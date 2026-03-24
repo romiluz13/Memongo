@@ -1,0 +1,24 @@
+{
+  "name": "@romiluz/memongo-tools",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AI/agent tool helpers for Memongo (Supermemory-tools-shaped; backed by @romiluz/memongo-platform client)",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "check-types": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@romiluz/memongo-platform": "workspace:*",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "ai": "5.0.59",
+    "typescript": "5.8.3"
+  },
+  "peerDependencies": {
+    "ai": ">=5.0.0"
+  }
+}

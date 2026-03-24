@@ -8,6 +8,9 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Memongo platform: add `memongo-platform/docs/PRODUCTION-READY.md` (pre-publish checklist) and `memongo-platform/docs/versus-local-reference-memory.md` (positioning vs typical local memory reference projects); rename `memongo-poc` workspace to `memongo-platform`, `memongo-poc-bridge` export to `memongo-bridge` (remove `clawmongo` CLI bin).
+- Memory: `MEMONGO_FORCE_MONGODB_URI` overrides `memory.mongodb.uri` from config when you need a different MongoDB connection string without editing the on-disk config (for example `memongo-api` or CI).
+
 ### Fixes
 
 - Plugins/message tool: make Discord `components` and Slack `blocks` optional again, and route Feishu `message(..., media=...)` sends through the outbound media path, so pin/unpin/react flows stop failing schema validation and Feishu file/image attachments actually send. Fixes #52970 and #52962. Thanks @vincentkoc.

@@ -1,34 +1,34 @@
-# ClawMongo -- OpenClaw, but it remembers.
+# Memongo -- OpenClaw, but it remembers.
 
 <p align="center">
-  <img src="./README-clawmongo-header-v2.png" alt="ClawMongo" width="100%">
+  <img src="./README-memongo-header-v2.png" alt="Memongo" width="100%">
 </p>
 
 <p align="center">
-  <a href="https://github.com/romiluz13/ClawMongo/actions/workflows/ci.yml?branch=main"><img src="https://img.shields.io/github/actions/workflow/status/romiluz13/ClawMongo/ci.yml?branch=main&style=for-the-badge" alt="CI status"></a>
-  <a href="https://github.com/romiluz13/ClawMongo/releases"><img src="https://img.shields.io/github/v/release/romiluz13/ClawMongo?include_prereleases&style=for-the-badge" alt="GitHub release"></a>
+  <a href="https://github.com/romiluz13/Memongo/actions/workflows/ci.yml?branch=main"><img src="https://img.shields.io/github/actions/workflow/status/romiluz13/Memongo/ci.yml?branch=main&style=for-the-badge" alt="CI status"></a>
+  <a href="https://github.com/romiluz13/Memongo/releases"><img src="https://img.shields.io/github/v/release/romiluz13/Memongo?include_prereleases&style=for-the-badge" alt="GitHub release"></a>
   <a href="https://discord.gg/clawd"><img src="https://img.shields.io/discord/1456350064065904867?label=Discord&logo=discord&logoColor=white&color=5865F2&style=for-the-badge" alt="Discord"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge" alt="MIT License"></a>
 </p>
 
 Same channels. Same plugins. Same voice. But your agent's memory lives in MongoDB -- not in files that corrupt, disappear, or overflow your context window.
 
-ClawMongo is [OpenClaw](https://github.com/openclaw/openclaw) (329K+ stars, 22 messaging channels, native apps, 78 extensions) with its memory replaced by a production MongoDB backend. Where OpenClaw defaults to QMD (SQLite + Markdown files), ClawMongo uses MongoDB Community + mongot + Voyage AI for vector search, knowledge graphs, episode materialization, event-sourcing, and 8 retrieval paths -- all in one database. Nothing is ever lost.
+Memongo is [OpenClaw](https://github.com/openclaw/openclaw) (329K+ stars, 22 messaging channels, native apps, 78 extensions) with its memory replaced by a production MongoDB backend. Where OpenClaw defaults to QMD (SQLite + Markdown files), Memongo uses MongoDB Community + mongot + Voyage AI for vector search, knowledge graphs, episode materialization, event-sourcing, and 8 retrieval paths -- all in one database. Nothing is ever lost.
 
-[Website](https://clawmongo.site) |
-[Getting Started](docs/start/clawmongo-getting-started.md) |
+[Website](https://memongo.site) |
+[Getting Started](docs/start/memongo-getting-started.md) |
 [MongoDB Capabilities](docs/reference/mongodb-capabilities.md) |
-[vs Default Memory](docs/reference/clawmongo-vs-default-memory.md) |
+[vs Default Memory](docs/reference/memongo-vs-default-memory.md) |
 [Upstream Docs](https://docs.openclaw.ai) |
 [Discord](https://discord.gg/clawd)
 
 ---
 
-## What Is ClawMongo?
+## What Is Memongo?
 
 The full OpenClaw personal AI assistant -- 22 messaging channels (WhatsApp, Telegram, Slack, Discord, Signal, iMessage, Microsoft Teams, Matrix, and 14 more), 78 extensions (25+ LLM providers, tools, media, infra), companion apps for macOS/iOS/Android, voice wake, live canvas, and the entire skills platform -- with a MongoDB brain instead of files.
 
-ClawMongo is **not** a memory library. It is a complete personal AI assistant with a real database behind it. The product is the assistant. MongoDB is what makes it production-ready.
+Memongo is **not** a memory library. It is a complete personal AI assistant with a real database behind it. The product is the assistant. MongoDB is what makes it production-ready.
 
 **Who is this for:**
 
@@ -42,7 +42,7 @@ ClawMongo is **not** a memory library. It is a complete personal AI assistant wi
 
 MongoDB is uniquely suited for agent memory because it combines document flexibility, vector search, full-text search, graph traversal, and operational guarantees in a single platform. No other database offers all of these without bolting on external services.
 
-ClawMongo uses 26 MongoDB capabilities. Each one solves a specific agent memory problem:
+Memongo uses 26 MongoDB capabilities. Each one solves a specific agent memory problem:
 
 | #   | Capability                      | Why It Matters                                                                 | How It Works                                                                                             |
 | --- | ------------------------------- | ------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------- |
@@ -73,13 +73,13 @@ ClawMongo uses 26 MongoDB capabilities. Each one solves a specific agent memory 
 | 25  | **Role-Based Extraction**       | Separate extraction prompts for user vs assistant messages                     | `buildUserExtractionPrompt` / `buildAssistantExtractionPrompt` + `sourceRole` tracking on entities       |
 | 26  | **Tiered Retrieval**            | IDs-only projection mode for 10x token reduction in large memory spaces        | `$project` after `$vectorSearch` returns lightweight results, full content fetched on demand             |
 
-For the full technical deep-dive on each capability with code examples: [MongoDB Capabilities in ClawMongo](docs/reference/mongodb-capabilities.md)
+For the full technical deep-dive on each capability with code examples: [MongoDB Capabilities in Memongo](docs/reference/mongodb-capabilities.md)
 
 ---
 
-## ClawMongo vs Default OpenClaw Memory
+## Memongo vs Default OpenClaw Memory
 
-| Capability             | OpenClaw Default (QMD/SQLite)         | ClawMongo (MongoDB)                                                          |
+| Capability             | OpenClaw Default (QMD/SQLite)         | Memongo (MongoDB)                                                            |
 | ---------------------- | ------------------------------------- | ---------------------------------------------------------------------------- |
 | Storage backend        | SQLite file + Markdown files          | MongoDB Community (replica set)                                              |
 | Vector search          | sqlite-vec or LanceDB                 | mongot + Voyage AI autoEmbed                                                 |
@@ -98,15 +98,15 @@ For the full technical deep-dive on each capability with code examples: [MongoDB
 | Query caching          | None                                  | Two-tier semantic cache (SHA-256 exact + cosine similarity)                  |
 | Data model             | Flat files + SQLite rows              | 23 collections, 66 indexes + 9 search indexes                                |
 
-**Decision rule:** If your workload is one user with small memory files, OpenClaw's default memory is fine. If you need retrieval quality SLOs, operational visibility, knowledge graphs, or team-scale agent memory, ClawMongo is the practical path.
+**Decision rule:** If your workload is one user with small memory files, OpenClaw's default memory is fine. If you need retrieval quality SLOs, operational visibility, knowledge graphs, or team-scale agent memory, Memongo is the practical path.
 
-Full comparison with migration guidance: [ClawMongo vs Default Memory](docs/reference/clawmongo-vs-default-memory.md)
+Full comparison with migration guidance: [Memongo vs Default Memory](docs/reference/memongo-vs-default-memory.md)
 
 ---
 
 ## MongoDB Memory Architecture
 
-ClawMongo uses a canonical-truth-first architecture where **events are the single source of truth**. Everything else -- chunks, entities, relations, episodes, procedures -- is derived.
+Memongo uses a canonical-truth-first architecture where **events are the single source of truth**. Everything else -- chunks, entities, relations, episodes, procedures -- is derived.
 
 ```text
 Write Path:
@@ -188,20 +188,32 @@ After retrieval, `crossEncoderRerank` (Voyage rerank-2.5, on by default) applies
 # Start MongoDB (atlas-local:preview -- bundles mongod + mongot + search)
 ./docker/mongodb/start-preview.sh
 
-npm install -g @romiluz/clawmongo@latest
+npm install -g @romiluz/memongo@latest
 
-clawmongo onboard --install-daemon
+memongo onboard --install-daemon
 ```
 
-For Docker-based MongoDB setup, detailed configuration, and verification steps: [Getting Started with ClawMongo](docs/start/clawmongo-getting-started.md)
+For Docker-based MongoDB setup, detailed configuration, and verification steps: [Getting Started with Memongo](docs/start/memongo-getting-started.md)
 
-`openclaw` is shipped as an alias to `clawmongo` for compatibility.
+`openclaw` is shipped as an alias to `memongo` for compatibility.
+
+### Memongo platform (SDK, HTTP API, MCP, web)
+
+The [`memongo-platform/`](memongo-platform/) workspace ships a **self-hosted** product layer modeled after common open-source memory deployments: npm SDK (`@romiluz/memongo-platform`), versioned HTTP API (`apps/api`, `GET /openapi.json`), MCP, and a Next.js console. There is **no vendor email registration**—you bring **MongoDB** (for example [`mongodb/mongodb-atlas-local:preview`](https://hub.docker.com/r/mongodb/mongodb-atlas-local)) and set **environment variables** (`OPENCLAW_MONGODB_URI` or `MEMONGO_FORCE_MONGODB_URI`, `VOYAGE_API_KEY`, optional `MEMONGO_API_KEY` for Bearer protection on `/v1/*`).
+
+| Step                                           | What to run                                                                                                                     |
+| ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| Build engine (includes `memongo-bridge` chunk) | From repo root: `pnpm install` && `pnpm build`                                                                                  |
+| Install platform workspace                     | `cd memongo-platform && pnpm install`                                                                                           |
+| Run HTTP API                                   | `cd memongo-platform/apps/api && pnpm start` (set env vars first; see [memongo-platform/README.md](memongo-platform/README.md)) |
+| Publish to npm                                 | [memongo-platform/docs/publish.md](memongo-platform/docs/publish.md)                                                            |
+| Pre-release checklist                          | [memongo-platform/docs/PRODUCTION-READY.md](memongo-platform/docs/PRODUCTION-READY.md)                                          |
 
 ---
 
-## For Agents: Install ClawMongo
+## For Agents: Install Memongo
 
-If you are an AI agent (Claude, GPT, Cursor, Windsurf, etc.) helping a user set up ClawMongo, follow these steps exactly:
+If you are an AI agent (Claude, GPT, Cursor, Windsurf, etc.) helping a user set up Memongo, follow these steps exactly:
 
 ### Prerequisites Check
 
@@ -221,23 +233,23 @@ export VOYAGE_API_KEY="pa-..."
 ./docker/mongodb/start-preview.sh
 
 # Verify it's healthy
-docker inspect --format='{{.State.Health.Status}}' clawmongo-preview
+docker inspect --format='{{.State.Health.Status}}' memongo-preview
 # Expected: "healthy"
 ```
 
 > **Critical:** Use the `:preview` tag only. The `:latest`, `:8.0`, and `:8.2` tags do NOT include the community mongot with Voyage AI auto-embeddings.
 
-### Step 2: Install ClawMongo
+### Step 2: Install Memongo
 
 ```bash
-npm install -g @romiluz/clawmongo@latest
-clawmongo --version
+npm install -g @romiluz/memongo@latest
+memongo --version
 ```
 
 ### Step 3: Run Onboarding
 
 ```bash
-clawmongo onboard --install-daemon
+memongo onboard --install-daemon
 ```
 
 The wizard will:
@@ -252,18 +264,18 @@ The wizard will:
 ### Step 4: Verify
 
 ```bash
-clawmongo doctor                    # Check MongoDB + mongot + Voyage AI
-clawmongo channels status --probe   # Check channel connectivity
-clawmongo agent --message "Hello, remember my name is Alice" --thinking low
-clawmongo agent --message "What is my name?" --thinking low
+memongo doctor                    # Check MongoDB + mongot + Voyage AI
+memongo channels status --probe   # Check channel connectivity
+memongo agent --message "Hello, remember my name is Alice" --thinking low
+memongo agent --message "What is my name?" --thinking low
 ```
 
 ### Step 5: Connect a Channel (Optional)
 
 ```bash
 # Telegram (quickest)
-clawmongo config set channels.telegram.botToken "YOUR_BOT_TOKEN"
-clawmongo gateway restart
+memongo config set channels.telegram.botToken "YOUR_BOT_TOKEN"
+memongo gateway restart
 ```
 
 ### Troubleshooting
@@ -295,7 +307,7 @@ Minimal `~/.openclaw/openclaw.json`:
 
 ## The Full OpenClaw Platform
 
-ClawMongo inherits the entire OpenClaw platform. Everything below works identically.
+Memongo inherits the entire OpenClaw platform. Everything below works identically.
 
 ### 22 Messaging Channels
 
@@ -325,7 +337,7 @@ Full channel setup guides: [OpenClaw Docs -- Channels](https://docs.openclaw.ai/
 - [Cron jobs](https://docs.openclaw.ai/automation/cron-jobs), [Webhooks](https://docs.openclaw.ai/automation/webhook), [Gmail Pub/Sub](https://docs.openclaw.ai/automation/gmail-pubsub)
 - [Skills platform](https://docs.openclaw.ai/tools/skills) -- bundled, managed, workspace skills
 
-All links above point to the upstream [OpenClaw docs](https://docs.openclaw.ai). ClawMongo inherits this functionality unchanged.
+All links above point to the upstream [OpenClaw docs](https://docs.openclaw.ai). Memongo inherits this functionality unchanged.
 
 ---
 
@@ -334,14 +346,14 @@ All links above point to the upstream [OpenClaw docs](https://docs.openclaw.ai).
 ### Install from Source
 
 ```bash
-git clone https://github.com/romiluz13/ClawMongo.git
-cd ClawMongo
+git clone https://github.com/romiluz13/Memongo.git
+cd Memongo
 
 pnpm install
 pnpm ui:build
 pnpm build
 
-pnpm clawmongo onboard --install-daemon
+pnpm memongo onboard --install-daemon
 pnpm gateway:watch  # dev loop with auto-reload
 ```
 
@@ -361,13 +373,13 @@ Detailed workflow: [docs/reference/upstream-sync.md](docs/reference/upstream-syn
 - **beta**: prerelease tags (`vYYYY.M.D-beta.N`), npm dist-tag `beta`
 - **dev**: moving head of `main`, npm dist-tag `dev`
 
-Switch: `clawmongo update --channel stable|beta|dev`
+Switch: `memongo update --channel stable|beta|dev`
 
 ### Security Defaults (DM Access)
 
-ClawMongo connects to real messaging surfaces. Treat inbound DMs as untrusted input.
+Memongo connects to real messaging surfaces. Treat inbound DMs as untrusted input.
 
-Default behavior: **DM pairing** -- unknown senders receive a pairing code. Approve with `clawmongo pairing approve <channel> <code>`. Public inbound DMs require explicit opt-in (`dmPolicy="open"`).
+Default behavior: **DM pairing** -- unknown senders receive a pairing code. Approve with `memongo pairing approve <channel> <code>`. Public inbound DMs require explicit opt-in (`dmPolicy="open"`).
 
 Full security guide: [OpenClaw Docs -- Security](https://docs.openclaw.ai/gateway/security)
 
@@ -375,7 +387,7 @@ Full security guide: [OpenClaw Docs -- Security](https://docs.openclaw.ai/gatewa
 
 ## Built on OpenClaw
 
-ClawMongo is a fork of [OpenClaw](https://github.com/openclaw/openclaw), which is supported by these sponsors:
+Memongo is a fork of [OpenClaw](https://github.com/openclaw/openclaw), which is supported by these sponsors:
 
 | OpenAI                                                            | Vercel                                                            | Blacksmith                                                                   | Convex                                                                |
 | ----------------------------------------------------------------- | ----------------------------------------------------------------- | ---------------------------------------------------------------------------- | --------------------------------------------------------------------- |
@@ -385,12 +397,12 @@ ClawMongo is a fork of [OpenClaw](https://github.com/openclaw/openclaw), which i
 
 ## Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=romiluz13/ClawMongo&type=date&legend=top-left)](https://www.star-history.com/#romiluz13/ClawMongo&type=date&legend=top-left)
+[![Star History Chart](https://api.star-history.com/svg?repos=romiluz13/Memongo&type=date&legend=top-left)](https://www.star-history.com/#romiluz13/Memongo&type=date&legend=top-left)
 
 ## Community and Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines, maintainers, and how to submit PRs.
 
-ClawMongo is built on [OpenClaw](https://github.com/openclaw/openclaw) by Peter Steinberger and the community. MIT licensed.
+Memongo is built on [OpenClaw](https://github.com/openclaw/openclaw) by Peter Steinberger and the community. MIT licensed.
 
-- [clawmongo.site](https://clawmongo.site) | [Upstream Docs](https://docs.openclaw.ai) | [Discord](https://discord.gg/clawd)
+- [memongo.site](https://memongo.site) | [Upstream Docs](https://docs.openclaw.ai) | [Discord](https://discord.gg/clawd)

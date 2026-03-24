@@ -1,0 +1,37 @@
+name: memongo-platform
+
+on:
+  push:
+    paths:
+      - "memongo-platform/**"
+      - "src/memongo-bridge.ts"
+  pull_request:
+    paths:
+      - "memongo-platform/**"
+      - "src/memongo-bridge.ts"
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.23.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install (monorepo)
+        run: pnpm install --frozen-lockfile
+      - name: Build engine (bridge chunk)
+        run: pnpm build
+      - name: memongo-platform install
+        working-directory: memongo-platform
+        run: pnpm install --frozen-lockfile
+      - name: memongo-platform typecheck
+        working-directory: memongo-platform
+        run: pnpm check-types:all
+      - name: memongo-platform tests
+        working-directory: memongo-platform
+        run: pnpm test

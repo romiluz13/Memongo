@@ -1,0 +1,19 @@
+{
+  "name": "@romiluz/memongo-mcp",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "MCP server for Memongo (stdio; calls Memongo HTTP API — Supermemory MCP–shaped install story)",
+  "scripts": {
+    "start": "node --import tsx src/server.ts",
+    "check-types": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.25.2",
+    "@romiluz/memongo-platform": "workspace:*",
+    "tsx": "^4.19.2"
+  },
+  "devDependencies": {
+    "typescript": "5.8.3"
+  }
+}

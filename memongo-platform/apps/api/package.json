@@ -1,0 +1,22 @@
+{
+  "name": "@romiluz/memongo-api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "HTTP API sidecar for Memongo (Supermemory-shaped routes, MongoDB memory backend)",
+  "scripts": {
+    "start": "node --import tsx src/server.ts",
+    "dev": "node --import tsx --watch src/server.ts",
+    "check-types": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@hono/node-server": "1.19.10",
+    "@romiluz/memongo": "link:../../../",
+    "hono": "4.12.8",
+    "tsx": "^4.19.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "5.8.3"
+  }
+}
