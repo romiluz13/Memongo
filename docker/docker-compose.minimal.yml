@@ -1,0 +1,13 @@
+# MongoDB only — run `apps/api` on the host with e.g.
+# MEMONGO_MONGODB_URI=mongodb://127.0.0.1:27017
+# (or `mongodb://mongodb:27017/...` when the API runs in another container on the same network).
+services:
+  mongodb:
+    image: mongo:7
+    ports:
+      - "27017:27017"
+    volumes:
+      - memongo_mongo_data:/data/db
+
+volumes:
+  memongo_mongo_data: {}

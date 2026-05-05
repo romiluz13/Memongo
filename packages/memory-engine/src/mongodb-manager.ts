@@ -1,0 +1,6817 @@
+import { createHash, randomUUID } from "node:crypto"
+import { createReadStream } from "node:fs"
+import path from "node:path"
+import chokidar, { type FSWatcher } from "chokidar"
+import { MongoClient, type Db, type Document } from "mongodb"
+import {
+	type MemongoConfig,
+	type MemoryScope,
+	createSubsystemLogger,
+} from "@memongo/lib"
+import {
+	AccessTracker,
+	getAccessSummaries as listAccessSummaries,
+	getAccessTrends as listAccessTrends,
+} from "./mongodb-access-tracker.js"
+import { resolveAgentWorkspaceDir } from "./agent-config.js"
+import type {
+	ResolvedMemoryBackendConfig,
+	ResolvedMongoDBConfig,
+} from "./backend-config.js"
+import { normalizeExtraMemoryPaths } from "./internal.js"
+import { getMemoryStats, type MemoryStats } from "./mongodb-analytics.js"
+import { MongoDBChangeStreamWatcher } from "./mongodb-change-stream.js"
+import {
+	heuristicEpisodeSummarizer,
+	promoteDerivedMemoryFromEvent,
+	extractStructuredCandidatesFromEvent,
+	extractProcedureCandidatesFromEvent,
+	resolveStructuredCandidatesForPromotion,
+} from "./mongodb-derived-memory.js"
+import { searchEpisodes } from "./mongodb-episodes.js"
+import { checkAutoEpisodeTriggers } from "./mongodb-episodes.js"
+import {
+	ingestBenchmarkDataset,
+	ingestBenchmarkConversations,
+	importConversationDataset,
+	loadBenchmarkDataset,
+	resolveBenchmarkDatasetPath,
+} from "./mongodb-benchmark-harness.js"
+import { recallConversation as recallConversationCore } from "./mongodb-conversation-recall.js"
+import {
+	buildBenchmarkRunReport,
+	evaluateRankingCase,
+	buildQueryGovernanceReport,
+	summarizeBenchmarkExecutions,
+	buildMissLedger,
+	type BenchmarkCaseExecution,
+} from "./mongodb-benchmark-runner.js"
+import {
+	writeEvent,
+	projectEventChunk,
+	getEventsByTimeRange,
+} from "./mongodb-events.js"
+import {
+	extractAndUpsertEntities,
+	searchEntitiesAutocomplete,
+	expandGraph,
+	type Entity,
+	type RelationType,
+} from "./mongodb-graph.js"
+import {
+	normalizeSearchResults,
+	rrfScore,
+	type SearchMethod,
+} from "./mongodb-hybrid.js"
+import { searchKB } from "./mongodb-kb-search.js"
+import { updateLaneCoverage, getLaneCoverage } from "./mongodb-lane-coverage.js"
+import {
+	recordIngestRun,
+	getLatestIngestRun,
+	getLatestProjectionRun,
+	getProjectionLag,
+	type IngestRun,
+	type ProjectionRun,
+} from "./mongodb-ops.js"
+import {
+	createMemoryJob,
+	getMemoryJob,
+	listMemoryJobs,
+	updateMemoryJob,
+} from "./mongodb-memory-jobs.js"
+import {
+	getRecallTrace,
+	listRecallTraces,
+	recordRecallTrace,
+} from "./mongodb-recall-traces.js"
+import type {
+	ProcedureEntry,
+	ProcedureLifecyclePatch,
+	ProcedureState,
+} from "./mongodb-procedures.js"
+import {
+	findExactProcedureMatches,
+	searchProcedures,
+} from "./mongodb-procedures.js"
+import { buildDiscoveryProjection } from "./mongodb-discovery-projections.js"
+import { hydrateActiveSlate } from "./mongodb-active-slate.js"
+import { buildContextBundle as composeContextBundle } from "./mongodb-context-bundle.js"
+import { synthesizeProfile, type ProfileSynthesis } from "./mongodb-profile.js"
+import { checkCache, writeCache } from "./mongodb-query-cache.js"
+import {
+	rewriteQuery,
+	type QueryRewriteConfig,
+} from "./mongodb-query-rewriter.js"
+import {
+	MongoDBRelevanceRuntime,
+	type RelevanceArtifact,
+	type RelevanceBenchmarkResult,
+	type RelevanceHealth,
+	type RelevanceReport,
+	type RelevanceSampleState,
+	type RelevanceSourceScope,
+} from "./mongodb-relevance.js"
+import { applyPostRetrievalScoring } from "./mongodb-post-retrieval-scoring.js"
+import {
+	resolveSessionEvidenceMode,
+	writeSessionEvidenceOptionA,
+	writeSessionEvidenceOptionB,
+	type SessionEvidenceMode,
+} from "./mongodb-session-evidence.js"
+import {
+	resolveUserfactEvidenceMode,
+	writeUserfactEvidence,
+} from "./mongodb-userfact-evidence.js"
+import {
+	resolveEnrichmentMode,
+	resolveEnrichmentProvider,
+	enrichSessionsWithLLM,
+} from "./mongodb-llm-enrichment.js"
+import {
+	resolveDecompositionMode,
+	decomposeQuery,
+	mergeMultiQueryResults,
+} from "./mongodb-query-decomposition.js"
+import { crossEncoderRerank, type RerankConfig } from "./mongodb-reranker.js"
+import {
+	planRetrieval,
+	type RetrievalPath,
+	type RetrievalPlan,
+	resolveTimeRangePreset,
+} from "./mongodb-retrieval-planner.js"
+import type { DetectedCapabilities } from "./mongodb-schema.js"
+import {
+	kbCollection,
+	chunksCollection,
+	detectCapabilities,
+	ensureCollections,
+	ensureSearchIndexes,
+	ensureStandardIndexes,
+	eventsCollection,
+	entitiesCollection,
+	relationsCollection,
+	episodesCollection,
+	filesCollection,
+	getExpectedSearchIndexTargets,
+	kbChunksCollection,
+	metaCollection,
+	proceduresCollection,
+	relevanceRunsCollection,
+	structuredMemCollection,
+	waitForSearchIndexesQueryable,
+	sessionChunksCollection,
+} from "./mongodb-schema.js"
+import { resolveScopeRef } from "./mongodb-scope.js"
+import { mongoSearch, vectorSearch } from "./mongodb-search.js"
+import type {
+	SearchExplainOptions,
+	SearchExplainTraceArtifact,
+	SearchTraceEvent,
+} from "./mongodb-search.js"
+import type {
+	StructuredMemoryEntry,
+	StructuredMemoryLifecyclePatch,
+	StructuredMemorySalience,
+	StructuredMemoryState,
+} from "./mongodb-structured-memory.js"
+import { searchStructuredMemory } from "./mongodb-structured-memory.js"
+import { syncToMongoDB } from "./mongodb-sync.js"
+import { emitTelemetry } from "./mongodb-telemetry.js"
+import { annotateResultsWithTrust, summarizeTrust } from "./mongodb-trust.js"
+import { traceReasoningChain } from "./mongodb-reasoning-chain.js"
+import { scanNovelty } from "./mongodb-novelty.js"
+import { consolidateMemory } from "./mongodb-consolidator.js"
+import { expandSearchContext } from "./mongodb-context-expansion.js"
+import {
+	applyHardConstraintRejections,
+	applySearchConfig,
+	buildConstraintSummaries,
+	buildExecutorPasses,
+	buildMemorySearchRequestSignature,
+	classifyExecutorSearch,
+	computeEvidenceCoverage,
+	executeMongoSearchPlan,
+	normalizeMemorySearchRequest,
+	resolveExecutorTimeRange,
+	resolveSearchConfig,
+	requestHasHardConstraints,
+} from "./mongodb-search-executor.js"
+import type {
+	ConversationRecallRequest,
+	ConversationRecallResponse,
+	MemoryActiveSlate,
+	AccessEventCollection,
+	MemoryContextBundle,
+	MemoryContextBundleRequest,
+	MemoryDiscoveryProjection,
+	MemoryDiscoveryProjectionRequest,
+	MemoryEmbeddingProbeResult,
+	MemoryAccessSummary,
+	MemoryAccessTrend,
+	MemoryBenchmarkDataset,
+	MemoryBenchmarkScenario,
+	MemoryBenchmarkIngestResult,
+	MemoryConversationImportResult,
+	MemoryFeedbackSignal,
+	MemoryLifecycleHistoryEntry,
+	MemoryLifecycleItem,
+	MemoryStableHandle,
+	MemoryProviderStatus,
+	MemorySearchManager,
+	MemorySearchRequest,
+	MemorySearchResponse,
+	MemorySearchResult,
+	MemorySearchMetadata,
+	MemorySearchMode,
+	MemorySource,
+	MemorySelfEditBlock,
+	MemorySelfEditAction,
+	MemorySyncProgressUpdate,
+	MemoryActorRole,
+	ResolvedSearchConfig,
+} from "./types.js"
+
+// v2 validation constants
+const VALID_SCOPES: ReadonlySet<string> = new Set<MemoryScope>([
+	"session",
+	"user",
+	"agent",
+	"workspace",
+	"tenant",
+	"global",
+])
+const VALID_ROLES: ReadonlySet<string> = new Set([
+	"user",
+	"assistant",
+	"system",
+	"tool",
+])
+const VALID_STRUCTURED_STATES: ReadonlySet<StructuredMemoryState> = new Set([
+	"active",
+	"invalidated",
+	"conflicted",
+])
+const VALID_STRUCTURED_SALIENCE: ReadonlySet<StructuredMemorySalience> =
+	new Set(["critical", "high", "normal", "low"])
+const VALID_PROCEDURE_STATES: ReadonlySet<ProcedureState> = new Set([
+	"active",
+	"invalidated",
+	"conflicted",
+])
+
+function isLegacyBenchmarkFallbackCandidate(err: unknown): boolean {
+	return (
+		err instanceof Error &&
+		(err.message === "benchmark dataset contains no valid conversations" ||
+			err.message === "benchmark dataset contains no evaluation cases")
+	)
+}
+
+function attachBenchmarkOperationsReport(
+	result: RelevanceBenchmarkResult,
+): RelevanceBenchmarkResult {
+	const queryGovernance = buildQueryGovernanceReport(result)
+	return {
+		...result,
+		queryGovernance,
+		benchmarkReport: buildBenchmarkRunReport({
+			...result,
+			queryGovernance,
+		}),
+	}
+}
+
+type BenchmarkEventEvidenceMaps = {
+	sessionIds: Map<string, string>
+	turnIds: Map<string, string>
+	dialogIds: Map<string, string>
+}
+
+export type RelevanceExplainResult = {
+	runId?: string
+	latencyMs: number
+	sourceScope: RelevanceSourceScope
+	health: RelevanceHealth
+	fallbackPath?: string
+	sampleRate: number
+	artifacts: RelevanceArtifact[]
+	results: MemorySearchResult[]
+}
+
+const log = createSubsystemLogger("memory:mongodb")
+const CHANGE_STREAM_RESUME_TOKEN_META_KEY = "change_stream_resume_token"
+
+// ---------------------------------------------------------------------------
+// Result dedup utility — exported for testing and reuse
+// ---------------------------------------------------------------------------
+
+/**
+ * Deduplicate search results by content (snippet text).
+ * When duplicates are found (same snippet from different sources),
+ * keep only the highest-scoring result.
+ * Uses simple string comparison (not crypto hash) per plan spec.
+ */
+export function deduplicateSearchResults(
+	results: MemorySearchResult[],
+): MemorySearchResult[] {
+	if (results.length === 0) {
+		return []
+	}
+
+	const seen = new Map<string, MemorySearchResult>()
+	for (const result of results) {
+		const existing = seen.get(result.snippet)
+		if (!existing || result.score > existing.score) {
+			seen.set(result.snippet, result)
+		}
+	}
+
+	return Array.from(seen.values())
+}
+
+// ---------------------------------------------------------------------------
+// Heuristic reranker
+// ---------------------------------------------------------------------------
+
+/**
+ * Configurable weights for the heuristic reranker.
+ */
+export type RerankWeights = {
+	/** Penalty per excess result from same source (default 0.15) */
+	diversityWeight?: number
+	/** Bonus for episode results (default 0.12) */
+	episodeBoost?: number
+}
+
+/**
+ * Heuristic reranker for v2 search results.
+ * - Source diversity penalty: no more than 2 results from the same source at the top
+ * - Episode priority boost: episode results get a score boost
+ *
+ * Does not mutate the original array.
+ * Recency boost deferred (needs timestamp in MemorySearchResult interface).
+ */
+export function rerankResults(
+	results: MemorySearchResult[],
+	_query: string,
+	weights?: RerankWeights,
+): MemorySearchResult[] {
+	if (results.length === 0) {
+		return []
+	}
+
+	const diversityWeight = weights?.diversityWeight ?? 0.15
+	const episodeBoost = weights?.episodeBoost ?? 0.12
+
+	// Score each result (copy, don't mutate)
+	const scored = results.map((r) => ({
+		result: r,
+		adjustedScore: r.score,
+	}))
+
+	// 1. Episode priority boost
+	for (const entry of scored) {
+		if (entry.result.path.startsWith("episode:")) {
+			entry.adjustedScore += episodeBoost
+		}
+	}
+
+	// 2. Sort by adjusted score descending
+	scored.sort((a, b) => b.adjustedScore - a.adjustedScore)
+
+	// 3. Source diversity penalty: penalize 3rd+ result from same source
+	const sourceCounts = new Map<string, number>()
+	for (const entry of scored) {
+		const source = entry.result.source
+		const count = (sourceCounts.get(source) ?? 0) + 1
+		sourceCounts.set(source, count)
+		if (count > 2) {
+			entry.adjustedScore -= diversityWeight * (count - 2)
+		}
+	}
+
+	// 4. Re-sort after diversity penalty
+	scored.sort((a, b) => b.adjustedScore - a.adjustedScore)
+
+	return scored.map((s) => s.result)
+}
+
+// ---------------------------------------------------------------------------
+// Source policy helpers — exported for testing and reuse
+// ---------------------------------------------------------------------------
+
+type SourceConfig = {
+	reference: { enabled: boolean }
+	conversation: { enabled: boolean }
+	structured: { enabled: boolean }
+}
+
+/**
+ * Determine which search sources are active based on source policy config.
+ * Reference (KB) search additionally requires KB to be enabled.
+ */
+export function getActiveSources(
+	sources: SourceConfig | undefined,
+	kbEnabled: boolean,
+): { conversation: boolean; reference: boolean; structured: boolean } {
+	if (!sources) {
+		// Default: all sources enabled when no source config is present (backward compat)
+		return { conversation: true, reference: kbEnabled, structured: true }
+	}
+	return {
+		conversation: sources.conversation.enabled,
+		reference: sources.reference.enabled && kbEnabled,
+		structured: sources.structured.enabled,
+	}
+}
+
+// ---------------------------------------------------------------------------
+// searchDetailed helpers
+// ---------------------------------------------------------------------------
+
+function normalizeDetailedSearchRequest(
+	request: MemorySearchRequest,
+): MemorySearchRequest {
+	const query = request.query.trim()
+	const configuredRequest = applySearchConfig({
+		...request,
+		query,
+	})
+	return {
+		...configuredRequest,
+		query,
+		searchMode: configuredRequest.searchMode ?? "auto",
+		maxResults: configuredRequest.maxResults ?? 10,
+		minScore: configuredRequest.minScore ?? 0.1,
+		needExactEvidence: configuredRequest.needExactEvidence === true,
+		returnPlan: configuredRequest.returnPlan === true,
+		...(configuredRequest.maxPasses != null
+			? {
+					maxPasses: Math.max(1, Math.min(4, configuredRequest.maxPasses)),
+				}
+			: {}),
+	}
+}
+
+function resolveRuntimeSearchConfig(
+	request: MemorySearchRequest,
+	mongoCfg: ResolvedMongoDBConfig,
+): ResolvedSearchConfig {
+	const resolved = resolveSearchConfig(request)
+	return {
+		recipe: resolved.recipe,
+		maxResults: resolved.maxResults,
+		searchMode: resolved.searchMode,
+		maxPasses: resolved.maxPasses,
+		sourcePreference: resolved.sourcePreference,
+		timeRange: resolved.timeRange,
+		needExactEvidence: resolved.needExactEvidence,
+		numCandidates: resolved.numCandidates ?? mongoCfg.numCandidates,
+		fusionMethod: resolved.fusionMethod ?? mongoCfg.fusionMethod,
+		hybridMode: resolved.hybridMode,
+		allowHybridBackstop: resolved.allowHybridBackstop,
+		lexicalPrefilter: resolved.lexicalPrefilter,
+	}
+}
+
+function shouldUseDetailedSearchCache(request: MemorySearchRequest): boolean {
+	const config = request.searchConfig
+	if (!config) {
+		return true
+	}
+	return (
+		config.recipe === undefined &&
+		config.numCandidates === undefined &&
+		config.fusionMethod === undefined &&
+		config.hybridMode === undefined &&
+		config.allowHybridBackstop === undefined &&
+		config.lexicalPrefilter === undefined
+	)
+}
+
+function emptySearchMetadata(
+	request: MemorySearchRequest,
+): MemorySearchMetadata {
+	const resolvedSearchConfig = request.searchConfig
+	return {
+		mode: (request.searchMode ?? "auto") as MemorySearchMode,
+		classification: "direct",
+		sourceOrder: request.sourcePreference ?? [
+			"conversation",
+			"structured",
+			"reference",
+		],
+		...(resolvedSearchConfig
+			? {
+					resolvedSearchConfig:
+						resolvedSearchConfig as unknown as ResolvedSearchConfig,
+				}
+			: {}),
+		passes: [],
+		queriesTried: [],
+		constraintsApplied: [],
+		resultsRejected: [],
+		evidenceCoverage: "none",
+		pathsExecuted: [],
+		resultsByPath: {},
+		queryRewritten: false,
+		reranked: false,
+	}
+}
+
+function normalizeStructuredState(
+	value: string | string[] | undefined,
+): StructuredMemoryState | StructuredMemoryState[] | undefined {
+	if (Array.isArray(value)) {
+		const states = value.filter((state): state is StructuredMemoryState =>
+			VALID_STRUCTURED_STATES.has(state as StructuredMemoryState),
+		)
+		return states.length > 0 ? states : undefined
+	}
+	if (
+		typeof value === "string" &&
+		VALID_STRUCTURED_STATES.has(value as StructuredMemoryState)
+	) {
+		return value as StructuredMemoryState
+	}
+	return undefined
+}
+
+function normalizeStructuredSalience(
+	value: string[] | undefined,
+): StructuredMemorySalience[] | undefined {
+	if (!Array.isArray(value)) {
+		return undefined
+	}
+	const salience = value.filter((entry): entry is StructuredMemorySalience =>
+		VALID_STRUCTURED_SALIENCE.has(entry as StructuredMemorySalience),
+	)
+	return salience.length > 0 ? salience : undefined
+}
+
+function normalizeProcedureState(
+	value: string | undefined,
+): ProcedureState | undefined {
+	if (
+		typeof value === "string" &&
+		VALID_PROCEDURE_STATES.has(value as ProcedureState)
+	) {
+		return value as ProcedureState
+	}
+	return undefined
+}
+
+/**
+ * Return the list of active source names for status reporting.
+ * Only sources that are actually enabled are included.
+ */
+export function getActiveSourcesForStatus(
+	sources: SourceConfig | undefined,
+	kbEnabled: boolean,
+): MemorySource[] {
+	const active = getActiveSources(sources, kbEnabled)
+	const names: MemorySource[] = []
+	if (active.conversation) {
+		names.push("conversation")
+	}
+	if (active.reference) {
+		names.push("reference")
+	}
+	if (active.structured) {
+		names.push("structured")
+	}
+	return names
+}
+
+type ActiveSources = {
+	conversation: boolean
+	reference: boolean
+	structured: boolean
+}
+
+/**
+ * Resolve which sources to query in relevanceExplain based on the requested
+ * sourceScope AND the active source policy. Disabled sources always return
+ * false even when explicitly requested via sourceScope.
+ */
+export function resolveExplainSources(
+	sourceScope: RelevanceSourceScope,
+	activeSources: ActiveSources,
+): ActiveSources {
+	switch (sourceScope) {
+		case "memory":
+			return {
+				conversation: activeSources.conversation,
+				reference: false,
+				structured: false,
+			}
+		case "kb":
+			return {
+				conversation: false,
+				reference: activeSources.reference,
+				structured: false,
+			}
+		case "structured":
+			return {
+				conversation: false,
+				reference: false,
+				structured: activeSources.structured,
+			}
+		case "all":
+		default:
+			return { ...activeSources }
+	}
+}
+
+/** Type guard: checks if a MemorySearchManager supports structured memory writes (MongoDB backend). */
+export function hasWriteCapability(
+	manager: MemorySearchManager,
+): manager is MongoDBMemoryManager {
+	return "writeStructuredMemory" in manager
+}
+
+/** Type guard: checks if a MemorySearchManager supports relevance diagnostics. */
+export function hasRelevanceCapability(
+	manager: MemorySearchManager,
+): manager is MongoDBMemoryManager {
+	return "relevanceExplain" in manager
+}
+
+/** Redact credentials from a MongoDB connection string for safe logging. */
+function redactMongoURI(uri: string): string {
+	try {
+		const parsed = new URL(uri)
+		if (parsed.password) {
+			parsed.password = "***"
+		}
+		if (parsed.username) {
+			parsed.username = parsed.username.slice(0, 2) + "***"
+		}
+		return parsed.toString()
+	} catch {
+		// If URL parsing fails, do a simple regex-based redaction
+		return uri.replace(/\/\/([^:]+):([^@]+)@/, "//***:***@")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// MongoDBMemoryManager — implements MemorySearchManager for MongoDB backend
+// ---------------------------------------------------------------------------
+
+/**
+ * Core runtime coordinator for the Memongo engine.
+ *
+ * The file is intentionally large today because it still hosts several stable
+ * subsystems in one place:
+ * - request normalization and search entrypoints
+ * - planner and legacy search orchestration
+ * - canonical event writes and derived memory projection
+ * - workspace/session sync and health/status reporting
+ *
+ * Cleanup work should preserve those behavior boundaries even when code is
+ * extracted into smaller modules later.
+ */
+export class MongoDBMemoryManager implements MemorySearchManager {
+	private readonly client: MongoClient
+	private readonly db: Db
+	private readonly prefix: string
+	private readonly agentId: string
+	private readonly workspaceDir: string
+	private readonly agentScopeRef: string
+	private readonly workspaceScopeRef: string
+	private readonly extraMemoryPaths: string[]
+	private readonly capabilities: DetectedCapabilities
+	private readonly config: ResolvedMemoryBackendConfig
+	private syncing: Promise<void> | null = null
+	private watcher: FSWatcher | null = null
+	private watchTimer: NodeJS.Timeout | null = null
+	private changeStreamWatcher: MongoDBChangeStreamWatcher | null = null
+	private relevance: MongoDBRelevanceRuntime | null = null
+	private closed = false
+	private dirty = true
+	private fileCount = 0
+	private chunkCount = 0
+	private writeQueue: Promise<void> = Promise.resolve()
+	private derivationQueue: Promise<void> = Promise.resolve()
+	private lastSearchMode = "legacy"
+	private lastSearchDetails: Record<string, unknown> | undefined
+	private accessTracker: AccessTracker | null = null
+
+	private constructor(params: {
+		client: MongoClient
+		db: Db
+		prefix: string
+		agentId: string
+		workspaceDir: string
+		extraMemoryPaths?: string[]
+		capabilities: DetectedCapabilities
+		config: ResolvedMemoryBackendConfig
+		relevance?: MongoDBRelevanceRuntime | null
+	}) {
+		this.client = params.client
+		this.db = params.db
+		this.prefix = params.prefix
+		this.agentId = params.agentId
+		this.workspaceDir = params.workspaceDir
+		this.agentScopeRef = resolveScopeRef({
+			scope: "agent",
+			agentId: params.agentId,
+		})
+		this.workspaceScopeRef = resolveScopeRef({
+			scope: "workspace",
+			agentId: params.agentId,
+			workspaceDir: params.workspaceDir,
+		})
+		this.extraMemoryPaths = params.extraMemoryPaths ?? []
+		this.capabilities = params.capabilities
+		this.config = params.config
+		this.relevance = params.relevance ?? null
+	}
+
+	// ---------------------------------------------------------------------------
+	// Factory
+	// ---------------------------------------------------------------------------
+
+	static async create(params: {
+		cfg: MemongoConfig
+		agentId: string
+		resolved: ResolvedMemoryBackendConfig
+		extraPaths?: string[]
+	}): Promise<MongoDBMemoryManager> {
+		const mongoCfg = params.resolved.mongodb
+		if (!mongoCfg) {
+			throw new Error(
+				"mongodb memory config missing from resolved backend config",
+			)
+		}
+
+		const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId)
+		// Connect to MongoDB with a timeout to avoid hanging
+		const safeUri = redactMongoURI(mongoCfg.uri)
+		log.info(`connecting to MongoDB: ${safeUri} (db=${mongoCfg.database})`)
+		const client = new MongoClient(mongoCfg.uri, {
+			serverSelectionTimeoutMS: mongoCfg.connectTimeoutMs,
+			connectTimeoutMS: mongoCfg.connectTimeoutMs,
+			maxPoolSize: mongoCfg.maxPoolSize,
+			minPoolSize: mongoCfg.minPoolSize,
+		})
+		try {
+			await client.connect()
+			// Verify the connection actually works with a ping
+			await client.db("admin").command({ ping: 1 })
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err)
+			log.warn(`failed to connect to MongoDB (${safeUri}): ${msg}`)
+			try {
+				await client.close()
+			} catch {
+				// Ignore close errors during failed connect
+			}
+			throw new Error(`failed to connect to MongoDB (${safeUri}): ${msg}`)
+		}
+
+		const db = client.db(mongoCfg.database)
+		const prefix = mongoCfg.collectionPrefix
+
+		// Ensure collections + schema validation + standard indexes
+		await ensureCollections(db, prefix)
+		await ensureStandardIndexes(db, prefix, {
+			embeddingCacheTtlDays: mongoCfg.embeddingCacheTtlDays,
+			memoryTtlDays: mongoCfg.memoryTtlDays,
+			relevanceRetentionDays: mongoCfg.relevance.retention.days,
+		})
+
+		// Detect what the connected MongoDB supports
+		const capabilities = await detectCapabilities(
+			db,
+			chunksCollection(db, prefix).collectionName,
+		)
+		log.info(`capabilities: ${JSON.stringify(capabilities)}`)
+
+		// Only bootstrap Search indexes when the deployment can talk to Search
+		// Index Management at all. This keeps runtime startup responsive on
+		// clusters that support fusion stages but do not expose mongot.
+		if (capabilities.textSearch || capabilities.vectorSearch) {
+			const ensuredSearchIndexes = await ensureSearchIndexes(
+				db,
+				prefix,
+				mongoCfg.deploymentProfile,
+				mongoCfg.embeddingMode,
+				mongoCfg.quantization,
+				mongoCfg.numDimensions,
+			)
+			if (ensuredSearchIndexes.text || ensuredSearchIndexes.vector) {
+				const readinessTimeoutMs = 60_000
+				const readinessPollMs = 1_000
+				const readinessResults = await Promise.all(
+					getExpectedSearchIndexTargets(prefix, mongoCfg.deploymentProfile).map(
+						async (target) => {
+							const readiness = await waitForSearchIndexesQueryable(
+								db.collection(target.collectionName),
+								{
+									indexNames: target.indexNames,
+									timeoutMs: readinessTimeoutMs,
+									pollMs: readinessPollMs,
+								},
+							)
+							return {
+								collectionName: target.collectionName,
+								...readiness,
+							}
+						},
+					),
+				)
+				const stalled = readinessResults.filter((result) => !result.ready)
+				if (stalled.length > 0) {
+					const summary = stalled
+						.map((result) => {
+							const pending = result.pending.join(",") || "none"
+							const failed = result.failed.join(",") || "none"
+							return `${result.collectionName} pending=[${pending}] failed=[${failed}]`
+						})
+						.join("; ")
+					const readinessMessage = `search indexes not fully queryable after bootstrap wait: ${summary}`
+					if (process.env.MEMONGO_STRICT_SEARCH_INDEX_READY === "1") {
+						throw new Error(readinessMessage)
+					}
+					log.warn(readinessMessage)
+				}
+			}
+		} else {
+			log.info(
+				"search index management unavailable; skipping search index bootstrap",
+			)
+		}
+
+		let relevance: MongoDBRelevanceRuntime | null = null
+		try {
+			if (mongoCfg.relevance.enabled) {
+				relevance = new MongoDBRelevanceRuntime(
+					db,
+					prefix,
+					params.agentId,
+					mongoCfg,
+					capabilities,
+				)
+			}
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err)
+			log.warn(`relevance runtime initialization failed: ${msg}`)
+		}
+
+		const manager = new MongoDBMemoryManager({
+			client,
+			db,
+			prefix,
+			agentId: params.agentId,
+			workspaceDir,
+			extraMemoryPaths: normalizeExtraMemoryPaths(
+				workspaceDir,
+				params.extraPaths,
+			),
+			capabilities,
+			config: params.resolved,
+			relevance,
+		})
+
+		// Phase 4.1 — the tracker now writes raw access events to the time-series
+		// collection while keeping computed access summaries on canonical docs.
+		manager.accessTracker = new AccessTracker(db, prefix, params.agentId, {
+			flushThreshold: 50,
+			flushIntervalMs: 5_000,
+		})
+
+		try {
+			await manager.sync({ reason: "startup" })
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err)
+			log.warn(`initial memory sync failed: ${msg}`)
+		}
+
+		// Start watching bridge memory files for changes
+		manager.ensureWatcher()
+
+		// Opt-in: Change Streams for cross-instance sync (requires replica set)
+		if (mongoCfg.enableChangeStreams) {
+			const persistedResumeToken =
+				await manager.loadPersistedChangeStreamResumeToken()
+			const csWatcher = new MongoDBChangeStreamWatcher(
+				chunksCollection(db, prefix),
+				(event) => {
+					if (event.resumeToken !== undefined && event.resumeToken !== null) {
+						void manager.persistChangeStreamResumeToken(event.resumeToken)
+					}
+				},
+				mongoCfg.changeStreamDebounceMs,
+			)
+			let started = await csWatcher.start(persistedResumeToken ?? undefined)
+			if (!started && persistedResumeToken) {
+				log.warn(
+					"change stream resume failed with persisted token; retrying from latest position",
+				)
+				started = await csWatcher.start()
+				if (started) {
+					await manager.clearPersistedChangeStreamResumeToken()
+				}
+			}
+			if (started) {
+				manager.changeStreamWatcher = csWatcher
+				log.info("change stream watcher enabled for cross-instance sync")
+			} else {
+				log.info(
+					"change streams not available — falling back to file watcher only",
+				)
+			}
+		}
+
+		log.info(
+			`ready: profile=${mongoCfg.deploymentProfile} embedding=${mongoCfg.embeddingMode} ` +
+				`fusion=${mongoCfg.fusionMethod} caps=${JSON.stringify(capabilities)}`,
+		)
+
+		return manager
+	}
+
+	// ---------------------------------------------------------------------------
+	// MemorySearchManager.search
+	// ---------------------------------------------------------------------------
+
+	private buildConversationChunkFilter(params?: {
+		scope?: MemoryScope
+		scopeRef?: string
+	}): Document {
+		const sources = ["conversation", "sessions"]
+		const sessionMode = resolveSessionEvidenceMode(
+			process.env.MEMONGO_SESSION_EVIDENCE_MODE,
+		)
+		if (sessionMode === "A") {
+			sources.push("session-evidence")
+		}
+		const userfactMode = resolveUserfactEvidenceMode(
+			process.env.MEMONGO_USERFACT_EVIDENCE_MODE,
+			process.env.MEMONGO_PREFERENCE_EVIDENCE_MODE,
+		)
+		if (userfactMode === "enabled") {
+			sources.push("userfact-evidence", "preference-evidence")
+		}
+		const enrichmentMode = resolveEnrichmentMode(
+			process.env.MEMONGO_LLM_ENRICHMENT_MODE,
+		)
+		if (enrichmentMode === "enabled") {
+			if (!sources.includes("userfact-evidence")) {
+				sources.push("userfact-evidence")
+			}
+			sources.push("qa-evidence")
+		} else if (enrichmentMode === "facts-only") {
+			if (!sources.includes("userfact-evidence")) {
+				sources.push("userfact-evidence")
+			}
+		}
+		return {
+			source: { $in: sources },
+			agentId: this.agentId,
+			...(params?.scope ? { scope: params.scope } : {}),
+			...(params?.scopeRef ? { scopeRef: params.scopeRef } : {}),
+			status: { $ne: "deleted" },
+		}
+	}
+
+	private buildBridgeChunkFilter(): Document {
+		return {
+			source: { $in: ["conversation", "memory"] },
+			agentId: this.agentId,
+			scope: "workspace",
+			scopeRef: this.workspaceScopeRef,
+			status: { $ne: "deleted" },
+		}
+	}
+
+	private getBridgeChunkBudget(maxResults: number): number {
+		// Bridge notes should remain searchable, but they are auxiliary to the
+		// live runtime memory stream and should not monopolize the result budget.
+		return Math.max(2, Math.ceil(maxResults / 3))
+	}
+
+	private buildV2AvailablePaths(
+		activeSources: ActiveSources,
+	): Set<RetrievalPath> {
+		const mongoCfg = this.config.mongodb!
+		const graphEnabled = mongoCfg.graph?.enabled !== false
+		const episodesEnabled = mongoCfg.episodes?.enabled !== false
+		const paths = new Set<RetrievalPath>()
+
+		if (activeSources.structured) {
+			paths.add("active-critical")
+			paths.add("procedural")
+			paths.add("structured")
+		}
+		if (activeSources.reference) {
+			paths.add("kb")
+		}
+		if (activeSources.conversation) {
+			paths.add("raw-window")
+			paths.add("hybrid")
+			if (graphEnabled) {
+				paths.add("graph")
+			}
+			if (episodesEnabled) {
+				paths.add("episodic")
+			}
+		}
+
+		return paths
+	}
+
+	/**
+	 * Record access for returned search results (fire-and-forget).
+	 * Maps canonicalId prefixes to collection names for the AccessTracker.
+	 */
+	private recordSearchAccess(results: MemorySearchResult[]): void {
+		if (!this.accessTracker || results.length === 0) return
+		for (const result of results) {
+			const cid = result.canonicalId
+			if (!cid) continue
+			const colonIdx = cid.indexOf(":")
+			if (colonIdx < 0) continue
+			const prefix = cid.slice(0, colonIdx)
+			const id = cid.slice(colonIdx + 1)
+			const collectionMap: Record<string, AccessEventCollection> = {
+				event: "events",
+				structured: "structured_mem",
+				procedure: "procedures",
+				episode: "episodes",
+				relation: "relations",
+				entity: "entities",
+			}
+			const collection = collectionMap[prefix]
+			if (collection && id) {
+				this.accessTracker.recordAccess(id, collection)
+			}
+		}
+	}
+
+	private setLastSearchMode(mode: string, details?: Record<string, unknown>) {
+		this.lastSearchMode = mode
+		this.lastSearchDetails = details
+	}
+
+	private async legacySearch(
+		query: string,
+		opts?: { maxResults?: number; minScore?: number; sessionKey?: string },
+	): Promise<MemorySearchResult[]> {
+		const cleaned = query.trim()
+		if (!cleaned) {
+			return []
+		}
+
+		const mongoCfg = this.config.mongodb!
+		const maxResults = opts?.maxResults ?? 10
+		const minScore = opts?.minScore ?? 0.1
+		const startedAt = Date.now()
+		const sampled = this.relevance?.shouldSample() ?? false
+		const explainArtifacts: RelevanceArtifact[] = []
+		const traceEvents: SearchTraceEvent[] = []
+		const explainOpts: SearchExplainOptions | undefined = sampled
+			? {
+					enabled: true,
+					deep: false,
+					includeScoreDetails: true,
+					onArtifact: (artifact: SearchExplainTraceArtifact) => {
+						explainArtifacts.push({
+							artifactType: artifact.artifactType,
+							summary: artifact.summary,
+							rawExplain: artifact.rawExplain,
+							compression: "none",
+						})
+					},
+				}
+			: undefined
+
+		const queryVector: number[] | null = null
+		const activeSources = getActiveSources(
+			mongoCfg.sources,
+			mongoCfg.kb.enabled,
+		)
+		const bridgeMaxResults = this.getBridgeChunkBudget(maxResults)
+		const emptyResults: MemorySearchResult[] = []
+		const [
+			runtimeConversationResults,
+			bridgeConversationResults,
+			kbResults,
+			structuredResults,
+		] = await Promise.all([
+			!activeSources.conversation
+				? emptyResults
+				: mongoSearch(
+						chunksCollection(this.db, this.prefix),
+						cleaned,
+						queryVector,
+						{
+							maxResults,
+							minScore,
+							numCandidates: mongoCfg.numCandidates,
+							sessionKey: opts?.sessionKey,
+							filter: this.buildConversationChunkFilter(),
+							fusionMethod: mongoCfg.fusionMethod,
+							capabilities: this.capabilities,
+							vectorIndexName: `${this.prefix}chunks_vector`,
+							textIndexName: `${this.prefix}chunks_text`,
+							vectorWeight: 0.7,
+							textWeight: 0.3,
+							embeddingMode: mongoCfg.embeddingMode,
+							explain: explainOpts,
+							onTrace: (event) => {
+								traceEvents.push(event)
+							},
+						},
+					),
+			!activeSources.conversation
+				? emptyResults
+				: mongoSearch(
+						chunksCollection(this.db, this.prefix),
+						cleaned,
+						queryVector,
+						{
+							maxResults: bridgeMaxResults,
+							minScore,
+							numCandidates: mongoCfg.numCandidates,
+							sessionKey: opts?.sessionKey,
+							filter: this.buildBridgeChunkFilter(),
+							fusionMethod: mongoCfg.fusionMethod,
+							capabilities: this.capabilities,
+							vectorIndexName: `${this.prefix}chunks_vector`,
+							textIndexName: `${this.prefix}chunks_text`,
+							vectorWeight: 0.7,
+							textWeight: 0.3,
+							embeddingMode: mongoCfg.embeddingMode,
+							explain: explainOpts,
+							onTrace: (event) => {
+								traceEvents.push(event)
+							},
+						},
+					),
+			!activeSources.reference
+				? emptyResults
+				: searchKB(
+						kbChunksCollection(this.db, this.prefix),
+						cleaned,
+						queryVector,
+						{
+							maxResults: Math.max(3, Math.floor(maxResults / 3)),
+							minScore,
+							numCandidates: mongoCfg.numCandidates,
+							vectorIndexName: `${this.prefix}kb_chunks_vector`,
+							textIndexName: `${this.prefix}kb_chunks_text`,
+							capabilities: this.capabilities,
+							embeddingMode: mongoCfg.embeddingMode,
+							kbDocs: kbCollection(this.db, this.prefix),
+							explain: explainOpts,
+						},
+					).catch((err) => {
+						log.warn(`KB search failed: ${String(err)}`)
+						return [] as MemorySearchResult[]
+					}),
+			!activeSources.structured
+				? emptyResults
+				: searchStructuredMemory(
+						structuredMemCollection(this.db, this.prefix),
+						cleaned,
+						queryVector,
+						{
+							maxResults: Math.max(3, Math.floor(maxResults / 3)),
+							minScore,
+							filter: { agentId: this.agentId },
+							numCandidates: mongoCfg.numCandidates,
+							capabilities: this.capabilities,
+							vectorIndexName: `${this.prefix}structured_mem_vector`,
+							embeddingMode: mongoCfg.embeddingMode,
+							explain: explainOpts,
+						},
+					).catch((err) => {
+						log.warn(`structured memory search failed: ${String(err)}`)
+						return [] as MemorySearchResult[]
+					}),
+		])
+
+		const conversationResults = [
+			...runtimeConversationResults,
+			...bridgeConversationResults,
+		]
+		const legacyMethod: SearchMethod = this.detectSearchMethod(mongoCfg)
+		const normalizedLegacy = normalizeSearchResults(
+			conversationResults,
+			legacyMethod,
+		)
+		const normalizedKb = normalizeSearchResults(kbResults, "kb")
+		const normalizedStructured = normalizeSearchResults(
+			structuredResults,
+			"structured",
+		)
+
+		const merged = [
+			...normalizedLegacy,
+			...normalizedKb,
+			...normalizedStructured,
+		].toSorted((a, b) => b.score - a.score)
+
+		const deduped = deduplicateSearchResults(merged)
+		const dedupCount = merged.length - deduped.length
+		if (dedupCount > 0) {
+			log.debug(`search dedup: removed ${dedupCount} duplicate result(s)`)
+		}
+		const finalResults = rerankResults(deduped, cleaned).slice(0, maxResults)
+		const successfulTrace = [...traceEvents]
+			.toReversed()
+			.find((event) => event.ok)
+		const fallbackPath =
+			successfulTrace && successfulTrace.method !== mongoCfg.fusionMethod
+				? `${mongoCfg.fusionMethod}->${successfulTrace.method}`
+				: undefined
+		const health =
+			this.relevance?.evaluateHealth(finalResults, fallbackPath) ?? "ok"
+		this.relevance?.recordSignal(finalResults, fallbackPath)
+
+		if (sampled && this.relevance) {
+			explainArtifacts.push({
+				artifactType: "trace",
+				summary: {
+					requestedFusionMethod: mongoCfg.fusionMethod,
+					fallbackPath,
+					events: traceEvents,
+					topScore: finalResults[0]?.score ?? 0,
+					resultCount: finalResults.length,
+				},
+			})
+			void this.relevance
+				.persistRun({
+					query: cleaned,
+					sourceScope: "all",
+					latencyMs: Date.now() - startedAt,
+					topK: maxResults,
+					hitSources: Array.from(
+						new Set(finalResults.map((result) => result.source)),
+					),
+					fallbackPath,
+					status: health,
+					sampled,
+					sampleRate: this.relevance.getSampleState().current,
+					artifacts: explainArtifacts,
+					diagnosticMode: false,
+				})
+				.catch((err) => {
+					this.relevance?.logTelemetryFailure(err)
+				})
+		}
+
+		this.recordSearchAccess(finalResults)
+		return finalResults
+	}
+
+	async search(
+		query: string,
+		opts?: {
+			maxResults?: number
+			minScore?: number
+			sessionKey?: string
+			questionDate?: Date
+		},
+	): Promise<MemorySearchResult[]> {
+		const cleaned = query.trim()
+		if (!cleaned) {
+			this.setLastSearchMode("v2:empty-query")
+			return []
+		}
+
+		const mongoCfg = this.config.mongodb!
+		const maxResults = opts?.maxResults ?? 10
+		const minScore = opts?.minScore ?? mongoCfg.reranking?.minScore ?? 0.01
+		const activeSources = getActiveSources(
+			mongoCfg.sources,
+			mongoCfg.kb.enabled,
+		)
+		const availablePaths = this.buildV2AvailablePaths(activeSources)
+
+		// Resolve search scope: session-scoped when sessionKey is present
+		const searchScope: MemoryScope = opts?.sessionKey ? "session" : "agent"
+		const searchScopeRef =
+			searchScope === "session"
+				? resolveScopeRef({
+						scope: "session",
+						agentId: this.agentId,
+						sessionId: opts?.sessionKey,
+					})
+				: this.agentScopeRef
+
+		// Cache check: BEFORE search pipeline
+		if (mongoCfg.cache.enabled) {
+			const cacheResult = await checkCache({
+				db: this.db,
+				prefix: this.prefix,
+				query: cleaned,
+				agentId: this.agentId,
+				scope: searchScope,
+				scopeRef: searchScopeRef,
+				config: mongoCfg.cache,
+			})
+			if (cacheResult.hit) {
+				this.setLastSearchMode(`v2:cache:${cacheResult.tier}`, {
+					pathUsed: cacheResult.pathUsed,
+					sourceScope: cacheResult.sourceScope,
+				})
+				const cachedPaths = cacheResult.pathUsed
+					? cacheResult.pathUsed.split(",").filter(Boolean)
+					: []
+				void recordRecallTrace({
+					db: this.db,
+					prefix: this.prefix,
+					trace: {
+						agentId: this.agentId,
+						query: cleaned,
+						lanesUsed: cachedPaths,
+						lanesSkipped: Array.from(availablePaths).filter(
+							(path) => !cachedPaths.includes(path),
+						),
+						totalHits: cacheResult.results.length,
+						latencyMs: 0,
+						hitsByLane: Object.fromEntries(
+							cachedPaths.map((path) => [path, 0]),
+						),
+						topHitIds: cacheResult.results
+							.map((result) => result.canonicalId ?? result.path)
+							.slice(0, 5),
+					},
+				}).catch((err) =>
+					log.warn(
+						`search recall trace write failed on cache hit: ${String(err)}`,
+					),
+				)
+				return cacheResult.results
+			}
+		}
+
+		const searchStart = Date.now()
+		try {
+			const v2 = await searchV2(this.db, this.prefix, cleaned, this.agentId, {
+				availablePaths,
+				hasEpisodes: mongoCfg.episodes.enabled,
+				hasGraphData: mongoCfg.graph.enabled,
+				maxResults,
+				searchOptions: {
+					minScore,
+					sessionKey: opts?.sessionKey,
+					numCandidates: mongoCfg.numCandidates,
+					capabilities: this.capabilities,
+					fusionMethod: mongoCfg.fusionMethod,
+					embeddingMode: mongoCfg.embeddingMode,
+					conversationFilter: this.buildConversationChunkFilter(),
+					bridgeFilter: activeSources.conversation
+						? this.buildBridgeChunkFilter()
+						: undefined,
+					bridgeMaxResults: this.getBridgeChunkBudget(maxResults),
+					scope: searchScope,
+					scopeRef: searchScopeRef,
+					rerankConfig: mongoCfg.reranking,
+					queryRewriteConfig: mongoCfg.queryRewriting,
+					questionDate: opts?.questionDate,
+				},
+			})
+
+			// Emit search telemetry (fire-and-forget)
+			emitTelemetry(this.db, this.prefix, {
+				meta: { agentId: this.agentId, operation: "search" },
+				durationMs: Date.now() - searchStart,
+				ok: v2.results.length > 0,
+				pathUsed: v2.metadata.pathsExecuted.join(","),
+				resultCount: v2.results.length,
+				topScore: v2.results[0]?.score ?? 0,
+				fusionMethod: mongoCfg.fusionMethod,
+			})
+			const latencyMs = Date.now() - searchStart
+
+			const v2Details = {
+				plan: v2.metadata.plan.paths,
+				confidence: v2.metadata.plan.confidence,
+				constraints: v2.metadata.plan.constraints,
+				pathsExecuted: v2.metadata.pathsExecuted,
+				resultsByPath: v2.metadata.resultsByPath,
+			}
+
+			if (v2.results.length > 0) {
+				this.setLastSearchMode("v2", v2Details)
+				void recordRecallTrace({
+					db: this.db,
+					prefix: this.prefix,
+					trace: {
+						agentId: this.agentId,
+						query: cleaned,
+						lanesUsed: v2.metadata.pathsExecuted,
+						lanesSkipped: Array.from(availablePaths).filter(
+							(path) => !v2.metadata.pathsExecuted.includes(path),
+						),
+						totalHits: v2.results.length,
+						latencyMs,
+						hitsByLane: v2.metadata.resultsByPath,
+						topHitIds: v2.results
+							.map((result) => result.canonicalId ?? result.path)
+							.slice(0, 5),
+					},
+				}).catch((err) =>
+					log.warn(`search recall trace write failed: ${String(err)}`),
+				)
+				// Fire-and-forget cache write
+				if (mongoCfg.cache.enabled) {
+					// H4 audit fix: derive TTL from actual paths executed (not static config)
+					const hasKbPath = v2.metadata.pathsExecuted.includes("kb")
+					const ttlSec = hasKbPath
+						? mongoCfg.cache.kbTtlSec
+						: mongoCfg.cache.conversationTtlSec
+					writeCache({
+						db: this.db,
+						prefix: this.prefix,
+						query: cleaned,
+						agentId: this.agentId,
+						scope: searchScope,
+						scopeRef: searchScopeRef,
+						results: v2.results,
+						pathUsed: v2.metadata.pathsExecuted.join(","),
+						sourceScope: "conversation",
+						ttlSec,
+					})
+				}
+				this.recordSearchAccess(v2.results)
+				return v2.results
+			}
+
+			const fallbackResults = await this.legacySearch(cleaned, opts)
+			this.setLastSearchMode("v2->legacy-empty", {
+				...v2Details,
+				fallbackResults: fallbackResults.length,
+			})
+			void recordRecallTrace({
+				db: this.db,
+				prefix: this.prefix,
+				trace: {
+					agentId: this.agentId,
+					query: cleaned,
+					lanesUsed: ["legacy"],
+					lanesSkipped: Array.from(availablePaths),
+					totalHits: fallbackResults.length,
+					latencyMs,
+					hitsByLane: { legacy: fallbackResults.length },
+					topHitIds: fallbackResults
+						.map((result) => result.canonicalId ?? result.path)
+						.slice(0, 5),
+				},
+			}).catch((err) =>
+				log.warn(`search fallback recall trace write failed: ${String(err)}`),
+			)
+			return fallbackResults
+		} catch (err) {
+			const message = err instanceof Error ? err.message : String(err)
+			log.warn(
+				`planner search failed, falling back to legacy search: ${message}`,
+			)
+			const fallbackResults = await this.legacySearch(cleaned, opts)
+			this.setLastSearchMode("v2->legacy-error", {
+				error: message,
+				fallbackResults: fallbackResults.length,
+			})
+			void recordRecallTrace({
+				db: this.db,
+				prefix: this.prefix,
+				trace: {
+					agentId: this.agentId,
+					query: cleaned,
+					lanesUsed: ["legacy"],
+					lanesSkipped: Array.from(availablePaths),
+					totalHits: fallbackResults.length,
+					latencyMs: Date.now() - searchStart,
+					hitsByLane: { legacy: fallbackResults.length },
+					topHitIds: fallbackResults
+						.map((result) => result.canonicalId ?? result.path)
+						.slice(0, 5),
+				},
+			}).catch((traceErr) =>
+				log.warn(
+					`search error fallback recall trace write failed: ${String(traceErr)}`,
+				),
+			)
+			return fallbackResults
+		}
+	}
+
+	async searchDetailed(
+		request: MemorySearchRequest,
+	): Promise<MemorySearchResponse> {
+		const normalized = normalizeDetailedSearchRequest(request)
+		if (!normalized.query) {
+			this.setLastSearchMode("v2:empty-query")
+			return {
+				results: [],
+				metadata: emptySearchMetadata(normalized),
+			}
+		}
+
+		const mongoCfg = this.config.mongodb!
+		const activeSources = getActiveSources(
+			mongoCfg.sources,
+			mongoCfg.kb.enabled,
+		)
+		const availablePaths = this.buildV2AvailablePaths(activeSources)
+		const searchScope: MemoryScope = normalized.conversationScope?.sessionKey
+			? "session"
+			: "agent"
+		const searchScopeRef =
+			searchScope === "session"
+				? resolveScopeRef({
+						scope: "session",
+						agentId: this.agentId,
+						sessionId: normalized.conversationScope?.sessionKey,
+					})
+				: this.agentScopeRef
+
+		const executorRequest = normalizeMemorySearchRequest(normalized)
+		const executorTimeRange = resolveExecutorTimeRange(executorRequest)
+		const resolvedSearchConfig = resolveRuntimeSearchConfig(
+			executorRequest,
+			mongoCfg,
+		)
+		const canUseDetailedSearchCache =
+			mongoCfg.cache.enabled && shouldUseDetailedSearchCache(executorRequest)
+
+		// Cache check
+		if (canUseDetailedSearchCache) {
+			const cacheResult = await checkCache({
+				db: this.db,
+				prefix: this.prefix,
+				query: normalized.query,
+				agentId: this.agentId,
+				scope: searchScope,
+				scopeRef: searchScopeRef,
+				config: mongoCfg.cache,
+			})
+			if (cacheResult.hit) {
+				this.setLastSearchMode(`v2:cache:${cacheResult.tier}`, {
+					pathUsed: cacheResult.pathUsed,
+					sourceScope: cacheResult.sourceScope,
+				})
+				const filteredCache = applyHardConstraintRejections({
+					results: cacheResult.results,
+					request: executorRequest,
+					...(executorTimeRange ? { timeRange: executorTimeRange } : {}),
+				})
+				if (filteredCache.accepted.length === cacheResult.results.length) {
+					const classification = classifyExecutorSearch(executorRequest)
+					const cachedPaths = cacheResult.pathUsed
+						? cacheResult.pathUsed.split(",").filter(Boolean)
+						: []
+					const plannedPasses = buildExecutorPasses(
+						executorRequest,
+						classification,
+					).map((pass, index) => ({
+						pass: pass.pass,
+						query: pass.query,
+						reason: index === 0 ? `${pass.reason} (cache hit)` : pass.reason,
+						pathsExecuted: index === 0 ? cachedPaths : [],
+						resultCount: index === 0 ? filteredCache.accepted.length : 0,
+						queryRewritten: false,
+						reranked: false,
+					}))
+					const trustedCacheResults = annotateResultsWithTrust(
+						filteredCache.accepted,
+						{
+							scope: searchScope,
+							scopeRef: searchScopeRef,
+							sessionKey: normalized.conversationScope?.sessionKey,
+						},
+					)
+					return {
+						results: trustedCacheResults,
+						metadata: {
+							...emptySearchMetadata(normalized),
+							classification,
+							resolvedSearchConfig,
+							passes: plannedPasses,
+							queriesTried: plannedPasses.map((pass) => pass.query),
+							constraintsApplied: [
+								...buildConstraintSummaries(executorRequest),
+								...(requestHasHardConstraints(normalized)
+									? ["cache-hit-constrained"]
+									: []),
+							],
+							evidenceCoverage: computeEvidenceCoverage(trustedCacheResults),
+							pathsExecuted: cachedPaths,
+							trustSummary: summarizeTrust(trustedCacheResults),
+						},
+					}
+				}
+			}
+		}
+
+		const searchStart = Date.now()
+		const response = await executeMongoSearchPlan({
+			request: normalized,
+			availablePaths,
+			executePass: async ({
+				query: passQuery,
+				availablePaths: passPaths,
+				timeRange,
+			}) =>
+				searchV2(this.db, this.prefix, passQuery, this.agentId, {
+					availablePaths: passPaths,
+					hasEpisodes: mongoCfg.episodes.enabled,
+					hasGraphData: mongoCfg.graph.enabled,
+					maxResults: resolvedSearchConfig.maxResults,
+					searchOptions: {
+						minScore: normalized.minScore ?? 0.1,
+						sessionKey: normalized.conversationScope?.sessionKey,
+						numCandidates: resolvedSearchConfig.numCandidates,
+						capabilities: this.capabilities,
+						fusionMethod: resolvedSearchConfig.fusionMethod,
+						embeddingMode: mongoCfg.embeddingMode,
+						conversationFilter: this.buildConversationChunkFilter({
+							scope: searchScope,
+							scopeRef: searchScopeRef,
+						}),
+						bridgeFilter: activeSources.conversation
+							? this.buildBridgeChunkFilter()
+							: undefined,
+						bridgeMaxResults: this.getBridgeChunkBudget(
+							resolvedSearchConfig.maxResults,
+						),
+						scope: searchScope,
+						scopeRef: searchScopeRef,
+						allowHybridBackstop: resolvedSearchConfig.allowHybridBackstop,
+						sourcePreference: normalized.sourcePreference,
+						needExactEvidence: normalized.needExactEvidence,
+						timeRange: normalized.timeRange,
+						conversationScope: normalized.conversationScope,
+						structuredScope: normalized.structuredScope,
+						referenceScope: normalized.referenceScope,
+						proceduralScope: normalized.proceduralScope,
+						rerankConfig: mongoCfg.reranking,
+						queryRewriteConfig: mongoCfg.queryRewriting,
+						searchConfig: resolvedSearchConfig,
+					},
+				}),
+			trustContext: {
+				scope: searchScope,
+				scopeRef: searchScopeRef,
+			},
+		})
+		response.metadata.resolvedSearchConfig = resolvedSearchConfig
+
+		emitTelemetry(this.db, this.prefix, {
+			meta: { agentId: this.agentId, operation: "search" },
+			durationMs: Date.now() - searchStart,
+			ok: response.results.length > 0,
+			pathUsed: response.metadata.pathsExecuted.join(","),
+			resultCount: response.results.length,
+			topScore: response.results[0]?.score ?? 0,
+			fusionMethod: resolvedSearchConfig.fusionMethod,
+		})
+		const latencyMs = Date.now() - searchStart
+		void recordRecallTrace({
+			db: this.db,
+			prefix: this.prefix,
+			trace: {
+				agentId: this.agentId,
+				query: normalized.query,
+				lanesUsed: response.metadata.pathsExecuted,
+				lanesSkipped: Array.from(availablePaths).filter(
+					(path) => !response.metadata.pathsExecuted.includes(path),
+				),
+				totalHits: response.results.length,
+				latencyMs,
+				hitsByLane: response.metadata.resultsByPath,
+				topHitIds: response.results
+					.map((result) => result.canonicalId ?? result.path)
+					.slice(0, 5),
+			},
+		}).catch((err) =>
+			log.warn(`searchDetailed recall trace write failed: ${String(err)}`),
+		)
+
+		const v2Details = {
+			classification: response.metadata.classification,
+			sourceOrder: response.metadata.sourceOrder,
+			resolvedSearchConfig: response.metadata.resolvedSearchConfig,
+			constraintsApplied: response.metadata.constraintsApplied,
+			pathsExecuted: response.metadata.pathsExecuted,
+			resultsByPath: response.metadata.resultsByPath,
+			evidenceCoverage: response.metadata.evidenceCoverage,
+		}
+
+		if (response.results.length > 0) {
+			this.setLastSearchMode("v2", v2Details)
+			this.recordSearchAccess(response.results)
+			if (canUseDetailedSearchCache) {
+				const hasKbPath = response.metadata.pathsExecuted.includes("kb")
+				const ttlSec = hasKbPath
+					? mongoCfg.cache.kbTtlSec
+					: mongoCfg.cache.conversationTtlSec
+				writeCache({
+					db: this.db,
+					prefix: this.prefix,
+					query: normalized.query,
+					agentId: this.agentId,
+					scope: searchScope,
+					scopeRef: searchScopeRef,
+					results: response.results,
+					pathUsed: response.metadata.pathsExecuted.join(","),
+					sourceScope: "conversation",
+					ttlSec,
+				})
+			}
+			return response
+		}
+
+		if (requestHasHardConstraints(normalized)) {
+			this.setLastSearchMode("v2:constrained-empty", v2Details)
+			return response
+		}
+
+		const fallbackResults = await this.legacySearch(normalized.query, {
+			maxResults: normalized.maxResults,
+			minScore: normalized.minScore,
+			sessionKey: normalized.conversationScope?.sessionKey,
+		})
+		this.setLastSearchMode("v2->legacy-empty", {
+			...v2Details,
+			fallbackResults: fallbackResults.length,
+		})
+		return {
+			results: fallbackResults,
+			metadata: {
+				...response.metadata,
+				pathsExecuted: response.metadata.pathsExecuted.length
+					? response.metadata.pathsExecuted
+					: ["legacy"],
+			},
+		}
+	}
+
+	async relevanceExplain(params: {
+		query: string
+		sourceScope?: RelevanceSourceScope
+		sessionKey?: string
+		maxResults?: number
+		minScore?: number
+		deep?: boolean
+		questionDate?: Date
+	}): Promise<RelevanceExplainResult> {
+		if (!this.relevance) {
+			throw new Error("relevance runtime is unavailable")
+		}
+		const sourceScope = params.sourceScope ?? "all"
+		const maxResults = params.maxResults ?? 10
+		const minScore = params.minScore ?? 0.1
+		const startedAt = Date.now()
+		const query = params.query.trim()
+		if (!query) {
+			return {
+				latencyMs: 0,
+				sourceScope,
+				health: "insufficient-data",
+				sampleRate: this.relevance.getSampleState().current,
+				artifacts: [],
+				results: [],
+			}
+		}
+
+		const queryVector: number[] | null = null
+		const mongoCfg = this.config.mongodb!
+
+		const artifacts: RelevanceArtifact[] = []
+		const traces: SearchTraceEvent[] = []
+		const explainOpts: SearchExplainOptions = {
+			enabled: true,
+			deep: Boolean(params.deep),
+			includeScoreDetails: true,
+			onArtifact: (artifact) => {
+				artifacts.push({
+					artifactType: artifact.artifactType,
+					summary: artifact.summary,
+					rawExplain: artifact.rawExplain,
+					compression: "none",
+				})
+			},
+		}
+
+		// Source policy enforcement: disabled sources return empty results even when
+		// explicitly requested via sourceScope (matches search() behavior).
+		const activeSources = getActiveSources(
+			mongoCfg.sources,
+			mongoCfg.kb.enabled,
+		)
+		const explainSources = resolveExplainSources(sourceScope, activeSources)
+		const bridgeMaxResults = this.getBridgeChunkBudget(maxResults)
+		const emptyResults: MemorySearchResult[] = []
+
+		let mergedResults: MemorySearchResult[] = []
+		if (sourceScope === "memory") {
+			if (!explainSources.conversation) {
+				mergedResults = emptyResults
+			} else {
+				const [runtimeHits, bridgeHits] = await Promise.all([
+					mongoSearch(
+						chunksCollection(this.db, this.prefix),
+						query,
+						queryVector,
+						{
+							maxResults: bridgeMaxResults,
+							minScore,
+							numCandidates: mongoCfg.numCandidates,
+							sessionKey: params.sessionKey,
+							filter: this.buildConversationChunkFilter(),
+							fusionMethod: mongoCfg.fusionMethod,
+							capabilities: this.capabilities,
+							vectorIndexName: `${this.prefix}chunks_vector`,
+							textIndexName: `${this.prefix}chunks_text`,
+							vectorWeight: 0.7,
+							textWeight: 0.3,
+							embeddingMode: mongoCfg.embeddingMode,
+							explain: explainOpts,
+							onTrace: (event) => traces.push(event),
+						},
+					),
+					mongoSearch(
+						chunksCollection(this.db, this.prefix),
+						query,
+						queryVector,
+						{
+							maxResults,
+							minScore,
+							numCandidates: mongoCfg.numCandidates,
+							sessionKey: params.sessionKey,
+							filter: this.buildBridgeChunkFilter(),
+							fusionMethod: mongoCfg.fusionMethod,
+							capabilities: this.capabilities,
+							vectorIndexName: `${this.prefix}chunks_vector`,
+							textIndexName: `${this.prefix}chunks_text`,
+							vectorWeight: 0.7,
+							textWeight: 0.3,
+							embeddingMode: mongoCfg.embeddingMode,
+							explain: explainOpts,
+							onTrace: (event) => traces.push(event),
+						},
+					),
+				])
+				const legacyMethod: SearchMethod = this.detectSearchMethod(mongoCfg)
+				const normalizedRuntime = normalizeSearchResults(
+					runtimeHits,
+					legacyMethod,
+				)
+				const normalizedBridge = normalizeSearchResults(
+					bridgeHits,
+					legacyMethod,
+				)
+				mergedResults = applyPostRetrievalScoring(
+					query,
+					rerankResults(
+						deduplicateSearchResults(
+							[...normalizedRuntime, ...normalizedBridge].toSorted(
+								(a, b) => b.score - a.score,
+							),
+						),
+						query,
+					),
+					{ questionDate: params.questionDate },
+				).slice(0, maxResults)
+			}
+		} else if (sourceScope === "kb") {
+			mergedResults = !explainSources.reference
+				? emptyResults
+				: await searchKB(
+						kbChunksCollection(this.db, this.prefix),
+						query,
+						queryVector,
+						{
+							maxResults,
+							minScore,
+							numCandidates: mongoCfg.numCandidates,
+							vectorIndexName: `${this.prefix}kb_chunks_vector`,
+							textIndexName: `${this.prefix}kb_chunks_text`,
+							capabilities: this.capabilities,
+							embeddingMode: mongoCfg.embeddingMode,
+							kbDocs: kbCollection(this.db, this.prefix),
+							explain: explainOpts,
+						},
+					)
+		} else if (sourceScope === "structured") {
+			mergedResults = !explainSources.structured
+				? emptyResults
+				: await searchStructuredMemory(
+						structuredMemCollection(this.db, this.prefix),
+						query,
+						queryVector,
+						{
+							maxResults,
+							minScore,
+							filter: { agentId: this.agentId },
+							numCandidates: mongoCfg.numCandidates,
+							capabilities: this.capabilities,
+							vectorIndexName: `${this.prefix}structured_mem_vector`,
+							embeddingMode: mongoCfg.embeddingMode,
+							explain: explainOpts,
+						},
+					)
+		} else {
+			const [
+				runtimeConversationResults,
+				bridgeConversationResults,
+				kbResults,
+				structuredResults,
+			] = await Promise.all([
+				// Runtime conversation chunks — skip if conversation source is disabled
+				!explainSources.conversation
+					? emptyResults
+					: mongoSearch(
+							chunksCollection(this.db, this.prefix),
+							query,
+							queryVector,
+							{
+								maxResults,
+								minScore,
+								numCandidates: mongoCfg.numCandidates,
+								sessionKey: params.sessionKey,
+								filter: this.buildConversationChunkFilter(),
+								fusionMethod: mongoCfg.fusionMethod,
+								capabilities: this.capabilities,
+								vectorIndexName: `${this.prefix}chunks_vector`,
+								textIndexName: `${this.prefix}chunks_text`,
+								vectorWeight: 0.7,
+								textWeight: 0.3,
+								embeddingMode: mongoCfg.embeddingMode,
+								explain: explainOpts,
+								onTrace: (event) => traces.push(event),
+							},
+						),
+				// Bridge-note chunks — same collection, different namespace filter
+				!explainSources.conversation
+					? emptyResults
+					: mongoSearch(
+							chunksCollection(this.db, this.prefix),
+							query,
+							queryVector,
+							{
+								maxResults: bridgeMaxResults,
+								minScore,
+								numCandidates: mongoCfg.numCandidates,
+								sessionKey: params.sessionKey,
+								filter: this.buildBridgeChunkFilter(),
+								fusionMethod: mongoCfg.fusionMethod,
+								capabilities: this.capabilities,
+								vectorIndexName: `${this.prefix}chunks_vector`,
+								textIndexName: `${this.prefix}chunks_text`,
+								vectorWeight: 0.7,
+								textWeight: 0.3,
+								embeddingMode: mongoCfg.embeddingMode,
+								explain: explainOpts,
+								onTrace: (event) => traces.push(event),
+							},
+						),
+				// KB chunks — skip if reference source is disabled
+				!explainSources.reference
+					? emptyResults
+					: searchKB(
+							kbChunksCollection(this.db, this.prefix),
+							query,
+							queryVector,
+							{
+								maxResults: Math.max(3, Math.floor(maxResults / 3)),
+								minScore,
+								numCandidates: mongoCfg.numCandidates,
+								vectorIndexName: `${this.prefix}kb_chunks_vector`,
+								textIndexName: `${this.prefix}kb_chunks_text`,
+								capabilities: this.capabilities,
+								embeddingMode: mongoCfg.embeddingMode,
+								kbDocs: kbCollection(this.db, this.prefix),
+								explain: explainOpts,
+							},
+						).catch((err) => {
+							log.warn(`relevanceExplain KB search failed: ${String(err)}`)
+							return [] as MemorySearchResult[]
+						}),
+				// Structured memory — skip if structured source is disabled
+				!explainSources.structured
+					? emptyResults
+					: searchStructuredMemory(
+							structuredMemCollection(this.db, this.prefix),
+							query,
+							queryVector,
+							{
+								maxResults: Math.max(3, Math.floor(maxResults / 3)),
+								minScore,
+								filter: { agentId: this.agentId },
+								numCandidates: mongoCfg.numCandidates,
+								capabilities: this.capabilities,
+								vectorIndexName: `${this.prefix}structured_mem_vector`,
+								embeddingMode: mongoCfg.embeddingMode,
+								explain: explainOpts,
+							},
+						).catch((err) => {
+							log.warn(
+								`relevanceExplain structured memory search failed: ${String(err)}`,
+							)
+							return [] as MemorySearchResult[]
+						}),
+			])
+			const conversationResults = [
+				...runtimeConversationResults,
+				...bridgeConversationResults,
+			]
+			const legacyMethod: SearchMethod = this.detectSearchMethod(mongoCfg)
+			const normalizedLegacy = normalizeSearchResults(
+				conversationResults,
+				legacyMethod,
+			)
+			const normalizedKb = normalizeSearchResults(kbResults, "kb")
+			const normalizedStructured = normalizeSearchResults(
+				structuredResults,
+				"structured",
+			)
+			const merged = [
+				...normalizedLegacy,
+				...normalizedKb,
+				...normalizedStructured,
+			].toSorted((a, b) => b.score - a.score)
+			mergedResults = applyPostRetrievalScoring(
+				query,
+				rerankResults(deduplicateSearchResults(merged), query),
+				{ questionDate: params.questionDate },
+			).slice(0, maxResults)
+		}
+
+		const successfulTrace = [...traces].toReversed().find((event) => event.ok)
+		const fallbackPath =
+			successfulTrace && successfulTrace.method !== mongoCfg.fusionMethod
+				? `${mongoCfg.fusionMethod}->${successfulTrace.method}`
+				: undefined
+		const health = this.relevance.evaluateHealth(mergedResults, fallbackPath)
+		this.relevance.recordSignal(mergedResults, fallbackPath)
+		artifacts.push({
+			artifactType: "trace",
+			summary: {
+				sourceScope,
+				requestedFusionMethod: mongoCfg.fusionMethod,
+				fallbackPath,
+				events: traces,
+				topScore: mergedResults[0]?.score ?? 0,
+				resultCount: mergedResults.length,
+			},
+		})
+
+		const latencyMs = Date.now() - startedAt
+		let runId: string | undefined
+		try {
+			runId = await this.relevance.persistRun({
+				query,
+				sourceScope,
+				latencyMs,
+				topK: maxResults,
+				hitSources: Array.from(
+					new Set(mergedResults.map((result) => result.source)),
+				),
+				fallbackPath,
+				status: health,
+				sampled: true,
+				sampleRate: this.relevance.getSampleState().current,
+				artifacts,
+				diagnosticMode: true,
+			})
+		} catch (err) {
+			this.relevance.logTelemetryFailure(err)
+		}
+
+		return {
+			runId,
+			latencyMs,
+			sourceScope,
+			health,
+			fallbackPath,
+			sampleRate: this.relevance.getSampleState().current,
+			artifacts,
+			results: mergedResults,
+		}
+	}
+
+	async relevanceBenchmark(params?: {
+		datasetPath?: string
+		maxResults?: number
+		minScore?: number
+	}): Promise<RelevanceBenchmarkResult> {
+		if (!this.relevance) {
+			throw new Error("relevance runtime is unavailable")
+		}
+		const mongoCfg = this.config.mongodb!
+		if (!mongoCfg.relevance.benchmark.enabled) {
+			throw new Error("relevance benchmark is disabled by configuration")
+		}
+		const datasetPath =
+			params?.datasetPath ?? mongoCfg.relevance.benchmark.datasetPath
+		const maxResults = params?.maxResults ?? 10
+		const minScore = params?.minScore ?? mongoCfg.reranking?.minScore ?? 0.01
+		const resolvedDatasetPath = await resolveBenchmarkDatasetPath({
+			datasetPath,
+			baseDir: this.workspaceDir,
+			allowedRoots: this.getBenchmarkAllowedRoots(),
+		})
+		let dataset: MemoryBenchmarkDataset
+		try {
+			dataset = await loadBenchmarkDataset(resolvedDatasetPath, {
+				baseDir: this.workspaceDir,
+				allowedRoots: this.getBenchmarkAllowedRoots(),
+			})
+		} catch (datasetErr) {
+			if (!isLegacyBenchmarkFallbackCandidate(datasetErr)) {
+				throw datasetErr
+			}
+			const cases =
+				await this.relevance.loadBenchmarkDataset(resolvedDatasetPath)
+			if (cases.length === 0) {
+				throw datasetErr
+			}
+			const result = await this.runLegacyRelevanceBenchmark({
+				datasetPath: resolvedDatasetPath,
+				maxResults,
+				minScore,
+			})
+			return attachBenchmarkOperationsReport(result)
+		}
+		if (
+			(dataset.scenarios?.some((scenario) => scenario.evaluations.length > 0) ??
+				false) === false
+		) {
+			const noEvaluationError = new Error(
+				"benchmark dataset contains no evaluation cases",
+			)
+			const cases =
+				await this.relevance.loadBenchmarkDataset(resolvedDatasetPath)
+			if (cases.length === 0) {
+				throw noEvaluationError
+			}
+			const result = await this.runLegacyRelevanceBenchmark({
+				datasetPath: resolvedDatasetPath,
+				maxResults,
+				minScore,
+			})
+			return attachBenchmarkOperationsReport(result)
+		}
+		const datasetVersion =
+			await this.buildBenchmarkDatasetVersion(resolvedDatasetPath)
+		const result = await this.runScenarioBenchmarkDataset({
+			datasetPath: resolvedDatasetPath,
+			dataset,
+			datasetVersion,
+			maxResults,
+			minScore,
+		})
+		return attachBenchmarkOperationsReport(result)
+	}
+
+	async relevanceReport(params?: {
+		windowMs?: number
+	}): Promise<RelevanceReport> {
+		if (!this.relevance) {
+			throw new Error("relevance runtime is unavailable")
+		}
+		const windowMs = params?.windowMs ?? 24 * 60 * 60 * 1000
+		return await this.relevance.buildReport(windowMs)
+	}
+
+	relevanceSampleRate(): RelevanceSampleState {
+		if (!this.relevance) {
+			return {
+				enabled: false,
+				current: 0,
+				base: 0,
+				max: 0,
+				windowSize: 0,
+				degradedSignals: 0,
+			}
+		}
+		return this.relevance.getSampleState()
+	}
+
+	private getBenchmarkAllowedRoots(): string[] {
+		return [
+			this.workspaceDir,
+			path.dirname(
+				this.config.mongodb?.relevance.benchmark.datasetPath ??
+					this.workspaceDir,
+			),
+		]
+	}
+
+	private createBenchmarkScenarioManager(
+		agentId: string,
+	): MongoDBMemoryManager {
+		const mongoCfg = this.config.mongodb
+		const relevance =
+			mongoCfg?.relevance.enabled === true
+				? new MongoDBRelevanceRuntime(
+						this.db,
+						this.prefix,
+						agentId,
+						mongoCfg,
+						this.capabilities,
+					)
+				: null
+		return new MongoDBMemoryManager({
+			client: this.client,
+			db: this.db,
+			prefix: this.prefix,
+			agentId,
+			workspaceDir: this.workspaceDir,
+			extraMemoryPaths: this.extraMemoryPaths,
+			capabilities: this.capabilities,
+			config: this.config,
+			relevance,
+		})
+	}
+
+	private async settleBenchmarkScenarioManager(
+		manager: MongoDBMemoryManager,
+	): Promise<void> {
+		for (let attempt = 0; attempt < 8; attempt++) {
+			const writeQueue = manager.writeQueue
+			const derivationQueue = manager.derivationQueue
+			await writeQueue
+			await derivationQueue
+			if (
+				writeQueue === manager.writeQueue &&
+				derivationQueue === manager.derivationQueue
+			) {
+				return
+			}
+		}
+		log.warn("benchmark scenario manager did not fully settle after retries", {
+			agentId: manager.agentId,
+		})
+	}
+
+	private async cleanupBenchmarkScenarioData(agentId: string): Promise<void> {
+		const collectionSuffixes = [
+			"events",
+			"chunks",
+			"session_chunks",
+			"structured_mem",
+			"structured_mem_revisions",
+			"procedures",
+			"procedure_revisions",
+			"entities",
+			"relations",
+			"entity_links",
+			"episodes",
+			"ingest_runs",
+			"projection_runs",
+			"lane_coverage",
+			"relevance_runs",
+			"relevance_regressions",
+			"relevance_artifacts",
+			"recall_traces",
+			"memory_jobs",
+			"consolidation_runs",
+			"memory_mutations",
+		] as const
+		const settled = await Promise.allSettled(
+			collectionSuffixes.map(async (suffix) => {
+				await this.db
+					.collection(`${this.prefix}${suffix}`)
+					.deleteMany({ agentId })
+			}),
+		)
+		for (const [index, result] of settled.entries()) {
+			if (result.status === "rejected") {
+				log.warn("benchmark scenario cleanup failed", {
+					agentId,
+					collection: collectionSuffixes[index],
+					error: result.reason,
+				})
+			}
+		}
+	}
+
+	private async listBenchmarkEventSessions(
+		agentId: string,
+	): Promise<Map<string, string>> {
+		return (await this.listBenchmarkEventEvidence(agentId)).sessionIds
+	}
+
+	private async listBenchmarkEventEvidence(
+		agentId: string,
+	): Promise<BenchmarkEventEvidenceMaps> {
+		const rows = await eventsCollection(this.db, this.prefix)
+			.find(
+				{ agentId },
+				{
+					projection: {
+						eventId: 1,
+						sessionId: 1,
+						metadata: 1,
+					},
+				},
+			)
+			.toArray()
+		const evidence: BenchmarkEventEvidenceMaps = {
+			sessionIds: new Map<string, string>(),
+			turnIds: new Map<string, string>(),
+			dialogIds: new Map<string, string>(),
+		}
+		for (const row of rows) {
+			if (typeof row.eventId !== "string" || row.eventId.trim().length === 0) {
+				continue
+			}
+			const eventId = row.eventId.trim()
+			if (
+				typeof row.sessionId === "string" &&
+				row.sessionId.trim().length > 0
+			) {
+				evidence.sessionIds.set(eventId, row.sessionId.trim())
+			}
+			const metadata =
+				row.metadata && typeof row.metadata === "object"
+					? (row.metadata as Record<string, unknown>)
+					: undefined
+			if (
+				typeof metadata?.benchmarkTurnId === "string" &&
+				metadata.benchmarkTurnId.trim().length > 0
+			) {
+				evidence.turnIds.set(eventId, metadata.benchmarkTurnId.trim())
+			}
+			if (
+				typeof metadata?.locomoDialogId === "string" &&
+				metadata.locomoDialogId.trim().length > 0
+			) {
+				evidence.dialogIds.set(eventId, metadata.locomoDialogId.trim())
+			}
+		}
+		return evidence
+	}
+
+	private collectBenchmarkResultSourceEventIds(
+		result: MemorySearchResult,
+	): string[] {
+		const sourceEventIds = new Set<string>()
+		if (Array.isArray(result.sourceEventIds)) {
+			for (const eventId of result.sourceEventIds) {
+				if (typeof eventId === "string" && eventId.trim().length > 0) {
+					sourceEventIds.add(eventId.trim())
+				}
+			}
+		}
+		const provenance = result.provenance
+		if (
+			provenance &&
+			typeof provenance === "object" &&
+			Array.isArray(
+				(provenance as { sourceEventIds?: unknown[] }).sourceEventIds,
+			)
+		) {
+			for (const eventId of (provenance as { sourceEventIds: unknown[] })
+				.sourceEventIds) {
+				if (typeof eventId === "string" && eventId.trim().length > 0) {
+					sourceEventIds.add(eventId.trim())
+				}
+			}
+		}
+		return Array.from(sourceEventIds)
+	}
+
+	private resolveBenchmarkResultSessionIds(
+		result: MemorySearchResult,
+		evidence: BenchmarkEventEvidenceMaps | Map<string, string>,
+	): string[] {
+		const sessionIds: string[] = []
+		if (
+			typeof result.sessionId === "string" &&
+			result.sessionId.trim().length > 0
+		) {
+			sessionIds.push(result.sessionId.trim())
+		}
+		// Recognize session-chunk canonical IDs (from session evidence documents)
+		if (
+			typeof result.canonicalId === "string" &&
+			result.canonicalId.startsWith("session-chunk/")
+		) {
+			const sessionId = result.canonicalId.slice("session-chunk/".length).trim()
+			if (sessionId.length > 0) {
+				sessionIds.push(sessionId)
+			}
+		}
+		const eventSessions =
+			evidence instanceof Map ? evidence : evidence.sessionIds
+		for (const eventId of this.collectBenchmarkResultSourceEventIds(result)) {
+			const sessionId = eventSessions.get(eventId)
+			if (sessionId) {
+				sessionIds.push(sessionId)
+			}
+		}
+		return Array.from(new Set(sessionIds))
+	}
+
+	private resolveBenchmarkResultTurnIds(
+		result: MemorySearchResult,
+		evidence: BenchmarkEventEvidenceMaps,
+	): string[] {
+		const turnIds: string[] = []
+		for (const eventId of this.collectBenchmarkResultSourceEventIds(result)) {
+			const turnId = evidence.turnIds.get(eventId)
+			if (turnId) {
+				turnIds.push(turnId)
+			}
+		}
+		return Array.from(new Set(turnIds))
+	}
+
+	private resolveBenchmarkResultDialogIds(
+		result: MemorySearchResult,
+		evidence: BenchmarkEventEvidenceMaps,
+	): string[] {
+		const dialogIds: string[] = []
+		for (const eventId of this.collectBenchmarkResultSourceEventIds(result)) {
+			const dialogId = evidence.dialogIds.get(eventId)
+			if (dialogId) {
+				dialogIds.push(dialogId)
+			}
+		}
+		return Array.from(new Set(dialogIds))
+	}
+
+	private async buildBenchmarkDatasetVersion(
+		datasetPath: string,
+	): Promise<string> {
+		const hash = createHash("sha256")
+		const stream = createReadStream(datasetPath)
+		await new Promise<void>((resolve, reject) => {
+			stream.on("data", (chunk) => {
+				hash.update(chunk)
+			})
+			stream.on("end", () => resolve())
+			stream.on("error", (err) => reject(err))
+		})
+		return hash.digest("hex").slice(0, 16)
+	}
+
+	private async runLegacyRelevanceBenchmark(params: {
+		datasetPath: string
+		maxResults: number
+		minScore: number
+	}): Promise<RelevanceBenchmarkResult> {
+		const cases = await this.relevance!.loadBenchmarkDataset(params.datasetPath)
+		const evaluations: Array<{
+			empty: boolean
+			topScore: number
+			latencyMs: number
+			pass: boolean
+		}> = []
+
+		for (const entry of cases) {
+			const run = await this.relevanceExplain({
+				query: entry.query,
+				sourceScope: entry.sourceScope ?? "all",
+				maxResults: params.maxResults,
+				minScore: params.minScore,
+				deep: false,
+			})
+			const summary = MongoDBRelevanceRuntime.buildCaseSummary(
+				run.results,
+				run.latencyMs,
+			)
+			const expectedSources = entry.expectedSources ?? []
+			const sourcePass = expectedSources.every((source) =>
+				summary.hitSources.includes(source),
+			)
+			const scorePass =
+				typeof entry.minTopScore === "number"
+					? summary.topScore >= entry.minTopScore
+					: true
+			evaluations.push({
+				empty: summary.empty,
+				topScore: summary.topScore,
+				latencyMs: summary.latencyMs,
+				pass: !summary.empty && sourcePass && scorePass,
+			})
+		}
+
+		const metrics = MongoDBRelevanceRuntime.summarizeBenchmarkCases(evaluations)
+		const datasetVersion = createHash("sha256")
+			.update(JSON.stringify(cases.map((entry) => entry.query)))
+			.digest("hex")
+			.slice(0, 16)
+		const regressions = await this.relevance!.persistRegression(
+			datasetVersion,
+			{
+				...metrics,
+				rAt5: 0,
+				rAt10: 0,
+				ndcgAt10: 0,
+			},
+		)
+		return {
+			datasetVersion,
+			datasetName: path.basename(params.datasetPath),
+			datasetKind: "legacy-query",
+			cases: cases.length,
+			scoredCases: cases.length,
+			skippedCases: 0,
+			...metrics,
+			rAt5: 0,
+			rAt10: 0,
+			ndcgAt10: 0,
+			questionTypeBreakdown: [],
+			regressions,
+		}
+	}
+
+	private async runScenarioBenchmarkDataset(params: {
+		datasetPath: string
+		dataset: MemoryBenchmarkDataset
+		datasetVersion: string
+		maxResults: number
+		minScore: number
+	}): Promise<RelevanceBenchmarkResult> {
+		const scenarios = params.dataset.scenarios ?? []
+		const executions: BenchmarkCaseExecution[] = []
+		const expectedSessionMap = new Map<string, string[]>()
+		const expectedTurnMap = new Map<string, string[]>()
+		const runToken = randomUUID().slice(0, 8)
+		const ingest = {
+			conversationsIngested: 0,
+			turnsIngested: 0,
+			skippedConversations: 0,
+			failedLines: params.dataset.failedLines ?? 0,
+			failedTurns: 0,
+		}
+
+		for (const [index, scenario] of scenarios.entries()) {
+			let scenarioManager: MongoDBMemoryManager = this
+			let eventEvidence: BenchmarkEventEvidenceMaps = {
+				sessionIds: new Map<string, string>(),
+				turnIds: new Map<string, string>(),
+				dialogIds: new Map<string, string>(),
+			}
+			try {
+				if (scenario.conversations.length > 0) {
+					const scenarioAgentId = `benchmark-${this.agentId}-${runToken}-${createHash("sha256").update(`${index}:${scenario.scenarioId}`).digest("hex").slice(0, 12)}`
+					scenarioManager = this.createBenchmarkScenarioManager(scenarioAgentId)
+					const scenarioIngest = await ingestBenchmarkConversations({
+						datasetPath: params.datasetPath,
+						datasetName: params.dataset.name,
+						conversations: scenario.conversations,
+						scope: "agent",
+						metadata: {
+							benchmarkDatasetKind: params.dataset.datasetKind ?? "generic",
+							benchmarkScenarioId: scenario.scenarioId,
+						},
+						writeTurn: async (turn) => {
+							await scenarioManager.writeConversationEvent(turn)
+						},
+					})
+					ingest.conversationsIngested += scenarioIngest.conversationsIngested
+					ingest.turnsIngested += scenarioIngest.turnsIngested
+					ingest.skippedConversations += scenarioIngest.skippedConversations
+					ingest.failedTurns += scenarioIngest.failedTurns
+					await this.settleBenchmarkScenarioManager(scenarioManager)
+					eventEvidence = await this.listBenchmarkEventEvidence(
+						scenarioManager.agentId,
+					)
+
+					// Session evidence: create session-level documents for retrieval
+					const sessionEvidenceMode = resolveSessionEvidenceMode(
+						process.env.MEMONGO_SESSION_EVIDENCE_MODE,
+					)
+					const userfactEvidenceMode = resolveUserfactEvidenceMode(
+						process.env.MEMONGO_USERFACT_EVIDENCE_MODE,
+						process.env.MEMONGO_PREFERENCE_EVIDENCE_MODE,
+					)
+					if (
+						sessionEvidenceMode !== "none" ||
+						userfactEvidenceMode === "enabled"
+					) {
+						try {
+							// Invert eventId->sessionId to sessionId->[eventIds]
+							const sessionEventMap = new Map<string, string[]>()
+							for (const [eventId, sessionId] of eventEvidence.sessionIds) {
+								const existing = sessionEventMap.get(sessionId)
+								if (existing) {
+									existing.push(eventId)
+								} else {
+									sessionEventMap.set(sessionId, [eventId])
+								}
+							}
+							const scopeRef = resolveScopeRef({
+								scope: "agent",
+								agentId: scenarioManager.agentId,
+							})
+
+							if (sessionEvidenceMode === "A") {
+								await writeSessionEvidenceOptionA({
+									chunksCollection: chunksCollection(this.db, this.prefix),
+									conversations: scenario.conversations,
+									agentId: scenarioManager.agentId,
+									scope: "agent",
+									scopeRef,
+									eventIds: sessionEventMap,
+								})
+							} else if (sessionEvidenceMode === "B") {
+								await writeSessionEvidenceOptionB({
+									sessionChunksCollection: sessionChunksCollection(
+										this.db,
+										this.prefix,
+									),
+									conversations: scenario.conversations,
+									agentId: scenarioManager.agentId,
+									scope: "agent",
+									scopeRef,
+									eventIds: sessionEventMap,
+								})
+							}
+
+							// LLM enrichment: replaces regex userfact when available
+							const enrichmentMode = resolveEnrichmentMode(
+								process.env.MEMONGO_LLM_ENRICHMENT_MODE,
+							)
+							const enrichmentProvider =
+								enrichmentMode !== "none"
+									? resolveEnrichmentProvider(process.env)
+									: null
+
+							if (enrichmentProvider && enrichmentMode !== "none") {
+								try {
+									const enrichmentModel =
+										process.env.MEMONGO_ENRICHMENT_MODEL ?? "gpt-4o-mini"
+									const enrichResult = await enrichSessionsWithLLM({
+										provider: enrichmentProvider,
+										model: enrichmentModel,
+										mode: enrichmentMode,
+										conversations: scenario.conversations,
+										agentId: scenarioManager.agentId,
+										scope: "agent",
+										scopeRef,
+										eventIds: sessionEventMap,
+									})
+									// Write LLM-produced userfact docs (replace regex)
+									if (enrichResult.userfactDocs.length > 0) {
+										await chunksCollection(this.db, this.prefix).insertMany(
+											enrichResult.userfactDocs,
+										)
+									}
+									// Write QA evidence docs
+									if (enrichResult.qaDocs.length > 0) {
+										await chunksCollection(this.db, this.prefix).insertMany(
+											enrichResult.qaDocs,
+										)
+									}
+									// Fall back to regex for sessions where LLM failed
+									if (
+										enrichResult.failedSessionIds.length > 0 &&
+										userfactEvidenceMode === "enabled"
+									) {
+										log.warn(
+											"LLM enrichment partial failure, falling back to regex for failed sessions",
+											{
+												scenarioId: scenario.scenarioId,
+												sessionsEnriched: enrichResult.sessionsEnriched,
+												sessionsFailed: enrichResult.sessionsFailed,
+												failedSessionIds: enrichResult.failedSessionIds,
+											},
+										)
+										const failedSet = new Set(enrichResult.failedSessionIds)
+										const failedConversations = scenario.conversations.filter(
+											(c) => c.sessionId && failedSet.has(c.sessionId),
+										)
+										if (failedConversations.length > 0) {
+											await writeUserfactEvidence({
+												chunksCollection: chunksCollection(
+													this.db,
+													this.prefix,
+												),
+												conversations: failedConversations,
+												agentId: scenarioManager.agentId,
+												scope: "agent",
+												scopeRef,
+												eventIds: sessionEventMap,
+											})
+										}
+									}
+								} catch (err) {
+									log.warn("LLM enrichment failed, falling back to regex", {
+										scenarioId: scenario.scenarioId,
+										error: err,
+									})
+									// Full fallback to regex userfact extraction
+									if (userfactEvidenceMode === "enabled") {
+										await writeUserfactEvidence({
+											chunksCollection: chunksCollection(this.db, this.prefix),
+											conversations: scenario.conversations,
+											agentId: scenarioManager.agentId,
+											scope: "agent",
+											scopeRef,
+											eventIds: sessionEventMap,
+										})
+									}
+								}
+							} else if (userfactEvidenceMode === "enabled") {
+								// No LLM provider: use regex extraction
+								await writeUserfactEvidence({
+									chunksCollection: chunksCollection(this.db, this.prefix),
+									conversations: scenario.conversations,
+									agentId: scenarioManager.agentId,
+									scope: "agent",
+									scopeRef,
+									eventIds: sessionEventMap,
+								})
+							}
+						} catch (err) {
+							log.warn("benchmark evidence creation failed", {
+								sessionMode: sessionEvidenceMode,
+								userfactMode: userfactEvidenceMode,
+								scenarioId: scenario.scenarioId,
+								error: err,
+							})
+						}
+						// Allow auto-embed to index enrichment docs before evaluation.
+						// MongoDB auto-embed is eventually consistent — mongot processes
+						// docs async via change streams + Voyage API. Empirically 5-15s
+						// for ~40 docs on Atlas Local. Fixed delay + write queue settle.
+						await this.settleBenchmarkScenarioManager(scenarioManager)
+						const evidenceCount = await chunksCollection(
+							this.db,
+							this.prefix,
+						).countDocuments({
+							agentId: scenarioManager.agentId,
+							source: {
+								$in: ["session-evidence", "userfact-evidence", "qa-evidence"],
+							},
+						})
+						if (evidenceCount > 0) {
+							const settleMs =
+								Number(process.env.MEMONGO_EVIDENCE_SETTLE_MS) || 15_000
+							log.info(
+								`waiting ${settleMs}ms for auto-embed convergence (${evidenceCount} evidence docs)`,
+								{
+									scenarioId: scenario.scenarioId,
+									evidenceCount,
+								},
+							)
+							await new Promise((r) => setTimeout(r, settleMs))
+						}
+					}
+				} else {
+					eventEvidence = await this.listBenchmarkEventEvidence(this.agentId)
+				}
+
+				for (const evaluation of scenario.evaluations) {
+					const startedAt = Date.now()
+					// Parse questionDate from evaluation metadata for temporal scoring
+					const evalQuestionDate =
+						typeof evaluation.metadata?.questionDate === "string"
+							? new Date(evaluation.metadata.questionDate)
+							: undefined
+					const validQuestionDate =
+						evalQuestionDate && !Number.isNaN(evalQuestionDate.getTime())
+							? evalQuestionDate
+							: undefined
+					try {
+						// Query decomposition: break preference-style queries into sub-queries
+						const decompositionMode = resolveDecompositionMode(
+							process.env.MEMONGO_QUERY_DECOMPOSITION_MODE,
+						)
+						const decompositionProvider =
+							decompositionMode === "enabled"
+								? resolveEnrichmentProvider(process.env)
+								: null
+
+						let results: MemorySearchResult[]
+
+						if (decompositionProvider && decompositionMode === "enabled") {
+							const decomposed = await decomposeQuery({
+								provider: decompositionProvider,
+								model: process.env.MEMONGO_ENRICHMENT_MODEL ?? "gpt-4o-mini",
+								query: evaluation.query,
+								questionType: evaluation.questionType,
+							})
+							// Run each sub-query through the search pipeline
+							const resultSets: MemorySearchResult[][] = []
+							for (const subQuery of decomposed.subQueries) {
+								const subResults = await scenarioManager.search(subQuery, {
+									maxResults: params.maxResults,
+									minScore: params.minScore,
+									questionDate: validQuestionDate,
+								})
+								resultSets.push(subResults)
+							}
+							// Also run the original query to avoid losing good direct matches
+							const originalResults = await scenarioManager.search(
+								evaluation.query,
+								{
+									maxResults: params.maxResults,
+									minScore: params.minScore,
+									questionDate: validQuestionDate,
+								},
+							)
+							resultSets.push(originalResults)
+							// Merge all result sets with RRF
+							results = mergeMultiQueryResults(
+								resultSets,
+								params.maxResults,
+							) as MemorySearchResult[]
+						} else {
+							results =
+								evaluation.sourceScope &&
+								scenarioManager.relevance &&
+								evaluation.sourceScope !== "all"
+									? (
+											await scenarioManager.relevanceExplain({
+												query: evaluation.query,
+												sourceScope: evaluation.sourceScope,
+												maxResults: params.maxResults,
+												minScore: params.minScore,
+												deep: false,
+												questionDate: validQuestionDate,
+											})
+										).results
+									: await scenarioManager.search(evaluation.query, {
+											maxResults: params.maxResults,
+											minScore: params.minScore,
+											questionDate: validQuestionDate,
+										})
+						}
+						executions.push(
+							evaluateRankingCase({
+								caseId: evaluation.caseId,
+								results,
+								latencyMs: Date.now() - startedAt,
+								relevantSessionIds: evaluation.expectedSessionIds,
+								relevantTurnIds: evaluation.expectedTurnIds,
+								relevantDialogIds: evaluation.expectedDialogIds,
+								resolveSessionIds: (result) =>
+									this.resolveBenchmarkResultSessionIds(result, eventEvidence),
+								resolveTurnIds: (result) =>
+									this.resolveBenchmarkResultTurnIds(result, eventEvidence),
+								resolveDialogIds: (result) =>
+									this.resolveBenchmarkResultDialogIds(result, eventEvidence),
+								datasetKind: params.dataset.datasetKind,
+								questionType: evaluation.questionType,
+								abstention: evaluation.abstention,
+								traceOptions: { maxCandidates: 50 },
+							}),
+						)
+						// Track expected IDs for miss ledger
+						expectedSessionMap.set(
+							evaluation.caseId,
+							evaluation.expectedSessionIds,
+						)
+						expectedTurnMap.set(
+							evaluation.caseId,
+							evaluation.expectedTurnIds ?? [],
+						)
+					} catch (err) {
+						log.warn("benchmark evaluation query failed", {
+							scenarioId: scenario.scenarioId,
+							caseId: evaluation.caseId,
+							error: err,
+						})
+						executions.push(
+							evaluateRankingCase({
+								caseId: evaluation.caseId,
+								results: [],
+								latencyMs: Date.now() - startedAt,
+								relevantSessionIds: evaluation.expectedSessionIds,
+								relevantTurnIds: evaluation.expectedTurnIds,
+								relevantDialogIds: evaluation.expectedDialogIds,
+								resolveSessionIds: (result) =>
+									this.resolveBenchmarkResultSessionIds(result, eventEvidence),
+								resolveTurnIds: (result) =>
+									this.resolveBenchmarkResultTurnIds(result, eventEvidence),
+								resolveDialogIds: (result) =>
+									this.resolveBenchmarkResultDialogIds(result, eventEvidence),
+								datasetKind: params.dataset.datasetKind,
+								questionType: evaluation.questionType,
+								abstention: evaluation.abstention,
+							}),
+						)
+						expectedSessionMap.set(
+							evaluation.caseId,
+							evaluation.expectedSessionIds,
+						)
+						expectedTurnMap.set(
+							evaluation.caseId,
+							evaluation.expectedTurnIds ?? [],
+						)
+					}
+				}
+			} finally {
+				if (scenarioManager !== this) {
+					await this.cleanupBenchmarkScenarioData(scenarioManager.agentId)
+				}
+			}
+		}
+
+		const summary = summarizeBenchmarkExecutions({
+			datasetName: params.dataset.name,
+			datasetKind: params.dataset.datasetKind,
+			scenarios: scenarios.length,
+			executions,
+			ingest,
+		})
+		const regressions = await this.relevance!.persistRegression(
+			params.datasetVersion,
+			{
+				hitRate: summary.hitRate,
+				emptyRate: summary.emptyRate,
+				avgTopScore: summary.avgTopScore,
+				p95LatencyMs: summary.p95LatencyMs,
+				rAt5: summary.rAt5,
+				rAt10: summary.rAt10,
+				ndcgAt10: summary.ndcgAt10,
+			},
+		)
+		// Explicitly pick only the fields defined in RelevanceBenchmarkResult
+		// to prevent any runtime-leaked properties from inflating the response
+		// beyond V8's JSON.stringify limit (~512 MB).
+		return {
+			datasetVersion: params.datasetVersion,
+			datasetName: summary.datasetName,
+			datasetKind: summary.datasetKind,
+			scenarios: summary.scenarios,
+			cases: summary.cases,
+			scoredCases: summary.scoredCases,
+			skippedCases: summary.skippedCases,
+			hitRate: summary.hitRate,
+			emptyRate: summary.emptyRate,
+			avgTopScore: summary.avgTopScore,
+			p95LatencyMs: summary.p95LatencyMs,
+			rAt5: summary.rAt5,
+			rAt10: summary.rAt10,
+			ndcgAt10: summary.ndcgAt10,
+			questionTypeBreakdown: summary.questionTypeBreakdown,
+			...(summary.officialMetrics
+				? { officialMetrics: summary.officialMetrics }
+				: {}),
+			...(summary.ingest ? { ingest: summary.ingest } : {}),
+			regressions,
+			missLedger: buildMissLedger({
+				executions,
+				expectedSessionMap,
+				expectedTurnMap,
+			}),
+		}
+	}
+
+	async benchmarkIngest(params: {
+		datasetPath: string
+		scope?: MemoryScope
+		limitConversations?: number
+		limitTurnsPerConversation?: number
+	}): Promise<MemoryBenchmarkIngestResult> {
+		const datasetPath = await resolveBenchmarkDatasetPath({
+			datasetPath: params.datasetPath,
+			baseDir: this.workspaceDir,
+			allowedRoots: this.getBenchmarkAllowedRoots(),
+		})
+		return ingestBenchmarkDataset({
+			datasetPath,
+			baseDir: this.workspaceDir,
+			allowedRoots: this.getBenchmarkAllowedRoots(),
+			scope: params.scope,
+			limitConversations: params.limitConversations,
+			limitTurnsPerConversation: params.limitTurnsPerConversation,
+			writeTurn: async (turn) => {
+				await this.writeConversationEvent(turn)
+			},
+		})
+	}
+
+	async importConversations(params: {
+		datasetPath: string
+		scope?: MemoryScope
+		limitConversations?: number
+		limitTurnsPerConversation?: number
+	}): Promise<MemoryConversationImportResult> {
+		const datasetPath = await resolveBenchmarkDatasetPath({
+			datasetPath: params.datasetPath,
+			baseDir: this.workspaceDir,
+			allowedRoots: this.getBenchmarkAllowedRoots(),
+		})
+		return importConversationDataset({
+			datasetPath,
+			baseDir: this.workspaceDir,
+			allowedRoots: this.getBenchmarkAllowedRoots(),
+			scope: params.scope,
+			limitConversations: params.limitConversations,
+			limitTurnsPerConversation: params.limitTurnsPerConversation,
+			writeTurn: async (turn) => {
+				await this.writeConversationEvent(turn)
+			},
+		})
+	}
+
+	async accessTrends(params?: {
+		collection?: AccessEventCollection
+		memoryIds?: string[]
+		windowDays?: number
+		limit?: number
+	}): Promise<MemoryAccessTrend[]> {
+		return listAccessTrends({
+			db: this.db,
+			prefix: this.prefix,
+			agentId: this.agentId,
+			collection: params?.collection,
+			memoryIds:
+				params?.memoryIds?.filter((memoryId) => memoryId.trim().length > 0) ??
+				undefined,
+			windowDays: params?.windowDays,
+			limit: params?.limit,
+		})
+	}
+
+	async accessSummaries(params: {
+		collection: AccessEventCollection
+		memoryIds: string[]
+		windowDays?: number
+	}): Promise<MemoryAccessSummary[]> {
+		return getAccessSummariesOrEmpty({
+			db: this.db,
+			prefix: this.prefix,
+			agentId: this.agentId,
+			collection: params.collection,
+			memoryIds: params.memoryIds,
+			windowDays: params.windowDays,
+		})
+	}
+
+	// ---------------------------------------------------------------------------
+	// Direct KB search (for kb_search tool optimization)
+	// ---------------------------------------------------------------------------
+
+	async searchKB(
+		query: string,
+		opts?: {
+			maxResults?: number
+			minScore?: number
+			filter?: { tags?: string[]; category?: string; source?: string }
+		},
+	): Promise<MemorySearchResult[]> {
+		const cleaned = query.trim()
+		if (!cleaned) {
+			return []
+		}
+
+		const mongoCfg = this.config.mongodb!
+		const maxResults = opts?.maxResults ?? 5
+		const minScore = opts?.minScore ?? 0.1
+
+		// Direct KB search uses MongoDB query-time automatic embeddings.
+		const queryVector: number[] | null = null
+
+		return searchKB(
+			kbChunksCollection(this.db, this.prefix),
+			cleaned,
+			queryVector,
+			{
+				maxResults,
+				minScore,
+				filter: opts?.filter,
+				numCandidates: mongoCfg.numCandidates,
+				vectorIndexName: `${this.prefix}kb_chunks_vector`,
+				textIndexName: `${this.prefix}kb_chunks_text`,
+				capabilities: this.capabilities,
+				embeddingMode: mongoCfg.embeddingMode,
+				kbDocs: kbCollection(this.db, this.prefix),
+			},
+		)
+	}
+
+	// ---------------------------------------------------------------------------
+	// Score normalization: detect which search method was used for legacy search
+	// ---------------------------------------------------------------------------
+
+	private detectSearchMethod(mongoCfg: ResolvedMongoDBConfig): SearchMethod {
+		// Determine which search method mongoSearch() likely used based on
+		// capabilities and fusion method configuration.
+		const canVector =
+			mongoCfg.embeddingMode === "automated" && this.capabilities.vectorSearch
+
+		if (canVector && this.capabilities.textSearch) {
+			// Both server-side fusion and JS-merge fallback produce hybrid-like
+			// scores in ~[0,1] range (server fusion via $meta:"searchScore",
+			// JS merge via our RRF normalization in mergeHybridResultsMongoDB).
+			return "hybrid"
+		}
+		if (canVector) {
+			return "vector"
+		}
+		// Text-only or $text fallback
+		return "text"
+	}
+
+	// ---------------------------------------------------------------------------
+	// MemorySearchManager.readFile
+	// ---------------------------------------------------------------------------
+
+	async readFile(params: { relPath: string; from?: number; lines?: number }) {
+		const rawPath = params.relPath.trim()
+		if (!rawPath) {
+			throw new Error("path required")
+		}
+
+		if (rawPath.startsWith("structured:")) {
+			const [basePath, queryString] = rawPath.split("?", 2)
+			const [, type, ...keyParts] = basePath.split(":")
+			const key = keyParts.join(":").trim()
+			if (!type || !key) {
+				throw new Error("path required")
+			}
+			const query = new URLSearchParams(queryString ?? "")
+			const scope = query.get("scope")
+			const scopeRef = query.get("scopeRef")
+			const record = await structuredMemCollection(
+				this.db,
+				this.prefix,
+			).findOne({
+				agentId: this.agentId,
+				type,
+				key,
+				...(scope ? { scope } : {}),
+				...(scopeRef ? { scopeRef } : {}),
+			})
+			if (!record) {
+				return {
+					text: "",
+					path: rawPath,
+					locator: rawPath,
+					source: "structured" as const,
+					sourceType: "structured" as const,
+				}
+			}
+			await structuredMemCollection(this.db, this.prefix).updateOne(
+				{ _id: record._id },
+				{
+					$set: { openedAt: new Date() },
+					$inc: { openedCount: 1 },
+				},
+			)
+			const text = [
+				`type: ${String(record.type ?? type)}`,
+				`key: ${String(record.key ?? key)}`,
+				`value: ${String(record.value ?? "")}`,
+				typeof record.revision === "number"
+					? `revision: ${record.revision}`
+					: null,
+				typeof record.state === "string" ? `state: ${record.state}` : null,
+				typeof record.salience === "string"
+					? `salience: ${record.salience}`
+					: null,
+				typeof record.temporalScope === "string"
+					? `temporalScope: ${record.temporalScope}`
+					: null,
+				record.validFrom instanceof Date
+					? `validFrom: ${record.validFrom.toISOString()}`
+					: null,
+				record.validTo instanceof Date
+					? `validTo: ${record.validTo.toISOString()}`
+					: null,
+				record.reviewAt instanceof Date
+					? `reviewAt: ${record.reviewAt.toISOString()}`
+					: null,
+				record.lastConfirmedAt instanceof Date
+					? `lastConfirmedAt: ${record.lastConfirmedAt.toISOString()}`
+					: null,
+				typeof record.reinforcementCount === "number"
+					? `reinforcementCount: ${record.reinforcementCount}`
+					: null,
+				typeof record.sourceReliability === "number"
+					? `sourceReliability: ${record.sourceReliability}`
+					: null,
+				typeof record.context === "string"
+					? `context: ${record.context}`
+					: null,
+				Array.isArray(record.tags) && record.tags.length > 0
+					? `tags: ${record.tags.join(", ")}`
+					: null,
+				Array.isArray(record.sourceEventIds) && record.sourceEventIds.length > 0
+					? `sourceEventIds: ${record.sourceEventIds.join(", ")}`
+					: null,
+				record.provenance && typeof record.provenance === "object"
+					? `provenance: ${JSON.stringify(record.provenance)}`
+					: null,
+				record.supersedes && typeof record.supersedes === "object"
+					? `supersedes: ${JSON.stringify(record.supersedes)}`
+					: null,
+				record.invalidatedBy && typeof record.invalidatedBy === "object"
+					? `invalidatedBy: ${JSON.stringify(record.invalidatedBy)}`
+					: null,
+				Array.isArray(record.conflictsWith) && record.conflictsWith.length > 0
+					? `conflictsWith: ${JSON.stringify(record.conflictsWith)}`
+					: null,
+			]
+				.filter(Boolean)
+				.join("\n")
+			return {
+				text,
+				path: rawPath,
+				locator: rawPath,
+				source: "structured" as const,
+				sourceType: "structured" as const,
+				type,
+				key,
+			}
+		}
+
+		if (rawPath.startsWith("entity:")) {
+			const [basePath, queryString] = rawPath.split("?", 2)
+			const entityId = basePath.slice("entity:".length).trim()
+			if (!entityId) {
+				throw new Error("path required")
+			}
+			const query = new URLSearchParams(queryString ?? "")
+			const scope = query.get("scope")
+			const scopeRef = query.get("scopeRef")
+			const record = await entitiesCollection(this.db, this.prefix).findOne({
+				agentId: this.agentId,
+				entityId,
+				...(scope ? { scope } : {}),
+				...(scopeRef ? { scopeRef } : {}),
+			})
+			if (!record) {
+				return {
+					text: "",
+					path: rawPath,
+					locator: rawPath,
+					source: "conversation" as const,
+					sourceType: "conversation" as const,
+				}
+			}
+			const text = [
+				`entityId: ${String(record.entityId ?? entityId)}`,
+				`name: ${String(record.name ?? "")}`,
+				typeof record.type === "string" ? `type: ${record.type}` : null,
+				Array.isArray(record.aliases) && record.aliases.length > 0
+					? `aliases: ${record.aliases.join(", ")}`
+					: null,
+				Array.isArray(record.sourceEventIds) && record.sourceEventIds.length > 0
+					? `sourceEventIds: ${record.sourceEventIds.join(", ")}`
+					: null,
+				record.metadata && typeof record.metadata === "object"
+					? `metadata: ${JSON.stringify(record.metadata)}`
+					: null,
+				record.updatedAt instanceof Date
+					? `updatedAt: ${record.updatedAt.toISOString()}`
+					: null,
+			]
+				.filter(Boolean)
+				.join("\n")
+			return {
+				text,
+				path: rawPath,
+				locator: rawPath,
+				source: "conversation" as const,
+				sourceType: "conversation" as const,
+			}
+		}
+
+		if (rawPath.startsWith("procedure:")) {
+			const [basePath, queryString] = rawPath.split("?", 2)
+			const procedureId = basePath.slice("procedure:".length).trim()
+			if (!procedureId) {
+				throw new Error("path required")
+			}
+			const query = new URLSearchParams(queryString ?? "")
+			const scope = query.get("scope")
+			const scopeRef = query.get("scopeRef")
+			const record = await proceduresCollection(this.db, this.prefix).findOne({
+				agentId: this.agentId,
+				procedureId,
+				...(scope ? { scope } : {}),
+				...(scopeRef ? { scopeRef } : {}),
+			})
+			if (!record) {
+				return {
+					text: "",
+					path: rawPath,
+					locator: rawPath,
+					source: "structured" as const,
+					sourceType: "structured" as const,
+				}
+			}
+			await proceduresCollection(this.db, this.prefix).updateOne(
+				{ _id: record._id },
+				{
+					$set: { openedAt: new Date() },
+					$inc: { openedCount: 1 },
+				},
+			)
+			const text = [
+				`procedureId: ${String(record.procedureId ?? procedureId)}`,
+				`name: ${String(record.name ?? "")}`,
+				Array.isArray(record.intentTags) && record.intentTags.length > 0
+					? `intentTags: ${record.intentTags.join(", ")}`
+					: null,
+				Array.isArray(record.triggerQueries) && record.triggerQueries.length > 0
+					? `triggerQueries: ${record.triggerQueries.join(" | ")}`
+					: null,
+				Array.isArray(record.steps) && record.steps.length > 0
+					? `steps:\n${record.steps.map((step: unknown, index: number) => `${index + 1}. ${String(step)}`).join("\n")}`
+					: null,
+				Array.isArray(record.successSignals) && record.successSignals.length > 0
+					? `successSignals: ${record.successSignals.join(", ")}`
+					: null,
+				typeof record.state === "string" ? `state: ${record.state}` : null,
+				typeof record.confidence === "number"
+					? `confidence: ${record.confidence}`
+					: null,
+				typeof record.revision === "number"
+					? `revision: ${record.revision}`
+					: null,
+				Array.isArray(record.sourceEventIds) && record.sourceEventIds.length > 0
+					? `sourceEventIds: ${record.sourceEventIds.join(", ")}`
+					: null,
+				record.provenance && typeof record.provenance === "object"
+					? `provenance: ${JSON.stringify(record.provenance)}`
+					: null,
+			]
+				.filter(Boolean)
+				.join("\n")
+			return {
+				text,
+				path: rawPath,
+				locator: rawPath,
+				source: "structured" as const,
+				sourceType: "structured" as const,
+			}
+		}
+
+		if (rawPath.startsWith("event:")) {
+			const eventId = rawPath.slice("event:".length).trim()
+			if (!eventId) {
+				throw new Error("path required")
+			}
+			return await this.readCanonicalEvent(eventId, rawPath)
+		}
+
+		if (rawPath.startsWith("episode:")) {
+			const [basePath, queryString] = rawPath.split("?", 2)
+			const episodeId = basePath.slice("episode:".length).trim()
+			if (!episodeId) {
+				throw new Error("path required")
+			}
+			const query = new URLSearchParams(queryString ?? "")
+			const expand = query.get("expand")?.trim().toLowerCase()
+			return await this.readEpisodeLocator({
+				rawPath,
+				episodeId,
+				expandEvents: expand === "events" || expand === "full",
+			})
+		}
+
+		if (rawPath.startsWith("relation:")) {
+			const [basePath, queryString] = rawPath.split("?", 2)
+			const relationId = basePath.slice("relation:".length).trim()
+			if (!relationId) {
+				throw new Error("path required")
+			}
+			const query = new URLSearchParams(queryString ?? "")
+			const scope = query.get("scope") ?? "agent"
+			const scopeRef = query.get("scopeRef") ?? this.agentScopeRef
+			const relation = (
+				await relationsCollection(this.db, this.prefix)
+					.find(
+						{
+							agentId: this.agentId,
+							scope,
+							scopeRef,
+						},
+						{
+							sort: { updatedAt: -1, _id: 1 },
+							limit: 50,
+						},
+					)
+					.toArray()
+			).find((candidate) => {
+				const fromEntityId = String(candidate.fromEntityId ?? "")
+				const toEntityId = String(candidate.toEntityId ?? "")
+				return `${fromEntityId}-${toEntityId}` === relationId
+			})
+			if (!relation) {
+				return {
+					text: "",
+					path: rawPath,
+					locator: rawPath,
+					source: "conversation" as const,
+					sourceType: "conversation" as const,
+				}
+			}
+			const text = [
+				`type: ${String(relation.type ?? "")}`,
+				`fromEntityId: ${String(relation.fromEntityId ?? "")}`,
+				`toEntityId: ${String(relation.toEntityId ?? "")}`,
+				typeof relation.state === "string" ? `state: ${relation.state}` : null,
+				typeof relation.weight === "number"
+					? `weight: ${relation.weight}`
+					: null,
+				typeof relation.confidence === "number"
+					? `confidence: ${relation.confidence}`
+					: null,
+				relation.validFrom instanceof Date
+					? `validFrom: ${relation.validFrom.toISOString()}`
+					: null,
+				relation.validTo instanceof Date
+					? `validTo: ${relation.validTo.toISOString()}`
+					: null,
+				relation.reviewAt instanceof Date
+					? `reviewAt: ${relation.reviewAt.toISOString()}`
+					: null,
+				relation.lastConfirmedAt instanceof Date
+					? `lastConfirmedAt: ${relation.lastConfirmedAt.toISOString()}`
+					: null,
+				typeof relation.reinforcementCount === "number"
+					? `reinforcementCount: ${relation.reinforcementCount}`
+					: null,
+				typeof relation.sourceReliability === "number"
+					? `sourceReliability: ${relation.sourceReliability}`
+					: null,
+				Array.isArray(relation.sourceEventIds) &&
+				relation.sourceEventIds.length > 0
+					? `sourceEventIds: ${relation.sourceEventIds.join(", ")}`
+					: null,
+				relation.provenance && typeof relation.provenance === "object"
+					? `provenance: ${JSON.stringify(relation.provenance)}`
+					: null,
+				relation.supersedes && typeof relation.supersedes === "object"
+					? `supersedes: ${JSON.stringify(relation.supersedes)}`
+					: null,
+				relation.invalidatedBy && typeof relation.invalidatedBy === "object"
+					? `invalidatedBy: ${JSON.stringify(relation.invalidatedBy)}`
+					: null,
+				relation.updatedAt instanceof Date
+					? `updatedAt: ${relation.updatedAt.toISOString()}`
+					: null,
+			]
+				.filter(Boolean)
+				.join("\n")
+			return {
+				text,
+				path: rawPath,
+				locator: rawPath,
+				source: "conversation" as const,
+				sourceType: "conversation" as const,
+			}
+		}
+
+		if (rawPath.startsWith("kb:") || rawPath.startsWith("reference:")) {
+			const kbPath = rawPath.replace(/^kb:|^reference:/, "").trim()
+			if (!kbPath) {
+				throw new Error("path required")
+			}
+			const record = await kbCollection(this.db, this.prefix).findOne(
+				{
+					$or: [{ "source.path": kbPath }, { title: kbPath }],
+				},
+				{ sort: { updatedAt: -1, _id: 1 } },
+			)
+			if (!record) {
+				return {
+					text: "",
+					path: rawPath,
+					locator: rawPath,
+					source: "reference" as const,
+					sourceType: "reference" as const,
+				}
+			}
+			return {
+				text: typeof record.content === "string" ? record.content : "",
+				path: rawPath,
+				locator: rawPath,
+				source: "reference" as const,
+				sourceType: "reference" as const,
+				title: typeof record.title === "string" ? record.title : undefined,
+			}
+		}
+
+		if (
+			rawPath.startsWith("conversation:") ||
+			rawPath.startsWith("events/") ||
+			rawPath.startsWith("sessions/")
+		) {
+			return await this.readConversationChunk(
+				rawPath,
+				params.from,
+				params.lines,
+			)
+		}
+
+		return await this.readBridgeChunk(rawPath, params.from, params.lines)
+	}
+
+	// ---------------------------------------------------------------------------
+	// MemorySearchManager.status
+	// ---------------------------------------------------------------------------
+
+	status(): MemoryProviderStatus {
+		const mongoCfg = this.config.mongodb!
+		const vectorEnabled =
+			this.capabilities.vectorSearch && this.probeEmbeddingModeSupportsVector()
+		const lexicalEnabled = this.capabilities.textSearch
+		const hybridEnabled = vectorEnabled && lexicalEnabled
+		return {
+			backend: "mongodb",
+			provider: "mongodb-automated",
+			model: "automated (server-managed)",
+			files: this.fileCount,
+			chunks: this.chunkCount,
+			dirty: this.dirty,
+			workspaceDir: this.workspaceDir,
+			sources: getActiveSourcesForStatus(mongoCfg.sources, mongoCfg.kb.enabled),
+			custom: {
+				deploymentProfile: mongoCfg.deploymentProfile,
+				embeddingMode: mongoCfg.embeddingMode,
+				fusionMethod: mongoCfg.fusionMethod,
+				capabilities: this.capabilities,
+				searchModes: {
+					vector: vectorEnabled,
+					lexical: lexicalEnabled,
+					hybrid: hybridEnabled,
+				},
+				searchMode: this.lastSearchMode,
+				searchModeDetails: this.lastSearchDetails,
+				retrievalPaths: [
+					"active-critical",
+					"structured",
+					"raw-window",
+					"graph",
+					"hybrid",
+					"kb",
+					"episodic",
+					"procedural",
+				],
+				sourceCoverage: {
+					reference:
+						mongoCfg.sources?.reference?.enabled && mongoCfg.kb.enabled,
+					conversation: mongoCfg.sources?.conversation?.enabled,
+					structured: mongoCfg.sources?.structured?.enabled,
+				},
+				database: mongoCfg.database,
+				collectionPrefix: mongoCfg.collectionPrefix,
+				quantization: mongoCfg.quantization,
+				relevance: this.relevance
+					? {
+							enabled: mongoCfg.relevance.enabled,
+							telemetry: {
+								state:
+									mongoCfg.relevance.enabled &&
+									mongoCfg.relevance.telemetry.enabled
+										? "enabled"
+										: "disabled",
+							},
+							sampleRate: {
+								current: this.relevance.getSampleState().current,
+							},
+							health: this.relevance.getCurrentHealth(),
+							lastRegressionAt: undefined,
+							profileCapabilities: this.relevance.getProfileCapabilities(),
+						}
+					: {
+							enabled: false,
+							telemetry: { state: "disabled" },
+							sampleRate: { current: 0 },
+							health: "insufficient-data",
+							profileCapabilities: {
+								textExplain: false,
+								vectorExplain: false,
+								fusionExplain: false,
+							},
+						},
+			},
+		}
+	}
+
+	private async readConversationChunk(
+		rawPath: string,
+		from?: number,
+		lines?: number,
+	) {
+		const normalizedPath = rawPath.startsWith("conversation:")
+			? rawPath.slice("conversation:".length).trim()
+			: rawPath
+		if (!normalizedPath) {
+			throw new Error("path required")
+		}
+		const start = Math.max(1, from ?? 1)
+		const count = Math.max(1, lines ?? Number.MAX_SAFE_INTEGER)
+		const end = start + count - 1
+		const docs = await chunksCollection(this.db, this.prefix)
+			.find({
+				path: normalizedPath,
+				source: { $in: ["sessions", "conversation"] },
+				agentId: this.agentId,
+				...(from || lines
+					? {
+							$or: [
+								{ startLine: { $gte: start, $lte: end } },
+								{ endLine: { $gte: start, $lte: end } },
+								{ startLine: { $lte: start }, endLine: { $gte: end } },
+							],
+						}
+					: {}),
+			})
+			// oxlint-disable-next-line unicorn/no-array-sort -- MongoDB cursor .sort(), not Array
+			.sort({ startLine: 1 })
+			.toArray()
+		if (docs.length === 0) {
+			if (normalizedPath.startsWith("events/")) {
+				const eventId = normalizedPath.slice("events/".length).trim()
+				if (eventId) {
+					return await this.readCanonicalEvent(
+						eventId,
+						`conversation:${normalizedPath}`,
+					)
+				}
+			}
+			return {
+				text: "",
+				path: `conversation:${normalizedPath}`,
+				locator: `conversation:${normalizedPath}`,
+				source: "conversation" as const,
+				sourceType: "conversation" as const,
+			}
+		}
+		return {
+			text: docs
+				.map((doc: Document) => (typeof doc.text === "string" ? doc.text : ""))
+				.filter(Boolean)
+				.join("\n"),
+			path: `conversation:${normalizedPath}`,
+			locator: `conversation:${normalizedPath}`,
+			source: "conversation" as const,
+			sourceType: "conversation" as const,
+		}
+	}
+
+	private async readCanonicalEvent(eventId: string, rawPath: string) {
+		const event = await eventsCollection(this.db, this.prefix).findOne({
+			agentId: this.agentId,
+			eventId,
+		})
+		if (!event) {
+			return {
+				text: "",
+				path: rawPath,
+				locator: rawPath,
+				source: "conversation" as const,
+				sourceType: "conversation" as const,
+			}
+		}
+		const role = typeof event.role === "string" ? event.role : "unknown-role"
+		const body = typeof event.body === "string" ? event.body : ""
+		const timestamp =
+			event.timestamp instanceof Date
+				? `timestamp: ${event.timestamp.toISOString()}\n`
+				: ""
+		return {
+			text: `${timestamp}${role}: ${body}`.trim(),
+			path: rawPath,
+			locator: rawPath,
+			source: "conversation" as const,
+			sourceType: "conversation" as const,
+			type: "event",
+			key: eventId,
+		}
+	}
+
+	private async readBridgeChunk(
+		rawPath: string,
+		from?: number,
+		lines?: number,
+	) {
+		const start = Math.max(1, from ?? 1)
+		const count = Math.max(1, lines ?? Number.MAX_SAFE_INTEGER)
+		const end = start + count - 1
+		const docs = await chunksCollection(this.db, this.prefix)
+			.find({
+				path: rawPath,
+				source: { $in: ["conversation", "memory"] },
+				agentId: this.agentId,
+				scope: "workspace",
+				scopeRef: this.workspaceScopeRef,
+				...(from || lines
+					? {
+							$or: [
+								{ startLine: { $gte: start, $lte: end } },
+								{ endLine: { $gte: start, $lte: end } },
+								{ startLine: { $lte: start }, endLine: { $gte: end } },
+							],
+						}
+					: {}),
+			})
+			// oxlint-disable-next-line unicorn/no-array-sort -- MongoDB cursor .sort(), not Array
+			.sort({ startLine: 1 })
+			.toArray()
+		if (docs.length === 0) {
+			return {
+				text: "",
+				path: rawPath,
+				locator: rawPath,
+				source: "reference" as const,
+				sourceType: "reference" as const,
+			}
+		}
+		return {
+			text: docs
+				.map((doc: Document) => (typeof doc.text === "string" ? doc.text : ""))
+				.filter(Boolean)
+				.join("\n"),
+			path: rawPath,
+			locator: rawPath,
+			source: "reference" as const,
+			sourceType: "reference" as const,
+		}
+	}
+
+	private async readEpisodeLocator(params: {
+		rawPath: string
+		episodeId: string
+		expandEvents: boolean
+	}) {
+		const { rawPath, episodeId, expandEvents } = params
+		const episode = await episodesCollection(this.db, this.prefix).findOne({
+			agentId: this.agentId,
+			episodeId,
+			status: { $ne: "deleted" },
+		})
+		if (!episode) {
+			return {
+				text: "",
+				path: rawPath,
+				locator: rawPath,
+				source: "conversation" as const,
+				sourceType: "conversation" as const,
+			}
+		}
+
+		const sourceEventIds = Array.isArray(episode.sourceEventIds)
+			? episode.sourceEventIds.filter(
+					(value): value is string => typeof value === "string",
+				)
+			: Array.isArray(episode.eventIds)
+				? episode.eventIds.filter(
+						(value): value is string => typeof value === "string",
+					)
+				: []
+
+		const lines = [
+			`type: episode`,
+			`episodeId: ${episodeId}`,
+			typeof episode.type === "string" ? `episodeType: ${episode.type}` : null,
+			typeof episode.title === "string" ? `title: ${episode.title}` : null,
+			typeof episode.summary === "string"
+				? `summary: ${episode.summary}`
+				: null,
+			episode.timeRange?.start instanceof Date
+				? `timeRangeStart: ${episode.timeRange.start.toISOString()}`
+				: null,
+			episode.timeRange?.end instanceof Date
+				? `timeRangeEnd: ${episode.timeRange.end.toISOString()}`
+				: null,
+			typeof episode.sourceEventCount === "number"
+				? `sourceEventCount: ${episode.sourceEventCount}`
+				: `sourceEventCount: ${sourceEventIds.length}`,
+			sourceEventIds.length > 0 && !expandEvents
+				? `expandLocator: episode:${episodeId}?expand=events`
+				: null,
+		].filter(Boolean)
+
+		if (expandEvents && sourceEventIds.length > 0) {
+			const events = await eventsCollection(this.db, this.prefix)
+				.find({
+					agentId: this.agentId,
+					eventId: { $in: sourceEventIds },
+				})
+				.toArray()
+			const eventOrder = new Map(
+				sourceEventIds.map((value, index) => [value, index]),
+			)
+			events.sort((a, b) => {
+				const left =
+					eventOrder.get(String(a.eventId)) ?? Number.MAX_SAFE_INTEGER
+				const right =
+					eventOrder.get(String(b.eventId)) ?? Number.MAX_SAFE_INTEGER
+				return left - right
+			})
+
+			if (events.length > 0) {
+				lines.push("sourceEvents:")
+				for (const event of events) {
+					const timestamp =
+						event.timestamp instanceof Date
+							? event.timestamp.toISOString()
+							: "unknown-time"
+					const role =
+						typeof event.role === "string" ? event.role : "unknown-role"
+					const body = typeof event.body === "string" ? event.body : ""
+					lines.push(`[${timestamp}] ${role}: ${body}`)
+				}
+			}
+		}
+
+		return {
+			text: lines.join("\n"),
+			path: rawPath,
+			locator: rawPath,
+			source: "conversation" as const,
+			sourceType: "conversation" as const,
+			title: typeof episode.title === "string" ? episode.title : undefined,
+			type: "episode",
+			key: episodeId,
+		}
+	}
+
+	// ---------------------------------------------------------------------------
+	// MemorySearchManager.sync
+	// ---------------------------------------------------------------------------
+
+	async sync(params?: {
+		reason?: string
+		force?: boolean
+		progress?: (update: MemorySyncProgressUpdate) => void
+	}): Promise<void> {
+		if (this.closed) {
+			return
+		}
+		if (this.syncing) {
+			return this.syncing
+		}
+		this.syncing = this.runSync(params).finally(() => {
+			this.syncing = null
+		})
+		return this.syncing
+	}
+
+	private async runSync(params?: {
+		reason?: string
+		force?: boolean
+		progress?: (update: MemorySyncProgressUpdate) => void
+	}): Promise<void> {
+		const mongoCfg = this.config.mongodb!
+		try {
+			const result = await syncToMongoDB({
+				client: this.client,
+				db: this.db,
+				prefix: this.prefix,
+				agentId: this.agentId,
+				// Runtime conversation memory is event-native in MongoDB. Manager-level
+				// sync only keeps bridge Markdown in sync and must not rebuild live
+				// conversation memory from session transcript files.
+				sessionMemoryEnabled: false,
+				workspaceDir: this.workspaceDir,
+				extraPaths: this.extraMemoryPaths,
+				embeddingMode: mongoCfg.embeddingMode,
+				reason: params?.reason,
+				force: params?.force,
+				maxSessionChunks: mongoCfg.maxSessionChunks,
+				progress: params?.progress,
+			})
+
+			// Query actual totals from MongoDB (not just the delta from this sync)
+			try {
+				this.fileCount = await filesCollection(
+					this.db,
+					this.prefix,
+				).countDocuments()
+				this.chunkCount = await chunksCollection(
+					this.db,
+					this.prefix,
+				).countDocuments()
+			} catch {
+				// Fallback to delta counts if count query fails
+				this.fileCount = result.filesProcessed + result.sessionFilesProcessed
+				this.chunkCount = result.chunksUpserted + result.sessionChunksUpserted
+			}
+
+			this.dirty = false
+			log.info(
+				`sync complete: processed=${result.filesProcessed}+${result.sessionFilesProcessed} ` +
+					`chunks=${result.chunksUpserted}+${result.sessionChunksUpserted} ` +
+					`totals=${this.fileCount} files, ${this.chunkCount} chunks`,
+			)
+
+			// KB auto-refresh: re-import autoImportPaths if autoRefreshHours has elapsed
+			await this.maybeAutoRefreshKB()
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err)
+			log.warn(`sync failed: ${msg}`)
+			throw err instanceof Error ? err : new Error(msg)
+		}
+	}
+
+	private async loadPersistedChangeStreamResumeToken(): Promise<unknown> {
+		try {
+			const meta = metaCollection(this.db, this.prefix)
+			const doc = await meta.findOne({
+				_id: CHANGE_STREAM_RESUME_TOKEN_META_KEY,
+			} as Record<string, unknown>)
+			if (!doc || !("token" in doc)) {
+				return null
+			}
+			return (doc as Record<string, unknown>).token ?? null
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err)
+			log.warn(`failed to load persisted change stream resume token: ${msg}`)
+			return null
+		}
+	}
+
+	private async persistChangeStreamResumeToken(token: unknown): Promise<void> {
+		try {
+			const meta = metaCollection(this.db, this.prefix)
+			await meta.updateOne(
+				{ _id: CHANGE_STREAM_RESUME_TOKEN_META_KEY } as Record<string, unknown>,
+				{ $set: { token, updatedAt: new Date() } },
+				{ upsert: true },
+			)
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err)
+			log.warn(`failed to persist change stream resume token: ${msg}`)
+		}
+	}
+
+	private async clearPersistedChangeStreamResumeToken(): Promise<void> {
+		try {
+			const meta = metaCollection(this.db, this.prefix)
+			await meta.deleteOne({
+				_id: CHANGE_STREAM_RESUME_TOKEN_META_KEY,
+			} as Record<string, unknown>)
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err)
+			log.warn(`failed to clear stale change stream resume token: ${msg}`)
+		}
+	}
+
+	private async maybeAutoRefreshKB(): Promise<void> {
+		const mongoCfg = this.config.mongodb!
+		if (!mongoCfg.kb.enabled) {
+			return
+		}
+		const autoRefreshHours = mongoCfg.kb.autoRefreshHours
+		if (autoRefreshHours <= 0) {
+			return
+		}
+		const paths = mongoCfg.kb.autoImportPaths
+		if (paths.length === 0) {
+			return
+		}
+
+		// Check last KB import time from meta collection
+		const meta = metaCollection(this.db, this.prefix)
+		const lastRefresh = await meta.findOne({
+			_id: "kb_last_auto_refresh",
+		} as Record<string, unknown>)
+		const lastRefreshTime =
+			lastRefresh?.timestamp instanceof Date
+				? lastRefresh.timestamp.getTime()
+				: 0
+		const hoursSinceRefresh = (Date.now() - lastRefreshTime) / (1000 * 60 * 60)
+
+		if (hoursSinceRefresh < autoRefreshHours) {
+			return
+		}
+
+		log.info(
+			`KB auto-refresh: ${hoursSinceRefresh.toFixed(1)}h since last import, refreshing ${paths.length} paths`,
+		)
+		try {
+			const { ingestFilesToKB } = await import("./mongodb-kb.js")
+			const result = await ingestFilesToKB({
+				db: this.db,
+				prefix: this.prefix,
+				paths,
+				recursive: true,
+				importedBy: "agent",
+				embeddingMode: mongoCfg.embeddingMode,
+				chunking: mongoCfg.kb.chunking,
+			})
+			log.info(
+				`KB auto-refresh complete: ${result.documentsProcessed} docs, ${result.chunksCreated} chunks, ${result.skipped} skipped`,
+			)
+
+			// Update last refresh timestamp
+			await meta.updateOne(
+				{ _id: "kb_last_auto_refresh" } as Record<string, unknown>,
+				{ $set: { timestamp: new Date() } },
+				{ upsert: true },
+			)
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err)
+			log.warn(`KB auto-refresh failed: ${msg}`)
+		}
+	}
+
+	// ---------------------------------------------------------------------------
+	// File watcher (chokidar)
+	// ---------------------------------------------------------------------------
+
+	private ensureWatcher(): void {
+		if (this.watcher) {
+			return
+		}
+		const mongoCfg = this.config.mongodb!
+		const debounceMs = mongoCfg.watchDebounceMs
+		const watchPaths = new Set<string>([
+			path.join(this.workspaceDir, "memory"),
+			...this.extraMemoryPaths,
+		])
+		this.watcher = chokidar.watch(Array.from(watchPaths), {
+			ignoreInitial: true,
+			awaitWriteFinish: {
+				stabilityThreshold: debounceMs,
+				pollInterval: 100,
+			},
+		})
+		const markDirty = () => {
+			this.dirty = true
+			this.scheduleWatchSync()
+		}
+		this.watcher.on("add", markDirty)
+		this.watcher.on("change", markDirty)
+		this.watcher.on("unlink", markDirty)
+		this.watcher.on("error", (err) => {
+			log.warn(`file watcher error: ${String(err)}`)
+		})
+	}
+
+	private scheduleWatchSync(): void {
+		const mongoCfg = this.config.mongodb!
+		if (this.watchTimer) {
+			clearTimeout(this.watchTimer)
+		}
+		this.watchTimer = setTimeout(() => {
+			this.watchTimer = null
+			void this.sync({ reason: "watch" }).catch((err) => {
+				log.warn(`memory sync failed (watch): ${String(err)}`)
+			})
+		}, mongoCfg.watchDebounceMs)
+	}
+
+	// ---------------------------------------------------------------------------
+	// MemorySearchManager.probeEmbeddingAvailability
+	// ---------------------------------------------------------------------------
+
+	async probeEmbeddingAvailability(): Promise<MemoryEmbeddingProbeResult> {
+		const mongoCfg = this.config.mongodb!
+
+		if (mongoCfg.embeddingMode === "automated") {
+			if (mongoCfg.deploymentProfile !== "atlas-local-preview") {
+				return {
+					ok: false,
+					error: `embeddingMode "automated" is only supported on atlas-local-preview in Memongo`,
+				}
+			}
+			return this.capabilities.vectorSearch
+				? { ok: true }
+				: {
+						ok: false,
+						error: "vector search not available on this MongoDB deployment",
+					}
+		}
+
+		return { ok: false, error: "unsupported embedding mode" }
+	}
+
+	// ---------------------------------------------------------------------------
+	// MemorySearchManager.probeVectorAvailability
+	// ---------------------------------------------------------------------------
+
+	async probeVectorAvailability(): Promise<boolean> {
+		return (
+			this.capabilities.vectorSearch && this.probeEmbeddingModeSupportsVector()
+		)
+	}
+
+	private probeEmbeddingModeSupportsVector(): boolean {
+		const mongoCfg = this.config.mongodb!
+		return (
+			mongoCfg.embeddingMode === "automated" &&
+			mongoCfg.deploymentProfile === "atlas-local-preview"
+		)
+	}
+
+	// ---------------------------------------------------------------------------
+	// Structured memory write (exposed for memory_write tool to avoid per-call MongoClient)
+	// ---------------------------------------------------------------------------
+
+	async writeStructuredMemory(
+		entry: StructuredMemoryEntry,
+	): Promise<{ upserted: boolean; id: string }> {
+		const mongoCfg = this.config.mongodb!
+		const { writeStructuredMemory: writeFn } = await import(
+			"./mongodb-structured-memory.js"
+		)
+		return writeFn({
+			db: this.db,
+			prefix: this.prefix,
+			entry: {
+				...entry,
+				workspaceDir: this.workspaceDir,
+				// Default sourceAgent to user when caller does not supply one
+				sourceAgent: entry.sourceAgent ?? {
+					id: entry.agentId,
+					name: "user",
+				},
+			},
+			embeddingMode: mongoCfg.embeddingMode,
+			client: this.client,
+		})
+	}
+
+	async writeProcedure(
+		entry: ProcedureEntry,
+	): Promise<{ upserted: boolean; id: string }> {
+		const mongoCfg = this.config.mongodb!
+		const { writeProcedure: writeFn } = await import("./mongodb-procedures.js")
+		return writeFn({
+			db: this.db,
+			prefix: this.prefix,
+			entry: {
+				...entry,
+				workspaceDir: this.workspaceDir,
+				// Default sourceAgent to user when caller does not supply one
+				sourceAgent: entry.sourceAgent ?? {
+					id: entry.agentId,
+					name: "user",
+				},
+			},
+			embeddingMode: mongoCfg.embeddingMode,
+			client: this.client,
+		})
+	}
+
+	async getLifecycleItem(
+		handle: MemoryStableHandle,
+	): Promise<MemoryLifecycleItem | null> {
+		if (handle.family === "structured") {
+			const { getStructuredMemoryByHandle } = await import(
+				"./mongodb-structured-memory.js"
+			)
+			return getStructuredMemoryByHandle({
+				db: this.db,
+				prefix: this.prefix,
+				handle,
+			})
+		}
+		const { getProcedureByHandle } = await import("./mongodb-procedures.js")
+		return getProcedureByHandle({
+			db: this.db,
+			prefix: this.prefix,
+			handle,
+		})
+	}
+
+	async updateLifecycleItem(
+		handle: MemoryStableHandle,
+		patch: StructuredMemoryLifecyclePatch | ProcedureLifecyclePatch,
+	): Promise<MemoryLifecycleItem | null> {
+		const mongoCfg = this.config.mongodb!
+		if (handle.family === "structured") {
+			const { updateStructuredMemoryByHandle } = await import(
+				"./mongodb-structured-memory.js"
+			)
+			return updateStructuredMemoryByHandle({
+				db: this.db,
+				prefix: this.prefix,
+				handle,
+				patch: patch as StructuredMemoryLifecyclePatch,
+				embeddingMode: mongoCfg.embeddingMode,
+				client: this.client,
+			})
+		}
+		const { updateProcedureByHandle } = await import("./mongodb-procedures.js")
+		return updateProcedureByHandle({
+			db: this.db,
+			prefix: this.prefix,
+			handle,
+			patch: patch as ProcedureLifecyclePatch,
+			embeddingMode: mongoCfg.embeddingMode,
+			client: this.client,
+		})
+	}
+
+	async invalidateLifecycleItem(
+		handle: MemoryStableHandle,
+		invalidatedBy?: Record<string, unknown>,
+	): Promise<MemoryLifecycleItem | null> {
+		if (handle.family === "structured") {
+			const { invalidateStructuredMemoryByHandle } = await import(
+				"./mongodb-structured-memory.js"
+			)
+			return invalidateStructuredMemoryByHandle({
+				db: this.db,
+				prefix: this.prefix,
+				handle,
+				...(invalidatedBy ? { invalidatedBy } : {}),
+				client: this.client,
+			})
+		}
+		const { invalidateProcedureByHandle } = await import(
+			"./mongodb-procedures.js"
+		)
+		return invalidateProcedureByHandle({
+			db: this.db,
+			prefix: this.prefix,
+			handle,
+			...(invalidatedBy ? { invalidatedBy } : {}),
+			client: this.client,
+		})
+	}
+
+	async getLifecycleHistory(params: {
+		handle: MemoryStableHandle
+		limit?: number
+	}): Promise<MemoryLifecycleHistoryEntry[]> {
+		if (params.handle.family === "structured") {
+			const { getStructuredMemoryHistoryByHandle } = await import(
+				"./mongodb-structured-memory.js"
+			)
+			return getStructuredMemoryHistoryByHandle({
+				db: this.db,
+				prefix: this.prefix,
+				handle: params.handle,
+				limit: params.limit,
+			}) as Promise<MemoryLifecycleHistoryEntry[]>
+		}
+		const { getProcedureHistoryByHandle } = await import(
+			"./mongodb-procedures.js"
+		)
+		return getProcedureHistoryByHandle({
+			db: this.db,
+			prefix: this.prefix,
+			handle: params.handle,
+			limit: params.limit,
+		}) as Promise<MemoryLifecycleHistoryEntry[]>
+	}
+
+	async reportProcedureOutcome(params: {
+		handle: Extract<MemoryStableHandle, { family: "procedure" }>
+		success: boolean
+		note?: string
+		actorRole?: MemoryActorRole
+	}): Promise<Extract<MemoryLifecycleItem, { family: "procedure" }> | null> {
+		const { reportProcedureOutcomeByHandle } = await import(
+			"./mongodb-procedures.js"
+		)
+		return reportProcedureOutcomeByHandle({
+			db: this.db,
+			prefix: this.prefix,
+			handle: params.handle,
+			success: params.success,
+			note: params.note,
+			actorRole: params.actorRole,
+		})
+	}
+
+	async applyMemoryFeedback(params: {
+		handle: Extract<MemoryStableHandle, { family: "structured" }>
+		signal: MemoryFeedbackSignal
+		patch?: StructuredMemoryLifecyclePatch
+		invalidatedBy?: Record<string, unknown>
+		note?: string
+		actorRole?: MemoryActorRole
+	}): Promise<Extract<MemoryLifecycleItem, { family: "structured" }> | null> {
+		const mongoCfg = this.config.mongodb!
+		const { applyStructuredMemoryFeedbackByHandle } = await import(
+			"./mongodb-structured-memory.js"
+		)
+		return applyStructuredMemoryFeedbackByHandle({
+			db: this.db,
+			prefix: this.prefix,
+			handle: params.handle,
+			signal: params.signal,
+			patch: params.patch,
+			invalidatedBy: params.invalidatedBy,
+			note: params.note,
+			embeddingMode: mongoCfg.embeddingMode,
+			client: this.client,
+			actorRole: params.actorRole,
+		})
+	}
+
+	// ---------------------------------------------------------------------------
+	// Self-edit: direct core block editing (user/persona/instructions)
+	// ---------------------------------------------------------------------------
+
+	async selfEditBlock(params: {
+		block: MemorySelfEditBlock
+		action: MemorySelfEditAction
+		content: string
+	}): Promise<{ upserted: boolean; id: string }> {
+		const mongoCfg = this.config.mongodb!
+		const { selfEditBlock: editFn } = await import("./mongodb-self-edit.js")
+		return editFn({
+			db: this.db,
+			prefix: this.prefix,
+			agentId: this.agentId,
+			embeddingMode: mongoCfg.embeddingMode,
+			client: this.client,
+			block: params.block,
+			action: params.action,
+			content: params.content,
+		})
+	}
+
+	async getDetailedStatus(): Promise<V2Status> {
+		return getV2Status(this.db, this.prefix, this.agentId)
+	}
+
+	// C2-manager audit fix: synthesizeProfile delegation to standalone function
+	async synthesizeProfile(
+		params: {
+			scope?: MemoryScope
+			scopeRef?: string
+			maxPerType?: number
+			maxEntities?: number
+			maxEpisodes?: number
+			activityWindowMs?: number
+		} = {},
+	): Promise<ProfileSynthesis> {
+		return synthesizeProfile({
+			db: this.db,
+			prefix: this.prefix,
+			agentId: this.agentId,
+			scope: params.scope ?? "agent",
+			scopeRef: params.scopeRef ?? this.agentScopeRef,
+			maxPerType: params.maxPerType,
+			maxEntities: params.maxEntities,
+			maxEpisodes: params.maxEpisodes,
+			activityWindowMs: params.activityWindowMs,
+		})
+	}
+
+	async hydrateActiveSlate(
+		params: { scope?: MemoryScope; scopeRef?: string; maxItems?: number } = {},
+	): Promise<MemoryActiveSlate> {
+		return hydrateActiveSlate({
+			db: this.db,
+			prefix: this.prefix,
+			agentId: this.agentId,
+			scope: params.scope ?? "agent",
+			scopeRef: params.scopeRef ?? this.agentScopeRef,
+			maxItems: params.maxItems,
+		})
+	}
+
+	async buildDiscoveryProjection(
+		request: MemoryDiscoveryProjectionRequest,
+	): Promise<MemoryDiscoveryProjection> {
+		return buildDiscoveryProjection({
+			db: this.db,
+			prefix: this.prefix,
+			agentId: this.agentId,
+			kind: request.kind,
+			query: request.query,
+			scope: request.scope ?? "agent",
+			scopeRef: request.scopeRef ?? this.agentScopeRef,
+			maxItems: request.maxItems,
+			timeRange: request.timeRange,
+		})
+	}
+
+	async buildContextBundle(
+		request: MemoryContextBundleRequest = {},
+	): Promise<MemoryContextBundle> {
+		const scope = request.scope ?? "agent"
+		const scopeRef =
+			request.scopeRef ??
+			resolveScopeRef({
+				scope,
+				agentId: this.agentId,
+				sessionId: request.sessionId,
+				workspaceDir: this.workspaceDir,
+			})
+		const mongoCfg = this.config.mongodb!
+		const activeSources = getActiveSources(
+			mongoCfg.sources,
+			mongoCfg.kb.enabled,
+		)
+		const availablePaths = this.buildV2AvailablePaths(activeSources)
+		const startedAt = Date.now()
+		let bundleSearchTrace:
+			| {
+					pathsExecuted: string[]
+					hitsByLane: Record<string, number>
+					totalHits: number
+			  }
+			| undefined
+
+		const bundle = await composeContextBundle({
+			db: this.db,
+			prefix: this.prefix,
+			agentId: this.agentId,
+			scope,
+			scopeRef,
+			request,
+			search: async (params) => {
+				const result = await searchV2(
+					this.db,
+					this.prefix,
+					params.query,
+					this.agentId,
+					{
+						availablePaths,
+						hasEpisodes: mongoCfg.episodes.enabled,
+						hasGraphData: mongoCfg.graph.enabled,
+						maxResults: params.maxResults,
+						searchOptions: {
+							minScore: 0.1,
+							numCandidates: mongoCfg.numCandidates,
+							capabilities: this.capabilities,
+							fusionMethod: mongoCfg.fusionMethod,
+							embeddingMode: mongoCfg.embeddingMode,
+							conversationFilter: this.buildConversationChunkFilter({
+								scope: params.scope,
+								scopeRef: params.scopeRef,
+							}),
+							bridgeFilter: activeSources.conversation
+								? this.buildBridgeChunkFilter()
+								: undefined,
+							bridgeMaxResults: this.getBridgeChunkBudget(params.maxResults),
+							scope: params.scope,
+							scopeRef: params.scopeRef,
+							conversationScope:
+								params.scope === "session" && params.sessionId
+									? { sessionKey: params.sessionId }
+									: undefined,
+							rerankConfig: mongoCfg.reranking,
+							queryRewriteConfig: mongoCfg.queryRewriting,
+						},
+					},
+				)
+				const expandedResults =
+					params.scope === "session"
+						? await expandSearchContext({
+								db: this.db,
+								prefix: this.prefix,
+								agentId: this.agentId,
+								results: result.results,
+								maxResults: params.maxResults,
+							})
+						: result.results
+				const trustedResults = annotateResultsWithTrust(expandedResults, {
+					scope: params.scope,
+					scopeRef: params.scopeRef,
+					sessionKey: params.scope === "session" ? params.sessionId : undefined,
+				})
+				bundleSearchTrace = {
+					pathsExecuted: result.metadata.pathsExecuted,
+					hitsByLane: result.metadata.resultsByPath,
+					totalHits: trustedResults.length,
+				}
+				return {
+					results: trustedResults,
+					pathsExecuted: result.metadata.pathsExecuted,
+					trustSummary: summarizeTrust(trustedResults),
+				}
+			},
+		})
+		void recordRecallTrace({
+			db: this.db,
+			prefix: this.prefix,
+			trace: {
+				agentId: this.agentId,
+				query: request.query?.trim() || "(context-bundle)",
+				lanesUsed:
+					bundleSearchTrace?.pathsExecuted ?? bundle.metadata.pathsExecuted,
+				lanesSkipped: Array.from(availablePaths).filter(
+					(path) =>
+						!(
+							bundleSearchTrace?.pathsExecuted ?? bundle.metadata.pathsExecuted
+						).includes(path),
+				),
+				totalHits: bundleSearchTrace?.totalHits ?? 0,
+				latencyMs: Date.now() - startedAt,
+				hitsByLane: bundleSearchTrace?.hitsByLane ?? {},
+				topHitIds: [],
+				tokenBudgetUsed: bundle.metadata.estimatedTokensUsed,
+				bundleMode: request.mode ?? "full",
+			},
+		}).catch((err) =>
+			log.warn(`buildContextBundle recall trace write failed: ${String(err)}`),
+		)
+		return bundle
+	}
+
+	async recallConversation(
+		request: Omit<ConversationRecallRequest, "agentId">,
+	): Promise<ConversationRecallResponse> {
+		return recallConversationCore({
+			db: this.db,
+			prefix: this.prefix,
+			request: {
+				...request,
+				agentId: this.agentId,
+			},
+			vectorIndexName: `${this.prefix}events_vector`,
+			textIndexName: `${this.prefix}events_text`,
+			capabilities: this.capabilities,
+		})
+	}
+
+	// -----------------------------------------------------------------------
+	// Reasoning chain / novelty / consolidation wrappers
+	// -----------------------------------------------------------------------
+
+	async traceChain(params: {
+		factId: string
+		collection: string
+		options?: { maxDepth?: number }
+	}) {
+		return traceReasoningChain({
+			db: this.db,
+			prefix: this.prefix,
+			agentId: this.agentId,
+			factId: params.factId,
+			collection: params.collection,
+			options: params.options,
+		})
+	}
+
+	async scanNovelty(params?: { limit?: number; scope?: string }) {
+		return scanNovelty({
+			db: this.db,
+			prefix: this.prefix,
+			agentId: this.agentId,
+			options: params,
+		})
+	}
+
+	async consolidate(params?: {
+		maxEvents?: number
+		minCombinedScore?: number
+		scope?: string
+	}) {
+		const startedAt = new Date()
+		const runId = randomUUID()
+		const jobId = `consolidation-${runId}`
+		let jobTrackingEnabled = false
+		try {
+			await createMemoryJob({
+				db: this.db,
+				prefix: this.prefix,
+				job: {
+					jobId,
+					jobType: "consolidation",
+					agentId: this.agentId,
+					status: "running",
+					startedAt,
+					metadata: params ? { ...params } : undefined,
+				},
+			})
+			jobTrackingEnabled = true
+		} catch (err) {
+			log.warn(
+				`createMemoryJob failed for ${jobId}: ${err instanceof Error ? err.message : String(err)}`,
+			)
+		}
+		try {
+			const result = await consolidateMemory({
+				db: this.db,
+				prefix: this.prefix,
+				agentId: this.agentId,
+				options: params,
+			})
+			if (jobTrackingEnabled) {
+				try {
+					await updateMemoryJob({
+						db: this.db,
+						prefix: this.prefix,
+						jobId,
+						agentId: this.agentId,
+						status: "completed",
+						completedAt: new Date(),
+						durationMs: result.durationMs,
+						inputCount: result.eventsProcessed,
+						outputCount: result.factsPromoted,
+						metadata: {
+							...(params ? { ...params } : {}),
+							runId: result.runId,
+							factsPruned: result.factsPruned,
+							conflictsResolved: result.conflictsResolved,
+						},
+					})
+				} catch (err) {
+					log.warn(
+						`updateMemoryJob failed for ${jobId}: ${err instanceof Error ? err.message : String(err)}`,
+					)
+				}
+			}
+			return result
+		} catch (err) {
+			if (jobTrackingEnabled) {
+				try {
+					await updateMemoryJob({
+						db: this.db,
+						prefix: this.prefix,
+						jobId,
+						agentId: this.agentId,
+						status: "failed",
+						completedAt: new Date(),
+						durationMs: Date.now() - startedAt.getTime(),
+						error: err instanceof Error ? err.message : String(err),
+						metadata: params ? { ...params } : undefined,
+					})
+				} catch (updateErr) {
+					log.warn(
+						`updateMemoryJob failed for ${jobId}: ${updateErr instanceof Error ? updateErr.message : String(updateErr)}`,
+					)
+				}
+			}
+			throw err
+		}
+	}
+
+	async listRecallTraces(params?: { limit?: number }) {
+		return listRecallTraces({
+			db: this.db,
+			prefix: this.prefix,
+			agentId: this.agentId,
+			limit: params?.limit,
+		})
+	}
+
+	async getRecallTrace(params: { traceId: string }) {
+		return getRecallTrace({
+			db: this.db,
+			prefix: this.prefix,
+			traceId: params.traceId,
+			agentId: this.agentId,
+		})
+	}
+
+	async listMemoryJobs(params?: {
+		status?: import("./types.js").MemoryJobStatus
+		limit?: number
+		jobType?: import("./types.js").MemoryJobType
+	}) {
+		return listMemoryJobs({
+			db: this.db,
+			prefix: this.prefix,
+			agentId: this.agentId,
+			status: params?.status,
+			limit: params?.limit,
+			jobType: params?.jobType,
+		})
+	}
+
+	async getMemoryJob(params: { jobId: string }) {
+		return getMemoryJob({
+			db: this.db,
+			prefix: this.prefix,
+			jobId: params.jobId,
+			agentId: this.agentId,
+		})
+	}
+
+	private enqueueDerivedWork(task: () => Promise<void>): void {
+		const run = async () => {
+			try {
+				await task()
+			} catch (err) {
+				log.warn(`derived memory work failed: ${String(err)}`)
+			}
+		}
+		const next = this.derivationQueue.then(run, run)
+		this.derivationQueue = next.then(
+			() => undefined,
+			() => undefined,
+		)
+	}
+
+	private isDuplicateKeyError(err: unknown): boolean {
+		if (!err || typeof err !== "object") {
+			return false
+		}
+		const code = (err as { code?: unknown }).code
+		if (code === 11000 || code === "11000") {
+			return true
+		}
+		const message =
+			err instanceof Error
+				? err.message
+				: typeof (err as { message?: unknown }).message === "string"
+					? String((err as { message: string }).message)
+					: String(err)
+		return message.includes("E11000") || message.includes("duplicate key")
+	}
+
+	private async runBackgroundExtractionJob(params: {
+		eventId: string
+		jobId: string
+	}): Promise<void> {
+		const { eventId, jobId } = params
+		const startedAt = new Date()
+		try {
+			await updateMemoryJob({
+				db: this.db,
+				prefix: this.prefix,
+				jobId,
+				agentId: this.agentId,
+				status: "running",
+				startedAt,
+				metadata: { eventId },
+			})
+		} catch (err) {
+			log.warn(
+				`updateMemoryJob failed for ${jobId}: ${err instanceof Error ? err.message : String(err)}`,
+			)
+		}
+
+		try {
+			const eventDoc = (await eventsCollection(this.db, this.prefix).findOne({
+				eventId,
+				agentId: this.agentId,
+			})) as {
+				eventId: string
+				agentId: string
+				role: "user" | "assistant" | "system" | "tool"
+				body: string
+				timestamp: Date
+				sessionId?: string
+				scope: MemoryScope
+				scopeRef: string
+			} | null
+			if (!eventDoc) {
+				throw new Error(`event not found: ${eventId}`)
+			}
+
+			const result = await promoteDerivedMemoryFromEvent({
+				db: this.db,
+				prefix: this.prefix,
+				client: this.client,
+				embeddingMode: this.config.mongodb?.embeddingMode ?? "automated",
+				event: {
+					...eventDoc,
+					workspaceDir: this.workspaceDir,
+				},
+			})
+
+			try {
+				await updateMemoryJob({
+					db: this.db,
+					prefix: this.prefix,
+					jobId,
+					agentId: this.agentId,
+					status: "completed",
+					completedAt: new Date(),
+					durationMs: Date.now() - startedAt.getTime(),
+					inputCount: 1,
+					outputCount: result.structuredCreated + result.proceduresCreated,
+					metadata: {
+						eventId,
+						structuredCreated: result.structuredCreated,
+						proceduresCreated: result.proceduresCreated,
+						...(result.skipped
+							? { skipped: true, skipReason: result.skipReason }
+							: {}),
+					},
+				})
+			} catch (err) {
+				log.warn(
+					`updateMemoryJob failed for ${jobId}: ${err instanceof Error ? err.message : String(err)}`,
+				)
+			}
+		} catch (err) {
+			try {
+				await updateMemoryJob({
+					db: this.db,
+					prefix: this.prefix,
+					jobId,
+					agentId: this.agentId,
+					status: "failed",
+					completedAt: new Date(),
+					durationMs: Date.now() - startedAt.getTime(),
+					error: err instanceof Error ? err.message : String(err),
+					metadata: { eventId },
+				})
+			} catch (updateErr) {
+				log.warn(
+					`updateMemoryJob failed for ${jobId}: ${updateErr instanceof Error ? updateErr.message : String(updateErr)}`,
+				)
+			}
+		}
+	}
+
+	private async scheduleBackgroundExtraction(
+		eventId: string,
+	): Promise<{ jobId: string; scheduled: boolean }> {
+		const jobId = `extraction-${eventId}`
+		try {
+			await createMemoryJob({
+				db: this.db,
+				prefix: this.prefix,
+				job: {
+					jobId,
+					jobType: "extraction",
+					agentId: this.agentId,
+					status: "pending",
+					metadata: { eventId },
+				},
+			})
+		} catch (err) {
+			if (this.isDuplicateKeyError(err)) {
+				return { jobId, scheduled: false }
+			}
+			throw err
+		}
+
+		this.enqueueDerivedWork(async () => {
+			await this.runBackgroundExtractionJob({ eventId, jobId })
+		})
+		return { jobId, scheduled: true }
+	}
+
+	private schedulePostWriteDerivations(params: {
+		eventId: string
+		role: "user" | "assistant" | "system" | "tool"
+		body: string
+		sessionId?: string
+		timestamp: Date
+		scope: MemoryScope
+		scopeRef: string
+	}): void {
+		const mongoCfg = this.config.mongodb
+		if (!mongoCfg) {
+			return
+		}
+
+		void this.scheduleBackgroundExtraction(params.eventId).catch((err) => {
+			log.warn("background extraction scheduling failed after event write", {
+				error: err,
+				eventId: params.eventId,
+			})
+		})
+
+		if (!mongoCfg.episodes.enabled) {
+			return
+		}
+
+		this.enqueueDerivedWork(async () => {
+			const triggerThreshold = Math.max(
+				1,
+				mongoCfg.episodes.minEventsForEpisode - 1,
+			)
+			try {
+				const episodeResult = await checkAutoEpisodeTriggers({
+					db: this.db,
+					prefix: this.prefix,
+					agentId: this.agentId,
+					summarizer: heuristicEpisodeSummarizer,
+					scope: params.scope,
+					scopeRef: params.scopeRef,
+					maxEventsWithoutEpisode: triggerThreshold,
+				})
+				// Update episodic lane coverage when an episode is materialized
+				if (episodeResult.triggered) {
+					await updateLaneCoverage({
+						db: this.db,
+						prefix: this.prefix,
+						agentId: this.agentId,
+						increments: { episodic: 1 },
+					}).catch((coverageErr) => {
+						log.warn(
+							`episodic lane coverage update failed: ${String(coverageErr)}`,
+						)
+					})
+				}
+			} catch (err) {
+				log.warn(
+					`auto episode trigger failed after event write: ${String(err)}`,
+				)
+			}
+		})
+	}
+
+	async writeConversationEvent(event: {
+		role: "user" | "assistant" | "system" | "tool"
+		body: string
+		sessionId?: string
+		timestamp?: Date
+		metadata?: Record<string, unknown>
+		scope?: MemoryScope
+	}): Promise<{ eventId: string; chunkCreated: boolean }> {
+		const execute = async () => {
+			const eventId = randomUUID()
+			const scope = event.scope ?? ("agent" as MemoryScope)
+			const written = await writeEvent({
+				db: this.db,
+				prefix: this.prefix,
+				event: {
+					eventId,
+					agentId: this.agentId,
+					sessionId: event.sessionId,
+					role: event.role,
+					body: event.body,
+					scope,
+					timestamp: event.timestamp,
+					metadata: event.metadata,
+				},
+			})
+			const projected = await projectEventChunk({
+				db: this.db,
+				prefix: this.prefix,
+				event: {
+					eventId: written.eventId,
+					agentId: this.agentId,
+					role: event.role,
+					body: event.body,
+					scope,
+					scopeRef: written.scopeRef,
+					timestamp: written.timestamp,
+					...(event.sessionId ? { sessionId: event.sessionId } : {}),
+					...(event.metadata ? { metadata: event.metadata } : {}),
+				},
+			})
+			if (projected.chunkCreated) {
+				this.chunkCount += 1
+			}
+			// Entity extraction (sync rule-based, non-blocking)
+			let entityCount = 0
+			try {
+				const entityResult = await extractAndUpsertEntities({
+					db: this.db,
+					prefix: this.prefix,
+					agentId: this.agentId,
+					eventContent: event.body,
+					scope,
+					scopeRef: written.scopeRef,
+					sourceEventId: written.eventId,
+				})
+				entityCount = entityResult.entities.length
+			} catch (err) {
+				log.warn("entity extraction failed after event write", { error: err })
+			}
+
+			this.schedulePostWriteDerivations({
+				eventId: written.eventId,
+				role: event.role,
+				body: event.body,
+				sessionId: event.sessionId,
+				timestamp: written.timestamp,
+				scope,
+				scopeRef: written.scopeRef,
+			})
+
+			// Lane coverage tracking (non-blocking)
+			// Note: episodic lane coverage is handled asynchronously inside
+			// schedulePostWriteDerivations when checkAutoEpisodeTriggers fires.
+			try {
+				const increments: Record<string, number> = {
+					"raw-window": 1,
+					hybrid: projected.chunkCreated ? 1 : 0,
+				}
+				if (entityCount > 0) {
+					increments.graph = entityCount
+				}
+				const candidates = await resolveStructuredCandidatesForPromotion({
+					db: this.db,
+					prefix: this.prefix,
+					event: {
+						eventId: written.eventId,
+						agentId: this.agentId,
+						role: event.role,
+						body: event.body,
+						timestamp: written.timestamp,
+						sessionId: event.sessionId,
+						scope,
+						scopeRef: written.scopeRef,
+					},
+				})
+				if (candidates.length > 0) {
+					increments.structured = candidates.length
+				}
+				const criticalCount = candidates.filter(
+					(c) => c.salience === "critical" || c.salience === "high",
+				).length
+				if (criticalCount > 0) {
+					increments["active-critical"] = criticalCount
+				}
+				const procedureCandidates = extractProcedureCandidatesFromEvent({
+					eventId: written.eventId,
+					agentId: this.agentId,
+					role: event.role,
+					body: event.body,
+					timestamp: written.timestamp,
+					sessionId: event.sessionId,
+					scope,
+					scopeRef: written.scopeRef,
+				})
+				if (procedureCandidates.length > 0) {
+					increments.procedural = procedureCandidates.length
+				}
+				await updateLaneCoverage({
+					db: this.db,
+					prefix: this.prefix,
+					agentId: this.agentId,
+					increments,
+				})
+			} catch (err) {
+				log.warn("lane coverage update failed after event write", {
+					error: err,
+				})
+			}
+
+			this.dirty = false
+			return { eventId: written.eventId, chunkCreated: projected.chunkCreated }
+		}
+
+		const next = this.writeQueue.then(execute, execute)
+		this.writeQueue = next.then(
+			() => undefined,
+			() => undefined,
+		)
+		return next
+	}
+
+	async extractEvent(params: { eventId: string }) {
+		const eventId = params.eventId.trim()
+		if (!eventId) {
+			throw new Error("eventId is required")
+		}
+		return this.scheduleBackgroundExtraction(eventId)
+	}
+
+	// ---------------------------------------------------------------------------
+	// Analytics: getMemoryStats
+	// ---------------------------------------------------------------------------
+
+	async stats(): Promise<MemoryStats> {
+		return getMemoryStats(this.db, this.prefix)
+	}
+
+	// ---------------------------------------------------------------------------
+	// MemorySearchManager.close
+	// ---------------------------------------------------------------------------
+
+	async close(): Promise<void> {
+		if (this.closed) {
+			return
+		}
+		this.closed = true
+
+		// Clear the debounced sync timer
+		if (this.watchTimer) {
+			clearTimeout(this.watchTimer)
+			this.watchTimer = null
+		}
+
+		await this.derivationQueue
+
+		// Close the file watcher
+		if (this.watcher) {
+			try {
+				await this.watcher.close()
+			} catch {
+				// Ignore watcher close errors
+			}
+			this.watcher = null
+		}
+
+		// Close the change stream watcher
+		if (this.changeStreamWatcher) {
+			const token = this.changeStreamWatcher.lastResumeToken
+			if (token !== undefined && token !== null) {
+				await this.persistChangeStreamResumeToken(token)
+			}
+			try {
+				await this.changeStreamWatcher.close()
+			} catch {
+				// Ignore change stream close errors
+			}
+			this.changeStreamWatcher = null
+		}
+
+		// Wait for any in-flight sync to complete before closing the connection
+		if (this.syncing) {
+			try {
+				await this.syncing
+			} catch {
+				// Ignore sync errors during close — already logged in runSync
+			}
+		}
+		await this.writeQueue
+
+		// Flush and close access tracker
+		if (this.accessTracker) {
+			try {
+				await this.accessTracker.close()
+			} catch {
+				// Ignore access tracker close errors
+			}
+			this.accessTracker = null
+		}
+
+		// Close the MongoDB connection
+		try {
+			await this.client.close()
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err)
+			log.warn(`error closing MongoDB connection: ${msg}`)
+		}
+	}
+}
+
+function getAccessSummariesOrEmpty(params: {
+	db: Db
+	prefix: string
+	agentId: string
+	collection: AccessEventCollection
+	memoryIds: string[]
+	windowDays?: number
+}) {
+	const memoryIds = params.memoryIds.filter(
+		(memoryId) => memoryId.trim().length > 0,
+	)
+	if (memoryIds.length === 0) {
+		return Promise.resolve([])
+	}
+	return listAccessSummaries({
+		db: params.db,
+		prefix: params.prefix,
+		agentId: params.agentId,
+		collection: params.collection,
+		memoryIds,
+		windowDays: params.windowDays,
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Phase 8: v2 standalone functions — write, search, status
+// ---------------------------------------------------------------------------
+
+/**
+ * Write an event and project it to chunks. Records an ingest run on success or failure.
+ * Standalone function following the v2 module pattern (db, prefix, ...).
+ */
+export async function writeEventAndProject(
+	db: Db,
+	prefix: string,
+	event: {
+		agentId: string
+		role: string
+		body: string
+		scope: string
+		sessionId?: string
+		path?: string
+		hash?: string
+		metadata?: Record<string, unknown>
+	},
+	options?: {
+		extractor?: import("./mongodb-entity-extractor.js").EntityExtractor
+	},
+): Promise<{ eventId: string; chunksCreated: number }> {
+	const startMs = Date.now()
+	try {
+		// Validate scope and role before passing to writeEvent
+		if (!VALID_SCOPES.has(event.scope)) {
+			throw new Error(`Invalid scope: ${event.scope}`)
+		}
+		if (!VALID_ROLES.has(event.role)) {
+			throw new Error(`Invalid role: ${event.role}`)
+		}
+		const written = await writeEvent({
+			db,
+			prefix,
+			event: {
+				eventId: randomUUID(),
+				agentId: event.agentId,
+				role: event.role as "user" | "assistant" | "system" | "tool",
+				body: event.body,
+				scope: event.scope as MemoryScope,
+				sessionId: event.sessionId,
+				channel: undefined,
+				metadata: event.metadata,
+			},
+		})
+
+		const projected = await projectEventChunk({
+			db,
+			prefix,
+			event: {
+				eventId: written.eventId,
+				agentId: event.agentId,
+				role: event.role as "user" | "assistant" | "system" | "tool",
+				body: event.body,
+				scope: event.scope as MemoryScope,
+				scopeRef: written.scopeRef,
+				timestamp: written.timestamp,
+				...(event.sessionId ? { sessionId: event.sessionId } : {}),
+				...(event.metadata ? { metadata: event.metadata } : {}),
+			},
+		})
+		// Entity extraction (sync rule-based, non-blocking)
+		let entityCount = 0
+		try {
+			const entityResult = await extractAndUpsertEntities({
+				db,
+				prefix,
+				agentId: event.agentId,
+				eventContent: event.body,
+				scope: event.scope as MemoryScope,
+				scopeRef: written.scopeRef,
+				sourceEventId: written.eventId,
+				extractor: options?.extractor,
+			})
+			entityCount = entityResult.entities.length
+		} catch (err) {
+			log.warn("entity extraction failed during writeEventAndProject", {
+				error: err,
+				eventId: written.eventId,
+			})
+		}
+
+		// Structured fact + procedure extraction (sync rule-based, non-blocking)
+		try {
+			await promoteDerivedMemoryFromEvent({
+				db,
+				prefix,
+				client: undefined,
+				embeddingMode: "automated",
+				event: {
+					eventId: written.eventId,
+					agentId: event.agentId,
+					role: event.role as "user" | "assistant" | "system" | "tool",
+					body: event.body,
+					timestamp: written.timestamp,
+					sessionId: event.sessionId,
+					scope: event.scope as MemoryScope,
+					scopeRef: written.scopeRef,
+				},
+			})
+		} catch (err) {
+			log.warn(
+				"structured/procedure extraction failed during writeEventAndProject",
+				{ error: err, eventId: written.eventId },
+			)
+		}
+
+		// Episode trigger check (sync, non-blocking)
+		// MUST capture result: episodeTriggered drives episodic lane coverage.
+		let episodeTriggered = false
+		try {
+			const episodeResult = await checkAutoEpisodeTriggers({
+				db,
+				prefix,
+				agentId: event.agentId,
+				summarizer: heuristicEpisodeSummarizer,
+				scope: event.scope as MemoryScope,
+				scopeRef: written.scopeRef,
+			})
+			episodeTriggered = episodeResult.triggered
+		} catch (err) {
+			log.warn("episode trigger check failed during writeEventAndProject", {
+				error: err,
+				eventId: written.eventId,
+			})
+		}
+
+		// Lane coverage tracking (non-blocking)
+		try {
+			const increments: Record<string, number> = {
+				"raw-window": 1, // every event populates raw-window
+				hybrid: projected.chunkCreated ? 1 : 0,
+			}
+			if (entityCount > 0) {
+				increments.graph = entityCount
+			}
+			// Structured lane tracks durable promotion eligibility, not just raw
+			// extraction hits, so deferred candidates do not inflate coverage.
+			const candidates = await resolveStructuredCandidatesForPromotion({
+				db,
+				prefix,
+				event: {
+					eventId: written.eventId,
+					agentId: event.agentId,
+					role: event.role as "user" | "assistant" | "system" | "tool",
+					body: event.body,
+					timestamp: written.timestamp,
+					sessionId: event.sessionId,
+					scope: event.scope as MemoryScope,
+					scopeRef: written.scopeRef,
+				},
+			})
+			if (candidates.length > 0) {
+				increments.structured = candidates.length
+			}
+			// Active-critical: check candidates for salience
+			const criticalCount = candidates.filter(
+				(c) => c.salience === "critical" || c.salience === "high",
+			).length
+			if (criticalCount > 0) {
+				increments["active-critical"] = criticalCount
+			}
+			// Procedure lane: use candidate count from re-extraction
+			const procedureCandidates = extractProcedureCandidatesFromEvent({
+				eventId: written.eventId,
+				agentId: event.agentId,
+				role: event.role as "user" | "assistant" | "system" | "tool",
+				body: event.body,
+				timestamp: written.timestamp,
+				sessionId: event.sessionId,
+				scope: event.scope as MemoryScope,
+				scopeRef: written.scopeRef,
+			})
+			if (procedureCandidates.length > 0) {
+				increments.procedural = procedureCandidates.length
+			}
+			// Episodic lane: from captured checkAutoEpisodeTriggers result
+			if (episodeTriggered) {
+				increments.episodic = 1
+			}
+			await updateLaneCoverage({
+				db,
+				prefix,
+				agentId: event.agentId,
+				increments,
+			})
+		} catch (err) {
+			log.warn("lane coverage update failed during writeEventAndProject", {
+				error: err,
+				eventId: written.eventId,
+			})
+		}
+
+		const durationMs = Date.now() - startMs
+		await recordIngestRun({
+			db,
+			prefix,
+			run: {
+				agentId: event.agentId,
+				source: "event-write",
+				status: "ok",
+				itemsProcessed: 1,
+				itemsFailed: 0,
+				durationMs,
+			},
+		})
+
+		// Emit event-write telemetry (fire-and-forget)
+		emitTelemetry(db, prefix, {
+			meta: { agentId: event.agentId, operation: "event-write" },
+			durationMs,
+			ok: true,
+			eventType: event.role,
+			projectionTriggered: true,
+		})
+
+		return {
+			eventId: written.eventId,
+			chunksCreated: projected.chunkCreated ? 1 : 0,
+		}
+	} catch (err) {
+		const durationMs = Date.now() - startMs
+		await recordIngestRun({
+			db,
+			prefix,
+			run: {
+				agentId: event.agentId,
+				source: "event-write",
+				status: "failed",
+				itemsProcessed: 0,
+				itemsFailed: 1,
+				durationMs,
+			},
+		}).catch((recErr) => {
+			log.warn("recordIngestRun failed during error recovery", {
+				error: recErr,
+			})
+		})
+		log.error("writeEventAndProject failed", { error: err })
+		throw err
+	}
+}
+
+// ---------------------------------------------------------------------------
+// v2 search types
+// ---------------------------------------------------------------------------
+
+export type V2SearchMetadata = {
+	plan: RetrievalPlan
+	pathsExecuted: RetrievalPath[]
+	resultsByPath: Record<string, number>
+	reranked?: boolean
+	queryRewritten?: boolean
+}
+
+const GRAPH_QUERY_STOPWORDS = new Set([
+	"a",
+	"about",
+	"and",
+	"for",
+	"how",
+	"in",
+	"is",
+	"of",
+	"on",
+	"or",
+	"the",
+	"to",
+	"what",
+	"who",
+])
+
+function graphRelationPriority(type: RelationType): number {
+	switch (type) {
+		case "works_on":
+		case "owns":
+		case "depends_on":
+		case "blocked_by":
+		case "decided":
+		case "reported_by":
+			return 4
+		case "related_to":
+			return 3
+		case "mentioned_with":
+		default:
+			return 1
+	}
+}
+
+function entityMatchScore(entity: Entity, query: string): number {
+	const normalizedQuery = query.trim().toLowerCase()
+	const normalizedName = entity.name.trim().toLowerCase()
+	if (!normalizedQuery || !normalizedName) {
+		return 0
+	}
+	if (normalizedQuery === normalizedName) {
+		return 10
+	}
+	if (normalizedQuery.includes(normalizedName)) {
+		return 8
+	}
+	if (normalizedName.includes(normalizedQuery)) {
+		return 6
+	}
+	const aliasMatch = entity.aliases?.some((alias) => {
+		const normalizedAlias = alias.trim().toLowerCase()
+		return (
+			normalizedAlias === normalizedQuery ||
+			normalizedQuery.includes(normalizedAlias)
+		)
+	})
+	if (aliasMatch) {
+		return 7
+	}
+	return 1
+}
+
+function pickBestEntityMatch(
+	candidates: Entity[],
+	query: string,
+): Entity | null {
+	if (candidates.length === 0) {
+		return null
+	}
+	return (
+		[...candidates].toSorted((a, b) => {
+			const scoreDiff = entityMatchScore(b, query) - entityMatchScore(a, query)
+			if (scoreDiff !== 0) {
+				return scoreDiff
+			}
+			const recencyDiff =
+				(b.updatedAt instanceof Date ? b.updatedAt.getTime() : 0) -
+				(a.updatedAt instanceof Date ? a.updatedAt.getTime() : 0)
+			if (recencyDiff !== 0) {
+				return recencyDiff
+			}
+			return a.name.localeCompare(b.name)
+		})[0] ?? null
+	)
+}
+
+function buildGraphQueryCandidates(query: string): string[] {
+	const candidates = new Set<string>()
+	const add = (value: string | undefined) => {
+		const trimmed = value?.trim()
+		if (
+			trimmed &&
+			trimmed.length >= 2 &&
+			!GRAPH_QUERY_STOPWORDS.has(trimmed.toLowerCase())
+		) {
+			candidates.add(trimmed)
+		}
+	}
+
+	for (const match of query.matchAll(/"([^"]+)"/g)) {
+		add(match[1])
+	}
+	for (const match of query.matchAll(/[@#]([A-Za-z0-9_./-]+)/g)) {
+		add(match[1])
+	}
+	for (const match of query.matchAll(
+		/\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2}\b/g,
+	)) {
+		add(match[0])
+	}
+
+	if (candidates.size < 2) {
+		const words = query
+			.split(/\s+/)
+			.map((word) => word.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, ""))
+			.filter(
+				(word) =>
+					word.length >= 3 && !GRAPH_QUERY_STOPWORDS.has(word.toLowerCase()),
+			)
+		for (const word of words.slice(0, 6)) {
+			add(word)
+		}
+	}
+
+	return Array.from(candidates).slice(0, 6)
+}
+
+function isTrustedPlannerEntityCandidate(
+	candidate: string,
+	query: string,
+): boolean {
+	const trimmed = candidate.trim()
+	if (!trimmed) {
+		return false
+	}
+	if (/\s/.test(trimmed) || /[./_-]/.test(trimmed)) {
+		return true
+	}
+	if (/^\p{Lu}/u.test(trimmed)) {
+		return true
+	}
+	const lowerQuery = query.toLowerCase()
+	const lowerCandidate = trimmed.toLowerCase()
+	return (
+		lowerQuery.includes(`"${lowerCandidate}"`) ||
+		lowerQuery.includes(`@${lowerCandidate}`) ||
+		lowerQuery.includes(`#${lowerCandidate}`)
+	)
+}
+
+const RAW_WINDOW_QUERY_STOPWORDS = new Set([
+	"what",
+	"when",
+	"where",
+	"which",
+	"who",
+	"whom",
+	"whose",
+	"why",
+	"how",
+	"is",
+	"are",
+	"was",
+	"were",
+	"do",
+	"does",
+	"did",
+	"the",
+	"a",
+	"an",
+	"this",
+	"that",
+	"these",
+	"those",
+	"in",
+	"on",
+	"for",
+	"with",
+	"to",
+	"from",
+	"of",
+	"my",
+	"our",
+	"your",
+	"current",
+	"exactly",
+	"please",
+	"thread",
+])
+
+function extractRawWindowQueryTerms(query: string): string[] {
+	return Array.from(
+		new Set(
+			query
+				.toLowerCase()
+				.split(/[^a-z0-9-]+/i)
+				.map((part) => part.trim())
+				.filter(
+					(part) => part.length >= 3 && !RAW_WINDOW_QUERY_STOPWORDS.has(part),
+				),
+		),
+	)
+}
+
+function computeRawWindowEventQueryScore(
+	body: string,
+	queryTerms: string[],
+): number {
+	if (queryTerms.length === 0) {
+		return 0
+	}
+	const haystack = body.toLowerCase()
+	let score = 0
+	for (const term of queryTerms) {
+		const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+		if (new RegExp(`\\b${escaped}\\b`, "i").test(haystack)) {
+			score += term.includes("-") || /\d/.test(term) ? 5 : 1
+		}
+	}
+	return score
+}
+
+/**
+ * Execute a v2 retrieval plan: call planRetrieval, execute top 3 paths, deduplicate results.
+ * Each path has its own try/catch so one failure doesn't kill the whole search.
+ */
+export async function searchV2(
+	db: Db,
+	prefix: string,
+	query: string,
+	agentId: string,
+	context: {
+		availablePaths: Set<RetrievalPath>
+		knownEntityNames?: string[]
+		hasEpisodes?: boolean
+		hasGraphData?: boolean
+		maxResults?: number
+		searchOptions?: {
+			minScore?: number
+			sessionKey?: string
+			numCandidates?: number
+			capabilities?: DetectedCapabilities
+			fusionMethod?: ResolvedMongoDBConfig["fusionMethod"]
+			embeddingMode?: ResolvedMongoDBConfig["embeddingMode"]
+			conversationFilter?: Document
+			bridgeFilter?: Document
+			bridgeMaxResults?: number
+			scope?: MemoryScope
+			scopeRef?: string
+			allowHybridBackstop?: boolean
+			rerankConfig?: RerankConfig
+			queryRewriteConfig?: QueryRewriteConfig
+			projection?: "full" | "ids-only"
+			sourcePreference?: MemorySearchRequest["sourcePreference"]
+			needExactEvidence?: boolean
+			timeRange?: MemorySearchRequest["timeRange"]
+			conversationScope?: MemorySearchRequest["conversationScope"]
+			structuredScope?: MemorySearchRequest["structuredScope"]
+			referenceScope?: MemorySearchRequest["referenceScope"]
+			proceduralScope?: MemorySearchRequest["proceduralScope"]
+			searchConfig?: ResolvedSearchConfig
+			questionDate?: Date
+		}
+	},
+): Promise<{ results: MemorySearchResult[]; metadata: V2SearchMetadata }> {
+	try {
+		const graphQueryCandidates =
+			context.knownEntityNames && context.knownEntityNames.length > 0
+				? context.knownEntityNames
+				: buildGraphQueryCandidates(query)
+		const scope = context.searchOptions?.scope ?? "agent"
+		const agentScopeRef =
+			context.searchOptions?.scopeRef ?? resolveScopeRef({ scope, agentId })
+		const sessionMode = resolveSessionEvidenceMode(
+			process.env.MEMONGO_SESSION_EVIDENCE_MODE,
+		)
+		const chunkSources = ["conversation", "sessions"]
+		if (sessionMode === "A") {
+			chunkSources.push("session-evidence")
+		}
+		const userfactMode = resolveUserfactEvidenceMode(
+			process.env.MEMONGO_USERFACT_EVIDENCE_MODE,
+			process.env.MEMONGO_PREFERENCE_EVIDENCE_MODE,
+		)
+		if (userfactMode === "enabled") {
+			chunkSources.push("userfact-evidence", "preference-evidence")
+		}
+		const enrichmentMode = resolveEnrichmentMode(
+			process.env.MEMONGO_LLM_ENRICHMENT_MODE,
+		)
+		if (enrichmentMode === "enabled") {
+			if (!chunkSources.includes("userfact-evidence")) {
+				chunkSources.push("userfact-evidence")
+			}
+			chunkSources.push("qa-evidence")
+		} else if (enrichmentMode === "facts-only") {
+			if (!chunkSources.includes("userfact-evidence")) {
+				chunkSources.push("userfact-evidence")
+			}
+		}
+		const conversationChunkFilter: Document = context.searchOptions
+			?.conversationFilter ?? {
+			source: { $in: chunkSources },
+			agentId,
+			status: { $ne: "deleted" },
+		}
+		const bridgeChunkFilter = context.searchOptions?.bridgeFilter
+		const maxResults = context.maxResults ?? 20
+		const minScore = context.searchOptions?.minScore ?? 0.01
+		const numCandidates = context.searchOptions?.numCandidates ?? 500
+		const capabilities = context.searchOptions?.capabilities ?? {
+			vectorSearch: true,
+			textSearch: true,
+			scoreFusion: false,
+			rankFusion: true,
+		}
+		const fusionMethod = context.searchOptions?.fusionMethod ?? "rankFusion"
+		const embeddingMode = context.searchOptions?.embeddingMode ?? "automated"
+		const hybridMode =
+			context.searchOptions?.searchConfig?.hybridMode ?? "hybrid"
+		const bridgeMaxResults =
+			context.searchOptions?.bridgeMaxResults ??
+			Math.max(2, Math.ceil(maxResults / 3))
+		const allowHybridBackstop =
+			context.searchOptions?.allowHybridBackstop ?? true
+
+		// Load lane coverage for planner (non-blocking: fallback to no coverage on error)
+		let laneCoverage:
+			| Record<
+					string,
+					{ hasData: boolean; count: number; lastUpdated: Date | null }
+			  >
+			| undefined
+		try {
+			const coverageDoc = await getLaneCoverage({ db, prefix, agentId })
+			if (coverageDoc) {
+				laneCoverage = coverageDoc.lanes
+			}
+		} catch (err) {
+			log.warn("Failed to load lane coverage for planner", {
+				error: err,
+				agentId,
+			})
+		}
+
+		const plan = planRetrieval(query, {
+			availablePaths: context.availablePaths,
+			knownEntityNames:
+				context.knownEntityNames && context.knownEntityNames.length > 0
+					? context.knownEntityNames
+					: graphQueryCandidates.filter((candidate) =>
+							isTrustedPlannerEntityCandidate(candidate, query),
+						),
+			hasEpisodes: context.hasEpisodes,
+			hasGraphData: context.hasGraphData,
+			laneCoverage,
+			intent: {
+				needExactEvidence: context.searchOptions?.needExactEvidence,
+				sourcePreference: context.searchOptions?.sourcePreference,
+				timeRange: context.searchOptions?.timeRange,
+				conversationScope: context.searchOptions?.conversationScope,
+				structuredScope: context.searchOptions?.structuredScope,
+				referenceScope: context.searchOptions?.referenceScope,
+				proceduralScope: context.searchOptions?.proceduralScope,
+			},
+		})
+
+		// Rewrite query for search execution (NOT for planner or cache key):
+		const qrConfig = context.searchOptions?.queryRewriteConfig
+		let searchQuery = query
+		let wasQueryRewritten = false
+		if (qrConfig?.enabled) {
+			const rewriteResult = await rewriteQuery({
+				db,
+				prefix,
+				agentId,
+				query,
+				config: qrConfig,
+			})
+			if (rewriteResult.rewritten) {
+				searchQuery = rewriteResult.rewrittenQuery
+				wasQueryRewritten = true
+			}
+		}
+
+		const constrainedGraphCandidates =
+			plan.constraints?.entities?.names &&
+			plan.constraints.entities.names.length > 0
+				? plan.constraints.entities.names
+				: graphQueryCandidates
+		const timeRange = plan.constraints?.timeRange
+			? resolveTimeRangePreset(plan.constraints.timeRange.preset)
+			: undefined
+		const normalizedStructuredState = normalizeStructuredState(
+			context.searchOptions?.structuredScope?.state,
+		)
+		const normalizedStructuredSalience = normalizeStructuredSalience(
+			context.searchOptions?.structuredScope?.salience,
+		)
+		const normalizedProceduralState = normalizeProcedureState(
+			context.searchOptions?.proceduralScope?.state,
+		)
+		const structuredCurrentOnly = Array.isArray(normalizedStructuredState)
+			? !normalizedStructuredState.includes("invalidated")
+			: normalizedStructuredState !== "invalidated"
+		const proceduralCurrentOnly = normalizedProceduralState !== "invalidated"
+		const structuredFilter: {
+			agentId: string
+			type?: string
+			state?: StructuredMemoryState | StructuredMemoryState[]
+			salience?: StructuredMemorySalience[]
+			currentOnly?: boolean
+			asOf?: Date
+		} = {
+			agentId,
+			...(normalizedStructuredState
+				? { state: normalizedStructuredState }
+				: {}),
+			...(normalizedStructuredSalience
+				? { salience: normalizedStructuredSalience }
+				: {}),
+			...(structuredCurrentOnly
+				? { currentOnly: true, asOf: timeRange?.end }
+				: {}),
+			...(plan.constraints?.structured?.type
+				? { type: plan.constraints.structured.type }
+				: context.searchOptions?.structuredScope?.type
+					? { type: context.searchOptions.structuredScope.type }
+					: {}),
+		}
+		const activeCriticalFilter = {
+			agentId,
+			state: "active" as const,
+			salience:
+				plan.constraints?.activeCritical?.salience ??
+				(["critical", "high"] as const),
+			currentOnly: true,
+			asOf: timeRange?.end,
+		}
+		const proceduralFilter: {
+			agentId: string
+			state?: ProcedureState
+			intentTags?: string[]
+			currentOnly?: boolean
+			asOf?: Date
+		} = {
+			agentId,
+			state: normalizedProceduralState ?? ("active" as const),
+			...(proceduralCurrentOnly
+				? { currentOnly: true, asOf: timeRange?.end }
+				: {}),
+			...(context.searchOptions?.proceduralScope?.intentTags?.length
+				? { intentTags: context.searchOptions.proceduralScope.intentTags }
+				: {}),
+		}
+		const kbFilter = {
+			...(context.searchOptions?.referenceScope?.source
+				? { source: context.searchOptions.referenceScope.source }
+				: {}),
+			...(context.searchOptions?.referenceScope?.category
+				? { category: context.searchOptions.referenceScope.category }
+				: {}),
+			...(context.searchOptions?.referenceScope?.tags?.length
+				? { tags: context.searchOptions.referenceScope.tags }
+				: {}),
+			...(plan.constraints?.kb?.source
+				? { source: plan.constraints.kb.source }
+				: {}),
+			...(plan.constraints?.kb?.category
+				? { category: plan.constraints.kb.category }
+				: {}),
+		}
+
+		const results: MemorySearchResult[] = []
+		const pathsExecuted: RetrievalPath[] = []
+		const resultsByPath: Record<string, number> = {}
+		// C3 audit fix: track per-path results for RRF score normalization
+		const perPathResults: Record<string, MemorySearchResult[]> = {}
+
+		// Execute the top planned paths first, but keep hybrid as the backstop when
+		// specialized paths come back weak or empty.
+		const pathsToExecute = plan.paths.slice(0, 3)
+
+		for (const path of pathsToExecute) {
+			try {
+				let pathResults: MemorySearchResult[] = []
+
+				switch (path) {
+					case "active-critical": {
+						const criticalHits = await searchStructuredMemory(
+							structuredMemCollection(db, prefix),
+							searchQuery,
+							null,
+							{
+								maxResults: context.maxResults ?? 10,
+								minScore,
+								filter: activeCriticalFilter,
+								numCandidates,
+								capabilities,
+								vectorIndexName: `${prefix}structured_mem_vector`,
+								embeddingMode,
+							},
+						).catch((err) => {
+							log.warn(`searchV2 active-critical path failed: ${String(err)}`)
+							return [] as MemorySearchResult[]
+						})
+						pathResults = criticalHits
+						break
+					}
+					case "structured": {
+						const structuredHits = await searchStructuredMemory(
+							structuredMemCollection(db, prefix),
+							searchQuery,
+							null,
+							{
+								maxResults: context.maxResults ?? 10,
+								minScore,
+								filter: structuredFilter,
+								numCandidates,
+								capabilities,
+								vectorIndexName: `${prefix}structured_mem_vector`,
+								embeddingMode,
+							},
+						).catch((err) => {
+							log.warn(`searchV2 structured path failed: ${String(err)}`)
+							return [] as MemorySearchResult[]
+						})
+						pathResults = structuredHits
+						break
+					}
+					case "raw-window": {
+						// M2 audit fix: cap raw-window events at 50 to avoid unbounded result sets
+						const rawWindowLimit = 50
+						const events = await getEventsByTimeRange({
+							db,
+							prefix,
+							agentId,
+							start:
+								timeRange?.start ?? new Date(Date.now() - 24 * 60 * 60 * 1000),
+							end: timeRange?.end ?? new Date(),
+							scope,
+							scopeRef: agentScopeRef,
+							limit: rawWindowLimit,
+						})
+						const queryTerms = extractRawWindowQueryTerms(query)
+						const scoredEvents = events.map((event) => ({
+							event,
+							matchScore: computeRawWindowEventQueryScore(
+								event.body,
+								queryTerms,
+							),
+						}))
+						const hasRelevantEvents = scoredEvents.some(
+							(entry) => entry.matchScore > 0,
+						)
+						const rankedEvents = scoredEvents
+							.filter((entry) => !hasRelevantEvents || entry.matchScore > 0)
+							.toSorted((left, right) => {
+								if (right.matchScore !== left.matchScore) {
+									return right.matchScore - left.matchScore
+								}
+								return (
+									right.event.timestamp.getTime() -
+									left.event.timestamp.getTime()
+								)
+							})
+						pathResults = rankedEvents.map(({ event: e, matchScore }, i) => ({
+							path: `events/${e.eventId}`,
+							filePath: `events/${e.eventId}`,
+							startLine: 0,
+							endLine: 0,
+							snippet: e.body,
+							score: Math.max(
+								0.35,
+								1 - i * 0.01 + Math.min(matchScore * 0.03, 0.12),
+							),
+							canonicalId: `event:${e.eventId}`,
+							source: "conversation" as MemorySource,
+							...(e.sessionId ? { sessionId: e.sessionId } : {}),
+							timestamp: e.timestamp,
+							scope: e.scope,
+							scopeRef: e.scopeRef,
+							sourceEventIds: [e.eventId],
+							sourceReliability: 0.95,
+							reinforcementCount: 1,
+							provenance: {
+								lane: "raw-window",
+								eventId: e.eventId,
+								sourceEventIds: [e.eventId],
+							},
+						}))
+						break
+					}
+					case "graph": {
+						if (constrainedGraphCandidates.length > 0) {
+							const candidateEntities = (
+								await Promise.all(
+									constrainedGraphCandidates.slice(0, 4).map((name) =>
+										searchEntitiesAutocomplete({
+											db,
+											prefix,
+											query: name,
+											agentId,
+											scope,
+											scopeRef: agentScopeRef,
+											limit: 5,
+										}),
+									),
+								)
+							).flat()
+							const entity = pickBestEntityMatch(candidateEntities, query)
+							if (entity) {
+								const graph = await expandGraph({
+									db,
+									prefix,
+									entityId: entity.entityId,
+									agentId,
+									scope,
+									scopeRef: agentScopeRef,
+									asOf: timeRange?.end,
+								})
+								if (graph) {
+									pathResults = graph.connections.map((c, i) => ({
+										path: `relation:${c.relation.fromEntityId}-${c.relation.toEntityId}`,
+										filePath: `relation:${c.relation.fromEntityId}-${c.relation.toEntityId}`,
+										startLine: 0,
+										endLine: 0,
+										snippet: `${graph.rootEntity.name} ${c.relation.type} ${c.entity.name}`,
+										score: Math.min(
+											1.0,
+											Math.max(
+												0.25,
+												0.9 -
+													c.depth * 0.08 -
+													i * 0.02 -
+													(4 - graphRelationPriority(c.relation.type)) * 0.05,
+											) + Math.min(c.relation.weight ?? 0, 0.15),
+										),
+										canonicalId: `relation:${c.relation.fromEntityId}:${c.relation.type}:${c.relation.toEntityId}`,
+										source: "conversation" as MemorySource,
+										timestamp: c.relation.updatedAt,
+										scope: c.relation.scope,
+										scopeRef: c.relation.scopeRef,
+										state: c.relation.state,
+										provenance: c.relation.provenance,
+										sourceEventIds: c.relation.sourceEventIds,
+										sourceReliability: c.relation.sourceReliability,
+										reinforcementCount: c.relation.reinforcementCount,
+										validFrom: c.relation.validFrom,
+										validTo: c.relation.validTo,
+										reviewAt: c.relation.reviewAt,
+										lastConfirmedAt: c.relation.lastConfirmedAt,
+									}))
+								}
+							}
+						}
+						break
+					}
+					case "episodic": {
+						// Use original query for regex-based episodic search (synonym expansion breaks regex matching)
+						const episodes = await searchEpisodes({
+							db,
+							prefix,
+							query,
+							agentId,
+							scope,
+							scopeRef: agentScopeRef,
+							...(timeRange ? { timeRange } : {}),
+						})
+						pathResults = episodes.map((ep, i) => ({
+							path: `episode:${ep.episodeId}`,
+							filePath: `episode:${ep.episodeId}`,
+							startLine: 0,
+							endLine: 0,
+							snippet: `${ep.title}: ${ep.summary}`,
+							score: 0.85 - i * 0.01,
+							canonicalId: `episode:${ep.episodeId}`,
+							source: "conversation" as MemorySource,
+							timestamp: ep.timeRange.end,
+							scope: ep.scope,
+							scopeRef: ep.scopeRef,
+							sourceEventIds: ep.sourceEventIds,
+							sourceReliability: 0.82,
+							reinforcementCount: ep.sourceEventCount,
+							provenance: {
+								lane: "episodic",
+								sourceEventIds: ep.sourceEventIds ?? [],
+								sourceEventCount: ep.sourceEventCount,
+							},
+						}))
+						break
+					}
+					case "procedural": {
+						const procedureHits = await searchProcedures(
+							proceduresCollection(db, prefix),
+							searchQuery,
+							null,
+							{
+								maxResults: context.maxResults ?? 10,
+								minScore,
+								filter: proceduralFilter,
+								numCandidates,
+								capabilities,
+								vectorIndexName: `${prefix}procedures_vector`,
+								embeddingMode,
+							},
+						).catch((err) => {
+							log.warn(`searchV2 procedural path failed: ${String(err)}`)
+							return [] as MemorySearchResult[]
+						})
+						pathResults = procedureHits
+						break
+					}
+					case "hybrid": {
+						const searches: Array<Promise<MemorySearchResult[]>> = []
+						if (conversationChunkFilter) {
+							searches.push(
+								(hybridMode === "vector-only"
+									? vectorSearch(chunksCollection(db, prefix), null, {
+											maxResults: context.maxResults ?? 10,
+											minScore,
+											numCandidates,
+											sessionKey: context.searchOptions?.sessionKey,
+											filter: conversationChunkFilter,
+											indexName: `${prefix}chunks_vector`,
+											queryText: searchQuery,
+											embeddingMode,
+										})
+									: mongoSearch(
+											chunksCollection(db, prefix),
+											searchQuery,
+											null,
+											{
+												maxResults: context.maxResults ?? 10,
+												minScore,
+												numCandidates,
+												sessionKey: context.searchOptions?.sessionKey,
+												filter: conversationChunkFilter,
+												fusionMethod,
+												capabilities,
+												vectorIndexName: `${prefix}chunks_vector`,
+												textIndexName: `${prefix}chunks_text`,
+												vectorWeight: 0.7,
+												textWeight: 0.3,
+												embeddingMode,
+											},
+										)
+								).catch((err) => {
+									log.warn(
+										`searchV2 hybrid conversation path failed: ${String(err)}`,
+									)
+									return [] as MemorySearchResult[]
+								}),
+							)
+						}
+						if (bridgeChunkFilter) {
+							searches.push(
+								(hybridMode === "vector-only"
+									? vectorSearch(chunksCollection(db, prefix), null, {
+											maxResults: bridgeMaxResults,
+											minScore,
+											numCandidates,
+											sessionKey: context.searchOptions?.sessionKey,
+											filter: bridgeChunkFilter,
+											indexName: `${prefix}chunks_vector`,
+											queryText: searchQuery,
+											embeddingMode,
+										})
+									: mongoSearch(
+											chunksCollection(db, prefix),
+											searchQuery,
+											null,
+											{
+												maxResults: bridgeMaxResults,
+												minScore,
+												numCandidates,
+												sessionKey: context.searchOptions?.sessionKey,
+												filter: bridgeChunkFilter,
+												fusionMethod,
+												capabilities,
+												vectorIndexName: `${prefix}chunks_vector`,
+												textIndexName: `${prefix}chunks_text`,
+												vectorWeight: 0.7,
+												textWeight: 0.3,
+												embeddingMode,
+											},
+										)
+								).catch((err) => {
+									log.warn(`searchV2 hybrid bridge path failed: ${String(err)}`)
+									return [] as MemorySearchResult[]
+								}),
+							)
+						}
+						// Option B: parallel search on session_chunks collection (vector + text hybrid)
+						const sessionMode = resolveSessionEvidenceMode(
+							process.env.MEMONGO_SESSION_EVIDENCE_MODE,
+						)
+						if (sessionMode === "B") {
+							const sessionFilter: Document = {
+								agentId,
+								...(scope !== "agent"
+									? { scope, scopeRef: agentScopeRef }
+									: {}),
+							}
+							searches.push(
+								(hybridMode === "vector-only"
+									? vectorSearch(sessionChunksCollection(db, prefix), null, {
+											maxResults: context.maxResults ?? 10,
+											minScore,
+											numCandidates,
+											sessionKey: context.searchOptions?.sessionKey,
+											filter: sessionFilter,
+											indexName: `${prefix}session_chunks_vector`,
+											queryText: searchQuery,
+											embeddingMode,
+										})
+									: mongoSearch(
+											sessionChunksCollection(db, prefix),
+											searchQuery,
+											null,
+											{
+												maxResults: context.maxResults ?? 10,
+												minScore,
+												numCandidates,
+												sessionKey: context.searchOptions?.sessionKey,
+												filter: sessionFilter,
+												fusionMethod,
+												capabilities,
+												vectorIndexName: `${prefix}session_chunks_vector`,
+												textIndexName: `${prefix}session_chunks_text`,
+												vectorWeight: 0.7,
+												textWeight: 0.3,
+												embeddingMode,
+											},
+										)
+								).catch((err) => {
+									log.warn(
+										`searchV2 session_chunks path failed: ${String(err)}`,
+									)
+									return [] as MemorySearchResult[]
+								}),
+							)
+						}
+						pathResults =
+							searches.length > 0 ? (await Promise.all(searches)).flat() : []
+						break
+					}
+					case "kb": {
+						const kbHits = await searchKB(
+							kbChunksCollection(db, prefix),
+							searchQuery,
+							null,
+							{
+								maxResults: Math.max(
+									3,
+									Math.floor((context.maxResults ?? 10) / 3),
+								),
+								minScore,
+								...(Object.keys(kbFilter).length > 0
+									? { filter: kbFilter }
+									: {}),
+								numCandidates,
+								vectorIndexName: `${prefix}kb_chunks_vector`,
+								textIndexName: `${prefix}kb_chunks_text`,
+								capabilities,
+								embeddingMode,
+								kbDocs: kbCollection(db, prefix),
+							},
+						).catch((err) => {
+							log.warn(`searchV2 kb path failed: ${String(err)}`)
+							return [] as MemorySearchResult[]
+						})
+						pathResults = kbHits
+						break
+					}
+				}
+
+				if (pathResults.length > 0) {
+					pathsExecuted.push(path)
+					resultsByPath[path] = pathResults.length
+					perPathResults[path] = pathResults
+					results.push(...pathResults)
+				}
+			} catch (pathErr) {
+				log.error(`searchV2 path ${path} failed`, { error: pathErr })
+				// Continue with other paths
+			}
+		}
+
+		// Deduplicate, rerank, and limit
+		let deduped = deduplicateSearchResults(results)
+		const needsExactProceduralBackstop =
+			context.availablePaths.has("procedural") &&
+			!deduped.some((result) => result.path.startsWith("procedure:"))
+		if (needsExactProceduralBackstop) {
+			try {
+				const exactProcedureMatches = await findExactProcedureMatches(
+					proceduresCollection(db, prefix),
+					query,
+					{
+						maxResults: context.maxResults ?? 10,
+						filter: proceduralFilter,
+					},
+				)
+				if (exactProcedureMatches.length > 0) {
+					pathsExecuted.push("procedural")
+					resultsByPath.procedural = exactProcedureMatches.length
+					perPathResults.procedural = exactProcedureMatches
+					deduped = deduplicateSearchResults([
+						...deduped,
+						...exactProcedureMatches,
+					])
+				}
+			} catch (err) {
+				log.warn(`searchV2 exact procedural backstop failed: ${String(err)}`)
+			}
+		}
+		const needsProceduralBackstop =
+			context.availablePaths.has("procedural") &&
+			!pathsToExecute.includes("procedural") &&
+			!pathsExecuted.includes("procedural") &&
+			deduped.length < Math.max(2, Math.ceil(maxResults / 3))
+		if (needsProceduralBackstop) {
+			try {
+				const procedureFallback = await searchProcedures(
+					proceduresCollection(db, prefix),
+					searchQuery,
+					null,
+					{
+						maxResults: context.maxResults ?? 10,
+						minScore,
+						filter: proceduralFilter,
+						numCandidates,
+						capabilities,
+						vectorIndexName: `${prefix}procedures_vector`,
+						embeddingMode,
+					},
+				)
+				if (procedureFallback.length > 0) {
+					pathsExecuted.push("procedural")
+					resultsByPath.procedural = procedureFallback.length
+					perPathResults.procedural = procedureFallback
+					deduped = deduplicateSearchResults([...deduped, ...procedureFallback])
+				}
+			} catch (err) {
+				log.warn(`searchV2 procedural backstop failed: ${String(err)}`)
+			}
+		}
+
+		const needsHybridBackstop =
+			allowHybridBackstop &&
+			context.availablePaths.has("hybrid") &&
+			!pathsExecuted.includes("hybrid") &&
+			deduped.length < Math.max(2, Math.ceil(maxResults / 3))
+		if (needsHybridBackstop) {
+			try {
+				// Use searchQuery (already rewritten) for the backstop, but disable rewriting
+				// to prevent double-expansion (idempotent for synonyms but breaks future LLM/HyDE)
+				const fallback = await searchV2(db, prefix, searchQuery, agentId, {
+					...context,
+					availablePaths: new Set(["hybrid"]),
+					maxResults,
+					searchOptions: {
+						...context.searchOptions,
+						allowHybridBackstop: false,
+						queryRewriteConfig: undefined, // already rewritten — don't rewrite again
+					},
+				})
+				if (fallback.results.length > 0) {
+					pathsExecuted.push("hybrid")
+					resultsByPath.hybrid = fallback.results.length
+					perPathResults.hybrid = fallback.results
+					deduped = deduplicateSearchResults([...deduped, ...fallback.results])
+				}
+			} catch (err) {
+				log.warn(`searchV2 hybrid backstop failed: ${String(err)}`)
+			}
+		}
+		// C3 audit fix: RRF score normalization across paths before reranking.
+		// Replace raw scores (incomparable across paths: vector 0-1, BM25 0-inf, episode 0.85-synthetic)
+		// with rank-based scores summed across paths. Uses existing rrfScore() from mongodb-hybrid.ts.
+		if (Object.keys(perPathResults).length > 1) {
+			const rrfMap = new Map<string, number>()
+			for (const [_pathName, pathRes] of Object.entries(perPathResults)) {
+				for (let rank = 0; rank < pathRes.length; rank++) {
+					const key = pathRes[rank].snippet
+					rrfMap.set(key, (rrfMap.get(key) ?? 0) + rrfScore(rank + 1))
+				}
+			}
+			for (const r of deduped) {
+				const rrfVal = rrfMap.get(r.snippet)
+				if (rrfVal !== undefined) {
+					r.score = rrfVal
+				}
+			}
+			deduped.sort((a, b) => b.score - a.score)
+		}
+
+		const heuristicReranked = rerankResults(deduped, query)
+
+		// Post-retrieval scoring: keyword, temporal, entity, quoted-phrase boosts
+		// Applied AFTER heuristic rerank, BEFORE cross-encoder rerank
+		const postScored = applyPostRetrievalScoring(query, heuristicReranked, {
+			questionDate: context.searchOptions?.questionDate,
+		})
+
+		// Cross-encoder re-ranking via Voyage API (after heuristic, before final slice)
+		const rerankCfg = context.searchOptions?.rerankConfig
+		let finalResults = postScored
+		let wasReranked = false
+		if (rerankCfg?.enabled) {
+			const rerankResult = await crossEncoderRerank({
+				db,
+				prefix,
+				agentId,
+				query,
+				results: postScored,
+				config: rerankCfg,
+			})
+			if (rerankResult.reranked) {
+				finalResults = rerankResult.results
+				wasReranked = true
+			}
+		}
+
+		const sliced = finalResults.slice(0, maxResults)
+
+		// Phase 9: Tiered retrieval — strip text for ids-only projection mode
+		const projectionMode = context.searchOptions?.projection ?? "full"
+		const projected =
+			projectionMode === "ids-only"
+				? sliced.map((r) => ({ ...r, snippet: "" }))
+				: sliced
+
+		return {
+			results: projected,
+			metadata: {
+				plan,
+				pathsExecuted,
+				resultsByPath,
+				reranked: wasReranked,
+				queryRewritten: wasQueryRewritten,
+			},
+		}
+	} catch (err) {
+		log.error("searchV2 failed", { query, error: err })
+		throw err
+	}
+}
+
+// ---------------------------------------------------------------------------
+// v2 status types
+// ---------------------------------------------------------------------------
+
+export type V2Status = {
+	events: { count: number; latestTimestamp?: Date }
+	entities: { count: number }
+	relations: { count: number }
+	episodes: { count: number; latestTimestamp?: Date }
+	procedures: { count: number; latestTimestamp?: Date }
+	projectionLag: Record<string, number | null>
+	projectionHealth: Record<
+		string,
+		| "ok"
+		| "projection-behind"
+		| "derived-product-unavailable"
+		| "health-uncertain"
+	>
+	laneCoverage: Record<
+		string,
+		{ hasData: boolean; count: number; lastUpdated: Date | null }
+	>
+	health: {
+		overall: "ok" | "degraded" | "health-uncertain"
+		retrieval: "ok" | "retrieval-degraded" | "health-uncertain"
+		recentNoRelevantResults: boolean
+		canonicalIngest: "ok" | "canonical-ingest-failed" | "health-uncertain"
+		derivedProducts: Record<
+			string,
+			| "ok"
+			| "projection-behind"
+			| "derived-product-unavailable"
+			| "health-uncertain"
+		>
+		diagnostics: string[]
+	}
+	retrievalPaths: string[]
+}
+
+const PROJECTION_BEHIND_SECONDS = 5 * 60
+
+export function classifyCanonicalIngestHealth(
+	latestIngestRun: Pick<IngestRun, "status"> | null,
+): "ok" | "canonical-ingest-failed" | "health-uncertain" {
+	if (!latestIngestRun) {
+		return "health-uncertain"
+	}
+	return latestIngestRun.status === "failed" ? "canonical-ingest-failed" : "ok"
+}
+
+export function classifyProjectionHealth(params: {
+	latestRun: Pick<ProjectionRun, "status"> | null
+	lagSeconds: number | null
+}):
+	| "ok"
+	| "projection-behind"
+	| "derived-product-unavailable"
+	| "health-uncertain" {
+	const { latestRun, lagSeconds } = params
+	if (!latestRun) {
+		return "health-uncertain"
+	}
+	if (latestRun.status === "failed") {
+		return "derived-product-unavailable"
+	}
+	if (lagSeconds === null) {
+		return "health-uncertain"
+	}
+	if (lagSeconds > PROJECTION_BEHIND_SECONDS) {
+		return "projection-behind"
+	}
+	return "ok"
+}
+
+export function classifyRetrievalHealth(params: {
+	status?: string | null
+	hitSources?: string[] | null
+}): {
+	state: "ok" | "retrieval-degraded" | "health-uncertain"
+	recentNoRelevantResults: boolean
+} {
+	const status = params.status ?? null
+	const hitSources = params.hitSources ?? []
+	if (status === "ok") {
+		return { state: "ok", recentNoRelevantResults: false }
+	}
+	if (status === "degraded") {
+		return {
+			state: "retrieval-degraded",
+			recentNoRelevantResults: hitSources.length === 0,
+		}
+	}
+	return { state: "health-uncertain", recentNoRelevantResults: false }
+}
+
+export function computeOverallV2Health(params: {
+	retrieval: "ok" | "retrieval-degraded" | "health-uncertain"
+	canonicalIngest: "ok" | "canonical-ingest-failed" | "health-uncertain"
+	derivedProducts: Array<
+		| "ok"
+		| "projection-behind"
+		| "derived-product-unavailable"
+		| "health-uncertain"
+	>
+}): "ok" | "degraded" | "health-uncertain" {
+	const { retrieval, canonicalIngest, derivedProducts } = params
+	if (
+		retrieval === "retrieval-degraded" ||
+		canonicalIngest === "canonical-ingest-failed" ||
+		derivedProducts.some(
+			(state) =>
+				state === "projection-behind" ||
+				state === "derived-product-unavailable",
+		)
+	) {
+		return "degraded"
+	}
+	if (
+		retrieval === "health-uncertain" ||
+		canonicalIngest === "health-uncertain" ||
+		derivedProducts.some((state) => state === "health-uncertain")
+	) {
+		return "health-uncertain"
+	}
+	return "ok"
+}
+
+/**
+ * Gather v2 health metrics: collection counts, projection lag, available retrieval paths.
+ */
+export async function getV2Status(
+	db: Db,
+	prefix: string,
+	agentId: string,
+): Promise<V2Status> {
+	try {
+		const settled = await Promise.allSettled([
+			eventsCollection(db, prefix).countDocuments({ agentId }),
+			entitiesCollection(db, prefix).countDocuments({ agentId }),
+			relationsCollection(db, prefix).countDocuments({ agentId }),
+			episodesCollection(db, prefix).countDocuments({ agentId }),
+			proceduresCollection(db, prefix).countDocuments({ agentId }),
+			getProjectionLag({ db, prefix, agentId, projectionType: "chunks" }),
+			getProjectionLag({ db, prefix, agentId, projectionType: "entities" }),
+			getProjectionLag({ db, prefix, agentId, projectionType: "relations" }),
+			getProjectionLag({ db, prefix, agentId, projectionType: "episodes" }),
+			getProjectionLag({
+				db,
+				prefix,
+				agentId,
+				projectionType: "structured-promotion",
+			}),
+			getProjectionLag({ db, prefix, agentId, projectionType: "procedures" }),
+			getLatestIngestRun({ db, prefix, agentId }),
+			getLatestProjectionRun({ db, prefix, agentId, projectionType: "chunks" }),
+			getLatestProjectionRun({
+				db,
+				prefix,
+				agentId,
+				projectionType: "entities",
+			}),
+			getLatestProjectionRun({
+				db,
+				prefix,
+				agentId,
+				projectionType: "relations",
+			}),
+			getLatestProjectionRun({
+				db,
+				prefix,
+				agentId,
+				projectionType: "episodes",
+			}),
+			getLatestProjectionRun({
+				db,
+				prefix,
+				agentId,
+				projectionType: "structured-promotion",
+			}),
+			getLatestProjectionRun({
+				db,
+				prefix,
+				agentId,
+				projectionType: "procedures",
+			}),
+			getLaneCoverage({ db, prefix, agentId }),
+			relevanceRunsCollection(db, prefix).findOne(
+				{ agentId },
+				{ sort: { ts: -1 }, projection: { status: 1, hitSources: 1 } },
+			),
+			eventsCollection(db, prefix).findOne(
+				{ agentId },
+				{ sort: { timestamp: -1 }, projection: { timestamp: 1 } },
+			),
+			episodesCollection(db, prefix).findOne(
+				{ agentId },
+				{ sort: { updatedAt: -1 }, projection: { updatedAt: 1 } },
+			),
+			proceduresCollection(db, prefix).findOne(
+				{ agentId },
+				{ sort: { updatedAt: -1 }, projection: { updatedAt: 1 } },
+			),
+		])
+
+		// Extract fulfilled values, default to safe fallbacks on rejection
+		const val = <T>(r: PromiseSettledResult<T>, fallback: T): T =>
+			r.status === "fulfilled" ? r.value : fallback
+
+		const eventCount = val(settled[0], 0)
+		const entityCount = val(settled[1], 0)
+		const relationCount = val(settled[2], 0)
+		const episodeCount = val(settled[3], 0)
+		const procedureCount = val(settled[4], 0)
+		const chunksLag = val(settled[5], null)
+		const entitiesLag = val(settled[6], null)
+		const relationsLag = val(settled[7], null)
+		const episodesLag = val(settled[8], null)
+		const structuredPromotionLag = val(settled[9], null)
+		const proceduresLag = val(settled[10], null)
+		const latestIngest = val(settled[11], null)
+		const latestChunksProjection = val(settled[12], null)
+		const latestEntitiesProjection = val(settled[13], null)
+		const latestRelationsProjection = val(settled[14], null)
+		const latestEpisodesProjection = val(settled[15], null)
+		const latestStructuredPromotion = val(settled[16], null)
+		const latestProceduresProjection = val(settled[17], null)
+		const laneCoverageDoc = val(settled[18], null) as {
+			lanes?: Record<
+				string,
+				{ hasData: boolean; count: number; lastUpdated: Date | null }
+			>
+		} | null
+		const latestRetrievalSafe = val(settled[19], null) as {
+			status?: string
+			hitSources?: string[]
+		} | null
+		const latestEvent = val(settled[20], null) as { timestamp?: Date } | null
+		const latestEpisode = val(settled[21], null) as { updatedAt?: Date } | null
+		const latestProcedure = val(settled[22], null) as {
+			updatedAt?: Date
+		} | null
+
+		const canonicalIngest = classifyCanonicalIngestHealth(latestIngest)
+		const retrievalHealth = classifyRetrievalHealth({
+			status: latestRetrievalSafe?.status,
+			hitSources: latestRetrievalSafe?.hitSources,
+		})
+		const derivedProducts = {
+			chunks: classifyProjectionHealth({
+				latestRun: latestChunksProjection,
+				lagSeconds: chunksLag,
+			}),
+			entities: classifyProjectionHealth({
+				latestRun: latestEntitiesProjection,
+				lagSeconds: entitiesLag,
+			}),
+			relations: classifyProjectionHealth({
+				latestRun: latestRelationsProjection,
+				lagSeconds: relationsLag,
+			}),
+			episodes: classifyProjectionHealth({
+				latestRun: latestEpisodesProjection,
+				lagSeconds: episodesLag,
+			}),
+			"structured-promotion": classifyProjectionHealth({
+				latestRun: latestStructuredPromotion,
+				lagSeconds: structuredPromotionLag,
+			}),
+			procedures: classifyProjectionHealth({
+				latestRun: latestProceduresProjection,
+				lagSeconds: proceduresLag,
+			}),
+		}
+		const diagnostics = [
+			retrievalHealth.state === "retrieval-degraded"
+				? "retrieval-degraded"
+				: null,
+			retrievalHealth.recentNoRelevantResults ? "no-relevant-results" : null,
+			canonicalIngest === "canonical-ingest-failed"
+				? "canonical-ingest-failed"
+				: null,
+			canonicalIngest === "health-uncertain"
+				? "health-uncertain:canonical-ingest"
+				: null,
+			...Object.entries(derivedProducts).map(([name, state]) => {
+				if (state === "projection-behind") {
+					return `projection-behind:${name}`
+				}
+				if (state === "derived-product-unavailable") {
+					return `derived-product-unavailable:${name}`
+				}
+				if (state === "health-uncertain") {
+					return `health-uncertain:${name}`
+				}
+				return null
+			}),
+		].filter((value): value is string => Boolean(value))
+		const overall = computeOverallV2Health({
+			retrieval: retrievalHealth.state,
+			canonicalIngest,
+			derivedProducts: [
+				derivedProducts.chunks,
+				derivedProducts.entities,
+				derivedProducts.relations,
+				derivedProducts.episodes,
+			],
+		})
+
+		// Log any individual failures for diagnostics
+		for (const r of settled) {
+			if (r.status === "rejected") {
+				log.error("getV2Status partial failure", { error: r.reason })
+			}
+		}
+
+		return {
+			events: {
+				count: eventCount,
+				latestTimestamp: latestEvent?.timestamp,
+			},
+			entities: { count: entityCount },
+			relations: { count: relationCount },
+			episodes: {
+				count: episodeCount,
+				latestTimestamp: latestEpisode?.updatedAt,
+			},
+			procedures: {
+				count: procedureCount,
+				latestTimestamp: latestProcedure?.updatedAt,
+			},
+			projectionLag: {
+				chunks: chunksLag,
+				entities: entitiesLag,
+				relations: relationsLag,
+				episodes: episodesLag,
+				"structured-promotion": structuredPromotionLag,
+				procedures: proceduresLag,
+			},
+			projectionHealth: derivedProducts,
+			laneCoverage: laneCoverageDoc?.lanes ?? {},
+			health: {
+				overall,
+				retrieval: retrievalHealth.state,
+				recentNoRelevantResults: retrievalHealth.recentNoRelevantResults,
+				canonicalIngest,
+				derivedProducts,
+				diagnostics,
+			},
+			retrievalPaths: [
+				"active-critical",
+				"structured",
+				"raw-window",
+				"graph",
+				"hybrid",
+				"kb",
+				"episodic",
+				"procedural",
+			],
+		}
+	} catch (err) {
+		log.error("getV2Status failed", { error: err })
+		throw err
+	}
+}

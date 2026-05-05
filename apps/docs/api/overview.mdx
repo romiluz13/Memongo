@@ -1,0 +1,52 @@
+---
+title: API Overview
+description: Memongo HTTP API endpoint reference.
+icon: "unplug"
+---
+
+The Memongo API server runs at `http://127.0.0.1:3847` by default (via `apps/api`).
+
+## Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/health` | Service health |
+| GET | `/openapi.json` | OpenAPI document |
+
+### Memory operations
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/v1/add` | Add content to memory |
+| POST | `/v1/write-event` | Write a conversation event (any role) |
+| POST | `/v1/write-structured` | Write a structured memory entry |
+| POST | `/v1/write-procedure` | Write a procedure memory |
+| POST | `/v1/search` | Search memory (hybrid vector + full-text) |
+| POST | `/v1/search-kb` | Search the knowledge base |
+| POST | `/v1/profile` | Synthesize a user profile from memory |
+
+### System operations
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/v1/status` | Memory provider status and health |
+| GET | `/v1/stats` | Memory statistics (counts, sizes) |
+| POST | `/v1/sync` | Force a memory sync cycle |
+| GET | `/v1/probes/embedding` | Probe embedding availability |
+| GET | `/v1/probes/vector` | Probe vector availability |
+| GET | `/v1/status/detailed` | Detailed status view |
+| POST | `/v1/admin/relevance/explain` | Explain relevance for a query |
+| POST | `/v1/admin/relevance/benchmark` | Run a relevance benchmark |
+| GET | `/v1/admin/relevance/report` | Relevance report |
+| GET | `/v1/admin/relevance/sample-rate` | Relevance sampling rate |
+
+## Authentication
+
+If `MEMONGO_API_KEY` is set, all requests must include a `Bearer` token:
+
+```bash
+http POST http://127.0.0.1:3847/v1/search \
+  Authorization:"Bearer your-api-key" \
+  query="search query" \
+  sessionKey="user-123"
+```

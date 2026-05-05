@@ -1,0 +1,159 @@
+---
+title: Quickstart
+description: Get Memongo running on Atlas Local preview and make your first API call in minutes.
+icon: "play"
+---
+
+## Prerequisites
+
+- **Node.js** 20+ and **Bun** 1.2+ installed
+- **Docker** for running the local MongoDB stack
+
+## 1. Clone and install
+
+```bash
+git clone https://github.com/romiluz/memongo.git
+cd memongo
+bun install
+```
+
+## 2. Start MongoDB
+
+Use the canonical Memongo stack: `mongodb/mongodb-atlas-local:preview`.
+
+```bash
+export VOYAGE_API_KEY="al-your-atlas-model-api-key"
+docker compose -f docker/mongodb/docker-compose.preview.yml up -d
+```
+
+Use an Atlas Model API key with the `al-...` prefix. Direct Voyage keys with the
+`pa-...` prefix do not enable the preview image's auto-embed path.
+
+Preview stack helper:
+
+```bash
+./docker/mongodb/start-preview.sh
+```
+
+## 3. Configure
+
+Set your MongoDB URI:
+
+```bash
+export MEMONGO_MONGODB_URI="mongodb://127.0.0.1:27017/?directConnection=true"
+```
+
+Or create a config file at `~/.memongo/memongo.json`:
+
+```json
+{
+  "memory": {
+    "backend": "mongodb",
+    "mongodb": {
+      "uri": "mongodb://127.0.0.1:27017/?directConnection=true",
+      "database": "memongo"
+    }
+  }
+}
+```
+
+## 4. Start the API server
+
+```bash
+cd apps/api && bun run dev
+```
+
+The API runs at `http://127.0.0.1:3847`.
+
+**Optional:** operator console - `cd apps/web && MEMONGO_API_URL=http://127.0.0.1:3847 bun run dev` (default port **3040**).
+
+## 5. Verify the stack
+
+```bash
+curl http://127.0.0.1:3847/health
+curl http://127.0.0.1:3847/v1/status
+```
+
+Look for a healthy API response and a memory status payload that reports the Atlas Local preview profile.
+
+## 6. Make your first API call
+
+<Tabs>
+<Tab title="TypeScript">
+```typescript
+import { MemongoClient } from "@memongo/client";
+
+const client = new MemongoClient({
+  baseUrl: "http://127.0.0.1:3847",
+});
+
+await client.add({
+  content: "The user prefers dark mode and uses TypeScript.",
+  sessionId: "user-123",
+});
+
+const results = await client.search({
+  query: "What are the user's preferences?",
+  sessionKey: "user-123",
+});
+
+console.log(results);
+```
+</Tab>
+<Tab title="cURL">
+```bash
+# Add a memory
+http POST http://127.0.0.1:3847/v1/add \
+  content="The user prefers dark mode and uses TypeScript." \
+  sessionId="user-123"
+
+# Search memories
+http POST http://127.0.0.1:3847/v1/search \
+  query="What are the user's preferences?" \
+  sessionKey="user-123"
+```
+</Tab>
+</Tabs>
+
+## API endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET  | `/health` | Service health |
+| GET  | `/openapi.json` | OpenAPI document |
+| POST | `/v1/search` | Search memory (hybrid vector + full-text) |
+| POST | `/v1/add` | Add user message to memory |
+| POST | `/v1/write-event` | Write conversation event (any role) |
+| POST | `/v1/write-structured` | Write structured memory entry |
+| POST | `/v1/profile` | Synthesize user profile from memory |
+| GET  | `/v1/status` | Memory provider status |
+| GET  | `/v1/stats` | Memory statistics |
+| POST | `/v1/sync` | Sync memory sources to MongoDB |
+| POST | `/v1/chain-trace` | Reasoning chain traversal (provenance trace) |
+| POST | `/v1/novelty-scan` | Surprisal novelty detection (centroid distance) |
+| POST | `/v1/consolidate` | Trigger consolidation agent (Dreamer) |
+
+## 7. Competition demo flow
+
+Run this sequence to show the full product path:
+
+1. `POST /v1/add` or `POST /v1/write-event`
+2. `POST /v1/search`
+3. `POST /v1/write-structured`
+4. `POST /v1/profile`
+5. `GET /v1/status`
+
+Optional adapters:
+- `apps/web` for the operator console
+- `apps/mcp` for MCP hosts using the same API
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Memory Concepts" icon="brain" href="/concepts/memory">
+    Learn how Memongo stores and retrieves memories
+  </Card>
+  <Card title="Architecture" icon="sitemap" href="/concepts/architecture">
+    Understand packages, data flow, and deployment
+  </Card>
+</CardGroup>

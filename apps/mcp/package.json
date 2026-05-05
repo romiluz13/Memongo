@@ -1,0 +1,22 @@
+{
+	"name": "@memongo/mcp",
+	"version": "0.1.0",
+	"private": true,
+	"type": "module",
+	"description": "MCP server for Memongo (stdio; calls Memongo HTTP API)",
+	"scripts": {
+		"start": "node --import tsx src/server.ts",
+		"build": "node ../../node_modules/typescript/bin/tsc -p tsconfig.json --noEmit false --rootDir src --outDir dist",
+		"check-types": "node ../../node_modules/typescript/bin/tsc --noEmit -p tsconfig.json",
+		"test": "vitest run src/server.test.ts"
+	},
+	"dependencies": {
+		"@modelcontextprotocol/sdk": "^1.25.0",
+		"@memongo/client": "workspace:*",
+		"tsx": "^4.19.0"
+	},
+	"devDependencies": {
+		"typescript": "^5.8.0",
+		"vitest": "^4.1.0"
+	}
+}

@@ -1,0 +1,10 @@
+{
+	"$schema": "https://workers.cloudflare.com/schemas/wrangler.json",
+	"name": "memongo-api",
+	"main": "src/server.ts",
+	"compatibility_date": "2025-01-01",
+	"compatibility_flags": ["nodejs_compat"],
+	"observability": {
+		"enabled": true
+	}
+}

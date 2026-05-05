@@ -1,0 +1,88 @@
+name: Publish Packages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "packages/lib/package.json"
+      - "packages/memory-engine/package.json"
+      - "packages/memory-bridge/package.json"
+      - "packages/memongo-memory/package.json"
+      - "packages/client/package.json"
+      - "packages/tools/package.json"
+
+jobs:
+  publish:
+    name: Build & Publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build
+        run: bun run build
+
+      - name: Check publishability
+        run: bun run check-publishability
+
+      - name: Detect changed publishable packages
+        id: changed
+        run: |
+          base="${{ github.event.before }}"
+          if [ -z "$base" ] || [ "$base" = "0000000000000000000000000000000000000000" ]; then
+            base="$(git rev-list --max-parents=0 HEAD)"
+          fi
+
+          changed_packages="$(git diff --name-only "$base" HEAD -- \
+            packages/lib \
+            packages/memory-engine \
+            packages/memory-bridge \
+            packages/memongo-memory \
+            packages/client \
+            packages/tools \
+            | cut -d/ -f1-2 \
+            | sort -u \
+            | tr '\n' ' ')"
+
+          echo "packages=$changed_packages" >> "$GITHUB_OUTPUT"
+
+      - name: Publish changed packages
+        run: |
+          if [ -z "${{ steps.changed.outputs.packages }}" ]; then
+            echo "No publishable package directories changed."
+            exit 0
+          fi
+
+          for pkg in ${{ steps.changed.outputs.packages }}; do
+            if [ ! -f "$pkg/package.json" ]; then
+              continue
+            fi
+
+            is_private=$(node -e "console.log(require('./$pkg/package.json').private === true)")
+            if [ "$is_private" = "true" ]; then
+              continue
+            fi
+
+            echo "Publishing $pkg..."
+            (cd "$pkg" && pnpm publish --access public --no-git-checks --provenance)
+          done
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

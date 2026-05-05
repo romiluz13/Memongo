@@ -1,0 +1,54 @@
+{
+	"name": "@memongo/memory-engine",
+	"version": "1.1.0",
+	"description": "MongoDB-native memory engine: embeddings, graph, episodes, search, knowledge base, reasoning chains, novelty detection, consolidation, analytics",
+	"type": "module",
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/romiluz/memongo.git",
+		"directory": "packages/memory-engine"
+	},
+	"keywords": [
+		"memongo",
+		"mongodb",
+		"memory",
+		"retrieval",
+		"agent-memory"
+	],
+	"main": "./dist/index.js",
+	"types": "./dist/index.d.ts",
+	"files": [
+		"dist",
+		"README.md"
+	],
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"default": "./dist/index.js"
+		}
+	},
+	"scripts": {
+		"build": "node ../../node_modules/typescript/bin/tsc -p tsconfig.json",
+		"check-types": "node ../../node_modules/typescript/bin/tsc --noEmit -p tsconfig.json",
+		"test": "vitest run --exclude=src/**/*.e2e.test.ts",
+		"test:e2e": "vitest run src/**/*.e2e.test.ts"
+	},
+	"dependencies": {
+		"@memongo/lib": "1.1.0",
+		"chokidar": "^4.0.3",
+		"mongodb": "^6.13.0"
+	},
+	"optionalDependencies": {
+		"node-llama-cpp": ">=3.0.0"
+	},
+	"devDependencies": {
+		"@types/node": "^22.10.0",
+		"typescript": "^5.8.0",
+		"vitest": "^4.1.0"
+	},
+	"homepage": "https://github.com/romiluz/memongo#readme",
+	"bugs": {
+		"url": "https://github.com/romiluz/memongo/issues"
+	}
+}

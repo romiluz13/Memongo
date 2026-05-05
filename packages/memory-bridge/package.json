@@ -1,0 +1,48 @@
+{
+	"name": "@memongo/memory-bridge",
+	"version": "1.1.0",
+	"description": "Memongo bridge: stable facade for the memory engine used by HTTP API and MCP",
+	"type": "module",
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/romiluz/memongo.git",
+		"directory": "packages/memory-bridge"
+	},
+	"keywords": [
+		"memongo",
+		"mongodb",
+		"memory",
+		"bridge"
+	],
+	"main": "./dist/memongo-bridge.js",
+	"types": "./dist/memongo-bridge.d.ts",
+	"files": [
+		"dist",
+		"README.md"
+	],
+	"exports": {
+		".": {
+			"types": "./dist/memongo-bridge.d.ts",
+			"default": "./dist/memongo-bridge.js"
+		}
+	},
+	"scripts": {
+		"build": "node ../../node_modules/typescript/bin/tsc -p tsconfig.json",
+		"check-types": "node ../../node_modules/typescript/bin/tsc --noEmit -p tsconfig.json",
+		"test": "vitest run"
+	},
+	"dependencies": {
+		"@memongo/lib": "1.1.0",
+		"@memongo/memory-engine": "1.1.0"
+	},
+	"devDependencies": {
+		"@memongo/tools": "workspace:*",
+		"typescript": "^5.8.0",
+		"vitest": "^4.1.0"
+	},
+	"homepage": "https://github.com/romiluz/memongo#readme",
+	"bugs": {
+		"url": "https://github.com/romiluz/memongo/issues"
+	}
+}

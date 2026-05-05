@@ -1,0 +1,87 @@
+{
+	"$schema": "https://mintlify.com/docs.json",
+	"name": "Memongo | MongoDB-native AI Memory",
+	"colors": {
+		"dark": "#00684A",
+		"light": "#00ED64",
+		"primary": "#00684A"
+	},
+	"favicon": "/favicon.png",
+	"logo": {
+		"dark": "/logo/dark.svg",
+		"light": "/logo/light.svg"
+	},
+	"icons": {
+		"library": "lucide"
+	},
+	"navbar": {
+		"links": [
+			{
+				"href": "https://github.com/romiluz/memongo",
+				"label": "GitHub"
+			}
+		]
+	},
+	"navigation": {
+		"tabs": [
+			{
+				"icon": "code",
+				"tab": "Documentation",
+				"anchors": [
+					{
+						"anchor": "Getting Started",
+						"pages": [
+							{
+								"group": "Overview",
+								"pages": ["introduction", "quickstart"]
+							},
+							{
+								"group": "Concepts",
+								"pages": ["concepts/memory", "concepts/architecture"]
+							}
+						]
+					},
+					{
+						"anchor": "Guides",
+						"pages": [
+							{
+								"group": "MCP",
+								"pages": ["guides/cli-memory"]
+							},
+							{
+								"group": "Configuration",
+								"pages": ["guides/memory-config", "guides/open-source"]
+							}
+						]
+					}
+				]
+			},
+			{
+				"icon": "book-open",
+				"tab": "API Reference",
+				"anchors": [
+					{
+						"anchor": "Endpoints",
+						"pages": [
+							{
+								"group": "Memory API",
+								"pages": ["api/overview"]
+							}
+						]
+					}
+				]
+			}
+		]
+	},
+	"redirects": [
+		{
+			"source": "/",
+			"destination": "/introduction",
+			"permanent": false
+		}
+	],
+	"styling": {
+		"eyebrows": "breadcrumbs"
+	},
+	"theme": "mint"
+}

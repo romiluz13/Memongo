@@ -1,0 +1,26 @@
+{
+	"name": "@memongo/web",
+	"version": "0.1.0",
+	"private": true,
+	"scripts": {
+		"dev": "node ../../node_modules/next/dist/bin/next dev -p 3040",
+		"build": "node ../../node_modules/next/dist/bin/next build",
+		"start": "node ../../node_modules/next/dist/bin/next start -p 3040",
+		"preview": "bunx opennextjs-cloudflare && bunx wrangler dev",
+		"deploy": "bunx opennextjs-cloudflare && bunx wrangler deploy",
+		"check-types": "node ../../node_modules/next/dist/bin/next typegen && node ../../node_modules/typescript/bin/tsc --noEmit -p tsconfig.json"
+	},
+	"dependencies": {
+		"@memongo/client": "workspace:*",
+		"next": "^15.1.0",
+		"react": "^19.0.0",
+		"react-dom": "^19.0.0"
+	},
+	"devDependencies": {
+		"@opennextjs/cloudflare": "^1.0.0",
+		"@types/node": "^22.10.0",
+		"@types/react": "^19.0.0",
+		"typescript": "^5.8.0",
+		"wrangler": "^4.42.0"
+	}
+}

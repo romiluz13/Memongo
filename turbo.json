@@ -1,0 +1,30 @@
+{
+	"$schema": "https://turborepo.com/schema.json",
+	"ui": "tui",
+	"tasks": {
+		"build": {
+			"dependsOn": ["^build"],
+			"inputs": ["$TURBO_DEFAULT$", ".env*"],
+			"outputs": [
+				".next/**",
+				"!.next/cache/**",
+				"dist/**",
+				".turbo/docs-integrity.txt"
+			]
+		},
+		"test": {
+			"dependsOn": ["^build"],
+			"outputs": []
+		},
+		"lint": {
+			"dependsOn": ["^lint"]
+		},
+		"check-types": {
+			"dependsOn": ["^build", "^check-types"]
+		},
+		"dev": {
+			"cache": false,
+			"persistent": true
+		}
+	}
+}

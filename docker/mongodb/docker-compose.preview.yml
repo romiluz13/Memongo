@@ -1,0 +1,38 @@
+# docker-compose.preview.yml - Memongo one-command setup
+# Uses mongodb/mongodb-atlas-local:preview (the ONLY tag with auto-embeddings)
+#
+# Usage:
+#   docker compose -f docker/mongodb/docker-compose.preview.yml up -d
+#   VOYAGE_API_KEY=al-xxxxx docker compose -f docker/mongodb/docker-compose.preview.yml up -d
+#
+# IMPORTANT: VOYAGE_API_KEY must be an Atlas Model API Key (al-... prefix).
+# Create one at: cloud.mongodb.com → AI Models → Create model API key
+# Direct Voyage keys (pa-...) will NOT work — mongot routes through ai.mongodb.com.
+# See: https://www.mongodb.com/docs/voyageai/management/api-keys/
+#
+# What's included (single container):
+#   - mongod (MongoDB 8.x, single-node replica set)
+#   - mongot (community search engine)
+#   - Atlas Search + Atlas Vector Search
+#   - Auto-embeddings via Voyage AI (when VOYAGE_API_KEY is set)
+
+services:
+  mongodb:
+    image: mongodb/mongodb-atlas-local:preview
+    container_name: memongo-preview
+    ports:
+      - "${MONGODB_PORT:-27017}:27017"
+    environment:
+      - VOYAGE_API_KEY=${VOYAGE_API_KEY:-}
+    volumes:
+      - memongo_preview_data:/data/db
+    # Built-in healthcheck verifies both mongod and mongot are operational
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/runner", "healthcheck"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+volumes:
+  memongo_preview_data:

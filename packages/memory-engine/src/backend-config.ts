@@ -1,0 +1,527 @@
+import {
+	type MemongoConfig,
+	type MemoryCitationsMode,
+	type MemoryMongoDBDeploymentProfile,
+	type MemoryMongoDBEmbeddingMode,
+	type MemoryMongoDBFusionMethod,
+	createSubsystemLogger,
+	resolveUserPath,
+} from "@memongo/lib"
+
+const log = createSubsystemLogger("memory:backend-config")
+
+// Known embedding model dimensions for numDimensions validation (F22)
+const KNOWN_MODEL_DIMENSIONS: Record<string, number> = {
+	"voyage-4-large": 1024,
+	"voyage-4": 1024,
+	"voyage-4-lite": 512,
+	"voyage-3": 1024,
+	"voyage-3-lite": 512,
+	"voyage-code-3": 1024,
+	"text-embedding-3-small": 1536,
+	"text-embedding-3-large": 3072,
+	"text-embedding-ada-002": 1536,
+}
+
+export type ResolvedMongoDBConfig = {
+	uri: string
+	database: string
+	collectionPrefix: string
+	deploymentProfile: MemoryMongoDBDeploymentProfile
+	embeddingMode: MemoryMongoDBEmbeddingMode
+	fusionMethod: MemoryMongoDBFusionMethod
+	quantization: "none" | "scalar" | "binary"
+	watchDebounceMs: number
+	numDimensions: number
+	maxPoolSize: number
+	minPoolSize: number
+	embeddingCacheTtlDays: number
+	memoryTtlDays: number
+	enableChangeStreams: boolean
+	changeStreamDebounceMs: number
+	connectTimeoutMs: number
+	numCandidates: number
+	maxSessionChunks: number
+	kb: {
+		enabled: boolean
+		chunking: { tokens: number; overlap: number }
+		autoImportPaths: string[]
+		maxDocumentSize: number
+		autoRefreshHours: number
+	}
+	relevance: {
+		enabled: boolean
+		telemetry: {
+			enabled: boolean
+			baseSampleRate: number
+			adaptive: {
+				enabled: boolean
+				maxSampleRate: number
+				minWindowSize: number
+			}
+			persistRawExplain: boolean
+			queryPrivacyMode: "redacted-hash" | "raw" | "none"
+		}
+		retention: {
+			days: number
+		}
+		benchmark: {
+			enabled: boolean
+			datasetPath: string
+		}
+	}
+	episodes: { enabled: boolean; minEventsForEpisode: number }
+	graph: {
+		enabled: boolean
+		maxGraphDepth: number
+		entityExtraction: {
+			method: "regex" | "llm"
+			model?: string
+			timeoutMs: number
+		}
+	}
+	queryRewriting: {
+		enabled: boolean
+		method: "synonym-expansion"
+		maxTokens: number
+	}
+	reranking: {
+		enabled: boolean
+		model: "rerank-2.5" | "rerank-2.5-lite"
+		topN: number
+		minScore: number
+		voyageApiKey: string
+		instruction?: string
+	}
+	cache: {
+		enabled: boolean
+		conversationTtlSec: number
+		kbTtlSec: number
+		similarityThreshold: number
+	}
+	sources: {
+		reference: { enabled: boolean }
+		conversation: { enabled: boolean }
+		structured: { enabled: boolean }
+	}
+}
+
+export type ResolvedMemoryBackendConfig = {
+	backend: "mongodb"
+	citations: MemoryCitationsMode
+	mongodb?: ResolvedMongoDBConfig
+}
+const DEFAULT_BACKEND = "mongodb"
+const DEFAULT_CITATIONS: MemoryCitationsMode = "auto"
+const DEFAULT_RELEVANCE_DATASET = "~/.memongo/relevance/golden.jsonl"
+const DEFAULT_MONGODB_PROFILE: MemoryMongoDBDeploymentProfile =
+	"atlas-local-preview"
+const DEFAULT_MONGODB_EMBEDDING_MODE: MemoryMongoDBEmbeddingMode = "automated"
+
+function sanitizeName(input: string): string {
+	const lower = input.toLowerCase().replace(/[^a-z0-9-]+/g, "-")
+	const trimmed = lower.replace(/^-+|-+$/g, "")
+	return trimmed || "collection"
+}
+
+export function resolveMemoryBackendConfig(params: {
+	cfg: MemongoConfig
+	agentId: string
+}): ResolvedMemoryBackendConfig {
+	const backend = params.cfg.memory?.backend ?? DEFAULT_BACKEND
+	const citations = params.cfg.memory?.citations ?? DEFAULT_CITATIONS
+
+	if (backend !== "mongodb") {
+		throw new Error(
+			`Unsupported memory.backend "${String(backend)}". Memongo supports only the MongoDB memory backend.`,
+		)
+	}
+
+	if (backend === "mongodb") {
+		const mongoCfg = params.cfg.memory?.mongodb
+		const forceUri = process.env.MEMONGO_FORCE_MONGODB_URI?.trim()
+		const uri =
+			forceUri ||
+			(typeof mongoCfg?.uri === "string" && mongoCfg.uri.trim()
+				? mongoCfg.uri.trim()
+				: undefined) ||
+			process.env.MEMONGO_MONGODB_URI?.trim()
+		if (!uri) {
+			throw new Error(
+				[
+					"MongoDB URI required for Memongo.",
+					"Set `memory.mongodb.uri` in config or `MEMONGO_MONGODB_URI` in the environment.",
+					"Use `MEMONGO_FORCE_MONGODB_URI` to override a file URI (for example memongo-api or CI).",
+				].join(" "),
+			)
+		}
+		const rawDeploymentProfile =
+			mongoCfg?.deploymentProfile ?? DEFAULT_MONGODB_PROFILE
+		const deploymentProfile: MemoryMongoDBDeploymentProfile =
+			rawDeploymentProfile === "community-mongot"
+				? "atlas-local-preview"
+				: rawDeploymentProfile
+		const rawEmbeddingMode =
+			mongoCfg?.embeddingMode ?? DEFAULT_MONGODB_EMBEDDING_MODE
+		const embeddingMode: MemoryMongoDBEmbeddingMode =
+			DEFAULT_MONGODB_EMBEDDING_MODE
+
+		if (uri.includes(".mongodb.net")) {
+			throw new Error(
+				[
+					"Memongo supports only MongoDB Community with mongot as the official deployment path.",
+					"Atlas URIs (*.mongodb.net) are not part of the supported Memongo contract.",
+				].join(" "),
+			)
+		}
+		if (
+			rawDeploymentProfile !== "atlas-local-preview" &&
+			rawDeploymentProfile !== "community-mongot"
+		) {
+			const unsupportedDeploymentProfile = String(mongoCfg?.deploymentProfile)
+			throw new Error(
+				[
+					`deploymentProfile "${unsupportedDeploymentProfile}" is not supported in Memongo.`,
+					'Use deploymentProfile "atlas-local-preview".',
+				].join(" "),
+			)
+		}
+		if (rawEmbeddingMode !== "automated") {
+			const unsupportedEmbeddingMode = String(mongoCfg?.embeddingMode)
+			throw new Error(
+				[
+					`embeddingMode "${unsupportedEmbeddingMode}" is not supported in Memongo.`,
+					'Use embeddingMode "automated" with atlas-local-preview.',
+				].join(" "),
+			)
+		}
+		if (
+			typeof mongoCfg?.queryRewriting?.method === "string" &&
+			mongoCfg.queryRewriting.method !== "synonym-expansion"
+		) {
+			throw new Error(
+				[
+					`queryRewriting.method "${mongoCfg.queryRewriting.method}" is not supported in Memongo.`,
+					'Use queryRewriting.method "synonym-expansion" or disable query rewriting.',
+				].join(" "),
+			)
+		}
+
+		const result: ResolvedMemoryBackendConfig = {
+			backend: "mongodb",
+			citations,
+			mongodb: {
+				uri,
+				database: mongoCfg?.database ?? "memongo",
+				collectionPrefix:
+					mongoCfg?.collectionPrefix ??
+					`memongo_${sanitizeName(params.agentId)}_`,
+				deploymentProfile,
+				embeddingMode,
+				fusionMethod: mongoCfg?.fusionMethod ?? "rankFusion",
+				quantization: mongoCfg?.quantization ?? "none",
+				watchDebounceMs:
+					typeof mongoCfg?.watchDebounceMs === "number" &&
+					Number.isFinite(mongoCfg.watchDebounceMs) &&
+					mongoCfg.watchDebounceMs >= 0
+						? Math.floor(mongoCfg.watchDebounceMs)
+						: 500,
+				numDimensions:
+					typeof mongoCfg?.numDimensions === "number" &&
+					Number.isFinite(mongoCfg.numDimensions) &&
+					mongoCfg.numDimensions > 0
+						? Math.floor(mongoCfg.numDimensions)
+						: 1024,
+				maxPoolSize:
+					typeof mongoCfg?.maxPoolSize === "number" &&
+					Number.isFinite(mongoCfg.maxPoolSize) &&
+					mongoCfg.maxPoolSize > 0
+						? Math.floor(mongoCfg.maxPoolSize)
+						: 10,
+				minPoolSize:
+					typeof mongoCfg?.minPoolSize === "number" &&
+					Number.isFinite(mongoCfg.minPoolSize) &&
+					mongoCfg.minPoolSize >= 0
+						? Math.floor(mongoCfg.minPoolSize)
+						: 2,
+				embeddingCacheTtlDays:
+					typeof mongoCfg?.embeddingCacheTtlDays === "number" &&
+					Number.isFinite(mongoCfg.embeddingCacheTtlDays) &&
+					mongoCfg.embeddingCacheTtlDays >= 0
+						? Math.floor(mongoCfg.embeddingCacheTtlDays)
+						: 30,
+				memoryTtlDays:
+					typeof mongoCfg?.memoryTtlDays === "number" &&
+					Number.isFinite(mongoCfg.memoryTtlDays) &&
+					mongoCfg.memoryTtlDays >= 0
+						? Math.floor(mongoCfg.memoryTtlDays)
+						: 0,
+				enableChangeStreams: mongoCfg?.enableChangeStreams === true,
+				changeStreamDebounceMs:
+					typeof mongoCfg?.changeStreamDebounceMs === "number" &&
+					Number.isFinite(mongoCfg.changeStreamDebounceMs) &&
+					mongoCfg.changeStreamDebounceMs >= 0
+						? Math.floor(mongoCfg.changeStreamDebounceMs)
+						: 1000,
+				connectTimeoutMs:
+					typeof mongoCfg?.connectTimeoutMs === "number" &&
+					Number.isFinite(mongoCfg.connectTimeoutMs) &&
+					mongoCfg.connectTimeoutMs > 0
+						? Math.floor(mongoCfg.connectTimeoutMs)
+						: 10_000,
+				numCandidates: Math.min(
+					typeof mongoCfg?.numCandidates === "number" &&
+						Number.isFinite(mongoCfg.numCandidates) &&
+						mongoCfg.numCandidates > 0
+						? Math.floor(mongoCfg.numCandidates)
+						: resolveEnvInt("MEMONGO_NUM_CANDIDATES", 500),
+					10_000, // F1: hard cap at MongoDB's max numCandidates
+				),
+				maxSessionChunks:
+					typeof mongoCfg?.maxSessionChunks === "number" &&
+					Number.isFinite(mongoCfg.maxSessionChunks) &&
+					mongoCfg.maxSessionChunks > 0
+						? Math.floor(mongoCfg.maxSessionChunks)
+						: 50,
+				kb: {
+					enabled: mongoCfg?.kb?.enabled !== false,
+					chunking: {
+						tokens:
+							typeof mongoCfg?.kb?.chunking?.tokens === "number" &&
+							Number.isFinite(mongoCfg.kb.chunking.tokens) &&
+							mongoCfg.kb.chunking.tokens > 0
+								? Math.floor(mongoCfg.kb.chunking.tokens)
+								: 600,
+						overlap:
+							typeof mongoCfg?.kb?.chunking?.overlap === "number" &&
+							Number.isFinite(mongoCfg.kb.chunking.overlap) &&
+							mongoCfg.kb.chunking.overlap >= 0
+								? Math.floor(mongoCfg.kb.chunking.overlap)
+								: 100,
+					},
+					autoImportPaths: Array.isArray(mongoCfg?.kb?.autoImportPaths)
+						? mongoCfg.kb.autoImportPaths.filter(
+								(p): p is string =>
+									typeof p === "string" && p.trim().length > 0,
+							)
+						: [],
+					maxDocumentSize:
+						typeof mongoCfg?.kb?.maxDocumentSize === "number" &&
+						Number.isFinite(mongoCfg.kb.maxDocumentSize) &&
+						mongoCfg.kb.maxDocumentSize > 0
+							? Math.floor(mongoCfg.kb.maxDocumentSize)
+							: 10 * 1024 * 1024,
+					autoRefreshHours:
+						typeof mongoCfg?.kb?.autoRefreshHours === "number" &&
+						Number.isFinite(mongoCfg.kb.autoRefreshHours) &&
+						mongoCfg.kb.autoRefreshHours >= 0
+							? mongoCfg.kb.autoRefreshHours
+							: 24,
+				},
+				relevance: {
+					enabled: mongoCfg?.relevance?.enabled !== false,
+					telemetry: {
+						enabled: mongoCfg?.relevance?.telemetry?.enabled !== false,
+						baseSampleRate:
+							typeof mongoCfg?.relevance?.telemetry?.baseSampleRate ===
+								"number" &&
+							Number.isFinite(mongoCfg.relevance.telemetry.baseSampleRate)
+								? Math.min(
+										1,
+										Math.max(0, mongoCfg.relevance.telemetry.baseSampleRate),
+									)
+								: 0.01,
+						adaptive: {
+							enabled:
+								mongoCfg?.relevance?.telemetry?.adaptive?.enabled !== false,
+							maxSampleRate:
+								typeof mongoCfg?.relevance?.telemetry?.adaptive
+									?.maxSampleRate === "number" &&
+								Number.isFinite(
+									mongoCfg.relevance.telemetry.adaptive.maxSampleRate,
+								)
+									? Math.min(
+											1,
+											Math.max(
+												0,
+												mongoCfg.relevance.telemetry.adaptive.maxSampleRate,
+											),
+										)
+									: 0.1,
+							minWindowSize:
+								typeof mongoCfg?.relevance?.telemetry?.adaptive
+									?.minWindowSize === "number" &&
+								Number.isFinite(
+									mongoCfg.relevance.telemetry.adaptive.minWindowSize,
+								) &&
+								mongoCfg.relevance.telemetry.adaptive.minWindowSize > 0
+									? Math.floor(
+											mongoCfg.relevance.telemetry.adaptive.minWindowSize,
+										)
+									: 200,
+						},
+						persistRawExplain:
+							mongoCfg?.relevance?.telemetry?.persistRawExplain !== false,
+						queryPrivacyMode:
+							mongoCfg?.relevance?.telemetry?.queryPrivacyMode === "raw" ||
+							mongoCfg?.relevance?.telemetry?.queryPrivacyMode === "none"
+								? mongoCfg.relevance.telemetry.queryPrivacyMode
+								: "redacted-hash",
+					},
+					retention: {
+						days:
+							typeof mongoCfg?.relevance?.retention?.days === "number" &&
+							Number.isFinite(mongoCfg.relevance.retention.days) &&
+							mongoCfg.relevance.retention.days > 0
+								? Math.floor(mongoCfg.relevance.retention.days)
+								: 14,
+					},
+					benchmark: {
+						enabled: mongoCfg?.relevance?.benchmark?.enabled !== false,
+						datasetPath:
+							typeof mongoCfg?.relevance?.benchmark?.datasetPath === "string" &&
+							mongoCfg.relevance.benchmark.datasetPath.trim().length > 0
+								? resolveUserPath(
+										mongoCfg.relevance.benchmark.datasetPath.trim(),
+									)
+								: resolveUserPath(DEFAULT_RELEVANCE_DATASET),
+					},
+				},
+				episodes: {
+					enabled: mongoCfg?.episodes?.enabled !== false,
+					minEventsForEpisode:
+						typeof mongoCfg?.episodes?.minEventsForEpisode === "number" &&
+						Number.isFinite(mongoCfg.episodes.minEventsForEpisode) &&
+						mongoCfg.episodes.minEventsForEpisode > 0
+							? Math.floor(mongoCfg.episodes.minEventsForEpisode)
+							: 10,
+				},
+				graph: {
+					enabled: mongoCfg?.graph?.enabled !== false,
+					maxGraphDepth:
+						typeof mongoCfg?.graph?.maxGraphDepth === "number" &&
+						Number.isFinite(mongoCfg.graph.maxGraphDepth) &&
+						mongoCfg.graph.maxGraphDepth > 0
+							? Math.floor(mongoCfg.graph.maxGraphDepth)
+							: 2,
+					entityExtraction: {
+						method: mongoCfg?.graph?.entityExtraction?.method ?? "regex",
+						model: mongoCfg?.graph?.entityExtraction?.model,
+						timeoutMs:
+							typeof mongoCfg?.graph?.entityExtraction?.timeoutMs ===
+								"number" &&
+							Number.isFinite(mongoCfg.graph.entityExtraction.timeoutMs) &&
+							mongoCfg.graph.entityExtraction.timeoutMs > 0
+								? Math.floor(mongoCfg.graph.entityExtraction.timeoutMs)
+								: 5000,
+					},
+				},
+				queryRewriting: {
+					enabled: mongoCfg?.queryRewriting?.enabled === true,
+					method: mongoCfg?.queryRewriting?.method ?? "synonym-expansion",
+					maxTokens:
+						typeof mongoCfg?.queryRewriting?.maxTokens === "number" &&
+						Number.isFinite(mongoCfg.queryRewriting.maxTokens) &&
+						mongoCfg.queryRewriting.maxTokens > 0
+							? Math.floor(mongoCfg.queryRewriting.maxTokens)
+							: 128,
+				},
+				reranking: {
+					enabled: mongoCfg?.reranking?.enabled !== false,
+					model: mongoCfg?.reranking?.model ?? "rerank-2.5",
+					topN:
+						typeof mongoCfg?.reranking?.topN === "number" &&
+						Number.isFinite(mongoCfg.reranking.topN) &&
+						mongoCfg.reranking.topN > 0
+							? Math.floor(mongoCfg.reranking.topN)
+							: 20,
+					minScore:
+						typeof mongoCfg?.reranking?.minScore === "number" &&
+						Number.isFinite(mongoCfg.reranking.minScore)
+							? Math.min(1, Math.max(0, mongoCfg.reranking.minScore))
+							: resolveEnvFloat("MEMONGO_RERANK_MIN_SCORE", 0.01),
+					voyageApiKey:
+						mongoCfg?.reranking?.voyageApiKey ??
+						process.env.VOYAGE_API_KEY ??
+						"",
+					instruction: mongoCfg?.reranking?.instruction,
+				},
+				cache: {
+					enabled: mongoCfg?.cache?.enabled !== false,
+					conversationTtlSec: mongoCfg?.cache?.conversationTtlSec ?? 300,
+					kbTtlSec: mongoCfg?.cache?.kbTtlSec ?? 3600,
+					similarityThreshold: mongoCfg?.cache?.similarityThreshold ?? 0.95,
+				},
+				sources: {
+					reference: {
+						enabled: params.cfg.memory?.sources?.reference?.enabled !== false,
+					},
+					conversation: {
+						enabled:
+							params.cfg.memory?.sources?.conversation?.enabled !== false,
+					},
+					structured: {
+						enabled: params.cfg.memory?.sources?.structured?.enabled !== false,
+					},
+				},
+			},
+		}
+		const mongodb = result.mongodb
+		if (
+			mongodb &&
+			mongodb.relevance.telemetry.adaptive.maxSampleRate <
+				mongodb.relevance.telemetry.baseSampleRate
+		) {
+			mongodb.relevance.telemetry.adaptive.maxSampleRate =
+				mongodb.relevance.telemetry.baseSampleRate
+		}
+
+		// F22: numDimensions validation warning — check if configured dimensions
+		// match known model dimensions for the default embedding model
+		const resolvedNumDims = mongodb?.numDimensions
+		const defaultModel = "voyage-4-large"
+		const expectedDims = KNOWN_MODEL_DIMENSIONS[defaultModel]
+		if (
+			mongoCfg?.numDimensions &&
+			expectedDims &&
+			resolvedNumDims !== expectedDims
+		) {
+			log.warn(
+				`numDimensions=${resolvedNumDims} may not match expected dimensions for ${defaultModel} (${expectedDims}). ` +
+					"Mismatched dimensions will cause vector search errors.",
+			)
+		}
+
+		// H2 audit fix: warn when entity extraction method is 'llm' but no LLM function injected
+		if (mongodb?.graph.entityExtraction.method === "llm") {
+			log.warn(
+				"entity extraction method 'llm' configured but LLM function not injected — regex extractor will be used at runtime. " +
+					"Set graph.entityExtraction.method to 'regex' to suppress this warning.",
+			)
+		}
+
+		return result
+	}
+
+	throw new Error(`Unsupported memory backend: ${String(backend)}`)
+}
+
+// ---------------------------------------------------------------------------
+// Env-var overrides for recall-oriented threshold ablation
+// ---------------------------------------------------------------------------
+
+function resolveEnvInt(envKey: string, fallback: number): number {
+	const raw = process.env[envKey]
+	if (raw === undefined || raw === "") return fallback
+	const parsed = Number.parseInt(raw, 10)
+	return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback
+}
+
+function resolveEnvFloat(envKey: string, fallback: number): number {
+	const raw = process.env[envKey]
+	if (raw === undefined || raw === "") return fallback
+	const parsed = Number.parseFloat(raw)
+	return Number.isFinite(parsed) && parsed >= 0 && parsed <= 1
+		? parsed
+		: fallback
+}

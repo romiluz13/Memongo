@@ -1,0 +1,42 @@
+{
+	"name": "@memongo/client",
+	"version": "1.1.0",
+	"description": "TypeScript client SDK for the Memongo HTTP API",
+	"type": "module",
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/romiluz/memongo.git",
+		"directory": "packages/client"
+	},
+	"keywords": [
+		"memongo",
+		"client",
+		"sdk",
+		"mongodb",
+		"memory"
+	],
+	"main": "./dist/index.js",
+	"types": "./dist/index.d.ts",
+	"files": [
+		"dist",
+		"README.md"
+	],
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"default": "./dist/index.js"
+		}
+	},
+	"scripts": {
+		"build": "node ../../node_modules/typescript/bin/tsc -p tsconfig.json",
+		"check-types": "node ../../node_modules/typescript/bin/tsc --noEmit -p tsconfig.json"
+	},
+	"devDependencies": {
+		"typescript": "^5.8.0"
+	},
+	"homepage": "https://github.com/romiluz/memongo#readme",
+	"bugs": {
+		"url": "https://github.com/romiluz/memongo/issues"
+	}
+}

@@ -1,0 +1,47 @@
+---
+title: Architecture
+description: Memongo's package structure, data flow, and deployment topology.
+icon: "sitemap"
+---
+
+Memongo is a Turborepo monorepo built around a small supported core. The product runtime is `apps/api` -> `packages/memory-bridge` -> `packages/memory-engine`.
+
+## Packages
+
+| Package | Role |
+|---------|------|
+| `@memongo/memory-engine` | Core MongoDB memory: embeddings, graph, episodes, search, KB, analytics |
+| `@memongo/memory-bridge` | Stable facade for the engine -- config resolution, bridge API |
+| `@memongo/memory` | Published re-export of the engine + bridge |
+| `@memongo/client` | TypeScript HTTP client SDK |
+| `@memongo/tools` | AI SDK tool helpers (Vercel AI SDK compatible) |
+| `@memongo/lib` | Shared types and utilities (internal) |
+
+## Apps
+
+| App | Port | Description |
+|-----|------|-------------|
+| `apps/api` | 3847 | HTTP API server (Hono) |
+| `apps/mcp` | stdio | MCP server wrapping the HTTP API |
+| `apps/web` | 3040 | Next.js web console |
+| `apps/docs` | 3003 | Mintlify docs for the supported product core |
+
+## Status by surface
+
+| Status | Surfaces |
+|--------|----------|
+| Supported public | `apps/api`, `apps/mcp`, `apps/web`, `apps/docs`, `packages/memory-engine`, `packages/memory-bridge`, `packages/memongo-memory`, `packages/client`, `packages/tools` |
+| Supported internal | `packages/lib`, `docker/mongodb`, repo-owned validation scripts |
+| Historical or internal planning | `docs/migration`, `docs/research`, `docs/experiments`, `docs/plans` |
+
+## Data flow
+
+```text
+Client SDK / HTTP  ->  apps/api  ->  memory-bridge  ->  memory-engine  ->  MongoDB
+                                                                                   |
+MCP client (stdio) ->  apps/mcp  ->  client SDK  ----------------------------------+
+```
+
+The engine writes to MongoDB collections with automated vector indexes, text indexes, and TTL policies. Search goes through the supported hybrid retrieval pipeline and falls back only when the engine explicitly chooses to do so.
+
+For the maintainer-facing package matrix and release map, see `docs/platform/PACKAGE-STATUS.md` and `docs/platform/MAINTAINER-MAP.md` in the repo root.

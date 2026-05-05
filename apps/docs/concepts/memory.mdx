@@ -1,0 +1,30 @@
+---
+title: Memory
+description: How Memongo stores, indexes, and retrieves AI agent memory using MongoDB.
+icon: "brain"
+---
+
+Memongo treats memory as a first-class MongoDB data model. Every memory is a document stored in MongoDB with automated vector embeddings, full-text indexing, and graph relationships.
+
+## Memory types
+
+| Type | Description | Use case |
+|------|-------------|----------|
+| **Episodes** | Conversation turns and events | Chat history, interaction logs |
+| **Structured** | Key-value facts with metadata | User preferences, settings |
+| **Procedures** | Step-by-step instructions | Workflows, playbooks |
+| **Graph entities** | Nodes and edges in a knowledge graph | Relationships, concepts |
+| **Knowledge base** | Ingested documents and files | Reference material, docs |
+
+## Hybrid search
+
+Memongo combines two search strategies using MongoDB `$scoreFusion`:
+
+1. **Vector search** -- semantic similarity via automated Voyage AI embeddings
+2. **Full-text search** -- keyword matching via MongoDB Atlas Search / mongot
+
+This hybrid approach finds results that are both semantically relevant and keyword-accurate.
+
+## Automated embeddings
+
+When you add content to Memongo, embeddings are generated automatically using Voyage AI. No manual embedding step is required -- just send text and Memongo handles the rest.

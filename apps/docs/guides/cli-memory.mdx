@@ -1,0 +1,30 @@
+---
+title: MCP memory tools
+description: Run the Memongo MCP server and expose memory tools to MCP-compatible clients.
+icon: "terminal"
+---
+
+The MCP server at `apps/mcp` exposes Memongo memory operations over stdio, making it available to any MCP-compatible AI client (Claude, Cursor, and others).
+
+## Starting the MCP server
+
+```bash
+cd apps/mcp
+bun run start
+```
+
+The server communicates over stdin/stdout using the MCP protocol.
+
+## Available operations
+
+The MCP server exposes these memory tools:
+
+| Tool | Description |
+|------|-------------|
+| `memongo_search` | Search memory with hybrid vector + full-text |
+| `memongo_search_kb` | Search imported knowledge base content |
+| `memongo_read_file` | Reopen a memory locator or file path |
+| `memongo_add` | Add content to memory |
+| `memongo_write_event` | Write a conversation event |
+| `memongo_profile` | Get a synthesized user profile |
+| `memongo_status` | Check memory provider health |

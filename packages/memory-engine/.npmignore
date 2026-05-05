@@ -1,0 +1,6 @@
+src/**/*.test.ts
+src/**/*.e2e.test.ts
+src/**/*.test-mocks.ts
+src/test-*.ts
+src/test-helpers/
+tsconfig.json

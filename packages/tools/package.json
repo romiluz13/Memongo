@@ -1,0 +1,60 @@
+{
+	"name": "@memongo/tools",
+	"version": "1.1.0",
+	"description": "AI SDK tool helpers for Memongo (function-calling tools for search, add, profile, etc.)",
+	"type": "module",
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/romiluz/memongo.git",
+		"directory": "packages/tools"
+	},
+	"keywords": [
+		"memongo",
+		"tools",
+		"ai-sdk",
+		"memory",
+		"mongodb"
+	],
+	"main": "./dist/index.js",
+	"types": "./dist/index.d.ts",
+	"files": [
+		"dist",
+		"README.md"
+	],
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"default": "./dist/index.js"
+		},
+		"./vercel": {
+			"types": "./dist/vercel/index.d.ts",
+			"default": "./dist/vercel/index.js"
+		},
+		"./openai": {
+			"types": "./dist/openai/index.d.ts",
+			"default": "./dist/openai/index.js"
+		}
+	},
+	"scripts": {
+		"build": "node ../../node_modules/typescript/bin/tsc -p tsconfig.json",
+		"check-types": "node ../../node_modules/typescript/bin/tsc --noEmit -p tsconfig.json",
+		"test": "vitest run"
+	},
+	"dependencies": {
+		"@memongo/client": "1.1.0",
+		"zod": "^3.25.0"
+	},
+	"devDependencies": {
+		"ai": "^5.0.0",
+		"typescript": "^5.8.0",
+		"vitest": "^4.1.0"
+	},
+	"peerDependencies": {
+		"ai": ">=5.0.0"
+	},
+	"homepage": "https://github.com/romiluz/memongo#readme",
+	"bugs": {
+		"url": "https://github.com/romiluz/memongo/issues"
+	}
+}

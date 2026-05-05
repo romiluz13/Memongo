@@ -1,0 +1,38 @@
+{
+	"name": "memongo",
+	"private": true,
+	"description": "MongoDB-native long-term AI memory with reasoning chains, novelty detection, and consolidation: engine, SDK, HTTP API, MCP server, and web console",
+	"license": "MIT",
+	"packageManager": "bun@1.2.5",
+	"engines": {
+		"node": ">=20"
+	},
+	"workspaces": [
+		"apps/*",
+		"packages/*"
+	],
+	"scripts": {
+		"build": "turbo run build",
+		"dev": "turbo run dev",
+		"test": "turbo run test",
+		"check-types": "turbo run check-types",
+		"check-publishability": "bun scripts/check-publishability.ts",
+		"lint": "biome check . --diagnostic-level=error",
+		"lint:fix": "biome check . --diagnostic-level=error --write",
+		"format": "biome format .",
+		"format:fix": "biome format --write .",
+		"proof-pack": "bun scripts/proof-pack.ts",
+		"memory-eval": "bun scripts/real-memory-eval.ts",
+		"compare-memory-eval": "bun scripts/compare-memory-eval.ts",
+		"agent-smoke": "bun scripts/real-agent-smoke.ts",
+		"capability-stress": "bun scripts/real-capability-stress.ts",
+		"benchmark:longmemeval:s": "bun scripts/launch-official-longmemeval-benchmark.ts",
+		"benchmark:canary": "bun scripts/run-longmemeval-canary.ts",
+		"benchmark:status": "bun scripts/check-benchmark-status.ts"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "^2.4.0",
+		"turbo": "^2.5.0",
+		"typescript": "^5.8.0"
+	}
+}

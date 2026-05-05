@@ -1,0 +1,66 @@
+---
+title: "What is Memongo?"
+sidebarTitle: "Introduction"
+icon: "book-open"
+---
+
+Memongo is **MongoDB-native long-term AI memory** for agents and operators. It ships a MongoDB-backed engine, a stable bridge, an HTTP API, a TypeScript client, MCP tools, and a web console.
+
+The open-source repo is intentionally curated around a supported core instead of every historical experiment. That keeps the product story, release gate, and package surface aligned.
+
+With Memongo, developers get:
+
+- **Automated embeddings** through MongoDB Search when the configured stack supports them
+- **Hybrid retrieval** combining vector and full-text search
+- **Knowledge base ingestion** for files and reference material
+- **Graph entities, episodes, structured memory, and procedures**
+- **A stable API contract** that adapters can call directly or through the client SDK
+
+Run Memongo against MongoDB with Search and vector capabilities enabled. The repository includes Docker Compose options under `docker/mongodb/`.
+
+## How it works
+
+```text
+┌──────────────┐  ┌──────────────┐  ┌──────────────┐
+│   apps/web   │  │   apps/mcp   │  │  apps/api    │
+│  (Next.js)   │  │   (stdio)    │  │   (Hono)     │
+└──────┬───────┘  └──────┬───────┘  └──────┬───────┘
+       │                 │                 │
+       └─────────────────┼─────────────────┘
+                         │
+              ┌──────────┴──────────┐
+              │  packages/client    │  TypeScript HTTP client
+              └──────────┬──────────┘
+                         │
+              ┌──────────┴──────────┐
+              │  packages/memory-   │  Stable facade
+              │  bridge             │
+              └──────────┬──────────┘
+                         │
+              ┌──────────┴──────────┐
+              │  packages/memory-   │  MongoDB memory core
+              │  engine             │
+              └──────────┬──────────┘
+                         │
+                    ┌────┴────┐
+                    │ MongoDB │
+                    └─────────┘
+```
+
+- You send Memongo text, files, and conversations.
+- Memongo indexes them, projects canonical events, and stores everything in MongoDB.
+- At query time, hybrid search fetches the most relevant context for your AI models.
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="play" href="/quickstart">
+    Get Memongo running in under five minutes
+  </Card>
+  <Card title="Architecture" icon="cpu" href="/concepts/architecture">
+    Understand the package and data architecture
+  </Card>
+  <Card title="Open source map" icon="folders" href="/guides/open-source">
+    See the supported surface, maintainer docs, and release guides
+  </Card>
+</CardGroup>

@@ -1,0 +1,41 @@
+---
+title: Configuration
+description: Configure Memongo via environment variables or config file.
+icon: "settings"
+---
+
+Memongo reads configuration from environment variables and an optional JSON config file at `~/.memongo/memongo.json`.
+
+## Environment variables
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `MEMONGO_MONGODB_URI` | MongoDB connection string | `mongodb://localhost:27017` |
+| `MEMONGO_AGENT_ID` | Agent identifier for memory isolation | `default` |
+| `MEMONGO_API_KEY` | API key for the HTTP server | (none) |
+| `MEMONGO_API_PORT` | API listen port | `3847` |
+| `MEMONGO_API_HOST` | API bind address | `127.0.0.1` |
+| `MEMONGO_CONFIG_PATH` | Alternate JSON config file path | `~/.memongo/memongo.json` |
+| `MEMONGO_WORKSPACE_DIR` | Workspace directory used by the bridge | `~/.memongo/workspace` |
+
+## Config file
+
+Create `~/.memongo/memongo.json`:
+
+```json
+{
+  "memory": {
+    "backend": "mongodb",
+    "mongodb": {
+      "uri": "mongodb://localhost:27017",
+      "database": "memongo"
+    }
+  }
+}
+```
+
+## Notes
+
+- `MEMONGO_MONGODB_URI` is the quickest way to point the API at MongoDB during development.
+- The Atlas Local preview compose stack in `docker/mongodb/docker-compose.preview.yml` is the canonical path for full functionality.
+- The supported runtime backend is MongoDB.
