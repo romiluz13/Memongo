@@ -23,6 +23,9 @@ export type EmbeddingCoverage = {
 	withoutEmbedding: number
 	total: number
 	coveragePercent: number
+	mode?: "stored-vectors" | "server-managed"
+	storedVectorsExpected?: boolean
+	note?: string
 }
 
 export type IndexStatsEntry = {
@@ -52,6 +55,7 @@ export async function getMemoryStats(
 	db: Db,
 	prefix: string,
 	validPaths?: Set<string>,
+	options?: { embeddingMode?: "automated" },
 ): Promise<MemoryStats> {
 	const chunksCol = chunksCollection(db, prefix)
 	const filesCol = filesCollection(db, prefix)
@@ -119,6 +123,16 @@ export async function getMemoryStats(
 		total: totalChunks,
 		coveragePercent:
 			totalChunks > 0 ? Math.round((withEmb / totalChunks) * 100) : 0,
+		...(options?.embeddingMode === "automated"
+			? {
+					mode: "server-managed" as const,
+					storedVectorsExpected: false,
+					note: "Automated embedding mode stores text in application documents; MongoDB Search stores generated embeddings internally and embeds query text at query time. 0 document-level vectors can be healthy.",
+				}
+			: {
+					mode: "stored-vectors" as const,
+					storedVectorsExpected: true,
+				}),
 	}
 
 	// Embedding status coverage (across chunks, kb_chunks, and structured_mem)

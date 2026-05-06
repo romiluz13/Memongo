@@ -1250,6 +1250,8 @@ export function createV1Router(): Hono {
 				agentId: readAgentId(body),
 				sessionId: readSessionId(body),
 				metadata,
+				scope: readScope(body),
+				scopeRef: readScopeRef(body),
 			})
 			return c.json({
 				ok: true,
@@ -1310,6 +1312,7 @@ export function createV1Router(): Hono {
 					typeof body.timestamp === "string" ? body.timestamp : undefined,
 				metadata,
 				scope,
+				scopeRef: readScopeRef(body),
 			})
 			return c.json({
 				ok: true,

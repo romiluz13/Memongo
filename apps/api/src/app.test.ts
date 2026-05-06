@@ -85,6 +85,7 @@ describe("createApp", () => {
 		bridgeMocks.memongoBridgeSelfEdit.mockReset()
 		bridgeMocks.memongoBridgeUpdateLifecycleItem.mockReset()
 		bridgeMocks.memongoBridgeReportProcedureOutcome.mockReset()
+		bridgeMocks.memongoBridgeWriteConversationEvent.mockReset()
 		bridgeMocks.memongoBridgeSearch.mockResolvedValue([])
 		bridgeMocks.memongoBridgeSearchDetailed.mockResolvedValue({
 			results: [],
@@ -110,6 +111,10 @@ describe("createApp", () => {
 		})
 		bridgeMocks.memongoBridgeAdd.mockResolvedValue({
 			eventId: "evt-1",
+			chunkCreated: true,
+		})
+		bridgeMocks.memongoBridgeWriteConversationEvent.mockResolvedValue({
+			eventId: "evt-2",
 			chunkCreated: true,
 		})
 		bridgeMocks.memongoBridgeProfile.mockResolvedValue({ profile: [] })
@@ -607,6 +612,60 @@ describe("createApp", () => {
 		})
 		expect(authorized.status).toBe(200)
 		expect(bridgeMocks.memongoBridgeStatus).toHaveBeenCalledOnce()
+	})
+
+	it("forwards add scope and scopeRef when provided", async () => {
+		const res = await createApp().request("/v1/add", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				content: "remember the scoped thing",
+				agentId: "codex",
+				sessionId: "session-9",
+				scope: "session",
+				scopeRef: "session:session-9",
+			}),
+		})
+
+		expect(res.status).toBe(200)
+		expect(bridgeMocks.memongoBridgeAdd).toHaveBeenCalledWith(
+			expect.objectContaining({
+				content: "remember the scoped thing",
+				agentId: "codex",
+				sessionId: "session-9",
+				scope: "session",
+				scopeRef: "session:session-9",
+			}),
+		)
+	})
+
+	it("forwards write-event scopeRef when provided", async () => {
+		const res = await createApp().request("/v1/write-event", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				role: "assistant",
+				body: "scoped assistant memory",
+				agentId: "codex",
+				sessionId: "session-9",
+				scope: "session",
+				scopeRef: "session:session-9",
+			}),
+		})
+
+		expect(res.status).toBe(200)
+		expect(
+			bridgeMocks.memongoBridgeWriteConversationEvent,
+		).toHaveBeenCalledWith(
+			expect.objectContaining({
+				role: "assistant",
+				body: "scoped assistant memory",
+				agentId: "codex",
+				sessionId: "session-9",
+				scope: "session",
+				scopeRef: "session:session-9",
+			}),
+		)
 	})
 
 	it("forwards profile scope when provided", async () => {

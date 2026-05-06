@@ -454,6 +454,8 @@ export class MemongoClient {
 			agentId: input.agentId,
 			containerTag: input.containerTag,
 			sessionId: input.sessionId ?? input.containerTag,
+			scope: input.scope,
+			scopeRef: input.scopeRef,
 			metadata: normalizeMetadata(input.metadata),
 		})
 	}
@@ -638,6 +640,7 @@ export class MemongoClient {
 		timestamp?: string
 		metadata?: Record<string, unknown>
 		scope?: string
+		scopeRef?: string
 	}): Promise<{ ok: true; eventId: string; chunkCreated: boolean }> {
 		return apiPost(this._opts, "/v1/write-event", {
 			role: input.role,
@@ -647,6 +650,7 @@ export class MemongoClient {
 			timestamp: input.timestamp,
 			metadata: input.metadata,
 			scope: input.scope,
+			scopeRef: input.scopeRef,
 		})
 	}
 

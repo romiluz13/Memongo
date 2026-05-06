@@ -4897,6 +4897,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		timestamp?: Date
 		metadata?: Record<string, unknown>
 		scope?: MemoryScope
+		scopeRef?: string
 	}): Promise<{ eventId: string; chunkCreated: boolean }> {
 		const execute = async () => {
 			const eventId = randomUUID()
@@ -4911,6 +4912,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 					role: event.role,
 					body: event.body,
 					scope,
+					scopeRef: event.scopeRef,
 					timestamp: event.timestamp,
 					metadata: event.metadata,
 				},
@@ -5044,7 +5046,9 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 	// ---------------------------------------------------------------------------
 
 	async stats(): Promise<MemoryStats> {
-		return getMemoryStats(this.db, this.prefix)
+		return getMemoryStats(this.db, this.prefix, undefined, {
+			embeddingMode: this.config.mongodb?.embeddingMode,
+		})
 	}
 
 	// ---------------------------------------------------------------------------

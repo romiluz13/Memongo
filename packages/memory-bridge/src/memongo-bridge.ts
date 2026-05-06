@@ -404,6 +404,8 @@ export async function memongoBridgeAdd(params: {
 	agentId?: string
 	sessionId?: string
 	metadata?: Record<string, unknown>
+	scope?: MemoryScope
+	scopeRef?: string
 }) {
 	return memongoBridgeWriteConversationEvent({
 		agentId: params.agentId,
@@ -411,6 +413,8 @@ export async function memongoBridgeAdd(params: {
 		body: params.content,
 		sessionId: params.sessionId,
 		metadata: params.metadata,
+		scope: params.scope,
+		scopeRef: params.scopeRef,
 	})
 }
 
@@ -422,6 +426,7 @@ export async function memongoBridgeWriteConversationEvent(params: {
 	timestamp?: string
 	metadata?: Record<string, unknown>
 	scope?: MemoryScope
+	scopeRef?: string
 }) {
 	const m = await memongoBridgeGetManager(params.agentId)
 	const timestamp = params.timestamp ? new Date(params.timestamp) : undefined
@@ -432,6 +437,7 @@ export async function memongoBridgeWriteConversationEvent(params: {
 		timestamp,
 		metadata: params.metadata,
 		scope: params.scope,
+		scopeRef: params.scopeRef,
 	})
 }
 

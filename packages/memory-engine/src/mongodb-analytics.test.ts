@@ -149,6 +149,29 @@ describe("getMemoryStats", () => {
 		expect(stats.embeddingCoverage.coveragePercent).toBe(70)
 	})
 
+	it("explains stored embedding coverage in automated mode", async () => {
+		;(mockFiles.aggregate as ReturnType<typeof vi.fn>).mockReturnValue({
+			toArray: vi.fn(async () => []),
+		})
+		;(mockChunks.aggregate as ReturnType<typeof vi.fn>)
+			.mockReturnValueOnce({ toArray: vi.fn(async () => []) })
+			.mockReturnValueOnce({
+				toArray: vi.fn(async () => [
+					{ _id: null, withEmbedding: 0, total: 10 },
+				]),
+			})
+
+		const stats = await getMemoryStats(db, "test_", undefined, {
+			embeddingMode: "automated",
+		})
+
+		expect(stats.embeddingCoverage.mode).toBe("server-managed")
+		expect(stats.embeddingCoverage.storedVectorsExpected).toBe(false)
+		expect(stats.embeddingCoverage.note).toContain(
+			"0 document-level vectors can be healthy",
+		)
+	})
+
 	it("detects stale files when validPaths is provided", async () => {
 		;(mockFiles.aggregate as ReturnType<typeof vi.fn>).mockReturnValue({
 			toArray: vi.fn(async () => []),

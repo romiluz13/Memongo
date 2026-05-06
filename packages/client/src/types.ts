@@ -14,6 +14,8 @@ export type MemongoAddInput = {
 	metadata?: Record<string, string | number | boolean | null>
 	agentId?: string
 	sessionId?: string
+	scope?: "session" | "user" | "agent" | "workspace" | "tenant" | "global"
+	scopeRef?: string
 }
 
 export type MemongoSearchInput = {
