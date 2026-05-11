@@ -3,12 +3,15 @@ import { tmpdir } from "node:os"
 import path from "node:path"
 import { describe, it, expect } from "vitest"
 import {
+	BENCHMARK_STRICT_FATAL_CLASSES,
+	isCanaryFatalFailureClass,
 	resolveCanaryArtifactDir,
 	resolveCanaryFullMode,
 	resolveCanaryHttpTimeoutMs,
 	resolveCanaryLogLevel,
 	resolveCanaryResumeMode,
 	selectStratifiedSubset,
+	shouldCanaryAbort,
 	writeScenarioProgress,
 	type RawLongMemEvalEntry,
 } from "./run-longmemeval-canary.js"
@@ -295,6 +298,58 @@ describe("writeScenarioProgress (Task 1.2)", () => {
 		} finally {
 			rmSync(dir, { recursive: true, force: true })
 		}
+	})
+})
+
+describe("strict-mode fail-fast (Task 1.6)", () => {
+	it("7 fatal classes are all strictly inside the 9-class taxonomy", () => {
+		expect(BENCHMARK_STRICT_FATAL_CLASSES).toEqual([
+			"harness-timeout",
+			"model-failure",
+			"json-parse",
+			"queue-settle-timeout",
+			"probe-timeout",
+			"index-not-ready",
+			"scope-leak",
+		])
+	})
+
+	it("retrieval-miss and unknown are NOT fatal under strict", () => {
+		expect(isCanaryFatalFailureClass("retrieval-miss")).toBe(false)
+		expect(isCanaryFatalFailureClass("unknown")).toBe(false)
+	})
+
+	it("all 7 classes above are fatal under strict", () => {
+		for (const cls of BENCHMARK_STRICT_FATAL_CLASSES) {
+			expect(isCanaryFatalFailureClass(cls)).toBe(true)
+		}
+	})
+
+	it("shouldCanaryAbort returns true only when strict=1 AND class is fatal", () => {
+		expect(
+			shouldCanaryAbort({ strictEnv: "1", failureClass: "model-failure" }),
+		).toBe(true)
+		expect(
+			shouldCanaryAbort({ strictEnv: "1", failureClass: "retrieval-miss" }),
+		).toBe(false)
+		expect(
+			shouldCanaryAbort({
+				strictEnv: undefined,
+				failureClass: "model-failure",
+			}),
+		).toBe(false)
+		expect(
+			shouldCanaryAbort({ strictEnv: "0", failureClass: "harness-timeout" }),
+		).toBe(false)
+	})
+
+	it("shouldCanaryAbort accepts strictEnv=true (case-insensitive) per convention", () => {
+		expect(
+			shouldCanaryAbort({ strictEnv: "true", failureClass: "model-failure" }),
+		).toBe(true)
+		expect(
+			shouldCanaryAbort({ strictEnv: "TRUE", failureClass: "model-failure" }),
+		).toBe(true)
 	})
 })
 

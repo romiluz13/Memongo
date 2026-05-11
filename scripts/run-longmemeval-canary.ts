@@ -145,6 +145,46 @@ export function resolveCanaryResumeMode(envValue: string | undefined): boolean {
 }
 
 /**
+ * Task 1.6 — canary strict mode. MEMONGO_BENCHMARK_STRICT=1 means: abort the
+ * run on the first fatal-classified failure (harness-timeout, model-failure,
+ * json-parse, queue-settle-timeout, probe-timeout, index-not-ready,
+ * scope-leak) instead of swallowing and continuing.
+ *
+ * The 7 fatal classes are a strict subset of the 9-class taxonomy.
+ * `retrieval-miss` and `unknown` are NOT fatal (retrieval-miss is a
+ * metric-worthy event, unknown is surfaced but doesn't imply the infra
+ * broke).
+ */
+export const BENCHMARK_STRICT_FATAL_CLASSES: ReadonlyArray<BenchmarkFailureClass> =
+	[
+		"harness-timeout",
+		"model-failure",
+		"json-parse",
+		"queue-settle-timeout",
+		"probe-timeout",
+		"index-not-ready",
+		"scope-leak",
+	]
+
+export function isCanaryFatalFailureClass(
+	failureClass: BenchmarkFailureClass,
+): boolean {
+	return (BENCHMARK_STRICT_FATAL_CLASSES as readonly string[]).includes(
+		failureClass,
+	)
+}
+
+export function shouldCanaryAbort(params: {
+	strictEnv: string | undefined
+	failureClass: BenchmarkFailureClass
+}): boolean {
+	const strict =
+		params.strictEnv === "1" || params.strictEnv?.toLowerCase() === "true"
+	if (!strict) return false
+	return isCanaryFatalFailureClass(params.failureClass)
+}
+
+/**
  * Task 1.2 — per-scenario progress artifact emitter.
  *
  * Writes `{runDir}/progress/{index}.json` synchronously so a failure leaves a
