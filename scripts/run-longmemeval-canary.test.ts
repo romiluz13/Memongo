@@ -3,6 +3,7 @@ import {
 	resolveCanaryArtifactDir,
 	resolveCanaryFullMode,
 	resolveCanaryHttpTimeoutMs,
+	resolveCanaryLogLevel,
 	resolveCanaryResumeMode,
 	selectStratifiedSubset,
 	type RawLongMemEvalEntry,
@@ -217,5 +218,34 @@ describe("MEMONGO_CANARY_* env var contract (Task 1.0)", () => {
 		expect(resolveCanaryResumeMode(undefined)).toBe(false)
 		expect(resolveCanaryResumeMode("true")).toBe(false)
 		expect(resolveCanaryResumeMode("")).toBe(false)
+	})
+})
+
+describe("resolveCanaryLogLevel (Task 1.1)", () => {
+	it("defaults MEMONGO_LOG_LEVEL to warn unless MEMONGO_CANARY_DEBUG=1", () => {
+		expect(
+			resolveCanaryLogLevel({ logLevel: undefined, debug: undefined }),
+		).toBe("warn")
+	})
+
+	it("MEMONGO_CANARY_DEBUG=1 upgrades log level to info", () => {
+		expect(resolveCanaryLogLevel({ logLevel: undefined, debug: "1" })).toBe(
+			"info",
+		)
+	})
+
+	it("honors an explicit MEMONGO_LOG_LEVEL override regardless of debug", () => {
+		expect(resolveCanaryLogLevel({ logLevel: "debug", debug: undefined })).toBe(
+			"debug",
+		)
+		expect(resolveCanaryLogLevel({ logLevel: "error", debug: "1" })).toBe(
+			"error",
+		)
+	})
+
+	it("blank MEMONGO_LOG_LEVEL falls back to the default", () => {
+		expect(resolveCanaryLogLevel({ logLevel: "  ", debug: undefined })).toBe(
+			"warn",
+		)
 	})
 })

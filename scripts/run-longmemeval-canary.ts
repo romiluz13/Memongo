@@ -17,6 +17,22 @@ import http from "node:http"
 import os from "node:os"
 import path from "node:path"
 
+// Bootstrap: set MEMONGO_LOG_LEVEL default to warn (Task 1.1). info during
+// benchmark runs causes PTY backpressure and throttles Node writes. This
+// runs BEFORE any other env read so downstream modules see the right value.
+// Tests for `resolveCanaryLogLevel` cover the precedence rules.
+// See docs/plans/2026-05-11-memongo-mempalace-roadmap-plan.md Task 1.1.
+const __canaryLogLevelBootstrap = (() => {
+	const explicit = process.env.MEMONGO_LOG_LEVEL?.trim()
+	if (!explicit) {
+		process.env.MEMONGO_LOG_LEVEL =
+			process.env.MEMONGO_CANARY_DEBUG === "1" ? "info" : "warn"
+	}
+	return process.env.MEMONGO_LOG_LEVEL
+})()
+// Reference to prevent tree-shaking complaints; the side effect is the point.
+void __canaryLogLevelBootstrap
+
 // ---------------------------------------------------------------------------
 // Types (raw LongMemEval entry shape)
 // ---------------------------------------------------------------------------
@@ -122,6 +138,25 @@ export function resolveCanaryFullMode(envValue: string | undefined): boolean {
 /** MEMONGO_CANARY_RESUME=1 is truthy; every other value is false. */
 export function resolveCanaryResumeMode(envValue: string | undefined): boolean {
 	return envValue === "1"
+}
+
+/**
+ * Task 1.1 — canary default log level is `warn`. `info` during benchmark runs
+ * causes PTY backpressure and throttles Node writes. MEMONGO_CANARY_DEBUG=1
+ * upgrades to `info`; an explicit MEMONGO_LOG_LEVEL always wins.
+ */
+export function resolveCanaryLogLevel(params: {
+	logLevel: string | undefined
+	debug: string | undefined
+}): string {
+	const explicit = params.logLevel?.trim()
+	if (explicit && explicit.length > 0) {
+		return explicit
+	}
+	if (params.debug === "1") {
+		return "info"
+	}
+	return "warn"
 }
 
 // ---------------------------------------------------------------------------
