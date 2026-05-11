@@ -6,6 +6,9 @@ but they must not be presented as official benchmark wins.
 
 ## Benchmark lanes
 
+For the concrete dataset/mode/model matrix and canary ladder, see
+[benchmark-matrix.md](benchmark-matrix.md).
+
 | Lane | Purpose | Required trigger | Publishable? |
 | --- | --- | --- | --- |
 | Official retrieval | LongMemEval / LoCoMo retrieval quality | release candidate, retrieval algorithm changes, benchmark corpus changes | Yes, when dataset, build, MongoDB topology, embeddings, and command are recorded |
@@ -24,6 +27,10 @@ bun run check-types
 bun run test
 bun run build
 ```
+
+Run `bun run build` after source edits and before starting a local API-backed
+canary. The API loads workspace packages through their built `dist` entrypoints,
+so a stale build can hide or invent benchmark behavior.
 
 For benchmark-specific work, include the focused engine/API tests that cover the
 touched lane. At minimum:

@@ -16,7 +16,7 @@
   <a href="./CONTRIBUTING.md">Contributing</a>
 </p>
 
-Memongo is a focused memory platform for AI systems that want durable recall without adding a separate vector database. It ships a MongoDB-backed engine, a stable bridge, an HTTP API, a TypeScript client, MCP tools, AI SDK helpers, and an operator console. The supported runtime core is `apps/api` -> `packages/memory-bridge` -> `packages/memory-engine` -> MongoDB.
+Memongo is a focused memory platform for AI systems that want durable recall without adding a separate vector database. It works for coding agents, Hermes-style personal agents, support agents, research agents, multi-agent teams, apps, and operators. It ships a MongoDB-backed engine, a stable bridge, an HTTP API, a TypeScript client, MCP tools, AI SDK helpers, a Hermes memory provider, and an operator console. The supported runtime core is `apps/api` -> `packages/memory-bridge` -> `packages/memory-engine` -> MongoDB.
 
 ## Supported Surface
 
@@ -30,6 +30,7 @@ Memongo is a focused memory platform for AI systems that want durable recall wit
 | Bridge | `packages/memory-bridge` | Stable facade used by apps |
 | Client SDK | `packages/client` | TypeScript HTTP client |
 | AI tools | `packages/tools` | Vercel AI SDK tool helpers |
+| Hermes provider | `integrations/hermes/memongo` | External Hermes Agent memory provider over the HTTP API |
 | Published barrel | `packages/memongo-memory` | `@memongo/memory` convenience import for engine + bridge |
 | Shared internals | `packages/lib` | Internal types, config, and utilities |
 
@@ -69,6 +70,7 @@ For prompt-ready handoff and synthesis turns, use the context-bundle surface:
 - HTTP: `POST /v1/context-bundle`
 - SDK: `MemongoClient.buildContextBundle()`
 - Tools/MCP: `memongo_build_context_bundle`
+- Hermes: `integrations/hermes/memongo` as a `memory.provider`
 
 For a guided setup, demo flow, and SDK examples, use [apps/docs/quickstart.mdx](./apps/docs/quickstart.mdx) or the platform docs in `docs/platform/`.
 
@@ -170,6 +172,7 @@ Current totals: 29 collections, 84 standard indexes, 14 search indexes, 48 MCP t
 - [Maintainer Map](docs/platform/MAINTAINER-MAP.md)
 - [Package Status](docs/platform/PACKAGE-STATUS.md)
 - [Validation Pack](docs/platform/validation-pack.md)
+- [Hermes Memory Provider](docs/platform/hermes-provider.md)
 - [Benchmark Operating Contract](docs/benchmarks/benchmark-operating-contract.md)
 - [Self-host Runbook](docs/platform/self-host.md)
 - [Publishing](docs/platform/publish.md)
