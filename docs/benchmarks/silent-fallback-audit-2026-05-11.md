@@ -73,6 +73,30 @@ The Task 1.9 forced-failure run surfaced a new silent-fallback suspect:
   benchmark-strict signal because they sit outside the strict hot path (init,
   shutdown, async maintenance) or already re-throw after logging.
 
+## Remfix addendum (2026-05-12)
+
+Phase 1 silent-failure hunter surfaced two additional honesty issues in the
+canary runner itself; both are fixed on `scope-1-harness-reliability` before
+Gate 1 exits.
+
+- **Task 1.2 downgraded to partial.** The benchmark endpoint returns aggregate
+  metrics only (no per-case pass/fail in the response envelope). The bulk
+  fan-out previously wrote `passStatus:"pass"` for every scenario, which
+  would silently swallow a regression and make Task 1.7 resume skip the
+  wrong cases. The runner now writes `completed:false` with
+  `reason:"bulk-api-no-per-case-stream-yet"` for every fan-out entry. True
+  per-case streaming (pass/fail per scenario in the API response) is deferred
+  to Phase 2 Scope #2 as part of the benchmark-runner envelope work.
+- **Task 1.4 narrowed.** The taxonomy's 5xx rule now requires co-occurrence
+  with a voyage/rerank/embedding/LLM/network token. Bare 5xx falls through to
+  `unknown` so bootstrap 500s (e.g. "MongoDB URI required") are no longer
+  misclassified as `model-failure`. `unknown` is not silent — it is the
+  intended escape valve per Task 1.4 precedence rules.
+- **Task 1.7 hardened.** Resume now verifies per-file `completed:true`,
+  `passStatus:"pass"`, JSON parseability, non-empty bytes, questionId match,
+  and `runShapeHash` match. A shape-hash mismatch aborts resume with a clear
+  error instead of silently skipping the wrong scenarios.
+
 ## Ownership Transfer (Phase 2 Scope #3)
 
 This file was created on `scope-1-harness-reliability` in Phase 1. When Scope #3
