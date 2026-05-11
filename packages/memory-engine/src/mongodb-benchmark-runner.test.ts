@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import {
 	buildBenchmarkRunReport,
+	buildCaseDiagnostics,
 	buildMissLedger,
 	buildQueryGovernanceReport,
 	evaluateRankingCase,
@@ -828,5 +829,127 @@ describe("buildMissLedger", () => {
 		expect(ledger).toHaveLength(2)
 		expect(ledger[0].caseId).toBe("worse")
 		expect(ledger[1].caseId).toBe("better")
+	})
+})
+
+describe("buildCaseDiagnostics", () => {
+	it("records top-1 LongMemEval misses even when R@5 is perfect", () => {
+		const evaluation = evaluateRankingCase({
+			caseId: "case-top1",
+			results: [
+				makeResult({
+					path: "distractor",
+					score: 0.95,
+					sessionId: "wrong",
+					sourceEventIds: ["wrong-turn"],
+				}),
+				makeResult({
+					path: "expected",
+					score: 0.91,
+					sessionId: "expected-s1",
+					sourceEventIds: ["turn-1"],
+				}),
+			],
+			latencyMs: 30,
+			relevantSessionIds: ["expected-s1"],
+			relevantTurnIds: ["turn-1"],
+			resolveSessionIds: (result) =>
+				result.sessionId ? [result.sessionId] : [],
+			resolveTurnIds: (result) => result.sourceEventIds ?? [],
+			datasetKind: "longmemeval",
+			questionType: "knowledge-update",
+			traceOptions: { maxCandidates: 10 },
+		})
+
+		expect(evaluation.rAt5).toBe(1)
+		expect(evaluation.longMemEval?.session.recallAllAt1).toBe(0)
+
+		const diagnostics = buildCaseDiagnostics({
+			executions: [evaluation],
+			expectedSessionMap: new Map([["case-top1", ["expected-s1"]]]),
+			expectedTurnMap: new Map([["case-top1", ["turn-1"]]]),
+		})
+
+		expect(diagnostics).toHaveLength(1)
+		expect(diagnostics[0]).toEqual(
+			expect.objectContaining({
+				caseId: "case-top1",
+				issue: "top1-session-and-turn",
+				sessionTop1Found: false,
+				turnTop1Found: false,
+				expectedSessionIds: ["expected-s1"],
+				expectedTurnIds: ["turn-1"],
+				topCandidateSessionIds: ["wrong", "expected-s1"],
+				topCandidateTurnIds: ["wrong-turn", "turn-1"],
+			}),
+		)
+		expect(diagnostics[0].topCandidates[0]).toEqual(
+			expect.objectContaining({
+				rank: 1,
+				sessionId: "wrong",
+				path: "distractor",
+			}),
+		)
+	})
+
+	it("does not record clean top-1 hits", () => {
+		const evaluation = evaluateRankingCase({
+			caseId: "case-clean",
+			results: [makeResult({ path: "expected", score: 0.95, sessionId: "s1" })],
+			latencyMs: 10,
+			relevantSessionIds: ["s1"],
+			resolveSessionIds: (result) =>
+				result.sessionId ? [result.sessionId] : [],
+			datasetKind: "longmemeval",
+			traceOptions: { maxCandidates: 10 },
+		})
+
+		const diagnostics = buildCaseDiagnostics({
+			executions: [evaluation],
+			expectedSessionMap: new Map([["case-clean", ["s1"]]]),
+			expectedTurnMap: new Map(),
+		})
+
+		expect(diagnostics).toHaveLength(0)
+	})
+
+	it("does not record healthy multi-evidence spreads as top-1 misses", () => {
+		const evaluation = evaluateRankingCase({
+			caseId: "case-multi-evidence",
+			results: [
+				makeResult({
+					path: "expected-1",
+					score: 0.95,
+					sessionId: "s1",
+					sourceEventIds: ["turn-1"],
+				}),
+				makeResult({
+					path: "expected-2",
+					score: 0.9,
+					sessionId: "s2",
+					sourceEventIds: ["turn-2"],
+				}),
+			],
+			latencyMs: 10,
+			relevantSessionIds: ["s1", "s2"],
+			relevantTurnIds: ["turn-1", "turn-2"],
+			resolveSessionIds: (result) =>
+				result.sessionId ? [result.sessionId] : [],
+			resolveTurnIds: (result) => result.sourceEventIds ?? [],
+			datasetKind: "longmemeval",
+			traceOptions: { maxCandidates: 10 },
+		})
+
+		expect(evaluation.longMemEval?.session.recallAnyAt1).toBe(1)
+		expect(evaluation.longMemEval?.session.recallAllAt1).toBe(0)
+		expect(evaluation.longMemEval?.session.recallAllAt3).toBe(1)
+
+		const diagnostics = buildCaseDiagnostics({
+			executions: [evaluation],
+			expectedSessionMap: new Map([["case-multi-evidence", ["s1", "s2"]]]),
+			expectedTurnMap: new Map([["case-multi-evidence", ["turn-1", "turn-2"]]]),
+		})
+
+		expect(diagnostics).toHaveLength(0)
 	})
 })

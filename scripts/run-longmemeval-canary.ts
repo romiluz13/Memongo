@@ -40,6 +40,8 @@ type CanaryArtifact = {
 	datasetPath: string
 	datasetHash: string
 	casesPerType: number
+	totalCaseLimit?: number
+	selectedQuestionIdFilter?: string[]
 	totalEvaluations: number
 	selectedQuestionIds: string[]
 	questionTypeBreakdown: Record<string, number>
@@ -52,7 +54,10 @@ type CanaryArtifact = {
 // Configuration
 // ---------------------------------------------------------------------------
 
-const CASES_PER_TYPE = 8
+const CASES_PER_TYPE = Math.max(
+	1,
+	Math.floor(Number(process.env.MEMONGO_CANARY_CASES_PER_TYPE?.trim()) || 8),
+)
 
 const repoRoot = process.cwd()
 const workspaceDir =
@@ -78,6 +83,14 @@ const maxResults = Number(
 	process.env.MEMONGO_BENCHMARK_MAX_RESULTS?.trim() || "50",
 )
 const dryRun = process.env.MEMONGO_CANARY_DRY_RUN === "1"
+const totalCaseLimitRaw = process.env.MEMONGO_CANARY_TOTAL_CASES?.trim()
+const totalCaseLimit = totalCaseLimitRaw
+	? Math.max(1, Math.floor(Number(totalCaseLimitRaw) || 1))
+	: undefined
+const selectedQuestionIdFilter =
+	process.env.MEMONGO_CANARY_QUESTION_IDS?.split(",")
+		.map((id) => id.trim())
+		.filter(Boolean) ?? []
 
 // ---------------------------------------------------------------------------
 // Stratified selection (exported for testability)
@@ -86,11 +99,28 @@ const dryRun = process.env.MEMONGO_CANARY_DRY_RUN === "1"
 export function selectStratifiedSubset(
 	entries: RawLongMemEvalEntry[],
 	casesPerType: number,
+	options: {
+		totalCaseLimit?: number
+		questionIds?: string[]
+	} = {},
 ): {
 	selected: RawLongMemEvalEntry[]
 	selectedQuestionIds: string[]
 	breakdown: Record<string, number>
 } {
+	if (options.questionIds && options.questionIds.length > 0) {
+		const requested = new Set(options.questionIds)
+		const selected = entries.filter((entry) => requested.has(entry.question_id))
+		const found = new Set(selected.map((entry) => entry.question_id))
+		const missing = [...requested].filter((id) => !found.has(id))
+		if (missing.length > 0) {
+			throw new Error(
+				`Requested question_id(s) not found: ${missing.join(", ")}`,
+			)
+		}
+		return summarizeSelectedEntries(selected)
+	}
+
 	// Group by question_type
 	const byType = new Map<string, RawLongMemEvalEntry[]>()
 	for (const entry of entries) {
@@ -117,20 +147,54 @@ export function selectStratifiedSubset(
 		breakdown[qt] = picked.length
 	}
 
-	return { selected, selectedQuestionIds, breakdown }
+	return summarizeSelectedEntries(
+		options.totalCaseLimit
+			? selected.slice(0, options.totalCaseLimit)
+			: selected,
+	)
+}
+
+function summarizeSelectedEntries(entries: RawLongMemEvalEntry[]): {
+	selected: RawLongMemEvalEntry[]
+	selectedQuestionIds: string[]
+	breakdown: Record<string, number>
+} {
+	const selectedQuestionIds: string[] = []
+	const breakdown: Record<string, number> = {}
+	for (const entry of entries) {
+		selectedQuestionIds.push(entry.question_id)
+		const qt = entry.question_type?.trim() || "unknown"
+		breakdown[qt] = (breakdown[qt] ?? 0) + 1
+	}
+	return { selected: entries, selectedQuestionIds, breakdown }
 }
 
 // ---------------------------------------------------------------------------
-// HTTP helper (no-timeout, reused from the full runner pattern)
+// HTTP helper
 // ---------------------------------------------------------------------------
 
-function postJsonNoTimeout(params: {
+export function resolveCanaryHttpTimeoutMs(
+	envValue: string | undefined,
+): number {
+	if (envValue === undefined || envValue.trim() === "") return 20 * 60 * 1000
+	const parsed = Number(envValue)
+	if (!Number.isFinite(parsed) || parsed < 0) {
+		throw new Error(
+			`MEMONGO_CANARY_HTTP_TIMEOUT_MS must be a non-negative number, got ${envValue}`,
+		)
+	}
+	return Math.floor(parsed)
+}
+
+function postJson(params: {
 	url: string
 	payload: unknown
+	timeoutMs: number
 }): Promise<{ statusCode: number; body: string }> {
 	const body = JSON.stringify(params.payload)
 	const parsed = new URL(params.url)
 	return new Promise((resolve, reject) => {
+		let settled = false
 		const req = http.request(
 			{
 				hostname: parsed.hostname,
@@ -141,12 +205,13 @@ function postJsonNoTimeout(params: {
 					"Content-Type": "application/json",
 					"Content-Length": Buffer.byteLength(body),
 				},
-				timeout: 0,
+				timeout: params.timeoutMs,
 			},
 			(res) => {
 				const chunks: Buffer[] = []
 				res.on("data", (chunk: Buffer) => chunks.push(chunk))
 				res.on("end", () => {
+					settled = true
 					resolve({
 						statusCode: res.statusCode ?? 0,
 						body: Buffer.concat(chunks).toString("utf8"),
@@ -154,7 +219,20 @@ function postJsonNoTimeout(params: {
 				})
 			},
 		)
-		req.on("error", reject)
+		req.on("timeout", () => {
+			if (settled) return
+			settled = true
+			req.destroy(
+				new Error(
+					`canary benchmark request timed out after ${params.timeoutMs}ms`,
+				),
+			)
+		})
+		req.on("error", (err) => {
+			if (settled) return
+			settled = true
+			reject(err)
+		})
 		req.write(body)
 		req.end()
 	})
@@ -193,6 +271,10 @@ async function main() {
 	const { selected, selectedQuestionIds, breakdown } = selectStratifiedSubset(
 		entries,
 		CASES_PER_TYPE,
+		{
+			totalCaseLimit,
+			questionIds: selectedQuestionIdFilter,
+		},
 	)
 
 	console.log(
@@ -215,6 +297,10 @@ async function main() {
 		datasetPath,
 		datasetHash,
 		casesPerType: CASES_PER_TYPE,
+		...(totalCaseLimit ? { totalCaseLimit } : {}),
+		...(selectedQuestionIdFilter.length > 0
+			? { selectedQuestionIdFilter }
+			: {}),
 		totalEvaluations: selectedQuestionIds.length,
 		selectedQuestionIds,
 		questionTypeBreakdown: breakdown,
@@ -234,8 +320,11 @@ async function main() {
 	console.log(
 		`[canary] posting benchmark to ${baseUrl}/v1/admin/relevance/benchmark`,
 	)
-	const response = await postJsonNoTimeout({
+	const response = await postJson({
 		url: `${baseUrl}/v1/admin/relevance/benchmark`,
+		timeoutMs: resolveCanaryHttpTimeoutMs(
+			process.env.MEMONGO_CANARY_HTTP_TIMEOUT_MS,
+		),
 		payload: {
 			agentId,
 			datasetPath: subsetPath,

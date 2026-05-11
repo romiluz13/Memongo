@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest"
 import {
+	resolveCanaryHttpTimeoutMs,
 	selectStratifiedSubset,
 	type RawLongMemEvalEntry,
 } from "./run-longmemeval-canary.js"
@@ -64,6 +65,48 @@ describe("selectStratifiedSubset", () => {
 		expect(Object.keys(breakdown)).toHaveLength(0)
 	})
 
+	it("limits the total selected cases after stratified selection", () => {
+		const entries = [
+			makeEntry("a-001", "alpha"),
+			makeEntry("a-002", "alpha"),
+			makeEntry("b-001", "beta"),
+		]
+
+		const { selectedQuestionIds, breakdown } = selectStratifiedSubset(
+			entries,
+			2,
+			{ totalCaseLimit: 1 },
+		)
+
+		expect(selectedQuestionIds).toEqual(["a-001"])
+		expect(breakdown).toEqual({ alpha: 1 })
+	})
+
+	it("selects exact question IDs for targeted replay", () => {
+		const entries = [
+			makeEntry("q001", "alpha"),
+			makeEntry("q002", "beta"),
+			makeEntry("q003", "beta"),
+		]
+
+		const { selectedQuestionIds, breakdown } = selectStratifiedSubset(
+			entries,
+			2,
+			{ questionIds: ["q003", "q001"] },
+		)
+
+		expect(selectedQuestionIds).toEqual(["q001", "q003"])
+		expect(breakdown).toEqual({ alpha: 1, beta: 1 })
+	})
+
+	it("fails targeted replay when a question ID is missing", () => {
+		expect(() =>
+			selectStratifiedSubset([makeEntry("q001", "alpha")], 2, {
+				questionIds: ["q002"],
+			}),
+		).toThrow("Requested question_id")
+	})
+
 	it("groups entries with missing question_type under unknown", () => {
 		const entries = [
 			{
@@ -107,5 +150,25 @@ describe("selectStratifiedSubset", () => {
 		// Same input always produces same output
 		const { selectedQuestionIds: second } = selectStratifiedSubset(entries, 8)
 		expect(second).toEqual(selectedQuestionIds)
+	})
+})
+
+describe("resolveCanaryHttpTimeoutMs", () => {
+	it("defaults to a bounded benchmark request timeout", () => {
+		expect(resolveCanaryHttpTimeoutMs(undefined)).toBe(20 * 60 * 1000)
+	})
+
+	it("accepts an explicit non-negative timeout", () => {
+		expect(resolveCanaryHttpTimeoutMs("30000")).toBe(30_000)
+		expect(resolveCanaryHttpTimeoutMs("0")).toBe(0)
+	})
+
+	it("rejects invalid timeout values", () => {
+		expect(() => resolveCanaryHttpTimeoutMs("-1")).toThrow(
+			"MEMONGO_CANARY_HTTP_TIMEOUT_MS",
+		)
+		expect(() => resolveCanaryHttpTimeoutMs("forever")).toThrow(
+			"MEMONGO_CANARY_HTTP_TIMEOUT_MS",
+		)
 	})
 })

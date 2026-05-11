@@ -26,6 +26,7 @@ import {
 } from "./mongodb-benchmark-harness.js"
 import { emitTelemetry } from "./mongodb-telemetry.js"
 import { checkCache, writeCache } from "./mongodb-query-cache.js"
+import { crossEncoderRerank } from "./mongodb-reranker.js"
 import type { MemorySearchResult } from "./types.js"
 
 // ---------------------------------------------------------------------------
@@ -97,11 +98,27 @@ vi.mock("./mongodb-schema.js", () => ({
 	ensureSchemaValidation: vi.fn(),
 	ensureSearchIndexes: vi.fn(),
 	ensureStandardIndexes: vi.fn(),
+	waitForSearchCapabilities: vi.fn(),
+	waitForSearchIndexesQueryable: vi.fn(),
+	resolveSearchIndexReadinessTiming: vi.fn(() => ({
+		timeoutMs: 60_000,
+		pollMs: 1_000,
+	})),
+	getExpectedSearchIndexTargets: vi.fn(() => []),
+	sessionChunksCollection: vi.fn(),
 }))
 
 vi.mock("./mongodb-query-cache.js", () => ({
 	checkCache: vi.fn(),
 	writeCache: vi.fn(),
+}))
+
+vi.mock("./mongodb-reranker.js", () => ({
+	crossEncoderRerank: vi.fn(async ({ results }) => ({
+		results,
+		reranked: false,
+		latencyMs: 0,
+	})),
 }))
 
 vi.mock("./mongodb-lane-coverage.js", () => ({
@@ -320,6 +337,110 @@ describe("benchmarkIngest", () => {
 		} finally {
 			await rm(workspaceDir, { recursive: true, force: true })
 			await rm(outsideDir, { recursive: true, force: true })
+		}
+	})
+})
+
+describe("benchmark event search convergence", () => {
+	beforeEach(() => {
+		vi.clearAllMocks()
+	})
+
+	it("bounds each MongoDB Search convergence probe with maxTimeMS", async () => {
+		const previousStrict = process.env.MEMONGO_BENCHMARK_STRICT
+		const previousTimeout =
+			process.env.MEMONGO_BENCHMARK_EVENT_SEARCH_SETTLE_TIMEOUT_MS
+		const previousProbeTimeout =
+			process.env.MEMONGO_BENCHMARK_EVENT_SEARCH_PROBE_MAX_TIME_MS
+		process.env.MEMONGO_BENCHMARK_STRICT = "1"
+		process.env.MEMONGO_BENCHMARK_EVENT_SEARCH_SETTLE_TIMEOUT_MS = "60000"
+		process.env.MEMONGO_BENCHMARK_EVENT_SEARCH_PROBE_MAX_TIME_MS = "1234"
+		try {
+			const aggregate = vi.fn().mockReturnValue({
+				toArray: vi.fn().mockResolvedValue([{ count: 2 }]),
+			})
+			vi.mocked(eventsCollection).mockReturnValue({
+				countDocuments: vi.fn().mockResolvedValue(2),
+				aggregate,
+			} as never)
+
+			const manager = {
+				db: fakeDb,
+				prefix: fakePrefix,
+				capabilities: {
+					textSearch: true,
+				},
+			} as unknown as MongoDBMemoryManager
+
+			await (
+				MongoDBMemoryManager.prototype as unknown as {
+					waitForBenchmarkEventSearchConvergence: (
+						this: MongoDBMemoryManager,
+						agentId: string,
+					) => Promise<void>
+				}
+			).waitForBenchmarkEventSearchConvergence.call(manager, "agent-1")
+
+			expect(aggregate).toHaveBeenCalledWith(expect.any(Array), {
+				maxTimeMS: 1234,
+				signal: expect.any(AbortSignal),
+			})
+		} finally {
+			if (previousStrict === undefined) {
+				delete process.env.MEMONGO_BENCHMARK_STRICT
+			} else {
+				process.env.MEMONGO_BENCHMARK_STRICT = previousStrict
+			}
+			if (previousTimeout === undefined) {
+				delete process.env.MEMONGO_BENCHMARK_EVENT_SEARCH_SETTLE_TIMEOUT_MS
+			} else {
+				process.env.MEMONGO_BENCHMARK_EVENT_SEARCH_SETTLE_TIMEOUT_MS =
+					previousTimeout
+			}
+			if (previousProbeTimeout === undefined) {
+				delete process.env.MEMONGO_BENCHMARK_EVENT_SEARCH_PROBE_MAX_TIME_MS
+			} else {
+				process.env.MEMONGO_BENCHMARK_EVENT_SEARCH_PROBE_MAX_TIME_MS =
+					previousProbeTimeout
+			}
+		}
+	})
+})
+
+describe("benchmark scenario queue settling", () => {
+	beforeEach(() => {
+		vi.clearAllMocks()
+	})
+
+	it("fails fast when a benchmark scenario queue does not settle", async () => {
+		const previousTimeout =
+			process.env.MEMONGO_BENCHMARK_QUEUE_SETTLE_TIMEOUT_MS
+		process.env.MEMONGO_BENCHMARK_QUEUE_SETTLE_TIMEOUT_MS = "1"
+		try {
+			const manager = {
+				agentId: "benchmark-agent-1",
+				writeQueue: new Promise<void>(() => {}),
+				derivationQueue: Promise.resolve(),
+			} as unknown as MongoDBMemoryManager
+
+			await expect(
+				(
+					MongoDBMemoryManager.prototype as unknown as {
+						settleBenchmarkScenarioManager: (
+							this: MongoDBMemoryManager,
+							manager: MongoDBMemoryManager,
+						) => Promise<void>
+					}
+				).settleBenchmarkScenarioManager.call(manager, manager),
+			).rejects.toThrow(
+				"benchmark scenario manager writeQueue settle timed out after 1ms",
+			)
+		} finally {
+			if (previousTimeout === undefined) {
+				delete process.env.MEMONGO_BENCHMARK_QUEUE_SETTLE_TIMEOUT_MS
+			} else {
+				process.env.MEMONGO_BENCHMARK_QUEUE_SETTLE_TIMEOUT_MS = previousTimeout
+			}
 		}
 	})
 })
@@ -1038,6 +1159,8 @@ const {
 	relationsCollection,
 	episodesCollection,
 	proceduresCollection,
+	chunksCollection,
+	sessionChunksCollection,
 	relevanceRunsCollection,
 } = await import("./mongodb-schema.js")
 
@@ -1168,6 +1291,11 @@ describe("writeEventAndProject", () => {
 describe("searchV2", () => {
 	beforeEach(() => {
 		vi.clearAllMocks()
+		vi.mocked(crossEncoderRerank).mockImplementation(async ({ results }) => ({
+			results,
+			reranked: false,
+			latencyMs: 0,
+		}))
 	})
 
 	it("uses retrieval planner and executes paths, returning results + metadata", async () => {
@@ -1512,6 +1640,277 @@ describe("searchV2", () => {
 		// Post-retrieval scoring with questionDate should execute without error
 		// and return results (the scoring is ranking-only)
 		expect(result.results.length).toBeGreaterThan(0)
+	})
+
+	it("uses MongoDB Search temporal coverage lane for temporal questions", async () => {
+		const previousMode = process.env.MEMONGO_BENCHMARK_TEMPORAL_COVERAGE_MODE
+		process.env.MEMONGO_BENCHMARK_TEMPORAL_COVERAGE_MODE = "enabled"
+		try {
+			vi.mocked(planRetrieval).mockReturnValue({
+				paths: ["raw-window"],
+				confidence: "high",
+				reasoning: "temporal coverage query",
+			})
+			vi.mocked(crossEncoderRerank).mockImplementation(async ({ results }) => ({
+				results: [...results].toReversed(),
+				reranked: true,
+				latencyMs: 1,
+			}))
+
+			vi.mocked(getEventsByTimeRange).mockResolvedValue([
+				{
+					_id: "evt-direct",
+					eventId: "evt-direct",
+					body: "I attended a guided tour at the Natural History Museum yesterday with my dad.",
+					role: "user",
+					timestamp: new Date("2023-02-18T04:22:00Z"),
+					agentId: "agent-1",
+					scope: "agent",
+					scopeRef: "agent:agent-1",
+					sessionId: "answer_f4ea84fb_1",
+					channel: "default",
+				},
+			])
+
+			const aggregate = vi.fn().mockReturnValue({
+				toArray: vi.fn().mockResolvedValue([
+					{
+						eventId: "evt-history",
+						body: "I learned about Petra in a lecture at the History Museum about ancient civilizations this month.",
+						sessionId: "answer_f4ea84fb_2",
+						timestamp: new Date("2023-01-11T10:24:00Z"),
+						scope: "agent",
+						scopeRef: "agent:agent-1",
+						score: 0.8,
+					},
+					{
+						eventId: "evt-science",
+						body: "I went to the Science Museum with a friend who is a chemistry professor.",
+						sessionId: "answer_f4ea84fb_3",
+						timestamp: new Date("2022-10-22T18:38:00Z"),
+						scope: "agent",
+						scopeRef: "agent:agent-1",
+						score: 0.7,
+					},
+				]),
+			})
+			const find = vi.fn().mockReturnValue({
+				toArray: vi.fn().mockResolvedValue([
+					{
+						eventId: "evt-history",
+						body: "I learned about Petra in a lecture at the History Museum about ancient civilizations this month.",
+						sessionId: "answer_f4ea84fb_2",
+						timestamp: new Date("2023-01-11T10:24:00Z"),
+						scope: "agent",
+						scopeRef: "agent:agent-1",
+					},
+					{
+						eventId: "evt-science",
+						body: "I went to the Science Museum with a friend who is a chemistry professor.",
+						sessionId: "answer_f4ea84fb_3",
+						timestamp: new Date("2022-10-22T18:38:00Z"),
+						scope: "agent",
+						scopeRef: "agent:agent-1",
+					},
+				]),
+			})
+			vi.mocked(eventsCollection).mockReturnValue({
+				aggregate,
+				find,
+			} as never)
+
+			const questionDate = new Date("2023-03-25T17:18:00Z")
+			const result = await searchV2(
+				fakeDb,
+				fakePrefix,
+				"How many months have passed since I last visited a museum with a friend?",
+				"agent-1",
+				{
+					availablePaths: new Set(["raw-window"]),
+					maxResults: 10,
+					searchOptions: {
+						allowHybridBackstop: false,
+						questionDate,
+						rerankConfig: {
+							enabled: true,
+							model: "rerank-2.5-lite",
+							topN: 10,
+							minScore: 0,
+							voyageApiKey: "test-key",
+						},
+					},
+				},
+			)
+
+			expect(aggregate).toHaveBeenCalled()
+			expect(find).toHaveBeenCalledOnce()
+			const pipeline = aggregate.mock.calls
+				.map((call) => call[0] as Record<string, any>[])
+				.find(
+					(candidate) =>
+						candidate[0]?.$search?.index === `${fakePrefix}events_text` &&
+						candidate[0]?.$search?.compound?.should?.some(
+							(clause: Record<string, any>) => clause.near,
+						),
+				)
+			expect(pipeline).toBeDefined()
+			const searchStage = pipeline[0]?.$search
+			expect(searchStage.index).toBe(`${fakePrefix}events_text`)
+			expect(searchStage.compound.must[0].text.query).toContain("museum")
+			expect(searchStage.compound.filter).toContainEqual({
+				range: { path: "timestamp", lte: questionDate },
+			})
+			const nearClause = searchStage.compound.should.find(
+				(clause: Record<string, any>) => clause.near,
+			)
+			expect(nearClause?.near).toMatchObject({
+				path: "timestamp",
+				origin: questionDate,
+			})
+			expect(crossEncoderRerank).toHaveBeenCalledOnce()
+			const rerankInput = vi.mocked(crossEncoderRerank).mock.calls[0]?.[0] as
+				| { results: MemorySearchResult[] }
+				| undefined
+			expect(
+				rerankInput?.results.some(
+					(entry) => entry.provenance?.temporalTimeline === true,
+				),
+			).toBe(false)
+			const timeline = result.results.find(
+				(entry) => entry.provenance?.temporalTimeline === true,
+			)
+			expect(timeline?.provenance?.temporalTimeline).toBe(true)
+			expect(timeline?.sourceEventIds).toEqual(
+				expect.arrayContaining(["evt-history", "evt-science"]),
+			)
+			expect(result.results[0]?.provenance?.temporalTimeline).not.toBe(true)
+			expect(result.results.map((entry) => entry.sessionId)).toContain(
+				"answer_f4ea84fb_2",
+			)
+			expect(result.results.map((entry) => entry.sessionId)).toContain(
+				"answer_f4ea84fb_3",
+			)
+		} finally {
+			if (previousMode === undefined) {
+				delete process.env.MEMONGO_BENCHMARK_TEMPORAL_COVERAGE_MODE
+			} else {
+				process.env.MEMONGO_BENCHMARK_TEMPORAL_COVERAGE_MODE = previousMode
+			}
+		}
+	})
+
+	it("boosts user-authored compatibility evidence for recommendation memory queries", async () => {
+		const previousMode = process.env.MEMONGO_BENCHMARK_TURN_PRECISION_MODE
+		process.env.MEMONGO_BENCHMARK_TURN_PRECISION_MODE = "enabled"
+		try {
+			vi.mocked(planRetrieval).mockReturnValue({
+				paths: ["raw-window"],
+				confidence: "high",
+				reasoning: "recommendation memory query",
+			})
+			vi.mocked(getEventsByTimeRange).mockResolvedValue([
+				{
+					_id: "evt-seed",
+					eventId: "evt-seed",
+					body: "Photography setup context for Sony A7R IV accessories.",
+					role: "user",
+					timestamp: new Date("2023-05-30T10:00:00Z"),
+					agentId: "agent-1",
+					scope: "agent",
+					scopeRef: "agent:agent-1",
+					sessionId: "photo-session",
+					channel: "default",
+				},
+			])
+			const aggregate = vi.fn().mockReturnValue({
+				toArray: vi.fn().mockResolvedValue([
+					{
+						eventId: "evt-user-distractor",
+						body: "What are good external battery packs for my Sony A7R IV?",
+						role: "user",
+						sessionId: "photo-session",
+						timestamp: new Date("2023-05-30T10:01:00Z"),
+						scope: "agent",
+						scopeRef: "agent:agent-1",
+						score: 0.9,
+					},
+					{
+						eventId: "evt-user-compatible",
+						body: "I'm looking to upgrade my camera flash. Can you recommend options compatible with my Sony A7R IV?",
+						role: "user",
+						sessionId: "photo-session",
+						timestamp: new Date("2023-05-30T10:02:00Z"),
+						scope: "agent",
+						scopeRef: "agent:agent-1",
+						score: 0.8,
+					},
+					{
+						eventId: "evt-assistant-recommendation",
+						body: "The Godox V1 comes with a soft case, but a padded pouch would complement your photography setup.",
+						role: "assistant",
+						sessionId: "photo-session",
+						timestamp: new Date("2023-05-30T10:03:00Z"),
+						scope: "agent",
+						scopeRef: "agent:agent-1",
+						score: 0.7,
+					},
+				]),
+			})
+			vi.mocked(crossEncoderRerank).mockImplementation(async ({ results }) => ({
+				results: results
+					.map((entry) => ({
+						...entry,
+						score:
+							entry.path === "events/evt-assistant-recommendation"
+								? 0.63
+								: entry.path === "events/evt-user-compatible"
+									? 0.57
+									: 0.52,
+					}))
+					.toSorted((left, right) => right.score - left.score),
+				reranked: true,
+				latencyMs: 1,
+			}))
+			vi.mocked(eventsCollection).mockReturnValue({ aggregate } as never)
+
+			const result = await searchV2(
+				fakeDb,
+				fakePrefix,
+				"Can you suggest accessories that complement my photography setup?",
+				"agent-1",
+				{
+					availablePaths: new Set(["raw-window"]),
+					searchOptions: {
+						allowHybridBackstop: false,
+						capabilities: {
+							vectorSearch: false,
+							textSearch: true,
+							scoreFusion: false,
+							rankFusion: false,
+						},
+						scope: "agent",
+						scopeRef: "agent:agent-1",
+						rerankConfig: {
+							enabled: true,
+							model: "rerank-2.5-lite",
+							topN: 10,
+							minScore: 0,
+							voyageApiKey: "test-key",
+						},
+					},
+				},
+			)
+
+			expect(crossEncoderRerank).toHaveBeenCalledOnce()
+			expect(result.results[0]?.path).toBe("events/evt-user-compatible")
+			expect(result.results[0]?.provenance?.eventRole).toBe("user")
+		} finally {
+			if (previousMode === undefined) {
+				delete process.env.MEMONGO_BENCHMARK_TURN_PRECISION_MODE
+			} else {
+				process.env.MEMONGO_BENCHMARK_TURN_PRECISION_MODE = previousMode
+			}
+		}
 	})
 })
 
@@ -2240,5 +2639,111 @@ describe("scope-safe cache writes", () => {
 				scopeRef: "session:sess-3",
 			}),
 		)
+	})
+
+	it("keeps default agent searches out of workspace bridge chunks", async () => {
+		vi.mocked(checkCache).mockResolvedValue({
+			hit: false,
+			tier: undefined,
+			results: [],
+		} as never)
+		vi.mocked(planRetrieval).mockReturnValue({
+			paths: ["hybrid"],
+			confidence: "high",
+			reasoning: "test bridge isolation",
+		})
+		const chunksAggregate = vi.fn().mockReturnValue({
+			toArray: vi.fn().mockResolvedValue([
+				{
+					path: "event:evt-1",
+					text: "agent scoped answer",
+					source: "conversation",
+					scope: "agent",
+					scopeRef: "agent:agent-1",
+					score: 0.9,
+				},
+			]),
+		})
+		vi.mocked(chunksCollection).mockReturnValue({
+			aggregate: chunksAggregate,
+		} as never)
+
+		const manager = buildMockManager({
+			capabilities: {
+				vectorSearch: false,
+				textSearch: true,
+				rankFusion: false,
+				scoreFusion: false,
+			},
+		})
+		await manager.search("agent scoped answer")
+
+		expect(chunksAggregate).toHaveBeenCalledOnce()
+		const pipeline = chunksAggregate.mock.calls[0]![0] as Record<string, any>[]
+		expect(pipeline[0]?.$search?.compound?.filter).toEqual(
+			expect.arrayContaining([
+				{ equals: { path: "scope", value: "agent" } },
+				{ equals: { path: "scopeRef", value: "agent:agent-1" } },
+			]),
+		)
+	})
+
+	it("filters session_chunks by scope and scopeRef even for agent scope", async () => {
+		const previousMode = process.env.MEMONGO_SESSION_EVIDENCE_MODE
+		process.env.MEMONGO_SESSION_EVIDENCE_MODE = "B"
+		try {
+			vi.mocked(planRetrieval).mockReturnValue({
+				paths: ["hybrid"],
+				confidence: "high",
+				reasoning: "test session chunk isolation",
+			})
+			vi.mocked(chunksCollection).mockReturnValue({
+				aggregate: vi.fn().mockReturnValue({
+					toArray: vi.fn().mockResolvedValue([]),
+				}),
+			} as never)
+			const sessionAggregate = vi.fn().mockReturnValue({
+				toArray: vi.fn().mockResolvedValue([]),
+			})
+			vi.mocked(sessionChunksCollection).mockReturnValue({
+				aggregate: sessionAggregate,
+			} as never)
+
+			await searchV2(fakeDb, fakePrefix, "agent scoped answer", "agent-1", {
+				availablePaths: new Set(["hybrid"]),
+				searchOptions: {
+					scope: "agent",
+					scopeRef: "agent:agent-1",
+					capabilities: {
+						vectorSearch: false,
+						textSearch: true,
+						rankFusion: false,
+						scoreFusion: false,
+					},
+					fusionMethod: "rankFusion",
+					embeddingMode: "automated",
+					allowHybridBackstop: false,
+				},
+			})
+
+			expect(sessionAggregate).toHaveBeenCalled()
+			const pipeline = sessionAggregate.mock.calls
+				.map((call) => call[0] as Record<string, any>[])
+				.find((candidate) => candidate[0]?.$search)
+			expect(pipeline).toBeDefined()
+			expect(pipeline![0]?.$search?.compound?.filter).toEqual(
+				expect.arrayContaining([
+					{ equals: { path: "agentId", value: "agent-1" } },
+					{ equals: { path: "scope", value: "agent" } },
+					{ equals: { path: "scopeRef", value: "agent:agent-1" } },
+				]),
+			)
+		} finally {
+			if (previousMode === undefined) {
+				delete process.env.MEMONGO_SESSION_EVIDENCE_MODE
+			} else {
+				process.env.MEMONGO_SESSION_EVIDENCE_MODE = previousMode
+			}
+		}
 	})
 })
