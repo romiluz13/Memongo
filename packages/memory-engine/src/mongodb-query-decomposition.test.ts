@@ -214,6 +214,34 @@ describe("mergeMultiQueryResults", () => {
 		expect(merged.filter((r) => r.path === "doc-x")).toHaveLength(1)
 	})
 
+	test("does not collapse distinct chunk results with empty paths", () => {
+		const resultSets = [
+			[
+				{
+					path: "",
+					canonicalId: "userfact-chunk/session-a",
+					score: 0.9,
+					snippet: "visited the science museum with a friend",
+				},
+			],
+			[
+				{
+					path: "",
+					canonicalId: "qa-chunk/session-b",
+					score: 0.8,
+					snippet: "planning a trip to the british museum",
+				},
+			],
+		]
+
+		const merged = mergeMultiQueryResults(resultSets, 10)
+
+		expect(merged.map((result) => result.canonicalId)).toEqual([
+			"userfact-chunk/session-a",
+			"qa-chunk/session-b",
+		])
+	})
+
 	test("returns empty array for empty input", () => {
 		expect(mergeMultiQueryResults([], 5)).toEqual([])
 	})
@@ -230,5 +258,51 @@ describe("mergeMultiQueryResults", () => {
 		const merged = mergeMultiQueryResults(resultSets, 2)
 
 		expect(merged).toHaveLength(2)
+	})
+
+	test("preserves temporal timeline bundles across decomposed-query fusion", () => {
+		const resultSets = [
+			[
+				{
+					path: "temporal-coverage/a",
+					score: 8,
+					snippet: "timeline",
+					sourceEventIds: ["evt-1", "evt-2"],
+					provenance: {
+						temporalTimeline: true,
+						sessionIds: ["session-a"],
+					},
+				},
+				{ path: "procedure-a", score: 0.8, snippet: "procedure a" },
+			],
+			[
+				{
+					path: "temporal-coverage/b",
+					score: 9,
+					snippet: "timeline from another sub-query",
+					sourceEventIds: ["evt-3"],
+					provenance: {
+						temporalTimeline: true,
+						sessionIds: ["session-b"],
+					},
+				},
+				{ path: "procedure-a", score: 0.95, snippet: "procedure a" },
+				{ path: "procedure-b", score: 0.7, snippet: "procedure b" },
+			],
+			[
+				{ path: "procedure-a", score: 0.96, snippet: "procedure a" },
+				{ path: "procedure-c", score: 0.7, snippet: "procedure c" },
+			],
+		]
+
+		const merged = mergeMultiQueryResults(resultSets, 5)
+
+		expect(merged[0].path).toBe("temporal-coverage/b")
+		expect(merged[0].sourceEventIds).toEqual(["evt-3", "evt-1", "evt-2"])
+		expect(merged[0].provenance).toEqual({
+			temporalTimeline: true,
+			sessionIds: ["session-b", "session-a"],
+		})
+		expect(merged[1].path).toBe("procedure-a")
 	})
 })

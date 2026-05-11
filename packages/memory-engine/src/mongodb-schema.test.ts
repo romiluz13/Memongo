@@ -13,6 +13,7 @@ import {
 	metaCollection,
 	getExpectedSearchIndexTargets,
 	isSearchIndexQueryable,
+	waitForSearchCapabilities,
 	kbCollection,
 	kbChunksCollection,
 	structuredMemCollection,
@@ -27,6 +28,7 @@ import {
 	ingestRunsCollection,
 	projectionRunsCollection,
 	queryCacheCollection,
+	resolveSearchIndexReadinessTiming,
 	telemetryCollection,
 	accessEventsCollection,
 	sessionChunksCollection,
@@ -1060,7 +1062,41 @@ describe("search index readiness helpers", () => {
 		expect(result.failed).toEqual(["test_chunks_vector"])
 	})
 
-	it("returns the full target list for atlas-local-preview", () => {
+	it("treats non-queryable building indexes as pending, not failed", async () => {
+		const db = mockDb()
+		const chunks = db.collection("test_chunks") as unknown as {
+			aggregate: ReturnType<typeof vi.fn>
+		}
+		chunks.aggregate.mockImplementation(() => ({
+			toArray: async () => [
+				{
+					name: "test_chunks_vector",
+					status: "BUILDING",
+					queryable: false,
+					statusDetail: [
+						{
+							mainIndex: { status: "BUILDING", queryable: false },
+							definitions: [{ status: "BUILDING", queryable: false }],
+						},
+					],
+				},
+			],
+		}))
+
+		const result = await waitForSearchIndexesQueryable(
+			db.collection("test_chunks"),
+			{
+				indexNames: ["test_chunks_vector"],
+				timeoutMs: 1,
+				pollMs: 0,
+			},
+		)
+		expect(result.ready).toBe(false)
+		expect(result.pending).toEqual(["test_chunks_vector"])
+		expect(result.failed).toEqual([])
+	})
+
+	it("returns the benchmark-required target list for atlas-local-preview", () => {
 		expect(
 			getExpectedSearchIndexTargets("test_", "atlas-local-preview"),
 		).toEqual([
@@ -1085,14 +1121,70 @@ describe("search index readiness helpers", () => {
 				indexNames: ["test_events_text", "test_events_vector"],
 			},
 			{
-				collectionName: "test_query_cache",
-				indexNames: ["test_query_cache_vector"],
-			},
-			{
 				collectionName: "test_session_chunks",
 				indexNames: ["test_session_chunks_text", "test_session_chunks_vector"],
 			},
 		])
+	})
+
+	it("uses a smaller LongMemEval search-index target list when requested", () => {
+		const previous = process.env.MEMONGO_BENCHMARK_SEARCH_INDEX_PROFILE
+		process.env.MEMONGO_BENCHMARK_SEARCH_INDEX_PROFILE = "longmemeval"
+		try {
+			expect(
+				getExpectedSearchIndexTargets("test_", "atlas-local-preview"),
+			).toEqual([
+				{
+					collectionName: "test_chunks",
+					indexNames: ["test_chunks_text", "test_chunks_vector"],
+				},
+				{
+					collectionName: "test_structured_mem",
+					indexNames: [
+						"test_structured_mem_text",
+						"test_structured_mem_vector",
+					],
+				},
+				{
+					collectionName: "test_procedures",
+					indexNames: ["test_procedures_text", "test_procedures_vector"],
+				},
+				{
+					collectionName: "test_events",
+					indexNames: ["test_events_text", "test_events_vector"],
+				},
+			])
+		} finally {
+			if (previous === undefined) {
+				delete process.env.MEMONGO_BENCHMARK_SEARCH_INDEX_PROFILE
+			} else {
+				process.env.MEMONGO_BENCHMARK_SEARCH_INDEX_PROFILE = previous
+			}
+		}
+	})
+
+	it("resolves search index readiness timing from env with safe defaults", () => {
+		expect(resolveSearchIndexReadinessTiming({})).toEqual({
+			timeoutMs: 60_000,
+			pollMs: 1_000,
+		})
+		expect(
+			resolveSearchIndexReadinessTiming({
+				MEMONGO_BENCHMARK_STRICT: "1",
+			}),
+		).toEqual({ timeoutMs: 180_000, pollMs: 1_000 })
+		expect(
+			resolveSearchIndexReadinessTiming({
+				MEMONGO_SEARCH_INDEX_READINESS_TIMEOUT_MS: "180000",
+				MEMONGO_SEARCH_INDEX_READINESS_POLL_MS: "250",
+			}),
+		).toEqual({ timeoutMs: 180_000, pollMs: 250 })
+		expect(
+			resolveSearchIndexReadinessTiming({
+				MEMONGO_SEARCH_INDEX_READINESS_TIMEOUT_MS: "0",
+				MEMONGO_SEARCH_INDEX_READINESS_POLL_MS: "nope",
+			}),
+		).toEqual({ timeoutMs: 60_000, pollMs: 1_000 })
 	})
 })
 
@@ -1373,6 +1465,102 @@ describe("detectCapabilities", () => {
 		expect(caps.vectorSearch).toBe(true)
 		expect(caps.textSearch).toBe(true)
 		// automatedEmbedding removed (F2: dead code)
+	})
+
+	it("detects search capabilities through $listSearchIndexes aggregation", async () => {
+		const db = {
+			admin: vi.fn(() => ({
+				command: vi.fn(async () => ({ versionArray: [8, 2, 0, 0] })),
+			})),
+			collection: vi.fn(() => ({
+				aggregate: vi.fn(() => ({
+					toArray: vi.fn(async () => []),
+				})),
+				listSearchIndexes: vi.fn(() => ({
+					toArray: vi.fn(async () => {
+						throw new Error("driver helper should not be required")
+					}),
+				})),
+			})),
+		} as unknown as Db
+
+		const caps = await detectCapabilities(db, "test_chunks")
+		expect(caps.vectorSearch).toBe(true)
+		expect(caps.textSearch).toBe(true)
+	})
+
+	it("waits for search capabilities to become available", async () => {
+		let attempts = 0
+		const db = {
+			admin: vi.fn(() => ({
+				command: vi.fn(async () => ({ versionArray: [8, 2, 0, 0] })),
+			})),
+			collection: vi.fn(() => ({
+				aggregate: vi.fn(() => ({
+					toArray: vi.fn(async () => {
+						attempts += 1
+						if (attempts < 2) {
+							throw new Error("mongot warming up")
+						}
+						return []
+					}),
+				})),
+				listSearchIndexes: vi.fn(() => ({
+					toArray: vi.fn(async () => {
+						if (attempts < 2) {
+							throw new Error("mongot still warming up")
+						}
+						return []
+					}),
+				})),
+			})),
+		} as unknown as Db
+
+		const caps = await waitForSearchCapabilities(db, "test_chunks", {
+			timeoutMs: 30,
+			pollMs: 1,
+		})
+		expect(caps.vectorSearch).toBe(true)
+		expect(caps.textSearch).toBe(true)
+		expect(attempts).toBe(2)
+	})
+})
+
+describe("waitForSearchIndexesQueryable", () => {
+	it("retries transient search index management errors", async () => {
+		let attempts = 0
+		const collection = {
+			aggregate: vi.fn(() => ({
+				toArray: vi.fn(async () => {
+					attempts += 1
+					if (attempts === 1) {
+						throw new Error(
+							"Error connecting to Search Index Management service",
+						)
+					}
+					return [
+						{
+							name: "events_text",
+							status: "READY",
+							queryable: true,
+						},
+					]
+				}),
+			})),
+			listSearchIndexes: vi.fn(() => ({
+				toArray: vi.fn(async () => []),
+			})),
+		} as unknown as Collection
+
+		const result = await waitForSearchIndexesQueryable(collection, {
+			indexNames: ["events_text"],
+			timeoutMs: 30,
+			pollMs: 1,
+		})
+
+		expect(result.ready).toBe(true)
+		expect(result.lastError).toBeUndefined()
+		expect(attempts).toBe(2)
 	})
 })
 

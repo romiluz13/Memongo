@@ -91,6 +91,25 @@ describe("mongodb-retrieval-planner", () => {
 		expect(plan.paths[0]).toBe("procedural")
 	})
 
+	it("routes previous-conversation recall to conversation evidence first", () => {
+		const plan = planRetrieval(
+			"remind me what we discussed in our previous conversation",
+			makeContext(),
+		)
+		expect(plan.paths[0]).toBe("hybrid")
+		expect(plan.paths.slice(0, 3)).toContain("raw-window")
+		expect(plan.reasoning).toContain("conversation evidence recall")
+	})
+
+	it("keeps count-style personal recall on conversation evidence lanes", () => {
+		const plan = planRetrieval(
+			"how many doctor's appointments did I go to in March?",
+			makeContext(),
+		)
+		expect(plan.paths[0]).toBe("hybrid")
+		expect(plan.paths.slice(0, 3)).toContain("raw-window")
+	})
+
 	it("boosts structured retrieval when explicit structured scope is provided", () => {
 		const plan = planRetrieval("what should I know about bloom", {
 			...makeContext(),

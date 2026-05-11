@@ -18,6 +18,10 @@ const searchSchema = z.object({
 	agentId: z.string().optional(),
 	limit: z.number().optional(),
 	minScore: z.number().optional(),
+	scope: z
+		.enum(["session", "user", "agent", "workspace", "tenant", "global"])
+		.optional(),
+	scopeRef: z.string().optional(),
 })
 
 const searchKbSchema = z.object({
@@ -37,6 +41,10 @@ const addSchema = z.object({
 	content: z.string(),
 	agentId: z.string().optional(),
 	sessionId: z.string().optional(),
+	scope: z
+		.enum(["session", "user", "agent", "workspace", "tenant", "global"])
+		.optional(),
+	scopeRef: z.string().optional(),
 })
 
 const writeEventSchema = z.object({
@@ -44,6 +52,10 @@ const writeEventSchema = z.object({
 	body: z.string(),
 	agentId: z.string().optional(),
 	sessionId: z.string().optional(),
+	scope: z
+		.enum(["session", "user", "agent", "workspace", "tenant", "global"])
+		.optional(),
+	scopeRef: z.string().optional(),
 })
 
 const profileSchema = z.object({

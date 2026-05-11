@@ -333,6 +333,8 @@ export type MemoryProceduralScope = {
 
 export type MemorySearchRequest = {
 	query: string
+	scope?: MemoryScope
+	scopeRef?: string
 	maxResults?: number
 	minScore?: number
 	searchMode?: MemorySearchMode
@@ -607,7 +609,13 @@ export type MemoryContextBundleRequest = {
 export interface MemorySearchManager {
 	search(
 		query: string,
-		opts?: { maxResults?: number; minScore?: number; sessionKey?: string },
+		opts?: {
+			maxResults?: number
+			minScore?: number
+			sessionKey?: string
+			scope?: MemoryScope
+			scopeRef?: string
+		},
 	): Promise<MemorySearchResult[]>
 	searchDetailed?(request: MemorySearchRequest): Promise<MemorySearchResponse>
 	buildDiscoveryProjection?(

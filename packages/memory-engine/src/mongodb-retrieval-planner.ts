@@ -201,6 +201,29 @@ const PROCEDURAL_KEYWORDS = [
 ]
 const PROCEDURAL_REGEXES = buildKeywordRegexes(PROCEDURAL_KEYWORDS)
 
+const CONVERSATION_EVIDENCE_KEYWORDS = [
+	"previous conversation",
+	"our previous conversation",
+	"earlier conversation",
+	"past conversation",
+	"last conversation",
+	"we discussed",
+	"we talked",
+	"i said",
+	"i told you",
+	"did i",
+	"did we",
+	"have i",
+	"have we",
+	"how many",
+	"remind me",
+	"appointment",
+	"appointments",
+]
+const CONVERSATION_EVIDENCE_REGEXES = buildKeywordRegexes(
+	CONVERSATION_EVIDENCE_KEYWORDS,
+)
+
 // Deterministic tie-breaking priority (lower = higher priority)
 const PATH_PRIORITY: Record<RetrievalPath, number> = {
 	"active-critical": 0,
@@ -594,6 +617,13 @@ export function planRetrieval(
 		if (PROCEDURAL_REGEXES.some((re) => re.test(query))) {
 			scores.procedural += 3
 			reasons.push("procedural/workflow keywords detected")
+		}
+
+		if (CONVERSATION_EVIDENCE_REGEXES.some((re) => re.test(query))) {
+			scores.hybrid += 4
+			scores["raw-window"] += 3
+			scores.episodic += 1
+			reasons.push("conversation evidence recall detected")
 		}
 
 		if (context.intent?.structuredScope) {
