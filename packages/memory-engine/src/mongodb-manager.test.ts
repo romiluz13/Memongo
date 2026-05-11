@@ -443,6 +443,86 @@ describe("benchmark scenario queue settling", () => {
 			}
 		}
 	})
+
+	// Task 1.3 — complete queue-settle timeout coverage (plan Harness Checklist #3).
+	const callSettle = async (manager: MongoDBMemoryManager) =>
+		(
+			MongoDBMemoryManager.prototype as unknown as {
+				settleBenchmarkScenarioManager: (
+					this: MongoDBMemoryManager,
+					manager: MongoDBMemoryManager,
+				) => Promise<void>
+			}
+		).settleBenchmarkScenarioManager.call(manager, manager)
+
+	it("names writeQueue when writeQueue hangs (Task 1.3)", async () => {
+		const prev = process.env.MEMONGO_BENCHMARK_QUEUE_SETTLE_TIMEOUT_MS
+		const prevStrict = process.env.MEMONGO_BENCHMARK_STRICT
+		process.env.MEMONGO_BENCHMARK_QUEUE_SETTLE_TIMEOUT_MS = "200"
+		process.env.MEMONGO_BENCHMARK_STRICT = "1"
+		try {
+			const manager = {
+				agentId: "benchmark-agent-write",
+				writeQueue: new Promise<void>(() => {}),
+				derivationQueue: Promise.resolve(),
+			} as unknown as MongoDBMemoryManager
+			await expect(callSettle(manager)).rejects.toThrow(
+				/writeQueue settle timed out after 200ms/,
+			)
+		} finally {
+			if (prev === undefined)
+				delete process.env.MEMONGO_BENCHMARK_QUEUE_SETTLE_TIMEOUT_MS
+			else process.env.MEMONGO_BENCHMARK_QUEUE_SETTLE_TIMEOUT_MS = prev
+			if (prevStrict === undefined) delete process.env.MEMONGO_BENCHMARK_STRICT
+			else process.env.MEMONGO_BENCHMARK_STRICT = prevStrict
+		}
+	})
+
+	it("names derivationQueue when derivationQueue hangs (Task 1.3)", async () => {
+		const prev = process.env.MEMONGO_BENCHMARK_QUEUE_SETTLE_TIMEOUT_MS
+		const prevStrict = process.env.MEMONGO_BENCHMARK_STRICT
+		process.env.MEMONGO_BENCHMARK_QUEUE_SETTLE_TIMEOUT_MS = "200"
+		process.env.MEMONGO_BENCHMARK_STRICT = "1"
+		try {
+			const manager = {
+				agentId: "benchmark-agent-derivation",
+				writeQueue: Promise.resolve(),
+				derivationQueue: new Promise<void>(() => {}),
+			} as unknown as MongoDBMemoryManager
+			await expect(callSettle(manager)).rejects.toThrow(
+				/derivationQueue settle timed out after 200ms/,
+			)
+		} finally {
+			if (prev === undefined)
+				delete process.env.MEMONGO_BENCHMARK_QUEUE_SETTLE_TIMEOUT_MS
+			else process.env.MEMONGO_BENCHMARK_QUEUE_SETTLE_TIMEOUT_MS = prev
+			if (prevStrict === undefined) delete process.env.MEMONGO_BENCHMARK_STRICT
+			else process.env.MEMONGO_BENCHMARK_STRICT = prevStrict
+		}
+	})
+
+	it("succeeds on slow-but-bounded queue under timeout (Task 1.3)", async () => {
+		const prev = process.env.MEMONGO_BENCHMARK_QUEUE_SETTLE_TIMEOUT_MS
+		const prevStrict = process.env.MEMONGO_BENCHMARK_STRICT
+		process.env.MEMONGO_BENCHMARK_QUEUE_SETTLE_TIMEOUT_MS = "500"
+		process.env.MEMONGO_BENCHMARK_STRICT = "1"
+		try {
+			const manager = {
+				agentId: "benchmark-agent-slow",
+				writeQueue: new Promise<void>((resolve) =>
+					setTimeout(resolve, 50),
+				),
+				derivationQueue: Promise.resolve(),
+			} as unknown as MongoDBMemoryManager
+			await expect(callSettle(manager)).resolves.toBeUndefined()
+		} finally {
+			if (prev === undefined)
+				delete process.env.MEMONGO_BENCHMARK_QUEUE_SETTLE_TIMEOUT_MS
+			else process.env.MEMONGO_BENCHMARK_QUEUE_SETTLE_TIMEOUT_MS = prev
+			if (prevStrict === undefined) delete process.env.MEMONGO_BENCHMARK_STRICT
+			else process.env.MEMONGO_BENCHMARK_STRICT = prevStrict
+		}
+	})
 })
 
 describe("importConversations", () => {
