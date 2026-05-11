@@ -5,6 +5,7 @@ import { describe, it, expect } from "vitest"
 import {
 	BENCHMARK_STRICT_FATAL_CLASSES,
 	isCanaryFatalFailureClass,
+	listCompletedScenarioIndices,
 	resolveCanaryArtifactDir,
 	resolveCanaryFullMode,
 	resolveCanaryHttpTimeoutMs,
@@ -295,6 +296,95 @@ describe("writeScenarioProgress (Task 1.2)", () => {
 			)
 			expect(doc.passStatus).toBe("fail")
 			expect(doc.failureClass).toBe("model-failure")
+		} finally {
+			rmSync(dir, { recursive: true, force: true })
+		}
+	})
+})
+
+describe("resume semantics (Task 1.7)", () => {
+	it("returns empty when progress/ directory is missing", () => {
+		const dir = mkdtempSync(path.join(tmpdir(), "canary-resume-empty-"))
+		try {
+			expect(listCompletedScenarioIndices(dir)).toEqual(new Set())
+		} finally {
+			rmSync(dir, { recursive: true, force: true })
+		}
+	})
+
+	it("returns empty when progress/ is present but has no progress files", () => {
+		const dir = mkdtempSync(path.join(tmpdir(), "canary-resume-blank-"))
+		try {
+			writeScenarioProgress({
+				runDir: dir,
+				index: 0,
+				questionId: "q0",
+				questionType: "t",
+				passStatus: "pass",
+				failureClass: null,
+				metrics: null,
+			})
+			// Then clear out the file to simulate an empty dir
+			rmSync(path.join(dir, "progress", "0.json"))
+			expect(listCompletedScenarioIndices(dir)).toEqual(new Set())
+		} finally {
+			rmSync(dir, { recursive: true, force: true })
+		}
+	})
+
+	it("enumerates integer indices from progress/{idx}.json files", () => {
+		const dir = mkdtempSync(path.join(tmpdir(), "canary-resume-enum-"))
+		try {
+			for (const idx of [0, 1, 3, 7]) {
+				writeScenarioProgress({
+					runDir: dir,
+					index: idx,
+					questionId: `q${idx}`,
+					questionType: "t",
+					passStatus: "pass",
+					failureClass: null,
+					metrics: null,
+				})
+			}
+			expect(listCompletedScenarioIndices(dir)).toEqual(new Set([0, 1, 3, 7]))
+		} finally {
+			rmSync(dir, { recursive: true, force: true })
+		}
+	})
+
+	it("ignores non-matching files and non-integer names", () => {
+		const dir = mkdtempSync(path.join(tmpdir(), "canary-resume-mixed-"))
+		try {
+			writeScenarioProgress({
+				runDir: dir,
+				index: 2,
+				questionId: "q2",
+				questionType: "t",
+				passStatus: "pass",
+				failureClass: null,
+				metrics: null,
+			})
+			// Plant a garbage file in progress/
+			const progressDir = path.join(dir, "progress")
+			writeScenarioProgress({
+				runDir: dir,
+				index: 4,
+				questionId: "q4",
+				questionType: "t",
+				passStatus: "pass",
+				failureClass: null,
+				metrics: null,
+			})
+			// Extra noise files
+			require("node:fs").writeFileSync(
+				path.join(progressDir, "notes.txt"),
+				"ignore me",
+			)
+			require("node:fs").writeFileSync(
+				path.join(progressDir, "q-weird.json"),
+				"{}",
+			)
+			expect(listCompletedScenarioIndices(dir)).toEqual(new Set([2, 4]))
 		} finally {
 			rmSync(dir, { recursive: true, force: true })
 		}

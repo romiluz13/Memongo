@@ -12,7 +12,13 @@
  */
 
 import { createHash, randomUUID } from "node:crypto"
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
+import {
+	existsSync,
+	mkdirSync,
+	readFileSync,
+	readdirSync,
+	writeFileSync,
+} from "node:fs"
 import http from "node:http"
 import os from "node:os"
 import path from "node:path"
@@ -182,6 +188,33 @@ export function shouldCanaryAbort(params: {
 		params.strictEnv === "1" || params.strictEnv?.toLowerCase() === "true"
 	if (!strict) return false
 	return isCanaryFatalFailureClass(params.failureClass)
+}
+
+/**
+ * Task 1.7 — enumerate the set of scenario indices that already have a
+ * `progress/{idx}.json` file in the given run dir. Non-matching file names
+ * and missing directories are silently ignored.
+ */
+export function listCompletedScenarioIndices(runDir: string): Set<number> {
+	const progressDir = path.join(runDir, "progress")
+	if (!existsSync(progressDir)) return new Set()
+	let entries: string[]
+	try {
+		entries = readdirSync(progressDir)
+	} catch {
+		return new Set()
+	}
+	const completed = new Set<number>()
+	for (const name of entries) {
+		// accept exactly "{integer}.json"
+		const match = /^(\d+)\.json$/.exec(name)
+		if (!match) continue
+		const idx = Number(match[1])
+		if (Number.isInteger(idx) && idx >= 0) {
+			completed.add(idx)
+		}
+	}
+	return completed
 }
 
 /**
@@ -440,6 +473,28 @@ async function main() {
 	)
 	for (const [qt, count] of Object.entries(breakdown)) {
 		console.log(`  ${qt}: ${count}`)
+	}
+
+	// Task 1.7 — resume semantics. MEMONGO_CANARY_RESUME=1 drops scenarios
+	// whose progress/{idx}.json already exists in runDir so a retried run
+	// only executes the remaining work.
+	const resumeMode = resolveCanaryResumeMode(process.env.MEMONGO_CANARY_RESUME)
+	let scenariosSkipped = 0
+	if (resumeMode) {
+		const completed = listCompletedScenarioIndices(runDir)
+		if (completed.size > 0) {
+			const beforeCount = selected.length
+			for (let idx = selected.length - 1; idx >= 0; idx--) {
+				if (completed.has(idx)) {
+					selected.splice(idx, 1)
+					selectedQuestionIds.splice(idx, 1)
+				}
+			}
+			scenariosSkipped = beforeCount - selected.length
+			console.log(
+				`[canary] resume mode: skipped ${scenariosSkipped}/${beforeCount} already-completed scenarios`,
+			)
+		}
 	}
 
 	// Write subset dataset inside the workspace so the benchmark API accepts it
