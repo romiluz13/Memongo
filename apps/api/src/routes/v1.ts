@@ -163,9 +163,7 @@ function readAccessCollection(
  * Returns the validated config or undefined if absent/malformed. All fields
  * must be present to accept it.
  */
-function parseEmbeddingConfig(
-	raw: unknown,
-):
+function parseEmbeddingConfig(raw: unknown):
 	| {
 			model: string
 			dimensions: number
@@ -193,9 +191,7 @@ function parseEmbeddingConfig(
  * Task 1.A — parse optional rerankerConfig from benchmark request body.
  * `version` is null-able (Voyage SDK does not always expose version).
  */
-function parseRerankerConfig(
-	raw: unknown,
-):
+function parseRerankerConfig(raw: unknown):
 	| {
 			model: string
 			version: string | null

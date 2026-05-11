@@ -917,9 +917,7 @@ export async function memongoBridgeRelevanceBenchmark(params: {
 		...(params.embeddingConfig
 			? { embeddingConfig: params.embeddingConfig }
 			: {}),
-		...(params.rerankerConfig
-			? { rerankerConfig: params.rerankerConfig }
-			: {}),
+		...(params.rerankerConfig ? { rerankerConfig: params.rerankerConfig } : {}),
 	})
 }
 

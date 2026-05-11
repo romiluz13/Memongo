@@ -2453,10 +2453,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		)
 		if (readinessProbe.kind === "ok") {
 			if (readinessProbe.queryable) {
-				if (
-					readinessProbe.status === "STALE" &&
-					isBenchmarkStrictMode()
-				) {
+				if (readinessProbe.status === "STALE" && isBenchmarkStrictMode()) {
 					throw new Error(
 						`index-not-ready: search index ${indexName} status STALE (queryable=${readinessProbe.queryable}) agentId=${agentId}`,
 					)

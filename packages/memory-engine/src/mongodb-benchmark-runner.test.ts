@@ -584,8 +584,7 @@ describe("mongodb benchmark runner", () => {
 			rAt10: 1,
 			ndcgAt10: 1,
 			runIdentity: {
-				datasetSha256:
-					"a".repeat(64),
+				datasetSha256: "a".repeat(64),
 				retrievalUnit: "turn",
 			},
 			embedding: {

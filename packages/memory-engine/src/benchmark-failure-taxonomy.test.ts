@@ -19,9 +19,9 @@ describe("classifyBenchmarkFailure (Task 1.4, Recommended Default #2)", () => {
 	})
 
 	test("classifies model-failure from Voyage 500", () => {
-		expect(
-			classifyBenchmarkFailure(new Error("Voyage API 500 Internal")),
-		).toBe("model-failure")
+		expect(classifyBenchmarkFailure(new Error("Voyage API 500 Internal"))).toBe(
+			"model-failure",
+		)
 	})
 
 	test("classifies model-failure from unreachable voyage base URL", () => {
@@ -30,9 +30,9 @@ describe("classifyBenchmarkFailure (Task 1.4, Recommended Default #2)", () => {
 	})
 
 	test("classifies json-parse from SyntaxError", () => {
-		expect(
-			classifyBenchmarkFailure(new SyntaxError("Unexpected token")),
-		).toBe("json-parse")
+		expect(classifyBenchmarkFailure(new SyntaxError("Unexpected token"))).toBe(
+			"json-parse",
+		)
 	})
 
 	test("classifies index-not-ready from STALE status error", () => {
@@ -69,7 +69,9 @@ describe("classifyBenchmarkFailure (Task 1.4, Recommended Default #2)", () => {
 
 	test("classifies scope-leak from scope-leak sentinel error", () => {
 		expect(
-			classifyBenchmarkFailure(new Error("scope-leak detected across scopeRef")),
+			classifyBenchmarkFailure(
+				new Error("scope-leak detected across scopeRef"),
+			),
 		).toBe("scope-leak")
 	})
 

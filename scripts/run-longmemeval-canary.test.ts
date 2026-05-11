@@ -187,9 +187,9 @@ describe("resolveCanaryHttpTimeoutMs", () => {
 
 describe("MEMONGO_CANARY_* env var contract (Task 1.0)", () => {
 	it("MEMONGO_CANARY_ARTIFACT_DIR overrides the default artifact root exactly", () => {
-		expect(
-			resolveCanaryArtifactDir({ runId: "abc", envDir: "/tmp/foo" }),
-		).toBe("/tmp/foo")
+		expect(resolveCanaryArtifactDir({ runId: "abc", envDir: "/tmp/foo" })).toBe(
+			"/tmp/foo",
+		)
 	})
 
 	it("MEMONGO_CANARY_ARTIFACT_DIR absent falls back to default root + runId", () => {

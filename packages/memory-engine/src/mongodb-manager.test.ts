@@ -518,7 +518,10 @@ describe("benchmark event search convergence", () => {
 							agentId: string,
 						) => Promise<void>
 					}
-				).waitForBenchmarkEventSearchConvergence.call(manager, "agent-building"),
+				).waitForBenchmarkEventSearchConvergence.call(
+					manager,
+					"agent-building",
+				),
 			).rejects.toThrow(/index-not-ready|queryable=false|BUILDING/)
 		} finally {
 			if (prevStrict === undefined) delete process.env.MEMONGO_BENCHMARK_STRICT
@@ -528,8 +531,10 @@ describe("benchmark event search convergence", () => {
 
 	it("falls back to aggregate probe when helper signals fallback (Task 1.5)", async () => {
 		const prevStrict = process.env.MEMONGO_BENCHMARK_STRICT
-		const prevSettle = process.env.MEMONGO_BENCHMARK_EVENT_SEARCH_SETTLE_TIMEOUT_MS
-		const prevProbe = process.env.MEMONGO_BENCHMARK_EVENT_SEARCH_PROBE_MAX_TIME_MS
+		const prevSettle =
+			process.env.MEMONGO_BENCHMARK_EVENT_SEARCH_SETTLE_TIMEOUT_MS
+		const prevProbe =
+			process.env.MEMONGO_BENCHMARK_EVENT_SEARCH_PROBE_MAX_TIME_MS
 		process.env.MEMONGO_BENCHMARK_STRICT = "1"
 		// Use a short settle window so this test stays fast even under the
 		// aggregate probe loop.
@@ -575,10 +580,13 @@ describe("benchmark event search convergence", () => {
 			else process.env.MEMONGO_BENCHMARK_STRICT = prevStrict
 			if (prevSettle === undefined)
 				delete process.env.MEMONGO_BENCHMARK_EVENT_SEARCH_SETTLE_TIMEOUT_MS
-			else process.env.MEMONGO_BENCHMARK_EVENT_SEARCH_SETTLE_TIMEOUT_MS = prevSettle
+			else
+				process.env.MEMONGO_BENCHMARK_EVENT_SEARCH_SETTLE_TIMEOUT_MS =
+					prevSettle
 			if (prevProbe === undefined)
 				delete process.env.MEMONGO_BENCHMARK_EVENT_SEARCH_PROBE_MAX_TIME_MS
-			else process.env.MEMONGO_BENCHMARK_EVENT_SEARCH_PROBE_MAX_TIME_MS = prevProbe
+			else
+				process.env.MEMONGO_BENCHMARK_EVENT_SEARCH_PROBE_MAX_TIME_MS = prevProbe
 		}
 	})
 })
@@ -685,9 +693,7 @@ describe("benchmark scenario queue settling", () => {
 		try {
 			const manager = {
 				agentId: "benchmark-agent-slow",
-				writeQueue: new Promise<void>((resolve) =>
-					setTimeout(resolve, 50),
-				),
+				writeQueue: new Promise<void>((resolve) => setTimeout(resolve, 50)),
 				derivationQueue: Promise.resolve(),
 			} as unknown as MongoDBMemoryManager
 			await expect(callSettle(manager)).resolves.toBeUndefined()
