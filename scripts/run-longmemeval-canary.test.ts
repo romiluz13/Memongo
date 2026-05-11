@@ -1,3 +1,6 @@
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs"
+import { tmpdir } from "node:os"
+import path from "node:path"
 import { describe, it, expect } from "vitest"
 import {
 	resolveCanaryArtifactDir,
@@ -6,6 +9,7 @@ import {
 	resolveCanaryLogLevel,
 	resolveCanaryResumeMode,
 	selectStratifiedSubset,
+	writeScenarioProgress,
 	type RawLongMemEvalEntry,
 } from "./run-longmemeval-canary.js"
 
@@ -218,6 +222,79 @@ describe("MEMONGO_CANARY_* env var contract (Task 1.0)", () => {
 		expect(resolveCanaryResumeMode(undefined)).toBe(false)
 		expect(resolveCanaryResumeMode("true")).toBe(false)
 		expect(resolveCanaryResumeMode("")).toBe(false)
+	})
+})
+
+describe("writeScenarioProgress (Task 1.2)", () => {
+	it("writes progress/{idx}.json synchronously with the required shape", () => {
+		const dir = mkdtempSync(path.join(tmpdir(), "canary-progress-"))
+		try {
+			writeScenarioProgress({
+				runDir: dir,
+				index: 0,
+				questionId: "q-001",
+				questionType: "multi-session",
+				passStatus: "pass",
+				failureClass: null,
+				metrics: { rAt5: 1, rAt10: 1 },
+			})
+			const p = path.join(dir, "progress", "0.json")
+			expect(existsSync(p)).toBe(true)
+			const doc = JSON.parse(readFileSync(p, "utf8"))
+			expect(doc).toMatchObject({
+				index: 0,
+				questionId: "q-001",
+				questionType: "multi-session",
+				passStatus: "pass",
+				failureClass: null,
+				metrics: { rAt5: 1, rAt10: 1 },
+			})
+			expect(typeof doc.completedAt).toBe("string")
+			// ISO-8601
+			expect(new Date(doc.completedAt).toISOString()).toBe(doc.completedAt)
+		} finally {
+			rmSync(dir, { recursive: true, force: true })
+		}
+	})
+
+	it("creates the progress directory when absent", () => {
+		const dir = mkdtempSync(path.join(tmpdir(), "canary-progress-"))
+		try {
+			writeScenarioProgress({
+				runDir: dir,
+				index: 7,
+				questionId: "q-007",
+				questionType: "knowledge-update",
+				passStatus: "fail",
+				failureClass: "retrieval-miss",
+				metrics: {},
+			})
+			expect(existsSync(path.join(dir, "progress", "7.json"))).toBe(true)
+		} finally {
+			rmSync(dir, { recursive: true, force: true })
+		}
+	})
+
+	it("records failureClass when the scenario fails", () => {
+		const dir = mkdtempSync(path.join(tmpdir(), "canary-progress-"))
+		try {
+			writeScenarioProgress({
+				runDir: dir,
+				index: 3,
+				questionId: "q-003",
+				questionType: "temporal-reasoning",
+				passStatus: "fail",
+				failureClass: "model-failure",
+				metrics: null,
+			})
+			const doc = JSON.parse(
+				readFileSync(path.join(dir, "progress", "3.json"), "utf8"),
+			)
+			expect(doc.passStatus).toBe("fail")
+			expect(doc.failureClass).toBe("model-failure")
+		} finally {
+			rmSync(dir, { recursive: true, force: true })
+		}
 	})
 })
 

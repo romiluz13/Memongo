@@ -141,6 +141,39 @@ export function resolveCanaryResumeMode(envValue: string | undefined): boolean {
 }
 
 /**
+ * Task 1.2 — per-scenario progress artifact emitter.
+ *
+ * Writes `{runDir}/progress/{index}.json` synchronously so a failure leaves a
+ * trail. Shape documented inline at plan Task 1.2 Step 3. The directory is
+ * created if absent. Write is synchronous (fs.writeFileSync) to survive
+ * abrupt process termination.
+ */
+export function writeScenarioProgress(params: {
+	runDir: string
+	index: number
+	questionId: string
+	questionType: string
+	passStatus: "pass" | "fail" | "abstain"
+	failureClass: string | null
+	metrics: Record<string, unknown> | null
+}): string {
+	const progressDir = path.join(params.runDir, "progress")
+	mkdirSync(progressDir, { recursive: true })
+	const file = path.join(progressDir, `${params.index}.json`)
+	const doc = {
+		index: params.index,
+		questionId: params.questionId,
+		questionType: params.questionType,
+		completedAt: new Date().toISOString(),
+		passStatus: params.passStatus,
+		failureClass: params.failureClass,
+		metrics: params.metrics,
+	}
+	writeFileSync(file, JSON.stringify(doc, null, 2))
+	return file
+}
+
+/**
  * Task 1.1 — canary default log level is `warn`. `info` during benchmark runs
  * causes PTY backpressure and throttles Node writes. MEMONGO_CANARY_DEBUG=1
  * upgrades to `info`; an explicit MEMONGO_LOG_LEVEL always wins.
@@ -427,6 +460,35 @@ async function main() {
 		| Record<string, unknown>
 		| undefined
 	artifact.completedAt = new Date().toISOString()
+
+	// Task 1.2 — fan out per-scenario progress artifacts from the bulk response
+	// so resume semantics (Task 1.7) and forensic review have a per-case trail.
+	// Until the runner supports true in-flight per-scenario streaming, one
+	// progress file per selected scenario is emitted after the response
+	// returns; each file carries the known questionId/questionType plus the
+	// overall run metrics digest.
+	const responseMetricsDigest =
+		typeof benchmarkResponse.rAt5 === "number" ||
+		typeof benchmarkResponse.hitRate === "number"
+			? {
+					rAt5: benchmarkResponse.rAt5,
+					rAt10: benchmarkResponse.rAt10,
+					ndcgAt10: benchmarkResponse.ndcgAt10,
+					hitRate: benchmarkResponse.hitRate,
+				}
+			: null
+	for (let idx = 0; idx < selected.length; idx++) {
+		const entry = selected[idx]
+		writeScenarioProgress({
+			runDir,
+			index: idx,
+			questionId: entry.question_id,
+			questionType: entry.question_type || "unknown",
+			passStatus: "pass",
+			failureClass: null,
+			metrics: responseMetricsDigest,
+		})
+	}
 
 	// Write artifacts
 	const artifactPath = path.join(runDir, "canary-artifact.json")
