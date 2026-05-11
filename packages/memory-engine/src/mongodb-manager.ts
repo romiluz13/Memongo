@@ -47,6 +47,7 @@ import {
 	buildCaseDiagnostics,
 	type BenchmarkCaseExecution,
 } from "./mongodb-benchmark-runner.js"
+import { readSearchIndexStatus } from "./mongodb-benchmark-readiness.js"
 import {
 	writeEvent,
 	projectEventChunk,
@@ -270,6 +271,21 @@ function isLegacyBenchmarkFallbackCandidate(err: unknown): boolean {
 		(err.message === "benchmark dataset contains no valid conversations" ||
 			err.message === "benchmark dataset contains no evaluation cases")
 	)
+}
+
+/**
+ * Benchmark strict mode toggle. Reads MEMONGO_BENCHMARK_STRICT at call time
+ * (not at module load) so tests that mutate the env mid-run see the update.
+ * Truthy values: "1", "true" (case-insensitive). Everything else is false.
+ *
+ * Referenced in 22 hot-path sites across this file. Was previously called
+ * without a definition (latent ReferenceError masked only by conditionals
+ * that never executed in non-strict runs); Task 1.5 uses it in the new
+ * readiness-probe delegate, so we define it here.
+ */
+function isBenchmarkStrictMode(): boolean {
+	const v = process.env.MEMONGO_BENCHMARK_STRICT
+	return v === "1" || v?.toLowerCase() === "true"
 }
 
 function attachBenchmarkOperationsReport(
@@ -2422,6 +2438,38 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 					? 60_000
 					: 0
 		if (timeoutMs === 0) return
+
+		// Task 1.5 — prefer `$listSearchIndexes` readiness (authoritative).
+		// Readiness = queryable === true. In strict mode, STALE or
+		// queryable === false aborts immediately rather than waiting.
+		// Falls back to the hardened aggregate $search probe when
+		// $listSearchIndexes is unsupported (e.g., atlas-local:preview < 8.3).
+		const eventsCollName = `${this.prefix}events`
+		const indexName = `${this.prefix}events_text`
+		const readinessProbe = await readSearchIndexStatus(
+			this.db,
+			eventsCollName,
+			indexName,
+		)
+		if (readinessProbe.kind === "ok") {
+			if (readinessProbe.queryable) {
+				if (
+					readinessProbe.status === "STALE" &&
+					isBenchmarkStrictMode()
+				) {
+					throw new Error(
+						`index-not-ready: search index ${indexName} status STALE (queryable=${readinessProbe.queryable}) agentId=${agentId}`,
+					)
+				}
+				return
+			}
+			if (isBenchmarkStrictMode()) {
+				throw new Error(
+					`index-not-ready: search index ${indexName} queryable=false status=${readinessProbe.status} agentId=${agentId}`,
+				)
+			}
+			// non-strict: fall through to aggregate probe and keep polling
+		}
 
 		const intervalMs = 2_000
 		const configuredProbeMaxTime = Number(
