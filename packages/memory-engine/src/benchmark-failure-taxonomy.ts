@@ -93,6 +93,15 @@ export function classifyBenchmarkFailure(err: unknown): BenchmarkFailureClass {
 	}
 
 	// 8. model-failure (Voyage, rerank, LLM, network unreachable)
+	//
+	// remfix C2A: A bare 5xx is NOT sufficient to classify as model-failure. A
+	// bootstrap 500 (e.g. "MongoDB URI required") must NOT be mislabeled as a
+	// Voyage/model problem. The 5xx rule now requires co-occurrence with a
+	// model/network token so that config/bootstrap 500s fall through to
+	// `unknown` (the intended escape valve — not silent, just not lying about
+	// class).
+	const MODEL_NETWORK_TOKEN =
+		/voyage|rerank|embedding|\bllm\b|anthropic|openai|ECONNREFUSED|ENETUNREACH|ENOTFOUND/i
 	if (
 		/voyage/i.test(msg) ||
 		/rerank/i.test(msg) ||
@@ -100,7 +109,7 @@ export function classifyBenchmarkFailure(err: unknown): BenchmarkFailureClass {
 		/ECONNREFUSED/.test(msg) ||
 		/ENETUNREACH/.test(msg) ||
 		/ENOTFOUND/.test(msg) ||
-		/\b5\d{2}\b/.test(msg) // 5xx HTTP
+		(/\b5\d{2}\b/.test(msg) && MODEL_NETWORK_TOKEN.test(msg))
 	) {
 		return "model-failure"
 	}
