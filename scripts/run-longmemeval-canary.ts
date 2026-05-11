@@ -65,8 +65,12 @@ type CanaryArtifact = {
 	completedAt?: string
 	datasetPath: string
 	datasetHash: string
-	casesPerType: number
-	totalCaseLimit?: number
+	/** remfix H3: null when fullMode=true; the value is irrelevant then. */
+	casesPerType: number | null
+	/** remfix H3: null when fullMode=true or no explicit limit. */
+	totalCaseLimit: number | null
+	fullMode: boolean
+	runShapeHash: string
 	selectedQuestionIdFilter?: string[]
 	totalEvaluations: number
 	selectedQuestionIds: string[]
@@ -191,9 +195,11 @@ export function shouldCanaryAbort(params: {
 }
 
 /**
- * Task 1.7 — enumerate the set of scenario indices that already have a
- * `progress/{idx}.json` file in the given run dir. Non-matching file names
- * and missing directories are silently ignored.
+ * Task 1.7 — enumerate the set of scenario indices whose `progress/{idx}.json`
+ * file is truly complete (valid JSON, non-empty, and `completed === true` with
+ * `passStatus === "pass"`). Kept as a back-compat shim; new callers should use
+ * `listResumableProgress` (remfix H1/H2) which also verifies questionId match
+ * and `runShapeHash`.
  */
 export function listCompletedScenarioIndices(runDir: string): Set<number> {
 	const progressDir = path.join(runDir, "progress")
@@ -210,11 +216,142 @@ export function listCompletedScenarioIndices(runDir: string): Set<number> {
 		const match = /^(\d+)\.json$/.exec(name)
 		if (!match) continue
 		const idx = Number(match[1])
-		if (Number.isInteger(idx) && idx >= 0) {
+		if (!Number.isInteger(idx) || idx < 0) continue
+		const filePath = path.join(progressDir, name)
+		try {
+			const raw = readFileSync(filePath, "utf8")
+			if (raw.length === 0) continue
+			const doc = JSON.parse(raw) as Record<string, unknown>
+			if (doc.completed !== true) continue
+			if (doc.passStatus !== "pass") continue
 			completed.add(idx)
+		} catch {
+			// Corrupt/unreadable file — do NOT silently treat as completed.
+			continue
 		}
 	}
 	return completed
+}
+
+/**
+ * remfix H1: compute a stable run-shape hash. Different shapes (fullMode on,
+ * different CASES_PER_TYPE, different TOTAL_CASES, different questionId set)
+ * must produce different hashes so resume can refuse to mix two runs.
+ *
+ * questionIds are sorted before hashing so stratified-selection ordering
+ * quirks do not spuriously invalidate resume.
+ */
+export function computeRunShapeHash(params: {
+	casesPerType: number
+	totalCaseLimit: number | null
+	questionIds: ReadonlyArray<string>
+	fullMode: boolean
+}): string {
+	const normalized = {
+		casesPerType: params.casesPerType,
+		totalCaseLimit: params.totalCaseLimit ?? null,
+		fullMode: Boolean(params.fullMode),
+		// canonicalize order for shape-stability
+		questionIds: [...params.questionIds].sort(),
+	}
+	return createHash("sha256").update(JSON.stringify(normalized)).digest("hex")
+}
+
+export type ResumableProgress = {
+	aborted: boolean
+	abortReason?: string
+	/** questionIds safe to skip on this resume pass. */
+	skipQuestionIds: Set<string>
+}
+
+/**
+ * remfix H1/H2: return the set of questionIds that are SAFE to skip on resume.
+ *
+ * A progress entry counts as "skip" only if ALL of:
+ *   1. file parses as JSON and is non-empty
+ *   2. `completed === true`
+ *   3. `passStatus === "pass"`
+ *   4. `questionId` appears in the current-run scenarios list
+ *   5. `runShapeHash` matches the current run's shape hash
+ *
+ * If any existing progress file's `runShapeHash` does not match the current
+ * expected hash, we ABORT resume and tell the caller to delete progress/ or
+ * start fresh. Resuming across two different shapes is unsafe.
+ */
+export function listResumableProgress(params: {
+	runDir: string
+	scenarioQuestionIds: ReadonlyArray<string>
+	expectedRunShapeHash: string
+}): ResumableProgress {
+	const progressDir = path.join(params.runDir, "progress")
+	if (!existsSync(progressDir)) {
+		return { aborted: false, skipQuestionIds: new Set() }
+	}
+	let entries: string[]
+	try {
+		entries = readdirSync(progressDir)
+	} catch {
+		return { aborted: false, skipQuestionIds: new Set() }
+	}
+	const currentQuestionIds = new Set(params.scenarioQuestionIds)
+	const skip = new Set<string>()
+	for (const name of entries) {
+		if (!/^(\d+)\.json$/.test(name)) continue
+		const file = path.join(progressDir, name)
+		let raw: string
+		try {
+			raw = readFileSync(file, "utf8")
+		} catch {
+			continue
+		}
+		if (raw.length === 0) continue
+		let doc: Record<string, unknown>
+		try {
+			doc = JSON.parse(raw) as Record<string, unknown>
+		} catch {
+			// Corrupt JSON — re-run that scenario.
+			continue
+		}
+		const runShapeHash = doc.runShapeHash
+		if (typeof runShapeHash === "string" && runShapeHash.length > 0) {
+			if (runShapeHash !== params.expectedRunShapeHash) {
+				return {
+					aborted: true,
+					abortReason:
+						"run shape changed; resume unsafe; delete progress/ or start a fresh run",
+					skipQuestionIds: new Set(),
+				}
+			}
+		}
+		if (doc.completed !== true) continue
+		if (doc.passStatus !== "pass") continue
+		const questionId = doc.questionId
+		if (typeof questionId !== "string" || questionId.length === 0) continue
+		if (!currentQuestionIds.has(questionId)) continue
+		skip.add(questionId)
+	}
+	return { aborted: false, skipQuestionIds: skip }
+}
+
+/**
+ * remfix H3: build the case-limit fields of the canary artifact.
+ *
+ * When MEMONGO_CANARY_FULL=1, casesPerType and totalCaseLimit do NOT describe
+ * the run (they're overridden by full-mode). Emit `null` so the artifact
+ * cannot lie about the run shape.
+ */
+export function buildCanaryArtifactCaseLimits(params: {
+	fullMode: boolean
+	casesPerType: number
+	totalCaseLimit: number | undefined
+}): { casesPerType: number | null; totalCaseLimit: number | null } {
+	if (params.fullMode) {
+		return { casesPerType: null, totalCaseLimit: null }
+	}
+	return {
+		casesPerType: params.casesPerType,
+		totalCaseLimit: params.totalCaseLimit ?? null,
+	}
 }
 
 /**
@@ -224,6 +361,11 @@ export function listCompletedScenarioIndices(runDir: string): Set<number> {
  * trail. Shape documented inline at plan Task 1.2 Step 3. The directory is
  * created if absent. Write is synchronous (fs.writeFileSync) to survive
  * abrupt process termination.
+ *
+ * remfix C1: `completed` and `runShapeHash` are MANDATORY fields. The bulk
+ * fan-out fallback (no per-case API stream yet) MUST write `completed:false`
+ * with a `reason` so resume mode (remfix H1/H2) correctly re-runs every
+ * scenario.
  */
 export function writeScenarioProgress(params: {
 	runDir: string
@@ -233,11 +375,14 @@ export function writeScenarioProgress(params: {
 	passStatus: "pass" | "fail" | "abstain"
 	failureClass: string | null
 	metrics: Record<string, unknown> | null
+	completed: boolean
+	runShapeHash: string
+	reason?: string
 }): string {
 	const progressDir = path.join(params.runDir, "progress")
 	mkdirSync(progressDir, { recursive: true })
 	const file = path.join(progressDir, `${params.index}.json`)
-	const doc = {
+	const doc: Record<string, unknown> = {
 		index: params.index,
 		questionId: params.questionId,
 		questionType: params.questionType,
@@ -245,6 +390,11 @@ export function writeScenarioProgress(params: {
 		passStatus: params.passStatus,
 		failureClass: params.failureClass,
 		metrics: params.metrics,
+		completed: params.completed,
+		runShapeHash: params.runShapeHash,
+	}
+	if (params.reason !== undefined) {
+		doc.reason = params.reason
 	}
 	writeFileSync(file, JSON.stringify(doc, null, 2))
 	return file
@@ -475,17 +625,41 @@ async function main() {
 		console.log(`  ${qt}: ${count}`)
 	}
 
-	// Task 1.7 — resume semantics. MEMONGO_CANARY_RESUME=1 drops scenarios
-	// whose progress/{idx}.json already exists in runDir so a retried run
-	// only executes the remaining work.
+	// remfix H1: compute run-shape hash from the FULL selected scenario list
+	// BEFORE resume trimming. This is the hash the current run will stamp into
+	// every progress file and is what resume compares against.
+	const runShapeHash = computeRunShapeHash({
+		casesPerType: CASES_PER_TYPE,
+		totalCaseLimit: totalCaseLimit ?? null,
+		questionIds: selectedQuestionIds,
+		fullMode,
+	})
+
+	// Task 1.7 + remfix H1/H2 — resume semantics. MEMONGO_CANARY_RESUME=1 drops
+	// scenarios whose progress entry: (a) parses as JSON, (b) is non-empty,
+	// (c) has completed===true, (d) has passStatus==="pass", (e) has a
+	// questionId that matches the current scenario list, and (f) has a
+	// runShapeHash equal to the current run's shape hash. Any progress file
+	// whose shape hash differs aborts resume: the run shape changed and
+	// skipping by numeric index would silently hide the regression.
 	const resumeMode = resolveCanaryResumeMode(process.env.MEMONGO_CANARY_RESUME)
 	let scenariosSkipped = 0
 	if (resumeMode) {
-		const completed = listCompletedScenarioIndices(runDir)
-		if (completed.size > 0) {
+		const resumable = listResumableProgress({
+			runDir,
+			scenarioQuestionIds: selectedQuestionIds,
+			expectedRunShapeHash: runShapeHash,
+		})
+		if (resumable.aborted) {
+			throw new Error(
+				`canary resume aborted: ${resumable.abortReason ?? "run shape mismatch"}`,
+			)
+		}
+		if (resumable.skipQuestionIds.size > 0) {
 			const beforeCount = selected.length
 			for (let idx = selected.length - 1; idx >= 0; idx--) {
-				if (completed.has(idx)) {
+				const qid = selected[idx].question_id
+				if (resumable.skipQuestionIds.has(qid)) {
 					selected.splice(idx, 1)
 					selectedQuestionIds.splice(idx, 1)
 				}
@@ -504,13 +678,24 @@ async function main() {
 	const subsetPath = path.join(subsetDir, `${runId}.json`)
 	writeFileSync(subsetPath, JSON.stringify(selected, null, 2))
 
+	// remfix H3: In full mode, casesPerType and totalCaseLimit do not describe
+	// the run. Emit null instead of the stale defaults so canary-artifact.json
+	// cannot misreport run shape.
+	const caseLimits = buildCanaryArtifactCaseLimits({
+		fullMode,
+		casesPerType: CASES_PER_TYPE,
+		totalCaseLimit,
+	})
+
 	const artifact: CanaryArtifact = {
 		runId,
 		startedAt: startedAt.toISOString(),
 		datasetPath,
 		datasetHash,
-		casesPerType: CASES_PER_TYPE,
-		...(totalCaseLimit ? { totalCaseLimit } : {}),
+		casesPerType: caseLimits.casesPerType,
+		totalCaseLimit: caseLimits.totalCaseLimit,
+		fullMode,
+		runShapeHash,
 		...(selectedQuestionIdFilter.length > 0
 			? { selectedQuestionIdFilter }
 			: {}),
@@ -560,12 +745,18 @@ async function main() {
 		| undefined
 	artifact.completedAt = new Date().toISOString()
 
-	// Task 1.2 — fan out per-scenario progress artifacts from the bulk response
-	// so resume semantics (Task 1.7) and forensic review have a per-case trail.
-	// Until the runner supports true in-flight per-scenario streaming, one
-	// progress file per selected scenario is emitted after the response
-	// returns; each file carries the known questionId/questionType plus the
-	// overall run metrics digest.
+	// Task 1.2 + remfix C1 — fan out per-scenario progress artifacts.
+	//
+	// The current benchmark endpoint returns AGGREGATE metrics only (rAt5,
+	// rAt10, hitRate across all cases) — no per-case pass/fail is exposed in
+	// the response envelope yet. Hard-coding `passStatus:"pass"` here would
+	// SILENTLY claim every scenario passed, and resume mode would then skip
+	// regressions forever (remfix C1 fallback #2).
+	//
+	// Until per-case streaming exists (tracked as a Phase 2 Scope #2 /
+	// benchmark-runner follow-up), every fan-out entry is marked
+	// `completed:false` with a reason so resume correctly re-runs each
+	// scenario. The aggregate metrics are still attached for forensic review.
 	const responseMetricsDigest =
 		typeof benchmarkResponse.rAt5 === "number" ||
 		typeof benchmarkResponse.hitRate === "number"
@@ -583,9 +774,12 @@ async function main() {
 			index: idx,
 			questionId: entry.question_id,
 			questionType: entry.question_type || "unknown",
-			passStatus: "pass",
+			passStatus: "abstain",
 			failureClass: null,
 			metrics: responseMetricsDigest,
+			completed: false,
+			reason: "bulk-api-no-per-case-stream-yet",
+			runShapeHash,
 		})
 	}
 
