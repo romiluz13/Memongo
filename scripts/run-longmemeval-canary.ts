@@ -16,6 +16,10 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import http from "node:http"
 import os from "node:os"
 import path from "node:path"
+import {
+	type BenchmarkFailureClass,
+	classifyBenchmarkFailure,
+} from "../packages/memory-engine/src/benchmark-failure-taxonomy.js"
 
 // Bootstrap: set MEMONGO_LOG_LEVEL default to warn (Task 1.1). info during
 // benchmark runs causes PTY backpressure and throttles Node writes. This
@@ -513,7 +517,42 @@ async function main() {
 	)
 }
 
+/**
+ * Task 1.4 — write `failure.json` in the run dir when main() throws so the
+ * forensic trail captures the failure class even if no scenarios completed.
+ * Falls back to a best-effort artifact dir when MEMONGO_CANARY_ARTIFACT_DIR
+ * is set; otherwise uses the default path resolver.
+ */
+function writeTopLevelFailureArtifact(err: unknown): void {
+	try {
+		const failureClass: BenchmarkFailureClass = classifyBenchmarkFailure(err)
+		const envDir = process.env.MEMONGO_CANARY_ARTIFACT_DIR
+		const runIdForFallback =
+			process.env.MEMONGO_CANARY_RUN_ID?.trim() ||
+			`canary-failure-${Date.now()}`
+		const runDir = resolveCanaryArtifactDir({
+			runId: runIdForFallback,
+			envDir,
+			repoRoot: process.cwd(),
+		})
+		mkdirSync(runDir, { recursive: true })
+		const doc = {
+			failedAt: new Date().toISOString(),
+			failureClass,
+			message: err instanceof Error ? err.message : String(err),
+			stack: err instanceof Error ? err.stack : undefined,
+		}
+		writeFileSync(
+			path.join(runDir, "failure.json"),
+			JSON.stringify(doc, null, 2),
+		)
+	} catch {
+		// Never swallow the original error — best-effort artifact only.
+	}
+}
+
 main().catch((err) => {
+	writeTopLevelFailureArtifact(err)
 	console.error(err instanceof Error ? err.stack || err.message : err)
 	process.exitCode = 1
 })
