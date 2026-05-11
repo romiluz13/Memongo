@@ -1,0 +1,15 @@
+{
+	"datasetSha256": "d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442",
+	"datasetPath": "/Users/rom.iluz/.memongo/workspace/benchmarks/longmemeval_s_cleaned.json",
+	"dockerComposeFile": "docker/mongodb/docker-compose.benchmark.yml",
+	"apiPort": 3847,
+	"collectionPrefix": "memongo_bench_1778541043_",
+	"apiHealthCheckedAt": "2026-05-11T23:15:41Z",
+	"apiPidFile": "/tmp/memongo-api.pid",
+	"workflow": "wf-20260511T212602Z-9db2daeb",
+	"task": "Task 1.9 forced-failure gate proof (remfix C2B re-run)",
+	"expectedFailureClass": "model-failure",
+	"apiKind": "mock",
+	"apiKindRationale": "Scope-1-alone cannot boot the real @memongo/api because packages/memory-engine/src/mongodb-manager.ts references exports (resolveEnrichmentStrictMode, resolveSearchIndexReadinessTiming, waitForSearchCapabilities, isStrictSearchReadinessMode, isBenchmarkTurnPrecisionMode, MemorySearchRequest.scope, caseDiagnostics, etc.) that the partition split landed on scope-2-retrieval-ranking. This is a pre-existing cross-scope dependency surfaced by the planner/reviewer but not flagged as blocking scope-1 alone. The mock emits the exact Voyage-failure envelope the real API would emit when MEMONGO_VOYAGE_BASE_URL is unroutable, so the taxonomy classification path is exercised end-to-end under the narrowed 5xx rule.",
+	"crossScopeDependencyFollowup": "Bootable API on scope-1-integration (scope-1+scope-2 merged) is required before Task 1.10 merges to main. Documented for integration-verifier follow-up."
+}

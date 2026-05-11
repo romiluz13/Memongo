@@ -1,0 +1,29 @@
+{
+  "runId": "canary-2026-05-11T23-15-46-960Z-b7ac32de",
+  "startedAt": "2026-05-11T23:15:46.960Z",
+  "datasetPath": "/Users/rom.iluz/.memongo/workspace/benchmarks/longmemeval_s_cleaned.json",
+  "datasetHash": "d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442",
+  "casesPerType": 1,
+  "totalCaseLimit": null,
+  "fullMode": false,
+  "runShapeHash": "3b431221da683570191e8195ec1091c7f9470b99ac8c4b2158c798a2391ec6d0",
+  "totalEvaluations": 6,
+  "selectedQuestionIds": [
+    "01493427",
+    "00ca467f",
+    "0e5e2d1a",
+    "06878be2",
+    "001be529",
+    "08f4fc43"
+  ],
+  "questionTypeBreakdown": {
+    "knowledge-update": 1,
+    "multi-session": 1,
+    "single-session-assistant": 1,
+    "single-session-preference": 1,
+    "single-session-user": 1,
+    "temporal-reasoning": 1
+  },
+  "error": "HTTP 500: {\"error\":{\"code\":\"RELEVANCE_BENCHMARK_FAILED\",\"message\":\"voyage embedding request failed: connect ECONNREFUSED 127.0.0.1:65530 (MEMONGO_VOYAGE_BASE_URL unroutable)\"}}",
+  "completedAt": "2026-05-11T23:15:48.182Z"
+}
