@@ -52,6 +52,16 @@ describe("memory-config standalone", () => {
 		expect(cfg.memory?.mongodb?.uri).toBe("mongodb://127.0.0.1:27017/bridge")
 	})
 
+	it("reads collection prefix from process.env", () => {
+		process.env = {
+			...prev,
+			MEMONGO_MONGODB_URI: "mongodb://127.0.0.1:27017/bridge",
+			MEMONGO_MONGODB_COLLECTION_PREFIX: "memongo_bench_",
+		}
+		const cfg = buildMemongoConfig(process.env)
+		expect(cfg.memory?.mongodb?.collectionPrefix).toBe("memongo_bench_")
+	})
+
 	it("buildMemongoConfig merges URI from env", () => {
 		process.env = {
 			...prev,

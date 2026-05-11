@@ -51,6 +51,15 @@ import { jsonError } from "../lib/errors.js"
 
 const MAX_LIST_LIMIT = 100
 const MAX_HISTORY_LIMIT = 200
+const VALID_SCOPE_VALUES = [
+	"session",
+	"user",
+	"agent",
+	"workspace",
+	"tenant",
+	"global",
+] as const
+type ApiScope = (typeof VALID_SCOPE_VALUES)[number]
 
 function readAgentId(body: Record<string, unknown>): string | undefined {
 	return typeof body.agentId === "string" ? body.agentId : undefined
@@ -111,28 +120,40 @@ function readScopeRef(body: Record<string, unknown>): string | undefined {
 	return readContainerTag(body)
 }
 
-function readScope(
-	body: Record<string, unknown>,
-):
-	| "session"
-	| "user"
-	| "agent"
-	| "workspace"
-	| "tenant"
-	| "global"
-	| undefined {
+function readScope(body: Record<string, unknown>): ApiScope | undefined {
 	const scope = typeof body.scope === "string" ? body.scope : undefined
-	if (
-		scope === "session" ||
-		scope === "user" ||
-		scope === "agent" ||
-		scope === "workspace" ||
-		scope === "tenant" ||
-		scope === "global"
-	) {
-		return scope
+	if (VALID_SCOPE_VALUES.includes(scope as ApiScope)) {
+		return scope as ApiScope
 	}
 	return undefined
+}
+
+function readScopeInputError(body: Record<string, unknown>): string | null {
+	if (
+		body.scope !== undefined &&
+		(typeof body.scope !== "string" || !readScope(body))
+	) {
+		return "scope must be session|user|agent|workspace|tenant|global"
+	}
+	if (
+		body.scopeRef !== undefined &&
+		(typeof body.scopeRef !== "string" || !body.scopeRef.trim())
+	) {
+		return "scopeRef must be a non-empty string"
+	}
+	const scope = readScope(body)
+	if (
+		scope === "session" &&
+		!readScopeRef(body) &&
+		!readSessionId(body) &&
+		!readSessionKey(body)
+	) {
+		return "session scope requires sessionId, sessionKey, scopeRef, or containerTag"
+	}
+	if ((scope === "user" || scope === "tenant") && !readScopeRef(body)) {
+		return `${scope} scope requires scopeRef`
+	}
+	return null
 }
 
 function readAccessCollection(
@@ -633,6 +654,10 @@ export function createV1Router(): Hono {
 		if (!query.trim()) {
 			return jsonError(c, 400, "VALIDATION_ERROR", "query is required")
 		}
+		const scopeError = readScopeInputError(body)
+		if (scopeError) {
+			return jsonError(c, 400, "VALIDATION_ERROR", scopeError)
+		}
 		try {
 			const results = await memongoBridgeSearch({
 				query,
@@ -640,6 +665,8 @@ export function createV1Router(): Hono {
 				maxResults: readLimit(body),
 				minScore: typeof body.minScore === "number" ? body.minScore : undefined,
 				sessionKey: readSessionKey(body),
+				scope: readScope(body),
+				scopeRef: readScopeRef(body),
 			})
 			return c.json({ results })
 		} catch (err) {
@@ -1029,6 +1056,10 @@ export function createV1Router(): Hono {
 			string,
 			unknown
 		>
+		const scopeError = readScopeInputError(body)
+		if (scopeError) {
+			return jsonError(c, 400, "VALIDATION_ERROR", scopeError)
+		}
 		const query = readQuery(body)
 		if (!query.trim()) {
 			return jsonError(c, 400, "VALIDATION_ERROR", "query is required")
@@ -1077,6 +1108,8 @@ export function createV1Router(): Hono {
 			const result = await memongoBridgeSearchDetailed({
 				query,
 				agentId: readAgentId(body),
+				scope: readScope(body),
+				scopeRef: readScopeRef(body),
 				maxResults: readLimit(body),
 				minScore: typeof body.minScore === "number" ? body.minScore : undefined,
 				searchMode,
@@ -1144,6 +1177,10 @@ export function createV1Router(): Hono {
 			string,
 			unknown
 		>
+		const scopeError = readScopeInputError(body)
+		if (scopeError) {
+			return jsonError(c, 400, "VALIDATION_ERROR", scopeError)
+		}
 		try {
 			const slate = await memongoBridgeHydrateActiveSlate({
 				agentId: readAgentId(body),
@@ -1172,6 +1209,10 @@ export function createV1Router(): Hono {
 			!readQuery(body).trim()
 		) {
 			return jsonError(c, 400, "VALIDATION_ERROR", "query is required")
+		}
+		const scopeError = readScopeInputError(body)
+		if (scopeError) {
+			return jsonError(c, 400, "VALIDATION_ERROR", scopeError)
 		}
 		try {
 			const timeRange =
@@ -1214,6 +1255,10 @@ export function createV1Router(): Hono {
 				"VALIDATION_ERROR",
 				"discoveryKind must be entity-brief|topic-brief|what-changed|contradiction-report",
 			)
+		}
+		const scopeError = readScopeInputError(body)
+		if (scopeError) {
+			return jsonError(c, 400, "VALIDATION_ERROR", scopeError)
 		}
 		try {
 			const timeRange =
@@ -1295,6 +1340,10 @@ export function createV1Router(): Hono {
 		if (!content.trim()) {
 			return jsonError(c, 400, "VALIDATION_ERROR", "content is required")
 		}
+		const scopeError = readScopeInputError(body)
+		if (scopeError) {
+			return jsonError(c, 400, "VALIDATION_ERROR", scopeError)
+		}
 		const metadata =
 			typeof body.metadata === "object" &&
 			body.metadata !== null &&
@@ -1307,6 +1356,8 @@ export function createV1Router(): Hono {
 				agentId: readAgentId(body),
 				sessionId: readSessionId(body),
 				metadata,
+				scope: readScope(body),
+				scopeRef: readScopeRef(body),
 			})
 			return c.json({
 				ok: true,
@@ -1342,21 +1393,17 @@ export function createV1Router(): Hono {
 		if (!bodyText.trim()) {
 			return jsonError(c, 400, "VALIDATION_ERROR", "body is required")
 		}
+		const scopeError = readScopeInputError(body)
+		if (scopeError) {
+			return jsonError(c, 400, "VALIDATION_ERROR", scopeError)
+		}
 		const metadata =
 			typeof body.metadata === "object" &&
 			body.metadata !== null &&
 			!Array.isArray(body.metadata)
 				? (body.metadata as Record<string, unknown>)
 				: undefined
-		const scope =
-			body.scope === "session" ||
-			body.scope === "user" ||
-			body.scope === "agent" ||
-			body.scope === "workspace" ||
-			body.scope === "tenant" ||
-			body.scope === "global"
-				? body.scope
-				: undefined
+		const scope = readScope(body)
 		try {
 			const out = await memongoBridgeWriteConversationEvent({
 				agentId: readAgentId(body),
@@ -1367,6 +1414,7 @@ export function createV1Router(): Hono {
 					typeof body.timestamp === "string" ? body.timestamp : undefined,
 				metadata,
 				scope,
+				scopeRef: readScopeRef(body),
 			})
 			return c.json({
 				ok: true,
@@ -1447,6 +1495,10 @@ export function createV1Router(): Hono {
 			string,
 			unknown
 		>
+		const scopeError = readScopeInputError(body)
+		if (scopeError) {
+			return jsonError(c, 400, "VALIDATION_ERROR", scopeError)
+		}
 		try {
 			const profile = await memongoBridgeProfile({
 				agentId: readAgentId(body),
@@ -1471,9 +1523,14 @@ export function createV1Router(): Hono {
 	})
 
 	v1.get("/state", async (c) => {
+		const query = c.req.query() as Record<string, unknown>
+		const scopeError = readScopeInputError(query)
+		if (scopeError) {
+			return jsonError(c, 400, "VALIDATION_ERROR", scopeError)
+		}
 		const agentId = c.req.query("agentId") ?? undefined
-		const scope = readScope(c.req.query() as Record<string, unknown>)
-		const scopeRef = readScopeRef(c.req.query() as Record<string, unknown>)
+		const scope = readScope(query)
+		const scopeRef = readScopeRef(query)
 		try {
 			const state = await memongoBridgeGetState({ agentId, scope, scopeRef })
 			return c.json(state)

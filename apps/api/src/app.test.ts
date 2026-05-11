@@ -85,6 +85,7 @@ describe("createApp", () => {
 		bridgeMocks.memongoBridgeSelfEdit.mockReset()
 		bridgeMocks.memongoBridgeUpdateLifecycleItem.mockReset()
 		bridgeMocks.memongoBridgeReportProcedureOutcome.mockReset()
+		bridgeMocks.memongoBridgeWriteConversationEvent.mockReset()
 		bridgeMocks.memongoBridgeSearch.mockResolvedValue([])
 		bridgeMocks.memongoBridgeSearchDetailed.mockResolvedValue({
 			results: [],
@@ -110,6 +111,10 @@ describe("createApp", () => {
 		})
 		bridgeMocks.memongoBridgeAdd.mockResolvedValue({
 			eventId: "evt-1",
+			chunkCreated: true,
+		})
+		bridgeMocks.memongoBridgeWriteConversationEvent.mockResolvedValue({
+			eventId: "evt-2",
 			chunkCreated: true,
 		})
 		bridgeMocks.memongoBridgeProfile.mockResolvedValue({ profile: [] })
@@ -488,6 +493,31 @@ describe("createApp", () => {
 		})
 	})
 
+	it("forwards scoped search options", async () => {
+		const res = await createApp().request("/v1/search", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				query: "dogfood checkpoint",
+				agentId: "codex",
+				scope: "workspace",
+				scopeRef: "/Users/rom.iluz/Dev/memongo",
+				limit: 3,
+			}),
+		})
+
+		expect(res.status).toBe(200)
+		expect(bridgeMocks.memongoBridgeSearch).toHaveBeenCalledWith({
+			query: "dogfood checkpoint",
+			agentId: "codex",
+			maxResults: 3,
+			minScore: undefined,
+			sessionKey: undefined,
+			scope: "workspace",
+			scopeRef: "/Users/rom.iluz/Dev/memongo",
+		})
+	})
+
 	for (const aliasCase of contractFixtures.aliasCases) {
 		it(`preserves ${aliasCase.name}`, async () => {
 			const res = await createApp().request(aliasCase.path, {
@@ -607,6 +637,286 @@ describe("createApp", () => {
 		})
 		expect(authorized.status).toBe(200)
 		expect(bridgeMocks.memongoBridgeStatus).toHaveBeenCalledOnce()
+	})
+
+	it("fails closed when scoped API key policy JSON is invalid", () => {
+		process.env.MEMONGO_API_SCOPED_KEYS = "not-json"
+
+		expect(() => createApp()).toThrow(
+			"MEMONGO_API_SCOPED_KEYS must be valid JSON",
+		)
+	})
+
+	it("fails closed when scoped API key policies are unconstrained", () => {
+		process.env.MEMONGO_API_SCOPED_KEYS = JSON.stringify([
+			{ token: "scoped-secret" },
+		])
+
+		expect(() => createApp()).toThrow(
+			"MEMONGO_API_SCOPED_KEYS policy for token scoped-secret must constrain agentIds, scopes, or scopeRefs",
+		)
+	})
+
+	it("allows scoped API keys only inside their agent and scope policy", async () => {
+		process.env.MEMONGO_API_SCOPED_KEYS = JSON.stringify([
+			{
+				token: "scoped-secret",
+				agentIds: ["codex"],
+				scopes: ["workspace"],
+				scopeRefs: ["/Users/rom.iluz/Dev/memongo"],
+			},
+		])
+
+		const res = await createApp().request("/v1/search", {
+			method: "POST",
+			headers: {
+				Authorization: "Bearer scoped-secret",
+				"Content-Type": "application/json",
+			},
+			body: JSON.stringify({
+				query: "dogfood gates",
+				agentId: "codex",
+				scope: "workspace",
+				scopeRef: "/Users/rom.iluz/Dev/memongo",
+			}),
+		})
+
+		expect(res.status).toBe(200)
+		expect(bridgeMocks.memongoBridgeSearch).toHaveBeenCalledWith(
+			expect.objectContaining({
+				agentId: "codex",
+				scope: "workspace",
+				scopeRef: "/Users/rom.iluz/Dev/memongo",
+			}),
+		)
+	})
+
+	it("rejects scoped API keys outside their allowed scopeRef", async () => {
+		process.env.MEMONGO_API_SCOPED_KEYS = JSON.stringify([
+			{
+				token: "scoped-secret",
+				agentIds: ["codex"],
+				scopes: ["workspace"],
+				scopeRefs: ["/Users/rom.iluz/Dev/memongo"],
+			},
+		])
+
+		const res = await createApp().request("/v1/search", {
+			method: "POST",
+			headers: {
+				Authorization: "Bearer scoped-secret",
+				"Content-Type": "application/json",
+			},
+			body: JSON.stringify({
+				query: "dogfood gates",
+				agentId: "codex",
+				scope: "workspace",
+				scopeRef: "/Users/rom.iluz/Dev/other",
+			}),
+		})
+
+		expect(res.status).toBe(403)
+		await expect(res.json()).resolves.toEqual({
+			error: {
+				code: "FORBIDDEN",
+				message: "scopeRef is not allowed for this API key",
+			},
+		})
+		expect(bridgeMocks.memongoBridgeSearch).not.toHaveBeenCalled()
+	})
+
+	it("requires explicit scoped fields for scoped API keys", async () => {
+		process.env.MEMONGO_API_SCOPED_KEYS = JSON.stringify([
+			{
+				token: "scoped-secret",
+				agentIds: ["codex"],
+				scopes: ["workspace"],
+				scopeRefs: ["/Users/rom.iluz/Dev/memongo"],
+			},
+		])
+
+		const res = await createApp().request("/v1/search", {
+			method: "POST",
+			headers: {
+				Authorization: "Bearer scoped-secret",
+				"Content-Type": "application/json",
+			},
+			body: JSON.stringify({
+				query: "dogfood gates",
+				agentId: "codex",
+			}),
+		})
+
+		expect(res.status).toBe(403)
+		await expect(res.json()).resolves.toEqual({
+			error: {
+				code: "FORBIDDEN",
+				message: "scope is required for this API key",
+			},
+		})
+		expect(bridgeMocks.memongoBridgeSearch).not.toHaveBeenCalled()
+	})
+
+	it("keeps MEMONGO_API_KEY as the admin key when scoped keys are configured", async () => {
+		process.env.MEMONGO_API_KEY = "admin-secret"
+		process.env.MEMONGO_API_SCOPED_KEYS = JSON.stringify([
+			{
+				token: "scoped-secret",
+				agentIds: ["codex"],
+				scopes: ["workspace"],
+				scopeRefs: ["/Users/rom.iluz/Dev/memongo"],
+			},
+		])
+
+		const res = await createApp().request("/v1/search", {
+			method: "POST",
+			headers: {
+				Authorization: "Bearer admin-secret",
+				"Content-Type": "application/json",
+			},
+			body: JSON.stringify({
+				query: "admin can inspect another scope",
+				agentId: "other-agent",
+				scope: "global",
+				scopeRef: "global",
+			}),
+		})
+
+		expect(res.status).toBe(200)
+		expect(bridgeMocks.memongoBridgeSearch).toHaveBeenCalledWith(
+			expect.objectContaining({
+				agentId: "other-agent",
+				scope: "global",
+				scopeRef: "global",
+			}),
+		)
+	})
+
+	it("forwards add scope and scopeRef when provided", async () => {
+		const res = await createApp().request("/v1/add", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				content: "remember the scoped thing",
+				agentId: "codex",
+				sessionId: "session-9",
+				scope: "session",
+				scopeRef: "session:session-9",
+			}),
+		})
+
+		expect(res.status).toBe(200)
+		expect(bridgeMocks.memongoBridgeAdd).toHaveBeenCalledWith(
+			expect.objectContaining({
+				content: "remember the scoped thing",
+				agentId: "codex",
+				sessionId: "session-9",
+				scope: "session",
+				scopeRef: "session:session-9",
+			}),
+		)
+	})
+
+	it("forwards write-event scopeRef when provided", async () => {
+		const res = await createApp().request("/v1/write-event", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				role: "assistant",
+				body: "scoped assistant memory",
+				agentId: "codex",
+				sessionId: "session-9",
+				scope: "session",
+				scopeRef: "session:session-9",
+			}),
+		})
+
+		expect(res.status).toBe(200)
+		expect(
+			bridgeMocks.memongoBridgeWriteConversationEvent,
+		).toHaveBeenCalledWith(
+			expect.objectContaining({
+				role: "assistant",
+				body: "scoped assistant memory",
+				agentId: "codex",
+				sessionId: "session-9",
+				scope: "session",
+				scopeRef: "session:session-9",
+			}),
+		)
+	})
+
+	it("rejects invalid scope values before calling the bridge", async () => {
+		const res = await createApp().request("/v1/search", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				query: "scoped launch note",
+				scope: "project",
+			}),
+		})
+
+		expect(res.status).toBe(400)
+		await expect(res.json()).resolves.toEqual({
+			error: {
+				code: "VALIDATION_ERROR",
+				message: "scope must be session|user|agent|workspace|tenant|global",
+			},
+		})
+		expect(bridgeMocks.memongoBridgeSearch).not.toHaveBeenCalled()
+	})
+
+	it("rejects invalid search-detailed scope values before calling the bridge", async () => {
+		const res = await createApp().request("/v1/search-detailed", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				query: "scoped launch note",
+				scope: "project",
+			}),
+		})
+
+		expect(res.status).toBe(400)
+		await expect(res.json()).resolves.toEqual({
+			error: {
+				code: "VALIDATION_ERROR",
+				message: "scope must be session|user|agent|workspace|tenant|global",
+			},
+		})
+		expect(bridgeMocks.memongoBridgeSearchDetailed).not.toHaveBeenCalled()
+	})
+
+	it("rejects user and tenant scopes without scopeRef", async () => {
+		const res = await createApp().request("/v1/add", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				content: "remember this for a tenant",
+				scope: "tenant",
+			}),
+		})
+
+		expect(res.status).toBe(400)
+		await expect(res.json()).resolves.toEqual({
+			error: {
+				code: "VALIDATION_ERROR",
+				message: "tenant scope requires scopeRef",
+			},
+		})
+		expect(bridgeMocks.memongoBridgeAdd).not.toHaveBeenCalled()
+	})
+
+	it("rejects state user scope without scopeRef", async () => {
+		const res = await createApp().request("/v1/state?scope=user")
+
+		expect(res.status).toBe(400)
+		await expect(res.json()).resolves.toEqual({
+			error: {
+				code: "VALIDATION_ERROR",
+				message: "user scope requires scopeRef",
+			},
+		})
+		expect(bridgeMocks.memongoBridgeGetState).not.toHaveBeenCalled()
 	})
 
 	it("forwards profile scope when provided", async () => {
@@ -1580,6 +1890,8 @@ describe("createApp", () => {
 			body: JSON.stringify({
 				query: "what changed",
 				agentId: "agent-42",
+				scope: "workspace",
+				scopeRef: "/Users/rom.iluz/Dev/memongo",
 				limit: 4,
 				minScore: 0.4,
 				searchMode: "agentic",
@@ -1639,6 +1951,8 @@ describe("createApp", () => {
 		expect(bridgeMocks.memongoBridgeSearchDetailed).toHaveBeenCalledWith({
 			query: "what changed",
 			agentId: "agent-42",
+			scope: "workspace",
+			scopeRef: "/Users/rom.iluz/Dev/memongo",
 			maxResults: 4,
 			minScore: 0.4,
 			searchMode: "agentic",
