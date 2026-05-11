@@ -569,6 +569,125 @@ describe("mongodb benchmark runner", () => {
 		)
 	})
 
+	it("emits parity envelope fields when Task 1.A parity inputs are provided (Task 1.A)", () => {
+		const report = buildBenchmarkRunReport({
+			datasetVersion: "longmem-v1",
+			datasetName: "longmemeval_s.json",
+			datasetKind: "longmemeval",
+			cases: 2,
+			scoredCases: 2,
+			hitRate: 1,
+			emptyRate: 0,
+			avgTopScore: 0.9,
+			p95LatencyMs: 44,
+			rAt5: 1,
+			rAt10: 1,
+			ndcgAt10: 1,
+			runIdentity: {
+				datasetSha256:
+					"a".repeat(64),
+				retrievalUnit: "turn",
+			},
+			embedding: {
+				model: "voyage-3",
+				dimensions: 1024,
+				quantization: "float32",
+			},
+			reranker: {
+				model: "rerank-2",
+				version: null,
+				stage: "post-fusion",
+			},
+			storage: {
+				collectionBytes: 1024,
+				indexBytes: 2048,
+			},
+			latency: {
+				p50Ms: 20,
+				p95Ms: 44,
+			},
+			cost: {
+				embeddingCalls: 10,
+				rerankCalls: 5,
+				llmEnrichmentCalls: 0,
+			},
+		})
+
+		expect(report.runIdentity?.datasetSha256).toMatch(/^[0-9a-f]{64}$/)
+		expect(report.runIdentity?.retrievalUnit).toBe("turn")
+		expect(report.embedding?.model).toBe("voyage-3")
+		expect(report.embedding?.dimensions).toBe(1024)
+		expect(report.embedding?.quantization).toBe("float32")
+		expect(report.reranker?.model).toBe("rerank-2")
+		expect(report.reranker?.version).toBeNull()
+		expect(report.reranker?.stage).toBe("post-fusion")
+		expect(report.storage?.collectionBytes).toBe(1024)
+		expect(report.storage?.indexBytes).toBe(2048)
+		expect(report.latency?.p50Ms).toBe(20)
+		expect(report.latency?.p95Ms).toBe(44)
+		expect(report.cost?.embeddingCalls).toBe(10)
+		expect(report.cost?.rerankCalls).toBe(5)
+		expect(report.cost?.llmEnrichmentCalls).toBe(0)
+	})
+
+	it("emits storage null-with-reason when collStats is unavailable (Task 1.A)", () => {
+		const report = buildBenchmarkRunReport({
+			datasetVersion: "longmem-v1",
+			datasetName: "longmemeval_s.json",
+			datasetKind: "longmemeval",
+			cases: 1,
+			scoredCases: 1,
+			hitRate: 1,
+			emptyRate: 0,
+			avgTopScore: 0.9,
+			p95LatencyMs: 30,
+			runIdentity: {
+				datasetSha256: "b".repeat(64),
+				retrievalUnit: "turn",
+			},
+			storage: {
+				collectionBytes: null,
+				indexBytes: null,
+				unavailableReason: "collStats-unsupported-on-atlas-local-preview",
+			},
+		})
+
+		expect(report.storage?.collectionBytes).toBeNull()
+		expect(report.storage?.indexBytes).toBeNull()
+		expect(report.storage?.unavailableReason).toBe(
+			"collStats-unsupported-on-atlas-local-preview",
+		)
+	})
+
+	it("accepts Gate-5 e2eQa extensions (may be null at Phase 1) (Task 1.A)", () => {
+		const report = buildBenchmarkRunReport({
+			datasetVersion: "longmem-v1",
+			datasetName: "longmemeval_s.json",
+			datasetKind: "longmemeval",
+			cases: 1,
+			scoredCases: 1,
+			hitRate: 1,
+			emptyRate: 0,
+			avgTopScore: 0.9,
+			p95LatencyMs: 30,
+			runIdentity: {
+				datasetSha256: "c".repeat(64),
+				retrievalUnit: "turn",
+			},
+			e2eQa: {
+				judge: null,
+				judgeVersion: null,
+				accuracy: null,
+				latencyMs: null,
+				judgeFalsePositiveRate: null,
+			},
+		})
+
+		expect(report.e2eQa).toBeDefined()
+		expect(report.e2eQa?.judge).toBeNull()
+		expect(report.e2eQa?.accuracy).toBeNull()
+	})
+
 	it("warns when official metrics score more cases than the corpus declares", () => {
 		const report = buildBenchmarkRunReport({
 			datasetVersion: "longmem-v1",

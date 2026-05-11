@@ -1,5 +1,12 @@
 import type { MemorySearchResult } from "./types.js"
 import type {
+	BenchmarkCostCounters,
+	BenchmarkE2eQaEnvelope,
+	BenchmarkEmbeddingConfig,
+	BenchmarkLatencyDistribution,
+	BenchmarkRerankerConfig,
+	BenchmarkRunIdentity,
+	BenchmarkStorageFootprint,
 	MemoryBenchmarkDatasetKind,
 	MemoryBenchmarkOfficialMetrics,
 	MemoryBenchmarkOfficialRetrievalMetrics,
@@ -153,6 +160,14 @@ type BenchmarkReportInput = {
 	officialMetrics?: MemoryBenchmarkOfficialMetrics
 	ingest?: BenchmarkSummary["ingest"]
 	queryGovernance?: QueryGovernanceReport
+	/** Task 1.A parity envelope (optional at Phase 1; required at Gate 3). */
+	runIdentity?: BenchmarkRunIdentity
+	embedding?: BenchmarkEmbeddingConfig
+	reranker?: BenchmarkRerankerConfig
+	storage?: BenchmarkStorageFootprint
+	latency?: BenchmarkLatencyDistribution
+	cost?: BenchmarkCostCounters
+	e2eQa?: BenchmarkE2eQaEnvelope
 }
 
 function readBuildIdentity(): MemoryBenchmarkRunReport["build"] {
@@ -336,6 +351,13 @@ export function buildBenchmarkRunReport(
 		],
 		warnings: buildBenchmarkWarnings(params),
 		degradations: buildBenchmarkDegradations(params),
+		...(params.runIdentity ? { runIdentity: params.runIdentity } : {}),
+		...(params.embedding ? { embedding: params.embedding } : {}),
+		...(params.reranker ? { reranker: params.reranker } : {}),
+		...(params.storage ? { storage: params.storage } : {}),
+		...(params.latency ? { latency: params.latency } : {}),
+		...(params.cost ? { cost: params.cost } : {}),
+		...(params.e2eQa ? { e2eQa: params.e2eQa } : {}),
 	}
 }
 

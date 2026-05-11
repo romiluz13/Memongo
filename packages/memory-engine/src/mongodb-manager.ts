@@ -2196,6 +2196,19 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		datasetPath?: string
 		maxResults?: number
 		minScore?: number
+		// Task 1.A envelope-parity pass-through — accepted today, wired into
+		// the envelope by Task 5.E2E (envelope emitter already supports them).
+		datasetSha256?: string
+		embeddingConfig?: {
+			model: string
+			dimensions: number
+			quantization: "float32" | "int8" | "binary"
+		}
+		rerankerConfig?: {
+			model: string
+			version: string | null
+			stage: "post-fusion" | "pre-fusion" | "none"
+		}
 	}): Promise<RelevanceBenchmarkResult> {
 		if (!this.relevance) {
 			throw new Error("relevance runtime is unavailable")

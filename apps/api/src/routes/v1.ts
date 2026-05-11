@@ -158,6 +158,67 @@ function readAccessCollection(
 	return undefined
 }
 
+/**
+ * Task 1.A — parse optional embeddingConfig from benchmark request body.
+ * Returns the validated config or undefined if absent/malformed. All fields
+ * must be present to accept it.
+ */
+function parseEmbeddingConfig(
+	raw: unknown,
+):
+	| {
+			model: string
+			dimensions: number
+			quantization: "float32" | "int8" | "binary"
+	  }
+	| undefined {
+	if (!raw || typeof raw !== "object") return undefined
+	const r = raw as Record<string, unknown>
+	const model = typeof r.model === "string" ? r.model : undefined
+	const dimensions =
+		typeof r.dimensions === "number" && r.dimensions > 0
+			? Math.floor(r.dimensions)
+			: undefined
+	const quantization =
+		r.quantization === "float32" ||
+		r.quantization === "int8" ||
+		r.quantization === "binary"
+			? r.quantization
+			: undefined
+	if (!model || !dimensions || !quantization) return undefined
+	return { model, dimensions, quantization }
+}
+
+/**
+ * Task 1.A — parse optional rerankerConfig from benchmark request body.
+ * `version` is null-able (Voyage SDK does not always expose version).
+ */
+function parseRerankerConfig(
+	raw: unknown,
+):
+	| {
+			model: string
+			version: string | null
+			stage: "post-fusion" | "pre-fusion" | "none"
+	  }
+	| undefined {
+	if (!raw || typeof raw !== "object") return undefined
+	const r = raw as Record<string, unknown>
+	const model = typeof r.model === "string" ? r.model : undefined
+	const version =
+		typeof r.version === "string"
+			? r.version
+			: r.version === null
+				? null
+				: undefined
+	const stage =
+		r.stage === "post-fusion" || r.stage === "pre-fusion" || r.stage === "none"
+			? r.stage
+			: undefined
+	if (!model || version === undefined || !stage) return undefined
+	return { model, version, stage }
+}
+
 function readDiscoveryProjectionKind(
 	body: Record<string, unknown>,
 ):
@@ -1540,6 +1601,15 @@ export function createV1Router(): Hono {
 			unknown
 		>
 		try {
+			// Task 1.A parity envelope inputs (all optional at Phase 1).
+			const datasetSha256 =
+				typeof body.datasetSha256 === "string" &&
+				/^[0-9a-f]{64}$/.test(body.datasetSha256)
+					? body.datasetSha256
+					: undefined
+			const embeddingConfig = parseEmbeddingConfig(body.embeddingConfig)
+			const rerankerConfig = parseRerankerConfig(body.rerankerConfig)
+
 			const out = await memongoBridgeRelevanceBenchmark({
 				agentId: readAgentId(body),
 				datasetPath:
@@ -1547,6 +1617,9 @@ export function createV1Router(): Hono {
 				maxResults:
 					typeof body.maxResults === "number" ? body.maxResults : undefined,
 				minScore: typeof body.minScore === "number" ? body.minScore : undefined,
+				...(datasetSha256 ? { datasetSha256 } : {}),
+				...(embeddingConfig ? { embeddingConfig } : {}),
+				...(rerankerConfig ? { rerankerConfig } : {}),
 			})
 			try {
 				return c.json(out)
