@@ -41,6 +41,27 @@ there must be zero silent fallback. Any fallback is either:
 | `mongodb-conversation-recall.ts:547-568` (hybrid & semantic recall fallback) | recall | **CONVERT (deferred)** | In strict mode the canary must fail instead of silently degrading to lexical. Land in Phase 2 Scope #2. | Phase 2 Scope #2 |
 | `mongodb-llm-enrichment.ts:478` (retry loop) | retry | KEEP | `lastError` is surfaced; not a fallback per se — the retry policy is explicit | — |
 
+## Additional finding (Task 1.9 gate proof)
+
+The Task 1.9 forced-failure run surfaced a new silent-fallback suspect:
+
+- **Site:** API server's Voyage client wiring (precise site TBD under Scope #2).
+- **Observation:** With `MEMONGO_VOYAGE_BASE_URL=http://127.0.0.1:65530`
+  (unroutable) set on the API server process, a 1-case LongMemEval benchmark
+  run still completed with `hitRate=1` and no logged error. That means one
+  of the following is happening silently:
+  1. The base-URL env var is not being read where the Voyage client is
+     instantiated (configuration drift), OR
+  2. The retrieval path bypasses Voyage entirely for this particular
+     question-type shape (lexical-only / cached), OR
+  3. The Voyage failure surfaces but is caught and swallowed as "degraded"
+     without strict mode re-throwing.
+- **Follow-up:** Investigate on scope-2-retrieval-ranking (this is retrieval
+  scope; changing Voyage wiring or strict-mode enforcement there crosses
+  scope-1's harness boundary). Add a correctness test that forces
+  `MEMONGO_VOYAGE_BASE_URL` unroutable and asserts the API returns a 5xx in
+  strict mode within 10s.
+
 ## Summary
 
 - 14 hot-path catch sites audited across the 7 files named in Task 1.8.
