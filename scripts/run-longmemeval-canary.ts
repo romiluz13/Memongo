@@ -67,16 +67,6 @@ const datasetPath =
 	process.env.MEMONGO_CANARY_DATASET_PATH?.trim() ||
 	process.env.MEMONGO_BENCHMARK_DATASET_PATH?.trim() ||
 	path.join(workspaceDir, "benchmarks", "longmemeval_s_cleaned.json")
-const artifactRoot = path.join(
-	repoRoot,
-	".claude",
-	"cc10x",
-	"v10",
-	"workflows",
-	"memongo-memory-hardening",
-	"artifacts",
-	"canary-runs",
-)
 const port = Number(process.env.MEMONGO_API_PORT?.trim() || "3847")
 const baseUrl = `http://127.0.0.1:${port}`
 const maxResults = Number(
@@ -91,6 +81,48 @@ const selectedQuestionIdFilter =
 	process.env.MEMONGO_CANARY_QUESTION_IDS?.split(",")
 		.map((id) => id.trim())
 		.filter(Boolean) ?? []
+
+// ---------------------------------------------------------------------------
+// Env-var contract helpers (Task 1.0 — exported for testability)
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolve the canary artifact directory. MEMONGO_CANARY_ARTIFACT_DIR, when set
+ * and non-blank, is used verbatim — runId is NOT appended. Otherwise the
+ * default root + runId is returned so each run gets its own subdirectory.
+ */
+export function resolveCanaryArtifactDir(params: {
+	runId: string
+	envDir: string | undefined
+	repoRoot?: string
+}): string {
+	const trimmed = params.envDir?.trim()
+	if (trimmed && trimmed.length > 0) {
+		return params.envDir as string
+	}
+	const root = params.repoRoot ?? process.cwd()
+	return path.join(
+		root,
+		".claude",
+		"cc10x",
+		"v10",
+		"workflows",
+		"memongo-memory-hardening",
+		"artifacts",
+		"canary-runs",
+		params.runId,
+	)
+}
+
+/** MEMONGO_CANARY_FULL=1 is truthy; every other value (including "true") is false. */
+export function resolveCanaryFullMode(envValue: string | undefined): boolean {
+	return envValue === "1"
+}
+
+/** MEMONGO_CANARY_RESUME=1 is truthy; every other value is false. */
+export function resolveCanaryResumeMode(envValue: string | undefined): boolean {
+	return envValue === "1"
+}
 
 // ---------------------------------------------------------------------------
 // Stratified selection (exported for testability)
@@ -247,9 +279,16 @@ async function main() {
 	const runId =
 		process.env.MEMONGO_CANARY_RUN_ID?.trim() ||
 		`canary-${startedAt.toISOString().replace(/[:.]/g, "-")}-${randomUUID().slice(0, 8)}`
-	const runDir = path.join(artifactRoot, runId)
+	const runDir = resolveCanaryArtifactDir({
+		runId,
+		envDir: process.env.MEMONGO_CANARY_ARTIFACT_DIR,
+		repoRoot,
+	})
+	const fullMode = resolveCanaryFullMode(process.env.MEMONGO_CANARY_FULL)
 
-	console.log(`[canary] run=${runId} dataset=${datasetPath} dryRun=${dryRun}`)
+	console.log(
+		`[canary] run=${runId} dataset=${datasetPath} dryRun=${dryRun} fullMode=${fullMode} runDir=${runDir}`,
+	)
 
 	// Load dataset
 	if (!existsSync(datasetPath)) {
@@ -267,15 +306,22 @@ async function main() {
 	}
 	const entries = dataset as RawLongMemEvalEntry[]
 
-	// Select stratified subset
-	const { selected, selectedQuestionIds, breakdown } = selectStratifiedSubset(
-		entries,
-		CASES_PER_TYPE,
-		{
-			totalCaseLimit,
-			questionIds: selectedQuestionIdFilter,
-		},
-	)
+	// Select stratified subset.
+	// MEMONGO_CANARY_FULL=1 overrides the stratified subset: run every scenario
+	// in the dataset, ignoring MEMONGO_CANARY_CASES_PER_TYPE and
+	// MEMONGO_CANARY_TOTAL_CASES (but still honoring an explicit question-id
+	// filter, since that's a narrower intent).
+	const { selected, selectedQuestionIds, breakdown } = fullMode
+		? selectStratifiedSubset(entries, entries.length, {
+				questionIds:
+					selectedQuestionIdFilter.length > 0
+						? selectedQuestionIdFilter
+						: undefined,
+			})
+		: selectStratifiedSubset(entries, CASES_PER_TYPE, {
+				totalCaseLimit,
+				questionIds: selectedQuestionIdFilter,
+			})
 
 	console.log(
 		`[canary] selected ${selectedQuestionIds.length} evaluations across ${Object.keys(breakdown).length} types from ${entries.length} total`,

@@ -1,6 +1,9 @@
 import { describe, it, expect } from "vitest"
 import {
+	resolveCanaryArtifactDir,
+	resolveCanaryFullMode,
 	resolveCanaryHttpTimeoutMs,
+	resolveCanaryResumeMode,
 	selectStratifiedSubset,
 	type RawLongMemEvalEntry,
 } from "./run-longmemeval-canary.js"
@@ -170,5 +173,49 @@ describe("resolveCanaryHttpTimeoutMs", () => {
 		expect(() => resolveCanaryHttpTimeoutMs("forever")).toThrow(
 			"MEMONGO_CANARY_HTTP_TIMEOUT_MS",
 		)
+	})
+})
+
+describe("MEMONGO_CANARY_* env var contract (Task 1.0)", () => {
+	it("MEMONGO_CANARY_ARTIFACT_DIR overrides the default artifact root exactly", () => {
+		expect(
+			resolveCanaryArtifactDir({ runId: "abc", envDir: "/tmp/foo" }),
+		).toBe("/tmp/foo")
+	})
+
+	it("MEMONGO_CANARY_ARTIFACT_DIR absent falls back to default root + runId", () => {
+		const out = resolveCanaryArtifactDir({
+			runId: "abc",
+			envDir: undefined,
+			repoRoot: "/repo",
+		})
+		expect(out).toMatch(
+			/\.claude\/cc10x\/v10\/workflows\/memongo-memory-hardening\/artifacts\/canary-runs\/abc$/,
+		)
+	})
+
+	it("MEMONGO_CANARY_ARTIFACT_DIR blank string falls back to default root + runId", () => {
+		const out = resolveCanaryArtifactDir({
+			runId: "abc",
+			envDir: "  ",
+			repoRoot: "/repo",
+		})
+		expect(out).toMatch(/canary-runs\/abc$/)
+	})
+
+	it("MEMONGO_CANARY_FULL=1 enables full mode; anything else is false", () => {
+		expect(resolveCanaryFullMode("1")).toBe(true)
+		expect(resolveCanaryFullMode("0")).toBe(false)
+		expect(resolveCanaryFullMode(undefined)).toBe(false)
+		expect(resolveCanaryFullMode("true")).toBe(false)
+		expect(resolveCanaryFullMode("")).toBe(false)
+	})
+
+	it("MEMONGO_CANARY_RESUME=1 enables resume mode; anything else is false", () => {
+		expect(resolveCanaryResumeMode("1")).toBe(true)
+		expect(resolveCanaryResumeMode("0")).toBe(false)
+		expect(resolveCanaryResumeMode(undefined)).toBe(false)
+		expect(resolveCanaryResumeMode("true")).toBe(false)
+		expect(resolveCanaryResumeMode("")).toBe(false)
 	})
 })
