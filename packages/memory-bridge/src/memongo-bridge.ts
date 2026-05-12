@@ -35,10 +35,22 @@ import type {
 	V2Status,
 } from "@memongo/memory-engine"
 import {
+	closeAllMemorySearchManagers,
 	getMemorySearchManager,
 	materializeBlocks,
 } from "@memongo/memory-engine"
 import { resolveBridgeConfig } from "./memory-config.js"
+
+/**
+ * CRIT-5 (part 2): Graceful bridge shutdown.
+ * Closes every cached MongoDB memory manager, which in turn flushes the
+ * access tracker and closes the Mongo client. Swallows errors per-manager
+ * via `closeAllMemorySearchManagers` so one failing manager does not block
+ * the rest.
+ */
+export async function memongoBridgeShutdown(): Promise<void> {
+	await closeAllMemorySearchManagers()
+}
 
 type MemongoBridgeActiveSlate = {
 	agentId: string

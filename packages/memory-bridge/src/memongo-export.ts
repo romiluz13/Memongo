@@ -50,10 +50,55 @@ export type ExportBundle = {
  * produce byte-identical JSON. Arrays are preserved in input order (event
  * order is load-bearing — callers are responsible for stable sort at the
  * retrieval site).
+ *
+ * CRIT-6 (silent-failure fix): native `JSON.stringify` silently drops or
+ * mangles several common non-plain-object types. We normalize them before
+ * serialization so exports never lose data:
+ *   - `Date`         → ISO-8601 string
+ *   - `Buffer`       → `{ __type: "Buffer", base64: string }`
+ *   - `Uint8Array`   → same tagged object as `Buffer`
+ *   - `Map`          → `{ __type: "Map", entries: [[k, v], ...] }` (key-sorted)
+ *   - `Set`          → `{ __type: "Set", values: [...] }` (JSON-sorted)
+ * Tagged objects round-trip through canonicalization and sign deterministically.
  */
 function canonicalize(value: unknown): unknown {
-	if (value === null || typeof value !== "object") {
+	if (value === null || value === undefined) {
 		return value
+	}
+	if (typeof value !== "object") {
+		return value
+	}
+	if (value instanceof Date) {
+		return value.toISOString()
+	}
+	if (Buffer.isBuffer(value)) {
+		return { __type: "Buffer", base64: value.toString("base64") }
+	}
+	if (value instanceof Uint8Array) {
+		return {
+			__type: "Buffer",
+			base64: Buffer.from(value).toString("base64"),
+		}
+	}
+	if (value instanceof Map) {
+		const entries = Array.from(value.entries()).map(
+			([k, v]) => [canonicalize(k), canonicalize(v)] as [unknown, unknown],
+		)
+		entries.sort((a, b) => {
+			const ka = JSON.stringify(a[0])
+			const kb = JSON.stringify(b[0])
+			return ka < kb ? -1 : ka > kb ? 1 : 0
+		})
+		return { __type: "Map", entries }
+	}
+	if (value instanceof Set) {
+		const values = Array.from(value.values()).map(canonicalize)
+		values.sort((a, b) => {
+			const sa = JSON.stringify(a)
+			const sb = JSON.stringify(b)
+			return sa < sb ? -1 : sa > sb ? 1 : 0
+		})
+		return { __type: "Set", values }
 	}
 	if (Array.isArray(value)) {
 		return value.map(canonicalize)

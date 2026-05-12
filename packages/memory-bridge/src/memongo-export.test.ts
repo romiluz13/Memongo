@@ -29,6 +29,128 @@ const SAMPLE_BUNDLE: ExportBundle = {
 	kb: [],
 }
 
+describe("canonicalizeExportBundle (Task 2.SE-4) — non-JSON type handling (CRIT-6)", () => {
+	it("encodes Date as ISO string (not {}) so it survives canonical JSON", () => {
+		const bundleWithDate = {
+			...SAMPLE_BUNDLE,
+			events: [
+				{
+					eventId: "evt-date",
+					body: "date test",
+					timestamp: "2026-04-01T00:00:00.000Z",
+					// Date lurking in a per-event metadata field.
+					loggedAt: new Date("2026-04-01T12:00:00.000Z"),
+				},
+			],
+		} as unknown as ExportBundle
+		const json = canonicalizeExportBundle(bundleWithDate)
+		expect(json).toContain('"loggedAt":"2026-04-01T12:00:00.000Z"')
+		// Must NOT be the silent-drop empty-object rendering.
+		expect(json).not.toContain('"loggedAt":{}')
+	})
+
+	it("encodes Buffer as {__type:'Buffer',base64:...} so bytes survive", () => {
+		const buf = Buffer.from([0x01, 0x02, 0x03, 0x04])
+		const bundleWithBuffer = {
+			...SAMPLE_BUNDLE,
+			events: [
+				{
+					eventId: "evt-buf",
+					body: "buf test",
+					timestamp: "2026-04-01T00:00:00.000Z",
+					payload: buf,
+				},
+			],
+		} as unknown as ExportBundle
+		const json = canonicalizeExportBundle(bundleWithBuffer)
+		expect(json).toContain('"__type":"Buffer"')
+		expect(json).toContain(`"base64":"${buf.toString("base64")}"`)
+		// Must NOT silently drop to the legacy Node {"type":"Buffer","data":[]}.
+		expect(json).not.toContain('"type":"Buffer","data":')
+	})
+
+	it("encodes Map as sorted {__type:'Map',entries:[[k,v],...]} to survive JSON", () => {
+		const bundleWithMap = {
+			...SAMPLE_BUNDLE,
+			events: [
+				{
+					eventId: "evt-map",
+					body: "map test",
+					timestamp: "2026-04-01T00:00:00.000Z",
+					// Out-of-order insert — canonical form must sort by key.
+					tags: new Map<string, number>([
+						["zeta", 2],
+						["alpha", 1],
+					]),
+				},
+			],
+		} as unknown as ExportBundle
+		const json = canonicalizeExportBundle(bundleWithMap)
+		expect(json).toContain('"__type":"Map"')
+		// Canonical: alphabetically sorted entries.
+		expect(json).toContain('"entries":[["alpha",1],["zeta",2]]')
+		// Must NOT be the silent empty-object drop.
+		expect(json).not.toContain('"tags":{}')
+	})
+
+	it("encodes Set as sorted {__type:'Set',values:[...]} to survive JSON", () => {
+		const bundleWithSet = {
+			...SAMPLE_BUNDLE,
+			events: [
+				{
+					eventId: "evt-set",
+					body: "set test",
+					timestamp: "2026-04-01T00:00:00.000Z",
+					// Out-of-order insert — canonical form must sort values.
+					labels: new Set<string>(["kiwi", "apple", "banana"]),
+				},
+			],
+		} as unknown as ExportBundle
+		const json = canonicalizeExportBundle(bundleWithSet)
+		expect(json).toContain('"__type":"Set"')
+		expect(json).toContain('"values":["apple","banana","kiwi"]')
+		expect(json).not.toContain('"labels":{}')
+	})
+
+	it("re-encoding produces identical bytes across Map insertion orders", () => {
+		const mapA = new Map<string, string>([
+			["a", "1"],
+			["b", "2"],
+			["c", "3"],
+		])
+		const mapB = new Map<string, string>([
+			["c", "3"],
+			["a", "1"],
+			["b", "2"],
+		])
+		const bundleA = {
+			...SAMPLE_BUNDLE,
+			events: [
+				{
+					eventId: "e",
+					body: "x",
+					timestamp: "2026-04-01T00:00:00.000Z",
+					m: mapA,
+				},
+			],
+		} as unknown as ExportBundle
+		const bundleB = {
+			...SAMPLE_BUNDLE,
+			events: [
+				{
+					eventId: "e",
+					body: "x",
+					timestamp: "2026-04-01T00:00:00.000Z",
+					m: mapB,
+				},
+			],
+		} as unknown as ExportBundle
+		expect(canonicalizeExportBundle(bundleA)).toBe(
+			canonicalizeExportBundle(bundleB),
+		)
+	})
+})
+
 describe("canonicalizeExportBundle (Task 2.SE-4)", () => {
 	it("produces byte-identical output for semantically equal bundles", () => {
 		const a = canonicalizeExportBundle({ ...SAMPLE_BUNDLE })
