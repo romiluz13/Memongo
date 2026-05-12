@@ -1,3 +1,12 @@
+import type { Db } from "mongodb"
+import {
+	collectStorageFootprint,
+	percentile50And95,
+	resolveBenchmarkEmbeddingConfig,
+	resolveBenchmarkRerankerConfig,
+	resolveDatasetSha256,
+	resolveRetrievalUnit,
+} from "./benchmark-parity-envelope.js"
 import type { MemorySearchResult } from "./types.js"
 import type {
 	BenchmarkCostCounters,
@@ -358,6 +367,75 @@ export function buildBenchmarkRunReport(
 		...(params.latency ? { latency: params.latency } : {}),
 		...(params.cost ? { cost: params.cost } : {}),
 		...(params.e2eQa ? { e2eQa: params.e2eQa } : {}),
+	}
+}
+
+/**
+ * Task 1.A projection: compute the parity-envelope bundle (runIdentity,
+ * embedding, reranker, storage, latency, cost) from runtime signals so
+ * callers can pass it into `buildBenchmarkRunReport()` without duplicating
+ * field logic at every call site.
+ *
+ * Inputs:
+ *   - `db` + `collectionName` — used for `collStats`; null-with-reason on
+ *     atlas-local:preview when unsupported.
+ *   - `datasetPath` — used to compute SHA-256 if no env override is set.
+ *     Env `MEMONGO_BENCHMARK_DATASET_SHA` takes precedence (matches
+ *     bootstrap.json), then the `datasetSha256` override.
+ *   - `datasetKind` — determines retrieval unit (currently always "turn").
+ *   - `mongoEmbeddingConfig` — from resolved backend config
+ *     (`numDimensions` + `quantization`).
+ *   - `mongoRerankerConfig` — from resolved backend config
+ *     (`enabled`, `model`, `topN`).
+ *   - `latencySamples` — per-case retrieval latencies collected during
+ *     the benchmark run. Emits p50 + p95.
+ *   - `costCounters` — run-scoped counters from
+ *     `createBenchmarkRunCounters()`.
+ */
+export async function projectBenchmarkParityFields(params: {
+	db: Pick<Db, "command">
+	collectionName: string
+	datasetPath?: string
+	datasetKind?: MemoryBenchmarkDatasetKind | "legacy-query"
+	datasetSha256Override?: string
+	mongoEmbeddingConfig: {
+		numDimensions: number
+		quantization: "none" | "scalar" | "binary"
+	}
+	mongoRerankerConfig: {
+		enabled: boolean
+		model: string
+		topN: number
+	}
+	latencySamples: number[]
+	costCounters: BenchmarkCostCounters
+}): Promise<{
+	runIdentity: BenchmarkRunIdentity
+	embedding: BenchmarkEmbeddingConfig
+	reranker: BenchmarkRerankerConfig
+	storage: BenchmarkStorageFootprint
+	latency: BenchmarkLatencyDistribution
+	cost: BenchmarkCostCounters
+}> {
+	const datasetSha256 = await resolveDatasetSha256({
+		datasetPath: params.datasetPath,
+		override: params.datasetSha256Override,
+	})
+	const retrievalUnit = resolveRetrievalUnit(params.datasetKind)
+	const embedding = resolveBenchmarkEmbeddingConfig(params.mongoEmbeddingConfig)
+	const reranker = resolveBenchmarkRerankerConfig(params.mongoRerankerConfig)
+	const storage = await collectStorageFootprint({
+		db: params.db,
+		collectionName: params.collectionName,
+	})
+	const latency = percentile50And95(params.latencySamples)
+	return {
+		runIdentity: { datasetSha256, retrievalUnit },
+		embedding,
+		reranker,
+		storage,
+		latency,
+		cost: params.costCounters,
 	}
 }
 

@@ -5,6 +5,7 @@ import {
 	buildMissLedger,
 	buildQueryGovernanceReport,
 	evaluateRankingCase,
+	projectBenchmarkParityFields,
 	rankResultSessions,
 	summarizeBenchmarkExecutions,
 	type BenchmarkCaseExecution,
@@ -685,6 +686,103 @@ describe("mongodb benchmark runner", () => {
 		expect(report.e2eQa).toBeDefined()
 		expect(report.e2eQa?.judge).toBeNull()
 		expect(report.e2eQa?.accuracy).toBeNull()
+	})
+
+	it("projectBenchmarkParityFields wires every parity field into the report (Task 1.A projection)", async () => {
+		const { writeFileSync, mkdtempSync } = await import("node:fs")
+		const { tmpdir } = await import("node:os")
+		const path = await import("node:path")
+		const dir = mkdtempSync(path.join(tmpdir(), "memongo-parity-proj-"))
+		const datasetPath = path.join(dir, "canary.jsonl")
+		writeFileSync(datasetPath, "parity-fixture-bytes")
+
+		const mockDb = {
+			command: async () => ({ size: 4096, totalIndexSize: 8192 }),
+		}
+
+		const projected = await projectBenchmarkParityFields({
+			db: mockDb as unknown as Parameters<
+				typeof projectBenchmarkParityFields
+			>[0]["db"],
+			collectionName: "memongo_bench_events",
+			datasetPath,
+			datasetKind: "longmemeval",
+			mongoEmbeddingConfig: {
+				numDimensions: 1024,
+				quantization: "none",
+			},
+			mongoRerankerConfig: {
+				enabled: true,
+				model: "rerank-2.5",
+				topN: 20,
+			},
+			latencySamples: [10, 20, 30, 40, 50],
+			costCounters: {
+				embeddingCalls: 6,
+				rerankCalls: 3,
+				llmEnrichmentCalls: 2,
+			},
+		})
+
+		expect(projected.runIdentity?.datasetSha256).toMatch(/^[0-9a-f]{64}$/)
+		expect(projected.runIdentity?.retrievalUnit).toBe("turn")
+		expect(projected.embedding?.model).toBe("voyage-3.5")
+		expect(projected.embedding?.dimensions).toBe(1024)
+		expect(projected.embedding?.quantization).toBe("float32")
+		expect(projected.reranker?.model).toBe("rerank-2.5")
+		expect(projected.reranker?.stage).toBe("post-fusion")
+		expect(projected.storage?.collectionBytes).toBe(4096)
+		expect(projected.storage?.indexBytes).toBe(8192)
+		expect(projected.latency?.p50Ms).toBeGreaterThanOrEqual(0)
+		expect(projected.latency?.p95Ms).toBeGreaterThanOrEqual(
+			projected.latency?.p50Ms ?? 0,
+		)
+		expect(projected.cost?.embeddingCalls).toBe(6)
+		expect(projected.cost?.rerankCalls).toBe(3)
+		expect(projected.cost?.llmEnrichmentCalls).toBe(2)
+	})
+
+	it("projectBenchmarkParityFields returns null-with-reason storage when collStats throws (atlas-local:preview)", async () => {
+		const { writeFileSync, mkdtempSync } = await import("node:fs")
+		const { tmpdir } = await import("node:os")
+		const path = await import("node:path")
+		const dir = mkdtempSync(path.join(tmpdir(), "memongo-parity-proj-"))
+		const datasetPath = path.join(dir, "canary.jsonl")
+		writeFileSync(datasetPath, "x")
+
+		const throwingDb = {
+			command: async () => {
+				throw new Error("Cannot do collStats on collection ... not supported")
+			},
+		}
+
+		const projected = await projectBenchmarkParityFields({
+			db: throwingDb as unknown as Parameters<
+				typeof projectBenchmarkParityFields
+			>[0]["db"],
+			collectionName: "memongo_bench_events",
+			datasetPath,
+			datasetKind: "longmemeval",
+			mongoEmbeddingConfig: {
+				numDimensions: 1024,
+				quantization: "none",
+			},
+			mongoRerankerConfig: {
+				enabled: true,
+				model: "rerank-2.5",
+				topN: 20,
+			},
+			latencySamples: [42],
+			costCounters: {
+				embeddingCalls: 0,
+				rerankCalls: 0,
+				llmEnrichmentCalls: 0,
+			},
+		})
+
+		expect(projected.storage?.collectionBytes).toBeNull()
+		expect(projected.storage?.indexBytes).toBeNull()
+		expect(projected.storage?.unavailableReason).toMatch(/collStats/i)
 	})
 
 	it("warns when official metrics score more cases than the corpus declares", () => {
