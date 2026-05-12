@@ -2709,12 +2709,6 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		result: MemorySearchResult,
 		evidence: BenchmarkEventEvidenceMaps,
 	): string[] {
-		if (
-			isBenchmarkTurnPrecisionMode() &&
-			result.canonicalId?.startsWith("session-chunk/")
-		) {
-			return []
-		}
 		const turnIds: string[] = []
 		for (const eventId of this.collectBenchmarkResultSourceEventIds(result)) {
 			const turnId = evidence.turnIds.get(eventId)
