@@ -45,8 +45,13 @@ import {
 	summarizeBenchmarkExecutions,
 	buildMissLedger,
 	buildCaseDiagnostics,
+	projectBenchmarkParityFields,
 	type BenchmarkCaseExecution,
 } from "./mongodb-benchmark-runner.js"
+import {
+	createBenchmarkRunCounters,
+	type BenchmarkRunCounters,
+} from "./benchmark-parity-envelope.js"
 import { readSearchIndexStatus } from "./mongodb-benchmark-readiness.js"
 import {
 	writeEvent,
@@ -215,6 +220,7 @@ import type {
 	MemoryAccessSummary,
 	MemoryAccessTrend,
 	MemoryBenchmarkDataset,
+	MemoryBenchmarkDatasetKind,
 	MemoryBenchmarkScenario,
 	MemoryBenchmarkIngestResult,
 	MemoryConversationImportResult,
@@ -290,6 +296,14 @@ function isBenchmarkStrictMode(): boolean {
 
 function attachBenchmarkOperationsReport(
 	result: RelevanceBenchmarkResult,
+	parity?: {
+		runIdentity: import("./types.js").BenchmarkRunIdentity
+		embedding: import("./types.js").BenchmarkEmbeddingConfig
+		reranker: import("./types.js").BenchmarkRerankerConfig
+		storage: import("./types.js").BenchmarkStorageFootprint
+		latency: import("./types.js").BenchmarkLatencyDistribution
+		cost: import("./types.js").BenchmarkCostCounters
+	},
 ): RelevanceBenchmarkResult {
 	const queryGovernance = buildQueryGovernanceReport(result)
 	return {
@@ -298,6 +312,16 @@ function attachBenchmarkOperationsReport(
 		benchmarkReport: buildBenchmarkRunReport({
 			...result,
 			queryGovernance,
+			...(parity
+				? {
+						runIdentity: parity.runIdentity,
+						embedding: parity.embedding,
+						reranker: parity.reranker,
+						storage: parity.storage,
+						latency: parity.latency,
+						cost: parity.cost,
+					}
+				: {}),
 		}),
 	}
 }
@@ -1805,6 +1829,12 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 	private lastSearchMode = "legacy"
 	private lastSearchDetails: Record<string, unknown> | undefined
 	private accessTracker: AccessTracker | null = null
+	/**
+	 * Task 1.A parity envelope: active run-scoped counters set by
+	 * `relevanceBenchmark` and read by rerank / LLM-enrichment sites to
+	 * populate `benchmarkReport.cost.*`. `null` outside a benchmark run.
+	 */
+	private benchmarkRunCounters: BenchmarkRunCounters | null = null
 
 	private constructor(params: {
 		client: MongoClient
@@ -2560,6 +2590,12 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 					rerankConfig: mongoCfg.reranking,
 					queryRewriteConfig: mongoCfg.queryRewriting,
 					questionDate: opts?.questionDate,
+					// Task 1.A projection: thread run-scoped counters so the
+					// rerank call site can increment cost.rerankCalls. null
+					// outside a benchmark run.
+					...(this.benchmarkRunCounters
+						? { benchmarkRunCounters: this.benchmarkRunCounters }
+						: {}),
 				},
 			})
 
@@ -3330,57 +3366,131 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 			baseDir: this.workspaceDir,
 			allowedRoots: this.getBenchmarkAllowedRoots(),
 		})
-		let dataset: MemoryBenchmarkDataset
+
+		// Task 1.A projection: register run-scoped counters so rerank + LLM
+		// enrichment can increment cost fields without threading a counter
+		// through every call site. Counters are cleared in `finally`.
+		const counters = createBenchmarkRunCounters()
+		this.benchmarkRunCounters = counters
 		try {
-			dataset = await loadBenchmarkDataset(resolvedDatasetPath, {
-				baseDir: this.workspaceDir,
-				allowedRoots: this.getBenchmarkAllowedRoots(),
-			})
-		} catch (datasetErr) {
-			if (!isLegacyBenchmarkFallbackCandidate(datasetErr)) {
-				throw datasetErr
+			let dataset: MemoryBenchmarkDataset
+			try {
+				dataset = await loadBenchmarkDataset(resolvedDatasetPath, {
+					baseDir: this.workspaceDir,
+					allowedRoots: this.getBenchmarkAllowedRoots(),
+				})
+			} catch (datasetErr) {
+				if (!isLegacyBenchmarkFallbackCandidate(datasetErr)) {
+					throw datasetErr
+				}
+				const cases =
+					await this.relevance.loadBenchmarkDataset(resolvedDatasetPath)
+				if (cases.length === 0) {
+					throw datasetErr
+				}
+				const legacy = await this.runLegacyRelevanceBenchmark({
+					datasetPath: resolvedDatasetPath,
+					maxResults,
+					minScore,
+				})
+				const parity = await this.buildBenchmarkParityBundle({
+					datasetPath: resolvedDatasetPath,
+					datasetKind: legacy.result.datasetKind,
+					datasetSha256Override: params?.datasetSha256,
+					latencySamples: legacy.latencySamples,
+					counters,
+				})
+				return attachBenchmarkOperationsReport(legacy.result, parity)
 			}
-			const cases =
-				await this.relevance.loadBenchmarkDataset(resolvedDatasetPath)
-			if (cases.length === 0) {
-				throw datasetErr
+			if (
+				(dataset.scenarios?.some(
+					(scenario) => scenario.evaluations.length > 0,
+				) ?? false) === false
+			) {
+				const noEvaluationError = new Error(
+					"benchmark dataset contains no evaluation cases",
+				)
+				const cases =
+					await this.relevance.loadBenchmarkDataset(resolvedDatasetPath)
+				if (cases.length === 0) {
+					throw noEvaluationError
+				}
+				const legacy = await this.runLegacyRelevanceBenchmark({
+					datasetPath: resolvedDatasetPath,
+					maxResults,
+					minScore,
+				})
+				const parity = await this.buildBenchmarkParityBundle({
+					datasetPath: resolvedDatasetPath,
+					datasetKind: legacy.result.datasetKind,
+					datasetSha256Override: params?.datasetSha256,
+					latencySamples: legacy.latencySamples,
+					counters,
+				})
+				return attachBenchmarkOperationsReport(legacy.result, parity)
 			}
-			const result = await this.runLegacyRelevanceBenchmark({
+			const datasetVersion =
+				await this.buildBenchmarkDatasetVersion(resolvedDatasetPath)
+			const scenario = await this.runScenarioBenchmarkDataset({
 				datasetPath: resolvedDatasetPath,
+				dataset,
+				datasetVersion,
 				maxResults,
 				minScore,
 			})
-			return attachBenchmarkOperationsReport(result)
-		}
-		if (
-			(dataset.scenarios?.some((scenario) => scenario.evaluations.length > 0) ??
-				false) === false
-		) {
-			const noEvaluationError = new Error(
-				"benchmark dataset contains no evaluation cases",
-			)
-			const cases =
-				await this.relevance.loadBenchmarkDataset(resolvedDatasetPath)
-			if (cases.length === 0) {
-				throw noEvaluationError
-			}
-			const result = await this.runLegacyRelevanceBenchmark({
+			const parity = await this.buildBenchmarkParityBundle({
 				datasetPath: resolvedDatasetPath,
-				maxResults,
-				minScore,
+				datasetKind: scenario.result.datasetKind,
+				datasetSha256Override: params?.datasetSha256,
+				latencySamples: scenario.latencySamples,
+				counters,
 			})
-			return attachBenchmarkOperationsReport(result)
+			return attachBenchmarkOperationsReport(scenario.result, parity)
+		} finally {
+			this.benchmarkRunCounters = null
 		}
-		const datasetVersion =
-			await this.buildBenchmarkDatasetVersion(resolvedDatasetPath)
-		const result = await this.runScenarioBenchmarkDataset({
-			datasetPath: resolvedDatasetPath,
-			dataset,
-			datasetVersion,
-			maxResults,
-			minScore,
+	}
+
+	/**
+	 * Task 1.A projection: assemble the parity-envelope bundle from
+	 * runtime signals (resolved backend config, run-scoped counters,
+	 * latency samples, live `collStats`).
+	 */
+	private async buildBenchmarkParityBundle(params: {
+		datasetPath: string
+		datasetKind?: MemoryBenchmarkDatasetKind | "legacy-query"
+		datasetSha256Override?: string
+		latencySamples: number[]
+		counters: BenchmarkRunCounters
+	}): Promise<{
+		runIdentity: import("./types.js").BenchmarkRunIdentity
+		embedding: import("./types.js").BenchmarkEmbeddingConfig
+		reranker: import("./types.js").BenchmarkRerankerConfig
+		storage: import("./types.js").BenchmarkStorageFootprint
+		latency: import("./types.js").BenchmarkLatencyDistribution
+		cost: import("./types.js").BenchmarkCostCounters
+	}> {
+		const mongoCfg = this.config.mongodb!
+		return await projectBenchmarkParityFields({
+			db: this.db,
+			// Events is the primary retrieval surface. storage bytes here reflect
+			// the collection hit by every benchmark query.
+			collectionName: `${this.prefix}events`,
+			datasetPath: params.datasetPath,
+			datasetKind: params.datasetKind,
+			datasetSha256Override: params.datasetSha256Override,
+			mongoEmbeddingConfig: {
+				numDimensions: mongoCfg.numDimensions,
+				quantization: mongoCfg.quantization,
+			},
+			mongoRerankerConfig: {
+				enabled: mongoCfg.reranking?.enabled ?? false,
+				model: mongoCfg.reranking?.model ?? "rerank-2.5",
+				topN: mongoCfg.reranking?.topN ?? 20,
+			},
+			latencySamples: params.latencySamples,
+			costCounters: params.counters.snapshot(),
 		})
-		return attachBenchmarkOperationsReport(result)
 	}
 
 	async relevanceReport(params?: {
@@ -3431,7 +3541,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 						this.capabilities,
 					)
 				: null
-		return new MongoDBMemoryManager({
+		const scenario = new MongoDBMemoryManager({
 			client: this.client,
 			db: this.db,
 			prefix: this.prefix,
@@ -3442,6 +3552,11 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 			config: this.config,
 			relevance,
 		})
+		// Task 1.A projection: propagate run-scoped counters so rerank calls
+		// issued via the scenario manager still increment the parent's
+		// cost.* fields.
+		scenario.benchmarkRunCounters = this.benchmarkRunCounters
+		return scenario
 	}
 
 	private async settleBenchmarkScenarioManager(
@@ -3840,7 +3955,10 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		datasetPath: string
 		maxResults: number
 		minScore: number
-	}): Promise<RelevanceBenchmarkResult> {
+	}): Promise<{
+		result: RelevanceBenchmarkResult
+		latencySamples: number[]
+	}> {
 		const cases = await this.relevance!.loadBenchmarkDataset(params.datasetPath)
 		const evaluations: Array<{
 			empty: boolean
@@ -3892,18 +4010,21 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 			},
 		)
 		return {
-			datasetVersion,
-			datasetName: path.basename(params.datasetPath),
-			datasetKind: "legacy-query",
-			cases: cases.length,
-			scoredCases: cases.length,
-			skippedCases: 0,
-			...metrics,
-			rAt5: 0,
-			rAt10: 0,
-			ndcgAt10: 0,
-			questionTypeBreakdown: [],
-			regressions,
+			result: {
+				datasetVersion,
+				datasetName: path.basename(params.datasetPath),
+				datasetKind: "legacy-query",
+				cases: cases.length,
+				scoredCases: cases.length,
+				skippedCases: 0,
+				...metrics,
+				rAt5: 0,
+				rAt10: 0,
+				ndcgAt10: 0,
+				questionTypeBreakdown: [],
+				regressions,
+			},
+			latencySamples: evaluations.map((entry) => entry.latencyMs),
 		}
 	}
 
@@ -3913,7 +4034,10 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		datasetVersion: string
 		maxResults: number
 		minScore: number
-	}): Promise<RelevanceBenchmarkResult> {
+	}): Promise<{
+		result: RelevanceBenchmarkResult
+		latencySamples: number[]
+	}> {
 		const scenarios = params.dataset.scenarios ?? []
 		const executions: BenchmarkCaseExecution[] = []
 		const expectedSessionMap = new Map<string, string[]>()
@@ -4058,6 +4182,19 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 										concurrency: enrichmentConcurrency,
 										strict: enrichmentStrict,
 									})
+									// Task 1.A projection: count LLM enrichment API calls
+									// during benchmark runs (both successful and failed — a
+									// failed call is still a billed call).
+									if (this.benchmarkRunCounters) {
+										const totalAttempted =
+											enrichResult.sessionsEnriched +
+											enrichResult.sessionsFailed
+										if (totalAttempted > 0) {
+											this.benchmarkRunCounters.recordLlmEnrichmentCall(
+												totalAttempted,
+											)
+										}
+									}
 									// Write LLM-produced userfact docs (replace regex)
 									if (enrichResult.userfactDocs.length > 0) {
 										await chunksCollection(this.db, this.prefix).insertMany(
@@ -4369,36 +4506,39 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		// to prevent any runtime-leaked properties from inflating the response
 		// beyond V8's JSON.stringify limit (~512 MB).
 		return {
-			datasetVersion: params.datasetVersion,
-			datasetName: summary.datasetName,
-			datasetKind: summary.datasetKind,
-			scenarios: summary.scenarios,
-			cases: summary.cases,
-			scoredCases: summary.scoredCases,
-			skippedCases: summary.skippedCases,
-			hitRate: summary.hitRate,
-			emptyRate: summary.emptyRate,
-			avgTopScore: summary.avgTopScore,
-			p95LatencyMs: summary.p95LatencyMs,
-			rAt5: summary.rAt5,
-			rAt10: summary.rAt10,
-			ndcgAt10: summary.ndcgAt10,
-			questionTypeBreakdown: summary.questionTypeBreakdown,
-			...(summary.officialMetrics
-				? { officialMetrics: summary.officialMetrics }
-				: {}),
-			...(summary.ingest ? { ingest: summary.ingest } : {}),
-			regressions,
-			missLedger: buildMissLedger({
-				executions,
-				expectedSessionMap,
-				expectedTurnMap,
-			}),
-			caseDiagnostics: buildCaseDiagnostics({
-				executions,
-				expectedSessionMap,
-				expectedTurnMap,
-			}),
+			result: {
+				datasetVersion: params.datasetVersion,
+				datasetName: summary.datasetName,
+				datasetKind: summary.datasetKind,
+				scenarios: summary.scenarios,
+				cases: summary.cases,
+				scoredCases: summary.scoredCases,
+				skippedCases: summary.skippedCases,
+				hitRate: summary.hitRate,
+				emptyRate: summary.emptyRate,
+				avgTopScore: summary.avgTopScore,
+				p95LatencyMs: summary.p95LatencyMs,
+				rAt5: summary.rAt5,
+				rAt10: summary.rAt10,
+				ndcgAt10: summary.ndcgAt10,
+				questionTypeBreakdown: summary.questionTypeBreakdown,
+				...(summary.officialMetrics
+					? { officialMetrics: summary.officialMetrics }
+					: {}),
+				...(summary.ingest ? { ingest: summary.ingest } : {}),
+				regressions,
+				missLedger: buildMissLedger({
+					executions,
+					expectedSessionMap,
+					expectedTurnMap,
+				}),
+				caseDiagnostics: buildCaseDiagnostics({
+					executions,
+					expectedSessionMap,
+					expectedTurnMap,
+				}),
+			},
+			latencySamples: executions.map((e) => e.latencyMs),
 		}
 	}
 
@@ -7116,6 +7256,12 @@ export async function searchV2(
 			proceduralScope?: MemorySearchRequest["proceduralScope"]
 			searchConfig?: ResolvedSearchConfig
 			questionDate?: Date
+			/**
+			 * Task 1.A projection: optional run-scoped cost counters. When
+			 * injected, rerank / LLM paths increment on every API call.
+			 * `null`/`undefined` outside a benchmark run.
+			 */
+			benchmarkRunCounters?: BenchmarkRunCounters
 		}
 	},
 ): Promise<{ results: MemorySearchResult[]; metadata: V2SearchMetadata }> {
@@ -8012,6 +8158,14 @@ export async function searchV2(
 				results: rerankInput.length > 0 ? rerankInput : precisionScored,
 				config: rerankCfg,
 			})
+			// Task 1.A projection: count rerank API calls during benchmark runs.
+			// Counters (if injected via searchOptions) increment only when the
+			// call actually hit the rerank API (reranked=true); short-circuit
+			// branches do NOT count.
+			const rerankCounters = context.searchOptions?.benchmarkRunCounters
+			if (rerankResult.reranked && rerankCounters) {
+				rerankCounters.recordRerankCall()
+			}
 			if (rerankResult.reranked) {
 				finalResults = orderTimelineAfterSourceEvidence(
 					deduplicateSearchResults([

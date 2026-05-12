@@ -727,6 +727,11 @@ async function main() {
 			agentId,
 			datasetPath: subsetPath,
 			maxResults,
+			// Task 1.A projection: pin the parity-envelope datasetSha256 to
+			// the FULL upstream dataset (not the per-canary subset) so
+			// `benchmarkReport.runIdentity.datasetSha256` traces back to
+			// the corpus a reader can reproduce, not the ephemeral subset.
+			datasetSha256: datasetHash,
 		},
 	})
 

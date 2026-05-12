@@ -840,26 +840,33 @@ describe("relevanceBenchmark", () => {
 			})
 
 			const runScenarioBenchmarkDataset = vi.fn().mockResolvedValue({
-				datasetVersion: "dataset-v1",
-				datasetName: "LongMemEval sample",
-				datasetKind: "longmemeval",
-				scenarios: 1,
-				cases: 1,
-				scoredCases: 1,
-				skippedCases: 0,
-				hitRate: 1,
-				emptyRate: 0,
-				avgTopScore: 0.9,
-				p95LatencyMs: 10,
-				rAt5: 1,
-				rAt10: 1,
-				ndcgAt10: 1,
-				questionTypeBreakdown: [],
-				regressions: [],
+				result: {
+					datasetVersion: "dataset-v1",
+					datasetName: "LongMemEval sample",
+					datasetKind: "longmemeval",
+					scenarios: 1,
+					cases: 1,
+					scoredCases: 1,
+					skippedCases: 0,
+					hitRate: 1,
+					emptyRate: 0,
+					avgTopScore: 0.9,
+					p95LatencyMs: 10,
+					rAt5: 1,
+					rAt10: 1,
+					ndcgAt10: 1,
+					questionTypeBreakdown: [],
+					regressions: [],
+				},
+				latencySamples: [10],
 			})
 
 			const manager = {
 				workspaceDir,
+				db: {
+					command: vi.fn().mockResolvedValue({ size: 0, totalIndexSize: 0 }),
+				},
+				prefix: "memongo_bench_",
 				config: {
 					mongodb: {
 						relevance: {
@@ -868,6 +875,9 @@ describe("relevanceBenchmark", () => {
 								datasetPath: path.join(datasetDir, "default.json"),
 							},
 						},
+						numDimensions: 1024,
+						quantization: "none",
+						reranking: { enabled: false, model: "rerank-2.5", topN: 20 },
 					},
 				},
 				relevance: {
@@ -877,6 +887,8 @@ describe("relevanceBenchmark", () => {
 					MongoDBMemoryManager.prototype.getBenchmarkAllowedRoots,
 				buildBenchmarkDatasetVersion:
 					MongoDBMemoryManager.prototype.buildBenchmarkDatasetVersion,
+				buildBenchmarkParityBundle:
+					MongoDBMemoryManager.prototype["buildBenchmarkParityBundle"],
 				runScenarioBenchmarkDataset,
 				runLegacyRelevanceBenchmark: vi.fn(),
 			} as unknown as MongoDBMemoryManager
@@ -949,20 +961,27 @@ describe("relevanceBenchmark", () => {
 				new Error("benchmark dataset contains no valid conversations"),
 			)
 			const runLegacyRelevanceBenchmark = vi.fn().mockResolvedValue({
-				datasetVersion: "legacy-v1",
-				cases: 1,
-				hitRate: 1,
-				emptyRate: 0,
-				avgTopScore: 0.8,
-				p95LatencyMs: 12,
-				rAt5: 0,
-				rAt10: 0,
-				ndcgAt10: 0,
-				regressions: [],
+				result: {
+					datasetVersion: "legacy-v1",
+					cases: 1,
+					hitRate: 1,
+					emptyRate: 0,
+					avgTopScore: 0.8,
+					p95LatencyMs: 12,
+					rAt5: 0,
+					rAt10: 0,
+					ndcgAt10: 0,
+					regressions: [],
+				},
+				latencySamples: [12],
 			})
 
 			const manager = {
 				workspaceDir,
+				db: {
+					command: vi.fn().mockResolvedValue({ size: 0, totalIndexSize: 0 }),
+				},
+				prefix: "memongo_bench_",
 				config: {
 					mongodb: {
 						relevance: {
@@ -971,6 +990,9 @@ describe("relevanceBenchmark", () => {
 								datasetPath: path.join(datasetDir, "default.jsonl"),
 							},
 						},
+						numDimensions: 1024,
+						quantization: "none",
+						reranking: { enabled: false, model: "rerank-2.5", topN: 20 },
 					},
 				},
 				relevance: {
@@ -980,6 +1002,8 @@ describe("relevanceBenchmark", () => {
 				},
 				getBenchmarkAllowedRoots:
 					MongoDBMemoryManager.prototype.getBenchmarkAllowedRoots,
+				buildBenchmarkParityBundle:
+					MongoDBMemoryManager.prototype["buildBenchmarkParityBundle"],
 				runScenarioBenchmarkDataset: vi.fn(),
 				runLegacyRelevanceBenchmark,
 			} as unknown as MongoDBMemoryManager
@@ -1156,10 +1180,13 @@ describe("runScenarioBenchmarkDataset", () => {
 			)
 
 		expect(search).toHaveBeenCalledTimes(2)
-		expect(result.cases).toBe(2)
-		expect(result.scoredCases).toBe(2)
-		expect(result.hitRate).toBe(0.5)
-		expect(result.rAt10).toBe(0.5)
+		// Phase 3 REM-FIX Task 1.A: runScenarioBenchmarkDataset now returns
+		// `{ result, latencySamples }` so the caller can project parity fields.
+		expect(result.result.cases).toBe(2)
+		expect(result.result.scoredCases).toBe(2)
+		expect(result.result.hitRate).toBe(0.5)
+		expect(result.result.rAt10).toBe(0.5)
+		expect(result.latencySamples).toHaveLength(2)
 	})
 
 	it("hashes the raw dataset file to build scenario datasetVersion", async () => {
