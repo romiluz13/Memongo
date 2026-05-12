@@ -1,5 +1,6 @@
 import type { Collection, Db, Document } from "mongodb"
 import { createSubsystemLogger } from "@memongo/lib"
+import { buildBitemporalFilter } from "./mongodb-bitemporal.js"
 import { type CanonicalEvent, renderEventChunkText } from "./mongodb-events.js"
 import {
 	buildVectorSearchStage,
@@ -227,6 +228,7 @@ function buildStandardFilter(params: {
 	startDate?: Date
 	endDate?: Date
 	queryText?: string
+	asOf?: Date
 }): Document {
 	const filter: Document = { agentId: params.request.agentId }
 	if (params.request.sessionId) {
@@ -245,6 +247,13 @@ function buildStandardFilter(params: {
 
 	if (params.queryText) {
 		filter.body = { $regex: new RegExp(escapeRegex(params.queryText), "i") }
+	}
+
+	// Phase 2 remfix CRIT-1 (ADR-006 SE-1): merge bi-temporal validity clause
+	// via `$and` so any memory invalidated at or before `asOf` is excluded.
+	// Legacy rows without `validAt`/`invalidAt` are treated as valid.
+	if (params.asOf instanceof Date) {
+		filter.$and = [buildBitemporalFilter(params.asOf)]
 	}
 
 	return filter
@@ -287,10 +296,43 @@ function normalizeRole(value: unknown): ConversationRecallRole {
 	}
 }
 
+/**
+ * Phase 2 remfix HIGH-5: track malformed scoreDetails payloads so the
+ * recall path can emit a single `log.warn` per recall call (not per doc)
+ * when MongoDB returned a `scoreDetails` field that is shaped wrong.
+ * "Absent" still returns undefined silently — only truly malformed data
+ * is flagged.
+ */
+type ScoreDetailsWarningState = {
+	warned: boolean
+	sample?: { docId: string; raw: string }
+}
+
 function normalizeScoreDetails(
 	raw: unknown,
+	opts?: {
+		docId?: string
+		warnings?: ScoreDetailsWarningState
+	},
 ): ConversationRecallScoreDetails | undefined {
+	if (raw === undefined) {
+		return undefined
+	}
+	// Explicitly malformed: present but not an object (or null).
 	if (raw === null || typeof raw !== "object") {
+		if (opts?.warnings && !opts.warnings.warned) {
+			opts.warnings.warned = true
+			opts.warnings.sample = {
+				docId: opts.docId ?? "unknown",
+				raw: (() => {
+					try {
+						return JSON.stringify(raw)
+					} catch {
+						return String(raw)
+					}
+				})(),
+			}
+		}
 		return undefined
 	}
 	const source = raw as Record<string, unknown>
@@ -334,6 +376,20 @@ function normalizeScoreDetails(
 		out.description === undefined &&
 		out.details === undefined
 	) {
+		// Present object but empty of recognized fields — malformed.
+		if (opts?.warnings && !opts.warnings.warned) {
+			opts.warnings.warned = true
+			opts.warnings.sample = {
+				docId: opts.docId ?? "unknown",
+				raw: (() => {
+					try {
+						return JSON.stringify(raw)
+					} catch {
+						return "[unserializable]"
+					}
+				})(),
+			}
+		}
 		return undefined
 	}
 	return out
@@ -342,6 +398,7 @@ function normalizeScoreDetails(
 function eventToRecallResult(
 	doc: Document,
 	matchType: ConversationRecallResult["matchType"],
+	warnings?: ScoreDetailsWarningState,
 ): ConversationRecallResult {
 	const event = doc as unknown as CanonicalEvent
 	const citation: ConversationRecallCitation = {
@@ -358,7 +415,10 @@ function eventToRecallResult(
 		...(typeof doc.sourceRef === "string" ? { sourceRef: doc.sourceRef } : {}),
 	}
 
-	const scoreDetails = normalizeScoreDetails(doc.scoreDetails)
+	const scoreDetails = normalizeScoreDetails(doc.scoreDetails, {
+		docId: citation.eventId,
+		warnings,
+	})
 
 	return {
 		citation,
@@ -375,12 +435,15 @@ async function standardRecall(params: {
 	startDate?: Date
 	endDate?: Date
 	queryText?: string
+	asOf: Date
+	scoreDetailsWarnings?: ScoreDetailsWarningState
 }): Promise<ConversationRecallResult[]> {
 	const filter = buildStandardFilter({
 		request: params.request,
 		startDate: params.startDate,
 		endDate: params.endDate,
 		queryText: params.queryText,
+		asOf: params.asOf,
 	})
 	const docs = await params.collection
 		.find(filter)
@@ -388,7 +451,9 @@ async function standardRecall(params: {
 		.limit(params.effectiveLimit)
 		.toArray()
 
-	return docs.map((doc) => eventToRecallResult(doc, "filter"))
+	return docs.map((doc) =>
+		eventToRecallResult(doc, "filter", params.scoreDetailsWarnings),
+	)
 }
 
 function buildEventProjection(
@@ -418,6 +483,8 @@ async function semanticRecall(params: {
 	startDate?: Date
 	endDate?: Date
 	vectorIndexName: string
+	asOf: Date
+	scoreDetailsWarnings?: ScoreDetailsWarningState
 }): Promise<ConversationRecallResult[]> {
 	const queryText = params.request.query?.trim()
 	if (!queryText) {
@@ -444,13 +511,22 @@ async function semanticRecall(params: {
 		return []
 	}
 
+	// Phase 2 remfix CRIT-1: the bi-temporal clause rides on a post-stage
+	// `$match`. `$vectorSearch.filter` supports a narrow subset of MQL
+	// ($eq / $and / $in) and range operators on dates are not documented,
+	// so we enforce validity outside the vector stage. The vector stage
+	// over-fetches `limit + buffer` candidates and the $match trims those
+	// invalidated at `asOf`.
 	const pipeline: Document[] = [
 		{ $vectorSearch: stage },
+		{ $match: buildBitemporalFilter(params.asOf) },
 		{ $limit: params.effectiveLimit },
 		{ $project: buildEventProjection("vectorSearchScore") },
 	]
 	const docs = await runSearchAggregateWithRetry(params.collection, pipeline)
-	return docs.map((doc) => eventToRecallResult(doc, "semantic"))
+	return docs.map((doc) =>
+		eventToRecallResult(doc, "semantic", params.scoreDetailsWarnings),
+	)
 }
 
 async function hybridRecall(params: {
@@ -461,6 +537,8 @@ async function hybridRecall(params: {
 	endDate?: Date
 	vectorIndexName: string
 	textIndexName: string
+	asOf: Date
+	scoreDetailsWarnings?: ScoreDetailsWarningState
 }): Promise<ConversationRecallResult[]> {
 	const queryText = params.request.query?.trim()
 	if (!queryText) {
@@ -488,13 +566,24 @@ async function hybridRecall(params: {
 		return []
 	}
 
+	// Phase 2 remfix CRIT-1: the bi-temporal predicate is applied as a
+	// post-stage `$match` inside EACH inner `$rankFusion` pipeline so
+	// invalidated-at-asOf documents cannot reach the fusion stage.
+	// `$search.compound.filter` could use native `range` operators on
+	// dates, but a post-$match keeps the predicate expressed once (via
+	// buildBitemporalFilter) and avoids drift between the two paths.
+	const bitemporalFilter = buildBitemporalFilter(params.asOf)
+
 	const { compoundFilter, postMatch } = splitAtlasSearchFilter(vectorFilter)
 	const pipeline: Document[] = [
 		{
 			$rankFusion: {
 				input: {
 					pipelines: {
-						vector: [{ $vectorSearch: vectorStage }],
+						vector: [
+							{ $vectorSearch: vectorStage },
+							{ $match: bitemporalFilter },
+						],
 						text: [
 							{
 								$search: {
@@ -506,6 +595,7 @@ async function hybridRecall(params: {
 								},
 							},
 							...(postMatch ? [{ $match: postMatch }] : []),
+							{ $match: bitemporalFilter },
 							{ $limit: params.effectiveLimit * 4 },
 						],
 					},
@@ -526,7 +616,9 @@ async function hybridRecall(params: {
 		},
 	]
 	const docs = await runSearchAggregateWithRetry(params.collection, pipeline)
-	return docs.map((doc) => eventToRecallResult(doc, "hybrid"))
+	return docs.map((doc) =>
+		eventToRecallResult(doc, "hybrid", params.scoreDetailsWarnings),
+	)
 }
 
 export async function recallConversation(params: {
@@ -596,6 +688,12 @@ export async function recallConversation(params: {
 	let searchMethod: ConversationRecallResponse["metadata"]["searchMethod"] =
 		"standard"
 
+	// Phase 2 remfix HIGH-5: accumulate malformed-scoreDetails warnings
+	// across all inner recall paths so we emit a single log.warn per
+	// `recallConversation` call (not per doc). Absent scoreDetails still
+	// returns `undefined` silently.
+	const scoreDetailsWarnings: ScoreDetailsWarningState = { warned: false }
+
 	if (!queryText) {
 		results = await standardRecall({
 			collection,
@@ -603,6 +701,8 @@ export async function recallConversation(params: {
 			effectiveLimit,
 			startDate,
 			endDate,
+			asOf,
+			scoreDetailsWarnings,
 		})
 	} else if (
 		capabilities.vectorSearch &&
@@ -619,6 +719,8 @@ export async function recallConversation(params: {
 				vectorIndexName:
 					params.vectorIndexName ?? `${params.prefix}events_vector`,
 				textIndexName: params.textIndexName ?? `${params.prefix}events_text`,
+				asOf,
+				scoreDetailsWarnings,
 			})
 			searchMethod = "hybrid"
 		} catch (error) {
@@ -638,6 +740,8 @@ export async function recallConversation(params: {
 				endDate,
 				vectorIndexName:
 					params.vectorIndexName ?? `${params.prefix}events_vector`,
+				asOf,
+				scoreDetailsWarnings,
 			})
 			searchMethod = "semantic"
 		} catch (error) {
@@ -655,8 +759,16 @@ export async function recallConversation(params: {
 			startDate,
 			endDate,
 			queryText,
+			asOf,
+			scoreDetailsWarnings,
 		})
 		searchMethod = "standard"
+	}
+
+	if (scoreDetailsWarnings.warned && scoreDetailsWarnings.sample) {
+		log.warn(
+			`rankFusion scoreDetails missing expected shape: docId=${scoreDetailsWarnings.sample.docId} raw=${scoreDetailsWarnings.sample.raw}`,
+		)
 	}
 
 	return {
