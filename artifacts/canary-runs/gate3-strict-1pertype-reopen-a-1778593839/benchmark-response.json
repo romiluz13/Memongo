@@ -1,0 +1,1493 @@
+{
+	"datasetVersion": "42f4a48d236e7775",
+	"datasetName": "canary-2026-05-12T13-51-48-756Z-f97b662a.json",
+	"datasetKind": "longmemeval",
+	"scenarios": 6,
+	"cases": 6,
+	"scoredCases": 6,
+	"skippedCases": 0,
+	"hitRate": 0.6666666666666666,
+	"emptyRate": 0,
+	"avgTopScore": 0.4775390625,
+	"p95LatencyMs": 2459,
+	"rAt5": 0.4444444444444444,
+	"rAt10": 0.5277777777777778,
+	"ndcgAt10": 0.5326729033513374,
+	"questionTypeBreakdown": [
+		{
+			"questionType": "knowledge-update",
+			"cases": 1,
+			"scoredCases": 1,
+			"hitRate": 1,
+			"rAt5": 0.5,
+			"rAt10": 0.5,
+			"ndcgAt10": 0.6131471927654584
+		},
+		{
+			"questionType": "multi-session",
+			"cases": 1,
+			"scoredCases": 1,
+			"hitRate": 1,
+			"rAt5": 0.6666666666666666,
+			"rAt10": 0.6666666666666666,
+			"ndcgAt10": 0.7653606369886217
+		},
+		{
+			"questionType": "single-session-assistant",
+			"cases": 1,
+			"scoredCases": 1,
+			"hitRate": 1,
+			"rAt5": 1,
+			"rAt10": 1,
+			"ndcgAt10": 1
+		},
+		{
+			"questionType": "single-session-preference",
+			"cases": 1,
+			"scoredCases": 1,
+			"hitRate": 0,
+			"rAt5": 0,
+			"rAt10": 0,
+			"ndcgAt10": 0
+		},
+		{
+			"questionType": "single-session-user",
+			"cases": 1,
+			"scoredCases": 1,
+			"hitRate": 0,
+			"rAt5": 0,
+			"rAt10": 0,
+			"ndcgAt10": 0
+		},
+		{
+			"questionType": "temporal-reasoning",
+			"cases": 1,
+			"scoredCases": 1,
+			"hitRate": 1,
+			"rAt5": 0.5,
+			"rAt10": 1,
+			"ndcgAt10": 0.8175295903539445
+		}
+	],
+	"officialMetrics": {
+		"longMemEval": {
+			"retrievalCases": 6,
+			"abstentionCases": 0,
+			"session": {
+				"recallAnyAt1": 0.6666666666666666,
+				"recallAllAt1": 0.16666666666666666,
+				"ndcgAnyAt1": 0.6666666666666666,
+				"recallAnyAt3": 0.6666666666666666,
+				"recallAllAt3": 0.16666666666666666,
+				"ndcgAnyAt3": 0.4600312555719781,
+				"recallAnyAt5": 0.6666666666666666,
+				"recallAllAt5": 0.16666666666666666,
+				"ndcgAnyAt5": 0.4600312555719781,
+				"recallAnyAt10": 0.6666666666666666,
+				"recallAllAt10": 0.3333333333333333,
+				"ndcgAnyAt10": 0.48971518783097995,
+				"recallAnyAt30": 0.6666666666666666,
+				"recallAllAt30": 0.5,
+				"ndcgAnyAt30": 0.5093325972781998,
+				"recallAnyAt50": 0.6666666666666666,
+				"recallAllAt50": 0.5,
+				"ndcgAnyAt50": 0.5093325972781998
+			},
+			"turn": {
+				"recallAnyAt1": 0.3333333333333333,
+				"recallAllAt1": 0.16666666666666666,
+				"ndcgAnyAt1": 0.3333333333333333,
+				"recallAnyAt3": 0.5,
+				"recallAllAt3": 0.16666666666666666,
+				"ndcgAnyAt3": 0.3333333333333333,
+				"recallAnyAt5": 0.5,
+				"recallAllAt5": 0.16666666666666666,
+				"ndcgAnyAt5": 0.3333333333333333,
+				"recallAnyAt10": 0.5,
+				"recallAllAt10": 0.16666666666666666,
+				"ndcgAnyAt10": 0.3333333333333333,
+				"recallAnyAt30": 0.5,
+				"recallAllAt30": 0.3333333333333333,
+				"ndcgAnyAt30": 0.3523058540580794,
+				"recallAnyAt50": 0.5,
+				"recallAllAt50": 0.3333333333333333,
+				"ndcgAnyAt50": 0.3523058540580794
+			}
+		}
+	},
+	"ingest": {
+		"conversationsIngested": 286,
+		"turnsIngested": 2860,
+		"skippedConversations": 0,
+		"failedLines": 0,
+		"failedTurns": 0
+	},
+	"regressions": [
+		{
+			"metricName": "hitRate",
+			"baseline": 0.6666666666666666,
+			"current": 0.6666666666666666,
+			"delta": 0,
+			"severity": "low"
+		},
+		{
+			"metricName": "emptyRate",
+			"baseline": 0,
+			"current": 0,
+			"delta": 0,
+			"severity": "low"
+		},
+		{
+			"metricName": "avgTopScore",
+			"baseline": 0.4775390625,
+			"current": 0.4775390625,
+			"delta": 0,
+			"severity": "low"
+		},
+		{
+			"metricName": "p95LatencyMs",
+			"baseline": 2459,
+			"current": 2459,
+			"delta": 0,
+			"severity": "low"
+		},
+		{
+			"metricName": "rAt5",
+			"baseline": 0.4444444444444444,
+			"current": 0.4444444444444444,
+			"delta": 0,
+			"severity": "low"
+		},
+		{
+			"metricName": "rAt10",
+			"baseline": 0.5277777777777778,
+			"current": 0.5277777777777778,
+			"delta": 0,
+			"severity": "low"
+		},
+		{
+			"metricName": "ndcgAt10",
+			"baseline": 0.5326729033513374,
+			"current": 0.5326729033513374,
+			"delta": 0,
+			"severity": "low"
+		}
+	],
+	"missLedger": [
+		{
+			"caseId": "06878be2",
+			"questionType": "single-session-preference",
+			"rAt5": 0,
+			"rAt10": 0,
+			"expectedSessionIds": ["06878be2::answer_555dfb94"],
+			"expectedTurnIds": [
+				"06878be2::answer_555dfb94::turn_1",
+				"06878be2::answer_555dfb94::turn_9",
+				"06878be2::answer_555dfb94::turn_15"
+			],
+			"topCandidateSessionIds": [
+				"06878be2::sharegpt_6Two42G_35",
+				"06878be2::sharegpt_cn3iUbp_7",
+				"06878be2::a6074da9_1",
+				"06878be2::e58109ed_1",
+				"06878be2::ultrachat_474421",
+				"06878be2::ultrachat_31347"
+			],
+			"sessionFound": false,
+			"allSessionsFound": false,
+			"reachableTurnIds": [
+				"06878be2::sharegpt_6Two42G_35::turn_3",
+				"06878be2::sharegpt_cn3iUbp_7::turn_7",
+				"06878be2::a6074da9_1::turn_2",
+				"06878be2::e58109ed_1::turn_2",
+				"06878be2::ultrachat_474421::turn_2",
+				"06878be2::sharegpt_cn3iUbp_7::turn_1",
+				"06878be2::sharegpt_6Two42G_35::turn_1",
+				"06878be2::ultrachat_31347::turn_2"
+			],
+			"turnReachable": false,
+			"missCategory": "preference",
+			"topCandidates": [
+				{
+					"rank": 1,
+					"score": 0.2890625,
+					"source": "conversation",
+					"sessionId": "06878be2::sharegpt_6Two42G_35",
+					"canonicalId": "event:fd343c11-31d7-49b7-b957-4a50dd807695",
+					"resolvedSessionIds": ["06878be2::sharegpt_6Two42G_35"],
+					"sourceEventIds": ["fd343c11-31d7-49b7-b957-4a50dd807695"]
+				},
+				{
+					"rank": 2,
+					"score": 0.271484375,
+					"source": "conversation",
+					"sessionId": "06878be2::sharegpt_cn3iUbp_7",
+					"canonicalId": "event:5a1bacb1-3bcb-4de9-b1b3-7ab2bcb65a5a",
+					"resolvedSessionIds": ["06878be2::sharegpt_cn3iUbp_7"],
+					"sourceEventIds": ["5a1bacb1-3bcb-4de9-b1b3-7ab2bcb65a5a"]
+				},
+				{
+					"rank": 3,
+					"score": 0.263671875,
+					"source": "conversation",
+					"canonicalId": "relation:cdd82794cc71e851:mentioned_with:9259c94764068614",
+					"resolvedSessionIds": ["06878be2::a6074da9_1"],
+					"sourceEventIds": ["8b08e730-0fa8-49a7-b494-7fb41c0f758b"]
+				},
+				{
+					"rank": 4,
+					"score": 0.255859375,
+					"source": "conversation",
+					"canonicalId": "relation:cdd82794cc71e851:mentioned_with:94396028c6b4b925",
+					"resolvedSessionIds": ["06878be2::a6074da9_1"],
+					"sourceEventIds": ["8b08e730-0fa8-49a7-b494-7fb41c0f758b"]
+				},
+				{
+					"rank": 5,
+					"score": 0.25,
+					"source": "conversation",
+					"sessionId": "06878be2::e58109ed_1",
+					"canonicalId": "event:a3112d50-b7bc-4f39-9382-959333dca956",
+					"resolvedSessionIds": ["06878be2::e58109ed_1"],
+					"sourceEventIds": ["a3112d50-b7bc-4f39-9382-959333dca956"]
+				}
+			]
+		},
+		{
+			"caseId": "001be529",
+			"questionType": "single-session-user",
+			"rAt5": 0,
+			"rAt10": 0,
+			"expectedSessionIds": ["001be529::answer_530960c1"],
+			"expectedTurnIds": ["001be529::answer_530960c1::turn_5"],
+			"topCandidateSessionIds": [
+				"001be529::c8854b28",
+				"001be529::sharegpt_ETJwE0s_0",
+				"001be529::3c11dc79",
+				"001be529::f067b0ee",
+				"001be529::3722ea11_2"
+			],
+			"sessionFound": false,
+			"allSessionsFound": false,
+			"reachableTurnIds": [
+				"001be529::c8854b28::turn_3",
+				"001be529::sharegpt_ETJwE0s_0::turn_5",
+				"001be529::c8854b28::turn_11",
+				"001be529::3c11dc79::turn_5",
+				"001be529::f067b0ee::turn_3",
+				"001be529::3722ea11_2::turn_5",
+				"001be529::3722ea11_2::turn_1",
+				"001be529::3c11dc79::turn_11",
+				"001be529::c8854b28::turn_5",
+				"001be529::3c11dc79::turn_4"
+			],
+			"turnReachable": false,
+			"missCategory": "unknown",
+			"topCandidates": [
+				{
+					"rank": 1,
+					"score": 0.43359375,
+					"source": "conversation",
+					"sessionId": "001be529::c8854b28",
+					"canonicalId": "event:57f3b011-9fcc-4304-a487-bb1716ae3111",
+					"resolvedSessionIds": ["001be529::c8854b28"],
+					"sourceEventIds": ["57f3b011-9fcc-4304-a487-bb1716ae3111"]
+				},
+				{
+					"rank": 2,
+					"score": 0.40234375,
+					"source": "conversation",
+					"sessionId": "001be529::sharegpt_ETJwE0s_0",
+					"canonicalId": "event:108f09c4-7fbe-45ab-a377-181f68a6bf13",
+					"resolvedSessionIds": ["001be529::sharegpt_ETJwE0s_0"],
+					"sourceEventIds": ["108f09c4-7fbe-45ab-a377-181f68a6bf13"]
+				},
+				{
+					"rank": 3,
+					"score": 0.2431640625,
+					"source": "conversation",
+					"sessionId": "001be529::c8854b28",
+					"canonicalId": "event:d62318cd-ae1e-40f7-815c-59e92bfae015",
+					"resolvedSessionIds": ["001be529::c8854b28"],
+					"sourceEventIds": ["d62318cd-ae1e-40f7-815c-59e92bfae015"]
+				},
+				{
+					"rank": 4,
+					"score": 0.23828125,
+					"source": "conversation",
+					"sessionId": "001be529::3c11dc79",
+					"canonicalId": "event:317cba9a-79c8-4de6-97ec-baf13bd03e2f",
+					"resolvedSessionIds": ["001be529::3c11dc79"],
+					"sourceEventIds": ["317cba9a-79c8-4de6-97ec-baf13bd03e2f"]
+				},
+				{
+					"rank": 5,
+					"score": 0.232421875,
+					"source": "conversation",
+					"sessionId": "001be529::f067b0ee",
+					"canonicalId": "event:c7443f5f-3af3-4d46-be33-813ec8db5761",
+					"resolvedSessionIds": ["001be529::f067b0ee"],
+					"sourceEventIds": ["c7443f5f-3af3-4d46-be33-813ec8db5761"]
+				}
+			]
+		},
+		{
+			"caseId": "01493427",
+			"questionType": "knowledge-update",
+			"rAt5": 0.5,
+			"rAt10": 0.5,
+			"expectedSessionIds": [
+				"01493427::answer_a7b44747_1",
+				"01493427::answer_a7b44747_2"
+			],
+			"expectedTurnIds": [
+				"01493427::answer_a7b44747_1::turn_7",
+				"01493427::answer_a7b44747_2::turn_7"
+			],
+			"topCandidateSessionIds": [
+				"01493427::answer_a7b44747_1",
+				"01493427::55e6ff53",
+				"01493427::077f7bcb_3",
+				"01493427::36e72174_2",
+				"01493427::291d8c82",
+				"01493427::3e8f07c9_1",
+				"01493427::5a840928_1"
+			],
+			"sessionFound": true,
+			"allSessionsFound": false,
+			"reachableTurnIds": [
+				"01493427::answer_a7b44747_1::turn_4",
+				"01493427::answer_a7b44747_1::turn_3",
+				"01493427::answer_a7b44747_1::turn_2",
+				"01493427::answer_a7b44747_1::turn_1",
+				"01493427::55e6ff53::turn_1",
+				"01493427::55e6ff53::turn_2",
+				"01493427::55e6ff53::turn_3",
+				"01493427::55e6ff53::turn_4",
+				"01493427::55e6ff53::turn_5",
+				"01493427::55e6ff53::turn_6",
+				"01493427::55e6ff53::turn_7",
+				"01493427::55e6ff53::turn_8",
+				"01493427::55e6ff53::turn_9",
+				"01493427::55e6ff53::turn_10",
+				"01493427::55e6ff53::turn_11",
+				"01493427::55e6ff53::turn_12",
+				"01493427::077f7bcb_3::turn_1",
+				"01493427::077f7bcb_3::turn_2",
+				"01493427::077f7bcb_3::turn_3",
+				"01493427::077f7bcb_3::turn_4",
+				"01493427::077f7bcb_3::turn_5",
+				"01493427::077f7bcb_3::turn_6",
+				"01493427::077f7bcb_3::turn_7",
+				"01493427::077f7bcb_3::turn_8",
+				"01493427::077f7bcb_3::turn_9",
+				"01493427::077f7bcb_3::turn_10",
+				"01493427::36e72174_2::turn_1",
+				"01493427::36e72174_2::turn_2",
+				"01493427::36e72174_2::turn_3",
+				"01493427::36e72174_2::turn_4",
+				"01493427::36e72174_2::turn_5",
+				"01493427::36e72174_2::turn_6",
+				"01493427::36e72174_2::turn_7",
+				"01493427::36e72174_2::turn_8",
+				"01493427::36e72174_2::turn_9",
+				"01493427::36e72174_2::turn_10",
+				"01493427::36e72174_2::turn_11",
+				"01493427::36e72174_2::turn_12",
+				"01493427::291d8c82::turn_1",
+				"01493427::291d8c82::turn_2",
+				"01493427::291d8c82::turn_3",
+				"01493427::291d8c82::turn_4",
+				"01493427::291d8c82::turn_5",
+				"01493427::291d8c82::turn_6",
+				"01493427::291d8c82::turn_7",
+				"01493427::291d8c82::turn_8",
+				"01493427::291d8c82::turn_9",
+				"01493427::291d8c82::turn_10",
+				"01493427::291d8c82::turn_11",
+				"01493427::291d8c82::turn_12",
+				"01493427::3e8f07c9_1::turn_1",
+				"01493427::3e8f07c9_1::turn_2",
+				"01493427::3e8f07c9_1::turn_3",
+				"01493427::3e8f07c9_1::turn_4",
+				"01493427::3e8f07c9_1::turn_5",
+				"01493427::3e8f07c9_1::turn_6",
+				"01493427::3e8f07c9_1::turn_7",
+				"01493427::3e8f07c9_1::turn_8",
+				"01493427::3e8f07c9_1::turn_9",
+				"01493427::3e8f07c9_1::turn_10",
+				"01493427::3e8f07c9_1::turn_11",
+				"01493427::3e8f07c9_1::turn_12",
+				"01493427::5a840928_1::turn_1",
+				"01493427::5a840928_1::turn_2",
+				"01493427::5a840928_1::turn_3",
+				"01493427::5a840928_1::turn_4",
+				"01493427::5a840928_1::turn_5",
+				"01493427::5a840928_1::turn_6",
+				"01493427::5a840928_1::turn_7",
+				"01493427::5a840928_1::turn_8",
+				"01493427::5a840928_1::turn_9",
+				"01493427::5a840928_1::turn_10",
+				"01493427::5a840928_1::turn_11",
+				"01493427::5a840928_1::turn_12"
+			],
+			"turnReachable": false,
+			"missCategory": "update",
+			"topCandidates": [
+				{
+					"rank": 1,
+					"score": 0.443359375,
+					"source": "conversation",
+					"sessionId": "01493427::answer_a7b44747_1",
+					"canonicalId": "event:3ccb02af-b0a6-4ee3-802c-eb0f5e3224e8",
+					"resolvedSessionIds": ["01493427::answer_a7b44747_1"],
+					"sourceEventIds": ["3ccb02af-b0a6-4ee3-802c-eb0f5e3224e8"]
+				},
+				{
+					"rank": 2,
+					"score": 0.380859375,
+					"source": "conversation",
+					"sessionId": "01493427::answer_a7b44747_1",
+					"canonicalId": "event:86999fea-7449-4eb1-9d65-26ca39025923",
+					"resolvedSessionIds": ["01493427::answer_a7b44747_1"],
+					"sourceEventIds": ["86999fea-7449-4eb1-9d65-26ca39025923"]
+				},
+				{
+					"rank": 3,
+					"score": 0.37109375,
+					"source": "conversation",
+					"sessionId": "01493427::answer_a7b44747_1",
+					"canonicalId": "event:f4672f27-dc8a-4393-b2cb-595b4b5a5a43",
+					"resolvedSessionIds": ["01493427::answer_a7b44747_1"],
+					"sourceEventIds": ["f4672f27-dc8a-4393-b2cb-595b4b5a5a43"]
+				},
+				{
+					"rank": 4,
+					"score": 0.36328125,
+					"source": "conversation",
+					"sessionId": "01493427::answer_a7b44747_1",
+					"canonicalId": "event:741208a7-1175-4869-a6ce-5981c18f54c4",
+					"resolvedSessionIds": ["01493427::answer_a7b44747_1"],
+					"sourceEventIds": ["741208a7-1175-4869-a6ce-5981c18f54c4"]
+				},
+				{
+					"rank": 5,
+					"score": 0.2451171875,
+					"source": "conversation",
+					"canonicalId": "episode:33e79bf1-f033-4634-824f-200a78142090",
+					"resolvedSessionIds": ["01493427::55e6ff53"],
+					"sourceEventIds": [
+						"63340225-30e9-4dee-a5dd-b683536b9c0b",
+						"2f17d137-53bd-440f-8cda-0e27fbed4b6a",
+						"f9732b8b-27bc-45dd-9266-6f8df7f9859c",
+						"9157d156-86e8-44e0-b4ca-c64ebe952ac9",
+						"d3c7f7f5-9b2b-4861-89fd-47ffad2e0c0e",
+						"f40e1fae-7ccb-40bb-9b84-f468dc0a86dc",
+						"d98d47aa-894b-4c4f-b384-09a129a07198",
+						"ac674a2f-98d5-4eee-add0-f66c836f324a",
+						"1c6a1a48-33a5-4e43-806b-7a62c8cf6db8",
+						"a9c22d1b-022c-46bd-850f-8ae45818de8a",
+						"28f1a7a2-47ac-4942-88da-c324a1a74d35",
+						"77a187a4-4ea1-49db-9b88-29db0bda23a6"
+					]
+				}
+			]
+		},
+		{
+			"caseId": "08f4fc43",
+			"questionType": "temporal-reasoning",
+			"rAt5": 0.5,
+			"rAt10": 1,
+			"expectedSessionIds": [
+				"08f4fc43::answer_6ea1541e_2",
+				"08f4fc43::answer_6ea1541e_1"
+			],
+			"expectedTurnIds": [
+				"08f4fc43::answer_6ea1541e_2::turn_1",
+				"08f4fc43::answer_6ea1541e_1::turn_1"
+			],
+			"topCandidateSessionIds": [
+				"08f4fc43::answer_6ea1541e_2",
+				"08f4fc43::sharegpt_EATvpo0_0",
+				"08f4fc43::ultrachat_423937",
+				"08f4fc43::cdbd6862_1"
+			],
+			"sessionFound": true,
+			"allSessionsFound": false,
+			"reachableTurnIds": [
+				"08f4fc43::answer_6ea1541e_2::turn_7",
+				"08f4fc43::answer_6ea1541e_2::turn_1",
+				"08f4fc43::answer_6ea1541e_2::turn_8",
+				"08f4fc43::answer_6ea1541e_2::turn_4",
+				"08f4fc43::sharegpt_EATvpo0_0::turn_1",
+				"08f4fc43::answer_6ea1541e_2::turn_2",
+				"08f4fc43::ultrachat_423937::turn_4",
+				"08f4fc43::sharegpt_EATvpo0_0::turn_7",
+				"08f4fc43::cdbd6862_1::turn_4",
+				"08f4fc43::sharegpt_EATvpo0_0::turn_6"
+			],
+			"turnReachable": true,
+			"missCategory": "temporal",
+			"topCandidates": [
+				{
+					"rank": 1,
+					"score": 0.5234375,
+					"source": "conversation",
+					"sessionId": "08f4fc43::answer_6ea1541e_2",
+					"canonicalId": "event:128dfa06-2512-410a-b167-c5d334c11dff",
+					"resolvedSessionIds": ["08f4fc43::answer_6ea1541e_2"],
+					"sourceEventIds": ["128dfa06-2512-410a-b167-c5d334c11dff"]
+				},
+				{
+					"rank": 2,
+					"score": 0.5,
+					"source": "conversation",
+					"sessionId": "08f4fc43::answer_6ea1541e_2",
+					"canonicalId": "event:b84aa310-e346-4bb5-8f91-cbb09e813b71",
+					"resolvedSessionIds": ["08f4fc43::answer_6ea1541e_2"],
+					"sourceEventIds": ["b84aa310-e346-4bb5-8f91-cbb09e813b71"]
+				},
+				{
+					"rank": 3,
+					"score": 0.3671875,
+					"source": "conversation",
+					"sessionId": "08f4fc43::answer_6ea1541e_2",
+					"canonicalId": "event:ee471c54-657f-4a64-8d5f-f2de0b8e35b5",
+					"resolvedSessionIds": ["08f4fc43::answer_6ea1541e_2"],
+					"sourceEventIds": ["ee471c54-657f-4a64-8d5f-f2de0b8e35b5"]
+				},
+				{
+					"rank": 4,
+					"score": 0.3359375,
+					"source": "conversation",
+					"sessionId": "08f4fc43::answer_6ea1541e_2",
+					"canonicalId": "event:757baa1f-8a0c-4771-baa4-0c6a5e905026",
+					"resolvedSessionIds": ["08f4fc43::answer_6ea1541e_2"],
+					"sourceEventIds": ["757baa1f-8a0c-4771-baa4-0c6a5e905026"]
+				},
+				{
+					"rank": 5,
+					"score": 0.3046875,
+					"source": "conversation",
+					"sessionId": "08f4fc43::sharegpt_EATvpo0_0",
+					"canonicalId": "event:2847d329-def6-4d2f-9da5-4cac173e1ee0",
+					"resolvedSessionIds": ["08f4fc43::sharegpt_EATvpo0_0"],
+					"sourceEventIds": ["2847d329-def6-4d2f-9da5-4cac173e1ee0"]
+				}
+			]
+		},
+		{
+			"caseId": "00ca467f",
+			"questionType": "multi-session",
+			"rAt5": 0.6666666666666666,
+			"rAt10": 0.6666666666666666,
+			"expectedSessionIds": [
+				"00ca467f::answer_39900a0a_3",
+				"00ca467f::answer_39900a0a_2",
+				"00ca467f::answer_39900a0a_1"
+			],
+			"expectedTurnIds": [
+				"00ca467f::answer_39900a0a_3::turn_1",
+				"00ca467f::answer_39900a0a_1::turn_1"
+			],
+			"topCandidateSessionIds": [
+				"00ca467f::answer_39900a0a_3",
+				"00ca467f::answer_39900a0a_2",
+				"00ca467f::ultrachat_145200",
+				"00ca467f::507dbf23_1",
+				"00ca467f::ultrachat_350801",
+				"00ca467f::e0fa8486_2",
+				"00ca467f::ultrachat_360972"
+			],
+			"sessionFound": true,
+			"allSessionsFound": false,
+			"reachableTurnIds": [
+				"00ca467f::answer_39900a0a_3::turn_1",
+				"00ca467f::answer_39900a0a_2::turn_11",
+				"00ca467f::answer_39900a0a_2::turn_9",
+				"00ca467f::ultrachat_145200::turn_5",
+				"00ca467f::507dbf23_1::turn_7",
+				"00ca467f::ultrachat_145200::turn_14",
+				"00ca467f::ultrachat_350801::turn_2",
+				"00ca467f::e0fa8486_2::turn_9",
+				"00ca467f::ultrachat_145200::turn_7",
+				"00ca467f::ultrachat_360972::turn_3"
+			],
+			"turnReachable": true,
+			"missCategory": "turn-selection",
+			"topCandidates": [
+				{
+					"rank": 1,
+					"score": 0.4609375,
+					"source": "conversation",
+					"sessionId": "00ca467f::answer_39900a0a_3",
+					"canonicalId": "event:d1fbc83f-ef44-493e-af91-295c46eb62a3",
+					"resolvedSessionIds": ["00ca467f::answer_39900a0a_3"],
+					"sourceEventIds": ["d1fbc83f-ef44-493e-af91-295c46eb62a3"]
+				},
+				{
+					"rank": 2,
+					"score": 0.431640625,
+					"source": "conversation",
+					"sessionId": "00ca467f::answer_39900a0a_2",
+					"canonicalId": "event:f4324173-f12a-4d29-b0de-47b7fc23e73b",
+					"resolvedSessionIds": ["00ca467f::answer_39900a0a_2"],
+					"sourceEventIds": ["f4324173-f12a-4d29-b0de-47b7fc23e73b"]
+				},
+				{
+					"rank": 3,
+					"score": 0.306640625,
+					"source": "conversation",
+					"sessionId": "00ca467f::answer_39900a0a_2",
+					"canonicalId": "event:f26dc32c-d252-4fe7-a7d3-8fff3163ca41",
+					"resolvedSessionIds": ["00ca467f::answer_39900a0a_2"],
+					"sourceEventIds": ["f26dc32c-d252-4fe7-a7d3-8fff3163ca41"]
+				},
+				{
+					"rank": 4,
+					"score": 0.2431640625,
+					"source": "conversation",
+					"sessionId": "00ca467f::ultrachat_145200",
+					"canonicalId": "event:8d262034-6597-471b-ac9e-4c328e51e516",
+					"resolvedSessionIds": ["00ca467f::ultrachat_145200"],
+					"sourceEventIds": ["8d262034-6597-471b-ac9e-4c328e51e516"]
+				},
+				{
+					"rank": 5,
+					"score": 0.232421875,
+					"source": "conversation",
+					"sessionId": "00ca467f::507dbf23_1",
+					"canonicalId": "event:774f366b-232f-4d69-bbbb-7012a2ef8cc3",
+					"resolvedSessionIds": ["00ca467f::507dbf23_1"],
+					"sourceEventIds": ["774f366b-232f-4d69-bbbb-7012a2ef8cc3"]
+				}
+			]
+		}
+	],
+	"caseDiagnostics": [
+		{
+			"caseId": "00ca467f",
+			"questionType": "multi-session",
+			"rAt5": 0.6666666666666666,
+			"rAt10": 0.6666666666666666,
+			"ndcgAt10": 0.7653606369886217,
+			"issue": "recall-at-5",
+			"expectedSessionIds": [
+				"00ca467f::answer_39900a0a_3",
+				"00ca467f::answer_39900a0a_2",
+				"00ca467f::answer_39900a0a_1"
+			],
+			"expectedTurnIds": [
+				"00ca467f::answer_39900a0a_3::turn_1",
+				"00ca467f::answer_39900a0a_1::turn_1"
+			],
+			"topCandidateSessionIds": [
+				"00ca467f::answer_39900a0a_3",
+				"00ca467f::answer_39900a0a_2",
+				"00ca467f::ultrachat_145200",
+				"00ca467f::507dbf23_1"
+			],
+			"topCandidateTurnIds": [
+				"00ca467f::answer_39900a0a_3::turn_1",
+				"00ca467f::answer_39900a0a_2::turn_11",
+				"00ca467f::answer_39900a0a_2::turn_9",
+				"00ca467f::ultrachat_145200::turn_5",
+				"00ca467f::507dbf23_1::turn_7"
+			],
+			"sessionTop1Found": true,
+			"turnTop1Found": true,
+			"longMemEval": {
+				"session": {
+					"recallAnyAt1": 1,
+					"recallAllAt1": 0,
+					"ndcgAnyAt1": 1,
+					"recallAnyAt3": 1,
+					"recallAllAt3": 0,
+					"ndcgAnyAt3": 0.7601875334318685,
+					"recallAnyAt5": 1,
+					"recallAllAt5": 0,
+					"ndcgAnyAt5": 0.7601875334318685,
+					"recallAnyAt10": 1,
+					"recallAllAt10": 0,
+					"ndcgAnyAt10": 0.7601875334318685,
+					"recallAnyAt30": 1,
+					"recallAllAt30": 0,
+					"ndcgAnyAt30": 0.7601875334318685,
+					"recallAnyAt50": 1,
+					"recallAllAt50": 0,
+					"ndcgAnyAt50": 0.7601875334318685
+				},
+				"turn": {
+					"recallAnyAt1": 1,
+					"recallAllAt1": 0,
+					"ndcgAnyAt1": 1,
+					"recallAnyAt3": 1,
+					"recallAllAt3": 0,
+					"ndcgAnyAt3": 0.5,
+					"recallAnyAt5": 1,
+					"recallAllAt5": 0,
+					"ndcgAnyAt5": 0.5,
+					"recallAnyAt10": 1,
+					"recallAllAt10": 0,
+					"ndcgAnyAt10": 0.5,
+					"recallAnyAt30": 1,
+					"recallAllAt30": 0,
+					"ndcgAnyAt30": 0.5,
+					"recallAnyAt50": 1,
+					"recallAllAt50": 0,
+					"ndcgAnyAt50": 0.5
+				}
+			},
+			"topCandidates": [
+				{
+					"rank": 1,
+					"score": 0.4609375,
+					"source": "conversation",
+					"path": "events/d1fbc83f-ef44-493e-af91-295c46eb62a3",
+					"sessionId": "00ca467f::answer_39900a0a_3",
+					"canonicalId": "event:d1fbc83f-ef44-493e-af91-295c46eb62a3",
+					"resolvedSessionIds": ["00ca467f::answer_39900a0a_3"],
+					"resolvedTurnIds": ["00ca467f::answer_39900a0a_3::turn_1"],
+					"sourceEventIds": ["d1fbc83f-ef44-493e-af91-295c46eb62a3"]
+				},
+				{
+					"rank": 2,
+					"score": 0.431640625,
+					"source": "conversation",
+					"path": "events/f4324173-f12a-4d29-b0de-47b7fc23e73b",
+					"sessionId": "00ca467f::answer_39900a0a_2",
+					"canonicalId": "event:f4324173-f12a-4d29-b0de-47b7fc23e73b",
+					"resolvedSessionIds": ["00ca467f::answer_39900a0a_2"],
+					"resolvedTurnIds": ["00ca467f::answer_39900a0a_2::turn_11"],
+					"sourceEventIds": ["f4324173-f12a-4d29-b0de-47b7fc23e73b"]
+				},
+				{
+					"rank": 3,
+					"score": 0.306640625,
+					"source": "conversation",
+					"path": "events/f26dc32c-d252-4fe7-a7d3-8fff3163ca41",
+					"sessionId": "00ca467f::answer_39900a0a_2",
+					"canonicalId": "event:f26dc32c-d252-4fe7-a7d3-8fff3163ca41",
+					"resolvedSessionIds": ["00ca467f::answer_39900a0a_2"],
+					"resolvedTurnIds": ["00ca467f::answer_39900a0a_2::turn_9"],
+					"sourceEventIds": ["f26dc32c-d252-4fe7-a7d3-8fff3163ca41"]
+				},
+				{
+					"rank": 4,
+					"score": 0.2431640625,
+					"source": "conversation",
+					"path": "events/8d262034-6597-471b-ac9e-4c328e51e516",
+					"sessionId": "00ca467f::ultrachat_145200",
+					"canonicalId": "event:8d262034-6597-471b-ac9e-4c328e51e516",
+					"resolvedSessionIds": ["00ca467f::ultrachat_145200"],
+					"resolvedTurnIds": ["00ca467f::ultrachat_145200::turn_5"],
+					"sourceEventIds": ["8d262034-6597-471b-ac9e-4c328e51e516"]
+				},
+				{
+					"rank": 5,
+					"score": 0.232421875,
+					"source": "conversation",
+					"path": "events/774f366b-232f-4d69-bbbb-7012a2ef8cc3",
+					"sessionId": "00ca467f::507dbf23_1",
+					"canonicalId": "event:774f366b-232f-4d69-bbbb-7012a2ef8cc3",
+					"resolvedSessionIds": ["00ca467f::507dbf23_1"],
+					"resolvedTurnIds": ["00ca467f::507dbf23_1::turn_7"],
+					"sourceEventIds": ["774f366b-232f-4d69-bbbb-7012a2ef8cc3"]
+				}
+			]
+		},
+		{
+			"caseId": "06878be2",
+			"questionType": "single-session-preference",
+			"rAt5": 0,
+			"rAt10": 0,
+			"ndcgAt10": 0,
+			"issue": "top1-session-and-turn",
+			"expectedSessionIds": ["06878be2::answer_555dfb94"],
+			"expectedTurnIds": [
+				"06878be2::answer_555dfb94::turn_1",
+				"06878be2::answer_555dfb94::turn_9",
+				"06878be2::answer_555dfb94::turn_15"
+			],
+			"topCandidateSessionIds": [
+				"06878be2::sharegpt_6Two42G_35",
+				"06878be2::sharegpt_cn3iUbp_7",
+				"06878be2::a6074da9_1",
+				"06878be2::e58109ed_1"
+			],
+			"topCandidateTurnIds": [
+				"06878be2::sharegpt_6Two42G_35::turn_3",
+				"06878be2::sharegpt_cn3iUbp_7::turn_7",
+				"06878be2::a6074da9_1::turn_2",
+				"06878be2::e58109ed_1::turn_2"
+			],
+			"sessionTop1Found": false,
+			"turnTop1Found": false,
+			"longMemEval": {
+				"session": {
+					"recallAnyAt1": 0,
+					"recallAllAt1": 0,
+					"ndcgAnyAt1": 0,
+					"recallAnyAt3": 0,
+					"recallAllAt3": 0,
+					"ndcgAnyAt3": 0,
+					"recallAnyAt5": 0,
+					"recallAllAt5": 0,
+					"ndcgAnyAt5": 0,
+					"recallAnyAt10": 0,
+					"recallAllAt10": 0,
+					"ndcgAnyAt10": 0,
+					"recallAnyAt30": 0,
+					"recallAllAt30": 0,
+					"ndcgAnyAt30": 0,
+					"recallAnyAt50": 0,
+					"recallAllAt50": 0,
+					"ndcgAnyAt50": 0
+				},
+				"turn": {
+					"recallAnyAt1": 0,
+					"recallAllAt1": 0,
+					"ndcgAnyAt1": 0,
+					"recallAnyAt3": 0,
+					"recallAllAt3": 0,
+					"ndcgAnyAt3": 0,
+					"recallAnyAt5": 0,
+					"recallAllAt5": 0,
+					"ndcgAnyAt5": 0,
+					"recallAnyAt10": 0,
+					"recallAllAt10": 0,
+					"ndcgAnyAt10": 0,
+					"recallAnyAt30": 0,
+					"recallAllAt30": 0,
+					"ndcgAnyAt30": 0,
+					"recallAnyAt50": 0,
+					"recallAllAt50": 0,
+					"ndcgAnyAt50": 0
+				}
+			},
+			"topCandidates": [
+				{
+					"rank": 1,
+					"score": 0.2890625,
+					"source": "conversation",
+					"path": "events/fd343c11-31d7-49b7-b957-4a50dd807695",
+					"sessionId": "06878be2::sharegpt_6Two42G_35",
+					"canonicalId": "event:fd343c11-31d7-49b7-b957-4a50dd807695",
+					"resolvedSessionIds": ["06878be2::sharegpt_6Two42G_35"],
+					"resolvedTurnIds": ["06878be2::sharegpt_6Two42G_35::turn_3"],
+					"sourceEventIds": ["fd343c11-31d7-49b7-b957-4a50dd807695"]
+				},
+				{
+					"rank": 2,
+					"score": 0.271484375,
+					"source": "conversation",
+					"path": "events/5a1bacb1-3bcb-4de9-b1b3-7ab2bcb65a5a",
+					"sessionId": "06878be2::sharegpt_cn3iUbp_7",
+					"canonicalId": "event:5a1bacb1-3bcb-4de9-b1b3-7ab2bcb65a5a",
+					"resolvedSessionIds": ["06878be2::sharegpt_cn3iUbp_7"],
+					"resolvedTurnIds": ["06878be2::sharegpt_cn3iUbp_7::turn_7"],
+					"sourceEventIds": ["5a1bacb1-3bcb-4de9-b1b3-7ab2bcb65a5a"]
+				},
+				{
+					"rank": 3,
+					"score": 0.263671875,
+					"source": "conversation",
+					"path": "relation:cdd82794cc71e851-9259c94764068614",
+					"canonicalId": "relation:cdd82794cc71e851:mentioned_with:9259c94764068614",
+					"resolvedSessionIds": ["06878be2::a6074da9_1"],
+					"resolvedTurnIds": ["06878be2::a6074da9_1::turn_2"],
+					"sourceEventIds": ["8b08e730-0fa8-49a7-b494-7fb41c0f758b"]
+				},
+				{
+					"rank": 4,
+					"score": 0.255859375,
+					"source": "conversation",
+					"path": "relation:cdd82794cc71e851-94396028c6b4b925",
+					"canonicalId": "relation:cdd82794cc71e851:mentioned_with:94396028c6b4b925",
+					"resolvedSessionIds": ["06878be2::a6074da9_1"],
+					"resolvedTurnIds": ["06878be2::a6074da9_1::turn_2"],
+					"sourceEventIds": ["8b08e730-0fa8-49a7-b494-7fb41c0f758b"]
+				},
+				{
+					"rank": 5,
+					"score": 0.25,
+					"source": "conversation",
+					"path": "events/a3112d50-b7bc-4f39-9382-959333dca956",
+					"sessionId": "06878be2::e58109ed_1",
+					"canonicalId": "event:a3112d50-b7bc-4f39-9382-959333dca956",
+					"resolvedSessionIds": ["06878be2::e58109ed_1"],
+					"resolvedTurnIds": ["06878be2::e58109ed_1::turn_2"],
+					"sourceEventIds": ["a3112d50-b7bc-4f39-9382-959333dca956"]
+				}
+			]
+		},
+		{
+			"caseId": "001be529",
+			"questionType": "single-session-user",
+			"rAt5": 0,
+			"rAt10": 0,
+			"ndcgAt10": 0,
+			"issue": "top1-session-and-turn",
+			"expectedSessionIds": ["001be529::answer_530960c1"],
+			"expectedTurnIds": ["001be529::answer_530960c1::turn_5"],
+			"topCandidateSessionIds": [
+				"001be529::c8854b28",
+				"001be529::sharegpt_ETJwE0s_0",
+				"001be529::3c11dc79",
+				"001be529::f067b0ee"
+			],
+			"topCandidateTurnIds": [
+				"001be529::c8854b28::turn_3",
+				"001be529::sharegpt_ETJwE0s_0::turn_5",
+				"001be529::c8854b28::turn_11",
+				"001be529::3c11dc79::turn_5",
+				"001be529::f067b0ee::turn_3"
+			],
+			"sessionTop1Found": false,
+			"turnTop1Found": false,
+			"longMemEval": {
+				"session": {
+					"recallAnyAt1": 0,
+					"recallAllAt1": 0,
+					"ndcgAnyAt1": 0,
+					"recallAnyAt3": 0,
+					"recallAllAt3": 0,
+					"ndcgAnyAt3": 0,
+					"recallAnyAt5": 0,
+					"recallAllAt5": 0,
+					"ndcgAnyAt5": 0,
+					"recallAnyAt10": 0,
+					"recallAllAt10": 0,
+					"ndcgAnyAt10": 0,
+					"recallAnyAt30": 0,
+					"recallAllAt30": 0,
+					"ndcgAnyAt30": 0,
+					"recallAnyAt50": 0,
+					"recallAllAt50": 0,
+					"ndcgAnyAt50": 0
+				},
+				"turn": {
+					"recallAnyAt1": 0,
+					"recallAllAt1": 0,
+					"ndcgAnyAt1": 0,
+					"recallAnyAt3": 0,
+					"recallAllAt3": 0,
+					"ndcgAnyAt3": 0,
+					"recallAnyAt5": 0,
+					"recallAllAt5": 0,
+					"ndcgAnyAt5": 0,
+					"recallAnyAt10": 0,
+					"recallAllAt10": 0,
+					"ndcgAnyAt10": 0,
+					"recallAnyAt30": 0,
+					"recallAllAt30": 0,
+					"ndcgAnyAt30": 0,
+					"recallAnyAt50": 0,
+					"recallAllAt50": 0,
+					"ndcgAnyAt50": 0
+				}
+			},
+			"topCandidates": [
+				{
+					"rank": 1,
+					"score": 0.43359375,
+					"source": "conversation",
+					"path": "events/57f3b011-9fcc-4304-a487-bb1716ae3111",
+					"sessionId": "001be529::c8854b28",
+					"canonicalId": "event:57f3b011-9fcc-4304-a487-bb1716ae3111",
+					"resolvedSessionIds": ["001be529::c8854b28"],
+					"resolvedTurnIds": ["001be529::c8854b28::turn_3"],
+					"sourceEventIds": ["57f3b011-9fcc-4304-a487-bb1716ae3111"]
+				},
+				{
+					"rank": 2,
+					"score": 0.40234375,
+					"source": "conversation",
+					"path": "events/108f09c4-7fbe-45ab-a377-181f68a6bf13",
+					"sessionId": "001be529::sharegpt_ETJwE0s_0",
+					"canonicalId": "event:108f09c4-7fbe-45ab-a377-181f68a6bf13",
+					"resolvedSessionIds": ["001be529::sharegpt_ETJwE0s_0"],
+					"resolvedTurnIds": ["001be529::sharegpt_ETJwE0s_0::turn_5"],
+					"sourceEventIds": ["108f09c4-7fbe-45ab-a377-181f68a6bf13"]
+				},
+				{
+					"rank": 3,
+					"score": 0.2431640625,
+					"source": "conversation",
+					"path": "events/d62318cd-ae1e-40f7-815c-59e92bfae015",
+					"sessionId": "001be529::c8854b28",
+					"canonicalId": "event:d62318cd-ae1e-40f7-815c-59e92bfae015",
+					"resolvedSessionIds": ["001be529::c8854b28"],
+					"resolvedTurnIds": ["001be529::c8854b28::turn_11"],
+					"sourceEventIds": ["d62318cd-ae1e-40f7-815c-59e92bfae015"]
+				},
+				{
+					"rank": 4,
+					"score": 0.23828125,
+					"source": "conversation",
+					"path": "events/317cba9a-79c8-4de6-97ec-baf13bd03e2f",
+					"sessionId": "001be529::3c11dc79",
+					"canonicalId": "event:317cba9a-79c8-4de6-97ec-baf13bd03e2f",
+					"resolvedSessionIds": ["001be529::3c11dc79"],
+					"resolvedTurnIds": ["001be529::3c11dc79::turn_5"],
+					"sourceEventIds": ["317cba9a-79c8-4de6-97ec-baf13bd03e2f"]
+				},
+				{
+					"rank": 5,
+					"score": 0.232421875,
+					"source": "conversation",
+					"path": "events/c7443f5f-3af3-4d46-be33-813ec8db5761",
+					"sessionId": "001be529::f067b0ee",
+					"canonicalId": "event:c7443f5f-3af3-4d46-be33-813ec8db5761",
+					"resolvedSessionIds": ["001be529::f067b0ee"],
+					"resolvedTurnIds": ["001be529::f067b0ee::turn_3"],
+					"sourceEventIds": ["c7443f5f-3af3-4d46-be33-813ec8db5761"]
+				}
+			]
+		},
+		{
+			"caseId": "01493427",
+			"questionType": "knowledge-update",
+			"rAt5": 0.5,
+			"rAt10": 0.5,
+			"ndcgAt10": 0.6131471927654584,
+			"issue": "top1-turn",
+			"expectedSessionIds": [
+				"01493427::answer_a7b44747_1",
+				"01493427::answer_a7b44747_2"
+			],
+			"expectedTurnIds": [
+				"01493427::answer_a7b44747_1::turn_7",
+				"01493427::answer_a7b44747_2::turn_7"
+			],
+			"topCandidateSessionIds": [
+				"01493427::answer_a7b44747_1",
+				"01493427::55e6ff53"
+			],
+			"topCandidateTurnIds": [
+				"01493427::answer_a7b44747_1::turn_4",
+				"01493427::answer_a7b44747_1::turn_3",
+				"01493427::answer_a7b44747_1::turn_2",
+				"01493427::answer_a7b44747_1::turn_1",
+				"01493427::55e6ff53::turn_1",
+				"01493427::55e6ff53::turn_2",
+				"01493427::55e6ff53::turn_3",
+				"01493427::55e6ff53::turn_4",
+				"01493427::55e6ff53::turn_5",
+				"01493427::55e6ff53::turn_6",
+				"01493427::55e6ff53::turn_7",
+				"01493427::55e6ff53::turn_8",
+				"01493427::55e6ff53::turn_9",
+				"01493427::55e6ff53::turn_10",
+				"01493427::55e6ff53::turn_11",
+				"01493427::55e6ff53::turn_12"
+			],
+			"sessionTop1Found": true,
+			"turnTop1Found": false,
+			"longMemEval": {
+				"session": {
+					"recallAnyAt1": 1,
+					"recallAllAt1": 0,
+					"ndcgAnyAt1": 1,
+					"recallAnyAt3": 1,
+					"recallAllAt3": 0,
+					"ndcgAnyAt3": 0.5,
+					"recallAnyAt5": 1,
+					"recallAllAt5": 0,
+					"ndcgAnyAt5": 0.5,
+					"recallAnyAt10": 1,
+					"recallAllAt10": 0,
+					"ndcgAnyAt10": 0.5,
+					"recallAnyAt30": 1,
+					"recallAllAt30": 1,
+					"ndcgAnyAt30": 0.6177044566833191,
+					"recallAnyAt50": 1,
+					"recallAllAt50": 1,
+					"ndcgAnyAt50": 0.6177044566833191
+				},
+				"turn": {
+					"recallAnyAt1": 0,
+					"recallAllAt1": 0,
+					"ndcgAnyAt1": 0,
+					"recallAnyAt3": 0,
+					"recallAllAt3": 0,
+					"ndcgAnyAt3": 0,
+					"recallAnyAt5": 0,
+					"recallAllAt5": 0,
+					"ndcgAnyAt5": 0,
+					"recallAnyAt10": 0,
+					"recallAllAt10": 0,
+					"ndcgAnyAt10": 0,
+					"recallAnyAt30": 0,
+					"recallAllAt30": 0,
+					"ndcgAnyAt30": 0,
+					"recallAnyAt50": 0,
+					"recallAllAt50": 0,
+					"ndcgAnyAt50": 0
+				}
+			},
+			"topCandidates": [
+				{
+					"rank": 1,
+					"score": 0.443359375,
+					"source": "conversation",
+					"path": "events/3ccb02af-b0a6-4ee3-802c-eb0f5e3224e8",
+					"sessionId": "01493427::answer_a7b44747_1",
+					"canonicalId": "event:3ccb02af-b0a6-4ee3-802c-eb0f5e3224e8",
+					"resolvedSessionIds": ["01493427::answer_a7b44747_1"],
+					"resolvedTurnIds": ["01493427::answer_a7b44747_1::turn_4"],
+					"sourceEventIds": ["3ccb02af-b0a6-4ee3-802c-eb0f5e3224e8"]
+				},
+				{
+					"rank": 2,
+					"score": 0.380859375,
+					"source": "conversation",
+					"path": "events/86999fea-7449-4eb1-9d65-26ca39025923",
+					"sessionId": "01493427::answer_a7b44747_1",
+					"canonicalId": "event:86999fea-7449-4eb1-9d65-26ca39025923",
+					"resolvedSessionIds": ["01493427::answer_a7b44747_1"],
+					"resolvedTurnIds": ["01493427::answer_a7b44747_1::turn_3"],
+					"sourceEventIds": ["86999fea-7449-4eb1-9d65-26ca39025923"]
+				},
+				{
+					"rank": 3,
+					"score": 0.37109375,
+					"source": "conversation",
+					"path": "events/f4672f27-dc8a-4393-b2cb-595b4b5a5a43",
+					"sessionId": "01493427::answer_a7b44747_1",
+					"canonicalId": "event:f4672f27-dc8a-4393-b2cb-595b4b5a5a43",
+					"resolvedSessionIds": ["01493427::answer_a7b44747_1"],
+					"resolvedTurnIds": ["01493427::answer_a7b44747_1::turn_2"],
+					"sourceEventIds": ["f4672f27-dc8a-4393-b2cb-595b4b5a5a43"]
+				},
+				{
+					"rank": 4,
+					"score": 0.36328125,
+					"source": "conversation",
+					"path": "events/741208a7-1175-4869-a6ce-5981c18f54c4",
+					"sessionId": "01493427::answer_a7b44747_1",
+					"canonicalId": "event:741208a7-1175-4869-a6ce-5981c18f54c4",
+					"resolvedSessionIds": ["01493427::answer_a7b44747_1"],
+					"resolvedTurnIds": ["01493427::answer_a7b44747_1::turn_1"],
+					"sourceEventIds": ["741208a7-1175-4869-a6ce-5981c18f54c4"]
+				},
+				{
+					"rank": 5,
+					"score": 0.2451171875,
+					"source": "conversation",
+					"path": "episode:33e79bf1-f033-4634-824f-200a78142090",
+					"canonicalId": "episode:33e79bf1-f033-4634-824f-200a78142090",
+					"resolvedSessionIds": ["01493427::55e6ff53"],
+					"resolvedTurnIds": [
+						"01493427::55e6ff53::turn_1",
+						"01493427::55e6ff53::turn_2",
+						"01493427::55e6ff53::turn_3",
+						"01493427::55e6ff53::turn_4",
+						"01493427::55e6ff53::turn_5",
+						"01493427::55e6ff53::turn_6",
+						"01493427::55e6ff53::turn_7",
+						"01493427::55e6ff53::turn_8",
+						"01493427::55e6ff53::turn_9",
+						"01493427::55e6ff53::turn_10",
+						"01493427::55e6ff53::turn_11",
+						"01493427::55e6ff53::turn_12"
+					],
+					"sourceEventIds": [
+						"63340225-30e9-4dee-a5dd-b683536b9c0b",
+						"2f17d137-53bd-440f-8cda-0e27fbed4b6a",
+						"f9732b8b-27bc-45dd-9266-6f8df7f9859c",
+						"9157d156-86e8-44e0-b4ca-c64ebe952ac9",
+						"d3c7f7f5-9b2b-4861-89fd-47ffad2e0c0e",
+						"f40e1fae-7ccb-40bb-9b84-f468dc0a86dc",
+						"d98d47aa-894b-4c4f-b384-09a129a07198",
+						"ac674a2f-98d5-4eee-add0-f66c836f324a",
+						"1c6a1a48-33a5-4e43-806b-7a62c8cf6db8",
+						"a9c22d1b-022c-46bd-850f-8ae45818de8a",
+						"28f1a7a2-47ac-4942-88da-c324a1a74d35",
+						"77a187a4-4ea1-49db-9b88-29db0bda23a6"
+					]
+				}
+			]
+		},
+		{
+			"caseId": "08f4fc43",
+			"questionType": "temporal-reasoning",
+			"rAt5": 0.5,
+			"rAt10": 1,
+			"ndcgAt10": 0.8175295903539445,
+			"issue": "top1-turn",
+			"expectedSessionIds": [
+				"08f4fc43::answer_6ea1541e_2",
+				"08f4fc43::answer_6ea1541e_1"
+			],
+			"expectedTurnIds": [
+				"08f4fc43::answer_6ea1541e_2::turn_1",
+				"08f4fc43::answer_6ea1541e_1::turn_1"
+			],
+			"topCandidateSessionIds": [
+				"08f4fc43::answer_6ea1541e_2",
+				"08f4fc43::sharegpt_EATvpo0_0"
+			],
+			"topCandidateTurnIds": [
+				"08f4fc43::answer_6ea1541e_2::turn_7",
+				"08f4fc43::answer_6ea1541e_2::turn_1",
+				"08f4fc43::answer_6ea1541e_2::turn_8",
+				"08f4fc43::answer_6ea1541e_2::turn_4",
+				"08f4fc43::sharegpt_EATvpo0_0::turn_1"
+			],
+			"sessionTop1Found": true,
+			"turnTop1Found": false,
+			"longMemEval": {
+				"session": {
+					"recallAnyAt1": 1,
+					"recallAllAt1": 0,
+					"ndcgAnyAt1": 1,
+					"recallAnyAt3": 1,
+					"recallAllAt3": 0,
+					"ndcgAnyAt3": 0.5,
+					"recallAnyAt5": 1,
+					"recallAllAt5": 0,
+					"ndcgAnyAt5": 0.5,
+					"recallAnyAt10": 1,
+					"recallAllAt10": 1,
+					"ndcgAnyAt10": 0.6781035935540111,
+					"recallAnyAt30": 1,
+					"recallAllAt30": 1,
+					"ndcgAnyAt30": 0.6781035935540111,
+					"recallAnyAt50": 1,
+					"recallAllAt50": 1,
+					"ndcgAnyAt50": 0.6781035935540111
+				},
+				"turn": {
+					"recallAnyAt1": 0,
+					"recallAllAt1": 0,
+					"ndcgAnyAt1": 0,
+					"recallAnyAt3": 1,
+					"recallAllAt3": 0,
+					"ndcgAnyAt3": 0.5,
+					"recallAnyAt5": 1,
+					"recallAllAt5": 0,
+					"ndcgAnyAt5": 0.5,
+					"recallAnyAt10": 1,
+					"recallAllAt10": 0,
+					"ndcgAnyAt10": 0.5,
+					"recallAnyAt30": 1,
+					"recallAllAt30": 1,
+					"ndcgAnyAt30": 0.6138351243484765,
+					"recallAnyAt50": 1,
+					"recallAllAt50": 1,
+					"ndcgAnyAt50": 0.6138351243484765
+				}
+			},
+			"topCandidates": [
+				{
+					"rank": 1,
+					"score": 0.5234375,
+					"source": "conversation",
+					"path": "events/128dfa06-2512-410a-b167-c5d334c11dff",
+					"sessionId": "08f4fc43::answer_6ea1541e_2",
+					"canonicalId": "event:128dfa06-2512-410a-b167-c5d334c11dff",
+					"resolvedSessionIds": ["08f4fc43::answer_6ea1541e_2"],
+					"resolvedTurnIds": ["08f4fc43::answer_6ea1541e_2::turn_7"],
+					"sourceEventIds": ["128dfa06-2512-410a-b167-c5d334c11dff"]
+				},
+				{
+					"rank": 2,
+					"score": 0.5,
+					"source": "conversation",
+					"path": "events/b84aa310-e346-4bb5-8f91-cbb09e813b71",
+					"sessionId": "08f4fc43::answer_6ea1541e_2",
+					"canonicalId": "event:b84aa310-e346-4bb5-8f91-cbb09e813b71",
+					"resolvedSessionIds": ["08f4fc43::answer_6ea1541e_2"],
+					"resolvedTurnIds": ["08f4fc43::answer_6ea1541e_2::turn_1"],
+					"sourceEventIds": ["b84aa310-e346-4bb5-8f91-cbb09e813b71"]
+				},
+				{
+					"rank": 3,
+					"score": 0.3671875,
+					"source": "conversation",
+					"path": "events/ee471c54-657f-4a64-8d5f-f2de0b8e35b5",
+					"sessionId": "08f4fc43::answer_6ea1541e_2",
+					"canonicalId": "event:ee471c54-657f-4a64-8d5f-f2de0b8e35b5",
+					"resolvedSessionIds": ["08f4fc43::answer_6ea1541e_2"],
+					"resolvedTurnIds": ["08f4fc43::answer_6ea1541e_2::turn_8"],
+					"sourceEventIds": ["ee471c54-657f-4a64-8d5f-f2de0b8e35b5"]
+				},
+				{
+					"rank": 4,
+					"score": 0.3359375,
+					"source": "conversation",
+					"path": "events/757baa1f-8a0c-4771-baa4-0c6a5e905026",
+					"sessionId": "08f4fc43::answer_6ea1541e_2",
+					"canonicalId": "event:757baa1f-8a0c-4771-baa4-0c6a5e905026",
+					"resolvedSessionIds": ["08f4fc43::answer_6ea1541e_2"],
+					"resolvedTurnIds": ["08f4fc43::answer_6ea1541e_2::turn_4"],
+					"sourceEventIds": ["757baa1f-8a0c-4771-baa4-0c6a5e905026"]
+				},
+				{
+					"rank": 5,
+					"score": 0.3046875,
+					"source": "conversation",
+					"path": "events/2847d329-def6-4d2f-9da5-4cac173e1ee0",
+					"sessionId": "08f4fc43::sharegpt_EATvpo0_0",
+					"canonicalId": "event:2847d329-def6-4d2f-9da5-4cac173e1ee0",
+					"resolvedSessionIds": ["08f4fc43::sharegpt_EATvpo0_0"],
+					"resolvedTurnIds": ["08f4fc43::sharegpt_EATvpo0_0::turn_1"],
+					"sourceEventIds": ["2847d329-def6-4d2f-9da5-4cac173e1ee0"]
+				}
+			]
+		}
+	],
+	"queryGovernance": {
+		"status": "advisory-only",
+		"generatedAt": "2026-05-12T13:53:36.535Z",
+		"candidates": [
+			{
+				"candidateId": "search-detailed-hybrid-rank-fusion",
+				"source": "benchmark",
+				"queryShapeFamily": "search-detailed",
+				"recipe": "hybrid",
+				"scope": "cluster",
+				"reason": "Benchmark evidence shows the canonical detailed-search hybrid lane is valuable enough to inspect with $queryStats before pinning any cluster-wide query settings.",
+				"evidence": {
+					"datasetName": "canary-2026-05-12T13-51-48-756Z-f97b662a.json",
+					"datasetKind": "longmemeval",
+					"cases": 6,
+					"hitRate": 0.6666666666666666,
+					"p95LatencyMs": 2459,
+					"rAt5": 0.4444444444444444,
+					"ndcgAt10": 0.5326729033513374
+				},
+				"recommendedAction": "inspect-query-stats",
+				"rollbackNote": "Query settings are cluster-wide. If indexes, fusion strategy, or benchmark evidence changes, remove the setting with removeQuerySettings by shape or queryShapeHash."
+			}
+		],
+		"notes": [
+			"Operational only: do not hardcode setQuerySettings assumptions into application logic.",
+			"Validate any candidate against live $queryStats and current indexes before pinning a plan."
+		]
+	},
+	"benchmarkReport": {
+		"generatedAt": "2026-05-12T13:53:36.535Z",
+		"build": {
+			"source": "unknown"
+		},
+		"corpus": {
+			"datasetVersion": "42f4a48d236e7775",
+			"datasetName": "canary-2026-05-12T13-51-48-756Z-f97b662a.json",
+			"datasetKind": "longmemeval",
+			"scenarios": 6,
+			"cases": 6,
+			"scoredCases": 6,
+			"skippedCases": 0
+		},
+		"metrics": {
+			"internal": {
+				"hitRate": 0.6666666666666666,
+				"emptyRate": 0,
+				"avgTopScore": 0.4775390625,
+				"p95LatencyMs": 2459,
+				"rAt5": 0.4444444444444444,
+				"rAt10": 0.5277777777777778,
+				"ndcgAt10": 0.5326729033513374
+			},
+			"official": {
+				"longMemEval": {
+					"retrievalCases": 6,
+					"abstentionCases": 0,
+					"session": {
+						"recallAnyAt1": 0.6666666666666666,
+						"recallAllAt1": 0.16666666666666666,
+						"ndcgAnyAt1": 0.6666666666666666,
+						"recallAnyAt3": 0.6666666666666666,
+						"recallAllAt3": 0.16666666666666666,
+						"ndcgAnyAt3": 0.4600312555719781,
+						"recallAnyAt5": 0.6666666666666666,
+						"recallAllAt5": 0.16666666666666666,
+						"ndcgAnyAt5": 0.4600312555719781,
+						"recallAnyAt10": 0.6666666666666666,
+						"recallAllAt10": 0.3333333333333333,
+						"ndcgAnyAt10": 0.48971518783097995,
+						"recallAnyAt30": 0.6666666666666666,
+						"recallAllAt30": 0.5,
+						"ndcgAnyAt30": 0.5093325972781998,
+						"recallAnyAt50": 0.6666666666666666,
+						"recallAllAt50": 0.5,
+						"ndcgAnyAt50": 0.5093325972781998
+					},
+					"turn": {
+						"recallAnyAt1": 0.3333333333333333,
+						"recallAllAt1": 0.16666666666666666,
+						"ndcgAnyAt1": 0.3333333333333333,
+						"recallAnyAt3": 0.5,
+						"recallAllAt3": 0.16666666666666666,
+						"ndcgAnyAt3": 0.3333333333333333,
+						"recallAnyAt5": 0.5,
+						"recallAllAt5": 0.16666666666666666,
+						"ndcgAnyAt5": 0.3333333333333333,
+						"recallAnyAt10": 0.5,
+						"recallAllAt10": 0.16666666666666666,
+						"ndcgAnyAt10": 0.3333333333333333,
+						"recallAnyAt30": 0.5,
+						"recallAllAt30": 0.3333333333333333,
+						"ndcgAnyAt30": 0.3523058540580794,
+						"recallAnyAt50": 0.5,
+						"recallAllAt50": 0.3333333333333333,
+						"ndcgAnyAt50": 0.3523058540580794
+					}
+				}
+			}
+		},
+		"releaseGates": [
+			{
+				"gate": "official-retrieval",
+				"status": "passed",
+				"evidence": "officialMetrics present and all 6/6 benchmark cases scored"
+			},
+			{
+				"gate": "internal-retrieval",
+				"status": "passed",
+				"evidence": "6 cases, 6 scored"
+			},
+			{
+				"gate": "conversation-recall-regression",
+				"status": "not-run",
+				"evidence": "Run packages/memory-engine/src/mongodb-conversation-recall-benchmark.test.ts for recall-affecting changes"
+			},
+			{
+				"gate": "query-governance",
+				"status": "advisory-only",
+				"evidence": "queryGovernance candidates are advisory-only"
+			}
+		],
+		"warnings": [],
+		"degradations": [],
+		"runIdentity": {
+			"datasetSha256": "d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442",
+			"retrievalUnit": "turn"
+		},
+		"embedding": {
+			"model": "voyage-3.5",
+			"dimensions": 1024,
+			"quantization": "float32"
+		},
+		"reranker": {
+			"model": "rerank-2.5",
+			"version": null,
+			"stage": "post-fusion"
+		},
+		"storage": {
+			"collectionBytes": 0,
+			"indexBytes": 1306624
+		},
+		"latency": {
+			"p50Ms": 1552,
+			"p95Ms": 2459
+		},
+		"cost": {
+			"embeddingCalls": 0,
+			"rerankCalls": 6,
+			"llmEnrichmentCalls": 0
+		}
+	}
+}

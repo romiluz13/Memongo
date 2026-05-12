@@ -1,0 +1,17 @@
+{
+	"index": 4,
+	"questionId": "001be529",
+	"questionType": "single-session-user",
+	"completedAt": "2026-05-12T13:53:36.554Z",
+	"passStatus": "abstain",
+	"failureClass": null,
+	"metrics": {
+		"rAt5": 0.4444444444444444,
+		"rAt10": 0.5277777777777778,
+		"ndcgAt10": 0.5326729033513374,
+		"hitRate": 0.6666666666666666
+	},
+	"completed": false,
+	"runShapeHash": "3b431221da683570191e8195ec1091c7f9470b99ac8c4b2158c798a2391ec6d0",
+	"reason": "bulk-api-no-per-case-stream-yet"
+}

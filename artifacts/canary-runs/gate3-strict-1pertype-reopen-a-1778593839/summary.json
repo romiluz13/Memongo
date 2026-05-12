@@ -1,0 +1,143 @@
+{
+	"runId": "canary-2026-05-12T13-51-48-756Z-f97b662a",
+	"gateLabel": "gate3-strict-1pertype-reopen-a",
+	"generatedAt": "2026-05-12T13:54:59.8662Z",
+	"datasetSha256": "d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442",
+	"retrievalUnit": "turn",
+	"gitSha": "abe55b6a3d2ebd9364d672c6cf5e85b22a065d27",
+	"gitBranch": "main",
+	"mongodbVersion": "8.2.7",
+	"casesPerType": 1,
+	"totalEvaluations": 6,
+	"questionTypeBreakdown": {
+		"knowledge-update": 1,
+		"multi-session": 1,
+		"single-session-assistant": 1,
+		"single-session-preference": 1,
+		"single-session-user": 1,
+		"temporal-reasoning": 1
+	},
+	"hitRate": 0.6666666666666666,
+	"emptyRate": 0,
+	"rAt5": 0.4444444444444444,
+	"rAt10": 0.5277777777777778,
+	"ndcgAt10": 0.5326729033513374,
+	"session": {
+		"any@1": 0.6666666666666666,
+		"any@3": 0.6666666666666666,
+		"any@5": 0.6666666666666666,
+		"ndcgAny@10": 0.48971518783097995
+	},
+	"turn": {
+		"any@1": 0.3333333333333333,
+		"any@3": 0.5,
+		"any@5": 0.5,
+		"ndcgAny@10": 0.3333333333333333
+	},
+	"missLedgerLength": 5,
+	"caseDiagnosticsLength": 5,
+	"gate3ExitCriteria": {
+		"hitRate=1": false,
+		"emptyRate=0": true,
+		"rAt5=1": false,
+		"rAt10=1": false,
+		"ndcgAt10=1": false,
+		"sessionAny@1=1": false,
+		"turnAny@1=1": false,
+		"missLedger=[]": false,
+		"caseDiagnostics=[]": false,
+		"task1AParityFieldsPopulated": true
+	},
+	"parityFieldInventory": {
+		"datasetSha256": {
+			"present": true,
+			"location": "benchmarkReport.runIdentity.datasetSha256",
+			"value": "d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442",
+			"reason": null
+		},
+		"retrievalUnit": {
+			"present": true,
+			"location": "benchmarkReport.runIdentity.retrievalUnit",
+			"value": "turn",
+			"reason": null
+		},
+		"embedding.model": {
+			"present": true,
+			"location": "benchmarkReport.embedding.model",
+			"value": "voyage-3.5",
+			"reason": null
+		},
+		"embedding.dimensions": {
+			"present": true,
+			"location": "benchmarkReport.embedding.dimensions",
+			"value": 1024,
+			"reason": null
+		},
+		"embedding.quantization": {
+			"present": true,
+			"location": "benchmarkReport.embedding.quantization",
+			"value": "float32",
+			"reason": null
+		},
+		"reranker.model": {
+			"present": true,
+			"location": "benchmarkReport.reranker.model",
+			"value": "rerank-2.5",
+			"reason": null
+		},
+		"reranker.version": {
+			"present": true,
+			"location": "benchmarkReport.reranker.version",
+			"value": null,
+			"reason": "Voyage SDK does not pin rerank-2.5 model version; null is the honest sentinel"
+		},
+		"reranker.stage": {
+			"present": true,
+			"location": "benchmarkReport.reranker.stage",
+			"value": "post-fusion",
+			"reason": null
+		},
+		"storage.*": {
+			"present": true,
+			"location": "benchmarkReport.storage",
+			"value": {
+				"collectionBytes": 0,
+				"indexBytes": 1306624
+			},
+			"reason": null
+		},
+		"latency.p50": {
+			"present": true,
+			"location": "benchmarkReport.latency.p50Ms",
+			"value": 1552,
+			"reason": null
+		},
+		"latency.p95": {
+			"present": true,
+			"location": "benchmarkReport.latency.p95Ms",
+			"value": 2459,
+			"reason": null
+		},
+		"cost.embeddingCalls": {
+			"present": true,
+			"location": "benchmarkReport.cost.embeddingCalls",
+			"value": 0,
+			"reason": "0 is honest in MongoDB automated-mongot-embedding mode (mongot handles embedding server-side)"
+		},
+		"cost.rerankCalls": {
+			"present": true,
+			"location": "benchmarkReport.cost.rerankCalls",
+			"value": 6,
+			"reason": null
+		},
+		"cost.llmEnrichmentCalls": {
+			"present": true,
+			"location": "benchmarkReport.cost.llmEnrichmentCalls",
+			"value": 0,
+			"reason": "0 is honest \u2014 MEMONGO_LLM_ENRICHMENT_MODE default is 'none'; strict flag only activates counting when mode is set"
+		}
+	},
+	"verdict": "PASS_PARITY",
+	"failureSummary": [],
+	"note": "Verdict scope narrow to Task 1.A projection. Retrieval-quality regressions (hitRate / rAt5 / caseDiagnostics) are under separate investigation on task #30 and are NOT criteria for this re-open."
+}

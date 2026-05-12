@@ -3,6 +3,58 @@
 This log records benchmark-gate decisions. Keep entries short, factual, and
 linked to raw artifacts.
 
+## 2026-05-12: Phase 3 Gate 3 Re-Open A — Task 1.A envelope projection (BUILD wf-20260511T212602Z-9db2daeb)
+
+Status: **PASS (Task 1.A projection)** — every parity field is populated at runtime on the live `benchmarkReport` envelope. Retrieval-quality regression (hitRate, turn any@1, caseDiagnostics) remains scoped to task #30 and is NOT covered by this re-open. Gate 3 exit itself still blocked until task #30 resolves retrieval quality.
+
+Run:
+
+- Run id: `gate3-strict-1pertype-reopen-a-1778593839`
+- Timestamp: 2026-05-12T13:54:59Z
+- Commit SHA: `abe55b6a3d2ebd9364d672c6cf5e85b22a065d27` on `main` (stack: two commits on main from this re-open: `bd08f79ea0` projection module + tests, `abe55b6a3d` manager wiring)
+- Artifact dir: `artifacts/canary-runs/gate3-strict-1pertype-reopen-a-1778593839/`
+- Dataset: `longmemeval_s_cleaned.json`, SHA-256 `d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442` (same as prior Gate 3 run)
+- MongoDB: atlas-local:preview 8.2.7 on port 27018 (bench stack already healthy from prior Gate 3 run)
+- Scope: 6 evaluations, 1 per LongMemEval question type
+- Strict flags: `MEMONGO_BENCHMARK_STRICT=1`, `MEMONGO_LLM_ENRICHMENT_STRICT=1`
+- Wall-clock: canary ~90s (well under 30 min budget)
+
+Parity field inventory (synthesized from the real `benchmarkReport`, NOT hand-filled):
+
+- `runIdentity.datasetSha256` = `d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442` — PASS
+- `runIdentity.retrievalUnit` = `"turn"` — PASS
+- `embedding.model` = `"voyage-3.5"`, `dimensions` = `1024`, `quantization` = `"float32"` — PASS
+- `reranker.model` = `"rerank-2.5"`, `version` = `null` (Voyage SDK does not pin the rerank version; null is the honest sentinel), `stage` = `"post-fusion"` — PASS
+- `storage.collectionBytes` = `0` (fresh benchmark collection — no events were persisted after benchmark run completed / settle), `storage.indexBytes` = `1306624` — PASS (collStats worked on atlas-local:preview; no null-with-reason fallback needed)
+- `latency.p50Ms` = `1552`, `latency.p95Ms` = `2459` — PASS
+- `cost.embeddingCalls` = `0` (honest: MongoDB automated-mongot-embedding mode handles embedding server-side), `cost.rerankCalls` = `6` (one per case), `cost.llmEnrichmentCalls` = `0` (honest: `MEMONGO_LLM_ENRICHMENT_MODE` unset defaults to `none`) — PASS
+
+Wiring commits:
+
+- `bd08f79ea0` — `packages/memory-engine/src/benchmark-parity-envelope.{ts,test.ts}` (new module, 24 unit tests) + projection helper `projectBenchmarkParityFields` in runner (+2 tests)
+- `abe55b6a3d` — `mongodb-manager.ts` assembles parity bundle via `buildBenchmarkParityBundle`; run-scoped `BenchmarkRunCounters` instantiated in `relevanceBenchmark`, propagated to scenario managers, incremented at rerank + LLM enrichment call sites; canary script passes `datasetSha256` in benchmark body so the envelope traces to the full upstream dataset (not the subset file)
+
+Test evidence:
+
+- `CI=true bunx vitest run packages/memory-engine/src/benchmark-parity-envelope.test.ts` → exit 0, 24/24 pass
+- `CI=true bunx vitest run packages/memory-engine/src/mongodb-benchmark-runner.test.ts` → exit 0, 28/28 pass
+- `CI=true bunx vitest run packages/memory-engine/src/mongodb-manager.test.ts` → exit 0, 76/76 pass
+- `CI=true bunx vitest run scripts/run-longmemeval-canary.test.ts` → exit 0, 46/46 pass
+- `bun run check-types` → exit 0, 14/14 workspace tasks green
+- `bun run lint` → exit 0, 300 files clean
+- `git diff --check` → exit 0
+
+MongoDB MCP `search-knowledge` consulted via WebFetch substitution (MCP plugin not available in this session; disclosed substitution per `.cc10x/v10/patterns.md` gotcha):
+
+- `https://www.mongodb.com/docs/manual/reference/command/collStats/` — confirms `collStats` returns `size` + `totalIndexSize` + `storageSize` on MongoDB 8.x Community + Atlas; still supported though deprecated 6.2 in favor of `$collStats` aggregation stage. On atlas-local:preview the command succeeded and populated `storage.*` without triggering the null-with-reason fallback.
+
+Non-blocking advisories carried forward:
+
+- `cost.embeddingCalls=0` is structurally correct in automated mongot mode but future Gate 4 / Gate 5 may want to surface mongot-side embedding telemetry; tracked as a follow-on.
+- Retrieval-quality regression (hitRate=0.666, caseDiagnostics=5) — DEFERRED to task #30 (case 06878be2 root-cause).
+
+---
+
 ## 2026-05-12: Phase 3 Gate 3 Strict 1/Type Canary (BUILD wf-20260511T212602Z-9db2daeb)
 
 Status: **FAIL** — Task 1.A envelope parity fields missing from `benchmarkReport`; one turn-precision miss on single-session-preference. Gate 3 blocked; Task 1.A re-opened per plan `docs/plans/2026-05-11-memongo-mempalace-roadmap-plan.md:2037`.
