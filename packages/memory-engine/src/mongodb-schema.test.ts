@@ -294,9 +294,7 @@ describe("schema constants", () => {
 		expect(schema.required).toContain("matchedPatterns")
 		expect(schema.required).toContain("status")
 		// `classification` is tightly scoped — only injection-likely rows land here.
-		expect(schema.properties.classification.enum).toEqual([
-			"injection-likely",
-		])
+		expect(schema.properties.classification.enum).toEqual(["injection-likely"])
 		// Lifecycle statuses for the pending → promoted / rejected flow.
 		expect(schema.properties.status.enum).toEqual([
 			"pending-review",
@@ -322,10 +320,7 @@ describe("schema constants", () => {
 		expect(schema.properties.invalidAt).toBeDefined()
 		// invalidAt accepts `date` OR null per the retrieval filter
 		// `invalidAt IS NULL OR invalidAt > queryTime`.
-		expect(schema.properties.invalidAt.bsonType).toEqual([
-			"date",
-			"null",
-		])
+		expect(schema.properties.invalidAt.bsonType).toEqual(["date", "null"])
 	})
 
 	it("chunks collection has polymorphic schema validation (F15)", async () => {

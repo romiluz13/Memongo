@@ -322,10 +322,6 @@ export type RelevanceExplainResult = {
 const log = createSubsystemLogger("memory:mongodb")
 const CHANGE_STREAM_RESUME_TOKEN_META_KEY = "change_stream_resume_token"
 
-function isBenchmarkStrictMode(): boolean {
-	return process.env.MEMONGO_BENCHMARK_STRICT === "1"
-}
-
 function isStrictSearchReadinessMode(): boolean {
 	return (
 		process.env.MEMONGO_BENCHMARK_STRICT === "1" ||

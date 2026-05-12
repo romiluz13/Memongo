@@ -519,7 +519,11 @@ async function hybridRecall(params: {
 		},
 		{ $limit: params.effectiveLimit },
 		{ $addFields: { scoreDetails: { $meta: "scoreDetails" } } },
-		{ $project: buildEventProjection("searchScore", { includeScoreDetails: true }) },
+		{
+			$project: buildEventProjection("searchScore", {
+				includeScoreDetails: true,
+			}),
+		},
 	]
 	const docs = await runSearchAggregateWithRetry(params.collection, pipeline)
 	return docs.map((doc) => eventToRecallResult(doc, "hybrid"))

@@ -334,9 +334,7 @@ describe("recallConversation", () => {
 		expect(addFieldsStage?.$addFields?.scoreDetails).toEqual({
 			$meta: "scoreDetails",
 		})
-		const projectStage = pipeline.find(
-			(stage) => stage.$project !== undefined,
-		)
+		const projectStage = pipeline.find((stage) => stage.$project !== undefined)
 		expect(projectStage?.$project?.scoreDetails).toBe(1)
 		// Order invariant: $addFields comes before $project.
 		const addFieldsIdx = pipeline.findIndex(

@@ -34,58 +34,63 @@ export type InjectionPatternEntry = {
  * code review + a regression test; removal of a pattern is a decision-RFC
  * event (never silent).
  */
-export const INJECTION_PATTERNS: readonly InjectionPatternEntry[] = Object.freeze([
-	{
-		id: "ignore-previous-instructions",
-		pattern: /\b(ignore|disregard)\b[^.]{0,40}\b(previous|prior|above|earlier|all)\b[^.]{0,40}\b(instruction|message|prompt|rule|request)s?\b/i,
-		severity: "high",
-		description:
-			"Classic 'ignore previous instructions' style override (Anthropic-flagged).",
-	},
-	{
-		id: "system-prompt-declaration",
-		pattern: /\bsystem\s*prompt\s*:/i,
-		severity: "high",
-		description: "Explicit 'system prompt:' leader trying to impersonate system role.",
-	},
-	{
-		id: "bracketed-system-role",
-		pattern: /\[\s*\/?\s*(system|assistant|user)\s*\]/i,
-		severity: "medium",
-		description:
-			"Bracketed role-injection tokens (e.g., [SYSTEM]...[/SYSTEM]).",
-	},
-	{
-		id: "angle-system-role",
-		pattern: /<\|\s*\/?\s*(system|assistant|user|end)\s*\|>/i,
-		severity: "medium",
-		description: "Angle-pipe role tokens (e.g., <|system|>, <|end|>).",
-	},
-	{
-		id: "reveal-prompt-request",
-		pattern: /\b(show|reveal|print|output|display|expose|leak)\b[^.]{0,30}\b(instructions?|prompt|system\s+prompt|rules?|hidden\s+prompt)\b/i,
-		severity: "high",
-		description: "Direct prompt-leak request.",
-	},
-	{
-		id: "verbatim-instructions-request",
-		pattern: /\b(your|the)\s+instructions?\b[^.]{0,30}\bverbatim\b/i,
-		severity: "medium",
-		description: "Verbatim-instruction exfiltration attempt.",
-	},
-	{
-		id: "act-as-override",
-		pattern: /\b(act|behave|respond)\s+as\b[^.]{0,40}\b(unfiltered|admin|developer|jailbroken|root|sudo|god)\b/i,
-		severity: "high",
-		description: "Role-override 'act as unfiltered/admin/etc.' patterns.",
-	},
-	{
-		id: "disregard-above-override",
-		pattern: /\bdisregard\s+the\s+above\b/i,
-		severity: "high",
-		description: "Short-form 'disregard the above' override.",
-	},
-])
+export const INJECTION_PATTERNS: readonly InjectionPatternEntry[] =
+	Object.freeze([
+		{
+			id: "ignore-previous-instructions",
+			pattern:
+				/\b(ignore|disregard)\b[^.]{0,40}\b(previous|prior|above|earlier|all)\b[^.]{0,40}\b(instruction|message|prompt|rule|request)s?\b/i,
+			severity: "high",
+			description:
+				"Classic 'ignore previous instructions' style override (Anthropic-flagged).",
+		},
+		{
+			id: "system-prompt-declaration",
+			pattern: /\bsystem\s*prompt\s*:/i,
+			severity: "high",
+			description:
+				"Explicit 'system prompt:' leader trying to impersonate system role.",
+		},
+		{
+			id: "bracketed-system-role",
+			pattern: /\[\s*\/?\s*(system|assistant|user)\s*\]/i,
+			severity: "medium",
+			description:
+				"Bracketed role-injection tokens (e.g., [SYSTEM]...[/SYSTEM]).",
+		},
+		{
+			id: "angle-system-role",
+			pattern: /<\|\s*\/?\s*(system|assistant|user|end)\s*\|>/i,
+			severity: "medium",
+			description: "Angle-pipe role tokens (e.g., <|system|>, <|end|>).",
+		},
+		{
+			id: "reveal-prompt-request",
+			pattern:
+				/\b(show|reveal|print|output|display|expose|leak)\b[^.]{0,30}\b(instructions?|prompt|system\s+prompt|rules?|hidden\s+prompt)\b/i,
+			severity: "high",
+			description: "Direct prompt-leak request.",
+		},
+		{
+			id: "verbatim-instructions-request",
+			pattern: /\b(your|the)\s+instructions?\b[^.]{0,30}\bverbatim\b/i,
+			severity: "medium",
+			description: "Verbatim-instruction exfiltration attempt.",
+		},
+		{
+			id: "act-as-override",
+			pattern:
+				/\b(act|behave|respond)\s+as\b[^.]{0,40}\b(unfiltered|admin|developer|jailbroken|root|sudo|god)\b/i,
+			severity: "high",
+			description: "Role-override 'act as unfiltered/admin/etc.' patterns.",
+		},
+		{
+			id: "disregard-above-override",
+			pattern: /\bdisregard\s+the\s+above\b/i,
+			severity: "high",
+			description: "Short-form 'disregard the above' override.",
+		},
+	])
 
 export type InjectionVerdict = {
 	classification: InjectionClassification

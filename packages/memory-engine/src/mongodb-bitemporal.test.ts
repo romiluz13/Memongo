@@ -7,10 +7,7 @@
 
 import { describe, expect, it } from "vitest"
 import fc from "fast-check"
-import {
-	buildBitemporalFilter,
-	isMemoryValidAt,
-} from "./mongodb-bitemporal.js"
+import { buildBitemporalFilter, isMemoryValidAt } from "./mongodb-bitemporal.js"
 
 const FAST_CHECK_SEED = 20260512
 
@@ -21,10 +18,7 @@ describe("buildBitemporalFilter (Task 2.SE-1)", () => {
 		expect(filter).toEqual({
 			$and: [
 				{
-					$or: [
-						{ validAt: { $exists: false } },
-						{ validAt: { $lte: t } },
-					],
+					$or: [{ validAt: { $exists: false } }, { validAt: { $lte: t } }],
 				},
 				{
 					$or: [
@@ -70,10 +64,7 @@ describe("isMemoryValidAt (Task 2.SE-1)", () => {
 
 	it("rejects memories with validAt in the future", () => {
 		expect(
-			isMemoryValidAt(
-				{ validAt: new Date("2026-05-12T10:00:00.001Z") },
-				T,
-			),
+			isMemoryValidAt({ validAt: new Date("2026-05-12T10:00:00.001Z") }, T),
 		).toBe(false)
 	})
 })
@@ -106,9 +97,7 @@ describe("bi-temporal validity invariant (property test — fast-check)", () => 
 							? { invalidAt: new Date(m.invalidAtMs) }
 							: {}),
 					}))
-					const retained = memories.filter((m) =>
-						isMemoryValidAt(m, queryTime),
-					)
+					const retained = memories.filter((m) => isMemoryValidAt(m, queryTime))
 					// Invariant: no retained memory has invalidAt <= queryTime.
 					for (const m of retained) {
 						if (m.invalidAt instanceof Date) {
@@ -155,9 +144,9 @@ describe("bi-temporal validity invariant (property test — fast-check)", () => 
 							: {}),
 					}))
 					const retained = new Set(
-						memories.filter((m) => isMemoryValidAt(m, queryTime)).map(
-							(m) => m.idx,
-						),
+						memories
+							.filter((m) => isMemoryValidAt(m, queryTime))
+							.map((m) => m.idx),
 					)
 					const rejected = new Set(
 						memories

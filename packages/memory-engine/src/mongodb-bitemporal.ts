@@ -38,7 +38,12 @@ export function buildBitemporalFilter(queryTime: Date): Document {
 	return {
 		$and: [
 			// validAt either missing (legacy pre-migration row) or <= queryTime.
-			{ $or: [{ validAt: { $exists: false } }, { validAt: { $lte: queryTime } }] },
+			{
+				$or: [
+					{ validAt: { $exists: false } },
+					{ validAt: { $lte: queryTime } },
+				],
+			},
 			// invalidAt either absent, explicitly null, or strictly greater than queryTime.
 			{
 				$or: [
@@ -60,10 +65,16 @@ export function isMemoryValidAt(
 	memory: { validAt?: Date | null; invalidAt?: Date | null },
 	queryTime: Date,
 ): boolean {
-	if (memory.validAt instanceof Date && memory.validAt.getTime() > queryTime.getTime()) {
+	if (
+		memory.validAt instanceof Date &&
+		memory.validAt.getTime() > queryTime.getTime()
+	) {
 		return false
 	}
-	if (memory.invalidAt instanceof Date && memory.invalidAt.getTime() <= queryTime.getTime()) {
+	if (
+		memory.invalidAt instanceof Date &&
+		memory.invalidAt.getTime() <= queryTime.getTime()
+	) {
 		return false
 	}
 	return true

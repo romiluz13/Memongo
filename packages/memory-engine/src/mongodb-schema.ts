@@ -1202,7 +1202,8 @@ const MEMORY_QUARANTINE_SCHEMA: Document = {
 			content: { bsonType: "string" },
 			classification: {
 				enum: ["injection-likely"],
-				description: "SE-2 classification; only 'injection-likely' is persisted here",
+				description:
+					"SE-2 classification; only 'injection-likely' is persisted here",
 			},
 			tier: {
 				enum: ["pattern", "llm"],
@@ -1224,7 +1225,8 @@ const MEMORY_QUARANTINE_SCHEMA: Document = {
 			sourceEventIds: {
 				bsonType: "array",
 				items: { bsonType: "string" },
-				description: "Source event ids if the candidate came from consolidation",
+				description:
+					"Source event ids if the candidate came from consolidation",
 			},
 		},
 	},

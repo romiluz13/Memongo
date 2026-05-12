@@ -827,7 +827,11 @@ export function classifyRetrievalQuery(params: {
  * experimentation). Non-positive or non-finite limits are treated as the floor.
  */
 export function resolveNumCandidates(limit: number, override?: number): number {
-	if (typeof override === "number" && Number.isFinite(override) && override > 0) {
+	if (
+		typeof override === "number" &&
+		Number.isFinite(override) &&
+		override > 0
+	) {
 		return Math.floor(override)
 	}
 	if (!Number.isFinite(limit) || limit <= 0) {
