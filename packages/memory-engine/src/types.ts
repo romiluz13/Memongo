@@ -966,6 +966,71 @@ export type MemoryBenchmarkReleaseGate = {
 	evidence: string
 }
 
+/**
+ * Envelope parity fields (Task 1.A).
+ *
+ * Gate 3 / Gate 4 / Gate 5 artifacts all share a single envelope superset so
+ * comparative claims against MemPalace carry dataset SHA, retrieval unit,
+ * embedding model, reranker identity, storage footprint, latency, and cost
+ * counters in every published run. `e2eQa.*` is a Gate-5 extension populated
+ * by Task 5.E2E and Task 5.adv; at Phase 1 these fields may be null.
+ */
+
+export type BenchmarkRetrievalUnit = "turn" | "session" | "memory" | "qa-pair"
+
+export type BenchmarkEmbeddingQuantization = "float32" | "int8" | "binary"
+
+export type BenchmarkRerankerStage = "post-fusion" | "pre-fusion" | "none"
+
+export type BenchmarkRunIdentity = {
+	/** SHA-256 of dataset file bytes (64-hex-char). */
+	datasetSha256: string
+	retrievalUnit: BenchmarkRetrievalUnit
+}
+
+export type BenchmarkEmbeddingConfig = {
+	model: string
+	dimensions: number
+	quantization: BenchmarkEmbeddingQuantization
+}
+
+export type BenchmarkRerankerConfig = {
+	model: string
+	version: string | null
+	stage: BenchmarkRerankerStage
+}
+
+/**
+ * Storage footprint from `collStats`. On atlas-local:preview `collStats` may
+ * be unavailable; in that case both numeric fields are `null` and
+ * `unavailableReason` carries a short machine-readable reason string.
+ */
+export type BenchmarkStorageFootprint = {
+	collectionBytes: number | null
+	indexBytes: number | null
+	unavailableReason?: string
+}
+
+export type BenchmarkLatencyDistribution = {
+	p50Ms: number
+	p95Ms: number
+}
+
+export type BenchmarkCostCounters = {
+	embeddingCalls: number
+	rerankCalls: number
+	llmEnrichmentCalls: number
+}
+
+/** Gate-5 extension. Populated by Task 5.E2E / Task 5.adv; null at Phase 1. */
+export type BenchmarkE2eQaEnvelope = {
+	judge: string | null
+	judgeVersion: string | null
+	accuracy: number | null
+	latencyMs: number | null
+	judgeFalsePositiveRate: number | null
+}
+
 export type MemoryBenchmarkRunReport = {
 	generatedAt: Date
 	build: MemoryBenchmarkBuildIdentity
@@ -993,6 +1058,14 @@ export type MemoryBenchmarkRunReport = {
 	releaseGates: MemoryBenchmarkReleaseGate[]
 	warnings: string[]
 	degradations: string[]
+	/** Task 1.A parity envelope (optional at Phase 1; blocks Gate 3 exit when missing). */
+	runIdentity?: BenchmarkRunIdentity
+	embedding?: BenchmarkEmbeddingConfig
+	reranker?: BenchmarkRerankerConfig
+	storage?: BenchmarkStorageFootprint
+	latency?: BenchmarkLatencyDistribution
+	cost?: BenchmarkCostCounters
+	e2eQa?: BenchmarkE2eQaEnvelope
 }
 
 // ---------------------------------------------------------------------------

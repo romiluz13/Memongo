@@ -1204,6 +1204,49 @@ describe("createApp", () => {
 		})
 	})
 
+	it("accepts datasetSha256, embeddingConfig, and rerankerConfig in benchmark body (Task 1.A)", async () => {
+		const res = await createApp().request("/v1/admin/relevance/benchmark", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				agentId: "agent-42",
+				datasetPath: "/tmp/longmemeval.json",
+				maxResults: 10,
+				datasetSha256: "a".repeat(64),
+				embeddingConfig: {
+					model: "voyage-3",
+					dimensions: 1024,
+					quantization: "float32",
+				},
+				rerankerConfig: {
+					model: "rerank-2",
+					version: null,
+					stage: "post-fusion",
+				},
+			}),
+		})
+
+		expect(res.status).toBe(200)
+		expect(bridgeMocks.memongoBridgeRelevanceBenchmark).toHaveBeenCalledWith(
+			expect.objectContaining({
+				agentId: "agent-42",
+				datasetPath: "/tmp/longmemeval.json",
+				maxResults: 10,
+				datasetSha256: "a".repeat(64),
+				embeddingConfig: {
+					model: "voyage-3",
+					dimensions: 1024,
+					quantization: "float32",
+				},
+				rerankerConfig: {
+					model: "rerank-2",
+					version: null,
+					stage: "post-fusion",
+				},
+			}),
+		)
+	})
+
 	it("rejects benchmark ingest when datasetPath is missing", async () => {
 		const res = await createApp().request("/v1/admin/benchmarks/ingest", {
 			method: "POST",

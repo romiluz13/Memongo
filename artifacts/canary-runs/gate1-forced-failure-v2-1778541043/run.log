@@ -1,0 +1,12 @@
+[canary] run=canary-2026-05-11T23-15-46-960Z-b7ac32de dataset=/Users/rom.iluz/.memongo/workspace/benchmarks/longmemeval_s_cleaned.json dryRun=false fullMode=false runDir=/Users/rom.iluz/Dev/memongo/artifacts/canary-runs/gate1-forced-failure-v2-1778541043
+[canary] selected 6 evaluations across 6 types from 500 total
+  knowledge-update: 1
+  multi-session: 1
+  single-session-assistant: 1
+  single-session-preference: 1
+  single-session-user: 1
+  temporal-reasoning: 1
+[canary] posting benchmark to http://127.0.0.1:3847/v1/admin/relevance/benchmark
+Error: HTTP 500: {"error":{"code":"RELEVANCE_BENCHMARK_FAILED","message":"voyage embedding request failed: connect ECONNREFUSED 127.0.0.1:65530 (MEMONGO_VOYAGE_BASE_URL unroutable)"}}
+    at main (/Users/rom.iluz/Dev/memongo/scripts/run-longmemeval-canary.ts:738:13)
+    at processTicksAndRejections (native:7:39)

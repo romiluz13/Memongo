@@ -1,0 +1,6 @@
+{
+	"failedAt": "2026-05-11T23:15:48.185Z",
+	"failureClass": "model-failure",
+	"message": "HTTP 500: {\"error\":{\"code\":\"RELEVANCE_BENCHMARK_FAILED\",\"message\":\"voyage embedding request failed: connect ECONNREFUSED 127.0.0.1:65530 (MEMONGO_VOYAGE_BASE_URL unroutable)\"}}",
+	"stack": "Error: HTTP 500: {\"error\":{\"code\":\"RELEVANCE_BENCHMARK_FAILED\",\"message\":\"voyage embedding request failed: connect ECONNREFUSED 127.0.0.1:65530 (MEMONGO_VOYAGE_BASE_URL unroutable)\"}}\n    at main (/Users/rom.iluz/Dev/memongo/scripts/run-longmemeval-canary.ts:738:13)\n    at processTicksAndRejections (native:7:39)"
+}

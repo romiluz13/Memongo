@@ -16,6 +16,7 @@ coverage
 
 # Local-only (not part of published OSS tree)
 .claude/
+.cc10x/
 .cursor/
 archive/
 
