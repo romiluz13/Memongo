@@ -3,6 +3,68 @@
 This log records benchmark-gate decisions. Keep entries short, factual, and
 linked to raw artifacts.
 
+## 2026-05-12: Phase 3 Gate 3 Retry — n=3 Canary Sampling Discipline (BUILD wf-20260511T212602Z-9db2daeb)
+
+Status: **FAIL (retrieval quality)** — but the n=3 sampling signal is now honest. The harness infrastructure for n≥3 Voyage-variance isolation is shipped; the single-commit variance confirmed by bisect is no longer a confound and is being reported instead of hidden. Phase 4 (48-case strict) remains BLOCKED on one deterministic miss + a retrieval-side fix.
+
+Run:
+
+- Run id: `gate3-strict-1pertype-n3-1778599299`
+- Timestamp: 2026-05-12T15:22:15Z → 2026-05-12T15:26:XZ (3 × ~90s + 2 × 2s inter-run delay)
+- Commit SHA: `8e6a422a018774a19d8cb6abf74c64c8341876ba` on `main` (2 commits on main from this retry: `8e6a422a01` n≥3 helpers + wiring + 24 new tests; `5404332a25` live artifacts + prefix snapshot fix)
+- Artifact dir: `artifacts/canary-runs/gate3-strict-1pertype-n3-1778599299/` (per-run subdirs: `run-1/`, `run-2/`, `run-3/`; aggregate at root)
+- Dataset: `longmemeval_s_cleaned.json`, SHA-256 `d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442`
+- MongoDB: atlas-local:preview 8.2.7 on port 27018 (bench stack already healthy)
+- Scope: 6 evaluations × 3 runs = 18 total evaluations
+- Strict flags: `MEMONGO_BENCHMARK_STRICT=1`, `MEMONGO_LLM_ENRICHMENT_STRICT=1`, `MEMONGO_CANARY_CASES_PER_TYPE=1`, `MEMONGO_CANARY_RUNS_PER_COMMIT=3`, `MEMONGO_CANARY_RUN_INTERVAL_MS=2000`
+- Wall-clock: ~5.5 minutes for 3 runs + 2 inter-run sleeps
+
+Per-run results:
+
+| Run | hitRate | rAt5 | rAt10 | ndcgAt10 | sessionAny1 | turnAny1 | missLedger |
+|-----|---------|------|-------|----------|-------------|----------|------------|
+| 1 | 0.667 | 0.472 | 0.472 | 0.514 | 0.667 | 0.167 | [0e5e2d1a, 001be529, 00ca467f, 01493427] |
+| 2 | 1.000 | 0.806 | 0.806 | 0.847 | 1.000 | 0.333 | [00ca467f, 01493427] |
+| 3 | 0.333 | 0.222 | 0.222 | 0.245 | 0.333 | 0.167 | [0e5e2d1a, 06878be2, 001be529, 08f4fc43, 00ca467f] |
+
+Aggregate:
+
+- `hitRate`: mean=0.667, min=0.333, max=1.000, stddev=0.272
+- `sessionAny1`: mean=0.667, min=0.333, max=1.000, stddev=0.272
+- `turnAny1`: mean=0.222, min=0.167, max=0.333, stddev=0.079
+- **Deterministic misses (present in EVERY run — real, reproducible):** `[00ca467f]` (1)
+- **Variance misses (Voyage non-determinism noise):** `[001be529, 01493427, 06878be2, 08f4fc43, 0e5e2d1a]` (5)
+
+Gate 3 exit classification (refined per n≥3 contract):
+
+- `deterministicPass` = FALSE (min(hitRate) !== 1.0; `00ca467f` is reproducibly bad)
+- `partialPass` = FALSE (min(hitRate)=0.333 below 0.666 threshold)
+- `fail` = TRUE
+- **Verdict: FAIL**
+
+Reasoning: `00ca467f` is the one deterministic retrieval miss that persisted across all three runs — this is real retrieval-side signal, not variance noise. The other 5 failing question IDs are Voyage rerank non-determinism (miss in some runs, pass in others). The 0.333-point same-commit hitRate range (0.333 ↔ 1.000) matches the prior bisect's variance finding exactly, confirming Voyage rerank dominates the 1/type signal when n=1.
+
+Test evidence:
+
+- `CI=true bunx vitest run scripts/run-longmemeval-canary.test.ts` → exit 0, 70/70 pass (46 existing + 24 new)
+- New tests cover: `resolveCanaryRunsPerCommit` (default/valid/invalid), `resolveCanaryRunIntervalMs` (default/invalid), `deriveCanaryRunCollectionPrefix` (per-run + cross-invocation isolation), `deriveCanaryRunDir`, `computeCanaryAggregateSummary` (mean/min/max/stddev, deterministic vs variance partition, 3-case verdict classification)
+- `bun run check-types` → exit 0
+- `bun x biome check scripts/run-longmemeval-canary.ts` → exit 0
+- `git diff --check` → exit 0
+- `bun x biome check artifacts/canary-runs/gate3-strict-1pertype-n3-1778599299/` → 26 files clean
+
+Recommendation for Phase 4 / Phase 5:
+
+- **Do NOT proceed to Phase 4 (48-case strict) yet.** Phase 4 would amplify the variance confound 8× and reconfirm the same deterministic miss without new information.
+- **Do NOT change retrieval code in this session.** Plan line 2052 (canary failure response) prohibits retrieval changes in the same session that surfaces the miss.
+- **Next:** Root-cause `00ca467f` specifically (question_type, evidence spans, expected session/turn IDs, vector vs text contribution, rerank rank delta). File a targeted diagnostic for next working session; apply ONE minimal retrieval fix; re-run n=3 canary to verify deterministic misses drop to 0.
+- **Secondary:** Investigate whether Voyage rerank variance can be reduced (deterministic seed? temperature? same-query hash cache?). If not, Phase 4 must carry the n=3 envelope as standard operating procedure (not a one-time gate artifact).
+- Variance misses `[001be529, 01493427, 06878be2, 08f4fc43, 0e5e2d1a]` are NOT retrieval-miss signal; they are a measurement-quality signal and should not drive retrieval changes.
+
+MongoDB MCP `search-knowledge` consultation posture: this phase is canary-runner orchestration logic (multiplier, inter-run delay, collection-prefix isolation, aggregate synthesis), not a retrieval/indexing/schema decision. Disclosed-substitution posture consistent with prior Gate 3 entries — no MongoDB URL citation required for orchestration logic changes.
+
+---
+
 ## 2026-05-12: Phase 3 Gate 3 Re-Open A — Task 1.A envelope projection (BUILD wf-20260511T212602Z-9db2daeb)
 
 Status: **PASS (Task 1.A projection)** — every parity field is populated at runtime on the live `benchmarkReport` envelope. Retrieval-quality regression (hitRate, turn any@1, caseDiagnostics) remains scoped to task #30 and is NOT covered by this re-open. Gate 3 exit itself still blocked until task #30 resolves retrieval quality.
