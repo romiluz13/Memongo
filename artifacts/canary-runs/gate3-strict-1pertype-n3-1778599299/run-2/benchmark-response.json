@@ -1,0 +1,1351 @@
+{
+	"datasetVersion": "42f4a48d236e7775",
+	"datasetName": "canary-run2-2026-05-12T15-23-44-568Z-bf083a01.json",
+	"datasetKind": "longmemeval",
+	"scenarios": 6,
+	"cases": 6,
+	"scoredCases": 6,
+	"skippedCases": 0,
+	"hitRate": 1,
+	"emptyRate": 0,
+	"avgTopScore": 0.4925130208333333,
+	"p95LatencyMs": 2364,
+	"rAt5": 0.8055555555555555,
+	"rAt10": 0.8055555555555555,
+	"ndcgAt10": 0.8470709864647025,
+	"questionTypeBreakdown": [
+		{
+			"questionType": "knowledge-update",
+			"cases": 1,
+			"scoredCases": 1,
+			"hitRate": 1,
+			"rAt5": 0.5,
+			"rAt10": 0.5,
+			"ndcgAt10": 0.6131471927654584
+		},
+		{
+			"questionType": "multi-session",
+			"cases": 1,
+			"scoredCases": 1,
+			"hitRate": 1,
+			"rAt5": 0.3333333333333333,
+			"rAt10": 0.3333333333333333,
+			"ndcgAt10": 0.46927872602275644
+		},
+		{
+			"questionType": "single-session-assistant",
+			"cases": 1,
+			"scoredCases": 1,
+			"hitRate": 1,
+			"rAt5": 1,
+			"rAt10": 1,
+			"ndcgAt10": 1
+		},
+		{
+			"questionType": "single-session-preference",
+			"cases": 1,
+			"scoredCases": 1,
+			"hitRate": 1,
+			"rAt5": 1,
+			"rAt10": 1,
+			"ndcgAt10": 1
+		},
+		{
+			"questionType": "single-session-user",
+			"cases": 1,
+			"scoredCases": 1,
+			"hitRate": 1,
+			"rAt5": 1,
+			"rAt10": 1,
+			"ndcgAt10": 1
+		},
+		{
+			"questionType": "temporal-reasoning",
+			"cases": 1,
+			"scoredCases": 1,
+			"hitRate": 1,
+			"rAt5": 1,
+			"rAt10": 1,
+			"ndcgAt10": 1
+		}
+	],
+	"officialMetrics": {
+		"longMemEval": {
+			"retrievalCases": 6,
+			"abstentionCases": 0,
+			"session": {
+				"recallAnyAt1": 1,
+				"recallAllAt1": 0.5,
+				"ndcgAnyAt1": 1,
+				"recallAnyAt3": 1,
+				"recallAllAt3": 0.6666666666666666,
+				"ndcgAnyAt3": 0.8133489611193223,
+				"recallAnyAt5": 1,
+				"recallAllAt5": 0.6666666666666666,
+				"ndcgAnyAt5": 0.8133489611193223,
+				"recallAnyAt10": 1,
+				"recallAllAt10": 0.6666666666666666,
+				"ndcgAnyAt10": 0.8133489611193223,
+				"recallAnyAt30": 1,
+				"recallAllAt30": 0.6666666666666666,
+				"ndcgAnyAt30": 0.8133489611193223,
+				"recallAnyAt50": 1,
+				"recallAllAt50": 0.8333333333333334,
+				"ndcgAnyAt50": 0.830015627785989
+			},
+			"turn": {
+				"recallAnyAt1": 0.3333333333333333,
+				"recallAllAt1": 0.3333333333333333,
+				"ndcgAnyAt1": 0.3333333333333333,
+				"recallAnyAt3": 0.3333333333333333,
+				"recallAllAt3": 0.3333333333333333,
+				"ndcgAnyAt3": 0.3333333333333333,
+				"recallAnyAt5": 0.3333333333333333,
+				"recallAllAt5": 0.3333333333333333,
+				"ndcgAnyAt5": 0.3333333333333333,
+				"recallAnyAt10": 0.5,
+				"recallAllAt10": 0.3333333333333333,
+				"ndcgAnyAt10": 0.3630172655923352,
+				"recallAnyAt30": 0.5,
+				"recallAllAt30": 0.3333333333333333,
+				"ndcgAnyAt30": 0.3630172655923352,
+				"recallAnyAt50": 0.5,
+				"recallAllAt50": 0.3333333333333333,
+				"ndcgAnyAt50": 0.3630172655923352
+			}
+		}
+	},
+	"ingest": {
+		"conversationsIngested": 286,
+		"turnsIngested": 2860,
+		"skippedConversations": 0,
+		"failedLines": 0,
+		"failedTurns": 0
+	},
+	"regressions": [
+		{
+			"metricName": "hitRate",
+			"baseline": 1,
+			"current": 1,
+			"delta": 0,
+			"severity": "low"
+		},
+		{
+			"metricName": "emptyRate",
+			"baseline": 0,
+			"current": 0,
+			"delta": 0,
+			"severity": "low"
+		},
+		{
+			"metricName": "avgTopScore",
+			"baseline": 0.4925130208333333,
+			"current": 0.4925130208333333,
+			"delta": 0,
+			"severity": "low"
+		},
+		{
+			"metricName": "p95LatencyMs",
+			"baseline": 2364,
+			"current": 2364,
+			"delta": 0,
+			"severity": "low"
+		},
+		{
+			"metricName": "rAt5",
+			"baseline": 0.8055555555555555,
+			"current": 0.8055555555555555,
+			"delta": 0,
+			"severity": "low"
+		},
+		{
+			"metricName": "rAt10",
+			"baseline": 0.8055555555555555,
+			"current": 0.8055555555555555,
+			"delta": 0,
+			"severity": "low"
+		},
+		{
+			"metricName": "ndcgAt10",
+			"baseline": 0.8470709864647025,
+			"current": 0.8470709864647025,
+			"delta": 0,
+			"severity": "low"
+		}
+	],
+	"missLedger": [
+		{
+			"caseId": "00ca467f",
+			"questionType": "multi-session",
+			"rAt5": 0.3333333333333333,
+			"rAt10": 0.3333333333333333,
+			"expectedSessionIds": [
+				"00ca467f::answer_39900a0a_3",
+				"00ca467f::answer_39900a0a_2",
+				"00ca467f::answer_39900a0a_1"
+			],
+			"expectedTurnIds": [
+				"00ca467f::answer_39900a0a_3::turn_1",
+				"00ca467f::answer_39900a0a_1::turn_1"
+			],
+			"topCandidateSessionIds": [
+				"00ca467f::answer_39900a0a_3",
+				"00ca467f::e4cb6c56",
+				"00ca467f::ultrachat_239705",
+				"00ca467f::8d1f9505",
+				"00ca467f::10857212_2",
+				"00ca467f::ultrachat_113678",
+				"00ca467f::ultrachat_193901",
+				"00ca467f::8a70ec05_2",
+				"00ca467f::07942c06"
+			],
+			"sessionFound": true,
+			"allSessionsFound": false,
+			"reachableTurnIds": [
+				"00ca467f::answer_39900a0a_3::turn_4",
+				"00ca467f::e4cb6c56::turn_2",
+				"00ca467f::ultrachat_239705::turn_14",
+				"00ca467f::8d1f9505::turn_8",
+				"00ca467f::10857212_2::turn_6",
+				"00ca467f::ultrachat_113678::turn_4",
+				"00ca467f::ultrachat_193901::turn_12",
+				"00ca467f::8a70ec05_2::turn_4",
+				"00ca467f::07942c06::turn_4",
+				"00ca467f::ultrachat_193901::turn_6"
+			],
+			"turnReachable": false,
+			"missCategory": "turn-selection",
+			"topCandidates": [
+				{
+					"rank": 1,
+					"score": 0.255859375,
+					"source": "structured",
+					"canonicalId": "procedure:procedure-64d34644dd3c",
+					"resolvedSessionIds": ["00ca467f::answer_39900a0a_3"],
+					"sourceEventIds": ["ed35d6bb-56d7-49bf-88d9-4ed45ad8fada"]
+				},
+				{
+					"rank": 2,
+					"score": 0.22265625,
+					"source": "structured",
+					"canonicalId": "procedure:procedure-c3499c272973",
+					"resolvedSessionIds": ["00ca467f::e4cb6c56"],
+					"sourceEventIds": ["c7d5b752-4b1a-4d73-a9b3-0ee7791c3f72"]
+				},
+				{
+					"rank": 3,
+					"score": 0.2216796875,
+					"source": "structured",
+					"canonicalId": "procedure:procedure-2ca8b7a62332",
+					"resolvedSessionIds": ["00ca467f::ultrachat_239705"],
+					"sourceEventIds": ["4c165973-b494-4c7e-bb9d-b8c8085e8d73"]
+				},
+				{
+					"rank": 4,
+					"score": 0.2216796875,
+					"source": "structured",
+					"canonicalId": "procedure:procedure-2e0db0c0cdb0",
+					"resolvedSessionIds": ["00ca467f::8d1f9505"],
+					"sourceEventIds": ["ef08ab13-6079-46e8-a5b9-b59f9766a2dc"]
+				},
+				{
+					"rank": 5,
+					"score": 0.2158203125,
+					"source": "structured",
+					"canonicalId": "procedure:procedure-5446f84ee7fd",
+					"resolvedSessionIds": ["00ca467f::10857212_2"],
+					"sourceEventIds": ["c71825a5-61bc-4ec6-9a74-6d1e66adbb76"]
+				}
+			]
+		},
+		{
+			"caseId": "01493427",
+			"questionType": "knowledge-update",
+			"rAt5": 0.5,
+			"rAt10": 0.5,
+			"expectedSessionIds": [
+				"01493427::answer_a7b44747_1",
+				"01493427::answer_a7b44747_2"
+			],
+			"expectedTurnIds": [
+				"01493427::answer_a7b44747_1::turn_7",
+				"01493427::answer_a7b44747_2::turn_7"
+			],
+			"topCandidateSessionIds": [
+				"01493427::answer_a7b44747_2",
+				"01493427::88e73f02",
+				"01493427::55e6ff53",
+				"01493427::ca896bdc_1",
+				"01493427::616fdd27",
+				"01493427::ultrachat_165871",
+				"01493427::sharegpt_5yrLy0f_183",
+				"01493427::a4d6c239_2",
+				"01493427::ultrachat_338304",
+				"01493427::5c184f9f_3"
+			],
+			"sessionFound": true,
+			"allSessionsFound": false,
+			"reachableTurnIds": [
+				"01493427::answer_a7b44747_2::turn_1",
+				"01493427::answer_a7b44747_2::turn_2",
+				"01493427::answer_a7b44747_2::turn_3",
+				"01493427::answer_a7b44747_2::turn_4",
+				"01493427::answer_a7b44747_2::turn_5",
+				"01493427::answer_a7b44747_2::turn_6",
+				"01493427::answer_a7b44747_2::turn_7",
+				"01493427::answer_a7b44747_2::turn_8",
+				"01493427::answer_a7b44747_2::turn_9",
+				"01493427::answer_a7b44747_2::turn_10",
+				"01493427::answer_a7b44747_2::turn_11",
+				"01493427::answer_a7b44747_2::turn_12",
+				"01493427::88e73f02::turn_1",
+				"01493427::88e73f02::turn_2",
+				"01493427::88e73f02::turn_3",
+				"01493427::88e73f02::turn_4",
+				"01493427::88e73f02::turn_5",
+				"01493427::88e73f02::turn_6",
+				"01493427::88e73f02::turn_7",
+				"01493427::88e73f02::turn_8",
+				"01493427::88e73f02::turn_9",
+				"01493427::88e73f02::turn_10",
+				"01493427::88e73f02::turn_11",
+				"01493427::88e73f02::turn_12",
+				"01493427::55e6ff53::turn_1",
+				"01493427::55e6ff53::turn_2",
+				"01493427::55e6ff53::turn_3",
+				"01493427::55e6ff53::turn_4",
+				"01493427::55e6ff53::turn_5",
+				"01493427::55e6ff53::turn_6",
+				"01493427::55e6ff53::turn_7",
+				"01493427::55e6ff53::turn_8",
+				"01493427::55e6ff53::turn_9",
+				"01493427::55e6ff53::turn_10",
+				"01493427::55e6ff53::turn_11",
+				"01493427::55e6ff53::turn_12",
+				"01493427::ca896bdc_1::turn_1",
+				"01493427::ca896bdc_1::turn_2",
+				"01493427::ca896bdc_1::turn_3",
+				"01493427::ca896bdc_1::turn_4",
+				"01493427::ca896bdc_1::turn_5",
+				"01493427::ca896bdc_1::turn_6",
+				"01493427::ca896bdc_1::turn_7",
+				"01493427::ca896bdc_1::turn_8",
+				"01493427::ca896bdc_1::turn_9",
+				"01493427::ca896bdc_1::turn_10",
+				"01493427::ca896bdc_1::turn_11",
+				"01493427::ca896bdc_1::turn_12",
+				"01493427::616fdd27::turn_1",
+				"01493427::616fdd27::turn_2",
+				"01493427::616fdd27::turn_3",
+				"01493427::616fdd27::turn_4",
+				"01493427::616fdd27::turn_5",
+				"01493427::616fdd27::turn_6",
+				"01493427::616fdd27::turn_7",
+				"01493427::616fdd27::turn_8",
+				"01493427::616fdd27::turn_9",
+				"01493427::616fdd27::turn_10",
+				"01493427::616fdd27::turn_11",
+				"01493427::616fdd27::turn_12",
+				"01493427::ultrachat_165871::turn_1",
+				"01493427::ultrachat_165871::turn_2",
+				"01493427::ultrachat_165871::turn_3",
+				"01493427::ultrachat_165871::turn_4",
+				"01493427::ultrachat_165871::turn_5",
+				"01493427::ultrachat_165871::turn_6",
+				"01493427::ultrachat_165871::turn_7",
+				"01493427::ultrachat_165871::turn_8",
+				"01493427::sharegpt_5yrLy0f_183::turn_1",
+				"01493427::sharegpt_5yrLy0f_183::turn_2",
+				"01493427::sharegpt_5yrLy0f_183::turn_3",
+				"01493427::sharegpt_5yrLy0f_183::turn_4",
+				"01493427::sharegpt_5yrLy0f_183::turn_5",
+				"01493427::sharegpt_5yrLy0f_183::turn_6",
+				"01493427::sharegpt_5yrLy0f_183::turn_7",
+				"01493427::a4d6c239_2::turn_1",
+				"01493427::a4d6c239_2::turn_2",
+				"01493427::a4d6c239_2::turn_3",
+				"01493427::a4d6c239_2::turn_4",
+				"01493427::a4d6c239_2::turn_5",
+				"01493427::a4d6c239_2::turn_6",
+				"01493427::a4d6c239_2::turn_7",
+				"01493427::a4d6c239_2::turn_8",
+				"01493427::a4d6c239_2::turn_9",
+				"01493427::a4d6c239_2::turn_10",
+				"01493427::a4d6c239_2::turn_11",
+				"01493427::a4d6c239_2::turn_12",
+				"01493427::ultrachat_338304::turn_1",
+				"01493427::ultrachat_338304::turn_2",
+				"01493427::ultrachat_338304::turn_3",
+				"01493427::ultrachat_338304::turn_4",
+				"01493427::ultrachat_338304::turn_5",
+				"01493427::ultrachat_338304::turn_6",
+				"01493427::ultrachat_338304::turn_7",
+				"01493427::ultrachat_338304::turn_8",
+				"01493427::ultrachat_338304::turn_9",
+				"01493427::ultrachat_338304::turn_10",
+				"01493427::5c184f9f_3::turn_1",
+				"01493427::5c184f9f_3::turn_2",
+				"01493427::5c184f9f_3::turn_3",
+				"01493427::5c184f9f_3::turn_4",
+				"01493427::5c184f9f_3::turn_5",
+				"01493427::5c184f9f_3::turn_6",
+				"01493427::5c184f9f_3::turn_7",
+				"01493427::5c184f9f_3::turn_8",
+				"01493427::5c184f9f_3::turn_9",
+				"01493427::5c184f9f_3::turn_10",
+				"01493427::5c184f9f_3::turn_11",
+				"01493427::5c184f9f_3::turn_12"
+			],
+			"turnReachable": true,
+			"missCategory": "update",
+			"topCandidates": [
+				{
+					"rank": 1,
+					"score": 0.36328125,
+					"source": "conversation",
+					"canonicalId": "episode:f9b9d5de-bb7c-48c0-8324-3ea973f705e9",
+					"resolvedSessionIds": ["01493427::answer_a7b44747_2"],
+					"sourceEventIds": [
+						"c740f090-fb32-4a08-8537-ea2f7bbfcd83",
+						"c2cab837-3c0d-4671-b1ef-b96e0ded2ad4",
+						"f28df78f-5e88-4202-b34c-ec03d7509773",
+						"bdd4d97b-0609-4ce2-afdc-0659f531fe82",
+						"23dd9a63-8245-4b95-92eb-581dd8f9d05e",
+						"cf193e0b-dc2b-4893-8f38-d906994e2e9c",
+						"3d74f9ac-d093-4fac-bcea-4a2295726f68",
+						"08d7067b-3fec-467c-9927-7664654f67f9",
+						"b7045fa9-88fb-4ade-8110-69123c66746a",
+						"22b1f0b1-814e-48df-be57-70c007e16a71",
+						"84f375ff-5d14-46bd-98c0-5f5493ca747c",
+						"1aa6de1e-007b-42cc-83ce-815d9f78cb0e"
+					]
+				},
+				{
+					"rank": 2,
+					"score": 0.306640625,
+					"source": "conversation",
+					"canonicalId": "episode:3024461b-0aed-4b61-b0b3-ef4ca6766c82",
+					"resolvedSessionIds": ["01493427::88e73f02"],
+					"sourceEventIds": [
+						"1ea7ef93-6652-4872-9e7b-6eeae0afba85",
+						"509a9e47-71a6-4972-829f-b6fc4c89ca96",
+						"5c9b6ee0-dff5-46d5-a26f-5ef635d08251",
+						"41f8ced5-6da3-4dbc-be39-3edbfc44aa05",
+						"4671e7f1-0fec-47c0-9d0d-ad04e1d92f3b",
+						"368a175a-3aca-48e8-a9d4-d32d7a04b8fb",
+						"628c4fac-cd5e-4595-9297-2bd4ba7ed578",
+						"148af4c0-eebf-4851-b81b-6a67575f306c",
+						"ba258a93-b86b-4b7b-a13d-5adb63ac85eb",
+						"9d2ed536-ece1-4f61-925f-53e2e2727ab4",
+						"898016b6-a894-4c3e-a509-4b6b2dcb5bf8",
+						"17656ee7-7f99-4020-9116-d54c07040cb0"
+					]
+				},
+				{
+					"rank": 3,
+					"score": 0.2451171875,
+					"source": "conversation",
+					"canonicalId": "episode:543e03f5-c9a8-42a4-acb8-70f896d29a86",
+					"resolvedSessionIds": ["01493427::55e6ff53"],
+					"sourceEventIds": [
+						"ae4b2f3b-cc79-404c-9103-70fa6c181c18",
+						"a620ddd0-6642-42de-9662-9b61d6b91033",
+						"612dc66e-a751-44bb-a671-e7fb72bfee89",
+						"412dda95-755e-4e28-948f-5b84feaad574",
+						"0d0c9686-a57d-4409-b0b1-f40e8bbba097",
+						"f2c27908-8acd-44e7-bff1-34eba5ef8fff",
+						"f7d5177c-a4d3-42fc-8c0b-ba2be39993cb",
+						"e0bf1576-391b-4528-a598-9bab49f9a9ba",
+						"4a82d07f-3468-4774-8df4-0317cdb38306",
+						"bd99586a-1b1c-444e-85b0-9de073281904",
+						"8dc15a21-97f8-484a-980f-57edf3714383",
+						"7511d215-07bb-4697-86a3-c354aebd2176"
+					]
+				},
+				{
+					"rank": 4,
+					"score": 0.2451171875,
+					"source": "conversation",
+					"canonicalId": "episode:5a1679ae-390d-4ab0-90b6-9a229a23f457",
+					"resolvedSessionIds": ["01493427::ca896bdc_1"],
+					"sourceEventIds": [
+						"3b4fcdcf-76a7-4fc5-bd55-2c789e16a691",
+						"4ed424d9-4121-468b-b059-30126318a06d",
+						"1411d768-554a-4d30-b5cd-8d0daf1e7142",
+						"472278c5-f6f4-41cd-a0b8-6f28aae92ba1",
+						"088f010d-3e53-4706-b9ad-bf66795837c7",
+						"ca0858b7-a838-4327-97d4-4b12c1a55654",
+						"77123e20-f513-4dc8-84ba-c3d65736e954",
+						"205b760d-8211-47c0-8e19-5fa240758b5b",
+						"08eba2d8-999a-4daf-801e-b8fb02ca555a",
+						"a6d89b89-3f79-496d-92f9-becac27fa9c0",
+						"fd042a98-0774-4b08-932f-f17fb027e7a2",
+						"f5e91977-cbbb-4fdf-8a1f-a18d3ea762c0"
+					]
+				},
+				{
+					"rank": 5,
+					"score": 0.23046875,
+					"source": "conversation",
+					"canonicalId": "episode:bd22bf29-952a-4306-a4bd-5712e1bd1873",
+					"resolvedSessionIds": ["01493427::616fdd27"],
+					"sourceEventIds": [
+						"1a8da2c8-a6ec-436a-9738-1f05a94d9dd9",
+						"494c04bc-30e9-45c6-a187-917486852818",
+						"b667e719-8e20-4fda-ada3-7b5639545f56",
+						"6a8b0485-3311-43ec-841d-2b5b35870175",
+						"4480e3cb-dd58-4636-873f-bdfe26b37543",
+						"1c0f6889-c643-4d3c-8905-847bed0b6a72",
+						"95b45fc6-a22e-4f0f-b954-5be42b48ad1f",
+						"31397450-bfd2-4684-9515-2d3b9eda3f10",
+						"238d195e-0b73-4ab2-9c97-36e20c322000",
+						"40c7edc8-a0a8-46c1-8dd2-212c98c5dd32",
+						"7c9124eb-90ca-488a-b1c9-8d1271ae6a34",
+						"a4f377f1-e697-4d5b-b727-a65c6b6f4fbc"
+					]
+				}
+			]
+		}
+	],
+	"caseDiagnostics": [
+		{
+			"caseId": "00ca467f",
+			"questionType": "multi-session",
+			"rAt5": 0.3333333333333333,
+			"rAt10": 0.3333333333333333,
+			"ndcgAt10": 0.46927872602275644,
+			"issue": "top1-turn",
+			"expectedSessionIds": [
+				"00ca467f::answer_39900a0a_3",
+				"00ca467f::answer_39900a0a_2",
+				"00ca467f::answer_39900a0a_1"
+			],
+			"expectedTurnIds": [
+				"00ca467f::answer_39900a0a_3::turn_1",
+				"00ca467f::answer_39900a0a_1::turn_1"
+			],
+			"topCandidateSessionIds": [
+				"00ca467f::answer_39900a0a_3",
+				"00ca467f::e4cb6c56",
+				"00ca467f::ultrachat_239705",
+				"00ca467f::8d1f9505",
+				"00ca467f::10857212_2"
+			],
+			"topCandidateTurnIds": [
+				"00ca467f::answer_39900a0a_3::turn_4",
+				"00ca467f::e4cb6c56::turn_2",
+				"00ca467f::ultrachat_239705::turn_14",
+				"00ca467f::8d1f9505::turn_8",
+				"00ca467f::10857212_2::turn_6"
+			],
+			"sessionTop1Found": true,
+			"turnTop1Found": false,
+			"longMemEval": {
+				"session": {
+					"recallAnyAt1": 1,
+					"recallAllAt1": 0,
+					"ndcgAnyAt1": 1,
+					"recallAnyAt3": 1,
+					"recallAllAt3": 0,
+					"ndcgAnyAt3": 0.38009376671593426,
+					"recallAnyAt5": 1,
+					"recallAllAt5": 0,
+					"ndcgAnyAt5": 0.38009376671593426,
+					"recallAnyAt10": 1,
+					"recallAllAt10": 0,
+					"ndcgAnyAt10": 0.38009376671593426,
+					"recallAnyAt30": 1,
+					"recallAllAt30": 0,
+					"ndcgAnyAt30": 0.38009376671593426,
+					"recallAnyAt50": 1,
+					"recallAllAt50": 0,
+					"ndcgAnyAt50": 0.38009376671593426
+				},
+				"turn": {
+					"recallAnyAt1": 0,
+					"recallAllAt1": 0,
+					"ndcgAnyAt1": 0,
+					"recallAnyAt3": 0,
+					"recallAllAt3": 0,
+					"ndcgAnyAt3": 0,
+					"recallAnyAt5": 0,
+					"recallAllAt5": 0,
+					"ndcgAnyAt5": 0,
+					"recallAnyAt10": 0,
+					"recallAllAt10": 0,
+					"ndcgAnyAt10": 0,
+					"recallAnyAt30": 0,
+					"recallAllAt30": 0,
+					"ndcgAnyAt30": 0,
+					"recallAnyAt50": 0,
+					"recallAllAt50": 0,
+					"ndcgAnyAt50": 0
+				}
+			},
+			"topCandidates": [
+				{
+					"rank": 1,
+					"score": 0.255859375,
+					"source": "structured",
+					"path": "procedure:procedure-64d34644dd3c",
+					"canonicalId": "procedure:procedure-64d34644dd3c",
+					"resolvedSessionIds": ["00ca467f::answer_39900a0a_3"],
+					"resolvedTurnIds": ["00ca467f::answer_39900a0a_3::turn_4"],
+					"sourceEventIds": ["ed35d6bb-56d7-49bf-88d9-4ed45ad8fada"]
+				},
+				{
+					"rank": 2,
+					"score": 0.22265625,
+					"source": "structured",
+					"path": "procedure:procedure-c3499c272973",
+					"canonicalId": "procedure:procedure-c3499c272973",
+					"resolvedSessionIds": ["00ca467f::e4cb6c56"],
+					"resolvedTurnIds": ["00ca467f::e4cb6c56::turn_2"],
+					"sourceEventIds": ["c7d5b752-4b1a-4d73-a9b3-0ee7791c3f72"]
+				},
+				{
+					"rank": 3,
+					"score": 0.2216796875,
+					"source": "structured",
+					"path": "procedure:procedure-2ca8b7a62332",
+					"canonicalId": "procedure:procedure-2ca8b7a62332",
+					"resolvedSessionIds": ["00ca467f::ultrachat_239705"],
+					"resolvedTurnIds": ["00ca467f::ultrachat_239705::turn_14"],
+					"sourceEventIds": ["4c165973-b494-4c7e-bb9d-b8c8085e8d73"]
+				},
+				{
+					"rank": 4,
+					"score": 0.2216796875,
+					"source": "structured",
+					"path": "procedure:procedure-2e0db0c0cdb0",
+					"canonicalId": "procedure:procedure-2e0db0c0cdb0",
+					"resolvedSessionIds": ["00ca467f::8d1f9505"],
+					"resolvedTurnIds": ["00ca467f::8d1f9505::turn_8"],
+					"sourceEventIds": ["ef08ab13-6079-46e8-a5b9-b59f9766a2dc"]
+				},
+				{
+					"rank": 5,
+					"score": 0.2158203125,
+					"source": "structured",
+					"path": "procedure:procedure-5446f84ee7fd",
+					"canonicalId": "procedure:procedure-5446f84ee7fd",
+					"resolvedSessionIds": ["00ca467f::10857212_2"],
+					"resolvedTurnIds": ["00ca467f::10857212_2::turn_6"],
+					"sourceEventIds": ["c71825a5-61bc-4ec6-9a74-6d1e66adbb76"]
+				}
+			]
+		},
+		{
+			"caseId": "01493427",
+			"questionType": "knowledge-update",
+			"rAt5": 0.5,
+			"rAt10": 0.5,
+			"ndcgAt10": 0.6131471927654584,
+			"issue": "top1-turn",
+			"expectedSessionIds": [
+				"01493427::answer_a7b44747_1",
+				"01493427::answer_a7b44747_2"
+			],
+			"expectedTurnIds": [
+				"01493427::answer_a7b44747_1::turn_7",
+				"01493427::answer_a7b44747_2::turn_7"
+			],
+			"topCandidateSessionIds": [
+				"01493427::answer_a7b44747_2",
+				"01493427::88e73f02",
+				"01493427::55e6ff53",
+				"01493427::ca896bdc_1",
+				"01493427::616fdd27"
+			],
+			"topCandidateTurnIds": [
+				"01493427::answer_a7b44747_2::turn_1",
+				"01493427::answer_a7b44747_2::turn_2",
+				"01493427::answer_a7b44747_2::turn_3",
+				"01493427::answer_a7b44747_2::turn_4",
+				"01493427::answer_a7b44747_2::turn_5",
+				"01493427::answer_a7b44747_2::turn_6",
+				"01493427::answer_a7b44747_2::turn_7",
+				"01493427::answer_a7b44747_2::turn_8",
+				"01493427::answer_a7b44747_2::turn_9",
+				"01493427::answer_a7b44747_2::turn_10",
+				"01493427::answer_a7b44747_2::turn_11",
+				"01493427::answer_a7b44747_2::turn_12",
+				"01493427::88e73f02::turn_1",
+				"01493427::88e73f02::turn_2",
+				"01493427::88e73f02::turn_3",
+				"01493427::88e73f02::turn_4",
+				"01493427::88e73f02::turn_5",
+				"01493427::88e73f02::turn_6",
+				"01493427::88e73f02::turn_7",
+				"01493427::88e73f02::turn_8",
+				"01493427::88e73f02::turn_9",
+				"01493427::88e73f02::turn_10",
+				"01493427::88e73f02::turn_11",
+				"01493427::88e73f02::turn_12",
+				"01493427::55e6ff53::turn_1",
+				"01493427::55e6ff53::turn_2",
+				"01493427::55e6ff53::turn_3",
+				"01493427::55e6ff53::turn_4",
+				"01493427::55e6ff53::turn_5",
+				"01493427::55e6ff53::turn_6",
+				"01493427::55e6ff53::turn_7",
+				"01493427::55e6ff53::turn_8",
+				"01493427::55e6ff53::turn_9",
+				"01493427::55e6ff53::turn_10",
+				"01493427::55e6ff53::turn_11",
+				"01493427::55e6ff53::turn_12",
+				"01493427::ca896bdc_1::turn_1",
+				"01493427::ca896bdc_1::turn_2",
+				"01493427::ca896bdc_1::turn_3",
+				"01493427::ca896bdc_1::turn_4",
+				"01493427::ca896bdc_1::turn_5",
+				"01493427::ca896bdc_1::turn_6",
+				"01493427::ca896bdc_1::turn_7",
+				"01493427::ca896bdc_1::turn_8",
+				"01493427::ca896bdc_1::turn_9",
+				"01493427::ca896bdc_1::turn_10",
+				"01493427::ca896bdc_1::turn_11",
+				"01493427::ca896bdc_1::turn_12",
+				"01493427::616fdd27::turn_1",
+				"01493427::616fdd27::turn_2",
+				"01493427::616fdd27::turn_3",
+				"01493427::616fdd27::turn_4",
+				"01493427::616fdd27::turn_5",
+				"01493427::616fdd27::turn_6",
+				"01493427::616fdd27::turn_7",
+				"01493427::616fdd27::turn_8",
+				"01493427::616fdd27::turn_9",
+				"01493427::616fdd27::turn_10",
+				"01493427::616fdd27::turn_11",
+				"01493427::616fdd27::turn_12"
+			],
+			"sessionTop1Found": true,
+			"turnTop1Found": true,
+			"longMemEval": {
+				"session": {
+					"recallAnyAt1": 1,
+					"recallAllAt1": 0,
+					"ndcgAnyAt1": 1,
+					"recallAnyAt3": 1,
+					"recallAllAt3": 0,
+					"ndcgAnyAt3": 0.5,
+					"recallAnyAt5": 1,
+					"recallAllAt5": 0,
+					"ndcgAnyAt5": 0.5,
+					"recallAnyAt10": 1,
+					"recallAllAt10": 0,
+					"ndcgAnyAt10": 0.5,
+					"recallAnyAt30": 1,
+					"recallAllAt30": 0,
+					"ndcgAnyAt30": 0.5,
+					"recallAnyAt50": 1,
+					"recallAllAt50": 1,
+					"ndcgAnyAt50": 0.6
+				},
+				"turn": {
+					"recallAnyAt1": 0,
+					"recallAllAt1": 0,
+					"ndcgAnyAt1": 0,
+					"recallAnyAt3": 0,
+					"recallAllAt3": 0,
+					"ndcgAnyAt3": 0,
+					"recallAnyAt5": 0,
+					"recallAllAt5": 0,
+					"ndcgAnyAt5": 0,
+					"recallAnyAt10": 1,
+					"recallAllAt10": 0,
+					"ndcgAnyAt10": 0.1781035935540111,
+					"recallAnyAt30": 1,
+					"recallAllAt30": 0,
+					"ndcgAnyAt30": 0.1781035935540111,
+					"recallAnyAt50": 1,
+					"recallAllAt50": 0,
+					"ndcgAnyAt50": 0.1781035935540111
+				}
+			},
+			"topCandidates": [
+				{
+					"rank": 1,
+					"score": 0.36328125,
+					"source": "conversation",
+					"path": "episode:f9b9d5de-bb7c-48c0-8324-3ea973f705e9",
+					"canonicalId": "episode:f9b9d5de-bb7c-48c0-8324-3ea973f705e9",
+					"resolvedSessionIds": ["01493427::answer_a7b44747_2"],
+					"resolvedTurnIds": [
+						"01493427::answer_a7b44747_2::turn_1",
+						"01493427::answer_a7b44747_2::turn_2",
+						"01493427::answer_a7b44747_2::turn_3",
+						"01493427::answer_a7b44747_2::turn_4",
+						"01493427::answer_a7b44747_2::turn_5",
+						"01493427::answer_a7b44747_2::turn_6",
+						"01493427::answer_a7b44747_2::turn_7",
+						"01493427::answer_a7b44747_2::turn_8",
+						"01493427::answer_a7b44747_2::turn_9",
+						"01493427::answer_a7b44747_2::turn_10",
+						"01493427::answer_a7b44747_2::turn_11",
+						"01493427::answer_a7b44747_2::turn_12"
+					],
+					"sourceEventIds": [
+						"c740f090-fb32-4a08-8537-ea2f7bbfcd83",
+						"c2cab837-3c0d-4671-b1ef-b96e0ded2ad4",
+						"f28df78f-5e88-4202-b34c-ec03d7509773",
+						"bdd4d97b-0609-4ce2-afdc-0659f531fe82",
+						"23dd9a63-8245-4b95-92eb-581dd8f9d05e",
+						"cf193e0b-dc2b-4893-8f38-d906994e2e9c",
+						"3d74f9ac-d093-4fac-bcea-4a2295726f68",
+						"08d7067b-3fec-467c-9927-7664654f67f9",
+						"b7045fa9-88fb-4ade-8110-69123c66746a",
+						"22b1f0b1-814e-48df-be57-70c007e16a71",
+						"84f375ff-5d14-46bd-98c0-5f5493ca747c",
+						"1aa6de1e-007b-42cc-83ce-815d9f78cb0e"
+					]
+				},
+				{
+					"rank": 2,
+					"score": 0.306640625,
+					"source": "conversation",
+					"path": "episode:3024461b-0aed-4b61-b0b3-ef4ca6766c82",
+					"canonicalId": "episode:3024461b-0aed-4b61-b0b3-ef4ca6766c82",
+					"resolvedSessionIds": ["01493427::88e73f02"],
+					"resolvedTurnIds": [
+						"01493427::88e73f02::turn_1",
+						"01493427::88e73f02::turn_2",
+						"01493427::88e73f02::turn_3",
+						"01493427::88e73f02::turn_4",
+						"01493427::88e73f02::turn_5",
+						"01493427::88e73f02::turn_6",
+						"01493427::88e73f02::turn_7",
+						"01493427::88e73f02::turn_8",
+						"01493427::88e73f02::turn_9",
+						"01493427::88e73f02::turn_10",
+						"01493427::88e73f02::turn_11",
+						"01493427::88e73f02::turn_12"
+					],
+					"sourceEventIds": [
+						"1ea7ef93-6652-4872-9e7b-6eeae0afba85",
+						"509a9e47-71a6-4972-829f-b6fc4c89ca96",
+						"5c9b6ee0-dff5-46d5-a26f-5ef635d08251",
+						"41f8ced5-6da3-4dbc-be39-3edbfc44aa05",
+						"4671e7f1-0fec-47c0-9d0d-ad04e1d92f3b",
+						"368a175a-3aca-48e8-a9d4-d32d7a04b8fb",
+						"628c4fac-cd5e-4595-9297-2bd4ba7ed578",
+						"148af4c0-eebf-4851-b81b-6a67575f306c",
+						"ba258a93-b86b-4b7b-a13d-5adb63ac85eb",
+						"9d2ed536-ece1-4f61-925f-53e2e2727ab4",
+						"898016b6-a894-4c3e-a509-4b6b2dcb5bf8",
+						"17656ee7-7f99-4020-9116-d54c07040cb0"
+					]
+				},
+				{
+					"rank": 3,
+					"score": 0.2451171875,
+					"source": "conversation",
+					"path": "episode:543e03f5-c9a8-42a4-acb8-70f896d29a86",
+					"canonicalId": "episode:543e03f5-c9a8-42a4-acb8-70f896d29a86",
+					"resolvedSessionIds": ["01493427::55e6ff53"],
+					"resolvedTurnIds": [
+						"01493427::55e6ff53::turn_1",
+						"01493427::55e6ff53::turn_2",
+						"01493427::55e6ff53::turn_3",
+						"01493427::55e6ff53::turn_4",
+						"01493427::55e6ff53::turn_5",
+						"01493427::55e6ff53::turn_6",
+						"01493427::55e6ff53::turn_7",
+						"01493427::55e6ff53::turn_8",
+						"01493427::55e6ff53::turn_9",
+						"01493427::55e6ff53::turn_10",
+						"01493427::55e6ff53::turn_11",
+						"01493427::55e6ff53::turn_12"
+					],
+					"sourceEventIds": [
+						"ae4b2f3b-cc79-404c-9103-70fa6c181c18",
+						"a620ddd0-6642-42de-9662-9b61d6b91033",
+						"612dc66e-a751-44bb-a671-e7fb72bfee89",
+						"412dda95-755e-4e28-948f-5b84feaad574",
+						"0d0c9686-a57d-4409-b0b1-f40e8bbba097",
+						"f2c27908-8acd-44e7-bff1-34eba5ef8fff",
+						"f7d5177c-a4d3-42fc-8c0b-ba2be39993cb",
+						"e0bf1576-391b-4528-a598-9bab49f9a9ba",
+						"4a82d07f-3468-4774-8df4-0317cdb38306",
+						"bd99586a-1b1c-444e-85b0-9de073281904",
+						"8dc15a21-97f8-484a-980f-57edf3714383",
+						"7511d215-07bb-4697-86a3-c354aebd2176"
+					]
+				},
+				{
+					"rank": 4,
+					"score": 0.2451171875,
+					"source": "conversation",
+					"path": "episode:5a1679ae-390d-4ab0-90b6-9a229a23f457",
+					"canonicalId": "episode:5a1679ae-390d-4ab0-90b6-9a229a23f457",
+					"resolvedSessionIds": ["01493427::ca896bdc_1"],
+					"resolvedTurnIds": [
+						"01493427::ca896bdc_1::turn_1",
+						"01493427::ca896bdc_1::turn_2",
+						"01493427::ca896bdc_1::turn_3",
+						"01493427::ca896bdc_1::turn_4",
+						"01493427::ca896bdc_1::turn_5",
+						"01493427::ca896bdc_1::turn_6",
+						"01493427::ca896bdc_1::turn_7",
+						"01493427::ca896bdc_1::turn_8",
+						"01493427::ca896bdc_1::turn_9",
+						"01493427::ca896bdc_1::turn_10",
+						"01493427::ca896bdc_1::turn_11",
+						"01493427::ca896bdc_1::turn_12"
+					],
+					"sourceEventIds": [
+						"3b4fcdcf-76a7-4fc5-bd55-2c789e16a691",
+						"4ed424d9-4121-468b-b059-30126318a06d",
+						"1411d768-554a-4d30-b5cd-8d0daf1e7142",
+						"472278c5-f6f4-41cd-a0b8-6f28aae92ba1",
+						"088f010d-3e53-4706-b9ad-bf66795837c7",
+						"ca0858b7-a838-4327-97d4-4b12c1a55654",
+						"77123e20-f513-4dc8-84ba-c3d65736e954",
+						"205b760d-8211-47c0-8e19-5fa240758b5b",
+						"08eba2d8-999a-4daf-801e-b8fb02ca555a",
+						"a6d89b89-3f79-496d-92f9-becac27fa9c0",
+						"fd042a98-0774-4b08-932f-f17fb027e7a2",
+						"f5e91977-cbbb-4fdf-8a1f-a18d3ea762c0"
+					]
+				},
+				{
+					"rank": 5,
+					"score": 0.23046875,
+					"source": "conversation",
+					"path": "episode:bd22bf29-952a-4306-a4bd-5712e1bd1873",
+					"canonicalId": "episode:bd22bf29-952a-4306-a4bd-5712e1bd1873",
+					"resolvedSessionIds": ["01493427::616fdd27"],
+					"resolvedTurnIds": [
+						"01493427::616fdd27::turn_1",
+						"01493427::616fdd27::turn_2",
+						"01493427::616fdd27::turn_3",
+						"01493427::616fdd27::turn_4",
+						"01493427::616fdd27::turn_5",
+						"01493427::616fdd27::turn_6",
+						"01493427::616fdd27::turn_7",
+						"01493427::616fdd27::turn_8",
+						"01493427::616fdd27::turn_9",
+						"01493427::616fdd27::turn_10",
+						"01493427::616fdd27::turn_11",
+						"01493427::616fdd27::turn_12"
+					],
+					"sourceEventIds": [
+						"1a8da2c8-a6ec-436a-9738-1f05a94d9dd9",
+						"494c04bc-30e9-45c6-a187-917486852818",
+						"b667e719-8e20-4fda-ada3-7b5639545f56",
+						"6a8b0485-3311-43ec-841d-2b5b35870175",
+						"4480e3cb-dd58-4636-873f-bdfe26b37543",
+						"1c0f6889-c643-4d3c-8905-847bed0b6a72",
+						"95b45fc6-a22e-4f0f-b954-5be42b48ad1f",
+						"31397450-bfd2-4684-9515-2d3b9eda3f10",
+						"238d195e-0b73-4ab2-9c97-36e20c322000",
+						"40c7edc8-a0a8-46c1-8dd2-212c98c5dd32",
+						"7c9124eb-90ca-488a-b1c9-8d1271ae6a34",
+						"a4f377f1-e697-4d5b-b727-a65c6b6f4fbc"
+					]
+				}
+			]
+		},
+		{
+			"caseId": "06878be2",
+			"questionType": "single-session-preference",
+			"rAt5": 1,
+			"rAt10": 1,
+			"ndcgAt10": 1,
+			"issue": "top1-turn",
+			"expectedSessionIds": ["06878be2::answer_555dfb94"],
+			"expectedTurnIds": [
+				"06878be2::answer_555dfb94::turn_1",
+				"06878be2::answer_555dfb94::turn_9",
+				"06878be2::answer_555dfb94::turn_15"
+			],
+			"topCandidateSessionIds": [
+				"06878be2::answer_555dfb94",
+				"06878be2::8fcfbe43_2",
+				"06878be2::ultrachat_556731",
+				"06878be2::dc18f65b",
+				"06878be2::ultrachat_474421"
+			],
+			"topCandidateTurnIds": [
+				"06878be2::answer_555dfb94::turn_16",
+				"06878be2::8fcfbe43_2::turn_6",
+				"06878be2::ultrachat_556731::turn_6",
+				"06878be2::dc18f65b::turn_6",
+				"06878be2::ultrachat_474421::turn_2"
+			],
+			"sessionTop1Found": true,
+			"turnTop1Found": false,
+			"longMemEval": {
+				"session": {
+					"recallAnyAt1": 1,
+					"recallAllAt1": 1,
+					"ndcgAnyAt1": 1,
+					"recallAnyAt3": 1,
+					"recallAllAt3": 1,
+					"ndcgAnyAt3": 1,
+					"recallAnyAt5": 1,
+					"recallAllAt5": 1,
+					"ndcgAnyAt5": 1,
+					"recallAnyAt10": 1,
+					"recallAllAt10": 1,
+					"ndcgAnyAt10": 1,
+					"recallAnyAt30": 1,
+					"recallAllAt30": 1,
+					"ndcgAnyAt30": 1,
+					"recallAnyAt50": 1,
+					"recallAllAt50": 1,
+					"ndcgAnyAt50": 1
+				},
+				"turn": {
+					"recallAnyAt1": 0,
+					"recallAllAt1": 0,
+					"ndcgAnyAt1": 0,
+					"recallAnyAt3": 0,
+					"recallAllAt3": 0,
+					"ndcgAnyAt3": 0,
+					"recallAnyAt5": 0,
+					"recallAllAt5": 0,
+					"ndcgAnyAt5": 0,
+					"recallAnyAt10": 0,
+					"recallAllAt10": 0,
+					"ndcgAnyAt10": 0,
+					"recallAnyAt30": 0,
+					"recallAllAt30": 0,
+					"ndcgAnyAt30": 0,
+					"recallAnyAt50": 0,
+					"recallAllAt50": 0,
+					"ndcgAnyAt50": 0
+				}
+			},
+			"topCandidates": [
+				{
+					"rank": 1,
+					"score": 0.5546875,
+					"source": "structured",
+					"path": "procedure:procedure-6f201682fac9",
+					"canonicalId": "procedure:procedure-6f201682fac9",
+					"resolvedSessionIds": ["06878be2::answer_555dfb94"],
+					"resolvedTurnIds": ["06878be2::answer_555dfb94::turn_16"],
+					"sourceEventIds": ["46e40710-6704-4f50-b123-41ac3960c84c"]
+				},
+				{
+					"rank": 2,
+					"score": 0.51171875,
+					"source": "structured",
+					"path": "procedure:procedure-f7a87e9c0e72",
+					"canonicalId": "procedure:procedure-f7a87e9c0e72",
+					"resolvedSessionIds": ["06878be2::8fcfbe43_2"],
+					"resolvedTurnIds": ["06878be2::8fcfbe43_2::turn_6"],
+					"sourceEventIds": ["fd24fa06-bfa8-402f-92f4-124a513c2479"]
+				},
+				{
+					"rank": 3,
+					"score": 0.263671875,
+					"source": "structured",
+					"path": "procedure:procedure-5d0d2d82acfc",
+					"canonicalId": "procedure:procedure-5d0d2d82acfc",
+					"resolvedSessionIds": ["06878be2::ultrachat_556731"],
+					"resolvedTurnIds": ["06878be2::ultrachat_556731::turn_6"],
+					"sourceEventIds": ["2cdc6854-8bfa-40a4-b252-79f623b02986"]
+				},
+				{
+					"rank": 4,
+					"score": 0.263671875,
+					"source": "structured",
+					"path": "procedure:procedure-191403c35e72",
+					"canonicalId": "procedure:procedure-191403c35e72",
+					"resolvedSessionIds": ["06878be2::dc18f65b"],
+					"resolvedTurnIds": ["06878be2::dc18f65b::turn_6"],
+					"sourceEventIds": ["c0f02add-438a-4bb7-99d2-984dd3e07e94"]
+				},
+				{
+					"rank": 5,
+					"score": 0.25,
+					"source": "structured",
+					"path": "structured:fact:fact-fab18a792fc6?scope=agent&scopeRef=agent%3Abenchmark-canary-canary-run2-2026-05-12T15-23-44-568Z-bf083a01-0fe78681-97ee296bce97",
+					"sessionId": "06878be2::ultrachat_474421",
+					"resolvedSessionIds": ["06878be2::ultrachat_474421"],
+					"resolvedTurnIds": ["06878be2::ultrachat_474421::turn_2"],
+					"sourceEventIds": ["fccb87d1-c1ad-48d9-948b-b9e740cacc1c"]
+				}
+			]
+		},
+		{
+			"caseId": "08f4fc43",
+			"questionType": "temporal-reasoning",
+			"rAt5": 1,
+			"rAt10": 1,
+			"ndcgAt10": 1,
+			"issue": "top1-turn",
+			"expectedSessionIds": [
+				"08f4fc43::answer_6ea1541e_2",
+				"08f4fc43::answer_6ea1541e_1"
+			],
+			"expectedTurnIds": [
+				"08f4fc43::answer_6ea1541e_2::turn_1",
+				"08f4fc43::answer_6ea1541e_1::turn_1"
+			],
+			"topCandidateSessionIds": [
+				"08f4fc43::answer_6ea1541e_1",
+				"08f4fc43::answer_6ea1541e_2",
+				"08f4fc43::9216c4d3_4",
+				"08f4fc43::f3bd00ec_2"
+			],
+			"topCandidateTurnIds": [
+				"08f4fc43::answer_6ea1541e_1::turn_2",
+				"08f4fc43::answer_6ea1541e_2::turn_4",
+				"08f4fc43::9216c4d3_4::turn_10",
+				"08f4fc43::9216c4d3_4::turn_12",
+				"08f4fc43::f3bd00ec_2::turn_12"
+			],
+			"sessionTop1Found": true,
+			"turnTop1Found": false,
+			"longMemEval": {
+				"session": {
+					"recallAnyAt1": 1,
+					"recallAllAt1": 0,
+					"ndcgAnyAt1": 1,
+					"recallAnyAt3": 1,
+					"recallAllAt3": 1,
+					"ndcgAnyAt3": 1,
+					"recallAnyAt5": 1,
+					"recallAllAt5": 1,
+					"ndcgAnyAt5": 1,
+					"recallAnyAt10": 1,
+					"recallAllAt10": 1,
+					"ndcgAnyAt10": 1,
+					"recallAnyAt30": 1,
+					"recallAllAt30": 1,
+					"ndcgAnyAt30": 1,
+					"recallAnyAt50": 1,
+					"recallAllAt50": 1,
+					"ndcgAnyAt50": 1
+				},
+				"turn": {
+					"recallAnyAt1": 0,
+					"recallAllAt1": 0,
+					"ndcgAnyAt1": 0,
+					"recallAnyAt3": 0,
+					"recallAllAt3": 0,
+					"ndcgAnyAt3": 0,
+					"recallAnyAt5": 0,
+					"recallAllAt5": 0,
+					"ndcgAnyAt5": 0,
+					"recallAnyAt10": 0,
+					"recallAllAt10": 0,
+					"ndcgAnyAt10": 0,
+					"recallAnyAt30": 0,
+					"recallAllAt30": 0,
+					"ndcgAnyAt30": 0,
+					"recallAnyAt50": 0,
+					"recallAllAt50": 0,
+					"ndcgAnyAt50": 0
+				}
+			},
+			"topCandidates": [
+				{
+					"rank": 1,
+					"score": 0.26171875,
+					"source": "structured",
+					"path": "procedure:procedure-597dc481da91",
+					"canonicalId": "procedure:procedure-597dc481da91",
+					"resolvedSessionIds": ["08f4fc43::answer_6ea1541e_1"],
+					"resolvedTurnIds": ["08f4fc43::answer_6ea1541e_1::turn_2"],
+					"sourceEventIds": ["60abbf2d-14bf-4816-a117-07b7901ff1e7"]
+				},
+				{
+					"rank": 2,
+					"score": 0.2451171875,
+					"source": "structured",
+					"path": "procedure:procedure-877e6ca5a966",
+					"canonicalId": "procedure:procedure-877e6ca5a966",
+					"resolvedSessionIds": ["08f4fc43::answer_6ea1541e_2"],
+					"resolvedTurnIds": ["08f4fc43::answer_6ea1541e_2::turn_4"],
+					"sourceEventIds": ["d1230fe9-55d7-4d43-bbca-5d3f1aea56cf"]
+				},
+				{
+					"rank": 3,
+					"score": 0.2431640625,
+					"source": "structured",
+					"path": "procedure:procedure-061a82c246d8",
+					"canonicalId": "procedure:procedure-061a82c246d8",
+					"resolvedSessionIds": ["08f4fc43::9216c4d3_4"],
+					"resolvedTurnIds": ["08f4fc43::9216c4d3_4::turn_10"],
+					"sourceEventIds": ["79f41689-4d0b-4f47-996e-e46bce2eb0a1"]
+				},
+				{
+					"rank": 4,
+					"score": 0.2421875,
+					"source": "structured",
+					"path": "procedure:procedure-b4f147c90607",
+					"canonicalId": "procedure:procedure-b4f147c90607",
+					"resolvedSessionIds": ["08f4fc43::9216c4d3_4"],
+					"resolvedTurnIds": ["08f4fc43::9216c4d3_4::turn_12"],
+					"sourceEventIds": ["d40ae8ca-d642-4233-840f-c2ceb81879aa"]
+				},
+				{
+					"rank": 5,
+					"score": 0.23828125,
+					"source": "structured",
+					"path": "procedure:procedure-7568f87e4483",
+					"canonicalId": "procedure:procedure-7568f87e4483",
+					"resolvedSessionIds": ["08f4fc43::f3bd00ec_2"],
+					"resolvedTurnIds": ["08f4fc43::f3bd00ec_2::turn_12"],
+					"sourceEventIds": ["c2dbc30c-2461-4921-9659-a388d67d3da8"]
+				}
+			]
+		}
+	],
+	"queryGovernance": {
+		"status": "advisory-only",
+		"generatedAt": "2026-05-12T15:25:18.144Z",
+		"candidates": [
+			{
+				"candidateId": "search-detailed-hybrid-rank-fusion",
+				"source": "benchmark",
+				"queryShapeFamily": "search-detailed",
+				"recipe": "hybrid",
+				"scope": "cluster",
+				"reason": "Benchmark evidence shows the canonical detailed-search hybrid lane is valuable enough to inspect with $queryStats before pinning any cluster-wide query settings.",
+				"evidence": {
+					"datasetName": "canary-run2-2026-05-12T15-23-44-568Z-bf083a01.json",
+					"datasetKind": "longmemeval",
+					"cases": 6,
+					"hitRate": 1,
+					"p95LatencyMs": 2364,
+					"rAt5": 0.8055555555555555,
+					"ndcgAt10": 0.8470709864647025
+				},
+				"recommendedAction": "consider-setQuerySettings",
+				"rollbackNote": "Query settings are cluster-wide. If indexes, fusion strategy, or benchmark evidence changes, remove the setting with removeQuerySettings by shape or queryShapeHash."
+			}
+		],
+		"notes": [
+			"Operational only: do not hardcode setQuerySettings assumptions into application logic.",
+			"Validate any candidate against live $queryStats and current indexes before pinning a plan."
+		]
+	},
+	"benchmarkReport": {
+		"generatedAt": "2026-05-12T15:25:18.144Z",
+		"build": {
+			"source": "unknown"
+		},
+		"corpus": {
+			"datasetVersion": "42f4a48d236e7775",
+			"datasetName": "canary-run2-2026-05-12T15-23-44-568Z-bf083a01.json",
+			"datasetKind": "longmemeval",
+			"scenarios": 6,
+			"cases": 6,
+			"scoredCases": 6,
+			"skippedCases": 0
+		},
+		"metrics": {
+			"internal": {
+				"hitRate": 1,
+				"emptyRate": 0,
+				"avgTopScore": 0.4925130208333333,
+				"p95LatencyMs": 2364,
+				"rAt5": 0.8055555555555555,
+				"rAt10": 0.8055555555555555,
+				"ndcgAt10": 0.8470709864647025
+			},
+			"official": {
+				"longMemEval": {
+					"retrievalCases": 6,
+					"abstentionCases": 0,
+					"session": {
+						"recallAnyAt1": 1,
+						"recallAllAt1": 0.5,
+						"ndcgAnyAt1": 1,
+						"recallAnyAt3": 1,
+						"recallAllAt3": 0.6666666666666666,
+						"ndcgAnyAt3": 0.8133489611193223,
+						"recallAnyAt5": 1,
+						"recallAllAt5": 0.6666666666666666,
+						"ndcgAnyAt5": 0.8133489611193223,
+						"recallAnyAt10": 1,
+						"recallAllAt10": 0.6666666666666666,
+						"ndcgAnyAt10": 0.8133489611193223,
+						"recallAnyAt30": 1,
+						"recallAllAt30": 0.6666666666666666,
+						"ndcgAnyAt30": 0.8133489611193223,
+						"recallAnyAt50": 1,
+						"recallAllAt50": 0.8333333333333334,
+						"ndcgAnyAt50": 0.830015627785989
+					},
+					"turn": {
+						"recallAnyAt1": 0.3333333333333333,
+						"recallAllAt1": 0.3333333333333333,
+						"ndcgAnyAt1": 0.3333333333333333,
+						"recallAnyAt3": 0.3333333333333333,
+						"recallAllAt3": 0.3333333333333333,
+						"ndcgAnyAt3": 0.3333333333333333,
+						"recallAnyAt5": 0.3333333333333333,
+						"recallAllAt5": 0.3333333333333333,
+						"ndcgAnyAt5": 0.3333333333333333,
+						"recallAnyAt10": 0.5,
+						"recallAllAt10": 0.3333333333333333,
+						"ndcgAnyAt10": 0.3630172655923352,
+						"recallAnyAt30": 0.5,
+						"recallAllAt30": 0.3333333333333333,
+						"ndcgAnyAt30": 0.3630172655923352,
+						"recallAnyAt50": 0.5,
+						"recallAllAt50": 0.3333333333333333,
+						"ndcgAnyAt50": 0.3630172655923352
+					}
+				}
+			}
+		},
+		"releaseGates": [
+			{
+				"gate": "official-retrieval",
+				"status": "passed",
+				"evidence": "officialMetrics present and all 6/6 benchmark cases scored"
+			},
+			{
+				"gate": "internal-retrieval",
+				"status": "passed",
+				"evidence": "6 cases, 6 scored"
+			},
+			{
+				"gate": "conversation-recall-regression",
+				"status": "not-run",
+				"evidence": "Run packages/memory-engine/src/mongodb-conversation-recall-benchmark.test.ts for recall-affecting changes"
+			},
+			{
+				"gate": "query-governance",
+				"status": "advisory-only",
+				"evidence": "queryGovernance candidates are advisory-only"
+			}
+		],
+		"warnings": [],
+		"degradations": [],
+		"runIdentity": {
+			"datasetSha256": "d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442",
+			"retrievalUnit": "turn"
+		},
+		"embedding": {
+			"model": "voyage-3.5",
+			"dimensions": 1024,
+			"quantization": "float32"
+		},
+		"reranker": {
+			"model": "rerank-2.5",
+			"version": null,
+			"stage": "post-fusion"
+		},
+		"storage": {
+			"collectionBytes": 0,
+			"indexBytes": 3358720
+		},
+		"latency": {
+			"p50Ms": 2163,
+			"p95Ms": 2364
+		},
+		"cost": {
+			"embeddingCalls": 0,
+			"rerankCalls": 6,
+			"llmEnrichmentCalls": 0
+		}
+	}
+}

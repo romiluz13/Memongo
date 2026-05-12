@@ -1,0 +1,15 @@
+{
+	"dockerComposeFile": "docker/mongodb/docker-compose.benchmark.yml",
+	"mongodbHealthy": true,
+	"apiPort": 3847,
+	"apiHealthUrl": "http://127.0.0.1:3847/health",
+	"apiHealthCheckedAt": "2026-05-12T15:22:08Z",
+	"datasetPath": "/Users/rom.iluz/.memongo/workspace/benchmarks/longmemeval_s_cleaned.json",
+	"datasetSha256": "d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442",
+	"gitSha": "8e6a422a018774a19d8cb6abf74c64c8341876ba",
+	"gitBranch": "main",
+	"mongodbVersion": "8.2.7",
+	"notes": "Phase 3 Gate 3 n=3 canary retry on main after n≥3 sampling discipline commit 8e6a422a01. Bench stack on 27018 already healthy; API (PID 7398) started fresh for this run.",
+	"runsPerCommit": 3,
+	"runIntervalMs": 2000
+}

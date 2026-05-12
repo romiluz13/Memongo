@@ -885,8 +885,18 @@ async function runSingleCanary(params: {
 	baseDir: string
 	invocationTimestampMs: number
 	runsPerCommit: number
+	/** Snapshotted at invocation start so repeated mutation of
+	 *  process.env.MEMONGO_MONGODB_COLLECTION_PREFIX across runs does not
+	 *  stack `_runN_{ts}` suffixes onto the prefix each pass. */
+	invocationBasePrefix: string
 }): Promise<CanaryPerRunSummary | null> {
-	const { runIndex, baseDir, invocationTimestampMs, runsPerCommit } = params
+	const {
+		runIndex,
+		baseDir,
+		invocationTimestampMs,
+		runsPerCommit,
+		invocationBasePrefix,
+	} = params
 
 	// Per-run artifact dir. When runsPerCommit=1, keep back-compat: write
 	// directly into baseDir (not baseDir/run-1/). This keeps existing single-
@@ -898,16 +908,17 @@ async function runSingleCanary(params: {
 
 	// Per-run collection prefix — only when running N>1. Single-run keeps the
 	// caller-supplied prefix so existing bench stacks stay addressable.
-	const basePrefix =
-		process.env.MEMONGO_MONGODB_COLLECTION_PREFIX?.trim() || "memongo_bench_"
+	// Always derive from the invocation-level base, NOT from the current
+	// process.env (which was overwritten by run N-1). This keeps the prefix
+	// semantics pure: `{base}_run{N}_{invocationTimestampMs}`.
 	const perRunPrefix =
 		runsPerCommit > 1
 			? deriveCanaryRunCollectionPrefix({
-					basePrefix,
+					basePrefix: invocationBasePrefix,
 					runIndex,
 					invocationTimestampMs,
 				})
-			: basePrefix
+			: invocationBasePrefix
 	if (runsPerCommit > 1) {
 		process.env.MEMONGO_MONGODB_COLLECTION_PREFIX = perRunPrefix
 		console.log(
@@ -1178,6 +1189,11 @@ async function main() {
 		)
 	}
 
+	// Snapshot the invocation-level base collection prefix once so per-run
+	// isolation does not stack `_runN_{ts}` suffixes each pass.
+	const invocationBasePrefix =
+		process.env.MEMONGO_MONGODB_COLLECTION_PREFIX?.trim() || "memongo_bench_"
+
 	const perRunSummaries: CanaryPerRunSummary[] = []
 	for (let runIndex = 1; runIndex <= runsPerCommit; runIndex++) {
 		const summary = await runSingleCanary({
@@ -1185,6 +1201,7 @@ async function main() {
 			baseDir,
 			invocationTimestampMs,
 			runsPerCommit,
+			invocationBasePrefix,
 		})
 		if (summary !== null) {
 			perRunSummaries.push(summary)
