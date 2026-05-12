@@ -6546,12 +6546,18 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		}
 		await this.writeQueue
 
-		// Flush and close access tracker
+		// Flush and close access tracker. Never swallow failures silently
+		// (Phase 2 remfix CRIT-5): closing can lose buffered access events.
+		// If the flush fails we at least surface it via log.warn with context
+		// so the reviewer/hunter can grep for it and downstream operators can
+		// alert on it; the tracker reference is still cleared afterward so the
+		// close sequence is idempotent.
 		if (this.accessTracker) {
 			try {
 				await this.accessTracker.close()
-			} catch {
-				// Ignore access tracker close errors
+			} catch (err) {
+				const msg = err instanceof Error ? err.message : String(err)
+				log.warn(`accessTracker close failed: ${msg}`)
 			}
 			this.accessTracker = null
 		}
