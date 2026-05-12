@@ -6,6 +6,11 @@
 import { describe, it, expect } from "vitest"
 
 describe("Phase 7-11 wiring: bridge functions", () => {
+	it("exports memongoBridgeShutdown (CRIT-5 part 2)", async () => {
+		const mod = await import("./memongo-bridge.js")
+		expect(typeof mod.memongoBridgeShutdown).toBe("function")
+	})
+
 	it("exports memongoBridgeGetLifecycleItem", async () => {
 		const mod = await import("./memongo-bridge.js")
 		expect(typeof mod.memongoBridgeGetLifecycleItem).toBe("function")

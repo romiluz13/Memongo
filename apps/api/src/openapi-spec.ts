@@ -437,6 +437,24 @@ export const openApiSpec = {
 										description:
 											"Optional session scope for conversational retrieval.",
 									},
+									scope: {
+										type: "string",
+										enum: [
+											"session",
+											"user",
+											"agent",
+											"workspace",
+											"tenant",
+											"global",
+										],
+										description:
+											"Optional memory isolation scope for retrieval.",
+									},
+									scopeRef: {
+										type: "string",
+										description:
+											"Optional scope reference, for example a workspace path.",
+									},
 									containerTag: {
 										type: "string",
 										deprecated: true,
@@ -473,6 +491,24 @@ export const openApiSpec = {
 								required: ["query"],
 								properties: {
 									query: { type: "string" },
+									scope: {
+										type: "string",
+										enum: [
+											"session",
+											"user",
+											"agent",
+											"workspace",
+											"tenant",
+											"global",
+										],
+										description:
+											"Optional memory isolation scope for retrieval.",
+									},
+									scopeRef: {
+										type: "string",
+										description:
+											"Optional scope reference, for example a workspace path.",
+									},
 									limit: {
 										type: "number",
 										description: "Maximum results to return.",

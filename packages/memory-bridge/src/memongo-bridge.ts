@@ -35,10 +35,22 @@ import type {
 	V2Status,
 } from "@memongo/memory-engine"
 import {
+	closeAllMemorySearchManagers,
 	getMemorySearchManager,
 	materializeBlocks,
 } from "@memongo/memory-engine"
 import { resolveBridgeConfig } from "./memory-config.js"
+
+/**
+ * CRIT-5 (part 2): Graceful bridge shutdown.
+ * Closes every cached MongoDB memory manager, which in turn flushes the
+ * access tracker and closes the Mongo client. Swallows errors per-manager
+ * via `closeAllMemorySearchManagers` so one failing manager does not block
+ * the rest.
+ */
+export async function memongoBridgeShutdown(): Promise<void> {
+	await closeAllMemorySearchManagers()
+}
 
 type MemongoBridgeActiveSlate = {
 	agentId: string
@@ -360,12 +372,16 @@ export async function memongoBridgeSearch(params: {
 	maxResults?: number
 	minScore?: number
 	sessionKey?: string
+	scope?: MemoryScope
+	scopeRef?: string
 }) {
 	const m = await memongoBridgeGetManager(params.agentId)
 	return m.search(params.query, {
 		maxResults: params.maxResults,
 		minScore: params.minScore,
 		sessionKey: params.sessionKey,
+		scope: params.scope,
+		scopeRef: params.scopeRef,
 	})
 }
 
@@ -404,6 +420,8 @@ export async function memongoBridgeAdd(params: {
 	agentId?: string
 	sessionId?: string
 	metadata?: Record<string, unknown>
+	scope?: MemoryScope
+	scopeRef?: string
 }) {
 	return memongoBridgeWriteConversationEvent({
 		agentId: params.agentId,
@@ -411,6 +429,8 @@ export async function memongoBridgeAdd(params: {
 		body: params.content,
 		sessionId: params.sessionId,
 		metadata: params.metadata,
+		scope: params.scope,
+		scopeRef: params.scopeRef,
 	})
 }
 
@@ -422,6 +442,7 @@ export async function memongoBridgeWriteConversationEvent(params: {
 	timestamp?: string
 	metadata?: Record<string, unknown>
 	scope?: MemoryScope
+	scopeRef?: string
 }) {
 	const m = await memongoBridgeGetManager(params.agentId)
 	const timestamp = params.timestamp ? new Date(params.timestamp) : undefined
@@ -432,6 +453,7 @@ export async function memongoBridgeWriteConversationEvent(params: {
 		timestamp,
 		metadata: params.metadata,
 		scope: params.scope,
+		scopeRef: params.scopeRef,
 	})
 }
 
@@ -705,6 +727,8 @@ export async function memongoBridgeApplyMemoryFeedback(params: {
 export async function memongoBridgeSearchDetailed(params: {
 	agentId?: string
 	query: string
+	scope?: MemoryScope
+	scopeRef?: string
 	maxResults?: number
 	minScore?: number
 	searchMode?: "auto" | "direct" | "agentic"
@@ -754,6 +778,8 @@ export async function memongoBridgeSearchDetailed(params: {
 	}
 	return m.searchDetailed({
 		query: params.query,
+		scope: params.scope,
+		scopeRef: params.scopeRef,
 		maxResults: params.maxResults,
 		minScore: params.minScore,
 		searchMode: params.searchMode,
