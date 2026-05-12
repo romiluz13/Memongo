@@ -1,0 +1,69 @@
+{
+	"runs": [
+		{
+			"runIndex": 1,
+			"hitRate": 1,
+			"rAt5": 1,
+			"rAt10": 1,
+			"ndcgAt10": 1,
+			"sessionAny1": 1,
+			"turnAny1": 0.8333333333333334,
+			"missLedger": [],
+			"caseDiagnosticsLength": 1,
+			"artifactPath": "artifacts/canary-runs/gate3-strict-1pertype-n3-gauss-1778608237/run-1/canary-artifact.json"
+		},
+		{
+			"runIndex": 2,
+			"hitRate": 0.8333333333333334,
+			"rAt5": 0.75,
+			"rAt10": 0.8333333333333334,
+			"ndcgAt10": 0.802921598392324,
+			"sessionAny1": 0.8333333333333334,
+			"turnAny1": 0.6666666666666666,
+			"missLedger": ["0e5e2d1a", "01493427"],
+			"caseDiagnosticsLength": 3,
+			"artifactPath": "artifacts/canary-runs/gate3-strict-1pertype-n3-gauss-1778608237/run-2/canary-artifact.json"
+		},
+		{
+			"runIndex": 3,
+			"hitRate": 0.8333333333333334,
+			"rAt5": 0.8333333333333334,
+			"rAt10": 0.8333333333333334,
+			"ndcgAt10": 0.8333333333333334,
+			"sessionAny1": 0.8333333333333334,
+			"turnAny1": 0.8333333333333334,
+			"missLedger": ["06878be2"],
+			"caseDiagnosticsLength": 1,
+			"artifactPath": "artifacts/canary-runs/gate3-strict-1pertype-n3-gauss-1778608237/run-3/canary-artifact.json"
+		}
+	],
+	"aggregate": {
+		"hitRate": {
+			"mean": 0.888888888888889,
+			"min": 0.8333333333333334,
+			"max": 1,
+			"stddev": 0.0785674201318386
+		},
+		"sessionAny1": {
+			"mean": 0.888888888888889,
+			"min": 0.8333333333333334,
+			"max": 1,
+			"stddev": 0.0785674201318386
+		},
+		"turnAny1": {
+			"mean": 0.7777777777777778,
+			"min": 0.6666666666666666,
+			"max": 0.8333333333333334,
+			"stddev": 0.07856742013183865
+		}
+	},
+	"deterministicMisses": [],
+	"varianceMisses": ["01493427", "06878be2", "0e5e2d1a"],
+	"gate3ExitCriteria": {
+		"deterministicPass": false,
+		"partialPass": true,
+		"fail": false
+	},
+	"verdict": "PARTIAL_PASS",
+	"reasoning": "min(hitRate)=0.833 mean=0.889 with 0 deterministic miss(es) and 3 variance miss(es); retrieval quality is partial — deterministic misses are real signal, variance misses are Voyage rerank non-determinism."
+}

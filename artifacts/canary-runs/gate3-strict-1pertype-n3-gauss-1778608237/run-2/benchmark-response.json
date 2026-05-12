@@ -1,0 +1,867 @@
+{
+	"datasetVersion": "42f4a48d236e7775",
+	"datasetName": "canary-run2-2026-05-12T17-51-51-219Z-0d9cb607.json",
+	"datasetKind": "longmemeval",
+	"scenarios": 6,
+	"cases": 6,
+	"scoredCases": 6,
+	"skippedCases": 0,
+	"hitRate": 0.8333333333333334,
+	"emptyRate": 0,
+	"avgTopScore": 0.5986328125,
+	"p95LatencyMs": 2916,
+	"rAt5": 0.75,
+	"rAt10": 0.8333333333333334,
+	"ndcgAt10": 0.802921598392324,
+	"questionTypeBreakdown": [
+		{
+			"questionType": "knowledge-update",
+			"cases": 1,
+			"scoredCases": 1,
+			"hitRate": 1,
+			"rAt5": 0.5,
+			"rAt10": 1,
+			"ndcgAt10": 0.8175295903539445
+		},
+		{
+			"questionType": "multi-session",
+			"cases": 1,
+			"scoredCases": 1,
+			"hitRate": 1,
+			"rAt5": 1,
+			"rAt10": 1,
+			"ndcgAt10": 1
+		},
+		{
+			"questionType": "single-session-assistant",
+			"cases": 1,
+			"scoredCases": 1,
+			"hitRate": 0,
+			"rAt5": 0,
+			"rAt10": 0,
+			"ndcgAt10": 0
+		},
+		{
+			"questionType": "single-session-preference",
+			"cases": 1,
+			"scoredCases": 1,
+			"hitRate": 1,
+			"rAt5": 1,
+			"rAt10": 1,
+			"ndcgAt10": 1
+		},
+		{
+			"questionType": "single-session-user",
+			"cases": 1,
+			"scoredCases": 1,
+			"hitRate": 1,
+			"rAt5": 1,
+			"rAt10": 1,
+			"ndcgAt10": 1
+		},
+		{
+			"questionType": "temporal-reasoning",
+			"cases": 1,
+			"scoredCases": 1,
+			"hitRate": 1,
+			"rAt5": 1,
+			"rAt10": 1,
+			"ndcgAt10": 1
+		}
+	],
+	"officialMetrics": {
+		"longMemEval": {
+			"retrievalCases": 6,
+			"abstentionCases": 0,
+			"session": {
+				"recallAnyAt1": 0.8333333333333334,
+				"recallAllAt1": 0.3333333333333333,
+				"ndcgAnyAt1": 0.8333333333333334,
+				"recallAnyAt3": 0.8333333333333334,
+				"recallAllAt3": 0.6666666666666666,
+				"ndcgAnyAt3": 0.75,
+				"recallAnyAt5": 0.8333333333333334,
+				"recallAllAt5": 0.6666666666666666,
+				"ndcgAnyAt5": 0.75,
+				"recallAnyAt10": 0.8333333333333334,
+				"recallAllAt10": 0.8333333333333334,
+				"ndcgAnyAt10": 0.7796839322590019,
+				"recallAnyAt30": 0.8333333333333334,
+				"recallAllAt30": 0.8333333333333334,
+				"ndcgAnyAt30": 0.7796839322590019,
+				"recallAnyAt50": 0.8333333333333334,
+				"recallAllAt50": 0.8333333333333334,
+				"ndcgAnyAt50": 0.7796839322590019
+			},
+			"turn": {
+				"recallAnyAt1": 0.6666666666666666,
+				"recallAllAt1": 0.16666666666666666,
+				"ndcgAnyAt1": 0.6666666666666666,
+				"recallAnyAt3": 0.6666666666666666,
+				"recallAllAt3": 0.3333333333333333,
+				"ndcgAnyAt3": 0.46924414613095483,
+				"recallAnyAt5": 0.6666666666666666,
+				"recallAllAt5": 0.3333333333333333,
+				"ndcgAnyAt5": 0.46924414613095483,
+				"recallAnyAt10": 0.6666666666666666,
+				"recallAllAt10": 0.3333333333333333,
+				"ndcgAnyAt10": 0.46924414613095483,
+				"recallAnyAt30": 0.6666666666666666,
+				"recallAllAt30": 0.6666666666666666,
+				"ndcgAnyAt30": 0.507189187580447,
+				"recallAnyAt50": 0.6666666666666666,
+				"recallAllAt50": 0.6666666666666666,
+				"ndcgAnyAt50": 0.507189187580447
+			}
+		}
+	},
+	"ingest": {
+		"conversationsIngested": 286,
+		"turnsIngested": 2860,
+		"skippedConversations": 0,
+		"failedLines": 0,
+		"failedTurns": 0
+	},
+	"regressions": [
+		{
+			"metricName": "hitRate",
+			"baseline": 0.8333333333333334,
+			"current": 0.8333333333333334,
+			"delta": 0,
+			"severity": "low"
+		},
+		{
+			"metricName": "emptyRate",
+			"baseline": 0,
+			"current": 0,
+			"delta": 0,
+			"severity": "low"
+		},
+		{
+			"metricName": "avgTopScore",
+			"baseline": 0.5986328125,
+			"current": 0.5986328125,
+			"delta": 0,
+			"severity": "low"
+		},
+		{
+			"metricName": "p95LatencyMs",
+			"baseline": 2916,
+			"current": 2916,
+			"delta": 0,
+			"severity": "low"
+		},
+		{
+			"metricName": "rAt5",
+			"baseline": 0.75,
+			"current": 0.75,
+			"delta": 0,
+			"severity": "low"
+		},
+		{
+			"metricName": "rAt10",
+			"baseline": 0.8333333333333334,
+			"current": 0.8333333333333334,
+			"delta": 0,
+			"severity": "low"
+		},
+		{
+			"metricName": "ndcgAt10",
+			"baseline": 0.802921598392324,
+			"current": 0.802921598392324,
+			"delta": 0,
+			"severity": "low"
+		}
+	],
+	"missLedger": [
+		{
+			"caseId": "0e5e2d1a",
+			"questionType": "single-session-assistant",
+			"rAt5": 0,
+			"rAt10": 0,
+			"expectedSessionIds": ["0e5e2d1a::answer_ultrachat_113156"],
+			"expectedTurnIds": ["0e5e2d1a::answer_ultrachat_113156::turn_4"],
+			"topCandidateSessionIds": [
+				"0e5e2d1a::sharegpt_DcVIUDF_0",
+				"0e5e2d1a::sharegpt_GPluPmJ_7",
+				"0e5e2d1a::a6c41826_3",
+				"0e5e2d1a::ultrachat_222974",
+				"0e5e2d1a::a803f50b_2",
+				"0e5e2d1a::ultrachat_238255",
+				"0e5e2d1a::sharegpt_CnhRZxj_0",
+				"0e5e2d1a::sharegpt_iYX2M5a_0",
+				"0e5e2d1a::sharegpt_T07U9gQ_31"
+			],
+			"sessionFound": false,
+			"allSessionsFound": false,
+			"reachableTurnIds": [
+				"0e5e2d1a::sharegpt_DcVIUDF_0::turn_2",
+				"0e5e2d1a::sharegpt_GPluPmJ_7::turn_3",
+				"0e5e2d1a::a6c41826_3::turn_6",
+				"0e5e2d1a::ultrachat_222974::turn_2",
+				"0e5e2d1a::a803f50b_2::turn_10",
+				"0e5e2d1a::ultrachat_238255::turn_2",
+				"0e5e2d1a::sharegpt_CnhRZxj_0::turn_12",
+				"0e5e2d1a::ultrachat_222974::turn_10",
+				"0e5e2d1a::sharegpt_iYX2M5a_0::turn_2",
+				"0e5e2d1a::sharegpt_T07U9gQ_31::turn_3"
+			],
+			"turnReachable": false,
+			"missCategory": "unknown",
+			"topCandidates": [
+				{
+					"rank": 1,
+					"score": 0.294921875,
+					"source": "conversation",
+					"sessionId": "0e5e2d1a::sharegpt_DcVIUDF_0",
+					"canonicalId": "event:3500fb86-fec9-47e3-bf1a-3dd6294f8a7f",
+					"resolvedSessionIds": ["0e5e2d1a::sharegpt_DcVIUDF_0"],
+					"sourceEventIds": ["3500fb86-fec9-47e3-bf1a-3dd6294f8a7f"]
+				},
+				{
+					"rank": 2,
+					"score": 0.271484375,
+					"source": "conversation",
+					"sessionId": "0e5e2d1a::sharegpt_GPluPmJ_7",
+					"canonicalId": "event:bcdd112a-de11-49e3-a7cc-9c46aa97ab31",
+					"resolvedSessionIds": ["0e5e2d1a::sharegpt_GPluPmJ_7"],
+					"sourceEventIds": ["bcdd112a-de11-49e3-a7cc-9c46aa97ab31"]
+				},
+				{
+					"rank": 3,
+					"score": 0.2578125,
+					"source": "conversation",
+					"sessionId": "0e5e2d1a::a6c41826_3",
+					"canonicalId": "event:739ddc30-e6b3-44ef-b0f6-b0fc03ae4297",
+					"resolvedSessionIds": ["0e5e2d1a::a6c41826_3"],
+					"sourceEventIds": ["739ddc30-e6b3-44ef-b0f6-b0fc03ae4297"]
+				},
+				{
+					"rank": 4,
+					"score": 0.255859375,
+					"source": "conversation",
+					"sessionId": "0e5e2d1a::ultrachat_222974",
+					"canonicalId": "event:b91c6ca1-1d93-480c-84f8-7a9cfc92d0ff",
+					"resolvedSessionIds": ["0e5e2d1a::ultrachat_222974"],
+					"sourceEventIds": ["b91c6ca1-1d93-480c-84f8-7a9cfc92d0ff"]
+				},
+				{
+					"rank": 5,
+					"score": 0.255859375,
+					"source": "conversation",
+					"sessionId": "0e5e2d1a::a803f50b_2",
+					"canonicalId": "event:8e1118fa-3e4a-45e2-8fb5-a9b71656f0e8",
+					"resolvedSessionIds": ["0e5e2d1a::a803f50b_2"],
+					"sourceEventIds": ["8e1118fa-3e4a-45e2-8fb5-a9b71656f0e8"]
+				}
+			]
+		},
+		{
+			"caseId": "01493427",
+			"questionType": "knowledge-update",
+			"rAt5": 0.5,
+			"rAt10": 1,
+			"expectedSessionIds": [
+				"01493427::answer_a7b44747_1",
+				"01493427::answer_a7b44747_2"
+			],
+			"expectedTurnIds": [
+				"01493427::answer_a7b44747_1::turn_7",
+				"01493427::answer_a7b44747_2::turn_7"
+			],
+			"topCandidateSessionIds": ["01493427::answer_a7b44747_1"],
+			"sessionFound": true,
+			"allSessionsFound": false,
+			"reachableTurnIds": [
+				"01493427::answer_a7b44747_1::turn_7",
+				"01493427::answer_a7b44747_1::turn_9",
+				"01493427::answer_a7b44747_1::turn_8",
+				"01493427::answer_a7b44747_1::turn_11",
+				"01493427::answer_a7b44747_1::turn_10",
+				"01493427::answer_a7b44747_1::turn_12",
+				"01493427::answer_a7b44747_1::turn_4",
+				"01493427::answer_a7b44747_1::turn_3",
+				"01493427::answer_a7b44747_1::turn_1",
+				"01493427::answer_a7b44747_1::turn_2"
+			],
+			"turnReachable": true,
+			"missCategory": "update",
+			"topCandidates": [
+				{
+					"rank": 1,
+					"score": 0.90625,
+					"source": "conversation",
+					"sessionId": "01493427::answer_a7b44747_1",
+					"canonicalId": "event:e061109b-81d7-4216-9e26-526f038a96fa",
+					"resolvedSessionIds": ["01493427::answer_a7b44747_1"],
+					"sourceEventIds": ["e061109b-81d7-4216-9e26-526f038a96fa"]
+				},
+				{
+					"rank": 2,
+					"score": 0.8203125,
+					"source": "conversation",
+					"sessionId": "01493427::answer_a7b44747_1",
+					"canonicalId": "event:324850cc-49a0-40bb-9901-a772d725b19f",
+					"resolvedSessionIds": ["01493427::answer_a7b44747_1"],
+					"sourceEventIds": ["324850cc-49a0-40bb-9901-a772d725b19f"]
+				},
+				{
+					"rank": 3,
+					"score": 0.68359375,
+					"source": "conversation",
+					"sessionId": "01493427::answer_a7b44747_1",
+					"canonicalId": "event:e300bf57-2190-426a-ab50-2d4c7e2b650d",
+					"resolvedSessionIds": ["01493427::answer_a7b44747_1"],
+					"sourceEventIds": ["e300bf57-2190-426a-ab50-2d4c7e2b650d"]
+				},
+				{
+					"rank": 4,
+					"score": 0.56640625,
+					"source": "conversation",
+					"sessionId": "01493427::answer_a7b44747_1",
+					"canonicalId": "event:bcfc18e6-e5aa-4a78-a936-a74a79ac8f09",
+					"resolvedSessionIds": ["01493427::answer_a7b44747_1"],
+					"sourceEventIds": ["bcfc18e6-e5aa-4a78-a936-a74a79ac8f09"]
+				},
+				{
+					"rank": 5,
+					"score": 0.490234375,
+					"source": "conversation",
+					"sessionId": "01493427::answer_a7b44747_1",
+					"canonicalId": "event:374a30ac-7e0d-405f-925e-7d4f4f3481d7",
+					"resolvedSessionIds": ["01493427::answer_a7b44747_1"],
+					"sourceEventIds": ["374a30ac-7e0d-405f-925e-7d4f4f3481d7"]
+				}
+			]
+		}
+	],
+	"caseDiagnostics": [
+		{
+			"caseId": "01493427",
+			"questionType": "knowledge-update",
+			"rAt5": 0.5,
+			"rAt10": 1,
+			"ndcgAt10": 0.8175295903539445,
+			"issue": "recall-at-5",
+			"expectedSessionIds": [
+				"01493427::answer_a7b44747_1",
+				"01493427::answer_a7b44747_2"
+			],
+			"expectedTurnIds": [
+				"01493427::answer_a7b44747_1::turn_7",
+				"01493427::answer_a7b44747_2::turn_7"
+			],
+			"topCandidateSessionIds": ["01493427::answer_a7b44747_1"],
+			"topCandidateTurnIds": [
+				"01493427::answer_a7b44747_1::turn_7",
+				"01493427::answer_a7b44747_1::turn_9",
+				"01493427::answer_a7b44747_1::turn_8",
+				"01493427::answer_a7b44747_1::turn_11",
+				"01493427::answer_a7b44747_1::turn_10"
+			],
+			"sessionTop1Found": true,
+			"turnTop1Found": true,
+			"longMemEval": {
+				"session": {
+					"recallAnyAt1": 1,
+					"recallAllAt1": 0,
+					"ndcgAnyAt1": 1,
+					"recallAnyAt3": 1,
+					"recallAllAt3": 0,
+					"ndcgAnyAt3": 0.5,
+					"recallAnyAt5": 1,
+					"recallAllAt5": 0,
+					"ndcgAnyAt5": 0.5,
+					"recallAnyAt10": 1,
+					"recallAllAt10": 1,
+					"ndcgAnyAt10": 0.6781035935540111,
+					"recallAnyAt30": 1,
+					"recallAllAt30": 1,
+					"ndcgAnyAt30": 0.6781035935540111,
+					"recallAnyAt50": 1,
+					"recallAllAt50": 1,
+					"ndcgAnyAt50": 0.6781035935540111
+				},
+				"turn": {
+					"recallAnyAt1": 1,
+					"recallAllAt1": 0,
+					"ndcgAnyAt1": 1,
+					"recallAnyAt3": 1,
+					"recallAllAt3": 0,
+					"ndcgAnyAt3": 0.5,
+					"recallAnyAt5": 1,
+					"recallAllAt5": 0,
+					"ndcgAnyAt5": 0.5,
+					"recallAnyAt10": 1,
+					"recallAllAt10": 0,
+					"ndcgAnyAt10": 0.5,
+					"recallAnyAt30": 1,
+					"recallAllAt30": 1,
+					"ndcgAnyAt30": 0.6138351243484765,
+					"recallAnyAt50": 1,
+					"recallAllAt50": 1,
+					"ndcgAnyAt50": 0.6138351243484765
+				}
+			},
+			"topCandidates": [
+				{
+					"rank": 1,
+					"score": 0.90625,
+					"source": "conversation",
+					"path": "events/e061109b-81d7-4216-9e26-526f038a96fa",
+					"sessionId": "01493427::answer_a7b44747_1",
+					"canonicalId": "event:e061109b-81d7-4216-9e26-526f038a96fa",
+					"resolvedSessionIds": ["01493427::answer_a7b44747_1"],
+					"resolvedTurnIds": ["01493427::answer_a7b44747_1::turn_7"],
+					"sourceEventIds": ["e061109b-81d7-4216-9e26-526f038a96fa"]
+				},
+				{
+					"rank": 2,
+					"score": 0.8203125,
+					"source": "conversation",
+					"path": "events/324850cc-49a0-40bb-9901-a772d725b19f",
+					"sessionId": "01493427::answer_a7b44747_1",
+					"canonicalId": "event:324850cc-49a0-40bb-9901-a772d725b19f",
+					"resolvedSessionIds": ["01493427::answer_a7b44747_1"],
+					"resolvedTurnIds": ["01493427::answer_a7b44747_1::turn_9"],
+					"sourceEventIds": ["324850cc-49a0-40bb-9901-a772d725b19f"]
+				},
+				{
+					"rank": 3,
+					"score": 0.68359375,
+					"source": "conversation",
+					"path": "events/e300bf57-2190-426a-ab50-2d4c7e2b650d",
+					"sessionId": "01493427::answer_a7b44747_1",
+					"canonicalId": "event:e300bf57-2190-426a-ab50-2d4c7e2b650d",
+					"resolvedSessionIds": ["01493427::answer_a7b44747_1"],
+					"resolvedTurnIds": ["01493427::answer_a7b44747_1::turn_8"],
+					"sourceEventIds": ["e300bf57-2190-426a-ab50-2d4c7e2b650d"]
+				},
+				{
+					"rank": 4,
+					"score": 0.56640625,
+					"source": "conversation",
+					"path": "events/bcfc18e6-e5aa-4a78-a936-a74a79ac8f09",
+					"sessionId": "01493427::answer_a7b44747_1",
+					"canonicalId": "event:bcfc18e6-e5aa-4a78-a936-a74a79ac8f09",
+					"resolvedSessionIds": ["01493427::answer_a7b44747_1"],
+					"resolvedTurnIds": ["01493427::answer_a7b44747_1::turn_11"],
+					"sourceEventIds": ["bcfc18e6-e5aa-4a78-a936-a74a79ac8f09"]
+				},
+				{
+					"rank": 5,
+					"score": 0.490234375,
+					"source": "conversation",
+					"path": "events/374a30ac-7e0d-405f-925e-7d4f4f3481d7",
+					"sessionId": "01493427::answer_a7b44747_1",
+					"canonicalId": "event:374a30ac-7e0d-405f-925e-7d4f4f3481d7",
+					"resolvedSessionIds": ["01493427::answer_a7b44747_1"],
+					"resolvedTurnIds": ["01493427::answer_a7b44747_1::turn_10"],
+					"sourceEventIds": ["374a30ac-7e0d-405f-925e-7d4f4f3481d7"]
+				}
+			]
+		},
+		{
+			"caseId": "0e5e2d1a",
+			"questionType": "single-session-assistant",
+			"rAt5": 0,
+			"rAt10": 0,
+			"ndcgAt10": 0,
+			"issue": "top1-session-and-turn",
+			"expectedSessionIds": ["0e5e2d1a::answer_ultrachat_113156"],
+			"expectedTurnIds": ["0e5e2d1a::answer_ultrachat_113156::turn_4"],
+			"topCandidateSessionIds": [
+				"0e5e2d1a::sharegpt_DcVIUDF_0",
+				"0e5e2d1a::sharegpt_GPluPmJ_7",
+				"0e5e2d1a::a6c41826_3",
+				"0e5e2d1a::ultrachat_222974",
+				"0e5e2d1a::a803f50b_2"
+			],
+			"topCandidateTurnIds": [
+				"0e5e2d1a::sharegpt_DcVIUDF_0::turn_2",
+				"0e5e2d1a::sharegpt_GPluPmJ_7::turn_3",
+				"0e5e2d1a::a6c41826_3::turn_6",
+				"0e5e2d1a::ultrachat_222974::turn_2",
+				"0e5e2d1a::a803f50b_2::turn_10"
+			],
+			"sessionTop1Found": false,
+			"turnTop1Found": false,
+			"longMemEval": {
+				"session": {
+					"recallAnyAt1": 0,
+					"recallAllAt1": 0,
+					"ndcgAnyAt1": 0,
+					"recallAnyAt3": 0,
+					"recallAllAt3": 0,
+					"ndcgAnyAt3": 0,
+					"recallAnyAt5": 0,
+					"recallAllAt5": 0,
+					"ndcgAnyAt5": 0,
+					"recallAnyAt10": 0,
+					"recallAllAt10": 0,
+					"ndcgAnyAt10": 0,
+					"recallAnyAt30": 0,
+					"recallAllAt30": 0,
+					"ndcgAnyAt30": 0,
+					"recallAnyAt50": 0,
+					"recallAllAt50": 0,
+					"ndcgAnyAt50": 0
+				},
+				"turn": {
+					"recallAnyAt1": 0,
+					"recallAllAt1": 0,
+					"ndcgAnyAt1": 0,
+					"recallAnyAt3": 0,
+					"recallAllAt3": 0,
+					"ndcgAnyAt3": 0,
+					"recallAnyAt5": 0,
+					"recallAllAt5": 0,
+					"ndcgAnyAt5": 0,
+					"recallAnyAt10": 0,
+					"recallAllAt10": 0,
+					"ndcgAnyAt10": 0,
+					"recallAnyAt30": 0,
+					"recallAllAt30": 0,
+					"ndcgAnyAt30": 0,
+					"recallAnyAt50": 0,
+					"recallAllAt50": 0,
+					"ndcgAnyAt50": 0
+				}
+			},
+			"topCandidates": [
+				{
+					"rank": 1,
+					"score": 0.294921875,
+					"source": "conversation",
+					"path": "events/3500fb86-fec9-47e3-bf1a-3dd6294f8a7f",
+					"sessionId": "0e5e2d1a::sharegpt_DcVIUDF_0",
+					"canonicalId": "event:3500fb86-fec9-47e3-bf1a-3dd6294f8a7f",
+					"resolvedSessionIds": ["0e5e2d1a::sharegpt_DcVIUDF_0"],
+					"resolvedTurnIds": ["0e5e2d1a::sharegpt_DcVIUDF_0::turn_2"],
+					"sourceEventIds": ["3500fb86-fec9-47e3-bf1a-3dd6294f8a7f"]
+				},
+				{
+					"rank": 2,
+					"score": 0.271484375,
+					"source": "conversation",
+					"path": "events/bcdd112a-de11-49e3-a7cc-9c46aa97ab31",
+					"sessionId": "0e5e2d1a::sharegpt_GPluPmJ_7",
+					"canonicalId": "event:bcdd112a-de11-49e3-a7cc-9c46aa97ab31",
+					"resolvedSessionIds": ["0e5e2d1a::sharegpt_GPluPmJ_7"],
+					"resolvedTurnIds": ["0e5e2d1a::sharegpt_GPluPmJ_7::turn_3"],
+					"sourceEventIds": ["bcdd112a-de11-49e3-a7cc-9c46aa97ab31"]
+				},
+				{
+					"rank": 3,
+					"score": 0.2578125,
+					"source": "conversation",
+					"path": "events/739ddc30-e6b3-44ef-b0f6-b0fc03ae4297",
+					"sessionId": "0e5e2d1a::a6c41826_3",
+					"canonicalId": "event:739ddc30-e6b3-44ef-b0f6-b0fc03ae4297",
+					"resolvedSessionIds": ["0e5e2d1a::a6c41826_3"],
+					"resolvedTurnIds": ["0e5e2d1a::a6c41826_3::turn_6"],
+					"sourceEventIds": ["739ddc30-e6b3-44ef-b0f6-b0fc03ae4297"]
+				},
+				{
+					"rank": 4,
+					"score": 0.255859375,
+					"source": "conversation",
+					"path": "events/b91c6ca1-1d93-480c-84f8-7a9cfc92d0ff",
+					"sessionId": "0e5e2d1a::ultrachat_222974",
+					"canonicalId": "event:b91c6ca1-1d93-480c-84f8-7a9cfc92d0ff",
+					"resolvedSessionIds": ["0e5e2d1a::ultrachat_222974"],
+					"resolvedTurnIds": ["0e5e2d1a::ultrachat_222974::turn_2"],
+					"sourceEventIds": ["b91c6ca1-1d93-480c-84f8-7a9cfc92d0ff"]
+				},
+				{
+					"rank": 5,
+					"score": 0.255859375,
+					"source": "conversation",
+					"path": "events/8e1118fa-3e4a-45e2-8fb5-a9b71656f0e8",
+					"sessionId": "0e5e2d1a::a803f50b_2",
+					"canonicalId": "event:8e1118fa-3e4a-45e2-8fb5-a9b71656f0e8",
+					"resolvedSessionIds": ["0e5e2d1a::a803f50b_2"],
+					"resolvedTurnIds": ["0e5e2d1a::a803f50b_2::turn_10"],
+					"sourceEventIds": ["8e1118fa-3e4a-45e2-8fb5-a9b71656f0e8"]
+				}
+			]
+		},
+		{
+			"caseId": "06878be2",
+			"questionType": "single-session-preference",
+			"rAt5": 1,
+			"rAt10": 1,
+			"ndcgAt10": 1,
+			"issue": "top1-turn",
+			"expectedSessionIds": ["06878be2::answer_555dfb94"],
+			"expectedTurnIds": [
+				"06878be2::answer_555dfb94::turn_1",
+				"06878be2::answer_555dfb94::turn_9",
+				"06878be2::answer_555dfb94::turn_15"
+			],
+			"topCandidateSessionIds": [
+				"06878be2::answer_555dfb94",
+				"06878be2::dc18f65b",
+				"06878be2::ultrachat_556731",
+				"06878be2::3e9fce53_1",
+				"06878be2::e58109ed_1"
+			],
+			"topCandidateTurnIds": [
+				"06878be2::answer_555dfb94::turn_16",
+				"06878be2::dc18f65b::turn_6",
+				"06878be2::ultrachat_556731::turn_6",
+				"06878be2::3e9fce53_1::turn_4",
+				"06878be2::e58109ed_1::turn_2"
+			],
+			"sessionTop1Found": true,
+			"turnTop1Found": false,
+			"longMemEval": {
+				"session": {
+					"recallAnyAt1": 1,
+					"recallAllAt1": 1,
+					"ndcgAnyAt1": 1,
+					"recallAnyAt3": 1,
+					"recallAllAt3": 1,
+					"ndcgAnyAt3": 1,
+					"recallAnyAt5": 1,
+					"recallAllAt5": 1,
+					"ndcgAnyAt5": 1,
+					"recallAnyAt10": 1,
+					"recallAllAt10": 1,
+					"ndcgAnyAt10": 1,
+					"recallAnyAt30": 1,
+					"recallAllAt30": 1,
+					"ndcgAnyAt30": 1,
+					"recallAnyAt50": 1,
+					"recallAllAt50": 1,
+					"ndcgAnyAt50": 1
+				},
+				"turn": {
+					"recallAnyAt1": 0,
+					"recallAllAt1": 0,
+					"ndcgAnyAt1": 0,
+					"recallAnyAt3": 0,
+					"recallAllAt3": 0,
+					"ndcgAnyAt3": 0,
+					"recallAnyAt5": 0,
+					"recallAllAt5": 0,
+					"ndcgAnyAt5": 0,
+					"recallAnyAt10": 0,
+					"recallAllAt10": 0,
+					"ndcgAnyAt10": 0,
+					"recallAnyAt30": 0,
+					"recallAllAt30": 0,
+					"ndcgAnyAt30": 0,
+					"recallAnyAt50": 0,
+					"recallAllAt50": 0,
+					"ndcgAnyAt50": 0
+				}
+			},
+			"topCandidates": [
+				{
+					"rank": 1,
+					"score": 0.56640625,
+					"source": "conversation",
+					"path": "events/c02e6460-84a9-410a-8f82-2b88391139d1",
+					"canonicalId": "event:c02e6460-84a9-410a-8f82-2b88391139d1",
+					"resolvedSessionIds": ["06878be2::answer_555dfb94"],
+					"resolvedTurnIds": ["06878be2::answer_555dfb94::turn_16"],
+					"sourceEventIds": ["c02e6460-84a9-410a-8f82-2b88391139d1"]
+				},
+				{
+					"rank": 2,
+					"score": 0.3125,
+					"source": "conversation",
+					"path": "events/c3446079-ff4f-4b0a-9dde-3aadc40446b4",
+					"canonicalId": "event:c3446079-ff4f-4b0a-9dde-3aadc40446b4",
+					"resolvedSessionIds": ["06878be2::dc18f65b"],
+					"resolvedTurnIds": ["06878be2::dc18f65b::turn_6"],
+					"sourceEventIds": ["c3446079-ff4f-4b0a-9dde-3aadc40446b4"]
+				},
+				{
+					"rank": 3,
+					"score": 0.283203125,
+					"source": "conversation",
+					"path": "events/1b4c863e-725e-461e-a159-dcf401fcaea6",
+					"canonicalId": "event:1b4c863e-725e-461e-a159-dcf401fcaea6",
+					"resolvedSessionIds": ["06878be2::ultrachat_556731"],
+					"resolvedTurnIds": ["06878be2::ultrachat_556731::turn_6"],
+					"sourceEventIds": ["1b4c863e-725e-461e-a159-dcf401fcaea6"]
+				},
+				{
+					"rank": 4,
+					"score": 0.255859375,
+					"source": "conversation",
+					"path": "events/58ea33be-faed-4bb9-a399-53c8f69b8da1",
+					"canonicalId": "event:58ea33be-faed-4bb9-a399-53c8f69b8da1",
+					"resolvedSessionIds": ["06878be2::3e9fce53_1"],
+					"resolvedTurnIds": ["06878be2::3e9fce53_1::turn_4"],
+					"sourceEventIds": ["58ea33be-faed-4bb9-a399-53c8f69b8da1"]
+				},
+				{
+					"rank": 5,
+					"score": 0.25,
+					"source": "conversation",
+					"path": "events/843e3f0f-7e96-4e3b-b1b8-f2784b93b4a9",
+					"canonicalId": "event:843e3f0f-7e96-4e3b-b1b8-f2784b93b4a9",
+					"resolvedSessionIds": ["06878be2::e58109ed_1"],
+					"resolvedTurnIds": ["06878be2::e58109ed_1::turn_2"],
+					"sourceEventIds": ["843e3f0f-7e96-4e3b-b1b8-f2784b93b4a9"]
+				}
+			]
+		}
+	],
+	"queryGovernance": {
+		"status": "advisory-only",
+		"generatedAt": "2026-05-12T17:53:39.015Z",
+		"candidates": [
+			{
+				"candidateId": "search-detailed-hybrid-rank-fusion",
+				"source": "benchmark",
+				"queryShapeFamily": "search-detailed",
+				"recipe": "hybrid",
+				"scope": "cluster",
+				"reason": "Benchmark evidence shows the canonical detailed-search hybrid lane is valuable enough to inspect with $queryStats before pinning any cluster-wide query settings.",
+				"evidence": {
+					"datasetName": "canary-run2-2026-05-12T17-51-51-219Z-0d9cb607.json",
+					"datasetKind": "longmemeval",
+					"cases": 6,
+					"hitRate": 0.8333333333333334,
+					"p95LatencyMs": 2916,
+					"rAt5": 0.75,
+					"ndcgAt10": 0.802921598392324
+				},
+				"recommendedAction": "inspect-query-stats",
+				"rollbackNote": "Query settings are cluster-wide. If indexes, fusion strategy, or benchmark evidence changes, remove the setting with removeQuerySettings by shape or queryShapeHash."
+			}
+		],
+		"notes": [
+			"Operational only: do not hardcode setQuerySettings assumptions into application logic.",
+			"Validate any candidate against live $queryStats and current indexes before pinning a plan."
+		]
+	},
+	"benchmarkReport": {
+		"generatedAt": "2026-05-12T17:53:39.015Z",
+		"build": {
+			"source": "env",
+			"buildLabel": "0.1.0"
+		},
+		"corpus": {
+			"datasetVersion": "42f4a48d236e7775",
+			"datasetName": "canary-run2-2026-05-12T17-51-51-219Z-0d9cb607.json",
+			"datasetKind": "longmemeval",
+			"scenarios": 6,
+			"cases": 6,
+			"scoredCases": 6,
+			"skippedCases": 0
+		},
+		"metrics": {
+			"internal": {
+				"hitRate": 0.8333333333333334,
+				"emptyRate": 0,
+				"avgTopScore": 0.5986328125,
+				"p95LatencyMs": 2916,
+				"rAt5": 0.75,
+				"rAt10": 0.8333333333333334,
+				"ndcgAt10": 0.802921598392324
+			},
+			"official": {
+				"longMemEval": {
+					"retrievalCases": 6,
+					"abstentionCases": 0,
+					"session": {
+						"recallAnyAt1": 0.8333333333333334,
+						"recallAllAt1": 0.3333333333333333,
+						"ndcgAnyAt1": 0.8333333333333334,
+						"recallAnyAt3": 0.8333333333333334,
+						"recallAllAt3": 0.6666666666666666,
+						"ndcgAnyAt3": 0.75,
+						"recallAnyAt5": 0.8333333333333334,
+						"recallAllAt5": 0.6666666666666666,
+						"ndcgAnyAt5": 0.75,
+						"recallAnyAt10": 0.8333333333333334,
+						"recallAllAt10": 0.8333333333333334,
+						"ndcgAnyAt10": 0.7796839322590019,
+						"recallAnyAt30": 0.8333333333333334,
+						"recallAllAt30": 0.8333333333333334,
+						"ndcgAnyAt30": 0.7796839322590019,
+						"recallAnyAt50": 0.8333333333333334,
+						"recallAllAt50": 0.8333333333333334,
+						"ndcgAnyAt50": 0.7796839322590019
+					},
+					"turn": {
+						"recallAnyAt1": 0.6666666666666666,
+						"recallAllAt1": 0.16666666666666666,
+						"ndcgAnyAt1": 0.6666666666666666,
+						"recallAnyAt3": 0.6666666666666666,
+						"recallAllAt3": 0.3333333333333333,
+						"ndcgAnyAt3": 0.46924414613095483,
+						"recallAnyAt5": 0.6666666666666666,
+						"recallAllAt5": 0.3333333333333333,
+						"ndcgAnyAt5": 0.46924414613095483,
+						"recallAnyAt10": 0.6666666666666666,
+						"recallAllAt10": 0.3333333333333333,
+						"ndcgAnyAt10": 0.46924414613095483,
+						"recallAnyAt30": 0.6666666666666666,
+						"recallAllAt30": 0.6666666666666666,
+						"ndcgAnyAt30": 0.507189187580447,
+						"recallAnyAt50": 0.6666666666666666,
+						"recallAllAt50": 0.6666666666666666,
+						"ndcgAnyAt50": 0.507189187580447
+					}
+				}
+			}
+		},
+		"releaseGates": [
+			{
+				"gate": "official-retrieval",
+				"status": "passed",
+				"evidence": "officialMetrics present and all 6/6 benchmark cases scored"
+			},
+			{
+				"gate": "internal-retrieval",
+				"status": "passed",
+				"evidence": "6 cases, 6 scored"
+			},
+			{
+				"gate": "conversation-recall-regression",
+				"status": "not-run",
+				"evidence": "Run packages/memory-engine/src/mongodb-conversation-recall-benchmark.test.ts for recall-affecting changes"
+			},
+			{
+				"gate": "query-governance",
+				"status": "advisory-only",
+				"evidence": "queryGovernance candidates are advisory-only"
+			}
+		],
+		"warnings": [],
+		"degradations": [],
+		"runIdentity": {
+			"datasetSha256": "d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442",
+			"retrievalUnit": "turn"
+		},
+		"embedding": {
+			"model": "voyage-3.5",
+			"dimensions": 1024,
+			"quantization": "float32"
+		},
+		"reranker": {
+			"model": "rerank-2.5",
+			"version": null,
+			"stage": "post-fusion"
+		},
+		"storage": {
+			"collectionBytes": 1443335,
+			"indexBytes": 4186112
+		},
+		"latency": {
+			"p50Ms": 2325,
+			"p95Ms": 2916
+		},
+		"cost": {
+			"embeddingCalls": 0,
+			"rerankCalls": 6,
+			"llmEnrichmentCalls": 0
+		}
+	}
+}
