@@ -7,7 +7,11 @@ import {
 	runSearchAggregateWithRetry,
 	splitAtlasSearchFilter,
 } from "./mongodb-search.js"
-import { resolveNumCandidates } from "./mongodb-retrieval-planner.js"
+import {
+	extractTemporalWindow,
+	resolveNumCandidates,
+	type TemporalWindow,
+} from "./mongodb-retrieval-planner.js"
 import {
 	type DetectedCapabilities,
 	eventsCollection,
@@ -539,6 +543,14 @@ async function hybridRecall(params: {
 	textIndexName: string
 	asOf: Date
 	scoreDetailsWarnings?: ScoreDetailsWarningState
+	/** Task 35 root fix: when set, inject Atlas Search `near` on
+	 *  `timestamp` into the text-lane `compound.should` so in-window
+	 *  events are boosted relative to out-of-window events. Leaves
+	 *  $rankFusion default 0.5/0.5 weights untouched — the boost is
+	 *  entirely inside the text lane's own relevance score.
+	 *  Cited: https://www.mongodb.com/docs/atlas/atlas-search/near/
+	 */
+	temporalWindow?: TemporalWindow | null
 }): Promise<ConversationRecallResult[]> {
 	const queryText = params.request.query?.trim()
 	if (!queryText) {
@@ -575,6 +587,34 @@ async function hybridRecall(params: {
 	const bitemporalFilter = buildBitemporalFilter(params.asOf)
 
 	const { compoundFilter, postMatch } = splitAtlasSearchFilter(vectorFilter)
+
+	// Task 35 root fix: when the query carries a temporal token, add an
+	// Atlas Search `near` clause on `timestamp` into the text-lane
+	// `compound.should`. `pivot` is scaleDays converted to milliseconds;
+	// a document at `origin` scores 1 from this clause, a document
+	// `scaleDays` away scores 0.5, and distant documents asymptote to
+	// 0. This is additive within the text lane (does NOT cross into
+	// vector lane, does NOT change $rankFusion weights). Out-of-window
+	// docs still appear if they match `must` (soft boost, not filter).
+	//
+	// Cited canonical MongoDB docs (MCP substitution disclosed):
+	//   https://www.mongodb.com/docs/atlas/atlas-search/near/
+	//   https://www.mongodb.com/docs/atlas/atlas-search/compound/
+	//   https://www.mongodb.com/docs/manual/reference/operator/aggregation/rankFusion/
+	const temporalWindow = params.temporalWindow ?? null
+	const nearShould =
+		temporalWindow !== null
+			? [
+					{
+						near: {
+							path: "timestamp",
+							origin: temporalWindow.origin,
+							pivot: temporalWindow.scaleDays * 86_400_000,
+						},
+					},
+				]
+			: []
+
 	const pipeline: Document[] = [
 		{
 			$rankFusion: {
@@ -591,6 +631,7 @@ async function hybridRecall(params: {
 									compound: {
 										must: [{ text: { query: queryText, path: "body" } }],
 										...(compoundFilter ? { filter: compoundFilter } : {}),
+										...(nearShould.length > 0 ? { should: nearShould } : {}),
 									},
 								},
 							},
@@ -694,6 +735,16 @@ export async function recallConversation(params: {
 	// returns `undefined` silently.
 	const scoreDetailsWarnings: ScoreDetailsWarningState = { warned: false }
 
+	// Task 35 root fix: run the temporal-window extractor once at the
+	// recall boundary and pass the result down to the hybrid pipeline
+	// builder. null here means no temporal token was found, in which
+	// case the text lane runs unchanged. `asOf` is passed so the
+	// extractor resolves 'today'/'yesterday'/'this month' relative to
+	// the caller-stamped clock (benchmarks fix asOf for determinism).
+	const temporalWindow = queryText
+		? extractTemporalWindow(queryText, asOf)
+		: null
+
 	if (!queryText) {
 		results = await standardRecall({
 			collection,
@@ -721,6 +772,7 @@ export async function recallConversation(params: {
 				textIndexName: params.textIndexName ?? `${params.prefix}events_text`,
 				asOf,
 				scoreDetailsWarnings,
+				temporalWindow,
 			})
 			searchMethod = "hybrid"
 		} catch (error) {

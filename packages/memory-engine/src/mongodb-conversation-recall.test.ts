@@ -791,6 +791,143 @@ describe("recallConversation", () => {
 		expect(hasBitemporalMatch(textInner)).toBe(true)
 	})
 
+	// =========================================================================
+	// Task 35 — gauss-decay root fix for Gate 3 miss 00ca467f.
+	//
+	// When the query contains a temporal token (via extractTemporalWindow),
+	// the hybrid text-lane must inject an Atlas Search `near` operator on
+	// `timestamp` into `compound.should` to boost in-window events. The
+	// $rankFusion default 0.5/0.5 fusion weights are untouched — the boost
+	// lives inside the text pipeline's own relevance score.
+	//
+	// Cited: https://www.mongodb.com/docs/atlas/atlas-search/near/ (near on
+	// date with origin=ISODate + pivot=ms). See research doc for substitution
+	// disclosure. ADR-008 MongoDB-native.
+	// =========================================================================
+
+	it("Task 35: hybrid text lane injects near-on-timestamp when temporal token is present (in March)", async () => {
+		const col = makeAggregateCollection({ results: [] })
+		vi.mocked(eventsCollection).mockReturnValue(col)
+
+		await recallConversation({
+			db: mockDb(),
+			prefix: "mem_",
+			request: {
+				agentId: "agent-1",
+				query: "how many doctor's appointments in March",
+				asOf: new Date("2026-05-12T00:00:00.000Z"),
+			},
+			capabilities: {
+				vectorSearch: true,
+				textSearch: true,
+				rankFusion: true,
+				scoreFusion: false,
+			},
+		})
+
+		const pipeline = vi.mocked(col.aggregate).mock.calls[0]?.[0] as Document[]
+		const rankFusion = pipeline[0]?.$rankFusion as {
+			input?: {
+				pipelines?: {
+					text?: Document[]
+				}
+			}
+		}
+		const textInner = rankFusion?.input?.pipelines?.text ?? []
+		const searchStage = textInner[0]?.$search as
+			| {
+					compound?: {
+						should?: Array<{
+							near?: {
+								path?: string
+								origin?: Date
+								pivot?: number
+							}
+						}>
+					}
+			  }
+			| undefined
+		const should = searchStage?.compound?.should ?? []
+		const nearClause = should.find((s) => s.near !== undefined)
+		expect(nearClause).toBeDefined()
+		expect(nearClause!.near!.path).toBe("timestamp")
+		expect(nearClause!.near!.origin).toBeInstanceOf(Date)
+		// March 2026 first-of-month (most recent past March from May 2026).
+		expect((nearClause!.near!.origin as Date).toISOString()).toBe(
+			"2026-03-01T00:00:00.000Z",
+		)
+		// scaleDays=15 → pivot = 15 * 86_400_000 = 1_296_000_000 ms.
+		expect(nearClause!.near!.pivot).toBe(15 * 86_400_000)
+	})
+
+	it("Task 35: hybrid text lane has NO near-on-timestamp when no temporal token is present", async () => {
+		const col = makeAggregateCollection({ results: [] })
+		vi.mocked(eventsCollection).mockReturnValue(col)
+
+		await recallConversation({
+			db: mockDb(),
+			prefix: "mem_",
+			request: {
+				agentId: "agent-1",
+				query: "deployment timeline for the service",
+			},
+			capabilities: {
+				vectorSearch: true,
+				textSearch: true,
+				rankFusion: true,
+				scoreFusion: false,
+			},
+		})
+
+		const pipeline = vi.mocked(col.aggregate).mock.calls[0]?.[0] as Document[]
+		const rankFusion = pipeline[0]?.$rankFusion as {
+			input?: { pipelines?: { text?: Document[] } }
+		}
+		const searchStage = (rankFusion?.input?.pipelines?.text?.[0]?.$search ??
+			{}) as {
+			compound?: {
+				should?: Array<{ near?: unknown }>
+			}
+		}
+		const should = searchStage.compound?.should ?? []
+		expect(should.find((s) => s.near !== undefined)).toBeUndefined()
+	})
+
+	it("Task 35: near pivot milliseconds = scaleDays * 86_400_000 for relative-week (3 days)", async () => {
+		const col = makeAggregateCollection({ results: [] })
+		vi.mocked(eventsCollection).mockReturnValue(col)
+
+		await recallConversation({
+			db: mockDb(),
+			prefix: "mem_",
+			request: {
+				agentId: "agent-1",
+				query: "what did we decide last week",
+				asOf: new Date("2026-05-12T00:00:00.000Z"),
+			},
+			capabilities: {
+				vectorSearch: true,
+				textSearch: true,
+				rankFusion: true,
+				scoreFusion: false,
+			},
+		})
+
+		const pipeline = vi.mocked(col.aggregate).mock.calls[0]?.[0] as Document[]
+		const rankFusion = pipeline[0]?.$rankFusion as {
+			input?: { pipelines?: { text?: Document[] } }
+		}
+		const searchStage = rankFusion?.input?.pipelines?.text?.[0]?.$search as
+			| {
+					compound?: { should?: Array<{ near?: { pivot?: number } }> }
+			  }
+			| undefined
+		const should = searchStage?.compound?.should ?? []
+		const nearClause = should.find((s) => s.near !== undefined)
+		expect(nearClause).toBeDefined()
+		expect(nearClause!.near!.pivot).toBe(3 * 86_400_000)
+	})
+
 	it("CRIT-1: standardRecall find() excludes memories invalidAt <= asOf", async () => {
 		// This is an integration-style unit test: two docs, one invalid,
 		// one valid — assert only the valid one returns after filter.
