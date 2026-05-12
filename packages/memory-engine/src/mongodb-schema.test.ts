@@ -279,6 +279,29 @@ describe("schema constants", () => {
 		])
 	})
 
+	it("events schema includes bi-temporal validAt + invalidAt (Task 2.SE-1)", async () => {
+		const db = mockDb([])
+		await ensureCollections(db, "test_")
+		const createCalls = (db.createCollection as ReturnType<typeof vi.fn>).mock
+			.calls
+		const eventsCall = createCalls.find(
+			(c: unknown[]) => c[0] === "test_events",
+		)
+		expect(eventsCall).toBeDefined()
+		const schema = eventsCall![1]?.validator.$jsonSchema
+		// Bi-temporal ADR-006 fields: validAt records when the assertion became
+		// true; invalidAt (nullable) records when it stopped being true.
+		expect(schema.properties.validAt).toBeDefined()
+		expect(schema.properties.validAt.bsonType).toBe("date")
+		expect(schema.properties.invalidAt).toBeDefined()
+		// invalidAt accepts `date` OR null per the retrieval filter
+		// `invalidAt IS NULL OR invalidAt > queryTime`.
+		expect(schema.properties.invalidAt.bsonType).toEqual([
+			"date",
+			"null",
+		])
+	})
+
 	it("chunks collection has polymorphic schema validation (F15)", async () => {
 		const db = mockDb([])
 		await ensureCollections(db, "test_")
@@ -458,7 +481,7 @@ describe("ensureStandardIndexes", () => {
 
 		// 4 chunks + 2 cache + 5 KB + 4 KB chunks (3 + 1 wiki) + 8 structured (6 + 1 v2 scope + 1 sourceEvent) +
 		// 1 structured revisions + 3 relevance_runs + 2 relevance_artifacts +
-		// 2 relevance_regressions + 7 events (6 + 1 dreamerProcessedAt) + 5 entities (3 + 2 Phase 3.4) + 4 relations +
+		// 2 relevance_regressions + 8 events (6 + 1 dreamerProcessedAt + 1 bi-temporal SE-1) + 5 entities (3 + 2 Phase 3.4) + 4 relations +
 		// 2 entity links + 4 episodes (3 + 1 promotion) + 1 ingest_runs + 1 projection_runs +
 		// 4 procedures + 1 procedure_revisions + 3 query_cache + 2 telemetry + 2 access_events
 		// + 3 memory_mutations (compound + TTL + per-document)
@@ -466,8 +489,8 @@ describe("ensureStandardIndexes", () => {
 		// + 1 consolidation_runs (agent_time)
 		// + 3 sourceRef dedup (events, structured, procedures)
 		// + 1 partial index (structured active facts) + 2 sourceEvent dedup indexes
-		// + 3 session_chunks = 84
-		expect(count).toBe(84)
+		// + 3 session_chunks = 85 (was 84; +1 for bi-temporal SE-1)
+		expect(count).toBe(85)
 		expect(chunks.createIndex).toHaveBeenCalledTimes(4)
 		expect(cache.createIndex).toHaveBeenCalledTimes(2)
 		expect(kb.createIndex).toHaveBeenCalledTimes(5)
@@ -500,7 +523,7 @@ describe("ensureStandardIndexes", () => {
 		const projectionRuns = db.collection("test_projection_runs") as unknown as {
 			createIndex: ReturnType<typeof vi.fn>
 		}
-		expect(events.createIndex).toHaveBeenCalledTimes(8)
+		expect(events.createIndex).toHaveBeenCalledTimes(9)
 		expect(entities.createIndex).toHaveBeenCalledTimes(5)
 		expect(relations.createIndex).toHaveBeenCalledTimes(4)
 		expect(entityLinks.createIndex).toHaveBeenCalledTimes(2)
@@ -539,6 +562,32 @@ describe("ensureStandardIndexes", () => {
 			createIndex: ReturnType<typeof vi.fn>
 		}
 		expect(sessionChunks.createIndex).toHaveBeenCalledTimes(3)
+	})
+
+	it("creates bi-temporal compound index on events (Task 2.SE-1)", async () => {
+		const db = mockDb()
+		await ensureStandardIndexes(db, "test_")
+		const events = db.collection("test_events") as unknown as {
+			createIndex: ReturnType<typeof vi.fn>
+		}
+		// Compound index: { agentId: 1, scope: 1, scopeRef: 1, validAt: 1, invalidAt: 1 }
+		// supports the retrieval filter
+		//   validAt <= queryTime AND (invalidAt IS NULL OR invalidAt > queryTime)
+		// and is scoped by (agentId, scope, scopeRef).
+		const calls = events.createIndex.mock.calls as Array<[unknown, unknown]>
+		const bitemporal = calls.find(
+			([, opts]) =>
+				(opts as { name?: string })?.name ===
+				"idx_events_agent_scope_scoperef_validAt_invalidAt",
+		)
+		expect(bitemporal).toBeDefined()
+		expect(bitemporal![0]).toEqual({
+			agentId: 1,
+			scope: 1,
+			scopeRef: 1,
+			validAt: 1,
+			invalidAt: 1,
+		})
 	})
 
 	it("creates a defensive $text index on text field", async () => {
@@ -677,12 +726,12 @@ describe("ensureStandardIndexes", () => {
 	it("index count includes relevance telemetry indexes and v2 collection indexes", async () => {
 		const db = mockDb()
 		const count = await ensureStandardIndexes(db, "test_")
-		// 27 (v1 base) + 7 events (6 + 1 dreamerProcessedAt) + 3 entities + 4 relations +
+		// 27 (v1 base) + 8 events (6 + 1 dreamerProcessedAt + 1 bi-temporal SE-1) + 3 entities + 4 relations +
 		// 2 entity links + 4 episodes (3 + 1 promotion) + 1 ingest_runs + 1 projection_runs +
 		// 1 structured scope + 1 structured revisions + 4 procedures + 1 procedure_revisions +
 		// 3 query_cache + 2 telemetry + 2 access_events + 3 memory_mutations
-		// + 1 lane_coverage + 1 consolidation_runs + 3 session_chunks = 84
-		expect(count).toBe(84)
+		// + 1 lane_coverage + 1 consolidation_runs + 3 session_chunks = 85
+		expect(count).toBe(85)
 	})
 
 	it("creates relevance TTL indexes when relevanceRetentionDays is set", async () => {
@@ -1947,12 +1996,12 @@ describe("ensureStandardIndexes total count with query_cache and time series ind
 	it("returns updated total index count including query_cache, telemetry, access event, and session_chunks indexes", async () => {
 		const db = mockDb()
 		const count = await ensureStandardIndexes(db, "test_")
-		// 27 (v1 base) + 7 events (6 + 1 dreamerProcessedAt) + 3 entities + 4 relations +
+		// 27 (v1 base) + 8 events (6 + 1 dreamerProcessedAt + 1 bi-temporal SE-1) + 3 entities + 4 relations +
 		// 2 entity links + 4 episodes (3 + 1 promotion) + 1 ingest_runs + 1 projection_runs +
 		// 1 structured scope + 1 structured revisions + 4 procedures + 1 procedure_revisions +
 		// 3 query_cache + 2 telemetry + 2 access_events + 3 memory_mutations
-		// + 1 lane_coverage + 1 consolidation_runs + 3 session_chunks = 84
-		expect(count).toBe(84)
+		// + 1 lane_coverage + 1 consolidation_runs + 3 session_chunks = 85
+		expect(count).toBe(85)
 	})
 })
 

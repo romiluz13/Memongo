@@ -722,6 +722,21 @@ const EVENTS_SCHEMA: Document = {
 				bsonType: "string",
 				description: "Caller-owned idempotency key for external sync/dedup",
 			},
+			// Task 2.SE-1 (ADR-006): bi-temporal validity. `validAt` marks when
+			// the assertion became true; `invalidAt` marks when it stopped being
+			// true (null = still valid). Retrieval filter:
+			//   validAt <= queryTime AND (invalidAt IS NULL OR invalidAt > queryTime)
+			// Cite: MongoDB MCP knowledge-base — bi-temporal compound index
+			// mongodb.com/docs/manual/core/indexes/index-types/index-compound/
+			validAt: {
+				bsonType: "date",
+				description: "Bi-temporal: when the assertion became true",
+			},
+			invalidAt: {
+				bsonType: ["date", "null"],
+				description:
+					"Bi-temporal: when the assertion stopped being true; null = still valid",
+			},
 		},
 	},
 }
@@ -1665,6 +1680,15 @@ export async function ensureStandardIndexes(
 	await events.createIndex(
 		{ dreamerProcessedAt: 1 },
 		{ name: "idx_events_dreamer_processed", sparse: true },
+	)
+	applied++
+	// Task 2.SE-1 (ADR-006): bi-temporal retrieval index. Supports the filter
+	//   validAt <= queryTime AND (invalidAt IS NULL OR invalidAt > queryTime)
+	// scoped by (agentId, scope, scopeRef). MongoDB compound index rules
+	// https://www.mongodb.com/docs/manual/core/indexes/index-types/index-compound/
+	await events.createIndex(
+		{ agentId: 1, scope: 1, scopeRef: 1, validAt: 1, invalidAt: 1 },
+		{ name: "idx_events_agent_scope_scoperef_validAt_invalidAt" },
 	)
 	applied++
 
