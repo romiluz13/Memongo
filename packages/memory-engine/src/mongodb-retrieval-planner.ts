@@ -337,6 +337,303 @@ export function resolveTimeRangePreset(
 	}
 }
 
+/**
+ * Temporal window extracted from natural-language time tokens in a query.
+ * Feeds the Atlas Search `near` operator injected into the text lane of
+ * `$rankFusion` — see `mongodb-conversation-recall.ts` hybrid pipeline
+ * and `docs/research/2026-05-12-mongodb-temporal-recall-capabilities.md`.
+ *
+ * `origin` is the center of the decay curve and `scaleDays` is the
+ * half-max distance (converted to milliseconds `pivot` at the query
+ * layer: `pivot = scaleDays * 86_400_000`). The `near` operator scores
+ * documents as `pivot / (pivot + |timestamp - origin|)`, so a document
+ * at `origin` scores 1 and a document `scaleDays` away scores 0.5.
+ *
+ * ADR-008: MongoDB-native capability adoption — prefer server-side
+ * operators over application-side reimplementation.
+ */
+export type TemporalWindow = {
+	origin: Date
+	scaleDays: number
+	source:
+		| "explicit-month"
+		| "relative-month"
+		| "relative-week"
+		| "explicit-date"
+		| "explicit-year"
+	matchedToken: string
+}
+
+// Canonical month name / abbrev → 0-indexed month number. Matches both
+// the three-letter abbreviation and the full name so the extractor is
+// tolerant of "Mar" and "March" alike. Case-insensitivity is enforced
+// by the word-boundary regex via the `i` flag.
+const MONTH_NAME_TO_INDEX: Record<string, number> = {
+	january: 0,
+	jan: 0,
+	february: 1,
+	feb: 1,
+	march: 2,
+	mar: 2,
+	april: 3,
+	apr: 3,
+	may: 4,
+	june: 5,
+	jun: 5,
+	july: 6,
+	jul: 6,
+	august: 7,
+	aug: 7,
+	september: 8,
+	sep: 8,
+	sept: 8,
+	october: 9,
+	oct: 9,
+	november: 10,
+	nov: 10,
+	december: 11,
+	dec: 11,
+}
+
+const MONTH_NAME_ALT = Object.keys(MONTH_NAME_TO_INDEX)
+	.toSorted((a, b) => b.length - a.length)
+	.join("|")
+const MONTH_NAME_WITH_OPTIONAL_YEAR_RE = new RegExp(
+	`\\b(${MONTH_NAME_ALT})(?:\\s+(\\d{4}))?\\b`,
+	"gi",
+)
+const YEAR_BEFORE_MONTH_RE = new RegExp(
+	`\\b(\\d{4})\\s+(${MONTH_NAME_ALT})\\b`,
+	"gi",
+)
+const EXPLICIT_YYYY_MM_DD_RE = /\b(\d{4})-(\d{2})-(\d{2})\b/
+const STANDALONE_YEAR_RE = /\b(\d{4})\b/
+const RELATIVE_MONTH_RE = /\b(this|last)\s+month\b/i
+const RELATIVE_WEEK_RE = /\b(this|last)\s+week\b/i
+const TODAY_RE = /\b(today|earlier today)\b/i
+const YESTERDAY_RE = /\byesterday\b/i
+
+function startOfIsoWeek(input: Date): Date {
+	const day = input.getUTCDay()
+	// ISO week starts Monday. Sunday (0) → 6 days back; otherwise day-1.
+	const diff = day === 0 ? 6 : day - 1
+	const start = new Date(
+		Date.UTC(
+			input.getUTCFullYear(),
+			input.getUTCMonth(),
+			input.getUTCDate() - diff,
+		),
+	)
+	return start
+}
+
+function firstOfMonth(year: number, monthIndex: number): Date {
+	return new Date(Date.UTC(year, monthIndex, 1))
+}
+
+/**
+ * Extract a single temporal window from a query. Most-specific match
+ * wins in this precedence order (highest wins):
+ *   1. explicit YYYY-MM-DD
+ *   2. relative-week ("this week" / "last week")
+ *   3. today / yesterday
+ *   4. explicit-month (optionally with year)
+ *   5. relative-month ("this month" / "last month")
+ *   6. explicit-year (four-digit year by itself)
+ *
+ * If no temporal token matches, returns `null` — callers must handle the
+ * no-window path (no silent fallback).
+ */
+export function extractTemporalWindow(
+	query: string,
+	now: Date = new Date(),
+): TemporalWindow | null {
+	if (typeof query !== "string" || query.trim().length === 0) {
+		return null
+	}
+
+	// 1. Explicit YYYY-MM-DD wins (includes dates embedded in month strings).
+	const dateMatch = EXPLICIT_YYYY_MM_DD_RE.exec(query)
+	if (dateMatch) {
+		const year = Number(dateMatch[1])
+		const month = Number(dateMatch[2])
+		const day = Number(dateMatch[3])
+		if (
+			Number.isInteger(year) &&
+			month >= 1 &&
+			month <= 12 &&
+			day >= 1 &&
+			day <= 31
+		) {
+			const origin = new Date(Date.UTC(year, month - 1, day))
+			if (!Number.isNaN(origin.getTime())) {
+				return {
+					origin,
+					scaleDays: 3,
+					source: "explicit-date",
+					matchedToken: dateMatch[0],
+				}
+			}
+		}
+	}
+
+	// 2. Relative-week (most-specific among relative-time phrases).
+	const relWeek = RELATIVE_WEEK_RE.exec(query)
+	if (relWeek) {
+		const thisWeekStart = startOfIsoWeek(now)
+		const origin =
+			relWeek[1].toLowerCase() === "last"
+				? new Date(
+						Date.UTC(
+							thisWeekStart.getUTCFullYear(),
+							thisWeekStart.getUTCMonth(),
+							thisWeekStart.getUTCDate() - 7,
+						),
+					)
+				: thisWeekStart
+		return {
+			origin,
+			scaleDays: 3,
+			source: "relative-week",
+			matchedToken: relWeek[0],
+		}
+	}
+
+	// 3. today / yesterday (same scaleDays=1 regardless).
+	const todayMatch = TODAY_RE.exec(query)
+	if (todayMatch) {
+		const origin = new Date(
+			Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()),
+		)
+		return {
+			origin,
+			scaleDays: 1,
+			source: "explicit-date",
+			matchedToken: todayMatch[0],
+		}
+	}
+	const yesterdayMatch = YESTERDAY_RE.exec(query)
+	if (yesterdayMatch) {
+		const origin = new Date(
+			Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - 1),
+		)
+		return {
+			origin,
+			scaleDays: 1,
+			source: "explicit-date",
+			matchedToken: yesterdayMatch[0],
+		}
+	}
+
+	// 4. Explicit month (possibly with adjacent year).
+	//    Pattern A: "<month> <year>" (e.g., "Mar 2024"). Pattern B: "<year>
+	//    <month>" (e.g., "2024 March"). Pattern C: bare month — resolve
+	//    year against `now` using the future-month guard.
+	const monthMatches: Array<{
+		index: number
+		token: string
+		monthIdx: number
+		year?: number
+	}> = []
+	MONTH_NAME_WITH_OPTIONAL_YEAR_RE.lastIndex = 0
+	for (;;) {
+		const m = MONTH_NAME_WITH_OPTIONAL_YEAR_RE.exec(query)
+		if (m === null) {
+			break
+		}
+		const monthIdx = MONTH_NAME_TO_INDEX[m[1].toLowerCase()]
+		const year = m[2] ? Number(m[2]) : undefined
+		monthMatches.push({ index: m.index, token: m[0], monthIdx, year })
+	}
+	YEAR_BEFORE_MONTH_RE.lastIndex = 0
+	for (;;) {
+		const yBefore = YEAR_BEFORE_MONTH_RE.exec(query)
+		if (yBefore === null) {
+			break
+		}
+		const monthIdx = MONTH_NAME_TO_INDEX[yBefore[2].toLowerCase()]
+		const year = Number(yBefore[1])
+		// Merge into monthMatches (last one wins later via most-recent rule).
+		monthMatches.push({
+			index: yBefore.index,
+			token: yBefore[0],
+			monthIdx,
+			year,
+		})
+	}
+	const winner =
+		monthMatches.length > 0
+			? monthMatches.toSorted((a, b) => a.index - b.index).at(-1)
+			: undefined
+	if (winner !== undefined) {
+		if (monthMatches.length > 1) {
+			log.warn(
+				"extractTemporalWindow: multiple month tokens found, keeping most-recent",
+				{
+					tokens: monthMatches.map((x) => x.token),
+					winner: winner.token,
+				},
+			)
+		}
+		let year: number
+		if (winner.year !== undefined) {
+			year = winner.year
+		} else {
+			// Future-month guard: prefer the most recently passed occurrence of
+			// this month strictly on-or-before `now`. If the month is AFTER
+			// `now`'s month in the current year, step back a year.
+			year = now.getUTCFullYear()
+			if (winner.monthIdx > now.getUTCMonth()) {
+				year = year - 1
+			}
+		}
+		return {
+			origin: firstOfMonth(year, winner.monthIdx),
+			scaleDays: 15,
+			source: "explicit-month",
+			matchedToken: winner.token,
+		}
+	}
+
+	// 5. Relative-month (comes AFTER explicit-month so a typed month wins).
+	const relMonth = RELATIVE_MONTH_RE.exec(query)
+	if (relMonth) {
+		const origin =
+			relMonth[1].toLowerCase() === "last"
+				? firstOfMonth(
+						now.getUTCMonth() === 0
+							? now.getUTCFullYear() - 1
+							: now.getUTCFullYear(),
+						now.getUTCMonth() === 0 ? 11 : now.getUTCMonth() - 1,
+					)
+				: firstOfMonth(now.getUTCFullYear(), now.getUTCMonth())
+		return {
+			origin,
+			scaleDays: 15,
+			source: "relative-month",
+			matchedToken: relMonth[0],
+		}
+	}
+
+	// 6. Bare four-digit year (least specific — last resort).
+	const yearMatch = STANDALONE_YEAR_RE.exec(query)
+	if (yearMatch) {
+		const year = Number(yearMatch[1])
+		// Refuse obvious non-year numbers (e.g., 0000, 9999 pathological values
+		// are allowed through — the caller can decide semantics).
+		if (year >= 1900 && year <= 2999) {
+			return {
+				origin: new Date(Date.UTC(year, 6, 1)),
+				scaleDays: 180,
+				source: "explicit-year",
+				matchedToken: yearMatch[0],
+			}
+		}
+	}
+
+	return null
+}
+
 function extractTimeConstraint(
 	query: string,
 ): RetrievalConstraints["timeRange"] | undefined {

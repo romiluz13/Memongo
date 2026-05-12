@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, afterEach } from "vitest"
 import {
+	extractTemporalWindow,
 	planRetrieval,
 	resolveNumCandidates,
 	resolveTimeRangePreset,
@@ -443,6 +444,149 @@ describe("mongodb-retrieval-planner", () => {
 			expect(resolveNumCandidates(0)).toBe(200)
 			expect(resolveNumCandidates(-5)).toBe(200)
 			expect(resolveNumCandidates(Number.NaN)).toBe(200)
+		})
+	})
+
+	// -------------------------------------------------------------------
+	// Task 35 — extractTemporalWindow (root fix for 00ca467f)
+	//
+	// Returns ONE temporal window (origin Date + scaleDays) when the query
+	// contains a natural-language time token. Feeds the Atlas Search `near`
+	// operator injected into the text lane of $rankFusion. Most-specific
+	// match wins: explicit-date > relative-week > explicit-month >
+	// explicit-year. See docs/research/2026-05-12-mongodb-temporal-recall-
+	// capabilities.md and docs/plans/2026-05-11-memongo-mempalace-roadmap-
+	// plan.md for the full spec.
+	// -------------------------------------------------------------------
+	describe("extractTemporalWindow", () => {
+		it("extracts full month name (March) — resolves to most recent past March when current date is May", () => {
+			const now = new Date(Date.UTC(2026, 4, 12, 0, 0, 0)) // 2026-05-12
+			const result = extractTemporalWindow(
+				"How many doctor's appointments in March?",
+				now,
+			)
+			expect(result).not.toBeNull()
+			expect(result!.source).toBe("explicit-month")
+			expect(result!.scaleDays).toBe(15)
+			expect(result!.origin.toISOString()).toBe("2026-03-01T00:00:00.000Z")
+			expect(result!.matchedToken.toLowerCase()).toContain("march")
+		})
+
+		it("extracts abbreviated month name (Mar) with explicit year preceding", () => {
+			const now = new Date(Date.UTC(2026, 4, 12, 0, 0, 0))
+			const result = extractTemporalWindow("what did I do in Mar 2024", now)
+			expect(result).not.toBeNull()
+			expect(result!.source).toBe("explicit-month")
+			expect(result!.origin.toISOString()).toBe("2024-03-01T00:00:00.000Z")
+			expect(result!.scaleDays).toBe(15)
+		})
+
+		it("extracts 'last month' relative window (scaleDays=15)", () => {
+			const now = new Date(Date.UTC(2026, 4, 12, 0, 0, 0)) // May 2026
+			const result = extractTemporalWindow("what happened last month", now)
+			expect(result).not.toBeNull()
+			expect(result!.source).toBe("relative-month")
+			expect(result!.origin.toISOString()).toBe("2026-04-01T00:00:00.000Z")
+			expect(result!.scaleDays).toBe(15)
+		})
+
+		it("extracts 'this month' relative window (scaleDays=15)", () => {
+			const now = new Date(Date.UTC(2026, 4, 12, 0, 0, 0))
+			const result = extractTemporalWindow("meetings this month", now)
+			expect(result).not.toBeNull()
+			expect(result!.source).toBe("relative-month")
+			expect(result!.origin.toISOString()).toBe("2026-05-01T00:00:00.000Z")
+			expect(result!.scaleDays).toBe(15)
+		})
+
+		it("extracts 'last week' with scaleDays=3 (most-specific wins over month tokens)", () => {
+			// 2026-05-12 is a Tuesday; ISO week starts Monday 2026-05-11.
+			// Last ISO week started 2026-05-04.
+			const now = new Date(Date.UTC(2026, 4, 12, 0, 0, 0))
+			const result = extractTemporalWindow("what did we discuss last week", now)
+			expect(result).not.toBeNull()
+			expect(result!.source).toBe("relative-week")
+			expect(result!.scaleDays).toBe(3)
+			expect(result!.origin.toISOString()).toBe("2026-05-04T00:00:00.000Z")
+		})
+
+		it("extracts 'today' with scaleDays=1", () => {
+			const now = new Date(Date.UTC(2026, 4, 12, 15, 30, 0))
+			const result = extractTemporalWindow("what happened today", now)
+			expect(result).not.toBeNull()
+			expect(result!.source).toBe("explicit-date")
+			expect(result!.scaleDays).toBe(1)
+			expect(result!.origin.toISOString()).toBe("2026-05-12T00:00:00.000Z")
+		})
+
+		it("extracts explicit YYYY-MM-DD date with scaleDays=3", () => {
+			const now = new Date(Date.UTC(2026, 4, 12, 0, 0, 0))
+			const result = extractTemporalWindow("show me notes from 2024-03-20", now)
+			expect(result).not.toBeNull()
+			expect(result!.source).toBe("explicit-date")
+			expect(result!.scaleDays).toBe(3)
+			expect(result!.origin.toISOString()).toBe("2024-03-20T00:00:00.000Z")
+		})
+
+		it("extracts explicit year-only with scaleDays=180 (mid-year origin)", () => {
+			const now = new Date(Date.UTC(2026, 4, 12, 0, 0, 0))
+			const result = extractTemporalWindow("activities during 2022", now)
+			expect(result).not.toBeNull()
+			expect(result!.source).toBe("explicit-year")
+			expect(result!.scaleDays).toBe(180)
+			// Mid-year = July 1 at UTC midnight.
+			expect(result!.origin.toISOString()).toBe("2022-07-01T00:00:00.000Z")
+		})
+
+		it("is case-insensitive (MARCH, march, March all match)", () => {
+			const now = new Date(Date.UTC(2026, 4, 12, 0, 0, 0))
+			const upper = extractTemporalWindow("meetings in MARCH", now)
+			const lower = extractTemporalWindow("meetings in march", now)
+			expect(upper?.origin.toISOString()).toBe("2026-03-01T00:00:00.000Z")
+			expect(lower?.origin.toISOString()).toBe("2026-03-01T00:00:00.000Z")
+		})
+
+		it("returns null when no temporal token is present", () => {
+			const now = new Date(Date.UTC(2026, 4, 12, 0, 0, 0))
+			const result = extractTemporalWindow("tell me about the project", now)
+			expect(result).toBeNull()
+		})
+
+		it("returns null for invalid month/date strings (no silent fallback)", () => {
+			const now = new Date(Date.UTC(2026, 4, 12, 0, 0, 0))
+			// 'Marchy' is not a valid month; word-boundary regex should avoid match.
+			const result = extractTemporalWindow("I did Marchy things", now)
+			expect(result).toBeNull()
+		})
+
+		it("most-specific match wins: explicit-date beats explicit-month when both present", () => {
+			const now = new Date(Date.UTC(2026, 4, 12, 0, 0, 0))
+			const result = extractTemporalWindow(
+				"appointments in March, specifically 2024-03-15",
+				now,
+			)
+			expect(result).not.toBeNull()
+			expect(result!.source).toBe("explicit-date")
+			expect(result!.origin.toISOString()).toBe("2024-03-15T00:00:00.000Z")
+		})
+
+		it("resolves 'March' to previous year when the current month is January (future-month guard)", () => {
+			// In January 2026, 'March' should resolve to March 2025 (most recent
+			// past March), not March 2026 (future).
+			const now = new Date(Date.UTC(2026, 0, 15, 0, 0, 0)) // 2026-01-15
+			const result = extractTemporalWindow("appointments in March", now)
+			expect(result).not.toBeNull()
+			expect(result!.source).toBe("explicit-month")
+			expect(result!.origin.toISOString()).toBe("2025-03-01T00:00:00.000Z")
+		})
+
+		it("month with explicit year overrides future-month guard", () => {
+			const now = new Date(Date.UTC(2026, 0, 15, 0, 0, 0))
+			// Explicit 2026 means March 2026 even though it's in the future.
+			const result = extractTemporalWindow("in March 2026", now)
+			expect(result).not.toBeNull()
+			expect(result!.source).toBe("explicit-month")
+			expect(result!.origin.toISOString()).toBe("2026-03-01T00:00:00.000Z")
 		})
 	})
 })
