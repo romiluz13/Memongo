@@ -144,6 +144,16 @@ export function mutationsCollection(db: Db, prefix: string): Collection {
 	return col(db, prefix, "memory_mutations")
 }
 
+/**
+ * Task 2.SE-2 (ADR-006): quarantine collection for injection-shaped candidates
+ * detected by the consolidator pre-write hook. Rows live here until a human
+ * (or the future Task 2.SE-3 review gate) promotes or rejects them; they are
+ * NEVER written to canonical events/structured_mem directly.
+ */
+export function memoryQuarantineCollection(db: Db, prefix: string): Collection {
+	return col(db, prefix, "memory_quarantine")
+}
+
 export function laneCoverageCollection(db: Db, prefix: string): Collection {
 	return col(db, prefix, "lane_coverage")
 }
@@ -1167,6 +1177,59 @@ const MEMORY_JOBS_SCHEMA: Document = {
 	},
 }
 
+const MEMORY_QUARANTINE_SCHEMA: Document = {
+	$jsonSchema: {
+		bsonType: "object",
+		required: [
+			"quarantineId",
+			"agentId",
+			"content",
+			"classification",
+			"matchedPatterns",
+			"status",
+			"createdAt",
+		],
+		properties: {
+			quarantineId: {
+				bsonType: "string",
+				description: "Unique id for this quarantined candidate",
+			},
+			agentId: { bsonType: "string" },
+			scope: { bsonType: "string" },
+			scopeRef: { bsonType: "string" },
+			// Raw candidate body that tripped the classifier. Quarantined content
+			// is visible to reviewers only; never returned by search.
+			content: { bsonType: "string" },
+			classification: {
+				enum: ["injection-likely"],
+				description: "SE-2 classification; only 'injection-likely' is persisted here",
+			},
+			tier: {
+				enum: ["pattern", "llm"],
+				description: "Which classifier tier produced the verdict",
+			},
+			matchedPatterns: {
+				bsonType: "array",
+				items: { bsonType: "string" },
+				description: "Every INJECTION_PATTERNS id that matched the content",
+			},
+			status: {
+				enum: ["pending-review", "rejected", "promoted"],
+				description: "Lifecycle status; canonical write requires 'promoted'",
+			},
+			createdAt: { bsonType: "date" },
+			reviewedAt: { bsonType: "date" },
+			reviewerId: { bsonType: "string" },
+			reviewNotes: { bsonType: "string" },
+			sourceEventIds: {
+				bsonType: "array",
+				items: { bsonType: "string" },
+				description: "Source event ids if the candidate came from consolidation",
+			},
+		},
+	},
+}
+
 const VALIDATED_COLLECTIONS: Record<string, Document> = {
 	chunks: CHUNKS_SCHEMA,
 	knowledge_base: KB_SCHEMA,
@@ -1189,6 +1252,7 @@ const VALIDATED_COLLECTIONS: Record<string, Document> = {
 	memory_mutations: MEMORY_MUTATIONS_SCHEMA,
 	recall_traces: RECALL_TRACES_SCHEMA,
 	memory_jobs: MEMORY_JOBS_SCHEMA,
+	memory_quarantine: MEMORY_QUARANTINE_SCHEMA,
 }
 
 export async function ensureCollections(db: Db, prefix: string): Promise<void> {
@@ -1226,6 +1290,7 @@ export async function ensureCollections(db: Db, prefix: string): Promise<void> {
 		"recall_traces",
 		"memory_jobs",
 		"session_chunks",
+		"memory_quarantine",
 	].map((n) => `${prefix}${n}`)
 	for (const name of needed) {
 		if (!existing.has(name)) {

@@ -279,6 +279,32 @@ describe("schema constants", () => {
 		])
 	})
 
+	it("memory_quarantine collection is created with validator (Task 2.SE-2)", async () => {
+		const db = mockDb([])
+		await ensureCollections(db, "test_")
+		const createCalls = (db.createCollection as ReturnType<typeof vi.fn>).mock
+			.calls
+		const qCall = createCalls.find(
+			(c: unknown[]) => c[0] === "test_memory_quarantine",
+		)
+		expect(qCall).toBeDefined()
+		const schema = qCall![1]?.validator.$jsonSchema
+		expect(schema.required).toContain("quarantineId")
+		expect(schema.required).toContain("classification")
+		expect(schema.required).toContain("matchedPatterns")
+		expect(schema.required).toContain("status")
+		// `classification` is tightly scoped — only injection-likely rows land here.
+		expect(schema.properties.classification.enum).toEqual([
+			"injection-likely",
+		])
+		// Lifecycle statuses for the pending → promoted / rejected flow.
+		expect(schema.properties.status.enum).toEqual([
+			"pending-review",
+			"rejected",
+			"promoted",
+		])
+	})
+
 	it("events schema includes bi-temporal validAt + invalidAt (Task 2.SE-1)", async () => {
 		const db = mockDb([])
 		await ensureCollections(db, "test_")
@@ -333,7 +359,8 @@ describe("ensureCollections", () => {
 	it("creates all collections when none exist, including both time series collections", async () => {
 		const db = mockDb([])
 		await ensureCollections(db, "test_")
-		expect(db.createCollection).toHaveBeenCalledTimes(29)
+		// 30 = 29 baseline + 1 memory_quarantine (Task 2.SE-2, ADR-006)
+		expect(db.createCollection).toHaveBeenCalledTimes(30)
 		// Non-validated collections: called with name only
 		expect(db.createCollection).toHaveBeenCalledWith("test_files")
 		expect(db.createCollection).toHaveBeenCalledWith("test_embedding_cache")
@@ -373,7 +400,8 @@ describe("ensureCollections", () => {
 	it("skips already-existing collections", async () => {
 		const db = mockDb(["test_chunks", "test_files"])
 		await ensureCollections(db, "test_")
-		expect(db.createCollection).toHaveBeenCalledTimes(27)
+		// 28 = 30 new total - 2 skipped. 29 baseline + 1 memory_quarantine.
+		expect(db.createCollection).toHaveBeenCalledTimes(28)
 		expect(db.createCollection).toHaveBeenCalledWith("test_embedding_cache")
 		expect(db.createCollection).toHaveBeenCalledWith("test_meta")
 		expect(db.createCollection).toHaveBeenCalledWith(
@@ -430,6 +458,7 @@ describe("ensureCollections", () => {
 			"oc_recall_traces",
 			"oc_memory_jobs",
 			"oc_session_chunks",
+			"oc_memory_quarantine",
 		])
 		await ensureCollections(db, "oc_")
 		expect(db.createCollection).not.toHaveBeenCalled()
@@ -1988,7 +2017,8 @@ describe("ensureCollections total count with query_cache and time series", () =>
 	it("creates all regular collections plus telemetry and access-events time series collections", async () => {
 		const db = mockDb([])
 		await ensureCollections(db, "test_")
-		expect(db.createCollection).toHaveBeenCalledTimes(29)
+		// 30 = 29 baseline + 1 memory_quarantine (Task 2.SE-2, ADR-006)
+		expect(db.createCollection).toHaveBeenCalledTimes(30)
 	})
 })
 
