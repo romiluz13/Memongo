@@ -6491,9 +6491,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 	// ---------------------------------------------------------------------------
 
 	async stats(): Promise<MemoryStats> {
-		return getMemoryStats(this.db, this.prefix, undefined, {
-			embeddingMode: this.config.mongodb?.embeddingMode,
-		})
+		return getMemoryStats(this.db, this.prefix)
 	}
 
 	// ---------------------------------------------------------------------------

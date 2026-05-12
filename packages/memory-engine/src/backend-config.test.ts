@@ -845,19 +845,24 @@ describe("resolveMemoryBackendConfig", () => {
 	// ---------------------------------------------------------------------------
 
 	it("resolves reranking defaults (enabled, rerank-2.5, topN=20, minScore=0.01)", () => {
-		const cfg = {
-			agents: { defaults: { workspace: "/tmp/memory-test" } },
-			memory: {
-				backend: "mongodb",
-				mongodb: { uri: "mongodb://localhost:27017" },
-			},
-		} as unknown as MemongoConfig
-		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
-		expect(resolved.mongodb!.reranking.enabled).toBe(true)
-		expect(resolved.mongodb!.reranking.model).toBe("rerank-2.5")
-		expect(resolved.mongodb!.reranking.topN).toBe(20)
-		expect(resolved.mongodb!.reranking.minScore).toBe(0.01)
-		expect(resolved.mongodb!.reranking.voyageApiKey).toBe("")
+		vi.stubEnv("VOYAGE_API_KEY", "")
+		try {
+			const cfg = {
+				agents: { defaults: { workspace: "/tmp/memory-test" } },
+				memory: {
+					backend: "mongodb",
+					mongodb: { uri: "mongodb://localhost:27017" },
+				},
+			} as unknown as MemongoConfig
+			const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
+			expect(resolved.mongodb!.reranking.enabled).toBe(true)
+			expect(resolved.mongodb!.reranking.model).toBe("rerank-2.5")
+			expect(resolved.mongodb!.reranking.topN).toBe(20)
+			expect(resolved.mongodb!.reranking.minScore).toBe(0.01)
+			expect(resolved.mongodb!.reranking.voyageApiKey).toBe("")
+		} finally {
+			vi.unstubAllEnvs()
+		}
 	})
 
 	it("resolves reranking with explicit values", () => {
