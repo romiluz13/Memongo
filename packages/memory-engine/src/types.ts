@@ -1257,6 +1257,14 @@ export type ConsolidationCandidate = {
 	importanceDecay: number
 	accessCount: number
 	combinedScore: number
+	/**
+	 * Source-event scope. Phase 2 remfix HIGH-2 threads scope/scopeRef from
+	 * the originating event through the candidate so cross-scope merges become
+	 * impossible by construction, rather than relying on the caller's
+	 * `ConsolidationOptions.scope`.
+	 */
+	scope?: MemoryScope
+	scopeRef?: string
 }
 
 export type ConsolidationOptions = {
