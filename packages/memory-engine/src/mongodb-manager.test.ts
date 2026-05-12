@@ -1903,6 +1903,277 @@ describe("searchV2", () => {
 		// and return results (the scoring is ranking-only)
 		expect(result.results.length).toBeGreaterThan(0)
 	})
+
+	it("uses MongoDB Search temporal coverage lane for temporal questions", async () => {
+		const previousMode = process.env.MEMONGO_BENCHMARK_TEMPORAL_COVERAGE_MODE
+		process.env.MEMONGO_BENCHMARK_TEMPORAL_COVERAGE_MODE = "enabled"
+		try {
+			vi.mocked(planRetrieval).mockReturnValue({
+				paths: ["raw-window"],
+				confidence: "high",
+				reasoning: "temporal coverage query",
+			})
+			vi.mocked(crossEncoderRerank).mockImplementation(async ({ results }) => ({
+				results: [...results].toReversed(),
+				reranked: true,
+				latencyMs: 1,
+			}))
+
+			vi.mocked(getEventsByTimeRange).mockResolvedValue([
+				{
+					_id: "evt-direct",
+					eventId: "evt-direct",
+					body: "I attended a guided tour at the Natural History Museum yesterday with my dad.",
+					role: "user",
+					timestamp: new Date("2023-02-18T04:22:00Z"),
+					agentId: "agent-1",
+					scope: "agent",
+					scopeRef: "agent:agent-1",
+					sessionId: "answer_f4ea84fb_1",
+					channel: "default",
+				},
+			])
+
+			const aggregate = vi.fn().mockReturnValue({
+				toArray: vi.fn().mockResolvedValue([
+					{
+						eventId: "evt-history",
+						body: "I learned about Petra in a lecture at the History Museum about ancient civilizations this month.",
+						sessionId: "answer_f4ea84fb_2",
+						timestamp: new Date("2023-01-11T10:24:00Z"),
+						scope: "agent",
+						scopeRef: "agent:agent-1",
+						score: 0.8,
+					},
+					{
+						eventId: "evt-science",
+						body: "I went to the Science Museum with a friend who is a chemistry professor.",
+						sessionId: "answer_f4ea84fb_3",
+						timestamp: new Date("2022-10-22T18:38:00Z"),
+						scope: "agent",
+						scopeRef: "agent:agent-1",
+						score: 0.7,
+					},
+				]),
+			})
+			const find = vi.fn().mockReturnValue({
+				toArray: vi.fn().mockResolvedValue([
+					{
+						eventId: "evt-history",
+						body: "I learned about Petra in a lecture at the History Museum about ancient civilizations this month.",
+						sessionId: "answer_f4ea84fb_2",
+						timestamp: new Date("2023-01-11T10:24:00Z"),
+						scope: "agent",
+						scopeRef: "agent:agent-1",
+					},
+					{
+						eventId: "evt-science",
+						body: "I went to the Science Museum with a friend who is a chemistry professor.",
+						sessionId: "answer_f4ea84fb_3",
+						timestamp: new Date("2022-10-22T18:38:00Z"),
+						scope: "agent",
+						scopeRef: "agent:agent-1",
+					},
+				]),
+			})
+			vi.mocked(eventsCollection).mockReturnValue({
+				aggregate,
+				find,
+			} as never)
+
+			const questionDate = new Date("2023-03-25T17:18:00Z")
+			const result = await searchV2(
+				fakeDb,
+				fakePrefix,
+				"How many months have passed since I last visited a museum with a friend?",
+				"agent-1",
+				{
+					availablePaths: new Set(["raw-window"]),
+					maxResults: 10,
+					searchOptions: {
+						allowHybridBackstop: false,
+						questionDate,
+						rerankConfig: {
+							enabled: true,
+							model: "rerank-2.5-lite",
+							topN: 10,
+							minScore: 0,
+							voyageApiKey: "test-key",
+						},
+					},
+				},
+			)
+
+			expect(aggregate).toHaveBeenCalled()
+			expect(find).toHaveBeenCalledOnce()
+			const pipeline = aggregate.mock.calls
+				.map((call) => call[0] as Record<string, any>[])
+				.find(
+					(candidate) =>
+						candidate[0]?.$search?.index === `${fakePrefix}events_text` &&
+						candidate[0]?.$search?.compound?.should?.some(
+							(clause: Record<string, any>) => clause.near,
+						),
+				)
+			expect(pipeline).toBeDefined()
+			const searchStage = pipeline[0]?.$search
+			expect(searchStage.index).toBe(`${fakePrefix}events_text`)
+			expect(searchStage.compound.must[0].text.query).toContain("museum")
+			expect(searchStage.compound.filter).toContainEqual({
+				range: { path: "timestamp", lte: questionDate },
+			})
+			const nearClause = searchStage.compound.should.find(
+				(clause: Record<string, any>) => clause.near,
+			)
+			expect(nearClause?.near).toMatchObject({
+				path: "timestamp",
+				origin: questionDate,
+			})
+			expect(crossEncoderRerank).toHaveBeenCalledOnce()
+			const rerankInput = vi.mocked(crossEncoderRerank).mock.calls[0]?.[0] as
+				| { results: MemorySearchResult[] }
+				| undefined
+			expect(
+				rerankInput?.results.some(
+					(entry) => entry.provenance?.temporalTimeline === true,
+				),
+			).toBe(false)
+			const timeline = result.results.find(
+				(entry) => entry.provenance?.temporalTimeline === true,
+			)
+			expect(timeline?.provenance?.temporalTimeline).toBe(true)
+			expect(timeline?.sourceEventIds).toEqual(
+				expect.arrayContaining(["evt-history", "evt-science"]),
+			)
+			expect(result.results[0]?.provenance?.temporalTimeline).not.toBe(true)
+			expect(result.results.map((entry) => entry.sessionId)).toContain(
+				"answer_f4ea84fb_2",
+			)
+			expect(result.results.map((entry) => entry.sessionId)).toContain(
+				"answer_f4ea84fb_3",
+			)
+		} finally {
+			if (previousMode === undefined) {
+				delete process.env.MEMONGO_BENCHMARK_TEMPORAL_COVERAGE_MODE
+			} else {
+				process.env.MEMONGO_BENCHMARK_TEMPORAL_COVERAGE_MODE = previousMode
+			}
+		}
+	})
+
+	it("boosts user-authored compatibility evidence for recommendation memory queries", async () => {
+		const previousMode = process.env.MEMONGO_BENCHMARK_TURN_PRECISION_MODE
+		process.env.MEMONGO_BENCHMARK_TURN_PRECISION_MODE = "enabled"
+		try {
+			vi.mocked(planRetrieval).mockReturnValue({
+				paths: ["raw-window"],
+				confidence: "high",
+				reasoning: "recommendation memory query",
+			})
+			vi.mocked(getEventsByTimeRange).mockResolvedValue([
+				{
+					_id: "evt-seed",
+					eventId: "evt-seed",
+					body: "Photography setup context for Sony A7R IV accessories.",
+					role: "user",
+					timestamp: new Date("2023-05-30T10:00:00Z"),
+					agentId: "agent-1",
+					scope: "agent",
+					scopeRef: "agent:agent-1",
+					sessionId: "photo-session",
+					channel: "default",
+				},
+			])
+			const aggregate = vi.fn().mockReturnValue({
+				toArray: vi.fn().mockResolvedValue([
+					{
+						eventId: "evt-user-distractor",
+						body: "What are good external battery packs for my Sony A7R IV?",
+						role: "user",
+						sessionId: "photo-session",
+						timestamp: new Date("2023-05-30T10:01:00Z"),
+						scope: "agent",
+						scopeRef: "agent:agent-1",
+						score: 0.9,
+					},
+					{
+						eventId: "evt-user-compatible",
+						body: "I'm looking to upgrade my camera flash. Can you recommend options compatible with my Sony A7R IV?",
+						role: "user",
+						sessionId: "photo-session",
+						timestamp: new Date("2023-05-30T10:02:00Z"),
+						scope: "agent",
+						scopeRef: "agent:agent-1",
+						score: 0.8,
+					},
+					{
+						eventId: "evt-assistant-recommendation",
+						body: "The Godox V1 comes with a soft case, but a padded pouch would complement your photography setup.",
+						role: "assistant",
+						sessionId: "photo-session",
+						timestamp: new Date("2023-05-30T10:03:00Z"),
+						scope: "agent",
+						scopeRef: "agent:agent-1",
+						score: 0.7,
+					},
+				]),
+			})
+			vi.mocked(crossEncoderRerank).mockImplementation(async ({ results }) => ({
+				results: results
+					.map((entry) => ({
+						...entry,
+						score:
+							entry.path === "events/evt-assistant-recommendation"
+								? 0.63
+								: entry.path === "events/evt-user-compatible"
+									? 0.57
+									: 0.52,
+					}))
+					.toSorted((left, right) => right.score - left.score),
+				reranked: true,
+				latencyMs: 1,
+			}))
+			vi.mocked(eventsCollection).mockReturnValue({ aggregate } as never)
+
+			const result = await searchV2(
+				fakeDb,
+				fakePrefix,
+				"Can you suggest accessories that complement my photography setup?",
+				"agent-1",
+				{
+					availablePaths: new Set(["raw-window"]),
+					searchOptions: {
+						allowHybridBackstop: false,
+						capabilities: {
+							vectorSearch: false,
+							textSearch: true,
+							scoreFusion: false,
+							rankFusion: false,
+						},
+						scope: "agent",
+						scopeRef: "agent:agent-1",
+						rerankConfig: {
+							enabled: true,
+							model: "rerank-2.5-lite",
+							topN: 10,
+							minScore: 0,
+							voyageApiKey: "test-key",
+						},
+					},
+				},
+			)
+
+			expect(crossEncoderRerank).toHaveBeenCalledOnce()
+			expect(result.results[0]?.path).toBe("events/evt-user-compatible")
+			expect(result.results[0]?.provenance?.eventRole).toBe("user")
+		} finally {
+			if (previousMode === undefined) {
+				delete process.env.MEMONGO_BENCHMARK_TURN_PRECISION_MODE
+			} else {
+				process.env.MEMONGO_BENCHMARK_TURN_PRECISION_MODE = previousMode
+			}
+		}
+	})
 })
 
 // ---------------------------------------------------------------------------
