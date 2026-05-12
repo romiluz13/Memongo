@@ -116,6 +116,7 @@ export type RelevanceBenchmarkResult = {
 	queryGovernance?: QueryGovernanceReport
 	benchmarkReport?: MemoryBenchmarkRunReport
 	missLedger?: import("./mongodb-benchmark-runner.js").BenchmarkMissLedgerEntry[]
+	caseDiagnostics?: import("./mongodb-benchmark-runner.js").BenchmarkCaseDiagnosticEntry[]
 }
 
 type RecentSignal = {

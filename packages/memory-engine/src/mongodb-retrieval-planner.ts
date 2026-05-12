@@ -201,6 +201,29 @@ const PROCEDURAL_KEYWORDS = [
 ]
 const PROCEDURAL_REGEXES = buildKeywordRegexes(PROCEDURAL_KEYWORDS)
 
+const CONVERSATION_EVIDENCE_KEYWORDS = [
+	"previous conversation",
+	"our previous conversation",
+	"earlier conversation",
+	"past conversation",
+	"last conversation",
+	"we discussed",
+	"we talked",
+	"i said",
+	"i told you",
+	"did i",
+	"did we",
+	"have i",
+	"have we",
+	"how many",
+	"remind me",
+	"appointment",
+	"appointments",
+]
+const CONVERSATION_EVIDENCE_REGEXES = buildKeywordRegexes(
+	CONVERSATION_EVIDENCE_KEYWORDS,
+)
+
 // Deterministic tie-breaking priority (lower = higher priority)
 const PATH_PRIORITY: Record<RetrievalPath, number> = {
 	"active-critical": 0,
@@ -596,6 +619,13 @@ export function planRetrieval(
 			reasons.push("procedural/workflow keywords detected")
 		}
 
+		if (CONVERSATION_EVIDENCE_REGEXES.some((re) => re.test(query))) {
+			scores.hybrid += 4
+			scores["raw-window"] += 3
+			scores.episodic += 1
+			reasons.push("conversation evidence recall detected")
+		}
+
 		if (context.intent?.structuredScope) {
 			scores.structured += 4
 			reasons.push("structured scope requested")
@@ -779,4 +809,46 @@ export function classifyRetrievalQuery(params: {
 		return "multi-hop"
 	}
 	return "direct"
+}
+
+/**
+ * Task 2.R2 Sub-path A: resolves `$vectorSearch.numCandidates` from the caller
+ * `limit` per the user-approved table (Phase 0 Task 0.5 Recommended Default #1):
+ *
+ *   limit=5  → 200
+ *   limit=10 → 200
+ *   limit=20 → 400
+ *   limit=30 → 600
+ *
+ * Intermediate limits scale by 20× (MongoDB MCP Finding #2 baseline:
+ * `numCandidates ≥ 20 × limit` —
+ * mongodb.com/docs/vector-search/query/aggregation-stages/vector-search-stage).
+ * Below the 200 floor we clamp up to 200. `override` wins when provided (Gate 5
+ * experimentation). Non-positive or non-finite limits are treated as the floor.
+ */
+export function resolveNumCandidates(limit: number, override?: number): number {
+	if (
+		typeof override === "number" &&
+		Number.isFinite(override) &&
+		override > 0
+	) {
+		return Math.floor(override)
+	}
+	if (!Number.isFinite(limit) || limit <= 0) {
+		return 200
+	}
+	// Discrete table lookup for the four approved values so we match the
+	// sign-off doc exactly even if the 20× rule nudges boundaries.
+	const discrete: Record<number, number> = {
+		5: 200,
+		10: 200,
+		20: 400,
+		30: 600,
+	}
+	const flooredLimit = Math.floor(limit)
+	if (discrete[flooredLimit] !== undefined) {
+		return discrete[flooredLimit]
+	}
+	// Otherwise: 20× limit, with a 200 floor.
+	return Math.max(200, flooredLimit * 20)
 }

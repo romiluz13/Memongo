@@ -135,11 +135,60 @@ type MergeableResult = {
 	[key: string]: unknown
 }
 
+function isProtectedAggregateResult(result: MergeableResult): boolean {
+	const provenance = result.provenance
+	return (
+		Boolean(provenance) &&
+		typeof provenance === "object" &&
+		(provenance as { temporalTimeline?: unknown }).temporalTimeline === true
+	)
+}
+
+function protectedAggregateKey(result: MergeableResult): string {
+	if (isProtectedAggregateResult(result)) return "temporalTimeline"
+	return resultIdentityKey(result)
+}
+
+function resultIdentityKey(result: MergeableResult): string {
+	if (typeof result.path === "string" && result.path.trim().length > 0) {
+		return `path:${result.path.trim()}`
+	}
+	if (
+		typeof result.canonicalId === "string" &&
+		result.canonicalId.trim().length > 0
+	) {
+		return `canonical:${result.canonicalId.trim()}`
+	}
+	if (
+		typeof result.filePath === "string" &&
+		result.filePath.trim().length > 0
+	) {
+		return `file:${result.filePath.trim()}`
+	}
+	return `snippet:${result.snippet}`
+}
+
+function collectStringArray(value: unknown): string[] {
+	return Array.isArray(value)
+		? value.filter((item): item is string => typeof item === "string")
+		: []
+}
+
+function mergeOrderedStrings(
+	primary: string[],
+	secondary: Set<string>,
+): Set<string> {
+	const merged = new Set<string>()
+	for (const value of primary) merged.add(value)
+	for (const value of secondary) merged.add(value)
+	return merged
+}
+
 /**
  * Merge results from multiple sub-query searches using Reciprocal Rank Fusion.
  *
  * Each result set is treated as a ranked list. Results appearing in multiple
- * lists accumulate RRF scores. Deduplication is by `path`.
+ * lists accumulate RRF scores. Deduplication uses a stable result identity.
  */
 export function mergeMultiQueryResults(
 	resultSets: MergeableResult[][],
@@ -151,19 +200,63 @@ export function mergeMultiQueryResults(
 		string,
 		{ totalRrf: number; bestResult: MergeableResult }
 	>()
+	const protectedMap = new Map<
+		string,
+		{
+			result: MergeableResult
+			sourceEventIds: Set<string>
+			sessionIds: Set<string>
+		}
+	>()
 
 	for (const results of resultSets) {
 		for (let rank = 0; rank < results.length; rank++) {
 			const result = results[rank]
+			if (isProtectedAggregateResult(result)) {
+				const key = protectedAggregateKey(result)
+				const existing = protectedMap.get(key)
+				const provenance =
+					result.provenance && typeof result.provenance === "object"
+						? (result.provenance as Record<string, unknown>)
+						: {}
+				if (!existing) {
+					protectedMap.set(key, {
+						result,
+						sourceEventIds: new Set(collectStringArray(result.sourceEventIds)),
+						sessionIds: new Set(collectStringArray(provenance.sessionIds)),
+					})
+				} else {
+					const sourceEventIds = collectStringArray(result.sourceEventIds)
+					const sessionIds = collectStringArray(provenance.sessionIds)
+					for (const eventId of sourceEventIds) {
+						existing.sourceEventIds.add(eventId)
+					}
+					for (const sessionId of sessionIds) {
+						existing.sessionIds.add(sessionId)
+					}
+					if (result.score > existing.result.score) {
+						existing.result = result
+						existing.sourceEventIds = mergeOrderedStrings(
+							sourceEventIds,
+							existing.sourceEventIds,
+						)
+						existing.sessionIds = mergeOrderedStrings(
+							sessionIds,
+							existing.sessionIds,
+						)
+					}
+				}
+			}
 			const rrf = rrfScore(rank + 1) // 1-based rank
-			const existing = scoreMap.get(result.path)
+			const key = resultIdentityKey(result)
+			const existing = scoreMap.get(key)
 			if (existing) {
 				existing.totalRrf += rrf
 				if (result.score > existing.bestResult.score) {
 					existing.bestResult = result
 				}
 			} else {
-				scoreMap.set(result.path, {
+				scoreMap.set(key, {
 					totalRrf: rrf,
 					bestResult: result,
 				})
@@ -171,11 +264,28 @@ export function mergeMultiQueryResults(
 		}
 	}
 
-	return Array.from(scoreMap.values())
+	const protectedResults = Array.from(protectedMap.values())
+		.map((entry) => ({
+			...entry.result,
+			sourceEventIds: Array.from(entry.sourceEventIds),
+			provenance: {
+				...((entry.result.provenance &&
+				typeof entry.result.provenance === "object"
+					? entry.result.provenance
+					: {}) as Record<string, unknown>),
+				sessionIds: Array.from(entry.sessionIds),
+			},
+		}))
+		.toSorted((left, right) => right.score - left.score)
+		.slice(0, 1)
+	const protectedKeys = new Set(protectedResults.map(resultIdentityKey))
+	const fusedResults = Array.from(scoreMap.values())
 		.sort((a, b) => b.totalRrf - a.totalRrf)
-		.slice(0, topK)
 		.map((entry) => ({
 			...entry.bestResult,
 			score: entry.totalRrf,
 		}))
+		.filter((result) => !protectedKeys.has(resultIdentityKey(result)))
+
+	return [...protectedResults, ...fusedResults].slice(0, topK)
 }

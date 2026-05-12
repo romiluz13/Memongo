@@ -22,14 +22,16 @@
 
 import { randomUUID } from "node:crypto"
 import type { Db, Document } from "mongodb"
-import { createSubsystemLogger } from "@memongo/lib"
+import { createSubsystemLogger, type MemoryScope } from "@memongo/lib"
 import { scanNovelty } from "./mongodb-novelty.js"
 import { traceReasoningChain } from "./mongodb-reasoning-chain.js"
 import { computeImportanceDecay } from "./mongodb-trust.js"
 import {
 	eventsCollection,
 	consolidationRunsCollection,
+	memoryQuarantineCollection,
 } from "./mongodb-schema.js"
+import { classifyInjection } from "./mongodb-injection-classifier.js"
 import { extractAndUpsertEntities } from "./mongodb-graph.js"
 import {
 	writeStructuredMemory,
@@ -471,6 +473,15 @@ export async function consolidateMemory(params: {
 			importanceWeight * impDecay +
 			accessWeight * normalizedAccess
 
+		// Phase 2 remfix HIGH-2: source-event scope/scopeRef flow through the
+		// candidate so the downstream similarity filter + canonical write can
+		// never merge memories from different scopes, even if the caller
+		// passed an incorrect or omitted ConsolidationOptions.scope.
+		const eventScope =
+			typeof event.scope === "string" ? (event.scope as MemoryScope) : undefined
+		const eventScopeRef =
+			typeof event.scopeRef === "string" ? event.scopeRef : undefined
+
 		return {
 			eventId: event.eventId as string,
 			body: (event.body as string) ?? "",
@@ -480,6 +491,8 @@ export async function consolidateMemory(params: {
 			importanceDecay: impDecay,
 			accessCount: rawAccess,
 			combinedScore,
+			...(eventScope ? { scope: eventScope } : {}),
+			...(eventScopeRef ? { scopeRef: eventScopeRef } : {}),
 		}
 	})
 
@@ -497,7 +510,66 @@ export async function consolidateMemory(params: {
 	let conflictsResolved = 0
 
 	for (const candidate of filteredCandidates) {
+		// Phase 2 remfix HIGH-2: derive scope isolation from the CANDIDATE
+		// event, not the caller's ConsolidationOptions. If the caller
+		// passed an options.scope/scopeRef that disagrees with the
+		// candidate's, log.warn and skip rather than silently producing
+		// a cross-scope consolidation or aborting the whole run.
+		const candidateScope = candidate.scope ?? options?.scope
+		const candidateScopeRef = candidate.scopeRef ?? options?.scopeRef
+		const strictScopeMismatch = process.env.MEMONGO_BENCHMARK_STRICT === "1"
+
+		if (
+			options?.scope &&
+			candidate.scope &&
+			options.scope !== candidate.scope
+		) {
+			const message = `consolidator scope mismatch: options.scope=${options.scope} but candidate.scope=${candidate.scope} (event=${candidate.eventId})`
+			if (strictScopeMismatch) {
+				throw new Error(message)
+			}
+			log.warn(`${message} - skipping to prevent cross-scope write`)
+			continue
+		}
+		if (
+			options?.scopeRef &&
+			candidate.scopeRef &&
+			options.scopeRef !== candidate.scopeRef
+		) {
+			const message = `consolidator scopeRef mismatch: options.scopeRef=${options.scopeRef} but candidate.scopeRef=${candidate.scopeRef} (event=${candidate.eventId})`
+			if (strictScopeMismatch) {
+				throw new Error(message)
+			}
+			log.warn(`${message} - skipping to prevent cross-scope write`)
+			continue
+		}
+
 		try {
+			// Task 2.SE-2 (ADR-006): injection / memory-poisoning defense.
+			// Route injection-shaped candidates to memory_quarantine with
+			// status="pending-review" BEFORE any pattern extraction or canonical
+			// write. Tier-1 classifier is always on; tier-2 LLM is off by default.
+			const injectionVerdict = classifyInjection({ content: candidate.body })
+			if (injectionVerdict.classification === "injection-likely") {
+				await memoryQuarantineCollection(db, prefix).insertOne({
+					quarantineId: randomUUID(),
+					agentId,
+					...(candidateScope ? { scope: candidateScope } : {}),
+					...(candidateScopeRef ? { scopeRef: candidateScopeRef } : {}),
+					content: candidate.body,
+					classification: "injection-likely",
+					tier: injectionVerdict.tier,
+					matchedPatterns: injectionVerdict.matchedPatterns,
+					status: "pending-review",
+					createdAt: new Date(),
+					sourceEventIds: [candidate.eventId],
+				})
+				log.warn(
+					`quarantined candidate event=${candidate.eventId}: injection patterns=${injectionVerdict.matchedPatterns.join(",")}`,
+				)
+				continue
+			}
+
 			const match = matchPatterns(candidate.body)
 			if (!match) {
 				continue
@@ -533,11 +605,12 @@ export async function consolidateMemory(params: {
 				continue
 			}
 
-			// Similarity check via $vectorSearch — decide ADD vs NOOP
-			// Include scope/scopeRef in filter to isolate similarity within same scope
+			// Similarity check via $vectorSearch — decide ADD vs NOOP.
+			// Scope is isolated to the SAME scope as the candidate so two
+			// events in different scopes can never be merged by the dreamer.
 			const simFilter: Document = { agentId }
-			if (options?.scope) simFilter.scope = options.scope
-			if (options?.scopeRef) simFilter.scopeRef = options.scopeRef
+			if (candidateScope) simFilter.scope = candidateScope
+			if (candidateScopeRef) simFilter.scopeRef = candidateScopeRef
 
 			let decision: "ADD" | "NOOP" = "ADD"
 			try {
@@ -590,7 +663,12 @@ export async function consolidateMemory(params: {
 				continue
 			}
 
-			// Promote to structured memory (ADD) — preserve scope isolation
+			// Promote to structured memory (ADD) — preserve scope isolation by
+			// writing the CANDIDATE's scope/scopeRef, not the options. Phase 2
+			// remfix HIGH-2: since the source event is what generated the
+			// structured fact, the fact inherits the source's scope. If the
+			// caller's options disagreed with the candidate, we already threw
+			// above.
 			await writeStructuredMemory({
 				db,
 				prefix,
@@ -603,9 +681,9 @@ export async function consolidateMemory(params: {
 					confidence: CONFIDENCE_BY_SOURCE.agent_extracted,
 					sourceAgent: { id: agentId, name: "dreamer", runId },
 					sourceEventIds: [candidate.eventId],
-					...(options?.scope
+					...(candidateScope
 						? {
-								scope: options.scope as
+								scope: candidateScope as
 									| "session"
 									| "user"
 									| "agent"
@@ -614,7 +692,7 @@ export async function consolidateMemory(params: {
 									| "global",
 							}
 						: {}),
-					...(options?.scopeRef ? { scopeRef: options.scopeRef } : {}),
+					...(candidateScopeRef ? { scopeRef: candidateScopeRef } : {}),
 				},
 				embeddingMode: "automated",
 			})

@@ -1,12 +1,20 @@
+import fc from "fast-check"
 import { describe, expect, it } from "vitest"
 import type { MemorySearchResult } from "./types.js"
 import {
 	annotateResultsWithTrust,
+	computeImportanceDecay,
 	computeResultTrust,
 	rerankResultsByTrust,
 	shouldAbstainForLowTrust,
 	summarizeTrust,
 } from "./mongodb-trust.js"
+
+/**
+ * Phase 2 remfix CRIT-2: fast-check seed pinned to project default.
+ * Evidence doc: docs/benchmarks/capability-audit/importance-decay-evidence.md
+ */
+const FAST_CHECK_SEED = 20260512
 
 function makeResult(
 	overrides: Partial<MemorySearchResult> = {},
@@ -324,5 +332,111 @@ describe("shouldAbstainForLowTrust", () => {
 				request: { query: "what happened today" },
 			}),
 		).toBeNull()
+	})
+})
+
+// ===========================================================================
+// Phase 2 remfix CRIT-2: importance-decay fast-check property tests.
+//
+// The capability-audit evidence document claims three properties at
+// seed=20260512. Before this remfix the test file had zero fc.assert calls,
+// so the claims were undefended. These tests defend:
+//
+//   Property A (permanent never decays): for any temporalScope in
+//     {"permanent", "ongoing"}, the decayed importance equals the clamped
+//     base importance regardless of how much time has passed since createdAt.
+//
+//   Property B (range): for any valid non-permanent input, the result is in
+//     the closed interval [0, 1]. The implementation clamps importance to
+//     [0, 1] before applying exponential decay, so inputs > 1 get clamped to
+//     1.0 first.
+//
+//   Property C (monotonic without access): for fixed baseImportance and no
+//     access, the decay function is non-increasing as daysSinceCreation grows.
+// ===========================================================================
+
+describe("computeImportanceDecay fast-check properties (CRIT-2)", () => {
+	it("Property A: permanent/ongoing temporalScope never decays", () => {
+		fc.assert(
+			fc.property(
+				fc.double({ min: 0, max: 1, noNaN: true }),
+				fc.integer({ min: 0, max: 365 * 10 }),
+				fc.constantFrom("permanent" as const, "ongoing" as const),
+				(importance, daysSinceCreate, temporalScope) => {
+					const now = new Date("2026-05-12T00:00:00.000Z")
+					const createdAt = new Date(
+						now.getTime() - daysSinceCreate * 86_400_000,
+					)
+					const result = computeImportanceDecay(
+						importance,
+						createdAt,
+						now,
+						7,
+						temporalScope,
+					)
+					// Result equals the clamp of the input (raw path).
+					expect(result).toBe(Math.min(1, Math.max(0, importance)))
+				},
+			),
+			{ seed: FAST_CHECK_SEED, numRuns: 500 },
+		)
+	})
+
+	it("Property B: non-permanent results are always in [0, 1]", () => {
+		fc.assert(
+			fc.property(
+				fc.double({ min: -5, max: 5, noNaN: true }),
+				fc.integer({ min: 0, max: 365 * 10 }),
+				fc.double({ min: 0.1, max: 365, noNaN: true }),
+				(importance, daysSinceCreate, halfLifeDays) => {
+					const now = new Date("2026-05-12T00:00:00.000Z")
+					const createdAt = new Date(
+						now.getTime() - daysSinceCreate * 86_400_000,
+					)
+					const result = computeImportanceDecay(
+						importance,
+						createdAt,
+						now,
+						halfLifeDays,
+					)
+					expect(result).toBeGreaterThanOrEqual(0)
+					expect(result).toBeLessThanOrEqual(1)
+					expect(Number.isFinite(result)).toBe(true)
+				},
+			),
+			{ seed: FAST_CHECK_SEED, numRuns: 500 },
+		)
+	})
+
+	it("Property C: non-increasing as daysSinceCreate grows (no access)", () => {
+		fc.assert(
+			fc.property(
+				fc.double({ min: 0, max: 1, noNaN: true }),
+				fc.integer({ min: 0, max: 365 }),
+				fc.integer({ min: 1, max: 365 }),
+				fc.double({ min: 0.5, max: 30, noNaN: true }),
+				(importance, day0, dayDelta, halfLifeDays) => {
+					const now = new Date("2026-05-12T00:00:00.000Z")
+					const earlier = new Date(now.getTime() - day0 * 86_400_000)
+					const later = new Date(now.getTime() - (day0 + dayDelta) * 86_400_000)
+					const decayEarlier = computeImportanceDecay(
+						importance,
+						earlier,
+						now,
+						halfLifeDays,
+					)
+					const decayLater = computeImportanceDecay(
+						importance,
+						later,
+						now,
+						halfLifeDays,
+					)
+					// `later` is older (smaller timestamp) so its daysSinceCreation
+					// is LARGER than `earlier`. Monotonicity: older => smaller decay.
+					expect(decayLater).toBeLessThanOrEqual(decayEarlier + 1e-12)
+				},
+			),
+			{ seed: FAST_CHECK_SEED, numRuns: 500 },
+		)
 	})
 })

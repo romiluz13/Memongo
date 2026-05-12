@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, afterEach } from "vitest"
 import {
 	planRetrieval,
+	resolveNumCandidates,
 	resolveTimeRangePreset,
 	type RetrievalPath,
 	type RetrievalContext,
@@ -89,6 +90,25 @@ describe("mongodb-retrieval-planner", () => {
 			makeContext(),
 		)
 		expect(plan.paths[0]).toBe("procedural")
+	})
+
+	it("routes previous-conversation recall to conversation evidence first", () => {
+		const plan = planRetrieval(
+			"remind me what we discussed in our previous conversation",
+			makeContext(),
+		)
+		expect(plan.paths[0]).toBe("hybrid")
+		expect(plan.paths.slice(0, 3)).toContain("raw-window")
+		expect(plan.reasoning).toContain("conversation evidence recall")
+	})
+
+	it("keeps count-style personal recall on conversation evidence lanes", () => {
+		const plan = planRetrieval(
+			"how many doctor's appointments did I go to in March?",
+			makeContext(),
+		)
+		expect(plan.paths[0]).toBe("hybrid")
+		expect(plan.paths.slice(0, 3)).toContain("raw-window")
 	})
 
 	it("boosts structured retrieval when explicit structured scope is provided", () => {
@@ -393,5 +413,36 @@ describe("mongodb-retrieval-planner", () => {
 		const range = resolveTimeRangePreset("last-7d")
 		expect(range.start.toISOString()).toBe("2026-03-13T12:00:00.000Z")
 		expect(range.end.toISOString()).toBe("2026-03-20T12:00:00.000Z")
+	})
+
+	describe("resolveNumCandidates (Task 2.R2 Sub-path A)", () => {
+		// User-approved table (Phase 0 Task 0.5 Recommended Default #1):
+		// limit=5 → 200, limit=10 → 200, limit=20 → 400, limit=30 → 600.
+		// Cites MongoDB MCP Finding #2: numCandidates ≥ 20 × limit baseline,
+		// mongodb.com/docs/vector-search/query/aggregation-stages/vector-search-stage.
+		it("returns 200 for limit=5 (20x floor bumped to 200 minimum)", () => {
+			expect(resolveNumCandidates(5)).toBe(200)
+		})
+		it("returns 200 for limit=10", () => {
+			expect(resolveNumCandidates(10)).toBe(200)
+		})
+		it("returns 400 for limit=20", () => {
+			expect(resolveNumCandidates(20)).toBe(400)
+		})
+		it("returns 600 for limit=30", () => {
+			expect(resolveNumCandidates(30)).toBe(600)
+		})
+		it("respects override via second argument (Gate 5 experimentation)", () => {
+			expect(resolveNumCandidates(10, 888)).toBe(888)
+		})
+		it("interpolates for intermediate limit values via 20x rule", () => {
+			// limit=15 → 15*20=300, above the 200 floor, below the 20-bucket 400.
+			expect(resolveNumCandidates(15)).toBe(300)
+		})
+		it("clamps invalid (non-positive or non-finite) limits to the 200 floor", () => {
+			expect(resolveNumCandidates(0)).toBe(200)
+			expect(resolveNumCandidates(-5)).toBe(200)
+			expect(resolveNumCandidates(Number.NaN)).toBe(200)
+		})
 	})
 })
