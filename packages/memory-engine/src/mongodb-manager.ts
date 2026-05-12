@@ -322,6 +322,1094 @@ export type RelevanceExplainResult = {
 const log = createSubsystemLogger("memory:mongodb")
 const CHANGE_STREAM_RESUME_TOKEN_META_KEY = "change_stream_resume_token"
 
+function isStrictSearchReadinessMode(): boolean {
+	return (
+		process.env.MEMONGO_BENCHMARK_STRICT === "1" ||
+		process.env.MEMONGO_STRICT_SEARCH_INDEX_READY === "1"
+	)
+}
+
+function isBenchmarkTurnPrecisionMode(): boolean {
+	return process.env.MEMONGO_BENCHMARK_TURN_PRECISION_MODE === "enabled"
+}
+
+function isTemporalCoverageMode(): boolean {
+	return (
+		process.env.MEMONGO_TEMPORAL_COVERAGE_MODE === "enabled" ||
+		process.env.MEMONGO_BENCHMARK_TEMPORAL_COVERAGE_MODE === "enabled"
+	)
+}
+
+function buildSearchFilterEquals(
+	path: string,
+	value: unknown,
+): Document | null {
+	if (Array.isArray(value)) {
+		return value.length > 0 ? { in: { path, value } } : null
+	}
+	if (typeof value === "string" && value.trim().length > 0) {
+		return { equals: { path, value } }
+	}
+	return null
+}
+
+function mapEventSearchDocToResult(
+	doc: Document,
+	lane: "turn-vector" | "turn-text",
+): MemorySearchResult | null {
+	const eventId = typeof doc.eventId === "string" ? doc.eventId.trim() : ""
+	const body = typeof doc.body === "string" ? doc.body : ""
+	if (!eventId || !body) return null
+	const score = typeof doc.score === "number" ? doc.score : 0
+	return {
+		path: `events/${eventId}`,
+		filePath: `events/${eventId}`,
+		startLine: 0,
+		endLine: 0,
+		score,
+		snippet: body.slice(0, 700),
+		source: "conversation",
+		sourceType: "conversation",
+		canonicalId: `event:${eventId}`,
+		...(typeof doc.sessionId === "string" ? { sessionId: doc.sessionId } : {}),
+		...(doc.timestamp instanceof Date ? { timestamp: doc.timestamp } : {}),
+		...(typeof doc.scope === "string"
+			? { scope: doc.scope as MemoryScope }
+			: {}),
+		...(typeof doc.scopeRef === "string" ? { scopeRef: doc.scopeRef } : {}),
+		sourceEventIds: [eventId],
+		provenance: {
+			lane,
+			turnPrecisionRerank: true,
+			...(typeof doc.role === "string" ? { eventRole: doc.role } : {}),
+		},
+	}
+}
+
+function mergeTurnPrecisionResults(
+	resultSets: MemorySearchResult[][],
+): MemorySearchResult[] {
+	const byPath = new Map<string, MemorySearchResult & { rrfScore: number }>()
+	for (const results of resultSets) {
+		for (let index = 0; index < results.length; index++) {
+			const result = results[index]
+			const existing = byPath.get(result.path)
+			const score = rrfScore(index + 1)
+			if (existing) {
+				existing.rrfScore += score
+				existing.score = existing.rrfScore
+			} else {
+				byPath.set(result.path, { ...result, rrfScore: score, score })
+			}
+		}
+	}
+	return Array.from(byPath.values())
+		.toSorted((left, right) => right.rrfScore - left.rrfScore)
+		.map(({ rrfScore: _rrfScore, ...result }) => result)
+}
+
+const RECOMMENDATION_MEMORY_QUERY_RE =
+	/\b(?:suggest|suggestion|recommend|recommendation|accessor(?:y|ies)|complement|setup|prefer|preference)\b/i
+
+function turnPrecisionPreferenceSignalBoost(
+	query: string,
+	result: MemorySearchResult,
+): number {
+	if (!RECOMMENDATION_MEMORY_QUERY_RE.test(query)) {
+		return 0
+	}
+	if (result.provenance?.eventRole !== "user") {
+		return 0
+	}
+	const snippet = result.snippet.toLowerCase()
+	let boost = 0.04
+	if (
+		/\b(?:compatible|specifically designed|designed for|as a .* user)\b/i.test(
+			snippet,
+		)
+	) {
+		boost += 0.08
+	}
+	return boost
+}
+
+function applyPreferenceEvidenceBoostAfterRerank(
+	query: string,
+	results: MemorySearchResult[],
+): MemorySearchResult[] {
+	if (!RECOMMENDATION_MEMORY_QUERY_RE.test(query)) {
+		return results
+	}
+	return results
+		.map((result, index) => ({
+			result: {
+				...result,
+				score: result.score + turnPrecisionPreferenceSignalBoost(query, result),
+			},
+			index,
+		}))
+		.toSorted(
+			(left, right) =>
+				right.result.score - left.result.score || left.index - right.index,
+		)
+		.map(({ result }) => result)
+}
+
+function stripSessionSummaryTurnProvenance(
+	results: MemorySearchResult[],
+): MemorySearchResult[] {
+	return results.map((result) => {
+		if (!result.canonicalId?.startsWith("session-chunk/")) {
+			return result
+		}
+		const { sourceEventIds: _sourceEventIds, ...rest } = result
+		return {
+			...rest,
+			provenance: {
+				...(result.provenance ?? {}),
+				turnPrecisionSourceEventIdsSuppressed: true,
+			},
+		}
+	})
+}
+
+const TEMPORAL_COVERAGE_QUERY_RE =
+	/\b(?:last|latest|recent|recently|since|before|after|when|months?|years?|weeks?|days?|passed|ago|january|february|march|april|may|june|july|august|september|october|november|december)\b/i
+
+const CONVERSATION_EVIDENCE_QUERY_RE =
+	/\b(?:previous conversation|earlier conversation|past conversation|last conversation|we discussed|we talked|i said|i told you|did i|did we|have i|have we|how many|remind me|appointments?)\b/i
+
+const TEMPORAL_COVERAGE_STOP_WORDS = new Set([
+	"a",
+	"an",
+	"and",
+	"are",
+	"as",
+	"at",
+	"be",
+	"been",
+	"being",
+	"but",
+	"by",
+	"could",
+	"did",
+	"do",
+	"does",
+	"for",
+	"had",
+	"has",
+	"many",
+	"much",
+	"passed",
+	"since",
+	"last",
+	"latest",
+	"recent",
+	"recently",
+	"before",
+	"after",
+	"when",
+	"month",
+	"months",
+	"year",
+	"years",
+	"week",
+	"weeks",
+	"day",
+	"days",
+	"ago",
+	"have",
+	"how",
+	"i",
+	"in",
+	"is",
+	"it",
+	"its",
+	"may",
+	"me",
+	"might",
+	"my",
+	"not",
+	"of",
+	"on",
+	"or",
+	"our",
+	"should",
+	"so",
+	"that",
+	"the",
+	"their",
+	"these",
+	"they",
+	"this",
+	"those",
+	"to",
+	"user",
+	"was",
+	"we",
+	"were",
+	"what",
+	"where",
+	"which",
+	"who",
+	"whom",
+	"why",
+	"will",
+	"would",
+	"with",
+	"from",
+	"you",
+	"your",
+])
+
+const TEMPORAL_COVERAGE_WEAK_TERMS = new Set([
+	"go",
+	"goes",
+	"going",
+	"gone",
+	"visit",
+	"visited",
+	"visiting",
+	"visits",
+])
+
+const TEMPORAL_COVERAGE_TIMELINE_EVENT_LIMIT = 12
+
+function isTemporalCoverageQuery(
+	query: string,
+	questionDate: Date | undefined,
+): boolean {
+	return Boolean(
+		questionDate &&
+			!Number.isNaN(questionDate.getTime()) &&
+			TEMPORAL_COVERAGE_QUERY_RE.test(query),
+	)
+}
+
+function isConversationEvidenceQuery(
+	query: string,
+	questionDate: Date | undefined,
+): boolean {
+	return (
+		CONVERSATION_EVIDENCE_QUERY_RE.test(query) ||
+		isTemporalCoverageQuery(query, questionDate)
+	)
+}
+
+function expandTemporalCoverageTerm(term: string): string[] {
+	const terms = new Set([term])
+	if (term.endsWith("ies") && term.length > 4) {
+		terms.add(`${term.slice(0, -3)}y`)
+	}
+	if (term.endsWith("s") && term.length > 4) {
+		terms.add(term.slice(0, -1))
+	}
+	if (term.endsWith("ed") && term.length > 4) {
+		terms.add(term.slice(0, -2))
+	}
+	if (term.endsWith("ing") && term.length > 5) {
+		terms.add(term.slice(0, -3))
+	}
+	return Array.from(terms)
+}
+
+function extractTemporalCoverageTerms(query: string): string[] {
+	const rawTerms = query
+		.toLowerCase()
+		.split(/\s+/)
+		.map((word) => word.replace(/[^a-z0-9]/g, ""))
+		.filter((word) => word.length >= 3)
+		.filter((word) => !TEMPORAL_COVERAGE_STOP_WORDS.has(word))
+	const expanded = new Set<string>()
+	for (const term of rawTerms) {
+		for (const expandedTerm of expandTemporalCoverageTerm(term)) {
+			if (expandedTerm.length >= 3) expanded.add(expandedTerm)
+		}
+	}
+	return Array.from(expanded).slice(0, 12)
+}
+
+function extractTemporalCoverageAnchorTerms(terms: string[]): string[] {
+	const anchors = terms.filter(
+		(term) => !TEMPORAL_COVERAGE_WEAK_TERMS.has(term),
+	)
+	return anchors.length > 0 ? anchors : terms
+}
+
+function scoreTemporalCoverageSessionEvent(
+	body: string,
+	terms: string[],
+	timestamp: Date | undefined,
+	questionDate: Date | undefined,
+): number {
+	const bodyLower = body.toLowerCase()
+	const matches = terms.filter((term) => bodyLower.includes(term)).length
+	const overlap = terms.length > 0 ? matches / terms.length : 0
+	const temporalScore =
+		timestamp && questionDate
+			? Math.max(
+					0,
+					1 -
+						Math.abs(questionDate.getTime() - timestamp.getTime()) /
+							(365 * 24 * 60 * 60 * 1000),
+				)
+			: 0
+	return 0.04 + overlap * 0.08 + temporalScore * 0.02
+}
+
+function orderTemporalCoverageBySession(
+	results: MemorySearchResult[],
+): MemorySearchResult[] {
+	const bySession = new Map<string, MemorySearchResult[]>()
+	const withoutSession: MemorySearchResult[] = []
+	for (const result of results) {
+		if (!result.sessionId) {
+			withoutSession.push(result)
+			continue
+		}
+		const sessionResults = bySession.get(result.sessionId)
+		if (sessionResults) {
+			sessionResults.push(result)
+		} else {
+			bySession.set(result.sessionId, [result])
+		}
+	}
+	for (const sessionResults of bySession.values()) {
+		sessionResults.sort((left, right) => right.score - left.score)
+	}
+
+	const output: MemorySearchResult[] = []
+	let depth = 0
+	while (output.length < results.length) {
+		let added = false
+		for (const sessionResults of bySession.values()) {
+			const result = sessionResults[depth]
+			if (result) {
+				output.push(result)
+				added = true
+			}
+		}
+		if (!added) break
+		depth++
+	}
+	return [...output, ...withoutSession]
+}
+
+function temporalCoverageBucketKey(result: MemorySearchResult): string {
+	if (!result.timestamp) return "unknown"
+	return result.timestamp.toISOString().slice(0, 7)
+}
+
+function orderTemporalCoverageByTimeBucket(
+	results: MemorySearchResult[],
+): MemorySearchResult[] {
+	const byBucket = new Map<string, MemorySearchResult[]>()
+	for (const result of results) {
+		const key = temporalCoverageBucketKey(result)
+		const bucket = byBucket.get(key)
+		if (bucket) {
+			bucket.push(result)
+		} else {
+			byBucket.set(key, [result])
+		}
+	}
+
+	for (const bucket of byBucket.values()) {
+		bucket.sort((left, right) => right.score - left.score)
+	}
+
+	const bucketEntries = [...byBucket.entries()].sort(([left], [right]) => {
+		if (left === "unknown") return 1
+		if (right === "unknown") return -1
+		return right.localeCompare(left)
+	})
+	const output: MemorySearchResult[] = []
+	const seenPaths = new Set<string>()
+	for (let depth = 0; depth < 2; depth++) {
+		for (const [, bucket] of bucketEntries) {
+			const result = bucket[depth]
+			if (!result || seenPaths.has(result.path)) continue
+			output.push(result)
+			seenPaths.add(result.path)
+		}
+	}
+
+	for (const result of results) {
+		if (seenPaths.has(result.path)) continue
+		output.push(result)
+		seenPaths.add(result.path)
+	}
+	return output
+}
+
+function isUserAuthoredTemporalResult(result: MemorySearchResult): boolean {
+	return result.provenance?.eventRole === "user"
+}
+
+function chooseTemporalTimelinePrimary(
+	results: MemorySearchResult[],
+): MemorySearchResult {
+	return results.toSorted((left, right) => {
+		const roleDelta =
+			(isUserAuthoredTemporalResult(right) ? 1 : 0) -
+			(isUserAuthoredTemporalResult(left) ? 1 : 0)
+		if (roleDelta !== 0) return roleDelta
+		return right.score - left.score
+	})[0]
+}
+
+function orderTemporalTimelineSourceEvidence(
+	results: MemorySearchResult[],
+): MemorySearchResult[] {
+	const bySession = new Map<string, MemorySearchResult[]>()
+	const withoutSession: MemorySearchResult[] = []
+	for (const result of results) {
+		if (!result.sessionId) {
+			withoutSession.push(result)
+			continue
+		}
+		const sessionResults = bySession.get(result.sessionId)
+		if (sessionResults) {
+			sessionResults.push(result)
+		} else {
+			bySession.set(result.sessionId, [result])
+		}
+	}
+	const primaries = new Set<string>()
+	const primaryResults = Array.from(bySession.values()).map(
+		(sessionResults) => {
+			const primary = chooseTemporalTimelinePrimary(sessionResults)
+			primaries.add(primary.path)
+			return primary
+		},
+	)
+	return [
+		...primaryResults,
+		...withoutSession,
+		...results.filter((result) => !primaries.has(result.path)),
+	]
+}
+
+function buildTemporalCoverageTimelineResult(
+	query: string,
+	results: MemorySearchResult[],
+): MemorySearchResult | null {
+	const timelineResults = orderTemporalTimelineSourceEvidence(results)
+	const visibleTimelineResults = timelineResults.slice(
+		0,
+		TEMPORAL_COVERAGE_TIMELINE_EVENT_LIMIT,
+	)
+	const sourceEventIds = [
+		...new Set(
+			visibleTimelineResults.flatMap((result) =>
+				Array.isArray(result.sourceEventIds) ? result.sourceEventIds : [],
+			),
+		),
+	]
+	const sessionIds = [
+		...new Set(
+			results
+				.map((result) => result.sessionId)
+				.filter((sessionId): sessionId is string => Boolean(sessionId)),
+		),
+	]
+	if (sourceEventIds.length === 0 || sessionIds.length < 2) return null
+
+	const timeline = timelineResults
+		.slice(0, TEMPORAL_COVERAGE_TIMELINE_EVENT_LIMIT)
+		.map((result) => {
+			const timestamp = result.timestamp
+				? result.timestamp.toISOString().slice(0, 10)
+				: "unknown-date"
+			const session = result.sessionId ? ` session=${result.sessionId}` : ""
+			return `- ${timestamp}${session}: ${result.snippet.replace(/\s+/g, " ").slice(0, 220)}`
+		})
+		.join("\n")
+	const hash = createHash("sha256")
+		.update(`${query}\n${sourceEventIds.join("\n")}`)
+		.digest("hex")
+		.slice(0, 16)
+	const topScore =
+		results.length > 0 ? Math.max(...results.map((result) => result.score)) : 0
+
+	return {
+		path: `temporal-coverage/${hash}`,
+		filePath: `temporal-coverage/${hash}`,
+		startLine: 0,
+		endLine: 0,
+		score: Math.max(0, topScore - 0.05),
+		snippet: `Temporal event timeline for: ${query}\n${timeline}`,
+		source: "conversation",
+		sourceType: "conversation",
+		canonicalId: `temporal-coverage/${hash}`,
+		sourceEventIds,
+		provenance: {
+			lane: "temporal-coverage-timeline",
+			temporalCoverage: true,
+			temporalTimeline: true,
+			sessionIds,
+		},
+	}
+}
+
+function orderTimelineAfterSourceEvidence(
+	results: MemorySearchResult[],
+): MemorySearchResult[] {
+	const timelineResults = results.filter(
+		(result) => result.provenance?.temporalTimeline === true,
+	)
+	if (timelineResults.length === 0) return results
+	const sourceResults = results.filter(
+		(result) => result.provenance?.temporalTimeline !== true,
+	)
+	if (sourceResults.length === 0) return results
+	return [...sourceResults, ...timelineResults]
+}
+
+async function expandTemporalCoverageSessionEvents(params: {
+	db: Db
+	prefix: string
+	agentId: string
+	scope: MemoryScope
+	scopeRef: string
+	sessionIds: string[]
+	terms: string[]
+	questionDate: Date
+	maxPerSession: number
+	maxEvents: number
+}): Promise<MemorySearchResult[]> {
+	const sessionIds = [...new Set(params.sessionIds)].filter(Boolean)
+	if (sessionIds.length === 0) return []
+	const docs = await eventsCollection(params.db, params.prefix)
+		.find(
+			{
+				agentId: params.agentId,
+				scope: params.scope,
+				scopeRef: params.scopeRef,
+				sessionId: { $in: sessionIds },
+				role: "user",
+				timestamp: { $lte: params.questionDate },
+			},
+			{
+				projection: {
+					_id: 0,
+					eventId: 1,
+					body: 1,
+					role: 1,
+					sessionId: 1,
+					timestamp: 1,
+					scope: 1,
+					scopeRef: 1,
+				},
+				sort: { timestamp: 1 },
+				limit: Math.max(params.maxEvents * 4, sessionIds.length * 6),
+			},
+		)
+		.toArray()
+	const bySession = new Map<string, Document[]>()
+	for (const doc of docs) {
+		if (
+			typeof doc.sessionId !== "string" ||
+			!sessionIds.includes(doc.sessionId)
+		) {
+			continue
+		}
+		const bucket = bySession.get(doc.sessionId)
+		if (bucket) {
+			bucket.push(doc)
+		} else {
+			bySession.set(doc.sessionId, [doc])
+		}
+	}
+
+	const selected: MemorySearchResult[] = []
+	for (const sessionId of sessionIds) {
+		const sessionDocs = bySession.get(sessionId) ?? []
+		if (sessionDocs.length === 0) continue
+		const scored = sessionDocs
+			.map((doc, index) => ({
+				doc,
+				index,
+				score: scoreTemporalCoverageSessionEvent(
+					typeof doc.body === "string" ? doc.body : "",
+					params.terms,
+					doc.timestamp instanceof Date ? doc.timestamp : undefined,
+					params.questionDate,
+				),
+			}))
+			.toSorted((left, right) => {
+				const scoreDelta = right.score - left.score
+				return Math.abs(scoreDelta) > 0.000001
+					? scoreDelta
+					: left.index - right.index
+			})
+		const picked = new Map<Document, number>()
+		picked.set(
+			sessionDocs[0],
+			scoreTemporalCoverageSessionEvent(
+				typeof sessionDocs[0].body === "string" ? sessionDocs[0].body : "",
+				params.terms,
+				sessionDocs[0].timestamp instanceof Date
+					? sessionDocs[0].timestamp
+					: undefined,
+				params.questionDate,
+			),
+		)
+		for (const entry of scored) {
+			picked.set(entry.doc, entry.score)
+			if (picked.size >= params.maxPerSession) break
+		}
+		for (const [doc, score] of picked) {
+			const result = mapEventSearchDocToResult({ ...doc, score }, "turn-text")
+			if (!result) continue
+			selected.push({
+				...result,
+				provenance: {
+					...(result.provenance ?? {}),
+					lane: "temporal-session-expansion",
+					temporalCoverage: true,
+					temporalSessionExpansion: true,
+				},
+			})
+		}
+	}
+
+	return orderTemporalCoverageByTimeBucket(
+		orderTemporalCoverageBySession(selected),
+	).slice(0, params.maxEvents)
+}
+
+async function searchTemporalCoverageEvents(params: {
+	db: Db
+	prefix: string
+	query: string
+	questionDate: Date | undefined
+	agentId: string
+	scope: MemoryScope
+	scopeRef: string
+	maxResults: number
+	capabilities: DetectedCapabilities
+}): Promise<MemorySearchResult[]> {
+	const temporalQuery = isTemporalCoverageQuery(
+		params.query,
+		params.questionDate,
+	)
+	if (!temporalQuery) {
+		return []
+	}
+	if (!params.capabilities.textSearch) {
+		if (isBenchmarkStrictMode()) {
+			throw new Error(
+				"temporal coverage search requires MongoDB Search text capability in strict mode",
+			)
+		}
+		return []
+	}
+
+	const terms = extractTemporalCoverageTerms(params.query)
+	if (terms.length === 0 || !params.questionDate) return []
+	const anchorTerms = extractTemporalCoverageAnchorTerms(terms)
+
+	const filters = [
+		buildSearchFilterEquals("agentId", params.agentId),
+		buildSearchFilterEquals("scope", params.scope),
+		buildSearchFilterEquals("scopeRef", params.scopeRef),
+		{
+			range: {
+				path: "timestamp",
+				lte: params.questionDate,
+			},
+		},
+	].filter((value): value is Document => Boolean(value))
+
+	const temporalPivotMs = 180 * 24 * 60 * 60 * 1000
+	const pipeline: Document[] = [
+		{
+			$search: {
+				index: `${params.prefix}events_text`,
+				compound: {
+					filter: filters,
+					must: [
+						{
+							text: {
+								query: anchorTerms,
+								path: "body",
+							},
+						},
+					],
+					should: [
+						{
+							text: {
+								query: terms,
+								path: "body",
+							},
+						},
+						{
+							near: {
+								path: "timestamp",
+								origin: params.questionDate,
+								pivot: temporalPivotMs,
+								score: { boost: { value: 2 } },
+							},
+						},
+					],
+				},
+			},
+		},
+		{ $limit: Math.max(params.maxResults * 3, 30) },
+		{
+			$project: {
+				_id: 0,
+				eventId: 1,
+				body: 1,
+				role: 1,
+				sessionId: 1,
+				timestamp: 1,
+				scope: 1,
+				scopeRef: 1,
+				score: { $meta: "searchScore" },
+			},
+		},
+	]
+
+	const docs = await eventsCollection(params.db, params.prefix)
+		.aggregate(pipeline)
+		.toArray()
+	const mapped = docs
+		.map((doc) => mapEventSearchDocToResult(doc, "turn-text"))
+		.filter((result): result is MemorySearchResult => Boolean(result))
+		.map((result) => ({
+			...result,
+			score: result.score + 0.02,
+			provenance: {
+				...(result.provenance ?? {}),
+				lane: "temporal-coverage",
+				temporalCoverage: true,
+			},
+		}))
+
+	const ordered = orderTemporalCoverageByTimeBucket(
+		orderTemporalCoverageBySession(mapped),
+	)
+	const sessionIds = [
+		...new Set(
+			ordered
+				.map((result) => result.sessionId)
+				.filter((sessionId): sessionId is string => Boolean(sessionId)),
+		),
+	].slice(0, 5)
+	const expandedSessionEvents = await expandTemporalCoverageSessionEvents({
+		db: params.db,
+		prefix: params.prefix,
+		agentId: params.agentId,
+		scope: params.scope,
+		scopeRef: params.scopeRef,
+		sessionIds,
+		terms,
+		questionDate: params.questionDate,
+		maxPerSession: 3,
+		maxEvents: Math.max(params.maxResults, 30),
+	})
+	const timelineEvidence = orderTemporalCoverageByTimeBucket(
+		orderTemporalCoverageBySession(
+			deduplicateSearchResults([...expandedSessionEvents, ...ordered]),
+		),
+	)
+	const timeline = buildTemporalCoverageTimelineResult(
+		params.query,
+		timelineEvidence.slice(0, Math.max(params.maxResults, 30)),
+	)
+	const eventResults = timelineEvidence.slice(0, params.maxResults)
+	return timeline ? [timeline, ...eventResults] : eventResults
+}
+
+async function searchTurnEventsWithinSessions(params: {
+	db: Db
+	prefix: string
+	query: string
+	agentId: string
+	scope: MemoryScope
+	scopeRef: string
+	sessionIds: string[]
+	maxResults: number
+	numCandidates: number
+	capabilities: DetectedCapabilities
+	embeddingMode: ResolvedMongoDBConfig["embeddingMode"]
+}): Promise<MemorySearchResult[]> {
+	const sessionIds = Array.from(new Set(params.sessionIds)).filter(
+		(value) => value.trim().length > 0,
+	)
+	if (sessionIds.length === 0) return []
+
+	const events = eventsCollection(params.db, params.prefix)
+	const vectorFilter: Document = {
+		agentId: params.agentId,
+		scope: params.scope,
+		scopeRef: params.scopeRef,
+		sessionId: { $in: sessionIds },
+	}
+	const textFilters = [
+		buildSearchFilterEquals("agentId", params.agentId),
+		buildSearchFilterEquals("scope", params.scope),
+		buildSearchFilterEquals("scopeRef", params.scopeRef),
+		buildSearchFilterEquals("sessionId", sessionIds),
+	].filter((value): value is Document => Boolean(value))
+
+	const searches: Array<Promise<MemorySearchResult[]>> = []
+	if (
+		params.capabilities.vectorSearch &&
+		params.embeddingMode === "automated"
+	) {
+		const vectorPipeline: Document[] = [
+			{
+				$vectorSearch: {
+					index: `${params.prefix}events_vector`,
+					path: "body",
+					query: { text: params.query },
+					filter: vectorFilter,
+					numCandidates: params.numCandidates,
+					limit: params.maxResults,
+				},
+			},
+			{
+				$project: {
+					_id: 0,
+					eventId: 1,
+					body: 1,
+					role: 1,
+					sessionId: 1,
+					timestamp: 1,
+					scope: 1,
+					scopeRef: 1,
+					score: { $meta: "vectorSearchScore" },
+				},
+			},
+		]
+		searches.push(
+			events
+				.aggregate(vectorPipeline)
+				.toArray()
+				.then((docs) =>
+					docs
+						.map((doc) => mapEventSearchDocToResult(doc, "turn-vector"))
+						.filter((result): result is MemorySearchResult => Boolean(result)),
+				),
+		)
+	}
+	if (params.capabilities.textSearch) {
+		const textPipeline: Document[] = [
+			{
+				$search: {
+					index: `${params.prefix}events_text`,
+					compound: {
+						must: [{ text: { query: params.query, path: "body" } }],
+						filter: textFilters,
+					},
+				},
+			},
+			{ $limit: params.maxResults },
+			{
+				$project: {
+					_id: 0,
+					eventId: 1,
+					body: 1,
+					role: 1,
+					sessionId: 1,
+					timestamp: 1,
+					scope: 1,
+					scopeRef: 1,
+					score: { $meta: "searchScore" },
+				},
+			},
+		]
+		searches.push(
+			events
+				.aggregate(textPipeline)
+				.toArray()
+				.then((docs) =>
+					docs
+						.map((doc) => mapEventSearchDocToResult(doc, "turn-text"))
+						.filter((result): result is MemorySearchResult => Boolean(result)),
+				),
+		)
+	}
+
+	if (searches.length === 0) return []
+	const results = await Promise.all(searches)
+	return mergeTurnPrecisionResults(results)
+		.map((result, index) => ({
+			...result,
+			score:
+				Math.max(result.score, 1 - index * 0.01) +
+				turnPrecisionPreferenceSignalBoost(params.query, result),
+		}))
+		.toSorted((left, right) => right.score - left.score)
+		.slice(0, params.maxResults)
+}
+
+async function searchConversationEvidenceEvents(params: {
+	db: Db
+	prefix: string
+	query: string
+	questionDate: Date | undefined
+	agentId: string
+	scope: MemoryScope
+	scopeRef: string
+	maxResults: number
+	numCandidates: number
+	capabilities: DetectedCapabilities
+	embeddingMode: ResolvedMongoDBConfig["embeddingMode"]
+}): Promise<MemorySearchResult[]> {
+	if (!isConversationEvidenceQuery(params.query, params.questionDate)) {
+		return []
+	}
+	if (!params.capabilities.textSearch && !params.capabilities.vectorSearch) {
+		if (isBenchmarkStrictMode()) {
+			throw new Error(
+				"conversation evidence search requires MongoDB Search or Vector Search capability in strict mode",
+			)
+		}
+		return []
+	}
+
+	const events = eventsCollection(params.db, params.prefix)
+	const vectorFilter: Document = {
+		agentId: params.agentId,
+		scope: params.scope,
+		scopeRef: params.scopeRef,
+	}
+	if (params.questionDate && !Number.isNaN(params.questionDate.getTime())) {
+		vectorFilter.timestamp = { $lte: params.questionDate }
+	}
+
+	const searchFilters = [
+		buildSearchFilterEquals("agentId", params.agentId),
+		buildSearchFilterEquals("scope", params.scope),
+		buildSearchFilterEquals("scopeRef", params.scopeRef),
+		params.questionDate && !Number.isNaN(params.questionDate.getTime())
+			? {
+					range: {
+						path: "timestamp",
+						lte: params.questionDate,
+					},
+				}
+			: null,
+	].filter((value): value is Document => Boolean(value))
+
+	const searches: Array<Promise<MemorySearchResult[]>> = []
+	if (
+		params.capabilities.vectorSearch &&
+		params.embeddingMode === "automated"
+	) {
+		const vectorPipeline: Document[] = [
+			{
+				$vectorSearch: {
+					index: `${params.prefix}events_vector`,
+					path: "body",
+					query: { text: params.query },
+					filter: vectorFilter,
+					numCandidates: params.numCandidates,
+					limit: params.maxResults,
+				},
+			},
+			{
+				$project: {
+					_id: 0,
+					eventId: 1,
+					body: 1,
+					role: 1,
+					sessionId: 1,
+					timestamp: 1,
+					scope: 1,
+					scopeRef: 1,
+					score: { $meta: "vectorSearchScore" },
+				},
+			},
+		]
+		searches.push(
+			events
+				.aggregate(vectorPipeline)
+				.toArray()
+				.then((docs) =>
+					docs
+						.map((doc) => mapEventSearchDocToResult(doc, "turn-vector"))
+						.filter((result): result is MemorySearchResult => Boolean(result)),
+				),
+		)
+	}
+
+	if (params.capabilities.textSearch) {
+		const should: Document[] = []
+		if (params.questionDate && !Number.isNaN(params.questionDate.getTime())) {
+			should.push({
+				near: {
+					path: "timestamp",
+					origin: params.questionDate,
+					pivot: 180 * 24 * 60 * 60 * 1000,
+					score: { boost: { value: 2 } },
+				},
+			})
+		}
+		const textPipeline: Document[] = [
+			{
+				$search: {
+					index: `${params.prefix}events_text`,
+					compound: {
+						filter: searchFilters,
+						must: [{ text: { query: params.query, path: "body" } }],
+						...(should.length > 0 ? { should } : {}),
+					},
+				},
+			},
+			{ $limit: params.maxResults },
+			{
+				$project: {
+					_id: 0,
+					eventId: 1,
+					body: 1,
+					role: 1,
+					sessionId: 1,
+					timestamp: 1,
+					scope: 1,
+					scopeRef: 1,
+					score: { $meta: "searchScore" },
+				},
+			},
+		]
+		searches.push(
+			events
+				.aggregate(textPipeline)
+				.toArray()
+				.then((docs) =>
+					docs
+						.map((doc) => mapEventSearchDocToResult(doc, "turn-text"))
+						.filter((result): result is MemorySearchResult => Boolean(result))
+						.map((result) => ({
+							...result,
+							provenance: {
+								...(result.provenance ?? {}),
+								conversationEvidence: true,
+							},
+						})),
+				),
+		)
+	}
+
+	if (searches.length === 0) return []
+	const results = await Promise.all(searches)
+	return mergeTurnPrecisionResults(results)
+		.map((result, index) => ({
+			...result,
+			score: Math.max(result.score, 1.1 - index * 0.01),
+			sourceReliability: Math.max(result.sourceReliability ?? 0, 0.98),
+			provenance: {
+				...(result.provenance ?? {}),
+				conversationEvidence: true,
+			},
+		}))
+		.slice(0, params.maxResults)
+}
+
 // ---------------------------------------------------------------------------
 // Result dedup utility — exported for testing and reuse
 // ---------------------------------------------------------------------------
@@ -5403,9 +6491,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 	// ---------------------------------------------------------------------------
 
 	async stats(): Promise<MemoryStats> {
-		return getMemoryStats(this.db, this.prefix, undefined, {
-			embeddingMode: this.config.mongodb?.embeddingMode,
-		})
+		return getMemoryStats(this.db, this.prefix)
 	}
 
 	// ---------------------------------------------------------------------------
@@ -5460,12 +6546,18 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		}
 		await this.writeQueue
 
-		// Flush and close access tracker
+		// Flush and close access tracker. Never swallow failures silently
+		// (Phase 2 remfix CRIT-5): closing can lose buffered access events.
+		// If the flush fails we at least surface it via log.warn with context
+		// so the reviewer/hunter can grep for it and downstream operators can
+		// alert on it; the tracker reference is still cleared afterward so the
+		// close sequence is idempotent.
 		if (this.accessTracker) {
 			try {
 				await this.accessTracker.close()
-			} catch {
-				// Ignore access tracker close errors
+			} catch (err) {
+				const msg = err instanceof Error ? err.message : String(err)
+				log.warn(`accessTracker close failed: ${msg}`)
 			}
 			this.accessTracker = null
 		}
@@ -6804,22 +7896,132 @@ export async function searchV2(
 		const postScored = applyPostRetrievalScoring(query, heuristicReranked, {
 			questionDate: context.searchOptions?.questionDate,
 		})
+		const conversationEvidenceResults = await searchConversationEvidenceEvents({
+			db,
+			prefix,
+			query: searchQuery,
+			questionDate: context.searchOptions?.questionDate,
+			agentId,
+			scope,
+			scopeRef: agentScopeRef,
+			maxResults: Math.min(maxResults, 20),
+			numCandidates,
+			capabilities,
+			embeddingMode,
+		}).catch((err) => {
+			if (isBenchmarkStrictMode()) {
+				throw err
+			}
+			log.warn(`conversation evidence search failed: ${String(err)}`)
+			return [] as MemorySearchResult[]
+		})
+		const temporalCoverageResults = isTemporalCoverageMode()
+			? await searchTemporalCoverageEvents({
+					db,
+					prefix,
+					query: searchQuery,
+					questionDate: context.searchOptions?.questionDate,
+					agentId,
+					scope,
+					scopeRef: agentScopeRef,
+					maxResults: Math.min(maxResults, 20),
+					capabilities,
+				}).catch((err) => {
+					if (isBenchmarkStrictMode()) {
+						throw err
+					}
+					log.warn(`temporal coverage search failed: ${String(err)}`)
+					return [] as MemorySearchResult[]
+				})
+			: []
+		const temporalCandidateBase =
+			temporalCoverageResults.length > 0
+				? deduplicateSearchResults([...temporalCoverageResults, ...postScored])
+				: postScored
+		const turnPrecisionResults = isBenchmarkTurnPrecisionMode()
+			? await searchTurnEventsWithinSessions({
+					db,
+					prefix,
+					query: searchQuery,
+					agentId,
+					scope,
+					scopeRef: agentScopeRef,
+					sessionIds: temporalCandidateBase.slice(0, 15).flatMap((result) => {
+						const ids: string[] = []
+						if (result.sessionId) ids.push(result.sessionId)
+						const sessionIdFromCanonical = extractSessionIdFromCanonicalId(
+							result.canonicalId,
+						)
+						if (sessionIdFromCanonical) ids.push(sessionIdFromCanonical)
+						return ids
+					}),
+					maxResults: Math.min(maxResults, 20),
+					numCandidates,
+					capabilities,
+					embeddingMode,
+				}).catch((err) => {
+					if (isBenchmarkStrictMode()) {
+						throw err
+					}
+					log.warn(`turn precision rerank failed: ${String(err)}`)
+					return [] as MemorySearchResult[]
+				})
+			: []
+		const precisionScored =
+			turnPrecisionResults.length > 0 || temporalCoverageResults.length > 0
+				? (() => {
+						const timelineResults = temporalCoverageResults.filter(
+							(result) => result.provenance?.temporalTimeline === true,
+						)
+						const temporalEventResults = temporalCoverageResults.filter(
+							(result) => result.provenance?.temporalTimeline !== true,
+						)
+						return orderTimelineAfterSourceEvidence(
+							deduplicateSearchResults([
+								...turnPrecisionResults,
+								...conversationEvidenceResults,
+								...temporalEventResults,
+								...stripSessionSummaryTurnProvenance(postScored),
+								...timelineResults,
+							]),
+						)
+					})()
+				: conversationEvidenceResults.length > 0
+					? deduplicateSearchResults([
+							...conversationEvidenceResults,
+							...stripSessionSummaryTurnProvenance(postScored),
+						])
+					: postScored
 
 		// Cross-encoder re-ranking via Voyage API (after heuristic, before final slice)
 		const rerankCfg = context.searchOptions?.rerankConfig
-		let finalResults = postScored
+		let finalResults = precisionScored
 		let wasReranked = false
 		if (rerankCfg?.enabled) {
+			const timelineResults = precisionScored.filter(
+				(result) => result.provenance?.temporalTimeline === true,
+			)
+			const rerankInput = precisionScored.filter(
+				(result) => result.provenance?.temporalTimeline !== true,
+			)
 			const rerankResult = await crossEncoderRerank({
 				db,
 				prefix,
 				agentId,
 				query,
-				results: postScored,
+				results: rerankInput.length > 0 ? rerankInput : precisionScored,
 				config: rerankCfg,
 			})
 			if (rerankResult.reranked) {
-				finalResults = rerankResult.results
+				finalResults = orderTimelineAfterSourceEvidence(
+					deduplicateSearchResults([
+						...applyPreferenceEvidenceBoostAfterRerank(
+							query,
+							rerankResult.results,
+						),
+						...timelineResults,
+					]),
+				)
 				wasReranked = true
 			}
 		}

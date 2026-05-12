@@ -47,6 +47,38 @@ export type SearchTraceEvent = {
 	message?: string
 }
 
+class SearchFallbackDisabledError extends Error {
+	constructor(message: string) {
+		super(`search fallback disabled: ${message}`)
+		this.name = "SearchFallbackDisabledError"
+	}
+}
+
+function isStrictSearchFallbackDisabled(opts: {
+	strictNoFallback?: boolean
+}): boolean {
+	return (
+		opts.strictNoFallback === true ||
+		process.env.MEMONGO_BENCHMARK_STRICT === "1"
+	)
+}
+
+function warnOrThrowFallback(
+	opts: { strictNoFallback?: boolean },
+	message: string,
+): void {
+	if (isStrictSearchFallbackDisabled(opts)) {
+		throw new SearchFallbackDisabledError(message)
+	}
+	log.warn(message)
+}
+
+function shouldStopInsteadOfFallback(opts: {
+	strictNoFallback?: boolean
+}): boolean {
+	return isStrictSearchFallbackDisabled(opts)
+}
+
 async function captureAggregateExplain(
 	collection: Collection,
 	pipeline: Document[],
@@ -491,6 +523,8 @@ export async function keywordSearch(
 				updatedAt: 1,
 				scope: 1,
 				scopeRef: 1,
+				canonicalId: 1,
+				"metadata.sourceEventIds": 1,
 				score: { $meta: "searchScore" },
 				...(opts.explain?.includeScoreDetails
 					? { scoreDetails: { $meta: "searchScoreDetails" } }
@@ -620,6 +654,8 @@ export async function hybridSearchScoreFusion(
 				updatedAt: 1,
 				scope: 1,
 				scopeRef: 1,
+				canonicalId: 1,
+				"metadata.sourceEventIds": 1,
 				score: { $meta: "searchScore" },
 			},
 		},
@@ -730,6 +766,8 @@ export async function hybridSearchRankFusion(
 				updatedAt: 1,
 				scope: 1,
 				scopeRef: 1,
+				canonicalId: 1,
+				"metadata.sourceEventIds": 1,
 				score: { $meta: "searchScore" },
 			},
 		},
@@ -793,6 +831,7 @@ export async function mongoSearch(
 		embeddingMode?: MemoryMongoDBEmbeddingMode
 		explain?: SearchExplainOptions
 		onTrace?: (event: SearchTraceEvent) => void
+		strictNoFallback?: boolean
 	},
 ): Promise<MemorySearchResult[]> {
 	const vectorWeight = opts.vectorWeight ?? 0.7
@@ -833,8 +872,17 @@ export async function mongoSearch(
 					ok: false,
 					message: "empty results",
 				})
-				log.warn("$scoreFusion returned no hits, trying fallback path")
+				if (shouldStopInsteadOfFallback(opts)) {
+					return []
+				}
+				warnOrThrowFallback(
+					opts,
+					"$scoreFusion returned no hits, trying fallback path",
+				)
 			} catch (err) {
+				if (err instanceof SearchFallbackDisabledError) {
+					throw err
+				}
 				const msg = err instanceof Error ? err.message : String(err)
 				opts.onTrace?.({
 					event: "method",
@@ -842,7 +890,10 @@ export async function mongoSearch(
 					ok: false,
 					message: msg,
 				})
-				log.warn(`$scoreFusion failed, trying $rankFusion fallback: ${msg}`)
+				warnOrThrowFallback(
+					opts,
+					`$scoreFusion failed, trying $rankFusion fallback: ${msg}`,
+				)
 			}
 		}
 
@@ -865,8 +916,17 @@ export async function mongoSearch(
 					ok: false,
 					message: "empty results",
 				})
-				log.warn("$rankFusion returned no hits, trying fallback path")
+				if (shouldStopInsteadOfFallback(opts)) {
+					return []
+				}
+				warnOrThrowFallback(
+					opts,
+					"$rankFusion returned no hits, trying fallback path",
+				)
 			} catch (err) {
+				if (err instanceof SearchFallbackDisabledError) {
+					throw err
+				}
 				const msg = err instanceof Error ? err.message : String(err)
 				opts.onTrace?.({
 					event: "method",
@@ -874,7 +934,8 @@ export async function mongoSearch(
 					ok: false,
 					message: msg,
 				})
-				log.warn(
+				warnOrThrowFallback(
+					opts,
 					`$rankFusion failed, trying separate queries + JS merge: ${msg}`,
 				)
 			}
@@ -908,8 +969,17 @@ export async function mongoSearch(
 				ok: false,
 				message: "empty results",
 			})
-			log.warn("hybrid JS merge returned no hits, trying fallback path")
+			if (shouldStopInsteadOfFallback(opts)) {
+				return []
+			}
+			warnOrThrowFallback(
+				opts,
+				"hybrid JS merge returned no hits, trying fallback path",
+			)
 		} catch (err) {
+			if (err instanceof SearchFallbackDisabledError) {
+				throw err
+			}
 			const msg = err instanceof Error ? err.message : String(err)
 			opts.onTrace?.({
 				event: "method",
@@ -917,7 +987,7 @@ export async function mongoSearch(
 				ok: false,
 				message: msg,
 			})
-			log.warn(`hybrid JS merge failed: ${msg}`)
+			warnOrThrowFallback(opts, `hybrid JS merge failed: ${msg}`)
 		}
 	}
 
@@ -939,8 +1009,17 @@ export async function mongoSearch(
 				ok: false,
 				message: "empty results",
 			})
-			log.warn("vector search returned no hits, trying fallback path")
+			if (shouldStopInsteadOfFallback(opts)) {
+				return []
+			}
+			warnOrThrowFallback(
+				opts,
+				"vector search returned no hits, trying fallback path",
+			)
 		} catch (err) {
+			if (err instanceof SearchFallbackDisabledError) {
+				throw err
+			}
 			const msg = err instanceof Error ? err.message : String(err)
 			opts.onTrace?.({
 				event: "method",
@@ -948,7 +1027,7 @@ export async function mongoSearch(
 				ok: false,
 				message: msg,
 			})
-			log.warn(`vector search failed: ${msg}`)
+			warnOrThrowFallback(opts, `vector search failed: ${msg}`)
 		}
 	}
 
@@ -969,8 +1048,17 @@ export async function mongoSearch(
 				ok: false,
 				message: "empty results",
 			})
-			log.warn("keyword search returned no hits, trying $text fallback")
+			if (shouldStopInsteadOfFallback(opts)) {
+				return []
+			}
+			warnOrThrowFallback(
+				opts,
+				"keyword search returned no hits, trying $text fallback",
+			)
 		} catch (err) {
+			if (err instanceof SearchFallbackDisabledError) {
+				throw err
+			}
 			const msg = err instanceof Error ? err.message : String(err)
 			opts.onTrace?.({
 				event: "method",
@@ -978,11 +1066,14 @@ export async function mongoSearch(
 				ok: false,
 				message: msg,
 			})
-			log.warn(`keyword search failed: ${msg}`)
+			warnOrThrowFallback(opts, `keyword search failed: ${msg}`)
 		}
 	}
 
 	// Last resort: basic $text index search (Community without mongot)
+	if (isStrictSearchFallbackDisabled(opts)) {
+		throw new SearchFallbackDisabledError("$text fallback would be required")
+	}
 	try {
 		const sourceFilter = resolveLegacySourceFilter(opts.sessionKey)
 		const filter = mergeFilters(

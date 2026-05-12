@@ -381,7 +381,9 @@ export function classifyExecutorSearch(
 		query: request.query,
 		hasTimeRange: Boolean(request.timeRange),
 		hasScopes: Boolean(
-			request.conversationScope ||
+			request.scope ||
+				request.scopeRef ||
+				request.conversationScope ||
 				request.structuredScope ||
 				request.referenceScope ||
 				request.proceduralScope,

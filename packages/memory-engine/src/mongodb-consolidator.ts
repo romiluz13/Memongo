@@ -29,7 +29,9 @@ import { computeImportanceDecay } from "./mongodb-trust.js"
 import {
 	eventsCollection,
 	consolidationRunsCollection,
+	memoryQuarantineCollection,
 } from "./mongodb-schema.js"
+import { classifyInjection } from "./mongodb-injection-classifier.js"
 import { extractAndUpsertEntities } from "./mongodb-graph.js"
 import {
 	writeStructuredMemory,
@@ -498,6 +500,31 @@ export async function consolidateMemory(params: {
 
 	for (const candidate of filteredCandidates) {
 		try {
+			// Task 2.SE-2 (ADR-006): injection / memory-poisoning defense.
+			// Route injection-shaped candidates to memory_quarantine with
+			// status="pending-review" BEFORE any pattern extraction or canonical
+			// write. Tier-1 classifier is always on; tier-2 LLM is off by default.
+			const injectionVerdict = classifyInjection({ content: candidate.body })
+			if (injectionVerdict.classification === "injection-likely") {
+				await memoryQuarantineCollection(db, prefix).insertOne({
+					quarantineId: randomUUID(),
+					agentId,
+					...(options?.scope ? { scope: options.scope } : {}),
+					...(options?.scopeRef ? { scopeRef: options.scopeRef } : {}),
+					content: candidate.body,
+					classification: "injection-likely",
+					tier: injectionVerdict.tier,
+					matchedPatterns: injectionVerdict.matchedPatterns,
+					status: "pending-review",
+					createdAt: new Date(),
+					sourceEventIds: [candidate.eventId],
+				})
+				log.warn(
+					`quarantined candidate event=${candidate.eventId}: injection patterns=${injectionVerdict.matchedPatterns.join(",")}`,
+				)
+				continue
+			}
+
 			const match = matchPatterns(candidate.body)
 			if (!match) {
 				continue

@@ -13,6 +13,7 @@ import {
 	metaCollection,
 	getExpectedSearchIndexTargets,
 	isSearchIndexQueryable,
+	waitForSearchCapabilities,
 	kbCollection,
 	kbChunksCollection,
 	structuredMemCollection,
@@ -27,6 +28,7 @@ import {
 	ingestRunsCollection,
 	projectionRunsCollection,
 	queryCacheCollection,
+	resolveSearchIndexReadinessTiming,
 	telemetryCollection,
 	accessEventsCollection,
 	sessionChunksCollection,
@@ -277,6 +279,50 @@ describe("schema constants", () => {
 		])
 	})
 
+	it("memory_quarantine collection is created with validator (Task 2.SE-2)", async () => {
+		const db = mockDb([])
+		await ensureCollections(db, "test_")
+		const createCalls = (db.createCollection as ReturnType<typeof vi.fn>).mock
+			.calls
+		const qCall = createCalls.find(
+			(c: unknown[]) => c[0] === "test_memory_quarantine",
+		)
+		expect(qCall).toBeDefined()
+		const schema = qCall![1]?.validator.$jsonSchema
+		expect(schema.required).toContain("quarantineId")
+		expect(schema.required).toContain("classification")
+		expect(schema.required).toContain("matchedPatterns")
+		expect(schema.required).toContain("status")
+		// `classification` is tightly scoped — only injection-likely rows land here.
+		expect(schema.properties.classification.enum).toEqual(["injection-likely"])
+		// Lifecycle statuses for the pending → promoted / rejected flow.
+		expect(schema.properties.status.enum).toEqual([
+			"pending-review",
+			"rejected",
+			"promoted",
+		])
+	})
+
+	it("events schema includes bi-temporal validAt + invalidAt (Task 2.SE-1)", async () => {
+		const db = mockDb([])
+		await ensureCollections(db, "test_")
+		const createCalls = (db.createCollection as ReturnType<typeof vi.fn>).mock
+			.calls
+		const eventsCall = createCalls.find(
+			(c: unknown[]) => c[0] === "test_events",
+		)
+		expect(eventsCall).toBeDefined()
+		const schema = eventsCall![1]?.validator.$jsonSchema
+		// Bi-temporal ADR-006 fields: validAt records when the assertion became
+		// true; invalidAt (nullable) records when it stopped being true.
+		expect(schema.properties.validAt).toBeDefined()
+		expect(schema.properties.validAt.bsonType).toBe("date")
+		expect(schema.properties.invalidAt).toBeDefined()
+		// invalidAt accepts `date` OR null per the retrieval filter
+		// `invalidAt IS NULL OR invalidAt > queryTime`.
+		expect(schema.properties.invalidAt.bsonType).toEqual(["date", "null"])
+	})
+
 	it("chunks collection has polymorphic schema validation (F15)", async () => {
 		const db = mockDb([])
 		await ensureCollections(db, "test_")
@@ -308,7 +354,8 @@ describe("ensureCollections", () => {
 	it("creates all collections when none exist, including both time series collections", async () => {
 		const db = mockDb([])
 		await ensureCollections(db, "test_")
-		expect(db.createCollection).toHaveBeenCalledTimes(29)
+		// 30 = 29 baseline + 1 memory_quarantine (Task 2.SE-2, ADR-006)
+		expect(db.createCollection).toHaveBeenCalledTimes(30)
 		// Non-validated collections: called with name only
 		expect(db.createCollection).toHaveBeenCalledWith("test_files")
 		expect(db.createCollection).toHaveBeenCalledWith("test_embedding_cache")
@@ -348,7 +395,8 @@ describe("ensureCollections", () => {
 	it("skips already-existing collections", async () => {
 		const db = mockDb(["test_chunks", "test_files"])
 		await ensureCollections(db, "test_")
-		expect(db.createCollection).toHaveBeenCalledTimes(27)
+		// 28 = 30 new total - 2 skipped. 29 baseline + 1 memory_quarantine.
+		expect(db.createCollection).toHaveBeenCalledTimes(28)
 		expect(db.createCollection).toHaveBeenCalledWith("test_embedding_cache")
 		expect(db.createCollection).toHaveBeenCalledWith("test_meta")
 		expect(db.createCollection).toHaveBeenCalledWith(
@@ -405,6 +453,7 @@ describe("ensureCollections", () => {
 			"oc_recall_traces",
 			"oc_memory_jobs",
 			"oc_session_chunks",
+			"oc_memory_quarantine",
 		])
 		await ensureCollections(db, "oc_")
 		expect(db.createCollection).not.toHaveBeenCalled()
@@ -456,7 +505,7 @@ describe("ensureStandardIndexes", () => {
 
 		// 4 chunks + 2 cache + 5 KB + 4 KB chunks (3 + 1 wiki) + 8 structured (6 + 1 v2 scope + 1 sourceEvent) +
 		// 1 structured revisions + 3 relevance_runs + 2 relevance_artifacts +
-		// 2 relevance_regressions + 7 events (6 + 1 dreamerProcessedAt) + 5 entities (3 + 2 Phase 3.4) + 4 relations +
+		// 2 relevance_regressions + 8 events (6 + 1 dreamerProcessedAt + 1 bi-temporal SE-1) + 5 entities (3 + 2 Phase 3.4) + 4 relations +
 		// 2 entity links + 4 episodes (3 + 1 promotion) + 1 ingest_runs + 1 projection_runs +
 		// 4 procedures + 1 procedure_revisions + 3 query_cache + 2 telemetry + 2 access_events
 		// + 3 memory_mutations (compound + TTL + per-document)
@@ -464,8 +513,8 @@ describe("ensureStandardIndexes", () => {
 		// + 1 consolidation_runs (agent_time)
 		// + 3 sourceRef dedup (events, structured, procedures)
 		// + 1 partial index (structured active facts) + 2 sourceEvent dedup indexes
-		// + 3 session_chunks = 84
-		expect(count).toBe(84)
+		// + 3 session_chunks = 85 (was 84; +1 for bi-temporal SE-1)
+		expect(count).toBe(85)
 		expect(chunks.createIndex).toHaveBeenCalledTimes(4)
 		expect(cache.createIndex).toHaveBeenCalledTimes(2)
 		expect(kb.createIndex).toHaveBeenCalledTimes(5)
@@ -498,7 +547,7 @@ describe("ensureStandardIndexes", () => {
 		const projectionRuns = db.collection("test_projection_runs") as unknown as {
 			createIndex: ReturnType<typeof vi.fn>
 		}
-		expect(events.createIndex).toHaveBeenCalledTimes(8)
+		expect(events.createIndex).toHaveBeenCalledTimes(9)
 		expect(entities.createIndex).toHaveBeenCalledTimes(5)
 		expect(relations.createIndex).toHaveBeenCalledTimes(4)
 		expect(entityLinks.createIndex).toHaveBeenCalledTimes(2)
@@ -537,6 +586,32 @@ describe("ensureStandardIndexes", () => {
 			createIndex: ReturnType<typeof vi.fn>
 		}
 		expect(sessionChunks.createIndex).toHaveBeenCalledTimes(3)
+	})
+
+	it("creates bi-temporal compound index on events (Task 2.SE-1)", async () => {
+		const db = mockDb()
+		await ensureStandardIndexes(db, "test_")
+		const events = db.collection("test_events") as unknown as {
+			createIndex: ReturnType<typeof vi.fn>
+		}
+		// Compound index: { agentId: 1, scope: 1, scopeRef: 1, validAt: 1, invalidAt: 1 }
+		// supports the retrieval filter
+		//   validAt <= queryTime AND (invalidAt IS NULL OR invalidAt > queryTime)
+		// and is scoped by (agentId, scope, scopeRef).
+		const calls = events.createIndex.mock.calls as Array<[unknown, unknown]>
+		const bitemporal = calls.find(
+			([, opts]) =>
+				(opts as { name?: string })?.name ===
+				"idx_events_agent_scope_scoperef_validAt_invalidAt",
+		)
+		expect(bitemporal).toBeDefined()
+		expect(bitemporal![0]).toEqual({
+			agentId: 1,
+			scope: 1,
+			scopeRef: 1,
+			validAt: 1,
+			invalidAt: 1,
+		})
 	})
 
 	it("creates a defensive $text index on text field", async () => {
@@ -675,12 +750,12 @@ describe("ensureStandardIndexes", () => {
 	it("index count includes relevance telemetry indexes and v2 collection indexes", async () => {
 		const db = mockDb()
 		const count = await ensureStandardIndexes(db, "test_")
-		// 27 (v1 base) + 7 events (6 + 1 dreamerProcessedAt) + 3 entities + 4 relations +
+		// 27 (v1 base) + 8 events (6 + 1 dreamerProcessedAt + 1 bi-temporal SE-1) + 3 entities + 4 relations +
 		// 2 entity links + 4 episodes (3 + 1 promotion) + 1 ingest_runs + 1 projection_runs +
 		// 1 structured scope + 1 structured revisions + 4 procedures + 1 procedure_revisions +
 		// 3 query_cache + 2 telemetry + 2 access_events + 3 memory_mutations
-		// + 1 lane_coverage + 1 consolidation_runs + 3 session_chunks = 84
-		expect(count).toBe(84)
+		// + 1 lane_coverage + 1 consolidation_runs + 3 session_chunks = 85
+		expect(count).toBe(85)
 	})
 
 	it("creates relevance TTL indexes when relevanceRetentionDays is set", async () => {
@@ -1060,7 +1135,41 @@ describe("search index readiness helpers", () => {
 		expect(result.failed).toEqual(["test_chunks_vector"])
 	})
 
-	it("returns the full target list for atlas-local-preview", () => {
+	it("treats non-queryable building indexes as pending, not failed", async () => {
+		const db = mockDb()
+		const chunks = db.collection("test_chunks") as unknown as {
+			aggregate: ReturnType<typeof vi.fn>
+		}
+		chunks.aggregate.mockImplementation(() => ({
+			toArray: async () => [
+				{
+					name: "test_chunks_vector",
+					status: "BUILDING",
+					queryable: false,
+					statusDetail: [
+						{
+							mainIndex: { status: "BUILDING", queryable: false },
+							definitions: [{ status: "BUILDING", queryable: false }],
+						},
+					],
+				},
+			],
+		}))
+
+		const result = await waitForSearchIndexesQueryable(
+			db.collection("test_chunks"),
+			{
+				indexNames: ["test_chunks_vector"],
+				timeoutMs: 1,
+				pollMs: 0,
+			},
+		)
+		expect(result.ready).toBe(false)
+		expect(result.pending).toEqual(["test_chunks_vector"])
+		expect(result.failed).toEqual([])
+	})
+
+	it("returns the benchmark-required target list for atlas-local-preview", () => {
 		expect(
 			getExpectedSearchIndexTargets("test_", "atlas-local-preview"),
 		).toEqual([
@@ -1085,14 +1194,70 @@ describe("search index readiness helpers", () => {
 				indexNames: ["test_events_text", "test_events_vector"],
 			},
 			{
-				collectionName: "test_query_cache",
-				indexNames: ["test_query_cache_vector"],
-			},
-			{
 				collectionName: "test_session_chunks",
 				indexNames: ["test_session_chunks_text", "test_session_chunks_vector"],
 			},
 		])
+	})
+
+	it("uses a smaller LongMemEval search-index target list when requested", () => {
+		const previous = process.env.MEMONGO_BENCHMARK_SEARCH_INDEX_PROFILE
+		process.env.MEMONGO_BENCHMARK_SEARCH_INDEX_PROFILE = "longmemeval"
+		try {
+			expect(
+				getExpectedSearchIndexTargets("test_", "atlas-local-preview"),
+			).toEqual([
+				{
+					collectionName: "test_chunks",
+					indexNames: ["test_chunks_text", "test_chunks_vector"],
+				},
+				{
+					collectionName: "test_structured_mem",
+					indexNames: [
+						"test_structured_mem_text",
+						"test_structured_mem_vector",
+					],
+				},
+				{
+					collectionName: "test_procedures",
+					indexNames: ["test_procedures_text", "test_procedures_vector"],
+				},
+				{
+					collectionName: "test_events",
+					indexNames: ["test_events_text", "test_events_vector"],
+				},
+			])
+		} finally {
+			if (previous === undefined) {
+				delete process.env.MEMONGO_BENCHMARK_SEARCH_INDEX_PROFILE
+			} else {
+				process.env.MEMONGO_BENCHMARK_SEARCH_INDEX_PROFILE = previous
+			}
+		}
+	})
+
+	it("resolves search index readiness timing from env with safe defaults", () => {
+		expect(resolveSearchIndexReadinessTiming({})).toEqual({
+			timeoutMs: 60_000,
+			pollMs: 1_000,
+		})
+		expect(
+			resolveSearchIndexReadinessTiming({
+				MEMONGO_BENCHMARK_STRICT: "1",
+			}),
+		).toEqual({ timeoutMs: 180_000, pollMs: 1_000 })
+		expect(
+			resolveSearchIndexReadinessTiming({
+				MEMONGO_SEARCH_INDEX_READINESS_TIMEOUT_MS: "180000",
+				MEMONGO_SEARCH_INDEX_READINESS_POLL_MS: "250",
+			}),
+		).toEqual({ timeoutMs: 180_000, pollMs: 250 })
+		expect(
+			resolveSearchIndexReadinessTiming({
+				MEMONGO_SEARCH_INDEX_READINESS_TIMEOUT_MS: "0",
+				MEMONGO_SEARCH_INDEX_READINESS_POLL_MS: "nope",
+			}),
+		).toEqual({ timeoutMs: 60_000, pollMs: 1_000 })
 	})
 })
 
@@ -1373,6 +1538,102 @@ describe("detectCapabilities", () => {
 		expect(caps.vectorSearch).toBe(true)
 		expect(caps.textSearch).toBe(true)
 		// automatedEmbedding removed (F2: dead code)
+	})
+
+	it("detects search capabilities through $listSearchIndexes aggregation", async () => {
+		const db = {
+			admin: vi.fn(() => ({
+				command: vi.fn(async () => ({ versionArray: [8, 2, 0, 0] })),
+			})),
+			collection: vi.fn(() => ({
+				aggregate: vi.fn(() => ({
+					toArray: vi.fn(async () => []),
+				})),
+				listSearchIndexes: vi.fn(() => ({
+					toArray: vi.fn(async () => {
+						throw new Error("driver helper should not be required")
+					}),
+				})),
+			})),
+		} as unknown as Db
+
+		const caps = await detectCapabilities(db, "test_chunks")
+		expect(caps.vectorSearch).toBe(true)
+		expect(caps.textSearch).toBe(true)
+	})
+
+	it("waits for search capabilities to become available", async () => {
+		let attempts = 0
+		const db = {
+			admin: vi.fn(() => ({
+				command: vi.fn(async () => ({ versionArray: [8, 2, 0, 0] })),
+			})),
+			collection: vi.fn(() => ({
+				aggregate: vi.fn(() => ({
+					toArray: vi.fn(async () => {
+						attempts += 1
+						if (attempts < 2) {
+							throw new Error("mongot warming up")
+						}
+						return []
+					}),
+				})),
+				listSearchIndexes: vi.fn(() => ({
+					toArray: vi.fn(async () => {
+						if (attempts < 2) {
+							throw new Error("mongot still warming up")
+						}
+						return []
+					}),
+				})),
+			})),
+		} as unknown as Db
+
+		const caps = await waitForSearchCapabilities(db, "test_chunks", {
+			timeoutMs: 30,
+			pollMs: 1,
+		})
+		expect(caps.vectorSearch).toBe(true)
+		expect(caps.textSearch).toBe(true)
+		expect(attempts).toBe(2)
+	})
+})
+
+describe("waitForSearchIndexesQueryable", () => {
+	it("retries transient search index management errors", async () => {
+		let attempts = 0
+		const collection = {
+			aggregate: vi.fn(() => ({
+				toArray: vi.fn(async () => {
+					attempts += 1
+					if (attempts === 1) {
+						throw new Error(
+							"Error connecting to Search Index Management service",
+						)
+					}
+					return [
+						{
+							name: "events_text",
+							status: "READY",
+							queryable: true,
+						},
+					]
+				}),
+			})),
+			listSearchIndexes: vi.fn(() => ({
+				toArray: vi.fn(async () => []),
+			})),
+		} as unknown as Collection
+
+		const result = await waitForSearchIndexesQueryable(collection, {
+			indexNames: ["events_text"],
+			timeoutMs: 30,
+			pollMs: 1,
+		})
+
+		expect(result.ready).toBe(true)
+		expect(result.lastError).toBeUndefined()
+		expect(attempts).toBe(2)
 	})
 })
 
@@ -1751,7 +2012,8 @@ describe("ensureCollections total count with query_cache and time series", () =>
 	it("creates all regular collections plus telemetry and access-events time series collections", async () => {
 		const db = mockDb([])
 		await ensureCollections(db, "test_")
-		expect(db.createCollection).toHaveBeenCalledTimes(29)
+		// 30 = 29 baseline + 1 memory_quarantine (Task 2.SE-2, ADR-006)
+		expect(db.createCollection).toHaveBeenCalledTimes(30)
 	})
 })
 
@@ -1759,12 +2021,12 @@ describe("ensureStandardIndexes total count with query_cache and time series ind
 	it("returns updated total index count including query_cache, telemetry, access event, and session_chunks indexes", async () => {
 		const db = mockDb()
 		const count = await ensureStandardIndexes(db, "test_")
-		// 27 (v1 base) + 7 events (6 + 1 dreamerProcessedAt) + 3 entities + 4 relations +
+		// 27 (v1 base) + 8 events (6 + 1 dreamerProcessedAt + 1 bi-temporal SE-1) + 3 entities + 4 relations +
 		// 2 entity links + 4 episodes (3 + 1 promotion) + 1 ingest_runs + 1 projection_runs +
 		// 1 structured scope + 1 structured revisions + 4 procedures + 1 procedure_revisions +
 		// 3 query_cache + 2 telemetry + 2 access_events + 3 memory_mutations
-		// + 1 lane_coverage + 1 consolidation_runs + 3 session_chunks = 84
-		expect(count).toBe(84)
+		// + 1 lane_coverage + 1 consolidation_runs + 3 session_chunks = 85
+		expect(count).toBe(85)
 	})
 })
 

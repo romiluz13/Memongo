@@ -41,6 +41,13 @@ function resolveRerankUrl(apiKey: string): string {
 		: VOYAGE_RERANK_URL_DIRECT
 }
 
+function isStrictRerankMode(): boolean {
+	return (
+		process.env.MEMONGO_RERANK_STRICT === "1" ||
+		process.env.MEMONGO_BENCHMARK_STRICT === "1"
+	)
+}
+
 /**
  * Cross-encoder re-ranking of search results using Voyage rerank-2.5 API.
  *
@@ -110,6 +117,10 @@ export async function crossEncoderRerank(params: {
 		})
 
 		if (!response.ok) {
+			const message = `rerank API returned non-OK status: ${response.status}`
+			if (isStrictRerankMode()) {
+				throw new Error(message)
+			}
 			log.warn("rerank API returned non-OK status", { status: response.status })
 			return { results, reranked: false, latencyMs: Date.now() - rerankStart }
 		}
@@ -119,6 +130,9 @@ export async function crossEncoderRerank(params: {
 		}
 
 		if (!body.data || !Array.isArray(body.data)) {
+			if (isStrictRerankMode()) {
+				throw new Error("rerank API returned unexpected response shape")
+			}
 			log.warn("rerank API returned unexpected response shape")
 			return { results, reranked: false, latencyMs: Date.now() - rerankStart }
 		}
@@ -131,6 +145,11 @@ export async function crossEncoderRerank(params: {
 					r.index < 0 ||
 					r.index >= validCandidates.length
 				) {
+					if (isStrictRerankMode()) {
+						throw new Error(
+							`rerank API returned out-of-bounds index: ${r.index}`,
+						)
+					}
 					log.warn("rerank API returned out-of-bounds index", {
 						index: r.index,
 						max: validCandidates.length - 1,
@@ -171,6 +190,9 @@ export async function crossEncoderRerank(params: {
 			rerankModel: config.model,
 			rerankLatencyMs: Date.now() - rerankStart,
 		})
+		if (isStrictRerankMode()) {
+			throw err
+		}
 		return { results, reranked: false, latencyMs: Date.now() - rerankStart }
 	}
 }
