@@ -80,7 +80,10 @@ export function canonicalizeExportBundle(bundle: ExportBundle): string {
  * lowercase hex string (64 chars). Throws if the key is empty — strict mode
  * refuses to produce an unsigned-masquerading-as-signed artifact.
  */
-export function signExportBundle(bundle: ExportBundle, signingKey: string): string {
+export function signExportBundle(
+	bundle: ExportBundle,
+	signingKey: string,
+): string {
 	if (!signingKey || signingKey.length === 0) {
 		throw new Error(
 			"signExportBundle: signing key (MEMONGO_EXPORT_SIGNING_KEY) must be set and non-empty",

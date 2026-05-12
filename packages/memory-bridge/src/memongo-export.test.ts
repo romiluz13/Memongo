@@ -37,8 +37,16 @@ describe("canonicalizeExportBundle (Task 2.SE-4)", () => {
 			kb: [],
 			episodes: [],
 			events: [
-				{ timestamp: "2026-04-01T00:00:00.000Z", body: "hello", eventId: "evt-1" },
-				{ timestamp: "2026-04-02T00:00:00.000Z", body: "world", eventId: "evt-2" },
+				{
+					timestamp: "2026-04-01T00:00:00.000Z",
+					body: "hello",
+					eventId: "evt-1",
+				},
+				{
+					timestamp: "2026-04-02T00:00:00.000Z",
+					body: "world",
+					eventId: "evt-2",
+				},
 			],
 			exportedAt: "2026-05-12T10:00:00.000Z",
 			scopeRef: "agent:agent-1",
@@ -53,8 +61,16 @@ describe("canonicalizeExportBundle (Task 2.SE-4)", () => {
 		const b = canonicalizeExportBundle({
 			...SAMPLE_BUNDLE,
 			events: [
-				{ eventId: "evt-1", body: "HELLO", timestamp: "2026-04-01T00:00:00.000Z" },
-				{ eventId: "evt-2", body: "world", timestamp: "2026-04-02T00:00:00.000Z" },
+				{
+					eventId: "evt-1",
+					body: "HELLO",
+					timestamp: "2026-04-01T00:00:00.000Z",
+				},
+				{
+					eventId: "evt-2",
+					body: "world",
+					timestamp: "2026-04-02T00:00:00.000Z",
+				},
 			],
 		})
 		expect(a).not.toBe(b)
@@ -107,9 +123,7 @@ describe("signExportBundle + verifyExportBundle (Task 2.SE-4)", () => {
 	})
 
 	it("throws on empty signing key — strict mode, no silent fallback", () => {
-		expect(() => signExportBundle(SAMPLE_BUNDLE, "")).toThrow(
-			/signing key/i,
-		)
+		expect(() => signExportBundle(SAMPLE_BUNDLE, "")).toThrow(/signing key/i)
 	})
 })
 
@@ -140,9 +154,9 @@ describe("export determinism invariant (Task 2.SE-4 — property test)", () => {
 					const sigB = signExportBundle(bundle as ExportBundle, key)
 					expect(sigA).toBe(sigB)
 					// And verification round-trips.
-					expect(
-						verifyExportBundle(bundle as ExportBundle, sigA, key),
-					).toBe(true)
+					expect(verifyExportBundle(bundle as ExportBundle, sigA, key)).toBe(
+						true,
+					)
 				},
 			),
 			{ seed: FAST_CHECK_SEED, numRuns: 200 },
