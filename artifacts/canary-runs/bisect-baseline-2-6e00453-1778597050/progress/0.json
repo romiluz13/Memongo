@@ -1,0 +1,17 @@
+{
+	"index": 0,
+	"questionId": "01493427",
+	"questionType": "knowledge-update",
+	"completedAt": "2026-05-12T14:46:12.095Z",
+	"passStatus": "abstain",
+	"failureClass": null,
+	"metrics": {
+		"rAt5": 0.8333333333333334,
+		"rAt10": 0.8333333333333334,
+		"ndcgAt10": 0.8333333333333334,
+		"hitRate": 0.8333333333333334
+	},
+	"completed": false,
+	"runShapeHash": "3b431221da683570191e8195ec1091c7f9470b99ac8c4b2158c798a2391ec6d0",
+	"reason": "bulk-api-no-per-case-stream-yet"
+}

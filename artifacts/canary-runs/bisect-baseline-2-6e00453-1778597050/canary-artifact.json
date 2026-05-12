@@ -1,0 +1,693 @@
+{
+	"runId": "bisect-baseline-2-6e00453-1778597050",
+	"startedAt": "2026-05-12T14:44:13.455Z",
+	"datasetPath": "/Users/rom.iluz/.memongo/workspace/benchmarks/longmemeval_s_cleaned.json",
+	"datasetHash": "d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442",
+	"casesPerType": 1,
+	"totalCaseLimit": null,
+	"fullMode": false,
+	"runShapeHash": "3b431221da683570191e8195ec1091c7f9470b99ac8c4b2158c798a2391ec6d0",
+	"totalEvaluations": 6,
+	"selectedQuestionIds": [
+		"01493427",
+		"00ca467f",
+		"0e5e2d1a",
+		"06878be2",
+		"001be529",
+		"08f4fc43"
+	],
+	"questionTypeBreakdown": {
+		"knowledge-update": 1,
+		"multi-session": 1,
+		"single-session-assistant": 1,
+		"single-session-preference": 1,
+		"single-session-user": 1,
+		"temporal-reasoning": 1
+	},
+	"benchmarkResponse": {
+		"datasetVersion": "42f4a48d236e7775",
+		"datasetName": "bisect-baseline-2-6e00453-1778597050.json",
+		"datasetKind": "longmemeval",
+		"scenarios": 6,
+		"cases": 6,
+		"scoredCases": 6,
+		"skippedCases": 0,
+		"hitRate": 0.8333333333333334,
+		"emptyRate": 0,
+		"avgTopScore": 0.6751302083333334,
+		"p95LatencyMs": 4306,
+		"rAt5": 0.8333333333333334,
+		"rAt10": 0.8333333333333334,
+		"ndcgAt10": 0.8333333333333334,
+		"questionTypeBreakdown": [
+			{
+				"questionType": "knowledge-update",
+				"cases": 1,
+				"scoredCases": 1,
+				"hitRate": 1,
+				"rAt5": 1,
+				"rAt10": 1,
+				"ndcgAt10": 1
+			},
+			{
+				"questionType": "multi-session",
+				"cases": 1,
+				"scoredCases": 1,
+				"hitRate": 1,
+				"rAt5": 1,
+				"rAt10": 1,
+				"ndcgAt10": 1
+			},
+			{
+				"questionType": "single-session-assistant",
+				"cases": 1,
+				"scoredCases": 1,
+				"hitRate": 1,
+				"rAt5": 1,
+				"rAt10": 1,
+				"ndcgAt10": 1
+			},
+			{
+				"questionType": "single-session-preference",
+				"cases": 1,
+				"scoredCases": 1,
+				"hitRate": 0,
+				"rAt5": 0,
+				"rAt10": 0,
+				"ndcgAt10": 0
+			},
+			{
+				"questionType": "single-session-user",
+				"cases": 1,
+				"scoredCases": 1,
+				"hitRate": 1,
+				"rAt5": 1,
+				"rAt10": 1,
+				"ndcgAt10": 1
+			},
+			{
+				"questionType": "temporal-reasoning",
+				"cases": 1,
+				"scoredCases": 1,
+				"hitRate": 1,
+				"rAt5": 1,
+				"rAt10": 1,
+				"ndcgAt10": 1
+			}
+		],
+		"officialMetrics": {
+			"longMemEval": {
+				"retrievalCases": 6,
+				"abstentionCases": 0,
+				"session": {
+					"recallAnyAt1": 0.8333333333333334,
+					"recallAllAt1": 0.3333333333333333,
+					"ndcgAnyAt1": 0.8333333333333334,
+					"recallAnyAt3": 0.8333333333333334,
+					"recallAllAt3": 0.8333333333333334,
+					"ndcgAnyAt3": 0.8333333333333334,
+					"recallAnyAt5": 0.8333333333333334,
+					"recallAllAt5": 0.8333333333333334,
+					"ndcgAnyAt5": 0.8333333333333334,
+					"recallAnyAt10": 0.8333333333333334,
+					"recallAllAt10": 0.8333333333333334,
+					"ndcgAnyAt10": 0.8333333333333334,
+					"recallAnyAt30": 0.8333333333333334,
+					"recallAllAt30": 0.8333333333333334,
+					"ndcgAnyAt30": 0.8333333333333334,
+					"recallAnyAt50": 0.8333333333333334,
+					"recallAllAt50": 0.8333333333333334,
+					"ndcgAnyAt50": 0.8333333333333334
+				},
+				"turn": {
+					"recallAnyAt1": 0.8333333333333334,
+					"recallAllAt1": 0.3333333333333333,
+					"ndcgAnyAt1": 0.8333333333333334,
+					"recallAnyAt3": 0.8333333333333334,
+					"recallAllAt3": 0.6666666666666666,
+					"ndcgAnyAt3": 0.7192441461309548,
+					"recallAnyAt5": 0.8333333333333334,
+					"recallAllAt5": 0.6666666666666666,
+					"ndcgAnyAt5": 0.7192441461309548,
+					"recallAnyAt10": 0.8333333333333334,
+					"recallAllAt10": 0.6666666666666666,
+					"ndcgAnyAt10": 0.7192441461309548,
+					"recallAnyAt30": 0.8333333333333334,
+					"recallAllAt30": 0.8333333333333334,
+					"ndcgAnyAt30": 0.7382166668557009,
+					"recallAnyAt50": 0.8333333333333334,
+					"recallAllAt50": 0.8333333333333334,
+					"ndcgAnyAt50": 0.7382166668557009
+				}
+			}
+		},
+		"ingest": {
+			"conversationsIngested": 286,
+			"turnsIngested": 2860,
+			"skippedConversations": 0,
+			"failedLines": 0,
+			"failedTurns": 0
+		},
+		"regressions": [
+			{
+				"metricName": "hitRate",
+				"baseline": 0.8333333333333334,
+				"current": 0.8333333333333334,
+				"delta": 0,
+				"severity": "low"
+			},
+			{
+				"metricName": "emptyRate",
+				"baseline": 0,
+				"current": 0,
+				"delta": 0,
+				"severity": "low"
+			},
+			{
+				"metricName": "avgTopScore",
+				"baseline": 0.6751302083333334,
+				"current": 0.6751302083333334,
+				"delta": 0,
+				"severity": "low"
+			},
+			{
+				"metricName": "p95LatencyMs",
+				"baseline": 4306,
+				"current": 4306,
+				"delta": 0,
+				"severity": "low"
+			},
+			{
+				"metricName": "rAt5",
+				"baseline": 0.8333333333333334,
+				"current": 0.8333333333333334,
+				"delta": 0,
+				"severity": "low"
+			},
+			{
+				"metricName": "rAt10",
+				"baseline": 0.8333333333333334,
+				"current": 0.8333333333333334,
+				"delta": 0,
+				"severity": "low"
+			},
+			{
+				"metricName": "ndcgAt10",
+				"baseline": 0.8333333333333334,
+				"current": 0.8333333333333334,
+				"delta": 0,
+				"severity": "low"
+			}
+		],
+		"missLedger": [
+			{
+				"caseId": "06878be2",
+				"questionType": "single-session-preference",
+				"rAt5": 0,
+				"rAt10": 0,
+				"expectedSessionIds": [
+					"06878be2::answer_555dfb94"
+				],
+				"expectedTurnIds": [
+					"06878be2::answer_555dfb94::turn_1",
+					"06878be2::answer_555dfb94::turn_9",
+					"06878be2::answer_555dfb94::turn_15"
+				],
+				"topCandidateSessionIds": [
+					"06878be2::8fcfbe43_2",
+					"06878be2::ultrachat_448784",
+					"06878be2::ultrachat_474421",
+					"06878be2::sharegpt_cn3iUbp_7",
+					"06878be2::a67c1862_4"
+				],
+				"sessionFound": false,
+				"allSessionsFound": false,
+				"reachableTurnIds": [
+					"06878be2::8fcfbe43_2::turn_6",
+					"06878be2::8fcfbe43_2::turn_5",
+					"06878be2::8fcfbe43_2::turn_4",
+					"06878be2::8fcfbe43_2::turn_3",
+					"06878be2::ultrachat_448784::turn_8",
+					"06878be2::ultrachat_448784::turn_4",
+					"06878be2::ultrachat_474421::turn_2",
+					"06878be2::sharegpt_cn3iUbp_7::turn_1",
+					"06878be2::8fcfbe43_2::turn_9",
+					"06878be2::a67c1862_4::turn_7"
+				],
+				"turnReachable": false,
+				"missCategory": "preference",
+				"topCandidates": [
+					{
+						"rank": 1,
+						"score": 0.54296875,
+						"source": "conversation",
+						"sessionId": "06878be2::8fcfbe43_2",
+						"canonicalId": "event:f4c7e2ab-6f98-48bf-b33f-97be21ea7df4",
+						"resolvedSessionIds": [
+							"06878be2::8fcfbe43_2"
+						],
+						"sourceEventIds": [
+							"f4c7e2ab-6f98-48bf-b33f-97be21ea7df4"
+						]
+					},
+					{
+						"rank": 2,
+						"score": 0.474609375,
+						"source": "conversation",
+						"sessionId": "06878be2::8fcfbe43_2",
+						"canonicalId": "event:cd2bbd10-1af6-4691-b048-d0f7ed9703a1",
+						"resolvedSessionIds": [
+							"06878be2::8fcfbe43_2"
+						],
+						"sourceEventIds": [
+							"cd2bbd10-1af6-4691-b048-d0f7ed9703a1"
+						]
+					},
+					{
+						"rank": 3,
+						"score": 0.359375,
+						"source": "conversation",
+						"sessionId": "06878be2::8fcfbe43_2",
+						"canonicalId": "event:1ac1bd0e-55ba-48ef-9738-57980c31b1de",
+						"resolvedSessionIds": [
+							"06878be2::8fcfbe43_2"
+						],
+						"sourceEventIds": [
+							"1ac1bd0e-55ba-48ef-9738-57980c31b1de"
+						]
+					},
+					{
+						"rank": 4,
+						"score": 0.33984375,
+						"source": "conversation",
+						"sessionId": "06878be2::8fcfbe43_2",
+						"canonicalId": "event:bc749e23-0dd3-4f89-bfb8-25d1fcee58e7",
+						"resolvedSessionIds": [
+							"06878be2::8fcfbe43_2"
+						],
+						"sourceEventIds": [
+							"bc749e23-0dd3-4f89-bfb8-25d1fcee58e7"
+						]
+					},
+					{
+						"rank": 5,
+						"score": 0.275390625,
+						"source": "conversation",
+						"sessionId": "06878be2::ultrachat_448784",
+						"canonicalId": "event:8fe04521-3f37-43d7-a932-7dfe30adc432",
+						"resolvedSessionIds": [
+							"06878be2::ultrachat_448784"
+						],
+						"sourceEventIds": [
+							"8fe04521-3f37-43d7-a932-7dfe30adc432"
+						]
+					}
+				]
+			}
+		],
+		"caseDiagnostics": [
+			{
+				"caseId": "06878be2",
+				"questionType": "single-session-preference",
+				"rAt5": 0,
+				"rAt10": 0,
+				"ndcgAt10": 0,
+				"issue": "top1-session-and-turn",
+				"expectedSessionIds": [
+					"06878be2::answer_555dfb94"
+				],
+				"expectedTurnIds": [
+					"06878be2::answer_555dfb94::turn_1",
+					"06878be2::answer_555dfb94::turn_9",
+					"06878be2::answer_555dfb94::turn_15"
+				],
+				"topCandidateSessionIds": [
+					"06878be2::8fcfbe43_2",
+					"06878be2::ultrachat_448784"
+				],
+				"topCandidateTurnIds": [
+					"06878be2::8fcfbe43_2::turn_6",
+					"06878be2::8fcfbe43_2::turn_5",
+					"06878be2::8fcfbe43_2::turn_4",
+					"06878be2::8fcfbe43_2::turn_3",
+					"06878be2::ultrachat_448784::turn_8"
+				],
+				"sessionTop1Found": false,
+				"turnTop1Found": false,
+				"longMemEval": {
+					"session": {
+						"recallAnyAt1": 0,
+						"recallAllAt1": 0,
+						"ndcgAnyAt1": 0,
+						"recallAnyAt3": 0,
+						"recallAllAt3": 0,
+						"ndcgAnyAt3": 0,
+						"recallAnyAt5": 0,
+						"recallAllAt5": 0,
+						"ndcgAnyAt5": 0,
+						"recallAnyAt10": 0,
+						"recallAllAt10": 0,
+						"ndcgAnyAt10": 0,
+						"recallAnyAt30": 0,
+						"recallAllAt30": 0,
+						"ndcgAnyAt30": 0,
+						"recallAnyAt50": 0,
+						"recallAllAt50": 0,
+						"ndcgAnyAt50": 0
+					},
+					"turn": {
+						"recallAnyAt1": 0,
+						"recallAllAt1": 0,
+						"ndcgAnyAt1": 0,
+						"recallAnyAt3": 0,
+						"recallAllAt3": 0,
+						"ndcgAnyAt3": 0,
+						"recallAnyAt5": 0,
+						"recallAllAt5": 0,
+						"ndcgAnyAt5": 0,
+						"recallAnyAt10": 0,
+						"recallAllAt10": 0,
+						"ndcgAnyAt10": 0,
+						"recallAnyAt30": 0,
+						"recallAllAt30": 0,
+						"ndcgAnyAt30": 0,
+						"recallAnyAt50": 0,
+						"recallAllAt50": 0,
+						"ndcgAnyAt50": 0
+					}
+				},
+				"topCandidates": [
+					{
+						"rank": 1,
+						"score": 0.54296875,
+						"source": "conversation",
+						"path": "events/f4c7e2ab-6f98-48bf-b33f-97be21ea7df4",
+						"sessionId": "06878be2::8fcfbe43_2",
+						"canonicalId": "event:f4c7e2ab-6f98-48bf-b33f-97be21ea7df4",
+						"resolvedSessionIds": [
+							"06878be2::8fcfbe43_2"
+						],
+						"resolvedTurnIds": [
+							"06878be2::8fcfbe43_2::turn_6"
+						],
+						"sourceEventIds": [
+							"f4c7e2ab-6f98-48bf-b33f-97be21ea7df4"
+						]
+					},
+					{
+						"rank": 2,
+						"score": 0.474609375,
+						"source": "conversation",
+						"path": "events/cd2bbd10-1af6-4691-b048-d0f7ed9703a1",
+						"sessionId": "06878be2::8fcfbe43_2",
+						"canonicalId": "event:cd2bbd10-1af6-4691-b048-d0f7ed9703a1",
+						"resolvedSessionIds": [
+							"06878be2::8fcfbe43_2"
+						],
+						"resolvedTurnIds": [
+							"06878be2::8fcfbe43_2::turn_5"
+						],
+						"sourceEventIds": [
+							"cd2bbd10-1af6-4691-b048-d0f7ed9703a1"
+						]
+					},
+					{
+						"rank": 3,
+						"score": 0.359375,
+						"source": "conversation",
+						"path": "events/1ac1bd0e-55ba-48ef-9738-57980c31b1de",
+						"sessionId": "06878be2::8fcfbe43_2",
+						"canonicalId": "event:1ac1bd0e-55ba-48ef-9738-57980c31b1de",
+						"resolvedSessionIds": [
+							"06878be2::8fcfbe43_2"
+						],
+						"resolvedTurnIds": [
+							"06878be2::8fcfbe43_2::turn_4"
+						],
+						"sourceEventIds": [
+							"1ac1bd0e-55ba-48ef-9738-57980c31b1de"
+						]
+					},
+					{
+						"rank": 4,
+						"score": 0.33984375,
+						"source": "conversation",
+						"path": "events/bc749e23-0dd3-4f89-bfb8-25d1fcee58e7",
+						"sessionId": "06878be2::8fcfbe43_2",
+						"canonicalId": "event:bc749e23-0dd3-4f89-bfb8-25d1fcee58e7",
+						"resolvedSessionIds": [
+							"06878be2::8fcfbe43_2"
+						],
+						"resolvedTurnIds": [
+							"06878be2::8fcfbe43_2::turn_3"
+						],
+						"sourceEventIds": [
+							"bc749e23-0dd3-4f89-bfb8-25d1fcee58e7"
+						]
+					},
+					{
+						"rank": 5,
+						"score": 0.275390625,
+						"source": "conversation",
+						"path": "events/8fe04521-3f37-43d7-a932-7dfe30adc432",
+						"sessionId": "06878be2::ultrachat_448784",
+						"canonicalId": "event:8fe04521-3f37-43d7-a932-7dfe30adc432",
+						"resolvedSessionIds": [
+							"06878be2::ultrachat_448784"
+						],
+						"resolvedTurnIds": [
+							"06878be2::ultrachat_448784::turn_8"
+						],
+						"sourceEventIds": [
+							"8fe04521-3f37-43d7-a932-7dfe30adc432"
+						]
+					}
+				]
+			}
+		],
+		"queryGovernance": {
+			"status": "advisory-only",
+			"generatedAt": "2026-05-12T14:46:12.080Z",
+			"candidates": [
+				{
+					"candidateId": "search-detailed-hybrid-rank-fusion",
+					"source": "benchmark",
+					"queryShapeFamily": "search-detailed",
+					"recipe": "hybrid",
+					"scope": "cluster",
+					"reason": "Benchmark evidence shows the canonical detailed-search hybrid lane is valuable enough to inspect with $queryStats before pinning any cluster-wide query settings.",
+					"evidence": {
+						"datasetName": "bisect-baseline-2-6e00453-1778597050.json",
+						"datasetKind": "longmemeval",
+						"cases": 6,
+						"hitRate": 0.8333333333333334,
+						"p95LatencyMs": 4306,
+						"rAt5": 0.8333333333333334,
+						"ndcgAt10": 0.8333333333333334
+					},
+					"recommendedAction": "inspect-query-stats",
+					"rollbackNote": "Query settings are cluster-wide. If indexes, fusion strategy, or benchmark evidence changes, remove the setting with removeQuerySettings by shape or queryShapeHash."
+				}
+			],
+			"notes": [
+				"Operational only: do not hardcode setQuerySettings assumptions into application logic.",
+				"Validate any candidate against live $queryStats and current indexes before pinning a plan."
+			]
+		},
+		"benchmarkReport": {
+			"generatedAt": "2026-05-12T14:46:12.080Z",
+			"build": {
+				"source": "env",
+				"buildLabel": "0.1.0"
+			},
+			"corpus": {
+				"datasetVersion": "42f4a48d236e7775",
+				"datasetName": "bisect-baseline-2-6e00453-1778597050.json",
+				"datasetKind": "longmemeval",
+				"scenarios": 6,
+				"cases": 6,
+				"scoredCases": 6,
+				"skippedCases": 0
+			},
+			"metrics": {
+				"internal": {
+					"hitRate": 0.8333333333333334,
+					"emptyRate": 0,
+					"avgTopScore": 0.6751302083333334,
+					"p95LatencyMs": 4306,
+					"rAt5": 0.8333333333333334,
+					"rAt10": 0.8333333333333334,
+					"ndcgAt10": 0.8333333333333334
+				},
+				"official": {
+					"longMemEval": {
+						"retrievalCases": 6,
+						"abstentionCases": 0,
+						"session": {
+							"recallAnyAt1": 0.8333333333333334,
+							"recallAllAt1": 0.3333333333333333,
+							"ndcgAnyAt1": 0.8333333333333334,
+							"recallAnyAt3": 0.8333333333333334,
+							"recallAllAt3": 0.8333333333333334,
+							"ndcgAnyAt3": 0.8333333333333334,
+							"recallAnyAt5": 0.8333333333333334,
+							"recallAllAt5": 0.8333333333333334,
+							"ndcgAnyAt5": 0.8333333333333334,
+							"recallAnyAt10": 0.8333333333333334,
+							"recallAllAt10": 0.8333333333333334,
+							"ndcgAnyAt10": 0.8333333333333334,
+							"recallAnyAt30": 0.8333333333333334,
+							"recallAllAt30": 0.8333333333333334,
+							"ndcgAnyAt30": 0.8333333333333334,
+							"recallAnyAt50": 0.8333333333333334,
+							"recallAllAt50": 0.8333333333333334,
+							"ndcgAnyAt50": 0.8333333333333334
+						},
+						"turn": {
+							"recallAnyAt1": 0.8333333333333334,
+							"recallAllAt1": 0.3333333333333333,
+							"ndcgAnyAt1": 0.8333333333333334,
+							"recallAnyAt3": 0.8333333333333334,
+							"recallAllAt3": 0.6666666666666666,
+							"ndcgAnyAt3": 0.7192441461309548,
+							"recallAnyAt5": 0.8333333333333334,
+							"recallAllAt5": 0.6666666666666666,
+							"ndcgAnyAt5": 0.7192441461309548,
+							"recallAnyAt10": 0.8333333333333334,
+							"recallAllAt10": 0.6666666666666666,
+							"ndcgAnyAt10": 0.7192441461309548,
+							"recallAnyAt30": 0.8333333333333334,
+							"recallAllAt30": 0.8333333333333334,
+							"ndcgAnyAt30": 0.7382166668557009,
+							"recallAnyAt50": 0.8333333333333334,
+							"recallAllAt50": 0.8333333333333334,
+							"ndcgAnyAt50": 0.7382166668557009
+						}
+					}
+				}
+			},
+			"releaseGates": [
+				{
+					"gate": "official-retrieval",
+					"status": "passed",
+					"evidence": "officialMetrics present and all 6/6 benchmark cases scored"
+				},
+				{
+					"gate": "internal-retrieval",
+					"status": "passed",
+					"evidence": "6 cases, 6 scored"
+				},
+				{
+					"gate": "conversation-recall-regression",
+					"status": "not-run",
+					"evidence": "Run packages/memory-engine/src/mongodb-conversation-recall-benchmark.test.ts for recall-affecting changes"
+				},
+				{
+					"gate": "query-governance",
+					"status": "advisory-only",
+					"evidence": "queryGovernance candidates are advisory-only"
+				}
+			],
+			"warnings": [],
+			"degradations": []
+		}
+	},
+	"metrics": {
+		"generatedAt": "2026-05-12T14:46:12.080Z",
+		"build": {
+			"source": "env",
+			"buildLabel": "0.1.0"
+		},
+		"corpus": {
+			"datasetVersion": "42f4a48d236e7775",
+			"datasetName": "bisect-baseline-2-6e00453-1778597050.json",
+			"datasetKind": "longmemeval",
+			"scenarios": 6,
+			"cases": 6,
+			"scoredCases": 6,
+			"skippedCases": 0
+		},
+		"metrics": {
+			"internal": {
+				"hitRate": 0.8333333333333334,
+				"emptyRate": 0,
+				"avgTopScore": 0.6751302083333334,
+				"p95LatencyMs": 4306,
+				"rAt5": 0.8333333333333334,
+				"rAt10": 0.8333333333333334,
+				"ndcgAt10": 0.8333333333333334
+			},
+			"official": {
+				"longMemEval": {
+					"retrievalCases": 6,
+					"abstentionCases": 0,
+					"session": {
+						"recallAnyAt1": 0.8333333333333334,
+						"recallAllAt1": 0.3333333333333333,
+						"ndcgAnyAt1": 0.8333333333333334,
+						"recallAnyAt3": 0.8333333333333334,
+						"recallAllAt3": 0.8333333333333334,
+						"ndcgAnyAt3": 0.8333333333333334,
+						"recallAnyAt5": 0.8333333333333334,
+						"recallAllAt5": 0.8333333333333334,
+						"ndcgAnyAt5": 0.8333333333333334,
+						"recallAnyAt10": 0.8333333333333334,
+						"recallAllAt10": 0.8333333333333334,
+						"ndcgAnyAt10": 0.8333333333333334,
+						"recallAnyAt30": 0.8333333333333334,
+						"recallAllAt30": 0.8333333333333334,
+						"ndcgAnyAt30": 0.8333333333333334,
+						"recallAnyAt50": 0.8333333333333334,
+						"recallAllAt50": 0.8333333333333334,
+						"ndcgAnyAt50": 0.8333333333333334
+					},
+					"turn": {
+						"recallAnyAt1": 0.8333333333333334,
+						"recallAllAt1": 0.3333333333333333,
+						"ndcgAnyAt1": 0.8333333333333334,
+						"recallAnyAt3": 0.8333333333333334,
+						"recallAllAt3": 0.6666666666666666,
+						"ndcgAnyAt3": 0.7192441461309548,
+						"recallAnyAt5": 0.8333333333333334,
+						"recallAllAt5": 0.6666666666666666,
+						"ndcgAnyAt5": 0.7192441461309548,
+						"recallAnyAt10": 0.8333333333333334,
+						"recallAllAt10": 0.6666666666666666,
+						"ndcgAnyAt10": 0.7192441461309548,
+						"recallAnyAt30": 0.8333333333333334,
+						"recallAllAt30": 0.8333333333333334,
+						"ndcgAnyAt30": 0.7382166668557009,
+						"recallAnyAt50": 0.8333333333333334,
+						"recallAllAt50": 0.8333333333333334,
+						"ndcgAnyAt50": 0.7382166668557009
+					}
+				}
+			}
+		},
+		"releaseGates": [
+			{
+				"gate": "official-retrieval",
+				"status": "passed",
+				"evidence": "officialMetrics present and all 6/6 benchmark cases scored"
+			},
+			{
+				"gate": "internal-retrieval",
+				"status": "passed",
+				"evidence": "6 cases, 6 scored"
+			},
+			{
+				"gate": "conversation-recall-regression",
+				"status": "not-run",
+				"evidence": "Run packages/memory-engine/src/mongodb-conversation-recall-benchmark.test.ts for recall-affecting changes"
+			},
+			{
+				"gate": "query-governance",
+				"status": "advisory-only",
+				"evidence": "queryGovernance candidates are advisory-only"
+			}
+		],
+		"warnings": [],
+		"degradations": []
+	},
+	"completedAt": "2026-05-12T14:46:12.093Z"
+}
