@@ -1,0 +1,25 @@
+[canary] run=canary-2026-05-12T12-53-06-563Z-87dfb3ce dataset=/Users/rom.iluz/.memongo/workspace/benchmarks/longmemeval_s_cleaned.json dryRun=false fullMode=false runDir=/Users/rom.iluz/Dev/memongo/artifacts/canary-runs/gate3-strict-1pertype-1778589425
+[canary] selected 6 evaluations across 6 types from 500 total
+  knowledge-update: 1
+  multi-session: 1
+  single-session-assistant: 1
+  single-session-preference: 1
+  single-session-user: 1
+  temporal-reasoning: 1
+[canary] posting benchmark to http://127.0.0.1:3847/v1/admin/relevance/benchmark
+[canary] complete. Artifact: /Users/rom.iluz/Dev/memongo/artifacts/canary-runs/gate3-strict-1pertype-1778589425/canary-artifact.json
+{
+  "ok": true,
+  "runId": "canary-2026-05-12T12-53-06-563Z-87dfb3ce",
+  "totalEvaluations": 6,
+  "breakdown": {
+    "knowledge-update": 1,
+    "multi-session": 1,
+    "single-session-assistant": 1,
+    "single-session-preference": 1,
+    "single-session-user": 1,
+    "temporal-reasoning": 1
+  },
+  "artifactPath": "/Users/rom.iluz/Dev/memongo/artifacts/canary-runs/gate3-strict-1pertype-1778589425/canary-artifact.json",
+  "responsePath": "/Users/rom.iluz/Dev/memongo/artifacts/canary-runs/gate3-strict-1pertype-1778589425/benchmark-response.json"
+}

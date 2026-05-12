@@ -3,6 +3,94 @@
 This log records benchmark-gate decisions. Keep entries short, factual, and
 linked to raw artifacts.
 
+## 2026-05-12: Phase 3 Gate 3 Strict 1/Type Canary (BUILD wf-20260511T212602Z-9db2daeb)
+
+Status: **FAIL** — Task 1.A envelope parity fields missing from `benchmarkReport`; one turn-precision miss on single-session-preference. Gate 3 blocked; Task 1.A re-opened per plan `docs/plans/2026-05-11-memongo-mempalace-roadmap-plan.md:2037`.
+
+Run:
+
+- Run id: `gate3-strict-1pertype-1778589425`
+- Timestamp: 2026-05-12T13:02:18Z (canary completed 12:55:57Z)
+- Commit SHA: `6e004534e8be5b761dcfd193af7c2cc19813d1ea` on `main`
+- Artifact dir: `artifacts/canary-runs/gate3-strict-1pertype-1778589425/`
+- Dataset: `longmemeval_s_cleaned.json`, SHA-256 `d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442`
+- MongoDB: atlas-local:preview 8.2.7 on port 27018 (fresh volumes; benchmark stack)
+- Scope: 6 evaluations, 1 per LongMemEval question type
+- Strict flags: `MEMONGO_BENCHMARK_STRICT=1`, `MEMONGO_LLM_ENRICHMENT_STRICT=1`
+- Wall-clock: canary ~171s (end-to-end 5.5 min including bootstrap) — well under 30 min budget
+
+Bootstrap B1-B5a results:
+
+- B1 (tool + dataset): PASS (`mongosh`, `docker`, `bun`, `curl` present; 277 MB dataset sha verified)
+- B2 (atlas-local:preview up): PASS after fresh volume wipe (prior stale volumes caused replica-set init panic; clean run healthy in ~36s)
+- B3 (`@memongo/api` start): initially failed with `SyntaxError: memongoBridgeShutdown not exported` — stale bridge dist; fixed by rebuilding `packages/memory-bridge` and `packages/memory-engine`; API then healthy on port 3847 connected to port 27018
+- B4 (`/health` probe): `{"ok":true,"service":"memongo-api"}`
+- B5 (bootstrap.json): emitted at `bootstrap.json`
+- B5a (mongot lag): PASS (status=READY, queryable=true, mongotLagEstimateSec=null, no STALE drift; post-canary re-snapshot `mongot-lag-post.json` also READY)
+- B5a knowledge URL: `https://www.mongodb.com/docs/manual/reference/operator/aggregation/listSearchIndexes/` (disclosed WebFetch substitution for MCP `search-knowledge`)
+
+Gate 3 exit-criteria checkboard (plan line 2035-2037):
+
+| Criterion | Result |
+|-----------|--------|
+| `hitRate=1` | PASS |
+| `emptyRate=0` | PASS |
+| `rAt5=1` | PASS |
+| `rAt10=1` | PASS |
+| `ndcgAt10=1` | PASS |
+| session `any@1=1` | PASS |
+| turn `any@1=1` | **FAIL** (0.8333) |
+| `missLedger=[]` | PASS (empty) |
+| `caseDiagnostics=[]` | **FAIL** (1 entry: `06878be2`) |
+| Task-1.A parity fields populated | **FAIL** (see parity inventory) |
+
+Internal metrics (all 1):
+
+- `hitRate=1`, `emptyRate=0`, `rAt5=1`, `rAt10=1`, `ndcgAt10=1`, `avgTopScore=0.7077`, `p95LatencyMs=8420`
+
+Official LongMemEval metrics:
+
+- Session: `any@1=1`, `all@1=0.5`, `ndcg@1=1`, `any@3=1`, `all@3=1`, `ndcg@3=1`, `any@10=1`, `ndcg@10=1` (perfect across K)
+- Turn: `any@1=0.8333`, `all@1=0.3333`, `ndcg@1=0.8333`, `any@3=1`, `all@3=0.8333`, `ndcg@3=0.8425`, `any@5=1`, `any@10=1`, `ndcg@10=0.8671`, `any@30=1`, `all@30=1`
+- Release gates: `official-retrieval=passed`, `internal-retrieval=passed`, `conversation-recall-regression=not-run`, `query-governance=advisory-only`; warnings=0, degradations=0
+
+Miss (case `06878be2`, single-session-preference):
+
+- Session top1 found (`sessionTop1Found=true`); turn top1 NOT found (`turnTop1Found=false`)
+- Expected turns: `turn_1`, `turn_9`, `turn_15`
+- Top-5 rank: `turn_2` (0.719), `turn_6` (0.664), `turn_1` (0.570), `turn_16` (0.566), `turn_5` (0.551)
+- Classification: preference evidence turn outranked by earlier assistant-response turn. Recovers at rank 3 → `any@3=1`.
+
+Task-1.A parity field inventory (Gate 3 blockers — all MISSING from `benchmarkReport`):
+
+- `datasetSha256` — MISSING; canary-artifact + bootstrap carry dataset SHA, but benchmarkReport envelope does not surface it
+- `retrievalUnit` — MISSING
+- `embedding.*` (model, dimensions, quantization, provider) — MISSING
+- `reranker.*` (enabled, model, topN) — MISSING
+- `storage.*` (BenchmarkStorageFootprint) — MISSING (not even null-with-reason)
+- `latency.p50` — MISSING (only `p95LatencyMs=8420` emitted)
+- `latency.p95` — PRESENT (8420 ms at `benchmarkReport.metrics.internal.p95LatencyMs`)
+- `cost.*` (BenchmarkCostCounters) — MISSING
+
+Note: Phase 1 Gate 1 wired the parity envelope types (`BenchmarkRunIdentity`, `BenchmarkEmbeddingConfig`, `BenchmarkRerankerConfig`, `BenchmarkStorageFootprint`, `BenchmarkLatencyDistribution`, `BenchmarkCostCounters`) with unit tests, but the `benchmarkReport` assembly path in `packages/memory-engine/src/mongodb-benchmark-runner.ts` does not currently project those values into the live benchmark response envelope. Task 1.A is re-opened.
+
+Decision:
+
+- **Gate 3 FAIL.** Do not proceed to Phase 4 (Gate 4 Strict 8/Type).
+- Re-open Task 1.A: wire envelope parity assembly into `benchmarkReport` (populate `datasetSha256`, `retrievalUnit`, `embedding.*`, `reranker.*`, `storage.*`, `latency.p50`, `cost.*`; null-with-reason is acceptable only for `storage.*` when `collStats` is unsupported on atlas-local:preview).
+- Re-investigate case `06878be2` turn-precision miss with miss-ledger + case diagnostics BEFORE changing retrieval logic (plan line 2052). Do NOT tune for 1/type — that's the anti-pattern. The 2026-05-11 preference-evidence post-rerank entry above claims this case was fixed; this regression at top1 turn level requires root-cause analysis.
+- Mongot lag + bootstrap infrastructure are GREEN. Phase 1 harness reliability is proven stable across this run.
+
+Next gate:
+
+- Re-run Gate 3 after Task 1.A parity-field wiring lands AND case `06878be2` turn-precision root-cause analysis completes (and, if needed, a targeted fix — not a dataset-specific tune).
+- Do NOT publish any retrieval comparison numbers until Gate 3 passes.
+
+Rejected alternatives:
+
+- Proceeding to Phase 4 despite caseDiagnostics≠[] and missing parity: rejected — plan explicitly requires both conditions cleared.
+- Tuning retrieval on case `06878be2` in isolation: rejected per plan anti-pattern line 2052.
+
 ## 2026-05-11: Preference Evidence Post-Rerank Fix
 
 Status: promote to strict 8/type canary.

@@ -1,0 +1,230 @@
+{
+	"runId": "canary-2026-05-12T12-53-06-563Z-87dfb3ce",
+	"gateLabel": "gate3-strict-1pertype",
+	"generatedAt": "2026-05-12T13:01:59.199Z",
+	"datasetSha256": "d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442",
+	"gitSha": "6e004534e8be5b761dcfd193af7c2cc19813d1ea",
+	"gitBranch": "main",
+	"mongodbVersion": "8.2.7",
+	"casesPerType": 1,
+	"totalEvaluations": 6,
+	"questionTypeBreakdown": {
+		"knowledge-update": 1,
+		"multi-session": 1,
+		"single-session-assistant": 1,
+		"single-session-preference": 1,
+		"single-session-user": 1,
+		"temporal-reasoning": 1
+	},
+	"hitRate": 1,
+	"emptyRate": 0,
+	"rAt5": 1,
+	"rAt10": 1,
+	"ndcgAt10": 1,
+	"session": {
+		"any@1": 1,
+		"any@3": 1,
+		"any@5": 1,
+		"ndcgAny@10": 1
+	},
+	"turn": {
+		"any@1": 0.8333333333333334,
+		"any@3": 1,
+		"any@5": 1,
+		"ndcgAny@10": 0.8670529473367118
+	},
+	"missLedger": [],
+	"caseDiagnostics": [
+		{
+			"caseId": "06878be2",
+			"questionType": "single-session-preference",
+			"rAt5": 1,
+			"rAt10": 1,
+			"ndcgAt10": 1,
+			"issue": "top1-turn",
+			"expectedSessionIds": ["06878be2::answer_555dfb94"],
+			"expectedTurnIds": [
+				"06878be2::answer_555dfb94::turn_1",
+				"06878be2::answer_555dfb94::turn_9",
+				"06878be2::answer_555dfb94::turn_15"
+			],
+			"topCandidateSessionIds": ["06878be2::answer_555dfb94"],
+			"topCandidateTurnIds": [
+				"06878be2::answer_555dfb94::turn_2",
+				"06878be2::answer_555dfb94::turn_6",
+				"06878be2::answer_555dfb94::turn_1",
+				"06878be2::answer_555dfb94::turn_16",
+				"06878be2::answer_555dfb94::turn_5"
+			],
+			"sessionTop1Found": true,
+			"turnTop1Found": false,
+			"longMemEval": {
+				"session": {
+					"recallAnyAt1": 1,
+					"recallAllAt1": 1,
+					"ndcgAnyAt1": 1,
+					"recallAnyAt3": 1,
+					"recallAllAt3": 1,
+					"ndcgAnyAt3": 1,
+					"recallAnyAt5": 1,
+					"recallAllAt5": 1,
+					"ndcgAnyAt5": 1,
+					"recallAnyAt10": 1,
+					"recallAllAt10": 1,
+					"ndcgAnyAt10": 1,
+					"recallAnyAt30": 1,
+					"recallAllAt30": 1,
+					"ndcgAnyAt30": 1,
+					"recallAnyAt50": 1,
+					"recallAllAt50": 1,
+					"ndcgAnyAt50": 1
+				},
+				"turn": {
+					"recallAnyAt1": 0,
+					"recallAllAt1": 0,
+					"ndcgAnyAt1": 0,
+					"recallAnyAt3": 1,
+					"recallAllAt3": 0,
+					"ndcgAnyAt3": 0.23981246656813146,
+					"recallAnyAt5": 1,
+					"recallAllAt5": 0,
+					"ndcgAnyAt5": 0.23981246656813146,
+					"recallAnyAt10": 1,
+					"recallAllAt10": 0,
+					"ndcgAnyAt10": 0.3868528072345416,
+					"recallAnyAt30": 1,
+					"recallAllAt30": 1,
+					"ndcgAnyAt30": 0.4708781329420831,
+					"recallAnyAt50": 1,
+					"recallAllAt50": 1,
+					"ndcgAnyAt50": 0.4708781329420831
+				}
+			},
+			"topCandidates": [
+				{
+					"rank": 1,
+					"score": 0.71875,
+					"source": "conversation",
+					"path": "events/13b6ca54-6d27-498b-80d4-34cc9ccb1b35",
+					"sessionId": "06878be2::answer_555dfb94",
+					"canonicalId": "event:13b6ca54-6d27-498b-80d4-34cc9ccb1b35",
+					"resolvedSessionIds": ["06878be2::answer_555dfb94"],
+					"resolvedTurnIds": ["06878be2::answer_555dfb94::turn_2"],
+					"sourceEventIds": ["13b6ca54-6d27-498b-80d4-34cc9ccb1b35"]
+				},
+				{
+					"rank": 2,
+					"score": 0.6640625,
+					"source": "conversation",
+					"path": "events/c4285de2-dc7a-4323-955b-1235026b70dd",
+					"sessionId": "06878be2::answer_555dfb94",
+					"canonicalId": "event:c4285de2-dc7a-4323-955b-1235026b70dd",
+					"resolvedSessionIds": ["06878be2::answer_555dfb94"],
+					"resolvedTurnIds": ["06878be2::answer_555dfb94::turn_6"],
+					"sourceEventIds": ["c4285de2-dc7a-4323-955b-1235026b70dd"]
+				},
+				{
+					"rank": 3,
+					"score": 0.5703125,
+					"source": "conversation",
+					"path": "events/b2f3ee5e-0652-483b-a5ed-d2043da9bf25",
+					"sessionId": "06878be2::answer_555dfb94",
+					"canonicalId": "event:b2f3ee5e-0652-483b-a5ed-d2043da9bf25",
+					"resolvedSessionIds": ["06878be2::answer_555dfb94"],
+					"resolvedTurnIds": ["06878be2::answer_555dfb94::turn_1"],
+					"sourceEventIds": ["b2f3ee5e-0652-483b-a5ed-d2043da9bf25"]
+				},
+				{
+					"rank": 4,
+					"score": 0.56640625,
+					"source": "conversation",
+					"path": "events/1891bcf6-f350-422e-bfe7-c6a8bc44b08c",
+					"sessionId": "06878be2::answer_555dfb94",
+					"canonicalId": "event:1891bcf6-f350-422e-bfe7-c6a8bc44b08c",
+					"resolvedSessionIds": ["06878be2::answer_555dfb94"],
+					"resolvedTurnIds": ["06878be2::answer_555dfb94::turn_16"],
+					"sourceEventIds": ["1891bcf6-f350-422e-bfe7-c6a8bc44b08c"]
+				},
+				{
+					"rank": 5,
+					"score": 0.55078125,
+					"source": "conversation",
+					"path": "events/3d0ca744-9120-454b-bfed-2b28eb6f96b4",
+					"sessionId": "06878be2::answer_555dfb94",
+					"canonicalId": "event:3d0ca744-9120-454b-bfed-2b28eb6f96b4",
+					"resolvedSessionIds": ["06878be2::answer_555dfb94"],
+					"resolvedTurnIds": ["06878be2::answer_555dfb94::turn_5"],
+					"sourceEventIds": ["3d0ca744-9120-454b-bfed-2b28eb6f96b4"]
+				}
+			]
+		}
+	],
+	"gate3ExitCriteria": {
+		"hitRate=1": true,
+		"emptyRate=0": true,
+		"rAt5=1": true,
+		"rAt10=1": true,
+		"ndcgAt10=1": true,
+		"sessionAny@1=1": true,
+		"turnAny@1=1": false,
+		"missLedger=[]": true,
+		"caseDiagnostics=[]": false,
+		"task1AParityFieldsPopulated": false
+	},
+	"parityFieldInventory": {
+		"datasetSha256": {
+			"present": false,
+			"location": "benchmarkReport.corpus.datasetSha256",
+			"value": null,
+			"reason": "missing from benchmarkReport envelope; canary-artifact + bootstrap do carry dataset SHA, but the benchmarkReport object does not surface it"
+		},
+		"retrievalUnit": {
+			"present": false,
+			"location": "benchmarkReport.corpus.retrievalUnit",
+			"value": null,
+			"reason": "missing from benchmarkReport envelope"
+		},
+		"embedding.*": {
+			"present": false,
+			"location": "benchmarkReport.embedding",
+			"value": null,
+			"reason": "missing from benchmarkReport envelope — expected BenchmarkEmbeddingConfig (model, dimensions, quantization, provider)"
+		},
+		"reranker.*": {
+			"present": false,
+			"location": "benchmarkReport.reranker",
+			"value": null,
+			"reason": "missing from benchmarkReport envelope — expected BenchmarkRerankerConfig (enabled, model, topN)"
+		},
+		"storage.*": {
+			"present": false,
+			"location": "benchmarkReport.storage",
+			"value": null,
+			"reason": "missing from benchmarkReport envelope — BenchmarkStorageFootprint expected"
+		},
+		"latency.p50": {
+			"present": false,
+			"location": "benchmarkReport.metrics.internal.p50LatencyMs OR benchmarkReport.metrics.latency.p50",
+			"value": null,
+			"reason": "missing; only p95 is emitted at benchmarkReport.metrics.internal.p95LatencyMs=8420"
+		},
+		"latency.p95": {
+			"present": true,
+			"location": "benchmarkReport.metrics.internal.p95LatencyMs",
+			"value": 8420,
+			"reason": null
+		},
+		"cost.*": {
+			"present": false,
+			"location": "benchmarkReport.cost",
+			"value": null,
+			"reason": "missing from benchmarkReport envelope — expected BenchmarkCostCounters"
+		}
+	},
+	"verdict": "FAIL",
+	"failureSummary": [
+		"Task-1.A parity fields missing from benchmarkReport envelope: datasetSha256, retrievalUnit, embedding.*, reranker.*, storage.*, latency.p50, cost.* (see parityFieldInventory). Per plan line 2037: Task 1.A is re-opened.",
+		"Official metric miss: turn recallAnyAt1=0.8333333333333334 (expected 1). Case 06878be2 (single-session-preference): top1 turn_2 (surface-level question text) ranked above expected turn_1/turn_9/turn_15; user preference evidence lost relevance race against assistant-response turn. See caseDiagnostics[0].",
+		"caseDiagnostics is non-empty: 1 case flagged (06878be2). Plan requires caseDiagnostics=[]."
+	]
+}

@@ -1,0 +1,553 @@
+{
+	"runId": "canary-2026-05-12T12-53-06-563Z-87dfb3ce",
+	"startedAt": "2026-05-12T12:53:06.563Z",
+	"datasetPath": "/Users/rom.iluz/.memongo/workspace/benchmarks/longmemeval_s_cleaned.json",
+	"datasetHash": "d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442",
+	"casesPerType": 1,
+	"totalCaseLimit": null,
+	"fullMode": false,
+	"runShapeHash": "3b431221da683570191e8195ec1091c7f9470b99ac8c4b2158c798a2391ec6d0",
+	"totalEvaluations": 6,
+	"selectedQuestionIds": [
+		"01493427",
+		"00ca467f",
+		"0e5e2d1a",
+		"06878be2",
+		"001be529",
+		"08f4fc43"
+	],
+	"questionTypeBreakdown": {
+		"knowledge-update": 1,
+		"multi-session": 1,
+		"single-session-assistant": 1,
+		"single-session-preference": 1,
+		"single-session-user": 1,
+		"temporal-reasoning": 1
+	},
+	"benchmarkResponse": {
+		"datasetVersion": "42f4a48d236e7775",
+		"datasetName": "canary-2026-05-12T12-53-06-563Z-87dfb3ce.json",
+		"datasetKind": "longmemeval",
+		"scenarios": 6,
+		"cases": 6,
+		"scoredCases": 6,
+		"skippedCases": 0,
+		"hitRate": 1,
+		"emptyRate": 0,
+		"avgTopScore": 0.7076822916666666,
+		"p95LatencyMs": 8420,
+		"rAt5": 1,
+		"rAt10": 1,
+		"ndcgAt10": 1,
+		"questionTypeBreakdown": [
+			{
+				"questionType": "knowledge-update",
+				"cases": 1,
+				"scoredCases": 1,
+				"hitRate": 1,
+				"rAt5": 1,
+				"rAt10": 1,
+				"ndcgAt10": 1
+			},
+			{
+				"questionType": "multi-session",
+				"cases": 1,
+				"scoredCases": 1,
+				"hitRate": 1,
+				"rAt5": 1,
+				"rAt10": 1,
+				"ndcgAt10": 1
+			},
+			{
+				"questionType": "single-session-assistant",
+				"cases": 1,
+				"scoredCases": 1,
+				"hitRate": 1,
+				"rAt5": 1,
+				"rAt10": 1,
+				"ndcgAt10": 1
+			},
+			{
+				"questionType": "single-session-preference",
+				"cases": 1,
+				"scoredCases": 1,
+				"hitRate": 1,
+				"rAt5": 1,
+				"rAt10": 1,
+				"ndcgAt10": 1
+			},
+			{
+				"questionType": "single-session-user",
+				"cases": 1,
+				"scoredCases": 1,
+				"hitRate": 1,
+				"rAt5": 1,
+				"rAt10": 1,
+				"ndcgAt10": 1
+			},
+			{
+				"questionType": "temporal-reasoning",
+				"cases": 1,
+				"scoredCases": 1,
+				"hitRate": 1,
+				"rAt5": 1,
+				"rAt10": 1,
+				"ndcgAt10": 1
+			}
+		],
+		"officialMetrics": {
+			"longMemEval": {
+				"retrievalCases": 6,
+				"abstentionCases": 0,
+				"session": {
+					"recallAnyAt1": 1,
+					"recallAllAt1": 0.5,
+					"ndcgAnyAt1": 1,
+					"recallAnyAt3": 1,
+					"recallAllAt3": 1,
+					"ndcgAnyAt3": 1,
+					"recallAnyAt5": 1,
+					"recallAllAt5": 1,
+					"ndcgAnyAt5": 1,
+					"recallAnyAt10": 1,
+					"recallAllAt10": 1,
+					"ndcgAnyAt10": 1,
+					"recallAnyAt30": 1,
+					"recallAllAt30": 1,
+					"ndcgAnyAt30": 1,
+					"recallAnyAt50": 1,
+					"recallAllAt50": 1,
+					"ndcgAnyAt50": 1
+				},
+				"turn": {
+					"recallAnyAt1": 0.8333333333333334,
+					"recallAllAt1": 0.3333333333333333,
+					"ndcgAnyAt1": 0.8333333333333334,
+					"recallAnyAt3": 1,
+					"recallAllAt3": 0.8333333333333334,
+					"ndcgAnyAt3": 0.84254622389231,
+					"recallAnyAt5": 1,
+					"recallAllAt5": 0.8333333333333334,
+					"ndcgAnyAt5": 0.84254622389231,
+					"recallAnyAt10": 1,
+					"recallAllAt10": 0.8333333333333334,
+					"ndcgAnyAt10": 0.8670529473367118,
+					"recallAnyAt30": 1,
+					"recallAllAt30": 1,
+					"ndcgAnyAt30": 0.8810571682879687,
+					"recallAnyAt50": 1,
+					"recallAllAt50": 1,
+					"ndcgAnyAt50": 0.8810571682879687
+				}
+			}
+		},
+		"ingest": {
+			"conversationsIngested": 286,
+			"turnsIngested": 2860,
+			"skippedConversations": 0,
+			"failedLines": 0,
+			"failedTurns": 0
+		},
+		"regressions": [
+			{
+				"metricName": "hitRate",
+				"baseline": 1,
+				"current": 1,
+				"delta": 0,
+				"severity": "low"
+			},
+			{
+				"metricName": "emptyRate",
+				"baseline": 0,
+				"current": 0,
+				"delta": 0,
+				"severity": "low"
+			},
+			{
+				"metricName": "avgTopScore",
+				"baseline": 0.7076822916666666,
+				"current": 0.7076822916666666,
+				"delta": 0,
+				"severity": "low"
+			},
+			{
+				"metricName": "p95LatencyMs",
+				"baseline": 8420,
+				"current": 8420,
+				"delta": 0,
+				"severity": "low"
+			},
+			{
+				"metricName": "rAt5",
+				"baseline": 1,
+				"current": 1,
+				"delta": 0,
+				"severity": "low"
+			},
+			{
+				"metricName": "rAt10",
+				"baseline": 1,
+				"current": 1,
+				"delta": 0,
+				"severity": "low"
+			},
+			{
+				"metricName": "ndcgAt10",
+				"baseline": 1,
+				"current": 1,
+				"delta": 0,
+				"severity": "low"
+			}
+		],
+		"missLedger": [],
+		"caseDiagnostics": [
+			{
+				"caseId": "06878be2",
+				"questionType": "single-session-preference",
+				"rAt5": 1,
+				"rAt10": 1,
+				"ndcgAt10": 1,
+				"issue": "top1-turn",
+				"expectedSessionIds": ["06878be2::answer_555dfb94"],
+				"expectedTurnIds": [
+					"06878be2::answer_555dfb94::turn_1",
+					"06878be2::answer_555dfb94::turn_9",
+					"06878be2::answer_555dfb94::turn_15"
+				],
+				"topCandidateSessionIds": ["06878be2::answer_555dfb94"],
+				"topCandidateTurnIds": [
+					"06878be2::answer_555dfb94::turn_2",
+					"06878be2::answer_555dfb94::turn_6",
+					"06878be2::answer_555dfb94::turn_1",
+					"06878be2::answer_555dfb94::turn_16",
+					"06878be2::answer_555dfb94::turn_5"
+				],
+				"sessionTop1Found": true,
+				"turnTop1Found": false,
+				"longMemEval": {
+					"session": {
+						"recallAnyAt1": 1,
+						"recallAllAt1": 1,
+						"ndcgAnyAt1": 1,
+						"recallAnyAt3": 1,
+						"recallAllAt3": 1,
+						"ndcgAnyAt3": 1,
+						"recallAnyAt5": 1,
+						"recallAllAt5": 1,
+						"ndcgAnyAt5": 1,
+						"recallAnyAt10": 1,
+						"recallAllAt10": 1,
+						"ndcgAnyAt10": 1,
+						"recallAnyAt30": 1,
+						"recallAllAt30": 1,
+						"ndcgAnyAt30": 1,
+						"recallAnyAt50": 1,
+						"recallAllAt50": 1,
+						"ndcgAnyAt50": 1
+					},
+					"turn": {
+						"recallAnyAt1": 0,
+						"recallAllAt1": 0,
+						"ndcgAnyAt1": 0,
+						"recallAnyAt3": 1,
+						"recallAllAt3": 0,
+						"ndcgAnyAt3": 0.23981246656813146,
+						"recallAnyAt5": 1,
+						"recallAllAt5": 0,
+						"ndcgAnyAt5": 0.23981246656813146,
+						"recallAnyAt10": 1,
+						"recallAllAt10": 0,
+						"ndcgAnyAt10": 0.3868528072345416,
+						"recallAnyAt30": 1,
+						"recallAllAt30": 1,
+						"ndcgAnyAt30": 0.4708781329420831,
+						"recallAnyAt50": 1,
+						"recallAllAt50": 1,
+						"ndcgAnyAt50": 0.4708781329420831
+					}
+				},
+				"topCandidates": [
+					{
+						"rank": 1,
+						"score": 0.71875,
+						"source": "conversation",
+						"path": "events/13b6ca54-6d27-498b-80d4-34cc9ccb1b35",
+						"sessionId": "06878be2::answer_555dfb94",
+						"canonicalId": "event:13b6ca54-6d27-498b-80d4-34cc9ccb1b35",
+						"resolvedSessionIds": ["06878be2::answer_555dfb94"],
+						"resolvedTurnIds": ["06878be2::answer_555dfb94::turn_2"],
+						"sourceEventIds": ["13b6ca54-6d27-498b-80d4-34cc9ccb1b35"]
+					},
+					{
+						"rank": 2,
+						"score": 0.6640625,
+						"source": "conversation",
+						"path": "events/c4285de2-dc7a-4323-955b-1235026b70dd",
+						"sessionId": "06878be2::answer_555dfb94",
+						"canonicalId": "event:c4285de2-dc7a-4323-955b-1235026b70dd",
+						"resolvedSessionIds": ["06878be2::answer_555dfb94"],
+						"resolvedTurnIds": ["06878be2::answer_555dfb94::turn_6"],
+						"sourceEventIds": ["c4285de2-dc7a-4323-955b-1235026b70dd"]
+					},
+					{
+						"rank": 3,
+						"score": 0.5703125,
+						"source": "conversation",
+						"path": "events/b2f3ee5e-0652-483b-a5ed-d2043da9bf25",
+						"sessionId": "06878be2::answer_555dfb94",
+						"canonicalId": "event:b2f3ee5e-0652-483b-a5ed-d2043da9bf25",
+						"resolvedSessionIds": ["06878be2::answer_555dfb94"],
+						"resolvedTurnIds": ["06878be2::answer_555dfb94::turn_1"],
+						"sourceEventIds": ["b2f3ee5e-0652-483b-a5ed-d2043da9bf25"]
+					},
+					{
+						"rank": 4,
+						"score": 0.56640625,
+						"source": "conversation",
+						"path": "events/1891bcf6-f350-422e-bfe7-c6a8bc44b08c",
+						"sessionId": "06878be2::answer_555dfb94",
+						"canonicalId": "event:1891bcf6-f350-422e-bfe7-c6a8bc44b08c",
+						"resolvedSessionIds": ["06878be2::answer_555dfb94"],
+						"resolvedTurnIds": ["06878be2::answer_555dfb94::turn_16"],
+						"sourceEventIds": ["1891bcf6-f350-422e-bfe7-c6a8bc44b08c"]
+					},
+					{
+						"rank": 5,
+						"score": 0.55078125,
+						"source": "conversation",
+						"path": "events/3d0ca744-9120-454b-bfed-2b28eb6f96b4",
+						"sessionId": "06878be2::answer_555dfb94",
+						"canonicalId": "event:3d0ca744-9120-454b-bfed-2b28eb6f96b4",
+						"resolvedSessionIds": ["06878be2::answer_555dfb94"],
+						"resolvedTurnIds": ["06878be2::answer_555dfb94::turn_5"],
+						"sourceEventIds": ["3d0ca744-9120-454b-bfed-2b28eb6f96b4"]
+					}
+				]
+			}
+		],
+		"queryGovernance": {
+			"status": "advisory-only",
+			"generatedAt": "2026-05-12T12:55:57.427Z",
+			"candidates": [
+				{
+					"candidateId": "search-detailed-hybrid-rank-fusion",
+					"source": "benchmark",
+					"queryShapeFamily": "search-detailed",
+					"recipe": "hybrid",
+					"scope": "cluster",
+					"reason": "Benchmark evidence shows the canonical detailed-search hybrid lane is valuable enough to inspect with $queryStats before pinning any cluster-wide query settings.",
+					"evidence": {
+						"datasetName": "canary-2026-05-12T12-53-06-563Z-87dfb3ce.json",
+						"datasetKind": "longmemeval",
+						"cases": 6,
+						"hitRate": 1,
+						"p95LatencyMs": 8420,
+						"rAt5": 1,
+						"ndcgAt10": 1
+					},
+					"recommendedAction": "consider-setQuerySettings",
+					"rollbackNote": "Query settings are cluster-wide. If indexes, fusion strategy, or benchmark evidence changes, remove the setting with removeQuerySettings by shape or queryShapeHash."
+				}
+			],
+			"notes": [
+				"Operational only: do not hardcode setQuerySettings assumptions into application logic.",
+				"Validate any candidate against live $queryStats and current indexes before pinning a plan."
+			]
+		},
+		"benchmarkReport": {
+			"generatedAt": "2026-05-12T12:55:57.427Z",
+			"build": {
+				"source": "env",
+				"buildLabel": "0.1.0"
+			},
+			"corpus": {
+				"datasetVersion": "42f4a48d236e7775",
+				"datasetName": "canary-2026-05-12T12-53-06-563Z-87dfb3ce.json",
+				"datasetKind": "longmemeval",
+				"scenarios": 6,
+				"cases": 6,
+				"scoredCases": 6,
+				"skippedCases": 0
+			},
+			"metrics": {
+				"internal": {
+					"hitRate": 1,
+					"emptyRate": 0,
+					"avgTopScore": 0.7076822916666666,
+					"p95LatencyMs": 8420,
+					"rAt5": 1,
+					"rAt10": 1,
+					"ndcgAt10": 1
+				},
+				"official": {
+					"longMemEval": {
+						"retrievalCases": 6,
+						"abstentionCases": 0,
+						"session": {
+							"recallAnyAt1": 1,
+							"recallAllAt1": 0.5,
+							"ndcgAnyAt1": 1,
+							"recallAnyAt3": 1,
+							"recallAllAt3": 1,
+							"ndcgAnyAt3": 1,
+							"recallAnyAt5": 1,
+							"recallAllAt5": 1,
+							"ndcgAnyAt5": 1,
+							"recallAnyAt10": 1,
+							"recallAllAt10": 1,
+							"ndcgAnyAt10": 1,
+							"recallAnyAt30": 1,
+							"recallAllAt30": 1,
+							"ndcgAnyAt30": 1,
+							"recallAnyAt50": 1,
+							"recallAllAt50": 1,
+							"ndcgAnyAt50": 1
+						},
+						"turn": {
+							"recallAnyAt1": 0.8333333333333334,
+							"recallAllAt1": 0.3333333333333333,
+							"ndcgAnyAt1": 0.8333333333333334,
+							"recallAnyAt3": 1,
+							"recallAllAt3": 0.8333333333333334,
+							"ndcgAnyAt3": 0.84254622389231,
+							"recallAnyAt5": 1,
+							"recallAllAt5": 0.8333333333333334,
+							"ndcgAnyAt5": 0.84254622389231,
+							"recallAnyAt10": 1,
+							"recallAllAt10": 0.8333333333333334,
+							"ndcgAnyAt10": 0.8670529473367118,
+							"recallAnyAt30": 1,
+							"recallAllAt30": 1,
+							"ndcgAnyAt30": 0.8810571682879687,
+							"recallAnyAt50": 1,
+							"recallAllAt50": 1,
+							"ndcgAnyAt50": 0.8810571682879687
+						}
+					}
+				}
+			},
+			"releaseGates": [
+				{
+					"gate": "official-retrieval",
+					"status": "passed",
+					"evidence": "officialMetrics present and all 6/6 benchmark cases scored"
+				},
+				{
+					"gate": "internal-retrieval",
+					"status": "passed",
+					"evidence": "6 cases, 6 scored"
+				},
+				{
+					"gate": "conversation-recall-regression",
+					"status": "not-run",
+					"evidence": "Run packages/memory-engine/src/mongodb-conversation-recall-benchmark.test.ts for recall-affecting changes"
+				},
+				{
+					"gate": "query-governance",
+					"status": "advisory-only",
+					"evidence": "queryGovernance candidates are advisory-only"
+				}
+			],
+			"warnings": [],
+			"degradations": []
+		}
+	},
+	"metrics": {
+		"generatedAt": "2026-05-12T12:55:57.427Z",
+		"build": {
+			"source": "env",
+			"buildLabel": "0.1.0"
+		},
+		"corpus": {
+			"datasetVersion": "42f4a48d236e7775",
+			"datasetName": "canary-2026-05-12T12-53-06-563Z-87dfb3ce.json",
+			"datasetKind": "longmemeval",
+			"scenarios": 6,
+			"cases": 6,
+			"scoredCases": 6,
+			"skippedCases": 0
+		},
+		"metrics": {
+			"internal": {
+				"hitRate": 1,
+				"emptyRate": 0,
+				"avgTopScore": 0.7076822916666666,
+				"p95LatencyMs": 8420,
+				"rAt5": 1,
+				"rAt10": 1,
+				"ndcgAt10": 1
+			},
+			"official": {
+				"longMemEval": {
+					"retrievalCases": 6,
+					"abstentionCases": 0,
+					"session": {
+						"recallAnyAt1": 1,
+						"recallAllAt1": 0.5,
+						"ndcgAnyAt1": 1,
+						"recallAnyAt3": 1,
+						"recallAllAt3": 1,
+						"ndcgAnyAt3": 1,
+						"recallAnyAt5": 1,
+						"recallAllAt5": 1,
+						"ndcgAnyAt5": 1,
+						"recallAnyAt10": 1,
+						"recallAllAt10": 1,
+						"ndcgAnyAt10": 1,
+						"recallAnyAt30": 1,
+						"recallAllAt30": 1,
+						"ndcgAnyAt30": 1,
+						"recallAnyAt50": 1,
+						"recallAllAt50": 1,
+						"ndcgAnyAt50": 1
+					},
+					"turn": {
+						"recallAnyAt1": 0.8333333333333334,
+						"recallAllAt1": 0.3333333333333333,
+						"ndcgAnyAt1": 0.8333333333333334,
+						"recallAnyAt3": 1,
+						"recallAllAt3": 0.8333333333333334,
+						"ndcgAnyAt3": 0.84254622389231,
+						"recallAnyAt5": 1,
+						"recallAllAt5": 0.8333333333333334,
+						"ndcgAnyAt5": 0.84254622389231,
+						"recallAnyAt10": 1,
+						"recallAllAt10": 0.8333333333333334,
+						"ndcgAnyAt10": 0.8670529473367118,
+						"recallAnyAt30": 1,
+						"recallAllAt30": 1,
+						"ndcgAnyAt30": 0.8810571682879687,
+						"recallAnyAt50": 1,
+						"recallAllAt50": 1,
+						"ndcgAnyAt50": 0.8810571682879687
+					}
+				}
+			}
+		},
+		"releaseGates": [
+			{
+				"gate": "official-retrieval",
+				"status": "passed",
+				"evidence": "officialMetrics present and all 6/6 benchmark cases scored"
+			},
+			{
+				"gate": "internal-retrieval",
+				"status": "passed",
+				"evidence": "6 cases, 6 scored"
+			},
+			{
+				"gate": "conversation-recall-regression",
+				"status": "not-run",
+				"evidence": "Run packages/memory-engine/src/mongodb-conversation-recall-benchmark.test.ts for recall-affecting changes"
+			},
+			{
+				"gate": "query-governance",
+				"status": "advisory-only",
+				"evidence": "queryGovernance candidates are advisory-only"
+			}
+		],
+		"warnings": [],
+		"degradations": []
+	},
+	"completedAt": "2026-05-12T12:55:57.866Z"
+}
