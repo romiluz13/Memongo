@@ -51,19 +51,29 @@ once. Also assert: the SIGTERM handler drains the batch within
 
 ## Layer 4 — Correctness invariant (fast-check)
 
-- **Property 5 (plan line 546):** access count is monotonic under
-  sequential reads.
-- Property: batch drain completes on shutdown signal within
-  `FLUSH_TIMEOUT_MS`.
-- Generator: sequences of `{ eventId, timestamp }` pairs sorted by
-  timestamp; simulated shutdown at a random index.
-- Seed: **20260512**, 200 runs.
+- **Property 5** (plan line 546) — implemented at
+  `packages/memory-engine/src/mongodb-access-tracker.test.ts:326–` under
+  "fast-check Property (CRIT-4): total flushed $inc count === total
+  recordAccess calls" (commit `76dcddd2ce`).
+  - Generator: sequences of `recordAccess(eventKey)` calls over up to 50
+    random keys; fresh `AccessTracker` + fake collection per run (so state
+    leakage across runs is impossible).
+  - Assertion: sum of `$inc.accessCount` across all `bulkWrite` operations
+    equals `calls.length` — no count loss, no count duplication.
+  - Seed: **20260512**, 200 runs.
+
+Supporting HIGH-4 regression test at `mongodb-access-tracker.test.ts:259–324`:
+
+- First flush fails (`insertMany` rejects); second flush succeeds with
+  the re-buffered snapshot — total `$inc` count across both attempts still
+  equals the number of `recordAccess` calls, proving the deadletter path
+  never loses counts.
 
 ## Commands
 
 ```bash
 CI=true bunx vitest run packages/memory-engine/src/mongodb-access-tracker.test.ts
-# Shutdown property runs under fast-check with simulated SIGTERM.
+# 2026-05-12: exit 0, 11/11 passed (HIGH-4 re-buffer + CRIT-4 property added).
 ```
 
 ## Open items

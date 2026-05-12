@@ -36,22 +36,26 @@
 
 ## Layer 4 — Correctness invariants (fast-check)
 
-Three linked invariants (plan lines 544-545):
+Three linked invariants (plan lines 544-545), implemented in
+`packages/memory-engine/src/mongodb-trust.test.ts` (commit `063a868c40`):
 
-- **Property 1:** `temporalScope ∈ { "permanent", "ongoing" }` → NEVER
-  decays.
-- **Property 2:** output always in `[0, 1]`.
-- **Property 3:** monotonic decreasing under no-access (temporary
-  memories).
+- **Property A** (`mongodb-trust.test.ts:359–383`): `temporalScope ∈
+  { "permanent", "ongoing" }` → NEVER decays. Seed 20260512, 500 runs.
+- **Property B** (`mongodb-trust.test.ts:385–409`): output always in
+  `[0, 1]` for any non-permanent input. Seed 20260512, 500 runs.
+- **Property C** (`mongodb-trust.test.ts:411–441`): monotonic
+  non-increasing as `daysSinceCreate` grows for fixed baseImportance with
+  no access. Seed 20260512, 500 runs.
 
 Generator: random `{ importance ∈ [0,1], temporalScope, ageMs, lastAccessMs }`.
-Seed: **20260512**, 500 runs.
+Same project-canonical seed across all three. `FAST_CHECK_SEED` constant
+lives at line 17; individual `fc.assert` calls cite it by name.
 
 ## Commands
 
 ```bash
 CI=true bunx vitest run packages/memory-engine/src/mongodb-trust.test.ts
-# Importance property test seed confirmed in test output header.
+# 2026-05-12: exit 0, 19/19 passed (3 new fast-check properties + existing unit tests).
 ```
 
 ## Open items

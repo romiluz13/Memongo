@@ -17,6 +17,9 @@ ADR-006 — own-your-memory posture.
   dependency produce different signatures for the same data).
 - Weak signature (e.g., truncated HMAC) accepting forgeries.
 - Signing with an empty key silently "succeeds".
+- **CRIT-6 (remfix):** `JSON.stringify` silently renders `Map`/`Set` as
+  `{}`, and a naive deep-sort drops `Date` objects to `{}` as well. Any
+  memory field of those types would be silently lost on export.
 
 ## Layer 1 — Unit
 
@@ -31,9 +34,18 @@ Tests at `packages/memory-bridge/src/memongo-export.test.ts`:
 - `verifyExportBundle` rejects tampered bundle, wrong key, malformed
   signature. Uses `timingSafeEqual`.
 - Empty signing key → **throws** (strict mode, no silent fallback).
+- **CRIT-6 remfix:** `canonicalize()` now tags non-plain-object values so
+  JSON never drops them silently:
+  - `Date` → ISO-8601 string.
+  - `Buffer` / `Uint8Array` → `{ __type: "Buffer", base64: string }`.
+  - `Map` → `{ __type: "Map", entries: [[k,v],...] }` (key-sorted).
+  - `Set` → `{ __type: "Set", values: [...] }` (JSON-sorted).
+  Tests cover all four types and assert `Map` is stable across insertion
+  orders (`memongo-export.test.ts` — 5 new cases in the "non-JSON type
+  handling (CRIT-6)" describe block).
 - Exit-code: `CI=true bunx vitest run
-  packages/memory-bridge/src/memongo-export.test.ts` → exit 0, 10/10
-  passed (recorded at commit `530a3bef95`).
+  packages/memory-bridge/src/memongo-export.test.ts` → exit 0, 15/15
+  passed (2026-05-12, commit covers CRIT-6 + original SE-4 baseline).
 
 ## Layer 2 — Integration (deferred)
 
@@ -69,7 +81,7 @@ wiring. Integration test against atlas-local:preview will:
 
 ```bash
 CI=true bunx vitest run packages/memory-bridge/src/memongo-export.test.ts
-# exit 0, 10/10 passed (2026-05-12)
+# 2026-05-12: exit 0, 15/15 passed (SE-4 baseline + CRIT-6 non-JSON canonicalization).
 ```
 
 ## Open items (follow-on)

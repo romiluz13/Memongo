@@ -46,9 +46,27 @@ Tests at `packages/memory-engine/src/mongodb-bitemporal.test.ts`:
 
 ## Layer 3 — E2E
 
-- Bridge-level `recallConversation` test confirms bi-temporal filter is
-  applied under atlas-local:preview. (Wired during scope-2 integration
-  pass; runs at Gate 3.)
+Wired retrieval paths (CRIT-1 remfix, commit `a85a43a81c`):
+
+- `buildStandardFilter()` in `packages/memory-engine/src/mongodb-conversation-recall.ts`
+  now sets `filter.$and = [buildBitemporalFilter(params.asOf)]` when the caller
+  supplies an `asOf: Date` cutoff.
+- `semanticRecall` pipeline inserts `{ $match: buildBitemporalFilter(params.asOf) }`
+  between `$vectorSearch` and `$limit`.
+- `hybridRecall` injects the bi-temporal `$match` into **both** the vector
+  and text inner pipelines of `$rankFusion`, so neither lane short-circuits
+  the check.
+- Pipeline-level assertions live in
+  `mongodb-conversation-recall.test.ts` — three new tests verify the
+  `$match(bitemporal)` stage is present in semantic and both hybrid inner
+  pipelines, and that the standard filter excludes `invalidAt <= asOf`.
+- Exit-code evidence: `CI=true bunx vitest run packages/memory-engine/src/mongodb-conversation-recall.test.ts`
+  → exit 0, 18/18 passed (2026-05-12).
+
+Bridge-level `recallConversation` with a live atlas-local cluster is still
+scheduled for Gate 3; the pipeline-level tests above lock the stage
+placement deterministically so the Gate 3 run is a regression check, not a
+discovery.
 
 ## Layer 4 — Correctness invariant (fast-check)
 

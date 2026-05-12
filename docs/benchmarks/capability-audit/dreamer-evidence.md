@@ -34,18 +34,30 @@
 
 ## Layer 4 — Correctness invariant (fast-check)
 
-- **Property 4 (plan line 545):** no consolidated memory's
-  `sourceEventIds` spans more than one `scopeRef`; cross-`scopeRef`
-  merge NEVER occurs.
-- Generator: random event sets with intentionally overlapping bodies
-  across scopes; assert the consolidator never merges rows across
-  scopeRefs.
-- Seed: **20260512**, 300 runs.
+- **Property 4** (plan line 545) — implemented at
+  `packages/memory-engine/src/mongodb-consolidator.test.ts:1426–` under
+  "CRIT-3 property: consolidated rows never cross scope/scopeRef"
+  (commit `4926e4c3e9`).
+  - Generator builds random event sets with overlapping bodies across
+    `(agent:A, agent:B, session:B)` triples.
+  - Assertion: every consolidated row's `(scope, scopeRef)` equals the
+    source candidate's `(scope, scopeRef)`; `sourceEventIds` is a subset
+    of the candidate's owning scope; no row spans more than one scope.
+  - Seed: **20260512**, 300 runs.
+
+Supporting HIGH-2 regression tests at `mongodb-consolidator.test.ts:1296–1414`:
+
+- Candidate inherits `(scope, scopeRef)` from source event when options omit
+  them.
+- Candidate mismatch (`options.scope` disagrees with `candidate.scope`)
+  emits `log.warn` and continues — does not throw, does not write the
+  mismatched row.
 
 ## Commands
 
 ```bash
 CI=true bunx vitest run packages/memory-engine/src/mongodb-consolidator.test.ts
+# 2026-05-12: exit 0, 30/30 passed (HIGH-2 + CRIT-3 added).
 # E2E via Gate 3 canary — artifacts/canary-runs/gate3-*/consolidate.json
 ```
 
