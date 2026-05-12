@@ -396,7 +396,7 @@ export function writeScenarioProgress(params: {
 	if (params.reason !== undefined) {
 		doc.reason = params.reason
 	}
-	writeFileSync(file, JSON.stringify(doc, null, 2))
+	writeFileSync(file, JSON.stringify(doc, null, "\t"))
 	return file
 }
 
@@ -707,7 +707,7 @@ async function main() {
 	if (dryRun) {
 		artifact.completedAt = new Date().toISOString()
 		const artifactPath = path.join(runDir, "canary-artifact.json")
-		writeFileSync(artifactPath, JSON.stringify(artifact, null, 2))
+		writeFileSync(artifactPath, JSON.stringify(artifact, null, "\t"))
 		console.log(`[canary] dry-run complete. Artifact: ${artifactPath}`)
 		console.log(JSON.stringify({ ok: true, runId, dryRun: true }, null, 2))
 		return
@@ -734,7 +734,7 @@ async function main() {
 		artifact.error = `HTTP ${response.statusCode}: ${response.body.slice(0, 500)}`
 		artifact.completedAt = new Date().toISOString()
 		const artifactPath = path.join(runDir, "canary-artifact.json")
-		writeFileSync(artifactPath, JSON.stringify(artifact, null, 2))
+		writeFileSync(artifactPath, JSON.stringify(artifact, null, "\t"))
 		throw new Error(artifact.error)
 	}
 
@@ -786,8 +786,8 @@ async function main() {
 	// Write artifacts
 	const artifactPath = path.join(runDir, "canary-artifact.json")
 	const responsePath = path.join(runDir, "benchmark-response.json")
-	writeFileSync(artifactPath, JSON.stringify(artifact, null, 2))
-	writeFileSync(responsePath, JSON.stringify(benchmarkResponse, null, 2))
+	writeFileSync(artifactPath, JSON.stringify(artifact, null, "\t"))
+	writeFileSync(responsePath, JSON.stringify(benchmarkResponse, null, "\t"))
 
 	console.log(`[canary] complete. Artifact: ${artifactPath}`)
 	console.log(
@@ -833,7 +833,7 @@ function writeTopLevelFailureArtifact(err: unknown): void {
 		}
 		writeFileSync(
 			path.join(runDir, "failure.json"),
-			JSON.stringify(doc, null, 2),
+			JSON.stringify(doc, null, "\t"),
 		)
 	} catch {
 		// Never swallow the original error — best-effort artifact only.
