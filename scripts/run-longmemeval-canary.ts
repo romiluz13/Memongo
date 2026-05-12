@@ -155,6 +155,257 @@ export function resolveCanaryResumeMode(envValue: string | undefined): boolean {
 }
 
 /**
+ * n≥3 canary sampling discipline — how many sequential runs on the same commit.
+ *
+ * Voyage rerank has observed non-determinism that dominates the 1/type canary
+ * signal. Running the strict 1/type canary N=3 lets the aggregator partition
+ * real (deterministic) misses from Voyage variance noise.
+ *
+ * Contract: integer ≥ 1. Any other value (NaN, zero, negative, fractional,
+ * blank) throws with a clear message. No silent fallback — treating a
+ * misconfigured env var as "use default 1" would silently invalidate a gate
+ * re-run's n-discipline.
+ *
+ * Default `undefined` is the back-compat signal — old invocations without the
+ * env var keep their single-run behavior.
+ */
+export function resolveCanaryRunsPerCommit(
+	envValue: string | undefined,
+): number {
+	if (envValue === undefined) return 1
+	const trimmed = envValue.trim()
+	if (trimmed.length === 0) {
+		throw new Error(
+			"MEMONGO_CANARY_RUNS_PER_COMMIT must be a positive integer; got empty string",
+		)
+	}
+	const parsed = Number(trimmed)
+	if (!Number.isFinite(parsed) || !Number.isInteger(parsed) || parsed < 1) {
+		throw new Error(
+			`MEMONGO_CANARY_RUNS_PER_COMMIT must be a positive integer (≥ 1); got ${envValue}`,
+		)
+	}
+	return parsed
+}
+
+/**
+ * Inter-run delay (ms) between sequential canary runs on the same commit.
+ *
+ * Voyage rerank has a per-minute rate limit; back-to-back bursts trigger
+ * 429s that then cascade into `model-failure` classifications. The default
+ * 2000ms spread smooths the burst profile across multiple runs.
+ *
+ * Contract: non-negative integer. NaN, negative, and non-numeric throw.
+ * Zero is accepted (for tests; no delay between runs).
+ */
+export function resolveCanaryRunIntervalMs(
+	envValue: string | undefined,
+): number {
+	if (envValue === undefined) return 2000
+	const trimmed = envValue.trim()
+	if (trimmed.length === 0) return 2000
+	const parsed = Number(trimmed)
+	if (!Number.isFinite(parsed) || !Number.isInteger(parsed) || parsed < 0) {
+		throw new Error(
+			`MEMONGO_CANARY_RUN_INTERVAL_MS must be a non-negative integer; got ${envValue}`,
+		)
+	}
+	return parsed
+}
+
+/**
+ * Per-run artifact subdirectory.
+ *
+ * Each run within a single invocation writes into
+ * `{baseDir}/run-{runIndex}/`. The aggregate-summary.json lives at `{baseDir}`.
+ */
+export function deriveCanaryRunDir(params: {
+	baseDir: string
+	runIndex: number
+}): string {
+	return path.join(params.baseDir, `run-${params.runIndex}`)
+}
+
+/**
+ * Per-run MongoDB collection prefix (collision-proof across runs AND
+ * invocations).
+ *
+ * Format: `{basePrefix}_run{runIndex}_{invocationTimestampMs}`
+ *
+ * Why both invocation timestamp AND run index:
+ * - Different runs in the same invocation need different prefixes (Atlas
+ *   Search index caches are keyed per-collection; reusing a prefix would let
+ *   run-2 see cached index state populated by run-1).
+ * - Different invocations of the same command need different prefixes
+ *   (otherwise a stale collection from a prior invocation could leak into
+ *   run-1 of the new invocation).
+ *
+ * The invocation timestamp is passed in (not read from Date.now) so the
+ * helper is testable.
+ */
+export function deriveCanaryRunCollectionPrefix(params: {
+	basePrefix: string
+	runIndex: number
+	invocationTimestampMs: number
+}): string {
+	return `${params.basePrefix}_run${params.runIndex}_${params.invocationTimestampMs}`
+}
+
+// ---------------------------------------------------------------------------
+// Aggregate synthesis (n≥3 discipline)
+// ---------------------------------------------------------------------------
+
+/**
+ * Per-run summary shape — the subset of canary-artifact fields needed by the
+ * aggregator. Extracted from `summary.json` after each run completes.
+ */
+export type CanaryPerRunSummary = {
+	runIndex: number
+	hitRate: number
+	rAt5: number
+	rAt10: number
+	ndcgAt10: number
+	sessionAny1: number
+	turnAny1: number
+	/** Array of question IDs that missed in this run. */
+	missLedger: string[]
+	caseDiagnosticsLength: number
+	artifactPath: string
+}
+
+type AggregateStat = {
+	mean: number
+	min: number
+	max: number
+	stddev: number
+}
+
+type Gate3ExitCriteria = {
+	deterministicPass: boolean
+	partialPass: boolean
+	fail: boolean
+}
+
+export type CanaryAggregateSummary = {
+	runs: CanaryPerRunSummary[]
+	aggregate: {
+		hitRate: AggregateStat
+		sessionAny1: AggregateStat
+		turnAny1: AggregateStat
+	}
+	deterministicMisses: string[]
+	varianceMisses: string[]
+	gate3ExitCriteria: Gate3ExitCriteria
+	verdict: "DETERMINISTIC_PASS" | "PARTIAL_PASS" | "FAIL"
+	reasoning: string
+}
+
+function computeAggregateStat(values: number[]): AggregateStat {
+	if (values.length === 0) {
+		return { mean: 0, min: 0, max: 0, stddev: 0 }
+	}
+	const sum = values.reduce((a, b) => a + b, 0)
+	const mean = sum / values.length
+	const min = Math.min(...values)
+	const max = Math.max(...values)
+	const variance =
+		values.reduce((acc, v) => acc + (v - mean) ** 2, 0) / values.length
+	const stddev = Math.sqrt(variance)
+	return { mean, min, max, stddev }
+}
+
+/**
+ * Synthesize aggregate summary across N sequential canary runs on the same
+ * commit.
+ *
+ * Gate-3 exit classification (refined per plan):
+ * - `deterministicPass`: `min(hitRate) === 1.0` AND `|deterministicMisses| === 0`
+ * - `partialPass`: `min(hitRate) >= 0.666` AND `mean(hitRate) >= 0.833`
+ *   AND `|deterministicMisses| <= 2`
+ * - `fail`: otherwise
+ *
+ * Miss partitioning:
+ * - `deterministicMisses`: question IDs present in EVERY run's missLedger
+ *   (real, reproducible failures)
+ * - `varianceMisses`: question IDs in SOME but not all runs' missLedgers
+ *   (Voyage rerank non-determinism)
+ */
+export function computeCanaryAggregateSummary(params: {
+	runs: CanaryPerRunSummary[]
+}): CanaryAggregateSummary {
+	const { runs } = params
+	if (runs.length === 0) {
+		throw new Error(
+			"computeCanaryAggregateSummary requires at least one run summary",
+		)
+	}
+
+	const hitRateStat = computeAggregateStat(runs.map((r) => r.hitRate))
+	const sessionAny1Stat = computeAggregateStat(runs.map((r) => r.sessionAny1))
+	const turnAny1Stat = computeAggregateStat(runs.map((r) => r.turnAny1))
+
+	// Partition misses: deterministic = present in EVERY run; variance = some.
+	const allMissSets = runs.map((r) => new Set(r.missLedger))
+	const unionMisses = new Set<string>()
+	for (const set of allMissSets) {
+		for (const qid of set) unionMisses.add(qid)
+	}
+	const deterministicMisses: string[] = []
+	const varianceMisses: string[] = []
+	for (const qid of unionMisses) {
+		const presentInAll = allMissSets.every((set) => set.has(qid))
+		if (presentInAll) {
+			deterministicMisses.push(qid)
+		} else {
+			varianceMisses.push(qid)
+		}
+	}
+	deterministicMisses.sort()
+	varianceMisses.sort()
+
+	// Gate-3 exit criteria — strict order: deterministic first, then partial,
+	// else fail.
+	const deterministicPass =
+		hitRateStat.min === 1 && deterministicMisses.length === 0
+	const partialPass =
+		!deterministicPass &&
+		hitRateStat.min >= 0.666 &&
+		hitRateStat.mean >= 0.833 &&
+		deterministicMisses.length <= 2
+	const fail = !deterministicPass && !partialPass
+
+	const verdict: CanaryAggregateSummary["verdict"] = deterministicPass
+		? "DETERMINISTIC_PASS"
+		: partialPass
+			? "PARTIAL_PASS"
+			: "FAIL"
+
+	const reasoning = deterministicPass
+		? `All ${runs.length} runs scored hitRate=1.0 with zero deterministic misses; retrieval quality is fully reproducible on this commit.`
+		: partialPass
+			? `min(hitRate)=${hitRateStat.min.toFixed(3)} mean=${hitRateStat.mean.toFixed(3)} with ${deterministicMisses.length} deterministic miss(es) and ${varianceMisses.length} variance miss(es); retrieval quality is partial — deterministic misses are real signal, variance misses are Voyage rerank non-determinism.`
+			: `min(hitRate)=${hitRateStat.min.toFixed(3)} mean=${hitRateStat.mean.toFixed(3)} with ${deterministicMisses.length} deterministic miss(es); retrieval quality fails gate 3 exit criteria.`
+
+	return {
+		runs,
+		aggregate: {
+			hitRate: hitRateStat,
+			sessionAny1: sessionAny1Stat,
+			turnAny1: turnAny1Stat,
+		},
+		deterministicMisses,
+		varianceMisses,
+		gate3ExitCriteria: {
+			deterministicPass,
+			partialPass,
+			fail,
+		},
+		verdict,
+		reasoning,
+	}
+}
+
+/**
  * Task 1.6 — canary strict mode. MEMONGO_BENCHMARK_STRICT=1 means: abort the
  * run on the first fatal-classified failure (harness-timeout, model-failure,
  * json-parse, queue-settle-timeout, probe-timeout, index-not-ready,
@@ -569,21 +820,130 @@ function postJson(params: {
 // Main
 // ---------------------------------------------------------------------------
 
-async function main() {
+/**
+ * Extract a CanaryPerRunSummary from the full benchmark response JSON.
+ * Exported for testability.
+ */
+export function extractPerRunSummaryFromBenchmarkResponse(params: {
+	runIndex: number
+	artifactPath: string
+	benchmarkResponse: Record<string, unknown>
+}): CanaryPerRunSummary {
+	const br = params.benchmarkResponse
+	const officialMetrics =
+		(br.officialMetrics as Record<string, unknown> | undefined) ?? {}
+	const longMemEval =
+		(officialMetrics.longMemEval as Record<string, unknown> | undefined) ?? {}
+	const session =
+		(longMemEval.session as Record<string, unknown> | undefined) ?? {}
+	const turn = (longMemEval.turn as Record<string, unknown> | undefined) ?? {}
+
+	const toNum = (v: unknown): number =>
+		typeof v === "number" && Number.isFinite(v) ? v : 0
+
+	const missLedgerRaw = Array.isArray(br.missLedger) ? br.missLedger : []
+	const missLedger: string[] = []
+	for (const m of missLedgerRaw) {
+		if (m && typeof m === "object") {
+			const caseId = (m as Record<string, unknown>).caseId
+			if (typeof caseId === "string" && caseId.length > 0) {
+				missLedger.push(caseId)
+			}
+		}
+	}
+
+	const caseDiagnosticsRaw = Array.isArray(br.caseDiagnostics)
+		? br.caseDiagnostics
+		: []
+
+	return {
+		runIndex: params.runIndex,
+		hitRate: toNum(br.hitRate),
+		rAt5: toNum(br.rAt5),
+		rAt10: toNum(br.rAt10),
+		ndcgAt10: toNum(br.ndcgAt10),
+		sessionAny1: toNum(session.recallAnyAt1),
+		turnAny1: toNum(turn.recallAnyAt1),
+		missLedger,
+		caseDiagnosticsLength: caseDiagnosticsRaw.length,
+		artifactPath: params.artifactPath,
+	}
+}
+
+/**
+ * Execute one full canary run (dataset select → bootstrap → POST → write
+ * artifacts). Extracted so the n≥3 discipline can iterate cleanly.
+ *
+ * Each run writes into `{baseDir}/run-{runIndex}/` and uses a unique
+ * `MEMONGO_MONGODB_COLLECTION_PREFIX` so the benchmark API isolates its
+ * MongoDB state per run (preventing Atlas Search index cache contamination).
+ *
+ * Returns a per-run summary for the aggregator.
+ */
+async function runSingleCanary(params: {
+	runIndex: number
+	baseDir: string
+	invocationTimestampMs: number
+	runsPerCommit: number
+}): Promise<CanaryPerRunSummary | null> {
+	const { runIndex, baseDir, invocationTimestampMs, runsPerCommit } = params
+
+	// Per-run artifact dir. When runsPerCommit=1, keep back-compat: write
+	// directly into baseDir (not baseDir/run-1/). This keeps existing single-
+	// invocation scripts, decision-log references, and downstream summary
+	// writers pointing at the same path they used before.
+	const runDir =
+		runsPerCommit > 1 ? deriveCanaryRunDir({ baseDir, runIndex }) : baseDir
+	mkdirSync(runDir, { recursive: true })
+
+	// Per-run collection prefix — only when running N>1. Single-run keeps the
+	// caller-supplied prefix so existing bench stacks stay addressable.
+	const basePrefix =
+		process.env.MEMONGO_MONGODB_COLLECTION_PREFIX?.trim() || "memongo_bench_"
+	const perRunPrefix =
+		runsPerCommit > 1
+			? deriveCanaryRunCollectionPrefix({
+					basePrefix,
+					runIndex,
+					invocationTimestampMs,
+				})
+			: basePrefix
+	if (runsPerCommit > 1) {
+		process.env.MEMONGO_MONGODB_COLLECTION_PREFIX = perRunPrefix
+		console.log(
+			`[canary] run ${runIndex}/${runsPerCommit} using collectionPrefix=${perRunPrefix}`,
+		)
+	}
+
 	const startedAt = new Date()
 	const runId =
-		process.env.MEMONGO_CANARY_RUN_ID?.trim() ||
-		`canary-${startedAt.toISOString().replace(/[:.]/g, "-")}-${randomUUID().slice(0, 8)}`
-	const runDir = resolveCanaryArtifactDir({
-		runId,
-		envDir: process.env.MEMONGO_CANARY_ARTIFACT_DIR,
-		repoRoot,
-	})
+		runsPerCommit > 1
+			? `canary-run${runIndex}-${startedAt.toISOString().replace(/[:.]/g, "-")}-${randomUUID().slice(0, 8)}`
+			: process.env.MEMONGO_CANARY_RUN_ID?.trim() ||
+				`canary-${startedAt.toISOString().replace(/[:.]/g, "-")}-${randomUUID().slice(0, 8)}`
 	const fullMode = resolveCanaryFullMode(process.env.MEMONGO_CANARY_FULL)
 
 	console.log(
-		`[canary] run=${runId} dataset=${datasetPath} dryRun=${dryRun} fullMode=${fullMode} runDir=${runDir}`,
+		`[canary] run=${runId} runIndex=${runIndex} dataset=${datasetPath} dryRun=${dryRun} fullMode=${fullMode} runDir=${runDir}`,
 	)
+
+	return await runCanaryBody({
+		runId,
+		runIndex,
+		runDir,
+		startedAt,
+		fullMode,
+	})
+}
+
+async function runCanaryBody(params: {
+	runId: string
+	runIndex: number
+	runDir: string
+	startedAt: Date
+	fullMode: boolean
+}): Promise<CanaryPerRunSummary | null> {
+	const { runId, runIndex, runDir, startedAt, fullMode } = params
 
 	// Load dataset
 	if (!existsSync(datasetPath)) {
@@ -602,10 +962,6 @@ async function main() {
 	const entries = dataset as RawLongMemEvalEntry[]
 
 	// Select stratified subset.
-	// MEMONGO_CANARY_FULL=1 overrides the stratified subset: run every scenario
-	// in the dataset, ignoring MEMONGO_CANARY_CASES_PER_TYPE and
-	// MEMONGO_CANARY_TOTAL_CASES (but still honoring an explicit question-id
-	// filter, since that's a narrower intent).
 	const { selected, selectedQuestionIds, breakdown } = fullMode
 		? selectStratifiedSubset(entries, entries.length, {
 				questionIds:
@@ -625,9 +981,6 @@ async function main() {
 		console.log(`  ${qt}: ${count}`)
 	}
 
-	// remfix H1: compute run-shape hash from the FULL selected scenario list
-	// BEFORE resume trimming. This is the hash the current run will stamp into
-	// every progress file and is what resume compares against.
 	const runShapeHash = computeRunShapeHash({
 		casesPerType: CASES_PER_TYPE,
 		totalCaseLimit: totalCaseLimit ?? null,
@@ -635,13 +988,8 @@ async function main() {
 		fullMode,
 	})
 
-	// Task 1.7 + remfix H1/H2 — resume semantics. MEMONGO_CANARY_RESUME=1 drops
-	// scenarios whose progress entry: (a) parses as JSON, (b) is non-empty,
-	// (c) has completed===true, (d) has passStatus==="pass", (e) has a
-	// questionId that matches the current scenario list, and (f) has a
-	// runShapeHash equal to the current run's shape hash. Any progress file
-	// whose shape hash differs aborts resume: the run shape changed and
-	// skipping by numeric index would silently hide the regression.
+	// Resume semantics stay per-run-dir (already isolated under run-N/ in
+	// multi-run mode).
 	const resumeMode = resolveCanaryResumeMode(process.env.MEMONGO_CANARY_RESUME)
 	let scenariosSkipped = 0
 	if (resumeMode) {
@@ -672,15 +1020,11 @@ async function main() {
 	}
 
 	// Write subset dataset inside the workspace so the benchmark API accepts it
-	mkdirSync(runDir, { recursive: true })
 	const subsetDir = path.join(workspaceDir, "benchmarks", "canary")
 	mkdirSync(subsetDir, { recursive: true })
 	const subsetPath = path.join(subsetDir, `${runId}.json`)
 	writeFileSync(subsetPath, JSON.stringify(selected, null, 2))
 
-	// remfix H3: In full mode, casesPerType and totalCaseLimit do not describe
-	// the run. Emit null instead of the stale defaults so canary-artifact.json
-	// cannot misreport run shape.
 	const caseLimits = buildCanaryArtifactCaseLimits({
 		fullMode,
 		casesPerType: CASES_PER_TYPE,
@@ -710,7 +1054,7 @@ async function main() {
 		writeFileSync(artifactPath, JSON.stringify(artifact, null, "\t"))
 		console.log(`[canary] dry-run complete. Artifact: ${artifactPath}`)
 		console.log(JSON.stringify({ ok: true, runId, dryRun: true }, null, 2))
-		return
+		return null
 	}
 
 	// Call benchmark API with the subset
@@ -727,10 +1071,6 @@ async function main() {
 			agentId,
 			datasetPath: subsetPath,
 			maxResults,
-			// Task 1.A projection: pin the parity-envelope datasetSha256 to
-			// the FULL upstream dataset (not the per-canary subset) so
-			// `benchmarkReport.runIdentity.datasetSha256` traces back to
-			// the corpus a reader can reproduce, not the ephemeral subset.
 			datasetSha256: datasetHash,
 		},
 	})
@@ -750,18 +1090,6 @@ async function main() {
 		| undefined
 	artifact.completedAt = new Date().toISOString()
 
-	// Task 1.2 + remfix C1 — fan out per-scenario progress artifacts.
-	//
-	// The current benchmark endpoint returns AGGREGATE metrics only (rAt5,
-	// rAt10, hitRate across all cases) — no per-case pass/fail is exposed in
-	// the response envelope yet. Hard-coding `passStatus:"pass"` here would
-	// SILENTLY claim every scenario passed, and resume mode would then skip
-	// regressions forever (remfix C1 fallback #2).
-	//
-	// Until per-case streaming exists (tracked as a Phase 2 Scope #2 /
-	// benchmark-runner follow-up), every fan-out entry is marked
-	// `completed:false` with a reason so resume correctly re-runs each
-	// scenario. The aggregate metrics are still attached for forensic review.
 	const responseMetricsDigest =
 		typeof benchmarkResponse.rAt5 === "number" ||
 		typeof benchmarkResponse.hitRate === "number"
@@ -788,7 +1116,7 @@ async function main() {
 		})
 	}
 
-	// Write artifacts
+	// Write per-run artifacts
 	const artifactPath = path.join(runDir, "canary-artifact.json")
 	const responsePath = path.join(runDir, "benchmark-response.json")
 	writeFileSync(artifactPath, JSON.stringify(artifact, null, "\t"))
@@ -800,6 +1128,7 @@ async function main() {
 			{
 				ok: true,
 				runId,
+				runIndex,
 				totalEvaluations: selectedQuestionIds.length,
 				breakdown,
 				artifactPath,
@@ -809,6 +1138,75 @@ async function main() {
 			2,
 		),
 	)
+
+	return extractPerRunSummaryFromBenchmarkResponse({
+		runIndex,
+		artifactPath,
+		benchmarkResponse,
+	})
+}
+
+async function sleep(ms: number): Promise<void> {
+	if (ms <= 0) return
+	await new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+async function main() {
+	const startedAt = new Date()
+	const invocationTimestampMs = startedAt.getTime()
+
+	// n≥3 canary sampling discipline. Default 1 for back-compat.
+	const runsPerCommit = resolveCanaryRunsPerCommit(
+		process.env.MEMONGO_CANARY_RUNS_PER_COMMIT,
+	)
+	const runIntervalMs = resolveCanaryRunIntervalMs(
+		process.env.MEMONGO_CANARY_RUN_INTERVAL_MS,
+	)
+
+	// Base directory holds per-run subdirs + aggregate-summary.json.
+	const fallbackRunId = `canary-${startedAt.toISOString().replace(/[:.]/g, "-")}-${randomUUID().slice(0, 8)}`
+	const baseDir = resolveCanaryArtifactDir({
+		runId: fallbackRunId,
+		envDir: process.env.MEMONGO_CANARY_ARTIFACT_DIR,
+		repoRoot,
+	})
+	mkdirSync(baseDir, { recursive: true })
+
+	if (runsPerCommit > 1) {
+		console.log(
+			`[canary] n≥3 discipline: runsPerCommit=${runsPerCommit} runIntervalMs=${runIntervalMs} baseDir=${baseDir}`,
+		)
+	}
+
+	const perRunSummaries: CanaryPerRunSummary[] = []
+	for (let runIndex = 1; runIndex <= runsPerCommit; runIndex++) {
+		const summary = await runSingleCanary({
+			runIndex,
+			baseDir,
+			invocationTimestampMs,
+			runsPerCommit,
+		})
+		if (summary !== null) {
+			perRunSummaries.push(summary)
+		}
+		if (runIndex < runsPerCommit && runIntervalMs > 0) {
+			console.log(
+				`[canary] sleeping ${runIntervalMs}ms before run ${runIndex + 1}/${runsPerCommit}`,
+			)
+			await sleep(runIntervalMs)
+		}
+	}
+
+	if (runsPerCommit > 1 && perRunSummaries.length > 0) {
+		const aggregate = computeCanaryAggregateSummary({ runs: perRunSummaries })
+		const aggregatePath = path.join(baseDir, "aggregate-summary.json")
+		writeFileSync(aggregatePath, JSON.stringify(aggregate, null, "\t"))
+		console.log(`[canary] aggregate-summary written: ${aggregatePath}`)
+		console.log(
+			`[canary] verdict=${aggregate.verdict} hitRate.mean=${aggregate.aggregate.hitRate.mean.toFixed(3)} min=${aggregate.aggregate.hitRate.min.toFixed(3)} max=${aggregate.aggregate.hitRate.max.toFixed(3)} deterministicMisses=${aggregate.deterministicMisses.length} varianceMisses=${aggregate.varianceMisses.length}`,
+		)
+		console.log(`[canary] reasoning: ${aggregate.reasoning}`)
+	}
 }
 
 /**

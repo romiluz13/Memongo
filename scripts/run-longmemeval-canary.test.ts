@@ -11,7 +11,10 @@ import { describe, it, expect } from "vitest"
 import {
 	BENCHMARK_STRICT_FATAL_CLASSES,
 	buildCanaryArtifactCaseLimits,
+	computeCanaryAggregateSummary,
 	computeRunShapeHash,
+	deriveCanaryRunCollectionPrefix,
+	deriveCanaryRunDir,
 	isCanaryFatalFailureClass,
 	listCompletedScenarioIndices,
 	listResumableProgress,
@@ -20,9 +23,12 @@ import {
 	resolveCanaryHttpTimeoutMs,
 	resolveCanaryLogLevel,
 	resolveCanaryResumeMode,
+	resolveCanaryRunIntervalMs,
+	resolveCanaryRunsPerCommit,
 	selectStratifiedSubset,
 	shouldCanaryAbort,
 	writeScenarioProgress,
+	type CanaryPerRunSummary,
 	type RawLongMemEvalEntry,
 } from "./run-longmemeval-canary.js"
 
@@ -846,5 +852,320 @@ describe("remfix H3: canary-artifact case-limit honesty in FULL mode", () => {
 				totalCaseLimit: undefined,
 			}),
 		).toEqual({ casesPerType: 8, totalCaseLimit: null })
+	})
+})
+
+describe("resolveCanaryRunsPerCommit (n≥3 canary sampling discipline)", () => {
+	it("defaults to 1 when MEMONGO_CANARY_RUNS_PER_COMMIT is undefined (back-compat)", () => {
+		expect(resolveCanaryRunsPerCommit(undefined)).toBe(1)
+	})
+
+	it("accepts a valid positive integer", () => {
+		expect(resolveCanaryRunsPerCommit("1")).toBe(1)
+		expect(resolveCanaryRunsPerCommit("3")).toBe(3)
+		expect(resolveCanaryRunsPerCommit("10")).toBe(10)
+	})
+
+	it("trims surrounding whitespace before parsing", () => {
+		expect(resolveCanaryRunsPerCommit("  3  ")).toBe(3)
+	})
+
+	it("throws on zero — no silent fallback", () => {
+		expect(() => resolveCanaryRunsPerCommit("0")).toThrow(
+			/MEMONGO_CANARY_RUNS_PER_COMMIT/,
+		)
+	})
+
+	it("throws on negative integers", () => {
+		expect(() => resolveCanaryRunsPerCommit("-1")).toThrow(
+			/MEMONGO_CANARY_RUNS_PER_COMMIT/,
+		)
+	})
+
+	it("throws on NaN / non-numeric strings", () => {
+		expect(() => resolveCanaryRunsPerCommit("NaN")).toThrow(
+			/MEMONGO_CANARY_RUNS_PER_COMMIT/,
+		)
+		expect(() => resolveCanaryRunsPerCommit("three")).toThrow(
+			/MEMONGO_CANARY_RUNS_PER_COMMIT/,
+		)
+	})
+
+	it("throws on empty string — explicit-but-blank is not a default signal", () => {
+		expect(() => resolveCanaryRunsPerCommit("")).toThrow(
+			/MEMONGO_CANARY_RUNS_PER_COMMIT/,
+		)
+		expect(() => resolveCanaryRunsPerCommit("   ")).toThrow(
+			/MEMONGO_CANARY_RUNS_PER_COMMIT/,
+		)
+	})
+
+	it("throws on non-integer positives (e.g. 1.5) — integer contract is strict", () => {
+		expect(() => resolveCanaryRunsPerCommit("1.5")).toThrow(
+			/MEMONGO_CANARY_RUNS_PER_COMMIT/,
+		)
+	})
+})
+
+describe("resolveCanaryRunIntervalMs (n≥3 canary sampling discipline)", () => {
+	it("defaults to 2000 when MEMONGO_CANARY_RUN_INTERVAL_MS is undefined", () => {
+		expect(resolveCanaryRunIntervalMs(undefined)).toBe(2000)
+	})
+
+	it("accepts a valid non-negative integer", () => {
+		expect(resolveCanaryRunIntervalMs("0")).toBe(0)
+		expect(resolveCanaryRunIntervalMs("1500")).toBe(1500)
+	})
+
+	it("throws on negative values", () => {
+		expect(() => resolveCanaryRunIntervalMs("-1")).toThrow(
+			/MEMONGO_CANARY_RUN_INTERVAL_MS/,
+		)
+	})
+
+	it("throws on NaN", () => {
+		expect(() => resolveCanaryRunIntervalMs("nope")).toThrow(
+			/MEMONGO_CANARY_RUN_INTERVAL_MS/,
+		)
+	})
+})
+
+describe("deriveCanaryRunDir / deriveCanaryRunCollectionPrefix (per-run isolation)", () => {
+	it("produces a distinct run-N subdirectory for each run index", () => {
+		const root = "/tmp/foo-artifacts"
+		expect(deriveCanaryRunDir({ baseDir: root, runIndex: 1 })).toBe(
+			"/tmp/foo-artifacts/run-1",
+		)
+		expect(deriveCanaryRunDir({ baseDir: root, runIndex: 2 })).toBe(
+			"/tmp/foo-artifacts/run-2",
+		)
+		expect(deriveCanaryRunDir({ baseDir: root, runIndex: 3 })).toBe(
+			"/tmp/foo-artifacts/run-3",
+		)
+	})
+
+	it("never produces duplicate collection prefixes within one invocation (same basePrefix + invocation timestamp + different runIndex)", () => {
+		const basePrefix = "memongo_bench_"
+		const invocationTimestampMs = 1778600000000
+		const prefixes = [1, 2, 3].map((runIndex) =>
+			deriveCanaryRunCollectionPrefix({
+				basePrefix,
+				runIndex,
+				invocationTimestampMs,
+			}),
+		)
+		expect(new Set(prefixes).size).toBe(3)
+		// Follow the contract: basePrefix + _run${N}_${timestampMs}
+		expect(prefixes[0]).toBe(`memongo_bench__run1_${invocationTimestampMs}`)
+		expect(prefixes[1]).toBe(`memongo_bench__run2_${invocationTimestampMs}`)
+		expect(prefixes[2]).toBe(`memongo_bench__run3_${invocationTimestampMs}`)
+	})
+
+	it("produces distinct prefixes across two different invocations (different invocation timestamps)", () => {
+		const basePrefix = "memongo_bench_"
+		const a = deriveCanaryRunCollectionPrefix({
+			basePrefix,
+			runIndex: 1,
+			invocationTimestampMs: 1778600000000,
+		})
+		const b = deriveCanaryRunCollectionPrefix({
+			basePrefix,
+			runIndex: 1,
+			invocationTimestampMs: 1778600005000,
+		})
+		expect(a).not.toBe(b)
+	})
+
+	it("handles empty basePrefix gracefully (still unique per run)", () => {
+		const a = deriveCanaryRunCollectionPrefix({
+			basePrefix: "",
+			runIndex: 1,
+			invocationTimestampMs: 100,
+		})
+		const b = deriveCanaryRunCollectionPrefix({
+			basePrefix: "",
+			runIndex: 2,
+			invocationTimestampMs: 100,
+		})
+		expect(a).not.toBe(b)
+	})
+})
+
+describe("computeCanaryAggregateSummary (n≥3 aggregate synthesis)", () => {
+	function mockRun(
+		runIndex: number,
+		hitRate: number,
+		rAt5: number,
+		rAt10: number,
+		ndcgAt10: number,
+		sessionAny1: number,
+		turnAny1: number,
+		missLedger: string[],
+		caseDiagnosticsLength: number,
+		artifactPath: string,
+	): CanaryPerRunSummary {
+		return {
+			runIndex,
+			hitRate,
+			rAt5,
+			rAt10,
+			ndcgAt10,
+			sessionAny1,
+			turnAny1,
+			missLedger,
+			caseDiagnosticsLength,
+			artifactPath,
+		}
+	}
+
+	it("classifies verdict=DETERMINISTIC_PASS when min(hitRate)=1 and 0 deterministic misses", () => {
+		const runs = [
+			mockRun(1, 1, 1, 1, 1, 1, 1, [], 0, "/a/run-1"),
+			mockRun(2, 1, 1, 1, 1, 1, 1, [], 0, "/a/run-2"),
+			mockRun(3, 1, 1, 1, 1, 1, 1, [], 0, "/a/run-3"),
+		]
+		const summary = computeCanaryAggregateSummary({ runs })
+
+		expect(summary.verdict).toBe("DETERMINISTIC_PASS")
+		expect(summary.gate3ExitCriteria.deterministicPass).toBe(true)
+		expect(summary.gate3ExitCriteria.partialPass).toBe(false)
+		expect(summary.gate3ExitCriteria.fail).toBe(false)
+		expect(summary.deterministicMisses).toEqual([])
+		expect(summary.varianceMisses).toEqual([])
+		expect(summary.aggregate.hitRate.mean).toBe(1)
+		expect(summary.aggregate.hitRate.min).toBe(1)
+		expect(summary.aggregate.hitRate.max).toBe(1)
+		expect(summary.aggregate.hitRate.stddev).toBe(0)
+	})
+
+	it("classifies verdict=PARTIAL_PASS when min=0.666, mean≥0.833 and ≤2 deterministic misses", () => {
+		// Per contract: min(hitRate) >= 0.666 AND mean(hitRate) >= 0.833 AND |deterministicMisses| <= 2
+		// 3 runs with hitRates 0.666, 1.0, 1.0 → mean=0.888 (>=0.833)
+		// Miss distribution: runA has Q1, runB has [] , runC has [] → Q1 is variance-only (not deterministic)
+		const runs = [
+			mockRun(1, 0.666, 0.666, 0.666, 0.6, 0.666, 0.666, ["qA"], 1, "/a/run-1"),
+			mockRun(2, 1, 1, 1, 1, 1, 1, [], 0, "/a/run-2"),
+			mockRun(3, 1, 1, 1, 1, 1, 1, [], 0, "/a/run-3"),
+		]
+		const summary = computeCanaryAggregateSummary({ runs })
+
+		expect(summary.verdict).toBe("PARTIAL_PASS")
+		expect(summary.gate3ExitCriteria.deterministicPass).toBe(false)
+		expect(summary.gate3ExitCriteria.partialPass).toBe(true)
+		expect(summary.gate3ExitCriteria.fail).toBe(false)
+		expect(summary.deterministicMisses).toEqual([])
+		expect(summary.varianceMisses).toEqual(["qA"])
+		expect(summary.aggregate.hitRate.min).toBeCloseTo(0.666, 3)
+	})
+
+	it("classifies verdict=FAIL when min(hitRate)<0.666 or deterministic misses exceed threshold", () => {
+		// 3 runs all hitRate=0.5 AND all 3 misses on same qID → deterministic miss
+		const runs = [
+			mockRun(1, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, ["qX", "qY"], 2, "/a/run-1"),
+			mockRun(2, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, ["qX", "qY"], 2, "/a/run-2"),
+			mockRun(3, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, ["qX", "qY"], 2, "/a/run-3"),
+		]
+		const summary = computeCanaryAggregateSummary({ runs })
+
+		expect(summary.verdict).toBe("FAIL")
+		expect(summary.gate3ExitCriteria.deterministicPass).toBe(false)
+		expect(summary.gate3ExitCriteria.partialPass).toBe(false)
+		expect(summary.gate3ExitCriteria.fail).toBe(true)
+		// qX + qY present in all 3 runs → deterministic misses
+		expect(summary.deterministicMisses.sort()).toEqual(["qX", "qY"])
+		expect(summary.varianceMisses).toEqual([])
+	})
+
+	it("computes mean/min/max/stddev correctly across 3 runs", () => {
+		const runs = [
+			mockRun(1, 0.666, 0.666, 0.666, 0.6, 0.666, 0.666, [], 0, "/a/run-1"),
+			mockRun(2, 1, 1, 1, 1, 1, 1, [], 0, "/a/run-2"),
+			mockRun(3, 0.833, 0.833, 0.833, 0.83, 0.833, 0.833, [], 0, "/a/run-3"),
+		]
+		const summary = computeCanaryAggregateSummary({ runs })
+
+		// mean = (0.666 + 1 + 0.833)/3 = 0.833
+		expect(summary.aggregate.hitRate.mean).toBeCloseTo(0.833, 3)
+		expect(summary.aggregate.hitRate.min).toBe(0.666)
+		expect(summary.aggregate.hitRate.max).toBe(1)
+		// stddev non-zero when values vary
+		expect(summary.aggregate.hitRate.stddev).toBeGreaterThan(0)
+	})
+
+	it("partitions misses into deterministic (in every run) vs variance (in some but not all)", () => {
+		const runs = [
+			mockRun(
+				1,
+				0.5,
+				0.5,
+				0.5,
+				0.5,
+				0.5,
+				0.5,
+				["qDET", "qVAR1"],
+				2,
+				"/a/run-1",
+			),
+			mockRun(
+				2,
+				0.666,
+				0.666,
+				0.666,
+				0.6,
+				0.666,
+				0.666,
+				["qDET"],
+				1,
+				"/a/run-2",
+			),
+			mockRun(
+				3,
+				0.5,
+				0.5,
+				0.5,
+				0.5,
+				0.5,
+				0.5,
+				["qDET", "qVAR2"],
+				2,
+				"/a/run-3",
+			),
+		]
+		const summary = computeCanaryAggregateSummary({ runs })
+
+		expect(summary.deterministicMisses).toEqual(["qDET"])
+		expect(summary.varianceMisses.sort()).toEqual(["qVAR1", "qVAR2"])
+	})
+
+	it("aggregates sessionAny1 and turnAny1 with same shape as hitRate", () => {
+		const runs = [
+			mockRun(1, 1, 1, 1, 1, 0.8, 0.7, [], 0, "/a/run-1"),
+			mockRun(2, 1, 1, 1, 1, 1, 0.9, [], 0, "/a/run-2"),
+			mockRun(3, 1, 1, 1, 1, 0.9, 0.8, [], 0, "/a/run-3"),
+		]
+		const summary = computeCanaryAggregateSummary({ runs })
+
+		expect(summary.aggregate.sessionAny1.mean).toBeCloseTo(0.9, 3)
+		expect(summary.aggregate.sessionAny1.min).toBe(0.8)
+		expect(summary.aggregate.sessionAny1.max).toBe(1)
+		expect(summary.aggregate.turnAny1.mean).toBeCloseTo(0.8, 3)
+		expect(summary.aggregate.turnAny1.min).toBe(0.7)
+		expect(summary.aggregate.turnAny1.max).toBe(0.9)
+	})
+
+	it("throws when runs array is empty — contract requires N≥1", () => {
+		expect(() => computeCanaryAggregateSummary({ runs: [] })).toThrow(
+			/at least one run/i,
+		)
+	})
+
+	it("classifies PARTIAL_PASS boundary: hitRate min=0.666 exactly", () => {
+		const runs = [
+			mockRun(1, 0.666, 0.666, 0.666, 0.6, 0.666, 0.666, ["qA"], 1, "/a/run-1"),
+			mockRun(2, 1, 1, 1, 1, 1, 1, [], 0, "/a/run-2"),
+			mockRun(3, 1, 1, 1, 1, 1, 1, [], 0, "/a/run-3"),
+		]
+		const summary = computeCanaryAggregateSummary({ runs })
+		expect(summary.verdict).toBe("PARTIAL_PASS")
 	})
 })
