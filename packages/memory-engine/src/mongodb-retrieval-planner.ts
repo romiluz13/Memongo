@@ -810,3 +810,41 @@ export function classifyRetrievalQuery(params: {
 	}
 	return "direct"
 }
+
+/**
+ * Task 2.R2 Sub-path A: resolves `$vectorSearch.numCandidates` from the caller
+ * `limit` per the user-approved table (Phase 0 Task 0.5 Recommended Default #1):
+ *
+ *   limit=5  → 200
+ *   limit=10 → 200
+ *   limit=20 → 400
+ *   limit=30 → 600
+ *
+ * Intermediate limits scale by 20× (MongoDB MCP Finding #2 baseline:
+ * `numCandidates ≥ 20 × limit` —
+ * mongodb.com/docs/vector-search/query/aggregation-stages/vector-search-stage).
+ * Below the 200 floor we clamp up to 200. `override` wins when provided (Gate 5
+ * experimentation). Non-positive or non-finite limits are treated as the floor.
+ */
+export function resolveNumCandidates(limit: number, override?: number): number {
+	if (typeof override === "number" && Number.isFinite(override) && override > 0) {
+		return Math.floor(override)
+	}
+	if (!Number.isFinite(limit) || limit <= 0) {
+		return 200
+	}
+	// Discrete table lookup for the four approved values so we match the
+	// sign-off doc exactly even if the 20× rule nudges boundaries.
+	const discrete: Record<number, number> = {
+		5: 200,
+		10: 200,
+		20: 400,
+		30: 600,
+	}
+	const flooredLimit = Math.floor(limit)
+	if (discrete[flooredLimit] !== undefined) {
+		return discrete[flooredLimit]
+	}
+	// Otherwise: 20× limit, with a 200 floor.
+	return Math.max(200, flooredLimit * 20)
+}

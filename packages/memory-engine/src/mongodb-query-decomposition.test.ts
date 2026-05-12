@@ -246,6 +246,19 @@ describe("mergeMultiQueryResults", () => {
 		expect(mergeMultiQueryResults([], 5)).toEqual([])
 	})
 
+	test("Task 2.R4: RRF constant parity — sole-list rank-1 score equals 1/(60+1)", () => {
+		// `$rankFusion` uses sum(weight * (1 / (60 + rank))); manual RRF at
+		// mongodb-hybrid.ts must match constant 60 so multi-query merges stay
+		// commensurate with the server-side `$rankFusion` baseline. With a
+		// single result at rank 1, the merged score must equal 1/(60+1).
+		const resultSets = [[{ path: "doc-only", score: 0.99, snippet: "only" }]]
+		const merged = mergeMultiQueryResults(resultSets, 1)
+		expect(merged).toHaveLength(1)
+		const expected = 1 / (60 + 1)
+		// merged scores are the RRF sum; a single list at rank 1 = 1/61.
+		expect(merged[0].score).toBeCloseTo(expected, 10)
+	})
+
 	test("respects topK limit", () => {
 		const resultSets = [
 			[

@@ -6,6 +6,7 @@ import {
 	runSearchAggregateWithRetry,
 	splitAtlasSearchFilter,
 } from "./mongodb-search.js"
+import { resolveNumCandidates } from "./mongodb-retrieval-planner.js"
 import {
 	type DetectedCapabilities,
 	eventsCollection,
@@ -16,6 +17,8 @@ import type {
 	ConversationRecallResponse,
 	ConversationRecallResult,
 	ConversationRecallRole,
+	ConversationRecallScoreDetailEntry,
+	ConversationRecallScoreDetails,
 } from "./types.js"
 
 const log = createSubsystemLogger("memory:mongodb:conversation-recall")
@@ -284,6 +287,58 @@ function normalizeRole(value: unknown): ConversationRecallRole {
 	}
 }
 
+function normalizeScoreDetails(
+	raw: unknown,
+): ConversationRecallScoreDetails | undefined {
+	if (raw === null || typeof raw !== "object") {
+		return undefined
+	}
+	const source = raw as Record<string, unknown>
+	const details: ConversationRecallScoreDetailEntry[] = []
+	const rawDetails = source.details
+	if (Array.isArray(rawDetails)) {
+		for (const entry of rawDetails) {
+			if (!entry || typeof entry !== "object") {
+				continue
+			}
+			const e = entry as Record<string, unknown>
+			const name =
+				typeof e.inputPipelineName === "string"
+					? e.inputPipelineName
+					: typeof e.pipelineName === "string"
+						? e.pipelineName
+						: undefined
+			if (name === undefined) {
+				continue
+			}
+			details.push({
+				inputPipelineName: name,
+				rank: typeof e.rank === "number" ? e.rank : Number.NaN,
+				weight: typeof e.weight === "number" ? e.weight : Number.NaN,
+				value: typeof e.value === "number" ? e.value : Number.NaN,
+			})
+		}
+	}
+	const out: ConversationRecallScoreDetails = {}
+	if (typeof source.value === "number") {
+		out.value = source.value
+	}
+	if (typeof source.description === "string") {
+		out.description = source.description
+	}
+	if (details.length > 0) {
+		out.details = details
+	}
+	if (
+		out.value === undefined &&
+		out.description === undefined &&
+		out.details === undefined
+	) {
+		return undefined
+	}
+	return out
+}
+
 function eventToRecallResult(
 	doc: Document,
 	matchType: ConversationRecallResult["matchType"],
@@ -303,10 +358,13 @@ function eventToRecallResult(
 		...(typeof doc.sourceRef === "string" ? { sourceRef: doc.sourceRef } : {}),
 	}
 
+	const scoreDetails = normalizeScoreDetails(doc.scoreDetails)
+
 	return {
 		citation,
 		matchType,
 		...(typeof doc.score === "number" ? { score: doc.score } : {}),
+		...(scoreDetails ? { scoreDetails } : {}),
 	}
 }
 
@@ -335,8 +393,9 @@ async function standardRecall(params: {
 
 function buildEventProjection(
 	scoreMeta: "vectorSearchScore" | "searchScore",
+	options?: { includeScoreDetails?: boolean },
 ): Document {
-	return {
+	const base: Document = {
 		_id: 0,
 		eventId: 1,
 		sessionId: 1,
@@ -346,6 +405,10 @@ function buildEventProjection(
 		sourceRef: 1,
 		score: { $meta: scoreMeta },
 	}
+	if (options?.includeScoreDetails) {
+		base.scoreDetails = 1
+	}
+	return base
 }
 
 async function semanticRecall(params: {
@@ -366,7 +429,9 @@ async function semanticRecall(params: {
 		queryText,
 		embeddingMode: "automated",
 		indexName: params.vectorIndexName,
-		numCandidates: Math.min(Math.max(params.effectiveLimit * 4, 100), 400),
+		// Task 2.R2 Sub-path A: use approved numCandidates table
+		// (5→200, 10→200, 20→400, 30→600; 20× otherwise with 200 floor).
+		numCandidates: resolveNumCandidates(params.effectiveLimit),
 		limit: params.effectiveLimit,
 		filter: buildVectorFilter({
 			request: params.request,
@@ -412,7 +477,9 @@ async function hybridRecall(params: {
 		queryText,
 		embeddingMode: "automated",
 		indexName: params.vectorIndexName,
-		numCandidates: Math.min(Math.max(params.effectiveLimit * 4, 100), 400),
+		// Task 2.R2 Sub-path A: use approved numCandidates table
+		// (5→200, 10→200, 20→400, 30→600; 20× otherwise with 200 floor).
+		numCandidates: resolveNumCandidates(params.effectiveLimit),
 		limit: params.effectiveLimit,
 		filter: vectorFilter,
 		textFieldPath: "body",
@@ -443,10 +510,16 @@ async function hybridRecall(params: {
 						],
 					},
 				},
+				// Task 2.R1: request per-pipeline rank-fusion breakdown so we can
+				// audit sum(weight * (1 / (60 + rank))) contributions in the
+				// benchmark artifact writer. Cites MongoDB MCP Finding #1:
+				// mongodb.com/docs/atlas/atlas-search/tutorial/hybrid-search.
+				scoreDetails: true,
 			},
 		},
 		{ $limit: params.effectiveLimit },
-		{ $project: buildEventProjection("searchScore") },
+		{ $addFields: { scoreDetails: { $meta: "scoreDetails" } } },
+		{ $project: buildEventProjection("searchScore", { includeScoreDetails: true }) },
 	]
 	const docs = await runSearchAggregateWithRetry(params.collection, pipeline)
 	return docs.map((doc) => eventToRecallResult(doc, "hybrid"))

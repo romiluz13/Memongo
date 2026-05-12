@@ -215,7 +215,9 @@ describe("recallConversation", () => {
 					$lte: expect.any(Date),
 				},
 			},
-			numCandidates: 400,
+			// Task 2.R2: approved numCandidates table — effectiveLimit=200 clamps
+			// above the 30-row (600), so we fall through to the 20× rule = 4000.
+			numCandidates: 4000,
 			limit: 200,
 		})
 		expect(response.metadata.searchMethod).toBe("semantic")
@@ -271,6 +273,89 @@ describe("recallConversation", () => {
 		).toBe("mem_events_text")
 		expect(response.metadata.searchMethod).toBe("hybrid")
 		expect(response.results[0]?.matchType).toBe("hybrid")
+	})
+
+	it("projects $rankFusion scoreDetails via $addFields before the final $project (Task 2.R1)", async () => {
+		const col = makeAggregateCollection({
+			results: [
+				{
+					eventId: "evt-4",
+					agentId: "agent-1",
+					role: "assistant",
+					body: "Scoring telemetry is observable.",
+					scope: "agent",
+					scopeRef: "agent:agent-1",
+					timestamp: new Date("2026-04-09T10:30:00.000Z"),
+					score: 0.31,
+					scoreDetails: {
+						value: 0.31,
+						description: "rank-fusion:sum(weight*(1/(60+rank)))",
+						details: [
+							{
+								inputPipelineName: "vector",
+								rank: 1,
+								weight: 0.5,
+								value: 0.5 * (1 / (60 + 1)),
+							},
+							{
+								inputPipelineName: "text",
+								rank: 2,
+								weight: 0.5,
+								value: 0.5 * (1 / (60 + 2)),
+							},
+						],
+					},
+				},
+			],
+		})
+		vi.mocked(eventsCollection).mockReturnValue(col)
+
+		const response = await recallConversation({
+			db: mockDb(),
+			prefix: "mem_",
+			request: {
+				agentId: "agent-1",
+				query: "deployment telemetry",
+			},
+			capabilities: {
+				vectorSearch: true,
+				textSearch: true,
+				rankFusion: true,
+				scoreFusion: false,
+			},
+		})
+
+		const pipeline = vi.mocked(col.aggregate).mock.calls[0]?.[0] as Document[]
+		// scoreDetails must come from $addFields BEFORE the final $project so the
+		// rank-fusion contributions survive into the benchmark artifact writer.
+		const addFieldsStage = pipeline.find(
+			(stage) => stage.$addFields !== undefined,
+		)
+		expect(addFieldsStage?.$addFields?.scoreDetails).toEqual({
+			$meta: "scoreDetails",
+		})
+		const projectStage = pipeline.find(
+			(stage) => stage.$project !== undefined,
+		)
+		expect(projectStage?.$project?.scoreDetails).toBe(1)
+		// Order invariant: $addFields comes before $project.
+		const addFieldsIdx = pipeline.findIndex(
+			(stage) => stage.$addFields !== undefined,
+		)
+		const projectIdx = pipeline.findIndex(
+			(stage) => stage.$project !== undefined,
+		)
+		expect(addFieldsIdx).toBeLessThan(projectIdx)
+		// Envelope surfaces the scoreDetails to consumers.
+		expect(response.results[0]?.scoreDetails?.details).toHaveLength(2)
+		expect(response.results[0]?.scoreDetails?.details?.[0]).toMatchObject({
+			inputPipelineName: "vector",
+			rank: 1,
+			weight: 0.5,
+		})
+		const vectorContribution =
+			response.results[0]?.scoreDetails?.details?.[0]?.value ?? 0
+		expect(vectorContribution).toBeCloseTo(0.5 * (1 / (60 + 1)), 10)
 	})
 
 	it("falls back to escaped regex filtering when semantic search is unavailable", async () => {

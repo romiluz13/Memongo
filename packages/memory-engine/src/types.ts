@@ -1104,10 +1104,29 @@ export type ConversationRecallCitation = {
 	preview: string
 }
 
+/**
+ * Task 2.R1: rank-fusion per-pipeline contribution emitted by MongoDB 8.1+
+ * `$rankFusion` with `scoreDetails: true`. Each entry is one sub-pipeline;
+ * `value = weight * (1 / (60 + rank))` per RRF formula.
+ */
+export type ConversationRecallScoreDetailEntry = {
+	inputPipelineName: string
+	rank: number
+	weight: number
+	value: number
+}
+
+export type ConversationRecallScoreDetails = {
+	value?: number
+	description?: string
+	details?: ConversationRecallScoreDetailEntry[]
+}
+
 export type ConversationRecallResult = {
 	citation: ConversationRecallCitation
 	score?: number
 	matchType: "filter" | "semantic" | "hybrid"
+	scoreDetails?: ConversationRecallScoreDetails
 }
 
 export type ConversationRecallResponse = {
