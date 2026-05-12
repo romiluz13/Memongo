@@ -12,6 +12,7 @@ Memongo is data-plane memory you run next to your agents. This runbook describes
 
 - `MEMONGO_MONGODB_URI` - required for standalone API processes.
 - `MEMONGO_API_KEY` - set in any untrusted network.
+- `MEMONGO_API_SCOPED_KEYS` - optional JSON policy for narrower bearer tokens bound to explicit `agentId`, `scope`, and `scopeRef` values.
 - `MEMONGO_API_PORT` / `MEMONGO_API_HOST` - bind address for `apps/api`.
 - `VOYAGE_API_KEY` - required for auto-embed and hybrid retrieval quality on the preview stack. Use an Atlas Model key with the `al-...` prefix.
 
@@ -43,6 +44,25 @@ cd apps/api && bun run start
 ```
 
 Put TLS termination and your preferred ingress in front of `apps/api` when exposing it outside localhost.
+
+## Scoped API keys
+
+`MEMONGO_API_KEY` is the admin bearer token. For agent-facing integrations, prefer a scoped token so a valid client cannot freely choose another agent or memory namespace:
+
+```bash
+export MEMONGO_API_SCOPED_KEYS='[
+  {
+    "token": "agent-facing-secret",
+    "agentIds": ["codex"],
+    "scopes": ["workspace"],
+    "scopeRefs": ["/opt/workspaces/memongo"]
+  }
+]'
+```
+
+Requests using a scoped token must send the matching `agentId`, `scope`, and `scopeRef` explicitly. Use `MEMONGO_API_KEY` only for admin operators, migrations, and trusted local development.
+
+`MEMONGO_API_SCOPED_KEYS` is fail-closed: invalid JSON, an empty policy list, or a token without at least one constraint prevents the API from starting. This avoids accidentally exposing `/v1` routes because of a malformed scoped-key config.
 
 ## Health checks
 
