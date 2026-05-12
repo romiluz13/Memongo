@@ -35,6 +35,15 @@ export type BenchmarkCandidateTrace = {
 	resolvedTurnIds?: string[]
 	path: string
 	timestamp?: string
+	/**
+	 * Task 35 observability (Fix #3): per-lane rank-fusion scoring
+	 * breakdown when the retrieval path emitted it. Lets Phase 5
+	 * investigators see WHICH lane contributed the winning score for
+	 * each candidate — critical for confirming the gauss-decay boost
+	 * actually fires on multi-session temporal queries. Populated from
+	 * the upstream `MemorySearchResult.scoreDetails` when present.
+	 */
+	scoreDetails?: import("./types.js").MemorySearchScoreDetails
 }
 
 export type BenchmarkMissLedgerEntry = {
@@ -758,6 +767,13 @@ export function evaluateRankingCase(params: {
 					timestamp: result.timestamp
 						? new Date(result.timestamp).toISOString()
 						: undefined,
+					// Task 35 Fix #3: surface scoreDetails on per-case trace so Phase
+					// 5 investigations can see which lane contributed the winning
+					// score (vs vs text). Only populated when upstream search
+					// retuned it; omitted entirely otherwise to keep artifacts lean.
+					...(result.scoreDetails !== undefined
+						? { scoreDetails: result.scoreDetails }
+						: {}),
 				}))
 			: undefined
 

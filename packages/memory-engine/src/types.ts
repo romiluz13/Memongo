@@ -81,6 +81,33 @@ export type MemorySearchResult = {
 	lastConfirmedAt?: Date
 	confidence?: number
 	trust?: MemoryResultTrust
+	/**
+	 * Task 35 observability: when the retrieval path was `$rankFusion`
+	 * with `scoreDetails: true`, this carries the per-lane contribution
+	 * breakdown (sum(weight * (1 / (60 + rank))) RRF). Optional because
+	 * not every retrieval path produces it (e.g., standard find() has
+	 * no notion of rank fusion).
+	 */
+	scoreDetails?: MemorySearchScoreDetails
+}
+
+/**
+ * Task 35: rank-fusion per-pipeline contribution for observability.
+ * Mirrors `ConversationRecallScoreDetails` but lives on the broader
+ * search surface so the benchmark runner can emit per-case scoring
+ * telemetry without importing conversation-recall types.
+ */
+export type MemorySearchScoreDetailEntry = {
+	inputPipelineName: string
+	rank: number
+	weight: number
+	value: number
+}
+
+export type MemorySearchScoreDetails = {
+	value?: number
+	description?: string
+	details?: MemorySearchScoreDetailEntry[]
 }
 
 export type MemoryReadResult = {

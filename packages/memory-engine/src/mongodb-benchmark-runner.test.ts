@@ -118,6 +118,51 @@ describe("mongodb benchmark runner", () => {
 		expect(evaluation.questionType).toBe("temporal")
 	})
 
+	it("Task 35: propagates scoreDetails on per-case topCandidates when present on result", () => {
+		const evaluation = evaluateRankingCase({
+			results: [
+				{
+					...makeResult({ path: "a", score: 0.31, sessionId: "s1" }),
+					canonicalId: "event:evt-1",
+					sourceEventIds: ["evt-1"],
+					scoreDetails: {
+						value: 0.31,
+						description: "rank-fusion:sum(weight*(1/(60+rank)))",
+						details: [
+							{
+								inputPipelineName: "vector",
+								rank: 1,
+								weight: 0.5,
+								value: 0.5 * (1 / (60 + 1)),
+							},
+							{
+								inputPipelineName: "text",
+								rank: 2,
+								weight: 0.5,
+								value: 0.5 * (1 / (60 + 2)),
+							},
+						],
+					},
+				},
+			],
+			latencyMs: 12,
+			relevantSessionIds: ["s1"],
+			resolveSessionIds: (r) => (r.sessionId ? [r.sessionId] : []),
+			traceOptions: { maxCandidates: 10 },
+		})
+
+		expect(evaluation.topCandidates).toBeDefined()
+		const first = evaluation.topCandidates![0]
+		expect(first.scoreDetails).toBeDefined()
+		expect(first.scoreDetails!.description).toContain("rank-fusion")
+		expect(first.scoreDetails!.details).toHaveLength(2)
+		expect(first.scoreDetails!.details![0]).toMatchObject({
+			inputPipelineName: "vector",
+			rank: 1,
+			weight: 0.5,
+		})
+	})
+
 	it("includes topCandidates trace with per-result retrieval metadata", () => {
 		const evaluation = evaluateRankingCase({
 			results: [
