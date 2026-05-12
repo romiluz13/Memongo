@@ -1,0 +1,31 @@
+# docker-compose.benchmark.yml - isolated Memongo benchmark database
+# Uses a separate container, port, and volumes from the developer preview stack.
+#
+# Usage:
+#   VOYAGE_API_KEY=al-xxxxx docker compose -f docker/mongodb/docker-compose.benchmark.yml up -d
+#   MEMONGO_MONGODB_URI='mongodb://127.0.0.1:27018/?directConnection=true'
+
+name: memongo-benchmark
+
+services:
+  mongodb:
+    image: mongodb/mongodb-atlas-local:preview
+    container_name: memongo-benchmark-preview
+    ports:
+      - "${MONGODB_BENCHMARK_PORT:-27018}:27017"
+    environment:
+      - VOYAGE_API_KEY=${VOYAGE_API_KEY:-}
+    volumes:
+      - memongo_benchmark_preview_data:/data/db
+      - memongo_benchmark_preview_config:/data/configdb
+    shm_size: "${MONGODB_BENCHMARK_SHM_SIZE:-2gb}"
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/runner", "healthcheck"]
+      interval: 10s
+      timeout: 10s
+      retries: 18
+      start_period: 60s
+
+volumes:
+  memongo_benchmark_preview_data:
+  memongo_benchmark_preview_config:

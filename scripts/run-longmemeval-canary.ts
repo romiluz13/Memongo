@@ -12,10 +12,36 @@
  */
 
 import { createHash, randomUUID } from "node:crypto"
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
+import {
+	existsSync,
+	mkdirSync,
+	readFileSync,
+	readdirSync,
+	writeFileSync,
+} from "node:fs"
 import http from "node:http"
 import os from "node:os"
 import path from "node:path"
+import {
+	type BenchmarkFailureClass,
+	classifyBenchmarkFailure,
+} from "../packages/memory-engine/src/benchmark-failure-taxonomy.js"
+
+// Bootstrap: set MEMONGO_LOG_LEVEL default to warn (Task 1.1). info during
+// benchmark runs causes PTY backpressure and throttles Node writes. This
+// runs BEFORE any other env read so downstream modules see the right value.
+// Tests for `resolveCanaryLogLevel` cover the precedence rules.
+// See docs/plans/2026-05-11-memongo-mempalace-roadmap-plan.md Task 1.1.
+const __canaryLogLevelBootstrap = (() => {
+	const explicit = process.env.MEMONGO_LOG_LEVEL?.trim()
+	if (!explicit) {
+		process.env.MEMONGO_LOG_LEVEL =
+			process.env.MEMONGO_CANARY_DEBUG === "1" ? "info" : "warn"
+	}
+	return process.env.MEMONGO_LOG_LEVEL
+})()
+// Reference to prevent tree-shaking complaints; the side effect is the point.
+void __canaryLogLevelBootstrap
 
 // ---------------------------------------------------------------------------
 // Types (raw LongMemEval entry shape)
@@ -39,7 +65,13 @@ type CanaryArtifact = {
 	completedAt?: string
 	datasetPath: string
 	datasetHash: string
-	casesPerType: number
+	/** remfix H3: null when fullMode=true; the value is irrelevant then. */
+	casesPerType: number | null
+	/** remfix H3: null when fullMode=true or no explicit limit. */
+	totalCaseLimit: number | null
+	fullMode: boolean
+	runShapeHash: string
+	selectedQuestionIdFilter?: string[]
 	totalEvaluations: number
 	selectedQuestionIds: string[]
 	questionTypeBreakdown: Record<string, number>
@@ -52,7 +84,10 @@ type CanaryArtifact = {
 // Configuration
 // ---------------------------------------------------------------------------
 
-const CASES_PER_TYPE = 8
+const CASES_PER_TYPE = Math.max(
+	1,
+	Math.floor(Number(process.env.MEMONGO_CANARY_CASES_PER_TYPE?.trim()) || 8),
+)
 
 const repoRoot = process.cwd()
 const workspaceDir =
@@ -62,22 +97,327 @@ const datasetPath =
 	process.env.MEMONGO_CANARY_DATASET_PATH?.trim() ||
 	process.env.MEMONGO_BENCHMARK_DATASET_PATH?.trim() ||
 	path.join(workspaceDir, "benchmarks", "longmemeval_s_cleaned.json")
-const artifactRoot = path.join(
-	repoRoot,
-	".claude",
-	"cc10x",
-	"v10",
-	"workflows",
-	"memongo-memory-hardening",
-	"artifacts",
-	"canary-runs",
-)
 const port = Number(process.env.MEMONGO_API_PORT?.trim() || "3847")
 const baseUrl = `http://127.0.0.1:${port}`
 const maxResults = Number(
 	process.env.MEMONGO_BENCHMARK_MAX_RESULTS?.trim() || "50",
 )
 const dryRun = process.env.MEMONGO_CANARY_DRY_RUN === "1"
+const totalCaseLimitRaw = process.env.MEMONGO_CANARY_TOTAL_CASES?.trim()
+const totalCaseLimit = totalCaseLimitRaw
+	? Math.max(1, Math.floor(Number(totalCaseLimitRaw) || 1))
+	: undefined
+const selectedQuestionIdFilter =
+	process.env.MEMONGO_CANARY_QUESTION_IDS?.split(",")
+		.map((id) => id.trim())
+		.filter(Boolean) ?? []
+
+// ---------------------------------------------------------------------------
+// Env-var contract helpers (Task 1.0 — exported for testability)
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolve the canary artifact directory. MEMONGO_CANARY_ARTIFACT_DIR, when set
+ * and non-blank, is used verbatim — runId is NOT appended. Otherwise the
+ * default root + runId is returned so each run gets its own subdirectory.
+ */
+export function resolveCanaryArtifactDir(params: {
+	runId: string
+	envDir: string | undefined
+	repoRoot?: string
+}): string {
+	const trimmed = params.envDir?.trim()
+	if (trimmed && trimmed.length > 0) {
+		return params.envDir as string
+	}
+	const root = params.repoRoot ?? process.cwd()
+	return path.join(
+		root,
+		".claude",
+		"cc10x",
+		"v10",
+		"workflows",
+		"memongo-memory-hardening",
+		"artifacts",
+		"canary-runs",
+		params.runId,
+	)
+}
+
+/** MEMONGO_CANARY_FULL=1 is truthy; every other value (including "true") is false. */
+export function resolveCanaryFullMode(envValue: string | undefined): boolean {
+	return envValue === "1"
+}
+
+/** MEMONGO_CANARY_RESUME=1 is truthy; every other value is false. */
+export function resolveCanaryResumeMode(envValue: string | undefined): boolean {
+	return envValue === "1"
+}
+
+/**
+ * Task 1.6 — canary strict mode. MEMONGO_BENCHMARK_STRICT=1 means: abort the
+ * run on the first fatal-classified failure (harness-timeout, model-failure,
+ * json-parse, queue-settle-timeout, probe-timeout, index-not-ready,
+ * scope-leak) instead of swallowing and continuing.
+ *
+ * The 7 fatal classes are a strict subset of the 9-class taxonomy.
+ * `retrieval-miss` and `unknown` are NOT fatal (retrieval-miss is a
+ * metric-worthy event, unknown is surfaced but doesn't imply the infra
+ * broke).
+ */
+export const BENCHMARK_STRICT_FATAL_CLASSES: ReadonlyArray<BenchmarkFailureClass> =
+	[
+		"harness-timeout",
+		"model-failure",
+		"json-parse",
+		"queue-settle-timeout",
+		"probe-timeout",
+		"index-not-ready",
+		"scope-leak",
+	]
+
+export function isCanaryFatalFailureClass(
+	failureClass: BenchmarkFailureClass,
+): boolean {
+	return (BENCHMARK_STRICT_FATAL_CLASSES as readonly string[]).includes(
+		failureClass,
+	)
+}
+
+export function shouldCanaryAbort(params: {
+	strictEnv: string | undefined
+	failureClass: BenchmarkFailureClass
+}): boolean {
+	const strict =
+		params.strictEnv === "1" || params.strictEnv?.toLowerCase() === "true"
+	if (!strict) return false
+	return isCanaryFatalFailureClass(params.failureClass)
+}
+
+/**
+ * Task 1.7 — enumerate the set of scenario indices whose `progress/{idx}.json`
+ * file is truly complete (valid JSON, non-empty, and `completed === true` with
+ * `passStatus === "pass"`). Kept as a back-compat shim; new callers should use
+ * `listResumableProgress` (remfix H1/H2) which also verifies questionId match
+ * and `runShapeHash`.
+ */
+export function listCompletedScenarioIndices(runDir: string): Set<number> {
+	const progressDir = path.join(runDir, "progress")
+	if (!existsSync(progressDir)) return new Set()
+	let entries: string[]
+	try {
+		entries = readdirSync(progressDir)
+	} catch {
+		return new Set()
+	}
+	const completed = new Set<number>()
+	for (const name of entries) {
+		// accept exactly "{integer}.json"
+		const match = /^(\d+)\.json$/.exec(name)
+		if (!match) continue
+		const idx = Number(match[1])
+		if (!Number.isInteger(idx) || idx < 0) continue
+		const filePath = path.join(progressDir, name)
+		try {
+			const raw = readFileSync(filePath, "utf8")
+			if (raw.length === 0) continue
+			const doc = JSON.parse(raw) as Record<string, unknown>
+			if (doc.completed !== true) continue
+			if (doc.passStatus !== "pass") continue
+			completed.add(idx)
+		} catch {
+			// Corrupt/unreadable file — do NOT silently treat as completed.
+			continue
+		}
+	}
+	return completed
+}
+
+/**
+ * remfix H1: compute a stable run-shape hash. Different shapes (fullMode on,
+ * different CASES_PER_TYPE, different TOTAL_CASES, different questionId set)
+ * must produce different hashes so resume can refuse to mix two runs.
+ *
+ * questionIds are sorted before hashing so stratified-selection ordering
+ * quirks do not spuriously invalidate resume.
+ */
+export function computeRunShapeHash(params: {
+	casesPerType: number
+	totalCaseLimit: number | null
+	questionIds: ReadonlyArray<string>
+	fullMode: boolean
+}): string {
+	const normalized = {
+		casesPerType: params.casesPerType,
+		totalCaseLimit: params.totalCaseLimit ?? null,
+		fullMode: Boolean(params.fullMode),
+		// canonicalize order for shape-stability
+		questionIds: [...params.questionIds].sort(),
+	}
+	return createHash("sha256").update(JSON.stringify(normalized)).digest("hex")
+}
+
+export type ResumableProgress = {
+	aborted: boolean
+	abortReason?: string
+	/** questionIds safe to skip on this resume pass. */
+	skipQuestionIds: Set<string>
+}
+
+/**
+ * remfix H1/H2: return the set of questionIds that are SAFE to skip on resume.
+ *
+ * A progress entry counts as "skip" only if ALL of:
+ *   1. file parses as JSON and is non-empty
+ *   2. `completed === true`
+ *   3. `passStatus === "pass"`
+ *   4. `questionId` appears in the current-run scenarios list
+ *   5. `runShapeHash` matches the current run's shape hash
+ *
+ * If any existing progress file's `runShapeHash` does not match the current
+ * expected hash, we ABORT resume and tell the caller to delete progress/ or
+ * start fresh. Resuming across two different shapes is unsafe.
+ */
+export function listResumableProgress(params: {
+	runDir: string
+	scenarioQuestionIds: ReadonlyArray<string>
+	expectedRunShapeHash: string
+}): ResumableProgress {
+	const progressDir = path.join(params.runDir, "progress")
+	if (!existsSync(progressDir)) {
+		return { aborted: false, skipQuestionIds: new Set() }
+	}
+	let entries: string[]
+	try {
+		entries = readdirSync(progressDir)
+	} catch {
+		return { aborted: false, skipQuestionIds: new Set() }
+	}
+	const currentQuestionIds = new Set(params.scenarioQuestionIds)
+	const skip = new Set<string>()
+	for (const name of entries) {
+		if (!/^(\d+)\.json$/.test(name)) continue
+		const file = path.join(progressDir, name)
+		let raw: string
+		try {
+			raw = readFileSync(file, "utf8")
+		} catch {
+			continue
+		}
+		if (raw.length === 0) continue
+		let doc: Record<string, unknown>
+		try {
+			doc = JSON.parse(raw) as Record<string, unknown>
+		} catch {
+			// Corrupt JSON — re-run that scenario.
+			continue
+		}
+		const runShapeHash = doc.runShapeHash
+		if (typeof runShapeHash === "string" && runShapeHash.length > 0) {
+			if (runShapeHash !== params.expectedRunShapeHash) {
+				return {
+					aborted: true,
+					abortReason:
+						"run shape changed; resume unsafe; delete progress/ or start a fresh run",
+					skipQuestionIds: new Set(),
+				}
+			}
+		}
+		if (doc.completed !== true) continue
+		if (doc.passStatus !== "pass") continue
+		const questionId = doc.questionId
+		if (typeof questionId !== "string" || questionId.length === 0) continue
+		if (!currentQuestionIds.has(questionId)) continue
+		skip.add(questionId)
+	}
+	return { aborted: false, skipQuestionIds: skip }
+}
+
+/**
+ * remfix H3: build the case-limit fields of the canary artifact.
+ *
+ * When MEMONGO_CANARY_FULL=1, casesPerType and totalCaseLimit do NOT describe
+ * the run (they're overridden by full-mode). Emit `null` so the artifact
+ * cannot lie about the run shape.
+ */
+export function buildCanaryArtifactCaseLimits(params: {
+	fullMode: boolean
+	casesPerType: number
+	totalCaseLimit: number | undefined
+}): { casesPerType: number | null; totalCaseLimit: number | null } {
+	if (params.fullMode) {
+		return { casesPerType: null, totalCaseLimit: null }
+	}
+	return {
+		casesPerType: params.casesPerType,
+		totalCaseLimit: params.totalCaseLimit ?? null,
+	}
+}
+
+/**
+ * Task 1.2 — per-scenario progress artifact emitter.
+ *
+ * Writes `{runDir}/progress/{index}.json` synchronously so a failure leaves a
+ * trail. Shape documented inline at plan Task 1.2 Step 3. The directory is
+ * created if absent. Write is synchronous (fs.writeFileSync) to survive
+ * abrupt process termination.
+ *
+ * remfix C1: `completed` and `runShapeHash` are MANDATORY fields. The bulk
+ * fan-out fallback (no per-case API stream yet) MUST write `completed:false`
+ * with a `reason` so resume mode (remfix H1/H2) correctly re-runs every
+ * scenario.
+ */
+export function writeScenarioProgress(params: {
+	runDir: string
+	index: number
+	questionId: string
+	questionType: string
+	passStatus: "pass" | "fail" | "abstain"
+	failureClass: string | null
+	metrics: Record<string, unknown> | null
+	completed: boolean
+	runShapeHash: string
+	reason?: string
+}): string {
+	const progressDir = path.join(params.runDir, "progress")
+	mkdirSync(progressDir, { recursive: true })
+	const file = path.join(progressDir, `${params.index}.json`)
+	const doc: Record<string, unknown> = {
+		index: params.index,
+		questionId: params.questionId,
+		questionType: params.questionType,
+		completedAt: new Date().toISOString(),
+		passStatus: params.passStatus,
+		failureClass: params.failureClass,
+		metrics: params.metrics,
+		completed: params.completed,
+		runShapeHash: params.runShapeHash,
+	}
+	if (params.reason !== undefined) {
+		doc.reason = params.reason
+	}
+	writeFileSync(file, JSON.stringify(doc, null, "\t"))
+	return file
+}
+
+/**
+ * Task 1.1 — canary default log level is `warn`. `info` during benchmark runs
+ * causes PTY backpressure and throttles Node writes. MEMONGO_CANARY_DEBUG=1
+ * upgrades to `info`; an explicit MEMONGO_LOG_LEVEL always wins.
+ */
+export function resolveCanaryLogLevel(params: {
+	logLevel: string | undefined
+	debug: string | undefined
+}): string {
+	const explicit = params.logLevel?.trim()
+	if (explicit && explicit.length > 0) {
+		return explicit
+	}
+	if (params.debug === "1") {
+		return "info"
+	}
+	return "warn"
+}
 
 // ---------------------------------------------------------------------------
 // Stratified selection (exported for testability)
@@ -86,11 +426,28 @@ const dryRun = process.env.MEMONGO_CANARY_DRY_RUN === "1"
 export function selectStratifiedSubset(
 	entries: RawLongMemEvalEntry[],
 	casesPerType: number,
+	options: {
+		totalCaseLimit?: number
+		questionIds?: string[]
+	} = {},
 ): {
 	selected: RawLongMemEvalEntry[]
 	selectedQuestionIds: string[]
 	breakdown: Record<string, number>
 } {
+	if (options.questionIds && options.questionIds.length > 0) {
+		const requested = new Set(options.questionIds)
+		const selected = entries.filter((entry) => requested.has(entry.question_id))
+		const found = new Set(selected.map((entry) => entry.question_id))
+		const missing = [...requested].filter((id) => !found.has(id))
+		if (missing.length > 0) {
+			throw new Error(
+				`Requested question_id(s) not found: ${missing.join(", ")}`,
+			)
+		}
+		return summarizeSelectedEntries(selected)
+	}
+
 	// Group by question_type
 	const byType = new Map<string, RawLongMemEvalEntry[]>()
 	for (const entry of entries) {
@@ -117,20 +474,54 @@ export function selectStratifiedSubset(
 		breakdown[qt] = picked.length
 	}
 
-	return { selected, selectedQuestionIds, breakdown }
+	return summarizeSelectedEntries(
+		options.totalCaseLimit
+			? selected.slice(0, options.totalCaseLimit)
+			: selected,
+	)
+}
+
+function summarizeSelectedEntries(entries: RawLongMemEvalEntry[]): {
+	selected: RawLongMemEvalEntry[]
+	selectedQuestionIds: string[]
+	breakdown: Record<string, number>
+} {
+	const selectedQuestionIds: string[] = []
+	const breakdown: Record<string, number> = {}
+	for (const entry of entries) {
+		selectedQuestionIds.push(entry.question_id)
+		const qt = entry.question_type?.trim() || "unknown"
+		breakdown[qt] = (breakdown[qt] ?? 0) + 1
+	}
+	return { selected: entries, selectedQuestionIds, breakdown }
 }
 
 // ---------------------------------------------------------------------------
-// HTTP helper (no-timeout, reused from the full runner pattern)
+// HTTP helper
 // ---------------------------------------------------------------------------
 
-function postJsonNoTimeout(params: {
+export function resolveCanaryHttpTimeoutMs(
+	envValue: string | undefined,
+): number {
+	if (envValue === undefined || envValue.trim() === "") return 20 * 60 * 1000
+	const parsed = Number(envValue)
+	if (!Number.isFinite(parsed) || parsed < 0) {
+		throw new Error(
+			`MEMONGO_CANARY_HTTP_TIMEOUT_MS must be a non-negative number, got ${envValue}`,
+		)
+	}
+	return Math.floor(parsed)
+}
+
+function postJson(params: {
 	url: string
 	payload: unknown
+	timeoutMs: number
 }): Promise<{ statusCode: number; body: string }> {
 	const body = JSON.stringify(params.payload)
 	const parsed = new URL(params.url)
 	return new Promise((resolve, reject) => {
+		let settled = false
 		const req = http.request(
 			{
 				hostname: parsed.hostname,
@@ -141,12 +532,13 @@ function postJsonNoTimeout(params: {
 					"Content-Type": "application/json",
 					"Content-Length": Buffer.byteLength(body),
 				},
-				timeout: 0,
+				timeout: params.timeoutMs,
 			},
 			(res) => {
 				const chunks: Buffer[] = []
 				res.on("data", (chunk: Buffer) => chunks.push(chunk))
 				res.on("end", () => {
+					settled = true
 					resolve({
 						statusCode: res.statusCode ?? 0,
 						body: Buffer.concat(chunks).toString("utf8"),
@@ -154,7 +546,20 @@ function postJsonNoTimeout(params: {
 				})
 			},
 		)
-		req.on("error", reject)
+		req.on("timeout", () => {
+			if (settled) return
+			settled = true
+			req.destroy(
+				new Error(
+					`canary benchmark request timed out after ${params.timeoutMs}ms`,
+				),
+			)
+		})
+		req.on("error", (err) => {
+			if (settled) return
+			settled = true
+			reject(err)
+		})
 		req.write(body)
 		req.end()
 	})
@@ -169,9 +574,16 @@ async function main() {
 	const runId =
 		process.env.MEMONGO_CANARY_RUN_ID?.trim() ||
 		`canary-${startedAt.toISOString().replace(/[:.]/g, "-")}-${randomUUID().slice(0, 8)}`
-	const runDir = path.join(artifactRoot, runId)
+	const runDir = resolveCanaryArtifactDir({
+		runId,
+		envDir: process.env.MEMONGO_CANARY_ARTIFACT_DIR,
+		repoRoot,
+	})
+	const fullMode = resolveCanaryFullMode(process.env.MEMONGO_CANARY_FULL)
 
-	console.log(`[canary] run=${runId} dataset=${datasetPath} dryRun=${dryRun}`)
+	console.log(
+		`[canary] run=${runId} dataset=${datasetPath} dryRun=${dryRun} fullMode=${fullMode} runDir=${runDir}`,
+	)
 
 	// Load dataset
 	if (!existsSync(datasetPath)) {
@@ -189,17 +601,74 @@ async function main() {
 	}
 	const entries = dataset as RawLongMemEvalEntry[]
 
-	// Select stratified subset
-	const { selected, selectedQuestionIds, breakdown } = selectStratifiedSubset(
-		entries,
-		CASES_PER_TYPE,
-	)
+	// Select stratified subset.
+	// MEMONGO_CANARY_FULL=1 overrides the stratified subset: run every scenario
+	// in the dataset, ignoring MEMONGO_CANARY_CASES_PER_TYPE and
+	// MEMONGO_CANARY_TOTAL_CASES (but still honoring an explicit question-id
+	// filter, since that's a narrower intent).
+	const { selected, selectedQuestionIds, breakdown } = fullMode
+		? selectStratifiedSubset(entries, entries.length, {
+				questionIds:
+					selectedQuestionIdFilter.length > 0
+						? selectedQuestionIdFilter
+						: undefined,
+			})
+		: selectStratifiedSubset(entries, CASES_PER_TYPE, {
+				totalCaseLimit,
+				questionIds: selectedQuestionIdFilter,
+			})
 
 	console.log(
 		`[canary] selected ${selectedQuestionIds.length} evaluations across ${Object.keys(breakdown).length} types from ${entries.length} total`,
 	)
 	for (const [qt, count] of Object.entries(breakdown)) {
 		console.log(`  ${qt}: ${count}`)
+	}
+
+	// remfix H1: compute run-shape hash from the FULL selected scenario list
+	// BEFORE resume trimming. This is the hash the current run will stamp into
+	// every progress file and is what resume compares against.
+	const runShapeHash = computeRunShapeHash({
+		casesPerType: CASES_PER_TYPE,
+		totalCaseLimit: totalCaseLimit ?? null,
+		questionIds: selectedQuestionIds,
+		fullMode,
+	})
+
+	// Task 1.7 + remfix H1/H2 — resume semantics. MEMONGO_CANARY_RESUME=1 drops
+	// scenarios whose progress entry: (a) parses as JSON, (b) is non-empty,
+	// (c) has completed===true, (d) has passStatus==="pass", (e) has a
+	// questionId that matches the current scenario list, and (f) has a
+	// runShapeHash equal to the current run's shape hash. Any progress file
+	// whose shape hash differs aborts resume: the run shape changed and
+	// skipping by numeric index would silently hide the regression.
+	const resumeMode = resolveCanaryResumeMode(process.env.MEMONGO_CANARY_RESUME)
+	let scenariosSkipped = 0
+	if (resumeMode) {
+		const resumable = listResumableProgress({
+			runDir,
+			scenarioQuestionIds: selectedQuestionIds,
+			expectedRunShapeHash: runShapeHash,
+		})
+		if (resumable.aborted) {
+			throw new Error(
+				`canary resume aborted: ${resumable.abortReason ?? "run shape mismatch"}`,
+			)
+		}
+		if (resumable.skipQuestionIds.size > 0) {
+			const beforeCount = selected.length
+			for (let idx = selected.length - 1; idx >= 0; idx--) {
+				const qid = selected[idx].question_id
+				if (resumable.skipQuestionIds.has(qid)) {
+					selected.splice(idx, 1)
+					selectedQuestionIds.splice(idx, 1)
+				}
+			}
+			scenariosSkipped = beforeCount - selected.length
+			console.log(
+				`[canary] resume mode: skipped ${scenariosSkipped}/${beforeCount} already-completed scenarios`,
+			)
+		}
 	}
 
 	// Write subset dataset inside the workspace so the benchmark API accepts it
@@ -209,12 +678,27 @@ async function main() {
 	const subsetPath = path.join(subsetDir, `${runId}.json`)
 	writeFileSync(subsetPath, JSON.stringify(selected, null, 2))
 
+	// remfix H3: In full mode, casesPerType and totalCaseLimit do not describe
+	// the run. Emit null instead of the stale defaults so canary-artifact.json
+	// cannot misreport run shape.
+	const caseLimits = buildCanaryArtifactCaseLimits({
+		fullMode,
+		casesPerType: CASES_PER_TYPE,
+		totalCaseLimit,
+	})
+
 	const artifact: CanaryArtifact = {
 		runId,
 		startedAt: startedAt.toISOString(),
 		datasetPath,
 		datasetHash,
-		casesPerType: CASES_PER_TYPE,
+		casesPerType: caseLimits.casesPerType,
+		totalCaseLimit: caseLimits.totalCaseLimit,
+		fullMode,
+		runShapeHash,
+		...(selectedQuestionIdFilter.length > 0
+			? { selectedQuestionIdFilter }
+			: {}),
 		totalEvaluations: selectedQuestionIds.length,
 		selectedQuestionIds,
 		questionTypeBreakdown: breakdown,
@@ -223,7 +707,7 @@ async function main() {
 	if (dryRun) {
 		artifact.completedAt = new Date().toISOString()
 		const artifactPath = path.join(runDir, "canary-artifact.json")
-		writeFileSync(artifactPath, JSON.stringify(artifact, null, 2))
+		writeFileSync(artifactPath, JSON.stringify(artifact, null, "\t"))
 		console.log(`[canary] dry-run complete. Artifact: ${artifactPath}`)
 		console.log(JSON.stringify({ ok: true, runId, dryRun: true }, null, 2))
 		return
@@ -234,8 +718,11 @@ async function main() {
 	console.log(
 		`[canary] posting benchmark to ${baseUrl}/v1/admin/relevance/benchmark`,
 	)
-	const response = await postJsonNoTimeout({
+	const response = await postJson({
 		url: `${baseUrl}/v1/admin/relevance/benchmark`,
+		timeoutMs: resolveCanaryHttpTimeoutMs(
+			process.env.MEMONGO_CANARY_HTTP_TIMEOUT_MS,
+		),
 		payload: {
 			agentId,
 			datasetPath: subsetPath,
@@ -247,7 +734,7 @@ async function main() {
 		artifact.error = `HTTP ${response.statusCode}: ${response.body.slice(0, 500)}`
 		artifact.completedAt = new Date().toISOString()
 		const artifactPath = path.join(runDir, "canary-artifact.json")
-		writeFileSync(artifactPath, JSON.stringify(artifact, null, 2))
+		writeFileSync(artifactPath, JSON.stringify(artifact, null, "\t"))
 		throw new Error(artifact.error)
 	}
 
@@ -258,11 +745,49 @@ async function main() {
 		| undefined
 	artifact.completedAt = new Date().toISOString()
 
+	// Task 1.2 + remfix C1 — fan out per-scenario progress artifacts.
+	//
+	// The current benchmark endpoint returns AGGREGATE metrics only (rAt5,
+	// rAt10, hitRate across all cases) — no per-case pass/fail is exposed in
+	// the response envelope yet. Hard-coding `passStatus:"pass"` here would
+	// SILENTLY claim every scenario passed, and resume mode would then skip
+	// regressions forever (remfix C1 fallback #2).
+	//
+	// Until per-case streaming exists (tracked as a Phase 2 Scope #2 /
+	// benchmark-runner follow-up), every fan-out entry is marked
+	// `completed:false` with a reason so resume correctly re-runs each
+	// scenario. The aggregate metrics are still attached for forensic review.
+	const responseMetricsDigest =
+		typeof benchmarkResponse.rAt5 === "number" ||
+		typeof benchmarkResponse.hitRate === "number"
+			? {
+					rAt5: benchmarkResponse.rAt5,
+					rAt10: benchmarkResponse.rAt10,
+					ndcgAt10: benchmarkResponse.ndcgAt10,
+					hitRate: benchmarkResponse.hitRate,
+				}
+			: null
+	for (let idx = 0; idx < selected.length; idx++) {
+		const entry = selected[idx]
+		writeScenarioProgress({
+			runDir,
+			index: idx,
+			questionId: entry.question_id,
+			questionType: entry.question_type || "unknown",
+			passStatus: "abstain",
+			failureClass: null,
+			metrics: responseMetricsDigest,
+			completed: false,
+			reason: "bulk-api-no-per-case-stream-yet",
+			runShapeHash,
+		})
+	}
+
 	// Write artifacts
 	const artifactPath = path.join(runDir, "canary-artifact.json")
 	const responsePath = path.join(runDir, "benchmark-response.json")
-	writeFileSync(artifactPath, JSON.stringify(artifact, null, 2))
-	writeFileSync(responsePath, JSON.stringify(benchmarkResponse, null, 2))
+	writeFileSync(artifactPath, JSON.stringify(artifact, null, "\t"))
+	writeFileSync(responsePath, JSON.stringify(benchmarkResponse, null, "\t"))
 
 	console.log(`[canary] complete. Artifact: ${artifactPath}`)
 	console.log(
@@ -281,7 +806,42 @@ async function main() {
 	)
 }
 
+/**
+ * Task 1.4 — write `failure.json` in the run dir when main() throws so the
+ * forensic trail captures the failure class even if no scenarios completed.
+ * Falls back to a best-effort artifact dir when MEMONGO_CANARY_ARTIFACT_DIR
+ * is set; otherwise uses the default path resolver.
+ */
+function writeTopLevelFailureArtifact(err: unknown): void {
+	try {
+		const failureClass: BenchmarkFailureClass = classifyBenchmarkFailure(err)
+		const envDir = process.env.MEMONGO_CANARY_ARTIFACT_DIR
+		const runIdForFallback =
+			process.env.MEMONGO_CANARY_RUN_ID?.trim() ||
+			`canary-failure-${Date.now()}`
+		const runDir = resolveCanaryArtifactDir({
+			runId: runIdForFallback,
+			envDir,
+			repoRoot: process.cwd(),
+		})
+		mkdirSync(runDir, { recursive: true })
+		const doc = {
+			failedAt: new Date().toISOString(),
+			failureClass,
+			message: err instanceof Error ? err.message : String(err),
+			stack: err instanceof Error ? err.stack : undefined,
+		}
+		writeFileSync(
+			path.join(runDir, "failure.json"),
+			JSON.stringify(doc, null, "\t"),
+		)
+	} catch {
+		// Never swallow the original error — best-effort artifact only.
+	}
+}
+
 main().catch((err) => {
+	writeTopLevelFailureArtifact(err)
 	console.error(err instanceof Error ? err.stack || err.message : err)
 	process.exitCode = 1
 })

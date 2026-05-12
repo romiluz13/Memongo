@@ -1,0 +1,12 @@
+{
+	"datasetSha256": "d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442",
+	"datasetPath": "/Users/rom.iluz/.memongo/workspace/benchmarks/longmemeval_s_cleaned.json",
+	"dockerComposeFile": "docker/mongodb/docker-compose.benchmark.yml",
+	"apiPort": 3847,
+	"collectionPrefix": "memongo_bench_1778539388_",
+	"apiHealthCheckedAt": "2026-05-11T22:43:36Z",
+	"apiPidFile": "/tmp/memongo-api.pid",
+	"workflow": "wf-20260511T212602Z-9db2daeb",
+	"task": "Task 1.9 forced-failure gate proof",
+	"expectedFailureClass": "model-failure"
+}

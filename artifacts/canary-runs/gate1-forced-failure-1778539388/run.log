@@ -1,0 +1,7 @@
+[canary] run=canary-2026-05-11T22-43-45-741Z-0f4aef10 dataset=/Users/rom.iluz/.memongo/workspace/benchmarks/longmemeval_s_cleaned.json dryRun=false fullMode=false runDir=artifacts/canary-runs/gate1-forced-failure-1778539388
+[canary] selected 1 evaluations across 1 types from 500 total
+  knowledge-update: 1
+[canary] posting benchmark to http://127.0.0.1:3847/v1/admin/relevance/benchmark
+Error: HTTP 500: {"error":{"code":"RELEVANCE_BENCHMARK_FAILED","message":"MongoDB URI required for Memongo. Set `memory.mongodb.uri` in config or `MEMONGO_MONGODB_URI` in the environment. Use `MEMONGO_FORCE_MONGODB_URI` to override a file URI (for example memongo-api or CI)."}}
+    at main (/Users/rom.iluz/Dev/memongo/scripts/run-longmemeval-canary.ts:553:13)
+    at processTicksAndRejections (native:7:39)

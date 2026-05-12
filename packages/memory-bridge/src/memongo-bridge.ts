@@ -895,12 +895,29 @@ export async function memongoBridgeRelevanceBenchmark(params: {
 	datasetPath?: string
 	maxResults?: number
 	minScore?: number
+	/** Task 1.A parity envelope — optional pass-through. */
+	datasetSha256?: string
+	embeddingConfig?: {
+		model: string
+		dimensions: number
+		quantization: "float32" | "int8" | "binary"
+	}
+	rerankerConfig?: {
+		model: string
+		version: string | null
+		stage: "post-fusion" | "pre-fusion" | "none"
+	}
 }): Promise<RelevanceBenchmarkResult> {
 	const m = await memongoBridgeGetManager(params.agentId)
 	return m.relevanceBenchmark({
 		datasetPath: params.datasetPath,
 		maxResults: params.maxResults,
 		minScore: params.minScore,
+		...(params.datasetSha256 ? { datasetSha256: params.datasetSha256 } : {}),
+		...(params.embeddingConfig
+			? { embeddingConfig: params.embeddingConfig }
+			: {}),
+		...(params.rerankerConfig ? { rerankerConfig: params.rerankerConfig } : {}),
 	})
 }
 

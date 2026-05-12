@@ -26,6 +26,7 @@ import {
 } from "./mongodb-benchmark-harness.js"
 import { emitTelemetry } from "./mongodb-telemetry.js"
 import { checkCache, writeCache } from "./mongodb-query-cache.js"
+import { crossEncoderRerank } from "./mongodb-reranker.js"
 import type { MemorySearchResult } from "./types.js"
 
 // ---------------------------------------------------------------------------
@@ -97,11 +98,27 @@ vi.mock("./mongodb-schema.js", () => ({
 	ensureSchemaValidation: vi.fn(),
 	ensureSearchIndexes: vi.fn(),
 	ensureStandardIndexes: vi.fn(),
+	waitForSearchCapabilities: vi.fn(),
+	waitForSearchIndexesQueryable: vi.fn(),
+	resolveSearchIndexReadinessTiming: vi.fn(() => ({
+		timeoutMs: 60_000,
+		pollMs: 1_000,
+	})),
+	getExpectedSearchIndexTargets: vi.fn(() => []),
+	sessionChunksCollection: vi.fn(),
 }))
 
 vi.mock("./mongodb-query-cache.js", () => ({
 	checkCache: vi.fn(),
 	writeCache: vi.fn(),
+}))
+
+vi.mock("./mongodb-reranker.js", () => ({
+	crossEncoderRerank: vi.fn(async ({ results }) => ({
+		results,
+		reranked: false,
+		latencyMs: 0,
+	})),
 }))
 
 vi.mock("./mongodb-lane-coverage.js", () => ({
@@ -135,6 +152,13 @@ vi.mock("./mongodb-derived-memory.js", async () => {
 		extractProcedureCandidatesFromEvent: vi.fn(() => []),
 	}
 })
+
+vi.mock("./mongodb-benchmark-readiness.js", () => ({
+	readSearchIndexStatus: vi.fn().mockResolvedValue({
+		kind: "fallback",
+		reason: "command-not-found",
+	}),
+}))
 
 vi.mock("./mongodb-telemetry.js", () => ({
 	emitTelemetry: vi.fn(),
@@ -320,6 +344,365 @@ describe("benchmarkIngest", () => {
 		} finally {
 			await rm(workspaceDir, { recursive: true, force: true })
 			await rm(outsideDir, { recursive: true, force: true })
+		}
+	})
+})
+
+describe("benchmark event search convergence", () => {
+	beforeEach(() => {
+		vi.clearAllMocks()
+	})
+
+	it("bounds each MongoDB Search convergence probe with maxTimeMS", async () => {
+		const previousStrict = process.env.MEMONGO_BENCHMARK_STRICT
+		const previousTimeout =
+			process.env.MEMONGO_BENCHMARK_EVENT_SEARCH_SETTLE_TIMEOUT_MS
+		const previousProbeTimeout =
+			process.env.MEMONGO_BENCHMARK_EVENT_SEARCH_PROBE_MAX_TIME_MS
+		process.env.MEMONGO_BENCHMARK_STRICT = "1"
+		process.env.MEMONGO_BENCHMARK_EVENT_SEARCH_SETTLE_TIMEOUT_MS = "60000"
+		process.env.MEMONGO_BENCHMARK_EVENT_SEARCH_PROBE_MAX_TIME_MS = "1234"
+		try {
+			const aggregate = vi.fn().mockReturnValue({
+				toArray: vi.fn().mockResolvedValue([{ count: 2 }]),
+			})
+			vi.mocked(eventsCollection).mockReturnValue({
+				countDocuments: vi.fn().mockResolvedValue(2),
+				aggregate,
+			} as never)
+
+			const manager = {
+				db: fakeDb,
+				prefix: fakePrefix,
+				capabilities: {
+					textSearch: true,
+				},
+			} as unknown as MongoDBMemoryManager
+
+			await (
+				MongoDBMemoryManager.prototype as unknown as {
+					waitForBenchmarkEventSearchConvergence: (
+						this: MongoDBMemoryManager,
+						agentId: string,
+					) => Promise<void>
+				}
+			).waitForBenchmarkEventSearchConvergence.call(manager, "agent-1")
+
+			expect(aggregate).toHaveBeenCalledWith(expect.any(Array), {
+				maxTimeMS: 1234,
+				signal: expect.any(AbortSignal),
+			})
+		} finally {
+			if (previousStrict === undefined) {
+				delete process.env.MEMONGO_BENCHMARK_STRICT
+			} else {
+				process.env.MEMONGO_BENCHMARK_STRICT = previousStrict
+			}
+			if (previousTimeout === undefined) {
+				delete process.env.MEMONGO_BENCHMARK_EVENT_SEARCH_SETTLE_TIMEOUT_MS
+			} else {
+				process.env.MEMONGO_BENCHMARK_EVENT_SEARCH_SETTLE_TIMEOUT_MS =
+					previousTimeout
+			}
+			if (previousProbeTimeout === undefined) {
+				delete process.env.MEMONGO_BENCHMARK_EVENT_SEARCH_PROBE_MAX_TIME_MS
+			} else {
+				process.env.MEMONGO_BENCHMARK_EVENT_SEARCH_PROBE_MAX_TIME_MS =
+					previousProbeTimeout
+			}
+		}
+	})
+
+	// Task 1.5 — readSearchIndexStatus delegation tests.
+	// The readSearchIndexStatus helper is mocked at module scope; each test
+	// overrides the return value for that test.
+	it("returns early when readiness helper reports queryable=true (Task 1.5)", async () => {
+		const { readSearchIndexStatus } = await import(
+			"./mongodb-benchmark-readiness.js"
+		)
+		vi.mocked(readSearchIndexStatus).mockResolvedValue({
+			kind: "ok",
+			status: "READY",
+			queryable: true,
+			indexName: "events_text",
+		})
+		vi.mocked(eventsCollection).mockReturnValue({
+			countDocuments: vi.fn().mockResolvedValue(2),
+		} as never)
+
+		const manager = {
+			db: fakeDb,
+			prefix: fakePrefix,
+			capabilities: { textSearch: true },
+		} as unknown as MongoDBMemoryManager
+
+		await expect(
+			(
+				MongoDBMemoryManager.prototype as unknown as {
+					waitForBenchmarkEventSearchConvergence: (
+						this: MongoDBMemoryManager,
+						agentId: string,
+					) => Promise<void>
+				}
+			).waitForBenchmarkEventSearchConvergence.call(manager, "agent-ready"),
+		).resolves.toBeUndefined()
+	})
+
+	it("aborts on STALE in strict mode even when queryable=true (Task 1.5)", async () => {
+		const prevStrict = process.env.MEMONGO_BENCHMARK_STRICT
+		process.env.MEMONGO_BENCHMARK_STRICT = "1"
+		try {
+			const { readSearchIndexStatus } = await import(
+				"./mongodb-benchmark-readiness.js"
+			)
+			vi.mocked(readSearchIndexStatus).mockResolvedValue({
+				kind: "ok",
+				status: "STALE",
+				queryable: true,
+				indexName: "events_text",
+			})
+			vi.mocked(eventsCollection).mockReturnValue({
+				countDocuments: vi.fn().mockResolvedValue(2),
+			} as never)
+
+			const manager = {
+				db: fakeDb,
+				prefix: fakePrefix,
+				capabilities: { textSearch: true },
+			} as unknown as MongoDBMemoryManager
+
+			await expect(
+				(
+					MongoDBMemoryManager.prototype as unknown as {
+						waitForBenchmarkEventSearchConvergence: (
+							this: MongoDBMemoryManager,
+							agentId: string,
+						) => Promise<void>
+					}
+				).waitForBenchmarkEventSearchConvergence.call(manager, "agent-stale"),
+			).rejects.toThrow(/index-not-ready|STALE/)
+		} finally {
+			if (prevStrict === undefined) delete process.env.MEMONGO_BENCHMARK_STRICT
+			else process.env.MEMONGO_BENCHMARK_STRICT = prevStrict
+		}
+	})
+
+	it("aborts on queryable=false in strict mode (Task 1.5)", async () => {
+		const prevStrict = process.env.MEMONGO_BENCHMARK_STRICT
+		process.env.MEMONGO_BENCHMARK_STRICT = "1"
+		try {
+			const { readSearchIndexStatus } = await import(
+				"./mongodb-benchmark-readiness.js"
+			)
+			vi.mocked(readSearchIndexStatus).mockResolvedValue({
+				kind: "ok",
+				status: "BUILDING",
+				queryable: false,
+				indexName: "events_text",
+			})
+			vi.mocked(eventsCollection).mockReturnValue({
+				countDocuments: vi.fn().mockResolvedValue(2),
+			} as never)
+
+			const manager = {
+				db: fakeDb,
+				prefix: fakePrefix,
+				capabilities: { textSearch: true },
+			} as unknown as MongoDBMemoryManager
+
+			await expect(
+				(
+					MongoDBMemoryManager.prototype as unknown as {
+						waitForBenchmarkEventSearchConvergence: (
+							this: MongoDBMemoryManager,
+							agentId: string,
+						) => Promise<void>
+					}
+				).waitForBenchmarkEventSearchConvergence.call(
+					manager,
+					"agent-building",
+				),
+			).rejects.toThrow(/index-not-ready|queryable=false|BUILDING/)
+		} finally {
+			if (prevStrict === undefined) delete process.env.MEMONGO_BENCHMARK_STRICT
+			else process.env.MEMONGO_BENCHMARK_STRICT = prevStrict
+		}
+	})
+
+	it("falls back to aggregate probe when helper signals fallback (Task 1.5)", async () => {
+		const prevStrict = process.env.MEMONGO_BENCHMARK_STRICT
+		const prevSettle =
+			process.env.MEMONGO_BENCHMARK_EVENT_SEARCH_SETTLE_TIMEOUT_MS
+		const prevProbe =
+			process.env.MEMONGO_BENCHMARK_EVENT_SEARCH_PROBE_MAX_TIME_MS
+		process.env.MEMONGO_BENCHMARK_STRICT = "1"
+		// Use a short settle window so this test stays fast even under the
+		// aggregate probe loop.
+		process.env.MEMONGO_BENCHMARK_EVENT_SEARCH_SETTLE_TIMEOUT_MS = "1500"
+		process.env.MEMONGO_BENCHMARK_EVENT_SEARCH_PROBE_MAX_TIME_MS = "1000"
+		try {
+			const { readSearchIndexStatus } = await import(
+				"./mongodb-benchmark-readiness.js"
+			)
+			vi.mocked(readSearchIndexStatus).mockResolvedValue({
+				kind: "fallback",
+				reason: "command-not-found",
+			})
+			const aggregate = vi.fn().mockReturnValue({
+				toArray: vi.fn().mockResolvedValue([{ count: 2 }]),
+			})
+			vi.mocked(eventsCollection).mockReturnValue({
+				countDocuments: vi.fn().mockResolvedValue(2),
+				aggregate,
+			} as never)
+
+			const manager = {
+				db: fakeDb,
+				prefix: fakePrefix,
+				capabilities: { textSearch: true },
+			} as unknown as MongoDBMemoryManager
+
+			const start = Date.now()
+			await (
+				MongoDBMemoryManager.prototype as unknown as {
+					waitForBenchmarkEventSearchConvergence: (
+						this: MongoDBMemoryManager,
+						agentId: string,
+					) => Promise<void>
+				}
+			).waitForBenchmarkEventSearchConvergence.call(manager, "agent-fallback")
+			// Aggregate-probe fallback must still bound itself under the
+			// configured probeMaxTime — this completes well under 2s.
+			expect(Date.now() - start).toBeLessThan(3000)
+			expect(aggregate).toHaveBeenCalled()
+		} finally {
+			if (prevStrict === undefined) delete process.env.MEMONGO_BENCHMARK_STRICT
+			else process.env.MEMONGO_BENCHMARK_STRICT = prevStrict
+			if (prevSettle === undefined)
+				delete process.env.MEMONGO_BENCHMARK_EVENT_SEARCH_SETTLE_TIMEOUT_MS
+			else
+				process.env.MEMONGO_BENCHMARK_EVENT_SEARCH_SETTLE_TIMEOUT_MS =
+					prevSettle
+			if (prevProbe === undefined)
+				delete process.env.MEMONGO_BENCHMARK_EVENT_SEARCH_PROBE_MAX_TIME_MS
+			else
+				process.env.MEMONGO_BENCHMARK_EVENT_SEARCH_PROBE_MAX_TIME_MS = prevProbe
+		}
+	})
+})
+
+describe("benchmark scenario queue settling", () => {
+	beforeEach(() => {
+		vi.clearAllMocks()
+	})
+
+	it("fails fast when a benchmark scenario queue does not settle", async () => {
+		const previousTimeout =
+			process.env.MEMONGO_BENCHMARK_QUEUE_SETTLE_TIMEOUT_MS
+		process.env.MEMONGO_BENCHMARK_QUEUE_SETTLE_TIMEOUT_MS = "1"
+		try {
+			const manager = {
+				agentId: "benchmark-agent-1",
+				writeQueue: new Promise<void>(() => {}),
+				derivationQueue: Promise.resolve(),
+			} as unknown as MongoDBMemoryManager
+
+			await expect(
+				(
+					MongoDBMemoryManager.prototype as unknown as {
+						settleBenchmarkScenarioManager: (
+							this: MongoDBMemoryManager,
+							manager: MongoDBMemoryManager,
+						) => Promise<void>
+					}
+				).settleBenchmarkScenarioManager.call(manager, manager),
+			).rejects.toThrow(
+				"benchmark scenario manager writeQueue settle timed out after 1ms",
+			)
+		} finally {
+			if (previousTimeout === undefined) {
+				delete process.env.MEMONGO_BENCHMARK_QUEUE_SETTLE_TIMEOUT_MS
+			} else {
+				process.env.MEMONGO_BENCHMARK_QUEUE_SETTLE_TIMEOUT_MS = previousTimeout
+			}
+		}
+	})
+
+	// Task 1.3 — complete queue-settle timeout coverage (plan Harness Checklist #3).
+	const callSettle = async (manager: MongoDBMemoryManager) =>
+		(
+			MongoDBMemoryManager.prototype as unknown as {
+				settleBenchmarkScenarioManager: (
+					this: MongoDBMemoryManager,
+					manager: MongoDBMemoryManager,
+				) => Promise<void>
+			}
+		).settleBenchmarkScenarioManager.call(manager, manager)
+
+	it("names writeQueue when writeQueue hangs (Task 1.3)", async () => {
+		const prev = process.env.MEMONGO_BENCHMARK_QUEUE_SETTLE_TIMEOUT_MS
+		const prevStrict = process.env.MEMONGO_BENCHMARK_STRICT
+		process.env.MEMONGO_BENCHMARK_QUEUE_SETTLE_TIMEOUT_MS = "200"
+		process.env.MEMONGO_BENCHMARK_STRICT = "1"
+		try {
+			const manager = {
+				agentId: "benchmark-agent-write",
+				writeQueue: new Promise<void>(() => {}),
+				derivationQueue: Promise.resolve(),
+			} as unknown as MongoDBMemoryManager
+			await expect(callSettle(manager)).rejects.toThrow(
+				/writeQueue settle timed out after 200ms/,
+			)
+		} finally {
+			if (prev === undefined)
+				delete process.env.MEMONGO_BENCHMARK_QUEUE_SETTLE_TIMEOUT_MS
+			else process.env.MEMONGO_BENCHMARK_QUEUE_SETTLE_TIMEOUT_MS = prev
+			if (prevStrict === undefined) delete process.env.MEMONGO_BENCHMARK_STRICT
+			else process.env.MEMONGO_BENCHMARK_STRICT = prevStrict
+		}
+	})
+
+	it("names derivationQueue when derivationQueue hangs (Task 1.3)", async () => {
+		const prev = process.env.MEMONGO_BENCHMARK_QUEUE_SETTLE_TIMEOUT_MS
+		const prevStrict = process.env.MEMONGO_BENCHMARK_STRICT
+		process.env.MEMONGO_BENCHMARK_QUEUE_SETTLE_TIMEOUT_MS = "200"
+		process.env.MEMONGO_BENCHMARK_STRICT = "1"
+		try {
+			const manager = {
+				agentId: "benchmark-agent-derivation",
+				writeQueue: Promise.resolve(),
+				derivationQueue: new Promise<void>(() => {}),
+			} as unknown as MongoDBMemoryManager
+			await expect(callSettle(manager)).rejects.toThrow(
+				/derivationQueue settle timed out after 200ms/,
+			)
+		} finally {
+			if (prev === undefined)
+				delete process.env.MEMONGO_BENCHMARK_QUEUE_SETTLE_TIMEOUT_MS
+			else process.env.MEMONGO_BENCHMARK_QUEUE_SETTLE_TIMEOUT_MS = prev
+			if (prevStrict === undefined) delete process.env.MEMONGO_BENCHMARK_STRICT
+			else process.env.MEMONGO_BENCHMARK_STRICT = prevStrict
+		}
+	})
+
+	it("succeeds on slow-but-bounded queue under timeout (Task 1.3)", async () => {
+		const prev = process.env.MEMONGO_BENCHMARK_QUEUE_SETTLE_TIMEOUT_MS
+		const prevStrict = process.env.MEMONGO_BENCHMARK_STRICT
+		process.env.MEMONGO_BENCHMARK_QUEUE_SETTLE_TIMEOUT_MS = "500"
+		process.env.MEMONGO_BENCHMARK_STRICT = "1"
+		try {
+			const manager = {
+				agentId: "benchmark-agent-slow",
+				writeQueue: new Promise<void>((resolve) => setTimeout(resolve, 50)),
+				derivationQueue: Promise.resolve(),
+			} as unknown as MongoDBMemoryManager
+			await expect(callSettle(manager)).resolves.toBeUndefined()
+		} finally {
+			if (prev === undefined)
+				delete process.env.MEMONGO_BENCHMARK_QUEUE_SETTLE_TIMEOUT_MS
+			else process.env.MEMONGO_BENCHMARK_QUEUE_SETTLE_TIMEOUT_MS = prev
+			if (prevStrict === undefined) delete process.env.MEMONGO_BENCHMARK_STRICT
+			else process.env.MEMONGO_BENCHMARK_STRICT = prevStrict
 		}
 	})
 })
@@ -1038,6 +1421,8 @@ const {
 	relationsCollection,
 	episodesCollection,
 	proceduresCollection,
+	chunksCollection,
+	sessionChunksCollection,
 	relevanceRunsCollection,
 } = await import("./mongodb-schema.js")
 
@@ -1168,6 +1553,11 @@ describe("writeEventAndProject", () => {
 describe("searchV2", () => {
 	beforeEach(() => {
 		vi.clearAllMocks()
+		vi.mocked(crossEncoderRerank).mockImplementation(async ({ results }) => ({
+			results,
+			reranked: false,
+			latencyMs: 0,
+		}))
 	})
 
 	it("uses retrieval planner and executes paths, returning results + metadata", async () => {
@@ -2240,5 +2630,111 @@ describe("scope-safe cache writes", () => {
 				scopeRef: "session:sess-3",
 			}),
 		)
+	})
+
+	it("keeps default agent searches out of workspace bridge chunks", async () => {
+		vi.mocked(checkCache).mockResolvedValue({
+			hit: false,
+			tier: undefined,
+			results: [],
+		} as never)
+		vi.mocked(planRetrieval).mockReturnValue({
+			paths: ["hybrid"],
+			confidence: "high",
+			reasoning: "test bridge isolation",
+		})
+		const chunksAggregate = vi.fn().mockReturnValue({
+			toArray: vi.fn().mockResolvedValue([
+				{
+					path: "event:evt-1",
+					text: "agent scoped answer",
+					source: "conversation",
+					scope: "agent",
+					scopeRef: "agent:agent-1",
+					score: 0.9,
+				},
+			]),
+		})
+		vi.mocked(chunksCollection).mockReturnValue({
+			aggregate: chunksAggregate,
+		} as never)
+
+		const manager = buildMockManager({
+			capabilities: {
+				vectorSearch: false,
+				textSearch: true,
+				rankFusion: false,
+				scoreFusion: false,
+			},
+		})
+		await manager.search("agent scoped answer")
+
+		expect(chunksAggregate).toHaveBeenCalledOnce()
+		const pipeline = chunksAggregate.mock.calls[0]![0] as Record<string, any>[]
+		expect(pipeline[0]?.$search?.compound?.filter).toEqual(
+			expect.arrayContaining([
+				{ equals: { path: "scope", value: "agent" } },
+				{ equals: { path: "scopeRef", value: "agent:agent-1" } },
+			]),
+		)
+	})
+
+	it("filters session_chunks by scope and scopeRef even for agent scope", async () => {
+		const previousMode = process.env.MEMONGO_SESSION_EVIDENCE_MODE
+		process.env.MEMONGO_SESSION_EVIDENCE_MODE = "B"
+		try {
+			vi.mocked(planRetrieval).mockReturnValue({
+				paths: ["hybrid"],
+				confidence: "high",
+				reasoning: "test session chunk isolation",
+			})
+			vi.mocked(chunksCollection).mockReturnValue({
+				aggregate: vi.fn().mockReturnValue({
+					toArray: vi.fn().mockResolvedValue([]),
+				}),
+			} as never)
+			const sessionAggregate = vi.fn().mockReturnValue({
+				toArray: vi.fn().mockResolvedValue([]),
+			})
+			vi.mocked(sessionChunksCollection).mockReturnValue({
+				aggregate: sessionAggregate,
+			} as never)
+
+			await searchV2(fakeDb, fakePrefix, "agent scoped answer", "agent-1", {
+				availablePaths: new Set(["hybrid"]),
+				searchOptions: {
+					scope: "agent",
+					scopeRef: "agent:agent-1",
+					capabilities: {
+						vectorSearch: false,
+						textSearch: true,
+						rankFusion: false,
+						scoreFusion: false,
+					},
+					fusionMethod: "rankFusion",
+					embeddingMode: "automated",
+					allowHybridBackstop: false,
+				},
+			})
+
+			expect(sessionAggregate).toHaveBeenCalled()
+			const pipeline = sessionAggregate.mock.calls
+				.map((call) => call[0] as Record<string, any>[])
+				.find((candidate) => candidate[0]?.$search)
+			expect(pipeline).toBeDefined()
+			expect(pipeline![0]?.$search?.compound?.filter).toEqual(
+				expect.arrayContaining([
+					{ equals: { path: "agentId", value: "agent-1" } },
+					{ equals: { path: "scope", value: "agent" } },
+					{ equals: { path: "scopeRef", value: "agent:agent-1" } },
+				]),
+			)
+		} finally {
+			if (previousMode === undefined) {
+				delete process.env.MEMONGO_SESSION_EVIDENCE_MODE
+			} else {
+				process.env.MEMONGO_SESSION_EVIDENCE_MODE = previousMode
+			}
+		}
 	})
 })

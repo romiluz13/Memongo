@@ -1,5 +1,12 @@
 import type { MemorySearchResult } from "./types.js"
 import type {
+	BenchmarkCostCounters,
+	BenchmarkE2eQaEnvelope,
+	BenchmarkEmbeddingConfig,
+	BenchmarkLatencyDistribution,
+	BenchmarkRerankerConfig,
+	BenchmarkRunIdentity,
+	BenchmarkStorageFootprint,
 	MemoryBenchmarkDatasetKind,
 	MemoryBenchmarkOfficialMetrics,
 	MemoryBenchmarkOfficialRetrievalMetrics,
@@ -53,6 +60,33 @@ export type BenchmarkMissLedgerEntry = {
 		sessionId?: string
 		canonicalId?: string
 		resolvedSessionIds?: string[]
+		sourceEventIds?: string[]
+	}>
+}
+
+export type BenchmarkCaseDiagnosticEntry = {
+	caseId?: string
+	questionType?: string
+	rAt5: number
+	rAt10: number
+	ndcgAt10: number
+	issue: "top1-session" | "top1-turn" | "top1-session-and-turn" | "recall-at-5"
+	expectedSessionIds: string[]
+	expectedTurnIds: string[]
+	topCandidateSessionIds: string[]
+	topCandidateTurnIds: string[]
+	sessionTop1Found?: boolean
+	turnTop1Found?: boolean
+	longMemEval?: BenchmarkCaseExecution["longMemEval"]
+	topCandidates: Array<{
+		rank: number
+		score: number
+		source: string
+		path: string
+		sessionId?: string
+		canonicalId?: string
+		resolvedSessionIds?: string[]
+		resolvedTurnIds?: string[]
 		sourceEventIds?: string[]
 	}>
 }
@@ -126,6 +160,14 @@ type BenchmarkReportInput = {
 	officialMetrics?: MemoryBenchmarkOfficialMetrics
 	ingest?: BenchmarkSummary["ingest"]
 	queryGovernance?: QueryGovernanceReport
+	/** Task 1.A parity envelope (optional at Phase 1; required at Gate 3). */
+	runIdentity?: BenchmarkRunIdentity
+	embedding?: BenchmarkEmbeddingConfig
+	reranker?: BenchmarkRerankerConfig
+	storage?: BenchmarkStorageFootprint
+	latency?: BenchmarkLatencyDistribution
+	cost?: BenchmarkCostCounters
+	e2eQa?: BenchmarkE2eQaEnvelope
 }
 
 function readBuildIdentity(): MemoryBenchmarkRunReport["build"] {
@@ -309,6 +351,13 @@ export function buildBenchmarkRunReport(
 		],
 		warnings: buildBenchmarkWarnings(params),
 		degradations: buildBenchmarkDegradations(params),
+		...(params.runIdentity ? { runIdentity: params.runIdentity } : {}),
+		...(params.embedding ? { embedding: params.embedding } : {}),
+		...(params.reranker ? { reranker: params.reranker } : {}),
+		...(params.storage ? { storage: params.storage } : {}),
+		...(params.latency ? { latency: params.latency } : {}),
+		...(params.cost ? { cost: params.cost } : {}),
+		...(params.e2eQa ? { e2eQa: params.e2eQa } : {}),
 	}
 }
 
@@ -899,6 +948,115 @@ export function buildMissLedger(params: {
 	}
 
 	return ledger.toSorted((a, b) => a.rAt5 - b.rAt5)
+}
+
+function inferDiagnosticIssue(
+	exec: BenchmarkCaseExecution,
+): BenchmarkCaseDiagnosticEntry["issue"] | null {
+	const sessionTop1Miss =
+		exec.longMemEval?.session !== undefined &&
+		exec.longMemEval.session.recallAnyAt1 < 1
+	const turnTop1Miss =
+		exec.longMemEval?.turn !== undefined &&
+		exec.longMemEval.turn.recallAnyAt1 < 1
+	if (sessionTop1Miss && turnTop1Miss) return "top1-session-and-turn"
+	if (sessionTop1Miss) return "top1-session"
+	if (turnTop1Miss) return "top1-turn"
+	if (exec.rAt5 < 1) return "recall-at-5"
+	return null
+}
+
+export function buildCaseDiagnostics(params: {
+	executions: BenchmarkCaseExecution[]
+	expectedSessionMap: Map<string, string[]>
+	expectedTurnMap: Map<string, string[]>
+}): BenchmarkCaseDiagnosticEntry[] {
+	const diagnostics: BenchmarkCaseDiagnosticEntry[] = []
+
+	for (const exec of params.executions) {
+		if (!exec.scored) continue
+		const issue = inferDiagnosticIssue(exec)
+		if (!issue) continue
+
+		const caseId = exec.caseId ?? "unknown"
+		const expectedSessionIds = params.expectedSessionMap.get(caseId) ?? []
+		const expectedTurnIds = params.expectedTurnMap.get(caseId) ?? []
+		const topCandidates = (exec.topCandidates ?? []).slice(0, 5)
+		const topCandidateSessionIds = [
+			...new Set(
+				topCandidates.flatMap((candidate) => {
+					if (
+						candidate.resolvedSessionIds &&
+						candidate.resolvedSessionIds.length > 0
+					) {
+						return candidate.resolvedSessionIds
+					}
+					return candidate.sessionId ? [candidate.sessionId] : []
+				}),
+			),
+		]
+		const topCandidateTurnIds = [
+			...new Set(
+				topCandidates.flatMap((candidate) =>
+					candidate.resolvedTurnIds && candidate.resolvedTurnIds.length > 0
+						? candidate.resolvedTurnIds
+						: (candidate.sourceEventIds ?? []),
+				),
+			),
+		]
+		const top1 = topCandidates[0]
+		const top1SessionIds =
+			top1?.resolvedSessionIds && top1.resolvedSessionIds.length > 0
+				? top1.resolvedSessionIds
+				: top1?.sessionId
+					? [top1.sessionId]
+					: []
+		const top1TurnIds =
+			top1?.resolvedTurnIds && top1.resolvedTurnIds.length > 0
+				? top1.resolvedTurnIds
+				: (top1?.sourceEventIds ?? [])
+
+		diagnostics.push({
+			caseId,
+			questionType: exec.questionType,
+			rAt5: exec.rAt5,
+			rAt10: exec.rAt10,
+			ndcgAt10: exec.ndcgAt10,
+			issue,
+			expectedSessionIds,
+			expectedTurnIds,
+			topCandidateSessionIds,
+			topCandidateTurnIds,
+			sessionTop1Found: expectedSessionIds.some((id) =>
+				top1SessionIds.includes(id),
+			),
+			turnTop1Found: expectedTurnIds.some((id) => top1TurnIds.includes(id)),
+			longMemEval: exec.longMemEval,
+			topCandidates: topCandidates.map((candidate) => ({
+				rank: candidate.rank,
+				score: candidate.score,
+				source: candidate.source,
+				path: candidate.path,
+				sessionId: candidate.sessionId,
+				canonicalId: candidate.canonicalId,
+				resolvedSessionIds: candidate.resolvedSessionIds,
+				resolvedTurnIds: candidate.resolvedTurnIds,
+				sourceEventIds: candidate.sourceEventIds,
+			})),
+		})
+	}
+
+	return diagnostics.toSorted((a, b) => {
+		const severity =
+			a.issue === b.issue
+				? 0
+				: a.issue === "recall-at-5"
+					? -1
+					: b.issue === "recall-at-5"
+						? 1
+						: 0
+		return severity || a.ndcgAt10 - b.ndcgAt10
+	})
 }
 
 export function summarizeBenchmarkExecutions(params: {
