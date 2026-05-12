@@ -144,6 +144,16 @@ export function mutationsCollection(db: Db, prefix: string): Collection {
 	return col(db, prefix, "memory_mutations")
 }
 
+/**
+ * Task 2.SE-2 (ADR-006): quarantine collection for injection-shaped candidates
+ * detected by the consolidator pre-write hook. Rows live here until a human
+ * (or the future Task 2.SE-3 review gate) promotes or rejects them; they are
+ * NEVER written to canonical events/structured_mem directly.
+ */
+export function memoryQuarantineCollection(db: Db, prefix: string): Collection {
+	return col(db, prefix, "memory_quarantine")
+}
+
 export function laneCoverageCollection(db: Db, prefix: string): Collection {
 	return col(db, prefix, "lane_coverage")
 }
@@ -722,6 +732,21 @@ const EVENTS_SCHEMA: Document = {
 				bsonType: "string",
 				description: "Caller-owned idempotency key for external sync/dedup",
 			},
+			// Task 2.SE-1 (ADR-006): bi-temporal validity. `validAt` marks when
+			// the assertion became true; `invalidAt` marks when it stopped being
+			// true (null = still valid). Retrieval filter:
+			//   validAt <= queryTime AND (invalidAt IS NULL OR invalidAt > queryTime)
+			// Cite: MongoDB MCP knowledge-base — bi-temporal compound index
+			// mongodb.com/docs/manual/core/indexes/index-types/index-compound/
+			validAt: {
+				bsonType: "date",
+				description: "Bi-temporal: when the assertion became true",
+			},
+			invalidAt: {
+				bsonType: ["date", "null"],
+				description:
+					"Bi-temporal: when the assertion stopped being true; null = still valid",
+			},
 		},
 	},
 }
@@ -1152,6 +1177,61 @@ const MEMORY_JOBS_SCHEMA: Document = {
 	},
 }
 
+const MEMORY_QUARANTINE_SCHEMA: Document = {
+	$jsonSchema: {
+		bsonType: "object",
+		required: [
+			"quarantineId",
+			"agentId",
+			"content",
+			"classification",
+			"matchedPatterns",
+			"status",
+			"createdAt",
+		],
+		properties: {
+			quarantineId: {
+				bsonType: "string",
+				description: "Unique id for this quarantined candidate",
+			},
+			agentId: { bsonType: "string" },
+			scope: { bsonType: "string" },
+			scopeRef: { bsonType: "string" },
+			// Raw candidate body that tripped the classifier. Quarantined content
+			// is visible to reviewers only; never returned by search.
+			content: { bsonType: "string" },
+			classification: {
+				enum: ["injection-likely"],
+				description:
+					"SE-2 classification; only 'injection-likely' is persisted here",
+			},
+			tier: {
+				enum: ["pattern", "llm"],
+				description: "Which classifier tier produced the verdict",
+			},
+			matchedPatterns: {
+				bsonType: "array",
+				items: { bsonType: "string" },
+				description: "Every INJECTION_PATTERNS id that matched the content",
+			},
+			status: {
+				enum: ["pending-review", "rejected", "promoted"],
+				description: "Lifecycle status; canonical write requires 'promoted'",
+			},
+			createdAt: { bsonType: "date" },
+			reviewedAt: { bsonType: "date" },
+			reviewerId: { bsonType: "string" },
+			reviewNotes: { bsonType: "string" },
+			sourceEventIds: {
+				bsonType: "array",
+				items: { bsonType: "string" },
+				description:
+					"Source event ids if the candidate came from consolidation",
+			},
+		},
+	},
+}
+
 const VALIDATED_COLLECTIONS: Record<string, Document> = {
 	chunks: CHUNKS_SCHEMA,
 	knowledge_base: KB_SCHEMA,
@@ -1174,6 +1254,7 @@ const VALIDATED_COLLECTIONS: Record<string, Document> = {
 	memory_mutations: MEMORY_MUTATIONS_SCHEMA,
 	recall_traces: RECALL_TRACES_SCHEMA,
 	memory_jobs: MEMORY_JOBS_SCHEMA,
+	memory_quarantine: MEMORY_QUARANTINE_SCHEMA,
 }
 
 export async function ensureCollections(db: Db, prefix: string): Promise<void> {
@@ -1211,6 +1292,7 @@ export async function ensureCollections(db: Db, prefix: string): Promise<void> {
 		"recall_traces",
 		"memory_jobs",
 		"session_chunks",
+		"memory_quarantine",
 	].map((n) => `${prefix}${n}`)
 	for (const name of needed) {
 		if (!existing.has(name)) {
@@ -1665,6 +1747,15 @@ export async function ensureStandardIndexes(
 	await events.createIndex(
 		{ dreamerProcessedAt: 1 },
 		{ name: "idx_events_dreamer_processed", sparse: true },
+	)
+	applied++
+	// Task 2.SE-1 (ADR-006): bi-temporal retrieval index. Supports the filter
+	//   validAt <= queryTime AND (invalidAt IS NULL OR invalidAt > queryTime)
+	// scoped by (agentId, scope, scopeRef). MongoDB compound index rules
+	// https://www.mongodb.com/docs/manual/core/indexes/index-types/index-compound/
+	await events.createIndex(
+		{ agentId: 1, scope: 1, scopeRef: 1, validAt: 1, invalidAt: 1 },
+		{ name: "idx_events_agent_scope_scoperef_validAt_invalidAt" },
 	)
 	applied++
 
@@ -2272,6 +2363,7 @@ export type SearchIndexWaitResult = {
 	indexes: SearchIndexDescription[]
 	pending: string[]
 	failed: string[]
+	lastError?: string
 }
 
 const SEARCH_INDEX_READY_STATUSES = new Set(["READY", "ACTIVE"])
@@ -2323,10 +2415,24 @@ function isSearchIndexFailed(index: SearchIndexDescription): boolean {
 	if (SEARCH_INDEX_FAILED_STATUSES.has(status)) {
 		return true
 	}
-	const nestedStates = extractNestedQueryableStates(index)
-	return (
-		nestedStates.length > 0 && nestedStates.every((value) => value === false)
-	)
+	if (!Array.isArray(index.statusDetail)) {
+		return false
+	}
+	for (const detail of index.statusDetail) {
+		const mainStatus = String(detail?.mainIndex?.status ?? "").toUpperCase()
+		if (SEARCH_INDEX_FAILED_STATUSES.has(mainStatus)) {
+			return true
+		}
+		if (Array.isArray(detail?.definitions)) {
+			for (const definition of detail.definitions) {
+				const definitionStatus = String(definition?.status ?? "").toUpperCase()
+				if (SEARCH_INDEX_FAILED_STATUSES.has(definitionStatus)) {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 async function listSearchIndexes(
@@ -2486,6 +2592,26 @@ export function getExpectedSearchIndexTargets(
 	if (reducedBudget) {
 		return targets
 	}
+	if (isLongMemEvalSearchIndexProfile()) {
+		return [
+			...targets,
+			{
+				collectionName: `${prefix}structured_mem`,
+				indexNames: [
+					`${prefix}structured_mem_text`,
+					`${prefix}structured_mem_vector`,
+				],
+			},
+			{
+				collectionName: `${prefix}procedures`,
+				indexNames: [`${prefix}procedures_text`, `${prefix}procedures_vector`],
+			},
+			{
+				collectionName: `${prefix}events`,
+				indexNames: [`${prefix}events_text`, `${prefix}events_vector`],
+			},
+		]
+	}
 	return [
 		...targets,
 		{
@@ -2508,10 +2634,6 @@ export function getExpectedSearchIndexTargets(
 			indexNames: [`${prefix}events_text`, `${prefix}events_vector`],
 		},
 		{
-			collectionName: `${prefix}query_cache`,
-			indexNames: [`${prefix}query_cache_vector`],
-		},
-		{
 			collectionName: `${prefix}session_chunks`,
 			indexNames: [
 				`${prefix}session_chunks_text`,
@@ -2519,6 +2641,15 @@ export function getExpectedSearchIndexTargets(
 			],
 		},
 	]
+}
+
+function isLongMemEvalSearchIndexProfile(
+	env: NodeJS.ProcessEnv = process.env,
+): boolean {
+	return (
+		env.MEMONGO_BENCHMARK_SEARCH_INDEX_PROFILE === "longmemeval" ||
+		env.MEMONGO_SKIP_OPTIONAL_SEARCH_INDEXES === "1"
+	)
 }
 
 export async function waitForSearchIndexesQueryable(
@@ -2535,11 +2666,19 @@ export async function waitForSearchIndexesQueryable(
 ): Promise<SearchIndexWaitResult> {
 	const deadline = Date.now() + timeoutMs
 	let lastRelevant: SearchIndexDescription[] = []
+	let lastError: string | undefined
 
 	while (Date.now() < deadline) {
-		lastRelevant = (await listSearchIndexes(collection)).filter((index) =>
-			indexNames.includes(String(index.name ?? "")),
-		)
+		try {
+			lastRelevant = (await listSearchIndexes(collection)).filter((index) =>
+				indexNames.includes(String(index.name ?? "")),
+			)
+			lastError = undefined
+		} catch (err) {
+			lastError = err instanceof Error ? err.message : String(err)
+			await sleep(pollMs)
+			continue
+		}
 		const byName = new Map(
 			lastRelevant.map((index) => [String(index.name ?? ""), index]),
 		)
@@ -2558,6 +2697,7 @@ export async function waitForSearchIndexesQueryable(
 				indexes: lastRelevant,
 				pending,
 				failed,
+				...(lastError ? { lastError } : {}),
 			}
 		}
 		if (pending.length === 0) {
@@ -2588,7 +2728,44 @@ export async function waitForSearchIndexesQueryable(
 		indexes: lastRelevant,
 		pending,
 		failed,
+		...(lastError ? { lastError } : {}),
 	}
+}
+
+export function resolveSearchIndexReadinessTiming(
+	env: NodeJS.ProcessEnv = process.env,
+): {
+	timeoutMs: number
+	pollMs: number
+} {
+	const strictDefaultTimeoutMs =
+		env.MEMONGO_BENCHMARK_STRICT === "1" ||
+		env.MEMONGO_STRICT_SEARCH_INDEX_READY === "1"
+			? 180_000
+			: 60_000
+	const timeoutMs = parsePositiveIntegerEnv(
+		env.MEMONGO_SEARCH_INDEX_READINESS_TIMEOUT_MS,
+		strictDefaultTimeoutMs,
+	)
+	const pollMs = parsePositiveIntegerEnv(
+		env.MEMONGO_SEARCH_INDEX_READINESS_POLL_MS,
+		1_000,
+	)
+	return { timeoutMs, pollMs }
+}
+
+function parsePositiveIntegerEnv(
+	value: string | undefined,
+	fallback: number,
+): number {
+	if (!value) {
+		return fallback
+	}
+	const parsed = Number(value.trim())
+	if (!Number.isFinite(parsed) || parsed <= 0) {
+		return fallback
+	}
+	return Math.floor(parsed)
 }
 
 export async function ensureSearchIndexes(
@@ -2624,6 +2801,7 @@ export async function ensureSearchIndexes(
 			`search index budget tight (${budget.budget}/${budget.plannedSearchIndexes}): creating core chunks indexes only, skipping KB, structured memory, and procedure search indexes`,
 		)
 	}
+	const longMemEvalIndexProfile = isLongMemEvalSearchIndexProfile()
 
 	const chunks = chunksCollection(db, prefix)
 	let textCreated = false
@@ -2713,72 +2891,74 @@ export async function ensureSearchIndexes(
 	if (reducedBudget) {
 		return { text: textCreated, vector: vectorCreated }
 	}
-	const kbChunks = kbChunksCollection(db, prefix)
-	try {
-		const kbTextDef: Document = {
-			mappings: {
-				dynamic: false,
-				fields: {
-					text: { type: "string", analyzer: "lucene.standard" },
-					path: { type: "token" },
-					docId: { type: "token" },
-					updatedAt: { type: "date" },
+	if (!longMemEvalIndexProfile) {
+		const kbChunks = kbChunksCollection(db, prefix)
+		try {
+			const kbTextDef: Document = {
+				mappings: {
+					dynamic: false,
+					fields: {
+						text: { type: "string", analyzer: "lucene.standard" },
+						path: { type: "token" },
+						docId: { type: "token" },
+						updatedAt: { type: "date" },
+					},
 				},
-			},
-		}
-		textCreated = await ensureNamedSearchIndex({
-			collection: kbChunks,
-			name: `${prefix}kb_chunks_text`,
-			type: "search",
-			definition: kbTextDef,
-			label: "kb_chunks text",
-		})
-	} catch (err) {
-		const msg = err instanceof Error ? err.message : String(err)
-		if (msg.includes("already exists") || msg.includes("duplicate")) {
-			textCreated = true
-		} else if (isSearchIndexManagementUnavailable(msg)) {
-			log.warn(`search index management unavailable: ${msg}`)
-			return { text: textCreated, vector: vectorCreated }
-		} else {
-			log.warn(`kb_chunks text search index creation failed: ${msg}`)
-		}
-	}
-
-	try {
-		const kbFilterFields: Document[] = [
-			{ type: "filter", path: "docId" },
-			{ type: "filter", path: "path" },
-		]
-
-		const kbVectorDef: Document = {
-			fields: [
-				{
-					type: "autoEmbed",
-					modality: "text",
-					path: "text",
-					model: "voyage-4-large",
-				},
-				...kbFilterFields,
-			],
+			}
+			textCreated = await ensureNamedSearchIndex({
+				collection: kbChunks,
+				name: `${prefix}kb_chunks_text`,
+				type: "search",
+				definition: kbTextDef,
+				label: "kb_chunks text",
+			})
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err)
+			if (msg.includes("already exists") || msg.includes("duplicate")) {
+				textCreated = true
+			} else if (isSearchIndexManagementUnavailable(msg)) {
+				log.warn(`search index management unavailable: ${msg}`)
+				return { text: textCreated, vector: vectorCreated }
+			} else {
+				log.warn(`kb_chunks text search index creation failed: ${msg}`)
+			}
 		}
 
-		vectorCreated = await ensureNamedSearchIndex({
-			collection: kbChunks,
-			name: `${prefix}kb_chunks_vector`,
-			type: "vectorSearch",
-			definition: kbVectorDef,
-			label: "kb_chunks vector",
-		})
-	} catch (err) {
-		const msg = err instanceof Error ? err.message : String(err)
-		if (msg.includes("already exists") || msg.includes("duplicate")) {
-			vectorCreated = true
-		} else if (isSearchIndexManagementUnavailable(msg)) {
-			log.warn(`search index management unavailable: ${msg}`)
-			return { text: textCreated, vector: vectorCreated }
-		} else {
-			log.warn(`kb_chunks vector search index creation failed: ${msg}`)
+		try {
+			const kbFilterFields: Document[] = [
+				{ type: "filter", path: "docId" },
+				{ type: "filter", path: "path" },
+			]
+
+			const kbVectorDef: Document = {
+				fields: [
+					{
+						type: "autoEmbed",
+						modality: "text",
+						path: "text",
+						model: "voyage-4-large",
+					},
+					...kbFilterFields,
+				],
+			}
+
+			vectorCreated = await ensureNamedSearchIndex({
+				collection: kbChunks,
+				name: `${prefix}kb_chunks_vector`,
+				type: "vectorSearch",
+				definition: kbVectorDef,
+				label: "kb_chunks vector",
+			})
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err)
+			if (msg.includes("already exists") || msg.includes("duplicate")) {
+				vectorCreated = true
+			} else if (isSearchIndexManagementUnavailable(msg)) {
+				log.warn(`search index management unavailable: ${msg}`)
+				return { text: textCreated, vector: vectorCreated }
+			} else {
+				log.warn(`kb_chunks vector search index creation failed: ${msg}`)
+			}
 		}
 	}
 
@@ -3020,122 +3200,128 @@ export async function ensureSearchIndexes(
 	}
 
 	// Query Cache search index (autoEmbed on queryNorm)
-	const queryCache = queryCacheCollection(db, prefix)
-	try {
-		const cacheVectorDef: Document = {
-			fields: [
-				{
-					type: "autoEmbed",
-					modality: "text",
-					path: "queryNorm",
-					model: "voyage-4-large",
-				},
-				{ type: "filter", path: "agentId" },
-				{ type: "filter", path: "scope" },
-				{ type: "filter", path: "scopeRef" },
-				{ type: "filter", path: "expiresAt" },
-			],
-		}
-		vectorCreated = await ensureNamedSearchIndex({
-			collection: queryCache,
-			name: `${prefix}query_cache_vector`,
-			type: "vectorSearch",
-			definition: cacheVectorDef,
-			label: "query_cache vector",
-		})
-	} catch (err) {
-		const msg = err instanceof Error ? err.message : String(err)
-		if (msg.includes("already exists") || msg.includes("duplicate")) {
-			vectorCreated = true
-		} else if (isSearchIndexManagementUnavailable(msg)) {
-			log.warn(`search index management unavailable: ${msg}`)
-			return { text: textCreated, vector: vectorCreated }
-		} else {
-			log.warn(`query_cache vector search index creation failed: ${msg}`)
+	if (!longMemEvalIndexProfile) {
+		const queryCache = queryCacheCollection(db, prefix)
+		try {
+			const cacheVectorDef: Document = {
+				fields: [
+					{
+						type: "autoEmbed",
+						modality: "text",
+						path: "queryNorm",
+						model: "voyage-4-large",
+					},
+					{ type: "filter", path: "agentId" },
+					{ type: "filter", path: "scope" },
+					{ type: "filter", path: "scopeRef" },
+					{ type: "filter", path: "expiresAt" },
+				],
+			}
+			vectorCreated = await ensureNamedSearchIndex({
+				collection: queryCache,
+				name: `${prefix}query_cache_vector`,
+				type: "vectorSearch",
+				definition: cacheVectorDef,
+				label: "query_cache vector",
+			})
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err)
+			if (msg.includes("already exists") || msg.includes("duplicate")) {
+				vectorCreated = true
+			} else if (isSearchIndexManagementUnavailable(msg)) {
+				log.warn(`search index management unavailable: ${msg}`)
+				return { text: textCreated, vector: vectorCreated }
+			} else {
+				log.warn(`query_cache vector search index creation failed: ${msg}`)
+			}
 		}
 	}
 
 	// Session Chunks search indexes (Option B — dedicated session-evidence collection)
-	const sessionChunks = sessionChunksCollection(db, prefix)
-	try {
-		const sessionTextDef: Document = {
-			mappings: {
-				dynamic: false,
-				fields: {
-					text: { type: "string", analyzer: "lucene.standard" },
-					agentId: { type: "token" },
-					scope: { type: "token" },
-					scopeRef: { type: "token" },
-					sessionId: { type: "token" },
+	if (!longMemEvalIndexProfile) {
+		const sessionChunks = sessionChunksCollection(db, prefix)
+		try {
+			const sessionTextDef: Document = {
+				mappings: {
+					dynamic: false,
+					fields: {
+						text: { type: "string", analyzer: "lucene.standard" },
+						agentId: { type: "token" },
+						scope: { type: "token" },
+						scopeRef: { type: "token" },
+						sessionId: { type: "token" },
+					},
 				},
-			},
+			}
+			textCreated = await ensureNamedSearchIndex({
+				collection: sessionChunks,
+				name: `${prefix}session_chunks_text`,
+				type: "search",
+				definition: sessionTextDef,
+				label: "session_chunks text",
+			})
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err)
+			if (msg.includes("already exists") || msg.includes("duplicate")) {
+				textCreated = true
+			} else if (isSearchIndexManagementUnavailable(msg)) {
+				log.warn(`search index management unavailable: ${msg}`)
+				return { text: textCreated, vector: vectorCreated }
+			} else {
+				log.warn(`session_chunks text search index creation failed: ${msg}`)
+			}
 		}
-		textCreated = await ensureNamedSearchIndex({
-			collection: sessionChunks,
-			name: `${prefix}session_chunks_text`,
-			type: "search",
-			definition: sessionTextDef,
-			label: "session_chunks text",
-		})
-	} catch (err) {
-		const msg = err instanceof Error ? err.message : String(err)
-		if (msg.includes("already exists") || msg.includes("duplicate")) {
-			textCreated = true
-		} else if (isSearchIndexManagementUnavailable(msg)) {
-			log.warn(`search index management unavailable: ${msg}`)
-			return { text: textCreated, vector: vectorCreated }
-		} else {
-			log.warn(`session_chunks text search index creation failed: ${msg}`)
-		}
-	}
 
-	try {
-		const sessionFilterFields: Document[] = [
-			{ type: "filter", path: "agentId" },
-			{ type: "filter", path: "scope" },
-			{ type: "filter", path: "scopeRef" },
-			{ type: "filter", path: "sessionId" },
-		]
-		const sessionVectorDef: Document = {
-			fields: [
-				{
-					type: "autoEmbed",
-					modality: "text",
-					path: "text",
-					model: "voyage-4-large",
-				},
-				...sessionFilterFields,
-			],
-		}
-		vectorCreated = await ensureNamedSearchIndex({
-			collection: sessionChunks,
-			name: `${prefix}session_chunks_vector`,
-			type: "vectorSearch",
-			definition: sessionVectorDef,
-			label: "session_chunks vector",
-		})
-	} catch (err) {
-		const msg = err instanceof Error ? err.message : String(err)
-		if (msg.includes("already exists") || msg.includes("duplicate")) {
-			vectorCreated = true
-		} else if (isSearchIndexManagementUnavailable(msg)) {
-			log.warn(`search index management unavailable: ${msg}`)
-			return { text: textCreated, vector: vectorCreated }
-		} else {
-			log.warn(`session_chunks vector search index creation failed: ${msg}`)
+		try {
+			const sessionFilterFields: Document[] = [
+				{ type: "filter", path: "agentId" },
+				{ type: "filter", path: "scope" },
+				{ type: "filter", path: "scopeRef" },
+				{ type: "filter", path: "sessionId" },
+			]
+			const sessionVectorDef: Document = {
+				fields: [
+					{
+						type: "autoEmbed",
+						modality: "text",
+						path: "text",
+						model: "voyage-4-large",
+					},
+					...sessionFilterFields,
+				],
+			}
+			vectorCreated = await ensureNamedSearchIndex({
+				collection: sessionChunks,
+				name: `${prefix}session_chunks_vector`,
+				type: "vectorSearch",
+				definition: sessionVectorDef,
+				label: "session_chunks vector",
+			})
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err)
+			if (msg.includes("already exists") || msg.includes("duplicate")) {
+				vectorCreated = true
+			} else if (isSearchIndexManagementUnavailable(msg)) {
+				log.warn(`search index management unavailable: ${msg}`)
+				return { text: textCreated, vector: vectorCreated }
+			} else {
+				log.warn(`session_chunks vector search index creation failed: ${msg}`)
+			}
 		}
 	}
 
 	// Entity autocomplete search index (separate from standard indexes)
-	try {
-		await ensureEntityAutocompleteIndex(db, prefix)
-	} catch (err) {
-		const msg = err instanceof Error ? err.message : String(err)
-		if (isSearchIndexManagementUnavailable(msg)) {
-			log.warn(`search index management unavailable: ${msg}`)
-			return { text: textCreated, vector: vectorCreated }
-		} else {
-			log.warn(`entity autocomplete search index creation failed: ${msg}`)
+	if (!longMemEvalIndexProfile) {
+		try {
+			await ensureEntityAutocompleteIndex(db, prefix)
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err)
+			if (isSearchIndexManagementUnavailable(msg)) {
+				log.warn(`search index management unavailable: ${msg}`)
+				return { text: textCreated, vector: vectorCreated }
+			} else {
+				log.warn(`entity autocomplete search index creation failed: ${msg}`)
+			}
 		}
 	}
 
@@ -3320,7 +3506,7 @@ export async function detectCapabilities(
 
 		for (const name of probeNames) {
 			try {
-				await db.collection(name).listSearchIndexes().toArray()
+				await listSearchIndexes(db.collection(name))
 				// listSearchIndexes succeeded → mongot is available
 				result.textSearch = true
 				result.vectorSearch = true
@@ -3335,4 +3521,40 @@ export async function detectCapabilities(
 
 	log.info(`detected capabilities: ${JSON.stringify(result)}`)
 	return result
+}
+
+export async function waitForSearchCapabilities(
+	db: Db,
+	probeCollectionName: string | undefined,
+	{
+		timeoutMs = 60_000,
+		pollMs = 1_000,
+		requireVector = true,
+		requireText = true,
+	}: {
+		timeoutMs?: number
+		pollMs?: number
+		requireVector?: boolean
+		requireText?: boolean
+	} = {},
+): Promise<DetectedCapabilities> {
+	const deadline = Date.now() + timeoutMs
+	let latest: DetectedCapabilities = {
+		vectorSearch: false,
+		textSearch: false,
+		scoreFusion: false,
+		rankFusion: false,
+	}
+
+	while (Date.now() < deadline) {
+		latest = await detectCapabilities(db, probeCollectionName)
+		const vectorReady = !requireVector || latest.vectorSearch
+		const textReady = !requireText || latest.textSearch
+		if (vectorReady && textReady) {
+			return latest
+		}
+		await sleep(pollMs)
+	}
+
+	return latest
 }

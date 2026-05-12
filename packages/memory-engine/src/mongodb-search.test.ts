@@ -406,6 +406,8 @@ describe("keywordSearch", () => {
 			.calls[0][0]
 		const projectStage = pipeline[2].$project
 		expect(projectStage.score).toEqual({ $meta: "searchScore" })
+		expect(projectStage.canonicalId).toBe(1)
+		expect(projectStage["metadata.sourceEventIds"]).toBe(1)
 	})
 
 	it("pushes supported hard filters into compound.filter", async () => {
@@ -585,6 +587,9 @@ describe("mongoSearch dispatcher", () => {
 		const pipeline = (col.aggregate as ReturnType<typeof vi.fn>).mock
 			.calls[0][0]
 		expect(pipeline[0].$scoreFusion).toBeDefined()
+		const projectStage = pipeline.at(-1).$project
+		expect(projectStage.canonicalId).toBe(1)
+		expect(projectStage["metadata.sourceEventIds"]).toBe(1)
 	})
 
 	it("uses $rankFusion when fusionMethod=rankFusion (skips $scoreFusion)", async () => {
@@ -601,6 +606,9 @@ describe("mongoSearch dispatcher", () => {
 		// Should use $rankFusion directly, NOT $scoreFusion
 		expect(pipeline[0].$rankFusion).toBeDefined()
 		expect(pipeline[0].$scoreFusion).toBeUndefined()
+		const projectStage = pipeline.at(-1).$project
+		expect(projectStage.canonicalId).toBe(1)
+		expect(projectStage["metadata.sourceEventIds"]).toBe(1)
 	})
 
 	it("falls back from $scoreFusion to $rankFusion on error", async () => {
@@ -666,6 +674,60 @@ describe("mongoSearch dispatcher", () => {
 
 		expect(col.aggregate).toHaveBeenCalledTimes(2)
 		expect(results).toHaveLength(2)
+	})
+
+	it("returns empty instead of falling back when strictNoFallback sees no hits", async () => {
+		const col = {
+			aggregate: vi.fn(() => ({
+				toArray: vi.fn(async () => []),
+			})),
+			find: vi.fn(() => ({
+				sort: vi.fn(() => ({
+					limit: vi.fn(() => ({
+						toArray: vi.fn(async () => SAMPLE_DOCS),
+					})),
+				})),
+			})),
+		} as unknown as Collection
+
+		const results = await mongoSearch(col, "test query", [0.1, 0.2], {
+			...baseOpts,
+			fusionMethod: "rankFusion",
+			capabilities: FULL_CAPS,
+			embeddingMode: "automated",
+			strictNoFallback: true,
+		})
+
+		expect(results).toEqual([])
+		expect(col.aggregate).toHaveBeenCalledTimes(1)
+	})
+
+	it("throws instead of falling back when strictNoFallback sees a search failure", async () => {
+		const col = {
+			aggregate: vi.fn(() => ({
+				toArray: vi.fn(async () => {
+					throw new Error("$rankFusion failed")
+				}),
+			})),
+			find: vi.fn(() => ({
+				sort: vi.fn(() => ({
+					limit: vi.fn(() => ({
+						toArray: vi.fn(async () => SAMPLE_DOCS),
+					})),
+				})),
+			})),
+		} as unknown as Collection
+
+		await expect(
+			mongoSearch(col, "test query", [0.1, 0.2], {
+				...baseOpts,
+				fusionMethod: "rankFusion",
+				capabilities: FULL_CAPS,
+				embeddingMode: "automated",
+				strictNoFallback: true,
+			}),
+		).rejects.toThrow("search fallback disabled")
+		expect(col.aggregate).toHaveBeenCalledTimes(1)
 	})
 
 	it("skips server-side fusion for js-merge fusionMethod", async () => {
