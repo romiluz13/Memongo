@@ -1,4 +1,5 @@
 import type { Collection, Db } from "mongodb"
+import fc from "fast-check"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 vi.mock("@memongo/lib", () => ({
@@ -253,6 +254,162 @@ describe("AccessTracker", () => {
 
 		vi.useFakeTimers()
 	}, 5_000)
+
+	// =========================================================================
+	// Phase 2 remfix HIGH-4 — re-buffer on flush error (deadletter retry path).
+	// Original behavior silently cleared the buffer before insertMany, so a
+	// network failure lost the access counts forever. New behavior snapshots
+	// the buffer first and, on error, merges the snapshot back into the live
+	// buffer so the next flush retries.
+	// =========================================================================
+	it("re-buffers counts when the access-events insertMany fails (HIGH-4)", async () => {
+		vi.useRealTimers()
+		let attempts = 0
+		const accessInsertMany = vi.fn().mockImplementation(async () => {
+			attempts++
+			if (attempts === 1) {
+				throw new Error("simulated network failure")
+			}
+			return { insertedCount: 1 }
+		})
+		const eventsBulkWrite = vi.fn().mockResolvedValue({ modifiedCount: 1 })
+		const db = {
+			collection: vi.fn((name: string) => {
+				if (name === `${PREFIX}access_events`) {
+					return {
+						insertMany: accessInsertMany,
+						aggregate: vi.fn(),
+					} as unknown as Collection
+				}
+				return { bulkWrite: eventsBulkWrite } as unknown as Collection
+			}),
+		} as unknown as Db
+
+		tracker = new AccessTracker(db, PREFIX, "agent-1", {
+			flushThreshold: 100,
+			flushIntervalMs: 600_000,
+		})
+
+		tracker.recordAccess("evt-1", "events")
+		tracker.recordAccess("evt-1", "events")
+		tracker.recordAccess("evt-2", "events")
+
+		// First flush fails — counts MUST be retained in the buffer.
+		await tracker.flush()
+		expect(attempts).toBe(1)
+
+		// Second flush succeeds — exactly the same counts must be written.
+		await tracker.flush()
+		expect(attempts).toBe(2)
+
+		const retriedDocs = accessInsertMany.mock.calls[1]?.[0] as Array<{
+			meta: { memoryId: string }
+			count: number
+		}>
+		// Sort by memoryId so the assertion is order-independent.
+		retriedDocs.sort((a, b) => a.meta.memoryId.localeCompare(b.meta.memoryId))
+		expect(retriedDocs).toEqual([
+			expect.objectContaining({
+				meta: expect.objectContaining({ memoryId: "evt-1" }),
+				count: 2,
+			}),
+			expect.objectContaining({
+				meta: expect.objectContaining({ memoryId: "evt-2" }),
+				count: 1,
+			}),
+		])
+
+		vi.useFakeTimers()
+	}, 5_000)
+
+	// =========================================================================
+	// Phase 2 remfix CRIT-4 — fast-check property: no count loss across any
+	// sequence of recordAccess calls.
+	// Evidence doc:
+	// docs/benchmarks/capability-audit/access-tracking-evidence.md seed=20260512
+	// =========================================================================
+	it("fast-check Property (CRIT-4): total flushed $inc count === total recordAccess calls", async () => {
+		vi.useRealTimers()
+		await fc.assert(
+			fc.asyncProperty(
+				fc.array(
+					fc.record({
+						id: fc.constantFrom("a", "b", "c", "d", "e"),
+						collection: fc.constantFrom(
+							"events" as const,
+							"structured_mem" as const,
+						),
+					}),
+					{ minLength: 0, maxLength: 40 },
+				),
+				async (calls) => {
+					// Per-property run: build a fresh tracker + mock db.
+					const eventsBulk = vi.fn().mockResolvedValue({ modifiedCount: 0 })
+					const structuredBulk = vi.fn().mockResolvedValue({ modifiedCount: 0 })
+					const accessInsertMany = vi
+						.fn()
+						.mockResolvedValue({ insertedCount: 0 })
+					const db = {
+						collection: vi.fn((name: string) => {
+							if (name === `${PREFIX}access_events`) {
+								return {
+									insertMany: accessInsertMany,
+									aggregate: vi.fn(),
+								} as unknown as Collection
+							}
+							if (name === `${PREFIX}events`) {
+								return {
+									bulkWrite: eventsBulk,
+								} as unknown as Collection
+							}
+							if (name === `${PREFIX}structured_mem`) {
+								return {
+									bulkWrite: structuredBulk,
+								} as unknown as Collection
+							}
+							return {
+								bulkWrite: vi.fn().mockResolvedValue({}),
+							} as unknown as Collection
+						}),
+					} as unknown as Db
+
+					const localTracker = new AccessTracker(db, PREFIX, "agent-1", {
+						flushThreshold: 100_000,
+						flushIntervalMs: 600_000,
+					})
+					try {
+						for (const call of calls) {
+							localTracker.recordAccess(call.id, call.collection)
+						}
+						await localTracker.flush()
+
+						// Sum $inc.accessCount across all bulk write ops. MUST equal
+						// calls.length (monotonic, lossless).
+						const sumFromBulk = (bulk: ReturnType<typeof vi.fn>): number => {
+							let total = 0
+							for (const callArgs of bulk.mock.calls) {
+								const ops = callArgs[0] as Array<{
+									updateOne: {
+										update: { $inc: { accessCount: number } }
+									}
+								}>
+								for (const op of ops) {
+									total += op.updateOne.update.$inc.accessCount
+								}
+							}
+							return total
+						}
+						const total = sumFromBulk(eventsBulk) + sumFromBulk(structuredBulk)
+						expect(total).toBe(calls.length)
+					} finally {
+						await localTracker.close()
+					}
+				},
+			),
+			{ seed: 20260512, numRuns: 200 },
+		)
+		vi.useFakeTimers()
+	}, 30_000)
 })
 
 describe("access event aggregation helpers", () => {

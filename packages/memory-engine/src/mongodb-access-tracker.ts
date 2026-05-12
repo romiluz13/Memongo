@@ -147,6 +147,29 @@ export class AccessTracker {
 		return run
 	}
 
+	/**
+	 * Merge a snapshot back into the live buffer. Used by the deadletter path
+	 * so a flush failure does NOT drop access counts. Counts are summed when
+	 * the same key already exists in the live buffer (another recordAccess()
+	 * call may have landed while the flush was in-flight).
+	 */
+	private rebufferSnapshot(
+		snapshot: Map<string, { collection: AccessEventCollection; count: number }>,
+	): void {
+		for (const [key, entry] of snapshot) {
+			const existing = this.buffer.get(key)
+			if (existing) {
+				existing.count += entry.count
+			} else {
+				this.buffer.set(key, {
+					collection: entry.collection,
+					count: entry.count,
+				})
+			}
+			this.totalBuffered += entry.count
+		}
+	}
+
 	private async doFlush(): Promise<number> {
 		const snapshot = new Map(this.buffer)
 		this.buffer.clear()
@@ -185,6 +208,9 @@ export class AccessTracker {
 			collectionOps.set(entry.collection, ops)
 		}
 
+		// Phase 2 remfix HIGH-4: re-buffer the ENTIRE snapshot on any error so
+		// no access counts are lost. Previously, a failing insertMany or bulk
+		// write silently swallowed the counts. Now the next flush retries.
 		if (eventDocs.length > 0) {
 			try {
 				await accessEventsCollection(this.db, this.prefix).insertMany(
@@ -195,7 +221,11 @@ export class AccessTracker {
 				)
 			} catch (err) {
 				const msg = err instanceof Error ? err.message : String(err)
-				log.warn(`access event insert failed: ${msg}`)
+				log.warn(
+					`access event insert failed (re-buffering ${snapshot.size} keys for retry): ${msg}`,
+				)
+				this.rebufferSnapshot(snapshot)
+				return 0
 			}
 		}
 
@@ -210,7 +240,27 @@ export class AccessTracker {
 				updated += result.modifiedCount ?? ops.length
 			} catch (err) {
 				const msg = err instanceof Error ? err.message : String(err)
-				log.warn(`access summary flush failed for ${collection}: ${msg}`)
+				log.warn(
+					`access summary flush failed for ${collection} (re-buffering ${ops.length} ops for retry): ${msg}`,
+				)
+				// Re-buffer only the failed collection's keys, not the whole
+				// snapshot: the access_events insert already succeeded for
+				// them and the other collections' bulkWrites may have too.
+				for (const [key, entry] of snapshot) {
+					if (entry.collection !== collection) {
+						continue
+					}
+					const existing = this.buffer.get(key)
+					if (existing) {
+						existing.count += entry.count
+					} else {
+						this.buffer.set(key, {
+							collection: entry.collection,
+							count: entry.count,
+						})
+					}
+					this.totalBuffered += entry.count
+				}
 			}
 		}
 
