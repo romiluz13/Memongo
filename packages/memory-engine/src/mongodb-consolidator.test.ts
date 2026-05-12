@@ -1,5 +1,6 @@
-import type { Collection, Db, UpdateResult } from "mongodb"
-import { describe, it, expect, vi, beforeEach } from "vitest"
+import fc from "fast-check"
+import type { Collection, Db, Document, UpdateResult } from "mongodb"
+import { beforeEach, describe, expect, it, vi } from "vitest"
 
 // ---------------------------------------------------------------------------
 // Mock helpers
@@ -240,6 +241,132 @@ describe("consolidateMemory", () => {
 				}),
 			}),
 		)
+	})
+
+	it("uses source-event scope for similarity filtering and promotion", async () => {
+		const { consolidateMemory } = await import("./mongodb-consolidator.js")
+		const { writeStructuredMemory } = await import(
+			"./mongodb-structured-memory.js"
+		)
+		const consolidationRunsCol = mockCollection({
+			findOne: vi.fn(async () => null),
+		})
+		const eventsCol = mockCollection({
+			find: vi.fn(() => ({
+				sort: vi.fn(() => ({
+					limit: vi.fn(() => ({
+						toArray: vi.fn(async () => [
+							{
+								eventId: "e-scoped",
+								agentId: "agent-1",
+								body: "I prefer scoped TypeScript memories",
+								timestamp: new Date(),
+								role: "user",
+								scope: "workspace",
+								scopeRef: "workspace:memongo",
+							},
+						]),
+					})),
+				})),
+			})),
+			updateMany: vi.fn(async () => ({ modifiedCount: 1 }) as UpdateResult),
+		})
+		const aggregate = vi.fn(() => ({
+			toArray: vi.fn(async () => []),
+		}))
+		const structuredCol = mockCollection({
+			findOne: vi.fn(async () => null),
+			aggregate,
+		})
+		const db = mockDb({
+			test_consolidation_runs: consolidationRunsCol,
+			test_events: eventsCol,
+			test_structured_mem: structuredCol,
+		})
+
+		const result = await consolidateMemory({
+			db,
+			prefix: "test_",
+			agentId: "agent-1",
+			options: { minCombinedScore: 0 },
+		})
+
+		expect(result.factsPromoted).toBe(1)
+		const pipeline = aggregate.mock.calls[0]?.[0] as Array<{
+			$vectorSearch?: { filter?: Record<string, unknown> }
+		}>
+		expect(pipeline[0]?.$vectorSearch?.filter).toEqual({
+			agentId: "agent-1",
+			scope: "workspace",
+			scopeRef: "workspace:memongo",
+		})
+		expect(writeStructuredMemory).toHaveBeenCalledWith(
+			expect.objectContaining({
+				entry: expect.objectContaining({
+					scope: "workspace",
+					scopeRef: "workspace:memongo",
+				}),
+			}),
+		)
+	})
+
+	it("rejects consolidation in strict mode when options scopeRef conflicts with source event", async () => {
+		const { consolidateMemory } = await import("./mongodb-consolidator.js")
+		const { writeStructuredMemory } = await import(
+			"./mongodb-structured-memory.js"
+		)
+		const consolidationRunsCol = mockCollection({
+			findOne: vi.fn(async () => null),
+		})
+		const eventsCol = mockCollection({
+			find: vi.fn(() => ({
+				sort: vi.fn(() => ({
+					limit: vi.fn(() => ({
+						toArray: vi.fn(async () => [
+							{
+								eventId: "e-mismatch",
+								agentId: "agent-1",
+								body: "I prefer scoped TypeScript memories",
+								timestamp: new Date(),
+								role: "user",
+								scope: "workspace",
+								scopeRef: "workspace:memongo",
+							},
+						]),
+					})),
+				})),
+			})),
+			updateMany: vi.fn(async () => ({ modifiedCount: 1 }) as UpdateResult),
+		})
+		const db = mockDb({
+			test_consolidation_runs: consolidationRunsCol,
+			test_events: eventsCol,
+		})
+
+		const previousStrict = process.env.MEMONGO_BENCHMARK_STRICT
+		process.env.MEMONGO_BENCHMARK_STRICT = "1"
+		vi.mocked(writeStructuredMemory).mockClear()
+		try {
+			await expect(
+				consolidateMemory({
+					db,
+					prefix: "test_",
+					agentId: "agent-1",
+					options: {
+						minCombinedScore: 0,
+						scope: "workspace",
+						scopeRef: "workspace:other",
+					},
+				}),
+			).rejects.toThrow("consolidator scopeRef mismatch")
+		} finally {
+			if (previousStrict === undefined) {
+				delete process.env.MEMONGO_BENCHMARK_STRICT
+			} else {
+				process.env.MEMONGO_BENCHMARK_STRICT = previousStrict
+			}
+		}
+		expect(writeStructuredMemory).not.toHaveBeenCalled()
 	})
 
 	it("extracts decision pattern", async () => {
@@ -1164,4 +1291,243 @@ describe("Dreamer entity extraction integration (Phase 3.4)", () => {
 			}),
 		)
 	})
+
+	// =====================================================================
+	// Phase 2 remfix HIGH-2 — scope-isolation regression tests.
+	//
+	// Previously the dreamer wrote structured_mem rows using the caller's
+	// `options.scope` / `options.scopeRef`. If the caller omitted those or
+	// supplied a value different from the source event's scope, a cross-
+	// scope consolidation was possible. The fix derives scope/scopeRef
+	// from the candidate (source event) and asserts any caller-supplied
+	// options match.
+	// =====================================================================
+
+	it("HIGH-2: inherits scope/scopeRef from source event when options omit them", async () => {
+		const { consolidateMemory } = await import("./mongodb-consolidator.js")
+		const { writeStructuredMemory } = await import(
+			"./mongodb-structured-memory.js"
+		)
+		const consolidationRunsCol = mockCollection({
+			findOne: vi.fn(async () => null),
+		})
+		const eventsCol = mockCollection({
+			find: vi.fn(() => ({
+				sort: vi.fn(() => ({
+					limit: vi.fn(() => ({
+						toArray: vi.fn(async () => [
+							{
+								eventId: "evt-user-scope",
+								agentId: "agent-1",
+								body: "I prefer TypeScript over JavaScript",
+								timestamp: new Date(),
+								role: "user",
+								scope: "user",
+								scopeRef: "user:alice",
+							},
+						]),
+					})),
+				})),
+			})),
+			updateMany: vi.fn(async () => ({ modifiedCount: 1 }) as UpdateResult),
+		})
+		const structuredCol = mockCollection({
+			findOne: vi.fn(async () => null),
+		})
+		const db = mockDb({
+			test_consolidation_runs: consolidationRunsCol,
+			test_events: eventsCol,
+			test_structured_mem: structuredCol,
+		})
+
+		await consolidateMemory({
+			db,
+			prefix: "test_",
+			agentId: "agent-1",
+			options: { minCombinedScore: 0 }, // no scope / scopeRef
+		})
+
+		expect(writeStructuredMemory).toHaveBeenCalledWith(
+			expect.objectContaining({
+				entry: expect.objectContaining({
+					scope: "user",
+					scopeRef: "user:alice",
+				}),
+			}),
+		)
+	})
+
+	it("HIGH-2: skips when options.scope disagrees with candidate.scope outside strict mode", async () => {
+		const { consolidateMemory } = await import("./mongodb-consolidator.js")
+		const consolidationRunsCol = mockCollection({
+			findOne: vi.fn(async () => null),
+		})
+		const eventsCol = mockCollection({
+			find: vi.fn(() => ({
+				sort: vi.fn(() => ({
+					limit: vi.fn(() => ({
+						toArray: vi.fn(async () => [
+							{
+								eventId: "evt-user",
+								agentId: "agent-1",
+								body: "I prefer dark mode",
+								timestamp: new Date(),
+								role: "user",
+								scope: "user",
+								scopeRef: "user:alice",
+							},
+						]),
+					})),
+				})),
+			})),
+			updateMany: vi.fn(async () => ({ modifiedCount: 1 }) as UpdateResult),
+		})
+		const db = mockDb({
+			test_consolidation_runs: consolidationRunsCol,
+			test_events: eventsCol,
+		})
+
+		// With the events-collection filter also containing the mismatched scope,
+		// the query would return nothing in production — but the guard must
+		// fire if the candidate and options ever disagree. To exercise the
+		// guard we provide an event that slipped past the top-level scope
+		// filter (e.g., because the mock ignores filter args). The
+		// consolidator must log.warn + skip (NOT throw, NOT cross-scope write).
+		const { writeStructuredMemory } = await import(
+			"./mongodb-structured-memory.js"
+		)
+		vi.mocked(writeStructuredMemory).mockClear()
+
+		const result = await consolidateMemory({
+			db,
+			prefix: "test_",
+			agentId: "agent-1",
+			options: {
+				minCombinedScore: 0,
+				scope: "agent", // disagrees with candidate.scope === "user"
+			},
+		})
+
+		expect(result.factsPromoted).toBe(0)
+		expect(writeStructuredMemory).not.toHaveBeenCalled()
+	})
+
+	// =====================================================================
+	// Phase 2 remfix CRIT-3 — fast-check: no consolidated row spans scopes.
+	//
+	// Seed = 20260512, numRuns = 300. Evidence doc:
+	// docs/benchmarks/capability-audit/dreamer-evidence.md
+	//
+	// Method: generate a random batch of events with varying scope/scopeRef.
+	// Run consolidateMemory once per event (single-scope filter). Assert the
+	// structured_mem rows written inherit the generating event's scope.
+	// =====================================================================
+
+	it("CRIT-3 property: consolidated rows never cross scope/scopeRef", async () => {
+		await fc.assert(
+			fc.asyncProperty(
+				fc.array(
+					fc.record({
+						eventId: fc
+							.integer({ min: 0, max: 0xff_ff_ff })
+							.map((n) => n.toString(16).padStart(4, "0")),
+						scope: fc.constantFrom(
+							"session" as const,
+							"user" as const,
+							"agent" as const,
+						),
+						scopeRef: fc.constantFrom(
+							"user:alice",
+							"user:bob",
+							"agent:default",
+							"session:s1",
+						),
+					}),
+					{ minLength: 1, maxLength: 6 },
+				),
+				async (rawEvents) => {
+					const { consolidateMemory } = await import(
+						"./mongodb-consolidator.js"
+					)
+					const { writeStructuredMemory } = await import(
+						"./mongodb-structured-memory.js"
+					)
+					vi.mocked(writeStructuredMemory).mockClear()
+
+					const events = rawEvents.map((e, idx) => ({
+						eventId: e.eventId + String(idx),
+						agentId: "agent-1",
+						body: "I prefer TypeScript over JavaScript", // matches preference pattern
+						timestamp: new Date(),
+						role: "user",
+						scope: e.scope,
+						scopeRef: e.scopeRef,
+					}))
+
+					// Simulate the server-side scope filter: events_col.find(filter)
+					// returns only events matching options.scope/scopeRef. The
+					// property focuses on the WRITE path: every structured_mem
+					// row must inherit its originating event's scope, even when
+					// options.scope matches multiple candidate scopes.
+					const eventsCol = mockCollection({
+						find: vi.fn((filter: Document) => ({
+							sort: vi.fn(() => ({
+								limit: vi.fn(() => ({
+									toArray: vi.fn(async () =>
+										events.filter(
+											(ev) =>
+												(!filter.scope || ev.scope === filter.scope) &&
+												(!filter.scopeRef || ev.scopeRef === filter.scopeRef),
+										),
+									),
+								})),
+							})),
+						})),
+						updateMany: vi.fn(
+							async () => ({ modifiedCount: 1 }) as UpdateResult,
+						),
+					})
+					const consolidationRunsCol = mockCollection({
+						findOne: vi.fn(async () => null),
+					})
+					const structuredCol = mockCollection({
+						findOne: vi.fn(async () => null),
+					})
+					const db = mockDb({
+						test_consolidation_runs: consolidationRunsCol,
+						test_events: eventsCol,
+						test_structured_mem: structuredCol,
+					})
+
+					// Run ONE consolidation with no scope filter → all events
+					// are candidates. The structured_mem rows must still each
+					// carry their own event's scope.
+					await consolidateMemory({
+						db,
+						prefix: "test_",
+						agentId: "agent-1",
+						options: { minCombinedScore: 0 },
+					})
+
+					const calls = vi.mocked(writeStructuredMemory).mock.calls
+					for (const [args] of calls) {
+						const entry = args?.entry as {
+							scope?: string
+							scopeRef?: string
+							sourceEventIds?: string[]
+						}
+						const sourceEventId = entry?.sourceEventIds?.[0]
+						const sourceEvent = events.find(
+							(ev) => ev.eventId === sourceEventId,
+						)
+						if (sourceEvent) {
+							expect(entry.scope).toBe(sourceEvent.scope)
+							expect(entry.scopeRef).toBe(sourceEvent.scopeRef)
+						}
+					}
+				},
+			),
+			{ seed: 20260512, numRuns: 300 },
+		)
+	}, 30_000)
 })
