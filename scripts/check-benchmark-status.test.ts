@@ -112,6 +112,19 @@ describe("evaluateBenchmarkStatus", () => {
 		expect(fullUnlock.failures.join("\n")).toContain("internal R@5")
 	})
 
+	it("does not unlock full-500 from a 6-case smoke artifact", () => {
+		const artifact = makeArtifact()
+		const report = (artifact.benchmarkResponse as Record<string, unknown>)
+			.benchmarkReport as Record<string, unknown>
+		report.corpus = { cases: 6, scoredCases: 6 }
+
+		const status = evaluateBenchmarkStatus(artifact)
+
+		expect(status.ok).toBe(true)
+		expect(status.fullUnlockOk).toBe(false)
+		expect(status.notes.join("\n")).toContain("cases=6 < 48-case")
+	})
+
 	it("fails when the parity envelope or miss ledger is absent", () => {
 		const artifact = makeArtifact()
 		const response = artifact.benchmarkResponse as Record<string, unknown>

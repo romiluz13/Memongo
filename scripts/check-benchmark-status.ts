@@ -206,6 +206,11 @@ export function evaluateBenchmarkStatus(
 	}
 
 	const fullUnlockFailures: string[] = []
+	if (cases < 48) {
+		fullUnlockFailures.push(
+			`cases=${cases} < 48-case canary unlock minimum`,
+		)
+	}
 	if (internalRAt5 === null || internalRAt5 < 0.85) {
 		fullUnlockFailures.push(
 			`internal R@5=${internalRAt5?.toFixed(4) ?? "missing"} < 0.8500`,
