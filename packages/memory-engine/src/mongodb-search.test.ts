@@ -142,11 +142,30 @@ describe("vectorSearch", () => {
 		const vsStage = pipeline[0].$vectorSearch
 		expect(vsStage.index).toBe("test_vector")
 		expect(vsStage.query).toEqual({ text: "search query" })
+		expect(vsStage.model).toBe("voyage-4-large")
 		expect(vsStage.path).toBe("text")
 		expect(vsStage.queryVector).toBeUndefined()
 		expect(vsStage.numCandidates).toBeGreaterThanOrEqual(100)
 		expect(vsStage.limit).toBe(10)
 		expect(results).toHaveLength(2)
+	})
+
+	it("keeps ANN numCandidates greater than or equal to limit", async () => {
+		const col = mockCollectionWithResults(SAMPLE_DOCS)
+		await vectorSearch(col, null, {
+			maxResults: 50,
+			minScore: 0.1,
+			indexName: "test_vector",
+			queryText: "search query",
+			embeddingMode: "automated",
+			numCandidates: 20,
+		})
+
+		const pipeline = (col.aggregate as ReturnType<typeof vi.fn>).mock
+			.calls[0][0]
+		const vsStage = pipeline[0].$vectorSearch
+		expect(vsStage.limit).toBe(50)
+		expect(vsStage.numCandidates).toBe(50)
 	})
 
 	it("builds correct pipeline for automated mode", async () => {
@@ -163,6 +182,7 @@ describe("vectorSearch", () => {
 			.calls[0][0]
 		const vsStage = pipeline[0].$vectorSearch
 		expect(vsStage.query).toEqual({ text: "search query" })
+		expect(vsStage.model).toBe("voyage-4-large")
 		expect(vsStage.path).toBe("text")
 		expect(vsStage.queryVector).toBeUndefined()
 		expect(results).toHaveLength(2)
@@ -903,6 +923,7 @@ describe("buildVectorSearchStage ENN", () => {
 		expect(stage!.numCandidates).toBeUndefined()
 		expect(stage!.limit).toBe(10)
 		expect(stage!.query).toEqual({ text: "test query" })
+		expect(stage!.model).toBe("voyage-4-large")
 	})
 
 	it("preserves filter pushdown in ENN mode", () => {

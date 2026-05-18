@@ -102,15 +102,29 @@ export function buildSessionEvidenceDocuments(params: {
 }): SessionEvidenceDocument[] {
 	const { conversations, agentId, scope, scopeRef, eventIds } = params
 	const documents: SessionEvidenceDocument[] = []
+	const sessions = new Map<
+		string,
+		{
+			userTurns: Array<MemoryBenchmarkConversation["turns"][number]>
+		}
+	>()
 
 	for (const conversation of conversations) {
 		const sessionId = conversation.sessionId
 		if (!sessionId) continue
 
-		// Concatenate only user turns
 		const userTurns = conversation.turns.filter((t) => t.role === "user")
 		if (userTurns.length === 0) continue
+		const existing = sessions.get(sessionId)
+		if (existing) {
+			existing.userTurns.push(...userTurns)
+		} else {
+			sessions.set(sessionId, { userTurns: [...userTurns] })
+		}
+	}
 
+	for (const [sessionId, session] of sessions) {
+		const userTurns = session.userTurns
 		const rawText = userTurns.map((t) => t.body).join("\n\n")
 		const text = truncateAtSentenceBoundary(rawText)
 

@@ -158,6 +158,7 @@ export async function scanNovelty(params: {
 						index: eventsVectorIndex(prefix),
 						path: "body",
 						query: { text: candidateBody },
+						model: "voyage-4-large",
 						numCandidates,
 						limit: searchLimit,
 						filter: vsFilter,

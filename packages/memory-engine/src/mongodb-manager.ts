@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto"
 import { createReadStream } from "node:fs"
 import path from "node:path"
 import chokidar, { type FSWatcher } from "chokidar"
-import { MongoClient, type Db, type Document } from "mongodb"
+import { MongoClient, type Collection, type Db, type Document } from "mongodb"
 import {
 	type MemongoConfig,
 	type MemoryScope,
@@ -200,6 +200,7 @@ import {
 	buildExecutorPasses,
 	buildMemorySearchRequestSignature,
 	classifyExecutorSearch,
+	applyLaneAwareResultControls,
 	computeEvidenceCoverage,
 	executeMongoSearchPlan,
 	normalizeMemorySearchRequest,
@@ -292,6 +293,10 @@ function isLegacyBenchmarkFallbackCandidate(err: unknown): boolean {
 function isBenchmarkStrictMode(): boolean {
 	const v = process.env.MEMONGO_BENCHMARK_STRICT
 	return v === "1" || v?.toLowerCase() === "true"
+}
+
+function hasBenchmarkSearchableText(value: unknown): boolean {
+	return typeof value === "string" && /[\p{L}\p{N}]/u.test(value)
 }
 
 function attachBenchmarkOperationsReport(
@@ -433,7 +438,7 @@ function mergeTurnPrecisionResults(
 }
 
 const RECOMMENDATION_MEMORY_QUERY_RE =
-	/\b(?:suggest|suggestion|recommend|recommendation|accessor(?:y|ies)|complement|setup|prefer|preference)\b/i
+	/\b(?:advice|tips?|suggest(?:ion)?s?|recommend(?:ation)?s?|accessor(?:y|ies)|complement|setup|prefer|preference)\b|(?:\bwhat\s+should\s+i\b|\bany\s+(?:tips?|suggestions?|recommendations?)\b)/i
 
 function turnPrecisionPreferenceSignalBoost(
 	query: string,
@@ -610,12 +615,13 @@ function isTemporalCoverageQuery(
 	)
 }
 
-function isConversationEvidenceQuery(
+export function isConversationEvidenceQuery(
 	query: string,
 	questionDate: Date | undefined,
 ): boolean {
 	return (
 		CONVERSATION_EVIDENCE_QUERY_RE.test(query) ||
+		RECOMMENDATION_MEMORY_QUERY_RE.test(query) ||
 		isTemporalCoverageQuery(query, questionDate)
 	)
 }
@@ -1190,6 +1196,7 @@ async function searchTurnEventsWithinSessions(params: {
 					index: `${params.prefix}events_vector`,
 					path: "body",
 					query: { text: params.query },
+					model: "voyage-4-large",
 					filter: vectorFilter,
 					numCandidates: params.numCandidates,
 					limit: params.maxResults,
@@ -1331,6 +1338,7 @@ async function searchConversationEvidenceEvents(params: {
 					index: `${params.prefix}events_vector`,
 					path: "body",
 					query: { text: params.query },
+					model: "voyage-4-large",
 					filter: vectorFilter,
 					numCandidates: params.numCandidates,
 					limit: params.maxResults,
@@ -1438,11 +1446,34 @@ async function searchConversationEvidenceEvents(params: {
 // Result dedup utility — exported for testing and reuse
 // ---------------------------------------------------------------------------
 
+export function searchResultIdentityKey(result: MemorySearchResult): string {
+	const canonicalId = result.canonicalId?.trim()
+	if (canonicalId) return `canonical:${canonicalId}`
+	const sourceEventIds = (result.sourceEventIds ?? [])
+		.map((id) => id.trim())
+		.filter(Boolean)
+		.toSorted()
+	if (sourceEventIds.length > 0) {
+		return `events:${sourceEventIds.join("|")}`
+	}
+	const locator = [
+		result.path || result.filePath || "",
+		result.startLine ?? "",
+		result.endLine ?? "",
+		result.sessionId ?? "",
+	]
+		.map(String)
+		.join(":")
+	if (locator.replaceAll(":", "").trim().length > 0) {
+		return `loc:${locator}`
+	}
+	return `snippet:${result.snippet}`
+}
+
 /**
- * Deduplicate search results by content (snippet text).
- * When duplicates are found (same snippet from different sources),
- * keep only the highest-scoring result.
- * Uses simple string comparison (not crypto hash) per plan spec.
+ * Deduplicate search results by stable evidence identity.
+ * Falls back to snippet text only when the result has no canonical id,
+ * source event id, or locator.
  */
 export function deduplicateSearchResults(
 	results: MemorySearchResult[],
@@ -1453,9 +1484,10 @@ export function deduplicateSearchResults(
 
 	const seen = new Map<string, MemorySearchResult>()
 	for (const result of results) {
-		const existing = seen.get(result.snippet)
+		const key = searchResultIdentityKey(result)
+		const existing = seen.get(key)
 		if (!existing || result.score > existing.score) {
-			seen.set(result.snippet, result)
+			seen.set(key, result)
 		}
 	}
 
@@ -1825,6 +1857,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 	private fileCount = 0
 	private chunkCount = 0
 	private writeQueue: Promise<void> = Promise.resolve()
+	private derivationSchedulingQueue: Promise<void> = Promise.resolve()
 	private derivationQueue: Promise<void> = Promise.resolve()
 	private lastSearchMode = "legacy"
 	private lastSearchDetails: Record<string, unknown> | undefined
@@ -2665,9 +2698,27 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 				return v2.results
 			}
 
+			void recordRecallTrace({
+				db: this.db,
+				prefix: this.prefix,
+				trace: {
+					agentId: this.agentId,
+					query: cleaned,
+					lanesUsed: v2.metadata.pathsExecuted,
+					lanesSkipped: Array.from(availablePaths).filter(
+						(path) => !v2.metadata.pathsExecuted.includes(path),
+					),
+					totalHits: 0,
+					latencyMs,
+					hitsByLane: v2.metadata.resultsByPath,
+					topHitIds: [],
+				},
+			}).catch((err) =>
+				log.warn(`empty search recall trace write failed: ${String(err)}`),
+			)
 			if (isBenchmarkStrictMode()) {
 				throw new Error(
-					"searchV2 returned no results; legacy fallback disabled",
+					`searchV2 returned no results; legacy fallback disabled; paths=${v2.metadata.pathsExecuted.join(",") || "none"} hitsByLane=${JSON.stringify(v2.metadata.resultsByPath)}`,
 				)
 			}
 			const fallbackResults = await this.legacySearch(cleaned, opts)
@@ -3595,11 +3646,16 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 
 		for (let attempt = 0; attempt < 8; attempt++) {
 			const writeQueue = manager.writeQueue
+			const derivationSchedulingQueue =
+				manager.derivationSchedulingQueue ?? Promise.resolve()
 			const derivationQueue = manager.derivationQueue
 			await awaitQueue(writeQueue, "writeQueue")
+			await awaitQueue(derivationSchedulingQueue, "derivationSchedulingQueue")
 			await awaitQueue(derivationQueue, "derivationQueue")
 			if (
 				writeQueue === manager.writeQueue &&
+				derivationSchedulingQueue ===
+					(manager.derivationSchedulingQueue ?? derivationSchedulingQueue) &&
 				derivationQueue === manager.derivationQueue
 			) {
 				return
@@ -3610,9 +3666,58 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		})
 	}
 
+	private async waitForBenchmarkSearchConvergence(
+		agentId: string,
+	): Promise<void> {
+		await this.waitForBenchmarkSearchCollectionConvergence({
+			agentId,
+			label: "events",
+			collection: eventsCollection(this.db, this.prefix),
+			collectionName: `${this.prefix}events`,
+			indexName: `${this.prefix}events_text`,
+			textPath: "body",
+		})
+		await this.waitForBenchmarkSearchCollectionConvergence({
+			agentId,
+			label: "chunks",
+			collection: chunksCollection(this.db, this.prefix),
+			collectionName: `${this.prefix}chunks`,
+			indexName: `${this.prefix}chunks_text`,
+			textPath: "text",
+		})
+		await this.waitForBenchmarkSearchCollectionConvergence({
+			agentId,
+			label: "session_chunks",
+			collection: sessionChunksCollection(this.db, this.prefix),
+			collectionName: `${this.prefix}session_chunks`,
+			indexName: `${this.prefix}session_chunks_text`,
+			textPath: "text",
+		})
+	}
+
 	private async waitForBenchmarkEventSearchConvergence(
 		agentId: string,
 	): Promise<void> {
+		await this.waitForBenchmarkSearchCollectionConvergence({
+			agentId,
+			label: "events",
+			collection: eventsCollection(this.db, this.prefix),
+			collectionName: `${this.prefix}events`,
+			indexName: `${this.prefix}events_text`,
+			textPath: "body",
+		})
+	}
+
+	private async waitForBenchmarkSearchCollectionConvergence(params: {
+		agentId: string
+		label: string
+		collection: Collection<Document>
+		collectionName: string
+		indexName: string
+		textPath: string
+	}): Promise<void> {
+		const { agentId, label, collection, collectionName, indexName, textPath } =
+			params
 		if (!this.capabilities.textSearch) {
 			if (isBenchmarkStrictMode()) {
 				throw new Error(
@@ -3622,13 +3727,18 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 			return
 		}
 
-		const expectedCount = await eventsCollection(
-			this.db,
-			this.prefix,
-		).countDocuments({
-			agentId,
-			body: { $type: "string", $ne: "" },
-		})
+		const expectedDocs = await collection
+			.find(
+				{
+					agentId,
+					[textPath]: { $type: "string", $ne: "" },
+				},
+				{ projection: { [textPath]: 1 } },
+			)
+			.toArray()
+		const expectedCount = expectedDocs.filter((doc) =>
+			hasBenchmarkSearchableText(doc[textPath]),
+		).length
 		if (expectedCount === 0) return
 
 		const configuredTimeout = Number(
@@ -3642,16 +3752,9 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 					: 0
 		if (timeoutMs === 0) return
 
-		// Task 1.5 — prefer `$listSearchIndexes` readiness (authoritative).
-		// Readiness = queryable === true. In strict mode, STALE or
-		// queryable === false aborts immediately rather than waiting.
-		// Falls back to the hardened aggregate $search probe when
-		// $listSearchIndexes is unsupported (e.g., atlas-local:preview < 8.3).
-		const eventsCollName = `${this.prefix}events`
-		const indexName = `${this.prefix}events_text`
 		const readinessProbe = await readSearchIndexStatus(
 			this.db,
-			eventsCollName,
+			collectionName,
 			indexName,
 		)
 		if (readinessProbe.kind === "ok") {
@@ -3661,9 +3764,11 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 						`index-not-ready: search index ${indexName} status STALE (queryable=${readinessProbe.queryable}) agentId=${agentId}`,
 					)
 				}
-				return
+				// queryable=true means the index is usable, not that fresh writes have
+				// propagated into mongot. MongoDB Search is eventually consistent, so
+				// benchmark setup must still probe document visibility below.
 			}
-			if (isBenchmarkStrictMode()) {
+			if (!readinessProbe.queryable && isBenchmarkStrictMode()) {
 				throw new Error(
 					`index-not-ready: search index ${indexName} queryable=false status=${readinessProbe.status} agentId=${agentId}`,
 				)
@@ -3687,15 +3792,26 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 			try {
 				const controller = new AbortController()
 				let timeout: ReturnType<typeof setTimeout> | undefined
-				const probe = eventsCollection(this.db, this.prefix)
+				const probe = collection
 					.aggregate<{ count: number }>(
 						[
 							{
 								$search: {
-									index: `${this.prefix}events_text`,
+									index: indexName,
 									compound: {
 										filter: [{ equals: { path: "agentId", value: agentId } }],
-										must: [{ exists: { path: "body" } }],
+										must: [
+											{
+												// Atlas Search `exists` can report zero for analyzed string
+												// fields even after `text` queries are live; wildcard probes
+												// the same analyzed field used by retrieval.
+												wildcard: {
+													path: textPath,
+													query: "*",
+													allowAnalyzedField: true,
+												},
+											},
+										],
 									},
 								},
 							},
@@ -3739,7 +3855,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 			await new Promise((resolve) => setTimeout(resolve, intervalMs))
 		}
 
-		const message = `benchmark event search convergence timed out: indexed=${indexedCount}/${expectedCount} agentId=${agentId}`
+		const message = `benchmark ${label} search convergence timed out: indexed=${indexedCount}/${expectedCount} agentId=${agentId}`
 		if (isBenchmarkStrictMode()) {
 			throw new Error(
 				lastError ? `${message}; lastError=${String(lastError)}` : message,
@@ -4320,9 +4436,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 							await new Promise((r) => setTimeout(r, settleMs))
 						}
 					}
-					await this.waitForBenchmarkEventSearchConvergence(
-						scenarioManager.agentId,
-					)
+					await this.waitForBenchmarkSearchConvergence(scenarioManager.agentId)
 				} else {
 					eventEvidence = await this.listBenchmarkEventEvidence(this.agentId)
 				}
@@ -5643,10 +5757,13 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		const mongoCfg = this.config.mongodb!
 
 		if (mongoCfg.embeddingMode === "automated") {
-			if (mongoCfg.deploymentProfile !== "atlas-local-preview") {
+			if (
+				mongoCfg.deploymentProfile !== "atlas-local-preview" &&
+				mongoCfg.deploymentProfile !== "atlas-managed"
+			) {
 				return {
 					ok: false,
-					error: `embeddingMode "automated" is only supported on atlas-local-preview in Memongo`,
+					error: `embeddingMode "automated" is only supported on atlas-local-preview or atlas-managed in Memongo`,
 				}
 			}
 			return this.capabilities.vectorSearch
@@ -5674,7 +5791,8 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		const mongoCfg = this.config.mongodb!
 		return (
 			mongoCfg.embeddingMode === "automated" &&
-			mongoCfg.deploymentProfile === "atlas-local-preview"
+			(mongoCfg.deploymentProfile === "atlas-local-preview" ||
+				mongoCfg.deploymentProfile === "atlas-managed")
 		)
 	}
 
@@ -6271,6 +6389,40 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		)
 	}
 
+	private enqueueDerivationScheduling(task: () => Promise<void>): void {
+		const run = async () => {
+			try {
+				await task()
+			} catch (err) {
+				log.warn(`derived memory scheduling failed: ${String(err)}`)
+			}
+		}
+		const current = this.derivationSchedulingQueue ?? Promise.resolve()
+		const next = current.then(run, run)
+		this.derivationSchedulingQueue = next.then(
+			() => undefined,
+			() => undefined,
+		)
+	}
+
+	private shouldRunPostWriteDerivedWork(): boolean {
+		const mode =
+			process.env.MEMONGO_BENCHMARK_DERIVED_WORK_MODE?.trim().toLowerCase()
+		if (
+			mode !== "disabled" &&
+			mode !== "off" &&
+			mode !== "none" &&
+			mode !== "0" &&
+			mode !== "false"
+		) {
+			return true
+		}
+		return !(
+			this.agentId.startsWith("benchmark-") ||
+			this.agentId.startsWith("canary-")
+		)
+	}
+
 	private isDuplicateKeyError(err: unknown): boolean {
 		if (!err || typeof err !== "object") {
 			return false
@@ -6427,12 +6579,12 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		if (!mongoCfg) {
 			return
 		}
+		if (!this.shouldRunPostWriteDerivedWork()) {
+			return
+		}
 
-		void this.scheduleBackgroundExtraction(params.eventId).catch((err) => {
-			log.warn("background extraction scheduling failed after event write", {
-				error: err,
-				eventId: params.eventId,
-			})
+		this.enqueueDerivationScheduling(async () => {
+			await this.scheduleBackgroundExtraction(params.eventId)
 		})
 
 		if (!mongoCfg.episodes.enabled) {
@@ -6520,21 +6672,24 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 			if (projected.chunkCreated) {
 				this.chunkCount += 1
 			}
+			const postWriteDerivedWorkEnabled = this.shouldRunPostWriteDerivedWork()
 			// Entity extraction (sync rule-based, non-blocking)
 			let entityCount = 0
-			try {
-				const entityResult = await extractAndUpsertEntities({
-					db: this.db,
-					prefix: this.prefix,
-					agentId: this.agentId,
-					eventContent: event.body,
-					scope,
-					scopeRef: written.scopeRef,
-					sourceEventId: written.eventId,
-				})
-				entityCount = entityResult.entities.length
-			} catch (err) {
-				log.warn("entity extraction failed after event write", { error: err })
+			if (postWriteDerivedWorkEnabled) {
+				try {
+					const entityResult = await extractAndUpsertEntities({
+						db: this.db,
+						prefix: this.prefix,
+						agentId: this.agentId,
+						eventContent: event.body,
+						scope,
+						scopeRef: written.scopeRef,
+						sourceEventId: written.eventId,
+					})
+					entityCount = entityResult.entities.length
+				} catch (err) {
+					log.warn("entity extraction failed after event write", { error: err })
+				}
 			}
 
 			this.schedulePostWriteDerivations({
@@ -6558,20 +6713,22 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 				if (entityCount > 0) {
 					increments.graph = entityCount
 				}
-				const candidates = await resolveStructuredCandidatesForPromotion({
-					db: this.db,
-					prefix: this.prefix,
-					event: {
-						eventId: written.eventId,
-						agentId: this.agentId,
-						role: event.role,
-						body: event.body,
-						timestamp: written.timestamp,
-						sessionId: event.sessionId,
-						scope,
-						scopeRef: written.scopeRef,
-					},
-				})
+				const candidates = postWriteDerivedWorkEnabled
+					? await resolveStructuredCandidatesForPromotion({
+							db: this.db,
+							prefix: this.prefix,
+							event: {
+								eventId: written.eventId,
+								agentId: this.agentId,
+								role: event.role,
+								body: event.body,
+								timestamp: written.timestamp,
+								sessionId: event.sessionId,
+								scope,
+								scopeRef: written.scopeRef,
+							},
+						})
+					: []
 				if (candidates.length > 0) {
 					increments.structured = candidates.length
 				}
@@ -6581,16 +6738,18 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 				if (criticalCount > 0) {
 					increments["active-critical"] = criticalCount
 				}
-				const procedureCandidates = extractProcedureCandidatesFromEvent({
-					eventId: written.eventId,
-					agentId: this.agentId,
-					role: event.role,
-					body: event.body,
-					timestamp: written.timestamp,
-					sessionId: event.sessionId,
-					scope,
-					scopeRef: written.scopeRef,
-				})
+				const procedureCandidates = postWriteDerivedWorkEnabled
+					? extractProcedureCandidatesFromEvent({
+							eventId: written.eventId,
+							agentId: this.agentId,
+							role: event.role,
+							body: event.body,
+							timestamp: written.timestamp,
+							sessionId: event.sessionId,
+							scope,
+							scopeRef: written.scopeRef,
+						})
+					: []
 				if (procedureCandidates.length > 0) {
 					increments.procedural = procedureCandidates.length
 				}
@@ -6650,6 +6809,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 			this.watchTimer = null
 		}
 
+		await this.derivationSchedulingQueue
 		await this.derivationQueue
 
 		// Close the file watcher
@@ -6992,6 +7152,7 @@ export type V2SearchMetadata = {
 	resultsByPath: Record<string, number>
 	reranked?: boolean
 	queryRewritten?: boolean
+	laneControls?: ReturnType<typeof applyLaneAwareResultControls>["summary"]
 }
 
 const GRAPH_QUERY_STOPWORDS = new Set([
@@ -7818,6 +7979,11 @@ export async function searchV2(
 							process.env.MEMONGO_SESSION_EVIDENCE_MODE,
 						)
 						if (sessionMode === "B") {
+							const requestedMaxResults = context.maxResults ?? 10
+							const sessionEvidenceMaxResults = Math.max(
+								requestedMaxResults,
+								requestedMaxResults * 4,
+							)
 							const sessionFilter: Document = {
 								agentId,
 								scope,
@@ -7826,7 +7992,7 @@ export async function searchV2(
 							searches.push(
 								(hybridMode === "vector-only"
 									? vectorSearch(sessionChunksCollection(db, prefix), null, {
-											maxResults: context.maxResults ?? 10,
+											maxResults: sessionEvidenceMaxResults,
 											minScore,
 											numCandidates,
 											sessionKey: context.searchOptions?.sessionKey,
@@ -7840,7 +8006,7 @@ export async function searchV2(
 											searchQuery,
 											null,
 											{
-												maxResults: context.maxResults ?? 10,
+												maxResults: sessionEvidenceMaxResults,
 												minScore,
 												numCandidates,
 												sessionKey: context.searchOptions?.sessionKey,
@@ -8022,12 +8188,12 @@ export async function searchV2(
 			const rrfMap = new Map<string, number>()
 			for (const [_pathName, pathRes] of Object.entries(perPathResults)) {
 				for (let rank = 0; rank < pathRes.length; rank++) {
-					const key = pathRes[rank].snippet
+					const key = searchResultIdentityKey(pathRes[rank])
 					rrfMap.set(key, (rrfMap.get(key) ?? 0) + rrfScore(rank + 1))
 				}
 			}
 			for (const r of deduped) {
-				const rrfVal = rrfMap.get(r.snippet)
+				const rrfVal = rrfMap.get(searchResultIdentityKey(r))
 				if (rrfVal !== undefined) {
 					r.score = rrfVal
 				}
@@ -8138,16 +8304,30 @@ export async function searchV2(
 							...stripSessionSummaryTurnProvenance(postScored),
 						])
 					: postScored
+		const laneControlled = applyLaneAwareResultControls({
+			query,
+			results: precisionScored,
+			classification: classifyExecutorSearch({
+				query,
+				timeRange: context.searchOptions?.timeRange,
+				conversationScope: context.searchOptions?.conversationScope,
+				structuredScope: context.searchOptions?.structuredScope,
+				referenceScope: context.searchOptions?.referenceScope,
+				proceduralScope: context.searchOptions?.proceduralScope,
+			}),
+			planPaths: plan.paths,
+		})
 
 		// Cross-encoder re-ranking via Voyage API (after heuristic, before final slice)
 		const rerankCfg = context.searchOptions?.rerankConfig
-		let finalResults = precisionScored
+		let finalResults = laneControlled.results
+		let laneControlSummary = laneControlled.summary
 		let wasReranked = false
 		if (rerankCfg?.enabled) {
-			const timelineResults = precisionScored.filter(
+			const timelineResults = finalResults.filter(
 				(result) => result.provenance?.temporalTimeline === true,
 			)
-			const rerankInput = precisionScored.filter(
+			const rerankInput = finalResults.filter(
 				(result) => result.provenance?.temporalTimeline !== true,
 			)
 			const rerankResult = await crossEncoderRerank({
@@ -8167,15 +8347,29 @@ export async function searchV2(
 				rerankCounters.recordRerankCall()
 			}
 			if (rerankResult.reranked) {
-				finalResults = orderTimelineAfterSourceEvidence(
-					deduplicateSearchResults([
-						...applyPreferenceEvidenceBoostAfterRerank(
-							query,
-							rerankResult.results,
-						),
-						...timelineResults,
-					]),
-				)
+				const postRerankLaneControlled = applyLaneAwareResultControls({
+					query,
+					results: orderTimelineAfterSourceEvidence(
+						deduplicateSearchResults([
+							...applyPreferenceEvidenceBoostAfterRerank(
+								query,
+								rerankResult.results,
+							),
+							...timelineResults,
+						]),
+					),
+					classification: classifyExecutorSearch({
+						query,
+						timeRange: context.searchOptions?.timeRange,
+						conversationScope: context.searchOptions?.conversationScope,
+						structuredScope: context.searchOptions?.structuredScope,
+						referenceScope: context.searchOptions?.referenceScope,
+						proceduralScope: context.searchOptions?.proceduralScope,
+					}),
+					planPaths: plan.paths,
+				})
+				finalResults = postRerankLaneControlled.results
+				laneControlSummary = postRerankLaneControlled.summary
 				wasReranked = true
 			}
 		}
@@ -8197,6 +8391,7 @@ export async function searchV2(
 				resultsByPath,
 				reranked: wasReranked,
 				queryRewritten: wasQueryRewritten,
+				laneControls: laneControlSummary,
 			},
 		}
 	} catch (err) {

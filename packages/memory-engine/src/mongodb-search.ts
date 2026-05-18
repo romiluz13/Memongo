@@ -352,11 +352,33 @@ export function splitAtlasSearchFilter(filter?: Document): {
 /** Hard maximum for numCandidates — MongoDB server rejects values above 10,000. */
 export const MONGODB_MAX_NUM_CANDIDATES = 10_000
 
+function normalizeVectorSearchLimit(value: number): number {
+	const normalized = Math.floor(value)
+	if (!Number.isFinite(normalized) || normalized <= 0) {
+		return 1
+	}
+	return Math.min(normalized, MONGODB_MAX_NUM_CANDIDATES)
+}
+
+function normalizeVectorSearchNumCandidates(params: {
+	numCandidates: number
+	limit: number
+}): number {
+	const requested = Math.floor(params.numCandidates)
+	const finiteRequested =
+		Number.isFinite(requested) && requested > 0 ? requested : params.limit
+	return Math.min(
+		Math.max(finiteRequested, params.limit),
+		MONGODB_MAX_NUM_CANDIDATES,
+	)
+}
+
 export function buildVectorSearchStage(input: {
 	queryVector: number[] | null
 	queryText: string | null
 	embeddingMode: MemoryMongoDBEmbeddingMode
 	indexName: string
+	model?: string
 	numCandidates: number
 	limit: number
 	filter?: Document
@@ -365,19 +387,20 @@ export function buildVectorSearchStage(input: {
 	 *  and omits numCandidates per the $vectorSearch contract. */
 	exact?: boolean
 }): Document | null {
+	const limit = normalizeVectorSearchLimit(input.limit)
 	const base: Document = {
 		index: input.indexName,
-		limit: input.limit,
+		limit,
 	}
 
 	// ENN mode: exact: true, no numCandidates
 	if (input.exact) {
 		base.exact = true
 	} else {
-		base.numCandidates = Math.min(
-			input.numCandidates,
-			MONGODB_MAX_NUM_CANDIDATES,
-		)
+		base.numCandidates = normalizeVectorSearchNumCandidates({
+			numCandidates: input.numCandidates,
+			limit,
+		})
 	}
 
 	if (input.filter && Object.keys(input.filter).length > 0) {
@@ -386,6 +409,7 @@ export function buildVectorSearchStage(input: {
 
 	if (input.embeddingMode === "automated" && input.queryText) {
 		base.query = { text: input.queryText }
+		base.model = input.model ?? "voyage-4-large"
 		base.path = input.textFieldPath ?? "text"
 	} else {
 		return null

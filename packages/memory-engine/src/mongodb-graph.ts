@@ -881,6 +881,8 @@ export async function expandGraph(params: {
 		}
 
 		const graphLookupDepth = Math.max(0, (maxDepth ?? 2) - 1)
+		const connectionLimit = maxConnections ?? 100
+		const directRelationLimit = Math.max(1, connectionLimit)
 		const relationTraversalClause = buildRelationTraversalClause(asOf)
 
 		// 3. Collect all unique relations with their depths
@@ -925,6 +927,7 @@ export async function expandGraph(params: {
 									relationTraversalClause,
 								),
 							},
+							{ $limit: directRelationLimit },
 							{
 								$graphLookup: {
 									from: `${prefix}relations`,
@@ -957,6 +960,7 @@ export async function expandGraph(params: {
 									relationTraversalClause,
 								),
 							},
+							{ $limit: directRelationLimit },
 							{
 								$graphLookup: {
 									from: `${prefix}relations`,
@@ -1000,6 +1004,7 @@ export async function expandGraph(params: {
 						relationTraversalClause,
 					),
 				},
+				{ $limit: directRelationLimit },
 				{
 					$graphLookup: {
 						from: `${prefix}relations`,
@@ -1093,7 +1098,6 @@ export async function expandGraph(params: {
 		})
 
 		// 7. Apply maxConnections limit
-		const connectionLimit = maxConnections ?? 100
 		const limitedConnections = connections.slice(0, connectionLimit)
 		if (connections.length > connectionLimit) {
 			log.warn(

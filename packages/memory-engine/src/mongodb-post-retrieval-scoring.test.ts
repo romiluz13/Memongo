@@ -81,6 +81,16 @@ describe("keywordOverlapBoost", () => {
 		)
 		expect(boosted).toBeGreaterThan(0.5)
 	})
+
+	it("bridges general product-domain terms without exact word overlap", () => {
+		const boosted = keywordOverlapBoost(
+			"photography accessories for my current setup",
+			"I use a Sony camera with a Godox flash, padded cases, lens cleaning gear, and spare battery packs.",
+			0.5,
+		)
+
+		expect(boosted).toBeGreaterThan(0.5)
+	})
 })
 
 // ---------------------------------------------------------------------------
