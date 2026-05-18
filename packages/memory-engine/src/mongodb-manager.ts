@@ -57,6 +57,7 @@ import {
 	writeEvent,
 	projectEventChunk,
 	getEventsByTimeRange,
+	renderEventChunkText,
 } from "./mongodb-events.js"
 import {
 	extractAndUpsertEntities,
@@ -74,6 +75,7 @@ import { searchKB } from "./mongodb-kb-search.js"
 import { updateLaneCoverage, getLaneCoverage } from "./mongodb-lane-coverage.js"
 import {
 	recordIngestRun,
+	recordProjectionRun,
 	getLatestIngestRun,
 	getLatestProjectionRun,
 	getProjectionLag,
@@ -222,6 +224,8 @@ import type {
 	MemoryAccessTrend,
 	MemoryBenchmarkDataset,
 	MemoryBenchmarkDatasetKind,
+	MemoryBenchmarkConversation,
+	MemoryBenchmarkTurn,
 	MemoryBenchmarkScenario,
 	MemoryBenchmarkIngestResult,
 	MemoryConversationImportResult,
@@ -297,6 +301,28 @@ function isBenchmarkStrictMode(): boolean {
 
 function hasBenchmarkSearchableText(value: unknown): boolean {
 	return typeof value === "string" && /[\p{L}\p{N}]/u.test(value)
+}
+
+function parseBenchmarkTurnTimestamp(value?: string): Date | undefined {
+	if (!value) return undefined
+	const parsed = new Date(value)
+	return Number.isNaN(parsed.getTime()) ? undefined : parsed
+}
+
+function buildBenchmarkReplayMetadata(params: {
+	baseMetadata?: Record<string, unknown>
+	turnMetadata?: Record<string, unknown>
+	datasetName?: string
+	datasetKind?: MemoryBenchmarkDatasetKind
+	conversationId: string
+}): Record<string, unknown> {
+	return {
+		...(params.baseMetadata ?? {}),
+		...(params.turnMetadata ?? {}),
+		benchmarkDataset: params.datasetName,
+		benchmarkDatasetKind: params.datasetKind,
+		benchmarkConversationId: params.conversationId,
+	}
 }
 
 function attachBenchmarkOperationsReport(
@@ -3666,6 +3692,179 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		})
 	}
 
+	private shouldUseBenchmarkFastIngest(): boolean {
+		const mode = process.env.MEMONGO_BENCHMARK_FAST_INGEST?.trim().toLowerCase()
+		if (mode === "0" || mode === "false" || mode === "off" || mode === "none") {
+			return false
+		}
+		if (
+			mode === "1" ||
+			mode === "true" ||
+			mode === "on" ||
+			mode === "enabled"
+		) {
+			return true
+		}
+		return !this.shouldRunPostWriteDerivedWork()
+	}
+
+	private async insertBenchmarkDocumentsInBatches(
+		collection: Collection<Document>,
+		docs: Document[],
+	): Promise<void> {
+		if (docs.length === 0) return
+		const configuredBatchSize = Number(
+			process.env.MEMONGO_BENCHMARK_FAST_INGEST_BATCH_SIZE,
+		)
+		const batchSize =
+			Number.isFinite(configuredBatchSize) && configuredBatchSize > 0
+				? Math.min(1000, Math.floor(configuredBatchSize))
+				: 200
+		for (let offset = 0; offset < docs.length; offset += batchSize) {
+			await collection.insertMany(docs.slice(offset, offset + batchSize), {
+				ordered: false,
+			})
+		}
+	}
+
+	private async fastIngestBenchmarkConversations(params: {
+		datasetPath: string
+		datasetName?: string
+		datasetKind?: MemoryBenchmarkDatasetKind
+		conversations: MemoryBenchmarkConversation[]
+		failedLines?: number
+		scope?: MemoryScope
+		metadata?: Record<string, unknown>
+	}): Promise<MemoryBenchmarkIngestResult> {
+		const startedAt = new Date()
+		const eventDocs: Document[] = []
+		const chunkDocs: Document[] = []
+		let conversationsIngested = 0
+		let turnsIngested = 0
+		let skippedConversations = 0
+		let failedTurns = 0
+
+		for (const [index, conversation] of params.conversations.entries()) {
+			const turns = conversation.turns
+			if (turns.length === 0) {
+				skippedConversations++
+				continue
+			}
+			const sessionId =
+				conversation.sessionId ??
+				conversation.conversationId ??
+				`conversation-${index + 1}`
+			const scope =
+				conversation.scope ?? params.scope ?? ("agent" as MemoryScope)
+			const scopeRef = resolveScopeRef({
+				scope,
+				agentId: this.agentId,
+				sessionId,
+			})
+			const conversationId = conversation.conversationId ?? sessionId
+
+			for (const turn of turns) {
+				try {
+					const eventId = randomUUID()
+					const timestamp =
+						parseBenchmarkTurnTimestamp(turn.timestamp) ?? new Date()
+					const metadata = buildBenchmarkReplayMetadata({
+						baseMetadata: params.metadata,
+						turnMetadata: turn.metadata,
+						datasetName: params.datasetName,
+						datasetKind: params.datasetKind,
+						conversationId,
+					})
+					const eventDoc = {
+						eventId,
+						agentId: this.agentId,
+						sessionId,
+						role: turn.role,
+						body: turn.body,
+						scope,
+						scopeRef,
+						timestamp,
+						projectedAt: startedAt,
+						metadata,
+					}
+					const text = renderEventChunkText({
+						role: turn.role,
+						body: turn.body,
+					})
+					const path = `events/${eventId}`
+					chunkDocs.push({
+						path,
+						text,
+						hash: createHash("sha256").update(text).digest("hex"),
+						source: "conversation",
+						agentId: this.agentId,
+						scope,
+						scopeRef,
+						sessionId,
+						updatedAt: startedAt,
+					})
+					eventDocs.push(eventDoc)
+					turnsIngested++
+				} catch (err) {
+					failedTurns++
+					log.warn("benchmark fast ingest turn failed", {
+						datasetPath: params.datasetPath,
+						datasetName: params.datasetName,
+						sessionId,
+						role: (turn as MemoryBenchmarkTurn).role,
+						error: err,
+					})
+				}
+			}
+			conversationsIngested++
+		}
+
+		await this.insertBenchmarkDocumentsInBatches(
+			eventsCollection(this.db, this.prefix),
+			eventDocs,
+		)
+		await this.insertBenchmarkDocumentsInBatches(
+			chunksCollection(this.db, this.prefix),
+			chunkDocs,
+		)
+		if (turnsIngested > 0) {
+			await updateLaneCoverage({
+				db: this.db,
+				prefix: this.prefix,
+				agentId: this.agentId,
+				increments: {
+					"raw-window": turnsIngested,
+					hybrid: chunkDocs.length,
+				},
+			})
+		}
+		await recordProjectionRun({
+			db: this.db,
+			prefix: this.prefix,
+			run: {
+				agentId: this.agentId,
+				projectionType: "chunks",
+				status: "ok",
+				itemsProjected: chunkDocs.length,
+				durationMs: Date.now() - startedAt.getTime(),
+			},
+		}).catch(() => {})
+		this.chunkCount += chunkDocs.length
+		this.dirty = false
+
+		return {
+			datasetPath: params.datasetPath,
+			datasetName: params.datasetName,
+			conversationsIngested,
+			turnsIngested,
+			skippedConversations,
+			failedLines: params.failedLines ?? 0,
+			failedTurns,
+			startedAt,
+			completedAt: new Date(),
+		}
+	}
+
 	private async waitForBenchmarkSearchConvergence(
 		agentId: string,
 	): Promise<void> {
@@ -4178,19 +4377,31 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 				if (scenario.conversations.length > 0) {
 					const scenarioAgentId = `benchmark-${this.agentId}-${runToken}-${createHash("sha256").update(`${index}:${scenario.scenarioId}`).digest("hex").slice(0, 12)}`
 					scenarioManager = this.createBenchmarkScenarioManager(scenarioAgentId)
-					const scenarioIngest = await ingestBenchmarkConversations({
-						datasetPath: params.datasetPath,
-						datasetName: params.dataset.name,
-						conversations: scenario.conversations,
-						scope: "agent",
-						metadata: {
-							benchmarkDatasetKind: params.dataset.datasetKind ?? "generic",
-							benchmarkScenarioId: scenario.scenarioId,
-						},
-						writeTurn: async (turn) => {
-							await scenarioManager.writeConversationEvent(turn)
-						},
-					})
+					const scenarioIngest = scenarioManager.shouldUseBenchmarkFastIngest()
+						? await scenarioManager.fastIngestBenchmarkConversations({
+								datasetPath: params.datasetPath,
+								datasetName: params.dataset.name,
+								datasetKind: params.dataset.datasetKind,
+								conversations: scenario.conversations,
+								scope: "agent",
+								metadata: {
+									benchmarkDatasetKind: params.dataset.datasetKind ?? "generic",
+									benchmarkScenarioId: scenario.scenarioId,
+								},
+							})
+						: await ingestBenchmarkConversations({
+								datasetPath: params.datasetPath,
+								datasetName: params.dataset.name,
+								conversations: scenario.conversations,
+								scope: "agent",
+								metadata: {
+									benchmarkDatasetKind: params.dataset.datasetKind ?? "generic",
+									benchmarkScenarioId: scenario.scenarioId,
+								},
+								writeTurn: async (turn) => {
+									await scenarioManager.writeConversationEvent(turn)
+								},
+							})
 					ingest.conversationsIngested += scenarioIngest.conversationsIngested
 					ingest.turnsIngested += scenarioIngest.turnsIngested
 					ingest.skippedConversations += scenarioIngest.skippedConversations
