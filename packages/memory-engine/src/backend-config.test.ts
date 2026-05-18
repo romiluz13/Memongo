@@ -96,6 +96,25 @@ describe("resolveMemoryBackendConfig", () => {
 		expect(resolved.mongodb!.quantization).toBe("scalar")
 	})
 
+	it("allows MEMONGO_MONGODB_COLLECTION_PREFIX to override config for benchmark isolation", () => {
+		vi.stubEnv("MEMONGO_MONGODB_COLLECTION_PREFIX", "bench_run_")
+		const cfg = {
+			agents: { defaults: { workspace: "/tmp/memory-test" } },
+			memory: {
+				backend: "mongodb",
+				mongodb: {
+					uri: "mongodb://localhost:27017",
+					collectionPrefix: "custom_",
+				},
+			},
+		} as unknown as MemongoConfig
+
+		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
+
+		expect(resolved.mongodb!.collectionPrefix).toBe("bench_run_")
+		vi.unstubAllEnvs()
+	})
+
 	it("resolves mongodb relevance config overrides", () => {
 		const cfg = {
 			agents: { defaults: { workspace: "/tmp/memory-test" } },
@@ -322,6 +341,36 @@ describe("resolveMemoryBackendConfig", () => {
 		expect(resolved.mongodb!.embeddingMode).toBe("automated")
 	})
 
+	it("infers atlas-managed profile for MongoDB Atlas SRV URIs", () => {
+		const cfg = {
+			agents: { defaults: { workspace: "/tmp/memory-test" } },
+			memory: {
+				backend: "mongodb",
+				mongodb: {
+					uri: "mongodb+srv://user:pass@example.mongodb.net/?appName=memongo",
+				},
+			},
+		} as MemongoConfig
+		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
+		expect(resolved.mongodb!.deploymentProfile).toBe("atlas-managed")
+		expect(resolved.mongodb!.embeddingMode).toBe("automated")
+	})
+
+	it("accepts explicit atlas-managed profile", () => {
+		const cfg = {
+			agents: { defaults: { workspace: "/tmp/memory-test" } },
+			memory: {
+				backend: "mongodb",
+				mongodb: {
+					uri: "mongodb+srv://user:pass@example.mongodb.net/?appName=memongo",
+					deploymentProfile: "atlas-managed",
+				},
+			},
+		} as MemongoConfig
+		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
+		expect(resolved.mongodb!.deploymentProfile).toBe("atlas-managed")
+	})
+
 	it("rejects unsupported community-bare profile", () => {
 		const cfg = {
 			agents: { defaults: { workspace: "/tmp/memory-test" } },
@@ -411,6 +460,22 @@ describe("resolveMemoryBackendConfig", () => {
 		} as MemongoConfig
 		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
 		expect(resolved.mongodb!.fusionMethod).toBe("scoreFusion")
+	})
+
+	it("allows fusionMethod override via MEMONGO_MONGODB_FUSION_METHOD env var", () => {
+		vi.stubEnv("MEMONGO_MONGODB_FUSION_METHOD", "js-merge")
+		const cfg = {
+			agents: { defaults: { workspace: "/tmp/memory-test" } },
+			memory: {
+				backend: "mongodb",
+				mongodb: {
+					uri: "mongodb://localhost:27017",
+					fusionMethod: "rankFusion",
+				},
+			},
+		} as MemongoConfig
+		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
+		expect(resolved.mongodb!.fusionMethod).toBe("js-merge")
 	})
 
 	it("throws when mongodb backend has no URI", () => {
@@ -903,6 +968,23 @@ describe("resolveMemoryBackendConfig", () => {
 			} as unknown as MemongoConfig
 			const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
 			expect(resolved.mongodb!.reranking.voyageApiKey).toBe("voy-from-env")
+		} finally {
+			vi.unstubAllEnvs()
+		}
+	})
+
+	it("allows reranking.enabled override via MEMONGO_RERANKING_ENABLED env var", () => {
+		vi.stubEnv("MEMONGO_RERANKING_ENABLED", "false")
+		try {
+			const cfg = {
+				agents: { defaults: { workspace: "/tmp/memory-test" } },
+				memory: {
+					backend: "mongodb",
+					mongodb: { uri: "mongodb://localhost:27017" },
+				},
+			} as unknown as MemongoConfig
+			const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
+			expect(resolved.mongodb!.reranking.enabled).toBe(false)
 		} finally {
 			vi.unstubAllEnvs()
 		}

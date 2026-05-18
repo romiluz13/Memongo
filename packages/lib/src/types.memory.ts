@@ -2,6 +2,7 @@ export type MemoryBackend = "mongodb"
 
 export type MemoryMongoDBDeploymentProfile =
 	| "atlas-local-preview"
+	| "atlas-managed"
 	| "community-mongot"
 
 export type MemoryMongoDBEmbeddingMode = "automated"

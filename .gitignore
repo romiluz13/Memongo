@@ -16,6 +16,7 @@ __pycache__/
 **/.turbo/
 .next
 **/.next/
+artifacts/
 
 # Local-only (not part of published OSS tree)
 .claude/

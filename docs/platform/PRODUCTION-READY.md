@@ -41,11 +41,20 @@ This lane verifies built `dist` entrypoints, tarball contents, workspace-depende
 
 Use a real MongoDB stack for the core live path.
 
-Atlas Local preview stack for Search and auto-embed:
+Managed Atlas cloud is the control lane for serious benchmark and release validation:
+
+```bash
+export MEMONGO_MONGODB_URI="mongodb+srv://<user>:<password>@<cluster>.mongodb.net/?appName=memongo"
+export VOYAGE_API_KEY="al-your-atlas-model-key"
+bun run mongodb:parity
+```
+
+Atlas Local Preview remains the local reproducibility lane:
 
 ```bash
 export VOYAGE_API_KEY="al-your-atlas-model-key"
 docker compose -f docker/mongodb/docker-compose.preview.yml up -d
+export MEMONGO_MONGODB_URI="mongodb://127.0.0.1:27017/?directConnection=true"
 ```
 
 Then run:
@@ -57,16 +66,15 @@ bunx vitest run \
   src/production-readiness.e2e.test.ts
 ```
 
-Without an `al-...` Atlas Model key on the preview environment, the
-vector-only assertions in `production-readiness.e2e.test.ts` should be treated
-as skipped capability checks.
+Without an `al-...` Atlas Model key, auto-embed/vector assertions should be
+treated as skipped capability checks, not product proof.
 
 ### 5. `live-capability`
 
 Capability lanes are separate from the core release lane and must be run with the environment they actually require.
 
 - Auto-embed/search lane:
-  Requires `docker/mongodb/docker-compose.preview.yml` and an Atlas Model key with the `al-...` prefix. A direct Voyage `pa-...` key is not a valid preview auto-embed environment.
+  Requires managed Atlas cloud or `docker/mongodb/docker-compose.preview.yml` and an Atlas Model key with the `al-...` prefix. A direct Voyage `pa-...` key is not a valid MongoDB auto-embed environment.
 - Replica-set-only lane:
   Use `docker/mongodb/docker-compose.mongodb.yml` `replicaset` or `fullstack`, then run `packages/memory-engine/src/mongodb-e2e.e2e.test.ts` with:
 
@@ -78,7 +86,7 @@ This lane covers transactions, change streams, and other replica-set-specific be
 
 ### 6. `real-agent`
 
-With `apps/api` running against the preview stack:
+With `apps/api` running against managed Atlas cloud or the preview stack:
 
 ```bash
 export GROVE_API_KEY="your-grove-key"

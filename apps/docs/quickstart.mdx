@@ -1,13 +1,13 @@
 ---
 title: Quickstart
-description: Get Memongo running on Atlas Local preview and make your first API call in minutes.
+description: Get Memongo running on MongoDB Atlas or Atlas Local Preview and make your first API call in minutes.
 icon: "play"
 ---
 
 ## Prerequisites
 
 - **Node.js** 20+ and **Bun** 1.2+ installed
-- **Docker** for running the local MongoDB stack
+- **Docker** if you want the local Atlas Preview stack
 
 ## 1. Clone and install
 
@@ -17,17 +17,25 @@ cd memongo
 bun install
 ```
 
-## 2. Start MongoDB
+## 2. Choose MongoDB
 
-Use the canonical Memongo stack: `mongodb/mongodb-atlas-local:preview`.
+Managed MongoDB Atlas cloud is the recommended control lane for serious benchmarks and shared dogfood:
+
+```bash
+export MEMONGO_MONGODB_URI="mongodb+srv://<user>:<password>@<cluster>.mongodb.net/?appName=memongo"
+export VOYAGE_API_KEY="al-your-atlas-model-api-key"
+```
+
+Atlas Local Preview is the local reproducibility lane:
 
 ```bash
 export VOYAGE_API_KEY="al-your-atlas-model-api-key"
 docker compose -f docker/mongodb/docker-compose.preview.yml up -d
+export MEMONGO_MONGODB_URI="mongodb://127.0.0.1:27017/?directConnection=true"
 ```
 
 Use an Atlas Model API key with the `al-...` prefix. Direct Voyage keys with the
-`pa-...` prefix do not enable the preview image's auto-embed path.
+`pa-...` prefix do not enable MongoDB auto-embed.
 
 Preview stack helper:
 
@@ -37,10 +45,10 @@ Preview stack helper:
 
 ## 3. Configure
 
-Set your MongoDB URI:
+Confirm your MongoDB URI is set:
 
 ```bash
-export MEMONGO_MONGODB_URI="mongodb://127.0.0.1:27017/?directConnection=true"
+echo "$MEMONGO_MONGODB_URI"
 ```
 
 Or create a config file at `~/.memongo/memongo.json`:
@@ -74,7 +82,7 @@ curl http://127.0.0.1:3847/health
 curl http://127.0.0.1:3847/v1/status
 ```
 
-Look for a healthy API response and a memory status payload that reports the Atlas Local preview profile.
+Look for a healthy API response and a memory status payload that reports either `atlas-managed` or `atlas-local-preview`.
 
 ## 6. Make your first API call
 

@@ -10,7 +10,7 @@ Memongo reads configuration from environment variables and an optional JSON conf
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `MEMONGO_MONGODB_URI` | MongoDB connection string | `mongodb://localhost:27017` |
+| `MEMONGO_MONGODB_URI` | MongoDB connection string for managed Atlas cloud or Atlas Local Preview | `mongodb://localhost:27017` |
 | `MEMONGO_AGENT_ID` | Agent identifier for memory isolation | `default` |
 | `MEMONGO_API_KEY` | API key for the HTTP server | (none) |
 | `MEMONGO_API_PORT` | API listen port | `3847` |
@@ -37,5 +37,6 @@ Create `~/.memongo/memongo.json`:
 ## Notes
 
 - `MEMONGO_MONGODB_URI` is the quickest way to point the API at MongoDB during development.
-- The Atlas Local preview compose stack in `docker/mongodb/docker-compose.preview.yml` is the canonical path for full functionality.
+- Managed Atlas cloud and Atlas Local Preview both use `embeddingMode: "automated"` with MongoDB auto-embed.
+- The engine infers `deploymentProfile: "atlas-managed"` for `mongodb+srv://...mongodb.net` URIs and `deploymentProfile: "atlas-local-preview"` for local preview URIs unless you set it explicitly.
 - The supported runtime backend is MongoDB.

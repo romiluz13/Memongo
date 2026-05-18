@@ -22,7 +22,7 @@ export type DetectedCapabilities = {
 export type MongoIndexBudgetCheck = {
 	profile: MemoryMongoDBDeploymentProfile
 	plannedSearchIndexes: number
-	budget: number | "self-managed"
+	budget: number | "unbounded"
 	withinBudget: boolean
 }
 
@@ -2453,6 +2453,17 @@ function searchIndexDefinitionSignature(definition: Document): string {
 	return JSON.stringify(sortObject(definition))
 }
 
+export function isSearchIndexTypeCompatible(
+	actual: string | undefined,
+	expected: "search" | "vectorSearch",
+): boolean {
+	if (!actual) return true
+	if (actual === expected) return true
+	// Atlas Local reports vectorSearch indexes backed by autoEmbed as
+	// `autoEmbed`. Treat that as compatible with the vectorSearch create API.
+	return expected === "vectorSearch" && actual === "autoEmbed"
+}
+
 async function ensureNamedSearchIndex(params: {
 	collection: Collection
 	name: string
@@ -2487,11 +2498,11 @@ async function ensureNamedSearchIndex(params: {
 		}>
 		const current = existing[0]
 		if (current) {
-			if (current.type && current.type !== params.type) {
+			if (!isSearchIndexTypeCompatible(current.type, params.type)) {
 				log.warn(
-					`${params.label} search index exists with unexpected type (${current.type}); keeping current type`,
+					`${params.label} search index exists with incompatible type (${current.type}); expected ${params.type}`,
 				)
-				return true
+				return false
 			}
 			const currentDefinition = current.latestDefinition ?? current.definition
 			if (
@@ -2575,7 +2586,7 @@ export function getExpectedSearchIndexTargets(
 	prefix: string,
 	profile: MemoryMongoDBDeploymentProfile,
 ): SearchIndexTarget[] {
-	const budget = assertIndexBudget(profile, 13)
+	const budget = assertIndexBudget(profile, 14)
 	const reducedBudget =
 		!budget.withinBudget &&
 		typeof budget.budget === "number" &&
@@ -2639,6 +2650,14 @@ export function getExpectedSearchIndexTargets(
 				`${prefix}session_chunks_text`,
 				`${prefix}session_chunks_vector`,
 			],
+		},
+		{
+			collectionName: `${prefix}query_cache`,
+			indexNames: [`${prefix}query_cache_vector`],
+		},
+		{
+			collectionName: `${prefix}entities`,
+			indexNames: ["entity_autocomplete"],
 		},
 	]
 }
@@ -2783,8 +2802,8 @@ export async function ensureSearchIndexes(
 	// 14 search indexes total: chunks, kb_chunks, structured_mem, procedures,
 	// events, and session_chunks each get text + vector indexes, plus query_cache
 	// gets 1 vector index, plus entities gets 1 autocomplete index.
-	// Memongo ships one self-managed profile, but we keep the budget helper
-	// for explicit reporting.
+	// Keep the budget helper explicit so future constrained/free-tier profiles
+	// can safely reduce index count without changing index definitions.
 	const budget = assertIndexBudget(profile, 14)
 	const reducedBudget =
 		!budget.withinBudget &&
@@ -3332,11 +3351,11 @@ export async function ensureSearchIndexes(
 // Index budget
 // ---------------------------------------------------------------------------
 
-const PROFILE_BUDGETS: Record<MemoryMongoDBDeploymentProfile, "self-managed"> =
-	{
-		"atlas-local-preview": "self-managed",
-		"community-mongot": "self-managed",
-	}
+const PROFILE_BUDGETS: Record<MemoryMongoDBDeploymentProfile, "unbounded"> = {
+	"atlas-local-preview": "unbounded",
+	"atlas-managed": "unbounded",
+	"community-mongot": "unbounded",
+}
 
 export function assertIndexBudget(
 	profile: MemoryMongoDBDeploymentProfile,

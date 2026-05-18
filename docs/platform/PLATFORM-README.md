@@ -1,6 +1,6 @@
 # Memongo Platform
 
-This repository is the Memongo product: a Turborepo/Bun monorepo that ships MongoDB-native long-term AI memory as a self-hosted stack.
+This repository is the Memongo product: a Turborepo/Bun monorepo that ships MongoDB-native long-term AI memory on MongoDB Atlas cloud and Atlas Local Preview.
 
 ## What ships here
 
@@ -35,19 +35,28 @@ Six advanced memory intelligence capabilities ship natively on MongoDB:
 bun install
 ```
 
-**MongoDB:** canonical Memongo stack for vector + Search + auto-embeddings:
+**MongoDB:** use either managed MongoDB Atlas cloud or Atlas Local Preview. Both lanes use MongoDB Search, Vector Search, and auto-embeddings with an Atlas Model API key.
+
+Managed Atlas cloud:
+
+```bash
+export MEMONGO_MONGODB_URI="mongodb+srv://<user>:<password>@<cluster>.mongodb.net/?appName=memongo"
+export VOYAGE_API_KEY="al-your-atlas-model-api-key"
+```
+
+Atlas Local Preview:
 
 ```bash
 export VOYAGE_API_KEY="al-your-atlas-model-api-key"
 docker compose -f docker/mongodb/docker-compose.preview.yml up -d
+export MEMONGO_MONGODB_URI="mongodb://127.0.0.1:27017/?directConnection=true"
 ```
 
-Use `mongodb://127.0.0.1:27017/?directConnection=true` when pointing local apps or tests at the preview container.
+Use cloud for serious benchmark/control runs and Atlas Local Preview for local reproducibility/parity.
 
 **API:**
 
 ```bash
-export MEMONGO_MONGODB_URI="mongodb://127.0.0.1:27017/?directConnection=true"
 cd apps/api && bun run dev
 ```
 

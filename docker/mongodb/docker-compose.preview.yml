@@ -24,8 +24,10 @@ services:
       - "${MONGODB_PORT:-27017}:27017"
     environment:
       - VOYAGE_API_KEY=${VOYAGE_API_KEY:-}
+      - MONGODB_ATLAS_TELEMETRY_ENABLE=false
     volumes:
       - memongo_preview_data:/data/db
+      - memongo_preview_config:/data/configdb
     # Built-in healthcheck verifies both mongod and mongot are operational
     healthcheck:
       test: ["CMD", "/usr/local/bin/runner", "healthcheck"]
@@ -36,3 +38,4 @@ services:
 
 volumes:
   memongo_preview_data:
+  memongo_preview_config:

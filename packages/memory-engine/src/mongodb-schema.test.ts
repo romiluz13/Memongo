@@ -12,6 +12,7 @@ import {
 	embeddingCacheCollection,
 	metaCollection,
 	getExpectedSearchIndexTargets,
+	isSearchIndexTypeCompatible,
 	isSearchIndexQueryable,
 	waitForSearchCapabilities,
 	kbCollection,
@@ -816,6 +817,15 @@ describe("ensureStandardIndexes", () => {
 // ---------------------------------------------------------------------------
 
 describe("ensureSearchIndexes", () => {
+	it("treats autoEmbed listSearchIndexes type as vectorSearch-compatible", () => {
+		expect(isSearchIndexTypeCompatible("autoEmbed", "vectorSearch")).toBe(true)
+		expect(isSearchIndexTypeCompatible("vectorSearch", "vectorSearch")).toBe(
+			true,
+		)
+		expect(isSearchIndexTypeCompatible("search", "vectorSearch")).toBe(false)
+		expect(isSearchIndexTypeCompatible("vectorSearch", "search")).toBe(false)
+	})
+
 	it("creates text + vector search indexes for the Memongo community profile", async () => {
 		const db = mockDb()
 		const result = await ensureSearchIndexes(
@@ -1197,6 +1207,14 @@ describe("search index readiness helpers", () => {
 				collectionName: "test_session_chunks",
 				indexNames: ["test_session_chunks_text", "test_session_chunks_vector"],
 			},
+			{
+				collectionName: "test_query_cache",
+				indexNames: ["test_query_cache_vector"],
+			},
+			{
+				collectionName: "test_entities",
+				indexNames: ["entity_autocomplete"],
+			},
 		])
 	})
 
@@ -1266,9 +1284,15 @@ describe("search index readiness helpers", () => {
 // ---------------------------------------------------------------------------
 
 describe("assertIndexBudget", () => {
-	it("atlas-local-preview has self-managed budget (unlimited)", () => {
+	it("atlas-local-preview has an unbounded search index budget", () => {
 		const result = assertIndexBudget("atlas-local-preview", 50)
-		expect(result.budget).toBe("self-managed")
+		expect(result.budget).toBe("unbounded")
+		expect(result.withinBudget).toBe(true)
+	})
+
+	it("atlas-managed has the same unbounded search index budget", () => {
+		const result = assertIndexBudget("atlas-managed", 50)
+		expect(result.budget).toBe("unbounded")
 		expect(result.withinBudget).toBe(true)
 	})
 })
@@ -1835,7 +1859,7 @@ describe("query_cache vector search index", () => {
 
 	it("assertIndexBudget uses 13 for total search index count", async () => {
 		const db = mockDb()
-		// This should NOT fail for self-managed profile
+		// This should NOT fail for unbounded Atlas profiles.
 		await ensureSearchIndexes(db, "test_", "atlas-local-preview", "automated")
 		// The budget check is internal, but we verify that the total search index call count
 		// includes events, query_cache, and session_chunks

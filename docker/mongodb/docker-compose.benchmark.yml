@@ -15,10 +15,12 @@ services:
       - "${MONGODB_BENCHMARK_PORT:-27018}:27017"
     environment:
       - VOYAGE_API_KEY=${VOYAGE_API_KEY:-}
+      - MONGODB_ATLAS_TELEMETRY_ENABLE=false
     volumes:
       - memongo_benchmark_preview_data:/data/db
       - memongo_benchmark_preview_config:/data/configdb
-    shm_size: "${MONGODB_BENCHMARK_SHM_SIZE:-2gb}"
+    shm_size: "${MONGODB_BENCHMARK_SHM_SIZE:-4gb}"
+    mem_limit: "${MONGODB_BENCHMARK_MEM_LIMIT:-8g}"
     healthcheck:
       test: ["CMD", "/usr/local/bin/runner", "healthcheck"]
       interval: 10s
