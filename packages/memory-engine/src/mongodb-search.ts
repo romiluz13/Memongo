@@ -186,11 +186,17 @@ function toSearchResult(
 		path.startsWith("events/") && path.length > "events/".length
 			? path.slice("events/".length).trim()
 			: ""
+	const score =
+		typeof doc.score === "number"
+			? Number(doc.score.toFixed(6))
+			: typeof doc.scoreDetails?.value === "number"
+				? Number(doc.scoreDetails.value.toFixed(6))
+				: 0
 	return {
 		path,
 		startLine: typeof doc.startLine === "number" ? doc.startLine : 0,
 		endLine: typeof doc.endLine === "number" ? doc.endLine : 0,
-		score: typeof doc.score === "number" ? Number(doc.score.toFixed(6)) : 0,
+		score,
 		snippet: typeof doc.text === "string" ? doc.text.slice(0, 700) : "",
 		source: sourceType,
 		sourceType,
@@ -213,6 +219,12 @@ function toSearchResult(
 		...(doc.provenance && typeof doc.provenance === "object"
 			? { provenance: doc.provenance as Record<string, unknown> }
 			: {}),
+		...(doc.scoreDetails && typeof doc.scoreDetails === "object"
+			? {
+					scoreDetails:
+						doc.scoreDetails as MemorySearchResult["scoreDetails"],
+				}
+			: {}),
 	}
 }
 
@@ -221,6 +233,14 @@ function filterByScore(
 	minScore: number,
 ): MemorySearchResult[] {
 	return results.filter((r) => r.score >= minScore)
+}
+
+function filterRankFusionResults(
+	results: MemorySearchResult[],
+): MemorySearchResult[] {
+	// $rankFusion scores use MongoDB's RRF formula, so values are commonly
+	// around 0.01-0.03 and are not comparable to vector or lexical scores.
+	return results.filter((r) => r.score > 0)
 }
 
 function resolveLegacySourceFilter(
@@ -663,9 +683,11 @@ export async function hybridSearchScoreFusion(
 					},
 					method: "avg",
 				},
+				scoreDetails: true,
 			},
 		},
 		{ $limit: opts.maxResults },
+		{ $addFields: { scoreDetails: { $meta: "scoreDetails" } } },
 		{
 			$project: {
 				_id: 0,
@@ -680,7 +702,8 @@ export async function hybridSearchScoreFusion(
 				scopeRef: 1,
 				canonicalId: 1,
 				"metadata.sourceEventIds": 1,
-				score: { $meta: "searchScore" },
+				score: "$scoreDetails.value",
+				...(opts.explain?.includeScoreDetails ? { scoreDetails: 1 } : {}),
 			},
 		},
 	]
@@ -775,9 +798,11 @@ export async function hybridSearchRankFusion(
 						text: opts.textWeight,
 					},
 				},
+				scoreDetails: true,
 			},
 		},
 		{ $limit: opts.maxResults },
+		{ $addFields: { scoreDetails: { $meta: "scoreDetails" } } },
 		{
 			$project: {
 				_id: 0,
@@ -792,7 +817,8 @@ export async function hybridSearchRankFusion(
 				scopeRef: 1,
 				canonicalId: 1,
 				"metadata.sourceEventIds": 1,
-				score: { $meta: "searchScore" },
+				score: "$scoreDetails.value",
+				...(opts.explain?.includeScoreDetails ? { scoreDetails: 1 } : {}),
 			},
 		},
 	]
@@ -810,7 +836,7 @@ export async function hybridSearchRankFusion(
 
 	const docs = await runSearchAggregateWithRetry(collection, pipeline)
 	const results = docs.map((doc) => toSearchResult(doc, "memory"))
-	return filterByScore(results, opts.minScore)
+	return filterRankFusionResults(results)
 }
 
 // ---------------------------------------------------------------------------
