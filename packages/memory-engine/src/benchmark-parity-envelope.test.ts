@@ -161,7 +161,7 @@ describe("resolveBenchmarkEmbeddingConfig", () => {
 			numDimensions: 1024,
 			quantization: "none",
 		})
-		expect(cfg.model).toBe("voyage-3.5")
+		expect(cfg.model).toBe("voyage-4-large")
 		expect(cfg.dimensions).toBe(1024)
 		expect(cfg.quantization).toBe("float32")
 	})

@@ -49,6 +49,26 @@ describe("classifyBenchmarkFailure (Task 1.4, Recommended Default #2)", () => {
 		).toBe("index-not-ready")
 	})
 
+	test("classifies index-not-ready from strict bootstrap readiness failure", () => {
+		expect(
+			classifyBenchmarkFailure(
+				new Error(
+					"search indexes not fully queryable after bootstrap wait: memongo_canary_events pending=[memongo_canary_events_vector]",
+				),
+			),
+		).toBe("index-not-ready")
+	})
+
+	test("classifies strict Search convergence timeout as index-not-ready", () => {
+		expect(
+			classifyBenchmarkFailure(
+				new Error(
+					"benchmark events search convergence timed out: indexed=493/494",
+				),
+			),
+		).toBe("index-not-ready")
+	})
+
 	test("classifies queue-settle-timeout from the scenario manager error", () => {
 		expect(
 			classifyBenchmarkFailure(
@@ -79,6 +99,16 @@ describe("classifyBenchmarkFailure (Task 1.4, Recommended Default #2)", () => {
 		expect(
 			classifyBenchmarkFailure(
 				new Error("retrieval-miss: expected session not in top-10"),
+			),
+		).toBe("retrieval-miss")
+	})
+
+	test("classifies strict empty planner search as retrieval-miss", () => {
+		expect(
+			classifyBenchmarkFailure(
+				new Error(
+					"planner search failed; legacy fallback disabled: searchV2 returned no results; legacy fallback disabled",
+				),
 			),
 		).toBe("retrieval-miss")
 	})

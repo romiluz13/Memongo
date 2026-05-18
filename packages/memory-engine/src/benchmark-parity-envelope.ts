@@ -122,7 +122,7 @@ export function resolveBenchmarkEmbeddingConfig(
 	mongoCfg: ResolvedEmbeddingInput,
 ): BenchmarkEmbeddingConfig {
 	const envModel = process.env.MEMONGO_BENCHMARK_EMBEDDING_MODEL?.trim()
-	const model = envModel && envModel.length > 0 ? envModel : "voyage-3.5"
+	const model = envModel && envModel.length > 0 ? envModel : "voyage-4-large"
 	return {
 		model,
 		dimensions: mongoCfg.numDimensions,

@@ -771,7 +771,7 @@ describe("mongodb benchmark runner", () => {
 
 		expect(projected.runIdentity?.datasetSha256).toMatch(/^[0-9a-f]{64}$/)
 		expect(projected.runIdentity?.retrievalUnit).toBe("turn")
-		expect(projected.embedding?.model).toBe("voyage-3.5")
+		expect(projected.embedding?.model).toBe("voyage-4-large")
 		expect(projected.embedding?.dimensions).toBe(1024)
 		expect(projected.embedding?.quantization).toBe("float32")
 		expect(projected.reranker?.model).toBe("rerank-2.5")

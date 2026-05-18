@@ -5,11 +5,14 @@ import {
 	rmSync,
 	writeFileSync,
 } from "node:fs"
+import { createServer } from "node:http"
+import type { AddressInfo } from "node:net"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { describe, it, expect } from "vitest"
 import {
 	BENCHMARK_STRICT_FATAL_CLASSES,
+	buildCanaryRuntimeSnapshot,
 	buildCanaryArtifactCaseLimits,
 	computeCanaryAggregateSummary,
 	computeRunShapeHash,
@@ -20,13 +23,23 @@ import {
 	listResumableProgress,
 	resolveCanaryArtifactDir,
 	resolveCanaryFullMode,
+	resolveCanaryHeartbeatIntervalMs,
 	resolveCanaryHttpTimeoutMs,
 	resolveCanaryLogLevel,
+	resolveCanaryModelPreflightMode,
+	resolveCanaryModelPreflightTimeoutMs,
+	resolveCanaryRerankEnabled,
+	resolveCanaryRequireAtlasModelKey,
 	resolveCanaryResumeMode,
 	resolveCanaryRunIntervalMs,
 	resolveCanaryRunsPerCommit,
+	resolveVoyageRerankEndpoint,
+	postJson,
+	runVoyageRerankPreflight,
 	selectStratifiedSubset,
 	shouldCanaryAbort,
+	writeCanaryArtifactFile,
+	writeCanaryHeartbeatFile,
 	writeScenarioProgress,
 	type CanaryPerRunSummary,
 	type RawLongMemEvalEntry,
@@ -107,6 +120,25 @@ describe("selectStratifiedSubset", () => {
 
 		expect(selectedQuestionIds).toEqual(["a-001"])
 		expect(breakdown).toEqual({ alpha: 1 })
+	})
+
+	it("applies totalCaseLimit round-robin across question types", () => {
+		const entries = [
+			makeEntry("a-001", "alpha"),
+			makeEntry("a-002", "alpha"),
+			makeEntry("b-001", "beta"),
+			makeEntry("b-002", "beta"),
+			makeEntry("c-001", "gamma"),
+		]
+
+		const { selectedQuestionIds, breakdown } = selectStratifiedSubset(
+			entries,
+			2,
+			{ totalCaseLimit: 3 },
+		)
+
+		expect(selectedQuestionIds).toEqual(["a-001", "b-001", "c-001"])
+		expect(breakdown).toEqual({ alpha: 1, beta: 1, gamma: 1 })
 	})
 
 	it("selects exact question IDs for targeted replay", () => {
@@ -200,6 +232,195 @@ describe("resolveCanaryHttpTimeoutMs", () => {
 	})
 })
 
+describe("canary request heartbeat", () => {
+	it("defaults to a 30s heartbeat and accepts zero to disable it", () => {
+		expect(resolveCanaryHeartbeatIntervalMs(undefined)).toBe(30_000)
+		expect(resolveCanaryHeartbeatIntervalMs("")).toBe(30_000)
+		expect(resolveCanaryHeartbeatIntervalMs("0")).toBe(0)
+		expect(resolveCanaryHeartbeatIntervalMs("250")).toBe(250)
+	})
+
+	it("rejects invalid heartbeat values", () => {
+		expect(() => resolveCanaryHeartbeatIntervalMs("-1")).toThrow(
+			"MEMONGO_CANARY_HEARTBEAT_INTERVAL_MS",
+		)
+		expect(() => resolveCanaryHeartbeatIntervalMs("soon")).toThrow(
+			"MEMONGO_CANARY_HEARTBEAT_INTERVAL_MS",
+		)
+	})
+
+	it("writes heartbeat state beside the canary artifact", () => {
+		const dir = mkdtempSync(path.join(tmpdir(), "canary-heartbeat-"))
+		try {
+			const heartbeatPath = writeCanaryHeartbeatFile({
+				runDir: dir,
+				runId: "run-1",
+				elapsedMs: 1234,
+				heartbeatCount: 2,
+				message: "waiting for benchmark API response",
+			})
+			const doc = JSON.parse(readFileSync(heartbeatPath, "utf8"))
+			expect(doc).toMatchObject({
+				runId: "run-1",
+				elapsedMs: 1234,
+				heartbeatCount: 2,
+				message: "waiting for benchmark API response",
+			})
+			expect(typeof doc.heartbeatAt).toBe("string")
+		} finally {
+			rmSync(dir, { recursive: true, force: true })
+		}
+	})
+
+	it("rejects HTTP timeouts instead of leaving the promise pending", async () => {
+		const server = createServer((_req, _res) => {
+			// Intentionally never respond; the client timeout must reject.
+		})
+		await new Promise<void>((resolve) => {
+			server.listen(0, "127.0.0.1", resolve)
+		})
+		const address = server.address() as AddressInfo
+		let heartbeatCount = 0
+		try {
+			await expect(
+				postJson({
+					url: `http://127.0.0.1:${address.port}/benchmark`,
+					payload: { ok: true },
+					timeoutMs: 50,
+					heartbeatIntervalMs: 10,
+					onHeartbeat: () => {
+						heartbeatCount += 1
+					},
+				}),
+			).rejects.toThrow("timed out after 50ms")
+			expect(heartbeatCount).toBeGreaterThan(0)
+		} finally {
+			await new Promise<void>((resolve) => {
+				server.close(() => resolve())
+			})
+		}
+	})
+})
+
+describe("canary model preflight", () => {
+	it("defaults to enabled only in strict benchmark mode", () => {
+		expect(
+			resolveCanaryModelPreflightMode({
+				modelPreflightEnv: undefined,
+				strictEnv: "1",
+			}),
+		).toBe(true)
+		expect(
+			resolveCanaryModelPreflightMode({
+				modelPreflightEnv: undefined,
+				strictEnv: undefined,
+			}),
+		).toBe(false)
+		expect(
+			resolveCanaryModelPreflightMode({
+				modelPreflightEnv: "0",
+				strictEnv: "1",
+			}),
+		).toBe(false)
+		expect(
+			resolveCanaryModelPreflightMode({
+				modelPreflightEnv: "1",
+				strictEnv: undefined,
+			}),
+		).toBe(true)
+	})
+
+	it("skips implicit model preflight when reranking is disabled", () => {
+		expect(
+			resolveCanaryModelPreflightMode({
+				modelPreflightEnv: undefined,
+				strictEnv: "1",
+				rerankEnabled: false,
+			}),
+		).toBe(false)
+		expect(
+			resolveCanaryModelPreflightMode({
+				modelPreflightEnv: "1",
+				strictEnv: "1",
+				rerankEnabled: false,
+			}),
+		).toBe(true)
+	})
+
+	it("resolves rerank-off canary ablation envs", () => {
+		expect(
+			resolveCanaryRerankEnabled({
+				rerankingEnabledEnv: "false",
+				benchmarkRerankModeEnv: undefined,
+			}),
+		).toBe(false)
+		expect(
+			resolveCanaryRerankEnabled({
+				rerankingEnabledEnv: "true",
+				benchmarkRerankModeEnv: "raw",
+			}),
+		).toBe(false)
+		expect(
+			resolveCanaryRerankEnabled({
+				rerankingEnabledEnv: "false",
+				benchmarkRerankModeEnv: "rerank",
+			}),
+		).toBe(true)
+	})
+
+	it("routes Atlas model keys to MongoDB's rerank endpoint", () => {
+		expect(resolveVoyageRerankEndpoint("al-test").url).toBe(
+			"https://ai.mongodb.com/v1/rerank",
+		)
+		expect(resolveVoyageRerankEndpoint("al-test").keyKind).toBe("atlas-model")
+		expect(resolveVoyageRerankEndpoint("pa-test").keyKind).toBe("direct-voyage")
+	})
+
+	it("requires Atlas model keys by default for MongoDB-only benchmark lanes", async () => {
+		await expect(
+			runVoyageRerankPreflight({
+				apiKey: "pa-direct-key",
+				fetchImpl: async () => new Response("{}", { status: 200 }),
+			}),
+		).rejects.toThrow("expected a MongoDB Atlas model API key")
+		expect(resolveCanaryRequireAtlasModelKey(undefined)).toBe(true)
+		expect(resolveCanaryRequireAtlasModelKey("0")).toBe(false)
+	})
+
+	it("fails without leaking credentials when rerank rejects the key", async () => {
+		await expect(
+			runVoyageRerankPreflight({
+				apiKey: "al-secret-test-key",
+				fetchImpl: async () => new Response("unauthorized", { status: 401 }),
+			}),
+		).rejects.toThrow("HTTP 401")
+		await expect(
+			runVoyageRerankPreflight({
+				apiKey: "al-secret-test-key",
+				fetchImpl: async () => new Response("unauthorized", { status: 401 }),
+			}),
+		).rejects.not.toThrow("al-secret-test-key")
+	})
+
+	it("accepts a successful rerank probe", async () => {
+		const result = await runVoyageRerankPreflight({
+			apiKey: "al-test-key",
+			fetchImpl: async () => new Response("{}", { status: 200 }),
+		})
+
+		expect(result.status).toBe(200)
+		expect(result.keyKind).toBe("atlas-model")
+	})
+
+	it("validates model preflight timeout", () => {
+		expect(resolveCanaryModelPreflightTimeoutMs(undefined)).toBe(5000)
+		expect(resolveCanaryModelPreflightTimeoutMs("100")).toBe(100)
+		expect(() => resolveCanaryModelPreflightTimeoutMs("-1")).toThrow(
+			"MEMONGO_CANARY_MODEL_PREFLIGHT_TIMEOUT_MS",
+		)
+	})
+})
+
 describe("MEMONGO_CANARY_* env var contract (Task 1.0)", () => {
 	it("MEMONGO_CANARY_ARTIFACT_DIR overrides the default artifact root exactly", () => {
 		expect(resolveCanaryArtifactDir({ runId: "abc", envDir: "/tmp/foo" })).toBe(
@@ -242,9 +463,95 @@ describe("MEMONGO_CANARY_* env var contract (Task 1.0)", () => {
 		expect(resolveCanaryResumeMode("true")).toBe(false)
 		expect(resolveCanaryResumeMode("")).toBe(false)
 	})
+
+	it("captures only safe runtime metadata for started artifacts", () => {
+		const previous = {
+			MEMONGO_MONGODB_COLLECTION_PREFIX:
+				process.env.MEMONGO_MONGODB_COLLECTION_PREFIX,
+			MEMONGO_BUILD_ID: process.env.MEMONGO_BUILD_ID,
+			MEMONGO_BENCHMARK_STRICT: process.env.MEMONGO_BENCHMARK_STRICT,
+			MEMONGO_STRICT_MODE: process.env.MEMONGO_STRICT_MODE,
+			MEMONGO_BENCHMARK_DERIVED_WORK_MODE:
+				process.env.MEMONGO_BENCHMARK_DERIVED_WORK_MODE,
+			MEMONGO_SESSION_EVIDENCE_MODE: process.env.MEMONGO_SESSION_EVIDENCE_MODE,
+			MEMONGO_MONGODB_FUSION_METHOD: process.env.MEMONGO_MONGODB_FUSION_METHOD,
+			MEMONGO_RERANKING_ENABLED: process.env.MEMONGO_RERANKING_ENABLED,
+			MEMONGO_BENCHMARK_RERANK_MODE: process.env.MEMONGO_BENCHMARK_RERANK_MODE,
+			MEMONGO_VOYAGE_RERANK_URL: process.env.MEMONGO_VOYAGE_RERANK_URL,
+			MEMONGO_MONGODB_URI: process.env.MEMONGO_MONGODB_URI,
+			VOYAGE_API_KEY: process.env.VOYAGE_API_KEY,
+		}
+		try {
+			process.env.MEMONGO_MONGODB_COLLECTION_PREFIX = "bench_"
+			process.env.MEMONGO_BUILD_ID = "build-1"
+			process.env.MEMONGO_BENCHMARK_STRICT = "1"
+			process.env.MEMONGO_STRICT_MODE = "1"
+			process.env.MEMONGO_BENCHMARK_DERIVED_WORK_MODE = "disabled"
+			process.env.MEMONGO_SESSION_EVIDENCE_MODE = "B"
+			process.env.MEMONGO_MONGODB_FUSION_METHOD = "js-merge"
+			process.env.MEMONGO_RERANKING_ENABLED = "false"
+			process.env.MEMONGO_BENCHMARK_RERANK_MODE = "raw"
+			process.env.MEMONGO_VOYAGE_RERANK_URL = "https://ai.mongodb.com/v1/rerank"
+			process.env.MEMONGO_MONGODB_URI = "mongodb+srv://secret"
+			process.env.VOYAGE_API_KEY = "al-secret"
+
+			const snapshot = buildCanaryRuntimeSnapshot()
+			expect(snapshot).toMatchObject({
+				collectionPrefix: "bench_",
+				buildId: "build-1",
+				benchmarkStrict: "1",
+				strictMode: "1",
+				derivedWorkMode: "disabled",
+				sessionEvidenceMode: "B",
+				fusionMethod: "js-merge",
+				rerankingEnabled: "false",
+				benchmarkRerankMode: "raw",
+				rerankEndpointFamily: "mongodb-atlas",
+			})
+			expect(JSON.stringify(snapshot)).not.toContain("secret")
+		} finally {
+			for (const [key, value] of Object.entries(previous)) {
+				if (value === undefined) {
+					delete process.env[key]
+				} else {
+					process.env[key] = value
+				}
+			}
+		}
+	})
 })
 
 describe("writeScenarioProgress (Task 1.2)", () => {
+	it("writes canary-artifact.json before the benchmark response exists", () => {
+		const dir = mkdtempSync(path.join(tmpdir(), "canary-artifact-"))
+		try {
+			const artifact = {
+				artifactVersion: 2,
+				runId: "run-1",
+				status: "started" as const,
+				startedAt: "2026-05-17T00:00:00.000Z",
+				datasetPath: "/tmp/dataset.json",
+				datasetHash: "a".repeat(64),
+				casesPerType: 1,
+				totalCaseLimit: 6,
+				fullMode: false,
+				runShapeHash: "shape",
+				totalEvaluations: 6,
+				selectedQuestionIds: ["q1"],
+				questionTypeBreakdown: { alpha: 1 },
+			}
+			const artifactPath = writeCanaryArtifactFile({
+				runDir: dir,
+				artifact,
+			})
+			const doc = JSON.parse(readFileSync(artifactPath, "utf8"))
+			expect(doc.status).toBe("started")
+			expect(doc.benchmarkResponse).toBeUndefined()
+		} finally {
+			rmSync(dir, { recursive: true, force: true })
+		}
+	})
+
 	it("writes progress/{idx}.json synchronously with the required shape", () => {
 		const dir = mkdtempSync(path.join(tmpdir(), "canary-progress-"))
 		try {

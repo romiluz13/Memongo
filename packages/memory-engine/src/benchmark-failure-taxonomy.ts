@@ -66,6 +66,8 @@ export function classifyBenchmarkFailure(err: unknown): BenchmarkFailureClass {
 	if (
 		/search index.*status\s+STALE/i.test(msg) ||
 		/search index.*BUILDING/i.test(msg) ||
+		/search indexes? not fully queryable/i.test(msg) ||
+		/search convergence timed out/i.test(msg) ||
 		/queryable=false/i.test(msg) ||
 		/index-not-ready/i.test(msg)
 	) {
@@ -78,7 +80,11 @@ export function classifyBenchmarkFailure(err: unknown): BenchmarkFailureClass {
 	}
 
 	// 6. retrieval-miss sentinel
-	if (/retrieval-miss/i.test(msg)) {
+	if (
+		/retrieval-miss/i.test(msg) ||
+		/searchV2 returned no results/i.test(msg) ||
+		/planner search failed; legacy fallback disabled/i.test(msg)
+	) {
 		return "retrieval-miss"
 	}
 
