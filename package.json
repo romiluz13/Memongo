@@ -24,6 +24,7 @@
 		"proof-pack": "bun scripts/proof-pack.ts",
 		"memory:inventory": "bun scripts/memory-plan-inventory.ts",
 		"mongodb:parity": "bun scripts/check-mongodb-runtime-parity.ts",
+		"mongodb:prepare": "bun scripts/prepare-mongodb-runtime.ts",
 		"mongodb:prefix-inventory": "bun scripts/mongodb-prefix-inventory.ts",
 		"memory-eval": "bun scripts/real-memory-eval.ts",
 		"compare-memory-eval": "bun scripts/compare-memory-eval.ts",
