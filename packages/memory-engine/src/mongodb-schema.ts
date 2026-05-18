@@ -4,6 +4,7 @@ import {
 	type MemoryMongoDBEmbeddingMode,
 	createSubsystemLogger,
 } from "@memongo/lib"
+import { isEvidenceMirrorEnabled } from "./mongodb-evidence-mirror.js"
 import { sortObject } from "./search-utils.js"
 
 const log = createSubsystemLogger("memory:mongodb:schema")
@@ -175,6 +176,10 @@ export function memoryJobsCollection(db: Db, prefix: string): Collection {
 
 export function sessionChunksCollection(db: Db, prefix: string): Collection {
 	return col(db, prefix, "session_chunks")
+}
+
+export function memoryEvidenceCollection(db: Db, prefix: string): Collection {
+	return col(db, prefix, "memory_evidence")
 }
 
 // ---------------------------------------------------------------------------
@@ -1232,6 +1237,56 @@ const MEMORY_QUARANTINE_SCHEMA: Document = {
 	},
 }
 
+const MEMORY_EVIDENCE_SCHEMA: Document = {
+	$jsonSchema: {
+		bsonType: "object",
+		required: [
+			"source",
+			"path",
+			"text",
+			"agentId",
+			"scope",
+			"scopeRef",
+			"sessionId",
+			"sourceIds",
+			"unit",
+			"canonicalId",
+			"status",
+			"timestamp",
+			"updatedAt",
+			"provenance",
+		],
+		properties: {
+			source: { enum: ["conversation"] },
+			path: { bsonType: "string" },
+			text: { bsonType: "string" },
+			agentId: { bsonType: "string" },
+			scope: { bsonType: "string" },
+			scopeRef: { bsonType: "string" },
+			sessionId: { bsonType: "string" },
+			sourceIds: { bsonType: "array", items: { bsonType: "string" } },
+			sourceEventIds: { bsonType: "array", items: { bsonType: "string" } },
+			unit: {
+				enum: [
+					"turn",
+					"session",
+					"preference",
+					"userfact",
+					"assistant",
+					"temporal_anchor",
+					"graph",
+				],
+			},
+			canonicalId: { bsonType: "string" },
+			status: { enum: ["active", "deleted", "stale"] },
+			timestamp: { bsonType: "date" },
+			updatedAt: { bsonType: "date" },
+			provenance: { bsonType: "object" },
+			metadata: { bsonType: "object" },
+		},
+	},
+}
+
 const VALIDATED_COLLECTIONS: Record<string, Document> = {
 	chunks: CHUNKS_SCHEMA,
 	knowledge_base: KB_SCHEMA,
@@ -1255,6 +1310,7 @@ const VALIDATED_COLLECTIONS: Record<string, Document> = {
 	recall_traces: RECALL_TRACES_SCHEMA,
 	memory_jobs: MEMORY_JOBS_SCHEMA,
 	memory_quarantine: MEMORY_QUARANTINE_SCHEMA,
+	memory_evidence: MEMORY_EVIDENCE_SCHEMA,
 }
 
 export async function ensureCollections(db: Db, prefix: string): Promise<void> {
@@ -1293,6 +1349,7 @@ export async function ensureCollections(db: Db, prefix: string): Promise<void> {
 		"memory_jobs",
 		"session_chunks",
 		"memory_quarantine",
+		...(isEvidenceMirrorEnabled() ? ["memory_evidence"] : []),
 	].map((n) => `${prefix}${n}`)
 	for (const name of needed) {
 		if (!existing.has(name)) {
@@ -2307,6 +2364,42 @@ export async function ensureStandardIndexes(
 	)
 	applied++
 
+	if (isEvidenceMirrorEnabled()) {
+		const memoryEvidence = memoryEvidenceCollection(db, prefix)
+		try {
+			await memoryEvidence.createIndex(
+				{ canonicalId: 1 },
+				{ name: "uq_memory_evidence_canonical", unique: true },
+			)
+			applied++
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err)
+			if (msg.includes("duplicate") || msg.includes("already exists")) {
+				log.warn(
+					"unique index uq_memory_evidence_canonical: index exists or duplicates detected; skipping",
+				)
+				applied++
+			} else {
+				throw err
+			}
+		}
+		await memoryEvidence.createIndex(
+			{ agentId: 1, scope: 1, scopeRef: 1, unit: 1, status: 1 },
+			{ name: "idx_memory_evidence_scope_unit_status" },
+		)
+		applied++
+		await memoryEvidence.createIndex(
+			{ agentId: 1, sessionId: 1, unit: 1 },
+			{ name: "idx_memory_evidence_session_unit" },
+		)
+		applied++
+		await memoryEvidence.createIndex(
+			{ agentId: 1, timestamp: -1 },
+			{ name: "idx_memory_evidence_agent_time" },
+		)
+		applied++
+	}
+
 	log.info(`ensured ${applied} standard indexes`)
 	return applied
 }
@@ -2586,7 +2679,9 @@ export function getExpectedSearchIndexTargets(
 	prefix: string,
 	profile: MemoryMongoDBDeploymentProfile,
 ): SearchIndexTarget[] {
-	const budget = assertIndexBudget(profile, 14)
+	const evidenceMirrorEnabled = isEvidenceMirrorEnabled()
+	const plannedSearchIndexCount = evidenceMirrorEnabled ? 16 : 14
+	const budget = assertIndexBudget(profile, plannedSearchIndexCount)
 	const reducedBudget =
 		!budget.withinBudget &&
 		typeof budget.budget === "number" &&
@@ -2603,6 +2698,17 @@ export function getExpectedSearchIndexTargets(
 	if (reducedBudget) {
 		return targets
 	}
+	const evidenceTargets: SearchIndexTarget[] = evidenceMirrorEnabled
+		? [
+				{
+					collectionName: `${prefix}memory_evidence`,
+					indexNames: [
+						`${prefix}memory_evidence_text`,
+						`${prefix}memory_evidence_vector`,
+					],
+				},
+			]
+		: []
 	if (isLongMemEvalSearchIndexProfile()) {
 		return [
 			...targets,
@@ -2621,6 +2727,7 @@ export function getExpectedSearchIndexTargets(
 				collectionName: `${prefix}events`,
 				indexNames: [`${prefix}events_text`, `${prefix}events_vector`],
 			},
+			...evidenceTargets,
 		]
 	}
 	return [
@@ -2651,6 +2758,7 @@ export function getExpectedSearchIndexTargets(
 				`${prefix}session_chunks_vector`,
 			],
 		},
+		...evidenceTargets,
 		{
 			collectionName: `${prefix}query_cache`,
 			indexNames: [`${prefix}query_cache_vector`],
@@ -2801,10 +2909,13 @@ export async function ensureSearchIndexes(
 
 	// 14 search indexes total: chunks, kb_chunks, structured_mem, procedures,
 	// events, and session_chunks each get text + vector indexes, plus query_cache
-	// gets 1 vector index, plus entities gets 1 autocomplete index.
+	// gets 1 vector index, plus entities gets 1 autocomplete index. The optional
+	// evidence mirror adds two more indexes only when explicitly enabled.
 	// Keep the budget helper explicit so future constrained/free-tier profiles
 	// can safely reduce index count without changing index definitions.
-	const budget = assertIndexBudget(profile, 14)
+	const evidenceMirrorEnabled = isEvidenceMirrorEnabled()
+	const plannedSearchIndexCount = evidenceMirrorEnabled ? 16 : 14
+	const budget = assertIndexBudget(profile, plannedSearchIndexCount)
 	const reducedBudget =
 		!budget.withinBudget &&
 		typeof budget.budget === "number" &&
@@ -3325,6 +3436,84 @@ export async function ensureSearchIndexes(
 				return { text: textCreated, vector: vectorCreated }
 			} else {
 				log.warn(`session_chunks vector search index creation failed: ${msg}`)
+			}
+		}
+	}
+
+	if (evidenceMirrorEnabled) {
+		const memoryEvidence = memoryEvidenceCollection(db, prefix)
+		try {
+			const evidenceTextDef: Document = {
+				mappings: {
+					dynamic: false,
+					fields: {
+						text: { type: "string", analyzer: "lucene.standard" },
+						agentId: { type: "token" },
+						scope: { type: "token" },
+						scopeRef: { type: "token" },
+						sessionId: { type: "token" },
+						unit: { type: "token" },
+						status: { type: "token" },
+						timestamp: { type: "date" },
+					},
+				},
+			}
+			textCreated = await ensureNamedSearchIndex({
+				collection: memoryEvidence,
+				name: `${prefix}memory_evidence_text`,
+				type: "search",
+				definition: evidenceTextDef,
+				label: "memory_evidence text",
+			})
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err)
+			if (msg.includes("already exists") || msg.includes("duplicate")) {
+				textCreated = true
+			} else if (isSearchIndexManagementUnavailable(msg)) {
+				log.warn(`search index management unavailable: ${msg}`)
+				return { text: textCreated, vector: vectorCreated }
+			} else {
+				log.warn(`memory_evidence text search index creation failed: ${msg}`)
+			}
+		}
+
+		try {
+			const evidenceFilterFields: Document[] = [
+				{ type: "filter", path: "agentId" },
+				{ type: "filter", path: "scope" },
+				{ type: "filter", path: "scopeRef" },
+				{ type: "filter", path: "sessionId" },
+				{ type: "filter", path: "unit" },
+				{ type: "filter", path: "status" },
+				{ type: "filter", path: "timestamp" },
+			]
+			const evidenceVectorDef: Document = {
+				fields: [
+					{
+						type: "autoEmbed",
+						modality: "text",
+						path: "text",
+						model: "voyage-4-large",
+					},
+					...evidenceFilterFields,
+				],
+			}
+			vectorCreated = await ensureNamedSearchIndex({
+				collection: memoryEvidence,
+				name: `${prefix}memory_evidence_vector`,
+				type: "vectorSearch",
+				definition: evidenceVectorDef,
+				label: "memory_evidence vector",
+			})
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err)
+			if (msg.includes("already exists") || msg.includes("duplicate")) {
+				vectorCreated = true
+			} else if (isSearchIndexManagementUnavailable(msg)) {
+				log.warn(`search index management unavailable: ${msg}`)
+				return { text: textCreated, vector: vectorCreated }
+			} else {
+				log.warn(`memory_evidence vector search index creation failed: ${msg}`)
 			}
 		}
 	}

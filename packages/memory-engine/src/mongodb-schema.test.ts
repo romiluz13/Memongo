@@ -33,6 +33,7 @@ import {
 	telemetryCollection,
 	accessEventsCollection,
 	sessionChunksCollection,
+	memoryEvidenceCollection,
 	waitForSearchIndexesQueryable,
 } from "./mongodb-schema.js"
 
@@ -393,6 +394,25 @@ describe("ensureCollections", () => {
 		)
 	})
 
+	it("creates memory_evidence only when the evidence mirror is enabled", async () => {
+		const previous = process.env.MEMONGO_EVIDENCE_MIRROR_MODE
+		process.env.MEMONGO_EVIDENCE_MIRROR_MODE = "enabled"
+		try {
+			const db = mockDb([])
+			await ensureCollections(db, "test_")
+			expect(db.createCollection).toHaveBeenCalledWith(
+				"test_memory_evidence",
+				expect.objectContaining({ validationAction: "error" }),
+			)
+		} finally {
+			if (previous === undefined) {
+				delete process.env.MEMONGO_EVIDENCE_MIRROR_MODE
+			} else {
+				process.env.MEMONGO_EVIDENCE_MIRROR_MODE = previous
+			}
+		}
+	})
+
 	it("skips already-existing collections", async () => {
 		const db = mockDb(["test_chunks", "test_files"])
 		await ensureCollections(db, "test_")
@@ -587,6 +607,36 @@ describe("ensureStandardIndexes", () => {
 			createIndex: ReturnType<typeof vi.fn>
 		}
 		expect(sessionChunks.createIndex).toHaveBeenCalledTimes(3)
+	})
+
+	it("creates memory_evidence indexes only when the evidence mirror is enabled", async () => {
+		const previous = process.env.MEMONGO_EVIDENCE_MIRROR_MODE
+		process.env.MEMONGO_EVIDENCE_MIRROR_MODE = "enabled"
+		try {
+			const db = mockDb()
+			const count = await ensureStandardIndexes(db, "test_")
+			const memoryEvidence = db.collection(
+				"test_memory_evidence",
+			) as unknown as {
+				createIndex: ReturnType<typeof vi.fn>
+			}
+			expect(count).toBe(89)
+			expect(memoryEvidence.createIndex).toHaveBeenCalledTimes(4)
+			expect(memoryEvidence.createIndex).toHaveBeenCalledWith(
+				{ canonicalId: 1 },
+				{ name: "uq_memory_evidence_canonical", unique: true },
+			)
+			expect(memoryEvidence.createIndex).toHaveBeenCalledWith(
+				{ agentId: 1, scope: 1, scopeRef: 1, unit: 1, status: 1 },
+				{ name: "idx_memory_evidence_scope_unit_status" },
+			)
+		} finally {
+			if (previous === undefined) {
+				delete process.env.MEMONGO_EVIDENCE_MIRROR_MODE
+			} else {
+				process.env.MEMONGO_EVIDENCE_MIRROR_MODE = previous
+			}
+		}
 	})
 
 	it("creates bi-temporal compound index on events (Task 2.SE-1)", async () => {
@@ -1218,6 +1268,28 @@ describe("search index readiness helpers", () => {
 		])
 	})
 
+	it("includes memory_evidence search targets when the evidence mirror is enabled", () => {
+		const previous = process.env.MEMONGO_EVIDENCE_MIRROR_MODE
+		process.env.MEMONGO_EVIDENCE_MIRROR_MODE = "enabled"
+		try {
+			expect(
+				getExpectedSearchIndexTargets("test_", "atlas-local-preview"),
+			).toContainEqual({
+				collectionName: "test_memory_evidence",
+				indexNames: [
+					"test_memory_evidence_text",
+					"test_memory_evidence_vector",
+				],
+			})
+		} finally {
+			if (previous === undefined) {
+				delete process.env.MEMONGO_EVIDENCE_MIRROR_MODE
+			} else {
+				process.env.MEMONGO_EVIDENCE_MIRROR_MODE = previous
+			}
+		}
+	})
+
 	it("uses a smaller LongMemEval search-index target list when requested", () => {
 		const previous = process.env.MEMONGO_BENCHMARK_SEARCH_INDEX_PROFILE
 		process.env.MEMONGO_BENCHMARK_SEARCH_INDEX_PROFILE = "longmemeval"
@@ -1697,6 +1769,14 @@ describe("sessionChunksCollection", () => {
 	})
 })
 
+describe("memoryEvidenceCollection", () => {
+	it("memoryEvidenceCollection returns prefixed collection", () => {
+		const db = mockDb()
+		memoryEvidenceCollection(db, "oc_")
+		expect(db.collection).toHaveBeenCalledWith("oc_memory_evidence")
+	})
+})
+
 describe("query_cache schema", () => {
 	it("QUERY_CACHE_SCHEMA validates all required fields via ensureCollections", async () => {
 		const db = mockDb([])
@@ -1871,6 +1951,46 @@ describe("query_cache vector search index", () => {
 			createSearchIndex: ReturnType<typeof vi.fn>
 		}
 		expect(sc.createSearchIndex).toHaveBeenCalledTimes(2)
+	})
+
+	it("creates memory_evidence Search and Vector Search indexes when enabled", async () => {
+		const previous = process.env.MEMONGO_EVIDENCE_MIRROR_MODE
+		process.env.MEMONGO_EVIDENCE_MIRROR_MODE = "enabled"
+		try {
+			const db = mockDb()
+			await ensureSearchIndexes(db, "test_", "atlas-local-preview", "automated")
+			const memoryEvidence = db.collection(
+				"test_memory_evidence",
+			) as unknown as {
+				createSearchIndex: ReturnType<typeof vi.fn>
+			}
+			expect(memoryEvidence.createSearchIndex).toHaveBeenCalledTimes(2)
+			const vectorCall = memoryEvidence.createSearchIndex.mock.calls.find(
+				(call) =>
+					(call[0] as { name?: string }).name === "test_memory_evidence_vector",
+			)
+			const fields = (vectorCall?.[0] as Document).definition.fields
+			const filterPaths = fields
+				.filter((field: Document) => field.type === "filter")
+				.map((field: Document) => field.path)
+			expect(filterPaths).toEqual(
+				expect.arrayContaining([
+					"agentId",
+					"scope",
+					"scopeRef",
+					"sessionId",
+					"unit",
+					"status",
+					"timestamp",
+				]),
+			)
+		} finally {
+			if (previous === undefined) {
+				delete process.env.MEMONGO_EVIDENCE_MIRROR_MODE
+			} else {
+				process.env.MEMONGO_EVIDENCE_MIRROR_MODE = previous
+			}
+		}
 	})
 })
 

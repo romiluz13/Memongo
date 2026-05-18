@@ -129,6 +129,10 @@ import {
 	type SessionEvidenceMode,
 } from "./mongodb-session-evidence.js"
 import {
+	isEvidenceMirrorEnabled,
+	writeMemoryEvidenceDocuments,
+} from "./mongodb-evidence-mirror.js"
+import {
 	resolveUserfactEvidenceMode,
 	writeUserfactEvidence,
 } from "./mongodb-userfact-evidence.js"
@@ -162,6 +166,7 @@ import {
 	entitiesCollection,
 	relationsCollection,
 	episodesCollection,
+	memoryEvidenceCollection,
 	filesCollection,
 	getExpectedSearchIndexTargets,
 	kbChunksCollection,
@@ -3739,6 +3744,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		const startedAt = new Date()
 		const eventDocs: Document[] = []
 		const chunkDocs: Document[] = []
+		const eventIdsBySession = new Map<string, string[]>()
 		let conversationsIngested = 0
 		let turnsIngested = 0
 		let skippedConversations = 0
@@ -3787,6 +3793,9 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 						projectedAt: startedAt,
 						metadata,
 					}
+					const sessionEventIds = eventIdsBySession.get(sessionId) ?? []
+					sessionEventIds.push(eventId)
+					eventIdsBySession.set(sessionId, sessionEventIds)
 					const text = renderEventChunkText({
 						role: turn.role,
 						body: turn.body,
@@ -3827,6 +3836,22 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 			chunksCollection(this.db, this.prefix),
 			chunkDocs,
 		)
+		let memoryEvidenceCount = 0
+		if (isEvidenceMirrorEnabled()) {
+			const evidenceScope = params.scope ?? ("agent" as MemoryScope)
+			const evidenceScopeRef = resolveScopeRef({
+				scope: evidenceScope,
+				agentId: this.agentId,
+			})
+			memoryEvidenceCount = await writeMemoryEvidenceDocuments({
+				collection: memoryEvidenceCollection(this.db, this.prefix),
+				conversations: params.conversations,
+				agentId: this.agentId,
+				scope: evidenceScope,
+				scopeRef: evidenceScopeRef,
+				eventIds: eventIdsBySession,
+			})
+		}
 		if (turnsIngested > 0) {
 			await updateLaneCoverage({
 				db: this.db,
@@ -3835,6 +3860,9 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 				increments: {
 					"raw-window": turnsIngested,
 					hybrid: chunkDocs.length,
+					...(memoryEvidenceCount > 0
+						? { "memory-evidence": memoryEvidenceCount }
+						: {}),
 				},
 			})
 		}
@@ -3892,6 +3920,16 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 			indexName: `${this.prefix}session_chunks_text`,
 			textPath: "text",
 		})
+		if (isEvidenceMirrorEnabled()) {
+			await this.waitForBenchmarkSearchCollectionConvergence({
+				agentId,
+				label: "memory_evidence",
+				collection: memoryEvidenceCollection(this.db, this.prefix),
+				collectionName: `${this.prefix}memory_evidence`,
+				indexName: `${this.prefix}memory_evidence_text`,
+				textPath: "text",
+			})
+		}
 	}
 
 	private async waitForBenchmarkEventSearchConvergence(
@@ -4068,6 +4106,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 			"events",
 			"chunks",
 			"session_chunks",
+			"memory_evidence",
 			"structured_mem",
 			"structured_mem_revisions",
 			"procedures",
@@ -8240,6 +8279,69 @@ export async function searchV2(
 									)
 									return [] as MemorySearchResult[]
 								}),
+							)
+						}
+						if (isEvidenceMirrorEnabled()) {
+							const requestedMaxResults = context.maxResults ?? 10
+							const evidenceMaxResults = Math.max(requestedMaxResults * 6, 30)
+							const evidenceFilter: Document = {
+								agentId,
+								scope,
+								scopeRef: agentScopeRef,
+								status: "active",
+							}
+							searches.push(
+								(hybridMode === "vector-only"
+									? vectorSearch(memoryEvidenceCollection(db, prefix), null, {
+											maxResults: evidenceMaxResults,
+											minScore,
+											numCandidates,
+											sessionKey: context.searchOptions?.sessionKey,
+											filter: evidenceFilter,
+											indexName: `${prefix}memory_evidence_vector`,
+											queryText: searchQuery,
+											embeddingMode,
+										})
+									: mongoSearch(
+											memoryEvidenceCollection(db, prefix),
+											searchQuery,
+											null,
+											{
+												maxResults: evidenceMaxResults,
+												minScore,
+												numCandidates,
+												sessionKey: context.searchOptions?.sessionKey,
+												filter: evidenceFilter,
+												fusionMethod,
+												capabilities,
+												vectorIndexName: `${prefix}memory_evidence_vector`,
+												textIndexName: `${prefix}memory_evidence_text`,
+												vectorWeight: 0.65,
+												textWeight: 0.35,
+												embeddingMode,
+											},
+										)
+								)
+									.then((hits) =>
+										hits.map((hit) => ({
+											...hit,
+											source: "conversation" as MemorySource,
+											sourceType: "conversation" as MemorySource,
+											provenance: {
+												...(hit.provenance ?? {}),
+												lane: "memory-evidence",
+											},
+										})),
+									)
+									.catch((err) => {
+										if (isBenchmarkStrictMode()) {
+											throw err
+										}
+										log.warn(
+											`searchV2 memory_evidence path failed: ${String(err)}`,
+										)
+										return [] as MemorySearchResult[]
+									}),
 							)
 						}
 						pathResults =

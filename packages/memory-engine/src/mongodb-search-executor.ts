@@ -1137,9 +1137,27 @@ function readStringProvenance(
 		: undefined
 }
 
+function readEvidenceUnit(result: MemorySearchResult): string | undefined {
+	return readStringProvenance(result.provenance, "evidenceUnit")
+}
+
 export function inferSearchResultLane(
 	result: MemorySearchResult,
 ): SearchResultLane {
+	const evidenceUnit = readEvidenceUnit(result)
+	if (evidenceUnit) {
+		if (evidenceUnit === "graph") return "graph"
+		if (evidenceUnit === "turn") return "conversation"
+		if (
+			evidenceUnit === "session" ||
+			evidenceUnit === "preference" ||
+			evidenceUnit === "userfact" ||
+			evidenceUnit === "assistant" ||
+			evidenceUnit === "temporal_anchor"
+		) {
+			return "session-evidence"
+		}
+	}
 	const provenanceLane = readStringProvenance(result.provenance, "lane")
 	if (provenanceLane) {
 		if (
@@ -1151,7 +1169,8 @@ export function inferSearchResultLane(
 		}
 		if (
 			provenanceLane === "session-evidence" ||
-			provenanceLane === "session_chunks"
+			provenanceLane === "session_chunks" ||
+			provenanceLane === "memory-evidence"
 		) {
 			return "session-evidence"
 		}
@@ -1170,6 +1189,11 @@ export function inferSearchResultLane(
 	if (
 		result.path.startsWith("session-chunk/") ||
 		result.path.startsWith("session_chunks/") ||
+		result.path.startsWith("memory-evidence/session:") ||
+		result.path.startsWith("memory-evidence/preference:") ||
+		result.path.startsWith("memory-evidence/userfact:") ||
+		result.path.startsWith("memory-evidence/assistant:") ||
+		result.path.startsWith("memory-evidence/temporal_anchor:") ||
 		result.canonicalId?.startsWith("session-chunk/")
 	) {
 		return "session-evidence"
@@ -1190,7 +1214,7 @@ function hasSessionEvidence(result: MemorySearchResult): boolean {
 }
 
 function queryPrefersConversationEvidence(query: string): boolean {
-	return /\b(i|me|my|we|us|our|you told|i told|i said|we discussed|we talked|previous conversation|earlier conversation|last conversation|did i|did we|have i|have we|how many|appointment|preference|prefer|like|dislike|remember|advice|tips?|suggest(?:ion)?s?|recommend(?:ation)?s?)\b/i.test(
+	return /\b(i|me|my|we|us|our|you told|i told|i said|we discussed|we talked|previous conversation|earlier conversation|last conversation|did i|did we|have i|have we|how many|appointment|preference|prefer|like|dislike|remember|advice|tips?|suggest(?:ion)?s?|recommend(?:ation)?s?|session|sessions|changed|updated|timeline)\b/i.test(
 		query,
 	)
 }
@@ -1201,6 +1225,24 @@ function queryPrefersCurrentConversationEvidence(query: string): boolean {
 		/\b(current|currently|right now|now|latest|recent|recently|last|setup)\b/i.test(
 			query,
 		)
+	)
+}
+
+function queryNeedsDistinctSessionCoverage(
+	query: string,
+	classification: MemorySearchClassification,
+): boolean {
+	return (
+		classification === "temporal" ||
+		/\b(temporal|timeline|when|before|after|earlier|later|first|last|latest|recent|recently|previous|changed|updated|now|currently|multi-session|multiple sessions|across sessions|which sessions?|how many|over time)\b/i.test(
+			query,
+		)
+	)
+}
+
+function queryPrefersPreferenceEvidence(query: string): boolean {
+	return /\b(prefer|preference|like|dislike|favorite|want|need|advice|tips?|suggest(?:ion)?s?|recommend(?:ation)?s?)\b/i.test(
+		query,
 	)
 }
 
@@ -1296,6 +1338,11 @@ export function applyLaneAwareResultControls(params: {
 	const conversationEvidenceQuery = queryPrefersConversationEvidence(
 		params.query,
 	)
+	const distinctSessionCoverageQuery = queryNeedsDistinctSessionCoverage(
+		params.query,
+		params.classification,
+	)
+	const preferenceEvidenceQuery = queryPrefersPreferenceEvidence(params.query)
 	const currentConversationEvidenceQuery =
 		queryPrefersCurrentConversationEvidence(params.query)
 	const summary: LaneControlSummary = {
@@ -1331,12 +1378,27 @@ export function applyLaneAwareResultControls(params: {
 
 	const rescored = params.results.map((result) => {
 		const lane = inferSearchResultLane(result)
+		const evidenceUnit = readEvidenceUnit(result)
 		let multiplier = 1
 		if (
 			(lane === "conversation" || lane === "session-evidence") &&
 			hasSessionEvidence(result)
 		) {
-			multiplier = 1.18
+			if (
+				preferenceEvidenceQuery &&
+				(evidenceUnit === "preference" ||
+					evidenceUnit === "userfact" ||
+					evidenceUnit === "session")
+			) {
+				multiplier = evidenceUnit === "preference" ? 1.65 : 1.4
+			} else if (
+				distinctSessionCoverageQuery &&
+				(evidenceUnit === "session" || evidenceUnit === "temporal_anchor")
+			) {
+				multiplier = 1.32
+			} else {
+				multiplier = lane === "session-evidence" ? 1.24 : 1.14
+			}
 			summary.boosted++
 		} else if (
 			!pathAllowsLaneDominance({
@@ -1401,6 +1463,8 @@ export function applyLaneAwareResultControls(params: {
 	const diversified = diversifyTopSessions({
 		results: [...top, ...rest, ...overflow],
 		topK,
+		maxPerSession:
+			conversationEvidenceQuery || distinctSessionCoverageQuery ? 1 : 2,
 	})
 	summary.sessionCapped = diversified.capped
 	summary.applied =

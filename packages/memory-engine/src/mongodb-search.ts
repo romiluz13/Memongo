@@ -205,7 +205,11 @@ function toSearchResult(
 			: eventId
 				? { canonicalId: `event:${eventId}` }
 				: {}),
-		...(doc.updatedAt instanceof Date ? { timestamp: doc.updatedAt } : {}),
+		...(doc.timestamp instanceof Date
+			? { timestamp: doc.timestamp }
+			: doc.updatedAt instanceof Date
+				? { timestamp: doc.updatedAt }
+				: {}),
 		...(typeof doc.sessionId === "string" ? { sessionId: doc.sessionId } : {}),
 		...(typeof doc.scope === "string"
 			? { scope: doc.scope as MemoryScope }
@@ -221,8 +225,7 @@ function toSearchResult(
 			: {}),
 		...(doc.scoreDetails && typeof doc.scoreDetails === "object"
 			? {
-					scoreDetails:
-						doc.scoreDetails as MemorySearchResult["scoreDetails"],
+					scoreDetails: doc.scoreDetails as MemorySearchResult["scoreDetails"],
 				}
 			: {}),
 	}
@@ -362,6 +365,66 @@ export function splitAtlasSearchFilter(filter?: Document): {
 	}
 }
 
+function extractQuotedPhrases(query: string): string[] {
+	return [...query.matchAll(/"([^"]{2,120})"|'([^']{2,120})'/g)]
+		.map((match) => (match[1] ?? match[2] ?? "").trim())
+		.filter(Boolean)
+		.slice(0, 4)
+}
+
+function buildTextSearchShouldClauses(query: string): Document[] {
+	const should: Document[] = []
+	for (const phrase of extractQuotedPhrases(query)) {
+		should.push({
+			phrase: {
+				query: phrase,
+				path: "text",
+				score: { boost: { value: 6 } },
+			},
+		})
+	}
+	if (
+		/\b(prefer|preference|like|dislike|favorite|want|need|advice|tips?|recommend(?:ation)?s?)\b/i.test(
+			query,
+		)
+	) {
+		should.push({
+			text: {
+				query:
+					"prefer preference like favorite want need advice recommendation",
+				path: "text",
+				score: { boost: { value: 2 } },
+			},
+		})
+	}
+	if (
+		/\b(when|before|after|earlier|later|recent|latest|last|first|updated|changed|currently|now|timeline|session)\b/i.test(
+			query,
+		)
+	) {
+		should.push({
+			text: {
+				query: "session date before after recent latest updated changed",
+				path: "text",
+				score: { boost: { value: 1.5 } },
+			},
+		})
+	}
+	return should
+}
+
+function buildTextSearchCompound(
+	query: string,
+	compoundFilter?: Document[],
+): Document {
+	const should = buildTextSearchShouldClauses(query)
+	return {
+		must: [{ text: { query, path: "text" } }],
+		...(compoundFilter ? { filter: compoundFilter } : {}),
+		...(should.length > 0 ? { should } : {}),
+	}
+}
+
 // ---------------------------------------------------------------------------
 // $vectorSearch stage builder
 // ---------------------------------------------------------------------------
@@ -493,10 +556,14 @@ export async function vectorSearch(
 				text: 1,
 				source: 1,
 				sessionId: 1,
+				sourceEventIds: 1,
 				updatedAt: 1,
+				timestamp: 1,
 				scope: 1,
 				scopeRef: 1,
 				canonicalId: 1,
+				unit: 1,
+				provenance: 1,
 				"metadata.sourceEventIds": 1,
 				score: { $meta: "vectorSearchScore" },
 			},
@@ -546,10 +613,7 @@ export async function keywordSearch(
 		{
 			$search: {
 				index: opts.indexName,
-				compound: {
-					must: [{ text: { query, path: "text" } }],
-					...(compoundFilter ? { filter: compoundFilter } : {}),
-				},
+				compound: buildTextSearchCompound(query, compoundFilter),
 				...(opts.explain?.includeScoreDetails ? { scoreDetails: true } : {}),
 			},
 		},
@@ -564,10 +628,14 @@ export async function keywordSearch(
 				text: 1,
 				source: 1,
 				sessionId: 1,
+				sourceEventIds: 1,
 				updatedAt: 1,
+				timestamp: 1,
 				scope: 1,
 				scopeRef: 1,
 				canonicalId: 1,
+				unit: 1,
+				provenance: 1,
 				"metadata.sourceEventIds": 1,
 				score: { $meta: "searchScore" },
 				...(opts.explain?.includeScoreDetails
@@ -664,10 +732,7 @@ export async function hybridSearchScoreFusion(
 							{
 								$search: {
 									index: opts.textIndexName,
-									compound: {
-										must: [{ text: { query, path: "text" } }],
-										...(compoundFilter ? { filter: compoundFilter } : {}),
-									},
+									compound: buildTextSearchCompound(query, compoundFilter),
 								},
 							},
 							...(postMatch ? [{ $match: postMatch }] : []),
@@ -697,10 +762,14 @@ export async function hybridSearchScoreFusion(
 				text: 1,
 				source: 1,
 				sessionId: 1,
+				sourceEventIds: 1,
 				updatedAt: 1,
+				timestamp: 1,
 				scope: 1,
 				scopeRef: 1,
 				canonicalId: 1,
+				unit: 1,
+				provenance: 1,
 				"metadata.sourceEventIds": 1,
 				score: "$scoreDetails.value",
 				...(opts.explain?.includeScoreDetails ? { scoreDetails: 1 } : {}),
@@ -781,10 +850,7 @@ export async function hybridSearchRankFusion(
 							{
 								$search: {
 									index: opts.textIndexName,
-									compound: {
-										must: [{ text: { query, path: "text" } }],
-										...(compoundFilter ? { filter: compoundFilter } : {}),
-									},
+									compound: buildTextSearchCompound(query, compoundFilter),
 								},
 							},
 							...(postMatch ? [{ $match: postMatch }] : []),
@@ -812,10 +878,14 @@ export async function hybridSearchRankFusion(
 				text: 1,
 				source: 1,
 				sessionId: 1,
+				sourceEventIds: 1,
 				updatedAt: 1,
+				timestamp: 1,
 				scope: 1,
 				scopeRef: 1,
 				canonicalId: 1,
+				unit: 1,
+				provenance: 1,
 				"metadata.sourceEventIds": 1,
 				score: "$scoreDetails.value",
 				...(opts.explain?.includeScoreDetails ? { scoreDetails: 1 } : {}),
