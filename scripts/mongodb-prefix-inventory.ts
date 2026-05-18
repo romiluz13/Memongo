@@ -135,7 +135,9 @@ async function listMongotCollscans(
 				},
 				{
 					$match: {
-						ns: { $regex: `^${database.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\.` },
+						ns: {
+							$regex: `^${database.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\.`,
+						},
 						planSummary: "COLLSCAN",
 					},
 				},
@@ -197,15 +199,13 @@ try {
 		const name = collection.name
 		const prefix = detectPrefix(name)
 		if (prefix === null || !prefix.startsWith("memongo_")) continue
-		const summary =
-			prefixMap.get(prefix) ??
-			{
-				prefix,
-				collections: 0,
-				classicIndexes: 0,
-				nonIdClassicIndexes: 0,
-				searchIndexes: includeSearchIndexes ? 0 : null,
-			}
+		const summary = prefixMap.get(prefix) ?? {
+			prefix,
+			collections: 0,
+			classicIndexes: 0,
+			nonIdClassicIndexes: 0,
+			searchIndexes: includeSearchIndexes ? 0 : null,
+		}
 		summary.collections += 1
 		const indexes = await db.collection(name).indexes()
 		summary.classicIndexes += indexes.length
@@ -241,7 +241,10 @@ try {
 			0,
 		),
 		totalSearchIndexes: includeSearchIndexes
-			? prefixes.reduce((total, prefix) => total + (prefix.searchIndexes ?? 0), 0)
+			? prefixes.reduce(
+					(total, prefix) => total + (prefix.searchIndexes ?? 0),
+					0,
+				)
 			: null,
 		mongotCollscans: await listMongotCollscans(client, database),
 	}

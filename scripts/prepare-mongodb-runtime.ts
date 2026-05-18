@@ -88,7 +88,11 @@ function sleep(ms: number): Promise<void> {
 
 async function waitForSearchIndexes(db: Db, options: PrepareOptions) {
 	const startedAt = Date.now()
-	let status = await countReadySearchIndexes(db, options.prefix, options.profile)
+	let status = await countReadySearchIndexes(
+		db,
+		options.prefix,
+		options.profile,
+	)
 	while (status.pending.length > 0 && Date.now() - startedAt < options.waitMs) {
 		const waitedMs = Date.now() - startedAt
 		console.warn(
@@ -121,10 +125,7 @@ async function prepareRuntime(options: PrepareOptions) {
 			"none",
 			1024,
 		)
-		const capabilities = await detectCapabilities(
-			db,
-			`${options.prefix}chunks`,
-		)
+		const capabilities = await detectCapabilities(db, `${options.prefix}chunks`)
 		const searchStatus = await waitForSearchIndexes(db, options)
 		const ok =
 			capabilities.vectorSearch &&

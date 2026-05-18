@@ -655,15 +655,20 @@ describe("mongoSearch dispatcher", () => {
 		]
 		const col = mockCollectionWithResults(rrfDocs)
 
-		const results = await hybridSearchRankFusion(col, "test query", [0.1, 0.2], {
-			maxResults: 10,
-			minScore: 0.1,
-			vectorIndexName: "chunks_vector",
-			textIndexName: "chunks_text",
-			vectorWeight: 0.7,
-			textWeight: 0.3,
-			embeddingMode: "automated",
-		})
+		const results = await hybridSearchRankFusion(
+			col,
+			"test query",
+			[0.1, 0.2],
+			{
+				maxResults: 10,
+				minScore: 0.1,
+				vectorIndexName: "chunks_vector",
+				textIndexName: "chunks_text",
+				vectorWeight: 0.7,
+				textWeight: 0.3,
+				embeddingMode: "automated",
+			},
+		)
 
 		expect(results).toHaveLength(1)
 		expect(results[0]?.score).toBe(0.004918)
@@ -686,19 +691,24 @@ describe("mongoSearch dispatcher", () => {
 			},
 		])
 
-		const results = await hybridSearchRankFusion(col, "test query", [0.1, 0.2], {
-			maxResults: 10,
-			minScore: 0.1,
-			vectorIndexName: "chunks_vector",
-			textIndexName: "chunks_text",
-			vectorWeight: 0.7,
-			textWeight: 0.3,
-			embeddingMode: "automated",
-			explain: {
-				enabled: true,
-				includeScoreDetails: true,
+		const results = await hybridSearchRankFusion(
+			col,
+			"test query",
+			[0.1, 0.2],
+			{
+				maxResults: 10,
+				minScore: 0.1,
+				vectorIndexName: "chunks_vector",
+				textIndexName: "chunks_text",
+				vectorWeight: 0.7,
+				textWeight: 0.3,
+				embeddingMode: "automated",
+				explain: {
+					enabled: true,
+					includeScoreDetails: true,
+				},
 			},
-		})
+		)
 
 		const pipeline = (col.aggregate as ReturnType<typeof vi.fn>).mock
 			.calls[0][0]
