@@ -10,6 +10,9 @@ dataset identity, scorer, retrieval unit, LLM/rerank disclosure, warnings,
 degradations, and competitor evidence. The old `98.1%` README claim is excluded:
 it has no committed artifact pack and remains unproven.
 
+For the refreshed cross-competitor queue, see
+[Competitor Benchmark Inventory](./COMPETITOR-BENCHMARK-INVENTORY.md).
+
 ## Claim Policy
 
 Allowed:
