@@ -478,7 +478,14 @@ function mergeTurnPrecisionResults(
 const RECOMMENDATION_MEMORY_QUERY_RE =
 	/\b(?:advice|tips?|suggest(?:ion)?s?|recommend(?:ation)?s?|accessor(?:y|ies)|complement|setup|prefer|preference)\b|(?:\bwhat\s+should\s+i\b|\bany\s+(?:tips?|suggestions?|recommendations?)\b)/i
 
-function turnPrecisionPreferenceSignalBoost(
+const FIRST_PERSON_MEMORY_SIGNAL_RE =
+	/\b(?:i(?:'m| am|'ve| have|'d| would)?|my|we(?:'re| are|'ve| have|'d| would)?|our)\b/i
+const PREFERENCE_CONTEXT_SIGNAL_RE =
+	/\b(?:like|love|prefer|favorite|enjoy|use|using|used|have|own|bought|purchased|consider(?:ing)?|try(?:ing)?|attend(?:ed|ing)?|learn(?:ed|ing)?|made|make|harvest(?:ed|ing)?|grew|grow(?:n|ing)?|garden(?:ing)?|class|course|travel|accessor(?:y|ies)|ingredient(?:s)?|setup|routine|habit)\b/i
+const FIRST_PERSON_ACTIVITY_SIGNAL_RE =
+	/\b(?:i(?:'ve| have| am|'m)?|we(?:'ve| have| are|'re)?|my|our)\b.{0,96}\b(?:like|love|prefer|enjoy|use|using|used|have|own|bought|purchased|consider(?:ing)?|try(?:ing)?|attend(?:ed|ing)?|learn(?:ed|ing)?|made|make|harvest(?:ed|ing)?|grew|grow(?:n|ing)?|garden(?:ing)?|class|course|travel|setup|routine|habit)\b/i
+
+export function scorePreferenceGroundingSignalBoost(
 	query: string,
 	result: MemorySearchResult,
 ): number {
@@ -491,13 +498,22 @@ function turnPrecisionPreferenceSignalBoost(
 	const snippet = result.snippet.toLowerCase()
 	let boost = 0.04
 	if (
+		FIRST_PERSON_MEMORY_SIGNAL_RE.test(snippet) &&
+		PREFERENCE_CONTEXT_SIGNAL_RE.test(snippet)
+	) {
+		boost += 0.16
+	}
+	if (FIRST_PERSON_ACTIVITY_SIGNAL_RE.test(snippet)) {
+		boost += 0.08
+	}
+	if (
 		/\b(?:compatible|specifically designed|designed for|as a .* user)\b/i.test(
 			snippet,
 		)
 	) {
 		boost += 0.08
 	}
-	return boost
+	return Math.min(boost, 0.32)
 }
 
 function applyPreferenceEvidenceBoostAfterRerank(
@@ -511,7 +527,8 @@ function applyPreferenceEvidenceBoostAfterRerank(
 		.map((result, index) => ({
 			result: {
 				...result,
-				score: result.score + turnPrecisionPreferenceSignalBoost(query, result),
+				score:
+					result.score + scorePreferenceGroundingSignalBoost(query, result),
 			},
 			index,
 		}))
@@ -1310,7 +1327,7 @@ async function searchTurnEventsWithinSessions(params: {
 			...result,
 			score:
 				Math.max(result.score, 1 - index * 0.01) +
-				turnPrecisionPreferenceSignalBoost(params.query, result),
+				scorePreferenceGroundingSignalBoost(params.query, result),
 		}))
 		.toSorted((left, right) => right.score - left.score)
 		.slice(0, params.maxResults)
@@ -5034,14 +5051,14 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 								nonAbstentionEvaluations,
 							})
 						}
-						if (evidenceCount > 0 && !rawSessionLane) {
+						if (chunkEvidenceCount > 0 && !rawSessionLane) {
 							const settleMs =
 								Number(process.env.MEMONGO_EVIDENCE_SETTLE_MS) || 15_000
 							log.info(
-								`waiting ${settleMs}ms for auto-embed convergence (${evidenceCount} evidence docs)`,
+								`waiting ${settleMs}ms for auto-embed convergence (${chunkEvidenceCount} chunk evidence docs)`,
 								{
 									scenarioId: scenario.scenarioId,
-									evidenceCount,
+									evidenceCount: chunkEvidenceCount,
 								},
 							)
 							await new Promise((r) => setTimeout(r, settleMs))
@@ -8620,7 +8637,10 @@ export async function searchV2(
 						const sessionMode = resolveSessionEvidenceMode(
 							process.env.MEMONGO_SESSION_EVIDENCE_MODE,
 						)
-						if (sessionMode === "B") {
+						if (
+							sessionMode === "B" ||
+							RECOMMENDATION_MEMORY_QUERY_RE.test(searchQuery)
+						) {
 							const requestedMaxResults = context.maxResults ?? 10
 							const sessionEvidenceMaxResults = Math.max(
 								requestedMaxResults,

@@ -15,6 +15,7 @@ import {
 	isConversationEvidenceQuery,
 	MongoDBMemoryManager,
 	resolveExplainSources,
+	scorePreferenceGroundingSignalBoost,
 	writeEventAndProject,
 	searchV2,
 	getV2Status,
@@ -59,6 +60,53 @@ describe("conversation evidence query detection", () => {
 				undefined,
 			),
 		).toBe(true)
+	})
+})
+
+describe("preference grounding signal boost", () => {
+	it("boosts first-person user memories for recommendation queries", () => {
+		const result: MemorySearchResult = {
+			path: "conversation/session-1",
+			startLine: 1,
+			endLine: 1,
+			score: 0.5,
+			snippet:
+				"I've been using a portable power bank on trips and I recently attended a mixology class.",
+			source: "conversation",
+			provenance: { eventRole: "user" },
+		}
+
+		expect(
+			scorePreferenceGroundingSignalBoost(
+				"Any suggestions for my weekend setup?",
+				result,
+			),
+		).toBeGreaterThanOrEqual(0.28)
+	})
+
+	it("does not boost assistant or non-recommendation evidence", () => {
+		const result: MemorySearchResult = {
+			path: "conversation/session-1",
+			startLine: 1,
+			endLine: 1,
+			score: 0.5,
+			snippet: "I've been using a portable power bank on trips.",
+			source: "conversation",
+			provenance: { eventRole: "assistant" },
+		}
+
+		expect(
+			scorePreferenceGroundingSignalBoost(
+				"Any tips for improving battery life?",
+				result,
+			),
+		).toBe(0)
+		expect(
+			scorePreferenceGroundingSignalBoost("What date was the meeting?", {
+				...result,
+				provenance: { eventRole: "user" },
+			}),
+		).toBe(0)
 	})
 })
 
