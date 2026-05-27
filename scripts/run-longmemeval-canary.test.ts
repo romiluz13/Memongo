@@ -28,6 +28,7 @@ import {
 	resolveCanaryLogLevel,
 	resolveCanaryModelPreflightMode,
 	resolveCanaryModelPreflightTimeoutMs,
+	resolveCanaryQuestionIdFilter,
 	resolveCanaryRerankEnabled,
 	resolveCanaryRequireAtlasModelKey,
 	resolveCanaryResumeMode,
@@ -158,6 +159,23 @@ describe("selectStratifiedSubset", () => {
 		expect(breakdown).toEqual({ alpha: 1, beta: 1 })
 	})
 
+	it("applies totalCaseLimit to targeted replay selections", () => {
+		const entries = [
+			makeEntry("q001", "alpha"),
+			makeEntry("q002", "beta"),
+			makeEntry("q003", "beta"),
+		]
+
+		const { selectedQuestionIds, breakdown } = selectStratifiedSubset(
+			entries,
+			2,
+			{ questionIds: ["q001", "q002", "q003"], totalCaseLimit: 2 },
+		)
+
+		expect(selectedQuestionIds).toEqual(["q001", "q002"])
+		expect(breakdown).toEqual({ alpha: 1, beta: 1 })
+	})
+
 	it("fails targeted replay when a question ID is missing", () => {
 		expect(() =>
 			selectStratifiedSubset([makeEntry("q001", "alpha")], 2, {
@@ -209,6 +227,69 @@ describe("selectStratifiedSubset", () => {
 		// Same input always produces same output
 		const { selectedQuestionIds: second } = selectStratifiedSubset(entries, 8)
 		expect(second).toEqual(selectedQuestionIds)
+	})
+})
+
+describe("resolveCanaryQuestionIdFilter", () => {
+	it("parses inline comma-separated question IDs", () => {
+		expect(
+			resolveCanaryQuestionIdFilter({
+				inlineQuestionIds: " q001, q002 ,, q001 ",
+			}),
+		).toEqual({
+			questionIds: ["q001", "q002"],
+			selection: { source: "env" },
+		})
+	})
+
+	it("parses a JSON questionIds file", () => {
+		const dir = mkdtempSync(path.join(tmpdir(), "memongo-question-ids-"))
+		try {
+			const file = path.join(dir, "ids.json")
+			writeFileSync(file, JSON.stringify({ questionIds: ["q003", "q004"] }))
+
+			expect(resolveCanaryQuestionIdFilter({ questionIdsFile: file })).toEqual({
+				questionIds: ["q003", "q004"],
+				selection: { source: "file", questionIdsFile: file },
+			})
+		} finally {
+			rmSync(dir, { recursive: true, force: true })
+		}
+	})
+
+	it("parses a MemPalace-style split file with an explicit key", () => {
+		const dir = mkdtempSync(path.join(tmpdir(), "memongo-split-"))
+		try {
+			const file = path.join(dir, "split.json")
+			writeFileSync(
+				file,
+				JSON.stringify({
+					dev: ["dev-1"],
+					held_out: ["held-1", "held-2"],
+				}),
+			)
+
+			expect(
+				resolveCanaryQuestionIdFilter({
+					splitFile: file,
+					splitKey: "held_out",
+				}),
+			).toEqual({
+				questionIds: ["held-1", "held-2"],
+				selection: { source: "split", splitFile: file, splitKey: "held_out" },
+			})
+		} finally {
+			rmSync(dir, { recursive: true, force: true })
+		}
+	})
+
+	it("rejects ambiguous question-id sources", () => {
+		expect(() =>
+			resolveCanaryQuestionIdFilter({
+				inlineQuestionIds: "q001",
+				splitFile: "/tmp/split.json",
+			}),
+		).toThrow("Set only one canary question-id source")
 	})
 })
 
@@ -1262,10 +1343,10 @@ describe("deriveCanaryRunDir / deriveCanaryRunCollectionPrefix (per-run isolatio
 			}),
 		)
 		expect(new Set(prefixes).size).toBe(3)
-		// Follow the contract: basePrefix + _run${N}_${timestampMs}
-		expect(prefixes[0]).toBe(`memongo_bench__run1_${invocationTimestampMs}`)
-		expect(prefixes[1]).toBe(`memongo_bench__run2_${invocationTimestampMs}`)
-		expect(prefixes[2]).toBe(`memongo_bench__run3_${invocationTimestampMs}`)
+		// Follow the contract: basePrefix + run${N}_${timestampMs}_
+		expect(prefixes[0]).toBe(`memongo_bench_run1_${invocationTimestampMs}_`)
+		expect(prefixes[1]).toBe(`memongo_bench_run2_${invocationTimestampMs}_`)
+		expect(prefixes[2]).toBe(`memongo_bench_run3_${invocationTimestampMs}_`)
 	})
 
 	it("produces distinct prefixes across two different invocations (different invocation timestamps)", () => {
@@ -1283,18 +1364,14 @@ describe("deriveCanaryRunDir / deriveCanaryRunCollectionPrefix (per-run isolatio
 		expect(a).not.toBe(b)
 	})
 
-	it("handles empty basePrefix gracefully (still unique per run)", () => {
-		const a = deriveCanaryRunCollectionPrefix({
-			basePrefix: "",
-			runIndex: 1,
-			invocationTimestampMs: 100,
-		})
-		const b = deriveCanaryRunCollectionPrefix({
-			basePrefix: "",
-			runIndex: 2,
-			invocationTimestampMs: 100,
-		})
-		expect(a).not.toBe(b)
+	it("rejects unsafe base prefixes", () => {
+		expect(() =>
+			deriveCanaryRunCollectionPrefix({
+				basePrefix: "",
+				runIndex: 1,
+				invocationTimestampMs: 100,
+			}),
+		).toThrow("must start with memongo_bench_")
 	})
 })
 

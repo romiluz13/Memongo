@@ -236,6 +236,18 @@ function parseRerankerConfig(raw: unknown):
 	return { model, version, stage }
 }
 
+function parseBenchmarkRetrievalLane(
+	raw: unknown,
+): "native" | "raw-session" | undefined {
+	if (typeof raw !== "string") return undefined
+	const normalized = raw.trim().toLowerCase().replace(/_/g, "-")
+	if (normalized === "native") return "native"
+	if (normalized === "raw-session" || normalized === "session") {
+		return "raw-session"
+	}
+	return undefined
+}
+
 function readDiscoveryProjectionKind(
 	body: Record<string, unknown>,
 ):
@@ -1662,6 +1674,7 @@ export function createV1Router(): Hono {
 					: undefined
 			const embeddingConfig = parseEmbeddingConfig(body.embeddingConfig)
 			const rerankerConfig = parseRerankerConfig(body.rerankerConfig)
+			const retrievalLane = parseBenchmarkRetrievalLane(body.retrievalLane)
 
 			const out = await memongoBridgeRelevanceBenchmark({
 				agentId: readAgentId(body),
@@ -1673,6 +1686,7 @@ export function createV1Router(): Hono {
 				...(datasetSha256 ? { datasetSha256 } : {}),
 				...(embeddingConfig ? { embeddingConfig } : {}),
 				...(rerankerConfig ? { rerankerConfig } : {}),
+				...(retrievalLane ? { retrievalLane } : {}),
 			})
 			try {
 				return c.json(out)

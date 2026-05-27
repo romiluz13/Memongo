@@ -933,6 +933,7 @@ export async function memongoBridgeRelevanceBenchmark(params: {
 		version: string | null
 		stage: "post-fusion" | "pre-fusion" | "none"
 	}
+	retrievalLane?: "native" | "raw-session"
 }): Promise<RelevanceBenchmarkResult> {
 	const m = await memongoBridgeGetManager(params.agentId)
 	return m.relevanceBenchmark({
@@ -944,6 +945,7 @@ export async function memongoBridgeRelevanceBenchmark(params: {
 			? { embeddingConfig: params.embeddingConfig }
 			: {}),
 		...(params.rerankerConfig ? { rerankerConfig: params.rerankerConfig } : {}),
+		...(params.retrievalLane ? { retrievalLane: params.retrievalLane } : {}),
 	})
 }
 

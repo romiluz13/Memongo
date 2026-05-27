@@ -13,6 +13,7 @@ import {
 import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
+import { resolveBenchmarkCollectionPrefix } from "./benchmark-run-isolation.js"
 
 type LaunchMode = "launcher" | "supervisor"
 
@@ -43,6 +44,10 @@ type LaunchRecord = {
 		pollMs: number
 		staleMs: number
 	}
+	mongodb: {
+		collectionPrefix: string
+		collectionPrefixSource: "explicit" | "derived"
+	}
 	paths: {
 		runDir: string
 		launch: string
@@ -63,6 +68,12 @@ const startedAt = new Date()
 const runId =
 	process.env.MEMONGO_BENCHMARK_RUN_ID?.trim() ||
 	`${startedAt.toISOString().replace(/[:.]/g, "-")}-${randomUUID().slice(0, 8)}`
+const collectionPrefixResolution = resolveBenchmarkCollectionPrefix({
+	runId,
+	explicitPrefix: process.env.MEMONGO_MONGODB_COLLECTION_PREFIX,
+})
+process.env.MEMONGO_MONGODB_COLLECTION_PREFIX =
+	collectionPrefixResolution.collectionPrefix
 const workspaceDir =
 	process.env.MEMONGO_WORKSPACE_DIR?.trim() ||
 	path.join(os.homedir(), ".memongo", "workspace")
@@ -195,6 +206,10 @@ function createLaunchRecord(params: {
 		watchdog: {
 			pollMs,
 			staleMs,
+		},
+		mongodb: {
+			collectionPrefix: collectionPrefixResolution.collectionPrefix,
+			collectionPrefixSource: collectionPrefixResolution.source,
 		},
 		paths: {
 			runDir,
@@ -357,6 +372,8 @@ async function runLauncher(): Promise<void> {
 			MEMONGO_BENCHMARK_RUN_ID: runId,
 			MEMONGO_BENCHMARK_RUN_DIR: artifactRoot,
 			MEMONGO_BENCHMARK_LAUNCH_MODE: "supervisor",
+			MEMONGO_MONGODB_COLLECTION_PREFIX:
+				collectionPrefixResolution.collectionPrefix,
 			MEMONGO_STRICT_SEARCH_INDEX_READY:
 				process.env.MEMONGO_STRICT_SEARCH_INDEX_READY?.trim() || "1",
 		},
@@ -383,6 +400,7 @@ async function runLauncher(): Promise<void> {
 		responsePath,
 		errorPath,
 		workspaceDir,
+		collectionPrefix: collectionPrefixResolution.collectionPrefix,
 	}
 	console.log(JSON.stringify(summary, null, 2))
 	console.log("")
@@ -411,6 +429,7 @@ async function runLauncher(): Promise<void> {
 	console.log(`    Failure -> ${errorPath}`)
 	console.log("")
 	console.log(`  Run ID:        ${runId}`)
+	console.log(`  Mongo prefix:  ${collectionPrefixResolution.collectionPrefix}`)
 	console.log(`  Supervisor PID: ${supervisor.pid}`)
 	console.log("=".repeat(72))
 }
@@ -426,6 +445,8 @@ async function runSupervisor(): Promise<void> {
 			MEMONGO_BENCHMARK_RUN_ID: runId,
 			MEMONGO_BENCHMARK_RUN_DIR: artifactRoot,
 			MEMONGO_BENCHMARK_SUPERVISED: "1",
+			MEMONGO_MONGODB_COLLECTION_PREFIX:
+				collectionPrefixResolution.collectionPrefix,
 			MEMONGO_STRICT_SEARCH_INDEX_READY:
 				process.env.MEMONGO_STRICT_SEARCH_INDEX_READY?.trim() || "1",
 		},

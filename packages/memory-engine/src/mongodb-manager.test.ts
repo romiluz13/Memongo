@@ -439,6 +439,69 @@ describe("benchmarkIngest", () => {
 			await rm(outsideDir, { recursive: true, force: true })
 		}
 	})
+
+	it("allows explicit benchmark dataset roots from the environment", async () => {
+		mocked(ingestBenchmarkDataset).mockResolvedValue({
+			datasetPath: "/outside/dataset.jsonl",
+			datasetName: "dataset.jsonl",
+			conversationsIngested: 1,
+			turnsIngested: 2,
+			skippedConversations: 0,
+			failedLines: 0,
+			failedTurns: 0,
+			startedAt: new Date("2026-04-09T00:00:00.000Z"),
+			completedAt: new Date("2026-04-09T00:00:01.000Z"),
+		})
+
+		const workspaceDir = await mkdtemp(
+			path.join(os.tmpdir(), "memongo-manager-workspace-"),
+		)
+		const outsideDir = await mkdtemp(path.join(os.tmpdir(), "memongo-outside-"))
+		const outsideFile = path.join(outsideDir, "dataset.jsonl")
+		const previous = process.env.MEMONGO_BENCHMARK_ALLOWED_ROOTS
+		try {
+			await writeFile(outsideFile, "")
+			process.env.MEMONGO_BENCHMARK_ALLOWED_ROOTS = outsideDir
+			const manager = {
+				workspaceDir,
+				config: {
+					mongodb: {
+						relevance: {
+							benchmark: {
+								datasetPath: path.join(
+									workspaceDir,
+									"benchmarks",
+									"default.jsonl",
+								),
+							},
+						},
+					},
+				},
+				getBenchmarkAllowedRoots:
+					MongoDBMemoryManager.prototype.getBenchmarkAllowedRoots,
+				writeConversationEvent: vi.fn(),
+			} as unknown as MongoDBMemoryManager
+
+			await MongoDBMemoryManager.prototype.benchmarkIngest.call(manager, {
+				datasetPath: outsideFile,
+			})
+
+			expect(ingestBenchmarkDataset).toHaveBeenCalledWith(
+				expect.objectContaining({
+					datasetPath: await realpath(outsideFile),
+					allowedRoots: expect.arrayContaining([outsideDir]),
+				}),
+			)
+		} finally {
+			if (previous === undefined) {
+				delete process.env.MEMONGO_BENCHMARK_ALLOWED_ROOTS
+			} else {
+				process.env.MEMONGO_BENCHMARK_ALLOWED_ROOTS = previous
+			}
+			await rm(workspaceDir, { recursive: true, force: true })
+			await rm(outsideDir, { recursive: true, force: true })
+		}
+	})
 })
 
 describe("benchmark event search convergence", () => {
@@ -450,11 +513,20 @@ describe("benchmark event search convergence", () => {
 		Object.assign(Object.create(MongoDBMemoryManager.prototype), {
 			db: fakeDb,
 			prefix: fakePrefix,
-			capabilities: { textSearch: true },
+			config: {
+				mongodb: {
+					embeddingMode: "automated",
+				},
+			},
+			capabilities: { textSearch: true, vectorSearch: true },
 		}) as MongoDBMemoryManager
 	const makeSearchableFind = (values = ["alpha", "beta"]) =>
 		vi.fn().mockReturnValue({
 			toArray: vi.fn().mockResolvedValue(values.map((body) => ({ body }))),
+		})
+	const makeSearchableTextFind = (values = ["alpha", "beta"]) =>
+		vi.fn().mockReturnValue({
+			toArray: vi.fn().mockResolvedValue(values.map((text) => ({ text }))),
 		})
 
 	it("bounds each MongoDB Search convergence probe with maxTimeMS", async () => {
@@ -731,6 +803,278 @@ describe("benchmark event search convergence", () => {
 				delete process.env.MEMONGO_BENCHMARK_EVENT_SEARCH_PROBE_MAX_TIME_MS
 			else
 				process.env.MEMONGO_BENCHMARK_EVENT_SEARCH_PROBE_MAX_TIME_MS = prevProbe
+		}
+	})
+
+	it("probes raw-session readiness through the session_chunks vector index", async () => {
+		const previousStrict = process.env.MEMONGO_BENCHMARK_STRICT
+		const previousTimeout =
+			process.env.MEMONGO_BENCHMARK_VECTOR_SEARCH_SETTLE_TIMEOUT_MS
+		const previousProbeTimeout =
+			process.env.MEMONGO_BENCHMARK_VECTOR_SEARCH_PROBE_MAX_TIME_MS
+		process.env.MEMONGO_BENCHMARK_STRICT = "1"
+		process.env.MEMONGO_BENCHMARK_VECTOR_SEARCH_SETTLE_TIMEOUT_MS = "1500"
+		process.env.MEMONGO_BENCHMARK_VECTOR_SEARCH_PROBE_MAX_TIME_MS = "1234"
+		try {
+			const { readSearchIndexStatus } = await import(
+				"./mongodb-benchmark-readiness.js"
+			)
+			mocked(readSearchIndexStatus).mockResolvedValue({
+				kind: "ok",
+				status: "READY",
+				queryable: true,
+				indexName: "test_session_chunks_vector",
+			})
+			const aggregate = vi.fn().mockReturnValue({
+				toArray: vi.fn().mockResolvedValue([{ count: 2 }]),
+			})
+			mocked(sessionChunksCollection).mockReturnValue({
+				find: makeSearchableTextFind(),
+				aggregate,
+			} as never)
+			const manager = makeSearchConvergenceManager()
+
+			await (
+				MongoDBMemoryManager.prototype as unknown as {
+					waitForBenchmarkSearchConvergence: (
+						this: MongoDBMemoryManager,
+						params: {
+							agentId: string
+							retrievalLane?: "native" | "raw-session"
+						},
+					) => Promise<void>
+				}
+			).waitForBenchmarkSearchConvergence.call(manager, {
+				agentId: "agent-raw",
+				retrievalLane: "raw-session",
+			})
+
+			expect(aggregate).toHaveBeenCalledWith(
+				[
+					{
+						$vectorSearch: expect.objectContaining({
+							filter: { agentId: "agent-raw" },
+							index: "test_session_chunks_vector",
+							model: "voyage-4-large",
+							path: "text",
+							query: { text: "benchmark vector readiness probe" },
+						}),
+					},
+					{ $count: "count" },
+				],
+				{ maxTimeMS: 1234, signal: expect.any(AbortSignal) },
+			)
+			expect(eventsCollection).not.toHaveBeenCalled()
+			expect(chunksCollection).not.toHaveBeenCalled()
+		} finally {
+			if (previousStrict === undefined) {
+				delete process.env.MEMONGO_BENCHMARK_STRICT
+			} else {
+				process.env.MEMONGO_BENCHMARK_STRICT = previousStrict
+			}
+			if (previousTimeout === undefined) {
+				delete process.env.MEMONGO_BENCHMARK_VECTOR_SEARCH_SETTLE_TIMEOUT_MS
+			} else {
+				process.env.MEMONGO_BENCHMARK_VECTOR_SEARCH_SETTLE_TIMEOUT_MS =
+					previousTimeout
+			}
+			if (previousProbeTimeout === undefined) {
+				delete process.env.MEMONGO_BENCHMARK_VECTOR_SEARCH_PROBE_MAX_TIME_MS
+			} else {
+				process.env.MEMONGO_BENCHMARK_VECTOR_SEARCH_PROBE_MAX_TIME_MS =
+					previousProbeTimeout
+			}
+		}
+	})
+
+	it("uses longer strict defaults for raw-session vector probes", async () => {
+		const previousStrict = process.env.MEMONGO_BENCHMARK_STRICT
+		const previousTimeout =
+			process.env.MEMONGO_BENCHMARK_VECTOR_SEARCH_SETTLE_TIMEOUT_MS
+		const previousFallbackTimeout =
+			process.env.MEMONGO_BENCHMARK_EVENT_SEARCH_SETTLE_TIMEOUT_MS
+		const previousProbeTimeout =
+			process.env.MEMONGO_BENCHMARK_VECTOR_SEARCH_PROBE_MAX_TIME_MS
+		const previousFallbackProbeTimeout =
+			process.env.MEMONGO_BENCHMARK_EVENT_SEARCH_PROBE_MAX_TIME_MS
+		process.env.MEMONGO_BENCHMARK_STRICT = "1"
+		delete process.env.MEMONGO_BENCHMARK_VECTOR_SEARCH_SETTLE_TIMEOUT_MS
+		delete process.env.MEMONGO_BENCHMARK_EVENT_SEARCH_SETTLE_TIMEOUT_MS
+		delete process.env.MEMONGO_BENCHMARK_VECTOR_SEARCH_PROBE_MAX_TIME_MS
+		delete process.env.MEMONGO_BENCHMARK_EVENT_SEARCH_PROBE_MAX_TIME_MS
+		try {
+			const { readSearchIndexStatus } = await import(
+				"./mongodb-benchmark-readiness.js"
+			)
+			mocked(readSearchIndexStatus).mockResolvedValue({
+				kind: "ok",
+				status: "READY",
+				queryable: true,
+				indexName: "test_session_chunks_vector",
+			})
+			const aggregate = vi.fn().mockReturnValue({
+				toArray: vi.fn().mockResolvedValue([{ count: 2 }]),
+			})
+			mocked(sessionChunksCollection).mockReturnValue({
+				find: makeSearchableTextFind(),
+				aggregate,
+			} as never)
+			const manager = makeSearchConvergenceManager()
+
+			await (
+				MongoDBMemoryManager.prototype as unknown as {
+					waitForBenchmarkSearchConvergence: (
+						this: MongoDBMemoryManager,
+						params: {
+							agentId: string
+							retrievalLane?: "native" | "raw-session"
+						},
+					) => Promise<void>
+				}
+			).waitForBenchmarkSearchConvergence.call(manager, {
+				agentId: "agent-defaults",
+				retrievalLane: "raw-session",
+			})
+
+			expect(aggregate).toHaveBeenCalledWith(expect.any(Array), {
+				maxTimeMS: 30000,
+				signal: expect.any(AbortSignal),
+			})
+		} finally {
+			if (previousStrict === undefined) {
+				delete process.env.MEMONGO_BENCHMARK_STRICT
+			} else {
+				process.env.MEMONGO_BENCHMARK_STRICT = previousStrict
+			}
+			if (previousTimeout === undefined) {
+				delete process.env.MEMONGO_BENCHMARK_VECTOR_SEARCH_SETTLE_TIMEOUT_MS
+			} else {
+				process.env.MEMONGO_BENCHMARK_VECTOR_SEARCH_SETTLE_TIMEOUT_MS =
+					previousTimeout
+			}
+			if (previousFallbackTimeout === undefined) {
+				delete process.env.MEMONGO_BENCHMARK_EVENT_SEARCH_SETTLE_TIMEOUT_MS
+			} else {
+				process.env.MEMONGO_BENCHMARK_EVENT_SEARCH_SETTLE_TIMEOUT_MS =
+					previousFallbackTimeout
+			}
+			if (previousProbeTimeout === undefined) {
+				delete process.env.MEMONGO_BENCHMARK_VECTOR_SEARCH_PROBE_MAX_TIME_MS
+			} else {
+				process.env.MEMONGO_BENCHMARK_VECTOR_SEARCH_PROBE_MAX_TIME_MS =
+					previousProbeTimeout
+			}
+			if (previousFallbackProbeTimeout === undefined) {
+				delete process.env.MEMONGO_BENCHMARK_EVENT_SEARCH_PROBE_MAX_TIME_MS
+			} else {
+				process.env.MEMONGO_BENCHMARK_EVENT_SEARCH_PROBE_MAX_TIME_MS =
+					previousFallbackProbeTimeout
+			}
+		}
+	})
+
+	it("waits through pending raw-session vector readiness when aggregate results are visible", async () => {
+		const previousStrict = process.env.MEMONGO_BENCHMARK_STRICT
+		const previousTimeout =
+			process.env.MEMONGO_BENCHMARK_VECTOR_SEARCH_SETTLE_TIMEOUT_MS
+		process.env.MEMONGO_BENCHMARK_STRICT = "1"
+		process.env.MEMONGO_BENCHMARK_VECTOR_SEARCH_SETTLE_TIMEOUT_MS = "1500"
+		try {
+			const { readSearchIndexStatus } = await import(
+				"./mongodb-benchmark-readiness.js"
+			)
+			mocked(readSearchIndexStatus).mockResolvedValue({
+				kind: "ok",
+				status: "PENDING",
+				queryable: false,
+				indexName: "test_session_chunks_vector",
+			})
+			const aggregate = vi.fn().mockReturnValue({
+				toArray: vi.fn().mockResolvedValue([{ count: 2 }]),
+			})
+			mocked(sessionChunksCollection).mockReturnValue({
+				find: makeSearchableTextFind(),
+				aggregate,
+			} as never)
+			const manager = makeSearchConvergenceManager()
+
+			await expect(
+				(
+					MongoDBMemoryManager.prototype as unknown as {
+						waitForBenchmarkSearchConvergence: (
+							this: MongoDBMemoryManager,
+							params: {
+								agentId: string
+								retrievalLane?: "native" | "raw-session"
+							},
+						) => Promise<void>
+					}
+				).waitForBenchmarkSearchConvergence.call(manager, {
+					agentId: "agent-pending",
+					retrievalLane: "raw-session",
+				}),
+			).resolves.toBeUndefined()
+			expect(aggregate).toHaveBeenCalled()
+		} finally {
+			if (previousStrict === undefined) {
+				delete process.env.MEMONGO_BENCHMARK_STRICT
+			} else {
+				process.env.MEMONGO_BENCHMARK_STRICT = previousStrict
+			}
+			if (previousTimeout === undefined) {
+				delete process.env.MEMONGO_BENCHMARK_VECTOR_SEARCH_SETTLE_TIMEOUT_MS
+			} else {
+				process.env.MEMONGO_BENCHMARK_VECTOR_SEARCH_SETTLE_TIMEOUT_MS =
+					previousTimeout
+			}
+		}
+	})
+
+	it("fails strict raw-session convergence when no session evidence documents exist", async () => {
+		const previousStrict = process.env.MEMONGO_BENCHMARK_STRICT
+		process.env.MEMONGO_BENCHMARK_STRICT = "1"
+		try {
+			const { readSearchIndexStatus } = await import(
+				"./mongodb-benchmark-readiness.js"
+			)
+			mocked(readSearchIndexStatus).mockResolvedValue({
+				kind: "ok",
+				status: "READY",
+				queryable: true,
+				indexName: "test_session_chunks_vector",
+			})
+			const aggregate = vi.fn()
+			mocked(sessionChunksCollection).mockReturnValue({
+				find: makeSearchableTextFind([]),
+				aggregate,
+			} as never)
+			const manager = makeSearchConvergenceManager()
+
+			await expect(
+				(
+					MongoDBMemoryManager.prototype as unknown as {
+						waitForBenchmarkSearchConvergence: (
+							this: MongoDBMemoryManager,
+							params: {
+								agentId: string
+								retrievalLane?: "native" | "raw-session"
+							},
+						) => Promise<void>
+					}
+				).waitForBenchmarkSearchConvergence.call(manager, {
+					agentId: "agent-missing-session-evidence",
+					retrievalLane: "raw-session",
+				}),
+			).rejects.toThrow(
+				"benchmark session_chunks vector convergence has no searchable documents",
+			)
+			expect(aggregate).not.toHaveBeenCalled()
+		} finally {
+			if (previousStrict === undefined) {
+				delete process.env.MEMONGO_BENCHMARK_STRICT
+			} else {
+				process.env.MEMONGO_BENCHMARK_STRICT = previousStrict
+			}
 		}
 	})
 })

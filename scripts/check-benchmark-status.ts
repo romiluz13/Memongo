@@ -144,6 +144,7 @@ export function evaluateBenchmarkStatus(
 	const official = readNestedRecord(report, ["metrics", "official"])
 	const longMemEval = asRecord(official.longMemEval)
 	const sessionMetrics = asRecord(longMemEval.session)
+	const loCoMo = asRecord(official.loCoMo)
 	const warnings = asStringArray(report.warnings)
 	const degradations = asStringArray(report.degradations)
 	const failures: string[] = []
@@ -154,7 +155,11 @@ export function evaluateBenchmarkStatus(
 	const internalRAt5 = asNumber(internal.rAt5)
 	const internalRAt10 = asNumber(internal.rAt10)
 	const emptyRate = asNumber(internal.emptyRate)
-	const sessionRecallAnyAt5 = asNumber(sessionMetrics.recallAnyAt5)
+	const datasetKind =
+		typeof corpus.datasetKind === "string" ? corpus.datasetKind : undefined
+	const sessionRecallAnyAt5 =
+		asNumber(sessionMetrics.recallAnyAt5) ??
+		asNumber(loCoMo.sessionEvidenceRecallAt5)
 	const runId =
 		typeof payload.runId === "string"
 			? payload.runId
@@ -206,20 +211,22 @@ export function evaluateBenchmarkStatus(
 	}
 
 	const fullUnlockFailures: string[] = []
-	if (cases < 48) {
-		fullUnlockFailures.push(`cases=${cases} < 48-case canary unlock minimum`)
+	if (datasetKind === "longmemeval" || datasetKind === undefined) {
+		if (cases < 48) {
+			fullUnlockFailures.push(`cases=${cases} < 48-case canary unlock minimum`)
+		}
+		if (internalRAt5 === null || internalRAt5 < 0.85) {
+			fullUnlockFailures.push(
+				`internal R@5=${internalRAt5?.toFixed(4) ?? "missing"} < 0.8500`,
+			)
+		}
+		if (sessionRecallAnyAt5 === null || sessionRecallAnyAt5 < 0.9) {
+			fullUnlockFailures.push(
+				`session RecallAny@5=${sessionRecallAnyAt5?.toFixed(4) ?? "missing"} < 0.9000`,
+			)
+		}
+		fullUnlockFailures.push(...perTypeUnlockFailures(response))
 	}
-	if (internalRAt5 === null || internalRAt5 < 0.85) {
-		fullUnlockFailures.push(
-			`internal R@5=${internalRAt5?.toFixed(4) ?? "missing"} < 0.8500`,
-		)
-	}
-	if (sessionRecallAnyAt5 === null || sessionRecallAnyAt5 < 0.9) {
-		fullUnlockFailures.push(
-			`session RecallAny@5=${sessionRecallAnyAt5?.toFixed(4) ?? "missing"} < 0.9000`,
-		)
-	}
-	fullUnlockFailures.push(...perTypeUnlockFailures(response))
 	if (fullUnlockFailures.length > 0) {
 		notes.push(`full-500 locked: ${fullUnlockFailures.join("; ")}`)
 	}

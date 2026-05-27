@@ -26,6 +26,10 @@ import {
 	type BenchmarkFailureClass,
 	classifyBenchmarkFailure,
 } from "../packages/memory-engine/src/benchmark-failure-taxonomy.js"
+import {
+	resolveBenchmarkCollectionPrefix,
+	validateBenchmarkCollectionPrefix,
+} from "./benchmark-run-isolation.js"
 
 // Bootstrap: set MEMONGO_LOG_LEVEL default to warn (Task 1.1). info during
 // benchmark runs causes PTY backpressure and throttles Node writes. This
@@ -80,6 +84,7 @@ export type CanaryArtifact = {
 		benchmarkStrict: string | null
 		strictMode: string | null
 		derivedWorkMode: string | null
+		benchmarkRetrievalLane: string | null
 		sessionEvidenceMode: string | null
 		fusionMethod: string | null
 		rerankingEnabled: string | null
@@ -93,6 +98,12 @@ export type CanaryArtifact = {
 	fullMode: boolean
 	runShapeHash: string
 	selectedQuestionIdFilter?: string[]
+	questionIdSelection?: {
+		source: "env" | "file" | "split"
+		questionIdsFile?: string
+		splitFile?: string
+		splitKey?: string
+	}
 	totalEvaluations: number
 	selectedQuestionIds: string[]
 	questionTypeBreakdown: Record<string, number>
@@ -131,10 +142,13 @@ const totalCaseLimitRaw = process.env.MEMONGO_CANARY_TOTAL_CASES?.trim()
 const totalCaseLimit = totalCaseLimitRaw
 	? Math.max(1, Math.floor(Number(totalCaseLimitRaw) || 1))
 	: undefined
-const selectedQuestionIdFilter =
-	process.env.MEMONGO_CANARY_QUESTION_IDS?.split(",")
-		.map((id) => id.trim())
-		.filter(Boolean) ?? []
+const questionIdFilterResolution = resolveCanaryQuestionIdFilter({
+	inlineQuestionIds: process.env.MEMONGO_CANARY_QUESTION_IDS,
+	questionIdsFile: process.env.MEMONGO_CANARY_QUESTION_IDS_FILE,
+	splitFile: process.env.MEMONGO_CANARY_SPLIT_FILE,
+	splitKey: process.env.MEMONGO_CANARY_SPLIT_KEY,
+})
+const selectedQuestionIdFilter = questionIdFilterResolution.questionIds
 
 const VOYAGE_RERANK_URL_ATLAS = "https://ai.mongodb.com/v1/rerank"
 const VOYAGE_RERANK_URL_DIRECT = "https://api.voyageai.com/v1/rerank"
@@ -378,7 +392,7 @@ export function deriveCanaryRunDir(params: {
  * Per-run MongoDB collection prefix (collision-proof across runs AND
  * invocations).
  *
- * Format: `{basePrefix}_run{runIndex}_{invocationTimestampMs}`
+ * Format: `{basePrefix}run{runIndex}_{invocationTimestampMs}_`
  *
  * Why both invocation timestamp AND run index:
  * - Different runs in the same invocation need different prefixes (Atlas
@@ -396,7 +410,9 @@ export function deriveCanaryRunCollectionPrefix(params: {
 	runIndex: number
 	invocationTimestampMs: number
 }): string {
-	return `${params.basePrefix}_run${params.runIndex}_${params.invocationTimestampMs}`
+	const prefix = `${params.basePrefix}run${params.runIndex}_${params.invocationTimestampMs}_`
+	validateBenchmarkCollectionPrefix(prefix)
+	return prefix
 }
 
 // ---------------------------------------------------------------------------
@@ -778,6 +794,7 @@ export function buildCanaryRuntimeSnapshot(): NonNullable<
 		benchmarkStrict: nullableEnv("MEMONGO_BENCHMARK_STRICT"),
 		strictMode: nullableEnv("MEMONGO_STRICT_MODE"),
 		derivedWorkMode: nullableEnv("MEMONGO_BENCHMARK_DERIVED_WORK_MODE"),
+		benchmarkRetrievalLane: nullableEnv("MEMONGO_BENCHMARK_RETRIEVAL_LANE"),
 		sessionEvidenceMode: nullableEnv("MEMONGO_SESSION_EVIDENCE_MODE"),
 		fusionMethod: nullableEnv("MEMONGO_MONGODB_FUSION_METHOD"),
 		rerankingEnabled: nullableEnv("MEMONGO_RERANKING_ENABLED"),
@@ -913,9 +930,28 @@ export function selectStratifiedSubset(
 				`Requested question_id(s) not found: ${missing.join(", ")}`,
 			)
 		}
+		if (options.totalCaseLimit && options.totalCaseLimit > 0) {
+			return selectStratifiedEntries(
+				selected,
+				casesPerType,
+				options.totalCaseLimit,
+			)
+		}
 		return summarizeSelectedEntries(selected)
 	}
 
+	return selectStratifiedEntries(entries, casesPerType, options.totalCaseLimit)
+}
+
+function selectStratifiedEntries(
+	entries: RawLongMemEvalEntry[],
+	casesPerType: number,
+	totalCaseLimit?: number,
+): {
+	selected: RawLongMemEvalEntry[]
+	selectedQuestionIds: string[]
+	breakdown: Record<string, number>
+} {
 	// Group by question_type
 	const byType = new Map<string, RawLongMemEvalEntry[]>()
 	for (const entry of entries) {
@@ -933,16 +969,16 @@ export function selectStratifiedSubset(
 		pickedByType.push(group.slice(0, casesPerType))
 	}
 
-	if (options.totalCaseLimit && options.totalCaseLimit > 0) {
+	if (totalCaseLimit && totalCaseLimit > 0) {
 		const selected: RawLongMemEvalEntry[] = []
-		for (let index = 0; selected.length < options.totalCaseLimit; index++) {
+		for (let index = 0; selected.length < totalCaseLimit; index++) {
 			let added = false
 			for (const group of pickedByType) {
 				const entry = group[index]
 				if (!entry) continue
 				selected.push(entry)
 				added = true
-				if (selected.length >= options.totalCaseLimit) break
+				if (selected.length >= totalCaseLimit) break
 			}
 			if (!added) break
 		}
@@ -950,6 +986,99 @@ export function selectStratifiedSubset(
 	}
 
 	return summarizeSelectedEntries(pickedByType.flat())
+}
+
+export function resolveCanaryQuestionIdFilter(params: {
+	inlineQuestionIds?: string
+	questionIdsFile?: string
+	splitFile?: string
+	splitKey?: string
+}): {
+	questionIds: string[]
+	selection?: CanaryArtifact["questionIdSelection"]
+} {
+	const inline = params.inlineQuestionIds?.trim()
+	const questionIdsFile = params.questionIdsFile?.trim()
+	const splitFile = params.splitFile?.trim()
+	const sources = [
+		inline ? "MEMONGO_CANARY_QUESTION_IDS" : null,
+		questionIdsFile ? "MEMONGO_CANARY_QUESTION_IDS_FILE" : null,
+		splitFile ? "MEMONGO_CANARY_SPLIT_FILE" : null,
+	].filter(Boolean)
+	if (sources.length > 1) {
+		throw new Error(
+			`Set only one canary question-id source; got ${sources.join(", ")}`,
+		)
+	}
+
+	if (inline) {
+		return {
+			questionIds: normalizeQuestionIds(inline.split(",")),
+			selection: { source: "env" },
+		}
+	}
+
+	if (questionIdsFile) {
+		const raw = readFileSync(questionIdsFile, "utf8")
+		return {
+			questionIds: parseQuestionIdsFile(raw, questionIdsFile),
+			selection: { source: "file", questionIdsFile },
+		}
+	}
+
+	if (splitFile) {
+		const splitKey = params.splitKey?.trim() || "held_out"
+		const raw = readFileSync(splitFile, "utf8")
+		const parsed = JSON.parse(raw) as unknown
+		if (!isRecord(parsed) || !Array.isArray(parsed[splitKey])) {
+			throw new Error(
+				`MEMONGO_CANARY_SPLIT_FILE ${splitFile} must contain an array at key "${splitKey}"`,
+			)
+		}
+		return {
+			questionIds: normalizeQuestionIds(parsed[splitKey]),
+			selection: { source: "split", splitFile, splitKey },
+		}
+	}
+
+	return { questionIds: [] }
+}
+
+function parseQuestionIdsFile(raw: string, filename: string): string[] {
+	const trimmed = raw.trim()
+	if (!trimmed) {
+		throw new Error(`Question-id file is empty: ${filename}`)
+	}
+	if (trimmed.startsWith("[") || trimmed.startsWith("{")) {
+		const parsed = JSON.parse(trimmed) as unknown
+		if (Array.isArray(parsed)) return normalizeQuestionIds(parsed)
+		if (isRecord(parsed) && Array.isArray(parsed.questionIds)) {
+			return normalizeQuestionIds(parsed.questionIds)
+		}
+		throw new Error(
+			`Question-id file ${filename} must be a JSON array or an object with questionIds[]`,
+		)
+	}
+	return normalizeQuestionIds(trimmed.split(/[\s,]+/))
+}
+
+function normalizeQuestionIds(values: readonly unknown[]): string[] {
+	const seen = new Set<string>()
+	const questionIds: string[] = []
+	for (const value of values) {
+		const id = typeof value === "string" ? value.trim() : ""
+		if (!id || seen.has(id)) continue
+		seen.add(id)
+		questionIds.push(id)
+	}
+	if (questionIds.length === 0) {
+		throw new Error("Question-id selection resolved to zero IDs")
+	}
+	return questionIds
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value)
 }
 
 function summarizeSelectedEntries(entries: RawLongMemEvalEntry[]): {
@@ -1168,11 +1297,9 @@ async function runSingleCanary(params: {
 		runsPerCommit > 1 ? deriveCanaryRunDir({ baseDir, runIndex }) : baseDir
 	mkdirSync(runDir, { recursive: true })
 
-	// Per-run collection prefix — only when running N>1. Single-run keeps the
-	// caller-supplied prefix so existing bench stacks stay addressable.
-	// Always derive from the invocation-level base, NOT from the current
-	// process.env (which was overwritten by run N-1). This keeps the prefix
-	// semantics pure: `{base}_run{N}_{invocationTimestampMs}`.
+	// Per-run collection prefix. Always derive from the invocation-level base,
+	// NOT from the current process.env (which was overwritten by run N-1). This
+	// keeps the prefix semantics pure: `{base}_run{N}_{invocationTimestampMs}`.
 	const perRunPrefix =
 		runsPerCommit > 1
 			? deriveCanaryRunCollectionPrefix({
@@ -1181,12 +1308,10 @@ async function runSingleCanary(params: {
 					invocationTimestampMs,
 				})
 			: invocationBasePrefix
-	if (runsPerCommit > 1) {
-		process.env.MEMONGO_MONGODB_COLLECTION_PREFIX = perRunPrefix
-		console.log(
-			`[canary] run ${runIndex}/${runsPerCommit} using collectionPrefix=${perRunPrefix}`,
-		)
-	}
+	process.env.MEMONGO_MONGODB_COLLECTION_PREFIX = perRunPrefix
+	console.log(
+		`[canary] run ${runIndex}/${runsPerCommit} using collectionPrefix=${perRunPrefix}`,
+	)
 
 	const startedAt = new Date()
 	const runId =
@@ -1332,6 +1457,9 @@ async function runCanaryBody(params: {
 		...(selectedQuestionIdFilter.length > 0
 			? { selectedQuestionIdFilter }
 			: {}),
+		...(questionIdFilterResolution.selection
+			? { questionIdSelection: questionIdFilterResolution.selection }
+			: {}),
 		totalEvaluations: selectedQuestionIds.length,
 		selectedQuestionIds,
 		questionTypeBreakdown: breakdown,
@@ -1381,6 +1509,8 @@ async function runCanaryBody(params: {
 				datasetPath: subsetPath,
 				maxResults,
 				datasetSha256: datasetHash,
+				retrievalLane:
+					nullableEnv("MEMONGO_BENCHMARK_RETRIEVAL_LANE") ?? undefined,
 			},
 		})
 	} catch (err) {
@@ -1534,8 +1664,10 @@ async function main() {
 
 	// Snapshot the invocation-level base collection prefix once so per-run
 	// isolation does not stack `_runN_{ts}` suffixes each pass.
-	const invocationBasePrefix =
-		process.env.MEMONGO_MONGODB_COLLECTION_PREFIX?.trim() || "memongo_bench_"
+	const invocationBasePrefix = resolveBenchmarkCollectionPrefix({
+		runId: fallbackRunId,
+		explicitPrefix: process.env.MEMONGO_MONGODB_COLLECTION_PREFIX,
+	}).collectionPrefix
 
 	const perRunSummaries: CanaryPerRunSummary[] = []
 	for (let runIndex = 1; runIndex <= runsPerCommit; runIndex++) {

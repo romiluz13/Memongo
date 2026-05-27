@@ -17,6 +17,7 @@ import {
 	createBenchmarkRunCounters,
 	percentile50And95,
 	resolveBenchmarkEmbeddingConfig,
+	resolveBenchmarkRetrievalLane,
 	resolveBenchmarkRerankerConfig,
 	resolveDatasetSha256,
 	resolveRetrievalUnit,
@@ -42,6 +43,22 @@ describe("resolveRetrievalUnit", () => {
 		expect(
 			resolveRetrievalUnit(undefined as unknown as MemoryBenchmarkDatasetKind),
 		).toBe("turn")
+	})
+
+	it("returns 'session' for the raw-session benchmark lane", () => {
+		expect(resolveRetrievalUnit("longmemeval", "raw-session")).toBe("session")
+	})
+})
+
+describe("resolveBenchmarkRetrievalLane", () => {
+	it("normalizes raw-session aliases", () => {
+		expect(resolveBenchmarkRetrievalLane("raw_session")).toBe("raw-session")
+		expect(resolveBenchmarkRetrievalLane("session")).toBe("raw-session")
+	})
+
+	it("defaults unknown values to native", () => {
+		expect(resolveBenchmarkRetrievalLane(undefined)).toBe("native")
+		expect(resolveBenchmarkRetrievalLane("nope")).toBe("native")
 	})
 })
 

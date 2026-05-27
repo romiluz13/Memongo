@@ -2680,7 +2680,12 @@ export function getExpectedSearchIndexTargets(
 	profile: MemoryMongoDBDeploymentProfile,
 ): SearchIndexTarget[] {
 	const evidenceMirrorEnabled = isEvidenceMirrorEnabled()
-	const plannedSearchIndexCount = evidenceMirrorEnabled ? 16 : 14
+	const rawSessionIndexProfile = isRawSessionSearchIndexProfile()
+	const plannedSearchIndexCount = rawSessionIndexProfile
+		? 1
+		: evidenceMirrorEnabled
+			? 16
+			: 14
 	const budget = assertIndexBudget(profile, plannedSearchIndexCount)
 	const reducedBudget =
 		!budget.withinBudget &&
@@ -2688,6 +2693,14 @@ export function getExpectedSearchIndexTargets(
 		budget.budget >= 2
 	if (!budget.withinBudget && !reducedBudget) {
 		return []
+	}
+	if (rawSessionIndexProfile) {
+		return [
+			{
+				collectionName: `${prefix}session_chunks`,
+				indexNames: [`${prefix}session_chunks_vector`],
+			},
+		]
 	}
 	const targets: SearchIndexTarget[] = [
 		{
@@ -2776,6 +2789,18 @@ function isLongMemEvalSearchIndexProfile(
 	return (
 		env.MEMONGO_BENCHMARK_SEARCH_INDEX_PROFILE === "longmemeval" ||
 		env.MEMONGO_SKIP_OPTIONAL_SEARCH_INDEXES === "1"
+	)
+}
+
+function isRawSessionSearchIndexProfile(
+	env: NodeJS.ProcessEnv = process.env,
+): boolean {
+	const profile = env.MEMONGO_BENCHMARK_SEARCH_INDEX_PROFILE?.trim()
+	const lane = env.MEMONGO_BENCHMARK_RETRIEVAL_LANE?.trim()
+	return [profile, lane].some((value) =>
+		["raw-session", "raw_session", "session"].includes(
+			value?.toLowerCase() ?? "",
+		),
 	)
 }
 
@@ -2914,7 +2939,12 @@ export async function ensureSearchIndexes(
 	// Keep the budget helper explicit so future constrained/free-tier profiles
 	// can safely reduce index count without changing index definitions.
 	const evidenceMirrorEnabled = isEvidenceMirrorEnabled()
-	const plannedSearchIndexCount = evidenceMirrorEnabled ? 16 : 14
+	const rawSessionIndexProfile = isRawSessionSearchIndexProfile()
+	const plannedSearchIndexCount = rawSessionIndexProfile
+		? 1
+		: evidenceMirrorEnabled
+			? 16
+			: 14
 	const budget = assertIndexBudget(profile, plannedSearchIndexCount)
 	const reducedBudget =
 		!budget.withinBudget &&
@@ -2930,6 +2960,44 @@ export async function ensureSearchIndexes(
 		log.warn(
 			`search index budget tight (${budget.budget}/${budget.plannedSearchIndexes}): creating core chunks indexes only, skipping KB, structured memory, and procedure search indexes`,
 		)
+	}
+	if (rawSessionIndexProfile) {
+		const sessionChunks = sessionChunksCollection(db, prefix)
+		try {
+			const sessionVectorDef: Document = {
+				fields: [
+					{
+						type: "autoEmbed",
+						modality: "text",
+						path: "text",
+						model: "voyage-4-large",
+					},
+					{ type: "filter", path: "agentId" },
+					{ type: "filter", path: "scope" },
+					{ type: "filter", path: "scopeRef" },
+					{ type: "filter", path: "sessionId" },
+				],
+			}
+			const vectorCreated = await ensureNamedSearchIndex({
+				collection: sessionChunks,
+				name: `${prefix}session_chunks_vector`,
+				type: "vectorSearch",
+				definition: sessionVectorDef,
+				label: "session_chunks vector",
+			})
+			return { text: false, vector: vectorCreated }
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err)
+			if (msg.includes("already exists") || msg.includes("duplicate")) {
+				return { text: false, vector: true }
+			}
+			if (isSearchIndexManagementUnavailable(msg)) {
+				log.warn(`search index management unavailable: ${msg}`)
+				return { text: false, vector: false }
+			}
+			log.warn(`session_chunks vector search index creation failed: ${msg}`)
+			return { text: false, vector: false }
+		}
 	}
 	const longMemEvalIndexProfile = isLongMemEvalSearchIndexProfile()
 

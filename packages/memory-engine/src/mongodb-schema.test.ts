@@ -953,6 +953,51 @@ describe("ensureSearchIndexes", () => {
 		expect(autoEmbedField.model).toBe("voyage-4-large")
 	})
 
+	it("creates only the session_chunks vector index for raw-session benchmark profile", async () => {
+		const previousProfile = process.env.MEMONGO_BENCHMARK_SEARCH_INDEX_PROFILE
+		const previousLane = process.env.MEMONGO_BENCHMARK_RETRIEVAL_LANE
+		process.env.MEMONGO_BENCHMARK_RETRIEVAL_LANE = "raw-session"
+		try {
+			const db = mockDb()
+			const result = await ensureSearchIndexes(
+				db,
+				"test_",
+				"atlas-managed",
+				"automated",
+			)
+			expect(result).toEqual({ text: false, vector: true })
+
+			const sessionChunks = db.collection("test_session_chunks") as unknown as {
+				createSearchIndex: ReturnType<typeof vi.fn>
+			}
+			expect(sessionChunks.createSearchIndex).toHaveBeenCalledTimes(1)
+			const [call] = sessionChunks.createSearchIndex.mock.calls
+			expect((call[0] as Document).name).toBe("test_session_chunks_vector")
+			expect((call[0] as Document).type).toBe("vectorSearch")
+			const fields = (call[0] as Document).definition.fields as Document[]
+			expect(fields.find((field) => field.type === "autoEmbed")).toMatchObject({
+				path: "text",
+				model: "voyage-4-large",
+			})
+
+			const chunks = db.collection("test_chunks") as unknown as {
+				createSearchIndex: ReturnType<typeof vi.fn>
+			}
+			expect(chunks.createSearchIndex).not.toHaveBeenCalled()
+		} finally {
+			if (previousProfile === undefined) {
+				delete process.env.MEMONGO_BENCHMARK_SEARCH_INDEX_PROFILE
+			} else {
+				process.env.MEMONGO_BENCHMARK_SEARCH_INDEX_PROFILE = previousProfile
+			}
+			if (previousLane === undefined) {
+				delete process.env.MEMONGO_BENCHMARK_RETRIEVAL_LANE
+			} else {
+				process.env.MEMONGO_BENCHMARK_RETRIEVAL_LANE = previousLane
+			}
+		}
+	})
+
 	it("includes filter fields (source, path, status) in vector index", async () => {
 		const db = mockDb()
 		await ensureSearchIndexes(db, "test_", "atlas-local-preview", "automated")
@@ -1322,6 +1367,31 @@ describe("search index readiness helpers", () => {
 				delete process.env.MEMONGO_BENCHMARK_SEARCH_INDEX_PROFILE
 			} else {
 				process.env.MEMONGO_BENCHMARK_SEARCH_INDEX_PROFILE = previous
+			}
+		}
+	})
+
+	it("uses only session_chunks vector readiness for raw-session benchmark profile", () => {
+		const previousProfile = process.env.MEMONGO_BENCHMARK_SEARCH_INDEX_PROFILE
+		const previousLane = process.env.MEMONGO_BENCHMARK_RETRIEVAL_LANE
+		process.env.MEMONGO_BENCHMARK_RETRIEVAL_LANE = "raw-session"
+		try {
+			expect(getExpectedSearchIndexTargets("test_", "atlas-managed")).toEqual([
+				{
+					collectionName: "test_session_chunks",
+					indexNames: ["test_session_chunks_vector"],
+				},
+			])
+		} finally {
+			if (previousProfile === undefined) {
+				delete process.env.MEMONGO_BENCHMARK_SEARCH_INDEX_PROFILE
+			} else {
+				process.env.MEMONGO_BENCHMARK_SEARCH_INDEX_PROFILE = previousProfile
+			}
+			if (previousLane === undefined) {
+				delete process.env.MEMONGO_BENCHMARK_RETRIEVAL_LANE
+			} else {
+				process.env.MEMONGO_BENCHMARK_RETRIEVAL_LANE = previousLane
 			}
 		}
 	})

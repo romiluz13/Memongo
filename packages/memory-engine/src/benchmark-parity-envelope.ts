@@ -31,6 +31,8 @@ import type {
 	MemoryBenchmarkDatasetKind,
 } from "./types.js"
 
+export type BenchmarkRetrievalLane = "native" | "raw-session"
+
 /**
  * Engine-wide retrieval unit. Memongo retrieves over the `events` collection
  * (turn-level documents), so the unit is `turn`. Exported as a constant so
@@ -38,12 +40,25 @@ import type {
  */
 export const BENCHMARK_RETRIEVAL_UNIT: BenchmarkRetrievalUnit = "turn"
 
+export function resolveBenchmarkRetrievalLane(
+	value?: string,
+): BenchmarkRetrievalLane {
+	const normalized = value?.trim().toLowerCase().replace(/_/g, "-")
+	if (normalized === "raw-session" || normalized === "session") {
+		return "raw-session"
+	}
+	return "native"
+}
+
 export function resolveRetrievalUnit(
 	_datasetKind?: MemoryBenchmarkDatasetKind | "legacy-query",
+	retrievalLane: BenchmarkRetrievalLane = resolveBenchmarkRetrievalLane(
+		process.env.MEMONGO_BENCHMARK_RETRIEVAL_LANE,
+	),
 ): BenchmarkRetrievalUnit {
-	// Current engine architecture: all benchmark retrieval targets the
-	// conversation-event surface. When future retrieval units land
-	// (session-level, QA-pair level), this switch picks them up.
+	if (retrievalLane === "raw-session") {
+		return "session"
+	}
 	return BENCHMARK_RETRIEVAL_UNIT
 }
 

@@ -177,6 +177,22 @@ describe("buildSessionEvidenceDocuments", () => {
 		}
 	})
 
+	it("sets stable path and provenance for benchmark traces", () => {
+		const docs = buildSessionEvidenceDocuments({
+			conversations,
+			agentId: "bench-agent",
+			scope: "agent",
+			scopeRef: "agent:bench-agent",
+			eventIds: new Map(),
+		})
+		expect(docs[0].path).toBe("session_chunks/q1::session_1")
+		expect(docs[0].provenance).toEqual({
+			lane: "session_chunks",
+			unit: "session",
+			source: "session-evidence",
+		})
+	})
+
 	it("preserves sourceEventIds from the event map", () => {
 		const docs = buildSessionEvidenceDocuments({
 			conversations,

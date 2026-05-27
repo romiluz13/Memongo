@@ -27,6 +27,7 @@ export type SessionEvidenceMode = "A" | "B" | "none"
 
 export type SessionEvidenceDocument = {
 	source: "session-evidence"
+	path: string
 	text: string
 	agentId: string
 	scope: MemoryScope
@@ -40,6 +41,11 @@ export type SessionEvidenceDocument = {
 		sourceEventIds: string[]
 		turnCount: number
 		docType: "session"
+	}
+	provenance: {
+		lane: "session_chunks"
+		unit: "session"
+		source: "session-evidence"
 	}
 }
 
@@ -141,6 +147,7 @@ export function buildSessionEvidenceDocuments(params: {
 
 		documents.push({
 			source: "session-evidence",
+			path: `session_chunks/${sessionId}`,
 			text,
 			agentId,
 			scope,
@@ -154,6 +161,11 @@ export function buildSessionEvidenceDocuments(params: {
 				sourceEventIds,
 				turnCount: userTurns.length,
 				docType: "session",
+			},
+			provenance: {
+				lane: "session_chunks",
+				unit: "session",
+				source: "session-evidence",
 			},
 		})
 	}

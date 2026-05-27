@@ -32,7 +32,8 @@
 		"capability-stress": "bun scripts/real-capability-stress.ts",
 		"benchmark:longmemeval:s": "bun scripts/launch-official-longmemeval-benchmark.ts",
 		"benchmark:canary": "bun scripts/run-longmemeval-canary.ts",
-		"benchmark:status": "bun scripts/check-benchmark-status.ts"
+		"benchmark:status": "bun scripts/check-benchmark-status.ts",
+		"mongodb:drop-benchmark-prefix": "bun scripts/drop-mongodb-benchmark-prefix.ts"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^2.4.0",

@@ -2,6 +2,7 @@ import type { Db } from "mongodb"
 import {
 	collectStorageFootprint,
 	percentile50And95,
+	type BenchmarkRetrievalLane,
 	resolveBenchmarkEmbeddingConfig,
 	resolveBenchmarkRerankerConfig,
 	resolveDatasetSha256,
@@ -416,6 +417,7 @@ export async function projectBenchmarkParityFields(params: {
 	collectionName: string
 	datasetPath?: string
 	datasetKind?: MemoryBenchmarkDatasetKind | "legacy-query"
+	retrievalLane?: BenchmarkRetrievalLane
 	datasetSha256Override?: string
 	mongoEmbeddingConfig: {
 		numDimensions: number
@@ -440,7 +442,10 @@ export async function projectBenchmarkParityFields(params: {
 		datasetPath: params.datasetPath,
 		override: params.datasetSha256Override,
 	})
-	const retrievalUnit = resolveRetrievalUnit(params.datasetKind)
+	const retrievalUnit = resolveRetrievalUnit(
+		params.datasetKind,
+		params.retrievalLane,
+	)
 	const embedding = resolveBenchmarkEmbeddingConfig(params.mongoEmbeddingConfig)
 	const reranker = resolveBenchmarkRerankerConfig(params.mongoRerankerConfig)
 	const storage = await collectStorageFootprint({

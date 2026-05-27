@@ -7,6 +7,7 @@ import {
 	type MemongoConfig,
 	type MemoryScope,
 	createSubsystemLogger,
+	resolveUserPath,
 } from "@memongo/lib"
 import {
 	AccessTracker,
@@ -50,6 +51,8 @@ import {
 } from "./mongodb-benchmark-runner.js"
 import {
 	createBenchmarkRunCounters,
+	resolveBenchmarkRetrievalLane,
+	type BenchmarkRetrievalLane,
 	type BenchmarkRunCounters,
 } from "./benchmark-parity-envelope.js"
 import { readSearchIndexStatus } from "./mongodb-benchmark-readiness.js"
@@ -180,7 +183,11 @@ import {
 	sessionChunksCollection,
 } from "./mongodb-schema.js"
 import { resolveScopeRef } from "./mongodb-scope.js"
-import { mongoSearch, vectorSearch } from "./mongodb-search.js"
+import {
+	buildVectorSearchStage,
+	mongoSearch,
+	vectorSearch,
+} from "./mongodb-search.js"
 import type {
 	SearchExplainOptions,
 	SearchExplainTraceArtifact,
@@ -2030,11 +2037,22 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 				mongoCfg.numDimensions,
 			)
 			if (ensuredSearchIndexes.text || ensuredSearchIndexes.vector) {
-				const { timeoutMs: readinessTimeoutMs, pollMs: readinessPollMs } =
-					resolveSearchIndexReadinessTiming()
-				const readinessResults = await Promise.all(
-					getExpectedSearchIndexTargets(prefix, mongoCfg.deploymentProfile).map(
-						async (target) => {
+				const rawSessionBootstrapProfile =
+					resolveBenchmarkRetrievalLane(
+						process.env.MEMONGO_BENCHMARK_RETRIEVAL_LANE,
+					) === "raw-session"
+				if (rawSessionBootstrapProfile) {
+					log.info(
+						"raw-session benchmark profile: deferring Search/Vector queryability until post-ingest vector convergence",
+					)
+				} else {
+					const { timeoutMs: readinessTimeoutMs, pollMs: readinessPollMs } =
+						resolveSearchIndexReadinessTiming()
+					const readinessResults = await Promise.all(
+						getExpectedSearchIndexTargets(
+							prefix,
+							mongoCfg.deploymentProfile,
+						).map(async (target) => {
 							try {
 								const readiness = await waitForSearchIndexesQueryable(
 									db.collection(target.collectionName),
@@ -2059,26 +2077,26 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 									lastError: message,
 								}
 							}
-						},
-					),
-				)
-				const stalled = readinessResults.filter((result) => !result.ready)
-				if (stalled.length > 0) {
-					const summary = stalled
-						.map((result) => {
-							const pending = result.pending.join(",") || "none"
-							const failed = result.failed.join(",") || "none"
-							const lastError = result.lastError
-								? ` lastError=${result.lastError}`
-								: ""
-							return `${result.collectionName} pending=[${pending}] failed=[${failed}]${lastError}`
-						})
-						.join("; ")
-					const readinessMessage = `search indexes not fully queryable after bootstrap wait: ${summary}`
-					if (isStrictSearchReadinessMode()) {
-						throw new Error(readinessMessage)
+						}),
+					)
+					const stalled = readinessResults.filter((result) => !result.ready)
+					if (stalled.length > 0) {
+						const summary = stalled
+							.map((result) => {
+								const pending = result.pending.join(",") || "none"
+								const failed = result.failed.join(",") || "none"
+								const lastError = result.lastError
+									? ` lastError=${result.lastError}`
+									: ""
+								return `${result.collectionName} pending=[${pending}] failed=[${failed}]${lastError}`
+							})
+							.join("; ")
+						const readinessMessage = `search indexes not fully queryable after bootstrap wait: ${summary}`
+						if (isStrictSearchReadinessMode()) {
+							throw new Error(readinessMessage)
+						}
+						log.warn(readinessMessage)
 					}
-					log.warn(readinessMessage)
 				}
 			}
 		} else {
@@ -3431,6 +3449,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 			version: string | null
 			stage: "post-fusion" | "pre-fusion" | "none"
 		}
+		retrievalLane?: BenchmarkRetrievalLane
 	}): Promise<RelevanceBenchmarkResult> {
 		if (!this.relevance) {
 			throw new Error("relevance runtime is unavailable")
@@ -3448,6 +3467,9 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 			baseDir: this.workspaceDir,
 			allowedRoots: this.getBenchmarkAllowedRoots(),
 		})
+		const retrievalLane = resolveBenchmarkRetrievalLane(
+			params?.retrievalLane ?? process.env.MEMONGO_BENCHMARK_RETRIEVAL_LANE,
+		)
 
 		// Task 1.A projection: register run-scoped counters so rerank + LLM
 		// enrichment can increment cost fields without threading a counter
@@ -3478,6 +3500,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 				const parity = await this.buildBenchmarkParityBundle({
 					datasetPath: resolvedDatasetPath,
 					datasetKind: legacy.result.datasetKind,
+					retrievalLane,
 					datasetSha256Override: params?.datasetSha256,
 					latencySamples: legacy.latencySamples,
 					counters,
@@ -3505,6 +3528,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 				const parity = await this.buildBenchmarkParityBundle({
 					datasetPath: resolvedDatasetPath,
 					datasetKind: legacy.result.datasetKind,
+					retrievalLane,
 					datasetSha256Override: params?.datasetSha256,
 					latencySamples: legacy.latencySamples,
 					counters,
@@ -3519,10 +3543,12 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 				datasetVersion,
 				maxResults,
 				minScore,
+				retrievalLane,
 			})
 			const parity = await this.buildBenchmarkParityBundle({
 				datasetPath: resolvedDatasetPath,
 				datasetKind: scenario.result.datasetKind,
+				retrievalLane,
 				datasetSha256Override: params?.datasetSha256,
 				latencySamples: scenario.latencySamples,
 				counters,
@@ -3541,6 +3567,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 	private async buildBenchmarkParityBundle(params: {
 		datasetPath: string
 		datasetKind?: MemoryBenchmarkDatasetKind | "legacy-query"
+		retrievalLane?: BenchmarkRetrievalLane
 		datasetSha256Override?: string
 		latencySamples: number[]
 		counters: BenchmarkRunCounters
@@ -3553,22 +3580,34 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		cost: import("./types.js").BenchmarkCostCounters
 	}> {
 		const mongoCfg = this.config.mongodb!
+		const retrievalLane = params.retrievalLane ?? "native"
 		return await projectBenchmarkParityFields({
 			db: this.db,
-			// Events is the primary retrieval surface. storage bytes here reflect
-			// the collection hit by every benchmark query.
-			collectionName: `${this.prefix}events`,
+			collectionName:
+				retrievalLane === "raw-session"
+					? `${this.prefix}session_chunks`
+					: `${this.prefix}events`,
 			datasetPath: params.datasetPath,
 			datasetKind: params.datasetKind,
+			retrievalLane,
 			datasetSha256Override: params.datasetSha256Override,
 			mongoEmbeddingConfig: {
 				numDimensions: mongoCfg.numDimensions,
 				quantization: mongoCfg.quantization,
 			},
 			mongoRerankerConfig: {
-				enabled: mongoCfg.reranking?.enabled ?? false,
-				model: mongoCfg.reranking?.model ?? "rerank-2.5",
-				topN: mongoCfg.reranking?.topN ?? 20,
+				enabled:
+					retrievalLane === "raw-session"
+						? false
+						: (mongoCfg.reranking?.enabled ?? false),
+				model:
+					retrievalLane === "raw-session"
+						? "none"
+						: (mongoCfg.reranking?.model ?? "rerank-2.5"),
+				topN:
+					retrievalLane === "raw-session"
+						? 0
+						: (mongoCfg.reranking?.topN ?? 20),
 			},
 			latencySamples: params.latencySamples,
 			costCounters: params.counters.snapshot(),
@@ -3600,12 +3639,18 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 	}
 
 	private getBenchmarkAllowedRoots(): string[] {
+		const envRoots = (process.env.MEMONGO_BENCHMARK_ALLOWED_ROOTS ?? "")
+			.split(path.delimiter)
+			.map((entry) => entry.trim())
+			.filter(Boolean)
+			.map((entry) => resolveUserPath(entry))
 		return [
 			this.workspaceDir,
 			path.dirname(
 				this.config.mongodb?.relevance.benchmark.datasetPath ??
 					this.workspaceDir,
 			),
+			...envRoots,
 		]
 	}
 
@@ -3893,11 +3938,24 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		}
 	}
 
-	private async waitForBenchmarkSearchConvergence(
-		agentId: string,
-	): Promise<void> {
+	private async waitForBenchmarkSearchConvergence(params: {
+		agentId: string
+		retrievalLane?: BenchmarkRetrievalLane
+	}): Promise<void> {
+		if (params.retrievalLane === "raw-session") {
+			await this.waitForBenchmarkVectorSearchCollectionConvergence({
+				agentId: params.agentId,
+				label: "session_chunks",
+				collection: sessionChunksCollection(this.db, this.prefix),
+				collectionName: `${this.prefix}session_chunks`,
+				indexName: `${this.prefix}session_chunks_vector`,
+				textPath: "text",
+				requireSearchableDocuments: true,
+			})
+			return
+		}
 		await this.waitForBenchmarkSearchCollectionConvergence({
-			agentId,
+			agentId: params.agentId,
 			label: "events",
 			collection: eventsCollection(this.db, this.prefix),
 			collectionName: `${this.prefix}events`,
@@ -3905,7 +3963,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 			textPath: "body",
 		})
 		await this.waitForBenchmarkSearchCollectionConvergence({
-			agentId,
+			agentId: params.agentId,
 			label: "chunks",
 			collection: chunksCollection(this.db, this.prefix),
 			collectionName: `${this.prefix}chunks`,
@@ -3913,7 +3971,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 			textPath: "text",
 		})
 		await this.waitForBenchmarkSearchCollectionConvergence({
-			agentId,
+			agentId: params.agentId,
 			label: "session_chunks",
 			collection: sessionChunksCollection(this.db, this.prefix),
 			collectionName: `${this.prefix}session_chunks`,
@@ -3922,7 +3980,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		})
 		if (isEvidenceMirrorEnabled()) {
 			await this.waitForBenchmarkSearchCollectionConvergence({
-				agentId,
+				agentId: params.agentId,
 				label: "memory_evidence",
 				collection: memoryEvidenceCollection(this.db, this.prefix),
 				collectionName: `${this.prefix}memory_evidence`,
@@ -3930,6 +3988,189 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 				textPath: "text",
 			})
 		}
+	}
+
+	private async waitForBenchmarkVectorSearchCollectionConvergence(params: {
+		agentId: string
+		label: string
+		collection: Collection<Document>
+		collectionName: string
+		indexName: string
+		textPath: string
+		requireSearchableDocuments?: boolean
+	}): Promise<void> {
+		const {
+			agentId,
+			label,
+			collection,
+			collectionName,
+			indexName,
+			textPath,
+			requireSearchableDocuments = false,
+		} = params
+		const mongoCfg = this.config.mongodb!
+		if (
+			mongoCfg.embeddingMode !== "automated" ||
+			!this.capabilities.vectorSearch
+		) {
+			if (isBenchmarkStrictMode()) {
+				throw new Error(
+					"benchmark vector convergence requires MongoDB Vector Search auto-embed capability in strict mode",
+				)
+			}
+			return
+		}
+
+		const expectedDocs = await collection
+			.find(
+				{
+					agentId,
+					[textPath]: { $type: "string", $ne: "" },
+				},
+				{ projection: { [textPath]: 1 } },
+			)
+			.toArray()
+		const expectedCount = expectedDocs.filter((doc) =>
+			hasBenchmarkSearchableText(doc[textPath]),
+		).length
+		if (expectedCount === 0) {
+			const message = `benchmark ${label} vector convergence has no searchable documents: collection=${collectionName} agentId=${agentId} textPath=${textPath}`
+			if (requireSearchableDocuments && isBenchmarkStrictMode()) {
+				throw new Error(message)
+			}
+			if (requireSearchableDocuments) {
+				log.warn(message)
+			}
+			return
+		}
+
+		const configuredTimeout = Number(
+			process.env.MEMONGO_BENCHMARK_VECTOR_SEARCH_SETTLE_TIMEOUT_MS ??
+				process.env.MEMONGO_BENCHMARK_EVENT_SEARCH_SETTLE_TIMEOUT_MS,
+		)
+		const timeoutMs =
+			Number.isFinite(configuredTimeout) && configuredTimeout >= 0
+				? configuredTimeout
+				: isBenchmarkStrictMode()
+					? 300_000
+					: 0
+		if (timeoutMs === 0) return
+
+		const readinessProbe = await readSearchIndexStatus(
+			this.db,
+			collectionName,
+			indexName,
+		)
+		if (readinessProbe.kind === "ok") {
+			if (
+				(readinessProbe.status === "FAILED" ||
+					readinessProbe.status === "DELETING" ||
+					readinessProbe.status === "STALE") &&
+				isBenchmarkStrictMode()
+			) {
+				throw new Error(
+					`index-not-ready: vector index ${indexName} status ${readinessProbe.status} (queryable=${readinessProbe.queryable}) agentId=${agentId}`,
+				)
+			}
+		}
+
+		const limit = Math.min(expectedCount, 1000)
+		const vectorStage = buildVectorSearchStage({
+			queryVector: null,
+			queryText: "benchmark vector readiness probe",
+			embeddingMode: mongoCfg.embeddingMode,
+			indexName,
+			numCandidates: Math.max(limit, Math.min(expectedCount * 4, 10_000)),
+			limit,
+			filter: { agentId },
+			textFieldPath: textPath,
+		})
+		if (!vectorStage) {
+			if (isBenchmarkStrictMode()) {
+				throw new Error(
+					`benchmark ${label} vector convergence cannot build $vectorSearch stage agentId=${agentId}`,
+				)
+			}
+			return
+		}
+
+		const intervalMs = 2_000
+		const configuredProbeMaxTime = Number(
+			process.env.MEMONGO_BENCHMARK_VECTOR_SEARCH_PROBE_MAX_TIME_MS ??
+				process.env.MEMONGO_BENCHMARK_EVENT_SEARCH_PROBE_MAX_TIME_MS,
+		)
+		const probeMaxTimeMs =
+			Number.isFinite(configuredProbeMaxTime) && configuredProbeMaxTime > 0
+				? Math.floor(configuredProbeMaxTime)
+				: 30_000
+		const deadline = Date.now() + timeoutMs
+		let indexedCount = 0
+		let lastError: unknown
+		let lastProgressLogAt = 0
+
+		while (Date.now() <= deadline) {
+			try {
+				const controller = new AbortController()
+				let timeout: ReturnType<typeof setTimeout> | undefined
+				const probe = collection
+					.aggregate<{ count: number }>(
+						[{ $vectorSearch: vectorStage }, { $count: "count" }],
+						{ maxTimeMS: probeMaxTimeMs, signal: controller.signal },
+					)
+					.toArray()
+				const rows = await Promise.race([
+					probe,
+					new Promise<Array<{ count: number }>>((_, reject) => {
+						timeout = setTimeout(() => {
+							controller.abort()
+							reject(
+								new Error(
+									`benchmark vector convergence probe exceeded ${probeMaxTimeMs}ms`,
+								),
+							)
+						}, probeMaxTimeMs)
+					}),
+				]).finally(() => {
+					if (timeout) clearTimeout(timeout)
+				})
+				indexedCount =
+					typeof rows[0]?.count === "number" ? Number(rows[0].count) : 0
+				if (indexedCount >= Math.min(expectedCount, limit)) {
+					return
+				}
+			} catch (err) {
+				lastError = err
+				if (!isBenchmarkStrictMode()) {
+					log.warn("benchmark vector convergence probe failed", {
+						agentId,
+						error: err,
+					})
+					return
+				}
+			}
+			const now = Date.now()
+			if (now - lastProgressLogAt >= 30_000) {
+				lastProgressLogAt = now
+				log.info("benchmark vector convergence waiting", {
+					agentId,
+					collection: collectionName,
+					index: indexName,
+					indexedCount,
+					expectedCount,
+					remainingMs: Math.max(0, deadline - now),
+					lastError: lastError ? String(lastError) : undefined,
+				})
+			}
+			await new Promise((resolve) => setTimeout(resolve, intervalMs))
+		}
+
+		const message = `benchmark ${label} vector convergence timed out: indexed=${indexedCount}/${expectedCount} agentId=${agentId}`
+		if (isBenchmarkStrictMode()) {
+			throw new Error(
+				lastError ? `${message}; lastError=${String(lastError)}` : message,
+			)
+		}
+		log.warn(message)
 	}
 
 	private async waitForBenchmarkEventSearchConvergence(
@@ -4305,6 +4546,61 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		return hash.digest("hex").slice(0, 16)
 	}
 
+	private async searchBenchmarkRawSession(
+		query: string,
+		opts: {
+			maxResults: number
+			minScore: number
+		},
+	): Promise<MemorySearchResult[]> {
+		const mongoCfg = this.config.mongodb!
+		if (
+			mongoCfg.embeddingMode !== "automated" ||
+			!this.capabilities.vectorSearch
+		) {
+			throw new Error(
+				"raw-session benchmark lane requires MongoDB Vector Search auto-embed",
+			)
+		}
+		const scopeRef = resolveScopeRef({
+			scope: "agent",
+			agentId: this.agentId,
+		})
+		const attemptsValue = Number(
+			process.env.MEMONGO_RAW_SESSION_VECTOR_RETRY_ATTEMPTS,
+		)
+		const attempts =
+			Number.isFinite(attemptsValue) && attemptsValue > 0
+				? Math.min(10, Math.floor(attemptsValue))
+				: 6
+		const delayValue = Number(process.env.MEMONGO_RAW_SESSION_VECTOR_RETRY_MS)
+		const delayMs =
+			Number.isFinite(delayValue) && delayValue >= 0
+				? Math.min(30_000, Math.floor(delayValue))
+				: 5_000
+		const collection = sessionChunksCollection(this.db, this.prefix)
+		for (let attempt = 1; attempt <= attempts; attempt++) {
+			const results = await vectorSearch(collection, null, {
+				maxResults: opts.maxResults,
+				minScore: opts.minScore,
+				numCandidates: mongoCfg.numCandidates,
+				filter: {
+					agentId: this.agentId,
+					scope: "agent",
+					scopeRef,
+				},
+				indexName: `${this.prefix}session_chunks_vector`,
+				queryText: query,
+				embeddingMode: mongoCfg.embeddingMode,
+			})
+			if (results.length > 0 || attempt >= attempts) {
+				return results
+			}
+			await new Promise((resolve) => setTimeout(resolve, delayMs))
+		}
+		return []
+	}
+
 	private async runLegacyRelevanceBenchmark(params: {
 		datasetPath: string
 		maxResults: number
@@ -4388,6 +4684,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		datasetVersion: string
 		maxResults: number
 		minScore: number
+		retrievalLane?: BenchmarkRetrievalLane
 	}): Promise<{
 		result: RelevanceBenchmarkResult
 		latencySamples: number[]
@@ -4397,6 +4694,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		const expectedSessionMap = new Map<string, string[]>()
 		const expectedTurnMap = new Map<string, string[]>()
 		const runToken = randomUUID().slice(0, 8)
+		const rawSessionLane = params.retrievalLane === "raw-session"
 		const ingest = {
 			conversationsIngested: 0,
 			turnsIngested: 0,
@@ -4406,6 +4704,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		}
 
 		for (const [index, scenario] of scenarios.entries()) {
+			const scenarioStartedAt = Date.now()
 			let scenarioManager: MongoDBMemoryManager = this
 			let eventEvidence: BenchmarkEventEvidenceMaps = {
 				sessionIds: new Map<string, string>(),
@@ -4413,6 +4712,14 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 				dialogIds: new Map<string, string>(),
 			}
 			try {
+				log.info("benchmark scenario start", {
+					scenarioId: scenario.scenarioId,
+					index,
+					totalScenarios: scenarios.length,
+					conversations: scenario.conversations.length,
+					evaluations: scenario.evaluations.length,
+					retrievalLane: params.retrievalLane ?? "native",
+				})
 				if (scenario.conversations.length > 0) {
 					const scenarioAgentId = `benchmark-${this.agentId}-${runToken}-${createHash("sha256").update(`${index}:${scenario.scenarioId}`).digest("hex").slice(0, 12)}`
 					scenarioManager = this.createBenchmarkScenarioManager(scenarioAgentId)
@@ -4445,6 +4752,13 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 					ingest.turnsIngested += scenarioIngest.turnsIngested
 					ingest.skippedConversations += scenarioIngest.skippedConversations
 					ingest.failedTurns += scenarioIngest.failedTurns
+					log.info("benchmark scenario ingested", {
+						scenarioId: scenario.scenarioId,
+						agentId: scenarioManager.agentId,
+						conversationsIngested: scenarioIngest.conversationsIngested,
+						turnsIngested: scenarioIngest.turnsIngested,
+						failedTurns: scenarioIngest.failedTurns,
+					})
 					await this.settleBenchmarkScenarioManager(scenarioManager)
 					eventEvidence = await this.listBenchmarkEventEvidence(
 						scenarioManager.agentId,
@@ -4454,6 +4768,9 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 					const sessionEvidenceMode = resolveSessionEvidenceMode(
 						process.env.MEMONGO_SESSION_EVIDENCE_MODE,
 					)
+					const effectiveSessionEvidenceMode = rawSessionLane
+						? "B"
+						: sessionEvidenceMode
 					const userfactEvidenceMode = resolveUserfactEvidenceMode(
 						process.env.MEMONGO_USERFACT_EVIDENCE_MODE,
 						process.env.MEMONGO_PREFERENCE_EVIDENCE_MODE,
@@ -4461,10 +4778,12 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 					const enrichmentMode = resolveEnrichmentMode(
 						process.env.MEMONGO_LLM_ENRICHMENT_MODE,
 					)
+					let sessionEvidenceDocsWritten = 0
+					let sessionEventCount = 0
 					if (
-						sessionEvidenceMode !== "none" ||
-						userfactEvidenceMode === "enabled" ||
-						enrichmentMode !== "none"
+						effectiveSessionEvidenceMode !== "none" ||
+						(!rawSessionLane &&
+							(userfactEvidenceMode === "enabled" || enrichmentMode !== "none"))
 					) {
 						try {
 							// Invert eventId->sessionId to sessionId->[eventIds]
@@ -4477,12 +4796,13 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 									sessionEventMap.set(sessionId, [eventId])
 								}
 							}
+							sessionEventCount = sessionEventMap.size
 							const scopeRef = resolveScopeRef({
 								scope: "agent",
 								agentId: scenarioManager.agentId,
 							})
 
-							if (sessionEvidenceMode === "A") {
+							if (effectiveSessionEvidenceMode === "A") {
 								await writeSessionEvidenceOptionA({
 									chunksCollection: chunksCollection(this.db, this.prefix),
 									conversations: scenario.conversations,
@@ -4491,8 +4811,8 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 									scopeRef,
 									eventIds: sessionEventMap,
 								})
-							} else if (sessionEvidenceMode === "B") {
-								await writeSessionEvidenceOptionB({
+							} else if (effectiveSessionEvidenceMode === "B") {
+								sessionEvidenceDocsWritten = await writeSessionEvidenceOptionB({
 									sessionChunksCollection: sessionChunksCollection(
 										this.db,
 										this.prefix,
@@ -4507,14 +4827,17 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 
 							// LLM enrichment: replaces regex userfact when available
 							const enrichmentProvider =
-								enrichmentMode !== "none"
+								!rawSessionLane && enrichmentMode !== "none"
 									? resolveEnrichmentProvider(process.env)
 									: null
-							const enrichmentStrict = resolveEnrichmentStrictMode(
-								process.env.MEMONGO_LLM_ENRICHMENT_STRICT,
-							)
+							const enrichmentStrict =
+								!rawSessionLane &&
+								resolveEnrichmentStrictMode(
+									process.env.MEMONGO_LLM_ENRICHMENT_STRICT,
+								)
 
 							if (
+								!rawSessionLane &&
 								enrichmentMode !== "none" &&
 								enrichmentStrict &&
 								!enrichmentProvider
@@ -4634,7 +4957,10 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 										})
 									}
 								}
-							} else if (userfactEvidenceMode === "enabled") {
+							} else if (
+								!rawSessionLane &&
+								userfactEvidenceMode === "enabled"
+							) {
 								// No LLM provider: use regex extraction
 								await writeUserfactEvidence({
 									chunksCollection: chunksCollection(this.db, this.prefix),
@@ -4647,7 +4973,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 							}
 						} catch (err) {
 							log.warn("benchmark evidence creation failed", {
-								sessionMode: sessionEvidenceMode,
+								sessionMode: effectiveSessionEvidenceMode,
 								userfactMode: userfactEvidenceMode,
 								scenarioId: scenario.scenarioId,
 								error: err,
@@ -4664,16 +4990,51 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 						// docs async via change streams + Voyage API. Empirically 5-15s
 						// for ~40 docs on Atlas Local. Fixed delay + write queue settle.
 						await this.settleBenchmarkScenarioManager(scenarioManager)
-						const evidenceCount = await chunksCollection(
-							this.db,
-							this.prefix,
-						).countDocuments({
-							agentId: scenarioManager.agentId,
-							source: {
-								$in: ["session-evidence", "userfact-evidence", "qa-evidence"],
-							},
-						})
-						if (evidenceCount > 0) {
+						const [chunkEvidenceCount, sessionEvidenceCount] =
+							await Promise.all([
+								chunksCollection(this.db, this.prefix).countDocuments({
+									agentId: scenarioManager.agentId,
+									source: {
+										$in: [
+											"session-evidence",
+											"userfact-evidence",
+											"qa-evidence",
+										],
+									},
+								}),
+								sessionChunksCollection(this.db, this.prefix).countDocuments({
+									agentId: scenarioManager.agentId,
+									source: "session-evidence",
+								}),
+							])
+						const evidenceCount = chunkEvidenceCount + sessionEvidenceCount
+						if (rawSessionLane) {
+							const nonAbstentionEvaluations = scenario.evaluations.filter(
+								(evaluation) => !evaluation.abstention,
+							).length
+							if (
+								nonAbstentionEvaluations > 0 &&
+								sessionEvidenceDocsWritten === 0
+							) {
+								throw new Error(
+									`raw-session benchmark evidence creation produced zero session documents: scenario=${scenario.scenarioId} agentId=${scenarioManager.agentId} conversations=${scenario.conversations.length} nonAbstentionEvaluations=${nonAbstentionEvaluations}`,
+								)
+							}
+							if (sessionEvidenceCount < sessionEvidenceDocsWritten) {
+								throw new Error(
+									`raw-session benchmark session_chunks persistence mismatch: scenario=${scenario.scenarioId} agentId=${scenarioManager.agentId} written=${sessionEvidenceDocsWritten} persisted=${sessionEvidenceCount}`,
+								)
+							}
+							log.info("raw-session benchmark evidence ready", {
+								scenarioId: scenario.scenarioId,
+								agentId: scenarioManager.agentId,
+								writtenSessionDocs: sessionEvidenceDocsWritten,
+								persistedSessionDocs: sessionEvidenceCount,
+								sessionEventCount,
+								nonAbstentionEvaluations,
+							})
+						}
+						if (evidenceCount > 0 && !rawSessionLane) {
 							const settleMs =
 								Number(process.env.MEMONGO_EVIDENCE_SETTLE_MS) || 15_000
 							log.info(
@@ -4686,7 +5047,10 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 							await new Promise((r) => setTimeout(r, settleMs))
 						}
 					}
-					await this.waitForBenchmarkSearchConvergence(scenarioManager.agentId)
+					await this.waitForBenchmarkSearchConvergence({
+						agentId: scenarioManager.agentId,
+						retrievalLane: params.retrievalLane,
+					})
 				} else {
 					eventEvidence = await this.listBenchmarkEventEvidence(this.agentId)
 				}
@@ -4714,7 +5078,18 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 
 						let results: MemorySearchResult[]
 
-						if (decompositionProvider && decompositionMode === "enabled") {
+						if (rawSessionLane) {
+							results = await scenarioManager.searchBenchmarkRawSession(
+								evaluation.query,
+								{
+									maxResults: params.maxResults,
+									minScore: params.minScore,
+								},
+							)
+						} else if (
+							decompositionProvider &&
+							decompositionMode === "enabled"
+						) {
 							const decomposed = await decomposeQuery({
 								provider: decompositionProvider,
 								model: process.env.MEMONGO_ENRICHMENT_MODEL ?? "gpt-4o-mini",
@@ -4837,6 +5212,14 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 						)
 					}
 				}
+				log.info("benchmark scenario complete", {
+					scenarioId: scenario.scenarioId,
+					agentId: scenarioManager.agentId,
+					index,
+					totalScenarios: scenarios.length,
+					evaluations: scenario.evaluations.length,
+					elapsedMs: Date.now() - scenarioStartedAt,
+				})
 			} finally {
 				if (
 					scenarioManager !== this &&

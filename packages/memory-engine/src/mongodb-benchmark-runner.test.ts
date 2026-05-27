@@ -787,6 +787,41 @@ describe("mongodb benchmark runner", () => {
 		expect(projected.cost?.llmEnrichmentCalls).toBe(2)
 	})
 
+	it("projectBenchmarkParityFields records session retrieval for raw-session lane", async () => {
+		const mockDb = {
+			command: async () => ({ size: 1024, totalIndexSize: 2048 }),
+		}
+
+		const projected = await projectBenchmarkParityFields({
+			db: mockDb as unknown as Parameters<
+				typeof projectBenchmarkParityFields
+			>[0]["db"],
+			collectionName: "memongo_bench_session_chunks",
+			datasetSha256Override: "a".repeat(64),
+			datasetKind: "longmemeval",
+			retrievalLane: "raw-session",
+			mongoEmbeddingConfig: {
+				numDimensions: 1024,
+				quantization: "none",
+			},
+			mongoRerankerConfig: {
+				enabled: false,
+				model: "none",
+				topN: 0,
+			},
+			latencySamples: [10],
+			costCounters: {
+				embeddingCalls: 0,
+				rerankCalls: 0,
+				llmEnrichmentCalls: 0,
+			},
+		})
+
+		expect(projected.runIdentity?.retrievalUnit).toBe("session")
+		expect(projected.reranker?.stage).toBe("none")
+		expect(projected.reranker?.model).toBe("none")
+	})
+
 	it("projectBenchmarkParityFields returns null-with-reason storage when collStats throws (atlas-local:preview)", async () => {
 		const { writeFileSync, mkdtempSync } = await import("node:fs")
 		const { tmpdir } = await import("node:os")

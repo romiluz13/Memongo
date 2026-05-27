@@ -125,6 +125,26 @@ describe("evaluateBenchmarkStatus", () => {
 		expect(status.notes.join("\n")).toContain("cases=6 < 48-case")
 	})
 
+	it("does not apply LongMemEval unlock gates to LoCoMo artifacts", () => {
+		const artifact = makeArtifact()
+		const response = artifact.benchmarkResponse as Record<string, unknown>
+		const report = response.benchmarkReport as Record<string, unknown>
+		report.corpus = { datasetKind: "locomo", cases: 10, scoredCases: 10 }
+		report.metrics = {
+			internal: { rAt5: 0.7, rAt10: 0.8, emptyRate: 0 },
+			official: { loCoMo: { sessionEvidenceRecallAt5: 0.6 } },
+		}
+		response.questionTypeBreakdown = []
+
+		const status = evaluateBenchmarkStatus(artifact, {
+			requireFullUnlock: true,
+		})
+
+		expect(status.ok).toBe(true)
+		expect(status.fullUnlockOk).toBe(true)
+		expect(status.sessionRecallAnyAt5).toBe(0.6)
+	})
+
 	it("fails when the parity envelope or miss ledger is absent", () => {
 		const artifact = makeArtifact()
 		const response = artifact.benchmarkResponse as Record<string, unknown>
