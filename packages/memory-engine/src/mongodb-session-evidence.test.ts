@@ -112,6 +112,38 @@ describe("buildSessionEvidenceDocuments", () => {
 		expect(docs).toHaveLength(2)
 	})
 
+	it("merges repeated conversation records for the same session", () => {
+		const docs = buildSessionEvidenceDocuments({
+			conversations: [
+				{
+					conversationId: "q1-a",
+					sessionId: "q1::session_repeat",
+					turns: [{ role: "user", body: "First user detail." }],
+				},
+				{
+					conversationId: "q1-b",
+					sessionId: "q1::session_repeat",
+					turns: [
+						{ role: "assistant", body: "Assistant detail." },
+						{ role: "user", body: "Second user detail." },
+					],
+				},
+			],
+			agentId: "bench-agent",
+			scope: "agent",
+			scopeRef: "agent:bench-agent",
+			eventIds: new Map([["q1::session_repeat", ["evt1", "evt2"]]]),
+		})
+
+		expect(docs).toHaveLength(1)
+		expect(docs[0].sessionId).toBe("q1::session_repeat")
+		expect(docs[0].text).toContain("First user detail.")
+		expect(docs[0].text).toContain("Second user detail.")
+		expect(docs[0].text).not.toContain("Assistant detail.")
+		expect(docs[0].metadata.turnCount).toBe(2)
+		expect(docs[0].metadata.sourceEventIds).toEqual(["evt1", "evt2"])
+	})
+
 	it("concatenates only user turns into the text field", () => {
 		const docs = buildSessionEvidenceDocuments({
 			conversations,
@@ -143,6 +175,22 @@ describe("buildSessionEvidenceDocuments", () => {
 		for (const doc of docs) {
 			expect(doc.source).toBe("session-evidence")
 		}
+	})
+
+	it("sets stable path and provenance for benchmark traces", () => {
+		const docs = buildSessionEvidenceDocuments({
+			conversations,
+			agentId: "bench-agent",
+			scope: "agent",
+			scopeRef: "agent:bench-agent",
+			eventIds: new Map(),
+		})
+		expect(docs[0].path).toBe("session_chunks/q1::session_1")
+		expect(docs[0].provenance).toEqual({
+			lane: "session_chunks",
+			unit: "session",
+			source: "session-evidence",
+		})
 	})
 
 	it("preserves sourceEventIds from the event map", () => {

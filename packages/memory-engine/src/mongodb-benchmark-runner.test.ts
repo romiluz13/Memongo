@@ -771,7 +771,7 @@ describe("mongodb benchmark runner", () => {
 
 		expect(projected.runIdentity?.datasetSha256).toMatch(/^[0-9a-f]{64}$/)
 		expect(projected.runIdentity?.retrievalUnit).toBe("turn")
-		expect(projected.embedding?.model).toBe("voyage-3.5")
+		expect(projected.embedding?.model).toBe("voyage-4-large")
 		expect(projected.embedding?.dimensions).toBe(1024)
 		expect(projected.embedding?.quantization).toBe("float32")
 		expect(projected.reranker?.model).toBe("rerank-2.5")
@@ -785,6 +785,41 @@ describe("mongodb benchmark runner", () => {
 		expect(projected.cost?.embeddingCalls).toBe(6)
 		expect(projected.cost?.rerankCalls).toBe(3)
 		expect(projected.cost?.llmEnrichmentCalls).toBe(2)
+	})
+
+	it("projectBenchmarkParityFields records session retrieval for raw-session lane", async () => {
+		const mockDb = {
+			command: async () => ({ size: 1024, totalIndexSize: 2048 }),
+		}
+
+		const projected = await projectBenchmarkParityFields({
+			db: mockDb as unknown as Parameters<
+				typeof projectBenchmarkParityFields
+			>[0]["db"],
+			collectionName: "memongo_bench_session_chunks",
+			datasetSha256Override: "a".repeat(64),
+			datasetKind: "longmemeval",
+			retrievalLane: "raw-session",
+			mongoEmbeddingConfig: {
+				numDimensions: 1024,
+				quantization: "none",
+			},
+			mongoRerankerConfig: {
+				enabled: false,
+				model: "none",
+				topN: 0,
+			},
+			latencySamples: [10],
+			costCounters: {
+				embeddingCalls: 0,
+				rerankCalls: 0,
+				llmEnrichmentCalls: 0,
+			},
+		})
+
+		expect(projected.runIdentity?.retrievalUnit).toBe("session")
+		expect(projected.reranker?.stage).toBe("none")
+		expect(projected.reranker?.model).toBe("none")
 	})
 
 	it("projectBenchmarkParityFields returns null-with-reason storage when collStats throws (atlas-local:preview)", async () => {

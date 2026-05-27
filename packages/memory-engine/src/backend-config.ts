@@ -156,7 +156,8 @@ export function resolveMemoryBackendConfig(params: {
 			)
 		}
 		const rawDeploymentProfile =
-			mongoCfg?.deploymentProfile ?? DEFAULT_MONGODB_PROFILE
+			mongoCfg?.deploymentProfile ??
+			(uri.includes(".mongodb.net") ? "atlas-managed" : DEFAULT_MONGODB_PROFILE)
 		const deploymentProfile: MemoryMongoDBDeploymentProfile =
 			rawDeploymentProfile === "community-mongot"
 				? "atlas-local-preview"
@@ -165,24 +166,19 @@ export function resolveMemoryBackendConfig(params: {
 			mongoCfg?.embeddingMode ?? DEFAULT_MONGODB_EMBEDDING_MODE
 		const embeddingMode: MemoryMongoDBEmbeddingMode =
 			DEFAULT_MONGODB_EMBEDDING_MODE
+		const envCollectionPrefix =
+			process.env.MEMONGO_MONGODB_COLLECTION_PREFIX?.trim()
 
-		if (uri.includes(".mongodb.net")) {
-			throw new Error(
-				[
-					"Memongo supports only MongoDB Community with mongot as the official deployment path.",
-					"Atlas URIs (*.mongodb.net) are not part of the supported Memongo contract.",
-				].join(" "),
-			)
-		}
 		if (
 			rawDeploymentProfile !== "atlas-local-preview" &&
+			rawDeploymentProfile !== "atlas-managed" &&
 			rawDeploymentProfile !== "community-mongot"
 		) {
 			const unsupportedDeploymentProfile = String(mongoCfg?.deploymentProfile)
 			throw new Error(
 				[
 					`deploymentProfile "${unsupportedDeploymentProfile}" is not supported in Memongo.`,
-					'Use deploymentProfile "atlas-local-preview".',
+					'Use deploymentProfile "atlas-local-preview" or "atlas-managed".',
 				].join(" "),
 			)
 		}
@@ -191,7 +187,7 @@ export function resolveMemoryBackendConfig(params: {
 			throw new Error(
 				[
 					`embeddingMode "${unsupportedEmbeddingMode}" is not supported in Memongo.`,
-					'Use embeddingMode "automated" with atlas-local-preview.',
+					'Use embeddingMode "automated" with atlas-local-preview or atlas-managed.',
 				].join(" "),
 			)
 		}
@@ -214,11 +210,17 @@ export function resolveMemoryBackendConfig(params: {
 				uri,
 				database: mongoCfg?.database ?? "memongo",
 				collectionPrefix:
+					(envCollectionPrefix && envCollectionPrefix.length > 0
+						? envCollectionPrefix
+						: undefined) ??
 					mongoCfg?.collectionPrefix ??
 					`memongo_${sanitizeName(params.agentId)}_`,
 				deploymentProfile,
 				embeddingMode,
-				fusionMethod: mongoCfg?.fusionMethod ?? "rankFusion",
+				fusionMethod: resolveEnvFusionMethod(
+					"MEMONGO_MONGODB_FUSION_METHOD",
+					mongoCfg?.fusionMethod ?? "rankFusion",
+				),
 				quantization: mongoCfg?.quantization ?? "none",
 				watchDebounceMs:
 					typeof mongoCfg?.watchDebounceMs === "number" &&
@@ -427,7 +429,10 @@ export function resolveMemoryBackendConfig(params: {
 							: 128,
 				},
 				reranking: {
-					enabled: mongoCfg?.reranking?.enabled !== false,
+					enabled: resolveEnvBoolean(
+						"MEMONGO_RERANKING_ENABLED",
+						mongoCfg?.reranking?.enabled !== false,
+					),
 					model: mongoCfg?.reranking?.model ?? "rerank-2.5",
 					topN:
 						typeof mongoCfg?.reranking?.topN === "number" &&
@@ -524,4 +529,23 @@ function resolveEnvFloat(envKey: string, fallback: number): number {
 	return Number.isFinite(parsed) && parsed >= 0 && parsed <= 1
 		? parsed
 		: fallback
+}
+
+function resolveEnvBoolean(envKey: string, fallback: boolean): boolean {
+	const raw = process.env[envKey]?.trim().toLowerCase()
+	if (!raw) return fallback
+	if (["1", "true", "yes", "on", "enabled"].includes(raw)) return true
+	if (["0", "false", "no", "off", "disabled"].includes(raw)) return false
+	return fallback
+}
+
+function resolveEnvFusionMethod(
+	envKey: string,
+	fallback: MemoryMongoDBFusionMethod,
+): MemoryMongoDBFusionMethod {
+	const raw = process.env[envKey]?.trim()
+	if (raw === "rankFusion" || raw === "scoreFusion" || raw === "js-merge") {
+		return raw
+	}
+	return fallback
 }

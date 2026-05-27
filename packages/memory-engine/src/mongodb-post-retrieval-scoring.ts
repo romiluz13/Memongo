@@ -136,6 +136,36 @@ const STOP_WORDS = new Set([
 	"down",
 ])
 
+const KEYWORD_EXPANSIONS: Record<string, string[]> = {
+	accessories: [
+		"accessory",
+		"case",
+		"cases",
+		"pouch",
+		"pouches",
+		"battery",
+		"batteries",
+		"charger",
+		"strap",
+		"tripod",
+		"bag",
+	],
+	accessory: [
+		"accessories",
+		"case",
+		"pouch",
+		"battery",
+		"charger",
+		"strap",
+		"tripod",
+		"bag",
+	],
+	photography: ["photo", "camera", "lens", "flash", "lighting"],
+	photo: ["photography", "camera", "lens", "flash"],
+	setup: ["gear", "equipment", "kit", "camera", "device", "devices"],
+	gear: ["setup", "equipment", "kit"],
+}
+
 // ---------------------------------------------------------------------------
 // Temporal pattern definitions
 // ---------------------------------------------------------------------------
@@ -182,7 +212,8 @@ export function keywordOverlapBoost(
 	const snippetLower = snippet.toLowerCase()
 	let matches = 0
 	for (const kw of keywords) {
-		if (snippetLower.includes(kw)) {
+		const alternatives = [kw, ...(KEYWORD_EXPANSIONS[kw] ?? [])]
+		if (alternatives.some((candidate) => snippetLower.includes(candidate))) {
 			matches++
 		}
 	}

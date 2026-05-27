@@ -101,33 +101,31 @@ bun run check-publishability
 
 Live validation requires MongoDB and model-provider credentials. See [Production-ready Checklist](docs/platform/PRODUCTION-READY.md), [Validation Pack](docs/platform/validation-pack.md), and [Self-host Runbook](docs/platform/self-host.md).
 
-## Retrieval Benchmark
+## Benchmarks
 
-Memongo is benchmarked against [LongMemEval-S](https://github.com/xiaowu0162/LongMemEval) (500 scenarios, 23,867 sessions, 246,750 turns) — the standard retrieval benchmark for long-term conversational AI memory.
+Memongo benchmark claims are artifact-backed and scoped by lane. The old unproven 98% README number has been removed because it did not have a reproducible artifact pack.
 
-**Full 500-case results (LLM-assisted pipeline):**
+Current MemPalace P0 evidence:
 
-| Metric | Baseline | Current | Delta |
-|--------|----------|---------|-------|
-| **R@5** | 73.4% | **98.1%** | +24.7 pp |
-| **R@10** | 77.0% | **98.9%** | +21.9 pp |
-| **NDCG@10** | — | **0.889** | — |
-| **Hit Rate** | — | **98.8%** | — |
+| Benchmark lane | Memongo | MemPalace | Status |
+|---|---:|---:|---|
+| LongMemEval raw session full 500, RecallAny@5 | **99.15%** | 96.60% | Memongo wins |
+| LongMemEval held-out 450 hybrid no-LLM, RecallAny@5 | **99.11%** | 98.44% | Memongo wins |
+| LongMemEval full 500 hybrid no-LLM, RecallAny@5 | **99.20%** | 96.60% raw / 99.20% Haiku rerank | Beats raw; ties rerank with different lane |
+| LoCoMo raw session top-10, avg recall | **91.71%** | 60.29% | Memongo wins |
+| LoCoMo hybrid session top-10, avg recall | **93.30%** | 88.91% | Memongo wins |
+| ConvoMem raw message top-10, avg recall | **100.00%** | 92.87% | Memongo wins |
+| MemBench full 8,500 hybrid top-5, hit@5 | **88.75%** | 80.33% | Memongo wins |
 
-The LLM-assisted pipeline uses a lightweight model (GPT-5.4-mini) at ingestion time for fact extraction and QA pair generation, and at query time for query decomposition. Retrieval and ranking remain MongoDB-native.
+These rows are described in [Benchmark Results](docs/benchmarks/BENCHMARKS.md) with artifact SHA256 hashes, dataset identity, scorer, retrieval unit, LLM/rerank disclosure, warnings, degradations, latency where available, and competitor evidence. Public language is intentionally narrow: Memongo beats MemPalace on these retrieval lanes. Broader ecosystem benchmarks are still in progress.
 
-Per-category breakdown (500 cases):
+Benchmark rules:
 
-| Category | R@5 | Cases |
-|----------|-----|-------|
-| single-session-assistant | 100.0% | 56 |
-| single-session-user | 100.0% | 70 |
-| knowledge-update | 96.8% | 78 |
-| single-session-preference | 86.7% | 30 |
-| multi-session | 85.6% | 133 |
-| temporal-reasoning | 84.0% | 133 |
-
-The reported run uses **MongoDB Atlas Local Preview (8.2.6)** with auto-embed vector search (Voyage 4 Large), Atlas Search, and `$rankFusion`. No external vector databases, no Redis, no Elasticsearch. Reproduction and operating rules live in [Benchmark Operating Contract](docs/benchmarks/benchmark-operating-contract.md); use the benchmark scripts only with the documented MongoDB preview stack and model credentials.
+- No question-ID tuning.
+- No hidden fallback.
+- No benchmark-only product claims.
+- Retrieval recall and judged answer quality are reported separately.
+- "Best memory framework in the world" is not claimed until ecosystem benchmarks are beaten or explicitly scoped out.
 
 ## Retrieval Architecture
 
@@ -184,4 +182,14 @@ Historical and migration notes are kept under [docs/migration](docs/migration/) 
 
 ## License
 
-MIT
+Memongo is source-available under the Business Source License 1.1. Commercial use, production hosted use, managed-service use, or substantially similar service use requires a commercial license from Rom Iluz / Memongo unless it is covered by the license's Additional Use Grant.
+
+The current BSL parameters are:
+
+- Licensor: Rom Iluz
+- Licensed Work: Memongo repository, packages, apps, docs, benchmark adapters, and examples
+- Additional Use Grant: non-production evaluation, research, personal use, internal testing, and local development
+- Change License: Apache License 2.0
+- Change Date: four years after each release date
+
+This is not legal advice. The final commercial-launch license language should be reviewed by counsel.

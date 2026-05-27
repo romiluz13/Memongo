@@ -12,6 +12,7 @@ import {
 	deduplicateSearchResults,
 	getActiveSources,
 	getActiveSourcesForStatus,
+	isConversationEvidenceQuery,
 	MongoDBMemoryManager,
 	resolveExplainSources,
 	writeEventAndProject,
@@ -28,6 +29,38 @@ import { emitTelemetry } from "./mongodb-telemetry.js"
 import { checkCache, writeCache } from "./mongodb-query-cache.js"
 import { crossEncoderRerank } from "./mongodb-reranker.js"
 import type { MemorySearchResult } from "./types.js"
+
+const mocked = <T>(value: T): T => {
+	const maybeMocked = (
+		vi as typeof vi & {
+			mocked?: <U>(item: U) => U
+		}
+	).mocked
+	return maybeMocked?.(value) ?? value
+}
+
+describe("conversation evidence query detection", () => {
+	it("routes advice and recommendation queries through conversation evidence", () => {
+		expect(
+			isConversationEvidenceQuery(
+				"What should I serve for dinner this weekend?",
+				undefined,
+			),
+		).toBe(true)
+		expect(
+			isConversationEvidenceQuery(
+				"I've been having trouble with my phone battery. Any tips?",
+				undefined,
+			),
+		).toBe(true)
+		expect(
+			isConversationEvidenceQuery(
+				"Any suggestions for a cocktail get-together?",
+				undefined,
+			),
+		).toBe(true)
+	})
+})
 
 // ---------------------------------------------------------------------------
 // Mocks for v2 module dependencies
@@ -47,27 +80,80 @@ vi.mock("./mongodb-ops.js", () => ({
 	getLatestProjectionRun: vi.fn(),
 }))
 
-vi.mock("./mongodb-benchmark-harness.js", async () => {
-	const actual = await vi.importActual<
-		typeof import("./mongodb-benchmark-harness.js")
-	>("./mongodb-benchmark-harness.js")
-	return {
-		...actual,
-		ingestBenchmarkDataset: vi.fn(),
-		importConversationDataset: vi.fn(),
-		loadBenchmarkDataset: vi.fn(),
-	}
-})
+vi.mock("./mongodb-benchmark-harness.js", () => ({
+	ingestBenchmarkDataset: vi.fn(),
+	ingestBenchmarkConversations: vi.fn(),
+	importConversationDataset: vi.fn(),
+	loadBenchmarkDataset: vi.fn(),
+	resolveBenchmarkDatasetPath: vi.fn(
+		async ({ datasetPath, baseDir, allowedRoots }) => {
+			const fs = await import("node:fs/promises")
+			const pathModule = await import("node:path")
+			const candidate = pathModule.default.isAbsolute(datasetPath)
+				? datasetPath
+				: pathModule.default.resolve(baseDir, datasetPath)
+			const resolved = await fs.realpath(candidate)
+			const roots = await Promise.all(
+				(allowedRoots ?? [baseDir]).map((root: string) =>
+					fs.realpath(root).catch(() => pathModule.default.resolve(root)),
+				),
+			)
+			const insideAllowedRoot = roots.some(
+				(root) =>
+					resolved === root ||
+					resolved.startsWith(`${root}${pathModule.default.sep}`),
+			)
+			if (!insideAllowedRoot) {
+				throw new Error(
+					"datasetPath must resolve inside the workspace or configured benchmark dataset directory",
+				)
+			}
+			return resolved
+		},
+	),
+}))
 
-vi.mock("./mongodb-retrieval-planner.js", async () => {
-	const actual = await vi.importActual<
-		typeof import("./mongodb-retrieval-planner.js")
-	>("./mongodb-retrieval-planner.js")
-	return {
-		...actual,
-		planRetrieval: vi.fn(),
-	}
-})
+vi.mock("./mongodb-retrieval-planner.js", () => ({
+	planRetrieval: vi.fn(),
+	classifyRetrievalQuery: vi.fn(({ query, hasTimeRange, hasScopes }) => {
+		const normalizedQuery = String(query ?? "").toLowerCase()
+		if (!normalizedQuery.trim()) return "direct"
+		if (
+			hasTimeRange ||
+			/\b(today|yesterday|last week|last month|when)\b/.test(normalizedQuery)
+		) {
+			return "temporal"
+		}
+		if (hasScopes) return "scoped"
+		if (/\b(compare|versus|vs|difference)\b/.test(normalizedQuery)) {
+			return "comparison"
+		}
+		if (/\b(why|because|after that|before that)\b/.test(normalizedQuery)) {
+			return "multi-hop"
+		}
+		return "direct"
+	}),
+	extractTemporalWindow: vi.fn(() => undefined),
+	resolveNumCandidates: vi.fn((limit: number, override?: number) => {
+		if (
+			typeof override === "number" &&
+			Number.isFinite(override) &&
+			override > 0
+		) {
+			return Math.floor(override)
+		}
+		return Math.max(200, Math.floor(limit * 20))
+	}),
+	resolveTimeRangePreset: vi.fn((preset: string, now = new Date()) => {
+		const end = new Date(now)
+		const start = new Date(end)
+		if (preset === "last-24h") start.setUTCDate(start.getUTCDate() - 1)
+		else if (preset === "last-7d") start.setUTCDate(start.getUTCDate() - 7)
+		else if (preset === "last-30d") start.setUTCDate(start.getUTCDate() - 30)
+		else start.setUTCHours(0, 0, 0, 0)
+		return { start, end }
+	}),
+}))
 
 vi.mock("./mongodb-episodes.js", () => ({
 	searchEpisodes: vi.fn(),
@@ -91,6 +177,7 @@ vi.mock("./mongodb-schema.js", () => ({
 	kbCollection: vi.fn(),
 	kbChunksCollection: vi.fn(),
 	relevanceRunsCollection: vi.fn(),
+	recallTracesCollection: vi.fn(),
 	structuredMemCollection: vi.fn(),
 	embeddingCacheCollection: vi.fn(),
 	detectCapabilities: vi.fn(),
@@ -137,21 +224,16 @@ vi.mock("./mongodb-consolidator.js", () => ({
 	consolidateMemory: vi.fn(),
 }))
 
-vi.mock("./mongodb-derived-memory.js", async () => {
-	const actual = await vi.importActual<
-		typeof import("./mongodb-derived-memory.js")
-	>("./mongodb-derived-memory.js")
-	return {
-		...actual,
-		heuristicEpisodeSummarizer: vi.fn(async () => ({
-			title: "Thread: synthetic",
-			summary: "Synthetic summary",
-		})),
-		promoteDerivedMemoryFromEvent: vi.fn(),
-		resolveStructuredCandidatesForPromotion: vi.fn(async () => []),
-		extractProcedureCandidatesFromEvent: vi.fn(() => []),
-	}
-})
+vi.mock("./mongodb-derived-memory.js", () => ({
+	heuristicEpisodeSummarizer: vi.fn(async () => ({
+		title: "Thread: synthetic",
+		summary: "Synthetic summary",
+	})),
+	promoteDerivedMemoryFromEvent: vi.fn(),
+	extractStructuredCandidatesFromEvent: vi.fn(() => []),
+	resolveStructuredCandidatesForPromotion: vi.fn(async () => []),
+	extractProcedureCandidatesFromEvent: vi.fn(() => []),
+}))
 
 vi.mock("./mongodb-benchmark-readiness.js", () => ({
 	readSearchIndexStatus: vi.fn().mockResolvedValue({
@@ -165,7 +247,7 @@ vi.mock("./mongodb-telemetry.js", () => ({
 }))
 
 // ---------------------------------------------------------------------------
-// Phase 3: Result dedup at merge by content hash
+// Phase 3: Result dedup at merge by stable evidence identity
 // ---------------------------------------------------------------------------
 
 describe("deduplicateSearchResults", () => {
@@ -184,16 +266,16 @@ describe("deduplicateSearchResults", () => {
 		source,
 	})
 
-	it("removes duplicate results by content, keeping the highest-scoring one", () => {
+	it("removes duplicate results by evidence identity, keeping the highest-scoring one", () => {
 		const results: MemorySearchResult[] = [
 			makeResult("/a.md", "same content here", 0.9, "conversation"),
-			makeResult("/b.md", "same content here", 0.7, "reference"),
+			makeResult("/a.md", "same content here", 0.7, "reference"),
 			makeResult("/c.md", "different content", 0.8, "structured"),
 		]
 
 		const deduped = deduplicateSearchResults(results)
 		expect(deduped).toHaveLength(2)
-		// The duplicate "same content here" should keep the one with score 0.9
+		// The duplicate locator should keep the one with score 0.9
 		const sameContentResult = deduped.find(
 			(r) => r.snippet === "same content here",
 		)
@@ -217,13 +299,24 @@ describe("deduplicateSearchResults", () => {
 		expect(deduped).toHaveLength(3)
 	})
 
+	it("keeps distinct evidence with identical snippet text", () => {
+		const results: MemorySearchResult[] = [
+			makeResult("/a.md", "same text", 0.9, "conversation"),
+			makeResult("/b.md", "same text", 0.7, "reference"),
+		]
+
+		const deduped = deduplicateSearchResults(results)
+
+		expect(deduped).toHaveLength(2)
+	})
+
 	it("handles multiple duplicates correctly", () => {
 		const results: MemorySearchResult[] = [
 			makeResult("/a.md", "alpha content", 0.3, "conversation"),
-			makeResult("/b.md", "alpha content", 0.9, "reference"),
-			makeResult("/c.md", "alpha content", 0.5, "structured"),
+			makeResult("/a.md", "alpha content", 0.9, "reference"),
+			makeResult("/a.md", "alpha content", 0.5, "structured"),
 			makeResult("/d.md", "beta content", 0.8, "conversation"),
-			makeResult("/e.md", "beta content", 0.6, "structured"),
+			makeResult("/d.md", "beta content", 0.6, "structured"),
 		]
 
 		const deduped = deduplicateSearchResults(results)
@@ -237,7 +330,7 @@ describe("deduplicateSearchResults", () => {
 	it("returns dedupCount in the result when logging is needed", () => {
 		const results: MemorySearchResult[] = [
 			makeResult("/a.md", "dup content", 0.9, "conversation"),
-			makeResult("/b.md", "dup content", 0.7, "reference"),
+			makeResult("/a.md", "dup content", 0.7, "reference"),
 		]
 
 		// The function should return deduped results — the count of removed duplicates
@@ -254,7 +347,7 @@ describe("benchmarkIngest", () => {
 	})
 
 	it("resolves workspace-relative benchmark datasets before replay", async () => {
-		vi.mocked(ingestBenchmarkDataset).mockResolvedValue({
+		mocked(ingestBenchmarkDataset).mockResolvedValue({
 			datasetPath: "/workspace/benchmarks/dataset.jsonl",
 			datasetName: "dataset.jsonl",
 			conversationsIngested: 1,
@@ -346,12 +439,95 @@ describe("benchmarkIngest", () => {
 			await rm(outsideDir, { recursive: true, force: true })
 		}
 	})
+
+	it("allows explicit benchmark dataset roots from the environment", async () => {
+		mocked(ingestBenchmarkDataset).mockResolvedValue({
+			datasetPath: "/outside/dataset.jsonl",
+			datasetName: "dataset.jsonl",
+			conversationsIngested: 1,
+			turnsIngested: 2,
+			skippedConversations: 0,
+			failedLines: 0,
+			failedTurns: 0,
+			startedAt: new Date("2026-04-09T00:00:00.000Z"),
+			completedAt: new Date("2026-04-09T00:00:01.000Z"),
+		})
+
+		const workspaceDir = await mkdtemp(
+			path.join(os.tmpdir(), "memongo-manager-workspace-"),
+		)
+		const outsideDir = await mkdtemp(path.join(os.tmpdir(), "memongo-outside-"))
+		const outsideFile = path.join(outsideDir, "dataset.jsonl")
+		const previous = process.env.MEMONGO_BENCHMARK_ALLOWED_ROOTS
+		try {
+			await writeFile(outsideFile, "")
+			process.env.MEMONGO_BENCHMARK_ALLOWED_ROOTS = outsideDir
+			const manager = {
+				workspaceDir,
+				config: {
+					mongodb: {
+						relevance: {
+							benchmark: {
+								datasetPath: path.join(
+									workspaceDir,
+									"benchmarks",
+									"default.jsonl",
+								),
+							},
+						},
+					},
+				},
+				getBenchmarkAllowedRoots:
+					MongoDBMemoryManager.prototype.getBenchmarkAllowedRoots,
+				writeConversationEvent: vi.fn(),
+			} as unknown as MongoDBMemoryManager
+
+			await MongoDBMemoryManager.prototype.benchmarkIngest.call(manager, {
+				datasetPath: outsideFile,
+			})
+
+			expect(ingestBenchmarkDataset).toHaveBeenCalledWith(
+				expect.objectContaining({
+					datasetPath: await realpath(outsideFile),
+					allowedRoots: expect.arrayContaining([outsideDir]),
+				}),
+			)
+		} finally {
+			if (previous === undefined) {
+				delete process.env.MEMONGO_BENCHMARK_ALLOWED_ROOTS
+			} else {
+				process.env.MEMONGO_BENCHMARK_ALLOWED_ROOTS = previous
+			}
+			await rm(workspaceDir, { recursive: true, force: true })
+			await rm(outsideDir, { recursive: true, force: true })
+		}
+	})
 })
 
 describe("benchmark event search convergence", () => {
 	beforeEach(() => {
 		vi.clearAllMocks()
 	})
+
+	const makeSearchConvergenceManager = () =>
+		Object.assign(Object.create(MongoDBMemoryManager.prototype), {
+			db: fakeDb,
+			prefix: fakePrefix,
+			config: {
+				mongodb: {
+					embeddingMode: "automated",
+				},
+			},
+			capabilities: { textSearch: true, vectorSearch: true },
+		}) as MongoDBMemoryManager
+	const makeSearchableFind = (values = ["alpha", "beta"]) =>
+		vi.fn().mockReturnValue({
+			toArray: vi.fn().mockResolvedValue(values.map((body) => ({ body }))),
+		})
+	const makeSearchableTextFind = (values = ["alpha", "beta"]) =>
+		vi.fn().mockReturnValue({
+			toArray: vi.fn().mockResolvedValue(values.map((text) => ({ text }))),
+		})
 
 	it("bounds each MongoDB Search convergence probe with maxTimeMS", async () => {
 		const previousStrict = process.env.MEMONGO_BENCHMARK_STRICT
@@ -366,18 +542,12 @@ describe("benchmark event search convergence", () => {
 			const aggregate = vi.fn().mockReturnValue({
 				toArray: vi.fn().mockResolvedValue([{ count: 2 }]),
 			})
-			vi.mocked(eventsCollection).mockReturnValue({
-				countDocuments: vi.fn().mockResolvedValue(2),
+			mocked(eventsCollection).mockReturnValue({
+				find: makeSearchableFind(),
 				aggregate,
 			} as never)
 
-			const manager = {
-				db: fakeDb,
-				prefix: fakePrefix,
-				capabilities: {
-					textSearch: true,
-				},
-			} as unknown as MongoDBMemoryManager
+			const manager = makeSearchConvergenceManager()
 
 			await (
 				MongoDBMemoryManager.prototype as unknown as {
@@ -392,6 +562,16 @@ describe("benchmark event search convergence", () => {
 				maxTimeMS: 1234,
 				signal: expect.any(AbortSignal),
 			})
+			const [pipeline] = aggregate.mock.calls[0]
+			expect(pipeline[0].$search.compound.must).toEqual([
+				{
+					wildcard: {
+						path: "body",
+						query: "*",
+						allowAnalyzedField: true,
+					},
+				},
+			])
 		} finally {
 			if (previousStrict === undefined) {
 				delete process.env.MEMONGO_BENCHMARK_STRICT
@@ -416,36 +596,84 @@ describe("benchmark event search convergence", () => {
 	// Task 1.5 — readSearchIndexStatus delegation tests.
 	// The readSearchIndexStatus helper is mocked at module scope; each test
 	// overrides the return value for that test.
-	it("returns early when readiness helper reports queryable=true (Task 1.5)", async () => {
+	it("still probes document visibility when readiness helper reports queryable=true", async () => {
+		const prevStrict = process.env.MEMONGO_BENCHMARK_STRICT
+		const prevSettle =
+			process.env.MEMONGO_BENCHMARK_EVENT_SEARCH_SETTLE_TIMEOUT_MS
+		process.env.MEMONGO_BENCHMARK_STRICT = "1"
+		process.env.MEMONGO_BENCHMARK_EVENT_SEARCH_SETTLE_TIMEOUT_MS = "1500"
 		const { readSearchIndexStatus } = await import(
 			"./mongodb-benchmark-readiness.js"
 		)
-		vi.mocked(readSearchIndexStatus).mockResolvedValue({
-			kind: "ok",
-			status: "READY",
-			queryable: true,
-			indexName: "events_text",
-		})
-		vi.mocked(eventsCollection).mockReturnValue({
-			countDocuments: vi.fn().mockResolvedValue(2),
-		} as never)
+		try {
+			mocked(readSearchIndexStatus).mockResolvedValue({
+				kind: "ok",
+				status: "READY",
+				queryable: true,
+				indexName: "events_text",
+			})
+			const aggregate = vi.fn().mockReturnValue({
+				toArray: vi.fn().mockResolvedValue([{ count: 2 }]),
+			})
+			mocked(eventsCollection).mockReturnValue({
+				find: makeSearchableFind(),
+				aggregate,
+			} as never)
 
-		const manager = {
-			db: fakeDb,
-			prefix: fakePrefix,
-			capabilities: { textSearch: true },
-		} as unknown as MongoDBMemoryManager
+			const manager = makeSearchConvergenceManager()
 
-		await expect(
-			(
-				MongoDBMemoryManager.prototype as unknown as {
-					waitForBenchmarkEventSearchConvergence: (
-						this: MongoDBMemoryManager,
-						agentId: string,
-					) => Promise<void>
-				}
-			).waitForBenchmarkEventSearchConvergence.call(manager, "agent-ready"),
-		).resolves.toBeUndefined()
+			await expect(
+				(
+					MongoDBMemoryManager.prototype as unknown as {
+						waitForBenchmarkEventSearchConvergence: (
+							this: MongoDBMemoryManager,
+							agentId: string,
+						) => Promise<void>
+					}
+				).waitForBenchmarkEventSearchConvergence.call(manager, "agent-ready"),
+			).resolves.toBeUndefined()
+			expect(aggregate).toHaveBeenCalled()
+		} finally {
+			if (prevStrict === undefined) delete process.env.MEMONGO_BENCHMARK_STRICT
+			else process.env.MEMONGO_BENCHMARK_STRICT = prevStrict
+			if (prevSettle === undefined)
+				delete process.env.MEMONGO_BENCHMARK_EVENT_SEARCH_SETTLE_TIMEOUT_MS
+			else
+				process.env.MEMONGO_BENCHMARK_EVENT_SEARCH_SETTLE_TIMEOUT_MS =
+					prevSettle
+		}
+	})
+
+	it("does not wait for non-searchable control-character text", async () => {
+		const prevStrict = process.env.MEMONGO_BENCHMARK_STRICT
+		process.env.MEMONGO_BENCHMARK_STRICT = "1"
+		const aggregate = vi.fn()
+		try {
+			mocked(eventsCollection).mockReturnValue({
+				find: makeSearchableFind(["\u200b"]),
+				aggregate,
+			} as never)
+
+			const manager = makeSearchConvergenceManager()
+
+			await expect(
+				(
+					MongoDBMemoryManager.prototype as unknown as {
+						waitForBenchmarkEventSearchConvergence: (
+							this: MongoDBMemoryManager,
+							agentId: string,
+						) => Promise<void>
+					}
+				).waitForBenchmarkEventSearchConvergence.call(
+					manager,
+					"agent-zero-width",
+				),
+			).resolves.toBeUndefined()
+			expect(aggregate).not.toHaveBeenCalled()
+		} finally {
+			if (prevStrict === undefined) delete process.env.MEMONGO_BENCHMARK_STRICT
+			else process.env.MEMONGO_BENCHMARK_STRICT = prevStrict
+		}
 	})
 
 	it("aborts on STALE in strict mode even when queryable=true (Task 1.5)", async () => {
@@ -455,21 +683,17 @@ describe("benchmark event search convergence", () => {
 			const { readSearchIndexStatus } = await import(
 				"./mongodb-benchmark-readiness.js"
 			)
-			vi.mocked(readSearchIndexStatus).mockResolvedValue({
+			mocked(readSearchIndexStatus).mockResolvedValue({
 				kind: "ok",
 				status: "STALE",
 				queryable: true,
 				indexName: "events_text",
 			})
-			vi.mocked(eventsCollection).mockReturnValue({
-				countDocuments: vi.fn().mockResolvedValue(2),
+			mocked(eventsCollection).mockReturnValue({
+				find: makeSearchableFind(),
 			} as never)
 
-			const manager = {
-				db: fakeDb,
-				prefix: fakePrefix,
-				capabilities: { textSearch: true },
-			} as unknown as MongoDBMemoryManager
+			const manager = makeSearchConvergenceManager()
 
 			await expect(
 				(
@@ -494,21 +718,17 @@ describe("benchmark event search convergence", () => {
 			const { readSearchIndexStatus } = await import(
 				"./mongodb-benchmark-readiness.js"
 			)
-			vi.mocked(readSearchIndexStatus).mockResolvedValue({
+			mocked(readSearchIndexStatus).mockResolvedValue({
 				kind: "ok",
 				status: "BUILDING",
 				queryable: false,
 				indexName: "events_text",
 			})
-			vi.mocked(eventsCollection).mockReturnValue({
-				countDocuments: vi.fn().mockResolvedValue(2),
+			mocked(eventsCollection).mockReturnValue({
+				find: makeSearchableFind(),
 			} as never)
 
-			const manager = {
-				db: fakeDb,
-				prefix: fakePrefix,
-				capabilities: { textSearch: true },
-			} as unknown as MongoDBMemoryManager
+			const manager = makeSearchConvergenceManager()
 
 			await expect(
 				(
@@ -544,23 +764,19 @@ describe("benchmark event search convergence", () => {
 			const { readSearchIndexStatus } = await import(
 				"./mongodb-benchmark-readiness.js"
 			)
-			vi.mocked(readSearchIndexStatus).mockResolvedValue({
+			mocked(readSearchIndexStatus).mockResolvedValue({
 				kind: "fallback",
 				reason: "command-not-found",
 			})
 			const aggregate = vi.fn().mockReturnValue({
 				toArray: vi.fn().mockResolvedValue([{ count: 2 }]),
 			})
-			vi.mocked(eventsCollection).mockReturnValue({
-				countDocuments: vi.fn().mockResolvedValue(2),
+			mocked(eventsCollection).mockReturnValue({
+				find: makeSearchableFind(),
 				aggregate,
 			} as never)
 
-			const manager = {
-				db: fakeDb,
-				prefix: fakePrefix,
-				capabilities: { textSearch: true },
-			} as unknown as MongoDBMemoryManager
+			const manager = makeSearchConvergenceManager()
 
 			const start = Date.now()
 			await (
@@ -587,6 +803,278 @@ describe("benchmark event search convergence", () => {
 				delete process.env.MEMONGO_BENCHMARK_EVENT_SEARCH_PROBE_MAX_TIME_MS
 			else
 				process.env.MEMONGO_BENCHMARK_EVENT_SEARCH_PROBE_MAX_TIME_MS = prevProbe
+		}
+	})
+
+	it("probes raw-session readiness through the session_chunks vector index", async () => {
+		const previousStrict = process.env.MEMONGO_BENCHMARK_STRICT
+		const previousTimeout =
+			process.env.MEMONGO_BENCHMARK_VECTOR_SEARCH_SETTLE_TIMEOUT_MS
+		const previousProbeTimeout =
+			process.env.MEMONGO_BENCHMARK_VECTOR_SEARCH_PROBE_MAX_TIME_MS
+		process.env.MEMONGO_BENCHMARK_STRICT = "1"
+		process.env.MEMONGO_BENCHMARK_VECTOR_SEARCH_SETTLE_TIMEOUT_MS = "1500"
+		process.env.MEMONGO_BENCHMARK_VECTOR_SEARCH_PROBE_MAX_TIME_MS = "1234"
+		try {
+			const { readSearchIndexStatus } = await import(
+				"./mongodb-benchmark-readiness.js"
+			)
+			mocked(readSearchIndexStatus).mockResolvedValue({
+				kind: "ok",
+				status: "READY",
+				queryable: true,
+				indexName: "test_session_chunks_vector",
+			})
+			const aggregate = vi.fn().mockReturnValue({
+				toArray: vi.fn().mockResolvedValue([{ count: 2 }]),
+			})
+			mocked(sessionChunksCollection).mockReturnValue({
+				find: makeSearchableTextFind(),
+				aggregate,
+			} as never)
+			const manager = makeSearchConvergenceManager()
+
+			await (
+				MongoDBMemoryManager.prototype as unknown as {
+					waitForBenchmarkSearchConvergence: (
+						this: MongoDBMemoryManager,
+						params: {
+							agentId: string
+							retrievalLane?: "native" | "raw-session"
+						},
+					) => Promise<void>
+				}
+			).waitForBenchmarkSearchConvergence.call(manager, {
+				agentId: "agent-raw",
+				retrievalLane: "raw-session",
+			})
+
+			expect(aggregate).toHaveBeenCalledWith(
+				[
+					{
+						$vectorSearch: expect.objectContaining({
+							filter: { agentId: "agent-raw" },
+							index: "test_session_chunks_vector",
+							model: "voyage-4-large",
+							path: "text",
+							query: { text: "benchmark vector readiness probe" },
+						}),
+					},
+					{ $count: "count" },
+				],
+				{ maxTimeMS: 1234, signal: expect.any(AbortSignal) },
+			)
+			expect(eventsCollection).not.toHaveBeenCalled()
+			expect(chunksCollection).not.toHaveBeenCalled()
+		} finally {
+			if (previousStrict === undefined) {
+				delete process.env.MEMONGO_BENCHMARK_STRICT
+			} else {
+				process.env.MEMONGO_BENCHMARK_STRICT = previousStrict
+			}
+			if (previousTimeout === undefined) {
+				delete process.env.MEMONGO_BENCHMARK_VECTOR_SEARCH_SETTLE_TIMEOUT_MS
+			} else {
+				process.env.MEMONGO_BENCHMARK_VECTOR_SEARCH_SETTLE_TIMEOUT_MS =
+					previousTimeout
+			}
+			if (previousProbeTimeout === undefined) {
+				delete process.env.MEMONGO_BENCHMARK_VECTOR_SEARCH_PROBE_MAX_TIME_MS
+			} else {
+				process.env.MEMONGO_BENCHMARK_VECTOR_SEARCH_PROBE_MAX_TIME_MS =
+					previousProbeTimeout
+			}
+		}
+	})
+
+	it("uses longer strict defaults for raw-session vector probes", async () => {
+		const previousStrict = process.env.MEMONGO_BENCHMARK_STRICT
+		const previousTimeout =
+			process.env.MEMONGO_BENCHMARK_VECTOR_SEARCH_SETTLE_TIMEOUT_MS
+		const previousFallbackTimeout =
+			process.env.MEMONGO_BENCHMARK_EVENT_SEARCH_SETTLE_TIMEOUT_MS
+		const previousProbeTimeout =
+			process.env.MEMONGO_BENCHMARK_VECTOR_SEARCH_PROBE_MAX_TIME_MS
+		const previousFallbackProbeTimeout =
+			process.env.MEMONGO_BENCHMARK_EVENT_SEARCH_PROBE_MAX_TIME_MS
+		process.env.MEMONGO_BENCHMARK_STRICT = "1"
+		delete process.env.MEMONGO_BENCHMARK_VECTOR_SEARCH_SETTLE_TIMEOUT_MS
+		delete process.env.MEMONGO_BENCHMARK_EVENT_SEARCH_SETTLE_TIMEOUT_MS
+		delete process.env.MEMONGO_BENCHMARK_VECTOR_SEARCH_PROBE_MAX_TIME_MS
+		delete process.env.MEMONGO_BENCHMARK_EVENT_SEARCH_PROBE_MAX_TIME_MS
+		try {
+			const { readSearchIndexStatus } = await import(
+				"./mongodb-benchmark-readiness.js"
+			)
+			mocked(readSearchIndexStatus).mockResolvedValue({
+				kind: "ok",
+				status: "READY",
+				queryable: true,
+				indexName: "test_session_chunks_vector",
+			})
+			const aggregate = vi.fn().mockReturnValue({
+				toArray: vi.fn().mockResolvedValue([{ count: 2 }]),
+			})
+			mocked(sessionChunksCollection).mockReturnValue({
+				find: makeSearchableTextFind(),
+				aggregate,
+			} as never)
+			const manager = makeSearchConvergenceManager()
+
+			await (
+				MongoDBMemoryManager.prototype as unknown as {
+					waitForBenchmarkSearchConvergence: (
+						this: MongoDBMemoryManager,
+						params: {
+							agentId: string
+							retrievalLane?: "native" | "raw-session"
+						},
+					) => Promise<void>
+				}
+			).waitForBenchmarkSearchConvergence.call(manager, {
+				agentId: "agent-defaults",
+				retrievalLane: "raw-session",
+			})
+
+			expect(aggregate).toHaveBeenCalledWith(expect.any(Array), {
+				maxTimeMS: 30000,
+				signal: expect.any(AbortSignal),
+			})
+		} finally {
+			if (previousStrict === undefined) {
+				delete process.env.MEMONGO_BENCHMARK_STRICT
+			} else {
+				process.env.MEMONGO_BENCHMARK_STRICT = previousStrict
+			}
+			if (previousTimeout === undefined) {
+				delete process.env.MEMONGO_BENCHMARK_VECTOR_SEARCH_SETTLE_TIMEOUT_MS
+			} else {
+				process.env.MEMONGO_BENCHMARK_VECTOR_SEARCH_SETTLE_TIMEOUT_MS =
+					previousTimeout
+			}
+			if (previousFallbackTimeout === undefined) {
+				delete process.env.MEMONGO_BENCHMARK_EVENT_SEARCH_SETTLE_TIMEOUT_MS
+			} else {
+				process.env.MEMONGO_BENCHMARK_EVENT_SEARCH_SETTLE_TIMEOUT_MS =
+					previousFallbackTimeout
+			}
+			if (previousProbeTimeout === undefined) {
+				delete process.env.MEMONGO_BENCHMARK_VECTOR_SEARCH_PROBE_MAX_TIME_MS
+			} else {
+				process.env.MEMONGO_BENCHMARK_VECTOR_SEARCH_PROBE_MAX_TIME_MS =
+					previousProbeTimeout
+			}
+			if (previousFallbackProbeTimeout === undefined) {
+				delete process.env.MEMONGO_BENCHMARK_EVENT_SEARCH_PROBE_MAX_TIME_MS
+			} else {
+				process.env.MEMONGO_BENCHMARK_EVENT_SEARCH_PROBE_MAX_TIME_MS =
+					previousFallbackProbeTimeout
+			}
+		}
+	})
+
+	it("waits through pending raw-session vector readiness when aggregate results are visible", async () => {
+		const previousStrict = process.env.MEMONGO_BENCHMARK_STRICT
+		const previousTimeout =
+			process.env.MEMONGO_BENCHMARK_VECTOR_SEARCH_SETTLE_TIMEOUT_MS
+		process.env.MEMONGO_BENCHMARK_STRICT = "1"
+		process.env.MEMONGO_BENCHMARK_VECTOR_SEARCH_SETTLE_TIMEOUT_MS = "1500"
+		try {
+			const { readSearchIndexStatus } = await import(
+				"./mongodb-benchmark-readiness.js"
+			)
+			mocked(readSearchIndexStatus).mockResolvedValue({
+				kind: "ok",
+				status: "PENDING",
+				queryable: false,
+				indexName: "test_session_chunks_vector",
+			})
+			const aggregate = vi.fn().mockReturnValue({
+				toArray: vi.fn().mockResolvedValue([{ count: 2 }]),
+			})
+			mocked(sessionChunksCollection).mockReturnValue({
+				find: makeSearchableTextFind(),
+				aggregate,
+			} as never)
+			const manager = makeSearchConvergenceManager()
+
+			await expect(
+				(
+					MongoDBMemoryManager.prototype as unknown as {
+						waitForBenchmarkSearchConvergence: (
+							this: MongoDBMemoryManager,
+							params: {
+								agentId: string
+								retrievalLane?: "native" | "raw-session"
+							},
+						) => Promise<void>
+					}
+				).waitForBenchmarkSearchConvergence.call(manager, {
+					agentId: "agent-pending",
+					retrievalLane: "raw-session",
+				}),
+			).resolves.toBeUndefined()
+			expect(aggregate).toHaveBeenCalled()
+		} finally {
+			if (previousStrict === undefined) {
+				delete process.env.MEMONGO_BENCHMARK_STRICT
+			} else {
+				process.env.MEMONGO_BENCHMARK_STRICT = previousStrict
+			}
+			if (previousTimeout === undefined) {
+				delete process.env.MEMONGO_BENCHMARK_VECTOR_SEARCH_SETTLE_TIMEOUT_MS
+			} else {
+				process.env.MEMONGO_BENCHMARK_VECTOR_SEARCH_SETTLE_TIMEOUT_MS =
+					previousTimeout
+			}
+		}
+	})
+
+	it("fails strict raw-session convergence when no session evidence documents exist", async () => {
+		const previousStrict = process.env.MEMONGO_BENCHMARK_STRICT
+		process.env.MEMONGO_BENCHMARK_STRICT = "1"
+		try {
+			const { readSearchIndexStatus } = await import(
+				"./mongodb-benchmark-readiness.js"
+			)
+			mocked(readSearchIndexStatus).mockResolvedValue({
+				kind: "ok",
+				status: "READY",
+				queryable: true,
+				indexName: "test_session_chunks_vector",
+			})
+			const aggregate = vi.fn()
+			mocked(sessionChunksCollection).mockReturnValue({
+				find: makeSearchableTextFind([]),
+				aggregate,
+			} as never)
+			const manager = makeSearchConvergenceManager()
+
+			await expect(
+				(
+					MongoDBMemoryManager.prototype as unknown as {
+						waitForBenchmarkSearchConvergence: (
+							this: MongoDBMemoryManager,
+							params: {
+								agentId: string
+								retrievalLane?: "native" | "raw-session"
+							},
+						) => Promise<void>
+					}
+				).waitForBenchmarkSearchConvergence.call(manager, {
+					agentId: "agent-missing-session-evidence",
+					retrievalLane: "raw-session",
+				}),
+			).rejects.toThrow(
+				"benchmark session_chunks vector convergence has no searchable documents",
+			)
+			expect(aggregate).not.toHaveBeenCalled()
+		} finally {
+			if (previousStrict === undefined) {
+				delete process.env.MEMONGO_BENCHMARK_STRICT
+			} else {
+				process.env.MEMONGO_BENCHMARK_STRICT = previousStrict
+			}
 		}
 	})
 })
@@ -685,6 +1173,63 @@ describe("benchmark scenario queue settling", () => {
 		}
 	})
 
+	it("names derivationSchedulingQueue when post-write scheduling hangs", async () => {
+		const prev = process.env.MEMONGO_BENCHMARK_QUEUE_SETTLE_TIMEOUT_MS
+		const prevStrict = process.env.MEMONGO_BENCHMARK_STRICT
+		process.env.MEMONGO_BENCHMARK_QUEUE_SETTLE_TIMEOUT_MS = "200"
+		process.env.MEMONGO_BENCHMARK_STRICT = "1"
+		try {
+			const manager = {
+				agentId: "benchmark-agent-scheduling",
+				writeQueue: Promise.resolve(),
+				derivationSchedulingQueue: new Promise<void>(() => {}),
+				derivationQueue: Promise.resolve(),
+			} as unknown as MongoDBMemoryManager
+			await expect(callSettle(manager)).rejects.toThrow(
+				/derivationSchedulingQueue settle timed out after 200ms/,
+			)
+		} finally {
+			if (prev === undefined)
+				delete process.env.MEMONGO_BENCHMARK_QUEUE_SETTLE_TIMEOUT_MS
+			else process.env.MEMONGO_BENCHMARK_QUEUE_SETTLE_TIMEOUT_MS = prev
+			if (prevStrict === undefined) delete process.env.MEMONGO_BENCHMARK_STRICT
+			else process.env.MEMONGO_BENCHMARK_STRICT = prevStrict
+		}
+	})
+
+	it("waits for post-write scheduling that enqueues derived work", async () => {
+		const prev = process.env.MEMONGO_BENCHMARK_QUEUE_SETTLE_TIMEOUT_MS
+		const prevStrict = process.env.MEMONGO_BENCHMARK_STRICT
+		process.env.MEMONGO_BENCHMARK_QUEUE_SETTLE_TIMEOUT_MS = "500"
+		process.env.MEMONGO_BENCHMARK_STRICT = "1"
+		try {
+			const manager = {
+				agentId: "benchmark-agent-scheduling-flush",
+				writeQueue: Promise.resolve(),
+				derivationQueue: Promise.resolve(),
+			} as MongoDBMemoryManager & {
+				derivationSchedulingQueue: Promise<void>
+				derivationQueue: Promise<void>
+			}
+			manager.derivationSchedulingQueue = new Promise<void>((resolve) => {
+				setTimeout(() => {
+					manager.derivationQueue = new Promise<void>((resolveDerived) => {
+						setTimeout(resolveDerived, 25)
+					})
+					resolve()
+				}, 25)
+			})
+
+			await expect(callSettle(manager)).resolves.toBeUndefined()
+		} finally {
+			if (prev === undefined)
+				delete process.env.MEMONGO_BENCHMARK_QUEUE_SETTLE_TIMEOUT_MS
+			else process.env.MEMONGO_BENCHMARK_QUEUE_SETTLE_TIMEOUT_MS = prev
+			if (prevStrict === undefined) delete process.env.MEMONGO_BENCHMARK_STRICT
+			else process.env.MEMONGO_BENCHMARK_STRICT = prevStrict
+		}
+	})
+
 	it("succeeds on slow-but-bounded queue under timeout (Task 1.3)", async () => {
 		const prev = process.env.MEMONGO_BENCHMARK_QUEUE_SETTLE_TIMEOUT_MS
 		const prevStrict = process.env.MEMONGO_BENCHMARK_STRICT
@@ -713,7 +1258,7 @@ describe("importConversations", () => {
 	})
 
 	it("resolves workspace-relative conversation imports before replay", async () => {
-		vi.mocked(importConversationDataset).mockResolvedValue({
+		mocked(importConversationDataset).mockResolvedValue({
 			datasetPath: "/workspace/imports/history.json",
 			datasetName: "history.json",
 			datasetKind: "generic",
@@ -819,7 +1364,7 @@ describe("relevanceBenchmark", () => {
 			await mkdir(datasetDir, { recursive: true })
 			await writeFile(datasetPath, JSON.stringify({ name: "placeholder" }))
 			const resolvedDatasetPath = await realpath(datasetPath)
-			vi.mocked(loadBenchmarkDataset).mockResolvedValue({
+			mocked(loadBenchmarkDataset).mockResolvedValue({
 				name: "LongMemEval sample",
 				datasetKind: "longmemeval",
 				conversations: [],
@@ -957,7 +1502,7 @@ describe("relevanceBenchmark", () => {
 			await mkdir(datasetDir, { recursive: true })
 			await writeFile(datasetPath, '{"query":"legacy"}\n')
 			const resolvedDatasetPath = await realpath(datasetPath)
-			vi.mocked(loadBenchmarkDataset).mockRejectedValue(
+			mocked(loadBenchmarkDataset).mockRejectedValue(
 				new Error("benchmark dataset contains no valid conversations"),
 			)
 			const runLegacyRelevanceBenchmark = vi.fn().mockResolvedValue({
@@ -1044,7 +1589,7 @@ describe("relevanceBenchmark", () => {
 		try {
 			await mkdir(datasetDir, { recursive: true })
 			await writeFile(datasetPath, JSON.stringify({ name: "placeholder" }))
-			vi.mocked(loadBenchmarkDataset).mockResolvedValue({
+			mocked(loadBenchmarkDataset).mockResolvedValue({
 				name: "LongMemEval sample",
 				datasetKind: "longmemeval",
 				conversations: [],
@@ -1437,7 +1982,9 @@ const { writeEvent, projectEventChunk, getEventsByTimeRange } = await import(
 	"./mongodb-events.js"
 )
 const { recordIngestRun, getProjectionLag } = await import("./mongodb-ops.js")
-const { planRetrieval } = await import("./mongodb-retrieval-planner.js")
+const { planRetrieval, resolveTimeRangePreset } = await import(
+	"./mongodb-retrieval-planner.js"
+)
 const { searchEpisodes } = await import("./mongodb-episodes.js")
 const { searchEntitiesAutocomplete, expandGraph } = await import(
 	"./mongodb-graph.js"
@@ -1469,13 +2016,13 @@ describe("writeEventAndProject", () => {
 	})
 
 	it("calls writeEvent + projectEventChunk + recordIngestRun and returns result", async () => {
-		vi.mocked(writeEvent).mockResolvedValue({
+		mocked(writeEvent).mockResolvedValue({
 			eventId: "evt-1",
 			timestamp: new Date("2026-03-16T00:00:00.000Z"),
 			scopeRef: "agent:agent-1",
 		})
-		vi.mocked(projectEventChunk).mockResolvedValue({ chunkCreated: true })
-		vi.mocked(recordIngestRun).mockResolvedValue("run-1")
+		mocked(projectEventChunk).mockResolvedValue({ chunkCreated: true })
+		mocked(recordIngestRun).mockResolvedValue("run-1")
 
 		const result = await writeEventAndProject(fakeDb, fakePrefix, {
 			agentId: "agent-1",
@@ -1506,8 +2053,8 @@ describe("writeEventAndProject", () => {
 
 	it("records failed ingest on error and re-throws", async () => {
 		const error = new Error("write failed")
-		vi.mocked(writeEvent).mockRejectedValue(error)
-		vi.mocked(recordIngestRun).mockResolvedValue("run-fail")
+		mocked(writeEvent).mockRejectedValue(error)
+		mocked(recordIngestRun).mockResolvedValue("run-fail")
 
 		await expect(
 			writeEventAndProject(fakeDb, fakePrefix, {
@@ -1532,8 +2079,8 @@ describe("writeEventAndProject", () => {
 
 	it("swallows recordIngestRun failure in catch path to not mask real error", async () => {
 		const realError = new Error("write failed")
-		vi.mocked(writeEvent).mockRejectedValue(realError)
-		vi.mocked(recordIngestRun).mockRejectedValue(
+		mocked(writeEvent).mockRejectedValue(realError)
+		mocked(recordIngestRun).mockRejectedValue(
 			new Error("ingest record also failed"),
 		)
 
@@ -1580,7 +2127,7 @@ describe("writeEventAndProject", () => {
 describe("searchV2", () => {
 	beforeEach(() => {
 		vi.clearAllMocks()
-		vi.mocked(crossEncoderRerank).mockImplementation(async ({ results }) => ({
+		mocked(crossEncoderRerank).mockImplementation(async ({ results }) => ({
 			results,
 			reranked: false,
 			latencyMs: 0,
@@ -1588,13 +2135,13 @@ describe("searchV2", () => {
 	})
 
 	it("uses retrieval planner and executes paths, returning results + metadata", async () => {
-		vi.mocked(planRetrieval).mockReturnValue({
+		mocked(planRetrieval).mockReturnValue({
 			paths: ["episodic", "hybrid", "raw-window"],
 			confidence: "high",
 			reasoning: "episodic keywords",
 		})
 
-		vi.mocked(searchEpisodes).mockResolvedValue([
+		mocked(searchEpisodes).mockResolvedValue([
 			{
 				episodeId: "ep-1",
 				title: "Morning standup",
@@ -1637,17 +2184,17 @@ describe("searchV2", () => {
 	})
 
 	it("continues when one path fails (inner try/catch per path)", async () => {
-		vi.mocked(planRetrieval).mockReturnValue({
+		mocked(planRetrieval).mockReturnValue({
 			paths: ["episodic", "raw-window", "hybrid"],
 			confidence: "medium",
 			reasoning: "test",
 		})
 
 		// Episodic fails
-		vi.mocked(searchEpisodes).mockRejectedValue(new Error("episodic broke"))
+		mocked(searchEpisodes).mockRejectedValue(new Error("episodic broke"))
 
 		// Raw-window succeeds
-		vi.mocked(getEventsByTimeRange).mockResolvedValue([
+		mocked(getEventsByTimeRange).mockResolvedValue([
 			{
 				eventId: "e-1",
 				body: "recent event",
@@ -1686,13 +2233,13 @@ describe("searchV2", () => {
 	})
 
 	it("ranks raw-window events by query relevance before pure recency", async () => {
-		vi.mocked(planRetrieval).mockReturnValue({
+		mocked(planRetrieval).mockReturnValue({
 			paths: ["raw-window"],
 			confidence: "medium",
 			reasoning: "conversation scope requested",
 		})
 
-		vi.mocked(getEventsByTimeRange).mockResolvedValue([
+		mocked(getEventsByTimeRange).mockResolvedValue([
 			{
 				eventId: "evt-recent",
 				body: "I will keep concise updates and track the Phoenix deploy checklist.",
@@ -1736,13 +2283,13 @@ describe("searchV2", () => {
 	})
 
 	it("executes graph path when entity names are provided", async () => {
-		vi.mocked(planRetrieval).mockReturnValue({
+		mocked(planRetrieval).mockReturnValue({
 			paths: ["graph", "hybrid", "raw-window"],
 			confidence: "high",
 			reasoning: "known entity detected",
 		})
 
-		vi.mocked(searchEntitiesAutocomplete).mockResolvedValue([
+		mocked(searchEntitiesAutocomplete).mockResolvedValue([
 			{
 				entityId: "ent-1",
 				name: "Alice",
@@ -1752,7 +2299,7 @@ describe("searchV2", () => {
 				updatedAt: new Date(),
 			},
 		])
-		vi.mocked(expandGraph).mockResolvedValue({
+		mocked(expandGraph).mockResolvedValue({
 			rootEntity: {
 				entityId: "ent-1",
 				name: "Alice",
@@ -1812,70 +2359,68 @@ describe("searchV2", () => {
 	})
 
 	it("passes the planned time-range end into graph expansion asOf", async () => {
-		vi.useFakeTimers()
-		try {
-			const now = new Date("2026-04-11T12:00:00.000Z")
-			vi.setSystemTime(now)
-			vi.mocked(planRetrieval).mockReturnValue({
-				paths: ["graph"],
-				confidence: "high",
-				reasoning: "known entity with temporal constraint",
-				constraints: {
-					timeRange: {
-						preset: "last-7d",
-						hard: true,
-						reason: "explicit last-week constraint",
-					},
-					entities: { names: ["Alice"] },
+		const plannedEnd = new Date("2026-04-11T12:00:00.000Z")
+		mocked(resolveTimeRangePreset).mockReturnValue({
+			start: new Date("2026-04-04T12:00:00.000Z"),
+			end: plannedEnd,
+		})
+		mocked(planRetrieval).mockReturnValue({
+			paths: ["graph"],
+			confidence: "high",
+			reasoning: "known entity with temporal constraint",
+			constraints: {
+				timeRange: {
+					preset: "last-7d",
+					hard: true,
+					reason: "explicit last-week constraint",
 				},
-			})
-			vi.mocked(searchEntitiesAutocomplete).mockResolvedValue([
-				{
-					entityId: "ent-1",
-					name: "Alice",
-					type: "person",
-					agentId: "agent-1",
-					scope: "agent",
-					updatedAt: new Date(),
-				},
-			])
-			vi.mocked(expandGraph).mockResolvedValue({
-				rootEntity: {
-					entityId: "ent-1",
-					name: "Alice",
-					type: "person",
-					agentId: "agent-1",
-					scope: "agent",
-					updatedAt: new Date(),
-				},
-				connections: [],
-			})
+				entities: { names: ["Alice"] },
+			},
+		})
+		mocked(searchEntitiesAutocomplete).mockResolvedValue([
+			{
+				entityId: "ent-1",
+				name: "Alice",
+				type: "person",
+				agentId: "agent-1",
+				scope: "agent",
+				updatedAt: new Date(),
+			},
+		])
+		mocked(expandGraph).mockResolvedValue({
+			rootEntity: {
+				entityId: "ent-1",
+				name: "Alice",
+				type: "person",
+				agentId: "agent-1",
+				scope: "agent",
+				updatedAt: new Date(),
+			},
+			connections: [],
+		})
 
-			await searchV2(
-				fakeDb,
-				fakePrefix,
-				"what did Alice work on last week",
-				"agent-1",
-				{
-					availablePaths: new Set(["graph"]),
-					knownEntityNames: ["Alice"],
-				},
-			)
+		await searchV2(
+			fakeDb,
+			fakePrefix,
+			"what did Alice work on last week",
+			"agent-1",
+			{
+				availablePaths: new Set(["graph"]),
+				knownEntityNames: ["Alice"],
+			},
+		)
 
-			expect(expandGraph).toHaveBeenCalledWith(
-				expect.objectContaining({
-					entityId: "ent-1",
-					agentId: "agent-1",
-					asOf: now,
-				}),
-			)
-		} finally {
-			vi.useRealTimers()
-		}
+		expect(expandGraph).toHaveBeenCalledWith(
+			expect.objectContaining({
+				entityId: "ent-1",
+				agentId: "agent-1",
+				asOf: plannedEnd,
+			}),
+		)
 	})
 
 	it("accepts questionDate in searchOptions type for post-retrieval scoring", async () => {
-		vi.mocked(planRetrieval).mockReturnValue({
+		mocked(planRetrieval).mockReturnValue({
 			paths: ["raw-window"],
 			confidence: "high",
 			reasoning: "temporal query",
@@ -1884,7 +2429,7 @@ describe("searchV2", () => {
 		const recentTimestamp = new Date("2024-03-14T00:00:00Z")
 		const oldTimestamp = new Date("2023-01-01T00:00:00Z")
 
-		vi.mocked(getEventsByTimeRange).mockResolvedValue([
+		mocked(getEventsByTimeRange).mockResolvedValue([
 			{
 				_id: "evt-old",
 				eventId: "evt-old",
@@ -1935,18 +2480,18 @@ describe("searchV2", () => {
 		const previousMode = process.env.MEMONGO_BENCHMARK_TEMPORAL_COVERAGE_MODE
 		process.env.MEMONGO_BENCHMARK_TEMPORAL_COVERAGE_MODE = "enabled"
 		try {
-			vi.mocked(planRetrieval).mockReturnValue({
+			mocked(planRetrieval).mockReturnValue({
 				paths: ["raw-window"],
 				confidence: "high",
 				reasoning: "temporal coverage query",
 			})
-			vi.mocked(crossEncoderRerank).mockImplementation(async ({ results }) => ({
+			mocked(crossEncoderRerank).mockImplementation(async ({ results }) => ({
 				results: [...results].toReversed(),
 				reranked: true,
 				latencyMs: 1,
 			}))
 
-			vi.mocked(getEventsByTimeRange).mockResolvedValue([
+			mocked(getEventsByTimeRange).mockResolvedValue([
 				{
 					_id: "evt-direct",
 					eventId: "evt-direct",
@@ -2003,7 +2548,7 @@ describe("searchV2", () => {
 					},
 				]),
 			})
-			vi.mocked(eventsCollection).mockReturnValue({
+			mocked(eventsCollection).mockReturnValue({
 				aggregate,
 				find,
 			} as never)
@@ -2057,7 +2602,7 @@ describe("searchV2", () => {
 				origin: questionDate,
 			})
 			expect(crossEncoderRerank).toHaveBeenCalledOnce()
-			const rerankInput = vi.mocked(crossEncoderRerank).mock.calls[0]?.[0] as
+			const rerankInput = mocked(crossEncoderRerank).mock.calls[0]?.[0] as
 				| { results: MemorySearchResult[] }
 				| undefined
 			expect(
@@ -2092,12 +2637,12 @@ describe("searchV2", () => {
 		const previousMode = process.env.MEMONGO_BENCHMARK_TURN_PRECISION_MODE
 		process.env.MEMONGO_BENCHMARK_TURN_PRECISION_MODE = "enabled"
 		try {
-			vi.mocked(planRetrieval).mockReturnValue({
+			mocked(planRetrieval).mockReturnValue({
 				paths: ["raw-window"],
 				confidence: "high",
 				reasoning: "recommendation memory query",
 			})
-			vi.mocked(getEventsByTimeRange).mockResolvedValue([
+			mocked(getEventsByTimeRange).mockResolvedValue([
 				{
 					_id: "evt-seed",
 					eventId: "evt-seed",
@@ -2145,7 +2690,7 @@ describe("searchV2", () => {
 					},
 				]),
 			})
-			vi.mocked(crossEncoderRerank).mockImplementation(async ({ results }) => ({
+			mocked(crossEncoderRerank).mockImplementation(async ({ results }) => ({
 				results: results
 					.map((entry) => ({
 						...entry,
@@ -2160,7 +2705,7 @@ describe("searchV2", () => {
 				reranked: true,
 				latencyMs: 1,
 			}))
-			vi.mocked(eventsCollection).mockReturnValue({ aggregate } as never)
+			mocked(eventsCollection).mockReturnValue({ aggregate } as never)
 
 			const result = await searchV2(
 				fakeDb,
@@ -2306,14 +2851,14 @@ describe("getV2Status", () => {
 			findOne: vi.fn().mockResolvedValue({ status: "ok", hitSources: ["kb"] }),
 		} as unknown as import("mongodb").Collection<import("mongodb").Document>
 
-		vi.mocked(eventsCollection).mockReturnValue(eventCol)
-		vi.mocked(entitiesCollection).mockReturnValue(derivedCol)
-		vi.mocked(relationsCollection).mockReturnValue(derivedCol)
-		vi.mocked(episodesCollection).mockReturnValue(derivedCol)
-		vi.mocked(proceduresCollection).mockReturnValue(derivedCol)
-		vi.mocked(relevanceRunsCollection).mockReturnValue(relevanceCol)
+		mocked(eventsCollection).mockReturnValue(eventCol)
+		mocked(entitiesCollection).mockReturnValue(derivedCol)
+		mocked(relationsCollection).mockReturnValue(derivedCol)
+		mocked(episodesCollection).mockReturnValue(derivedCol)
+		mocked(proceduresCollection).mockReturnValue(derivedCol)
+		mocked(relevanceRunsCollection).mockReturnValue(relevanceCol)
 
-		vi.mocked(getProjectionLag)
+		mocked(getProjectionLag)
 			.mockResolvedValueOnce(10) // chunks lag
 			.mockResolvedValueOnce(20) // entities lag
 			.mockResolvedValueOnce(30) // relations lag
@@ -2358,14 +2903,14 @@ describe("getV2Status", () => {
 			findOne: vi.fn().mockRejectedValue(new Error("connection lost")),
 		} as unknown as import("mongodb").Collection<import("mongodb").Document>
 
-		vi.mocked(eventsCollection).mockReturnValue(workingCol)
-		vi.mocked(entitiesCollection).mockReturnValue(failingCol)
-		vi.mocked(relationsCollection).mockReturnValue(failingCol)
-		vi.mocked(episodesCollection).mockReturnValue(failingCol)
-		vi.mocked(proceduresCollection).mockReturnValue(failingCol)
-		vi.mocked(relevanceRunsCollection).mockReturnValue(failingCol)
+		mocked(eventsCollection).mockReturnValue(workingCol)
+		mocked(entitiesCollection).mockReturnValue(failingCol)
+		mocked(relationsCollection).mockReturnValue(failingCol)
+		mocked(episodesCollection).mockReturnValue(failingCol)
+		mocked(proceduresCollection).mockReturnValue(failingCol)
+		mocked(relevanceRunsCollection).mockReturnValue(failingCol)
 
-		vi.mocked(getProjectionLag)
+		mocked(getProjectionLag)
 			.mockResolvedValueOnce(5) // chunks lag works
 			.mockRejectedValueOnce(new Error("timeout")) // entities lag fails
 			.mockResolvedValueOnce(15) // relations lag works
@@ -2477,14 +3022,14 @@ describe("writeEventAndProject telemetry emission", () => {
 		const { recordIngestRun } = await import("./mongodb-ops.js")
 		const { extractAndUpsertEntities } = await import("./mongodb-graph.js")
 
-		vi.mocked(writeEvent).mockResolvedValue({
+		mocked(writeEvent).mockResolvedValue({
 			eventId: "evt-1",
 			timestamp: new Date("2026-03-16T00:00:00.000Z"),
 			scopeRef: "agent:agent-1",
 		})
-		vi.mocked(projectEventChunk).mockResolvedValue({ chunkCreated: true })
-		vi.mocked(recordIngestRun).mockResolvedValue("run-1")
-		vi.mocked(extractAndUpsertEntities).mockResolvedValue({
+		mocked(projectEventChunk).mockResolvedValue({ chunkCreated: true })
+		mocked(recordIngestRun).mockResolvedValue("run-1")
+		mocked(extractAndUpsertEntities).mockResolvedValue({
 			entities: [],
 			relationsCreated: 0,
 		})
@@ -2522,8 +3067,8 @@ describe("MongoDBMemoryManager consolidate job tracking", () => {
 		)
 		const { consolidateMemory } = await import("./mongodb-consolidator.js")
 
-		vi.mocked(createMemoryJob).mockRejectedValue(new Error("job create failed"))
-		vi.mocked(consolidateMemory).mockResolvedValue({
+		mocked(createMemoryJob).mockRejectedValue(new Error("job create failed"))
+		mocked(consolidateMemory).mockResolvedValue({
 			runId: "run-1",
 			eventsProcessed: 3,
 			factsPromoted: 2,
@@ -2554,9 +3099,9 @@ describe("MongoDBMemoryManager consolidate job tracking", () => {
 		)
 		const { consolidateMemory } = await import("./mongodb-consolidator.js")
 
-		vi.mocked(createMemoryJob).mockResolvedValue("job-1")
-		vi.mocked(consolidateMemory).mockRejectedValue(new Error("boom"))
-		vi.mocked(updateMemoryJob).mockRejectedValue(new Error("job update failed"))
+		mocked(createMemoryJob).mockResolvedValue("job-1")
+		mocked(consolidateMemory).mockRejectedValue(new Error("boom"))
+		mocked(updateMemoryJob).mockRejectedValue(new Error("job update failed"))
 
 		const manager = Object.assign(
 			Object.create(MongoDBMemoryManager.prototype),
@@ -2588,8 +3133,8 @@ describe("MongoDBMemoryManager background extraction", () => {
 			"./mongodb-derived-memory.js"
 		)
 
-		vi.mocked(createMemoryJob).mockResolvedValue("extraction-evt-1")
-		vi.mocked(eventsCollection).mockReturnValue({
+		mocked(createMemoryJob).mockResolvedValue("extraction-evt-1")
+		mocked(eventsCollection).mockReturnValue({
 			findOne: vi.fn(async () => ({
 				eventId: "evt-1",
 				agentId: "agent-1",
@@ -2600,7 +3145,7 @@ describe("MongoDBMemoryManager background extraction", () => {
 				scopeRef: "agent:agent-1",
 			})),
 		} as unknown as import("mongodb").Collection)
-		vi.mocked(promoteDerivedMemoryFromEvent).mockResolvedValue({
+		mocked(promoteDerivedMemoryFromEvent).mockResolvedValue({
 			structuredCreated: 1,
 			proceduresCreated: 0,
 			skipped: false,
@@ -2672,7 +3217,7 @@ describe("MongoDBMemoryManager background extraction", () => {
 			"./mongodb-derived-memory.js"
 		)
 
-		vi.mocked(createMemoryJob).mockRejectedValue({ code: 11000 })
+		mocked(createMemoryJob).mockRejectedValue({ code: 11000 })
 
 		const manager = Object.assign(
 			Object.create(MongoDBMemoryManager.prototype),
@@ -2729,18 +3274,18 @@ describe("MongoDBMemoryManager background extraction", () => {
 			"./mongodb-derived-memory.js"
 		)
 
-		vi.mocked(writeEvent).mockResolvedValue({
+		mocked(writeEvent).mockResolvedValue({
 			eventId: "evt-1",
 			timestamp: new Date("2026-04-09T12:00:00.000Z"),
 			scopeRef: "agent:agent-1",
 		})
-		vi.mocked(projectEventChunk).mockResolvedValue({ chunkCreated: false })
-		vi.mocked(extractAndUpsertEntities).mockResolvedValue({
+		mocked(projectEventChunk).mockResolvedValue({ chunkCreated: false })
+		mocked(extractAndUpsertEntities).mockResolvedValue({
 			entities: [],
 			relationsCreated: 0,
 		})
-		vi.mocked(createMemoryJob).mockResolvedValue("extraction-evt-1")
-		vi.mocked(eventsCollection).mockReturnValue({
+		mocked(createMemoryJob).mockResolvedValue("extraction-evt-1")
+		mocked(eventsCollection).mockReturnValue({
 			findOne: vi.fn(async () => ({
 				eventId: "evt-1",
 				agentId: "agent-1",
@@ -2751,7 +3296,7 @@ describe("MongoDBMemoryManager background extraction", () => {
 				scopeRef: "agent:agent-1",
 			})),
 		} as unknown as import("mongodb").Collection)
-		vi.mocked(promoteDerivedMemoryFromEvent).mockResolvedValue({
+		mocked(promoteDerivedMemoryFromEvent).mockResolvedValue({
 			structuredCreated: 0,
 			proceduresCreated: 0,
 			skipped: true,
@@ -2802,6 +3347,168 @@ describe("MongoDBMemoryManager background extraction", () => {
 			}),
 		)
 		expect(promoteDerivedMemoryFromEvent).toHaveBeenCalled()
+	})
+
+	it("skips benchmark-only derived work when benchmark mode disables it", async () => {
+		const prev = process.env.MEMONGO_BENCHMARK_DERIVED_WORK_MODE
+		process.env.MEMONGO_BENCHMARK_DERIVED_WORK_MODE = "disabled"
+		try {
+			const { writeEvent, projectEventChunk } = await import(
+				"./mongodb-events.js"
+			)
+			const { extractAndUpsertEntities } = await import("./mongodb-graph.js")
+			const { createMemoryJob } = await import("./mongodb-memory-jobs.js")
+			const {
+				extractProcedureCandidatesFromEvent,
+				resolveStructuredCandidatesForPromotion,
+			} = await import("./mongodb-derived-memory.js")
+			const { updateLaneCoverage } = await import("./mongodb-lane-coverage.js")
+
+			mocked(writeEvent).mockResolvedValue({
+				eventId: "evt-benchmark-1",
+				timestamp: new Date("2026-04-09T12:00:00.000Z"),
+				scopeRef: "agent:benchmark-agent-1",
+			})
+			mocked(projectEventChunk).mockResolvedValue({ chunkCreated: true })
+
+			const manager = Object.assign(
+				Object.create(MongoDBMemoryManager.prototype),
+				{
+					db: {} as import("mongodb").Db,
+					prefix: "test_",
+					agentId: "benchmark-agent-1",
+					client: undefined,
+					config: {
+						mongodb: {
+							embeddingMode: "automated",
+							episodes: { enabled: true, minEventsForEpisode: 6 },
+						},
+					},
+					workspaceDir: "/tmp/memongo",
+					writeQueue: Promise.resolve(),
+					derivationQueue: Promise.resolve(),
+					derivationSchedulingQueue: Promise.resolve(),
+					chunkCount: 0,
+					dirty: true,
+				},
+			) as MongoDBMemoryManager
+
+			await manager.writeConversationEvent({
+				role: "assistant",
+				body: "Remember this benchmark fact.",
+				scope: "agent",
+			})
+
+			expect(extractAndUpsertEntities).not.toHaveBeenCalled()
+			expect(createMemoryJob).not.toHaveBeenCalled()
+			expect(resolveStructuredCandidatesForPromotion).not.toHaveBeenCalled()
+			expect(extractProcedureCandidatesFromEvent).not.toHaveBeenCalled()
+			expect(updateLaneCoverage).toHaveBeenCalledWith(
+				expect.objectContaining({
+					agentId: "benchmark-agent-1",
+					increments: {
+						"raw-window": 1,
+						hybrid: 1,
+					},
+				}),
+			)
+		} finally {
+			if (prev === undefined)
+				delete process.env.MEMONGO_BENCHMARK_DERIVED_WORK_MODE
+			else process.env.MEMONGO_BENCHMARK_DERIVED_WORK_MODE = prev
+		}
+	})
+
+	it("keeps derived work enabled for non-benchmark agents", async () => {
+		const prev = process.env.MEMONGO_BENCHMARK_DERIVED_WORK_MODE
+		process.env.MEMONGO_BENCHMARK_DERIVED_WORK_MODE = "disabled"
+		try {
+			const { writeEvent, projectEventChunk } = await import(
+				"./mongodb-events.js"
+			)
+			const { extractAndUpsertEntities } = await import("./mongodb-graph.js")
+			const { createMemoryJob } = await import("./mongodb-memory-jobs.js")
+			const { eventsCollection } = await import("./mongodb-schema.js")
+			const { promoteDerivedMemoryFromEvent } = await import(
+				"./mongodb-derived-memory.js"
+			)
+
+			mocked(writeEvent).mockResolvedValue({
+				eventId: "evt-dogfood-1",
+				timestamp: new Date("2026-04-09T12:00:00.000Z"),
+				scopeRef: "agent:agent-1",
+			})
+			mocked(projectEventChunk).mockResolvedValue({ chunkCreated: false })
+			mocked(extractAndUpsertEntities).mockResolvedValue({
+				entities: [],
+				relationsCreated: 0,
+			})
+			mocked(createMemoryJob).mockResolvedValue("extraction-evt-dogfood-1")
+			mocked(eventsCollection).mockReturnValue({
+				findOne: vi.fn(async () => ({
+					eventId: "evt-dogfood-1",
+					agentId: "agent-1",
+					role: "assistant",
+					body: "Remember this dogfood fact.",
+					timestamp: new Date("2026-04-09T12:00:00.000Z"),
+					scope: "agent",
+					scopeRef: "agent:agent-1",
+				})),
+			} as unknown as import("mongodb").Collection)
+			mocked(promoteDerivedMemoryFromEvent).mockResolvedValue({
+				structuredCreated: 0,
+				proceduresCreated: 0,
+				skipped: false,
+			})
+
+			const manager = Object.assign(
+				Object.create(MongoDBMemoryManager.prototype),
+				{
+					db: {} as import("mongodb").Db,
+					prefix: "test_",
+					agentId: "agent-1",
+					client: undefined,
+					config: {
+						mongodb: {
+							embeddingMode: "automated",
+							episodes: { enabled: false, minEventsForEpisode: 6 },
+						},
+					},
+					workspaceDir: "/tmp/memongo",
+					writeQueue: Promise.resolve(),
+					derivationQueue: Promise.resolve(),
+					derivationSchedulingQueue: Promise.resolve(),
+					chunkCount: 0,
+					dirty: true,
+				},
+			) as MongoDBMemoryManager & {
+				derivationQueue: Promise<void>
+				derivationSchedulingQueue: Promise<void>
+			}
+
+			await manager.writeConversationEvent({
+				role: "assistant",
+				body: "Remember this dogfood fact.",
+				scope: "agent",
+			})
+			await manager.derivationSchedulingQueue
+			await manager.derivationQueue
+
+			expect(extractAndUpsertEntities).toHaveBeenCalled()
+			expect(createMemoryJob).toHaveBeenCalledWith(
+				expect.objectContaining({
+					job: expect.objectContaining({
+						jobId: "extraction-evt-dogfood-1",
+						jobType: "extraction",
+					}),
+				}),
+			)
+			expect(promoteDerivedMemoryFromEvent).toHaveBeenCalled()
+		} finally {
+			if (prev === undefined)
+				delete process.env.MEMONGO_BENCHMARK_DERIVED_WORK_MODE
+			else process.env.MEMONGO_BENCHMARK_DERIVED_WORK_MODE = prev
+		}
 	})
 })
 
@@ -2861,20 +3568,20 @@ describe("scope-safe cache writes", () => {
 
 	it("search() writes cache with session scope when sessionKey is provided", async () => {
 		// Cache miss so the search pipeline runs
-		vi.mocked(checkCache).mockResolvedValue({
+		mocked(checkCache).mockResolvedValue({
 			hit: false,
 			tier: undefined,
 			results: [],
 		} as never)
 
 		// Planner returns episodic path — which is fully mocked
-		vi.mocked(planRetrieval).mockReturnValue({
+		mocked(planRetrieval).mockReturnValue({
 			paths: ["episodic"],
 			confidence: "high",
 			reasoning: "test scope cache",
 		})
 
-		vi.mocked(searchEpisodes).mockResolvedValue([
+		mocked(searchEpisodes).mockResolvedValue([
 			{
 				episodeId: "ep-scope-1",
 				title: "Scope session episode",
@@ -2895,26 +3602,26 @@ describe("scope-safe cache writes", () => {
 		})
 
 		expect(writeCache).toHaveBeenCalledTimes(1)
-		const writeCacheArgs = vi.mocked(writeCache).mock.calls[0]![0]
+		const writeCacheArgs = mocked(writeCache).mock.calls[0]![0]
 		// BUG: currently writes scope: "agent" — should be "session"
 		expect(writeCacheArgs.scope).toBe("session")
 		expect(writeCacheArgs.scopeRef).toBe("session:sess-1")
 	})
 
 	it("search() reads cache with session scope when sessionKey is provided", async () => {
-		vi.mocked(checkCache).mockResolvedValue({
+		mocked(checkCache).mockResolvedValue({
 			hit: false,
 			tier: undefined,
 			results: [],
 		} as never)
 
-		vi.mocked(planRetrieval).mockReturnValue({
+		mocked(planRetrieval).mockReturnValue({
 			paths: ["episodic"],
 			confidence: "high",
 			reasoning: "test scope in cache read",
 		})
 
-		vi.mocked(searchEpisodes).mockResolvedValue([])
+		mocked(searchEpisodes).mockResolvedValue([])
 
 		const manager = buildMockManager()
 		await manager.search("what did we discuss?", {
@@ -2931,12 +3638,12 @@ describe("scope-safe cache writes", () => {
 	})
 
 	it("keeps default agent searches out of workspace bridge chunks", async () => {
-		vi.mocked(checkCache).mockResolvedValue({
+		mocked(checkCache).mockResolvedValue({
 			hit: false,
 			tier: undefined,
 			results: [],
 		} as never)
-		vi.mocked(planRetrieval).mockReturnValue({
+		mocked(planRetrieval).mockReturnValue({
 			paths: ["hybrid"],
 			confidence: "high",
 			reasoning: "test bridge isolation",
@@ -2953,7 +3660,7 @@ describe("scope-safe cache writes", () => {
 				},
 			]),
 		})
-		vi.mocked(chunksCollection).mockReturnValue({
+		mocked(chunksCollection).mockReturnValue({
 			aggregate: chunksAggregate,
 		} as never)
 
@@ -2981,12 +3688,12 @@ describe("scope-safe cache writes", () => {
 		const previousMode = process.env.MEMONGO_SESSION_EVIDENCE_MODE
 		process.env.MEMONGO_SESSION_EVIDENCE_MODE = "B"
 		try {
-			vi.mocked(planRetrieval).mockReturnValue({
+			mocked(planRetrieval).mockReturnValue({
 				paths: ["hybrid"],
 				confidence: "high",
 				reasoning: "test session chunk isolation",
 			})
-			vi.mocked(chunksCollection).mockReturnValue({
+			mocked(chunksCollection).mockReturnValue({
 				aggregate: vi.fn().mockReturnValue({
 					toArray: vi.fn().mockResolvedValue([]),
 				}),
@@ -2994,7 +3701,7 @@ describe("scope-safe cache writes", () => {
 			const sessionAggregate = vi.fn().mockReturnValue({
 				toArray: vi.fn().mockResolvedValue([]),
 			})
-			vi.mocked(sessionChunksCollection).mockReturnValue({
+			mocked(sessionChunksCollection).mockReturnValue({
 				aggregate: sessionAggregate,
 			} as never)
 

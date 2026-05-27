@@ -22,6 +22,7 @@ import {
 import http from "node:http"
 import os from "node:os"
 import path from "node:path"
+import { resolveBenchmarkCollectionPrefix } from "./benchmark-run-isolation.js"
 
 type RunWarningCounters = {
 	scoreFusionNoHits: number
@@ -62,6 +63,10 @@ type RunTelemetry = {
 		lastLineAt?: string
 	}
 	warnings: RunWarningCounters
+	mongodb: {
+		collectionPrefix: string
+		collectionPrefixSource: "explicit" | "derived"
+	}
 }
 
 type RunEvent = {
@@ -84,6 +89,7 @@ type RunStatus = {
 		path: string
 		name: string
 		sha256: string
+		kind?: string
 		scenarios: number
 		sessions: number
 		turns: number
@@ -93,6 +99,10 @@ type RunStatus = {
 		commit: string
 		id: string
 		label: string
+	}
+	mongodb: {
+		collectionPrefix: string
+		collectionPrefixSource: "explicit" | "derived"
 	}
 	paths: {
 		runDir: string
@@ -111,14 +121,23 @@ const startedAt = new Date()
 const runId =
 	process.env.MEMONGO_BENCHMARK_RUN_ID?.trim() ||
 	`${startedAt.toISOString().replace(/[:.]/g, "-")}-${randomUUID().slice(0, 8)}`
+const collectionPrefixResolution = resolveBenchmarkCollectionPrefix({
+	runId,
+	explicitPrefix: process.env.MEMONGO_MONGODB_COLLECTION_PREFIX,
+})
+process.env.MEMONGO_MONGODB_COLLECTION_PREFIX =
+	collectionPrefixResolution.collectionPrefix
 const port = Number(process.env.MEMONGO_API_PORT?.trim() || "3847")
 const baseUrl = `http://127.0.0.1:${port}`
 const workspaceDir =
 	process.env.MEMONGO_WORKSPACE_DIR?.trim() ||
 	path.join(os.homedir(), ".memongo", "workspace")
-const datasetPath =
+const datasetPathInput =
 	process.env.MEMONGO_BENCHMARK_DATASET_PATH?.trim() ||
 	path.join(workspaceDir, "benchmarks", "longmemeval_s_cleaned.json")
+const datasetPath = path.isAbsolute(datasetPathInput)
+	? datasetPathInput
+	: path.resolve(repoRoot, datasetPathInput)
 const artifactRoot =
 	process.env.MEMONGO_BENCHMARK_RUN_DIR?.trim() ||
 	path.join(
@@ -243,11 +262,70 @@ function summarizeLongMemEvalDataset(raw: unknown): RunStatus["dataset"] {
 		path: datasetPath,
 		name: path.basename(datasetPath),
 		sha256: "",
+		kind: "longmemeval",
 		scenarios: raw.length,
 		sessions,
 		turns,
 		abstentionCases,
 	}
+}
+
+function summarizeLoCoMoDataset(raw: unknown): RunStatus["dataset"] | null {
+	if (!Array.isArray(raw)) {
+		return null
+	}
+	let sessions = 0
+	let turns = 0
+	let abstentionCases = 0
+	for (const entry of raw) {
+		const record =
+			entry && typeof entry === "object"
+				? (entry as Record<string, unknown>)
+				: {}
+		const sampleId =
+			typeof record.sample_id === "string" ? record.sample_id.trim() : ""
+		const conversation =
+			record.conversation && typeof record.conversation === "object"
+				? (record.conversation as Record<string, unknown>)
+				: null
+		const qa = Array.isArray(record.qa) ? record.qa : null
+		if (!sampleId || !conversation || !qa) {
+			return null
+		}
+		abstentionCases += qa.filter((item) => {
+			const category =
+				item && typeof item === "object"
+					? (item as Record<string, unknown>).category
+					: undefined
+			return String(category) === "5"
+		}).length
+		for (let index = 1; ; index++) {
+			const session = conversation[`session_${index}`]
+			if (!Array.isArray(session)) {
+				break
+			}
+			sessions++
+			turns += session.length
+		}
+	}
+	return {
+		path: datasetPath,
+		name: path.basename(datasetPath),
+		sha256: "",
+		kind: "locomo",
+		scenarios: raw.length,
+		sessions,
+		turns,
+		abstentionCases,
+	}
+}
+
+function summarizeBenchmarkDataset(raw: unknown): RunStatus["dataset"] {
+	const loCoMo = summarizeLoCoMoDataset(raw)
+	if (loCoMo) {
+		return loCoMo
+	}
+	return summarizeLongMemEvalDataset(raw)
 }
 
 async function sleep(ms: number): Promise<void> {
@@ -417,7 +495,7 @@ async function main(): Promise<void> {
 
 	const datasetText = await readFile(datasetPath, "utf8")
 	const datasetSha = createHash("sha256").update(datasetText).digest("hex")
-	const dataset = summarizeLongMemEvalDataset(JSON.parse(datasetText))
+	const dataset = summarizeBenchmarkDataset(JSON.parse(datasetText))
 	dataset.sha256 = datasetSha
 
 	const commit =
@@ -450,6 +528,10 @@ async function main(): Promise<void> {
 		startedAt: startedAt.toISOString(),
 		dataset,
 		build: { commit, id: buildId, label: buildLabel },
+		mongodb: {
+			collectionPrefix: collectionPrefixResolution.collectionPrefix,
+			collectionPrefixSource: collectionPrefixResolution.source,
+		},
 		paths: {
 			runDir,
 			apiLog: apiLogPath,
@@ -488,6 +570,10 @@ async function main(): Promise<void> {
 				...(lastApiLineAt ? { lastLineAt: lastApiLineAt } : {}),
 			},
 			warnings: { ...warningCounts },
+			mongodb: {
+				collectionPrefix: collectionPrefixResolution.collectionPrefix,
+				collectionPrefixSource: collectionPrefixResolution.source,
+			},
 		}
 	}
 	const enqueueArtifactWrite = (task: () => Promise<void>): Promise<void> => {
@@ -635,6 +721,10 @@ async function main(): Promise<void> {
 					...(lastApiLineAt ? { lastLineAt: lastApiLineAt } : {}),
 				},
 				warnings: { ...warningCounts },
+				mongodb: {
+					collectionPrefix: collectionPrefixResolution.collectionPrefix,
+					collectionPrefixSource: collectionPrefixResolution.source,
+				},
 			})
 		} catch {
 			// Best effort only during process teardown.
@@ -822,6 +912,8 @@ async function main(): Promise<void> {
 			MEMONGO_API_HOST: "127.0.0.1",
 			MEMONGO_API_PORT: String(port),
 			MEMONGO_WORKSPACE_DIR: workspaceDir,
+			MEMONGO_MONGODB_COLLECTION_PREFIX:
+				collectionPrefixResolution.collectionPrefix,
 			MEMONGO_BUILD_COMMIT: commit,
 			MEMONGO_BUILD_ID: buildId,
 			MEMONGO_BUILD_LABEL: buildLabel,
@@ -854,6 +946,7 @@ async function main(): Promise<void> {
 		await recordEvent("benchmark-running", "Starting benchmark request", {
 			agentId,
 			maxResults: Number(process.env.MEMONGO_BENCHMARK_MAX_RESULTS ?? 50),
+			collectionPrefix: collectionPrefixResolution.collectionPrefix,
 		})
 		await writeTelemetry("benchmark-start")
 		await writeStatus()
@@ -863,6 +956,8 @@ async function main(): Promise<void> {
 				agentId,
 				datasetPath,
 				maxResults: Number(process.env.MEMONGO_BENCHMARK_MAX_RESULTS ?? 50),
+				retrievalLane:
+					process.env.MEMONGO_BENCHMARK_RETRIEVAL_LANE?.trim() || undefined,
 			},
 		})
 		const text = response.body

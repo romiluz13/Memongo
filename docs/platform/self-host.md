@@ -1,10 +1,10 @@
 # Self-host Memongo
 
-Memongo is data-plane memory you run next to your agents. This runbook describes the supported Memongo deployment layout and the canonical local stack.
+Memongo is data-plane memory you run next to your agents. This runbook describes the supported Memongo deployment layout for managed Atlas cloud and the local Atlas Preview parity stack.
 
 ## Components
 
-1. MongoDB via `mongodb/mongodb-atlas-local:preview`.
+1. MongoDB via managed Atlas cloud or `mongodb/mongodb-atlas-local:preview`.
 2. `apps/api` - stateless HTTP service.
 3. Optional: `apps/web` and `apps/mcp`.
 
@@ -14,24 +14,28 @@ Memongo is data-plane memory you run next to your agents. This runbook describes
 - `MEMONGO_API_KEY` - set in any untrusted network.
 - `MEMONGO_API_SCOPED_KEYS` - optional JSON policy for narrower bearer tokens bound to explicit `agentId`, `scope`, and `scopeRef` values.
 - `MEMONGO_API_PORT` / `MEMONGO_API_HOST` - bind address for `apps/api`.
-- `VOYAGE_API_KEY` - required for auto-embed and hybrid retrieval quality on the preview stack. Use an Atlas Model key with the `al-...` prefix.
+- `VOYAGE_API_KEY` - required for auto-embed and hybrid retrieval quality. Use an Atlas Model key with the `al-...` prefix.
 
 Optional file config: `~/.memongo/memongo.json` or `MEMONGO_CONFIG_PATH`. See `apps/docs/guides/memory-config.mdx`.
 
-## Canonical MongoDB stack
+## MongoDB runtimes
 
-Reference deployment:
+Managed Atlas cloud:
+
+```bash
+export MEMONGO_MONGODB_URI="mongodb+srv://<user>:<password>@<cluster>.mongodb.net/?appName=memongo"
+export VOYAGE_API_KEY="al-your-atlas-model-api-key"
+```
+
+Atlas Local Preview:
 
 ```bash
 export VOYAGE_API_KEY="al-your-atlas-model-api-key"
 docker compose -f docker/mongodb/docker-compose.preview.yml up -d
-```
-
-Use this URI from local apps and validation:
-
-```bash
 export MEMONGO_MONGODB_URI="mongodb://127.0.0.1:27017/?directConnection=true"
 ```
+
+Use managed Atlas cloud for benchmark/control runs and Atlas Local Preview for local reproducibility.
 
 ## Running the API
 

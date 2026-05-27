@@ -2,6 +2,7 @@ import type { Db } from "mongodb"
 import {
 	collectStorageFootprint,
 	percentile50And95,
+	type BenchmarkRetrievalLane,
 	resolveBenchmarkEmbeddingConfig,
 	resolveBenchmarkRerankerConfig,
 	resolveDatasetSha256,
@@ -27,7 +28,10 @@ import type {
 export type BenchmarkCandidateTrace = {
 	rank: number
 	score: number
+	finalScore: number
+	fusionScore?: number
 	source: string
+	lane: string
 	canonicalId?: string
 	sessionId?: string
 	resolvedSessionIds?: string[]
@@ -35,6 +39,7 @@ export type BenchmarkCandidateTrace = {
 	resolvedTurnIds?: string[]
 	path: string
 	timestamp?: string
+	whySurvived: string
 	/**
 	 * Task 35 observability (Fix #3): per-lane rank-fusion scoring
 	 * breakdown when the retrieval path emitted it. Lets Phase 5
@@ -70,15 +75,21 @@ export type BenchmarkMissLedgerEntry = {
 		| "update"
 		| "turn-selection"
 		| "unknown"
-	/** Top 5 candidates with source and score for inspection */
+	/** Top candidates with source, score, and lane context for inspection */
 	topCandidates: Array<{
 		rank: number
 		score: number
+		finalScore: number
+		fusionScore?: number
 		source: string
+		lane: string
 		sessionId?: string
 		canonicalId?: string
 		resolvedSessionIds?: string[]
+		resolvedTurnIds?: string[]
 		sourceEventIds?: string[]
+		path: string
+		whySurvived: string
 	}>
 }
 
@@ -406,6 +417,7 @@ export async function projectBenchmarkParityFields(params: {
 	collectionName: string
 	datasetPath?: string
 	datasetKind?: MemoryBenchmarkDatasetKind | "legacy-query"
+	retrievalLane?: BenchmarkRetrievalLane
 	datasetSha256Override?: string
 	mongoEmbeddingConfig: {
 		numDimensions: number
@@ -430,7 +442,10 @@ export async function projectBenchmarkParityFields(params: {
 		datasetPath: params.datasetPath,
 		override: params.datasetSha256Override,
 	})
-	const retrievalUnit = resolveRetrievalUnit(params.datasetKind)
+	const retrievalUnit = resolveRetrievalUnit(
+		params.datasetKind,
+		params.retrievalLane,
+	)
 	const embedding = resolveBenchmarkEmbeddingConfig(params.mongoEmbeddingConfig)
 	const reranker = resolveBenchmarkRerankerConfig(params.mongoRerankerConfig)
 	const storage = await collectStorageFootprint({
@@ -510,6 +525,39 @@ function uniqueSessionIds(sessionIds: string[]): string[] {
 	return Array.from(
 		new Set(sessionIds.map((value) => value.trim()).filter(Boolean)),
 	)
+}
+
+function inferCandidateLane(result: MemorySearchResult): string {
+	const lane =
+		result.provenance &&
+		typeof result.provenance === "object" &&
+		typeof result.provenance.lane === "string"
+			? result.provenance.lane
+			: ""
+	if (lane) return lane
+	if (result.path.startsWith("relation:")) return "graph"
+	if (result.path.startsWith("procedure:")) return "procedural"
+	if (result.path.startsWith("episode:")) return "episodic"
+	if (
+		result.path.startsWith("session-chunk/") ||
+		result.path.startsWith("session_chunks/") ||
+		result.canonicalId?.startsWith("session-chunk/")
+	) {
+		return "session-evidence"
+	}
+	if (result.source === "structured") return "structured"
+	if (result.source === "reference") return "reference"
+	return "conversation"
+}
+
+function explainCandidateSurvival(result: MemorySearchResult): string {
+	const reasons: string[] = []
+	if (result.sessionId) reasons.push("session-id")
+	if (result.sourceEventIds?.length) reasons.push("source-event-ids")
+	if (result.scoreDetails?.value !== undefined) reasons.push("fusion-score")
+	if (result.canonicalId) reasons.push("canonical-id")
+	if (result.timestamp) reasons.push("timestamp")
+	return reasons.length > 0 ? reasons.join(",") : "scored-result"
 }
 
 function officialDcgAtK(
@@ -753,7 +801,12 @@ export function evaluateRankingCase(params: {
 			? params.results.slice(0, traceMax).map((result, index) => ({
 					rank: index + 1,
 					score: result.score,
+					finalScore: result.score,
+					...(result.scoreDetails?.value !== undefined
+						? { fusionScore: result.scoreDetails.value }
+						: {}),
 					source: result.source ?? "unknown",
+					lane: inferCandidateLane(result),
 					canonicalId: result.canonicalId,
 					sessionId: result.sessionId,
 					resolvedSessionIds: uniqueSessionIds(
@@ -767,6 +820,7 @@ export function evaluateRankingCase(params: {
 					timestamp: result.timestamp
 						? new Date(result.timestamp).toISOString()
 						: undefined,
+					whySurvived: explainCandidateSurvival(result),
 					// Task 35 Fix #3: surface scoreDetails on per-case trace so Phase
 					// 5 investigations can see which lane contributed the winning
 					// score (vs vs text). Only populated when upstream search
@@ -984,8 +1038,9 @@ export function buildMissLedger(params: {
 		const caseId = exec.caseId ?? "unknown"
 		const expectedSessionIds = params.expectedSessionMap.get(caseId) ?? []
 		const expectedTurnIds = params.expectedTurnMap.get(caseId) ?? []
-		// Extract session IDs from top 10 candidates
+		// Extract session IDs from top 10 candidates for R@10-shaped diagnosis.
 		const top10 = (exec.topCandidates ?? []).slice(0, 10)
+		const top50 = (exec.topCandidates ?? []).slice(0, 50)
 		const topCandidateSessionIds = top10.flatMap((candidate) => {
 			if (
 				candidate.resolvedSessionIds &&
@@ -1029,14 +1084,20 @@ export function buildMissLedger(params: {
 			reachableTurnIds,
 			turnReachable,
 			missCategory: inferMissCategory(exec.questionType, sessionFound),
-			topCandidates: top10.slice(0, 5).map((c) => ({
+			topCandidates: top50.map((c) => ({
 				rank: c.rank,
 				score: c.score,
+				finalScore: c.finalScore,
+				fusionScore: c.fusionScore,
 				source: c.source,
+				lane: c.lane,
 				sessionId: c.sessionId,
 				canonicalId: c.canonicalId,
 				resolvedSessionIds: c.resolvedSessionIds,
+				resolvedTurnIds: c.resolvedTurnIds,
 				sourceEventIds: c.sourceEventIds,
+				path: c.path,
+				whySurvived: c.whySurvived,
 			})),
 		})
 	}

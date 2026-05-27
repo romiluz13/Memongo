@@ -818,12 +818,14 @@ export class MemongoClient {
 		datasetPath?: string
 		maxResults?: number
 		minScore?: number
+		retrievalLane?: "native" | "raw-session"
 	}): Promise<MemongoRelevanceBenchmarkResponse> {
 		return apiPost(this._opts, "/v1/admin/relevance/benchmark", {
 			agentId: input?.agentId,
 			datasetPath: input?.datasetPath,
 			maxResults: input?.maxResults,
 			minScore: input?.minScore,
+			retrievalLane: input?.retrievalLane,
 		})
 	}
 

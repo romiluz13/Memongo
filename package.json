@@ -2,7 +2,7 @@
 	"name": "memongo",
 	"private": true,
 	"description": "MongoDB-native long-term AI memory with reasoning chains, novelty detection, and consolidation: engine, SDK, HTTP API, MCP server, and web console",
-	"license": "MIT",
+	"license": "BUSL-1.1",
 	"packageManager": "bun@1.2.5",
 	"engines": {
 		"node": ">=20"
@@ -22,13 +22,18 @@
 		"format": "biome format .",
 		"format:fix": "biome format --write .",
 		"proof-pack": "bun scripts/proof-pack.ts",
+		"memory:inventory": "bun scripts/memory-plan-inventory.ts",
+		"mongodb:parity": "bun scripts/check-mongodb-runtime-parity.ts",
+		"mongodb:prepare": "bun scripts/prepare-mongodb-runtime.ts",
+		"mongodb:prefix-inventory": "bun scripts/mongodb-prefix-inventory.ts",
 		"memory-eval": "bun scripts/real-memory-eval.ts",
 		"compare-memory-eval": "bun scripts/compare-memory-eval.ts",
 		"agent-smoke": "bun scripts/real-agent-smoke.ts",
 		"capability-stress": "bun scripts/real-capability-stress.ts",
 		"benchmark:longmemeval:s": "bun scripts/launch-official-longmemeval-benchmark.ts",
 		"benchmark:canary": "bun scripts/run-longmemeval-canary.ts",
-		"benchmark:status": "bun scripts/check-benchmark-status.ts"
+		"benchmark:status": "bun scripts/check-benchmark-status.ts",
+		"mongodb:drop-benchmark-prefix": "bun scripts/drop-mongodb-benchmark-prefix.ts"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^2.4.0",

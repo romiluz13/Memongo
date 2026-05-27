@@ -7,6 +7,7 @@ import {
 	isSearchIndexWarmupError,
 	vectorSearch,
 	keywordSearch,
+	hybridSearchRankFusion,
 	hybridSearchJSFallback,
 	mongoSearch,
 	splitAtlasSearchFilter,
@@ -142,11 +143,30 @@ describe("vectorSearch", () => {
 		const vsStage = pipeline[0].$vectorSearch
 		expect(vsStage.index).toBe("test_vector")
 		expect(vsStage.query).toEqual({ text: "search query" })
+		expect(vsStage.model).toBe("voyage-4-large")
 		expect(vsStage.path).toBe("text")
 		expect(vsStage.queryVector).toBeUndefined()
 		expect(vsStage.numCandidates).toBeGreaterThanOrEqual(100)
 		expect(vsStage.limit).toBe(10)
 		expect(results).toHaveLength(2)
+	})
+
+	it("keeps ANN numCandidates greater than or equal to limit", async () => {
+		const col = mockCollectionWithResults(SAMPLE_DOCS)
+		await vectorSearch(col, null, {
+			maxResults: 50,
+			minScore: 0.1,
+			indexName: "test_vector",
+			queryText: "search query",
+			embeddingMode: "automated",
+			numCandidates: 20,
+		})
+
+		const pipeline = (col.aggregate as ReturnType<typeof vi.fn>).mock
+			.calls[0][0]
+		const vsStage = pipeline[0].$vectorSearch
+		expect(vsStage.limit).toBe(50)
+		expect(vsStage.numCandidates).toBe(50)
 	})
 
 	it("builds correct pipeline for automated mode", async () => {
@@ -163,6 +183,7 @@ describe("vectorSearch", () => {
 			.calls[0][0]
 		const vsStage = pipeline[0].$vectorSearch
 		expect(vsStage.query).toEqual({ text: "search query" })
+		expect(vsStage.model).toBe("voyage-4-large")
 		expect(vsStage.path).toBe("text")
 		expect(vsStage.queryVector).toBeUndefined()
 		expect(results).toHaveLength(2)
@@ -590,6 +611,11 @@ describe("mongoSearch dispatcher", () => {
 		const projectStage = pipeline.at(-1).$project
 		expect(projectStage.canonicalId).toBe(1)
 		expect(projectStage["metadata.sourceEventIds"]).toBe(1)
+		expect(pipeline[0].$scoreFusion.scoreDetails).toBe(true)
+		expect(pipeline.at(-2).$addFields.scoreDetails).toEqual({
+			$meta: "scoreDetails",
+		})
+		expect(projectStage.score).toBe("$scoreDetails.value")
 	})
 
 	it("uses $rankFusion when fusionMethod=rankFusion (skips $scoreFusion)", async () => {
@@ -609,6 +635,91 @@ describe("mongoSearch dispatcher", () => {
 		const projectStage = pipeline.at(-1).$project
 		expect(projectStage.canonicalId).toBe(1)
 		expect(projectStage["metadata.sourceEventIds"]).toBe(1)
+		expect(pipeline[0].$rankFusion.scoreDetails).toBe(true)
+		expect(pipeline.at(-2).$addFields.scoreDetails).toEqual({
+			$meta: "scoreDetails",
+		})
+		expect(projectStage.score).toBe("$scoreDetails.value")
+	})
+
+	it("keeps low RRF-scale $rankFusion scores instead of applying raw minScore", async () => {
+		const rrfDocs: Document[] = [
+			{
+				path: "memory/rrf.md",
+				startLine: 1,
+				endLine: 2,
+				text: "rank fusion result",
+				source: "conversation",
+				score: 0.004918,
+			},
+		]
+		const col = mockCollectionWithResults(rrfDocs)
+
+		const results = await hybridSearchRankFusion(
+			col,
+			"test query",
+			[0.1, 0.2],
+			{
+				maxResults: 10,
+				minScore: 0.1,
+				vectorIndexName: "chunks_vector",
+				textIndexName: "chunks_text",
+				vectorWeight: 0.7,
+				textWeight: 0.3,
+				embeddingMode: "automated",
+			},
+		)
+
+		expect(results).toHaveLength(1)
+		expect(results[0]?.score).toBe(0.004918)
+	})
+
+	it("enables and surfaces $rankFusion scoreDetails for explain traces", async () => {
+		const scoreDetails = {
+			value: 0.032,
+			description: "rrf",
+			details: [],
+		}
+		const col = mockCollectionWithResults([
+			{
+				path: "memory/rrf-details.md",
+				startLine: 1,
+				endLine: 2,
+				text: "rank fusion detail result",
+				source: "conversation",
+				scoreDetails,
+			},
+		])
+
+		const results = await hybridSearchRankFusion(
+			col,
+			"test query",
+			[0.1, 0.2],
+			{
+				maxResults: 10,
+				minScore: 0.1,
+				vectorIndexName: "chunks_vector",
+				textIndexName: "chunks_text",
+				vectorWeight: 0.7,
+				textWeight: 0.3,
+				embeddingMode: "automated",
+				explain: {
+					enabled: true,
+					includeScoreDetails: true,
+				},
+			},
+		)
+
+		const pipeline = (col.aggregate as ReturnType<typeof vi.fn>).mock
+			.calls[0][0]
+		expect(pipeline[0].$rankFusion.scoreDetails).toBe(true)
+		expect(pipeline.at(-2).$addFields.scoreDetails).toEqual({
+			$meta: "scoreDetails",
+		})
+		expect(pipeline.at(-1).$project.scoreDetails).toBe(1)
+		expect(pipeline.at(-1).$project.score).toBe("$scoreDetails.value")
+		expect(results[0]?.score).toBe(0.032)
+		expect(results[0]?.scoreDetails).toEqual(scoreDetails)
 	})
 
 	it("falls back from $scoreFusion to $rankFusion on error", async () => {
@@ -903,6 +1014,7 @@ describe("buildVectorSearchStage ENN", () => {
 		expect(stage!.numCandidates).toBeUndefined()
 		expect(stage!.limit).toBe(10)
 		expect(stage!.query).toEqual({ text: "test query" })
+		expect(stage!.model).toBe("voyage-4-large")
 	})
 
 	it("preserves filter pushdown in ENN mode", () => {

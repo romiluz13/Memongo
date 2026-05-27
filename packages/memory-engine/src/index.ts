@@ -113,6 +113,15 @@ export {
 	type CanonicalEvent,
 } from "./mongodb-events.js"
 export {
+	buildMemoryEvidenceDocuments,
+	isEvidenceMirrorEnabled,
+	resolveEvidenceMirrorMode,
+	writeMemoryEvidenceDocuments,
+	type EvidenceMirrorMode,
+	type MemoryEvidenceDocument,
+	type MemoryEvidenceUnit,
+} from "./mongodb-evidence-mirror.js"
+export {
 	upsertEntity,
 	upsertRelation,
 	findEntitiesByName,

@@ -32,6 +32,23 @@ export type MemorySearchExecutorTimeRange = {
 	end: Date
 }
 
+export type SearchResultLane =
+	| MemorySearchSourcePreference
+	| "session-evidence"
+	| "unknown"
+
+export type LaneControlSummary = {
+	applied: boolean
+	conversationEvidenceQuery: boolean
+	boosted: number
+	recencyBoosted: number
+	demoted: number
+	capped: number
+	sessionCapped: number
+	topK: number
+	caps: Partial<Record<SearchResultLane, number>>
+}
+
 export type MemorySearchExecutorRequest = MemorySearchRequest & {
 	searchMode: MemorySearchMode
 	maxPasses: number
@@ -1108,6 +1125,399 @@ export function applyMMRReranking(params: {
 	}
 
 	return { results: selected, mmrApplied: true, mmrLambda: lambda }
+}
+
+function readStringProvenance(
+	provenance: Record<string, unknown> | undefined,
+	key: string,
+): string | undefined {
+	const value = provenance?.[key]
+	return typeof value === "string" && value.trim().length > 0
+		? value.trim()
+		: undefined
+}
+
+function readEvidenceUnit(result: MemorySearchResult): string | undefined {
+	return readStringProvenance(result.provenance, "evidenceUnit")
+}
+
+export function inferSearchResultLane(
+	result: MemorySearchResult,
+): SearchResultLane {
+	const evidenceUnit = readEvidenceUnit(result)
+	if (evidenceUnit) {
+		if (evidenceUnit === "graph") return "graph"
+		if (evidenceUnit === "turn") return "conversation"
+		if (
+			evidenceUnit === "session" ||
+			evidenceUnit === "preference" ||
+			evidenceUnit === "userfact" ||
+			evidenceUnit === "assistant" ||
+			evidenceUnit === "temporal_anchor"
+		) {
+			return "session-evidence"
+		}
+	}
+	const provenanceLane = readStringProvenance(result.provenance, "lane")
+	if (provenanceLane) {
+		if (
+			provenanceLane === "raw-window" ||
+			provenanceLane === "hybrid" ||
+			provenanceLane === "chunks"
+		) {
+			return "conversation"
+		}
+		if (
+			provenanceLane === "session-evidence" ||
+			provenanceLane === "session_chunks" ||
+			provenanceLane === "memory-evidence"
+		) {
+			return "session-evidence"
+		}
+		if (
+			provenanceLane === "structured" ||
+			provenanceLane === "procedural" ||
+			provenanceLane === "episodic" ||
+			provenanceLane === "graph"
+		) {
+			return provenanceLane
+		}
+	}
+	if (result.path.startsWith("relation:")) return "graph"
+	if (result.path.startsWith("procedure:")) return "procedural"
+	if (result.path.startsWith("episode:")) return "episodic"
+	if (
+		result.path.startsWith("session-chunk/") ||
+		result.path.startsWith("session_chunks/") ||
+		result.path.startsWith("memory-evidence/session:") ||
+		result.path.startsWith("memory-evidence/preference:") ||
+		result.path.startsWith("memory-evidence/userfact:") ||
+		result.path.startsWith("memory-evidence/assistant:") ||
+		result.path.startsWith("memory-evidence/temporal_anchor:") ||
+		result.canonicalId?.startsWith("session-chunk/")
+	) {
+		return "session-evidence"
+	}
+	if (result.source === "structured") return "structured"
+	if (result.source === "reference") return "reference"
+	if (result.source === "conversation") return "conversation"
+	return "unknown"
+}
+
+function hasSessionEvidence(result: MemorySearchResult): boolean {
+	return Boolean(
+		result.sessionId ||
+			(result.sourceEventIds && result.sourceEventIds.length > 0) ||
+			result.path.startsWith("events/") ||
+			inferSearchResultLane(result) === "session-evidence",
+	)
+}
+
+function queryPrefersConversationEvidence(query: string): boolean {
+	return /\b(i|me|my|we|us|our|you told|i told|i said|we discussed|we talked|previous conversation|earlier conversation|last conversation|did i|did we|have i|have we|how many|appointment|preference|prefer|like|dislike|remember|advice|tips?|suggest(?:ion)?s?|recommend(?:ation)?s?|session|sessions|changed|updated|timeline)\b/i.test(
+		query,
+	)
+}
+
+function queryPrefersCurrentConversationEvidence(query: string): boolean {
+	return (
+		queryPrefersConversationEvidence(query) &&
+		/\b(current|currently|right now|now|latest|recent|recently|last|setup)\b/i.test(
+			query,
+		)
+	)
+}
+
+function queryNeedsDistinctSessionCoverage(
+	query: string,
+	classification: MemorySearchClassification,
+): boolean {
+	return (
+		classification === "temporal" ||
+		/\b(temporal|timeline|when|before|after|earlier|later|first|last|latest|recent|recently|previous|changed|updated|now|currently|multi-session|multiple sessions|across sessions|which sessions?|how many|over time)\b/i.test(
+			query,
+		)
+	)
+}
+
+function queryPrefersPreferenceEvidence(query: string): boolean {
+	return /\b(prefer|preference|like|dislike|favorite|want|need|advice|tips?|suggest(?:ion)?s?|recommend(?:ation)?s?)\b/i.test(
+		query,
+	)
+}
+
+function recencyMultiplier(params: {
+	result: MemorySearchResult
+	minTime: number
+	maxTime: number
+}): number {
+	const value = params.result.timestamp?.getTime()
+	if (
+		value === undefined ||
+		!Number.isFinite(value) ||
+		params.maxTime <= params.minTime
+	) {
+		return 1
+	}
+	const normalized = Math.max(
+		0,
+		Math.min(1, (value - params.minTime) / (params.maxTime - params.minTime)),
+	)
+	return 1 + normalized * 0.35
+}
+
+function pathAllowsLaneDominance(params: {
+	lane: SearchResultLane
+	planPaths: RetrievalPath[]
+	classification: MemorySearchClassification
+}): boolean {
+	if (params.lane === "unknown" || params.lane === "conversation") return true
+	if (params.lane === "session-evidence") return true
+	const first = params.planPaths[0]
+	if (params.lane === "graph") {
+		return first === "graph" || params.classification === "multi-hop"
+	}
+	if (params.lane === "procedural") {
+		return first === "procedural"
+	}
+	if (params.lane === "structured") {
+		return first === "structured" || params.classification === "scoped"
+	}
+	if (params.lane === "episodic") {
+		return first === "episodic" || params.classification === "temporal"
+	}
+	if (params.lane === "reference") {
+		return first === "kb" || params.classification === "family"
+	}
+	return false
+}
+
+function defaultCaps(params: {
+	conversationEvidenceQuery: boolean
+	classification: MemorySearchClassification
+	planPaths: RetrievalPath[]
+}): Partial<Record<SearchResultLane, number>> {
+	if (!params.conversationEvidenceQuery) {
+		return {}
+	}
+	return {
+		graph: pathAllowsLaneDominance({
+			lane: "graph",
+			planPaths: params.planPaths,
+			classification: params.classification,
+		})
+			? 3
+			: 1,
+		procedural: pathAllowsLaneDominance({
+			lane: "procedural",
+			planPaths: params.planPaths,
+			classification: params.classification,
+		})
+			? 3
+			: 1,
+		structured: pathAllowsLaneDominance({
+			lane: "structured",
+			planPaths: params.planPaths,
+			classification: params.classification,
+		})
+			? 4
+			: 2,
+		episodic: 2,
+	}
+}
+
+export function applyLaneAwareResultControls(params: {
+	query: string
+	results: MemorySearchResult[]
+	classification: MemorySearchClassification
+	planPaths?: RetrievalPath[]
+	topK?: number
+}): { results: MemorySearchResult[]; summary: LaneControlSummary } {
+	const planPaths = params.planPaths ?? []
+	const topK = params.topK ?? 10
+	const conversationEvidenceQuery = queryPrefersConversationEvidence(
+		params.query,
+	)
+	const distinctSessionCoverageQuery = queryNeedsDistinctSessionCoverage(
+		params.query,
+		params.classification,
+	)
+	const preferenceEvidenceQuery = queryPrefersPreferenceEvidence(params.query)
+	const currentConversationEvidenceQuery =
+		queryPrefersCurrentConversationEvidence(params.query)
+	const summary: LaneControlSummary = {
+		applied: false,
+		conversationEvidenceQuery,
+		boosted: 0,
+		recencyBoosted: 0,
+		demoted: 0,
+		capped: 0,
+		sessionCapped: 0,
+		topK,
+		caps: {},
+	}
+	if (params.results.length === 0 || !conversationEvidenceQuery) {
+		return { results: params.results, summary }
+	}
+	const conversationTimes = currentConversationEvidenceQuery
+		? params.results
+				.filter((result) => {
+					const lane = inferSearchResultLane(result)
+					return lane === "conversation" || lane === "session-evidence"
+				})
+				.map((result) => result.timestamp?.getTime())
+				.filter(
+					(value): value is number =>
+						typeof value === "number" && Number.isFinite(value),
+				)
+		: []
+	const minConversationTime =
+		conversationTimes.length > 0 ? Math.min(...conversationTimes) : 0
+	const maxConversationTime =
+		conversationTimes.length > 0 ? Math.max(...conversationTimes) : 0
+
+	const rescored = params.results.map((result) => {
+		const lane = inferSearchResultLane(result)
+		const evidenceUnit = readEvidenceUnit(result)
+		let multiplier = 1
+		if (
+			(lane === "conversation" || lane === "session-evidence") &&
+			hasSessionEvidence(result)
+		) {
+			if (
+				preferenceEvidenceQuery &&
+				(evidenceUnit === "preference" ||
+					evidenceUnit === "userfact" ||
+					evidenceUnit === "session")
+			) {
+				multiplier = evidenceUnit === "preference" ? 1.65 : 1.4
+			} else if (
+				distinctSessionCoverageQuery &&
+				(evidenceUnit === "session" || evidenceUnit === "temporal_anchor")
+			) {
+				multiplier = 1.32
+			} else {
+				multiplier = lane === "session-evidence" ? 1.24 : 1.14
+			}
+			summary.boosted++
+		} else if (
+			!pathAllowsLaneDominance({
+				lane,
+				planPaths,
+				classification: params.classification,
+			}) &&
+			(lane === "graph" ||
+				lane === "procedural" ||
+				lane === "structured" ||
+				lane === "episodic")
+		) {
+			multiplier = lane === "structured" ? 0.9 : 0.75
+			summary.demoted++
+		}
+		if (
+			currentConversationEvidenceQuery &&
+			(lane === "conversation" || lane === "session-evidence")
+		) {
+			const recency = recencyMultiplier({
+				result,
+				minTime: minConversationTime,
+				maxTime: maxConversationTime,
+			})
+			if (recency > 1) {
+				multiplier *= recency
+				summary.recencyBoosted++
+			}
+		}
+		return multiplier === 1
+			? result
+			: { ...result, score: Number((result.score * multiplier).toFixed(6)) }
+	})
+
+	rescored.sort((a, b) => b.score - a.score)
+	const caps = defaultCaps({
+		conversationEvidenceQuery,
+		classification: params.classification,
+		planPaths,
+	})
+	summary.caps = caps
+	const top: MemorySearchResult[] = []
+	const overflow: MemorySearchResult[] = []
+	const rest: MemorySearchResult[] = []
+	const counts: Partial<Record<SearchResultLane, number>> = {}
+	for (const result of rescored) {
+		const lane = inferSearchResultLane(result)
+		const cap = caps[lane]
+		if (top.length < topK) {
+			const used = counts[lane] ?? 0
+			if (cap !== undefined && used >= cap) {
+				overflow.push(result)
+				summary.capped++
+				continue
+			}
+			top.push(result)
+			counts[lane] = used + 1
+			continue
+		}
+		rest.push(result)
+	}
+	const diversified = diversifyTopSessions({
+		results: [...top, ...rest, ...overflow],
+		topK,
+		maxPerSession:
+			conversationEvidenceQuery || distinctSessionCoverageQuery ? 1 : 2,
+	})
+	summary.sessionCapped = diversified.capped
+	summary.applied =
+		summary.boosted > 0 ||
+		summary.recencyBoosted > 0 ||
+		summary.demoted > 0 ||
+		summary.capped > 0 ||
+		summary.sessionCapped > 0
+	return { results: diversified.results, summary }
+}
+
+function diversifyTopSessions(params: {
+	results: MemorySearchResult[]
+	topK: number
+	maxPerSession?: number
+}): { results: MemorySearchResult[]; capped: number } {
+	const maxPerSession = params.maxPerSession ?? 2
+	if (params.results.length <= 1 || params.topK <= 1) {
+		return { results: params.results, capped: 0 }
+	}
+	const uniqueSessions = new Set(
+		params.results
+			.map((result) => result.sessionId?.trim())
+			.filter((sessionId): sessionId is string => Boolean(sessionId)),
+	)
+	if (uniqueSessions.size <= 1) {
+		return { results: params.results, capped: 0 }
+	}
+
+	const top: MemorySearchResult[] = []
+	const overflow: MemorySearchResult[] = []
+	const rest: MemorySearchResult[] = []
+	const counts = new Map<string, number>()
+	let capped = 0
+	for (const result of params.results) {
+		if (top.length >= params.topK) {
+			rest.push(result)
+			continue
+		}
+		const sessionId = result.sessionId?.trim()
+		if (sessionId) {
+			const used = counts.get(sessionId) ?? 0
+			if (used >= maxPerSession) {
+				overflow.push(result)
+				capped++
+				continue
+			}
+			counts.set(sessionId, used + 1)
+		}
+		top.push(result)
+	}
+
+	return { results: [...top, ...rest, ...overflow], capped }
 }
 
 export async function executeMongoSearchPlan(params: {

@@ -252,6 +252,7 @@ describe("recallConversation", () => {
 		expect(pipeline[0]?.$vectorSearch).toEqual({
 			index: "mem_events_vector",
 			query: { text: "phoenix launch" },
+			model: "voyage-4-large",
 			path: "body",
 			filter: {
 				agentId: { $eq: "agent-1" },

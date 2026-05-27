@@ -26,6 +26,10 @@ import {
 	type BenchmarkFailureClass,
 	classifyBenchmarkFailure,
 } from "../packages/memory-engine/src/benchmark-failure-taxonomy.js"
+import {
+	resolveBenchmarkCollectionPrefix,
+	validateBenchmarkCollectionPrefix,
+} from "./benchmark-run-isolation.js"
 
 // Bootstrap: set MEMONGO_LOG_LEVEL default to warn (Task 1.1). info during
 // benchmark runs causes PTY backpressure and throttles Node writes. This
@@ -59,12 +63,34 @@ export type RawLongMemEvalEntry = {
 	haystack_sessions?: Record<string, unknown>[]
 }
 
-type CanaryArtifact = {
+export type CanaryArtifact = {
+	artifactVersion: 2
 	runId: string
+	status: "started" | "completed" | "failed"
 	startedAt: string
 	completedAt?: string
 	datasetPath: string
 	datasetHash: string
+	subsetPath?: string
+	httpRequest?: {
+		endpointPath: string
+		maxResults: number
+		timeoutMs: number
+		heartbeatIntervalMs?: number
+	}
+	runtime?: {
+		collectionPrefix: string | null
+		buildId: string | null
+		benchmarkStrict: string | null
+		strictMode: string | null
+		derivedWorkMode: string | null
+		benchmarkRetrievalLane: string | null
+		sessionEvidenceMode: string | null
+		fusionMethod: string | null
+		rerankingEnabled: string | null
+		benchmarkRerankMode: string | null
+		rerankEndpointFamily: "mongodb-atlas" | "voyage-direct" | "unknown"
+	}
 	/** remfix H3: null when fullMode=true; the value is irrelevant then. */
 	casesPerType: number | null
 	/** remfix H3: null when fullMode=true or no explicit limit. */
@@ -72,11 +98,20 @@ type CanaryArtifact = {
 	fullMode: boolean
 	runShapeHash: string
 	selectedQuestionIdFilter?: string[]
+	questionIdSelection?: {
+		source: "env" | "file" | "split"
+		questionIdsFile?: string
+		splitFile?: string
+		splitKey?: string
+	}
 	totalEvaluations: number
 	selectedQuestionIds: string[]
 	questionTypeBreakdown: Record<string, number>
 	metrics?: Record<string, unknown>
 	benchmarkResponse?: unknown
+	lastHeartbeatAt?: string
+	heartbeatCount?: number
+	failureClass?: BenchmarkFailureClass
 	error?: string
 }
 
@@ -107,10 +142,16 @@ const totalCaseLimitRaw = process.env.MEMONGO_CANARY_TOTAL_CASES?.trim()
 const totalCaseLimit = totalCaseLimitRaw
 	? Math.max(1, Math.floor(Number(totalCaseLimitRaw) || 1))
 	: undefined
-const selectedQuestionIdFilter =
-	process.env.MEMONGO_CANARY_QUESTION_IDS?.split(",")
-		.map((id) => id.trim())
-		.filter(Boolean) ?? []
+const questionIdFilterResolution = resolveCanaryQuestionIdFilter({
+	inlineQuestionIds: process.env.MEMONGO_CANARY_QUESTION_IDS,
+	questionIdsFile: process.env.MEMONGO_CANARY_QUESTION_IDS_FILE,
+	splitFile: process.env.MEMONGO_CANARY_SPLIT_FILE,
+	splitKey: process.env.MEMONGO_CANARY_SPLIT_KEY,
+})
+const selectedQuestionIdFilter = questionIdFilterResolution.questionIds
+
+const VOYAGE_RERANK_URL_ATLAS = "https://ai.mongodb.com/v1/rerank"
+const VOYAGE_RERANK_URL_DIRECT = "https://api.voyageai.com/v1/rerank"
 
 // ---------------------------------------------------------------------------
 // Env-var contract helpers (Task 1.0 — exported for testability)
@@ -213,6 +254,127 @@ export function resolveCanaryRunIntervalMs(
 	return parsed
 }
 
+export function resolveCanaryModelPreflightMode(params: {
+	modelPreflightEnv: string | undefined
+	strictEnv: string | undefined
+	rerankEnabled?: boolean
+}): boolean {
+	const explicit = params.modelPreflightEnv?.trim()
+	if (explicit === "0") return false
+	if (explicit === "1") return true
+	if (params.rerankEnabled === false) return false
+	return params.strictEnv === "1" || params.strictEnv?.toLowerCase() === "true"
+}
+
+export function resolveCanaryRerankEnabled(params: {
+	rerankingEnabledEnv: string | undefined
+	benchmarkRerankModeEnv: string | undefined
+}): boolean {
+	const mode = params.benchmarkRerankModeEnv?.trim().toLowerCase()
+	if (mode) {
+		if (["disabled", "off", "none", "0", "false", "raw"].includes(mode)) {
+			return false
+		}
+		if (["enabled", "on", "1", "true", "rerank"].includes(mode)) {
+			return true
+		}
+	}
+	const enabled = params.rerankingEnabledEnv?.trim().toLowerCase()
+	if (!enabled) return true
+	if (["0", "false", "no", "off", "disabled"].includes(enabled)) return false
+	if (["1", "true", "yes", "on", "enabled"].includes(enabled)) return true
+	return true
+}
+
+export function resolveCanaryModelPreflightTimeoutMs(
+	envValue: string | undefined,
+): number {
+	if (envValue === undefined || envValue.trim() === "") return 5000
+	const parsed = Number(envValue)
+	if (!Number.isFinite(parsed) || parsed < 0) {
+		throw new Error(
+			`MEMONGO_CANARY_MODEL_PREFLIGHT_TIMEOUT_MS must be a non-negative number, got ${envValue}`,
+		)
+	}
+	return Math.floor(parsed)
+}
+
+export function resolveCanaryRequireAtlasModelKey(
+	envValue: string | undefined,
+): boolean {
+	return envValue?.trim() !== "0"
+}
+
+export function resolveVoyageRerankEndpoint(apiKey: string): {
+	url: string
+	keyKind: "atlas-model" | "direct-voyage" | "unknown"
+} {
+	if (apiKey.startsWith("al-")) {
+		return { url: VOYAGE_RERANK_URL_ATLAS, keyKind: "atlas-model" }
+	}
+	if (apiKey.startsWith("pa-")) {
+		return { url: VOYAGE_RERANK_URL_DIRECT, keyKind: "direct-voyage" }
+	}
+	return { url: VOYAGE_RERANK_URL_DIRECT, keyKind: "unknown" }
+}
+
+export async function runVoyageRerankPreflight(params: {
+	apiKey: string | undefined
+	model?: "rerank-2.5" | "rerank-2.5-lite"
+	timeoutMs?: number
+	requireAtlasModelKey?: boolean
+	fetchImpl?: typeof fetch
+}): Promise<{ status: number; keyKind: string; url: string }> {
+	const apiKey = params.apiKey?.trim() ?? ""
+	const model = params.model ?? "rerank-2.5"
+	const timeoutMs = params.timeoutMs ?? 5000
+	const requireAtlasModelKey = params.requireAtlasModelKey ?? true
+	if (!apiKey) {
+		throw new Error(
+			"canary model preflight failed: VOYAGE_API_KEY is missing; strict rerank requires a MongoDB Atlas model API key",
+		)
+	}
+
+	const endpoint = resolveVoyageRerankEndpoint(apiKey)
+	if (requireAtlasModelKey && endpoint.keyKind !== "atlas-model") {
+		throw new Error(
+			`canary model preflight failed: VOYAGE_API_KEY is ${endpoint.keyKind}; expected a MongoDB Atlas model API key (al-...) for MongoDB-only benchmark lanes`,
+		)
+	}
+
+	const fetchImpl = params.fetchImpl ?? fetch
+	const response = await fetchImpl(endpoint.url, {
+		method: "POST",
+		headers: {
+			Authorization: `Bearer ${apiKey}`,
+			"Content-Type": "application/json",
+		},
+		body: JSON.stringify({
+			model,
+			query: "Memongo benchmark model preflight",
+			documents: [
+				"MongoDB Atlas Search can combine lexical and vector retrieval.",
+				"Memongo strict mode treats fallback as benchmark failure.",
+			],
+			top_k: 1,
+		}),
+		signal: AbortSignal.timeout(timeoutMs),
+	})
+
+	if (!response.ok) {
+		const host = new URL(endpoint.url).host
+		throw new Error(
+			`canary model preflight failed: rerank endpoint rejected request with HTTP ${response.status} (${endpoint.keyKind}, ${host}); verify the MongoDB Atlas model API key is active and authorized for Voyage rerank`,
+		)
+	}
+
+	return {
+		status: response.status,
+		keyKind: endpoint.keyKind,
+		url: endpoint.url,
+	}
+}
+
 /**
  * Per-run artifact subdirectory.
  *
@@ -230,7 +392,7 @@ export function deriveCanaryRunDir(params: {
  * Per-run MongoDB collection prefix (collision-proof across runs AND
  * invocations).
  *
- * Format: `{basePrefix}_run{runIndex}_{invocationTimestampMs}`
+ * Format: `{basePrefix}run{runIndex}_{invocationTimestampMs}_`
  *
  * Why both invocation timestamp AND run index:
  * - Different runs in the same invocation need different prefixes (Atlas
@@ -248,7 +410,9 @@ export function deriveCanaryRunCollectionPrefix(params: {
 	runIndex: number
 	invocationTimestampMs: number
 }): string {
-	return `${params.basePrefix}_run${params.runIndex}_${params.invocationTimestampMs}`
+	const prefix = `${params.basePrefix}run${params.runIndex}_${params.invocationTimestampMs}_`
+	validateBenchmarkCollectionPrefix(prefix)
+	return prefix
 }
 
 // ---------------------------------------------------------------------------
@@ -605,6 +769,76 @@ export function buildCanaryArtifactCaseLimits(params: {
 	}
 }
 
+function nullableEnv(name: string): string | null {
+	const value = process.env[name]?.trim()
+	return value && value.length > 0 ? value : null
+}
+
+function resolveRerankEndpointFamily():
+	| "mongodb-atlas"
+	| "voyage-direct"
+	| "unknown" {
+	const endpoint = process.env.MEMONGO_VOYAGE_RERANK_URL?.trim()
+	if (!endpoint) return "unknown"
+	if (endpoint.includes("ai.mongodb.com")) return "mongodb-atlas"
+	if (endpoint.includes("voyageai.com")) return "voyage-direct"
+	return "unknown"
+}
+
+export function buildCanaryRuntimeSnapshot(): NonNullable<
+	CanaryArtifact["runtime"]
+> {
+	return {
+		collectionPrefix: nullableEnv("MEMONGO_MONGODB_COLLECTION_PREFIX"),
+		buildId: nullableEnv("MEMONGO_BUILD_ID"),
+		benchmarkStrict: nullableEnv("MEMONGO_BENCHMARK_STRICT"),
+		strictMode: nullableEnv("MEMONGO_STRICT_MODE"),
+		derivedWorkMode: nullableEnv("MEMONGO_BENCHMARK_DERIVED_WORK_MODE"),
+		benchmarkRetrievalLane: nullableEnv("MEMONGO_BENCHMARK_RETRIEVAL_LANE"),
+		sessionEvidenceMode: nullableEnv("MEMONGO_SESSION_EVIDENCE_MODE"),
+		fusionMethod: nullableEnv("MEMONGO_MONGODB_FUSION_METHOD"),
+		rerankingEnabled: nullableEnv("MEMONGO_RERANKING_ENABLED"),
+		benchmarkRerankMode: nullableEnv("MEMONGO_BENCHMARK_RERANK_MODE"),
+		rerankEndpointFamily: resolveRerankEndpointFamily(),
+	}
+}
+
+export function writeCanaryArtifactFile(params: {
+	runDir: string
+	artifact: CanaryArtifact
+}): string {
+	mkdirSync(params.runDir, { recursive: true })
+	const artifactPath = path.join(params.runDir, "canary-artifact.json")
+	writeFileSync(artifactPath, JSON.stringify(params.artifact, null, "\t"))
+	return artifactPath
+}
+
+export function writeCanaryHeartbeatFile(params: {
+	runDir: string
+	runId: string
+	elapsedMs: number
+	heartbeatCount: number
+	message: string
+}): string {
+	mkdirSync(params.runDir, { recursive: true })
+	const heartbeatPath = path.join(params.runDir, "canary-heartbeat.json")
+	writeFileSync(
+		heartbeatPath,
+		JSON.stringify(
+			{
+				runId: params.runId,
+				heartbeatAt: new Date().toISOString(),
+				elapsedMs: params.elapsedMs,
+				heartbeatCount: params.heartbeatCount,
+				message: params.message,
+			},
+			null,
+			"\t",
+		),
+	)
+	return heartbeatPath
+}
+
 /**
  * Task 1.2 — per-scenario progress artifact emitter.
  *
@@ -696,9 +930,28 @@ export function selectStratifiedSubset(
 				`Requested question_id(s) not found: ${missing.join(", ")}`,
 			)
 		}
+		if (options.totalCaseLimit && options.totalCaseLimit > 0) {
+			return selectStratifiedEntries(
+				selected,
+				casesPerType,
+				options.totalCaseLimit,
+			)
+		}
 		return summarizeSelectedEntries(selected)
 	}
 
+	return selectStratifiedEntries(entries, casesPerType, options.totalCaseLimit)
+}
+
+function selectStratifiedEntries(
+	entries: RawLongMemEvalEntry[],
+	casesPerType: number,
+	totalCaseLimit?: number,
+): {
+	selected: RawLongMemEvalEntry[]
+	selectedQuestionIds: string[]
+	breakdown: Record<string, number>
+} {
 	// Group by question_type
 	const byType = new Map<string, RawLongMemEvalEntry[]>()
 	for (const entry of entries) {
@@ -708,28 +961,124 @@ export function selectStratifiedSubset(
 		byType.set(qt, group)
 	}
 
-	// Stable sort within each group by question_id and select top N
-	const selected: RawLongMemEvalEntry[] = []
-	const selectedQuestionIds: string[] = []
-	const breakdown: Record<string, number> = {}
-
-	for (const [qt, group] of [...byType.entries()].sort((a, b) =>
+	const pickedByType: RawLongMemEvalEntry[][] = []
+	for (const [_qt, group] of [...byType.entries()].sort((a, b) =>
 		a[0].localeCompare(b[0]),
 	)) {
 		group.sort((a, b) => a.question_id.localeCompare(b.question_id))
-		const picked = group.slice(0, casesPerType)
-		selected.push(...picked)
-		for (const entry of picked) {
-			selectedQuestionIds.push(entry.question_id)
-		}
-		breakdown[qt] = picked.length
+		pickedByType.push(group.slice(0, casesPerType))
 	}
 
-	return summarizeSelectedEntries(
-		options.totalCaseLimit
-			? selected.slice(0, options.totalCaseLimit)
-			: selected,
-	)
+	if (totalCaseLimit && totalCaseLimit > 0) {
+		const selected: RawLongMemEvalEntry[] = []
+		for (let index = 0; selected.length < totalCaseLimit; index++) {
+			let added = false
+			for (const group of pickedByType) {
+				const entry = group[index]
+				if (!entry) continue
+				selected.push(entry)
+				added = true
+				if (selected.length >= totalCaseLimit) break
+			}
+			if (!added) break
+		}
+		return summarizeSelectedEntries(selected)
+	}
+
+	return summarizeSelectedEntries(pickedByType.flat())
+}
+
+export function resolveCanaryQuestionIdFilter(params: {
+	inlineQuestionIds?: string
+	questionIdsFile?: string
+	splitFile?: string
+	splitKey?: string
+}): {
+	questionIds: string[]
+	selection?: CanaryArtifact["questionIdSelection"]
+} {
+	const inline = params.inlineQuestionIds?.trim()
+	const questionIdsFile = params.questionIdsFile?.trim()
+	const splitFile = params.splitFile?.trim()
+	const sources = [
+		inline ? "MEMONGO_CANARY_QUESTION_IDS" : null,
+		questionIdsFile ? "MEMONGO_CANARY_QUESTION_IDS_FILE" : null,
+		splitFile ? "MEMONGO_CANARY_SPLIT_FILE" : null,
+	].filter(Boolean)
+	if (sources.length > 1) {
+		throw new Error(
+			`Set only one canary question-id source; got ${sources.join(", ")}`,
+		)
+	}
+
+	if (inline) {
+		return {
+			questionIds: normalizeQuestionIds(inline.split(",")),
+			selection: { source: "env" },
+		}
+	}
+
+	if (questionIdsFile) {
+		const raw = readFileSync(questionIdsFile, "utf8")
+		return {
+			questionIds: parseQuestionIdsFile(raw, questionIdsFile),
+			selection: { source: "file", questionIdsFile },
+		}
+	}
+
+	if (splitFile) {
+		const splitKey = params.splitKey?.trim() || "held_out"
+		const raw = readFileSync(splitFile, "utf8")
+		const parsed = JSON.parse(raw) as unknown
+		if (!isRecord(parsed) || !Array.isArray(parsed[splitKey])) {
+			throw new Error(
+				`MEMONGO_CANARY_SPLIT_FILE ${splitFile} must contain an array at key "${splitKey}"`,
+			)
+		}
+		return {
+			questionIds: normalizeQuestionIds(parsed[splitKey]),
+			selection: { source: "split", splitFile, splitKey },
+		}
+	}
+
+	return { questionIds: [] }
+}
+
+function parseQuestionIdsFile(raw: string, filename: string): string[] {
+	const trimmed = raw.trim()
+	if (!trimmed) {
+		throw new Error(`Question-id file is empty: ${filename}`)
+	}
+	if (trimmed.startsWith("[") || trimmed.startsWith("{")) {
+		const parsed = JSON.parse(trimmed) as unknown
+		if (Array.isArray(parsed)) return normalizeQuestionIds(parsed)
+		if (isRecord(parsed) && Array.isArray(parsed.questionIds)) {
+			return normalizeQuestionIds(parsed.questionIds)
+		}
+		throw new Error(
+			`Question-id file ${filename} must be a JSON array or an object with questionIds[]`,
+		)
+	}
+	return normalizeQuestionIds(trimmed.split(/[\s,]+/))
+}
+
+function normalizeQuestionIds(values: readonly unknown[]): string[] {
+	const seen = new Set<string>()
+	const questionIds: string[] = []
+	for (const value of values) {
+		const id = typeof value === "string" ? value.trim() : ""
+		if (!id || seen.has(id)) continue
+		seen.add(id)
+		questionIds.push(id)
+	}
+	if (questionIds.length === 0) {
+		throw new Error("Question-id selection resolved to zero IDs")
+	}
+	return questionIds
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value)
 }
 
 function summarizeSelectedEntries(entries: RawLongMemEvalEntry[]): {
@@ -764,15 +1113,59 @@ export function resolveCanaryHttpTimeoutMs(
 	return Math.floor(parsed)
 }
 
-function postJson(params: {
+export function resolveCanaryHeartbeatIntervalMs(
+	envValue: string | undefined,
+): number {
+	if (envValue === undefined || envValue.trim() === "") return 30 * 1000
+	const parsed = Number(envValue)
+	if (!Number.isFinite(parsed) || parsed < 0) {
+		throw new Error(
+			`MEMONGO_CANARY_HEARTBEAT_INTERVAL_MS must be a non-negative number, got ${envValue}`,
+		)
+	}
+	return Math.floor(parsed)
+}
+
+export function postJson(params: {
 	url: string
 	payload: unknown
 	timeoutMs: number
+	heartbeatIntervalMs?: number
+	onHeartbeat?: (elapsedMs: number) => void
 }): Promise<{ statusCode: number; body: string }> {
 	const body = JSON.stringify(params.payload)
 	const parsed = new URL(params.url)
 	return new Promise((resolve, reject) => {
 		let settled = false
+		let heartbeatTimer: ReturnType<typeof setInterval> | undefined
+		const startedAtMs = Date.now()
+		const clearHeartbeat = () => {
+			if (heartbeatTimer) {
+				clearInterval(heartbeatTimer)
+				heartbeatTimer = undefined
+			}
+		}
+		const resolveOnce = (value: { statusCode: number; body: string }) => {
+			if (settled) return
+			settled = true
+			clearHeartbeat()
+			resolve(value)
+		}
+		const rejectOnce = (err: Error) => {
+			if (settled) return
+			settled = true
+			clearHeartbeat()
+			reject(err)
+		}
+		const heartbeatIntervalMs = params.heartbeatIntervalMs ?? 0
+		if (heartbeatIntervalMs > 0 && params.onHeartbeat) {
+			heartbeatTimer = setInterval(() => {
+				if (!settled) {
+					params.onHeartbeat?.(Date.now() - startedAtMs)
+				}
+			}, heartbeatIntervalMs)
+			heartbeatTimer.unref?.()
+		}
 		const req = http.request(
 			{
 				hostname: parsed.hostname,
@@ -789,27 +1182,25 @@ function postJson(params: {
 				const chunks: Buffer[] = []
 				res.on("data", (chunk: Buffer) => chunks.push(chunk))
 				res.on("end", () => {
-					settled = true
-					resolve({
+					resolveOnce({
 						statusCode: res.statusCode ?? 0,
 						body: Buffer.concat(chunks).toString("utf8"),
 					})
 				})
+				res.on("error", (err) => {
+					rejectOnce(err)
+				})
 			},
 		)
 		req.on("timeout", () => {
-			if (settled) return
-			settled = true
-			req.destroy(
-				new Error(
-					`canary benchmark request timed out after ${params.timeoutMs}ms`,
-				),
+			const err = new Error(
+				`canary benchmark request timed out after ${params.timeoutMs}ms`,
 			)
+			rejectOnce(err)
+			req.destroy(err)
 		})
 		req.on("error", (err) => {
-			if (settled) return
-			settled = true
-			reject(err)
+			rejectOnce(err)
 		})
 		req.write(body)
 		req.end()
@@ -906,11 +1297,9 @@ async function runSingleCanary(params: {
 		runsPerCommit > 1 ? deriveCanaryRunDir({ baseDir, runIndex }) : baseDir
 	mkdirSync(runDir, { recursive: true })
 
-	// Per-run collection prefix — only when running N>1. Single-run keeps the
-	// caller-supplied prefix so existing bench stacks stay addressable.
-	// Always derive from the invocation-level base, NOT from the current
-	// process.env (which was overwritten by run N-1). This keeps the prefix
-	// semantics pure: `{base}_run{N}_{invocationTimestampMs}`.
+	// Per-run collection prefix. Always derive from the invocation-level base,
+	// NOT from the current process.env (which was overwritten by run N-1). This
+	// keeps the prefix semantics pure: `{base}_run{N}_{invocationTimestampMs}`.
 	const perRunPrefix =
 		runsPerCommit > 1
 			? deriveCanaryRunCollectionPrefix({
@@ -919,12 +1308,10 @@ async function runSingleCanary(params: {
 					invocationTimestampMs,
 				})
 			: invocationBasePrefix
-	if (runsPerCommit > 1) {
-		process.env.MEMONGO_MONGODB_COLLECTION_PREFIX = perRunPrefix
-		console.log(
-			`[canary] run ${runIndex}/${runsPerCommit} using collectionPrefix=${perRunPrefix}`,
-		)
-	}
+	process.env.MEMONGO_MONGODB_COLLECTION_PREFIX = perRunPrefix
+	console.log(
+		`[canary] run ${runIndex}/${runsPerCommit} using collectionPrefix=${perRunPrefix}`,
+	)
 
 	const startedAt = new Date()
 	const runId =
@@ -1035,6 +1422,12 @@ async function runCanaryBody(params: {
 	mkdirSync(subsetDir, { recursive: true })
 	const subsetPath = path.join(subsetDir, `${runId}.json`)
 	writeFileSync(subsetPath, JSON.stringify(selected, null, 2))
+	const httpTimeoutMs = resolveCanaryHttpTimeoutMs(
+		process.env.MEMONGO_CANARY_HTTP_TIMEOUT_MS,
+	)
+	const heartbeatIntervalMs = resolveCanaryHeartbeatIntervalMs(
+		process.env.MEMONGO_CANARY_HEARTBEAT_INTERVAL_MS,
+	)
 
 	const caseLimits = buildCanaryArtifactCaseLimits({
 		fullMode,
@@ -1043,10 +1436,20 @@ async function runCanaryBody(params: {
 	})
 
 	const artifact: CanaryArtifact = {
+		artifactVersion: 2,
 		runId,
+		status: "started",
 		startedAt: startedAt.toISOString(),
 		datasetPath,
 		datasetHash,
+		subsetPath,
+		httpRequest: {
+			endpointPath: "/v1/admin/relevance/benchmark",
+			maxResults,
+			timeoutMs: httpTimeoutMs,
+			heartbeatIntervalMs,
+		},
+		runtime: buildCanaryRuntimeSnapshot(),
 		casesPerType: caseLimits.casesPerType,
 		totalCaseLimit: caseLimits.totalCaseLimit,
 		fullMode,
@@ -1054,15 +1457,20 @@ async function runCanaryBody(params: {
 		...(selectedQuestionIdFilter.length > 0
 			? { selectedQuestionIdFilter }
 			: {}),
+		...(questionIdFilterResolution.selection
+			? { questionIdSelection: questionIdFilterResolution.selection }
+			: {}),
 		totalEvaluations: selectedQuestionIds.length,
 		selectedQuestionIds,
 		questionTypeBreakdown: breakdown,
 	}
+	const artifactPath = writeCanaryArtifactFile({ runDir, artifact })
+	console.log(`[canary] started. Artifact: ${artifactPath}`)
 
 	if (dryRun) {
+		artifact.status = "completed"
 		artifact.completedAt = new Date().toISOString()
-		const artifactPath = path.join(runDir, "canary-artifact.json")
-		writeFileSync(artifactPath, JSON.stringify(artifact, null, "\t"))
+		writeCanaryArtifactFile({ runDir, artifact })
 		console.log(`[canary] dry-run complete. Artifact: ${artifactPath}`)
 		console.log(JSON.stringify({ ok: true, runId, dryRun: true }, null, 2))
 		return null
@@ -1073,28 +1481,68 @@ async function runCanaryBody(params: {
 	console.log(
 		`[canary] posting benchmark to ${baseUrl}/v1/admin/relevance/benchmark`,
 	)
-	const response = await postJson({
-		url: `${baseUrl}/v1/admin/relevance/benchmark`,
-		timeoutMs: resolveCanaryHttpTimeoutMs(
-			process.env.MEMONGO_CANARY_HTTP_TIMEOUT_MS,
-		),
-		payload: {
-			agentId,
-			datasetPath: subsetPath,
-			maxResults,
-			datasetSha256: datasetHash,
-		},
-	})
+	let heartbeatCount = 0
+	let response: { statusCode: number; body: string }
+	try {
+		response = await postJson({
+			url: `${baseUrl}/v1/admin/relevance/benchmark`,
+			timeoutMs: httpTimeoutMs,
+			heartbeatIntervalMs,
+			onHeartbeat: (elapsedMs) => {
+				heartbeatCount += 1
+				artifact.lastHeartbeatAt = new Date().toISOString()
+				artifact.heartbeatCount = heartbeatCount
+				writeCanaryArtifactFile({ runDir, artifact })
+				writeCanaryHeartbeatFile({
+					runDir,
+					runId,
+					elapsedMs,
+					heartbeatCount,
+					message: "waiting for benchmark API response",
+				})
+				console.log(
+					`[canary] waiting for benchmark response elapsedMs=${elapsedMs}`,
+				)
+			},
+			payload: {
+				agentId,
+				datasetPath: subsetPath,
+				maxResults,
+				datasetSha256: datasetHash,
+				retrievalLane:
+					nullableEnv("MEMONGO_BENCHMARK_RETRIEVAL_LANE") ?? undefined,
+			},
+		})
+	} catch (err) {
+		artifact.status = "failed"
+		artifact.error = err instanceof Error ? err.message : String(err)
+		artifact.failureClass = classifyBenchmarkFailure(err)
+		artifact.completedAt = new Date().toISOString()
+		writeCanaryArtifactFile({ runDir, artifact })
+		throw err
+	}
 
 	if (response.statusCode < 200 || response.statusCode >= 300) {
+		artifact.status = "failed"
 		artifact.error = `HTTP ${response.statusCode}: ${response.body.slice(0, 500)}`
+		artifact.failureClass = classifyBenchmarkFailure(new Error(artifact.error))
 		artifact.completedAt = new Date().toISOString()
-		const artifactPath = path.join(runDir, "canary-artifact.json")
-		writeFileSync(artifactPath, JSON.stringify(artifact, null, "\t"))
+		writeCanaryArtifactFile({ runDir, artifact })
 		throw new Error(artifact.error)
 	}
 
-	const benchmarkResponse = JSON.parse(response.body) as Record<string, unknown>
+	let benchmarkResponse: Record<string, unknown>
+	try {
+		benchmarkResponse = JSON.parse(response.body) as Record<string, unknown>
+	} catch (err) {
+		artifact.status = "failed"
+		artifact.error = err instanceof Error ? err.message : String(err)
+		artifact.failureClass = classifyBenchmarkFailure(err)
+		artifact.completedAt = new Date().toISOString()
+		writeCanaryArtifactFile({ runDir, artifact })
+		throw err
+	}
+	artifact.status = "completed"
 	artifact.benchmarkResponse = benchmarkResponse
 	artifact.metrics = benchmarkResponse.benchmarkReport as
 		| Record<string, unknown>
@@ -1128,9 +1576,8 @@ async function runCanaryBody(params: {
 	}
 
 	// Write per-run artifacts
-	const artifactPath = path.join(runDir, "canary-artifact.json")
 	const responsePath = path.join(runDir, "benchmark-response.json")
-	writeFileSync(artifactPath, JSON.stringify(artifact, null, "\t"))
+	writeCanaryArtifactFile({ runDir, artifact })
 	writeFileSync(responsePath, JSON.stringify(benchmarkResponse, null, "\t"))
 
 	console.log(`[canary] complete. Artifact: ${artifactPath}`)
@@ -1182,6 +1629,32 @@ async function main() {
 		repoRoot,
 	})
 	mkdirSync(baseDir, { recursive: true })
+	const rerankEnabled = resolveCanaryRerankEnabled({
+		rerankingEnabledEnv: process.env.MEMONGO_RERANKING_ENABLED,
+		benchmarkRerankModeEnv: process.env.MEMONGO_BENCHMARK_RERANK_MODE,
+	})
+
+	if (
+		!dryRun &&
+		resolveCanaryModelPreflightMode({
+			modelPreflightEnv: process.env.MEMONGO_CANARY_MODEL_PREFLIGHT,
+			strictEnv: process.env.MEMONGO_BENCHMARK_STRICT,
+			rerankEnabled,
+		})
+	) {
+		const preflight = await runVoyageRerankPreflight({
+			apiKey: process.env.VOYAGE_API_KEY,
+			timeoutMs: resolveCanaryModelPreflightTimeoutMs(
+				process.env.MEMONGO_CANARY_MODEL_PREFLIGHT_TIMEOUT_MS,
+			),
+			requireAtlasModelKey: resolveCanaryRequireAtlasModelKey(
+				process.env.MEMONGO_CANARY_REQUIRE_ATLAS_MODEL_KEY,
+			),
+		})
+		console.log(
+			`[canary] model preflight ok: rerank endpoint accepted ${preflight.keyKind} credential`,
+		)
+	}
 
 	if (runsPerCommit > 1) {
 		console.log(
@@ -1191,8 +1664,10 @@ async function main() {
 
 	// Snapshot the invocation-level base collection prefix once so per-run
 	// isolation does not stack `_runN_{ts}` suffixes each pass.
-	const invocationBasePrefix =
-		process.env.MEMONGO_MONGODB_COLLECTION_PREFIX?.trim() || "memongo_bench_"
+	const invocationBasePrefix = resolveBenchmarkCollectionPrefix({
+		runId: fallbackRunId,
+		explicitPrefix: process.env.MEMONGO_MONGODB_COLLECTION_PREFIX,
+	}).collectionPrefix
 
 	const perRunSummaries: CanaryPerRunSummary[] = []
 	for (let runIndex = 1; runIndex <= runsPerCommit; runIndex++) {
@@ -1260,8 +1735,10 @@ function writeTopLevelFailureArtifact(err: unknown): void {
 	}
 }
 
-main().catch((err) => {
-	writeTopLevelFailureArtifact(err)
-	console.error(err instanceof Error ? err.stack || err.message : err)
-	process.exitCode = 1
-})
+if (import.meta.main) {
+	main().catch((err) => {
+		writeTopLevelFailureArtifact(err)
+		console.error(err instanceof Error ? err.stack || err.message : err)
+		process.exitCode = 1
+	})
+}

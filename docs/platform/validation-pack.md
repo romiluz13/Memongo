@@ -1,6 +1,6 @@
 # Memongo Validation Pack
 
-Use this pack to prove that the supported Memongo core is healthy on the canonical Atlas Local preview stack and the repo's official gates.
+Use this pack to prove that the supported Memongo core is healthy on managed MongoDB Atlas cloud, Atlas Local Preview, and the repo's official gates.
 
 ## Release-blocking lanes
 
@@ -59,11 +59,20 @@ This validates:
 
 ### 4. `live-core`
 
-Use the Atlas Local preview Docker stack:
+Use managed Atlas cloud for the control lane:
+
+```bash
+export MEMONGO_MONGODB_URI="mongodb+srv://<user>:<password>@<cluster>.mongodb.net/?appName=memongo"
+export VOYAGE_API_KEY="al-your-atlas-model-key"
+bun run mongodb:parity
+```
+
+Use Atlas Local Preview for the local parity lane:
 
 ```bash
 export VOYAGE_API_KEY="al-your-atlas-model-key"
 docker compose -f docker/mongodb/docker-compose.preview.yml up -d
+export MEMONGO_MONGODB_URI="mongodb://127.0.0.1:27017/?directConnection=true"
 ```
 
 Then run:
@@ -75,14 +84,14 @@ bunx vitest run \
   src/production-readiness.e2e.test.ts
 ```
 
-If the preview stack does not have an Atlas Model key with the `al-...` prefix,
-the vector-only assertions in `production-readiness.e2e.test.ts` will skip.
+If the runtime does not have an Atlas Model key with the `al-...` prefix, the
+vector-only assertions in `production-readiness.e2e.test.ts` will skip.
 
 ### 5. `live-capability`
 
 These lanes are real but environment-specific:
 - Auto-embed/search:
-  `packages/memory-engine/src/real-e2e-v2.e2e.test.ts` against the preview stack with a valid `al-...` Atlas Model key.
+  `packages/memory-engine/src/real-e2e-v2.e2e.test.ts` against managed Atlas cloud or the preview stack with a valid `al-...` Atlas Model key.
 - Replica-set-only:
   `packages/memory-engine/src/mongodb-e2e.e2e.test.ts` against `docker/mongodb/docker-compose.mongodb.yml` `replicaset` or `fullstack` using:
 

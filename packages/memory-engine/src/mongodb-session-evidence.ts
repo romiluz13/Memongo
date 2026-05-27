@@ -27,6 +27,7 @@ export type SessionEvidenceMode = "A" | "B" | "none"
 
 export type SessionEvidenceDocument = {
 	source: "session-evidence"
+	path: string
 	text: string
 	agentId: string
 	scope: MemoryScope
@@ -40,6 +41,11 @@ export type SessionEvidenceDocument = {
 		sourceEventIds: string[]
 		turnCount: number
 		docType: "session"
+	}
+	provenance: {
+		lane: "session_chunks"
+		unit: "session"
+		source: "session-evidence"
 	}
 }
 
@@ -102,15 +108,29 @@ export function buildSessionEvidenceDocuments(params: {
 }): SessionEvidenceDocument[] {
 	const { conversations, agentId, scope, scopeRef, eventIds } = params
 	const documents: SessionEvidenceDocument[] = []
+	const sessions = new Map<
+		string,
+		{
+			userTurns: Array<MemoryBenchmarkConversation["turns"][number]>
+		}
+	>()
 
 	for (const conversation of conversations) {
 		const sessionId = conversation.sessionId
 		if (!sessionId) continue
 
-		// Concatenate only user turns
 		const userTurns = conversation.turns.filter((t) => t.role === "user")
 		if (userTurns.length === 0) continue
+		const existing = sessions.get(sessionId)
+		if (existing) {
+			existing.userTurns.push(...userTurns)
+		} else {
+			sessions.set(sessionId, { userTurns: [...userTurns] })
+		}
+	}
 
+	for (const [sessionId, session] of sessions) {
+		const userTurns = session.userTurns
 		const rawText = userTurns.map((t) => t.body).join("\n\n")
 		const text = truncateAtSentenceBoundary(rawText)
 
@@ -127,6 +147,7 @@ export function buildSessionEvidenceDocuments(params: {
 
 		documents.push({
 			source: "session-evidence",
+			path: `session_chunks/${sessionId}`,
 			text,
 			agentId,
 			scope,
@@ -140,6 +161,11 @@ export function buildSessionEvidenceDocuments(params: {
 				sourceEventIds,
 				turnCount: userTurns.length,
 				docType: "session",
+			},
+			provenance: {
+				lane: "session_chunks",
+				unit: "session",
+				source: "session-evidence",
 			},
 		})
 	}

@@ -3,12 +3,14 @@ import {
 	applySearchConfig,
 	analyzeCorrectionNeeded,
 	applyHardConstraintRejections,
+	applyLaneAwareResultControls,
 	applyMMRReranking,
 	buildExecutorPasses,
 	buildMemorySearchRequestSignature,
 	classifyExecutorSearch,
 	executeMongoSearchPlan,
 	identifyRelaxableConstraint,
+	inferSearchResultLane,
 	normalizeMemorySearchRequest,
 	resolveSearchConfig,
 	requestHasHardConstraints,
@@ -276,6 +278,255 @@ describe("requestHasHardConstraints", () => {
 				structuredScope: { type: "decision" },
 			}),
 		).toBe(true)
+	})
+})
+
+describe("lane-aware result controls", () => {
+	it("infers graph and session-evidence lanes from path/provenance", () => {
+		expect(
+			inferSearchResultLane(
+				makeResult({
+					path: "relation:a-b",
+					provenance: { lane: "graph" },
+				}),
+			),
+		).toBe("graph")
+		expect(
+			inferSearchResultLane(
+				makeResult({
+					path: "session-chunk/session-1",
+					canonicalId: "session-chunk/session-1",
+				}),
+			),
+		).toBe("session-evidence")
+		expect(
+			inferSearchResultLane(
+				makeResult({
+					path: "memory-evidence/preference:session-1:abc",
+					canonicalId: "memory-evidence/preference:session-1:abc",
+					provenance: {
+						lane: "memory-evidence",
+						evidenceUnit: "preference",
+					},
+				}),
+			),
+		).toBe("session-evidence")
+	})
+
+	it("boosts session evidence and caps graph/procedure dominance for personal recall", () => {
+		const graph = Array.from({ length: 4 }, (_, index) =>
+			makeResult({
+				path: `relation:a-${index}`,
+				canonicalId: `relation:a-${index}`,
+				score: 0.9 - index * 0.01,
+				provenance: { lane: "graph" },
+			}),
+		)
+		const procedure = makeResult({
+			path: "procedure:deploy",
+			canonicalId: "procedure:deploy",
+			score: 0.86,
+			source: "structured",
+			provenance: { lane: "procedural" },
+		})
+		const session = makeResult({
+			path: "events/evt-1",
+			canonicalId: "event:evt-1",
+			score: 0.78,
+			sessionId: "session-1",
+			sourceEventIds: ["evt-1"],
+		})
+
+		const controlled = applyLaneAwareResultControls({
+			query: "What did I say I prefer in the last conversation?",
+			results: [...graph, procedure, session],
+			classification: "direct",
+			planPaths: ["hybrid", "raw-window", "graph"],
+			topK: 3,
+		})
+
+		expect(controlled.summary.applied).toBe(true)
+		expect(controlled.summary.boosted).toBe(1)
+		expect(controlled.summary.demoted).toBeGreaterThan(0)
+		expect(controlled.summary.capped).toBeGreaterThan(0)
+		expect(controlled.results.slice(0, 3).map(inferSearchResultLane)).toContain(
+			"conversation",
+		)
+		expect(
+			controlled.results
+				.slice(0, 3)
+				.filter((result) => inferSearchResultLane(result) === "graph"),
+		).toHaveLength(1)
+	})
+
+	it("boosts newer session evidence for current personal setup queries", () => {
+		const oldSession = makeResult({
+			path: "",
+			canonicalId: "session-chunk/old",
+			score: 0.8,
+			sessionId: "old",
+			timestamp: new Date("2023-05-21T00:00:00.000Z"),
+			provenance: { lane: "session-evidence" },
+		})
+		const currentSession = makeResult({
+			path: "",
+			canonicalId: "session-chunk/current",
+			score: 0.62,
+			sessionId: "current",
+			timestamp: new Date("2023-05-27T00:00:00.000Z"),
+			provenance: { lane: "session-evidence" },
+		})
+
+		const controlled = applyLaneAwareResultControls({
+			query: "Can you suggest accessories for my current photography setup?",
+			results: [oldSession, currentSession],
+			classification: "direct",
+			planPaths: ["hybrid"],
+			topK: 2,
+		})
+
+		expect(controlled.summary.recencyBoosted).toBeGreaterThan(0)
+		expect(controlled.results[0]?.canonicalId).toBe("session-chunk/current")
+	})
+
+	it("limits duplicate sessions from flooding personal-memory top results", () => {
+		const repeatedSession = Array.from({ length: 5 }, (_, index) =>
+			makeResult({
+				path: `events/a-${index}`,
+				canonicalId: `event:a-${index}`,
+				score: 1 - index * 0.01,
+				sessionId: "session-a",
+				sourceEventIds: [`a-${index}`],
+			}),
+		)
+		const otherSessions = ["b", "c", "d"].map((id, index) =>
+			makeResult({
+				path: `events/${id}-1`,
+				canonicalId: `event:${id}-1`,
+				score: 0.94 - index * 0.01,
+				sessionId: `session-${id}`,
+				sourceEventIds: [`${id}-1`],
+			}),
+		)
+
+		const controlled = applyLaneAwareResultControls({
+			query: "Any tips based on what I mentioned before?",
+			results: [...repeatedSession, ...otherSessions],
+			classification: "direct",
+			planPaths: ["hybrid"],
+			topK: 5,
+		})
+
+		expect(controlled.summary.sessionCapped).toBeGreaterThan(0)
+		expect(
+			controlled.results.slice(0, 5).map((result) => result.sessionId),
+		).toContain("session-b")
+		expect(
+			controlled.results.slice(0, 5).map((result) => result.sessionId),
+		).toContain("session-c")
+		expect(
+			controlled.results
+				.slice(0, 5)
+				.filter((result) => result.sessionId === "session-a"),
+		).toHaveLength(2)
+	})
+
+	it("exhausts distinct session coverage before repeated turns for temporal queries", () => {
+		const repeatedSession = Array.from({ length: 5 }, (_, index) =>
+			makeResult({
+				path: `events/a-${index}`,
+				canonicalId: `event:a-${index}`,
+				score: 1 - index * 0.01,
+				sessionId: "session-a",
+				sourceEventIds: [`a-${index}`],
+			}),
+		)
+		const otherSessions = ["b", "c", "d", "e", "f"].map((id, index) =>
+			makeResult({
+				path: `events/${id}-1`,
+				canonicalId: `event:${id}-1`,
+				score: 0.93 - index * 0.01,
+				sessionId: `session-${id}`,
+				sourceEventIds: [`${id}-1`],
+			}),
+		)
+
+		const controlled = applyLaneAwareResultControls({
+			query: "What changed across sessions before the latest update?",
+			results: [...repeatedSession, ...otherSessions],
+			classification: "temporal",
+			planPaths: ["hybrid"],
+			topK: 5,
+		})
+
+		expect(controlled.summary.sessionCapped).toBeGreaterThan(0)
+		expect(
+			controlled.results
+				.slice(0, 5)
+				.filter((result) => result.sessionId === "session-a"),
+		).toHaveLength(1)
+		expect(
+			new Set(controlled.results.slice(0, 5).map((r) => r.sessionId)).size,
+		).toBe(5)
+	})
+
+	it("boosts preference evidence above generic turn hits for advice queries", () => {
+		const turn = makeResult({
+			path: "events/turn-1",
+			canonicalId: "event:turn-1",
+			score: 0.91,
+			sessionId: "session-a",
+			sourceEventIds: ["turn-1"],
+		})
+		const preference = makeResult({
+			path: "memory-evidence/preference:session-b:pref",
+			canonicalId: "memory-evidence/preference:session-b:pref",
+			score: 0.72,
+			sessionId: "session-b",
+			sourceEventIds: ["turn-2"],
+			provenance: {
+				lane: "memory-evidence",
+				evidenceUnit: "preference",
+			},
+		})
+
+		const controlled = applyLaneAwareResultControls({
+			query: "What advice fits my food preferences?",
+			results: [turn, preference],
+			classification: "direct",
+			planPaths: ["hybrid"],
+			topK: 2,
+		})
+
+		expect(controlled.summary.boosted).toBe(2)
+		expect(controlled.results[0]?.canonicalId).toBe(
+			"memory-evidence/preference:session-b:pref",
+		)
+	})
+
+	it("leaves explicit graph queries free to return graph-heavy top results", () => {
+		const graph = Array.from({ length: 3 }, (_, index) =>
+			makeResult({
+				path: `relation:a-${index}`,
+				canonicalId: `relation:a-${index}`,
+				score: 0.9 - index * 0.01,
+				provenance: { lane: "graph" },
+			}),
+		)
+		const controlled = applyLaneAwareResultControls({
+			query: "Who is Alice connected to?",
+			results: graph,
+			classification: "multi-hop",
+			planPaths: ["graph", "hybrid"],
+			topK: 3,
+		})
+
+		expect(controlled.summary.capped).toBe(0)
+		expect(controlled.results.slice(0, 3).map(inferSearchResultLane)).toEqual([
+			"graph",
+			"graph",
+			"graph",
+		])
 	})
 })
 

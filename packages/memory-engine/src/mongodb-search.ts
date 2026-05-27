@@ -186,11 +186,17 @@ function toSearchResult(
 		path.startsWith("events/") && path.length > "events/".length
 			? path.slice("events/".length).trim()
 			: ""
+	const score =
+		typeof doc.score === "number"
+			? Number(doc.score.toFixed(6))
+			: typeof doc.scoreDetails?.value === "number"
+				? Number(doc.scoreDetails.value.toFixed(6))
+				: 0
 	return {
 		path,
 		startLine: typeof doc.startLine === "number" ? doc.startLine : 0,
 		endLine: typeof doc.endLine === "number" ? doc.endLine : 0,
-		score: typeof doc.score === "number" ? Number(doc.score.toFixed(6)) : 0,
+		score,
 		snippet: typeof doc.text === "string" ? doc.text.slice(0, 700) : "",
 		source: sourceType,
 		sourceType,
@@ -199,7 +205,11 @@ function toSearchResult(
 			: eventId
 				? { canonicalId: `event:${eventId}` }
 				: {}),
-		...(doc.updatedAt instanceof Date ? { timestamp: doc.updatedAt } : {}),
+		...(doc.timestamp instanceof Date
+			? { timestamp: doc.timestamp }
+			: doc.updatedAt instanceof Date
+				? { timestamp: doc.updatedAt }
+				: {}),
 		...(typeof doc.sessionId === "string" ? { sessionId: doc.sessionId } : {}),
 		...(typeof doc.scope === "string"
 			? { scope: doc.scope as MemoryScope }
@@ -213,6 +223,11 @@ function toSearchResult(
 		...(doc.provenance && typeof doc.provenance === "object"
 			? { provenance: doc.provenance as Record<string, unknown> }
 			: {}),
+		...(doc.scoreDetails && typeof doc.scoreDetails === "object"
+			? {
+					scoreDetails: doc.scoreDetails as MemorySearchResult["scoreDetails"],
+				}
+			: {}),
 	}
 }
 
@@ -221,6 +236,14 @@ function filterByScore(
 	minScore: number,
 ): MemorySearchResult[] {
 	return results.filter((r) => r.score >= minScore)
+}
+
+function filterRankFusionResults(
+	results: MemorySearchResult[],
+): MemorySearchResult[] {
+	// $rankFusion scores use MongoDB's RRF formula, so values are commonly
+	// around 0.01-0.03 and are not comparable to vector or lexical scores.
+	return results.filter((r) => r.score > 0)
 }
 
 function resolveLegacySourceFilter(
@@ -342,6 +365,66 @@ export function splitAtlasSearchFilter(filter?: Document): {
 	}
 }
 
+function extractQuotedPhrases(query: string): string[] {
+	return [...query.matchAll(/"([^"]{2,120})"|'([^']{2,120})'/g)]
+		.map((match) => (match[1] ?? match[2] ?? "").trim())
+		.filter(Boolean)
+		.slice(0, 4)
+}
+
+function buildTextSearchShouldClauses(query: string): Document[] {
+	const should: Document[] = []
+	for (const phrase of extractQuotedPhrases(query)) {
+		should.push({
+			phrase: {
+				query: phrase,
+				path: "text",
+				score: { boost: { value: 6 } },
+			},
+		})
+	}
+	if (
+		/\b(prefer|preference|like|dislike|favorite|want|need|advice|tips?|recommend(?:ation)?s?)\b/i.test(
+			query,
+		)
+	) {
+		should.push({
+			text: {
+				query:
+					"prefer preference like favorite want need advice recommendation",
+				path: "text",
+				score: { boost: { value: 2 } },
+			},
+		})
+	}
+	if (
+		/\b(when|before|after|earlier|later|recent|latest|last|first|updated|changed|currently|now|timeline|session)\b/i.test(
+			query,
+		)
+	) {
+		should.push({
+			text: {
+				query: "session date before after recent latest updated changed",
+				path: "text",
+				score: { boost: { value: 1.5 } },
+			},
+		})
+	}
+	return should
+}
+
+function buildTextSearchCompound(
+	query: string,
+	compoundFilter?: Document[],
+): Document {
+	const should = buildTextSearchShouldClauses(query)
+	return {
+		must: [{ text: { query, path: "text" } }],
+		...(compoundFilter ? { filter: compoundFilter } : {}),
+		...(should.length > 0 ? { should } : {}),
+	}
+}
+
 // ---------------------------------------------------------------------------
 // $vectorSearch stage builder
 // ---------------------------------------------------------------------------
@@ -352,11 +435,33 @@ export function splitAtlasSearchFilter(filter?: Document): {
 /** Hard maximum for numCandidates — MongoDB server rejects values above 10,000. */
 export const MONGODB_MAX_NUM_CANDIDATES = 10_000
 
+function normalizeVectorSearchLimit(value: number): number {
+	const normalized = Math.floor(value)
+	if (!Number.isFinite(normalized) || normalized <= 0) {
+		return 1
+	}
+	return Math.min(normalized, MONGODB_MAX_NUM_CANDIDATES)
+}
+
+function normalizeVectorSearchNumCandidates(params: {
+	numCandidates: number
+	limit: number
+}): number {
+	const requested = Math.floor(params.numCandidates)
+	const finiteRequested =
+		Number.isFinite(requested) && requested > 0 ? requested : params.limit
+	return Math.min(
+		Math.max(finiteRequested, params.limit),
+		MONGODB_MAX_NUM_CANDIDATES,
+	)
+}
+
 export function buildVectorSearchStage(input: {
 	queryVector: number[] | null
 	queryText: string | null
 	embeddingMode: MemoryMongoDBEmbeddingMode
 	indexName: string
+	model?: string
 	numCandidates: number
 	limit: number
 	filter?: Document
@@ -365,19 +470,20 @@ export function buildVectorSearchStage(input: {
 	 *  and omits numCandidates per the $vectorSearch contract. */
 	exact?: boolean
 }): Document | null {
+	const limit = normalizeVectorSearchLimit(input.limit)
 	const base: Document = {
 		index: input.indexName,
-		limit: input.limit,
+		limit,
 	}
 
 	// ENN mode: exact: true, no numCandidates
 	if (input.exact) {
 		base.exact = true
 	} else {
-		base.numCandidates = Math.min(
-			input.numCandidates,
-			MONGODB_MAX_NUM_CANDIDATES,
-		)
+		base.numCandidates = normalizeVectorSearchNumCandidates({
+			numCandidates: input.numCandidates,
+			limit,
+		})
 	}
 
 	if (input.filter && Object.keys(input.filter).length > 0) {
@@ -386,6 +492,7 @@ export function buildVectorSearchStage(input: {
 
 	if (input.embeddingMode === "automated" && input.queryText) {
 		base.query = { text: input.queryText }
+		base.model = input.model ?? "voyage-4-large"
 		base.path = input.textFieldPath ?? "text"
 	} else {
 		return null
@@ -449,10 +556,14 @@ export async function vectorSearch(
 				text: 1,
 				source: 1,
 				sessionId: 1,
+				sourceEventIds: 1,
 				updatedAt: 1,
+				timestamp: 1,
 				scope: 1,
 				scopeRef: 1,
 				canonicalId: 1,
+				unit: 1,
+				provenance: 1,
 				"metadata.sourceEventIds": 1,
 				score: { $meta: "vectorSearchScore" },
 			},
@@ -502,10 +613,7 @@ export async function keywordSearch(
 		{
 			$search: {
 				index: opts.indexName,
-				compound: {
-					must: [{ text: { query, path: "text" } }],
-					...(compoundFilter ? { filter: compoundFilter } : {}),
-				},
+				compound: buildTextSearchCompound(query, compoundFilter),
 				...(opts.explain?.includeScoreDetails ? { scoreDetails: true } : {}),
 			},
 		},
@@ -520,10 +628,14 @@ export async function keywordSearch(
 				text: 1,
 				source: 1,
 				sessionId: 1,
+				sourceEventIds: 1,
 				updatedAt: 1,
+				timestamp: 1,
 				scope: 1,
 				scopeRef: 1,
 				canonicalId: 1,
+				unit: 1,
+				provenance: 1,
 				"metadata.sourceEventIds": 1,
 				score: { $meta: "searchScore" },
 				...(opts.explain?.includeScoreDetails
@@ -620,10 +732,7 @@ export async function hybridSearchScoreFusion(
 							{
 								$search: {
 									index: opts.textIndexName,
-									compound: {
-										must: [{ text: { query, path: "text" } }],
-										...(compoundFilter ? { filter: compoundFilter } : {}),
-									},
+									compound: buildTextSearchCompound(query, compoundFilter),
 								},
 							},
 							...(postMatch ? [{ $match: postMatch }] : []),
@@ -639,9 +748,11 @@ export async function hybridSearchScoreFusion(
 					},
 					method: "avg",
 				},
+				scoreDetails: true,
 			},
 		},
 		{ $limit: opts.maxResults },
+		{ $addFields: { scoreDetails: { $meta: "scoreDetails" } } },
 		{
 			$project: {
 				_id: 0,
@@ -651,12 +762,17 @@ export async function hybridSearchScoreFusion(
 				text: 1,
 				source: 1,
 				sessionId: 1,
+				sourceEventIds: 1,
 				updatedAt: 1,
+				timestamp: 1,
 				scope: 1,
 				scopeRef: 1,
 				canonicalId: 1,
+				unit: 1,
+				provenance: 1,
 				"metadata.sourceEventIds": 1,
-				score: { $meta: "searchScore" },
+				score: "$scoreDetails.value",
+				...(opts.explain?.includeScoreDetails ? { scoreDetails: 1 } : {}),
 			},
 		},
 	]
@@ -734,10 +850,7 @@ export async function hybridSearchRankFusion(
 							{
 								$search: {
 									index: opts.textIndexName,
-									compound: {
-										must: [{ text: { query, path: "text" } }],
-										...(compoundFilter ? { filter: compoundFilter } : {}),
-									},
+									compound: buildTextSearchCompound(query, compoundFilter),
 								},
 							},
 							...(postMatch ? [{ $match: postMatch }] : []),
@@ -751,9 +864,11 @@ export async function hybridSearchRankFusion(
 						text: opts.textWeight,
 					},
 				},
+				scoreDetails: true,
 			},
 		},
 		{ $limit: opts.maxResults },
+		{ $addFields: { scoreDetails: { $meta: "scoreDetails" } } },
 		{
 			$project: {
 				_id: 0,
@@ -763,12 +878,17 @@ export async function hybridSearchRankFusion(
 				text: 1,
 				source: 1,
 				sessionId: 1,
+				sourceEventIds: 1,
 				updatedAt: 1,
+				timestamp: 1,
 				scope: 1,
 				scopeRef: 1,
 				canonicalId: 1,
+				unit: 1,
+				provenance: 1,
 				"metadata.sourceEventIds": 1,
-				score: { $meta: "searchScore" },
+				score: "$scoreDetails.value",
+				...(opts.explain?.includeScoreDetails ? { scoreDetails: 1 } : {}),
 			},
 		},
 	]
@@ -786,7 +906,7 @@ export async function hybridSearchRankFusion(
 
 	const docs = await runSearchAggregateWithRetry(collection, pipeline)
 	const results = docs.map((doc) => toSearchResult(doc, "memory"))
-	return filterByScore(results, opts.minScore)
+	return filterRankFusionResults(results)
 }
 
 // ---------------------------------------------------------------------------
