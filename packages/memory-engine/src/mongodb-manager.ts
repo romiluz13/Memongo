@@ -7042,18 +7042,27 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		const mode =
 			process.env.MEMONGO_BENCHMARK_DERIVED_WORK_MODE?.trim().toLowerCase()
 		if (
-			mode !== "disabled" &&
-			mode !== "off" &&
-			mode !== "none" &&
-			mode !== "0" &&
-			mode !== "false"
+			mode === "enabled" ||
+			mode === "on" ||
+			mode === "1" ||
+			mode === "true"
 		) {
 			return true
 		}
-		return !(
+		const benchmarkAgent =
 			this.agentId.startsWith("benchmark-") ||
 			this.agentId.startsWith("canary-")
-		)
+		if (
+			mode === "disabled" ||
+			mode === "off" ||
+			mode === "none" ||
+			mode === "0" ||
+			mode === "false" ||
+			benchmarkAgent
+		) {
+			return !benchmarkAgent
+		}
+		return true
 	}
 
 	private isDuplicateKeyError(err: unknown): boolean {

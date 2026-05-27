@@ -3419,6 +3419,170 @@ describe("MongoDBMemoryManager background extraction", () => {
 		}
 	})
 
+	it("defaults benchmark agents to skip post-write derived work", async () => {
+		const prev = process.env.MEMONGO_BENCHMARK_DERIVED_WORK_MODE
+		delete process.env.MEMONGO_BENCHMARK_DERIVED_WORK_MODE
+		try {
+			const { writeEvent, projectEventChunk } = await import(
+				"./mongodb-events.js"
+			)
+			const { extractAndUpsertEntities } = await import("./mongodb-graph.js")
+			const { createMemoryJob } = await import("./mongodb-memory-jobs.js")
+			const {
+				extractProcedureCandidatesFromEvent,
+				resolveStructuredCandidatesForPromotion,
+			} = await import("./mongodb-derived-memory.js")
+			const { updateLaneCoverage } = await import("./mongodb-lane-coverage.js")
+
+			mocked(writeEvent).mockResolvedValue({
+				eventId: "evt-canary-default-1",
+				timestamp: new Date("2026-04-09T12:00:00.000Z"),
+				scopeRef: "agent:canary-agent-1",
+			})
+			mocked(projectEventChunk).mockResolvedValue({ chunkCreated: true })
+
+			const manager = Object.assign(
+				Object.create(MongoDBMemoryManager.prototype),
+				{
+					db: {} as import("mongodb").Db,
+					prefix: "test_",
+					agentId: "canary-agent-1",
+					client: undefined,
+					config: {
+						mongodb: {
+							embeddingMode: "automated",
+							episodes: { enabled: true, minEventsForEpisode: 6 },
+						},
+					},
+					workspaceDir: "/tmp/memongo",
+					writeQueue: Promise.resolve(),
+					derivationQueue: Promise.resolve(),
+					derivationSchedulingQueue: Promise.resolve(),
+					chunkCount: 0,
+					dirty: true,
+				},
+			) as MongoDBMemoryManager
+
+			await manager.writeConversationEvent({
+				role: "assistant",
+				body: "Remember this canary fact.",
+				scope: "agent",
+			})
+
+			expect(extractAndUpsertEntities).not.toHaveBeenCalled()
+			expect(createMemoryJob).not.toHaveBeenCalled()
+			expect(resolveStructuredCandidatesForPromotion).not.toHaveBeenCalled()
+			expect(extractProcedureCandidatesFromEvent).not.toHaveBeenCalled()
+			expect(updateLaneCoverage).toHaveBeenCalledWith(
+				expect.objectContaining({
+					agentId: "canary-agent-1",
+					increments: {
+						"raw-window": 1,
+						hybrid: 1,
+					},
+				}),
+			)
+		} finally {
+			if (prev === undefined)
+				delete process.env.MEMONGO_BENCHMARK_DERIVED_WORK_MODE
+			else process.env.MEMONGO_BENCHMARK_DERIVED_WORK_MODE = prev
+		}
+	})
+
+	it("allows dogfood benchmarks to opt into post-write derived work", async () => {
+		const prev = process.env.MEMONGO_BENCHMARK_DERIVED_WORK_MODE
+		process.env.MEMONGO_BENCHMARK_DERIVED_WORK_MODE = "enabled"
+		try {
+			const { writeEvent, projectEventChunk } = await import(
+				"./mongodb-events.js"
+			)
+			const { extractAndUpsertEntities } = await import("./mongodb-graph.js")
+			const { createMemoryJob } = await import("./mongodb-memory-jobs.js")
+			const { eventsCollection } = await import("./mongodb-schema.js")
+			const { promoteDerivedMemoryFromEvent } = await import(
+				"./mongodb-derived-memory.js"
+			)
+
+			mocked(writeEvent).mockResolvedValue({
+				eventId: "evt-benchmark-enabled-1",
+				timestamp: new Date("2026-04-09T12:00:00.000Z"),
+				scopeRef: "agent:benchmark-agent-enabled",
+			})
+			mocked(projectEventChunk).mockResolvedValue({ chunkCreated: false })
+			mocked(extractAndUpsertEntities).mockResolvedValue({
+				entities: [],
+				relationsCreated: 0,
+			})
+			mocked(createMemoryJob).mockResolvedValue(
+				"extraction-evt-benchmark-enabled-1",
+			)
+			mocked(eventsCollection).mockReturnValue({
+				findOne: vi.fn(async () => ({
+					eventId: "evt-benchmark-enabled-1",
+					agentId: "benchmark-agent-enabled",
+					role: "assistant",
+					body: "Remember this dogfood benchmark fact.",
+					timestamp: new Date("2026-04-09T12:00:00.000Z"),
+					scope: "agent",
+					scopeRef: "agent:benchmark-agent-enabled",
+				})),
+			} as unknown as import("mongodb").Collection)
+			mocked(promoteDerivedMemoryFromEvent).mockResolvedValue({
+				structuredCreated: 0,
+				proceduresCreated: 0,
+				skipped: false,
+			})
+
+			const manager = Object.assign(
+				Object.create(MongoDBMemoryManager.prototype),
+				{
+					db: {} as import("mongodb").Db,
+					prefix: "test_",
+					agentId: "benchmark-agent-enabled",
+					client: undefined,
+					config: {
+						mongodb: {
+							embeddingMode: "automated",
+							episodes: { enabled: false, minEventsForEpisode: 6 },
+						},
+					},
+					workspaceDir: "/tmp/memongo",
+					writeQueue: Promise.resolve(),
+					derivationQueue: Promise.resolve(),
+					derivationSchedulingQueue: Promise.resolve(),
+					chunkCount: 0,
+					dirty: true,
+				},
+			) as MongoDBMemoryManager & {
+				derivationQueue: Promise<void>
+				derivationSchedulingQueue: Promise<void>
+			}
+
+			await manager.writeConversationEvent({
+				role: "assistant",
+				body: "Remember this dogfood benchmark fact.",
+				scope: "agent",
+			})
+			await manager.derivationSchedulingQueue
+			await manager.derivationQueue
+
+			expect(extractAndUpsertEntities).toHaveBeenCalled()
+			expect(createMemoryJob).toHaveBeenCalledWith(
+				expect.objectContaining({
+					job: expect.objectContaining({
+						jobId: "extraction-evt-benchmark-enabled-1",
+						jobType: "extraction",
+					}),
+				}),
+			)
+			expect(promoteDerivedMemoryFromEvent).toHaveBeenCalled()
+		} finally {
+			if (prev === undefined)
+				delete process.env.MEMONGO_BENCHMARK_DERIVED_WORK_MODE
+			else process.env.MEMONGO_BENCHMARK_DERIVED_WORK_MODE = prev
+		}
+	})
+
 	it("keeps derived work enabled for non-benchmark agents", async () => {
 		const prev = process.env.MEMONGO_BENCHMARK_DERIVED_WORK_MODE
 		process.env.MEMONGO_BENCHMARK_DERIVED_WORK_MODE = "disabled"
