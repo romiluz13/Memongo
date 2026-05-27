@@ -6,6 +6,9 @@ This inventory tracks repo-backed benchmark claims only. A row can become a
 Memongo victory claim only when Memongo runs the same dataset, scorer, retrieval
 unit, top-k, and LLM/rerank posture, with artifacts and cleanup proof.
 
+Execution rules for the fresh Atlas control lane live in
+[Ecosystem Benchmark Runbook](./ECOSYSTEM-BENCHMARK-RUNBOOK.md).
+
 ## Refresh Snapshot
 
 | Competitor repo | Latest local commit | Refresh result | Notes |

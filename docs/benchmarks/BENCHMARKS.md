@@ -12,6 +12,8 @@ it has no committed artifact pack and remains unproven.
 
 For the refreshed cross-competitor queue, see
 [Competitor Benchmark Inventory](./COMPETITOR-BENCHMARK-INVENTORY.md).
+For the fresh Atlas execution procedure, see
+[Ecosystem Benchmark Runbook](./ECOSYSTEM-BENCHMARK-RUNBOOK.md).
 
 ## Claim Policy
 

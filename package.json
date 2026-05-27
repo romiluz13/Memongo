@@ -26,6 +26,7 @@
 		"mongodb:parity": "bun scripts/check-mongodb-runtime-parity.ts",
 		"mongodb:prepare": "bun scripts/prepare-mongodb-runtime.ts",
 		"mongodb:prefix-inventory": "bun scripts/mongodb-prefix-inventory.ts",
+		"benchmark:cluster-preflight": "bun scripts/benchmark-cluster-preflight.ts",
 		"memory-eval": "bun scripts/real-memory-eval.ts",
 		"compare-memory-eval": "bun scripts/compare-memory-eval.ts",
 		"agent-smoke": "bun scripts/real-agent-smoke.ts",
