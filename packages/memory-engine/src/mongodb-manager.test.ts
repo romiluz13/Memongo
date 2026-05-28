@@ -13,6 +13,7 @@ import {
 	getActiveSources,
 	getActiveSourcesForStatus,
 	isConversationEvidenceQuery,
+	mergeRankedResultSets,
 	MongoDBMemoryManager,
 	resolveExplainSources,
 	scorePreferenceGroundingSignalBoost,
@@ -386,6 +387,56 @@ describe("deduplicateSearchResults", () => {
 		const deduped = deduplicateSearchResults(results)
 		const dedupCount = results.length - deduped.length
 		expect(dedupCount).toBe(1)
+	})
+})
+
+describe("mergeRankedResultSets", () => {
+	const makeResult = (
+		path: string,
+		score: number,
+		source: MemorySearchResult["source"] = "conversation",
+	): MemorySearchResult => ({
+		path,
+		filePath: path,
+		startLine: 0,
+		endLine: 0,
+		score,
+		snippet: path,
+		source,
+		canonicalId: path,
+	})
+
+	it("combines independent ranked lists without penalizing later arrays", () => {
+		const turnResults = Array.from({ length: 8 }, (_, index) =>
+			makeResult(`event:${index}`, 1 - index * 0.01),
+		)
+		const sessionResults = [
+			makeResult("session-chunk:best", 0.01),
+			makeResult("session-chunk:next", 0.009),
+		]
+
+		const merged = mergeRankedResultSets([turnResults, sessionResults])
+
+		expect(merged.slice(0, 4).map((result) => result.canonicalId)).toContain(
+			"session-chunk:best",
+		)
+		expect(
+			merged.findIndex((result) => result.canonicalId === "session-chunk:best"),
+		).toBeLessThan(
+			merged.findIndex((result) => result.canonicalId === "event:7"),
+		)
+	})
+
+	it("sums RRF contribution for duplicate evidence identities", () => {
+		const sharedA = makeResult("event:shared", 0.2)
+		const sharedB = makeResult("event:shared", 0.9)
+		const merged = mergeRankedResultSets([
+			[makeResult("event:other-a", 0.8), sharedA],
+			[sharedB, makeResult("event:other-b", 0.7)],
+		])
+
+		expect(merged[0]?.canonicalId).toBe("event:shared")
+		expect(merged[0]?.snippet).toBe("event:shared")
 	})
 })
 

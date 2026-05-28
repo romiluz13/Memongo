@@ -453,26 +453,56 @@ function mapEventSearchDocToResult(
 	}
 }
 
-function mergeTurnPrecisionResults(
+export function mergeRankedResultSets(
 	resultSets: MemorySearchResult[][],
 ): MemorySearchResult[] {
-	const byPath = new Map<string, MemorySearchResult & { rrfScore: number }>()
+	const activeSets = resultSets.filter((results) => results.length > 0)
+	if (activeSets.length <= 1) {
+		return activeSets[0]?.map((result) => ({ ...result })) ?? []
+	}
+	const byIdentity = new Map<
+		string,
+		MemorySearchResult & { originalScore: number; rrfScore: number }
+	>()
 	for (const results of resultSets) {
 		for (let index = 0; index < results.length; index++) {
 			const result = results[index]
-			const existing = byPath.get(result.path)
+			const key = searchResultIdentityKey(result)
 			const score = rrfScore(index + 1)
+			const existing = byIdentity.get(key)
 			if (existing) {
 				existing.rrfScore += score
 				existing.score = existing.rrfScore
+				if (result.score > existing.originalScore) {
+					Object.assign(existing, {
+						...result,
+						originalScore: result.score,
+						rrfScore: existing.rrfScore,
+						score: existing.rrfScore,
+					})
+				}
 			} else {
-				byPath.set(result.path, { ...result, rrfScore: score, score })
+				byIdentity.set(key, {
+					...result,
+					originalScore: result.score,
+					rrfScore: score,
+					score,
+				})
 			}
 		}
 	}
-	return Array.from(byPath.values())
+	return Array.from(byIdentity.values())
 		.toSorted((left, right) => right.rrfScore - left.rrfScore)
-		.map(({ rrfScore: _rrfScore, ...result }) => result)
+		.map(
+			({ originalScore: _originalScore, rrfScore: _rrfScore, ...result }) =>
+				result,
+		)
+}
+
+function mergeTurnPrecisionResults(
+	resultSets: MemorySearchResult[][],
+): MemorySearchResult[] {
+	return mergeRankedResultSets(resultSets)
 }
 
 const RECOMMENDATION_MEMORY_QUERY_RE =
@@ -8757,7 +8787,9 @@ export async function searchV2(
 							)
 						}
 						pathResults =
-							searches.length > 0 ? (await Promise.all(searches)).flat() : []
+							searches.length > 0
+								? mergeRankedResultSets(await Promise.all(searches))
+								: []
 						break
 					}
 					case "kb": {
