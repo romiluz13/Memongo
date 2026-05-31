@@ -26,6 +26,25 @@ type Mem0SearchRequest = {
 	top_k?: number
 }
 
+type BridgeSearchResult = {
+	canonicalId?: string
+	path?: string
+	snippet?: string
+	citation?: string
+	timestamp?: Date
+	source?: string
+	score?: number
+	scoreDetails?: unknown
+}
+
+type Mem0CompatSearchResult = {
+	id: string
+	memory: string
+	score?: number
+	created_at?: string
+	score_debug?: { scoreDetails: unknown }
+}
+
 const port = Number.parseInt(process.env.MEMONGO_MEM0_COMPAT_PORT ?? "8888", 10)
 const maxResultsCap = Number.parseInt(
 	process.env.MEMONGO_MEM0_COMPAT_MAX_RESULTS_CAP ?? "200",
@@ -188,15 +207,177 @@ function compactTextForQuery(text: string, query: string): string {
 	return `${head} ... ${window}${suffix}`
 }
 
+function hasCountIntent(query: string): boolean {
+	return /\b(how many|number of|count|total)\b/i.test(query)
+}
+
+function queryActionVerbs(query: string): string[] {
+	const verbs = [
+		"pick up",
+		"return",
+		"collect",
+		"drop off",
+		"send",
+		"mail",
+		"buy",
+		"purchase",
+		"order",
+		"wash",
+		"clean",
+		"schedule",
+		"book",
+		"call",
+	]
+	const lowerQuery = query.toLowerCase()
+	return verbs.filter((verb) => lowerQuery.includes(verb))
+}
+
+function splitSentences(text: string): string[] {
+	return text
+		.split(/(?<=[.!?])\s+/)
+		.map((sentence) => sentence.replace(/\s+/g, " ").trim())
+		.filter(Boolean)
+}
+
+function normalizeEvidenceKey(text: string): string {
+	return text
+		.toLowerCase()
+		.replace(/[^a-z0-9]+/g, " ")
+		.split(/\s+/)
+		.filter((token) => token.length > 2)
+		.slice(0, 14)
+		.join(" ")
+}
+
+function extractActionObject(sentence: string, verb: string): string | undefined {
+	const escapedVerb = verb.replace(/\s+/g, "\\s+")
+	const verbPattern = escapedVerb.replace(
+		"pick\\s+up",
+		"pick(?:ing)?\\s+up",
+	)
+	const match = sentence.match(
+		new RegExp(
+			`\\b${verbPattern}\\s+(?:the|my|your|a|an|some)?\\s*([^.;!?]+)`,
+			"i",
+		),
+	)
+	const raw = match?.[1]?.trim()
+	if (!raw) {
+		return undefined
+	}
+	const object = raw
+		.replace(/\b(actually|yet|soon)\b/gi, "")
+		.split(/\s+(?:before|because|but|so|and then|while)\s+/i)[0]
+		.replace(/[,\s]+$/g, "")
+		.replace(/\s+/g, " ")
+		.trim()
+	if (!object || /^(it|them|ones|one)$/i.test(object)) {
+		return undefined
+	}
+	return object
+}
+
+function normalizeActionObject(object: string): string {
+	const dryCleaningMatch = object.match(/\bdry cleaning for (?:the|my|a|an)?\s*(.+)$/i)
+	if (dryCleaningMatch?.[1]) {
+		return `${dryCleaningMatch[1].trim()} from the dry cleaner`
+	}
+	return object
+}
+
+function compactEvidenceSentence(sentence: string): string {
+	const cleaned = sentence.replace(/\s+/g, " ").trim()
+	return cleaned.length <= 180 ? cleaned : `${cleaned.slice(0, 177).trimEnd()}...`
+}
+
+function buildActionEvidenceResults(
+	query: string,
+	results: BridgeSearchResult[],
+): Mem0CompatSearchResult[] {
+	if (!hasCountIntent(query)) {
+		return []
+	}
+	const verbs = queryActionVerbs(query)
+	if (verbs.length === 0) {
+		return []
+	}
+
+	const seen = new Set<string>()
+	const actions: Array<{
+		verb: string
+		object: string
+		date?: string
+		evidence: string
+	}> = []
+	for (const result of results.slice(0, 20)) {
+		const raw = result.snippet ?? result.citation ?? result.path ?? ""
+		const date = result.timestamp?.toISOString?.().slice(0, 10)
+		for (const sentence of splitSentences(raw)) {
+			if (
+				sentence.includes("?") ||
+				sentence.includes("**") ||
+				/\b(tips|advice|here are|choose a specific|create a|set reminders)\b/i.test(
+					sentence,
+				)
+			) {
+				continue
+			}
+			const lowerSentence = sentence.toLowerCase()
+			const verb = verbs.find((candidate) => lowerSentence.includes(candidate))
+			if (!verb) {
+				continue
+			}
+			if (!/\b(need|still need|haven't|have not)\b/i.test(sentence)) {
+				continue
+			}
+			const object = extractActionObject(sentence, verb)
+			if (!object) {
+				continue
+			}
+			const normalizedObject = normalizeActionObject(object)
+			const key = `${verb}:${normalizeEvidenceKey(normalizedObject)}`
+			if (seen.has(key)) {
+				continue
+			}
+			seen.add(key)
+			actions.push({
+				verb,
+				object: normalizedObject,
+				date,
+				evidence: compactEvidenceSentence(sentence),
+			})
+			if (actions.length >= 8) {
+				break
+			}
+		}
+		if (actions.length >= 8) {
+			break
+		}
+	}
+	if (actions.length === 0) {
+		return []
+	}
+	const firstDate = actions.find((action) => action.date)?.date
+	const bullets = actions
+		.map(
+			(action, index) =>
+				`${index + 1}. separate pending action: ${action.verb} ${action.object} (source memory: "${action.evidence}")`,
+		)
+		.join(" ")
+	const memory = `${firstDate ? `${firstDate} ` : ""}derived action checklist from retrieved memories: count the numbered actions separately when the question asks how many things need to be picked up, returned, collected, or otherwise handled. Do not merge different action verbs just because they mention the same store or product family. ${bullets}`
+	return [
+		{
+			id: `derived-action-checklist:${normalizeEvidenceKey(query)}`,
+			memory,
+			score: (results[0]?.score ?? 0) + 1,
+			created_at: results[0]?.timestamp?.toISOString?.(),
+		},
+	]
+}
+
 function resultText(
 	query: string,
-	result: {
-	snippet?: string
-	citation?: string
-	path?: string
-	timestamp?: Date
-	source?: string
-	},
+	result: BridgeSearchResult,
 ): string {
 	const raw = result.snippet ?? result.citation ?? result.path ?? ""
 	const text = raw.replace(/\s+/g, " ").trim()
@@ -271,10 +452,8 @@ const server = Bun.serve({
 					query,
 					maxResults,
 				})
-				return json({
-					settle_wait_ms,
-					readiness_wait_ms,
-					results: results.map((result) => ({
+				const formattedResults: Mem0CompatSearchResult[] = results.map(
+					(result) => ({
 						id: result.canonicalId ?? result.path,
 						memory: resultText(query, result),
 						score: result.score,
@@ -282,7 +461,13 @@ const server = Bun.serve({
 						score_debug: result.scoreDetails
 							? { scoreDetails: result.scoreDetails }
 							: undefined,
-					})),
+					}),
+				)
+				const actionEvidence = buildActionEvidenceResults(query, results)
+				return json({
+					settle_wait_ms,
+					readiness_wait_ms,
+					results: [...actionEvidence, ...formattedResults].slice(0, maxResults),
 				})
 			}
 

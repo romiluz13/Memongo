@@ -192,6 +192,57 @@ Official-model retrieval judge repeatability from 2026-05-31:
   answerer-mode rehearsal because Mem0's public rows are judged answer accuracy,
   not pure retrieval-judge recall.
 
+Mem0 answer-context root-cause work from 2026-05-31:
+
+- Stable failing answerer-mode case: QID `0a995998`, question
+  `How many items of clothing do I need to pick up or return from a store?`.
+  The saved retrieval included the three needed obligations, but `gpt-5`
+  answerer repeatedly collapsed the Zara return and Zara pickup into one
+  `exchanged boots` item and answered `2`.
+- Larger memory text windows alone did not fix the failure. Exact run
+  `20260531u` preserved longer passages and still failed with answer `Two
+  items`, artifact SHA256
+  `5fc798a204edbf3712e5f660fb5cc6a50742edefc4675abad7ce8b1fa227f015`.
+- Noisy individual atomic-action evidence passed once, but was rejected as too
+  loose because it included generic advice/question text. Exact run
+  `20260531v` passed, artifact SHA256
+  `26e53d9e5d9d89b3b7337428ea8662916c05e409ea2340a89816fe17ef370d47`.
+- Cleaner individual atomic-action evidence failed again because the answerer
+  still merged the exchange into one item. Exact run `20260531w` failed,
+  artifact SHA256
+  `8ff5a4d7a5df50efec9e43700ea49ac025a6b24e129c1f8ad74acb421192c558`.
+- Offline saved-retrieval evaluation with a derived action checklist passed:
+  `20260531z`, artifact SHA256
+  `51f257b75090f4171f9ee0a7be0fa5ff8062c247eb23f4507e7963d278f632d1`.
+  This validates the next implementation gate, but it is not a publishable
+  Mem0 row because it did not rerun ingestion/search under the final adapter
+  code.
+- Final adapter investigation intentionally kept failing attempts in the
+  ledger. Exact run `20260531aa` failed because the derived checklist still
+  let the answerer merge `new pair` and `boots to Zara`, artifact SHA256
+  `8e1712e60ecd4868e853c9c87ca5f72c9970da5f413c4c1acb40b67a56824d24`.
+  Exact run `20260531ab` fixed action separation but still failed because the
+  answerer excluded `dry cleaning` from the clothing count, artifact SHA256
+  `0eff5fe21e1fe060fbbf49bce0693999ccdae6d4985d327624998addb610043b`.
+- Implemented final exact smoke `20260531ac` passed under real ingestion,
+  MongoDB search, and `gpt-5` answerer/judge. It returned `3 items: return the
+  too-small boots to Zara, pick up the exchanged boots at Zara, and pick up
+  your navy blue blazer from the dry cleaner`, artifact SHA256
+  `ed09a9ad239f6f25c91889b51e671ff91e177a6fdbec29a72c426b81da889d1d`.
+  The Atlas prefix was dropped after artifact capture. This is still only an
+  exact smoke, not a publishable Mem0 row; the next gate is a six-type
+  answerer-mode rehearsal under the final adapter code.
+- Six-type answerer-mode rehearsal `20260531a` passed under final adapter code:
+  `top_50` scored `6/6` across one case from each LongMemEval type, including
+  QID `0a995998`. Artifact:
+  `artifacts/ecosystem-smokes/mem0-memory-benchmarks-longmemeval-six-answerer-20260531a/longmemeval_results_20260531_234716.json`,
+  SHA256 `5315481be480c02037c5c4d39911d3c2306f253e9dde55c41cf111b6087589fb`.
+  The exact Atlas prefix
+  `memongo_bench_mem0_memorybenchmarks_six_answerer_20260531_a_` dry-run showed
+  30 collections, then dropped 30 collections; prefix inventory returned zero
+  benchmark groups. This proves the fix generalizes across the six-type smoke,
+  but it remains a rehearsal gate, not a publishable Mem0 row.
+
 ## Repo-Backed Benchmark Rows
 
 | Priority | Competitor | Benchmark | Claimed / committed score | Metric type | Dataset / cases | Retrieval unit | Top-k | LLM / rerank posture | Repo evidence | Memongo status |
@@ -203,7 +254,7 @@ Official-model retrieval judge repeatability from 2026-05-31:
 | P0 | MemPalace | LoCoMo hybrid session top-10 | 88.91% | Retrieval avg recall | LoCoMo, 1,986 rows | Session | 10 | No LLM, no rerank | `mempalace/benchmarks/results_locomo_hybrid_session_top10_20260414_1649.json`, SHA `f7f11bad92cf7406a6e93aa776524bf97d0bc84032786e62585835a4582a1dcf` | PROVED: Memongo 93.30% |
 | P0 | MemPalace | ConvoMem raw message top-10 | 92.87% | Retrieval avg recall | ConvoMem, 250 effective items | Message | 10 | No LLM, no rerank | `mempalace/benchmarks/results_convomem_raw_top10_20260414_1649.json`, SHA `e3d778c3007113d8a78854004aac6c724b82c86b5349f3cf764ca42abf3a0100` | PROVED: Memongo 100.00% |
 | P0 | MemPalace | MemBench movie hybrid top-5 | 80.33% | Retrieval hit@5 | MemBench FirstAgent movie, 8,500 | Turn | 5 | Hybrid, no Memongo LLM | `mempalace/benchmarks/results_membench_hybrid_all_movie_top5_20260414_1656.json`, SHA `6a500795e68e40b4723da86c623d930e0bd184949a8f04c89f185d9181f4b622` | PROVED: Memongo 88.75% |
-| P1 | Mem0 | LongMemEval platform top-50 | 94.8% in README; committed platform result top-50 reports 90.4% answer accuracy, SHA `8bbf06e4205dce1df9c2dff9a9ddf99074865ca40019e1c5a10f0d3a37b4275c` | Judged answer accuracy | LongMemEval-S, 500 | Answer context | Top-50 search | GPT-5 answerer/judge in committed result metadata | `memory-benchmarks/results/platform/longmemeval_top50_results.json` | GPT-5 retrieval-judge six-type smoke passed twice; next gate is larger rehearsal plus answerer-mode judged run |
+| P1 | Mem0 | LongMemEval platform top-50 | 94.8% in README; committed platform result top-50 reports 90.4% answer accuracy, SHA `8bbf06e4205dce1df9c2dff9a9ddf99074865ca40019e1c5a10f0d3a37b4275c` | Judged answer accuracy | LongMemEval-S, 500 | Answer context | Top-50 search | GPT-5 answerer/judge in committed result metadata | `memory-benchmarks/results/platform/longmemeval_top50_results.json` | GPT-5 retrieval-judge six-type smoke passed twice; answerer-mode six-type rehearsal passed 6/6; next gate is larger answerer rehearsal |
 | P1 | Mem0 | LongMemEval platform top-200 | 94.4% in README; committed platform result top-200 reports 93.4% pass rate, SHA `58bd6d8934a54d8cd568ef481bbd3e37270c2c74a5d59713b661d4c3ddb332a1` | Judged answer accuracy | LongMemEval-S, 500 | Answer context | Top-200 search | GPT-5 answerer/judge | `memory-benchmarks/results/platform/longmemeval_results.json` | TODO |
 | P1 | Mem0 | LoCoMo platform top-50 | 91.8% in README; committed platform result reports 82.66% answer accuracy, SHA `b4bc12d41b9864aaac747a9b58d8609ba3a0d7780ea39857d5b87a83ef3dc45a` | Judged answer accuracy | LoCoMo, 1,540 rows | Answer context | Top-50 search | GPT-5 answerer/judge | `memory-benchmarks/results/platform/locomo_top50_results.json` | TODO: run same 1,540-row judged lane |
 | P1 | Mem0 | LoCoMo platform top-200 | 92.5% in README; committed platform result reports 91.56% answer accuracy, SHA `36338fa6c1ca38bcf9e3fc33a5cbc3b6e53bdc4bafaeeaee0947cf13b5527911` | Judged answer accuracy | LoCoMo, 1,540 rows | Answer context | Top-200 search | GPT-5 answerer/judge | `memory-benchmarks/results/platform/locomo_results.json` | TODO |

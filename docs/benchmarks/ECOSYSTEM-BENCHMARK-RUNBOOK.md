@@ -158,6 +158,17 @@ the query-relevant passage, not blindly clip the head of a long retrieved
 memory. This makes downstream judged-answer harnesses see the evidence that
 MongoDB already retrieved.
 
+For count/action questions, the Mem0 compat adapter may prepend a derived
+action checklist built only from retrieved memories. This is answer-context
+packaging, not new retrieval evidence: each checklist bullet must be traceable
+to returned memory text, and the row must disclose this as Memongo answer
+context behavior. The feature exists because the official answerer can collapse
+two distinct obligations in the same exchange, such as `return X` and
+`pick up Y`, into one phrase unless the retrieved evidence is structured as
+separate action candidates. Keep this generic: normalize evidence categories
+such as `dry cleaning for jacket` into the clothing item being retrieved, but
+never add an action that is not present in returned memory text.
+
 Small judged-QA smokes with Grove/Kimi can be unstable because structured
 output, content-filter retries, and ambiguous answer counting can change the
 pass/fail decision over the same saved retrieval artifacts. Treat six-case
@@ -177,8 +188,9 @@ Before a full Mem0 LongMemEval row, require:
   cleanup proof,
 - two repeated retrieval-judge evaluations over copied saved predictions with
   the official judge model,
-- one answerer-mode rehearsal with the same answerer and judge model as the
-  competitor row,
+- one six-type answerer-mode rehearsal with the same answerer and judge model as
+  the competitor row,
+- one larger answerer-mode rehearsal after any answer-context packaging change,
 - explicit separation between retrieval-judge diagnostics and judged answer
   accuracy claims.
 
