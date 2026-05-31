@@ -167,6 +167,31 @@ Six-type query-passage rehearsal from 2026-05-31:
   produced inconsistent judged outcomes, so the next gate is repeatable
   judge/answerer configuration and larger rehearsal, not a benchmark claim.
 
+Official-model retrieval judge repeatability from 2026-05-31:
+
+- Grove availability check: `gpt-5` is callable through the Grove
+  OpenAI-compatible path when the completion budget is large enough. This
+  matches the model name recorded in Mem0's committed LongMemEval platform
+  artifacts more closely than the earlier Kimi diagnostic lane.
+- Method: copied the same six saved prediction artifacts into fresh result
+  folders and ran official `memory-benchmarks` retrieval-judge mode with
+  `--judge-model gpt-5`, `--provider openai`, `--top-k-cutoffs 10,50`, and
+  `--rejudge`. No MongoDB writes or searches were performed during these
+  repeatability checks.
+- Run `20260531n`: `top_10` scored `6/6`; `top_50` scored `6/6`. Unified
+  artifact:
+  `artifacts/ecosystem-smokes/mem0-memory-benchmarks-longmemeval-20260531n/longmemeval_results_20260531_190435.json`,
+  SHA256 `39f3ee4c551217653fdf77ad5a0a693c677a9cfccf795202bf9ba87b03bb9344`.
+- Run `20260531o`: `top_10` scored `6/6`; `top_50` scored `6/6`. Unified
+  artifact:
+  `artifacts/ecosystem-smokes/mem0-memory-benchmarks-longmemeval-20260531o/longmemeval_results_20260531_190657.json`,
+  SHA256 `5e5175e4351ef87beffd1529ede55ba564b823357442ec983aca016441a1cfa9`.
+- Interpretation: retrieval-judge stability is now established on the six-type
+  smoke under the official model posture. This still is not a Mem0 publishable
+  row; the next gate is a larger `gpt-5` retrieval-judge rehearsal, followed by
+  answerer-mode rehearsal because Mem0's public rows are judged answer accuracy,
+  not pure retrieval-judge recall.
+
 ## Repo-Backed Benchmark Rows
 
 | Priority | Competitor | Benchmark | Claimed / committed score | Metric type | Dataset / cases | Retrieval unit | Top-k | LLM / rerank posture | Repo evidence | Memongo status |
@@ -178,7 +203,7 @@ Six-type query-passage rehearsal from 2026-05-31:
 | P0 | MemPalace | LoCoMo hybrid session top-10 | 88.91% | Retrieval avg recall | LoCoMo, 1,986 rows | Session | 10 | No LLM, no rerank | `mempalace/benchmarks/results_locomo_hybrid_session_top10_20260414_1649.json`, SHA `f7f11bad92cf7406a6e93aa776524bf97d0bc84032786e62585835a4582a1dcf` | PROVED: Memongo 93.30% |
 | P0 | MemPalace | ConvoMem raw message top-10 | 92.87% | Retrieval avg recall | ConvoMem, 250 effective items | Message | 10 | No LLM, no rerank | `mempalace/benchmarks/results_convomem_raw_top10_20260414_1649.json`, SHA `e3d778c3007113d8a78854004aac6c724b82c86b5349f3cf764ca42abf3a0100` | PROVED: Memongo 100.00% |
 | P0 | MemPalace | MemBench movie hybrid top-5 | 80.33% | Retrieval hit@5 | MemBench FirstAgent movie, 8,500 | Turn | 5 | Hybrid, no Memongo LLM | `mempalace/benchmarks/results_membench_hybrid_all_movie_top5_20260414_1656.json`, SHA `6a500795e68e40b4723da86c623d930e0bd184949a8f04c89f185d9181f4b622` | PROVED: Memongo 88.75% |
-| P1 | Mem0 | LongMemEval platform top-50 | 94.8% in README; committed platform result top-50 reports 90.4% answer accuracy, SHA `8bbf06e4205dce1df9c2dff9a9ddf99074865ca40019e1c5a10f0d3a37b4275c` | Judged answer accuracy | LongMemEval-S, 500 | Answer context | Top-50 search | GPT-5 answerer/judge in committed result metadata | `memory-benchmarks/results/platform/longmemeval_top50_results.json` | STRICT 6-TYPE SMOKE PASSED; next gate is larger rehearsal plus judged top-50 run |
+| P1 | Mem0 | LongMemEval platform top-50 | 94.8% in README; committed platform result top-50 reports 90.4% answer accuracy, SHA `8bbf06e4205dce1df9c2dff9a9ddf99074865ca40019e1c5a10f0d3a37b4275c` | Judged answer accuracy | LongMemEval-S, 500 | Answer context | Top-50 search | GPT-5 answerer/judge in committed result metadata | `memory-benchmarks/results/platform/longmemeval_top50_results.json` | GPT-5 retrieval-judge six-type smoke passed twice; next gate is larger rehearsal plus answerer-mode judged run |
 | P1 | Mem0 | LongMemEval platform top-200 | 94.4% in README; committed platform result top-200 reports 93.4% pass rate, SHA `58bd6d8934a54d8cd568ef481bbd3e37270c2c74a5d59713b661d4c3ddb332a1` | Judged answer accuracy | LongMemEval-S, 500 | Answer context | Top-200 search | GPT-5 answerer/judge | `memory-benchmarks/results/platform/longmemeval_results.json` | TODO |
 | P1 | Mem0 | LoCoMo platform top-50 | 91.8% in README; committed platform result reports 82.66% answer accuracy, SHA `b4bc12d41b9864aaac747a9b58d8609ba3a0d7780ea39857d5b87a83ef3dc45a` | Judged answer accuracy | LoCoMo, 1,540 rows | Answer context | Top-50 search | GPT-5 answerer/judge | `memory-benchmarks/results/platform/locomo_top50_results.json` | TODO: run same 1,540-row judged lane |
 | P1 | Mem0 | LoCoMo platform top-200 | 92.5% in README; committed platform result reports 91.56% answer accuracy, SHA `36338fa6c1ca38bcf9e3fc33a5cbc3b6e53bdc4bafaeeaee0947cf13b5527911` | Judged answer accuracy | LoCoMo, 1,540 rows | Answer context | Top-200 search | GPT-5 answerer/judge | `memory-benchmarks/results/platform/locomo_results.json` | TODO |

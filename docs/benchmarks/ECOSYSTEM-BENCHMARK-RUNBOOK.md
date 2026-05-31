@@ -165,6 +165,23 @@ judged runs as diagnostics only. A publishable Mem0 row needs repeatability
 criteria, fixed answerer/judge metadata, full artifact hashes, and a larger
 rehearsal before any full benchmark.
 
+For Mem0 LongMemEval, prefer `gpt-5` through the Grove wrapper when possible
+because the official committed platform artifacts record `gpt-5` as both
+generation and judge model. A quick model smoke should use enough completion
+budget; too-small `max_completion_tokens` can return an empty response with
+`finish_reason=length` even when the model is available.
+
+Before a full Mem0 LongMemEval row, require:
+
+- prediction artifacts from a strict Memongo compat run with exact-prefix
+  cleanup proof,
+- two repeated retrieval-judge evaluations over copied saved predictions with
+  the official judge model,
+- one answerer-mode rehearsal with the same answerer and judge model as the
+  competitor row,
+- explicit separation between retrieval-judge diagnostics and judged answer
+  accuracy claims.
+
 ## Stop Conditions
 
 Stop the run, preserve artifacts, and do not publish the row if any condition is
