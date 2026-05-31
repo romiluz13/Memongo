@@ -73,13 +73,13 @@ Multi-type smoke evidence from 2026-05-31:
 - Prefix: `memongo_bench_mem0_memorybenchmarks_smoke_20260531_h_`.
 - Ingestion: 1,475 memory pairs processed, 0 failed.
 - Retrieval: all 6 prediction artifacts returned 50/50 results; no empty retrieval files.
-- Per-question result SHA256:
-  - `0a995998.json`: `43c2a1446f9df6faf0379702deec2db92cefcf16c54dbc4bdcfe2ddf2dcde4d6`
-  - `18bc8abd.json`: `ff106de1df343a1e93cb3e55466b1084b85de96654404d6c87c63ff99bff05ee`
-  - `1c0ddc50.json`: `8ae3f9d29d43037a53fecdb0142e4d208036ab8fc2b3bd801f3625f91cc68c3c`
-  - `6b168ec8.json`: `20c6303d8ca280afa354a942bcfffef94ee223f222b04884675cde91ce59fd9a`
-  - `e3fc4d6e.json`: `130c19516bbde8fff737147cd7efdaa0a6ec30ad19d83bc58d2edc37ff8b5fde`
-  - `gpt4_2655b836.json`: `f6872697123502622fd8ab33ec6e6b2016a99f79481cce181f26852a05f19bff`
+- Per-question result SHA256 after retrieval-judge rejudge:
+  - `0a995998.json`: `3a2630975255c5f3c5b013926a0af471e9526fc1862a27a12bce315b6b349e05`
+  - `18bc8abd.json`: `734c532b5de3f7a7563cd67f26af0dc40b8c315b84b88bf5838c8672a7742308`
+  - `1c0ddc50.json`: `6c8906182f6d64a3a636e8ea9892061121c1e5ac49c5442a4409464246049eca`
+  - `6b168ec8.json`: `55f1e90c0af8ae4abc0f0c52f8e41403d241990cd3211543e38aff38542bcaec`
+  - `e3fc4d6e.json`: `63e46f1131e4893a6a7a13d1ce1efb538f86ff99e0d20b3fd40b1b16b5ced035`
+  - `gpt4_2655b836.json`: `6866d7ef485257d4bfa11e9b6429a980033e492f5d27037ec36cdaea32f85882`
 - Per-question ingestion SHA256:
   - `_ingestion_0a995998.json`: `55fb0af87fff6ac49d9b301c49fd5afff700cbe2eb57674649f7f8f3b681375a`
   - `_ingestion_18bc8abd.json`: `faa19c2813192ff8b6aa84c2b4bc5a4920ba67524cd99d9dfef7b8f56c8f7d31`
@@ -89,6 +89,27 @@ Multi-type smoke evidence from 2026-05-31:
   - `_ingestion_gpt4_2655b836.json`: `3a9af694dfe877356a8ed9a79c8e24d9f8c7e5135723a56750d189de020ba041`
 - Runtime note: the official harness took about 36.5 minutes for six questions because each question ingests a large LongMemEval haystack through the Mem0 API shape.
 - Atlas cleanup: exact prefix dry-run listed 30 collections; exact drop removed 30; prefix inventory returned 0 groups.
+
+Judged smoke evidence from 2026-05-31:
+
+- Grove transport note: the official harness's vanilla OpenAI SDK path failed
+  against Grove with missing subscription-key errors. A one-off wrapper added
+  Grove's required `api-key` header only; official prompts, scorer code, and
+  saved retrieval artifacts were otherwise unchanged.
+- Answerer mode with `Kimi-K2.6`: `top_10` scored 5/6 (83.3%); `top_50`
+  scored 4/6 (66.7%). Unified artifact SHA256:
+  `6800ad53be7f10d9bc45d057a68dc1ee61c7f38d2e6fdd8a1e0df7251aa6fca5`.
+- Answerer-mode root cause: retrieval was not empty; the multi-session miss
+  returned relevant top-10 memories but the answerer produced a blank answer,
+  and the preference top-50 miss included relevant evidence but produced
+  reasoning/noise instead of a clean final answer.
+- Retrieval-judge mode with `Kimi-K2.6`: `top_10` scored 6/6 (100.0%);
+  `top_50` scored 6/6 (100.0%). Unified artifact SHA256:
+  `4251d9ccf5f881bd549ede75c3901e688aa33502df5b0c4b17948fa98564abe5`.
+- Interpretation: the six-type smoke now supports Memongo retrieval/context
+  quality for the Mem0 harness shape, but not yet a publishable Mem0 judged-QA
+  win. The next fix must improve answer-context generation/transport, not
+  question-specific retrieval.
 
 Current blocker before full Mem0 runs: the adapter is now strict-clean on a
 six-type official LongMemEval smoke, but full judged Mem0 rows still require a
