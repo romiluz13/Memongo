@@ -385,6 +385,16 @@ export async function memongoBridgeSearch(params: {
 	})
 }
 
+export async function memongoBridgeWaitForBenchmarkSearchReadiness(params: {
+	agentId?: string
+	retrievalLane?: "native" | "raw-session"
+}) {
+	const m = await memongoBridgeGetManager(params.agentId)
+	await m.waitForBenchmarkSearchReadiness({
+		retrievalLane: params.retrievalLane,
+	})
+}
+
 export async function memongoBridgeSearchKB(params: {
 	query: string
 	agentId?: string

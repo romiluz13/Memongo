@@ -54,6 +54,23 @@ The first attempted smoke exposed workspace contamination from default local
 workspace sync; the adapter now creates an isolated empty workspace unless
 `MEMONGO_WORKSPACE_DIR` is explicitly set.
 
+Follow-up smoke evidence from 2026-05-31:
+
+- Root cause fixed: explicit `MEMONGO_BENCHMARK_DERIVED_WORK_MODE=disabled` now disables derived background work for non-standard official harness agent IDs such as `longmemeval_<run>`, not only Memongo's older `benchmark-*` and `canary-*` IDs.
+- Harness: same official LongMemEval runner and one-question `single-session-user` smoke.
+- Prefix `memongo_bench_mem0_memorybenchmarks_smoke_20260531_c_`: derived-work pollution removed; top results were raw event memories only. Search/vector still fell back after final writes.
+- Prefix `memongo_bench_mem0_memorybenchmarks_smoke_20260531_d_`: added a 10s per-user post-write search settle guard. Result artifact SHA256 `b476bb7e863ebd2fbb09b8ddc0149a22e8e9e44f0421f03488a7ae44be2d8175`; ingestion artifact SHA256 `5d0e8be66940c1b689cfc0d296442be0fc6ebae95c66c4a2de795688240d9ae3`.
+- Atlas cleanup: exact prefix `memongo_bench_mem0_memorybenchmarks_smoke_20260531_d_` dry-run listed 30 collections; exact drop removed 30; prefix inventory returned 0 groups.
+- Prefix `memongo_bench_mem0_memorybenchmarks_smoke_20260531_f_`: strict Search V2 correctly failed instead of falling back. Root cause: the adapter mapped Mem0 `user_id` both to Memongo `agentId` and to `sessionKey`; writes were stored under agent scope while search narrowed to session scope. Result artifact SHA256 `1e7d2ff96a33e27dc7b81bfe108f3b60f34fd5d6ae5c27a4934a54a71086a374`; ingestion artifact SHA256 `81865300fe6fb44113f8053a9d3e5ba7d92e5bd6a84017743f536debb2d18960`.
+- Prefix `memongo_bench_mem0_memorybenchmarks_smoke_20260531_g_`: fixed the adapter to search at the Mem0 user namespace level. Strict Search V2 returned 10 results; top-1 was the exact Netflix/documentaries/10-hours memory. Result artifact SHA256 `d44915722de59d5098343c861979a19939eb30f8497d273e1399dcacd3a31e72`; ingestion artifact SHA256 `a882eeee8eaee4b0d27cbfa6307cc1c91407c6a3c27df5d1662ed8fe7035f6ef`.
+- Atlas cleanup: exact prefix `memongo_bench_mem0_memorybenchmarks_smoke_20260531_g_` dry-run listed 30 collections; exact drop removed 30; prefix inventory returned 0 groups.
+
+Current blocker before full Mem0 runs: the adapter is now strict-clean on a
+one-question official LongMemEval smoke, but full judged Mem0 rows still require
+a larger multi-question smoke with the same strict Search/Vector settings and a
+fixed answerer/judge setup. Do not publish a Mem0 win from the one-question
+smoke.
+
 ## Repo-Backed Benchmark Rows
 
 | Priority | Competitor | Benchmark | Claimed / committed score | Metric type | Dataset / cases | Retrieval unit | Top-k | LLM / rerank posture | Repo evidence | Memongo status |
@@ -65,7 +82,7 @@ workspace sync; the adapter now creates an isolated empty workspace unless
 | P0 | MemPalace | LoCoMo hybrid session top-10 | 88.91% | Retrieval avg recall | LoCoMo, 1,986 rows | Session | 10 | No LLM, no rerank | `mempalace/benchmarks/results_locomo_hybrid_session_top10_20260414_1649.json`, SHA `f7f11bad92cf7406a6e93aa776524bf97d0bc84032786e62585835a4582a1dcf` | PROVED: Memongo 93.30% |
 | P0 | MemPalace | ConvoMem raw message top-10 | 92.87% | Retrieval avg recall | ConvoMem, 250 effective items | Message | 10 | No LLM, no rerank | `mempalace/benchmarks/results_convomem_raw_top10_20260414_1649.json`, SHA `e3d778c3007113d8a78854004aac6c724b82c86b5349f3cf764ca42abf3a0100` | PROVED: Memongo 100.00% |
 | P0 | MemPalace | MemBench movie hybrid top-5 | 80.33% | Retrieval hit@5 | MemBench FirstAgent movie, 8,500 | Turn | 5 | Hybrid, no Memongo LLM | `mempalace/benchmarks/results_membench_hybrid_all_movie_top5_20260414_1656.json`, SHA `6a500795e68e40b4723da86c623d930e0bd184949a8f04c89f185d9181f4b622` | PROVED: Memongo 88.75% |
-| P1 | Mem0 | LongMemEval platform top-50 | 94.8% in README; committed platform result top-50 reports 90.4% answer accuracy, SHA `8bbf06e4205dce1df9c2dff9a9ddf99074865ca40019e1c5a10f0d3a37b4275c` | Judged answer accuracy | LongMemEval-S, 500 | Answer context | Top-50 search | GPT-5 answerer/judge in committed result metadata | `memory-benchmarks/results/platform/longmemeval_top50_results.json` | ADAPTER SMOKE PASSED; full judged lane next |
+| P1 | Mem0 | LongMemEval platform top-50 | 94.8% in README; committed platform result top-50 reports 90.4% answer accuracy, SHA `8bbf06e4205dce1df9c2dff9a9ddf99074865ca40019e1c5a10f0d3a37b4275c` | Judged answer accuracy | LongMemEval-S, 500 | Answer context | Top-50 search | GPT-5 answerer/judge in committed result metadata | `memory-benchmarks/results/platform/longmemeval_top50_results.json` | ADAPTER SMOKE PASSED; next gate is larger strict multi-question smoke |
 | P1 | Mem0 | LongMemEval platform top-200 | 94.4% in README; committed platform result top-200 reports 93.4% pass rate, SHA `58bd6d8934a54d8cd568ef481bbd3e37270c2c74a5d59713b661d4c3ddb332a1` | Judged answer accuracy | LongMemEval-S, 500 | Answer context | Top-200 search | GPT-5 answerer/judge | `memory-benchmarks/results/platform/longmemeval_results.json` | TODO |
 | P1 | Mem0 | LoCoMo platform top-50 | 91.8% in README; committed platform result reports 82.66% answer accuracy, SHA `b4bc12d41b9864aaac747a9b58d8609ba3a0d7780ea39857d5b87a83ef3dc45a` | Judged answer accuracy | LoCoMo, 1,540 rows | Answer context | Top-50 search | GPT-5 answerer/judge | `memory-benchmarks/results/platform/locomo_top50_results.json` | TODO: run same 1,540-row judged lane |
 | P1 | Mem0 | LoCoMo platform top-200 | 92.5% in README; committed platform result reports 91.56% answer accuracy, SHA `36338fa6c1ca38bcf9e3fc33a5cbc3b6e53bdc4bafaeeaee0947cf13b5527911` | Judged answer accuracy | LoCoMo, 1,540 rows | Answer context | Top-200 search | GPT-5 answerer/judge | `memory-benchmarks/results/platform/locomo_results.json` | TODO |
@@ -82,7 +99,7 @@ workspace sync; the adapter now creates an isolated empty workspace unless
 ## Must-Beat Queue
 
 1. MemPalace LLM/rerank retrieval lane: reproduce committed Haiku/Sonnet rerank result, then run a Memongo rerank lane with identical split/scorer/top-k disclosure.
-2. Mem0 Memory Benchmarks: promote the Mem0 compatibility adapter from one-question smoke to full LongMemEval top-50/top-200, then LoCoMo top-50/top-200, BEAM 1M, and BEAM 10M with the same answerer/judge settings.
+2. Mem0 Memory Benchmarks: promote the strict-clean Mem0 compatibility adapter from one-question smoke to a larger multi-question smoke, then full LongMemEval top-50/top-200, LoCoMo top-50/top-200, BEAM 1M, and BEAM 10M with the same answerer/judge settings.
 3. Supermemory MemoryBench: implement a Memongo provider for `memorybench`; run `locomo`, `longmemeval`, and `convomem` with the same judge/model and report MemScore.
 4. Zep LoCoMo and LongMemEval: run Zep's own harness first, then run Memongo through a matching adapter and compare only judged answer accuracy rows.
 5. Mastra, Hindsight, and OpenViking: run their official benchmark commands first; only build Memongo lanes after the competitor artifact is reproducible.

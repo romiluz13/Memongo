@@ -4009,6 +4009,14 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 			indexName: `${this.prefix}events_text`,
 			textPath: "body",
 		})
+		await this.waitForBenchmarkVectorSearchCollectionConvergence({
+			agentId: params.agentId,
+			label: "events",
+			collection: eventsCollection(this.db, this.prefix),
+			collectionName: `${this.prefix}events`,
+			indexName: `${this.prefix}events_vector`,
+			textPath: "body",
+		})
 		await this.waitForBenchmarkSearchCollectionConvergence({
 			agentId: params.agentId,
 			label: "chunks",
@@ -4017,12 +4025,28 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 			indexName: `${this.prefix}chunks_text`,
 			textPath: "text",
 		})
+		await this.waitForBenchmarkVectorSearchCollectionConvergence({
+			agentId: params.agentId,
+			label: "chunks",
+			collection: chunksCollection(this.db, this.prefix),
+			collectionName: `${this.prefix}chunks`,
+			indexName: `${this.prefix}chunks_vector`,
+			textPath: "text",
+		})
 		await this.waitForBenchmarkSearchCollectionConvergence({
 			agentId: params.agentId,
 			label: "session_chunks",
 			collection: sessionChunksCollection(this.db, this.prefix),
 			collectionName: `${this.prefix}session_chunks`,
 			indexName: `${this.prefix}session_chunks_text`,
+			textPath: "text",
+		})
+		await this.waitForBenchmarkVectorSearchCollectionConvergence({
+			agentId: params.agentId,
+			label: "session_chunks",
+			collection: sessionChunksCollection(this.db, this.prefix),
+			collectionName: `${this.prefix}session_chunks`,
+			indexName: `${this.prefix}session_chunks_vector`,
 			textPath: "text",
 		})
 		if (isEvidenceMirrorEnabled()) {
@@ -4035,6 +4059,15 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 				textPath: "text",
 			})
 		}
+	}
+
+	async waitForBenchmarkSearchReadiness(params?: {
+		retrievalLane?: BenchmarkRetrievalLane
+	}): Promise<void> {
+		await this.waitForBenchmarkSearchConvergence({
+			agentId: this.agentId,
+			retrievalLane: params?.retrievalLane,
+		})
 	}
 
 	private async waitForBenchmarkVectorSearchCollectionConvergence(params: {
@@ -7104,10 +7137,12 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 			mode === "off" ||
 			mode === "none" ||
 			mode === "0" ||
-			mode === "false" ||
-			benchmarkAgent
+			mode === "false"
 		) {
-			return !benchmarkAgent
+			return false
+		}
+		if (benchmarkAgent) {
+			return false
 		}
 		return true
 	}

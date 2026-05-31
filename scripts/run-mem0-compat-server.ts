@@ -1,6 +1,7 @@
 import {
 	memongoBridgeSearch,
 	memongoBridgeShutdown,
+	memongoBridgeWaitForBenchmarkSearchReadiness,
 	memongoBridgeWriteConversationEvent,
 } from "@memongo/memory-bridge"
 import { mkdirSync } from "node:fs"
@@ -30,9 +31,29 @@ const maxResultsCap = Number.parseInt(
 	process.env.MEMONGO_MEM0_COMPAT_MAX_RESULTS_CAP ?? "200",
 	10,
 )
+const searchSettleMs = Math.max(
+	0,
+	Number.parseInt(process.env.MEMONGO_MEM0_COMPAT_SEARCH_SETTLE_MS ?? "10000", 10),
+)
+const strictCompat =
+	process.env.MEMONGO_MEM0_COMPAT_STRICT?.trim().toLowerCase() !== "0" &&
+	process.env.MEMONGO_MEM0_COMPAT_STRICT?.trim().toLowerCase() !== "false"
+const lastWriteAtByUser = new Map<string, number>()
 
 if (!process.env.MEMONGO_MONGODB_URI) {
 	throw new Error("MEMONGO_MONGODB_URI is required")
+}
+
+process.env.MEMONGO_BENCHMARK_DERIVED_WORK_MODE ??=
+	process.env.MEMONGO_MEM0_COMPAT_DERIVED_WORK_MODE ?? "disabled"
+if (strictCompat) {
+	process.env.MEMONGO_BENCHMARK_STRICT ??= "1"
+	process.env.MEMONGO_STRICT_SEARCH_INDEX_READY ??= "1"
+	process.env.MEMONGO_SEARCH_INDEX_READINESS_TIMEOUT_MS ??= "300000"
+	process.env.MEMONGO_BENCHMARK_EVENT_SEARCH_SETTLE_TIMEOUT_MS ??= "300000"
+	process.env.MEMONGO_BENCHMARK_EVENT_SEARCH_PROBE_MAX_TIME_MS ??= "30000"
+	process.env.MEMONGO_BENCHMARK_VECTOR_SEARCH_SETTLE_TIMEOUT_MS ??= "300000"
+	process.env.MEMONGO_BENCHMARK_VECTOR_SEARCH_PROBE_MAX_TIME_MS ??= "30000"
 }
 
 if (!process.env.MEMONGO_WORKSPACE_DIR) {
@@ -68,6 +89,32 @@ function toTimestamp(timestamp?: number): string | undefined {
 		return undefined
 	}
 	return new Date((timestamp as number) * 1000).toISOString()
+}
+
+function sleep(ms: number): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+async function waitForSearchSettle(userId: string): Promise<number> {
+	const lastWriteAt = lastWriteAtByUser.get(userId)
+	if (!lastWriteAt || searchSettleMs <= 0) {
+		return 0
+	}
+	const remainingMs = searchSettleMs - (Date.now() - lastWriteAt)
+	if (remainingMs <= 0) {
+		return 0
+	}
+	await sleep(remainingMs)
+	return remainingMs
+}
+
+async function waitForSearchReadiness(userId: string): Promise<number> {
+	const startedAt = Date.now()
+	await memongoBridgeWaitForBenchmarkSearchReadiness({
+		agentId: userId,
+		retrievalLane: "native",
+	})
+	return Date.now() - startedAt
 }
 
 function resultText(result: {
@@ -118,6 +165,9 @@ const server = Bun.serve({
 						memory: content,
 					})
 				}
+				if (results.length > 0) {
+					lastWriteAtByUser.set(userId, Date.now())
+				}
 				return json({ results })
 			}
 
@@ -130,13 +180,16 @@ const server = Bun.serve({
 				}
 				const requestedLimit = body.limit ?? body.top_k ?? 10
 				const maxResults = Math.max(1, Math.min(requestedLimit, maxResultsCap))
+				const settle_wait_ms = await waitForSearchSettle(userId)
+				const readiness_wait_ms = await waitForSearchReadiness(userId)
 				const results = await memongoBridgeSearch({
 					agentId: userId,
 					query,
 					maxResults,
-					sessionKey: userId,
 				})
 				return json({
+					settle_wait_ms,
+					readiness_wait_ms,
 					results: results.map((result) => ({
 						id: result.canonicalId ?? result.path,
 						memory: resultText(result),
@@ -160,6 +213,7 @@ const server = Bun.serve({
 			return json({ error: "not found" }, 404)
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error)
+			console.error(`mem0-compat: request failed ${url.pathname}: ${message}`)
 			return json({ error: message }, 500)
 		}
 	},

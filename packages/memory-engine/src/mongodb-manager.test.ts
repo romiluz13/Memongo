@@ -3601,6 +3601,7 @@ describe("MongoDBMemoryManager background extraction", () => {
 			const { promoteDerivedMemoryFromEvent } = await import(
 				"./mongodb-derived-memory.js"
 			)
+			const { updateLaneCoverage } = await import("./mongodb-lane-coverage.js")
 
 			mocked(writeEvent).mockResolvedValue({
 				eventId: "evt-benchmark-enabled-1",
@@ -3682,7 +3683,7 @@ describe("MongoDBMemoryManager background extraction", () => {
 		}
 	})
 
-	it("keeps derived work enabled for non-benchmark agents", async () => {
+	it("lets explicit benchmark mode disable derived work for non-standard benchmark agent ids", async () => {
 		const prev = process.env.MEMONGO_BENCHMARK_DERIVED_WORK_MODE
 		process.env.MEMONGO_BENCHMARK_DERIVED_WORK_MODE = "disabled"
 		try {
@@ -3695,41 +3696,21 @@ describe("MongoDBMemoryManager background extraction", () => {
 			const { promoteDerivedMemoryFromEvent } = await import(
 				"./mongodb-derived-memory.js"
 			)
+			const { updateLaneCoverage } = await import("./mongodb-lane-coverage.js")
 
 			mocked(writeEvent).mockResolvedValue({
-				eventId: "evt-dogfood-1",
+				eventId: "evt-longmemeval-1",
 				timestamp: new Date("2026-04-09T12:00:00.000Z"),
-				scopeRef: "agent:agent-1",
+				scopeRef: "agent:longmemeval_311778f1_run",
 			})
 			mocked(projectEventChunk).mockResolvedValue({ chunkCreated: false })
-			mocked(extractAndUpsertEntities).mockResolvedValue({
-				entities: [],
-				relationsCreated: 0,
-			})
-			mocked(createMemoryJob).mockResolvedValue("extraction-evt-dogfood-1")
-			mocked(eventsCollection).mockReturnValue({
-				findOne: vi.fn(async () => ({
-					eventId: "evt-dogfood-1",
-					agentId: "agent-1",
-					role: "assistant",
-					body: "Remember this dogfood fact.",
-					timestamp: new Date("2026-04-09T12:00:00.000Z"),
-					scope: "agent",
-					scopeRef: "agent:agent-1",
-				})),
-			} as unknown as import("mongodb").Collection)
-			mocked(promoteDerivedMemoryFromEvent).mockResolvedValue({
-				structuredCreated: 0,
-				proceduresCreated: 0,
-				skipped: false,
-			})
 
 			const manager = Object.assign(
 				Object.create(MongoDBMemoryManager.prototype),
 				{
 					db: {} as import("mongodb").Db,
 					prefix: "test_",
-					agentId: "agent-1",
+					agentId: "longmemeval_311778f1_run",
 					client: undefined,
 					config: {
 						mongodb: {
@@ -3751,22 +3732,25 @@ describe("MongoDBMemoryManager background extraction", () => {
 
 			await manager.writeConversationEvent({
 				role: "assistant",
-				body: "Remember this dogfood fact.",
+				body: "Remember this benchmark fact.",
 				scope: "agent",
 			})
 			await manager.derivationSchedulingQueue
 			await manager.derivationQueue
 
-			expect(extractAndUpsertEntities).toHaveBeenCalled()
-			expect(createMemoryJob).toHaveBeenCalledWith(
+			expect(extractAndUpsertEntities).not.toHaveBeenCalled()
+			expect(createMemoryJob).not.toHaveBeenCalled()
+			expect(eventsCollection).not.toHaveBeenCalled()
+			expect(promoteDerivedMemoryFromEvent).not.toHaveBeenCalled()
+			expect(updateLaneCoverage).toHaveBeenCalledWith(
 				expect.objectContaining({
-					job: expect.objectContaining({
-						jobId: "extraction-evt-dogfood-1",
-						jobType: "extraction",
-					}),
+					agentId: "longmemeval_311778f1_run",
+					increments: {
+						"raw-window": 1,
+						hybrid: 0,
+					},
 				}),
 			)
-			expect(promoteDerivedMemoryFromEvent).toHaveBeenCalled()
 		} finally {
 			if (prev === undefined)
 				delete process.env.MEMONGO_BENCHMARK_DERIVED_WORK_MODE
