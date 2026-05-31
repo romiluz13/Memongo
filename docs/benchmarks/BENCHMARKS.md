@@ -2,7 +2,7 @@
 
 Status: publication evidence pack for the MemPalace P0 release scope.
 
-Last evidence refresh: 2026-05-27.
+Last evidence refresh: 2026-05-28.
 
 This document follows one rule: a benchmark row is public only when the run proves
 the product path being claimed. Every public row must include artifact paths,
@@ -87,7 +87,7 @@ R@k. The public comparison must use the same retrieval-unit language.
 ### Held-Out 450
 
 MemPalace's honest generalizable hybrid row is held-out 450 hybrid v4 no-LLM at
-98.44% R@5. Memongo has a completed held-out 450 hybrid no-LLM artifact at
+98.44% R@5. Memongo has a current post-fix held-out 450 hybrid no-LLM artifact at
 99.11% session RecallAny@5. This row is a MemPalace P0 win.
 
 | Field | Memongo hybrid no-LLM | MemPalace hybrid held-out |
@@ -95,24 +95,24 @@ MemPalace's honest generalizable hybrid row is held-out 450 hybrid v4 no-LLM at
 | Cases | 450/450 | 450/450 |
 | Session RecallAny@1 | 88.67% | 89.11% |
 | Session RecallAny@5 | 99.11% | 98.44% |
-| Session RecallAny@10 | 99.33% | 99.78% |
+| Session RecallAny@10 | 99.56% | 99.78% |
 | Empty rate | 0.00% | Not reported |
 | Warnings/degradations | 0/0 | Not reported |
-| Artifact SHA256 | `195b6eb3939a48b27c934d0511aea6f3bf8d95b9192fbe47f660d39b4e345fd0` | `5f5849e8facdbdec673967dfbd9dd288323983ae824ca787ffa89110dd1b588d` |
+| Artifact SHA256 | `d173405a11d55750726722623de9bfe4726d1d3788d11038588ae0987c578343` | `5f5849e8facdbdec673967dfbd9dd288323983ae824ca787ffa89110dd1b588d` |
 
 Completed hybrid no-LLM run:
 
 | Field | Value |
 | --- | --- |
 | Status | PROVED; `benchmark:status` PASS |
-| Run ID | `memongo-lme-heldout450-hybrid-surgical-20260527-atlas-a` |
-| Artifact | `artifacts/benchmark-runs/memongo-lme-heldout450-hybrid-surgical-20260527-atlas-a/benchmark-response.json` |
-| Artifact SHA256 | `195b6eb3939a48b27c934d0511aea6f3bf8d95b9192fbe47f660d39b4e345fd0` |
+| Run ID | `memongo-lme-heldout450-hybrid-rrf-20260528-a` |
+| Artifact | `artifacts/benchmark-runs/memongo-lme-heldout450-hybrid-rrf-20260528-a/benchmark-response.json` |
+| Artifact SHA256 | `d173405a11d55750726722623de9bfe4726d1d3788d11038588ae0987c578343` |
 | Scored cases | 450/450 |
 | Internal/session R@5 | 99.11% |
 | Empty rate | 0.00% |
 | Main remaining miss pattern | single-session-preference, one multi-session, one temporal |
-| Generic fix used | Atlas Search key-phrase token facets plus recall-intent rank-agreement fusion; no question-id rules |
+| Generic fix used | Atlas Search key-phrase token facets plus independent subsearch rank fusion; no question-id rules |
 | Prefix cleanup | Exact prefix dropped and verified empty |
 
 Previous failed hybrid no-LLM attempt:
@@ -137,18 +137,18 @@ as MemPalace Haiku rerank; use this row with explicit lane disclosure.
 | Field | Memongo hybrid no-LLM |
 | --- | ---: |
 | Cases | 500/500 |
-| Session RecallAny@1 | 89.60% |
+| Session RecallAny@1 | 89.80% |
 | Session RecallAny@5 | 99.20% |
 | Session RecallAny@10 | 99.60% |
 | Empty rate | 0.00% |
 | Warnings/degradations | 0/0 |
-| Artifact SHA256 | `2b9b6cb32588f54cf9c227e9b1639c0b1e56d3b883f65afd03d8f4b58fcb24e5` |
+| Artifact SHA256 | `c3611431927fac69a3e64dced860d2a52ef1279d0b9eaa8625d77320d4e2f1ca` |
 
 | Field | Value |
 | --- | --- |
 | Status | COMPLETE; `benchmark:status` PASS |
-| Run ID | `memongo-lme-full500-hybrid-surgical-20260527-atlas-a` |
-| Artifact | `artifacts/benchmark-runs/memongo-lme-full500-hybrid-surgical-20260527-atlas-a/benchmark-response.json` |
+| Run ID | `memongo-lme-full500-hybrid-rrf-20260528-a` |
+| Artifact | `artifacts/benchmark-runs/memongo-lme-full500-hybrid-rrf-20260528-a/benchmark-response.json` |
 | Scored cases | 500/500 |
 | Internal/session R@5 | 99.20% |
 | Main remaining miss pattern | single-session-preference and temporal-reasoning |
