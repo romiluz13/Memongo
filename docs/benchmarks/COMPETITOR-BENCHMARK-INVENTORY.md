@@ -116,6 +116,57 @@ six-type official LongMemEval smoke, but full judged Mem0 rows still require a
 larger rehearsal and a fixed answerer/judge setup. Do not publish a Mem0 win
 from the smoke.
 
+Query-passage smoke evidence from 2026-05-31:
+
+- MongoDB docs basis: Atlas Search highlighting is built around returning
+  passages that contain query terms, and the docs note that examined-character
+  and passage limits can hide relevant terms. The Mem0 adapter now applies the
+  same product principle when packaging retrieved memories for judged answer
+  harnesses: preserve a query-relevant passage instead of blindly head-clipping
+  long memories.
+- Code path: `scripts/run-mem0-compat-server.ts` now compacts each returned
+  `memory` string around query terms and keeps date/source provenance. This is
+  generic query/evidence behavior, not question-id tuning.
+- Exact failing case rehearsal: `single-session-assistant`, seed `26`, QID
+  `e3fc4d6e`, prefix
+  `memongo_bench_mem0_memorybenchmarks_smoke_20260531_l_`.
+- Result: the retrieved memory preserved the previously clipped answer passage
+  containing `Dr. Arati Prabhakar`; retrieval judge scored `1/1` at both
+  `top_10` and `top_50`.
+- Result artifact:
+  `artifacts/ecosystem-smokes/mem0-memory-benchmarks-longmemeval-20260531l/longmemeval_results_20260531_175917.json`,
+  SHA256 `7c1d53bb1edc56d25d33b17392915f0263f65b54cd03f448d9af42b9184f9b8d`.
+- Atlas cleanup: exact prefix dry-run listed 30 collections; exact drop removed
+  30; prefix inventory returned 0 groups.
+
+Six-type query-passage rehearsal from 2026-05-31:
+
+- Harness: official `memory-benchmarks` LongMemEval runner, predict-only first,
+  then retrieval-judge evaluation over the saved predictions.
+- Filter: `per-type=1`, `top-k=50`, six LongMemEval-S question types.
+- Prefix: `memongo_bench_mem0_memorybenchmarks_smoke_20260531_m_`.
+- Ingestion: 1,475 memory pairs processed, 0 failed.
+- Retrieval packaging: all 6 prediction artifacts returned 50/50 results; no
+  empty retrieval files.
+- Result directory:
+  `artifacts/ecosystem-smokes/mem0-memory-benchmarks-longmemeval-20260531m`.
+- Retrieval judge run 1: `top_10` scored `6/6`; `top_50` scored `5/6`.
+  The one `top_50` failure was QID `0a995998` with blank generated answer,
+  blank reason, and blank core intent after structured-output timeout and
+  connection retries. Unified artifact SHA256:
+  `4d9b3c3ca09fc3bb1a7b182eb0aecb4f58c7a4441f2f0918a36096810115703b`.
+- Retrieval judge run 2 over the same saved predictions: `top_10` scored
+  `5/6`; `top_50` scored `6/6`. The same QID `0a995998` flipped behavior:
+  top-50 passed with all three required errands, while top-10 failed after the
+  judge counted only two of the three errands. Unified artifact SHA256:
+  `e4b9c9f5ce274063b17999fe6ba0d46499db37b54857ddf418443350421b0c51`.
+- Atlas cleanup: exact prefix dry-run listed 30 collections; exact drop removed
+  30; prefix inventory returned 0 groups.
+- Interpretation: the packaging fix is valid and retrieval is promising, but
+  the Mem0 judged lane is still not publishable. The same retrieved artifacts
+  produced inconsistent judged outcomes, so the next gate is repeatable
+  judge/answerer configuration and larger rehearsal, not a benchmark claim.
+
 ## Repo-Backed Benchmark Rows
 
 | Priority | Competitor | Benchmark | Claimed / committed score | Metric type | Dataset / cases | Retrieval unit | Top-k | LLM / rerank posture | Repo evidence | Memongo status |

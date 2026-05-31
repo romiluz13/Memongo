@@ -118,6 +118,53 @@ This wrapper only adds Grove transport headers and sets OpenAI-compatible env
 defaults from `GROVE_API_KEY` and `GROVE_BASE_URL`. It must not modify prompts,
 scorers, datasets, cutoffs, case filters, or saved retrieval artifacts.
 
+## Mem0 Memory-Benchmarks Notes
+
+Run official `memory-benchmarks` commands from the competitor repo root:
+
+```bash
+cd /Users/rom.iluz/Dev/memongo-competitors/memory-benchmarks
+```
+
+Running the module from another working directory can fail with
+`ModuleNotFoundError: No module named 'benchmarks'`.
+
+Predict-only LongMemEval runs do not need an LLM call. Use a harmless local
+placeholder for OpenAI compatibility and point the harness at the Memongo
+compat server:
+
+```bash
+OPENAI_API_KEY=unused .venv/bin/python -m benchmarks.longmemeval.run \
+  --project-name memongo-compat-smoke \
+  --run-id memongo-compat-smoke \
+  --dataset-path /Users/rom.iluz/.memongo/workspace/benchmarks/longmemeval_s_cleaned.json \
+  --per-type 1 \
+  --top-k 50 \
+  --top-k-cutoffs 10,50 \
+  --predict-only \
+  --mem0-host http://localhost:8898 \
+  --max-workers 1 \
+  --output-dir /Users/rom.iluz/Dev/memongo-world-class-replay/artifacts/ecosystem-smokes/<run-id>
+```
+
+The exact previously failing `single-session-assistant` case `e3fc4d6e` is
+selected by `--question-types single-session-assistant --seed 26 --per-type 1`.
+Use it only as a regression smoke for generic evidence packaging. Do not add
+case-specific retrieval or answer rules.
+
+MongoDB Search highlighting guidance is the product rationale for the Mem0
+compat adapter's query-passage packaging: returned memory text should preserve
+the query-relevant passage, not blindly clip the head of a long retrieved
+memory. This makes downstream judged-answer harnesses see the evidence that
+MongoDB already retrieved.
+
+Small judged-QA smokes with Grove/Kimi can be unstable because structured
+output, content-filter retries, and ambiguous answer counting can change the
+pass/fail decision over the same saved retrieval artifacts. Treat six-case
+judged runs as diagnostics only. A publishable Mem0 row needs repeatability
+criteria, fixed answerer/judge metadata, full artifact hashes, and a larger
+rehearsal before any full benchmark.
+
 ## Stop Conditions
 
 Stop the run, preserve artifacts, and do not publish the row if any condition is

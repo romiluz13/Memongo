@@ -35,10 +35,43 @@ const searchSettleMs = Math.max(
 	0,
 	Number.parseInt(process.env.MEMONGO_MEM0_COMPAT_SEARCH_SETTLE_MS ?? "10000", 10),
 )
+const memoryTextMaxChars = Math.max(
+	120,
+	Number.parseInt(
+		process.env.MEMONGO_MEM0_COMPAT_MEMORY_TEXT_MAX_CHARS ?? "420",
+		10,
+	),
+)
 const strictCompat =
 	process.env.MEMONGO_MEM0_COMPAT_STRICT?.trim().toLowerCase() !== "0" &&
 	process.env.MEMONGO_MEM0_COMPAT_STRICT?.trim().toLowerCase() !== "false"
 const lastWriteAtByUser = new Map<string, number>()
+const queryStopwords = new Set([
+	"about",
+	"after",
+	"again",
+	"also",
+	"can",
+	"could",
+	"from",
+	"have",
+	"many",
+	"need",
+	"previous",
+	"remind",
+	"some",
+	"that",
+	"their",
+	"there",
+	"this",
+	"what",
+	"when",
+	"where",
+	"which",
+	"with",
+	"would",
+	"your",
+])
 
 if (!process.env.MEMONGO_MONGODB_URI) {
 	throw new Error("MEMONGO_MONGODB_URI is required")
@@ -117,12 +150,63 @@ async function waitForSearchReadiness(userId: string): Promise<number> {
 	return Date.now() - startedAt
 }
 
-function resultText(result: {
+function queryTerms(query: string): string[] {
+	return [
+		...new Set(
+			query
+				.toLowerCase()
+				.split(/[^a-z0-9']+/)
+				.filter((term) => term.length >= 4 && !queryStopwords.has(term)),
+		),
+	].sort((a, b) => b.length - a.length)
+}
+
+function compactTextForQuery(text: string, query: string): string {
+	if (text.length <= memoryTextMaxChars) {
+		return text
+	}
+	const lowerText = text.toLowerCase()
+	const matchIndex = queryTerms(query)
+		.map((term) => lowerText.indexOf(term))
+		.filter((index) => index >= 0)
+		.sort((a, b) => b - a)[0]
+	if (matchIndex === undefined || matchIndex < Math.floor(memoryTextMaxChars * 0.6)) {
+		return `${text.slice(0, memoryTextMaxChars).trimEnd()}...`
+	}
+	const headBudget = Math.min(160, Math.floor(memoryTextMaxChars * 0.4))
+	const windowBudget = memoryTextMaxChars - headBudget - 5
+	const windowStart = Math.max(
+		0,
+		Math.min(
+			matchIndex - Math.floor(windowBudget * 0.35),
+			text.length - windowBudget,
+		),
+	)
+	const head = text.slice(0, headBudget).trimEnd()
+	const window = text.slice(windowStart, windowStart + windowBudget).trim()
+	const suffix = windowStart + windowBudget < text.length ? "..." : ""
+	return `${head} ... ${window}${suffix}`
+}
+
+function resultText(
+	query: string,
+	result: {
 	snippet?: string
 	citation?: string
 	path?: string
-}): string {
-	return result.snippet ?? result.citation ?? result.path ?? ""
+	timestamp?: Date
+	source?: string
+	},
+): string {
+	const raw = result.snippet ?? result.citation ?? result.path ?? ""
+	const text = raw.replace(/\s+/g, " ").trim()
+	if (!text) {
+		return result.path ?? ""
+	}
+	const clipped = compactTextForQuery(text, query)
+	const date = result.timestamp?.toISOString?.().slice(0, 10)
+	const source = result.source ? `${result.source} memory` : "memory"
+	return date ? `${date} ${source}: ${clipped}` : `${source}: ${clipped}`
 }
 
 const server = Bun.serve({
@@ -192,7 +276,7 @@ const server = Bun.serve({
 					readiness_wait_ms,
 					results: results.map((result) => ({
 						id: result.canonicalId ?? result.path,
-						memory: resultText(result),
+						memory: resultText(query, result),
 						score: result.score,
 						created_at: result.timestamp?.toISOString?.(),
 						score_debug: result.scoreDetails
