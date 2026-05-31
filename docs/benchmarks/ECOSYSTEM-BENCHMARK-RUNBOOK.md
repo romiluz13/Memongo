@@ -31,6 +31,7 @@ docs or artifacts.
 export MEMONGO_MONGODB_URI="..."
 export VOYAGE_API_KEY="<atlas-model-api-key-with-al-prefix>"
 export GROVE_API_KEY="..."
+export GROVE_BASE_URL="..."
 export MEMONGO_DB_NAME="memongo"
 ```
 
@@ -95,6 +96,27 @@ Search CPU, memory, or page faults indicate warmup instability.
     ```bash
     bun run mongodb:prefix-inventory -- --include-search-indexes
     ```
+
+## Grove For Official Python Harnesses
+
+Some official competitor harnesses use the OpenAI Python SDK directly. Grove's
+OpenAI-compatible gateway requires an `api-key` header, so use the Memongo
+transport wrapper instead of editing competitor scorer code:
+
+```bash
+/path/to/competitor/.venv/bin/python \
+  /path/to/memongo/scripts/run-memory-benchmarks-grove.py \
+  benchmarks.longmemeval.run \
+  --project-name memongo-compat-smoke \
+  --evaluate-only \
+  --provider openai \
+  --answerer-model Kimi-K2.6 \
+  --judge-model Kimi-K2.6
+```
+
+This wrapper only adds Grove transport headers and sets OpenAI-compatible env
+defaults from `GROVE_API_KEY` and `GROVE_BASE_URL`. It must not modify prompts,
+scorers, datasets, cutoffs, case filters, or saved retrieval artifacts.
 
 ## Stop Conditions
 
