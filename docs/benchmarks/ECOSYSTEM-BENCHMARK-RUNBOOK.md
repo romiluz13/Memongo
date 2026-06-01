@@ -209,6 +209,9 @@ Before a full Mem0 LongMemEval row, require:
 - one six-type answerer-mode rehearsal with the same answerer and judge model as
   the competitor row,
 - one larger answerer-mode rehearsal after any answer-context packaging change,
+- post-run validation that fails the artifact if any non-abstention answerer
+  result has an empty `generated_answer`; run
+  `bun run benchmark:mem0-answerer-status -- <artifact> --cutoff=top_50`,
 - explicit separation between retrieval-judge diagnostics and judged answer
   accuracy claims.
 

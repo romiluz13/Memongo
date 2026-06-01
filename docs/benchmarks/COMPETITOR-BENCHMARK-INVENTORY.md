@@ -290,6 +290,34 @@ Mem0 answer-context root-cause work from 2026-05-31:
   reason to add benchmark-specific count rules. Treat it as a dataset/semantic
   ambiguity requiring broader rehearsal and generic count-policy review before
   any Mem0 publication row.
+- Larger 12-case answerer-mode rehearsal `20260601f` completed under the
+  official `memory-benchmarks` harness with Memongo served only through the
+  Mem0-compatible endpoint. It scored `11/12` (`91.7%`) at `top_50`, with five
+  of six question types at `100%` and the only miss in `multi-session`.
+  Artifact:
+  `artifacts/ecosystem-smokes/mem0-memory-benchmarks-longmemeval-12-answerer-20260601f/longmemeval_results_20260601_105719.json`,
+  SHA256 `310f8c43180cd374fd417fca99315dfc8d927b01b362423539ce29962913444f`.
+  The exact Atlas prefix
+  `memongo_bench_mem0_memorybenchmarks_12_answerer_20260601_f_` dry-run showed
+  30 collections, then dropped 30 collections; prefix inventory returned zero
+  benchmark groups. The miss was again QID `88432d0a`: retrieval returned the
+  needed baking-count evidence as the top result plus supporting events, but the
+  official answerer produced a blank generated answer. Do not promote this row
+  or run full Mem0 LongMemEval yet; the next gate is an answerer artifact
+  validator and a generic count-answer policy decision that preserves source
+  truth instead of forcing the benchmark's ambiguous gold count.
+- Saved-retrieval re-evaluation `20260601g` copied the same 12 retrieved-memory
+  artifacts from `20260601f` and re-ran only the official answerer/judge phase
+  (`--evaluate-only --rejudge`), so no MongoDB writes or searches occurred. It
+  again scored `11/12` (`91.7%`) at `top_50`. Artifact:
+  `artifacts/ecosystem-smokes/mem0-memory-benchmarks-longmemeval-12-answerer-reeval-20260601g/longmemeval_results_20260601_114456.json`,
+  SHA256 `e6dfe77bcd1abe788ef77dab9b5b9e3767b26b27b69d63c44be49078a4a16f8a`.
+  The new answerer-artifact validator passed this artifact because no generated
+  answer was blank; the remaining miss answered `6` for QID `88432d0a`. This
+  proves the blank-answer issue was transient, while the real blocker remains
+  generic count-context ambiguity. Do not make a code change that maps this case
+  to `4`; first define a source-faithful count policy that rejects duplicate
+  mentions and plans/advice across all count-style queries.
 
 ## Repo-Backed Benchmark Rows
 
@@ -302,7 +330,7 @@ Mem0 answer-context root-cause work from 2026-05-31:
 | P0 | MemPalace | LoCoMo hybrid session top-10 | 88.91% | Retrieval avg recall | LoCoMo, 1,986 rows | Session | 10 | No LLM, no rerank | `mempalace/benchmarks/results_locomo_hybrid_session_top10_20260414_1649.json`, SHA `f7f11bad92cf7406a6e93aa776524bf97d0bc84032786e62585835a4582a1dcf` | PROVED: Memongo 93.30% |
 | P0 | MemPalace | ConvoMem raw message top-10 | 92.87% | Retrieval avg recall | ConvoMem, 250 effective items | Message | 10 | No LLM, no rerank | `mempalace/benchmarks/results_convomem_raw_top10_20260414_1649.json`, SHA `e3d778c3007113d8a78854004aac6c724b82c86b5349f3cf764ca42abf3a0100` | PROVED: Memongo 100.00% |
 | P0 | MemPalace | MemBench movie hybrid top-5 | 80.33% | Retrieval hit@5 | MemBench FirstAgent movie, 8,500 | Turn | 5 | Hybrid, no Memongo LLM | `mempalace/benchmarks/results_membench_hybrid_all_movie_top5_20260414_1656.json`, SHA `6a500795e68e40b4723da86c623d930e0bd184949a8f04c89f185d9181f4b622` | PROVED: Memongo 88.75% |
-| P1 | Mem0 | LongMemEval platform top-50 | 94.8% in README; committed platform result top-50 reports 90.4% answer accuracy, SHA `8bbf06e4205dce1df9c2dff9a9ddf99074865ca40019e1c5a10f0d3a37b4275c` | Judged answer accuracy | LongMemEval-S, 500 | Answer context | Top-50 search | GPT-5 answerer/judge in committed result metadata | `memory-benchmarks/results/platform/longmemeval_top50_results.json` | GPT-5 retrieval-judge six-type smoke passed twice; answerer-mode six-type rehearsal passed 6/6; next gate is larger answerer rehearsal |
+| P1 | Mem0 | LongMemEval platform top-50 | 94.8% in README; committed platform result top-50 reports 90.4% answer accuracy, SHA `8bbf06e4205dce1df9c2dff9a9ddf99074865ca40019e1c5a10f0d3a37b4275c` | Judged answer accuracy | LongMemEval-S, 500 | Answer context | Top-50 search | GPT-5 answerer/judge in committed result metadata | `memory-benchmarks/results/platform/longmemeval_top50_results.json` | Larger answerer rehearsal reached 11/12, but the remaining miss has source-backed ambiguity plus a blank answerer output; not publishable yet |
 | P1 | Mem0 | LongMemEval platform top-200 | 94.4% in README; committed platform result top-200 reports 93.4% pass rate, SHA `58bd6d8934a54d8cd568ef481bbd3e37270c2c74a5d59713b661d4c3ddb332a1` | Judged answer accuracy | LongMemEval-S, 500 | Answer context | Top-200 search | GPT-5 answerer/judge | `memory-benchmarks/results/platform/longmemeval_results.json` | TODO |
 | P1 | Mem0 | LoCoMo platform top-50 | 91.8% in README; committed platform result reports 82.66% answer accuracy, SHA `b4bc12d41b9864aaac747a9b58d8609ba3a0d7780ea39857d5b87a83ef3dc45a` | Judged answer accuracy | LoCoMo, 1,540 rows | Answer context | Top-50 search | GPT-5 answerer/judge | `memory-benchmarks/results/platform/locomo_top50_results.json` | TODO: run same 1,540-row judged lane |
 | P1 | Mem0 | LoCoMo platform top-200 | 92.5% in README; committed platform result reports 91.56% answer accuracy, SHA `36338fa6c1ca38bcf9e3fc33a5cbc3b6e53bdc4bafaeeaee0947cf13b5527911` | Judged answer accuracy | LoCoMo, 1,540 rows | Answer context | Top-200 search | GPT-5 answerer/judge | `memory-benchmarks/results/platform/locomo_results.json` | TODO |
