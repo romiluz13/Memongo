@@ -329,6 +329,32 @@ Mem0 answer-context root-cause work from 2026-05-31:
   derived evidence count differs from either gold or generated answer. This
   confirms the next work must be a generic count-context policy, not MongoDB
   Search ranking and not a session-count shortcut.
+- Materialized-evidence retrieval gate `20260601n` ran the official
+  `memory-benchmarks` LongMemEval runner in predict-only mode after the Mem0
+  compatibility adapter was changed to materialize canonical event text from
+  returned Memongo file sources. This is a generic evidence-handoff fix: MongoDB
+  search had already found the right source, but the previous adapter could hand
+  the official downstream judge an over-clipped snippet. The run processed 12
+  questions, two from each LongMemEval-S type, with 12 prediction files and 12
+  ingestion ledgers. Exact Atlas prefix
+  `memongo_bench_mem0_memorybenchmarks_12_predict_materialized_20260601_n_`
+  dry-run listed 30 collections, exact drop removed 30 collections, and prefix
+  inventory returned zero groups/indexes.
+- First saved-retrieval rejudge over `20260601n` with Grove/Kimi scored
+  `11/12` because QID `88432d0a` returned `{}` / empty generated evidence after
+  a structured-output timeout, even though rank 1 contained the correct
+  source-backed count evidence. Failed artifact:
+  `artifacts/ecosystem-smokes/mem0-memory-benchmarks-longmemeval-12-predict-materialized-20260601n/longmemeval_results_20260601_215919.json`,
+  SHA256 `83892580fd3f27e6fb80ba183e3b6c438c3130a38a111595d4d099c22ca4988d`.
+  Preserve this artifact as judge-transport evidence.
+- Second saved-retrieval rejudge over the exact same `20260601n` prediction
+  files used stronger Grove transport bounds
+  (`timeout=180s`, `max_retries=5`, `min_max_tokens=8192`) and scored
+  `12/12` at both `top_10` and `top_50`. Passing artifact:
+  `artifacts/ecosystem-smokes/mem0-memory-benchmarks-longmemeval-12-predict-materialized-20260601n/longmemeval_results_20260601_220929.json`,
+  SHA256 `fcee7162f42509b9c9a19db6832d57158130c6d00af665909d1c4bbf01aa3042`.
+  This supports the materialized evidence handoff and transport-bounds fix, but
+  it is still a 12-case rehearsal, not a publishable Mem0 full row.
 
 ## Repo-Backed Benchmark Rows
 

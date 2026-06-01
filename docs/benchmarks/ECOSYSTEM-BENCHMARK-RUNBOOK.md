@@ -118,6 +118,25 @@ This wrapper only adds Grove transport headers and sets OpenAI-compatible env
 defaults from `GROVE_API_KEY` and `GROVE_BASE_URL`. It must not modify prompts,
 scorers, datasets, cutoffs, case filters, or saved retrieval artifacts.
 
+Use conservative transport bounds for Grove/Kimi judged runs. The official
+structured-output calls can occasionally time out or return empty JSON over the
+same saved retrieval artifacts. Treat this as transport instability, not a
+retrieval miss, and preserve the failed artifact. Standard judged rehearsals
+should use at least:
+
+```bash
+export MEMONGO_GROVE_LLM_TIMEOUT_SECONDS=180
+export MEMONGO_GROVE_LLM_MAX_RETRIES=5
+export MEMONGO_GROVE_LLM_MIN_MAX_TOKENS=8192
+export MEMONGO_GROVE_BLANK_GENERATION_RETRIES=2
+```
+
+Do not lower these values for publication rehearsals unless the artifact records
+why. If a first judge pass fails with empty `generated_answer` or `{}` while
+retrieval evidence is clearly present, rerun only `--evaluate-only --rejudge`
+from the saved prediction files. Do not rerun MongoDB ingestion/search just to
+paper over a judge transport failure.
+
 ## Mem0 Memory-Benchmarks Notes
 
 Run official `memory-benchmarks` commands from the competitor repo root:
