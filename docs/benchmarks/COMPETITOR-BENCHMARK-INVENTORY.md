@@ -1,6 +1,6 @@
 # Competitor Benchmark Inventory
 
-Last refresh: 2026-05-31.
+Last refresh: 2026-06-01.
 
 This inventory tracks repo-backed benchmark claims only. A row can become a
 Memongo victory claim only when Memongo runs the same dataset, scorer, retrieval
@@ -15,15 +15,15 @@ The full branch/evidence/roadmap summary lives in
 
 | Competitor repo | Latest local commit | Refresh result | Notes |
 | --- | --- | --- | --- |
-| MemPalace | `9b7cfc9940` | Fast-forwarded | P0 comparison source; benchmark result artifacts did not change in this refresh. |
-| Mem0 | `a3154d59e5` | Fast-forwarded | README points to `mem0ai/memory-benchmarks` for reproducible numbers. |
-| Memory Benchmarks | `4b61c5d31b` | Already current | Official Mem0 benchmark harness and committed results. |
-| Supermemory | `4eb8399358` | Fast-forwarded | README claims #1 rows; MemoryBench is the reproducible harness. |
+| MemPalace | `9b7cfc9940` | Already current | P0 comparison source; benchmark result artifacts did not change in this refresh. |
+| Mem0 | `8e65ce915d` | Fast-forwarded | README points to `mem0ai/memory-benchmarks` for reproducible numbers; no benchmark-relevant paths changed in this refresh. |
+| Memory Benchmarks | `4b61c5d31b` | Already current | Official Mem0 benchmark harness and committed results. Local repo has untracked `artifacts/`; snapshot recorded metadata before refresh. |
+| Supermemory | `46e7ee1eb4` | Fast-forwarded | README claims #1 rows; MemoryBench is the reproducible harness. No benchmark-relevant paths changed in this refresh. |
 | MemoryBench | `118209a746` | Already current | Official provider-neutral benchmark framework. |
 | Zep | `faf2acec4f` | Already current | LoCoMo CLI harness and LongMemEval notebooks. |
-| Mastra | `bf8dd8b75a` | Fast-forwarded | LongMemEval answer-quality benchmark package. |
-| Hindsight | `3e99a3f490` | Fast-forwarded | LoCoMo and LongMemEval benchmark scripts. |
-| OpenViking | `9e99c8f7db` | Fast-forwarded | LoCoMo/openclaw-eval and RAG benchmark surfaces. |
+| Mastra | `b0771a48b4` | Fast-forwarded | LongMemEval/evals package files changed; re-audit before running Memongo adapter. |
+| Hindsight | `e4b50f8054` | Fast-forwarded | Retrieval docs changed; re-audit benchmark scripts and retrieval semantics before comparison. |
+| OpenViking | `c0abcb9a34` | Fast-forwarded | LoCoMo/openclaw-eval and RAG benchmark surfaces. No benchmark-relevant paths changed in this refresh. |
 | OpenClaw Eval | `75e07d696e` | Already current | External LoCoMo evaluation script referenced by OpenViking. |
 | Letta | `1131535716` | Already current | No reproducible benchmark claim found yet. |
 | LoCoMo | `3eb6f2c585` | Already current | Dataset/evaluator source. |
@@ -31,9 +31,16 @@ The full branch/evidence/roadmap summary lives in
 
 Snapshot artifacts:
 
-- Manifest: `artifacts/competitor-snapshots/20260531-a/manifest.json`
-- Refresh report: `artifacts/competitor-snapshots/20260531-a/refresh-report.json`
-- Bundles: `artifacts/competitor-snapshots/20260531-a/bundles/*.bundle`
+- Manifest: `artifacts/competitor-snapshots/20260601-refresh/manifest.json`
+- Refresh report: `artifacts/competitor-snapshots/20260601-refresh/refresh-report.json`
+- Bundles: `artifacts/competitor-snapshots/20260601-refresh/bundles/*.bundle`
+
+Refresh impact:
+
+- Changed repos: Hindsight, Mastra, Mem0, OpenViking, and Supermemory.
+- Benchmark-adjacent changes: Hindsight retrieval docs and Mastra LongMemEval/evals package files.
+- Unchanged official harnesses/result sources: MemPalace result artifacts, Mem0 `memory-benchmarks`, MemoryBench, Zep, LoCoMo, MemBench dataset, OpenClaw Eval, and Letta.
+- No failed fast-forward pulls and no separate latest clone was required.
 
 ## Active Adapter Smoke
 

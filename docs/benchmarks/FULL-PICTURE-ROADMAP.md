@@ -84,6 +84,20 @@ The refreshed inventory lives in
 Non-reproducible marketing screenshots, blog claims, or README tables are not
 victory targets until tied to a public repo commit and scorer.
 
+Latest competitor refresh:
+
+- Snapshot: `artifacts/competitor-snapshots/20260601-refresh/manifest.json`.
+- Refresh report: `artifacts/competitor-snapshots/20260601-refresh/refresh-report.json`.
+- Fast-forwarded repos: Hindsight, Mastra, Mem0, OpenViking, and Supermemory.
+- Benchmark-adjacent changes: Hindsight retrieval docs and Mastra
+  LongMemEval/evals package files.
+- Unchanged official comparison sources: MemPalace result artifacts, Mem0
+  `memory-benchmarks`, MemoryBench, Zep, LoCoMo, MemBench dataset, OpenClaw
+  Eval, and Letta.
+- Next inventory rule: re-audit Hindsight and Mastra before any adapter run;
+  continue Mem0 from `memory-benchmarks` because that official harness did not
+  move.
+
 ## Road Already Traveled
 
 ### 1. We Stopped Trusting The Old 98.1%
