@@ -1,4 +1,5 @@
 import {
+	memongoBridgeReadFile,
 	memongoBridgeSearchDetailed,
 	memongoBridgeShutdown,
 	memongoBridgeWaitForBenchmarkSearchReadiness,
@@ -288,8 +289,49 @@ function compactTextForQuery(
 	return `${head} ... ${window}${suffix}`
 }
 
-function resultText(query: string, result: BridgeSearchResult): string {
-	const raw = result.snippet ?? result.citation ?? result.path ?? ""
+function materializedPathForResult(result: BridgeSearchResult): string | null {
+	if (result.canonicalId?.startsWith("event:")) {
+		return result.canonicalId
+	}
+	if (result.path?.startsWith("events/")) {
+		return result.path
+	}
+	const eventId = result.sourceEventIds?.find((value) => value.trim().length > 0)
+	return eventId ? `event:${eventId}` : null
+}
+
+async function materializedResultText(
+	agentId: string,
+	result: BridgeSearchResult,
+): Promise<string | null> {
+	const relPath = materializedPathForResult(result)
+	if (!relPath) {
+		return null
+	}
+	try {
+		const materialized = await memongoBridgeReadFile({ agentId, relPath })
+		const text =
+			typeof materialized.text === "string" ? materialized.text.trim() : ""
+		return text.length > 0 ? text : null
+	} catch (error) {
+		if (strictCompat) {
+			throw error
+		}
+		return null
+	}
+}
+
+async function resultText(
+	agentId: string,
+	query: string,
+	result: BridgeSearchResult,
+): Promise<string> {
+	const raw =
+		(await materializedResultText(agentId, result)) ??
+		result.citation ??
+		result.snippet ??
+		result.path ??
+		""
 	const text = raw.replace(/\s+/g, " ").trim()
 	if (!text) {
 		return result.path ?? ""
@@ -375,16 +417,16 @@ const server = Bun.serve({
 					},
 				})
 				const results = detailed.results as BridgeSearchResult[]
-				const formattedResults: Mem0CompatSearchResult[] = results.map(
-					(result) => ({
+				const formattedResults: Mem0CompatSearchResult[] = await Promise.all(
+					results.map(async (result) => ({
 						id: result.canonicalId ?? result.path,
-						memory: resultText(query, result),
+						memory: await resultText(userId, query, result),
 						score: result.score,
 						created_at: result.timestamp?.toISOString?.(),
 						score_debug: result.scoreDetails
 							? { scoreDetails: result.scoreDetails }
 							: undefined,
-					}),
+					})),
 				)
 				const actionEvidence = buildActionEvidenceResults(query, results)
 				const countEvidence = buildCountEvidenceResults(query, results)
