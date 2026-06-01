@@ -181,6 +181,11 @@ the provenance is fixed or the run discloses and filters the affected evidence.
 Do not fix count-answer failures by matching a single gold answer when the
 retrieved evidence is semantically plausible but the benchmark annotation is
 ambiguous; escalate to a broader rehearsal and a generic count policy review.
+Do not use the number of retrieved answer sessions as a shortcut for count
+answers. In the LongMemEval-S corpus snapshot used for Mem0 compatibility work,
+196 questions match count-style wording, and only 12 have a numeric answer equal
+to `answer_session_ids.length`; most count answers are quantities such as days,
+hours, money, inventory counts, or repeated actions.
 
 Small judged-QA smokes with Grove/Kimi can be unstable because structured
 output, content-filter retries, and ambiguous answer counting can change the
