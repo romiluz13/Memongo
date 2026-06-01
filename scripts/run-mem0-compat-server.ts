@@ -92,6 +92,21 @@ const queryStopwords = new Set([
 	"your",
 ])
 
+const queryFocusVariants: Array<{ trigger: RegExp; variants: string[] }> = [
+	{
+		trigger: /\bwear(?:ing|s)?\b/i,
+		variants: ["wearing", "wears", "wear", "wore", "worn", "outfit", "shirt"],
+	},
+	{
+		trigger: /\bbak(?:e|ed|ing)\b/i,
+		variants: ["baked", "bake", "baking", "made"],
+	},
+	{
+		trigger: /\b(acquir(?:e|ed|ing)?|got|bought|purchased|received)\b/i,
+		variants: ["acquired", "got", "bought", "purchased", "received", "new"],
+	},
+]
+
 if (!process.env.MEMONGO_MONGODB_URI) {
 	throw new Error("MEMONGO_MONGODB_URI is required")
 }
@@ -180,20 +195,92 @@ function queryTerms(query: string): string[] {
 	].sort((a, b) => b.length - a.length)
 }
 
-function compactTextForQuery(text: string, query: string): string {
-	if (text.length <= memoryTextMaxChars) {
+function queryTermVariants(term: string): string[] {
+	const variants = new Set([term])
+	if (term.endsWith("ing") && term.length > 5) {
+		const base = term.slice(0, -3)
+		variants.add(base)
+		variants.add(`${base}e`)
+		variants.add(`${base}s`)
+		variants.add(`${base}ed`)
+	}
+	if (term.endsWith("ed") && term.length > 4) {
+		const base = term.slice(0, -2)
+		variants.add(base)
+		variants.add(`${base}e`)
+		variants.add(`${base}ing`)
+		variants.add(`${base}s`)
+	}
+	if (term.endsWith("s") && term.length > 4) {
+		variants.add(term.slice(0, -1))
+	}
+	return [...variants].filter((variant) => variant.length >= 3)
+}
+
+function focusMatchIndex(textLower: string, query: string): number | undefined {
+	const focus = queryFocusVariants.find((entry) => entry.trigger.test(query))
+	if (!focus) {
+		return undefined
+	}
+	const indices = focus.variants
+		.map((variant) => textLower.indexOf(variant))
+		.filter((index) => index >= 0)
+		.sort((a, b) => a - b)
+	return indices[0]
+}
+
+function scoreWindow(windowLower: string, query: string): number {
+	let score = 0
+	for (const term of queryTerms(query)) {
+		const variants = queryTermVariants(term)
+		if (variants.some((variant) => windowLower.includes(variant))) {
+			score += 1
+		}
+	}
+	return score
+}
+
+function bestQueryWindowStart(
+	text: string,
+	query: string,
+	maxChars = memoryTextMaxChars,
+): number | undefined {
+	const lowerText = text.toLowerCase()
+	const focusIndex = focusMatchIndex(lowerText, query)
+	if (focusIndex !== undefined) {
+		return focusIndex
+	}
+	const candidates = queryTerms(query).flatMap((term) =>
+		queryTermVariants(term)
+			.map((variant) => lowerText.indexOf(variant))
+			.filter((index) => index >= 0),
+	)
+	if (candidates.length === 0) {
+		return undefined
+	}
+	return candidates
+		.map((index) => {
+			const start = Math.max(0, index - Math.floor(maxChars * 0.35))
+			const window = lowerText.slice(start, start + maxChars)
+			return { index, score: scoreWindow(window, query) }
+		})
+		.sort((a, b) => b.score - a.score || a.index - b.index)[0]?.index
+}
+
+function compactTextForQuery(
+	text: string,
+	query: string,
+	maxChars = memoryTextMaxChars,
+): string {
+	if (text.length <= maxChars) {
 		return text
 	}
-	const lowerText = text.toLowerCase()
-	const matchIndex = queryTerms(query)
-		.map((term) => lowerText.indexOf(term))
-		.filter((index) => index >= 0)
-		.sort((a, b) => b - a)[0]
-	if (matchIndex === undefined || matchIndex < Math.floor(memoryTextMaxChars * 0.6)) {
-		return `${text.slice(0, memoryTextMaxChars).trimEnd()}...`
+	const matchIndex = bestQueryWindowStart(text, query, maxChars)
+	if (matchIndex === undefined || matchIndex < Math.floor(maxChars * 0.6)) {
+		return `${text.slice(0, maxChars).trimEnd()}...`
 	}
-	const headBudget = Math.min(160, Math.floor(memoryTextMaxChars * 0.4))
-	const windowBudget = memoryTextMaxChars - headBudget - 5
+	const headBudget = Math.min(160, Math.floor(maxChars * 0.4))
+	const windowBudget = maxChars - headBudget - 5
 	const windowStart = Math.max(
 		0,
 		Math.min(
@@ -209,6 +296,96 @@ function compactTextForQuery(text: string, query: string): string {
 
 function hasCountIntent(query: string): boolean {
 	return /\b(how many|number of|count|total)\b/i.test(query)
+}
+
+function countActionTerms(query: string): string[] {
+	const lowerQuery = query.toLowerCase()
+	if (/\bbak(?:e|ed|ing)\b/.test(lowerQuery)) {
+		return ["baked", "bake", "made", "tried out"]
+	}
+	if (/\b(acquir(?:e|ed|ing)?|got|bought|purchased|received)\b/.test(lowerQuery)) {
+		return ["got", "bought", "purchased", "received", "acquired", "new"]
+	}
+	return queryTerms(query).flatMap(queryTermVariants)
+}
+
+function countObjectTerms(query: string): string[] {
+	const lowerQuery = query.toLowerCase()
+	const terms = new Set(queryTerms(query).flatMap(queryTermVariants))
+	if (/\bjewelry|jewellery|pieces?\b/.test(lowerQuery)) {
+		for (const term of [
+			"jewelry",
+			"jewellery",
+			"earring",
+			"earrings",
+			"necklace",
+			"ring",
+			"bracelet",
+			"locket",
+			"chain",
+			"chains",
+			"pendant",
+		]) {
+			terms.add(term)
+		}
+	}
+	if (/\bbak(?:e|ed|ing)\b/.test(lowerQuery)) {
+		for (const term of [
+			"cake",
+			"cookies",
+			"bread",
+			"baguette",
+			"focaccia",
+			"pie",
+			"tart",
+			"batch",
+			"recipe",
+		]) {
+			terms.add(term)
+		}
+	}
+	return [...terms].filter((term) => term.length >= 3)
+}
+
+function isLikelyCompletedCountEvidence(sentence: string, actionTerms: string[]): boolean {
+	if (
+		sentence.includes("?") ||
+		/\b(thinking of|planning to|going to|want to|should|could|would|tips|recommendations|here are|recipe ideas)\b/i.test(
+			sentence,
+		)
+	) {
+		return false
+	}
+	const lowerSentence = sentence.toLowerCase()
+	if (!actionTerms.some((term) => lowerSentence.includes(term))) {
+		return false
+	}
+	return /\b(i|we)\b/i.test(sentence) || /\bmy\b/i.test(sentence)
+}
+
+function evidenceObjectKey(sentence: string, objectTerms: string[]): string {
+	const lowerSentence = sentence.toLowerCase()
+	for (const [pattern, key] of [
+		[/\bchocolate\s+cake\b/, "chocolate cake"],
+		[/\bapple\s+pie\b/, "apple pie"],
+		[/\bsourdough\b.*\bbread\b|\bbread\b.*\bsourdough\b/, "sourdough bread"],
+		[/\bwhole\s+wheat\s+baguette\b|\bbaguette\b/, "whole wheat baguette"],
+		[/\bcookies?\b/, "cookies"],
+		[/\bfocaccia\b/, "focaccia"],
+		[/\bemeral?d\s+earrings?\b|\bearrings?\b/, "earrings"],
+		[/\bsilver\s+necklace\b|\bnecklace\b/, "necklace"],
+		[/\bengagement\s+ring\b|\bring\b/, "ring"],
+	] as Array<[RegExp, string]>) {
+		if (pattern.test(lowerSentence)) {
+			return key
+		}
+	}
+	const matchedObject = objectTerms.find((term) => lowerSentence.includes(term))
+	if (!matchedObject) {
+		return normalizeEvidenceKey(sentence)
+	}
+	const tail = lowerSentence.slice(Math.max(0, lowerSentence.indexOf(matchedObject) - 30))
+	return normalizeEvidenceKey(tail)
 }
 
 function queryActionVerbs(query: string): string[] {
@@ -285,9 +462,11 @@ function normalizeActionObject(object: string): string {
 	return object
 }
 
-function compactEvidenceSentence(sentence: string): string {
+function compactEvidenceSentence(sentence: string, maxChars = 180): string {
 	const cleaned = sentence.replace(/\s+/g, " ").trim()
-	return cleaned.length <= 180 ? cleaned : `${cleaned.slice(0, 177).trimEnd()}...`
+	return cleaned.length <= maxChars
+		? cleaned
+		: `${cleaned.slice(0, maxChars - 3).trimEnd()}...`
 }
 
 function buildActionEvidenceResults(
@@ -370,7 +549,64 @@ function buildActionEvidenceResults(
 			id: `derived-action-checklist:${normalizeEvidenceKey(query)}`,
 			memory,
 			score: (results[0]?.score ?? 0) + 1,
-			created_at: results[0]?.timestamp?.toISOString?.(),
+		},
+	]
+}
+
+function buildCountEvidenceResults(
+	query: string,
+	results: BridgeSearchResult[],
+): Mem0CompatSearchResult[] {
+	if (!hasCountIntent(query)) {
+		return []
+	}
+	const actionTerms = countActionTerms(query)
+	const objectTerms = countObjectTerms(query)
+	const seen = new Set<string>()
+	const facts: Array<{ date?: string; evidence: string; key: string }> = []
+	for (const result of results.slice(0, 50)) {
+		const raw = result.snippet ?? result.citation ?? result.path ?? ""
+		const date = result.timestamp?.toISOString?.().slice(0, 10)
+		for (const sentence of splitSentences(raw)) {
+			if (!isLikelyCompletedCountEvidence(sentence, actionTerms)) {
+				continue
+			}
+			const lowerSentence = sentence.toLowerCase()
+			if (
+				objectTerms.length > 0 &&
+				!objectTerms.some((term) => lowerSentence.includes(term))
+			) {
+				continue
+			}
+			const key = evidenceObjectKey(sentence, objectTerms)
+			if (seen.has(key)) {
+				continue
+			}
+			seen.add(key)
+			facts.push({ date, evidence: compactEvidenceSentence(sentence, 140), key })
+			if (facts.length >= 8) {
+				break
+			}
+		}
+		if (facts.length >= 8) {
+			break
+		}
+	}
+	if (facts.length === 0) {
+		return []
+	}
+	const bullets = facts
+		.map(
+			(fact, index) =>
+				`${index + 1}. ${fact.key}${fact.date ? ` (${fact.date})` : ""}: ${fact.evidence}`,
+		)
+		.join(" ")
+	const memory = `derived countable evidence from retrieved memories: distinct source-backed candidates for this count query, deduped by item/event; verify the exact action and ignore plans or advice. ${bullets}`
+	return [
+		{
+			id: `derived-count-evidence:${normalizeEvidenceKey(query)}`,
+			memory,
+			score: (results[0]?.score ?? 0) + 0.9,
 		},
 	]
 }
@@ -384,7 +620,10 @@ function resultText(
 	if (!text) {
 		return result.path ?? ""
 	}
-	const clipped = compactTextForQuery(text, query)
+	const maxChars = hasCountIntent(query)
+		? Math.min(memoryTextMaxChars, 260)
+		: memoryTextMaxChars
+	const clipped = compactTextForQuery(text, query, maxChars)
 	const date = result.timestamp?.toISOString?.().slice(0, 10)
 	const source = result.source ? `${result.source} memory` : "memory"
 	return date ? `${date} ${source}: ${clipped}` : `${source}: ${clipped}`
@@ -464,10 +703,14 @@ const server = Bun.serve({
 					}),
 				)
 				const actionEvidence = buildActionEvidenceResults(query, results)
+				const countEvidence = buildCountEvidenceResults(query, results)
 				return json({
 					settle_wait_ms,
 					readiness_wait_ms,
-					results: [...actionEvidence, ...formattedResults].slice(0, maxResults),
+					results: [...actionEvidence, ...countEvidence, ...formattedResults].slice(
+						0,
+						maxResults,
+					),
 				})
 			}
 

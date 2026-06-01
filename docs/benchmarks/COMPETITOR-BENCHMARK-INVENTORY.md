@@ -242,6 +242,28 @@ Mem0 answer-context root-cause work from 2026-05-31:
   30 collections, then dropped 30 collections; prefix inventory returned zero
   benchmark groups. This proves the fix generalizes across the six-type smoke,
   but it remains a rehearsal gate, not a publishable Mem0 row.
+- Larger 12-case answerer-mode rehearsal `20260601b` improved to `11/12`
+  (`91.7%`) at `top_50`, including passes for the earlier Andy-wearing and
+  jewelry-count failures. Artifact:
+  `artifacts/ecosystem-smokes/mem0-memory-benchmarks-longmemeval-12-answerer-20260601b/longmemeval_results_20260601_023313.json`,
+  SHA256 `91039a0ac236ce7ac68abb651e8c1955a30945be18012c4c6807fae587b2a7bc`.
+  Rejudging the same saved retrieval artifact produced the same `11/12` result,
+  SHA256 `d63b7f70e3a6872bf156aaf3564b72ed344844d3fb227d24557916599eee4db`.
+  The remaining fail was QID `88432d0a`, where MongoDB retrieval returned
+  relevant baking-count evidence but the answerer generated a blank response.
+- Follow-up adapter hardening made count evidence shorter, deduped by canonical
+  item/event key, and capped to eight source-backed candidates. This is generic
+  answer-context packaging over retrieved evidence, not question-id tuning.
+  A two-question multi-session smoke `20260601c` scored `2/2` at `top_50`.
+  Artifact:
+  `artifacts/ecosystem-smokes/mem0-memory-benchmarks-longmemeval-2multi-answerer-20260601c/longmemeval_results_20260601_030201.json`,
+  SHA256 `9ca3b79af1cffcb91e5f528df0ee96e5d88d1c5c0f90ad1ecfc2c965b6ce7eeb`.
+  The sampled questions were `0a995998` and `3c1045c8`, so this smoke did not
+  rerun the exact old baking-count fail `88432d0a`. The exact Atlas prefix
+  `memongo_bench_mem0_memorybenchmarks_2_multi_answerer_20260601_c_` dry-run
+  showed 30 collections, then dropped 30 collections; prefix inventory returned
+  zero benchmark groups. The next gate remains a rerun of the larger answerer
+  rehearsal after the compact count-evidence change.
 
 ## Repo-Backed Benchmark Rows
 

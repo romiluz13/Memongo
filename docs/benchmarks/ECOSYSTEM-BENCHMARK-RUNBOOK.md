@@ -169,6 +169,13 @@ separate action candidates. Keep this generic: normalize evidence categories
 such as `dry cleaning for jacket` into the clothing item being retrieved, but
 never add an action that is not present in returned memory text.
 
+For count evidence, keep the generated context compact and source-backed:
+dedupe repeated candidates by stable item/event identity, cap the evidence
+block, preserve the source date, and instruct the answerer to verify the exact
+action while ignoring plans or advice. This follows the same MongoDB Search
+principle as query-passage packaging: expose the relevant evidence passage that
+was already retrieved instead of flooding the answerer with duplicate snippets.
+
 Small judged-QA smokes with Grove/Kimi can be unstable because structured
 output, content-filter retries, and ambiguous answer counting can change the
 pass/fail decision over the same saved retrieval artifacts. Treat six-case
