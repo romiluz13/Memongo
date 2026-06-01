@@ -264,6 +264,21 @@ Mem0 answer-context root-cause work from 2026-05-31:
   showed 30 collections, then dropped 30 collections; prefix inventory returned
   zero benchmark groups. The next gate remains a rerun of the larger answerer
   rehearsal after the compact count-evidence change.
+- Exact old baking-count miss rerun `20260601d` passed under real ingestion,
+  MongoDB search, and `gpt-5` answerer/judge. The official sampler selected
+  QID `88432d0a` with `--question-types multi-session --per-type 1 --seed 51`;
+  `top_50` scored `1/1`, generated answer `4 times.`, and artifact SHA256 is
+  `ac5882782db7af3e1b15c1c9412d7643145f526bee20aaba743a524132c6a518`.
+  Artifact:
+  `artifacts/ecosystem-smokes/mem0-memory-benchmarks-longmemeval-1baking-answerer-20260601d/longmemeval_results_20260601_031653.json`.
+  The exact Atlas prefix
+  `memongo_bench_mem0_memorybenchmarks_1_baking_answerer_20260601_d_` dry-run
+  showed 30 collections, then dropped 30 collections; prefix inventory returned
+  zero benchmark groups and MCP listed only `system.views`. This proves the
+  old miss is resolved by generic count evidence, but it also exposed a
+  separate provenance risk: some projected/chunk retrieval units can surface
+  run-time timestamps instead of source session dates. Do not promote Mem0 rows
+  until the larger rehearsal passes and timestamp provenance is audited.
 
 ## Repo-Backed Benchmark Rows
 

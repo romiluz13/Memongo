@@ -175,6 +175,9 @@ block, preserve the source date, and instruct the answerer to verify the exact
 action while ignoring plans or advice. This follows the same MongoDB Search
 principle as query-passage packaging: expose the relevant evidence passage that
 was already retrieved instead of flooding the answerer with duplicate snippets.
+If a retrieved unit exposes a timestamp from ingestion/projection time rather
+than the source conversation/session, treat that lane as not publishable until
+the provenance is fixed or the run discloses and filters the affected evidence.
 
 Small judged-QA smokes with Grove/Kimi can be unstable because structured
 output, content-filter retries, and ambiguous answer counting can change the
