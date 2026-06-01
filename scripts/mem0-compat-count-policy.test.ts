@@ -137,7 +137,7 @@ describe("mem0 compat count policy", () => {
 			"How many things do I still need to pick up or return?",
 			[
 				result("I still need to pick up the dry cleaning for my suit."),
-				result("I have not returned my library books yet."),
+				result("I need to return my library books."),
 			],
 		)
 		const countEvidence = buildCountEvidenceResults(
@@ -146,6 +146,9 @@ describe("mem0 compat count policy", () => {
 		)
 
 		expect(actionEvidence[0]?.id).toContain("derived-action-checklist")
+		expect(actionEvidence[0]?.memory).toContain(
+			"computed pending-action count: 2",
+		)
 		expect(countEvidence).toEqual([])
 	})
 })

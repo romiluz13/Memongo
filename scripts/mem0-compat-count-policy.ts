@@ -612,7 +612,7 @@ export function buildActionEvidenceResults(
 				`${index + 1}. separate pending action: ${action.verb} ${action.object} (source memory: "${action.evidence}")`,
 		)
 		.join(" ")
-	const memory = `${firstDate ? `${firstDate} ` : ""}derived action checklist from retrieved memories: count the numbered actions separately when the question asks how many things need to be picked up, returned, collected, or otherwise handled. Do not merge different action verbs just because they mention the same store or product family. ${bullets}`
+	const memory = `${firstDate ? `${firstDate} ` : ""}derived action checklist from retrieved memories: computed pending-action count: ${actions.length}. Count the numbered actions separately when the question asks how many things need to be picked up, returned, collected, or otherwise handled. Do not merge different action verbs just because they mention the same store, service location, or product family. ${bullets}`
 	return [
 		{
 			id: `derived-action-checklist:${normalizeEvidenceKey(query)}`,
