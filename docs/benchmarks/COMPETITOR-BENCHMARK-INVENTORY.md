@@ -318,6 +318,17 @@ Mem0 answer-context root-cause work from 2026-05-31:
   generic count-context ambiguity. Do not make a code change that maps this case
   to `4`; first define a source-faithful count policy that rejects duplicate
   mentions and plans/advice across all count-style queries.
+- Count-policy audit `20260601g` ran over the LongMemEval-S dataset and the
+  saved-retrieval re-evaluation artifact. Audit artifact:
+  `artifacts/ecosystem-smokes/mem0-memory-benchmarks-longmemeval-12-answerer-reeval-20260601g/count-policy-audit.json`,
+  SHA256 `8deb6249e84f2751f89ba2e331fdf76ff3bbe73bfabeac6a91233317657ff301`.
+  It found 225 broad quantitative questions: `inventory=85`, `duration=77`,
+  `money-or-percent=42`, `repeated-action=20`, `pending-action=1`. Of 212
+  numeric gold answers, only 21 equal `answer_session_ids.length`; 191 differ.
+  In the 12-case artifact, all four quantitative cases were flagged because the
+  derived evidence count differs from either gold or generated answer. This
+  confirms the next work must be a generic count-context policy, not MongoDB
+  Search ranking and not a session-count shortcut.
 
 ## Repo-Backed Benchmark Rows
 

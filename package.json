@@ -33,6 +33,7 @@
 		"capability-stress": "bun scripts/real-capability-stress.ts",
 		"benchmark:longmemeval:s": "bun scripts/launch-official-longmemeval-benchmark.ts",
 		"benchmark:canary": "bun scripts/run-longmemeval-canary.ts",
+		"benchmark:count-policy-audit": "bun scripts/count-policy-audit.ts",
 		"benchmark:mem0-compat": "bun scripts/run-mem0-compat-server.ts",
 		"benchmark:mem0-answerer-status": "bun scripts/check-memory-benchmarks-answerer-artifact.ts",
 		"benchmark:status": "bun scripts/check-benchmark-status.ts",

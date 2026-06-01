@@ -186,6 +186,13 @@ answers. In the LongMemEval-S corpus snapshot used for Mem0 compatibility work,
 196 questions match count-style wording, and only 12 have a numeric answer equal
 to `answer_session_ids.length`; most count answers are quantities such as days,
 hours, money, inventory counts, or repeated actions.
+For the broader quantitative audit, run
+`bun run benchmark:count-policy-audit -- --dataset=<longmemeval.json> --artifact=<memory-benchmarks-result.json> --cutoff=top_50`.
+The current audit includes `how much` money/percentage questions as explicit
+non-item-count cases: 225 quantitative questions, 212 numeric gold answers, only
+21 where `answer_session_ids.length` equals the gold number, and 191 where it
+differs. Treat any adapter change that makes session count the answer as a
+benchmark shortcut, not a product fix.
 
 Small judged-QA smokes with Grove/Kimi can be unstable because structured
 output, content-filter retries, and ambiguous answer counting can change the
@@ -212,6 +219,8 @@ Before a full Mem0 LongMemEval row, require:
 - post-run validation that fails the artifact if any non-abstention answerer
   result has an empty `generated_answer`; run
   `bun run benchmark:mem0-answerer-status -- <artifact> --cutoff=top_50`,
+- count-policy audit saved for the larger rehearsal artifact; count-context
+  changes must be justified by broad audit flags, not one question ID,
 - explicit separation between retrieval-judge diagnostics and judged answer
   accuracy claims.
 
