@@ -63,6 +63,7 @@ function mockDb(existingCollections: string[] = []): Db {
 			}
 			return collections.get(name)!
 		}),
+		command: vi.fn(async () => ({ ok: 1 })),
 		createCollection: vi.fn(async (name: string) => {
 			collections.set(name, mockCollection(name))
 			return collections.get(name)!
@@ -403,6 +404,24 @@ describe("ensureCollections", () => {
 			expect(db.createCollection).toHaveBeenCalledWith(
 				"test_memory_evidence",
 				expect.objectContaining({ validationAction: "error" }),
+			)
+		} finally {
+			if (previous === undefined) {
+				delete process.env.MEMONGO_EVIDENCE_MIRROR_MODE
+			} else {
+				process.env.MEMONGO_EVIDENCE_MIRROR_MODE = previous
+			}
+		}
+	})
+
+	it("does not refresh memory_evidence validation when the evidence mirror is disabled", async () => {
+		const previous = process.env.MEMONGO_EVIDENCE_MIRROR_MODE
+		delete process.env.MEMONGO_EVIDENCE_MIRROR_MODE
+		try {
+			const db = mockDb([])
+			await ensureCollections(db, "test_")
+			expect(db.command).not.toHaveBeenCalledWith(
+				expect.objectContaining({ collMod: "test_memory_evidence" }),
 			)
 		} finally {
 			if (previous === undefined) {

@@ -1429,6 +1429,9 @@ export async function ensureSchemaValidation(
 	prefix: string,
 ): Promise<void> {
 	for (const [baseName, validator] of Object.entries(VALIDATED_COLLECTIONS)) {
+		if (baseName === "memory_evidence" && !isEvidenceMirrorEnabled()) {
+			continue
+		}
 		const collName = `${prefix}${baseName}`
 		try {
 			await db.command({
@@ -1441,7 +1444,12 @@ export async function ensureSchemaValidation(
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err)
 			// Collection might not exist yet — skip silently
-			if (msg.includes("ns not found") || msg.includes("doesn't exist")) {
+			if (
+				msg.includes("ns not found") ||
+				msg.includes("ns does not exist") ||
+				msg.includes("doesn't exist") ||
+				msg.includes("NamespaceNotFound")
+			) {
 				continue
 			}
 			log.warn(`schema validation for ${collName} failed: ${msg}`)
