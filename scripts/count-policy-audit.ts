@@ -28,6 +28,7 @@ export type ArtifactCountAudit = CountQuestionAudit & {
 	generatedAnswer: string
 	generatedNumber: number | null
 	derivedEvidenceCount: number | null
+	derivedEvidenceNumber: number | null
 	cutoff: string
 	artifactFlags: string[]
 }
@@ -131,7 +132,9 @@ export function classifyCountKind(question: string, answer: string): CountKind {
 	) {
 		return "pending-action"
 	}
-	if (/\bhow many\s+(?:days?|hours?|minutes?|weeks?|months?|years?)\b/.test(q)) {
+	if (
+		/\bhow many\s+(?:days?|hours?|minutes?|weeks?|months?|years?)\b/.test(q)
+	) {
 		return "duration"
 	}
 	if (
@@ -161,7 +164,9 @@ export function isTimeWindowedQuestion(question: string): boolean {
 	)
 }
 
-export function auditCountQuestion(raw: LongMemEvalQuestion): CountQuestionAudit | null {
+export function auditCountQuestion(
+	raw: LongMemEvalQuestion,
+): CountQuestionAudit | null {
 	const question = asString(raw.question).trim()
 	if (!question || !hasCountStyleQuestion(question)) {
 		return null
@@ -209,7 +214,22 @@ export function countDerivedEvidenceBullets(memory: string): number | null {
 	return matches ? matches.length : 0
 }
 
-function buildQuestionMap(questions: CountQuestionAudit[]): Map<string, CountQuestionAudit> {
+export function extractDerivedEvidenceNumber(memory: string): number | null {
+	const lowerMemory = memory.toLowerCase()
+	if (/\bderived current-total evidence\b/.test(lowerMemory)) {
+		const statedTotals = [
+			...lowerMemory.matchAll(/\bstated total\s+(\d+(?:\.\d+)?)\b/g),
+		]
+			.map((match) => Number(match[1]))
+			.filter(Number.isFinite)
+		return statedTotals.length > 0 ? Math.max(...statedTotals) : null
+	}
+	return countDerivedEvidenceBullets(memory)
+}
+
+function buildQuestionMap(
+	questions: CountQuestionAudit[],
+): Map<string, CountQuestionAudit> {
 	return new Map(questions.map((question) => [question.questionId, question]))
 }
 
@@ -234,33 +254,41 @@ export function auditArtifactCounts(
 		const searchResults = Array.isArray(retrieval.search_results)
 			? retrieval.search_results.map(asRecord)
 			: []
+		const derivedEvidenceNumber =
+			searchResults
+				.map((result) => extractDerivedEvidenceNumber(asString(result.memory)))
+				.find((count): count is number => count !== null) ?? null
 		const derivedEvidenceCount =
 			searchResults
 				.map((result) => countDerivedEvidenceBullets(asString(result.memory)))
 				.find((count): count is number => count !== null) ?? null
 		const artifactFlags: string[] = []
 		if (!generatedAnswer) artifactFlags.push("generated-answer-empty")
-		if (base.goldNumber !== null && generatedNumber !== null && generatedNumber !== base.goldNumber) {
+		if (
+			base.goldNumber !== null &&
+			generatedNumber !== null &&
+			generatedNumber !== base.goldNumber
+		) {
 			artifactFlags.push("generated-number-differs-from-gold")
 		}
 		if (
 			base.goldNumber !== null &&
-			derivedEvidenceCount !== null &&
-			derivedEvidenceCount !== base.goldNumber
+			derivedEvidenceNumber !== null &&
+			derivedEvidenceNumber !== base.goldNumber
 		) {
 			artifactFlags.push("derived-evidence-count-differs-from-gold")
 		}
 		if (
 			generatedNumber !== null &&
-			derivedEvidenceCount !== null &&
-			generatedNumber !== derivedEvidenceCount
+			derivedEvidenceNumber !== null &&
+			generatedNumber !== derivedEvidenceNumber
 		) {
 			artifactFlags.push("generated-number-differs-from-derived-evidence")
 		}
 		if (
 			base.countKind !== "money-or-percent" &&
 			base.countKind !== "duration" &&
-			derivedEvidenceCount === null
+			derivedEvidenceNumber === null
 		) {
 			artifactFlags.push("derived-count-evidence-missing")
 		}
@@ -270,6 +298,7 @@ export function auditArtifactCounts(
 			generatedAnswer,
 			generatedNumber,
 			derivedEvidenceCount,
+			derivedEvidenceNumber,
 			cutoff,
 			artifactFlags,
 		})
@@ -288,12 +317,19 @@ function summarize(
 	return {
 		countQuestions: questions.length,
 		byKind,
-		numericGold: questions.filter((question) => question.goldNumber !== null).length,
-		sessionCountEqualsGold: questions.filter((question) => question.sessionCountEqualsGold === true).length,
-		sessionCountDiffersFromGold: questions.filter((question) => question.sessionCountEqualsGold === false).length,
+		numericGold: questions.filter((question) => question.goldNumber !== null)
+			.length,
+		sessionCountEqualsGold: questions.filter(
+			(question) => question.sessionCountEqualsGold === true,
+		).length,
+		sessionCountDiffersFromGold: questions.filter(
+			(question) => question.sessionCountEqualsGold === false,
+		).length,
 		timeWindowed: questions.filter((question) => question.timeWindowed).length,
 		artifactEvaluations: artifactEvaluations.length,
-		artifactFlagged: artifactEvaluations.filter((entry) => entry.artifactFlags.length > 0).length,
+		artifactFlagged: artifactEvaluations.filter(
+			(entry) => entry.artifactFlags.length > 0,
+		).length,
 	}
 }
 
@@ -303,7 +339,9 @@ export function buildCountPolicyAuditReport(params: {
 	cutoff?: string
 }): CountPolicyAuditReport {
 	const cutoff = params.cutoff ?? "top_50"
-	const dataset = JSON.parse(readFileSync(params.datasetPath, "utf8")) as unknown
+	const dataset = JSON.parse(
+		readFileSync(params.datasetPath, "utf8"),
+	) as unknown
 	if (!Array.isArray(dataset)) {
 		throw new Error("dataset must be a LongMemEval JSON array")
 	}
@@ -341,8 +379,10 @@ function parseArgs(argv: string[]): {
 	let json = false
 	for (const arg of argv) {
 		if (arg === "--json") json = true
-		else if (arg.startsWith("--dataset=")) datasetPath = arg.slice("--dataset=".length)
-		else if (arg.startsWith("--artifact=")) artifactPath = arg.slice("--artifact=".length)
+		else if (arg.startsWith("--dataset="))
+			datasetPath = arg.slice("--dataset=".length)
+		else if (arg.startsWith("--artifact="))
+			artifactPath = arg.slice("--artifact=".length)
 		else if (arg.startsWith("--cutoff=")) cutoff = arg.slice("--cutoff=".length)
 		else if (arg.startsWith("--out=")) outputPath = arg.slice("--out=".length)
 		else throw new Error(`unknown argument: ${arg}`)
@@ -373,7 +413,7 @@ function renderReport(report: CountPolicyAuditReport): string {
 		lines.push("", "flagged artifact count cases:")
 		for (const entry of flagged) {
 			lines.push(
-				`- ${entry.questionId} ${entry.countKind}: gold=${entry.goldNumber ?? "?"} generated=${entry.generatedNumber ?? "?"} derived=${entry.derivedEvidenceCount ?? "?"} flags=${entry.artifactFlags.join(", ")}`,
+				`- ${entry.questionId} ${entry.countKind}: gold=${entry.goldNumber ?? "?"} generated=${entry.generatedNumber ?? "?"} derived=${entry.derivedEvidenceNumber ?? "?"} flags=${entry.artifactFlags.join(", ")}`,
 			)
 		}
 	}

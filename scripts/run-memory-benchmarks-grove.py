@@ -10,6 +10,8 @@ from __future__ import annotations
 import os
 import runpy
 import sys
+import asyncio
+import logging
 
 
 def main() -> None:
@@ -43,6 +45,32 @@ def main() -> None:
 
     module = sys.argv[1]
     sys.path.insert(0, os.getcwd())
+
+    blank_retries = int(os.environ.get("MEMONGO_GROVE_BLANK_GENERATION_RETRIES", "3"))
+    if blank_retries > 0:
+        try:
+            from benchmarks.common.llm_client import LLMClient
+
+            original_generate = LLMClient.generate
+
+            async def generate_with_blank_retry(self, system, user, temperature=0, max_tokens=4096):
+                for attempt in range(blank_retries + 1):
+                    text = await original_generate(self, system, user, temperature, max_tokens)
+                    if text.strip():
+                        return text
+                    if attempt < blank_retries:
+                        logging.getLogger("memory-benchmarks.grove").warning(
+                            "Generation returned blank text; retrying %d/%d",
+                            attempt + 1,
+                            blank_retries,
+                        )
+                        await asyncio.sleep(2 * (attempt + 1))
+                return text
+
+            LLMClient.generate = generate_with_blank_retry
+        except ModuleNotFoundError:
+            pass
+
     sys.argv = [module, *sys.argv[2:]]
     runpy.run_module(module, run_name="__main__")
 

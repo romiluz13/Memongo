@@ -4,6 +4,7 @@ import {
 	auditCountQuestion,
 	classifyCountKind,
 	countDerivedEvidenceBullets,
+	extractDerivedEvidenceNumber,
 	extractFirstNumber,
 	hasCountStyleQuestion,
 } from "./count-policy-audit.js"
@@ -67,7 +68,17 @@ describe("artifact count audit", () => {
 				"derived countable evidence from retrieved memories: 1. cake 2. cookies 3. pie",
 			),
 		).toBe(3)
-		expect(countDerivedEvidenceBullets("ordinary memory: 1. not derived")).toBeNull()
+		expect(
+			countDerivedEvidenceBullets("ordinary memory: 1. not derived"),
+		).toBeNull()
+	})
+
+	it("extracts source-stated totals without treating progress bullets as the count", () => {
+		expect(
+			extractDerivedEvidenceNumber(
+				"derived current-total evidence from retrieved memories: use the latest source-stated total. 1. stated total 5: finished my 5th project. 2. stated total 4: completed 4 projects.",
+			),
+		).toBe(5)
 	})
 
 	it("flags generated and derived evidence count disagreements", () => {
@@ -79,6 +90,9 @@ describe("artifact count audit", () => {
 			answer_session_ids: ["a", "b", "c", "d"],
 		})
 		expect(question).not.toBeNull()
+		if (!question) {
+			throw new Error("expected audit question")
+		}
 
 		const [artifactAudit] = auditArtifactCounts(
 			{
@@ -101,7 +115,7 @@ describe("artifact count audit", () => {
 					},
 				],
 			},
-			[question!],
+			[question],
 			"top_50",
 		)
 
