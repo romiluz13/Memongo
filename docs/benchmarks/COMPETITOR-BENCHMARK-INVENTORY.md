@@ -8,6 +8,8 @@ unit, top-k, and LLM/rerank posture, with artifacts and cleanup proof.
 
 Execution rules for the fresh Atlas control lane live in
 [Ecosystem Benchmark Runbook](./ECOSYSTEM-BENCHMARK-RUNBOOK.md).
+The full branch/evidence/roadmap summary lives in
+[Memongo Benchmark Full Picture Roadmap](./FULL-PICTURE-ROADMAP.md).
 
 ## Refresh Snapshot
 

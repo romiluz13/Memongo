@@ -14,6 +14,8 @@ For the refreshed cross-competitor queue, see
 [Competitor Benchmark Inventory](./COMPETITOR-BENCHMARK-INVENTORY.md).
 For the fresh Atlas execution procedure, see
 [Ecosystem Benchmark Runbook](./ECOSYSTEM-BENCHMARK-RUNBOOK.md).
+For the end-to-end state, road already traveled, and remaining gates, see
+[Memongo Benchmark Full Picture Roadmap](./FULL-PICTURE-ROADMAP.md).
 
 ## Claim Policy
 
