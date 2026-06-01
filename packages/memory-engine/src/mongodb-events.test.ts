@@ -537,6 +537,7 @@ describe("projectChunksFromEvents", () => {
 	})
 
 	it("projected chunks have correct source and path format", async () => {
+		const eventTimestamp = new Date("2025-01-01T12:00:00.000Z")
 		const mockEvents: CanonicalEvent[] = [
 			{
 				eventId: "abc-def-123",
@@ -545,7 +546,7 @@ describe("projectChunksFromEvents", () => {
 				body: "Test content",
 				scope: "agent",
 				scopeRef: "agent:agent-1",
-				timestamp: new Date(),
+				timestamp: eventTimestamp,
 			},
 		]
 
@@ -586,6 +587,7 @@ describe("projectChunksFromEvents", () => {
 		expect(doc.source).toBe("conversation")
 		expect(doc.path).toBe("events/abc-def-123")
 		expect(doc.agentId).toBe("agent-1")
+		expect(doc.timestamp).toEqual(eventTimestamp)
 	})
 
 	it("only counts chunksCreated when upsertedCount > 0 (not duplicates)", async () => {

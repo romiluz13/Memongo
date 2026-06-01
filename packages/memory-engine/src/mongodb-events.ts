@@ -372,6 +372,7 @@ export async function projectEventChunk(params: {
 				scope: event.scope,
 				scopeRef: event.scopeRef,
 				...(event.sessionId ? { sessionId: event.sessionId } : {}),
+				timestamp: event.timestamp,
 				updatedAt: new Date(),
 			},
 		},

@@ -29,7 +29,7 @@ docs or artifacts.
 
 ```bash
 export MEMONGO_MONGODB_URI="..."
-export VOYAGE_API_KEY="<atlas-model-api-key-with-al-prefix>"
+export VOYAGE_API_KEY="<atlas-model-api-key>"
 export GROVE_API_KEY="..."
 export GROVE_BASE_URL="..."
 export MEMONGO_DB_NAME="memongo"
@@ -178,6 +178,9 @@ was already retrieved instead of flooding the answerer with duplicate snippets.
 If a retrieved unit exposes a timestamp from ingestion/projection time rather
 than the source conversation/session, treat that lane as not publishable until
 the provenance is fixed or the run discloses and filters the affected evidence.
+Do not fix count-answer failures by matching a single gold answer when the
+retrieved evidence is semantically plausible but the benchmark annotation is
+ambiguous; escalate to a broader rehearsal and a generic count policy review.
 
 Small judged-QA smokes with Grove/Kimi can be unstable because structured
 output, content-filter retries, and ambiguous answer counting can change the

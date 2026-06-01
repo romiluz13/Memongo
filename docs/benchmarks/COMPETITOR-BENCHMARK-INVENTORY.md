@@ -279,6 +279,17 @@ Mem0 answer-context root-cause work from 2026-05-31:
   separate provenance risk: some projected/chunk retrieval units can surface
   run-time timestamps instead of source session dates. Do not promote Mem0 rows
   until the larger rehearsal passes and timestamp provenance is audited.
+- Core provenance fix `20260601e`: event chunk projection now stores the source
+  event timestamp instead of forcing search result mapping to fall back to
+  projection `updatedAt`. Focused unit coverage was added in
+  `packages/memory-engine/src/mongodb-events.test.ts`. The exact rerun of
+  QID `88432d0a` then failed with answer `5`, artifact SHA256
+  `148657a11fd00026167120cadec3607b5155ad2b238482139e104a5daf1f3bf9`,
+  because the now-correct source dates exposed five plausible source-backed
+  baking candidates while the official gold answer is `4`. This is not a
+  reason to add benchmark-specific count rules. Treat it as a dataset/semantic
+  ambiguity requiring broader rehearsal and generic count-policy review before
+  any Mem0 publication row.
 
 ## Repo-Backed Benchmark Rows
 
