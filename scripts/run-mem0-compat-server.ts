@@ -1,5 +1,5 @@
 import {
-	memongoBridgeSearch,
+	memongoBridgeSearchDetailed,
 	memongoBridgeShutdown,
 	memongoBridgeWaitForBenchmarkSearchReadiness,
 	memongoBridgeWriteConversationEvent,
@@ -360,11 +360,21 @@ const server = Bun.serve({
 				const maxResults = Math.max(1, Math.min(requestedLimit, maxResultsCap))
 				const settle_wait_ms = await waitForSearchSettle(userId)
 				const readiness_wait_ms = await waitForSearchReadiness(userId)
-				const results = await memongoBridgeSearch({
+				const detailed = await memongoBridgeSearchDetailed({
 					agentId: userId,
 					query,
 					maxResults,
+					searchMode: "direct",
+					sourcePreference: ["conversation"],
+					needExactEvidence: true,
+					searchConfig: {
+						maxResults,
+						searchMode: "direct",
+						sourcePreference: ["conversation"],
+						needExactEvidence: true,
+					},
 				})
+				const results = detailed.results as BridgeSearchResult[]
 				const formattedResults: Mem0CompatSearchResult[] = results.map(
 					(result) => ({
 						id: result.canonicalId ?? result.path,

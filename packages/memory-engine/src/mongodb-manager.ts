@@ -315,6 +315,12 @@ function hasBenchmarkSearchableText(value: unknown): boolean {
 	return typeof value === "string" && /[\p{L}\p{N}]/u.test(value)
 }
 
+function benchmarkSearchProbeTerm(value: unknown): string | undefined {
+	if (typeof value !== "string") return undefined
+	const terms = value.match(/[\p{L}\p{N}][\p{L}\p{N}'-]{2,}/gu) ?? []
+	return terms.find((term) => term.length >= 4) ?? terms[0]
+}
+
 function parseBenchmarkTurnTimestamp(value?: string): Date | undefined {
 	if (!value) return undefined
 	const parsed = new Date(value)
@@ -4297,6 +4303,10 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		const expectedCount = expectedDocs.filter((doc) =>
 			hasBenchmarkSearchableText(doc[textPath]),
 		).length
+		const textProbeQuery = [...expectedDocs]
+			.reverse()
+			.map((doc) => benchmarkSearchProbeTerm(doc[textPath]))
+			.find((term): term is string => Boolean(term))
 		if (expectedCount === 0) return
 
 		const configuredTimeout = Number(
@@ -4344,6 +4354,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 				: 5_000
 		const deadline = Date.now() + timeoutMs
 		let indexedCount = 0
+		let textProbeCount = 0
 		let lastError: unknown
 
 		while (Date.now() <= deadline) {
@@ -4397,8 +4408,41 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 					if (timeout) clearTimeout(timeout)
 				})
 				indexedCount = rows[0]?.count ?? 0
-				if (indexedCount >= expectedCount) {
+				if (indexedCount >= expectedCount && !textProbeQuery) {
 					return
+				}
+				if (indexedCount >= expectedCount && textProbeQuery) {
+					const textProbeRows = await collection
+						.aggregate<{ count: number }>(
+							[
+								{
+									$search: {
+										index: indexName,
+										compound: {
+											filter: [{ equals: { path: "agentId", value: agentId } }],
+											must: [
+												{
+													text: {
+														path: textPath,
+														query: textProbeQuery,
+													},
+												},
+											],
+										},
+									},
+								},
+								{ $count: "count" },
+							],
+							{
+								maxTimeMS: probeMaxTimeMs,
+								signal: controller.signal,
+							},
+						)
+						.toArray()
+					textProbeCount = textProbeRows[0]?.count ?? 0
+					if (textProbeCount > 0) {
+						return
+					}
 				}
 			} catch (err) {
 				lastError = err
@@ -4413,7 +4457,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 			await new Promise((resolve) => setTimeout(resolve, intervalMs))
 		}
 
-		const message = `benchmark ${label} search convergence timed out: indexed=${indexedCount}/${expectedCount} agentId=${agentId}`
+		const message = `benchmark ${label} search convergence timed out: indexed=${indexedCount}/${expectedCount} textProbe=${textProbeCount}${textProbeQuery ? ` query=${textProbeQuery}` : ""} agentId=${agentId}`
 		if (isBenchmarkStrictMode()) {
 			throw new Error(
 				lastError ? `${message}; lastError=${String(lastError)}` : message,

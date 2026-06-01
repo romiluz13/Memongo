@@ -42,9 +42,12 @@ function resolveRerankUrl(apiKey: string): string {
 }
 
 function isStrictRerankMode(): boolean {
+	const benchmarkStrict = process.env.MEMONGO_BENCHMARK_STRICT
 	return (
 		process.env.MEMONGO_RERANK_STRICT === "1" ||
-		process.env.MEMONGO_BENCHMARK_STRICT === "1"
+		process.env.MEMONGO_RERANK_STRICT?.toLowerCase() === "true" ||
+		benchmarkStrict === "1" ||
+		benchmarkStrict?.toLowerCase() === "true"
 	)
 }
 

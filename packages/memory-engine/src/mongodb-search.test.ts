@@ -813,6 +813,41 @@ describe("mongoSearch dispatcher", () => {
 		expect(col.aggregate).toHaveBeenCalledTimes(1)
 	})
 
+	it("treats MEMONGO_BENCHMARK_STRICT=true as no-fallback strict mode", async () => {
+		const previousStrict = process.env.MEMONGO_BENCHMARK_STRICT
+		process.env.MEMONGO_BENCHMARK_STRICT = "true"
+		try {
+			const col = {
+				aggregate: vi.fn(() => ({
+					toArray: vi.fn(async () => []),
+				})),
+				find: vi.fn(() => ({
+					sort: vi.fn(() => ({
+						limit: vi.fn(() => ({
+							toArray: vi.fn(async () => SAMPLE_DOCS),
+						})),
+					})),
+				})),
+			} as unknown as Collection
+
+			const results = await mongoSearch(col, "test query", [0.1, 0.2], {
+				...baseOpts,
+				fusionMethod: "rankFusion",
+				capabilities: FULL_CAPS,
+				embeddingMode: "automated",
+			})
+
+			expect(results).toEqual([])
+			expect(col.aggregate).toHaveBeenCalledTimes(1)
+		} finally {
+			if (previousStrict === undefined) {
+				delete process.env.MEMONGO_BENCHMARK_STRICT
+			} else {
+				process.env.MEMONGO_BENCHMARK_STRICT = previousStrict
+			}
+		}
+	})
+
 	it("throws instead of falling back when strictNoFallback sees a search failure", async () => {
 		const col = {
 			aggregate: vi.fn(() => ({

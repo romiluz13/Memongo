@@ -2890,9 +2890,13 @@ export function resolveSearchIndexReadinessTiming(
 	timeoutMs: number
 	pollMs: number
 } {
+	const benchmarkStrict = env.MEMONGO_BENCHMARK_STRICT
+	const searchReadyStrict = env.MEMONGO_STRICT_SEARCH_INDEX_READY
 	const strictDefaultTimeoutMs =
-		env.MEMONGO_BENCHMARK_STRICT === "1" ||
-		env.MEMONGO_STRICT_SEARCH_INDEX_READY === "1"
+		benchmarkStrict === "1" ||
+		benchmarkStrict?.toLowerCase() === "true" ||
+		searchReadyStrict === "1" ||
+		searchReadyStrict?.toLowerCase() === "true"
 			? 180_000
 			: 60_000
 	const timeoutMs = parsePositiveIntegerEnv(

@@ -743,6 +743,93 @@ describe("benchmark event search convergence", () => {
 		}
 	})
 
+	it("waits for actual text terms after wildcard document visibility", async () => {
+		const prevStrict = process.env.MEMONGO_BENCHMARK_STRICT
+		const prevSettle =
+			process.env.MEMONGO_BENCHMARK_EVENT_SEARCH_SETTLE_TIMEOUT_MS
+		const prevProbe =
+			process.env.MEMONGO_BENCHMARK_EVENT_SEARCH_PROBE_MAX_TIME_MS
+		process.env.MEMONGO_BENCHMARK_STRICT = "1"
+		process.env.MEMONGO_BENCHMARK_EVENT_SEARCH_SETTLE_TIMEOUT_MS = "3000"
+		process.env.MEMONGO_BENCHMARK_EVENT_SEARCH_PROBE_MAX_TIME_MS = "1000"
+		try {
+			const { readSearchIndexStatus } = await import(
+				"./mongodb-benchmark-readiness.js"
+			)
+			mocked(readSearchIndexStatus).mockResolvedValue({
+				kind: "ok",
+				status: "READY",
+				queryable: true,
+				indexName: "events_text",
+			})
+			const textCounts = [0, 1]
+			const aggregate = vi
+				.fn()
+				.mockImplementation((pipeline: Array<unknown>) => {
+					const firstStage = pipeline[0] as {
+						$search?: { compound?: { must?: Array<Record<string, unknown>> } }
+					}
+					const must = firstStage.$search?.compound?.must ?? []
+					const isTextProbe = Boolean(must[0]?.text)
+					return {
+						toArray: vi
+							.fn()
+							.mockResolvedValue([
+								{ count: isTextProbe ? (textCounts.shift() ?? 1) : 2 },
+							]),
+					}
+				})
+			mocked(eventsCollection).mockReturnValue({
+				find: makeSearchableFind(["alpha", "beta"]),
+				aggregate,
+			} as never)
+
+			const manager = makeSearchConvergenceManager()
+
+			await expect(
+				(
+					MongoDBMemoryManager.prototype as unknown as {
+						waitForBenchmarkEventSearchConvergence: (
+							this: MongoDBMemoryManager,
+							agentId: string,
+						) => Promise<void>
+					}
+				).waitForBenchmarkEventSearchConvergence.call(manager, "agent-ready"),
+			).resolves.toBeUndefined()
+			expect(aggregate).toHaveBeenCalledWith(
+				expect.arrayContaining([
+					expect.objectContaining({
+						$search: expect.objectContaining({
+							compound: expect.objectContaining({
+								must: [
+									{
+										text: {
+											path: "body",
+											query: "beta",
+										},
+									},
+								],
+							}),
+						}),
+					}),
+				]),
+				expect.any(Object),
+			)
+		} finally {
+			if (prevStrict === undefined) delete process.env.MEMONGO_BENCHMARK_STRICT
+			else process.env.MEMONGO_BENCHMARK_STRICT = prevStrict
+			if (prevSettle === undefined)
+				delete process.env.MEMONGO_BENCHMARK_EVENT_SEARCH_SETTLE_TIMEOUT_MS
+			else
+				process.env.MEMONGO_BENCHMARK_EVENT_SEARCH_SETTLE_TIMEOUT_MS =
+					prevSettle
+			if (prevProbe === undefined)
+				delete process.env.MEMONGO_BENCHMARK_EVENT_SEARCH_PROBE_MAX_TIME_MS
+			else
+				process.env.MEMONGO_BENCHMARK_EVENT_SEARCH_PROBE_MAX_TIME_MS = prevProbe
+		}
+	})
+
 	it("does not wait for non-searchable control-character text", async () => {
 		const prevStrict = process.env.MEMONGO_BENCHMARK_STRICT
 		process.env.MEMONGO_BENCHMARK_STRICT = "1"
