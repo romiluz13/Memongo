@@ -4,6 +4,7 @@ import { evaluateAnswererArtifact } from "./check-memory-benchmarks-answerer-art
 import {
 	buildArithmeticTotalEvidenceResults,
 	buildAssistantRecallEvidenceResults,
+	buildCompiledAnswerEvidenceResults,
 	buildCountEvidenceResults,
 	buildCurrentStateEvidenceResults,
 	buildPreferenceEvidenceResults,
@@ -407,6 +408,40 @@ function currentStateSupersessionGate(): FixtureGateResult {
 	}
 }
 
+function compiledAnswerEvidencePackGate(): FixtureGateResult {
+	const query = "Where do I currently keep my old sneakers?"
+	const evidence = buildCompiledAnswerEvidenceResults(query, [
+		result("user: I used to keep my old sneakers under my bed.", "2023-04-01"),
+		result(
+			"user: I moved my old sneakers to a shoe rack in my closet.",
+			"2023-05-20",
+		),
+		result(
+			"user: I plan to move my old sneakers to the garage shelf next month.",
+			"2023-05-30",
+		),
+	])
+	const text = memoryText(evidence)
+	const failures = [
+		...expectContains(text, "ANSWER EVIDENCE PACK"),
+		...expectContains(text, "source-backed proof pack"),
+		...expectContains(text, "1. current-state"),
+		...expectContains(text, "current answer = a shoe rack in my closet"),
+		...expectContains(text, "superseded or older"),
+		...expectContains(text, "under my bed"),
+		...expectNotContains(text, "garage shelf"),
+		...expectNotContains(text, "question_id"),
+	]
+	return {
+		id: "gate-compiled-answer-evidence-pack",
+		capabilityId: "multi-session-current-state",
+		label: "Compiled answer proof pack orders current and stale evidence",
+		ok: failures.length === 0,
+		failures,
+		details: { query, evidence },
+	}
+}
+
 function retrievalCoverageSupplementalGate(): FixtureGateResult {
 	const query =
 		"Did I mostly recently increase or decrease the limit on the number of cups of coffee in the morning?"
@@ -608,6 +643,7 @@ export function runMemoryCapabilityFixtureGates(
 		countEntityExtractionGate(),
 		arithmeticTotalGate(),
 		currentStateSupersessionGate(),
+		compiledAnswerEvidencePackGate(),
 		retrievalCoverageSupplementalGate(),
 		zeroEmptyRetrievalArtifactGate(),
 		temporalOrderGate(),
