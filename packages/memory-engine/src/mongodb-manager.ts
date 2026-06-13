@@ -2,7 +2,13 @@ import { createHash, randomUUID } from "node:crypto"
 import { createReadStream } from "node:fs"
 import path from "node:path"
 import chokidar, { type FSWatcher } from "chokidar"
-import { MongoClient, type Collection, type Db, type Document } from "mongodb"
+import {
+	MongoClient,
+	type Collection,
+	type Db,
+	type Document,
+	type MongoClientOptions,
+} from "mongodb"
 import {
 	type MemongoConfig,
 	type MemoryScope,
@@ -185,6 +191,7 @@ import {
 import { resolveScopeRef } from "./mongodb-scope.js"
 import {
 	buildVectorSearchStage,
+	MONGODB_MAX_NUM_CANDIDATES,
 	mongoSearch,
 	vectorSearch,
 } from "./mongodb-search.js"
@@ -313,6 +320,32 @@ function isBenchmarkStrictMode(): boolean {
 
 function hasBenchmarkSearchableText(value: unknown): boolean {
 	return typeof value === "string" && /[\p{L}\p{N}]/u.test(value)
+}
+
+type BenchmarkConvergenceNamespace = {
+	agentId: string
+	scope?: MemoryScope
+	scopeRef?: string
+	sessionId?: string
+}
+
+function benchmarkConvergenceFilter(
+	namespace: BenchmarkConvergenceNamespace,
+): Document {
+	return {
+		agentId: namespace.agentId,
+		...(namespace.scope ? { scope: namespace.scope } : {}),
+		...(namespace.scopeRef ? { scopeRef: namespace.scopeRef } : {}),
+		...(namespace.sessionId ? { sessionId: namespace.sessionId } : {}),
+	}
+}
+
+function benchmarkSearchEqualsFilters(
+	namespace: BenchmarkConvergenceNamespace,
+): Document[] {
+	return Object.entries(benchmarkConvergenceFilter(namespace)).map(
+		([path, value]) => ({ equals: { path, value } }),
+	)
 }
 
 function benchmarkSearchProbeTerm(value: unknown): string | undefined {
@@ -1714,6 +1747,10 @@ function resolveRuntimeSearchConfig(
 	mongoCfg: ResolvedMongoDBConfig,
 ): ResolvedSearchConfig {
 	const resolved = resolveSearchConfig(request)
+	const recommendedNumCandidates = Math.min(
+		Math.max(mongoCfg.numCandidates, resolved.maxResults * 20),
+		MONGODB_MAX_NUM_CANDIDATES,
+	)
 	return {
 		recipe: resolved.recipe,
 		maxResults: resolved.maxResults,
@@ -1722,7 +1759,7 @@ function resolveRuntimeSearchConfig(
 		sourcePreference: resolved.sourcePreference,
 		timeRange: resolved.timeRange,
 		needExactEvidence: resolved.needExactEvidence,
-		numCandidates: resolved.numCandidates ?? mongoCfg.numCandidates,
+		numCandidates: resolved.numCandidates ?? recommendedNumCandidates,
 		fusionMethod: resolved.fusionMethod ?? mongoCfg.fusionMethod,
 		hybridMode: resolved.hybridMode,
 		allowHybridBackstop: resolved.allowHybridBackstop,
@@ -2012,12 +2049,34 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		// Connect to MongoDB with a timeout to avoid hanging
 		const safeUri = redactMongoURI(mongoCfg.uri)
 		log.info(`connecting to MongoDB: ${safeUri} (db=${mongoCfg.database})`)
-		const client = new MongoClient(mongoCfg.uri, {
-			serverSelectionTimeoutMS: mongoCfg.connectTimeoutMs,
+		const clientOptions: MongoClientOptions = {
+			serverSelectionTimeoutMS: mongoCfg.serverSelectionTimeoutMs,
 			connectTimeoutMS: mongoCfg.connectTimeoutMs,
 			maxPoolSize: mongoCfg.maxPoolSize,
 			minPoolSize: mongoCfg.minPoolSize,
-		})
+		}
+		if (mongoCfg.maxConnecting !== undefined) {
+			clientOptions.maxConnecting = mongoCfg.maxConnecting
+		}
+		if (mongoCfg.maxIdleTimeMs !== undefined) {
+			clientOptions.maxIdleTimeMS = mongoCfg.maxIdleTimeMs
+		}
+		if (mongoCfg.networkFamily !== undefined) {
+			clientOptions.family = mongoCfg.networkFamily
+		}
+		if (mongoCfg.socketTimeoutMs !== undefined) {
+			clientOptions.socketTimeoutMS = mongoCfg.socketTimeoutMs
+		}
+		if (mongoCfg.heartbeatFrequencyMs !== undefined) {
+			clientOptions.heartbeatFrequencyMS = mongoCfg.heartbeatFrequencyMs
+		}
+		if (mongoCfg.serverMonitoringMode !== undefined) {
+			clientOptions.serverMonitoringMode = mongoCfg.serverMonitoringMode
+		}
+		if (mongoCfg.waitQueueTimeoutMs !== undefined) {
+			clientOptions.waitQueueTimeoutMS = mongoCfg.waitQueueTimeoutMs
+		}
+		const client = new MongoClient(mongoCfg.uri, clientOptions)
 		try {
 			await client.connect()
 			// Verify the connection actually works with a ping
@@ -3994,10 +4053,16 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 	private async waitForBenchmarkSearchConvergence(params: {
 		agentId: string
 		retrievalLane?: BenchmarkRetrievalLane
+		scope?: MemoryScope
+		scopeRef?: string
+		sessionId?: string
 	}): Promise<void> {
 		if (params.retrievalLane === "raw-session") {
 			await this.waitForBenchmarkVectorSearchCollectionConvergence({
 				agentId: params.agentId,
+				scope: params.scope,
+				scopeRef: params.scopeRef,
+				sessionId: params.sessionId,
 				label: "session_chunks",
 				collection: sessionChunksCollection(this.db, this.prefix),
 				collectionName: `${this.prefix}session_chunks`,
@@ -4009,6 +4074,9 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		}
 		await this.waitForBenchmarkSearchCollectionConvergence({
 			agentId: params.agentId,
+			scope: params.scope,
+			scopeRef: params.scopeRef,
+			sessionId: params.sessionId,
 			label: "events",
 			collection: eventsCollection(this.db, this.prefix),
 			collectionName: `${this.prefix}events`,
@@ -4017,6 +4085,9 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		})
 		await this.waitForBenchmarkVectorSearchCollectionConvergence({
 			agentId: params.agentId,
+			scope: params.scope,
+			scopeRef: params.scopeRef,
+			sessionId: params.sessionId,
 			label: "events",
 			collection: eventsCollection(this.db, this.prefix),
 			collectionName: `${this.prefix}events`,
@@ -4025,6 +4096,9 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		})
 		await this.waitForBenchmarkSearchCollectionConvergence({
 			agentId: params.agentId,
+			scope: params.scope,
+			scopeRef: params.scopeRef,
+			sessionId: params.sessionId,
 			label: "chunks",
 			collection: chunksCollection(this.db, this.prefix),
 			collectionName: `${this.prefix}chunks`,
@@ -4033,6 +4107,9 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		})
 		await this.waitForBenchmarkVectorSearchCollectionConvergence({
 			agentId: params.agentId,
+			scope: params.scope,
+			scopeRef: params.scopeRef,
+			sessionId: params.sessionId,
 			label: "chunks",
 			collection: chunksCollection(this.db, this.prefix),
 			collectionName: `${this.prefix}chunks`,
@@ -4041,6 +4118,9 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		})
 		await this.waitForBenchmarkSearchCollectionConvergence({
 			agentId: params.agentId,
+			scope: params.scope,
+			scopeRef: params.scopeRef,
+			sessionId: params.sessionId,
 			label: "session_chunks",
 			collection: sessionChunksCollection(this.db, this.prefix),
 			collectionName: `${this.prefix}session_chunks`,
@@ -4049,6 +4129,9 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		})
 		await this.waitForBenchmarkVectorSearchCollectionConvergence({
 			agentId: params.agentId,
+			scope: params.scope,
+			scopeRef: params.scopeRef,
+			sessionId: params.sessionId,
 			label: "session_chunks",
 			collection: sessionChunksCollection(this.db, this.prefix),
 			collectionName: `${this.prefix}session_chunks`,
@@ -4058,6 +4141,9 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		if (isEvidenceMirrorEnabled()) {
 			await this.waitForBenchmarkSearchCollectionConvergence({
 				agentId: params.agentId,
+				scope: params.scope,
+				scopeRef: params.scopeRef,
+				sessionId: params.sessionId,
 				label: "memory_evidence",
 				collection: memoryEvidenceCollection(this.db, this.prefix),
 				collectionName: `${this.prefix}memory_evidence`,
@@ -4069,15 +4155,24 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 
 	async waitForBenchmarkSearchReadiness(params?: {
 		retrievalLane?: BenchmarkRetrievalLane
+		scope?: MemoryScope
+		scopeRef?: string
+		sessionId?: string
 	}): Promise<void> {
 		await this.waitForBenchmarkSearchConvergence({
 			agentId: this.agentId,
 			retrievalLane: params?.retrievalLane,
+			scope: params?.scope,
+			scopeRef: params?.scopeRef,
+			sessionId: params?.sessionId,
 		})
 	}
 
 	private async waitForBenchmarkVectorSearchCollectionConvergence(params: {
 		agentId: string
+		scope?: MemoryScope
+		scopeRef?: string
+		sessionId?: string
 		label: string
 		collection: Collection<Document>
 		collectionName: string
@@ -4094,6 +4189,13 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 			textPath,
 			requireSearchableDocuments = false,
 		} = params
+		const namespace = {
+			agentId,
+			scope: params.scope,
+			scopeRef: params.scopeRef,
+			sessionId: params.sessionId,
+		}
+		const scopeFilter = benchmarkConvergenceFilter(namespace)
 		const mongoCfg = this.config.mongodb!
 		if (
 			mongoCfg.embeddingMode !== "automated" ||
@@ -4110,7 +4212,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		const expectedDocs = await collection
 			.find(
 				{
-					agentId,
+					...scopeFilter,
 					[textPath]: { $type: "string", $ne: "" },
 				},
 				{ projection: { [textPath]: 1 } },
@@ -4168,8 +4270,9 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 			indexName,
 			numCandidates: Math.max(limit, Math.min(expectedCount * 4, 10_000)),
 			limit,
-			filter: { agentId },
+			filter: scopeFilter,
 			textFieldPath: textPath,
+			exact: true,
 		})
 		if (!vectorStage) {
 			if (isBenchmarkStrictMode()) {
@@ -4274,6 +4377,9 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 
 	private async waitForBenchmarkSearchCollectionConvergence(params: {
 		agentId: string
+		scope?: MemoryScope
+		scopeRef?: string
+		sessionId?: string
 		label: string
 		collection: Collection<Document>
 		collectionName: string
@@ -4282,6 +4388,14 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 	}): Promise<void> {
 		const { agentId, label, collection, collectionName, indexName, textPath } =
 			params
+		const namespace = {
+			agentId,
+			scope: params.scope,
+			scopeRef: params.scopeRef,
+			sessionId: params.sessionId,
+		}
+		const scopeFilter = benchmarkConvergenceFilter(namespace)
+		const searchFilters = benchmarkSearchEqualsFilters(namespace)
 		if (!this.capabilities.textSearch) {
 			if (isBenchmarkStrictMode()) {
 				throw new Error(
@@ -4294,7 +4408,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		const expectedDocs = await collection
 			.find(
 				{
-					agentId,
+					...scopeFilter,
 					[textPath]: { $type: "string", $ne: "" },
 				},
 				{ projection: { [textPath]: 1 } },
@@ -4368,7 +4482,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 								$search: {
 									index: indexName,
 									compound: {
-										filter: [{ equals: { path: "agentId", value: agentId } }],
+										filter: searchFilters,
 										must: [
 											{
 												// Atlas Search `exists` can report zero for analyzed string
@@ -4419,7 +4533,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 									$search: {
 										index: indexName,
 										compound: {
-											filter: [{ equals: { path: "agentId", value: agentId } }],
+											filter: searchFilters,
 											must: [
 												{
 													text: {

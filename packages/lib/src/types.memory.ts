@@ -35,6 +35,14 @@ export type MemoryMongoDBConfig = {
 	numDimensions?: number
 	maxPoolSize?: number
 	minPoolSize?: number
+	maxConnecting?: number
+	maxIdleTimeMs?: number
+	networkFamily?: 4 | 6
+	socketTimeoutMs?: number
+	serverSelectionTimeoutMs?: number
+	heartbeatFrequencyMs?: number
+	serverMonitoringMode?: "auto" | "stream" | "poll"
+	waitQueueTimeoutMs?: number
 	embeddingCacheTtlDays?: number
 	memoryTtlDays?: number
 	enableChangeStreams?: boolean

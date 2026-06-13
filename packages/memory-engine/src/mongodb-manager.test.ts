@@ -692,6 +692,104 @@ describe("benchmark event search convergence", () => {
 		}
 	})
 
+	it("narrows MongoDB Search convergence probes to scope filters", async () => {
+		const previousStrict = process.env.MEMONGO_BENCHMARK_STRICT
+		const previousTimeout =
+			process.env.MEMONGO_BENCHMARK_EVENT_SEARCH_SETTLE_TIMEOUT_MS
+		const previousProbeTimeout =
+			process.env.MEMONGO_BENCHMARK_EVENT_SEARCH_PROBE_MAX_TIME_MS
+		process.env.MEMONGO_BENCHMARK_STRICT = "1"
+		process.env.MEMONGO_BENCHMARK_EVENT_SEARCH_SETTLE_TIMEOUT_MS = "1500"
+		process.env.MEMONGO_BENCHMARK_EVENT_SEARCH_PROBE_MAX_TIME_MS = "1234"
+		try {
+			const { readSearchIndexStatus } = await import(
+				"./mongodb-benchmark-readiness.js"
+			)
+			mocked(readSearchIndexStatus).mockResolvedValue({
+				kind: "ok",
+				status: "READY",
+				queryable: true,
+				indexName: "events_text",
+			})
+			const aggregate = vi.fn().mockReturnValue({
+				toArray: vi.fn().mockResolvedValue([{ count: 2 }]),
+			})
+			const find = makeSearchableFind()
+			const manager = makeSearchConvergenceManager()
+
+			await (
+				MongoDBMemoryManager.prototype as unknown as {
+					waitForBenchmarkSearchCollectionConvergence: (
+						this: MongoDBMemoryManager,
+						params: {
+							agentId: string
+							scope?:
+								| "session"
+								| "user"
+								| "agent"
+								| "workspace"
+								| "tenant"
+								| "global"
+							scopeRef?: string
+							sessionId?: string
+							label: string
+							collection: unknown
+							collectionName: string
+							indexName: string
+							textPath: string
+						},
+					) => Promise<void>
+				}
+			).waitForBenchmarkSearchCollectionConvergence.call(manager, {
+				agentId: "agent-1",
+				scope: "user",
+				scopeRef: "user:bench-17",
+				sessionId: "bench-17",
+				label: "events",
+				collection: { find, aggregate },
+				collectionName: "test_events",
+				indexName: "test_events_text",
+				textPath: "body",
+			})
+
+			expect(find).toHaveBeenCalledWith(
+				{
+					agentId: "agent-1",
+					scope: "user",
+					scopeRef: "user:bench-17",
+					sessionId: "bench-17",
+					body: { $type: "string", $ne: "" },
+				},
+				{ projection: { body: 1 } },
+			)
+			const [pipeline] = aggregate.mock.calls[0]
+			expect(pipeline[0].$search.compound.filter).toEqual([
+				{ equals: { path: "agentId", value: "agent-1" } },
+				{ equals: { path: "scope", value: "user" } },
+				{ equals: { path: "scopeRef", value: "user:bench-17" } },
+				{ equals: { path: "sessionId", value: "bench-17" } },
+			])
+		} finally {
+			if (previousStrict === undefined) {
+				delete process.env.MEMONGO_BENCHMARK_STRICT
+			} else {
+				process.env.MEMONGO_BENCHMARK_STRICT = previousStrict
+			}
+			if (previousTimeout === undefined) {
+				delete process.env.MEMONGO_BENCHMARK_EVENT_SEARCH_SETTLE_TIMEOUT_MS
+			} else {
+				process.env.MEMONGO_BENCHMARK_EVENT_SEARCH_SETTLE_TIMEOUT_MS =
+					previousTimeout
+			}
+			if (previousProbeTimeout === undefined) {
+				delete process.env.MEMONGO_BENCHMARK_EVENT_SEARCH_PROBE_MAX_TIME_MS
+			} else {
+				process.env.MEMONGO_BENCHMARK_EVENT_SEARCH_PROBE_MAX_TIME_MS =
+					previousProbeTimeout
+			}
+		}
+	})
+
 	// Task 1.5 — readSearchIndexStatus delegation tests.
 	// The readSearchIndexStatus helper is mocked at module scope; each test
 	// overrides the return value for that test.
@@ -1027,19 +1125,37 @@ describe("benchmark event search convergence", () => {
 						params: {
 							agentId: string
 							retrievalLane?: "native" | "raw-session"
+							scope?:
+								| "session"
+								| "user"
+								| "agent"
+								| "workspace"
+								| "tenant"
+								| "global"
+							scopeRef?: string
+							sessionId?: string
 						},
 					) => Promise<void>
 				}
 			).waitForBenchmarkSearchConvergence.call(manager, {
 				agentId: "agent-raw",
 				retrievalLane: "raw-session",
+				scope: "user",
+				scopeRef: "user:bench-17",
+				sessionId: "bench-17",
 			})
 
 			expect(aggregate).toHaveBeenCalledWith(
 				[
 					{
 						$vectorSearch: expect.objectContaining({
-							filter: { agentId: "agent-raw" },
+							exact: true,
+							filter: {
+								agentId: "agent-raw",
+								scope: "user",
+								scopeRef: "user:bench-17",
+								sessionId: "bench-17",
+							},
 							index: "test_session_chunks_vector",
 							model: "voyage-4-large",
 							path: "text",
@@ -1049,6 +1165,22 @@ describe("benchmark event search convergence", () => {
 					{ $count: "count" },
 				],
 				{ maxTimeMS: 1234, signal: expect.any(AbortSignal) },
+			)
+			expect(
+				(
+					mocked(sessionChunksCollection).mock.results[0]?.value as {
+						find: ReturnType<typeof vi.fn>
+					}
+				).find,
+			).toHaveBeenCalledWith(
+				{
+					agentId: "agent-raw",
+					scope: "user",
+					scopeRef: "user:bench-17",
+					sessionId: "bench-17",
+					text: { $type: "string", $ne: "" },
+				},
+				{ projection: { text: 1 } },
 			)
 			expect(eventsCollection).not.toHaveBeenCalled()
 			expect(chunksCollection).not.toHaveBeenCalled()
@@ -3899,6 +4031,96 @@ describe("scope-safe cache writes", () => {
 			...overrides,
 		}) as MongoDBMemoryManager
 	}
+
+	it("scales default searchDetailed numCandidates with requested top-k", async () => {
+		mocked(planRetrieval).mockReturnValue({
+			paths: ["hybrid"],
+			confidence: "high",
+			reasoning: "test numCandidates scaling",
+			constraints: {},
+		})
+		mocked(chunksCollection).mockReturnValue({
+			aggregate: vi.fn().mockReturnValue({
+				toArray: vi.fn().mockResolvedValue([]),
+			}),
+		} as never)
+
+		const manager = buildMockManager({
+			config: {
+				mongodb: {
+					embeddingMode: "automated",
+					fusionMethod: "rankFusion",
+					numCandidates: 500,
+					cache: {
+						enabled: false,
+						conversationTtlSec: 300,
+						kbTtlSec: 600,
+					},
+					kb: { enabled: false },
+					episodes: { enabled: false },
+					graph: { enabled: false },
+					reranking: { enabled: false },
+					queryRewriting: { enabled: false },
+				},
+			},
+		})
+
+		const top50 = await manager.searchDetailed({
+			query: "what changed?",
+			maxResults: 50,
+		})
+		const top200 = await manager.searchDetailed({
+			query: "what changed?",
+			maxResults: 200,
+		})
+
+		expect(top50.metadata.resolvedSearchConfig?.numCandidates).toBe(1000)
+		expect(top200.metadata.resolvedSearchConfig?.numCandidates).toBe(4000)
+	})
+
+	it("keeps explicit searchDetailed numCandidates overrides", async () => {
+		mocked(planRetrieval).mockReturnValue({
+			paths: ["hybrid"],
+			confidence: "high",
+			reasoning: "test explicit numCandidates",
+			constraints: {},
+		})
+		mocked(chunksCollection).mockReturnValue({
+			aggregate: vi.fn().mockReturnValue({
+				toArray: vi.fn().mockResolvedValue([]),
+			}),
+		} as never)
+
+		const manager = buildMockManager({
+			config: {
+				mongodb: {
+					embeddingMode: "automated",
+					fusionMethod: "rankFusion",
+					numCandidates: 500,
+					cache: {
+						enabled: false,
+						conversationTtlSec: 300,
+						kbTtlSec: 600,
+					},
+					kb: { enabled: false },
+					episodes: { enabled: false },
+					graph: { enabled: false },
+					reranking: { enabled: false },
+					queryRewriting: { enabled: false },
+				},
+			},
+		})
+
+		const response = await manager.searchDetailed({
+			query: "what changed?",
+			maxResults: 50,
+			searchConfig: {
+				numCandidates: 750,
+			},
+		})
+
+		expect(response.metadata.resolvedSearchConfig?.numCandidates).toBe(750)
+	})
 
 	it("search() writes cache with session scope when sessionKey is provided", async () => {
 		// Cache miss so the search pipeline runs

@@ -251,6 +251,42 @@ describe("resolveMemoryBackendConfig", () => {
 		expect(resolved.mongodb!.maxPoolSize).toBe(20)
 	})
 
+	it("resolves MongoDB connection pool overrides from env", () => {
+		vi.stubEnv("MEMONGO_MONGODB_MAX_POOL_SIZE", "6")
+		vi.stubEnv("MEMONGO_MONGODB_MIN_POOL_SIZE", "0")
+		vi.stubEnv("MEMONGO_MONGODB_MAX_CONNECTING", "2")
+		vi.stubEnv("MEMONGO_MONGODB_MAX_IDLE_TIME_MS", "120000")
+		vi.stubEnv("MEMONGO_MONGODB_SOCKET_TIMEOUT_MS", "180000")
+		vi.stubEnv("MEMONGO_MONGODB_WAIT_QUEUE_TIMEOUT_MS", "30000")
+		vi.stubEnv("MEMONGO_MONGODB_CONNECT_TIMEOUT_MS", "30000")
+		vi.stubEnv("MEMONGO_MONGODB_SERVER_SELECTION_TIMEOUT_MS", "120000")
+		vi.stubEnv("MEMONGO_MONGODB_HEARTBEAT_FREQUENCY_MS", "5000")
+		vi.stubEnv("MEMONGO_MONGODB_SERVER_MONITORING_MODE", "poll")
+		vi.stubEnv("MEMONGO_MONGODB_NETWORK_FAMILY", "4")
+		const cfg = {
+			agents: { defaults: { workspace: "/tmp/memory-test" } },
+			memory: {
+				backend: "mongodb",
+				mongodb: { uri: "mongodb://localhost:27017", maxPoolSize: 20 },
+			},
+		} as unknown as MemongoConfig
+
+		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
+
+		expect(resolved.mongodb!.maxPoolSize).toBe(6)
+		expect(resolved.mongodb!.minPoolSize).toBe(0)
+		expect(resolved.mongodb!.maxConnecting).toBe(2)
+		expect(resolved.mongodb!.maxIdleTimeMs).toBe(120000)
+		expect(resolved.mongodb!.socketTimeoutMs).toBe(180000)
+		expect(resolved.mongodb!.waitQueueTimeoutMs).toBe(30000)
+		expect(resolved.mongodb!.connectTimeoutMs).toBe(30000)
+		expect(resolved.mongodb!.serverSelectionTimeoutMs).toBe(120000)
+		expect(resolved.mongodb!.heartbeatFrequencyMs).toBe(5000)
+		expect(resolved.mongodb!.serverMonitoringMode).toBe("poll")
+		expect(resolved.mongodb!.networkFamily).toBe(4)
+		vi.unstubAllEnvs()
+	})
+
 	it("resolves embeddingCacheTtlDays with default 30", () => {
 		const cfg = {
 			agents: { defaults: { workspace: "/tmp/memory-test" } },

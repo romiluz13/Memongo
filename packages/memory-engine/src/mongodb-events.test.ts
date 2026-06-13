@@ -24,6 +24,7 @@ import {
 	getUnconsolidatedEvents,
 	projectChunksFromEvents,
 	getSessionEventsWithBound,
+	isTransientMongoWriteError,
 	type CanonicalEvent,
 } from "./mongodb-events.js"
 import { eventsCollection, chunksCollection } from "./mongodb-schema.js"
@@ -138,6 +139,67 @@ describe("writeEvent", () => {
 		expect(result.eventId).toBe("existing-id")
 		// updateOne was called (idempotent upsert, not an error)
 		expect(col.updateOne).toHaveBeenCalledOnce()
+	})
+
+	it("retries transient MongoDB write errors with the same eventId", async () => {
+		vi.useFakeTimers()
+		const col = createMockEventsCol()
+		vi.mocked(col.updateOne)
+			.mockRejectedValueOnce(
+				Object.assign(
+					new Error(
+						"Connection to memongo-shard interrupted due to server monitor timeout",
+					),
+					{ name: "MongoNetworkError" },
+				),
+			)
+			.mockResolvedValueOnce({
+				upsertedCount: 1,
+				upsertedId: "new-id",
+				modifiedCount: 0,
+				matchedCount: 0,
+				acknowledged: true,
+			})
+		vi.mocked(eventsCollection).mockReturnValue(col)
+
+		const promise = writeEvent({
+			db: mockDb(),
+			prefix: "test_",
+			event: {
+				agentId: "agent-1",
+				role: "user",
+				body: "Hello world",
+				scope: "agent",
+				scopeRef: "agent:agent-1",
+			},
+		})
+		await vi.advanceTimersByTimeAsync(1_000)
+		const result = await promise
+		vi.useRealTimers()
+
+		expect(result.eventId).toBeDefined()
+		expect(col.updateOne).toHaveBeenCalledTimes(2)
+		const [firstFilter] = vi.mocked(col.updateOne).mock.calls[0]
+		const [secondFilter] = vi.mocked(col.updateOne).mock.calls[1]
+		expect(secondFilter).toEqual(firstFilter)
+	})
+
+	it("classifies retryable MongoDB write labels as transient", () => {
+		const err = {
+			hasErrorLabel: (label: string) => label === "NoWritesPerformed",
+		}
+
+		expect(isTransientMongoWriteError(err)).toBe(true)
+		expect(isTransientMongoWriteError(new Error("getaddrinfo ENOTFOUND"))).toBe(
+			true,
+		)
+		expect(isTransientMongoWriteError(new Error("ReplicaSetNoPrimary"))).toBe(
+			true,
+		)
+		expect(isTransientMongoWriteError(new Error("connect ECONNREFUSED"))).toBe(
+			true,
+		)
+		expect(isTransientMongoWriteError(new Error("duplicate key"))).toBe(false)
 	})
 
 	it("defaults scope to agent when not provided", async () => {

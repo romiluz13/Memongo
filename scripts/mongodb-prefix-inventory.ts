@@ -97,6 +97,15 @@ function detectPrefix(collectionName: string): string | null {
 	return null
 }
 
+function isNamespaceNotFound(error: unknown): boolean {
+	return (
+		typeof error === "object" &&
+		error !== null &&
+		"code" in error &&
+		(error as { code?: unknown }).code === 26
+	)
+}
+
 async function listSearchIndexCount(
 	client: MongoClient,
 	database: string,
@@ -207,7 +216,13 @@ try {
 			searchIndexes: includeSearchIndexes ? 0 : null,
 		}
 		summary.collections += 1
-		const indexes = await db.collection(name).indexes()
+		let indexes
+		try {
+			indexes = await db.collection(name).indexes()
+		} catch (error) {
+			if (isNamespaceNotFound(error)) continue
+			throw error
+		}
 		summary.classicIndexes += indexes.length
 		summary.nonIdClassicIndexes += indexes.filter(
 			(index) => index.name !== "_id_",

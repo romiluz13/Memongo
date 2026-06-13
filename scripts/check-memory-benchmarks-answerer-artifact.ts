@@ -7,7 +7,11 @@ export type AnswererArtifactStatus = {
 	artifactPath: string
 	mode: string | null
 	evaluations: number
+	nonAbstentionEvaluations: number
 	cutoffsChecked: string[]
+	blankGeneratedAnswers: number
+	emptyRetrievals: number
+	emptyRetrievalQuestionIds: string[]
 	failures: string[]
 	warnings: string[]
 }
@@ -53,6 +57,9 @@ export function evaluateAnswererArtifact(
 		? payload.evaluations
 		: []
 	const cutoffsChecked = new Set<string>()
+	const emptyRetrievalQuestionIds: string[] = []
+	let nonAbstentionEvaluations = 0
+	let blankGeneratedAnswers = 0
 
 	if (options.requireAnswererMode !== false && mode && mode !== "answerer") {
 		failures.push(`metadata.mode=${mode}; expected answerer`)
@@ -69,6 +76,10 @@ export function evaluateAnswererArtifact(
 		const cutoffResults = asRecord(evaluation.cutoff_results)
 		const entries = cutoffEntries(cutoffResults, options.cutoff)
 
+		if (!isAbstention) {
+			nonAbstentionEvaluations += 1
+		}
+
 		if (entries.length === 0) {
 			failures.push(`${questionId} (${questionType}): cutoff_results missing`)
 			continue
@@ -77,12 +88,15 @@ export function evaluateAnswererArtifact(
 		for (const [label, result] of entries) {
 			cutoffsChecked.add(label)
 			if (Object.keys(result).length === 0) {
-				failures.push(`${questionId} (${questionType}) ${label}: result missing`)
+				failures.push(
+					`${questionId} (${questionType}) ${label}: result missing`,
+				)
 				continue
 			}
 
 			const generatedAnswer = asString(result.generated_answer).trim()
 			if (!isAbstention && !generatedAnswer) {
+				blankGeneratedAnswers += 1
 				failures.push(
 					`${questionId} (${questionType}) ${label}: generated_answer is empty`,
 				)
@@ -90,7 +104,9 @@ export function evaluateAnswererArtifact(
 
 			const judgeRaw = asString(result.judge_raw).trim()
 			if (!judgeRaw) {
-				warnings.push(`${questionId} (${questionType}) ${label}: judge_raw empty`)
+				warnings.push(
+					`${questionId} (${questionType}) ${label}: judge_raw empty`,
+				)
 			}
 		}
 
@@ -99,7 +115,10 @@ export function evaluateAnswererArtifact(
 			? retrieval.search_results
 			: []
 		if (!isAbstention && searchResults.length === 0) {
-			failures.push(`${questionId} (${questionType}): retrieval.search_results empty`)
+			emptyRetrievalQuestionIds.push(questionId)
+			failures.push(
+				`${questionId} (${questionType}): retrieval.search_results empty`,
+			)
 		}
 	}
 
@@ -108,7 +127,11 @@ export function evaluateAnswererArtifact(
 		artifactPath,
 		mode,
 		evaluations: evaluations.length,
+		nonAbstentionEvaluations,
 		cutoffsChecked: [...cutoffsChecked].sort(),
+		blankGeneratedAnswers,
+		emptyRetrievals: emptyRetrievalQuestionIds.length,
+		emptyRetrievalQuestionIds,
 		failures,
 		warnings,
 	}
@@ -150,9 +173,17 @@ function renderStatus(status: AnswererArtifactStatus): string {
 		`artifact: ${status.artifactPath}`,
 		`mode: ${status.mode ?? "unknown"}`,
 		`evaluations: ${status.evaluations}`,
+		`non-abstention evaluations: ${status.nonAbstentionEvaluations}`,
 		`cutoffs: ${status.cutoffsChecked.join(", ") || "none"}`,
+		`blank generated answers: ${status.blankGeneratedAnswers}`,
+		`empty retrievals: ${status.emptyRetrievals}`,
 		`status: ${status.ok ? "PASS" : "FAIL"}`,
 	]
+	if (status.emptyRetrievalQuestionIds.length > 0) {
+		lines.push(
+			`empty retrieval question ids: ${status.emptyRetrievalQuestionIds.join(", ")}`,
+		)
+	}
 	if (status.failures.length > 0) {
 		lines.push("", "failures:")
 		for (const failure of status.failures) lines.push(`- ${failure}`)
@@ -175,7 +206,9 @@ if (import.meta.main) {
 		if (!existsSync(parsed.artifactPath)) {
 			throw new Error(`artifact not found: ${parsed.artifactPath}`)
 		}
-		const payload = JSON.parse(readFileSync(parsed.artifactPath, "utf8")) as JsonRecord
+		const payload = JSON.parse(
+			readFileSync(parsed.artifactPath, "utf8"),
+		) as JsonRecord
 		const status = evaluateAnswererArtifact(
 			payload,
 			parsed.artifactPath,

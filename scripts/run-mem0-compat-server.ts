@@ -1,7 +1,9 @@
 import {
 	memongoBridgeReadFile,
+	memongoBridgeRecallConversation,
 	memongoBridgeSearchDetailed,
 	memongoBridgeShutdown,
+	memongoBridgeStatus,
 	memongoBridgeWaitForBenchmarkSearchReadiness,
 	memongoBridgeWriteConversationEvent,
 } from "@memongo/memory-bridge"
@@ -10,9 +12,20 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import {
 	buildActionEvidenceResults,
+	buildArithmeticTotalEvidenceResults,
+	buildAttributeEvidenceResults,
+	buildAssistantRecallEvidenceResults,
+	buildAssistantRecallQueries,
 	buildCountEvidenceResults,
+	buildCurrentStateEvidenceResults,
+	buildPercentageComparisonEvidenceResults,
 	buildPreferenceEvidenceResults,
+	buildRemainingTotalEvidenceResults,
+	buildSupplementalSearchQueries,
+	buildTemporalOrderEvidenceResults,
 	hasCountIntent,
+	selectCountSupportingRawResults,
+	type AssistantRecallResult,
 	type BridgeSearchResult,
 	type Mem0CompatSearchResult,
 } from "./mem0-compat-count-policy.js"
@@ -50,10 +63,12 @@ const searchSettleMs = Math.max(
 const memoryTextMaxChars = Math.max(
 	120,
 	Number.parseInt(
-		process.env.MEMONGO_MEM0_COMPAT_MEMORY_TEXT_MAX_CHARS ?? "420",
+		process.env.MEMONGO_MEM0_COMPAT_MEMORY_TEXT_MAX_CHARS ?? "900",
 		10,
 	),
 )
+const compatAgentId =
+	process.env.MEMONGO_MEM0_COMPAT_AGENT_ID?.trim() || "mem0-compat"
 const strictCompat =
 	process.env.MEMONGO_MEM0_COMPAT_STRICT?.trim().toLowerCase() !== "0" &&
 	process.env.MEMONGO_MEM0_COMPAT_STRICT?.trim().toLowerCase() !== "false"
@@ -106,6 +121,8 @@ if (!process.env.MEMONGO_MONGODB_URI) {
 
 process.env.MEMONGO_BENCHMARK_DERIVED_WORK_MODE ??=
 	process.env.MEMONGO_MEM0_COMPAT_DERIVED_WORK_MODE ?? "disabled"
+process.env.MEMONGO_RERANKING_ENABLED ??=
+	process.env.MEMONGO_MEM0_COMPAT_RERANKING_ENABLED ?? "false"
 if (strictCompat) {
 	process.env.MEMONGO_BENCHMARK_STRICT ??= "1"
 	process.env.MEMONGO_STRICT_SEARCH_INDEX_READY ??= "1"
@@ -114,6 +131,20 @@ if (strictCompat) {
 	process.env.MEMONGO_BENCHMARK_EVENT_SEARCH_PROBE_MAX_TIME_MS ??= "30000"
 	process.env.MEMONGO_BENCHMARK_VECTOR_SEARCH_SETTLE_TIMEOUT_MS ??= "300000"
 	process.env.MEMONGO_BENCHMARK_VECTOR_SEARCH_PROBE_MAX_TIME_MS ??= "30000"
+	process.env.MEMONGO_MONGODB_CONNECT_TIMEOUT_MS ??= "30000"
+	process.env.MEMONGO_MONGODB_SERVER_SELECTION_TIMEOUT_MS ??= "120000"
+	process.env.MEMONGO_MONGODB_MAX_POOL_SIZE ??= "6"
+	process.env.MEMONGO_MONGODB_MIN_POOL_SIZE ??= "0"
+	process.env.MEMONGO_MONGODB_MAX_CONNECTING ??= "2"
+	process.env.MEMONGO_MONGODB_MAX_IDLE_TIME_MS ??= "120000"
+	process.env.MEMONGO_MONGODB_NETWORK_FAMILY ??= "4"
+	process.env.MEMONGO_MONGODB_SOCKET_TIMEOUT_MS ??= "180000"
+	process.env.MEMONGO_MONGODB_WAIT_QUEUE_TIMEOUT_MS ??= "30000"
+	process.env.MEMONGO_MONGODB_HEARTBEAT_FREQUENCY_MS ??= "5000"
+	process.env.MEMONGO_MONGODB_SERVER_MONITORING_MODE ??= "poll"
+	process.env.MEMONGO_MONGODB_TRANSIENT_WRITE_RETRY_ATTEMPTS ??= "8"
+	process.env.MEMONGO_MONGODB_TRANSIENT_WRITE_RETRY_MIN_DELAY_MS ??= "1000"
+	process.env.MEMONGO_MONGODB_TRANSIENT_WRITE_RETRY_MAX_DELAY_MS ??= "30000"
 }
 
 if (!process.env.MEMONGO_WORKSPACE_DIR) {
@@ -173,10 +204,17 @@ async function waitForSearchSettle(userId: string): Promise<number> {
 async function waitForSearchReadiness(userId: string): Promise<number> {
 	const startedAt = Date.now()
 	await memongoBridgeWaitForBenchmarkSearchReadiness({
-		agentId: userId,
+		agentId: compatAgentId,
 		retrievalLane: "native",
+		scope: "user",
+		scopeRef: userScopeRef(userId),
+		sessionId: userId,
 	})
 	return Date.now() - startedAt
+}
+
+function userScopeRef(userId: string): string {
+	return `user:${userId}`
 }
 
 function queryTerms(query: string): string[] {
@@ -296,7 +334,9 @@ function materializedPathForResult(result: BridgeSearchResult): string | null {
 	if (result.path?.startsWith("events/")) {
 		return result.path
 	}
-	const eventId = result.sourceEventIds?.find((value) => value.trim().length > 0)
+	const eventId = result.sourceEventIds?.find(
+		(value) => value.trim().length > 0,
+	)
 	return eventId ? `event:${eventId}` : null
 }
 
@@ -337,7 +377,7 @@ async function resultText(
 		return result.path ?? ""
 	}
 	const maxChars = hasCountIntent(query)
-		? Math.min(memoryTextMaxChars, 260)
+		? Math.min(memoryTextMaxChars, 700)
 		: memoryTextMaxChars
 	const clipped = compactTextForQuery(text, query, maxChars)
 	const date = result.timestamp?.toISOString?.().slice(0, 10)
@@ -345,13 +385,130 @@ async function resultText(
 	return date ? `${date} ${source}: ${clipped}` : `${source}: ${clipped}`
 }
 
+async function assistantRecallResults(
+	query: string,
+	userId: string,
+): Promise<AssistantRecallResult[]> {
+	const queries = buildAssistantRecallQueries(query)
+	if (queries.length === 0) {
+		return []
+	}
+	const seen = new Set<string>()
+	const results: AssistantRecallResult[] = []
+	for (const recallQuery of queries) {
+		const response = await memongoBridgeRecallConversation({
+			agentId: compatAgentId,
+			query: recallQuery,
+			sessionId: userId,
+			roles: ["assistant"],
+			limit: 8,
+		})
+		for (const result of response.results as AssistantRecallResult[]) {
+			const id = result.citation?.eventId
+			if (!id || seen.has(id)) {
+				continue
+			}
+			seen.add(id)
+			results.push(await rehydrateAssistantRecallResult(result))
+		}
+	}
+	return results
+}
+
+function mergeSearchResults(
+	primary: BridgeSearchResult[],
+	supplemental: BridgeSearchResult[],
+): BridgeSearchResult[] {
+	const seen = new Set<string>()
+	const merged: BridgeSearchResult[] = []
+	for (const result of [...supplemental, ...primary]) {
+		const key = result.canonicalId ?? result.path ?? result.snippet
+		if (!key || seen.has(key)) {
+			continue
+		}
+		seen.add(key)
+		merged.push(result)
+	}
+	return merged
+}
+
+async function supplementalSearchResults(
+	query: string,
+	userId: string,
+	maxResults: number,
+): Promise<BridgeSearchResult[]> {
+	const queries = buildSupplementalSearchQueries(query)
+	if (queries.length === 0) {
+		return []
+	}
+	const results: BridgeSearchResult[] = []
+	for (const supplementalQuery of queries) {
+		const detailed = await memongoBridgeSearchDetailed({
+			agentId: compatAgentId,
+			query: supplementalQuery,
+			scope: "user",
+			scopeRef: userScopeRef(userId),
+			maxResults: Math.min(Math.max(maxResults, 50), 120),
+			searchMode: "direct",
+			sourcePreference: ["conversation"],
+			needExactEvidence: true,
+			searchConfig: {
+				maxResults: Math.min(Math.max(maxResults, 50), 120),
+				searchMode: "direct",
+				sourcePreference: ["conversation"],
+				needExactEvidence: true,
+			},
+		})
+		results.push(...(detailed.results as BridgeSearchResult[]))
+	}
+	return results
+}
+
+async function rehydrateAssistantRecallResult(
+	result: AssistantRecallResult,
+): Promise<AssistantRecallResult> {
+	const eventId = result.citation?.eventId?.trim()
+	if (!eventId) {
+		return result
+	}
+	try {
+		const materialized = await memongoBridgeReadFile({
+			agentId: compatAgentId,
+			relPath: `event:${eventId}`,
+		})
+		const text =
+			typeof materialized.text === "string" ? materialized.text.trim() : ""
+		if (!text) {
+			return result
+		}
+		return {
+			...result,
+			citation: {
+				...result.citation,
+				preview: text,
+			},
+		}
+	} catch (error) {
+		if (strictCompat) {
+			throw error
+		}
+		return result
+	}
+}
+
 const server = Bun.serve({
 	port,
+	idleTimeout: 120,
 	async fetch(request) {
 		const url = new URL(request.url)
 		try {
 			if (request.method === "GET" && url.pathname === "/health") {
 				return json({ ok: true, service: "memongo-mem0-compat" })
+			}
+
+			if (request.method === "GET" && url.pathname === "/ready") {
+				const status = await memongoBridgeStatus({ agentId: compatAgentId })
+				return json({ ok: true, service: "memongo-mem0-compat", status })
 			}
 
 			if (request.method === "POST" && url.pathname === "/memories") {
@@ -369,10 +526,12 @@ const server = Bun.serve({
 						continue
 					}
 					const written = await memongoBridgeWriteConversationEvent({
-						agentId: userId,
+						agentId: compatAgentId,
 						role: normalizeRole(message.role),
 						body: content,
 						sessionId: userId,
+						scope: "user",
+						scopeRef: userScopeRef(userId),
 						timestamp,
 						metadata: {
 							benchmarkAdapter: "mem0-oss-compat",
@@ -403,8 +562,10 @@ const server = Bun.serve({
 				const settle_wait_ms = await waitForSearchSettle(userId)
 				const readiness_wait_ms = await waitForSearchReadiness(userId)
 				const detailed = await memongoBridgeSearchDetailed({
-					agentId: userId,
+					agentId: compatAgentId,
 					query,
+					scope: "user",
+					scopeRef: userScopeRef(userId),
 					maxResults,
 					searchMode: "direct",
 					sourcePreference: ["conversation"],
@@ -417,10 +578,53 @@ const server = Bun.serve({
 					},
 				})
 				const results = detailed.results as BridgeSearchResult[]
+				const evidenceResults = mergeSearchResults(
+					results,
+					await supplementalSearchResults(query, userId, maxResults),
+				)
+				const actionEvidence = buildActionEvidenceResults(
+					query,
+					evidenceResults,
+				)
+				const assistantRecallEvidence = buildAssistantRecallEvidenceResults(
+					query,
+					await assistantRecallResults(query, userId),
+				)
+				const countEvidence = buildCountEvidenceResults(query, evidenceResults)
+				const percentageComparisonEvidence =
+					buildPercentageComparisonEvidenceResults(query, evidenceResults)
+				const remainingTotalEvidence = buildRemainingTotalEvidenceResults(
+					query,
+					evidenceResults,
+				)
+				const arithmeticTotalEvidence = buildArithmeticTotalEvidenceResults(
+					query,
+					evidenceResults,
+				)
+				const currentStateEvidence = buildCurrentStateEvidenceResults(
+					query,
+					evidenceResults,
+				)
+				const attributeEvidence = buildAttributeEvidenceResults(
+					query,
+					evidenceResults,
+				)
+				const preferenceEvidence = buildPreferenceEvidenceResults(
+					query,
+					evidenceResults,
+				)
+				const temporalOrderEvidence = buildTemporalOrderEvidenceResults(
+					query,
+					evidenceResults,
+				)
+				const rawResults =
+					countEvidence.length > 0
+						? selectCountSupportingRawResults(query, evidenceResults)
+						: evidenceResults
 				const formattedResults: Mem0CompatSearchResult[] = await Promise.all(
-					results.map(async (result) => ({
+					rawResults.map(async (result) => ({
 						id: result.canonicalId ?? result.path,
-						memory: await resultText(userId, query, result),
+						memory: await resultText(compatAgentId, query, result),
 						score: result.score,
 						created_at: result.timestamp?.toISOString?.(),
 						score_debug: result.scoreDetails
@@ -428,19 +632,20 @@ const server = Bun.serve({
 							: undefined,
 					})),
 				)
-				const actionEvidence = buildActionEvidenceResults(query, results)
-				const countEvidence = buildCountEvidenceResults(query, results)
-				const preferenceEvidence = buildPreferenceEvidenceResults(
-					query,
-					results,
-				)
 				return json({
 					settle_wait_ms,
 					readiness_wait_ms,
 					results: [
 						...actionEvidence,
+						...assistantRecallEvidence,
+						...percentageComparisonEvidence,
+						...remainingTotalEvidence,
+						...arithmeticTotalEvidence,
+						...currentStateEvidence,
+						...attributeEvidence,
 						...countEvidence,
 						...preferenceEvidence,
+						...temporalOrderEvidence,
 						...formattedResults,
 					].slice(0, maxResults),
 				})
@@ -465,7 +670,10 @@ const server = Bun.serve({
 
 console.log(`mem0-compat: listening on http://localhost:${server.port}`)
 
+const keepAlive = setInterval(() => {}, 60_000)
+
 const shutdown = async () => {
+	clearInterval(keepAlive)
 	server.stop(true)
 	await memongoBridgeShutdown()
 	process.exit(0)

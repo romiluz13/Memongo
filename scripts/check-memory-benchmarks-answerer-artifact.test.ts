@@ -28,17 +28,24 @@ function makeArtifact(generatedAnswer: string) {
 
 describe("evaluateAnswererArtifact", () => {
 	it("passes non-empty non-abstention answerer artifacts", () => {
-		const status = evaluateAnswererArtifact(makeArtifact("4 times"), "artifact.json")
+		const status = evaluateAnswererArtifact(
+			makeArtifact("4 times"),
+			"artifact.json",
+		)
 
 		expect(status.ok).toBe(true)
 		expect(status.failures).toEqual([])
 		expect(status.cutoffsChecked).toEqual(["top_50"])
+		expect(status.nonAbstentionEvaluations).toBe(1)
+		expect(status.blankGeneratedAnswers).toBe(0)
+		expect(status.emptyRetrievals).toBe(0)
 	})
 
 	it("fails empty generated answers for non-abstention questions", () => {
 		const status = evaluateAnswererArtifact(makeArtifact("  "), "artifact.json")
 
 		expect(status.ok).toBe(false)
+		expect(status.blankGeneratedAnswers).toBe(1)
 		expect(status.failures.join("\n")).toContain("generated_answer is empty")
 	})
 
@@ -49,7 +56,23 @@ describe("evaluateAnswererArtifact", () => {
 		const status = evaluateAnswererArtifact(artifact, "artifact.json")
 
 		expect(status.ok).toBe(false)
-		expect(status.failures.join("\n")).toContain("retrieval.search_results empty")
+		expect(status.emptyRetrievals).toBe(1)
+		expect(status.emptyRetrievalQuestionIds).toEqual(["q1"])
+		expect(status.failures.join("\n")).toContain(
+			"retrieval.search_results empty",
+		)
+	})
+
+	it("does not fail empty retrievals for abstention questions", () => {
+		const artifact = makeArtifact("I cannot answer from the provided context.")
+		artifact.evaluations[0].is_abstention = true
+		artifact.evaluations[0].retrieval.search_results = []
+
+		const status = evaluateAnswererArtifact(artifact, "artifact.json")
+
+		expect(status.ok).toBe(true)
+		expect(status.nonAbstentionEvaluations).toBe(0)
+		expect(status.emptyRetrievals).toBe(0)
 	})
 })
 

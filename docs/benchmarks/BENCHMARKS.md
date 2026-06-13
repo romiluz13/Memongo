@@ -2,7 +2,7 @@
 
 Status: publication evidence pack for the MemPalace P0 release scope.
 
-Last evidence refresh: 2026-05-28.
+Last evidence refresh: 2026-06-13.
 
 This document follows one rule: a benchmark row is public only when the run proves
 the product path being claimed. Every public row must include artifact paths,
@@ -37,7 +37,9 @@ Not allowed yet:
 
 These rows are artifact-backed and beat the matching MemPalace retrieval row.
 They are valid for scoped README language after release checks, secret scans, and
-reviewed commits pass.
+reviewed commits pass. The 2026-06-03 competitor refresh moved MemPalace to
+`02b8753d9759`; benchmark docs and committed result artifacts were unchanged, so
+the P0 rows remain valid unless a later artifact-shape audit finds a gap.
 
 | Status | Benchmark lane | Memongo | MemPalace | Verdict |
 | --- | --- | ---: | ---: | --- |
@@ -55,7 +57,8 @@ Rows below are promising but not publishable claims.
 | --- | --- | --- | --- |
 | PROMISING | LongMemEval held-out 450 raw session | Memongo session RecallAny@5 99.06%, internal R@5 97.14% | Do not compare directly to MemPalace held-out hybrid without lane wording |
 | INCOMPLETE | LLM/rerank rows | No Memongo full rerank lane artifact | Run and disclose Grove/model/reranker separately |
-| BLOCKED | Mem0/Supermemory/Zep/Letta/Mastra/OpenViking ecosystem rows | Repos exist locally | Memongo adapters and same-scorer runs required |
+| INCOMPLETE | Mem0 official `memory-benchmarks` rows | Latest full 500 Atlas Local Preview sharded rehearsal completed 20/20 shards, 500/500 predictions, 500/500 ingestion ledgers, zero empty retrievals, and exact-prefix cleanup. Saved-artifact GPT-5/Grove judging scored top-50 89.6% and top-200 90.4%, still below Mem0 committed 90.4%/93.4% rows; top-50 answerer validation failed on one blank non-abstention generated answer. | Fix generic blank-answer handling, multi-session current-state/count retrieval, stale/future evidence suppression, and answer-context packing; then rerun saved-artifact evaluation and only run another full retrieval batch after focused gates pass |
+| BLOCKED | Supermemory/Zep/Letta/Mastra/OpenViking ecosystem rows | Repos exist locally | Competitor command first, then Memongo adapter and same-scorer run |
 
 ## LongMemEval
 
@@ -249,8 +252,15 @@ Per-category Memongo hit@5:
 
 ## Next Run Queue
 
-1. Optional LongMemEval rerank lane with full model disclosure.
-2. Ecosystem adapters for Mem0, Supermemory, Zep, Letta, Mastra, and OpenViking.
+1. Mem0 official `memory-benchmarks` scoped 72-case Local Preview rehearsal on a
+   fresh benchmark-only deployment with `MEMONGO_BENCHMARK_SEARCH_INDEX_PROFILE=longmemeval`,
+   plus managed Atlas disclosure if Local Preview probe warnings persist.
+2. Mem0 LongMemEval top-50/top-200 full rows, followed by LoCoMo and BEAM rows
+   under the official scorer/model posture.
+3. Supermemory/MemoryBench provider adapter.
+4. Zep, Mastra, Hindsight, and OpenViking adapters only after reproducing each
+   competitor command.
+5. Optional LongMemEval rerank lane with full model disclosure.
 
 ## Validation Commands
 

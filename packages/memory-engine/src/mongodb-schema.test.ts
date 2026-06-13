@@ -1017,6 +1017,38 @@ describe("ensureSearchIndexes", () => {
 		}
 	})
 
+	it("does not set unsupported indexingMethod on autoEmbed vector indexes", async () => {
+		const previousProfile = process.env.MEMONGO_BENCHMARK_SEARCH_INDEX_PROFILE
+		process.env.MEMONGO_BENCHMARK_SEARCH_INDEX_PROFILE = "longmemeval"
+		try {
+			const db = mockDb()
+			await ensureSearchIndexes(db, "test_", "atlas-local-preview", "automated")
+
+			const chunks = db.collection("test_chunks") as unknown as {
+				createSearchIndex: ReturnType<typeof vi.fn>
+			}
+			const vectorCall = chunks.createSearchIndex.mock.calls.find(
+				(c: unknown[]) => (c[0] as Document).type === "vectorSearch",
+			)
+			expect(vectorCall).toBeDefined()
+			const fields = (vectorCall![0] as Document).definition
+				.fields as Document[]
+			expect(fields.find((field) => field.type === "autoEmbed")).toMatchObject({
+				path: "text",
+				model: "voyage-4-large",
+			})
+			expect(
+				fields.find((field) => field.type === "autoEmbed"),
+			).not.toHaveProperty("indexingMethod")
+		} finally {
+			if (previousProfile === undefined) {
+				delete process.env.MEMONGO_BENCHMARK_SEARCH_INDEX_PROFILE
+			} else {
+				process.env.MEMONGO_BENCHMARK_SEARCH_INDEX_PROFILE = previousProfile
+			}
+		}
+	})
+
 	it("includes filter fields (source, path, status) in vector index", async () => {
 		const db = mockDb()
 		await ensureSearchIndexes(db, "test_", "atlas-local-preview", "automated")
@@ -1177,6 +1209,58 @@ describe("search index readiness helpers", () => {
 			isSearchIndexQueryable({
 				name: "test_chunks_vector",
 				status: "READY",
+			}),
+		).toBe(true)
+	})
+
+	it("does not mark STALE indexes queryable even when MongoDB reports queryable=true", () => {
+		expect(
+			isSearchIndexQueryable({
+				name: "test_chunks_vector",
+				status: "STALE",
+				queryable: true,
+			}),
+		).toBe(false)
+	})
+
+	it("requires status and queryable evidence to agree when both are present", () => {
+		expect(
+			isSearchIndexQueryable({
+				name: "test_chunks_vector",
+				status: "READY",
+				queryable: false,
+			}),
+		).toBe(false)
+		expect(
+			isSearchIndexQueryable({
+				name: "test_chunks_vector",
+				status: "READY",
+				queryable: true,
+			}),
+		).toBe(true)
+	})
+
+	it("requires nested statusDetail entries to be ready and queryable", () => {
+		expect(
+			isSearchIndexQueryable({
+				name: "test_chunks_vector",
+				statusDetail: [
+					{
+						mainIndex: { status: "READY", queryable: true },
+						definitions: [{ status: "STALE", queryable: true }],
+					},
+				],
+			}),
+		).toBe(false)
+		expect(
+			isSearchIndexQueryable({
+				name: "test_chunks_vector",
+				statusDetail: [
+					{
+						mainIndex: { status: "READY", queryable: true },
+						definitions: [{ status: "READY", queryable: true }],
+					},
+				],
 			}),
 		).toBe(true)
 	})

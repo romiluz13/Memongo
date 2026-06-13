@@ -1,6 +1,6 @@
 # Competitor Benchmark Inventory
 
-Last refresh: 2026-06-01.
+Last refresh: 2026-06-09.
 
 This inventory tracks repo-backed benchmark claims only. A row can become a
 Memongo victory claim only when Memongo runs the same dataset, scorer, retrieval
@@ -15,15 +15,15 @@ The full branch/evidence/roadmap summary lives in
 
 | Competitor repo | Latest local commit | Refresh result | Notes |
 | --- | --- | --- | --- |
-| MemPalace | `9b7cfc9940` | Already current | P0 comparison source; benchmark result artifacts did not change in this refresh. |
-| Mem0 | `8e65ce915d` | Fast-forwarded | README points to `mem0ai/memory-benchmarks` for reproducible numbers; no benchmark-relevant paths changed in this refresh. |
+| MemPalace | `4ceb880d19` | Current | P0 comparison source; v3.4.0/product retrieval code moved, but committed benchmark result artifacts remain the comparison source. |
+| Mem0 | `d31fa168eb` | Current | Product repo changed; README still points to `mem0ai/memory-benchmarks` for reproducible numbers. |
 | Memory Benchmarks | `4b61c5d31b` | Already current | Official Mem0 benchmark harness and committed results. Local repo has untracked `artifacts/`; snapshot recorded metadata before refresh. |
-| Supermemory | `46e7ee1eb4` | Fast-forwarded | README claims #1 rows; MemoryBench is the reproducible harness. No benchmark-relevant paths changed in this refresh. |
+| Supermemory | `819090ae9d` | Current | Product repo changed; MemoryBench remains the reproducible harness. |
 | MemoryBench | `118209a746` | Already current | Official provider-neutral benchmark framework. |
 | Zep | `faf2acec4f` | Already current | LoCoMo CLI harness and LongMemEval notebooks. |
-| Mastra | `b0771a48b4` | Fast-forwarded | LongMemEval/evals package files changed; re-audit before running Memongo adapter. |
-| Hindsight | `e4b50f8054` | Fast-forwarded | Retrieval docs changed; re-audit benchmark scripts and retrieval semantics before comparison. |
-| OpenViking | `c0abcb9a34` | Fast-forwarded | LoCoMo/openclaw-eval and RAG benchmark surfaces. No benchmark-relevant paths changed in this refresh. |
+| Mastra | `8377e5a6c2` | Current | LongMemEval/evals package files changed; re-audit before running Memongo adapter. |
+| Hindsight | `9ea1ef164a` | Current | Retrieval docs and performance benchmark files changed; re-audit before comparison. |
+| OpenViking | `58ff0290b2` | Current | Benchmark/tau2 docs and scripts changed; re-audit before OpenViking claims. |
 | OpenClaw Eval | `75e07d696e` | Already current | External LoCoMo evaluation script referenced by OpenViking. |
 | Letta | `1131535716` | Already current | No reproducible benchmark claim found yet. |
 | LoCoMo | `3eb6f2c585` | Already current | Dataset/evaluator source. |
@@ -31,22 +31,142 @@ The full branch/evidence/roadmap summary lives in
 
 Snapshot artifacts:
 
-- Manifest: `artifacts/competitor-snapshots/20260601-refresh/manifest.json`
-- Refresh report: `artifacts/competitor-snapshots/20260601-refresh/refresh-report.json`
-- Bundles: `artifacts/competitor-snapshots/20260601-refresh/bundles/*.bundle`
+- Current manifest: `artifacts/competitor-snapshots/20260609-refresh/manifest.md`
+- Current manifest SHA: `artifacts/competitor-snapshots/20260609-refresh/SHA256SUMS`
+- Prior refresh report: `artifacts/competitor-snapshots/20260603-refresh/alignment-report.md`
+- Prior bundles: `artifacts/competitor-snapshots/20260603-refresh/bundles/*.bundle`
 
 Refresh impact:
 
-- Changed repos: Hindsight, Mastra, Mem0, OpenViking, and Supermemory.
-- Benchmark-adjacent changes: Hindsight retrieval docs and Mastra LongMemEval/evals package files.
-- Unchanged official harnesses/result sources: MemPalace result artifacts, Mem0 `memory-benchmarks`, MemoryBench, Zep, LoCoMo, MemBench dataset, OpenClaw Eval, and Letta.
-- No failed fast-forward pulls and no separate latest clone was required.
+- MemPalace P0 retrieval rows remain proved; its LLM/rerank lane remains
+  separate and must not be collapsed into the no-LLM Memongo row.
+- Mem0 LongMemEval remains rehearsal-only; the exact 72-case predict-only run
+  with the `longmemeval` index profile passed, and saved-artifact GPT-5 judged
+  top-50 evaluation scored 72/72. The next gate is full LongMemEval-S.
+- MemoryBench/Supermemory still require a Memongo provider before comparison.
+- Zep, Mastra, Hindsight, and OpenViking require competitor command
+  reproduction before Memongo adapter work.
+- Letta remains watchlist until a repo-backed benchmark claim is found.
 
 ## Active Adapter Smoke
 
 Mem0's official `memory-benchmarks` harness is the first P1 ecosystem target.
 Memongo now has a local Mem0 OSS-compatible adapter for the harness:
 `bun run benchmark:mem0-compat`.
+
+Latest Local Preview evidence from 2026-06-03 after the scoped readiness fix:
+
+- Harness: official `memory-benchmarks` LongMemEval runner, predict-only.
+- Environment: Atlas Local Preview `8.2.7`, exact-prefix isolated.
+- Result directory:
+  `artifacts/ecosystem-smokes/mem0-memory-benchmarks-longmemeval-18-predict-local-scoped-20260603a`.
+- Scope: 18 questions completed with 18 prediction files and 18 ingestion
+  ledgers.
+- Strict hygiene: no hidden fallback matches, no rerank mentions, no request
+  failures, no `java.net.ConnectException`, and exact-prefix cleanup proof
+  removed 30 benchmark collections.
+- Readiness behavior: 26 bounded vector convergence waits remained. This is
+  Local Preview async indexing/warmup behavior, not the old cross-user
+  readiness bug.
+- Interpretation: this validates the generic scope/scopeRef/sessionId
+  prefilter fix. It unlocked scoped 36/72 rehearsals, not a full Mem0 row.
+
+Scoped 36-case Local Preview rehearsal from 2026-06-03:
+
+- Result directory:
+  `artifacts/ecosystem-smokes/mem0-memory-benchmarks-longmemeval-36-predict-local-scoped-20260603b`.
+- Scope: aborted at 14/36 prediction files and 14/36 ingestion ledgers.
+- Strict hygiene before abort: zero hidden fallback and zero rerank.
+- Failure: scoped events vector readiness for
+  `longmemeval_41275add_memongo-compat-36-predict-local-scoped-20260603b`
+  stalled at `indexedCount=0 expectedCount=529`; probe calls exceeded 30s,
+  then Atlas Local Preview port `27018` became unreachable.
+- Container evidence: `memongo-benchmark-preview` was `OOMKilled=true`, exited
+  code `2`, and the Atlas Local runner hit the telemetry shutdown panic.
+- Cleanup: Local Preview was restarted only to drop the exact failed prefix;
+  dry-run listed 30 collections, exact drop removed 30, and post-clean inventory
+  showed no failed benchmark prefix.
+- Interpretation: this is not a Memongo scoring row. It is a MongoDB runtime
+  capacity gate. The next Local Preview rehearsal must use a fresh benchmark-only
+  deployment and set `MEMONGO_BENCHMARK_SEARCH_INDEX_PROFILE=longmemeval` before
+  `mongodb:prepare`, or move this lane to managed Atlas with explicit
+  infrastructure disclosure.
+
+Scoped 36-case Local Preview rehearsal with the LongMemEval index profile from
+2026-06-03:
+
+- Result directory:
+  `artifacts/ecosystem-smokes/mem0-memory-benchmarks-longmemeval-36-predict-local-lmeprofile-20260603f`.
+- Scope: completed 36/36 prediction files and 36/36 ingestion ledgers.
+- Runtime: fresh benchmark-only Local Preview volume, MongoDB `8.2.7`,
+  `MEMONGO_BENCHMARK_SEARCH_INDEX_PROFILE=longmemeval`, 8/8 Search/Vector
+  indexes queryable before the harness.
+- Strict hygiene: zero hidden fallback matches, zero rerank mentions, zero
+  request failures, no OOM, exact-prefix cleanup removed 30 benchmark
+  collections, and post-clean inventory showed zero benchmark prefix groups.
+- Retrieval artifact shape: no empty retrievals; top-k 50 request returned
+  between 5 and 50 memories per question, average `40.81`.
+- Local Preview warning state: 16 bounded vector convergence waits, 2 vector
+  probe timeout warnings, and 1 EOF probe error. The harness recovered and
+  completed, but this keeps the row in rehearsal status.
+- Interpretation: the MongoDB docs-backed index-footprint fix worked for the
+  36-case rehearsal. It unlocks a scoped 72-case rehearsal with the same
+  profile. It is still not a publishable Mem0 row.
+
+Scoped 72-case Local Preview rehearsal with the LongMemEval index profile from
+2026-06-09:
+
+- Result directory:
+  `artifacts/ecosystem-smokes/mem0-memory-benchmarks-longmemeval-72-predict-local-lmeprofile-20260609a`.
+- Proof note:
+  `artifacts/proof-gates/20260609/gate3-mem0-72-predict-local-lmeprofile.md`.
+- Scope: completed 72/72 prediction files and 72/72 ingestion ledgers.
+- Runtime: local Atlas Preview on `127.0.0.1:27018`,
+  `MEMONGO_BENCHMARK_SEARCH_INDEX_PROFILE=longmemeval`, 8/8 Search/Vector
+  indexes queryable before the harness.
+- Ingestion: 17,938 conversation pairs processed, 0 failed.
+- Retrieval artifact shape: no empty retrievals; top-k 50 request returned
+  between 4 and 50 memories per question.
+- Strict hygiene: zero hidden fallback markers, zero rerank mentions, zero
+  request-failure/OOM/traceback markers, and exact-prefix cleanup removed 30
+  benchmark collections; post-clean inventory showed zero prefix groups and
+  zero search/vector indexes.
+- Interpretation: this passes the 72-case predict-only retrieval rehearsal.
+  It remains a rehearsal; the saved-artifact judged result is tracked below.
+
+Saved-artifact judged evaluation over the 2026-06-09 72-case predictions:
+
+- Result artifact:
+  `artifacts/ecosystem-smokes/mem0-memory-benchmarks-longmemeval-72-predict-local-lmeprofile-20260609a/longmemeval_results_20260609_125540.json`.
+- Proof note:
+  `artifacts/proof-gates/20260609/gate4-mem0-72-saved-artifact-gpt5.md`.
+- Mode: official `memory-benchmarks` `--evaluate-only --rejudge`; no Mem0,
+  MongoDB ingestion, or MongoDB retrieval during judge phase.
+- Model posture: `gpt-5` answerer and `gpt-5` judge through the Grove transport
+  wrapper. Grove returned `gpt-5-2025-08-07` in the availability probe.
+- Result: top-50 scored 72/72 (100.0%); top-10 scored 71/72 (98.6%).
+- Checker status: answerer artifact checker passed for top-50 and top-10;
+  `top_200` was not present.
+- Miss ledger: one top-10 `single-session-preference` miss categorized as
+  stale-or-conflicting evidence; zero top-50 misses; zero blank non-abstention
+  top-50 generated answers.
+- Interpretation: this passes the 72-case saved-artifact judged top-50 gate.
+  It is still a rehearsal, not a publishable full Mem0 row.
+
+Previous Local Preview warning evidence from 2026-06-03:
+
+- Harness: official `memory-benchmarks` LongMemEval runner, predict-only.
+- Environment: Atlas Local Preview `8.2.7`, exact-prefix isolated.
+- Result directory:
+  `artifacts/ecosystem-smokes/mem0-memory-benchmarks-longmemeval-72-predict-local-20260603a`.
+- Scope: 72 questions completed with 72 prediction files and 72 ingestion
+  ledgers.
+- Strict hygiene: no hidden fallback matches, no rerank mentions, and exact
+  prefix cleanup returned zero benchmark groups/indexes after artifact capture.
+- Warning: 11 vector convergence waits and 7 `java.net.ConnectException` entries
+  appeared during readiness probing because convergence checks were not scoped
+  to the current Mem0 harness user. This warning is fixed by the scoped
+  readiness path above, but the original 72-case artifact remains non-publishable.
 
 Smoke evidence from 2026-05-31:
 
@@ -120,10 +240,18 @@ Judged smoke evidence from 2026-05-31:
   win. The next fix must improve answer-context generation/transport, not
   question-specific retrieval.
 
-Current blocker before full Mem0 runs: the adapter is now strict-clean on a
-six-type official LongMemEval smoke, but full judged Mem0 rows still require a
-larger rehearsal and a fixed answerer/judge setup. Do not publish a Mem0 win
-from the smoke.
+Current blocker before full Mem0 claims: the adapter is strict-clean on
+six-type and 18-case official LongMemEval smokes, the fresh benchmark-only
+72-case Local Preview run with the `longmemeval` search index profile completed
+72/72, and saved-artifact GPT-5 judged top-50 evaluation scored 72/72. Do not
+publish a Mem0 win from the smoke or rehearsal. The latest full LongMemEval-S
+top-50/top-200 domainfix rehearsal completed 500/500 prediction files and
+500/500 ingestion ledgers with zero empty retrievals, but it is still not a win:
+saved-artifact GPT-5/Grove judged accuracy was 89.6% at top-50 and 90.4% at
+top-200, below Mem0's committed platform rows. The next gate is a generic fix
+for blank generated answers, multi-session count/current-state evidence,
+stale/future evidence suppression, and answer-context packing, then
+saved-artifact re-evaluation before a fresh full retrieval rerun.
 
 Query-passage smoke evidence from 2026-05-31:
 
@@ -376,14 +504,14 @@ Mem0 answer-context root-cause work from 2026-05-31:
 | P0 | MemPalace | LoCoMo hybrid session top-10 | 88.91% | Retrieval avg recall | LoCoMo, 1,986 rows | Session | 10 | No LLM, no rerank | `mempalace/benchmarks/results_locomo_hybrid_session_top10_20260414_1649.json`, SHA `f7f11bad92cf7406a6e93aa776524bf97d0bc84032786e62585835a4582a1dcf` | PROVED: Memongo 93.30% |
 | P0 | MemPalace | ConvoMem raw message top-10 | 92.87% | Retrieval avg recall | ConvoMem, 250 effective items | Message | 10 | No LLM, no rerank | `mempalace/benchmarks/results_convomem_raw_top10_20260414_1649.json`, SHA `e3d778c3007113d8a78854004aac6c724b82c86b5349f3cf764ca42abf3a0100` | PROVED: Memongo 100.00% |
 | P0 | MemPalace | MemBench movie hybrid top-5 | 80.33% | Retrieval hit@5 | MemBench FirstAgent movie, 8,500 | Turn | 5 | Hybrid, no Memongo LLM | `mempalace/benchmarks/results_membench_hybrid_all_movie_top5_20260414_1656.json`, SHA `6a500795e68e40b4723da86c623d930e0bd184949a8f04c89f185d9181f4b622` | PROVED: Memongo 88.75% |
-| P1 | Mem0 | LongMemEval platform top-50 | 94.8% in README; committed platform result top-50 reports 90.4% answer accuracy, SHA `8bbf06e4205dce1df9c2dff9a9ddf99074865ca40019e1c5a10f0d3a37b4275c` | Judged answer accuracy | LongMemEval-S, 500 | Answer context | Top-50 search | GPT-5 answerer/judge in committed result metadata | `memory-benchmarks/results/platform/longmemeval_top50_results.json` | Larger answerer rehearsal reached 11/12, but the remaining miss has source-backed ambiguity plus a blank answerer output; not publishable yet |
-| P1 | Mem0 | LongMemEval platform top-200 | 94.4% in README; committed platform result top-200 reports 93.4% pass rate, SHA `58bd6d8934a54d8cd568ef481bbd3e37270c2c74a5d59713b661d4c3ddb332a1` | Judged answer accuracy | LongMemEval-S, 500 | Answer context | Top-200 search | GPT-5 answerer/judge | `memory-benchmarks/results/platform/longmemeval_results.json` | TODO |
+| P1 | Mem0 | LongMemEval platform top-50 | 94.8% in README; committed platform result top-50 reports 90.4% answer accuracy, SHA `8bbf06e4205dce1df9c2dff9a9ddf99074865ca40019e1c5a10f0d3a37b4275c` | Judged answer accuracy | LongMemEval-S, 500 | Answer context | Top-50 search | GPT-5 answerer/judge in committed result metadata | `memory-benchmarks/results/platform/longmemeval_top50_results.json` | FAILED ATTEMPT: latest Memongo saved-artifact GPT-5/Grove judged rehearsal scored 448/500 (89.6%); needs at least +5 correct cases to beat the committed row and top-50 checker still fails one blank non-abstention generated answer |
+| P1 | Mem0 | LongMemEval platform top-200 | 94.4% in README; committed platform result top-200 reports 93.4% pass rate, SHA `58bd6d8934a54d8cd568ef481bbd3e37270c2c74a5d59713b661d4c3ddb332a1` | Judged answer accuracy | LongMemEval-S, 500 | Answer context | Top-200 search | GPT-5 answerer/judge | `memory-benchmarks/results/platform/longmemeval_results.json` | FAILED ATTEMPT: latest Memongo saved-artifact GPT-5/Grove judged rehearsal scored 452/500 (90.4%); needs at least +16 correct cases to beat the committed row; top-200 checker passed but miss ledger still shows multi-session/current-state/retrieval blockers |
 | P1 | Mem0 | LoCoMo platform top-50 | 91.8% in README; committed platform result reports 82.66% answer accuracy, SHA `b4bc12d41b9864aaac747a9b58d8609ba3a0d7780ea39857d5b87a83ef3dc45a` | Judged answer accuracy | LoCoMo, 1,540 rows | Answer context | Top-50 search | GPT-5 answerer/judge | `memory-benchmarks/results/platform/locomo_top50_results.json` | TODO: run same 1,540-row judged lane |
 | P1 | Mem0 | LoCoMo platform top-200 | 92.5% in README; committed platform result reports 91.56% answer accuracy, SHA `36338fa6c1ca38bcf9e3fc33a5cbc3b6e53bdc4bafaeeaee0947cf13b5527911` | Judged answer accuracy | LoCoMo, 1,540 rows | Answer context | Top-200 search | GPT-5 answerer/judge | `memory-benchmarks/results/platform/locomo_results.json` | TODO |
 | P1 | Mem0 | BEAM 1M top-200 | 70.1% pass rate, 0.641 avg score, SHA `60a4878fdbd0082164dbf48a440f62384ec5e16001eaea4152732b8dfc9f75da` | Judged answer quality | BEAM 1M, 700 questions | Answer context | Top-200 search | GPT-5 answerer/judge | `memory-benchmarks/results/platform/beam_1m_results.json` | TODO: build BEAM adapter |
 | P1 | Mem0 | BEAM 10M top-200 | 50.5% pass rate, 0.486 avg score, SHA `e0a3578d501d29a0dec9e13218945611e61e2d859a8a4aca2d4beaf4a71d78f3` | Judged answer quality | BEAM 10M, 200 questions | Answer context | Top-200 search | GPT-5 answerer/judge | `memory-benchmarks/results/platform/beam_10m_results.json` | TODO |
 | P1 | Supermemory / MemoryBench | LoCoMo / LongMemEval / ConvoMem provider comparison | Framework claim, no committed provider result row found yet | Judged answer accuracy plus MemScore | MemoryBench supports `locomo`, `longmemeval`, `convomem` | Answer context | Provider-defined | Configurable judge/model | `memorybench` CLI and docs | TODO: add Memongo provider and run `compare` lanes |
-| P1 | Zep | LoCoMo harness | No committed score found in repo docs | Judged answer accuracy, latency, context analysis | LoCoMo10, configurable users | Graph context | Graph limits | OpenAI response and grader models | `zep/benchmarks/locomo` | TODO: run Zep harness and Memongo adapter under same config |
+| P1 | Zep | LoCoMo harness | Committed experiment reports mean accuracy 0.80318 and max accuracy 0.81234, but command replay is still required | Judged answer accuracy, latency, context analysis | LoCoMo10, configurable users | Graph context | Graph limits | OpenAI response and grader models | `zep/benchmarks/locomo` | TODO: reproduce Zep harness command, then run Memongo adapter under same config |
 | P1 | Zep | LongMemEval notebooks | No committed score found in repo docs | Judged answer accuracy | LongMemEval | Context | Notebook-defined | OpenAI and Zep keys required | `zep/benchmarks/longmemeval` | TODO: convert notebook lane into reproducible command or mark blocked |
 | P2 | Mastra | LongMemEval | README references full and quick commands; no committed result found | Judged answer accuracy | LongMemEval-S/M/oracle | Answer context | Config-defined | Model e.g. GPT-4o in README examples | `mastra/explorations/longmemeval` | TODO: run official package; compare judged QA only |
 | P2 | Hindsight | LoCoMo / LongMemEval | README claims state of the art but no score table in benchmark README | Judged answer accuracy and latency | LoCoMo and LongMemEval | API recall/think context | Config-defined | Hindsight API, likely LLM-backed | `hindsight/hindsight-dev/benchmarks` | TODO: run scripts; capture score artifacts |
@@ -393,7 +521,7 @@ Mem0 answer-context root-cause work from 2026-05-31:
 ## Must-Beat Queue
 
 1. MemPalace LLM/rerank retrieval lane: reproduce committed Haiku/Sonnet rerank result, then run a Memongo rerank lane with identical split/scorer/top-k disclosure.
-2. Mem0 Memory Benchmarks: promote the strict-clean Mem0 compatibility adapter from six-type smoke to a larger rehearsal, then full LongMemEval top-50/top-200, LoCoMo top-50/top-200, BEAM 1M, and BEAM 10M with the same answerer/judge settings.
+2. Mem0 Memory Benchmarks: fix the latest LongMemEval miss families generically before another full retrieval run: blank non-abstention answer handling, multi-session current-state/count retrieval, stale/future evidence suppression, and answer-context packing. Then rerun saved-artifact evaluation, pass capability gates, and only then rerun top-50/top-200 until Memongo beats committed platform rows before LoCoMo and BEAM.
 3. Supermemory MemoryBench: implement a Memongo provider for `memorybench`; run `locomo`, `longmemeval`, and `convomem` with the same judge/model and report MemScore.
 4. Zep LoCoMo and LongMemEval: run Zep's own harness first, then run Memongo through a matching adapter and compare only judged answer accuracy rows.
 5. Mastra, Hindsight, and OpenViking: run their official benchmark commands first; only build Memongo lanes after the competitor artifact is reproducible.
