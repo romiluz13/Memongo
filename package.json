@@ -5,7 +5,7 @@
 	"license": "BUSL-1.1",
 	"packageManager": "bun@1.2.5",
 	"engines": {
-		"node": ">=20"
+		"node": ">=20.19.0"
 	},
 	"workspaces": [
 		"apps/*",
@@ -26,12 +26,24 @@
 		"mongodb:parity": "bun scripts/check-mongodb-runtime-parity.ts",
 		"mongodb:prepare": "bun scripts/prepare-mongodb-runtime.ts",
 		"mongodb:prefix-inventory": "bun scripts/mongodb-prefix-inventory.ts",
+		"benchmark:cluster-preflight": "bun scripts/benchmark-cluster-preflight.ts",
 		"memory-eval": "bun scripts/real-memory-eval.ts",
 		"compare-memory-eval": "bun scripts/compare-memory-eval.ts",
 		"agent-smoke": "bun scripts/real-agent-smoke.ts",
 		"capability-stress": "bun scripts/real-capability-stress.ts",
 		"benchmark:longmemeval:s": "bun scripts/launch-official-longmemeval-benchmark.ts",
 		"benchmark:canary": "bun scripts/run-longmemeval-canary.ts",
+		"benchmark:count-policy-audit": "bun scripts/count-policy-audit.ts",
+		"benchmark:mem0-compat": "bun scripts/run-mem0-compat-server.ts",
+		"benchmark:mem0-answerer-status": "bun scripts/check-memory-benchmarks-answerer-artifact.ts",
+		"benchmark:mem0-answerer-misses": "bun scripts/analyze-memory-benchmarks-answerer-misses.ts",
+		"benchmark:longmemeval-shards": "bun scripts/longmemeval-shards.ts",
+		"benchmark:mem0-longmemeval-sharded": "bun scripts/run-memory-benchmarks-longmemeval-shards.ts",
+		"benchmark:longmemeval-sharded-watchdog": "bun scripts/check-longmemeval-sharded-watchdog.ts",
+		"benchmark:memory-fixtures": "bun scripts/memory-capability-fixtures.ts",
+		"benchmark:memory-fixture-gates": "bun scripts/memory-capability-fixture-gates.ts",
+		"benchmark:memory-capabilities": "bun scripts/memory-capability-report.ts",
+		"benchmark:campaign-ledger": "bun scripts/benchmark-campaign-ledger.ts",
 		"benchmark:status": "bun scripts/check-benchmark-status.ts",
 		"mongodb:drop-benchmark-prefix": "bun scripts/drop-mongodb-benchmark-prefix.ts"
 	},

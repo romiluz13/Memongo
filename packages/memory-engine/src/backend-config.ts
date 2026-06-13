@@ -35,6 +35,14 @@ export type ResolvedMongoDBConfig = {
 	numDimensions: number
 	maxPoolSize: number
 	minPoolSize: number
+	maxConnecting?: number
+	maxIdleTimeMs?: number
+	networkFamily?: 4 | 6
+	socketTimeoutMs?: number
+	serverSelectionTimeoutMs: number
+	heartbeatFrequencyMs?: number
+	serverMonitoringMode?: "auto" | "stream" | "poll"
+	waitQueueTimeoutMs?: number
 	embeddingCacheTtlDays: number
 	memoryTtlDays: number
 	enableChangeStreams: boolean
@@ -234,18 +242,53 @@ export function resolveMemoryBackendConfig(params: {
 					mongoCfg.numDimensions > 0
 						? Math.floor(mongoCfg.numDimensions)
 						: 1024,
-				maxPoolSize:
-					typeof mongoCfg?.maxPoolSize === "number" &&
-					Number.isFinite(mongoCfg.maxPoolSize) &&
-					mongoCfg.maxPoolSize > 0
-						? Math.floor(mongoCfg.maxPoolSize)
-						: 10,
-				minPoolSize:
-					typeof mongoCfg?.minPoolSize === "number" &&
-					Number.isFinite(mongoCfg.minPoolSize) &&
-					mongoCfg.minPoolSize >= 0
-						? Math.floor(mongoCfg.minPoolSize)
-						: 2,
+				maxPoolSize: resolvePositiveIntegerSetting(
+					mongoCfg?.maxPoolSize,
+					"MEMONGO_MONGODB_MAX_POOL_SIZE",
+					10,
+				),
+				minPoolSize: resolveNonNegativeIntegerSetting(
+					mongoCfg?.minPoolSize,
+					"MEMONGO_MONGODB_MIN_POOL_SIZE",
+					2,
+				),
+				maxConnecting: resolveOptionalPositiveIntegerSetting(
+					mongoCfg?.maxConnecting,
+					"MEMONGO_MONGODB_MAX_CONNECTING",
+				),
+				maxIdleTimeMs: resolveOptionalPositiveIntegerSetting(
+					mongoCfg?.maxIdleTimeMs,
+					"MEMONGO_MONGODB_MAX_IDLE_TIME_MS",
+				),
+				networkFamily: resolveOptionalMongoNetworkFamily(
+					mongoCfg?.networkFamily,
+					"MEMONGO_MONGODB_NETWORK_FAMILY",
+				),
+				socketTimeoutMs: resolveOptionalPositiveIntegerSetting(
+					mongoCfg?.socketTimeoutMs,
+					"MEMONGO_MONGODB_SOCKET_TIMEOUT_MS",
+				),
+				serverSelectionTimeoutMs: resolvePositiveIntegerSetting(
+					mongoCfg?.serverSelectionTimeoutMs,
+					"MEMONGO_MONGODB_SERVER_SELECTION_TIMEOUT_MS",
+					resolvePositiveIntegerSetting(
+						mongoCfg?.connectTimeoutMs,
+						"MEMONGO_MONGODB_CONNECT_TIMEOUT_MS",
+						10_000,
+					),
+				),
+				heartbeatFrequencyMs: resolveOptionalPositiveIntegerSetting(
+					mongoCfg?.heartbeatFrequencyMs,
+					"MEMONGO_MONGODB_HEARTBEAT_FREQUENCY_MS",
+				),
+				serverMonitoringMode: resolveOptionalMongoServerMonitoringMode(
+					mongoCfg?.serverMonitoringMode,
+					"MEMONGO_MONGODB_SERVER_MONITORING_MODE",
+				),
+				waitQueueTimeoutMs: resolveOptionalPositiveIntegerSetting(
+					mongoCfg?.waitQueueTimeoutMs,
+					"MEMONGO_MONGODB_WAIT_QUEUE_TIMEOUT_MS",
+				),
 				embeddingCacheTtlDays:
 					typeof mongoCfg?.embeddingCacheTtlDays === "number" &&
 					Number.isFinite(mongoCfg.embeddingCacheTtlDays) &&
@@ -265,12 +308,11 @@ export function resolveMemoryBackendConfig(params: {
 					mongoCfg.changeStreamDebounceMs >= 0
 						? Math.floor(mongoCfg.changeStreamDebounceMs)
 						: 1000,
-				connectTimeoutMs:
-					typeof mongoCfg?.connectTimeoutMs === "number" &&
-					Number.isFinite(mongoCfg.connectTimeoutMs) &&
-					mongoCfg.connectTimeoutMs > 0
-						? Math.floor(mongoCfg.connectTimeoutMs)
-						: 10_000,
+				connectTimeoutMs: resolvePositiveIntegerSetting(
+					mongoCfg?.connectTimeoutMs,
+					"MEMONGO_MONGODB_CONNECT_TIMEOUT_MS",
+					10_000,
+				),
 				numCandidates: Math.min(
 					typeof mongoCfg?.numCandidates === "number" &&
 						Number.isFinite(mongoCfg.numCandidates) &&
@@ -520,6 +562,93 @@ function resolveEnvInt(envKey: string, fallback: number): number {
 	if (raw === undefined || raw === "") return fallback
 	const parsed = Number.parseInt(raw, 10)
 	return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback
+}
+
+function resolvePositiveIntegerSetting(
+	configValue: unknown,
+	envKey: string,
+	fallback: number,
+): number {
+	const envValue = resolveOptionalPositiveIntegerEnv(envKey)
+	if (envValue !== undefined) return envValue
+	if (
+		typeof configValue === "number" &&
+		Number.isFinite(configValue) &&
+		configValue > 0
+	) {
+		return Math.floor(configValue)
+	}
+	return fallback
+}
+
+function resolveNonNegativeIntegerSetting(
+	configValue: unknown,
+	envKey: string,
+	fallback: number,
+): number {
+	const envRaw = process.env[envKey]
+	if (envRaw !== undefined && envRaw !== "") {
+		const parsed = Number.parseInt(envRaw, 10)
+		if (Number.isFinite(parsed) && parsed >= 0) return parsed
+		return fallback
+	}
+	if (
+		typeof configValue === "number" &&
+		Number.isFinite(configValue) &&
+		configValue >= 0
+	) {
+		return Math.floor(configValue)
+	}
+	return fallback
+}
+
+function resolveOptionalPositiveIntegerSetting(
+	configValue: unknown,
+	envKey: string,
+): number | undefined {
+	const envValue = resolveOptionalPositiveIntegerEnv(envKey)
+	if (envValue !== undefined) return envValue
+	if (
+		typeof configValue === "number" &&
+		Number.isFinite(configValue) &&
+		configValue > 0
+	) {
+		return Math.floor(configValue)
+	}
+	return undefined
+}
+
+function resolveOptionalPositiveIntegerEnv(envKey: string): number | undefined {
+	const raw = process.env[envKey]
+	if (raw === undefined || raw === "") return undefined
+	const parsed = Number.parseInt(raw, 10)
+	return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined
+}
+
+function resolveOptionalMongoNetworkFamily(
+	configValue: unknown,
+	envKey: string,
+): 4 | 6 | undefined {
+	const raw = process.env[envKey]?.trim()
+	if (raw === "4" || raw === "6") return Number.parseInt(raw, 10) as 4 | 6
+	if (configValue === 4 || configValue === 6) return configValue
+	return undefined
+}
+
+function resolveOptionalMongoServerMonitoringMode(
+	configValue: unknown,
+	envKey: string,
+): "auto" | "stream" | "poll" | undefined {
+	const raw = process.env[envKey]?.trim()
+	if (raw === "auto" || raw === "stream" || raw === "poll") return raw
+	if (
+		configValue === "auto" ||
+		configValue === "stream" ||
+		configValue === "poll"
+	) {
+		return configValue
+	}
+	return undefined
 }
 
 function resolveEnvFloat(envKey: string, fallback: number): number {

@@ -195,10 +195,9 @@ const limitItems = Math.max(
 	0,
 	Math.floor(Number(process.env.MEMONGO_BENCHMARK_LIMIT_ITEMS ?? 0)),
 )
-const reuseExistingIndex =
-	/^(1|true|enabled|yes)$/i.test(
-		process.env.MEMONGO_MEMBENCH_REUSE_EXISTING_INDEX?.trim() ?? "",
-	)
+const reuseExistingIndex = /^(1|true|enabled|yes)$/i.test(
+	process.env.MEMONGO_MEMBENCH_REUSE_EXISTING_INDEX?.trim() ?? "",
+)
 const vectorRetries = Math.max(
 	1,
 	Math.floor(Number(process.env.MEMONGO_MEMBENCH_VECTOR_RETRIES ?? 8)),

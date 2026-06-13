@@ -23,15 +23,18 @@ function readDatabaseName(): string {
 }
 
 function readPrefix(): string {
-	const argPrefix = process.argv
-		.find((arg) => arg.startsWith("--prefix="))
-		?.slice("--prefix=".length)
-		.trim()
+	const prefixArgIndex = process.argv.findIndex((arg) => arg === "--prefix")
+	const argPrefix =
+		process.argv
+			.find((arg) => arg.startsWith("--prefix="))
+			?.slice("--prefix=".length)
+			.trim() ||
+		(prefixArgIndex >= 0 ? process.argv[prefixArgIndex + 1]?.trim() : undefined)
 	const prefix =
 		argPrefix || process.env.MEMONGO_MONGODB_COLLECTION_PREFIX?.trim()
 	if (!prefix) {
 		throw new Error(
-			"pass --prefix=memongo_bench_<run-id>_ or set MEMONGO_MONGODB_COLLECTION_PREFIX",
+			"pass --prefix memongo_bench_<run-id>_, --prefix=memongo_bench_<run-id>_, or set MEMONGO_MONGODB_COLLECTION_PREFIX",
 		)
 	}
 	validateBenchmarkCollectionPrefix(prefix)

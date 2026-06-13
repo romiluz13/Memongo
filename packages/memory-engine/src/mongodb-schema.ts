@@ -1429,6 +1429,9 @@ export async function ensureSchemaValidation(
 	prefix: string,
 ): Promise<void> {
 	for (const [baseName, validator] of Object.entries(VALIDATED_COLLECTIONS)) {
+		if (baseName === "memory_evidence" && !isEvidenceMirrorEnabled()) {
+			continue
+		}
 		const collName = `${prefix}${baseName}`
 		try {
 			await db.command({
@@ -1441,7 +1444,12 @@ export async function ensureSchemaValidation(
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err)
 			// Collection might not exist yet — skip silently
-			if (msg.includes("ns not found") || msg.includes("doesn't exist")) {
+			if (
+				msg.includes("ns not found") ||
+				msg.includes("ns does not exist") ||
+				msg.includes("doesn't exist") ||
+				msg.includes("NamespaceNotFound")
+			) {
 				continue
 			}
 			log.warn(`schema validation for ${collName} failed: ${msg}`)
@@ -2488,16 +2496,57 @@ function extractNestedQueryableStates(
 	return states
 }
 
+function extractNestedStatuses(index: SearchIndexDescription): string[] {
+	if (!Array.isArray(index.statusDetail)) {
+		return []
+	}
+	const statuses: string[] = []
+	for (const detail of index.statusDetail) {
+		const mainStatus = String(detail?.mainIndex?.status ?? "").toUpperCase()
+		if (mainStatus) {
+			statuses.push(mainStatus)
+		}
+		if (Array.isArray(detail?.definitions)) {
+			for (const definition of detail.definitions) {
+				const definitionStatus = String(definition?.status ?? "").toUpperCase()
+				if (definitionStatus) {
+					statuses.push(definitionStatus)
+				}
+			}
+		}
+	}
+	return statuses
+}
+
 export function isSearchIndexQueryable(index: SearchIndexDescription): boolean {
-	if (index.queryable === true) {
-		return true
-	}
-	const nestedStates = extractNestedQueryableStates(index)
-	if (nestedStates.length > 0) {
-		return nestedStates.every(Boolean)
-	}
 	const status = String(index.status ?? "").toUpperCase()
-	return SEARCH_INDEX_READY_STATUSES.has(status)
+	if (status && !SEARCH_INDEX_READY_STATUSES.has(status)) {
+		return false
+	}
+	if (index.queryable === false) {
+		return false
+	}
+
+	const nestedStates = extractNestedQueryableStates(index)
+	if (nestedStates.some((queryable) => !queryable)) {
+		return false
+	}
+
+	const nestedStatuses = extractNestedStatuses(index)
+	if (
+		nestedStatuses.some(
+			(nestedStatus) => !SEARCH_INDEX_READY_STATUSES.has(nestedStatus),
+		)
+	) {
+		return false
+	}
+
+	return (
+		index.queryable === true ||
+		nestedStates.length > 0 ||
+		SEARCH_INDEX_READY_STATUSES.has(status) ||
+		nestedStatuses.length > 0
+	)
 }
 
 function isSearchIndexFailed(index: SearchIndexDescription): boolean {
@@ -2804,6 +2853,15 @@ function isRawSessionSearchIndexProfile(
 	)
 }
 
+function autoEmbedVectorField(path: string): Document {
+	return {
+		type: "autoEmbed",
+		modality: "text",
+		path,
+		model: "voyage-4-large",
+	}
+}
+
 export async function waitForSearchIndexesQueryable(
 	collection: Collection,
 	{
@@ -2890,9 +2948,13 @@ export function resolveSearchIndexReadinessTiming(
 	timeoutMs: number
 	pollMs: number
 } {
+	const benchmarkStrict = env.MEMONGO_BENCHMARK_STRICT
+	const searchReadyStrict = env.MEMONGO_STRICT_SEARCH_INDEX_READY
 	const strictDefaultTimeoutMs =
-		env.MEMONGO_BENCHMARK_STRICT === "1" ||
-		env.MEMONGO_STRICT_SEARCH_INDEX_READY === "1"
+		benchmarkStrict === "1" ||
+		benchmarkStrict?.toLowerCase() === "true" ||
+		searchReadyStrict === "1" ||
+		searchReadyStrict?.toLowerCase() === "true"
 			? 180_000
 			: 60_000
 	const timeoutMs = parsePositiveIntegerEnv(
@@ -2966,12 +3028,7 @@ export async function ensureSearchIndexes(
 		try {
 			const sessionVectorDef: Document = {
 				fields: [
-					{
-						type: "autoEmbed",
-						modality: "text",
-						path: "text",
-						model: "voyage-4-large",
-					},
+					autoEmbedVectorField("text"),
 					{ type: "filter", path: "agentId" },
 					{ type: "filter", path: "scope" },
 					{ type: "filter", path: "scopeRef" },
@@ -3055,15 +3112,7 @@ export async function ensureSearchIndexes(
 		]
 
 		const vectorDef: Document = {
-			fields: [
-				{
-					type: "autoEmbed",
-					modality: "text",
-					path: "text",
-					model: "voyage-4-large",
-				},
-				...filterFields,
-			],
+			fields: [autoEmbedVectorField("text"), ...filterFields],
 		}
 
 		vectorCreated = await ensureNamedSearchIndex({
@@ -3129,15 +3178,7 @@ export async function ensureSearchIndexes(
 			]
 
 			const kbVectorDef: Document = {
-				fields: [
-					{
-						type: "autoEmbed",
-						modality: "text",
-						path: "text",
-						model: "voyage-4-large",
-					},
-					...kbFilterFields,
-				],
+				fields: [autoEmbedVectorField("text"), ...kbFilterFields],
 			}
 
 			vectorCreated = await ensureNamedSearchIndex({
@@ -3215,15 +3256,7 @@ export async function ensureSearchIndexes(
 		]
 
 		const structVectorDef: Document = {
-			fields: [
-				{
-					type: "autoEmbed",
-					modality: "text",
-					path: "value",
-					model: "voyage-4-large",
-				},
-				...structFilterFields,
-			],
+			fields: [autoEmbedVectorField("value"), ...structFilterFields],
 		}
 
 		vectorCreated = await ensureNamedSearchIndex({
@@ -3284,12 +3317,7 @@ export async function ensureSearchIndexes(
 	try {
 		const procedureVectorDef: Document = {
 			fields: [
-				{
-					type: "autoEmbed",
-					modality: "text",
-					path: "searchText",
-					model: "voyage-4-large",
-				},
+				autoEmbedVectorField("searchText"),
 				{ type: "filter", path: "intentTags" },
 				{ type: "filter", path: "agentId" },
 				{ type: "filter", path: "scope" },
@@ -3367,15 +3395,7 @@ export async function ensureSearchIndexes(
 			{ type: "filter", path: "timestamp" },
 		]
 		const eventsVectorDef: Document = {
-			fields: [
-				{
-					type: "autoEmbed",
-					modality: "text",
-					path: "body",
-					model: "voyage-4-large",
-				},
-				...eventsFilterFields,
-			],
+			fields: [autoEmbedVectorField("body"), ...eventsFilterFields],
 		}
 		vectorCreated = await ensureNamedSearchIndex({
 			collection: events,
@@ -3403,12 +3423,7 @@ export async function ensureSearchIndexes(
 		try {
 			const cacheVectorDef: Document = {
 				fields: [
-					{
-						type: "autoEmbed",
-						modality: "text",
-						path: "queryNorm",
-						model: "voyage-4-large",
-					},
+					autoEmbedVectorField("queryNorm"),
 					{ type: "filter", path: "agentId" },
 					{ type: "filter", path: "scope" },
 					{ type: "filter", path: "scopeRef" },
@@ -3478,15 +3493,7 @@ export async function ensureSearchIndexes(
 				{ type: "filter", path: "sessionId" },
 			]
 			const sessionVectorDef: Document = {
-				fields: [
-					{
-						type: "autoEmbed",
-						modality: "text",
-						path: "text",
-						model: "voyage-4-large",
-					},
-					...sessionFilterFields,
-				],
+				fields: [autoEmbedVectorField("text"), ...sessionFilterFields],
 			}
 			vectorCreated = await ensureNamedSearchIndex({
 				collection: sessionChunks,
@@ -3556,15 +3563,7 @@ export async function ensureSearchIndexes(
 				{ type: "filter", path: "timestamp" },
 			]
 			const evidenceVectorDef: Document = {
-				fields: [
-					{
-						type: "autoEmbed",
-						modality: "text",
-						path: "text",
-						model: "voyage-4-large",
-					},
-					...evidenceFilterFields,
-				],
+				fields: [autoEmbedVectorField("text"), ...evidenceFilterFields],
 			}
 			vectorCreated = await ensureNamedSearchIndex({
 				collection: memoryEvidence,

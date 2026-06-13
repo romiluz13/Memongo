@@ -1,11 +1,90 @@
 import { createHash, randomUUID } from "node:crypto"
 import type { Db, Document } from "mongodb"
-import { type MemoryScope, createSubsystemLogger } from "@memongo/lib"
+import {
+	type MemoryScope,
+	createSubsystemLogger,
+	retryAsync,
+} from "@memongo/lib"
 import { recordProjectionRun } from "./mongodb-ops.js"
 import { eventsCollection, chunksCollection } from "./mongodb-schema.js"
 import { resolveScopeRef } from "./mongodb-scope.js"
 
 const log = createSubsystemLogger("memory:mongodb:events")
+
+const RETRYABLE_MONGO_ERROR_LABELS = new Set([
+	"NoWritesPerformed",
+	"RetryableError",
+	"RetryableWriteError",
+	"TransientTransactionError",
+])
+
+export function isTransientMongoWriteError(err: unknown): boolean {
+	const hasErrorLabel = (err as { hasErrorLabel?: (label: string) => boolean })
+		?.hasErrorLabel
+	if (typeof hasErrorLabel === "function") {
+		for (const label of RETRYABLE_MONGO_ERROR_LABELS) {
+			if (hasErrorLabel.call(err, label)) return true
+		}
+	}
+
+	const name = err instanceof Error ? err.name : ""
+	const message = err instanceof Error ? err.message : String(err)
+	const normalized = `${name} ${message}`.toLowerCase()
+	return (
+		normalized.includes("mongonetwork") ||
+		normalized.includes("mongoserverselection") ||
+		normalized.includes("mongotimeout") ||
+		normalized.includes("getaddrinfo enotfound") ||
+		normalized.includes("econnrefused") ||
+		normalized.includes("replicasetnoprimary") ||
+		normalized.includes("server monitor timeout") ||
+		normalized.includes("server selection timed out") ||
+		normalized.includes("connection timed out") ||
+		(normalized.includes("connection to") && normalized.includes("interrupted"))
+	)
+}
+
+async function retryTransientMongoWrite<T>(
+	label: string,
+	run: () => Promise<T>,
+): Promise<T> {
+	const attempts = resolveTransientWriteRetryAttempts()
+	return await retryAsync(run, {
+		label,
+		attempts,
+		minDelayMs: resolveTransientWriteRetryDelayMs(
+			"MEMONGO_MONGODB_TRANSIENT_WRITE_RETRY_MIN_DELAY_MS",
+			500,
+		),
+		maxDelayMs: resolveTransientWriteRetryDelayMs(
+			"MEMONGO_MONGODB_TRANSIENT_WRITE_RETRY_MAX_DELAY_MS",
+			3_000,
+		),
+		jitter: 0.2,
+		shouldRetry: (err) => isTransientMongoWriteError(err),
+		onRetry: ({ attempt, delayMs, err }) => {
+			const message = err instanceof Error ? err.message : String(err)
+			log.warn(
+				`transient MongoDB write retry: ${label} nextAttempt=${attempt + 1}/${attempts} delayMs=${delayMs} error=${message}`,
+			)
+		},
+	})
+}
+
+function resolveTransientWriteRetryAttempts(): number {
+	const raw = process.env.MEMONGO_MONGODB_TRANSIENT_WRITE_RETRY_ATTEMPTS
+	const parsed = raw ? Number.parseInt(raw, 10) : 3
+	return Number.isFinite(parsed) && parsed >= 1 ? Math.floor(parsed) : 3
+}
+
+function resolveTransientWriteRetryDelayMs(
+	envKey: string,
+	fallback: number,
+): number {
+	const raw = process.env[envKey]
+	const parsed = raw ? Number.parseInt(raw, 10) : fallback
+	return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : fallback
+}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -72,10 +151,8 @@ export async function writeEvent(params: {
 		...(event.metadata && { metadata: event.metadata }),
 	}
 
-	await collection.updateOne(
-		{ eventId },
-		{ $setOnInsert: doc },
-		{ upsert: true },
+	await retryTransientMongoWrite("events.updateOne", () =>
+		collection.updateOne({ eventId }, { $setOnInsert: doc }, { upsert: true }),
 	)
 
 	log.info(`event written: ${eventId} role=${event.role}`)
@@ -360,24 +437,29 @@ export async function projectEventChunk(params: {
 	const path = `events/${event.eventId}`
 	const text = renderEventChunkText(event)
 	const hash = createHash("sha256").update(text).digest("hex")
-	const result = await chunks.updateOne(
-		{ path },
-		{
-			$setOnInsert: {
-				path,
-				text,
-				hash,
-				source: "conversation",
-				agentId: event.agentId,
-				scope: event.scope,
-				scopeRef: event.scopeRef,
-				...(event.sessionId ? { sessionId: event.sessionId } : {}),
-				updatedAt: new Date(),
+	const result = await retryTransientMongoWrite("chunks.updateOne", () =>
+		chunks.updateOne(
+			{ path },
+			{
+				$setOnInsert: {
+					path,
+					text,
+					hash,
+					source: "conversation",
+					agentId: event.agentId,
+					scope: event.scope,
+					scopeRef: event.scopeRef,
+					...(event.sessionId ? { sessionId: event.sessionId } : {}),
+					timestamp: event.timestamp,
+					updatedAt: new Date(),
+				},
 			},
-		},
-		{ upsert: true },
+			{ upsert: true },
+		),
 	)
-	await markEventsProjected({ db, prefix, eventIds: [event.eventId] })
+	await retryTransientMongoWrite("events.markProjected", () =>
+		markEventsProjected({ db, prefix, eventIds: [event.eventId] }),
+	)
 	if (params.recordRun !== false) {
 		await recordProjectionRun({
 			db,

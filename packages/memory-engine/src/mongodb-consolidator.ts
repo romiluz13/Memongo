@@ -517,7 +517,9 @@ export async function consolidateMemory(params: {
 		// a cross-scope consolidation or aborting the whole run.
 		const candidateScope = candidate.scope ?? options?.scope
 		const candidateScopeRef = candidate.scopeRef ?? options?.scopeRef
-		const strictScopeMismatch = process.env.MEMONGO_BENCHMARK_STRICT === "1"
+		const benchmarkStrict = process.env.MEMONGO_BENCHMARK_STRICT
+		const strictScopeMismatch =
+			benchmarkStrict === "1" || benchmarkStrict?.toLowerCase() === "true"
 
 		if (
 			options?.scope &&

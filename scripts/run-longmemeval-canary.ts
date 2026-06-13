@@ -640,10 +640,7 @@ export function listCompletedScenarioIndices(runDir: string): Set<number> {
 			if (doc.completed !== true) continue
 			if (doc.passStatus !== "pass") continue
 			completed.add(idx)
-		} catch {
-			// Corrupt/unreadable file — do NOT silently treat as completed.
-			continue
-		}
+		} catch {}
 	}
 	return completed
 }

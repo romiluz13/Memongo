@@ -2,13 +2,20 @@
 
 Status: publication evidence pack for the MemPalace P0 release scope.
 
-Last evidence refresh: 2026-05-27.
+Last evidence refresh: 2026-06-13.
 
 This document follows one rule: a benchmark row is public only when the run proves
 the product path being claimed. Every public row must include artifact paths,
 dataset identity, scorer, retrieval unit, LLM/rerank disclosure, warnings,
 degradations, and competitor evidence. The old `98.1%` README claim is excluded:
 it has no committed artifact pack and remains unproven.
+
+For the refreshed cross-competitor queue, see
+[Competitor Benchmark Inventory](./COMPETITOR-BENCHMARK-INVENTORY.md).
+For the fresh Atlas execution procedure, see
+[Ecosystem Benchmark Runbook](./ECOSYSTEM-BENCHMARK-RUNBOOK.md).
+For the end-to-end state, road already traveled, and remaining gates, see
+[Memongo Benchmark Full Picture Roadmap](./FULL-PICTURE-ROADMAP.md).
 
 ## Claim Policy
 
@@ -30,7 +37,9 @@ Not allowed yet:
 
 These rows are artifact-backed and beat the matching MemPalace retrieval row.
 They are valid for scoped README language after release checks, secret scans, and
-reviewed commits pass.
+reviewed commits pass. The 2026-06-03 competitor refresh moved MemPalace to
+`02b8753d9759`; benchmark docs and committed result artifacts were unchanged, so
+the P0 rows remain valid unless a later artifact-shape audit finds a gap.
 
 | Status | Benchmark lane | Memongo | MemPalace | Verdict |
 | --- | --- | ---: | ---: | --- |
@@ -48,7 +57,8 @@ Rows below are promising but not publishable claims.
 | --- | --- | --- | --- |
 | PROMISING | LongMemEval held-out 450 raw session | Memongo session RecallAny@5 99.06%, internal R@5 97.14% | Do not compare directly to MemPalace held-out hybrid without lane wording |
 | INCOMPLETE | LLM/rerank rows | No Memongo full rerank lane artifact | Run and disclose Grove/model/reranker separately |
-| BLOCKED | Mem0/Supermemory/Zep/Letta/Mastra/OpenViking ecosystem rows | Repos exist locally | Memongo adapters and same-scorer runs required |
+| INCOMPLETE | Mem0 official `memory-benchmarks` rows | Latest full 500 Atlas Local Preview sharded rehearsal completed 20/20 shards, 500/500 predictions, 500/500 ingestion ledgers, zero empty retrievals, and exact-prefix cleanup. Saved-artifact GPT-5/Grove judging scored top-50 89.6% and top-200 90.4%, still below Mem0 committed 90.4%/93.4% rows; top-50 answerer validation failed on one blank non-abstention generated answer. | Fix generic blank-answer handling, multi-session current-state/count retrieval, stale/future evidence suppression, and answer-context packing; then rerun saved-artifact evaluation and only run another full retrieval batch after focused gates pass |
+| BLOCKED | Supermemory/Zep/Letta/Mastra/OpenViking ecosystem rows | Repos exist locally | Competitor command first, then Memongo adapter and same-scorer run |
 
 ## LongMemEval
 
@@ -82,7 +92,7 @@ R@k. The public comparison must use the same retrieval-unit language.
 ### Held-Out 450
 
 MemPalace's honest generalizable hybrid row is held-out 450 hybrid v4 no-LLM at
-98.44% R@5. Memongo has a completed held-out 450 hybrid no-LLM artifact at
+98.44% R@5. Memongo has a current post-fix held-out 450 hybrid no-LLM artifact at
 99.11% session RecallAny@5. This row is a MemPalace P0 win.
 
 | Field | Memongo hybrid no-LLM | MemPalace hybrid held-out |
@@ -90,24 +100,24 @@ MemPalace's honest generalizable hybrid row is held-out 450 hybrid v4 no-LLM at
 | Cases | 450/450 | 450/450 |
 | Session RecallAny@1 | 88.67% | 89.11% |
 | Session RecallAny@5 | 99.11% | 98.44% |
-| Session RecallAny@10 | 99.33% | 99.78% |
+| Session RecallAny@10 | 99.56% | 99.78% |
 | Empty rate | 0.00% | Not reported |
 | Warnings/degradations | 0/0 | Not reported |
-| Artifact SHA256 | `195b6eb3939a48b27c934d0511aea6f3bf8d95b9192fbe47f660d39b4e345fd0` | `5f5849e8facdbdec673967dfbd9dd288323983ae824ca787ffa89110dd1b588d` |
+| Artifact SHA256 | `d173405a11d55750726722623de9bfe4726d1d3788d11038588ae0987c578343` | `5f5849e8facdbdec673967dfbd9dd288323983ae824ca787ffa89110dd1b588d` |
 
 Completed hybrid no-LLM run:
 
 | Field | Value |
 | --- | --- |
 | Status | PROVED; `benchmark:status` PASS |
-| Run ID | `memongo-lme-heldout450-hybrid-surgical-20260527-atlas-a` |
-| Artifact | `artifacts/benchmark-runs/memongo-lme-heldout450-hybrid-surgical-20260527-atlas-a/benchmark-response.json` |
-| Artifact SHA256 | `195b6eb3939a48b27c934d0511aea6f3bf8d95b9192fbe47f660d39b4e345fd0` |
+| Run ID | `memongo-lme-heldout450-hybrid-rrf-20260528-a` |
+| Artifact | `artifacts/benchmark-runs/memongo-lme-heldout450-hybrid-rrf-20260528-a/benchmark-response.json` |
+| Artifact SHA256 | `d173405a11d55750726722623de9bfe4726d1d3788d11038588ae0987c578343` |
 | Scored cases | 450/450 |
 | Internal/session R@5 | 99.11% |
 | Empty rate | 0.00% |
 | Main remaining miss pattern | single-session-preference, one multi-session, one temporal |
-| Generic fix used | Atlas Search key-phrase token facets plus recall-intent rank-agreement fusion; no question-id rules |
+| Generic fix used | Atlas Search key-phrase token facets plus independent subsearch rank fusion; no question-id rules |
 | Prefix cleanup | Exact prefix dropped and verified empty |
 
 Previous failed hybrid no-LLM attempt:
@@ -132,18 +142,18 @@ as MemPalace Haiku rerank; use this row with explicit lane disclosure.
 | Field | Memongo hybrid no-LLM |
 | --- | ---: |
 | Cases | 500/500 |
-| Session RecallAny@1 | 89.60% |
+| Session RecallAny@1 | 89.80% |
 | Session RecallAny@5 | 99.20% |
 | Session RecallAny@10 | 99.60% |
 | Empty rate | 0.00% |
 | Warnings/degradations | 0/0 |
-| Artifact SHA256 | `2b9b6cb32588f54cf9c227e9b1639c0b1e56d3b883f65afd03d8f4b58fcb24e5` |
+| Artifact SHA256 | `c3611431927fac69a3e64dced860d2a52ef1279d0b9eaa8625d77320d4e2f1ca` |
 
 | Field | Value |
 | --- | --- |
 | Status | COMPLETE; `benchmark:status` PASS |
-| Run ID | `memongo-lme-full500-hybrid-surgical-20260527-atlas-a` |
-| Artifact | `artifacts/benchmark-runs/memongo-lme-full500-hybrid-surgical-20260527-atlas-a/benchmark-response.json` |
+| Run ID | `memongo-lme-full500-hybrid-rrf-20260528-a` |
+| Artifact | `artifacts/benchmark-runs/memongo-lme-full500-hybrid-rrf-20260528-a/benchmark-response.json` |
 | Scored cases | 500/500 |
 | Internal/session R@5 | 99.20% |
 | Main remaining miss pattern | single-session-preference and temporal-reasoning |
@@ -242,8 +252,15 @@ Per-category Memongo hit@5:
 
 ## Next Run Queue
 
-1. Optional LongMemEval rerank lane with full model disclosure.
-2. Ecosystem adapters for Mem0, Supermemory, Zep, Letta, Mastra, and OpenViking.
+1. Mem0 official `memory-benchmarks` scoped 72-case Local Preview rehearsal on a
+   fresh benchmark-only deployment with `MEMONGO_BENCHMARK_SEARCH_INDEX_PROFILE=longmemeval`,
+   plus managed Atlas disclosure if Local Preview probe warnings persist.
+2. Mem0 LongMemEval top-50/top-200 full rows, followed by LoCoMo and BEAM rows
+   under the official scorer/model posture.
+3. Supermemory/MemoryBench provider adapter.
+4. Zep, Mastra, Hindsight, and OpenViking adapters only after reproducing each
+   competitor command.
+5. Optional LongMemEval rerank lane with full model disclosure.
 
 ## Validation Commands
 

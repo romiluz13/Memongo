@@ -57,9 +57,11 @@ class SearchFallbackDisabledError extends Error {
 function isStrictSearchFallbackDisabled(opts: {
 	strictNoFallback?: boolean
 }): boolean {
+	const strictEnv = process.env.MEMONGO_BENCHMARK_STRICT
 	return (
 		opts.strictNoFallback === true ||
-		process.env.MEMONGO_BENCHMARK_STRICT === "1"
+		strictEnv === "1" ||
+		strictEnv?.toLowerCase() === "true"
 	)
 }
 
