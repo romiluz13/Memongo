@@ -64,14 +64,14 @@ type Candidate = {
 		keyPhrase: number
 		rankAgreement: number
 		eventTerm: number
-			entity: number
-			ordinal: number
-			semanticFacet: number
-			domain: number
-			transaction: number
-			bridge: number
-			temporal: number
-			personal: number
+		entity: number
+		ordinal: number
+		semanticFacet: number
+		domain: number
+		transaction: number
+		bridge: number
+		temporal: number
+		personal: number
 		advice: number
 		unit: number
 		vectorWeight: number
@@ -606,11 +606,12 @@ function extractKeyPhrases(text: string): string[] {
 	for (const phrase of extractOrdinalPhrases(text)) {
 		phrases.add(phrase)
 	}
-	const words = text
-		.replace(/([a-z])([A-Z])/g, "$1 $2")
-		.toLowerCase()
-		.match(/\b[a-z][a-z0-9+-]{2,}\b/g)
-		?.filter((word) => !ANCHOR_STOP_WORDS.has(word)) ?? []
+	const words =
+		text
+			.replace(/([a-z])([A-Z])/g, "$1 $2")
+			.toLowerCase()
+			.match(/\b[a-z][a-z0-9+-]{2,}\b/g)
+			?.filter((word) => !ANCHOR_STOP_WORDS.has(word)) ?? []
 	for (let size = 4; size >= 2; size--) {
 		for (let index = 0; index <= words.length - size; index++) {
 			const phrase = words.slice(index, index + size).join(" ")
@@ -623,13 +624,25 @@ function extractKeyPhrases(text: string): string[] {
 function extractIntentTags(text: string): string[] {
 	const q = text.toLowerCase()
 	const tags = new Set<string>()
-	if (/\b(remind me|follow up|looking back|previous conversation|mentioned)\b/.test(q)) {
+	if (
+		/\b(remind me|follow up|looking back|previous conversation|mentioned)\b/.test(
+			q,
+		)
+	) {
 		tags.add("followup-recall")
 	}
-	if (/\b(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|\d+(?:st|nd|rd|th))\b/.test(q)) {
+	if (
+		/\b(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|\d+(?:st|nd|rd|th))\b/.test(
+			q,
+		)
+	) {
 		tags.add("list-position")
 	}
-	if (/\b(cashback|cash back|refund|receipt|coupon|discount|earn(?:ed)?|spent|paid|cost|price|\$\d+|\d+\s*(?:dollars?|usd))\b/.test(q)) {
+	if (
+		/\b(cashback|cash back|refund|receipt|coupon|discount|earn(?:ed)?|spent|paid|cost|price|\$\d+|\d+\s*(?:dollars?|usd))\b/.test(
+			q,
+		)
+	) {
 		tags.add("transaction")
 	}
 	if (/\b(last|this past|yesterday|ago|recently|before|after)\b/.test(q)) {
@@ -638,7 +651,11 @@ function extractIntentTags(text: string): string[] {
 	if (/\b(article|paper|report|study|breakthrough|laboratory)\b/.test(q)) {
 		tags.add("article-reference")
 	}
-	if (/\b(prefer|preference|like|favorite|advice|recommend|suggest|tips?)\b/.test(q)) {
+	if (
+		/\b(prefer|preference|like|favorite|advice|recommend|suggest|tips?)\b/.test(
+			q,
+		)
+	) {
 		tags.add("preference-advice")
 	}
 	return Array.from(tags)
@@ -687,55 +704,105 @@ function extractSemanticFacets(text: string): string[] {
 	if (/\b(basil|mint|fresh herbs?)\b/.test(q)) {
 		facets.add("fresh-herbs")
 	}
-	if (/\b(previous occupation|new role|career change|promotion|job|work|task|deadline|project management)\b/.test(q)) {
+	if (
+		/\b(previous occupation|new role|career change|promotion|job|work|task|deadline|project management)\b/.test(
+			q,
+		)
+	) {
 		facets.add("career-role")
 	}
-	if (/\b(projects?|led|leading|team|engineers?|launch|timeline|gantt)\b/.test(q)) {
+	if (
+		/\b(projects?|led|leading|team|engineers?|launch|timeline|gantt)\b/.test(q)
+	) {
 		facets.add("project-leadership")
 	}
-	if (/\b(vintage cameras?|camera flash|sony a7r|photography setup|photo setup|lens|flash)\b/.test(q)) {
+	if (
+		/\b(vintage cameras?|camera flash|sony a7r|photography setup|photo setup|lens|flash)\b/.test(
+			q,
+		)
+	) {
 		facets.add("photography-gear")
 	}
-	if (/\b(paintings?|acrylic|brushes|art supplies?|art history|sunset|inspiration)\b/.test(q)) {
+	if (
+		/\b(paintings?|acrylic|brushes|art supplies?|art history|sunset|inspiration)\b/.test(
+			q,
+		)
+	) {
 		facets.add("visual-art")
 	}
-	if (/\b(shampoo|skincare|bathroom|sephora|dry skin|cleaning routine)\b/.test(q)) {
+	if (
+		/\b(shampoo|skincare|bathroom|sephora|dry skin|cleaning routine)\b/.test(q)
+	) {
 		facets.add("personal-care")
 	}
-	if (/\b(music streaming|concert|shows?|movie|netflix|stand-up|comedy|podcasts?|watch tonight)\b/.test(q)) {
+	if (
+		/\b(music streaming|concert|shows?|movie|netflix|stand-up|comedy|podcasts?|watch tonight)\b/.test(
+			q,
+		)
+	) {
 		facets.add("media-entertainment")
 	}
-	if (/\b(hotel|trip|miami|seattle|las vegas|travel|flight|packing)\b/.test(q)) {
+	if (
+		/\b(hotel|trip|miami|seattle|las vegas|travel|flight|packing)\b/.test(q)
+	) {
 		facets.add("travel-lodging")
 	}
-	if (/\b(cultural events?|language learning|french|podcasts?|around me)\b/.test(q)) {
+	if (
+		/\b(cultural events?|language learning|french|podcasts?|around me)\b/.test(
+			q,
+		)
+	) {
 		facets.add("local-culture")
 	}
-	if (/\b(guitar|guitars|music store|instrument|fender|stratocaster|gibson|les paul|acoustic|electric guitar|strings|amp|amplifier)\b/.test(q)) {
+	if (
+		/\b(guitar|guitars|music store|instrument|fender|stratocaster|gibson|les paul|acoustic|electric guitar|strings|amp|amplifier)\b/.test(
+			q,
+		)
+	) {
 		facets.add("musical-instrument")
 	}
-	if (/\b(phone|battery|power bank|wireless charging|tech accessories|ipad case|wireless mouse|delivery|arrive|ordered)\b/.test(q)) {
+	if (
+		/\b(phone|battery|power bank|wireless charging|tech accessories|ipad case|wireless mouse|delivery|arrive|ordered)\b/.test(
+			q,
+		)
+	) {
 		facets.add("device-accessory")
 	}
 	if (/\b(battery life|power bank|charging)\b/.test(q)) {
 		facets.add("device-power")
 	}
-	if (/\b(bake|baking|cake|cookies?|caramel|ganache|sugar|recipe|pastr(?:y|ies)|dinner)\b/.test(q)) {
+	if (
+		/\b(bake|baking|cake|cookies?|caramel|ganache|sugar|recipe|pastr(?:y|ies)|dinner)\b/.test(
+			q,
+		)
+	) {
 		facets.add("food-baking")
 	}
-	if (/\b(furniture|bedroom|dresser|mid-century|design inspiration)\b/.test(q)) {
+	if (
+		/\b(furniture|bedroom|dresser|mid-century|design inspiration)\b/.test(q)
+	) {
 		facets.add("home-furniture")
 	}
-	if (/\b(dad|mom|grandma|grandpa|parents?|grandparents?|birthday gift|family)\b/.test(q)) {
+	if (
+		/\b(dad|mom|grandma|grandpa|parents?|grandparents?|birthday gift|family)\b/.test(
+			q,
+		)
+	) {
 		facets.add("family-context")
 	}
 	if (/\b(rare items?|rare records?|collection|collecting|catalog)\b/.test(q)) {
 		facets.add("collection-hobby")
 	}
-	if (/\b(camping|road trip|moab|utah|hiking|trails?|united states)\b/.test(q)) {
+	if (
+		/\b(camping|road trip|moab|utah|hiking|trails?|united states)\b/.test(q)
+	) {
 		facets.add("outdoor-travel")
 	}
-	if (/\b(workshops?|lectures?|conferences?|april|library|sustainable development|urban planning)\b/.test(q)) {
+	if (
+		/\b(workshops?|lectures?|conferences?|april|library|sustainable development|urban planning)\b/.test(
+			q,
+		)
+	) {
 		facets.add("learning-events")
 	}
 	return Array.from(facets).slice(0, 24)
@@ -757,33 +824,57 @@ function domainIntentBoost(question: string, text: string): number {
 	const doc = text.toLowerCase()
 	if (/\bhow many different doctors?\b/.test(q)) {
 		let score = 0
-		if (/\b(?:dr\.?\s+[a-z]+|doctor|physician|healthcare provider)\b/i.test(doc)) {
+		if (
+			/\b(?:dr\.?\s+[a-z]+|doctor|physician|healthcare provider)\b/i.test(doc)
+		) {
 			score += 0.45
 		}
-		if (/\b(?:dermatologist|ent specialist|primary care physician)\b/i.test(doc)) {
+		if (
+			/\b(?:dermatologist|ent specialist|primary care physician)\b/i.test(doc)
+		) {
 			score += 0.35
 		}
-		if (/\b(?:prescription|diagnosed|antibiotics|biopsy|sinusitis|uti)\b/i.test(doc)) {
+		if (
+			/\b(?:prescription|diagnosed|antibiotics|biopsy|sinusitis|uti)\b/i.test(
+				doc,
+			)
+		) {
 			score += 0.2
 		}
 		return Math.min(score, 1)
 	}
 	if (/\b(publications?|conferences?)\b/.test(q) && /\binteresting\b/.test(q)) {
 		let score = 0
-		if (/\b(research|study|studies|recent advancements?|working in the field)\b/i.test(doc)) {
+		if (
+			/\b(research|study|studies|recent advancements?|working in the field)\b/i.test(
+				doc,
+			)
+		) {
 			score += 0.35
 		}
-		if (/\b(deep learning|medical image|medical imaging|healthcare|clinical)\b/i.test(doc)) {
+		if (
+			/\b(deep learning|medical image|medical imaging|healthcare|clinical)\b/i.test(
+				doc,
+			)
+		) {
 			score += 0.45
 		}
-		if (/\b(transformers?|self-supervised|federated learning|multimodal|generative models?)\b/i.test(doc)) {
+		if (
+			/\b(transformers?|self-supervised|federated learning|multimodal|generative models?)\b/i.test(
+				doc,
+			)
+		) {
 			score += 0.2
 		}
 		return Math.min(score, 1)
 	}
 	if (/\bhomegrown\b/.test(q) && /\bingredients?\b/.test(q)) {
 		let score = 0
-		if (/\b(garden|gardening|companion plants?|planting|grown|homegrown)\b/i.test(doc)) {
+		if (
+			/\b(garden|gardening|companion plants?|planting|grown|homegrown)\b/i.test(
+				doc,
+			)
+		) {
 			score += 0.45
 		}
 		if (/\b(tomatoes?|cherry tomatoes?|basil|mint|fresh herbs?)\b/i.test(doc)) {
@@ -797,20 +888,36 @@ function domainIntentBoost(question: string, text: string): number {
 	if (/\bhow many\b/.test(q)) {
 		let score = 0
 		if (/\b\d+\b/.test(doc)) score += 0.35
-		if (/\b(projects?|days?|items?|records?|workshops?|lectures?|conferences?|trips?)\b/.test(q)) {
+		if (
+			/\b(projects?|days?|items?|records?|workshops?|lectures?|conferences?|trips?)\b/.test(
+				q,
+			)
+		) {
 			const queryTerms =
 				q.match(
 					/\b(projects?|days?|items?|records?|workshops?|lectures?|conferences?|trips?)\b/g,
 				) ?? []
-			if (queryTerms.some((term) => new RegExp(`\\b${term}\\b`, "i").test(doc))) {
+			if (
+				queryTerms.some((term) => new RegExp(`\\b${term}\\b`, "i").test(doc))
+			) {
 				score += 0.35
 			}
 		}
-		if (/\b(total|average|different|currently leading|this year|in april|after|before)\b/.test(q)) {
+		if (
+			/\b(total|average|different|currently leading|this year|in april|after|before)\b/.test(
+				q,
+			)
+		) {
 			score += 0.15
 		}
-		if (/\b(april|february|march|january|may|june|july|august|september|october|november|december)\b/.test(q) &&
-			/\b(april|february|march|january|may|june|july|august|september|october|november|december)\b/.test(doc)) {
+		if (
+			/\b(april|february|march|january|may|june|july|august|september|october|november|december)\b/.test(
+				q,
+			) &&
+			/\b(april|february|march|january|may|june|july|august|september|october|november|december)\b/.test(
+				doc,
+			)
+		) {
 			score += 0.15
 		}
 		return Math.min(score, 1)
@@ -830,10 +937,16 @@ function personalMemoryBoost(question: string, text: string): number {
 	if (!/\b(i|me|my|mine|we|our)\b/i.test(question)) return 0
 	const doc = text.toLowerCase()
 	let score = 0
-	if (/\b(i'm|i am|i've|i have|i was|i recently|i just|my|me|we|our)\b/.test(doc)) {
+	if (
+		/\b(i'm|i am|i've|i have|i was|i recently|i just|my|me|we|our)\b/.test(doc)
+	) {
 		score += 0.5
 	}
-	if (/user:[\s\S]{0,450}\b(i'm|i am|i've|i have|i was|i recently|i just|my|me|we|our)\b/i.test(text)) {
+	if (
+		/user:[\s\S]{0,450}\b(i'm|i am|i've|i have|i was|i recently|i just|my|me|we|our)\b/i.test(
+			text,
+		)
+	) {
 		score += 0.5
 	}
 	return Math.min(score, 1)
@@ -853,7 +966,8 @@ function entityBoost(entities: string[], text: string): number {
 	if (entities.length === 0) return 0
 	const docEntities = new Set(extractEntityTerms(text))
 	return Math.min(
-		entities.filter((entity) => docEntities.has(entity)).length / entities.length,
+		entities.filter((entity) => docEntities.has(entity)).length /
+			entities.length,
 		1,
 	)
 }
@@ -878,13 +992,17 @@ function keyPhraseBoost(phrases: string[], text: string): number {
 
 function transactionBoost(question: string, text: string): number {
 	const q = question.toLowerCase()
-	if (!/\b(cashback|cash back|refund|receipt|coupon|discount|earn(?:ed)?|spent|paid|cost|price|worth|value)\b/.test(q)) {
+	if (
+		!/\b(cashback|cash back|refund|receipt|coupon|discount|earn(?:ed)?|spent|paid|cost|price|worth|value)\b/.test(
+			q,
+		)
+	) {
 		return 0
 	}
 	const doc = text.toLowerCase()
 	if (/\bworth\b/.test(q) && /\bpaid\b/.test(q)) {
 		let score = 0
-		let possible = 2
+		const possible = 2
 		if (/\b(worth|value|valuable|apprais(?:e|ed|al)|market)\b/.test(doc)) {
 			score += 1
 		}
@@ -905,7 +1023,11 @@ function transactionBoost(question: string, text: string): number {
 	}
 	if (/\b(how much|\$\d+|\d+\s*(?:dollars?|usd))\b/.test(q)) {
 		possible += 1
-		if (/\$\s?\d+|\b\d+(?:\.\d{2})?\s*(?:dollars?|usd|cashback|cash back)\b/.test(doc)) {
+		if (
+			/\$\s?\d+|\b\d+(?:\.\d{2})?\s*(?:dollars?|usd|cashback|cash back)\b/.test(
+				doc,
+			)
+		) {
 			score += 1
 		}
 	}
@@ -1337,12 +1459,12 @@ async function ensureSessionCollection(params: {
 						unit: { type: "token" },
 						status: { type: "token" },
 						entities: { type: "token" },
-							lexicalTerms: { type: "token" },
-							intentTags: { type: "token" },
-							keyPhrases: { type: "token" },
-							ordinalPhrases: { type: "token" },
-							semanticFacets: { type: "token" },
-						},
+						lexicalTerms: { type: "token" },
+						intentTags: { type: "token" },
+						keyPhrases: { type: "token" },
+						ordinalPhrases: { type: "token" },
+						semanticFacets: { type: "token" },
+					},
 				},
 			},
 		})
@@ -1682,14 +1804,17 @@ async function retrieveCandidates(params: {
 		const overlap = keywordOverlap(keywords, candidate.text)
 		const quote = quotedBoost(quoted, candidate.text)
 		const person = nameBoost(names, candidate.text)
-			const exactTerm = exactTermBoost(exactTerms, candidate.text)
-			const entity = entityBoost(entities, candidate.text)
-			const ordinal = ordinalBoost(ordinalPhrases, candidate.text)
-			const keyPhrase = keyPhraseBoost(keyPhrases, candidate.text)
-			const semanticFacet = semanticFacetBoost(params.entry.question, candidate.text)
-			const domain = domainIntentBoost(params.entry.question, candidate.text)
-			const transaction = transactionBoost(params.entry.question, candidate.text)
-			const personal = personalMemoryBoost(params.entry.question, candidate.text)
+		const exactTerm = exactTermBoost(exactTerms, candidate.text)
+		const entity = entityBoost(entities, candidate.text)
+		const ordinal = ordinalBoost(ordinalPhrases, candidate.text)
+		const keyPhrase = keyPhraseBoost(keyPhrases, candidate.text)
+		const semanticFacet = semanticFacetBoost(
+			params.entry.question,
+			candidate.text,
+		)
+		const domain = domainIntentBoost(params.entry.question, candidate.text)
+		const transaction = transactionBoost(params.entry.question, candidate.text)
+		const personal = personalMemoryBoost(params.entry.question, candidate.text)
 		const anchorTerm = anchorTermBoost(anchorTerms, candidate.text)
 		const eventTerm = eventTermBoost(params.entry.question, candidate.text)
 		const bridge = bridgeBoost(params.entry.question, candidate.text)
@@ -1713,14 +1838,14 @@ async function retrieveCandidates(params: {
 			0.01 * overlap +
 			0.02 * quote +
 			0.012 * person +
-				0.04 * exactTerm +
-				0.024 * entity +
-				0.02 * ordinal +
-				0.012 * keyPhrase +
-				0.024 * semanticFacet +
-				0.035 * domain +
-				0.022 * transaction +
-				0.01 * personal +
+			0.04 * exactTerm +
+			0.024 * entity +
+			0.02 * ordinal +
+			0.012 * keyPhrase +
+			0.024 * semanticFacet +
+			0.035 * domain +
+			0.022 * transaction +
+			0.01 * personal +
 			0.04 * eventTerm +
 			0.018 * bridge +
 			0.032 * temporal +
@@ -1734,14 +1859,14 @@ async function retrieveCandidates(params: {
 			overlap,
 			quote,
 			person,
-				exactTerm,
-				entity,
-				ordinal,
-				keyPhrase,
-				semanticFacet,
-				domain,
-				transaction,
-				personal,
+			exactTerm,
+			entity,
+			ordinal,
+			keyPhrase,
+			semanticFacet,
+			domain,
+			transaction,
+			personal,
 			anchorTerm,
 			eventTerm,
 			bridge,
@@ -1755,14 +1880,14 @@ async function retrieveCandidates(params: {
 			overlap > 0 ||
 			quote > 0 ||
 			person > 0 ||
-				exactTerm > 0 ||
-				entity > 0 ||
-				ordinal > 0 ||
-				keyPhrase > 0 ||
-				semanticFacet > 0 ||
-				domain > 0 ||
-				transaction > 0 ||
-				personal > 0 ||
+			exactTerm > 0 ||
+			entity > 0 ||
+			ordinal > 0 ||
+			keyPhrase > 0 ||
+			semanticFacet > 0 ||
+			domain > 0 ||
+			transaction > 0 ||
+			personal > 0 ||
 			eventTerm > 0 ||
 			bridge > 0 ||
 			temporal > 0 ||
@@ -2183,13 +2308,13 @@ async function main(): Promise<void> {
 					timestamp,
 					updatedAt: timestamp,
 					canonicalId: `session-chunk/${sessionId}`,
-						entities: sessionFacets.entities,
-						lexicalTerms: sessionFacets.lexicalTerms,
-						intentTags: sessionFacets.intentTags,
-						keyPhrases: sessionFacets.keyPhrases,
-						ordinalPhrases: sessionFacets.ordinalPhrases,
-						semanticFacets: sessionFacets.semanticFacets,
-					})
+					entities: sessionFacets.entities,
+					lexicalTerms: sessionFacets.lexicalTerms,
+					intentTags: sessionFacets.intentTags,
+					keyPhrases: sessionFacets.keyPhrases,
+					ordinalPhrases: sessionFacets.ordinalPhrases,
+					semanticFacets: sessionFacets.semanticFacets,
+				})
 				if (mode === "hybrid" && prefs.length > 0) {
 					const prefText = `User has mentioned: ${prefs.join("; ")}`
 					const prefFacets = buildEvidenceFacets(prefText)
@@ -2206,13 +2331,13 @@ async function main(): Promise<void> {
 						timestamp,
 						updatedAt: timestamp,
 						canonicalId: `session-preference/${sessionId}`,
-							entities: prefFacets.entities,
-							lexicalTerms: prefFacets.lexicalTerms,
-							intentTags: prefFacets.intentTags,
-							keyPhrases: prefFacets.keyPhrases,
-							ordinalPhrases: prefFacets.ordinalPhrases,
-							semanticFacets: prefFacets.semanticFacets,
-						})
+						entities: prefFacets.entities,
+						lexicalTerms: prefFacets.lexicalTerms,
+						intentTags: prefFacets.intentTags,
+						keyPhrases: prefFacets.keyPhrases,
+						ordinalPhrases: prefFacets.ordinalPhrases,
+						semanticFacets: prefFacets.semanticFacets,
+					})
 				}
 				if (mode === "hybrid" && fullText !== text) {
 					const assistantFacets = buildEvidenceFacets(fullText)
@@ -2229,13 +2354,13 @@ async function main(): Promise<void> {
 						timestamp,
 						updatedAt: timestamp,
 						canonicalId: `session-assistant/${sessionId}`,
-							entities: assistantFacets.entities,
-							lexicalTerms: assistantFacets.lexicalTerms,
-							intentTags: assistantFacets.intentTags,
-							keyPhrases: assistantFacets.keyPhrases,
-							ordinalPhrases: assistantFacets.ordinalPhrases,
-							semanticFacets: assistantFacets.semanticFacets,
-						})
+						entities: assistantFacets.entities,
+						lexicalTerms: assistantFacets.lexicalTerms,
+						intentTags: assistantFacets.intentTags,
+						keyPhrases: assistantFacets.keyPhrases,
+						ordinalPhrases: assistantFacets.ordinalPhrases,
+						semanticFacets: assistantFacets.semanticFacets,
+					})
 				}
 			}
 			if (docs.length > 0) {

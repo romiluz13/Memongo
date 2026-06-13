@@ -1,4 +1,4 @@
-import { MongoClient } from "mongodb"
+import { type IndexDescription, MongoClient } from "mongodb"
 
 type PrefixSummary = {
 	prefix: string
@@ -216,7 +216,7 @@ try {
 			searchIndexes: includeSearchIndexes ? 0 : null,
 		}
 		summary.collections += 1
-		let indexes
+		let indexes: IndexDescription[]
 		try {
 			indexes = await db.collection(name).indexes()
 		} catch (error) {

@@ -40,8 +40,7 @@ export function isTransientMongoWriteError(err: unknown): boolean {
 		normalized.includes("server monitor timeout") ||
 		normalized.includes("server selection timed out") ||
 		normalized.includes("connection timed out") ||
-		(normalized.includes("connection to") &&
-			normalized.includes("interrupted"))
+		(normalized.includes("connection to") && normalized.includes("interrupted"))
 	)
 }
 
@@ -153,11 +152,7 @@ export async function writeEvent(params: {
 	}
 
 	await retryTransientMongoWrite("events.updateOne", () =>
-		collection.updateOne(
-			{ eventId },
-			{ $setOnInsert: doc },
-			{ upsert: true },
-		),
+		collection.updateOne({ eventId }, { $setOnInsert: doc }, { upsert: true }),
 	)
 
 	log.info(`event written: ${eventId} role=${event.role}`)

@@ -242,18 +242,16 @@ export function resolveMemoryBackendConfig(params: {
 					mongoCfg.numDimensions > 0
 						? Math.floor(mongoCfg.numDimensions)
 						: 1024,
-				maxPoolSize:
-					resolvePositiveIntegerSetting(
-						mongoCfg?.maxPoolSize,
-						"MEMONGO_MONGODB_MAX_POOL_SIZE",
-						10,
-					),
-				minPoolSize:
-					resolveNonNegativeIntegerSetting(
-						mongoCfg?.minPoolSize,
-						"MEMONGO_MONGODB_MIN_POOL_SIZE",
-						2,
-					),
+				maxPoolSize: resolvePositiveIntegerSetting(
+					mongoCfg?.maxPoolSize,
+					"MEMONGO_MONGODB_MAX_POOL_SIZE",
+					10,
+				),
+				minPoolSize: resolveNonNegativeIntegerSetting(
+					mongoCfg?.minPoolSize,
+					"MEMONGO_MONGODB_MIN_POOL_SIZE",
+					2,
+				),
 				maxConnecting: resolveOptionalPositiveIntegerSetting(
 					mongoCfg?.maxConnecting,
 					"MEMONGO_MONGODB_MAX_CONNECTING",
@@ -310,12 +308,11 @@ export function resolveMemoryBackendConfig(params: {
 					mongoCfg.changeStreamDebounceMs >= 0
 						? Math.floor(mongoCfg.changeStreamDebounceMs)
 						: 1000,
-				connectTimeoutMs:
-					resolvePositiveIntegerSetting(
-						mongoCfg?.connectTimeoutMs,
-						"MEMONGO_MONGODB_CONNECT_TIMEOUT_MS",
-						10_000,
-					),
+				connectTimeoutMs: resolvePositiveIntegerSetting(
+					mongoCfg?.connectTimeoutMs,
+					"MEMONGO_MONGODB_CONNECT_TIMEOUT_MS",
+					10_000,
+				),
 				numCandidates: Math.min(
 					typeof mongoCfg?.numCandidates === "number" &&
 						Number.isFinite(mongoCfg.numCandidates) &&
@@ -644,7 +641,11 @@ function resolveOptionalMongoServerMonitoringMode(
 ): "auto" | "stream" | "poll" | undefined {
 	const raw = process.env[envKey]?.trim()
 	if (raw === "auto" || raw === "stream" || raw === "poll") return raw
-	if (configValue === "auto" || configValue === "stream" || configValue === "poll") {
+	if (
+		configValue === "auto" ||
+		configValue === "stream" ||
+		configValue === "poll"
+	) {
 		return configValue
 	}
 	return undefined

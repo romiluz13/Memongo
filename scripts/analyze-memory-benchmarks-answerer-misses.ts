@@ -54,7 +54,10 @@ type AnalyzerReport = {
 		cutoffs: string[]
 		misses: number
 		byCategory: Record<MissCategory, number>
-		byQuestionType: Record<string, { misses: number; totalCutoffMisses: number }>
+		byQuestionType: Record<
+			string,
+			{ misses: number; totalCutoffMisses: number }
+		>
 	}
 	misses: CutoffMiss[]
 	recommendations: string[]
@@ -119,7 +122,10 @@ function tokens(text: string): string[] {
 
 function salientAnswerTokens(text: string): string[] {
 	const raw = tokens(text)
-	const numeric = text.match(/\$?\b\d+(?:\.\d+)?%?\b|\b(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\b/gi) ?? []
+	const numeric =
+		text.match(
+			/\$?\b\d+(?:\.\d+)?%?\b|\b(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\b/gi,
+		) ?? []
 	return [...new Set([...numeric.map((token) => token.toLowerCase()), ...raw])]
 		.filter((token) => token.length >= 2)
 		.slice(0, 16)
@@ -129,7 +135,10 @@ function normalizeText(value: string): string {
 	return value.toLowerCase()
 }
 
-function tokenHitRanks(searchResults: EvidenceSummary[], answer: string): number[] {
+function tokenHitRanks(
+	searchResults: EvidenceSummary[],
+	answer: string,
+): number[] {
 	const answerTokens = salientAnswerTokens(answer)
 	if (answerTokens.length === 0) return []
 	const ranks: number[] = []
@@ -142,7 +151,11 @@ function tokenHitRanks(searchResults: EvidenceSummary[], answer: string): number
 	return ranks
 }
 
-function queryCoverage(searchResults: EvidenceSummary[], query: string, limit: number): number {
+function queryCoverage(
+	searchResults: EvidenceSummary[],
+	query: string,
+	limit: number,
+): number {
 	const queryTokens = tokens(query)
 	if (queryTokens.length === 0) return 0
 	const seen = new Set<string>()
@@ -179,7 +192,8 @@ function summarizeEvidence(rawResults: unknown[]): EvidenceSummary[] {
 			rank: index + 1,
 			id: asString(result.id) || null,
 			score: asNumber(result.score),
-			createdAt: asString(result.created_at) || asString(result.createdAt) || null,
+			createdAt:
+				asString(result.created_at) || asString(result.createdAt) || null,
 			memory: asString(result.memory) || asString(result.text) || "",
 		}
 	})
@@ -196,8 +210,12 @@ function evidenceSignals(
 		generatedAnswerTokenHitRanks: tokenHitRanks(searchResults, generatedAnswer),
 		queryTokenCoverageTop10: queryCoverage(searchResults, question, 10),
 		queryTokenCoverageTop50: queryCoverage(searchResults, question, 50),
-		distinctSessionLikeIdsTop10: new Set(searchResults.slice(0, 10).map(sessionLikeId)).size,
-		distinctSessionLikeIdsTop50: new Set(searchResults.slice(0, 50).map(sessionLikeId)).size,
+		distinctSessionLikeIdsTop10: new Set(
+			searchResults.slice(0, 10).map(sessionLikeId),
+		).size,
+		distinctSessionLikeIdsTop50: new Set(
+			searchResults.slice(0, 50).map(sessionLikeId),
+		).size,
 		newestEvidenceRank: newestEvidenceRank(searchResults),
 	}
 }
@@ -329,8 +347,10 @@ function analyze(payload: JsonRecord, artifactPath: string): AnalyzerReport {
 			"unknown",
 		].map((category) => [category, 0]),
 	) as Record<MissCategory, number>
-	const byQuestionType: Record<string, { misses: number; totalCutoffMisses: number }> =
-		{}
+	const byQuestionType: Record<
+		string,
+		{ misses: number; totalCutoffMisses: number }
+	> = {}
 	for (const miss of misses) {
 		byCategory[miss.category] += 1
 		byQuestionType[miss.questionType] ??= { misses: 0, totalCutoffMisses: 0 }
@@ -377,8 +397,16 @@ function renderMarkdown(report: AnalyzerReport): string {
 	for (const [category, count] of Object.entries(report.summary.byCategory)) {
 		if (count > 0) lines.push(`| ${category} | ${count} |`)
 	}
-	lines.push("", "## Question-Type Summary", "", "| Type | Misses |", "| --- | ---: |")
-	for (const [questionType, item] of Object.entries(report.summary.byQuestionType)) {
+	lines.push(
+		"",
+		"## Question-Type Summary",
+		"",
+		"| Type | Misses |",
+		"| --- | ---: |",
+	)
+	for (const [questionType, item] of Object.entries(
+		report.summary.byQuestionType,
+	)) {
 		lines.push(`| ${questionType} | ${item.misses} |`)
 	}
 	lines.push("", "## Miss Ledger", "")
@@ -445,8 +473,14 @@ if (import.meta.main) {
 		const report = analyze(payload, artifactPath)
 		if (outDir) {
 			mkdirSync(outDir, { recursive: true })
-			writeFileSync(join(outDir, "answerer-miss-analysis.json"), JSON.stringify(report, null, 2))
-			writeFileSync(join(outDir, "answerer-miss-analysis.md"), renderMarkdown(report))
+			writeFileSync(
+				join(outDir, "answerer-miss-analysis.json"),
+				JSON.stringify(report, null, 2),
+			)
+			writeFileSync(
+				join(outDir, "answerer-miss-analysis.md"),
+				renderMarkdown(report),
+			)
 		} else if (jsonOnly) {
 			console.log(JSON.stringify(report, null, 2))
 		} else {
