@@ -16,6 +16,7 @@ import {
 	buildAttributeEvidenceResults,
 	buildAssistantRecallEvidenceResults,
 	buildAssistantRecallQueries,
+	buildCompiledAnswerEvidenceResults,
 	buildCountEvidenceResults,
 	buildCurrentStateEvidenceResults,
 	buildPercentageComparisonEvidenceResults,
@@ -582,13 +583,19 @@ const server = Bun.serve({
 					results,
 					await supplementalSearchResults(query, userId, maxResults),
 				)
+				const assistantRecall = await assistantRecallResults(query, userId)
 				const actionEvidence = buildActionEvidenceResults(
 					query,
 					evidenceResults,
 				)
 				const assistantRecallEvidence = buildAssistantRecallEvidenceResults(
 					query,
-					await assistantRecallResults(query, userId),
+					assistantRecall,
+				)
+				const compiledAnswerEvidence = buildCompiledAnswerEvidenceResults(
+					query,
+					evidenceResults,
+					assistantRecall,
 				)
 				const countEvidence = buildCountEvidenceResults(query, evidenceResults)
 				const percentageComparisonEvidence =
@@ -636,6 +643,7 @@ const server = Bun.serve({
 					settle_wait_ms,
 					readiness_wait_ms,
 					results: [
+						...compiledAnswerEvidence,
 						...actionEvidence,
 						...assistantRecallEvidence,
 						...percentageComparisonEvidence,

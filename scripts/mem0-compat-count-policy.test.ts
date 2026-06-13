@@ -5,6 +5,7 @@ import {
 	buildAttributeEvidenceResults,
 	buildAssistantRecallEvidenceResults,
 	buildAssistantRecallQueries,
+	buildCompiledAnswerEvidenceResults,
 	buildCountEvidenceResults,
 	buildCurrentStateEvidenceResults,
 	buildPercentageComparisonEvidenceResults,
@@ -405,6 +406,84 @@ describe("mem0 compat count policy", () => {
 		expect(spareEvidence?.memory).toContain("spare precision screwdriver")
 		expect(recordEvidence?.memory).toContain("current answer = 25:50")
 		expect(recordEvidence?.memory).toContain("superseded or older: 27:12")
+	})
+
+	it("builds a compiled proof pack with current-state evidence ahead of stale and planned facts", () => {
+		const [evidence] = buildCompiledAnswerEvidenceResults(
+			"Where do I currently keep my old sneakers?",
+			[
+				result(
+					"user: I used to keep my old sneakers under my bed.",
+					"2023-04-01",
+				),
+				result(
+					"user: I moved my old sneakers to a shoe rack in my closet.",
+					"2023-05-20",
+				),
+				result(
+					"user: I plan to move my old sneakers to the garage shelf next month.",
+					"2023-05-30",
+				),
+			],
+		)
+
+		expect(evidence?.id).toContain("derived-answer-evidence-pack")
+		expect(evidence?.memory).toContain("ANSWER EVIDENCE PACK")
+		expect(evidence?.memory).toContain("source-backed proof pack")
+		expect(evidence?.memory).toContain("1. current-state")
+		expect(evidence?.memory).toContain(
+			"current answer = a shoe rack in my closet",
+		)
+		expect(evidence?.memory).toContain("superseded or older")
+		expect(evidence?.memory).toContain("under my bed")
+		expect(evidence?.memory).not.toContain("garage shelf")
+		expect(evidence?.score ?? 0).toBeGreaterThan(0.5)
+	})
+
+	it("builds compiled assistant-recall and preference packs without count evidence", () => {
+		const [assistantEvidence] = buildCompiledAnswerEvidenceResults(
+			"Can you remind me what specific back-end programming languages you recommended I learn?",
+			[],
+			[
+				{
+					citation: {
+						eventId: "assistant-1",
+						role: "assistant",
+						timestamp: "2023-05-26T19:29:00.000Z",
+						preview:
+							"assistant: Learn a back-end programming language, such as Ruby, Python, or PHP.",
+					},
+					score: 0.42,
+				},
+				{
+					citation: {
+						eventId: "user-1",
+						role: "user",
+						preview: "user: Can someone learn front-end and back-end?",
+					},
+				},
+			],
+		)
+		const [preferenceEvidence] = buildCompiledAnswerEvidenceResults(
+			"What are some simple ways to keep my living room dust-free, especially with a cat that sheds a lot?",
+			[
+				result(
+					"user: What are some simple ways to keep my living room dust-free, especially with a cat that sheds a lot?",
+				),
+				result("user: I should order more of Luna's favorite wet food."),
+				result(
+					"assistant: Here are generic cleaning tips for your living room.",
+				),
+			],
+		)
+
+		expect(assistantEvidence?.memory).toContain("1. assistant-recall")
+		expect(assistantEvidence?.memory).toContain("Ruby, Python, or PHP")
+		expect(assistantEvidence?.memory).not.toContain("Can someone learn")
+		expect(preferenceEvidence?.memory).toContain("1. preference-context")
+		expect(preferenceEvidence?.memory).toContain("Luna")
+		expect(preferenceEvidence?.memory).not.toContain("count-current-state")
+		expect(preferenceEvidence?.memory).not.toContain("generic cleaning tips")
 	})
 
 	it("builds respiratory preference evidence from deeper source context", () => {

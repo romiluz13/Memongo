@@ -3813,3 +3813,124 @@ export function buildCountEvidenceResults(
 		},
 	]
 }
+
+function evidenceSectionMemory(memory: string): string {
+	return memory
+		.replace(/^ANSWER EVIDENCE:\s*/i, "")
+		.replace(/\s+/g, " ")
+		.trim()
+}
+
+function firstCreatedAt(results: Mem0CompatSearchResult[]): string | undefined {
+	return results.find((result) => result.created_at)?.created_at
+}
+
+function topEvidenceScore(
+	searchResults: BridgeSearchResult[],
+	evidenceResults: Mem0CompatSearchResult[],
+): number {
+	return Math.max(
+		0,
+		...searchResults.map((result) =>
+			typeof result.score === "number" ? result.score : 0,
+		),
+		...evidenceResults.map((result) =>
+			typeof result.score === "number" ? result.score : 0,
+		),
+	)
+}
+
+function uniqueEvidenceResults(
+	sections: Array<{ kind: string; results: Mem0CompatSearchResult[] }>,
+): Array<{ kind: string; result: Mem0CompatSearchResult }> {
+	const seen = new Set<string>()
+	const unique: Array<{ kind: string; result: Mem0CompatSearchResult }> = []
+	for (const section of sections) {
+		for (const result of section.results) {
+			const key = `${result.id}:${normalizeEvidenceKey(result.memory)}`
+			if (seen.has(key)) {
+				continue
+			}
+			seen.add(key)
+			unique.push({ kind: section.kind, result })
+		}
+	}
+	return unique
+}
+
+export function buildCompiledAnswerEvidenceResults(
+	query: string,
+	results: BridgeSearchResult[],
+	assistantRecallResults: AssistantRecallResult[] = [],
+): Mem0CompatSearchResult[] {
+	const sections = uniqueEvidenceResults([
+		{
+			kind: "current-state",
+			results: buildCurrentStateEvidenceResults(query, results),
+		},
+		{
+			kind: "count-current-state",
+			results: buildCountEvidenceResults(query, results),
+		},
+		{
+			kind: "pending-action",
+			results: buildActionEvidenceResults(query, results),
+		},
+		{
+			kind: "remaining-total",
+			results: buildRemainingTotalEvidenceResults(query, results),
+		},
+		{
+			kind: "arithmetic-total",
+			results: buildArithmeticTotalEvidenceResults(query, results),
+		},
+		{
+			kind: "percentage-comparison",
+			results: buildPercentageComparisonEvidenceResults(query, results),
+		},
+		{
+			kind: "temporal-order",
+			results: buildTemporalOrderEvidenceResults(query, results),
+		},
+		{
+			kind: "assistant-recall",
+			results: buildAssistantRecallEvidenceResults(
+				query,
+				assistantRecallResults,
+			),
+		},
+		{
+			kind: "attribute",
+			results: buildAttributeEvidenceResults(query, results),
+		},
+		{
+			kind: "preference-context",
+			results: buildPreferenceEvidenceResults(query, results),
+		},
+	])
+	if (sections.length === 0) {
+		return []
+	}
+	const sectionText = sections
+		.slice(0, 8)
+		.map(
+			(section, index) =>
+				`${index + 1}. ${section.kind}: ${evidenceSectionMemory(section.result.memory)}`,
+		)
+		.join(" ")
+	const evidenceResults = sections.map((section) => section.result)
+	const memory = [
+		"ANSWER EVIDENCE PACK: Use this source-backed proof pack before raw memories.",
+		"It is generated only from retrieved memories and assistant recall artifacts; it contains no question-id or gold-answer logic.",
+		"Treat current/latest facts as active, keep superseded/older facts only as context, and exclude planned, future, assistant-advice, or out-of-scope memories unless a section explicitly says otherwise.",
+		sectionText,
+	].join(" ")
+	return [
+		{
+			id: `derived-answer-evidence-pack:${normalizeEvidenceKey(query)}`,
+			memory,
+			score: topEvidenceScore(results, evidenceResults) + 0.25,
+			created_at: firstCreatedAt(evidenceResults),
+		},
+	]
+}
