@@ -18,7 +18,9 @@ Memongo treats memory as a first-class MongoDB data model. Every memory is a doc
 
 ## Hybrid search
 
-Memongo combines two search strategies using MongoDB `$scoreFusion`:
+Memongo combines two search strategies using MongoDB hybrid search. `$rankFusion`
+is the default broad retrieval lane; `$scoreFusion` is used only as a supported
+score-normalized lane when that row is explicitly selected and measured:
 
 1. **Vector search** -- semantic similarity via automated Voyage AI embeddings
 2. **Full-text search** -- keyword matching via MongoDB Atlas Search / mongot

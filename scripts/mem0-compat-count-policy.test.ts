@@ -437,7 +437,18 @@ describe("mem0 compat count policy", () => {
 		expect(evidence?.memory).toContain("superseded or older")
 		expect(evidence?.memory).toContain("under my bed")
 		expect(evidence?.memory).not.toContain("garage shelf")
-		expect(evidence?.score ?? 0).toBeGreaterThan(0.5)
+		expect(evidence?.memory).toContain("answer-context packaging artifact")
+		expect(evidence?.memory).toContain(
+			"raw MongoDB-ranked memories remain below",
+		)
+		expect(evidence?.score).toBeUndefined()
+		expect(evidence?.score_debug?.scoreDetails).toMatchObject({
+			artifactType: "compiledAnswerEvidencePack",
+			ranking: "answer-context-packaging",
+			mongoScore: null,
+			sectionCount: 1,
+			sourceResultCount: 3,
+		})
 	})
 
 	it("builds compiled assistant-recall and preference packs without count evidence", () => {
