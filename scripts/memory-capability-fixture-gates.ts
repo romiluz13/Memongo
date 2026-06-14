@@ -425,6 +425,8 @@ function compiledAnswerEvidencePackGate(): FixtureGateResult {
 	const failures = [
 		...expectContains(text, "ANSWER EVIDENCE PACK"),
 		...expectContains(text, "source-backed proof pack"),
+		...expectContains(text, "answer-context packaging artifact"),
+		...expectContains(text, "raw MongoDB-ranked memories remain below"),
 		...expectContains(text, "1. current-state"),
 		...expectContains(text, "current answer = a shoe rack in my closet"),
 		...expectContains(text, "superseded or older"),

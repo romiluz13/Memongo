@@ -35,6 +35,21 @@ answer-context packaging, record:
 | Managed embeddings | Vector Search Automated Embedding / `autoEmbed` | `https://www.mongodb.com/docs/vector-search/crud-embeddings/automated-embedding/` | Separate Atlas lane; never silently mix with client-side embedding rows. |
 | Cost/latency vector optimization | Vector quantization | `https://www.mongodb.com/docs/vector-search/about/vector-quantization/` | Publish only with remeasured recall, latency, storage, and cost. |
 | Index readiness | `$listSearchIndexes` / `getSearchIndexes` status and `queryable` | `https://www.mongodb.com/docs/manual/reference/operator/aggregation/listSearchIndexes/` | No measured run starts unless Search/Vector indexes are `READY` and queryable. |
+| Answer-context packaging | Source-backed aggregation over MongoDB-ranked memories | MongoDB MCP knowledge for Search scores/analyzers, Vector Search `numCandidates`, Hybrid Search fusion, and `$listSearchIndexes` readiness | Must be labeled as packaging, not retrieval score; raw MongoDB-ranked memories must remain preserved below the package. |
+
+## Decision Records
+
+### 2026-06-14: Mem0 Answer Evidence Pack
+
+| Field | Decision |
+| --- | --- |
+| Capability family | Answer-context packing, aggregation/schema, graph/provenance |
+| MongoDB feature | No new index or retrieval operator. The pack is derived after MongoDB Search / Vector Search / Hybrid Search retrieval from source-backed memory documents and assistant-authored recall artifacts. |
+| Version support | Works anywhere the existing Mem0 compatibility retrieval path works. MongoDB Search/Vector/Hybrid support remains governed by the existing runtime capability checks. |
+| Index shape | No index definition change. Existing Search/Vector indexes, analyzers, embedding model, filter fields, and readiness checks remain the source of retrieval truth. |
+| Query shape | `/search` calls scoped `memongoBridgeSearchDetailed` with `searchMode: "direct"`, `sourcePreference: ["conversation"]`, and `needExactEvidence: true`, merges supplemental source-backed retrieval, then compiles current-state/count/temporal/assistant/preference evidence into one labeled context package. |
+| Artifact impact | Mem0 compatibility result arrays may include `derived-answer-evidence-pack:*` before raw memories. The row is labeled as answer-context packaging, carries no MongoDB score, and includes `score_debug.scoreDetails.artifactType = "compiledAnswerEvidencePack"`. |
+| Stop condition | Stop if the pack contains question IDs, gold answers, scorer edits, prompt edits, hidden fallback, competitor harness changes beyond transport headers, or if raw MongoDB-ranked memories are not preserved below it. |
 
 ## Capability Families For Misses
 

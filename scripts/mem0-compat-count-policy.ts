@@ -3825,21 +3825,6 @@ function firstCreatedAt(results: Mem0CompatSearchResult[]): string | undefined {
 	return results.find((result) => result.created_at)?.created_at
 }
 
-function topEvidenceScore(
-	searchResults: BridgeSearchResult[],
-	evidenceResults: Mem0CompatSearchResult[],
-): number {
-	return Math.max(
-		0,
-		...searchResults.map((result) =>
-			typeof result.score === "number" ? result.score : 0,
-		),
-		...evidenceResults.map((result) =>
-			typeof result.score === "number" ? result.score : 0,
-		),
-	)
-}
-
 function uniqueEvidenceResults(
 	sections: Array<{ kind: string; results: Mem0CompatSearchResult[] }>,
 ): Array<{ kind: string; result: Mem0CompatSearchResult }> {
@@ -3922,6 +3907,7 @@ export function buildCompiledAnswerEvidenceResults(
 	const memory = [
 		"ANSWER EVIDENCE PACK: Use this source-backed proof pack before raw memories.",
 		"It is generated only from retrieved memories and assistant recall artifacts; it contains no question-id or gold-answer logic.",
+		"It is an answer-context packaging artifact, not a MongoDB Search or Vector Search score; raw MongoDB-ranked memories remain below it.",
 		"Treat current/latest facts as active, keep superseded/older facts only as context, and exclude planned, future, assistant-advice, or out-of-scope memories unless a section explicitly says otherwise.",
 		sectionText,
 	].join(" ")
@@ -3929,8 +3915,16 @@ export function buildCompiledAnswerEvidenceResults(
 		{
 			id: `derived-answer-evidence-pack:${normalizeEvidenceKey(query)}`,
 			memory,
-			score: topEvidenceScore(results, evidenceResults) + 0.25,
 			created_at: firstCreatedAt(evidenceResults),
+			score_debug: {
+				scoreDetails: {
+					artifactType: "compiledAnswerEvidencePack",
+					ranking: "answer-context-packaging",
+					mongoScore: null,
+					sourceResultCount: results.length,
+					sectionCount: sections.length,
+				},
+			},
 		},
 	]
 }
