@@ -81,6 +81,14 @@ describe("artifact count audit", () => {
 		).toBe(5)
 	})
 
+	it("extracts explicit pending-action counts before counting numbered prose", () => {
+		expect(
+			extractDerivedEvidenceNumber(
+				"Derived action checklist from retrieved memories: computed pending-action count: 3. Count the numbered actions separately. 1. separate pending action: pick up boots. 2. separate pending action: return jacket. 3. separate pending action: pick up blazer.",
+			),
+		).toBe(3)
+	})
+
 	it("flags generated and derived evidence count disagreements", () => {
 		const question = auditCountQuestion({
 			question_id: "88432d0a",

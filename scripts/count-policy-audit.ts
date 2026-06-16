@@ -216,6 +216,13 @@ export function countDerivedEvidenceBullets(memory: string): number | null {
 
 export function extractDerivedEvidenceNumber(memory: string): number | null {
 	const lowerMemory = memory.toLowerCase()
+	const explicitDerivedCount = lowerMemory.match(
+		/\b(?:count answer|computed (?:repeated-action|pending-action) count)\s*[:=]\s*(\d+(?:\.\d+)?)\b/,
+	)
+	if (explicitDerivedCount?.[1]) {
+		const parsed = Number(explicitDerivedCount[1])
+		return Number.isFinite(parsed) ? parsed : null
+	}
 	if (/\bderived current-total evidence\b/.test(lowerMemory)) {
 		const statedTotals = [
 			...lowerMemory.matchAll(/\bstated total\s+(\d+(?:\.\d+)?)\b/g),

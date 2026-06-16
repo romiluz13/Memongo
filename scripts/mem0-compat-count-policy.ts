@@ -7,6 +7,7 @@ export type BridgeSearchResult = {
 	source?: string
 	score?: number
 	scoreDetails?: unknown
+	sourceEventIds?: string[]
 }
 
 export type Mem0CompatSearchResult = {

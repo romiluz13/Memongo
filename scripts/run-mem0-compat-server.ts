@@ -328,38 +328,90 @@ function compactTextForQuery(
 	return `${head} ... ${window}${suffix}`
 }
 
-function materializedPathForResult(result: BridgeSearchResult): string | null {
+function eventPathForId(eventId: string): string | null {
+	const trimmed = eventId.trim()
+	if (!trimmed) {
+		return null
+	}
+	return trimmed.startsWith("event:") || trimmed.startsWith("events/")
+		? trimmed
+		: `event:${trimmed}`
+}
+
+function materializedPathsForResult(result: BridgeSearchResult): string[] {
+	const paths: string[] = []
+	const seen = new Set<string>()
+	const add = (path: string | null) => {
+		if (!path || seen.has(path)) {
+			return
+		}
+		seen.add(path)
+		paths.push(path)
+	}
 	if (result.canonicalId?.startsWith("event:")) {
-		return result.canonicalId
+		add(result.canonicalId)
 	}
 	if (result.path?.startsWith("events/")) {
-		return result.path
+		add(result.path)
 	}
-	const eventId = result.sourceEventIds?.find(
-		(value) => value.trim().length > 0,
-	)
-	return eventId ? `event:${eventId}` : null
+	for (const eventId of result.sourceEventIds ?? []) {
+		add(eventPathForId(eventId))
+	}
+	return paths.slice(0, 12)
 }
 
 async function materializedResultText(
 	agentId: string,
 	result: BridgeSearchResult,
 ): Promise<string | null> {
-	const relPath = materializedPathForResult(result)
-	if (!relPath) {
+	const relPaths = materializedPathsForResult(result)
+	if (relPaths.length === 0) {
 		return null
 	}
+	const texts: string[] = []
 	try {
-		const materialized = await memongoBridgeReadFile({ agentId, relPath })
-		const text =
-			typeof materialized.text === "string" ? materialized.text.trim() : ""
-		return text.length > 0 ? text : null
+		for (const relPath of relPaths) {
+			const materialized = await memongoBridgeReadFile({ agentId, relPath })
+			const text =
+				typeof materialized.text === "string" ? materialized.text.trim() : ""
+			if (text.length > 0) {
+				texts.push(text)
+			}
+		}
 	} catch (error) {
 		if (strictCompat) {
 			throw error
 		}
+	}
+	return texts.length > 0 ? texts.join("\n") : null
+}
+
+async function evidenceResultText(
+	agentId: string,
+	query: string,
+	result: BridgeSearchResult,
+): Promise<string | null> {
+	const text = await materializedResultText(agentId, result)
+	if (!text) {
 		return null
 	}
+	return compactTextForQuery(text.replace(/\s+/g, " ").trim(), query, 4000)
+}
+
+async function enrichResultsForDerivedEvidence(
+	agentId: string,
+	query: string,
+	results: BridgeSearchResult[],
+): Promise<BridgeSearchResult[]> {
+	return Promise.all(
+		results.map(async (result) => {
+			const sourceText = await evidenceResultText(agentId, query, result)
+			if (!sourceText) {
+				return result
+			}
+			return { ...result, snippet: sourceText }
+		}),
+	)
 }
 
 async function resultText(
@@ -579,14 +631,24 @@ const server = Bun.serve({
 					},
 				})
 				const results = detailed.results as BridgeSearchResult[]
-				const evidenceResults = mergeSearchResults(
+				const evidenceResults = await enrichResultsForDerivedEvidence(
+					compatAgentId,
+					query,
 					results,
+				)
+				const supplementalResults = await enrichResultsForDerivedEvidence(
+					compatAgentId,
+					query,
 					await supplementalSearchResults(query, userId, maxResults),
+				)
+				const mergedEvidenceResults = mergeSearchResults(
+					evidenceResults,
+					supplementalResults,
 				)
 				const assistantRecall = await assistantRecallResults(query, userId)
 				const actionEvidence = buildActionEvidenceResults(
 					query,
-					evidenceResults,
+					mergedEvidenceResults,
 				)
 				const assistantRecallEvidence = buildAssistantRecallEvidenceResults(
 					query,
@@ -594,40 +656,43 @@ const server = Bun.serve({
 				)
 				const compiledAnswerEvidence = buildCompiledAnswerEvidenceResults(
 					query,
-					evidenceResults,
+					mergedEvidenceResults,
 					assistantRecall,
 				)
-				const countEvidence = buildCountEvidenceResults(query, evidenceResults)
+				const countEvidence = buildCountEvidenceResults(
+					query,
+					mergedEvidenceResults,
+				)
 				const percentageComparisonEvidence =
-					buildPercentageComparisonEvidenceResults(query, evidenceResults)
+					buildPercentageComparisonEvidenceResults(query, mergedEvidenceResults)
 				const remainingTotalEvidence = buildRemainingTotalEvidenceResults(
 					query,
-					evidenceResults,
+					mergedEvidenceResults,
 				)
 				const arithmeticTotalEvidence = buildArithmeticTotalEvidenceResults(
 					query,
-					evidenceResults,
+					mergedEvidenceResults,
 				)
 				const currentStateEvidence = buildCurrentStateEvidenceResults(
 					query,
-					evidenceResults,
+					mergedEvidenceResults,
 				)
 				const attributeEvidence = buildAttributeEvidenceResults(
 					query,
-					evidenceResults,
+					mergedEvidenceResults,
 				)
 				const preferenceEvidence = buildPreferenceEvidenceResults(
 					query,
-					evidenceResults,
+					mergedEvidenceResults,
 				)
 				const temporalOrderEvidence = buildTemporalOrderEvidenceResults(
 					query,
-					evidenceResults,
+					mergedEvidenceResults,
 				)
 				const rawResults =
 					countEvidence.length > 0
-						? selectCountSupportingRawResults(query, evidenceResults)
-						: evidenceResults
+						? selectCountSupportingRawResults(query, mergedEvidenceResults)
+						: mergedEvidenceResults
 				const formattedResults: Mem0CompatSearchResult[] = await Promise.all(
 					rawResults.map(async (result) => ({
 						id: result.canonicalId ?? result.path,
