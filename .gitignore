@@ -1,4 +1,6 @@
 node_modules
+.envrc
+.direnv/
 **/node_modules/
 .env
 .env.local
