@@ -9,9 +9,13 @@ versions and the current `main` branch.
 
 Please do not open a public issue for a suspected vulnerability.
 
-Use GitHub private vulnerability reporting for this repository when available.
-If private reporting is unavailable, contact the maintainer through the GitHub
-profile listed on the repository.
+Use [GitHub private vulnerability reporting](https://github.com/romiluz13/memongo/security/advisories/new)
+for this repository. If that channel is unavailable, contact the maintainer via
+the GitHub profile at [github.com/romiluz13](https://github.com/romiluz13).
+
+Valid reports will be acknowledged within **7 business days**. A fix timeline
+will be communicated after triage; critical issues affecting live deployments
+will be prioritised.
 
 Include:
 

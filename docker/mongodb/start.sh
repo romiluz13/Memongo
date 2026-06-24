@@ -77,7 +77,7 @@ case "${1:-fullstack}" in
       echo -e "${GREEN}Embedding API key detected - mongot config includes auto-embedding.${NC}"
     else
       echo ""
-      echo -e "${YELLOW}For auto-embedding: export VOYAGE_API_KEY=your-key && ./start.sh fullstack${NC}"
+      echo -e "${YELLOW}For auto-embedding: export VOYAGE_API_KEY=al-your-atlas-model-api-key && ./start.sh fullstack${NC}"
     fi
     ;;
 

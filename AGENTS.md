@@ -1,6 +1,6 @@
 # Memongo Repository Guidelines
 
-- Repo: https://github.com/romiluz/memongo
+- Repo: https://github.com/romiluz13/memongo
 - In chat replies, file references must be repo-root relative only (example: `packages/memory-engine/src/mongodb-manager.ts:80`); never absolute paths or `~/...`.
 
 ## Project Structure

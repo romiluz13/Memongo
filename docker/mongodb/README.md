@@ -11,7 +11,7 @@ The fastest way to run Memongo's full MongoDB stack:
 ./docker/mongodb/start-preview.sh
 
 # With auto-embeddings
-VOYAGE_API_KEY=atlas-model-api-key ./docker/mongodb/start-preview.sh
+VOYAGE_API_KEY=al-your-atlas-model-api-key ./docker/mongodb/start-preview.sh
 
 # Stop
 ./docker/mongodb/start-preview.sh stop
@@ -107,10 +107,10 @@ docker compose -f docker/mongodb/docker-compose.mongodb.yml --profile standalone
 | `MONGOT_GRPC_PORT`                   | `27028`                                  | mongot gRPC port (fullstack only)             |
 | `MONGOT_HEALTH_PORT`                 | `8080`                                   | mongot health check port (fullstack only)     |
 | `MONGOT_METRICS_PORT`                | `9946`                                   | mongot metrics port (fullstack only)          |
-| `VOYAGE_API_KEY`                     | _(empty)_                                | Shared embedding API key for query + indexing |
-| `VOYAGE_API_QUERY_KEY`               | _(empty)_                                | Optional query-time embedding key override    |
-| `VOYAGE_API_INDEXING_KEY`            | _(empty)_                                | Optional indexing embedding key override      |
-| `MONGOT_EMBEDDING_PROVIDER_ENDPOINT` | `https://api.voyageai.com/v1/embeddings` | Embedding provider endpoint                   |
+| `VOYAGE_API_KEY`                     | _(empty)_                               | Shared Atlas Model API key (`al-...`) for query + indexing |
+| `VOYAGE_API_QUERY_KEY`               | _(empty)_                               | Optional Atlas Model API key (`al-...`) for query-time embedding |
+| `VOYAGE_API_INDEXING_KEY`            | _(empty)_                               | Optional Atlas Model API key (`al-...`) for indexing-time embedding |
+| `MONGOT_EMBEDDING_PROVIDER_ENDPOINT` | `https://ai.mongodb.com/v1/embeddings` | MongoDB Atlas Embedding API endpoint          |
 
 ### Custom Passwords
 
@@ -122,10 +122,12 @@ ADMIN_PASSWORD=mySecurePass MONGOT_PASSWORD=mongotPass ./docker/mongodb/start.sh
 
 To enable server-side automatic embeddings (no application-level embedding code needed):
 
-1. Provision an Atlas Model key for Voyage-backed auto-embedding
+1. Provision an Atlas Model API key for Voyage-backed MongoDB auto-embedding.
+   Use an `al-...` key from Atlas. Direct Voyage `pa-...` keys are for the
+   legacy/direct Voyage API and do not authenticate MongoDB auto-embed.
 2. Set the environment variable before starting:
    ```bash
-   export VOYAGE_API_KEY=atlas-model-api-key
+   export VOYAGE_API_KEY=al-your-atlas-model-api-key
    ./docker/mongodb/start-preview.sh
    ```
 3. The preview container enables the auto-embed path when the key is present at startup.

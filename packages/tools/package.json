@@ -6,9 +6,10 @@
 	"license": "Apache-2.0",
 	"repository": {
 		"type": "git",
-		"url": "https://github.com/romiluz/memongo.git",
+		"url": "https://github.com/romiluz13/memongo.git",
 		"directory": "packages/tools"
 	},
+	"author": "Rom Iluz",
 	"keywords": [
 		"memongo",
 		"tools",
@@ -53,8 +54,8 @@
 	"peerDependencies": {
 		"ai": ">=5.0.0"
 	},
-	"homepage": "https://github.com/romiluz/memongo#readme",
+	"homepage": "https://github.com/romiluz13/memongo#readme",
 	"bugs": {
-		"url": "https://github.com/romiluz/memongo/issues"
+		"url": "https://github.com/romiluz13/memongo/issues"
 	}
 }

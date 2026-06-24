@@ -189,7 +189,7 @@ export default function LandingPage() {
 						<a href="#architecture">Architecture</a>
 						<a href="#memory-model">Memory model</a>
 						<a href="/console">Console</a>
-						<a href="https://github.com/romiluz/memongo">GitHub</a>
+						<a href="https://github.com/romiluz13/memongo">GitHub</a>
 					</div>
 				</nav>
 
@@ -330,7 +330,7 @@ export default function LandingPage() {
 					<div className="hero-actions">
 						<a
 							className="button button-primary"
-							href="https://github.com/romiluz/memongo#quickstart"
+							href="https://github.com/romiluz13/memongo#quickstart"
 						>
 							Read the quickstart
 						</a>

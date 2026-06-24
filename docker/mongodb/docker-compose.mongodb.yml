@@ -28,7 +28,7 @@ services:
       - VOYAGE_API_KEY=${VOYAGE_API_KEY:-}
       - VOYAGE_API_QUERY_KEY=${VOYAGE_API_QUERY_KEY:-}
       - VOYAGE_API_INDEXING_KEY=${VOYAGE_API_INDEXING_KEY:-}
-      - MONGOT_EMBEDDING_PROVIDER_ENDPOINT=${MONGOT_EMBEDDING_PROVIDER_ENDPOINT:-https://api.voyageai.com/v1/embeddings}
+      - MONGOT_EMBEDDING_PROVIDER_ENDPOINT=${MONGOT_EMBEDDING_PROVIDER_ENDPOINT:-https://ai.mongodb.com/v1/embeddings}
       - MONGOT_GENERATED_FILE=/runtime/mongot.generated.yml
     command: ["/setup-generator.sh"]
     restart: "no"
@@ -90,7 +90,7 @@ services:
     image: mongodb/mongodb-community-search:latest
     container_name: memongo-mongot
     environment:
-      MONGOT_EMBEDDING_PROVIDER_ENDPOINT: ${MONGOT_EMBEDDING_PROVIDER_ENDPOINT:-https://api.voyageai.com/v1/embeddings}
+      MONGOT_EMBEDDING_PROVIDER_ENDPOINT: ${MONGOT_EMBEDDING_PROVIDER_ENDPOINT:-https://ai.mongodb.com/v1/embeddings}
     ports:
       - "${MONGOT_GRPC_PORT:-27028}:27028"
       - "${MONGOT_HEALTH_PORT:-8080}:8080"

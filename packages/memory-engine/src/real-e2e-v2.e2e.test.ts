@@ -2282,7 +2282,7 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 		// Reranker auto-routes based on key prefix (same as Python SDK):
 		// al-... → ai.mongodb.com/v1/rerank (Atlas proxy)
 		// pa-... → api.voyageai.com/v1/rerank (direct)
-		// Both key types work — a single VOYAGE_API_KEY is sufficient.
+		// Rerank-only tests may use either family. MongoDB auto-embedding still requires al-....
 		const RERANK_KEY = PREVIEW_VOYAGE_API_KEY
 
 		it("should rerank search results via Voyage rerank-2.5 with instruction-following", async () => {

@@ -4,7 +4,7 @@
 #
 # Usage:
 #   ./docker/mongodb/start-preview.sh                             # Start (no auto-embed)
-#   VOYAGE_API_KEY=atlas-model-api-key ./docker/mongodb/start-preview.sh  # Start with auto-embed
+#   VOYAGE_API_KEY=al-your-atlas-model-api-key ./docker/mongodb/start-preview.sh  # Start with auto-embed
 #   ./docker/mongodb/start-preview.sh stop          # Stop
 #   ./docker/mongodb/start-preview.sh clean         # Stop + delete data
 

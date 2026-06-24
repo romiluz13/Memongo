@@ -29,8 +29,14 @@ Examples of unacceptable behavior:
 ## Enforcement
 
 Project maintainers are responsible for clarifying and enforcing standards of
-acceptable behavior. Report issues through the security/contact channels in
-`SECURITY.md`.
+acceptable behavior.
+
+To report a conduct issue, open a [GitHub private vulnerability report](https://github.com/romiluz13/memongo/security/advisories/new)
+and mark the subject "Code of Conduct". If that channel is unavailable, contact
+the maintainer directly via the GitHub profile at
+[github.com/romiluz13](https://github.com/romiluz13). Reports will be
+acknowledged within 7 days.
 
 Maintainers may remove comments, commits, code, issues, or other contributions
-that do not align with this Code of Conduct.
+that do not align with this Code of Conduct, and may impose temporary or
+permanent bans for repeated or severe violations.

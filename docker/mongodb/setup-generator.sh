@@ -5,7 +5,7 @@ auth_dir="${AUTH_DIR:-/auth}"
 template_dir="${TEMPLATE_DIR:-/templates}"
 template_file="${MONGOT_TEMPLATE_FILE:-$template_dir/mongot.conf}"
 generated_file="${MONGOT_GENERATED_FILE:-$auth_dir/mongot.generated.yml}"
-provider_endpoint="${MONGOT_EMBEDDING_PROVIDER_ENDPOINT:-https://api.voyageai.com/v1/embeddings}"
+provider_endpoint="${MONGOT_EMBEDDING_PROVIDER_ENDPOINT:-https://ai.mongodb.com/v1/embeddings}"
 
 mongot_password="${MONGOT_PASSWORD:-mongotPassword}"
 admin_password="${ADMIN_PASSWORD:-admin}"
@@ -51,6 +51,18 @@ printf '%s' "$mongot_password" > "$auth_dir/passwordFile"
 chmod 600 "$auth_dir/passwordFile"
 safe_chown "$auth_dir/passwordFile"
 echo 'Password file created'
+
+case "$provider_endpoint" in
+  https://ai.mongodb.com/*)
+    for key_name in VOYAGE_API_KEY VOYAGE_API_QUERY_KEY VOYAGE_API_INDEXING_KEY; do
+      eval "key_value=\${$key_name:-}"
+      if [ -n "$key_value" ] && [ "${key_value#al-}" = "$key_value" ]; then
+        echo "$key_name must be an Atlas Model API key with the al-... prefix when using ai.mongodb.com" >&2
+        exit 1
+      fi
+    done
+    ;;
+esac
 
 if [ -n "$query_key" ]; then
   printf '%s' "$query_key" > "$auth_dir/voyage-api-query-key"

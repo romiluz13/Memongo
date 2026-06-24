@@ -63,14 +63,14 @@ Use managed Atlas cloud for the control lane:
 
 ```bash
 export MEMONGO_MONGODB_URI="mongodb+srv://<user>:<password>@<cluster>.mongodb.net/?appName=memongo"
-export VOYAGE_API_KEY="atlas-model-key"
+export VOYAGE_API_KEY="al-your-atlas-model-api-key"
 bun run mongodb:parity
 ```
 
 Use Atlas Local Preview for the local parity lane:
 
 ```bash
-export VOYAGE_API_KEY="atlas-model-key"
+export VOYAGE_API_KEY="al-your-atlas-model-api-key"
 docker compose -f docker/mongodb/docker-compose.preview.yml up -d
 export MEMONGO_MONGODB_URI="mongodb://127.0.0.1:27017/?directConnection=true"
 ```
