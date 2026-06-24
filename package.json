@@ -21,6 +21,8 @@
 		"lint:fix": "biome check . --diagnostic-level=error --write",
 		"format": "biome format .",
 		"format:fix": "biome format --write .",
+		"web:preview": "bun run --cwd apps/web preview",
+		"web:deploy": "bun run --cwd apps/web deploy",
 		"proof-pack": "bun scripts/proof-pack.ts",
 		"mongodb:parity": "bun scripts/check-mongodb-runtime-parity.ts",
 		"mongodb:prepare": "bun scripts/prepare-mongodb-runtime.ts",
