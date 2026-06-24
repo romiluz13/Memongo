@@ -1,5 +1,7 @@
 import { type MemongoConfig, resolveUserPath } from "@memongo/lib"
 
+const SAFE_AGENT_PATH_SEGMENT = /^[A-Za-z0-9._-]+$/
+
 type AgentMemorySearchConfig = {
 	extraPaths?: string[]
 }
@@ -55,7 +57,19 @@ export function resolveAgentWorkspaceDir(
 		agentConfig?.workspace?.trim() || defaults?.workspace?.trim()
 	return workspace
 		? resolveUserPath(workspace)
-		: resolveUserPath(`~/.memongo/agents/${agentId}`)
+		: resolveUserPath(`~/.memongo/agents/${agentIdPathSegment(agentId)}`)
+}
+
+function agentIdPathSegment(agentId: string): string {
+	const trimmed = agentId.trim() || "main"
+	if (
+		SAFE_AGENT_PATH_SEGMENT.test(trimmed) &&
+		trimmed !== "." &&
+		trimmed !== ".."
+	) {
+		return trimmed
+	}
+	return `agent-${Buffer.from(trimmed).toString("base64url")}`
 }
 
 export function resolveAgentMemorySearchExtraPaths(
