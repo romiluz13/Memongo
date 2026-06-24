@@ -1,13 +1,14 @@
 ---
 title: Quickstart
-description: Get Memongo running on MongoDB Atlas or Atlas Local Preview and make your first API call in minutes.
+description: Start Memongo, add one memory, and search it.
 icon: "play"
 ---
 
 ## Prerequisites
 
-- **Node.js** 20+ and **Bun** 1.2+ installed
-- **Docker** if you want the local Atlas Preview stack
+- Node.js 20+
+- Bun 1.2+
+- Docker, for local MongoDB
 
 ## 1. Clone and install
 
@@ -17,74 +18,46 @@ cd memongo
 bun install
 ```
 
-## 2. Choose MongoDB
+## 2. Start MongoDB
 
-Managed MongoDB Atlas cloud is the recommended control lane for serious benchmarks and shared dogfood:
-
-```bash
-export MEMONGO_MONGODB_URI="mongodb+srv://<user>:<password>@<cluster>.mongodb.net/?appName=memongo"
-export VOYAGE_API_KEY="al-your-atlas-model-api-key"
-```
-
-Atlas Local Preview is the local reproducibility lane:
+For the default local path:
 
 ```bash
-export VOYAGE_API_KEY="al-your-atlas-model-api-key"
-docker compose -f docker/mongodb/docker-compose.preview.yml up -d
+docker compose -f docker/docker-compose.yml up -d
 export MEMONGO_MONGODB_URI="mongodb://127.0.0.1:27017/?directConnection=true"
 ```
 
-Use an Atlas Model API key with the `al-...` prefix. Direct Voyage keys with the
-`pa-...` prefix do not enable MongoDB auto-embed.
-
-Preview stack helper:
+For Atlas Local Preview with MongoDB automated embeddings:
 
 ```bash
+export VOYAGE_API_KEY="atlas-model-api-key"
 ./docker/mongodb/start-preview.sh
+export MEMONGO_MONGODB_URI="mongodb://127.0.0.1:27017/?directConnection=true"
 ```
 
-## 3. Configure
+`VOYAGE_API_KEY` must be a MongoDB Atlas Model API key with the `al-...` prefix
+when you use MongoDB auto-embed. Direct Voyage keys with the `pa-...` prefix do
+not enable MongoDB auto-embed.
 
-Confirm your MongoDB URI is set:
+## 3. Start the API
 
 ```bash
-echo "$MEMONGO_MONGODB_URI"
-```
-
-Or create a config file at `~/.memongo/memongo.json`:
-
-```json
-{
-  "memory": {
-    "backend": "mongodb",
-    "mongodb": {
-      "uri": "mongodb://127.0.0.1:27017/?directConnection=true",
-      "database": "memongo"
-    }
-  }
-}
-```
-
-## 4. Start the API server
-
-```bash
-cd apps/api && bun run dev
+cd apps/api
+bun run dev
 ```
 
 The API runs at `http://127.0.0.1:3847`.
 
-**Optional:** operator console - `cd apps/web && MEMONGO_API_URL=http://127.0.0.1:3847 bun run dev` (default port **3040**).
-
-## 5. Verify the stack
+## 4. Verify
 
 ```bash
-curl http://127.0.0.1:3847/health
-curl http://127.0.0.1:3847/v1/status
+curl -s http://127.0.0.1:3847/health
+curl -s http://127.0.0.1:3847/v1/status
 ```
 
-Look for a healthy API response and a memory status payload that reports either `atlas-managed` or `atlas-local-preview`.
+Look for a healthy API response and a memory status payload.
 
-## 6. Make your first API call
+## 5. Add and search memory
 
 <Tabs>
 <Tab title="TypeScript">
@@ -96,13 +69,14 @@ const client = new MemongoClient({
 });
 
 await client.add({
-  content: "The user prefers dark mode and uses TypeScript.",
+  content: "The user prefers dark mode and TypeScript.",
   sessionId: "user-123",
 });
 
 const results = await client.search({
   query: "What are the user's preferences?",
   sessionKey: "user-123",
+  maxResults: 5,
 });
 
 console.log(results);
@@ -110,58 +84,55 @@ console.log(results);
 </Tab>
 <Tab title="cURL">
 ```bash
-# Add a memory
-http POST http://127.0.0.1:3847/v1/add \
-  content="The user prefers dark mode and uses TypeScript." \
-  sessionId="user-123"
+curl -s http://127.0.0.1:3847/v1/add \
+  -H "content-type: application/json" \
+  -d '{"content":"The user prefers dark mode and TypeScript.","sessionId":"user-123"}'
 
-# Search memories
-http POST http://127.0.0.1:3847/v1/search \
-  query="What are the user's preferences?" \
-  sessionKey="user-123"
+curl -s http://127.0.0.1:3847/v1/search \
+  -H "content-type: application/json" \
+  -d '{"query":"What are the user preferences?","sessionKey":"user-123","maxResults":5}'
 ```
 </Tab>
 </Tabs>
 
-## API endpoints
+## Optional surfaces
+
+Operator console:
+
+```bash
+cd apps/web
+MEMONGO_API_URL=http://127.0.0.1:3847 bun run dev
+```
+
+MCP server:
+
+```bash
+cd apps/mcp
+bun run start
+```
+
+## Common endpoints
 
 | Method | Path | Description |
-|--------|------|-------------|
-| GET  | `/health` | Service health |
-| GET  | `/openapi.json` | OpenAPI document |
-| POST | `/v1/search` | Search memory (hybrid vector + full-text) |
-| POST | `/v1/add` | Add user message to memory |
-| POST | `/v1/write-event` | Write conversation event (any role) |
-| POST | `/v1/write-structured` | Write structured memory entry |
-| POST | `/v1/profile` | Synthesize user profile from memory |
-| GET  | `/v1/status` | Memory provider status |
-| GET  | `/v1/stats` | Memory statistics |
-| POST | `/v1/sync` | Sync memory sources to MongoDB |
-| POST | `/v1/chain-trace` | Reasoning chain traversal (provenance trace) |
-| POST | `/v1/novelty-scan` | Surprisal novelty detection (centroid distance) |
-| POST | `/v1/consolidate` | Trigger consolidation agent (Dreamer) |
-
-## 7. Competition demo flow
-
-Run this sequence to show the full product path:
-
-1. `POST /v1/add` or `POST /v1/write-event`
-2. `POST /v1/search`
-3. `POST /v1/write-structured`
-4. `POST /v1/profile`
-5. `GET /v1/status`
-
-Optional adapters:
-- `apps/web` for the operator console
-- `apps/mcp` for MCP hosts using the same API
+|---|---|---|
+| GET | `/health` | Service health |
+| GET | `/openapi.json` | OpenAPI document |
+| GET | `/v1/status` | Memory provider status |
+| POST | `/v1/add` | Add content to memory |
+| POST | `/v1/write-event` | Write conversation event |
+| POST | `/v1/write-structured` | Write structured memory |
+| POST | `/v1/search` | Search memory |
+| POST | `/v1/search-kb` | Search knowledge base |
+| POST | `/v1/profile` | Synthesize a profile |
+| POST | `/v1/context-bundle` | Build an answer-ready context bundle |
 
 ## Next steps
 
 <CardGroup cols={2}>
   <Card title="Memory Concepts" icon="brain" href="/concepts/memory">
-    Learn how Memongo stores and retrieves memories
+    Learn how Memongo stores and retrieves memory.
   </Card>
   <Card title="Architecture" icon="sitemap" href="/concepts/architecture">
-    Understand packages, data flow, and deployment
+    Understand packages, data flow, and deployment.
   </Card>
 </CardGroup>

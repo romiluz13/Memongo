@@ -48,6 +48,7 @@ describe("resolveMemoryBackendConfig", () => {
 		expect(resolved.mongodb!.deploymentProfile).toBe("atlas-local-preview")
 		expect(resolved.mongodb!.embeddingMode).toBe("automated")
 		expect(resolved.mongodb!.fusionMethod).toBe("rankFusion")
+		expect(resolved.mongodb!.recallProfile).toBe("balanced")
 		expect(resolved.mongodb!.quantization).toBe("none")
 		expect(resolved.mongodb!.relevance.enabled).toBe(true)
 		expect(resolved.mongodb!.relevance.telemetry.enabled).toBe(true)
@@ -82,6 +83,7 @@ describe("resolveMemoryBackendConfig", () => {
 					deploymentProfile: "community-mongot",
 					embeddingMode: "automated",
 					fusionMethod: "rankFusion",
+					recallProfile: "proof",
 					quantization: "scalar",
 				},
 			},
@@ -93,7 +95,40 @@ describe("resolveMemoryBackendConfig", () => {
 		expect(resolved.mongodb!.deploymentProfile).toBe("atlas-local-preview")
 		expect(resolved.mongodb!.embeddingMode).toBe("automated")
 		expect(resolved.mongodb!.fusionMethod).toBe("rankFusion")
+		expect(resolved.mongodb!.recallProfile).toBe("proof")
 		expect(resolved.mongodb!.quantization).toBe("scalar")
+	})
+
+	it("resolves MongoDB recall profile from env and ignores invalid values", () => {
+		vi.stubEnv("MEMONGO_MONGODB_RECALL_PROFILE", "proof")
+		try {
+			const cfg = {
+				agents: { defaults: { workspace: "/tmp/memory-test" } },
+				memory: {
+					backend: "mongodb",
+					mongodb: { uri: "mongodb://localhost:27017" },
+				},
+			} as unknown as MemongoConfig
+			const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
+			expect(resolved.mongodb!.recallProfile).toBe("proof")
+		} finally {
+			vi.unstubAllEnvs()
+		}
+
+		vi.stubEnv("MEMONGO_MONGODB_RECALL_PROFILE", "not-real")
+		try {
+			const cfg = {
+				agents: { defaults: { workspace: "/tmp/memory-test" } },
+				memory: {
+					backend: "mongodb",
+					mongodb: { uri: "mongodb://localhost:27017" },
+				},
+			} as unknown as MemongoConfig
+			const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
+			expect(resolved.mongodb!.recallProfile).toBe("balanced")
+		} finally {
+			vi.unstubAllEnvs()
+		}
 	})
 
 	it("allows MEMONGO_MONGODB_COLLECTION_PREFIX to override config for benchmark isolation", () => {

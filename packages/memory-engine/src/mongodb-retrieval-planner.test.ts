@@ -454,9 +454,8 @@ describe("mongodb-retrieval-planner", () => {
 	// contains a natural-language time token. Feeds the Atlas Search `near`
 	// operator injected into the text lane of $rankFusion. Most-specific
 	// match wins: explicit-date > relative-week > explicit-month >
-	// explicit-year. See docs/research/2026-05-12-mongodb-temporal-recall-
-	// capabilities.md and docs/plans/2026-05-11-memongo-mempalace-roadmap-
-	// plan.md for the full spec.
+	// explicit-year. The source design notes are intentionally not shipped in
+	// the public launch tree.
 	// -------------------------------------------------------------------
 	describe("extractTemporalWindow", () => {
 		it("extracts full month name (March) — resolves to most recent past March when current date is May", () => {

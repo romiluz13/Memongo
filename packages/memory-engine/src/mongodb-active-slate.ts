@@ -86,12 +86,25 @@ function timestampValue(value: unknown): number {
 	return value instanceof Date ? value.getTime() : 0
 }
 
+function isActiveContextProjection(doc: Document): boolean {
+	return (
+		(typeof doc.key === "string" && doc.key.startsWith("active-context-")) ||
+		(Array.isArray(doc.tags) && doc.tags.includes("active-context"))
+	)
+}
+
 function sortActiveStructuredDocs(docs: Document[]): Document[] {
 	return [...docs].toSorted((left, right) => {
 		const salienceDelta =
 			salienceRank(left.salience) - salienceRank(right.salience)
 		if (salienceDelta !== 0) {
 			return salienceDelta
+		}
+		const activeContextDelta =
+			Number(isActiveContextProjection(left)) -
+			Number(isActiveContextProjection(right))
+		if (activeContextDelta !== 0) {
+			return activeContextDelta
 		}
 		return timestampValue(right.updatedAt) - timestampValue(left.updatedAt)
 	})
@@ -249,6 +262,7 @@ export async function hydrateActiveSlate(params: {
 							scopeRef: 1,
 							provenance: 1,
 							sourceEventIds: 1,
+							tags: 1,
 						})
 						.toArray(),
 				),
@@ -271,6 +285,7 @@ export async function hydrateActiveSlate(params: {
 							scopeRef: 1,
 							provenance: 1,
 							sourceEventIds: 1,
+							tags: 1,
 						})
 						.toArray(),
 				),

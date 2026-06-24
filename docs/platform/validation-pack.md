@@ -63,14 +63,14 @@ Use managed Atlas cloud for the control lane:
 
 ```bash
 export MEMONGO_MONGODB_URI="mongodb+srv://<user>:<password>@<cluster>.mongodb.net/?appName=memongo"
-export VOYAGE_API_KEY="al-your-atlas-model-key"
+export VOYAGE_API_KEY="atlas-model-key"
 bun run mongodb:parity
 ```
 
 Use Atlas Local Preview for the local parity lane:
 
 ```bash
-export VOYAGE_API_KEY="al-your-atlas-model-key"
+export VOYAGE_API_KEY="atlas-model-key"
 docker compose -f docker/mongodb/docker-compose.preview.yml up -d
 export MEMONGO_MONGODB_URI="mongodb://127.0.0.1:27017/?directConnection=true"
 ```
@@ -164,7 +164,6 @@ This emits a release-gate summary with:
 
 `bun run proof-pack`, `bun run memory-eval`, `bun run compare-memory-eval`, `bun run agent-smoke`, and `bun run capability-stress` can persist comparable JSON run artifacts when one of these is true:
 - `MEMONGO_PROOF_ARTIFACT_DIR` is set
-- the local workflow directory `.claude/cc10x/v10/workflows/memongo-memory-hardening/artifacts/` exists
 
 This keeps baseline and candidate evidence local-only by default while still making the proof lanes reproducible.
 
@@ -175,4 +174,3 @@ Memongo is ready for release only when every release-blocking lane is green and 
 ## Related
 - [Benchmark pack](benchmark-pack.md)
 - [Self-host runbook](self-host.md)
-- [Legacy notes](../migration/legacy-notes.md)

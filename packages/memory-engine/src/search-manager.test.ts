@@ -17,6 +17,7 @@ function makeConfig(
 		deploymentProfile: "atlas-local-preview",
 		embeddingMode: "automated",
 		fusionMethod: "scoreFusion",
+		recallProfile: "balanced",
 		quantization: "none",
 		watchDebounceMs: 500,
 		numDimensions: 1024,

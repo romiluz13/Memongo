@@ -326,7 +326,7 @@ describe("AccessTracker", () => {
 	// Phase 2 remfix CRIT-4 — fast-check property: no count loss across any
 	// sequence of recordAccess calls.
 	// Evidence doc:
-	// docs/benchmarks/capability-audit/access-tracking-evidence.md seed=20260512
+	// Access-tracking evidence seed: 20260512.
 	// =========================================================================
 	it("fast-check Property (CRIT-4): total flushed $inc count === total recordAccess calls", async () => {
 		vi.useRealTimers()

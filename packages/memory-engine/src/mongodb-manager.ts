@@ -226,6 +226,7 @@ import {
 	executeMongoSearchPlan,
 	normalizeMemorySearchRequest,
 	resolveExecutorTimeRange,
+	resolveProfileNumCandidates,
 	resolveSearchConfig,
 	requestHasHardConstraints,
 } from "./mongodb-search-executor.js"
@@ -1747,19 +1748,33 @@ function resolveRuntimeSearchConfig(
 	mongoCfg: ResolvedMongoDBConfig,
 ): ResolvedSearchConfig {
 	const resolved = resolveSearchConfig(request)
+	const recallProfile =
+		request.searchConfig?.recallProfile ??
+		mongoCfg.recallProfile ??
+		resolved.recallProfile
 	const recommendedNumCandidates = Math.min(
 		Math.max(mongoCfg.numCandidates, resolved.maxResults * 20),
 		MONGODB_MAX_NUM_CANDIDATES,
 	)
+	const requestedNumCandidates =
+		resolved.numCandidates ??
+		request.searchConfig?.numCandidates ??
+		recommendedNumCandidates
 	return {
 		recipe: resolved.recipe,
+		recallProfile,
 		maxResults: resolved.maxResults,
 		searchMode: resolved.searchMode,
 		maxPasses: resolved.maxPasses,
 		sourcePreference: resolved.sourcePreference,
 		timeRange: resolved.timeRange,
 		needExactEvidence: resolved.needExactEvidence,
-		numCandidates: resolved.numCandidates ?? recommendedNumCandidates,
+		numCandidates:
+			resolveProfileNumCandidates({
+				maxResults: resolved.maxResults,
+				recallProfile,
+				requested: requestedNumCandidates,
+			}) ?? recommendedNumCandidates,
 		fusionMethod: resolved.fusionMethod ?? mongoCfg.fusionMethod,
 		hybridMode: resolved.hybridMode,
 		allowHybridBackstop: resolved.allowHybridBackstop,
@@ -1774,6 +1789,8 @@ function shouldUseDetailedSearchCache(request: MemorySearchRequest): boolean {
 	}
 	return (
 		config.recipe === undefined &&
+		(config.recallProfile === undefined ||
+			config.recallProfile === "balanced") &&
 		config.numCandidates === undefined &&
 		config.fusionMethod === undefined &&
 		config.hybridMode === undefined &&
@@ -4476,10 +4493,12 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 				const controller = new AbortController()
 				let timeout: ReturnType<typeof setTimeout> | undefined
 				const probe = collection
-					.aggregate<{ count: number }>(
+					.aggregate<{
+						count?: { total?: number; lowerBound?: number } | number
+					}>(
 						[
 							{
-								$search: {
+								$searchMeta: {
 									index: indexName,
 									compound: {
 										filter: searchFilters,
@@ -4496,9 +4515,9 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 											},
 										],
 									},
+									count: { type: "total" },
 								},
 							},
-							{ $count: "count" },
 						],
 						{
 							maxTimeMS: probeMaxTimeMs,
@@ -4521,16 +4540,22 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 				]).finally(() => {
 					if (timeout) clearTimeout(timeout)
 				})
-				indexedCount = rows[0]?.count ?? 0
+				const countMeta = rows[0]?.count
+				indexedCount =
+					typeof countMeta === "number"
+						? countMeta
+						: (countMeta?.total ?? countMeta?.lowerBound ?? 0)
 				if (indexedCount >= expectedCount && !textProbeQuery) {
 					return
 				}
 				if (indexedCount >= expectedCount && textProbeQuery) {
 					const textProbeRows = await collection
-						.aggregate<{ count: number }>(
+						.aggregate<{
+							count?: { total?: number; lowerBound?: number } | number
+						}>(
 							[
 								{
-									$search: {
+									$searchMeta: {
 										index: indexName,
 										compound: {
 											filter: searchFilters,
@@ -4543,9 +4568,9 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 												},
 											],
 										},
+										count: { type: "total" },
 									},
 								},
-								{ $count: "count" },
 							],
 							{
 								maxTimeMS: probeMaxTimeMs,
@@ -4553,7 +4578,11 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 							},
 						)
 						.toArray()
-					textProbeCount = textProbeRows[0]?.count ?? 0
+					const textCountMeta = textProbeRows[0]?.count
+					textProbeCount =
+						typeof textCountMeta === "number"
+							? textCountMeta
+							: (textCountMeta?.total ?? textCountMeta?.lowerBound ?? 0)
 					if (textProbeCount > 0) {
 						return
 					}

@@ -662,7 +662,7 @@ describe("benchmark event search convergence", () => {
 				signal: expect.any(AbortSignal),
 			})
 			const [pipeline] = aggregate.mock.calls[0]
-			expect(pipeline[0].$search.compound.must).toEqual([
+			expect(pipeline[0].$searchMeta.compound.must).toEqual([
 				{
 					wildcard: {
 						path: "body",
@@ -763,7 +763,7 @@ describe("benchmark event search convergence", () => {
 				{ projection: { body: 1 } },
 			)
 			const [pipeline] = aggregate.mock.calls[0]
-			expect(pipeline[0].$search.compound.filter).toEqual([
+			expect(pipeline[0].$searchMeta.compound.filter).toEqual([
 				{ equals: { path: "agentId", value: "agent-1" } },
 				{ equals: { path: "scope", value: "user" } },
 				{ equals: { path: "scopeRef", value: "user:bench-17" } },
@@ -865,9 +865,11 @@ describe("benchmark event search convergence", () => {
 				.fn()
 				.mockImplementation((pipeline: Array<unknown>) => {
 					const firstStage = pipeline[0] as {
-						$search?: { compound?: { must?: Array<Record<string, unknown>> } }
+						$searchMeta?: {
+							compound?: { must?: Array<Record<string, unknown>> }
+						}
 					}
-					const must = firstStage.$search?.compound?.must ?? []
+					const must = firstStage.$searchMeta?.compound?.must ?? []
 					const isTextProbe = Boolean(must[0]?.text)
 					return {
 						toArray: vi
@@ -897,7 +899,7 @@ describe("benchmark event search convergence", () => {
 			expect(aggregate).toHaveBeenCalledWith(
 				expect.arrayContaining([
 					expect.objectContaining({
-						$search: expect.objectContaining({
+						$searchMeta: expect.objectContaining({
 							compound: expect.objectContaining({
 								must: [
 									{
@@ -3807,7 +3809,7 @@ describe("MongoDBMemoryManager background extraction", () => {
 		}
 	})
 
-	it("allows dogfood benchmarks to opt into post-write derived work", async () => {
+	it("allows diagnostic benchmarks to opt into post-write derived work", async () => {
 		const prev = process.env.MEMONGO_BENCHMARK_DERIVED_WORK_MODE
 		process.env.MEMONGO_BENCHMARK_DERIVED_WORK_MODE = "enabled"
 		try {
@@ -3840,7 +3842,7 @@ describe("MongoDBMemoryManager background extraction", () => {
 					eventId: "evt-benchmark-enabled-1",
 					agentId: "benchmark-agent-enabled",
 					role: "assistant",
-					body: "Remember this dogfood benchmark fact.",
+					body: "Remember this diagnostic benchmark fact.",
 					timestamp: new Date("2026-04-09T12:00:00.000Z"),
 					scope: "agent",
 					scopeRef: "agent:benchmark-agent-enabled",
@@ -3879,7 +3881,7 @@ describe("MongoDBMemoryManager background extraction", () => {
 
 			await manager.writeConversationEvent({
 				role: "assistant",
-				body: "Remember this dogfood benchmark fact.",
+				body: "Remember this diagnostic benchmark fact.",
 				scope: "agent",
 			})
 			await manager.derivationSchedulingQueue
@@ -4076,6 +4078,52 @@ describe("scope-safe cache writes", () => {
 
 		expect(top50.metadata.resolvedSearchConfig?.numCandidates).toBe(1000)
 		expect(top200.metadata.resolvedSearchConfig?.numCandidates).toBe(4000)
+	})
+
+	it("uses backend proof recall profile when request does not override it", async () => {
+		mocked(planRetrieval).mockReturnValue({
+			paths: ["hybrid"],
+			confidence: "high",
+			reasoning: "test proof profile from backend config",
+			constraints: {},
+		})
+		mocked(chunksCollection).mockReturnValue({
+			aggregate: vi.fn().mockReturnValue({
+				toArray: vi.fn().mockResolvedValue([]),
+			}),
+		} as never)
+
+		const manager = buildMockManager({
+			config: {
+				mongodb: {
+					embeddingMode: "automated",
+					fusionMethod: "rankFusion",
+					recallProfile: "proof",
+					numCandidates: 200,
+					cache: {
+						enabled: false,
+						conversationTtlSec: 300,
+						kbTtlSec: 600,
+					},
+					kb: { enabled: false },
+					episodes: { enabled: false },
+					graph: { enabled: false },
+					reranking: { enabled: false },
+					queryRewriting: { enabled: false },
+				},
+			},
+		})
+
+		const response = await manager.searchDetailed({
+			query: "what changed?",
+			maxResults: 50,
+			searchConfig: {
+				numCandidates: 200,
+			},
+		})
+
+		expect(response.metadata.resolvedSearchConfig?.recallProfile).toBe("proof")
+		expect(response.metadata.resolvedSearchConfig?.numCandidates).toBe(1000)
 	})
 
 	it("keeps explicit searchDetailed numCandidates overrides", async () => {

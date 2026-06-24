@@ -6,6 +6,7 @@ export type {
 	MemoryMongoDBDeploymentProfile,
 	MemoryMongoDBEmbeddingMode,
 	MemoryMongoDBFusionMethod,
+	MemoryMongoDBRecallProfile,
 	MemoryScope,
 	MemorySourceToggleConfig,
 } from "./types.memory.js"

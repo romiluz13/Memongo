@@ -498,23 +498,23 @@ describe("createApp", () => {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify({
-				query: "dogfood checkpoint",
+				query: "workspace checkpoint",
 				agentId: "codex",
 				scope: "workspace",
-				scopeRef: "/Users/rom.iluz/Dev/memongo",
+				scopeRef: "/workspace/memongo",
 				limit: 3,
 			}),
 		})
 
 		expect(res.status).toBe(200)
 		expect(bridgeMocks.memongoBridgeSearch).toHaveBeenCalledWith({
-			query: "dogfood checkpoint",
+			query: "workspace checkpoint",
 			agentId: "codex",
 			maxResults: 3,
 			minScore: undefined,
 			sessionKey: undefined,
 			scope: "workspace",
-			scopeRef: "/Users/rom.iluz/Dev/memongo",
+			scopeRef: "/workspace/memongo",
 		})
 	})
 
@@ -749,7 +749,7 @@ describe("createApp", () => {
 				token: "scoped-secret",
 				agentIds: ["codex"],
 				scopes: ["workspace"],
-				scopeRefs: ["/Users/rom.iluz/Dev/memongo"],
+				scopeRefs: ["/workspace/memongo"],
 			},
 		])
 
@@ -760,10 +760,10 @@ describe("createApp", () => {
 				"Content-Type": "application/json",
 			},
 			body: JSON.stringify({
-				query: "dogfood gates",
+				query: "scoped gates",
 				agentId: "codex",
 				scope: "workspace",
-				scopeRef: "/Users/rom.iluz/Dev/memongo",
+				scopeRef: "/workspace/memongo",
 			}),
 		})
 
@@ -772,7 +772,7 @@ describe("createApp", () => {
 			expect.objectContaining({
 				agentId: "codex",
 				scope: "workspace",
-				scopeRef: "/Users/rom.iluz/Dev/memongo",
+				scopeRef: "/workspace/memongo",
 			}),
 		)
 	})
@@ -783,7 +783,7 @@ describe("createApp", () => {
 				token: "scoped-secret",
 				agentIds: ["codex"],
 				scopes: ["workspace"],
-				scopeRefs: ["/Users/rom.iluz/Dev/memongo"],
+				scopeRefs: ["/workspace/memongo"],
 			},
 		])
 
@@ -794,10 +794,10 @@ describe("createApp", () => {
 				"Content-Type": "application/json",
 			},
 			body: JSON.stringify({
-				query: "dogfood gates",
+				query: "scoped gates",
 				agentId: "codex",
 				scope: "workspace",
-				scopeRef: "/Users/rom.iluz/Dev/other",
+				scopeRef: "/workspace/other",
 			}),
 		})
 
@@ -817,7 +817,7 @@ describe("createApp", () => {
 				token: "scoped-secret",
 				agentIds: ["codex"],
 				scopes: ["workspace"],
-				scopeRefs: ["/Users/rom.iluz/Dev/memongo"],
+				scopeRefs: ["/workspace/memongo"],
 			},
 		])
 
@@ -828,7 +828,7 @@ describe("createApp", () => {
 				"Content-Type": "application/json",
 			},
 			body: JSON.stringify({
-				query: "dogfood gates",
+				query: "scoped gates",
 				agentId: "codex",
 			}),
 		})
@@ -850,7 +850,7 @@ describe("createApp", () => {
 				token: "scoped-secret",
 				agentIds: ["codex"],
 				scopes: ["workspace"],
-				scopeRefs: ["/Users/rom.iluz/Dev/memongo"],
+				scopeRefs: ["/workspace/memongo"],
 			},
 		])
 
@@ -1937,6 +1937,7 @@ describe("createApp", () => {
 				sourceOrder: ["structured", "conversation"],
 				resolvedSearchConfig: {
 					recipe: "deep",
+					recallProfile: "balanced",
 					maxResults: 4,
 					searchMode: "agentic",
 					maxPasses: 3,
@@ -1977,7 +1978,7 @@ describe("createApp", () => {
 				query: "what changed",
 				agentId: "agent-42",
 				scope: "workspace",
-				scopeRef: "/Users/rom.iluz/Dev/memongo",
+				scopeRef: "/workspace/memongo",
 				limit: 4,
 				minScore: 0.4,
 				searchMode: "agentic",
@@ -2038,7 +2039,7 @@ describe("createApp", () => {
 			query: "what changed",
 			agentId: "agent-42",
 			scope: "workspace",
-			scopeRef: "/Users/rom.iluz/Dev/memongo",
+			scopeRef: "/workspace/memongo",
 			maxResults: 4,
 			minScore: 0.4,
 			searchMode: "agentic",

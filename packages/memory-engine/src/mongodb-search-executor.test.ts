@@ -78,6 +78,54 @@ describe("search recipes", () => {
 		)
 	})
 
+	it("enforces MongoDB high-recall numCandidates in proof profile", () => {
+		const resolved = resolveSearchConfig({
+			query: "phoenix",
+			maxResults: 200,
+			searchConfig: {
+				recallProfile: "proof",
+				numCandidates: 200,
+			},
+		})
+		expect(resolved).toEqual(
+			expect.objectContaining({
+				recallProfile: "proof",
+				maxResults: 200,
+				numCandidates: 4000,
+			}),
+		)
+	})
+
+	it("lets proof profile keep explicit candidates above the MongoDB floor", () => {
+		const resolved = resolveSearchConfig({
+			query: "phoenix",
+			maxResults: 50,
+			searchConfig: {
+				recallProfile: "proof",
+				numCandidates: 2500,
+			},
+		})
+		expect(resolved.numCandidates).toBe(2500)
+	})
+
+	it("does not inject balanced recall profile into normalized requests", () => {
+		const applied = applySearchConfig({
+			query: "phoenix",
+			maxResults: 50,
+		})
+		expect(applied.searchConfig?.recallProfile).toBeUndefined()
+	})
+
+	it("keeps explicit proof recall profile in normalized requests", () => {
+		const applied = applySearchConfig({
+			query: "phoenix",
+			maxResults: 50,
+			searchConfig: { recallProfile: "proof" },
+		})
+		expect(applied.searchConfig?.recallProfile).toBe("proof")
+		expect(applied.searchConfig?.numCandidates).toBe(1000)
+	})
+
 	it("lets explicit top-level fields override recipe defaults", () => {
 		const applied = applySearchConfig({
 			query: "phoenix",

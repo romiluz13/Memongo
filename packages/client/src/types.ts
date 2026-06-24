@@ -28,6 +28,7 @@ export type MemongoSearchInput = {
 
 export type SearchConfig = {
 	recipe?: "fast" | "hybrid" | "deep" | "temporal" | "chain-of-thought"
+	recallProfile?: "latency" | "balanced" | "proof"
 	maxResults?: number
 	searchMode?: "auto" | "direct" | "agentic"
 	maxPasses?: number

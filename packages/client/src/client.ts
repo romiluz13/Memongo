@@ -225,6 +225,7 @@ export type MemongoSearchDetailedMetadata = {
 			| "temporal"
 			| "chain-of-thought"
 			| "custom"
+		recallProfile: "latency" | "balanced" | "proof"
 		maxResults: number
 		searchMode: "auto" | "direct" | "agentic"
 		maxPasses: number

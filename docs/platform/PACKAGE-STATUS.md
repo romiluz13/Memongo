@@ -16,23 +16,20 @@ Use this table to decide whether something belongs in the public product story.
 | `packages/client` | supported | TypeScript SDK |
 | `packages/tools` | supported | AI SDK helpers |
 
-## Supported internal
+## Runtime support
 
 | Surface | Status | Notes |
 |---|---|---|
-| `packages/lib` | supported internal | Runtime utilities used by publishable packages |
-| `docker/mongodb` | supported internal | Atlas Local preview and advanced MongoDB validation stacks |
-| `scripts/proof-pack.ts` | supported internal | API contract and operator proof lane |
-| `scripts/check-publishability.ts` | supported internal | npm/tarball/install validation |
+| `packages/lib` | supported | Runtime utilities used by publishable packages |
+| `docker/mongodb` | supported | Local MongoDB and Atlas Local Preview validation stacks |
+| `scripts/proof-pack.ts` | supported | API contract and operator proof lane |
+| `scripts/check-publishability.ts` | supported | npm/tarball/install validation |
+| `scripts/check-mongodb-runtime-parity.ts` | supported | MongoDB runtime compatibility check |
 
-## Historical, migration, or internal analysis
+## Not shipped
 
-| Surface | Status | Notes |
-|---|---|---|
-| `docs/migration` | historical | Compatibility and legacy notes |
-| `docs/research` | internal | Research and audits |
-| `docs/experiments` | internal | Experiments and analysis |
-| `docs/plans` | internal | Planning material |
+Historical research, raw artifacts, diagnostic runs, and planning notes are preserved
+outside the public launch tree. They are not part of the supported product docs.
 
 ## Not part of the supported product core
 

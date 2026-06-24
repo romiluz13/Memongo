@@ -45,14 +45,14 @@ Managed Atlas cloud is the control lane for serious benchmark and release valida
 
 ```bash
 export MEMONGO_MONGODB_URI="mongodb+srv://<user>:<password>@<cluster>.mongodb.net/?appName=memongo"
-export VOYAGE_API_KEY="al-your-atlas-model-key"
+export VOYAGE_API_KEY="atlas-model-key"
 bun run mongodb:parity
 ```
 
 Atlas Local Preview remains the local reproducibility lane:
 
 ```bash
-export VOYAGE_API_KEY="al-your-atlas-model-key"
+export VOYAGE_API_KEY="atlas-model-key"
 docker compose -f docker/mongodb/docker-compose.preview.yml up -d
 export MEMONGO_MONGODB_URI="mongodb://127.0.0.1:27017/?directConnection=true"
 ```

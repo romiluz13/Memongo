@@ -1,40 +1,36 @@
 ---
 title: "Open source map"
-description: "What Memongo supports publicly, what is internal, and where maintainers should start."
+description: "What Memongo supports publicly and where maintainers should start."
 icon: "folders"
 ---
 
-Memongo is open source, but the public product story is intentionally narrower than the full repository history.
+Memongo is open source under Apache-2.0. The public repo is intentionally focused
+on the supported runtime and documentation needed to run it.
 
-## Public product
+## Supported public product
 
-These are the supported product surfaces:
+- `apps/api` - HTTP API server
+- `apps/mcp` - MCP stdio adapter over the HTTP API
+- `apps/web` - operator console
+- `apps/docs` - public documentation
+- `packages/memory-engine` - MongoDB memory core
+- `packages/memory-bridge` - stable facade over the engine
+- `packages/memongo-memory` - `@memongo/memory` convenience package
+- `packages/client` - TypeScript HTTP client
+- `packages/tools` - AI SDK tool helpers
 
-- `apps/api`
-- `apps/mcp`
-- `apps/web`
-- `apps/docs`
-- `packages/memory-engine`
-- `packages/memory-bridge`
-- `packages/memongo-memory`
-- `packages/client`
-- `packages/tools`
+## Runtime support
 
-## Internal support surfaces
+- `packages/lib` - shared types and utilities used by published packages
+- `docker/mongodb` - local MongoDB and Atlas Local Preview setup
+- `.github/workflows` - CI and package publish workflows
+- `scripts/check-publishability.ts` - package validation
+- `scripts/proof-pack.ts` - live API proof checks
 
-- `packages/lib`
-- `docker/mongodb`
-- `scripts/proof-pack.ts`
-- `scripts/check-publishability.ts`
+## Not in the launch tree
 
-## Historical or planning material
-
-Historical and planning documents are still kept in the repo, but they are not part of the main product story:
-
-- `docs/migration`
-- `docs/research`
-- `docs/experiments`
-- `docs/plans`
+Internal research, diagnostic runs, raw benchmark artifacts, and historical planning
+notes are preserved privately rather than shipped in the public source tree.
 
 ## Maintainer links
 

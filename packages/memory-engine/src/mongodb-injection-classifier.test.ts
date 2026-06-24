@@ -1,8 +1,7 @@
 /**
  * Task 2.SE-2 injection classifier tests (ADR-006 scope expansion).
  *
- * **fast-check seed recorded in the capability-audit evidence doc:**
- *   `docs/benchmarks/capability-audit/poisoning-defense-evidence.md` (seed = 20260512).
+ * fast-check seed: 20260512.
  *
  * Tier-1 pattern classifier is always on. Tier-2 LLM gated classifier is
  * invoked only when `injection_strict` is enabled; off by default.

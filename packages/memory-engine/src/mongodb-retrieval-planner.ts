@@ -341,7 +341,7 @@ export function resolveTimeRangePreset(
  * Temporal window extracted from natural-language time tokens in a query.
  * Feeds the Atlas Search `near` operator injected into the text lane of
  * `$rankFusion` — see `mongodb-conversation-recall.ts` hybrid pipeline
- * and `docs/research/2026-05-12-mongodb-temporal-recall-capabilities.md`.
+ * and the temporal-recall notes kept out of the public launch tree.
  *
  * `origin` is the center of the decay curve and `scaleDays` is the
  * half-max distance (converted to milliseconds `pivot` at the query

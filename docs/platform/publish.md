@@ -64,7 +64,7 @@ See [self-host.md](self-host.md).
 ## Scope and naming
 
 - Do not publish under legacy `@romiluz/*` names for new releases; this repo standardizes on `@memongo/*`.
-- Historical material is kept only in migration or archive notes.
+- Historical material is kept outside the public launch tree.
 
 ## Related docs
 

@@ -1,5 +1,4 @@
 import { MongoClient } from "mongodb"
-import { validateBenchmarkCollectionPrefix } from "./benchmark-run-isolation.js"
 
 type ActiveOperation = {
 	appName?: string
@@ -14,9 +13,15 @@ type PreflightReport = {
 	database: string
 	prefix: string
 	requireEmptyDb: boolean
+	verifyAtlasModelKey: boolean
 	requiredEnv: string[]
 	missingEnv: string[]
 	keyFailures: string[]
+	atlasModelKeyProbe?: {
+		ok: boolean
+		status?: number
+		error?: string
+	}
 	collections: {
 		total: number
 		nonSystem: number
@@ -55,13 +60,32 @@ function readPrefix(): string {
 			"pass --prefix=memongo_bench_<lane>_<date>_<suffix>_ or set MEMONGO_MONGODB_COLLECTION_PREFIX",
 		)
 	}
-	validateBenchmarkCollectionPrefix(prefix)
+	validateCollectionPrefix(prefix)
 	return prefix
+}
+
+function validateCollectionPrefix(prefix: string): void {
+	if (!/^memongo_bench_[a-z0-9][a-z0-9_-]*_$/.test(prefix)) {
+		throw new Error(
+			"collection prefix must start with memongo_bench_, contain only lowercase letters, numbers, underscores, and hyphens, and end with _",
+		)
+	}
+}
+
+function hasArg(name: string): boolean {
+	return process.argv.includes(`--${name}`)
+}
+
+function readBooleanEnv(name: string): boolean {
+	return ["1", "true", "yes", "on"].includes(
+		process.env[name]?.trim().toLowerCase() ?? "",
+	)
 }
 
 function readRequiredEnvNames(): string[] {
 	const raw =
 		readArg("required-env") ||
+		process.env.MEMONGO_CLUSTER_PREFLIGHT_REQUIRED_ENV?.trim() ||
 		process.env.MEMONGO_BENCHMARK_PREFLIGHT_REQUIRED_ENV?.trim()
 	if (!raw) return [...DEFAULT_REQUIRED_ENV]
 	return raw
@@ -85,6 +109,50 @@ function listKeyFailures(): string[] {
 		failures.push("VOYAGE_API_KEY must be a MongoDB Atlas model key (al-...)")
 	}
 	return failures
+}
+
+async function verifyAtlasModelKey(): Promise<{
+	ok: boolean
+	status?: number
+	error?: string
+}> {
+	const voyageKey = process.env.VOYAGE_API_KEY?.trim()
+	if (!voyageKey) {
+		return { ok: false, error: "VOYAGE_API_KEY is missing" }
+	}
+
+	const controller = new AbortController()
+	const timeout = setTimeout(() => controller.abort(), 15_000)
+	try {
+		const response = await fetch("https://ai.mongodb.com/v1/embeddings", {
+			method: "POST",
+			headers: {
+				Authorization: `Bearer ${voyageKey}`,
+				"Content-Type": "application/json",
+			},
+			body: JSON.stringify({
+				input: "Memongo MongoDB preflight probe",
+				model: "voyage-4-lite",
+				input_type: "document",
+			}),
+			signal: controller.signal,
+		})
+		if (!response.ok) {
+			return {
+				ok: false,
+				status: response.status,
+				error: "MongoDB Atlas Embedding API rejected VOYAGE_API_KEY",
+			}
+		}
+		return { ok: true, status: response.status }
+	} catch (error) {
+		return {
+			ok: false,
+			error: `MongoDB Atlas Embedding API probe failed: ${error instanceof Error ? error.message : String(error)}`,
+		}
+	} finally {
+		clearTimeout(timeout)
+	}
 }
 
 async function listActiveOperations(
@@ -128,13 +196,26 @@ async function listActiveOperations(
 
 function renderText(report: PreflightReport): string {
 	const lines = [
-		`benchmark:cluster-preflight ${report.ok ? "PASS" : "FAIL"}`,
+		`mongodb:cluster-preflight ${report.ok ? "PASS" : "FAIL"}`,
 		`db=${report.database}`,
 		`prefix=${report.prefix}`,
+		`verifyAtlasModelKey=${report.verifyAtlasModelKey}`,
 		`requiredEnv=${report.requiredEnv.join(",")}`,
 		`collections=${report.collections.total} nonSystem=${report.collections.nonSystem} benchmark=${report.collections.benchmark} matchingPrefix=${report.collections.matchingPrefix}`,
 		`activeOperations=${report.activeOperations.length}`,
 	]
+	if (report.atlasModelKeyProbe) {
+		lines.push(
+			`atlasModelKeyProbe=${report.atlasModelKeyProbe.ok ? "PASS" : "FAIL"}${
+				report.atlasModelKeyProbe.status
+					? ` status=${report.atlasModelKeyProbe.status}`
+					: ""
+			}`,
+		)
+		if (report.atlasModelKeyProbe.error) {
+			lines.push(`atlasModelKeyProbeError=${report.atlasModelKeyProbe.error}`)
+		}
+	}
 	if (report.missingEnv.length > 0) {
 		lines.push(`missingEnv=${report.missingEnv.join(",")}`)
 	}
@@ -163,16 +244,33 @@ const requiredEnv = readRequiredEnvNames()
 const missingEnv = listMissingEnv(requiredEnv)
 const keyFailures = listKeyFailures()
 const warnings: string[] = []
-const requireEmptyDb = process.argv.includes("--require-empty-db")
+const requireEmptyDb = hasArg("require-empty-db")
+const shouldVerifyAtlasModelKey =
+	hasArg("verify-atlas-model-key") ||
+	readBooleanEnv("MEMONGO_CLUSTER_PREFLIGHT_VERIFY_ATLAS_MODEL_KEY") ||
+	readBooleanEnv("MEMONGO_BENCHMARK_VERIFY_ATLAS_MODEL_KEY")
+
+const atlasModelKeyProbe = shouldVerifyAtlasModelKey
+	? await verifyAtlasModelKey()
+	: undefined
+if (atlasModelKeyProbe && !atlasModelKeyProbe.ok) {
+	keyFailures.push(
+		`VOYAGE_API_KEY failed MongoDB Atlas Embedding API probe${
+			atlasModelKeyProbe.status ? ` (HTTP ${atlasModelKeyProbe.status})` : ""
+		}`,
+	)
+}
 
 let report: PreflightReport = {
 	ok: false,
 	database,
 	prefix,
 	requireEmptyDb,
+	verifyAtlasModelKey: shouldVerifyAtlasModelKey,
 	requiredEnv,
 	missingEnv,
 	keyFailures,
+	atlasModelKeyProbe,
 	collections: {
 		total: 0,
 		nonSystem: 0,
@@ -190,7 +288,7 @@ if (!process.env.MEMONGO_MONGODB_URI?.trim()) {
 	report.warnings.push("MEMONGO_MONGODB_URI is required for publication runs")
 } else {
 	const client = new MongoClient(process.env.MEMONGO_MONGODB_URI.trim(), {
-		appName: "memongo-benchmark-cluster-preflight-readonly",
+		appName: "memongo-mongodb-cluster-preflight-readonly",
 		serverSelectionTimeoutMS: 10_000,
 	})
 	await client.connect()

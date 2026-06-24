@@ -12,7 +12,7 @@ import {
 
 /**
  * Phase 2 remfix CRIT-2: fast-check seed pinned to project default.
- * Evidence doc: docs/benchmarks/capability-audit/importance-decay-evidence.md
+ * fast-check seed: 20260512.
  */
 const FAST_CHECK_SEED = 20260512
 
@@ -338,7 +338,7 @@ describe("shouldAbstainForLowTrust", () => {
 // ===========================================================================
 // Phase 2 remfix CRIT-2: importance-decay fast-check property tests.
 //
-// The capability-audit evidence document claims three properties at
+// The importance-decay evidence claims three properties at
 // seed=20260512. Before this remfix the test file had zero fc.assert calls,
 // so the claims were undefended. These tests defend:
 //

@@ -1,8 +1,0 @@
-{
-	"status": "READY",
-	"queryable": true,
-	"mongotLagEstimateSec": null,
-	"listSearchIndexesError": null,
-	"preRunState": true,
-	"note": "Pre-canary snapshot. The canary itself creates the $vectorSearch index on first ingest. DOES_NOT_EXIST pre-run is expected; re-check will run post-canary as mongot-lag-post.json."
-}

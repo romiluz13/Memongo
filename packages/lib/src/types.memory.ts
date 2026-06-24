@@ -12,6 +12,8 @@ export type MemoryMongoDBFusionMethod =
 	| "rankFusion"
 	| "js-merge"
 
+export type MemoryMongoDBRecallProfile = "latency" | "balanced" | "proof"
+
 export type MemoryScope =
 	| "session"
 	| "user"
@@ -30,6 +32,7 @@ export type MemoryMongoDBConfig = {
 	deploymentProfile?: MemoryMongoDBDeploymentProfile
 	embeddingMode?: MemoryMongoDBEmbeddingMode
 	fusionMethod?: MemoryMongoDBFusionMethod
+	recallProfile?: MemoryMongoDBRecallProfile
 	quantization?: "none" | "scalar" | "binary"
 	watchDebounceMs?: number
 	numDimensions?: number

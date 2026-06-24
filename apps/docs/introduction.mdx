@@ -4,63 +4,73 @@ sidebarTitle: "Introduction"
 icon: "book-open"
 ---
 
-Memongo is **MongoDB-native long-term AI memory** for agents and operators. It ships a MongoDB-backed engine, a stable bridge, an HTTP API, a TypeScript client, MCP tools, and a web console.
+Memongo is **MongoDB-native long-term memory for AI agents**.
 
-The open-source repo is intentionally curated around a supported core instead of every historical experiment. That keeps the product story, release gate, and package surface aligned.
+It gives apps and agents a durable memory layer backed by MongoDB collections,
+MongoDB Search, Vector Search, and hybrid retrieval. The public repo focuses on
+the supported product path: API server, MCP server, TypeScript client, AI SDK
+tools, web console, Docker setup, and release checks.
 
-With Memongo, developers get:
+## Start with one loop
 
-- **Automated embeddings** through MongoDB Search when the configured stack supports them
-- **Hybrid retrieval** combining vector and full-text search
-- **Knowledge base ingestion** for files and reference material
-- **Graph entities, episodes, structured memory, and procedures**
-- **A stable API contract** that adapters can call directly or through the client SDK
+The fastest way to understand Memongo is:
 
-Run Memongo against MongoDB with Search and vector capabilities enabled. The repository includes Docker Compose options under `docker/mongodb/`.
+1. Start MongoDB.
+2. Start the Memongo API.
+3. Add one memory.
+4. Search for it.
 
-## How it works
+<Card title="Quickstart" icon="play" href="/quickstart">
+  Run the local add/search loop in a few minutes.
+</Card>
+
+## What it stores
+
+| Memory type | Use case |
+|---|---|
+| Conversation events | Long-running chat and agent history |
+| Structured facts | Preferences, profile details, current state |
+| Procedures | Workflows, playbooks, and instructions |
+| Knowledge base chunks | Documents and reference material |
+| Episodes and graph links | Higher-level context and relationships |
+
+## Runtime shape
 
 ```text
-┌──────────────┐  ┌──────────────┐  ┌──────────────┐
-│   apps/web   │  │   apps/mcp   │  │  apps/api    │
-│  (Next.js)   │  │   (stdio)    │  │   (Hono)     │
-└──────┬───────┘  └──────┬───────┘  └──────┬───────┘
-       │                 │                 │
-       └─────────────────┼─────────────────┘
-                         │
-              ┌──────────┴──────────┐
-              │  packages/client    │  TypeScript HTTP client
-              └──────────┬──────────┘
-                         │
-              ┌──────────┴──────────┐
-              │  packages/memory-   │  Stable facade
-              │  bridge             │
-              └──────────┬──────────┘
-                         │
-              ┌──────────┴──────────┐
-              │  packages/memory-   │  MongoDB memory core
-              │  engine             │
-              └──────────┬──────────┘
-                         │
-                    ┌────┴────┐
-                    │ MongoDB │
-                    └─────────┘
+App / Agent / MCP client
+  -> Memongo API or TypeScript client
+  -> Memory bridge
+  -> MongoDB memory engine
+  -> MongoDB
 ```
 
-- You send Memongo text, files, and conversations.
-- Memongo indexes them, projects canonical events, and stores everything in MongoDB.
-- At query time, hybrid search fetches the most relevant context for your AI models.
+Memongo keeps the integration surface small while the engine handles indexing,
+retrieval, telemetry, graph relationships, and memory lifecycle behavior.
 
-## Next steps
+## Why MongoDB
+
+Memongo uses MongoDB as the memory substrate instead of bolting together a
+separate vector database, relational store, and event log. That keeps source
+documents, vector search, lexical search, metadata, provenance, and operational
+queries in one place.
+
+## Evaluation posture
+
+Benchmark evidence is scoped by lane. Memongo currently publishes selected
+MemPalace retrieval-lane evidence only. Broader ecosystem and judged-answer
+benchmarks remain under audit, and no Mem0 LongMemEval win is claimed.
 
 <CardGroup cols={2}>
-  <Card title="Quickstart" icon="play" href="/quickstart">
-    Get Memongo running in under five minutes
+  <Card title="Architecture" icon="sitemap" href="/concepts/architecture">
+    Understand the packages and data flow.
   </Card>
-  <Card title="Architecture" icon="cpu" href="/concepts/architecture">
-    Understand the package and data architecture
+  <Card title="API Reference" icon="unplug" href="/api/overview">
+    See the HTTP endpoints.
+  </Card>
+  <Card title="MCP tools" icon="terminal" href="/guides/cli-memory">
+    Expose memory to MCP-compatible clients.
   </Card>
   <Card title="Open source map" icon="folders" href="/guides/open-source">
-    See the supported surface, maintainer docs, and release guides
+    See what is supported publicly.
   </Card>
 </CardGroup>

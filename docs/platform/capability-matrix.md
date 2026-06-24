@@ -72,7 +72,6 @@ This matrix maps the supported Memongo memory engine to the standalone product s
 
 ## Proof path
 
-- MongoDB flaws and fixes: [mongodb-flaws.md](mongodb-flaws.md)
 - MongoDB runtime parity: `bun run mongodb:parity` with managed Atlas cloud, Atlas Local Preview, or both configured.
 - `repo-foundation`: `bun run check-types`, `bun run lint`, `bun run build`, `bun run test`
 - `api-contract`: `bun run proof-pack`

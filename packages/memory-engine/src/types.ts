@@ -307,8 +307,11 @@ export type SearchHybridMode = "hybrid" | "vector-only"
 
 export type SearchLexicalPrefilterMode = "disabled" | "experimental"
 
+export type SearchRecallProfile = "latency" | "balanced" | "proof"
+
 export type SearchConfig = {
 	recipe?: SearchRecipe
+	recallProfile?: SearchRecallProfile
 	maxResults?: number
 	searchMode?: MemorySearchMode
 	maxPasses?: number
@@ -324,6 +327,7 @@ export type SearchConfig = {
 
 export type ResolvedSearchConfig = {
 	recipe: SearchRecipe | "custom"
+	recallProfile: SearchRecallProfile
 	maxResults: number
 	searchMode: MemorySearchMode
 	maxPasses: number

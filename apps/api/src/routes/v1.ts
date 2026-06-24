@@ -1163,6 +1163,7 @@ export function createV1Router(): Hono {
 								| "deep"
 								| "temporal"
 								| "chain-of-thought"
+							recallProfile?: "latency" | "balanced" | "proof"
 							maxResults?: number
 							searchMode?: "auto" | "direct" | "agentic"
 							maxPasses?: number

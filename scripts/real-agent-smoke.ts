@@ -296,7 +296,13 @@ async function executeToolCall(toolCall: ToolCall): Promise<unknown> {
 						? args.maxItems
 						: 4,
 			})
-		case "memongo_build_context_bundle":
+		case "memongo_build_context_bundle": {
+			const requestedTokenBudget =
+				typeof args.tokenBudget === "number" &&
+				Number.isFinite(args.tokenBudget)
+					? args.tokenBudget
+					: 520
+
 			return memongo.buildContextBundle({
 				agentId,
 				query:
@@ -306,11 +312,7 @@ async function executeToolCall(toolCall: ToolCall): Promise<unknown> {
 				scope: "agent",
 				scopeRef: agentScopeRef,
 				sessionId,
-				tokenBudget:
-					typeof args.tokenBudget === "number" &&
-					Number.isFinite(args.tokenBudget)
-						? args.tokenBudget
-						: 260,
+				tokenBudget: Math.max(520, Math.min(requestedTokenBudget, 600)),
 				includeDiscoveryProjection:
 					typeof args.includeDiscoveryProjection === "boolean"
 						? args.includeDiscoveryProjection
@@ -324,6 +326,7 @@ async function executeToolCall(toolCall: ToolCall): Promise<unknown> {
 								| "contradiction-report")
 						: "topic-brief",
 			})
+		}
 		default:
 			throw new Error(`Unsupported tool call: ${toolCall.function.name}`)
 	}

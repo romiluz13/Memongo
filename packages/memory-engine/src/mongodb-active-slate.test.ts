@@ -162,6 +162,54 @@ describe("mongodb-active-slate", () => {
 		vi.useRealTimers()
 	})
 
+	it("prioritizes explicit durable state before generated active-context projections", async () => {
+		vi.mocked(structuredMemCollection)
+			.mockReturnValueOnce(
+				createMockFindCollection([
+					{
+						type: "fact",
+						key: "active-context-latest",
+						value: "Assistant answer about Phoenix validation.",
+						salience: "critical",
+						state: "active",
+						updatedAt: new Date("2026-04-05T11:59:00.000Z"),
+						scope: SCOPE,
+						scopeRef: SCOPE_REF,
+						tags: ["active-context", "phoenix"],
+					},
+					{
+						type: "decision",
+						key: "phoenix-release-window",
+						value: "Phoenix deploys on Monday afternoon after validation.",
+						salience: "critical",
+						state: "active",
+						updatedAt: new Date("2026-04-05T10:00:00.000Z"),
+						scope: SCOPE,
+						scopeRef: SCOPE_REF,
+						tags: ["phoenix", "release"],
+					},
+				]),
+			)
+			.mockReturnValueOnce(createMockFindCollection([]))
+		vi.mocked(proceduresCollection).mockReturnValue(
+			createMockFindCollection([]),
+		)
+		vi.mocked(eventsCollection).mockReturnValue(createMockFindCollection([]))
+
+		const slate = await hydrateActiveSlate({
+			...defaultParams(),
+			maxItems: 1,
+		})
+
+		expect(slate.items).toHaveLength(1)
+		expect(slate.items[0]).toEqual(
+			expect.objectContaining({
+				title: "phoenix-release-window",
+				summary: "Phoenix deploys on Monday afternoon after validation.",
+			}),
+		)
+	})
+
 	it("filters every query by agent scope and clamps requested size to six items", async () => {
 		vi.mocked(structuredMemCollection)
 			.mockReturnValueOnce(createMockFindCollection([]))

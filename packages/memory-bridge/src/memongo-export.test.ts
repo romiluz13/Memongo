@@ -1,8 +1,7 @@
 /**
  * Task 2.SE-4 export determinism tests (ADR-006 scope expansion).
  *
- * **fast-check seed recorded in the capability-audit evidence doc:**
- *   `docs/benchmarks/capability-audit/export-evidence.md` (seed = 20260512).
+ * fast-check seed: 20260512.
  */
 
 import { describe, expect, it } from "vitest"

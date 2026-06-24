@@ -591,6 +591,10 @@ export const openApiSpec = {
 													"chain-of-thought",
 												],
 											},
+											recallProfile: {
+												type: "string",
+												enum: ["latency", "balanced", "proof"],
+											},
 											maxResults: { type: "number" },
 											searchMode: {
 												type: "string",
@@ -732,6 +736,7 @@ export const openApiSpec = {
 													type: "object",
 													properties: {
 														recipe: { type: "string" },
+														recallProfile: { type: "string" },
 														maxResults: { type: "number" },
 														searchMode: { type: "string" },
 														maxPasses: { type: "number" },

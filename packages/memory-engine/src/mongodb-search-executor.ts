@@ -1,6 +1,7 @@
 import type { RetrievalPath } from "./mongodb-retrieval-planner.js"
 import {
 	classifyRetrievalQuery,
+	resolveNumCandidates,
 	resolveTimeRangePreset,
 } from "./mongodb-retrieval-planner.js"
 import { resolveScopeRef } from "./mongodb-scope.js"
@@ -24,8 +25,11 @@ import type {
 	ResolvedSearchConfig,
 	RejectedResultSummary,
 	SearchConfig,
+	SearchRecallProfile,
 	SearchRecipe,
 } from "./types.js"
+
+const MONGODB_MAX_NUM_CANDIDATES = 10_000
 
 export type MemorySearchExecutorTimeRange = {
 	start: Date
@@ -153,6 +157,29 @@ function recipeDefaults(recipe: SearchRecipe): SearchConfig {
 	}
 }
 
+function normalizeRequestedNumCandidates(value: unknown): number | undefined {
+	if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+		return undefined
+	}
+	return Math.min(Math.floor(value), MONGODB_MAX_NUM_CANDIDATES)
+}
+
+export function resolveProfileNumCandidates(params: {
+	maxResults: number
+	recallProfile: SearchRecallProfile
+	requested?: number
+}): number | undefined {
+	const requested = normalizeRequestedNumCandidates(params.requested)
+	if (params.recallProfile !== "proof") {
+		return requested
+	}
+	const proofMinimum = Math.min(
+		resolveNumCandidates(params.maxResults),
+		MONGODB_MAX_NUM_CANDIDATES,
+	)
+	return Math.max(requested ?? proofMinimum, proofMinimum)
+}
+
 export function resolveSearchConfig(request: MemorySearchRequest): Omit<
 	ResolvedSearchConfig,
 	"numCandidates" | "fusionMethod"
@@ -163,12 +190,15 @@ export function resolveSearchConfig(request: MemorySearchRequest): Omit<
 	const recipe = request.searchConfig?.recipe
 	const seeded = recipe ? recipeDefaults(recipe) : {}
 	const configured = { ...seeded, ...request.searchConfig }
+	const maxResults = Math.max(
+		1,
+		Math.trunc(request.maxResults ?? configured.maxResults ?? 10),
+	)
+	const recallProfile = configured.recallProfile ?? "balanced"
 	return {
 		recipe: recipe ?? "custom",
-		maxResults: Math.max(
-			1,
-			Math.trunc(request.maxResults ?? configured.maxResults ?? 10),
-		),
+		recallProfile,
+		maxResults,
 		searchMode: request.searchMode ?? configured.searchMode ?? "auto",
 		maxPasses: Math.max(
 			1,
@@ -194,8 +224,12 @@ export function resolveSearchConfig(request: MemorySearchRequest): Omit<
 		timeRange: request.timeRange ?? configured.timeRange,
 		needExactEvidence:
 			request.needExactEvidence ?? configured.needExactEvidence ?? false,
-		numCandidates:
-			request.searchConfig?.numCandidates ?? configured.numCandidates,
+		numCandidates: resolveProfileNumCandidates({
+			maxResults,
+			recallProfile,
+			requested:
+				request.searchConfig?.numCandidates ?? configured.numCandidates,
+		}),
 		fusionMethod: request.searchConfig?.fusionMethod ?? configured.fusionMethod,
 		hybridMode:
 			request.searchConfig?.hybridMode ?? configured.hybridMode ?? "hybrid",
@@ -216,6 +250,9 @@ export function applySearchConfig(
 	const resolved = resolveSearchConfig(request)
 	const requestSearchConfig: SearchConfig = {
 		...(resolved.recipe !== "custom" ? { recipe: resolved.recipe } : {}),
+		...(request.searchConfig?.recallProfile
+			? { recallProfile: resolved.recallProfile }
+			: {}),
 		maxResults: resolved.maxResults,
 		searchMode: resolved.searchMode,
 		maxPasses: resolved.maxPasses,

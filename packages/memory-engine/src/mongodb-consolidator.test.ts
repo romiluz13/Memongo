@@ -1416,7 +1416,7 @@ describe("Dreamer entity extraction integration (Phase 3.4)", () => {
 	// Phase 2 remfix CRIT-3 — fast-check: no consolidated row spans scopes.
 	//
 	// Seed = 20260512, numRuns = 300. Evidence doc:
-	// docs/benchmarks/capability-audit/dreamer-evidence.md
+	// Dreamer evidence seed: 20260512.
 	//
 	// Method: generate a random batch of events with varying scope/scopeRef.
 	// Run consolidateMemory once per event (single-scope filter). Assert the

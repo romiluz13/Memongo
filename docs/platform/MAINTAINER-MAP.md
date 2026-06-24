@@ -55,10 +55,10 @@ Canonical local stack:
   Public product docs and quickstart
 - `docs/platform`
   Maintainer and release docs
-- `docs/migration`
-  Historical and compatibility notes
-- `docs/research`, `docs/experiments`, `docs/plans`
-  Internal analysis and planning only
+- `docs/benchmarks`
+  Scoped public benchmark evidence and operating contract
+- Not shipped
+  Historical research, diagnostic runs, raw artifacts, and planning notes
 
 ## Source of truth
 

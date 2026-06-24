@@ -771,6 +771,7 @@ export async function memongoBridgeSearchDetailed(params: {
 	proceduralScope?: { state?: string; intentTags?: string[] }
 	searchConfig?: {
 		recipe?: "fast" | "hybrid" | "deep" | "temporal" | "chain-of-thought"
+		recallProfile?: "latency" | "balanced" | "proof"
 		maxResults?: number
 		searchMode?: "auto" | "direct" | "agentic"
 		maxPasses?: number
@@ -833,6 +834,7 @@ export async function memongoBridgeSearchDetailed(params: {
 		searchConfig: params.searchConfig as
 			| {
 					recipe?: "fast" | "hybrid" | "deep" | "temporal" | "chain-of-thought"
+					recallProfile?: "latency" | "balanced" | "proof"
 					maxResults?: number
 					searchMode?: "auto" | "direct" | "agentic"
 					maxPasses?: number

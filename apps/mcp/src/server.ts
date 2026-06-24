@@ -824,6 +824,10 @@ export const toolList = [
 							},
 						},
 						needExactEvidence: { type: "boolean" },
+						recallProfile: {
+							type: "string",
+							enum: ["latency", "balanced", "proof"],
+						},
 						numCandidates: { type: "number" },
 						fusionMethod: {
 							type: "string",
@@ -1553,6 +1557,12 @@ export async function handleToolCall(
 							needExactEvidence:
 								typeof searchConfig.needExactEvidence === "boolean"
 									? searchConfig.needExactEvidence
+									: undefined,
+							recallProfile:
+								searchConfig.recallProfile === "latency" ||
+								searchConfig.recallProfile === "balanced" ||
+								searchConfig.recallProfile === "proof"
+									? searchConfig.recallProfile
 									: undefined,
 							numCandidates:
 								typeof searchConfig.numCandidates === "number"

@@ -62,6 +62,7 @@ function makeConfig(
 		collectionPrefix: "test_",
 		deploymentProfile: "atlas-local-preview",
 		embeddingMode: "manual",
+		recallProfile: "balanced",
 		fallbackToBuiltin: true,
 		relevance: {
 			enabled: true,

@@ -6,9 +6,6 @@ but they must not be presented as official benchmark wins.
 
 ## Benchmark lanes
 
-For the concrete dataset/mode/model matrix and canary ladder, see
-[benchmark-matrix.md](benchmark-matrix.md).
-
 | Lane | Purpose | Required trigger | Publishable? |
 | --- | --- | --- | --- |
 | Official retrieval | LongMemEval / LoCoMo retrieval quality | release candidate, retrieval algorithm changes, benchmark corpus changes | Yes, when dataset, build, MongoDB topology, embeddings, and command are recorded |

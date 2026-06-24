@@ -1,6 +1,0 @@
-{
-	"failedAt": "2026-05-11T22:43:46.839Z",
-	"failureClass": "model-failure",
-	"message": "HTTP 500: {\"error\":{\"code\":\"RELEVANCE_BENCHMARK_FAILED\",\"message\":\"MongoDB URI required for Memongo. Set `memory.mongodb.uri` in config or `MEMONGO_MONGODB_URI` in the environment. Use `MEMONGO_FORCE_MONGODB_URI` to override a file URI (for example memongo-api or CI).\"}}",
-	"stack": "Error: HTTP 500: {\"error\":{\"code\":\"RELEVANCE_BENCHMARK_FAILED\",\"message\":\"MongoDB URI required for Memongo. Set `memory.mongodb.uri` in config or `MEMONGO_MONGODB_URI` in the environment. Use `MEMONGO_FORCE_MONGODB_URI` to override a file URI (for example memongo-api or CI).\"}}\n    at main (/Users/rom.iluz/Dev/memongo/scripts/run-longmemeval-canary.ts:553:13)\n    at processTicksAndRejections (native:7:39)"
-}

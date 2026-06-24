@@ -3,7 +3,7 @@
 #
 # Usage:
 #   docker compose -f docker/mongodb/docker-compose.preview.yml up -d
-#   VOYAGE_API_KEY=al-xxxxx docker compose -f docker/mongodb/docker-compose.preview.yml up -d
+#   VOYAGE_API_KEY=atlas-model-key docker compose -f docker/mongodb/docker-compose.preview.yml up -d
 #
 # IMPORTANT: VOYAGE_API_KEY must be an Atlas Model API Key (al-... prefix).
 # Create one at: cloud.mongodb.com → AI Models → Create model API key

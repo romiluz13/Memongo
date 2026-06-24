@@ -11,7 +11,7 @@ The fastest way to run Memongo's full MongoDB stack:
 ./docker/mongodb/start-preview.sh
 
 # With auto-embeddings
-VOYAGE_API_KEY=al-your-atlas-model-api-key ./docker/mongodb/start-preview.sh
+VOYAGE_API_KEY=atlas-model-api-key ./docker/mongodb/start-preview.sh
 
 # Stop
 ./docker/mongodb/start-preview.sh stop
@@ -125,7 +125,7 @@ To enable server-side automatic embeddings (no application-level embedding code 
 1. Provision an Atlas Model key for Voyage-backed auto-embedding
 2. Set the environment variable before starting:
    ```bash
-   export VOYAGE_API_KEY=al-your-atlas-model-api-key
+   export VOYAGE_API_KEY=atlas-model-api-key
    ./docker/mongodb/start-preview.sh
    ```
 3. The preview container enables the auto-embed path when the key is present at startup.

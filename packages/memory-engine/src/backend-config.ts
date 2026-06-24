@@ -4,6 +4,7 @@ import {
 	type MemoryMongoDBDeploymentProfile,
 	type MemoryMongoDBEmbeddingMode,
 	type MemoryMongoDBFusionMethod,
+	type MemoryMongoDBRecallProfile,
 	createSubsystemLogger,
 	resolveUserPath,
 } from "@memongo/lib"
@@ -30,6 +31,7 @@ export type ResolvedMongoDBConfig = {
 	deploymentProfile: MemoryMongoDBDeploymentProfile
 	embeddingMode: MemoryMongoDBEmbeddingMode
 	fusionMethod: MemoryMongoDBFusionMethod
+	recallProfile: MemoryMongoDBRecallProfile
 	quantization: "none" | "scalar" | "binary"
 	watchDebounceMs: number
 	numDimensions: number
@@ -228,6 +230,10 @@ export function resolveMemoryBackendConfig(params: {
 				fusionMethod: resolveEnvFusionMethod(
 					"MEMONGO_MONGODB_FUSION_METHOD",
 					mongoCfg?.fusionMethod ?? "rankFusion",
+				),
+				recallProfile: resolveEnvRecallProfile(
+					"MEMONGO_MONGODB_RECALL_PROFILE",
+					mongoCfg?.recallProfile ?? "balanced",
 				),
 				quantization: mongoCfg?.quantization ?? "none",
 				watchDebounceMs:
@@ -674,6 +680,17 @@ function resolveEnvFusionMethod(
 ): MemoryMongoDBFusionMethod {
 	const raw = process.env[envKey]?.trim()
 	if (raw === "rankFusion" || raw === "scoreFusion" || raw === "js-merge") {
+		return raw
+	}
+	return fallback
+}
+
+function resolveEnvRecallProfile(
+	envKey: string,
+	fallback: MemoryMongoDBRecallProfile,
+): MemoryMongoDBRecallProfile {
+	const raw = process.env[envKey]?.trim()
+	if (raw === "latency" || raw === "balanced" || raw === "proof") {
 		return raw
 	}
 	return fallback
