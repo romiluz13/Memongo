@@ -117,7 +117,7 @@ describe("classifyBenchmarkFailure (Task 1.4, Recommended Default #2)", () => {
 		expect(classifyBenchmarkFailure(new Error("wat"))).toBe("unknown")
 	})
 
-	test("5xx without model/network token falls through to `unknown` (remfix C2A)", () => {
+	test("5xx without model/network token falls through to `unknown`", () => {
 		// A generic HTTP 500 from the benchmark endpoint (e.g. MongoDB URI
 		// required) is NOT a model-failure. It's a bootstrap/config error.
 		// Bucketing it into model-failure would misclassify root cause and
@@ -131,7 +131,7 @@ describe("classifyBenchmarkFailure (Task 1.4, Recommended Default #2)", () => {
 		).toBe("unknown")
 	})
 
-	test("5xx WITH voyage/network token still classifies as model-failure (remfix C2A)", () => {
+	test("5xx WITH voyage/network token still classifies as model-failure", () => {
 		expect(
 			classifyBenchmarkFailure(
 				new Error("HTTP 500 from voyage embedding endpoint"),
@@ -139,7 +139,7 @@ describe("classifyBenchmarkFailure (Task 1.4, Recommended Default #2)", () => {
 		).toBe("model-failure")
 	})
 
-	test("ECONNREFUSED without 5xx classifies as model-failure (remfix C2A)", () => {
+	test("ECONNREFUSED without 5xx classifies as model-failure", () => {
 		expect(
 			classifyBenchmarkFailure(
 				new Error("connect ECONNREFUSED 127.0.0.1:65530"),

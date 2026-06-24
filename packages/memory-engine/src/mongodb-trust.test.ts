@@ -339,8 +339,7 @@ describe("shouldAbstainForLowTrust", () => {
 // Importance-decay safety: importance-decay fast-check property tests.
 //
 // The importance-decay evidence claims three properties at
-// seed=20260512. Before this remfix the test file had zero fc.assert calls,
-// so the claims were undefended. These tests defend:
+// seed=20260512. These fast-check property tests defend those claims:
 //
 //   Property A (permanent never decays): for any temporalScope in
 //     {"permanent", "ongoing"}, the decayed importance equals the clamped

@@ -26,10 +26,10 @@ Prerequisites:
 
 - Node.js 20+
 - Bun 1.2+
-- Docker, for the local MongoDB path
+- Docker (for the local MongoDB path — uses MongoDB Atlas Local Preview with mongot for Atlas Search)
 
 ```bash
-git clone https://github.com/romiluz/memongo.git
+git clone https://github.com/romiluz13/memongo.git
 cd memongo
 bun install
 ```
@@ -40,6 +40,8 @@ Start MongoDB:
 docker compose -f docker/docker-compose.yml up -d
 export MEMONGO_MONGODB_URI="mongodb://127.0.0.1:27017/?directConnection=true"
 export MEMONGO_API_KEY="local-dev-secret"
+# Required for semantic search results below (Atlas Model API key, `al-...` prefix):
+export VOYAGE_API_KEY="al-your-atlas-model-api-key"
 ```
 
 The default Docker file uses MongoDB Atlas Local Preview. Set `VOYAGE_API_KEY`
@@ -69,6 +71,9 @@ curl -s http://127.0.0.1:3847/v1/search \
   -H "authorization: Bearer local-dev-secret" \
   -d '{"query":"What does the user prefer?","sessionKey":"demo-user","maxResults":5}'
 ```
+
+> Semantic search returns `{"results":[]}` until `VOYAGE_API_KEY` is set (see
+> above) — embeddings are required to match stored memories by meaning.
 
 For a guided setup, see [Quickstart](apps/docs/quickstart.mdx).
 

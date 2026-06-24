@@ -14,7 +14,7 @@
  *   - "none" (default): fall back to regex-only userfact extraction
  */
 
-import type { MemoryScope } from "@memongo/lib"
+import { type MemoryScope, createSubsystemLogger } from "@memongo/lib"
 import type {
 	MemoryBenchmarkConversation,
 	MemoryBenchmarkTurn,
@@ -99,6 +99,8 @@ export type QaEvidenceDocument = {
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
+
+const log = createSubsystemLogger("memory:mongodb:llm-enrichment")
 
 const USERFACT_CHUNK_PREFIX = "userfact-chunk/"
 const QA_CHUNK_PREFIX = "qa-chunk/"
@@ -547,9 +549,9 @@ export async function extractSessionEnrichment(
 				`LLM enrichment JSON parse failed: ${response.content.slice(0, 200)}`,
 			)
 		}
-		console.warn(
-			`LLM enrichment JSON parse failed: ${response.content.slice(0, 200)}`,
-		)
+		log.warn("LLM enrichment JSON parse failed", {
+			preview: response.content.slice(0, 200),
+		})
 		return empty
 	}
 
