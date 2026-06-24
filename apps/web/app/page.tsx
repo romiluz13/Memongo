@@ -1,616 +1,347 @@
 "use client"
 
-import { MemongoClient } from "@memongo/client"
-import type { ReactNode } from "react"
-import { useMemo, useState } from "react"
+import { useEffect, useRef } from "react"
 
-const defaultApi =
-	process.env.NEXT_PUBLIC_MEMONGO_API_URL ?? "http://127.0.0.1:3847"
+const memoryLayers = [
+	{
+		label: "Events",
+		title: "Every interaction stays source-backed.",
+		body: "Conversations, tool calls, documents, and agent actions land as durable memory events with timestamps, scope, provenance, and metadata.",
+	},
+	{
+		label: "Structure",
+		title: "Facts become current state, not loose notes.",
+		body: "Preferences, procedures, profile details, revisions, and superseded values are modeled so an agent can know what changed and what still holds.",
+	},
+	{
+		label: "Retrieval",
+		title: "Semantic, lexical, graph, and hybrid recall work together.",
+		body: "Vector similarity finds meaning, full-text search catches names and exact facts, graph links recover relationships, and hybrid ranking chooses the right evidence.",
+	},
+	{
+		label: "Proof",
+		title: "The answer can point back to the memory.",
+		body: "Context bundles preserve source IDs, scores, roles, timestamps, and stale/current labels so memory can be inspected instead of trusted blindly.",
+	},
+]
 
-type Tab = "overview" | "search" | "kb" | "profile" | "write"
+const capabilities = [
+	[
+		"Document memory",
+		"Events, facts, KB chunks, procedures, graph edges, and telemetry live together.",
+	],
+	[
+		"Vector recall",
+		"High-recall semantic search for fuzzy questions and long-running context.",
+	],
+	[
+		"Lexical recall",
+		"Exact names, dates, identifiers, and proper nouns stay recoverable.",
+	],
+	[
+		"Hybrid ranking",
+		"Semantic and keyword evidence can be fused without leaving the memory store.",
+	],
+	[
+		"Graph context",
+		"Episodes, entities, sessions, and scopes become traversable relationships.",
+	],
+	[
+		"Operational truth",
+		"Health, indexes, provenance, cleanup, and release gates are first-class.",
+	],
+]
 
-type OutputState = {
-	title: string
-	body: string
-	state: "idle" | "success" | "error"
-}
+const codeSample = `const memongo = new MemongoClient({
+  baseUrl: "http://127.0.0.1:3847"
+})
 
-type OverviewState = {
-	health?: { ok?: boolean; service?: string }
-	status?: Record<string, unknown>
-	stats?: Record<string, unknown>
-	openApiPathCount?: number
-	lastRefreshAt?: string
-}
+await memongo.add({
+  sessionId: "agent-42",
+  content: "Romi prefers concise release notes."
+})
 
-type Style = Record<string, string | number>
+const context = await memongo.search({
+  sessionKey: "agent-42",
+  query: "How should I write the launch note?",
+  limit: 8
+})`
 
-const palette = {
-	page: "#f6f8fb",
-	ink: "#172033",
-	muted: "#667085",
-	border: "#d6dde8",
-	panel: "#ffffff",
-	panelAlt: "#eef3f8",
-	accent: "#0f766e",
-	accentDark: "#115e59",
-	code: "#0b1220",
-	success: "#047857",
-	error: "#b42318",
-	warning: "#b54708",
-}
+export default function LandingPage() {
+	const rootRef = useRef<HTMLElement>(null)
 
-const fieldStyle: Style = {
-	width: "100%",
-	boxSizing: "border-box",
-	border: `1px solid ${palette.border}`,
-	borderRadius: 6,
-	padding: "9px 10px",
-	font: "inherit",
-	color: palette.ink,
-	background: "#fff",
-}
-
-function pretty(value: unknown): string {
-	return JSON.stringify(value, null, 2)
-}
-
-function statusLabel(ok?: boolean): string {
-	if (ok === true) {
-		return "Healthy"
-	}
-	if (ok === false) {
-		return "Unhealthy"
-	}
-	return "Not checked"
-}
-
-function buttonStyle(kind: "primary" | "secondary" = "secondary"): Style {
-	return {
-		border:
-			kind === "primary"
-				? `1px solid ${palette.accent}`
-				: `1px solid ${palette.border}`,
-		background: kind === "primary" ? palette.accent : "#fff",
-		color: kind === "primary" ? "#fff" : palette.ink,
-		borderRadius: 6,
-		padding: "9px 12px",
-		cursor: "pointer",
-		fontWeight: 650,
-	}
-}
-
-function tabButtonStyle(active: boolean): Style {
-	return {
-		border: active ? `1px solid ${palette.accent}` : "1px solid transparent",
-		background: active ? "#d9f4ef" : "transparent",
-		color: active ? palette.accentDark : palette.muted,
-		padding: "8px 10px",
-		borderRadius: 6,
-		cursor: "pointer",
-		fontWeight: 650,
-	}
-}
-
-function MetricCard({
-	label,
-	value,
-	help,
-	tone = "neutral",
-}: {
-	label: string
-	value: string
-	help: string
-	tone?: "neutral" | "success" | "warning"
-}) {
-	const valueColor =
-		tone === "success"
-			? palette.success
-			: tone === "warning"
-				? palette.warning
-				: palette.ink
-
-	return (
-		<div
-			style={{
-				border: `1px solid ${palette.border}`,
-				borderRadius: 8,
-				padding: 14,
-				background: palette.panel,
-				minHeight: 108,
-			}}
-		>
-			<div
-				style={{
-					fontSize: 12,
-					color: palette.muted,
-					marginBottom: 8,
-					textTransform: "uppercase",
-					fontWeight: 700,
-				}}
-			>
-				{label}
-			</div>
-			<div
-				style={{
-					fontSize: 22,
-					fontWeight: 760,
-					marginBottom: 6,
-					color: valueColor,
-				}}
-			>
-				{value}
-			</div>
-			<div style={{ fontSize: 13, color: palette.muted, lineHeight: 1.35 }}>
-				{help}
-			</div>
-		</div>
-	)
-}
-
-function Field({ label, children }: { label: string; children: ReactNode }) {
-	return (
-		<div style={{ display: "grid", gap: 6 }}>
-			<span style={{ color: palette.muted, fontSize: 13, fontWeight: 650 }}>
-				{label}
-			</span>
-			{children}
-		</div>
-	)
-}
-
-export default function Home() {
-	const [baseUrl, setBaseUrl] = useState(defaultApi)
-	const [apiKey, setApiKey] = useState("")
-	const [agentId, setAgentId] = useState("main")
-	const [scopeValue, setScopeValue] = useState("default")
-	const [tab, setTab] = useState<Tab>("overview")
-	const [query, setQuery] = useState("What does this user prefer?")
-	const [writeContent, setWriteContent] = useState(
-		"The user prefers concise release notes and Friday deploy windows.",
-	)
-	const [loading, setLoading] = useState(false)
-	const [output, setOutput] = useState<OutputState>({
-		title: "Console output",
-		body: "Run an action to inspect live Memongo responses.",
-		state: "idle",
-	})
-	const [overview, setOverview] = useState<OverviewState>({})
-
-	const root = useMemo(() => baseUrl.replace(/\/$/, ""), [baseUrl])
-	const client = useMemo(
-		() =>
-			new MemongoClient({
-				baseUrl: root,
-				apiKey: apiKey.trim() || undefined,
-			}),
-		[apiKey, root],
-	)
-
-	function authHeaders(): Record<string, string> {
-		const headers: Record<string, string> = {}
-		if (apiKey.trim()) {
-			headers.Authorization = `Bearer ${apiKey.trim()}`
+	useEffect(() => {
+		const root = rootRef.current
+		if (!root) {
+			return
 		}
-		return headers
-	}
 
-	async function fetchJson(path: string): Promise<unknown> {
-		const response = await fetch(`${root}${path}`, { headers: authHeaders() })
-		const text = await response.text()
-		if (!response.ok) {
-			throw new Error(`${path} returned HTTP ${response.status}\n${text}`)
+		const reduceMotion = window.matchMedia(
+			"(prefers-reduced-motion: reduce)",
+		).matches
+
+		if (reduceMotion) {
+			root.dataset.motion = "reduced"
+			return
 		}
-		return text ? JSON.parse(text) : null
-	}
 
-	async function withOutput(title: string, action: () => Promise<unknown>) {
-		setLoading(true)
-		try {
-			const result = await action()
-			setOutput({ title, body: pretty(result), state: "success" })
-		} catch (error) {
-			setOutput({
-				title: `${title} failed`,
-				body: error instanceof Error ? error.message : String(error),
-				state: "error",
-			})
-		} finally {
-			setLoading(false)
-		}
-	}
+		let cleanup = () => {}
 
-	async function refreshOverview() {
-		await withOutput("Overview refresh", async () => {
-			const [health, status, stats, openApi] = await Promise.all([
-				fetchJson("/health"),
-				client.status(agentId),
-				client.stats(agentId),
-				fetchJson("/openapi.json"),
+		void (async () => {
+			const [{ gsap }, { ScrollTrigger }] = await Promise.all([
+				import("gsap"),
+				import("gsap/ScrollTrigger"),
 			])
-			const nextOverview: OverviewState = {
-				health: health as OverviewState["health"],
-				status: status as Record<string, unknown>,
-				stats: stats as Record<string, unknown>,
-				openApiPathCount: Object.keys(
-					((openApi as { paths?: Record<string, unknown> }).paths ??
-						{}) as Record<string, unknown>,
-				).length,
-				lastRefreshAt: new Date().toISOString(),
-			}
-			setOverview(nextOverview)
-			return nextOverview
-		})
-	}
 
-	async function runCurrentTab() {
-		if (tab === "overview") {
-			await refreshOverview()
-			return
-		}
-		if (tab === "search") {
-			await withOutput("Search results", async () => {
-				return await client.search({
-					agentId,
-					query,
-					limit: 8,
-					sessionKey: scopeValue,
-				})
-			})
-			return
-		}
-		if (tab === "kb") {
-			await withOutput("Knowledge base results", async () => {
-				return await client.searchKB({
-					agentId,
-					query,
-					limit: 8,
-				})
-			})
-			return
-		}
-		if (tab === "profile") {
-			await withOutput("Profile synthesis", async () => {
-				return await client.profile({
-					agentId,
-					maxEntities: 10,
-					maxEpisodes: 10,
-					scopeRef: scopeValue,
-				})
-			})
-			return
-		}
-		await withOutput("Memory write", async () => {
-			return await client.add({
-				agentId,
-				content: writeContent,
-				sessionId: scopeValue,
-			})
-		})
-	}
+			gsap.registerPlugin(ScrollTrigger)
 
-	const backend = String(
-		(overview.status?.backend as string | undefined) ?? "unknown",
-	)
-	const sources = (
-		(overview.status?.sources as string[] | undefined) ?? []
-	).join(", ")
-	const outputBorder =
-		output.state === "error"
-			? palette.error
-			: output.state === "success"
-				? palette.success
-				: palette.border
+			const context = gsap.context(() => {
+				gsap
+					.timeline({ defaults: { ease: "power4.out" } })
+					.from(".hero-kicker", { opacity: 0, y: 18, duration: 0.7 })
+					.from(
+						".hero-title span",
+						{
+							opacity: 0,
+							yPercent: 70,
+							rotateX: -35,
+							stagger: 0.08,
+							duration: 0.9,
+						},
+						"-=0.4",
+					)
+					.from(
+						".hero-copy, .hero-actions",
+						{
+							opacity: 0,
+							y: 22,
+							duration: 0.8,
+							stagger: 0.12,
+						},
+						"-=0.45",
+					)
+					.from(
+						".memory-constellation",
+						{
+							opacity: 0,
+							scale: 0.96,
+							duration: 1,
+						},
+						"-=0.8",
+					)
+
+				gsap.to(".memory-orbit", {
+					rotate: 360,
+					duration: 48,
+					repeat: -1,
+					ease: "none",
+					transformOrigin: "50% 50%",
+				})
+
+				gsap.to(".memory-core", {
+					scale: 1.08,
+					duration: 2.8,
+					yoyo: true,
+					repeat: -1,
+					ease: "sine.inOut",
+				})
+
+				gsap.utils.toArray<HTMLElement>(".reveal").forEach((element) => {
+					gsap.from(element, {
+						opacity: 0,
+						y: 44,
+						duration: 0.9,
+						ease: "power4.out",
+						scrollTrigger: {
+							trigger: element,
+							start: "top 82%",
+						},
+					})
+				})
+
+				gsap.to(".system-line", {
+					scaleY: 1,
+					ease: "none",
+					scrollTrigger: {
+						trigger: ".system-story",
+						start: "top 74%",
+						end: "bottom 68%",
+						scrub: true,
+					},
+				})
+			}, root)
+
+			cleanup = () => context.revert()
+		})()
+
+		return () => cleanup()
+	}, [])
 
 	return (
-		<main
-			style={{
-				maxWidth: 1200,
-				margin: "0 auto",
-				padding: "24px 18px 36px",
-				color: palette.ink,
-			}}
-		>
-			<header
-				style={{
-					display: "flex",
-					justifyContent: "space-between",
-					gap: 16,
-					alignItems: "flex-end",
-					marginBottom: 22,
-					flexWrap: "wrap",
-				}}
-			>
-				<div>
-					<div
-						style={{
-							color: palette.accentDark,
-							fontSize: 13,
-							fontWeight: 760,
-							marginBottom: 6,
-						}}
-					>
-						MongoDB-native memory
+		<main ref={rootRef} className="landing-shell">
+			<section className="landing-hero">
+				<nav className="landing-nav" aria-label="Primary navigation">
+					<a className="brand-mark" href="/" aria-label="Memongo home">
+						<span className="brand-mark__glyph">M</span>
+						<span>Memongo</span>
+					</a>
+					<div className="nav-links">
+						<a href="#architecture">Architecture</a>
+						<a href="#memory-model">Memory model</a>
+						<a href="/console">Console</a>
+						<a href="https://github.com/romiluz/memongo">GitHub</a>
 					</div>
-					<h1 style={{ margin: 0, fontSize: 34, letterSpacing: 0 }}>
-						Memongo Console
-					</h1>
-					<p
-						style={{
-							color: palette.muted,
-							marginTop: 8,
-							marginBottom: 0,
-							maxWidth: 720,
-							lineHeight: 1.5,
-						}}
-					>
-						Operate the supported Memongo API surface: inspect health, search
-						memory, query the knowledge base, synthesize profiles, and write a
-						test event.
-					</p>
-				</div>
-				<div
-					style={{
-						border: `1px solid ${palette.border}`,
-						borderRadius: 8,
-						padding: "10px 12px",
-						background: palette.panel,
-						minWidth: 240,
-					}}
-				>
-					<div style={{ fontSize: 12, color: palette.muted }}>Connected to</div>
-					<div
-						style={{
-							fontSize: 14,
-							fontWeight: 700,
-							overflowWrap: "anywhere",
-							marginTop: 3,
-						}}
-					>
-						{root}
-					</div>
-				</div>
-			</header>
+				</nav>
 
-			<section
-				style={{
-					display: "grid",
-					gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))",
-					gap: 12,
-					marginBottom: 18,
-				}}
-			>
-				<MetricCard
-					label="API health"
-					value={statusLabel(overview.health?.ok)}
-					tone={overview.health?.ok ? "success" : "warning"}
-					help={overview.health?.service ?? "Refresh overview to probe the API"}
-				/>
-				<MetricCard
-					label="OpenAPI paths"
-					value={String(overview.openApiPathCount ?? 0)}
-					help="Standalone HTTP contract"
-				/>
-				<MetricCard
-					label="Memory backend"
-					value={backend}
-					help={`Sources: ${sources || "unknown"}`}
-				/>
-				<MetricCard
-					label="Chunk count"
-					value={String(
-						(overview.stats?.totalChunks as number | undefined) ?? 0,
-					)}
-					help={`Files: ${String((overview.stats?.totalFiles as number | undefined) ?? 0)}`}
-				/>
+				<div className="hero-grid">
+					<div className="hero-copy-block">
+						<p className="hero-kicker">MongoDB-native agent memory</p>
+						<h1 className="hero-title">
+							<span>Memory</span>
+							<span>that keeps</span>
+							<span>its evidence.</span>
+						</h1>
+						<p className="hero-copy">
+							Memongo gives AI agents durable long-term memory: event history,
+							structured facts, knowledge chunks, procedures, graph context, and
+							hybrid retrieval in one inspectable system.
+						</p>
+						<div className="hero-actions">
+							<a className="button button-primary" href="#quickstart">
+								Start in five minutes
+							</a>
+							<a className="button button-secondary" href="/console">
+								Open console
+							</a>
+						</div>
+					</div>
+
+					<div
+						className="memory-constellation"
+						role="img"
+						aria-label="Animated memory system diagram"
+					>
+						<div className="memory-ring memory-ring--outer" />
+						<div className="memory-ring memory-ring--inner" />
+						<div className="memory-orbit">
+							<span className="memory-node memory-node--event">events</span>
+							<span className="memory-node memory-node--vector">vector</span>
+							<span className="memory-node memory-node--graph">graph</span>
+							<span className="memory-node memory-node--text">text</span>
+						</div>
+						<div className="memory-core">
+							<span className="memory-core__label">one memory store</span>
+							<strong>source, search, graph, proof</strong>
+						</div>
+					</div>
+				</div>
 			</section>
 
-			<section
-				style={{
-					display: "grid",
-					gridTemplateColumns: "minmax(300px, 390px) minmax(0, 1fr)",
-					gap: 18,
-					alignItems: "start",
-				}}
-			>
-				<div
-					style={{
-						border: `1px solid ${palette.border}`,
-						borderRadius: 8,
-						padding: 18,
-						background: palette.panel,
-					}}
-				>
-					<h2 style={{ marginTop: 0, marginBottom: 14, fontSize: 18 }}>
-						Connection
-					</h2>
-					<div style={{ display: "grid", gap: 12 }}>
-						<Field label="API base URL">
-							<input
-								value={baseUrl}
-								onChange={(e) => setBaseUrl(e.target.value)}
-								style={fieldStyle}
-							/>
-						</Field>
-						<Field label="API key">
-							<input
-								type="password"
-								value={apiKey}
-								onChange={(e) => setApiKey(e.target.value)}
-								placeholder="Optional bearer token"
-								style={fieldStyle}
-							/>
-						</Field>
-						<Field label="Agent ID">
-							<input
-								value={agentId}
-								onChange={(e) => setAgentId(e.target.value)}
-								style={fieldStyle}
-							/>
-						</Field>
-						<Field label="Session / scope value">
-							<input
-								value={scopeValue}
-								onChange={(e) => setScopeValue(e.target.value)}
-								style={fieldStyle}
-							/>
-						</Field>
-					</div>
+			<section className="signal-strip" aria-label="Memongo capabilities">
+				<div>
+					<span>Stores</span>
+					<strong>events, facts, procedures, docs</strong>
+				</div>
+				<div>
+					<span>Retrieves</span>
+					<strong>vector, lexical, hybrid, graph</strong>
+				</div>
+				<div>
+					<span>Explains</span>
+					<strong>sources, scores, roles, timestamps</strong>
+				</div>
+			</section>
 
-					<h2 style={{ marginBottom: 10, marginTop: 22, fontSize: 18 }}>
-						Actions
-					</h2>
-					<div
-						style={{
-							display: "flex",
-							gap: 6,
-							flexWrap: "wrap",
-							background: palette.panelAlt,
-							padding: 4,
-							borderRadius: 8,
-							marginBottom: 14,
-						}}
-					>
-						{(
-							[
-								["overview", "Overview"],
-								["search", "Search"],
-								["kb", "KB"],
-								["profile", "Profile"],
-								["write", "Write"],
-							] as const
-						).map(([key, label]) => (
-							<button
-								key={key}
-								type="button"
-								onClick={() => setTab(key)}
-								style={tabButtonStyle(tab === key)}
-							>
-								{label}
-							</button>
-						))}
-					</div>
-
-					{(tab === "search" || tab === "kb") && (
-						<Field label="Query">
-							<input
-								value={query}
-								onChange={(e) => setQuery(e.target.value)}
-								style={{ ...fieldStyle, marginBottom: 14 }}
-							/>
-						</Field>
-					)}
-
-					{tab === "write" && (
-						<Field label="Memory content">
-							<textarea
-								value={writeContent}
-								onChange={(e) => setWriteContent(e.target.value)}
-								rows={5}
-								style={{
-									...fieldStyle,
-									resize: "vertical",
-									marginBottom: 14,
-									lineHeight: 1.45,
-								}}
-							/>
-						</Field>
-					)}
-
-					<div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-						<button
-							type="button"
-							onClick={() => void runCurrentTab()}
-							disabled={loading}
-							style={{
-								...buttonStyle("primary"),
-								opacity: loading ? 0.65 : 1,
-							}}
-						>
-							{loading ? "Running..." : `Run ${tab}`}
-						</button>
-						<button
-							type="button"
-							onClick={() =>
-								void withOutput("OpenAPI document", () =>
-									fetchJson("/openapi.json"),
-								)
-							}
-							disabled={loading}
-							style={{
-								...buttonStyle(),
-								opacity: loading ? 0.65 : 1,
-							}}
-						>
-							Show OpenAPI
-						</button>
-					</div>
-
-					<p
-						style={{
-							color: palette.muted,
-							fontSize: 12,
-							marginTop: 15,
-							marginBottom: 0,
-						}}
-					>
-						Last overview refresh: {overview.lastRefreshAt ?? "not yet run"}
+			<section id="architecture" className="section-grid system-story">
+				<div className="section-heading reveal">
+					<p className="eyebrow">The hidden hard part</p>
+					<h2>Memory is not a vector table.</h2>
+					<p>
+						A useful agent needs more than nearest neighbors. It needs the
+						actual event, the current fact, the old fact it replaced, the exact
+						name a user typed, the relationship between sessions, and the proof
+						that a context bundle was assembled honestly.
 					</p>
 				</div>
-
-				<div
-					style={{
-						border: `1px solid ${outputBorder}`,
-						borderRadius: 8,
-						padding: 18,
-						background: palette.panel,
-						minHeight: 520,
-					}}
-				>
-					<div
-						style={{
-							display: "flex",
-							alignItems: "center",
-							justifyContent: "space-between",
-							gap: 10,
-							marginBottom: 12,
-						}}
-					>
-						<h2 style={{ margin: 0, fontSize: 18 }}>{output.title}</h2>
-						<span
-							style={{
-								color:
-									output.state === "error"
-										? palette.error
-										: output.state === "success"
-											? palette.success
-											: palette.muted,
-								fontSize: 12,
-								fontWeight: 760,
-								textTransform: "uppercase",
-							}}
-						>
-							{output.state}
-						</span>
-					</div>
-					<pre
-						style={{
-							background: palette.code,
-							border: "1px solid #1f2937",
-							borderRadius: 8,
-							color: "#dbeafe",
-							padding: 16,
-							overflow: "auto",
-							whiteSpace: "pre-wrap",
-							fontSize: 13,
-							lineHeight: 1.5,
-							minHeight: 438,
-							margin: 0,
-						}}
-					>
-						{output.body}
-					</pre>
+				<div className="system-steps">
+					<div className="system-line" />
+					{memoryLayers.map((layer) => (
+						<article className="system-step reveal" key={layer.label}>
+							<span>{layer.label}</span>
+							<h3>{layer.title}</h3>
+							<p>{layer.body}</p>
+						</article>
+					))}
 				</div>
+			</section>
+
+			<section id="memory-model" className="capability-section reveal">
+				<div className="capability-intro">
+					<p className="eyebrow">The shape of the system</p>
+					<h2>One memory substrate, many recall modes.</h2>
+					<p>
+						Memongo is built around a simple belief: agent memory should live
+						where documents, indexes, relationships, operational queries, and
+						provenance can be reasoned about together.
+					</p>
+				</div>
+				<div className="capability-grid">
+					{capabilities.map(([title, body]) => (
+						<article className="capability-tile" key={title}>
+							<h3>{title}</h3>
+							<p>{body}</p>
+						</article>
+					))}
+				</div>
+			</section>
+
+			<section className="proof-section reveal">
+				<div>
+					<p className="eyebrow">Not benchmark theater</p>
+					<h2>Built for audit before bragging.</h2>
+					<p>
+						Memongo keeps benchmark claims scoped. Retrieval evidence and judged
+						answer quality are separated. Source IDs, commands, metadata,
+						topology, cleanup proof, and model posture matter more than a
+						headline.
+					</p>
+				</div>
+				<div className="proof-card">
+					<span className="proof-card__status">Public posture</span>
+					<strong>
+						Selected retrieval evidence is published. Broad ecosystem leadership
+						is not claimed.
+					</strong>
+					<p>
+						The product is open source now. The benchmark work remains honest,
+						reproducible, and deliberately scoped.
+					</p>
+				</div>
+			</section>
+
+			<section id="quickstart" className="quickstart-section reveal">
+				<div>
+					<p className="eyebrow">Use it like infrastructure</p>
+					<h2>Add memory, search memory, inspect the answer.</h2>
+					<p>
+						Run the API, connect the SDK, then let your agent retrieve context
+						from the same place that stores the source evidence.
+					</p>
+					<div className="hero-actions">
+						<a
+							className="button button-primary"
+							href="https://github.com/romiluz/memongo#quickstart"
+						>
+							Read the quickstart
+						</a>
+						<a className="button button-secondary" href="/console">
+							Try the console
+						</a>
+					</div>
+				</div>
+				<pre className="code-window">
+					<code>{codeSample}</code>
+				</pre>
 			</section>
 		</main>
 	)
