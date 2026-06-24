@@ -18,6 +18,12 @@ __pycache__/
 **/.turbo/
 .next
 **/.next/
+.open-next
+**/.open-next/
+.wrangler
+**/.wrangler/
+out
+**/out/
 artifacts/
 
 # Local-only (not part of published OSS tree)

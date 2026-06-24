@@ -6,8 +6,8 @@
 		"dev": "node ../../node_modules/next/dist/bin/next dev -p 3040",
 		"build": "node ../../node_modules/next/dist/bin/next build",
 		"start": "node ../../node_modules/next/dist/bin/next start -p 3040",
-		"preview": "bunx opennextjs-cloudflare && bunx wrangler dev",
-		"deploy": "bunx opennextjs-cloudflare && bunx wrangler deploy",
+		"preview": "bunx opennextjs-cloudflare build && bunx wrangler dev",
+		"deploy": "bunx opennextjs-cloudflare build && bunx opennextjs-cloudflare deploy",
 		"check-types": "node ../../node_modules/next/dist/bin/next typegen && node ../../node_modules/typescript/bin/tsc --noEmit -p tsconfig.json"
 	},
 	"dependencies": {
