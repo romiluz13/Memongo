@@ -11,7 +11,7 @@ const server = serve({ fetch: app.fetch, port, hostname: host }, (info) => {
 	console.error(`memongo-api listening on http://${info.address}:${info.port}`)
 })
 
-// CRIT-5 (part 2): SIGTERM / SIGINT drain the server, flush the bridge, then
+// Graceful shutdown: SIGTERM / SIGINT drain the server, flush the bridge, then
 // exit. Timeout is set short enough for container runtimes but long enough to
 // let Mongo in-flight writes finish.
 registerGracefulShutdown({

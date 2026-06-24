@@ -38,7 +38,9 @@ type PreflightReport = {
 const DEFAULT_REQUIRED_ENV = [
 	"MEMONGO_MONGODB_URI",
 	"VOYAGE_API_KEY",
-	"GROVE_API_KEY",
+	"MEMONGO_LLM_BASE_URL",
+	"MEMONGO_LLM_API_KEY",
+	"MEMONGO_LLM_MODEL",
 ] as const
 
 function readArg(name: string): string | undefined {

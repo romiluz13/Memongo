@@ -473,7 +473,7 @@ export async function consolidateMemory(params: {
 			importanceWeight * impDecay +
 			accessWeight * normalizedAccess
 
-		// Phase 2 remfix HIGH-2: source-event scope/scopeRef flow through the
+		// Scope-isolation safety: source-event scope/scopeRef flow through the
 		// candidate so the downstream similarity filter + canonical write can
 		// never merge memories from different scopes, even if the caller
 		// passed an incorrect or omitted ConsolidationOptions.scope.
@@ -510,7 +510,7 @@ export async function consolidateMemory(params: {
 	let conflictsResolved = 0
 
 	for (const candidate of filteredCandidates) {
-		// Phase 2 remfix HIGH-2: derive scope isolation from the CANDIDATE
+		// Scope-isolation safety: derive scope isolation from the CANDIDATE
 		// event, not the caller's ConsolidationOptions. If the caller
 		// passed an options.scope/scopeRef that disagrees with the
 		// candidate's, log.warn and skip rather than silently producing
@@ -547,7 +547,7 @@ export async function consolidateMemory(params: {
 		}
 
 		try {
-			// Task 2.SE-2 (ADR-006): injection / memory-poisoning defense.
+			// Injection-safety: injection / memory-poisoning defense.
 			// Route injection-shaped candidates to memory_quarantine with
 			// status="pending-review" BEFORE any pattern extraction or canonical
 			// write. Tier-1 classifier is always on; tier-2 LLM is off by default.
@@ -668,7 +668,7 @@ export async function consolidateMemory(params: {
 
 			// Promote to structured memory (ADD) — preserve scope isolation by
 			// writing the CANDIDATE's scope/scopeRef, not the options. Phase 2
-			// remfix HIGH-2: since the source event is what generated the
+			// Scope-isolation safety: since the source event is what generated the
 			// structured fact, the fact inherits the source's scope. If the
 			// caller's options disagreed with the candidate, we already threw
 			// above.

@@ -208,7 +208,7 @@ export class AccessTracker {
 			collectionOps.set(entry.collection, ops)
 		}
 
-		// Phase 2 remfix HIGH-4: re-buffer the ENTIRE snapshot on any error so
+		// Access-event durability: re-buffer the ENTIRE snapshot on any error so
 		// no access counts are lost. Previously, a failing insertMany or bulk
 		// write silently swallowed the counts. Now the next flush retries.
 		if (eventDocs.length > 0) {

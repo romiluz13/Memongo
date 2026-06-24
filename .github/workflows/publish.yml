@@ -1,15 +1,10 @@
 name: Publish Packages
 
 on:
+  workflow_dispatch:
   push:
-    branches: [main]
-    paths:
-      - "packages/lib/package.json"
-      - "packages/memory-engine/package.json"
-      - "packages/memory-bridge/package.json"
-      - "packages/memongo-memory/package.json"
-      - "packages/client/package.json"
-      - "packages/tools/package.json"
+    tags:
+      - "v*"
 
 jobs:
   publish:
@@ -23,13 +18,15 @@ jobs:
 
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          bun-version: 1.2.5
 
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
           registry-url: "https://registry.npmjs.org"
 
+      # npm provenance is required for package publishing. pnpm supports
+      # `publish --provenance`; Bun remains the repo package manager.
       - uses: pnpm/action-setup@v4
         with:
           version: 10
@@ -43,39 +40,16 @@ jobs:
       - name: Check publishability
         run: bun run check-publishability
 
-      - name: Detect changed publishable packages
-        id: changed
+      - name: Publish packages
         run: |
-          base="${{ github.event.before }}"
-          if [ -z "$base" ] || [ "$base" = "0000000000000000000000000000000000000000" ]; then
-            base="$(git rev-list --max-parents=0 HEAD)"
-          fi
-
-          changed_packages="$(git diff --name-only "$base" HEAD -- \
+          for pkg in \
             packages/lib \
             packages/memory-engine \
             packages/memory-bridge \
             packages/memongo-memory \
             packages/client \
-            packages/tools \
-            | cut -d/ -f1-2 \
-            | sort -u \
-            | tr '\n' ' ')"
-
-          echo "packages=$changed_packages" >> "$GITHUB_OUTPUT"
-
-      - name: Publish changed packages
-        run: |
-          if [ -z "${{ steps.changed.outputs.packages }}" ]; then
-            echo "No publishable package directories changed."
-            exit 0
-          fi
-
-          for pkg in ${{ steps.changed.outputs.packages }}; do
-            if [ ! -f "$pkg/package.json" ]; then
-              continue
-            fi
-
+            packages/tools
+          do
             is_private=$(node -e "console.log(require('./$pkg/package.json').private === true)")
             if [ "$is_private" = "true" ]; then
               continue

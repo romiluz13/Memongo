@@ -28,6 +28,11 @@ type ScopedApiKeyPolicy = {
 }
 
 const WILDCARD = "*"
+let unauthenticatedApiWarningEmitted = false
+
+export function resetUnauthenticatedApiWarningForTests(): void {
+	unauthenticatedApiWarningEmitted = false
+}
 
 function asStringList(value: unknown): string[] | undefined {
 	if (value === undefined) {
@@ -189,7 +194,7 @@ async function authorizeScopedApiKey(
 }
 
 /**
- * CRIT-5 (part 2): Process-level graceful shutdown orchestrator.
+ * Graceful shutdown: Process-level graceful shutdown orchestrator.
  *
  * Registers listeners for SIGTERM / SIGINT that:
  *  1. Stop accepting new HTTP connections (`closeServer`).
@@ -311,6 +316,11 @@ export function createApp(): Hono {
 			}
 			await next()
 		})
+	} else if (!unauthenticatedApiWarningEmitted) {
+		unauthenticatedApiWarningEmitted = true
+		console.warn(
+			"WARNING: MEMONGO_API_KEY is not set and MEMONGO_API_SCOPED_KEYS is empty; /v1 routes are unauthenticated. Use only for trusted local development.",
+		)
 	}
 
 	app.get("/health", (c) => c.json({ ok: true, service: "memongo-api" }))

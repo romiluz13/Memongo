@@ -89,8 +89,9 @@ This lane covers transactions, change streams, and other replica-set-specific be
 With `apps/api` running against managed Atlas cloud or the preview stack:
 
 ```bash
-export GROVE_API_KEY="your-grove-key"
-export GROVE_MODEL="gpt-5.4"
+export MEMONGO_LLM_BASE_URL="https://api.openai.com/v1"
+export MEMONGO_LLM_API_KEY="your-llm-api-key"
+export MEMONGO_LLM_MODEL="gpt-4o-mini"
 export MEMONGO_API_URL="http://127.0.0.1:3847"
 bun run agent-smoke
 ```

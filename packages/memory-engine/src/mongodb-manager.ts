@@ -5117,7 +5117,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 							if (enrichmentProvider && enrichmentMode !== "none") {
 								try {
 									const enrichmentModel =
-										process.env.MEMONGO_ENRICHMENT_MODEL ?? "gpt-4o-mini"
+										process.env.MEMONGO_ENRICHMENT_MODEL?.trim() ?? ""
 									const enrichmentConcurrencyValue = Number(
 										process.env.MEMONGO_ENRICHMENT_CONCURRENCY,
 									)
@@ -5359,7 +5359,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 						) {
 							const decomposed = await decomposeQuery({
 								provider: decompositionProvider,
-								model: process.env.MEMONGO_ENRICHMENT_MODEL ?? "gpt-4o-mini",
+								model: process.env.MEMONGO_ENRICHMENT_MODEL?.trim() ?? "",
 								query: evaluation.query,
 								questionType: evaluation.questionType,
 							})
@@ -7758,7 +7758,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		await this.writeQueue
 
 		// Flush and close access tracker. Never swallow failures silently
-		// (Phase 2 remfix CRIT-5): closing can lose buffered access events.
+		// (Bridge close durability): closing can lose buffered access events.
 		// If the flush fails we at least surface it via log.warn with context
 		// so the reviewer/hunter can grep for it and downstream operators can
 		// alert on it; the tracker reference is still cleared afterward so the

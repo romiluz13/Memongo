@@ -39,7 +39,13 @@ Start MongoDB:
 ```bash
 docker compose -f docker/docker-compose.yml up -d
 export MEMONGO_MONGODB_URI="mongodb://127.0.0.1:27017/?directConnection=true"
+export MEMONGO_API_KEY="local-dev-secret"
 ```
+
+The default Docker file uses MongoDB Atlas Local Preview. Set `VOYAGE_API_KEY`
+to a MongoDB Atlas Model API key with the `al-...` prefix when you want MongoDB
+auto-embeddings. Without it, you can still use local development paths that do
+not require auto-embed.
 
 Start the API:
 
@@ -55,10 +61,12 @@ curl -s http://127.0.0.1:3847/health
 
 curl -s http://127.0.0.1:3847/v1/add \
   -H "content-type: application/json" \
+  -H "authorization: Bearer local-dev-secret" \
   -d '{"content":"The user prefers TypeScript and concise release notes.","sessionId":"demo-user"}'
 
 curl -s http://127.0.0.1:3847/v1/search \
   -H "content-type: application/json" \
+  -H "authorization: Bearer local-dev-secret" \
   -d '{"query":"What does the user prefer?","sessionKey":"demo-user","maxResults":5}'
 ```
 
@@ -109,9 +117,19 @@ Common variables:
 | `MEMONGO_MONGODB_URI` | MongoDB connection string |
 | `MEMONGO_API_HOST` | API bind host, default `127.0.0.1` |
 | `MEMONGO_API_PORT` | API port, default `3847` |
-| `MEMONGO_API_KEY` | Optional bearer token for API requests |
+| `MEMONGO_API_KEY` | Recommended bearer token for API requests |
 | `MEMONGO_AGENT_ID` | Default memory isolation key |
 | `MEMONGO_MONGODB_RECALL_PROFILE` | `latency`, `balanced`, or `proof`; default `balanced` |
+| `VOYAGE_API_KEY` | Atlas Model API key for MongoDB auto-embed lanes |
+| `MEMONGO_ENRICHMENT_BASE_URL` | Optional OpenAI-compatible or Anthropic endpoint for LLM enrichment |
+| `MEMONGO_ENRICHMENT_API_KEY` | API key for the enrichment endpoint |
+| `MEMONGO_ENRICHMENT_MODEL` | Model used by enrichment when enabled |
+
+OpenAI-compatible enrichment defaults to `Authorization: Bearer`. Gateways that
+require provider-specific headers can set
+`MEMONGO_ENRICHMENT_AUTH_STYLE=api-key` or `x-api-key`; gateways that require
+newer completion token naming can set
+`MEMONGO_ENRICHMENT_TOKEN_PARAM=max_completion_tokens`.
 
 For managed Atlas and Atlas Local Preview notes, see [Configuration](apps/docs/guides/memory-config.mdx) and [Self-hosting](docs/platform/self-host.md).
 

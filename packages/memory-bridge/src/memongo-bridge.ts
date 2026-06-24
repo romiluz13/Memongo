@@ -42,7 +42,7 @@ import {
 import { resolveBridgeConfig } from "./memory-config.js"
 
 /**
- * CRIT-5 (part 2): Graceful bridge shutdown.
+ * Graceful shutdown: Graceful bridge shutdown.
  * Closes every cached MongoDB memory manager, which in turn flushes the
  * access tracker and closes the Mongo client. Swallows errors per-manager
  * via `closeAllMemorySearchManagers` so one failing manager does not block

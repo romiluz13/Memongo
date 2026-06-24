@@ -12,11 +12,15 @@ Memongo reads configuration from environment variables and an optional JSON conf
 |----------|-------------|---------|
 | `MEMONGO_MONGODB_URI` | MongoDB connection string for managed Atlas cloud or Atlas Local Preview | `mongodb://localhost:27017` |
 | `MEMONGO_AGENT_ID` | Agent identifier for memory isolation | `default` |
-| `MEMONGO_API_KEY` | API key for the HTTP server | (none) |
+| `MEMONGO_API_KEY` | Bearer token for the HTTP server; recommended outside trusted local dev | (none) |
 | `MEMONGO_API_PORT` | API listen port | `3847` |
 | `MEMONGO_API_HOST` | API bind address | `127.0.0.1` |
 | `MEMONGO_CONFIG_PATH` | Alternate JSON config file path | `~/.memongo/memongo.json` |
 | `MEMONGO_WORKSPACE_DIR` | Workspace directory used by the bridge | `~/.memongo/workspace` |
+| `VOYAGE_API_KEY` | Atlas Model API key for MongoDB auto-embed lanes | (none) |
+| `MEMONGO_ENRICHMENT_BASE_URL` | Optional OpenAI-compatible or Anthropic endpoint for LLM enrichment | (none) |
+| `MEMONGO_ENRICHMENT_API_KEY` | API key for LLM enrichment | (none) |
+| `MEMONGO_ENRICHMENT_MODEL` | Model used by LLM enrichment when enabled | (none) |
 
 ## Config file
 
@@ -37,6 +41,7 @@ Create `~/.memongo/memongo.json`:
 ## Notes
 
 - `MEMONGO_MONGODB_URI` is the quickest way to point the API at MongoDB during development.
+- When `MEMONGO_API_KEY` and scoped keys are unset, `/v1` routes are unauthenticated and the API logs a startup warning.
 - Managed Atlas cloud and Atlas Local Preview both use `embeddingMode: "automated"` with MongoDB auto-embed.
 - The engine infers `deploymentProfile: "atlas-managed"` for `mongodb+srv://...mongodb.net` URIs and `deploymentProfile: "atlas-local-preview"` for local preview URIs unless you set it explicitly.
 - The supported runtime backend is MongoDB.

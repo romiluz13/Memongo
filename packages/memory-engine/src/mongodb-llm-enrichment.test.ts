@@ -109,19 +109,32 @@ describe("resolveEnrichmentProvider", () => {
 		expect(provider!.name).toBe("http")
 	})
 
-	it("falls back to GROVE_API_KEY", () => {
+	it("ignores private gateway aliases", () => {
+		const legacyEnv = {
+			["GRO" + "VE_API_KEY"]: "legacy-key",
+			["GRO" + "VE_API_URL"]: "https://example.com/v1",
+			["GRO" + "VE_MODEL"]: "legacy-model",
+		}
 		const provider = resolveEnrichmentProvider({
-			GROVE_API_KEY: "grove-key-123",
+			...legacyEnv,
 		})
-		expect(provider).not.toBeNull()
-		expect(provider!.name).toBe("http")
+		expect(provider).toBeNull()
 	})
 
-	it("uses default Grove base URL when not specified", () => {
-		const provider = resolveEnrichmentProvider({
-			MEMONGO_ENRICHMENT_API_KEY: "test-key",
-		})
-		expect(provider).not.toBeNull()
+	it("requires explicit base URL and model when an API key is configured", () => {
+		expect(() =>
+			resolveEnrichmentProvider({
+				MEMONGO_ENRICHMENT_API_KEY: "test-key",
+				MEMONGO_ENRICHMENT_MODEL: "gpt-4o-mini",
+			}),
+		).toThrow("MEMONGO_ENRICHMENT_BASE_URL")
+
+		expect(() =>
+			resolveEnrichmentProvider({
+				MEMONGO_ENRICHMENT_API_KEY: "test-key",
+				MEMONGO_ENRICHMENT_BASE_URL: "https://example.com/v1",
+			}),
+		).toThrow("MEMONGO_ENRICHMENT_MODEL")
 	})
 
 	it("creates Anthropic provider from explicit provider flag", () => {
@@ -137,7 +150,7 @@ describe("resolveEnrichmentProvider", () => {
 })
 
 describe("createHttpProvider", () => {
-	it("sends request with api-key header and returns parsed content", async () => {
+	it("sends OpenAI-compatible requests with bearer auth by default", async () => {
 		const mockFetch = vi.fn().mockResolvedValue({
 			ok: true,
 			json: async () => ({
@@ -174,8 +187,68 @@ describe("createHttpProvider", () => {
 
 		const [url, options] = mockFetch.mock.calls[0]
 		expect(url).toBe("https://example.com/v1/chat/completions")
+		expect(options.headers.Authorization).toBe("Bearer test-key")
+		expect(options.headers["api-key"]).toBeUndefined()
+	})
+
+	it("supports gateway api-key auth and max_completion_tokens", async () => {
+		const mockFetch = vi.fn().mockResolvedValue({
+			ok: true,
+			json: async () => ({
+				choices: [{ message: { content: "{}" } }],
+			}),
+		})
+
+		const provider = createHttpProvider(
+			{
+				baseUrl: "https://gateway.example.com/v1",
+				apiKey: "test-key",
+				model: "gateway-model",
+				authStyle: "api-key",
+				tokenParam: "max_completion_tokens",
+			},
+			mockFetch as unknown as typeof globalThis.fetch,
+		)
+
+		await provider.chatCompletion({
+			model: "gateway-model",
+			messages: [{ role: "user", content: "test" }],
+			maxTokens: 99,
+		})
+
+		const [, options] = mockFetch.mock.calls[0]
+		const body = JSON.parse(options.body)
 		expect(options.headers["api-key"]).toBe("test-key")
-		// Must NOT use Authorization: Bearer
+		expect(options.headers.Authorization).toBeUndefined()
+		expect(body.max_completion_tokens).toBe(99)
+		expect(body.max_tokens).toBeUndefined()
+	})
+
+	it("supports x-api-key auth for OpenAI-compatible gateways", async () => {
+		const mockFetch = vi.fn().mockResolvedValue({
+			ok: true,
+			json: async () => ({
+				choices: [{ message: { content: "{}" } }],
+			}),
+		})
+
+		const provider = createHttpProvider(
+			{
+				baseUrl: "https://gateway.example.com/v1",
+				apiKey: "test-key",
+				model: "gateway-model",
+				authStyle: "x-api-key",
+			},
+			mockFetch as unknown as typeof globalThis.fetch,
+		)
+
+		await provider.chatCompletion({
+			model: "gateway-model",
+			messages: [{ role: "user", content: "test" }],
+		})
+
+		const [, options] = mockFetch.mock.calls[0]
+		expect(options.headers["x-api-key"]).toBe("test-key")
 		expect(options.headers.Authorization).toBeUndefined()
 	})
 
@@ -244,7 +317,7 @@ describe("createAnthropicProvider", () => {
 		const body = JSON.parse(options.body)
 		expect(url).toBe("https://example.com/anthropic/v1/messages")
 		expect(options.headers["anthropic-version"]).toBe("2023-06-01")
-		expect(options.headers["api-key"]).toBe("test-key")
+		expect(options.headers["x-api-key"]).toBe("test-key")
 		expect(body.model).toBe("claude-sonnet-4-6")
 		expect(body.max_tokens).toBe(2048)
 		expect(body.system).toBe("system prompt")

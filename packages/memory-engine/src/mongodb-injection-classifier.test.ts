@@ -1,5 +1,5 @@
 /**
- * Task 2.SE-2 injection classifier tests (ADR-006 scope expansion).
+ *  injection classifier tests ( scope expansion).
  *
  * fast-check seed: 20260512.
  *
@@ -17,7 +17,7 @@ import {
 
 const FAST_CHECK_SEED = 20260512
 
-describe("classifyInjection tier-1 patterns (Task 2.SE-2)", () => {
+describe("classifyInjection tier-1 patterns ()", () => {
 	it("flags 'ignore previous instructions' as injection-likely", () => {
 		const verdict = classifyInjection({
 			content:
@@ -93,8 +93,8 @@ describe("classifyInjection tier-1 patterns (Task 2.SE-2)", () => {
 	})
 })
 
-describe("injection quarantine invariant (Task 2.SE-2 — property test)", () => {
-	it("Property 12 (ADR-006): every injection-matching content is flagged; safe content is not", () => {
+describe("injection quarantine invariant ( — property test)", () => {
+	it("Property 12 (): every injection-matching content is flagged; safe content is not", () => {
 		// Build synthetic strings that either DO or DO NOT contain a known
 		// injection phrase, and assert the classifier's partition is correct.
 		const injectionSeeds = [

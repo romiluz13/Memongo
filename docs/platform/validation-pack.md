@@ -104,14 +104,15 @@ MONGODB_TEST_URI="mongodb://admin:admin@localhost:27017/memongo?authSource=admin
 Start `apps/api` against the preview stack, then run:
 
 ```bash
-export GROVE_API_KEY="your-grove-key"
-export GROVE_MODEL="gpt-5.4"
+export MEMONGO_LLM_BASE_URL="https://api.openai.com/v1"
+export MEMONGO_LLM_API_KEY="your-llm-api-key"
+export MEMONGO_LLM_MODEL="gpt-4o-mini"
 export MEMONGO_API_URL="http://127.0.0.1:3847"
 bun run agent-smoke
 ```
 
 This lane proves a real tool-calling agent can:
-- call the Grove chat-completions endpoint
+- call an OpenAI-compatible chat-completions endpoint
 - persist events into Memongo through the supported HTTP API
 - search memory through live retrieval paths
 - hydrate active memory for current-state questions

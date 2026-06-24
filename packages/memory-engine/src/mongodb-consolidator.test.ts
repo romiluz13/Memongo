@@ -1293,7 +1293,7 @@ describe("Dreamer entity extraction integration (Phase 3.4)", () => {
 	})
 
 	// =====================================================================
-	// Phase 2 remfix HIGH-2 — scope-isolation regression tests.
+	// Scope-isolation safety — scope-isolation regression tests.
 	//
 	// Previously the dreamer wrote structured_mem rows using the caller's
 	// `options.scope` / `options.scopeRef`. If the caller omitted those or
@@ -1303,7 +1303,7 @@ describe("Dreamer entity extraction integration (Phase 3.4)", () => {
 	// options match.
 	// =====================================================================
 
-	it("HIGH-2: inherits scope/scopeRef from source event when options omit them", async () => {
+	it("scope-isolation safety: inherits scope/scopeRef from source event when options omit them", async () => {
 		const { consolidateMemory } = await import("./mongodb-consolidator.js")
 		const { writeStructuredMemory } = await import(
 			"./mongodb-structured-memory.js"
@@ -1357,7 +1357,7 @@ describe("Dreamer entity extraction integration (Phase 3.4)", () => {
 		)
 	})
 
-	it("HIGH-2: skips when options.scope disagrees with candidate.scope outside strict mode", async () => {
+	it("scope-isolation safety: skips when options.scope disagrees with candidate.scope outside strict mode", async () => {
 		const { consolidateMemory } = await import("./mongodb-consolidator.js")
 		const consolidationRunsCol = mockCollection({
 			findOne: vi.fn(async () => null),
@@ -1413,7 +1413,7 @@ describe("Dreamer entity extraction integration (Phase 3.4)", () => {
 	})
 
 	// =====================================================================
-	// Phase 2 remfix CRIT-3 — fast-check: no consolidated row spans scopes.
+	// Scope-isolation safety — fast-check: no consolidated row spans scopes.
 	//
 	// Seed = 20260512, numRuns = 300. Evidence doc:
 	// Dreamer evidence seed: 20260512.
@@ -1423,7 +1423,7 @@ describe("Dreamer entity extraction integration (Phase 3.4)", () => {
 	// structured_mem rows written inherit the generating event's scope.
 	// =====================================================================
 
-	it("CRIT-3 property: consolidated rows never cross scope/scopeRef", async () => {
+	it("scope-isolation safety property: consolidated rows never cross scope/scopeRef", async () => {
 		await fc.assert(
 			fc.asyncProperty(
 				fc.array(

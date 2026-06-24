@@ -53,10 +53,6 @@ memongo/
 - `@memongo/lib` -- shared utilities (private)
 - `@memongo/api`, `@memongo/mcp`, `@memongo/web` -- apps (private)
 
-## Fork history
-
-Memongo evolved from the same MongoDB memory work as the ClawMongo project. This repository contains **only** the standalone memory product; do not import from vendored fork trees or local `archive/` copies.
-
 ## Commit Guidelines
 
 - Follow concise, action-oriented commit messages (e.g., `engine: add graph expansion`).

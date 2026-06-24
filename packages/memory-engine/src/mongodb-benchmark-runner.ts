@@ -227,12 +227,12 @@ function buildBenchmarkWarnings(params: BenchmarkReportInput): string[] {
 	const warnings: string[] = []
 	if (params.datasetKind === "legacy-query") {
 		warnings.push(
-			"legacy-query datasets are internal diagnostics and must not be published as official LongMemEval or LoCoMo wins",
+			"legacy-query datasets are non-comparable diagnostics and must not be published as official LongMemEval or LoCoMo wins",
 		)
 	}
 	if (!params.officialMetrics) {
 		warnings.push(
-			"officialMetrics are absent; publish only as an internal Memongo diagnostic unless paired with an official benchmark run",
+			"officialMetrics are absent; publish only as non-comparable diagnostics unless paired with an official benchmark run",
 		)
 	}
 	if (params.officialMetrics && params.cases === 0) {
@@ -291,7 +291,7 @@ function buildOfficialRetrievalGate(
 		return {
 			gate: "official-retrieval",
 			status: "warning",
-			evidence: "officialMetrics absent; use internal diagnostics only",
+			evidence: "officialMetrics absent; use non-comparable diagnostics only",
 		}
 	}
 	if (params.cases === 0) {
@@ -307,7 +307,7 @@ function buildOfficialRetrievalGate(
 			gate: "official-retrieval",
 			status: "warning",
 			evidence:
-				"officialMetrics present, but scoredCases is missing; use internal diagnostics only",
+				"officialMetrics present, but scoredCases is missing; use non-comparable diagnostics only",
 		}
 	}
 	if (params.scoredCases !== params.cases) {

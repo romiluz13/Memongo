@@ -4,7 +4,7 @@ import { createMemongoTools } from "@memongo/tools"
 import * as bridge from "./memongo-bridge.js"
 
 describe("Phase 7-11 wiring: bridge functions", () => {
-	it("exports memongoBridgeShutdown (CRIT-5 part 2)", async () => {
+	it("exports memongoBridgeShutdown (bridge shutdown part 2)", async () => {
 		expect(typeof bridge.memongoBridgeShutdown).toBe("function")
 	})
 

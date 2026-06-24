@@ -146,9 +146,9 @@ export function mutationsCollection(db: Db, prefix: string): Collection {
 }
 
 /**
- * Task 2.SE-2 (ADR-006): quarantine collection for injection-shaped candidates
+ * Injection-safety: quarantine collection for injection-shaped candidates
  * detected by the consolidator pre-write hook. Rows live here until a human
- * (or the future Task 2.SE-3 review gate) promotes or rejects them; they are
+ * (or a future review gate) promotes or rejects them; they are
  * NEVER written to canonical events/structured_mem directly.
  */
 export function memoryQuarantineCollection(db: Db, prefix: string): Collection {
@@ -737,7 +737,7 @@ const EVENTS_SCHEMA: Document = {
 				bsonType: "string",
 				description: "Caller-owned idempotency key for external sync/dedup",
 			},
-			// Task 2.SE-1 (ADR-006): bi-temporal validity. `validAt` marks when
+			// Bi-temporal validity: bi-temporal validity. `validAt` marks when
 			// the assertion became true; `invalidAt` marks when it stopped being
 			// true (null = still valid). Retrieval filter:
 			//   validAt <= queryTime AND (invalidAt IS NULL OR invalidAt > queryTime)
@@ -1814,7 +1814,7 @@ export async function ensureStandardIndexes(
 		{ name: "idx_events_dreamer_processed", sparse: true },
 	)
 	applied++
-	// Task 2.SE-1 (ADR-006): bi-temporal retrieval index. Supports the filter
+	// Bi-temporal validity: bi-temporal retrieval index. Supports the filter
 	//   validAt <= queryTime AND (invalidAt IS NULL OR invalidAt > queryTime)
 	// scoped by (agentId, scope, scopeRef). MongoDB compound index rules
 	// https://www.mongodb.com/docs/manual/core/indexes/index-types/index-compound/

@@ -225,8 +225,12 @@ async function fetchJson(pathname: string): Promise<unknown> {
 }
 
 async function runRealAgentLane(): Promise<CapabilityCheck> {
-	if (!process.env.GROVE_API_KEY?.trim()) {
-		return pass("real-agent", "skipped: GROVE_API_KEY not set")
+	if (
+		!process.env.MEMONGO_LLM_API_KEY?.trim() ||
+		!process.env.MEMONGO_LLM_BASE_URL?.trim() ||
+		!process.env.MEMONGO_LLM_MODEL?.trim()
+	) {
+		return pass("real-agent", "skipped: MEMONGO_LLM_* env not set")
 	}
 
 	const stdoutChunks: string[] = []
@@ -269,7 +273,7 @@ async function runRealAgentLane(): Promise<CapabilityCheck> {
 		stdout.includes('"step": "success"'),
 		"real agent smoke did not report success",
 	)
-	return pass("real-agent", "real Grove model stored and recalled memory")
+	return pass("real-agent", "real LLM model stored and recalled memory")
 }
 
 async function main() {

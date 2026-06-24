@@ -7,6 +7,8 @@ This monorepo uses the `@memongo` npm scope. Publishing is maintainer-operated; 
 1. Complete [PRODUCTION-READY.md](PRODUCTION-READY.md).
 2. Confirm no secrets in the working tree.
 3. Bump semver in the package(s) you ship; tag releases in git to match.
+4. Configure `NPM_TOKEN` as a GitHub Actions secret with publish access to the
+   `@memongo` npm scope.
 
 ## Which packages are intended for npm
 
@@ -37,7 +39,11 @@ cd packages/client
 npm publish --access public
 ```
 
-Use npm or bun publish with your org’s 2FA and provenance policy. Prefer CI automation with trusted publishing (OIDC) once configured.
+The GitHub publish workflow runs only from `v*` tags or manual dispatch. It uses
+Bun for install/build and `pnpm publish --provenance` for npm provenance.
+
+For an emergency manual publish, use npm with your org's 2FA and provenance
+policy.
 
 ## Recommended publish order
 

@@ -256,13 +256,13 @@ describe("AccessTracker", () => {
 	}, 5_000)
 
 	// =========================================================================
-	// Phase 2 remfix HIGH-4 — re-buffer on flush error (deadletter retry path).
+	// Access-event durability — re-buffer on flush error (deadletter retry path).
 	// Original behavior silently cleared the buffer before insertMany, so a
 	// network failure lost the access counts forever. New behavior snapshots
 	// the buffer first and, on error, merges the snapshot back into the live
 	// buffer so the next flush retries.
 	// =========================================================================
-	it("re-buffers counts when the access-events insertMany fails (HIGH-4)", async () => {
+	it("re-buffers counts when the access-events insertMany fails (access-event durability)", async () => {
 		vi.useRealTimers()
 		let attempts = 0
 		const accessInsertMany = vi.fn().mockImplementation(async () => {
@@ -323,12 +323,12 @@ describe("AccessTracker", () => {
 	}, 5_000)
 
 	// =========================================================================
-	// Phase 2 remfix CRIT-4 — fast-check property: no count loss across any
+	// Access-count durability — fast-check property: no count loss across any
 	// sequence of recordAccess calls.
 	// Evidence doc:
 	// Access-tracking evidence seed: 20260512.
 	// =========================================================================
-	it("fast-check Property (CRIT-4): total flushed $inc count === total recordAccess calls", async () => {
+	it("fast-check Property (access-count safety): total flushed $inc count === total recordAccess calls", async () => {
 		vi.useRealTimers()
 		await fc.assert(
 			fc.asyncProperty(

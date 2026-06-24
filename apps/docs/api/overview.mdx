@@ -42,7 +42,11 @@ The Memongo API server runs at `http://127.0.0.1:3847` by default (via `apps/api
 
 ## Authentication
 
-If `MEMONGO_API_KEY` is set, all requests must include a `Bearer` token:
+Set `MEMONGO_API_KEY` for every shared or network-exposed deployment. If no
+admin or scoped key is configured, `/v1` routes stay open for trusted local
+development and the API logs a startup warning.
+
+When `MEMONGO_API_KEY` is set, all requests must include a `Bearer` token:
 
 ```bash
 http POST http://127.0.0.1:3847/v1/search \

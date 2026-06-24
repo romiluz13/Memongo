@@ -253,7 +253,7 @@ function buildStandardFilter(params: {
 		filter.body = { $regex: new RegExp(escapeRegex(params.queryText), "i") }
 	}
 
-	// Phase 2 remfix CRIT-1 (ADR-006 SE-1): merge bi-temporal validity clause
+	// Bi-temporal recall safety: merge bi-temporal validity clause
 	// via `$and` so any memory invalidated at or before `asOf` is excluded.
 	// Legacy rows without `validAt`/`invalidAt` are treated as valid.
 	if (params.asOf instanceof Date) {
@@ -301,7 +301,7 @@ function normalizeRole(value: unknown): ConversationRecallRole {
 }
 
 /**
- * Phase 2 remfix HIGH-5: track malformed scoreDetails payloads so the
+ * Malformed scoreDetails handling: track malformed scoreDetails payloads so the
  * recall path can emit a single `log.warn` per recall call (not per doc)
  * when MongoDB returned a `scoreDetails` field that is shaped wrong.
  * "Absent" still returns undefined silently — only truly malformed data
@@ -515,7 +515,7 @@ async function semanticRecall(params: {
 		return []
 	}
 
-	// Phase 2 remfix CRIT-1: the bi-temporal clause rides on a post-stage
+	// Bi-temporal recall safety: the bi-temporal clause rides on a post-stage
 	// `$match`. `$vectorSearch.filter` supports a narrow subset of MQL
 	// ($eq / $and / $in) and range operators on dates are not documented,
 	// so we enforce validity outside the vector stage. The vector stage
@@ -578,7 +578,7 @@ async function hybridRecall(params: {
 		return []
 	}
 
-	// Phase 2 remfix CRIT-1: the bi-temporal predicate is applied as a
+	// Bi-temporal recall safety: the bi-temporal predicate is applied as a
 	// post-stage `$match` inside EACH inner `$rankFusion` pipeline so
 	// invalidated-at-asOf documents cannot reach the fusion stage.
 	// `$search.compound.filter` could use native `range` operators on
@@ -729,7 +729,7 @@ export async function recallConversation(params: {
 	let searchMethod: ConversationRecallResponse["metadata"]["searchMethod"] =
 		"standard"
 
-	// Phase 2 remfix HIGH-5: accumulate malformed-scoreDetails warnings
+	// Malformed scoreDetails handling: accumulate malformed-scoreDetails warnings
 	// across all inner recall paths so we emit a single log.warn per
 	// `recallConversation` call (not per doc). Absent scoreDetails still
 	// returns `undefined` silently.

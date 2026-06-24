@@ -282,7 +282,7 @@ describe("schema constants", () => {
 		])
 	})
 
-	it("memory_quarantine collection is created with validator (Task 2.SE-2)", async () => {
+	it("memory_quarantine collection is created with validator ()", async () => {
 		const db = mockDb([])
 		await ensureCollections(db, "test_")
 		const createCalls = (db.createCollection as ReturnType<typeof vi.fn>).mock
@@ -306,7 +306,7 @@ describe("schema constants", () => {
 		])
 	})
 
-	it("events schema includes bi-temporal validAt + invalidAt (Task 2.SE-1)", async () => {
+	it("events schema includes bi-temporal validAt + invalidAt ()", async () => {
 		const db = mockDb([])
 		await ensureCollections(db, "test_")
 		const createCalls = (db.createCollection as ReturnType<typeof vi.fn>).mock
@@ -316,7 +316,7 @@ describe("schema constants", () => {
 		)
 		expect(eventsCall).toBeDefined()
 		const schema = eventsCall![1]?.validator.$jsonSchema
-		// Bi-temporal ADR-006 fields: validAt records when the assertion became
+		// Bi-temporal  fields: validAt records when the assertion became
 		// true; invalidAt (nullable) records when it stopped being true.
 		expect(schema.properties.validAt).toBeDefined()
 		expect(schema.properties.validAt.bsonType).toBe("date")
@@ -357,7 +357,7 @@ describe("ensureCollections", () => {
 	it("creates all collections when none exist, including both time series collections", async () => {
 		const db = mockDb([])
 		await ensureCollections(db, "test_")
-		// 30 = 29 baseline + 1 memory_quarantine (Task 2.SE-2, ADR-006)
+		// 30 = 29 baseline + 1 memory_quarantine (, )
 		expect(db.createCollection).toHaveBeenCalledTimes(30)
 		// Non-validated collections: called with name only
 		expect(db.createCollection).toHaveBeenCalledWith("test_files")
@@ -658,7 +658,7 @@ describe("ensureStandardIndexes", () => {
 		}
 	})
 
-	it("creates bi-temporal compound index on events (Task 2.SE-1)", async () => {
+	it("creates bi-temporal compound index on events ()", async () => {
 		const db = mockDb()
 		await ensureStandardIndexes(db, "test_")
 		const events = db.collection("test_events") as unknown as {
@@ -2329,7 +2329,7 @@ describe("ensureCollections total count with query_cache and time series", () =>
 	it("creates all regular collections plus telemetry and access-events time series collections", async () => {
 		const db = mockDb([])
 		await ensureCollections(db, "test_")
-		// 30 = 29 baseline + 1 memory_quarantine (Task 2.SE-2, ADR-006)
+		// 30 = 29 baseline + 1 memory_quarantine (, )
 		expect(db.createCollection).toHaveBeenCalledTimes(30)
 	})
 })

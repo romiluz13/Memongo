@@ -1,5 +1,5 @@
 /**
- * Bi-temporal memory filter (Task 2.SE-1 / ADR-006 scope expansion).
+ * Bi-temporal memory filter (Bi-temporal validity).
  *
  * A memory's validity window is defined by two dates:
  *   - `validAt`   — when the assertion became true (required)
@@ -8,9 +8,8 @@
  * Retrieval at `queryTime = T` MUST only return memories satisfying
  *   validAt <= T AND (invalidAt IS NULL OR invalidAt > T)
  *
- * Zep leads Memongo's competitor field by 15 points on temporal queries
- * because of bi-temporal modeling; this module is the durable surface for
- * every retrieval path (standard, semantic, hybrid) to enforce the invariant.
+ * This module is the durable surface for every retrieval path (standard,
+ * semantic, hybrid) to enforce current-state and historical-time invariants.
  *
  * MongoDB MCP citation: compound index shape
  * https://www.mongodb.com/docs/manual/core/indexes/index-types/index-compound/

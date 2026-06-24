@@ -639,7 +639,47 @@ describe("createApp", () => {
 		expect(bridgeMocks.memongoBridgeStatus).toHaveBeenCalledOnce()
 	})
 
-	it("registers a graceful shutdown handler that runs bridge close on SIGTERM/SIGINT (CRIT-5 part 2)", async () => {
+	it("logs a prominent warning once when API auth is disabled", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+		try {
+			const { resetUnauthenticatedApiWarningForTests } = await import(
+				"./app.js"
+			)
+			resetUnauthenticatedApiWarningForTests()
+
+			createApp()
+			createApp()
+
+			expect(warn).toHaveBeenCalledTimes(1)
+			expect(warn.mock.calls[0]?.[0]).toContain("MEMONGO_API_KEY is not set")
+		} finally {
+			warn.mockRestore()
+		}
+	})
+
+	it("does not warn when admin or scoped API auth is configured", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+		try {
+			const { resetUnauthenticatedApiWarningForTests } = await import(
+				"./app.js"
+			)
+			resetUnauthenticatedApiWarningForTests()
+
+			process.env.MEMONGO_API_KEY = "secret"
+			createApp()
+			process.env.MEMONGO_API_KEY = ""
+			process.env.MEMONGO_API_SCOPED_KEYS = JSON.stringify([
+				{ token: "scoped-secret", agentIds: ["agent"] },
+			])
+			createApp()
+
+			expect(warn).not.toHaveBeenCalled()
+		} finally {
+			warn.mockRestore()
+		}
+	})
+
+	it("registers a graceful shutdown handler that runs bridge close on SIGTERM/SIGINT (bridge shutdown part 2)", async () => {
 		const { registerGracefulShutdown } = await import("./app.js")
 		expect(typeof registerGracefulShutdown).toBe("function")
 
@@ -672,7 +712,7 @@ describe("createApp", () => {
 		expect(shutdownCalls).toEqual(["server-closed", "bridge-closed"])
 	})
 
-	it("shutdown forces exit(1) when close handlers exceed the timeout (CRIT-5 part 2)", async () => {
+	it("shutdown forces exit(1) when close handlers exceed the timeout (bridge shutdown part 2)", async () => {
 		const { registerGracefulShutdown } = await import("./app.js")
 		const emitter = new (await import("node:events")).EventEmitter()
 

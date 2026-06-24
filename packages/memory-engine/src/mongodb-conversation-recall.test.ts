@@ -2,7 +2,7 @@
 import type { Collection, Db, Document } from "mongodb"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
-// Phase 2 remfix HIGH-5 — capture log.warn for malformed scoreDetails.
+// Malformed scoreDetails handling — capture log.warn for malformed scoreDetails.
 // `vi.mock` is hoisted above `const` declarations at module scope, so we
 // use `vi.hoisted` to declare the spy in the same phase.
 const { warnSpy } = vi.hoisted(() => ({ warnSpy: vi.fn() }))
@@ -27,7 +27,7 @@ function mockDb(): Db {
 }
 
 /**
- * Phase 2 remfix CRIT-1 (ADR-006 SE-1): every recall path MUST stamp the
+ * Bi-temporal recall safety: every recall path MUST stamp the
  * bi-temporal validity clause onto the filter so invalidated memories
  * cannot be returned at `asOf`. Tests use this helper to match the
  * expected `$and: [...bitemporal shape...]` entry.
@@ -181,7 +181,7 @@ describe("recallConversation", () => {
 				timestamp: {
 					$lte: expect.any(Date),
 				},
-				// Phase 2 remfix CRIT-1: bi-temporal $and clause is always present.
+				// Bi-temporal recall safety: bi-temporal $and clause is always present.
 				$and: expect.arrayContaining([
 					expect.objectContaining({ $and: expect.any(Array) }),
 				]),
@@ -602,7 +602,7 @@ describe("recallConversation", () => {
 	})
 
 	// =========================================================================
-	// Phase 2 remfix HIGH-5 — warn on malformed scoreDetails shape.
+	// Malformed scoreDetails handling — warn on malformed scoreDetails shape.
 	//
 	// When MongoDB returns a document with scoreDetails present but malformed
 	// (e.g., non-object or object missing value/description/details), the
@@ -611,7 +611,7 @@ describe("recallConversation", () => {
 	// offending docId, while still returning undefined so the ranking path
 	// is unaffected. Truly absent scoreDetails (undefined) stays silent.
 	// =========================================================================
-	it("HIGH-5: emits a single log.warn when scoreDetails is malformed", async () => {
+	it("malformed scoreDetails: emits a single log.warn when scoreDetails is malformed", async () => {
 		warnSpy.mockClear()
 		const col = makeAggregateCollection({
 			results: [
@@ -656,7 +656,7 @@ describe("recallConversation", () => {
 		expect(String(malformedWarns[0][0])).toMatch(/evt-bad-1/)
 	})
 
-	it("HIGH-5: stays silent when scoreDetails is absent (undefined)", async () => {
+	it("malformed scoreDetails: stays silent when scoreDetails is absent (undefined)", async () => {
 		warnSpy.mockClear()
 		const col = makeAggregateCollection({
 			results: [
@@ -692,13 +692,13 @@ describe("recallConversation", () => {
 	})
 
 	// =========================================================================
-	// Phase 2 remfix CRIT-1 (ADR-006 SE-1): bi-temporal wiring pipeline-level
+	// Bi-temporal recall safety: bi-temporal wiring pipeline-level
 	// assertions. The evidence document must cite these tests as proof that
 	// `buildBitemporalFilter` is wired into standard, semantic, and hybrid
 	// retrieval paths. Without these, the audit claim is undefended.
 	// =========================================================================
 
-	it("CRIT-1: semanticRecall pipeline includes $match(bitemporal) after $vectorSearch", async () => {
+	it("bi-temporal safety: semanticRecall pipeline includes $match(bitemporal) after $vectorSearch", async () => {
 		const col = makeAggregateCollection({ results: [] })
 		vi.mocked(eventsCollection).mockReturnValue(col)
 
@@ -738,7 +738,7 @@ describe("recallConversation", () => {
 		})
 	})
 
-	it("CRIT-1: hybridRecall $rankFusion injects bi-temporal $match into BOTH vector and text inner pipelines", async () => {
+	it("bi-temporal safety: hybridRecall $rankFusion injects bi-temporal $match into BOTH vector and text inner pipelines", async () => {
 		const col = makeAggregateCollection({ results: [] })
 		vi.mocked(eventsCollection).mockReturnValue(col)
 
@@ -803,7 +803,7 @@ describe("recallConversation", () => {
 	//
 	// Cited: https://www.mongodb.com/docs/atlas/atlas-search/near/ (near on
 	// date with origin=ISODate + pivot=ms). See research doc for substitution
-	// disclosure. ADR-008 MongoDB-native.
+	// disclosure. MongoDB-native capability adoption MongoDB-native.
 	// =========================================================================
 
 	it("Task 35: hybrid text lane injects near-on-timestamp when temporal token is present (in March)", async () => {
@@ -929,7 +929,7 @@ describe("recallConversation", () => {
 		expect(nearClause!.near!.pivot).toBe(3 * 86_400_000)
 	})
 
-	it("CRIT-1: standardRecall find() excludes memories invalidAt <= asOf", async () => {
+	it("bi-temporal safety: standardRecall find() excludes memories invalidAt <= asOf", async () => {
 		// This is an integration-style unit test: two docs, one invalid,
 		// one valid — assert only the valid one returns after filter.
 		const asOf = new Date("2026-05-12T10:00:00.000Z")

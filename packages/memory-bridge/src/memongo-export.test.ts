@@ -1,5 +1,5 @@
 /**
- * Task 2.SE-4 export determinism tests (ADR-006 scope expansion).
+ * Export determinism tests.
  *
  * fast-check seed: 20260512.
  */
@@ -28,7 +28,7 @@ const SAMPLE_BUNDLE: ExportBundle = {
 	kb: [],
 }
 
-describe("canonicalizeExportBundle (Task 2.SE-4) — non-JSON type handling (CRIT-6)", () => {
+describe("canonicalizeExportBundle — non-JSON type handling", () => {
 	it("encodes Date as ISO string (not {}) so it survives canonical JSON", () => {
 		const bundleWithDate = {
 			...SAMPLE_BUNDLE,
@@ -150,7 +150,7 @@ describe("canonicalizeExportBundle (Task 2.SE-4) — non-JSON type handling (CRI
 	})
 })
 
-describe("canonicalizeExportBundle (Task 2.SE-4)", () => {
+describe("canonicalizeExportBundle", () => {
 	it("produces byte-identical output for semantically equal bundles", () => {
 		const a = canonicalizeExportBundle({ ...SAMPLE_BUNDLE })
 		const b = canonicalizeExportBundle({
@@ -198,7 +198,7 @@ describe("canonicalizeExportBundle (Task 2.SE-4)", () => {
 	})
 })
 
-describe("signExportBundle + verifyExportBundle (Task 2.SE-4)", () => {
+describe("signExportBundle + verifyExportBundle", () => {
 	it("HMAC-SHA256 signature is deterministic for the same input + key", () => {
 		const sigA = signExportBundle(SAMPLE_BUNDLE, "test-signing-key")
 		const sigB = signExportBundle(SAMPLE_BUNDLE, "test-signing-key")
@@ -248,8 +248,8 @@ describe("signExportBundle + verifyExportBundle (Task 2.SE-4)", () => {
 	})
 })
 
-describe("export determinism invariant (Task 2.SE-4 — property test)", () => {
-	it("Property 14 (ADR-006): signed bundle is byte-identical across two exports with no intervening writes", () => {
+describe("export determinism invariant", () => {
+	it("signed bundle is byte-identical across two exports with no intervening writes", () => {
 		fc.assert(
 			fc.property(
 				fc.record({

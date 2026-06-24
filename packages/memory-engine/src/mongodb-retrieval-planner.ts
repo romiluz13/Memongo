@@ -349,7 +349,7 @@ export function resolveTimeRangePreset(
  * documents as `pivot / (pivot + |timestamp - origin|)`, so a document
  * at `origin` scores 1 and a document `scaleDays` away scores 0.5.
  *
- * ADR-008: MongoDB-native capability adoption — prefer server-side
+ * MongoDB-native capability adoption — prefer server-side
  * operators over application-side reimplementation.
  */
 export type TemporalWindow = {

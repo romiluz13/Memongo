@@ -9,7 +9,7 @@ but they must not be presented as official benchmark wins.
 | Lane | Purpose | Required trigger | Publishable? |
 | --- | --- | --- | --- |
 | Official retrieval | LongMemEval / LoCoMo retrieval quality | release candidate, retrieval algorithm changes, benchmark corpus changes | Yes, when dataset, build, MongoDB topology, embeddings, and command are recorded |
-| Internal retrieval | Fast regression signal over legacy or custom query sets | every retrieval/search/scoring change | No, unless labeled as internal Memongo diagnostic |
+| Diagnostic retrieval | Fast regression signal over legacy or custom query sets | every retrieval/search/scoring change | No, unless labeled as non-comparable diagnostics |
 | Conversation recall regression | Protect user-visible recall behavior | conversation recall, event schema, session/time filter, citation, or recall-plane changes | No, regression gate only |
 | Query governance | Surface candidate MongoDB query-shape settings | benchmark or operator-trace review | Advisory only |
 | Proof pack | Confirm build, tests, and live smoke readiness | release candidate | Yes, as release evidence |

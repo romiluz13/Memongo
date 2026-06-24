@@ -1,5 +1,5 @@
 /**
- * Task 2.SE-2: Prompt-injection / memory-poisoning classifier (ADR-006).
+ * Prompt-injection and memory-poisoning classifier.
  *
  * Tier-1 (always on, pattern-based): string-level regex matching against a
  * frozen catalogue of injection-shaped content (role-override attempts,

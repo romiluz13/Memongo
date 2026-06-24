@@ -11,7 +11,7 @@ import {
 } from "./mongodb-trust.js"
 
 /**
- * Phase 2 remfix CRIT-2: fast-check seed pinned to project default.
+ * Importance-decay safety: fast-check seed pinned to project default.
  * fast-check seed: 20260512.
  */
 const FAST_CHECK_SEED = 20260512
@@ -336,7 +336,7 @@ describe("shouldAbstainForLowTrust", () => {
 })
 
 // ===========================================================================
-// Phase 2 remfix CRIT-2: importance-decay fast-check property tests.
+// Importance-decay safety: importance-decay fast-check property tests.
 //
 // The importance-decay evidence claims three properties at
 // seed=20260512. Before this remfix the test file had zero fc.assert calls,
@@ -355,7 +355,7 @@ describe("shouldAbstainForLowTrust", () => {
 //     access, the decay function is non-increasing as daysSinceCreation grows.
 // ===========================================================================
 
-describe("computeImportanceDecay fast-check properties (CRIT-2)", () => {
+describe("computeImportanceDecay fast-check properties (importance-decay safety)", () => {
 	it("Property A: permanent/ongoing temporalScope never decays", () => {
 		fc.assert(
 			fc.property(

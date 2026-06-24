@@ -3,7 +3,7 @@
  *
  * Extracts atomic user facts and synthetic QA pairs per session using a
  * provider-agnostic LLM interface (OpenAI-compatible chat completions or
- * Anthropic Messages via Grove).
+ * Anthropic Messages).
  * Produces two doc types in the canonical chunks collection:
  *   - "userfact-evidence" with extractionMethod "llm" (replaces regex when available)
  *   - "qa-evidence" (new synthetic QA pairs for EnrichIndex-style retrieval)
@@ -25,12 +25,19 @@ import type {
 // ---------------------------------------------------------------------------
 
 export type EnrichmentMode = "enabled" | "facts-only" | "none"
+export type EnrichmentAuthStyle =
+	| "authorization-bearer"
+	| "api-key"
+	| "x-api-key"
+export type EnrichmentTokenParam = "max_tokens" | "max_completion_tokens"
 
 export type EnrichmentProviderConfig = {
 	baseUrl: string
 	apiKey: string
 	model: string
 	provider?: "openai-compatible" | "anthropic"
+	authStyle?: EnrichmentAuthStyle
+	tokenParam?: EnrichmentTokenParam
 }
 
 export type EnrichmentProvider = {
@@ -174,12 +181,13 @@ export function resolveEnrichmentStrictMode(
 }
 
 // ---------------------------------------------------------------------------
-// HTTP provider (OpenAI-compatible, Grove gateway compatible)
+// HTTP provider (OpenAI-compatible gateways and Anthropic Messages)
 // ---------------------------------------------------------------------------
 
-const DEFAULT_GROVE_BASE_URL =
-	"https://grove-gateway-prod.azure-api.net/grove-foundry-prod/openai/v1"
-const DEFAULT_MODEL = "gpt-4o-mini"
+const DEFAULT_OPENAI_COMPATIBLE_AUTH_STYLE: EnrichmentAuthStyle =
+	"authorization-bearer"
+const DEFAULT_ANTHROPIC_AUTH_STYLE: EnrichmentAuthStyle = "x-api-key"
+const DEFAULT_TOKEN_PARAM: EnrichmentTokenParam = "max_tokens"
 
 function isAbortError(err: unknown): boolean {
 	return err instanceof DOMException && err.name === "AbortError"
@@ -187,6 +195,48 @@ function isAbortError(err: unknown): boolean {
 
 function isFetchTransportError(err: unknown): err is TypeError {
 	return err instanceof TypeError
+}
+
+function resolveAuthStyle(
+	value: string | undefined,
+	defaultValue: EnrichmentAuthStyle,
+): EnrichmentAuthStyle {
+	if (value === undefined || value.trim() === "") return defaultValue
+	const normalized = value.trim().toLowerCase()
+	if (
+		normalized === "authorization-bearer" ||
+		normalized === "api-key" ||
+		normalized === "x-api-key"
+	) {
+		return normalized
+	}
+	throw new Error(
+		`MEMONGO_ENRICHMENT_AUTH_STYLE must be authorization-bearer, api-key, or x-api-key, got ${value}`,
+	)
+}
+
+function resolveTokenParam(value: string | undefined): EnrichmentTokenParam {
+	if (value === undefined || value.trim() === "") return DEFAULT_TOKEN_PARAM
+	const normalized = value.trim().toLowerCase()
+	if (normalized === "max_tokens" || normalized === "max_completion_tokens") {
+		return normalized
+	}
+	throw new Error(
+		`MEMONGO_ENRICHMENT_TOKEN_PARAM must be max_tokens or max_completion_tokens, got ${value}`,
+	)
+}
+
+function buildAuthHeaders(
+	apiKey: string,
+	authStyle: EnrichmentAuthStyle,
+): Record<string, string> {
+	if (authStyle === "authorization-bearer") {
+		return { Authorization: `Bearer ${apiKey}` }
+	}
+	if (authStyle === "x-api-key") {
+		return { "x-api-key": apiKey }
+	}
+	return { "api-key": apiKey }
 }
 
 export function resolveEnrichmentTimeoutMs(
@@ -245,6 +295,7 @@ export function createHttpProvider(
 		name: "http",
 		async chatCompletion(params) {
 			const url = `${config.baseUrl.replace(/\/+$/, "")}/chat/completions`
+			const tokenParam = config.tokenParam ?? DEFAULT_TOKEN_PARAM
 			const body: Record<string, unknown> = {
 				model: params.model,
 				messages: params.messages,
@@ -253,9 +304,7 @@ export function createHttpProvider(
 				body.response_format = params.responseFormat
 			}
 			if (params.maxTokens !== undefined) {
-				// Use max_completion_tokens (required by gpt-5+ via Grove gateway)
-				// with max_tokens as fallback for older model endpoints
-				body.max_completion_tokens = params.maxTokens
+				body[tokenParam] = params.maxTokens
 			}
 
 			const timeoutMs = resolveEnrichmentTimeoutMs()
@@ -267,7 +316,10 @@ export function createHttpProvider(
 					method: "POST",
 					headers: {
 						"Content-Type": "application/json",
-						"api-key": config.apiKey,
+						...buildAuthHeaders(
+							config.apiKey,
+							config.authStyle ?? DEFAULT_OPENAI_COMPATIBLE_AUTH_STYLE,
+						),
 					},
 					body: JSON.stringify(body),
 					signal: controller.signal,
@@ -347,7 +399,10 @@ export function createAnthropicProvider(
 					headers: {
 						"Content-Type": "application/json",
 						"anthropic-version": "2023-06-01",
-						"api-key": config.apiKey,
+						...buildAuthHeaders(
+							config.apiKey,
+							config.authStyle ?? DEFAULT_ANTHROPIC_AUTH_STYLE,
+						),
 					},
 					body: JSON.stringify(body),
 					signal: controller.signal,
@@ -415,18 +470,42 @@ export class EnrichmentParseError extends Error {
 export function resolveEnrichmentProvider(
 	env: Record<string, string | undefined>,
 ): EnrichmentProvider | null {
-	const apiKey = env.MEMONGO_ENRICHMENT_API_KEY ?? env.GROVE_API_KEY
+	const apiKey = env.MEMONGO_ENRICHMENT_API_KEY?.trim()
 	if (!apiKey) return null
 
-	const baseUrl = env.MEMONGO_ENRICHMENT_BASE_URL ?? DEFAULT_GROVE_BASE_URL
-	const model = env.MEMONGO_ENRICHMENT_MODEL ?? DEFAULT_MODEL
+	const baseUrl = env.MEMONGO_ENRICHMENT_BASE_URL?.trim()
+	if (!baseUrl) {
+		throw new Error(
+			"MEMONGO_ENRICHMENT_BASE_URL is required when MEMONGO_ENRICHMENT_API_KEY is set",
+		)
+	}
+	const model = env.MEMONGO_ENRICHMENT_MODEL?.trim()
+	if (!model) {
+		throw new Error(
+			"MEMONGO_ENRICHMENT_MODEL is required when MEMONGO_ENRICHMENT_API_KEY is set",
+		)
+	}
 	const provider =
 		env.MEMONGO_ENRICHMENT_PROVIDER === "anthropic" ||
 		baseUrl.includes("/anthropic/")
 			? "anthropic"
 			: "openai-compatible"
+	const authStyle = resolveAuthStyle(
+		env.MEMONGO_ENRICHMENT_AUTH_STYLE,
+		provider === "anthropic"
+			? DEFAULT_ANTHROPIC_AUTH_STYLE
+			: DEFAULT_OPENAI_COMPATIBLE_AUTH_STYLE,
+	)
+	const tokenParam = resolveTokenParam(env.MEMONGO_ENRICHMENT_TOKEN_PARAM)
 
-	return createHttpProvider({ baseUrl, apiKey, model, provider })
+	return createHttpProvider({
+		baseUrl,
+		apiKey,
+		model,
+		provider,
+		authStyle,
+		tokenParam,
+	})
 }
 
 // ---------------------------------------------------------------------------

@@ -33,11 +33,18 @@ type ChatCompletionResponse = {
 	}
 }
 
-const groveApiUrl =
-	process.env.GROVE_API_URL?.trim() ??
-	"https://grove-gateway-prod.azure-api.net/grove-foundry-prod/openai/v1/chat/completions"
-const groveApiKey = process.env.GROVE_API_KEY?.trim()
-const groveModel = process.env.GROVE_MODEL?.trim() ?? "gpt-5.4"
+type LlmAuthStyle = "authorization-bearer" | "api-key" | "x-api-key"
+type LlmTokenParam = "max_tokens" | "max_completion_tokens"
+
+const llmBaseUrl = process.env.MEMONGO_LLM_BASE_URL?.trim()
+const llmApiKey = process.env.MEMONGO_LLM_API_KEY?.trim()
+const llmModel = process.env.MEMONGO_LLM_MODEL?.trim()
+const llmAuthStyle =
+	(process.env.MEMONGO_LLM_AUTH_STYLE?.trim() as LlmAuthStyle | undefined) ??
+	"authorization-bearer"
+const llmTokenParam =
+	(process.env.MEMONGO_LLM_TOKEN_PARAM?.trim() as LlmTokenParam | undefined) ??
+	"max_tokens"
 const memongoApiUrl =
 	process.env.MEMONGO_API_URL?.trim() ?? "http://127.0.0.1:3847"
 const memongoApiKey = process.env.MEMONGO_API_KEY?.trim() || undefined
@@ -50,9 +57,14 @@ const sessionId =
 const agentScopeRef = `agent:${agentId}`
 const marker = `Blue Finch ${randomUUID().slice(0, 8)}`
 
-if (!groveApiKey) {
-	throw new Error("GROVE_API_KEY is required.")
+if (!llmBaseUrl || !llmApiKey || !llmModel) {
+	throw new Error(
+		"MEMONGO_LLM_BASE_URL, MEMONGO_LLM_API_KEY, and MEMONGO_LLM_MODEL are required.",
+	)
 }
+const configuredLlmBaseUrl = llmBaseUrl
+const configuredLlmApiKey = llmApiKey
+const configuredLlmModel = llmModel
 
 const memongo = new MemongoClient({
 	baseUrl: memongoApiUrl,
@@ -189,25 +201,50 @@ async function callModel(messages: ChatMessage[]): Promise<{
 	content: string | null
 	toolCalls: ToolCall[]
 }> {
-	const response = await fetch(groveApiUrl, {
-		method: "POST",
-		headers: {
-			"Content-Type": "application/json",
-			"api-key": groveApiKey,
+	const headers: Record<string, string> = {
+		"Content-Type": "application/json",
+	}
+	if (llmAuthStyle === "authorization-bearer") {
+		headers.Authorization = `Bearer ${configuredLlmApiKey}`
+	} else if (llmAuthStyle === "x-api-key") {
+		headers["x-api-key"] = configuredLlmApiKey
+	} else if (llmAuthStyle === "api-key") {
+		headers["api-key"] = configuredLlmApiKey
+	} else {
+		throw new Error(
+			"MEMONGO_LLM_AUTH_STYLE must be authorization-bearer, api-key, or x-api-key.",
+		)
+	}
+	if (
+		llmTokenParam !== "max_tokens" &&
+		llmTokenParam !== "max_completion_tokens"
+	) {
+		throw new Error(
+			"MEMONGO_LLM_TOKEN_PARAM must be max_tokens or max_completion_tokens.",
+		)
+	}
+	const body: Record<string, unknown> = {
+		model: configuredLlmModel,
+		temperature: 0,
+		parallel_tool_calls: false,
+		tools,
+		messages,
+	}
+	body[llmTokenParam] = 1024
+
+	const response = await fetch(
+		`${configuredLlmBaseUrl.replace(/\/+$/, "")}/chat/completions`,
+		{
+			method: "POST",
+			headers,
+			body: JSON.stringify(body),
 		},
-		body: JSON.stringify({
-			model: groveModel,
-			temperature: 0,
-			parallel_tool_calls: false,
-			tools,
-			messages,
-		}),
-	})
+	)
 
 	const payload = (await response.json()) as ChatCompletionResponse
 	if (!response.ok) {
 		throw new Error(
-			`Grove chat completion failed (${response.status}): ${payload.error?.message ?? JSON.stringify(payload)}`,
+			`LLM chat completion failed (${response.status}): ${payload.error?.message ?? JSON.stringify(payload)}`,
 		)
 	}
 
@@ -394,8 +431,8 @@ async function main() {
 	emitRunStep({
 		step: "start",
 		memongoApiUrl,
-		groveApiUrl,
-		model: groveModel,
+		llmBaseUrl: configuredLlmBaseUrl,
+		model: configuredLlmModel,
 		agentId,
 		sessionId,
 	})

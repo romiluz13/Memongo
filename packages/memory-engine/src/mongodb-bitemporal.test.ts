@@ -1,5 +1,5 @@
 /**
- * Task 2.SE-1 bi-temporal validity invariant tests (ADR-006 scope expansion).
+ *  bi-temporal validity invariant tests ( scope expansion).
  *
  * fast-check seed: 20260512.
  */
@@ -10,7 +10,7 @@ import { buildBitemporalFilter, isMemoryValidAt } from "./mongodb-bitemporal.js"
 
 const FAST_CHECK_SEED = 20260512
 
-describe("buildBitemporalFilter (Task 2.SE-1)", () => {
+describe("buildBitemporalFilter ()", () => {
 	it("builds a two-clause $and enforcing validAt/invalidAt at queryTime", () => {
 		const t = new Date("2026-05-12T10:00:00.000Z")
 		const filter = buildBitemporalFilter(t)
@@ -41,7 +41,7 @@ describe("buildBitemporalFilter (Task 2.SE-1)", () => {
 	})
 })
 
-describe("isMemoryValidAt (Task 2.SE-1)", () => {
+describe("isMemoryValidAt ()", () => {
 	const T = new Date("2026-05-12T10:00:00.000Z")
 
 	it("accepts legacy memories without validAt", () => {
@@ -69,7 +69,7 @@ describe("isMemoryValidAt (Task 2.SE-1)", () => {
 })
 
 describe("bi-temporal validity invariant (property test — fast-check)", () => {
-	it("Property 11 (ADR-006): no retrieval returns a memory where invalidAt <= queryTime", () => {
+	it("Property 11 (): no retrieval returns a memory where invalidAt <= queryTime", () => {
 		fc.assert(
 			fc.property(
 				fc.array(

@@ -25,6 +25,7 @@ For the default local path:
 ```bash
 docker compose -f docker/docker-compose.yml up -d
 export MEMONGO_MONGODB_URI="mongodb://127.0.0.1:27017/?directConnection=true"
+export MEMONGO_API_KEY="local-dev-secret"
 ```
 
 For Atlas Local Preview with MongoDB automated embeddings:
@@ -52,7 +53,8 @@ The API runs at `http://127.0.0.1:3847`.
 
 ```bash
 curl -s http://127.0.0.1:3847/health
-curl -s http://127.0.0.1:3847/v1/status
+curl -s http://127.0.0.1:3847/v1/status \
+  -H "authorization: Bearer local-dev-secret"
 ```
 
 Look for a healthy API response and a memory status payload.
@@ -66,6 +68,7 @@ import { MemongoClient } from "@memongo/client";
 
 const client = new MemongoClient({
   baseUrl: "http://127.0.0.1:3847",
+  apiKey: "local-dev-secret",
 });
 
 await client.add({
@@ -86,10 +89,12 @@ console.log(results);
 ```bash
 curl -s http://127.0.0.1:3847/v1/add \
   -H "content-type: application/json" \
+  -H "authorization: Bearer local-dev-secret" \
   -d '{"content":"The user prefers dark mode and TypeScript.","sessionId":"user-123"}'
 
 curl -s http://127.0.0.1:3847/v1/search \
   -H "content-type: application/json" \
+  -H "authorization: Bearer local-dev-secret" \
   -d '{"query":"What are the user preferences?","sessionKey":"user-123","maxResults":5}'
 ```
 </Tab>

@@ -53,25 +53,6 @@ memongo/
 - `@memongo/lib` -- shared utilities (private)
 - `@memongo/api`, `@memongo/mcp`, `@memongo/web` -- apps (private)
 
-## Memory Intelligence
-
-Six advanced memory intelligence capabilities shipped natively on MongoDB:
-
-| Feature | Key file | Layers |
-|---|---|---|
-| Reasoning chain traversal | `packages/memory-engine/src/mongodb-reasoning-chain.ts` | Engine, Bridge (`memongoBridgeTraceChain`), API (`POST /v1/chain-trace`), MCP (`memongo_chain_trace`), Client (`.traceChain()`), AI SDK (`memongo_chain_trace`) |
-| Surprisal novelty detection | `packages/memory-engine/src/mongodb-novelty.ts` | Engine, Bridge (`memongoBridgeScanNovelty`), API (`POST /v1/novelty-scan`), MCP (`memongo_novelty_scan`), Client (`.scanNovelty()`), AI SDK (`memongo_novelty_scan`) |
-| Access tracking | `packages/memory-engine/src/mongodb-access-tracker.ts` | Engine only (`AccessTracker` with batched writes) |
-| Importance decay | `packages/memory-engine/src/mongodb-trust.ts` | Engine only (`computeImportanceDecay()`; permanent/ongoing memories never decay via `temporalScope`) |
-| Wiki source categorization | KB schema: `wikiSource`, `vault`, `section` | Schema-level on KB collections |
-| Consolidation agent (Dreamer) | `packages/memory-engine/src/mongodb-consolidator.ts` | Engine, Bridge (`memongoBridgeConsolidate`), API (`POST /v1/consolidate`), MCP (`memongo_consolidate`), Client (`.consolidate()`), AI SDK (`memongo_consolidate`) |
-
-Current totals: 25 collections, 67 standard indexes, 3 new API routes, 3 new MCP tools, 3 new client methods, 3 new AI SDK tools.
-
-## Fork history
-
-Memongo evolved from the same MongoDB memory work as the ClawMongo project. This repository contains **only** the standalone memory product; do not import from vendored fork trees or local `archive/` copies.
-
 ## Commit Guidelines
 
 - Follow concise, action-oriented commit messages (e.g., `engine: add graph expansion`).

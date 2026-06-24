@@ -573,7 +573,7 @@ describe("mongodb benchmark runner", () => {
 					gate: "official-retrieval",
 					status: "warning",
 					evidence:
-						"officialMetrics present, but scoredCases is missing; use internal diagnostics only",
+						"officialMetrics present, but scoredCases is missing; use non-comparable diagnostics only",
 				}),
 			]),
 		)

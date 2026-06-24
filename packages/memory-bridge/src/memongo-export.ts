@@ -1,5 +1,5 @@
 /**
- * Task 2.SE-4: Exportable-memory guarantee (ADR-006 scope expansion).
+ * Exportable-memory guarantee.
  *
  * Users can export every memory scoped to an `agentId` as a signed JSON
  * bundle. The bundle is HMAC-SHA256 signed using `MEMONGO_EXPORT_SIGNING_KEY`
@@ -51,7 +51,7 @@ export type ExportBundle = {
  * order is load-bearing — callers are responsible for stable sort at the
  * retrieval site).
  *
- * CRIT-6 (silent-failure fix): native `JSON.stringify` silently drops or
+ * Non-JSON value handling: native `JSON.stringify` silently drops or
  * mangles several common non-plain-object types. We normalize them before
  * serialization so exports never lose data:
  *   - `Date`         → ISO-8601 string
