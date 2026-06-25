@@ -53,12 +53,19 @@ jobs:
             packages/client \
             packages/tools
           do
+            name=$(node -p "require('./$pkg/package.json').name")
+            version=$(node -p "require('./$pkg/package.json').version")
             is_private=$(node -e "console.log(require('./$pkg/package.json').private === true)")
             if [ "$is_private" = "true" ]; then
               continue
             fi
 
-            echo "Publishing $pkg..."
+            if npm view "$name@$version" version >/dev/null 2>&1; then
+              echo "Skipping $name@$version; already published."
+              continue
+            fi
+
+            echo "Publishing $name@$version..."
             (cd "$pkg" && pnpm publish --access public --no-git-checks --provenance)
           done
         env:
