@@ -6,7 +6,7 @@
 	"license": "Apache-2.0",
 	"repository": {
 		"type": "git",
-		"url": "https://github.com/romiluz13/memongo.git",
+		"url": "git+https://github.com/romiluz13/memongo.git",
 		"directory": "packages/memory-engine"
 	},
 	"author": "Rom Iluz",
