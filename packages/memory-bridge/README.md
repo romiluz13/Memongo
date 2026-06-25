@@ -5,7 +5,7 @@ Stable facade over the Memongo engine. Use this package when you want one suppor
 ## Install
 
 ```bash
-bun add @memongo/memory-bridge
+npm install @memongo/memory-bridge
 ```
 
 ## When to use this package

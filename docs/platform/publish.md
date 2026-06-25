@@ -40,7 +40,8 @@ npm publish --access public
 ```
 
 The GitHub publish workflow runs only from `v*` tags or manual dispatch. It uses
-Bun for install/build and `pnpm publish --provenance` for npm provenance.
+Bun for install/build/test and `npm publish --access public --provenance` for
+npm publishing with provenance.
 
 For an emergency manual publish, use npm with your org's 2FA and provenance
 policy.

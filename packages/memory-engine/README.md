@@ -5,7 +5,7 @@ MongoDB-native memory engine for Memongo. Use this package when you need direct 
 ## Install
 
 ```bash
-bun add @memongo/memory-engine
+npm install @memongo/memory-engine
 ```
 
 ## When to use this package

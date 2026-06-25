@@ -12,8 +12,15 @@
   <a href="./apps/docs/quickstart.mdx">Quickstart</a> ·
   <a href="./apps/docs/concepts/architecture.mdx">Architecture</a> ·
   <a href="./apps/docs/api/overview.mdx">API</a> ·
+  <a href="https://memongo.rom-88f.workers.dev">Live Site</a> ·
   <a href="./docs/benchmarks/BENCHMARKS.md">Benchmarks</a> ·
   <a href="./docs/platform/PRODUCTION-READY.md">Release Gate</a>
+</p>
+
+<p align="center">
+  <a href="https://www.npmjs.com/package/@memongo/memory"><img alt="@memongo/memory npm version" src="https://img.shields.io/npm/v/%40memongo%2Fmemory?label=%40memongo%2Fmemory"></a>
+  <a href="https://www.npmjs.com/package/@memongo/client"><img alt="@memongo/client npm version" src="https://img.shields.io/npm/v/%40memongo%2Fclient?label=%40memongo%2Fclient"></a>
+  <a href="https://www.npmjs.com/package/@memongo/tools"><img alt="@memongo/tools npm version" src="https://img.shields.io/npm/v/%40memongo%2Ftools?label=%40memongo%2Ftools"></a>
 </p>
 
 Memongo gives AI systems durable memory on top of MongoDB. It stores conversations, facts, procedures, knowledge-base chunks, episodes, and graph relationships in one MongoDB-backed memory engine, then retrieves context with vector search, full-text search, and hybrid ranking.
@@ -176,9 +183,9 @@ See [Production-ready Checklist](docs/platform/PRODUCTION-READY.md), [Validation
 ## Packages
 
 ```bash
-bun add @memongo/client
-bun add @memongo/tools
-bun add @memongo/memory
+npm install @memongo/memory
+npm install @memongo/client
+npm install @memongo/tools
 ```
 
 Package READMEs:

@@ -5,7 +5,7 @@ AI SDK tool helpers for Memongo. Use this package when you want to expose suppor
 ## Install
 
 ```bash
-bun add @memongo/tools
+npm install @memongo/tools
 ```
 
 ## When to use this package

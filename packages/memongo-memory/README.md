@@ -5,7 +5,7 @@ Convenience barrel over the supported Memongo memory core. It re-exports the bri
 ## Install
 
 ```bash
-bun add @memongo/memory
+npm install @memongo/memory
 ```
 
 ## When to use this package

@@ -5,7 +5,7 @@ TypeScript HTTP client for the Memongo API. Use this package when you want to ca
 ## Install
 
 ```bash
-bun add @memongo/client
+npm install @memongo/client
 ```
 
 ## When to use this package
