@@ -197,14 +197,18 @@ export default function LandingPage() {
 					<div className="hero-copy-block">
 						<p className="hero-kicker">MongoDB-native agent memory</p>
 						<h1 className="hero-title">
-							<span>Memory</span>
-							<span>that keeps</span>
-							<span>its evidence.</span>
+							<span>Your agent's memory</span>
+							<span>shouldn't live in</span>
+							<span>
+								a <code className="hero-title-code">.md</code> file.
+							</span>
 						</h1>
 						<p className="hero-copy">
-							Memongo gives AI agents durable long-term memory: event history,
-							structured facts, knowledge chunks, procedures, graph context, and
-							hybrid retrieval in one inspectable system.
+							A <code>.md</code> file made it easy to start. But every turn your
+							agent re-reads the whole thing — burning tokens and rotting
+							context. Memongo gives agents indexed, pre-filtered retrieval on
+							MongoDB: vector, text, graph, and proof in one store. You inject
+							the relevant slice, not the entire brain.
 						</p>
 						<div className="hero-actions">
 							<a className="button button-primary" href="#quickstart">
