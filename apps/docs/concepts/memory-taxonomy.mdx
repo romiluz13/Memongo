@@ -1,0 +1,76 @@
+---
+title: "Memory Taxonomy"
+description: "Canonical memory types and operations in the Memongo framework."
+icon: "brain"
+---
+
+Memongo models memory as scoped evidence, not as a single vector bucket. The
+taxonomy gives apps, agents, and operators a shared language for deciding what
+to store, how to retrieve it, and when it is safe to update.
+
+## Memory types
+
+| Type | Stored as | Typical source | Retrieval use |
+|---|---|---|---|
+| Episodic events | Conversation and workflow events | User turns, assistant turns, tool events, ticket activity | Recent context, timelines, handoffs |
+| Semantic facts | Structured memory | Preferences, decisions, attributes, current state | Precise facts and stable profile context |
+| Procedural playbooks | Procedure memory | Runbooks, workflows, operating rules | Repeatable action guidance |
+| Profile preferences | Profile synthesis over memory | User or account history | Personalization and response shaping |
+| Workspace knowledge | Knowledge base chunks, events, graph links | Docs, repo notes, research, project history | Shared Company Brain recall |
+| Provenance | Metadata, citations, source event IDs, traces | Every write path that can attach evidence | Trust, audit, correction, and invalidation |
+
+## Operation model
+
+Use the smallest operation that matches the user's intent:
+
+| Intent | Operation | Existing surfaces |
+|---|---|---|
+| Find relevant context | Recall | `search`, `searchDetailed`, `searchKB`, `memongo_search` |
+| Start an answer or agent turn | Context bundle | `buildContextBundle`, `/v1/context-bundle`, `memongo_build_context_bundle` |
+| Save a new event | Remember event | `writeEvent`, `/v1/write-event`, `memongo_write_event` |
+| Save a stable fact | Remember fact | `writeStructured`, `/v1/write-structured`, `memongo_write_structured` |
+| Save a playbook | Remember procedure | `writeProcedure`, `/v1/write-procedure`, `memongo_write_procedure` |
+| Correct memory | Update or feedback | Lifecycle update, `applyMemoryFeedback`, MCP lifecycle tools |
+| Remove stale memory | Forget | Lifecycle delete or invalidation |
+| Explain why memory appeared | Trace provenance | `traceChain`, detailed search metadata, admin trace tools |
+
+## Retrieval lanes
+
+Memongo separates retrieval quality from answer quality. A memory framework can
+retrieve the right evidence and still need an app or agent to answer well.
+
+| Lane | Goal |
+|---|---|
+| Vector recall | Match meaning across wording differences |
+| Full-text recall | Match exact names, identifiers, and keywords |
+| Hybrid recall | Blend semantic and lexical evidence |
+| Detailed recall | Return plans, passes, metadata, and evidence for audit |
+| Context bundle | Compress the best available memory into prompt-ready sections |
+
+## Provenance rules
+
+Provenance is part of the framework contract:
+
+- Preserve source text or source event identity where available.
+- Prefer structured memories with `scope`, `scopeRef`, and evidence metadata.
+- Treat corrections as lifecycle updates or feedback, not as hidden rewrites.
+- Use traces and detailed search when evaluating why a memory was retrieved.
+- Do not turn diagnostic or benchmark artifacts into public product claims
+  unless the evidence lane supports the claim.
+- Treat portable export as maintainer-level bundle support until a public export
+  API is documented.
+
+## Scope mapping
+
+| Product concept | Use this scope | Example `scopeRef` |
+|---|---|---|
+| One chat thread | `session` | `support-ticket-314` |
+| One person | `user` | `user_123` |
+| One named agent | `agent` | `research-agent` |
+| One repo, app, or work area | `workspace` | `memongo` |
+| One company or customer tenant | `tenant` | `acme-corp` |
+| Shared defaults | `global` | `default` |
+
+Avoid adding synonyms to the type system until production evidence shows they
+are necessary. Keep `project` and `team` as product language mapped to
+`workspace` and `tenant`.

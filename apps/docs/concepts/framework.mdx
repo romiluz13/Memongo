@@ -1,0 +1,98 @@
+---
+title: "Memory Framework"
+description: "The Memongo Company Brain framework contract for AI apps, agents, and teams."
+icon: "network"
+---
+
+Memongo is a MongoDB-native memory framework for building a Company Brain across
+AI apps, agents, and team workflows.
+
+The framework is intentionally small at the public interface and rich at the
+memory layer. Apps and agents use the HTTP API, TypeScript client, AI SDK tools,
+or MCP server. The engine stores evidence, scopes it, retrieves it, and returns
+answer-ready context without requiring every client to invent a memory system.
+
+## Framework contract
+
+| Contract area | What Memongo provides |
+|---|---|
+| Memory taxonomy | Episodic events, semantic facts, procedures, profile preferences, workspace knowledge, and provenance |
+| Core operations | Recall, context bundles, remember, update, forget, feedback, and trace |
+| Integration model | HTTP API, TypeScript SDK, AI SDK helpers, and MCP tools |
+| Scope model | `session`, `user`, `agent`, `workspace`, `tenant`, and `global` |
+| Safety model | Read by default; write only on explicit user or app intent |
+| Evaluation model | Separate retrieval quality, answer quality, provenance, and production claims |
+
+## What is a Company Brain?
+
+A Company Brain is shared, durable operational memory. It can hold customer
+context, product decisions, team preferences, support playbooks, research notes,
+workflow history, and agent handoff context.
+
+It is broader than coding-agent memory. Coding agents are one adapter path. The
+same framework should support internal copilots, customer support assistants,
+research agents, sales workflows, product operations, and AI applications that
+need long-running context.
+
+## Core operations
+
+| Operation | Existing surface | Use it for |
+|---|---|---|
+| Recall | `/v1/search`, `/v1/search-detailed`, `memongo_search` | Find relevant memories and evidence |
+| Context bundle | `/v1/context-bundle`, `memongo_build_context_bundle` | Build prompt-ready context for an app or agent turn |
+| Remember | `/v1/add`, `/v1/write-event`, `/v1/write-structured`, `/v1/write-procedure` | Store explicit memory |
+| Update | Lifecycle update endpoints and MCP lifecycle tools | Revise structured or procedural memories |
+| Forget | Lifecycle delete endpoints and MCP lifecycle tools | Invalidate or remove scoped memory |
+| Feedback | `/v1/memory/feedback`, `memongo_memory_feedback` | Confirm, correct, or mark memory irrelevant |
+| Trace | `/v1/chain-trace`, admin trace tools | Inspect evidence and provenance |
+
+## Scope rules
+
+Use existing scopes only:
+
+| Scope | Meaning |
+|---|---|
+| `session` | One conversation, task, ticket, or short-lived workflow |
+| `user` | A person's stable preferences and reusable context |
+| `agent` | A named agent's durable working memory |
+| `workspace` | A repository, project, department workspace, or app workspace |
+| `tenant` | Organization-wide or customer-tenant memory |
+| `global` | Deliberate defaults shared across all callers |
+
+Do not add `project` or `team` as new scope values in this slice. Model those
+as `workspace` or `tenant` with clear `scopeRef` values.
+
+## Safety baseline
+
+Phase 1 integrations read by default. They can search, build context bundles,
+and show relevant evidence without changing memory.
+
+Writes require explicit intent, such as:
+
+- A user says "remember this"
+- An app calls a write endpoint as part of a documented workflow
+- An operator updates or invalidates a memory
+- A test or benchmark fixture intentionally writes data
+
+No background writeback, hooks, auto-consolidation, or silent client-side
+capture is part of the first framework slice.
+
+The existing `@memongo/tools` middleware helpers are not read-first: they inject
+context and then write user or assistant events by design. Use them only when
+your app has explicitly chosen conversation persistence. For read-first AI SDK
+apps, use explicit tools or the TypeScript client directly.
+
+<CardGroup cols={2}>
+  <Card title="Memory Taxonomy" icon="brain" href="/concepts/memory-taxonomy">
+    See the canonical memory types and operations.
+  </Card>
+  <Card title="Writeback Policy" icon="shield-check" href="/guides/writeback-policy">
+    Apply the read-by-default safety rule.
+  </Card>
+  <Card title="Adapter Contract" icon="plug" href="/guides/adapters">
+    Wire apps and agents without changing runtime defaults.
+  </Card>
+  <Card title="Company Brain Guide" icon="building-2" href="/guides/company-brain">
+    Use Memongo across teams and AI workflows.
+  </Card>
+</CardGroup>

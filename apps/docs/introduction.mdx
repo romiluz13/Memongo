@@ -4,12 +4,13 @@ sidebarTitle: "Introduction"
 icon: "book-open"
 ---
 
-Memongo is **MongoDB-native long-term memory for AI agents**.
+Memongo is a **MongoDB-native Company Brain memory framework** for AI apps,
+agents, and teams.
 
-It gives apps and agents a durable memory layer backed by MongoDB collections,
+It gives AI systems a durable memory layer backed by MongoDB collections,
 MongoDB Search, Vector Search, and hybrid retrieval. The public repo focuses on
 the supported product path: API server, MCP server, TypeScript client, AI SDK
-tools, web console, Docker setup, and release checks.
+tools, web console, Docker setup, framework docs, and release checks.
 
 ## Start with one loop
 
@@ -28,11 +29,11 @@ The fastest way to understand Memongo is:
 
 | Memory type | Use case |
 |---|---|
-| Conversation events | Long-running chat and agent history |
-| Structured facts | Preferences, profile details, current state |
-| Procedures | Workflows, playbooks, and instructions |
-| Knowledge base chunks | Documents and reference material |
-| Episodes and graph links | Higher-level context and relationships |
+| Episodic events | Long-running chat, task, ticket, and workflow history |
+| Semantic facts | Preferences, profile details, decisions, and current state |
+| Procedural playbooks | Workflows, runbooks, and operating instructions |
+| Workspace knowledge | Documents, project context, and reference material |
+| Provenance | Source context, traces, citations, and lifecycle evidence |
 
 ## Runtime shape
 
@@ -46,6 +47,12 @@ App / Agent / MCP client
 
 Memongo keeps the integration surface small while the engine handles indexing,
 retrieval, telemetry, graph relationships, and memory lifecycle behavior.
+
+## Framework safety
+
+Memongo integrations are read by default. They can search memory and build
+context bundles without changing stored state. Writes require explicit user,
+app, operator, test, or import intent.
 
 ## Why MongoDB
 
@@ -61,6 +68,12 @@ MemPalace retrieval-lane evidence only. Broader ecosystem and judged-answer
 benchmarks remain under audit, and no Mem0 LongMemEval win is claimed.
 
 <CardGroup cols={2}>
+  <Card title="Memory Framework" icon="network" href="/concepts/framework">
+    Learn the Company Brain contract.
+  </Card>
+  <Card title="Company Brain Guide" icon="building-2" href="/guides/company-brain">
+    Apply Memongo across AI apps, agents, and teams.
+  </Card>
   <Card title="Architecture" icon="sitemap" href="/concepts/architecture">
     Understand the packages and data flow.
   </Card>

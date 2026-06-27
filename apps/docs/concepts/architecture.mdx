@@ -4,7 +4,9 @@ description: Memongo's package structure, data flow, and deployment topology.
 icon: "sitemap"
 ---
 
-Memongo is a Turborepo monorepo built around a small supported core. The product runtime is `apps/api` -> `packages/memory-bridge` -> `packages/memory-engine`.
+Memongo is a Turborepo monorepo built around a small supported core. The
+Company Brain framework runtime is `apps/api` -> `packages/memory-bridge` ->
+`packages/memory-engine`.
 
 ## Packages
 
@@ -16,6 +18,20 @@ Memongo is a Turborepo monorepo built around a small supported core. The product
 | `@memongo/client` | TypeScript HTTP client SDK |
 | `@memongo/tools` | AI SDK tool helpers (Vercel AI SDK compatible) |
 | `@memongo/lib` | Shared types and utilities (internal) |
+
+## Framework surfaces
+
+| Surface | Role |
+|---|---|
+| HTTP API | App and service integration |
+| TypeScript client | Typed app access to API operations |
+| AI SDK tools | Explicit function tools plus optional middleware for app frameworks |
+| MCP server | Agent and IDE client integration |
+| Web console | Operator review and inspection |
+
+The `@memongo/tools` middleware helpers can write conversation events
+automatically after model calls. Use explicit function tools or the TypeScript
+client when an app needs strict read-first behavior.
 
 ## Apps
 
@@ -42,6 +58,11 @@ Client SDK / HTTP  ->  apps/api  ->  memory-bridge  ->  memory-engine  ->  Mongo
 MCP client (stdio) ->  apps/mcp  ->  client SDK  ----------------------------------+
 ```
 
-The engine writes to MongoDB collections with automated vector indexes, text indexes, and TTL policies. Search goes through the supported hybrid retrieval pipeline and falls back only when the engine explicitly chooses to do so.
+The engine writes to MongoDB collections with automated vector indexes, text
+indexes, and TTL policies. Search goes through the supported hybrid retrieval
+pipeline and falls back only when the engine explicitly chooses to do so.
+
+The first framework slice does not change this topology. It defines taxonomy,
+scope policy, adapter guidance, and write safety on top of the existing runtime.
 
 For the maintainer-facing package matrix and release map, see `docs/platform/PACKAGE-STATUS.md` and `docs/platform/MAINTAINER-MAP.md` in the repo root.

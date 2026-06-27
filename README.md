@@ -5,11 +5,12 @@
 </p>
 
 <p align="center">
-  <strong>MongoDB-native long-term memory for AI agents.</strong>
+  <strong>MongoDB-native Company Brain memory framework for AI apps, agents, and teams.</strong>
 </p>
 
 <p align="center">
   <a href="./apps/docs/quickstart.mdx">Quickstart</a> ·
+  <a href="./apps/docs/concepts/framework.mdx">Framework</a> ·
   <a href="./apps/docs/concepts/architecture.mdx">Architecture</a> ·
   <a href="./apps/docs/api/overview.mdx">API</a> ·
   <a href="https://memongo.rom-88f.workers.dev">Live Site</a> ·
@@ -23,7 +24,10 @@
   <a href="https://www.npmjs.com/package/@memongo/tools"><img alt="@memongo/tools npm version" src="https://img.shields.io/npm/v/%40memongo%2Ftools?label=%40memongo%2Ftools"></a>
 </p>
 
-Memongo gives AI systems durable memory on top of MongoDB. It stores conversations, facts, procedures, knowledge-base chunks, episodes, and graph relationships in one MongoDB-backed memory engine, then retrieves context with vector search, full-text search, and hybrid ranking.
+Memongo gives AI systems durable Company Brain memory on top of MongoDB. It
+stores conversations, facts, procedures, knowledge-base chunks, episodes, and
+graph relationships in one MongoDB-backed memory engine, then retrieves context
+with vector search, full-text search, and hybrid ranking.
 
 The public repo is intentionally focused: a runnable API, MCP server, TypeScript client, AI SDK tools, web console, docs, Docker MongoDB setup, and release checks.
 
@@ -97,6 +101,20 @@ For a guided setup, see [Quickstart](apps/docs/quickstart.mdx).
 | Client SDK | `packages/client` | TypeScript HTTP client |
 | AI tools | `packages/tools` | Vercel AI SDK tool helpers |
 | Published barrel | `packages/memongo-memory` | `@memongo/memory` convenience package |
+
+## Memory Framework
+
+Memongo's framework contract is:
+
+- Memory taxonomy: episodic events, semantic facts, procedural playbooks,
+  profile preferences, workspace knowledge, and provenance.
+- Core operations: recall, context bundles, remember, update, forget, feedback,
+  and trace.
+- Scope model: `session`, `user`, `agent`, `workspace`, `tenant`, and `global`.
+- Safety model: read by default; write only on explicit user, app, operator,
+  test, or import intent.
+
+See [Memory Framework](apps/docs/concepts/framework.mdx), [Memory Taxonomy](apps/docs/concepts/memory-taxonomy.mdx), and [Company Brain Guide](apps/docs/guides/company-brain.mdx).
 
 ## How It Works
 

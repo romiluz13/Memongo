@@ -1,0 +1,94 @@
+---
+title: "Company Brain Guide"
+description: "Use Memongo as shared memory for AI apps, agents, and teams."
+icon: "building-2"
+---
+
+Memongo can serve as a Company Brain: a durable memory layer for AI systems that
+need shared context across people, apps, agents, and workflows.
+
+This guide keeps the product broad. Coding agents are a useful adapter path, but
+the framework also fits support, sales, research, product operations, customer
+success, and internal copilots.
+
+## Start with a memory boundary
+
+Choose what the Company Brain is allowed to remember before wiring clients.
+
+| Boundary | Example |
+|---|---|
+| Customer or tenant | Account preferences, support history, implementation notes |
+| Workspace | Repository, product area, department, or app workspace |
+| User | Stable preferences and recurring context |
+| Agent | A named agent's own operating notes |
+| Session | One ticket, chat, or workflow run |
+
+Avoid sending all activity into global memory. Most durable context belongs in
+`workspace`, `tenant`, `user`, or `session` scopes.
+
+## Recommended rollout
+
+1. Start with read-only recall from the API, SDK, or MCP server.
+2. Add context bundles to the app or agent prompt path.
+3. Add explicit "remember this" workflows.
+4. Add correction and forget workflows.
+5. Add evaluation gates for recall quality and provenance.
+6. Consider installer tooling or background consolidation only after the first
+   five steps are stable.
+
+## Example app flow
+
+```text
+User asks a question
+  -> App calls /v1/context-bundle with query, scope, and token budget
+  -> App places the bundle in the prompt
+  -> Model answers with retrieved evidence
+  -> App writes memory only if the workflow explicitly asks to remember
+```
+
+## Example agent flow
+
+```text
+Agent receives a task
+  -> Agent searches Memongo or builds a context bundle
+  -> Agent uses retrieved context while working
+  -> Agent asks before storing new durable memory
+  -> User confirms, corrects, or rejects the memory write
+```
+
+## What to store
+
+| Store | Do not store |
+|---|---|
+| Decisions with source context | Secrets, credentials, or private keys |
+| Stable preferences | Every transient chat turn |
+| Workflow procedures | Unsupported claims or guesses |
+| Customer/account facts | Personal data without a clear reason |
+| Handoff summaries | Generated text with no provenance |
+| Corrections and invalidations | Contradictory duplicates |
+
+## Evaluation gates
+
+Keep these gates separate:
+
+| Gate | What it proves |
+|---|---|
+| Retrieval quality | The right memory appears in results |
+| Context-bundle quality | The prompt receives useful, compact context |
+| Provenance | The system can show why a memory was used |
+| Write safety | Integrations do not write without explicit intent |
+| Scope isolation | One tenant, workspace, user, or session cannot leak into another |
+| Claim discipline | Public claims match the evidence lane that produced them |
+
+## Adoption paths
+
+| Path | Surface |
+|---|---|
+| Product app | HTTP API or TypeScript client |
+| AI SDK app | `@memongo/tools` explicit tools for read-first use; middleware only when auto event persistence is intended |
+| Coding agent | MCP server plus client-specific instructions |
+| Operator review | Web console and lifecycle APIs |
+| Data import | Explicit import or benchmark scripts |
+
+For client templates, see [Adapter Contract](/guides/adapters). For the safety
+rule, see [Writeback Policy](/guides/writeback-policy).

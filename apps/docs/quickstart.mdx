@@ -102,6 +102,10 @@ curl -s http://127.0.0.1:3847/v1/search \
 
 ## Optional surfaces
 
+Memongo can be used directly by apps or exposed to agents as a Company Brain.
+Start read-first, then add explicit write workflows once scopes and safety are
+clear.
+
 Operator console:
 
 ```bash
@@ -113,6 +117,8 @@ MCP server:
 
 ```bash
 cd apps/mcp
+MEMONGO_API_URL=http://127.0.0.1:3847 \
+MEMONGO_API_KEY=local-dev-secret \
 bun run start
 ```
 
@@ -137,7 +143,13 @@ bun run start
   <Card title="Memory Concepts" icon="brain" href="/concepts/memory">
     Learn how Memongo stores and retrieves memory.
   </Card>
+  <Card title="Memory Framework" icon="network" href="/concepts/framework">
+    Understand the Company Brain contract.
+  </Card>
   <Card title="Architecture" icon="sitemap" href="/concepts/architecture">
     Understand packages, data flow, and deployment.
+  </Card>
+  <Card title="Adapter Contract" icon="plug" href="/guides/adapters">
+    Connect MCP clients and AI apps safely.
   </Card>
 </CardGroup>

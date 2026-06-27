@@ -6,6 +6,10 @@ icon: "unplug"
 
 The Memongo API server runs at `http://127.0.0.1:3847` by default (via `apps/api`).
 
+The API is the app-facing surface of the Memongo Company Brain framework. It can
+be used directly from services or through the TypeScript client, AI SDK tools,
+and MCP server.
+
 ## Endpoints
 
 | Method | Path | Description |
@@ -22,8 +26,20 @@ The Memongo API server runs at `http://127.0.0.1:3847` by default (via `apps/api
 | POST | `/v1/write-structured` | Write a structured memory entry |
 | POST | `/v1/write-procedure` | Write a procedure memory |
 | POST | `/v1/search` | Search memory (hybrid vector + full-text) |
+| POST | `/v1/search-detailed` | Search with passes, metadata, and evidence |
 | POST | `/v1/search-kb` | Search the knowledge base |
 | POST | `/v1/profile` | Synthesize a user profile from memory |
+| POST | `/v1/context-bundle` | Build a prompt-ready context bundle |
+| POST | `/v1/memory/feedback` | Confirm, correct, or reject memory relevance |
+
+### Lifecycle operations
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/v1/lifecycle/get` | Get a structured or procedure memory by stable handle |
+| POST | `/v1/lifecycle/update` | Update a structured or procedure memory by stable handle |
+| POST | `/v1/lifecycle/delete` | Delete or invalidate a structured or procedure memory by stable handle |
+| POST | `/v1/lifecycle/history` | Inspect lifecycle history by stable handle |
 
 ### System operations
 

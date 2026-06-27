@@ -1,0 +1,168 @@
+---
+title: "Adapter Contract"
+description: "How apps, agents, and MCP clients should connect to the Memongo framework."
+icon: "plug"
+---
+
+Memongo adapters should be thin. They translate a client surface into the
+existing framework operations without changing API behavior or inventing client
+specific memory semantics.
+
+## Adapter contract
+
+| Adapter responsibility | Contract |
+|---|---|
+| Read | Search memory, search KB, or build a context bundle before a task when durable context is useful |
+| Write | Persist only on explicit user, app, operator, test, or import intent |
+| Scope | Use existing `session`, `user`, `agent`, `workspace`, `tenant`, or `global` scopes |
+| Provenance | Pass source context, session IDs, and metadata when writing |
+| Correction | Prefer lifecycle update, delete, or feedback over duplicate contradictory memory |
+| Secrets | Never store API keys, tokens, passwords, or private connection strings |
+
+For AI SDK apps, read-first means direct TypeScript client calls or explicit
+`createMemongoTools` tools. The `withMemongo` and `createOpenAIMiddleware`
+helpers persist conversation events by design, so use them only when automatic
+conversation persistence is an explicit app workflow.
+
+## MCP server command
+
+The MCP server wraps the HTTP API. Use the same command values in any
+MCP-compatible client that supports stdio servers.
+
+```bash
+cd apps/mcp
+MEMONGO_API_URL=http://127.0.0.1:3847 \
+MEMONGO_API_KEY=local-dev-secret \
+bun run start
+```
+
+For client config files, use an absolute `cwd` pointing at `apps/mcp`, pass
+`bun run start` as the command, and set `MEMONGO_API_URL` plus
+`MEMONGO_API_KEY` in that client's supported environment field.
+
+## Canonical MCP tools
+
+| Use case | MCP tools |
+|---|---|
+| Recall memory | `memongo_search`, `memongo_search_detailed`, `memongo_search_kb` |
+| Build prompt context | `memongo_build_context_bundle` |
+| Read evidence | `memongo_read_file`, trace and admin trace tools |
+| Remember events | `memongo_write_event`, `memongo_add` |
+| Remember facts and playbooks | `memongo_write_structured`, `memongo_write_procedure` |
+| Correct memory | Lifecycle update/delete/history tools, `memongo_memory_feedback` |
+| Check health | `memongo_status`, `memongo_status_detailed`, probes, stats |
+
+## Codex template
+
+Codex uses `AGENTS.md` for durable repository guidance and `config.toml` for MCP
+servers. Project-scoped MCP config belongs in `.codex/config.toml` for trusted
+projects, or in user config for personal setup.
+
+```toml
+[mcp_servers.memongo]
+command = "bun"
+args = ["run", "start"]
+cwd = "/absolute/path/to/memongo/apps/mcp"
+env = { MEMONGO_API_URL = "http://127.0.0.1:3847", MEMONGO_API_KEY = "local-dev-secret" }
+default_tools_approval_mode = "prompt"
+```
+
+Add this to `AGENTS.md` or another durable instruction file:
+
+```md
+Use Memongo as the read-first Company Brain for durable project and workflow
+context. Search or build a context bundle before answering when remembered
+company, customer, user, project, or workflow context would help. Do not write
+memory automatically. Write only when the user explicitly asks to remember,
+update, or forget something.
+```
+
+## Claude Code template
+
+Claude Code uses `CLAUDE.md` for project memory and has its own MCP setup. Use
+Claude Code's MCP flow with the command and environment values above.
+
+Add this to `CLAUDE.md`:
+
+```md
+Use Memongo as a read-first Company Brain. Search Memongo before answering when
+durable team, customer, project, user, or workflow context would help. Do not
+write memory automatically. Write only on explicit remember, update, or forget
+intent, and include the narrowest useful scope.
+```
+
+## Cursor template
+
+Cursor supports Project, Team, and User Rules plus MCP servers. Add the same
+read-first policy to the rule scope that matches your team.
+
+```md
+When durable context may matter, use the Memongo MCP server to search memory or
+build a context bundle before answering. Treat Memongo as a Company Brain, not
+as a coding-only memory store. Do not persist memory unless the user or app
+explicitly asks to remember, update, or forget something.
+```
+
+## Windsurf template
+
+Windsurf separates memories and rules. Put durable shared behavior in rules, and
+wire Memongo through Windsurf's MCP setup when the client needs live tools.
+
+```md
+Use Memongo for durable Company Brain recall across apps, agents, and team
+workflows. Prefer read operations. Persist memory only when the user or workflow
+explicitly asks for a memory write, update, or deletion.
+```
+
+## Cline template
+
+Cline supports project rules and a Memory Bank methodology. Keep Memongo as the
+live memory backend and use local rule files only to tell Cline when to read or
+write.
+
+```md
+Before work that depends on durable company, customer, user, project, or
+workflow context, use Memongo recall or a context bundle. Do not mirror every
+turn into Memongo. Write only explicit memories, corrections, procedures, or
+forget requests.
+```
+
+## Serena template
+
+Serena is an MCP toolkit. Wire Memongo through the MCP client that hosts Serena
+or through the same client that uses Serena.
+
+```md
+Memongo is the durable Company Brain. Serena may provide code and project
+tooling, but durable memory reads and writes should go through Memongo. Read
+first, write only on explicit intent, and keep scopes narrow.
+```
+
+## Continue template
+
+Continue supports rules and MCP in Agent mode. Put the policy in a rule and use
+Continue's MCP configuration for the server command.
+
+```md
+Use Memongo through MCP when an Agent-mode task needs durable Company Brain
+context. Search or build a context bundle first. Do not write memory unless the
+user or workflow explicitly asks to remember, update, or forget something.
+```
+
+## Source anchors
+
+These templates were checked on June 27, 2026 against client-owned docs for
+instruction and MCP surfaces:
+
+| Client | Source docs |
+|---|---|
+| Codex | [AGENTS.md](https://developers.openai.com/codex/guides/agents-md), [MCP](https://developers.openai.com/codex/mcp), [memories](https://developers.openai.com/codex/memories), [customization](https://developers.openai.com/codex/concepts/customization) |
+| Claude Code | [memory](https://code.claude.com/docs/en/memory), [MCP](https://code.claude.com/docs/en/mcp), [features overview](https://code.claude.com/docs/en/features-overview) |
+| Cursor | [rules](https://cursor.com/docs/rules), [MCP](https://cursor.com/docs/context/model-context-protocol) |
+| Windsurf | [memories](https://docs.windsurf.com/windsurf/cascade/memories), [rules](https://docs.windsurf.com/windsurf/cascade/rules), [MCP](https://docs.windsurf.com/mcp) |
+| Cline | [Cline Rules](https://docs.cline.bot/customization/cline-rules), [Memory Bank](https://docs.cline.bot/best-practices/memory-bank), [MCP overview](https://docs.cline.bot/mcp/mcp-overview) |
+| Serena | [clients](https://oraios.github.io/serena/02-usage/030_clients.html), [configuration](https://oraios.github.io/serena/02-usage/050_configuration.html) |
+| Continue | [rules](https://docs.continue.dev/customize/deep-dives/rules), [MCP](https://docs.continue.dev/customize/deep-dives/mcp) |
+
+Do not publish a client-specific installer until the exact current config shape
+has been tested on that client.

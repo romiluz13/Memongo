@@ -1,18 +1,21 @@
 ---
 title: Memory
-description: How Memongo stores, indexes, and retrieves AI agent memory using MongoDB.
+description: How Memongo stores, indexes, and retrieves Company Brain memory using MongoDB.
 icon: "brain"
 ---
 
-Memongo treats memory as a first-class MongoDB data model. Every memory is a document stored in MongoDB with automated vector embeddings, full-text indexing, and graph relationships.
+Memongo treats memory as a first-class MongoDB data model for AI apps, agents,
+and team workflows. Memory documents can participate in automated vector
+embeddings, full-text indexing, hybrid retrieval, lifecycle updates, and graph
+relationships.
 
 ## Memory types
 
 | Type | Description | Use case |
 |------|-------------|----------|
-| **Episodes** | Conversation turns and events | Chat history, interaction logs |
-| **Structured** | Key-value facts with metadata | User preferences, settings |
-| **Procedures** | Step-by-step instructions | Workflows, playbooks |
+| **Episodes** | Conversation turns and workflow events | Chat history, task history, interaction logs |
+| **Structured** | Key-value facts with metadata | Preferences, decisions, current state |
+| **Procedures** | Step-by-step instructions | Workflows, runbooks, playbooks |
 | **Graph entities** | Nodes and edges in a knowledge graph | Relationships, concepts |
 | **Knowledge base** | Ingested documents and files | Reference material, docs |
 
@@ -26,6 +29,8 @@ score-normalized lane when that row is explicitly selected and measured:
 2. **Full-text search** -- keyword matching via MongoDB Atlas Search / mongot
 
 This hybrid approach finds results that are both semantically relevant and keyword-accurate.
+
+For the full framework taxonomy, see [Memory Taxonomy](/concepts/memory-taxonomy).
 
 ## Automated embeddings
 

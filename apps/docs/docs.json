@@ -37,13 +37,26 @@
 							},
 							{
 								"group": "Concepts",
-								"pages": ["concepts/memory", "concepts/architecture"]
+								"pages": [
+									"concepts/framework",
+									"concepts/memory-taxonomy",
+									"concepts/memory",
+									"concepts/architecture"
+								]
 							}
 						]
 					},
 					{
 						"anchor": "Guides",
 						"pages": [
+							{
+								"group": "Company Brain",
+								"pages": [
+									"guides/company-brain",
+									"guides/writeback-policy",
+									"guides/adapters"
+								]
+							},
 							{
 								"group": "MCP",
 								"pages": ["guides/cli-memory"]

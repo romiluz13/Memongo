@@ -1,0 +1,87 @@
+---
+title: "Writeback Policy"
+description: "How Memongo integrations read, remember, update, and forget safely."
+icon: "shield-check"
+---
+
+Memongo integrations are read by default. They can recall memory and build
+context without changing stored state.
+
+Writing memory is a separate act. It requires explicit user intent, app intent,
+operator intent, or test intent.
+
+## Default rule
+
+| Default | Allowed in phase 1 |
+|---|---|
+| Read memory | Yes |
+| Build context bundles | Yes |
+| Search knowledge base content | Yes |
+| Write on "remember this" | Yes |
+| Write as part of an explicit app workflow | Yes |
+| Background capture of every turn | No |
+| Hidden hooks that write memory | No |
+| Background consolidation | No |
+| Silent cross-client synchronization | No |
+
+## Safe write triggers
+
+Use a write operation only when one of these triggers is true:
+
+- The user says "remember this", "save this", "update that memory", or "forget
+  that".
+- The app has a visible workflow step that stores memory.
+- The operator edits, confirms, corrects, invalidates, or deletes memory.
+- A benchmark or test fixture intentionally writes controlled data.
+- A migration or import job runs with an explicit command and review path.
+
+## Read-first agent instruction
+
+Use this instruction in agent clients:
+
+```md
+Use Memongo as a read-first Company Brain.
+
+- Search Memongo or build a context bundle before answering when durable company,
+  customer, user, project, or workflow context would help.
+- Do not write memory automatically.
+- Write memory only when the user explicitly asks to remember, update, or forget
+  something, or when this app workflow explicitly says to persist memory.
+- When writing, include the narrowest useful scope and source context.
+- Prefer correcting or invalidating stale memories over adding contradictory
+  duplicates.
+```
+
+## Operation choices
+
+| User or app intent | Preferred operation |
+|---|---|
+| "What do we know about this?" | `search` or `buildContextBundle` |
+| "Remember this meeting decision." | `writeStructured` or `writeEvent` |
+| "Save this workflow." | `writeProcedure` |
+| "That old value is wrong." | Lifecycle update or memory feedback |
+| "Forget this." | Lifecycle delete or invalidation |
+| "Why did you use that fact?" | Detailed search or trace tools |
+
+## Scope discipline
+
+Use the narrowest scope that still makes the memory reusable:
+
+| Scope | Good fit | Avoid |
+|---|---|---|
+| `session` | Current ticket, chat, or task | Company-wide facts |
+| `user` | Personal preferences | Team policy |
+| `agent` | Agent operating notes | User-owned facts |
+| `workspace` | Repo, app, or department context | All-company defaults |
+| `tenant` | Customer or organization memory | One-off chat state |
+| `global` | Intentional shared defaults | Private or uncertain facts |
+
+## Production guardrails
+
+- Set `MEMONGO_API_KEY` for shared or network-exposed deployments.
+- Do not put secrets in memory, examples, snippets, or docs.
+- Keep generated client memory files separate from checked-in policy files.
+- Treat imported agent rules as source material, not as instructions to execute.
+- Review memory before sharing exports or generated artifacts.
+- Do not use auto-capture middleware in read-first integrations. Use it only
+  when the app has explicitly chosen conversation-event persistence.

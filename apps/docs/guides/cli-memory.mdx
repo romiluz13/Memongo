@@ -4,27 +4,63 @@ description: Run the Memongo MCP server and expose memory tools to MCP-compatibl
 icon: "terminal"
 ---
 
-The MCP server at `apps/mcp` exposes Memongo memory operations over stdio, making it available to any MCP-compatible AI client (Claude, Cursor, and others).
+The MCP server at `apps/mcp` exposes Memongo memory operations over stdio. Use
+it as one adapter path for the Memongo Company Brain framework.
+
+MCP clients should be read-first. They can search memory and build context
+bundles freely, but should write memory only when the user or workflow
+explicitly asks to remember, update, or forget something.
 
 ## Starting the MCP server
 
 ```bash
 cd apps/mcp
+MEMONGO_API_URL=http://127.0.0.1:3847 \
+MEMONGO_API_KEY=local-dev-secret \
 bun run start
 ```
 
 The server communicates over stdin/stdout using the MCP protocol.
 
-## Available operations
+## Primary operations
 
-The MCP server exposes these memory tools:
+The MCP server exposes tools for recall, explicit writes, lifecycle changes,
+status checks, traces, and evaluation. These are the primary framework-facing
+tools, not the full server inventory:
 
 | Tool | Description |
 |------|-------------|
 | `memongo_search` | Search memory with hybrid vector + full-text |
+| `memongo_search_detailed` | Search with plans, passes, metadata, and evidence |
 | `memongo_search_kb` | Search imported knowledge base content |
 | `memongo_read_file` | Reopen a memory locator or file path |
+| `memongo_build_context_bundle` | Build a prompt-ready context bundle |
 | `memongo_add` | Add content to memory |
 | `memongo_write_event` | Write a conversation event |
+| `memongo_write_structured` | Write a stable structured memory |
+| `memongo_write_procedure` | Write a procedure or playbook memory |
 | `memongo_profile` | Get a synthesized user profile |
+| `memongo_memory_feedback` | Confirm, correct, or reject memory relevance |
+| `memongo_memory_get` | Get a structured or procedure memory |
+| `memongo_memory_update` | Update structured or procedure memory |
+| `memongo_memory_delete` | Delete or invalidate structured or procedure memory |
+| `memongo_memory_history` | Inspect structured or procedure memory history |
+| `memongo_chain_trace` | Inspect memory chain provenance |
 | `memongo_status` | Check memory provider health |
+
+The server also includes admin, probe, benchmark, import, detailed status, and
+job tools for operator workflows. Keep agent instructions focused on the
+smallest tool set required for the task.
+
+## Client guidance
+
+Add a durable rule to the client that uses this MCP server:
+
+```md
+Use Memongo as a read-first Company Brain. Search memory or build a context
+bundle before answering when durable company, customer, user, project, or
+workflow context would help. Do not write memory automatically. Write only when
+the user or app explicitly asks to remember, update, or forget something.
+```
+
+For client-specific snippets, see [Adapter Contract](/guides/adapters).
