@@ -1284,7 +1284,49 @@ describe("createApp", () => {
 			includeProfile: undefined,
 			timeRange: undefined,
 			mode: undefined,
+			format: undefined,
 		})
+	})
+
+	it("forwards TOON format for context bundle requests", async () => {
+		const res = await createApp().request("/v1/context-bundle", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				agentId: "agent-42",
+				query: "Phoenix handoff",
+				format: "toon",
+			}),
+		})
+
+		expect(res.status).toBe(200)
+		expect(bridgeMocks.memongoBridgeBuildContextBundle).toHaveBeenCalledWith(
+			expect.objectContaining({
+				agentId: "agent-42",
+				query: "Phoenix handoff",
+				format: "toon",
+			}),
+		)
+	})
+
+	it("rejects invalid context bundle format values", async () => {
+		const res = await createApp().request("/v1/context-bundle", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				agentId: "agent-42",
+				format: "yaml",
+			}),
+		})
+
+		expect(res.status).toBe(400)
+		await expect(res.json()).resolves.toEqual({
+			error: {
+				code: "VALIDATION_ERROR",
+				message: "format must be markdown|json|toon",
+			},
+		})
+		expect(bridgeMocks.memongoBridgeBuildContextBundle).not.toHaveBeenCalled()
 	})
 
 	it("forwards wake-up mode for context bundle requests", async () => {
@@ -1315,6 +1357,7 @@ describe("createApp", () => {
 			includeProfile: undefined,
 			timeRange: undefined,
 			mode: "wake-up",
+			format: undefined,
 		})
 	})
 

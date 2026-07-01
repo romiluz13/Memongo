@@ -331,6 +331,78 @@ describe("mongodb-context-bundle", () => {
 		])
 	})
 
+	it("keeps markdown as the default context bundle rendering", async () => {
+		vi.mocked(episodesCollection).mockReturnValue(
+			createFindCollection({ next: null }),
+		)
+		vi.mocked(eventsCollection).mockReturnValue(
+			createFindCollection({ docs: [] }),
+		)
+
+		const bundle = await buildContextBundle({
+			db: {} as Db,
+			prefix: PREFIX,
+			agentId: AGENT_ID,
+			scope: "agent",
+			scopeRef: "agent:agent-1",
+			request: {},
+			search: vi.fn(),
+		})
+
+		expect(bundle.rendered).toContain("## Active Slate")
+		expect(bundle.rendered).not.toContain("context_bundle")
+		expect(bundle.rendered).not.toContain("items[")
+	})
+
+	it("renders TOON only when explicitly requested", async () => {
+		vi.mocked(episodesCollection).mockReturnValue(
+			createFindCollection({ next: null }),
+		)
+		vi.mocked(eventsCollection).mockReturnValue(
+			createFindCollection({ docs: [] }),
+		)
+
+		const bundle = await buildContextBundle({
+			db: {} as Db,
+			prefix: PREFIX,
+			agentId: AGENT_ID,
+			scope: "agent",
+			scopeRef: "agent:agent-1",
+			request: {
+				format: "toon",
+			},
+			search: vi.fn(),
+		})
+
+		expect(bundle.rendered).toContain("context_bundle")
+		expect(bundle.rendered).toContain("items[2]{")
+		expect(bundle.rendered).not.toContain("## Active Slate")
+	})
+
+	it("falls back to markdown for unknown internal format values", async () => {
+		vi.mocked(episodesCollection).mockReturnValue(
+			createFindCollection({ next: null }),
+		)
+		vi.mocked(eventsCollection).mockReturnValue(
+			createFindCollection({ docs: [] }),
+		)
+
+		const bundle = await buildContextBundle({
+			db: {} as Db,
+			prefix: PREFIX,
+			agentId: AGENT_ID,
+			scope: "agent",
+			scopeRef: "agent:agent-1",
+			request: {
+				format: "yaml",
+			} as never,
+			search: vi.fn(),
+		})
+
+		expect(bundle.rendered).toContain("## Active Slate")
+		expect(bundle.rendered).not.toContain("context_bundle")
+	})
+
 	it("wake-up mode limits token budget to 250 and includes profile", async () => {
 		vi.mocked(hydrateActiveSlate).mockResolvedValue({
 			agentId: AGENT_ID,
@@ -446,6 +518,47 @@ describe("mongodb-context-bundle", () => {
 		)
 		// buildDiscoveryProjection should NOT have been called
 		expect(vi.mocked(buildDiscoveryProjection)).not.toHaveBeenCalled()
+	})
+
+	it("renders TOON only when requested", async () => {
+		vi.mocked(episodesCollection).mockReturnValue(
+			createFindCollection({ next: null }),
+		)
+		vi.mocked(eventsCollection).mockReturnValue(
+			createFindCollection({ docs: [] }),
+		)
+
+		const baseParams = {
+			db: {} as Db,
+			prefix: PREFIX,
+			agentId: AGENT_ID,
+			scope: "agent" as const,
+			scopeRef: "agent:agent-1",
+			request: {
+				query: "Phoenix handoff",
+			},
+			search: vi.fn().mockResolvedValue({
+				results: [],
+				pathsExecuted: [],
+			}),
+		}
+
+		const markdownBundle = await buildContextBundle(baseParams)
+		const toonBundle = await buildContextBundle({
+			...baseParams,
+			request: {
+				...baseParams.request,
+				format: "toon",
+			},
+		})
+
+		expect(markdownBundle.rendered).toContain("## Active Slate")
+		expect(markdownBundle.rendered).not.toContain("context_bundle")
+		expect(toonBundle.rendered).toContain("context_bundle")
+		expect(toonBundle.rendered).toContain(
+			"sections[1]{kind,title,summary,items,truncated,partial}",
+		)
+		expect(toonBundle.sections).toEqual(markdownBundle.sections)
 	})
 
 	it("splits query evidence into explicit and derived sections (3.2 multi-level)", async () => {

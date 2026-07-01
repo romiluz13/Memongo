@@ -4,7 +4,7 @@ import type { MemongoClient } from "@memongo/client"
  * (same integration role as @supermemory/tools).
  */
 import { tool, type Tool } from "ai"
-import { z } from "zod"
+import * as z from "zod"
 
 /* ------------------------------------------------------------------ */
 /*  SDK middleware re-exports                                          */
@@ -93,6 +93,7 @@ const contextBundleSchema = z.object({
 		})
 		.optional(),
 	mode: z.enum(["full", "wake-up"]).optional(),
+	format: z.enum(["markdown", "json", "toon"]).optional(),
 })
 
 const recallConversationSchema = z.object({
