@@ -1,0 +1,243 @@
+{
+  "generatedAt": "2026-07-04T00:00:00.000Z",
+  "source": {
+    "repo": "https://github.com/toon-format/toon.git",
+    "commit": "a19a1179193451fad40f11ef88de5f363ea3684a",
+    "datasets": "benchmarks/src/datasets.ts TOKEN_EFFICIENCY_DATASETS"
+  },
+  "tokenizer": {
+    "package": "gpt-tokenizer",
+    "model": "gpt-4o",
+    "encoding": "o200k_base"
+  },
+  "selectionPolicy": "Auto samples up to 12 rows from the largest top-level object array. It selects TOON only for at least 5 mostly uniform rows with no nested object cells; otherwise compact JSON.",
+  "results": [
+    {
+      "datasetName": "tabular",
+      "description": "Uniform employee records",
+      "structureClass": "uniform",
+      "tabularEligibility": 100,
+      "formatName": "json-compact",
+      "tokenCount": 79046,
+      "tokenDeltaVsCompactJson": 0,
+      "tokenSavingsPctVsCompactJson": 0,
+      "renderMs": 0.9073,
+      "sourceSha256": "4627b4137de7f8cba462320fb3189a96fe5e684307fb38da19b107e55fa8f178"
+    },
+    {
+      "datasetName": "tabular",
+      "description": "Uniform employee records",
+      "structureClass": "uniform",
+      "tabularEligibility": 100,
+      "formatName": "toon",
+      "tokenCount": 49966,
+      "tokenDeltaVsCompactJson": -29080,
+      "tokenSavingsPctVsCompactJson": 36.788705310831666,
+      "renderMs": 15.5396,
+      "sourceSha256": "4627b4137de7f8cba462320fb3189a96fe5e684307fb38da19b107e55fa8f178"
+    },
+    {
+      "datasetName": "tabular",
+      "description": "Uniform employee records",
+      "structureClass": "uniform",
+      "tabularEligibility": 100,
+      "formatName": "auto",
+      "selectedFormat": "toon",
+      "tokenCount": 49966,
+      "tokenDeltaVsCompactJson": -29080,
+      "tokenSavingsPctVsCompactJson": 36.788705310831666,
+      "renderMs": 15.5396,
+      "sourceSha256": "4627b4137de7f8cba462320fb3189a96fe5e684307fb38da19b107e55fa8f178"
+    },
+    {
+      "datasetName": "nested",
+      "description": "E-commerce orders with nested structures",
+      "structureClass": "nested",
+      "tabularEligibility": 33,
+      "formatName": "json-compact",
+      "tokenCount": 69528,
+      "tokenDeltaVsCompactJson": 0,
+      "tokenSavingsPctVsCompactJson": 0,
+      "renderMs": 0.5654,
+      "sourceSha256": "9e34b3ff5ee78f25f22c6e5f6ba4da6cfc7fb3d5b1248d1959585adaa76d55bf"
+    },
+    {
+      "datasetName": "nested",
+      "description": "E-commerce orders with nested structures",
+      "structureClass": "nested",
+      "tabularEligibility": 33,
+      "formatName": "toon",
+      "tokenCount": 73246,
+      "tokenDeltaVsCompactJson": 3718,
+      "tokenSavingsPctVsCompactJson": -5.347485904959153,
+      "renderMs": 30.5074,
+      "sourceSha256": "9e34b3ff5ee78f25f22c6e5f6ba4da6cfc7fb3d5b1248d1959585adaa76d55bf"
+    },
+    {
+      "datasetName": "nested",
+      "description": "E-commerce orders with nested structures",
+      "structureClass": "nested",
+      "tabularEligibility": 33,
+      "formatName": "auto",
+      "selectedFormat": "json-compact",
+      "tokenCount": 69528,
+      "tokenDeltaVsCompactJson": 0,
+      "tokenSavingsPctVsCompactJson": 0,
+      "renderMs": 0.5654,
+      "sourceSha256": "9e34b3ff5ee78f25f22c6e5f6ba4da6cfc7fb3d5b1248d1959585adaa76d55bf"
+    },
+    {
+      "datasetName": "analytics",
+      "description": "Time-series analytics data",
+      "structureClass": "uniform",
+      "tabularEligibility": 100,
+      "formatName": "json-compact",
+      "tokenCount": 14220,
+      "tokenDeltaVsCompactJson": 0,
+      "tokenSavingsPctVsCompactJson": 0,
+      "renderMs": 0.1195,
+      "sourceSha256": "c99db91f5948434c53de74a471860ab5c63b5c1e61051b21725d5360c2bd7cb9"
+    },
+    {
+      "datasetName": "analytics",
+      "description": "Time-series analytics data",
+      "structureClass": "uniform",
+      "tabularEligibility": 100,
+      "formatName": "toon",
+      "tokenCount": 9124,
+      "tokenDeltaVsCompactJson": -5096,
+      "tokenSavingsPctVsCompactJson": 35.836849507735586,
+      "renderMs": 1.4437,
+      "sourceSha256": "c99db91f5948434c53de74a471860ab5c63b5c1e61051b21725d5360c2bd7cb9"
+    },
+    {
+      "datasetName": "analytics",
+      "description": "Time-series analytics data",
+      "structureClass": "uniform",
+      "tabularEligibility": 100,
+      "formatName": "auto",
+      "selectedFormat": "toon",
+      "tokenCount": 9124,
+      "tokenDeltaVsCompactJson": -5096,
+      "tokenSavingsPctVsCompactJson": 35.836849507735586,
+      "renderMs": 1.4437,
+      "sourceSha256": "c99db91f5948434c53de74a471860ab5c63b5c1e61051b21725d5360c2bd7cb9"
+    },
+    {
+      "datasetName": "github",
+      "description": "Top 100 GitHub repositories",
+      "structureClass": "uniform",
+      "tabularEligibility": 100,
+      "formatName": "json-compact",
+      "tokenCount": 11454,
+      "tokenDeltaVsCompactJson": 0,
+      "tokenSavingsPctVsCompactJson": 0,
+      "renderMs": 0.1015,
+      "sourceSha256": "d0ad1fc722dbf5382a2dd122dd783c56110a4ea42fa83d84f688279ee24898e9"
+    },
+    {
+      "datasetName": "github",
+      "description": "Top 100 GitHub repositories",
+      "structureClass": "uniform",
+      "tabularEligibility": 100,
+      "formatName": "toon",
+      "tokenCount": 8744,
+      "tokenDeltaVsCompactJson": -2710,
+      "tokenSavingsPctVsCompactJson": 23.65985681857866,
+      "renderMs": 1.2742,
+      "sourceSha256": "d0ad1fc722dbf5382a2dd122dd783c56110a4ea42fa83d84f688279ee24898e9"
+    },
+    {
+      "datasetName": "github",
+      "description": "Top 100 GitHub repositories",
+      "structureClass": "uniform",
+      "tabularEligibility": 100,
+      "formatName": "auto",
+      "selectedFormat": "toon",
+      "tokenCount": 8744,
+      "tokenDeltaVsCompactJson": -2710,
+      "tokenSavingsPctVsCompactJson": 23.65985681857866,
+      "renderMs": 1.2742,
+      "sourceSha256": "d0ad1fc722dbf5382a2dd122dd783c56110a4ea42fa83d84f688279ee24898e9"
+    },
+    {
+      "datasetName": "event-logs",
+      "description": "Semi-uniform event logs",
+      "structureClass": "semi-uniform",
+      "tabularEligibility": 50,
+      "formatName": "json-compact",
+      "tokenCount": 128480,
+      "tokenDeltaVsCompactJson": 0,
+      "tokenSavingsPctVsCompactJson": 0,
+      "renderMs": 1.1383,
+      "sourceSha256": "713267138900d2283fc3432e9f65d990b99c654017e8a1b21ceef975a195897b"
+    },
+    {
+      "datasetName": "event-logs",
+      "description": "Semi-uniform event logs",
+      "structureClass": "semi-uniform",
+      "tabularEligibility": 50,
+      "formatName": "toon",
+      "tokenCount": 154032,
+      "tokenDeltaVsCompactJson": 25552,
+      "tokenSavingsPctVsCompactJson": -19.8879202988792,
+      "renderMs": 37.4023,
+      "sourceSha256": "713267138900d2283fc3432e9f65d990b99c654017e8a1b21ceef975a195897b"
+    },
+    {
+      "datasetName": "event-logs",
+      "description": "Semi-uniform event logs",
+      "structureClass": "semi-uniform",
+      "tabularEligibility": 50,
+      "formatName": "auto",
+      "selectedFormat": "json-compact",
+      "tokenCount": 128480,
+      "tokenDeltaVsCompactJson": 0,
+      "tokenSavingsPctVsCompactJson": 0,
+      "renderMs": 1.1383,
+      "sourceSha256": "713267138900d2283fc3432e9f65d990b99c654017e8a1b21ceef975a195897b"
+    },
+    {
+      "datasetName": "nested-config",
+      "description": "Deeply nested configuration",
+      "structureClass": "deep",
+      "tabularEligibility": 0,
+      "formatName": "json-compact",
+      "tokenCount": 552,
+      "tokenDeltaVsCompactJson": 0,
+      "tokenSavingsPctVsCompactJson": 0,
+      "renderMs": 0.0038,
+      "sourceSha256": "8a2bd95cda002a1c6fa2a76b1e57440ce319154b9ed683d942ea5fa11bf1e60a"
+    },
+    {
+      "datasetName": "nested-config",
+      "description": "Deeply nested configuration",
+      "structureClass": "deep",
+      "tabularEligibility": 0,
+      "formatName": "toon",
+      "tokenCount": 618,
+      "tokenDeltaVsCompactJson": 66,
+      "tokenSavingsPctVsCompactJson": -11.956521739130435,
+      "renderMs": 0.1622,
+      "sourceSha256": "8a2bd95cda002a1c6fa2a76b1e57440ce319154b9ed683d942ea5fa11bf1e60a"
+    },
+    {
+      "datasetName": "nested-config",
+      "description": "Deeply nested configuration",
+      "structureClass": "deep",
+      "tabularEligibility": 0,
+      "formatName": "auto",
+      "selectedFormat": "json-compact",
+      "tokenCount": 552,
+      "tokenDeltaVsCompactJson": 0,
+      "tokenSavingsPctVsCompactJson": 0,
+      "renderMs": 0.0038,
+      "sourceSha256": "8a2bd95cda002a1c6fa2a76b1e57440ce319154b9ed683d942ea5fa11bf1e60a"
+    }
+  ],
+  "interpretation": [
+    "Public TOON token-efficiency datasets: raw TOON saved tokens on 3/6 datasets and lost tokens on 3/6 versus compact JSON.",
+    "Auto selected TOON on 3/6 datasets and compact JSON on 3/6; auto saved tokens on 3/6 datasets and lost tokens on 0/6.",
+    "Totals versus compact JSON: raw TOON +2.5%, auto +12.2%."
+  ]
+}

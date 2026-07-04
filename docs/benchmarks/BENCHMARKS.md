@@ -54,12 +54,17 @@ metadata, and cleanup proof are attached to a public GitHub Release.
 
 ## Token-Efficiency Diagnostics
 
-TOON context-format measurements are local token-efficiency diagnostics, not
-retrieval quality claims. Run `bun run benchmark:toon` to compare JSON pretty,
-JSON compact, markdown-style context, and TOON for deterministic fixtures. The
-command writes ignored local output under `artifacts/benchmarks/`. To save a
-reviewable docs sample explicitly, pass
-`--sample-out=docs/benchmarks/toon-token-benchmark.sample.json`. See
+TOON context-format measurements are token-efficiency diagnostics, not retrieval
+quality claims. Run `bun run benchmark:toon` to compare JSON pretty, JSON
+compact, markdown-style context, TOON, and auto for deterministic Memongo
+fixtures.
+
+Run `bun run benchmark:toon-public` to compare compact JSON, official TOON
+encoding, and Memongo's auto selector on the public `toon-format/toon`
+`TOKEN_EFFICIENCY_DATASETS`. These commands write ignored local output under
+`artifacts/benchmarks/`. To save reviewable docs samples explicitly, pass
+`--sample-out=docs/benchmarks/toon-token-benchmark.sample.json` or
+`--sample-out=docs/benchmarks/toon-public-token-benchmark.sample.json`. See
 [TOON context format](../toon-format.md).
 
 ## Mem0 Status

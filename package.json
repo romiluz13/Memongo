@@ -30,6 +30,7 @@
 		"memory-eval": "bun scripts/real-memory-eval.ts",
 		"compare-memory-eval": "bun scripts/compare-memory-eval.ts",
 		"benchmark:toon": "bun scripts/benchmark-toon.ts",
+		"benchmark:toon-public": "bun scripts/benchmark-toon-public.ts",
 		"agent-smoke": "bun scripts/real-agent-smoke.ts",
 		"capability-stress": "bun scripts/real-capability-stress.ts"
 	},
