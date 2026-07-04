@@ -19,6 +19,10 @@ const ITEM_COLUMNS = [
 	"metadata",
 ] as const
 
+const AUTO_SAMPLE_LIMIT = 12
+const AUTO_MIN_ITEMS = 5
+const AUTO_UNIFORM_RATIO = 0.75
+
 type ItemColumn = (typeof ITEM_COLUMNS)[number]
 
 function stableJson(value: unknown): string {
@@ -196,6 +200,46 @@ export function renderContextBundleJson(bundle: MemoryContextBundle): string {
 	})
 }
 
+function itemKeySet(item: MemoryContextBundleSectionItem): string {
+	return Object.entries(item)
+		.filter(([, value]) => value !== undefined)
+		.map(([key]) => key)
+		.sort()
+		.join("|")
+}
+
+function hasObjectCell(item: MemoryContextBundleSectionItem): boolean {
+	return Object.values(item).some(
+		(value) =>
+			value !== null &&
+			typeof value === "object" &&
+			!Array.isArray(value) &&
+			!(value instanceof Date),
+	)
+}
+
+export function selectContextBundleAutoFormat(
+	bundle: MemoryContextBundle,
+): "toon" | "json" {
+	const sample = bundle.sections
+		.flatMap((section) => section.items)
+		.slice(0, AUTO_SAMPLE_LIMIT)
+	if (sample.length < AUTO_MIN_ITEMS) {
+		return "json"
+	}
+	if (sample.some(hasObjectCell)) {
+		return "json"
+	}
+
+	const counts = new Map<string, number>()
+	for (const item of sample) {
+		const keySet = itemKeySet(item)
+		counts.set(keySet, (counts.get(keySet) ?? 0) + 1)
+	}
+	const mostCommon = Math.max(...counts.values())
+	return mostCommon / sample.length >= AUTO_UNIFORM_RATIO ? "toon" : "json"
+}
+
 export function renderContextBundle(
 	bundle: MemoryContextBundle,
 	format: MemoryContextFormat,
@@ -205,6 +249,11 @@ export function renderContextBundle(
 	}
 	if (format === "json") {
 		return renderContextBundleJson(bundle)
+	}
+	if (format === "auto") {
+		return selectContextBundleAutoFormat(bundle) === "toon"
+			? renderContextBundleToon(bundle)
+			: renderContextBundleJson(bundle)
 	}
 	return renderContextBundleMarkdown(bundle.sections)
 }

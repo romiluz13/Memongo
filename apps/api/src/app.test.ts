@@ -1288,14 +1288,14 @@ describe("createApp", () => {
 		})
 	})
 
-	it("forwards TOON format for context bundle requests", async () => {
+	it("forwards explicit format for context bundle requests", async () => {
 		const res = await createApp().request("/v1/context-bundle", {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify({
 				agentId: "agent-42",
 				query: "Phoenix handoff",
-				format: "toon",
+				format: "auto",
 			}),
 		})
 
@@ -1304,7 +1304,7 @@ describe("createApp", () => {
 			expect.objectContaining({
 				agentId: "agent-42",
 				query: "Phoenix handoff",
-				format: "toon",
+				format: "auto",
 			}),
 		)
 	})
@@ -1323,7 +1323,7 @@ describe("createApp", () => {
 		await expect(res.json()).resolves.toEqual({
 			error: {
 				code: "VALIDATION_ERROR",
-				message: "format must be markdown|json|toon",
+				message: "format must be markdown|json|toon|auto",
 			},
 		})
 		expect(bridgeMocks.memongoBridgeBuildContextBundle).not.toHaveBeenCalled()

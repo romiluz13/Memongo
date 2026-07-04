@@ -13,13 +13,15 @@ type BenchmarkFixture = {
 	payload: JsonValue
 }
 
-type FormatName = "json-pretty" | "json-compact" | "markdown" | "toon"
+type FormatName = "json-pretty" | "json-compact" | "markdown" | "toon" | "auto"
+type AutoSelectedFormat = "json-compact" | "toon"
 
 type RenderedFormat = {
 	format: FormatName
 	text: string
 	fieldPaths: Set<string>
 	renderMs: number
+	selectedFormat?: AutoSelectedFormat
 }
 
 type BenchmarkRow = {
@@ -32,6 +34,7 @@ type BenchmarkRow = {
 	renderMs: number
 	sourceSha256: string
 	fieldPathCount: number
+	selectedFormat?: AutoSelectedFormat
 }
 
 const TOKENIZER = {
@@ -42,6 +45,9 @@ const TOKENIZER = {
 
 const DEFAULT_JSON_OUT = "artifacts/benchmarks/toon-token-benchmark.json"
 const FIXED_NOW = "2026-06-27T00:00:00.000Z"
+const AUTO_SAMPLE_LIMIT = 12
+const AUTO_MIN_ITEMS = 5
+const AUTO_UNIFORM_RATIO = 0.75
 
 function stableValue(value: unknown): JsonValue {
 	if (value === undefined) {
@@ -239,6 +245,81 @@ function renderToon(payload: JsonValue): {
 	return { text: lines.join("\n"), fieldPaths: coverage }
 }
 
+function sampleObjectRows(
+	value: JsonValue,
+): Array<{ [key: string]: JsonValue }> {
+	const sample: Array<{ [key: string]: JsonValue }> = []
+	const queue: JsonValue[] = [value]
+	for (
+		let index = 0;
+		index < queue.length && sample.length < AUTO_SAMPLE_LIMIT;
+		index += 1
+	) {
+		const current = queue[index]
+		if (Array.isArray(current)) {
+			for (const entry of current) {
+				if (isPlainObject(entry) && sample.length < AUTO_SAMPLE_LIMIT) {
+					sample.push(entry)
+				}
+				if (Array.isArray(entry) || isPlainObject(entry)) {
+					queue.push(entry)
+				}
+			}
+			continue
+		}
+		if (isPlainObject(current)) {
+			for (const entry of Object.values(current)) {
+				if (Array.isArray(entry) || isPlainObject(entry)) {
+					queue.push(entry)
+				}
+			}
+		}
+	}
+	return sample
+}
+
+function selectAutoBenchmarkFormat(payload: JsonValue): AutoSelectedFormat {
+	const sample = sampleObjectRows(payload)
+	if (sample.length < AUTO_MIN_ITEMS) {
+		return "json-compact"
+	}
+	if (
+		sample.some((row) =>
+			Object.values(row).some((value) => isPlainObject(value)),
+		)
+	) {
+		return "json-compact"
+	}
+	const counts = new Map<string, number>()
+	for (const row of sample) {
+		const keySet = Object.keys(row).sort().join("|")
+		counts.set(keySet, (counts.get(keySet) ?? 0) + 1)
+	}
+	const mostCommon = Math.max(...counts.values())
+	return mostCommon / sample.length >= AUTO_UNIFORM_RATIO
+		? "toon"
+		: "json-compact"
+}
+
+function renderAuto(
+	payload: JsonValue,
+	allPaths: Set<string>,
+): {
+	text: string
+	fieldPaths: Set<string>
+	selectedFormat: AutoSelectedFormat
+} {
+	const selectedFormat = selectAutoBenchmarkFormat(payload)
+	if (selectedFormat === "toon") {
+		return { ...renderToon(payload), selectedFormat }
+	}
+	return {
+		text: stableJson(payload),
+		fieldPaths: new Set(allPaths),
+		selectedFormat,
+	}
+}
+
 function renderMarkdownValue(
 	key: string,
 	value: JsonValue,
@@ -304,7 +385,11 @@ function renderMarkdown(payload: JsonValue): {
 
 function measureRender(
 	format: FormatName,
-	render: () => { text: string; fieldPaths: Set<string> },
+	render: () => {
+		text: string
+		fieldPaths: Set<string>
+		selectedFormat?: AutoSelectedFormat
+	},
 ): RenderedFormat {
 	const timings: number[] = []
 	let result = render()
@@ -319,6 +404,7 @@ function measureRender(
 		text: result.text,
 		fieldPaths: result.fieldPaths,
 		renderMs: timings[Math.floor(timings.length / 2)] ?? 0,
+		selectedFormat: result.selectedFormat,
 	}
 }
 
@@ -336,6 +422,7 @@ function renderFormats(payload: JsonValue): RenderedFormat[] {
 		})),
 		measureRender("markdown", () => renderMarkdown(stable)),
 		measureRender("toon", () => renderToon(stable)),
+		measureRender("auto", () => renderAuto(stable, allPaths)),
 	]
 }
 
@@ -626,6 +713,7 @@ function benchmarkFixtures(fixtures: BenchmarkFixture[]): {
 				renderMs: Number(format.renderMs.toFixed(4)),
 				sourceSha256: sourceSha,
 				fieldPathCount: expectedFields.size,
+				selectedFormat: format.selectedFormat,
 			})
 		}
 		validations.push(
@@ -642,6 +730,7 @@ function deterministicTokenSignature(rows: BenchmarkRow[]): string {
 				byteSize: row.byteSize,
 				fixtureName: row.fixtureName,
 				formatName: row.formatName,
+				selectedFormat: row.selectedFormat,
 				sourceSha256: row.sourceSha256,
 				tokenCount: row.tokenCount,
 			})),
@@ -688,7 +777,9 @@ function printTable(rows: BenchmarkRow[]): void {
 	]
 	const tableRows = rows.map((row) => [
 		row.fixtureName,
-		row.formatName,
+		row.selectedFormat
+			? `${row.formatName}->${row.selectedFormat}`
+			: row.formatName,
 		formatNumber(row.tokenCount),
 		row.tokenDeltaVsCompactJson === 0
 			? "0"
@@ -718,9 +809,16 @@ function printTable(rows: BenchmarkRow[]): void {
 
 function summarize(rows: BenchmarkRow[]): string[] {
 	const toonRows = rows.filter((row) => row.formatName === "toon")
+	const autoRows = rows.filter((row) => row.formatName === "auto")
 	const wins = toonRows.filter((row) => row.tokenDeltaVsCompactJson < 0)
 	const losses = toonRows.filter((row) => row.tokenDeltaVsCompactJson > 0)
 	const neutral = toonRows.filter((row) => row.tokenDeltaVsCompactJson === 0)
+	const autoToon = autoRows.filter((row) => row.selectedFormat === "toon")
+	const autoJson = autoRows.filter(
+		(row) => row.selectedFormat === "json-compact",
+	)
+	const autoWins = autoRows.filter((row) => row.tokenDeltaVsCompactJson < 0)
+	const autoLosses = autoRows.filter((row) => row.tokenDeltaVsCompactJson > 0)
 	const best = [...wins].sort(
 		(left, right) =>
 			right.tokenSavingsPctVsCompactJson - left.tokenSavingsPctVsCompactJson,
@@ -731,6 +829,7 @@ function summarize(rows: BenchmarkRow[]): string[] {
 	)[0]
 	return [
 		`TOON saved tokens on ${wins.length}/${toonRows.length} fixtures, lost tokens on ${losses.length}/${toonRows.length}, and tied on ${neutral.length}/${toonRows.length}.`,
+		`Auto selected TOON on ${autoToon.length}/${autoRows.length} fixtures and compact JSON on ${autoJson.length}/${autoRows.length}; it saved tokens on ${autoWins.length}/${autoRows.length} fixtures and lost tokens on ${autoLosses.length}/${autoRows.length}.`,
 		best
 			? `Best TOON case: ${best.fixtureName} (${formatPercent(best.tokenSavingsPctVsCompactJson)}, ${best.tokenDeltaVsCompactJson} tokens vs compact JSON).`
 			: "No TOON savings were observed in these fixtures.",
@@ -764,13 +863,13 @@ async function main(): Promise<void> {
 			"Local token-format benchmark over deterministic fixtures; not a broad product claim.",
 		tokenizer: TOKENIZER,
 		deterministicTokenSignature: deterministicSignature,
-		formats: ["json-pretty", "json-compact", "markdown", "toon"],
+		formats: ["json-pretty", "json-compact", "markdown", "toon", "auto"],
 		compactJsonBaseline:
 			"tokenDeltaVsCompactJson and tokenSavingsPctVsCompactJson compare each row to json-compact for the same fixture/sourceSha256.",
 		validations: [
 			"All formats are rendered from the same stable source fixture object.",
 			"Each row records the stable sourceSha256 used for that fixture.",
-			"Field-path coverage is checked for every format, including TOON.",
+			"Field-path coverage is checked for every format, including TOON and auto.",
 			"Token counts are recomputed in-process and must match before output is written.",
 			...validations,
 		],
@@ -781,7 +880,7 @@ async function main(): Promise<void> {
 		results: rows,
 		interpretation: summarize(rows),
 		recommendedThreshold:
-			"Use TOON only when representative payloads show at least 10% token savings versus compact JSON and field coverage validation passes; otherwise prefer compact JSON for fidelity and simpler parsing.",
+			"Use auto selection when representative payloads mix uniform rows and irregular objects; keep explicit TOON only when payloads show at least 10% token savings versus compact JSON and field coverage validation passes.",
 	}
 
 	printTable(rows)

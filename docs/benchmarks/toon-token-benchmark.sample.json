@@ -6,18 +6,19 @@
     "model": "gpt-4o",
     "encoding": "o200k_base"
   },
-  "deterministicTokenSignature": "1c948c41198739bfe6b22397a9d978ede08e8822a98a1cd17613e5a9f1d09665",
+  "deterministicTokenSignature": "2f3051ce9bd306c3eb7e2a96360dc4e6d8bf5ce8d73983fd7e2e2ebbe81bcf56",
   "formats": [
     "json-pretty",
     "json-compact",
     "markdown",
-    "toon"
+    "toon",
+    "auto"
   ],
   "compactJsonBaseline": "tokenDeltaVsCompactJson and tokenSavingsPctVsCompactJson compare each row to json-compact for the same fixture/sourceSha256.",
   "validations": [
     "All formats are rendered from the same stable source fixture object.",
     "Each row records the stable sourceSha256 used for that fixture.",
-    "Field-path coverage is checked for every format, including TOON.",
+    "Field-path coverage is checked for every format, including TOON and auto.",
     "Token counts are recomputed in-process and must match before output is written.",
     "small-uniform-5: same source SHA across formats (ceb014f39be0), 59 field paths covered",
     "medium-uniform-50: same source SHA across formats (57917f37bbfd), 554 field paths covered",
@@ -65,7 +66,7 @@
       "tokenDeltaVsCompactJson": 222,
       "tokenSavingsPctVsCompactJson": -43.960396039603964,
       "byteSize": 2144,
-      "renderMs": 0.0217,
+      "renderMs": 0.0595,
       "sourceSha256": "ceb014f39be0b9f8f77196f5fd23595260cd4211c7571a521c4462263c46767d",
       "fieldPathCount": 59
     },
@@ -76,7 +77,7 @@
       "tokenDeltaVsCompactJson": 0,
       "tokenSavingsPctVsCompactJson": 0,
       "byteSize": 1481,
-      "renderMs": 0.0105,
+      "renderMs": 0.0352,
       "sourceSha256": "ceb014f39be0b9f8f77196f5fd23595260cd4211c7571a521c4462263c46767d",
       "fieldPathCount": 59
     },
@@ -87,7 +88,7 @@
       "tokenDeltaVsCompactJson": 311,
       "tokenSavingsPctVsCompactJson": -61.584158415841586,
       "byteSize": 2573,
-      "renderMs": 0.0522,
+      "renderMs": 0.1401,
       "sourceSha256": "ceb014f39be0b9f8f77196f5fd23595260cd4211c7571a521c4462263c46767d",
       "fieldPathCount": 59
     },
@@ -98,9 +99,21 @@
       "tokenDeltaVsCompactJson": -61,
       "tokenSavingsPctVsCompactJson": 12.07920792079208,
       "byteSize": 1062,
-      "renderMs": 0.0534,
+      "renderMs": 0.1412,
       "sourceSha256": "ceb014f39be0b9f8f77196f5fd23595260cd4211c7571a521c4462263c46767d",
       "fieldPathCount": 59
+    },
+    {
+      "fixtureName": "small-uniform-5",
+      "formatName": "auto",
+      "tokenCount": 444,
+      "tokenDeltaVsCompactJson": -61,
+      "tokenSavingsPctVsCompactJson": 12.07920792079208,
+      "byteSize": 1062,
+      "renderMs": 0.1316,
+      "sourceSha256": "ceb014f39be0b9f8f77196f5fd23595260cd4211c7571a521c4462263c46767d",
+      "fieldPathCount": 59,
+      "selectedFormat": "toon"
     },
     {
       "fixtureName": "medium-uniform-50",
@@ -109,7 +122,7 @@
       "tokenDeltaVsCompactJson": 2112,
       "tokenSavingsPctVsCompactJson": -44.80271531607976,
       "byteSize": 20442,
-      "renderMs": 0.0873,
+      "renderMs": 0.2638,
       "sourceSha256": "57917f37bbfda57118f8b48daeb2e7d0ebaeb915f4aad9194d70a5c9997a3e26",
       "fieldPathCount": 554
     },
@@ -120,7 +133,7 @@
       "tokenDeltaVsCompactJson": 0,
       "tokenSavingsPctVsCompactJson": 0,
       "byteSize": 13884,
-      "renderMs": 0.0637,
+      "renderMs": 0.2101,
       "sourceSha256": "57917f37bbfda57118f8b48daeb2e7d0ebaeb915f4aad9194d70a5c9997a3e26",
       "fieldPathCount": 554
     },
@@ -131,7 +144,7 @@
       "tokenDeltaVsCompactJson": 3055,
       "tokenSavingsPctVsCompactJson": -64.80695799745439,
       "byteSize": 24827,
-      "renderMs": 0.3157,
+      "renderMs": 1.012,
       "sourceSha256": "57917f37bbfda57118f8b48daeb2e7d0ebaeb915f4aad9194d70a5c9997a3e26",
       "fieldPathCount": 554
     },
@@ -142,9 +155,21 @@
       "tokenDeltaVsCompactJson": -871,
       "tokenSavingsPctVsCompactJson": 18.47687738650827,
       "byteSize": 8876,
-      "renderMs": 0.2665,
+      "renderMs": 0.7626,
       "sourceSha256": "57917f37bbfda57118f8b48daeb2e7d0ebaeb915f4aad9194d70a5c9997a3e26",
       "fieldPathCount": 554
+    },
+    {
+      "fixtureName": "medium-uniform-50",
+      "formatName": "auto",
+      "tokenCount": 3843,
+      "tokenDeltaVsCompactJson": -871,
+      "tokenSavingsPctVsCompactJson": 18.47687738650827,
+      "byteSize": 8876,
+      "renderMs": 0.8643,
+      "sourceSha256": "57917f37bbfda57118f8b48daeb2e7d0ebaeb915f4aad9194d70a5c9997a3e26",
+      "fieldPathCount": 554,
+      "selectedFormat": "toon"
     },
     {
       "fixtureName": "large-uniform-250",
@@ -153,7 +178,7 @@
       "tokenDeltaVsCompactJson": 10512,
       "tokenSavingsPctVsCompactJson": -44.89621593918169,
       "byteSize": 101711,
-      "renderMs": 0.4116,
+      "renderMs": 1.361,
       "sourceSha256": "4c4713729417395c1c9638f77191c6bfa54cc2e283a426f1b96e6d6439b1a343",
       "fieldPathCount": 2754
     },
@@ -164,7 +189,7 @@
       "tokenDeltaVsCompactJson": 0,
       "tokenSavingsPctVsCompactJson": 0,
       "byteSize": 68953,
-      "renderMs": 0.2866,
+      "renderMs": 1.222,
       "sourceSha256": "4c4713729417395c1c9638f77191c6bfa54cc2e283a426f1b96e6d6439b1a343",
       "fieldPathCount": 2754
     },
@@ -175,7 +200,7 @@
       "tokenDeltaVsCompactJson": 15255,
       "tokenSavingsPctVsCompactJson": -65.1533270692748,
       "byteSize": 123847,
-      "renderMs": 1.2599,
+      "renderMs": 6.9694,
       "sourceSha256": "4c4713729417395c1c9638f77191c6bfa54cc2e283a426f1b96e6d6439b1a343",
       "fieldPathCount": 2754
     },
@@ -186,9 +211,21 @@
       "tokenDeltaVsCompactJson": -4471,
       "tokenSavingsPctVsCompactJson": 19.095413000768772,
       "byteSize": 43546,
-      "renderMs": 1.0054,
+      "renderMs": 4.5186,
       "sourceSha256": "4c4713729417395c1c9638f77191c6bfa54cc2e283a426f1b96e6d6439b1a343",
       "fieldPathCount": 2754
+    },
+    {
+      "fixtureName": "large-uniform-250",
+      "formatName": "auto",
+      "tokenCount": 18943,
+      "tokenDeltaVsCompactJson": -4471,
+      "tokenSavingsPctVsCompactJson": 19.095413000768772,
+      "byteSize": 43546,
+      "renderMs": 6.4543,
+      "sourceSha256": "4c4713729417395c1c9638f77191c6bfa54cc2e283a426f1b96e6d6439b1a343",
+      "fieldPathCount": 2754,
+      "selectedFormat": "toon"
     },
     {
       "fixtureName": "mixed-memory-types",
@@ -197,7 +234,7 @@
       "tokenDeltaVsCompactJson": 204,
       "tokenSavingsPctVsCompactJson": -60.71428571428571,
       "byteSize": 1780,
-      "renderMs": 0.0099,
+      "renderMs": 0.0268,
       "sourceSha256": "a6638d52b7109ff9a1eb5e4c6ce14f2229059d7ac22ececaf0bb2f751490124f",
       "fieldPathCount": 46
     },
@@ -208,7 +245,7 @@
       "tokenDeltaVsCompactJson": 0,
       "tokenSavingsPctVsCompactJson": 0,
       "byteSize": 1226,
-      "renderMs": 0.0062,
+      "renderMs": 0.0163,
       "sourceSha256": "a6638d52b7109ff9a1eb5e4c6ce14f2229059d7ac22ececaf0bb2f751490124f",
       "fieldPathCount": 46
     },
@@ -219,7 +256,7 @@
       "tokenDeltaVsCompactJson": 235,
       "tokenSavingsPctVsCompactJson": -69.94047619047619,
       "byteSize": 1997,
-      "renderMs": 0.0277,
+      "renderMs": 0.0665,
       "sourceSha256": "a6638d52b7109ff9a1eb5e4c6ce14f2229059d7ac22ececaf0bb2f751490124f",
       "fieldPathCount": 46
     },
@@ -230,9 +267,21 @@
       "tokenDeltaVsCompactJson": 12,
       "tokenSavingsPctVsCompactJson": -3.571428571428571,
       "byteSize": 1111,
-      "renderMs": 0.0301,
+      "renderMs": 0.0645,
       "sourceSha256": "a6638d52b7109ff9a1eb5e4c6ce14f2229059d7ac22ececaf0bb2f751490124f",
       "fieldPathCount": 46
+    },
+    {
+      "fixtureName": "mixed-memory-types",
+      "formatName": "auto",
+      "tokenCount": 336,
+      "tokenDeltaVsCompactJson": 0,
+      "tokenSavingsPctVsCompactJson": 0,
+      "byteSize": 1226,
+      "renderMs": 0.0298,
+      "sourceSha256": "a6638d52b7109ff9a1eb5e4c6ce14f2229059d7ac22ececaf0bb2f751490124f",
+      "fieldPathCount": 46,
+      "selectedFormat": "json-compact"
     },
     {
       "fixtureName": "nested-metadata",
@@ -241,7 +290,7 @@
       "tokenDeltaVsCompactJson": 871,
       "tokenSavingsPctVsCompactJson": -59.698423577793015,
       "byteSize": 7882,
-      "renderMs": 0.0356,
+      "renderMs": 0.0884,
       "sourceSha256": "058f018bbee2d11f3267f5676322dfff9355c2b427c0f95998b9db7abb3d308e",
       "fieldPathCount": 169
     },
@@ -252,7 +301,7 @@
       "tokenDeltaVsCompactJson": 0,
       "tokenSavingsPctVsCompactJson": 0,
       "byteSize": 4294,
-      "renderMs": 0.0242,
+      "renderMs": 0.062,
       "sourceSha256": "058f018bbee2d11f3267f5676322dfff9355c2b427c0f95998b9db7abb3d308e",
       "fieldPathCount": 169
     },
@@ -263,7 +312,7 @@
       "tokenDeltaVsCompactJson": 1081,
       "tokenSavingsPctVsCompactJson": -74.09184372858122,
       "byteSize": 9229,
-      "renderMs": 0.1156,
+      "renderMs": 0.3686,
       "sourceSha256": "058f018bbee2d11f3267f5676322dfff9355c2b427c0f95998b9db7abb3d308e",
       "fieldPathCount": 169
     },
@@ -274,9 +323,21 @@
       "tokenDeltaVsCompactJson": 67,
       "tokenSavingsPctVsCompactJson": -4.592186429061001,
       "byteSize": 4340,
-      "renderMs": 0.1006,
+      "renderMs": 0.2759,
       "sourceSha256": "058f018bbee2d11f3267f5676322dfff9355c2b427c0f95998b9db7abb3d308e",
       "fieldPathCount": 169
+    },
+    {
+      "fixtureName": "nested-metadata",
+      "formatName": "auto",
+      "tokenCount": 1459,
+      "tokenDeltaVsCompactJson": 0,
+      "tokenSavingsPctVsCompactJson": 0,
+      "byteSize": 4294,
+      "renderMs": 0.0699,
+      "sourceSha256": "058f018bbee2d11f3267f5676322dfff9355c2b427c0f95998b9db7abb3d308e",
+      "fieldPathCount": 169,
+      "selectedFormat": "json-compact"
     },
     {
       "fixtureName": "realistic-retrieved-context",
@@ -285,7 +346,7 @@
       "tokenDeltaVsCompactJson": 519,
       "tokenSavingsPctVsCompactJson": -29.65714285714286,
       "byteSize": 7684,
-      "renderMs": 0.0252,
+      "renderMs": 0.0821,
       "sourceSha256": "7168612aaa2b6b55d895d08399a4688748dcc7e4b170969f68276a9eb48b70a9",
       "fieldPathCount": 148
     },
@@ -296,7 +357,7 @@
       "tokenDeltaVsCompactJson": 0,
       "tokenSavingsPctVsCompactJson": 0,
       "byteSize": 6328,
-      "renderMs": 0.0156,
+      "renderMs": 0.0392,
       "sourceSha256": "7168612aaa2b6b55d895d08399a4688748dcc7e4b170969f68276a9eb48b70a9",
       "fieldPathCount": 148
     },
@@ -307,7 +368,7 @@
       "tokenDeltaVsCompactJson": 511,
       "tokenSavingsPctVsCompactJson": -29.2,
       "byteSize": 7906,
-      "renderMs": 0.0621,
+      "renderMs": 0.1708,
       "sourceSha256": "7168612aaa2b6b55d895d08399a4688748dcc7e4b170969f68276a9eb48b70a9",
       "fieldPathCount": 148
     },
@@ -318,9 +379,21 @@
       "tokenDeltaVsCompactJson": -333,
       "tokenSavingsPctVsCompactJson": 19.02857142857143,
       "byteSize": 4665,
-      "renderMs": 0.0514,
+      "renderMs": 0.135,
       "sourceSha256": "7168612aaa2b6b55d895d08399a4688748dcc7e4b170969f68276a9eb48b70a9",
       "fieldPathCount": 148
+    },
+    {
+      "fixtureName": "realistic-retrieved-context",
+      "formatName": "auto",
+      "tokenCount": 1417,
+      "tokenDeltaVsCompactJson": -333,
+      "tokenSavingsPctVsCompactJson": 19.02857142857143,
+      "byteSize": 4665,
+      "renderMs": 0.1814,
+      "sourceSha256": "7168612aaa2b6b55d895d08399a4688748dcc7e4b170969f68276a9eb48b70a9",
+      "fieldPathCount": 148,
+      "selectedFormat": "toon"
     },
     {
       "fixtureName": "toon-unfriendly-irregular",
@@ -329,7 +402,7 @@
       "tokenDeltaVsCompactJson": 131,
       "tokenSavingsPctVsCompactJson": -54.132231404958674,
       "byteSize": 1436,
-      "renderMs": 0.0055,
+      "renderMs": 0.0176,
       "sourceSha256": "9470579f14063abff1ec2d0ae5e05e974cff4d89fb8b0a33818f3de3ed966003",
       "fieldPathCount": 23
     },
@@ -340,7 +413,7 @@
       "tokenDeltaVsCompactJson": 0,
       "tokenSavingsPctVsCompactJson": 0,
       "byteSize": 884,
-      "renderMs": 0.0037,
+      "renderMs": 0.0097,
       "sourceSha256": "9470579f14063abff1ec2d0ae5e05e974cff4d89fb8b0a33818f3de3ed966003",
       "fieldPathCount": 23
     },
@@ -351,7 +424,7 @@
       "tokenDeltaVsCompactJson": 166,
       "tokenSavingsPctVsCompactJson": -68.59504132231406,
       "byteSize": 1668,
-      "renderMs": 0.0185,
+      "renderMs": 0.0546,
       "sourceSha256": "9470579f14063abff1ec2d0ae5e05e974cff4d89fb8b0a33818f3de3ed966003",
       "fieldPathCount": 23
     },
@@ -362,16 +435,29 @@
       "tokenDeltaVsCompactJson": 113,
       "tokenSavingsPctVsCompactJson": -46.69421487603306,
       "byteSize": 1373,
-      "renderMs": 0.0215,
+      "renderMs": 0.0771,
       "sourceSha256": "9470579f14063abff1ec2d0ae5e05e974cff4d89fb8b0a33818f3de3ed966003",
       "fieldPathCount": 23
+    },
+    {
+      "fixtureName": "toon-unfriendly-irregular",
+      "formatName": "auto",
+      "tokenCount": 242,
+      "tokenDeltaVsCompactJson": 0,
+      "tokenSavingsPctVsCompactJson": 0,
+      "byteSize": 884,
+      "renderMs": 0.0129,
+      "sourceSha256": "9470579f14063abff1ec2d0ae5e05e974cff4d89fb8b0a33818f3de3ed966003",
+      "fieldPathCount": 23,
+      "selectedFormat": "json-compact"
     }
   ],
   "interpretation": [
     "TOON saved tokens on 4/7 fixtures, lost tokens on 3/7, and tied on 0/7.",
+    "Auto selected TOON on 4/7 fixtures and compact JSON on 3/7; it saved tokens on 4/7 fixtures and lost tokens on 0/7.",
     "Best TOON case: large-uniform-250 (+19.1%, -4471 tokens vs compact JSON).",
     "Worst TOON case: toon-unfriendly-irregular (-46.7%, +113 tokens vs compact JSON).",
     "Results are local to these deterministic fixtures and should not be presented as a general product-wide compression claim."
   ],
-  "recommendedThreshold": "Use TOON only when representative payloads show at least 10% token savings versus compact JSON and field coverage validation passes; otherwise prefer compact JSON for fidelity and simpler parsing."
+  "recommendedThreshold": "Use auto selection when representative payloads mix uniform rows and irregular objects; keep explicit TOON only when payloads show at least 10% token savings versus compact JSON and field coverage validation passes."
 }

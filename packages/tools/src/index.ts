@@ -93,7 +93,7 @@ const contextBundleSchema = z.object({
 		})
 		.optional(),
 	mode: z.enum(["full", "wake-up"]).optional(),
-	format: z.enum(["markdown", "json", "toon"]).optional(),
+	format: z.enum(["markdown", "json", "toon", "auto"]).optional(),
 })
 
 const recallConversationSchema = z.object({

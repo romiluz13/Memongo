@@ -170,7 +170,7 @@ export const toolList = [
 				},
 				format: {
 					type: "string",
-					enum: ["markdown", "json", "toon"],
+					enum: ["markdown", "json", "toon", "auto"],
 					description:
 						"Optional format for the prompt-ready rendered string. Defaults to markdown.",
 				},
@@ -1143,12 +1143,16 @@ export async function handleToolCall(
 				format !== undefined &&
 				format !== "markdown" &&
 				format !== "json" &&
-				format !== "toon"
+				format !== "toon" &&
+				format !== "auto"
 			) {
 				throw new Error("invalid format")
 			}
 			const validatedFormat =
-				format === "markdown" || format === "json" || format === "toon"
+				format === "markdown" ||
+				format === "json" ||
+				format === "toon" ||
+				format === "auto"
 					? format
 					: undefined
 			const timeRange =

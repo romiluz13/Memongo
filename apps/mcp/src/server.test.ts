@@ -190,7 +190,7 @@ describe("handleToolCall", () => {
 			"memongo_build_context_bundle",
 			{
 				query: "Phoenix",
-				format: "toon",
+				format: "auto",
 			},
 			{
 				buildContextBundle,
@@ -200,7 +200,7 @@ describe("handleToolCall", () => {
 		expect(buildContextBundle).toHaveBeenCalledWith(
 			expect.objectContaining({
 				query: "Phoenix",
-				format: "toon",
+				format: "auto",
 			}),
 		)
 

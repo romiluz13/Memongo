@@ -28,7 +28,7 @@ describe("MemongoClient context bundle format", () => {
 		)
 	})
 
-	it("sends TOON format only when requested", async () => {
+	it("sends explicit context format only when requested", async () => {
 		const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
 			new Response(JSON.stringify({ rendered: "context_bundle" }), {
 				status: 200,
@@ -39,7 +39,7 @@ describe("MemongoClient context bundle format", () => {
 
 		await client.buildContextBundle({
 			query: "Phoenix",
-			format: "toon",
+			format: "auto",
 		})
 
 		expect(fetchMock).toHaveBeenCalledWith(
@@ -48,7 +48,7 @@ describe("MemongoClient context bundle format", () => {
 				method: "POST",
 				body: JSON.stringify({
 					query: "Phoenix",
-					format: "toon",
+					format: "auto",
 				}),
 			}),
 		)

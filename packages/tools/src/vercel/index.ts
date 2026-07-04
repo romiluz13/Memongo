@@ -10,7 +10,7 @@ export interface MemongoCoreOptions {
 	userId: string
 	agentId?: string
 	mode?: "wake-up" | "full"
-	format?: "markdown" | "json" | "toon"
+	format?: "markdown" | "json" | "toon" | "auto"
 }
 
 /* ------------------------------------------------------------------ */

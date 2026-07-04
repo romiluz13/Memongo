@@ -1278,7 +1278,8 @@ export function createV1Router(): Hono {
 				? undefined
 				: body.format === "markdown" ||
 						body.format === "json" ||
-						body.format === "toon"
+						body.format === "toon" ||
+						body.format === "auto"
 					? body.format
 					: null
 		if (format === null) {
@@ -1286,7 +1287,7 @@ export function createV1Router(): Hono {
 				c,
 				400,
 				"VALIDATION_ERROR",
-				"format must be markdown|json|toon",
+				"format must be markdown|json|toon|auto",
 			)
 		}
 		try {

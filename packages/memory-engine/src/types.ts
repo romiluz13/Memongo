@@ -619,7 +619,7 @@ export type MemoryContextBundle = {
 }
 
 export type MemoryContextBundleMode = "full" | "wake-up"
-export type MemoryContextFormat = "markdown" | "json" | "toon"
+export type MemoryContextFormat = "markdown" | "json" | "toon" | "auto"
 
 export type MemoryContextBundleRequest = {
 	query?: string

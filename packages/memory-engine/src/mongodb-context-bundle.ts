@@ -224,7 +224,7 @@ function renderSectionText(section: {
 function resolveContextFormat(
 	format: MemoryContextBundleRequest["format"],
 ): NonNullable<MemoryContextBundleRequest["format"]> {
-	if (format === "json" || format === "toon") {
+	if (format === "json" || format === "toon" || format === "auto") {
 		return format
 	}
 	return "markdown"

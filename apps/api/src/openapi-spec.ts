@@ -1131,7 +1131,7 @@ export const openApiSpec = {
 									},
 									format: {
 										type: "string",
-										enum: ["markdown", "json", "toon"],
+										enum: ["markdown", "json", "toon", "auto"],
 										description:
 											"Optional format for the prompt-ready rendered string. JSON remains the HTTP transport.",
 									},

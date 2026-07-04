@@ -4,6 +4,7 @@ import {
 	renderContextBundle,
 	renderContextBundleJson,
 	renderContextBundleToon,
+	selectContextBundleAutoFormat,
 } from "./context.js"
 
 const BUILT_AT = new Date("2026-04-05T12:00:00.000Z")
@@ -126,6 +127,89 @@ describe("context formatter", () => {
 		expect(rendered).toContain("items[5]{title,summary,source}")
 		expect(rendered).toContain("event-1,User message 1,event")
 		expect(rendered).toContain("event-5,User message 5,event")
+	})
+
+	it("routes automatic formatting to TOON for mostly uniform item shapes", () => {
+		const bundle = createBundle({
+			sections: [
+				{
+					kind: "recent-events",
+					title: "Recent Session Events",
+					items: Array.from({ length: 5 }, (_, index) => ({
+						title: `event-${index + 1}`,
+						summary: `User message ${index + 1}`,
+						source: "event",
+					})),
+					estimatedTokens: 40,
+					truncated: false,
+					partial: false,
+				},
+			],
+		})
+
+		expect(selectContextBundleAutoFormat(bundle)).toBe("toon")
+		expect(renderContextBundle(bundle, "auto")).toContain("context_bundle")
+	})
+
+	it("routes automatic formatting to JSON for tiny bundles", () => {
+		const bundle = createBundle()
+		const rendered = renderContextBundle(bundle, "auto")
+
+		expect(selectContextBundleAutoFormat(bundle)).toBe("json")
+		expect(JSON.parse(rendered)).toMatchObject({ agentId: "agent-1" })
+		expect(rendered).not.toContain("context_bundle")
+	})
+
+	it("routes automatic formatting to JSON for mixed item shapes", () => {
+		const bundle = createBundle({
+			sections: [
+				{
+					kind: "query-evidence",
+					title: "Direct Evidence",
+					items: [
+						{ title: "one", summary: "a", source: "structured" },
+						{ title: "two", summary: "b", source: "structured" },
+						{ title: "three", summary: "c", source: "structured" },
+						{ title: "four", summary: "d", path: "structured:four" },
+						{ title: "five", summary: "e", path: "structured:five" },
+						{ title: "six", summary: "f", path: "structured:six" },
+					],
+					estimatedTokens: 50,
+					truncated: false,
+					partial: false,
+				},
+			],
+		})
+
+		expect(selectContextBundleAutoFormat(bundle)).toBe("json")
+		expect(
+			JSON.parse(renderContextBundle(bundle, "auto")).sections[0].items,
+		).toHaveLength(6)
+	})
+
+	it("routes automatic formatting to JSON for nested object cells", () => {
+		const bundle = createBundle({
+			sections: [
+				{
+					kind: "query-evidence",
+					title: "Direct Evidence",
+					items: Array.from({ length: 5 }, (_, index) => ({
+						title: `memory-${index + 1}`,
+						summary: `Nested memory ${index + 1}`,
+						source: "structured",
+						metadata: { score: index + 1 },
+					})),
+					estimatedTokens: 50,
+					truncated: false,
+					partial: false,
+				},
+			],
+		})
+
+		expect(selectContextBundleAutoFormat(bundle)).toBe("json")
+		expect(
+			JSON.parse(renderContextBundle(bundle, "auto")).sections[0].items,
+		).toHaveLength(5)
 	})
 
 	it("renders mixed TOON rows without dropping nested or special-character content", () => {
