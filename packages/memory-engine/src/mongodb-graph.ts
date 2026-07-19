@@ -9,6 +9,8 @@ import {
 } from "./mongodb-entity-extractor.js"
 import { recordMutation } from "./mongodb-mutations.js"
 import { recordProjectionRun } from "./mongodb-ops.js"
+import type { EnrichmentProvider } from "./mongodb-llm-enrichment.js"
+import { extractTypedRelations } from "./mongodb-relation-extraction.js"
 import {
 	entitiesCollection,
 	entityLinksCollection,
@@ -1642,6 +1644,84 @@ export async function extractAndUpsertEntities(params: {
 			`extractAndUpsertEntities failed: ${err instanceof Error ? err.message : String(err)}`,
 		)
 		throw err
+	}
+}
+
+/**
+ * Extract typed semantic relations among an event's entities and upsert them as
+ * graph edges (#34). Runs only in the LLM-backed background path. Each typed
+ * relation reuses upsertRelation (so it inherits the same versioning/exclusivity
+ * machinery as any other edge) and carries the extraction confidence as weight
+ * plus llm-relation-extraction provenance. Tenant-scoped by (agentId, scope,
+ * scopeRef) from the event; never throws.
+ */
+export async function extractAndUpsertTypedRelations(params: {
+	db: Db
+	prefix: string
+	agentId: string
+	scope: MemoryScope
+	scopeRef: string
+	eventContent: string
+	entities: Array<{ entityId: string; name: string }>
+	provider: EnrichmentProvider
+	model: string
+	sourceEventId?: string
+	validFrom?: Date
+}): Promise<number> {
+	const {
+		db,
+		prefix,
+		agentId,
+		scope,
+		scopeRef,
+		eventContent,
+		entities,
+		provider,
+		model,
+		sourceEventId,
+		validFrom,
+	} = params
+	if (entities.length < 2) return 0
+
+	try {
+		const relations = await extractTypedRelations({
+			provider,
+			model,
+			text: eventContent,
+			entities,
+		})
+		let created = 0
+		for (const rel of relations) {
+			const result = await upsertRelation({
+				db,
+				prefix,
+				relation: {
+					fromEntityId: rel.fromEntityId,
+					toEntityId: rel.toEntityId,
+					type: rel.type,
+					weight: rel.confidence,
+					confidence: rel.confidence,
+					agentId,
+					scope,
+					scopeRef,
+					provenance: {
+						origin: "llm-relation-extraction",
+						rationale: rel.rationale,
+						...(sourceEventId ? { runId: sourceEventId } : {}),
+					},
+					...(sourceEventId ? { sourceEventIds: [sourceEventId] } : {}),
+					...(validFrom ? { validFrom } : {}),
+					updatedAt: new Date(),
+				},
+			})
+			if (result.upserted) created += 1
+		}
+		return created
+	} catch (err) {
+		log.warn(
+			`extractAndUpsertTypedRelations failed: ${err instanceof Error ? err.message : String(err)}`,
+		)
+		return 0
 	}
 }
 

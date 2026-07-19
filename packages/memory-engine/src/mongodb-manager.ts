@@ -70,6 +70,7 @@ import {
 } from "./mongodb-events.js"
 import {
 	extractAndUpsertEntities,
+	extractAndUpsertTypedRelations,
 	searchEntitiesAutocomplete,
 	expandGraph,
 	type Entity,
@@ -7421,6 +7422,44 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 				provider: enrichmentProvider,
 				model: process.env.MEMONGO_ENRICHMENT_MODEL?.trim(),
 			})
+
+			// Typed semantic edge extraction (issue #34): LLM-only, so it runs
+			// exclusively in this background path. Re-derive the event's entities
+			// (idempotent upsert) and add typed edges beyond mentioned_with.
+			if (enrichmentProvider) {
+				try {
+					const entityResult = await extractAndUpsertEntities({
+						db: this.db,
+						prefix: this.prefix,
+						agentId: this.agentId,
+						eventContent: eventDoc.body,
+						scope: eventDoc.scope,
+						scopeRef: eventDoc.scopeRef,
+						sourceEventId: eventDoc.eventId,
+						role: eventDoc.role,
+					})
+					if (entityResult.entities.length >= 2) {
+						await extractAndUpsertTypedRelations({
+							db: this.db,
+							prefix: this.prefix,
+							agentId: this.agentId,
+							scope: eventDoc.scope,
+							scopeRef: eventDoc.scopeRef,
+							eventContent: eventDoc.body,
+							entities: entityResult.entities.map((e) => ({
+								entityId: e.entityId,
+								name: e.name,
+							})),
+							provider: enrichmentProvider,
+							model: process.env.MEMONGO_ENRICHMENT_MODEL?.trim() ?? "",
+							sourceEventId: eventDoc.eventId,
+							validFrom: eventDoc.timestamp,
+						})
+					}
+				} catch (err) {
+					log.warn("typed relation extraction failed", { error: err })
+				}
+			}
 
 			try {
 				await updateMemoryJob({
