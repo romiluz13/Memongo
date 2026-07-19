@@ -82,6 +82,17 @@ vi.mock("./mongodb-graph.js", () => ({
 	})),
 }))
 
+const { resolveEnrichmentProviderMock } = vi.hoisted(() => ({
+	resolveEnrichmentProviderMock: vi.fn<() => unknown>(() => null),
+}))
+
+vi.mock("./mongodb-llm-enrichment.js", async () => {
+	const actual = await vi.importActual<
+		typeof import("./mongodb-llm-enrichment.js")
+	>("./mongodb-llm-enrichment.js")
+	return { ...actual, resolveEnrichmentProvider: resolveEnrichmentProviderMock }
+})
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -238,6 +249,94 @@ describe("consolidateMemory", () => {
 			expect.objectContaining({
 				entry: expect.objectContaining({
 					type: "preference",
+				}),
+			}),
+		)
+	})
+
+	it("infers new flagged facts via the LLM reasoning phases when a provider is configured", async () => {
+		const { consolidateMemory } = await import("./mongodb-consolidator.js")
+		const { writeStructuredMemory } = await import(
+			"./mongodb-structured-memory.js"
+		)
+
+		// Canned provider: deduction and induction both call chatCompletion.
+		const dummyProvider = {
+			name: "mock",
+			chatCompletion: vi.fn(async () => ({
+				content: JSON.stringify({
+					facts: [
+						{
+							value: "The user operates entirely within US infrastructure",
+							rationale: "every region signal is US-based",
+							from: ["fact-a", "fact-b"],
+						},
+					],
+				}),
+			})),
+		}
+		resolveEnrichmentProviderMock.mockReturnValueOnce(dummyProvider)
+
+		const consolidationRunsCol = mockCollection({
+			findOne: vi.fn(async () => null),
+		})
+		// One event that matches no extraction pattern → reaches the reasoning
+		// phase without promoting anything in phase 2.
+		const eventsCol = mockCollection({
+			find: vi.fn(() => ({
+				sort: vi.fn(() => ({
+					limit: vi.fn(() => ({
+						toArray: vi.fn(async () => [
+							{
+								eventId: "e1",
+								agentId: "agent-1",
+								body: "just checking in",
+								timestamp: new Date(),
+								role: "user",
+							},
+						]),
+					})),
+				})),
+			})),
+			updateMany: vi.fn(async () => ({ modifiedCount: 1 }) as UpdateResult),
+		})
+		// Two existing durable facts feed the reasoning phase.
+		const structuredCol = mockCollection({
+			findOne: vi.fn(async () => null),
+			find: vi.fn(() => ({
+				sort: vi.fn(() => ({
+					limit: vi.fn(() => ({
+						toArray: vi.fn(async () => [
+							{ value: "The user deploys to AWS us-east-1", type: "fact" },
+							{ value: "The user's data residency is the US", type: "fact" },
+						]),
+					})),
+				})),
+			})),
+		})
+		const db = mockDb({
+			test_consolidation_runs: consolidationRunsCol,
+			test_events: eventsCol,
+			test_structured_mem: structuredCol,
+		})
+
+		const result = await consolidateMemory({
+			db,
+			prefix: "test_",
+			agentId: "agent-1",
+			options: { minCombinedScore: 0 },
+		})
+
+		// Deduction + induction returned the same value → deduped to one write.
+		expect(result.factsInferred).toBe(1)
+		expect(dummyProvider.chatCompletion).toHaveBeenCalledTimes(2)
+		expect(writeStructuredMemory).toHaveBeenCalledWith(
+			expect.objectContaining({
+				entry: expect.objectContaining({
+					type: "fact",
+					confidence: 0.5,
+					reinforcementCount: 0,
+					provenance: expect.objectContaining({ origin: "llm-inference" }),
 				}),
 			}),
 		)

@@ -1,5 +1,7 @@
-import { createSubsystemLogger } from "@memongo/lib"
+import { createHash } from "node:crypto"
+import { type MemoryScope, createSubsystemLogger } from "@memongo/lib"
 import type { EnrichmentProvider } from "./mongodb-llm-enrichment.js"
+import type { StructuredMemoryEntry } from "./mongodb-structured-memory.js"
 
 /**
  * LLM reasoning over consolidated memory (issue #31).
@@ -150,4 +152,50 @@ export async function induceFactsFromMemories(params: {
 		kind: "induction",
 		systemPrompt: INDUCTION_SYSTEM_PROMPT,
 	})
+}
+
+// Inferred facts are never as trustworthy as observed ones; start below the
+// observed-fact confidence floor so retrieval/scoring can down-weight them.
+const INFERRED_CONFIDENCE = 0.5
+
+function shortHash(input: string): string {
+	return createHash("sha1").update(input).digest("hex").slice(0, 12)
+}
+
+/**
+ * Turn a reasoned fact into a structured-memory entry flagged as an
+ * unreinforced LLM inference (issue #31). The entry is retrievable but clearly
+ * distinguishable from observed facts: origin "llm-inference", low confidence,
+ * reinforcementCount 0, and an "inferred" tag. Corroboration by future observed
+ * evidence raises its standing through the normal reinforcement path.
+ */
+export function buildInferredMemoryEntry(params: {
+	reasoned: ReasonedFact
+	agentId: string
+	scope?: MemoryScope
+	scopeRef?: string
+	runId?: string
+}): StructuredMemoryEntry {
+	const { reasoned, agentId, scope, scopeRef, runId } = params
+	return {
+		type: "fact",
+		key: `fact-${shortHash(reasoned.value.toLowerCase())}`,
+		value: reasoned.value,
+		agentId,
+		source: "agent",
+		confidence: INFERRED_CONFIDENCE,
+		reinforcementCount: 0,
+		state: "active",
+		tags: ["inferred", reasoned.kind],
+		provenance: {
+			origin: "llm-inference",
+			kind: reasoned.kind,
+			rationale: reasoned.rationale,
+			derivedFrom: reasoned.sourceValues,
+			...(runId ? { runId } : {}),
+		},
+		sourceAgent: { id: agentId, name: "dreamer", ...(runId ? { runId } : {}) },
+		...(scope ? { scope } : {}),
+		...(scopeRef ? { scopeRef } : {}),
+	}
 }

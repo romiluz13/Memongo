@@ -33,6 +33,12 @@ import {
 } from "./mongodb-schema.js"
 import { classifyInjection } from "./mongodb-injection-classifier.js"
 import { extractAndUpsertEntities } from "./mongodb-graph.js"
+import { resolveEnrichmentProvider } from "./mongodb-llm-enrichment.js"
+import {
+	buildInferredMemoryEntry,
+	deduceFactsFromMemories,
+	induceFactsFromMemories,
+} from "./mongodb-consolidation-reasoning.js"
 import {
 	writeStructuredMemory,
 	type StructuredMemoryType,
@@ -57,6 +63,9 @@ const DEFAULT_MIN_INTERVAL_MS = 3_600_000 // 1 hour
 const DEFAULT_NOVELTY_WEIGHT = 0.4
 const DEFAULT_IMPORTANCE_WEIGHT = 0.3
 const DEFAULT_ACCESS_WEIGHT = 0.3
+// Cap the facts fed to the reasoning phases so a large memory does not blow the
+// LLM context window or token budget on a single consolidation run.
+const REASONING_MAX_FACTS = 40
 
 // ---------------------------------------------------------------------------
 // Rule-based pattern matching (conservative: false negatives OK,
@@ -507,6 +516,7 @@ export async function consolidateMemory(params: {
 
 	const structuredCol = db.collection(`${prefix}structured_mem`)
 	let factsPromoted = 0
+	let factsInferred = 0
 	let conflictsResolved = 0
 
 	for (const candidate of filteredCandidates) {
@@ -760,16 +770,100 @@ export async function consolidateMemory(params: {
 	}
 
 	// ===================================================================
-	// Phase 3 — Deduction (stub for future LLM agent)
+	// Phase 3 — Deduction / Phase 4 — Induction (issue #31)
+	// Derive NEW facts from the durable facts in this scope: deduction (strict
+	// entailment) and induction (probable generalization). Inferred facts are
+	// written flagged (origin "llm-inference", low confidence, reinforcementCount
+	// 0) so they are distinguishable from observed facts and never treated as
+	// fully corroborated. Degrades to the historical skip when no LLM is set.
 	// ===================================================================
 
-	log.info("deduction phase: no LLM configured, skipping")
+	const reasoningProvider = (() => {
+		try {
+			return resolveEnrichmentProvider(process.env)
+		} catch (err) {
+			log.warn(
+				`enrichment provider resolution failed; skipping reasoning phases: ${err instanceof Error ? err.message : String(err)}`,
+			)
+			return null
+		}
+	})()
 
-	// ===================================================================
-	// Phase 4 — Induction (stub for future LLM agent)
-	// ===================================================================
+	if (!reasoningProvider) {
+		log.info("deduction phase: no LLM configured, skipping")
+		log.info("induction phase: no LLM configured, skipping")
+	} else {
+		try {
+			const reasoningModel = process.env.MEMONGO_ENRICHMENT_MODEL?.trim() ?? ""
+			const factFilter: Document = {
+				agentId,
+				type: "fact",
+				state: { $ne: "invalidated" },
+			}
+			if (options?.scope) factFilter.scope = options.scope
+			if (options?.scopeRef) factFilter.scopeRef = options.scopeRef
 
-	log.info("induction phase: no LLM configured, skipping")
+			const factDocs = await structuredCol
+				.find(factFilter)
+				.sort({ updatedAt: -1 })
+				.limit(REASONING_MAX_FACTS)
+				.toArray()
+			const factValues = factDocs
+				.map((doc) => (typeof doc.value === "string" ? doc.value : ""))
+				.filter(Boolean)
+
+			if (factValues.length >= 2) {
+				const [deduced, induced] = await Promise.all([
+					deduceFactsFromMemories({
+						provider: reasoningProvider,
+						model: reasoningModel,
+						facts: factValues,
+					}),
+					induceFactsFromMemories({
+						provider: reasoningProvider,
+						model: reasoningModel,
+						facts: factValues,
+					}),
+				])
+
+				// Never restate an existing observed fact as an inference.
+				const existingValues = new Set(
+					factValues.map((value) => value.toLowerCase()),
+				)
+				for (const reasoned of [...deduced, ...induced]) {
+					if (existingValues.has(reasoned.value.toLowerCase())) continue
+					existingValues.add(reasoned.value.toLowerCase())
+					const entry = buildInferredMemoryEntry({
+						reasoned,
+						agentId,
+						scope: options?.scope as MemoryScope | undefined,
+						scopeRef: options?.scopeRef,
+						runId,
+					})
+					try {
+						const result = await writeStructuredMemory({
+							db,
+							prefix,
+							entry,
+							embeddingMode: "automated",
+						})
+						if (result.upserted) factsInferred++
+					} catch (err) {
+						log.warn(
+							`inferred fact write failed during consolidation: ${err instanceof Error ? err.message : String(err)}`,
+						)
+					}
+				}
+				log.info(
+					`reasoning phases inferred ${factsInferred} new fact(s) for agent=${agentId}`,
+				)
+			}
+		} catch (err) {
+			log.warn(
+				`consolidation reasoning phases failed (non-blocking): ${err instanceof Error ? err.message : String(err)}`,
+			)
+		}
+	}
 
 	// ===================================================================
 	// Phase 5 — Prune + Profile (near-duplicate merge)
@@ -888,6 +982,7 @@ export async function consolidateMemory(params: {
 				completedAt: new Date(),
 				eventsProcessed: events.length,
 				factsPromoted,
+				factsInferred,
 				factsPruned: prunedCount,
 				conflictsResolved,
 				durationMs,
@@ -908,6 +1003,7 @@ export async function consolidateMemory(params: {
 		agentId,
 		eventsProcessed: events.length,
 		factsPromoted,
+		factsInferred,
 		factsPruned: prunedCount,
 		conflictsResolved,
 		durationMs,

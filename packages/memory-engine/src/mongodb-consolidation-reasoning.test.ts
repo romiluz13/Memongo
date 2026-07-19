@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from "vitest"
 import {
+	buildInferredMemoryEntry,
 	deduceFactsFromMemories,
 	induceFactsFromMemories,
+	type ReasonedFact,
 } from "./mongodb-consolidation-reasoning.js"
 import type { EnrichmentProvider } from "./mongodb-llm-enrichment.js"
 
@@ -86,6 +88,50 @@ describe("deduceFactsFromMemories", () => {
 		})
 		expect(result).toHaveLength(1)
 		expect(result[0].value).toBe("A real derived fact")
+	})
+})
+
+describe("buildInferredMemoryEntry", () => {
+	const reasoned: ReasonedFact = {
+		value: "The deployment satisfies the US compliance requirement",
+		rationale: "us-east-1 is a US region",
+		sourceValues: facts,
+		kind: "deduction",
+	}
+
+	it("flags the entry as an unreinforced LLM inference, distinct from observed facts", () => {
+		const entry = buildInferredMemoryEntry({
+			reasoned,
+			agentId: "agent-1",
+			scope: "agent",
+			scopeRef: "agent:agent-1",
+			runId: "run-1",
+		})
+
+		expect(entry.type).toBe("fact")
+		expect(entry.value).toBe(reasoned.value)
+		expect(entry.confidence).toBeLessThan(0.7)
+		expect(entry.reinforcementCount).toBe(0)
+		expect(entry.tags).toContain("inferred")
+		expect(entry.tags).toContain("deduction")
+		expect(entry.provenance?.origin).toBe("llm-inference")
+		expect(entry.provenance?.derivedFrom).toEqual(facts)
+		expect(entry.provenance?.rationale).toBe(reasoned.rationale)
+		expect(entry.scope).toBe("agent")
+		expect(entry.scopeRef).toBe("agent:agent-1")
+	})
+
+	it("derives a deterministic fact key from the value", () => {
+		const a = buildInferredMemoryEntry({ reasoned, agentId: "agent-1" })
+		const b = buildInferredMemoryEntry({ reasoned, agentId: "agent-1" })
+		expect(a.key).toBe(b.key)
+		expect(a.key).toMatch(/^fact-/)
+	})
+
+	it("omits scope fields when not provided", () => {
+		const entry = buildInferredMemoryEntry({ reasoned, agentId: "agent-1" })
+		expect(entry.scope).toBeUndefined()
+		expect(entry.scopeRef).toBeUndefined()
 	})
 })
 

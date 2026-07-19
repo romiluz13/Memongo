@@ -1325,6 +1325,8 @@ export type ConsolidationResult = {
 	candidates: ConsolidationCandidate[]
 	orientStats?: DreamerOrientStats
 	prunedCount?: number
+	/** New facts derived by the LLM deduction/induction phases (issue #31). */
+	factsInferred?: number
 }
 
 // ---------------------------------------------------------------------------
