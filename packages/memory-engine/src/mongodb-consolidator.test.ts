@@ -342,6 +342,116 @@ describe("consolidateMemory", () => {
 		)
 	})
 
+	it("isolates reasoning per scope and never writes a cross-scope inference", async () => {
+		const { consolidateMemory } = await import("./mongodb-consolidator.js")
+		const { writeStructuredMemory } = await import(
+			"./mongodb-structured-memory.js"
+		)
+
+		let call = 0
+		const dummyProvider = {
+			name: "mock",
+			chatCompletion: vi.fn(async () => {
+				call += 1
+				return {
+					content: JSON.stringify({
+						facts: [
+							{
+								value: `synthesized conclusion number ${call}`,
+								rationale: "r",
+								from: ["x", "y"],
+							},
+						],
+					}),
+				}
+			}),
+		}
+		resolveEnrichmentProviderMock.mockReturnValueOnce(dummyProvider)
+
+		const consolidationRunsCol = mockCollection({
+			findOne: vi.fn(async () => null),
+		})
+		const eventsCol = mockCollection({
+			find: vi.fn(() => ({
+				sort: vi.fn(() => ({
+					limit: vi.fn(() => ({
+						toArray: vi.fn(async () => [
+							{
+								eventId: "e1",
+								agentId: "agent-1",
+								body: "just checking in",
+								timestamp: new Date(),
+								role: "user",
+							},
+						]),
+					})),
+				})),
+			})),
+			updateMany: vi.fn(async () => ({ modifiedCount: 1 }) as UpdateResult),
+		})
+		// Facts from two different tenants under the same agent.
+		const structuredCol = mockCollection({
+			findOne: vi.fn(async () => null),
+			find: vi.fn(() => ({
+				sort: vi.fn(() => ({
+					limit: vi.fn(() => ({
+						toArray: vi.fn(async () => [
+							{
+								value: "tenant A widget preference",
+								type: "fact",
+								scope: "user",
+								scopeRef: "user:A",
+							},
+							{
+								value: "tenant A gadget workflow",
+								type: "fact",
+								scope: "user",
+								scopeRef: "user:A",
+							},
+							{
+								value: "tenant B finance policy",
+								type: "fact",
+								scope: "user",
+								scopeRef: "user:B",
+							},
+							{
+								value: "tenant B budget cycle",
+								type: "fact",
+								scope: "user",
+								scopeRef: "user:B",
+							},
+						]),
+					})),
+				})),
+			})),
+		})
+		const db = mockDb({
+			test_consolidation_runs: consolidationRunsCol,
+			test_events: eventsCol,
+			test_structured_mem: structuredCol,
+		})
+
+		const result = await consolidateMemory({
+			db,
+			prefix: "test_",
+			agentId: "agent-1",
+			options: { minCombinedScore: 0 },
+		})
+
+		// Two groups × (deduction + induction), each written under its own scope.
+		expect(result.factsInferred).toBe(4)
+		const writtenScopeRefs = (
+			writeStructuredMemory as unknown as {
+				mock: { calls: Array<[{ entry: { scopeRef?: string } }]> }
+			}
+		).mock.calls.map((c) => c[0].entry.scopeRef)
+		expect(writtenScopeRefs.filter((r) => r === "user:A")).toHaveLength(2)
+		expect(writtenScopeRefs.filter((r) => r === "user:B")).toHaveLength(2)
+		// No inference is ever written agent-global from scoped inputs.
+		expect(writtenScopeRefs).not.toContain("agent:agent-1")
+		expect(writtenScopeRefs).not.toContain(undefined)
+	})
+
 	it("uses source-event scope for similarity filtering and promotion", async () => {
 		const { consolidateMemory } = await import("./mongodb-consolidator.js")
 		const { writeStructuredMemory } = await import(

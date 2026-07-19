@@ -795,10 +795,13 @@ export async function consolidateMemory(params: {
 	} else {
 		try {
 			const reasoningModel = process.env.MEMONGO_ENRICHMENT_MODEL?.trim() ?? ""
+			// Reason over OBSERVED facts only: exclude prior inferences so a run
+			// cannot compound inference-on-inference and erode grounding.
 			const factFilter: Document = {
 				agentId,
 				type: "fact",
 				state: { $ne: "invalidated" },
+				"provenance.origin": { $ne: "llm-inference" },
 			}
 			if (options?.scope) factFilter.scope = options.scope
 			if (options?.scopeRef) factFilter.scopeRef = options.scopeRef
@@ -808,36 +811,64 @@ export async function consolidateMemory(params: {
 				.sort({ updatedAt: -1 })
 				.limit(REASONING_MAX_FACTS)
 				.toArray()
-			const factValues = factDocs
-				.map((doc) => (typeof doc.value === "string" ? doc.value : ""))
-				.filter(Boolean)
 
-			if (factValues.length >= 2) {
+			// CRITICAL: never mix scopes. Phase 2 isolates each fact under its
+			// source scope, so a single run legitimately spans many scopes/tenants.
+			// Group facts by (scope, scopeRef) and reason strictly within a group,
+			// writing each inferred fact back under that same scope — otherwise an
+			// inference derived from tenant B's data could surface to tenant A.
+			const groups = new Map<
+				string,
+				{ scope?: MemoryScope; scopeRef?: string; values: string[] }
+			>()
+			for (const doc of factDocs) {
+				const value = typeof doc.value === "string" ? doc.value : ""
+				if (!value) continue
+				const scope =
+					typeof doc.scope === "string" ? (doc.scope as MemoryScope) : undefined
+				const scopeRef =
+					typeof doc.scopeRef === "string" ? doc.scopeRef : undefined
+				const groupKey = `${scope ?? ""} ${scopeRef ?? ""}`
+				const group = groups.get(groupKey) ?? { scope, scopeRef, values: [] }
+				group.values.push(value)
+				groups.set(groupKey, group)
+			}
+
+			for (const group of groups.values()) {
+				if (group.values.length < 2) continue
 				const [deduced, induced] = await Promise.all([
 					deduceFactsFromMemories({
 						provider: reasoningProvider,
 						model: reasoningModel,
-						facts: factValues,
+						facts: group.values,
 					}),
 					induceFactsFromMemories({
 						provider: reasoningProvider,
 						model: reasoningModel,
-						facts: factValues,
+						facts: group.values,
 					}),
 				])
 
-				// Never restate an existing observed fact as an inference.
-				const existingValues = new Set(
-					factValues.map((value) => value.toLowerCase()),
-				)
+				const observed = group.values.map((value) => value.toLowerCase())
+				const seen = new Set(observed)
+				// Skip an inference that merely restates an observed fact. Observed
+				// values are full event bodies while inferences are concise, so exact
+				// equality is not enough — reject on substring overlap either way.
+				// (A future improvement is $vectorSearch similarity like Phase 2.)
+				const restatesObserved = (candidate: string) =>
+					observed.some(
+						(value) => value.includes(candidate) || candidate.includes(value),
+					)
+
 				for (const reasoned of [...deduced, ...induced]) {
-					if (existingValues.has(reasoned.value.toLowerCase())) continue
-					existingValues.add(reasoned.value.toLowerCase())
+					const key = reasoned.value.toLowerCase()
+					if (seen.has(key) || restatesObserved(key)) continue
+					seen.add(key)
 					const entry = buildInferredMemoryEntry({
 						reasoned,
 						agentId,
-						scope: options?.scope as MemoryScope | undefined,
-						scopeRef: options?.scopeRef,
+						scope: group.scope,
+						scopeRef: group.scopeRef,
 						runId,
 					})
 					try {
@@ -854,6 +885,8 @@ export async function consolidateMemory(params: {
 						)
 					}
 				}
+			}
+			if (factsInferred > 0) {
 				log.info(
 					`reasoning phases inferred ${factsInferred} new fact(s) for agent=${agentId}`,
 				)
