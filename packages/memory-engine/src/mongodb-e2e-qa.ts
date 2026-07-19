@@ -136,18 +136,36 @@ export type E2eQaCase = {
 	abstention?: boolean
 }
 
-// A wrong answer for the false-positive probe: another case's gold answer (which
-// should NOT satisfy this question), or a fixed nonsense fallback when the set
-// is too small/homogeneous to borrow one.
-function pickDecoy(cases: E2eQaCase[], index: number): string {
-	const mine = cases[index].goldAnswer.trim().toLowerCase()
+// Common phrasings for "I have no answer" — the correct response to an
+// abstention case, graded by refusal rather than fact-match.
+function isAbstaining(answer: string): boolean {
+	const a = answer.trim().toLowerCase()
+	if (a === "") return true
+	return /\b(i don'?t know|no information|not (mentioned|available|specified|stated|in the context)|cannot answer|unknown|unsure|no relevant)\b/.test(
+		a,
+	)
+}
+
+// A KNOWN-WRONG answer for the false-positive probe: the gold answer from a case
+// with BOTH a different question and a different gold, so it should not satisfy
+// this question. Returns null when no such decoy exists (e.g. a single case or a
+// homogeneous set) — the FP metric is then reported as "not measured" (null)
+// rather than a falsely-reassuring 0 obtained from nonsense the judge trivially
+// rejects.
+function pickDecoy(cases: E2eQaCase[], index: number): string | null {
+	const mineGold = cases[index].goldAnswer.trim().toLowerCase()
+	const mineQuestion = cases[index].question.trim().toLowerCase()
 	for (let offset = 1; offset < cases.length; offset++) {
 		const other = cases[(index + offset) % cases.length]
-		if (other.goldAnswer.trim().toLowerCase() !== mine) {
+		if (
+			other.goldAnswer.trim().toLowerCase() !== mineGold &&
+			other.question.trim().toLowerCase() !== mineQuestion &&
+			other.goldAnswer.trim() !== ""
+		) {
 			return other.goldAnswer
 		}
 	}
-	return "a completely unrelated placeholder answer (7f3a-decoy)"
+	return null
 }
 
 /**
@@ -173,7 +191,8 @@ export async function runE2eQa(params: {
 	}
 
 	let correctCount = 0
-	let decoyPassCount = 0
+	let decoyProbes = 0
+	let decoyPasses = 0
 	let totalLatency = 0
 
 	for (let i = 0; i < cases.length; i++) {
@@ -185,6 +204,16 @@ export async function runE2eQa(params: {
 			question: testCase.question,
 			contextPassages: testCase.contextPassages,
 		})
+
+		if (testCase.abstention) {
+			// Correct behavior for an abstention case is to decline, not to match a
+			// gold fact — grade by refusal. No decoy probe (there is no wrong fact
+			// to plant against a "no answer" gold).
+			if (isAbstaining(candidate)) correctCount += 1
+			totalLatency += Date.now() - startedAt
+			continue
+		}
+
 		const verdict = await judgeAnswer({
 			provider,
 			model,
@@ -195,15 +224,21 @@ export async function runE2eQa(params: {
 		totalLatency += Date.now() - startedAt
 		if (verdict.correct) correctCount += 1
 
-		// Calibration probe: a known-wrong decoy should be judged incorrect.
-		const decoyVerdict = await judgeAnswer({
-			provider,
-			model,
-			question: testCase.question,
-			goldAnswer: testCase.goldAnswer,
-			candidateAnswer: pickDecoy(cases, i),
-		})
-		if (decoyVerdict.correct) decoyPassCount += 1
+		// Calibration probe: a genuinely-wrong decoy should be judged incorrect.
+		// Only run it when a viable decoy exists, so the FP rate reflects real
+		// probes rather than trivially-rejected nonsense.
+		const decoy = pickDecoy(cases, i)
+		if (decoy !== null) {
+			decoyProbes += 1
+			const decoyVerdict = await judgeAnswer({
+				provider,
+				model,
+				question: testCase.question,
+				goldAnswer: testCase.goldAnswer,
+				candidateAnswer: decoy,
+			})
+			if (decoyVerdict.correct) decoyPasses += 1
+		}
 	}
 
 	return {
@@ -211,6 +246,8 @@ export async function runE2eQa(params: {
 		judgeVersion,
 		accuracy: correctCount / cases.length,
 		latencyMs: totalLatency / cases.length,
-		judgeFalsePositiveRate: decoyPassCount / cases.length,
+		// Null (not 0) when no viable decoy could be constructed — an unmeasured
+		// probe must not read as a perfectly-calibrated judge.
+		judgeFalsePositiveRate: decoyProbes > 0 ? decoyPasses / decoyProbes : null,
 	}
 }
