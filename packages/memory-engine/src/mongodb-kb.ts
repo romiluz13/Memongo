@@ -4,13 +4,55 @@ import path from "node:path"
 import type { Db, MongoClient, ClientSession } from "mongodb"
 import {
 	type MemoryMongoDBEmbeddingMode,
+	type MemoryScope,
 	createSubsystemLogger,
 } from "@memongo/lib"
 import { chunkMarkdown, hashText } from "./internal.js"
 import type { EmbeddingStatus } from "./mongodb-embedding-retry.js"
 import { kbCollection, kbChunksCollection } from "./mongodb-schema.js"
+import { resolveScopeRef } from "./mongodb-scope.js"
 
 const log = createSubsystemLogger("memory:mongodb:kb")
+
+// ---------------------------------------------------------------------------
+// Tenant scoping (issue #27)
+//
+// KB documents and chunks are tagged with the resolved {agentId, scope,
+// scopeRef} of the caller. `scopeRef` is the concrete isolation namespace
+// (e.g. "agent:foo", "global") and is the key every read/write/delete path
+// filters on, so tenants sharing one physical collection cannot observe or
+// mutate each other's KB. Callers wanting a shared corpus use scope "global"
+// or "tenant".
+// ---------------------------------------------------------------------------
+
+export type KBScope = {
+	agentId: string
+	scope?: MemoryScope
+	scopeRef?: string
+	// Companion ids required by non-agent scopes. Forwarded to resolveScopeRef so
+	// user/tenant/session resolve correctly (and throw when missing) and workspace
+	// does not silently fall back to workspace:${agentId}.
+	userId?: string
+	tenantId?: string
+	sessionId?: string
+	workspaceDir?: string
+}
+
+type ResolvedKBScope = { agentId: string; scope: MemoryScope; scopeRef: string }
+
+function resolveKBScope(scope: KBScope): ResolvedKBScope {
+	const resolvedScope = scope.scope ?? "agent"
+	const scopeRef = resolveScopeRef({
+		agentId: scope.agentId,
+		scope: resolvedScope,
+		scopeRef: scope.scopeRef,
+		userId: scope.userId,
+		tenantId: scope.tenantId,
+		sessionId: scope.sessionId,
+		workspaceDir: scope.workspaceDir,
+	})
+	return { agentId: scope.agentId, scope: resolvedScope, scopeRef }
+}
 
 // ---------------------------------------------------------------------------
 // Transaction helpers (same pattern as mongodb-sync.ts)
@@ -62,6 +104,7 @@ export type KBIngestResult = {
 export async function ingestToKB(params: {
 	db: Db
 	prefix: string
+	scope: KBScope
 	documents: KBDocument[]
 	embeddingMode: MemoryMongoDBEmbeddingMode
 	chunking?: { tokens: number; overlap: number }
@@ -76,6 +119,7 @@ export async function ingestToKB(params: {
 	}) => void
 }): Promise<KBIngestResult> {
 	const { db, prefix, documents, force, progress } = params
+	const { agentId, scope: memoryScope, scopeRef } = resolveKBScope(params.scope)
 	const maxDocSize = params.maxDocumentSize ?? 10 * 1024 * 1024 // default 10MB
 	const chunking = params.chunking ?? { tokens: 600, overlap: 100 }
 	const model = params.model ?? "voyage-4-large"
@@ -110,7 +154,10 @@ export async function ingestToKB(params: {
 			let reIngestionOldDocId: unknown = null
 			if (!force) {
 				const sourcePath = doc.source.path ?? doc.title
-				const existingByPath = await kb.findOne({ "source.path": sourcePath })
+				const existingByPath = await kb.findOne({
+					"source.path": sourcePath,
+					scopeRef,
+				})
 				if (existingByPath) {
 					if (existingByPath.hash === doc.hash) {
 						// Same content — skip
@@ -122,7 +169,7 @@ export async function ingestToKB(params: {
 					reIngestionOldDocId = existingByPath._id
 				} else {
 					// No path match — check hash as fallback
-					const existingByHash = await kb.findOne({ hash: doc.hash })
+					const existingByHash = await kb.findOne({ hash: doc.hash, scopeRef })
 					if (existingByHash) {
 						result.skipped++
 						continue
@@ -144,7 +191,7 @@ export async function ingestToKB(params: {
 			let forceOldId: string | null = null
 			let forceOldDocId: unknown = null
 			if (force) {
-				const existingDoc = await kb.findOne({ hash: doc.hash })
+				const existingDoc = await kb.findOne({ hash: doc.hash, scopeRef })
 				if (existingDoc) {
 					forceOldId = String(existingDoc._id)
 					forceOldDocId = existingDoc._id
@@ -155,6 +202,9 @@ export async function ingestToKB(params: {
 			const chunkOps = chunks.map((chunk) => {
 				const chunkDoc: Record<string, unknown> = {
 					docId,
+					agentId,
+					scope: memoryScope,
+					scopeRef,
 					path: doc.source.path ?? doc.title,
 					source: "kb",
 					startLine: chunk.startLine,
@@ -168,6 +218,7 @@ export async function ingestToKB(params: {
 				return {
 					updateOne: {
 						filter: {
+							scopeRef,
 							path: doc.source.path ?? doc.title,
 							startLine: chunk.startLine,
 							endLine: chunk.endLine,
@@ -181,6 +232,9 @@ export async function ingestToKB(params: {
 			// The new KB document to insert
 			const newKBDoc: Record<string, unknown> = {
 				_id: docId,
+				agentId,
+				scope: memoryScope,
+				scopeRef,
 				title: doc.title,
 				content: doc.content,
 				source: {
@@ -188,7 +242,9 @@ export async function ingestToKB(params: {
 					importedAt: new Date(),
 				},
 				tags: doc.tags ?? [],
-				category: doc.category ?? undefined,
+				// Omit category when absent — the KB validator types it as a
+				// string, so writing an explicit null fails validation.
+				...(doc.category ? { category: doc.category } : {}),
 				hash: doc.hash,
 				chunkCount: chunks.length,
 				updatedAt: new Date(),
@@ -366,6 +422,7 @@ async function walkDirForKB(
 export async function ingestFilesToKB(params: {
 	db: Db
 	prefix: string
+	scope: KBScope
 	paths: string[]
 	recursive?: boolean
 	tags?: string[]
@@ -445,7 +502,12 @@ export async function ingestFilesToKB(params: {
 export async function listKBDocuments(
 	db: Db,
 	prefix: string,
-	filter?: { category?: string; tags?: string[]; source?: string },
+	opts: {
+		scope: KBScope
+		category?: string
+		tags?: string[]
+		source?: string
+	},
 ): Promise<
 	Array<{
 		_id: string
@@ -458,15 +520,16 @@ export async function listKBDocuments(
 	}>
 > {
 	const kb = kbCollection(db, prefix)
-	const query: Record<string, unknown> = {}
-	if (filter?.category) {
-		query.category = filter.category
+	const { scopeRef } = resolveKBScope(opts.scope)
+	const query: Record<string, unknown> = { scopeRef }
+	if (opts.category) {
+		query.category = opts.category
 	}
-	if (filter?.tags?.length) {
-		query.tags = { $all: filter.tags }
+	if (opts.tags?.length) {
+		query.tags = { $all: opts.tags }
 	}
-	if (filter?.source) {
-		query["source.type"] = filter.source
+	if (opts.source) {
+		query["source.type"] = opts.source
 	}
 
 	const docs = await kb.find(query, { sort: { updatedAt: -1 } }).toArray()
@@ -490,10 +553,15 @@ export async function removeKBDocument(
 	db: Db,
 	prefix: string,
 	docId: string,
+	scope: KBScope,
 	client?: MongoClient,
 ): Promise<boolean> {
 	const kb = kbCollection(db, prefix)
 	const kbChunks = kbChunksCollection(db, prefix)
+	const { scopeRef } = resolveKBScope(scope)
+	// scopeRef in every filter: a tenant can only delete its own KB documents.
+	const docFilter = { _id: docId, scopeRef } as Record<string, unknown>
+	const chunkFilter = { docId, scopeRef }
 
 	// Try transaction-wrapped removal (requires replica set)
 	if (client) {
@@ -502,12 +570,13 @@ export async function removeKBDocument(
 			let deleted = false
 			try {
 				await session.withTransaction(async () => {
-					await kbChunks.deleteMany({ docId }, { session })
-					const result = await kb.deleteOne(
-						{ _id: docId } as Record<string, unknown>,
-						{ session },
-					)
+					// Delete the owned document first; if nothing matched the
+					// tenant filter, leave chunks untouched (cross-tenant guard).
+					const result = await kb.deleteOne(docFilter, { session })
 					deleted = result.deletedCount > 0
+					if (deleted) {
+						await kbChunks.deleteMany(chunkFilter, { session })
+					}
 				})
 				return deleted
 			} finally {
@@ -523,14 +592,18 @@ export async function removeKBDocument(
 	}
 
 	// Standalone fallback: sequential writes without transaction
-	await kbChunks.deleteMany({ docId })
-	const result = await kb.deleteOne({ _id: docId } as Record<string, unknown>)
-	return result.deletedCount > 0
+	const result = await kb.deleteOne(docFilter)
+	if (result.deletedCount > 0) {
+		await kbChunks.deleteMany(chunkFilter)
+		return true
+	}
+	return false
 }
 
 export async function getKBStats(
 	db: Db,
 	prefix: string,
+	opts: { scope: KBScope },
 ): Promise<{
 	documents: number
 	chunks: number
@@ -539,17 +612,19 @@ export async function getKBStats(
 }> {
 	const kb = kbCollection(db, prefix)
 	const kbChunks = kbChunksCollection(db, prefix)
+	const { scopeRef } = resolveKBScope(opts.scope)
 
-	const documents = await kb.countDocuments()
-	const chunks = await kbChunks.countDocuments()
+	const documents = await kb.countDocuments({ scopeRef })
+	const chunks = await kbChunks.countDocuments({ scopeRef })
 
 	// Get distinct categories
-	const categories = (await kb.distinct("category")).filter(
+	const categories = (await kb.distinct("category", { scopeRef })).filter(
 		(c): c is string => typeof c === "string",
 	)
 
 	// Get source type counts
 	const sourcePipeline = [
+		{ $match: { scopeRef } },
 		{ $group: { _id: "$source.type", count: { $sum: 1 } } },
 	]
 	const sourceResults = await kb.aggregate(sourcePipeline).toArray()

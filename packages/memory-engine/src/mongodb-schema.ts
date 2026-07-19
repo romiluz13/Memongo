@@ -195,6 +195,12 @@ const KB_SCHEMA: Document = {
 		bsonType: "object",
 		required: ["hash", "title", "source", "updatedAt"],
 		properties: {
+			agentId: { bsonType: "string", description: "Owning agent (tenant)" },
+			scope: { bsonType: "string", description: "Memory scope" },
+			scopeRef: {
+				bsonType: "string",
+				description: "Resolved tenant isolation namespace",
+			},
 			hash: { bsonType: "string", description: "Content hash for dedup" },
 			title: { bsonType: "string", description: "Document title" },
 			source: {
@@ -235,6 +241,12 @@ const KB_CHUNKS_SCHEMA: Document = {
 		bsonType: "object",
 		required: ["docId", "path", "text", "startLine", "endLine", "updatedAt"],
 		properties: {
+			agentId: { bsonType: "string", description: "Owning agent (tenant)" },
+			scope: { bsonType: "string", description: "Memory scope" },
+			scopeRef: {
+				bsonType: "string",
+				description: "Resolved tenant isolation namespace",
+			},
 			docId: {
 				bsonType: "string",
 				description: "Reference to knowledge_base _id",
@@ -1567,8 +1579,21 @@ export async function ensureStandardIndexes(
 
 	// Knowledge Base indexes
 	const kb = kbCollection(db, prefix)
+	// Migrate the old globally-unique hash index to the tenant-scoped one —
+	// otherwise it keeps enforcing cross-tenant uniqueness on upgraded clusters.
 	try {
-		await kb.createIndex({ hash: 1 }, { name: "uq_kb_hash", unique: true })
+		await kb.dropIndex("uq_kb_hash")
+	} catch {
+		// Index may not exist — safe to ignore.
+	}
+	try {
+		// Unique per tenant (scopeRef), not globally — otherwise one tenant's
+		// content hash blocks another tenant from ingesting the same content.
+		// scopeRef-leading prefix also serves list/stats/remove tenant filters.
+		await kb.createIndex(
+			{ scopeRef: 1, hash: 1 },
+			{ name: "uq_kb_scope_hash", unique: true },
+		)
 		applied++
 	} catch (err) {
 		const msg = err instanceof Error ? err.message : String(err)
@@ -1601,10 +1626,16 @@ export async function ensureStandardIndexes(
 	const kbChunks = kbChunksCollection(db, prefix)
 	await kbChunks.createIndex({ docId: 1 }, { name: "idx_kbchunks_docid" })
 	applied++
+	// Migrate the old globally-unique path+lines index to the tenant-scoped one.
+	try {
+		await kbChunks.dropIndex("uq_kbchunks_path_lines")
+	} catch {
+		// Index may not exist — safe to ignore.
+	}
 	try {
 		await kbChunks.createIndex(
-			{ path: 1, startLine: 1, endLine: 1 },
-			{ name: "uq_kbchunks_path_lines", unique: true },
+			{ scopeRef: 1, path: 1, startLine: 1, endLine: 1 },
+			{ name: "uq_kbchunks_scope_path_lines", unique: true },
 		)
 		applied++
 	} catch (err) {
@@ -3148,6 +3179,7 @@ export async function ensureSearchIndexes(
 						text: { type: "string", analyzer: "lucene.standard" },
 						path: { type: "token" },
 						docId: { type: "token" },
+						scopeRef: { type: "token" },
 						updatedAt: { type: "date" },
 					},
 				},
@@ -3175,6 +3207,8 @@ export async function ensureSearchIndexes(
 			const kbFilterFields: Document[] = [
 				{ type: "filter", path: "docId" },
 				{ type: "filter", path: "path" },
+				// Tenant isolation pre-filter for KB vector search (issue #27).
+				{ type: "filter", path: "scopeRef" },
 			]
 
 			const kbVectorDef: Document = {

@@ -2575,6 +2575,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 						{
 							maxResults: Math.max(3, Math.floor(maxResults / 3)),
 							minScore,
+							scopeRef: this.agentScopeRef,
 							numCandidates: mongoCfg.numCandidates,
 							vectorIndexName: `${this.prefix}kb_chunks_vector`,
 							textIndexName: `${this.prefix}kb_chunks_text`,
@@ -3354,6 +3355,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 						{
 							maxResults,
 							minScore,
+							scopeRef: this.agentScopeRef,
 							numCandidates: mongoCfg.numCandidates,
 							vectorIndexName: `${this.prefix}kb_chunks_vector`,
 							textIndexName: `${this.prefix}kb_chunks_text`,
@@ -3446,6 +3448,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 							{
 								maxResults: Math.max(3, Math.floor(maxResults / 3)),
 								minScore,
+								scopeRef: this.agentScopeRef,
 								numCandidates: mongoCfg.numCandidates,
 								vectorIndexName: `${this.prefix}kb_chunks_vector`,
 								textIndexName: `${this.prefix}kb_chunks_text`,
@@ -5669,6 +5672,8 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 			{
 				maxResults,
 				minScore,
+				// Tenant isolation: only this agent's KB chunks are searchable.
+				scopeRef: this.agentScopeRef,
 				filter: opts?.filter,
 				numCandidates: mongoCfg.numCandidates,
 				vectorIndexName: `${this.prefix}kb_chunks_vector`,
@@ -6581,6 +6586,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 			const result = await ingestFilesToKB({
 				db: this.db,
 				prefix: this.prefix,
+				scope: { agentId: this.agentId, scope: "agent" },
 				paths,
 				recursive: true,
 				importedBy: "agent",
@@ -9025,6 +9031,7 @@ export async function searchV2(
 									Math.floor((context.maxResults ?? 10) / 3),
 								),
 								minScore,
+								scopeRef: agentScopeRef,
 								...(Object.keys(kbFilter).length > 0
 									? { filter: kbFilter }
 									: {}),

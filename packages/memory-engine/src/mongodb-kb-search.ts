@@ -59,21 +59,25 @@ function normalizeKBFilter(raw?: {
 }
 
 async function resolveKBChunkFilter(params: {
+	scopeRef: string
 	kbDocs?: Collection
 	filter?: { tags?: string[]; category?: string; source?: string }
-}): Promise<Document | undefined> {
+}): Promise<Document> {
+	// scopeRef is ALWAYS applied — it is the tenant isolation predicate, so a
+	// search can never return another tenant's KB chunks (issue #27).
+	const base: Document = { scopeRef: params.scopeRef }
 	const normalized = normalizeKBFilter(params.filter)
 	if (!normalized) {
-		return undefined
+		return base
 	}
 	if (!params.kbDocs) {
 		log.warn(
 			"KB filter provided but kb document collection is unavailable; ignoring filter",
 		)
-		return undefined
+		return base
 	}
 
-	const kbDocFilter: Document = {}
+	const kbDocFilter: Document = { scopeRef: params.scopeRef }
 	if (normalized.tags?.length) {
 		kbDocFilter.tags = { $all: normalized.tags }
 	}
@@ -90,7 +94,7 @@ async function resolveKBChunkFilter(params: {
 		.limit(10_000)
 		.toArray()
 	const docIds = docs.map((doc) => String(doc._id))
-	return { docId: { $in: docIds } }
+	return { scopeRef: params.scopeRef, docId: { $in: docIds } }
 }
 
 // ---------------------------------------------------------------------------
@@ -104,6 +108,7 @@ export async function searchKB(
 	opts: {
 		maxResults: number
 		minScore: number
+		scopeRef: string
 		filter?: { tags?: string[]; category?: string; source?: string }
 		kbDocs?: Collection
 		vectorIndexName: string
@@ -121,6 +126,7 @@ export async function searchKB(
 
 	const canText = opts.capabilities.textSearch
 	const chunkFilter = await resolveKBChunkFilter({
+		scopeRef: opts.scopeRef,
 		kbDocs: opts.kbDocs,
 		filter: opts.filter,
 	})

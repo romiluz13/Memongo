@@ -60,6 +60,7 @@ describe("searchKB", () => {
 		const results = await searchKB(col, "architecture", [0.1, 0.2], {
 			maxResults: 5,
 			minScore: 0.1,
+			scopeRef: "agent:test",
 			vectorIndexName: "test_kb_chunks_vector",
 			textIndexName: "test_kb_chunks_text",
 			capabilities: baseCapabilities,
@@ -78,6 +79,7 @@ describe("searchKB", () => {
 		const results = await searchKB(col, "nonexistent", [0.1, 0.2], {
 			maxResults: 5,
 			minScore: 0.1,
+			scopeRef: "agent:test",
 			vectorIndexName: "test_kb_chunks_vector",
 			textIndexName: "test_kb_chunks_text",
 			capabilities: baseCapabilities,
@@ -101,6 +103,7 @@ describe("searchKB", () => {
 		const results = await searchKB(col, "content", [0.1], {
 			maxResults: 5,
 			minScore: 0.3,
+			scopeRef: "agent:test",
 			vectorIndexName: "test_kb_chunks_vector",
 			textIndexName: "test_kb_chunks_text",
 			capabilities: baseCapabilities,
@@ -124,6 +127,7 @@ describe("searchKB", () => {
 		const results = await searchKB(col, "fallback", null, {
 			maxResults: 5,
 			minScore: 0.1,
+			scopeRef: "agent:test",
 			vectorIndexName: "test_kb_chunks_vector",
 			textIndexName: "test_kb_chunks_text",
 			capabilities: noSearchCapabilities,
@@ -142,6 +146,7 @@ describe("searchKB", () => {
 		await searchKB(col, "test", [0.1], {
 			maxResults: 5,
 			minScore: 0.1,
+			scopeRef: "agent:test",
 			vectorIndexName: "idx",
 			textIndexName: "txt",
 			capabilities: baseCapabilities,
@@ -163,6 +168,7 @@ describe("searchKB", () => {
 		await searchKB(col, "test", [0.1], {
 			maxResults: 3,
 			minScore: 0,
+			scopeRef: "agent:test",
 			vectorIndexName: "idx",
 			textIndexName: "txt",
 			capabilities: baseCapabilities,
@@ -192,6 +198,7 @@ describe("searchKB", () => {
 		const results = await searchKB(col, "test", [0.1], {
 			maxResults: 5,
 			minScore: 0,
+			scopeRef: "agent:test",
 			vectorIndexName: "idx",
 			textIndexName: "txt",
 			capabilities: hybridCaps,
@@ -218,6 +225,7 @@ describe("searchKB", () => {
 		const results = await searchKB(col, "auto embed", null, {
 			maxResults: 5,
 			minScore: 0.1,
+			scopeRef: "agent:test",
 			vectorIndexName: "test_kb_chunks_vector",
 			textIndexName: "test_kb_chunks_text",
 			capabilities: baseCapabilities,
@@ -240,6 +248,7 @@ describe("searchKB", () => {
 		const results = await searchKB(col, "vector", [0.1], {
 			maxResults: 5,
 			minScore: 0.1,
+			scopeRef: "agent:test",
 			filter: { tags: ["missing"], category: "none", source: "file" },
 			kbDocs,
 			vectorIndexName: "test_kb_chunks_vector",
@@ -267,6 +276,7 @@ describe("searchKB", () => {
 		await searchKB(col, "filtered", [0.2], {
 			maxResults: 5,
 			minScore: 0.1,
+			scopeRef: "agent:test",
 			filter: { tags: ["docs"], category: "architecture", source: "file" },
 			kbDocs,
 			vectorIndexName: "test_kb_chunks_vector",
@@ -278,7 +288,10 @@ describe("searchKB", () => {
 		const pipeline = (col.aggregate as ReturnType<typeof vi.fn>).mock
 			.calls[0][0]
 		const vsStage = pipeline[0].$vectorSearch
-		expect(vsStage.filter).toEqual({ docId: { $in: ["doc-a", "doc-b"] } })
+		expect(vsStage.filter).toEqual({
+			scopeRef: "agent:test",
+			docId: { $in: ["doc-a", "doc-b"] },
+		})
 	})
 
 	it("pushes KB docId filters into the text-side compound.filter", async () => {
@@ -300,6 +313,7 @@ describe("searchKB", () => {
 		await searchKB(col, "filtered", [0.2], {
 			maxResults: 5,
 			minScore: 0.1,
+			scopeRef: "agent:test",
 			filter: { tags: ["docs"], category: "architecture", source: "file" },
 			kbDocs,
 			vectorIndexName: "test_kb_chunks_vector",
@@ -312,6 +326,8 @@ describe("searchKB", () => {
 			.calls[0][0]
 		const textPipeline = pipeline[0].$rankFusion.input.pipelines.text
 		expect(textPipeline[0].$search.compound.filter).toEqual([
+			// Tenant isolation pre-filter is always present (issue #27).
+			{ equals: { path: "scopeRef", value: "agent:test" } },
 			{ in: { path: "docId", value: ["doc-a", "doc-b"] } },
 		])
 		expect(textPipeline[1]?.$match).toBeUndefined()

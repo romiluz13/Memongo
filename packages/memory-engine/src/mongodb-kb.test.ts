@@ -22,6 +22,11 @@ import {
 } from "./mongodb-kb.js"
 import { kbCollection, kbChunksCollection } from "./mongodb-schema.js"
 
+// Shared tenant scope for unit tests. resolveScopeRef({agentId,scope:"agent"})
+// yields "agent:test-agent" — the scopeRef the KB layer filters on.
+const SCOPE = { agentId: "test-agent", scope: "agent" } as const
+const SCOPE_REF = "agent:test-agent"
+
 // ---------------------------------------------------------------------------
 // Mock collection factories
 // ---------------------------------------------------------------------------
@@ -107,6 +112,7 @@ describe("ingestToKB", () => {
 			prefix: "test_",
 			documents: [doc],
 			embeddingMode: "automated",
+			scope: SCOPE,
 		})
 
 		expect(result.documentsProcessed).toBe(1)
@@ -138,6 +144,7 @@ describe("ingestToKB", () => {
 			prefix: "test_",
 			documents: [doc],
 			embeddingMode: "automated",
+			scope: SCOPE,
 		})
 
 		expect(result.documentsProcessed).toBe(0)
@@ -163,6 +170,7 @@ describe("ingestToKB", () => {
 			prefix: "test_",
 			documents: [doc],
 			embeddingMode: "automated",
+			scope: SCOPE,
 			force: true,
 		})
 
@@ -195,6 +203,7 @@ describe("ingestToKB", () => {
 			prefix: "test_",
 			documents: [doc],
 			embeddingMode: "automated",
+			scope: SCOPE,
 		})
 
 		expect(result.skipped).toBe(1)
@@ -223,6 +232,7 @@ describe("ingestToKB", () => {
 			prefix: "test_",
 			documents: [doc],
 			embeddingMode: "automated",
+			scope: SCOPE,
 		})
 
 		expect(result.documentsProcessed).toBe(1)
@@ -244,6 +254,7 @@ describe("ingestToKB", () => {
 			prefix: "test_",
 			documents: [doc],
 			embeddingMode: "automated",
+			scope: SCOPE,
 		})
 
 		expect(result.documentsProcessed).toBe(1)
@@ -276,6 +287,7 @@ describe("ingestToKB", () => {
 			prefix: "test_",
 			documents: docs,
 			embeddingMode: "automated",
+			scope: SCOPE,
 			progress: (update) => progressUpdates.push(update),
 		})
 
@@ -302,6 +314,7 @@ describe("ingestFilesToKB", () => {
 			paths: [docsDir],
 			importedBy: "cli",
 			embeddingMode: "automated",
+			scope: SCOPE,
 		})
 
 		// Should process .md and .txt but skip .js
@@ -316,6 +329,7 @@ describe("ingestFilesToKB", () => {
 			paths: ["/nonexistent/path"],
 			importedBy: "cli",
 			embeddingMode: "automated",
+			scope: SCOPE,
 		})
 
 		expect(result.documentsProcessed).toBe(0)
@@ -332,6 +346,7 @@ describe("ingestFilesToKB", () => {
 			paths: [filePath],
 			importedBy: "agent",
 			embeddingMode: "automated",
+			scope: SCOPE,
 			tags: ["auto"],
 			category: "docs",
 		})
@@ -342,16 +357,19 @@ describe("ingestFilesToKB", () => {
 
 describe("listKBDocuments", () => {
 	it("returns list of KB documents", async () => {
-		const docs = await listKBDocuments(mockDb(), "test_")
+		const docs = await listKBDocuments(mockDb(), "test_", { scope: SCOPE })
 		expect(Array.isArray(docs)).toBe(true)
 	})
 })
 
 describe("removeKBDocument", () => {
 	it("removes a KB document and its chunks (sequential fallback)", async () => {
-		const removed = await removeKBDocument(mockDb(), "test_", "doc-123")
+		const removed = await removeKBDocument(mockDb(), "test_", "doc-123", SCOPE)
 		expect(removed).toBe(true)
-		expect(mockKBChunks.deleteMany).toHaveBeenCalledWith({ docId: "doc-123" })
+		expect(mockKBChunks.deleteMany).toHaveBeenCalledWith({
+			docId: "doc-123",
+			scopeRef: SCOPE_REF,
+		})
 		expect(mockKB.deleteOne).toHaveBeenCalled()
 	})
 
@@ -368,6 +386,7 @@ describe("removeKBDocument", () => {
 			mockDb(),
 			"test_",
 			"doc-tx",
+			SCOPE,
 			clientMock as unknown as import("mongodb").MongoClient,
 		)
 		expect(removed).toBe(true)
@@ -391,12 +410,14 @@ describe("removeKBDocument", () => {
 			mockDb(),
 			"test_",
 			"doc-fallback",
+			SCOPE,
 			clientMock as unknown as import("mongodb").MongoClient,
 		)
 		expect(removed).toBe(true)
 		// Should still delete via sequential fallback
 		expect(mockKBChunks.deleteMany).toHaveBeenCalledWith({
 			docId: "doc-fallback",
+			scopeRef: SCOPE_REF,
 		})
 		expect(mockKB.deleteOne).toHaveBeenCalled()
 	})
@@ -404,7 +425,7 @@ describe("removeKBDocument", () => {
 
 describe("getKBStats", () => {
 	it("returns document and chunk counts", async () => {
-		const stats = await getKBStats(mockDb(), "test_")
+		const stats = await getKBStats(mockDb(), "test_", { scope: SCOPE })
 		expect(stats).toHaveProperty("documents")
 		expect(stats).toHaveProperty("chunks")
 		expect(stats).toHaveProperty("categories")
@@ -449,6 +470,7 @@ describe("ingestToKB — transaction wrapping for re-ingestion", () => {
 			prefix: "test_",
 			documents: [doc],
 			embeddingMode: "automated",
+			scope: SCOPE,
 			client: clientMock as unknown as import("mongodb").MongoClient,
 		})
 
@@ -493,6 +515,7 @@ describe("ingestToKB — transaction wrapping for re-ingestion", () => {
 			prefix: "test_",
 			documents: [doc],
 			embeddingMode: "automated",
+			scope: SCOPE,
 			client: clientMock as unknown as import("mongodb").MongoClient,
 		})
 
@@ -536,6 +559,7 @@ describe("ingestToKB — transaction wrapping for re-ingestion", () => {
 			prefix: "test_",
 			documents: [doc],
 			embeddingMode: "automated",
+			scope: SCOPE,
 			client: clientMock as unknown as import("mongodb").MongoClient,
 		})
 
@@ -574,6 +598,7 @@ describe("ingestToKB — transaction wrapping for re-ingestion", () => {
 			prefix: "test_",
 			documents: [doc],
 			embeddingMode: "automated",
+			scope: SCOPE,
 			client: clientMock as unknown as import("mongodb").MongoClient,
 		})
 
