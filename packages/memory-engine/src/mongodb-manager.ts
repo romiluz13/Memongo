@@ -7423,38 +7423,56 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 				model: process.env.MEMONGO_ENRICHMENT_MODEL?.trim(),
 			})
 
-			// Typed semantic edge extraction (issue #34): LLM-only, so it runs
-			// exclusively in this background path. Re-derive the event's entities
-			// (idempotent upsert) and add typed edges beyond mentioned_with.
+			// Typed semantic edge extraction (issue #34): LLM-only, background-only.
+			// Read the entities already upserted synchronously for this event — do
+			// NOT re-extract, which would double-increment the indexed mentionCount.
 			if (enrichmentProvider) {
 				try {
-					const entityResult = await extractAndUpsertEntities({
-						db: this.db,
-						prefix: this.prefix,
-						agentId: this.agentId,
-						eventContent: eventDoc.body,
-						scope: eventDoc.scope,
-						scopeRef: eventDoc.scopeRef,
-						sourceEventId: eventDoc.eventId,
-						role: eventDoc.role,
-					})
-					if (entityResult.entities.length >= 2) {
-						await extractAndUpsertTypedRelations({
+					const eventEntities = (
+						await entitiesCollection(this.db, this.prefix)
+							.find(
+								{
+									agentId: this.agentId,
+									scope: eventDoc.scope,
+									scopeRef: eventDoc.scopeRef,
+									sourceEventIds: eventDoc.eventId,
+								},
+								{ projection: { entityId: 1, name: 1, _id: 0 } },
+							)
+							.toArray()
+					)
+						.map((e) => ({
+							entityId: String(e.entityId),
+							name: String(e.name ?? ""),
+						}))
+						.filter((e) => e.entityId && e.name)
+					if (eventEntities.length >= 2) {
+						const relationsCreated = await extractAndUpsertTypedRelations({
 							db: this.db,
 							prefix: this.prefix,
 							agentId: this.agentId,
 							scope: eventDoc.scope,
 							scopeRef: eventDoc.scopeRef,
 							eventContent: eventDoc.body,
-							entities: entityResult.entities.map((e) => ({
-								entityId: e.entityId,
-								name: e.name,
-							})),
+							entities: eventEntities,
 							provider: enrichmentProvider,
 							model: process.env.MEMONGO_ENRICHMENT_MODEL?.trim() ?? "",
 							sourceEventId: eventDoc.eventId,
 							validFrom: eventDoc.timestamp,
 						})
+						// Surface the pass so silent degradation to mentioned_with-only
+						// is observable rather than an invisible no-op.
+						await recordProjectionRun({
+							db: this.db,
+							prefix: this.prefix,
+							run: {
+								agentId: this.agentId,
+								projectionType: "relations",
+								status: "ok",
+								itemsProjected: relationsCreated,
+								durationMs: 0,
+							},
+						}).catch(() => {})
 					}
 				} catch (err) {
 					log.warn("typed relation extraction failed", { error: err })

@@ -46,7 +46,12 @@ describe("extractTypedRelations", () => {
 		const provider = providerReturning(
 			JSON.stringify({
 				relations: [
-					{ from: "e-alice", to: "e-ghost", type: "owns", confidence: 0.8 },
+					{
+						from: "e-alice",
+						to: "e-ghost",
+						type: "depends_on",
+						confidence: 0.8,
+					},
 				],
 			}),
 		)
@@ -57,6 +62,41 @@ describe("extractTypedRelations", () => {
 			entities: ENTITIES,
 		})
 		expect(result).toEqual([])
+	})
+
+	it("drops 'owns' — it is not LLM-extractable (destructive write-side exclusivity)", async () => {
+		const provider = providerReturning(
+			JSON.stringify({
+				relations: [
+					{ from: "e-alice", to: "e-api", type: "owns", confidence: 0.95 },
+				],
+			}),
+		)
+		const result = await extractTypedRelations({
+			provider,
+			model: "m",
+			text: "x",
+			entities: ENTITIES,
+		})
+		expect(result).toEqual([])
+	})
+
+	it("drops edges below the minimum confidence floor", async () => {
+		const provider = providerReturning(
+			JSON.stringify({
+				relations: [
+					{ from: "e-api", to: "e-mongo", type: "depends_on", confidence: 0.2 },
+					{ from: "e-alice", to: "e-api", type: "works_on", confidence: 0.8 },
+				],
+			}),
+		)
+		const result = await extractTypedRelations({
+			provider,
+			model: "m",
+			text: "x",
+			entities: ENTITIES,
+		})
+		expect(result.map((r) => r.type)).toEqual(["works_on"])
 	})
 
 	it("drops self-relations and the co-occurrence type mentioned_with", async () => {

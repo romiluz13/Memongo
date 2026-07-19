@@ -22,11 +22,14 @@ const MAX_TOKENS = 2048
 // entities, this is a hard ceiling on prompt size and edge fan-out.
 const MAX_ENTITIES = 25
 
-// Extractable semantic types — everything except the co-occurrence default
-// `mentioned_with`, which the rule-based path already emits.
+// Extractable semantic types — everything except:
+//  - `mentioned_with`: the co-occurrence default the rule-based path emits.
+//  - `owns`: upsertRelation applies DESTRUCTIVE write-side exclusivity to `owns`
+//    (a new owns-edge invalidates every other live owns-edge to the same target).
+//    That is designed for trusted/manual edges; a probabilistic LLM `owns` would
+//    silently invalidate curated ownership. Ownership stays a manual/API-only edge.
 const EXTRACTABLE_TYPES = new Set<RelationType>([
 	"works_on",
-	"owns",
 	"depends_on",
 	"blocked_by",
 	"decided",
@@ -35,6 +38,9 @@ const EXTRACTABLE_TYPES = new Set<RelationType>([
 ])
 
 const DEFAULT_CONFIDENCE = 0.6
+// Floor for writing a probabilistic edge; below this the model is too unsure to
+// durably assert a typed relationship, so we drop it rather than add graph noise.
+const MIN_CONFIDENCE = 0.5
 
 export type TypedRelationCandidate = {
 	fromEntityId: string
@@ -48,7 +54,6 @@ const SYSTEM_PROMPT = `You extract TYPED semantic relationships between entities
 You are given source text and a list of entities (each with an id and name). Identify directed relationships that the text actually asserts BETWEEN THE GIVEN ENTITIES.
 Allowed types (use the closest fit; omit if none applies):
 - works_on: a person/agent works on a project/component
-- owns: an entity owns/possesses another
 - depends_on: an entity technically depends on another
 - blocked_by: an entity is blocked by another
 - decided: an entity made a decision (the decision/topic)
@@ -153,6 +158,9 @@ export async function extractTypedRelations(params: {
 		if (!from || !to || from === to) continue
 		if (!validIds.has(from) || !validIds.has(to)) continue
 		if (!EXTRACTABLE_TYPES.has(type as RelationType)) continue
+		const confidence = clampConfidence(record.confidence)
+		// Drop edges the model is too unsure about to durably assert.
+		if (confidence < MIN_CONFIDENCE) continue
 		const identity = `${from}|${to}|${type}`
 		if (seen.has(identity)) continue
 		seen.add(identity)
@@ -160,7 +168,7 @@ export async function extractTypedRelations(params: {
 			fromEntityId: from,
 			toEntityId: to,
 			type: type as RelationType,
-			confidence: clampConfidence(record.confidence),
+			confidence,
 			rationale:
 				typeof record.rationale === "string" ? record.rationale.trim() : "",
 		})
