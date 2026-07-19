@@ -776,12 +776,27 @@ export async function writeStructuredMemory(params: {
 			buildRevisionDoc({ existing, scope, scopeRef, now }),
 			session ? { session } : {},
 		)
+		// This path also fires for a same-value re-mention from a NEW event,
+		// because provenance/sourceEventIds differ per event (hasStructuredValueChanged).
+		// Distinguish a genuine value change from a re-mention for valid-time (#32).
+		const incomingValidFrom = entry.validFrom ?? now
+		const existingValidFrom =
+			existing.validFrom instanceof Date ? existing.validFrom : undefined
+		const valueChanged =
+			String(existing.value ?? "") !== String(entry.value ?? "")
+		// A genuine value change opens a new valid-time window. A same-value
+		// re-mention keeps the EARLIEST known start, or a later mention would push
+		// validFrom forward and wrongly drop the fact from an "as of T" query. (#32 F1)
+		const nextValidFrom =
+			valueChanged || !existingValidFrom
+				? incomingValidFrom
+				: existingValidFrom.getTime() <= incomingValidFrom.getTime()
+					? existingValidFrom
+					: incomingValidFrom
 		const nextSetDoc: Document = {
 			...setDoc,
 			revision: currentRevision + 1,
-			// A changed value is a new assertion; honor its event/extracted
-			// valid-time (#32) rather than always stamping the write clock.
-			validFrom: entry.validFrom ?? now,
+			validFrom: nextValidFrom,
 			supersedes: {
 				revision: currentRevision,
 				type: String(existing.type ?? entry.type),
@@ -798,6 +813,18 @@ export async function writeStructuredMemory(params: {
 			]
 		}
 
+		// A genuine value change must not inherit the prior assertion's end-date;
+		// $set never removes an unspecified field, so clear a stale validTo when the
+		// new open-ended value carries none. (#32 F2)
+		const nextUnset: Document = {}
+		if (
+			valueChanged &&
+			entry.validTo === undefined &&
+			existing.validTo != null
+		) {
+			nextUnset.validTo = ""
+		}
+
 		await collection.updateOne(
 			identityFilter,
 			{
@@ -808,6 +835,7 @@ export async function writeStructuredMemory(params: {
 					openedCount:
 						typeof existing.openedCount === "number" ? existing.openedCount : 0,
 				},
+				...(Object.keys(nextUnset).length > 0 ? { $unset: nextUnset } : {}),
 			},
 			{ upsert: true, ...(session ? { session } : {}) },
 		)

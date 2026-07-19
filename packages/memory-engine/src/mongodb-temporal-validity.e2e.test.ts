@@ -132,4 +132,98 @@ describe("bi-temporal valid-time (live MongoDB)", () => {
 		expect(keys).toContain("fact-open")
 		expect(keys).not.toContain("fact-closed")
 	})
+
+	it("does not push validFrom forward when the same fact is re-mentioned later (#32 review F1)", async () => {
+		const key = "fact-rementioned"
+		// Establish the fact as valid since 2020, from event A.
+		await writeStructuredMemory({
+			db,
+			prefix: PREFIX,
+			embeddingMode: "automated",
+			entry: {
+				type: "fact",
+				key,
+				value: "The user prefers dark mode.",
+				agentId: AGENT,
+				scope: SCOPE,
+				scopeRef: SCOPE_REF,
+				validFrom: new Date("2020-01-01T00:00:00.000Z"),
+				sourceEventIds: ["evt-A"],
+			},
+		})
+		// Re-mention the SAME value from a later event B with no explicit date, so
+		// its baseline validFrom is 2026. This differs in provenance/sourceEventIds,
+		// which forces the change path.
+		await writeStructuredMemory({
+			db,
+			prefix: PREFIX,
+			embeddingMode: "automated",
+			entry: {
+				type: "fact",
+				key,
+				value: "The user prefers dark mode.",
+				agentId: AGENT,
+				scope: SCOPE,
+				scopeRef: SCOPE_REF,
+				validFrom: new Date("2026-01-01T00:00:00.000Z"),
+				sourceEventIds: ["evt-B"],
+			},
+		})
+		const doc = await structuredMemCollection(db, PREFIX).findOne({
+			agentId: AGENT,
+			key,
+		})
+		// The earliest known start must win — the fact has been valid since 2020.
+		expect((doc?.validFrom as Date).toISOString()).toBe(
+			"2020-01-01T00:00:00.000Z",
+		)
+		// And it must still be retrievable "as of 2021".
+		expect(await asOfKeys(new Date("2021-06-01T00:00:00.000Z"))).toContain(key)
+	})
+
+	it("clears a stale validTo when the value genuinely changes (#32 review F2)", async () => {
+		const key = "fact-relocation"
+		// Berlin, a closed window that ended in 2022.
+		await writeStructuredMemory({
+			db,
+			prefix: PREFIX,
+			embeddingMode: "automated",
+			entry: {
+				type: "fact",
+				key,
+				value: "The user lives in Berlin.",
+				agentId: AGENT,
+				scope: SCOPE,
+				scopeRef: SCOPE_REF,
+				validFrom: new Date("2019-01-01T00:00:00.000Z"),
+				validTo: new Date("2022-01-01T00:00:00.000Z"),
+				sourceEventIds: ["evt-A"],
+			},
+		})
+		// Value changes to London with no end date — an open-ended current fact.
+		await writeStructuredMemory({
+			db,
+			prefix: PREFIX,
+			embeddingMode: "automated",
+			entry: {
+				type: "fact",
+				key,
+				value: "The user lives in London.",
+				agentId: AGENT,
+				scope: SCOPE,
+				scopeRef: SCOPE_REF,
+				validFrom: new Date("2023-01-01T00:00:00.000Z"),
+				sourceEventIds: ["evt-B"],
+			},
+		})
+		const doc = await structuredMemCollection(db, PREFIX).findOne({
+			agentId: AGENT,
+			key,
+		})
+		expect(doc?.value).toBe("The user lives in London.")
+		// The stale Berlin end-date must NOT carry over to the open London fact.
+		expect(doc?.validTo ?? null).toBeNull()
+		// London is therefore valid "as of now" (well after 2022).
+		expect(await asOfKeys(new Date("2026-06-01T00:00:00.000Z"))).toContain(key)
+	})
 })

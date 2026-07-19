@@ -1713,11 +1713,11 @@ export async function ensureStandardIndexes(
 	)
 	applied++
 	// Bi-temporal valid-time index (#32): serves buildCurrentValidityClause's
-	// "as of T" predicate (validFrom <= T AND (validTo absent OR > T)) under the
-	// tenant equality keys, mirroring the events collection's validAt/invalidAt
-	// compound index shape.
+	// "as of T" predicate (validFrom <= T AND (validTo absent OR > T)). The
+	// current-facts read composes it with state:"active" as an equality, so under
+	// ESR `state` precedes the validFrom/validTo range fields.
 	await structured.createIndex(
-		{ agentId: 1, scope: 1, scopeRef: 1, validFrom: 1, validTo: 1 },
+		{ agentId: 1, scope: 1, scopeRef: 1, state: 1, validFrom: 1, validTo: 1 },
 		{ name: "idx_structured_scope_validfrom_validto" },
 	)
 	applied++
@@ -2068,9 +2068,10 @@ export async function ensureStandardIndexes(
 		{ name: "idx_structured_revisions_identity_revision" },
 	)
 	applied++
-	// Optional retention cap on structured history (#32). Default is indefinite
-	// retention — bi-temporal "as of T" queries depend on the revision history —
-	// so a destructive TTL is created ONLY when a retention window is explicitly
+	// Optional retention cap on structured history (#32). Revisions are the audit
+	// trail and the substrate for future historical-version ("as of T reads the
+	// value that was current at T") retrieval, so retention is indefinite by
+	// default; a destructive TTL is created ONLY when a window is explicitly
 	// configured. Keyed on supersededAt (when the revision left the current set).
 	if (ttlOpts?.revisionRetentionDays && ttlOpts.revisionRetentionDays > 0) {
 		await structuredRevisions.createIndex(
