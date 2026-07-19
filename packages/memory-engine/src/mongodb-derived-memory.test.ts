@@ -1,12 +1,21 @@
 import type { Collection, Db } from "mongodb"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import {
+	extractLlmStructuredCandidates,
 	extractProcedureCandidatesFromEvent,
 	extractStructuredCandidatesFromEvent,
 	heuristicEpisodeSummarizer,
 	promoteDerivedMemoryFromEvent,
 	resolveStructuredCandidatesForPromotion,
 } from "./mongodb-derived-memory.js"
+import type { EnrichmentProvider } from "./mongodb-llm-enrichment.js"
+
+function mockLlmProvider(content: string): EnrichmentProvider {
+	return {
+		name: "mock",
+		chatCompletion: async () => ({ content }),
+	}
+}
 
 const loggerMocks = vi.hoisted(() => ({
 	warn: vi.fn(),
@@ -465,5 +474,51 @@ describe("mongodb-derived-memory", () => {
 		expect(loggerMocks.warn).toHaveBeenCalledWith(
 			expect.stringContaining("projection run recording failed"),
 		)
+	})
+})
+
+describe("extractLlmStructuredCandidates", () => {
+	const event = {
+		eventId: "evt-llm-1",
+		agentId: "agent-1",
+		role: "user" as const,
+		body: "By the way, I always switch the editor to dark mode.",
+		timestamp: new Date("2026-03-21T10:00:00Z"),
+		scope: "agent" as const,
+		scopeRef: "agent:agent-1",
+	}
+
+	it("maps LLM-extracted facts into structured fact candidates", async () => {
+		const provider = mockLlmProvider(
+			JSON.stringify({
+				facts: ["User prefers dark mode in the editor"],
+				qa_pairs: [],
+				has_personal_content: true,
+			}),
+		)
+
+		const candidates = await extractLlmStructuredCandidates({
+			event,
+			provider,
+			model: "gpt-4o-mini",
+		})
+
+		expect(candidates).toHaveLength(1)
+		const fact = candidates[0]
+		expect(fact.type).toBe("fact")
+		expect(fact.value).toBe("User prefers dark mode in the editor")
+		expect(fact.sourceEventIds).toEqual(["evt-llm-1"])
+		expect(fact.promotionReason).toBe("llm-extraction")
+		expect(fact.promotionPolicy).toBe("requires-reinforcement")
+	})
+
+	it("returns no candidates when the LLM extracts no facts", async () => {
+		const provider = mockLlmProvider(JSON.stringify({ facts: [] }))
+		const candidates = await extractLlmStructuredCandidates({
+			event,
+			provider,
+			model: "gpt-4o-mini",
+		})
+		expect(candidates).toEqual([])
 	})
 })

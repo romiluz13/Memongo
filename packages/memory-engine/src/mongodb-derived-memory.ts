@@ -7,6 +7,10 @@ import {
 } from "@memongo/lib"
 import { recordProjectionRun } from "./mongodb-ops.js"
 import { isDerivableFromContext } from "./mongodb-consolidator.js"
+import {
+	type EnrichmentProvider,
+	extractSessionEnrichment,
+} from "./mongodb-llm-enrichment.js"
 import { type ProcedureEntry, writeProcedure } from "./mongodb-procedures.js"
 import {
 	eventsCollection,
@@ -693,4 +697,69 @@ export async function promoteDerivedMemoryFromEvent(params: {
 	}
 
 	return { structuredCreated, proceduresCreated, skipped: false }
+}
+
+/**
+ * LLM-driven structured fact extraction (issue #30).
+ *
+ * Turns a canonical event into structured `fact` candidates using the
+ * configured OpenAI-compatible / Anthropic enrichment provider, mirroring the
+ * shape produced by the regex `extractStructuredCandidatesFromEvent` so the
+ * downstream promotion/consolidation pipeline treats both identically.
+ *
+ * LLM facts are promoted only with reinforcement — the model can be wrong, so a
+ * single extraction is never durably promoted on its own.
+ */
+export async function extractLlmStructuredCandidates(params: {
+	event: ConversationEvent
+	provider: EnrichmentProvider
+	model: string
+}): Promise<DerivedStructuredCandidate[]> {
+	const { event, provider, model } = params
+	const body = normalizeWhitespace(event.body)
+	if (!body) {
+		return []
+	}
+
+	const enrichment = await extractSessionEnrichment(provider, body, model)
+	if (enrichment.facts.length === 0) {
+		return []
+	}
+
+	const base = {
+		agentId: event.agentId,
+		scope: event.scope,
+		scopeRef: event.scopeRef,
+		workspaceDir: event.workspaceDir,
+		sessionId: event.sessionId,
+		sourceEventIds: [event.eventId],
+		provenance: buildStructuredProvenance(event),
+		confidence: 0.8, // llm_extracted
+		sourceAgent: {
+			id: event.agentId,
+			name: "extractor" as const,
+			runId: event.eventId,
+		},
+	} satisfies Partial<StructuredMemoryEntry>
+
+	const candidates = new Map<string, DerivedStructuredCandidate>()
+	for (const factText of enrichment.facts) {
+		const value = normalizeWhitespace(factText)
+		if (!value) {
+			continue
+		}
+		const key = `fact-${shortHash(value.toLowerCase())}`
+		candidates.set(key, {
+			...base,
+			type: "fact",
+			key,
+			value,
+			context: "Extracted by the LLM fact extractor from a canonical event.",
+			source: event.role === "user" ? "user" : "session",
+			tags: pickTopTerms(value, 4),
+			promotionPolicy: "requires-reinforcement",
+			promotionReason: "llm-extraction",
+		})
+	}
+	return [...candidates.values()]
 }
