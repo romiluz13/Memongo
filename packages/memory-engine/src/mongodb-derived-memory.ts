@@ -391,13 +391,55 @@ async function findSupportingEventIds(params: {
 		.filter((eventId) => eventId.length > 0)
 }
 
+/**
+ * Combine deterministic regex candidates with LLM-extracted candidates (issue
+ * #30). Regex candidates are trusted on identity collisions. Degrades to
+ * regex-only when no provider is configured or the LLM call fails, so the write
+ * path never breaks on a missing key or an upstream outage.
+ */
+async function mergeStructuredCandidates(
+	event: ConversationEvent,
+	provider?: EnrichmentProvider | null,
+	model?: string,
+): Promise<DerivedStructuredCandidate[]> {
+	const regexCandidates = extractStructuredCandidatesFromEvent(event)
+	if (!provider) {
+		return regexCandidates
+	}
+
+	let llmCandidates: DerivedStructuredCandidate[] = []
+	try {
+		llmCandidates = await extractLlmStructuredCandidates({
+			event,
+			provider,
+			model: model ?? "",
+		})
+	} catch (err) {
+		log.warn(
+			`LLM structured extraction failed for ${event.eventId}, using regex only: ${String(err)}`,
+		)
+		return regexCandidates
+	}
+
+	const merged = new Map<string, DerivedStructuredCandidate>()
+	for (const candidate of [...regexCandidates, ...llmCandidates]) {
+		const identity = `${candidate.type}::${candidate.key}`
+		if (!merged.has(identity)) {
+			merged.set(identity, candidate)
+		}
+	}
+	return [...merged.values()]
+}
+
 export async function resolveStructuredCandidatesForPromotion(params: {
 	db: Db
 	prefix: string
 	event: ConversationEvent
+	provider?: EnrichmentProvider | null
+	model?: string
 }): Promise<StructuredMemoryEntry[]> {
-	const { db, prefix, event } = params
-	const candidates = extractStructuredCandidatesFromEvent(event)
+	const { db, prefix, event, provider, model } = params
+	const candidates = await mergeStructuredCandidates(event, provider, model)
 	if (candidates.length === 0) {
 		return []
 	}
@@ -566,13 +608,15 @@ export async function promoteDerivedMemoryFromEvent(params: {
 	client?: MongoClient
 	embeddingMode: MemoryMongoDBEmbeddingMode
 	event: ConversationEvent
+	provider?: EnrichmentProvider | null
+	model?: string
 }): Promise<{
 	structuredCreated: number
 	proceduresCreated: number
 	skipped: boolean
 	skipReason?: string
 }> {
-	const { db, prefix, client, embeddingMode, event } = params
+	const { db, prefix, client, embeddingMode, event, provider, model } = params
 
 	let structuredCreated = 0
 	let proceduresCreated = 0
@@ -602,6 +646,8 @@ export async function promoteDerivedMemoryFromEvent(params: {
 					db,
 					prefix,
 					event,
+					provider,
+					model,
 				})
 			).filter((candidate) => !isDerivableFromContext(candidate.value))
 			for (const candidate of promotable) {

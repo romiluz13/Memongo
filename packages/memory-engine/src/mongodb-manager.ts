@@ -146,6 +146,7 @@ import {
 	writeUserfactEvidence,
 } from "./mongodb-userfact-evidence.js"
 import {
+	type EnrichmentProvider,
 	resolveEnrichmentMode,
 	resolveEnrichmentStrictMode,
 	resolveEnrichmentProvider,
@@ -7397,6 +7398,17 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 				throw new Error(`event not found: ${eventId}`)
 			}
 
+			// LLM fact extraction (issue #30): degrade to regex-only when the
+			// provider is unconfigured or misconfigured.
+			let enrichmentProvider: EnrichmentProvider | null = null
+			try {
+				enrichmentProvider = resolveEnrichmentProvider(process.env)
+			} catch (err) {
+				log.warn("enrichment provider resolution failed; using regex-only", {
+					error: err,
+				})
+			}
+
 			const result = await promoteDerivedMemoryFromEvent({
 				db: this.db,
 				prefix: this.prefix,
@@ -7406,6 +7418,8 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 					...eventDoc,
 					workspaceDir: this.workspaceDir,
 				},
+				provider: enrichmentProvider,
+				model: process.env.MEMONGO_ENRICHMENT_MODEL?.trim(),
 			})
 
 			try {
@@ -7630,6 +7644,10 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 				if (entityCount > 0) {
 					increments.graph = entityCount
 				}
+				// Regex-only on purpose: this is a synchronous coverage counter on
+				// the hot write path. The LLM-augmented promotion (issue #30) runs
+				// in the background job, so this count is a cheap regex lower bound,
+				// not a blocking LLM call duplicated per event.
 				const candidates = postWriteDerivedWorkEnabled
 					? await resolveStructuredCandidatesForPromotion({
 							db: this.db,
@@ -7898,7 +7916,11 @@ export async function writeEventAndProject(
 			})
 		}
 
-		// Structured fact + procedure extraction (sync rule-based, non-blocking)
+		// Structured fact + procedure extraction (sync rule-based, non-blocking).
+		// LLM-augmented promotion (issue #30) intentionally runs only in the
+		// manager's background memory-job path (runBackgroundExtractionJob), never
+		// inline here — extractSessionEnrichment is a 30s-timeout network call and
+		// this function promotes synchronously on the write path.
 		try {
 			await promoteDerivedMemoryFromEvent({
 				db,
@@ -7954,6 +7976,7 @@ export async function writeEventAndProject(
 			}
 			// Structured lane tracks durable promotion eligibility, not just raw
 			// extraction hits, so deferred candidates do not inflate coverage.
+			// Regex-only, matching this function's regex-only promotion above.
 			const candidates = await resolveStructuredCandidatesForPromotion({
 				db,
 				prefix,

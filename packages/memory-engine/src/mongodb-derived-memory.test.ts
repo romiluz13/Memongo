@@ -230,6 +230,93 @@ describe("mongodb-derived-memory", () => {
 		expect(eventsCol.find).not.toHaveBeenCalled()
 	})
 
+	it("merges LLM-extracted facts into promotable candidates when a provider is configured", async () => {
+		const structuredCol = createMockCollection()
+		// Reinforcement path: LLM facts are requires-reinforcement, so supply
+		// one supporting event so the candidate becomes promotable.
+		const eventsCol = createMockCollection({
+			find: vi.fn(() => ({
+				sort: vi.fn().mockReturnValue({
+					limit: vi.fn().mockReturnValue({
+						toArray: vi.fn(async () => [
+							{
+								eventId: "evt-support-0",
+								body: "earlier chat about deployment",
+								timestamp: new Date("2026-03-20T10:00:00Z"),
+							},
+						]),
+					}),
+				}),
+			})),
+		})
+
+		const provider = mockLlmProvider(
+			JSON.stringify({
+				facts: ["User deploys to AWS us-east-1"],
+				qa_pairs: [],
+				has_personal_content: false,
+			}),
+		)
+
+		const promotable = await resolveStructuredCandidatesForPromotion({
+			db: createMockDb({
+				test_structured_mem: structuredCol,
+				test_events: eventsCol,
+			}),
+			prefix: "test_",
+			// Inert body: the regex extractor produces nothing here, so any
+			// promotable fact must have come from the LLM path.
+			event: {
+				eventId: "evt-llm-merge-1",
+				agentId: "agent-1",
+				role: "user",
+				body: "ok sounds good",
+				timestamp: new Date("2026-03-21T10:00:00Z"),
+				scope: "agent",
+				scopeRef: "agent:agent-1",
+			},
+			provider,
+			model: "gpt-4o-mini",
+		})
+
+		expect(
+			promotable.some((c) => c.value === "User deploys to AWS us-east-1"),
+		).toBe(true)
+	})
+
+	it("falls back to regex candidates when the LLM provider fails", async () => {
+		const structuredCol = createMockCollection()
+		const eventsCol = createMockCollection()
+		const failingProvider: EnrichmentProvider = {
+			name: "failing",
+			chatCompletion: async () => {
+				throw new Error("llm upstream 500")
+			},
+		}
+
+		const promotable = await resolveStructuredCandidatesForPromotion({
+			db: createMockDb({
+				test_structured_mem: structuredCol,
+				test_events: eventsCol,
+			}),
+			prefix: "test_",
+			event: {
+				eventId: "evt-llm-fail-1",
+				agentId: "agent-1",
+				role: "user",
+				body: "Remember this: the launch codeword is Blue Finch.",
+				timestamp: new Date("2026-03-21T10:00:00Z"),
+				scope: "agent",
+				scopeRef: "agent:agent-1",
+			},
+			provider: failingProvider,
+			model: "gpt-4o-mini",
+		})
+
+		expect(promotable).toHaveLength(1)
+		expect(promotable[0]?.value).toContain("Blue Finch")
+	})
+
 	it("extracts procedures from assistant workflow-style responses", () => {
 		const procedures = extractProcedureCandidatesFromEvent({
 			eventId: "evt-3",
