@@ -17,6 +17,7 @@ import {
 	proceduresCollection,
 	structuredMemCollection,
 } from "./mongodb-schema.js"
+import { invalidateContradictedFacts } from "./mongodb-contradiction.js"
 import { refineCandidatesValidTime } from "./mongodb-temporal-extraction.js"
 import {
 	type StructuredMemoryEntry,
@@ -690,6 +691,28 @@ export async function promoteDerivedMemoryFromEvent(params: {
 						durationMs: 0,
 					},
 					context: "structured promotion",
+				})
+			}
+			// Contradiction-driven invalidation (#33): expire existing active
+			// facts the new facts make false. LLM-gated, so the synchronous write
+			// path (no provider) skips it; runs only in the background job.
+			if (provider) {
+				await invalidateContradictedFacts({
+					db,
+					prefix,
+					client,
+					provider,
+					model: model ?? "",
+					agentId: event.agentId,
+					scope: event.scope,
+					scopeRef: event.scopeRef,
+					newFacts: promotable
+						.filter((candidate) => candidate.type === "fact")
+						.map((candidate) => ({
+							key: candidate.key,
+							value: candidate.value,
+						})),
+					runId: event.eventId,
 				})
 			}
 		} catch (err) {
