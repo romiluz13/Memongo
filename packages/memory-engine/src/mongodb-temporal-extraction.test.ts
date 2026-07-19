@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest"
 import type { EnrichmentProvider } from "./mongodb-llm-enrichment.js"
-import { extractValidityFromText } from "./mongodb-temporal-extraction.js"
+import {
+	extractValidityFromText,
+	refineCandidatesValidTime,
+} from "./mongodb-temporal-extraction.js"
 
 const REFERENCE = new Date("2024-03-15T00:00:00.000Z")
 
@@ -136,5 +139,77 @@ describe("extractValidityFromText", () => {
 		})
 		const userMsg = calls[0]?.messages.find((m) => m.role === "user")?.content
 		expect(userMsg).toContain("2024-03-15")
+	})
+})
+
+describe("refineCandidatesValidTime", () => {
+	const candidate = (value: string) => ({
+		value,
+		provenance: { origin: "test" } as Record<string, unknown>,
+	})
+
+	it("upgrades a candidate to an extracted date and marks source 'extracted'", async () => {
+		const { provider } = providerReturning(
+			JSON.stringify({ validFrom: "2021-01-01", validTo: null }),
+		)
+		const [out] = await refineCandidatesValidTime({
+			candidates: [candidate("worked at Acme since 2021")],
+			provider,
+			model: "m",
+			referenceTime: REFERENCE,
+		})
+		expect(out.validFrom?.toISOString()).toBe("2021-01-01T00:00:00.000Z")
+		expect(out.provenance?.validTimeSource).toBe("extracted")
+	})
+
+	it("keeps the event-time baseline and 'event' source when no date is extracted", async () => {
+		const { provider } = providerReturning(
+			JSON.stringify({ validFrom: null, validTo: null }),
+		)
+		const [out] = await refineCandidatesValidTime({
+			candidates: [candidate("likes coffee")],
+			provider,
+			model: "m",
+			referenceTime: REFERENCE,
+		})
+		expect(out.validFrom?.toISOString()).toBe(REFERENCE.toISOString())
+		expect(out.provenance?.validTimeSource).toBe("event")
+	})
+
+	it("does not call the LLM beyond maxExtractions; capped candidates keep the event baseline", async () => {
+		const { provider } = providerReturning(
+			JSON.stringify({ validFrom: "2021-01-01", validTo: null }),
+		)
+		const out = await refineCandidatesValidTime({
+			candidates: [candidate("a"), candidate("b"), candidate("c")],
+			provider,
+			model: "m",
+			referenceTime: REFERENCE,
+			maxExtractions: 1,
+		})
+		expect(
+			(provider.chatCompletion as ReturnType<typeof vi.fn>).mock.calls.length,
+		).toBe(1)
+		expect(out[0].provenance?.validTimeSource).toBe("extracted")
+		expect(out[1].validFrom?.toISOString()).toBe(REFERENCE.toISOString())
+		expect(out[1].provenance?.validTimeSource).toBe("event")
+		expect(out[2].validFrom?.toISOString()).toBe(REFERENCE.toISOString())
+	})
+
+	it("never throws when the provider fails; every candidate falls back to the event baseline", async () => {
+		const provider: EnrichmentProvider = {
+			name: "mock",
+			chatCompletion: vi.fn(async () => {
+				throw new Error("boom")
+			}),
+		}
+		const [out] = await refineCandidatesValidTime({
+			candidates: [candidate("x")],
+			provider,
+			model: "m",
+			referenceTime: REFERENCE,
+		})
+		expect(out.validFrom?.toISOString()).toBe(REFERENCE.toISOString())
+		expect(out.provenance?.validTimeSource).toBe("event")
 	})
 })

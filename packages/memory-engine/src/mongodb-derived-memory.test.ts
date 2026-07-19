@@ -116,6 +116,26 @@ describe("mongodb-derived-memory", () => {
 		expect(activeContext?.sourceEventIds).toEqual(["evt-1"])
 	})
 
+	it("stamps candidate valid-time from the event timestamp (#32), not the write clock", () => {
+		const eventTime = new Date("2026-03-21T10:00:00Z")
+		const candidates = extractStructuredCandidatesFromEvent({
+			eventId: "evt-vt",
+			agentId: "agent-1",
+			role: "user",
+			body: "Remember this: the deploy region is us-east-1.",
+			timestamp: eventTime,
+			scope: "agent",
+			scopeRef: "agent:agent-1",
+		})
+		expect(candidates.length).toBeGreaterThan(0)
+		for (const candidate of candidates) {
+			expect(candidate.validFrom?.toISOString()).toBe(eventTime.toISOString())
+			expect(
+				(candidate.provenance as Record<string, unknown>)?.validTimeSource,
+			).toBe("event")
+		}
+	})
+
 	it("promotes explicit preferences into structured preference memory", () => {
 		const candidates = extractStructuredCandidatesFromEvent({
 			eventId: "evt-2",

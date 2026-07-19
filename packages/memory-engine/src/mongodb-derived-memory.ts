@@ -17,6 +17,7 @@ import {
 	proceduresCollection,
 	structuredMemCollection,
 } from "./mongodb-schema.js"
+import { refineCandidatesValidTime } from "./mongodb-temporal-extraction.js"
 import {
 	type StructuredMemoryEntry,
 	writeStructuredMemory,
@@ -225,7 +226,14 @@ export function extractStructuredCandidatesFromEvent(
 		workspaceDir: event.workspaceDir,
 		sessionId: event.sessionId,
 		sourceEventIds: [event.eventId],
-		provenance: buildStructuredProvenance(event),
+		// Valid-time baseline (#32): the assertion is valid as of the event, not
+		// the write clock. LLM refinement may later upgrade this to an extracted
+		// date; until then validTimeSource is "event".
+		validFrom: event.timestamp,
+		provenance: {
+			...buildStructuredProvenance(event),
+			validTimeSource: "event",
+		},
 		confidence: 0.7, // agent_extracted
 		sourceAgent: {
 			id: event.agentId,
@@ -428,7 +436,15 @@ async function mergeStructuredCandidates(
 			merged.set(identity, candidate)
 		}
 	}
-	return [...merged.values()]
+
+	// Refine each candidate's valid-time from its own text (#32). Anchored to the
+	// event timestamp, which is also the explicit fallback. Never throws.
+	return refineCandidatesValidTime({
+		candidates: [...merged.values()],
+		provider,
+		model: model ?? "",
+		referenceTime: event.timestamp,
+	})
 }
 
 export async function resolveStructuredCandidatesForPromotion(params: {
@@ -779,7 +795,12 @@ export async function extractLlmStructuredCandidates(params: {
 		workspaceDir: event.workspaceDir,
 		sessionId: event.sessionId,
 		sourceEventIds: [event.eventId],
-		provenance: buildStructuredProvenance(event),
+		// Valid-time baseline (#32); refined per-candidate in mergeStructuredCandidates.
+		validFrom: event.timestamp,
+		provenance: {
+			...buildStructuredProvenance(event),
+			validTimeSource: "event",
+		},
 		confidence: 0.8, // llm_extracted
 		sourceAgent: {
 			id: event.agentId,

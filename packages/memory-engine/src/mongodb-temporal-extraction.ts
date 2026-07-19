@@ -142,3 +142,85 @@ export async function extractValidityFromText(params: {
 		...(validTo ? { validTo } : {}),
 	}
 }
+
+// Per-event cap on temporal LLM calls. Each candidate needs its own extraction
+// (facts in one event can carry different validity), so an unbounded event would
+// fan out arbitrarily many calls. Beyond the cap, candidates keep the event-time
+// baseline (still distinct from the write clock) without an LLM call.
+const DEFAULT_MAX_EXTRACTIONS = 12
+
+type ValidTimeCandidate = {
+	value: string
+	validFrom?: Date
+	validTo?: Date
+	provenance?: Record<string, unknown>
+}
+
+function withEventBaseline<T extends ValidTimeCandidate>(
+	candidate: T,
+	referenceTime: Date,
+): T {
+	return {
+		...candidate,
+		validFrom: candidate.validFrom ?? referenceTime,
+		provenance: {
+			...(candidate.provenance ?? {}),
+			validTimeSource: candidate.provenance?.validTimeSource ?? "event",
+		},
+	}
+}
+
+function applyExtractedValidity<T extends ValidTimeCandidate>(
+	candidate: T,
+	validity: ExtractedValidity,
+): T {
+	return {
+		...candidate,
+		validFrom: validity.validFrom,
+		...(validity.validTo ? { validTo: validity.validTo } : {}),
+		provenance: {
+			...(candidate.provenance ?? {}),
+			// source "reference" means we fell back to the event timestamp, so the
+			// valid-time IS the event time — label it "event", not "extracted".
+			validTimeSource: validity.source === "extracted" ? "extracted" : "event",
+		},
+	}
+}
+
+/**
+ * Refine a batch of structured candidates with LLM-extracted valid-time (#32).
+ *
+ * Each candidate's own `value` text is inspected for validity dates, anchored to
+ * `referenceTime` (the source event's timestamp). Candidates with an explicit
+ * date are upgraded to `validTimeSource: "extracted"`; the rest keep the
+ * event-time baseline (`validTimeSource: "event"`). Never throws — a failing
+ * extraction degrades that candidate to the baseline.
+ */
+export async function refineCandidatesValidTime<
+	T extends ValidTimeCandidate,
+>(params: {
+	candidates: T[]
+	provider: EnrichmentProvider
+	model: string
+	referenceTime: Date
+	maxExtractions?: number
+}): Promise<T[]> {
+	const { candidates, provider, model, referenceTime } = params
+	const cap = params.maxExtractions ?? DEFAULT_MAX_EXTRACTIONS
+	const refined: T[] = []
+	for (let i = 0; i < candidates.length; i++) {
+		const candidate = candidates[i]
+		if (i >= cap) {
+			refined.push(withEventBaseline(candidate, referenceTime))
+			continue
+		}
+		const validity = await extractValidityFromText({
+			provider,
+			model,
+			text: candidate.value,
+			referenceTime,
+		})
+		refined.push(applyExtractedValidity(candidate, validity))
+	}
+	return refined
+}

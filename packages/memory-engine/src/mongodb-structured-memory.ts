@@ -89,6 +89,12 @@ export type StructuredMemoryEntry = {
 	provenance?: Record<string, unknown>
 	sourceEventIds?: string[]
 	state?: StructuredMemoryState
+	/**
+	 * Valid-time start (#32): when the assertion became true, distinct from the
+	 * ingestion/write clock. Derived from the source event's timestamp or an
+	 * LLM-extracted date. When omitted, the write path defaults to `now`.
+	 */
+	validFrom?: Date
 	validTo?: Date
 	reviewAt?: Date
 	lastConfirmedAt?: Date
@@ -643,7 +649,9 @@ export async function writeStructuredMemory(params: {
 		temporalScope,
 		sourceReliability,
 		lastConfirmedAt,
-		validFrom: now,
+		// Valid-time is the event/extracted time when supplied (#32); only a
+		// direct write with no temporal signal falls back to the write clock.
+		validFrom: entry.validFrom ?? now,
 		updatedAt: now,
 	}
 	if (entry.context !== undefined) {
@@ -771,7 +779,9 @@ export async function writeStructuredMemory(params: {
 		const nextSetDoc: Document = {
 			...setDoc,
 			revision: currentRevision + 1,
-			validFrom: now,
+			// A changed value is a new assertion; honor its event/extracted
+			// valid-time (#32) rather than always stamping the write clock.
+			validFrom: entry.validFrom ?? now,
 			supersedes: {
 				revision: currentRevision,
 				type: String(existing.type ?? entry.type),
