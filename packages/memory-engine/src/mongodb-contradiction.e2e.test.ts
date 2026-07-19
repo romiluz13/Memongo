@@ -15,13 +15,16 @@
 import { randomUUID } from "node:crypto"
 import { type Db, MongoClient } from "mongodb"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
+import { invalidateContradictedFacts } from "./mongodb-contradiction.js"
 import { promoteDerivedMemoryFromEvent } from "./mongodb-derived-memory.js"
+import type { EnrichmentProvider } from "./mongodb-llm-enrichment.js"
 import { resolveEnrichmentProvider } from "./mongodb-llm-enrichment.js"
 import {
 	ensureCollections,
 	ensureStandardIndexes,
 	structuredMemCollection,
 } from "./mongodb-schema.js"
+import { writeStructuredMemory } from "./mongodb-structured-memory.js"
 import { buildCurrentValidityClause } from "./mongodb-temporal.js"
 
 const provider = (() => {
@@ -135,3 +138,88 @@ describe.skipIf(!provider)(
 		})
 	},
 )
+
+// Deterministic tenant-isolation regression (Mongo only, no live LLM): a mock
+// provider flags EVERY candidate it is shown as contradicted, so if the
+// candidate query ever reached another tenant's fact it would be wrongly
+// invalidated. This locks the #31-class cross-tenant guarantee for #33.
+describe("contradiction invalidation tenant isolation (live Mongo, mocked LLM)", () => {
+	const ISO_DB = `memongo_contra_iso_${randomUUID().slice(0, 8)}`
+	const ISO_PREFIX = "shared_"
+	const ISO_AGENT = `agent-${randomUUID().slice(0, 8)}`
+	let isoClient: MongoClient
+	let isoDb: Db
+
+	// Flags every existing fact key present in the prompt as contradicted.
+	const flagEverythingProvider: EnrichmentProvider = {
+		name: "mock-flag-all",
+		chatCompletion: async ({ messages }) => {
+			const userMsg = messages.find((m) => m.role === "user")?.content ?? ""
+			const keys = [...userMsg.matchAll(/key=(\S+):/g)].map((m) => m[1])
+			return {
+				content: JSON.stringify({
+					contradictions: keys.map((key) => ({ key, rationale: "mock" })),
+				}),
+			}
+		},
+	}
+
+	beforeAll(async () => {
+		isoClient = new MongoClient(TEST_URI)
+		await isoClient.connect()
+		isoDb = isoClient.db(ISO_DB)
+		await ensureCollections(isoDb, ISO_PREFIX)
+		await ensureStandardIndexes(isoDb, ISO_PREFIX)
+
+		// Same agent, two DIFFERENT scopeRefs (two tenants sharing a collection).
+		for (const ref of ["user:alice", "user:bob"]) {
+			await writeStructuredMemory({
+				db: isoDb,
+				prefix: ISO_PREFIX,
+				embeddingMode: "automated",
+				entry: {
+					type: "fact",
+					key: "fact-berlin",
+					value: "The user lives in Berlin.",
+					agentId: ISO_AGENT,
+					scope: "user",
+					scopeRef: ref,
+				},
+			})
+		}
+	}, 60000)
+
+	afterAll(async () => {
+		await isoDb?.dropDatabase().catch(() => {})
+		await isoClient?.close()
+	})
+
+	it("only invalidates the contradicted fact within the acting tenant", async () => {
+		const invalidated = await invalidateContradictedFacts({
+			db: isoDb,
+			prefix: ISO_PREFIX,
+			provider: flagEverythingProvider,
+			model: "mock",
+			agentId: ISO_AGENT,
+			scope: "user",
+			scopeRef: "user:alice",
+			newFacts: [{ key: "fact-london", value: "The user lives in London." }],
+		})
+		expect(invalidated).toBe(1)
+
+		const alice = await structuredMemCollection(isoDb, ISO_PREFIX).findOne({
+			agentId: ISO_AGENT,
+			scopeRef: "user:alice",
+			key: "fact-berlin",
+		})
+		const bob = await structuredMemCollection(isoDb, ISO_PREFIX).findOne({
+			agentId: ISO_AGENT,
+			scopeRef: "user:bob",
+			key: "fact-berlin",
+		})
+		// Acting tenant's fact is expired; the sibling tenant's identical fact is
+		// completely untouched.
+		expect(alice?.state).toBe("invalidated")
+		expect(bob?.state).toBe("active")
+	})
+})

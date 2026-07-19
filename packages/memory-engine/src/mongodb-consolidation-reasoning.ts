@@ -31,7 +31,13 @@ export type ReasonedFact = {
 // nothing to combine against.
 const MIN_FACTS = 2
 const MAX_FACTS = 40
-const MAX_TOKENS = 700
+// Strict entailment/generalization is heavy reasoning: a reasoning model (e.g.
+// DeepSeek) can spend ~5k tokens of chain-of-thought BEFORE emitting the JSON,
+// and that budget is consumed first. A small cap truncates mid-reasoning, so the
+// response never becomes parseable and every run silently returns []. Budget
+// generously — a non-reasoning model stops early and wastes nothing. (measured
+// live: 2-fact deduction used ~5k completion tokens end to end.)
+const MAX_TOKENS = 8000
 
 const DEDUCTION_SYSTEM_PROMPT = `You are a careful reasoning engine for a long-term memory system.
 Given a list of known facts about a user or project, derive ONLY facts that MUST be logically true given the inputs — strict entailment, no speculation.
