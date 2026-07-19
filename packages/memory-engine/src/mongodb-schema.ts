@@ -1480,6 +1480,7 @@ export async function ensureStandardIndexes(
 		embeddingCacheTtlDays?: number
 		memoryTtlDays?: number
 		relevanceRetentionDays?: number
+		revisionRetentionDays?: number
 	},
 ): Promise<number> {
 	let applied = 0
@@ -1709,6 +1710,15 @@ export async function ensureStandardIndexes(
 	await structured.createIndex(
 		{ value: "text", context: "text" },
 		{ name: "idx_structured_text" },
+	)
+	applied++
+	// Bi-temporal valid-time index (#32): serves buildCurrentValidityClause's
+	// "as of T" predicate (validFrom <= T AND (validTo absent OR > T)) under the
+	// tenant equality keys, mirroring the events collection's validAt/invalidAt
+	// compound index shape.
+	await structured.createIndex(
+		{ agentId: 1, scope: 1, scopeRef: 1, validFrom: 1, validTo: 1 },
+		{ name: "idx_structured_scope_validfrom_validto" },
 	)
 	applied++
 
@@ -2058,6 +2068,20 @@ export async function ensureStandardIndexes(
 		{ name: "idx_structured_revisions_identity_revision" },
 	)
 	applied++
+	// Optional retention cap on structured history (#32). Default is indefinite
+	// retention — bi-temporal "as of T" queries depend on the revision history —
+	// so a destructive TTL is created ONLY when a retention window is explicitly
+	// configured. Keyed on supersededAt (when the revision left the current set).
+	if (ttlOpts?.revisionRetentionDays && ttlOpts.revisionRetentionDays > 0) {
+		await structuredRevisions.createIndex(
+			{ supersededAt: 1 },
+			{
+				name: "idx_structured_revisions_ttl",
+				expireAfterSeconds: ttlOpts.revisionRetentionDays * 24 * 60 * 60,
+			},
+		)
+		applied++
+	}
 
 	const procedures = proceduresCollection(db, prefix)
 	try {
