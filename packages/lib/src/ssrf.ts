@@ -61,7 +61,12 @@ function isPrivateIpv6(ip: string): boolean {
 }
 
 export function isPrivateIpAddress(address: string): boolean {
-	const trimmed = address.trim()
+	let trimmed = address.trim()
+	// URL hostnames keep IPv6 literals bracketed (e.g. "[::1]"); strip so the
+	// literal is recognized on both the guard path and the self-hosted opt-in.
+	if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+		trimmed = trimmed.slice(1, -1)
+	}
 	if (trimmed.includes(":")) return isPrivateIpv6(trimmed)
 	return isPrivateIpv4(trimmed)
 }
@@ -123,6 +128,8 @@ export async function assertPublicHostname(hostname: string): Promise<void> {
 	}
 }
 
-export const defaultSsrfPolicy: SsrFPolicy = {
-	allowPrivateNetwork: true,
-}
+// Fail closed by default: when no policy is supplied, outbound fetches must
+// target a public host (the DNS guard runs). Callers with a legitimate private
+// endpoint opt in explicitly via `allowPrivateNetwork` (or a base-URL policy
+// built from a privately-configured host).
+export const defaultSsrfPolicy: SsrFPolicy = {}

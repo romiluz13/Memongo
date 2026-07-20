@@ -1,9 +1,118 @@
 import { createHash, timingSafeEqual } from "node:crypto"
-import { Hono, type Context } from "hono"
+import { Hono, type Context, type MiddlewareHandler } from "hono"
+import { bodyLimit } from "hono/body-limit"
 import { cors } from "hono/cors"
 import { openApiSpec } from "./openapi-spec.js"
 import { createV1Router } from "./routes/v1.js"
 import { resolveScopeField, resolveScopeInput } from "./scope-identity.js"
+
+// Baseline network hardening (#28). Defaults are generous so normal use is
+// unaffected; operators tighten via env. Body size is capped BEFORE JSON
+// parsing so an oversized payload is rejected without being buffered/parsed.
+const DEFAULT_MAX_BODY_BYTES = 1_000_000
+const DEFAULT_RATE_LIMIT = 600
+const DEFAULT_RATE_WINDOW_MS = 60_000
+
+function parsePositiveIntEnv(
+	raw: string | undefined,
+	fallback: number,
+): number {
+	if (raw === undefined || raw.trim() === "") {
+		return fallback
+	}
+	const parsed = Number(raw)
+	if (!Number.isFinite(parsed) || parsed < 0) {
+		return fallback
+	}
+	return Math.floor(parsed)
+}
+
+function parseBoolEnv(raw: string | undefined): boolean {
+	const v = raw?.trim().toLowerCase()
+	return v === "1" || v === "true" || v === "yes"
+}
+
+// Hard ceiling on distinct rate-limit buckets. Beyond this the limiter fails
+// closed for NEW identities rather than growing without bound — otherwise an
+// attacker rotating keys (e.g. spoofed X-Forwarded-For) could exhaust memory.
+const RATE_LIMIT_MAX_BUCKETS = 100_000
+
+/**
+ * The rate-limit identity for a request: the bearer token (per-key) when
+ * present, else — only when the deployment opts into trusting its proxy — the
+ * forwarded client IP (per-IP), else a shared anonymous bucket. X-Forwarded-For
+ * is attacker-controlled unless a trusted proxy sets it, so per-IP keying is
+ * gated behind MEMONGO_TRUST_PROXY to avoid unbounded attacker-chosen keys.
+ * Bearer tokens are hashed so raw secrets never key the map.
+ */
+function rateLimitKey(c: Context, trustProxy: boolean): string {
+	const auth = c.req.header("Authorization") ?? ""
+	const bearer = auth.startsWith("Bearer ") ? auth.slice(7).trim() : ""
+	if (bearer) {
+		return `k:${createHash("sha256").update(bearer, "utf8").digest("hex")}`
+	}
+	if (trustProxy) {
+		const forwarded = (c.req.header("X-Forwarded-For") ?? "")
+			.split(",")[0]
+			?.trim()
+		if (forwarded) {
+			return `ip:${forwarded}`
+		}
+	}
+	return "anonymous"
+}
+
+type RateBucket = { count: number; resetAt: number }
+
+/**
+ * Fixed-window in-memory rate limiter. State is per-app-instance (created in
+ * createApp) so it never leaks across tests or app instances. Single-process
+ * only; a shared store is out of scope (tracked with the durability work).
+ */
+function createRateLimiter(
+	limit: number,
+	windowMs: number,
+	trustProxy: boolean,
+): MiddlewareHandler {
+	const buckets = new Map<string, RateBucket>()
+	// Sweep expired buckets at most once per window (amortized O(1)/request)
+	// rather than scanning on every request once the map is large.
+	let nextSweepAt = 0
+	const tooManyResponse = (c: Context, retryAfterMs: number): Response => {
+		c.header("Retry-After", String(Math.max(1, Math.ceil(retryAfterMs / 1000))))
+		return c.json(
+			{ error: { code: "RATE_LIMITED", message: "rate limit exceeded" } },
+			429,
+		)
+	}
+	return async (c, next) => {
+		const now = Date.now()
+		if (now >= nextSweepAt) {
+			for (const [key, bucket] of buckets) {
+				if (now >= bucket.resetAt) {
+					buckets.delete(key)
+				}
+			}
+			nextSweepAt = now + windowMs
+		}
+		const key = rateLimitKey(c, trustProxy)
+		let bucket = buckets.get(key)
+		if (!bucket || now >= bucket.resetAt) {
+			// Fail closed for new identities once saturated, so the limiter can
+			// never be turned into a memory-exhaustion vector.
+			if (!bucket && buckets.size >= RATE_LIMIT_MAX_BUCKETS) {
+				return tooManyResponse(c, windowMs)
+			}
+			bucket = { count: 0, resetAt: now + windowMs }
+			buckets.set(key, bucket)
+		}
+		bucket.count++
+		if (bucket.count > limit) {
+			return tooManyResponse(c, bucket.resetAt - now)
+		}
+		await next()
+	}
+}
 
 /**
  * Constant-time bearer comparison. Using `===` would short-circuit on the
@@ -255,6 +364,46 @@ export function createApp(): Hono {
 	const app = new Hono()
 
 	app.use("/*", cors())
+
+	// #28 network hardening on /v1: rate-limit first (cheapest rejection, also
+	// throttles unauthenticated auth attempts), then cap body size before any
+	// handler parses JSON. Set MEMONGO_API_RATE_LIMIT=0 to disable rate limiting.
+	const rateLimit = parsePositiveIntEnv(
+		process.env.MEMONGO_API_RATE_LIMIT,
+		DEFAULT_RATE_LIMIT,
+	)
+	if (rateLimit > 0) {
+		const windowMs = parsePositiveIntEnv(
+			process.env.MEMONGO_API_RATE_WINDOW_MS,
+			DEFAULT_RATE_WINDOW_MS,
+		)
+		const trustProxy = parseBoolEnv(process.env.MEMONGO_TRUST_PROXY)
+		app.use("/v1/*", createRateLimiter(rateLimit, windowMs, trustProxy))
+	}
+	// MEMONGO_API_MAX_BODY_BYTES=0 disables the cap (symmetric with the rate
+	// limit) rather than rejecting every body.
+	const maxBodyBytes = parsePositiveIntEnv(
+		process.env.MEMONGO_API_MAX_BODY_BYTES,
+		DEFAULT_MAX_BODY_BYTES,
+	)
+	if (maxBodyBytes > 0) {
+		app.use(
+			"/v1/*",
+			bodyLimit({
+				maxSize: maxBodyBytes,
+				onError: (c) =>
+					c.json(
+						{
+							error: {
+								code: "PAYLOAD_TOO_LARGE",
+								message: "request body exceeds the configured size limit",
+							},
+						},
+						413,
+					),
+			}),
+		)
+	}
 
 	const token = process.env.MEMONGO_API_KEY?.trim()
 	const scopedPolicies = parseScopedApiKeyPolicies()

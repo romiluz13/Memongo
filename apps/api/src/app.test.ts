@@ -836,6 +836,113 @@ describe("createApp", () => {
 		expect(bridgeMocks.memongoBridgeGetLifecycleItem).toHaveBeenCalledOnce()
 	})
 
+	it("#28: rate-limits per identity and returns 429 with Retry-After", async () => {
+		process.env.MEMONGO_API_KEY = ""
+		process.env.MEMONGO_API_SCOPED_KEYS = ""
+		process.env.MEMONGO_API_RATE_LIMIT = "1"
+		bridgeMocks.memongoBridgeStatus.mockResolvedValue({ ok: true })
+
+		const app = createApp()
+		const first = await app.request("/v1/status")
+		expect(first.status).toBe(200)
+
+		const second = await app.request("/v1/status")
+		expect(second.status).toBe(429)
+		expect(second.headers.get("Retry-After")).toBeTruthy()
+		const body = (await second.json()) as { error: { code: string } }
+		expect(body.error.code).toBe("RATE_LIMITED")
+	})
+
+	it("#28: rate limiting can be disabled with MEMONGO_API_RATE_LIMIT=0", async () => {
+		process.env.MEMONGO_API_KEY = ""
+		process.env.MEMONGO_API_SCOPED_KEYS = ""
+		process.env.MEMONGO_API_RATE_LIMIT = "0"
+		bridgeMocks.memongoBridgeStatus.mockResolvedValue({ ok: true })
+
+		const app = createApp()
+		for (let i = 0; i < 5; i++) {
+			expect((await app.request("/v1/status")).status).toBe(200)
+		}
+	})
+
+	it("#28: ignores X-Forwarded-For for rate limiting unless MEMONGO_TRUST_PROXY is set", async () => {
+		process.env.MEMONGO_API_KEY = ""
+		process.env.MEMONGO_API_SCOPED_KEYS = ""
+		process.env.MEMONGO_API_RATE_LIMIT = "1"
+		process.env.MEMONGO_TRUST_PROXY = ""
+		bridgeMocks.memongoBridgeStatus.mockResolvedValue({ ok: true })
+
+		const app = createApp()
+		// Different spoofed XFF values must NOT create separate buckets by default,
+		// or an attacker could rotate the header to evade the limit.
+		const first = await app.request("/v1/status", {
+			headers: { "X-Forwarded-For": "1.1.1.1" },
+		})
+		expect(first.status).toBe(200)
+		const second = await app.request("/v1/status", {
+			headers: { "X-Forwarded-For": "2.2.2.2" },
+		})
+		expect(second.status).toBe(429)
+	})
+
+	it("#28: keys rate limiting per forwarded IP when MEMONGO_TRUST_PROXY is enabled", async () => {
+		process.env.MEMONGO_API_KEY = ""
+		process.env.MEMONGO_API_SCOPED_KEYS = ""
+		process.env.MEMONGO_API_RATE_LIMIT = "1"
+		process.env.MEMONGO_TRUST_PROXY = "true"
+		bridgeMocks.memongoBridgeStatus.mockResolvedValue({ ok: true })
+
+		const app = createApp()
+		const a = await app.request("/v1/status", {
+			headers: { "X-Forwarded-For": "1.1.1.1" },
+		})
+		const b = await app.request("/v1/status", {
+			headers: { "X-Forwarded-For": "2.2.2.2" },
+		})
+		expect(a.status).toBe(200)
+		expect(b.status).toBe(200)
+	})
+
+	it("#28: MEMONGO_API_MAX_BODY_BYTES=0 disables the body cap", async () => {
+		process.env.MEMONGO_API_KEY = ""
+		process.env.MEMONGO_API_SCOPED_KEYS = ""
+		process.env.MEMONGO_API_RATE_LIMIT = "0"
+		process.env.MEMONGO_API_MAX_BODY_BYTES = "0"
+
+		const body = JSON.stringify({ query: "x".repeat(5000) })
+		const res = await createApp().request("/v1/search", {
+			method: "POST",
+			headers: {
+				"Content-Type": "application/json",
+				"Content-Length": String(body.length),
+			},
+			body,
+		})
+
+		expect(res.status).toBe(200)
+		expect(bridgeMocks.memongoBridgeSearch).toHaveBeenCalledOnce()
+	})
+
+	it("#28: caps request body size and returns 413 before the handler parses it", async () => {
+		process.env.MEMONGO_API_KEY = ""
+		process.env.MEMONGO_API_SCOPED_KEYS = ""
+		process.env.MEMONGO_API_RATE_LIMIT = "0"
+		process.env.MEMONGO_API_MAX_BODY_BYTES = "50"
+
+		const body = JSON.stringify({ query: "x".repeat(5000) })
+		const res = await createApp().request("/v1/search", {
+			method: "POST",
+			headers: {
+				"Content-Type": "application/json",
+				"Content-Length": String(body.length),
+			},
+			body,
+		})
+
+		expect(res.status).toBe(413)
+		expect(bridgeMocks.memongoBridgeSearch).not.toHaveBeenCalled()
+	})
+
 	it("logs a prominent warning once when API auth is disabled", async () => {
 		const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
 		try {
