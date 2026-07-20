@@ -175,56 +175,104 @@ export async function getMemoryStats(
 	}
 }
 
+// Collections whose documents carry (or are expected to carry) an embedding
+// vector queried by vector search.
+function embeddableChunkCollections(db: Db, prefix: string) {
+	return [
+		chunksCollection(db, prefix),
+		kbChunksCollection(db, prefix),
+		structuredMemCollection(db, prefix),
+	]
+}
+
 /**
- * Aggregate embeddingStatus across all chunk collections (chunks, kb_chunks, structured_mem).
- * Returns counts of success/failed/pending documents.
+ * Embedding coverage across all chunk collections (chunks, kb_chunks,
+ * structured_mem).
+ *
+ * #26: the `embeddingStatus` field is written as "pending" by every writer and
+ * never advanced, so grouping on it produced a fabricated, always-pending
+ * coverage number. Instead derive coverage from the REAL signal — whether the
+ * document actually carries a non-empty `embedding` vector (the field the vector
+ * index queries) — so the reported number reflects reality.
+ *
+ * NOTE (autoEmbed): with Atlas autoEmbed the vector is generated and stored by
+ * Atlas in a managed collection, NOT on the document, so on-document presence
+ * understates coverage in that mode. Confirming autoEmbed queryability requires
+ * a live vector-search probe against the atlas-local + mongot stack (doctor
+ * probe / e2e); that is out of scope for this in-process aggregation.
  */
 async function aggregateEmbeddingStatusCoverage(
 	db: Db,
 	prefix: string,
 ): Promise<EmbeddingStatusCoverage> {
-	const collections = [
-		chunksCollection(db, prefix),
-		kbChunksCollection(db, prefix),
-		structuredMemCollection(db, prefix),
-	]
-
 	let total = 0
 	let success = 0
-	let failed = 0
-	let pending = 0
 
-	for (const col of collections) {
+	for (const col of embeddableChunkCollections(db, prefix)) {
 		try {
-			const statusAgg: Document[] = await col
+			const agg: Document[] = await col
 				.aggregate([
 					{
 						$group: {
-							_id: { $ifNull: ["$embeddingStatus", "pending"] },
-							count: { $sum: 1 },
+							_id: null,
+							total: { $sum: 1 },
+							withEmbedding: {
+								$sum: {
+									$cond: [
+										{ $gt: [{ $size: { $ifNull: ["$embedding", []] } }, 0] },
+										1,
+										0,
+									],
+								},
+							},
 						},
 					},
 				])
 				.toArray()
 
-			for (const doc of statusAgg) {
-				const status = String(doc._id)
-				const count = doc.count as number
-				total += count
-				if (status === "success") {
-					success += count
-				} else if (status === "failed") {
-					failed += count
-				} else {
-					pending += count
-				}
+			const row = agg[0]
+			if (row) {
+				total += (row.total as number) ?? 0
+				success += (row.withEmbedding as number) ?? 0
 			}
 		} catch {
 			// Collection may not exist yet — ignore
 		}
 	}
 
-	return { total, success, failed, pending }
+	// `failed` is not derivable from on-document presence alone; only genuinely
+	// embedded (success) vs not-yet-embedded (pending) are reported honestly.
+	return { total, success, failed: 0, pending: total - success }
+}
+
+/**
+ * #26 reconciliation: advance the stored `embeddingStatus` field to "success"
+ * for documents that actually carry an embedding vector, so the persisted field
+ * stops lying (it was written "pending" and never advanced). Returns how many
+ * documents were advanced. Documents without an on-document vector are left as
+ * pending — for autoEmbed collections their queryability must be confirmed via a
+ * live vector-search probe, not this sweep.
+ */
+export async function reconcileEmbeddingStatus(
+	db: Db,
+	prefix: string,
+): Promise<{ advanced: number }> {
+	let advanced = 0
+	for (const col of embeddableChunkCollections(db, prefix)) {
+		try {
+			const res = await col.updateMany(
+				{
+					"embedding.0": { $exists: true },
+					embeddingStatus: { $ne: "success" },
+				},
+				{ $set: { embeddingStatus: "success" } },
+			)
+			advanced += res.modifiedCount ?? 0
+		} catch {
+			// Collection may not exist yet — ignore
+		}
+	}
+	return { advanced }
 }
 
 /**

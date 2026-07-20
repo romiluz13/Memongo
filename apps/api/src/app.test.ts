@@ -3069,6 +3069,60 @@ describe("createApp", () => {
 		})
 	})
 
+	it("scope isolation: search-kb forwards the authorized scopeRef to the bridge", async () => {
+		process.env.MEMONGO_API_KEY = ""
+		process.env.MEMONGO_API_SCOPED_KEYS = JSON.stringify([
+			{ token: "scoped-A", scopeRefs: ["ref-A"] },
+		])
+		bridgeMocks.memongoBridgeSearchKB.mockReset()
+		bridgeMocks.memongoBridgeSearchKB.mockResolvedValue([])
+
+		const res = await createApp().request("/v1/search-kb?scopeRef=ref-A", {
+			method: "POST",
+			headers: {
+				Authorization: "Bearer scoped-A",
+				"Content-Type": "application/json",
+			},
+			body: JSON.stringify({ query: "hello" }),
+		})
+
+		expect(res.status).toBe(200)
+		const call = bridgeMocks.memongoBridgeSearchKB.mock.calls[0]?.[0]
+		expect(call?.scopeRef).toBe("ref-A")
+	})
+
+	it("scope isolation: recall-conversation forwards the authorized scope/scopeRef to the bridge", async () => {
+		process.env.MEMONGO_API_KEY = ""
+		process.env.MEMONGO_API_SCOPED_KEYS = JSON.stringify([
+			{ token: "scoped-A", scopes: ["tenant"], scopeRefs: ["ref-A"] },
+		])
+		bridgeMocks.memongoBridgeRecallConversation.mockReset()
+		bridgeMocks.memongoBridgeRecallConversation.mockResolvedValue({
+			results: [],
+			metadata: {
+				totalMatched: 0,
+				queryUsed: "x",
+				filtersApplied: [],
+				searchMethod: "standard",
+				durationMs: 1,
+			},
+		})
+
+		const res = await createApp().request("/v1/recall-conversation", {
+			method: "POST",
+			headers: {
+				Authorization: "Bearer scoped-A",
+				"Content-Type": "application/json",
+			},
+			body: JSON.stringify({ scope: "tenant", scopeRef: "ref-A", query: "x" }),
+		})
+
+		expect(res.status).toBe(200)
+		const call = bridgeMocks.memongoBridgeRecallConversation.mock.calls[0]?.[0]
+		expect(call?.scope).toBe("tenant")
+		expect(call?.scopeRef).toBe("ref-A")
+	})
+
 	it("rejects recall-conversation when roles contain unsupported values", async () => {
 		const res = await createApp().request("/v1/recall-conversation", {
 			method: "POST",

@@ -265,6 +265,13 @@ function buildStandardFilter(params: {
 	asOf?: Date
 }): Document {
 	const filter: Document = { agentId: params.request.agentId }
+	// Tenant isolation: restrict to the caller's scope/scopeRef when provided.
+	if (params.request.scope) {
+		filter.scope = params.request.scope
+	}
+	if (params.request.scopeRef) {
+		filter.scopeRef = params.request.scopeRef
+	}
 	if (params.request.sessionId) {
 		filter.sessionId = params.request.sessionId
 	}
@@ -300,6 +307,13 @@ function buildVectorFilter(params: {
 }): Document {
 	const filter: Document = {
 		agentId: { $eq: params.request.agentId },
+	}
+	// Tenant isolation: restrict to the caller's scope/scopeRef when provided.
+	if (params.request.scope) {
+		filter.scope = { $eq: params.request.scope }
+	}
+	if (params.request.scopeRef) {
+		filter.scopeRef = { $eq: params.request.scopeRef }
 	}
 	if (params.request.sessionId) {
 		filter.sessionId = { $eq: params.request.sessionId }

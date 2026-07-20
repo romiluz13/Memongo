@@ -1115,6 +1115,14 @@ export type ConversationRecallRole = "user" | "assistant" | "system" | "tool"
 
 export type ConversationRecallRequest = {
 	agentId: string
+	/**
+	 * Tenant-isolation coordinates. When present, recall is filtered to events
+	 * carrying the same scope/scopeRef so a scope-restricted caller cannot read
+	 * another tenant's conversation events under the same agent. Absent = the
+	 * caller is unscoped (full access) and recall spans all scopes.
+	 */
+	scope?: string
+	scopeRef?: string
 	query?: string
 	sessionId?: string
 	roles?: ConversationRecallRole[]

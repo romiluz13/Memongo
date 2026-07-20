@@ -404,6 +404,7 @@ export async function memongoBridgeWaitForBenchmarkSearchReadiness(params: {
 export async function memongoBridgeSearchKB(params: {
 	query: string
 	agentId?: string
+	scopeRef?: string
 	maxResults?: number
 	minScore?: number
 	filter?: { tags?: string[]; category?: string; source?: string }
@@ -412,6 +413,9 @@ export async function memongoBridgeSearchKB(params: {
 	return m.searchKB(params.query, {
 		maxResults: params.maxResults,
 		minScore: params.minScore,
+		// Tenant isolation: search the caller's authorized KB scopeRef, not the
+		// manager's default. Undefined falls back to the agent default in searchKB.
+		scopeRef: params.scopeRef,
 		filter: params.filter,
 	})
 }
@@ -645,6 +649,8 @@ export async function memongoBridgeBuildContextBundle(params: {
 
 export async function memongoBridgeRecallConversation(params: {
 	agentId?: string
+	scope?: string
+	scopeRef?: string
 	query?: string
 	sessionId?: string
 	roles?: Array<"user" | "assistant" | "system" | "tool">
@@ -661,6 +667,10 @@ export async function memongoBridgeRecallConversation(params: {
 		throw new Error("recallConversation is not available on this manager")
 	}
 	return m.recallConversation({
+		// Tenant isolation: forward the authorized scope/scopeRef so recall is
+		// filtered to the caller's tenant, never all scopes under the agent.
+		scope: params.scope,
+		scopeRef: params.scopeRef,
 		query: params.query,
 		sessionId: params.sessionId,
 		roles: params.roles,

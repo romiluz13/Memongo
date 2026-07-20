@@ -751,6 +751,7 @@ export function createV1Router(): Hono {
 			const results = await memongoBridgeSearchKB({
 				query,
 				agentId: await readAgentId(c),
+				scopeRef: await readScopeRef(c),
 				maxResults: readLimit(body),
 				minScore: typeof body.minScore === "number" ? body.minScore : undefined,
 				filter,
@@ -779,6 +780,8 @@ export function createV1Router(): Hono {
 		try {
 			const result = await memongoBridgeRecallConversation({
 				agentId: await readAgentId(c),
+				scope: await readScope(c),
+				scopeRef: await readScopeRef(c),
 				query: typeof body.query === "string" ? body.query : undefined,
 				sessionId:
 					typeof body.sessionId === "string" ? body.sessionId : undefined,

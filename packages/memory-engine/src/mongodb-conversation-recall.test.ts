@@ -160,6 +160,29 @@ describe("recallConversation", () => {
 		])
 	})
 
+	it("scope isolation: filters standard recall by the request scope and scopeRef", async () => {
+		const col = makeFindCollection({ results: [] })
+		vi.mocked(eventsCollection).mockReturnValue(col)
+
+		await recallConversation({
+			db: mockDb(),
+			prefix: "mem_",
+			request: {
+				agentId: "agent-1",
+				scope: "tenant",
+				scopeRef: "ref-A",
+			},
+		})
+
+		expect(col.find).toHaveBeenCalledWith(
+			expect.objectContaining({
+				agentId: "agent-1",
+				scope: "tenant",
+				scopeRef: "ref-A",
+			}),
+		)
+	})
+
 	it("lets explicit roles override the default tool-message exclusion", async () => {
 		const col = makeFindCollection({ results: [] })
 		vi.mocked(eventsCollection).mockReturnValue(col)
@@ -778,7 +801,9 @@ describe("recallConversation", () => {
 			vectorLimit as number,
 		)
 		expect(vectorStage?.numCandidates).toBeGreaterThanOrEqual(
-			(vectorLimit as number) * 20 > 10000 ? 10000 : (vectorLimit as number) * 20,
+			(vectorLimit as number) * 20 > 10000
+				? 10000
+				: (vectorLimit as number) * 20,
 		)
 		expect(vectorStage?.numCandidates).toBeLessThanOrEqual(10000)
 		// The terminal $limit still enforces the requested result count.

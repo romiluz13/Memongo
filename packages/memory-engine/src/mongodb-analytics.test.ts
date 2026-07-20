@@ -10,7 +10,10 @@ vi.mock("./mongodb-schema.js", () => ({
 	structuredMemCollection: vi.fn(),
 }))
 
-import { getMemoryStats } from "./mongodb-analytics.js"
+import {
+	getMemoryStats,
+	reconcileEmbeddingStatus,
+} from "./mongodb-analytics.js"
 import {
 	chunksCollection,
 	filesCollection,
@@ -81,6 +84,62 @@ describe("getMemoryStats", () => {
 		expect(stats.collectionSizes.files).toBe(0)
 		expect(stats.collectionSizes.chunks).toBe(0)
 		expect(stats.collectionSizes.embeddingCache).toBe(0)
+	})
+
+	it("#26: derives embedding status coverage from real embedding presence, not the unadvanced field", async () => {
+		;(mockFiles.aggregate as ReturnType<typeof vi.fn>).mockReturnValue({
+			toArray: vi.fn(async () => []),
+		})
+		;(mockChunks.aggregate as ReturnType<typeof vi.fn>)
+			.mockReturnValueOnce({ toArray: vi.fn(async () => []) }) // source counts
+			.mockReturnValueOnce({
+				toArray: vi.fn(async () => [
+					{ _id: null, withEmbedding: 8, total: 10 },
+				]),
+			}) // embeddingCoverage
+			.mockReturnValueOnce({
+				toArray: vi.fn(async () => [
+					{ _id: null, total: 10, withEmbedding: 8 },
+				]),
+			}) // status coverage (chunks)
+		;(mockKbChunks.aggregate as ReturnType<typeof vi.fn>).mockReturnValueOnce({
+			toArray: vi.fn(async () => [{ _id: null, total: 4, withEmbedding: 1 }]),
+		})
+		;(
+			mockStructuredMem.aggregate as ReturnType<typeof vi.fn>
+		).mockReturnValueOnce({
+			toArray: vi.fn(async () => [{ _id: null, total: 2, withEmbedding: 2 }]),
+		})
+
+		const stats = await getMemoryStats(db, "test_")
+
+		// success reflects docs that actually carry a vector; nothing is
+		// fabricated as "pending" from the never-advanced embeddingStatus field.
+		expect(stats.embeddingStatusCoverage).toEqual({
+			total: 16,
+			success: 11,
+			failed: 0,
+			pending: 5,
+		})
+	})
+
+	it("#26: reconcileEmbeddingStatus advances only docs carrying a vector", async () => {
+		const updateMany = vi.fn(async () => ({ modifiedCount: 3 }))
+		const cols = [mockChunks, mockKbChunks, mockStructuredMem]
+		for (const col of cols) {
+			;(col as unknown as { updateMany: unknown }).updateMany = updateMany
+		}
+
+		const res = await reconcileEmbeddingStatus(db, "test_")
+
+		expect(res.advanced).toBe(9) // 3 per collection × 3 collections
+		expect(updateMany).toHaveBeenCalledWith(
+			{
+				"embedding.0": { $exists: true },
+				embeddingStatus: { $ne: "success" },
+			},
+			{ $set: { embeddingStatus: "success" } },
+		)
 	})
 
 	it("returns per-source breakdown for memory + sessions", async () => {
@@ -184,7 +243,7 @@ describe("getMemoryStats", () => {
 		expect(mockFiles.find).not.toHaveBeenCalled()
 	})
 
-	it("aggregates embeddingStatusCoverage across all chunk collections", async () => {
+	it("aggregates embedding coverage across all chunk collections from real presence", async () => {
 		;(mockFiles.aggregate as ReturnType<typeof vi.fn>).mockReturnValue({
 			toArray: vi.fn(async () => []),
 		})
@@ -193,35 +252,28 @@ describe("getMemoryStats", () => {
 			.mockReturnValueOnce({ toArray: vi.fn(async () => []) }) // embedding agg
 			.mockReturnValueOnce({
 				toArray: vi.fn(async () => [
-					{ _id: "success", count: 10 },
-					{ _id: "failed", count: 2 },
-					{ _id: "pending", count: 3 },
+					{ _id: null, total: 15, withEmbedding: 10 },
 				]),
-			}) // status agg for chunks
-		// kb_chunks status agg
+			}) // status coverage for chunks
 		;(mockKbChunks.aggregate as ReturnType<typeof vi.fn>).mockReturnValueOnce({
-			toArray: vi.fn(async () => [
-				{ _id: "success", count: 5 },
-				{ _id: "failed", count: 1 },
-			]),
+			toArray: vi.fn(async () => [{ _id: null, total: 6, withEmbedding: 5 }]),
 		})
-		// structured_mem status agg
 		;(
 			mockStructuredMem.aggregate as ReturnType<typeof vi.fn>
 		).mockReturnValueOnce({
-			toArray: vi.fn(async () => [{ _id: "success", count: 4 }]),
+			toArray: vi.fn(async () => [{ _id: null, total: 4, withEmbedding: 4 }]),
 		})
 
 		const stats = await getMemoryStats(db, "test_")
 
-		// Totals: chunks(10+2+3=15) + kb(5+1=6) + structured(4) = 25
+		// Totals: chunks 15 + kb 6 + structured 4 = 25; embedded 10+5+4 = 19.
 		expect(stats.embeddingStatusCoverage.total).toBe(25)
-		expect(stats.embeddingStatusCoverage.success).toBe(19) // 10+5+4
-		expect(stats.embeddingStatusCoverage.failed).toBe(3) // 2+1
-		expect(stats.embeddingStatusCoverage.pending).toBe(3)
+		expect(stats.embeddingStatusCoverage.success).toBe(19)
+		expect(stats.embeddingStatusCoverage.failed).toBe(0)
+		expect(stats.embeddingStatusCoverage.pending).toBe(6) // 25 - 19
 	})
 
-	it("treats missing embeddingStatus as pending in coverage", async () => {
+	it("counts documents without an embedding vector as pending, not fabricated", async () => {
 		;(mockFiles.aggregate as ReturnType<typeof vi.fn>).mockReturnValue({
 			toArray: vi.fn(async () => []),
 		})
@@ -229,8 +281,7 @@ describe("getMemoryStats", () => {
 			.mockReturnValueOnce({ toArray: vi.fn(async () => []) })
 			.mockReturnValueOnce({ toArray: vi.fn(async () => []) })
 			.mockReturnValueOnce({
-				// $ifNull maps null embeddingStatus to "pending"
-				toArray: vi.fn(async () => [{ _id: "pending", count: 8 }]),
+				toArray: vi.fn(async () => [{ _id: null, total: 8, withEmbedding: 0 }]),
 			})
 		;(mockKbChunks.aggregate as ReturnType<typeof vi.fn>).mockReturnValueOnce({
 			toArray: vi.fn(async () => []),

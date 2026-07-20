@@ -26,7 +26,11 @@ import type {
 	ResolvedMongoDBConfig,
 } from "./backend-config.js"
 import { normalizeExtraMemoryPaths } from "./internal.js"
-import { getMemoryStats, type MemoryStats } from "./mongodb-analytics.js"
+import {
+	getMemoryStats,
+	reconcileEmbeddingStatus,
+	type MemoryStats,
+} from "./mongodb-analytics.js"
 import { MongoDBChangeStreamWatcher } from "./mongodb-change-stream.js"
 import {
 	heuristicEpisodeSummarizer,
@@ -5652,6 +5656,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		opts?: {
 			maxResults?: number
 			minScore?: number
+			scopeRef?: string
 			filter?: { tags?: string[]; category?: string; source?: string }
 		},
 	): Promise<MemorySearchResult[]> {
@@ -5674,8 +5679,9 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 			{
 				maxResults,
 				minScore,
-				// Tenant isolation: only this agent's KB chunks are searchable.
-				scopeRef: this.agentScopeRef,
+				// Tenant isolation: search the caller's authorized scopeRef when
+				// provided; otherwise fall back to this agent's default scopeRef.
+				scopeRef: opts?.scopeRef ?? this.agentScopeRef,
 				filter: opts?.filter,
 				numCandidates: mongoCfg.numCandidates,
 				vectorIndexName: `${this.prefix}kb_chunks_vector`,
@@ -7782,6 +7788,15 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 	// ---------------------------------------------------------------------------
 
 	async stats(): Promise<MemoryStats> {
+		// #26: best-effort self-heal of the stored embeddingStatus field (written
+		// "pending" and otherwise never advanced) so it converges to truth for
+		// on-document vectors. Reported coverage is derived from real presence
+		// regardless; a reconcile failure must never break the diagnostic read.
+		try {
+			await reconcileEmbeddingStatus(this.db, this.prefix)
+		} catch {
+			// ignore — stats is a read-path diagnostic
+		}
 		return getMemoryStats(this.db, this.prefix)
 	}
 
