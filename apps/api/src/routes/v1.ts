@@ -1528,6 +1528,10 @@ export function createV1Router(): Hono {
 			return c.json({ ok: true, ...out }, 202)
 		} catch (err) {
 			const message = err instanceof Error ? err.message : String(err)
+			// Tenant isolation: the event is not in the caller's authorized scope.
+			if (err instanceof Error && err.name === "EventNotInScopeError") {
+				return jsonError(c, 404, "EVENT_NOT_FOUND", message)
+			}
 			return jsonError(c, 500, "EXTRACT_FAILED", message)
 		}
 	})

@@ -3069,6 +3069,35 @@ describe("createApp", () => {
 		})
 	})
 
+	it("scope isolation: extract returns 404 when the event is not in the caller's authorized scope", async () => {
+		process.env.MEMONGO_API_KEY = ""
+		process.env.MEMONGO_API_SCOPED_KEYS = JSON.stringify([
+			{ token: "scoped-A", scopes: ["tenant"], scopeRefs: ["ref-A"] },
+		])
+		bridgeMocks.memongoBridgeExtractEvent.mockReset()
+		bridgeMocks.memongoBridgeExtractEvent.mockRejectedValue(
+			Object.assign(new Error("event not found: evt-x"), {
+				name: "EventNotInScopeError",
+			}),
+		)
+
+		const res = await createApp().request(
+			"/v1/extract?scope=tenant&scopeRef=ref-A",
+			{
+				method: "POST",
+				headers: {
+					Authorization: "Bearer scoped-A",
+					"Content-Type": "application/json",
+				},
+				body: JSON.stringify({ eventId: "evt-x" }),
+			},
+		)
+
+		expect(res.status).toBe(404)
+		const json = (await res.json()) as { error: { code: string } }
+		expect(json.error.code).toBe("EVENT_NOT_FOUND")
+	})
+
 	it("scope isolation: novelty-scan, consolidate, extract, import forward the authorized scopeRef", async () => {
 		process.env.MEMONGO_API_KEY = ""
 		process.env.MEMONGO_API_SCOPED_KEYS = JSON.stringify([

@@ -7812,6 +7812,29 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		if (!eventId) {
 			throw new Error("eventId is required")
 		}
+		// Tenant isolation: a scope-restricted caller may only extract from an event
+		// within its authorized scope/scopeRef. Enforce ownership SYNCHRONOUSLY here,
+		// before scheduling — the deterministic `extraction-${eventId}` job is often
+		// pre-created by the write path, so a scope check inside the background job
+		// would dedup away and never run.
+		if (params.scope !== undefined || params.scopeRef !== undefined) {
+			const owned = await eventsCollection(this.db, this.prefix).findOne(
+				{
+					eventId,
+					agentId: this.agentId,
+					...(params.scope !== undefined ? { scope: params.scope } : {}),
+					...(params.scopeRef !== undefined
+						? { scopeRef: params.scopeRef }
+						: {}),
+				},
+				{ projection: { _id: 1 } },
+			)
+			if (!owned) {
+				const err = new Error(`event not found: ${eventId}`)
+				err.name = "EventNotInScopeError"
+				throw err
+			}
+		}
 		return this.scheduleBackgroundExtraction(eventId, {
 			scope: params.scope,
 			scopeRef: params.scopeRef,
