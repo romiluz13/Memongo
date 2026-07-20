@@ -494,7 +494,10 @@ export async function memongoBridgeWriteStructuredMemory(params: {
 	const id = resolveAgentId(params.agentId)
 	return m.writeStructuredMemory({
 		...params.entry,
-		agentId: params.entry.agentId ?? id,
+		// Issue #42: the manager/collection prefix is selected from the
+		// authorized identity, so the stored agentId MUST be that identity.
+		// Never trust a caller-supplied entry.agentId (cross-tenant write).
+		agentId: id,
 	})
 }
 
@@ -506,7 +509,8 @@ export async function memongoBridgeWriteProcedure(params: {
 	const id = resolveAgentId(params.agentId)
 	return m.writeProcedure({
 		...params.entry,
-		agentId: params.entry.agentId ?? id,
+		// Issue #42: force the authorized identity; never trust entry.agentId.
+		agentId: id,
 	})
 }
 
