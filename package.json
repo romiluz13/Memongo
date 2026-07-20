@@ -29,12 +29,15 @@
 		"mongodb:cluster-preflight": "bun scripts/mongodb-cluster-preflight.ts",
 		"memory-eval": "bun scripts/real-memory-eval.ts",
 		"compare-memory-eval": "bun scripts/compare-memory-eval.ts",
+		"benchmark:toon": "bun scripts/benchmark-toon.ts",
+		"benchmark:toon-public": "bun scripts/benchmark-toon-public.ts",
 		"agent-smoke": "bun scripts/real-agent-smoke.ts",
 		"capability-stress": "bun scripts/real-capability-stress.ts"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^2.4.0",
 		"fast-check": "^4.8.0",
+		"gpt-tokenizer": "^3.4.0",
 		"turbo": "^2.5.0",
 		"typescript": "^5.8.0"
 	}

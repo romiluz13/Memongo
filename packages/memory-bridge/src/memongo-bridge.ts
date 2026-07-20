@@ -14,6 +14,7 @@ import type {
 	MemoryBenchmarkIngestResult,
 	MemoryConversationImportResult,
 	MemoryFeedbackSignal,
+	MemoryContextFormat,
 	AccessEventCollection,
 	MemoryActorRole,
 	RecallTrace,
@@ -238,6 +239,7 @@ type ContextBundleCapableManager = MongoDBMemoryManager & {
 			end?: string
 		}
 		mode?: "full" | "wake-up"
+		format?: MemoryContextFormat
 	}) => Promise<MemongoBridgeContextBundle>
 }
 
@@ -601,6 +603,7 @@ export async function memongoBridgeBuildContextBundle(params: {
 		end?: string
 	}
 	mode?: "full" | "wake-up"
+	format?: MemoryContextFormat
 }): Promise<MemongoBridgeContextBundle> {
 	const m = (await memongoBridgeGetManager(
 		params.agentId,
@@ -622,6 +625,7 @@ export async function memongoBridgeBuildContextBundle(params: {
 		includeProfile: params.includeProfile,
 		timeRange: params.timeRange,
 		mode: params.mode,
+		format: params.format,
 	})
 }
 

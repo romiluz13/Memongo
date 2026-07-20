@@ -39,6 +39,7 @@ async function fetchContextBundle(
 	const body: Record<string, unknown> = {
 		agentId: options.agentId ?? options.userId,
 		mode,
+		format: options.format,
 	}
 	if (mode === "full" && userQuery) {
 		body.query = userQuery

@@ -903,4 +903,6 @@ export type MemongoContextBundleInput = {
 	timeRange?: { preset?: string; start?: string; end?: string }
 	/** "wake-up" returns a compact 250-token projection for session start. Default: "full". */
 	mode?: "full" | "wake-up"
+	/** Format for the prompt-ready `rendered` string. Default: "markdown". */
+	format?: "markdown" | "json" | "toon" | "auto"
 }
