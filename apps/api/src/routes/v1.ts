@@ -1,4 +1,4 @@
-import { Hono } from "hono"
+import { Hono, type Context } from "hono"
 import {
 	memongoBridgeAdd,
 	memongoBridgeAccessSummaries,
@@ -48,6 +48,11 @@ import {
 	type StructuredMemoryEntry,
 } from "@memongo/memory-bridge"
 import { jsonError } from "../lib/errors.js"
+import {
+	resolveRequestAgentId,
+	resolveScopeField,
+	resolveScopeInput,
+} from "../scope-identity.js"
 
 const MAX_LIST_LIMIT = 100
 const MAX_HISTORY_LIMIT = 200
@@ -61,9 +66,11 @@ const VALID_SCOPE_VALUES = [
 ] as const
 type ApiScope = (typeof VALID_SCOPE_VALUES)[number]
 
-function readAgentId(body: Record<string, unknown>): string | undefined {
-	return typeof body.agentId === "string" ? body.agentId : undefined
-}
+// Issue #57: resolve agentId from the SAME merged input the auth layer
+// validates, so manager/partition selection can never diverge from the
+// authorized identity (e.g. a nested-only agentId must not fall back to the
+// default partition). Shared with the auth layer via ./scope-identity.
+const readAgentId = resolveRequestAgentId
 
 function parseListLimit(raw?: string): number | undefined {
 	if (raw === undefined) {
@@ -76,10 +83,8 @@ function parseListLimit(raw?: string): number | undefined {
 	return Math.max(1, Math.min(MAX_LIST_LIMIT, Math.floor(parsed)))
 }
 
-function readContainerTag(body: Record<string, unknown>): string | undefined {
-	return typeof body.containerTag === "string" && body.containerTag.trim()
-		? body.containerTag
-		: undefined
+function pickContainerTag(input: Record<string, unknown>): string | undefined {
+	return resolveScopeField(input, "containerTag")
 }
 
 function readQuery(body: Record<string, unknown>): string {
@@ -99,59 +104,100 @@ function readLimit(body: Record<string, unknown>): number | undefined {
 	return typeof body.maxResults === "number" ? body.maxResults : undefined
 }
 
-function readSessionId(body: Record<string, unknown>): string | undefined {
-	if (typeof body.sessionId === "string" && body.sessionId.trim()) {
-		return body.sessionId
-	}
-	return readContainerTag(body)
+function pickSessionId(input: Record<string, unknown>): string | undefined {
+	return resolveScopeField(input, "sessionId") ?? pickContainerTag(input)
 }
 
-function readSessionKey(body: Record<string, unknown>): string | undefined {
-	if (typeof body.sessionKey === "string" && body.sessionKey.trim()) {
-		return body.sessionKey
-	}
-	return readContainerTag(body)
+function pickSessionKey(input: Record<string, unknown>): string | undefined {
+	return resolveScopeField(input, "sessionKey") ?? pickContainerTag(input)
 }
 
-function readScopeRef(body: Record<string, unknown>): string | undefined {
-	if (typeof body.scopeRef === "string" && body.scopeRef.trim()) {
-		return body.scopeRef
-	}
-	return readContainerTag(body)
+// Issue #57: session identifiers can also scope a read/write within a tenant,
+// so resolve them from the same merged+nested input as scope/scopeRef. Reading
+// only the top-level body let validation and execution disagree (validation saw
+// a nested sessionId while execution saw none, silently mis-scoping the call).
+async function readSessionId(c: Context): Promise<string | undefined> {
+	return pickSessionId(await resolveScopeInput(c))
 }
 
-function readScope(body: Record<string, unknown>): ApiScope | undefined {
-	const scope = typeof body.scope === "string" ? body.scope : undefined
-	if (VALID_SCOPE_VALUES.includes(scope as ApiScope)) {
-		return scope as ApiScope
-	}
-	return undefined
+async function readSessionKey(c: Context): Promise<string | undefined> {
+	return pickSessionKey(await resolveScopeInput(c))
 }
 
-function readScopeInputError(body: Record<string, unknown>): string | null {
-	if (
-		body.scope !== undefined &&
-		(typeof body.scope !== "string" || !readScope(body))
-	) {
+// Issue #57: scope and scopeRef are tenant-isolation boundaries, so the value
+// used for a read/write MUST be the SAME value the auth layer validated. Auth
+// resolves them from the merged query+body+nested input (see ./scope-identity),
+// so these readers do too — reading only the top-level body would let a request
+// pass auth under one scopeRef yet execute under another (e.g. scopeRef supplied
+// only as a query param or nested in `params`). pickScope/pickScopeRef are the
+// pure resolvers over an already-merged input; readScope/readScopeRef wrap them
+// over the request context, mirroring readAgentId.
+function pickScope(input: Record<string, unknown>): ApiScope | undefined {
+	const scope = resolveScopeField(input, "scope")
+	return scope && VALID_SCOPE_VALUES.includes(scope as ApiScope)
+		? (scope as ApiScope)
+		: undefined
+}
+
+function pickScopeRef(input: Record<string, unknown>): string | undefined {
+	return (
+		resolveScopeField(input, "scopeRef") ??
+		resolveScopeField(input, "containerTag")
+	)
+}
+
+async function readScope(c: Context): Promise<ApiScope | undefined> {
+	return pickScope(await resolveScopeInput(c))
+}
+
+async function readScopeRef(c: Context): Promise<string | undefined> {
+	return pickScopeRef(await resolveScopeInput(c))
+}
+
+function scopeInputError(input: Record<string, unknown>): string | null {
+	// Auth normalizes empty/whitespace scope fields to "absent" via
+	// resolveScopeField, so validation must treat them the same way — otherwise
+	// the validation and auth layers would disagree about what was provided.
+	if (resolveScopeField(input, "scope") !== undefined && !pickScope(input)) {
 		return "scope must be session|user|agent|workspace|tenant|global"
 	}
-	if (
-		body.scopeRef !== undefined &&
-		(typeof body.scopeRef !== "string" || !body.scopeRef.trim())
-	) {
-		return "scopeRef must be a non-empty string"
-	}
-	const scope = readScope(body)
+	const scope = pickScope(input)
 	if (
 		scope === "session" &&
-		!readScopeRef(body) &&
-		!readSessionId(body) &&
-		!readSessionKey(body)
+		!pickScopeRef(input) &&
+		!pickSessionId(input) &&
+		!pickSessionKey(input)
 	) {
 		return "session scope requires sessionId, sessionKey, scopeRef, or containerTag"
 	}
-	if ((scope === "user" || scope === "tenant") && !readScopeRef(body)) {
+	if ((scope === "user" || scope === "tenant") && !pickScopeRef(input)) {
 		return `${scope} scope requires scopeRef`
+	}
+	return null
+}
+
+async function readScopeInputError(c: Context): Promise<string | null> {
+	return scopeInputError(await resolveScopeInput(c))
+}
+
+// Issue #57: lifecycle routes accept a full, client-supplied stable handle whose
+// agentId/scope/scopeRef the bridge uses verbatim to select the manager and
+// intra-collection partition. The auth layer only validated the merged-input
+// identity, so a scoped key could pass auth under one identity (e.g. a top-level
+// decoy agentId) while the handle points at another tenant's data. Require the
+// handle's tenant coordinates to equal the authorized identity, failing closed.
+async function lifecycleHandleIdentityError(
+	c: Context,
+	handle: MemoryStableHandle,
+): Promise<string | null> {
+	if (handle.agentId !== (await readAgentId(c))) {
+		return "handle agentId does not match the authorized identity"
+	}
+	if (handle.scope !== (await readScope(c))) {
+		return "handle scope does not match the authorized identity"
+	}
+	if (handle.scopeRef !== (await readScopeRef(c))) {
+		return "handle scopeRef does not match the authorized identity"
 	}
 	return null
 }
@@ -405,7 +451,7 @@ function readLifecycleHandle(raw: unknown): MemoryStableHandle | null {
 	}
 	const id = typeof raw.id === "string" ? raw.id.trim() : ""
 	const agentId = typeof raw.agentId === "string" ? raw.agentId.trim() : ""
-	const scope = readScope(raw)
+	const scope = pickScope(raw)
 	const scopeRef = typeof raw.scopeRef === "string" ? raw.scopeRef.trim() : ""
 	const revision =
 		typeof raw.revision === "number" && Number.isInteger(raw.revision)
@@ -666,19 +712,19 @@ export function createV1Router(): Hono {
 		if (!query.trim()) {
 			return jsonError(c, 400, "VALIDATION_ERROR", "query is required")
 		}
-		const scopeError = readScopeInputError(body)
+		const scopeError = await readScopeInputError(c)
 		if (scopeError) {
 			return jsonError(c, 400, "VALIDATION_ERROR", scopeError)
 		}
 		try {
 			const results = await memongoBridgeSearch({
 				query,
-				agentId: readAgentId(body),
+				agentId: await readAgentId(c),
 				maxResults: readLimit(body),
 				minScore: typeof body.minScore === "number" ? body.minScore : undefined,
-				sessionKey: readSessionKey(body),
-				scope: readScope(body),
-				scopeRef: readScopeRef(body),
+				sessionKey: await readSessionKey(c),
+				scope: await readScope(c),
+				scopeRef: await readScopeRef(c),
 			})
 			return c.json({ results })
 		} catch (err) {
@@ -709,7 +755,7 @@ export function createV1Router(): Hono {
 					: undefined
 			const results = await memongoBridgeSearchKB({
 				query,
-				agentId: readAgentId(body),
+				agentId: await readAgentId(c),
 				maxResults: readLimit(body),
 				minScore: typeof body.minScore === "number" ? body.minScore : undefined,
 				filter,
@@ -737,7 +783,7 @@ export function createV1Router(): Hono {
 		}
 		try {
 			const result = await memongoBridgeRecallConversation({
-				agentId: readAgentId(body),
+				agentId: await readAgentId(c),
 				query: typeof body.query === "string" ? body.query : undefined,
 				sessionId:
 					typeof body.sessionId === "string" ? body.sessionId : undefined,
@@ -775,9 +821,9 @@ export function createV1Router(): Hono {
 		}
 		try {
 			const result = await memongoBridgeImportConversations({
-				agentId: readAgentId(body),
+				agentId: await readAgentId(c),
 				datasetPath: body.datasetPath,
-				scope: readScope(body),
+				scope: await readScope(c),
 				limitConversations:
 					typeof body.limitConversations === "number"
 						? body.limitConversations
@@ -808,6 +854,10 @@ export function createV1Router(): Hono {
 				"handle must be a valid structured/procedure stable handle",
 			)
 		}
+		const identityError = await lifecycleHandleIdentityError(c, handle)
+		if (identityError) {
+			return jsonError(c, 403, "FORBIDDEN", identityError)
+		}
 		try {
 			const item = await memongoBridgeGetLifecycleItem({ handle })
 			if (!item) {
@@ -833,6 +883,10 @@ export function createV1Router(): Hono {
 				"VALIDATION_ERROR",
 				"handle must be a valid structured/procedure stable handle",
 			)
+		}
+		const identityError = await lifecycleHandleIdentityError(c, handle)
+		if (identityError) {
+			return jsonError(c, 403, "FORBIDDEN", identityError)
 		}
 		const patch =
 			handle.family === "structured"
@@ -871,6 +925,10 @@ export function createV1Router(): Hono {
 				"VALIDATION_ERROR",
 				"handle must be a valid structured/procedure stable handle",
 			)
+		}
+		const identityError = await lifecycleHandleIdentityError(c, handle)
+		if (identityError) {
+			return jsonError(c, 403, "FORBIDDEN", identityError)
 		}
 		if (body.invalidatedBy !== undefined && !isRecord(body.invalidatedBy)) {
 			return jsonError(
@@ -911,6 +969,10 @@ export function createV1Router(): Hono {
 				"handle must be a valid structured/procedure stable handle",
 			)
 		}
+		const identityError = await lifecycleHandleIdentityError(c, handle)
+		if (identityError) {
+			return jsonError(c, 403, "FORBIDDEN", identityError)
+		}
 		if (
 			body.limit !== undefined &&
 			(typeof body.limit !== "number" || !Number.isFinite(body.limit))
@@ -949,6 +1011,10 @@ export function createV1Router(): Hono {
 				"VALIDATION_ERROR",
 				"handle must be a valid procedure stable handle",
 			)
+		}
+		const outcomeIdentityError = await lifecycleHandleIdentityError(c, handle)
+		if (outcomeIdentityError) {
+			return jsonError(c, 403, "FORBIDDEN", outcomeIdentityError)
 		}
 		if (typeof body.success !== "boolean") {
 			return jsonError(c, 400, "VALIDATION_ERROR", "success must be a boolean")
@@ -995,6 +1061,10 @@ export function createV1Router(): Hono {
 				"VALIDATION_ERROR",
 				"handle must be a valid structured memory stable handle",
 			)
+		}
+		const feedbackIdentityError = await lifecycleHandleIdentityError(c, handle)
+		if (feedbackIdentityError) {
+			return jsonError(c, 403, "FORBIDDEN", feedbackIdentityError)
 		}
 		const signal =
 			body.signal === "confirm" ||
@@ -1068,7 +1138,7 @@ export function createV1Router(): Hono {
 			string,
 			unknown
 		>
-		const scopeError = readScopeInputError(body)
+		const scopeError = await readScopeInputError(c)
 		if (scopeError) {
 			return jsonError(c, 400, "VALIDATION_ERROR", scopeError)
 		}
@@ -1119,9 +1189,9 @@ export function createV1Router(): Hono {
 					: undefined
 			const result = await memongoBridgeSearchDetailed({
 				query,
-				agentId: readAgentId(body),
-				scope: readScope(body),
-				scopeRef: readScopeRef(body),
+				agentId: await readAgentId(c),
+				scope: await readScope(c),
+				scopeRef: await readScopeRef(c),
 				maxResults: readLimit(body),
 				minScore: typeof body.minScore === "number" ? body.minScore : undefined,
 				searchMode,
@@ -1190,15 +1260,15 @@ export function createV1Router(): Hono {
 			string,
 			unknown
 		>
-		const scopeError = readScopeInputError(body)
+		const scopeError = await readScopeInputError(c)
 		if (scopeError) {
 			return jsonError(c, 400, "VALIDATION_ERROR", scopeError)
 		}
 		try {
 			const slate = await memongoBridgeHydrateActiveSlate({
-				agentId: readAgentId(body),
-				scope: readScope(body),
-				scopeRef: readScopeRef(body),
+				agentId: await readAgentId(c),
+				scope: await readScope(c),
+				scopeRef: await readScopeRef(c),
 				maxItems: typeof body.maxItems === "number" ? body.maxItems : undefined,
 			})
 			return c.json(slate)
@@ -1223,7 +1293,7 @@ export function createV1Router(): Hono {
 		) {
 			return jsonError(c, 400, "VALIDATION_ERROR", "query is required")
 		}
-		const scopeError = readScopeInputError(body)
+		const scopeError = await readScopeInputError(c)
 		if (scopeError) {
 			return jsonError(c, 400, "VALIDATION_ERROR", scopeError)
 		}
@@ -1235,11 +1305,11 @@ export function createV1Router(): Hono {
 					? (body.timeRange as Record<string, unknown>)
 					: undefined
 			const projection = await memongoBridgeBuildDiscoveryProjection({
-				agentId: readAgentId(body),
+				agentId: await readAgentId(c),
 				kind,
 				query: readQuery(body) || undefined,
-				scope: readScope(body),
-				scopeRef: readScopeRef(body),
+				scope: await readScope(c),
+				scopeRef: await readScopeRef(c),
 				maxItems: typeof body.maxItems === "number" ? body.maxItems : undefined,
 				timeRange: timeRange as
 					| { preset?: string; start?: string; end?: string }
@@ -1269,7 +1339,7 @@ export function createV1Router(): Hono {
 				"discoveryKind must be entity-brief|topic-brief|what-changed|contradiction-report",
 			)
 		}
-		const scopeError = readScopeInputError(body)
+		const scopeError = await readScopeInputError(c)
 		if (scopeError) {
 			return jsonError(c, 400, "VALIDATION_ERROR", scopeError)
 		}
@@ -1281,11 +1351,11 @@ export function createV1Router(): Hono {
 					? (body.timeRange as Record<string, unknown>)
 					: undefined
 			const bundle = await memongoBridgeBuildContextBundle({
-				agentId: readAgentId(body),
+				agentId: await readAgentId(c),
 				query: readQuery(body) || undefined,
-				scope: readScope(body),
-				scopeRef: readScopeRef(body),
-				sessionId: readSessionId(body),
+				scope: await readScope(c),
+				scopeRef: await readScopeRef(c),
+				sessionId: await readSessionId(c),
 				tokenBudget:
 					typeof body.tokenBudget === "number" ? body.tokenBudget : undefined,
 				maxActiveItems:
@@ -1335,7 +1405,7 @@ export function createV1Router(): Hono {
 				relPath,
 				from: typeof body.from === "number" ? body.from : undefined,
 				lines: typeof body.lines === "number" ? body.lines : undefined,
-				agentId: readAgentId(body),
+				agentId: await readAgentId(c),
 			})
 			return c.json(out)
 		} catch (err) {
@@ -1353,7 +1423,7 @@ export function createV1Router(): Hono {
 		if (!content.trim()) {
 			return jsonError(c, 400, "VALIDATION_ERROR", "content is required")
 		}
-		const scopeError = readScopeInputError(body)
+		const scopeError = await readScopeInputError(c)
 		if (scopeError) {
 			return jsonError(c, 400, "VALIDATION_ERROR", scopeError)
 		}
@@ -1366,11 +1436,11 @@ export function createV1Router(): Hono {
 		try {
 			const out = await memongoBridgeAdd({
 				content,
-				agentId: readAgentId(body),
-				sessionId: readSessionId(body),
+				agentId: await readAgentId(c),
+				sessionId: await readSessionId(c),
 				metadata,
-				scope: readScope(body),
-				scopeRef: readScopeRef(body),
+				scope: await readScope(c),
+				scopeRef: await readScopeRef(c),
 			})
 			return c.json({
 				ok: true,
@@ -1406,7 +1476,7 @@ export function createV1Router(): Hono {
 		if (!bodyText.trim()) {
 			return jsonError(c, 400, "VALIDATION_ERROR", "body is required")
 		}
-		const scopeError = readScopeInputError(body)
+		const scopeError = await readScopeInputError(c)
 		if (scopeError) {
 			return jsonError(c, 400, "VALIDATION_ERROR", scopeError)
 		}
@@ -1416,18 +1486,18 @@ export function createV1Router(): Hono {
 			!Array.isArray(body.metadata)
 				? (body.metadata as Record<string, unknown>)
 				: undefined
-		const scope = readScope(body)
+		const scope = await readScope(c)
 		try {
 			const out = await memongoBridgeWriteConversationEvent({
-				agentId: readAgentId(body),
+				agentId: await readAgentId(c),
 				role,
 				body: bodyText,
-				sessionId: readSessionId(body),
+				sessionId: await readSessionId(c),
 				timestamp:
 					typeof body.timestamp === "string" ? body.timestamp : undefined,
 				metadata,
 				scope,
-				scopeRef: readScopeRef(body),
+				scopeRef: await readScopeRef(c),
 			})
 			return c.json({
 				ok: true,
@@ -1451,7 +1521,7 @@ export function createV1Router(): Hono {
 		}
 		try {
 			const out = await memongoBridgeExtractEvent({
-				agentId: readAgentId(body),
+				agentId: await readAgentId(c),
 				eventId,
 			})
 			return c.json({ ok: true, ...out }, 202)
@@ -1472,7 +1542,7 @@ export function createV1Router(): Hono {
 		}
 		try {
 			const out = await memongoBridgeWriteStructuredMemory({
-				agentId: readAgentId(body),
+				agentId: await readAgentId(c),
 				entry: entry as StructuredMemoryEntry,
 			})
 			return c.json(out)
@@ -1493,7 +1563,7 @@ export function createV1Router(): Hono {
 		}
 		try {
 			const out = await memongoBridgeWriteProcedure({
-				agentId: readAgentId(body),
+				agentId: await readAgentId(c),
 				entry: entry as ProcedureEntry,
 			})
 			return c.json(out)
@@ -1508,15 +1578,15 @@ export function createV1Router(): Hono {
 			string,
 			unknown
 		>
-		const scopeError = readScopeInputError(body)
+		const scopeError = await readScopeInputError(c)
 		if (scopeError) {
 			return jsonError(c, 400, "VALIDATION_ERROR", scopeError)
 		}
 		try {
 			const profile = await memongoBridgeProfile({
-				agentId: readAgentId(body),
-				scope: readScope(body),
-				scopeRef: readScopeRef(body),
+				agentId: await readAgentId(c),
+				scope: await readScope(c),
+				scopeRef: await readScopeRef(c),
 				maxEntities:
 					typeof body.maxEntities === "number" ? body.maxEntities : undefined,
 				maxEpisodes:
@@ -1536,14 +1606,13 @@ export function createV1Router(): Hono {
 	})
 
 	v1.get("/state", async (c) => {
-		const query = c.req.query() as Record<string, unknown>
-		const scopeError = readScopeInputError(query)
+		const scopeError = await readScopeInputError(c)
 		if (scopeError) {
 			return jsonError(c, 400, "VALIDATION_ERROR", scopeError)
 		}
-		const agentId = c.req.query("agentId") ?? undefined
-		const scope = readScope(query)
-		const scopeRef = readScopeRef(query)
+		const agentId = await readAgentId(c)
+		const scope = await readScope(c)
+		const scopeRef = await readScopeRef(c)
 		try {
 			const state = await memongoBridgeGetState({ agentId, scope, scopeRef })
 			return c.json(state)
@@ -1593,7 +1662,7 @@ export function createV1Router(): Hono {
 		>
 		try {
 			await memongoBridgeSync({
-				agentId: readAgentId(body),
+				agentId: await readAgentId(c),
 				reason: typeof body.reason === "string" ? body.reason : undefined,
 				force: typeof body.force === "boolean" ? body.force : undefined,
 			})
@@ -1644,7 +1713,7 @@ export function createV1Router(): Hono {
 				: undefined
 		try {
 			const out = await memongoBridgeRelevanceExplain({
-				agentId: readAgentId(body),
+				agentId: await readAgentId(c),
 				query,
 				sourceScope,
 				sessionKey:
@@ -1678,7 +1747,7 @@ export function createV1Router(): Hono {
 			const retrievalLane = parseBenchmarkRetrievalLane(body.retrievalLane)
 
 			const out = await memongoBridgeRelevanceBenchmark({
-				agentId: readAgentId(body),
+				agentId: await readAgentId(c),
 				datasetPath:
 					typeof body.datasetPath === "string" ? body.datasetPath : undefined,
 				maxResults:
@@ -1751,9 +1820,9 @@ export function createV1Router(): Hono {
 		}
 		try {
 			const out = await memongoBridgeBenchmarkIngest({
-				agentId: readAgentId(body),
+				agentId: await readAgentId(c),
 				datasetPath,
-				scope: readScope(body),
+				scope: await readScope(c),
 				limitConversations:
 					typeof body.limitConversations === "number"
 						? body.limitConversations
@@ -1965,7 +2034,7 @@ export function createV1Router(): Hono {
 		}
 		try {
 			const chain = await memongoBridgeTraceChain({
-				agentId: readAgentId(body),
+				agentId: await readAgentId(c),
 				factId,
 				collection,
 				maxDepth: typeof body.maxDepth === "number" ? body.maxDepth : undefined,
@@ -1984,9 +2053,9 @@ export function createV1Router(): Hono {
 		>
 		try {
 			const report = await memongoBridgeScanNovelty({
-				agentId: readAgentId(body),
+				agentId: await readAgentId(c),
 				limit: typeof body.limit === "number" ? body.limit : undefined,
-				scope: typeof body.scope === "string" ? body.scope : undefined,
+				scope: await readScope(c),
 			})
 			return c.json(report)
 		} catch (err) {
@@ -2002,14 +2071,14 @@ export function createV1Router(): Hono {
 		>
 		try {
 			const result = await memongoBridgeConsolidate({
-				agentId: readAgentId(body),
+				agentId: await readAgentId(c),
 				maxEvents:
 					typeof body.maxEvents === "number" ? body.maxEvents : undefined,
 				minCombinedScore:
 					typeof body.minCombinedScore === "number"
 						? body.minCombinedScore
 						: undefined,
-				scope: typeof body.scope === "string" ? body.scope : undefined,
+				scope: await readScope(c),
 			})
 			return c.json(result)
 		} catch (err) {
@@ -2049,7 +2118,7 @@ export function createV1Router(): Hono {
 		}
 		try {
 			const result = await memongoBridgeSelfEdit({
-				agentId: readAgentId(body),
+				agentId: await readAgentId(c),
 				block: block as "user" | "persona" | "instructions",
 				action: action as "append" | "replace" | "prepend",
 				content,

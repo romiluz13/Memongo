@@ -639,6 +639,203 @@ describe("createApp", () => {
 		expect(bridgeMocks.memongoBridgeStatus).toHaveBeenCalledOnce()
 	})
 
+	it("issue #57: nested-only agentId resolves to the SAME identity auth validated (no default-partition drift)", async () => {
+		process.env.MEMONGO_API_KEY = ""
+		process.env.MEMONGO_API_SCOPED_KEYS = JSON.stringify([
+			{ token: "scoped-A", agentIds: ["agent-A"] },
+		])
+		bridgeMocks.memongoBridgeWriteStructuredMemory.mockReset()
+		bridgeMocks.memongoBridgeWriteStructuredMemory.mockResolvedValue({
+			id: "s1",
+		})
+
+		// agentId is present ONLY nested in `entry` (no top-level). Auth resolves
+		// it via its multi-container search and allows it; the write path MUST
+		// resolve the same identity, not fall back to the default "main" partition.
+		const res = await createApp().request("/v1/write-structured", {
+			method: "POST",
+			headers: {
+				Authorization: "Bearer scoped-A",
+				"Content-Type": "application/json",
+			},
+			body: JSON.stringify({
+				entry: { agentId: "agent-A", key: "city", value: "Berlin" },
+			}),
+		})
+
+		expect(res.status).toBe(200)
+		expect(
+			bridgeMocks.memongoBridgeWriteStructuredMemory,
+		).toHaveBeenCalledOnce()
+		expect(
+			bridgeMocks.memongoBridgeWriteStructuredMemory.mock.calls[0]?.[0]
+				?.agentId,
+		).toBe("agent-A")
+	})
+
+	it("issue #57: a key scoped to agent-A cannot write under agent-B via nested identity", async () => {
+		process.env.MEMONGO_API_KEY = ""
+		process.env.MEMONGO_API_SCOPED_KEYS = JSON.stringify([
+			{ token: "scoped-A", agentIds: ["agent-A"] },
+		])
+		bridgeMocks.memongoBridgeWriteStructuredMemory.mockReset()
+		bridgeMocks.memongoBridgeWriteStructuredMemory.mockResolvedValue({
+			id: "s1",
+		})
+
+		const res = await createApp().request("/v1/write-structured", {
+			method: "POST",
+			headers: {
+				Authorization: "Bearer scoped-A",
+				"Content-Type": "application/json",
+			},
+			body: JSON.stringify({
+				entry: { agentId: "agent-B", key: "city", value: "Berlin" },
+			}),
+		})
+
+		expect(res.status).toBe(403)
+		expect(
+			bridgeMocks.memongoBridgeWriteStructuredMemory,
+		).not.toHaveBeenCalled()
+	})
+
+	it("issue #57: scopeRef sent as a query param drives the search, not dropped (auth == execution)", async () => {
+		process.env.MEMONGO_API_KEY = ""
+		process.env.MEMONGO_API_SCOPED_KEYS = JSON.stringify([
+			{ token: "scoped-A", scopeRefs: ["/workspace/memongo"] },
+		])
+		bridgeMocks.memongoBridgeSearch.mockReset()
+		bridgeMocks.memongoBridgeSearch.mockResolvedValue([])
+
+		// scopeRef is present ONLY as a query param. Auth merges query params and
+		// allows the request; the search MUST run under the SAME scopeRef, never
+		// fall back to undefined (which would read across tenant boundaries).
+		const res = await createApp().request(
+			"/v1/search?scopeRef=%2Fworkspace%2Fmemongo",
+			{
+				method: "POST",
+				headers: {
+					Authorization: "Bearer scoped-A",
+					"Content-Type": "application/json",
+				},
+				body: JSON.stringify({ query: "hello" }),
+			},
+		)
+
+		expect(res.status).toBe(200)
+		expect(bridgeMocks.memongoBridgeSearch).toHaveBeenCalledOnce()
+		expect(bridgeMocks.memongoBridgeSearch.mock.calls[0]?.[0]?.scopeRef).toBe(
+			"/workspace/memongo",
+		)
+	})
+
+	it("issue #57: scope/scopeRef nested in params resolve to the SAME values auth validated", async () => {
+		process.env.MEMONGO_API_KEY = ""
+		process.env.MEMONGO_API_SCOPED_KEYS = JSON.stringify([
+			{
+				token: "scoped-A",
+				scopes: ["tenant"],
+				scopeRefs: ["/workspace/memongo"],
+			},
+		])
+		bridgeMocks.memongoBridgeSearch.mockReset()
+		bridgeMocks.memongoBridgeSearch.mockResolvedValue([])
+
+		// scope + scopeRef live ONLY in a nested container. Auth's multi-container
+		// resolver finds and allows them; the search path must resolve identically.
+		const res = await createApp().request("/v1/search", {
+			method: "POST",
+			headers: {
+				Authorization: "Bearer scoped-A",
+				"Content-Type": "application/json",
+			},
+			body: JSON.stringify({
+				query: "hello",
+				params: { scope: "tenant", scopeRef: "/workspace/memongo" },
+			}),
+		})
+
+		expect(res.status).toBe(200)
+		expect(bridgeMocks.memongoBridgeSearch).toHaveBeenCalledOnce()
+		const call = bridgeMocks.memongoBridgeSearch.mock.calls[0]?.[0]
+		expect(call?.scope).toBe("tenant")
+		expect(call?.scopeRef).toBe("/workspace/memongo")
+	})
+
+	it("issue #57: a scoped key cannot act on another tenant's item via a lifecycle handle (top-level decoy)", async () => {
+		process.env.MEMONGO_API_KEY = ""
+		process.env.MEMONGO_API_SCOPED_KEYS = JSON.stringify([
+			{ token: "scoped-A", agentIds: ["agent-A"] },
+		])
+		bridgeMocks.memongoBridgeGetLifecycleItem.mockReset()
+		bridgeMocks.memongoBridgeGetLifecycleItem.mockResolvedValue({
+			family: "structured",
+		})
+
+		// The scoped key is authorized for agent-A via the top-level decoy, which
+		// auth validates (top-level wins). The handle points at agent-B. The bridge
+		// selects the partition from handle.agentId, so this MUST be rejected before
+		// it can read agent-B's data.
+		const res = await createApp().request("/v1/lifecycle/get", {
+			method: "POST",
+			headers: {
+				Authorization: "Bearer scoped-A",
+				"Content-Type": "application/json",
+			},
+			body: JSON.stringify({
+				agentId: "agent-A",
+				handle: {
+					family: "structured",
+					id: "structured:agent-B:agent:agent-B:decision:db",
+					agentId: "agent-B",
+					scope: "agent",
+					scopeRef: "agent-B",
+					revision: 1,
+					state: "active",
+					structured: { type: "decision", key: "db" },
+				},
+			}),
+		})
+
+		expect(res.status).toBe(403)
+		expect(bridgeMocks.memongoBridgeGetLifecycleItem).not.toHaveBeenCalled()
+	})
+
+	it("issue #57: a lifecycle handle whose identity matches the caller is allowed", async () => {
+		process.env.MEMONGO_API_KEY = ""
+		process.env.MEMONGO_API_SCOPED_KEYS = JSON.stringify([
+			{ token: "scoped-A", agentIds: ["agent-A"] },
+		])
+		bridgeMocks.memongoBridgeGetLifecycleItem.mockReset()
+		bridgeMocks.memongoBridgeGetLifecycleItem.mockResolvedValue({
+			family: "structured",
+		})
+
+		const res = await createApp().request("/v1/lifecycle/get", {
+			method: "POST",
+			headers: {
+				Authorization: "Bearer scoped-A",
+				"Content-Type": "application/json",
+			},
+			body: JSON.stringify({
+				handle: {
+					family: "structured",
+					id: "structured:agent-A:agent:agent-A:decision:db",
+					agentId: "agent-A",
+					scope: "agent",
+					scopeRef: "agent-A",
+					revision: 1,
+					state: "active",
+					structured: { type: "decision", key: "db" },
+				},
+			}),
+		})
+
+		expect(res.status).toBe(200)
+		expect(bridgeMocks.memongoBridgeGetLifecycleItem).toHaveBeenCalledOnce()
+	})
+
 	it("logs a prominent warning once when API auth is disabled", async () => {
 		const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
 		try {

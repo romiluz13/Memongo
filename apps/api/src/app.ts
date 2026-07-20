@@ -3,6 +3,7 @@ import { Hono, type Context } from "hono"
 import { cors } from "hono/cors"
 import { openApiSpec } from "./openapi-spec.js"
 import { createV1Router } from "./routes/v1.js"
+import { resolveScopeField, resolveScopeInput } from "./scope-identity.js"
 
 /**
  * Constant-time bearer comparison. Using `===` would short-circuit on the
@@ -118,46 +119,10 @@ export function parseScopedApiKeyPolicies(
 	throw new Error("MEMONGO_API_SCOPED_KEYS must be a JSON array or object")
 }
 
-async function readRequestScopeInput(
-	c: Context,
-): Promise<Record<string, unknown>> {
-	const query = c.req.query() as Record<string, unknown>
-	if (c.req.method === "GET" || c.req.method === "HEAD") {
-		return query
-	}
-	const contentType = c.req.header("Content-Type") ?? ""
-	if (!contentType.toLowerCase().includes("application/json")) {
-		return query
-	}
-	const body = (await c.req.raw
-		.clone()
-		.json()
-		.catch(() => ({}))) as unknown
-	if (!body || typeof body !== "object" || Array.isArray(body)) {
-		return query
-	}
-	return { ...query, ...(body as Record<string, unknown>) }
-}
-
-function firstStringField(input: Record<string, unknown>, field: string) {
-	const containers = [
-		input,
-		input.handle,
-		input.entry,
-		input.memory,
-		input.params,
-	].filter(
-		(item): item is Record<string, unknown> =>
-			!!item && typeof item === "object" && !Array.isArray(item),
-	)
-	for (const container of containers) {
-		const value = container[field]
-		if (typeof value === "string" && value.trim()) {
-			return value.trim()
-		}
-	}
-	return undefined
-}
+// Issue #57: identity resolution is shared with the route layer so auth and
+// manager/partition selection can never disagree. See ./scope-identity.ts.
+const readRequestScopeInput = resolveScopeInput
+const firstStringField = resolveScopeField
 
 function allowedByPolicy(
 	label: string,
