@@ -39,6 +39,36 @@ function clampLimit(limit?: number): number {
 	return Math.max(1, Math.min(MAX_LIMIT, Math.floor(limit ?? DEFAULT_LIMIT)))
 }
 
+// Issue #41: bi-temporal validity is enforced as a post-`$vectorSearch` `$match`
+// (the vector stage filter cannot reliably express date-range validity), so the
+// vector stage MUST over-fetch beyond the final limit. Without a buffer,
+// invalid-at-`asOf` documents occupy result slots and are trimmed by the $match,
+// returning fewer than `limit` valid memories. Fetch a bounded multiple of the
+// final limit so the $match has spare valid candidates to keep.
+const VECTOR_VALIDITY_OVERFETCH_FACTOR = 4
+
+// MongoDB Atlas Vector Search caps `numCandidates` at 10000.
+// https://www.mongodb.com/docs/atlas/atlas-vector-search/vector-search-stage/
+const MAX_NUM_CANDIDATES = 10_000
+
+// Issue #41 follow-up: `numCandidates` must scale with the ACTUAL vector `limit`,
+// not the caller's requested count — otherwise over-fetching 4× more results
+// from a candidate pool sized for the smaller limit silently drops the
+// documented `numCandidates >= 20 * limit` ANN-recall baseline (degrading
+// neighbor quality). Return both together so the two stay in sync, capped at
+// the Atlas ceiling.
+function resolveVectorFetchPlan(effectiveLimit: number): {
+	limit: number
+	numCandidates: number
+} {
+	const limit = effectiveLimit * VECTOR_VALIDITY_OVERFETCH_FACTOR
+	const numCandidates = Math.min(
+		MAX_NUM_CANDIDATES,
+		resolveNumCandidates(limit),
+	)
+	return { limit, numCandidates }
+}
+
 function escapeRegex(value: string): string {
 	return value.replaceAll(/[.*+?^${}()|[\]\\]/g, "\\$&")
 }
@@ -495,15 +525,17 @@ async function semanticRecall(params: {
 		return []
 	}
 
+	// Issue #41: over-fetch beyond the final limit so the post-stage bi-temporal
+	// $match cannot starve the result set, with numCandidates scaled to the
+	// over-fetched limit to preserve the 20× ANN-recall baseline.
+	const semanticFetch = resolveVectorFetchPlan(params.effectiveLimit)
 	const stage = buildVectorSearchStage({
 		queryVector: null,
 		queryText,
 		embeddingMode: "automated",
 		indexName: params.vectorIndexName,
-		// Task 2.R2 Sub-path A: use approved numCandidates table
-		// (5→200, 10→200, 20→400, 30→600; 20× otherwise with 200 floor).
-		numCandidates: resolveNumCandidates(params.effectiveLimit),
-		limit: params.effectiveLimit,
+		numCandidates: semanticFetch.numCandidates,
+		limit: semanticFetch.limit,
 		filter: buildVectorFilter({
 			request: params.request,
 			startDate: params.startDate,
@@ -519,8 +551,9 @@ async function semanticRecall(params: {
 	// `$match`. `$vectorSearch.filter` supports a narrow subset of MQL
 	// ($eq / $and / $in) and range operators on dates are not documented,
 	// so we enforce validity outside the vector stage. The vector stage
-	// over-fetches `limit + buffer` candidates and the $match trims those
-	// invalidated at `asOf`.
+	// over-fetches `effectiveLimit * VECTOR_VALIDITY_OVERFETCH_FACTOR`
+	// candidates (issue #41) and the $match trims those invalidated at `asOf`,
+	// then the terminal $limit restores the requested count.
 	const pipeline: Document[] = [
 		{ $vectorSearch: stage },
 		{ $match: buildBitemporalFilter(params.asOf) },
@@ -562,15 +595,17 @@ async function hybridRecall(params: {
 		startDate: params.startDate,
 		endDate: params.endDate,
 	})
+	// Issue #41: over-fetch beyond the final limit so the bi-temporal $match
+	// inside the vector inner lane cannot starve fusion input; numCandidates
+	// scales with the over-fetched limit to preserve the 20× ANN baseline.
+	const hybridFetch = resolveVectorFetchPlan(params.effectiveLimit)
 	const vectorStage = buildVectorSearchStage({
 		queryVector: null,
 		queryText,
 		embeddingMode: "automated",
 		indexName: params.vectorIndexName,
-		// Task 2.R2 Sub-path A: use approved numCandidates table
-		// (5→200, 10→200, 20→400, 30→600; 20× otherwise with 200 floor).
-		numCandidates: resolveNumCandidates(params.effectiveLimit),
-		limit: params.effectiveLimit,
+		numCandidates: hybridFetch.numCandidates,
+		limit: hybridFetch.limit,
 		filter: vectorFilter,
 		textFieldPath: "body",
 	})

@@ -262,10 +262,12 @@ describe("recallConversation", () => {
 					$lte: expect.any(Date),
 				},
 			},
-			// Task 2.R2: approved numCandidates table — effectiveLimit=200 clamps
-			// above the 30-row (600), so we fall through to the 20× rule = 4000.
-			numCandidates: 4000,
-			limit: 200,
+			// Issue #41: vector stage over-fetches effectiveLimit*4 (=800) so the
+			// post-stage bi-temporal $match cannot starve results, and numCandidates
+			// scales to the over-fetched limit (20×800=16000, capped at the Atlas
+			// ceiling of 10000) to preserve the ANN-recall baseline.
+			numCandidates: 10000,
+			limit: 800,
 		})
 		expect(response.metadata.searchMethod).toBe("semantic")
 		expect(response.results[0]).toEqual(
@@ -736,6 +738,88 @@ describe("recallConversation", () => {
 				},
 			],
 		})
+	})
+
+	it("recall overfetch (issue #41): semanticRecall $vectorSearch fetches MORE than the final limit so the bitemporal $match cannot starve results", async () => {
+		const col = makeAggregateCollection({ results: [] })
+		vi.mocked(eventsCollection).mockReturnValue(col)
+
+		const limit = 5
+		await recallConversation({
+			db: mockDb(),
+			prefix: "mem_",
+			request: {
+				agentId: "agent-1",
+				query: "semantic query",
+				asOf: new Date("2026-05-12T10:00:00.000Z"),
+				limit,
+			},
+			capabilities: {
+				vectorSearch: true,
+				textSearch: false,
+				rankFusion: false,
+				scoreFusion: false,
+			},
+		})
+
+		const pipeline = vi.mocked(col.aggregate).mock.calls[0]?.[0] as Document[]
+		const vectorStage = pipeline[0]?.$vectorSearch as {
+			limit?: number
+			numCandidates?: number
+		}
+		const vectorLimit = vectorStage?.limit
+		// The vector stage must over-fetch beyond the requested limit so that
+		// invalid-at-asOf docs trimmed by the later $match cannot leave fewer
+		// than `limit` valid results.
+		expect(vectorLimit).toBeGreaterThan(limit)
+		// numCandidates must scale with the OVER-FETCHED limit (>= it, and at
+		// least 20× per the ANN baseline) and never exceed the Atlas ceiling.
+		expect(vectorStage?.numCandidates).toBeGreaterThanOrEqual(
+			vectorLimit as number,
+		)
+		expect(vectorStage?.numCandidates).toBeGreaterThanOrEqual(
+			(vectorLimit as number) * 20 > 10000 ? 10000 : (vectorLimit as number) * 20,
+		)
+		expect(vectorStage?.numCandidates).toBeLessThanOrEqual(10000)
+		// The terminal $limit still enforces the requested result count.
+		const limitStage = pipeline.find(
+			(s) => typeof (s as { $limit?: number }).$limit === "number",
+		) as { $limit?: number } | undefined
+		expect(limitStage?.$limit).toBe(limit)
+	})
+
+	it("recall overfetch (issue #41): hybridRecall $rankFusion vector inner lane over-fetches beyond the final limit", async () => {
+		const col = makeAggregateCollection({ results: [] })
+		vi.mocked(eventsCollection).mockReturnValue(col)
+
+		const limit = 5
+		await recallConversation({
+			db: mockDb(),
+			prefix: "mem_",
+			request: {
+				agentId: "agent-1",
+				query: "hybrid query",
+				asOf: new Date("2026-05-12T10:00:00.000Z"),
+				limit,
+			},
+			capabilities: {
+				vectorSearch: true,
+				textSearch: true,
+				rankFusion: true,
+				scoreFusion: false,
+			},
+		})
+
+		const pipeline = vi.mocked(col.aggregate).mock.calls[0]?.[0] as Document[]
+		const rankFusion = pipeline[0]?.$rankFusion as {
+			input?: { pipelines?: { vector?: Document[] } }
+		}
+		const vectorLimit = (
+			rankFusion?.input?.pipelines?.vector?.[0]?.$vectorSearch as {
+				limit?: number
+			}
+		)?.limit
+		expect(vectorLimit).toBeGreaterThan(limit)
 	})
 
 	it("bi-temporal safety: hybridRecall $rankFusion injects bi-temporal $match into BOTH vector and text inner pipelines", async () => {
