@@ -3,6 +3,7 @@ import type {
 	LanguageModelV2CallOptions,
 } from "@ai-sdk/provider"
 import { wrapLanguageModel, type LanguageModelMiddleware } from "ai"
+import { renderMemoryContextBlock } from "../memory-context.js"
 
 export interface MemongoCoreOptions {
 	apiUrl: string
@@ -172,7 +173,7 @@ export function withMemongo(
 			const newPrompt: LanguageModelV2CallOptions["prompt"] = [
 				{
 					role: "system" as const,
-					content: `[Memory Context]\n${rendered}`,
+					content: renderMemoryContextBlock(rendered),
 				},
 				...params.prompt,
 			]

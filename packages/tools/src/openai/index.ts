@@ -1,3 +1,4 @@
+import { renderMemoryContextBlock } from "../memory-context.js"
 import type { MemongoCoreOptions } from "../vercel/index.js"
 
 /* ------------------------------------------------------------------ */
@@ -114,7 +115,7 @@ export function createOpenAIMiddleware<
 						? [
 								{
 									role: "system" as const,
-									content: `[Memory Context]\n${rendered}`,
+									content: renderMemoryContextBlock(rendered),
 								},
 								...params.messages,
 							]

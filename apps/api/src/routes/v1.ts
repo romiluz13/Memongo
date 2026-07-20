@@ -2126,6 +2126,11 @@ export function createV1Router(): Hono {
 			return c.json(result)
 		} catch (err) {
 			const message = err instanceof Error ? err.message : String(err)
+			// #29: a persona/instructions self-edit blocked by the injection screen
+			// is a client-side rejection, not a server fault.
+			if (err instanceof Error && err.name === "SelfEditRejectedError") {
+				return jsonError(c, 422, "SELF_EDIT_REJECTED", message)
+			}
 			return jsonError(c, 500, "SELF_EDIT_FAILED", message)
 		}
 	})

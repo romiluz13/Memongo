@@ -5,6 +5,7 @@
 import type { Db, MongoClient } from "mongodb"
 import type { MemoryMongoDBEmbeddingMode } from "@memongo/lib"
 import type { MemorySelfEditBlock, MemorySelfEditAction } from "./types.js"
+import { classifyInjection } from "./mongodb-injection-classifier.js"
 import { structuredMemCollection } from "./mongodb-schema.js"
 import {
 	writeStructuredMemory,
@@ -22,6 +23,47 @@ const BLOCK_MAP: Record<
 	user: { type: "preference", key: "core:user" },
 	persona: { type: "identity", key: "core:persona" },
 	instructions: { type: "instruction", key: "core:instructions" },
+}
+
+// #29 self-edit hardening: persona and instructions define the agent's own
+// behavior. An agent steered by injected retrieved memory must not be able to
+// rewrite these blocks with injection-shaped content unchecked, so screen the
+// incoming content and reject clear injection attempts. `user` (preferences) is
+// ordinary user data and is not screened.
+const PROTECTED_SELF_EDIT_BLOCKS: ReadonlySet<MemorySelfEditBlock> = new Set([
+	"persona",
+	"instructions",
+])
+
+export class SelfEditRejectedError extends Error {
+	readonly block: MemorySelfEditBlock
+	readonly matchedPatterns: string[]
+	constructor(block: MemorySelfEditBlock, matchedPatterns: string[]) {
+		super(
+			`self-edit to '${block}' rejected: content matched injection patterns [${matchedPatterns.join(
+				", ",
+			)}]`,
+		)
+		this.name = "SelfEditRejectedError"
+		this.block = block
+		this.matchedPatterns = matchedPatterns
+	}
+}
+
+// Screen the FINAL merged value (not just the incoming delta) for protected
+// blocks, so an injection cannot be smuggled in by splitting it across multiple
+// append/prepend calls that each look benign on their own.
+function assertProtectedSelfEditSafe(
+	block: MemorySelfEditBlock,
+	value: string,
+): void {
+	if (!PROTECTED_SELF_EDIT_BLOCKS.has(block)) {
+		return
+	}
+	const verdict = classifyInjection({ content: value })
+	if (verdict.classification === "injection-likely") {
+		throw new SelfEditRejectedError(block, verdict.matchedPatterns)
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -59,6 +101,8 @@ export async function selfEditBlock(params: {
 						: action === "append"
 							? `${existingValue}\n${content}`
 							: `${content}\n${existingValue}`
+
+				assertProtectedSelfEditSafe(block, value)
 
 				result = await writeStructuredMemory({
 					db,
@@ -105,6 +149,8 @@ export async function selfEditBlock(params: {
 			value = `${content}\n${existingValue}`
 		}
 	}
+
+	assertProtectedSelfEditSafe(block, value)
 
 	const result = await writeStructuredMemory({
 		db,
