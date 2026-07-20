@@ -49,7 +49,7 @@ const bridgeMocks = vi.hoisted(() => ({
 
 vi.mock("@memongo/memory-bridge", () => bridgeMocks)
 
-import { createApp } from "./app.js"
+import { createApp, parseScopedApiKeyPolicies } from "./app.js"
 
 describe("createApp", () => {
 	const prevEnv = { ...process.env }
@@ -834,6 +834,213 @@ describe("createApp", () => {
 
 		expect(res.status).toBe(200)
 		expect(bridgeMocks.memongoBridgeGetLifecycleItem).toHaveBeenCalledOnce()
+	})
+
+	it("scope isolation: a key scoped to scope/scopeRef forwards the AUTHORIZED scope to write-structured, not a nested entry.scope smuggle", async () => {
+		process.env.MEMONGO_API_KEY = ""
+		process.env.MEMONGO_API_SCOPED_KEYS = JSON.stringify([
+			{
+				token: "scoped-A",
+				agentIds: ["agent-A"],
+				scopes: ["agent"],
+				scopeRefs: ["ref-A"],
+			},
+		])
+		bridgeMocks.memongoBridgeWriteStructuredMemory.mockReset()
+		bridgeMocks.memongoBridgeWriteStructuredMemory.mockResolvedValue({
+			id: "s1",
+		})
+
+		// Top-level scope/scopeRef are the authorized values (auth validates these,
+		// top-level precedence). The nested entry carries a DIFFERENT scope/scopeRef
+		// — a smuggle attempt. The write MUST execute under the authorized
+		// scope/scopeRef, never the nested decoy, or a key limited to (agent, ref-A)
+		// could write into (tenant, ref-B).
+		const res = await createApp().request("/v1/write-structured", {
+			method: "POST",
+			headers: {
+				Authorization: "Bearer scoped-A",
+				"Content-Type": "application/json",
+			},
+			body: JSON.stringify({
+				agentId: "agent-A",
+				scope: "agent",
+				scopeRef: "ref-A",
+				entry: {
+					agentId: "agent-A",
+					scope: "tenant",
+					scopeRef: "ref-B",
+					key: "city",
+					value: "Berlin",
+				},
+			}),
+		})
+
+		expect(res.status).toBe(200)
+		expect(
+			bridgeMocks.memongoBridgeWriteStructuredMemory,
+		).toHaveBeenCalledOnce()
+		const call =
+			bridgeMocks.memongoBridgeWriteStructuredMemory.mock.calls[0]?.[0]
+		expect(call?.scope).toBe("agent")
+		expect(call?.scopeRef).toBe("ref-A")
+	})
+
+	it("scope isolation: a scoped key forwards the AUTHORIZED scope to write-procedure, not a nested entry.scope smuggle", async () => {
+		process.env.MEMONGO_API_KEY = ""
+		process.env.MEMONGO_API_SCOPED_KEYS = JSON.stringify([
+			{
+				token: "scoped-A",
+				agentIds: ["agent-A"],
+				scopes: ["agent"],
+				scopeRefs: ["ref-A"],
+			},
+		])
+		bridgeMocks.memongoBridgeWriteProcedure.mockReset()
+		bridgeMocks.memongoBridgeWriteProcedure.mockResolvedValue({ id: "p1" })
+
+		const res = await createApp().request("/v1/write-procedure", {
+			method: "POST",
+			headers: {
+				Authorization: "Bearer scoped-A",
+				"Content-Type": "application/json",
+			},
+			body: JSON.stringify({
+				agentId: "agent-A",
+				scope: "agent",
+				scopeRef: "ref-A",
+				entry: {
+					agentId: "agent-A",
+					scope: "tenant",
+					scopeRef: "ref-B",
+					name: "deploy",
+				},
+			}),
+		})
+
+		expect(res.status).toBe(200)
+		expect(bridgeMocks.memongoBridgeWriteProcedure).toHaveBeenCalledOnce()
+		const call = bridgeMocks.memongoBridgeWriteProcedure.mock.calls[0]?.[0]
+		expect(call?.scope).toBe("agent")
+		expect(call?.scopeRef).toBe("ref-A")
+	})
+
+	it("class-G: a scope-constrained key is rejected (403) on an agent-global route (stats)", async () => {
+		process.env.MEMONGO_API_KEY = ""
+		process.env.MEMONGO_API_SCOPED_KEYS = JSON.stringify([
+			{ token: "scoped-A", scopes: ["agent"] },
+		])
+		bridgeMocks.memongoBridgeStats.mockReset()
+		bridgeMocks.memongoBridgeStats.mockResolvedValue({ ok: true })
+
+		// The key supplies scope=agent to satisfy auth, but /stats is agent-global
+		// (aggregates across ALL scopes). A scope-constrained key must not reach it.
+		const res = await createApp().request("/v1/stats?scope=agent", {
+			headers: { Authorization: "Bearer scoped-A" },
+		})
+
+		expect(res.status).toBe(403)
+		expect(bridgeMocks.memongoBridgeStats).not.toHaveBeenCalled()
+	})
+
+	it("class-G: a scope-constrained key is rejected (403) on self-edit (agent-global mutation)", async () => {
+		process.env.MEMONGO_API_KEY = ""
+		process.env.MEMONGO_API_SCOPED_KEYS = JSON.stringify([
+			{ token: "scoped-A", scopes: ["agent"] },
+		])
+		bridgeMocks.memongoBridgeSelfEdit.mockReset()
+		bridgeMocks.memongoBridgeSelfEdit.mockResolvedValue({ ok: true })
+
+		const res = await createApp().request("/v1/self-edit?scope=agent", {
+			method: "POST",
+			headers: {
+				Authorization: "Bearer scoped-A",
+				"Content-Type": "application/json",
+			},
+			body: JSON.stringify({
+				block: "persona",
+				action: "replace",
+				content: "new persona",
+			}),
+		})
+
+		expect(res.status).toBe(403)
+		expect(bridgeMocks.memongoBridgeSelfEdit).not.toHaveBeenCalled()
+	})
+
+	it("class-G: a FULL key reaches agent-global routes normally", async () => {
+		process.env.MEMONGO_API_KEY = "secret"
+		process.env.MEMONGO_API_SCOPED_KEYS = ""
+		bridgeMocks.memongoBridgeStats.mockReset()
+		bridgeMocks.memongoBridgeStats.mockResolvedValue({ ok: true })
+
+		const res = await createApp().request("/v1/stats", {
+			headers: { Authorization: "Bearer secret" },
+		})
+
+		expect(res.status).toBe(200)
+		expect(bridgeMocks.memongoBridgeStats).toHaveBeenCalledOnce()
+	})
+
+	it("class-G: an agentId-only scoped key (no scope/scopeRef constraint) still reaches agent-global routes", async () => {
+		process.env.MEMONGO_API_KEY = ""
+		process.env.MEMONGO_API_SCOPED_KEYS = JSON.stringify([
+			{ token: "scoped-A", agentIds: ["agent-A"] },
+		])
+		bridgeMocks.memongoBridgeStats.mockReset()
+		bridgeMocks.memongoBridgeStats.mockResolvedValue({ ok: true })
+
+		const res = await createApp().request("/v1/stats?agentId=agent-A", {
+			headers: { Authorization: "Bearer scoped-A" },
+		})
+
+		expect(res.status).toBe(200)
+		expect(bridgeMocks.memongoBridgeStats).toHaveBeenCalledOnce()
+	})
+
+	it("class-G guard does not block scope-constrained keys on tenant-scoped routes (search)", async () => {
+		process.env.MEMONGO_API_KEY = ""
+		process.env.MEMONGO_API_SCOPED_KEYS = JSON.stringify([
+			{ token: "scoped-A", scopes: ["agent"] },
+		])
+		bridgeMocks.memongoBridgeSearch.mockReset()
+		bridgeMocks.memongoBridgeSearch.mockResolvedValue([])
+
+		const res = await createApp().request("/v1/search?scope=agent", {
+			method: "POST",
+			headers: {
+				Authorization: "Bearer scoped-A",
+				"Content-Type": "application/json",
+			},
+			body: JSON.stringify({ query: "hello" }),
+		})
+
+		expect(res.status).toBe(200)
+		expect(bridgeMocks.memongoBridgeSearch).toHaveBeenCalledOnce()
+	})
+
+	it("scope isolation: rejects a scoped policy whose scope value is non-canonical (fail closed)", () => {
+		// A policy scope that auth would accept as a raw string but that pickScope
+		// drops (non-canonical) would silently disable write-forcing and let a
+		// nested entry.scope smuggle survive. Fail closed at config load instead.
+		expect(() =>
+			parseScopedApiKeyPolicies(
+				JSON.stringify([{ token: "k", scopes: ["Agent"] }]),
+			),
+		).toThrow(/scope/i)
+		expect(() =>
+			parseScopedApiKeyPolicies(
+				JSON.stringify([{ token: "k", scopes: ["tennant"] }]),
+			),
+		).toThrow(/scope/i)
+	})
+
+	it("scope isolation: accepts canonical scope values in a scoped policy", () => {
+		expect(() =>
+			parseScopedApiKeyPolicies(
+				JSON.stringify([{ token: "k", scopes: ["agent", "tenant"] }]),
+			),
+		).not.toThrow()
 	})
 
 	it("#28: rate-limits per identity and returns 429 with Retry-After", async () => {

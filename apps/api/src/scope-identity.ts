@@ -1,6 +1,30 @@
 import type { Context } from "hono"
 
 /**
+ * The canonical set of scope values. This is the SINGLE source of truth shared
+ * by request resolution (pickScope) and scoped-API-key policy validation, so the
+ * authorization layer and the execution layer cannot disagree about which scope
+ * strings are valid (issue #57 divergence class). A policy that authorizes a
+ * non-canonical scope would let execution silently drop it and a nested
+ * entry.scope smuggle survive — so policies are validated against this set at
+ * config load and fail closed.
+ */
+export const VALID_SCOPE_VALUES = [
+	"session",
+	"user",
+	"agent",
+	"workspace",
+	"tenant",
+	"global",
+] as const
+
+export type ApiScope = (typeof VALID_SCOPE_VALUES)[number]
+
+export function isValidScope(value: string): value is ApiScope {
+	return (VALID_SCOPE_VALUES as readonly string[]).includes(value)
+}
+
+/**
  * Single source of truth for resolving tenant-scope fields (agentId, scope,
  * scopeRef) from a request. Issue #57: authorization and manager/partition
  * selection MUST resolve identity from the identical input, or a request can

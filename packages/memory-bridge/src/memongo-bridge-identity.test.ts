@@ -68,4 +68,49 @@ describe("bridge tenant identity (issue #42)", () => {
 			(writeProcedure.mock.calls[0]?.[0] as { agentId?: string }).agentId,
 		).toBe("agent-A")
 	})
+
+	it("forces stored scope/scopeRef to the authorized values, ignoring nested entry smuggle (structured memory)", async () => {
+		await memongoBridgeWriteStructuredMemory({
+			agentId: "agent-A",
+			// Authorized scope coordinates (resolved from the request under top-level
+			// precedence, matching what auth validated).
+			scope: "agent" as never,
+			scopeRef: "ref-A",
+			// The body tries to smuggle a different tenant boundary.
+			entry: {
+				agentId: "agent-A",
+				scope: "tenant",
+				scopeRef: "ref-B",
+				key: "k",
+				value: "v",
+			} as never,
+		})
+		expect(writeStructuredMemory).toHaveBeenCalledOnce()
+		const stored = writeStructuredMemory.mock.calls[0]?.[0] as {
+			scope?: string
+			scopeRef?: string
+		}
+		expect(stored.scope).toBe("agent")
+		expect(stored.scopeRef).toBe("ref-A")
+	})
+
+	it("leaves entry scope untouched when the caller resolved no scope (unscoped caller)", async () => {
+		await memongoBridgeWriteStructuredMemory({
+			agentId: "agent-A",
+			entry: {
+				agentId: "agent-A",
+				scope: "tenant",
+				scopeRef: "ref-B",
+				key: "k",
+				value: "v",
+			} as never,
+		})
+		const stored = writeStructuredMemory.mock.calls[0]?.[0] as {
+			scope?: string
+			scopeRef?: string
+		}
+		// No authorized scope was provided — do not wipe the entry's own value.
+		expect(stored.scope).toBe("tenant")
+		expect(stored.scopeRef).toBe("ref-B")
+	})
 })

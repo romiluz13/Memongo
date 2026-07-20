@@ -49,22 +49,17 @@ import {
 } from "@memongo/memory-bridge"
 import { jsonError } from "../lib/errors.js"
 import {
+	type ApiScope,
 	resolveRequestAgentId,
 	resolveScopeField,
 	resolveScopeInput,
+	VALID_SCOPE_VALUES,
 } from "../scope-identity.js"
 
 const MAX_LIST_LIMIT = 100
 const MAX_HISTORY_LIMIT = 200
-const VALID_SCOPE_VALUES = [
-	"session",
-	"user",
-	"agent",
-	"workspace",
-	"tenant",
-	"global",
-] as const
-type ApiScope = (typeof VALID_SCOPE_VALUES)[number]
+// VALID_SCOPE_VALUES / ApiScope now live in scope-identity.ts (single source of
+// truth shared with scoped-API-key policy validation — issue #57 divergence).
 
 // Issue #57: resolve agentId from the SAME merged input the auth layer
 // validates, so manager/partition selection can never diverge from the
@@ -1543,6 +1538,8 @@ export function createV1Router(): Hono {
 		try {
 			const out = await memongoBridgeWriteStructuredMemory({
 				agentId: await readAgentId(c),
+				scope: await readScope(c),
+				scopeRef: await readScopeRef(c),
 				entry: entry as StructuredMemoryEntry,
 			})
 			return c.json(out)
@@ -1564,6 +1561,8 @@ export function createV1Router(): Hono {
 		try {
 			const out = await memongoBridgeWriteProcedure({
 				agentId: await readAgentId(c),
+				scope: await readScope(c),
+				scopeRef: await readScopeRef(c),
 				entry: entry as ProcedureEntry,
 			})
 			return c.json(out)

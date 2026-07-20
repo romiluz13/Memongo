@@ -488,6 +488,8 @@ export async function memongoBridgeExtractEvent(params: {
 
 export async function memongoBridgeWriteStructuredMemory(params: {
 	agentId?: string
+	scope?: MemoryScope
+	scopeRef?: string
 	entry: StructuredMemoryEntry
 }) {
 	const m = await memongoBridgeGetManager(params.agentId)
@@ -498,11 +500,19 @@ export async function memongoBridgeWriteStructuredMemory(params: {
 		// authorized identity, so the stored agentId MUST be that identity.
 		// Never trust a caller-supplied entry.agentId (cross-tenant write).
 		agentId: id,
+		// Scope isolation: when the caller resolved an authorized scope/scopeRef
+		// (top-level precedence), force them so a nested entry.scope/entry.scopeRef
+		// smuggle cannot cross the tenant boundary. Undefined = unscoped caller;
+		// keep the entry's own value.
+		...(params.scope !== undefined ? { scope: params.scope } : {}),
+		...(params.scopeRef !== undefined ? { scopeRef: params.scopeRef } : {}),
 	})
 }
 
 export async function memongoBridgeWriteProcedure(params: {
 	agentId?: string
+	scope?: MemoryScope
+	scopeRef?: string
 	entry: ProcedureEntry
 }) {
 	const m = await memongoBridgeGetManager(params.agentId)
@@ -511,6 +521,10 @@ export async function memongoBridgeWriteProcedure(params: {
 		...params.entry,
 		// Issue #42: force the authorized identity; never trust entry.agentId.
 		agentId: id,
+		// Scope isolation: force the authorized scope/scopeRef over any nested
+		// entry smuggle (see memongoBridgeWriteStructuredMemory).
+		...(params.scope !== undefined ? { scope: params.scope } : {}),
+		...(params.scopeRef !== undefined ? { scopeRef: params.scopeRef } : {}),
 	})
 }
 

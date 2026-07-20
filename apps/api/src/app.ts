@@ -4,7 +4,11 @@ import { bodyLimit } from "hono/body-limit"
 import { cors } from "hono/cors"
 import { openApiSpec } from "./openapi-spec.js"
 import { createV1Router } from "./routes/v1.js"
-import { resolveScopeField, resolveScopeInput } from "./scope-identity.js"
+import {
+	isValidScope,
+	resolveScopeField,
+	resolveScopeInput,
+} from "./scope-identity.js"
 
 // Baseline network hardening (#28). Defaults are generous so normal use is
 // unaffected; operators tighten via env. Body size is capped BEFORE JSON
@@ -191,6 +195,19 @@ function requireValidScopedPolicies(
 			`MEMONGO_API_SCOPED_KEYS policy for token ${unconstrained.token} must constrain agentIds, scopes, or scopeRefs`,
 		)
 	}
+	// Fail closed on a non-canonical scope value. Auth matches scope by raw
+	// string, but request resolution (pickScope) only keeps canonical scopes, so
+	// a policy scope outside the canonical set would authorize a request whose
+	// scope execution silently drops — disabling write-forcing and letting a
+	// nested entry.scope smuggle survive (issue #57 auth-vs-execution divergence).
+	for (const policy of policies) {
+		const invalidScope = policy.scopes?.find((scope) => !isValidScope(scope))
+		if (invalidScope !== undefined) {
+			throw new Error(
+				`MEMONGO_API_SCOPED_KEYS policy for token ${policy.token} has an invalid scope "${invalidScope}"; valid scopes: session, user, agent, workspace, tenant, global`,
+			)
+		}
+	}
 	return policies
 }
 
@@ -265,6 +282,46 @@ async function authorizeScopedApiKey(
 		allowedByPolicy("scope", scope, policy.scopes) ??
 		allowedByPolicy("scopeRef", scopeRef, policy.scopeRefs)
 	)
+}
+
+/**
+ * Agent-global /v1 routes: operations that read or mutate data across an
+ * agent's whole memory (all scopes) — admin analytics, operational status,
+ * background jobs, and agent-identity self-edits. They have no tenant scope to
+ * filter by, so a scope-restricted key must NOT reach them (Class-G): it would
+ * observe or act beyond its authorized scope/scopeRef.
+ */
+const AGENT_GLOBAL_V1_PATHS = new Set([
+	"/v1/status",
+	"/v1/status/detailed",
+	"/v1/stats",
+	"/v1/sync",
+	"/v1/probes/embedding",
+	"/v1/probes/vector",
+	"/v1/read-file",
+	"/v1/chain-trace",
+	"/v1/self-edit",
+])
+
+function isAgentGlobalV1Path(path: string): boolean {
+	if (AGENT_GLOBAL_V1_PATHS.has(path)) {
+		return true
+	}
+	if (path.startsWith("/v1/admin/")) {
+		return true
+	}
+	return path === "/v1/jobs" || path.startsWith("/v1/jobs/")
+}
+
+/**
+ * A key is scope-constrained when its policy restricts scopes or scopeRefs to a
+ * concrete allow-list (a wildcard is not a constraint). agentId-only keys are
+ * not scope-constrained — agentId scoping is orthogonal to the tenant boundary.
+ */
+function policyIsScopeConstrained(policy: ScopedApiKeyPolicy): boolean {
+	const constrains = (list?: string[]): boolean =>
+		!!list && list.length > 0 && !list.includes(WILDCARD)
+	return constrains(policy.scopes) || constrains(policy.scopeRefs)
 }
 
 /**
@@ -427,6 +484,25 @@ export function createApp(): Hono {
 			const forbidden = await authorizeScopedApiKey(c, scopedPolicy)
 			if (forbidden) {
 				return c.json({ error: { code: "FORBIDDEN", message: forbidden } }, 403)
+			}
+			// Class-G: a scope-constrained key may satisfy per-request authorization
+			// (it supplies its allowed scope) yet still be reaching an agent-global
+			// route that ignores scope entirely. Reject it — there is no tenant
+			// boundary to enforce on such routes.
+			if (
+				policyIsScopeConstrained(scopedPolicy) &&
+				isAgentGlobalV1Path(c.req.path)
+			) {
+				return c.json(
+					{
+						error: {
+							code: "FORBIDDEN",
+							message:
+								"scope-restricted API key cannot access an agent-global route",
+						},
+					},
+					403,
+				)
 			}
 			await next()
 		})
