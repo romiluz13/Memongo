@@ -1231,6 +1231,7 @@ export type NoveltyOptions = {
 	limit?: number
 	kNeighbors?: number
 	scope?: string
+	scopeRef?: string
 	timeRange?: {
 		start: Date
 		end: Date

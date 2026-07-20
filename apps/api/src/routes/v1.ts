@@ -822,6 +822,7 @@ export function createV1Router(): Hono {
 				agentId: await readAgentId(c),
 				datasetPath: body.datasetPath,
 				scope: await readScope(c),
+				scopeRef: await readScopeRef(c),
 				limitConversations:
 					typeof body.limitConversations === "number"
 						? body.limitConversations
@@ -1520,6 +1521,8 @@ export function createV1Router(): Hono {
 		try {
 			const out = await memongoBridgeExtractEvent({
 				agentId: await readAgentId(c),
+				scope: await readScope(c),
+				scopeRef: await readScopeRef(c),
 				eventId,
 			})
 			return c.json({ ok: true, ...out }, 202)
@@ -2058,6 +2061,7 @@ export function createV1Router(): Hono {
 				agentId: await readAgentId(c),
 				limit: typeof body.limit === "number" ? body.limit : undefined,
 				scope: await readScope(c),
+				scopeRef: await readScopeRef(c),
 			})
 			return c.json(report)
 		} catch (err) {
@@ -2081,6 +2085,7 @@ export function createV1Router(): Hono {
 						? body.minCombinedScore
 						: undefined,
 				scope: await readScope(c),
+				scopeRef: await readScopeRef(c),
 			})
 			return c.json(result)
 		} catch (err) {

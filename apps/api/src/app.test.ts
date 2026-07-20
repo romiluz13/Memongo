@@ -3069,6 +3069,61 @@ describe("createApp", () => {
 		})
 	})
 
+	it("scope isolation: novelty-scan, consolidate, extract, import forward the authorized scopeRef", async () => {
+		process.env.MEMONGO_API_KEY = ""
+		process.env.MEMONGO_API_SCOPED_KEYS = JSON.stringify([
+			{ token: "scoped-A", scopes: ["tenant"], scopeRefs: ["ref-A"] },
+		])
+		for (const mock of [
+			bridgeMocks.memongoBridgeScanNovelty,
+			bridgeMocks.memongoBridgeConsolidate,
+			bridgeMocks.memongoBridgeExtractEvent,
+			bridgeMocks.memongoBridgeImportConversations,
+		]) {
+			mock.mockReset()
+			mock.mockResolvedValue({})
+		}
+		const headers = {
+			Authorization: "Bearer scoped-A",
+			"Content-Type": "application/json",
+		}
+		const base = "?scope=tenant&scopeRef=ref-A"
+
+		await createApp().request(`/v1/novelty-scan${base}`, {
+			method: "POST",
+			headers,
+			body: JSON.stringify({}),
+		})
+		await createApp().request(`/v1/consolidate${base}`, {
+			method: "POST",
+			headers,
+			body: JSON.stringify({}),
+		})
+		await createApp().request(`/v1/extract${base}`, {
+			method: "POST",
+			headers,
+			body: JSON.stringify({ eventId: "evt-1" }),
+		})
+		await createApp().request(`/v1/import/conversations${base}`, {
+			method: "POST",
+			headers,
+			body: JSON.stringify({ datasetPath: "d.jsonl" }),
+		})
+
+		expect(
+			bridgeMocks.memongoBridgeScanNovelty.mock.calls[0]?.[0]?.scopeRef,
+		).toBe("ref-A")
+		expect(
+			bridgeMocks.memongoBridgeConsolidate.mock.calls[0]?.[0]?.scopeRef,
+		).toBe("ref-A")
+		expect(
+			bridgeMocks.memongoBridgeExtractEvent.mock.calls[0]?.[0]?.scopeRef,
+		).toBe("ref-A")
+		expect(
+			bridgeMocks.memongoBridgeImportConversations.mock.calls[0]?.[0]?.scopeRef,
+		).toBe("ref-A")
+	})
+
 	it("scope isolation: search-kb forwards the authorized scopeRef to the bridge", async () => {
 		process.env.MEMONGO_API_KEY = ""
 		process.env.MEMONGO_API_SCOPED_KEYS = JSON.stringify([

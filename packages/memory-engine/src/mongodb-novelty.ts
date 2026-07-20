@@ -104,6 +104,9 @@ export async function scanNovelty(params: {
 	if (options?.scope) {
 		filter.scope = options.scope
 	}
+	if (options?.scopeRef) {
+		filter.scopeRef = options.scopeRef
+	}
 	if (options?.timeRange) {
 		filter.timestamp = {
 			$gte: options.timeRange.start,
@@ -132,6 +135,9 @@ export async function scanNovelty(params: {
 	const vsFilter: Document = { agentId }
 	if (options?.scope) {
 		vsFilter.scope = options.scope
+	}
+	if (options?.scopeRef) {
+		vsFilter.scopeRef = options.scopeRef
 	}
 	if (options?.timeRange) {
 		vsFilter.timestamp = {

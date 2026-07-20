@@ -479,6 +479,8 @@ export async function memongoBridgeWriteConversationEvent(params: {
 
 export async function memongoBridgeExtractEvent(params: {
 	agentId?: string
+	scope?: MemoryScope
+	scopeRef?: string
 	eventId: string
 }): Promise<{ jobId: string; scheduled: boolean }> {
 	const m = (await memongoBridgeGetManager(
@@ -487,7 +489,13 @@ export async function memongoBridgeExtractEvent(params: {
 	if (!m.extractEvent) {
 		throw new Error("extractEvent is not available on this manager")
 	}
-	return m.extractEvent({ eventId: params.eventId })
+	// Tenant isolation: forward the authorized scope/scopeRef so extraction can
+	// only read an event within the caller's tenant.
+	return m.extractEvent({
+		eventId: params.eventId,
+		scope: params.scope,
+		scopeRef: params.scopeRef,
+	})
 }
 
 export async function memongoBridgeWriteStructuredMemory(params: {
@@ -1030,6 +1038,7 @@ export async function memongoBridgeImportConversations(params: {
 	agentId?: string
 	datasetPath: string
 	scope?: MemoryScope
+	scopeRef?: string
 	limitConversations?: number
 	limitTurnsPerConversation?: number
 }): Promise<MemoryConversationImportResult> {
@@ -1042,6 +1051,9 @@ export async function memongoBridgeImportConversations(params: {
 	return m.importConversations({
 		datasetPath: params.datasetPath,
 		scope: params.scope,
+		// Tenant isolation: forward the authorized scopeRef so imported turns are
+		// forced into the caller's tenant (see manager importConversations).
+		scopeRef: params.scopeRef,
 		limitConversations: params.limitConversations,
 		limitTurnsPerConversation: params.limitTurnsPerConversation,
 	})
@@ -1104,6 +1116,7 @@ export async function memongoBridgeScanNovelty(params: {
 	agentId?: string
 	limit?: number
 	scope?: string
+	scopeRef?: string
 }) {
 	const m = (await memongoBridgeGetManager(
 		params.agentId,
@@ -1114,6 +1127,9 @@ export async function memongoBridgeScanNovelty(params: {
 	return m.scanNovelty({
 		limit: params.limit,
 		scope: params.scope,
+		// Tenant isolation: forward the authorized scopeRef so novelty scanning
+		// stays within the caller's tenant, not every scopeRef under the scope.
+		scopeRef: params.scopeRef,
 	})
 }
 
@@ -1122,6 +1138,7 @@ export async function memongoBridgeConsolidate(params: {
 	maxEvents?: number
 	minCombinedScore?: number
 	scope?: string
+	scopeRef?: string
 }) {
 	const m = (await memongoBridgeGetManager(
 		params.agentId,
@@ -1133,6 +1150,9 @@ export async function memongoBridgeConsolidate(params: {
 		maxEvents: params.maxEvents,
 		minCombinedScore: params.minCombinedScore,
 		scope: params.scope,
+		// Tenant isolation: forward the authorized scopeRef so consolidation only
+		// processes the caller's tenant events (consolidateMemory filters on it).
+		scopeRef: params.scopeRef,
 	})
 }
 

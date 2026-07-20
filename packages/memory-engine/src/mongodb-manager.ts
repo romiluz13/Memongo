@@ -5592,6 +5592,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 	async importConversations(params: {
 		datasetPath: string
 		scope?: MemoryScope
+		scopeRef?: string
 		limitConversations?: number
 		limitTurnsPerConversation?: number
 	}): Promise<MemoryConversationImportResult> {
@@ -5608,7 +5609,16 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 			limitConversations: params.limitConversations,
 			limitTurnsPerConversation: params.limitTurnsPerConversation,
 			writeTurn: async (turn) => {
-				await this.writeConversationEvent(turn)
+				// Tenant isolation: force the caller's authorized scope/scopeRef onto
+				// every imported turn so a dataset that declares its own
+				// conversation.scope cannot land events outside the caller's tenant.
+				await this.writeConversationEvent({
+					...turn,
+					...(params.scope !== undefined ? { scope: params.scope } : {}),
+					...(params.scopeRef !== undefined
+						? { scopeRef: params.scopeRef }
+						: {}),
+				})
 			},
 		})
 	}
@@ -7152,7 +7162,11 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		})
 	}
 
-	async scanNovelty(params?: { limit?: number; scope?: string }) {
+	async scanNovelty(params?: {
+		limit?: number
+		scope?: string
+		scopeRef?: string
+	}) {
 		return scanNovelty({
 			db: this.db,
 			prefix: this.prefix,
@@ -7165,6 +7179,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		maxEvents?: number
 		minCombinedScore?: number
 		scope?: string
+		scopeRef?: string
 	}) {
 		const startedAt = new Date()
 		const runId = randomUUID()
@@ -7368,8 +7383,10 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 	private async runBackgroundExtractionJob(params: {
 		eventId: string
 		jobId: string
+		scope?: MemoryScope
+		scopeRef?: string
 	}): Promise<void> {
-		const { eventId, jobId } = params
+		const { eventId, jobId, scope, scopeRef } = params
 		const startedAt = new Date()
 		try {
 			await updateMemoryJob({
@@ -7391,6 +7408,11 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 			const eventDoc = (await eventsCollection(this.db, this.prefix).findOne({
 				eventId,
 				agentId: this.agentId,
+				// Tenant isolation: a scope-restricted caller can only extract from an
+				// event within its authorized scope/scopeRef; a cross-scope event is
+				// simply not found here.
+				...(scope !== undefined ? { scope } : {}),
+				...(scopeRef !== undefined ? { scopeRef } : {}),
 			})) as {
 				eventId: string
 				agentId: string
@@ -7533,6 +7555,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 
 	private async scheduleBackgroundExtraction(
 		eventId: string,
+		tenant?: { scope?: MemoryScope; scopeRef?: string },
 	): Promise<{ jobId: string; scheduled: boolean }> {
 		const jobId = `extraction-${eventId}`
 		try {
@@ -7555,7 +7578,12 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		}
 
 		this.enqueueDerivedWork(async () => {
-			await this.runBackgroundExtractionJob({ eventId, jobId })
+			await this.runBackgroundExtractionJob({
+				eventId,
+				jobId,
+				scope: tenant?.scope,
+				scopeRef: tenant?.scopeRef,
+			})
 		})
 		return { jobId, scheduled: true }
 	}
@@ -7775,12 +7803,19 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		return next
 	}
 
-	async extractEvent(params: { eventId: string }) {
+	async extractEvent(params: {
+		eventId: string
+		scope?: MemoryScope
+		scopeRef?: string
+	}) {
 		const eventId = params.eventId.trim()
 		if (!eventId) {
 			throw new Error("eventId is required")
 		}
-		return this.scheduleBackgroundExtraction(eventId)
+		return this.scheduleBackgroundExtraction(eventId, {
+			scope: params.scope,
+			scopeRef: params.scopeRef,
+		})
 	}
 
 	// ---------------------------------------------------------------------------
