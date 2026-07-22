@@ -1,0 +1,377 @@
+{
+  "generatedAt": "2026-06-27T00:00:00.000Z",
+  "scope": "Local token-format benchmark over deterministic fixtures; not a broad product claim.",
+  "tokenizer": {
+    "package": "gpt-tokenizer",
+    "model": "gpt-4o",
+    "encoding": "o200k_base"
+  },
+  "deterministicTokenSignature": "1c948c41198739bfe6b22397a9d978ede08e8822a98a1cd17613e5a9f1d09665",
+  "formats": [
+    "json-pretty",
+    "json-compact",
+    "markdown",
+    "toon"
+  ],
+  "compactJsonBaseline": "tokenDeltaVsCompactJson and tokenSavingsPctVsCompactJson compare each row to json-compact for the same fixture/sourceSha256.",
+  "validations": [
+    "All formats are rendered from the same stable source fixture object.",
+    "Each row records the stable sourceSha256 used for that fixture.",
+    "Field-path coverage is checked for every format, including TOON.",
+    "Token counts are recomputed in-process and must match before output is written.",
+    "small-uniform-5: same source SHA across formats (ceb014f39be0), 59 field paths covered",
+    "medium-uniform-50: same source SHA across formats (57917f37bbfd), 554 field paths covered",
+    "large-uniform-250: same source SHA across formats (4c4713729417), 2754 field paths covered",
+    "mixed-memory-types: same source SHA across formats (a6638d52b710), 46 field paths covered",
+    "nested-metadata: same source SHA across formats (058f018bbee2), 169 field paths covered",
+    "realistic-retrieved-context: same source SHA across formats (7168612aaa2b), 148 field paths covered",
+    "toon-unfriendly-irregular: same source SHA across formats (9470579f1406), 23 field paths covered"
+  ],
+  "fixtures": [
+    {
+      "name": "small-uniform-5",
+      "description": "5 uniform fact/preference memories with identical fields."
+    },
+    {
+      "name": "medium-uniform-50",
+      "description": "50 uniform fact/preference memories with identical fields."
+    },
+    {
+      "name": "large-uniform-250",
+      "description": "250 uniform fact/preference memories with identical fields."
+    },
+    {
+      "name": "mixed-memory-types",
+      "description": "Facts, preferences, procedures, episodes, graph edges, and provenance."
+    },
+    {
+      "name": "nested-metadata",
+      "description": "Uniform memories with nested source, score, confidence, tag, and relation metadata."
+    },
+    {
+      "name": "realistic-retrieved-context",
+      "description": "Search result snippets with relevance scores, sessions, timestamps, and memory type."
+    },
+    {
+      "name": "toon-unfriendly-irregular",
+      "description": "Non-uniform deeply nested records with long comma/newline-heavy text."
+    }
+  ],
+  "results": [
+    {
+      "fixtureName": "small-uniform-5",
+      "formatName": "json-pretty",
+      "tokenCount": 727,
+      "tokenDeltaVsCompactJson": 222,
+      "tokenSavingsPctVsCompactJson": -43.960396039603964,
+      "byteSize": 2144,
+      "renderMs": 0.0217,
+      "sourceSha256": "ceb014f39be0b9f8f77196f5fd23595260cd4211c7571a521c4462263c46767d",
+      "fieldPathCount": 59
+    },
+    {
+      "fixtureName": "small-uniform-5",
+      "formatName": "json-compact",
+      "tokenCount": 505,
+      "tokenDeltaVsCompactJson": 0,
+      "tokenSavingsPctVsCompactJson": 0,
+      "byteSize": 1481,
+      "renderMs": 0.0105,
+      "sourceSha256": "ceb014f39be0b9f8f77196f5fd23595260cd4211c7571a521c4462263c46767d",
+      "fieldPathCount": 59
+    },
+    {
+      "fixtureName": "small-uniform-5",
+      "formatName": "markdown",
+      "tokenCount": 816,
+      "tokenDeltaVsCompactJson": 311,
+      "tokenSavingsPctVsCompactJson": -61.584158415841586,
+      "byteSize": 2573,
+      "renderMs": 0.0522,
+      "sourceSha256": "ceb014f39be0b9f8f77196f5fd23595260cd4211c7571a521c4462263c46767d",
+      "fieldPathCount": 59
+    },
+    {
+      "fixtureName": "small-uniform-5",
+      "formatName": "toon",
+      "tokenCount": 444,
+      "tokenDeltaVsCompactJson": -61,
+      "tokenSavingsPctVsCompactJson": 12.07920792079208,
+      "byteSize": 1062,
+      "renderMs": 0.0534,
+      "sourceSha256": "ceb014f39be0b9f8f77196f5fd23595260cd4211c7571a521c4462263c46767d",
+      "fieldPathCount": 59
+    },
+    {
+      "fixtureName": "medium-uniform-50",
+      "formatName": "json-pretty",
+      "tokenCount": 6826,
+      "tokenDeltaVsCompactJson": 2112,
+      "tokenSavingsPctVsCompactJson": -44.80271531607976,
+      "byteSize": 20442,
+      "renderMs": 0.0873,
+      "sourceSha256": "57917f37bbfda57118f8b48daeb2e7d0ebaeb915f4aad9194d70a5c9997a3e26",
+      "fieldPathCount": 554
+    },
+    {
+      "fixtureName": "medium-uniform-50",
+      "formatName": "json-compact",
+      "tokenCount": 4714,
+      "tokenDeltaVsCompactJson": 0,
+      "tokenSavingsPctVsCompactJson": 0,
+      "byteSize": 13884,
+      "renderMs": 0.0637,
+      "sourceSha256": "57917f37bbfda57118f8b48daeb2e7d0ebaeb915f4aad9194d70a5c9997a3e26",
+      "fieldPathCount": 554
+    },
+    {
+      "fixtureName": "medium-uniform-50",
+      "formatName": "markdown",
+      "tokenCount": 7769,
+      "tokenDeltaVsCompactJson": 3055,
+      "tokenSavingsPctVsCompactJson": -64.80695799745439,
+      "byteSize": 24827,
+      "renderMs": 0.3157,
+      "sourceSha256": "57917f37bbfda57118f8b48daeb2e7d0ebaeb915f4aad9194d70a5c9997a3e26",
+      "fieldPathCount": 554
+    },
+    {
+      "fixtureName": "medium-uniform-50",
+      "formatName": "toon",
+      "tokenCount": 3843,
+      "tokenDeltaVsCompactJson": -871,
+      "tokenSavingsPctVsCompactJson": 18.47687738650827,
+      "byteSize": 8876,
+      "renderMs": 0.2665,
+      "sourceSha256": "57917f37bbfda57118f8b48daeb2e7d0ebaeb915f4aad9194d70a5c9997a3e26",
+      "fieldPathCount": 554
+    },
+    {
+      "fixtureName": "large-uniform-250",
+      "formatName": "json-pretty",
+      "tokenCount": 33926,
+      "tokenDeltaVsCompactJson": 10512,
+      "tokenSavingsPctVsCompactJson": -44.89621593918169,
+      "byteSize": 101711,
+      "renderMs": 0.4116,
+      "sourceSha256": "4c4713729417395c1c9638f77191c6bfa54cc2e283a426f1b96e6d6439b1a343",
+      "fieldPathCount": 2754
+    },
+    {
+      "fixtureName": "large-uniform-250",
+      "formatName": "json-compact",
+      "tokenCount": 23414,
+      "tokenDeltaVsCompactJson": 0,
+      "tokenSavingsPctVsCompactJson": 0,
+      "byteSize": 68953,
+      "renderMs": 0.2866,
+      "sourceSha256": "4c4713729417395c1c9638f77191c6bfa54cc2e283a426f1b96e6d6439b1a343",
+      "fieldPathCount": 2754
+    },
+    {
+      "fixtureName": "large-uniform-250",
+      "formatName": "markdown",
+      "tokenCount": 38669,
+      "tokenDeltaVsCompactJson": 15255,
+      "tokenSavingsPctVsCompactJson": -65.1533270692748,
+      "byteSize": 123847,
+      "renderMs": 1.2599,
+      "sourceSha256": "4c4713729417395c1c9638f77191c6bfa54cc2e283a426f1b96e6d6439b1a343",
+      "fieldPathCount": 2754
+    },
+    {
+      "fixtureName": "large-uniform-250",
+      "formatName": "toon",
+      "tokenCount": 18943,
+      "tokenDeltaVsCompactJson": -4471,
+      "tokenSavingsPctVsCompactJson": 19.095413000768772,
+      "byteSize": 43546,
+      "renderMs": 1.0054,
+      "sourceSha256": "4c4713729417395c1c9638f77191c6bfa54cc2e283a426f1b96e6d6439b1a343",
+      "fieldPathCount": 2754
+    },
+    {
+      "fixtureName": "mixed-memory-types",
+      "formatName": "json-pretty",
+      "tokenCount": 540,
+      "tokenDeltaVsCompactJson": 204,
+      "tokenSavingsPctVsCompactJson": -60.71428571428571,
+      "byteSize": 1780,
+      "renderMs": 0.0099,
+      "sourceSha256": "a6638d52b7109ff9a1eb5e4c6ce14f2229059d7ac22ececaf0bb2f751490124f",
+      "fieldPathCount": 46
+    },
+    {
+      "fixtureName": "mixed-memory-types",
+      "formatName": "json-compact",
+      "tokenCount": 336,
+      "tokenDeltaVsCompactJson": 0,
+      "tokenSavingsPctVsCompactJson": 0,
+      "byteSize": 1226,
+      "renderMs": 0.0062,
+      "sourceSha256": "a6638d52b7109ff9a1eb5e4c6ce14f2229059d7ac22ececaf0bb2f751490124f",
+      "fieldPathCount": 46
+    },
+    {
+      "fixtureName": "mixed-memory-types",
+      "formatName": "markdown",
+      "tokenCount": 571,
+      "tokenDeltaVsCompactJson": 235,
+      "tokenSavingsPctVsCompactJson": -69.94047619047619,
+      "byteSize": 1997,
+      "renderMs": 0.0277,
+      "sourceSha256": "a6638d52b7109ff9a1eb5e4c6ce14f2229059d7ac22ececaf0bb2f751490124f",
+      "fieldPathCount": 46
+    },
+    {
+      "fixtureName": "mixed-memory-types",
+      "formatName": "toon",
+      "tokenCount": 348,
+      "tokenDeltaVsCompactJson": 12,
+      "tokenSavingsPctVsCompactJson": -3.571428571428571,
+      "byteSize": 1111,
+      "renderMs": 0.0301,
+      "sourceSha256": "a6638d52b7109ff9a1eb5e4c6ce14f2229059d7ac22ececaf0bb2f751490124f",
+      "fieldPathCount": 46
+    },
+    {
+      "fixtureName": "nested-metadata",
+      "formatName": "json-pretty",
+      "tokenCount": 2330,
+      "tokenDeltaVsCompactJson": 871,
+      "tokenSavingsPctVsCompactJson": -59.698423577793015,
+      "byteSize": 7882,
+      "renderMs": 0.0356,
+      "sourceSha256": "058f018bbee2d11f3267f5676322dfff9355c2b427c0f95998b9db7abb3d308e",
+      "fieldPathCount": 169
+    },
+    {
+      "fixtureName": "nested-metadata",
+      "formatName": "json-compact",
+      "tokenCount": 1459,
+      "tokenDeltaVsCompactJson": 0,
+      "tokenSavingsPctVsCompactJson": 0,
+      "byteSize": 4294,
+      "renderMs": 0.0242,
+      "sourceSha256": "058f018bbee2d11f3267f5676322dfff9355c2b427c0f95998b9db7abb3d308e",
+      "fieldPathCount": 169
+    },
+    {
+      "fixtureName": "nested-metadata",
+      "formatName": "markdown",
+      "tokenCount": 2540,
+      "tokenDeltaVsCompactJson": 1081,
+      "tokenSavingsPctVsCompactJson": -74.09184372858122,
+      "byteSize": 9229,
+      "renderMs": 0.1156,
+      "sourceSha256": "058f018bbee2d11f3267f5676322dfff9355c2b427c0f95998b9db7abb3d308e",
+      "fieldPathCount": 169
+    },
+    {
+      "fixtureName": "nested-metadata",
+      "formatName": "toon",
+      "tokenCount": 1526,
+      "tokenDeltaVsCompactJson": 67,
+      "tokenSavingsPctVsCompactJson": -4.592186429061001,
+      "byteSize": 4340,
+      "renderMs": 0.1006,
+      "sourceSha256": "058f018bbee2d11f3267f5676322dfff9355c2b427c0f95998b9db7abb3d308e",
+      "fieldPathCount": 169
+    },
+    {
+      "fixtureName": "realistic-retrieved-context",
+      "formatName": "json-pretty",
+      "tokenCount": 2269,
+      "tokenDeltaVsCompactJson": 519,
+      "tokenSavingsPctVsCompactJson": -29.65714285714286,
+      "byteSize": 7684,
+      "renderMs": 0.0252,
+      "sourceSha256": "7168612aaa2b6b55d895d08399a4688748dcc7e4b170969f68276a9eb48b70a9",
+      "fieldPathCount": 148
+    },
+    {
+      "fixtureName": "realistic-retrieved-context",
+      "formatName": "json-compact",
+      "tokenCount": 1750,
+      "tokenDeltaVsCompactJson": 0,
+      "tokenSavingsPctVsCompactJson": 0,
+      "byteSize": 6328,
+      "renderMs": 0.0156,
+      "sourceSha256": "7168612aaa2b6b55d895d08399a4688748dcc7e4b170969f68276a9eb48b70a9",
+      "fieldPathCount": 148
+    },
+    {
+      "fixtureName": "realistic-retrieved-context",
+      "formatName": "markdown",
+      "tokenCount": 2261,
+      "tokenDeltaVsCompactJson": 511,
+      "tokenSavingsPctVsCompactJson": -29.2,
+      "byteSize": 7906,
+      "renderMs": 0.0621,
+      "sourceSha256": "7168612aaa2b6b55d895d08399a4688748dcc7e4b170969f68276a9eb48b70a9",
+      "fieldPathCount": 148
+    },
+    {
+      "fixtureName": "realistic-retrieved-context",
+      "formatName": "toon",
+      "tokenCount": 1417,
+      "tokenDeltaVsCompactJson": -333,
+      "tokenSavingsPctVsCompactJson": 19.02857142857143,
+      "byteSize": 4665,
+      "renderMs": 0.0514,
+      "sourceSha256": "7168612aaa2b6b55d895d08399a4688748dcc7e4b170969f68276a9eb48b70a9",
+      "fieldPathCount": 148
+    },
+    {
+      "fixtureName": "toon-unfriendly-irregular",
+      "formatName": "json-pretty",
+      "tokenCount": 373,
+      "tokenDeltaVsCompactJson": 131,
+      "tokenSavingsPctVsCompactJson": -54.132231404958674,
+      "byteSize": 1436,
+      "renderMs": 0.0055,
+      "sourceSha256": "9470579f14063abff1ec2d0ae5e05e974cff4d89fb8b0a33818f3de3ed966003",
+      "fieldPathCount": 23
+    },
+    {
+      "fixtureName": "toon-unfriendly-irregular",
+      "formatName": "json-compact",
+      "tokenCount": 242,
+      "tokenDeltaVsCompactJson": 0,
+      "tokenSavingsPctVsCompactJson": 0,
+      "byteSize": 884,
+      "renderMs": 0.0037,
+      "sourceSha256": "9470579f14063abff1ec2d0ae5e05e974cff4d89fb8b0a33818f3de3ed966003",
+      "fieldPathCount": 23
+    },
+    {
+      "fixtureName": "toon-unfriendly-irregular",
+      "formatName": "markdown",
+      "tokenCount": 408,
+      "tokenDeltaVsCompactJson": 166,
+      "tokenSavingsPctVsCompactJson": -68.59504132231406,
+      "byteSize": 1668,
+      "renderMs": 0.0185,
+      "sourceSha256": "9470579f14063abff1ec2d0ae5e05e974cff4d89fb8b0a33818f3de3ed966003",
+      "fieldPathCount": 23
+    },
+    {
+      "fixtureName": "toon-unfriendly-irregular",
+      "formatName": "toon",
+      "tokenCount": 355,
+      "tokenDeltaVsCompactJson": 113,
+      "tokenSavingsPctVsCompactJson": -46.69421487603306,
+      "byteSize": 1373,
+      "renderMs": 0.0215,
+      "sourceSha256": "9470579f14063abff1ec2d0ae5e05e974cff4d89fb8b0a33818f3de3ed966003",
+      "fieldPathCount": 23
+    }
+  ],
+  "interpretation": [
+    "TOON saved tokens on 4/7 fixtures, lost tokens on 3/7, and tied on 0/7.",
+    "Best TOON case: large-uniform-250 (+19.1%, -4471 tokens vs compact JSON).",
+    "Worst TOON case: toon-unfriendly-irregular (-46.7%, +113 tokens vs compact JSON).",
+    "Results are local to these deterministic fixtures and should not be presented as a general product-wide compression claim."
+  ],
+  "recommendedThreshold": "Use TOON only when representative payloads show at least 10% token savings versus compact JSON and field coverage validation passes; otherwise prefer compact JSON for fidelity and simpler parsing."
+}

@@ -619,6 +619,7 @@ export type MemoryContextBundle = {
 }
 
 export type MemoryContextBundleMode = "full" | "wake-up"
+export type MemoryContextFormat = "markdown" | "json" | "toon"
 
 export type MemoryContextBundleRequest = {
 	query?: string
@@ -635,6 +636,8 @@ export type MemoryContextBundleRequest = {
 	timeRange?: MemorySearchTimeRange
 	/** "wake-up" returns a compact 250-token projection for session start. Default: "full". */
 	mode?: MemoryContextBundleMode
+	/** Format for the prompt-ready `rendered` string. Default: "markdown". */
+	format?: MemoryContextFormat
 }
 
 export interface MemorySearchManager {

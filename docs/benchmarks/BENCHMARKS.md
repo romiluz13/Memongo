@@ -52,6 +52,16 @@ The public source tree intentionally omits raw benchmark artifacts. Do not quote
 artifact hashes until the corresponding raw predictions, scorer output, run
 metadata, and cleanup proof are attached to a public GitHub Release.
 
+## Token-Efficiency Diagnostics
+
+TOON context-format measurements are local token-efficiency diagnostics, not
+retrieval quality claims. Run `bun run benchmark:toon` to compare JSON pretty,
+JSON compact, markdown-style context, and TOON for deterministic fixtures. The
+command writes ignored local output under `artifacts/benchmarks/`. To save a
+reviewable docs sample explicitly, pass
+`--sample-out=docs/benchmarks/toon-token-benchmark.sample.json`. See
+[TOON context format](../toon-format.md).
+
 ## Mem0 Status
 
 No Mem0 LongMemEval win is claimed.

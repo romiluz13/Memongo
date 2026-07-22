@@ -1,6 +1,7 @@
 import type { Db, Document } from "mongodb"
 import { type MemoryScope, createSubsystemLogger } from "@memongo/lib"
 import { buildDiscoveryProjection } from "./mongodb-discovery-projections.js"
+import { renderContextBundle } from "./formatters/context.js"
 import { hydrateActiveSlate } from "./mongodb-active-slate.js"
 import { synthesizeProfile, type ProfileSynthesis } from "./mongodb-profile.js"
 import { resolveTimeRangePreset } from "./mongodb-retrieval-planner.js"
@@ -218,6 +219,15 @@ function renderSectionText(section: {
 		lines.push(renderItem(item))
 	}
 	return lines.join("\n")
+}
+
+function resolveContextFormat(
+	format: MemoryContextBundleRequest["format"],
+): NonNullable<MemoryContextBundleRequest["format"]> {
+	if (format === "json" || format === "toon") {
+		return format
+	}
+	return "markdown"
 }
 
 function materializeSection(
@@ -796,15 +806,34 @@ export async function buildContextBundle(params: {
 		partial ||= section.partial
 	}
 
-	const rendered = sections
-		.map((section) =>
-			renderSectionText({
-				title: section.title,
-				summary: section.summary,
-				items: section.items,
-			}),
-		)
-		.join("\n\n")
+	const contextFormat = resolveContextFormat(request.format)
+	const builtAt = new Date()
+	const bundleForRendering: MemoryContextBundle = {
+		agentId,
+		...(query ? { query } : {}),
+		scope,
+		scopeRef,
+		...(sessionId ? { sessionId } : {}),
+		rendered: "",
+		sections,
+		metadata: {
+			tokenBudget,
+			estimatedTokensUsed,
+			partial,
+			truncated,
+			pathsExecuted: Array.from(pathsExecuted),
+			...(searchResult.value?.trustSummary
+				? { trustSummary: searchResult.value.trustSummary }
+				: {}),
+			sectionsIncluded: sections.map((section) => section.kind),
+		},
+		builtAt,
+	}
+	const rendered = renderContextBundle(bundleForRendering, contextFormat)
+	const renderedEstimatedTokensUsed =
+		contextFormat === "markdown"
+			? estimatedTokensUsed
+			: estimateTokens(rendered)
 
 	emitTelemetry(db, prefix, {
 		meta: { agentId, operation: "context-bundle" },
@@ -828,7 +857,7 @@ export async function buildContextBundle(params: {
 		sections,
 		metadata: {
 			tokenBudget,
-			estimatedTokensUsed,
+			estimatedTokensUsed: renderedEstimatedTokensUsed,
 			partial,
 			truncated,
 			pathsExecuted: Array.from(pathsExecuted),
@@ -837,6 +866,6 @@ export async function buildContextBundle(params: {
 				: {}),
 			sectionsIncluded: sections.map((section) => section.kind),
 		},
-		builtAt: new Date(),
+		builtAt,
 	}
 }

@@ -1129,6 +1129,12 @@ export const openApiSpec = {
 										description:
 											"wake-up returns a compact session-start projection and skips query evidence",
 									},
+									format: {
+										type: "string",
+										enum: ["markdown", "json", "toon"],
+										description:
+											"Optional format for the prompt-ready rendered string. JSON remains the HTTP transport.",
+									},
 								},
 							},
 						},

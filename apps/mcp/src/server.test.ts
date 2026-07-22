@@ -181,6 +181,66 @@ describe("handleToolCall", () => {
 		expect(parseTextPayload(out)).toEqual({ importedTurns: 12 })
 	})
 
+	it("forwards context bundle format only when explicitly requested", async () => {
+		const buildContextBundle = vi.fn().mockResolvedValue({
+			rendered: "context_bundle",
+		})
+
+		await handleToolCall(
+			"memongo_build_context_bundle",
+			{
+				query: "Phoenix",
+				format: "toon",
+			},
+			{
+				buildContextBundle,
+			} as any,
+		)
+
+		expect(buildContextBundle).toHaveBeenCalledWith(
+			expect.objectContaining({
+				query: "Phoenix",
+				format: "toon",
+			}),
+		)
+
+		buildContextBundle.mockClear()
+		await handleToolCall(
+			"memongo_build_context_bundle",
+			{
+				query: "Phoenix",
+			},
+			{
+				buildContextBundle,
+			} as any,
+		)
+
+		expect(buildContextBundle).toHaveBeenCalledWith(
+			expect.objectContaining({
+				query: "Phoenix",
+				format: undefined,
+			}),
+		)
+	})
+
+	it("rejects invalid context bundle format values", async () => {
+		const buildContextBundle = vi.fn()
+
+		const out = await handleToolCall(
+			"memongo_build_context_bundle",
+			{
+				format: "yaml",
+			},
+			{
+				buildContextBundle,
+			} as any,
+		)
+
+		expect(buildContextBundle).not.toHaveBeenCalled()
+		expect(out.isError).toBe(true)
+		expect(parseTextPayload(out)).toEqual({ error: "invalid format" })
+	})
+
 	it("routes procedure outcome calls to the canonical runtime", async () => {
 		const reportProcedureOutcome = vi.fn().mockResolvedValue({
 			family: "procedure",

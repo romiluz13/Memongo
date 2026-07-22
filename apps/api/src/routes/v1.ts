@@ -1342,6 +1342,22 @@ export function createV1Router(): Hono {
 		if (scopeError) {
 			return jsonError(c, 400, "VALIDATION_ERROR", scopeError)
 		}
+		const format =
+			body.format === undefined
+				? undefined
+				: body.format === "markdown" ||
+						body.format === "json" ||
+						body.format === "toon"
+					? body.format
+					: null
+		if (format === null) {
+			return jsonError(
+				c,
+				400,
+				"VALIDATION_ERROR",
+				"format must be markdown|json|toon",
+			)
+		}
 		try {
 			const timeRange =
 				typeof body.timeRange === "object" &&
@@ -1382,6 +1398,7 @@ export function createV1Router(): Hono {
 					| { preset?: string; start?: string; end?: string }
 					| undefined,
 				mode: body.mode === "wake-up" ? "wake-up" : undefined,
+				format,
 			})
 			return c.json(bundle)
 		} catch (err) {

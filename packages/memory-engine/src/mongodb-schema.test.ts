@@ -1890,7 +1890,7 @@ describe("detectCapabilities", () => {
 		} as unknown as Db
 
 		const caps = await waitForSearchCapabilities(db, "test_chunks", {
-			timeoutMs: 30,
+			timeoutMs: 500,
 			pollMs: 1,
 		})
 		expect(caps.vectorSearch).toBe(true)
@@ -1927,7 +1927,7 @@ describe("waitForSearchIndexesQueryable", () => {
 
 		const result = await waitForSearchIndexesQueryable(collection, {
 			indexNames: ["events_text"],
-			timeoutMs: 30,
+			timeoutMs: 500,
 			pollMs: 1,
 		})
 

@@ -755,6 +755,7 @@ export class MemongoClient {
 			includeProfile: input.includeProfile,
 			timeRange: input.timeRange,
 			mode: input.mode,
+			format: input.format,
 		})
 	}
 

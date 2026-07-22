@@ -11,6 +11,7 @@ export interface MemongoCoreOptions {
 	userId: string
 	agentId?: string
 	mode?: "wake-up" | "full"
+	format?: "markdown" | "json" | "toon"
 }
 
 /* ------------------------------------------------------------------ */
@@ -97,13 +98,14 @@ async function fetchContextBundle(
 		userQuery && options.mode !== "wake-up"
 			? "full"
 			: (options.mode ?? "wake-up")
-	const cacheKey = `${options.userId}:${hashQuery(userQuery ?? "")}`
+	const cacheKey = `${options.userId}:${options.format ?? "markdown"}:${hashQuery(userQuery ?? "")}`
 	const cached = cacheGet(cacheKey)
 	if (cached !== undefined) return cached
 
 	const body: Record<string, unknown> = {
 		agentId: options.agentId ?? options.userId,
 		mode,
+		format: options.format,
 	}
 	if (mode === "full" && userQuery) {
 		body.query = userQuery

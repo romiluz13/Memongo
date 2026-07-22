@@ -21,6 +21,7 @@ export type {
 	MemoryBlockLabel,
 	MemoryBlocks,
 	MemoryContextBundle,
+	MemoryContextFormat,
 	MemoryContextBundleMode,
 	MemoryContextBundleMetadata,
 	MemoryContextBundleRequest,

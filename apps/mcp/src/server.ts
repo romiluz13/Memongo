@@ -168,6 +168,12 @@ export const toolList = [
 					description:
 						"wake-up returns a compact 250-token projection for session start",
 				},
+				format: {
+					type: "string",
+					enum: ["markdown", "json", "toon"],
+					description:
+						"Optional format for the prompt-ready rendered string. Defaults to markdown.",
+				},
 				timeRange: {
 					type: "object",
 					properties: {
@@ -1132,6 +1138,19 @@ export async function handleToolCall(
 				discoveryKind === "contradiction-report"
 					? discoveryKind
 					: undefined
+			const format = args.format
+			if (
+				format !== undefined &&
+				format !== "markdown" &&
+				format !== "json" &&
+				format !== "toon"
+			) {
+				throw new Error("invalid format")
+			}
+			const validatedFormat =
+				format === "markdown" || format === "json" || format === "toon"
+					? format
+					: undefined
 			const timeRange =
 				typeof args.timeRange === "object" &&
 				args.timeRange !== null &&
@@ -1186,6 +1205,7 @@ export async function handleToolCall(
 					args.mode === "wake-up" || args.mode === "full"
 						? args.mode
 						: undefined,
+				format: validatedFormat,
 			})
 			return { content: [{ type: "text", text: JSON.stringify(out) }] }
 		}
