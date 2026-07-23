@@ -976,7 +976,7 @@ describe("E2E: Transactions (replica set)", () => {
 					)
 					executed = true
 				},
-				{ writeConcern: { w: "majority" } },
+				{ writeConcern: { w: "majority", wtimeout: 1000 } },
 			)
 			expect(executed).toBe(true)
 

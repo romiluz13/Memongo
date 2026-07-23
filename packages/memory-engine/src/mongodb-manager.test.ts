@@ -5361,7 +5361,7 @@ describe("MongoDBMemoryManager background extraction", () => {
 
 		expect(client.startSession).toHaveBeenCalledOnce()
 		expect(session.withTransaction).toHaveBeenCalledWith(expect.any(Function), {
-			writeConcern: { w: "majority" },
+			writeConcern: { w: "majority", wtimeout: 1000 },
 		})
 		expect(writeEvent).toHaveBeenCalledWith(
 			expect.objectContaining({
