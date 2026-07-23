@@ -51,10 +51,72 @@ const benchmarkOfficialMetricsSchema = {
 	properties: {
 		longMemEval: {
 			type: "object",
-			required: ["retrievalCases", "abstentionCases", "session"],
+			required: [
+				"evaluator",
+				"totalCases",
+				"eligibleCases",
+				"retrievalCases",
+				"abstentionCases",
+				"ineligibleCases",
+				"projectionFailureCases",
+				"executionFailureCases",
+			],
 			properties: {
+				evaluator: {
+					type: "object",
+					required: [
+						"suite",
+						"sourceRepository",
+						"sourceCommit",
+						"evaluatorPath",
+						"evaluatorBlob",
+						"aggregationEntrypoint",
+						"cutoffs",
+						"eligibilityPolicy",
+						"candidateProjection",
+						"comparability",
+					],
+					properties: {
+						suite: { type: "string", enum: ["longmemeval"] },
+						sourceRepository: {
+							type: "string",
+							enum: ["xiaowu0162/LongMemEval"],
+						},
+						sourceCommit: { type: "string" },
+						evaluatorPath: {
+							type: "string",
+							enum: ["src/retrieval/eval_utils.py"],
+						},
+						evaluatorBlob: { type: "string" },
+						aggregationEntrypoint: {
+							type: "string",
+							enum: ["src/retrieval/run_retrieval.py"],
+						},
+						cutoffs: { type: "array", items: { type: "integer" } },
+						eligibilityPolicy: {
+							type: "string",
+							enum: ["exclude-abstention-and-no-user-answer-target"],
+						},
+						candidateProjection: {
+							type: "string",
+							enum: [
+								"one-session-document-one-label",
+								"native-memory-source-session-adapter",
+							],
+						},
+						comparability: {
+							type: "string",
+							enum: ["canonical", "adapted"],
+						},
+					},
+				},
+				totalCases: { type: "integer" },
+				eligibleCases: { type: "integer" },
 				retrievalCases: { type: "integer" },
 				abstentionCases: { type: "integer" },
+				ineligibleCases: { type: "integer" },
+				projectionFailureCases: { type: "integer" },
+				executionFailureCases: { type: "integer" },
 				session: benchmarkOfficialRetrievalMetricsSchema,
 				turn: benchmarkOfficialRetrievalMetricsSchema,
 			},
@@ -62,13 +124,13 @@ const benchmarkOfficialMetricsSchema = {
 		loCoMo: {
 			type: "object",
 			required: [
-				"qaCases",
+				"retrievalCases",
 				"abstentionCases",
 				"sessionEvidenceRecallAt5",
 				"sessionEvidenceRecallAt10",
 			],
 			properties: {
-				qaCases: { type: "integer" },
+				retrievalCases: { type: "integer" },
 				abstentionCases: { type: "integer" },
 				sessionEvidenceRecallAt5: { type: "number" },
 				sessionEvidenceRecallAt10: { type: "number" },
@@ -79,6 +141,87 @@ const benchmarkOfficialMetricsSchema = {
 	},
 } as const
 
+const benchmarkCommonThresholdProperties = {
+	contractId: { type: "string", minLength: 1 },
+	version: { type: "string", minLength: 1 },
+	minHitRate: { type: "number", minimum: 0, maximum: 1 },
+	maxEmptyRate: { type: "number", minimum: 0, maximum: 1 },
+	minRAt5: { type: "number", minimum: 0, maximum: 1 },
+	minNdcgAt10: { type: "number", minimum: 0, maximum: 1 },
+	maxP95LatencyMs: { type: "number", exclusiveMinimum: true, minimum: 0 },
+} as const
+
+const benchmarkCommonThresholdRequired = [
+	"contractId",
+	"version",
+	"datasetKind",
+	"minHitRate",
+	"maxEmptyRate",
+	"minRAt5",
+	"minNdcgAt10",
+	"maxP95LatencyMs",
+] as const
+
+const benchmarkQualityThresholdsSchema = {
+	oneOf: [
+		{
+			type: "object",
+			additionalProperties: false,
+			properties: {
+				...benchmarkCommonThresholdProperties,
+				datasetKind: { type: "string", enum: ["longmemeval"] },
+				minSessionRecallAnyAt10: {
+					type: "number",
+					minimum: 0,
+					maximum: 1,
+				},
+				minSessionNdcgAnyAt10: {
+					type: "number",
+					minimum: 0,
+					maximum: 1,
+				},
+			},
+			required: [
+				...benchmarkCommonThresholdRequired,
+				"minSessionRecallAnyAt10",
+				"minSessionNdcgAnyAt10",
+			],
+		},
+		{
+			type: "object",
+			additionalProperties: false,
+			properties: {
+				...benchmarkCommonThresholdProperties,
+				datasetKind: { type: "string", enum: ["locomo"] },
+				minSessionEvidenceRecallAt10: {
+					type: "number",
+					minimum: 0,
+					maximum: 1,
+				},
+				minDialogEvidenceRecallAt10: {
+					type: "number",
+					minimum: 0,
+					maximum: 1,
+				},
+				minAnswerAccuracy: { type: "number", minimum: 0, maximum: 1 },
+				maxJudgeFalsePositiveRate: {
+					type: "number",
+					minimum: 0,
+					maximum: 1,
+				},
+				minAnswerCoverage: { type: "number", minimum: 0, maximum: 1 },
+			},
+			required: [
+				...benchmarkCommonThresholdRequired,
+				"minSessionEvidenceRecallAt10",
+				"minAnswerAccuracy",
+				"maxJudgeFalsePositiveRate",
+				"minAnswerCoverage",
+			],
+		},
+	],
+} as const
+
 const benchmarkRunReportSchema = {
 	type: "object",
 	required: [
@@ -87,6 +230,7 @@ const benchmarkRunReportSchema = {
 		"corpus",
 		"metrics",
 		"releaseGates",
+		"publicationDecision",
 		"warnings",
 		"degradations",
 	],
@@ -116,6 +260,62 @@ const benchmarkRunReportSchema = {
 				cases: { type: "integer" },
 				scoredCases: { type: "integer" },
 				skippedCases: { type: "integer" },
+				execution: {
+					type: "object",
+					required: [
+						"attemptedCases",
+						"succeededCases",
+						"failedCases",
+						"retrievalEligibleCases",
+						"abstentionCases",
+						"missingJudgmentCases",
+						"retrievalHits",
+						"retrievalMisses",
+						"scoredCases",
+					],
+					properties: {
+						attemptedCases: { type: "integer" },
+						succeededCases: { type: "integer" },
+						failedCases: { type: "integer" },
+						retrievalEligibleCases: { type: "integer" },
+						abstentionCases: { type: "integer" },
+						missingJudgmentCases: { type: "integer" },
+						retrievalHits: { type: "integer" },
+						retrievalMisses: { type: "integer" },
+						scoredCases: { type: "integer" },
+					},
+				},
+				caseOutcomes: {
+					type: "array",
+					items: {
+						type: "object",
+						required: [
+							"executionStatus",
+							"scoreEligibility",
+							"retrievalOutcome",
+							"empty",
+							"latencyMs",
+						],
+						properties: {
+							caseId: { type: "string" },
+							questionType: { type: "string" },
+							executionStatus: {
+								type: "string",
+								enum: ["succeeded", "system-failure"],
+							},
+							scoreEligibility: {
+								type: "string",
+								enum: ["retrieval", "abstention", "missing-judgment"],
+							},
+							retrievalOutcome: {
+								type: "string",
+								enum: ["hit", "miss", "not-applicable"],
+							},
+							empty: { type: "boolean" },
+							latencyMs: { type: "number" },
+						},
+					},
+				},
 			},
 		},
 		metrics: {
@@ -149,18 +349,52 @@ const benchmarkRunReportSchema = {
 						enum: [
 							"official-retrieval",
 							"internal-retrieval",
+							"execution-completeness",
+							"quality-thresholds",
+							"e2e-answer-quality",
 							"conversation-recall-regression",
 							"query-governance",
 						],
 					},
 					status: {
 						type: "string",
-						enum: ["passed", "warning", "not-run", "advisory-only"],
+						enum: ["passed", "failed", "warning", "not-run", "advisory-only"],
 					},
 					evidence: { type: "string" },
+					checks: {
+						type: "array",
+						items: {
+							type: "object",
+							required: ["metric", "actual", "operator", "threshold", "passed"],
+							properties: {
+								metric: { type: "string" },
+								actual: { type: "number", nullable: true },
+								operator: { type: "string", enum: [">=", "<=", "="] },
+								threshold: { type: "number" },
+								passed: { type: "boolean" },
+							},
+						},
+					},
 				},
 			},
 		},
+		publicationDecision: {
+			type: "object",
+			required: ["publishable", "failedGates", "blockingGates"],
+			properties: {
+				publishable: { type: "boolean" },
+				failedGates: { type: "array", items: { type: "string" } },
+				blockingGates: { type: "array", items: { type: "string" } },
+			},
+		},
+		qualityThresholds: benchmarkQualityThresholdsSchema,
+		runIdentity: { type: "object" },
+		embedding: { type: "object" },
+		reranker: { type: "object" },
+		storage: { type: "object" },
+		latency: { type: "object" },
+		cost: { type: "object" },
+		e2eQa: { type: "object" },
 		warnings: { type: "array", items: { type: "string" } },
 		degradations: { type: "array", items: { type: "string" } },
 	},
@@ -1330,6 +1564,12 @@ export const openApiSpec = {
 										description:
 											"Inclusive end boundary. Use ISO 8601 (`YYYY-MM-DD` or `YYYY-MM-DDTHH:mm:ssZ`).",
 									},
+									asOf: {
+										type: "string",
+										format: "date-time",
+										description:
+											"Evaluate event validity at this historical instant. Defaults to now.",
+									},
 									timezone: {
 										type: "string",
 										description:
@@ -1808,6 +2048,52 @@ export const openApiSpec = {
 		"/v1/write-event": {
 			post: {
 				summary: "Write conversation event (any role)",
+				requestBody: {
+					required: true,
+					content: {
+						"application/json": {
+							schema: {
+								type: "object",
+								required: ["role", "body"],
+								properties: {
+									role: {
+										type: "string",
+										enum: ["user", "assistant", "system", "tool"],
+									},
+									body: { type: "string", minLength: 1 },
+									agentId: { type: "string" },
+									sessionId: { type: "string" },
+									scope: {
+										type: "string",
+										enum: [
+											"session",
+											"user",
+											"agent",
+											"workspace",
+											"tenant",
+											"global",
+										],
+									},
+									scopeRef: { type: "string" },
+									timestamp: { type: "string", format: "date-time" },
+									validAt: {
+										type: "string",
+										format: "date-time",
+										description:
+											"When the event became valid; defaults to timestamp.",
+									},
+									invalidAt: {
+										type: "string",
+										format: "date-time",
+										description:
+											"When the event stopped being valid; omitted means still valid.",
+									},
+									metadata: { type: "object" },
+								},
+							},
+						},
+					},
+				},
 				responses: { "200": { description: "Event id" } },
 			},
 		},
@@ -1944,6 +2230,17 @@ export const openApiSpec = {
 									datasetPath: { type: "string", minLength: 1 },
 									maxResults: { type: "integer", minimum: 1 },
 									minScore: { type: "number", minimum: 0 },
+									retrievalLane: {
+										type: "string",
+										enum: ["native", "raw-session"],
+									},
+									datasetSha256: {
+										type: "string",
+										pattern: "^[0-9a-f]{64}$",
+									},
+									embeddingConfig: { type: "object" },
+									rerankerConfig: { type: "object" },
+									qualityThresholds: benchmarkQualityThresholdsSchema,
 								},
 							},
 						},

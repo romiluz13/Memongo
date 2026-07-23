@@ -9,8 +9,13 @@ import {
 } from "@memongo/lib"
 import { chunkMarkdown, hashText } from "./internal.js"
 import type { EmbeddingStatus } from "./mongodb-embedding-retry.js"
+import { invalidateQueryCache } from "./mongodb-query-cache.js"
 import { kbCollection, kbChunksCollection } from "./mongodb-schema.js"
 import { resolveScopeRef } from "./mongodb-scope.js"
+import {
+	MAJORITY_TRANSACTION_OPTIONS,
+	isTransactionUnsupported,
+} from "./mongodb-transactions.js"
 
 const log = createSubsystemLogger("memory:mongodb:kb")
 
@@ -52,22 +57,6 @@ function resolveKBScope(scope: KBScope): ResolvedKBScope {
 		workspaceDir: scope.workspaceDir,
 	})
 	return { agentId: scope.agentId, scope: resolvedScope, scopeRef }
-}
-
-// ---------------------------------------------------------------------------
-// Transaction helpers (same pattern as mongodb-sync.ts)
-// ---------------------------------------------------------------------------
-
-function isTransactionNotSupported(err: unknown): boolean {
-	if (err instanceof Error && "code" in err) {
-		const code = (err as { code: number }).code
-		// 20 = IllegalOperation (standalone), 263 = NoSuchTransaction
-		if (code === 20 || code === 263) {
-			return true
-		}
-	}
-	const msg = err instanceof Error ? err.message : String(err)
-	return msg.includes("Transaction numbers are only allowed on a replica set")
 }
 
 // ---------------------------------------------------------------------------
@@ -296,6 +285,15 @@ export async function ingestToKB(params: {
 	log.info(
 		`KB ingest: processed=${result.documentsProcessed} chunks=${result.chunksCreated} skipped=${result.skipped} errors=${result.errors.length}`,
 	)
+	if (result.documentsProcessed > 0) {
+		await invalidateQueryCache({
+			db,
+			prefix,
+			agentId,
+			scope: memoryScope,
+			scopeRef,
+		})
+	}
 	return result
 }
 
@@ -360,26 +358,21 @@ async function reIngestAtomically(params: {
 			const session = client.startSession()
 			try {
 				let chunksCreated = 0
-				await session.withTransaction(
-					async () => {
-						chunksCreated = await performWrites(session)
-					},
-					{ writeConcern: { w: "majority" } },
-				)
+				await session.withTransaction(async () => {
+					chunksCreated = await performWrites(session)
+				}, MAJORITY_TRANSACTION_OPTIONS)
 				return chunksCreated
 			} finally {
 				await session.endSession()
 			}
 		} catch (err) {
 			// Standalone or no replica set — fall through to sequential
-			if (isTransactionNotSupported(err)) {
+			if (isTransactionUnsupported(err)) {
 				log.info(
 					"transactions not supported for KB re-ingestion, falling back to direct writes",
 				)
 			} else {
-				log.warn(
-					`transaction failed for KB re-ingestion, falling back to sequential: ${err instanceof Error ? err.message : String(err)}`,
-				)
+				throw err
 			}
 		}
 	}
@@ -558,7 +551,7 @@ export async function removeKBDocument(
 ): Promise<boolean> {
 	const kb = kbCollection(db, prefix)
 	const kbChunks = kbChunksCollection(db, prefix)
-	const { scopeRef } = resolveKBScope(scope)
+	const { agentId, scope: memoryScope, scopeRef } = resolveKBScope(scope)
 	// scopeRef in every filter: a tenant can only delete its own KB documents.
 	const docFilter = { _id: docId, scopeRef } as Record<string, unknown>
 	const chunkFilter = { docId, scopeRef }
@@ -577,16 +570,26 @@ export async function removeKBDocument(
 					if (deleted) {
 						await kbChunks.deleteMany(chunkFilter, { session })
 					}
-				})
+				}, MAJORITY_TRANSACTION_OPTIONS)
+				if (deleted) {
+					await invalidateQueryCache({
+						db,
+						prefix,
+						agentId,
+						scope: memoryScope,
+						scopeRef,
+					})
+				}
 				return deleted
 			} finally {
 				await session.endSession()
 			}
 		} catch (err) {
-			const msg = err instanceof Error ? err.message : String(err)
-			// Standalone or no replica set — fall through to sequential
-			log.warn(
-				`transaction failed for removeKBDocument, falling back to sequential: ${msg}`,
+			if (!isTransactionUnsupported(err)) {
+				throw err
+			}
+			log.info(
+				"transactions not supported for removeKBDocument, falling back to direct writes",
 			)
 		}
 	}
@@ -595,6 +598,13 @@ export async function removeKBDocument(
 	const result = await kb.deleteOne(docFilter)
 	if (result.deletedCount > 0) {
 		await kbChunks.deleteMany(chunkFilter)
+		await invalidateQueryCache({
+			db,
+			prefix,
+			agentId,
+			scope: memoryScope,
+			scopeRef,
+		})
 		return true
 	}
 	return false

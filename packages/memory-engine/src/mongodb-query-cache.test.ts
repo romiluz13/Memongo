@@ -32,6 +32,7 @@ import {
 	normalizeQuery,
 	hashQuery,
 	checkCache,
+	invalidateQueryCache,
 	writeCache,
 	DEFAULT_CACHE_CONFIG,
 	type QueryCacheConfig,
@@ -54,6 +55,7 @@ function createMockCollection(
 			.fn()
 			.mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) }),
 		updateOne: vi.fn().mockResolvedValue({ acknowledged: true }),
+		deleteMany: vi.fn().mockResolvedValue({ deletedCount: 0 }),
 		...overrides,
 	} as unknown as Collection
 }
@@ -135,6 +137,47 @@ describe("DEFAULT_CACHE_CONFIG", () => {
 		expect(DEFAULT_CACHE_CONFIG.conversationTtlSec).toBe(300)
 		expect(DEFAULT_CACHE_CONFIG.kbTtlSec).toBe(3600)
 		expect(DEFAULT_CACHE_CONFIG.similarityThreshold).toBe(0.95)
+	})
+})
+
+describe("invalidateQueryCache", () => {
+	it("deletes only the mutated tenant namespace", async () => {
+		const mockCol = createMockCollection({
+			deleteMany: vi.fn().mockResolvedValue({ deletedCount: 3 }),
+		})
+		vi.mocked(queryCacheCollection).mockReturnValue(mockCol)
+
+		await expect(
+			invalidateQueryCache({
+				db: {} as Db,
+				prefix: PREFIX,
+				agentId: AGENT_ID,
+				scope: SCOPE,
+				scopeRef: SCOPE_REF,
+			}),
+		).resolves.toBe(3)
+		expect(mockCol.deleteMany).toHaveBeenCalledWith({
+			agentId: AGENT_ID,
+			scope: SCOPE,
+			scopeRef: SCOPE_REF,
+		})
+	})
+
+	it("does not fail a completed primary mutation when invalidation fails", async () => {
+		const mockCol = createMockCollection({
+			deleteMany: vi.fn().mockRejectedValue(new Error("cache unavailable")),
+		})
+		vi.mocked(queryCacheCollection).mockReturnValue(mockCol)
+
+		await expect(
+			invalidateQueryCache({
+				db: {} as Db,
+				prefix: PREFIX,
+				agentId: AGENT_ID,
+				scope: SCOPE,
+				scopeRef: SCOPE_REF,
+			}),
+		).resolves.toBe(0)
 	})
 })
 

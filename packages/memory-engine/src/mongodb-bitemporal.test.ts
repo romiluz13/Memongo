@@ -6,7 +6,11 @@
 
 import { describe, expect, it } from "vitest"
 import fc from "fast-check"
-import { buildBitemporalFilter, isMemoryValidAt } from "./mongodb-bitemporal.js"
+import {
+	buildBitemporalFilter,
+	buildVectorBitemporalFilter,
+	isMemoryValidAt,
+} from "./mongodb-bitemporal.js"
 
 const FAST_CHECK_SEED = 20260512
 
@@ -38,6 +42,22 @@ describe("buildBitemporalFilter ()", () => {
 		expect(() =>
 			buildBitemporalFilter("2026-05-12" as unknown as Date),
 		).toThrow(/queryTime/)
+	})
+})
+
+describe("buildVectorBitemporalFilter ()", () => {
+	it("uses only documented Vector Search date and existence prefilters", () => {
+		const t = new Date("2026-05-12T10:00:00.000Z")
+		expect(buildVectorBitemporalFilter(t)).toEqual({
+			$and: [
+				{
+					$or: [{ validAt: { $exists: false } }, { validAt: { $lte: t } }],
+				},
+				{
+					$or: [{ invalidAt: { $exists: false } }, { invalidAt: { $gt: t } }],
+				},
+			],
+		})
 	})
 })
 

@@ -19,17 +19,75 @@
 import { createHash } from "node:crypto"
 import { createReadStream } from "node:fs"
 import type { Db } from "mongodb"
+import type { EnrichmentProvider } from "./mongodb-llm-enrichment.js"
 import type {
-	BenchmarkCostCounters,
+	BenchmarkCostAccounting,
 	BenchmarkEmbeddingConfig,
 	BenchmarkEmbeddingQuantization,
 	BenchmarkLatencyDistribution,
+	BenchmarkOperationAccounting,
+	BenchmarkOperationName,
 	BenchmarkRerankerConfig,
 	BenchmarkRerankerStage,
 	BenchmarkRetrievalUnit,
 	BenchmarkStorageFootprint,
+	BenchmarkTenantStorageMeasurement,
 	MemoryBenchmarkDatasetKind,
 } from "./types.js"
+
+export async function collectBenchmarkTenantStorage(params: {
+	db: Pick<Db, "collection">
+	agentId: string
+	collectionNames: string[]
+}): Promise<BenchmarkTenantStorageMeasurement> {
+	const collections: BenchmarkTenantStorageMeasurement["collections"] = []
+	const failures: string[] = []
+	for (const collectionName of params.collectionNames) {
+		try {
+			const rows = (await params.db
+				.collection(collectionName)
+				.aggregate([
+					{ $match: { agentId: params.agentId } },
+					{
+						$group: {
+							_id: null,
+							documents: { $sum: 1 },
+							logicalBytes: { $sum: { $bsonSize: "$$ROOT" } },
+						},
+					},
+					{ $project: { _id: 0, documents: 1, logicalBytes: 1 } },
+				])
+				.toArray()) as Array<{ documents?: unknown; logicalBytes?: unknown }>
+			const row = rows[0]
+			const documents = row ? toNonNegativeNumber(row.documents) : 0
+			const logicalBytes = row ? toNonNegativeNumber(row.logicalBytes) : 0
+			if (documents === null || logicalBytes === null) {
+				throw new Error("aggregation returned an unexpected shape")
+			}
+			collections.push({ collectionName, documents, logicalBytes })
+		} catch (error) {
+			failures.push(
+				`${collectionName}: ${error instanceof Error ? error.message : String(error)}`,
+			)
+		}
+	}
+	if (failures.length > 0) {
+		return {
+			documents: null,
+			logicalBytes: null,
+			collections,
+			unavailableReason: `tenant logical storage incomplete: ${failures.join("; ")}`,
+		}
+	}
+	return {
+		documents: collections.reduce((sum, entry) => sum + entry.documents, 0),
+		logicalBytes: collections.reduce(
+			(sum, entry) => sum + entry.logicalBytes,
+			0,
+		),
+		collections,
+	}
+}
 
 export type BenchmarkRetrievalLane = "native" | "raw-session"
 
@@ -80,40 +138,29 @@ export async function computeDatasetSha256FromPath(
 	})
 }
 
-function isStrictBenchmarkMode(): boolean {
-	const v = process.env.MEMONGO_BENCHMARK_STRICT
-	return v === "1" || v?.toLowerCase() === "true"
-}
-
-/**
- * Resolve dataset SHA-256. Precedence:
- *   1. `override` argument (e.g., route-body `datasetSha256`)
- *   2. `MEMONGO_BENCHMARK_DATASET_SHA` env var (matches bootstrap.json)
- *   3. compute from `datasetPath` bytes
- *
- * In strict mode, throws if no source is available — zero silent fallback.
- */
+/** Hash dataset bytes and treat an override/env digest only as an assertion. */
 export async function resolveDatasetSha256(params: {
 	datasetPath: string | undefined
 	override?: string
 }): Promise<string> {
-	if (params.override && SHA256_REGEX.test(params.override)) {
-		return params.override
-	}
-	const envSha = process.env.MEMONGO_BENCHMARK_DATASET_SHA
-	if (envSha && SHA256_REGEX.test(envSha)) {
-		return envSha
-	}
-	if (params.datasetPath) {
-		return await computeDatasetSha256FromPath(params.datasetPath)
-	}
-	if (isStrictBenchmarkMode()) {
+	if (!params.datasetPath) {
 		throw new Error(
-			"resolveDatasetSha256: cannot resolve dataset SHA-256 — no override, no MEMONGO_BENCHMARK_DATASET_SHA env, and no dataset path (strict mode rejects silent fallback)",
+			"resolveDatasetSha256: dataset bytes are required to attest the SHA-256",
 		)
 	}
-	// Non-strict: fall back to zero-SHA only when no strict requirement.
-	return "0".repeat(64)
+	const declared = params.override ?? process.env.MEMONGO_BENCHMARK_DATASET_SHA
+	if (declared !== undefined && !SHA256_REGEX.test(declared)) {
+		throw new Error(
+			"resolveDatasetSha256: declared digest must be a 64-character lowercase SHA-256",
+		)
+	}
+	const actual = await computeDatasetSha256FromPath(params.datasetPath)
+	if (declared !== undefined && declared !== actual) {
+		throw new Error(
+			`resolveDatasetSha256: declared digest ${declared} does not match dataset bytes ${actual}`,
+		)
+	}
+	return actual
 }
 
 // ---------------------------------------------------------------------------
@@ -183,30 +230,50 @@ function toNonNegativeNumber(value: unknown): number | null {
 export async function collectStorageFootprint(params: {
 	db: Pick<Db, "command">
 	collectionName: string
+	collectionNames?: string[]
+	tenant?: BenchmarkStorageFootprint["tenant"]
 }): Promise<BenchmarkStorageFootprint> {
-	const { db, collectionName } = params
-	try {
-		const stats = (await db.command({
-			collStats: collectionName,
-		})) as CollStatsResponse
-		const collectionBytes = toNonNegativeNumber(stats.size)
-		const indexBytes = toNonNegativeNumber(stats.totalIndexSize)
-		if (collectionBytes === null || indexBytes === null) {
-			return {
+	const collectionNames = params.collectionNames ?? [params.collectionName]
+	const tenant = params.tenant ?? {
+		documents: null,
+		logicalBytes: null,
+		collections: [],
+		unavailableReason: "benchmark tenant measurement was not provided",
+	}
+	const collections: BenchmarkStorageFootprint["sharedPhysical"]["collections"] =
+		[]
+	for (const collectionName of collectionNames) {
+		try {
+			const stats = (await params.db.command({
+				collStats: collectionName,
+			})) as CollStatsResponse
+			const collectionBytes = toNonNegativeNumber(stats.size)
+			const indexBytes = toNonNegativeNumber(stats.totalIndexSize)
+			collections.push(
+				collectionBytes === null || indexBytes === null
+					? {
+							collectionName,
+							collectionBytes: null,
+							indexBytes: null,
+							unavailableReason:
+								"collStats returned unexpected shape on atlas-local:preview",
+						}
+					: { collectionName, collectionBytes, indexBytes },
+			)
+		} catch (err) {
+			const message = err instanceof Error ? err.message : String(err)
+			collections.push({
+				collectionName,
 				collectionBytes: null,
 				indexBytes: null,
-				unavailableReason:
-					"collStats returned unexpected shape on atlas-local:preview",
-			}
+				unavailableReason: `collStats unsupported on atlas-local:preview: ${message}`,
+			})
 		}
-		return { collectionBytes, indexBytes }
-	} catch (err) {
-		const message = err instanceof Error ? err.message : String(err)
-		return {
-			collectionBytes: null,
-			indexBytes: null,
-			unavailableReason: `collStats unsupported on atlas-local:preview: ${message}`,
-		}
+	}
+	return {
+		basis: "benchmark-agent-logical-plus-shared-physical",
+		tenant,
+		sharedPhysical: { collections },
 	}
 }
 
@@ -237,34 +304,227 @@ export function percentile50And95(
 // Cost counters (run-scoped)
 // ---------------------------------------------------------------------------
 
-export type BenchmarkRunCounters = {
-	snapshot(): BenchmarkCostCounters
-	recordEmbeddingCall(count?: number): void
-	recordRerankCall(count?: number): void
-	recordLlmEnrichmentCall(count?: number): void
+export type BenchmarkRunAccounting = {
+	snapshot(): BenchmarkCostAccounting
+	recordAttempt(
+		operation: Exclude<BenchmarkOperationName, "embedding">,
+		metadata?: BenchmarkOperationMutation,
+	): void
+	recordSuccess(
+		operation: Exclude<BenchmarkOperationName, "embedding">,
+		metadata?: BenchmarkOperationMutation,
+	): void
+	recordFailure(
+		operation: Exclude<BenchmarkOperationName, "embedding">,
+		metadata?: BenchmarkOperationMutation,
+	): void
 }
 
-export function createBenchmarkRunCounters(): BenchmarkRunCounters {
-	let embeddingCalls = 0
-	let rerankCalls = 0
-	let llmEnrichmentCalls = 0
+type BenchmarkOperationMutation = {
+	provider?: string
+	model?: string
+	count?: number
+}
+
+export type BenchmarkRunConfiguration = {
+	executionProfile: "shipped" | "diagnostic"
+	retrievalLane: BenchmarkRetrievalLane
+	maxResults: number
+	minScore: number
+	settings: Record<string, string | number | boolean | null>
+}
+
+export type BenchmarkRunContext = {
+	runId: string
+	configuration: Readonly<BenchmarkRunConfiguration>
+	configurationHash: string
+	accounting: BenchmarkRunAccounting
+}
+
+const AUTOMATED_EMBEDDING_ACCOUNTING: BenchmarkOperationAccounting = {
+	operation: "embedding",
+	observability: "unknown",
+	attempted: null,
+	succeeded: null,
+	failed: null,
+	unavailableReason:
+		"MongoDB automated embedding calls are not exposed to the benchmark process",
+}
+
+const VECTOR_QUERY_ACCOUNTING: BenchmarkOperationAccounting = {
+	operation: "vector-query",
+	observability: "unknown",
+	attempted: null,
+	succeeded: null,
+	failed: null,
+	unavailableReason:
+		"MongoDB search execution does not expose per-stage vector operation counts",
+}
+
+const OBSERVED_PROVIDER_OPERATIONS = [
+	"rerank",
+	"enrichment",
+	"query-decomposition",
+	"answer-generation",
+	"answer-judge",
+	"decoy-judge",
+	"structured-extraction",
+	"temporal-extraction",
+	"contradiction-detection",
+	"relation-extraction",
+] as const
+
+export function createBenchmarkRunContext(params: {
+	runId: string
+	configuration: BenchmarkRunConfiguration
+}): BenchmarkRunContext {
+	const configuration: Readonly<BenchmarkRunConfiguration> = Object.freeze({
+		...params.configuration,
+		settings: Object.freeze({ ...params.configuration.settings }),
+	})
+	const configurationHash = hashBenchmarkRunConfiguration(configuration)
+	const operations = new Map<string, BenchmarkOperationAccounting>()
+	const operationKey = (
+		operation: Exclude<BenchmarkOperationName, "embedding">,
+		metadata?: BenchmarkOperationMutation,
+	) => `${operation}\0${metadata?.provider ?? ""}\0${metadata?.model ?? ""}`
+	operations.set(operationKey("vector-query"), { ...VECTOR_QUERY_ACCOUNTING })
+	for (const operation of OBSERVED_PROVIDER_OPERATIONS) {
+		operations.set(operationKey(operation), {
+			operation,
+			observability: "not-run",
+			attempted: 0,
+			succeeded: 0,
+			failed: 0,
+		})
+	}
+	const measuredOperation = (
+		operation: Exclude<BenchmarkOperationName, "embedding">,
+		metadata?: BenchmarkOperationMutation,
+	): BenchmarkOperationAccounting => {
+		const key = operationKey(operation, metadata)
+		const defaultKey = operationKey(operation)
+		if (key !== defaultKey) {
+			const defaultEntry = operations.get(defaultKey)
+			if (defaultEntry?.observability === "not-run") {
+				operations.delete(defaultKey)
+			}
+		}
+		const existing = operations.get(key)
+		if (existing) {
+			if (existing.observability !== "measured") {
+				existing.observability = "measured"
+				existing.attempted = 0
+				existing.succeeded = 0
+				existing.failed = 0
+				delete existing.unavailableReason
+			}
+			return existing
+		}
+		const created: BenchmarkOperationAccounting = {
+			operation,
+			observability: "measured",
+			attempted: 0,
+			succeeded: 0,
+			failed: 0,
+			...(metadata?.provider ? { provider: metadata.provider } : {}),
+			...(metadata?.model ? { model: metadata.model } : {}),
+		}
+		operations.set(key, created)
+		return created
+	}
 	return {
-		snapshot() {
-			return { embeddingCalls, rerankCalls, llmEnrichmentCalls }
+		runId: params.runId,
+		configuration,
+		configurationHash,
+		accounting: {
+			snapshot() {
+				return {
+					currency: null,
+					totalCost: null,
+					unavailableReason:
+						"provider token usage and prices are not instrumented",
+					operations: [
+						{ ...AUTOMATED_EMBEDDING_ACCOUNTING },
+						...Array.from(operations.values(), (entry) => ({ ...entry })),
+					],
+				}
+			},
+			recordAttempt(operation, metadata) {
+				const count = metadata?.count ?? 1
+				if (!Number.isFinite(count) || count <= 0) return
+				const entry = measuredOperation(operation, metadata)
+				entry.attempted = (entry.attempted ?? 0) + count
+			},
+			recordSuccess(operation, metadata) {
+				const count = metadata?.count ?? 1
+				if (!Number.isFinite(count) || count <= 0) return
+				const entry = measuredOperation(operation, metadata)
+				entry.succeeded = (entry.succeeded ?? 0) + count
+			},
+			recordFailure(operation, metadata) {
+				const count = metadata?.count ?? 1
+				if (!Number.isFinite(count) || count <= 0) return
+				const entry = measuredOperation(operation, metadata)
+				entry.failed = (entry.failed ?? 0) + count
+			},
 		},
-		recordEmbeddingCall(count = 1) {
-			if (Number.isFinite(count) && count > 0) {
-				embeddingCalls += count
+	}
+}
+
+function hashBenchmarkRunConfiguration(
+	configuration: BenchmarkRunConfiguration,
+): string {
+	return createHash("sha256")
+		.update(
+			JSON.stringify({
+				executionProfile: configuration.executionProfile,
+				retrievalLane: configuration.retrievalLane,
+				maxResults: configuration.maxResults,
+				minScore: configuration.minScore,
+				settings: Object.fromEntries(
+					Object.entries(configuration.settings).toSorted(([left], [right]) =>
+						left.localeCompare(right),
+					),
+				),
+			}),
+		)
+		.digest("hex")
+}
+
+export function assertBenchmarkRunConfiguration(
+	context: BenchmarkRunContext,
+	current: BenchmarkRunConfiguration,
+): void {
+	const currentHash = hashBenchmarkRunConfiguration(current)
+	if (currentHash !== context.configurationHash) {
+		throw new Error(
+			`benchmark configuration changed during execution: started=${context.configurationHash} current=${currentHash}`,
+		)
+	}
+}
+
+export function instrumentBenchmarkProvider(params: {
+	provider: EnrichmentProvider
+	runContext: BenchmarkRunContext
+	operation: Exclude<BenchmarkOperationName, "embedding" | "vector-query">
+	model?: string
+}): EnrichmentProvider {
+	return {
+		...params.provider,
+		async chatCompletion(request) {
+			const metadata = {
+				provider: params.provider.name,
+				model: request.model,
 			}
-		},
-		recordRerankCall(count = 1) {
-			if (Number.isFinite(count) && count > 0) {
-				rerankCalls += count
-			}
-		},
-		recordLlmEnrichmentCall(count = 1) {
-			if (Number.isFinite(count) && count > 0) {
-				llmEnrichmentCalls += count
+			params.runContext.accounting.recordAttempt(params.operation, metadata)
+			try {
+				const response = await params.provider.chatCompletion(request)
+				params.runContext.accounting.recordSuccess(params.operation, metadata)
+				return response
+			} catch (error) {
+				params.runContext.accounting.recordFailure(params.operation, metadata)
+				throw error
 			}
 		},
 	}

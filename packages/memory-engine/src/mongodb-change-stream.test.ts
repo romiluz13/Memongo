@@ -4,6 +4,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest"
 import {
 	MongoDBChangeStreamWatcher,
 	type ChangeStreamCallback,
+	isResumeTokenInvalid,
 } from "./mongodb-change-stream.js"
 
 // ---------------------------------------------------------------------------
@@ -214,6 +215,106 @@ describe("MongoDBChangeStreamWatcher", () => {
 
 		// Should not throw
 		vi.advanceTimersByTime(100)
+
+		await watcher.close()
+	})
+})
+
+// ---------------------------------------------------------------------------
+// Resume token resilience (isResumeTokenInvalid + re-stream on stale token)
+// ---------------------------------------------------------------------------
+
+describe("isResumeTokenInvalid", () => {
+	it("recognizes 'Resume Token Not Found'", () => {
+		expect(isResumeTokenInvalid(new Error("Resume Token Not Found"))).toBe(true)
+	})
+
+	it("recognizes 'oplog' / 'CappedPositionLost' style messages", () => {
+		expect(
+			isResumeTokenInvalid(
+				new Error("cannot resume stream; the oplog cannot be found"),
+			),
+		).toBe(true)
+	})
+
+	it("does not match unrelated errors", () => {
+		expect(
+			isResumeTokenInvalid(
+				new Error("The $changeStream stage is only supported on replica sets"),
+			),
+		).toBe(false)
+		expect(isResumeTokenInvalid(new Error("network timeout"))).toBe(false)
+	})
+})
+
+describe("MongoDBChangeStreamWatcher — resume token resilience", () => {
+	let mockStream: ReturnType<typeof createMockStream>
+	let callback: ChangeStreamCallback
+	let callbackArgs: Array<{
+		operationType: string
+		paths: string[]
+		timestamp: Date
+		resumeToken?: unknown
+		gapDetected?: { reason: string; from: "startup" | "midstream" }
+	}>
+
+	beforeEach(() => {
+		vi.useFakeTimers()
+		mockStream = createMockStream()
+		callbackArgs = []
+		callback = (event) => callbackArgs.push(event)
+	})
+
+	afterEach(async () => {
+		vi.useRealTimers()
+	})
+
+	it("re-opens from now and signals a gap when the resume token is stale at startup", async () => {
+		let watchCallCount = 0
+		const col = {
+			watch: vi.fn(() => {
+				watchCallCount++
+				if (watchCallCount === 1) {
+					throw new Error("Resume Token Not Found")
+				}
+				return mockStream
+			}),
+		} as unknown as Collection
+
+		const watcher = new MongoDBChangeStreamWatcher(col, callback, 100)
+		const started = await watcher.start({ _data: "stale-token" })
+
+		expect(started).toBe(true)
+		expect(watchCallCount).toBe(2) // first failed, second succeeded from now
+		expect(callbackArgs.some((e) => e.gapDetected?.from === "startup")).toBe(
+			true,
+		)
+
+		await watcher.close()
+	})
+
+	it("re-opens from now and signals a gap on a mid-stream 'Resume Token Not Found' error", async () => {
+		let watchCallCount = 0
+		const stream1 = createMockStream()
+		const stream2 = createMockStream()
+		const col = {
+			watch: vi.fn(() => {
+				watchCallCount++
+				return watchCallCount === 1 ? stream1 : stream2
+			}),
+		} as unknown as Collection
+
+		const watcher = new MongoDBChangeStreamWatcher(col, callback, 100)
+		await watcher.start()
+		expect(watchCallCount).toBe(1)
+
+		// Simulate a mid-stream token-invalid error
+		stream1.emit("error", new Error("Resume Token Not Found"))
+
+		expect(watchCallCount).toBe(2) // re-opened from now
+		expect(callbackArgs.some((e) => e.gapDetected?.from === "midstream")).toBe(
+			true,
+		)
 
 		await watcher.close()
 	})

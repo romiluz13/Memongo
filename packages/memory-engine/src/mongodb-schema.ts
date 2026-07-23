@@ -133,6 +133,65 @@ export function queryCacheCollection(db: Db, prefix: string): Collection {
 	return col(db, prefix, "query_cache")
 }
 
+/**
+ * Ensure a time series collection exists, falling back to a plain collection
+ * with a TTL index on the timeField when time series are unsupported
+ * (pre-5.0 / DocumentDB / standalone). On "already exists" the collection is
+ * assumed to already be a time series — no fallback is attempted.
+ */
+export async function ensureTimeseriesOrPlain(
+	db: Db,
+	name: string,
+	options: {
+		timeField: string
+		metaField: string
+		granularity: "seconds" | "minutes" | "hours"
+		expireAfterSeconds: number
+	},
+): Promise<void> {
+	try {
+		await db.createCollection(name, {
+			timeseries: {
+				timeField: options.timeField,
+				metaField: options.metaField,
+				granularity: options.granularity,
+			},
+			expireAfterSeconds: options.expireAfterSeconds,
+		})
+		log.info(`created time series collection ${name}`)
+		return
+	} catch (err) {
+		const msg = err instanceof Error ? err.message : String(err)
+		if (
+			msg.includes("already exists") ||
+			msg.includes("Collection already exists")
+		) {
+			return
+		}
+		// Fall back to a plain collection with a TTL index on the timeField.
+		try {
+			await db.createCollection(name)
+		} catch (fallbackErr) {
+			const fallbackMsg =
+				fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr)
+			if (
+				!fallbackMsg.includes("already exists") &&
+				!fallbackMsg.includes("Collection already exists")
+			) {
+				throw fallbackErr
+			}
+		}
+		const collection = db.collection(name)
+		await collection.createIndex(
+			{ [options.timeField]: 1 },
+			{ expireAfterSeconds: options.expireAfterSeconds },
+		)
+		log.info(
+			`created plain collection ${name} with TTL index (time series unsupported: ${msg})`,
+		)
+	}
+}
+
 export function telemetryCollection(db: Db, prefix: string): Collection {
 	return col(db, prefix, "memory_telemetry")
 }
@@ -733,6 +792,11 @@ const EVENTS_SCHEMA: Document = {
 			sessionId: { bsonType: "string" },
 			channel: { bsonType: "string" },
 			metadata: { bsonType: "object" },
+			extractionJobPendingAt: {
+				bsonType: "date",
+				description:
+					"Durable outbox marker for an extraction job not yet made claimable",
+			},
 			projectedAt: {
 				bsonType: "date",
 				description: "When this event was projected to chunks",
@@ -758,6 +822,10 @@ const EVENTS_SCHEMA: Document = {
 			validAt: {
 				bsonType: "date",
 				description: "Bi-temporal: when the assertion became true",
+			},
+			recordedAt: {
+				bsonType: "date",
+				description: "Transaction time when Memongo first persisted the event",
 			},
 			invalidAt: {
 				bsonType: ["date", "null"],
@@ -1190,6 +1258,20 @@ const MEMORY_JOBS_SCHEMA: Document = {
 			outputCount: { bsonType: "number", minimum: 0 },
 			durationMs: { bsonType: "number", minimum: 0 },
 			metadata: { bsonType: "object" },
+			payload: {
+				bsonType: "object",
+				properties: {
+					eventId: { bsonType: "string" },
+					scope: { bsonType: "string" },
+					scopeRef: { bsonType: "string" },
+				},
+			},
+			attempts: { bsonType: "number", minimum: 0 },
+			stagedAt: { bsonType: "date" },
+			leaseOwner: { bsonType: "string" },
+			leaseToken: { bsonType: "string" },
+			leaseExpiresAt: { bsonType: "date" },
+			heartbeatAt: { bsonType: "date" },
 		},
 	},
 }
@@ -1380,52 +1462,28 @@ export async function ensureCollections(db: Db, prefix: string): Promise<void> {
 			log.info(`created collection ${name}`)
 		}
 	}
-	// Time series collection — created separately (no $jsonSchema support)
+	// Time series collections — created separately (no $jsonSchema support).
+	// Falls back to a plain collection with a TTL index when time series are
+	// unsupported (pre-5.0 / DocumentDB / standalone), so writes don't throw.
 	const telemetryName = `${prefix}memory_telemetry`
 	if (!existing.has(telemetryName)) {
-		try {
-			await db.createCollection(telemetryName, {
-				timeseries: {
-					timeField: "ts",
-					metaField: "meta",
-					granularity: "seconds",
-				},
-				expireAfterSeconds: 604800, // 7 days
-			})
-			log.info(`created time series collection ${telemetryName}`)
-		} catch (err) {
-			const msg = err instanceof Error ? err.message : String(err)
-			// Collection may already exist or time series not supported
-			if (
-				!msg.includes("already exists") &&
-				!msg.includes("Collection already exists")
-			) {
-				log.warn(`time series collection creation failed: ${msg}`)
-			}
-		}
+		await ensureTimeseriesOrPlain(db, telemetryName, {
+			timeField: "ts",
+			metaField: "meta",
+			granularity: "seconds",
+			expireAfterSeconds: 604800, // 7 days
+		})
+		log.info(`created telemetry collection ${telemetryName}`)
 	}
 	const accessEventsName = `${prefix}access_events`
 	if (!existing.has(accessEventsName)) {
-		try {
-			await db.createCollection(accessEventsName, {
-				timeseries: {
-					timeField: "ts",
-					metaField: "meta",
-					granularity: "minutes",
-				},
-				expireAfterSeconds: 30 * 24 * 3600,
-			})
-			log.info(`created time series collection ${accessEventsName}`)
-		} catch (err) {
-			const msg = err instanceof Error ? err.message : String(err)
-			if (
-				!msg.includes("already exists") &&
-				!msg.includes("Collection already exists")
-			) {
-				log.warn(`access events collection creation failed: ${msg}`)
-				throw err
-			}
-		}
+		await ensureTimeseriesOrPlain(db, accessEventsName, {
+			timeField: "ts",
+			metaField: "meta",
+			granularity: "minutes",
+			expireAfterSeconds: 30 * 24 * 3600,
+		})
+		log.info(`created access events collection ${accessEventsName}`)
 	}
 
 	await ensureSchemaValidation(db, prefix)
@@ -1842,6 +1900,16 @@ export async function ensureStandardIndexes(
 	)
 	applied++
 	await events.createIndex(
+		{ agentId: 1, extractionJobPendingAt: 1 },
+		{
+			name: "idx_events_agent_extraction_pending",
+			partialFilterExpression: {
+				extractionJobPendingAt: { $type: "date" },
+			},
+		},
+	)
+	applied++
+	await events.createIndex(
 		{ consolidatedAt: 1 },
 		{ name: "idx_events_consolidated", sparse: true },
 	)
@@ -1932,6 +2000,18 @@ export async function ensureStandardIndexes(
 
 	// Relations indexes
 	const relations = relationsCollection(db, prefix)
+	await relations.createIndex(
+		{
+			agentId: 1,
+			scope: 1,
+			scopeRef: 1,
+			fromEntityId: 1,
+			toEntityId: 1,
+			type: 1,
+		},
+		{ name: "uq_relations_identity", unique: true },
+	)
+	applied++
 	await relations.createIndex(
 		{ agentId: 1, scope: 1, scopeRef: 1, fromEntityId: 1, type: 1 },
 		{ name: "idx_relations_agent_scope_scoperef_from_type" },
@@ -2397,6 +2477,23 @@ export async function ensureStandardIndexes(
 		{ name: "idx_memory_jobs_agent_status_created" },
 	)
 	applied++
+	await memoryJobs.createIndex(
+		{
+			agentId: 1,
+			jobType: 1,
+			status: 1,
+			leaseExpiresAt: 1,
+			createdAt: 1,
+			jobId: 1,
+		},
+		{ name: "idx_memory_jobs_claim_v2" },
+	)
+	applied++
+	try {
+		await memoryJobs.dropIndex("idx_memory_jobs_claim")
+	} catch {
+		// The v1 index may not exist on fresh installations.
+	}
 
 	// Session chunks (Option B session-evidence collection)
 	const sessionChunks = sessionChunksCollection(db, prefix)
@@ -2605,6 +2702,55 @@ export function isSearchIndexQueryable(index: SearchIndexDescription): boolean {
 	)
 }
 
+export function isSearchIndexReadyWithFilterFields(
+	index: SearchIndexDescription,
+	filterPaths: string[],
+	expectedType?: "search" | "vectorSearch",
+): boolean {
+	if (!isSearchIndexQueryable(index)) {
+		return false
+	}
+	if (expectedType && !isSearchIndexTypeCompatible(index.type, expectedType)) {
+		return false
+	}
+	const definition = index.latestDefinition ?? index.definition
+	const fields = Array.isArray(definition?.fields) ? definition.fields : []
+	return filterPaths.every((path) =>
+		fields.some(
+			(field) =>
+				typeof field === "object" &&
+				field !== null &&
+				(field as Document).type === "filter" &&
+				(field as Document).path === path,
+		),
+	)
+}
+
+export async function isEventsVectorBitemporalPrefilterReady(
+	collection: Collection,
+	indexName: string,
+	indexes?: SearchIndexDescription[],
+): Promise<boolean> {
+	const index = (indexes ?? (await listSearchIndexes(collection))).find(
+		(candidate) => candidate.name === indexName,
+	)
+	if (
+		!index ||
+		!isSearchIndexReadyWithFilterFields(
+			index,
+			["validAt", "invalidAt"],
+			"vectorSearch",
+		)
+	) {
+		return false
+	}
+	const explicitNullInvalidAt = await collection.findOne(
+		{ invalidAt: { $type: 10 } },
+		{ projection: { _id: 1 } },
+	)
+	return explicitNullInvalidAt === null
+}
+
 function isSearchIndexFailed(index: SearchIndexDescription): boolean {
 	if (index.queryable === true) {
 		return false
@@ -2633,7 +2779,7 @@ function isSearchIndexFailed(index: SearchIndexDescription): boolean {
 	return false
 }
 
-async function listSearchIndexes(
+export async function listSearchIndexes(
 	collection: Collection,
 ): Promise<SearchIndexDescription[]> {
 	try {
@@ -2644,6 +2790,18 @@ async function listSearchIndexes(
 		return (await collection
 			.listSearchIndexes()
 			.toArray()) as SearchIndexDescription[]
+	}
+}
+
+export async function isSearchIndexManagementAvailable(
+	db: Db,
+	collectionName: string,
+): Promise<boolean> {
+	try {
+		await listSearchIndexes(db.collection(collectionName))
+		return true
+	} catch {
+		return false
 	}
 }
 
@@ -3452,6 +3610,8 @@ export async function ensureSearchIndexes(
 			{ type: "filter", path: "role" },
 			{ type: "filter", path: "channel" },
 			{ type: "filter", path: "timestamp" },
+			{ type: "filter", path: "validAt" },
+			{ type: "filter", path: "invalidAt" },
 		]
 		const eventsVectorDef: Document = {
 			fields: [autoEmbedVectorField("body"), ...eventsFilterFields],
@@ -3782,7 +3942,7 @@ export async function detectCapabilities(
 		const buildInfo = await db.admin().command({ buildInfo: 1 })
 		const versionArray = (buildInfo as { versionArray?: unknown }).versionArray
 		result.rankFusion = hasServerVersionAtLeast(versionArray, 8, 0)
-		result.scoreFusion = hasServerVersionAtLeast(versionArray, 8, 2)
+		result.scoreFusion = hasServerVersionAtLeast(versionArray, 8, 3)
 	} catch {
 		try {
 			await db
@@ -3833,24 +3993,31 @@ export async function detectCapabilities(
 		}
 	}
 
-	// Probe mongot against the current search collection first so capability
-	// detection does not depend on arbitrary legacy collections in a dirty DB.
-	try {
-		const probeNames = [probeCollectionName ?? "__probe__"]
-
-		for (const name of probeNames) {
-			try {
-				await listSearchIndexes(db.collection(name))
-				// listSearchIndexes succeeded → mongot is available
-				result.textSearch = true
-				result.vectorSearch = true
-				break
-			} catch {
-				// This collection doesn't support search indexes
-			}
+	// Search capability means the concrete serving indexes are queryable. Index
+	// management availability alone is insufficient: an empty or PENDING index
+	// list cannot serve either retrieval lane.
+	if (probeCollectionName) {
+		try {
+			const indexes = await listSearchIndexes(
+				db.collection(probeCollectionName),
+			)
+			const textIndex = indexes.find(
+				(index) => index.name === `${probeCollectionName}_text`,
+			)
+			const vectorIndex = indexes.find(
+				(index) => index.name === `${probeCollectionName}_vector`,
+			)
+			result.textSearch =
+				textIndex !== undefined &&
+				isSearchIndexTypeCompatible(textIndex.type, "search") &&
+				isSearchIndexQueryable(textIndex)
+			result.vectorSearch =
+				vectorIndex !== undefined &&
+				isSearchIndexTypeCompatible(vectorIndex.type, "vectorSearch") &&
+				isSearchIndexQueryable(vectorIndex)
+		} catch {
+			// Search index management is unavailable on this deployment.
 		}
-	} catch {
-		// listSearchIndexes not available
 	}
 
 	log.info(`detected capabilities: ${JSON.stringify(result)}`)

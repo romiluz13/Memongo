@@ -203,7 +203,9 @@ describe("selfEditBlock", () => {
 				}),
 			}),
 		)
-		expect(withTransaction).toHaveBeenCalledTimes(1)
+		expect(withTransaction).toHaveBeenCalledWith(expect.any(Function), {
+			writeConcern: { w: "majority" },
+		})
 		expect(endSession).toHaveBeenCalledTimes(1)
 	})
 

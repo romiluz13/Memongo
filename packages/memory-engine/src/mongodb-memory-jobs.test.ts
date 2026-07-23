@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
-import type { Collection, Db, UpdateResult } from "mongodb"
+import type { ClientSession, Collection, Db, UpdateResult } from "mongodb"
 
 function mockCollection(
 	overrides: Partial<Record<string, unknown>> = {},
@@ -7,6 +7,8 @@ function mockCollection(
 	return {
 		insertOne: vi.fn(async () => ({ insertedId: "job-1" })),
 		updateOne: vi.fn(async () => ({ matchedCount: 1 }) as UpdateResult),
+		updateMany: vi.fn(async () => ({ matchedCount: 1 }) as UpdateResult),
+		findOneAndUpdate: vi.fn(async () => null),
 		find: vi.fn(() => ({
 			sort: vi.fn(() => ({
 				limit: vi.fn(() => ({
@@ -87,6 +89,243 @@ describe("mongodb-memory-jobs", () => {
 				agentId: "agent-1",
 				status: { $in: ["pending", "running"] },
 			}),
+			expect.any(Object),
+		)
+	})
+
+	it("claims pending or abandoned extraction work with one atomic lease update", async () => {
+		const { claimMemoryJob } = await import("./mongodb-memory-jobs.js")
+		const now = new Date("2026-07-23T00:00:00.000Z")
+		const claimed = {
+			jobId: "job-1",
+			jobType: "extraction",
+			agentId: "agent-1",
+			status: "running",
+			createdAt: now,
+			attempts: 1,
+			leaseOwner: "worker-a",
+			leaseToken: "token-a",
+			heartbeatAt: now,
+			leaseExpiresAt: new Date(now.getTime() + 30_000),
+		}
+		const findOneAndUpdate = vi.fn(async () => claimed)
+		const db = mockDb({
+			test_memory_jobs: mockCollection({ findOneAndUpdate }),
+		})
+
+		await expect(
+			claimMemoryJob({
+				db,
+				prefix: "test_",
+				agentId: "agent-1",
+				jobType: "extraction",
+				workerId: "worker-a",
+				leaseMs: 30_000,
+				now,
+			}),
+		).resolves.toEqual(claimed)
+
+		expect(findOneAndUpdate).toHaveBeenCalledTimes(1)
+		expect(findOneAndUpdate).toHaveBeenCalledWith(
+			{
+				agentId: "agent-1",
+				jobType: "extraction",
+				$or: [
+					{ status: "pending", stagedAt: { $exists: false } },
+					{ status: "running", leaseExpiresAt: { $lte: now } },
+					{ status: "running", leaseExpiresAt: { $exists: false } },
+				],
+			},
+			expect.objectContaining({
+				$inc: { attempts: 1 },
+				$set: expect.objectContaining({
+					status: "running",
+					leaseOwner: "worker-a",
+					heartbeatAt: now,
+					leaseExpiresAt: new Date(now.getTime() + 30_000),
+					leaseToken: expect.any(String),
+				}),
+			}),
+			expect.objectContaining({
+				sort: { createdAt: 1, jobId: 1 },
+				returnDocument: "after",
+				writeConcern: { w: "majority", wtimeoutMS: 5_000 },
+			}),
+		)
+	})
+
+	it("renews only the current unexpired fenced lease", async () => {
+		const { renewMemoryJobLease } = await import("./mongodb-memory-jobs.js")
+		const now = new Date("2026-07-23T00:00:00.000Z")
+		const updateOne = vi.fn(async () => ({ matchedCount: 0 }) as UpdateResult)
+		const db = mockDb({
+			test_memory_jobs: mockCollection({ updateOne }),
+		})
+
+		await expect(
+			renewMemoryJobLease({
+				db,
+				prefix: "test_",
+				jobId: "job-1",
+				agentId: "agent-1",
+				leaseOwner: "worker-a",
+				leaseToken: "stale-token",
+				leaseMs: 30_000,
+				now,
+			}),
+		).resolves.toBe(false)
+
+		expect(updateOne).toHaveBeenCalledWith(
+			{
+				jobId: "job-1",
+				agentId: "agent-1",
+				status: "running",
+				leaseOwner: "worker-a",
+				leaseToken: "stale-token",
+				leaseExpiresAt: { $gt: now },
+			},
+			expect.any(Object),
+			expect.objectContaining({
+				writeConcern: { w: "majority", wtimeoutMS: 5_000 },
+			}),
+		)
+	})
+
+	it("prevents a stale or expired worker from completing claimed work", async () => {
+		const { completeClaimedMemoryJob } = await import(
+			"./mongodb-memory-jobs.js"
+		)
+		const now = new Date("2026-07-23T00:01:00.000Z")
+		const updateOne = vi.fn(async () => ({ matchedCount: 0 }) as UpdateResult)
+		const db = mockDb({
+			test_memory_jobs: mockCollection({ updateOne }),
+		})
+
+		await expect(
+			completeClaimedMemoryJob({
+				db,
+				prefix: "test_",
+				jobId: "job-1",
+				agentId: "agent-1",
+				leaseOwner: "worker-a",
+				leaseToken: "stale-token",
+				completedAt: now,
+				now,
+			}),
+		).resolves.toBe(false)
+
+		expect(updateOne).toHaveBeenCalledWith(
+			expect.objectContaining({
+				status: "running",
+				leaseOwner: "worker-a",
+				leaseToken: "stale-token",
+				leaseExpiresAt: { $gt: now },
+			}),
+			expect.objectContaining({
+				$set: expect.objectContaining({ status: "completed" }),
+				$unset: {
+					leaseOwner: "",
+					leaseToken: "",
+					leaseExpiresAt: "",
+					heartbeatAt: "",
+				},
+			}),
+			expect.any(Object),
+		)
+	})
+
+	it("atomically resets a failed job to pending without resetting attempts", async () => {
+		const { retryFailedMemoryJob } = await import("./mongodb-memory-jobs.js")
+		const updateOne = vi.fn(async () => ({ matchedCount: 1 }) as UpdateResult)
+		const db = mockDb({
+			test_memory_jobs: mockCollection({ updateOne }),
+		})
+
+		await expect(
+			retryFailedMemoryJob({
+				db,
+				prefix: "test_",
+				jobId: "job-1",
+				agentId: "agent-1",
+				payload: {
+					eventId: "event-1",
+					scope: "agent",
+					scopeRef: "agent:agent-1",
+				},
+				metadata: { eventId: "event-1" },
+			}),
+		).resolves.toBe(true)
+
+		expect(updateOne).toHaveBeenCalledWith(
+			{
+				jobId: "job-1",
+				agentId: "agent-1",
+				status: "failed",
+			},
+			expect.objectContaining({
+				$set: expect.objectContaining({
+					status: "pending",
+					payload: expect.objectContaining({ eventId: "event-1" }),
+				}),
+				$unset: expect.not.objectContaining({ attempts: expect.anything() }),
+			}),
+			expect.objectContaining({
+				writeConcern: { w: "majority", wtimeoutMS: 5_000 },
+			}),
+		)
+	})
+
+	it("uses the transaction session instead of per-operation write concern", async () => {
+		const { createMemoryJob } = await import("./mongodb-memory-jobs.js")
+		const insertOne = vi.fn(async () => ({ insertedId: "job-1" }))
+		const db = mockDb({
+			test_memory_jobs: mockCollection({ insertOne }),
+		})
+		const session = {} as ClientSession
+
+		await createMemoryJob({
+			db,
+			prefix: "test_",
+			session,
+			job: {
+				jobId: "job-1",
+				jobType: "extraction",
+				agentId: "agent-1",
+				status: "pending",
+				stagedAt: new Date("2026-07-23T00:00:00.000Z"),
+				payload: { eventId: "event-1" },
+			},
+		})
+
+		expect(insertOne).toHaveBeenCalledWith(
+			expect.objectContaining({ jobId: "job-1" }),
+			{ session },
+		)
+	})
+
+	it("releases one staged job owned by an agent", async () => {
+		const { releaseStagedMemoryJob } = await import("./mongodb-memory-jobs.js")
+		const updateOne = vi.fn(async () => ({ matchedCount: 1 }) as UpdateResult)
+		const db = mockDb({
+			test_memory_jobs: mockCollection({ updateOne }),
+		})
+
+		await expect(
+			releaseStagedMemoryJob({
+				db,
+				prefix: "test_",
+				jobId: "job-1",
+				agentId: "agent-1",
+			}),
+		).resolves.toBe(true)
+		expect(updateOne).toHaveBeenCalledWith(
+			{
+				jobId: "job-1",
+				agentId: "agent-1",
+				status: "pending",
+				stagedAt: { $exists: true },
+			},
+			{ $unset: { stagedAt: "" } },
 			expect.any(Object),
 		)
 	})

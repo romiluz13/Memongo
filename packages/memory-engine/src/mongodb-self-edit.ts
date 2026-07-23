@@ -11,6 +11,7 @@ import {
 	writeStructuredMemory,
 	type StructuredMemoryType,
 } from "./mongodb-structured-memory.js"
+import { MAJORITY_TRANSACTION_OPTIONS } from "./mongodb-transactions.js"
 
 // ---------------------------------------------------------------------------
 // Block → structured memory type/key mapping
@@ -119,7 +120,7 @@ export async function selfEditBlock(params: {
 					embeddingMode,
 					session,
 				})
-			})
+			}, MAJORITY_TRANSACTION_OPTIONS)
 
 			return { upserted: result?.upserted ?? false, id: `core:${block}` }
 		} finally {

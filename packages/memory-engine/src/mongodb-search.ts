@@ -678,7 +678,7 @@ export async function keywordSearch(
 }
 
 // ---------------------------------------------------------------------------
-// Hybrid Search with $scoreFusion (MongoDB 8.2+)
+// Hybrid Search with $scoreFusion (MongoDB 8.3+)
 // ---------------------------------------------------------------------------
 
 export async function hybridSearchScoreFusion(

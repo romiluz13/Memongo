@@ -823,6 +823,12 @@ export type MemoryJobStatus =
 	| "failed"
 	| "cancelled"
 
+export type MemoryExtractionJobPayload = {
+	eventId: string
+	scope?: MemoryScope
+	scopeRef?: string
+}
+
 export type MemoryJob = {
 	jobId: string
 	jobType: MemoryJobType
@@ -836,6 +842,22 @@ export type MemoryJob = {
 	outputCount?: number
 	durationMs?: number
 	metadata?: Record<string, unknown>
+	payload?: MemoryExtractionJobPayload
+	attempts?: number
+	stagedAt?: Date
+	leaseOwner?: string
+	leaseToken?: string
+	leaseExpiresAt?: Date
+	heartbeatAt?: Date
+}
+
+export type ClaimedMemoryJob = MemoryJob & {
+	status: "running"
+	attempts: number
+	leaseOwner: string
+	leaseToken: string
+	leaseExpiresAt: Date
+	heartbeatAt: Date
 }
 
 // ---------------------------------------------------------------------------
@@ -863,6 +885,13 @@ export type MemoryBenchmarkEvaluationCase = {
 	query: string
 	expectedSessionIds: string[]
 	expectedTurnIds?: string[]
+	officialRetrieval?: {
+		evaluator: "longmemeval-main-run"
+		eligible: boolean
+		expectedSessionIds: string[]
+		expectedTurnIds: string[]
+		ineligibleReason?: "abstention" | "no-user-answer-target"
+	}
 	expectedDialogIds?: string[]
 	answer?: string
 	questionType?: string
@@ -916,6 +945,9 @@ export type MemoryConversationImportResult = {
 export type MemoryBenchmarkQuestionTypeMetrics = {
 	questionType: string
 	cases: number
+	succeededCases: number
+	failedCases: number
+	retrievalEligibleCases: number
 	scoredCases: number
 	hitRate: number
 	rAt5: number
@@ -944,15 +976,36 @@ export type MemoryBenchmarkOfficialRetrievalMetrics = {
 	ndcgAnyAt50: number
 }
 
+export type MemoryBenchmarkEvaluatorIdentity = {
+	suite: "longmemeval"
+	sourceRepository: "xiaowu0162/LongMemEval"
+	sourceCommit: string
+	evaluatorPath: "src/retrieval/eval_utils.py"
+	evaluatorBlob: string
+	aggregationEntrypoint: "src/retrieval/run_retrieval.py"
+	cutoffs: readonly number[]
+	eligibilityPolicy: "exclude-abstention-and-no-user-answer-target"
+	candidateProjection:
+		| "one-session-document-one-label"
+		| "native-memory-source-session-adapter"
+	comparability: "canonical" | "adapted"
+}
+
 export type MemoryBenchmarkOfficialMetrics = {
 	longMemEval?: {
+		evaluator: MemoryBenchmarkEvaluatorIdentity
+		totalCases: number
+		eligibleCases: number
 		retrievalCases: number
 		abstentionCases: number
-		session: MemoryBenchmarkOfficialRetrievalMetrics
+		ineligibleCases: number
+		projectionFailureCases: number
+		executionFailureCases: number
+		session?: MemoryBenchmarkOfficialRetrievalMetrics
 		turn?: MemoryBenchmarkOfficialRetrievalMetrics
 	}
 	loCoMo?: {
-		qaCases: number
+		retrievalCases: number
 		abstentionCases: number
 		sessionEvidenceRecallAt5: number
 		sessionEvidenceRecallAt10: number
@@ -999,11 +1052,76 @@ export type MemoryBenchmarkReleaseGate = {
 	gate:
 		| "official-retrieval"
 		| "internal-retrieval"
+		| "execution-completeness"
+		| "quality-thresholds"
+		| "e2e-answer-quality"
+		| "evidence-completeness"
 		| "conversation-recall-regression"
 		| "query-governance"
-	status: "passed" | "warning" | "not-run" | "advisory-only"
+	status: "passed" | "failed" | "warning" | "not-run" | "advisory-only"
 	evidence: string
+	checks?: Array<{
+		metric: string
+		actual: number | null
+		operator: ">=" | "<=" | "="
+		threshold: number
+		passed: boolean
+	}>
 }
+
+export type MemoryBenchmarkExecutionSummary = {
+	attemptedCases: number
+	succeededCases: number
+	failedCases: number
+	retrievalEligibleCases: number
+	abstentionCases: number
+	missingJudgmentCases: number
+	retrievalHits: number
+	retrievalMisses: number
+	scoredCases: number
+}
+
+export type MemoryBenchmarkCaseOutcome = {
+	caseId?: string
+	questionType?: string
+	executionStatus: "succeeded" | "system-failure"
+	scoreEligibility: "retrieval" | "abstention" | "missing-judgment"
+	retrievalOutcome: "hit" | "miss" | "not-applicable"
+	officialMetric?:
+		| { status: "scored" }
+		| {
+				status: "ineligible" | "projection-failure" | "execution-failure"
+				reason: string
+		  }
+	empty: boolean
+	latencyMs: number
+	failure?: { stage: "retrieval"; message: string }
+}
+
+type BenchmarkCommonQualityThresholds = {
+	contractId: string
+	version: string
+	minHitRate: number
+	maxEmptyRate: number
+	minRAt5: number
+	minNdcgAt10: number
+	maxP95LatencyMs: number
+}
+
+export type BenchmarkQualityThresholds =
+	| (BenchmarkCommonQualityThresholds & {
+			datasetKind: "longmemeval"
+			minSessionRecallAnyAt10: number
+			minSessionNdcgAnyAt10: number
+	  })
+	| (BenchmarkCommonQualityThresholds & {
+			datasetKind: "locomo"
+			minSessionEvidenceRecallAt10: number
+			minDialogEvidenceRecallAt10?: number
+			minAnswerAccuracy: number
+			maxJudgeFalsePositiveRate: number
+			minAnswerCoverage: number
+	  })
 
 /**
  * Envelope parity fields (Task 1.A).
@@ -1022,9 +1140,16 @@ export type BenchmarkEmbeddingQuantization = "float32" | "int8" | "binary"
 export type BenchmarkRerankerStage = "post-fusion" | "pre-fusion" | "none"
 
 export type BenchmarkRunIdentity = {
+	runId: string
 	/** SHA-256 of dataset file bytes (64-hex-char). */
 	datasetSha256: string
 	retrievalUnit: BenchmarkRetrievalUnit
+	configurationHash: string
+	executionProfile: "shipped" | "diagnostic"
+	retrievalLane: "native" | "raw-session"
+	maxResults: number
+	minScore: number
+	settings: Record<string, string | number | boolean | null>
 }
 
 export type BenchmarkEmbeddingConfig = {
@@ -1039,15 +1164,29 @@ export type BenchmarkRerankerConfig = {
 	stage: BenchmarkRerankerStage
 }
 
-/**
- * Storage footprint from `collStats`. On atlas-local:preview `collStats` may
- * be unavailable; in that case both numeric fields are `null` and
- * `unavailableReason` carries a short machine-readable reason string.
- */
-export type BenchmarkStorageFootprint = {
-	collectionBytes: number | null
-	indexBytes: number | null
+export type BenchmarkTenantStorageMeasurement = {
+	documents: number | null
+	logicalBytes: number | null
+	collections: Array<{
+		collectionName: string
+		documents: number
+		logicalBytes: number
+	}>
 	unavailableReason?: string
+}
+
+export type BenchmarkStorageFootprint = {
+	basis: "benchmark-agent-logical-plus-shared-physical"
+	tenant: BenchmarkTenantStorageMeasurement
+	sharedPhysical: {
+		collections: Array<{
+			collectionName: string
+			collectionBytes: number | null
+			indexBytes: number | null
+			unavailableReason?: string
+		}>
+		unavailableReason?: string
+	}
 }
 
 export type BenchmarkLatencyDistribution = {
@@ -1055,19 +1194,66 @@ export type BenchmarkLatencyDistribution = {
 	p95Ms: number
 }
 
-export type BenchmarkCostCounters = {
-	embeddingCalls: number
-	rerankCalls: number
-	llmEnrichmentCalls: number
+export type BenchmarkOperationName =
+	| "embedding"
+	| "rerank"
+	| "enrichment"
+	| "query-decomposition"
+	| "answer-generation"
+	| "answer-judge"
+	| "decoy-judge"
+	| "structured-extraction"
+	| "temporal-extraction"
+	| "contradiction-detection"
+	| "relation-extraction"
+	| "vector-query"
+
+export type BenchmarkOperationAccounting = {
+	operation: BenchmarkOperationName
+	observability: "measured" | "unknown" | "not-run"
+	attempted: number | null
+	succeeded: number | null
+	failed: number | null
+	provider?: string
+	model?: string
+	unavailableReason?: string
+}
+
+export type BenchmarkCostAccounting = {
+	currency: null
+	totalCost: null
+	unavailableReason: string
+	operations: BenchmarkOperationAccounting[]
 }
 
 /** Gate-5 extension. Populated by Task 5.E2E / Task 5.adv; null at Phase 1. */
 export type BenchmarkE2eQaEnvelope = {
+	answerModel: string | null
 	judge: string | null
 	judgeVersion: string | null
 	accuracy: number | null
 	latencyMs: number | null
 	judgeFalsePositiveRate: number | null
+	cases: {
+		eligible: number
+		attempted: number
+		completed: number
+		failed: number
+	}
+	attempts: {
+		answerGeneration: number
+		answerJudge: number
+		decoyJudge: number
+	}
+	caseResults: Array<{
+		caseId: string
+		candidateAnswer: string
+		correct: boolean
+		abstention: boolean
+		latencyMs: number
+		error?: string
+	}>
+	unavailableReason?: string
 }
 
 export type MemoryBenchmarkRunReport = {
@@ -1081,6 +1267,8 @@ export type MemoryBenchmarkRunReport = {
 		cases: number
 		scoredCases?: number
 		skippedCases?: number
+		execution?: MemoryBenchmarkExecutionSummary
+		caseOutcomes?: MemoryBenchmarkCaseOutcome[]
 	}
 	metrics: {
 		internal: {
@@ -1095,6 +1283,12 @@ export type MemoryBenchmarkRunReport = {
 		official?: MemoryBenchmarkOfficialMetrics
 	}
 	releaseGates: MemoryBenchmarkReleaseGate[]
+	publicationDecision: {
+		publishable: boolean
+		failedGates: MemoryBenchmarkReleaseGate["gate"][]
+		blockingGates: MemoryBenchmarkReleaseGate["gate"][]
+	}
+	qualityThresholds?: BenchmarkQualityThresholds
 	warnings: string[]
 	degradations: string[]
 	/** Task 1.A parity envelope (optional at Phase 1; blocks Gate 3 exit when missing). */
@@ -1103,7 +1297,7 @@ export type MemoryBenchmarkRunReport = {
 	reranker?: BenchmarkRerankerConfig
 	storage?: BenchmarkStorageFootprint
 	latency?: BenchmarkLatencyDistribution
-	cost?: BenchmarkCostCounters
+	cost?: BenchmarkCostAccounting
 	e2eQa?: BenchmarkE2eQaEnvelope
 }
 
@@ -1314,7 +1508,7 @@ export type ConsolidationOptions = {
 	noveltyWeight?: number
 	importanceWeight?: number
 	accessWeight?: number
-	scope?: string
+	scope?: MemoryScope
 	/** Filter to specific namespace within scope */
 	scopeRef?: string
 	/** Bounded time window for scoped enrichment */

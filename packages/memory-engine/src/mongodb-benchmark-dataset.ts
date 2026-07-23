@@ -259,6 +259,8 @@ function normalizeLongMemEvalDataset(
 			? entry.haystack_sessions
 			: []
 		const expectedTurnIds: string[] = []
+		const officialExpectedSessionIds: string[] = []
+		const officialExpectedTurnIds: string[] = []
 		const conversations: MemoryBenchmarkConversation[] = []
 		for (const [index, session] of rawSessions.entries()) {
 			if (!Array.isArray(session)) {
@@ -275,6 +277,7 @@ function normalizeLongMemEvalDataset(
 					? rawDates[index]
 					: undefined
 			const turns: MemoryBenchmarkTurn[] = []
+			let hasUserAnswerTarget = false
 			for (const [turnIndex, turn] of session.entries()) {
 				if (!turn || typeof turn !== "object") {
 					continue
@@ -292,6 +295,10 @@ function normalizeLongMemEvalDataset(
 				const benchmarkTurnId = `${sessionId}::turn_${turnIndex + 1}`
 				if (record.has_answer === true) {
 					expectedTurnIds.push(benchmarkTurnId)
+					if (role === "user") {
+						hasUserAnswerTarget = true
+						officialExpectedTurnIds.push(benchmarkTurnId)
+					}
 				}
 				turns.push({
 					role,
@@ -308,6 +315,9 @@ function normalizeLongMemEvalDataset(
 			}
 			if (turns.length === 0) {
 				continue
+			}
+			if (hasUserAnswerTarget) {
+				officialExpectedSessionIds.push(sessionId)
 			}
 			conversations.push({
 				conversationId: questionId,
@@ -331,6 +341,7 @@ function normalizeLongMemEvalDataset(
 					? "abstention"
 					: undefined
 		const abstention = questionId.endsWith("_abs")
+		const officialEligible = !abstention && officialExpectedTurnIds.length > 0
 		scenarios.push({
 			scenarioId: questionId,
 			conversations,
@@ -340,6 +351,21 @@ function normalizeLongMemEvalDataset(
 					query: question,
 					expectedSessionIds,
 					expectedTurnIds,
+					officialRetrieval: {
+						evaluator: "longmemeval-main-run",
+						eligible: officialEligible,
+						expectedSessionIds: officialEligible
+							? officialExpectedSessionIds
+							: [],
+						expectedTurnIds: officialEligible ? officialExpectedTurnIds : [],
+						...(!officialEligible
+							? {
+									ineligibleReason: abstention
+										? ("abstention" as const)
+										: ("no-user-answer-target" as const),
+								}
+							: {}),
+					},
 					answer:
 						typeof entry.answer === "string" && entry.answer.trim().length > 0
 							? entry.answer

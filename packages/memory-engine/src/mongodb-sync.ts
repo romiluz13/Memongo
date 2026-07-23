@@ -18,9 +18,15 @@ import {
 	type MemoryChunk,
 	type MemoryFileEntry,
 } from "./internal.js"
+import type { AnyBulkWriteOperation } from "mongodb"
 import type { EmbeddingStatus } from "./mongodb-embedding-retry.js"
 import { chunksCollection, filesCollection } from "./mongodb-schema.js"
 import { resolveScopeRef } from "./mongodb-scope.js"
+import {
+	MAJORITY_TRANSACTION_OPTIONS,
+	isTransactionUnsupported,
+	withTransactionBatched,
+} from "./mongodb-transactions.js"
 import {
 	buildSessionEntry,
 	listSessionFilesForAgent,
@@ -130,21 +136,15 @@ function buildChunkId(
 	return `${storageId}:${startLine}:${endLine}`
 }
 
-async function upsertChunks(
-	chunks: Collection,
+function buildChunkOps(
 	path: string,
 	namespace: SyncNamespace,
 	chunkList: MemoryChunk[],
 	model: string,
 	embeddings: number[][] | null,
 	embeddingStatus: EmbeddingStatus,
-	session?: ClientSession,
-): Promise<number> {
-	if (chunkList.length === 0) {
-		return 0
-	}
-
-	const ops = chunkList.map((chunk, index) => {
+): AnyBulkWriteOperation<Document>[] {
+	return chunkList.map((chunk, index) => {
 		const chunkId = buildChunkId(
 			buildStorageId(namespace, path),
 			chunk.startLine,
@@ -176,11 +176,51 @@ async function upsertChunks(
 			},
 		}
 	})
+}
 
-	const result = session
-		? await chunks.bulkWrite(ops, { ordered: false, session })
-		: await chunks.bulkWrite(ops, { ordered: false })
+async function upsertChunks(
+	chunks: Collection,
+	path: string,
+	namespace: SyncNamespace,
+	chunkList: MemoryChunk[],
+	model: string,
+	embeddings: number[][] | null,
+	embeddingStatus: EmbeddingStatus,
+): Promise<number> {
+	if (chunkList.length === 0) {
+		return 0
+	}
+
+	const ops = buildChunkOps(
+		path,
+		namespace,
+		chunkList,
+		model,
+		embeddings,
+		embeddingStatus,
+	)
+
+	const result = await chunks.bulkWrite(ops, { ordered: false })
 	return result.upsertedCount + result.modifiedCount
+}
+
+/**
+ * Upsert chunk ops in batched transactions. If the batch throws
+ * `TransactionTooLargeForCache` (MongoDB 6.2+, code 225), split it in half and
+ * retry each half in its own transaction. Every op still runs transactionally —
+ * we only split the work so each transaction's cache footprint is smaller.
+ */
+async function upsertChunksBatched(
+	chunks: Collection,
+	session: ClientSession,
+	ops: AnyBulkWriteOperation<Document>[],
+): Promise<number> {
+	let upserted = 0
+	await withTransactionBatched(session, ops, async (batch) => {
+		const result = await chunks.bulkWrite(batch, { ordered: false, session })
+		upserted += result.upsertedCount + result.modifiedCount
+	})
+	return upserted
 }
 
 async function deleteChunksForPath(
@@ -216,26 +256,6 @@ async function deleteStaleChunks(
 		? await chunks.deleteMany(filter, { session })
 		: await chunks.deleteMany(filter)
 	return result.deletedCount
-}
-
-// ---------------------------------------------------------------------------
-// Transaction helpers
-// ---------------------------------------------------------------------------
-
-/**
- * Detect if an error indicates transactions are not supported (standalone topology).
- * Transactions require a replica set or mongos.
- */
-function isTransactionNotSupported(err: unknown): boolean {
-	if (err instanceof Error && "code" in err) {
-		const code = (err as { code: number }).code
-		// 20 = IllegalOperation (standalone), 263 = NoSuchTransaction
-		if (code === 20 || code === 263) {
-			return true
-		}
-	}
-	const msg = err instanceof Error ? err.message : String(err)
-	return msg.includes("Transaction numbers are only allowed on a replica set")
 }
 
 // ---------------------------------------------------------------------------
@@ -283,27 +303,27 @@ async function syncFileAtomically(params: {
 
 	const session = client.startSession()
 	try {
+		// Delete in one small transaction, then upsert chunks in batched
+		// transactions (so a TransactionTooLargeForCache on a large file doesn't
+		// abort the whole sync). File metadata is written AFTER the chunks succeed
+		// so a partial chunk failure isn't masked as a completed sync.
 		let upserted = 0
-		await session.withTransaction(
-			async () => {
-				await deleteChunksForPath(chunksCol, file.path, namespace, session)
-				upserted = await upsertChunks(
-					chunksCol,
-					file.path,
-					namespace,
-					chunks,
-					model,
-					embeddings,
-					embeddingStatus,
-					session,
-				)
-				await upsertFileMetadata(filesCol, file, namespace, session)
-			},
-			{ writeConcern: { w: "majority" } },
+		await session.withTransaction(async () => {
+			await deleteChunksForPath(chunksCol, file.path, namespace, session)
+		}, MAJORITY_TRANSACTION_OPTIONS)
+		const chunkOps = buildChunkOps(
+			file.path,
+			namespace,
+			chunks,
+			model,
+			embeddings,
+			embeddingStatus,
 		)
+		upserted = await upsertChunksBatched(chunksCol, session, chunkOps)
+		await upsertFileMetadata(filesCol, file, namespace, session)
 		return { upserted, disableTransactions: false }
 	} catch (err) {
-		if (isTransactionNotSupported(err)) {
+		if (isTransactionUnsupported(err)) {
 			log.info(
 				"transactions not supported (standalone), falling back for file sync",
 			)
@@ -529,27 +549,24 @@ export async function syncToMongoDB(params: {
 		let session: ClientSession | undefined
 		try {
 			session = params.client.startSession()
-			await session.withTransaction(
-				async () => {
-					staleDeleted = await deleteStaleChunks(
-						chunksCol,
-						memoryNamespace,
-						validPaths,
-						session,
+			await session.withTransaction(async () => {
+				staleDeleted = await deleteStaleChunks(
+					chunksCol,
+					memoryNamespace,
+					validPaths,
+					session,
+				)
+				if (staleFileIds.length > 0) {
+					await filesCol.deleteMany(
+						{ _id: { $in: staleFileIds } } as Record<string, unknown>,
+						{
+							session,
+						},
 					)
-					if (staleFileIds.length > 0) {
-						await filesCol.deleteMany(
-							{ _id: { $in: staleFileIds } } as Record<string, unknown>,
-							{
-								session,
-							},
-						)
-					}
-				},
-				{ writeConcern: { w: "majority" } },
-			)
+				}
+			}, MAJORITY_TRANSACTION_OPTIONS)
 		} catch (err) {
-			if (isTransactionNotSupported(err)) {
+			if (isTransactionUnsupported(err)) {
 				// Fallback: non-transactional stale cleanup
 				staleDeleted = await deleteStaleChunks(
 					chunksCol,
@@ -800,27 +817,26 @@ async function syncSessionFileAtomically(params: {
 
 	const session = client.startSession()
 	try {
+		// Delete in one small transaction, then upsert chunks in batched
+		// transactions. Session metadata is written AFTER the chunks succeed so a
+		// partial chunk failure isn't masked as a completed sync.
 		let upserted = 0
-		await session.withTransaction(
-			async () => {
-				await deleteChunksForPath(chunksCol, entry.path, namespace, session)
-				upserted = await upsertChunks(
-					chunksCol,
-					entry.path,
-					namespace,
-					chunks,
-					model,
-					embeddings,
-					embeddingStatus,
-					session,
-				)
-				await upsertSessionFileMetadata(filesCol, entry, namespace, session)
-			},
-			{ writeConcern: { w: "majority" } },
+		await session.withTransaction(async () => {
+			await deleteChunksForPath(chunksCol, entry.path, namespace, session)
+		}, MAJORITY_TRANSACTION_OPTIONS)
+		const chunkOps = buildChunkOps(
+			entry.path,
+			namespace,
+			chunks,
+			model,
+			embeddings,
+			embeddingStatus,
 		)
+		upserted = await upsertChunksBatched(chunksCol, session, chunkOps)
+		await upsertSessionFileMetadata(filesCol, entry, namespace, session)
 		return { upserted, disableTransactions: false }
 	} catch (err) {
-		if (isTransactionNotSupported(err)) {
+		if (isTransactionUnsupported(err)) {
 			log.info(
 				"transactions not supported (standalone), falling back for session sync",
 			)

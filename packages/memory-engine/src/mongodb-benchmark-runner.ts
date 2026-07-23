@@ -3,6 +3,7 @@ import {
 	collectStorageFootprint,
 	percentile50And95,
 	type BenchmarkRetrievalLane,
+	type BenchmarkRunContext,
 	resolveBenchmarkEmbeddingConfig,
 	resolveBenchmarkRerankerConfig,
 	resolveDatasetSha256,
@@ -10,20 +11,35 @@ import {
 } from "./benchmark-parity-envelope.js"
 import type { MemorySearchResult } from "./types.js"
 import type {
-	BenchmarkCostCounters,
+	BenchmarkCostAccounting,
 	BenchmarkE2eQaEnvelope,
 	BenchmarkEmbeddingConfig,
 	BenchmarkLatencyDistribution,
+	BenchmarkQualityThresholds,
 	BenchmarkRerankerConfig,
 	BenchmarkRunIdentity,
 	BenchmarkStorageFootprint,
+	BenchmarkTenantStorageMeasurement,
 	MemoryBenchmarkDatasetKind,
+	MemoryBenchmarkCaseOutcome,
+	MemoryBenchmarkExecutionSummary,
 	MemoryBenchmarkOfficialMetrics,
 	MemoryBenchmarkOfficialRetrievalMetrics,
 	MemoryBenchmarkQuestionTypeMetrics,
 	MemoryBenchmarkRunReport,
 	QueryGovernanceReport,
 } from "./types.js"
+
+const LONGMEMEVAL_EVALUATOR_SOURCE = {
+	suite: "longmemeval",
+	sourceRepository: "xiaowu0162/LongMemEval",
+	sourceCommit: "9e0b455f4ef0e2ab8f2e582289761153549043fc",
+	evaluatorPath: "src/retrieval/eval_utils.py",
+	evaluatorBlob: "9c43a835e7c41aff0eb3272c448f5cbe76bbbd45",
+	aggregationEntrypoint: "src/retrieval/run_retrieval.py",
+	cutoffs: [1, 3, 5, 10, 30, 50],
+	eligibilityPolicy: "exclude-abstention-and-no-user-answer-target",
+} as const
 
 export type BenchmarkCandidateTrace = {
 	rank: number
@@ -125,6 +141,10 @@ export type BenchmarkCaseExecution = {
 	datasetKind?: MemoryBenchmarkDatasetKind | "legacy-query"
 	questionType?: string
 	abstention?: boolean
+	executionStatus: MemoryBenchmarkCaseOutcome["executionStatus"]
+	scoreEligibility: MemoryBenchmarkCaseOutcome["scoreEligibility"]
+	retrievalOutcome: MemoryBenchmarkCaseOutcome["retrievalOutcome"]
+	error?: string
 	empty: boolean
 	topScore: number
 	latencyMs: number
@@ -138,6 +158,12 @@ export type BenchmarkCaseExecution = {
 		session?: MemoryBenchmarkOfficialRetrievalMetrics
 		turn?: MemoryBenchmarkOfficialRetrievalMetrics
 	}
+	officialMetric?:
+		| { status: "scored" }
+		| {
+				status: "ineligible" | "projection-failure" | "execution-failure"
+				reason: string
+		  }
 	loCoMo?: {
 		sessionEvidenceRecallAt5: number
 		sessionEvidenceRecallAt10: number
@@ -153,6 +179,8 @@ export type BenchmarkSummary = {
 	cases: number
 	scoredCases: number
 	skippedCases: number
+	execution: MemoryBenchmarkExecutionSummary
+	caseOutcomes: MemoryBenchmarkCaseOutcome[]
 	hitRate: number
 	emptyRate: number
 	avgTopScore: number
@@ -179,6 +207,8 @@ type BenchmarkReportInput = {
 	cases: number
 	scoredCases?: number
 	skippedCases?: number
+	execution?: MemoryBenchmarkExecutionSummary
+	caseOutcomes?: MemoryBenchmarkCaseOutcome[]
 	hitRate: number
 	emptyRate: number
 	avgTopScore: number
@@ -195,8 +225,9 @@ type BenchmarkReportInput = {
 	reranker?: BenchmarkRerankerConfig
 	storage?: BenchmarkStorageFootprint
 	latency?: BenchmarkLatencyDistribution
-	cost?: BenchmarkCostCounters
+	cost?: BenchmarkCostAccounting
 	e2eQa?: BenchmarkE2eQaEnvelope
+	qualityThresholds?: BenchmarkQualityThresholds
 }
 
 function readBuildIdentity(): MemoryBenchmarkRunReport["build"] {
@@ -290,47 +321,408 @@ function buildOfficialRetrievalGate(
 	if (!params.officialMetrics) {
 		return {
 			gate: "official-retrieval",
-			status: "warning",
+			status: "failed",
 			evidence: "officialMetrics absent; use non-comparable diagnostics only",
 		}
 	}
 	if (params.cases === 0) {
 		return {
 			gate: "official-retrieval",
-			status: "warning",
+			status: "failed",
 			evidence:
 				"officialMetrics present, but no benchmark cases were available",
+		}
+	}
+	const longMemEval = params.officialMetrics.longMemEval
+	if (longMemEval) {
+		if (longMemEval.evaluator.comparability !== "canonical") {
+			return {
+				gate: "official-retrieval",
+				status: "failed",
+				evidence: `LongMemEval evaluator projection is ${longMemEval.evaluator.comparability}: ${longMemEval.evaluator.candidateProjection}`,
+			}
+		}
+		if (longMemEval.totalCases !== params.cases) {
+			return {
+				gate: "official-retrieval",
+				status: "failed",
+				evidence: `LongMemEval evaluator covered ${longMemEval.totalCases}/${params.cases} total cases`,
+			}
+		}
+		if (
+			longMemEval.projectionFailureCases > 0 ||
+			longMemEval.executionFailureCases > 0
+		) {
+			return {
+				gate: "official-retrieval",
+				status: "failed",
+				evidence: `${longMemEval.projectionFailureCases} canonical projection failures; ${longMemEval.executionFailureCases} execution failures`,
+			}
+		}
+		if (longMemEval.retrievalCases !== longMemEval.eligibleCases) {
+			return {
+				gate: "official-retrieval",
+				status: "failed",
+				evidence: `${longMemEval.retrievalCases}/${longMemEval.eligibleCases} LongMemEval main-run eligible cases scored`,
+			}
+		}
+		return {
+			gate: "official-retrieval",
+			status: "passed",
+			evidence: `${longMemEval.retrievalCases}/${longMemEval.eligibleCases} LongMemEval main-run eligible cases scored with evaluator ${longMemEval.evaluator.sourceCommit}`,
 		}
 	}
 	if (params.scoredCases == null) {
 		return {
 			gate: "official-retrieval",
-			status: "warning",
+			status: "failed",
 			evidence:
 				"officialMetrics present, but scoredCases is missing; use non-comparable diagnostics only",
 		}
 	}
-	if (params.scoredCases !== params.cases) {
+	if ((params.execution?.failedCases ?? 0) > 0) {
 		return {
 			gate: "official-retrieval",
-			status: "warning",
-			evidence: `officialMetrics present, but ${params.scoredCases}/${params.cases} benchmark cases were scored`,
+			status: "failed",
+			evidence: `${params.execution?.failedCases ?? 0}/${params.cases} benchmark cases failed execution`,
+		}
+	}
+	const coveredCases =
+		params.scoredCases + (params.execution?.abstentionCases ?? 0)
+	if (coveredCases !== params.cases) {
+		return {
+			gate: "official-retrieval",
+			status: "failed",
+			evidence: `officialMetrics present, but ${coveredCases}/${params.cases} benchmark cases were scored or identified as abstentions`,
 		}
 	}
 	return {
 		gate: "official-retrieval",
 		status: "passed",
-		evidence: `officialMetrics present and all ${params.scoredCases}/${params.cases} benchmark cases scored`,
+		evidence: `officialMetrics present and all ${coveredCases}/${params.cases} benchmark cases evaluated`,
 	}
+}
+
+function buildQualityThresholdGate(
+	params: BenchmarkReportInput,
+): MemoryBenchmarkRunReport["releaseGates"][number] {
+	const thresholds = params.qualityThresholds
+	if (!thresholds) {
+		return {
+			gate: "quality-thresholds",
+			status: "failed",
+			evidence: "quality thresholds were not declared before the run",
+		}
+	}
+	if (params.datasetKind !== thresholds.datasetKind) {
+		return {
+			gate: "quality-thresholds",
+			status: "failed",
+			evidence: `quality contract datasetKind=${thresholds.datasetKind} does not match run datasetKind=${params.datasetKind ?? "unknown"}`,
+		}
+	}
+	const checks: NonNullable<
+		MemoryBenchmarkRunReport["releaseGates"][number]["checks"]
+	> = [
+		{
+			metric: "hitRate",
+			actual: params.hitRate,
+			operator: ">=",
+			threshold: thresholds.minHitRate,
+			passed: params.hitRate >= thresholds.minHitRate,
+		},
+		{
+			metric: "emptyRate",
+			actual: params.emptyRate,
+			operator: "<=",
+			threshold: thresholds.maxEmptyRate,
+			passed: params.emptyRate <= thresholds.maxEmptyRate,
+		},
+		{
+			metric: "rAt5",
+			actual: params.rAt5 ?? null,
+			operator: ">=",
+			threshold: thresholds.minRAt5,
+			passed: params.rAt5 != null && params.rAt5 >= thresholds.minRAt5,
+		},
+		{
+			metric: "ndcgAt10",
+			actual: params.ndcgAt10 ?? null,
+			operator: ">=",
+			threshold: thresholds.minNdcgAt10,
+			passed:
+				params.ndcgAt10 != null && params.ndcgAt10 >= thresholds.minNdcgAt10,
+		},
+		{
+			metric: "p95LatencyMs",
+			actual: params.p95LatencyMs,
+			operator: "<=",
+			threshold: thresholds.maxP95LatencyMs,
+			passed: params.p95LatencyMs <= thresholds.maxP95LatencyMs,
+		},
+	]
+	if (thresholds.datasetKind === "longmemeval") {
+		const official = params.officialMetrics?.longMemEval?.session
+		checks.push(
+			{
+				metric: "official.longMemEval.session.recallAnyAt10",
+				actual: official?.recallAnyAt10 ?? null,
+				operator: ">=",
+				threshold: thresholds.minSessionRecallAnyAt10,
+				passed:
+					official != null &&
+					official.recallAnyAt10 >= thresholds.minSessionRecallAnyAt10,
+			},
+			{
+				metric: "official.longMemEval.session.ndcgAnyAt10",
+				actual: official?.ndcgAnyAt10 ?? null,
+				operator: ">=",
+				threshold: thresholds.minSessionNdcgAnyAt10,
+				passed:
+					official != null &&
+					official.ndcgAnyAt10 >= thresholds.minSessionNdcgAnyAt10,
+			},
+		)
+	} else {
+		const official = params.officialMetrics?.loCoMo
+		checks.push({
+			metric: "official.loCoMo.sessionEvidenceRecallAt10",
+			actual: official?.sessionEvidenceRecallAt10 ?? null,
+			operator: ">=",
+			threshold: thresholds.minSessionEvidenceRecallAt10,
+			passed:
+				official != null &&
+				official.sessionEvidenceRecallAt10 >=
+					thresholds.minSessionEvidenceRecallAt10,
+		})
+		if (thresholds.minDialogEvidenceRecallAt10 !== undefined) {
+			checks.push({
+				metric: "official.loCoMo.dialogEvidenceRecallAt10",
+				actual: official?.dialogEvidenceRecallAt10 ?? null,
+				operator: ">=",
+				threshold: thresholds.minDialogEvidenceRecallAt10,
+				passed:
+					official?.dialogEvidenceRecallAt10 != null &&
+					official.dialogEvidenceRecallAt10 >=
+						thresholds.minDialogEvidenceRecallAt10,
+			})
+		}
+	}
+	const failures = checks.filter((check) => !check.passed)
+	return failures.length > 0
+		? {
+				gate: "quality-thresholds",
+				status: "failed",
+				evidence: failures
+					.map(
+						(check) =>
+							`${check.metric}=${check.actual ?? "unavailable"} ${check.operator} ${check.threshold}`,
+					)
+					.join("; "),
+				checks,
+			}
+		: {
+				gate: "quality-thresholds",
+				status: "passed",
+				evidence: `all ${thresholds.contractId}@${thresholds.version} retrieval quality thresholds passed`,
+				checks,
+			}
+}
+
+function buildAnswerQualityGate(
+	params: BenchmarkReportInput,
+): MemoryBenchmarkRunReport["releaseGates"][number] | null {
+	const thresholds = params.qualityThresholds
+	if (!thresholds || thresholds.datasetKind !== "locomo") {
+		return null
+	}
+	const minimum = thresholds.minAnswerAccuracy
+	const accuracy = params.e2eQa?.accuracy
+	if (accuracy == null) {
+		return {
+			gate: "e2e-answer-quality",
+			status: "failed",
+			evidence: `answer accuracy is unavailable; required minimum=${minimum}`,
+		}
+	}
+	const coverage =
+		params.e2eQa && params.e2eQa.cases.eligible > 0
+			? params.e2eQa.cases.completed / params.e2eQa.cases.eligible
+			: null
+	const falsePositiveRate = params.e2eQa?.judgeFalsePositiveRate ?? null
+	const checks: NonNullable<
+		MemoryBenchmarkRunReport["releaseGates"][number]["checks"]
+	> = [
+		{
+			metric: "e2eQa.accuracy",
+			actual: accuracy,
+			operator: ">=",
+			threshold: minimum,
+			passed: accuracy >= minimum,
+		},
+		{
+			metric: "e2eQa.coverage",
+			actual: coverage,
+			operator: ">=",
+			threshold: thresholds.minAnswerCoverage,
+			passed: coverage != null && coverage >= thresholds.minAnswerCoverage,
+		},
+		{
+			metric: "e2eQa.judgeFalsePositiveRate",
+			actual: falsePositiveRate,
+			operator: "<=",
+			threshold: thresholds.maxJudgeFalsePositiveRate,
+			passed:
+				falsePositiveRate != null &&
+				falsePositiveRate <= thresholds.maxJudgeFalsePositiveRate,
+		},
+	]
+	return checks.every((check) => check.passed)
+		? {
+				gate: "e2e-answer-quality",
+				status: "passed",
+				evidence:
+					"all declared answer-quality and judge-calibration thresholds passed",
+				checks,
+			}
+		: {
+				gate: "e2e-answer-quality",
+				status: "failed",
+				evidence: checks
+					.filter((check) => !check.passed)
+					.map(
+						(check) =>
+							`${check.metric}=${check.actual ?? "unavailable"} ${check.operator} ${check.threshold}`,
+					)
+					.join("; "),
+				checks,
+			}
+}
+
+function buildEvidenceCompletenessGate(
+	params: BenchmarkReportInput,
+	build: MemoryBenchmarkRunReport["build"],
+): MemoryBenchmarkRunReport["releaseGates"][number] {
+	const missing: string[] = []
+	if (build.source !== "env" || !build.commitSha) {
+		missing.push("build commit identity")
+	}
+	if (!params.runIdentity?.runId || !params.runIdentity.configurationHash) {
+		missing.push("immutable run identity")
+	}
+	if (!params.embedding) missing.push("embedding configuration")
+	if (!params.reranker) missing.push("reranker configuration")
+	if (!params.latency) missing.push("latency distribution")
+	if (!params.storage) {
+		missing.push("storage evidence")
+	} else {
+		if (
+			params.storage.tenant.documents == null ||
+			params.storage.tenant.logicalBytes == null
+		) {
+			missing.push("benchmark-attributed tenant storage")
+		}
+		if (
+			params.storage.sharedPhysical.collections.length === 0 ||
+			params.storage.sharedPhysical.collections.some(
+				(entry) => entry.collectionBytes == null || entry.indexBytes == null,
+			)
+		) {
+			missing.push("shared physical collection/index storage")
+		}
+	}
+	if (!params.cost) {
+		missing.push("operation accounting")
+	} else {
+		if (params.cost.currency == null || params.cost.totalCost == null) {
+			missing.push("monetary cost")
+		}
+		if (
+			params.cost.operations.some((entry) => entry.observability === "unknown")
+		) {
+			missing.push("complete operation observability")
+		}
+		if (
+			params.cost.operations.some(
+				(entry) =>
+					entry.observability === "measured" &&
+					(entry.attempted == null ||
+						entry.succeeded == null ||
+						entry.failed == null ||
+						entry.attempted !== entry.succeeded + entry.failed),
+			)
+		) {
+			missing.push("balanced operation outcomes")
+		}
+	}
+	return missing.length === 0
+		? {
+				gate: "evidence-completeness",
+				status: "passed",
+				evidence:
+					"build, run, storage, latency, configuration, operations, and monetary cost evidence are complete",
+			}
+		: {
+				gate: "evidence-completeness",
+				status: "failed",
+				evidence: `publication evidence is incomplete: ${missing.join(", ")}`,
+			}
 }
 
 export function buildBenchmarkRunReport(
 	params: BenchmarkReportInput,
 ): MemoryBenchmarkRunReport {
-	const internalStatus = params.cases > 0 ? "passed" : "warning"
+	const build = readBuildIdentity()
+	const executionFailed = (params.execution?.failedCases ?? 0) > 0
+	const internalStatus =
+		params.cases > 0 && !executionFailed ? "passed" : "failed"
+	const answerQualityGate = buildAnswerQualityGate(params)
+	const releaseGates: MemoryBenchmarkRunReport["releaseGates"] = [
+		buildOfficialRetrievalGate(params),
+		{
+			gate: "internal-retrieval",
+			status: internalStatus,
+			evidence: `${params.cases} cases, ${params.scoredCases ?? params.cases} scored`,
+		},
+		{
+			gate: "execution-completeness",
+			status:
+				params.execution && params.execution.failedCases === 0
+					? "passed"
+					: "failed",
+			evidence: params.execution
+				? `${params.execution.succeededCases}/${params.execution.attemptedCases} cases executed successfully; ${params.execution.failedCases} failed`
+				: "per-case execution outcomes are absent",
+		},
+		buildQualityThresholdGate(params),
+		...(answerQualityGate ? [answerQualityGate] : []),
+		buildEvidenceCompletenessGate(params, build),
+		{
+			gate: "conversation-recall-regression",
+			status: "not-run",
+			evidence:
+				"Run packages/memory-engine/src/mongodb-conversation-recall-benchmark.test.ts for recall-affecting changes",
+		},
+		{
+			gate: "query-governance",
+			status: "advisory-only",
+			evidence:
+				params.queryGovernance?.status === "advisory-only"
+					? "queryGovernance candidates are advisory-only"
+					: "no queryGovernance candidates attached",
+		},
+	]
+	const blockingGates = releaseGates
+		.filter(
+			(gate) => gate.status !== "passed" && gate.status !== "advisory-only",
+		)
+		.map((gate) => gate.gate)
+	const failedGates = releaseGates
+		.filter((gate) => gate.status === "failed")
+		.map((gate) => gate.gate)
 	return {
 		generatedAt: new Date(),
-		build: readBuildIdentity(),
+		build,
 		corpus: {
 			datasetVersion: params.datasetVersion,
 			...(params.datasetName ? { datasetName: params.datasetName } : {}),
@@ -343,6 +735,8 @@ export function buildBenchmarkRunReport(
 			...(params.skippedCases != null
 				? { skippedCases: params.skippedCases }
 				: {}),
+			...(params.execution ? { execution: params.execution } : {}),
+			...(params.caseOutcomes ? { caseOutcomes: params.caseOutcomes } : {}),
 		},
 		metrics: {
 			internal: {
@@ -356,28 +750,15 @@ export function buildBenchmarkRunReport(
 			},
 			...(params.officialMetrics ? { official: params.officialMetrics } : {}),
 		},
-		releaseGates: [
-			buildOfficialRetrievalGate(params),
-			{
-				gate: "internal-retrieval",
-				status: internalStatus,
-				evidence: `${params.cases} cases, ${params.scoredCases ?? params.cases} scored`,
-			},
-			{
-				gate: "conversation-recall-regression",
-				status: "not-run",
-				evidence:
-					"Run packages/memory-engine/src/mongodb-conversation-recall-benchmark.test.ts for recall-affecting changes",
-			},
-			{
-				gate: "query-governance",
-				status: "advisory-only",
-				evidence:
-					params.queryGovernance?.status === "advisory-only"
-						? "queryGovernance candidates are advisory-only"
-						: "no queryGovernance candidates attached",
-			},
-		],
+		releaseGates,
+		publicationDecision: {
+			publishable: blockingGates.length === 0,
+			failedGates,
+			blockingGates,
+		},
+		...(params.qualityThresholds
+			? { qualityThresholds: params.qualityThresholds }
+			: {}),
 		warnings: buildBenchmarkWarnings(params),
 		degradations: buildBenchmarkDegradations(params),
 		...(params.runIdentity ? { runIdentity: params.runIdentity } : {}),
@@ -399,9 +780,8 @@ export function buildBenchmarkRunReport(
  * Inputs:
  *   - `db` + `collectionName` — used for `collStats`; null-with-reason on
  *     atlas-local:preview when unsupported.
- *   - `datasetPath` — used to compute SHA-256 if no env override is set.
- *     Env `MEMONGO_BENCHMARK_DATASET_SHA` takes precedence (matches
- *     bootstrap.json), then the `datasetSha256` override.
+ *   - `datasetPath` — always hashed from its bytes. Any declared digest is
+ *     verified as an assertion against those bytes.
  *   - `datasetKind` — determines retrieval unit (currently always "turn").
  *   - `mongoEmbeddingConfig` — from resolved backend config
  *     (`numDimensions` + `quantization`).
@@ -409,12 +789,12 @@ export function buildBenchmarkRunReport(
  *     (`enabled`, `model`, `topN`).
  *   - `latencySamples` — per-case retrieval latencies collected during
  *     the benchmark run. Emits p50 + p95.
- *   - `costCounters` — run-scoped counters from
- *     `createBenchmarkRunCounters()`.
+ *   - `cost` — immutable snapshot from the run-scoped accounting ledger.
  */
 export async function projectBenchmarkParityFields(params: {
 	db: Pick<Db, "command">
 	collectionName: string
+	collectionNames?: string[]
 	datasetPath?: string
 	datasetKind?: MemoryBenchmarkDatasetKind | "legacy-query"
 	retrievalLane?: BenchmarkRetrievalLane
@@ -429,14 +809,16 @@ export async function projectBenchmarkParityFields(params: {
 		topN: number
 	}
 	latencySamples: number[]
-	costCounters: BenchmarkCostCounters
+	cost: BenchmarkCostAccounting
+	runContext: BenchmarkRunContext
+	tenantStorage?: BenchmarkTenantStorageMeasurement
 }): Promise<{
 	runIdentity: BenchmarkRunIdentity
 	embedding: BenchmarkEmbeddingConfig
 	reranker: BenchmarkRerankerConfig
 	storage: BenchmarkStorageFootprint
 	latency: BenchmarkLatencyDistribution
-	cost: BenchmarkCostCounters
+	cost: BenchmarkCostAccounting
 }> {
 	const datasetSha256 = await resolveDatasetSha256({
 		datasetPath: params.datasetPath,
@@ -451,15 +833,27 @@ export async function projectBenchmarkParityFields(params: {
 	const storage = await collectStorageFootprint({
 		db: params.db,
 		collectionName: params.collectionName,
+		collectionNames: params.collectionNames,
+		tenant: params.tenantStorage,
 	})
 	const latency = percentile50And95(params.latencySamples)
 	return {
-		runIdentity: { datasetSha256, retrievalUnit },
+		runIdentity: {
+			runId: params.runContext.runId,
+			datasetSha256,
+			retrievalUnit,
+			configurationHash: params.runContext.configurationHash,
+			executionProfile: params.runContext.configuration.executionProfile,
+			retrievalLane: params.runContext.configuration.retrievalLane,
+			maxResults: params.runContext.configuration.maxResults,
+			minScore: params.runContext.configuration.minScore,
+			settings: { ...params.runContext.configuration.settings },
+		},
 		embedding,
 		reranker,
 		storage,
 		latency,
-		cost: params.costCounters,
+		cost: params.cost,
 	}
 }
 
@@ -560,14 +954,19 @@ function explainCandidateSurvival(result: MemorySearchResult): string {
 	return reasons.length > 0 ? reasons.join(",") : "scored-result"
 }
 
+type RankedIdGroup = {
+	ids: string[]
+	score: number
+}
+
 function officialDcgAtK(
-	rankedIds: string[],
+	rankedGroups: RankedIdGroup[],
 	relevantIds: Set<string>,
 	k: number,
 ): number {
 	let score = 0
-	for (const [index, id] of rankedIds.slice(0, k).entries()) {
-		if (!relevantIds.has(id)) {
+	for (const [index, group] of rankedGroups.slice(0, k).entries()) {
+		if (!group.ids.some((id) => relevantIds.has(id))) {
 			continue
 		}
 		score += index === 0 ? 1 : 1 / Math.log2(index + 1)
@@ -584,13 +983,13 @@ function officialIdealDcg(relevantCount: number, k: number): number {
 }
 
 function dcgAtK(
-	rankedIds: string[],
+	rankedGroups: RankedIdGroup[],
 	relevantIds: Set<string>,
 	k: number,
 ): number {
 	let score = 0
-	for (const [index, sessionId] of rankedIds.slice(0, k).entries()) {
-		if (!relevantIds.has(sessionId)) {
+	for (const [index, group] of rankedGroups.slice(0, k).entries()) {
+		if (!group.ids.some((id) => relevantIds.has(id))) {
 			continue
 		}
 		score += 1 / Math.log2(index + 2)
@@ -598,23 +997,60 @@ function dcgAtK(
 	return score
 }
 
+function rankResultIdGroups(params: {
+	results: MemorySearchResult[]
+	resolveIds: (result: MemorySearchResult) => string[]
+}): RankedIdGroup[] {
+	const seen = new Set<string>()
+	const ranked: RankedIdGroup[] = []
+	for (const result of params.results) {
+		const ids = uniqueSessionIds(params.resolveIds(result)).filter(
+			(id) => !seen.has(id),
+		)
+		if (ids.length === 0) {
+			continue
+		}
+		for (const id of ids) {
+			seen.add(id)
+		}
+		ranked.push({ ids, score: result.score })
+	}
+	return ranked
+}
+
+function projectCanonicalRankedGroups(params: {
+	results: MemorySearchResult[]
+	resolveIds: (result: MemorySearchResult) => string[]
+	label: "session" | "turn"
+}):
+	| { groups: RankedIdGroup[]; error?: undefined }
+	| { groups?: undefined; error: string } {
+	const groups: RankedIdGroup[] = []
+	for (const [index, result] of params.results.entries()) {
+		const ids = uniqueSessionIds(params.resolveIds(result))
+		if (ids.length > 1) {
+			return {
+				error: `${params.label} candidate rank ${index + 1} resolved to ${ids.length} labels`,
+			}
+		}
+		groups.push({ ids, score: result.score })
+	}
+	return { groups }
+}
+
+function idsAtK(rankedGroups: RankedIdGroup[], k: number): string[] {
+	return uniqueSessionIds(
+		rankedGroups.slice(0, k).flatMap((group) => group.ids),
+	)
+}
+
 export function rankResultIds(params: {
 	results: MemorySearchResult[]
 	resolveIds: (result: MemorySearchResult) => string[]
 }): Array<{ id: string; score: number }> {
-	const seen = new Set<string>()
-	const ranked: Array<{ id: string; score: number }> = []
-	for (const result of params.results) {
-		const ids = uniqueSessionIds(params.resolveIds(result))
-		for (const id of ids) {
-			if (seen.has(id)) {
-				continue
-			}
-			seen.add(id)
-			ranked.push({ id, score: result.score })
-		}
-	}
-	return ranked
+	return rankResultIdGroups(params).flatMap((group) =>
+		group.ids.map((id) => ({ id, score: group.score })),
+	)
 }
 
 export function rankResultSessions(params: {
@@ -628,7 +1064,7 @@ export function rankResultSessions(params: {
 }
 
 function evaluateOfficialRetrieval(
-	rankedIds: string[],
+	rankedGroups: RankedIdGroup[],
 	relevantIds: string[],
 ): MemoryBenchmarkOfficialRetrievalMetrics | undefined {
 	const relevantSet = new Set(uniqueSessionIds(relevantIds))
@@ -636,7 +1072,7 @@ function evaluateOfficialRetrieval(
 		return undefined
 	}
 	const atK = (k: number) => {
-		const recalled = new Set(rankedIds.slice(0, k))
+		const recalled = new Set(idsAtK(rankedGroups, k))
 		const recallAny = Array.from(relevantSet).some((id) => recalled.has(id))
 			? 1
 			: 0
@@ -645,7 +1081,7 @@ function evaluateOfficialRetrieval(
 			: 0
 		const idcg = officialIdealDcg(relevantSet.size, k)
 		const ndcgAny =
-			idcg > 0 ? officialDcgAtK(rankedIds, relevantSet, k) / idcg : 0
+			idcg > 0 ? officialDcgAtK(rankedGroups, relevantSet, k) / idcg : 0
 		return { recallAny, recallAll, ndcgAny }
 	}
 	const at1 = atK(1)
@@ -677,7 +1113,7 @@ function evaluateOfficialRetrieval(
 }
 
 function evidenceRecallAtK(
-	rankedIds: string[],
+	rankedGroups: RankedIdGroup[],
 	relevantIds: string[] | undefined,
 	k: number,
 ): number | undefined {
@@ -688,7 +1124,7 @@ function evidenceRecallAtK(
 	if (relevant.length === 0) {
 		return 1
 	}
-	const recalled = new Set(rankedIds.slice(0, k))
+	const recalled = new Set(idsAtK(rankedGroups, k))
 	return relevant.filter((id) => recalled.has(id)).length / relevant.length
 }
 
@@ -703,31 +1139,37 @@ export function evaluateRankingCase(params: {
 	resolveTurnIds?: (result: MemorySearchResult) => string[]
 	resolveDialogIds?: (result: MemorySearchResult) => string[]
 	datasetKind?: MemoryBenchmarkDatasetKind | "legacy-query"
+	officialRetrieval?: {
+		eligible: boolean
+		expectedSessionIds: string[]
+		expectedTurnIds: string[]
+		ineligibleReason?: "abstention" | "no-user-answer-target"
+	}
 	questionType?: string
 	abstention?: boolean
+	executionError?: string
 	traceOptions?: { maxCandidates?: number }
 }): BenchmarkCaseExecution {
 	const relevantSessionIds = uniqueSessionIds(params.relevantSessionIds)
-	const ranked = rankResultSessions({
+	const rankedSessionGroups = rankResultIdGroups({
 		results: params.results,
-		resolveSessionIds: params.resolveSessionIds,
+		resolveIds: params.resolveSessionIds,
 	})
-	const rankedIds = ranked.map((entry) => entry.sessionId)
-	const rankedTurnIds = params.resolveTurnIds
-		? rankResultIds({
+	const rankedTurnGroups = params.resolveTurnIds
+		? rankResultIdGroups({
 				results: params.results,
 				resolveIds: params.resolveTurnIds,
-			}).map((entry) => entry.id)
+			})
 		: []
-	const rankedDialogIds = params.resolveDialogIds
-		? rankResultIds({
+	const rankedDialogGroups = params.resolveDialogIds
+		? rankResultIdGroups({
 				results: params.results,
 				resolveIds: params.resolveDialogIds,
-			}).map((entry) => entry.id)
+			})
 		: []
 	const relevantSet = new Set(relevantSessionIds)
-	const top5 = rankedIds.slice(0, 5)
-	const top10 = rankedIds.slice(0, 10)
+	const top5 = idsAtK(rankedSessionGroups, 5)
+	const top10 = idsAtK(rankedSessionGroups, 10)
 	const relevantTop5 = top5.filter((sessionId) =>
 		relevantSet.has(sessionId),
 	).length
@@ -743,43 +1185,90 @@ export function evaluateRankingCase(params: {
 					(_, index) => 1 / Math.log2(index + 2),
 				).reduce((sum, value) => sum + value, 0)
 
-	const longMemEval =
-		params.datasetKind === "longmemeval" && params.abstention !== true
-			? {
-					session: evaluateOfficialRetrieval(
-						rankedIds,
-						params.relevantSessionIds,
-					),
-					turn: params.resolveTurnIds
-						? evaluateOfficialRetrieval(
-								rankedTurnIds,
-								params.relevantTurnIds ?? [],
-							)
-						: undefined,
+	const canonicalSessionProjection = projectCanonicalRankedGroups({
+		results: params.results,
+		resolveIds: params.resolveSessionIds,
+		label: "session",
+	})
+	const canonicalTurnProjection = params.resolveTurnIds
+		? projectCanonicalRankedGroups({
+				results: params.results,
+				resolveIds: params.resolveTurnIds,
+				label: "turn",
+			})
+		: undefined
+	const officialExpectedSessionIds =
+		params.officialRetrieval?.expectedSessionIds ?? params.relevantSessionIds
+	const officialExpectedTurnIds =
+		params.officialRetrieval?.expectedTurnIds ?? params.relevantTurnIds ?? []
+	let officialMetric: BenchmarkCaseExecution["officialMetric"]
+	let longMemEval: BenchmarkCaseExecution["longMemEval"]
+	if (params.datasetKind === "longmemeval") {
+		if (params.executionError) {
+			officialMetric = {
+				status: "execution-failure",
+				reason: params.executionError,
+			}
+		} else if (
+			params.abstention === true ||
+			params.officialRetrieval?.eligible === false
+		) {
+			officialMetric = {
+				status: "ineligible",
+				reason:
+					params.officialRetrieval?.ineligibleReason ??
+					(params.abstention === true ? "abstention" : "case-ineligible"),
+			}
+		} else {
+			const projectionError =
+				canonicalSessionProjection.error ?? canonicalTurnProjection?.error
+			if (projectionError) {
+				officialMetric = {
+					status: "projection-failure",
+					reason: projectionError,
 				}
-			: undefined
+			} else {
+				officialMetric = { status: "scored" }
+				longMemEval = {
+					session: evaluateOfficialRetrieval(
+						canonicalSessionProjection.groups ?? [],
+						officialExpectedSessionIds,
+					),
+					turn:
+						canonicalTurnProjection?.groups !== undefined
+							? evaluateOfficialRetrieval(
+									canonicalTurnProjection.groups,
+									officialExpectedTurnIds,
+								)
+							: undefined,
+				}
+			}
+		}
+	}
 	const sessionEvidenceAt5 = evidenceRecallAtK(
-		rankedIds,
+		rankedSessionGroups,
 		params.relevantSessionIds,
 		5,
 	)
 	const sessionEvidenceAt10 = evidenceRecallAtK(
-		rankedIds,
+		rankedSessionGroups,
 		params.relevantSessionIds,
 		10,
 	)
 	const dialogEvidenceAt5 = evidenceRecallAtK(
-		rankedDialogIds,
+		rankedDialogGroups,
 		params.relevantDialogIds,
 		5,
 	)
 	const dialogEvidenceAt10 = evidenceRecallAtK(
-		rankedDialogIds,
+		rankedDialogGroups,
 		params.relevantDialogIds,
 		10,
 	)
 	const loCoMo =
+		!params.executionError &&
 		params.datasetKind === "locomo" &&
+		params.abstention !== true &&
 		sessionEvidenceAt5 !== undefined &&
 		sessionEvidenceAt10 !== undefined
 			? {
@@ -831,24 +1320,48 @@ export function evaluateRankingCase(params: {
 				}))
 			: undefined
 
+	const executionStatus: BenchmarkCaseExecution["executionStatus"] =
+		params.executionError ? "system-failure" : "succeeded"
+	const scoreEligibility: BenchmarkCaseExecution["scoreEligibility"] =
+		params.abstention === true
+			? "abstention"
+			: relevantSet.size > 0
+				? "retrieval"
+				: "missing-judgment"
+	const hit =
+		executionStatus === "succeeded" &&
+		scoreEligibility === "retrieval" &&
+		relevantTop10 > 0
+	const retrievalOutcome: BenchmarkCaseExecution["retrievalOutcome"] =
+		executionStatus === "succeeded" && scoreEligibility === "retrieval"
+			? hit
+				? "hit"
+				: "miss"
+			: "not-applicable"
+
 	return {
 		caseId: params.caseId,
 		datasetKind: params.datasetKind,
 		questionType: params.questionType,
 		abstention: params.abstention,
+		executionStatus,
+		scoreEligibility,
+		retrievalOutcome,
+		...(params.executionError ? { error: params.executionError } : {}),
 		empty: params.results.length === 0,
 		topScore: params.results[0]?.score ?? 0,
 		latencyMs: params.latencyMs,
-		scored: relevantSet.size > 0,
-		hit: relevantTop10 > 0,
+		scored: executionStatus === "succeeded" && scoreEligibility === "retrieval",
+		hit,
 		rAt5: relevantSet.size > 0 ? relevantTop5 / relevantSet.size : 0,
 		rAt10: relevantSet.size > 0 ? relevantTop10 / relevantSet.size : 0,
 		ndcgAt10:
 			relevantSet.size > 0 && idcg > 0
-				? dcgAtK(top10, relevantSet, 10) / idcg
+				? dcgAtK(rankedSessionGroups, relevantSet, 10) / idcg
 				: 0,
 		...(topCandidates ? { topCandidates } : {}),
 		...(longMemEval ? { longMemEval } : {}),
+		...(officialMetric ? { officialMetric } : {}),
 		...(loCoMo ? { loCoMo } : {}),
 	}
 }
@@ -869,9 +1382,17 @@ function summarizeQuestionTypes(
 	return Array.from(groups.entries())
 		.map(([questionType, bucket]) => {
 			const scored = bucket.filter((entry) => entry.scored)
+			const succeeded = bucket.filter(
+				(entry) => entry.executionStatus === "succeeded",
+			)
 			return {
 				questionType,
 				cases: bucket.length,
+				succeededCases: succeeded.length,
+				failedCases: bucket.length - succeeded.length,
+				retrievalEligibleCases: bucket.filter(
+					(entry) => entry.scoreEligibility === "retrieval",
+				).length,
 				scoredCases: scored.length,
 				hitRate:
 					scored.length > 0
@@ -929,6 +1450,7 @@ function averageOfficialRetrievalMetrics(
 function summarizeOfficialMetrics(
 	datasetKind: MemoryBenchmarkDatasetKind | "legacy-query" | undefined,
 	executions: BenchmarkCaseExecution[],
+	retrievalLane: BenchmarkRetrievalLane = "native",
 ): MemoryBenchmarkOfficialMetrics | undefined {
 	if (datasetKind === "longmemeval") {
 		const longMemEvalExecutions = executions.filter(
@@ -947,17 +1469,37 @@ function summarizeOfficialMetrics(
 					entry !== undefined,
 			)
 		const session = averageOfficialRetrievalMetrics(sessionMetrics)
-		if (!session) {
-			return undefined
-		}
 		const turn = averageOfficialRetrievalMetrics(turnMetrics)
+		const ineligibleCases = longMemEvalExecutions.filter(
+			(execution) => execution.officialMetric?.status === "ineligible",
+		).length
+		const projectionFailureCases = longMemEvalExecutions.filter(
+			(execution) => execution.officialMetric?.status === "projection-failure",
+		).length
+		const executionFailureCases = longMemEvalExecutions.filter(
+			(execution) => execution.officialMetric?.status === "execution-failure",
+		).length
 		return {
 			longMemEval: {
+				evaluator: {
+					...LONGMEMEVAL_EVALUATOR_SOURCE,
+					candidateProjection:
+						retrievalLane === "raw-session"
+							? "one-session-document-one-label"
+							: "native-memory-source-session-adapter",
+					comparability:
+						retrievalLane === "raw-session" ? "canonical" : "adapted",
+				},
+				totalCases: longMemEvalExecutions.length,
+				eligibleCases: longMemEvalExecutions.length - ineligibleCases,
 				retrievalCases: sessionMetrics.length,
 				abstentionCases: longMemEvalExecutions.filter(
 					(execution) => execution.abstention === true,
 				).length,
-				session,
+				ineligibleCases,
+				projectionFailureCases,
+				executionFailureCases,
+				...(session ? { session } : {}),
 				...(turn ? { turn } : {}),
 			},
 		}
@@ -987,7 +1529,7 @@ function summarizeOfficialMetrics(
 		)
 		return {
 			loCoMo: {
-				qaCases: loCoMoExecutions.length,
+				retrievalCases: loCoMoExecutions.length,
 				abstentionCases: loCoMoExecutions.filter(
 					(execution) => execution.abstention === true,
 				).length,
@@ -1217,17 +1759,59 @@ export function buildCaseDiagnostics(params: {
 export function summarizeBenchmarkExecutions(params: {
 	datasetName?: string
 	datasetKind?: MemoryBenchmarkDatasetKind | "legacy-query"
+	retrievalLane?: BenchmarkRetrievalLane
 	scenarios?: number
 	executions: BenchmarkCaseExecution[]
 	ingest?: BenchmarkSummary["ingest"]
 }): BenchmarkSummary {
 	const executions = params.executions
 	const scored = executions.filter((entry) => entry.scored)
-	const topScores = executions.map((entry) => entry.topScore)
-	const latencies = executions.map((entry) => entry.latencyMs)
+	const topScores = scored.map((entry) => entry.topScore)
+	const latencies = scored.map((entry) => entry.latencyMs)
 	const officialMetrics = summarizeOfficialMetrics(
 		params.datasetKind,
 		executions,
+		params.retrievalLane,
+	)
+	const execution: MemoryBenchmarkExecutionSummary = {
+		attemptedCases: executions.length,
+		succeededCases: executions.filter(
+			(entry) => entry.executionStatus === "succeeded",
+		).length,
+		failedCases: executions.filter(
+			(entry) => entry.executionStatus === "system-failure",
+		).length,
+		retrievalEligibleCases: executions.filter(
+			(entry) => entry.scoreEligibility === "retrieval",
+		).length,
+		abstentionCases: executions.filter(
+			(entry) => entry.scoreEligibility === "abstention",
+		).length,
+		missingJudgmentCases: executions.filter(
+			(entry) => entry.scoreEligibility === "missing-judgment",
+		).length,
+		retrievalHits: executions.filter(
+			(entry) => entry.retrievalOutcome === "hit",
+		).length,
+		retrievalMisses: executions.filter(
+			(entry) => entry.retrievalOutcome === "miss",
+		).length,
+		scoredCases: scored.length,
+	}
+	const caseOutcomes: MemoryBenchmarkCaseOutcome[] = executions.map(
+		(entry) => ({
+			caseId: entry.caseId,
+			questionType: entry.questionType,
+			executionStatus: entry.executionStatus,
+			scoreEligibility: entry.scoreEligibility,
+			retrievalOutcome: entry.retrievalOutcome,
+			...(entry.officialMetric ? { officialMetric: entry.officialMetric } : {}),
+			empty: entry.empty,
+			latencyMs: entry.latencyMs,
+			...(entry.error
+				? { failure: { stage: "retrieval" as const, message: entry.error } }
+				: {}),
+		}),
 	)
 	return {
 		datasetName: params.datasetName,
@@ -1236,13 +1820,15 @@ export function summarizeBenchmarkExecutions(params: {
 		cases: executions.length,
 		scoredCases: scored.length,
 		skippedCases: executions.length - scored.length,
+		execution,
+		caseOutcomes,
 		hitRate:
 			scored.length > 0
 				? scored.filter((entry) => entry.hit).length / scored.length
 				: 0,
 		emptyRate:
-			executions.length > 0
-				? executions.filter((entry) => entry.empty).length / executions.length
+			scored.length > 0
+				? scored.filter((entry) => entry.empty).length / scored.length
 				: 0,
 		avgTopScore:
 			topScores.length > 0

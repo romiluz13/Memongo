@@ -39,6 +39,87 @@ const IMPORT_TOOL_NAMES = new Set([
 	"memongo_import_conversation_history",
 ])
 
+const benchmarkCommonThresholdProperties = {
+	contractId: { type: "string", minLength: 1 },
+	version: { type: "string", minLength: 1 },
+	minHitRate: { type: "number", minimum: 0, maximum: 1 },
+	maxEmptyRate: { type: "number", minimum: 0, maximum: 1 },
+	minRAt5: { type: "number", minimum: 0, maximum: 1 },
+	minNdcgAt10: { type: "number", minimum: 0, maximum: 1 },
+	maxP95LatencyMs: { type: "number", exclusiveMinimum: 0 },
+} as const
+
+const benchmarkCommonThresholdRequired = [
+	"contractId",
+	"version",
+	"datasetKind",
+	"minHitRate",
+	"maxEmptyRate",
+	"minRAt5",
+	"minNdcgAt10",
+	"maxP95LatencyMs",
+] as const
+
+const benchmarkQualityThresholdsSchema = {
+	oneOf: [
+		{
+			type: "object",
+			additionalProperties: false,
+			properties: {
+				...benchmarkCommonThresholdProperties,
+				datasetKind: { type: "string", enum: ["longmemeval"] },
+				minSessionRecallAnyAt10: {
+					type: "number",
+					minimum: 0,
+					maximum: 1,
+				},
+				minSessionNdcgAnyAt10: {
+					type: "number",
+					minimum: 0,
+					maximum: 1,
+				},
+			},
+			required: [
+				...benchmarkCommonThresholdRequired,
+				"minSessionRecallAnyAt10",
+				"minSessionNdcgAnyAt10",
+			],
+		},
+		{
+			type: "object",
+			additionalProperties: false,
+			properties: {
+				...benchmarkCommonThresholdProperties,
+				datasetKind: { type: "string", enum: ["locomo"] },
+				minSessionEvidenceRecallAt10: {
+					type: "number",
+					minimum: 0,
+					maximum: 1,
+				},
+				minDialogEvidenceRecallAt10: {
+					type: "number",
+					minimum: 0,
+					maximum: 1,
+				},
+				minAnswerAccuracy: { type: "number", minimum: 0, maximum: 1 },
+				maxJudgeFalsePositiveRate: {
+					type: "number",
+					minimum: 0,
+					maximum: 1,
+				},
+				minAnswerCoverage: { type: "number", minimum: 0, maximum: 1 },
+			},
+			required: [
+				...benchmarkCommonThresholdRequired,
+				"minSessionEvidenceRecallAt10",
+				"minAnswerAccuracy",
+				"maxJudgeFalsePositiveRate",
+				"minAnswerCoverage",
+			],
+		},
+	],
+} as const
+
 function jsonResult(payload: unknown, isError = false) {
 	const structuredContent =
 		payload !== null && typeof payload === "object"
@@ -118,6 +199,14 @@ export const toolList = [
 				body: { type: "string" },
 				agentId: { type: "string" },
 				sessionId: { type: "string" },
+				timestamp: { type: "string", format: "date-time" },
+				validAt: { type: "string", format: "date-time" },
+				invalidAt: { type: "string", format: "date-time" },
+				scope: {
+					type: "string",
+					enum: ["session", "user", "agent", "workspace", "tenant", "global"],
+				},
+				scopeRef: { type: "string" },
 			},
 			required: ["role", "body"],
 		},
@@ -214,6 +303,12 @@ export const toolList = [
 					description:
 						"Inclusive end of time range. ISO 8601: `YYYY-MM-DD` or `YYYY-MM-DDTHH:MM:SSZ`.",
 				},
+				asOf: {
+					type: "string",
+					format: "date-time",
+					description:
+						"Evaluate event validity at this historical instant. Defaults to now.",
+				},
 				timezone: {
 					type: "string",
 					description:
@@ -264,6 +359,12 @@ export const toolList = [
 					type: "string",
 					description:
 						"Inclusive end of time range. ISO 8601: `YYYY-MM-DD` or `YYYY-MM-DDTHH:MM:SSZ`.",
+				},
+				asOf: {
+					type: "string",
+					format: "date-time",
+					description:
+						"Evaluate event validity at this historical instant. Defaults to now.",
 				},
 				timezone: {
 					type: "string",
@@ -987,6 +1088,14 @@ export const toolList = [
 				datasetPath: { type: "string" },
 				maxResults: { type: "number" },
 				minScore: { type: "number" },
+				retrievalLane: {
+					type: "string",
+					enum: ["native", "raw-session"],
+				},
+				datasetSha256: { type: "string" },
+				embeddingConfig: { type: "object" },
+				rerankerConfig: { type: "object" },
+				qualityThresholds: benchmarkQualityThresholdsSchema,
 			},
 		},
 	},
@@ -1083,6 +1192,13 @@ export async function handleToolCall(
 				agentId: typeof args.agentId === "string" ? args.agentId : undefined,
 				sessionId:
 					typeof args.sessionId === "string" ? args.sessionId : undefined,
+				timestamp:
+					typeof args.timestamp === "string" ? args.timestamp : undefined,
+				validAt: typeof args.validAt === "string" ? args.validAt : undefined,
+				invalidAt:
+					typeof args.invalidAt === "string" ? args.invalidAt : undefined,
+				scope: typeof args.scope === "string" ? args.scope : undefined,
+				scopeRef: typeof args.scopeRef === "string" ? args.scopeRef : undefined,
 			})
 			return { content: [{ type: "text", text: JSON.stringify(out) }] }
 		}
@@ -1241,6 +1357,7 @@ export async function handleToolCall(
 				startTime:
 					typeof args.startTime === "string" ? args.startTime : undefined,
 				endTime: typeof args.endTime === "string" ? args.endTime : undefined,
+				asOf: typeof args.asOf === "string" ? args.asOf : undefined,
 				timezone: typeof args.timezone === "string" ? args.timezone : undefined,
 				includeToolMessages:
 					typeof args.includeToolMessages === "boolean"
@@ -1699,6 +1816,9 @@ export async function handleToolCall(
 			return { content: [{ type: "text", text: JSON.stringify(out) }] }
 		}
 		if (name === "memongo_relevance_benchmark") {
+			type BenchmarkInput = NonNullable<
+				Parameters<typeof memongo.relevanceBenchmark>[0]
+			>
 			const out = await memongo.relevanceBenchmark({
 				agentId: typeof args.agentId === "string" ? args.agentId : undefined,
 				datasetPath:
@@ -1706,6 +1826,30 @@ export async function handleToolCall(
 				maxResults:
 					typeof args.maxResults === "number" ? args.maxResults : undefined,
 				minScore: typeof args.minScore === "number" ? args.minScore : undefined,
+				retrievalLane:
+					args.retrievalLane === "native" ||
+					args.retrievalLane === "raw-session"
+						? args.retrievalLane
+						: undefined,
+				datasetSha256:
+					typeof args.datasetSha256 === "string"
+						? args.datasetSha256
+						: undefined,
+				embeddingConfig:
+					typeof args.embeddingConfig === "object" &&
+					args.embeddingConfig !== null
+						? (args.embeddingConfig as BenchmarkInput["embeddingConfig"])
+						: undefined,
+				rerankerConfig:
+					typeof args.rerankerConfig === "object" &&
+					args.rerankerConfig !== null
+						? (args.rerankerConfig as BenchmarkInput["rerankerConfig"])
+						: undefined,
+				qualityThresholds:
+					typeof args.qualityThresholds === "object" &&
+					args.qualityThresholds !== null
+						? (args.qualityThresholds as BenchmarkInput["qualityThresholds"])
+						: undefined,
 			})
 			return { content: [{ type: "text", text: JSON.stringify(out) }] }
 		}

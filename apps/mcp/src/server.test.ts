@@ -17,6 +17,70 @@ describe("toolList", () => {
 		expect(names.has("memongo_procedure_outcome")).toBe(true)
 		expect(names.has("memongo_memory_feedback")).toBe(true)
 	})
+
+	it("publishes event validity and historical recall inputs", () => {
+		const writeEvent = toolList.find(
+			(tool) => tool.name === "memongo_write_event",
+		)
+		const recall = toolList.find(
+			(tool) => tool.name === "memongo_recall_conversation",
+		)
+		expect(writeEvent?.inputSchema.properties).toEqual(
+			expect.objectContaining({
+				timestamp: expect.any(Object),
+				validAt: expect.any(Object),
+				invalidAt: expect.any(Object),
+			}),
+		)
+		expect(recall?.inputSchema.properties).toEqual(
+			expect.objectContaining({ asOf: expect.any(Object) }),
+		)
+	})
+
+	it("keeps benchmark-only controls off detailed search", () => {
+		const detailedSearch = toolList.find(
+			(tool) => tool.name === "memongo_search_detailed",
+		)
+		const properties = detailedSearch?.inputSchema.properties as Record<
+			string,
+			unknown
+		>
+
+		expect(properties).not.toHaveProperty("datasetSha256")
+		expect(properties).not.toHaveProperty("retrievalLane")
+		expect(properties).not.toHaveProperty("qualityThresholds")
+	})
+
+	it("publishes the dataset-discriminated benchmark quality contract", () => {
+		const benchmark = toolList.find(
+			(tool) => tool.name === "memongo_relevance_benchmark",
+		)
+		const qualityThresholds = (
+			benchmark?.inputSchema.properties as Record<string, unknown>
+		).qualityThresholds as { oneOf?: Array<{ required?: string[] }> }
+
+		expect(qualityThresholds.oneOf).toHaveLength(2)
+		expect(qualityThresholds.oneOf?.[0]?.required).toEqual(
+			expect.arrayContaining([
+				"contractId",
+				"version",
+				"datasetKind",
+				"minSessionRecallAnyAt10",
+				"minSessionNdcgAnyAt10",
+			]),
+		)
+		expect(qualityThresholds.oneOf?.[1]?.required).toEqual(
+			expect.arrayContaining([
+				"contractId",
+				"version",
+				"datasetKind",
+				"minSessionEvidenceRecallAt10",
+				"minAnswerAccuracy",
+				"maxJudgeFalsePositiveRate",
+				"minAnswerCoverage",
+			]),
+		)
+	})
 })
 
 describe("handleToolCall", () => {
@@ -32,6 +96,7 @@ describe("handleToolCall", () => {
 				roles: ["assistant", "tool"],
 				limit: 999,
 				includeToolMessages: true,
+				asOf: "2026-04-09T12:00:00.000Z",
 			},
 			{
 				recallConversation,
@@ -45,6 +110,7 @@ describe("handleToolCall", () => {
 			roles: ["assistant", "tool"],
 			startTime: undefined,
 			endTime: undefined,
+			asOf: "2026-04-09T12:00:00.000Z",
 			timezone: undefined,
 			includeToolMessages: true,
 			limit: 200,
@@ -53,6 +119,30 @@ describe("handleToolCall", () => {
 		expect(parseTextPayload(out)).toEqual({
 			results: [{ citation: { eventId: "evt-1" } }],
 		})
+	})
+
+	it("forwards canonical event validity inputs", async () => {
+		const writeEvent = vi.fn().mockResolvedValue({ eventId: "evt-1" })
+
+		await handleToolCall(
+			"memongo_write_event",
+			{
+				role: "user",
+				body: "Historical statement",
+				timestamp: "2026-04-08T12:00:00.000Z",
+				validAt: "2026-04-08T12:00:00.000Z",
+				invalidAt: "2026-04-09T12:00:00.000Z",
+			},
+			{ writeEvent } as any,
+		)
+
+		expect(writeEvent).toHaveBeenCalledWith(
+			expect.objectContaining({
+				timestamp: "2026-04-08T12:00:00.000Z",
+				validAt: "2026-04-08T12:00:00.000Z",
+				invalidAt: "2026-04-09T12:00:00.000Z",
+			}),
+		)
 	})
 
 	it("returns a tool execution error when semantic recall alias receives invalid roles", async () => {

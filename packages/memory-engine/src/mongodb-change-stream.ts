@@ -18,6 +18,7 @@ export type ChangeStreamCallback = (event: {
 	paths: string[]
 	timestamp: Date
 	resumeToken?: unknown
+	gapDetected?: { reason: string; from: "startup" | "midstream" }
 }) => void
 
 /**
@@ -33,6 +34,8 @@ export class MongoDBChangeStreamWatcher {
 	private pendingPaths: Set<string> = new Set()
 	private pendingOpType: string = "unknown"
 	private closed = false
+	private _reopenAttempts = 0
+	private static readonly MAX_REOPEN_ATTEMPTS = 3
 	/**
 	 * F21: Last resume token for reconnection after restart.
 	 * The manager can persist this token externally across restarts.
@@ -52,7 +55,8 @@ export class MongoDBChangeStreamWatcher {
 
 	/**
 	 * F21: Open the change stream. Accepts an optional resumeAfter token
-	 * to resume from a previously persisted position.
+	 * to resume from a previously persisted position. If the token is stale
+	 * (oplog rotated past it), re-opens from now and signals a gap.
 	 * Returns false if change streams are not supported (standalone MongoDB).
 	 */
 	async start(resumeAfter?: unknown): Promise<boolean> {
@@ -61,41 +65,8 @@ export class MongoDBChangeStreamWatcher {
 		}
 
 		try {
-			// Filter to relevant operation types only
-			const watchOpts: Record<string, unknown> = {
-				fullDocument: "updateLookup",
-			}
-			if (resumeAfter) {
-				watchOpts.resumeAfter = resumeAfter
-			}
-
-			this.stream = this.collection.watch(
-				[
-					{
-						$match: {
-							operationType: { $in: ["insert", "update", "replace", "delete"] },
-						},
-					},
-				],
-				watchOpts,
-			)
-
-			this.stream.on("change", (change: ChangeStreamDocument) => {
-				this.handleChange(change)
-			})
-
-			this.stream.on("error", (err: Error) => {
-				const msg = err.message ?? String(err)
-				if (isChangeStreamNotSupported(msg)) {
-					log.info(
-						"change streams not supported (standalone topology), closing watcher",
-					)
-					void this.close()
-				} else {
-					log.warn(`change stream error: ${msg}`)
-				}
-			})
-
+			this.stream = this.openStream({ resumeAfter })
+			this.attachStreamHandlers()
 			log.info("change stream started")
 			return true
 		} catch (err) {
@@ -104,9 +75,121 @@ export class MongoDBChangeStreamWatcher {
 				log.info("change streams not supported (standalone topology)")
 				return false
 			}
+			if (isResumeTokenInvalid(err)) {
+				log.info("resume token stale at startup, re-opening from now")
+				return this.reopenFromNow("startup")
+			}
 			log.warn(`failed to start change stream: ${msg}`)
 			return false
 		}
+	}
+
+	/**
+	 * Open the change stream with the given resume strategy. Returns the stream
+	 * (does not attach handlers — caller calls attachStreamHandlers).
+	 */
+	private openStream(options: {
+		resumeAfter?: unknown
+		startAtOperationTime?: Date
+	}): ChangeStream<Document, ChangeStreamDocument> {
+		const watchOpts: Record<string, unknown> = {
+			fullDocument: "updateLookup",
+		}
+		if (options.resumeAfter) {
+			watchOpts.resumeAfter = options.resumeAfter
+		} else if (options.startAtOperationTime) {
+			watchOpts.startAtOperationTime = options.startAtOperationTime
+		}
+		return this.collection.watch(
+			[
+				{
+					$match: {
+						operationType: { $in: ["insert", "update", "replace", "delete"] },
+					},
+				},
+			],
+			watchOpts,
+		)
+	}
+
+	private attachStreamHandlers(): void {
+		if (!this.stream) {
+			return
+		}
+		this.stream.on("change", (change: ChangeStreamDocument) => {
+			this.handleChange(change)
+		})
+		this.stream.on("error", (err: Error) => {
+			const msg = err.message ?? String(err)
+			if (isChangeStreamNotSupported(msg)) {
+				log.info(
+					"change streams not supported (standalone topology), closing watcher",
+				)
+				void this.close()
+			} else if (isResumeTokenInvalid(err)) {
+				log.info("resume token invalid mid-stream, re-opening from now")
+				void this.reopenFromNow("midstream")
+			} else {
+				log.warn(`change stream error: ${msg}`)
+			}
+		})
+	}
+
+	/**
+	 * Re-open the stream from the current time after a stale/invalid resume token.
+	 * Emits a gapDetected signal so the manager can trigger a full re-scan of
+	 * affected paths. Caps re-open attempts to MAX_REOPEN_ATTEMPTS to avoid a
+	 * tight crash loop; after the cap, closes gracefully.
+	 */
+	private reopenFromNow(from: "startup" | "midstream"): boolean {
+		if (this.closed) {
+			return false
+		}
+		if (
+			this._reopenAttempts >= MongoDBChangeStreamWatcher.MAX_REOPEN_ATTEMPTS
+		) {
+			log.warn("change stream re-open cap reached, closing watcher")
+			void this.close()
+			return false
+		}
+		this._reopenAttempts++
+
+		// Close the old stream in the background (don't block the re-open).
+		if (this.stream) {
+			void this.stream.close().catch(() => {
+				// Ignore close errors on the old stream.
+			})
+			this.stream = null
+		}
+
+		try {
+			this.stream = this.openStream({ startAtOperationTime: new Date() })
+			this.attachStreamHandlers()
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err)
+			log.warn(`failed to re-open change stream from now: ${msg}`)
+			return false
+		}
+
+		// Signal the gap so the manager can trigger a full re-scan.
+		try {
+			this.callback({
+				operationType: "gap_detected",
+				paths: [],
+				timestamp: new Date(),
+				resumeToken: this._lastResumeToken,
+				gapDetected: { reason: "stale resume token", from },
+			})
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err)
+			log.warn(`gap signal callback error: ${msg}`)
+		}
+
+		// Reset the re-open counter — this re-open succeeded, so a future
+		// stale-token event should get a fresh budget of attempts.
+		this._reopenAttempts = 0
+		log.info(`change stream re-opened from now (${from})`)
+		return true
 	}
 
 	private handleChange(change: ChangeStreamDocument): void {
@@ -203,5 +286,22 @@ function isChangeStreamNotSupported(msg: string): boolean {
 		msg.includes("The $changeStream stage is only supported") ||
 		msg.includes("not replicated") ||
 		msg.includes("not a replica set")
+	)
+}
+
+/**
+ * Detect a stale or invalid resume token — the oplog has rotated past the
+ * token's position, so the stream cannot resume from it. MongoDB surfaces this
+ * as "Resume Token Not Found" or an oplog/CappedPositionLost-style message.
+ * The fix is to re-open the stream from the current time (startAtOperationTime)
+ * and signal a gap so the manager can trigger a full re-scan.
+ */
+export function isResumeTokenInvalid(error: unknown): boolean {
+	const msg = error instanceof Error ? error.message : String(error)
+	return (
+		msg.includes("Resume Token Not Found") ||
+		msg.includes("CappedPositionLost") ||
+		msg.includes("oplog was overrun") ||
+		msg.includes("cannot resume stream")
 	)
 }

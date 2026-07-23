@@ -136,6 +136,24 @@ describe("decomposeQuery", () => {
 		expect(result.subQueries).toEqual(["test"])
 	})
 
+	test("reports a failed provider attempt before falling back", async () => {
+		const provider: EnrichmentProvider = {
+			name: "mock",
+			chatCompletion: vi.fn().mockRejectedValue(new Error("provider down")),
+		}
+		const outcomes: Array<"attempted" | "succeeded" | "failed"> = []
+
+		const result = await decomposeQuery({
+			provider,
+			model: "gpt-4o-mini",
+			query: "test",
+			onProviderCall: (outcome) => outcomes.push(outcome),
+		})
+
+		expect(result.subQueries).toEqual(["test"])
+		expect(outcomes).toEqual(["attempted", "failed"])
+	})
+
 	test("strips markdown fences before parsing", async () => {
 		const provider = mockProvider('```json\n{"sub_queries": ["q1", "q2"]}\n```')
 

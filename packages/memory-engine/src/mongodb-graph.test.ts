@@ -154,6 +154,34 @@ describe("mongodb-graph", () => {
 	})
 
 	describe("upsertRelation", () => {
+		it("uses one majority transaction for relation identity and exclusivity", async () => {
+			const relationsCol = createMockCollection()
+			const db = createMockDb({ [`${PREFIX}relations`]: relationsCol })
+			const withTransaction = vi.fn(async (fn: () => Promise<void>) => fn())
+			const session = { withTransaction, endSession: vi.fn(async () => {}) }
+			const client = { startSession: vi.fn(() => session) }
+
+			await upsertRelation({
+				db,
+				prefix: PREFIX,
+				relation: makeRelation(),
+				client: client as unknown as import("mongodb").MongoClient,
+			})
+
+			expect(withTransaction).toHaveBeenCalledWith(expect.any(Function), {
+				writeConcern: { w: "majority" },
+			})
+			expect(relationsCol.findOne).toHaveBeenCalledWith(expect.any(Object), {
+				session,
+			})
+			expect(relationsCol.updateOne).toHaveBeenCalledWith(
+				expect.any(Object),
+				expect.any(Object),
+				{ upsert: true, session },
+			)
+			expect(session.endSession).toHaveBeenCalledOnce()
+		})
+
 		it("creates a relation between two entities", async () => {
 			const relationsCol = createMockCollection()
 			const db = createMockDb({ [`${PREFIX}relations`]: relationsCol })
@@ -189,6 +217,7 @@ describe("mongodb-graph", () => {
 				relation: makeRelation({
 					sourceEventIds: ["evt-1"],
 				}),
+				eventReceiptIds: ["evt-replayed"],
 			})
 
 			const [, update] = (relationsCol.updateOne as ReturnType<typeof vi.fn>)
@@ -233,6 +262,62 @@ describe("mongodb-graph", () => {
 				.mock.calls[0]
 			expect(update.$inc.reinforcementCount).toBe(1)
 			expect(update.$set.lastConfirmedAt).toBeInstanceOf(Date)
+		})
+
+		it("does not replay relation or ownership side effects for the same source event", async () => {
+			const relationsCol = createMockCollection({
+				findOne: vi.fn().mockResolvedValue({
+					fromEntityId: "ent-bob",
+					toEntityId: "ent-phoenix",
+					type: "owns",
+					agentId: "agent-1",
+					scope: "agent",
+					scopeRef: "agent:agent-1",
+					state: "active",
+					sourceEventIds: ["evt-replayed"],
+				}),
+			})
+			const db = createMockDb({ [`${PREFIX}relations`]: relationsCol })
+
+			const result = await upsertRelation({
+				db,
+				prefix: PREFIX,
+				relation: makeRelation({
+					fromEntityId: "ent-bob",
+					toEntityId: "ent-phoenix",
+					type: "owns",
+					sourceEventIds: ["evt-replayed"],
+				}),
+			})
+
+			expect(result).toEqual({ upserted: false })
+			expect(relationsCol.updateMany).not.toHaveBeenCalled()
+			expect(relationsCol.updateOne).not.toHaveBeenCalled()
+		})
+
+		it("accumulates source-event evidence when a new event confirms a relation", async () => {
+			const relationsCol = createMockCollection({
+				findOne: vi.fn().mockResolvedValue({
+					fromEntityId: "ent-1",
+					toEntityId: "ent-2",
+					type: "works_on",
+					agentId: "agent-1",
+					scope: "agent",
+					scopeRef: "agent:agent-1",
+					state: "active",
+					sourceEventIds: ["evt-first"],
+				}),
+			})
+			const db = createMockDb({ [`${PREFIX}relations`]: relationsCol })
+
+			await upsertRelation({
+				db,
+				prefix: PREFIX,
+				relation: makeRelation({ sourceEventIds: ["evt-second"] }),
+			})
+
+			const update = vi.mocked(relationsCol.updateOne).mock.calls[0]?.[1]
+			expect(update?.$set.sourceEventIds).toEqual(["evt-first", "evt-second"])
 		})
 
 		it("invalidates stale active owns relations when ownership changes", async () => {
@@ -1527,7 +1612,7 @@ describe("mongodb-graph", () => {
 
 	describe("Entity Registry Phase 3.4", () => {
 		describe("mentionCount $inc on entity upsert", () => {
-			it("uses $inc mentionCount:1 in bulkWrite entity upserts", async () => {
+			it("uses $inc when no source event idempotency key is available", async () => {
 				const entitiesCol = createMockCollection()
 				const relationsCol = createMockCollection()
 				const entityLinksCol = createMockCollection()
@@ -1543,7 +1628,6 @@ describe("mongodb-graph", () => {
 					agentId: "agent-1",
 					eventContent: "@alice works on the project",
 					scope: "agent",
-					sourceEventId: "ev1",
 				})
 
 				const bulkCalls = (entitiesCol.bulkWrite as ReturnType<typeof vi.fn>)

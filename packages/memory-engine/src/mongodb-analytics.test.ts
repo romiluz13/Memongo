@@ -80,6 +80,8 @@ describe("getMemoryStats", () => {
 			success: 0,
 			failed: 0,
 			pending: 0,
+			unknown: 0,
+			basis: "stored-vector",
 		})
 		expect(stats.collectionSizes.files).toBe(0)
 		expect(stats.collectionSizes.chunks).toBe(0)
@@ -120,6 +122,131 @@ describe("getMemoryStats", () => {
 			success: 11,
 			failed: 0,
 			pending: 5,
+			unknown: 0,
+			basis: "stored-vector",
+		})
+	})
+
+	it("#26: derives automated embedding coverage from queryable Search index documents", async () => {
+		;(mockFiles.aggregate as ReturnType<typeof vi.fn>).mockReturnValue({
+			toArray: vi.fn(async () => []),
+		})
+		;(mockChunks.countDocuments as ReturnType<typeof vi.fn>).mockResolvedValue(
+			10,
+		)
+		;(
+			mockKbChunks.countDocuments as ReturnType<typeof vi.fn>
+		).mockResolvedValue(4)
+		;(
+			mockStructuredMem.countDocuments as ReturnType<typeof vi.fn>
+		).mockResolvedValue(2)
+
+		const searchIndexCounts = new Map([
+			["test_chunks_vector", 8],
+			["test_kb_chunks_vector", 1],
+			["test_structured_mem_vector", 2],
+		])
+		for (const col of [mockChunks, mockKbChunks, mockStructuredMem]) {
+			;(col.aggregate as ReturnType<typeof vi.fn>).mockImplementation(
+				(pipeline: Array<Record<string, unknown>>) => ({
+					toArray: vi.fn(async () => {
+						const list = pipeline[0]?.$listSearchIndexes as
+							| { name?: string }
+							| undefined
+						if (list?.name) {
+							return [
+								{
+									name: list.name,
+									status: "READY",
+									queryable: true,
+									numDocs: searchIndexCounts.get(list.name),
+									latestDefinition: {
+										fields: [{ type: "autoEmbed", path: "text" }],
+									},
+								},
+							]
+						}
+						return []
+					}),
+				}),
+			)
+		}
+
+		const stats = await getMemoryStats(db, "test_", undefined, {
+			embeddingMode: "automated",
+		})
+
+		expect(stats.embeddingCoverage).toEqual({
+			withEmbedding: 8,
+			withoutEmbedding: 2,
+			unknown: 0,
+			total: 10,
+			coveragePercent: 80,
+			basis: "search-index",
+		})
+		expect(stats.embeddingStatusCoverage).toEqual({
+			total: 16,
+			success: 11,
+			failed: 0,
+			pending: 5,
+			unknown: 0,
+			basis: "search-index",
+		})
+	})
+
+	it("#26: reports automated coverage as unknown when Search index counts are not observable", async () => {
+		;(mockFiles.aggregate as ReturnType<typeof vi.fn>).mockReturnValue({
+			toArray: vi.fn(async () => []),
+		})
+		;(mockChunks.countDocuments as ReturnType<typeof vi.fn>).mockResolvedValue(
+			10,
+		)
+		;(
+			mockKbChunks.countDocuments as ReturnType<typeof vi.fn>
+		).mockResolvedValue(4)
+		;(
+			mockStructuredMem.countDocuments as ReturnType<typeof vi.fn>
+		).mockResolvedValue(2)
+		for (const col of [mockChunks, mockKbChunks, mockStructuredMem]) {
+			;(col.aggregate as ReturnType<typeof vi.fn>).mockImplementation(
+				(pipeline: Array<Record<string, unknown>>) => ({
+					toArray: vi.fn(async () => {
+						if (pipeline[0]?.$listSearchIndexes) {
+							return [
+								{
+									status: "READY",
+									queryable: true,
+									latestDefinition: {
+										fields: [{ type: "autoEmbed", path: "text" }],
+									},
+								},
+							]
+						}
+						return []
+					}),
+				}),
+			)
+		}
+
+		const stats = await getMemoryStats(db, "test_", undefined, {
+			embeddingMode: "automated",
+		})
+
+		expect(stats.embeddingCoverage).toMatchObject({
+			withEmbedding: 0,
+			withoutEmbedding: 0,
+			unknown: 10,
+			total: 10,
+			coveragePercent: null,
+			basis: "search-index",
+		})
+		expect(stats.embeddingStatusCoverage).toMatchObject({
+			total: 16,
+			success: 0,
+			failed: 0,
+			pending: 0,
+			unknown: 16,
+			basis: "search-index",
 		})
 	})
 

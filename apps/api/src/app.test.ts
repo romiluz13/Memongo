@@ -56,6 +56,7 @@ describe("createApp", () => {
 
 	beforeEach(() => {
 		process.env = { ...prevEnv }
+		process.env.MEMONGO_ALLOW_INSECURE_NO_AUTH = "true"
 		bridgeMocks.memongoBridgeSearch.mockReset()
 		bridgeMocks.memongoBridgeSearchDetailed.mockReset()
 		bridgeMocks.memongoBridgeAdd.mockReset()
@@ -450,7 +451,9 @@ describe("createApp", () => {
 
 	it("serves the OpenAPI document without auth", async () => {
 		const res = await createApp().request("/openapi.json")
-		const json = (await res.json()) as { paths?: Record<string, unknown> }
+		const json = (await res.json()) as {
+			paths?: Record<string, unknown>
+		}
 
 		expect(res.status).toBe(200)
 		for (const path of contractFixtures.corePaths) {
@@ -477,6 +480,57 @@ describe("createApp", () => {
 				?.schema?.properties?.benchmarkReport
 		expect(benchmarkReport?.required).toEqual(
 			expect.arrayContaining(["releaseGates", "warnings", "degradations"]),
+		)
+		const reportProperties = benchmarkReport as {
+			properties?: {
+				corpus?: {
+					properties?: { execution?: { required?: string[] } }
+				}
+				releaseGates?: {
+					items?: { properties?: Record<string, unknown> }
+				}
+			}
+		}
+		expect(
+			reportProperties.properties?.corpus?.properties?.execution?.required,
+		).toEqual(
+			expect.arrayContaining([
+				"retrievalEligibleCases",
+				"abstentionCases",
+				"missingJudgmentCases",
+			]),
+		)
+		expect(
+			reportProperties.properties?.releaseGates?.items?.properties,
+		).toHaveProperty("checks")
+
+		const requestSchema = benchmarkPath.post as {
+			requestBody?: {
+				content?: {
+					"application/json"?: {
+						schema?: {
+							properties?: Record<
+								string,
+								{ oneOf?: Array<{ required?: string[] }> }
+							>
+						}
+					}
+				}
+			}
+		}
+		const thresholdVariants =
+			requestSchema.requestBody?.content?.["application/json"]?.schema
+				?.properties?.qualityThresholds?.oneOf
+		expect(thresholdVariants).toHaveLength(2)
+		expect(thresholdVariants?.[0]?.required).toContain(
+			"minSessionRecallAnyAt10",
+		)
+		expect(thresholdVariants?.[1]?.required).toEqual(
+			expect.arrayContaining([
+				"minAnswerAccuracy",
+				"maxJudgeFalsePositiveRate",
+				"minAnswerCoverage",
+			]),
 		)
 	})
 
@@ -998,6 +1052,30 @@ describe("createApp", () => {
 		expect(bridgeMocks.memongoBridgeStats).toHaveBeenCalledOnce()
 	})
 
+	it("server-file import: rejects every scoped API key", async () => {
+		process.env.MEMONGO_API_KEY = ""
+		process.env.MEMONGO_API_SCOPED_KEYS = JSON.stringify([
+			{ token: "scoped-A", agentIds: ["agent-A"] },
+		])
+		bridgeMocks.memongoBridgeImportConversations.mockReset()
+		bridgeMocks.memongoBridgeImportConversations.mockResolvedValue({})
+
+		const res = await createApp().request(
+			"/v1/import/conversations?agentId=agent-A",
+			{
+				method: "POST",
+				headers: {
+					Authorization: "Bearer scoped-A",
+					"Content-Type": "application/json",
+				},
+				body: JSON.stringify({ datasetPath: "benchmarks/private.jsonl" }),
+			},
+		)
+
+		expect(res.status).toBe(403)
+		expect(bridgeMocks.memongoBridgeImportConversations).not.toHaveBeenCalled()
+	})
+
 	it("class-G guard does not block scope-constrained keys on tenant-scoped routes (search)", async () => {
 		process.env.MEMONGO_API_KEY = ""
 		process.env.MEMONGO_API_SCOPED_KEYS = JSON.stringify([
@@ -1043,6 +1121,35 @@ describe("createApp", () => {
 		).not.toThrow()
 	})
 
+	it("scope isolation: rejects malformed supplied policy dimensions instead of dropping them", () => {
+		expect(() =>
+			parseScopedApiKeyPolicies(
+				JSON.stringify([
+					{
+						token: "k",
+						agentIds: ["agent-A"],
+						scopeRefs: "ref-A",
+					},
+				]),
+			),
+		).toThrow(/scopeRefs/i)
+	})
+
+	it("scope isolation: wildcard-only scoped policies do not count as constrained", () => {
+		expect(() =>
+			parseScopedApiKeyPolicies(
+				JSON.stringify([
+					{
+						token: "k",
+						agentIds: ["*"],
+						scopes: ["*"],
+						scopeRefs: ["*"],
+					},
+				]),
+			),
+		).toThrow(/concrete/i)
+	})
+
 	it("#28: rate-limits per identity and returns 429 with Retry-After", async () => {
 		process.env.MEMONGO_API_KEY = ""
 		process.env.MEMONGO_API_SCOPED_KEYS = ""
@@ -1058,6 +1165,18 @@ describe("createApp", () => {
 		expect(second.headers.get("Retry-After")).toBeTruthy()
 		const body = (await second.json()) as { error: { code: string } }
 		expect(body.error.code).toBe("RATE_LIMITED")
+	})
+
+	it("#28: rejects a zero-length rate window instead of disabling enforcement", async () => {
+		process.env.MEMONGO_API_KEY = ""
+		process.env.MEMONGO_API_SCOPED_KEYS = ""
+		process.env.MEMONGO_API_RATE_LIMIT = "1"
+		process.env.MEMONGO_API_RATE_WINDOW_MS = "0"
+		bridgeMocks.memongoBridgeStatus.mockResolvedValue({ ok: true })
+
+		const app = createApp()
+		expect((await app.request("/v1/status")).status).toBe(200)
+		expect((await app.request("/v1/status")).status).toBe(429)
 	})
 
 	it("#28: rate limiting can be disabled with MEMONGO_API_RATE_LIMIT=0", async () => {
@@ -1090,6 +1209,63 @@ describe("createApp", () => {
 			headers: { "X-Forwarded-For": "2.2.2.2" },
 		})
 		expect(second.status).toBe(429)
+	})
+
+	it("#28: rotating unvalidated bearer tokens cannot evade the pre-auth rate limit", async () => {
+		process.env.MEMONGO_API_KEY = "valid-admin-key"
+		process.env.MEMONGO_API_SCOPED_KEYS = ""
+		process.env.MEMONGO_API_RATE_LIMIT = "1"
+		process.env.MEMONGO_TRUST_PROXY = ""
+
+		const app = createApp()
+		const first = await app.request("/v1/status", {
+			headers: { Authorization: "Bearer attacker-token-a" },
+		})
+		expect(first.status).toBe(401)
+		const second = await app.request("/v1/status", {
+			headers: { Authorization: "Bearer attacker-token-b" },
+		})
+		expect(second.status).toBe(429)
+	})
+
+	it("#28: validated credentials receive separate rate-limit buckets", async () => {
+		process.env.MEMONGO_API_KEY = "admin-key"
+		process.env.MEMONGO_API_SCOPED_KEYS = JSON.stringify([
+			{ token: "scoped-A", agentIds: ["agent-A"] },
+			{ token: "scoped-B", agentIds: ["agent-B"] },
+		])
+		process.env.MEMONGO_API_RATE_LIMIT = "1"
+		process.env.MEMONGO_TRUST_PROXY = ""
+
+		const app = createApp()
+		expect(
+			(
+				await app.request("/v1/status", {
+					headers: { Authorization: "Bearer invalid-key" },
+				})
+			).status,
+		).toBe(401)
+		expect(
+			(
+				await app.request("/v1/status", {
+					headers: { Authorization: "Bearer admin-key" },
+				})
+			).status,
+		).toBe(200)
+		for (const [key, agentId] of [
+			["scoped-A", "agent-A"],
+			["scoped-B", "agent-B"],
+		] as const) {
+			const res = await app.request("/v1/search", {
+				method: "POST",
+				headers: {
+					Authorization: `Bearer ${key}`,
+					"Content-Type": "application/json",
+				},
+				body: JSON.stringify({ agentId, query: "hello" }),
+			})
+			expect(res.status).toBe(200)
+		}
 	})
 
 	it("#28: keys rate limiting per forwarded IP when MEMONGO_TRUST_PROXY is enabled", async () => {
@@ -1150,7 +1326,62 @@ describe("createApp", () => {
 		expect(bridgeMocks.memongoBridgeSearch).not.toHaveBeenCalled()
 	})
 
-	it("logs a prominent warning once when API auth is disabled", async () => {
+	it("#28: caps streamed request bodies without a Content-Length header", async () => {
+		process.env.MEMONGO_API_KEY = ""
+		process.env.MEMONGO_API_SCOPED_KEYS = ""
+		process.env.MEMONGO_API_RATE_LIMIT = "0"
+		process.env.MEMONGO_API_MAX_BODY_BYTES = "50"
+
+		const payload = new TextEncoder().encode(
+			JSON.stringify({ query: "x".repeat(5000) }),
+		)
+		const body = new ReadableStream<Uint8Array>({
+			start(controller) {
+				controller.enqueue(payload)
+				controller.close()
+			},
+		})
+		const request = new Request("http://localhost/v1/search", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body,
+			duplex: "half",
+		} as RequestInit & { duplex: "half" })
+
+		const res = await createApp().request(request)
+
+		expect(res.status).toBe(413)
+		expect(await res.json()).toEqual({
+			error: {
+				code: "PAYLOAD_TOO_LARGE",
+				message: "request body exceeds the configured size limit",
+			},
+		})
+		expect(bridgeMocks.memongoBridgeSearch).not.toHaveBeenCalled()
+	})
+
+	it("denies v1 by default when no API credentials are configured", async () => {
+		process.env.MEMONGO_API_KEY = ""
+		process.env.MEMONGO_API_SCOPED_KEYS = ""
+		delete process.env.MEMONGO_ALLOW_INSECURE_NO_AUTH
+
+		const res = await createApp().request("/v1/search", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ query: "must not execute", agentId: "main" }),
+		})
+
+		expect(res.status).toBe(401)
+		await expect(res.json()).resolves.toEqual({
+			error: {
+				code: "AUTH_NOT_CONFIGURED",
+				message: "API authentication is required",
+			},
+		})
+		expect(bridgeMocks.memongoBridgeSearch).not.toHaveBeenCalled()
+	})
+
+	it("allows explicit unauthenticated local development and warns once", async () => {
 		const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
 		try {
 			const { resetUnauthenticatedApiWarningForTests } = await import(
@@ -1162,10 +1393,40 @@ describe("createApp", () => {
 			createApp()
 
 			expect(warn).toHaveBeenCalledTimes(1)
-			expect(warn.mock.calls[0]?.[0]).toContain("MEMONGO_API_KEY is not set")
+			expect(warn.mock.calls[0]?.[0]).toContain(
+				"MEMONGO_ALLOW_INSECURE_NO_AUTH",
+			)
 		} finally {
 			warn.mockRestore()
 		}
+	})
+
+	it("does not emit CORS headers without an explicit origin allowlist", async () => {
+		delete process.env.MEMONGO_CORS_ORIGINS
+
+		const res = await createApp().request("/health", {
+			headers: { Origin: "https://attacker.example" },
+		})
+
+		expect(res.headers.get("Access-Control-Allow-Origin")).toBeNull()
+	})
+
+	it("emits CORS headers only for configured origins", async () => {
+		process.env.MEMONGO_CORS_ORIGINS =
+			"https://console.example, https://admin.example"
+		const app = createApp()
+
+		const allowed = await app.request("/health", {
+			headers: { Origin: "https://console.example" },
+		})
+		const denied = await app.request("/health", {
+			headers: { Origin: "https://attacker.example" },
+		})
+
+		expect(allowed.headers.get("Access-Control-Allow-Origin")).toBe(
+			"https://console.example",
+		)
+		expect(denied.headers.get("Access-Control-Allow-Origin")).toBeNull()
 	})
 
 	it("does not warn when admin or scoped API auth is configured", async () => {
@@ -1481,6 +1742,68 @@ describe("createApp", () => {
 				scopeRef: "session:session-9",
 			}),
 		)
+	})
+
+	it("forwards write-event validity bounds when provided", async () => {
+		const res = await createApp().request("/v1/write-event", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				role: "assistant",
+				body: "historically valid memory",
+				validAt: "2026-04-09T12:00:00.000Z",
+				invalidAt: "2026-04-10T12:00:00.000Z",
+			}),
+		})
+
+		expect(res.status).toBe(200)
+		expect(
+			bridgeMocks.memongoBridgeWriteConversationEvent,
+		).toHaveBeenCalledWith(
+			expect.objectContaining({
+				validAt: "2026-04-09T12:00:00.000Z",
+				invalidAt: "2026-04-10T12:00:00.000Z",
+			}),
+		)
+	})
+
+	it.each([
+		"timestamp",
+		"validAt",
+		"invalidAt",
+	])("rejects an invalid write-event %s", async (field) => {
+		const res = await createApp().request("/v1/write-event", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				role: "assistant",
+				body: "invalid dated memory",
+				[field]: "not-a-date",
+			}),
+		})
+
+		expect(res.status).toBe(400)
+		expect(
+			bridgeMocks.memongoBridgeWriteConversationEvent,
+		).not.toHaveBeenCalled()
+	})
+
+	it("rejects a write-event validity window that does not advance", async () => {
+		const res = await createApp().request("/v1/write-event", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				role: "assistant",
+				body: "invalid validity window",
+				validAt: "2026-04-10T12:00:00.000Z",
+				invalidAt: "2026-04-10T12:00:00.000Z",
+			}),
+		})
+
+		expect(res.status).toBe(400)
+		expect(
+			bridgeMocks.memongoBridgeWriteConversationEvent,
+		).not.toHaveBeenCalled()
 	})
 
 	it("rejects invalid scope values before calling the bridge", async () => {
@@ -2151,7 +2474,7 @@ describe("createApp", () => {
 		})
 	})
 
-	it("accepts datasetSha256, embeddingConfig, and rerankerConfig in benchmark body (Task 1.A)", async () => {
+	it("accepts benchmark identity, model declarations, and quality thresholds", async () => {
 		const res = await createApp().request("/v1/admin/relevance/benchmark", {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
@@ -2169,6 +2492,18 @@ describe("createApp", () => {
 					model: "rerank-2",
 					version: null,
 					stage: "post-fusion",
+				},
+				qualityThresholds: {
+					contractId: "longmemeval-release",
+					version: "1",
+					datasetKind: "longmemeval",
+					minHitRate: 0.8,
+					maxEmptyRate: 0.2,
+					minRAt5: 0.75,
+					minNdcgAt10: 0.7,
+					maxP95LatencyMs: 500,
+					minSessionRecallAnyAt10: 0.8,
+					minSessionNdcgAnyAt10: 0.8,
 				},
 			}),
 		})
@@ -2189,6 +2524,18 @@ describe("createApp", () => {
 					model: "rerank-2",
 					version: null,
 					stage: "post-fusion",
+				},
+				qualityThresholds: {
+					contractId: "longmemeval-release",
+					version: "1",
+					datasetKind: "longmemeval",
+					minHitRate: 0.8,
+					maxEmptyRate: 0.2,
+					minRAt5: 0.75,
+					minNdcgAt10: 0.7,
+					maxP95LatencyMs: 500,
+					minSessionRecallAnyAt10: 0.8,
+					minSessionNdcgAnyAt10: 0.8,
 				},
 			}),
 		)
@@ -2665,6 +3012,7 @@ describe("createApp", () => {
 				roles: ["assistant"],
 				startTime: "2026-04-08",
 				endTime: "2026-04-08",
+				asOf: "2026-04-09T12:00:00.000Z",
 				timezone: "America/New_York",
 				includeToolMessages: true,
 				limit: 3,
@@ -2701,15 +3049,29 @@ describe("createApp", () => {
 		})
 		expect(bridgeMocks.memongoBridgeRecallConversation).toHaveBeenCalledWith({
 			agentId: "agent-42",
+			scope: undefined,
+			scopeRef: undefined,
 			query: "phoenix",
 			sessionId: "session-9",
 			roles: ["assistant"],
 			startTime: "2026-04-08",
 			endTime: "2026-04-08",
+			asOf: "2026-04-09T12:00:00.000Z",
 			timezone: "America/New_York",
 			includeToolMessages: true,
 			limit: 3,
 		})
+	})
+
+	it("rejects an invalid recall-conversation asOf", async () => {
+		const res = await createApp().request("/v1/recall-conversation", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ asOf: "not-a-date" }),
+		})
+
+		expect(res.status).toBe(400)
+		expect(bridgeMocks.memongoBridgeRecallConversation).not.toHaveBeenCalled()
 	})
 
 	it("gets lifecycle item by stable handle", async () => {
@@ -3098,7 +3460,7 @@ describe("createApp", () => {
 		expect(json.error.code).toBe("EVENT_NOT_FOUND")
 	})
 
-	it("scope isolation: novelty-scan, consolidate, extract, import forward the authorized scopeRef", async () => {
+	it("scope isolation: novelty-scan, consolidate, and extract forward the authorized scopeRef", async () => {
 		process.env.MEMONGO_API_KEY = ""
 		process.env.MEMONGO_API_SCOPED_KEYS = JSON.stringify([
 			{ token: "scoped-A", scopes: ["tenant"], scopeRefs: ["ref-A"] },
@@ -3107,7 +3469,6 @@ describe("createApp", () => {
 			bridgeMocks.memongoBridgeScanNovelty,
 			bridgeMocks.memongoBridgeConsolidate,
 			bridgeMocks.memongoBridgeExtractEvent,
-			bridgeMocks.memongoBridgeImportConversations,
 		]) {
 			mock.mockReset()
 			mock.mockResolvedValue({})
@@ -3133,12 +3494,6 @@ describe("createApp", () => {
 			headers,
 			body: JSON.stringify({ eventId: "evt-1" }),
 		})
-		await createApp().request(`/v1/import/conversations${base}`, {
-			method: "POST",
-			headers,
-			body: JSON.stringify({ datasetPath: "d.jsonl" }),
-		})
-
 		expect(
 			bridgeMocks.memongoBridgeScanNovelty.mock.calls[0]?.[0]?.scopeRef,
 		).toBe("ref-A")
@@ -3147,9 +3502,6 @@ describe("createApp", () => {
 		).toBe("ref-A")
 		expect(
 			bridgeMocks.memongoBridgeExtractEvent.mock.calls[0]?.[0]?.scopeRef,
-		).toBe("ref-A")
-		expect(
-			bridgeMocks.memongoBridgeImportConversations.mock.calls[0]?.[0]?.scopeRef,
 		).toBe("ref-A")
 	})
 
@@ -3173,6 +3525,30 @@ describe("createApp", () => {
 		expect(res.status).toBe(200)
 		const call = bridgeMocks.memongoBridgeSearchKB.mock.calls[0]?.[0]
 		expect(call?.scopeRef).toBe("ref-A")
+	})
+
+	it("scope isolation: search-kb rejects a scope-only policy that cannot constrain its scopeRef filter", async () => {
+		process.env.MEMONGO_API_KEY = ""
+		process.env.MEMONGO_API_SCOPED_KEYS = JSON.stringify([
+			{ token: "scoped-A", agentIds: ["agent-A"], scopes: ["agent"] },
+		])
+		bridgeMocks.memongoBridgeSearchKB.mockReset()
+		bridgeMocks.memongoBridgeSearchKB.mockResolvedValue([])
+
+		const res = await createApp().request(
+			"/v1/search-kb?agentId=agent-A&scope=agent&scopeRef=global",
+			{
+				method: "POST",
+				headers: {
+					Authorization: "Bearer scoped-A",
+					"Content-Type": "application/json",
+				},
+				body: JSON.stringify({ query: "hello" }),
+			},
+		)
+
+		expect(res.status).toBe(403)
+		expect(bridgeMocks.memongoBridgeSearchKB).not.toHaveBeenCalled()
 	})
 
 	it("scope isolation: recall-conversation forwards the authorized scope/scopeRef to the bridge", async () => {

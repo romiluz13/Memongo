@@ -543,6 +543,66 @@ describe("mongodb-derived-memory", () => {
 		expect(writeProcedure).toHaveBeenCalledTimes(1)
 	})
 
+	it("retries only the missing structured candidate after a partial failure", async () => {
+		const { writeStructuredMemory } = await import(
+			"./mongodb-structured-memory.js"
+		)
+		const writtenKeys = new Set<string>()
+		const structured = createMockCollection({
+			findOne: vi.fn(async (filter: Record<string, unknown>) =>
+				writtenKeys.has(String(filter.key)) ? { key: filter.key } : null,
+			),
+		})
+		const db = createMockDb({
+			test_structured_mem: structured,
+			test_procedures: createMockCollection(),
+		})
+		const failure = new Error("second candidate failed")
+		vi.mocked(writeStructuredMemory)
+			.mockImplementationOnce(async ({ entry }) => {
+				writtenKeys.add(entry.key)
+				return { upserted: true, id: entry.key }
+			})
+			.mockRejectedValueOnce(failure)
+			.mockImplementationOnce(async ({ entry }) => {
+				writtenKeys.add(entry.key)
+				return { upserted: true, id: entry.key }
+			})
+
+		const event = {
+			eventId: "evt-partial-candidates",
+			agentId: "agent-1",
+			role: "user" as const,
+			body: "Remember this: the launch blocker is active right now.",
+			timestamp: new Date("2026-03-21T10:00:00Z"),
+			scope: "agent" as const,
+			scopeRef: "agent:agent-1",
+		}
+
+		await expect(
+			promoteDerivedMemoryFromEvent({
+				db,
+				prefix: "test_",
+				embeddingMode: "automated",
+				event,
+			}),
+		).rejects.toBe(failure)
+		await expect(
+			promoteDerivedMemoryFromEvent({
+				db,
+				prefix: "test_",
+				embeddingMode: "automated",
+				event,
+			}),
+		).resolves.toEqual({
+			structuredCreated: 1,
+			proceduresCreated: 0,
+			skipped: false,
+		})
+		expect(writeStructuredMemory).toHaveBeenCalledTimes(3)
+		expect(writtenKeys.size).toBe(2)
+	})
+
 	it("logs projection-run failures instead of swallowing them silently", async () => {
 		const { recordProjectionRun } = await import("./mongodb-ops.js")
 		vi.mocked(recordProjectionRun).mockRejectedValue(

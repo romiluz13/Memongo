@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto"
-import type { Db, Document } from "mongodb"
+import type { ClientSession, Db, Document, MongoClient } from "mongodb"
 import { type MemoryScope, createSubsystemLogger } from "@memongo/lib"
 import {
 	type EntityExtractor,
@@ -24,6 +24,10 @@ import {
 	mergeQueryClauses,
 	resolveTemporalAsOf,
 } from "./mongodb-temporal.js"
+import {
+	isTransactionUnsupported,
+	MAJORITY_TRANSACTION_OPTIONS,
+} from "./mongodb-transactions.js"
 
 const log = createSubsystemLogger("memory:mongodb:graph")
 
@@ -160,6 +164,35 @@ function arraysEqual(
 	const a = left ?? []
 	const b = right ?? []
 	return a.length === b.length && a.every((value, index) => value === b[index])
+}
+
+function hasProcessedSourceEvents(
+	existing: Document,
+	sourceEventIds: string[] | undefined,
+): boolean {
+	if (!sourceEventIds || sourceEventIds.length === 0) {
+		return false
+	}
+	const existingIds = new Set(
+		Array.isArray(existing.sourceEventIds)
+			? existing.sourceEventIds.map((value) => String(value))
+			: [],
+	)
+	return sourceEventIds.every((eventId) => existingIds.has(eventId))
+}
+
+function mergeSourceEventIds(
+	existing: Document | null,
+	sourceEventIds: string[],
+): string[] {
+	return Array.from(
+		new Set([
+			...(existing && Array.isArray(existing.sourceEventIds)
+				? existing.sourceEventIds.map((value) => String(value))
+				: []),
+			...sourceEventIds,
+		]),
+	)
 }
 
 function hasRelationChanged(existing: Document, relation: Relation): boolean {
@@ -399,12 +432,13 @@ export async function upsertRelation(params: {
 	db: Db
 	prefix: string
 	relation: Relation
+	client?: MongoClient
+	session?: ClientSession
+	eventReceiptIds?: string[]
 }): Promise<{ upserted: boolean }> {
 	const { db, prefix, relation } = params
 	try {
 		const collection = relationsCollection(db, prefix)
-
-		const now = new Date()
 		const scopeRef = resolveScopeRef({
 			scope: relation.scope,
 			scopeRef: relation.scopeRef,
@@ -418,48 +452,62 @@ export async function upsertRelation(params: {
 			scope: relation.scope,
 			scopeRef,
 		}
-		const existing = await collection.findOne(identityFilter)
-		const state = relation.state ?? "active"
-		const sourceReliability = inferRelationSourceReliability(relation)
-		const lastConfirmedAt = relation.lastConfirmedAt ?? now
-		const reviewAt = inferRelationReviewAt(relation, now)
-		const setDoc: Document = {
-			fromEntityId: relation.fromEntityId,
-			toEntityId: relation.toEntityId,
-			type: relation.type,
-			agentId: relation.agentId,
-			scope: relation.scope,
-			scopeRef,
-			state,
-			sourceReliability,
-			lastConfirmedAt,
-			updatedAt: now,
+		type PersistOutcome = {
+			upserted: boolean
+			changed: boolean
+			setDoc: Document
+			existing: Document | null
 		}
-		if (relation.weight !== undefined) {
-			setDoc.weight = relation.weight
-		}
-		if (relation.confidence !== undefined) {
-			setDoc.confidence = relation.confidence
-		}
-		if (relation.metadata !== undefined) {
-			setDoc.metadata = relation.metadata
-		}
-		if (relation.provenance !== undefined) {
-			setDoc.provenance = relation.provenance
-		}
-		if (relation.sourceEventIds !== undefined) {
-			setDoc.sourceEventIds = relation.sourceEventIds
-		}
-		if (reviewAt !== undefined) {
-			setDoc.reviewAt = reviewAt
-		}
+		const persist = async (
+			session?: ClientSession,
+		): Promise<PersistOutcome> => {
+			const existing = session
+				? await collection.findOne(identityFilter, { session })
+				: await collection.findOne(identityFilter)
+			if (
+				existing &&
+				(hasProcessedSourceEvents(existing, params.eventReceiptIds) ||
+					hasProcessedSourceEvents(existing, relation.sourceEventIds))
+			) {
+				return { upserted: false, changed: false, setDoc: {}, existing }
+			}
 
-		let invalidatedRelationCount = 0
-		if (relation.type === "owns" && state === "active") {
-			// Write-side exclusivity cleanup intentionally targets all currently
-			// live competing relations; this is not an asOf historical read path.
-			const invalidation = await collection.updateMany(
-				{
+			const now = new Date()
+			const state = relation.state ?? "active"
+			const sourceReliability = inferRelationSourceReliability(relation)
+			const lastConfirmedAt = relation.lastConfirmedAt ?? now
+			const reviewAt = inferRelationReviewAt(relation, now)
+			const setDoc: Document = {
+				fromEntityId: relation.fromEntityId,
+				toEntityId: relation.toEntityId,
+				type: relation.type,
+				agentId: relation.agentId,
+				scope: relation.scope,
+				scopeRef,
+				state,
+				sourceReliability,
+				lastConfirmedAt,
+				updatedAt: now,
+			}
+			if (relation.weight !== undefined) setDoc.weight = relation.weight
+			if (relation.confidence !== undefined) {
+				setDoc.confidence = relation.confidence
+			}
+			if (relation.metadata !== undefined) setDoc.metadata = relation.metadata
+			if (relation.provenance !== undefined) {
+				setDoc.provenance = relation.provenance
+			}
+			if (relation.sourceEventIds !== undefined) {
+				setDoc.sourceEventIds = mergeSourceEventIds(
+					existing,
+					relation.sourceEventIds,
+				)
+			}
+			if (reviewAt !== undefined) setDoc.reviewAt = reviewAt
+
+			let invalidatedRelationCount = 0
+			if (relation.type === "owns" && state === "active") {
+				const filter = {
 					agentId: relation.agentId,
 					scope: relation.scope,
 					scopeRef,
@@ -467,8 +515,8 @@ export async function upsertRelation(params: {
 					toEntityId: relation.toEntityId,
 					fromEntityId: { $ne: relation.fromEntityId },
 					state: { $ne: "invalidated" },
-				},
-				{
+				}
+				const update = {
 					$set: {
 						state: "invalidated",
 						validTo: now,
@@ -481,83 +529,106 @@ export async function upsertRelation(params: {
 							reason: "exclusive-relation-replaced",
 						},
 					},
-				},
-			)
-			invalidatedRelationCount = invalidation.modifiedCount
-		}
-
-		let result:
-			| {
-					upsertedCount: number
-					matchedCount?: number
-			  }
-			| undefined
-		if (!existing) {
-			if (relation.validFrom !== undefined) {
-				setDoc.validFrom = relation.validFrom
-			} else {
-				setDoc.validFrom = now
-			}
-			setDoc.reinforcementCount = relation.reinforcementCount ?? 1
-			if (invalidatedRelationCount > 0) {
-				setDoc.supersedes = {
-					type: relation.type,
-					toEntityId: relation.toEntityId,
-					invalidatedRelationCount,
 				}
+				const invalidation = session
+					? await collection.updateMany(filter, update, { session })
+					: await collection.updateMany(filter, update)
+				invalidatedRelationCount = invalidation.modifiedCount
 			}
 
-			result = await collection.updateOne(
-				identityFilter,
-				{ $set: setDoc, $setOnInsert: { createdAt: now } },
-				{ upsert: true },
-			)
-		} else if (!hasRelationChanged(existing, relation)) {
-			const currentValidFrom =
-				existing.validFrom instanceof Date
-					? existing.validFrom
-					: existing.createdAt instanceof Date
-						? existing.createdAt
-						: now
-			result = await collection.updateOne(
-				identityFilter,
-				{
+			let update: Document
+			if (!existing) {
+				setDoc.validFrom = relation.validFrom ?? now
+				setDoc.reinforcementCount = relation.reinforcementCount ?? 1
+				if (invalidatedRelationCount > 0) {
+					setDoc.supersedes = {
+						type: relation.type,
+						toEntityId: relation.toEntityId,
+						invalidatedRelationCount,
+					}
+				}
+				update = { $set: setDoc, $setOnInsert: { createdAt: now } }
+			} else if (!hasRelationChanged(existing, relation)) {
+				const currentValidFrom =
+					existing.validFrom instanceof Date
+						? existing.validFrom
+						: existing.createdAt instanceof Date
+							? existing.createdAt
+							: now
+				update = {
 					$set: {
 						...setDoc,
 						validFrom: currentValidFrom,
 						lastConfirmedAt: now,
 					},
 					$inc: { reinforcementCount: 1 },
-				},
-				{ upsert: true },
-			)
-		} else {
-			setDoc.validFrom = now
-			setDoc.reinforcementCount = relation.reinforcementCount ?? 1
-			setDoc.supersedes = {
-				type: String(existing.type ?? relation.type),
-				fromEntityId: String(existing.fromEntityId ?? relation.fromEntityId),
-				toEntityId: String(existing.toEntityId ?? relation.toEntityId),
-				updatedAt:
-					existing.updatedAt instanceof Date
-						? existing.updatedAt.toISOString()
-						: undefined,
-			}
-			if (invalidatedRelationCount > 0) {
-				setDoc.supersedes = {
-					...(setDoc.supersedes as Record<string, unknown>),
-					invalidatedRelationCount,
 				}
+			} else {
+				setDoc.validFrom = now
+				setDoc.reinforcementCount = relation.reinforcementCount ?? 1
+				setDoc.supersedes = {
+					type: String(existing.type ?? relation.type),
+					fromEntityId: String(existing.fromEntityId ?? relation.fromEntityId),
+					toEntityId: String(existing.toEntityId ?? relation.toEntityId),
+					updatedAt:
+						existing.updatedAt instanceof Date
+							? existing.updatedAt.toISOString()
+							: undefined,
+				}
+				if (invalidatedRelationCount > 0) {
+					setDoc.supersedes = {
+						...(setDoc.supersedes as Record<string, unknown>),
+						invalidatedRelationCount,
+					}
+				}
+				update = { $set: setDoc, $setOnInsert: { createdAt: now } }
 			}
 
-			result = await collection.updateOne(
-				identityFilter,
-				{ $set: setDoc, $setOnInsert: { createdAt: now } },
-				{ upsert: true },
-			)
+			const result = await collection.updateOne(identityFilter, update, {
+				upsert: true,
+				...(session ? { session } : {}),
+			})
+			return {
+				upserted: result.upsertedCount > 0,
+				changed: true,
+				setDoc,
+				existing,
+			}
 		}
 
-		const upserted = (result?.upsertedCount ?? 0) > 0
+		const client = params.client
+		const outcome = params.session
+			? await persist(params.session)
+			: client
+				? await (async () => {
+						const session = client.startSession()
+						try {
+							let result: PersistOutcome | undefined
+							await session.withTransaction(async () => {
+								result = await persist(session)
+							}, MAJORITY_TRANSACTION_OPTIONS)
+							return (
+								result ?? {
+									upserted: false,
+									changed: false,
+									setDoc: {},
+									existing: null,
+								}
+							)
+						} catch (err) {
+							if (!isTransactionUnsupported(err)) throw err
+							log.info(
+								"transactions not supported for relation writes, falling back to direct writes",
+							)
+							return await persist()
+						} finally {
+							await session.endSession()
+						}
+					})()
+				: await persist()
+
+		if (!outcome.changed) return { upserted: false }
+		const upserted = outcome.upserted
 		log.info(
 			`relation ${upserted ? "created" : "updated"}: ${relation.fromEntityId} -[${relation.type}]-> ${relation.toEntityId}`,
 		)
@@ -572,8 +643,8 @@ export async function upsertRelation(params: {
 					documentId: `${relation.fromEntityId}:${relation.toEntityId}`,
 					operation: upserted ? "create" : "update",
 					agentId: relation.agentId,
-					oldValue: null,
-					newValue: setDoc,
+					oldValue: outcome.existing,
+					newValue: outcome.setDoc,
 					actorRole: "system",
 				},
 			}),
@@ -1418,10 +1489,62 @@ export async function extractAndUpsertEntities(params: {
 				addToSet.ambiguousFlags = entity.name.toLowerCase()
 			}
 
-			return {
-				updateOne: {
-					filter: { entityId: entity.entityId, agentId, scope, scopeRef },
-					update: {
+			const update = sourceEventId
+				? [
+						{
+							$set: {
+								...Object.fromEntries(
+									Object.entries(setDoc).map(([key, value]) => [
+										key,
+										{ $literal: value },
+									]),
+								),
+								mentionCount: {
+									$cond: [
+										{
+											$in: [
+												{ $literal: sourceEventId },
+												{ $ifNull: ["$sourceEventIds", []] },
+											],
+										},
+										{ $ifNull: ["$mentionCount", 0] },
+										{
+											$add: [{ $ifNull: ["$mentionCount", 0] }, 1],
+										},
+									],
+								},
+								sourceEventIds: {
+									$setUnion: [
+										{ $ifNull: ["$sourceEventIds", []] },
+										{ $literal: [sourceEventId] },
+									],
+								},
+								...(isAmbiguous
+									? {
+											ambiguousFlags: {
+												$setUnion: [
+													{ $ifNull: ["$ambiguousFlags", []] },
+													{ $literal: [entity.name.toLowerCase()] },
+												],
+											},
+										}
+									: {}),
+								createdAt: {
+									$ifNull: ["$createdAt", { $literal: now }],
+								},
+								extractedAt: {
+									$ifNull: ["$extractedAt", { $literal: now }],
+								},
+								confidenceSource: {
+									$ifNull: [
+										"$confidenceSource",
+										{ $literal: confidenceSource },
+									],
+								},
+							},
+						},
+					]
+				: {
 						$set: setDoc,
 						$inc: { mentionCount: 1 },
 						$setOnInsert: {
@@ -1432,7 +1555,12 @@ export async function extractAndUpsertEntities(params: {
 						...(Object.keys(addToSet).length > 0
 							? { $addToSet: addToSet }
 							: {}),
-					},
+					}
+
+			return {
+				updateOne: {
+					filter: { entityId: entity.entityId, agentId, scope, scopeRef },
+					update,
 					upsert: true,
 				},
 			}
@@ -1503,9 +1631,11 @@ export async function extractAndUpsertEntities(params: {
 									scopeRef,
 									updatedAt: now,
 									...(link.provenance ? { provenance: link.provenance } : {}),
-									...(sourceEventId ? { sourceEventIds: [sourceEventId] } : {}),
 								},
 								$setOnInsert: { createdAt: now },
+								...(sourceEventId
+									? { $addToSet: { sourceEventIds: sourceEventId } }
+									: {}),
 							},
 							upsert: true,
 						},
@@ -1532,9 +1662,11 @@ export async function extractAndUpsertEntities(params: {
 									scope,
 									scopeRef,
 									updatedAt: now,
-									...(sourceEventId ? { sourceEventIds: [sourceEventId] } : {}),
 								},
 								$setOnInsert: { createdAt: now },
+								...(sourceEventId
+									? { $addToSet: { sourceEventIds: sourceEventId } }
+									: {}),
 							},
 							upsert: true,
 						},
@@ -1658,6 +1790,7 @@ export async function extractAndUpsertEntities(params: {
 export async function extractAndUpsertTypedRelations(params: {
 	db: Db
 	prefix: string
+	client?: MongoClient
 	agentId: string
 	scope: MemoryScope
 	scopeRef: string
@@ -1695,6 +1828,8 @@ export async function extractAndUpsertTypedRelations(params: {
 			const result = await upsertRelation({
 				db,
 				prefix,
+				client: params.client,
+				eventReceiptIds: sourceEventId ? [sourceEventId] : undefined,
 				relation: {
 					fromEntityId: rel.fromEntityId,
 					toEntityId: rel.toEntityId,

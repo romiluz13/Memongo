@@ -9,6 +9,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest"
 vi.mock("./mongodb-schema.js", () => ({
 	kbCollection: vi.fn(),
 	kbChunksCollection: vi.fn(),
+	queryCacheCollection: vi.fn(),
 }))
 
 import { hashText } from "./internal.js"
@@ -20,7 +21,11 @@ import {
 	getKBStats,
 	type KBDocument,
 } from "./mongodb-kb.js"
-import { kbCollection, kbChunksCollection } from "./mongodb-schema.js"
+import {
+	kbCollection,
+	kbChunksCollection,
+	queryCacheCollection,
+} from "./mongodb-schema.js"
 
 // Shared tenant scope for unit tests. resolveScopeRef({agentId,scope:"agent"})
 // yields "agent:test-agent" — the scopeRef the KB layer filters on.
@@ -75,14 +80,19 @@ function mockDb(): Db {
 let tmpDir: string
 let mockKB: Collection
 let mockKBChunks: Collection
+let mockQueryCache: Collection
 
 beforeEach(async () => {
 	vi.clearAllMocks()
 	tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "memongo-kb-test-"))
 	mockKB = createMockKBCol()
 	mockKBChunks = createMockKBChunksCol()
+	mockQueryCache = {
+		deleteMany: vi.fn(async () => ({ deletedCount: 0 })),
+	} as unknown as Collection
 	vi.mocked(kbCollection).mockReturnValue(mockKB)
 	vi.mocked(kbChunksCollection).mockReturnValue(mockKBChunks)
+	vi.mocked(queryCacheCollection).mockReturnValue(mockQueryCache)
 })
 
 afterEach(async () => {
@@ -121,6 +131,11 @@ describe("ingestToKB", () => {
 		expect(result.errors).toHaveLength(0)
 		expect(mockKB.insertOne).toHaveBeenCalledTimes(1)
 		expect(mockKBChunks.bulkWrite).toHaveBeenCalledTimes(1)
+		expect(mockQueryCache.deleteMany).toHaveBeenCalledWith({
+			agentId: SCOPE.agentId,
+			scope: SCOPE.scope,
+			scopeRef: SCOPE_REF,
+		})
 	})
 
 	it("skips document with same hash (dedup)", async () => {
@@ -239,6 +254,11 @@ describe("ingestToKB", () => {
 		// Should delete old doc+chunks before inserting new
 		expect(mockKBChunks.deleteMany).toHaveBeenCalledWith({ docId: "old-id" })
 		expect(mockKB.deleteOne).toHaveBeenCalled()
+		expect(mockQueryCache.deleteMany).toHaveBeenCalledWith({
+			agentId: SCOPE.agentId,
+			scope: SCOPE.scope,
+			scopeRef: SCOPE_REF,
+		})
 	})
 
 	it("handles empty content gracefully", async () => {
@@ -391,14 +411,21 @@ describe("removeKBDocument", () => {
 		)
 		expect(removed).toBe(true)
 		expect(clientMock.startSession).toHaveBeenCalled()
-		expect(sessionMock.withTransaction).toHaveBeenCalled()
+		expect(sessionMock.withTransaction).toHaveBeenCalledWith(
+			expect.any(Function),
+			{ writeConcern: { w: "majority" } },
+		)
 		expect(sessionMock.endSession).toHaveBeenCalled()
 	})
 
-	it("falls back to sequential on transaction failure (F11)", async () => {
+	it("falls back to sequential when transactions are unsupported (F11)", async () => {
 		const sessionMock = {
 			withTransaction: vi.fn(async () => {
-				throw new Error("not a replica set")
+				const error = new Error(
+					"Transaction numbers are only allowed on a replica set member or mongos",
+				)
+				;(error as Error & { code: number }).code = 20
+				throw error
 			}),
 			endSession: vi.fn(),
 		}
@@ -420,6 +447,33 @@ describe("removeKBDocument", () => {
 			scopeRef: SCOPE_REF,
 		})
 		expect(mockKB.deleteOne).toHaveBeenCalled()
+	})
+
+	it("propagates transaction failures without replaying sequential deletes", async () => {
+		const error = Object.assign(new Error("transaction exceeded cache"), {
+			code: 225,
+		})
+		const sessionMock = {
+			withTransaction: vi.fn(async () => {
+				throw error
+			}),
+			endSession: vi.fn(),
+		}
+		const clientMock = {
+			startSession: vi.fn(() => sessionMock),
+		}
+
+		await expect(
+			removeKBDocument(
+				mockDb(),
+				"test_",
+				"doc-too-large",
+				SCOPE,
+				clientMock as unknown as import("mongodb").MongoClient,
+			),
+		).rejects.toBe(error)
+		expect(mockKB.deleteOne).not.toHaveBeenCalled()
+		expect(mockKBChunks.deleteMany).not.toHaveBeenCalled()
 	})
 })
 
@@ -476,8 +530,52 @@ describe("ingestToKB — transaction wrapping for re-ingestion", () => {
 
 		expect(result.documentsProcessed).toBe(1)
 		expect(clientMock.startSession).toHaveBeenCalled()
-		expect(sessionMock.withTransaction).toHaveBeenCalled()
+		expect(sessionMock.withTransaction).toHaveBeenCalledWith(
+			expect.any(Function),
+			{ writeConcern: { w: "majority" } },
+		)
 		expect(sessionMock.endSession).toHaveBeenCalled()
+	})
+
+	it("does not replay re-ingestion writes after a non-topology transaction failure", async () => {
+		const newContent = "Updated content that must remain atomic"
+		const doc: KBDocument = {
+			title: "Atomic Re-Ingest",
+			content: newContent,
+			source: { type: "file", path: "/docs/atomic.md", importedBy: "cli" },
+			hash: hashText(newContent),
+		}
+		vi.mocked(mockKB.findOne).mockResolvedValueOnce({
+			_id: "old-atomic-id",
+			hash: hashText("Old atomic content"),
+			"source.path": "/docs/atomic.md",
+		})
+		const error = Object.assign(new Error("duplicate key during transaction"), {
+			code: 11000,
+		})
+		const sessionMock = {
+			withTransaction: vi.fn(async () => {
+				throw error
+			}),
+			endSession: vi.fn(),
+		}
+		const clientMock = { startSession: vi.fn(() => sessionMock) }
+
+		const result = await ingestToKB({
+			db: mockDb(),
+			prefix: "test_",
+			documents: [doc],
+			embeddingMode: "automated",
+			scope: SCOPE,
+			client: clientMock as unknown as import("mongodb").MongoClient,
+		})
+
+		expect(result.documentsProcessed).toBe(0)
+		expect(result.errors).toEqual([`Atomic Re-Ingest: ${error.message}`])
+		expect(mockKB.deleteOne).not.toHaveBeenCalled()
+		expect(mockKBChunks.deleteMany).not.toHaveBeenCalled()
+		expect(mockKB.insertOne).not.toHaveBeenCalled()
+		expect(mockKBChunks.bulkWrite).not.toHaveBeenCalled()
 	})
 
 	it("falls back to sequential writes when transaction fails (standalone)", async () => {

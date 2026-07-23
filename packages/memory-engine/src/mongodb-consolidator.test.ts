@@ -173,6 +173,41 @@ describe("consolidateMemory", () => {
 		expect(result.factsPromoted).toBe(0)
 	})
 
+	it("does not let a recent run in another scope rate-limit this tenant", async () => {
+		const { consolidateMemory } = await import("./mongodb-consolidator.js")
+		const consolidationRunsCol = mockCollection({
+			findOne: vi.fn(async (filter: Document) =>
+				filter.scope === "tenant" && filter.scopeRef === "tenant:A"
+					? null
+					: {
+							agentId: "agent-1",
+							scope: "tenant",
+							scopeRef: "tenant:B",
+							status: "completed",
+							startedAt: new Date(),
+						},
+			),
+		})
+		const eventsCol = mockCollection()
+		const db = mockDb({
+			test_consolidation_runs: consolidationRunsCol,
+			test_events: eventsCol,
+		})
+
+		await consolidateMemory({
+			db,
+			prefix: "test_",
+			agentId: "agent-1",
+			options: {
+				scope: "tenant",
+				scopeRef: "tenant:A",
+				minIntervalMs: 3_600_000,
+			},
+		})
+
+		expect(consolidationRunsCol.insertOne).toHaveBeenCalledOnce()
+	})
+
 	it("returns empty result when no unprocessed events", async () => {
 		const { consolidateMemory } = await import("./mongodb-consolidator.js")
 		const consolidationRunsCol = mockCollection({
@@ -249,6 +284,77 @@ describe("consolidateMemory", () => {
 			expect.objectContaining({
 				entry: expect.objectContaining({
 					type: "preference",
+				}),
+			}),
+		)
+	})
+
+	it("leaves a failed candidate unprocessed while acknowledging successful candidates", async () => {
+		const { consolidateMemory } = await import("./mongodb-consolidator.js")
+		const { writeStructuredMemory } = await import(
+			"./mongodb-structured-memory.js"
+		)
+		const writeFailure = new Error("structured write failed")
+		vi.mocked(writeStructuredMemory)
+			.mockResolvedValueOnce({ upserted: true, id: "first" })
+			.mockRejectedValueOnce(writeFailure)
+
+		const consolidationRunsCol = mockCollection({
+			findOne: vi.fn(async () => null),
+		})
+		const eventsCol = mockCollection({
+			find: vi.fn(() => ({
+				sort: vi.fn(() => ({
+					limit: vi.fn(() => ({
+						toArray: vi.fn(async () => [
+							{
+								eventId: "e1",
+								agentId: "agent-1",
+								body: "I prefer TypeScript",
+								timestamp: new Date("2026-01-02T00:00:00Z"),
+								role: "user",
+							},
+							{
+								eventId: "e2",
+								agentId: "agent-1",
+								body: "I prefer Rust",
+								timestamp: new Date("2026-01-01T00:00:00Z"),
+								role: "user",
+							},
+						]),
+					})),
+				})),
+			})),
+			updateMany: vi.fn(async () => ({ modifiedCount: 1 }) as UpdateResult),
+		})
+		const structuredCol = mockCollection({
+			findOne: vi.fn(async () => null),
+		})
+		const db = mockDb({
+			test_consolidation_runs: consolidationRunsCol,
+			test_events: eventsCol,
+			test_structured_mem: structuredCol,
+		})
+
+		await expect(
+			consolidateMemory({
+				db,
+				prefix: "test_",
+				agentId: "agent-1",
+				options: { minCombinedScore: 0 },
+			}),
+		).rejects.toThrow(writeFailure)
+
+		expect(eventsCol.updateMany).toHaveBeenCalledWith(
+			{ eventId: { $in: ["e1"] } },
+			expect.any(Object),
+		)
+		expect(consolidationRunsCol.updateOne).toHaveBeenCalledWith(
+			expect.any(Object),
+			expect.objectContaining({
+				$set: expect.objectContaining({
+					status: "failed",
+					eventsProcessed: 1,
 				}),
 			}),
 		)
@@ -721,6 +827,66 @@ describe("consolidateMemory", () => {
 		expect(result.factsPromoted).toBe(0)
 	})
 
+	it("does not let a conflict in another scope suppress promotion", async () => {
+		const { consolidateMemory } = await import("./mongodb-consolidator.js")
+		const consolidationRunsCol = mockCollection({
+			findOne: vi.fn(async () => null),
+		})
+		const eventsCol = mockCollection({
+			find: vi.fn(() => ({
+				sort: vi.fn(() => ({
+					limit: vi.fn(() => ({
+						toArray: vi.fn(async () => [
+							{
+								eventId: "e-scope-A",
+								agentId: "agent-1",
+								body: "I prefer Python over JavaScript",
+								timestamp: new Date(),
+								role: "user",
+								scope: "tenant",
+								scopeRef: "tenant:A",
+							},
+						]),
+					})),
+				})),
+			})),
+			updateMany: vi.fn(async () => ({ modifiedCount: 1 }) as UpdateResult),
+		})
+		const structuredCol = mockCollection({
+			findOne: vi.fn(async (filter: Document) =>
+				filter.scope === "tenant" && filter.scopeRef === "tenant:A"
+					? null
+					: {
+							agentId: "agent-1",
+							scope: "tenant",
+							scopeRef: "tenant:B",
+							type: "preference",
+							key: "Python over JavaScript",
+							state: "conflicted",
+						},
+			),
+		})
+		const db = mockDb({
+			test_consolidation_runs: consolidationRunsCol,
+			test_events: eventsCol,
+			test_structured_mem: structuredCol,
+		})
+
+		const result = await consolidateMemory({
+			db,
+			prefix: "test_",
+			agentId: "agent-1",
+			options: {
+				scope: "tenant",
+				scopeRef: "tenant:A",
+				minCombinedScore: 0,
+			},
+		})
+
+		expect(result.factsPromoted).toBe(1)
+		expect(result.conflictsResolved).toBe(0)
+	})
+
 	it("records run start and completion", async () => {
 		const { consolidateMemory } = await import("./mongodb-consolidator.js")
 		const consolidationRunsCol = mockCollection({
@@ -867,6 +1033,62 @@ describe("consolidateMemory", () => {
 		expect(result.eventsProcessed).toBe(1)
 	})
 
+	it("uses the caller scopeRef when scoring novelty", async () => {
+		const { consolidateMemory } = await import("./mongodb-consolidator.js")
+		const { scanNovelty } = await import("./mongodb-novelty.js")
+		;(scanNovelty as ReturnType<typeof vi.fn>).mockImplementationOnce(
+			async (params: { options?: { scopeRef?: string } }) => ({
+				events: [
+					{
+						eventId: "e1",
+						noveltyScore: params.options?.scopeRef === "tenant:A" ? 1 : 0,
+					},
+				],
+				scannedCount: 1,
+				agentId: "agent-1",
+			}),
+		)
+		const consolidationRunsCol = mockCollection({
+			findOne: vi.fn(async () => null),
+		})
+		const eventsCol = mockCollection({
+			find: vi.fn(() => ({
+				sort: vi.fn(() => ({
+					limit: vi.fn(() => ({
+						toArray: vi.fn(async () => [
+							{
+								eventId: "e1",
+								agentId: "agent-1",
+								body: "ordinary scoped event",
+								timestamp: new Date(),
+								role: "user",
+								scope: "tenant",
+								scopeRef: "tenant:A",
+							},
+						]),
+					})),
+				})),
+			})),
+		})
+		const db = mockDb({
+			test_consolidation_runs: consolidationRunsCol,
+			test_events: eventsCol,
+		})
+
+		const result = await consolidateMemory({
+			db,
+			prefix: "test_",
+			agentId: "agent-1",
+			options: {
+				scope: "tenant",
+				scopeRef: "tenant:A",
+				minIntervalMs: 0,
+			},
+		})
+
+		expect(result.candidates[0]?.noveltyScore).toBe(1)
+	})
+
 	it("uses 0.15 as default minCombinedScore when not specified", async () => {
 		const { consolidateMemory } = await import("./mongodb-consolidator.js")
 		const consolidationRunsCol = mockCollection({
@@ -1000,6 +1222,70 @@ describe("consolidateMemory", () => {
 		])
 		expect(result.orientStats!.topScopes).toHaveLength(1)
 		expect(result.orientStats!.topScopes[0].scope).toBe("project-alpha")
+	})
+
+	it("does not expose another scope through orientStats", async () => {
+		const { consolidateMemory } = await import("./mongodb-consolidator.js")
+		const consolidationRunsCol = mockCollection({
+			findOne: vi.fn(async () => null),
+		})
+		const eventsCol = mockCollection({
+			find: vi.fn(() => ({
+				sort: vi.fn(() => ({
+					limit: vi.fn(() => ({
+						toArray: vi.fn(async () => [
+							{
+								eventId: "e1",
+								agentId: "agent-1",
+								body: "ordinary scoped event",
+								timestamp: new Date(),
+								role: "user",
+								scope: "tenant",
+								scopeRef: "tenant:A",
+							},
+						]),
+					})),
+				})),
+			})),
+			aggregate: vi.fn((pipeline: Document[]) => {
+				const initialMatch = pipeline[0]?.$match as Document | undefined
+				const isolated =
+					initialMatch?.scope === "tenant" &&
+					initialMatch?.scopeRef === "tenant:A"
+				return {
+					toArray: vi.fn(async () => [
+						{
+							unprocessed: [{ n: isolated ? 1 : 99 }],
+							byType: [{ _id: "user", count: isolated ? 1 : 99 }],
+							topTopics: [
+								{
+									_id: isolated ? "tenant" : "tenant:B",
+									lastActivity: new Date(),
+								},
+							],
+						},
+					]),
+				}
+			}),
+		})
+		const db = mockDb({
+			test_consolidation_runs: consolidationRunsCol,
+			test_events: eventsCol,
+		})
+
+		const result = await consolidateMemory({
+			db,
+			prefix: "test_",
+			agentId: "agent-1",
+			options: {
+				scope: "tenant",
+				scopeRef: "tenant:A",
+				minIntervalMs: 0,
+			},
+		})
+
+		expect(result.orientStats?.unprocessedCount).toBe(1)
+		expect(result.orientStats?.byRole).toEqual([{ role: "user", count: 1 }])
 	})
 
 	it("matches 8 category patterns (Phase 2 — Extract)", async () => {

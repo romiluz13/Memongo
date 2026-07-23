@@ -359,6 +359,7 @@ describe("crossEncoderRerank", () => {
 	it("falls back on API error (non-OK status)", async () => {
 		const results = makeResults(3)
 		const config = makeConfig()
+		const providerOutcomes: Array<"attempted" | "succeeded" | "failed"> = []
 
 		globalThis.fetch = vi.fn().mockResolvedValue({
 			ok: false,
@@ -373,10 +374,34 @@ describe("crossEncoderRerank", () => {
 			query: QUERY,
 			results,
 			config,
+			onProviderCall: (outcome) => providerOutcomes.push(outcome),
 		})
 
 		expect(out.reranked).toBe(false)
 		expect(out.results).toBe(results)
+		expect(providerOutcomes).toEqual(["attempted", "failed"])
+	})
+
+	it("disables automatic redirects on reranker requests", async () => {
+		const results = makeResults(3)
+		const config = makeConfig()
+		globalThis.fetch = vi.fn().mockResolvedValue({
+			ok: false,
+			status: 302,
+		})
+
+		await crossEncoderRerank({
+			db: DB,
+			prefix: PREFIX,
+			agentId: AGENT_ID,
+			query: QUERY,
+			results,
+			config,
+		})
+
+		expect(
+			(globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0]?.[1],
+		).toMatchObject({ redirect: "manual" })
 	})
 
 	it("falls back on network error", async () => {
