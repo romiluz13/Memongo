@@ -1,10 +1,7 @@
 import { randomUUID } from "node:crypto"
 import { MongoClient } from "mongodb"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
-import {
-	projectChunksFromEvents,
-	writeEvent,
-} from "./mongodb-events.js"
+import { projectChunksFromEvents, writeEvent } from "./mongodb-events.js"
 import {
 	chunksCollection,
 	ensureCollections,
@@ -29,7 +26,10 @@ describe("canonical event projection repair (live MongoDB)", () => {
 	})
 
 	afterAll(async () => {
-		await client?.db(TEST_DB).dropDatabase().catch(() => {})
+		await client
+			?.db(TEST_DB)
+			.dropDatabase()
+			.catch(() => {})
 		await client?.close()
 	})
 

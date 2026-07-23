@@ -169,7 +169,7 @@ describe("mongodb-graph", () => {
 			})
 
 			expect(withTransaction).toHaveBeenCalledWith(expect.any(Function), {
-				writeConcern: { w: "majority" },
+				writeConcern: { w: "majority", wtimeout: 1000 },
 			})
 			expect(relationsCol.findOne).toHaveBeenCalledWith(expect.any(Object), {
 				session,
@@ -264,7 +264,7 @@ describe("mongodb-graph", () => {
 			expect(update.$set.lastConfirmedAt).toBeInstanceOf(Date)
 		})
 
-		it("does not replay relation or ownership side effects for the same source event", async () => {
+		it("does not replay the destructive owns-invalidation side effect for the same source event, but still applies field updates", async () => {
 			const relationsCol = createMockCollection({
 				findOne: vi.fn().mockResolvedValue({
 					fromEntityId: "ent-bob",
@@ -276,10 +276,15 @@ describe("mongodb-graph", () => {
 					state: "active",
 					sourceEventIds: ["evt-replayed"],
 				}),
+				updateOne: vi.fn().mockResolvedValue({
+					upsertedCount: 0,
+					matchedCount: 1,
+					modifiedCount: 1,
+				}),
 			})
 			const db = createMockDb({ [`${PREFIX}relations`]: relationsCol })
 
-			const result = await upsertRelation({
+			await upsertRelation({
 				db,
 				prefix: PREFIX,
 				relation: makeRelation({
@@ -287,12 +292,19 @@ describe("mongodb-graph", () => {
 					toEntityId: "ent-phoenix",
 					type: "owns",
 					sourceEventIds: ["evt-replayed"],
+					weight: 0.9,
 				}),
 			})
 
-			expect(result).toEqual({ upserted: false })
+			// The destructive owns-invalidation (updateMany) is NOT replayed.
 			expect(relationsCol.updateMany).not.toHaveBeenCalled()
-			expect(relationsCol.updateOne).not.toHaveBeenCalled()
+			// But the field update (updateOne) IS applied — the same sourceEventIds
+			// with a changed weight must not be silently dropped.
+			expect(relationsCol.updateOne).toHaveBeenCalled()
+			const [, update] = (relationsCol.updateOne as ReturnType<typeof vi.fn>)
+				.mock.calls[0]
+			expect(update.$set.weight).toBe(0.9)
+			expect(update.$inc.reinforcementCount).toBe(1)
 		})
 
 		it("accumulates source-event evidence when a new event confirms a relation", async () => {

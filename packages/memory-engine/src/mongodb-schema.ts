@@ -139,6 +139,33 @@ export function queryCacheCollection(db: Db, prefix: string): Collection {
  * (pre-5.0 / DocumentDB / standalone). On "already exists" the collection is
  * assumed to already be a time series — no fallback is attempted.
  */
+
+/**
+ * Detect a "time series unsupported" error — fCV < 5.0 (code 72 / InvalidOptions,
+ * message "Time-series collection is not enabled") or pre-5.0 unknown-field
+ * rejection (code 9 / 40414). Used to discriminate before falling back to a
+ * plain collection; all other errors are rethrown so transient/auth/quota
+ * failures are not masked as "unsupported".
+ *
+ * Source: mongodb/mongo r5.0.0 src/mongo/db/commands/create_command.cpp:147-148;
+ * src/mongo/base/error_codes.yml (code 72 = InvalidOptions, 9 = FailedToParse,
+ * 40414 = IDLFailedToParse).
+ */
+function isTimeseriesUnsupported(err: unknown): boolean {
+	if (!(err instanceof Error)) return false
+	const code = (err as { code?: unknown }).code
+	const msg = err.message ?? ""
+	// (a) 5.0+ binary, fCV < 5.0: code 72 / InvalidOptions
+	if (code === 72) {
+		return /time-series collection is not enabled/i.test(msg)
+	}
+	// (b) pre-5.0 strict IDL: unknown field 'timeseries'
+	if (code === 9 || code === 40414) {
+		return /unknown field.*timeseries|timeseries.*unknown field/i.test(msg)
+	}
+	// (c) DocumentDB / other emulations: match a "not supported" message only
+	return /time.?series.*(not supported|not enabled|unsupported)/i.test(msg)
+}
 export async function ensureTimeseriesOrPlain(
 	db: Db,
 	name: string,
@@ -167,6 +194,12 @@ export async function ensureTimeseriesOrPlain(
 			msg.includes("Collection already exists")
 		) {
 			return
+		}
+		// Only fall back to a plain collection if time series is genuinely
+		// unsupported (fCV < 5.0 / DocumentDB). Rethrow transient/auth/quota
+		// errors so they surface instead of silently downgrading.
+		if (!isTimeseriesUnsupported(err)) {
+			throw err
 		}
 		// Fall back to a plain collection with a TTL index on the timeField.
 		try {
@@ -2334,7 +2367,7 @@ export async function ensureStandardIndexes(
 	const kbChunksForWiki = kbChunksCollection(db, prefix)
 	await kbChunksForWiki.createIndex(
 		{ docId: 1, wikiSource: 1 },
-		{ name: "idx_kb_chunks_wiki", sparse: true },
+		{ name: "idx_kb_chunks_wiki" },
 	)
 	applied++
 
@@ -3941,7 +3974,7 @@ export async function detectCapabilities(
 	try {
 		const buildInfo = await db.admin().command({ buildInfo: 1 })
 		const versionArray = (buildInfo as { versionArray?: unknown }).versionArray
-		result.rankFusion = hasServerVersionAtLeast(versionArray, 8, 0)
+		result.rankFusion = hasServerVersionAtLeast(versionArray, 8, 1)
 		result.scoreFusion = hasServerVersionAtLeast(versionArray, 8, 3)
 	} catch {
 		try {

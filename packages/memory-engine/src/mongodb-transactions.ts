@@ -1,7 +1,10 @@
 import type { ClientSession, TransactionOptions } from "mongodb"
 
 export const MAJORITY_TRANSACTION_OPTIONS: TransactionOptions = {
-	writeConcern: { w: "majority" },
+	// wtimeout prevents indefinite blocking when majority is unachievable
+	// (e.g. a secondary is down). Docs examples use wtimeout: 1000.
+	// See https://www.mongodb.com/docs/manual/reference/write-concern/
+	writeConcern: { w: "majority", wtimeout: 1000 },
 }
 
 /** Extract a MongoDB server error code from an error-like object. */
@@ -26,12 +29,13 @@ export function isTransactionUnsupported(error: unknown): boolean {
 }
 
 /**
- * Detect a WiredTiger `TransactionTooLargeForCache` error (MongoDB 6.2+, code 225).
- * The driver's `withTransaction` does NOT auto-retry this — it surfaces to the caller.
- * See https://www.mongodb.com/docs/manual/core/transactions/ (6.2 behavior change).
+ * Detect a WiredTiger `TransactionTooLargeForCache` error (MongoDB 6.2+,
+ * code 388). The driver's `withTransaction` does NOT auto-retry this — it
+ * surfaces to the caller. Note: code 225 is `TransactionTooOld` (a different,
+ * unrelated error). See https://www.mongodb.com/docs/manual/core/transactions/
  */
 export function isTransactionTooLargeForCache(error: unknown): boolean {
-	if (getMongoErrorCode(error) === 225) {
+	if (getMongoErrorCode(error) === 388) {
 		return true
 	}
 	const message = error instanceof Error ? error.message : String(error)

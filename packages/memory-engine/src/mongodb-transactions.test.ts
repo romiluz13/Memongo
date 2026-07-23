@@ -1,3 +1,4 @@
+import type { ClientSession } from "mongodb"
 import { describe, expect, it } from "vitest"
 import {
 	isTransactionTooLargeForCache,
@@ -20,7 +21,8 @@ describe("isTransactionUnsupported", () => {
 	it.each([
 		[251, "NoSuchTransaction"],
 		[263, "OperationNotSupportedInTransaction"],
-		[225, "TransactionTooLargeForCache"],
+		[225, "TransactionTooOld"],
+		[388, "TransactionTooLargeForCache"],
 		[11000, "duplicate key"],
 	])("does not downgrade code %i (%s) to sequential writes", (code, message) => {
 		expect(
@@ -30,10 +32,10 @@ describe("isTransactionUnsupported", () => {
 })
 
 describe("isTransactionTooLargeForCache", () => {
-	it("recognizes code 225", () => {
+	it("recognizes code 388", () => {
 		expect(
 			isTransactionTooLargeForCache(
-				Object.assign(new Error("TransactionTooLargeForCache"), { code: 225 }),
+				Object.assign(new Error("TransactionTooLargeForCache"), { code: 388 }),
 			),
 		).toBe(true)
 	})
@@ -42,6 +44,14 @@ describe("isTransactionTooLargeForCache", () => {
 		expect(
 			isTransactionTooLargeForCache(new Error("TransactionTooLargeForCache")),
 		).toBe(true)
+	})
+
+	it("does NOT match TransactionTooOld (code 225)", () => {
+		expect(
+			isTransactionTooLargeForCache(
+				Object.assign(new Error("TransactionTooOld"), { code: 225 }),
+			),
+		).toBe(false)
 	})
 
 	it("does not match other errors", () => {
@@ -54,11 +64,12 @@ describe("isTransactionTooLargeForCache", () => {
 })
 
 /** Fake session whose withTransaction simply runs the callback. */
-function fakeSession(): {
-	withTransaction: <T>(fn: () => Promise<T>, _options?: unknown) => Promise<T>
-} {
+function fakeSession(): Pick<ClientSession, "withTransaction"> {
 	return {
-		withTransaction: async <T>(fn: () => Promise<T>): Promise<T> => fn(),
+		withTransaction: ((fn: () => Promise<unknown>) => fn()) as Pick<
+			ClientSession,
+			"withTransaction"
+		>["withTransaction"],
 	}
 }
 
@@ -68,7 +79,7 @@ describe("withTransactionBatched", () => {
 		const runBatch = async (batch: number[]) => {
 			if (batch.length > 2) {
 				throw Object.assign(new Error("TransactionTooLargeForCache"), {
-					code: 225,
+					code: 388,
 				})
 			}
 			executed.push(batch)
@@ -95,7 +106,7 @@ describe("withTransactionBatched", () => {
 	it("re-throws at minBatchSize floor when a single op is too large", async () => {
 		const runBatch = async () => {
 			throw Object.assign(new Error("TransactionTooLargeForCache"), {
-				code: 225,
+				code: 388,
 			})
 		}
 

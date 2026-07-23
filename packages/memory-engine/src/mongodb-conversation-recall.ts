@@ -517,7 +517,7 @@ async function standardRecall(params: {
 }
 
 function buildEventProjection(
-	scoreMeta: "vectorSearchScore" | "searchScore",
+	scoreMeta: "vectorSearchScore" | "searchScore" | "score",
 	options?: { includeScoreDetails?: boolean },
 ): Document {
 	const base: Document = {
@@ -727,7 +727,7 @@ async function hybridRecall(params: {
 		{ $limit: params.effectiveLimit },
 		{ $addFields: { scoreDetails: { $meta: "scoreDetails" } } },
 		{
-			$project: buildEventProjection("searchScore", {
+			$project: buildEventProjection("score", {
 				includeScoreDetails: true,
 			}),
 		},

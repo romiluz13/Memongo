@@ -225,14 +225,32 @@ describe("MongoDBChangeStreamWatcher", () => {
 // ---------------------------------------------------------------------------
 
 describe("isResumeTokenInvalid", () => {
-	it("recognizes 'Resume Token Not Found'", () => {
-		expect(isResumeTokenInvalid(new Error("Resume Token Not Found"))).toBe(true)
+	it("recognizes ChangeStreamHistoryLost (code 286) with the real errmsg", () => {
+		const err = Object.assign(
+			new Error(
+				"Resume of change stream was not possible, as the resume point may no longer be in the oplog (resumeTimestamp: Timestamp(1730000000, 1))",
+			),
+			{ code: 286, codeName: "ChangeStreamHistoryLost" },
+		)
+		expect(isResumeTokenInvalid(err)).toBe(true)
 	})
 
-	it("recognizes 'oplog' / 'CappedPositionLost' style messages", () => {
+	it("recognizes InvalidResumeToken (code 260) via code", () => {
+		const err = Object.assign(
+			new Error(
+				"Attempting to resume a change stream using 'resumeAfter' is not allowed",
+			),
+			{ code: 260, codeName: "InvalidResumeToken" },
+		)
+		expect(isResumeTokenInvalid(err)).toBe(true)
+	})
+
+	it("recognizes the real errmsg by case-insensitive substring (fallback)", () => {
 		expect(
 			isResumeTokenInvalid(
-				new Error("cannot resume stream; the oplog cannot be found"),
+				new Error(
+					"RESUME OF CHANGE STREAM WAS NOT POSSIBLE, AS THE RESUME POINT MAY NO LONGER BE IN THE OPLOG",
+				),
 			),
 		).toBe(true)
 	})
@@ -240,10 +258,20 @@ describe("isResumeTokenInvalid", () => {
 	it("does not match unrelated errors", () => {
 		expect(
 			isResumeTokenInvalid(
-				new Error("The $changeStream stage is only supported on replica sets"),
+				Object.assign(new Error("The $changeStream stage is only supported"), {
+					code: 303,
+				}),
 			),
 		).toBe(false)
 		expect(isResumeTokenInvalid(new Error("network timeout"))).toBe(false)
+	})
+
+	it("does NOT match ChangeStreamInvalidated (code 346) — different semantics", () => {
+		const err = Object.assign(new Error("The collection was dropped"), {
+			code: 346,
+			codeName: "ChangeStreamInvalidated",
+		})
+		expect(isResumeTokenInvalid(err)).toBe(false)
 	})
 })
 
@@ -275,7 +303,12 @@ describe("MongoDBChangeStreamWatcher — resume token resilience", () => {
 			watch: vi.fn(() => {
 				watchCallCount++
 				if (watchCallCount === 1) {
-					throw new Error("Resume Token Not Found")
+					throw Object.assign(
+						new Error(
+							"Resume of change stream was not possible, as the resume point may no longer be in the oplog",
+						),
+						{ code: 286, codeName: "ChangeStreamHistoryLost" },
+					)
 				}
 				return mockStream
 			}),
@@ -308,8 +341,16 @@ describe("MongoDBChangeStreamWatcher — resume token resilience", () => {
 		await watcher.start()
 		expect(watchCallCount).toBe(1)
 
-		// Simulate a mid-stream token-invalid error
-		stream1.emit("error", new Error("Resume Token Not Found"))
+		// Simulate a mid-stream token-invalid error using the real server code
+		stream1.emit(
+			"error",
+			Object.assign(
+				new Error(
+					"Resume of change stream was not possible, as the resume point may no longer be in the oplog",
+				),
+				{ code: 286, codeName: "ChangeStreamHistoryLost" },
+			),
+		)
 
 		expect(watchCallCount).toBe(2) // re-opened from now
 		expect(callbackArgs.some((e) => e.gapDetected?.from === "midstream")).toBe(

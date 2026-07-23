@@ -2062,6 +2062,8 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 	private watcher: FSWatcher | null = null
 	private watchTimer: NodeJS.Timeout | null = null
 	private changeStreamWatcher: MongoDBChangeStreamWatcher | null = null
+	/** Guards against a re-scan storm from rapid gapDetected events. */
+	gapReSyncInFlight = false
 	private relevance: MongoDBRelevanceRuntime | null = null
 	private closed = false
 	private dirty = true
@@ -2379,6 +2381,23 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 			const csWatcher = new MongoDBChangeStreamWatcher(
 				chunksCollection(db, prefix),
 				(event) => {
+					if (event.gapDetected) {
+						log.warn(
+							`change stream gap detected (${event.gapDetected.from}); triggering full re-scan`,
+						)
+						// Debounce: dedupe concurrent gap-triggered syncs to avoid a
+						// re-scan storm. If a sync is already in-flight, skip this one.
+						if (!manager.gapReSyncInFlight) {
+							manager.gapReSyncInFlight = true
+							void manager
+								.sync({ reason: "change-stream-gap" })
+								.catch((err) => log.warn(`gap re-scan failed: ${String(err)}`))
+								.finally(() => {
+									manager.gapReSyncInFlight = false
+								})
+						}
+						return // do NOT persist the stale token carried by the gap event
+					}
 					if (event.resumeToken !== undefined && event.resumeToken !== null) {
 						void manager.persistChangeStreamResumeToken(event.resumeToken)
 					}

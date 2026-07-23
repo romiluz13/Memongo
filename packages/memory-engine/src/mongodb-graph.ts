@@ -464,13 +464,14 @@ export async function upsertRelation(params: {
 			const existing = session
 				? await collection.findOne(identityFilter, { session })
 				: await collection.findOne(identityFilter)
-			if (
+			// If the SAME sourceEventIds (or eventReceiptIds) have already been
+			// processed, skip ONLY the destructive `owns` invalidation side effect —
+			// NOT the hasRelationChanged path, so weight/confidence/state/metadata
+			// updates still apply when the same event re-arrives with changed fields.
+			const alreadyProcessed =
 				existing &&
 				(hasProcessedSourceEvents(existing, params.eventReceiptIds) ||
 					hasProcessedSourceEvents(existing, relation.sourceEventIds))
-			) {
-				return { upserted: false, changed: false, setDoc: {}, existing }
-			}
 
 			const now = new Date()
 			const state = relation.state ?? "active"
@@ -506,7 +507,7 @@ export async function upsertRelation(params: {
 			if (reviewAt !== undefined) setDoc.reviewAt = reviewAt
 
 			let invalidatedRelationCount = 0
-			if (relation.type === "owns" && state === "active") {
+			if (relation.type === "owns" && state === "active" && !alreadyProcessed) {
 				const filter = {
 					agentId: relation.agentId,
 					scope: relation.scope,
@@ -548,6 +549,25 @@ export async function upsertRelation(params: {
 					}
 				}
 				update = { $set: setDoc, $setOnInsert: { createdAt: now } }
+			} else if (alreadyProcessed) {
+				// Same sourceEventIds already processed: skip the destructive owns
+				// invalidation, but still apply field updates (weight/confidence/state/
+				// metadata) and bump reinforcement, so re-emits with changed fields
+				// are not silently dropped.
+				const currentValidFrom =
+					existing.validFrom instanceof Date
+						? existing.validFrom
+						: existing.createdAt instanceof Date
+							? existing.createdAt
+							: now
+				update = {
+					$set: {
+						...setDoc,
+						validFrom: currentValidFrom,
+						lastConfirmedAt: now,
+					},
+					$inc: { reinforcementCount: 1 },
+				}
 			} else if (!hasRelationChanged(existing, relation)) {
 				const currentValidFrom =
 					existing.validFrom instanceof Date

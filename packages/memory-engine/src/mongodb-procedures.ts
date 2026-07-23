@@ -556,18 +556,14 @@ export async function writeProcedure(params: {
 			return {
 				upserted: false,
 				id: entry.procedureId,
-				revision:
-					typeof existing.revision === "number" ? existing.revision : 1,
+				revision: typeof existing.revision === "number" ? existing.revision : 1,
 				changed: false,
 			}
 		}
 		persistedSetDoc = entry.sourceEventIds
 			? {
 					...setDoc,
-					sourceEventIds: mergeSourceEventIds(
-						existing,
-						entry.sourceEventIds,
-					),
+					sourceEventIds: mergeSourceEventIds(existing, entry.sourceEventIds),
 				}
 			: setDoc
 
@@ -612,7 +608,7 @@ export async function writeProcedure(params: {
 		await collection.updateOne(
 			identityFilter,
 			{
-			$set: {
+				$set: {
 					...persistedSetDoc,
 					revision: currentRevision + 1,
 					validFrom: now,
@@ -639,25 +635,25 @@ export async function writeProcedure(params: {
 		? await (async () => {
 				const session = client.startSession()
 				try {
-				let result:
-					| {
-							upserted: boolean
-							id: string
-							revision: number
-							changed: boolean
-						}
-					| undefined
+					let result:
+						| {
+								upserted: boolean
+								id: string
+								revision: number
+								changed: boolean
+						  }
+						| undefined
 					await session.withTransaction(async () => {
 						result = await persist(session)
 					}, MAJORITY_TRANSACTION_OPTIONS)
-				return (
-					result ?? {
-						upserted: false,
-						id: entry.procedureId,
-						revision: 1,
-						changed: false,
-					}
-				)
+					return (
+						result ?? {
+							upserted: false,
+							id: entry.procedureId,
+							revision: 1,
+							changed: false,
+						}
+					)
 				} catch (err) {
 					if (!isTransactionUnsupported(err)) {
 						throw err

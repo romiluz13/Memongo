@@ -784,18 +784,14 @@ export async function writeStructuredMemory(params: {
 			return {
 				upserted: false,
 				id: entry.key,
-				revision:
-					typeof existing.revision === "number" ? existing.revision : 1,
+				revision: typeof existing.revision === "number" ? existing.revision : 1,
 				changed: false,
 			}
 		}
 		persistedSetDoc = entry.sourceEventIds
 			? {
 					...setDoc,
-					sourceEventIds: mergeSourceEventIds(
-						existing,
-						entry.sourceEventIds,
-					),
+					sourceEventIds: mergeSourceEventIds(existing, entry.sourceEventIds),
 				}
 			: setDoc
 
@@ -925,7 +921,7 @@ export async function writeStructuredMemory(params: {
 									id: string
 									revision: number
 									changed: boolean
-								}
+							  }
 							| undefined
 						await session.withTransaction(async () => {
 							result = await persist(session)

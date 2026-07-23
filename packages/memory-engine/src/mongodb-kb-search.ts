@@ -189,7 +189,7 @@ export async function searchKB(
 							text: 1,
 							docId: 1,
 							updatedAt: 1,
-							score: { $meta: "searchScore" },
+							score: { $meta: "score" },
 						},
 					},
 				]

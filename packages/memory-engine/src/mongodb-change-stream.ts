@@ -90,16 +90,18 @@ export class MongoDBChangeStreamWatcher {
 	 */
 	private openStream(options: {
 		resumeAfter?: unknown
-		startAtOperationTime?: Date
 	}): ChangeStream<Document, ChangeStreamDocument> {
 		const watchOpts: Record<string, unknown> = {
 			fullDocument: "updateLookup",
 		}
 		if (options.resumeAfter) {
 			watchOpts.resumeAfter = options.resumeAfter
-		} else if (options.startAtOperationTime) {
-			watchOpts.startAtOperationTime = options.startAtOperationTime
 		}
+		// When no resumeAfter is provided, pass NO resume option — the driver
+		// auto-captures response.operationTime (a BSON Timestamp) on the initial
+		// aggregate, which is the correct type for startAtOperationTime. Passing a
+		// JS Date is a type error on the wire (BSON type 9 vs 17). See:
+		// node_modules/mongodb/src/cursor/change_stream_cursor.ts:143-150
 		return this.collection.watch(
 			[
 				{
@@ -163,7 +165,7 @@ export class MongoDBChangeStreamWatcher {
 		}
 
 		try {
-			this.stream = this.openStream({ startAtOperationTime: new Date() })
+			this.stream = this.openStream({})
 			this.attachStreamHandlers()
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err)
@@ -185,9 +187,13 @@ export class MongoDBChangeStreamWatcher {
 			log.warn(`gap signal callback error: ${msg}`)
 		}
 
-		// Reset the re-open counter — this re-open succeeded, so a future
-		// stale-token event should get a fresh budget of attempts.
-		this._reopenAttempts = 0
+		// Do NOT reset _reopenAttempts here. openStream() returns synchronously
+		// without a server round-trip, so a successful return doesn't prove the
+		// stream is alive. The counter is reset in handleChange() on the first
+		// real change event, which proves the new stream is working. This
+		// prevents a re-stream storm: if the server keeps emitting stale-token
+		// errors on each freshly opened stream, the cap actually bounds the
+		// rate instead of resetting every iteration.
 		log.info(`change stream re-opened from now (${from})`)
 		return true
 	}
@@ -197,6 +203,13 @@ export class MongoDBChangeStreamWatcher {
 		if (change._id) {
 			this._lastResumeToken = change._id
 		}
+
+		// A real change event proves the current stream is alive — reset the
+		// re-open counter so a future stale-token event gets a fresh budget.
+		// (openStream() returns synchronously without a server round-trip, so a
+		// successful return doesn't prove the stream is alive; only a real event
+		// does. This prevents a re-stream storm: see reopenFromNow.)
+		this._reopenAttempts = 0
 
 		const opType = change.operationType
 
@@ -291,17 +304,50 @@ function isChangeStreamNotSupported(msg: string): boolean {
 
 /**
  * Detect a stale or invalid resume token — the oplog has rotated past the
- * token's position, so the stream cannot resume from it. MongoDB surfaces this
- * as "Resume Token Not Found" or an oplog/CappedPositionLost-style message.
- * The fix is to re-open the stream from the current time (startAtOperationTime)
- * and signal a gap so the manager can trigger a full re-scan.
+ * token's position, or the token is structurally unusable. MongoDB surfaces
+ * this as ChangeStreamHistoryLost (code 286), InvalidResumeToken (260), or
+ * CappedPositionLost (136, legacy). The Node driver surfaces `error.code` and
+ * `error.codeName` verbatim from the server response.
+ *
+ * Primary match: `error.code` / `error.codeName` (stable across server
+ * versions and message wording). Fallback: case-insensitive substrings of the
+ * REAL server `errmsg` (NOT fabricated strings — the server does NOT put the
+ * codeName in the message).
+ *
+ * Sources: github.com/mongodb/mongo src/mongo/base/error_codes.yml;
+ * src/mongo/db/exec/agg/change_stream_check_resumability_stage.cpp:61-66.
+ *
+ * NOTE: ChangeStreamInvalidated (346) is deliberately NOT included — it means
+ * the collection was dropped/renamed, which requires startAfter, not a
+ * from-now re-stream.
  */
+const RESUME_TOKEN_INVALID_CODES = new Set<number>([136, 260, 286])
+const RESUME_TOKEN_INVALID_CODE_NAMES = new Set<string>([
+	"CappedPositionLost",
+	"InvalidResumeToken",
+	"ChangeStreamHistoryLost",
+])
+
 export function isResumeTokenInvalid(error: unknown): boolean {
-	const msg = error instanceof Error ? error.message : String(error)
+	if (error != null && typeof error === "object") {
+		const code = (error as { code?: unknown }).code
+		if (typeof code === "number" && RESUME_TOKEN_INVALID_CODES.has(code)) {
+			return true
+		}
+		const codeName = (error as { codeName?: unknown }).codeName
+		if (
+			typeof codeName === "string" &&
+			RESUME_TOKEN_INVALID_CODE_NAMES.has(codeName)
+		) {
+			return true
+		}
+	}
+	// Fallback: case-insensitive substrings of the REAL server errmsg.
+	const msg = (
+		error instanceof Error ? error.message : String(error ?? "")
+	).toLowerCase()
 	return (
-		msg.includes("Resume Token Not Found") ||
-		msg.includes("CappedPositionLost") ||
-		msg.includes("oplog was overrun") ||
-		msg.includes("cannot resume stream")
+		msg.includes("resume of change stream was not possible") ||
+		msg.includes("resume point may no longer be in the oplog")
 	)
 }
