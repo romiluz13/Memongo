@@ -27,6 +27,23 @@ const ANSWER_MAX_TOKENS = 512
 const JUDGE_MAX_TOKENS = 512
 const MAX_CONTEXT_PASSAGES = 20
 
+type E2eQaProviderOperation =
+	| "answer-generation"
+	| "answer-judge"
+	| "decoy-judge"
+type ProviderCallOutcome = "attempted" | "succeeded" | "failed"
+
+function recordProviderCall(
+	observer: ((outcome: ProviderCallOutcome) => void) | undefined,
+	outcome: ProviderCallOutcome,
+): void {
+	try {
+		observer?.(outcome)
+	} catch (error) {
+		log.warn("E2E QA provider-call observer failed", { error })
+	}
+}
+
 const ANSWER_SYSTEM_PROMPT = `You answer the QUESTION using ONLY the provided context passages from a user's memory.
 Rules:
 - Be concise and factual; answer with just the fact asked for.
@@ -51,6 +68,8 @@ export async function generateAnswer(params: {
 	model: string
 	question: string
 	contextPassages: string[]
+	onFailure?: (error: Error) => void
+	onProviderCall?: (outcome: ProviderCallOutcome) => void
 }): Promise<string> {
 	const context = params.contextPassages
 		.slice(0, MAX_CONTEXT_PASSAGES)
@@ -65,6 +84,7 @@ export async function generateAnswer(params: {
 	].join("\n")
 
 	try {
+		recordProviderCall(params.onProviderCall, "attempted")
 		const response = await params.provider.chatCompletion({
 			model: params.model,
 			messages: [
@@ -77,10 +97,14 @@ export async function generateAnswer(params: {
 		const parsed = JSON.parse(stripFences(response.content)) as {
 			answer?: unknown
 		}
+		recordProviderCall(params.onProviderCall, "succeeded")
 		return typeof parsed.answer === "string" ? parsed.answer.trim() : ""
 	} catch (err) {
+		recordProviderCall(params.onProviderCall, "failed")
+		const error = err instanceof Error ? err : new Error(String(err))
+		params.onFailure?.(error)
 		log.warn("answer generation failed", {
-			error: err instanceof Error ? err.message : String(err),
+			error: error.message,
 		})
 		return ""
 	}
@@ -92,6 +116,8 @@ export async function judgeAnswer(params: {
 	question: string
 	goldAnswer: string
 	candidateAnswer: string
+	onFailure?: (error: Error) => void
+	onProviderCall?: (outcome: ProviderCallOutcome) => void
 }): Promise<{ correct: boolean; rationale: string }> {
 	const user = [
 		`QUESTION: ${params.question}`,
@@ -101,6 +127,7 @@ export async function judgeAnswer(params: {
 	].join("\n")
 
 	try {
+		recordProviderCall(params.onProviderCall, "attempted")
 		const response = await params.provider.chatCompletion({
 			model: params.model,
 			messages: [
@@ -114,6 +141,7 @@ export async function judgeAnswer(params: {
 			correct?: unknown
 			rationale?: unknown
 		}
+		recordProviderCall(params.onProviderCall, "succeeded")
 		return {
 			// An unparseable/ambiguous verdict is never a silent pass.
 			correct: parsed.correct === true,
@@ -121,8 +149,11 @@ export async function judgeAnswer(params: {
 				typeof parsed.rationale === "string" ? parsed.rationale.trim() : "",
 		}
 	} catch (err) {
+		recordProviderCall(params.onProviderCall, "failed")
+		const error = err instanceof Error ? err : new Error(String(err))
+		params.onFailure?.(error)
 		log.warn("answer judging failed", {
-			error: err instanceof Error ? err.message : String(err),
+			error: error.message,
 		})
 		return { correct: false, rationale: "judge-error" }
 	}
@@ -134,6 +165,7 @@ export type E2eQaCase = {
 	goldAnswer: string
 	contextPassages: string[]
 	abstention?: boolean
+	upstreamFailure?: string
 }
 
 // Common phrasings for "I have no answer" — the correct response to an
@@ -175,18 +207,30 @@ function pickDecoy(cases: E2eQaCase[], index: number): string | null {
 export async function runE2eQa(params: {
 	provider: EnrichmentProvider
 	model: string
+	answerModel?: string
+	judgeModel?: string
 	cases: E2eQaCase[]
 	judgeVersion?: string
+	onProviderCall?: (
+		operation: E2eQaProviderOperation,
+		outcome: ProviderCallOutcome,
+	) => void
 }): Promise<BenchmarkE2eQaEnvelope> {
 	const { provider, model, cases } = params
+	const answerModel = params.answerModel ?? model
+	const judgeModel = params.judgeModel ?? model
 	const judgeVersion = params.judgeVersion ?? E2E_QA_JUDGE_VERSION
 	if (cases.length === 0) {
 		return {
+			answerModel: null,
 			judge: null,
 			judgeVersion: null,
 			accuracy: null,
 			latencyMs: null,
 			judgeFalsePositiveRate: null,
+			cases: { eligible: 0, attempted: 0, completed: 0, failed: 0 },
+			attempts: { answerGeneration: 0, answerJudge: 0, decoyJudge: 0 },
+			caseResults: [],
 		}
 	}
 
@@ -194,60 +238,139 @@ export async function runE2eQa(params: {
 	let decoyProbes = 0
 	let decoyPasses = 0
 	let totalLatency = 0
+	let completedCases = 0
+	let failedCases = 0
+	let answerGenerationAttempts = 0
+	let answerJudgeAttempts = 0
+	let decoyJudgeAttempts = 0
+	const caseResults: BenchmarkE2eQaEnvelope["caseResults"] = []
 
 	for (let i = 0; i < cases.length; i++) {
 		const testCase = cases[i]
 		const startedAt = Date.now()
+		if (testCase.upstreamFailure) {
+			failedCases += 1
+			caseResults.push({
+				caseId: testCase.caseId,
+				candidateAnswer: "",
+				correct: false,
+				abstention: testCase.abstention === true,
+				latencyMs: 0,
+				error: `retrieval: ${testCase.upstreamFailure}`,
+			})
+			continue
+		}
+		let caseError: string | undefined
+		answerGenerationAttempts += 1
 		const candidate = await generateAnswer({
 			provider,
-			model,
+			model: answerModel,
 			question: testCase.question,
 			contextPassages: testCase.contextPassages,
+			onProviderCall: (outcome) =>
+				params.onProviderCall?.("answer-generation", outcome),
+			onFailure: (error) => {
+				caseError = `answer-generation: ${error.message}`
+			},
 		})
 
 		if (testCase.abstention) {
 			// Correct behavior for an abstention case is to decline, not to match a
 			// gold fact — grade by refusal. No decoy probe (there is no wrong fact
 			// to plant against a "no answer" gold).
-			if (isAbstaining(candidate)) correctCount += 1
-			totalLatency += Date.now() - startedAt
+			const correct = !caseError && isAbstaining(candidate)
+			if (correct) correctCount += 1
+			const latencyMs = Date.now() - startedAt
+			totalLatency += latencyMs
+			if (caseError) failedCases += 1
+			else completedCases += 1
+			caseResults.push({
+				caseId: testCase.caseId,
+				candidateAnswer: candidate,
+				correct,
+				abstention: true,
+				latencyMs,
+				...(caseError ? { error: caseError } : {}),
+			})
 			continue
 		}
 
-		const verdict = await judgeAnswer({
-			provider,
-			model,
-			question: testCase.question,
-			goldAnswer: testCase.goldAnswer,
-			candidateAnswer: candidate,
-		})
-		totalLatency += Date.now() - startedAt
-		if (verdict.correct) correctCount += 1
+		let correct = false
+		if (!caseError) {
+			answerJudgeAttempts += 1
+			const verdict = await judgeAnswer({
+				provider,
+				model: judgeModel,
+				question: testCase.question,
+				goldAnswer: testCase.goldAnswer,
+				candidateAnswer: candidate,
+				onProviderCall: (outcome) =>
+					params.onProviderCall?.("answer-judge", outcome),
+				onFailure: (error) => {
+					caseError = `answer-judge: ${error.message}`
+				},
+			})
+			correct = !caseError && verdict.correct
+			if (correct) correctCount += 1
+		}
 
 		// Calibration probe: a genuinely-wrong decoy should be judged incorrect.
 		// Only run it when a viable decoy exists, so the FP rate reflects real
 		// probes rather than trivially-rejected nonsense.
 		const decoy = pickDecoy(cases, i)
-		if (decoy !== null) {
-			decoyProbes += 1
+		if (decoy !== null && !caseError) {
+			decoyJudgeAttempts += 1
 			const decoyVerdict = await judgeAnswer({
 				provider,
-				model,
+				model: judgeModel,
 				question: testCase.question,
 				goldAnswer: testCase.goldAnswer,
 				candidateAnswer: decoy,
+				onProviderCall: (outcome) =>
+					params.onProviderCall?.("decoy-judge", outcome),
+				onFailure: (error) => {
+					caseError = `decoy-judge: ${error.message}`
+				},
 			})
-			if (decoyVerdict.correct) decoyPasses += 1
+			if (!caseError) {
+				decoyProbes += 1
+				if (decoyVerdict.correct) decoyPasses += 1
+			}
 		}
+		const latencyMs = Date.now() - startedAt
+		totalLatency += latencyMs
+		if (caseError) failedCases += 1
+		else completedCases += 1
+		caseResults.push({
+			caseId: testCase.caseId,
+			candidateAnswer: candidate,
+			correct,
+			abstention: false,
+			latencyMs,
+			...(caseError ? { error: caseError } : {}),
+		})
 	}
 
 	return {
-		judge: model,
+		answerModel,
+		judge: judgeModel,
 		judgeVersion,
-		accuracy: correctCount / cases.length,
+		accuracy: completedCases > 0 ? correctCount / completedCases : null,
 		latencyMs: totalLatency / cases.length,
 		// Null (not 0) when no viable decoy could be constructed — an unmeasured
 		// probe must not read as a perfectly-calibrated judge.
 		judgeFalsePositiveRate: decoyProbes > 0 ? decoyPasses / decoyProbes : null,
+		cases: {
+			eligible: cases.length,
+			attempted: cases.length,
+			completed: completedCases,
+			failed: failedCases,
+		},
+		attempts: {
+			answerGeneration: answerGenerationAttempts,
+			answerJudge: answerJudgeAttempts,
+			decoyJudge: decoyJudgeAttempts,
+		},
+		caseResults,
 	}
 }

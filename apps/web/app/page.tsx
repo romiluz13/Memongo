@@ -197,18 +197,17 @@ export default function LandingPage() {
 					<div className="hero-copy-block">
 						<p className="hero-kicker">MongoDB-native agent memory</p>
 						<h1 className="hero-title">
-							<span>Your agent's memory</span>
-							<span>shouldn't live in</span>
+							<span>Memory,</span>
+							<span>minus the</span>
 							<span>
-								a <code className="hero-title-code">.md</code> file.
+								<code className="hero-title-code">.md</code> tax.
 							</span>
 						</h1>
 						<p className="hero-copy">
-							A <code>.md</code> file made it easy to start. But every turn your
-							agent re-reads the whole thing — burning tokens and rotting
-							context. Memongo gives agents indexed, pre-filtered retrieval on
-							MongoDB: vector, text, graph, and proof in one store. You inject
-							the relevant slice, not the entire brain.
+							A <code>.md</code> file is fine for the first run. It fails when
+							every turn makes the agent reread the whole past. Memongo stores
+							memory in MongoDB, then retrieves only the slice that matters:
+							source, search, graph, and proof.
 						</p>
 						<div className="hero-actions">
 							<a className="button button-primary" href="#quickstart">

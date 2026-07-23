@@ -67,6 +67,17 @@ const MAX_HISTORY_LIMIT = 200
 // default partition). Shared with the auth layer via ./scope-identity.
 const readAgentId = resolveRequestAgentId
 
+async function readJsonBody(c: Context): Promise<Record<string, unknown>> {
+	try {
+		return (await c.req.json()) as Record<string, unknown>
+	} catch (error) {
+		if (error instanceof Error && error.name === "BodyLimitError") {
+			throw error
+		}
+		return {}
+	}
+}
+
 function parseListLimit(raw?: string): number | undefined {
 	if (raw === undefined) {
 		return undefined
@@ -275,6 +286,113 @@ function parseRerankerConfig(raw: unknown):
 			: undefined
 	if (!model || version === undefined || !stage) return undefined
 	return { model, version, stage }
+}
+
+type BenchmarkCommonQualityThresholds = {
+	contractId: string
+	version: string
+	minHitRate: number
+	maxEmptyRate: number
+	minRAt5: number
+	minNdcgAt10: number
+	maxP95LatencyMs: number
+}
+
+type BenchmarkQualityThresholds =
+	| (BenchmarkCommonQualityThresholds & {
+			datasetKind: "longmemeval"
+			minSessionRecallAnyAt10: number
+			minSessionNdcgAnyAt10: number
+	  })
+	| (BenchmarkCommonQualityThresholds & {
+			datasetKind: "locomo"
+			minSessionEvidenceRecallAt10: number
+			minDialogEvidenceRecallAt10?: number
+			minAnswerAccuracy: number
+			maxJudgeFalsePositiveRate: number
+			minAnswerCoverage: number
+	  })
+
+function parseBenchmarkQualityThresholds(
+	raw: unknown,
+): BenchmarkQualityThresholds | null {
+	if (!isRecord(raw)) {
+		return null
+	}
+	const ratioFields = [
+		"minHitRate",
+		"maxEmptyRate",
+		"minRAt5",
+		"minNdcgAt10",
+	] as const
+	if (
+		typeof raw.contractId !== "string" ||
+		raw.contractId.trim() === "" ||
+		typeof raw.version !== "string" ||
+		raw.version.trim() === "" ||
+		(raw.datasetKind !== "longmemeval" && raw.datasetKind !== "locomo") ||
+		ratioFields.some(
+			(field) =>
+				typeof raw[field] !== "number" ||
+				!Number.isFinite(raw[field]) ||
+				raw[field] < 0 ||
+				raw[field] > 1,
+		) ||
+		typeof raw.maxP95LatencyMs !== "number" ||
+		!Number.isFinite(raw.maxP95LatencyMs) ||
+		raw.maxP95LatencyMs <= 0
+	) {
+		return null
+	}
+	const common = {
+		contractId: raw.contractId.trim(),
+		version: raw.version.trim(),
+		minHitRate: raw.minHitRate as number,
+		maxEmptyRate: raw.maxEmptyRate as number,
+		minRAt5: raw.minRAt5 as number,
+		minNdcgAt10: raw.minNdcgAt10 as number,
+		maxP95LatencyMs: raw.maxP95LatencyMs,
+	}
+	const validRatio = (value: unknown): value is number =>
+		typeof value === "number" &&
+		Number.isFinite(value) &&
+		value >= 0 &&
+		value <= 1
+	if (raw.datasetKind === "longmemeval") {
+		if (
+			!validRatio(raw.minSessionRecallAnyAt10) ||
+			!validRatio(raw.minSessionNdcgAnyAt10)
+		) {
+			return null
+		}
+		return {
+			...common,
+			datasetKind: "longmemeval",
+			minSessionRecallAnyAt10: raw.minSessionRecallAnyAt10,
+			minSessionNdcgAnyAt10: raw.minSessionNdcgAnyAt10,
+		}
+	}
+	if (
+		!validRatio(raw.minSessionEvidenceRecallAt10) ||
+		!validRatio(raw.minAnswerAccuracy) ||
+		!validRatio(raw.maxJudgeFalsePositiveRate) ||
+		!validRatio(raw.minAnswerCoverage) ||
+		(raw.minDialogEvidenceRecallAt10 !== undefined &&
+			!validRatio(raw.minDialogEvidenceRecallAt10))
+	) {
+		return null
+	}
+	return {
+		...common,
+		datasetKind: "locomo",
+		minSessionEvidenceRecallAt10: raw.minSessionEvidenceRecallAt10,
+		...(typeof raw.minDialogEvidenceRecallAt10 === "number"
+			? { minDialogEvidenceRecallAt10: raw.minDialogEvidenceRecallAt10 }
+			: {}),
+		minAnswerAccuracy: raw.minAnswerAccuracy,
+		maxJudgeFalsePositiveRate: raw.maxJudgeFalsePositiveRate,
+		minAnswerCoverage: raw.minAnswerCoverage,
+	}
 }
 
 function parseBenchmarkRetrievalLane(
@@ -699,10 +817,7 @@ export function createV1Router(): Hono {
 	const v1 = new Hono()
 
 	v1.post("/search", async (c) => {
-		const body = (await c.req.json().catch(() => ({}))) as Record<
-			string,
-			unknown
-		>
+		const body = (await readJsonBody(c)) as Record<string, unknown>
 		const query = readQuery(body)
 		if (!query.trim()) {
 			return jsonError(c, 400, "VALIDATION_ERROR", "query is required")
@@ -729,10 +844,7 @@ export function createV1Router(): Hono {
 	})
 
 	v1.post("/search-kb", async (c) => {
-		const body = (await c.req.json().catch(() => ({}))) as Record<
-			string,
-			unknown
-		>
+		const body = (await readJsonBody(c)) as Record<string, unknown>
 		const query = readQuery(body)
 		if (!query.trim()) {
 			return jsonError(c, 400, "VALIDATION_ERROR", "query is required")
@@ -764,10 +876,7 @@ export function createV1Router(): Hono {
 	})
 
 	v1.post("/recall-conversation", async (c) => {
-		const body = (await c.req.json().catch(() => ({}))) as Record<
-			string,
-			unknown
-		>
+		const body = (await readJsonBody(c)) as Record<string, unknown>
 		const roles = readConversationRoles(body)
 		if (roles === null) {
 			return jsonError(
@@ -776,6 +885,10 @@ export function createV1Router(): Hono {
 				"VALIDATION_ERROR",
 				"roles must contain only user|assistant|system|tool",
 			)
+		}
+		const asOf = readDateValue(body.asOf)
+		if (asOf === null) {
+			return jsonError(c, 400, "VALIDATION_ERROR", "asOf must be a valid date")
 		}
 		try {
 			const result = await memongoBridgeRecallConversation({
@@ -789,6 +902,7 @@ export function createV1Router(): Hono {
 				startTime:
 					typeof body.startTime === "string" ? body.startTime : undefined,
 				endTime: typeof body.endTime === "string" ? body.endTime : undefined,
+				asOf: asOf?.toISOString(),
 				timezone: typeof body.timezone === "string" ? body.timezone : undefined,
 				includeToolMessages:
 					typeof body.includeToolMessages === "boolean"
@@ -807,10 +921,7 @@ export function createV1Router(): Hono {
 	})
 
 	v1.post("/import/conversations", async (c) => {
-		const body = (await c.req.json().catch(() => ({}))) as Record<
-			string,
-			unknown
-		>
+		const body = (await readJsonBody(c)) as Record<string, unknown>
 		if (
 			typeof body.datasetPath !== "string" ||
 			body.datasetPath.trim() === ""
@@ -840,10 +951,7 @@ export function createV1Router(): Hono {
 	})
 
 	v1.post("/lifecycle/get", async (c) => {
-		const body = (await c.req.json().catch(() => ({}))) as Record<
-			string,
-			unknown
-		>
+		const body = (await readJsonBody(c)) as Record<string, unknown>
 		const handle = readLifecycleHandle(body.handle)
 		if (!handle) {
 			return jsonError(
@@ -870,10 +978,7 @@ export function createV1Router(): Hono {
 	})
 
 	v1.post("/lifecycle/update", async (c) => {
-		const body = (await c.req.json().catch(() => ({}))) as Record<
-			string,
-			unknown
-		>
+		const body = (await readJsonBody(c)) as Record<string, unknown>
 		const handle = readLifecycleHandle(body.handle)
 		if (!handle) {
 			return jsonError(
@@ -912,10 +1017,7 @@ export function createV1Router(): Hono {
 	})
 
 	v1.post("/lifecycle/delete", async (c) => {
-		const body = (await c.req.json().catch(() => ({}))) as Record<
-			string,
-			unknown
-		>
+		const body = (await readJsonBody(c)) as Record<string, unknown>
 		const handle = readLifecycleHandle(body.handle)
 		if (!handle) {
 			return jsonError(
@@ -955,10 +1057,7 @@ export function createV1Router(): Hono {
 	})
 
 	v1.post("/lifecycle/history", async (c) => {
-		const body = (await c.req.json().catch(() => ({}))) as Record<
-			string,
-			unknown
-		>
+		const body = (await readJsonBody(c)) as Record<string, unknown>
 		const handle = readLifecycleHandle(body.handle)
 		if (!handle) {
 			return jsonError(
@@ -998,10 +1097,7 @@ export function createV1Router(): Hono {
 	})
 
 	v1.post("/procedures/outcome", async (c) => {
-		const body = (await c.req.json().catch(() => ({}))) as Record<
-			string,
-			unknown
-		>
+		const body = (await readJsonBody(c)) as Record<string, unknown>
 		const handle = readLifecycleHandle(body.handle)
 		if (!handle || handle.family !== "procedure") {
 			return jsonError(
@@ -1048,10 +1144,7 @@ export function createV1Router(): Hono {
 	})
 
 	v1.post("/memory/feedback", async (c) => {
-		const body = (await c.req.json().catch(() => ({}))) as Record<
-			string,
-			unknown
-		>
+		const body = (await readJsonBody(c)) as Record<string, unknown>
 		const handle = readLifecycleHandle(body.handle)
 		if (!handle || handle.family !== "structured") {
 			return jsonError(
@@ -1133,10 +1226,7 @@ export function createV1Router(): Hono {
 	})
 
 	v1.post("/search-detailed", async (c) => {
-		const body = (await c.req.json().catch(() => ({}))) as Record<
-			string,
-			unknown
-		>
+		const body = (await readJsonBody(c)) as Record<string, unknown>
 		const scopeError = await readScopeInputError(c)
 		if (scopeError) {
 			return jsonError(c, 400, "VALIDATION_ERROR", scopeError)
@@ -1255,10 +1345,7 @@ export function createV1Router(): Hono {
 	})
 
 	v1.post("/hydrate-active-slate", async (c) => {
-		const body = (await c.req.json().catch(() => ({}))) as Record<
-			string,
-			unknown
-		>
+		const body = (await readJsonBody(c)) as Record<string, unknown>
 		const scopeError = await readScopeInputError(c)
 		if (scopeError) {
 			return jsonError(c, 400, "VALIDATION_ERROR", scopeError)
@@ -1278,10 +1365,7 @@ export function createV1Router(): Hono {
 	})
 
 	v1.post("/discovery-projection", async (c) => {
-		const body = (await c.req.json().catch(() => ({}))) as Record<
-			string,
-			unknown
-		>
+		const body = (await readJsonBody(c)) as Record<string, unknown>
 		const kind = readDiscoveryProjectionKind(body)
 		if (!kind) {
 			return jsonError(c, 400, "VALIDATION_ERROR", "kind is required")
@@ -1322,10 +1406,7 @@ export function createV1Router(): Hono {
 	})
 
 	v1.post("/context-bundle", async (c) => {
-		const body = (await c.req.json().catch(() => ({}))) as Record<
-			string,
-			unknown
-		>
+		const body = (await readJsonBody(c)) as Record<string, unknown>
 		const discoveryKind =
 			body.discoveryKind === undefined
 				? undefined
@@ -1391,10 +1472,7 @@ export function createV1Router(): Hono {
 	})
 
 	v1.post("/read-file", async (c) => {
-		const body = (await c.req.json().catch(() => ({}))) as Record<
-			string,
-			unknown
-		>
+		const body = (await readJsonBody(c)) as Record<string, unknown>
 		const relPath = typeof body.relPath === "string" ? body.relPath : ""
 		if (!relPath.trim()) {
 			return jsonError(c, 400, "VALIDATION_ERROR", "relPath is required")
@@ -1414,10 +1492,7 @@ export function createV1Router(): Hono {
 	})
 
 	v1.post("/add", async (c) => {
-		const body = (await c.req.json().catch(() => ({}))) as Record<
-			string,
-			unknown
-		>
+		const body = (await readJsonBody(c)) as Record<string, unknown>
 		const content = typeof body.content === "string" ? body.content : ""
 		if (!content.trim()) {
 			return jsonError(c, 400, "VALIDATION_ERROR", "content is required")
@@ -1453,10 +1528,7 @@ export function createV1Router(): Hono {
 	})
 
 	v1.post("/write-event", async (c) => {
-		const body = (await c.req.json().catch(() => ({}))) as Record<
-			string,
-			unknown
-		>
+		const body = (await readJsonBody(c)) as Record<string, unknown>
 		const role = body.role
 		const bodyText = typeof body.body === "string" ? body.body : ""
 		if (
@@ -1475,6 +1547,28 @@ export function createV1Router(): Hono {
 		if (!bodyText.trim()) {
 			return jsonError(c, 400, "VALIDATION_ERROR", "body is required")
 		}
+		const timestamp = readDateValue(body.timestamp)
+		const validAt = readDateValue(body.validAt)
+		const invalidAt = readDateValue(body.invalidAt)
+		if (timestamp === null || validAt === null || invalidAt === null) {
+			return jsonError(
+				c,
+				400,
+				"VALIDATION_ERROR",
+				"timestamp, validAt, and invalidAt must be valid date strings when provided",
+			)
+		}
+		if (
+			invalidAt &&
+			invalidAt.getTime() <= (validAt ?? timestamp ?? new Date()).getTime()
+		) {
+			return jsonError(
+				c,
+				400,
+				"VALIDATION_ERROR",
+				"invalidAt must be later than validAt or timestamp",
+			)
+		}
 		const scopeError = await readScopeInputError(c)
 		if (scopeError) {
 			return jsonError(c, 400, "VALIDATION_ERROR", scopeError)
@@ -1492,8 +1586,9 @@ export function createV1Router(): Hono {
 				role,
 				body: bodyText,
 				sessionId: await readSessionId(c),
-				timestamp:
-					typeof body.timestamp === "string" ? body.timestamp : undefined,
+				timestamp: timestamp?.toISOString(),
+				validAt: validAt?.toISOString(),
+				invalidAt: invalidAt?.toISOString(),
 				metadata,
 				scope,
 				scopeRef: await readScopeRef(c),
@@ -1510,10 +1605,7 @@ export function createV1Router(): Hono {
 	})
 
 	v1.post("/extract", async (c) => {
-		const body = (await c.req.json().catch(() => ({}))) as Record<
-			string,
-			unknown
-		>
+		const body = (await readJsonBody(c)) as Record<string, unknown>
 		const eventId = typeof body.eventId === "string" ? body.eventId : ""
 		if (!eventId.trim()) {
 			return jsonError(c, 400, "VALIDATION_ERROR", "eventId is required")
@@ -1537,10 +1629,7 @@ export function createV1Router(): Hono {
 	})
 
 	v1.post("/write-structured", async (c) => {
-		const body = (await c.req.json().catch(() => ({}))) as Record<
-			string,
-			unknown
-		>
+		const body = (await readJsonBody(c)) as Record<string, unknown>
 		const entry = body.entry
 		if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
 			return jsonError(c, 400, "VALIDATION_ERROR", "entry object is required")
@@ -1560,10 +1649,7 @@ export function createV1Router(): Hono {
 	})
 
 	v1.post("/write-procedure", async (c) => {
-		const body = (await c.req.json().catch(() => ({}))) as Record<
-			string,
-			unknown
-		>
+		const body = (await readJsonBody(c)) as Record<string, unknown>
 		const entry = body.entry
 		if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
 			return jsonError(c, 400, "VALIDATION_ERROR", "entry object is required")
@@ -1583,10 +1669,7 @@ export function createV1Router(): Hono {
 	})
 
 	v1.post("/profile", async (c) => {
-		const body = (await c.req.json().catch(() => ({}))) as Record<
-			string,
-			unknown
-		>
+		const body = (await readJsonBody(c)) as Record<string, unknown>
 		const scopeError = await readScopeInputError(c)
 		if (scopeError) {
 			return jsonError(c, 400, "VALIDATION_ERROR", scopeError)
@@ -1665,10 +1748,7 @@ export function createV1Router(): Hono {
 	})
 
 	v1.post("/sync", async (c) => {
-		const body = (await c.req.json().catch(() => ({}))) as Record<
-			string,
-			unknown
-		>
+		const body = (await readJsonBody(c)) as Record<string, unknown>
 		try {
 			await memongoBridgeSync({
 				agentId: await readAgentId(c),
@@ -1705,10 +1785,7 @@ export function createV1Router(): Hono {
 	})
 
 	v1.post("/admin/relevance/explain", async (c) => {
-		const body = (await c.req.json().catch(() => ({}))) as Record<
-			string,
-			unknown
-		>
+		const body = (await readJsonBody(c)) as Record<string, unknown>
 		const query = typeof body.query === "string" ? body.query : ""
 		if (!query.trim()) {
 			return jsonError(c, 400, "VALIDATION_ERROR", "query is required")
@@ -1740,10 +1817,7 @@ export function createV1Router(): Hono {
 	})
 
 	v1.post("/admin/relevance/benchmark", async (c) => {
-		const body = (await c.req.json().catch(() => ({}))) as Record<
-			string,
-			unknown
-		>
+		const body = (await readJsonBody(c)) as Record<string, unknown>
 		try {
 			// Task 1.A parity envelope inputs (all optional at Phase 1).
 			const datasetSha256 =
@@ -1754,6 +1828,17 @@ export function createV1Router(): Hono {
 			const embeddingConfig = parseEmbeddingConfig(body.embeddingConfig)
 			const rerankerConfig = parseRerankerConfig(body.rerankerConfig)
 			const retrievalLane = parseBenchmarkRetrievalLane(body.retrievalLane)
+			const qualityThresholds = parseBenchmarkQualityThresholds(
+				body.qualityThresholds,
+			)
+			if (body.qualityThresholds !== undefined && !qualityThresholds) {
+				return jsonError(
+					c,
+					400,
+					"VALIDATION_ERROR",
+					"qualityThresholds must declare finite ratios between 0 and 1 and a positive maxP95LatencyMs",
+				)
+			}
 
 			const out = await memongoBridgeRelevanceBenchmark({
 				agentId: await readAgentId(c),
@@ -1766,6 +1851,7 @@ export function createV1Router(): Hono {
 				...(embeddingConfig ? { embeddingConfig } : {}),
 				...(rerankerConfig ? { rerankerConfig } : {}),
 				...(retrievalLane ? { retrievalLane } : {}),
+				...(qualityThresholds ? { qualityThresholds } : {}),
 			})
 			try {
 				return c.json(out)
@@ -1818,10 +1904,7 @@ export function createV1Router(): Hono {
 	})
 
 	v1.post("/admin/benchmarks/ingest", async (c) => {
-		const body = (await c.req.json().catch(() => ({}))) as Record<
-			string,
-			unknown
-		>
+		const body = (await readJsonBody(c)) as Record<string, unknown>
 		const datasetPath =
 			typeof body.datasetPath === "string" ? body.datasetPath.trim() : ""
 		if (!datasetPath) {
@@ -2028,10 +2111,7 @@ export function createV1Router(): Hono {
 	})
 
 	v1.post("/chain-trace", async (c) => {
-		const body = (await c.req.json().catch(() => ({}))) as Record<
-			string,
-			unknown
-		>
+		const body = (await readJsonBody(c)) as Record<string, unknown>
 		const factId = typeof body.factId === "string" ? body.factId : ""
 		const collection =
 			typeof body.collection === "string" ? body.collection : ""
@@ -2056,10 +2136,7 @@ export function createV1Router(): Hono {
 	})
 
 	v1.post("/novelty-scan", async (c) => {
-		const body = (await c.req.json().catch(() => ({}))) as Record<
-			string,
-			unknown
-		>
+		const body = (await readJsonBody(c)) as Record<string, unknown>
 		try {
 			const report = await memongoBridgeScanNovelty({
 				agentId: await readAgentId(c),
@@ -2075,10 +2152,7 @@ export function createV1Router(): Hono {
 	})
 
 	v1.post("/consolidate", async (c) => {
-		const body = (await c.req.json().catch(() => ({}))) as Record<
-			string,
-			unknown
-		>
+		const body = (await readJsonBody(c)) as Record<string, unknown>
 		try {
 			const result = await memongoBridgeConsolidate({
 				agentId: await readAgentId(c),
@@ -2099,10 +2173,7 @@ export function createV1Router(): Hono {
 	})
 
 	v1.post("/self-edit", async (c) => {
-		const body = (await c.req.json().catch(() => ({}))) as Record<
-			string,
-			unknown
-		>
+		const body = (await readJsonBody(c)) as Record<string, unknown>
 		const block = typeof body.block === "string" ? body.block : ""
 		const action = typeof body.action === "string" ? body.action : "replace"
 		const content = typeof body.content === "string" ? body.content : ""

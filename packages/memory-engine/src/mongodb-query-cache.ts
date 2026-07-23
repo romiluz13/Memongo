@@ -52,6 +52,29 @@ export type CacheCheckResult = {
 	sourceScope?: string
 }
 
+export async function invalidateQueryCache(params: {
+	db: Db
+	prefix: string
+	agentId: string
+	scope: MemoryScope
+	scopeRef: string
+}): Promise<number> {
+	try {
+		const result = await queryCacheCollection(
+			params.db,
+			params.prefix,
+		).deleteMany({
+			agentId: params.agentId,
+			scope: params.scope,
+			scopeRef: params.scopeRef,
+		})
+		return result.deletedCount
+	} catch (err) {
+		log.warn(`query cache invalidation failed: ${String(err)}`)
+		return 0
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------

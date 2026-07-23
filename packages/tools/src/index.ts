@@ -52,6 +52,9 @@ const writeEventSchema = z.object({
 	body: z.string(),
 	agentId: z.string().optional(),
 	sessionId: z.string().optional(),
+	timestamp: z.string().datetime().optional(),
+	validAt: z.string().datetime().optional(),
+	invalidAt: z.string().datetime().optional(),
 	scope: z
 		.enum(["session", "user", "agent", "workspace", "tenant", "global"])
 		.optional(),
@@ -102,6 +105,7 @@ const recallConversationSchema = z.object({
 	roles: z.array(z.enum(["user", "assistant", "system", "tool"])).optional(),
 	startTime: z.string().optional(),
 	endTime: z.string().optional(),
+	asOf: z.string().optional(),
 	timezone: z.string().optional(),
 	includeToolMessages: z.boolean().optional(),
 	limit: z.number().int().positive().max(200).optional(),

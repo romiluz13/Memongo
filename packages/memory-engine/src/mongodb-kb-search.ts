@@ -153,6 +153,7 @@ export async function searchKB(
 				numCandidates,
 				limit: opts.maxResults,
 				filter: chunkFilter,
+				returnStoredSource: opts.capabilities.storedSource,
 			})
 
 			if (vsStage) {
@@ -189,7 +190,7 @@ export async function searchKB(
 							text: 1,
 							docId: 1,
 							updatedAt: 1,
-							score: { $meta: "searchScore" },
+							score: { $meta: "score" },
 						},
 					},
 				]
@@ -241,6 +242,7 @@ export async function searchKB(
 				numCandidates,
 				limit: opts.maxResults,
 				filter: chunkFilter,
+				returnStoredSource: opts.capabilities.storedSource,
 			})
 
 			if (vsStage) {

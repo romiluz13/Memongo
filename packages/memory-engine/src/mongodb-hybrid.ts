@@ -139,8 +139,18 @@ export function mergeHybridResultsMongoDB(params: {
 	vector: MemorySearchResult[]
 	keyword: MemorySearchResult[]
 	maxResults: number
+	/**
+	 * Optional RRF weights for the vector and keyword streams. When omitted,
+	 * defaults to equal weights (1:1). Pass the same weights the server-side
+	 * $rankFusion/$scoreFusion would use (e.g. 0.7/0.3) so the JS fallback
+	 * matches the fused ranking.
+	 */
+	vectorWeight?: number
+	textWeight?: number
 }): MemorySearchResult[] {
 	const { vector, keyword, maxResults } = params
+	const vectorWeight = params.vectorWeight ?? 1
+	const textWeight = params.textWeight ?? 1
 
 	if (vector.length === 0 && keyword.length === 0) {
 		return []
@@ -302,12 +312,12 @@ export function mergeHybridResultsMongoDB(params: {
 		}
 	>()
 
-	// Assign RRF scores based on rank in vector results
+	// Assign RRF scores based on rank in vector results (scaled by vectorWeight)
 	for (let rank = 0; rank < vector.length; rank++) {
 		const r = vector[rank]
 		const id = resultIdentity(r)
 		const existing = byId.get(id)
-		const rScore = rrfScore(rank + 1) // 1-based rank
+		const rScore = rrfScore(rank + 1) * vectorWeight // 1-based rank
 		if (existing) {
 			existing.rrfSum += rScore
 			existing.result = mergeResultMetadata(existing.result, r)
@@ -319,12 +329,12 @@ export function mergeHybridResultsMongoDB(params: {
 		}
 	}
 
-	// Assign RRF scores based on rank in keyword results
+	// Assign RRF scores based on rank in keyword results (scaled by textWeight)
 	for (let rank = 0; rank < keyword.length; rank++) {
 		const r = keyword[rank]
 		const id = resultIdentity(r)
 		const existing = byId.get(id)
-		const rScore = rrfScore(rank + 1) // 1-based rank
+		const rScore = rrfScore(rank + 1) * textWeight // 1-based rank
 		if (existing) {
 			existing.rrfSum += rScore
 			existing.result = mergeResultMetadata(existing.result, r)
@@ -341,8 +351,9 @@ export function mergeHybridResultsMongoDB(params: {
 	}
 
 	// Normalize RRF scores to [0,1] and sort descending
-	// Maximum possible sum is 2 * 1/(k+1) when a result is ranked #1 in both lists
-	const maxPossibleSum = 2 * rrfScore(1)
+	// Maximum possible sum is (vectorWeight + textWeight) * rrfScore(1) when a
+	// result is ranked #1 in both lists
+	const maxPossibleSum = (vectorWeight + textWeight) * rrfScore(1)
 
 	const merged = Array.from(byId.values())
 		.map((entry) => ({

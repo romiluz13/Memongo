@@ -291,10 +291,11 @@ describe("E2E: MongoDB Collections and Indexes", () => {
 describe("E2E: Capability Detection", () => {
 	it("matches the live deployment's actual search capabilities", async () => {
 		const caps = await detectCapabilities(db, `${TEST_PREFIX}chunks`)
+		const buildInfo = await db.admin().command({ buildInfo: 1 })
+		const [major = 0, minor = 0] = buildInfo.versionArray as number[]
 
-		// MongoDB 8.2 recognizes $rankFusion and $scoreFusion as valid stages
 		expect(caps.rankFusion).toBe(true)
-		expect(caps.scoreFusion).toBe(true)
+		expect(caps.scoreFusion).toBe(major > 8 || (major === 8 && minor >= 3))
 
 		let listSearchIndexesAvailable = false
 		try {
@@ -703,6 +704,8 @@ describe("E2E: mongoSearch dispatcher fallback", () => {
 					textSearch: false,
 					scoreFusion: false,
 					rankFusion: false,
+					storedSource: false,
+					vectorIndexMethod: false,
 				},
 				vectorIndexName: `${TEST_PREFIX}chunks_vector`,
 				textIndexName: `${TEST_PREFIX}chunks_text`,
@@ -975,7 +978,7 @@ describe("E2E: Transactions (replica set)", () => {
 					)
 					executed = true
 				},
-				{ writeConcern: { w: "majority" } },
+				{ writeConcern: { w: "majority", wtimeout: 1000 } },
 			)
 			expect(executed).toBe(true)
 

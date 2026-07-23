@@ -11,6 +11,7 @@ import {
 	writeStructuredMemory,
 	type StructuredMemoryType,
 } from "./mongodb-structured-memory.js"
+import { MAJORITY_TRANSACTION_OPTIONS } from "./mongodb-transactions.js"
 
 // ---------------------------------------------------------------------------
 // Block → structured memory type/key mapping
@@ -87,7 +88,13 @@ export async function selfEditBlock(params: {
 	if (action !== "replace" && client) {
 		const session = client.startSession()
 		try {
-			let result: { upserted: boolean; id: string } | undefined
+			let result:
+				| {
+						upserted: boolean
+						id: string
+						pendingSideEffects?: () => Promise<void>
+				  }
+				| undefined
 			await session.withTransaction(async () => {
 				const existing = await structuredMemCollection(db, prefix).findOne(
 					{ agentId, type, key },
@@ -119,7 +126,12 @@ export async function selfEditBlock(params: {
 					embeddingMode,
 					session,
 				})
-			})
+			}, MAJORITY_TRANSACTION_OPTIONS)
+
+			// Run deferred side effects (query-cache invalidation + audit) AFTER the
+			// transaction commits, so we don't record an audit for a write that may
+			// never commit.
+			await result?.pendingSideEffects?.()
 
 			return { upserted: result?.upserted ?? false, id: `core:${block}` }
 		} finally {

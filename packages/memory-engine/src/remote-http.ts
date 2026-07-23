@@ -41,11 +41,23 @@ export async function withRemoteHttpResponse<T>(params: {
 	ssrfPolicy?: SsrFPolicy
 	auditContext?: string
 	onResponse: (response: Response) => Promise<T>
+	fetchFn?: typeof globalThis.fetch
 	// Overridable DNS-resolving guard seam — production uses assertPublicHostname
 	// (DNS-resolves the host and blocks private/metadata targets); tests inject a
 	// deterministic fake so no real network lookup is required.
 	verifyPublicHostname?: (hostname: string) => Promise<void>
 }): Promise<T> {
+	let parsedUrl: URL
+	try {
+		parsedUrl = new URL(params.url)
+	} catch {
+		throw new SsrFBlockedError(`SSRF guard rejected invalid URL: ${params.url}`)
+	}
+	if (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") {
+		throw new SsrFBlockedError(
+			`SSRF guard rejected non-HTTP URL: ${params.url}`,
+		)
+	}
 	const policy = params.ssrfPolicy ?? defaultSsrfPolicy
 	// Hostname pinning: when the caller configured an allow predicate (e.g. from
 	// the operator's baseUrl), the request must target that exact host.
@@ -60,8 +72,15 @@ export async function withRemoteHttpResponse<T>(params: {
 	// Real risk is low because these URLs are operator-configured, not user input.
 	if (!isPrivateNetworkAllowedByPolicy(policy)) {
 		const verify = params.verifyPublicHostname ?? assertPublicHostname
-		await verify(new URL(params.url).hostname)
+		await verify(parsedUrl.hostname)
 	}
-	const response = await fetch(params.url, params.init)
+	const fetchFn = params.fetchFn ?? fetch
+	const response = await fetchFn(params.url, {
+		...params.init,
+		redirect: "manual",
+	})
+	if (response.status >= 300 && response.status < 400) {
+		throw new SsrFBlockedError(`SSRF guard refused redirect from ${params.url}`)
+	}
 	return await params.onResponse(response)
 }

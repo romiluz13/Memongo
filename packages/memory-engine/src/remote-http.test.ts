@@ -107,4 +107,32 @@ describe("withRemoteHttpResponse SSRF guard", () => {
 		).rejects.toBeInstanceOf(SsrFBlockedError)
 		expect(fetchMock).not.toHaveBeenCalled()
 	})
+
+	it("rejects non-HTTP protocols before fetching", async () => {
+		await expect(
+			withRemoteHttpResponse({
+				url: "file:///etc/passwd",
+				onResponse: async (r) => r.status,
+			}),
+		).rejects.toBeInstanceOf(SsrFBlockedError)
+		expect(fetchMock).not.toHaveBeenCalled()
+	})
+
+	it("does not follow redirects that could escape the validated host", async () => {
+		fetchMock.mockResolvedValueOnce(
+			new Response(null, {
+				status: 302,
+				headers: { Location: "http://169.254.169.254/latest/meta-data/" },
+			}),
+		)
+		await expect(
+			withRemoteHttpResponse({
+				url: "https://api.example.com/v1/embeddings",
+				verifyPublicHostname: vi.fn(async () => {}),
+				onResponse: async (r) => r.status,
+			}),
+		).rejects.toBeInstanceOf(SsrFBlockedError)
+		expect(fetchMock).toHaveBeenCalledOnce()
+		expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({ redirect: "manual" })
+	})
 })

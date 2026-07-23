@@ -471,6 +471,10 @@ export function buildVectorSearchStage(input: {
 	/** When true, uses MongoDB ENN (exact nearest neighbor): sets exact: true
 	 *  and omits numCandidates per the $vectorSearch contract. */
 	exact?: boolean
+	/** When true, returns stored source fields from the index without a
+	 *  collection re-fetch (requires the index to have `storedSource` configured).
+	 *  MongoDB 8.3+ feature. */
+	returnStoredSource?: boolean
 }): Document | null {
 	const limit = normalizeVectorSearchLimit(input.limit)
 	const base: Document = {
@@ -490,6 +494,12 @@ export function buildVectorSearchStage(input: {
 
 	if (input.filter && Object.keys(input.filter).length > 0) {
 		base.filter = input.filter
+	}
+
+	// L4: returnStoredSource — return stored source fields from the index
+	// without a collection re-fetch (MongoDB 8.3+ feature).
+	if (input.returnStoredSource) {
+		base.returnStoredSource = true
 	}
 
 	if (input.embeddingMode === "automated" && input.queryText) {
@@ -520,6 +530,7 @@ export async function vectorSearch(
 		embeddingMode?: MemoryMongoDBEmbeddingMode
 		numCandidates?: number
 		explain?: SearchExplainOptions
+		returnStoredSource?: boolean
 	},
 ): Promise<MemorySearchResult[]> {
 	const filter: Document = {}
@@ -540,6 +551,7 @@ export async function vectorSearch(
 		numCandidates: opts.numCandidates ?? Math.max(opts.maxResults * 20, 100),
 		limit: opts.maxResults,
 		filter: mergedFilter,
+		returnStoredSource: opts.returnStoredSource ?? false,
 	})
 
 	if (!vsStage) {
@@ -678,7 +690,7 @@ export async function keywordSearch(
 }
 
 // ---------------------------------------------------------------------------
-// Hybrid Search with $scoreFusion (MongoDB 8.2+)
+// Hybrid Search with $scoreFusion (MongoDB 8.3+)
 // ---------------------------------------------------------------------------
 
 export async function hybridSearchScoreFusion(
@@ -927,6 +939,8 @@ export function hybridSearchJSFallback(
 		vector: vectorResults,
 		keyword: keywordResults,
 		maxResults: opts.maxResults,
+		vectorWeight: opts.vectorWeight,
+		textWeight: opts.textWeight,
 	})
 }
 
@@ -967,6 +981,7 @@ export async function mongoSearch(
 		vectorWeight,
 		textWeight,
 		embeddingMode,
+		returnStoredSource: opts.capabilities.storedSource,
 	}
 
 	// Attempt hybrid search first (best quality).

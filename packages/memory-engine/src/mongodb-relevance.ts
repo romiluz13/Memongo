@@ -90,6 +90,8 @@ export type RelevanceBenchmarkResult = {
 	cases: number
 	scoredCases?: number
 	skippedCases?: number
+	execution?: import("./types.js").MemoryBenchmarkExecutionSummary
+	caseOutcomes?: import("./types.js").MemoryBenchmarkCaseOutcome[]
 	hitRate: number
 	emptyRate: number
 	avgTopScore: number

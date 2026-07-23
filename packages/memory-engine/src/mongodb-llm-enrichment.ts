@@ -15,6 +15,10 @@
  */
 
 import { type MemoryScope, createSubsystemLogger } from "@memongo/lib"
+import {
+	buildRemoteBaseUrlPolicy,
+	withRemoteHttpResponse,
+} from "./remote-http.js"
 import type {
 	MemoryBenchmarkConversation,
 	MemoryBenchmarkTurn,
@@ -38,6 +42,11 @@ export type EnrichmentProviderConfig = {
 	provider?: "openai-compatible" | "anthropic"
 	authStyle?: EnrichmentAuthStyle
 	tokenParam?: EnrichmentTokenParam
+	allowPrivateNetwork?: boolean
+}
+
+type EnrichmentTransportOptions = {
+	verifyPublicHostname?: (hostname: string) => Promise<void>
 }
 
 export type EnrichmentProvider = {
@@ -289,6 +298,7 @@ export function resolveEnrichmentMaxTokens(
 export function createHttpProvider(
 	config: EnrichmentProviderConfig,
 	fetchFn: typeof globalThis.fetch = globalThis.fetch,
+	transport: EnrichmentTransportOptions = {},
 ): EnrichmentProvider {
 	if (config.provider === "anthropic") {
 		return createAnthropicProvider(config, fetchFn)
@@ -314,17 +324,30 @@ export function createHttpProvider(
 			const timer = setTimeout(() => controller.abort(), timeoutMs)
 
 			try {
-				const response = await fetchFn(url, {
-					method: "POST",
-					headers: {
-						"Content-Type": "application/json",
-						...buildAuthHeaders(
-							config.apiKey,
-							config.authStyle ?? DEFAULT_OPENAI_COMPATIBLE_AUTH_STYLE,
-						),
+				const pinnedPolicy = buildRemoteBaseUrlPolicy(config.baseUrl)
+				const response = await withRemoteHttpResponse({
+					url,
+					fetchFn,
+					verifyPublicHostname: transport.verifyPublicHostname,
+					ssrfPolicy: pinnedPolicy
+						? {
+								...pinnedPolicy,
+								allowPrivateNetwork: config.allowPrivateNetwork === true,
+							}
+						: undefined,
+					init: {
+						method: "POST",
+						headers: {
+							"Content-Type": "application/json",
+							...buildAuthHeaders(
+								config.apiKey,
+								config.authStyle ?? DEFAULT_OPENAI_COMPATIBLE_AUTH_STYLE,
+							),
+						},
+						body: JSON.stringify(body),
+						signal: controller.signal,
 					},
-					body: JSON.stringify(body),
-					signal: controller.signal,
+					onResponse: async (value) => value,
 				})
 
 				if (!response.ok) {
@@ -367,6 +390,7 @@ export function createHttpProvider(
 export function createAnthropicProvider(
 	config: EnrichmentProviderConfig,
 	fetchFn: typeof globalThis.fetch = globalThis.fetch,
+	transport: EnrichmentTransportOptions = {},
 ): EnrichmentProvider {
 	return {
 		name: "anthropic",
@@ -396,18 +420,31 @@ export function createAnthropicProvider(
 			const timer = setTimeout(() => controller.abort(), timeoutMs)
 
 			try {
-				const response = await fetchFn(url, {
-					method: "POST",
-					headers: {
-						"Content-Type": "application/json",
-						"anthropic-version": "2023-06-01",
-						...buildAuthHeaders(
-							config.apiKey,
-							config.authStyle ?? DEFAULT_ANTHROPIC_AUTH_STYLE,
-						),
+				const pinnedPolicy = buildRemoteBaseUrlPolicy(config.baseUrl)
+				const response = await withRemoteHttpResponse({
+					url,
+					fetchFn,
+					verifyPublicHostname: transport.verifyPublicHostname,
+					ssrfPolicy: pinnedPolicy
+						? {
+								...pinnedPolicy,
+								allowPrivateNetwork: config.allowPrivateNetwork === true,
+							}
+						: undefined,
+					init: {
+						method: "POST",
+						headers: {
+							"Content-Type": "application/json",
+							"anthropic-version": "2023-06-01",
+							...buildAuthHeaders(
+								config.apiKey,
+								config.authStyle ?? DEFAULT_ANTHROPIC_AUTH_STYLE,
+							),
+						},
+						body: JSON.stringify(body),
+						signal: controller.signal,
 					},
-					body: JSON.stringify(body),
-					signal: controller.signal,
+					onResponse: async (value) => value,
 				})
 
 				if (!response.ok) {
@@ -507,6 +544,9 @@ export function resolveEnrichmentProvider(
 		provider,
 		authStyle,
 		tokenParam,
+		allowPrivateNetwork: resolveEnrichmentStrictMode(
+			env.MEMONGO_ENRICHMENT_ALLOW_PRIVATE_NETWORK,
+		),
 	})
 }
 
@@ -805,6 +845,7 @@ export async function enrichSessionsWithLLM(params: {
 	eventIds: Map<string, string[]>
 	concurrency?: number
 	strict?: boolean
+	onProviderCall?: (outcome: "attempted" | "succeeded" | "failed") => void
 }): Promise<EnrichSessionsResult> {
 	const concurrency = params.concurrency ?? MAX_CONCURRENT
 	const userfactDocs: UserfactEvidenceEnrichedDocument[] = []
@@ -813,6 +854,15 @@ export async function enrichSessionsWithLLM(params: {
 	const failureSamples: EnrichSessionsResult["failureSamples"] = []
 	let sessionsEnriched = 0
 	let sessionsFailed = 0
+	const recordProviderCall = (
+		outcome: "attempted" | "succeeded" | "failed",
+	) => {
+		try {
+			params.onProviderCall?.(outcome)
+		} catch (error) {
+			log.warn("LLM enrichment provider-call observer failed", { error })
+		}
+	}
 
 	// Build session work items
 	type SessionWork = {
@@ -851,22 +901,30 @@ export async function enrichSessionsWithLLM(params: {
 			const currentIndex = index++
 			const work = workItems[currentIndex]
 			try {
-				const result = await withRetry(() =>
-					enrichSingleSession({
-						provider: params.provider,
-						model: params.model,
-						mode: params.mode,
-						sessionText: work.sessionText,
-						sessionId: work.sessionId,
-						agentId: params.agentId,
-						scope: params.scope,
-						scopeRef: params.scopeRef,
-						sourceEventIds: work.sourceEventIds,
-						turnCount: work.turnCount,
-						timestamp: work.timestamp,
-						strictJson: params.strict,
-					}),
-				)
+				const result = await withRetry(async () => {
+					recordProviderCall("attempted")
+					try {
+						const enriched = await enrichSingleSession({
+							provider: params.provider,
+							model: params.model,
+							mode: params.mode,
+							sessionText: work.sessionText,
+							sessionId: work.sessionId,
+							agentId: params.agentId,
+							scope: params.scope,
+							scopeRef: params.scopeRef,
+							sourceEventIds: work.sourceEventIds,
+							turnCount: work.turnCount,
+							timestamp: work.timestamp,
+							strictJson: params.strict,
+						})
+						recordProviderCall("succeeded")
+						return enriched
+					} catch (error) {
+						recordProviderCall("failed")
+						throw error
+					}
+				})
 				if (result.userfactDoc) {
 					userfactDocs.push(result.userfactDoc)
 				}

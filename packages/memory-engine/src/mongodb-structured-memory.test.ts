@@ -23,6 +23,7 @@ function createMockStructuredCol(): Collection {
 			modifiedCount: 0,
 		})),
 		insertOne: vi.fn(async () => ({ acknowledged: true, insertedId: "rev-1" })),
+		deleteMany: vi.fn(async () => ({ deletedCount: 0 })),
 		aggregate: vi.fn(() => ({
 			toArray: vi.fn(async () => []),
 		})),
@@ -45,6 +46,8 @@ const baseCapabilities: DetectedCapabilities = {
 	textSearch: true,
 	scoreFusion: false,
 	rankFusion: false,
+	storedSource: false,
+	vectorIndexMethod: false,
 }
 
 const noSearchCapabilities: DetectedCapabilities = {
@@ -52,6 +55,8 @@ const noSearchCapabilities: DetectedCapabilities = {
 	textSearch: false,
 	scoreFusion: false,
 	rankFusion: false,
+	storedSource: false,
+	vectorIndexMethod: false,
 }
 
 // ---------------------------------------------------------------------------
@@ -59,9 +64,71 @@ const noSearchCapabilities: DetectedCapabilities = {
 // ---------------------------------------------------------------------------
 
 describe("writeStructuredMemory", () => {
+	it("uses majority write concern for transactional writes", async () => {
+		const col = createMockStructuredCol()
+		const revisionsCol = createMockStructuredCol()
+		const withTransaction = vi.fn(async (fn: () => Promise<void>) => fn())
+		const session = { withTransaction, endSession: vi.fn(async () => {}) }
+		const client = { startSession: vi.fn(() => session) }
+
+		await writeStructuredMemory({
+			db: mockDb({
+				test_structured_mem: col,
+				test_structured_mem_revisions: revisionsCol,
+			}),
+			prefix: "test_",
+			entry: {
+				type: "decision",
+				key: "transaction-durability",
+				value: "Use majority write concern",
+				agentId: "main",
+			},
+			embeddingMode: "automated",
+			client: client as unknown as import("mongodb").MongoClient,
+		})
+
+		expect(withTransaction).toHaveBeenCalledWith(expect.any(Function), {
+			writeConcern: { w: "majority", wtimeout: 1000 },
+		})
+	})
+
+	it("propagates transaction failures without replaying a non-session write", async () => {
+		const col = createMockStructuredCol()
+		const error = Object.assign(new Error("duplicate key during transaction"), {
+			code: 11000,
+		})
+		const session = {
+			withTransaction: vi.fn(async () => {
+				throw error
+			}),
+			endSession: vi.fn(async () => {}),
+		}
+		const client = { startSession: vi.fn(() => session) }
+
+		await expect(
+			writeStructuredMemory({
+				db: mockDb({
+					test_structured_mem: col,
+					test_structured_mem_revisions: createMockStructuredCol(),
+				}),
+				prefix: "test_",
+				entry: {
+					type: "decision",
+					key: "atomic-failure",
+					value: "Must not replay",
+					agentId: "main",
+				},
+				embeddingMode: "automated",
+				client: client as unknown as import("mongodb").MongoClient,
+			}),
+		).rejects.toBe(error)
+		expect(col.updateOne).not.toHaveBeenCalled()
+	})
+
 	it("creates a new structured memory entry", async () => {
 		const col = createMockStructuredCol()
 		const revisionsCol = createMockStructuredCol()
+		const queryCache = createMockStructuredCol()
 
 		const entry: StructuredMemoryEntry = {
 			type: "decision",
@@ -78,6 +145,7 @@ describe("writeStructuredMemory", () => {
 			db: mockDb({
 				test_structured_mem: col,
 				test_structured_mem_revisions: revisionsCol,
+				test_query_cache: queryCache,
 			}),
 			prefix: "test_",
 			entry,
@@ -98,6 +166,11 @@ describe("writeStructuredMemory", () => {
 			key: "framework-choice",
 		})
 		expect(call[2]).toEqual({ upsert: true })
+		expect(queryCache.deleteMany).toHaveBeenCalledWith({
+			agentId: "main",
+			scope: "agent",
+			scopeRef: "agent:main",
+		})
 	})
 
 	it("updates existing entry with same type+key", async () => {
@@ -135,6 +208,83 @@ describe("writeStructuredMemory", () => {
 		expect(result.upserted).toBe(false)
 		expect(result.id).toBe("editor")
 		expect(revisionsCol.insertOne).not.toHaveBeenCalled()
+	})
+
+	it("does not replay a structured-memory side effect for the same source event", async () => {
+		const col = createMockStructuredCol()
+		const revisionsCol = createMockStructuredCol()
+		const queryCache = createMockStructuredCol()
+		vi.mocked(col.findOne).mockResolvedValueOnce({
+			type: "fact",
+			key: "event-receipt",
+			value: "MongoDB transactions retry safely",
+			agentId: "main",
+			scope: "agent",
+			scopeRef: "agent:main",
+			revision: 3,
+			sourceEventIds: ["evt-replayed"],
+			createdAt: new Date("2026-03-01T00:00:00.000Z"),
+			updatedAt: new Date("2026-03-02T00:00:00.000Z"),
+		})
+
+		const result = await writeStructuredMemory({
+			db: mockDb({
+				test_structured_mem: col,
+				test_structured_mem_revisions: revisionsCol,
+				test_query_cache: queryCache,
+			}),
+			prefix: "test_",
+			entry: {
+				type: "fact",
+				key: "event-receipt",
+				value: "MongoDB transactions retry safely",
+				agentId: "main",
+				sourceEventIds: ["evt-replayed"],
+			},
+			embeddingMode: "automated",
+			eventReceiptIds: ["evt-replayed"],
+		})
+
+		expect(result).toEqual({ upserted: false, id: "event-receipt" })
+		expect(col.updateOne).not.toHaveBeenCalled()
+		expect(revisionsCol.insertOne).not.toHaveBeenCalled()
+		expect(queryCache.deleteMany).not.toHaveBeenCalled()
+	})
+
+	it("accumulates source-event evidence when a new event confirms a memory", async () => {
+		const col = createMockStructuredCol()
+		const revisionsCol = createMockStructuredCol()
+		vi.mocked(col.findOne).mockResolvedValueOnce({
+			type: "fact",
+			key: "evidence-ledger",
+			value: "Events remain traceable",
+			agentId: "main",
+			scope: "agent",
+			scopeRef: "agent:main",
+			revision: 1,
+			sourceEventIds: ["evt-first"],
+			createdAt: new Date("2026-03-01T00:00:00.000Z"),
+			updatedAt: new Date("2026-03-01T00:00:00.000Z"),
+		})
+
+		await writeStructuredMemory({
+			db: mockDb({
+				test_structured_mem: col,
+				test_structured_mem_revisions: revisionsCol,
+			}),
+			prefix: "test_",
+			entry: {
+				type: "fact",
+				key: "evidence-ledger",
+				value: "Events remain traceable",
+				agentId: "main",
+				sourceEventIds: ["evt-second"],
+			},
+			embeddingMode: "automated",
+		})
+
+		const update = vi.mocked(col.updateOne).mock.calls[0]?.[1]
+		expect(update?.$set.sourceEventIds).toEqual(["evt-first", "evt-second"])
 	})
 
 	it("stores pending embedding status for combined value + context text", async () => {

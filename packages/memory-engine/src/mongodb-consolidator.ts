@@ -219,15 +219,20 @@ async function hasConflict(params: {
 	agentId: string
 	type: string
 	key: string
+	scope?: MemoryScope
+	scopeRef?: string
 }): Promise<boolean> {
-	const { db, prefix, agentId, type, key } = params
+	const { db, prefix, agentId, type, key, scope, scopeRef } = params
 	const structuredCol = db.collection(`${prefix}structured_mem`)
-	const existing = await structuredCol.findOne({
+	const filter: Document = {
 		agentId,
 		type,
 		key,
 		state: { $ne: "invalidated" },
-	})
+	}
+	if (scope) filter.scope = scope
+	if (scopeRef) filter.scopeRef = scopeRef
+	const existing = await structuredCol.findOne(filter)
 
 	if (!existing) {
 		return false
@@ -277,8 +282,15 @@ export async function consolidateMemory(params: {
 	// ===================================================================
 
 	const consolidationRuns = consolidationRunsCollection(db, prefix)
+	const runScopeFilter: Document = { agentId }
+	if (options?.scope) {
+		runScopeFilter.scope = options.scope
+	}
+	if (options?.scopeRef) {
+		runScopeFilter.scopeRef = options.scopeRef
+	}
 	const lastRun = await consolidationRuns.findOne(
-		{ agentId, status: { $in: ["completed", "running"] } },
+		{ ...runScopeFilter, status: { $in: ["completed", "running"] } },
 		{ sort: { startedAt: -1 } },
 	)
 
@@ -296,7 +308,7 @@ export async function consolidateMemory(params: {
 	// Record run start
 	await consolidationRuns.insertOne({
 		runId,
-		agentId,
+		...runScopeFilter,
 		startedAt: new Date(),
 		status: "running",
 	})
@@ -364,26 +376,24 @@ export async function consolidateMemory(params: {
 
 	let orientStats: DreamerOrientStats | undefined
 	try {
+		const orientFilter: Document = { agentId }
+		if (options?.scope) orientFilter.scope = options.scope
+		if (options?.scopeRef) orientFilter.scopeRef = options.scopeRef
 		const [facetResult] = await eventsCol
 			.aggregate([
-				{ $match: { agentId } },
+				{ $match: orientFilter },
 				{
 					$facet: {
 						unprocessed: [
 							{
 								$match: {
-									agentId,
 									dreamerProcessedAt: { $exists: false },
 								},
 							},
 							{ $count: "n" },
 						],
-						byType: [
-							{ $match: { agentId } },
-							{ $group: { _id: "$role", count: { $sum: 1 } } },
-						],
+						byType: [{ $group: { _id: "$role", count: { $sum: 1 } } }],
 						topTopics: [
-							{ $match: { agentId } },
 							{
 								$group: {
 									_id: "$scope",
@@ -438,6 +448,7 @@ export async function consolidateMemory(params: {
 	const noveltyOpts = options
 		? {
 				scope: options.scope,
+				scopeRef: options.scopeRef,
 				...(options.timeRange
 					? {
 							timeRange: {
@@ -518,6 +529,8 @@ export async function consolidateMemory(params: {
 	let factsPromoted = 0
 	let factsInferred = 0
 	let conflictsResolved = 0
+	const failedEventIds = new Set<string>()
+	let firstCandidateError: unknown
 
 	for (const candidate of filteredCandidates) {
 		// Scope-isolation safety: derive scope isolation from the CANDIDATE
@@ -541,6 +554,7 @@ export async function consolidateMemory(params: {
 				throw new Error(message)
 			}
 			log.warn(`${message} - skipping to prevent cross-scope write`)
+			failedEventIds.add(candidate.eventId)
 			continue
 		}
 		if (
@@ -553,6 +567,7 @@ export async function consolidateMemory(params: {
 				throw new Error(message)
 			}
 			log.warn(`${message} - skipping to prevent cross-scope write`)
+			failedEventIds.add(candidate.eventId)
 			continue
 		}
 
@@ -607,6 +622,8 @@ export async function consolidateMemory(params: {
 				agentId,
 				type: match.type,
 				key: match.key,
+				scope: candidateScope,
+				scopeRef: candidateScopeRef,
 			})
 
 			if (conflicted) {
@@ -634,7 +651,7 @@ export async function consolidateMemory(params: {
 								path: "value",
 								query: { text: candidate.body },
 								model: "voyage-4-large",
-								numCandidates: 50,
+								numCandidates: 100,
 								limit: 5,
 								filter: simFilter,
 							},
@@ -712,6 +729,8 @@ export async function consolidateMemory(params: {
 
 			factsPromoted++
 		} catch (err) {
+			failedEventIds.add(candidate.eventId)
+			firstCandidateError ??= err
 			log.warn(
 				`candidate processing failed for event=${candidate.eventId}: ${err instanceof Error ? err.message : String(err)}`,
 			)
@@ -936,7 +955,7 @@ export async function consolidateMemory(params: {
 								path: "value",
 								query: { text: fact.value },
 								model: "voyage-4-large",
-								numCandidates: 20,
+								numCandidates: 80,
 								limit: 4, // +1 to account for self-match consuming a slot
 								filter: {
 									agentId,
@@ -990,14 +1009,16 @@ export async function consolidateMemory(params: {
 	}
 
 	// ===================================================================
-	// Mark ALL processed events as dreamer-processed
+	// Acknowledge only events whose candidate processing completed durably.
 	// ===================================================================
 
-	const allEventIds = events.map((e) => e.eventId as string)
+	const successfulEventIds = events
+		.map((event) => event.eventId as string)
+		.filter((eventId) => !failedEventIds.has(eventId))
 	await markEventsDreamerProcessed({
 		db,
 		prefix,
-		eventIds: allEventIds,
+		eventIds: successfulEventIds,
 		runId,
 	})
 
@@ -1011,20 +1032,32 @@ export async function consolidateMemory(params: {
 		{ runId },
 		{
 			$set: {
-				status: "completed",
+				status: firstCandidateError ? "failed" : "completed",
 				completedAt: new Date(),
-				eventsProcessed: events.length,
+				eventsProcessed: successfulEventIds.length,
 				factsPromoted,
 				factsInferred,
 				factsPruned: prunedCount,
 				conflictsResolved,
 				durationMs,
+				...(firstCandidateError
+					? {
+							error:
+								firstCandidateError instanceof Error
+									? firstCandidateError.message
+									: String(firstCandidateError),
+						}
+					: {}),
 			},
 		},
 	)
 
+	if (firstCandidateError) {
+		throw firstCandidateError
+	}
+
 	log.info(
-		`consolidation run=${runId} completed: ${events.length} events processed, ${factsPromoted} facts promoted, ${prunedCount} pruned, ${durationMs}ms`,
+		`consolidation run=${runId} completed: ${successfulEventIds.length} events processed, ${factsPromoted} facts promoted, ${prunedCount} pruned, ${durationMs}ms`,
 	)
 
 	// ===================================================================
@@ -1034,7 +1067,7 @@ export async function consolidateMemory(params: {
 	return {
 		runId,
 		agentId,
-		eventsProcessed: events.length,
+		eventsProcessed: successfulEventIds.length,
 		factsPromoted,
 		factsInferred,
 		factsPruned: prunedCount,

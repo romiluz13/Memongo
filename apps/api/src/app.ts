@@ -31,9 +31,33 @@ function parsePositiveIntEnv(
 	return Math.floor(parsed)
 }
 
+function parseStrictlyPositiveIntEnv(
+	raw: string | undefined,
+	fallback: number,
+): number {
+	const parsed = parsePositiveIntEnv(raw, fallback)
+	return parsed > 0 ? parsed : fallback
+}
+
 function parseBoolEnv(raw: string | undefined): boolean {
 	const v = raw?.trim().toLowerCase()
 	return v === "1" || v === "true" || v === "yes"
+}
+
+function parseCorsOrigins(raw: string | undefined): string[] {
+	if (!raw?.trim()) {
+		return []
+	}
+	const origins = raw
+		.split(",")
+		.map((origin) => origin.trim())
+		.filter(Boolean)
+	if (origins.includes("*")) {
+		throw new Error(
+			"MEMONGO_CORS_ORIGINS must list explicit origins; wildcard CORS is not allowed",
+		)
+	}
+	return [...new Set(origins)]
 }
 
 // Hard ceiling on distinct rate-limit buckets. Beyond this the limiter fails
@@ -42,18 +66,23 @@ function parseBoolEnv(raw: string | undefined): boolean {
 const RATE_LIMIT_MAX_BUCKETS = 100_000
 
 /**
- * The rate-limit identity for a request: the bearer token (per-key) when
- * present, else — only when the deployment opts into trusting its proxy — the
- * forwarded client IP (per-IP), else a shared anonymous bucket. X-Forwarded-For
- * is attacker-controlled unless a trusted proxy sets it, so per-IP keying is
- * gated behind MEMONGO_TRUST_PROXY to avoid unbounded attacker-chosen keys.
- * Bearer tokens are hashed so raw secrets never key the map.
+ * A bearer participates in rate-limit identity only after it matches a configured
+ * credential. Invalid and missing bearers share the trusted-proxy IP bucket, or
+ * one anonymous bucket when no proxy is trusted, so attacker-chosen tokens cannot
+ * evade the limiter or exhaust its bucket map.
  */
-function rateLimitKey(c: Context, trustProxy: boolean): string {
+function rateLimitKey(
+	c: Context,
+	trustProxy: boolean,
+	validCredentials: string[],
+): string {
 	const auth = c.req.header("Authorization") ?? ""
 	const bearer = auth.startsWith("Bearer ") ? auth.slice(7).trim() : ""
-	if (bearer) {
-		return `k:${createHash("sha256").update(bearer, "utf8").digest("hex")}`
+	const credential = validCredentials.find((candidate) =>
+		timingSafeBearerEquals(bearer, candidate),
+	)
+	if (credential) {
+		return `credential:${createHash("sha256").update(credential, "utf8").digest("hex")}`
 	}
 	if (trustProxy) {
 		const forwarded = (c.req.header("X-Forwarded-For") ?? "")
@@ -77,6 +106,7 @@ function createRateLimiter(
 	limit: number,
 	windowMs: number,
 	trustProxy: boolean,
+	validCredentials: string[],
 ): MiddlewareHandler {
 	const buckets = new Map<string, RateBucket>()
 	// Sweep expired buckets at most once per window (amortized O(1)/request)
@@ -99,7 +129,7 @@ function createRateLimiter(
 			}
 			nextSweepAt = now + windowMs
 		}
-		const key = rateLimitKey(c, trustProxy)
+		const key = rateLimitKey(c, trustProxy, validCredentials)
 		let bucket = buckets.get(key)
 		if (!bucket || now >= bucket.resetAt) {
 			// Fail closed for new identities once saturated, so the limiter can
@@ -148,18 +178,24 @@ export function resetUnauthenticatedApiWarningForTests(): void {
 	unauthenticatedApiWarningEmitted = false
 }
 
-function asStringList(value: unknown): string[] | undefined {
+function asStringList(
+	value: unknown,
+	label: "agentIds" | "scopes" | "scopeRefs",
+	token: string,
+): string[] | undefined {
 	if (value === undefined) {
 		return undefined
 	}
-	if (!Array.isArray(value)) {
-		return undefined
+	if (
+		!Array.isArray(value) ||
+		value.length === 0 ||
+		value.some((item) => typeof item !== "string" || item.trim() === "")
+	) {
+		throw new Error(
+			`MEMONGO_API_SCOPED_KEYS policy for token ${token} must define ${label} as a non-empty array of non-empty strings`,
+		)
 	}
-	const values = value
-		.filter((item): item is string => typeof item === "string")
-		.map((item) => item.trim())
-		.filter(Boolean)
-	return values.length > 0 ? values : undefined
+	return value.map((item) => (item as string).trim())
 }
 
 function normalizePolicy(raw: unknown): ScopedApiKeyPolicy | null {
@@ -173,10 +209,14 @@ function normalizePolicy(raw: unknown): ScopedApiKeyPolicy | null {
 	}
 	return {
 		token,
-		agentIds: asStringList(item.agentIds),
-		scopes: asStringList(item.scopes),
-		scopeRefs: asStringList(item.scopeRefs),
+		agentIds: asStringList(item.agentIds, "agentIds", token),
+		scopes: asStringList(item.scopes, "scopes", token),
+		scopeRefs: asStringList(item.scopeRefs, "scopeRefs", token),
 	}
+}
+
+function hasConcreteConstraint(values?: string[]): boolean {
+	return values?.some((value) => value !== WILDCARD) ?? false
 }
 
 function requireValidScopedPolicies(
@@ -188,11 +228,14 @@ function requireValidScopedPolicies(
 		)
 	}
 	const unconstrained = policies.find(
-		(policy) => !policy.agentIds && !policy.scopes && !policy.scopeRefs,
+		(policy) =>
+			!hasConcreteConstraint(policy.agentIds) &&
+			!hasConcreteConstraint(policy.scopes) &&
+			!hasConcreteConstraint(policy.scopeRefs),
 	)
 	if (unconstrained) {
 		throw new Error(
-			`MEMONGO_API_SCOPED_KEYS policy for token ${unconstrained.token} must constrain agentIds, scopes, or scopeRefs`,
+			`MEMONGO_API_SCOPED_KEYS policy for token ${unconstrained.token} must constrain agentIds, scopes, or scopeRefs with at least one concrete value`,
 		)
 	}
 	// Fail closed on a non-canonical scope value. Auth matches scope by raw
@@ -201,7 +244,20 @@ function requireValidScopedPolicies(
 	// scope execution silently drops — disabling write-forcing and letting a
 	// nested entry.scope smuggle survive (issue #57 auth-vs-execution divergence).
 	for (const policy of policies) {
-		const invalidScope = policy.scopes?.find((scope) => !isValidScope(scope))
+		for (const [label, values] of [
+			["agentIds", policy.agentIds],
+			["scopes", policy.scopes],
+			["scopeRefs", policy.scopeRefs],
+		] as const) {
+			if (values?.includes(WILDCARD) && values.length !== 1) {
+				throw new Error(
+					`MEMONGO_API_SCOPED_KEYS policy for token ${policy.token} must use "*" as the only ${label} value`,
+				)
+			}
+		}
+		const invalidScope = policy.scopes?.find(
+			(scope) => scope !== WILDCARD && !isValidScope(scope),
+		)
 		if (invalidScope !== undefined) {
 			throw new Error(
 				`MEMONGO_API_SCOPED_KEYS policy for token ${policy.token} has an invalid scope "${invalidScope}"; valid scopes: session, user, agent, workspace, tenant, global`,
@@ -209,6 +265,16 @@ function requireValidScopedPolicies(
 		}
 	}
 	return policies
+}
+
+function routePolicyError(
+	path: string,
+	policy: ScopedApiKeyPolicy,
+): string | null {
+	if (path === "/v1/search-kb" && !hasConcreteConstraint(policy.scopeRefs)) {
+		return "search-kb requires a concrete scopeRefs constraint for scoped API keys"
+	}
+	return null
 }
 
 export function parseScopedApiKeyPolicies(
@@ -301,6 +367,11 @@ const AGENT_GLOBAL_V1_PATHS = new Set([
 	"/v1/read-file",
 	"/v1/chain-trace",
 	"/v1/self-edit",
+])
+
+const ADMIN_ONLY_V1_PATHS = new Set([
+	"/v1/read-file",
+	"/v1/import/conversations",
 ])
 
 function isAgentGlobalV1Path(path: string): boolean {
@@ -419,8 +490,20 @@ export function registerGracefulShutdown(
 
 export function createApp(): Hono {
 	const app = new Hono()
+	const token = process.env.MEMONGO_API_KEY?.trim()
+	const scopedPolicies = parseScopedApiKeyPolicies()
+	const rateLimitCredentials = [
+		...(token ? [token] : []),
+		...scopedPolicies.map((policy) => policy.token),
+	]
+	const corsOrigins = parseCorsOrigins(process.env.MEMONGO_CORS_ORIGINS)
+	const allowInsecureNoAuth = parseBoolEnv(
+		process.env.MEMONGO_ALLOW_INSECURE_NO_AUTH,
+	)
 
-	app.use("/*", cors())
+	if (corsOrigins.length > 0) {
+		app.use("/*", cors({ origin: corsOrigins }))
+	}
 
 	// #28 network hardening on /v1: rate-limit first (cheapest rejection, also
 	// throttles unauthenticated auth attempts), then cap body size before any
@@ -430,12 +513,15 @@ export function createApp(): Hono {
 		DEFAULT_RATE_LIMIT,
 	)
 	if (rateLimit > 0) {
-		const windowMs = parsePositiveIntEnv(
+		const windowMs = parseStrictlyPositiveIntEnv(
 			process.env.MEMONGO_API_RATE_WINDOW_MS,
 			DEFAULT_RATE_WINDOW_MS,
 		)
 		const trustProxy = parseBoolEnv(process.env.MEMONGO_TRUST_PROXY)
-		app.use("/v1/*", createRateLimiter(rateLimit, windowMs, trustProxy))
+		app.use(
+			"/v1/*",
+			createRateLimiter(rateLimit, windowMs, trustProxy, rateLimitCredentials),
+		)
 	}
 	// MEMONGO_API_MAX_BODY_BYTES=0 disables the cap (symmetric with the rate
 	// limit) rather than rejecting every body.
@@ -462,8 +548,6 @@ export function createApp(): Hono {
 		)
 	}
 
-	const token = process.env.MEMONGO_API_KEY?.trim()
-	const scopedPolicies = parseScopedApiKeyPolicies()
 	if (token || scopedPolicies.length > 0) {
 		app.use("/v1/*", async (c, next) => {
 			const auth = c.req.header("Authorization") ?? ""
@@ -484,6 +568,24 @@ export function createApp(): Hono {
 			const forbidden = await authorizeScopedApiKey(c, scopedPolicy)
 			if (forbidden) {
 				return c.json({ error: { code: "FORBIDDEN", message: forbidden } }, 403)
+			}
+			const routeForbidden = routePolicyError(c.req.path, scopedPolicy)
+			if (routeForbidden) {
+				return c.json(
+					{ error: { code: "FORBIDDEN", message: routeForbidden } },
+					403,
+				)
+			}
+			if (ADMIN_ONLY_V1_PATHS.has(c.req.path)) {
+				return c.json(
+					{
+						error: {
+							code: "FORBIDDEN",
+							message: "scoped API key cannot access a server-file route",
+						},
+					},
+					403,
+				)
 			}
 			// Class-G: a scope-constrained key may satisfy per-request authorization
 			// (it supplies its allowed scope) yet still be reaching an agent-global
@@ -506,10 +608,24 @@ export function createApp(): Hono {
 			}
 			await next()
 		})
-	} else if (!unauthenticatedApiWarningEmitted) {
-		unauthenticatedApiWarningEmitted = true
-		console.warn(
-			"WARNING: MEMONGO_API_KEY is not set and MEMONGO_API_SCOPED_KEYS is empty; /v1 routes are unauthenticated. Use only for trusted local development.",
+	} else if (allowInsecureNoAuth) {
+		if (!unauthenticatedApiWarningEmitted) {
+			unauthenticatedApiWarningEmitted = true
+			console.warn(
+				"WARNING: MEMONGO_ALLOW_INSECURE_NO_AUTH is enabled; /v1 routes are unauthenticated. Use only for trusted local development.",
+			)
+		}
+	} else {
+		app.use("/v1/*", async (c) =>
+			c.json(
+				{
+					error: {
+						code: "AUTH_NOT_CONFIGURED",
+						message: "API authentication is required",
+					},
+				},
+				401,
+			),
 		)
 	}
 

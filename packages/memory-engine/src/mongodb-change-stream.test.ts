@@ -4,6 +4,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest"
 import {
 	MongoDBChangeStreamWatcher,
 	type ChangeStreamCallback,
+	isResumeTokenInvalid,
 } from "./mongodb-change-stream.js"
 
 // ---------------------------------------------------------------------------
@@ -214,6 +215,147 @@ describe("MongoDBChangeStreamWatcher", () => {
 
 		// Should not throw
 		vi.advanceTimersByTime(100)
+
+		await watcher.close()
+	})
+})
+
+// ---------------------------------------------------------------------------
+// Resume token resilience (isResumeTokenInvalid + re-stream on stale token)
+// ---------------------------------------------------------------------------
+
+describe("isResumeTokenInvalid", () => {
+	it("recognizes ChangeStreamHistoryLost (code 286) with the real errmsg", () => {
+		const err = Object.assign(
+			new Error(
+				"Resume of change stream was not possible, as the resume point may no longer be in the oplog (resumeTimestamp: Timestamp(1730000000, 1))",
+			),
+			{ code: 286, codeName: "ChangeStreamHistoryLost" },
+		)
+		expect(isResumeTokenInvalid(err)).toBe(true)
+	})
+
+	it("recognizes InvalidResumeToken (code 260) via code", () => {
+		const err = Object.assign(
+			new Error(
+				"Attempting to resume a change stream using 'resumeAfter' is not allowed",
+			),
+			{ code: 260, codeName: "InvalidResumeToken" },
+		)
+		expect(isResumeTokenInvalid(err)).toBe(true)
+	})
+
+	it("recognizes the real errmsg by case-insensitive substring (fallback)", () => {
+		expect(
+			isResumeTokenInvalid(
+				new Error(
+					"RESUME OF CHANGE STREAM WAS NOT POSSIBLE, AS THE RESUME POINT MAY NO LONGER BE IN THE OPLOG",
+				),
+			),
+		).toBe(true)
+	})
+
+	it("does not match unrelated errors", () => {
+		expect(
+			isResumeTokenInvalid(
+				Object.assign(new Error("The $changeStream stage is only supported"), {
+					code: 303,
+				}),
+			),
+		).toBe(false)
+		expect(isResumeTokenInvalid(new Error("network timeout"))).toBe(false)
+	})
+
+	it("does NOT match ChangeStreamInvalidated (code 346) — different semantics", () => {
+		const err = Object.assign(new Error("The collection was dropped"), {
+			code: 346,
+			codeName: "ChangeStreamInvalidated",
+		})
+		expect(isResumeTokenInvalid(err)).toBe(false)
+	})
+})
+
+describe("MongoDBChangeStreamWatcher — resume token resilience", () => {
+	let mockStream: ReturnType<typeof createMockStream>
+	let callback: ChangeStreamCallback
+	let callbackArgs: Array<{
+		operationType: string
+		paths: string[]
+		timestamp: Date
+		resumeToken?: unknown
+		gapDetected?: { reason: string; from: "startup" | "midstream" }
+	}>
+
+	beforeEach(() => {
+		vi.useFakeTimers()
+		mockStream = createMockStream()
+		callbackArgs = []
+		callback = (event) => callbackArgs.push(event)
+	})
+
+	afterEach(async () => {
+		vi.useRealTimers()
+	})
+
+	it("re-opens from now and signals a gap when the resume token is stale at startup", async () => {
+		let watchCallCount = 0
+		const col = {
+			watch: vi.fn(() => {
+				watchCallCount++
+				if (watchCallCount === 1) {
+					throw Object.assign(
+						new Error(
+							"Resume of change stream was not possible, as the resume point may no longer be in the oplog",
+						),
+						{ code: 286, codeName: "ChangeStreamHistoryLost" },
+					)
+				}
+				return mockStream
+			}),
+		} as unknown as Collection
+
+		const watcher = new MongoDBChangeStreamWatcher(col, callback, 100)
+		const started = await watcher.start({ _data: "stale-token" })
+
+		expect(started).toBe(true)
+		expect(watchCallCount).toBe(2) // first failed, second succeeded from now
+		expect(callbackArgs.some((e) => e.gapDetected?.from === "startup")).toBe(
+			true,
+		)
+
+		await watcher.close()
+	})
+
+	it("re-opens from now and signals a gap on a mid-stream 'Resume Token Not Found' error", async () => {
+		let watchCallCount = 0
+		const stream1 = createMockStream()
+		const stream2 = createMockStream()
+		const col = {
+			watch: vi.fn(() => {
+				watchCallCount++
+				return watchCallCount === 1 ? stream1 : stream2
+			}),
+		} as unknown as Collection
+
+		const watcher = new MongoDBChangeStreamWatcher(col, callback, 100)
+		await watcher.start()
+		expect(watchCallCount).toBe(1)
+
+		// Simulate a mid-stream token-invalid error using the real server code
+		stream1.emit(
+			"error",
+			Object.assign(
+				new Error(
+					"Resume of change stream was not possible, as the resume point may no longer be in the oplog",
+				),
+				{ code: 286, codeName: "ChangeStreamHistoryLost" },
+			),
+		)
+
+		expect(watchCallCount).toBe(2) // re-opened from now
+		expect(callbackArgs.some((e) => e.gapDetected?.from === "midstream")).toBe(
+			true,
+		)
 
 		await watcher.close()
 	})

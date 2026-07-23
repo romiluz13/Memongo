@@ -1,6 +1,7 @@
 import type { Db } from "mongodb"
 import { createSubsystemLogger } from "@memongo/lib"
 import { emitTelemetry } from "./mongodb-telemetry.js"
+import { withRemoteHttpResponse } from "./remote-http.js"
 import type { MemorySearchResult } from "./types.js"
 
 const log = createSubsystemLogger("memory:mongodb:reranker")
@@ -66,9 +67,27 @@ export async function crossEncoderRerank(params: {
 	query: string
 	results: MemorySearchResult[]
 	config: RerankConfig
+	onProviderCall?: (outcome: "attempted" | "succeeded" | "failed") => void
 }): Promise<RerankResult> {
 	const { db, prefix, agentId, query, results, config } = params
 	const rerankStart = Date.now()
+	let providerCallOpen = false
+	const recordProviderCall = (
+		outcome: "attempted" | "succeeded" | "failed",
+	) => {
+		if (outcome === "attempted") {
+			providerCallOpen = true
+		} else if (!providerCallOpen) {
+			return
+		} else {
+			providerCallOpen = false
+		}
+		try {
+			params.onProviderCall?.(outcome)
+		} catch (error) {
+			log.warn("rerank provider-call observer failed", { error })
+		}
+	}
 
 	// Early returns — no API call needed
 	if (!config.enabled || results.length === 0 || !config.voyageApiKey) {
@@ -103,23 +122,29 @@ export async function crossEncoderRerank(params: {
 		const documents = validCandidates.map((r) => r.snippet)
 
 		const rerankUrl = resolveRerankUrl(config.voyageApiKey)
-		const response = await fetch(rerankUrl, {
-			method: "POST",
-			headers: {
-				"Content-Type": "application/json",
-				Authorization: `Bearer ${config.voyageApiKey}`,
+		recordProviderCall("attempted")
+		const response = await withRemoteHttpResponse({
+			url: rerankUrl,
+			init: {
+				method: "POST",
+				headers: {
+					"Content-Type": "application/json",
+					Authorization: `Bearer ${config.voyageApiKey}`,
+				},
+				body: JSON.stringify({
+					model: config.model,
+					// rerank-2.5 supports instruction-following: prepend instruction to query
+					query: config.instruction ? `${config.instruction}\n${query}` : query,
+					documents,
+					top_k: validCandidates.length,
+				}),
+				signal: AbortSignal.timeout(2_000),
 			},
-			body: JSON.stringify({
-				model: config.model,
-				// rerank-2.5 supports instruction-following: prepend instruction to query
-				query: config.instruction ? `${config.instruction}\n${query}` : query,
-				documents,
-				top_k: validCandidates.length,
-			}),
-			signal: AbortSignal.timeout(2_000),
+			onResponse: async (value) => value,
 		})
 
 		if (!response.ok) {
+			recordProviderCall("failed")
 			const message = `rerank API returned non-OK status: ${response.status}`
 			if (isStrictRerankMode()) {
 				throw new Error(message)
@@ -133,6 +158,7 @@ export async function crossEncoderRerank(params: {
 		}
 
 		if (!body.data || !Array.isArray(body.data)) {
+			recordProviderCall("failed")
 			if (isStrictRerankMode()) {
 				throw new Error("rerank API returned unexpected response shape")
 			}
@@ -168,6 +194,7 @@ export async function crossEncoderRerank(params: {
 			}))
 
 		const latencyMs = Date.now() - rerankStart
+		recordProviderCall("succeeded")
 		emitTelemetry(db, prefix, {
 			meta: { agentId, operation: "rerank" },
 			durationMs: latencyMs,
@@ -184,6 +211,7 @@ export async function crossEncoderRerank(params: {
 			latencyMs,
 		}
 	} catch (err) {
+		recordProviderCall("failed")
 		log.warn("rerank failed, falling back to input order", { error: err })
 		// M1: Emit failure telemetry in catch block
 		emitTelemetry(db, prefix, {

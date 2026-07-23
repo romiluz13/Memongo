@@ -4,6 +4,7 @@ import type {
 	MemongoAccessTrendResponse,
 	MemongoActiveSlateInput,
 	MemongoBenchmarkIngestResponse,
+	MemongoBenchmarkQualityThresholds,
 	MemongoConsolidateInput,
 	MemongoConsolidateResponse,
 	MemongoConversationImportInput,
@@ -549,6 +550,7 @@ export class MemongoClient {
 			roles: input.roles,
 			startTime: input.startTime,
 			endTime: input.endTime,
+			asOf: input.asOf,
 			timezone: input.timezone,
 			includeToolMessages: input.includeToolMessages,
 			limit: input.limit,
@@ -637,8 +639,11 @@ export class MemongoClient {
 		agentId?: string
 		sessionId?: string
 		timestamp?: string
+		validAt?: string
+		invalidAt?: string
 		metadata?: Record<string, unknown>
 		scope?: string
+		scopeRef?: string
 	}): Promise<{ ok: true; eventId: string; chunkCreated: boolean }> {
 		return apiPost(this._opts, "/v1/write-event", {
 			role: input.role,
@@ -646,8 +651,11 @@ export class MemongoClient {
 			agentId: input.agentId,
 			sessionId: input.sessionId,
 			timestamp: input.timestamp,
+			validAt: input.validAt,
+			invalidAt: input.invalidAt,
 			metadata: input.metadata,
 			scope: input.scope,
+			scopeRef: input.scopeRef,
 		})
 	}
 
@@ -820,6 +828,18 @@ export class MemongoClient {
 		maxResults?: number
 		minScore?: number
 		retrievalLane?: "native" | "raw-session"
+		datasetSha256?: string
+		embeddingConfig?: {
+			model: string
+			dimensions: number
+			quantization: "float32" | "int8" | "binary"
+		}
+		rerankerConfig?: {
+			model: string
+			version: string | null
+			stage: "post-fusion" | "pre-fusion" | "none"
+		}
+		qualityThresholds?: MemongoBenchmarkQualityThresholds
 	}): Promise<MemongoRelevanceBenchmarkResponse> {
 		return apiPost(this._opts, "/v1/admin/relevance/benchmark", {
 			agentId: input?.agentId,
@@ -827,6 +847,10 @@ export class MemongoClient {
 			maxResults: input?.maxResults,
 			minScore: input?.minScore,
 			retrievalLane: input?.retrievalLane,
+			datasetSha256: input?.datasetSha256,
+			embeddingConfig: input?.embeddingConfig,
+			rerankerConfig: input?.rerankerConfig,
+			qualityThresholds: input?.qualityThresholds,
 		})
 	}
 

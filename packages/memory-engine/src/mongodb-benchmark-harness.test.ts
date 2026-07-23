@@ -142,6 +142,12 @@ describe("benchmark harness", () => {
 					expectedTurnIds: ["q1::s1::turn_1"],
 					questionType: "single-session",
 					abstention: false,
+					officialRetrieval: {
+						evaluator: "longmemeval-main-run",
+						eligible: true,
+						expectedSessionIds: ["q1::s1"],
+						expectedTurnIds: ["q1::s1::turn_1"],
+					},
 				}),
 			)
 			expect(
@@ -152,6 +158,53 @@ describe("benchmark harness", () => {
 					benchmarkHasAnswer: true,
 				}),
 			)
+		} finally {
+			await rm(dir, { recursive: true, force: true })
+		}
+	})
+
+	it("separates LongMemEval main-run eligibility from assistant evidence", async () => {
+		const dir = await mkdtemp(path.join(os.tmpdir(), "memongo-bench-"))
+		const datasetPath = path.join(dir, "longmemeval-assistant.json")
+		try {
+			await writeFile(
+				datasetPath,
+				JSON.stringify([
+					{
+						question_id: "q-assistant",
+						question_type: "single-session-assistant",
+						question: "What did the assistant recommend?",
+						answer: "Use the blue deployment.",
+						haystack_session_ids: ["answer_s1"],
+						haystack_sessions: [
+							[
+								{ role: "user", content: "Which deployment?" },
+								{
+									role: "assistant",
+									content: "Use the blue deployment.",
+									has_answer: true,
+								},
+							],
+						],
+						answer_session_ids: ["answer_s1"],
+					},
+				]),
+			)
+
+			const dataset = await loadBenchmarkDataset(datasetPath)
+			const evaluation = dataset.scenarios?.[0]?.evaluations[0]
+
+			expect(evaluation?.expectedSessionIds).toEqual(["q-assistant::answer_s1"])
+			expect(evaluation?.expectedTurnIds).toEqual([
+				"q-assistant::answer_s1::turn_2",
+			])
+			expect(evaluation?.officialRetrieval).toEqual({
+				evaluator: "longmemeval-main-run",
+				eligible: false,
+				expectedSessionIds: [],
+				expectedTurnIds: [],
+				ineligibleReason: "no-user-answer-target",
+			})
 		} finally {
 			await rm(dir, { recursive: true, force: true })
 		}

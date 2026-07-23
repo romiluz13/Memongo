@@ -1,6 +1,9 @@
 import type { Collection, Db, Document } from "mongodb"
 import { createSubsystemLogger } from "@memongo/lib"
-import { buildBitemporalFilter } from "./mongodb-bitemporal.js"
+import {
+	buildBitemporalFilter,
+	buildVectorBitemporalFilter,
+} from "./mongodb-bitemporal.js"
 import { type CanonicalEvent, renderEventChunkText } from "./mongodb-events.js"
 import {
 	buildVectorSearchStage,
@@ -39,9 +42,9 @@ function clampLimit(limit?: number): number {
 	return Math.max(1, Math.min(MAX_LIMIT, Math.floor(limit ?? DEFAULT_LIMIT)))
 }
 
-// Issue #41: bi-temporal validity is enforced as a post-`$vectorSearch` `$match`
-// (the vector stage filter cannot reliably express date-range validity), so the
-// vector stage MUST over-fetch beyond the final limit. Without a buffer,
+// Issue #41 compatibility path: before the serving vector index is verified
+// with validity filter fields, validity is enforced after `$vectorSearch`, so
+// the vector stage MUST over-fetch beyond the final limit. Without a buffer,
 // invalid-at-`asOf` documents occupy result slots and are trimmed by the $match,
 // returning fewer than `limit` valid memories. Fetch a bounded multiple of the
 // final limit so the $match has spare valid candidates to keep.
@@ -57,11 +60,16 @@ const MAX_NUM_CANDIDATES = 10_000
 // documented `numCandidates >= 20 * limit` ANN-recall baseline (degrading
 // neighbor quality). Return both together so the two stay in sync, capped at
 // the Atlas ceiling.
-function resolveVectorFetchPlan(effectiveLimit: number): {
+function resolveVectorFetchPlan(
+	effectiveLimit: number,
+	nativeBitemporalPrefilter: boolean,
+): {
 	limit: number
 	numCandidates: number
 } {
-	const limit = effectiveLimit * VECTOR_VALIDITY_OVERFETCH_FACTOR
+	const limit = nativeBitemporalPrefilter
+		? effectiveLimit
+		: effectiveLimit * VECTOR_VALIDITY_OVERFETCH_FACTOR
 	const numCandidates = Math.min(
 		MAX_NUM_CANDIDATES,
 		resolveNumCandidates(limit),
@@ -304,6 +312,7 @@ function buildVectorFilter(params: {
 	request: ConversationRecallRequest
 	startDate?: Date
 	endDate?: Date
+	bitemporalPrefilterAt?: Date
 }): Document {
 	const filter: Document = {
 		agentId: { $eq: params.request.agentId },
@@ -327,6 +336,9 @@ function buildVectorFilter(params: {
 	const timestampFilter = buildTimestampFilter(params.startDate, params.endDate)
 	if (Object.keys(timestampFilter).length > 0) {
 		filter.timestamp = timestampFilter
+	}
+	if (params.bitemporalPrefilterAt) {
+		filter.$and = buildVectorBitemporalFilter(params.bitemporalPrefilterAt).$and
 	}
 
 	return filter
@@ -505,7 +517,7 @@ async function standardRecall(params: {
 }
 
 function buildEventProjection(
-	scoreMeta: "vectorSearchScore" | "searchScore",
+	scoreMeta: "vectorSearchScore" | "searchScore" | "score",
 	options?: { includeScoreDetails?: boolean },
 ): Document {
 	const base: Document = {
@@ -532,6 +544,7 @@ async function semanticRecall(params: {
 	endDate?: Date
 	vectorIndexName: string
 	asOf: Date
+	nativeBitemporalPrefilter: boolean
 	scoreDetailsWarnings?: ScoreDetailsWarningState
 }): Promise<ConversationRecallResult[]> {
 	const queryText = params.request.query?.trim()
@@ -542,7 +555,10 @@ async function semanticRecall(params: {
 	// Issue #41: over-fetch beyond the final limit so the post-stage bi-temporal
 	// $match cannot starve the result set, with numCandidates scaled to the
 	// over-fetched limit to preserve the 20× ANN-recall baseline.
-	const semanticFetch = resolveVectorFetchPlan(params.effectiveLimit)
+	const semanticFetch = resolveVectorFetchPlan(
+		params.effectiveLimit,
+		params.nativeBitemporalPrefilter,
+	)
 	const stage = buildVectorSearchStage({
 		queryVector: null,
 		queryText,
@@ -554,6 +570,9 @@ async function semanticRecall(params: {
 			request: params.request,
 			startDate: params.startDate,
 			endDate: params.endDate,
+			...(params.nativeBitemporalPrefilter
+				? { bitemporalPrefilterAt: params.asOf }
+				: {}),
 		}),
 		textFieldPath: "body",
 	})
@@ -561,16 +580,15 @@ async function semanticRecall(params: {
 		return []
 	}
 
-	// Bi-temporal recall safety: the bi-temporal clause rides on a post-stage
-	// `$match`. `$vectorSearch.filter` supports a narrow subset of MQL
-	// ($eq / $and / $in) and range operators on dates are not documented,
-	// so we enforce validity outside the vector stage. The vector stage
-	// over-fetches `effectiveLimit * VECTOR_VALIDITY_OVERFETCH_FACTOR`
-	// candidates (issue #41) and the $match trims those invalidated at `asOf`,
-	// then the terminal $limit restores the requested count.
+	// Until the serving index is verified with the validity filter fields, keep
+	// issue #41's bounded overfetch plus post-filter fallback. Once verified,
+	// MongoDB's documented date-range/existence prefilter operators enforce the
+	// validity window before ANN candidate selection.
 	const pipeline: Document[] = [
 		{ $vectorSearch: stage },
-		{ $match: buildBitemporalFilter(params.asOf) },
+		...(params.nativeBitemporalPrefilter
+			? []
+			: [{ $match: buildBitemporalFilter(params.asOf) }]),
 		{ $limit: params.effectiveLimit },
 		{ $project: buildEventProjection("vectorSearchScore") },
 	]
@@ -589,11 +607,12 @@ async function hybridRecall(params: {
 	vectorIndexName: string
 	textIndexName: string
 	asOf: Date
+	nativeBitemporalPrefilter: boolean
 	scoreDetailsWarnings?: ScoreDetailsWarningState
 	/** Task 35 root fix: when set, inject Atlas Search `near` on
 	 *  `timestamp` into the text-lane `compound.should` so in-window
 	 *  events are boosted relative to out-of-window events. Leaves
-	 *  $rankFusion default 0.5/0.5 weights untouched — the boost is
+	 *  $rankFusion default equal weights untouched — the boost is
 	 *  entirely inside the text lane's own relevance score.
 	 *  Cited: https://www.mongodb.com/docs/atlas/atlas-search/near/
 	 */
@@ -608,11 +627,17 @@ async function hybridRecall(params: {
 		request: params.request,
 		startDate: params.startDate,
 		endDate: params.endDate,
+		...(params.nativeBitemporalPrefilter
+			? { bitemporalPrefilterAt: params.asOf }
+			: {}),
 	})
 	// Issue #41: over-fetch beyond the final limit so the bi-temporal $match
 	// inside the vector inner lane cannot starve fusion input; numCandidates
 	// scales with the over-fetched limit to preserve the 20× ANN baseline.
-	const hybridFetch = resolveVectorFetchPlan(params.effectiveLimit)
+	const hybridFetch = resolveVectorFetchPlan(
+		params.effectiveLimit,
+		params.nativeBitemporalPrefilter,
+	)
 	const vectorStage = buildVectorSearchStage({
 		queryVector: null,
 		queryText,
@@ -627,9 +652,9 @@ async function hybridRecall(params: {
 		return []
 	}
 
-	// Bi-temporal recall safety: the bi-temporal predicate is applied as a
-	// post-stage `$match` inside EACH inner `$rankFusion` pipeline so
-	// invalidated-at-asOf documents cannot reach the fusion stage.
+	// The text lane keeps its post-search validity match. The vector lane uses
+	// the same compatibility match until its native prefilter gate is ready, so
+	// invalidated-at-asOf documents cannot reach fusion in either mode.
 	// `$search.compound.filter` could use native `range` operators on
 	// dates, but a post-$match keeps the predicate expressed once (via
 	// buildBitemporalFilter) and avoids drift between the two paths.
@@ -671,7 +696,9 @@ async function hybridRecall(params: {
 					pipelines: {
 						vector: [
 							{ $vectorSearch: vectorStage },
-							{ $match: bitemporalFilter },
+							...(params.nativeBitemporalPrefilter
+								? []
+								: [{ $match: bitemporalFilter }]),
 						],
 						text: [
 							{
@@ -700,7 +727,7 @@ async function hybridRecall(params: {
 		{ $limit: params.effectiveLimit },
 		{ $addFields: { scoreDetails: { $meta: "scoreDetails" } } },
 		{
-			$project: buildEventProjection("searchScore", {
+			$project: buildEventProjection("score", {
 				includeScoreDetails: true,
 			}),
 		},
@@ -718,6 +745,7 @@ export async function recallConversation(params: {
 	vectorIndexName?: string
 	textIndexName?: string
 	capabilities?: DetectedCapabilities
+	nativeBitemporalVectorPrefilter?: boolean
 }): Promise<ConversationRecallResponse> {
 	const startedAt = Date.now()
 	const effectiveLimit = clampLimit(params.request.limit)
@@ -772,6 +800,8 @@ export async function recallConversation(params: {
 		textSearch: false,
 		rankFusion: false,
 		scoreFusion: false,
+		storedSource: false,
+		vectorIndexMethod: false,
 	}
 
 	let results: ConversationRecallResult[] = []
@@ -822,6 +852,8 @@ export async function recallConversation(params: {
 				asOf,
 				scoreDetailsWarnings,
 				temporalWindow,
+				nativeBitemporalPrefilter:
+					params.nativeBitemporalVectorPrefilter === true,
 			})
 			searchMethod = "hybrid"
 		} catch (error) {
@@ -843,6 +875,8 @@ export async function recallConversation(params: {
 					params.vectorIndexName ?? `${params.prefix}events_vector`,
 				asOf,
 				scoreDetailsWarnings,
+				nativeBitemporalPrefilter:
+					params.nativeBitemporalVectorPrefilter === true,
 			})
 			searchMethod = "semantic"
 		} catch (error) {

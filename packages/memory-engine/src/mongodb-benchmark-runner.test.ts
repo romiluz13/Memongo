@@ -12,6 +12,58 @@ import {
 } from "./mongodb-benchmark-runner.js"
 import type { MemorySearchResult } from "./types.js"
 import type { MemoryBenchmarkOfficialMetrics } from "./types.js"
+import { createBenchmarkRunContext } from "./benchmark-parity-envelope.js"
+
+function benchmarkCost(
+	operations: Array<{
+		operation:
+			| "rerank"
+			| "enrichment"
+			| "query-decomposition"
+			| "answer-generation"
+			| "answer-judge"
+			| "decoy-judge"
+		attempted: number
+		succeeded: number
+		failed: number
+	}> = [],
+) {
+	return {
+		currency: null,
+		totalCost: null,
+		unavailableReason: "provider token usage and prices are not instrumented",
+		operations: [
+			{
+				operation: "embedding" as const,
+				observability: "unknown" as const,
+				attempted: null,
+				succeeded: null,
+				failed: null,
+				unavailableReason:
+					"MongoDB automated embedding calls are not exposed to the benchmark process",
+			},
+			...operations.map((entry) => ({
+				...entry,
+				observability: "measured" as const,
+			})),
+		],
+	}
+}
+
+function benchmarkRunContext(
+	retrievalLane: "native" | "raw-session" = "native",
+) {
+	return createBenchmarkRunContext({
+		runId: `run-${retrievalLane}`,
+		configuration: {
+			executionProfile: "diagnostic",
+			retrievalLane,
+			maxResults: 50,
+			minScore: 0.01,
+			settings: { numCandidates: 500, fusionMethod: "rankFusion" },
+		},
+	})
+}
 
 function makeResult(params: {
 	path: string
@@ -33,8 +85,25 @@ function makeResult(params: {
 
 const officialMetrics: MemoryBenchmarkOfficialMetrics = {
 	longMemEval: {
+		evaluator: {
+			suite: "longmemeval",
+			sourceRepository: "xiaowu0162/LongMemEval",
+			sourceCommit: "9e0b455f4ef0e2ab8f2e582289761153549043fc",
+			evaluatorPath: "src/retrieval/eval_utils.py",
+			evaluatorBlob: "9c43a835e7c41aff0eb3272c448f5cbe76bbbd45",
+			aggregationEntrypoint: "src/retrieval/run_retrieval.py",
+			cutoffs: [1, 3, 5, 10, 30, 50],
+			eligibilityPolicy: "exclude-abstention-and-no-user-answer-target",
+			candidateProjection: "one-session-document-one-label",
+			comparability: "canonical",
+		},
+		totalCases: 2,
+		eligibleCases: 2,
 		retrievalCases: 2,
 		abstentionCases: 0,
+		ineligibleCases: 0,
+		projectionFailureCases: 0,
+		executionFailureCases: 0,
 		session: {
 			recallAnyAt1: 1,
 			recallAllAt1: 1,
@@ -84,6 +153,195 @@ describe("mongodb benchmark runner", () => {
 			{ sessionId: "session-1", score: 0.9 },
 			{ sessionId: "session-2", score: 0.8 },
 		])
+	})
+
+	it("marks a query execution failure separately from a retrieval miss", () => {
+		const execution = evaluateRankingCase({
+			caseId: "case-failed",
+			results: [],
+			latencyMs: 12,
+			relevantSessionIds: ["session-1"],
+			resolveSessionIds: () => [],
+			executionError: "search timeout",
+		})
+
+		expect(execution.executionStatus).toBe("system-failure")
+		expect(execution.scoreEligibility).toBe("retrieval")
+		expect(execution.retrievalOutcome).toBe("not-applicable")
+		expect(execution.error).toBe("search timeout")
+		expect(execution.scored).toBe(false)
+	})
+
+	it("reports attempted, succeeded, failed, abstention, and scored denominators", () => {
+		const summary = summarizeBenchmarkExecutions({
+			executions: [
+				evaluateRankingCase({
+					caseId: "hit",
+					results: [
+						makeResult({ path: "hit", score: 0.9, sessionId: "session-1" }),
+					],
+					latencyMs: 1,
+					relevantSessionIds: ["session-1"],
+					resolveSessionIds: (result) => [result.sessionId ?? ""],
+				}),
+				evaluateRankingCase({
+					caseId: "abstain",
+					results: [],
+					latencyMs: 1,
+					relevantSessionIds: [],
+					resolveSessionIds: () => [],
+					abstention: true,
+				}),
+				evaluateRankingCase({
+					caseId: "failed",
+					results: [],
+					latencyMs: 1,
+					relevantSessionIds: ["session-2"],
+					resolveSessionIds: () => [],
+					executionError: "network failure",
+				}),
+			],
+		})
+
+		expect(summary.execution).toEqual({
+			attemptedCases: 3,
+			succeededCases: 2,
+			failedCases: 1,
+			retrievalEligibleCases: 2,
+			abstentionCases: 1,
+			missingJudgmentCases: 0,
+			retrievalHits: 1,
+			retrievalMisses: 0,
+			scoredCases: 1,
+		})
+		expect(summary.emptyRate).toBe(0)
+		expect(summary.avgTopScore).toBe(0.9)
+		expect(summary.caseOutcomes).toHaveLength(3)
+	})
+
+	it("fails publication when declared quality thresholds are missed", () => {
+		const report = buildBenchmarkRunReport({
+			datasetVersion: "longmem-v1",
+			datasetKind: "longmemeval",
+			cases: 2,
+			scoredCases: 2,
+			hitRate: 0.5,
+			emptyRate: 0.5,
+			avgTopScore: 0.5,
+			p95LatencyMs: 200,
+			rAt5: 0.5,
+			rAt10: 0.5,
+			ndcgAt10: 0.5,
+			officialMetrics,
+			execution: {
+				attemptedCases: 2,
+				succeededCases: 2,
+				failedCases: 0,
+				retrievalEligibleCases: 2,
+				abstentionCases: 0,
+				missingJudgmentCases: 0,
+				retrievalHits: 1,
+				retrievalMisses: 1,
+				scoredCases: 2,
+			},
+			qualityThresholds: {
+				contractId: "longmemeval-release",
+				version: "1",
+				datasetKind: "longmemeval",
+				minHitRate: 0.8,
+				maxEmptyRate: 0.2,
+				minRAt5: 0.8,
+				minNdcgAt10: 0.7,
+				maxP95LatencyMs: 100,
+				minSessionRecallAnyAt10: 0.8,
+				minSessionNdcgAnyAt10: 0.8,
+			},
+		})
+
+		expect(report.releaseGates).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					gate: "quality-thresholds",
+					status: "failed",
+				}),
+			]),
+		)
+		expect(report.publicationDecision.publishable).toBe(false)
+		expect(report.publicationDecision.failedGates).toContain(
+			"quality-thresholds",
+		)
+		expect(report.publicationDecision.failedGates).not.toContain(
+			"conversation-recall-regression",
+		)
+		expect(report.publicationDecision.blockingGates).toContain(
+			"conversation-recall-regression",
+		)
+	})
+
+	it("applies the declared LoCoMo answer coverage threshold", () => {
+		const build = (minAnswerCoverage: number) =>
+			buildBenchmarkRunReport({
+				datasetVersion: "locomo-v1",
+				datasetKind: "locomo",
+				cases: 4,
+				scoredCases: 4,
+				hitRate: 1,
+				emptyRate: 0,
+				avgTopScore: 0.9,
+				p95LatencyMs: 10,
+				rAt5: 1,
+				ndcgAt10: 1,
+				officialMetrics: {
+					loCoMo: {
+						retrievalCases: 4,
+						abstentionCases: 0,
+						sessionEvidenceRecallAt5: 1,
+						sessionEvidenceRecallAt10: 1,
+					},
+				},
+				qualityThresholds: {
+					contractId: "locomo-release",
+					version: "1",
+					datasetKind: "locomo",
+					minHitRate: 0.8,
+					maxEmptyRate: 0.2,
+					minRAt5: 0.8,
+					minNdcgAt10: 0.8,
+					maxP95LatencyMs: 100,
+					minSessionEvidenceRecallAt10: 0.8,
+					minAnswerAccuracy: 0.8,
+					maxJudgeFalsePositiveRate: 0.05,
+					minAnswerCoverage,
+				},
+				e2eQa: {
+					answerModel: "answer-model",
+					judge: "judge-model",
+					judgeVersion: "1",
+					accuracy: 0.9,
+					latencyMs: 20,
+					judgeFalsePositiveRate: 0,
+					cases: { eligible: 4, attempted: 4, completed: 3, failed: 1 },
+					attempts: { answerGeneration: 4, answerJudge: 3, decoyJudge: 3 },
+					caseResults: [],
+				},
+			})
+
+		expect(build(0.75).releaseGates).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					gate: "e2e-answer-quality",
+					status: "passed",
+				}),
+			]),
+		)
+		expect(build(0.8).releaseGates).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					gate: "e2e-answer-quality",
+					status: "failed",
+				}),
+			]),
+		)
 	})
 
 	it("computes recall and ndcg over ranked session hits", () => {
@@ -222,6 +480,95 @@ describe("mongodb benchmark runner", () => {
 		expect(evaluation.longMemEval?.session?.recallAllAt3).toBe(1)
 		expect(evaluation.longMemEval?.session?.ndcgAnyAt10).toBeGreaterThan(0)
 		expect(evaluation.longMemEval?.turn?.recallAllAt5).toBe(1)
+	})
+
+	it("matches the pinned LongMemEval evaluator discount fixture", () => {
+		const evaluation = evaluateRankingCase({
+			results: [
+				makeResult({ path: "distractor-1", score: 0.9, sessionId: "d1" }),
+				makeResult({ path: "relevant-1", score: 0.8, sessionId: "s1" }),
+				makeResult({ path: "distractor-2", score: 0.7, sessionId: "d2" }),
+				makeResult({ path: "relevant-2", score: 0.6, sessionId: "s2" }),
+			],
+			latencyMs: 1,
+			relevantSessionIds: ["s1", "s2"],
+			resolveSessionIds: (result) =>
+				result.sessionId ? [result.sessionId] : [],
+			datasetKind: "longmemeval",
+		})
+
+		expect(evaluation.longMemEval?.session).toMatchObject({
+			recallAnyAt1: 0,
+			recallAnyAt3: 1,
+			recallAllAt3: 0,
+			ndcgAnyAt3: 0.5,
+			recallAllAt5: 1,
+			ndcgAnyAt5: 0.75,
+		})
+	})
+
+	it("rejects multi-label candidates from the canonical LongMemEval projection", () => {
+		const evaluation = evaluateRankingCase({
+			results: [makeResult({ path: "multi-session", score: 0.9 })],
+			latencyMs: 1,
+			relevantSessionIds: ["s1", "s2"],
+			resolveSessionIds: () => ["s1", "s2"],
+			datasetKind: "longmemeval",
+		})
+
+		expect(evaluation.rAt5).toBe(1)
+		expect(evaluation.longMemEval).toBeUndefined()
+		expect(evaluation.officialMetric).toEqual({
+			status: "projection-failure",
+			reason: "session candidate rank 1 resolved to 2 labels",
+		})
+	})
+
+	it("keeps unresolved candidates and duplicate labels in canonical ranks", () => {
+		const evaluation = evaluateRankingCase({
+			results: [
+				makeResult({ path: "unresolved", score: 0.9 }),
+				makeResult({ path: "duplicate-1", score: 0.8, sessionId: "s1" }),
+				makeResult({ path: "duplicate-2", score: 0.7, sessionId: "s1" }),
+				makeResult({ path: "relevant", score: 0.6, sessionId: "s2" }),
+			],
+			latencyMs: 1,
+			relevantSessionIds: ["s2"],
+			resolveSessionIds: (result) =>
+				result.sessionId ? [result.sessionId] : [],
+			datasetKind: "longmemeval",
+		})
+
+		expect(evaluation.longMemEval?.session).toMatchObject({
+			recallAnyAt1: 0,
+			recallAnyAt3: 0,
+			recallAnyAt5: 1,
+			ndcgAnyAt5: 0.5,
+		})
+		expect(evaluation.officialMetric).toEqual({ status: "scored" })
+	})
+
+	it("excludes cases outside the pinned LongMemEval main-run denominator", () => {
+		const evaluation = evaluateRankingCase({
+			results: [makeResult({ path: "answer", score: 0.9, sessionId: "s1" })],
+			latencyMs: 1,
+			relevantSessionIds: ["s1"],
+			resolveSessionIds: (result) =>
+				result.sessionId ? [result.sessionId] : [],
+			datasetKind: "longmemeval",
+			officialRetrieval: {
+				eligible: false,
+				expectedSessionIds: [],
+				expectedTurnIds: [],
+				ineligibleReason: "no-user-answer-target",
+			},
+		})
+
+		expect(evaluation.longMemEval).toBeUndefined()
+		expect(evaluation.officialMetric).toEqual({
+			status: "ineligible",
+			reason: "no-user-answer-target",
+		})
 	})
 
 	it("computes LoCoMo evidence recall from session and dialog IDs", () => {
@@ -366,7 +713,7 @@ describe("mongodb benchmark runner", () => {
 		expect(summary.scoredCases).toBe(2)
 		expect(summary.skippedCases).toBe(1)
 		expect(summary.hitRate).toBe(0.5)
-		expect(summary.emptyRate).toBeCloseTo(1 / 3)
+		expect(summary.emptyRate).toBe(0.5)
 		expect(summary.rAt5).toBe(0.5)
 		expect(summary.officialMetrics?.longMemEval).toEqual(
 			expect.objectContaining({
@@ -462,7 +809,7 @@ describe("mongodb benchmark runner", () => {
 				expect.arrayContaining([
 					expect.objectContaining({
 						gate: "official-retrieval",
-						status: "warning",
+						status: "failed",
 					}),
 					expect.objectContaining({
 						gate: "query-governance",
@@ -514,7 +861,7 @@ describe("mongodb benchmark runner", () => {
 					gate: "official-retrieval",
 					status: "passed",
 					evidence:
-						"officialMetrics present and all 2/2 benchmark cases scored",
+						"2/2 LongMemEval main-run eligible cases scored with evaluator 9e0b455f4ef0e2ab8f2e582289761153549043fc",
 				}),
 			]),
 		)
@@ -523,7 +870,7 @@ describe("mongodb benchmark runner", () => {
 		)
 	})
 
-	it("warns when official metrics have zero benchmark cases", () => {
+	it("fails when official metrics have zero benchmark cases", () => {
 		const report = buildBenchmarkRunReport({
 			datasetVersion: "longmem-v1",
 			datasetName: "longmemeval.json",
@@ -541,7 +888,7 @@ describe("mongodb benchmark runner", () => {
 			expect.arrayContaining([
 				expect.objectContaining({
 					gate: "official-retrieval",
-					status: "warning",
+					status: "failed",
 					evidence:
 						"officialMetrics present, but no benchmark cases were available",
 				}),
@@ -554,7 +901,7 @@ describe("mongodb benchmark runner", () => {
 		)
 	})
 
-	it("warns when official metrics omit scored case coverage", () => {
+	it("uses evaluator-specific coverage instead of the internal scored denominator", () => {
 		const report = buildBenchmarkRunReport({
 			datasetVersion: "longmem-v1",
 			datasetName: "longmemeval.json",
@@ -571,20 +918,19 @@ describe("mongodb benchmark runner", () => {
 			expect.arrayContaining([
 				expect.objectContaining({
 					gate: "official-retrieval",
-					status: "warning",
-					evidence:
-						"officialMetrics present, but scoredCases is missing; use non-comparable diagnostics only",
+					status: "passed",
 				}),
-			]),
-		)
-		expect(report.warnings).toEqual(
-			expect.arrayContaining([
-				expect.stringContaining("scoredCases is missing"),
 			]),
 		)
 	})
 
-	it("warns when official metrics only score a partial corpus", () => {
+	it("fails when official metrics only score part of the eligible corpus", () => {
+		const partialOfficialMetrics: MemoryBenchmarkOfficialMetrics = {
+			longMemEval: {
+				...officialMetrics.longMemEval!,
+				retrievalCases: 1,
+			},
+		}
 		const report = buildBenchmarkRunReport({
 			datasetVersion: "longmem-v1",
 			datasetName: "longmemeval.json",
@@ -595,22 +941,55 @@ describe("mongodb benchmark runner", () => {
 			emptyRate: 0,
 			avgTopScore: 0.9,
 			p95LatencyMs: 44,
-			officialMetrics,
+			officialMetrics: partialOfficialMetrics,
 		})
 
 		expect(report.releaseGates).toEqual(
 			expect.arrayContaining([
 				expect.objectContaining({
 					gate: "official-retrieval",
-					status: "warning",
-					evidence:
-						"officialMetrics present, but 1/2 benchmark cases were scored",
+					status: "failed",
+					evidence: "1/2 LongMemEval main-run eligible cases scored",
 				}),
 			]),
 		)
 		expect(report.warnings).toEqual(
 			expect.arrayContaining([
 				expect.stringContaining("1/2 benchmark cases were scored"),
+			]),
+		)
+	})
+
+	it("rejects adapted native metrics as an official LongMemEval result", () => {
+		const adaptedOfficialMetrics: MemoryBenchmarkOfficialMetrics = {
+			longMemEval: {
+				...officialMetrics.longMemEval!,
+				evaluator: {
+					...officialMetrics.longMemEval!.evaluator,
+					candidateProjection: "native-memory-source-session-adapter",
+					comparability: "adapted",
+				},
+			},
+		}
+		const report = buildBenchmarkRunReport({
+			datasetVersion: "longmem-v1",
+			datasetKind: "longmemeval",
+			cases: 2,
+			scoredCases: 2,
+			hitRate: 1,
+			emptyRate: 0,
+			avgTopScore: 0.9,
+			p95LatencyMs: 44,
+			officialMetrics: adaptedOfficialMetrics,
+		})
+
+		expect(report.releaseGates).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					gate: "official-retrieval",
+					status: "failed",
+					evidence: expect.stringContaining("projection is adapted"),
+				}),
 			]),
 		)
 	})
@@ -630,8 +1009,15 @@ describe("mongodb benchmark runner", () => {
 			rAt10: 1,
 			ndcgAt10: 1,
 			runIdentity: {
+				runId: "run-report",
 				datasetSha256: "a".repeat(64),
 				retrievalUnit: "turn",
+				configurationHash: "b".repeat(64),
+				executionProfile: "diagnostic",
+				retrievalLane: "native",
+				maxResults: 50,
+				minScore: 0.01,
+				settings: {},
 			},
 			embedding: {
 				model: "voyage-3",
@@ -644,18 +1030,30 @@ describe("mongodb benchmark runner", () => {
 				stage: "post-fusion",
 			},
 			storage: {
-				collectionBytes: 1024,
-				indexBytes: 2048,
+				basis: "benchmark-agent-logical-plus-shared-physical",
+				tenant: { documents: 2, logicalBytes: 512, collections: [] },
+				sharedPhysical: {
+					collections: [
+						{
+							collectionName: "memongo_events",
+							collectionBytes: 1024,
+							indexBytes: 2048,
+						},
+					],
+				},
 			},
 			latency: {
 				p50Ms: 20,
 				p95Ms: 44,
 			},
-			cost: {
-				embeddingCalls: 10,
-				rerankCalls: 5,
-				llmEnrichmentCalls: 0,
-			},
+			cost: benchmarkCost([
+				{
+					operation: "rerank",
+					attempted: 5,
+					succeeded: 5,
+					failed: 0,
+				},
+			]),
 		})
 
 		expect(report.runIdentity?.datasetSha256).toMatch(/^[0-9a-f]{64}$/)
@@ -666,13 +1064,34 @@ describe("mongodb benchmark runner", () => {
 		expect(report.reranker?.model).toBe("rerank-2")
 		expect(report.reranker?.version).toBeNull()
 		expect(report.reranker?.stage).toBe("post-fusion")
-		expect(report.storage?.collectionBytes).toBe(1024)
-		expect(report.storage?.indexBytes).toBe(2048)
+		expect(report.storage?.tenant.logicalBytes).toBe(512)
+		expect(report.storage?.sharedPhysical.collections[0]?.indexBytes).toBe(2048)
 		expect(report.latency?.p50Ms).toBe(20)
 		expect(report.latency?.p95Ms).toBe(44)
-		expect(report.cost?.embeddingCalls).toBe(10)
-		expect(report.cost?.rerankCalls).toBe(5)
-		expect(report.cost?.llmEnrichmentCalls).toBe(0)
+		expect(report.cost?.operations).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					operation: "embedding",
+					observability: "unknown",
+					attempted: null,
+				}),
+				expect.objectContaining({
+					operation: "rerank",
+					attempted: 5,
+					succeeded: 5,
+					failed: 0,
+				}),
+			]),
+		)
+		expect(report.releaseGates).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					gate: "evidence-completeness",
+					status: "failed",
+					evidence: expect.stringContaining("monetary cost"),
+				}),
+			]),
+		)
 	})
 
 	it("emits storage null-with-reason when collStats is unavailable (Task 1.A)", () => {
@@ -691,17 +1110,32 @@ describe("mongodb benchmark runner", () => {
 				retrievalUnit: "turn",
 			},
 			storage: {
-				collectionBytes: null,
-				indexBytes: null,
-				unavailableReason: "collStats-unsupported-on-atlas-local-preview",
+				basis: "benchmark-agent-logical-plus-shared-physical",
+				tenant: {
+					documents: null,
+					logicalBytes: null,
+					collections: [],
+					unavailableReason: "tenant-measurement-unavailable",
+				},
+				sharedPhysical: {
+					collections: [
+						{
+							collectionName: "memongo_events",
+							collectionBytes: null,
+							indexBytes: null,
+							unavailableReason: "collStats-unsupported-on-atlas-local-preview",
+						},
+					],
+				},
 			},
 		})
 
-		expect(report.storage?.collectionBytes).toBeNull()
-		expect(report.storage?.indexBytes).toBeNull()
-		expect(report.storage?.unavailableReason).toBe(
-			"collStats-unsupported-on-atlas-local-preview",
-		)
+		expect(
+			report.storage?.sharedPhysical.collections[0]?.collectionBytes,
+		).toBeNull()
+		expect(
+			report.storage?.sharedPhysical.collections[0]?.unavailableReason,
+		).toBe("collStats-unsupported-on-atlas-local-preview")
 	})
 
 	it("accepts Gate-5 e2eQa extensions (may be null at Phase 1) (Task 1.A)", () => {
@@ -762,11 +1196,21 @@ describe("mongodb benchmark runner", () => {
 				topN: 20,
 			},
 			latencySamples: [10, 20, 30, 40, 50],
-			costCounters: {
-				embeddingCalls: 6,
-				rerankCalls: 3,
-				llmEnrichmentCalls: 2,
-			},
+			cost: benchmarkCost([
+				{
+					operation: "rerank",
+					attempted: 3,
+					succeeded: 3,
+					failed: 0,
+				},
+				{
+					operation: "enrichment",
+					attempted: 2,
+					succeeded: 2,
+					failed: 0,
+				},
+			]),
+			runContext: benchmarkRunContext(),
 		})
 
 		expect(projected.runIdentity?.datasetSha256).toMatch(/^[0-9a-f]{64}$/)
@@ -776,18 +1220,41 @@ describe("mongodb benchmark runner", () => {
 		expect(projected.embedding?.quantization).toBe("float32")
 		expect(projected.reranker?.model).toBe("rerank-2.5")
 		expect(projected.reranker?.stage).toBe("post-fusion")
-		expect(projected.storage?.collectionBytes).toBe(4096)
-		expect(projected.storage?.indexBytes).toBe(8192)
+		expect(projected.storage?.sharedPhysical.collections[0]).toEqual(
+			expect.objectContaining({
+				collectionBytes: 4096,
+				indexBytes: 8192,
+			}),
+		)
 		expect(projected.latency?.p50Ms).toBeGreaterThanOrEqual(0)
 		expect(projected.latency?.p95Ms).toBeGreaterThanOrEqual(
 			projected.latency?.p50Ms ?? 0,
 		)
-		expect(projected.cost?.embeddingCalls).toBe(6)
-		expect(projected.cost?.rerankCalls).toBe(3)
-		expect(projected.cost?.llmEnrichmentCalls).toBe(2)
+		expect(projected.cost?.operations).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					operation: "embedding",
+					observability: "unknown",
+				}),
+				expect.objectContaining({
+					operation: "rerank",
+					attempted: 3,
+				}),
+				expect.objectContaining({
+					operation: "enrichment",
+					attempted: 2,
+				}),
+			]),
+		)
 	})
 
 	it("projectBenchmarkParityFields records session retrieval for raw-session lane", async () => {
+		const { writeFileSync, mkdtempSync } = await import("node:fs")
+		const { tmpdir } = await import("node:os")
+		const path = await import("node:path")
+		const dir = mkdtempSync(path.join(tmpdir(), "memongo-parity-session-"))
+		const datasetPath = path.join(dir, "dataset.json")
+		writeFileSync(datasetPath, "raw-session-fixture")
 		const mockDb = {
 			command: async () => ({ size: 1024, totalIndexSize: 2048 }),
 		}
@@ -797,7 +1264,7 @@ describe("mongodb benchmark runner", () => {
 				typeof projectBenchmarkParityFields
 			>[0]["db"],
 			collectionName: "memongo_bench_session_chunks",
-			datasetSha256Override: "a".repeat(64),
+			datasetPath,
 			datasetKind: "longmemeval",
 			retrievalLane: "raw-session",
 			mongoEmbeddingConfig: {
@@ -810,11 +1277,8 @@ describe("mongodb benchmark runner", () => {
 				topN: 0,
 			},
 			latencySamples: [10],
-			costCounters: {
-				embeddingCalls: 0,
-				rerankCalls: 0,
-				llmEnrichmentCalls: 0,
-			},
+			cost: benchmarkCost(),
+			runContext: benchmarkRunContext("raw-session"),
 		})
 
 		expect(projected.runIdentity?.retrievalUnit).toBe("session")
@@ -853,19 +1317,28 @@ describe("mongodb benchmark runner", () => {
 				topN: 20,
 			},
 			latencySamples: [42],
-			costCounters: {
-				embeddingCalls: 0,
-				rerankCalls: 0,
-				llmEnrichmentCalls: 0,
-			},
+			cost: benchmarkCost(),
+			runContext: benchmarkRunContext(),
 		})
 
-		expect(projected.storage?.collectionBytes).toBeNull()
-		expect(projected.storage?.indexBytes).toBeNull()
-		expect(projected.storage?.unavailableReason).toMatch(/collStats/i)
+		expect(projected.storage?.sharedPhysical.collections[0]).toEqual(
+			expect.objectContaining({
+				collectionBytes: null,
+				indexBytes: null,
+				unavailableReason: expect.stringMatching(/collStats/i),
+			}),
+		)
 	})
 
-	it("warns when official metrics score more cases than the corpus declares", () => {
+	it("fails when official metrics score more cases than the corpus declares", () => {
+		const oversizedOfficialMetrics: MemoryBenchmarkOfficialMetrics = {
+			longMemEval: {
+				...officialMetrics.longMemEval!,
+				totalCases: 3,
+				eligibleCases: 3,
+				retrievalCases: 3,
+			},
+		}
 		const report = buildBenchmarkRunReport({
 			datasetVersion: "longmem-v1",
 			datasetName: "longmemeval.json",
@@ -876,16 +1349,15 @@ describe("mongodb benchmark runner", () => {
 			emptyRate: 0,
 			avgTopScore: 0.9,
 			p95LatencyMs: 44,
-			officialMetrics,
+			officialMetrics: oversizedOfficialMetrics,
 		})
 
 		expect(report.releaseGates).toEqual(
 			expect.arrayContaining([
 				expect.objectContaining({
 					gate: "official-retrieval",
-					status: "warning",
-					evidence:
-						"officialMetrics present, but 3/2 benchmark cases were scored",
+					status: "failed",
+					evidence: "LongMemEval evaluator covered 3/2 total cases",
 				}),
 			]),
 		)

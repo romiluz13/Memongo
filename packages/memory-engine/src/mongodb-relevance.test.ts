@@ -91,6 +91,8 @@ const capabilities: DetectedCapabilities = {
 	textSearch: true,
 	vectorSearch: true,
 	rankFusion: true,
+	storedSource: false,
+	vectorIndexMethod: false,
 	scoreFusion: true,
 }
 

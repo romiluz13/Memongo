@@ -19,6 +19,7 @@ export type {
 	MemongoActiveSlateInput,
 	MemongoActorRole,
 	MemongoBenchmarkIngestResponse,
+	MemongoBenchmarkQualityThresholds,
 	MemongoConsolidateInput,
 	MemongoConsolidateResponse,
 	MemongoConversationImportInput,

@@ -39,6 +39,8 @@ const NO_ATLAS_SEARCH: DetectedCapabilities = {
 	textSearch: false,
 	scoreFusion: false,
 	rankFusion: false,
+	storedSource: false,
+	vectorIndexMethod: false,
 }
 
 const TEST_URI = resolvePreviewMongoTestUri(

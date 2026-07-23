@@ -12,6 +12,7 @@ import {
 } from "@memongo/lib"
 import type { EmbeddingStatus } from "./mongodb-embedding-retry.js"
 import { recordMutation, type MutationMeta } from "./mongodb-mutations.js"
+import { invalidateQueryCache } from "./mongodb-query-cache.js"
 import { summarizeExplain } from "./mongodb-relevance.js"
 import type { DetectedCapabilities } from "./mongodb-schema.js"
 import {
@@ -30,6 +31,10 @@ import {
 	mergeQueryClauses,
 	resolveTemporalAsOf,
 } from "./mongodb-temporal.js"
+import {
+	MAJORITY_TRANSACTION_OPTIONS,
+	isTransactionUnsupported,
+} from "./mongodb-transactions.js"
 import type {
 	MemoryActorRole,
 	MemoryFeedbackSignal,
@@ -196,6 +201,35 @@ function arraysEqual(
 	const a = left ?? []
 	const b = right ?? []
 	return a.length === b.length && a.every((value, index) => value === b[index])
+}
+
+function hasProcessedSourceEvents(
+	existing: Document,
+	sourceEventIds: string[] | undefined,
+): boolean {
+	if (!sourceEventIds || sourceEventIds.length === 0) {
+		return false
+	}
+	const existingIds = new Set(
+		Array.isArray(existing.sourceEventIds)
+			? existing.sourceEventIds.map((value) => String(value))
+			: [],
+	)
+	return sourceEventIds.every((eventId) => existingIds.has(eventId))
+}
+
+function mergeSourceEventIds(
+	existing: Document,
+	sourceEventIds: string[],
+): string[] {
+	return Array.from(
+		new Set([
+			...(Array.isArray(existing.sourceEventIds)
+				? existing.sourceEventIds.map((value) => String(value))
+				: []),
+			...sourceEventIds,
+		]),
+	)
 }
 
 function hasStructuredValueChanged(
@@ -610,7 +644,18 @@ export async function writeStructuredMemory(params: {
 	session?: ClientSession
 	actorRole?: MemoryActorRole
 	mutationMeta?: MutationMeta
-}): Promise<{ upserted: boolean; id: string }> {
+	eventReceiptIds?: string[]
+}): Promise<{
+	upserted: boolean
+	id: string
+	/**
+	 * When a `session` is provided, side effects (query-cache invalidation,
+	 * mutation audit) are deferred and returned here so the caller can run
+	 * them AFTER the caller's transaction commits. Running them inside the
+	 * live transaction would record an audit for a write that may never commit.
+	 */
+	pendingSideEffects?: () => Promise<void>
+}> {
 	const { db, prefix, entry } = params
 	const collection = structuredMemCollection(db, prefix)
 	const revisions = structuredMemRevisionsCollection(db, prefix)
@@ -710,10 +755,16 @@ export async function writeStructuredMemory(params: {
 
 	// Captured for fire-and-forget audit after persist completes
 	let existingBeforeWrite: Document | null = null
+	let persistedSetDoc = setDoc
 
 	const persist = async (
 		session?: ClientSession,
-	): Promise<{ upserted: boolean; id: string; revision: number }> => {
+	): Promise<{
+		upserted: boolean
+		id: string
+		revision: number
+		changed: boolean
+	}> => {
 		const existing = await collection.findOne(
 			identityFilter,
 			session ? { session } : undefined,
@@ -736,8 +787,23 @@ export async function writeStructuredMemory(params: {
 				upserted: result.upsertedCount > 0,
 				id: result.upsertedId ? String(result.upsertedId) : entry.key,
 				revision: 1,
+				changed: true,
 			}
 		}
+		if (hasProcessedSourceEvents(existing, params.eventReceiptIds)) {
+			return {
+				upserted: false,
+				id: entry.key,
+				revision: typeof existing.revision === "number" ? existing.revision : 1,
+				changed: false,
+			}
+		}
+		persistedSetDoc = entry.sourceEventIds
+			? {
+					...setDoc,
+					sourceEventIds: mergeSourceEventIds(existing, entry.sourceEventIds),
+				}
+			: setDoc
 
 		const currentRevision =
 			typeof existing.revision === "number" &&
@@ -758,7 +824,7 @@ export async function writeStructuredMemory(params: {
 				identityFilter,
 				{
 					$set: {
-						...setDoc,
+						...persistedSetDoc,
 						revision: currentRevision,
 						validFrom: currentValidFrom,
 						lastConfirmedAt: now,
@@ -769,7 +835,12 @@ export async function writeStructuredMemory(params: {
 				},
 				session ? { session } : {},
 			)
-			return { upserted: false, id: entry.key, revision: currentRevision }
+			return {
+				upserted: false,
+				id: entry.key,
+				revision: currentRevision,
+				changed: true,
+			}
 		}
 
 		await revisions.insertOne(
@@ -794,7 +865,7 @@ export async function writeStructuredMemory(params: {
 					? existingValidFrom
 					: incomingValidFrom
 		const nextSetDoc: Document = {
-			...setDoc,
+			...persistedSetDoc,
 			revision: currentRevision + 1,
 			validFrom: nextValidFrom,
 			supersedes: {
@@ -839,7 +910,12 @@ export async function writeStructuredMemory(params: {
 			},
 			{ upsert: true, ...(session ? { session } : {}) },
 		)
-		return { upserted: false, id: entry.key, revision: currentRevision + 1 }
+		return {
+			upserted: false,
+			id: entry.key,
+			revision: currentRevision + 1,
+			changed: true,
+		}
 	}
 
 	const client = params.client
@@ -850,16 +926,30 @@ export async function writeStructuredMemory(params: {
 					const session = client.startSession()
 					try {
 						let result:
-							| { upserted: boolean; id: string; revision: number }
+							| {
+									upserted: boolean
+									id: string
+									revision: number
+									changed: boolean
+							  }
 							| undefined
 						await session.withTransaction(async () => {
 							result = await persist(session)
-						})
-						return result ?? { upserted: false, id: entry.key, revision: 1 }
+						}, MAJORITY_TRANSACTION_OPTIONS)
+						return (
+							result ?? {
+								upserted: false,
+								id: entry.key,
+								revision: 1,
+								changed: false,
+							}
+						)
 					} catch (err) {
-						const message = err instanceof Error ? err.message : String(err)
-						log.warn(
-							`structured memory transaction unavailable, falling back to sequential writes: ${message}`,
+						if (!isTransactionUnsupported(err)) {
+							throw err
+						}
+						log.info(
+							"transactions not supported for structured memory, falling back to direct writes",
 						)
 						return await persist()
 					} finally {
@@ -867,37 +957,66 @@ export async function writeStructuredMemory(params: {
 					}
 				})()
 			: await persist()
+	if (!outcome.changed) {
+		return { upserted: false, id: outcome.id }
+	}
 
 	log.info(
 		`structured memory ${outcome.upserted ? "created" : "updated"}: type=${entry.type} key=${entry.key} revision=${outcome.revision}`,
 	)
 
-	// Fire-and-forget: record mutation audit trail (non-blocking)
-	const oldSnapshot = existingBeforeWrite
-	const changedFields =
-		oldSnapshot != null ? computeChangedFields(oldSnapshot, setDoc) : undefined
-	Promise.allSettled([
-		recordMutation({
+	// Side effects: query-cache invalidation + mutation audit trail.
+	// When a `session` is provided, the caller's transaction is still open —
+	// defer the side effects so they run AFTER the transaction commits (an
+	// audit for a write that never commits is a correctness bug). Otherwise
+	// run them immediately.
+	const runSideEffects = async (): Promise<void> => {
+		await invalidateQueryCache({
 			db,
 			prefix,
-			mutation: {
-				collectionName: "structured_mem",
-				documentId: entry.key,
-				operation: oldSnapshot == null ? "create" : "update",
-				agentId: entry.agentId,
-				oldValue: oldSnapshot ?? null,
-				newValue: setDoc,
-				changedFields,
-				actorRole: params.actorRole ?? "system",
-				...(params.mutationMeta ? { meta: params.mutationMeta } : {}),
-			},
-		}),
-	]).catch((err) => {
-		log.warn(
-			`structured memory audit failed: ${err instanceof Error ? err.message : String(err)}`,
-		)
-	})
+			agentId: entry.agentId,
+			scope,
+			scopeRef,
+		})
 
+		const oldSnapshot = existingBeforeWrite
+		const changedFields =
+			oldSnapshot != null
+				? computeChangedFields(oldSnapshot, persistedSetDoc)
+				: undefined
+		Promise.allSettled([
+			recordMutation({
+				db,
+				prefix,
+				mutation: {
+					collectionName: "structured_mem",
+					documentId: entry.key,
+					operation: oldSnapshot == null ? "create" : "update",
+					agentId: entry.agentId,
+					oldValue: oldSnapshot ?? null,
+					newValue: persistedSetDoc,
+					changedFields,
+					actorRole: params.actorRole ?? "system",
+					...(params.mutationMeta ? { meta: params.mutationMeta } : {}),
+				},
+			}),
+		]).catch((err) => {
+			log.warn(
+				`structured memory audit failed: ${err instanceof Error ? err.message : String(err)}`,
+			)
+		})
+	}
+
+	if (params.session) {
+		// Caller's transaction is still open — defer side effects.
+		return {
+			upserted: outcome.upserted,
+			id: outcome.id,
+			pendingSideEffects: runSideEffects,
+		}
+	}
+
+	await runSideEffects()
 	return { upserted: outcome.upserted, id: outcome.id }
 }
 
@@ -1010,11 +1129,13 @@ export async function invalidateStructuredMemoryByHandle(params: {
 		try {
 			await session.withTransaction(async () => {
 				await persist(session)
-			})
+			}, MAJORITY_TRANSACTION_OPTIONS)
 		} catch (err) {
-			const message = err instanceof Error ? err.message : String(err)
-			log.warn(
-				`structured lifecycle transaction unavailable, falling back to sequential writes: ${message}`,
+			if (!isTransactionUnsupported(err)) {
+				throw err
+			}
+			log.info(
+				"transactions not supported for structured lifecycle, falling back to direct writes",
 			)
 			await persist()
 		} finally {
@@ -1028,6 +1149,13 @@ export async function invalidateStructuredMemoryByHandle(params: {
 		return null
 	}
 	if (changed) {
+		await invalidateQueryCache({
+			db: params.db,
+			prefix: params.prefix,
+			agentId: params.handle.agentId,
+			scope: params.handle.scope,
+			scopeRef: params.handle.scopeRef,
+		})
 		recordMutation({
 			db: params.db,
 			prefix: params.prefix,

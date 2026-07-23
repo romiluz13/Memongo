@@ -154,6 +154,34 @@ describe("mongodb-graph", () => {
 	})
 
 	describe("upsertRelation", () => {
+		it("uses one majority transaction for relation identity and exclusivity", async () => {
+			const relationsCol = createMockCollection()
+			const db = createMockDb({ [`${PREFIX}relations`]: relationsCol })
+			const withTransaction = vi.fn(async (fn: () => Promise<void>) => fn())
+			const session = { withTransaction, endSession: vi.fn(async () => {}) }
+			const client = { startSession: vi.fn(() => session) }
+
+			await upsertRelation({
+				db,
+				prefix: PREFIX,
+				relation: makeRelation(),
+				client: client as unknown as import("mongodb").MongoClient,
+			})
+
+			expect(withTransaction).toHaveBeenCalledWith(expect.any(Function), {
+				writeConcern: { w: "majority", wtimeout: 1000 },
+			})
+			expect(relationsCol.findOne).toHaveBeenCalledWith(expect.any(Object), {
+				session,
+			})
+			expect(relationsCol.updateOne).toHaveBeenCalledWith(
+				expect.any(Object),
+				expect.any(Object),
+				{ upsert: true, session },
+			)
+			expect(session.endSession).toHaveBeenCalledOnce()
+		})
+
 		it("creates a relation between two entities", async () => {
 			const relationsCol = createMockCollection()
 			const db = createMockDb({ [`${PREFIX}relations`]: relationsCol })
@@ -189,6 +217,7 @@ describe("mongodb-graph", () => {
 				relation: makeRelation({
 					sourceEventIds: ["evt-1"],
 				}),
+				eventReceiptIds: ["evt-replayed"],
 			})
 
 			const [, update] = (relationsCol.updateOne as ReturnType<typeof vi.fn>)
@@ -233,6 +262,74 @@ describe("mongodb-graph", () => {
 				.mock.calls[0]
 			expect(update.$inc.reinforcementCount).toBe(1)
 			expect(update.$set.lastConfirmedAt).toBeInstanceOf(Date)
+		})
+
+		it("does not replay the destructive owns-invalidation side effect for the same source event, but still applies field updates", async () => {
+			const relationsCol = createMockCollection({
+				findOne: vi.fn().mockResolvedValue({
+					fromEntityId: "ent-bob",
+					toEntityId: "ent-phoenix",
+					type: "owns",
+					agentId: "agent-1",
+					scope: "agent",
+					scopeRef: "agent:agent-1",
+					state: "active",
+					sourceEventIds: ["evt-replayed"],
+				}),
+				updateOne: vi.fn().mockResolvedValue({
+					upsertedCount: 0,
+					matchedCount: 1,
+					modifiedCount: 1,
+				}),
+			})
+			const db = createMockDb({ [`${PREFIX}relations`]: relationsCol })
+
+			await upsertRelation({
+				db,
+				prefix: PREFIX,
+				relation: makeRelation({
+					fromEntityId: "ent-bob",
+					toEntityId: "ent-phoenix",
+					type: "owns",
+					sourceEventIds: ["evt-replayed"],
+					weight: 0.9,
+				}),
+			})
+
+			// The destructive owns-invalidation (updateMany) is NOT replayed.
+			expect(relationsCol.updateMany).not.toHaveBeenCalled()
+			// But the field update (updateOne) IS applied — the same sourceEventIds
+			// with a changed weight must not be silently dropped.
+			expect(relationsCol.updateOne).toHaveBeenCalled()
+			const [, update] = (relationsCol.updateOne as ReturnType<typeof vi.fn>)
+				.mock.calls[0]
+			expect(update.$set.weight).toBe(0.9)
+			expect(update.$inc.reinforcementCount).toBe(1)
+		})
+
+		it("accumulates source-event evidence when a new event confirms a relation", async () => {
+			const relationsCol = createMockCollection({
+				findOne: vi.fn().mockResolvedValue({
+					fromEntityId: "ent-1",
+					toEntityId: "ent-2",
+					type: "works_on",
+					agentId: "agent-1",
+					scope: "agent",
+					scopeRef: "agent:agent-1",
+					state: "active",
+					sourceEventIds: ["evt-first"],
+				}),
+			})
+			const db = createMockDb({ [`${PREFIX}relations`]: relationsCol })
+
+			await upsertRelation({
+				db,
+				prefix: PREFIX,
+				relation: makeRelation({ sourceEventIds: ["evt-second"] }),
+			})
+
+			const update = vi.mocked(relationsCol.updateOne).mock.calls[0]?.[1]
+			expect(update?.$set.sourceEventIds).toEqual(["evt-first", "evt-second"])
 		})
 
 		it("invalidates stale active owns relations when ownership changes", async () => {
@@ -742,7 +839,7 @@ describe("mongodb-graph", () => {
 			expect(facetStage).toBeUndefined()
 		})
 
-		it("bidirectional=true uses $facet for parallel traversal", async () => {
+		it("bidirectional=true uses two separate aggregations for forward + reverse", async () => {
 			const rootEntity = makeEntity()
 			const entitiesCol = createMockCollection()
 			;(entitiesCol as unknown as Record<string, unknown>).findOne = vi
@@ -751,7 +848,7 @@ describe("mongodb-graph", () => {
 
 			const relationsCol = createMockCollection({
 				aggregate: vi.fn().mockReturnValue({
-					toArray: vi.fn().mockResolvedValue([{ forward: [], reverse: [] }]),
+					toArray: vi.fn().mockResolvedValue([]),
 				}),
 			})
 
@@ -768,13 +865,20 @@ describe("mongodb-graph", () => {
 				bidirectional: true,
 			})
 
-			// Should use $facet when bidirectional=true
-			const [pipeline] = (relationsCol.aggregate as ReturnType<typeof vi.fn>)
-				.mock.calls[0]
-			const facetStage = pipeline.find((s: Document) => s.$facet)
-			expect(facetStage).toBeDefined()
-			expect(facetStage.$facet.forward).toBeDefined()
-			expect(facetStage.$facet.reverse).toBeDefined()
+			// Bidirectional should issue two separate aggregate calls (forward +
+			// reverse), NOT a $facet — $facet has a 100MB per-branch limit with
+			// no spill to disk, which a large graph can exceed.
+			const aggregateCalls = (
+				relationsCol.aggregate as ReturnType<typeof vi.fn>
+			).mock.calls
+			expect(aggregateCalls).toHaveLength(2)
+			// Each pipeline should contain a $graphLookup (not $facet)
+			for (const [pipeline] of aggregateCalls) {
+				const hasGraphLookup = pipeline.some((s: Document) => s.$graphLookup)
+				expect(hasGraphLookup).toBe(true)
+				const hasFacet = pipeline.some((s: Document) => s.$facet)
+				expect(hasFacet).toBe(false)
+			}
 		})
 
 		it("maxConnections limits total connections returned", async () => {
@@ -927,35 +1031,31 @@ describe("mongodb-graph", () => {
 				.fn()
 				.mockResolvedValue(rootEntity)
 
-			// Same relation appears in both forward and reverse
-			const facetResult = {
-				forward: [
-					{
-						fromEntityId: "ent-1",
-						toEntityId: "ent-2",
-						type: "works_on",
-						agentId: "agent-1",
-						scope: "agent",
-						updatedAt: new Date("2026-01-01"),
-						transitiveRelations: [],
-					},
-				],
-				reverse: [
-					{
-						fromEntityId: "ent-1",
-						toEntityId: "ent-2",
-						type: "works_on",
-						agentId: "agent-1",
-						scope: "agent",
-						updatedAt: new Date("2026-01-01"),
-						transitiveRelations: [],
-					},
-				],
+			// Same relation appears in both forward and reverse. With two separate
+			// aggregations (no $facet), the first call returns forward, the second
+			// returns reverse.
+			const forwardRel = {
+				fromEntityId: "ent-1",
+				toEntityId: "ent-2",
+				type: "works_on",
+				agentId: "agent-1",
+				scope: "agent",
+				updatedAt: new Date("2026-01-01"),
+				transitiveRelations: [],
 			}
+			const reverseRel = { ...forwardRel }
 
+			let aggregateCallCount = 0
 			const relationsCol = createMockCollection({
-				aggregate: vi.fn().mockReturnValue({
-					toArray: vi.fn().mockResolvedValue([facetResult]),
+				aggregate: vi.fn().mockImplementation(() => {
+					aggregateCallCount++
+					return {
+						toArray: vi
+							.fn()
+							.mockResolvedValue(
+								aggregateCallCount === 1 ? [forwardRel] : [reverseRel],
+							),
+					}
 				}),
 			})
 
@@ -1527,7 +1627,7 @@ describe("mongodb-graph", () => {
 
 	describe("Entity Registry Phase 3.4", () => {
 		describe("mentionCount $inc on entity upsert", () => {
-			it("uses $inc mentionCount:1 in bulkWrite entity upserts", async () => {
+			it("uses $inc when no source event idempotency key is available", async () => {
 				const entitiesCol = createMockCollection()
 				const relationsCol = createMockCollection()
 				const entityLinksCol = createMockCollection()
@@ -1543,7 +1643,6 @@ describe("mongodb-graph", () => {
 					agentId: "agent-1",
 					eventContent: "@alice works on the project",
 					scope: "agent",
-					sourceEventId: "ev1",
 				})
 
 				const bulkCalls = (entitiesCol.bulkWrite as ReturnType<typeof vi.fn>)

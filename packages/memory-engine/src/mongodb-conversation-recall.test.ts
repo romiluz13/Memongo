@@ -266,6 +266,8 @@ describe("recallConversation", () => {
 				vectorSearch: true,
 				textSearch: false,
 				rankFusion: false,
+				storedSource: false,
+				vectorIndexMethod: false,
 				scoreFusion: false,
 			},
 		})
@@ -330,6 +332,8 @@ describe("recallConversation", () => {
 				vectorSearch: true,
 				textSearch: true,
 				rankFusion: true,
+				storedSource: false,
+				vectorIndexMethod: false,
 				scoreFusion: false,
 			},
 		})
@@ -393,6 +397,8 @@ describe("recallConversation", () => {
 				vectorSearch: true,
 				textSearch: true,
 				rankFusion: true,
+				storedSource: false,
+				vectorIndexMethod: false,
 				scoreFusion: false,
 			},
 		})
@@ -443,6 +449,8 @@ describe("recallConversation", () => {
 				vectorSearch: false,
 				textSearch: false,
 				rankFusion: false,
+				storedSource: false,
+				vectorIndexMethod: false,
 				scoreFusion: false,
 			},
 		})
@@ -670,6 +678,8 @@ describe("recallConversation", () => {
 				vectorSearch: true,
 				textSearch: true,
 				rankFusion: true,
+				storedSource: false,
+				vectorIndexMethod: false,
 				scoreFusion: false,
 			},
 		})
@@ -706,6 +716,8 @@ describe("recallConversation", () => {
 				vectorSearch: true,
 				textSearch: true,
 				rankFusion: true,
+				storedSource: false,
+				vectorIndexMethod: false,
 				scoreFusion: false,
 			},
 		})
@@ -740,6 +752,8 @@ describe("recallConversation", () => {
 				vectorSearch: true,
 				textSearch: false,
 				rankFusion: false,
+				storedSource: false,
+				vectorIndexMethod: false,
 				scoreFusion: false,
 			},
 		})
@@ -781,6 +795,8 @@ describe("recallConversation", () => {
 				vectorSearch: true,
 				textSearch: false,
 				rankFusion: false,
+				storedSource: false,
+				vectorIndexMethod: false,
 				scoreFusion: false,
 			},
 		})
@@ -813,6 +829,70 @@ describe("recallConversation", () => {
 		expect(limitStage?.$limit).toBe(limit)
 	})
 
+	it("uses native bitemporal prefiltering only when the serving events index is verified", async () => {
+		const col = makeAggregateCollection({ results: [] })
+		vi.mocked(eventsCollection).mockReturnValue(col)
+
+		const asOf = new Date("2026-05-12T10:00:00.000Z")
+		const limit = 5
+		await recallConversation({
+			db: mockDb(),
+			prefix: "mem_",
+			request: {
+				agentId: "agent-1",
+				scope: "tenant",
+				scopeRef: "tenant:acme",
+				sessionId: "session-1",
+				roles: ["assistant"],
+				query: "semantic query",
+				startTime: "2026-05-01T00:00:00.000Z",
+				endTime: "2026-05-11T23:59:59.999Z",
+				asOf,
+				limit,
+			},
+			capabilities: {
+				vectorSearch: true,
+				textSearch: false,
+				rankFusion: false,
+				storedSource: false,
+				vectorIndexMethod: false,
+				scoreFusion: false,
+			},
+			nativeBitemporalVectorPrefilter: true,
+		})
+
+		const pipeline = vi.mocked(col.aggregate).mock.calls[0]?.[0] as Document[]
+		const vectorStage = pipeline[0]?.$vectorSearch as {
+			filter?: Document
+			limit?: number
+			numCandidates?: number
+		}
+		expect(vectorStage.limit).toBe(limit)
+		expect(vectorStage.numCandidates).toBe(200)
+		expect(vectorStage.filter).toEqual(
+			expect.objectContaining({
+				agentId: { $eq: "agent-1" },
+				scope: { $eq: "tenant" },
+				scopeRef: { $eq: "tenant:acme" },
+				sessionId: { $eq: "session-1" },
+				role: { $in: ["assistant"] },
+				timestamp: {
+					$gte: new Date("2026-05-01T00:00:00.000Z"),
+					$lte: new Date("2026-05-11T23:59:59.999Z"),
+				},
+			}),
+		)
+		expect(vectorStage.filter?.$and).toEqual([
+			{
+				$or: [{ validAt: { $exists: false } }, { validAt: { $lte: asOf } }],
+			},
+			{
+				$or: [{ invalidAt: { $exists: false } }, { invalidAt: { $gt: asOf } }],
+			},
+		])
+		expect(pipeline.some((stage) => stage.$match !== undefined)).toBe(false)
+	})
+
 	it("recall overfetch (issue #41): hybridRecall $rankFusion vector inner lane over-fetches beyond the final limit", async () => {
 		const col = makeAggregateCollection({ results: [] })
 		vi.mocked(eventsCollection).mockReturnValue(col)
@@ -831,6 +911,8 @@ describe("recallConversation", () => {
 				vectorSearch: true,
 				textSearch: true,
 				rankFusion: true,
+				storedSource: false,
+				vectorIndexMethod: false,
 				scoreFusion: false,
 			},
 		})
@@ -845,6 +927,55 @@ describe("recallConversation", () => {
 			}
 		)?.limit
 		expect(vectorLimit).toBeGreaterThan(limit)
+	})
+
+	it("uses native validity only in the verified hybrid vector lane and retains text-lane validity", async () => {
+		const col = makeAggregateCollection({ results: [] })
+		vi.mocked(eventsCollection).mockReturnValue(col)
+
+		const asOf = new Date("2026-05-12T10:00:00.000Z")
+		await recallConversation({
+			db: mockDb(),
+			prefix: "mem_",
+			request: {
+				agentId: "agent-1",
+				query: "hybrid query",
+				asOf,
+				limit: 5,
+			},
+			capabilities: {
+				vectorSearch: true,
+				textSearch: true,
+				rankFusion: true,
+				storedSource: false,
+				vectorIndexMethod: false,
+				scoreFusion: false,
+			},
+			nativeBitemporalVectorPrefilter: true,
+		})
+
+		const pipeline = vi.mocked(col.aggregate).mock.calls[0]?.[0] as Document[]
+		const rankFusion = pipeline[0]?.$rankFusion as {
+			input?: {
+				pipelines?: { vector?: Document[]; text?: Document[] }
+			}
+		}
+		const vectorInner = rankFusion.input?.pipelines?.vector ?? []
+		const textInner = rankFusion.input?.pipelines?.text ?? []
+		expect(vectorInner).toHaveLength(1)
+		expect(vectorInner[0]?.$vectorSearch?.limit).toBe(5)
+		expect(vectorInner[0]?.$vectorSearch?.filter?.$and).toEqual([
+			{
+				$or: [{ validAt: { $exists: false } }, { validAt: { $lte: asOf } }],
+			},
+			{
+				$or: [{ invalidAt: { $exists: false } }, { invalidAt: { $gt: asOf } }],
+			},
+		])
+		expect(textInner).toEqual(
+			expect.arrayContaining([{ $match: expectedBitemporalAnd(asOf)[0] }]),
+		)
+		expect(pipeline[1]).toEqual({ $limit: 5 })
 	})
 
 	it("bi-temporal safety: hybridRecall $rankFusion injects bi-temporal $match into BOTH vector and text inner pipelines", async () => {
@@ -864,6 +995,8 @@ describe("recallConversation", () => {
 				vectorSearch: true,
 				textSearch: true,
 				rankFusion: true,
+				storedSource: false,
+				vectorIndexMethod: false,
 				scoreFusion: false,
 			},
 		})
@@ -907,7 +1040,7 @@ describe("recallConversation", () => {
 	// When the query contains a temporal token (via extractTemporalWindow),
 	// the hybrid text-lane must inject an Atlas Search `near` operator on
 	// `timestamp` into `compound.should` to boost in-window events. The
-	// $rankFusion default 0.5/0.5 fusion weights are untouched — the boost
+	// $rankFusion default equal fusion weights are untouched — the boost
 	// lives inside the text pipeline's own relevance score.
 	//
 	// Cited: https://www.mongodb.com/docs/atlas/atlas-search/near/ (near on
@@ -931,6 +1064,8 @@ describe("recallConversation", () => {
 				vectorSearch: true,
 				textSearch: true,
 				rankFusion: true,
+				storedSource: false,
+				vectorIndexMethod: false,
 				scoreFusion: false,
 			},
 		})
@@ -985,6 +1120,8 @@ describe("recallConversation", () => {
 				vectorSearch: true,
 				textSearch: true,
 				rankFusion: true,
+				storedSource: false,
+				vectorIndexMethod: false,
 				scoreFusion: false,
 			},
 		})
@@ -1019,6 +1156,8 @@ describe("recallConversation", () => {
 				vectorSearch: true,
 				textSearch: true,
 				rankFusion: true,
+				storedSource: false,
+				vectorIndexMethod: false,
 				scoreFusion: false,
 			},
 		})

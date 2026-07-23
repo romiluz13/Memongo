@@ -9,12 +9,15 @@
  * this re-open wires the PROJECTION — callers now actually populate them.
  */
 
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import {
 	BENCHMARK_RETRIEVAL_UNIT,
+	assertBenchmarkRunConfiguration,
+	collectBenchmarkTenantStorage,
 	collectStorageFootprint,
 	computeDatasetSha256FromPath,
-	createBenchmarkRunCounters,
+	createBenchmarkRunContext,
+	instrumentBenchmarkProvider,
 	percentile50And95,
 	resolveBenchmarkEmbeddingConfig,
 	resolveBenchmarkRetrievalLane,
@@ -90,14 +93,18 @@ describe("computeDatasetSha256FromPath", () => {
 })
 
 describe("resolveDatasetSha256", () => {
-	it("prefers MEMONGO_BENCHMARK_DATASET_SHA env over computing from path", async () => {
-		const envSha = "a".repeat(64)
+	it("accepts an env digest only when it attests the dataset bytes", async () => {
+		const { writeFileSync, mkdtempSync } = await import("node:fs")
+		const { tmpdir } = await import("node:os")
+		const path = await import("node:path")
+		const dir = mkdtempSync(path.join(tmpdir(), "memongo-dataset-sha-"))
+		const filePath = path.join(dir, "canary.jsonl")
+		writeFileSync(filePath, "attested-bytes")
+		const envSha = await computeDatasetSha256FromPath(filePath)
 		const original = process.env.MEMONGO_BENCHMARK_DATASET_SHA
 		process.env.MEMONGO_BENCHMARK_DATASET_SHA = envSha
 		try {
-			const sha = await resolveDatasetSha256({
-				datasetPath: "/nonexistent/path.json",
-			})
+			const sha = await resolveDatasetSha256({ datasetPath: filePath })
 			expect(sha).toBe(envSha)
 		} finally {
 			if (original === undefined) {
@@ -108,7 +115,7 @@ describe("resolveDatasetSha256", () => {
 		}
 	})
 
-	it("ignores env value that is not a 64-hex SHA and falls back to path compute", async () => {
+	it("rejects an invalid env digest instead of silently dropping it", async () => {
 		const { writeFileSync, mkdtempSync } = await import("node:fs")
 		const { tmpdir } = await import("node:os")
 		const path = await import("node:path")
@@ -118,8 +125,9 @@ describe("resolveDatasetSha256", () => {
 		const original = process.env.MEMONGO_BENCHMARK_DATASET_SHA
 		process.env.MEMONGO_BENCHMARK_DATASET_SHA = "not-a-real-sha"
 		try {
-			const sha = await resolveDatasetSha256({ datasetPath: filePath })
-			expect(sha).toMatch(/^[0-9a-f]{64}$/)
+			await expect(
+				resolveDatasetSha256({ datasetPath: filePath }),
+			).rejects.toThrow(/64-character lowercase SHA-256/i)
 		} finally {
 			if (original === undefined) {
 				delete process.env.MEMONGO_BENCHMARK_DATASET_SHA
@@ -129,7 +137,7 @@ describe("resolveDatasetSha256", () => {
 		}
 	})
 
-	it("throws in strict mode when no env and no path — zero silent fallback", async () => {
+	it("always rejects when no dataset bytes are available", async () => {
 		const originalEnv = process.env.MEMONGO_BENCHMARK_DATASET_SHA
 		const originalStrict = process.env.MEMONGO_BENCHMARK_STRICT
 		delete process.env.MEMONGO_BENCHMARK_DATASET_SHA
@@ -152,16 +160,20 @@ describe("resolveDatasetSha256", () => {
 		}
 	})
 
-	it("accepts override datasetSha256 arg ahead of env and path", async () => {
+	it("rejects a valid-looking override that does not match dataset bytes", async () => {
+		const { writeFileSync, mkdtempSync } = await import("node:fs")
+		const { tmpdir } = await import("node:os")
+		const path = await import("node:path")
+		const dir = mkdtempSync(path.join(tmpdir(), "memongo-dataset-sha-"))
+		const filePath = path.join(dir, "canary.jsonl")
+		writeFileSync(filePath, "real-dataset-bytes")
 		const original = process.env.MEMONGO_BENCHMARK_DATASET_SHA
 		process.env.MEMONGO_BENCHMARK_DATASET_SHA = "b".repeat(64)
 		try {
 			const override = "c".repeat(64)
-			const sha = await resolveDatasetSha256({
-				datasetPath: undefined,
-				override,
-			})
-			expect(sha).toBe(override)
+			await expect(
+				resolveDatasetSha256({ datasetPath: filePath, override }),
+			).rejects.toThrow(/does not match dataset bytes/i)
 		} finally {
 			if (original === undefined) {
 				delete process.env.MEMONGO_BENCHMARK_DATASET_SHA
@@ -242,6 +254,34 @@ describe("resolveBenchmarkRerankerConfig", () => {
 })
 
 describe("collectStorageFootprint", () => {
+	it("sums benchmark-owned documents before cleanup across every touched collection", async () => {
+		const rowsByCollection = new Map([
+			["memongo_events", [{ documents: 2, logicalBytes: 300 }]],
+			["memongo_chunks", [{ documents: 3, logicalBytes: 450 }]],
+		])
+		const aggregate = vi.fn((collectionName: string) => ({
+			toArray: async () => rowsByCollection.get(collectionName) ?? [],
+		}))
+		const storage = await collectBenchmarkTenantStorage({
+			db: {
+				collection: (collectionName: string) => ({
+					aggregate: () => aggregate(collectionName),
+				}),
+			} as unknown as Parameters<typeof collectBenchmarkTenantStorage>[0]["db"],
+			agentId: "benchmark-agent",
+			collectionNames: ["memongo_events", "memongo_chunks"],
+		})
+
+		expect(storage).toEqual({
+			documents: 5,
+			logicalBytes: 750,
+			collections: [
+				{ collectionName: "memongo_events", documents: 2, logicalBytes: 300 },
+				{ collectionName: "memongo_chunks", documents: 3, logicalBytes: 450 },
+			],
+		})
+	})
+
 	it("returns populated bytes when collStats succeeds", async () => {
 		const mockDb = {
 			command: async (cmd: Record<string, unknown>) => {
@@ -255,9 +295,48 @@ describe("collectStorageFootprint", () => {
 			>[0]["db"],
 			collectionName: "memongo_bench_events",
 		})
-		expect(footprint.collectionBytes).toBe(1234)
-		expect(footprint.indexBytes).toBe(5678)
-		expect(footprint.unavailableReason).toBeUndefined()
+		expect(footprint).toEqual({
+			basis: "benchmark-agent-logical-plus-shared-physical",
+			tenant: {
+				documents: null,
+				logicalBytes: null,
+				collections: [],
+				unavailableReason: "benchmark tenant measurement was not provided",
+			},
+			sharedPhysical: {
+				collections: [
+					{
+						collectionName: "memongo_bench_events",
+						collectionBytes: 1234,
+						indexBytes: 5678,
+					},
+				],
+			},
+		})
+	})
+
+	it("labels shared physical bytes for every requested collection", async () => {
+		const footprint = await collectStorageFootprint({
+			db: {
+				command: async (cmd: { collStats?: string }) =>
+					cmd.collStats === "memongo_events"
+						? { size: 100, totalIndexSize: 200 }
+						: { size: 300, totalIndexSize: 400 },
+			} as unknown as Parameters<typeof collectStorageFootprint>[0]["db"],
+			collectionName: "memongo_events",
+			collectionNames: ["memongo_events", "memongo_chunks"],
+		})
+
+		expect(footprint.sharedPhysical.collections).toEqual([
+			expect.objectContaining({
+				collectionName: "memongo_events",
+				collectionBytes: 100,
+			}),
+			expect.objectContaining({
+				collectionName: "memongo_chunks",
+				collectionBytes: 300,
+			}),
+		])
 	})
 
 	it("returns null-with-reason when collStats throws (atlas-local:preview)", async () => {
@@ -272,9 +351,13 @@ describe("collectStorageFootprint", () => {
 			>[0]["db"],
 			collectionName: "memongo_bench_events",
 		})
-		expect(footprint.collectionBytes).toBeNull()
-		expect(footprint.indexBytes).toBeNull()
-		expect(footprint.unavailableReason).toMatch(/collStats/i)
+		expect(footprint.sharedPhysical.collections[0]).toEqual(
+			expect.objectContaining({
+				collectionBytes: null,
+				indexBytes: null,
+				unavailableReason: expect.stringMatching(/collStats/i),
+			}),
+		)
 	})
 
 	it("returns null-with-reason when collStats returns malformed shape", async () => {
@@ -287,9 +370,13 @@ describe("collectStorageFootprint", () => {
 			>[0]["db"],
 			collectionName: "memongo_bench_events",
 		})
-		expect(footprint.collectionBytes).toBeNull()
-		expect(footprint.indexBytes).toBeNull()
-		expect(footprint.unavailableReason).toMatch(/shape|malformed|unexpected/i)
+		expect(footprint.sharedPhysical.collections[0]).toEqual(
+			expect.objectContaining({
+				collectionBytes: null,
+				indexBytes: null,
+				unavailableReason: expect.stringMatching(/shape|malformed|unexpected/i),
+			}),
+		)
 	})
 })
 
@@ -311,28 +398,219 @@ describe("percentile50And95", () => {
 	})
 })
 
-describe("createBenchmarkRunCounters", () => {
-	it("starts at zero and increments monotonically", () => {
-		const counters = createBenchmarkRunCounters()
-		expect(counters.snapshot()).toEqual({
-			embeddingCalls: 0,
-			rerankCalls: 0,
-			llmEnrichmentCalls: 0,
+describe("createBenchmarkRunContext", () => {
+	it("hashes an immutable configuration snapshot and rejects drift", () => {
+		const configuration = {
+			executionProfile: "shipped" as const,
+			retrievalLane: "native" as const,
+			maxResults: 50,
+			minScore: 0.01,
+			settings: {
+				fusionMethod: "rankFusion",
+				numCandidates: 500,
+			},
+		}
+		const context = createBenchmarkRunContext({
+			runId: "immutable-run",
+			configuration,
 		})
-		counters.recordRerankCall()
-		counters.recordRerankCall()
-		counters.recordEmbeddingCall()
-		counters.recordLlmEnrichmentCall()
-		expect(counters.snapshot()).toEqual({
-			embeddingCalls: 1,
-			rerankCalls: 2,
-			llmEnrichmentCalls: 1,
-		})
+		const sameValuesDifferentOrder = {
+			...configuration,
+			settings: {
+				numCandidates: 500,
+				fusionMethod: "rankFusion",
+			},
+		}
+
+		expect(context.configurationHash).toMatch(/^[0-9a-f]{64}$/)
+		expect(() =>
+			assertBenchmarkRunConfiguration(context, sameValuesDifferentOrder),
+		).not.toThrow()
+		expect(() =>
+			assertBenchmarkRunConfiguration(context, {
+				...configuration,
+				settings: { ...configuration.settings, numCandidates: 501 },
+			}),
+		).toThrow(/configuration changed during execution/i)
 	})
 
-	it("supports bulk increments (records batch of N calls)", () => {
-		const counters = createBenchmarkRunCounters()
-		counters.recordLlmEnrichmentCall(5)
-		expect(counters.snapshot().llmEnrichmentCalls).toBe(5)
+	it("keeps overlapping run accounting isolated and reports unobservable embeddings as unknown", () => {
+		const configuration = {
+			executionProfile: "diagnostic" as const,
+			retrievalLane: "native" as const,
+			maxResults: 10,
+			minScore: 0.01,
+			settings: {},
+		}
+		const first = createBenchmarkRunContext({
+			runId: "run-first",
+			configuration,
+		})
+		const second = createBenchmarkRunContext({
+			runId: "run-second",
+			configuration,
+		})
+
+		first.accounting.recordAttempt("rerank", {
+			provider: "voyage",
+			model: "rerank-2.5",
+		})
+		first.accounting.recordFailure("rerank", {
+			provider: "voyage",
+			model: "rerank-2.5",
+		})
+		second.accounting.recordAttempt("answer-generation", {
+			provider: "openai-compatible",
+			model: "judge-model",
+		})
+		second.accounting.recordSuccess("answer-generation", {
+			provider: "openai-compatible",
+			model: "judge-model",
+		})
+
+		expect(first.runId).toBe("run-first")
+		const firstSnapshot = first.accounting.snapshot()
+		expect(firstSnapshot).toEqual(
+			expect.objectContaining({
+				currency: null,
+				totalCost: null,
+				unavailableReason:
+					"provider token usage and prices are not instrumented",
+			}),
+		)
+		expect(firstSnapshot.operations).toEqual(
+			expect.arrayContaining([
+				{
+					operation: "embedding",
+					observability: "unknown",
+					attempted: null,
+					succeeded: null,
+					failed: null,
+					unavailableReason:
+						"MongoDB automated embedding calls are not exposed to the benchmark process",
+				},
+				{
+					operation: "vector-query",
+					observability: "unknown",
+					attempted: null,
+					succeeded: null,
+					failed: null,
+					unavailableReason:
+						"MongoDB search execution does not expose per-stage vector operation counts",
+				},
+				{
+					operation: "rerank",
+					observability: "measured",
+					attempted: 1,
+					succeeded: 0,
+					failed: 1,
+					provider: "voyage",
+					model: "rerank-2.5",
+				},
+				{
+					operation: "answer-generation",
+					observability: "not-run",
+					attempted: 0,
+					succeeded: 0,
+					failed: 0,
+				},
+			]),
+		)
+		expect(second.accounting.snapshot().operations).toEqual(
+			expect.arrayContaining([
+				{
+					operation: "answer-generation",
+					observability: "measured",
+					attempted: 1,
+					succeeded: 1,
+					failed: 0,
+					provider: "openai-compatible",
+					model: "judge-model",
+				},
+				{
+					operation: "rerank",
+					observability: "not-run",
+					attempted: 0,
+					succeeded: 0,
+					failed: 0,
+				},
+			]),
+		)
+	})
+
+	it("keeps provider and model variants as separate operation rows", () => {
+		const context = createBenchmarkRunContext({
+			runId: "variant-run",
+			configuration: {
+				executionProfile: "diagnostic",
+				retrievalLane: "native",
+				maxResults: 10,
+				minScore: 0.01,
+				settings: {},
+			},
+		})
+		for (const model of ["rerank-a", "rerank-b"]) {
+			const metadata = { provider: "voyage", model }
+			context.accounting.recordAttempt("rerank", metadata)
+			context.accounting.recordSuccess("rerank", metadata)
+		}
+
+		expect(
+			context.accounting
+				.snapshot()
+				.operations.filter((entry) => entry.operation === "rerank"),
+		).toEqual([
+			expect.objectContaining({
+				model: "rerank-a",
+				attempted: 1,
+				succeeded: 1,
+			}),
+			expect.objectContaining({
+				model: "rerank-b",
+				attempted: 1,
+				succeeded: 1,
+			}),
+		])
+	})
+})
+
+describe("instrumentBenchmarkProvider", () => {
+	it("records a failed shipped structured extraction call in its own ledger row", async () => {
+		const context = createBenchmarkRunContext({
+			runId: "derived-run",
+			configuration: {
+				executionProfile: "shipped",
+				retrievalLane: "native",
+				maxResults: 50,
+				minScore: 0.01,
+				settings: {},
+			},
+		})
+		const provider = {
+			name: "mock-provider",
+			chatCompletion: vi.fn().mockRejectedValue(new Error("provider down")),
+		}
+		const instrumented = instrumentBenchmarkProvider({
+			provider,
+			runContext: context,
+			operation: "structured-extraction",
+			model: "derived-model",
+		})
+
+		await expect(
+			instrumented.chatCompletion({
+				model: "derived-model",
+				messages: [{ role: "user", content: "remember this" }],
+			}),
+		).rejects.toThrow("provider down")
+		expect(context.accounting.snapshot().operations).toContainEqual({
+			operation: "structured-extraction",
+			observability: "measured",
+			attempted: 1,
+			succeeded: 0,
+			failed: 1,
+			provider: "mock-provider",
+			model: "derived-model",
+		})
 	})
 })

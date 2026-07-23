@@ -14,6 +14,8 @@ import {
 	getExpectedSearchIndexTargets,
 	isSearchIndexTypeCompatible,
 	isSearchIndexQueryable,
+	isSearchIndexReadyWithFilterFields,
+	isEventsVectorBitemporalPrefilterReady,
 	waitForSearchCapabilities,
 	kbCollection,
 	kbChunksCollection,
@@ -35,6 +37,7 @@ import {
 	sessionChunksCollection,
 	memoryEvidenceCollection,
 	waitForSearchIndexesQueryable,
+	ensureTimeseriesOrPlain,
 } from "./mongodb-schema.js"
 
 // ---------------------------------------------------------------------------
@@ -360,8 +363,14 @@ describe("ensureCollections", () => {
 		// 30 = 29 baseline + 1 memory_quarantine (, )
 		expect(db.createCollection).toHaveBeenCalledTimes(30)
 		// Non-validated collections: called with name only
-		expect(db.createCollection).toHaveBeenCalledWith("test_files")
-		expect(db.createCollection).toHaveBeenCalledWith("test_embedding_cache")
+		expect(db.createCollection).toHaveBeenCalledWith(
+			"test_files",
+			expect.objectContaining({ validator: expect.any(Object) }),
+		)
+		expect(db.createCollection).toHaveBeenCalledWith(
+			"test_embedding_cache",
+			expect.objectContaining({ validator: expect.any(Object) }),
+		)
 		expect(db.createCollection).toHaveBeenCalledWith("test_meta")
 		expect(db.createCollection).toHaveBeenCalledWith("test_session_chunks")
 		// Validated collections: called with name + validator options (F15: chunks now validated)
@@ -437,7 +446,10 @@ describe("ensureCollections", () => {
 		await ensureCollections(db, "test_")
 		// 28 = 30 new total - 2 skipped. 29 baseline + 1 memory_quarantine.
 		expect(db.createCollection).toHaveBeenCalledTimes(28)
-		expect(db.createCollection).toHaveBeenCalledWith("test_embedding_cache")
+		expect(db.createCollection).toHaveBeenCalledWith(
+			"test_embedding_cache",
+			expect.objectContaining({ validator: expect.any(Object) }),
+		)
 		expect(db.createCollection).toHaveBeenCalledWith("test_meta")
 		expect(db.createCollection).toHaveBeenCalledWith(
 			"test_knowledge_base",
@@ -553,8 +565,10 @@ describe("ensureStandardIndexes", () => {
 		// + 1 consolidation_runs (agent_time)
 		// + 3 sourceRef dedup (events, structured, procedures)
 		// + 1 partial index (structured active facts) + 2 sourceEvent dedup indexes
-		// + 3 session_chunks + 1 bi-temporal valid-time (#32) = 86
-		expect(count).toBe(86)
+		// + 3 session_chunks + 1 bi-temporal valid-time (#32)
+		// + 1 durable memory-job claim index + 1 extraction outbox partial index
+		// + 1 unique relation identity index = 89
+		expect(count).toBe(90)
 		expect(chunks.createIndex).toHaveBeenCalledTimes(4)
 		expect(cache.createIndex).toHaveBeenCalledTimes(2)
 		expect(kb.createIndex).toHaveBeenCalledTimes(5)
@@ -587,9 +601,29 @@ describe("ensureStandardIndexes", () => {
 		const projectionRuns = db.collection("test_projection_runs") as unknown as {
 			createIndex: ReturnType<typeof vi.fn>
 		}
-		expect(events.createIndex).toHaveBeenCalledTimes(9)
+		expect(events.createIndex).toHaveBeenCalledTimes(10)
+		expect(events.createIndex).toHaveBeenCalledWith(
+			{ agentId: 1, extractionJobPendingAt: 1 },
+			{
+				name: "idx_events_agent_extraction_pending",
+				partialFilterExpression: {
+					extractionJobPendingAt: { $type: "date" },
+				},
+			},
+		)
 		expect(entities.createIndex).toHaveBeenCalledTimes(5)
-		expect(relations.createIndex).toHaveBeenCalledTimes(4)
+		expect(relations.createIndex).toHaveBeenCalledTimes(6)
+		expect(relations.createIndex).toHaveBeenCalledWith(
+			{
+				agentId: 1,
+				scope: 1,
+				scopeRef: 1,
+				fromEntityId: 1,
+				toEntityId: 1,
+				type: 1,
+			},
+			{ name: "uq_relations_identity", unique: true },
+		)
 		expect(entityLinks.createIndex).toHaveBeenCalledTimes(2)
 		expect(episodes.createIndex).toHaveBeenCalledTimes(4)
 		expect(ingestRuns.createIndex).toHaveBeenCalledTimes(1)
@@ -626,6 +660,21 @@ describe("ensureStandardIndexes", () => {
 			createIndex: ReturnType<typeof vi.fn>
 		}
 		expect(sessionChunks.createIndex).toHaveBeenCalledTimes(3)
+		const memoryJobs = db.collection("test_memory_jobs") as unknown as {
+			createIndex: ReturnType<typeof vi.fn>
+		}
+		expect(memoryJobs.createIndex).toHaveBeenCalledWith(
+			{
+				agentId: 1,
+				jobType: 1,
+				status: 1,
+				leaseExpiresAt: 1,
+				createdAt: 1,
+				jobId: 1,
+			},
+			{ name: "idx_memory_jobs_claim_v2" },
+		)
+		expect(memoryJobs.dropIndex).toHaveBeenCalledWith("idx_memory_jobs_claim")
 	})
 
 	it("creates memory_evidence indexes only when the evidence mirror is enabled", async () => {
@@ -639,7 +688,7 @@ describe("ensureStandardIndexes", () => {
 			) as unknown as {
 				createIndex: ReturnType<typeof vi.fn>
 			}
-			expect(count).toBe(90)
+			expect(count).toBe(94)
 			expect(memoryEvidence.createIndex).toHaveBeenCalledTimes(4)
 			expect(memoryEvidence.createIndex).toHaveBeenCalledWith(
 				{ canonicalId: 1 },
@@ -825,8 +874,9 @@ describe("ensureStandardIndexes", () => {
 		// 1 structured scope + 1 structured revisions + 4 procedures + 1 procedure_revisions +
 		// 3 query_cache + 2 telemetry + 2 access_events + 3 memory_mutations
 		// + 1 lane_coverage + 1 consolidation_runs + 3 session_chunks
-		// + 1 bi-temporal valid-time (#32) = 86
-		expect(count).toBe(86)
+		// + 1 bi-temporal valid-time (#32) + 1 durable job claim index
+		// + 1 extraction outbox partial index + 1 unique relation identity = 89
+		expect(count).toBe(90)
 	})
 
 	it("creates relevance TTL indexes when relevanceRetentionDays is set", async () => {
@@ -1746,14 +1796,59 @@ describe("EPISODES_SCHEMA enum completeness", () => {
 })
 
 describe("detectCapabilities", () => {
-	it("detects fusion stages from buildInfo version when available", async () => {
+	it("does not claim scoreFusion support on MongoDB 8.2", async () => {
 		const db = {
 			admin: vi.fn(() => ({
 				command: vi.fn(async () => ({ versionArray: [8, 2, 0, 0] })),
 			})),
 			collection: vi.fn(() => ({
 				listSearchIndexes: vi.fn(() => ({
-					toArray: vi.fn(async () => []),
+					toArray: vi.fn(async () => [
+						{
+							name: "test_chunks_text",
+							type: "search",
+							status: "READY",
+							queryable: true,
+						},
+						{
+							name: "test_chunks_vector",
+							type: "vectorSearch",
+							status: "READY",
+							queryable: true,
+						},
+					]),
+				})),
+			})),
+		} as unknown as Db
+
+		const caps = await detectCapabilities(db, "test_chunks")
+		expect(caps.rankFusion).toBe(true)
+		expect(caps.scoreFusion).toBe(false)
+		expect(caps.vectorSearch).toBe(true)
+		expect(caps.textSearch).toBe(true)
+	})
+
+	it("detects scoreFusion support from MongoDB 8.3", async () => {
+		const db = {
+			admin: vi.fn(() => ({
+				command: vi.fn(async () => ({ versionArray: [8, 3, 0, 0] })),
+			})),
+			collection: vi.fn(() => ({
+				listSearchIndexes: vi.fn(() => ({
+					toArray: vi.fn(async () => [
+						{
+							name: "test_chunks_text",
+							type: "search",
+							status: "READY",
+							queryable: true,
+						},
+						{
+							name: "test_chunks_vector",
+							type: "vectorSearch",
+							status: "READY",
+							queryable: true,
+						},
+					]),
 				})),
 			})),
 		} as unknown as Db
@@ -1817,7 +1912,7 @@ describe("detectCapabilities", () => {
 		expect(caps.scoreFusion).toBe(true)
 	})
 
-	it("detects vectorSearch and textSearch when listSearchIndexes succeeds", async () => {
+	it("does not claim search readiness when index listing succeeds but is empty", async () => {
 		const db = {
 			collection: vi.fn(() => ({
 				aggregate: vi.fn(() => ({
@@ -1835,9 +1930,39 @@ describe("detectCapabilities", () => {
 		} as unknown as Db
 
 		const caps = await detectCapabilities(db)
-		expect(caps.vectorSearch).toBe(true)
-		expect(caps.textSearch).toBe(true)
+		expect(caps.vectorSearch).toBe(false)
+		expect(caps.textSearch).toBe(false)
 		// automatedEmbedding removed (F2: dead code)
+	})
+
+	it("reports only named queryable search indexes as ready", async () => {
+		const db = {
+			admin: vi.fn(() => ({
+				command: vi.fn(async () => ({ versionArray: [8, 3, 0, 0] })),
+			})),
+			collection: vi.fn(() => ({
+				listSearchIndexes: vi.fn(() => ({
+					toArray: vi.fn(async () => [
+						{
+							name: "test_chunks_text",
+							type: "search",
+							status: "READY",
+							queryable: true,
+						},
+						{
+							name: "test_chunks_vector",
+							type: "vectorSearch",
+							status: "PENDING",
+							queryable: false,
+						},
+					]),
+				})),
+			})),
+		} as unknown as Db
+
+		const caps = await detectCapabilities(db, "test_chunks")
+		expect(caps.textSearch).toBe(true)
+		expect(caps.vectorSearch).toBe(false)
 	})
 
 	it("detects search capabilities through $listSearchIndexes aggregation", async () => {
@@ -1847,7 +1972,20 @@ describe("detectCapabilities", () => {
 			})),
 			collection: vi.fn(() => ({
 				aggregate: vi.fn(() => ({
-					toArray: vi.fn(async () => []),
+					toArray: vi.fn(async () => [
+						{
+							name: "test_chunks_text",
+							type: "search",
+							status: "READY",
+							queryable: true,
+						},
+						{
+							name: "test_chunks_vector",
+							type: "vectorSearch",
+							status: "READY",
+							queryable: true,
+						},
+					]),
 				})),
 				listSearchIndexes: vi.fn(() => ({
 					toArray: vi.fn(async () => {
@@ -1875,7 +2013,20 @@ describe("detectCapabilities", () => {
 						if (attempts < 2) {
 							throw new Error("mongot warming up")
 						}
-						return []
+						return [
+							{
+								name: "test_chunks_text",
+								type: "search",
+								status: "READY",
+								queryable: true,
+							},
+							{
+								name: "test_chunks_vector",
+								type: "vectorSearch",
+								status: "READY",
+								queryable: true,
+							},
+						]
 					}),
 				})),
 				listSearchIndexes: vi.fn(() => ({
@@ -1927,13 +2078,228 @@ describe("waitForSearchIndexesQueryable", () => {
 
 		const result = await waitForSearchIndexesQueryable(collection, {
 			indexNames: ["events_text"],
-			timeoutMs: 30,
+			timeoutMs: 200,
 			pollMs: 1,
 		})
 
 		expect(result.ready).toBe(true)
 		expect(result.lastError).toBeUndefined()
 		expect(attempts).toBe(2)
+	})
+})
+
+describe("isSearchIndexReadyWithFilterFields", () => {
+	it("accepts only a queryable ready index whose latest definition contains every filter field", () => {
+		expect(
+			isSearchIndexReadyWithFilterFields(
+				{
+					name: "events_vector",
+					type: "vectorSearch",
+					status: "READY",
+					queryable: true,
+					latestDefinition: {
+						fields: [
+							{ type: "autoEmbed", path: "body" },
+							{ type: "filter", path: "validAt" },
+							{ type: "filter", path: "invalidAt" },
+						],
+					},
+				},
+				["validAt", "invalidAt"],
+				"vectorSearch",
+			),
+		).toBe(true)
+	})
+
+	it.each([
+		{
+			label: "building",
+			index: {
+				status: "BUILDING",
+				queryable: true,
+				latestDefinition: {
+					fields: [
+						{ type: "filter", path: "validAt" },
+						{ type: "filter", path: "invalidAt" },
+					],
+				},
+			},
+		},
+		{
+			label: "stale",
+			index: {
+				status: "STALE",
+				queryable: true,
+				latestDefinition: {
+					fields: [
+						{ type: "filter", path: "validAt" },
+						{ type: "filter", path: "invalidAt" },
+					],
+				},
+			},
+		},
+		{
+			label: "mixed nested readiness",
+			index: {
+				status: "READY",
+				queryable: true,
+				statusDetail: [
+					{
+						mainIndex: { status: "READY", queryable: true },
+						definitions: [{ status: "BUILDING", queryable: false }],
+					},
+				],
+				latestDefinition: {
+					fields: [
+						{ type: "filter", path: "validAt" },
+						{ type: "filter", path: "invalidAt" },
+					],
+				},
+			},
+		},
+		{
+			label: "missing definition",
+			index: { status: "READY", queryable: true },
+		},
+		{
+			label: "definition drift",
+			index: {
+				status: "READY",
+				queryable: true,
+				latestDefinition: {
+					fields: [{ type: "filter", path: "validAt" }],
+				},
+			},
+		},
+		{
+			label: "wrong field type",
+			index: {
+				status: "READY",
+				queryable: true,
+				latestDefinition: {
+					fields: [
+						{ type: "date", path: "validAt" },
+						{ type: "filter", path: "invalidAt" },
+					],
+				},
+			},
+		},
+		{
+			label: "wrong index type",
+			index: {
+				type: "search",
+				status: "READY",
+				queryable: true,
+				latestDefinition: {
+					fields: [
+						{ type: "filter", path: "validAt" },
+						{ type: "filter", path: "invalidAt" },
+					],
+				},
+			},
+		},
+	])("rejects $label indexes", ({ index }) => {
+		expect(
+			isSearchIndexReadyWithFilterFields(
+				index,
+				["validAt", "invalidAt"],
+				"vectorSearch",
+			),
+		).toBe(false)
+	})
+
+	it("accepts definition fallback but gives latestDefinition precedence", () => {
+		const readyDefinition = {
+			fields: [
+				{ type: "filter", path: "validAt" },
+				{ type: "filter", path: "invalidAt" },
+			],
+		}
+		expect(
+			isSearchIndexReadyWithFilterFields(
+				{
+					type: "vectorSearch",
+					status: "READY",
+					queryable: true,
+					definition: readyDefinition,
+				},
+				["validAt", "invalidAt"],
+				"vectorSearch",
+			),
+		).toBe(true)
+		expect(
+			isSearchIndexReadyWithFilterFields(
+				{
+					type: "vectorSearch",
+					status: "READY",
+					queryable: true,
+					definition: readyDefinition,
+					latestDefinition: {
+						fields: [{ type: "filter", path: "validAt" }],
+					},
+				},
+				["validAt", "invalidAt"],
+				"vectorSearch",
+			),
+		).toBe(false)
+	})
+})
+
+describe("isEventsVectorBitemporalPrefilterReady", () => {
+	const readyIndex = {
+		name: "test_events_vector",
+		type: "vectorSearch",
+		status: "READY",
+		queryable: true,
+		latestDefinition: {
+			fields: [
+				{ type: "filter", path: "validAt" },
+				{ type: "filter", path: "invalidAt" },
+			],
+		},
+	}
+
+	it("accepts the exact ready index only when event data has no explicit null invalidAt", async () => {
+		const collection = {
+			findOne: vi.fn(async () => null),
+		} as unknown as Collection
+
+		await expect(
+			isEventsVectorBitemporalPrefilterReady(collection, "test_events_vector", [
+				readyIndex,
+			]),
+		).resolves.toBe(true)
+		expect(collection.findOne).toHaveBeenCalledWith(
+			{ invalidAt: { $type: 10 } },
+			{ projection: { _id: 1 } },
+		)
+	})
+
+	it("rejects explicit-null event rows", async () => {
+		const collection = {
+			findOne: vi.fn(async () => ({ _id: "legacy-null" })),
+		} as unknown as Collection
+
+		await expect(
+			isEventsVectorBitemporalPrefilterReady(collection, "test_events_vector", [
+				readyIndex,
+			]),
+		).resolves.toBe(false)
+	})
+
+	it("selects by exact index name and skips the data probe when no match is ready", async () => {
+		const collection = {
+			findOne: vi.fn(async () => null),
+		} as unknown as Collection
+
+		await expect(
+			isEventsVectorBitemporalPrefilterReady(
+				collection,
+				"other_events_vector",
+				[readyIndex],
+			),
+		).resolves.toBe(false)
+		expect(collection.findOne).not.toHaveBeenCalled()
 	})
 })
 
@@ -2374,8 +2740,9 @@ describe("ensureStandardIndexes total count with query_cache and time series ind
 		// 1 structured scope + 1 structured revisions + 4 procedures + 1 procedure_revisions +
 		// 3 query_cache + 2 telemetry + 2 access_events + 3 memory_mutations
 		// + 1 lane_coverage + 1 consolidation_runs + 3 session_chunks
-		// + 1 bi-temporal valid-time (#32) = 86
-		expect(count).toBe(86)
+		// + 1 bi-temporal valid-time (#32) + 1 durable job claim index
+		// + 1 extraction outbox partial index + 1 unique relation identity = 89
+		expect(count).toBe(90)
 	})
 })
 
@@ -2426,6 +2793,62 @@ describe("events search indexes", () => {
 		expect(autoEmbed.path).toBe("body")
 		expect(autoEmbed.model).toBe("voyage-4-large")
 		expect(autoEmbed.modality).toBe("text")
+	})
+
+	it("events vector index declares canonical validity fields as prefilters", async () => {
+		const db = mockDb()
+		await ensureSearchIndexes(db, "test_", "atlas-local-preview", "automated")
+
+		const eventsCol = db.collection("test_events") as unknown as {
+			createSearchIndex: ReturnType<typeof vi.fn>
+		}
+		const vectorCall = eventsCol.createSearchIndex.mock.calls.find(
+			(c: unknown[]) => (c[0] as Document).type === "vectorSearch",
+		)
+		const fields = (vectorCall![0] as Document).definition.fields as Document[]
+		expect(fields).toEqual(
+			expect.arrayContaining([
+				{ type: "filter", path: "validAt" },
+				{ type: "filter", path: "invalidAt" },
+			]),
+		)
+	})
+
+	it("updates an existing events vector index that lacks validity prefilters", async () => {
+		const db = mockDb()
+		const events = db.collection("test_events") as unknown as {
+			updateSearchIndex: ReturnType<typeof vi.fn>
+			listSearchIndexes: ReturnType<typeof vi.fn>
+		}
+		events.listSearchIndexes.mockImplementation((name?: string) => ({
+			toArray: async () =>
+				name === "test_events_vector"
+					? [
+							{
+								name,
+								type: "vectorSearch",
+								definition: {
+									fields: [
+										{ type: "autoEmbed", path: "body" },
+										{ type: "filter", path: "agentId" },
+									],
+								},
+							},
+						]
+					: [],
+		}))
+
+		await ensureSearchIndexes(db, "test_", "atlas-local-preview", "automated")
+
+		expect(events.updateSearchIndex).toHaveBeenCalledWith(
+			"test_events_vector",
+			expect.objectContaining({
+				fields: expect.arrayContaining([
+					{ type: "filter", path: "validAt" },
+					{ type: "filter", path: "invalidAt" },
+				]),
+			}),
+		)
 	})
 
 	it("events vector index includes agentId, scope, scopeRef, sessionId, role, channel, timestamp filters", async () => {
@@ -2666,5 +3089,90 @@ describe("unique index creation resilience", () => {
 		await expect(ensureStandardIndexes(db, "test_")).rejects.toThrow(
 			"connection timeout",
 		)
+	})
+})
+
+// ---------------------------------------------------------------------------
+// Time series fallback (ensureTimeseriesOrPlain)
+// ---------------------------------------------------------------------------
+
+describe("ensureTimeseriesOrPlain", () => {
+	it("creates a time series collection when supported", async () => {
+		const db = mockDb()
+		await ensureTimeseriesOrPlain(db, "test_telemetry", {
+			timeField: "ts",
+			metaField: "meta",
+			granularity: "seconds",
+			expireAfterSeconds: 604800,
+		})
+
+		expect(db.createCollection).toHaveBeenCalledWith(
+			"test_telemetry",
+			expect.objectContaining({
+				timeseries: expect.objectContaining({
+					timeField: "ts",
+					granularity: "seconds",
+				}),
+				expireAfterSeconds: 604800,
+			}),
+		)
+	})
+
+	it("falls back to a plain collection with a TTL index when time series is unsupported", async () => {
+		const collections = new Map<string, Collection>()
+		const db = {
+			createCollection: vi.fn(
+				async (name: string, options?: Record<string, unknown>) => {
+					if (options?.timeseries) {
+						throw new Error("time series collections are not supported")
+					}
+					const col = mockCollection(name)
+					collections.set(name, col)
+					return col
+				},
+			),
+			collection: vi.fn((name: string) => {
+				if (!collections.has(name)) {
+					collections.set(name, mockCollection(name))
+				}
+				return collections.get(name)!
+			}),
+		} as unknown as Db
+
+		await ensureTimeseriesOrPlain(db, "test_telemetry", {
+			timeField: "ts",
+			metaField: "meta",
+			granularity: "seconds",
+			expireAfterSeconds: 604800,
+		})
+
+		// Plain collection created (no timeseries option)
+		expect(db.createCollection).toHaveBeenCalledWith("test_telemetry")
+		// TTL index created on the timeField
+		const col = collections.get("test_telemetry")!
+		expect(col.createIndex).toHaveBeenCalledWith(
+			{ ts: 1 },
+			expect.objectContaining({ expireAfterSeconds: 604800 }),
+		)
+	})
+
+	it("is idempotent when the collection already exists", async () => {
+		let createCallCount = 0
+		const db = {
+			createCollection: vi.fn(async () => {
+				createCallCount++
+				throw new Error("collection already exists")
+			}),
+		} as unknown as Db
+
+		await ensureTimeseriesOrPlain(db, "test_telemetry", {
+			timeField: "ts",
+			metaField: "meta",
+			granularity: "seconds",
+			expireAfterSeconds: 604800,
+		})
+
+		// "already exists" means the timeseries is already there — no fallback.
+		expect(createCallCount).toBe(1)
 	})
 })

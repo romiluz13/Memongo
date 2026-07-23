@@ -55,6 +55,7 @@ export type MemongoConversationRecallInput = {
 	roles?: Array<"user" | "assistant" | "system" | "tool">
 	startTime?: string
 	endTime?: string
+	asOf?: string
 	timezone?: string
 	includeToolMessages?: boolean
 	limit?: number
@@ -443,19 +444,38 @@ export type MemongoDetailedStatusResponse = {
 }
 
 export type MemongoStatsResponse = {
-	sources: Array<{ source: string; files: number; chunks: number }>
+	sources: Array<{
+		source: string
+		fileCount: number
+		chunkCount: number
+		lastSync: string | null
+	}>
 	totalFiles: number
 	totalChunks: number
-	embeddingCoverage: Record<string, number>
-	embeddingStatusCoverage: Record<string, number>
+	embeddingCoverage: {
+		withEmbedding: number
+		withoutEmbedding: number
+		unknown: number
+		total: number
+		coveragePercent: number | null
+		basis: "stored-vector" | "search-index"
+	}
+	embeddingStatusCoverage: {
+		total: number
+		success: number
+		failed: number
+		pending: number
+		unknown: number
+		basis: "stored-vector" | "search-index"
+	}
 	cachedEmbeddings: number
 	staleFiles: string[]
 	collectionSizes: { files: number; chunks: number; embeddingCache: number }
 	indexStats: Array<{
-		name: string
 		collection: string
-		size: number
+		name: string
 		accesses: number
+		since: string | null
 	}>
 }
 
@@ -534,11 +554,59 @@ export type MemongoBenchmarkReleaseGate = {
 	gate:
 		| "official-retrieval"
 		| "internal-retrieval"
+		| "execution-completeness"
+		| "quality-thresholds"
+		| "e2e-answer-quality"
+		| "evidence-completeness"
 		| "conversation-recall-regression"
 		| "query-governance"
-	status: "passed" | "warning" | "not-run" | "advisory-only"
+	status: "passed" | "failed" | "warning" | "not-run" | "advisory-only"
 	evidence: string
+	checks?: Array<{
+		metric: string
+		actual: number | null
+		operator: ">=" | "<=" | "="
+		threshold: number
+		passed: boolean
+	}>
 }
+
+export type MemongoBenchmarkExecutionSummary = {
+	attemptedCases: number
+	succeededCases: number
+	failedCases: number
+	retrievalEligibleCases: number
+	abstentionCases: number
+	missingJudgmentCases: number
+	retrievalHits: number
+	retrievalMisses: number
+	scoredCases: number
+}
+
+type MemongoBenchmarkCommonQualityThresholds = {
+	contractId: string
+	version: string
+	minHitRate: number
+	maxEmptyRate: number
+	minRAt5: number
+	minNdcgAt10: number
+	maxP95LatencyMs: number
+}
+
+export type MemongoBenchmarkQualityThresholds =
+	| (MemongoBenchmarkCommonQualityThresholds & {
+			datasetKind: "longmemeval"
+			minSessionRecallAnyAt10: number
+			minSessionNdcgAnyAt10: number
+	  })
+	| (MemongoBenchmarkCommonQualityThresholds & {
+			datasetKind: "locomo"
+			minSessionEvidenceRecallAt10: number
+			minDialogEvidenceRecallAt10?: number
+			minAnswerAccuracy: number
+			maxJudgeFalsePositiveRate: number
+			minAnswerCoverage: number
+	  })
 
 export type MemongoBenchmarkRunReport = {
 	generatedAt: string
@@ -551,6 +619,23 @@ export type MemongoBenchmarkRunReport = {
 		cases: number
 		scoredCases?: number
 		skippedCases?: number
+		execution?: MemongoBenchmarkExecutionSummary
+		caseOutcomes?: Array<{
+			caseId?: string
+			questionType?: string
+			executionStatus: "succeeded" | "system-failure"
+			scoreEligibility: "retrieval" | "abstention" | "missing-judgment"
+			retrievalOutcome: "hit" | "miss" | "not-applicable"
+			officialMetric?:
+				| { status: "scored" }
+				| {
+						status: "ineligible" | "projection-failure" | "execution-failure"
+						reason: string
+				  }
+			empty: boolean
+			latencyMs: number
+			failure?: { stage: "retrieval"; message: string }
+		}>
 	}
 	metrics: {
 		internal: {
@@ -564,13 +649,32 @@ export type MemongoBenchmarkRunReport = {
 		}
 		official?: {
 			longMemEval?: {
+				evaluator: {
+					suite: "longmemeval"
+					sourceRepository: "xiaowu0162/LongMemEval"
+					sourceCommit: string
+					evaluatorPath: "src/retrieval/eval_utils.py"
+					evaluatorBlob: string
+					aggregationEntrypoint: "src/retrieval/run_retrieval.py"
+					cutoffs: number[]
+					eligibilityPolicy: "exclude-abstention-and-no-user-answer-target"
+					candidateProjection:
+						| "one-session-document-one-label"
+						| "native-memory-source-session-adapter"
+					comparability: "canonical" | "adapted"
+				}
+				totalCases: number
+				eligibleCases: number
 				retrievalCases: number
 				abstentionCases: number
-				session: MemongoBenchmarkOfficialRetrievalMetrics
+				ineligibleCases: number
+				projectionFailureCases: number
+				executionFailureCases: number
+				session?: MemongoBenchmarkOfficialRetrievalMetrics
 				turn?: MemongoBenchmarkOfficialRetrievalMetrics
 			}
 			loCoMo?: {
-				qaCases: number
+				retrievalCases: number
 				abstentionCases: number
 				sessionEvidenceRecallAt5: number
 				sessionEvidenceRecallAt10: number
@@ -580,8 +684,113 @@ export type MemongoBenchmarkRunReport = {
 		}
 	}
 	releaseGates: MemongoBenchmarkReleaseGate[]
+	publicationDecision: {
+		publishable: boolean
+		failedGates: MemongoBenchmarkReleaseGate["gate"][]
+		blockingGates: MemongoBenchmarkReleaseGate["gate"][]
+	}
+	qualityThresholds?: MemongoBenchmarkQualityThresholds
 	warnings: string[]
 	degradations: string[]
+	runIdentity?: {
+		runId: string
+		datasetSha256: string
+		retrievalUnit: "turn" | "session" | "memory" | "qa-pair"
+		configurationHash: string
+		executionProfile: "shipped" | "diagnostic"
+		retrievalLane: "native" | "raw-session"
+		maxResults: number
+		minScore: number
+		settings: Record<string, string | number | boolean | null>
+	}
+	embedding?: {
+		model: string
+		dimensions: number
+		quantization: "float32" | "int8" | "binary"
+	}
+	reranker?: {
+		model: string
+		version: string | null
+		stage: "post-fusion" | "pre-fusion" | "none"
+	}
+	storage?: {
+		basis: "benchmark-agent-logical-plus-shared-physical"
+		tenant: {
+			documents: number | null
+			logicalBytes: number | null
+			collections: Array<{
+				collectionName: string
+				documents: number
+				logicalBytes: number
+			}>
+			unavailableReason?: string
+		}
+		sharedPhysical: {
+			collections: Array<{
+				collectionName: string
+				collectionBytes: number | null
+				indexBytes: number | null
+				unavailableReason?: string
+			}>
+			unavailableReason?: string
+		}
+	}
+	latency?: { p50Ms: number; p95Ms: number }
+	cost?: {
+		currency: null
+		totalCost: null
+		unavailableReason: string
+		operations: Array<{
+			operation:
+				| "embedding"
+				| "vector-query"
+				| "rerank"
+				| "enrichment"
+				| "query-decomposition"
+				| "answer-generation"
+				| "answer-judge"
+				| "decoy-judge"
+				| "structured-extraction"
+				| "temporal-extraction"
+				| "contradiction-detection"
+				| "relation-extraction"
+			observability: "measured" | "unknown" | "not-run"
+			attempted: number | null
+			succeeded: number | null
+			failed: number | null
+			provider?: string
+			model?: string
+			unavailableReason?: string
+		}>
+	}
+	e2eQa?: {
+		answerModel: string | null
+		judge: string | null
+		judgeVersion: string | null
+		accuracy: number | null
+		latencyMs: number | null
+		judgeFalsePositiveRate: number | null
+		cases: {
+			eligible: number
+			attempted: number
+			completed: number
+			failed: number
+		}
+		attempts: {
+			answerGeneration: number
+			answerJudge: number
+			decoyJudge: number
+		}
+		caseResults: Array<{
+			caseId: string
+			candidateAnswer: string
+			correct: boolean
+			abstention: boolean
+			latencyMs: number
+			error?: string
+		}>
+		unavailableReason?: string
+	}
 }
 
 export type MemongoRelevanceBenchmarkResponse = {
@@ -592,6 +801,17 @@ export type MemongoRelevanceBenchmarkResponse = {
 	cases: number
 	scoredCases?: number
 	skippedCases?: number
+	execution?: MemongoBenchmarkExecutionSummary
+	caseOutcomes?: Array<{
+		caseId?: string
+		questionType?: string
+		executionStatus: "succeeded" | "system-failure"
+		scoreEligibility: "retrieval" | "abstention" | "missing-judgment"
+		retrievalOutcome: "hit" | "miss" | "not-applicable"
+		empty: boolean
+		latencyMs: number
+		failure?: { stage: "retrieval"; message: string }
+	}>
 	hitRate: number
 	emptyRate: number
 	avgTopScore: number
@@ -602,6 +822,9 @@ export type MemongoRelevanceBenchmarkResponse = {
 	questionTypeBreakdown?: Array<{
 		questionType: string
 		cases: number
+		succeededCases: number
+		failedCases: number
+		retrievalEligibleCases: number
 		scoredCases: number
 		hitRate: number
 		rAt5: number
@@ -616,7 +839,7 @@ export type MemongoRelevanceBenchmarkResponse = {
 			turn?: MemongoBenchmarkOfficialRetrievalMetrics
 		}
 		loCoMo?: {
-			qaCases: number
+			retrievalCases: number
 			abstentionCases: number
 			sessionEvidenceRecallAt5: number
 			sessionEvidenceRecallAt10: number

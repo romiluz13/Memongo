@@ -11,7 +11,9 @@ import {
 	createSubsystemLogger,
 } from "@memongo/lib"
 import { recordMutation, type MutationMeta } from "./mongodb-mutations.js"
+import { invalidateQueryCache } from "./mongodb-query-cache.js"
 import { summarizeExplain } from "./mongodb-relevance.js"
+import { splitAtlasSearchFilter } from "./mongodb-search.js"
 import type { DetectedCapabilities } from "./mongodb-schema.js"
 import {
 	procedureRevisionsCollection,
@@ -29,6 +31,10 @@ import {
 	mergeQueryClauses,
 	resolveTemporalAsOf,
 } from "./mongodb-temporal.js"
+import {
+	MAJORITY_TRANSACTION_OPTIONS,
+	isTransactionUnsupported,
+} from "./mongodb-transactions.js"
 import type {
 	MemoryActorRole,
 	MemoryLifecycleItem,
@@ -96,6 +102,35 @@ function arraysEqual(
 	const a = left ?? []
 	const b = right ?? []
 	return a.length === b.length && a.every((value, index) => value === b[index])
+}
+
+function hasProcessedSourceEvents(
+	existing: Document,
+	sourceEventIds: string[] | undefined,
+): boolean {
+	if (!sourceEventIds || sourceEventIds.length === 0) {
+		return false
+	}
+	const existingIds = new Set(
+		Array.isArray(existing.sourceEventIds)
+			? existing.sourceEventIds.map((value) => String(value))
+			: [],
+	)
+	return sourceEventIds.every((eventId) => existingIds.has(eventId))
+}
+
+function mergeSourceEventIds(
+	existing: Document,
+	sourceEventIds: string[],
+): string[] {
+	return Array.from(
+		new Set([
+			...(Array.isArray(existing.sourceEventIds)
+				? existing.sourceEventIds.map((value) => String(value))
+				: []),
+			...sourceEventIds,
+		]),
+	)
 }
 
 function buildSearchText(entry: ProcedureEntry): string {
@@ -421,6 +456,7 @@ export async function writeProcedure(params: {
 	client?: MongoClient
 	actorRole?: MemoryActorRole
 	mutationMeta?: MutationMeta
+	eventReceiptIds?: string[]
 }): Promise<{ upserted: boolean; id: string }> {
 	const { db, prefix, entry } = params
 	void params.embeddingMode
@@ -479,10 +515,16 @@ export async function writeProcedure(params: {
 	}
 
 	let existingBeforeWrite: Document | null = null
+	let persistedSetDoc = setDoc
 
 	const persist = async (
 		session?: ClientSession,
-	): Promise<{ upserted: boolean; id: string; revision: number }> => {
+	): Promise<{
+		upserted: boolean
+		id: string
+		revision: number
+		changed: boolean
+	}> => {
 		const existing = await collection.findOne(
 			identityFilter,
 			session ? { session } : undefined,
@@ -508,8 +550,23 @@ export async function writeProcedure(params: {
 				upserted: result.upsertedCount > 0,
 				id: entry.procedureId,
 				revision: 1,
+				changed: true,
 			}
 		}
+		if (hasProcessedSourceEvents(existing, params.eventReceiptIds)) {
+			return {
+				upserted: false,
+				id: entry.procedureId,
+				revision: typeof existing.revision === "number" ? existing.revision : 1,
+				changed: false,
+			}
+		}
+		persistedSetDoc = entry.sourceEventIds
+			? {
+					...setDoc,
+					sourceEventIds: mergeSourceEventIds(existing, entry.sourceEventIds),
+				}
+			: setDoc
 
 		const currentRevision =
 			typeof existing.revision === "number" &&
@@ -530,7 +587,7 @@ export async function writeProcedure(params: {
 				identityFilter,
 				{
 					$set: {
-						...setDoc,
+						...persistedSetDoc,
 						revision: currentRevision,
 						validFrom: currentValidFrom,
 					},
@@ -541,6 +598,7 @@ export async function writeProcedure(params: {
 				upserted: false,
 				id: entry.procedureId,
 				revision: currentRevision,
+				changed: true,
 			}
 		}
 
@@ -552,7 +610,7 @@ export async function writeProcedure(params: {
 			identityFilter,
 			{
 				$set: {
-					...setDoc,
+					...persistedSetDoc,
 					revision: currentRevision + 1,
 					validFrom: now,
 				},
@@ -569,6 +627,7 @@ export async function writeProcedure(params: {
 			upserted: false,
 			id: entry.procedureId,
 			revision: currentRevision + 1,
+			changed: true,
 		}
 	}
 
@@ -578,18 +637,30 @@ export async function writeProcedure(params: {
 				const session = client.startSession()
 				try {
 					let result:
-						| { upserted: boolean; id: string; revision: number }
+						| {
+								upserted: boolean
+								id: string
+								revision: number
+								changed: boolean
+						  }
 						| undefined
 					await session.withTransaction(async () => {
 						result = await persist(session)
-					})
+					}, MAJORITY_TRANSACTION_OPTIONS)
 					return (
-						result ?? { upserted: false, id: entry.procedureId, revision: 1 }
+						result ?? {
+							upserted: false,
+							id: entry.procedureId,
+							revision: 1,
+							changed: false,
+						}
 					)
 				} catch (err) {
-					const message = err instanceof Error ? err.message : String(err)
-					log.warn(
-						`procedure transaction unavailable, falling back to sequential writes: ${message}`,
+					if (!isTransactionUnsupported(err)) {
+						throw err
+					}
+					log.info(
+						"transactions not supported for procedure writes, falling back to direct writes",
 					)
 					return await persist()
 				} finally {
@@ -597,14 +668,26 @@ export async function writeProcedure(params: {
 				}
 			})()
 		: await persist()
+	if (!outcome.changed) {
+		return { upserted: false, id: outcome.id }
+	}
 
 	log.info(
 		`procedure ${outcome.upserted ? "created" : "updated"}: id=${entry.procedureId} revision=${outcome.revision}`,
 	)
+	await invalidateQueryCache({
+		db,
+		prefix,
+		agentId: entry.agentId,
+		scope,
+		scopeRef,
+	})
 
 	const oldSnapshot = existingBeforeWrite
 	const changedFields =
-		oldSnapshot != null ? computeChangedFields(oldSnapshot, setDoc) : undefined
+		oldSnapshot != null
+			? computeChangedFields(oldSnapshot, persistedSetDoc)
+			: undefined
 	recordMutation({
 		db,
 		prefix,
@@ -614,7 +697,7 @@ export async function writeProcedure(params: {
 			operation: oldSnapshot == null ? "create" : "update",
 			agentId: entry.agentId,
 			oldValue: oldSnapshot ?? null,
-			newValue: setDoc,
+			newValue: persistedSetDoc,
 			changedFields,
 			actorRole: params.actorRole ?? "system",
 			...(params.mutationMeta ? { meta: params.mutationMeta } : {}),
@@ -734,11 +817,13 @@ export async function invalidateProcedureByHandle(params: {
 		try {
 			await session.withTransaction(async () => {
 				await persist(session)
-			})
+			}, MAJORITY_TRANSACTION_OPTIONS)
 		} catch (err) {
-			const message = err instanceof Error ? err.message : String(err)
-			log.warn(
-				`procedure lifecycle transaction unavailable, falling back to sequential writes: ${message}`,
+			if (!isTransactionUnsupported(err)) {
+				throw err
+			}
+			log.info(
+				"transactions not supported for procedure lifecycle, falling back to direct writes",
 			)
 			await persist()
 		} finally {
@@ -752,6 +837,13 @@ export async function invalidateProcedureByHandle(params: {
 		return null
 	}
 	if (changed) {
+		await invalidateQueryCache({
+			db: params.db,
+			prefix: params.prefix,
+			agentId: params.handle.agentId,
+			scope: params.handle.scope,
+			scopeRef: params.handle.scopeRef,
+		})
 		recordMutation({
 			db: params.db,
 			prefix: params.prefix,
@@ -1186,6 +1278,7 @@ export async function searchProcedures(
 		}
 		capabilities: DetectedCapabilities
 		vectorIndexName: string
+		textIndexName?: string
 		embeddingMode: MemoryMongoDBEmbeddingMode
 		numCandidates?: number
 		explain?: SearchExplainOptions
@@ -1241,6 +1334,7 @@ export async function searchProcedures(
 				filter:
 					Object.keys(buildFilter()).length > 0 ? buildFilter() : undefined,
 				textFieldPath: "searchText",
+				returnStoredSource: opts.capabilities.storedSource,
 			})
 			if (vsStage) {
 				const pipeline: Document[] = [
@@ -1295,6 +1389,64 @@ export async function searchProcedures(
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err)
 			log.warn(`procedure vector search failed: ${msg}`)
+		}
+	}
+
+	// Atlas Search tier — uses the procedures_text Atlas Search index that is
+	// created and maintained by mongodb-schema.ts but was previously unused.
+	// Gated on capabilities.textSearch so it only runs where Atlas Search is
+	// available; falls through to $text on Community / unsupported deployments.
+	const canText = opts.capabilities.textSearch
+	if (canText && opts.textIndexName) {
+		try {
+			const textFilter = buildFilter()
+			const { compoundFilter, postMatch } = splitAtlasSearchFilter(textFilter)
+			const pipeline: Document[] = [
+				{
+					$search: {
+						index: opts.textIndexName,
+						compound: {
+							must: [{ text: { query, path: "searchText" } }],
+							...(compoundFilter ? { filter: compoundFilter } : {}),
+						},
+					},
+				},
+				...(postMatch ? [{ $match: postMatch }] : []),
+				{ $limit: opts.maxResults * 4 },
+				{
+					$project: {
+						_id: 0,
+						procedureId: 1,
+						searchText: 1,
+						sessionId: 1,
+						updatedAt: 1,
+						state: 1,
+						scope: 1,
+						scopeRef: 1,
+						provenance: 1,
+						sourceEventIds: 1,
+						validFrom: 1,
+						validTo: 1,
+						score: { $meta: "searchScore" },
+					},
+				},
+			]
+			if (opts.explain?.enabled) {
+				opts.explain.onArtifact?.({
+					artifactType: "searchExplain",
+					summary: { source: "procedure", method: "atlas-search" },
+				})
+			}
+			const docs = await runSearchAggregateWithRetry(collection, pipeline)
+			const results = docs
+				.map(toProcedureResult)
+				.filter((result) => result.score >= minScore)
+			if (results.length > 0) {
+				return results
+			}
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err)
+			log.warn(`procedure Atlas Search failed: ${msg}`)
 		}
 	}
 

@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto"
-import type { Db, Document } from "mongodb"
+import type { ClientSession, Db, Document } from "mongodb"
 import {
 	type MemoryScope,
 	createSubsystemLogger,
@@ -10,6 +10,10 @@ import { eventsCollection, chunksCollection } from "./mongodb-schema.js"
 import { resolveScopeRef } from "./mongodb-scope.js"
 
 const log = createSubsystemLogger("memory:mongodb:events")
+const DURABLE_EVENT_WRITE_CONCERN = {
+	w: "majority" as const,
+	wtimeoutMS: 5_000,
+}
 
 const RETRYABLE_MONGO_ERROR_LABELS = new Set([
 	"NoWritesPerformed",
@@ -101,6 +105,14 @@ export type CanonicalEvent = {
 	scope: MemoryScope
 	scopeRef: string
 	timestamp: Date
+	/** Event-valid time. Legacy rows may omit it; new writes always set it. */
+	validAt?: Date
+	/** End of event-valid time. Missing means the event remains valid. */
+	invalidAt?: Date
+	/** Transaction time when Memongo first persisted the event. */
+	recordedAt?: Date
+	/** Durable outbox marker cleared only after the extraction job is claimable. */
+	extractionJobPendingAt?: Date
 	projectedAt?: Date
 	consolidatedAt?: Date
 	consolidatedIntoEpisodeId?: string
@@ -120,7 +132,11 @@ export function renderEventChunkText(
 export async function writeEvent(params: {
 	db: Db
 	prefix: string
-	event: Omit<CanonicalEvent, "eventId" | "timestamp" | "scopeRef"> & {
+	session?: ClientSession
+	event: Omit<
+		CanonicalEvent,
+		"eventId" | "timestamp" | "scopeRef" | "recordedAt"
+	> & {
 		eventId?: string
 		timestamp?: Date
 		scopeRef?: string
@@ -130,6 +146,21 @@ export async function writeEvent(params: {
 	const collection = eventsCollection(db, prefix)
 	const eventId = event.eventId ?? randomUUID()
 	const timestamp = event.timestamp ?? new Date()
+	const validAt = event.validAt ?? timestamp
+	const recordedAt = new Date()
+	for (const [label, value] of [
+		["timestamp", timestamp],
+		["validAt", validAt],
+		["recordedAt", recordedAt],
+		["invalidAt", event.invalidAt],
+	] as const) {
+		if (value && Number.isNaN(value.getTime())) {
+			throw new Error(`invalid event ${label}`)
+		}
+	}
+	if (event.invalidAt && event.invalidAt.getTime() <= validAt.getTime()) {
+		throw new Error("event invalidAt must be later than validAt")
+	}
 	const scope = event.scope ?? ("agent" as MemoryScope)
 	const scopeRef = resolveScopeRef({
 		scope,
@@ -146,17 +177,64 @@ export async function writeEvent(params: {
 		scope,
 		scopeRef,
 		timestamp,
+		validAt,
+		recordedAt,
+		...(event.invalidAt ? { invalidAt: event.invalidAt } : {}),
 		...(event.sessionId && { sessionId: event.sessionId }),
 		...(event.channel && { channel: event.channel }),
 		...(event.metadata && { metadata: event.metadata }),
+		...(event.extractionJobPendingAt
+			? { extractionJobPendingAt: event.extractionJobPendingAt }
+			: {}),
 	}
 
 	await retryTransientMongoWrite("events.updateOne", () =>
-		collection.updateOne({ eventId }, { $setOnInsert: doc }, { upsert: true }),
+		collection.updateOne(
+			{ eventId },
+			{ $setOnInsert: doc },
+			params.session
+				? { upsert: true, session: params.session }
+				: { upsert: true, writeConcern: DURABLE_EVENT_WRITE_CONCERN },
+		),
 	)
 
 	log.info(`event written: ${eventId} role=${event.role}`)
 	return { eventId, timestamp, scopeRef }
+}
+
+export async function getPendingExtractionEvents(params: {
+	db: Db
+	prefix: string
+	agentId: string
+	limit?: number
+}): Promise<CanonicalEvent[]> {
+	const limit = Math.max(1, Math.min(500, Math.floor(params.limit ?? 100)))
+	return (await eventsCollection(params.db, params.prefix)
+		.find({
+			agentId: params.agentId,
+			extractionJobPendingAt: { $exists: true },
+		})
+		.sort({ extractionJobPendingAt: 1, _id: 1 })
+		.limit(limit)
+		.toArray()) as unknown as CanonicalEvent[]
+}
+
+export async function clearEventExtractionJobPending(params: {
+	db: Db
+	prefix: string
+	eventId: string
+	agentId: string
+}): Promise<boolean> {
+	const result = await eventsCollection(params.db, params.prefix).updateOne(
+		{
+			eventId: params.eventId,
+			agentId: params.agentId,
+			extractionJobPendingAt: { $exists: true },
+		},
+		{ $unset: { extractionJobPendingAt: "" } },
+		{ writeConcern: DURABLE_EVENT_WRITE_CONCERN },
+	)
+	return result.matchedCount === 1
 }
 
 // ---------------------------------------------------------------------------

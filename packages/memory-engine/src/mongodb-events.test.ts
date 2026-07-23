@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/unbound-method -- Vitest mock method assertions */
-import type { Collection, Db } from "mongodb"
+import type { ClientSession, Collection, Db } from "mongodb"
 import { describe, it, expect, vi, beforeEach } from "vitest"
 
 // Mock the schema module before imports
@@ -16,6 +16,8 @@ vi.mock("./mongodb-schema.js", () => ({
 
 import {
 	writeEvent,
+	getPendingExtractionEvents,
+	clearEventExtractionJobPending,
 	getEventsByTimeRange,
 	getEventsBySession,
 	getUnprojectedEvents,
@@ -38,6 +40,7 @@ function createMockEventsCol(): Collection {
 		updateOne: vi.fn(async () => ({
 			upsertedCount: 1,
 			upsertedId: "new-id",
+			matchedCount: 1,
 			modifiedCount: 0,
 		})),
 		updateMany: vi.fn(async () => ({
@@ -101,7 +104,10 @@ describe("writeEvent", () => {
 		const [filter, update, opts] = vi.mocked(col.updateOne).mock.calls[0]
 		expect(filter).toEqual({ eventId: result.eventId })
 		expect(update).toHaveProperty("$setOnInsert")
-		expect(opts).toEqual({ upsert: true })
+		expect(opts).toEqual({
+			upsert: true,
+			writeConcern: { w: "majority", wtimeoutMS: 5_000 },
+		})
 
 		// Verify the doc has correct fields
 		const doc = (update as Record<string, Record<string, unknown>>).$setOnInsert
@@ -110,6 +116,237 @@ describe("writeEvent", () => {
 		expect(doc.body).toBe("Hello world")
 		expect(doc.scope).toBe("agent")
 		expect(doc.timestamp).toBeInstanceOf(Date)
+	})
+
+	it("propagates a transaction session to the canonical event write", async () => {
+		const col = createMockEventsCol()
+		vi.mocked(eventsCollection).mockReturnValue(col)
+		const session = {} as ClientSession
+
+		await writeEvent({
+			db: mockDb(),
+			prefix: "test_",
+			session,
+			event: {
+				eventId: "event-transactional",
+				agentId: "agent-1",
+				role: "user",
+				body: "Commit the event and extraction job together.",
+				scope: "agent",
+				scopeRef: "agent:agent-1",
+			},
+		})
+
+		expect(col.updateOne).toHaveBeenCalledWith(
+			{ eventId: "event-transactional" },
+			expect.any(Object),
+			{ upsert: true, session },
+		)
+	})
+
+	it("persists a durable extraction outbox marker with the event", async () => {
+		const col = createMockEventsCol()
+		vi.mocked(eventsCollection).mockReturnValue(col)
+		const extractionJobPendingAt = new Date("2026-04-09T12:00:00.000Z")
+
+		await writeEvent({
+			db: mockDb(),
+			prefix: "test_",
+			event: {
+				eventId: "event-with-extraction-outbox",
+				agentId: "agent-1",
+				role: "user",
+				body: "Recover my extraction after a process crash.",
+				scope: "agent",
+				scopeRef: "agent:agent-1",
+				extractionJobPendingAt,
+			} as CanonicalEvent,
+		})
+
+		const [, update] = vi.mocked(col.updateOne).mock.calls[0]
+		const doc = (update as Record<string, Record<string, unknown>>).$setOnInsert
+		expect(doc.extractionJobPendingAt).toEqual(extractionJobPendingAt)
+	})
+
+	it("lists only this agent's pending extraction outbox events oldest first", async () => {
+		const pending = [
+			{
+				eventId: "pending-1",
+				agentId: "agent-1",
+				extractionJobPendingAt: new Date("2026-04-09T12:00:00.000Z"),
+			},
+		] as CanonicalEvent[]
+		const toArray = vi.fn().mockResolvedValue(pending)
+		const limit = vi.fn(() => ({ toArray }))
+		const sort = vi.fn(() => ({ limit }))
+		const find = vi.fn(() => ({ sort }))
+		const col = createMockEventsCol()
+		vi.mocked(col.find).mockImplementation(find)
+		vi.mocked(eventsCollection).mockReturnValue(col)
+
+		await expect(
+			getPendingExtractionEvents({
+				db: mockDb(),
+				prefix: "test_",
+				agentId: "agent-1",
+				limit: 25,
+			}),
+		).resolves.toEqual(pending)
+		expect(find).toHaveBeenCalledWith({
+			agentId: "agent-1",
+			extractionJobPendingAt: { $exists: true },
+		})
+		expect(sort).toHaveBeenCalledWith({ extractionJobPendingAt: 1, _id: 1 })
+		expect(limit).toHaveBeenCalledWith(25)
+	})
+
+	it("clears the extraction outbox marker durably", async () => {
+		const col = createMockEventsCol()
+		vi.mocked(eventsCollection).mockReturnValue(col)
+
+		await expect(
+			clearEventExtractionJobPending({
+				db: mockDb(),
+				prefix: "test_",
+				eventId: "pending-1",
+				agentId: "agent-1",
+			}),
+		).resolves.toBe(true)
+		expect(col.updateOne).toHaveBeenCalledWith(
+			{
+				eventId: "pending-1",
+				agentId: "agent-1",
+				extractionJobPendingAt: { $exists: true },
+			},
+			{ $unset: { extractionJobPendingAt: "" } },
+			{ writeConcern: { w: "majority", wtimeoutMS: 5_000 } },
+		)
+	})
+
+	it("stores event validity separately from the write clock", async () => {
+		const col = createMockEventsCol()
+		vi.mocked(eventsCollection).mockReturnValue(col)
+		const eventTime = new Date("2021-04-05T12:00:00.000Z")
+
+		await writeEvent({
+			db: mockDb(),
+			prefix: "test_",
+			event: {
+				agentId: "agent-1",
+				role: "user",
+				body: "Historical message",
+				scope: "agent",
+				scopeRef: "agent:agent-1",
+				timestamp: eventTime,
+			},
+		})
+
+		const [, update] = vi.mocked(col.updateOne).mock.calls[0]
+		const doc = (update as Record<string, Record<string, unknown>>).$setOnInsert
+		expect(doc.timestamp).toEqual(eventTime)
+		expect(doc.validAt).toEqual(eventTime)
+		expect(doc.recordedAt).toBeInstanceOf(Date)
+	})
+
+	it("owns recordedAt even when an untyped caller supplies one", async () => {
+		const col = createMockEventsCol()
+		vi.mocked(eventsCollection).mockReturnValue(col)
+		const callerRecordedAt = new Date("2000-01-01T00:00:00.000Z")
+		const beforeWrite = Date.now()
+
+		await writeEvent({
+			db: mockDb(),
+			prefix: "test_",
+			event: {
+				agentId: "agent-1",
+				role: "user",
+				body: "Current transaction",
+				scope: "agent",
+				scopeRef: "agent:agent-1",
+				recordedAt: callerRecordedAt,
+			} as CanonicalEvent,
+		})
+
+		const [, update] = vi.mocked(col.updateOne).mock.calls[0]
+		const doc = (update as Record<string, Record<string, unknown>>).$setOnInsert
+		expect(doc.recordedAt).not.toEqual(callerRecordedAt)
+		expect((doc.recordedAt as Date).getTime()).toBeGreaterThanOrEqual(
+			beforeWrite,
+		)
+	})
+
+	it("stores an explicit event validity window", async () => {
+		const col = createMockEventsCol()
+		vi.mocked(eventsCollection).mockReturnValue(col)
+		const validAt = new Date("2021-04-05T12:00:00.000Z")
+		const invalidAt = new Date("2021-04-06T12:00:00.000Z")
+
+		await writeEvent({
+			db: mockDb(),
+			prefix: "test_",
+			event: {
+				agentId: "agent-1",
+				role: "user",
+				body: "Historical message",
+				scope: "agent",
+				scopeRef: "agent:agent-1",
+				timestamp: validAt,
+				validAt,
+				invalidAt,
+			},
+		})
+
+		const [, update] = vi.mocked(col.updateOne).mock.calls[0]
+		const doc = (update as Record<string, Record<string, unknown>>).$setOnInsert
+		expect(doc.validAt).toEqual(validAt)
+		expect(doc.invalidAt).toEqual(invalidAt)
+	})
+
+	it.each([
+		["timestamp", { timestamp: new Date("invalid") }],
+		["validAt", { validAt: new Date("invalid") }],
+		["invalidAt", { invalidAt: new Date("invalid") }],
+	])("rejects an invalid %s", async (label, dates) => {
+		const col = createMockEventsCol()
+		vi.mocked(eventsCollection).mockReturnValue(col)
+
+		await expect(
+			writeEvent({
+				db: mockDb(),
+				prefix: "test_",
+				event: {
+					agentId: "agent-1",
+					role: "user",
+					body: "Invalid event",
+					scope: "agent",
+					scopeRef: "agent:agent-1",
+					...dates,
+				},
+			}),
+		).rejects.toThrow(`invalid event ${label}`)
+		expect(col.updateOne).not.toHaveBeenCalled()
+	})
+
+	it("rejects a validity window that does not advance", async () => {
+		const col = createMockEventsCol()
+		vi.mocked(eventsCollection).mockReturnValue(col)
+		const validAt = new Date("2021-04-05T12:00:00.000Z")
+
+		await expect(
+			writeEvent({
+				db: mockDb(),
+				prefix: "test_",
+				event: {
+					agentId: "agent-1",
+					role: "user",
+					body: "Invalid event",
+					scope: "agent",
+					scopeRef: "agent:agent-1",
+					validAt,
+					invalidAt: validAt,
+				},
+			}),
+		).rejects.toThrow("event invalidAt must be later than validAt")
 	})
 
 	it("with duplicate eventId is idempotent", async () => {

@@ -75,6 +75,7 @@ export async function decomposeQuery(params: {
 	model: string
 	query: string
 	questionType?: string
+	onProviderCall?: (outcome: "attempted" | "succeeded" | "failed") => void
 }): Promise<DecompositionResult> {
 	const fallback: DecompositionResult = {
 		subQueries: [params.query],
@@ -87,7 +88,17 @@ export async function decomposeQuery(params: {
 	}
 
 	let response: { content: string }
+	const recordProviderCall = (
+		outcome: "attempted" | "succeeded" | "failed",
+	) => {
+		try {
+			params.onProviderCall?.(outcome)
+		} catch {
+			// Accounting observers must never change retrieval behavior.
+		}
+	}
 	try {
+		recordProviderCall("attempted")
 		response = await params.provider.chatCompletion({
 			model: params.model,
 			messages: [
@@ -97,7 +108,9 @@ export async function decomposeQuery(params: {
 			responseFormat: { type: "json_object" },
 			maxTokens: 512,
 		})
+		recordProviderCall("succeeded")
 	} catch {
+		recordProviderCall("failed")
 		return fallback
 	}
 

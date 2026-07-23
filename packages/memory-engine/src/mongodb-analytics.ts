@@ -1,4 +1,4 @@
-import type { Db, Document } from "mongodb"
+import type { Collection, Db, Document } from "mongodb"
 import { createSubsystemLogger } from "@memongo/lib"
 import type { EmbeddingStatusCoverage } from "./mongodb-embedding-retry.js"
 import {
@@ -21,8 +21,14 @@ export type MemorySourceStats = {
 export type EmbeddingCoverage = {
 	withEmbedding: number
 	withoutEmbedding: number
+	unknown: number
 	total: number
-	coveragePercent: number
+	coveragePercent: number | null
+	basis: "stored-vector" | "search-index"
+}
+
+export type MemoryStatsOptions = {
+	embeddingMode?: "automated" | "client"
 }
 
 export type IndexStatsEntry = {
@@ -52,6 +58,7 @@ export async function getMemoryStats(
 	db: Db,
 	prefix: string,
 	validPaths?: Set<string>,
+	options: MemoryStatsOptions = {},
 ): Promise<MemoryStats> {
 	const chunksCol = chunksCollection(db, prefix)
 	const filesCol = filesCollection(db, prefix)
@@ -89,42 +96,33 @@ export async function getMemoryStats(
 		}
 	}
 
-	// Embedding coverage
-	const embeddingAgg: Document[] = await chunksCol
-		.aggregate([
-			{
-				$group: {
-					_id: null,
-					withEmbedding: {
-						$sum: {
-							$cond: [
-								{ $gt: [{ $size: { $ifNull: ["$embedding", []] } }, 0] },
-								1,
-								0,
-							],
-						},
-					},
-					total: { $sum: 1 },
-				},
-			},
-		])
-		.toArray()
-
-	const embRow = embeddingAgg[0] ?? { withEmbedding: 0, total: 0 }
-	const withEmb = embRow.withEmbedding as number
-	const totalChunks = embRow.total as number
+	const embeddingMode = options.embeddingMode ?? "client"
+	const chunkMeasurement = await measureEmbeddingCoverage({
+		collection: chunksCol,
+		indexName: `${prefix}chunks_vector`,
+		embeddingMode,
+	})
+	const withEmb = chunkMeasurement.success
+	const totalChunks = chunkMeasurement.total
 	const embeddingCoverage: EmbeddingCoverage = {
 		withEmbedding: withEmb,
-		withoutEmbedding: totalChunks - withEmb,
+		withoutEmbedding: chunkMeasurement.pending,
+		unknown: chunkMeasurement.unknown,
 		total: totalChunks,
 		coveragePercent:
-			totalChunks > 0 ? Math.round((withEmb / totalChunks) * 100) : 0,
+			chunkMeasurement.unknown > 0
+				? null
+				: totalChunks > 0
+					? Math.round((withEmb / totalChunks) * 100)
+					: 0,
+		basis: chunkMeasurement.basis,
 	}
 
 	// Embedding status coverage (across chunks, kb_chunks, and structured_mem)
 	const embeddingStatusCoverage = await aggregateEmbeddingStatusCoverage(
 		db,
 		prefix,
+		embeddingMode,
 	)
 
 	// Cached embeddings count
@@ -154,7 +152,7 @@ export async function getMemoryStats(
 
 	log.info(
 		`stats: files=${totalFiles} chunks=${totalChunks} cached=${cachedEmbeddings} ` +
-			`embeddingStatus={success=${embeddingStatusCoverage.success},failed=${embeddingStatusCoverage.failed},pending=${embeddingStatusCoverage.pending}} ` +
+			`embeddingStatus={basis=${embeddingStatusCoverage.basis},success=${embeddingStatusCoverage.success},failed=${embeddingStatusCoverage.failed},pending=${embeddingStatusCoverage.pending},unknown=${embeddingStatusCoverage.unknown}} ` +
 			`stale=${staleFiles.length}`,
 	)
 
@@ -185,6 +183,113 @@ function embeddableChunkCollections(db: Db, prefix: string) {
 	]
 }
 
+type EmbeddingCoverageMeasurement = EmbeddingStatusCoverage
+
+async function measureEmbeddingCoverage(params: {
+	collection: Collection
+	indexName: string
+	embeddingMode: "automated" | "client"
+}): Promise<EmbeddingCoverageMeasurement> {
+	if (params.embeddingMode === "client") {
+		try {
+			const rows: Document[] = await params.collection
+				.aggregate([
+					{
+						$group: {
+							_id: null,
+							total: { $sum: 1 },
+							withEmbedding: {
+								$sum: {
+									$cond: [
+										{ $gt: [{ $size: { $ifNull: ["$embedding", []] } }, 0] },
+										1,
+										0,
+									],
+								},
+							},
+						},
+					},
+				])
+				.toArray()
+			const row = rows[0]
+			const total = typeof row?.total === "number" ? row.total : 0
+			const success =
+				typeof row?.withEmbedding === "number" ? row.withEmbedding : 0
+			return {
+				total,
+				success,
+				failed: 0,
+				pending: Math.max(0, total - success),
+				unknown: 0,
+				basis: "stored-vector",
+			}
+		} catch {
+			return {
+				total: 0,
+				success: 0,
+				failed: 0,
+				pending: 0,
+				unknown: 0,
+				basis: "stored-vector",
+			}
+		}
+	}
+
+	let total = 0
+	try {
+		total = await params.collection.countDocuments()
+		const indexes = await params.collection
+			.aggregate([{ $listSearchIndexes: { name: params.indexName } }])
+			.toArray()
+		const index = indexes.find((entry) => entry.name === params.indexName)
+		const indexed = index?.numDocs
+		const fields = index?.latestDefinition?.fields
+		const isAutomatedEmbeddingIndex =
+			Array.isArray(fields) &&
+			fields.some(
+				(field: unknown) =>
+					typeof field === "object" &&
+					field !== null &&
+					(field as { type?: unknown }).type === "autoEmbed",
+			)
+		if (
+			index?.status !== "READY" ||
+			index.queryable !== true ||
+			!isAutomatedEmbeddingIndex ||
+			typeof indexed !== "number" ||
+			!Number.isFinite(indexed) ||
+			indexed < 0
+		) {
+			return {
+				total,
+				success: 0,
+				failed: 0,
+				pending: 0,
+				unknown: total,
+				basis: "search-index",
+			}
+		}
+		const success = Math.min(total, Math.floor(indexed))
+		return {
+			total,
+			success,
+			failed: 0,
+			pending: Math.max(0, total - success),
+			unknown: 0,
+			basis: "search-index",
+		}
+	} catch {
+		return {
+			total,
+			success: 0,
+			failed: 0,
+			pending: 0,
+			unknown: total,
+			basis: "search-index",
+		}
+	}
+}
+
 /**
  * Embedding coverage across all chunk collections (chunks, kb_chunks,
  * structured_mem).
@@ -204,45 +309,44 @@ function embeddableChunkCollections(db: Db, prefix: string) {
 async function aggregateEmbeddingStatusCoverage(
 	db: Db,
 	prefix: string,
+	embeddingMode: "automated" | "client",
 ): Promise<EmbeddingStatusCoverage> {
-	let total = 0
-	let success = 0
-
-	for (const col of embeddableChunkCollections(db, prefix)) {
-		try {
-			const agg: Document[] = await col
-				.aggregate([
-					{
-						$group: {
-							_id: null,
-							total: { $sum: 1 },
-							withEmbedding: {
-								$sum: {
-									$cond: [
-										{ $gt: [{ $size: { $ifNull: ["$embedding", []] } }, 0] },
-										1,
-										0,
-									],
-								},
-							},
-						},
-					},
-				])
-				.toArray()
-
-			const row = agg[0]
-			if (row) {
-				total += (row.total as number) ?? 0
-				success += (row.withEmbedding as number) ?? 0
-			}
-		} catch {
-			// Collection may not exist yet — ignore
-		}
-	}
-
-	// `failed` is not derivable from on-document presence alone; only genuinely
-	// embedded (success) vs not-yet-embedded (pending) are reported honestly.
-	return { total, success, failed: 0, pending: total - success }
+	const [chunks, kb, structured] = embeddableChunkCollections(db, prefix)
+	const measurements = await Promise.all([
+		measureEmbeddingCoverage({
+			collection: chunks,
+			indexName: `${prefix}chunks_vector`,
+			embeddingMode,
+		}),
+		measureEmbeddingCoverage({
+			collection: kb,
+			indexName: `${prefix}kb_chunks_vector`,
+			embeddingMode,
+		}),
+		measureEmbeddingCoverage({
+			collection: structured,
+			indexName: `${prefix}structured_mem_vector`,
+			embeddingMode,
+		}),
+	])
+	return measurements.reduce<EmbeddingStatusCoverage>(
+		(total, current) => ({
+			total: total.total + current.total,
+			success: total.success + current.success,
+			failed: total.failed + current.failed,
+			pending: total.pending + current.pending,
+			unknown: total.unknown + current.unknown,
+			basis: current.basis,
+		}),
+		{
+			total: 0,
+			success: 0,
+			failed: 0,
+			pending: 0,
+			unknown: 0,
+			basis: embeddingMode === "automated" ? "search-index" : "stored-vector",
+		},
+	)
 }
 
 /**

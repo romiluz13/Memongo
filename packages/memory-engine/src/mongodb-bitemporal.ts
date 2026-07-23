@@ -18,9 +18,8 @@
 import type { Document } from "mongodb"
 
 /**
- * Shape used by retrieval paths (standard filter + Atlas Search `$vectorSearch`
- * filter + `$rankFusion` inner `$search` compound filter) to enforce the
- * bi-temporal validity predicate at `queryTime`.
+ * Shape used by ordinary MongoDB retrieval and post-search filters to enforce
+ * the bi-temporal validity predicate at `queryTime`.
  *
  * Returns a MongoDB `$and`-composable `Document` describing:
  *   validAt <= queryTime AND (invalidAt IS NULL OR invalidAt > queryTime)
@@ -48,6 +47,36 @@ export function buildBitemporalFilter(queryTime: Date): Document {
 				$or: [
 					{ invalidAt: { $exists: false } },
 					{ invalidAt: null },
+					{ invalidAt: { $gt: queryTime } },
+				],
+			},
+		],
+	}
+}
+
+/**
+ * MongoDB Vector Search prefilters don't document BSON null as a supported
+ * filter value. Canonical event writes therefore represent an open validity
+ * window by omitting `invalidAt`. This shape is safe only after rollout has
+ * verified that no legacy event stores an explicit null.
+ */
+export function buildVectorBitemporalFilter(queryTime: Date): Document {
+	if (!(queryTime instanceof Date) || Number.isNaN(queryTime.getTime())) {
+		throw new Error(
+			"buildVectorBitemporalFilter: queryTime must be a valid Date",
+		)
+	}
+	return {
+		$and: [
+			{
+				$or: [
+					{ validAt: { $exists: false } },
+					{ validAt: { $lte: queryTime } },
+				],
+			},
+			{
+				$or: [
+					{ invalidAt: { $exists: false } },
 					{ invalidAt: { $gt: queryTime } },
 				],
 			},

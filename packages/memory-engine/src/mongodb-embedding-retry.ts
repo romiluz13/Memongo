@@ -31,6 +31,8 @@ export type EmbeddingStatusCoverage = {
 	success: number
 	failed: number
 	pending: number
+	unknown: number
+	basis: "stored-vector" | "search-index"
 }
 
 // ---------------------------------------------------------------------------

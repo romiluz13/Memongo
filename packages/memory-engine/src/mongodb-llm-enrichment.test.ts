@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest"
+import { SsrFBlockedError } from "@memongo/lib"
 import {
 	resolveEnrichmentMode,
 	resolveEnrichmentStrictMode,
@@ -20,6 +21,8 @@ import {
 	type EnrichmentProvider,
 	type EnrichmentResult,
 } from "./mongodb-llm-enrichment.js"
+
+const TEST_TRANSPORT = { verifyPublicHostname: vi.fn(async () => {}) }
 
 describe("resolveEnrichmentMode", () => {
 	it("returns 'none' by default", () => {
@@ -150,6 +153,26 @@ describe("resolveEnrichmentProvider", () => {
 })
 
 describe("createHttpProvider", () => {
+	it("blocks private enrichment endpoints unless the operator explicitly opts in", async () => {
+		const mockFetch = vi.fn()
+		const provider = createHttpProvider(
+			{
+				baseUrl: "http://169.254.169.254/v1",
+				apiKey: "test-key",
+				model: "gateway-model",
+			},
+			mockFetch as unknown as typeof globalThis.fetch,
+		)
+
+		await expect(
+			provider.chatCompletion({
+				model: "gateway-model",
+				messages: [{ role: "user", content: "test" }],
+			}),
+		).rejects.toBeInstanceOf(SsrFBlockedError)
+		expect(mockFetch).not.toHaveBeenCalled()
+	})
+
 	it("sends OpenAI-compatible requests with bearer auth by default", async () => {
 		const mockFetch = vi.fn().mockResolvedValue({
 			ok: true,
@@ -172,6 +195,7 @@ describe("createHttpProvider", () => {
 				model: "gpt-4o-mini",
 			},
 			mockFetch as unknown as typeof globalThis.fetch,
+			TEST_TRANSPORT,
 		)
 
 		const result = await provider.chatCompletion({
@@ -208,6 +232,7 @@ describe("createHttpProvider", () => {
 				tokenParam: "max_completion_tokens",
 			},
 			mockFetch as unknown as typeof globalThis.fetch,
+			TEST_TRANSPORT,
 		)
 
 		await provider.chatCompletion({
@@ -240,6 +265,7 @@ describe("createHttpProvider", () => {
 				authStyle: "x-api-key",
 			},
 			mockFetch as unknown as typeof globalThis.fetch,
+			TEST_TRANSPORT,
 		)
 
 		await provider.chatCompletion({
@@ -266,6 +292,7 @@ describe("createHttpProvider", () => {
 				model: "gpt-4o-mini",
 			},
 			mockFetch as unknown as typeof globalThis.fetch,
+			TEST_TRANSPORT,
 		)
 
 		await expect(
@@ -298,6 +325,7 @@ describe("createAnthropicProvider", () => {
 				model: "claude-sonnet-4-6",
 			},
 			mockFetch as unknown as typeof globalThis.fetch,
+			TEST_TRANSPORT,
 		)
 
 		const result = await provider.chatCompletion({
@@ -991,6 +1019,7 @@ describe("enrichSessionsWithLLM", () => {
 
 	it("retries on AbortError (timeout) by wrapping as 408", async () => {
 		let callCount = 0
+		const providerOutcomes: Array<"attempted" | "succeeded" | "failed"> = []
 		const provider: EnrichmentProvider = {
 			name: "mock",
 			chatCompletion: vi.fn().mockImplementation(async () => {
@@ -1026,11 +1055,18 @@ describe("enrichSessionsWithLLM", () => {
 			scope: "agent",
 			scopeRef: "ref-1",
 			eventIds,
+			onProviderCall: (outcome) => providerOutcomes.push(outcome),
 		})
 
 		expect(result.userfactDocs.length).toBe(1)
 		expect(result.sessionsEnriched).toBe(1)
 		expect(callCount).toBe(2)
+		expect(providerOutcomes).toEqual([
+			"attempted",
+			"failed",
+			"attempted",
+			"succeeded",
+		])
 	})
 
 	it("wraps transient fetch transport failures as retryable 503", async () => {
@@ -1064,6 +1100,7 @@ describe("enrichSessionsWithLLM", () => {
 				provider: "anthropic",
 			},
 			fetchFn as unknown as typeof globalThis.fetch,
+			TEST_TRANSPORT,
 		)
 
 		const result = await enrichSessionsWithLLM({

@@ -15,6 +15,7 @@ import type {
 	MemoryConversationImportResult,
 	MemoryFeedbackSignal,
 	AccessEventCollection,
+	BenchmarkQualityThresholds,
 	MemoryActorRole,
 	RecallTrace,
 	MemoryStateFamily,
@@ -248,6 +249,7 @@ type ConversationRecallCapableManager = MongoDBMemoryManager & {
 		roles?: Array<"user" | "assistant" | "system" | "tool">
 		startTime?: string
 		endTime?: string
+		asOf?: Date
 		timezone?: string
 		includeToolMessages?: boolean
 		limit?: number
@@ -273,7 +275,8 @@ type ConsolidateCapableManager = MongoDBMemoryManager & {
 	consolidate?: (params?: {
 		maxEvents?: number
 		minCombinedScore?: number
-		scope?: string
+		scope?: MemoryScope
+		scopeRef?: string
 	}) => Promise<unknown>
 }
 
@@ -460,17 +463,23 @@ export async function memongoBridgeWriteConversationEvent(params: {
 	body: string
 	sessionId?: string
 	timestamp?: string
+	validAt?: string
+	invalidAt?: string
 	metadata?: Record<string, unknown>
 	scope?: MemoryScope
 	scopeRef?: string
 }) {
 	const m = await memongoBridgeGetManager(params.agentId)
 	const timestamp = params.timestamp ? new Date(params.timestamp) : undefined
+	const validAt = params.validAt ? new Date(params.validAt) : undefined
+	const invalidAt = params.invalidAt ? new Date(params.invalidAt) : undefined
 	return m.writeConversationEvent({
 		role: params.role,
 		body: params.body,
 		sessionId: params.sessionId,
 		timestamp,
+		validAt,
+		invalidAt,
 		metadata: params.metadata,
 		scope: params.scope,
 		scopeRef: params.scopeRef,
@@ -664,6 +673,7 @@ export async function memongoBridgeRecallConversation(params: {
 	roles?: Array<"user" | "assistant" | "system" | "tool">
 	startTime?: string
 	endTime?: string
+	asOf?: string
 	timezone?: string
 	includeToolMessages?: boolean
 	limit?: number
@@ -674,6 +684,7 @@ export async function memongoBridgeRecallConversation(params: {
 	if (!m.recallConversation) {
 		throw new Error("recallConversation is not available on this manager")
 	}
+	const asOf = params.asOf ? new Date(params.asOf) : undefined
 	return m.recallConversation({
 		// Tenant isolation: forward the authorized scope/scopeRef so recall is
 		// filtered to the caller's tenant, never all scopes under the agent.
@@ -684,6 +695,7 @@ export async function memongoBridgeRecallConversation(params: {
 		roles: params.roles,
 		startTime: params.startTime,
 		endTime: params.endTime,
+		asOf,
 		timezone: params.timezone,
 		includeToolMessages: params.includeToolMessages,
 		limit: params.limit,
@@ -988,6 +1000,7 @@ export async function memongoBridgeRelevanceBenchmark(params: {
 		stage: "post-fusion" | "pre-fusion" | "none"
 	}
 	retrievalLane?: "native" | "raw-session"
+	qualityThresholds?: BenchmarkQualityThresholds
 }): Promise<RelevanceBenchmarkResult> {
 	const m = await memongoBridgeGetManager(params.agentId)
 	return m.relevanceBenchmark({
@@ -1000,6 +1013,9 @@ export async function memongoBridgeRelevanceBenchmark(params: {
 			: {}),
 		...(params.rerankerConfig ? { rerankerConfig: params.rerankerConfig } : {}),
 		...(params.retrievalLane ? { retrievalLane: params.retrievalLane } : {}),
+		...(params.qualityThresholds
+			? { qualityThresholds: params.qualityThresholds }
+			: {}),
 	})
 }
 
@@ -1137,7 +1153,7 @@ export async function memongoBridgeConsolidate(params: {
 	agentId?: string
 	maxEvents?: number
 	minCombinedScore?: number
-	scope?: string
+	scope?: MemoryScope
 	scopeRef?: string
 }) {
 	const m = (await memongoBridgeGetManager(
