@@ -704,6 +704,8 @@ describe("E2E: mongoSearch dispatcher fallback", () => {
 					textSearch: false,
 					scoreFusion: false,
 					rankFusion: false,
+					storedSource: false,
+					vectorIndexMethod: false,
 				},
 				vectorIndexName: `${TEST_PREFIX}chunks_vector`,
 				textIndexName: `${TEST_PREFIX}chunks_text`,

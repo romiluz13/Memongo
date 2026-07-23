@@ -45,6 +45,8 @@ const baseCapabilities: DetectedCapabilities = {
 	textSearch: true,
 	scoreFusion: false,
 	rankFusion: false,
+	storedSource: false,
+	vectorIndexMethod: false,
 }
 
 describe("mongodb-procedures", () => {

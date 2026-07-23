@@ -9537,6 +9537,8 @@ export async function searchV2(
 			textSearch: true,
 			scoreFusion: false,
 			rankFusion: true,
+			storedSource: false,
+			vectorIndexMethod: false,
 		}
 		const fusionMethod = context.searchOptions?.fusionMethod ?? "rankFusion"
 		const embeddingMode = context.searchOptions?.embeddingMode ?? "automated"

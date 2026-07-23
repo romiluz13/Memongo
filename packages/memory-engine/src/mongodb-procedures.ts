@@ -1334,6 +1334,7 @@ export async function searchProcedures(
 				filter:
 					Object.keys(buildFilter()).length > 0 ? buildFilter() : undefined,
 				textFieldPath: "searchText",
+				returnStoredSource: opts.capabilities.storedSource,
 			})
 			if (vsStage) {
 				const pipeline: Document[] = [

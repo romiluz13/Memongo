@@ -266,6 +266,8 @@ describe("recallConversation", () => {
 				vectorSearch: true,
 				textSearch: false,
 				rankFusion: false,
+				storedSource: false,
+				vectorIndexMethod: false,
 				scoreFusion: false,
 			},
 		})
@@ -330,6 +332,8 @@ describe("recallConversation", () => {
 				vectorSearch: true,
 				textSearch: true,
 				rankFusion: true,
+				storedSource: false,
+				vectorIndexMethod: false,
 				scoreFusion: false,
 			},
 		})
@@ -393,6 +397,8 @@ describe("recallConversation", () => {
 				vectorSearch: true,
 				textSearch: true,
 				rankFusion: true,
+				storedSource: false,
+				vectorIndexMethod: false,
 				scoreFusion: false,
 			},
 		})
@@ -443,6 +449,8 @@ describe("recallConversation", () => {
 				vectorSearch: false,
 				textSearch: false,
 				rankFusion: false,
+				storedSource: false,
+				vectorIndexMethod: false,
 				scoreFusion: false,
 			},
 		})
@@ -670,6 +678,8 @@ describe("recallConversation", () => {
 				vectorSearch: true,
 				textSearch: true,
 				rankFusion: true,
+				storedSource: false,
+				vectorIndexMethod: false,
 				scoreFusion: false,
 			},
 		})
@@ -706,6 +716,8 @@ describe("recallConversation", () => {
 				vectorSearch: true,
 				textSearch: true,
 				rankFusion: true,
+				storedSource: false,
+				vectorIndexMethod: false,
 				scoreFusion: false,
 			},
 		})
@@ -740,6 +752,8 @@ describe("recallConversation", () => {
 				vectorSearch: true,
 				textSearch: false,
 				rankFusion: false,
+				storedSource: false,
+				vectorIndexMethod: false,
 				scoreFusion: false,
 			},
 		})
@@ -781,6 +795,8 @@ describe("recallConversation", () => {
 				vectorSearch: true,
 				textSearch: false,
 				rankFusion: false,
+				storedSource: false,
+				vectorIndexMethod: false,
 				scoreFusion: false,
 			},
 		})
@@ -838,6 +854,8 @@ describe("recallConversation", () => {
 				vectorSearch: true,
 				textSearch: false,
 				rankFusion: false,
+				storedSource: false,
+				vectorIndexMethod: false,
 				scoreFusion: false,
 			},
 			nativeBitemporalVectorPrefilter: true,
@@ -893,6 +911,8 @@ describe("recallConversation", () => {
 				vectorSearch: true,
 				textSearch: true,
 				rankFusion: true,
+				storedSource: false,
+				vectorIndexMethod: false,
 				scoreFusion: false,
 			},
 		})
@@ -927,6 +947,8 @@ describe("recallConversation", () => {
 				vectorSearch: true,
 				textSearch: true,
 				rankFusion: true,
+				storedSource: false,
+				vectorIndexMethod: false,
 				scoreFusion: false,
 			},
 			nativeBitemporalVectorPrefilter: true,
@@ -973,6 +995,8 @@ describe("recallConversation", () => {
 				vectorSearch: true,
 				textSearch: true,
 				rankFusion: true,
+				storedSource: false,
+				vectorIndexMethod: false,
 				scoreFusion: false,
 			},
 		})
@@ -1040,6 +1064,8 @@ describe("recallConversation", () => {
 				vectorSearch: true,
 				textSearch: true,
 				rankFusion: true,
+				storedSource: false,
+				vectorIndexMethod: false,
 				scoreFusion: false,
 			},
 		})
@@ -1094,6 +1120,8 @@ describe("recallConversation", () => {
 				vectorSearch: true,
 				textSearch: true,
 				rankFusion: true,
+				storedSource: false,
+				vectorIndexMethod: false,
 				scoreFusion: false,
 			},
 		})
@@ -1128,6 +1156,8 @@ describe("recallConversation", () => {
 				vectorSearch: true,
 				textSearch: true,
 				rankFusion: true,
+				storedSource: false,
+				vectorIndexMethod: false,
 				scoreFusion: false,
 			},
 		})

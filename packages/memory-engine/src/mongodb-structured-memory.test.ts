@@ -46,6 +46,8 @@ const baseCapabilities: DetectedCapabilities = {
 	textSearch: true,
 	scoreFusion: false,
 	rankFusion: false,
+	storedSource: false,
+	vectorIndexMethod: false,
 }
 
 const noSearchCapabilities: DetectedCapabilities = {
@@ -53,6 +55,8 @@ const noSearchCapabilities: DetectedCapabilities = {
 	textSearch: false,
 	scoreFusion: false,
 	rankFusion: false,
+	storedSource: false,
+	vectorIndexMethod: false,
 }
 
 // ---------------------------------------------------------------------------

@@ -18,6 +18,18 @@ export type DetectedCapabilities = {
 	textSearch: boolean
 	scoreFusion: boolean
 	rankFusion: boolean
+	/**
+	 * storedSource: $vectorSearch can return stored source fields directly
+	 * from the index without a collection re-fetch. Available on MongoDB 8.3+.
+	 * See: mongodb.com/docs/atlas/vector-search/tutorials/vector-search-stored-source/
+	 */
+	storedSource: boolean
+	/**
+	 * vectorIndexMethod: the vector index supports `indexingMethod` for
+	 * controlling HNSW vs flat (exact) indexing. Available on MongoDB 8.3+.
+	 * See: mongodb.com/docs/atlas/vector-search/vector-search-overview/
+	 */
+	vectorIndexMethod: boolean
 }
 
 export type MongoIndexBudgetCheck = {
@@ -2884,6 +2896,8 @@ function searchIndexDefinitionSignature(definition: Document): string {
 		"query",
 		"model",
 		"filter",
+		"storedSource",
+		"indexingMethod",
 	]
 	for (const key of keysToCompare) {
 		if (definition[key] !== undefined) {
@@ -3321,6 +3335,36 @@ export async function ensureSearchIndexes(
 			`search index budget tight (${budget.budget}/${budget.plannedSearchIndexes}): creating core chunks indexes only, skipping KB, structured memory, and procedure search indexes`,
 		)
 	}
+
+	// L4/L5: Detect MongoDB version for storedSource and indexingMethod support.
+	// These are MongoDB 8.3+ features; adding them to index definitions on older
+	// versions would fail index creation. See:
+	// mongodb.com/docs/atlas/vector-search/tutorials/vector-search-stored-source/
+	// mongodb.com/docs/atlas/vector-search/vector-search-overview/
+	let supportsStoredSource = false
+	let supportsVectorIndexMethod = false
+	try {
+		const buildInfo = await db.admin().command({ buildInfo: 1 })
+		const versionArray = (buildInfo as { versionArray?: unknown }).versionArray
+		supportsStoredSource = hasServerVersionAtLeast(versionArray, 8, 3)
+		supportsVectorIndexMethod = hasServerVersionAtLeast(versionArray, 8, 3)
+	} catch {
+		// buildInfo unavailable — assume not supported (conservative).
+	}
+	/** Augment a vector search index definition with 8.3+ options. */
+	const withVectorOpts = (def: Document): Document => {
+		if (supportsStoredSource) {
+			// Store the source document in the index so $vectorSearch can return
+			// fields via returnStoredSource without a collection re-fetch.
+			def.storedSource = true
+		}
+		if (supportsVectorIndexMethod) {
+			// Flat indexing for filtered (multitenant) workloads — better recall
+			// under heavy filtering, at the cost of exact O(n) search.
+			def.indexingMethod = "flat"
+		}
+		return def
+	}
 	if (rawSessionIndexProfile) {
 		const sessionChunks = sessionChunksCollection(db, prefix)
 		try {
@@ -3333,6 +3377,7 @@ export async function ensureSearchIndexes(
 					{ type: "filter", path: "sessionId" },
 				],
 			}
+			withVectorOpts(sessionVectorDef)
 			const vectorCreated = await ensureNamedSearchIndex({
 				collection: sessionChunks,
 				name: `${prefix}session_chunks_vector`,
@@ -3412,6 +3457,7 @@ export async function ensureSearchIndexes(
 		const vectorDef: Document = {
 			fields: [autoEmbedVectorField("text"), ...filterFields],
 		}
+		withVectorOpts(vectorDef)
 
 		vectorCreated = await ensureNamedSearchIndex({
 			collection: chunks,
@@ -3481,6 +3527,7 @@ export async function ensureSearchIndexes(
 			const kbVectorDef: Document = {
 				fields: [autoEmbedVectorField("text"), ...kbFilterFields],
 			}
+			withVectorOpts(kbVectorDef)
 
 			vectorCreated = await ensureNamedSearchIndex({
 				collection: kbChunks,
@@ -3559,6 +3606,7 @@ export async function ensureSearchIndexes(
 		const structVectorDef: Document = {
 			fields: [autoEmbedVectorField("value"), ...structFilterFields],
 		}
+		withVectorOpts(structVectorDef)
 
 		vectorCreated = await ensureNamedSearchIndex({
 			collection: structured,
@@ -3628,6 +3676,7 @@ export async function ensureSearchIndexes(
 				{ type: "filter", path: "validTo" },
 			],
 		}
+		withVectorOpts(procedureVectorDef)
 
 		vectorCreated = await ensureNamedSearchIndex({
 			collection: procedures,
@@ -3700,6 +3749,7 @@ export async function ensureSearchIndexes(
 		const eventsVectorDef: Document = {
 			fields: [autoEmbedVectorField("body"), ...eventsFilterFields],
 		}
+		withVectorOpts(eventsVectorDef)
 		vectorCreated = await ensureNamedSearchIndex({
 			collection: events,
 			name: `${prefix}events_vector`,
@@ -3733,6 +3783,7 @@ export async function ensureSearchIndexes(
 					{ type: "filter", path: "expiresAt" },
 				],
 			}
+			withVectorOpts(cacheVectorDef)
 			vectorCreated = await ensureNamedSearchIndex({
 				collection: queryCache,
 				name: `${prefix}query_cache_vector`,
@@ -3798,6 +3849,7 @@ export async function ensureSearchIndexes(
 			const sessionVectorDef: Document = {
 				fields: [autoEmbedVectorField("text"), ...sessionFilterFields],
 			}
+			withVectorOpts(sessionVectorDef)
 			vectorCreated = await ensureNamedSearchIndex({
 				collection: sessionChunks,
 				name: `${prefix}session_chunks_vector`,
@@ -3868,6 +3920,7 @@ export async function ensureSearchIndexes(
 			const evidenceVectorDef: Document = {
 				fields: [autoEmbedVectorField("text"), ...evidenceFilterFields],
 			}
+			withVectorOpts(evidenceVectorDef)
 			vectorCreated = await ensureNamedSearchIndex({
 				collection: memoryEvidence,
 				name: `${prefix}memory_evidence_vector`,
@@ -4017,6 +4070,8 @@ export async function detectCapabilities(
 		textSearch: false,
 		scoreFusion: false,
 		rankFusion: false,
+		storedSource: false,
+		vectorIndexMethod: false,
 	}
 
 	// Prefer server-version gating for fusion stages because the MongoDB docs
@@ -4027,6 +4082,11 @@ export async function detectCapabilities(
 		const versionArray = (buildInfo as { versionArray?: unknown }).versionArray
 		result.rankFusion = hasServerVersionAtLeast(versionArray, 8, 1)
 		result.scoreFusion = hasServerVersionAtLeast(versionArray, 8, 3)
+		// storedSource (return stored source fields from $vectorSearch) and
+		// vectorIndexMethod (indexingMethod: "flat" for filtered multitenant
+		// workloads) are MongoDB 8.3+ features.
+		result.storedSource = hasServerVersionAtLeast(versionArray, 8, 3)
+		result.vectorIndexMethod = hasServerVersionAtLeast(versionArray, 8, 3)
 	} catch {
 		try {
 			await db
@@ -4129,6 +4189,8 @@ export async function waitForSearchCapabilities(
 		textSearch: false,
 		scoreFusion: false,
 		rankFusion: false,
+		storedSource: false,
+		vectorIndexMethod: false,
 	}
 
 	while (Date.now() < deadline) {

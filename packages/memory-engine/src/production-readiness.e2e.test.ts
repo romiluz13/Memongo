@@ -137,6 +137,8 @@ function createLifecycleManagerHarness(
 			vectorSearch: false,
 			textSearch: false,
 			rankFusion: false,
+			storedSource: false,
+			vectorIndexMethod: false,
 			scoreFusion: false,
 		},
 		config: {
@@ -1903,6 +1905,8 @@ describeIfMongo(
 								textSearch: false,
 								scoreFusion: false,
 								rankFusion: false,
+								storedSource: false,
+								vectorIndexMethod: false,
 							},
 						},
 					},

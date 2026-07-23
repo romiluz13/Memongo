@@ -800,6 +800,8 @@ export async function recallConversation(params: {
 		textSearch: false,
 		rankFusion: false,
 		scoreFusion: false,
+		storedSource: false,
+		vectorIndexMethod: false,
 	}
 
 	let results: ConversationRecallResult[] = []

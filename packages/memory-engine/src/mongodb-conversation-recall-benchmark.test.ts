@@ -204,6 +204,8 @@ describe("conversation recall regression suite", () => {
 				vectorSearch: false,
 				textSearch: false,
 				rankFusion: false,
+				storedSource: false,
+				vectorIndexMethod: false,
 				scoreFusion: false,
 			},
 		})

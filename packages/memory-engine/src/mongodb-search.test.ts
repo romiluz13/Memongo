@@ -102,6 +102,8 @@ const FULL_CAPS: DetectedCapabilities = {
 	textSearch: true,
 	scoreFusion: true,
 	rankFusion: true,
+	storedSource: false,
+	vectorIndexMethod: false,
 }
 
 const NO_CAPS: DetectedCapabilities = {
@@ -109,6 +111,8 @@ const NO_CAPS: DetectedCapabilities = {
 	textSearch: false,
 	scoreFusion: false,
 	rankFusion: false,
+	storedSource: false,
+	vectorIndexMethod: false,
 }
 
 // ---------------------------------------------------------------------------
@@ -908,6 +912,8 @@ describe("mongoSearch dispatcher", () => {
 				textSearch: false,
 				scoreFusion: false,
 				rankFusion: false,
+				storedSource: false,
+				vectorIndexMethod: false,
 			},
 			embeddingMode: "automated",
 		})
@@ -955,6 +961,8 @@ describe("mongoSearch dispatcher", () => {
 				textSearch: true,
 				scoreFusion: false,
 				rankFusion: false,
+				storedSource: false,
+				vectorIndexMethod: false,
 			},
 			embeddingMode: "automated",
 		})
