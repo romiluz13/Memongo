@@ -242,10 +242,14 @@ function filterByScore(
 
 function filterRankFusionResults(
 	results: MemorySearchResult[],
+	minScore: number,
 ): MemorySearchResult[] {
 	// $rankFusion scores use MongoDB's RRF formula, so values are commonly
 	// around 0.01-0.03 and are not comparable to vector or lexical scores.
-	return results.filter((r) => r.score > 0)
+	// Apply both a > 0 guard (drop zero-score results) and the caller's minScore
+	// (even though RRF scores are small, the caller's threshold should be
+	// honored for consistency with the scoreFusion path).
+	return results.filter((r) => r.score > 0 && r.score >= minScore)
 }
 
 function resolveLegacySourceFilter(
@@ -920,7 +924,7 @@ export async function hybridSearchRankFusion(
 
 	const docs = await runSearchAggregateWithRetry(collection, pipeline)
 	const results = docs.map((doc) => toSearchResult(doc, "memory"))
-	return filterRankFusionResults(results)
+	return filterRankFusionResults(results, opts.minScore)
 }
 
 // ---------------------------------------------------------------------------

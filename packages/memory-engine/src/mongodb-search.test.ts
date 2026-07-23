@@ -646,7 +646,7 @@ describe("mongoSearch dispatcher", () => {
 		expect(projectStage.score).toBe("$scoreDetails.value")
 	})
 
-	it("keeps low RRF-scale $rankFusion scores instead of applying raw minScore", async () => {
+	it("keeps low RRF-scale $rankFusion scores, applying both >0 and minScore filters", async () => {
 		const rrfDocs: Document[] = [
 			{
 				path: "memory/rrf.md",
@@ -659,6 +659,8 @@ describe("mongoSearch dispatcher", () => {
 		]
 		const col = mockCollectionWithResults(rrfDocs)
 
+		// With minScore: 0.1, the RRF score 0.004918 is below the threshold and
+		// should be filtered out (the > 0 guard passes, but >= minScore fails).
 		const results = await hybridSearchRankFusion(
 			col,
 			"test query",
@@ -674,8 +676,26 @@ describe("mongoSearch dispatcher", () => {
 			},
 		)
 
-		expect(results).toHaveLength(1)
-		expect(results[0]?.score).toBe(0.004918)
+		expect(results).toHaveLength(0)
+
+		// With minScore: 0, the RRF score passes both the > 0 guard and >= minScore.
+		const results2 = await hybridSearchRankFusion(
+			col,
+			"test query",
+			[0.1, 0.2],
+			{
+				maxResults: 10,
+				minScore: 0,
+				vectorIndexName: "chunks_vector",
+				textIndexName: "chunks_text",
+				vectorWeight: 0.7,
+				textWeight: 0.3,
+				embeddingMode: "automated",
+			},
+		)
+
+		expect(results2).toHaveLength(1)
+		expect(results2[0]?.score).toBe(0.004918)
 	})
 
 	it("enables and surfaces $rankFusion scoreDetails for explain traces", async () => {
@@ -701,7 +721,7 @@ describe("mongoSearch dispatcher", () => {
 			[0.1, 0.2],
 			{
 				maxResults: 10,
-				minScore: 0.1,
+				minScore: 0,
 				vectorIndexName: "chunks_vector",
 				textIndexName: "chunks_text",
 				vectorWeight: 0.7,

@@ -178,6 +178,9 @@ export async function searchKB(
 									],
 								},
 							},
+							combination: {
+								weights: { vector: 0.7, text: 0.3 },
+							},
 						},
 					},
 					{ $limit: opts.maxResults },
@@ -212,7 +215,9 @@ export async function searchKB(
 								...(opts.explain.deep ? { rawExplain: explained } : {}),
 							})
 						}
-					} catch {}
+					} catch {
+						log.warn("KB search explain failed")
+					}
 				}
 
 				const docs = await runSearchAggregateWithRetry(kbChunks, pipeline)
@@ -276,7 +281,9 @@ export async function searchKB(
 								...(opts.explain.deep ? { rawExplain: explained } : {}),
 							})
 						}
-					} catch {}
+					} catch {
+						log.warn("KB search explain failed")
+					}
 				}
 
 				const docs = await runSearchAggregateWithRetry(kbChunks, pipeline)
@@ -342,7 +349,9 @@ export async function searchKB(
 							...(opts.explain.deep ? { rawExplain: explained } : {}),
 						})
 					}
-				} catch {}
+				} catch {
+					log.warn("KB search explain failed")
+				}
 			}
 
 			const docs = await runSearchAggregateWithRetry(kbChunks, pipeline)

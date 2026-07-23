@@ -2694,7 +2694,7 @@ describe("access events standard indexes", () => {
 		expect(indexCall![0]).toEqual({
 			"meta.agentId": 1,
 			"meta.collection": 1,
-			"meta.memoryId": 1,
+			memoryId: 1,
 			ts: -1,
 		})
 	})

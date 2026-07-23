@@ -206,7 +206,7 @@ async function upsertChunks(
 
 /**
  * Upsert chunk ops in batched transactions. If the batch throws
- * `TransactionTooLargeForCache` (MongoDB 6.2+, code 225), split it in half and
+ * `TransactionTooLargeForCache` (MongoDB 6.2+, code 388), split it in half and
  * retry each half in its own transaction. Every op still runs transactionally —
  * we only split the work so each transaction's cache footprint is smaller.
  */

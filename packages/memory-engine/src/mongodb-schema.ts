@@ -1455,17 +1455,21 @@ const VALIDATED_COLLECTIONS: Record<string, Document> = {
 	// expires). These validators ensure updatedAt is a BSON date so the TTL
 	// index actually evicts expired entries.
 	embedding_cache: {
-		bsonType: "object",
-		required: ["updatedAt"],
-		properties: {
-			updatedAt: { bsonType: "date" },
+		$jsonSchema: {
+			bsonType: "object",
+			required: ["updatedAt"],
+			properties: {
+				updatedAt: { bsonType: "date" },
+			},
 		},
 	},
 	files: {
-		bsonType: "object",
-		required: ["updatedAt"],
-		properties: {
-			updatedAt: { bsonType: "date" },
+		$jsonSchema: {
+			bsonType: "object",
+			required: ["updatedAt"],
+			properties: {
+				updatedAt: { bsonType: "date" },
+			},
 		},
 	},
 }
@@ -2333,7 +2337,7 @@ export async function ensureStandardIndexes(
 	const accessEvents = accessEventsCollection(db, prefix)
 	try {
 		await accessEvents.createIndex(
-			{ "meta.agentId": 1, "meta.collection": 1, "meta.memoryId": 1, ts: -1 },
+			{ "meta.agentId": 1, "meta.collection": 1, memoryId: 1, ts: -1 },
 			{ name: "idx_access_events_agent_collection_memory_ts" },
 		)
 		applied++
