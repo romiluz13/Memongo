@@ -1438,6 +1438,24 @@ const VALIDATED_COLLECTIONS: Record<string, Document> = {
 	memory_jobs: MEMORY_JOBS_SCHEMA,
 	memory_quarantine: MEMORY_QUARANTINE_SCHEMA,
 	memory_evidence: MEMORY_EVIDENCE_SCHEMA,
+	// L2: embedding_cache and files use a TTL index on updatedAt. If updatedAt
+	// is missing or not a date, the TTL index silently no-ops (the document never
+	// expires). These validators ensure updatedAt is a BSON date so the TTL
+	// index actually evicts expired entries.
+	embedding_cache: {
+		bsonType: "object",
+		required: ["updatedAt"],
+		properties: {
+			updatedAt: { bsonType: "date" },
+		},
+	},
+	files: {
+		bsonType: "object",
+		required: ["updatedAt"],
+		properties: {
+			updatedAt: { bsonType: "date" },
+		},
+	},
 }
 
 export async function ensureCollections(db: Db, prefix: string): Promise<void> {
@@ -2065,6 +2083,14 @@ export async function ensureStandardIndexes(
 	await relations.createIndex(
 		{ toEntityId: 1, agentId: 1, scope: 1, scopeRef: 1 },
 		{ name: "idx_relations_to_entity_scope" },
+	)
+	applied++
+	// Forward fromEntityId-prefixed index for $graphLookup / $lookup paths that
+	// traverse from the source entity (connectFromField: fromEntityId). Mirrors
+	// idx_relations_to_entity_scope for the reverse direction.
+	await relations.createIndex(
+		{ fromEntityId: 1, agentId: 1, scope: 1, scopeRef: 1 },
+		{ name: "idx_relations_from_entity_scope" },
 	)
 	applied++
 
@@ -2838,8 +2864,33 @@ export async function isSearchIndexManagementAvailable(
 	}
 }
 
+/**
+ * Compute a signature of the code-owned parts of a search index definition.
+ * We compare only the fields the code controls (mappings, fields, similarity,
+ * type, numDimensions, path) — NOT the full normalized definition, because the
+ * server may add default values (e.g. `storedSource: false`, `dynamic: true`) to
+ * `latestDefinition` that cause full-JSON equality to spuriously report drift
+ * and trigger a rebuild on every boot.
+ */
 function searchIndexDefinitionSignature(definition: Document): string {
-	return JSON.stringify(sortObject(definition))
+	const codeOwned: Record<string, unknown> = {}
+	const keysToCompare = [
+		"fields",
+		"mappings",
+		"similarity",
+		"type",
+		"numDimensions",
+		"path",
+		"query",
+		"model",
+		"filter",
+	]
+	for (const key of keysToCompare) {
+		if (definition[key] !== undefined) {
+			codeOwned[key] = definition[key]
+		}
+	}
+	return JSON.stringify(sortObject(codeOwned))
 }
 
 export function isSearchIndexTypeCompatible(

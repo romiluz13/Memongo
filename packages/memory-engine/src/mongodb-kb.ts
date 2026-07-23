@@ -15,6 +15,7 @@ import { resolveScopeRef } from "./mongodb-scope.js"
 import {
 	MAJORITY_TRANSACTION_OPTIONS,
 	isTransactionUnsupported,
+	withTransactionBatched,
 } from "./mongodb-transactions.js"
 
 const log = createSubsystemLogger("memory:mongodb:kb")
@@ -304,7 +305,9 @@ export async function ingestToKB(params: {
 /**
  * Atomically re-ingest a KB document: delete old chunks + doc, insert new doc + chunks.
  * Uses withTransaction() when client is provided. Falls back to sequential writes
- * on standalone topology (same pattern as mongodb-sync.ts).
+ * on standalone topology (same pattern as mongodb-sync.ts). Chunk bulkWrite is
+ * routed through withTransactionBatched to handle TransactionTooLargeForCache
+ * (code 388) by splitting oversized batches — see mongodb-transactions.ts.
  * Returns the number of chunks created.
  */
 async function reIngestAtomically(params: {
@@ -325,10 +328,9 @@ async function reIngestAtomically(params: {
 	const { client, kb, kbChunks, oldDocId, oldDocPk, newKBDoc, chunkOps } =
 		params
 
-	// Inner write function — performs all DB writes, optionally with a session.
-	// Per `fundamental-propagate-session`: pass session to EVERY operation inside the transaction.
-	// When no session, call without the options arg to match test expectations.
-	async function performWrites(session?: ClientSession): Promise<number> {
+	// Metadata writes (delete old chunks, delete old doc, insert new doc). Kept
+	// small so they never hit TransactionTooLargeForCache.
+	async function performMetadataWrites(session?: ClientSession): Promise<void> {
 		if (session) {
 			await kbChunks.deleteMany({ docId: oldDocId }, { session })
 			await kb.deleteOne({ _id: oldDocPk } as Record<string, unknown>, {
@@ -340,16 +342,18 @@ async function reIngestAtomically(params: {
 			await kb.deleteOne({ _id: oldDocPk } as Record<string, unknown>)
 			await kb.insertOne(newKBDoc)
 		}
+	}
 
-		// Insert new chunks
-		let chunksCreated = 0
-		if (chunkOps.length > 0) {
-			const writeResult = session
-				? await kbChunks.bulkWrite(chunkOps, { ordered: false, session })
-				: await kbChunks.bulkWrite(chunkOps, { ordered: false })
-			chunksCreated = writeResult.upsertedCount + writeResult.modifiedCount
-		}
-		return chunksCreated
+	// Run a chunk batch, returning the number of chunks upserted/modified.
+	async function runChunkBatch(
+		batch: typeof chunkOps,
+		session?: ClientSession,
+	): Promise<number> {
+		if (batch.length === 0) return 0
+		const writeResult = session
+			? await kbChunks.bulkWrite(batch, { ordered: false, session })
+			: await kbChunks.bulkWrite(batch, { ordered: false })
+		return writeResult.upsertedCount + writeResult.modifiedCount
 	}
 
 	// Try transactional path if client is available
@@ -359,7 +363,10 @@ async function reIngestAtomically(params: {
 			try {
 				let chunksCreated = 0
 				await session.withTransaction(async () => {
-					chunksCreated = await performWrites(session)
+					await performMetadataWrites(session)
+					await withTransactionBatched(session, chunkOps, async (batch) => {
+						chunksCreated += await runChunkBatch(batch, session)
+					})
 				}, MAJORITY_TRANSACTION_OPTIONS)
 				return chunksCreated
 			} finally {
@@ -378,7 +385,8 @@ async function reIngestAtomically(params: {
 	}
 
 	// Sequential fallback (no transaction)
-	return performWrites()
+	await performMetadataWrites()
+	return runChunkBatch(chunkOps)
 }
 
 // ---------------------------------------------------------------------------

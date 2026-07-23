@@ -1447,12 +1447,16 @@ export type AccessEventCollection =
 export type AccessEventMeta = {
 	agentId: string
 	collection: AccessEventCollection
-	memoryId: string
 }
 
 export type AccessEventDocument = {
 	ts: Date
 	meta: AccessEventMeta
+	/**
+	 * Top-level field (not inside `meta`) to avoid high-cardinality
+	 * `memoryId` defeating time-series bucket compaction. See L6.
+	 */
+	memoryId: string
 	count: number
 }
 

@@ -9936,6 +9936,7 @@ export async function searchV2(
 								numCandidates,
 								capabilities,
 								vectorIndexName: `${prefix}procedures_vector`,
+								textIndexName: `${prefix}procedures_text`,
 								embeddingMode,
 							},
 						).catch((err) => {
@@ -10262,6 +10263,7 @@ export async function searchV2(
 						numCandidates,
 						capabilities,
 						vectorIndexName: `${prefix}procedures_vector`,
+						textIndexName: `${prefix}procedures_text`,
 						embeddingMode,
 					},
 				)

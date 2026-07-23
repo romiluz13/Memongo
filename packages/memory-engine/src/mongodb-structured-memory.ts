@@ -645,7 +645,17 @@ export async function writeStructuredMemory(params: {
 	actorRole?: MemoryActorRole
 	mutationMeta?: MutationMeta
 	eventReceiptIds?: string[]
-}): Promise<{ upserted: boolean; id: string }> {
+}): Promise<{
+	upserted: boolean
+	id: string
+	/**
+	 * When a `session` is provided, side effects (query-cache invalidation,
+	 * mutation audit) are deferred and returned here so the caller can run
+	 * them AFTER the caller's transaction commits. Running them inside the
+	 * live transaction would record an audit for a write that may never commit.
+	 */
+	pendingSideEffects?: () => Promise<void>
+}> {
 	const { db, prefix, entry } = params
 	const collection = structuredMemCollection(db, prefix)
 	const revisions = structuredMemRevisionsCollection(db, prefix)
@@ -954,42 +964,59 @@ export async function writeStructuredMemory(params: {
 	log.info(
 		`structured memory ${outcome.upserted ? "created" : "updated"}: type=${entry.type} key=${entry.key} revision=${outcome.revision}`,
 	)
-	await invalidateQueryCache({
-		db,
-		prefix,
-		agentId: entry.agentId,
-		scope,
-		scopeRef,
-	})
 
-	// Fire-and-forget: record mutation audit trail (non-blocking)
-	const oldSnapshot = existingBeforeWrite
-	const changedFields =
-		oldSnapshot != null
-			? computeChangedFields(oldSnapshot, persistedSetDoc)
-			: undefined
-	Promise.allSettled([
-		recordMutation({
+	// Side effects: query-cache invalidation + mutation audit trail.
+	// When a `session` is provided, the caller's transaction is still open —
+	// defer the side effects so they run AFTER the transaction commits (an
+	// audit for a write that never commits is a correctness bug). Otherwise
+	// run them immediately.
+	const runSideEffects = async (): Promise<void> => {
+		await invalidateQueryCache({
 			db,
 			prefix,
-			mutation: {
-				collectionName: "structured_mem",
-				documentId: entry.key,
-				operation: oldSnapshot == null ? "create" : "update",
-				agentId: entry.agentId,
-				oldValue: oldSnapshot ?? null,
-				newValue: persistedSetDoc,
-				changedFields,
-				actorRole: params.actorRole ?? "system",
-				...(params.mutationMeta ? { meta: params.mutationMeta } : {}),
-			},
-		}),
-	]).catch((err) => {
-		log.warn(
-			`structured memory audit failed: ${err instanceof Error ? err.message : String(err)}`,
-		)
-	})
+			agentId: entry.agentId,
+			scope,
+			scopeRef,
+		})
 
+		const oldSnapshot = existingBeforeWrite
+		const changedFields =
+			oldSnapshot != null
+				? computeChangedFields(oldSnapshot, persistedSetDoc)
+				: undefined
+		Promise.allSettled([
+			recordMutation({
+				db,
+				prefix,
+				mutation: {
+					collectionName: "structured_mem",
+					documentId: entry.key,
+					operation: oldSnapshot == null ? "create" : "update",
+					agentId: entry.agentId,
+					oldValue: oldSnapshot ?? null,
+					newValue: persistedSetDoc,
+					changedFields,
+					actorRole: params.actorRole ?? "system",
+					...(params.mutationMeta ? { meta: params.mutationMeta } : {}),
+				},
+			}),
+		]).catch((err) => {
+			log.warn(
+				`structured memory audit failed: ${err instanceof Error ? err.message : String(err)}`,
+			)
+		})
+	}
+
+	if (params.session) {
+		// Caller's transaction is still open — defer side effects.
+		return {
+			upserted: outcome.upserted,
+			id: outcome.id,
+			pendingSideEffects: runSideEffects,
+		}
+	}
+
+	await runSideEffects()
 	return { upserted: outcome.upserted, id: outcome.id }
 }
 

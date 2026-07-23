@@ -156,7 +156,7 @@ export async function scanNovelty(params: {
 
 			// Request kNeighbors + 1 to account for self being returned
 			const searchLimit = kNeighbors + 1
-			const numCandidates = Math.max(searchLimit * 10, 50)
+			const numCandidates = Math.max(searchLimit * 20, 100)
 
 			const pipeline: Document[] = [
 				{

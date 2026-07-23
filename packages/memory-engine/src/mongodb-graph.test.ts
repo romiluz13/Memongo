@@ -839,7 +839,7 @@ describe("mongodb-graph", () => {
 			expect(facetStage).toBeUndefined()
 		})
 
-		it("bidirectional=true uses $facet for parallel traversal", async () => {
+		it("bidirectional=true uses two separate aggregations for forward + reverse", async () => {
 			const rootEntity = makeEntity()
 			const entitiesCol = createMockCollection()
 			;(entitiesCol as unknown as Record<string, unknown>).findOne = vi
@@ -848,7 +848,7 @@ describe("mongodb-graph", () => {
 
 			const relationsCol = createMockCollection({
 				aggregate: vi.fn().mockReturnValue({
-					toArray: vi.fn().mockResolvedValue([{ forward: [], reverse: [] }]),
+					toArray: vi.fn().mockResolvedValue([]),
 				}),
 			})
 
@@ -865,13 +865,20 @@ describe("mongodb-graph", () => {
 				bidirectional: true,
 			})
 
-			// Should use $facet when bidirectional=true
-			const [pipeline] = (relationsCol.aggregate as ReturnType<typeof vi.fn>)
-				.mock.calls[0]
-			const facetStage = pipeline.find((s: Document) => s.$facet)
-			expect(facetStage).toBeDefined()
-			expect(facetStage.$facet.forward).toBeDefined()
-			expect(facetStage.$facet.reverse).toBeDefined()
+			// Bidirectional should issue two separate aggregate calls (forward +
+			// reverse), NOT a $facet — $facet has a 100MB per-branch limit with
+			// no spill to disk, which a large graph can exceed.
+			const aggregateCalls = (
+				relationsCol.aggregate as ReturnType<typeof vi.fn>
+			).mock.calls
+			expect(aggregateCalls).toHaveLength(2)
+			// Each pipeline should contain a $graphLookup (not $facet)
+			for (const [pipeline] of aggregateCalls) {
+				const hasGraphLookup = pipeline.some((s: Document) => s.$graphLookup)
+				expect(hasGraphLookup).toBe(true)
+				const hasFacet = pipeline.some((s: Document) => s.$facet)
+				expect(hasFacet).toBe(false)
+			}
 		})
 
 		it("maxConnections limits total connections returned", async () => {
@@ -1024,35 +1031,31 @@ describe("mongodb-graph", () => {
 				.fn()
 				.mockResolvedValue(rootEntity)
 
-			// Same relation appears in both forward and reverse
-			const facetResult = {
-				forward: [
-					{
-						fromEntityId: "ent-1",
-						toEntityId: "ent-2",
-						type: "works_on",
-						agentId: "agent-1",
-						scope: "agent",
-						updatedAt: new Date("2026-01-01"),
-						transitiveRelations: [],
-					},
-				],
-				reverse: [
-					{
-						fromEntityId: "ent-1",
-						toEntityId: "ent-2",
-						type: "works_on",
-						agentId: "agent-1",
-						scope: "agent",
-						updatedAt: new Date("2026-01-01"),
-						transitiveRelations: [],
-					},
-				],
+			// Same relation appears in both forward and reverse. With two separate
+			// aggregations (no $facet), the first call returns forward, the second
+			// returns reverse.
+			const forwardRel = {
+				fromEntityId: "ent-1",
+				toEntityId: "ent-2",
+				type: "works_on",
+				agentId: "agent-1",
+				scope: "agent",
+				updatedAt: new Date("2026-01-01"),
+				transitiveRelations: [],
 			}
+			const reverseRel = { ...forwardRel }
 
+			let aggregateCallCount = 0
 			const relationsCol = createMockCollection({
-				aggregate: vi.fn().mockReturnValue({
-					toArray: vi.fn().mockResolvedValue([facetResult]),
+				aggregate: vi.fn().mockImplementation(() => {
+					aggregateCallCount++
+					return {
+						toArray: vi
+							.fn()
+							.mockResolvedValue(
+								aggregateCallCount === 1 ? [forwardRel] : [reverseRel],
+							),
+					}
 				}),
 			})
 

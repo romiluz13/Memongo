@@ -138,8 +138,8 @@ describe("AccessTracker", () => {
 					meta: {
 						agentId: "agent-1",
 						collection: "events",
-						memoryId: "evt-1",
 					},
+					memoryId: "evt-1",
 					count: 5,
 					ts: expect.any(Date),
 				}),
@@ -303,18 +303,18 @@ describe("AccessTracker", () => {
 		expect(attempts).toBe(2)
 
 		const retriedDocs = accessInsertMany.mock.calls[1]?.[0] as Array<{
-			meta: { memoryId: string }
+			memoryId: string
 			count: number
 		}>
 		// Sort by memoryId so the assertion is order-independent.
-		retriedDocs.sort((a, b) => a.meta.memoryId.localeCompare(b.meta.memoryId))
+		retriedDocs.sort((a, b) => a.memoryId.localeCompare(b.memoryId))
 		expect(retriedDocs).toEqual([
 			expect.objectContaining({
-				meta: expect.objectContaining({ memoryId: "evt-1" }),
+				memoryId: "evt-1",
 				count: 2,
 			}),
 			expect.objectContaining({
-				meta: expect.objectContaining({ memoryId: "evt-2" }),
+				memoryId: "evt-2",
 				count: 1,
 			}),
 		])

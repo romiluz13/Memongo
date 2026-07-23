@@ -363,8 +363,14 @@ describe("ensureCollections", () => {
 		// 30 = 29 baseline + 1 memory_quarantine (, )
 		expect(db.createCollection).toHaveBeenCalledTimes(30)
 		// Non-validated collections: called with name only
-		expect(db.createCollection).toHaveBeenCalledWith("test_files")
-		expect(db.createCollection).toHaveBeenCalledWith("test_embedding_cache")
+		expect(db.createCollection).toHaveBeenCalledWith(
+			"test_files",
+			expect.objectContaining({ validator: expect.any(Object) }),
+		)
+		expect(db.createCollection).toHaveBeenCalledWith(
+			"test_embedding_cache",
+			expect.objectContaining({ validator: expect.any(Object) }),
+		)
 		expect(db.createCollection).toHaveBeenCalledWith("test_meta")
 		expect(db.createCollection).toHaveBeenCalledWith("test_session_chunks")
 		// Validated collections: called with name + validator options (F15: chunks now validated)
@@ -440,7 +446,10 @@ describe("ensureCollections", () => {
 		await ensureCollections(db, "test_")
 		// 28 = 30 new total - 2 skipped. 29 baseline + 1 memory_quarantine.
 		expect(db.createCollection).toHaveBeenCalledTimes(28)
-		expect(db.createCollection).toHaveBeenCalledWith("test_embedding_cache")
+		expect(db.createCollection).toHaveBeenCalledWith(
+			"test_embedding_cache",
+			expect.objectContaining({ validator: expect.any(Object) }),
+		)
 		expect(db.createCollection).toHaveBeenCalledWith("test_meta")
 		expect(db.createCollection).toHaveBeenCalledWith(
 			"test_knowledge_base",
@@ -559,7 +568,7 @@ describe("ensureStandardIndexes", () => {
 		// + 3 session_chunks + 1 bi-temporal valid-time (#32)
 		// + 1 durable memory-job claim index + 1 extraction outbox partial index
 		// + 1 unique relation identity index = 89
-		expect(count).toBe(89)
+		expect(count).toBe(90)
 		expect(chunks.createIndex).toHaveBeenCalledTimes(4)
 		expect(cache.createIndex).toHaveBeenCalledTimes(2)
 		expect(kb.createIndex).toHaveBeenCalledTimes(5)
@@ -603,7 +612,7 @@ describe("ensureStandardIndexes", () => {
 			},
 		)
 		expect(entities.createIndex).toHaveBeenCalledTimes(5)
-		expect(relations.createIndex).toHaveBeenCalledTimes(5)
+		expect(relations.createIndex).toHaveBeenCalledTimes(6)
 		expect(relations.createIndex).toHaveBeenCalledWith(
 			{
 				agentId: 1,
@@ -679,7 +688,7 @@ describe("ensureStandardIndexes", () => {
 			) as unknown as {
 				createIndex: ReturnType<typeof vi.fn>
 			}
-			expect(count).toBe(93)
+			expect(count).toBe(94)
 			expect(memoryEvidence.createIndex).toHaveBeenCalledTimes(4)
 			expect(memoryEvidence.createIndex).toHaveBeenCalledWith(
 				{ canonicalId: 1 },
@@ -867,7 +876,7 @@ describe("ensureStandardIndexes", () => {
 		// + 1 lane_coverage + 1 consolidation_runs + 3 session_chunks
 		// + 1 bi-temporal valid-time (#32) + 1 durable job claim index
 		// + 1 extraction outbox partial index + 1 unique relation identity = 89
-		expect(count).toBe(89)
+		expect(count).toBe(90)
 	})
 
 	it("creates relevance TTL indexes when relevanceRetentionDays is set", async () => {
@@ -2733,7 +2742,7 @@ describe("ensureStandardIndexes total count with query_cache and time series ind
 		// + 1 lane_coverage + 1 consolidation_runs + 3 session_chunks
 		// + 1 bi-temporal valid-time (#32) + 1 durable job claim index
 		// + 1 extraction outbox partial index + 1 unique relation identity = 89
-		expect(count).toBe(89)
+		expect(count).toBe(90)
 	})
 })
 

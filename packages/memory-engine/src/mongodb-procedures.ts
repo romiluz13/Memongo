@@ -13,6 +13,7 @@ import {
 import { recordMutation, type MutationMeta } from "./mongodb-mutations.js"
 import { invalidateQueryCache } from "./mongodb-query-cache.js"
 import { summarizeExplain } from "./mongodb-relevance.js"
+import { splitAtlasSearchFilter } from "./mongodb-search.js"
 import type { DetectedCapabilities } from "./mongodb-schema.js"
 import {
 	procedureRevisionsCollection,
@@ -1277,6 +1278,7 @@ export async function searchProcedures(
 		}
 		capabilities: DetectedCapabilities
 		vectorIndexName: string
+		textIndexName?: string
 		embeddingMode: MemoryMongoDBEmbeddingMode
 		numCandidates?: number
 		explain?: SearchExplainOptions
@@ -1386,6 +1388,64 @@ export async function searchProcedures(
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err)
 			log.warn(`procedure vector search failed: ${msg}`)
+		}
+	}
+
+	// Atlas Search tier — uses the procedures_text Atlas Search index that is
+	// created and maintained by mongodb-schema.ts but was previously unused.
+	// Gated on capabilities.textSearch so it only runs where Atlas Search is
+	// available; falls through to $text on Community / unsupported deployments.
+	const canText = opts.capabilities.textSearch
+	if (canText && opts.textIndexName) {
+		try {
+			const textFilter = buildFilter()
+			const { compoundFilter, postMatch } = splitAtlasSearchFilter(textFilter)
+			const pipeline: Document[] = [
+				{
+					$search: {
+						index: opts.textIndexName,
+						compound: {
+							must: [{ text: { query, path: "searchText" } }],
+							...(compoundFilter ? { filter: compoundFilter } : {}),
+						},
+					},
+				},
+				...(postMatch ? [{ $match: postMatch }] : []),
+				{ $limit: opts.maxResults * 4 },
+				{
+					$project: {
+						_id: 0,
+						procedureId: 1,
+						searchText: 1,
+						sessionId: 1,
+						updatedAt: 1,
+						state: 1,
+						scope: 1,
+						scopeRef: 1,
+						provenance: 1,
+						sourceEventIds: 1,
+						validFrom: 1,
+						validTo: 1,
+						score: { $meta: "searchScore" },
+					},
+				},
+			]
+			if (opts.explain?.enabled) {
+				opts.explain.onArtifact?.({
+					artifactType: "searchExplain",
+					summary: { source: "procedure", method: "atlas-search" },
+				})
+			}
+			const docs = await runSearchAggregateWithRetry(collection, pipeline)
+			const results = docs
+				.map(toProcedureResult)
+				.filter((result) => result.score >= minScore)
+			if (results.length > 0) {
+				return results
+			}
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err)
+			log.warn(`procedure Atlas Search failed: ${msg}`)
 		}
 	}
 

@@ -927,6 +927,8 @@ export function hybridSearchJSFallback(
 		vector: vectorResults,
 		keyword: keywordResults,
 		maxResults: opts.maxResults,
+		vectorWeight: opts.vectorWeight,
+		textWeight: opts.textWeight,
 	})
 }
 

@@ -189,8 +189,8 @@ export class AccessTracker {
 				meta: {
 					agentId: this.agentId,
 					collection: entry.collection,
-					memoryId,
 				},
+				memoryId,
 				count: entry.count,
 			})
 
@@ -295,13 +295,13 @@ export async function getAccessSummaries(params: {
 				$match: {
 					"meta.agentId": params.agentId,
 					"meta.collection": params.collection,
-					"meta.memoryId": { $in: params.memoryIds },
+					memoryId: { $in: params.memoryIds },
 					ts: { $gte: since },
 				},
 			},
 			{
 				$group: {
-					_id: "$meta.memoryId",
+					_id: "$memoryId",
 					accessCount: { $sum: "$count" },
 					lastAccessedAt: { $max: "$ts" },
 				},
@@ -342,7 +342,7 @@ async function resolveTrendTargets(params: {
 				{
 					$match: {
 						"meta.agentId": params.agentId,
-						"meta.memoryId": { $in: params.memoryIds },
+						memoryId: { $in: params.memoryIds },
 						ts: {
 							$gte: new Date(Date.now() - params.windowDays * DAY_MS),
 						},
@@ -352,7 +352,7 @@ async function resolveTrendTargets(params: {
 					$group: {
 						_id: {
 							collection: "$meta.collection",
-							memoryId: "$meta.memoryId",
+							memoryId: "$memoryId",
 						},
 					},
 				},
@@ -380,7 +380,7 @@ async function resolveTrendTargets(params: {
 				$group: {
 					_id: {
 						collection: "$meta.collection",
-						memoryId: "$meta.memoryId",
+						memoryId: "$memoryId",
 					},
 					totalCount: { $sum: "$count" },
 				},
@@ -429,7 +429,7 @@ export async function getAccessTrends(params: {
 					ts: { $gte: since },
 					$or: targets.map((target) => ({
 						"meta.collection": target.collection,
-						"meta.memoryId": target.memoryId,
+						memoryId: target.memoryId,
 					})),
 				},
 			},
@@ -447,7 +447,7 @@ export async function getAccessTrends(params: {
 				$group: {
 					_id: {
 						collection: "$meta.collection",
-						memoryId: "$meta.memoryId",
+						memoryId: "$memoryId",
 						day: "$day",
 					},
 					count: { $sum: "$count" },

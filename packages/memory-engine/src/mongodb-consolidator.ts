@@ -651,7 +651,7 @@ export async function consolidateMemory(params: {
 								path: "value",
 								query: { text: candidate.body },
 								model: "voyage-4-large",
-								numCandidates: 50,
+								numCandidates: 100,
 								limit: 5,
 								filter: simFilter,
 							},
@@ -955,7 +955,7 @@ export async function consolidateMemory(params: {
 								path: "value",
 								query: { text: fact.value },
 								model: "voyage-4-large",
-								numCandidates: 20,
+								numCandidates: 80,
 								limit: 4, // +1 to account for self-match consuming a slot
 								filter: {
 									agentId,

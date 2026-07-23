@@ -1004,85 +1004,84 @@ export async function expandGraph(params: {
 		}
 
 		if (bidirectional) {
-			// 2b. Use $facet for parallel forward + reverse traversal in one aggregation
-			const facetPipeline: Document[] = [
+			// 2b. Run forward + reverse as two SEPARATE aggregations (not $facet).
+			// $facet has a 100MB per-branch limit with no spill to disk; a large
+			// graph can exceed that and abort the whole aggregation. Separate
+			// aggregations can spill to disk, bounding memory per branch.
+			const forwardPipeline: Document[] = [
 				{
-					$facet: {
-						forward: [
+					$match: mergeQueryClauses(
+						{
+							fromEntityId: entityId,
+							agentId,
+							...(scope ? { scope } : {}),
+							...(scopeRef ? { scopeRef } : {}),
+						},
+						relationTraversalClause,
+					),
+				},
+				{ $limit: directRelationLimit },
+				{
+					$graphLookup: {
+						from: `${prefix}relations`,
+						startWith: "$toEntityId",
+						connectFromField: "toEntityId",
+						connectToField: "fromEntityId",
+						as: "transitiveRelations",
+						maxDepth: graphLookupDepth,
+						depthField: "depth",
+						restrictSearchWithMatch: mergeQueryClauses(
 							{
-								$match: mergeQueryClauses(
-									{
-										fromEntityId: entityId,
-										agentId,
-										...(scope ? { scope } : {}),
-										...(scopeRef ? { scopeRef } : {}),
-									},
-									relationTraversalClause,
-								),
+								agentId,
+								...(scope ? { scope } : {}),
+								...(scopeRef ? { scopeRef } : {}),
 							},
-							{ $limit: directRelationLimit },
-							{
-								$graphLookup: {
-									from: `${prefix}relations`,
-									startWith: "$toEntityId",
-									connectFromField: "toEntityId",
-									connectToField: "fromEntityId",
-									as: "transitiveRelations",
-									maxDepth: graphLookupDepth,
-									depthField: "depth",
-									restrictSearchWithMatch: mergeQueryClauses(
-										{
-											agentId,
-											...(scope ? { scope } : {}),
-											...(scopeRef ? { scopeRef } : {}),
-										},
-										relationTraversalClause,
-									),
-								},
-							},
-						],
-						reverse: [
-							{
-								$match: mergeQueryClauses(
-									{
-										toEntityId: entityId,
-										agentId,
-										...(scope ? { scope } : {}),
-										...(scopeRef ? { scopeRef } : {}),
-									},
-									relationTraversalClause,
-								),
-							},
-							{ $limit: directRelationLimit },
-							{
-								$graphLookup: {
-									from: `${prefix}relations`,
-									startWith: "$fromEntityId",
-									connectFromField: "fromEntityId",
-									connectToField: "toEntityId",
-									as: "transitiveRelations",
-									maxDepth: graphLookupDepth,
-									depthField: "depth",
-									restrictSearchWithMatch: mergeQueryClauses(
-										{
-											agentId,
-											...(scope ? { scope } : {}),
-											...(scopeRef ? { scopeRef } : {}),
-										},
-										relationTraversalClause,
-									),
-								},
-							},
-						],
+							relationTraversalClause,
+						),
 					},
 				},
 			]
 
-			const [facetResult] = await relCol.aggregate(facetPipeline).toArray()
-			const forwardRels = (facetResult?.forward ?? []) as Document[]
-			const reverseRels = (facetResult?.reverse ?? []) as Document[]
-			collectRelations(forwardRels)
-			collectRelations(reverseRels)
+			const reversePipeline: Document[] = [
+				{
+					$match: mergeQueryClauses(
+						{
+							toEntityId: entityId,
+							agentId,
+							...(scope ? { scope } : {}),
+							...(scopeRef ? { scopeRef } : {}),
+						},
+						relationTraversalClause,
+					),
+				},
+				{ $limit: directRelationLimit },
+				{
+					$graphLookup: {
+						from: `${prefix}relations`,
+						startWith: "$fromEntityId",
+						connectFromField: "fromEntityId",
+						connectToField: "toEntityId",
+						as: "transitiveRelations",
+						maxDepth: graphLookupDepth,
+						depthField: "depth",
+						restrictSearchWithMatch: mergeQueryClauses(
+							{
+								agentId,
+								...(scope ? { scope } : {}),
+								...(scopeRef ? { scopeRef } : {}),
+							},
+							relationTraversalClause,
+						),
+					},
+				},
+			]
+
+			const [forwardRels, reverseRels] = await Promise.all([
+				relCol.aggregate(forwardPipeline).toArray(),
+				relCol.aggregate(reversePipeline).toArray(),
+			])
+			collectRelations(forwardRels as Document[])
+			collectRelations(reverseRels as Document[])
 		} else {
 			// 2a. Outbound-only pipeline (original behavior)
 			const relPipeline: Document[] = [
