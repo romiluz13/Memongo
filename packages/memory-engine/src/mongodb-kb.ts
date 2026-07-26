@@ -15,7 +15,6 @@ import { resolveScopeRef } from "./mongodb-scope.js"
 import {
 	MAJORITY_TRANSACTION_OPTIONS,
 	isTransactionUnsupported,
-	withTransactionBatched,
 } from "./mongodb-transactions.js"
 
 const log = createSubsystemLogger("memory:mongodb:kb")
@@ -305,9 +304,13 @@ export async function ingestToKB(params: {
 /**
  * Atomically re-ingest a KB document: delete old chunks + doc, insert new doc + chunks.
  * Uses withTransaction() when client is provided. Falls back to sequential writes
- * on standalone topology (same pattern as mongodb-sync.ts). Chunk bulkWrite is
- * routed through withTransactionBatched to handle TransactionTooLargeForCache
- * (code 388) by splitting oversized batches — see mongodb-transactions.ts.
+ * on standalone topology (same pattern as mongodb-sync.ts).
+ *
+ * Metadata writes and the chunk bulkWrite share ONE transaction. They must not
+ * be split across nested transactions: a session can have at most one open
+ * transaction, so opening a second one inside the callback throws
+ * MongoTransactionError('Transaction already in progress') on every re-ingest.
+ *
  * Returns the number of chunks created.
  */
 async function reIngestAtomically(params: {
@@ -363,10 +366,11 @@ async function reIngestAtomically(params: {
 			try {
 				let chunksCreated = 0
 				await session.withTransaction(async () => {
+					// withTransaction may re-run this callback on a transient error,
+					// so the count is reset per attempt rather than accumulated.
+					chunksCreated = 0
 					await performMetadataWrites(session)
-					await withTransactionBatched(session, chunkOps, async (batch) => {
-						chunksCreated += await runChunkBatch(batch, session)
-					})
+					chunksCreated = await runChunkBatch(chunkOps, session)
 				}, MAJORITY_TRANSACTION_OPTIONS)
 				return chunksCreated
 			} finally {
