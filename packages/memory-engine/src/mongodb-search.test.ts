@@ -12,6 +12,7 @@ import {
 	mongoSearch,
 	splitAtlasSearchFilter,
 	buildVectorSearchStage,
+	normalizeAndFilterRankFusionResults,
 } from "./mongodb-search.js"
 
 // ---------------------------------------------------------------------------
@@ -646,7 +647,14 @@ describe("mongoSearch dispatcher", () => {
 		expect(projectStage.score).toBe("$scoreDetails.value")
 	})
 
-	it("keeps low RRF-scale $rankFusion scores, applying both >0 and minScore filters", async () => {
+	it("rescales low RRF-scale $rankFusion scores instead of discarding them", async () => {
+		// This test used to assert the opposite: that minScore 0.1 filtered the
+		// result away. That was the S2 defect, not the contract. Raw RRF scores
+		// cap at sum(weights)/61 (~0.0164 here), so any caller threshold at or
+		// above that emptied the hybrid path for every query and silently
+		// demoted every search to the JS-merge fallback. Scores are now rescaled
+		// into the [0,1] space the other search paths report in, so the caller's
+		// threshold means the same thing on every path.
 		const rrfDocs: Document[] = [
 			{
 				path: "memory/rrf.md",
@@ -659,8 +667,7 @@ describe("mongoSearch dispatcher", () => {
 		]
 		const col = mockCollectionWithResults(rrfDocs)
 
-		// With minScore: 0.1, the RRF score 0.004918 is below the threshold and
-		// should be filtered out (the > 0 guard passes, but >= minScore fails).
+		// 0.004918 is 30% of the 1/61 ceiling, so it survives a 0.1 threshold.
 		const results = await hybridSearchRankFusion(
 			col,
 			"test query",
@@ -676,16 +683,17 @@ describe("mongoSearch dispatcher", () => {
 			},
 		)
 
-		expect(results).toHaveLength(0)
+		expect(results).toHaveLength(1)
+		expect(results[0]?.score).toBeCloseTo(0.3, 3)
 
-		// With minScore: 0, the RRF score passes both the > 0 guard and >= minScore.
+		// ...and a threshold above it still filters, so minScore is not inert.
 		const results2 = await hybridSearchRankFusion(
 			col,
 			"test query",
 			[0.1, 0.2],
 			{
 				maxResults: 10,
-				minScore: 0,
+				minScore: 0.5,
 				vectorIndexName: "chunks_vector",
 				textIndexName: "chunks_text",
 				vectorWeight: 0.7,
@@ -694,13 +702,14 @@ describe("mongoSearch dispatcher", () => {
 			},
 		)
 
-		expect(results2).toHaveLength(1)
-		expect(results2[0]?.score).toBe(0.004918)
+		expect(results2).toHaveLength(0)
 	})
 
 	it("enables and surfaces $rankFusion scoreDetails for explain traces", async () => {
+		// 0.008 is roughly half the 1/61 ceiling these weights produce, so the
+		// rescaled score lands mid-range rather than clamping at 1.
 		const scoreDetails = {
-			value: 0.032,
+			value: 0.008,
 			description: "rrf",
 			details: [],
 		}
@@ -742,7 +751,10 @@ describe("mongoSearch dispatcher", () => {
 		})
 		expect(pipeline.at(-1).$project.scoreDetails).toBe(1)
 		expect(pipeline.at(-1).$project.score).toBe("$scoreDetails.value")
-		expect(results[0]?.score).toBe(0.032)
+		// The reported score is rescaled out of raw RRF space, but scoreDetails
+		// is passed through untouched so explain traces still show what the
+		// server actually returned.
+		expect(results[0]?.score).toBeCloseTo(0.488, 3)
 		expect(results[0]?.scoreDetails).toEqual(scoreDetails)
 	})
 
@@ -1108,5 +1120,87 @@ describe("buildVectorSearchStage ENN", () => {
 		expect(stage).not.toBeNull()
 		expect(stage!.numCandidates).toBe(200)
 		expect(stage!.exact).toBeUndefined()
+	})
+})
+
+describe("normalizeAndFilterRankFusionResults", () => {
+	// Raw $rankFusion output, as measured on a live cluster with weights
+	// 0.7/0.3. The top document is ranked #1 in both pipelines and so sits
+	// exactly on the ceiling of (0.7 + 0.3) / (60 + 1).
+	const CEILING = 1 / 61
+	function raw(scores: number[]) {
+		return scores.map((score, i) => ({
+			path: `chunk/${i}`,
+			startLine: 0,
+			endLine: 0,
+			score,
+			snippet: `doc ${i}`,
+			source: "conversation" as const,
+		}))
+	}
+
+	it("rescales the RRF ceiling to 1", () => {
+		const out = normalizeAndFilterRankFusionResults(raw([CEILING]), 0, 0.7, 0.3)
+		expect(out).toHaveLength(1)
+		expect(out[0].score).toBeCloseTo(1, 5)
+	})
+
+	it("returns results at the shipped default minScore of 0.1", () => {
+		// S2 regression: these are real scores from a live $rankFusion run. Before
+		// rescaling, every one of them was below 0.1, so the whole hybrid path
+		// returned [] and silently fell through to the JS-merge fallback.
+		const observed = [0.01639344, 0.01612903, 0.01579861, 0.01076923]
+		expect(observed.every((s) => s < 0.1)).toBe(true)
+
+		const out = normalizeAndFilterRankFusionResults(
+			raw(observed),
+			0.1,
+			0.7,
+			0.3,
+		)
+		expect(out).toHaveLength(4)
+		expect(out[0].score).toBeCloseTo(1, 4)
+	})
+
+	it("keeps RRF ordering and stays within [0,1]", () => {
+		const out = normalizeAndFilterRankFusionResults(
+			raw([0.01639344, 0.01076923, 0.01612903]),
+			0,
+			0.7,
+			0.3,
+		)
+		expect(out.map((r) => r.snippet)).toEqual(["doc 0", "doc 1", "doc 2"])
+		for (const r of out) {
+			expect(r.score).toBeGreaterThan(0)
+			expect(r.score).toBeLessThanOrEqual(1)
+		}
+	})
+
+	it("still applies a threshold that is meaningful after rescaling", () => {
+		const out = normalizeAndFilterRankFusionResults(
+			raw([0.01639344, 0.01076923]),
+			0.9,
+			0.7,
+			0.3,
+		)
+		expect(out).toHaveLength(1)
+		expect(out[0].snippet).toBe("doc 0")
+	})
+
+	it("drops zero-score documents", () => {
+		const out = normalizeAndFilterRankFusionResults(
+			raw([0, CEILING]),
+			0,
+			0.7,
+			0.3,
+		)
+		expect(out).toHaveLength(1)
+		expect(out[0].snippet).toBe("doc 1")
+	})
+
+	it("returns nothing when the weights cannot produce a positive ceiling", () => {
+		expect(
+			normalizeAndFilterRankFusionResults(raw([CEILING]), 0, 0, 0),
+		).toEqual([])
 	})
 })

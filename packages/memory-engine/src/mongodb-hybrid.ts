@@ -412,10 +412,11 @@ function getNormalizer(method: SearchMethod): (score: number) => number {
 			// BM25/TF-IDF scores are unbounded [0, inf)
 			return normalizeBM25Score
 		case "hybrid":
-			// Both server-side fusion ($rankFusion/$scoreFusion) and our JS-merge
-			// (mergeHybridResultsMongoDB) already produce scores in ~[0,1].
-			// Use identity clamp rather than RRF scaling which would multiply by 60
-			// and flatten all scores to 1.0.
+			// Every hybrid producer reports in ~[0,1] by the time results reach
+			// here: $scoreFusion normalizes with sigmoid, mergeHybridResultsMongoDB
+			// divides by its own RRF ceiling, and hybridSearchRankFusion divides
+			// raw $rankFusion output by sum(weights)/61 at the source. Rescaling
+			// again here would be a second, wrong division — clamp only.
 			return normalizeVectorScore
 		default:
 			return normalizeVectorScore
