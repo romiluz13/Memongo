@@ -94,6 +94,8 @@ function harness(workspaceDir = process.cwd()): MongoDBMemoryManager {
 		getBridgeChunkBudget:
 			MongoDBMemoryManager.prototype["getBridgeChunkBudget"],
 		detectSearchMethod: MongoDBMemoryManager.prototype["detectSearchMethod"],
+		resolveObservedSearchMethod:
+			MongoDBMemoryManager.prototype["resolveObservedSearchMethod"],
 		setLastSearchMode: () => undefined,
 		recordSearchAccess: () => undefined,
 	} as unknown as MongoDBMemoryManager

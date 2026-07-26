@@ -10,6 +10,7 @@ import {
 	completeClaimedMemoryJob,
 	createMemoryJob,
 	failClaimedMemoryJob,
+	MEMORY_JOB_MAX_ATTEMPTS,
 	releaseStagedMemoryJob,
 	retryFailedMemoryJob,
 } from "./mongodb-memory-jobs.js"
@@ -837,5 +838,142 @@ describe("durable memory job leases (live MongoDB)", () => {
 			status: "running",
 			leaseOwner: "worker-second-attempt",
 		})
+	})
+
+	it("retries a failed job until it exhausts its attempt budget (C4)", async () => {
+		// Before this, `attempts` was incremented on every claim and read by
+		// nothing, so claimMemoryJob never matched a failed job. Extraction
+		// clears the event's extractionJobPendingAt marker when the job is
+		// released — before the work runs — so repairExtractionOutbox could not
+		// see it either. One transient failure dropped that event's memories
+		// permanently and silently.
+		const db = client.db(TEST_DB)
+		const agentId = `${AGENT}-retry-budget`
+		const jobId = `extraction-retry-${randomUUID()}`
+		await createMemoryJob({
+			db,
+			prefix: PREFIX,
+			job: {
+				jobId,
+				jobType: "extraction",
+				agentId,
+				status: "pending",
+				payload: { eventId: "event-retry" },
+			},
+		})
+
+		// Each round claims, fails, then waits out the backoff by moving the
+		// clock forward rather than sleeping.
+		let now = new Date("2026-07-23T00:00:00.000Z")
+		const observedAttempts: number[] = []
+		for (let round = 0; round < MEMORY_JOB_MAX_ATTEMPTS; round++) {
+			const claimed = await claimMemoryJob({
+				db,
+				prefix: PREFIX,
+				agentId,
+				jobType: "extraction",
+				workerId: `worker-${round}`,
+				leaseMs: 60_000,
+				now,
+			})
+			expect(claimed).not.toBeNull()
+			observedAttempts.push(claimed!.attempts)
+			await failClaimedMemoryJob({
+				db,
+				prefix: PREFIX,
+				jobId,
+				agentId,
+				leaseOwner: claimed!.leaseOwner,
+				leaseToken: claimed!.leaseToken,
+				now,
+				error: `transient failure ${round}`,
+				attempts: claimed!.attempts,
+			})
+			// Past any backoff this job could have been given.
+			now = new Date(now.getTime() + 2 * 60 * 60_000)
+		}
+
+		expect(observedAttempts).toEqual([1, 2, 3])
+
+		// Budget spent: the job stays failed as an explicit dead letter.
+		const exhausted = await claimMemoryJob({
+			db,
+			prefix: PREFIX,
+			agentId,
+			jobType: "extraction",
+			workerId: "worker-final",
+			leaseMs: 60_000,
+			now,
+		})
+		expect(exhausted).toBeNull()
+
+		const doc = await memoryJobsCollection(db, PREFIX).findOne({ jobId })
+		expect(doc?.status).toBe("failed")
+		expect(doc?.attempts).toBe(MEMORY_JOB_MAX_ATTEMPTS)
+	})
+
+	it("holds a failed job until its retry backoff elapses", async () => {
+		const db = client.db(TEST_DB)
+		const agentId = `${AGENT}-retry-backoff`
+		const jobId = `extraction-backoff-${randomUUID()}`
+		await createMemoryJob({
+			db,
+			prefix: PREFIX,
+			job: {
+				jobId,
+				jobType: "extraction",
+				agentId,
+				status: "pending",
+				payload: { eventId: "event-backoff" },
+			},
+		})
+
+		const now = new Date("2026-07-23T00:00:00.000Z")
+		const claimed = await claimMemoryJob({
+			db,
+			prefix: PREFIX,
+			agentId,
+			jobType: "extraction",
+			workerId: "worker-a",
+			leaseMs: 60_000,
+			now,
+		})
+		expect(claimed).not.toBeNull()
+		await failClaimedMemoryJob({
+			db,
+			prefix: PREFIX,
+			jobId,
+			agentId,
+			leaseOwner: claimed!.leaseOwner,
+			leaseToken: claimed!.leaseToken,
+			now,
+			error: "transient failure",
+			attempts: claimed!.attempts,
+		})
+
+		// Immediately after failing, the job is still inside its backoff window,
+		// so a job that fails for a persistent reason cannot spin the worker.
+		const tooSoon = await claimMemoryJob({
+			db,
+			prefix: PREFIX,
+			agentId,
+			jobType: "extraction",
+			workerId: "worker-b",
+			leaseMs: 60_000,
+			now: new Date(now.getTime() + 1_000),
+		})
+		expect(tooSoon).toBeNull()
+
+		const afterBackoff = await claimMemoryJob({
+			db,
+			prefix: PREFIX,
+			agentId,
+			jobType: "extraction",
+			workerId: "worker-c",
+			leaseMs: 60_000,
+			now: new Date(now.getTime() + 10 * 60_000),
+		})
+		expect(afterBackoff).not.toBeNull()
+		expect(afterBackoff!.attempts).toBe(2)
 	})
 })

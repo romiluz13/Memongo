@@ -17,6 +17,24 @@ const DURABLE_JOB_WRITE_CONCERN = {
 	wtimeoutMS: 5_000,
 }
 
+/**
+ * How many times a job may be claimed before it is left failed for good.
+ *
+ * `attempts` has always been incremented on claim but never read, so a failed
+ * job was terminal by accident rather than by policy: nothing reclaimed it,
+ * and for extraction the event's `extractionJobPendingAt` marker is cleared
+ * when the job is released — before the work runs — so the outbox repair pass
+ * could not see it either. A single transient extraction failure therefore
+ * dropped that event's memories permanently and silently.
+ */
+export const MEMORY_JOB_MAX_ATTEMPTS = 3
+
+/** Backoff before a failed job becomes claimable again: 1min, 4min, ... */
+export function memoryJobRetryDelayMs(attempts: number): number {
+	const safeAttempts = Math.max(1, Math.floor(attempts))
+	return Math.min(60_000 * 4 ** (safeAttempts - 1), 60 * 60_000)
+}
+
 function clampListLimit(limit?: number): number {
 	if (!Number.isFinite(limit)) {
 		return DEFAULT_LIST_LIMIT
@@ -83,6 +101,14 @@ export async function claimMemoryJob(params: {
 				{ status: "pending", stagedAt: { $exists: false } },
 				{ status: "running", leaseExpiresAt: { $lte: now } },
 				{ status: "running", leaseExpiresAt: { $exists: false } },
+				// A failed job is retried until it exhausts its attempt budget,
+				// after which it stays failed as an explicit dead letter. Jobs that
+				// failed before retryAt existed are eligible immediately.
+				{
+					status: "failed",
+					attempts: { $lt: MEMORY_JOB_MAX_ATTEMPTS },
+					$or: [{ retryAt: { $exists: false } }, { retryAt: { $lte: now } }],
+				},
 			],
 		},
 		{
@@ -95,7 +121,7 @@ export async function claimMemoryJob(params: {
 				leaseExpiresAt,
 			},
 			$inc: { attempts: 1 },
-			$unset: { completedAt: "", error: "", stagedAt: "" },
+			$unset: { completedAt: "", error: "", stagedAt: "", retryAt: "" },
 		},
 		{
 			sort: { createdAt: 1, jobId: 1 },
@@ -156,6 +182,8 @@ async function finishClaimedMemoryJob(
 	params: ClaimedJobTerminalParams & {
 		status: "completed" | "failed"
 		error?: string
+		/** Attempts already spent, used to space out the retry. */
+		attempts?: number
 	},
 ): Promise<boolean> {
 	const now = params.now ?? new Date()
@@ -163,6 +191,13 @@ async function finishClaimedMemoryJob(
 	const update: Record<string, unknown> = {
 		status: params.status,
 		completedAt,
+	}
+	if (params.status === "failed") {
+		// Claiming is what enforces the budget; this only spaces the retries out
+		// so a job that fails for a persistent reason does not spin.
+		update.retryAt = new Date(
+			now.getTime() + memoryJobRetryDelayMs(params.attempts ?? 1),
+		)
 	}
 	if (params.durationMs !== undefined) update.durationMs = params.durationMs
 	if (params.inputCount !== undefined) update.inputCount = params.inputCount
@@ -199,7 +234,7 @@ export async function completeClaimedMemoryJob(
 }
 
 export async function failClaimedMemoryJob(
-	params: ClaimedJobTerminalParams & { error: string },
+	params: ClaimedJobTerminalParams & { error: string; attempts?: number },
 ): Promise<boolean> {
 	return finishClaimedMemoryJob({ ...params, status: "failed" })
 }
@@ -235,6 +270,7 @@ export async function retryFailedMemoryJob(params: {
 				leaseToken: "",
 				leaseExpiresAt: "",
 				heartbeatAt: "",
+				retryAt: "",
 			},
 		},
 		{ writeConcern: DURABLE_JOB_WRITE_CONCERN },

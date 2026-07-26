@@ -1312,6 +1312,7 @@ const MEMORY_JOBS_SCHEMA: Document = {
 				},
 			},
 			attempts: { bsonType: "number", minimum: 0 },
+			retryAt: { bsonType: "date" },
 			stagedAt: { bsonType: "date" },
 			leaseOwner: { bsonType: "string" },
 			leaseToken: { bsonType: "string" },

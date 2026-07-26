@@ -8428,6 +8428,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 					durationMs: Date.now() - startedAt.getTime(),
 					error: err instanceof Error ? err.message : String(err),
 					metadata: { eventId },
+					attempts: job.attempts,
 				})
 			} catch (updateErr) {
 				log.warn(
