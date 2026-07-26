@@ -2040,8 +2040,12 @@ describe("detectCapabilities", () => {
 			})),
 		} as unknown as Db
 
+		// timeoutMs is the give-up budget, not the expected runtime: the mock
+		// succeeds on attempt 2, so this returns in ~1ms. It was 30ms, which the
+		// suite blew whenever the machine was loaded — a flaky failure that says
+		// nothing about the retry behavior under test.
 		const caps = await waitForSearchCapabilities(db, "test_chunks", {
-			timeoutMs: 30,
+			timeoutMs: 10_000,
 			pollMs: 1,
 		})
 		expect(caps.vectorSearch).toBe(true)
@@ -2078,7 +2082,9 @@ describe("waitForSearchIndexesQueryable", () => {
 
 		const result = await waitForSearchIndexesQueryable(collection, {
 			indexNames: ["events_text"],
-			timeoutMs: 200,
+			// Same reasoning as the waitForSearchCapabilities retry test above:
+			// the give-up budget must not double as the expected runtime.
+			timeoutMs: 10_000,
 			pollMs: 1,
 		})
 

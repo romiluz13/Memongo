@@ -2436,9 +2436,35 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 	// MemorySearchManager.search
 	// ---------------------------------------------------------------------------
 
-	private buildConversationChunkFilter(params?: {
+	/**
+	 * Resolve the tenant identity a read must be confined to.
+	 *
+	 * Every read path resolves identity through here so that an absent `scope`
+	 * can never degrade into "all scopes" — the filter builders below take
+	 * `scope`/`scopeRef` as required arguments, and this is the only sanctioned
+	 * way to produce them.
+	 */
+	private resolveSearchIdentity(opts?: {
 		scope?: MemoryScope
 		scopeRef?: string
+		sessionKey?: string
+	}): { scope: MemoryScope; scopeRef: string } {
+		const scope: MemoryScope =
+			opts?.scope ?? (opts?.sessionKey ? "session" : "agent")
+		const scopeRef =
+			opts?.scopeRef ??
+			resolveScopeRef({
+				scope,
+				agentId: this.agentId,
+				sessionId: opts?.sessionKey,
+				workspaceDir: this.workspaceDir,
+			})
+		return { scope, scopeRef }
+	}
+
+	private buildConversationChunkFilter(params: {
+		scope: MemoryScope
+		scopeRef: string
 	}): Document {
 		const sources = ["conversation", "sessions"]
 		const sessionMode = resolveSessionEvidenceMode(
@@ -2470,8 +2496,8 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		return {
 			source: { $in: sources },
 			agentId: this.agentId,
-			...(params?.scope ? { scope: params.scope } : {}),
-			...(params?.scopeRef ? { scopeRef: params.scopeRef } : {}),
+			scope: params.scope,
+			scopeRef: params.scopeRef,
 			status: { $ne: "deleted" },
 		}
 	}
@@ -2486,13 +2512,16 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		}
 	}
 
-	private buildScopeAwareBridgeChunkFilter(
-		activeSources: ActiveSources,
-		params: { scope: MemoryScope; scopeRef: string },
-	): Document | undefined {
-		if (!activeSources.conversation || isBenchmarkStrictMode()) {
-			return undefined
-		}
+	/**
+	 * Bridge notes live in the workspace namespace, so they are only readable by
+	 * a caller whose own identity IS that workspace. Any other identity gets
+	 * `undefined`, and the caller must skip the bridge lane entirely rather than
+	 * search with no filter.
+	 */
+	private buildBridgeChunkFilterForIdentity(params: {
+		scope: MemoryScope
+		scopeRef: string
+	}): Document | undefined {
 		if (
 			params.scope !== "workspace" ||
 			params.scopeRef !== this.workspaceScopeRef
@@ -2500,6 +2529,16 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 			return undefined
 		}
 		return this.buildBridgeChunkFilter()
+	}
+
+	private buildScopeAwareBridgeChunkFilter(
+		activeSources: ActiveSources,
+		params: { scope: MemoryScope; scopeRef: string },
+	): Document | undefined {
+		if (!activeSources.conversation || isBenchmarkStrictMode()) {
+			return undefined
+		}
+		return this.buildBridgeChunkFilterForIdentity(params)
 	}
 
 	private getBridgeChunkBudget(maxResults: number): number {
@@ -2616,6 +2655,12 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		)
 		const bridgeMaxResults = this.getBridgeChunkBudget(maxResults)
 		const emptyResults: MemorySearchResult[] = []
+		// The legacy path is a fallback for searchV2, so it must be confined to
+		// exactly the same tenant identity searchV2 would have used. Resolving it
+		// here (rather than passing `opts` through raw) is what keeps an absent
+		// `scope` from widening the read to every scope under this agentId.
+		const identity = this.resolveSearchIdentity(opts)
+		const bridgeFilter = this.buildBridgeChunkFilterForIdentity(identity)
 		const [
 			runtimeConversationResults,
 			bridgeConversationResults,
@@ -2633,10 +2678,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 							minScore,
 							numCandidates: mongoCfg.numCandidates,
 							sessionKey: opts?.sessionKey,
-							filter: this.buildConversationChunkFilter({
-								scope: opts?.scope,
-								scopeRef: opts?.scopeRef,
-							}),
+							filter: this.buildConversationChunkFilter(identity),
 							fusionMethod: mongoCfg.fusionMethod,
 							capabilities: this.capabilities,
 							vectorIndexName: `${this.prefix}chunks_vector`,
@@ -2650,7 +2692,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 							},
 						},
 					),
-			!activeSources.conversation
+			!activeSources.conversation || !bridgeFilter
 				? emptyResults
 				: mongoSearch(
 						chunksCollection(this.db, this.prefix),
@@ -2661,7 +2703,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 							minScore,
 							numCandidates: mongoCfg.numCandidates,
 							sessionKey: opts?.sessionKey,
-							filter: this.buildBridgeChunkFilter(),
+							filter: bridgeFilter,
 							fusionMethod: mongoCfg.fusionMethod,
 							capabilities: this.capabilities,
 							vectorIndexName: `${this.prefix}chunks_vector`,
@@ -2684,7 +2726,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 						{
 							maxResults: Math.max(3, Math.floor(maxResults / 3)),
 							minScore,
-							scopeRef: this.agentScopeRef,
+							scopeRef: identity.scopeRef,
 							numCandidates: mongoCfg.numCandidates,
 							vectorIndexName: `${this.prefix}kb_chunks_vector`,
 							textIndexName: `${this.prefix}kb_chunks_text`,
@@ -2709,7 +2751,11 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 						{
 							maxResults: Math.max(3, Math.floor(maxResults / 3)),
 							minScore,
-							filter: { agentId: this.agentId },
+							filter: {
+								agentId: this.agentId,
+								scope: identity.scope,
+								scopeRef: identity.scopeRef,
+							},
 							numCandidates: mongoCfg.numCandidates,
 							capabilities: this.capabilities,
 							vectorIndexName: `${this.prefix}structured_mem_vector`,
@@ -3378,6 +3424,13 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		const explainSources = resolveExplainSources(sourceScope, activeSources)
 		const bridgeMaxResults = this.getBridgeChunkBudget(maxResults)
 		const emptyResults: MemorySearchResult[] = []
+		// relevanceExplain is a diagnostic view of what search() would return, so
+		// it resolves the same identity from the same inputs and must never read
+		// wider than the search path it is explaining.
+		const identity = this.resolveSearchIdentity({
+			sessionKey: params.sessionKey,
+		})
+		const bridgeFilter = this.buildBridgeChunkFilterForIdentity(identity)
 
 		let mergedResults: MemorySearchResult[] = []
 		if (sourceScope === "memory") {
@@ -3394,7 +3447,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 							minScore,
 							numCandidates: mongoCfg.numCandidates,
 							sessionKey: params.sessionKey,
-							filter: this.buildConversationChunkFilter(),
+							filter: this.buildConversationChunkFilter(identity),
 							fusionMethod: mongoCfg.fusionMethod,
 							capabilities: this.capabilities,
 							vectorIndexName: `${this.prefix}chunks_vector`,
@@ -3406,27 +3459,29 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 							onTrace: (event) => traces.push(event),
 						},
 					),
-					mongoSearch(
-						chunksCollection(this.db, this.prefix),
-						query,
-						queryVector,
-						{
-							maxResults,
-							minScore,
-							numCandidates: mongoCfg.numCandidates,
-							sessionKey: params.sessionKey,
-							filter: this.buildBridgeChunkFilter(),
-							fusionMethod: mongoCfg.fusionMethod,
-							capabilities: this.capabilities,
-							vectorIndexName: `${this.prefix}chunks_vector`,
-							textIndexName: `${this.prefix}chunks_text`,
-							vectorWeight: 0.7,
-							textWeight: 0.3,
-							embeddingMode: mongoCfg.embeddingMode,
-							explain: explainOpts,
-							onTrace: (event) => traces.push(event),
-						},
-					),
+					!bridgeFilter
+						? emptyResults
+						: mongoSearch(
+								chunksCollection(this.db, this.prefix),
+								query,
+								queryVector,
+								{
+									maxResults,
+									minScore,
+									numCandidates: mongoCfg.numCandidates,
+									sessionKey: params.sessionKey,
+									filter: bridgeFilter,
+									fusionMethod: mongoCfg.fusionMethod,
+									capabilities: this.capabilities,
+									vectorIndexName: `${this.prefix}chunks_vector`,
+									textIndexName: `${this.prefix}chunks_text`,
+									vectorWeight: 0.7,
+									textWeight: 0.3,
+									embeddingMode: mongoCfg.embeddingMode,
+									explain: explainOpts,
+									onTrace: (event) => traces.push(event),
+								},
+							),
 				])
 				const legacyMethod: SearchMethod = this.detectSearchMethod(mongoCfg)
 				const normalizedRuntime = normalizeSearchResults(
@@ -3460,7 +3515,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 						{
 							maxResults,
 							minScore,
-							scopeRef: this.agentScopeRef,
+							scopeRef: identity.scopeRef,
 							numCandidates: mongoCfg.numCandidates,
 							vectorIndexName: `${this.prefix}kb_chunks_vector`,
 							textIndexName: `${this.prefix}kb_chunks_text`,
@@ -3480,7 +3535,11 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 						{
 							maxResults,
 							minScore,
-							filter: { agentId: this.agentId },
+							filter: {
+								agentId: this.agentId,
+								scope: identity.scope,
+								scopeRef: identity.scopeRef,
+							},
 							numCandidates: mongoCfg.numCandidates,
 							capabilities: this.capabilities,
 							vectorIndexName: `${this.prefix}structured_mem_vector`,
@@ -3507,7 +3566,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 								minScore,
 								numCandidates: mongoCfg.numCandidates,
 								sessionKey: params.sessionKey,
-								filter: this.buildConversationChunkFilter(),
+								filter: this.buildConversationChunkFilter(identity),
 								fusionMethod: mongoCfg.fusionMethod,
 								capabilities: this.capabilities,
 								vectorIndexName: `${this.prefix}chunks_vector`,
@@ -3520,7 +3579,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 							},
 						),
 				// Bridge-note chunks — same collection, different namespace filter
-				!explainSources.conversation
+				!explainSources.conversation || !bridgeFilter
 					? emptyResults
 					: mongoSearch(
 							chunksCollection(this.db, this.prefix),
@@ -3531,7 +3590,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 								minScore,
 								numCandidates: mongoCfg.numCandidates,
 								sessionKey: params.sessionKey,
-								filter: this.buildBridgeChunkFilter(),
+								filter: bridgeFilter,
 								fusionMethod: mongoCfg.fusionMethod,
 								capabilities: this.capabilities,
 								vectorIndexName: `${this.prefix}chunks_vector`,
@@ -3553,7 +3612,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 							{
 								maxResults: Math.max(3, Math.floor(maxResults / 3)),
 								minScore,
-								scopeRef: this.agentScopeRef,
+								scopeRef: identity.scopeRef,
 								numCandidates: mongoCfg.numCandidates,
 								vectorIndexName: `${this.prefix}kb_chunks_vector`,
 								textIndexName: `${this.prefix}kb_chunks_text`,
@@ -3576,7 +3635,11 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 							{
 								maxResults: Math.max(3, Math.floor(maxResults / 3)),
 								minScore,
-								filter: { agentId: this.agentId },
+								filter: {
+									agentId: this.agentId,
+									scope: identity.scope,
+									scopeRef: identity.scopeRef,
+								},
 								numCandidates: mongoCfg.numCandidates,
 								capabilities: this.capabilities,
 								vectorIndexName: `${this.prefix}structured_mem_vector`,
@@ -7717,6 +7780,8 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 								db: this.db,
 								prefix: this.prefix,
 								agentId: this.agentId,
+								scope: params.scope,
+								scopeRef: params.scopeRef,
 								results: result.results,
 								maxResults: params.maxResults,
 							})

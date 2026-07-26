@@ -55,6 +55,8 @@ describe("expandSearchContext", () => {
 			db,
 			prefix: "test_",
 			agentId: "agent1",
+			scope: "session",
+			scopeRef: "agent:agent1:session:s1",
 			results,
 		})
 		expect(expanded).toHaveLength(1)
@@ -68,6 +70,8 @@ describe("expandSearchContext", () => {
 			db,
 			prefix: "test_",
 			agentId: "agent1",
+			scope: "session",
+			scopeRef: "agent:agent1:session:s1",
 			results,
 		})
 		expect(expanded).toHaveLength(1)
@@ -106,12 +110,44 @@ describe("expandSearchContext", () => {
 			db,
 			prefix: "test_",
 			agentId: "agent1",
+			scope: "session",
+			scopeRef: "agent:agent1:session:s1",
 			results,
 		})
 		// Original + 2 neighbors
 		expect(expanded.length).toBeGreaterThanOrEqual(2)
 		const paths = expanded.map((r) => r.path)
 		expect(paths).toContain("events/mid")
+	})
+
+	it("confines the neighbor lookup to the caller's scope and scopeRef", async () => {
+		// Regression (#62 / L2): expansion re-queries the events collection
+		// directly. Without scope+scopeRef in the filter, a sessionId shared
+		// across scopes pulls in another tenant's neighbor events.
+		const ts = new Date("2026-01-01T00:02:00Z")
+		const { db, findFn } = createMockDb([])
+		await expandSearchContext({
+			db,
+			prefix: "test_",
+			agentId: "agent1",
+			scope: "user",
+			scopeRef: "agent:agent1:user:alice",
+			results: [
+				makeResult({
+					path: "events/mid",
+					sessionId: "s1",
+					timestamp: ts,
+					score: 0.9,
+				}),
+			],
+		})
+		expect(findFn).toHaveBeenCalledTimes(1)
+		expect(findFn.mock.calls[0][0]).toMatchObject({
+			agentId: "agent1",
+			scope: "user",
+			scopeRef: "agent:agent1:user:alice",
+			sessionId: "s1",
+		})
 	})
 
 	it("assigns neighbor score as parentScore * 0.95", async () => {
@@ -138,6 +174,8 @@ describe("expandSearchContext", () => {
 			db,
 			prefix: "test_",
 			agentId: "agent1",
+			scope: "session",
+			scopeRef: "agent:agent1:session:s1",
 			results,
 		})
 		const neighbor = expanded.find((r) => r.path === "events/prev")
@@ -178,6 +216,8 @@ describe("expandSearchContext", () => {
 			db,
 			prefix: "test_",
 			agentId: "agent1",
+			scope: "session",
+			scopeRef: "agent:agent1:session:s1",
 			results,
 		})
 		// Should not duplicate event b
@@ -222,6 +262,8 @@ describe("expandSearchContext", () => {
 			db,
 			prefix: "test_",
 			agentId: "agent1",
+			scope: "session",
+			scopeRef: "agent:agent1:session:s1",
 			results,
 			maxResults: 3, // Only room for 3 total
 		})
@@ -243,6 +285,8 @@ describe("expandSearchContext", () => {
 			db,
 			prefix: "test_",
 			agentId: "agent1",
+			scope: "session",
+			scopeRef: "agent:agent1:session:s1",
 			results,
 		})
 		// Original only, no neighbors added
@@ -269,6 +313,8 @@ describe("expandSearchContext", () => {
 			db,
 			prefix: "test_",
 			agentId: "agent1",
+			scope: "session",
+			scopeRef: "agent:agent1:session:s1",
 			results,
 		})
 		expect(expanded).toHaveLength(2)
