@@ -2775,7 +2775,10 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 			...runtimeConversationResults,
 			...bridgeConversationResults,
 		]
-		const legacyMethod: SearchMethod = this.detectSearchMethod(mongoCfg)
+		const legacyMethod: SearchMethod = this.resolveObservedSearchMethod(
+			traceEvents,
+			mongoCfg,
+		)
 		const normalizedLegacy = normalizeSearchResults(
 			conversationResults,
 			legacyMethod,
@@ -3483,7 +3486,10 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 								},
 							),
 				])
-				const legacyMethod: SearchMethod = this.detectSearchMethod(mongoCfg)
+				const legacyMethod: SearchMethod = this.resolveObservedSearchMethod(
+					traces,
+					mongoCfg,
+				)
 				const normalizedRuntime = normalizeSearchResults(
 					runtimeHits,
 					legacyMethod,
@@ -3657,7 +3663,10 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 				...runtimeConversationResults,
 				...bridgeConversationResults,
 			]
-			const legacyMethod: SearchMethod = this.detectSearchMethod(mongoCfg)
+			const legacyMethod: SearchMethod = this.resolveObservedSearchMethod(
+				traces,
+				mongoCfg,
+			)
 			const normalizedLegacy = normalizeSearchResults(
 				conversationResults,
 				legacyMethod,
@@ -6216,15 +6225,13 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 	// ---------------------------------------------------------------------------
 
 	private detectSearchMethod(mongoCfg: ResolvedMongoDBConfig): SearchMethod {
-		// Determine which search method mongoSearch() likely used based on
-		// capabilities and fusion method configuration.
+		// Best guess from configuration alone. Only correct when mongoSearch
+		// actually took the path its capabilities allow — prefer
+		// resolveObservedSearchMethod, which uses the trace of what ran.
 		const canVector =
 			mongoCfg.embeddingMode === "automated" && this.capabilities.vectorSearch
 
 		if (canVector && this.capabilities.textSearch) {
-			// Both server-side fusion and JS-merge fallback produce hybrid-like
-			// scores in ~[0,1] range (server fusion via $meta:"searchScore",
-			// JS merge via our RRF normalization in mergeHybridResultsMongoDB).
 			return "hybrid"
 		}
 		if (canVector) {
@@ -6232,6 +6239,40 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		}
 		// Text-only or $text fallback
 		return "text"
+	}
+
+	/**
+	 * Resolve which search method actually produced these results, from the
+	 * trace mongoSearch emits, falling back to the configuration guess only
+	 * when nothing succeeded.
+	 *
+	 * This picks the normalizer, so guessing wrong corrupts ranking rather than
+	 * just mislabeling. mongoSearch degrades through hybrid → vector → keyword
+	 * → $text, and the last two return raw BM25/textScore values on an
+	 * unbounded scale. Calling those "hybrid" sends them to the [0,1] clamp,
+	 * which pins every lexical hit above ~1 to exactly 1.0 — sorting degraded
+	 * results above genuine cosine hits from the KB and structured lanes, whose
+	 * scores are normalized honestly. normalizeBM25Score exists precisely for
+	 * this case; it was simply never reached.
+	 */
+	private resolveObservedSearchMethod(
+		traceEvents: SearchTraceEvent[],
+		mongoCfg: ResolvedMongoDBConfig,
+	): SearchMethod {
+		const succeeded = [...traceEvents].toReversed().find((event) => event.ok)
+		switch (succeeded?.method) {
+			case "scoreFusion":
+			case "rankFusion":
+			case "js-merge":
+				return "hybrid"
+			case "vector":
+				return "vector"
+			case "keyword":
+			case "$text":
+				return "text"
+			default:
+				return this.detectSearchMethod(mongoCfg)
+		}
 	}
 
 	// ---------------------------------------------------------------------------

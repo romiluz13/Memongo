@@ -6365,3 +6365,91 @@ describe("scope-safe cache writes", () => {
 		}
 	})
 })
+
+describe("resolveObservedSearchMethod", () => {
+	// C8 regression. The normalizer is picked from this value, so guessing
+	// "hybrid" while mongoSearch actually degraded to keyword/$text sent raw
+	// BM25 scores through the [0,1] clamp. Every lexical hit scoring above 1
+	// pinned to exactly 1.0 and sorted above genuine cosine hits from the KB
+	// and structured lanes.
+	const mongoCfg = {
+		embeddingMode: "automated",
+	} as unknown as Parameters<
+		typeof MongoDBMemoryManager.prototype.resolveObservedSearchMethod
+	>[1]
+
+	function resolve(
+		traceEvents: Array<{ method: string; ok: boolean }>,
+		capabilities: { vectorSearch: boolean; textSearch: boolean },
+	) {
+		const self = {
+			capabilities,
+			detectSearchMethod: MongoDBMemoryManager.prototype["detectSearchMethod"],
+		}
+		return MongoDBMemoryManager.prototype["resolveObservedSearchMethod"].call(
+			self as never,
+			traceEvents as never,
+			mongoCfg,
+		)
+	}
+
+	const fullCaps = { vectorSearch: true, textSearch: true }
+
+	it("reports text when the search degraded to keyword, despite hybrid capabilities", () => {
+		expect(
+			resolve(
+				[
+					{ method: "rankFusion", ok: false },
+					{ method: "js-merge", ok: false },
+					{ method: "vector", ok: false },
+					{ method: "keyword", ok: true },
+				],
+				fullCaps,
+			),
+		).toBe("text")
+	})
+
+	it("reports text for the last-resort $text path", () => {
+		expect(resolve([{ method: "$text", ok: true }], fullCaps)).toBe("text")
+	})
+
+	it("reports vector when only the vector fallback succeeded", () => {
+		expect(
+			resolve(
+				[
+					{ method: "rankFusion", ok: false },
+					{ method: "vector", ok: true },
+				],
+				fullCaps,
+			),
+		).toBe("vector")
+	})
+
+	it("reports hybrid for each server-side fusion path and the JS merge", () => {
+		for (const method of ["scoreFusion", "rankFusion", "js-merge"]) {
+			expect(resolve([{ method, ok: true }], fullCaps)).toBe("hybrid")
+		}
+	})
+
+	it("uses the latest successful trace when several succeeded", () => {
+		expect(
+			resolve(
+				[
+					{ method: "rankFusion", ok: true },
+					{ method: "keyword", ok: true },
+				],
+				fullCaps,
+			),
+		).toBe("text")
+	})
+
+	it("falls back to the capability guess when nothing succeeded", () => {
+		expect(resolve([{ method: "rankFusion", ok: false }], fullCaps)).toBe(
+			"hybrid",
+		)
+		expect(resolve([], { vectorSearch: true, textSearch: false })).toBe(
+			"vector",
+		)
+		expect(resolve([], { vectorSearch: false, textSearch: true })).toBe("text")
+	})
+})
