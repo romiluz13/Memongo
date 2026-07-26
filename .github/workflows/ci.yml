@@ -37,3 +37,42 @@ jobs:
 
       - name: Test
         run: bun run test
+
+  e2e:
+    name: E2E against real MongoDB (tier A)
+    runs-on: ubuntu-latest
+    services:
+      mongodb:
+        image: mongodb/mongodb-atlas-local:preview
+        ports:
+          - 27017:27017
+        env:
+          MONGODB_ATLAS_TELEMETRY_ENABLE: "false"
+        options: >-
+          --health-cmd "/usr/local/bin/runner healthcheck"
+          --health-interval 10s
+          --health-timeout 10s
+          --health-retries 20
+          --health-start-period 40s
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.2.5
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build
+        run: bun run build
+
+      # Tier A covers the paths that need only MongoDB: transactions, indexes,
+      # tenant isolation, and background jobs. Tiers needing a Voyage/LLM key
+      # run in the nightly workflow, so this job gates every PR without secrets.
+      - name: E2E (tier A)
+        env:
+          MONGODB_TEST_URI: mongodb://127.0.0.1:27017/?directConnection=true
+        run: bun run --filter @memongo/memory-engine test:e2e:tier-a

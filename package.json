@@ -15,6 +15,7 @@
 		"build": "turbo run build",
 		"dev": "turbo run dev",
 		"test": "turbo run test",
+		"test:e2e": "turbo run test:e2e",
 		"check-types": "turbo run check-types",
 		"check-publishability": "bun scripts/check-publishability.ts",
 		"lint": "biome check . --diagnostic-level=error",
