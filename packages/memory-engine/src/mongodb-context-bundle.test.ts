@@ -250,6 +250,74 @@ describe("mongodb-context-bundle", () => {
 		)
 	})
 
+	it("ignores a requested sessionId that would escape a restricted scope", async () => {
+		// A user-scoped caller asks for another tenant's session. sessionId is not
+		// a dimension of the authorized policy, so it must not replace the
+		// authorized scope/scopeRef in the recent-events query.
+		const bundle = await buildContextBundle({
+			db: {} as Db,
+			prefix: PREFIX,
+			agentId: AGENT_ID,
+			scope: "user",
+			scopeRef: "user:alice",
+			request: {
+				query: "Phoenix handoff",
+				sessionId: "session-belonging-to-bob",
+				tokenBudget: 320,
+			},
+		})
+
+		expect(
+			vi.mocked(vi.mocked(eventsCollection).mock.results[0]?.value.find).mock
+				.calls[0]?.[0],
+		).toEqual({
+			agentId: AGENT_ID,
+			scope: "user",
+			scopeRef: "user:alice",
+		})
+		expect(bundle.sessionId).toBeUndefined()
+	})
+
+	it("narrows to a session for an agent-wide caller, which owns every session", async () => {
+		await buildContextBundle({
+			db: {} as Db,
+			prefix: PREFIX,
+			agentId: AGENT_ID,
+			scope: "agent",
+			scopeRef: `agent:${AGENT_ID}`,
+			request: { sessionId: "session-main", tokenBudget: 320 },
+		})
+
+		expect(
+			vi.mocked(vi.mocked(eventsCollection).mock.results[0]?.value.find).mock
+				.calls[0]?.[0],
+		).toEqual({
+			agentId: AGENT_ID,
+			scope: "session",
+			scopeRef: "session:session-main",
+		})
+	})
+
+	it("keeps a session-scoped caller inside its own session", async () => {
+		await buildContextBundle({
+			db: {} as Db,
+			prefix: PREFIX,
+			agentId: AGENT_ID,
+			scope: "session",
+			scopeRef: "session:mine",
+			request: { sessionId: "session-belonging-to-bob", tokenBudget: 320 },
+		})
+
+		expect(
+			vi.mocked(vi.mocked(eventsCollection).mock.results[0]?.value.find).mock
+				.calls[0]?.[0],
+		).toEqual({
+			agentId: AGENT_ID,
+			scope: "session",
+			scopeRef: "session:mine",
+		})
+	})
+
 	it("truncates sections to stay within the requested token budget", async () => {
 		vi.mocked(episodesCollection).mockReturnValue(
 			createFindCollection({ next: null }),
