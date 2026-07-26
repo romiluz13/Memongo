@@ -361,14 +361,28 @@ export function splitAtlasSearchFilter(filter?: Document): {
 	const visit = (node: Document) => {
 		for (const [key, value] of Object.entries(node)) {
 			if (key === "$and" && Array.isArray(value)) {
-				for (const entry of value) {
-					if (isPlainObject(entry)) {
+				if (value.every((entry) => isPlainObject(entry))) {
+					for (const entry of value) {
 						visit(entry as Document)
-					} else {
-						postMatchClauses.push({ $and: value as unknown[] })
-						return
 					}
+				} else {
+					// A non-object member means this isn't a shape we can flatten.
+					// Hand the whole clause to $match and keep visiting siblings —
+					// bailing out here used to drop every remaining key on the node,
+					// silently widening the query.
+					postMatchClauses.push({ $and: value as unknown[] })
 				}
+				continue
+			}
+
+			// Any other operator key ($or, $nor, $not, $expr, ...) has no path to
+			// bind to. buildSearchFilterClause would treat the operator itself as a
+			// field path and emit e.g. {in: {path: "$or", value: [{...}]}}, which
+			// mongot rejects outright ("must be a boolean, objectId, number,
+			// string, date, uuid, or null"), taking the whole Atlas Search pipeline
+			// down with it. $match handles these correctly, so route them there.
+			if (key.startsWith("$")) {
+				postMatchClauses.push({ [key]: value })
 				continue
 			}
 

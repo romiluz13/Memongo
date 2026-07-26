@@ -1204,3 +1204,68 @@ describe("normalizeAndFilterRankFusionResults", () => {
 		).toEqual([])
 	})
 })
+
+describe("splitAtlasSearchFilter operator handling", () => {
+	it("routes $or to $match instead of inventing a $or field path", () => {
+		// S1 regression. This used to emit {in: {path: "$or", value: [{...}]}},
+		// which mongot rejects with "compound.filter[N].in.value[0] must be a
+		// boolean, objectId, number, string, date, uuid, or null" — verified
+		// against a live cluster. That error took down the entire $search
+		// pipeline, so any query carrying a $or silently degraded to JS merge.
+		const or = [{ scope: "user" }, { scope: "agent" }]
+		const out = splitAtlasSearchFilter({ agentId: "a1", $or: or })
+
+		expect(out.compoundFilter).toEqual([
+			{ equals: { path: "agentId", value: "a1" } },
+		])
+		expect(out.postMatch).toEqual({ $or: or })
+	})
+
+	it("routes bi-temporal $and-of-$or filters to $match", () => {
+		// buildBitemporalFilter emits exactly this shape, so it is the realistic
+		// way a $or reaches the Atlas Search path.
+		const asOf = new Date("2026-07-26T00:00:00Z")
+		const out = splitAtlasSearchFilter({
+			agentId: "a1",
+			$and: [
+				{ $or: [{ validAt: { $exists: false } }, { validAt: { $lte: asOf } }] },
+				{
+					$or: [
+						{ invalidAt: { $exists: false } },
+						{ invalidAt: { $gt: asOf } },
+					],
+				},
+			],
+		})
+
+		expect(out.compoundFilter).toEqual([
+			{ equals: { path: "agentId", value: "a1" } },
+		])
+		expect(out.postMatch).toEqual({
+			$and: [
+				{ $or: [{ validAt: { $exists: false } }, { validAt: { $lte: asOf } }] },
+				{
+					$or: [
+						{ invalidAt: { $exists: false } },
+						{ invalidAt: { $gt: asOf } },
+					],
+				},
+			],
+		})
+	})
+
+	it("keeps sibling clauses when an $and cannot be flattened", () => {
+		// The old code returned out of the whole visit here, so `agentId` was
+		// dropped from both the compound filter and $match — a silently wider
+		// query rather than a narrower one.
+		const out = splitAtlasSearchFilter({
+			$and: ["not-an-object"],
+			agentId: "a1",
+		})
+
+		expect(out.compoundFilter).toEqual([
+			{ equals: { path: "agentId", value: "a1" } },
+		])
+		expect(out.postMatch).toEqual({ $and: ["not-an-object"] })
+	})
+})
