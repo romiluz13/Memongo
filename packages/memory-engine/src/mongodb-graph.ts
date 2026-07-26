@@ -560,13 +560,16 @@ export async function upsertRelation(params: {
 						: existing.createdAt instanceof Date
 							? existing.createdAt
 							: now
+				// No $inc here: this event was already applied to this relation, so
+				// re-applying it is a replay, not new reinforcement. Incrementing
+				// would also make concurrent writers of the SAME event each add one
+				// (withTransaction re-runs this callback after a WriteConflict).
 				update = {
 					$set: {
 						...setDoc,
 						validFrom: currentValidFrom,
 						lastConfirmedAt: now,
 					},
-					$inc: { reinforcementCount: 1 },
 				}
 			} else if (!hasRelationChanged(existing, relation)) {
 				const currentValidFrom =

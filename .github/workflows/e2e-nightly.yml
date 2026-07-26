@@ -1,0 +1,52 @@
+name: E2E Nightly (full)
+
+# Tier A runs on every PR in ci.yml with no secrets. This workflow runs the
+# full e2e suite, including the paths that need an Atlas Model key for
+# auto-embeddings (Voyage) and an enrichment model for LLM extraction.
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+jobs:
+  e2e-full:
+    name: Full E2E against real MongoDB
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    services:
+      mongodb:
+        image: mongodb/mongodb-atlas-local:preview
+        ports:
+          - 27017:27017
+        env:
+          # Auto-embeddings are served by mongot inside the container, so the
+          # key has to be present on the container, not just the test process.
+          VOYAGE_API_KEY: ${{ secrets.VOYAGE_API_KEY }}
+          MONGODB_ATLAS_TELEMETRY_ENABLE: "false"
+        options: >-
+          --health-cmd "/usr/local/bin/runner healthcheck"
+          --health-interval 10s
+          --health-timeout 10s
+          --health-retries 20
+          --health-start-period 40s
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.2.5
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build
+        run: bun run build
+
+      - name: E2E (full suite)
+        env:
+          MONGODB_TEST_URI: mongodb://127.0.0.1:27017/?directConnection=true
+          VOYAGE_API_KEY: ${{ secrets.VOYAGE_API_KEY }}
+          MEMONGO_ENRICHMENT_MODEL: ${{ vars.MEMONGO_ENRICHMENT_MODEL }}
+        run: bun run --filter @memongo/memory-engine test:e2e

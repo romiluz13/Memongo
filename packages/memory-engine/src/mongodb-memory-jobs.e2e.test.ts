@@ -701,6 +701,10 @@ describe("durable memory job leases (live MongoDB)", () => {
 				agentId,
 				leaseOwner: recovered?.leaseOwner ?? "",
 				leaseToken: recovered?.leaseToken ?? "",
+				// Must be inside the recovered lease window (claimed at 00:01:00.001
+				// for 60s). Without this the real wall clock is used, so the lease
+				// reads as long expired and the completion is fenced.
+				now: new Date("2026-07-23T00:01:30.000Z"),
 			}),
 		).resolves.toBe(true)
 

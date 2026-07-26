@@ -304,7 +304,11 @@ describe("mongodb-graph", () => {
 			const [, update] = (relationsCol.updateOne as ReturnType<typeof vi.fn>)
 				.mock.calls[0]
 			expect(update.$set.weight).toBe(0.9)
-			expect(update.$inc.reinforcementCount).toBe(1)
+			// ...and reinforcement is NOT bumped: reinforcementCount counts the
+			// distinct events that confirmed the relation, and this event was
+			// already counted. It feeds retrieval scoring, so incrementing on a
+			// replay would inflate the ranking of duplicated evidence.
+			expect(update.$inc).toBeUndefined()
 		})
 
 		it("accumulates source-event evidence when a new event confirms a relation", async () => {

@@ -16,6 +16,17 @@
 			"dependsOn": ["^build"],
 			"outputs": []
 		},
+		"test:e2e": {
+			"dependsOn": ["^build"],
+			"cache": false,
+			"env": [
+				"MONGODB_TEST_URI",
+				"MEMONGO_TEST_MONGODB_URI",
+				"VOYAGE_API_KEY",
+				"MEMONGO_E2E_TIER"
+			],
+			"outputs": []
+		},
 		"lint": {
 			"dependsOn": ["^lint"]
 		},
