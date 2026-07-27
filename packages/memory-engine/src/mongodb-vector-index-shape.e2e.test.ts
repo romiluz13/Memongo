@@ -8,18 +8,23 @@
  * indexes silently failed to create: no semantic retrieval at all, on exactly
  * the versions the version gate was written to light up.
  *
- * A mocked test cannot catch this. It was tried: mockDb() has no working
- * buildInfo, so the version gate never fires and the assertion passes against
- * the broken code. Only a real server rejects the definition, which is the
- * whole reason this suite exists.
+ * A mocked test cannot catch this. It was tried first and passed against the
+ * broken code: mockDb() has no working buildInfo, so the version gate never
+ * fires. Only a real server rejects the definition.
  *
- * This creates ONE index from buildAutoEmbedVectorDefinition — the same
- * builder every collection ships — rather than running ensureSearchIndexes,
- * which would queue fourteen auto-embedding indexes. Those cannot finish their
- * initial sync without a working embedding provider, and mongot syncs
- * embedding indexes one at a time, so they starve every other e2e file's
- * search indexes. Creation is validated synchronously by the server, so one
- * index proves exactly as much as fourteen.
+ * Both halves are checked here without an embedding provider, so this stays in
+ * the secretless tier-A gate:
+ *
+ *   - what we send: buildAutoEmbedVectorDefinition carries none of the
+ *     options the server refuses;
+ *   - why that matters: the server really does refuse `storedSource: true` on
+ *     a vector index, pinned against a live cluster using an explicit vector
+ *     field, which needs no embeddings.
+ *
+ * Creating an actual auto-embedding index cannot be done here — with no key on
+ * the container mongot reports "CanonicalModel: voyage-4-large not registered
+ * yet, supported models are: []" — so that proof lives in the nightly suite,
+ * which has one.
  *
  * Run: bun run --filter @memongo/memory-engine test:e2e:tier-a
  */
@@ -49,47 +54,23 @@ afterAll(async () => {
 })
 
 describe("vector index definition", () => {
-	it("is accepted by the server exactly as shipped", async () => {
-		const collection = db.collection("chunks")
-		await collection.insertOne({ text: "hello", agentId: "a1" })
-
-		// Throws if the server rejects any option in the definition. That is the
-		// regression: ensureSearchIndexes swallows this same error into a
-		// log.warn, so nothing downstream could tell the difference between "no
-		// vector index" and "no data".
-		await collection.createSearchIndex({
-			name: "chunks_vector",
-			type: "vectorSearch",
-			definition: buildAutoEmbedVectorDefinition("text", [
-				"source",
-				"path",
-				"agentId",
-				"scope",
-				"scopeRef",
-				"sessionId",
-				"status",
-			]),
-		})
-
-		const indexes = await collection.listSearchIndexes().toArray()
-		expect(indexes.map((index) => index.name)).toContain("chunks_vector")
-
-		// Drop it again so its initial sync does not hold mongot's
-		// one-at-a-time embedding queue for the rest of the run.
-		await collection.dropSearchIndex("chunks_vector").catch(() => undefined)
-	})
-
-	it("carries no option the server rejects on an autoEmbed field", () => {
-		// Asserted separately from creation so the reason a future "let's pin the
-		// index options" change fails is legible. Live 8.3.4 rejects each of
-		// these on an autoEmbed field: the embedding model determines them.
-		const definition = buildAutoEmbedVectorDefinition("text", ["agentId"])
+	it("carries no option the server rejects", () => {
+		// Live 8.3.4 rejects each of these on an autoEmbed field — the embedding
+		// model determines all of them: quantization ("Omit quantization to use
+		// the default (float)"), similarity ("...the default (dotProduct)"),
+		// numDimensions ("The embedding model determines dimensions
+		// automatically") and field-level indexingMethod ("Omit indexingMethod
+		// to use default HNSW"). So there is nothing here to pin.
+		const definition = buildAutoEmbedVectorDefinition("text", [
+			"agentId",
+			"scope",
+			"scopeRef",
+		])
 		expect(definition.storedSource).toBeUndefined()
 		expect(definition.indexingMethod).toBeUndefined()
 
-		const autoEmbed = (
-			definition.fields as Array<Record<string, unknown>>
-		).find((field) => field.type === "autoEmbed")
+		const fields = definition.fields as Array<Record<string, unknown>>
+		const autoEmbed = fields.find((field) => field.type === "autoEmbed")
 		expect(autoEmbed).toMatchObject({
 			type: "autoEmbed",
 			modality: "text",
@@ -103,5 +84,64 @@ describe("vector index definition", () => {
 		]) {
 			expect(autoEmbed?.[rejected]).toBeUndefined()
 		}
+
+		// The filter fields the search prefilters depend on must survive.
+		expect(fields.filter((field) => field.type === "filter")).toEqual([
+			{ type: "filter", path: "agentId" },
+			{ type: "filter", path: "scope" },
+			{ type: "filter", path: "scopeRef" },
+		])
+	})
+
+	it("would be rejected by the server if storedSource: true came back", async () => {
+		// This is the assertion that gives the one above its teeth, and it is
+		// the exact error that silently disabled every vector index on 8.3+.
+		// An explicit vector field is used so no embedding provider is needed.
+		const collection = db.collection("stored_source_probe")
+		await collection.insertOne({ embedding: [0.1, 0.2, 0.3, 0.4] })
+
+		await expect(
+			collection.createSearchIndex({
+				name: "rejected_vector",
+				type: "vectorSearch",
+				definition: {
+					fields: [
+						{
+							type: "vector",
+							path: "embedding",
+							numDimensions: 4,
+							similarity: "dotProduct",
+						},
+					],
+					storedSource: true,
+				},
+			}),
+		).rejects.toThrow(/storedSource/i)
+	})
+
+	it("accepts the same definition shape once storedSource is gone", async () => {
+		// Control for the test above: proves the rejection is specifically about
+		// storedSource: true and not about the rest of the definition.
+		const collection = db.collection("accepted_probe")
+		await collection.insertOne({ embedding: [0.1, 0.2, 0.3, 0.4] })
+
+		await collection.createSearchIndex({
+			name: "accepted_vector",
+			type: "vectorSearch",
+			definition: {
+				fields: [
+					{
+						type: "vector",
+						path: "embedding",
+						numDimensions: 4,
+						similarity: "dotProduct",
+					},
+					{ type: "filter", path: "agentId" },
+				],
+			},
+		})
+
+		const indexes = await collection.listSearchIndexes().toArray()
+		expect(indexes.map((index) => index.name)).toContain("accepted_vector")
 	})
 })
