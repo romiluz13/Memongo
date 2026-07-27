@@ -33,8 +33,8 @@
 		"build": "node ../../node_modules/typescript/bin/tsc -p tsconfig.json",
 		"check-types": "node ../../node_modules/typescript/bin/tsc --noEmit -p tsconfig.json",
 		"test": "vitest run --exclude=src/**/*.e2e.test.ts",
-		"test:e2e": "vitest run src/**/*.e2e.test.ts",
-		"test:e2e:tier-a": "vitest run src/mongodb-kb-reingest.e2e.test.ts src/mongodb-kb-isolation.e2e.test.ts src/mongodb-legacy-search-isolation.e2e.test.ts src/mongodb-rankfusion-score.e2e.test.ts src/mongodb-projection-repair.e2e.test.ts src/mongodb-temporal-validity.e2e.test.ts src/mongodb-memory-jobs.e2e.test.ts"
+		"test:e2e": "vitest run --testTimeout=120000 src/**/*.e2e.test.ts",
+		"test:e2e:tier-a": "vitest run --testTimeout=120000 src/mongodb-kb-reingest.e2e.test.ts src/mongodb-kb-isolation.e2e.test.ts src/mongodb-legacy-search-isolation.e2e.test.ts src/mongodb-vector-index-shape.e2e.test.ts src/mongodb-rankfusion-score.e2e.test.ts src/mongodb-projection-repair.e2e.test.ts src/mongodb-temporal-validity.e2e.test.ts src/mongodb-memory-jobs.e2e.test.ts"
 	},
 	"dependencies": {
 		"@memongo/lib": "1.1.0",

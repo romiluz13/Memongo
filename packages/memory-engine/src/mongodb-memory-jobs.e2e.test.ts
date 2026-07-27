@@ -539,7 +539,11 @@ describe("durable memory job leases (live MongoDB)", () => {
 				agentId,
 				resolved: resolveMemoryBackendConfig({ cfg, agentId }),
 			})
-			const deadline = Date.now() + 15_000
+			// Give-up budget, not an expected runtime: this waits on a full
+			// manager startup (which now builds the vector indexes that used to
+			// fail) plus a worker round trip, while every other e2e file is
+			// hitting the same container.
+			const deadline = Date.now() + 90_000
 			let stored = await memoryJobsCollection(db, PREFIX).findOne({
 				jobId: `extraction-${eventId}`,
 				agentId,
@@ -575,7 +579,10 @@ describe("durable memory job leases (live MongoDB)", () => {
 			await manager?.close()
 			await rm(workspace, { recursive: true, force: true })
 		}
-	}, 30_000)
+		// Give-up budget. Manager startup now builds the vector indexes that
+		// used to fail outright, and every other e2e file is hitting the same
+		// container, so 30s no longer covers a healthy run.
+	}, 120_000)
 
 	it("replays foreground entity projection without double-counting an event", async () => {
 		const db = client.db(TEST_DB)

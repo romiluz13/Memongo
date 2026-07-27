@@ -1025,6 +1025,71 @@ describe("ensureSearchIndexes", () => {
 		expect(structuredCol.createSearchIndex).toHaveBeenCalledTimes(2)
 	})
 
+	it("ships vector definitions with no option the server rejects (V1)", async () => {
+		// Regression. ensureSearchIndexes used to add `storedSource: true` and
+		// `indexingMethod: "flat"` to every vector index whenever buildInfo
+		// reported MongoDB 8.3+. Verified against a live 8.3.4 cluster, the
+		// server rejects the first outright — "storedSource: true is not
+		// supported for vector indexes. Accepted values are include, exclude, or
+		// false" — and each creation is wrapped in a catch that only logs. On
+		// 8.3 and newer every vector index therefore failed to create and
+		// ensureSearchIndexes returned {text: true, vector: false}: no semantic
+		// retrieval at all, silently, on exactly the versions the gate was
+		// written to light up.
+		//
+		// The per-field options are not ours to choose either. The same cluster
+		// rejects quantization ("Omit quantization to use the default (float)"),
+		// similarity ("...the default (dotProduct)"), numDimensions ("The
+		// embedding model determines dimensions automatically") and field-level
+		// indexingMethod ("Omit indexingMethod to use default HNSW") on an
+		// autoEmbed field. The embedding model determines all of them.
+		const db = mockDb()
+		await ensureSearchIndexes(db, "test_", "atlas-local-preview", "automated")
+
+		// Collect every vectorSearch definition this run produced.
+		const vectorCalls: Document[] = []
+		for (const collectionName of [
+			"test_chunks",
+			"test_kb_chunks",
+			"test_structured_mem",
+			"test_procedures",
+			"test_events",
+			"test_query_cache",
+			"test_session_chunks",
+		]) {
+			const col = db.collection(collectionName) as unknown as {
+				createSearchIndex: ReturnType<typeof vi.fn>
+			}
+			for (const call of col.createSearchIndex.mock.calls) {
+				const spec = call[0] as Document
+				if (spec.type === "vectorSearch") {
+					vectorCalls.push(spec)
+				}
+			}
+		}
+
+		// If this is ever 0 the assertions below become vacuous.
+		expect(vectorCalls.length).toBeGreaterThan(0)
+
+		for (const spec of vectorCalls) {
+			expect(spec.definition.storedSource).toBeUndefined()
+			expect(spec.definition.indexingMethod).toBeUndefined()
+			for (const field of spec.definition.fields as Document[]) {
+				if (field.type !== "autoEmbed") {
+					continue
+				}
+				for (const rejected of [
+					"quantization",
+					"similarity",
+					"numDimensions",
+					"indexingMethod",
+				]) {
+					expect(field[rejected]).toBeUndefined()
+				}
+			}
+		}
+	})
+
 	it("creates autoEmbed vector index for automated mode", async () => {
 		const db = mockDb()
 		const result = await ensureSearchIndexes(
