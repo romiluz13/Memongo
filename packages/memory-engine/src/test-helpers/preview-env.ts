@@ -112,3 +112,69 @@ export function resolvePreviewMongoTestUri(fallbackUri: string): string {
 	}
 	return fallbackUri
 }
+
+/**
+ * Embed text with the real provider, batched.
+ *
+ * Suites that need embeddings used to synthesise them — 1024 uniform random
+ * numbers per vector. Measured on the evaluation fixtures, that gives every
+ * pair of unrelated statements a cosine of ~0.75 (min 0.719, max 0.788),
+ * where the real model puts the same pair at ~0.35. Anything scored off those
+ * vectors — novelty above all, which is 40% of the consolidation gate — was
+ * being driven by noise rather than by meaning.
+ *
+ * Endpoint selection follows the same rule the engine uses: Atlas Model keys
+ * (`al-...`) are only valid against ai.mongodb.com, direct Voyage keys against
+ * api.voyageai.com.
+ */
+export async function embedTextsForTest(
+	texts: string[],
+	options?: { apiKey?: string; model?: string; batchSize?: number },
+): Promise<number[][]> {
+	const apiKey = options?.apiKey ?? resolvePreviewVoyageApiKey()
+	if (!apiKey) {
+		throw new Error(
+			"embedTextsForTest requires a Voyage/Atlas Model API key; guard the suite on resolvePreviewVoyageApiKey()",
+		)
+	}
+	const baseUrl = hasAtlasModelKey(apiKey)
+		? "https://ai.mongodb.com/v1"
+		: "https://api.voyageai.com/v1"
+	const model = options?.model ?? "voyage-4-large"
+	const batchSize = options?.batchSize ?? 96
+	const out: number[][] = []
+
+	for (let i = 0; i < texts.length; i += batchSize) {
+		const batch = texts.slice(i, i + batchSize)
+		const response = await fetch(`${baseUrl}/embeddings`, {
+			method: "POST",
+			headers: {
+				Authorization: `Bearer ${apiKey}`,
+				"Content-Type": "application/json",
+			},
+			body: JSON.stringify({ model, input: batch }),
+		})
+		if (!response.ok) {
+			const detail = await response.text().catch(() => "")
+			throw new Error(
+				`embedTextsForTest failed: HTTP ${response.status} ${detail.slice(0, 200)}`,
+			)
+		}
+		const payload = (await response.json()) as {
+			data?: Array<{ embedding: number[]; index?: number }>
+		}
+		if (!payload.data || payload.data.length !== batch.length) {
+			throw new Error(
+				`embedTextsForTest: expected ${batch.length} vectors, got ${payload.data?.length ?? 0}`,
+			)
+		}
+		// The API documents an `index` field; order defensively rather than
+		// trusting response order, since a mis-ordered vector would silently
+		// attach the wrong meaning to every downstream assertion.
+		const ordered = [...payload.data].sort(
+			(a, b) => (a.index ?? 0) - (b.index ?? 0),
+		)
+		out.push(...ordered.map((entry) => entry.embedding))
+	}
+	return out
+}

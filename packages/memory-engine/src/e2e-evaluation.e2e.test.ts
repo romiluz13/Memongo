@@ -43,7 +43,11 @@ import {
 	structuredMemCollection,
 	kbChunksCollection,
 } from "./mongodb-schema.js"
-import { resolvePreviewMongoTestUri } from "./test-helpers/preview-env.js"
+import {
+	embedTextsForTest,
+	resolvePreviewMongoTestUri,
+	resolvePreviewVoyageApiKey,
+} from "./test-helpers/preview-env.js"
 
 // ---------------------------------------------------------------------------
 // Environment
@@ -56,6 +60,13 @@ const TEST_PREFIX = "eval_"
 // ---------------------------------------------------------------------------
 // Scenario agent IDs (UUID-suffixed for isolation)
 // ---------------------------------------------------------------------------
+
+/**
+ * This suite scores memory quality, so it must run against real embeddings.
+ * Skipping loudly beats the previous behaviour of quietly substituting random
+ * vectors and reporting a score anyway.
+ */
+const HAS_REAL_EMBEDDINGS = resolvePreviewVoyageApiKey().length > 0
 
 const SCENARIO_UUID = randomUUID().slice(0, 8)
 const CODING_AGENT_ARCH = `coding-agent-arch-${SCENARIO_UUID}`
@@ -136,25 +147,6 @@ function hoursAgo(hours: number): Date {
 // ---------------------------------------------------------------------------
 
 /** Seeded random number generator for reproducible embeddings. */
-function seededRandom(seed: number): () => number {
-	let s = seed
-	return () => {
-		s = (s * 1103515245 + 12345) & 0x7fffffff
-		return s / 0x7fffffff // range [0, 1] — positive cluster so anomaly in negative space is clearly distant
-	}
-}
-
-/** Generate a pseudo-random 1024-dim embedding vector from a seed. */
-function randomEmbedding(seed: number, dim = 1024): number[] {
-	const rng = seededRandom(seed)
-	return Array.from({ length: dim }, () => rng())
-}
-
-/** Generate an anomaly embedding: negative-space vector maximally distant from positive-cluster normal vectors. */
-function anomalyEmbedding(dim = 1024): number[] {
-	return Array.from({ length: dim }, () => -1.0)
-}
-
 // ---------------------------------------------------------------------------
 // Seed event helpers
 // ---------------------------------------------------------------------------
@@ -170,8 +162,32 @@ type SeedEvent = {
 /** Stored event IDs by agent for chain/isolation testing. */
 const eventIdsByAgent: Map<string, string[]> = new Map()
 
-/** Global seed counter for deterministic embeddings. */
-let embeddingSeedCounter = 1
+/**
+ * Real embeddings for the current seeding batch, keyed by event body.
+ *
+ * This suite used to synthesise embeddings as 1024 uniform random numbers.
+ * Measured on these very fixtures that puts every pair of unrelated statements
+ * at ~0.75 cosine (min 0.719, max 0.788) where the real model puts them at
+ * ~0.35 — so novelty, which is 40% of the consolidation gate, was computed
+ * from noise. The anomaly fixtures are already semantically distinct in their
+ * text ("a complete career change to become a woodworking artisan" among
+ * coding preferences), so real vectors make the novelty assertions meaningful
+ * instead of merely reproducible.
+ */
+const embeddingByBody = new Map<string, number[]>()
+
+async function primeEmbeddings(events: SeedEvent[]): Promise<void> {
+	const bodies = [...new Set(events.map((evt) => evt.body))].filter(
+		(body) => !embeddingByBody.has(body),
+	)
+	if (bodies.length === 0) {
+		return
+	}
+	const vectors = await embedTextsForTest(bodies)
+	bodies.forEach((body, index) => {
+		embeddingByBody.set(body, vectors[index])
+	})
+}
 
 async function seedEvent(
 	db: Db,
@@ -190,11 +206,12 @@ async function seedEvent(
 		},
 	})
 
-	// Attach embedding for novelty detection: anomaly events get a uniform vector,
-	// normal events get pseudo-random vectors seeded by counter for reproducibility.
-	const embedding = evt.isAnomaly
-		? anomalyEmbedding()
-		: randomEmbedding(embeddingSeedCounter++)
+	// Real embedding of the event text. Anomaly events are anomalous by their
+	// content, so they need no special-cased vector.
+	const embedding = embeddingByBody.get(evt.body)
+	if (!embedding) {
+		throw new Error(`seedEvent: no embedding primed for body: ${evt.body}`)
+	}
 	await eventsCollection(db, TEST_PREFIX).updateOne(
 		{ eventId: result.eventId },
 		{ $set: { embedding } },
@@ -307,7 +324,7 @@ afterAll(async () => {
 // Phase A: Seed Scenarios (450+ events across 3 scenarios)
 // ===========================================================================
 
-describe("Phase A: Seed Scenarios", () => {
+describe.skipIf(!HAS_REAL_EMBEDDINGS)("Phase A: Seed Scenarios", () => {
 	it("seeds AI Coding Assistant scenario (3 agents, 200+ events)", async () => {
 		// -----------------------------------------------------------------------
 		// CODING-AGENT-ARCH events (70+)
@@ -1010,7 +1027,9 @@ describe("Phase A: Seed Scenarios", () => {
 		]
 
 		// Seed all coding events
-		for (const evt of [...archEvents, ...implEvents, ...reviewEvents]) {
+		const codingEvents = [...archEvents, ...implEvents, ...reviewEvents]
+		await primeEmbeddings(codingEvents)
+		for (const evt of codingEvents) {
 			await seedEvent(db, evt)
 		}
 
@@ -1274,7 +1293,9 @@ describe("Phase A: Seed Scenarios", () => {
 			),
 		]
 
-		for (const evt of [...tier1Events, ...tier2Events]) {
+		const supportEvents = [...tier1Events, ...tier2Events]
+		await primeEmbeddings(supportEvents)
+		for (const evt of supportEvents) {
 			await seedEvent(db, evt)
 		}
 
@@ -1438,6 +1459,7 @@ describe("Phase A: Seed Scenarios", () => {
 			},
 		]
 
+		await primeEmbeddings(prodEvents)
 		for (const evt of prodEvents) {
 			await seedEvent(db, evt)
 		}
@@ -1529,7 +1551,7 @@ describe("Phase A: Seed Scenarios", () => {
 // Phase B: Baseline Verification
 // ===========================================================================
 
-describe("Phase B: Baseline Verification", () => {
+describe.skipIf(!HAS_REAL_EMBEDDINGS)("Phase B: Baseline Verification", () => {
 	it("events collection has seeded data per scenario", async () => {
 		for (const agentId of ALL_AGENTS) {
 			const count = await eventsCollection(db, TEST_PREFIX).countDocuments({
@@ -1552,7 +1574,7 @@ describe("Phase B: Baseline Verification", () => {
 // Phase C: Consolidation
 // ===========================================================================
 
-describe("Phase C: Consolidation", () => {
+describe.skipIf(!HAS_REAL_EMBEDDINGS)("Phase C: Consolidation", () => {
 	/** Track promoted facts per agent for scoring. */
 	const promotedByAgent: Map<string, number> = new Map()
 
@@ -1588,7 +1610,9 @@ describe("Phase C: Consolidation", () => {
 			0,
 		)
 		expect(totalPromoted).toBeGreaterThan(0)
-	}, 60_000)
+		// Give-up budget. Consolidating five agents now runs novelty over real
+		// embeddings rather than synthetic vectors, which is real work.
+	}, 240_000)
 
 	it("idempotent re-run produces 0 new promotions (arch agent)", async () => {
 		const result2 = await consolidateMemory({
@@ -1631,7 +1655,7 @@ describe("Phase C: Consolidation", () => {
 // Phase D: Reasoning Chain
 // ===========================================================================
 
-describe("Phase D: Reasoning Chain", () => {
+describe.skipIf(!HAS_REAL_EMBEDDINGS)("Phase D: Reasoning Chain", () => {
 	it("traces promoted fact back to source events", async () => {
 		// Find a structured memory entry with sourceEventIds
 		const facts = await structuredMemCollection(db, TEST_PREFIX)
@@ -1737,7 +1761,7 @@ describe("Phase D: Reasoning Chain", () => {
 // Phase E: Novelty
 // ===========================================================================
 
-describe("Phase E: Novelty", () => {
+describe.skipIf(!HAS_REAL_EMBEDDINGS)("Phase E: Novelty", () => {
 	it("wait for vector index to sync seeded embeddings", async () => {
 		// After seeding 450+ events with embeddings, mongot needs time to index them.
 		// This is a real infrastructure concern, not a workaround.
@@ -1832,7 +1856,7 @@ describe("Phase E: Novelty", () => {
 // Phase F: Importance Decay
 // ===========================================================================
 
-describe("Phase F: Importance Decay", () => {
+describe.skipIf(!HAS_REAL_EMBEDDINGS)("Phase F: Importance Decay", () => {
 	it("fresh fact has importance close to base value", () => {
 		const fresh = computeImportanceDecay(1.0, new Date(), new Date())
 		expect(fresh).toBeCloseTo(1.0, 1)
@@ -1959,7 +1983,7 @@ describe("Phase F: Importance Decay", () => {
 // Phase G: Access Tracking
 // ===========================================================================
 
-describe("Phase G: Access Tracking", () => {
+describe.skipIf(!HAS_REAL_EMBEDDINGS)("Phase G: Access Tracking", () => {
 	it("batched access counts accumulate correctly", async () => {
 		// Grab a known event ID to track
 		const archEvents = eventIdsByAgent.get(CODING_AGENT_ARCH)
@@ -2018,7 +2042,7 @@ describe("Phase G: Access Tracking", () => {
 // Phase H: Wiki Categorization
 // ===========================================================================
 
-describe("Phase H: Wiki Categorization", () => {
+describe.skipIf(!HAS_REAL_EMBEDDINGS)("Phase H: Wiki Categorization", () => {
 	it("KB entries with wikiSource filter correctly", async () => {
 		const kbCol = kbChunksCollection(db, TEST_PREFIX)
 
@@ -2117,7 +2141,7 @@ describe("Phase H: Wiki Categorization", () => {
 // Phase I: Cross-Agent Isolation
 // ===========================================================================
 
-describe("Phase I: Cross-Agent Isolation", () => {
+describe.skipIf(!HAS_REAL_EMBEDDINGS)("Phase I: Cross-Agent Isolation", () => {
 	it("reasoning chains do not leak across agents", async () => {
 		let leakFound = false
 
@@ -2220,7 +2244,7 @@ describe("Phase I: Cross-Agent Isolation", () => {
 // Phase J: Score Card
 // ===========================================================================
 
-describe("Phase J: Score Card", () => {
+describe.skipIf(!HAS_REAL_EMBEDDINGS)("Phase J: Score Card", () => {
 	it("overall score >= 90/100", () => {
 		const weighted = computeWeightedScore(scores)
 		console.log("\n--- Score Summary ---")
