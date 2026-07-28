@@ -63,6 +63,7 @@ import {
 	ensureCollections,
 	ensureStandardIndexes,
 	ensureSearchIndexes,
+	isSearchIndexTypeCompatible,
 } from "./mongodb-schema.js"
 import { resolveScopeRef } from "./mongodb-scope.js"
 // Search functions (direct vector search, keyword search, hybrid)
@@ -1536,10 +1537,17 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 				const textIdx = indexes.find((i) => i.name === `${PREFIX}chunks_text`)
 
 				expect(vectorIdx).toBeDefined()
-				expect(vectorIdx!.type).toBe("vectorSearch")
+				// The server does not populate `type` for an auto-embedding vector
+				// index — verified live, it comes back undefined. That is what
+				// isSearchIndexTypeCompatible exists to absorb, and what
+				// detectCapabilities already uses. Asserting the literal string
+				// here was asserting a field MongoDB never sends.
+				expect(
+					isSearchIndexTypeCompatible(vectorIdx!.type, "vectorSearch"),
+				).toBe(true)
 				expect(vectorIdx!.status).toBe("READY")
 				expect(textIdx).toBeDefined()
-				expect(textIdx!.type).toBe("search")
+				expect(isSearchIndexTypeCompatible(textIdx!.type, "search")).toBe(true)
 				expect(textIdx!.status).toBe("READY")
 
 				// Verify autoEmbed definition
