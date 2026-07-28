@@ -176,6 +176,68 @@ docker logs memongo-mongod
 docker compose -f docker/mongodb/docker-compose.mongodb.yml --profile setup run --rm setup-generator
 ```
 
+### Preview container exits after recreating it (replica set name mismatch)
+
+**Symptom:** After `docker rm` + re-create of `memongo-preview` while keeping
+the existing data volume, the container reaches `healthy` briefly and then
+exits with `panic: error checking mongot: mongot health check ... context
+deadline exceeded`. `mongod` is running but no mongot process exists, and
+`replSetGetStatus` returns `InvalidReplicaSetConfig`.
+
+**Cause:** `mongodb-atlas-local` derives the replica set name from the
+container hostname, which Docker defaults to the container ID. Recreating the
+container changes that name, so it no longer matches the replica set config
+persisted in the `/data/db` volume. mongod cannot become primary, mongot never
+starts, and the supervisor panics on its health check.
+
+**Fix:** pin the hostname to the replica set name already in the volume.
+
+```bash
+# 1. Read the persisted name (start a standalone mongod on the volume)
+docker run --rm -d --name rs-probe -v mongodb_memongo_preview_data:/data/db \
+  -p 27021:27017 --entrypoint mongod mongodb/mongodb-atlas-local:preview \
+  --dbpath /data/db --bind_ip_all
+mongosh "mongodb://127.0.0.1:27021/?directConnection=true" --quiet \
+  --eval 'db.getSiblingDB("local").system.replset.findOne()._id'
+docker rm -f rs-probe
+
+# 2. Recreate with that name as the hostname
+docker run -d --name memongo-preview --hostname <THAT_NAME> -p 27019:27017 \
+  -e VOYAGE_API_KEY=al-... -e MONGODB_ATLAS_TELEMETRY_ENABLE=false \
+  -v mongodb_memongo_preview_data:/data/db \
+  -v mongodb_memongo_preview_config:/data/configdb \
+  mongodb/mongodb-atlas-local:preview
+```
+
+Alternatively, discard the volume (`start-preview.sh clean`) and let the new
+container initialise its own replica set. Set `hostname:` in the compose file
+if you intend to recreate the container repeatedly against one volume.
+
+### Auto-embedding indexes stay PENDING and mongot eventually dies
+
+**Symptom:** Vector indexes never reach `queryable`, mongot logs repeat
+`Concurrent initial sync limit for embedding indexes reached`, and the
+container later fails its health check.
+
+**Cause:** an invalid `VOYAGE_API_KEY`. Every embedding call returns 403, so
+no auto-embedding index can finish its initial sync. mongot syncs embedding
+indexes one at a time, so the queue never drains and the backlog grows until
+the health check times out.
+
+**Fix:** verify the key before starting the container. A `401` means no
+credential was sent; a `403` means the key is recognised but denied — revoked,
+disabled, or the Atlas org has no model credits.
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' -X POST https://ai.mongodb.com/v1/embeddings \
+  -H "Authorization: Bearer $VOYAGE_API_KEY" -H 'Content-Type: application/json' \
+  -d '{"model":"voyage-4-large","input":["hi"]}'
+```
+
+`200` is the only healthy answer. Keys must be Atlas Model keys (`al-...`):
+the preview image routes embeddings through `ai.mongodb.com`, so direct Voyage
+keys (`pa-...`) are rejected.
+
 ### mongot fails to start
 
 **Symptom:** mongot container keeps restarting.
