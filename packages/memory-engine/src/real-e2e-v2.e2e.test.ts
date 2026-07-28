@@ -91,6 +91,9 @@ import type { MemorySearchResult } from "./types.js"
 const TEST_URI = resolvePreviewMongoTestUri(
 	"mongodb://admin:admin@localhost:27017/memongo?authSource=admin&replicaSet=rs0&directConnection=true",
 )
+// Isolated per run — see the note in production-readiness.e2e.test.ts. Both
+// suites shared one "memongo" database and neither dropped it.
+const TEST_DB = `memongo_realv2_${randomUUID().slice(0, 8)}`
 const PREFIX = "memtest_"
 const AGENT_ID = `agent-e2e-${randomUUID().slice(0, 8)}`
 const TEST_WINDOW_START = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)
@@ -306,7 +309,7 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 			serverSelectionTimeoutMS: 10_000,
 		})
 		await client.connect()
-		db = client.db("memongo")
+		db = client.db(TEST_DB)
 
 		// Setup fresh collections and indexes
 		await ensureCollections(db, PREFIX)
@@ -326,6 +329,10 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 	}, 30_000)
 
 	afterAll(async () => {
+		await client
+			?.db(TEST_DB)
+			.dropDatabase()
+			.catch(() => {})
 		await client?.close()
 	})
 

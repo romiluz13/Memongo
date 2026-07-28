@@ -107,6 +107,11 @@ import type {
 const TEST_URI = resolvePreviewMongoTestUri(
 	"mongodb://admin:admin@localhost:27017/memongo?authSource=admin&replicaSet=rs0&directConnection=true",
 )
+// Isolated per run. This suite used to write into a shared "memongo" database
+// and never drop it, so every run piled more state into the same collections
+// and re-runs collided on index names. It also raced real-e2e-v2, which used
+// the same database, making full-suite results order-dependent.
+const TEST_DB = `memongo_prodready_${randomUUID().slice(0, 8)}`
 const PREFIX = "prodready_"
 const AGENT_ID = `agent-prodready-${randomUUID().slice(0, 8)}`
 const VOYAGE_API_KEY = resolvePreviewVoyageApiKey()
@@ -155,6 +160,27 @@ function createLifecycleManagerHarness(
 			MongoDBMemoryManager.prototype["getBenchmarkAllowedRoots"],
 		writeConversationEvent:
 			MongoDBMemoryManager.prototype.writeConversationEvent,
+		// writeConversationEvent reaches all of these. Omitting the first made
+		// every imported turn throw "this.shouldRunPostWriteDerivedWork is not
+		// a function", which importConversationDataset catches and only logs —
+		// so the import reported 1 conversation and 0 turns with no visible
+		// error. The predicate is wired to the real implementation because it
+		// decides behaviour; the background-worker entry points are no-ops
+		// because this harness has no worker to drive and the test asserts the
+		// written events, not job scheduling.
+		shouldRunPostWriteDerivedWork:
+			MongoDBMemoryManager.prototype["shouldRunPostWriteDerivedWork"],
+		wakeMemoryJobWorker: () => undefined,
+		// recallConversation reaches this. false = no native vector prefilter,
+		// which matches the "standard" (non-vector) recall path this test asserts.
+		refreshNativeBitemporalVectorPrefilter: async () => false,
+		drainMemoryJobQueue: async () => undefined,
+		repairExtractionOutbox: async () => ({
+			eventsProcessed: 0,
+			jobsCreated: 0,
+			jobsReleased: 0,
+			eventsFailed: 0,
+		}),
 		schedulePostWriteDerivations: () => undefined,
 	} as unknown as MongoDBMemoryManager
 }
@@ -455,7 +481,7 @@ describeIfMongo(
 				serverSelectionTimeoutMS: 10_000,
 			})
 			await client.connect()
-			db = client.db("memongo")
+			db = client.db(TEST_DB)
 
 			// Setup fresh collections and indexes
 			await ensureCollections(db, PREFIX)
@@ -494,6 +520,10 @@ describeIfMongo(
 		}, 30_000)
 
 		afterAll(async () => {
+			await client
+				?.db(TEST_DB)
+				.dropDatabase()
+				.catch(() => {})
 			await client?.close()
 		})
 
