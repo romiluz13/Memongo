@@ -94,7 +94,9 @@ describe("mongodb-memory-jobs", () => {
 	})
 
 	it("claims pending or abandoned extraction work with one atomic lease update", async () => {
-		const { claimMemoryJob } = await import("./mongodb-memory-jobs.js")
+		const { claimMemoryJob, MEMORY_JOB_MAX_ATTEMPTS } = await import(
+			"./mongodb-memory-jobs.js"
+		)
 		const now = new Date("2026-07-23T00:00:00.000Z")
 		const claimed = {
 			jobId: "job-1",
@@ -134,6 +136,13 @@ describe("mongodb-memory-jobs", () => {
 					{ status: "pending", stagedAt: { $exists: false } },
 					{ status: "running", leaseExpiresAt: { $lte: now } },
 					{ status: "running", leaseExpiresAt: { $exists: false } },
+					// C4: a failed job stays claimable until its attempt budget is
+					// spent, so a transient failure no longer discards the work.
+					{
+						status: "failed",
+						attempts: { $lt: MEMORY_JOB_MAX_ATTEMPTS },
+						$or: [{ retryAt: { $exists: false } }, { retryAt: { $lte: now } }],
+					},
 				],
 			},
 			expect.objectContaining({

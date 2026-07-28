@@ -141,18 +141,51 @@ function resolveTimeRange(
 	return undefined
 }
 
-function inferSessionId(
-	scope: MemoryScope,
-	scopeRef: string,
-	sessionId?: string,
-): string | undefined {
-	if (sessionId?.trim()) {
-		return sessionId.trim()
+/**
+ * Recent events are read with the EVENT's own scope/scopeRef, so drilling into a
+ * session means swapping the query identity. A caller-supplied sessionId is not
+ * a dimension of the authorized policy, so it must only ever NARROW inside the
+ * authorized identity — never replace it.
+ *
+ * Containment we can actually prove:
+ *  - a session-scoped caller may only read its own session, so the requested
+ *    sessionId is ignored entirely;
+ *  - an agent-wide caller owns every session under that agentId, so narrowing
+ *    to one of them is safe.
+ *
+ * Every other authorized scope (user/workspace/tenant/global) keeps its own
+ * identity and ignores the requested sessionId — it fails closed rather than
+ * escaping into a session that may belong to another tenant.
+ */
+function resolveRecentEventIdentity(params: {
+	agentId: string
+	scope: MemoryScope
+	scopeRef: string
+	requestedSessionId?: string
+}): { scope: MemoryScope; scopeRef: string; sessionId?: string } {
+	const { agentId, scope, scopeRef } = params
+	if (scope === "session") {
+		return {
+			scope,
+			scopeRef,
+			...(scopeRef.startsWith("session:")
+				? { sessionId: scopeRef.slice("session:".length) }
+				: {}),
+		}
 	}
-	if (scope === "session" && scopeRef.startsWith("session:")) {
-		return scopeRef.slice("session:".length)
+	const requested = params.requestedSessionId?.trim()
+	if (requested && scopeRef === resolveScopeRef({ scope: "agent", agentId })) {
+		return {
+			scope: "session",
+			scopeRef: resolveScopeRef({
+				scope: "session",
+				agentId,
+				sessionId: requested,
+			}),
+			sessionId: requested,
+		}
 	}
-	return undefined
+	return { scope, scopeRef }
 }
 
 function summarizeSources(items: Array<{ source?: string }>): string {
@@ -573,11 +606,14 @@ export async function buildContextBundle(params: {
 	const request = params.request ?? {}
 	const isWakeUp = request.mode === "wake-up"
 	const query = isWakeUp ? undefined : request.query?.trim() || undefined
-	const sessionId = inferSessionId(
+	const recentEventIdentity = resolveRecentEventIdentity({
+		agentId,
 		scope,
 		scopeRef,
-		typeof request.sessionId === "string" ? request.sessionId : undefined,
-	)
+		requestedSessionId:
+			typeof request.sessionId === "string" ? request.sessionId : undefined,
+	})
+	const sessionId = recentEventIdentity.sessionId
 	const tokenBudget = isWakeUp ? 250 : clampTokenBudget(request.tokenBudget)
 	const maxActiveItems = isWakeUp
 		? 5
@@ -596,10 +632,8 @@ export async function buildContextBundle(params: {
 				DEFAULT_MAX_RECENT_EVENTS,
 				MAX_RECENT_EVENTS,
 			)
-	const recentEventScope = sessionId ? "session" : scope
-	const recentEventScopeRef = sessionId
-		? resolveScopeRef({ scope: "session", agentId, sessionId })
-		: scopeRef
+	const recentEventScope = recentEventIdentity.scope
+	const recentEventScopeRef = recentEventIdentity.scopeRef
 
 	const pathsExecuted = new Set<string>()
 	let partial = false

@@ -92,7 +92,10 @@ describe("bi-temporal valid-time (live MongoDB)", () => {
 				validTo: VALID_TO,
 			},
 		})
-	})
+		// Real-MongoDB schema setup shares one container with every other e2e
+		// file in the run, so the default 10s hook budget is not enough under
+		// contention. Matches the budget its sibling e2e suites already use.
+	}, 120_000)
 
 	afterAll(async () => {
 		await db?.dropDatabase().catch(() => {})

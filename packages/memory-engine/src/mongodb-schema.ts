@@ -1312,6 +1312,7 @@ const MEMORY_JOBS_SCHEMA: Document = {
 				},
 			},
 			attempts: { bsonType: "number", minimum: 0 },
+			retryAt: { bsonType: "date" },
 			stagedAt: { bsonType: "date" },
 			leaseOwner: { bsonType: "string" },
 			leaseToken: { bsonType: "string" },
@@ -3178,6 +3179,50 @@ function autoEmbedVectorField(path: string): Document {
 	}
 }
 
+/**
+ * Build the vector search index definition for an auto-embedded text field.
+ *
+ * Exported so a live-server test can create one index from the exact shape
+ * every collection ships, without paying for all fourteen.
+ *
+ * Deliberately carries no extra options. ensureSearchIndexes used to add
+ * `storedSource: true` and `indexingMethod: "flat"` whenever buildInfo
+ * reported MongoDB 8.3+. Verified against a live 8.3.4 cluster, the server
+ * rejects the first outright — "storedSource: true is not supported for vector
+ * indexes. Accepted values are include, exclude, or false" — and every
+ * creation here is wrapped in a catch that only logs, so on 8.3 and newer all
+ * seven vector indexes silently failed to create and ensureSearchIndexes
+ * returned {text: true, vector: false}. No semantic retrieval at all, on
+ * precisely the versions the gate was written to light up.
+ *
+ * The per-field options are not ours to choose either. The same cluster
+ * rejects `quantization` ("Omit quantization to use the default (float)"),
+ * `similarity` ("...the default (dotProduct)"), `numDimensions` ("The
+ * embedding model determines dimensions automatically") and field-level
+ * `indexingMethod` ("Omit indexingMethod to use default HNSW") on an autoEmbed
+ * field: the embedding model determines all of them. So there is nothing here
+ * to pin, and no irreversible choice to get wrong.
+ *
+ * Re-enabling stored source later means `{include: [...]}` naming every field
+ * the search projections read, plus flipping DetectedCapabilities.storedSource
+ * to match. Getting that list wrong drops fields from results silently, so it
+ * needs its own change with its own live test — not a version check.
+ */
+export function buildAutoEmbedVectorDefinition(
+	path: string,
+	filterPaths: string[] = [],
+): Document {
+	return {
+		fields: [
+			autoEmbedVectorField(path),
+			...filterPaths.map((filterPath) => ({
+				type: "filter",
+				path: filterPath,
+			})),
+		],
+	}
+}
+
 export async function waitForSearchIndexesQueryable(
 	collection: Collection,
 	{
@@ -3340,35 +3385,8 @@ export async function ensureSearchIndexes(
 		)
 	}
 
-	// L4/L5: Detect MongoDB version for storedSource and indexingMethod support.
-	// These are MongoDB 8.3+ features; adding them to index definitions on older
-	// versions would fail index creation. See:
-	// mongodb.com/docs/atlas/vector-search/tutorials/vector-search-stored-source/
-	// mongodb.com/docs/atlas/vector-search/vector-search-overview/
-	let supportsStoredSource = false
-	let supportsVectorIndexMethod = false
-	try {
-		const buildInfo = await db.admin().command({ buildInfo: 1 })
-		const versionArray = (buildInfo as { versionArray?: unknown }).versionArray
-		supportsStoredSource = hasServerVersionAtLeast(versionArray, 8, 3)
-		supportsVectorIndexMethod = hasServerVersionAtLeast(versionArray, 8, 3)
-	} catch {
-		// buildInfo unavailable — assume not supported (conservative).
-	}
-	/** Augment a vector search index definition with 8.3+ options. */
-	const withVectorOpts = (def: Document): Document => {
-		if (supportsStoredSource) {
-			// Store the source document in the index so $vectorSearch can return
-			// fields via returnStoredSource without a collection re-fetch.
-			def.storedSource = true
-		}
-		if (supportsVectorIndexMethod) {
-			// Flat indexing for filtered (multitenant) workloads — better recall
-			// under heavy filtering, at the cost of exact O(n) search.
-			def.indexingMethod = "flat"
-		}
-		return def
-	}
+	// Vector index definitions are built by buildAutoEmbedVectorDefinition (see
+	// its doc comment): no version-gated extras, because the server rejects them.
 	if (rawSessionIndexProfile) {
 		const sessionChunks = sessionChunksCollection(db, prefix)
 		try {
@@ -3381,7 +3399,6 @@ export async function ensureSearchIndexes(
 					{ type: "filter", path: "sessionId" },
 				],
 			}
-			withVectorOpts(sessionVectorDef)
 			const vectorCreated = await ensureNamedSearchIndex({
 				collection: sessionChunks,
 				name: `${prefix}session_chunks_vector`,
@@ -3448,20 +3465,15 @@ export async function ensureSearchIndexes(
 
 	// Vector Search index
 	try {
-		const filterFields: Document[] = [
-			{ type: "filter", path: "source" },
-			{ type: "filter", path: "path" },
-			{ type: "filter", path: "agentId" },
-			{ type: "filter", path: "scope" },
-			{ type: "filter", path: "scopeRef" },
-			{ type: "filter", path: "sessionId" },
-			{ type: "filter", path: "status" },
-		]
-
-		const vectorDef: Document = {
-			fields: [autoEmbedVectorField("text"), ...filterFields],
-		}
-		withVectorOpts(vectorDef)
+		const vectorDef: Document = buildAutoEmbedVectorDefinition("text", [
+			"source",
+			"path",
+			"agentId",
+			"scope",
+			"scopeRef",
+			"sessionId",
+			"status",
+		])
 
 		vectorCreated = await ensureNamedSearchIndex({
 			collection: chunks,
@@ -3531,7 +3543,6 @@ export async function ensureSearchIndexes(
 			const kbVectorDef: Document = {
 				fields: [autoEmbedVectorField("text"), ...kbFilterFields],
 			}
-			withVectorOpts(kbVectorDef)
 
 			vectorCreated = await ensureNamedSearchIndex({
 				collection: kbChunks,
@@ -3610,7 +3621,6 @@ export async function ensureSearchIndexes(
 		const structVectorDef: Document = {
 			fields: [autoEmbedVectorField("value"), ...structFilterFields],
 		}
-		withVectorOpts(structVectorDef)
 
 		vectorCreated = await ensureNamedSearchIndex({
 			collection: structured,
@@ -3680,7 +3690,6 @@ export async function ensureSearchIndexes(
 				{ type: "filter", path: "validTo" },
 			],
 		}
-		withVectorOpts(procedureVectorDef)
 
 		vectorCreated = await ensureNamedSearchIndex({
 			collection: procedures,
@@ -3753,7 +3762,6 @@ export async function ensureSearchIndexes(
 		const eventsVectorDef: Document = {
 			fields: [autoEmbedVectorField("body"), ...eventsFilterFields],
 		}
-		withVectorOpts(eventsVectorDef)
 		vectorCreated = await ensureNamedSearchIndex({
 			collection: events,
 			name: `${prefix}events_vector`,
@@ -3787,7 +3795,6 @@ export async function ensureSearchIndexes(
 					{ type: "filter", path: "expiresAt" },
 				],
 			}
-			withVectorOpts(cacheVectorDef)
 			vectorCreated = await ensureNamedSearchIndex({
 				collection: queryCache,
 				name: `${prefix}query_cache_vector`,
@@ -3853,7 +3860,6 @@ export async function ensureSearchIndexes(
 			const sessionVectorDef: Document = {
 				fields: [autoEmbedVectorField("text"), ...sessionFilterFields],
 			}
-			withVectorOpts(sessionVectorDef)
 			vectorCreated = await ensureNamedSearchIndex({
 				collection: sessionChunks,
 				name: `${prefix}session_chunks_vector`,
@@ -3924,7 +3930,6 @@ export async function ensureSearchIndexes(
 			const evidenceVectorDef: Document = {
 				fields: [autoEmbedVectorField("text"), ...evidenceFilterFields],
 			}
-			withVectorOpts(evidenceVectorDef)
 			vectorCreated = await ensureNamedSearchIndex({
 				collection: memoryEvidence,
 				name: `${prefix}memory_evidence_vector`,
@@ -4086,11 +4091,13 @@ export async function detectCapabilities(
 		const versionArray = (buildInfo as { versionArray?: unknown }).versionArray
 		result.rankFusion = hasServerVersionAtLeast(versionArray, 8, 1)
 		result.scoreFusion = hasServerVersionAtLeast(versionArray, 8, 3)
-		// storedSource (return stored source fields from $vectorSearch) and
-		// vectorIndexMethod (indexingMethod: "flat" for filtered multitenant
-		// workloads) are MongoDB 8.3+ features.
-		result.storedSource = hasServerVersionAtLeast(versionArray, 8, 3)
-		result.vectorIndexMethod = hasServerVersionAtLeast(versionArray, 8, 3)
+		// storedSource and vectorIndexMethod stay false: these describe what
+		// THIS deployment's indexes were built with, not what the server
+		// version could support. ensureSearchIndexes ships auto-embedding
+		// indexes with neither option, so claiming them from a version number
+		// would send returnStoredSource: true at indexes that store nothing.
+		// Whoever re-enables stored source must set this from the index
+		// definition, not from buildInfo.
 	} catch {
 		try {
 			await db

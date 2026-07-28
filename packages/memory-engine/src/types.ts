@@ -844,6 +844,8 @@ export type MemoryJob = {
 	metadata?: Record<string, unknown>
 	payload?: MemoryExtractionJobPayload
 	attempts?: number
+	/** Earliest time a failed job may be claimed again. */
+	retryAt?: Date
 	stagedAt?: Date
 	leaseOwner?: string
 	leaseToken?: string

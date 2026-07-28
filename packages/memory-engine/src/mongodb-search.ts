@@ -5,7 +5,7 @@ import {
 	type MemoryScope,
 	createSubsystemLogger,
 } from "@memongo/lib"
-import { mergeHybridResultsMongoDB } from "./mongodb-hybrid.js"
+import { mergeHybridResultsMongoDB, rrfScore } from "./mongodb-hybrid.js"
 import { summarizeExplain } from "./mongodb-relevance.js"
 import type { DetectedCapabilities } from "./mongodb-schema.js"
 import type {
@@ -240,16 +240,41 @@ function filterByScore(
 	return results.filter((r) => r.score >= minScore)
 }
 
-function filterRankFusionResults(
+/**
+ * Rescale raw `$rankFusion` output into the [0,1] space every other search
+ * path reports in, then apply the caller's threshold.
+ *
+ * MongoDB computes the fused score as (quoting the `scoreDetails.description`
+ * the server itself returns): "value output by reciprocal rank fusion
+ * algorithm, computed as sum of (weight * (1 / (60 + rank))) across input
+ * pipelines from which this document is output". A document ranked #1 in every
+ * pipeline therefore scores `Σweights / 61` — with the 0.7/0.3 weights used
+ * here that ceiling is 1/61 ≈ 0.0164, measured exactly on a live cluster.
+ *
+ * Raw RRF output is thus not a relevance score and shares no scale with vector
+ * or lexical scores. Comparing it against a caller minScore of 0.1 made this
+ * function return [] for every query, which silently demoted every hybrid
+ * search to the JS-merge fallback below. `mergeHybridResultsMongoDB` already
+ * divides by this same ceiling; doing it here too is what makes the two paths
+ * interchangeable, which a fallback has to be.
+ */
+export function normalizeAndFilterRankFusionResults(
 	results: MemorySearchResult[],
 	minScore: number,
+	vectorWeight: number,
+	textWeight: number,
 ): MemorySearchResult[] {
-	// $rankFusion scores use MongoDB's RRF formula, so values are commonly
-	// around 0.01-0.03 and are not comparable to vector or lexical scores.
-	// Apply both a > 0 guard (drop zero-score results) and the caller's minScore
-	// (even though RRF scores are small, the caller's threshold should be
-	// honored for consistency with the scoreFusion path).
-	return results.filter((r) => r.score > 0 && r.score >= minScore)
+	const maxPossibleScore = (vectorWeight + textWeight) * rrfScore(1)
+	if (!(maxPossibleScore > 0)) {
+		return []
+	}
+	return results
+		.filter((r) => r.score > 0)
+		.map((r) => ({
+			...r,
+			score: Number(Math.min(1, r.score / maxPossibleScore).toFixed(6)),
+		}))
+		.filter((r) => r.score >= minScore)
 }
 
 function resolveLegacySourceFilter(
@@ -336,14 +361,28 @@ export function splitAtlasSearchFilter(filter?: Document): {
 	const visit = (node: Document) => {
 		for (const [key, value] of Object.entries(node)) {
 			if (key === "$and" && Array.isArray(value)) {
-				for (const entry of value) {
-					if (isPlainObject(entry)) {
+				if (value.every((entry) => isPlainObject(entry))) {
+					for (const entry of value) {
 						visit(entry as Document)
-					} else {
-						postMatchClauses.push({ $and: value as unknown[] })
-						return
 					}
+				} else {
+					// A non-object member means this isn't a shape we can flatten.
+					// Hand the whole clause to $match and keep visiting siblings —
+					// bailing out here used to drop every remaining key on the node,
+					// silently widening the query.
+					postMatchClauses.push({ $and: value as unknown[] })
 				}
+				continue
+			}
+
+			// Any other operator key ($or, $nor, $not, $expr, ...) has no path to
+			// bind to. buildSearchFilterClause would treat the operator itself as a
+			// field path and emit e.g. {in: {path: "$or", value: [{...}]}}, which
+			// mongot rejects outright ("must be a boolean, objectId, number,
+			// string, date, uuid, or null"), taking the whole Atlas Search pipeline
+			// down with it. $match handles these correctly, so route them there.
+			if (key.startsWith("$")) {
+				postMatchClauses.push({ [key]: value })
 				continue
 			}
 
@@ -924,7 +963,12 @@ export async function hybridSearchRankFusion(
 
 	const docs = await runSearchAggregateWithRetry(collection, pipeline)
 	const results = docs.map((doc) => toSearchResult(doc, "memory"))
-	return filterRankFusionResults(results, opts.minScore)
+	return normalizeAndFilterRankFusionResults(
+		results,
+		opts.minScore,
+		opts.vectorWeight,
+		opts.textWeight,
+	)
 }
 
 // ---------------------------------------------------------------------------
