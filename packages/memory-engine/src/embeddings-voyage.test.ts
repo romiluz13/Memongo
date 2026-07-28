@@ -160,3 +160,24 @@ describe("voyage embedding provider", () => {
 		expect(normalizeVoyageModel("")).toBe("voyage-4-large") // Default
 	})
 })
+
+describe("resolveVoyageBaseUrlForKey", () => {
+	it("routes Atlas Model keys to MongoDB and direct keys to Voyage", async () => {
+		// Atlas Model keys (al-...) are issued by MongoDB and only valid against
+		// ai.mongodb.com; sending one to Voyage's own API returns 403 — verified
+		// live. The docker preview setup mandates an al- key because mongot
+		// routes embeddings through ai.mongodb.com, so a deployment following
+		// the shipped docs could not use this provider at all. mongodb-reranker
+		// already routed on this prefix; embeddings did not.
+		const { resolveVoyageBaseUrlForKey } = await import(
+			"./embeddings-voyage.js"
+		)
+		expect(resolveVoyageBaseUrlForKey("al-example")).toBe(
+			"https://ai.mongodb.com/v1",
+		)
+		expect(resolveVoyageBaseUrlForKey("pa-example")).toBe(
+			"https://api.voyageai.com/v1",
+		)
+		expect(resolveVoyageBaseUrlForKey("")).toBe("https://api.voyageai.com/v1")
+	})
+})

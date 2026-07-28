@@ -79,8 +79,14 @@ type CategoryPattern = {
 
 const CATEGORY_PATTERNS: CategoryPattern[] = [
 	{
+		// First-person plural matters as much as singular here: in practice
+		// decisions get recorded as "we decided" / "we chose" far more often
+		// than "I decided", and the singular-only form silently dropped every
+		// one of them. Both readings are unambiguously a decision, so this stays
+		// within the false-positives-are-not-OK rule above.
 		type: "decision",
-		pattern: /\b(?:I\s+(?:decided|chose|picked|selected|went with))\s+(.+)/i,
+		pattern:
+			/\b(?:(?:I|we)\s+(?:decided|chose|picked|selected|went with))\s+(.+)/i,
 	},
 	{
 		type: "preference",
@@ -128,7 +134,7 @@ type PatternMatch = {
  * Returns null if no high-confidence pattern matches.
  * Checks all 8 category patterns in priority order.
  */
-function matchPatterns(body: string): PatternMatch | null {
+export function matchPatterns(body: string): PatternMatch | null {
 	for (const { type, pattern } of CATEGORY_PATTERNS) {
 		const match = pattern.exec(body)
 		if (match?.[1]) {

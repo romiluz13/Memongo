@@ -2026,3 +2026,55 @@ describe("Dreamer entity extraction integration (Phase 3.4)", () => {
 		)
 	}, 30_000)
 })
+
+describe("matchPatterns", () => {
+	it("extracts decisions phrased in the first person plural", async () => {
+		// Regression. The decision pattern matched only "I decided/chose/...",
+		// so every "we decided" statement fell through to no category and was
+		// never promoted. In the e2e evaluation fixtures that was all 8 of the
+		// decision events: consolidation reported 0 decisions while the suite
+		// expected 8. Every existing unit test used "I decided", which is why
+		// the gap survived.
+		for (const body of [
+			"We decided to use MongoDB for the memory layer",
+			"We chose Vitest over Jest for testing",
+			"We picked Turborepo for the build system",
+			"We selected Node 20 as the minimum",
+			"We went with Biome instead of ESLint",
+		]) {
+			const { matchPatterns } = await import("./mongodb-consolidator.js")
+			expect(matchPatterns(body), body).toMatchObject({ type: "decision" })
+		}
+	})
+
+	it("still extracts decisions phrased in the first person singular", async () => {
+		const { matchPatterns } = await import("./mongodb-consolidator.js")
+		expect(matchPatterns("I decided to use Bun instead of Node")).toMatchObject(
+			{ type: "decision" },
+		)
+	})
+
+	it("keeps the whole body as the value and the predicate as the key", async () => {
+		const { matchPatterns } = await import("./mongodb-consolidator.js")
+		const body = "We chose Vitest over Jest for testing"
+		expect(matchPatterns(body)).toEqual({
+			type: "decision",
+			key: "Vitest over Jest for testing",
+			value: body,
+		})
+	})
+
+	it("does not invent a decision from unrelated first-person-plural text", async () => {
+		// The category patterns are documented as conservative: false negatives
+		// are acceptable, false positives are not. Widening to "we" must not
+		// start classifying ordinary narration as a decision.
+		const { matchPatterns } = await import("./mongodb-consolidator.js")
+		for (const body of [
+			"We discussed the tradeoffs for a while",
+			"We were wondering about the schema",
+			"We deployed on Friday",
+		]) {
+			expect(matchPatterns(body)?.type, body).not.toBe("decision")
+		}
+	})
+})

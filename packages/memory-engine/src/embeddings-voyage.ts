@@ -16,6 +16,21 @@ export type VoyageEmbeddingClient = {
 
 export const DEFAULT_VOYAGE_EMBEDDING_MODEL = "voyage-4-large"
 const DEFAULT_VOYAGE_BASE_URL = "https://api.voyageai.com/v1"
+/**
+ * Atlas Model API keys (`al-...`) are issued by MongoDB and are only valid
+ * against MongoDB's endpoint; sending one to Voyage's own API returns 403.
+ * The reranker already routes on this prefix (see mongodb-reranker.ts), and
+ * the same key has to work for embeddings, otherwise a deployment configured
+ * per the docker docs — which mandate an `al-` key because mongot routes
+ * through ai.mongodb.com — cannot use this provider at all.
+ */
+const VOYAGE_ATLAS_BASE_URL = "https://ai.mongodb.com/v1"
+
+export function resolveVoyageBaseUrlForKey(apiKey: string): string {
+	return apiKey.startsWith("al-")
+		? VOYAGE_ATLAS_BASE_URL
+		: DEFAULT_VOYAGE_BASE_URL
+}
 const VOYAGE_MAX_INPUT_TOKENS: Record<string, number> = {
 	"voyage-3": 32000,
 	"voyage-3-lite": 16000,
@@ -90,6 +105,7 @@ export async function resolveVoyageEmbeddingClient(
 			provider: "voyage",
 			options,
 			defaultBaseUrl: DEFAULT_VOYAGE_BASE_URL,
+			resolveDefaultBaseUrl: resolveVoyageBaseUrlForKey,
 		})
 	const model = normalizeVoyageModel(options.model)
 	return { baseUrl, headers, ssrfPolicy, model }

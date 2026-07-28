@@ -9,6 +9,13 @@ export async function resolveRemoteEmbeddingBearerClient(params: {
 	provider: RemoteEmbeddingProviderId
 	options: EmbeddingProviderOptions
 	defaultBaseUrl: string
+	/**
+	 * Lets a provider pick its default endpoint from the resolved key, for
+	 * services that route different key types to different hosts. Explicit
+	 * configuration still wins, and the SSRF policy is computed from whatever
+	 * URL this ends up selecting.
+	 */
+	resolveDefaultBaseUrl?: (apiKey: string) => string
 }): Promise<{
 	baseUrl: string
 	headers: Record<string, string>
@@ -24,7 +31,10 @@ export async function resolveRemoteEmbeddingBearerClient(params: {
 		params.options.config.models?.providers?.[params.provider]
 	const apiKey = remoteApiKey ?? requireApiKey(params.provider)
 	const baseUrl =
-		remoteBaseUrl || providerConfig?.baseUrl?.trim() || params.defaultBaseUrl
+		remoteBaseUrl ||
+		providerConfig?.baseUrl?.trim() ||
+		params.resolveDefaultBaseUrl?.(apiKey) ||
+		params.defaultBaseUrl
 	const headerOverrides = Object.assign(
 		{},
 		providerConfig?.headers,
