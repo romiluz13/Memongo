@@ -1587,8 +1587,9 @@ describe.skipIf(!HAS_REAL_EMBEDDINGS)("Phase C: Consolidation", () => {
 		})
 
 		expect(result.eventsProcessed).toBeGreaterThan(0)
-		// The arch agent has ~10 "I prefer" and ~8 "I decided" statements
-		expect(result.factsPromoted).toBeGreaterThan(0)
+		// The arch agent has 10 "I prefer" and 8 "I decided" statements, all of
+		// them durable. ">0" was too weak to notice that only one was surviving.
+		expect(result.factsPromoted).toBeGreaterThanOrEqual(16)
 		promotedByAgent.set(CODING_AGENT_ARCH, result.factsPromoted)
 	}, 30_000)
 
@@ -1632,13 +1633,17 @@ describe.skipIf(!HAS_REAL_EMBEDDINGS)("Phase C: Consolidation", () => {
 		// Arch has 10 pref + 8 dec = 18 expected promotable
 		const archPromoted = promotedByAgent.get(CODING_AGENT_ARCH) ?? 0
 
-		// Score yield: 100 if >= 8 promoted (reasonable threshold for 18 promotable events)
-		// The actual count may be lower due to combinedScore filtering
-		if (archPromoted >= 8) {
+		// These bands used to top out at ">= 8 of 18", with the note "the actual
+		// count may be lower due to combinedScore filtering" — i.e. the scorecard
+		// was calibrated to a defect rather than to the contract. All 18 are
+		// durable preferences and decisions; the only legitimate losses are
+		// extraction misses, conflicts, and near-duplicate NOOPs, so the bar is
+		// now most of them rather than a third.
+		if (archPromoted >= 16) {
 			scores.consolidationYield = 100
-		} else if (archPromoted >= 5) {
+		} else if (archPromoted >= 12) {
 			scores.consolidationYield = 85
-		} else if (archPromoted >= 2) {
+		} else if (archPromoted >= 8) {
 			scores.consolidationYield = 70
 		} else if (archPromoted >= 1) {
 			scores.consolidationYield = 50

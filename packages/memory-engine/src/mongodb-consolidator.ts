@@ -58,11 +58,26 @@ const log = createSubsystemLogger("memory:mongodb:consolidator")
 // ---------------------------------------------------------------------------
 
 const DEFAULT_MAX_EVENTS = 100
-const DEFAULT_MIN_COMBINED_SCORE = 0.15 // Minimum combined score for Dreamer candidates (novelty + importance + access all live)
+// Quality floor only. This must never behave as a recency filter: whether a
+// fact is worth keeping does not depend on how long ago it was stated. Decay
+// belongs in retrieval ranking, not write eligibility.
+const DEFAULT_MIN_COMBINED_SCORE = 0.15
 const DEFAULT_MIN_INTERVAL_MS = 3_600_000 // 1 hour
 const DEFAULT_NOVELTY_WEIGHT = 0.4
-const DEFAULT_IMPORTANCE_WEIGHT = 0.3
-const DEFAULT_ACCESS_WEIGHT = 0.3
+// Raised from 0.3 to absorb the access weight below, keeping the score scale
+// near unity so the 0.15 threshold keeps the meaning callers already rely on.
+const DEFAULT_IMPORTANCE_WEIGHT = 0.6
+// Access is structurally ~0 at write time (raw events are appended, not
+// retrieved) and normalizedAccess is batch-relative, so the same event scores
+// 1.0 alone and 0.01 in a busy batch. It was 0.3 of the gate and carried no
+// signal. Weight 0 rather than removal keeps the option honored for callers
+// who set it explicitly.
+const DEFAULT_ACCESS_WEIGHT = 0
+// An event missing from the novelty report was never SCORED — scanNovelty caps
+// its candidate set — so its novelty is unknown, not zero. Treating unknown as
+// "perfectly duplicate" silently discarded every event past that cap. Real
+// duplicate detection is the $vectorSearch NOOP check in the promotion loop.
+const UNSCORED_NOVELTY = 0.5
 // Cap the facts fed to the reasoning phases so a large memory does not blow the
 // LLM context window or token budget on a single consolidation run.
 const REASONING_MAX_FACTS = 40
@@ -450,21 +465,24 @@ export async function consolidateMemory(params: {
 	// Score each event (unchanged scoring model)
 	// ===================================================================
 
-	// Get novelty scores (graceful degradation if mongot unavailable)
-	const noveltyOpts = options
-		? {
-				scope: options.scope,
-				scopeRef: options.scopeRef,
-				...(options.timeRange
-					? {
-							timeRange: {
-								start: options.timeRange.from,
-								end: options.timeRange.to,
-							},
-						}
-					: {}),
-			}
-		: undefined
+	// Get novelty scores (graceful degradation if mongot unavailable).
+	// The limit matters: scanNovelty defaults to scoring only 10 events, and
+	// this call used to omit it, so on a 100-event run 90 events came back
+	// unscored and were dropped by the score gate. Ask for as many as we are
+	// consolidating.
+	const noveltyOpts = {
+		limit: maxEvents,
+		...(options?.scope ? { scope: options.scope } : {}),
+		...(options?.scopeRef ? { scopeRef: options.scopeRef } : {}),
+		...(options?.timeRange
+			? {
+					timeRange: {
+						start: options.timeRange.from,
+						end: options.timeRange.to,
+					},
+				}
+			: {}),
+	}
 	const noveltyReport = await scanNovelty({
 		db,
 		prefix,
@@ -485,7 +503,15 @@ export async function consolidateMemory(params: {
 	)
 
 	const allCandidates: ConsolidationCandidate[] = events.map((event) => {
-		const noveltyScore = noveltyByEventId.get(event.eventId as string) ?? 0
+		const scoredNovelty = noveltyByEventId.get(event.eventId as string)
+		const noveltyScore = scoredNovelty ?? UNSCORED_NOVELTY
+		const importanceRaw =
+			typeof event.importance === "number" && Number.isFinite(event.importance)
+				? Math.min(1, Math.max(0, event.importance))
+				: 0.5
+		// Retained as an observability field only, never as a gate. An event's
+		// age describes how it should RANK today, not whether it is a durable
+		// fact worth keeping: "I prefer tabs" is exactly as true 27 days later.
 		const impDecay = computeImportanceDecay(
 			event.importance as number | undefined,
 			event.timestamp instanceof Date ? event.timestamp : undefined,
@@ -496,7 +522,7 @@ export async function consolidateMemory(params: {
 
 		const combinedScore =
 			noveltyWeight * noveltyScore +
-			importanceWeight * impDecay +
+			importanceWeight * importanceRaw +
 			accessWeight * normalizedAccess
 
 		// Scope-isolation safety: source-event scope/scopeRef flow through the
@@ -514,6 +540,7 @@ export async function consolidateMemory(params: {
 			timestamp:
 				event.timestamp instanceof Date ? event.timestamp : new Date(0),
 			noveltyScore,
+			importance: importanceRaw,
 			importanceDecay: impDecay,
 			accessCount: rawAccess,
 			combinedScore,
@@ -524,6 +551,8 @@ export async function consolidateMemory(params: {
 
 	// Filter by minCombinedScore and sort descending
 	const filteredCandidates = allCandidates
+		// An explicit importance of 0 is a caller veto: never promote this.
+		.filter((c) => (c.importance ?? 0.5) > 0)
 		.filter((c) => c.combinedScore >= minCombinedScore)
 		.toSorted((a, b) => b.combinedScore - a.combinedScore)
 

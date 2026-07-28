@@ -1496,6 +1496,11 @@ export type ConsolidationCandidate = {
 	noveltyScore: number
 	importanceDecay: number
 	accessCount: number
+	/**
+	 * Raw (undecayed) importance used for write eligibility. Write gating must
+	 * not depend on creation age; `importanceDecay` is diagnostic only.
+	 */
+	importance?: number
 	combinedScore: number
 	/**
 	 * Source-event scope. Scope-isolation safety threads scope/scopeRef from

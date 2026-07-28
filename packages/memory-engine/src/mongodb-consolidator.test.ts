@@ -1089,6 +1089,73 @@ describe("consolidateMemory", () => {
 		expect(result.candidates[0]?.noveltyScore).toBe(1)
 	})
 
+	it("scores an old event identically to a fresh one (age-invariance)", async () => {
+		// The contract, not just the count. Write eligibility used to multiply
+		// importance by 0.5**(ageDays/7), so a 60-day-old preference contributed
+		// ~0.001 where a same-day one contributed 0.15 — the same fact, promoted
+		// or silently dropped depending only on when it was said. A count-only
+		// assertion would pass again the day someone reintroduces a milder decay;
+		// equality is what pins it.
+		const { consolidateMemory } = await import("./mongodb-consolidator.js")
+		const { scanNovelty } = await import("./mongodb-novelty.js")
+		;(scanNovelty as ReturnType<typeof vi.fn>).mockImplementationOnce(
+			async () => ({ events: [], scannedCount: 0, agentId: "agent-1" }),
+		)
+		const now = new Date("2026-07-29T00:00:00.000Z")
+		const sixtyDaysAgo = new Date(now.getTime() - 60 * 24 * 60 * 60 * 1000)
+		const consolidationRunsCol = mockCollection({
+			findOne: vi.fn(async () => null),
+		})
+		const eventsCol = mockCollection({
+			find: vi.fn(() => ({
+				sort: vi.fn(() => ({
+					limit: vi.fn(() => ({
+						toArray: vi.fn(async () => [
+							{
+								eventId: "fresh",
+								agentId: "agent-1",
+								body: "I prefer tabs over spaces",
+								timestamp: now,
+								role: "user",
+							},
+							{
+								eventId: "old",
+								agentId: "agent-1",
+								body: "I prefer tabs over spaces",
+								timestamp: sixtyDaysAgo,
+								role: "user",
+							},
+						]),
+					})),
+				})),
+			})),
+		})
+		const db = mockDb({
+			test_consolidation_runs: consolidationRunsCol,
+			test_events: eventsCol,
+		})
+
+		const result = await consolidateMemory({
+			db,
+			prefix: "test_",
+			agentId: "agent-1",
+			options: { minIntervalMs: 0 },
+		})
+
+		const fresh = result.candidates.find((c) => c.eventId === "fresh")
+		const old = result.candidates.find((c) => c.eventId === "old")
+		expect(fresh).toBeDefined()
+		expect(old).toBeDefined()
+		expect(old?.combinedScore).toBe(fresh?.combinedScore)
+		// Both must clear the default gate — neither is a duplicate, and the
+		// novelty report returned nothing, which means "unscored", not "stale".
+		expect(fresh?.combinedScore).toBeGreaterThanOrEqual(0.15)
+		// The decay figure survives as an observability field, and still differs.
+		expect(old?.importanceDecay).toBeLessThan(
+			fresh?.importanceDecay ?? Number.POSITIVE_INFINITY,
+		)
+	})
+
 	it("uses 0.15 as default minCombinedScore when not specified", async () => {
 		const { consolidateMemory } = await import("./mongodb-consolidator.js")
 		const consolidationRunsCol = mockCollection({
