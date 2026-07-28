@@ -90,8 +90,16 @@ const EXPECTED_COLLECTION_SUFFIXES = [
 	"memory_mutations",
 	"lane_coverage",
 	"consolidation_runs",
+	// Added after this file was last able to run. The nightly job that would
+	// have caught the drift was passing a glob vitest treats as a substring
+	// filter, so it matched no files and never executed a single e2e test.
+	"access_events",
+	"memory_jobs",
+	"memory_quarantine",
+	"recall_traces",
+	"session_chunks",
 ] as const
-const EXPECTED_STANDARD_INDEX_COUNT = 67
+const EXPECTED_STANDARD_INDEX_COUNT = 90
 
 let client: MongoClient
 let db: Db
@@ -297,16 +305,27 @@ describe("E2E: Capability Detection", () => {
 		expect(caps.rankFusion).toBe(true)
 		expect(caps.scoreFusion).toBe(major > 8 || (major === 8 && minor >= 3))
 
-		let listSearchIndexesAvailable = false
+		// This used to compare against "did listSearchIndexes succeed", which is
+		// a weaker claim than detectCapabilities makes. Index management being
+		// reachable says nothing about whether a serving index exists: an empty
+		// or PENDING list cannot answer a query. Asserting the weaker premise
+		// meant the test failed whenever the indexes were still building, and
+		// would have passed on a deployment with no search indexes at all.
+		let searchIndexes: Array<{ name?: string; queryable?: boolean }> = []
 		try {
-			await chunksCollection(db, TEST_PREFIX).listSearchIndexes().toArray()
-			listSearchIndexesAvailable = true
+			searchIndexes = (await chunksCollection(db, TEST_PREFIX)
+				.listSearchIndexes()
+				.toArray()) as typeof searchIndexes
 		} catch {
-			listSearchIndexesAvailable = false
+			searchIndexes = []
 		}
+		const queryable = (name: string) =>
+			searchIndexes.some(
+				(index) => index.name === name && index.queryable === true,
+			)
 
-		expect(caps.vectorSearch).toBe(listSearchIndexesAvailable)
-		expect(caps.textSearch).toBe(listSearchIndexesAvailable)
+		expect(caps.vectorSearch).toBe(queryable(`${TEST_PREFIX}chunks_vector`))
+		expect(caps.textSearch).toBe(queryable(`${TEST_PREFIX}chunks_text`))
 	})
 })
 
