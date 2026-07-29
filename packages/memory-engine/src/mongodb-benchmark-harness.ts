@@ -120,12 +120,17 @@ async function replayConversationDataset(params: {
 				turnsImported++
 			} catch (err) {
 				failedTurns++
+				// Log the message, never the error object. A driver error carries the
+				// entire replica-set topology — every host, every field — which
+				// serializes to roughly 3 KB per failed turn. A full LongMemEval run
+				// replays ~269,000 turns, so one sustained outage buried the actual
+				// signal under gigabytes of identical topology dumps.
 				log.warn("conversation dataset replay turn failed", {
 					datasetPath: params.datasetPath,
 					datasetName: params.datasetName,
 					sessionId,
 					role: turn.role,
-					error: err,
+					error: err instanceof Error ? err.message : String(err),
 				})
 			}
 		}

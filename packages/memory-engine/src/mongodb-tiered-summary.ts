@@ -128,7 +128,7 @@ export function withTieredSummaries(
 			}
 		} catch (err) {
 			log.warn("tiered summary generation failed, using base summary only", {
-				error: err,
+				error: err instanceof Error ? err.message : String(err),
 			})
 			return base
 		}

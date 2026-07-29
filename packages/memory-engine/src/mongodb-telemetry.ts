@@ -68,7 +68,7 @@ export function emitTelemetry(
 		.catch((err) => {
 			log.warn("telemetry emit failed", {
 				operation: doc.meta.operation,
-				error: err,
+				error: err instanceof Error ? err.message : String(err),
 			})
 		})
 }

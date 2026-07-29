@@ -4385,7 +4385,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 						datasetName: params.datasetName,
 						sessionId,
 						role: (turn as MemoryBenchmarkTurn).role,
-						error: err,
+						error: err instanceof Error ? err.message : String(err),
 					})
 				}
 			}
@@ -4739,7 +4739,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 				if (!isBenchmarkStrictMode()) {
 					log.warn("benchmark vector convergence probe failed", {
 						agentId,
-						error: err,
+						error: err instanceof Error ? err.message : String(err),
 					})
 					return
 				}
@@ -4982,7 +4982,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 				if (!isBenchmarkStrictMode()) {
 					log.warn("benchmark event search convergence probe failed", {
 						agentId,
-						error: err,
+						error: err instanceof Error ? err.message : String(err),
 					})
 					return
 				}
@@ -5585,7 +5585,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 									}
 									log.warn("LLM enrichment failed, falling back to regex", {
 										scenarioId: scenario.scenarioId,
-										error: err,
+										error: err instanceof Error ? err.message : String(err),
 									})
 									// Full fallback to regex userfact extraction
 									if (userfactEvidenceMode === "enabled") {
@@ -5618,7 +5618,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 								sessionMode: effectiveSessionEvidenceMode,
 								userfactMode: userfactEvidenceMode,
 								scenarioId: scenario.scenarioId,
-								error: err,
+								error: err instanceof Error ? err.message : String(err),
 							})
 							if (isBenchmarkStrictMode()) {
 								const message = err instanceof Error ? err.message : String(err)
@@ -5863,7 +5863,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 						log.warn("benchmark evaluation query failed", {
 							scenarioId: scenario.scenarioId,
 							caseId: evaluation.caseId,
-							error: err,
+							error: err instanceof Error ? err.message : String(err),
 						})
 						executions.push(
 							evaluateRankingCase({
@@ -7153,7 +7153,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 						})
 					} catch (err) {
 						log.warn("entity extraction failed during outbox repair", {
-							error: err,
+							error: err instanceof Error ? err.message : String(err),
 							eventId: event.eventId,
 						})
 					}
@@ -8282,7 +8282,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 				enrichmentProvider = resolveEnrichmentProvider(process.env)
 			} catch (err) {
 				log.warn("enrichment provider resolution failed; using regex-only", {
-					error: err,
+					error: err instanceof Error ? err.message : String(err),
 				})
 			}
 			const enrichmentModel = process.env.MEMONGO_ENRICHMENT_MODEL?.trim() ?? ""
@@ -8910,7 +8910,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 				})
 			} catch (err) {
 				log.warn("lane coverage update failed after event write", {
-					error: err,
+					error: err instanceof Error ? err.message : String(err),
 				})
 			}
 
@@ -9157,7 +9157,7 @@ export async function writeEventAndProject(
 			entityCount = entityResult.entities.length
 		} catch (err) {
 			log.warn("entity extraction failed during writeEventAndProject", {
-				error: err,
+				error: err instanceof Error ? err.message : String(err),
 				eventId: written.eventId,
 			})
 		}
@@ -9206,7 +9206,7 @@ export async function writeEventAndProject(
 			episodeTriggered = episodeResult.triggered
 		} catch (err) {
 			log.warn("episode trigger check failed during writeEventAndProject", {
-				error: err,
+				error: err instanceof Error ? err.message : String(err),
 				eventId: written.eventId,
 			})
 		}
@@ -9273,7 +9273,7 @@ export async function writeEventAndProject(
 			})
 		} catch (err) {
 			log.warn("lane coverage update failed during writeEventAndProject", {
-				error: err,
+				error: err instanceof Error ? err.message : String(err),
 				eventId: written.eventId,
 			})
 		}
@@ -9684,7 +9684,7 @@ export async function searchV2(
 			}
 		} catch (err) {
 			log.warn("Failed to load lane coverage for planner", {
-				error: err,
+				error: err instanceof Error ? err.message : String(err),
 				agentId,
 			})
 		}

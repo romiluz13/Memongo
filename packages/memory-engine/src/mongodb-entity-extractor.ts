@@ -275,7 +275,7 @@ export class LLMEntityExtractor implements EntityExtractor {
 			return result
 		} catch (err) {
 			log.warn("LLM entity extraction failed, falling back to regex", {
-				error: err,
+				error: err instanceof Error ? err.message : String(err),
 			})
 			return this.fallback.extract(content)
 		} finally {

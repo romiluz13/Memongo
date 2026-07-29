@@ -147,7 +147,7 @@ export async function getRecentProjectionRuns(params: {
 		log.error("getRecentProjectionRuns failed", {
 			agentId,
 			projectionType,
-			error: err,
+			error: err instanceof Error ? err.message : String(err),
 		})
 		throw err
 	}
@@ -188,7 +188,7 @@ export async function getLatestProjectionRun(params: {
 		log.error("getLatestProjectionRun failed", {
 			agentId,
 			projectionType,
-			error: err,
+			error: err instanceof Error ? err.message : String(err),
 		})
 		throw err
 	}
@@ -215,7 +215,7 @@ export async function getProjectionLag(params: {
 		log.error("getProjectionLag failed", {
 			agentId,
 			projectionType,
-			error: err,
+			error: err instanceof Error ? err.message : String(err),
 		})
 		throw err
 	}
