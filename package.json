@@ -32,7 +32,8 @@
 		"compare-memory-eval": "bun scripts/compare-memory-eval.ts",
 		"agent-smoke": "bun scripts/real-agent-smoke.ts",
 		"capability-stress": "bun scripts/real-capability-stress.ts",
-		"benchmark:fetch": "bun scripts/fetch-benchmark-dataset.ts"
+		"benchmark:fetch": "bun scripts/fetch-benchmark-dataset.ts",
+		"benchmark": "bun scripts/run-benchmark.ts"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^2.4.0",
