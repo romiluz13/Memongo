@@ -2982,6 +2982,39 @@ describe("searchV2", () => {
 		expect(result.results[0].snippet).toContain("Morning standup")
 	})
 
+	it("executes planned paths concurrently, not serially", async () => {
+		// Most paths pay a server-side embedding round-trip inside
+		// $vectorSearch; run serially the loop costs the SUM of its lanes
+		// (3.5s measured on Atlas). The first path here refuses to resolve
+		// until it has seen the second path start.
+		mocked(planRetrieval).mockReturnValue({
+			paths: ["episodic", "raw-window"],
+			confidence: "high",
+			reasoning: "concurrency probe",
+		})
+
+		let rawWindowStarted = false
+		let rawWindowStartedBeforeEpisodicResolved = false
+		mocked(getEventsByTimeRange).mockImplementation(async () => {
+			rawWindowStarted = true
+			return []
+		})
+		mocked(searchEpisodes).mockImplementation(async () => {
+			for (let i = 0; i < 20 && !rawWindowStarted; i++) {
+				await new Promise((resolve) => setTimeout(resolve, 5))
+			}
+			rawWindowStartedBeforeEpisodicResolved = rawWindowStarted
+			return []
+		})
+
+		await searchV2(fakeDb, fakePrefix, "what happened today", "agent-1", {
+			availablePaths: new Set(["episodic", "raw-window"]),
+			searchOptions: { allowHybridBackstop: false },
+		})
+
+		expect(rawWindowStartedBeforeEpisodicResolved).toBe(true)
+	})
+
 	it("continues when one path fails (inner try/catch per path)", async () => {
 		mocked(planRetrieval).mockReturnValue({
 			paths: ["episodic", "raw-window", "hybrid"],

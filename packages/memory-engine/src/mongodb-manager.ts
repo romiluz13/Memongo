@@ -9837,7 +9837,14 @@ export async function searchV2(
 		// specialized paths come back weak or empty.
 		const pathsToExecute = plan.paths.slice(0, 3)
 
-		for (const path of pathsToExecute) {
+		// Each path is an independent read over its own collections, and most
+		// pay a server-side embedding round-trip inside $vectorSearch — run
+		// serially the loop costs the SUM of its lanes (3.5s measured on
+		// Atlas). Execute concurrently; merge in plan order below so ranking
+		// stays deterministic.
+		const executeSearchPath = async (
+			path: RetrievalPath,
+		): Promise<MemorySearchResult[]> => {
 			try {
 				let pathResults: MemorySearchResult[] = []
 
@@ -10321,18 +10328,27 @@ export async function searchV2(
 					}
 				}
 
-				if (pathResults.length > 0) {
-					pathsExecuted.push(path)
-					resultsByPath[path] = pathResults.length
-					perPathResults[path] = pathResults
-					results.push(...pathResults)
-				}
+				return pathResults
 			} catch (pathErr) {
 				if (isBenchmarkStrictMode()) {
 					throw pathErr
 				}
 				log.error(`searchV2 path ${path} failed`, { error: pathErr })
 				// Continue with other paths
+				return []
+			}
+		}
+
+		const pathOutcomes = await Promise.all(
+			pathsToExecute.map((path) => executeSearchPath(path)),
+		)
+		for (const [pathIndex, path] of pathsToExecute.entries()) {
+			const pathResults = pathOutcomes[pathIndex] ?? []
+			if (pathResults.length > 0) {
+				pathsExecuted.push(path)
+				resultsByPath[path] = pathResults.length
+				perPathResults[path] = pathResults
+				results.push(...pathResults)
 			}
 		}
 
