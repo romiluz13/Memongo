@@ -1093,6 +1093,26 @@ function jaccardSimilarity(a: Set<string>, b: Set<string>): number {
 	return union === 0 ? 0 : intersection / union
 }
 
+// #40 ablation switches. Each named heuristic can be turned OFF through the
+// same shipped code path (never a parallel benchmark scorer), so on/off
+// recall deltas measure exactly what production would do. The env var is in
+// the benchmark run identity's environmentKeys, so an ablated run hashes
+// differently and can never masquerade as the shipped default.
+export type ScoringAblationName =
+	| "session-evidence-boost"
+	| "classification-mmr"
+
+export function isScoringHeuristicAblated(name: ScoringAblationName): boolean {
+	const raw = process.env.MEMONGO_SCORING_ABLATION
+	if (!raw) {
+		return false
+	}
+	return raw
+		.split(",")
+		.map((token) => token.trim())
+		.includes(name)
+}
+
 export function applyMMRReranking(params: {
 	results: MemorySearchResult[]
 	classification: MemorySearchClassification
@@ -1109,7 +1129,9 @@ export function applyMMRReranking(params: {
 		scoped: 0.7,
 		"multi-hop": 0.7,
 	}
-	const lambda = lambdaByClassification[params.classification] ?? 0.5
+	const lambda = isScoringHeuristicAblated("classification-mmr")
+		? 0.5
+		: (lambdaByClassification[params.classification] ?? 0.5)
 
 	if (params.results.length < 3) {
 		return {
@@ -1413,11 +1435,15 @@ export function applyLaneAwareResultControls(params: {
 	const maxConversationTime =
 		conversationTimes.length > 0 ? Math.max(...conversationTimes) : 0
 
+	const sessionEvidenceBoostAblated = isScoringHeuristicAblated(
+		"session-evidence-boost",
+	)
 	const rescored = params.results.map((result) => {
 		const lane = inferSearchResultLane(result)
 		const evidenceUnit = readEvidenceUnit(result)
 		let multiplier = 1
 		if (
+			!sessionEvidenceBoostAblated &&
 			(lane === "conversation" || lane === "session-evidence") &&
 			hasSessionEvidence(result)
 		) {

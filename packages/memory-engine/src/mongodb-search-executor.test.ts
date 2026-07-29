@@ -1291,6 +1291,76 @@ describe("identifyRelaxableConstraint", () => {
 })
 
 // ---------------------------------------------------------------------------
+// Scoring ablation switches (#40)
+// ---------------------------------------------------------------------------
+
+describe("scoring ablation", () => {
+	const withAblation = async (value: string, run: () => Promise<void>) => {
+		const previous = process.env.MEMONGO_SCORING_ABLATION
+		process.env.MEMONGO_SCORING_ABLATION = value
+		try {
+			await run()
+		} finally {
+			if (previous === undefined) {
+				delete process.env.MEMONGO_SCORING_ABLATION
+			} else {
+				process.env.MEMONGO_SCORING_ABLATION = previous
+			}
+		}
+	}
+
+	it("disables the session-evidence lane boost when ablated", async () => {
+		const session = makeResult({
+			path: "events/evt-1",
+			canonicalId: "event:evt-1",
+			score: 0.78,
+			sessionId: "session-1",
+			sourceEventIds: ["evt-1"],
+		})
+		await withAblation("session-evidence-boost", async () => {
+			const controlled = applyLaneAwareResultControls({
+				query: "What did I say I prefer in the last conversation?",
+				results: [session],
+				classification: "direct",
+				planPaths: ["hybrid"],
+				topK: 3,
+			})
+			expect(controlled.summary.boosted).toBe(0)
+			expect(controlled.results[0]?.score).toBe(0.78)
+		})
+	})
+
+	it("flattens classification-keyed MMR lambdas when ablated", async () => {
+		const results: MemorySearchResult[] = [
+			makeResult({ snippet: "alpha beta gamma", score: 0.9 }),
+			makeResult({ snippet: "alpha beta delta", score: 0.85 }),
+			makeResult({ snippet: "epsilon zeta eta", score: 0.8 }),
+		]
+		await withAblation("classification-mmr", async () => {
+			const { mmrLambda } = applyMMRReranking({
+				results,
+				classification: "family",
+			})
+			expect(mmrLambda).toBe(0.5)
+		})
+	})
+
+	it("keeps shipped behavior when the ablation list names something else", async () => {
+		await withAblation("some-other-heuristic", async () => {
+			const { mmrLambda } = applyMMRReranking({
+				results: [
+					makeResult({ snippet: "a b c", score: 0.9 }),
+					makeResult({ snippet: "a b d", score: 0.85 }),
+					makeResult({ snippet: "x y z", score: 0.8 }),
+				],
+				classification: "family",
+			})
+			expect(mmrLambda).toBe(0.3)
+		})
+	})
+})
+
+// ---------------------------------------------------------------------------
 // applyMMRReranking unit tests
 // ---------------------------------------------------------------------------
 
