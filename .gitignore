@@ -46,3 +46,7 @@ docker/mongodb/.runtime/
 
 # OS
 Thumbs.db
+
+# Benchmark datasets — fetched on demand and verified against the SHA-256
+# pinned in benchmark-quality-contracts.ts. Too large to vendor (~265 MB).
+benchmarks/data/
