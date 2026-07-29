@@ -1,4 +1,4 @@
-import type { Collection, Document } from "mongodb"
+import type { AggregateOptions, Collection, Document } from "mongodb"
 import {
 	type MemoryMongoDBEmbeddingMode,
 	type MemoryMongoDBFusionMethod,
@@ -130,16 +130,18 @@ export async function runSearchAggregateWithRetry(
 	{
 		maxAttempts = 5,
 		initialDelayMs = 250,
+		aggregateOptions,
 	}: {
 		maxAttempts?: number
 		initialDelayMs?: number
+		aggregateOptions?: AggregateOptions
 	} = {},
 ): Promise<Document[]> {
 	let attempt = 0
 	let delayMs = initialDelayMs
 	while (true) {
 		try {
-			return await collection.aggregate(pipeline).toArray()
+			return await collection.aggregate(pipeline, aggregateOptions).toArray()
 		} catch (error) {
 			if (!isSearchIndexWarmupError(error) || attempt >= maxAttempts - 1) {
 				throw error

@@ -11,6 +11,10 @@ import type { MemorySearchResult } from "./types.js"
 
 const log = createSubsystemLogger("memory:mongodb:query-cache")
 
+// The tier-2 probe embeds the query server-side, so its floor is one provider
+// round-trip; the cap only cuts off pathological cases, not the happy path.
+const SEMANTIC_PROBE_MAX_TIME_MS = 1_500
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -172,6 +176,19 @@ export async function checkCache(params: {
 
 	// Tier 2: Semantic similarity via $vectorSearch with autoEmbed
 	try {
+		// The semantic probe embeds the query server-side — a full provider
+		// round-trip (~2.4s measured on Atlas) — so never pay it against a cache
+		// that cannot hit. estimatedDocumentCount is a collstats metadata read.
+		const cachedEntries = await col.estimatedDocumentCount()
+		if (cachedEntries === 0) {
+			emitTelemetry(db, prefix, {
+				meta: { agentId, operation: "cache-check" },
+				durationMs: Date.now() - cacheStart,
+				ok: true,
+				cacheHit: false,
+			})
+			return { hit: false, tier: "miss", results: [] }
+		}
 		const indexName = params.vectorIndexName ?? `${prefix}query_cache_vector`
 		const vsStage = buildVectorSearchStage({
 			queryVector: null,
@@ -208,7 +225,11 @@ export async function checkCache(params: {
 			},
 		]
 
-		const candidates = await runSearchAggregateWithRetry(col, pipeline)
+		// A cache probe slower than its budget costs more than it can save; let
+		// the server abandon it rather than serialize it in front of the search.
+		const candidates = await runSearchAggregateWithRetry(col, pipeline, {
+			aggregateOptions: { maxTimeMS: SEMANTIC_PROBE_MAX_TIME_MS },
+		})
 		if (
 			candidates.length > 0 &&
 			candidates[0].score >= config.similarityThreshold &&

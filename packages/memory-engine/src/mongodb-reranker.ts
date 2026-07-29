@@ -149,7 +149,10 @@ export async function crossEncoderRerank(params: {
 			if (isStrictRerankMode()) {
 				throw new Error(message)
 			}
-			log.warn("rerank API returned non-OK status", { status: response.status })
+			log.warn("rerank API returned non-OK status", {
+				status: response.status,
+				url: rerankUrl,
+			})
 			return { results, reranked: false, latencyMs: Date.now() - rerankStart }
 		}
 

@@ -14,8 +14,10 @@ vi.mock("./mongodb-search.js", async () => {
 	return {
 		...actual,
 		buildVectorSearchStage: vi.fn(),
-		runSearchAggregateWithRetry: vi.fn(async (collection, pipeline) => {
-			return await collection.aggregate(pipeline).toArray()
+		runSearchAggregateWithRetry: vi.fn(async (collection, pipeline, opts) => {
+			return await collection
+				.aggregate(pipeline, opts?.aggregateOptions)
+				.toArray()
 		}),
 	}
 })
@@ -51,6 +53,7 @@ function createMockCollection(
 	return {
 		findOne: vi.fn().mockResolvedValue(null),
 		findOneAndUpdate: vi.fn().mockResolvedValue(null),
+		estimatedDocumentCount: vi.fn().mockResolvedValue(1),
 		aggregate: vi
 			.fn()
 			.mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) }),
@@ -283,6 +286,58 @@ describe("checkCache", () => {
 			expect.objectContaining({
 				expiresAt: expect.objectContaining({ $gt: expect.any(Date) }),
 			}),
+		)
+	})
+
+	it("skips the semantic tier entirely when the cache collection is empty", async () => {
+		// The tier-2 probe is a $vectorSearch with server-side query embedding —
+		// a full provider round-trip (~2.4s measured on Atlas) spent on a cache
+		// that cannot hit. estimatedDocumentCount is a metadata read.
+		vi.mocked(mockCol.findOne).mockResolvedValue(null)
+		const estimatedDocumentCount = vi.fn().mockResolvedValue(0)
+		;(mockCol as unknown as Record<string, unknown>).estimatedDocumentCount =
+			estimatedDocumentCount
+		vi.mocked(buildVectorSearchStage).mockReturnValue({
+			index: "test_query_cache_vector",
+		} as never)
+
+		const result = await checkCache({
+			db: {} as Db,
+			prefix: PREFIX,
+			query: "test query",
+			agentId: AGENT_ID,
+			scope: SCOPE,
+			scopeRef: SCOPE_REF,
+			config: DEFAULT_CONFIG,
+		})
+
+		expect(result.hit).toBe(false)
+		expect(estimatedDocumentCount).toHaveBeenCalled()
+		expect(mockCol.aggregate).not.toHaveBeenCalled()
+	})
+
+	it("caps the semantic probe latency with maxTimeMS", async () => {
+		vi.mocked(mockCol.findOne).mockResolvedValue(null)
+		;(mockCol as unknown as Record<string, unknown>).estimatedDocumentCount = vi
+			.fn()
+			.mockResolvedValue(3)
+		vi.mocked(buildVectorSearchStage).mockReturnValue({
+			index: "test_query_cache_vector",
+		} as never)
+
+		await checkCache({
+			db: {} as Db,
+			prefix: PREFIX,
+			query: "test query",
+			agentId: AGENT_ID,
+			scope: SCOPE,
+			scopeRef: SCOPE_REF,
+			config: DEFAULT_CONFIG,
+		})
+
+		expect(mockCol.aggregate).toHaveBeenCalledWith(
+			expect.anything(),
+			expect.objectContaining({ maxTimeMS: expect.any(Number) }),
 		)
 	})
 
