@@ -2173,6 +2173,34 @@ export async function ensureStandardIndexes(
 		{ name: "idx_episodes_agent_scope_scoperef_type_start" },
 	)
 	applied++
+	// Content address of the summarized event set — the identity materializeEpisode
+	// upserts on. Unique so two concurrent materializations of the same events
+	// cannot both insert; partial so episodes written before the field existed do
+	// not all collide on a missing key.
+	try {
+		await episodes.createIndex(
+			{ agentId: 1, scope: 1, scopeRef: 1, type: 1, sourceEventsHash: 1 },
+			{
+				name: "uq_episodes_source_events",
+				unique: true,
+				partialFilterExpression: { sourceEventsHash: { $type: "string" } },
+			},
+		)
+		applied++
+	} catch (err) {
+		const msg = err instanceof Error ? err.message : String(err)
+		if (msg.includes("duplicate") || msg.includes("already exists")) {
+			// Pre-existing duplicate episodes (the very defect this index prevents)
+			// block creation. Log loudly rather than failing startup — the upsert
+			// filter already converges new writes onto one document per event set.
+			log.warn(
+				"unique index uq_episodes_source_events: index exists or duplicate episodes detected; skipping",
+			)
+			applied++
+		} else {
+			throw err
+		}
+	}
 	await episodes.createIndex(
 		{ summary: "text", title: "text" },
 		{ name: "idx_episodes_text" },

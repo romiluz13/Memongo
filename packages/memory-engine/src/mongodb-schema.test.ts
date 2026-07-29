@@ -568,7 +568,7 @@ describe("ensureStandardIndexes", () => {
 		// + 3 session_chunks + 1 bi-temporal valid-time (#32)
 		// + 1 durable memory-job claim index + 1 extraction outbox partial index
 		// + 1 unique relation identity index = 89
-		expect(count).toBe(90)
+		expect(count).toBe(91)
 		expect(chunks.createIndex).toHaveBeenCalledTimes(4)
 		expect(cache.createIndex).toHaveBeenCalledTimes(2)
 		expect(kb.createIndex).toHaveBeenCalledTimes(5)
@@ -625,7 +625,7 @@ describe("ensureStandardIndexes", () => {
 			{ name: "uq_relations_identity", unique: true },
 		)
 		expect(entityLinks.createIndex).toHaveBeenCalledTimes(2)
-		expect(episodes.createIndex).toHaveBeenCalledTimes(4)
+		expect(episodes.createIndex).toHaveBeenCalledTimes(5)
 		expect(ingestRuns.createIndex).toHaveBeenCalledTimes(1)
 		expect(projectionRuns.createIndex).toHaveBeenCalledTimes(1)
 
@@ -688,7 +688,7 @@ describe("ensureStandardIndexes", () => {
 			) as unknown as {
 				createIndex: ReturnType<typeof vi.fn>
 			}
-			expect(count).toBe(94)
+			expect(count).toBe(95)
 			expect(memoryEvidence.createIndex).toHaveBeenCalledTimes(4)
 			expect(memoryEvidence.createIndex).toHaveBeenCalledWith(
 				{ canonicalId: 1 },
@@ -876,7 +876,7 @@ describe("ensureStandardIndexes", () => {
 		// + 1 lane_coverage + 1 consolidation_runs + 3 session_chunks
 		// + 1 bi-temporal valid-time (#32) + 1 durable job claim index
 		// + 1 extraction outbox partial index + 1 unique relation identity = 89
-		expect(count).toBe(90)
+		expect(count).toBe(91)
 	})
 
 	it("creates relevance TTL indexes when relevanceRetentionDays is set", async () => {
@@ -2813,7 +2813,7 @@ describe("ensureStandardIndexes total count with query_cache and time series ind
 		// + 1 lane_coverage + 1 consolidation_runs + 3 session_chunks
 		// + 1 bi-temporal valid-time (#32) + 1 durable job claim index
 		// + 1 extraction outbox partial index + 1 unique relation identity = 89
-		expect(count).toBe(90)
+		expect(count).toBe(91)
 	})
 })
 

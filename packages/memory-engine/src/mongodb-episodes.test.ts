@@ -10,6 +10,7 @@ vi.mock("./mongodb-events.js", () => ({
 }))
 
 import {
+	hashSourceEventIds,
 	materializeEpisode,
 	getEpisodesByTimeRange,
 	getEpisodesByType,
@@ -281,6 +282,96 @@ describe("mongodb-episodes", () => {
 			expect(episodesCol.updateOne).toHaveBeenCalledOnce()
 		})
 
+		it("keys episode identity on the event set, not the query window", async () => {
+			// The auto-trigger derives timeRange from whichever event window it
+			// happened to select (resolveTriggeredEpisodeWindow), so two runs over
+			// the SAME events can produce slightly different window boundaries.
+			// When timeRange was part of the upsert identity, that jitter minted a
+			// brand-new episode over identical content — observed live as three
+			// episode documents with byte-identical summaries and identical
+			// 18-element sourceEventIds, all competing for retrieval slots.
+			const start = new Date("2026-03-15T09:00:00Z")
+			const end = new Date("2026-03-15T10:00:00Z")
+			const eventDocs = makeEventDocs(5, start)
+			vi.mocked(getEventsByTimeRangeMock).mockResolvedValue(eventDocs as never)
+
+			const episodesCol = createMockCollection()
+			const db = createMockDb({ [`${PREFIX}episodes`]: episodesCol })
+
+			await materializeEpisode({
+				db,
+				prefix: PREFIX,
+				agentId: AGENT_ID,
+				type: "daily",
+				timeRange: { start, end },
+				summarizer: mockSummarizer,
+			})
+			// Same events, a window widened by one second.
+			await materializeEpisode({
+				db,
+				prefix: PREFIX,
+				agentId: AGENT_ID,
+				type: "daily",
+				timeRange: { start, end: new Date(end.getTime() + 1000) },
+				summarizer: mockSummarizer,
+			})
+
+			const calls = (episodesCol.updateOne as ReturnType<typeof vi.fn>).mock
+				.calls
+			expect(calls).toHaveLength(2)
+			const [filterA] = calls[0]
+			const [filterB] = calls[1]
+
+			// Both runs must address the SAME document.
+			expect(filterA).toEqual(filterB)
+			// The window must not be part of that address...
+			expect(filterA["timeRange.start"]).toBeUndefined()
+			expect(filterA["timeRange.end"]).toBeUndefined()
+			// ...and the event set must be.
+			expect(typeof filterA.sourceEventsHash).toBe("string")
+			expect(filterA.sourceEventsHash).toHaveLength(64)
+
+			// timeRange is still recorded, just as derived data rather than identity.
+			const [, updateA] = calls[0]
+			expect(updateA.$set.timeRange).toEqual({ start, end })
+		})
+
+		it("gives a different identity to a genuinely different event set", async () => {
+			const start = new Date("2026-03-15T09:00:00Z")
+			const end = new Date("2026-03-15T10:00:00Z")
+			const episodesCol = createMockCollection()
+			const db = createMockDb({ [`${PREFIX}episodes`]: episodesCol })
+
+			vi.mocked(getEventsByTimeRangeMock).mockResolvedValue(
+				makeEventDocs(5, start) as never,
+			)
+			await materializeEpisode({
+				db,
+				prefix: PREFIX,
+				agentId: AGENT_ID,
+				type: "daily",
+				timeRange: { start, end },
+				summarizer: mockSummarizer,
+			})
+			vi.mocked(getEventsByTimeRangeMock).mockResolvedValue(
+				makeEventDocs(6, start) as never,
+			)
+			await materializeEpisode({
+				db,
+				prefix: PREFIX,
+				agentId: AGENT_ID,
+				type: "daily",
+				timeRange: { start, end },
+				summarizer: mockSummarizer,
+			})
+
+			const calls = (episodesCol.updateOne as ReturnType<typeof vi.fn>).mock
+				.calls
+			expect(calls[0][0].sourceEventsHash).not.toBe(
+				calls[1][0].sourceEventsHash,
+			)
+		})
+
 		it("stores sourceEventCount and sample sourceEventIds", async () => {
 			const start = new Date("2026-03-15T09:00:00Z")
 			const end = new Date("2026-03-15T10:00:00Z")
@@ -503,8 +594,12 @@ describe("mongodb-episodes", () => {
 			).mock.calls[0]
 			expect(filter.agentId).toBe(AGENT_ID)
 			expect(filter.type).toBe("daily")
-			expect(filter["timeRange.start"]).toEqual(start)
-			expect(filter["timeRange.end"]).toEqual(end)
+			// The idempotent key is the event set, not the query window — a window
+			// that shifts by a fraction of a second must still address the same
+			// episode. See "keys episode identity on the event set" above.
+			expect(filter.sourceEventsHash).toEqual(
+				hashSourceEventIds(["evt-0", "evt-1", "evt-2", "evt-3", "evt-4"]),
+			)
 			expect(opts).toEqual({ upsert: true })
 			expect(result?.episodeId).toBe("ep-existing")
 		})
