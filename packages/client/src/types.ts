@@ -660,6 +660,7 @@ export type MemongoBenchmarkRunReport = {
 					eligibilityPolicy: "exclude-abstention-and-no-user-answer-target"
 					candidateProjection:
 						| "one-session-document-one-label"
+						| "native-source-attribution-flattened"
 						| "native-memory-source-session-adapter"
 					comparability: "canonical" | "adapted"
 				}

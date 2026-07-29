@@ -989,6 +989,9 @@ export type MemoryBenchmarkEvaluatorIdentity = {
 	eligibilityPolicy: "exclude-abstention-and-no-user-answer-target"
 	candidateProjection:
 		| "one-session-document-one-label"
+		| "native-source-attribution-flattened"
+		// Retained for reports produced before the native lane became canonical;
+		// no current code path emits it.
 		| "native-memory-source-session-adapter"
 	comparability: "canonical" | "adapted"
 }

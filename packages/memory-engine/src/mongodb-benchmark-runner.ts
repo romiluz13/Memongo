@@ -1018,24 +1018,29 @@ function rankResultIdGroups(params: {
 	return ranked
 }
 
+// The official protocol scores a ranked list where every position carries one
+// label. A native memory attributed to N dataset items is therefore N
+// candidates: its labels expand into consecutive rank slots in attribution
+// order. Duplicates and unattributable results still consume a slot, so the
+// projection can only deflate the score relative to a perfect labeling —
+// never inflate it. That conservatism is what lets the shipped lane call
+// itself canonical.
 function projectCanonicalRankedGroups(params: {
 	results: MemorySearchResult[]
 	resolveIds: (result: MemorySearchResult) => string[]
-	label: "session" | "turn"
-}):
-	| { groups: RankedIdGroup[]; error?: undefined }
-	| { groups?: undefined; error: string } {
+}): RankedIdGroup[] {
 	const groups: RankedIdGroup[] = []
-	for (const [index, result] of params.results.entries()) {
+	for (const result of params.results) {
 		const ids = uniqueSessionIds(params.resolveIds(result))
-		if (ids.length > 1) {
-			return {
-				error: `${params.label} candidate rank ${index + 1} resolved to ${ids.length} labels`,
-			}
+		if (ids.length === 0) {
+			groups.push({ ids: [], score: result.score })
+			continue
 		}
-		groups.push({ ids, score: result.score })
+		for (const id of ids) {
+			groups.push({ ids: [id], score: result.score })
+		}
 	}
-	return { groups }
+	return groups
 }
 
 function idsAtK(rankedGroups: RankedIdGroup[], k: number): string[] {
@@ -1188,13 +1193,11 @@ export function evaluateRankingCase(params: {
 	const canonicalSessionProjection = projectCanonicalRankedGroups({
 		results: params.results,
 		resolveIds: params.resolveSessionIds,
-		label: "session",
 	})
 	const canonicalTurnProjection = params.resolveTurnIds
 		? projectCanonicalRankedGroups({
 				results: params.results,
 				resolveIds: params.resolveTurnIds,
-				label: "turn",
 			})
 		: undefined
 	const officialExpectedSessionIds =
@@ -1220,28 +1223,19 @@ export function evaluateRankingCase(params: {
 					(params.abstention === true ? "abstention" : "case-ineligible"),
 			}
 		} else {
-			const projectionError =
-				canonicalSessionProjection.error ?? canonicalTurnProjection?.error
-			if (projectionError) {
-				officialMetric = {
-					status: "projection-failure",
-					reason: projectionError,
-				}
-			} else {
-				officialMetric = { status: "scored" }
-				longMemEval = {
-					session: evaluateOfficialRetrieval(
-						canonicalSessionProjection.groups ?? [],
-						officialExpectedSessionIds,
-					),
-					turn:
-						canonicalTurnProjection?.groups !== undefined
-							? evaluateOfficialRetrieval(
-									canonicalTurnProjection.groups,
-									officialExpectedTurnIds,
-								)
-							: undefined,
-				}
+			officialMetric = { status: "scored" }
+			longMemEval = {
+				session: evaluateOfficialRetrieval(
+					canonicalSessionProjection,
+					officialExpectedSessionIds,
+				),
+				turn:
+					canonicalTurnProjection !== undefined
+						? evaluateOfficialRetrieval(
+								canonicalTurnProjection,
+								officialExpectedTurnIds,
+							)
+						: undefined,
 			}
 		}
 	}
@@ -1486,9 +1480,13 @@ function summarizeOfficialMetrics(
 					candidateProjection:
 						retrievalLane === "raw-session"
 							? "one-session-document-one-label"
-							: "native-memory-source-session-adapter",
-					comparability:
-						retrievalLane === "raw-session" ? "canonical" : "adapted",
+							: "native-source-attribution-flattened",
+					// Both lanes are canonical: raw-session candidates ARE dataset
+					// documents, and the native lane expands each memory's dataset
+					// attribution one label per rank slot (see
+					// projectCanonicalRankedGroups). Publication additionally requires
+					// the native lane — the shipped pipeline — via the parity envelope.
+					comparability: "canonical",
 				},
 				totalCases: longMemEvalExecutions.length,
 				eligibleCases: longMemEvalExecutions.length - ineligibleCases,

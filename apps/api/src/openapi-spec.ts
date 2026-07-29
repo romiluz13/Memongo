@@ -101,6 +101,7 @@ const benchmarkOfficialMetricsSchema = {
 							type: "string",
 							enum: [
 								"one-session-document-one-label",
+								"native-source-attribution-flattened",
 								"native-memory-source-session-adapter",
 							],
 						},

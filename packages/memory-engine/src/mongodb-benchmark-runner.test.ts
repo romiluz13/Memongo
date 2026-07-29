@@ -507,7 +507,7 @@ describe("mongodb benchmark runner", () => {
 		})
 	})
 
-	it("rejects multi-label candidates from the canonical LongMemEval projection", () => {
+	it("flattens multi-label candidates into consecutive canonical rank slots", () => {
 		const evaluation = evaluateRankingCase({
 			results: [makeResult({ path: "multi-session", score: 0.9 })],
 			latencyMs: 1,
@@ -517,10 +517,33 @@ describe("mongodb benchmark runner", () => {
 		})
 
 		expect(evaluation.rAt5).toBe(1)
-		expect(evaluation.longMemEval).toBeUndefined()
-		expect(evaluation.officialMetric).toEqual({
-			status: "projection-failure",
-			reason: "session candidate rank 1 resolved to 2 labels",
+		expect(evaluation.officialMetric).toEqual({ status: "scored" })
+		expect(evaluation.longMemEval?.session).toMatchObject({
+			recallAnyAt1: 1,
+			recallAllAt1: 0,
+			recallAllAt3: 1,
+		})
+	})
+
+	it("never lets a multi-label candidate outrank the slots it occupies", () => {
+		// One memory attributed to [s1, s2] where only s2 is relevant: s1 must
+		// consume rank 1, so the earliest the answer can appear is rank 2.
+		const evaluation = evaluateRankingCase({
+			results: [
+				makeResult({ path: "multi-session", score: 0.9 }),
+				makeResult({ path: "relevant-later", score: 0.8, sessionId: "s3" }),
+			],
+			latencyMs: 1,
+			relevantSessionIds: ["s2"],
+			resolveSessionIds: (result) =>
+				result.sessionId ? [result.sessionId] : ["s1", "s2"],
+			datasetKind: "longmemeval",
+		})
+
+		expect(evaluation.officialMetric).toEqual({ status: "scored" })
+		expect(evaluation.longMemEval?.session).toMatchObject({
+			recallAnyAt1: 0,
+			recallAnyAt3: 1,
 		})
 	})
 
@@ -610,6 +633,52 @@ describe("mongodb benchmark runner", () => {
 		expect(evaluation.scored).toBe(false)
 		expect(evaluation.rAt5).toBe(0)
 		expect(evaluation.ndcgAt10).toBe(0)
+	})
+
+	it("labels the native lane canonical under the flattened attribution projection", () => {
+		const summary = summarizeBenchmarkExecutions({
+			datasetKind: "longmemeval",
+			retrievalLane: "native",
+			executions: [
+				evaluateRankingCase({
+					results: [makeResult({ path: "a", score: 0.9, sessionId: "s1" })],
+					latencyMs: 1,
+					relevantSessionIds: ["s1"],
+					resolveSessionIds: (result) =>
+						result.sessionId ? [result.sessionId] : [],
+					datasetKind: "longmemeval",
+				}),
+			],
+		})
+
+		expect(summary.officialMetrics?.longMemEval?.evaluator).toMatchObject({
+			candidateProjection: "native-source-attribution-flattened",
+			comparability: "canonical",
+		})
+		expect(summary.officialMetrics?.longMemEval?.retrievalCases).toBe(1)
+		expect(summary.officialMetrics?.longMemEval?.projectionFailureCases).toBe(0)
+	})
+
+	it("keeps the raw-session lane on the one-document-one-label projection", () => {
+		const summary = summarizeBenchmarkExecutions({
+			datasetKind: "longmemeval",
+			retrievalLane: "raw-session",
+			executions: [
+				evaluateRankingCase({
+					results: [makeResult({ path: "a", score: 0.9, sessionId: "s1" })],
+					latencyMs: 1,
+					relevantSessionIds: ["s1"],
+					resolveSessionIds: (result) =>
+						result.sessionId ? [result.sessionId] : [],
+					datasetKind: "longmemeval",
+				}),
+			],
+		})
+
+		expect(summary.officialMetrics?.longMemEval?.evaluator).toMatchObject({
+			candidateProjection: "one-session-document-one-label",
+			comparability: "canonical",
+		})
 	})
 
 	it("summarizes executions with question-type breakdown", () => {
