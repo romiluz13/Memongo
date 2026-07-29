@@ -3190,6 +3190,40 @@ describe("searchV2", () => {
 		expect(result.results.length).toBeGreaterThan(0)
 	})
 
+	it("passes the configured graph depth into graph expansion", async () => {
+		// graph.maxGraphDepth was resolved from config but never reached
+		// $graphLookup — every deployment silently ran at the hardcoded default.
+		mocked(planRetrieval).mockReturnValue({
+			paths: ["graph"],
+			confidence: "high",
+			reasoning: "known entity detected",
+		})
+		mocked(searchEntitiesAutocomplete).mockResolvedValue([
+			{
+				entityId: "ent-1",
+				name: "Alice",
+				type: "person",
+				agentId: "agent-1",
+				scope: "agent",
+				updatedAt: new Date(),
+			},
+		])
+		mocked(expandGraph).mockResolvedValue(null)
+
+		await searchV2(fakeDb, fakePrefix, "what does Alice work on", "agent-1", {
+			availablePaths: new Set(["graph"]),
+			knownEntityNames: ["Alice"],
+			searchOptions: {
+				allowHybridBackstop: false,
+				graphMaxDepth: 4,
+			},
+		})
+
+		expect(expandGraph).toHaveBeenCalledWith(
+			expect.objectContaining({ maxDepth: 4 }),
+		)
+	})
+
 	it("passes the planned time-range end into graph expansion asOf", async () => {
 		const plannedEnd = new Date("2026-04-11T12:00:00.000Z")
 		mocked(resolveTimeRangePreset).mockReturnValue({

@@ -2949,6 +2949,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 					capabilities: this.capabilities,
 					fusionMethod: mongoCfg.fusionMethod,
 					embeddingMode: mongoCfg.embeddingMode,
+					graphMaxDepth: mongoCfg.graph.maxGraphDepth,
 					conversationFilter: this.buildConversationChunkFilter({
 						scope: searchScope,
 						scopeRef: searchScopeRef,
@@ -3248,6 +3249,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 						capabilities: this.capabilities,
 						fusionMethod: resolvedSearchConfig.fusionMethod,
 						embeddingMode: mongoCfg.embeddingMode,
+						graphMaxDepth: mongoCfg.graph.maxGraphDepth,
 						conversationFilter: this.buildConversationChunkFilter({
 							scope: searchScope,
 							scopeRef: searchScopeRef,
@@ -7806,6 +7808,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 							capabilities: this.capabilities,
 							fusionMethod: mongoCfg.fusionMethod,
 							embeddingMode: mongoCfg.embeddingMode,
+							graphMaxDepth: mongoCfg.graph.maxGraphDepth,
 							conversationFilter: this.buildConversationChunkFilter({
 								scope: params.scope,
 								scopeRef: params.scopeRef,
@@ -9602,6 +9605,7 @@ export async function searchV2(
 			structuredScope?: MemorySearchRequest["structuredScope"]
 			referenceScope?: MemorySearchRequest["referenceScope"]
 			proceduralScope?: MemorySearchRequest["proceduralScope"]
+			graphMaxDepth?: number
 			searchConfig?: ResolvedSearchConfig
 			questionDate?: Date
 			benchmarkRunContext?: BenchmarkRunContext
@@ -9982,6 +9986,9 @@ export async function searchV2(
 									scope,
 									scopeRef: agentScopeRef,
 									asOf: timeRange?.end,
+									...(context.searchOptions?.graphMaxDepth != null
+										? { maxDepth: context.searchOptions.graphMaxDepth }
+										: {}),
 								})
 								if (graph) {
 									pathResults = graph.connections.map((c, i) => ({
