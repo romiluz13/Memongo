@@ -190,16 +190,24 @@ function buildEpisodeTitleTerms(
 	return pickTopTerms(events.map((event) => event.body).join(" "), 3)
 }
 
+/**
+ * `type` labels the lens the episode is being written under. Two episodes over
+ * the same events but under different lenses must not read identically —
+ * otherwise both surface in one search as apparent duplicates. Defaults to
+ * "thread" so callers that omit it keep the previous wording.
+ */
 export async function heuristicEpisodeSummarizer(
 	events: Array<{ role: string; body: string; timestamp: Date }>,
+	type = "thread",
 ): Promise<{ title: string; summary: string; tags?: string[] }> {
 	const terms = buildEpisodeTitleTerms(events)
+	const lens = type.charAt(0).toUpperCase() + type.slice(1)
 	const title =
-		terms.length > 0 ? `Thread: ${terms.join(", ")}` : "Thread: conversation"
+		terms.length > 0 ? `${lens}: ${terms.join(", ")}` : `${lens}: conversation`
 	const first = normalizeWhitespace(events[0]?.body ?? "")
 	const last = normalizeWhitespace(events[events.length - 1]?.body ?? "")
 	const summary = [
-		`${events.length} messages captured in this conversation thread.`,
+		`${events.length} messages captured in this ${type} episode.`,
 		first ? `Started with: ${first.slice(0, 160)}` : null,
 		last && last !== first ? `Ended with: ${last.slice(0, 160)}` : null,
 	]

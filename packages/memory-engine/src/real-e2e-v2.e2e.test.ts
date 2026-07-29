@@ -827,7 +827,14 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 
 	describe("Phase 4: Episode Materialization", () => {
 		// Simple summarizer that creates realistic-looking summaries without LLM
-		const testSummarizer: EpisodeSummarizer = async (events) => {
+		// Mirrors the production contract: the episode type is a lens, so two
+		// episodes over the same events under different lenses must not read
+		// identically. Without this the daily/topic/decision episodes below are
+		// byte-identical clones and all three surface in one search.
+		const testSummarizer: EpisodeSummarizer = async (
+			events,
+			type = "thread",
+		) => {
 			const userMessages = events.filter((e) => e.role === "user")
 			const topics = new Set<string>()
 
@@ -859,8 +866,8 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 			}
 
 			return {
-				title: `DataVault session: ${[...topics].slice(0, 3).join(", ")} (${userMessages.length} user turns)`,
-				summary: `Discussion covering ${[...topics].join(", ")}. ${events.length} messages exchanged, ${userMessages.length} user turns. Key entities mentioned: ${
+				title: `DataVault ${type}: ${[...topics].slice(0, 3).join(", ")} (${userMessages.length} user turns)`,
+				summary: `${type} view. Discussion covering ${[...topics].join(", ")}. ${events.length} messages exchanged, ${userMessages.length} user turns. Key entities mentioned: ${
 					events
 						.flatMap((e) => {
 							const mentions = e.body.match(/@[\w-]+/g) || []

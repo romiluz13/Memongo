@@ -282,6 +282,29 @@ describe("mongodb-episodes", () => {
 			expect(episodesCol.updateOne).toHaveBeenCalledOnce()
 		})
 
+		it("passes the episode type to the summarizer so lenses differ", async () => {
+			// Without this, a daily, a topic and a decision episode over one window
+			// are byte-identical clones — the summarizer had no way to tell them
+			// apart — and all three surface together in a single search.
+			const start = new Date("2026-03-15T09:00:00Z")
+			vi.mocked(getEventsByTimeRangeMock).mockResolvedValue(
+				makeEventDocs(4, start) as never,
+			)
+			const episodesCol = createMockCollection()
+			const db = createMockDb({ [`${PREFIX}episodes`]: episodesCol })
+
+			await materializeEpisode({
+				db,
+				prefix: PREFIX,
+				agentId: AGENT_ID,
+				type: "decision",
+				timeRange: { start, end: new Date(start.getTime() + 3_600_000) },
+				summarizer: mockSummarizer,
+			})
+
+			expect(mockSummarizer).toHaveBeenCalledWith(expect.any(Array), "decision")
+		})
+
 		it("keys episode identity on the event set, not the query window", async () => {
 			// The auto-trigger derives timeRange from whichever event window it
 			// happened to select (resolveTriggeredEpisodeWindow), so two runs over
@@ -1092,18 +1115,22 @@ describe("mongodb-episodes", () => {
 
 			expect(result.triggered).toBe(true)
 			expect(result.reason).toBe("event_count")
-			expect(mockSummarizer).toHaveBeenCalledWith([
-				{
-					role: "user",
-					body: "Message 0",
-					timestamp: events[0].timestamp,
-				},
-				{
-					role: "assistant",
-					body: "Message 1",
-					timestamp: events[1].timestamp,
-				},
-			])
+			expect(mockSummarizer).toHaveBeenCalledWith(
+				[
+					{
+						role: "user",
+						body: "Message 0",
+						timestamp: events[0].timestamp,
+					},
+					{
+						role: "assistant",
+						body: "Message 1",
+						timestamp: events[1].timestamp,
+					},
+				],
+				// Auto-triggered episodes are written under the "thread" lens.
+				"thread",
+			)
 		})
 
 		it("does not trigger when under thresholds", async () => {
