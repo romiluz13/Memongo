@@ -3,6 +3,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { DEFAULT_GEMINI_EMBEDDING_MODEL } from "./embeddings-gemini.js"
 import { mockPublicPinnedHostname } from "./test-helpers/ssrf.js"
 
+// The SSRF guard resolves the target hostname for real (assertPublicHostname ->
+// dnsLookup in @memongo/lib). A unit test must not depend on DNS: these specs
+// failed with getaddrinfo ENOTFOUND example.com whenever the network or
+// resolver was unavailable, which looked like a product regression and was not.
+// The address below is public, so the guard's private-IP check still runs for
+// real against a deterministic answer.
+vi.mock("node:dns/promises", () => ({
+	lookup: vi.fn(async () => [{ address: "93.184.216.34", family: 4 }]),
+}))
+
 vi.mock("@memongo/lib", async (importOriginal) => {
 	const original = await importOriginal<typeof import("@memongo/lib")>()
 	const { createModelAuthMockModule } = await import(
