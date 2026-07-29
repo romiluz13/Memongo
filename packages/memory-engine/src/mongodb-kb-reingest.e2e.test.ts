@@ -67,7 +67,7 @@ beforeAll(async () => {
 	db = client.db(TEST_DB)
 	await ensureCollections(db, PREFIX)
 	await ensureStandardIndexes(db, PREFIX)
-}, 120_000)
+})
 
 afterAll(async () => {
 	await db?.dropDatabase().catch(() => {})
@@ -87,7 +87,7 @@ describe("KB re-ingestion on a real replica set", () => {
 		expect(second.errors).toHaveLength(0)
 		expect(second.documentsProcessed).toBe(1)
 		expect(second.chunksCreated).toBeGreaterThan(0)
-	}, 120_000)
+	})
 
 	it("leaves exactly one document and its chunks after re-ingestion", async () => {
 		const docs = await listKBDocuments(db, PREFIX, {
@@ -108,5 +108,5 @@ describe("KB re-ingestion on a real replica set", () => {
 		expect(stats.documents).toBe(1)
 		// The old document's chunks must be gone and the new ones present.
 		expect(stats.chunks).toBeGreaterThan(0)
-	}, 120_000)
+	})
 })

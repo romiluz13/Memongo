@@ -26,6 +26,7 @@ import {
 } from "./mongodb-schema.js"
 import { writeStructuredMemory } from "./mongodb-structured-memory.js"
 import { buildCurrentValidityClause } from "./mongodb-temporal.js"
+import { resolvePreviewMongoTestUri } from "./test-helpers/preview-env.js"
 
 const provider = (() => {
 	try {
@@ -36,9 +37,9 @@ const provider = (() => {
 })()
 const model = process.env.MEMONGO_ENRICHMENT_MODEL?.trim() ?? ""
 
-const TEST_URI = process.env.MEMONGO_TEST_MONGODB_URI?.trim()
-	? process.env.MEMONGO_TEST_MONGODB_URI.trim()
-	: "mongodb://127.0.0.1:27019/?directConnection=true"
+const TEST_URI = resolvePreviewMongoTestUri(
+	"mongodb://127.0.0.1:27019/?directConnection=true",
+)
 const TEST_DB = `memongo_contradiction_${randomUUID().slice(0, 8)}`
 const PREFIX = "contra_"
 const AGENT = `agent-${randomUUID().slice(0, 8)}`
@@ -100,7 +101,7 @@ describe.skipIf(!provider)(
 				"Remember: The user moved to London and no longer lives in Berlin.",
 				new Date("2026-01-01T00:00:00.000Z"),
 			)
-		}, 240000)
+		})
 
 		afterAll(async () => {
 			await db?.dropDatabase().catch(() => {})
@@ -187,7 +188,7 @@ describe("contradiction invalidation tenant isolation (live Mongo, mocked LLM)",
 				},
 			})
 		}
-	}, 60000)
+	})
 
 	afterAll(async () => {
 		await isoDb?.dropDatabase().catch(() => {})

@@ -517,7 +517,7 @@ describeIfMongo(
 			} catch {
 				/* ignore if collection doesn't exist yet */
 			}
-		}, 30_000)
+		})
 
 		afterAll(async () => {
 			await client
@@ -583,7 +583,7 @@ describeIfMongo(
 						SESSION_2_EVENTS.length +
 						SESSION_3_EVENTS.length,
 				)
-			}, 90_000)
+			})
 
 			it("extracts entities from conversation content", async () => {
 				// Extract entities from ALL events written in Phase 1
@@ -2558,7 +2558,7 @@ describeIfMongo(
 				for (const r of result.results) {
 					expect(r.score).toBeLessThanOrEqual(1)
 				}
-			}, 60_000)
+			})
 
 			it("profile synthesis handles large entity sets", async () => {
 				const scopeRef = resolveScopeRef({ scope: "agent", agentId: AGENT_ID })
@@ -3284,7 +3284,7 @@ describeIfMongo(
 				).toBeGreaterThanOrEqual(
 					EVIDENCE_RANK[direct.metadata.evidenceCoverage],
 				)
-			}, 30_000)
+			})
 
 			it("(b) noisy query resilience handles typos and abbreviations", async () => {
 				// Intentionally messy query with typos and abbreviations
@@ -3313,7 +3313,7 @@ describeIfMongo(
 				// Even with heavy typos, the system should return a valid response structure
 				expect(response.results).toBeDefined()
 				expect(Array.isArray(response.results)).toBe(true)
-			}, 30_000)
+			})
 
 			it("(c) adversarial constraint stack applies all constraints simultaneously", async () => {
 				const constrainedReq: MemorySearchRequest = {
@@ -3357,7 +3357,7 @@ describeIfMongo(
 				).toBe(true)
 				// No crash, valid passes
 				expect(response.metadata.passes.length).toBeGreaterThanOrEqual(1)
-			}, 30_000)
+			})
 
 			it("(d) MMR diversity validation for family queries", async () => {
 				const familyReq: MemorySearchRequest = {
@@ -3405,7 +3405,7 @@ describeIfMongo(
 						}
 					}
 				}
-			}, 30_000)
+			})
 
 			it("(e) CRAG corrective retrieval fires on poor initial coverage", async () => {
 				// Use tight time range that excludes most data — forces corrective behavior
@@ -3443,7 +3443,7 @@ describeIfMongo(
 						/time-range|evidence|relaxation/,
 					)
 				}
-			}, 30_000)
+			})
 
 			it("(f) constraint relaxation proof with impossible time range", async () => {
 				const impossibleReq: MemorySearchRequest = {
@@ -3480,7 +3480,7 @@ describeIfMongo(
 				}
 				// Either way, the system should not crash
 				expect(response.metadata.passes.length).toBeGreaterThanOrEqual(1)
-			}, 30_000)
+			})
 
 			it("(g) cache coherence under mode switching", async () => {
 				const query = "Emergency rollback procedure"
@@ -3534,7 +3534,7 @@ describeIfMongo(
 				expect(agentic1.metadata.passes.length).toBeGreaterThanOrEqual(
 					direct1.metadata.passes.length,
 				)
-			}, 30_000)
+			})
 
 			it("(h) reranker quality assertion — front-loads relevance", async () => {
 				const rerankerReq: MemorySearchRequest = {
@@ -3573,7 +3573,7 @@ describeIfMongo(
 					// First result should have >= keyword overlap as last result
 					expect(firstScore).toBeGreaterThanOrEqual(lastScore)
 				}
-			}, 30_000)
+			})
 
 			it("(i) evidence coverage monotonicity across modes", async () => {
 				const query = "rollback procedure family"
@@ -3624,7 +3624,7 @@ describeIfMongo(
 				expect(
 					EVIDENCE_RANK[agentic.metadata.evidenceCoverage],
 				).toBeGreaterThanOrEqual(EVIDENCE_RANK[auto.metadata.evidenceCoverage])
-			}, 30_000)
+			})
 
 			it("(j) latency budget — exact lookups faster than family searches", async () => {
 				const availablePaths = new Set<RetrievalPath>([
@@ -3665,7 +3665,7 @@ describeIfMongo(
 				// Exact lookups should generally be faster (or equal if cached)
 				// Using tolerance to allow for cache-fast equality
 				expect(exactMs).toBeLessThanOrEqual(familyMs + 500)
-			}, 60_000)
+			})
 		})
 	},
 )

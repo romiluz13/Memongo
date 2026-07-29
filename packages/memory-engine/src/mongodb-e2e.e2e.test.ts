@@ -99,7 +99,7 @@ const EXPECTED_COLLECTION_SUFFIXES = [
 	"recall_traces",
 	"session_chunks",
 ] as const
-const EXPECTED_STANDARD_INDEX_COUNT = 90
+const EXPECTED_STANDARD_INDEX_COUNT = 91
 
 let client: MongoClient
 let db: Db
@@ -259,13 +259,13 @@ describe("E2E: MongoDB Collections and Indexes", () => {
 			(i) => i.name === "uq_embedding_cache_composite",
 		)
 		expect(uniqueIdx?.unique).toBe(true)
-	}, 90_000)
+	})
 
 	it("ensureStandardIndexes is idempotent", async () => {
 		const applied1 = await ensureStandardIndexes(db, TEST_PREFIX)
 		const applied2 = await ensureStandardIndexes(db, TEST_PREFIX)
 		expect(applied1).toBe(applied2)
-	}, 90_000)
+	})
 
 	it("ensures search indexes according to the live deployment", async () => {
 		const result = await ensureSearchIndexes(
@@ -524,7 +524,7 @@ describe("E2E: Sync Workflow", () => {
 		// Last update should show completion
 		const last = progressUpdates[progressUpdates.length - 1]
 		expect(last.completed).toBe(last.total)
-	}, 90_000)
+	})
 })
 
 // ===========================================================================

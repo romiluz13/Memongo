@@ -346,3 +346,49 @@ To completely remove all data:
 | 27028 | mongot  | gRPC     | Search coordination   |
 | 8080  | mongot  | HTTP     | Health check endpoint |
 | 9946  | mongot  | HTTP     | Prometheus metrics    |
+
+## Running e2e against MongoDB Atlas instead of the local container
+
+The local `atlas-local` image runs mongod **and** mongot (a JVM) in one
+container. On a Docker Desktop VM sized at the 2 GB default it idles at ~966 MB
+— roughly half the VM — and the e2e suite's index builds and vector fan-out push
+it past the limit. The container is then OOM-killed (`exit 137`), and the run
+reports connection-refused failures plus a large number of *skipped* tests,
+which reads like a code failure but is not one.
+
+If you see `ECONNREFUSED 127.0.0.1:27019`, or a run where most tests are
+skipped, check this first:
+
+```bash
+docker inspect memongo-preview --format '{{.State.ExitCode}}'   # 137 = OOM
+docker info --format '{{.MemTotal}}'                            # VM memory
+```
+
+Give the Docker VM at least 8 GB and 4 CPUs (Settings → Resources), or run the
+suite against Atlas.
+
+### Pointing the suite at Atlas
+
+```bash
+MONGODB_TEST_URI='mongodb+srv://<user>:<pass>@<cluster>/?appName=memongo' \
+  bun run --filter @memongo/memory-engine test:e2e
+```
+
+Two things the cluster must provide, both verified by probing rather than
+assumed:
+
+- **`dbAdminAnyDatabase` on the database user.** The suites create randomized
+  databases and drop them in `afterAll`. `readWriteAnyDatabase` alone cannot run
+  `dropDatabase`, so every run silently leaves its database behind and the
+  cluster accumulates garbage between runs.
+- **A tier that is not search-index capped.** The engine creates up to 14 Search
+  indexes per prefix. Confirm headroom by creating several on a scratch
+  collection before committing to a long run.
+
+Atlas builds search indexes far more slowly than the local container — an
+autoEmbed index took ~50s to reach READY versus near-instant locally — so a full
+e2e run takes considerably longer. The tradeoff is worth it for one reason:
+autoEmbed genuinely works there. Locally, with no Voyage key on the container,
+mongot reports `CanonicalModel: voyage-4-large not registered yet, supported
+models are: []`, so every autoEmbed index fails and the vector paths are never
+really exercised.

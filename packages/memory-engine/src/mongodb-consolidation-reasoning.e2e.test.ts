@@ -43,7 +43,7 @@ describe.skipIf(!provider)("consolidation reasoning (live LLM)", () => {
 		console.log("deduced ->", JSON.stringify(result.map((r) => r.value)))
 		expect(result.length).toBeGreaterThan(0)
 		expect(result.every((r) => r.kind === "deduction" && r.value)).toBe(true)
-	}, 240000)
+	})
 
 	it("induces a generalization across a repeated pattern", async () => {
 		if (!provider) return
@@ -59,5 +59,5 @@ describe.skipIf(!provider)("consolidation reasoning (live LLM)", () => {
 		console.log("induced ->", JSON.stringify(result.map((r) => r.value)))
 		expect(result.length).toBeGreaterThan(0)
 		expect(result.every((r) => r.kind === "induction" && r.value)).toBe(true)
-	}, 240000)
+	})
 })

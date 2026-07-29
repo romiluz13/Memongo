@@ -24,6 +24,7 @@ import {
 	ensureStandardIndexes,
 	relationsCollection,
 } from "./mongodb-schema.js"
+import { resolvePreviewMongoTestUri } from "./test-helpers/preview-env.js"
 
 const provider = (() => {
 	try {
@@ -34,9 +35,9 @@ const provider = (() => {
 })()
 const model = process.env.MEMONGO_ENRICHMENT_MODEL?.trim() ?? ""
 
-const TEST_URI = process.env.MEMONGO_TEST_MONGODB_URI?.trim()
-	? process.env.MEMONGO_TEST_MONGODB_URI.trim()
-	: "mongodb://127.0.0.1:27019/?directConnection=true"
+const TEST_URI = resolvePreviewMongoTestUri(
+	"mongodb://127.0.0.1:27019/?directConnection=true",
+)
 const TEST_DB = `memongo_relations_${randomUUID().slice(0, 8)}`
 const PREFIX = "rel_"
 const AGENT = `agent-${randomUUID().slice(0, 8)}`
@@ -84,7 +85,7 @@ describe.skipIf(!provider)("typed semantic edges (live Mongo + LLM)", () => {
 			sourceEventId: "evt-rel-1",
 			validFrom: new Date("2026-01-01T00:00:00.000Z"),
 		})
-	}, 240000)
+	})
 
 	afterAll(async () => {
 		await db?.dropDatabase().catch(() => {})

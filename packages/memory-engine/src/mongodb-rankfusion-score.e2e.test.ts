@@ -110,7 +110,7 @@ beforeAll(async () => {
 		await new Promise((r) => setTimeout(r, 2000))
 	}
 	throw new Error("search indexes never became queryable")
-}, 240_000)
+})
 
 afterAll(async () => {
 	await db?.dropDatabase().catch(() => undefined)

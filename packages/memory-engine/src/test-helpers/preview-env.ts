@@ -102,8 +102,15 @@ export function resolvePreviewVoyageApiKey(): string {
 }
 
 export function resolvePreviewMongoTestUri(fallbackUri: string): string {
-	if (process.env.MONGODB_TEST_URI?.trim()) {
-		return process.env.MONGODB_TEST_URI.trim()
+	// Both names are honored because the suite grew two of them, and a file
+	// reading the one the operator did not set silently falls back to localhost
+	// and "passes" against a cluster nobody targeted. That is a gate that lies:
+	// an Atlas run reported six files green that had never left the laptop.
+	const explicit =
+		process.env.MONGODB_TEST_URI?.trim() ||
+		process.env.MEMONGO_TEST_MONGODB_URI?.trim()
+	if (explicit) {
+		return explicit
 	}
 	const containerName = resolvePreviewContainerName()
 	const port = resolvePreviewPort(containerName)

@@ -66,5 +66,5 @@ describe.skipIf(!provider)("e2e QA answer+judge (live LLM)", () => {
 		expect(envelope.accuracy).toBeGreaterThanOrEqual(0.66)
 		// A trustworthy judge rejects the known-wrong decoys.
 		expect(envelope.judgeFalsePositiveRate).toBeLessThanOrEqual(0.34)
-	}, 240000)
+	})
 })

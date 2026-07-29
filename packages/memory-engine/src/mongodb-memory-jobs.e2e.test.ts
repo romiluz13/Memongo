@@ -582,7 +582,7 @@ describe("durable memory job leases (live MongoDB)", () => {
 		// Give-up budget. Manager startup now builds the vector indexes that
 		// used to fail outright, and every other e2e file is hitting the same
 		// container, so 30s no longer covers a healthy run.
-	}, 120_000)
+	})
 
 	it("replays foreground entity projection without double-counting an event", async () => {
 		const db = client.db(TEST_DB)

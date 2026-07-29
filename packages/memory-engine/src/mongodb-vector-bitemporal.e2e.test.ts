@@ -130,7 +130,7 @@ describe("native Vector Search bitemporal prefilter (live MongoDB)", () => {
 				`events_vector did not become ready: ${JSON.stringify(readiness)}`,
 			)
 		}
-	}, 210_000)
+	})
 
 	afterAll(async () => {
 		await db?.dropDatabase().catch(() => {})
@@ -192,7 +192,7 @@ describe("native Vector Search bitemporal prefilter (live MongoDB)", () => {
 			"open-before",
 			"starts-equal",
 		])
-	}, 210_000)
+	})
 
 	it("returns lower-ranked valid memories after more than four limits of invalid neighbors", async () => {
 		const collection = db.collection(COLLECTION)
@@ -253,5 +253,5 @@ describe("native Vector Search bitemporal prefilter (live MongoDB)", () => {
 		expect(actual).toEqual(
 			Array.from({ length: 5 }, (_, index) => `valid-lower-ranked-${index}`),
 		)
-	}, 210_000)
+	})
 })

@@ -52,7 +52,7 @@ describeAutoEmbed("automated embedding coverage (live MongoDB)", () => {
 				],
 			},
 		})
-	}, 210_000)
+	})
 
 	afterAll(async () => {
 		await db?.dropDatabase().catch(() => {})
@@ -113,5 +113,5 @@ describeAutoEmbed("automated embedding coverage (live MongoDB)", () => {
 			unknown: 0,
 			basis: "search-index",
 		})
-	}, 210_000)
+	})
 })

@@ -286,7 +286,7 @@ beforeAll(async () => {
 			console.warn(`Could not create events vector index: ${msg}`)
 		}
 	}
-}, 60_000)
+})
 
 afterAll(async () => {
 	// Print score card
@@ -1037,7 +1037,7 @@ describe.skipIf(!HAS_REAL_EMBEDDINGS)("Phase A: Seed Scenarios", () => {
 			archEvents.length + implEvents.length + reviewEvents.length
 		totalSeededEvents += codingTotal
 		expect(codingTotal).toBeGreaterThan(200)
-	}, 120_000)
+	})
 
 	it("seeds Customer Support scenario (2 agents, 150+ events)", async () => {
 		// -----------------------------------------------------------------------
@@ -1302,7 +1302,7 @@ describe.skipIf(!HAS_REAL_EMBEDDINGS)("Phase A: Seed Scenarios", () => {
 		const supportTotal = tier1Events.length + tier2Events.length
 		totalSeededEvents += supportTotal
 		expect(supportTotal).toBeGreaterThan(150)
-	}, 120_000)
+	})
 
 	it("seeds Personal Productivity scenario (1 agent, 100+ events)", async () => {
 		const prodEvents: SeedEvent[] = [
@@ -1466,7 +1466,7 @@ describe.skipIf(!HAS_REAL_EMBEDDINGS)("Phase A: Seed Scenarios", () => {
 
 		totalSeededEvents += prodEvents.length
 		expect(prodEvents.length).toBeGreaterThan(100)
-	}, 60_000)
+	})
 
 	it("seeds structured memory with sourceEventIds for chain testing", async () => {
 		// For each coding agent, write structured memory entries pointing to seeded events
@@ -1540,7 +1540,7 @@ describe.skipIf(!HAS_REAL_EMBEDDINGS)("Phase A: Seed Scenarios", () => {
 				embeddingMode: "automated",
 			})
 		}
-	}, 30_000)
+	})
 
 	it("total seeded events >= 450", () => {
 		expect(totalSeededEvents).toBeGreaterThanOrEqual(450)
@@ -1591,7 +1591,7 @@ describe.skipIf(!HAS_REAL_EMBEDDINGS)("Phase C: Consolidation", () => {
 		// them durable. ">0" was too weak to notice that only one was surviving.
 		expect(result.factsPromoted).toBeGreaterThanOrEqual(16)
 		promotedByAgent.set(CODING_AGENT_ARCH, result.factsPromoted)
-	}, 30_000)
+	})
 
 	it("consolidateMemory runs for all agents", async () => {
 		const otherAgents = ALL_AGENTS.filter((a) => a !== CODING_AGENT_ARCH)
@@ -1613,7 +1613,7 @@ describe.skipIf(!HAS_REAL_EMBEDDINGS)("Phase C: Consolidation", () => {
 		expect(totalPromoted).toBeGreaterThan(0)
 		// Give-up budget. Consolidating five agents now runs novelty over real
 		// embeddings rather than synthetic vectors, which is real work.
-	}, 240_000)
+	})
 
 	it("idempotent re-run produces 0 new promotions (arch agent)", async () => {
 		const result2 = await consolidateMemory({
@@ -1626,7 +1626,7 @@ describe.skipIf(!HAS_REAL_EMBEDDINGS)("Phase C: Consolidation", () => {
 		// All events were already dreamer-processed, so 0 new events to process
 		expect(result2.eventsProcessed).toBe(0)
 		expect(result2.factsPromoted).toBe(0)
-	}, 30_000)
+	})
 
 	it("score consolidation dimensions", () => {
 		// Count expected preference/decision events across agents
@@ -1696,7 +1696,7 @@ describe.skipIf(!HAS_REAL_EMBEDDINGS)("Phase D: Reasoning Chain", () => {
 		// Score: percentage of chains that are complete
 		scores.chainCompleteness =
 			totalChains > 0 ? Math.round((completeChains / totalChains) * 100) : 0
-	}, 30_000)
+	})
 
 	it("chain nodes are ordered oldest-first", async () => {
 		const facts = await structuredMemCollection(db, TEST_PREFIX)
@@ -1737,7 +1737,7 @@ describe.skipIf(!HAS_REAL_EMBEDDINGS)("Phase D: Reasoning Chain", () => {
 
 		scores.chainOrdering =
 			totalChains > 0 ? Math.round((sortedChains / totalChains) * 100) : 100 // If no multi-node chains, consider sorted
-	}, 30_000)
+	})
 
 	it("agentId isolation: chain excludes other agents", async () => {
 		const archFacts = await structuredMemCollection(db, TEST_PREFIX)
@@ -1759,7 +1759,7 @@ describe.skipIf(!HAS_REAL_EMBEDDINGS)("Phase D: Reasoning Chain", () => {
 			// Every node should belong to CODING_AGENT_ARCH, not any other agent
 			expect(chain.agentId).toBe(CODING_AGENT_ARCH)
 		}
-	}, 30_000)
+	})
 })
 
 // ===========================================================================
@@ -1771,7 +1771,7 @@ describe.skipIf(!HAS_REAL_EMBEDDINGS)("Phase E: Novelty", () => {
 		// After seeding 450+ events with embeddings, mongot needs time to index them.
 		// This is a real infrastructure concern, not a workaround.
 		await new Promise((resolve) => setTimeout(resolve, 10_000))
-	}, 20_000)
+	})
 
 	it("novelty scan returns results or degrades gracefully", async () => {
 		const report = await scanNovelty({
@@ -1829,7 +1829,7 @@ describe.skipIf(!HAS_REAL_EMBEDDINGS)("Phase E: Novelty", () => {
 				scores.noveltyAccuracy = anyAnomaly ? 75 : 50
 			}
 		}
-	}, 30_000)
+	})
 
 	it("novelty scan for support agent handles graceful degradation", async () => {
 		const report = await scanNovelty({
@@ -1854,7 +1854,7 @@ describe.skipIf(!HAS_REAL_EMBEDDINGS)("Phase E: Novelty", () => {
 				scores.noveltyAccuracy = Math.max(scores.noveltyAccuracy, 90)
 			}
 		}
-	}, 30_000)
+	})
 })
 
 // ===========================================================================
@@ -2029,7 +2029,7 @@ describe.skipIf(!HAS_REAL_EMBEDDINGS)("Phase G: Access Tracking", () => {
 		} finally {
 			tracker.close()
 		}
-	}, 15_000)
+	})
 
 	it("access tracking records lastAccessedAt", async () => {
 		const archEvents = eventIdsByAgent.get(CODING_AGENT_ARCH)
@@ -2139,7 +2139,7 @@ describe.skipIf(!HAS_REAL_EMBEDDINGS)("Phase H: Wiki Categorization", () => {
 		} else {
 			scores.wikiCategorization = 50
 		}
-	}, 15_000)
+	})
 })
 
 // ===========================================================================
@@ -2182,7 +2182,7 @@ describe.skipIf(!HAS_REAL_EMBEDDINGS)("Phase I: Cross-Agent Isolation", () => {
 		}
 
 		expect(leakFound).toBe(false)
-	}, 60_000)
+	})
 
 	it("novelty scan does not leak across agents", async () => {
 		let leakFound = false
@@ -2212,7 +2212,7 @@ describe.skipIf(!HAS_REAL_EMBEDDINGS)("Phase I: Cross-Agent Isolation", () => {
 		}
 
 		expect(leakFound).toBe(false)
-	}, 60_000)
+	})
 
 	it("consolidation does not promote across agent boundaries", async () => {
 		// Verify all promoted structured memory entries belong to the correct agent
@@ -2236,7 +2236,7 @@ describe.skipIf(!HAS_REAL_EMBEDDINGS)("Phase I: Cross-Agent Isolation", () => {
 		}
 
 		expect(leakFound).toBe(false)
-	}, 30_000)
+	})
 
 	it("score cross-agent isolation dimension", () => {
 		// If we got here without leaks in the tests above, score is 100.

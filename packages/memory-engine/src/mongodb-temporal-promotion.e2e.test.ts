@@ -24,6 +24,7 @@ import {
 	ensureStandardIndexes,
 	structuredMemCollection,
 } from "./mongodb-schema.js"
+import { resolvePreviewMongoTestUri } from "./test-helpers/preview-env.js"
 
 const provider = (() => {
 	try {
@@ -34,9 +35,9 @@ const provider = (() => {
 })()
 const model = process.env.MEMONGO_ENRICHMENT_MODEL?.trim() ?? ""
 
-const TEST_URI = process.env.MEMONGO_TEST_MONGODB_URI?.trim()
-	? process.env.MEMONGO_TEST_MONGODB_URI.trim()
-	: "mongodb://127.0.0.1:27019/?directConnection=true"
+const TEST_URI = resolvePreviewMongoTestUri(
+	"mongodb://127.0.0.1:27019/?directConnection=true",
+)
 const TEST_DB = `memongo_temporal_promo_${randomUUID().slice(0, 8)}`
 const PREFIX = "promo_"
 const AGENT = `agent-${randomUUID().slice(0, 8)}`
@@ -71,7 +72,7 @@ describe.skipIf(!provider)("valid-time promotion (live Mongo + LLM)", () => {
 				scopeRef: `agent:${AGENT}`,
 			},
 		})
-	}, 180000)
+	})
 
 	afterAll(async () => {
 		await db?.dropDatabase().catch(() => {})

@@ -326,7 +326,7 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 				await db.collection(col.name).deleteMany({ agentId: AGENT_ID })
 			}
 		}
-	}, 30_000)
+	})
 
 	afterAll(async () => {
 		await client
@@ -992,7 +992,7 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 			expect(first).not.toBeNull()
 			expect(second).not.toBeNull()
 			expect(second?.episodeId).toBe(first?.episodeId)
-		}, 90_000)
+		})
 
 		it("should retrieve episodes by time range", async () => {
 			const episodes = await getEpisodesByTimeRange({

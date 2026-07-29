@@ -46,7 +46,7 @@ beforeAll(async () => {
 	client = new MongoClient(TEST_URI)
 	await client.connect()
 	db = client.db(TEST_DB)
-}, 120_000)
+})
 
 afterAll(async () => {
 	await db?.dropDatabase().catch(() => undefined)

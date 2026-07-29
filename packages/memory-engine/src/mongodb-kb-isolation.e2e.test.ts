@@ -88,7 +88,7 @@ beforeAll(async () => {
 		scope: { agentId: AGENT_B, scope: "agent" },
 		documents: [kbDoc("B-secret", "bravo private content")],
 	})
-}, 120_000)
+})
 
 afterAll(async () => {
 	await db?.dropDatabase().catch(() => {})
