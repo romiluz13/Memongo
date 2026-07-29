@@ -6304,6 +6304,65 @@ describe("scope-safe cache writes", () => {
 		)
 	})
 
+	it("never queries session_chunks unless the lane is explicitly enabled", async () => {
+		// The session_chunks lane is written only by benchmark ingest, so for a
+		// real user it is an empty collection whose results the scorer then
+		// boosts 1.24x. A query-shape regex must not be able to enable it.
+		const previousMode = process.env.MEMONGO_SESSION_EVIDENCE_MODE
+		delete process.env.MEMONGO_SESSION_EVIDENCE_MODE
+		try {
+			mocked(planRetrieval).mockReturnValue({
+				paths: ["hybrid"],
+				confidence: "high",
+				reasoning: "test session lane opt-in",
+			})
+			mocked(chunksCollection).mockReturnValue({
+				aggregate: vi.fn().mockReturnValue({
+					toArray: vi.fn().mockResolvedValue([]),
+				}),
+			} as never)
+			const sessionAggregate = vi.fn().mockReturnValue({
+				toArray: vi.fn().mockResolvedValue([]),
+			})
+			mocked(sessionChunksCollection).mockReturnValue({
+				aggregate: sessionAggregate,
+			} as never)
+
+			await searchV2(
+				fakeDb,
+				fakePrefix,
+				"any tips or recommendations for my espresso setup?",
+				"agent-1",
+				{
+					availablePaths: new Set(["hybrid"]),
+					searchOptions: {
+						scope: "agent",
+						scopeRef: "agent:agent-1",
+						capabilities: {
+							vectorSearch: false,
+							textSearch: true,
+							rankFusion: false,
+							storedSource: false,
+							vectorIndexMethod: false,
+							scoreFusion: false,
+						},
+						fusionMethod: "rankFusion",
+						embeddingMode: "automated",
+						allowHybridBackstop: false,
+					},
+				},
+			)
+
+			expect(sessionAggregate).not.toHaveBeenCalled()
+		} finally {
+			if (previousMode === undefined) {
+				delete process.env.MEMONGO_SESSION_EVIDENCE_MODE
+			} else {
+				process.env.MEMONGO_SESSION_EVIDENCE_MODE = previousMode
+			}
+		}
+	})
+
 	it("filters session_chunks by scope and scopeRef even for agent scope", async () => {
 		const previousMode = process.env.MEMONGO_SESSION_EVIDENCE_MODE
 		process.env.MEMONGO_SESSION_EVIDENCE_MODE = "B"

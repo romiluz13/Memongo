@@ -10158,14 +10158,14 @@ export async function searchV2(
 								}),
 							)
 						}
-						// Option B: parallel search on session_chunks collection (vector + text hybrid)
+						// Option B: parallel search on session_chunks collection (vector +
+						// text hybrid). Strictly opt-in: only benchmark ingest writes this
+						// collection, so for a real user it is empty — and the scorer
+						// boosts its lane. No query-shape heuristic may enable it.
 						const sessionMode = resolveSessionEvidenceMode(
 							process.env.MEMONGO_SESSION_EVIDENCE_MODE,
 						)
-						if (
-							sessionMode === "B" ||
-							RECOMMENDATION_MEMORY_QUERY_RE.test(searchQuery)
-						) {
+						if (sessionMode === "B") {
 							const requestedMaxResults = context.maxResults ?? 10
 							const sessionEvidenceMaxResults = Math.max(
 								requestedMaxResults,
