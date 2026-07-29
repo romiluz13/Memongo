@@ -741,23 +741,58 @@ describe("E2E: mongoSearch dispatcher fallback", () => {
 		expect(results[0].source).toBe("conversation")
 	})
 
-	it("returns empty for queries with no matches", async () => {
+	it("ranks a nonsense query below a genuine match instead of inventing relevance", async () => {
+		// This used to assert zero results, and only passed because autoEmbed was
+		// dead on the local container: with no Voyage key mongot reports
+		// "CanonicalModel: voyage-4-large not registered yet", every vector index
+		// fails, the text lane runs alone, and a nonsense token matches nothing.
+		// Against a cluster where the vector lane actually works, there is no such
+		// thing as "no matches" for a semantic search — ANN always returns nearest
+		// neighbours, and minScore 0 filters none of them.
+		//
+		// Measured on live Atlas 8.3.7, autoEmbed scores sit in a narrow band:
+		// an exact match scored 0.50631 while unrelated docs scored 0.50381-0.50402,
+		// and a nonsense query scored 0.50199-0.50217. Rank order is meaningful;
+		// absolute magnitude barely is. So the contract worth pinning is ordering —
+		// relevance must beat noise — not a count, and emphatically not a minScore
+		// threshold, which cannot separate the two on this lane.
 		const col = chunksCollection(db, TEST_PREFIX)
 		const caps = await detectCapabilities(db, `${TEST_PREFIX}chunks`)
-
-		const results = await mongoSearchFn(col, "xyznonexistent12345", null, {
+		const searchOpts = {
 			maxResults: 5,
 			minScore: 0,
-			fusionMethod: "scoreFusion",
+			fusionMethod: "scoreFusion" as const,
 			capabilities: caps,
 			vectorIndexName: `${TEST_PREFIX}chunks_vector`,
 			textIndexName: `${TEST_PREFIX}chunks_text`,
 			vectorWeight: 0.7,
 			textWeight: 0.3,
-			embeddingMode: "automated",
-		})
+			embeddingMode: "automated" as const,
+		}
 
-		expect(results.length).toBe(0)
+		const nonsense = await mongoSearchFn(
+			col,
+			"xyznonexistent12345",
+			null,
+			searchOpts,
+		)
+
+		if (!caps.vectorSearch) {
+			// Text-only deployment: a token present in no document matches nothing.
+			expect(nonsense.length).toBe(0)
+			return
+		}
+
+		const genuine = await mongoSearchFn(
+			col,
+			"MongoDB document database",
+			null,
+			searchOpts,
+		)
+		expect(genuine.length).toBeGreaterThan(0)
+		expect(genuine[0].path).toContain("mongodb-guide.md")
+		// Neighbours are expected; ranking below the genuine match is the contract.
+		expect(nonsense[0]?.score ?? 0).toBeLessThan(genuine[0].score)
 	})
 
 	it("respects maxResults limit", async () => {
