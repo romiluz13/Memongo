@@ -20,6 +20,7 @@ import {
 	instrumentBenchmarkProvider,
 	percentile50And95,
 	resolveBenchmarkEmbeddingConfig,
+	resolveBenchmarkExecutionProfile,
 	resolveBenchmarkRetrievalLane,
 	resolveBenchmarkRerankerConfig,
 	resolveDatasetSha256,
@@ -612,5 +613,65 @@ describe("instrumentBenchmarkProvider", () => {
 			provider: "mock-provider",
 			model: "derived-model",
 		})
+	})
+})
+
+describe("benchmark execution profile default", () => {
+	// A diagnostic run writes session/userfact/preference evidence documents and
+	// runs LLM enrichment that the shipped pipeline never performs, then the
+	// shipped scorer boosts exactly those documents. A number produced that way
+	// is not a number about the shipped product. So the honest profile has to be
+	// what you get by DEFAULT — diagnostic must cost you an explicit, recorded
+	// opt-in, never a forgotten flag.
+	it("defaults to the shipped profile", () => {
+		expect(resolveBenchmarkExecutionProfile({})).toBe("shipped")
+		expect(resolveBenchmarkExecutionProfile({ retrievalLane: "native" })).toBe(
+			"shipped",
+		)
+	})
+
+	it("honors an explicit diagnostic opt-in", () => {
+		expect(resolveBenchmarkExecutionProfile({ requested: "diagnostic" })).toBe(
+			"diagnostic",
+		)
+	})
+
+	it("defaults the raw-session lane to diagnostic", () => {
+		// raw-session retrieves over benchmark-only session evidence documents.
+		// It cannot describe the shipped pipeline by construction, so it is
+		// diagnostic by nature rather than by choice.
+		expect(
+			resolveBenchmarkExecutionProfile({ retrievalLane: "raw-session" }),
+		).toBe("diagnostic")
+	})
+
+	it("refuses a publication contract on a diagnostic run", () => {
+		expect(() =>
+			resolveBenchmarkExecutionProfile({
+				requested: "diagnostic",
+				hasQualityContract: true,
+			}),
+		).toThrow(/publication quality contract/i)
+	})
+
+	it("refuses to call the raw-session lane shipped", () => {
+		expect(() =>
+			resolveBenchmarkExecutionProfile({
+				requested: "shipped",
+				retrievalLane: "raw-session",
+			}),
+		).toThrow(/raw-session/i)
+	})
+
+	it("keeps a publication contract on the shipped profile", () => {
+		expect(resolveBenchmarkExecutionProfile({ hasQualityContract: true })).toBe(
+			"shipped",
+		)
+		expect(
+			resolveBenchmarkExecutionProfile({
+				requested: "shipped",
+				hasQualityContract: true,
+			}),
+		).toBe("shipped")
 	})
 })

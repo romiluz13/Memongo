@@ -91,6 +91,8 @@ export async function collectBenchmarkTenantStorage(params: {
 
 export type BenchmarkRetrievalLane = "native" | "raw-session"
 
+export type BenchmarkExecutionProfile = "shipped" | "diagnostic"
+
 /**
  * Engine-wide retrieval unit. Memongo retrieves over the `events` collection
  * (turn-level documents), so the unit is `turn`. Exported as a constant so
@@ -106,6 +108,44 @@ export function resolveBenchmarkRetrievalLane(
 		return "raw-session"
 	}
 	return "native"
+}
+
+/**
+ * Decides which execution profile a benchmark run uses.
+ *
+ * A `diagnostic` run writes session/userfact/preference evidence documents and
+ * runs LLM enrichment that the shipped pipeline never performs — and the
+ * shipped scorer then boosts exactly those documents
+ * (mongodb-search-executor.ts lane multipliers). A number produced that way is
+ * not a number about the shipped product.
+ *
+ * So `shipped` is the default and `diagnostic` costs an explicit, recorded
+ * opt-in. This used to be inverted: the profile was derived solely from whether
+ * a publication contract was supplied, so every run that simply forgot the flag
+ * silently measured the augmented corpus.
+ */
+export function resolveBenchmarkExecutionProfile(params: {
+	requested?: BenchmarkExecutionProfile
+	retrievalLane?: BenchmarkRetrievalLane
+	hasQualityContract?: boolean
+}): BenchmarkExecutionProfile {
+	const rawSessionLane = params.retrievalLane === "raw-session"
+	if (params.requested === "diagnostic" && params.hasQualityContract) {
+		throw new Error(
+			"a publication quality contract cannot run in the diagnostic execution profile",
+		)
+	}
+	if (params.requested === "shipped" && rawSessionLane) {
+		throw new Error(
+			"the raw-session retrieval lane retrieves over benchmark-only session evidence and cannot run in the shipped execution profile",
+		)
+	}
+	if (params.requested) {
+		return params.requested
+	}
+	// raw-session cannot describe the shipped pipeline by construction, so it is
+	// diagnostic by nature rather than by choice.
+	return rawSessionLane ? "diagnostic" : "shipped"
 }
 
 export function resolveRetrievalUnit(
@@ -327,7 +367,7 @@ type BenchmarkOperationMutation = {
 }
 
 export type BenchmarkRunConfiguration = {
-	executionProfile: "shipped" | "diagnostic"
+	executionProfile: BenchmarkExecutionProfile
 	retrievalLane: BenchmarkRetrievalLane
 	maxResults: number
 	minScore: number

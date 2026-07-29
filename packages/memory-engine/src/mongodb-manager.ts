@@ -63,6 +63,8 @@ import {
 	instrumentBenchmarkProvider,
 	resolveDatasetSha256,
 	resolveBenchmarkRetrievalLane,
+	resolveBenchmarkExecutionProfile,
+	type BenchmarkExecutionProfile,
 	type BenchmarkRetrievalLane,
 	type BenchmarkRunContext,
 	type BenchmarkRunConfiguration,
@@ -3760,6 +3762,13 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		}
 		retrievalLane?: BenchmarkRetrievalLane
 		qualityThresholds?: BenchmarkQualityThresholds
+		/**
+		 * Defaults to "shipped". Pass "diagnostic" to opt into the augmented
+		 * corpus (evidence documents + LLM enrichment) that the shipped pipeline
+		 * never writes — a diagnostic number must never be published as a
+		 * product number.
+		 */
+		executionProfile?: BenchmarkExecutionProfile
 	}): Promise<RelevanceBenchmarkResult> {
 		if (!this.relevance) {
 			throw new Error("relevance runtime is unavailable")
@@ -3802,7 +3811,11 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 			)
 		}
 
-		const executionProfile = qualityThresholds ? "shipped" : "diagnostic"
+		const executionProfile = resolveBenchmarkExecutionProfile({
+			requested: params?.executionProfile,
+			retrievalLane,
+			hasQualityContract: Boolean(qualityThresholds),
+		})
 		const runContext = createBenchmarkRunContext({
 			runId: randomUUID(),
 			configuration: this.snapshotBenchmarkRunConfiguration({
