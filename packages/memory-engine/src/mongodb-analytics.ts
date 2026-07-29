@@ -185,7 +185,62 @@ function embeddableChunkCollections(db: Db, prefix: string) {
 
 type EmbeddingCoverageMeasurement = EmbeddingStatusCoverage
 
-async function measureEmbeddingCoverage(params: {
+/**
+ * Upper bound on the coverage probe below. numCandidates and limit are both
+ * capped at 10k by the server, so a collection larger than this cannot be
+ * measured in one query — and we report unknown rather than a partial count
+ * dressed up as a total.
+ */
+const MAX_COVERAGE_PROBE_DOCS = 10_000
+
+/** Any non-empty text works; autoEmbed embeds it and ANN returns every doc. */
+const COVERAGE_PROBE_QUERY = "coverage probe"
+
+/**
+ * Counts how many documents the vector index will actually return.
+ *
+ * This exists because Atlas does not report `numDocs` on $listSearchIndexes —
+ * only the local atlas-local container does. Keying coverage on that field
+ * meant coverage was permanently `unknown` against a real cluster, which is
+ * the deployment that matters.
+ *
+ * Counting what the index will serve is also the better question: coverage
+ * should mean "retrievable", not "claimed by a metadata field".
+ *
+ * Returns null when the probe cannot answer, so the caller can report unknown
+ * rather than guess.
+ */
+async function countRetrievableViaVectorIndex(params: {
+	collection: Collection
+	indexName: string
+	path: string
+	limit: number
+}): Promise<number | null> {
+	try {
+		const rows: Document[] = await params.collection
+			.aggregate([
+				{
+					$vectorSearch: {
+						index: params.indexName,
+						path: params.path,
+						query: COVERAGE_PROBE_QUERY,
+						numCandidates: params.limit,
+						limit: params.limit,
+					},
+				},
+				{ $count: "n" },
+			])
+			.toArray()
+		const n = rows[0]?.n
+		return typeof n === "number" && Number.isFinite(n) && n >= 0
+			? Math.floor(n)
+			: null
+	} catch {
+		return null
+	}
+}
+
+export async function measureEmbeddingCoverage(params: {
 	collection: Collection
 	indexName: string
 	embeddingMode: "automated" | "client"
@@ -252,24 +307,51 @@ async function measureEmbeddingCoverage(params: {
 					field !== null &&
 					(field as { type?: unknown }).type === "autoEmbed",
 			)
+		const unknownResult: EmbeddingCoverageMeasurement = {
+			total,
+			success: 0,
+			failed: 0,
+			pending: 0,
+			unknown: total,
+			basis: "search-index",
+		}
 		if (
 			index?.status !== "READY" ||
 			index.queryable !== true ||
-			!isAutomatedEmbeddingIndex ||
-			typeof indexed !== "number" ||
-			!Number.isFinite(indexed) ||
-			indexed < 0
+			!isAutomatedEmbeddingIndex
 		) {
-			return {
-				total,
-				success: 0,
-				failed: 0,
-				pending: 0,
-				unknown: total,
-				basis: "search-index",
+			return unknownResult
+		}
+
+		let indexedCount =
+			typeof indexed === "number" && Number.isFinite(indexed) && indexed >= 0
+				? Math.floor(indexed)
+				: null
+
+		if (indexedCount === null) {
+			// Atlas serves a READY, queryable index but reports no numDocs. Ask the
+			// index directly how much it will return instead of giving up.
+			if (total > MAX_COVERAGE_PROBE_DOCS) {
+				return unknownResult
+			}
+			const autoEmbedPath = (fields as Document[]).find(
+				(field) => field?.type === "autoEmbed",
+			)?.path
+			if (typeof autoEmbedPath !== "string" || !autoEmbedPath.trim()) {
+				return unknownResult
+			}
+			indexedCount = await countRetrievableViaVectorIndex({
+				collection: params.collection,
+				indexName: params.indexName,
+				path: autoEmbedPath,
+				limit: Math.max(1, Math.min(total, MAX_COVERAGE_PROBE_DOCS)),
+			})
+			if (indexedCount === null) {
+				return unknownResult
 			}
 		}
-		const success = Math.min(total, Math.floor(indexed))
+
+		const success = Math.min(total, indexedCount)
 		return {
 			total,
 			success,

@@ -12,6 +12,7 @@ vi.mock("./mongodb-schema.js", () => ({
 
 import {
 	getMemoryStats,
+	measureEmbeddingCoverage,
 	reconcileEmbeddingStatus,
 } from "./mongodb-analytics.js"
 import {
@@ -441,5 +442,173 @@ describe("getMemoryStats", () => {
 
 		expect(stats.cachedEmbeddings).toBe(42)
 		expect(stats.collectionSizes.embeddingCache).toBe(42)
+	})
+})
+
+describe("measureEmbeddingCoverage on a server without numDocs", () => {
+	// Atlas does not report numDocs on $listSearchIndexes; only the local
+	// atlas-local container does. Keying coverage on that field left coverage
+	// permanently `unknown` against a real cluster — the deployment that
+	// actually matters — while the dev container looked fine.
+	const readyAutoEmbedIndex = {
+		name: "vec_idx",
+		status: "READY",
+		queryable: true,
+		latestDefinition: {
+			fields: [{ type: "autoEmbed", modality: "text", path: "text" }],
+		},
+	}
+
+	function collectionWith(params: {
+		total: number
+		index: Record<string, unknown>
+		probeCount?: number | null
+		onVectorSearch?: (stage: Record<string, unknown>) => void
+	}): Collection {
+		return {
+			countDocuments: vi.fn(async () => params.total),
+			aggregate: vi.fn((pipeline: Array<Record<string, unknown>>) => {
+				const stage = pipeline[0] ?? {}
+				if ("$listSearchIndexes" in stage) {
+					return { toArray: vi.fn(async () => [params.index]) }
+				}
+				if ("$vectorSearch" in stage) {
+					params.onVectorSearch?.(
+						stage.$vectorSearch as Record<string, unknown>,
+					)
+					if (params.probeCount === null) {
+						throw new Error("probe unavailable")
+					}
+					return {
+						toArray: vi.fn(async () => [{ n: params.probeCount }]),
+					}
+				}
+				return { toArray: vi.fn(async () => []) }
+			}),
+		} as unknown as Collection
+	}
+
+	it("measures what the index will actually return", async () => {
+		let seen: Record<string, unknown> | undefined
+		const collection = collectionWith({
+			total: 3,
+			index: readyAutoEmbedIndex,
+			probeCount: 3,
+			onVectorSearch: (stage) => {
+				seen = stage
+			},
+		})
+
+		const result = await measureEmbeddingCoverage({
+			collection,
+			indexName: "vec_idx",
+			embeddingMode: "automated",
+		})
+
+		expect(result).toEqual({
+			total: 3,
+			success: 3,
+			failed: 0,
+			pending: 0,
+			unknown: 0,
+			basis: "search-index",
+		})
+		// The probe must target the autoEmbed field, or it cannot embed the query.
+		expect(seen?.path).toBe("text")
+		expect(seen?.index).toBe("vec_idx")
+	})
+
+	it("reports the shortfall as pending rather than as covered", async () => {
+		const collection = collectionWith({
+			total: 5,
+			index: readyAutoEmbedIndex,
+			probeCount: 2,
+		})
+		const result = await measureEmbeddingCoverage({
+			collection,
+			indexName: "vec_idx",
+			embeddingMode: "automated",
+		})
+		expect(result).toMatchObject({
+			total: 5,
+			success: 2,
+			pending: 3,
+			unknown: 0,
+		})
+	})
+
+	it("stays unknown when the probe itself cannot answer", async () => {
+		const collection = collectionWith({
+			total: 3,
+			index: readyAutoEmbedIndex,
+			probeCount: null,
+		})
+		const result = await measureEmbeddingCoverage({
+			collection,
+			indexName: "vec_idx",
+			embeddingMode: "automated",
+		})
+		expect(result).toMatchObject({ total: 3, success: 0, unknown: 3 })
+	})
+
+	it("refuses to guess for a collection larger than one probe can cover", async () => {
+		// numCandidates and limit are both server-capped at 10k, so a bigger
+		// collection cannot be measured in one query. Reporting the capped count
+		// as the total would understate coverage as a hard number.
+		let probed = false
+		const collection = collectionWith({
+			total: 10_001,
+			index: readyAutoEmbedIndex,
+			probeCount: 10_000,
+			onVectorSearch: () => {
+				probed = true
+			},
+		})
+		const result = await measureEmbeddingCoverage({
+			collection,
+			indexName: "vec_idx",
+			embeddingMode: "automated",
+		})
+		expect(result).toMatchObject({ unknown: 10_001, success: 0 })
+		expect(probed).toBe(false)
+	})
+
+	it("still prefers numDocs when the server does report it", async () => {
+		let probed = false
+		const collection = collectionWith({
+			total: 4,
+			index: { ...readyAutoEmbedIndex, numDocs: 4 },
+			probeCount: 999,
+			onVectorSearch: () => {
+				probed = true
+			},
+		})
+		const result = await measureEmbeddingCoverage({
+			collection,
+			indexName: "vec_idx",
+			embeddingMode: "automated",
+		})
+		expect(result).toMatchObject({ total: 4, success: 4, unknown: 0 })
+		// No reason to pay for an ANN query when the cheap field is present.
+		expect(probed).toBe(false)
+	})
+
+	it("does not probe an index that is not ready", async () => {
+		let probed = false
+		const collection = collectionWith({
+			total: 3,
+			index: { ...readyAutoEmbedIndex, status: "BUILDING", queryable: false },
+			probeCount: 3,
+			onVectorSearch: () => {
+				probed = true
+			},
+		})
+		const result = await measureEmbeddingCoverage({
+			collection,
+			indexName: "vec_idx",
+			embeddingMode: "automated",
+		})
+		expect(result).toMatchObject({ unknown: 3, success: 0 })
+		expect(probed).toBe(false)
 	})
 })
