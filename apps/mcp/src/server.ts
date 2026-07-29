@@ -669,6 +669,7 @@ export const toolList = [
 				maxEvents: { type: "number" },
 				minCombinedScore: { type: "number" },
 				scope: { type: "string" },
+				scopeRef: { type: "string" },
 			},
 		},
 	},
@@ -1537,6 +1538,7 @@ export async function handleToolCall(
 						? args.minCombinedScore
 						: undefined,
 				scope: typeof args.scope === "string" ? args.scope : undefined,
+				scopeRef: typeof args.scopeRef === "string" ? args.scopeRef : undefined,
 			})
 			return { content: [{ type: "text", text: JSON.stringify(out) }] }
 		}

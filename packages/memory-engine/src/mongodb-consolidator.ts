@@ -992,10 +992,14 @@ export async function consolidateMemory(params: {
 								model: "voyage-4-large",
 								numCandidates: 80,
 								limit: 4, // +1 to account for self-match consuming a slot
+								// Scope from the FACT, never from options: with options.scope
+								// absent (master key, MCP), an agentId-only filter would let
+								// the invalidation below destroy another tenant's fact. Same
+								// invariant Phases 2-4 enforce from the document's own scope.
 								filter: {
 									agentId,
-									...(options?.scope ? { scope: options.scope } : {}),
-									...(options?.scopeRef ? { scopeRef: options.scopeRef } : {}),
+									...(fact.scope ? { scope: fact.scope } : {}),
+									...(fact.scopeRef ? { scopeRef: fact.scopeRef } : {}),
 								},
 							},
 						},
@@ -1010,6 +1014,11 @@ export async function consolidateMemory(params: {
 					.toArray()
 
 				for (const dup of duplicates) {
+					// Tenant floor, belt-and-suspenders: even if the store returns a
+					// cross-scope doc, never invalidate across scope/scopeRef.
+					if (dup.scope !== fact.scope || dup.scopeRef !== fact.scopeRef) {
+						continue
+					}
 					const dupScore = typeof dup.score === "number" ? dup.score : 0
 					if (dupScore > SIMILARITY_THRESHOLD_PRUNE) {
 						// Invalidate the older duplicate

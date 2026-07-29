@@ -308,6 +308,7 @@ export type MemongoConsolidateInput = {
 	maxEvents?: number
 	minCombinedScore?: number
 	scope?: string
+	scopeRef?: string
 }
 
 export type MemongoSelfEditInput = {

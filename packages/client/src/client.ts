@@ -1019,6 +1019,7 @@ export class MemongoClient {
 			maxEvents: input?.maxEvents,
 			minCombinedScore: input?.minCombinedScore,
 			scope: input?.scope,
+			scopeRef: input?.scopeRef,
 		})
 	}
 

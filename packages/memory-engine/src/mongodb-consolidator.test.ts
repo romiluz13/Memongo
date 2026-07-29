@@ -1517,6 +1517,107 @@ describe("consolidateMemory", () => {
 		expect(writeStructuredMemory).not.toHaveBeenCalled()
 	})
 
+	it("never invalidates a fact from another scope during pruning (Phase 5)", async () => {
+		// P0: with no options.scope, the prune filter degraded to agentId-only,
+		// so the older of two similar facts was invalidated ACROSS the tenant
+		// floor (scopeRef). Each fact must prune only within its own scope.
+		const { consolidateMemory } = await import("./mongodb-consolidator.js")
+		const consolidationRunsCol = mockCollection({
+			findOne: vi.fn(async () => null),
+		})
+		const eventsCol = mockCollection({
+			find: vi.fn(() => ({
+				sort: vi.fn(() => ({
+					limit: vi.fn(() => ({
+						toArray: vi.fn(async () => [
+							{
+								eventId: "e1",
+								agentId: "agent-1",
+								body: "some event without pattern match",
+								timestamp: new Date(),
+								role: "user",
+							},
+						]),
+					})),
+				})),
+			})),
+			updateMany: vi.fn(async () => ({ modifiedCount: 1 }) as UpdateResult),
+			aggregate: vi.fn(() => ({
+				toArray: vi.fn(async () => [
+					{ unprocessed: [{ n: 1 }], byType: [], topTopics: [] },
+				]),
+			})),
+		})
+
+		const updateOneFn = vi.fn(
+			async () => ({ modifiedCount: 1 }) as UpdateResult,
+		)
+		const aggregateFn = vi.fn(() => ({
+			// Simulates the unscoped query result: a near-identical fact that
+			// belongs to a DIFFERENT tenant (scopeRef) under the same agentId.
+			toArray: vi.fn(async () => [
+				{
+					_id: "fact-bob",
+					value: "I prefer dark mode",
+					type: "preference",
+					agentId: "agent-1",
+					scope: "user",
+					scopeRef: "user:bob",
+					state: "active",
+					updatedAt: new Date("2026-04-01"),
+					score: 0.95,
+				},
+			]),
+		}))
+		const structuredCol = mockCollection({
+			findOne: vi.fn(async () => null),
+			find: vi.fn(() => ({
+				sort: vi.fn(() => ({
+					limit: vi.fn(() => ({
+						toArray: vi.fn(async () => [
+							{
+								_id: "fact-alice",
+								value: "I prefer dark mode for coding",
+								agentId: "agent-1",
+								scope: "user",
+								scopeRef: "user:alice",
+								state: "active",
+								updatedAt: new Date("2026-04-08"),
+							},
+						]),
+					})),
+				})),
+			})),
+			aggregate: aggregateFn,
+			updateOne: updateOneFn,
+		})
+		const db = mockDb({
+			test_consolidation_runs: consolidationRunsCol,
+			test_events: eventsCol,
+			test_structured_mem: structuredCol,
+		})
+
+		const result = await consolidateMemory({
+			db,
+			prefix: "test_",
+			agentId: "agent-1",
+			options: { minCombinedScore: 0 },
+		})
+
+		// The $vectorSearch prune query must be scoped to the fact's own tenant.
+		const pipeline = aggregateFn.mock.calls[0]?.[0] as
+			| Record<string, any>[]
+			| undefined
+		expect(pipeline?.[0]?.$vectorSearch?.filter).toMatchObject({
+			agentId: "agent-1",
+			scope: "user",
+			scopeRef: "user:alice",
+		})
+		// And even if the store returns a cross-scope doc, it must not be touched.
+		expect(updateOneFn).not.toHaveBeenCalled()
+		expect(result.prunedCount).toBe(0)
+	})
+
 	it("prunes near-duplicate structured memories (Phase 5 — Prune)", async () => {
 		const { consolidateMemory } = await import("./mongodb-consolidator.js")
 		const consolidationRunsCol = mockCollection({
