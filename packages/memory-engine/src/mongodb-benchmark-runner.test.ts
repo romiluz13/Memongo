@@ -621,6 +621,30 @@ describe("mongodb benchmark runner", () => {
 		expect(evaluation.officialMetric).toEqual({ status: "scored" })
 	})
 
+	it("never credits DCG twice for the same relevant id across flattened slots", () => {
+		// Two memories both attributed to the one relevant session: the
+		// flattened projection puts s1 in two consecutive rank slots. Gain must
+		// be awarded once — the 2026-07-30 regression run produced session
+		// nDCG 1.564 (> 1 is impossible) because every duplicate slot was
+		// credited while IDCG assumed one appearance.
+		const evaluation = evaluateRankingCase({
+			results: [
+				makeResult({ path: "mem-a", score: 0.9, sessionId: "s1" }),
+				makeResult({ path: "mem-b", score: 0.8, sessionId: "s1" }),
+			],
+			latencyMs: 1,
+			relevantSessionIds: ["s1"],
+			resolveSessionIds: (result) =>
+				result.sessionId ? [result.sessionId] : [],
+			datasetKind: "longmemeval",
+		})
+
+		const session = evaluation.longMemEval?.session
+		expect(session?.ndcgAnyAt3).toBe(1)
+		expect(session?.ndcgAnyAt10).toBe(1)
+		expect(session?.recallAnyAt1).toBe(1)
+	})
+
 	it("excludes cases outside the pinned LongMemEval main-run denominator", () => {
 		const evaluation = evaluateRankingCase({
 			results: [makeResult({ path: "answer", score: 0.9, sessionId: "s1" })],

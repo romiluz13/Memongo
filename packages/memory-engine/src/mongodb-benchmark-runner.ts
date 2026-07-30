@@ -980,9 +980,22 @@ function officialDcgAtK(
 	k: number,
 ): number {
 	let score = 0
+	// The flattened canonical projection deliberately places one attributed id
+	// in multiple consecutive rank slots (deflate-only honesty). Gain must be
+	// awarded once per relevant id — the official evaluator ranks unique ids —
+	// or DCG exceeds the IDCG computed from relevantCount and nDCG goes above
+	// 1 (observed live: 1.564). Duplicate slots still burn rank positions;
+	// they just cannot add gain.
+	const credited = new Set<string>()
 	for (const [index, group] of rankedGroups.slice(0, k).entries()) {
-		if (!group.ids.some((id) => relevantIds.has(id))) {
+		const fresh = group.ids.filter(
+			(id) => relevantIds.has(id) && !credited.has(id),
+		)
+		if (fresh.length === 0) {
 			continue
+		}
+		for (const id of fresh) {
+			credited.add(id)
 		}
 		score += index === 0 ? 1 : 1 / Math.log2(index + 1)
 	}
