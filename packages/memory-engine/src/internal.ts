@@ -49,6 +49,29 @@ const DISABLED_MULTIMODAL_SETTINGS: MemoryMultimodalSettings = {
 	maxFileBytes: 0,
 }
 
+/**
+ * E11000 classifier for read-then-upsert races: a concurrent writer that
+ * commits between our read and our insert makes the unique index reject the
+ * insert. Re-running the read+update once resolves it (the second pass finds
+ * the winner's document and updates it).
+ */
+export function isDuplicateKeyError(err: unknown): boolean {
+	if (!err || typeof err !== "object") {
+		return false
+	}
+	const code = (err as { code?: unknown }).code
+	if (code === 11000 || code === "11000") {
+		return true
+	}
+	const message =
+		err instanceof Error
+			? err.message
+			: typeof (err as { message?: unknown }).message === "string"
+				? String((err as { message: string }).message)
+				: String(err)
+	return message.includes("E11000") || message.includes("duplicate key")
+}
+
 export function ensureDir(dir: string): string {
 	try {
 		fsSync.mkdirSync(dir, { recursive: true })

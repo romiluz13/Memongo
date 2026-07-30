@@ -1291,6 +1291,63 @@ describe("consolidateMemory", () => {
 		expect(result.orientStats!.topScopes[0].scope).toBe("project-alpha")
 	})
 
+	it("bounds the orient scan to the batch's time window (P1-7)", async () => {
+		// Unbounded, the orient $facet walked the agent's ENTIRE event history
+		// on every run — a linearly growing COLLSCAN feeding a log line.
+		const { consolidateMemory } = await import("./mongodb-consolidator.js")
+		const oldest = new Date("2026-06-01T00:00:00Z")
+		const consolidationRunsCol = mockCollection({
+			findOne: vi.fn(async () => null),
+		})
+		const aggregate = vi.fn(() => ({
+			toArray: vi.fn(async () => [
+				{ unprocessed: [{ n: 1 }], byType: [], topTopics: [] },
+			]),
+		}))
+		const eventsCol = mockCollection({
+			find: vi.fn(() => ({
+				sort: vi.fn(() => ({
+					limit: vi.fn(() => ({
+						toArray: vi.fn(async () => [
+							{
+								eventId: "e-new",
+								agentId: "agent-1",
+								body: "newest",
+								timestamp: new Date("2026-06-02T00:00:00Z"),
+								role: "user",
+							},
+							{
+								eventId: "e-old",
+								agentId: "agent-1",
+								body: "oldest in batch",
+								timestamp: oldest,
+								role: "user",
+							},
+						]),
+					})),
+				})),
+			})),
+			updateMany: vi.fn(async () => ({ modifiedCount: 2 }) as UpdateResult),
+			aggregate,
+		})
+		const db = mockDb({
+			test_consolidation_runs: consolidationRunsCol,
+			test_events: eventsCol,
+		})
+
+		await consolidateMemory({
+			db,
+			prefix: "test_",
+			agentId: "agent-1",
+			options: { minCombinedScore: 0 },
+		})
+
+		const pipeline = aggregate.mock.calls[0]?.[0] as Array<{
+			$match?: { timestamp?: { $gte?: Date } }
+		}>
+		expect(pipeline[0]?.$match?.timestamp?.$gte).toEqual(oldest)
+	})
+
 	it("does not expose another scope through orientStats", async () => {
 		const { consolidateMemory } = await import("./mongodb-consolidator.js")
 		const consolidationRunsCol = mockCollection({

@@ -1585,6 +1585,37 @@ export async function ensureSchemaValidation(
 // Standard indexes (work on all MongoDB editions)
 // ---------------------------------------------------------------------------
 
+/**
+ * E11000 while building a unique index means the collection already contains
+ * duplicates for the exact keys the index exists to enforce — including the
+ * tenant/scope uniqueness floors (uq_kb_scope_hash, uq_structured_*,
+ * uq_entities_*). MongoDB builds no partial index in that case, so continuing
+ * would leave the constraint permanently unenforced behind a log line: fail
+ * bootstrap and make the operator deduplicate. "already exists"
+ * (IndexOptionsConflict) stays non-fatal — an index with this name is present,
+ * just created by an older version.
+ */
+function handleUniqueIndexCreationError(err: unknown, indexName: string): void {
+	const code = (err as { code?: unknown } | null)?.code
+	const msg = err instanceof Error ? err.message : String(err)
+	if (
+		code === 11000 ||
+		code === "11000" ||
+		msg.includes("E11000") ||
+		msg.includes("duplicate key")
+	) {
+		throw new Error(
+			`unique index ${indexName} cannot be enforced: existing documents violate it (${msg}). Deduplicate the collection, then restart.`,
+			{ cause: err },
+		)
+	}
+	if (msg.includes("already exists")) {
+		log.warn(`unique index ${indexName}: already exists; skipping`)
+		return
+	}
+	throw err
+}
+
 export async function ensureStandardIndexes(
 	db: Db,
 	prefix: string,
@@ -1660,15 +1691,8 @@ export async function ensureStandardIndexes(
 		)
 		applied++
 	} catch (err) {
-		const msg = err instanceof Error ? err.message : String(err)
-		if (msg.includes("duplicate") || msg.includes("already exists")) {
-			log.warn(
-				"unique index uq_kb_hash: index exists or duplicates detected; skipping",
-			)
-			applied++
-		} else {
-			throw err
-		}
+		handleUniqueIndexCreationError(err, "uq_kb_scope_hash")
+		applied++
 	}
 	await kb.createIndex(
 		{ "source.type": 1, category: 1 },
@@ -1703,15 +1727,8 @@ export async function ensureStandardIndexes(
 		)
 		applied++
 	} catch (err) {
-		const msg = err instanceof Error ? err.message : String(err)
-		if (msg.includes("duplicate") || msg.includes("already exists")) {
-			log.warn(
-				"unique index uq_kbchunks_path_lines: index exists or duplicates detected; skipping",
-			)
-			applied++
-		} else {
-			throw err
-		}
+		handleUniqueIndexCreationError(err, "uq_kbchunks_path_lines")
+		applied++
 	}
 	// $text index on kb_chunks text field for text search fallback
 	await kbChunks.createIndex({ text: "text" }, { name: "idx_kbchunks_text" })
@@ -1737,15 +1754,11 @@ export async function ensureStandardIndexes(
 		)
 		applied++
 	} catch (err) {
-		const msg = err instanceof Error ? err.message : String(err)
-		if (msg.includes("duplicate") || msg.includes("already exists")) {
-			log.warn(
-				"unique index uq_structured_agent_scope_scoperef_type_key: index exists or duplicates detected; skipping",
-			)
-			applied++
-		} else {
-			throw err
-		}
+		handleUniqueIndexCreationError(
+			err,
+			"uq_structured_agent_scope_scoperef_type_key",
+		)
+		applied++
 	}
 	await structured.createIndex(
 		{ type: 1, updatedAt: -1 },
@@ -1879,15 +1892,8 @@ export async function ensureStandardIndexes(
 		)
 		applied++
 	} catch (err) {
-		const msg = err instanceof Error ? err.message : String(err)
-		if (msg.includes("duplicate") || msg.includes("already exists")) {
-			log.warn(
-				"unique index uq_events_eventid: index exists or duplicates detected; skipping",
-			)
-			applied++
-		} else {
-			throw err
-		}
+		handleUniqueIndexCreationError(err, "uq_events_eventid")
+		applied++
 	}
 	await events.createIndex(
 		{ scope: 1, scopeRef: 1, timestamp: -1 },
@@ -1947,15 +1953,11 @@ export async function ensureStandardIndexes(
 		)
 		applied++
 	} catch (err) {
-		const msg = err instanceof Error ? err.message : String(err)
-		if (msg.includes("duplicate") || msg.includes("already exists")) {
-			log.warn(
-				"unique index uq_entities_entityid_agent_scope_scoperef: index exists or duplicates detected; skipping",
-			)
-			applied++
-		} else {
-			throw err
-		}
+		handleUniqueIndexCreationError(
+			err,
+			"uq_entities_entityid_agent_scope_scoperef",
+		)
+		applied++
 	}
 	await entities.createIndex(
 		{ agentId: 1, scope: 1, scopeRef: 1, type: 1, name: 1 },
@@ -2063,15 +2065,8 @@ export async function ensureStandardIndexes(
 		)
 		applied++
 	} catch (err) {
-		const msg = err instanceof Error ? err.message : String(err)
-		if (msg.includes("duplicate") || msg.includes("already exists")) {
-			log.warn(
-				"unique index uq_entity_links_pair_type: index exists or duplicates detected; skipping",
-			)
-			applied++
-		} else {
-			throw err
-		}
+		handleUniqueIndexCreationError(err, "uq_entity_links_pair_type")
+		applied++
 	}
 	await entityLinks.createIndex(
 		{
@@ -2095,15 +2090,8 @@ export async function ensureStandardIndexes(
 		)
 		applied++
 	} catch (err) {
-		const msg = err instanceof Error ? err.message : String(err)
-		if (msg.includes("duplicate") || msg.includes("already exists")) {
-			log.warn(
-				"unique index uq_episodes_episodeid: index exists or duplicates detected; skipping",
-			)
-			applied++
-		} else {
-			throw err
-		}
+		handleUniqueIndexCreationError(err, "uq_episodes_episodeid")
+		applied++
 	}
 	await episodes.createIndex(
 		{ agentId: 1, scope: 1, scopeRef: 1, type: 1, "timeRange.start": -1 },
@@ -2125,18 +2113,8 @@ export async function ensureStandardIndexes(
 		)
 		applied++
 	} catch (err) {
-		const msg = err instanceof Error ? err.message : String(err)
-		if (msg.includes("duplicate") || msg.includes("already exists")) {
-			// Pre-existing duplicate episodes (the very defect this index prevents)
-			// block creation. Log loudly rather than failing startup — the upsert
-			// filter already converges new writes onto one document per event set.
-			log.warn(
-				"unique index uq_episodes_source_events: index exists or duplicate episodes detected; skipping",
-			)
-			applied++
-		} else {
-			throw err
-		}
+		handleUniqueIndexCreationError(err, "uq_episodes_source_events")
+		applied++
 	}
 	await episodes.createIndex(
 		{ summary: "text", title: "text" },
@@ -2172,15 +2150,11 @@ export async function ensureStandardIndexes(
 		)
 		applied++
 	} catch (err) {
-		const msg = err instanceof Error ? err.message : String(err)
-		if (msg.includes("duplicate") || msg.includes("already exists")) {
-			log.warn(
-				"unique index uq_structured_agent_scope_scoperef_type_key_v2: index exists or duplicates detected; skipping",
-			)
-			applied++
-		} else {
-			throw err
-		}
+		handleUniqueIndexCreationError(
+			err,
+			"uq_structured_agent_scope_scoperef_type_key_v2",
+		)
+		applied++
 	}
 
 	const structuredRevisions = structuredMemRevisionsCollection(db, prefix)
@@ -2213,15 +2187,8 @@ export async function ensureStandardIndexes(
 		)
 		applied++
 	} catch (err) {
-		const msg = err instanceof Error ? err.message : String(err)
-		if (msg.includes("duplicate") || msg.includes("already exists")) {
-			log.warn(
-				"unique index uq_procedures_identity: index exists or duplicates detected; skipping",
-			)
-			applied++
-		} else {
-			throw err
-		}
+		handleUniqueIndexCreationError(err, "uq_procedures_identity")
+		applied++
 	}
 	await procedures.createIndex(
 		{ agentId: 1, scope: 1, scopeRef: 1, state: 1, updatedAt: -1 },
@@ -2260,15 +2227,11 @@ export async function ensureStandardIndexes(
 		)
 		applied++
 	} catch (err) {
-		const msg = err instanceof Error ? err.message : String(err)
-		if (msg.includes("duplicate") || msg.includes("already exists")) {
-			log.warn(
-				"unique index uq_query_cache_hash_agent_scope_scoperef: index exists or duplicates detected; skipping",
-			)
-			applied++
-		} else {
-			throw err
-		}
+		handleUniqueIndexCreationError(
+			err,
+			"uq_query_cache_hash_agent_scope_scoperef",
+		)
+		applied++
 	}
 	await queryCache.createIndex(
 		{ expiresAt: 1 },
@@ -2344,15 +2307,8 @@ export async function ensureStandardIndexes(
 		)
 		applied++
 	} catch (err) {
-		const msg = err instanceof Error ? err.message : String(err)
-		if (msg.includes("duplicate") || msg.includes("already exists")) {
-			log.warn(
-				"unique index uq_lane_coverage_agentid: index exists or duplicates detected; skipping",
-			)
-			applied++
-		} else {
-			throw err
-		}
+		handleUniqueIndexCreationError(err, "uq_lane_coverage_agentid")
+		applied++
 	}
 
 	// Episodes promotion index (consolidation queries for promotable episodes)
@@ -2395,15 +2351,8 @@ export async function ensureStandardIndexes(
 		)
 		applied++
 	} catch (err) {
-		const msg = err instanceof Error ? err.message : String(err)
-		if (msg.includes("duplicate") || msg.includes("already exists")) {
-			log.warn(
-				"unique index uq_events_sourceref: index exists or duplicates detected; skipping",
-			)
-			applied++
-		} else {
-			throw err
-		}
+		handleUniqueIndexCreationError(err, "uq_events_sourceref")
+		applied++
 	}
 	const structuredForSourceRef = structuredMemCollection(db, prefix)
 	try {
@@ -2417,15 +2366,8 @@ export async function ensureStandardIndexes(
 		)
 		applied++
 	} catch (err) {
-		const msg = err instanceof Error ? err.message : String(err)
-		if (msg.includes("duplicate") || msg.includes("already exists")) {
-			log.warn(
-				"unique index uq_structured_sourceref: index exists or duplicates detected; skipping",
-			)
-			applied++
-		} else {
-			throw err
-		}
+		handleUniqueIndexCreationError(err, "uq_structured_sourceref")
+		applied++
 	}
 	const proceduresForSourceRef = proceduresCollection(db, prefix)
 	try {
@@ -2439,15 +2381,8 @@ export async function ensureStandardIndexes(
 		)
 		applied++
 	} catch (err) {
-		const msg = err instanceof Error ? err.message : String(err)
-		if (msg.includes("duplicate") || msg.includes("already exists")) {
-			log.warn(
-				"unique index uq_procedures_sourceref: index exists or duplicates detected; skipping",
-			)
-			applied++
-		} else {
-			throw err
-		}
+		handleUniqueIndexCreationError(err, "uq_procedures_sourceref")
+		applied++
 	}
 
 	// Partial index for current-facts queries on structured_mem.
@@ -2479,15 +2414,8 @@ export async function ensureStandardIndexes(
 		)
 		applied++
 	} catch (err) {
-		const msg = err instanceof Error ? err.message : String(err)
-		if (msg.includes("duplicate") || msg.includes("already exists")) {
-			log.warn(
-				"unique index uq_recall_traces_traceid: index exists or duplicates detected; skipping",
-			)
-			applied++
-		} else {
-			throw err
-		}
+		handleUniqueIndexCreationError(err, "uq_recall_traces_traceid")
+		applied++
 	}
 
 	// -----------------------------------------------------------------------
@@ -2502,15 +2430,8 @@ export async function ensureStandardIndexes(
 		)
 		applied++
 	} catch (err) {
-		const msg = err instanceof Error ? err.message : String(err)
-		if (msg.includes("duplicate") || msg.includes("already exists")) {
-			log.warn(
-				"unique index uq_memory_jobs_jobid: index exists or duplicates detected; skipping",
-			)
-			applied++
-		} else {
-			throw err
-		}
+		handleUniqueIndexCreationError(err, "uq_memory_jobs_jobid")
+		applied++
 	}
 	// ESR: agentId + status equality, createdAt descending sort
 	await memoryJobs.createIndex(
@@ -2545,15 +2466,8 @@ export async function ensureStandardIndexes(
 		)
 		applied++
 	} catch (err) {
-		const msg = err instanceof Error ? err.message : String(err)
-		if (msg.includes("duplicate") || msg.includes("already exists")) {
-			log.warn(
-				"unique index uq_session_chunks_agent_session: index exists or duplicates detected; skipping",
-			)
-			applied++
-		} else {
-			throw err
-		}
+		handleUniqueIndexCreationError(err, "uq_session_chunks_agent_session")
+		applied++
 	}
 	await sessionChunks.createIndex(
 		{ agentId: 1, scope: 1, scopeRef: 1 },

@@ -138,6 +138,96 @@ describe("ingestToKB", () => {
 		})
 	})
 
+	it("treats a lost uq_kb_scope_hash insert race as dedup, not error (P1-2)", async () => {
+		const content = "Concurrent content"
+		const doc: KBDocument = {
+			title: "Race",
+			content,
+			source: { type: "manual", importedBy: "agent" },
+			hash: hashText(content),
+		}
+		;(mockKB.insertOne as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+			Object.assign(new Error("E11000 duplicate key error"), { code: 11000 }),
+		)
+
+		const result = await ingestToKB({
+			db: mockDb(),
+			prefix: "test_",
+			documents: [doc],
+			embeddingMode: "automated",
+			scope: SCOPE,
+		})
+
+		expect(result.skipped).toBe(1)
+		expect(result.errors).toHaveLength(0)
+		expect(result.documentsProcessed).toBe(0)
+	})
+
+	it("measures the size guard in UTF-8 bytes, not UTF-16 code units", async () => {
+		// P1-3 (fleet audit): "€" is 1 code unit but 3 UTF-8 bytes. A guard on
+		// .length passes documents insertOne cannot store — at the 10 MiB
+		// default, ~10M non-ASCII chars is up to ~30 MB of BSON.
+		const content = "€".repeat(600)
+		const doc: KBDocument = {
+			title: "Multibyte",
+			content,
+			source: { type: "manual", importedBy: "agent" },
+			hash: hashText(content),
+		}
+
+		const result = await ingestToKB({
+			db: mockDb(),
+			prefix: "test_",
+			documents: [doc],
+			embeddingMode: "automated",
+			scope: SCOPE,
+			maxDocumentSize: 1000, // 600 code units pass, 1800 bytes must not
+		})
+
+		expect(result.skipped).toBe(1)
+		expect(result.errors[0]).toMatch(/too large \(1800 bytes > 1000/)
+		expect(mockKB.insertOne).not.toHaveBeenCalled()
+	})
+
+	it("clamps a caller maxDocumentSize override under the 16 MiB BSON limit", async () => {
+		const content = "x".repeat(64)
+		const doc: KBDocument = {
+			title: "Clamped",
+			content,
+			source: { type: "manual", importedBy: "agent" },
+			hash: hashText(content),
+		}
+
+		// A 64-byte doc still ingests fine under an absurd override…
+		const result = await ingestToKB({
+			db: mockDb(),
+			prefix: "test_",
+			documents: [doc],
+			embeddingMode: "automated",
+			scope: SCOPE,
+			maxDocumentSize: 64 * 1024 * 1024,
+		})
+		expect(result.documentsProcessed).toBe(1)
+
+		// …but a doc over the BSON ceiling is rejected even when the caller
+		// asked for a limit above it.
+		const big: KBDocument = {
+			title: "Over BSON",
+			content: "y".repeat(15 * 1024 * 1024 + 1),
+			source: { type: "manual", importedBy: "agent" },
+			hash: "big",
+		}
+		const result2 = await ingestToKB({
+			db: mockDb(),
+			prefix: "test_",
+			documents: [big],
+			embeddingMode: "automated",
+			scope: SCOPE,
+			maxDocumentSize: 64 * 1024 * 1024,
+		})
+		expect(result2.skipped).toBe(1)
+	})
+
 	it("skips document with same hash (dedup)", async () => {
 		const content = "Duplicate content"
 		const hash = hashText(content)

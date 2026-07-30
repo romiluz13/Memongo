@@ -124,6 +124,89 @@ describe("runVoyageEmbeddingBatches", () => {
 		expect(withRemoteHttpResponse).toHaveBeenCalledTimes(2)
 	})
 
+	it("retries a transient 429 on status polling instead of failing the batch (P1-5)", async () => {
+		const outputLines: VoyageBatchOutputLine[] = [
+			{
+				custom_id: "req-1",
+				response: {
+					status_code: 200,
+					body: { data: [{ embedding: [0.1, 0.1] }] },
+				},
+			},
+			{
+				custom_id: "req-2",
+				response: {
+					status_code: 200,
+					body: { data: [{ embedding: [0.2, 0.2] }] },
+				},
+			},
+		]
+		const withRemoteHttpResponse = vi.fn()
+		const postJsonWithRetry = vi.fn()
+		const uploadBatchJsonlFile = vi.fn()
+
+		const stream = new ReadableStream({
+			start(controller) {
+				const text = outputLines.map((l) => JSON.stringify(l)).join("\n")
+				controller.enqueue(new TextEncoder().encode(text))
+				controller.close()
+			},
+		})
+		uploadBatchJsonlFile.mockResolvedValueOnce("file-123")
+		postJsonWithRetry.mockResolvedValueOnce({
+			id: "batch-abc",
+			status: "pending",
+		})
+		// First status poll: transient 429 — must be retried, not fatal.
+		withRemoteHttpResponse.mockImplementationOnce(async (params) => {
+			return await params.onResponse(new Response("slow down", { status: 429 }))
+		})
+		withRemoteHttpResponse.mockImplementationOnce(async (params) => {
+			expect(params.url).toContain("/batches/batch-abc")
+			return await params.onResponse(
+				new Response(
+					JSON.stringify({
+						id: "batch-abc",
+						status: "completed",
+						output_file_id: "file-out-999",
+					}),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				),
+			)
+		})
+		withRemoteHttpResponse.mockImplementationOnce(async (params) => {
+			expect(params.url).toContain("/files/file-out-999/content")
+			return await params.onResponse(
+				new Response(stream as unknown as BodyInit, {
+					status: 200,
+					headers: { "Content-Type": "application/x-ndjson" },
+				}),
+			)
+		})
+
+		const results = await runVoyageEmbeddingBatches({
+			client: mockClient,
+			agentId: "agent-1",
+			requests: mockRequests,
+			wait: true,
+			pollIntervalMs: 1,
+			timeoutMs: 30_000,
+			concurrency: 1,
+			deps: {
+				now: realNow,
+				sleep: async (ms) => {
+					await nativeSleep(ms)
+				},
+				postJsonWithRetry,
+				uploadBatchJsonlFile,
+				withRemoteHttpResponse,
+			},
+		})
+
+		expect(results.size).toBe(2)
+		expect(withRemoteHttpResponse).toHaveBeenCalledTimes(3)
+	})
+
 	it("handles empty lines and stream chunks correctly", async () => {
 		const withRemoteHttpResponse = vi.fn()
 		const postJsonWithRetry = vi.fn()

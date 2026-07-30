@@ -2988,18 +2988,27 @@ describe("query_cache_vector expiresAt filter", () => {
 // Fix 5: unique index creation wrapped in try/catch
 // ---------------------------------------------------------------------------
 
-describe("unique index creation resilience", () => {
-	it("continues when uq_kb_hash unique index throws duplicate error", async () => {
+describe("unique index creation strictness", () => {
+	// P1-1 (fleet audit): E11000 while building a unique index means the
+	// collection already violates the uniqueness the index enforces (the
+	// tenant/scope floors). MongoDB builds no partial index, so continuing
+	// would leave the constraint permanently unenforced behind a log line.
+	it("fails bootstrap when a unique index hits E11000 duplicates", async () => {
 		const db = mockDb()
 		const kb = db.collection("test_knowledge_base") as unknown as {
 			createIndex: ReturnType<typeof vi.fn>
 		}
-		// Override first createIndex call on KB to throw duplicate error
-		kb.createIndex.mockRejectedValueOnce(new Error("duplicate key error"))
+		const dup = Object.assign(
+			new Error(
+				"E11000 duplicate key error collection: test_knowledge_base index: uq_kb_scope_hash",
+			),
+			{ code: 11000 },
+		)
+		kb.createIndex.mockRejectedValueOnce(dup)
 
-		const count = await ensureStandardIndexes(db, "test_")
-		// Should still return a count (not throw), with the index counted as existing
-		expect(count).toBeGreaterThan(0)
+		await expect(ensureStandardIndexes(db, "test_")).rejects.toThrow(
+			/uq_kb_scope_hash.*cannot be enforced/,
+		)
 	})
 
 	it("continues when uq_kbchunks_path_lines unique index throws already exists error", async () => {
@@ -3024,7 +3033,7 @@ describe("unique index creation resilience", () => {
 		}
 		// dropIndex calls succeed (migration), then createIndex for unique index fails
 		structured.createIndex.mockRejectedValueOnce(
-			new Error("index already exists with duplicate keys"),
+			new Error("index with that name already exists"),
 		)
 
 		const count = await ensureStandardIndexes(db, "test_")

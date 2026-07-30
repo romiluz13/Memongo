@@ -18,6 +18,7 @@ import {
 	type BatchCompletionResult,
 	type ProviderBatchOutputLine,
 	uploadBatchJsonlFile,
+	withBatchTransientRetry,
 	withRemoteHttpResponse,
 } from "./batch-embedding-common.js"
 import type { VoyageEmbeddingClient } from "./embeddings-voyage.js"
@@ -71,7 +72,11 @@ async function assertVoyageResponseOk(
 ): Promise<void> {
 	if (!res.ok) {
 		const text = await res.text()
-		throw new Error(`${context}: ${res.status} ${text}`)
+		const err = new Error(`${context}: ${res.status} ${text}`) as Error & {
+			status?: number
+		}
+		err.status = res.status
+		throw err
 	}
 }
 
@@ -131,15 +136,17 @@ async function fetchVoyageBatchStatus(params: {
 	batchId: string
 	deps: VoyageBatchDeps
 }): Promise<VoyageBatchStatus> {
-	return await params.deps.withRemoteHttpResponse(
-		buildVoyageBatchRequest({
-			client: params.client,
-			path: `batches/${params.batchId}`,
-			onResponse: async (res) => {
-				await assertVoyageResponseOk(res, "voyage batch status failed")
-				return (await res.json()) as VoyageBatchStatus
-			},
-		}),
+	return await withBatchTransientRetry(async () =>
+		params.deps.withRemoteHttpResponse(
+			buildVoyageBatchRequest({
+				client: params.client,
+				path: `batches/${params.batchId}`,
+				onResponse: async (res) => {
+					await assertVoyageResponseOk(res, "voyage batch status failed")
+					return (await res.json()) as VoyageBatchStatus
+				},
+			}),
+		),
 	)
 }
 
@@ -149,27 +156,29 @@ async function readVoyageBatchError(params: {
 	deps: VoyageBatchDeps
 }): Promise<string | undefined> {
 	try {
-		return await params.deps.withRemoteHttpResponse(
-			buildVoyageBatchRequest({
-				client: params.client,
-				path: `files/${params.errorFileId}/content`,
-				onResponse: async (res) => {
-					await assertVoyageResponseOk(
-						res,
-						"voyage batch error file content failed",
-					)
-					const text = await res.text()
-					if (!text.trim()) {
-						return undefined
-					}
-					const lines = text
-						.split("\n")
-						.map((line) => line.trim())
-						.filter(Boolean)
-						.map((line) => JSON.parse(line) as VoyageBatchOutputLine)
-					return extractBatchErrorMessage(lines)
-				},
-			}),
+		return await withBatchTransientRetry(async () =>
+			params.deps.withRemoteHttpResponse(
+				buildVoyageBatchRequest({
+					client: params.client,
+					path: `files/${params.errorFileId}/content`,
+					onResponse: async (res) => {
+						await assertVoyageResponseOk(
+							res,
+							"voyage batch error file content failed",
+						)
+						const text = await res.text()
+						if (!text.trim()) {
+							return undefined
+						}
+						const lines = text
+							.split("\n")
+							.map((line) => line.trim())
+							.filter(Boolean)
+							.map((line) => JSON.parse(line) as VoyageBatchOutputLine)
+						return extractBatchErrorMessage(lines)
+					},
+				}),
+			),
 		)
 	} catch (err) {
 		return formatUnavailableBatchError(err)
@@ -287,44 +296,48 @@ export async function runVoyageEmbeddingBatches(
 			const errors: string[] = []
 			const remaining = new Set(group.map((request) => request.custom_id))
 
-			await deps.withRemoteHttpResponse({
-				url: `${baseUrl}/files/${completed.outputFileId}/content`,
-				ssrfPolicy: params.client.ssrfPolicy,
-				init: {
-					headers: buildBatchHeaders(params.client, { json: true }),
-				},
-				onResponse: async (contentRes) => {
-					if (!contentRes.ok) {
-						const text = await contentRes.text()
-						throw new Error(
-							`voyage batch file content failed: ${contentRes.status} ${text}`,
-						)
-					}
-
-					if (!contentRes.body) {
-						return
-					}
-					const reader = createInterface({
-						input: Readable.fromWeb(
-							contentRes.body as unknown as import("stream/web").ReadableStream,
-						),
-						terminal: false,
-					})
-
-					for await (const rawLine of reader) {
-						if (!rawLine.trim()) {
-							continue
+			await withBatchTransientRetry(async () =>
+				deps.withRemoteHttpResponse({
+					url: `${baseUrl}/files/${completed.outputFileId}/content`,
+					ssrfPolicy: params.client.ssrfPolicy,
+					init: {
+						headers: buildBatchHeaders(params.client, { json: true }),
+					},
+					onResponse: async (contentRes) => {
+						if (!contentRes.ok) {
+							const text = await contentRes.text()
+							const err = new Error(
+								`voyage batch file content failed: ${contentRes.status} ${text}`,
+							) as Error & { status?: number }
+							err.status = contentRes.status
+							throw err
 						}
-						const line = JSON.parse(rawLine) as VoyageBatchOutputLine
-						applyEmbeddingBatchOutputLine({
-							line,
-							remaining,
-							errors,
-							byCustomId,
+
+						if (!contentRes.body) {
+							return
+						}
+						const reader = createInterface({
+							input: Readable.fromWeb(
+								contentRes.body as unknown as import("stream/web").ReadableStream,
+							),
+							terminal: false,
 						})
-					}
-				},
-			})
+
+						for await (const rawLine of reader) {
+							if (!rawLine.trim()) {
+								continue
+							}
+							const line = JSON.parse(rawLine) as VoyageBatchOutputLine
+							applyEmbeddingBatchOutputLine({
+								line,
+								remaining,
+								errors,
+								byCustomId,
+							})
+						}
+					},
+				}),
+			)
 
 			if (errors.length > 0) {
 				throw new Error(

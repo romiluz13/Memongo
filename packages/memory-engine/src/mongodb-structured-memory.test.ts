@@ -125,6 +125,48 @@ describe("writeStructuredMemory", () => {
 		expect(col.updateOne).not.toHaveBeenCalled()
 	})
 
+	it("retries once when a concurrent writer wins the upsert race (P1-2)", async () => {
+		// Committed-loser window: our findOne sees nothing, another writer
+		// commits the same identity, our upsert-insert hits the unique index.
+		// The write must land as an update on re-run, not surface E11000.
+		const col = createMockStructuredCol()
+		const dup = Object.assign(
+			new Error("E11000 duplicate key error collection: structured_mem"),
+			{ code: 11000 },
+		)
+		;(col.findOne as ReturnType<typeof vi.fn>)
+			.mockResolvedValueOnce(null)
+			.mockResolvedValueOnce({
+				revision: 1,
+				value: "winner value",
+				createdAt: new Date(),
+				openedCount: 0,
+			})
+		;(col.updateOne as ReturnType<typeof vi.fn>)
+			.mockRejectedValueOnce(dup)
+			.mockResolvedValueOnce({ upsertedCount: 0, modifiedCount: 1 })
+
+		const result = await writeStructuredMemory({
+			db: mockDb({
+				test_structured_mem: col,
+				test_structured_mem_revisions: createMockStructuredCol(),
+				test_query_cache: createMockStructuredCol(),
+			}),
+			prefix: "test_",
+			entry: {
+				type: "decision",
+				key: "race-key",
+				value: "loser value",
+				agentId: "main",
+			},
+			embeddingMode: "automated",
+		})
+
+		expect(result.upserted).toBe(false)
+		expect(col.updateOne).toHaveBeenCalledTimes(2)
+		expect(col.findOne).toHaveBeenCalledTimes(2)
+	})
+
 	it("creates a new structured memory entry", async () => {
 		const col = createMockStructuredCol()
 		const revisionsCol = createMockStructuredCol()

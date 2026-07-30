@@ -7,7 +7,7 @@ import {
 	type MemoryScope,
 	createSubsystemLogger,
 } from "@memongo/lib"
-import { chunkMarkdown, hashText } from "./internal.js"
+import { chunkMarkdown, hashText, isDuplicateKeyError } from "./internal.js"
 import type { EmbeddingStatus } from "./mongodb-embedding-retry.js"
 import { invalidateQueryCache } from "./mongodb-query-cache.js"
 import { kbCollection, kbChunksCollection } from "./mongodb-schema.js"
@@ -109,7 +109,14 @@ export async function ingestToKB(params: {
 }): Promise<KBIngestResult> {
 	const { db, prefix, documents, force, progress } = params
 	const { agentId, scope: memoryScope, scopeRef } = resolveKBScope(params.scope)
-	const maxDocSize = params.maxDocumentSize ?? 10 * 1024 * 1024 // default 10MB
+	// Clamp under the 16 MiB BSON document limit with headroom for the KB
+	// document's own metadata — a caller override above the ceiling would only
+	// trade this guard's clear error for a raw driver failure at insertOne.
+	const MAX_DOC_SIZE_CEILING = 15 * 1024 * 1024
+	const maxDocSize = Math.min(
+		params.maxDocumentSize ?? 10 * 1024 * 1024, // default 10MB
+		MAX_DOC_SIZE_CEILING,
+	)
 	const chunking = params.chunking ?? { tokens: 600, overlap: 100 }
 	const model = params.model ?? "voyage-4-large"
 	const kb = kbCollection(db, prefix)
@@ -127,10 +134,13 @@ export async function ingestToKB(params: {
 		progress?.({ completed: i, total: documents.length, label: doc.title })
 
 		try {
-			// Size enforcement — reject documents that exceed maxDocumentSize
-			if (doc.content.length > maxDocSize) {
+			// Size enforcement — reject documents that exceed maxDocumentSize.
+			// Measured in UTF-8 bytes (what BSON stores), not UTF-16 code units:
+			// .length undercounts non-ASCII content by up to 3×.
+			const contentBytes = Buffer.byteLength(doc.content, "utf8")
+			if (contentBytes > maxDocSize) {
 				result.errors.push(
-					`${doc.title}: document too large (${doc.content.length} bytes > ${maxDocSize} limit)`,
+					`${doc.title}: document too large (${contentBytes} bytes > ${maxDocSize} limit)`,
 				)
 				result.skipped++
 				continue
@@ -258,8 +268,19 @@ export async function ingestToKB(params: {
 				})
 				result.chunksCreated += chunksCreated
 			} else {
-				// Fresh ingestion: no delete needed, no transaction required
-				await kb.insertOne(newKBDoc)
+				// Fresh ingestion: no delete needed, no transaction required.
+				// P1-2: a concurrent ingest of the same content can win the
+				// uq_kb_scope_hash race between our dedup check and this insert
+				// — that is a successful dedup, not an error.
+				try {
+					await kb.insertOne(newKBDoc)
+				} catch (err) {
+					if (isDuplicateKeyError(err)) {
+						result.skipped++
+						continue
+					}
+					throw err
+				}
 				if (chunkOps.length > 0) {
 					const writeResult = await kbChunks.bulkWrite(chunkOps, {
 						ordered: false,

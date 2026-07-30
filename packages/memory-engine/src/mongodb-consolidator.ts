@@ -400,6 +400,15 @@ export async function consolidateMemory(params: {
 		const orientFilter: Document = { agentId }
 		if (options?.scope) orientFilter.scope = options.scope
 		if (options?.scopeRef) orientFilter.scopeRef = options.scopeRef
+		// Fleet audit P1-7: bound the orient scan to the window this run
+		// actually processes. Unbounded, this $facet walked the agent's entire
+		// event history on every consolidation, growing linearly forever, to
+		// feed a log line. `events` is sorted timestamp-desc, so the last entry
+		// is the oldest event in this run's batch.
+		const oldestBatchTimestamp = events[events.length - 1]?.timestamp
+		if (oldestBatchTimestamp instanceof Date) {
+			orientFilter.timestamp = { $gte: oldestBatchTimestamp }
+		}
 		const [facetResult] = await eventsCol
 			.aggregate([
 				{ $match: orientFilter },

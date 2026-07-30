@@ -10,6 +10,7 @@ import {
 	type MemoryScope,
 	createSubsystemLogger,
 } from "@memongo/lib"
+import { isDuplicateKeyError } from "./internal.js"
 import type { EmbeddingStatus } from "./mongodb-embedding-retry.js"
 import { recordMutation, type MutationMeta } from "./mongodb-mutations.js"
 import { invalidateQueryCache } from "./mongodb-query-cache.js"
@@ -918,6 +919,24 @@ export async function writeStructuredMemory(params: {
 		}
 	}
 
+	// Fleet audit P1-2: the committed-loser race. A concurrent writer that
+	// commits between our findOne and our upsert makes the unique identity
+	// index reject the insert with E11000; re-running once finds the winner's
+	// document and applies this write as an update. Only for sessionless runs —
+	// inside a caller transaction, aborting is correct.
+	const persistWithDuplicateKeyRetry = async (): Promise<
+		Awaited<ReturnType<typeof persist>>
+	> => {
+		try {
+			return await persist()
+		} catch (err) {
+			if (!isDuplicateKeyError(err)) {
+				throw err
+			}
+			return await persist()
+		}
+	}
+
 	const client = params.client
 	const outcome = params.session
 		? await persist(params.session)
@@ -951,12 +970,12 @@ export async function writeStructuredMemory(params: {
 						log.info(
 							"transactions not supported for structured memory, falling back to direct writes",
 						)
-						return await persist()
+						return await persistWithDuplicateKeyRetry()
 					} finally {
 						await session.endSession()
 					}
 				})()
-			: await persist()
+			: await persistWithDuplicateKeyRetry()
 	if (!outcome.changed) {
 		return { upserted: false, id: outcome.id }
 	}

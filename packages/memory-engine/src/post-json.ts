@@ -8,6 +8,9 @@ export async function postJson<T>(params: {
 	body: unknown
 	errorPrefix: string
 	attachStatus?: boolean
+	/** Bound the whole request via AbortSignal.timeout — without it the only
+	 *  bound is undici's ~300 s default (fleet audit P1-4). */
+	timeoutMs?: number
 	parse: (payload: unknown) => T | Promise<T>
 }): Promise<T> {
 	return await withRemoteHttpResponse({
@@ -17,6 +20,9 @@ export async function postJson<T>(params: {
 			method: "POST",
 			headers: params.headers,
 			body: JSON.stringify(params.body),
+			...(params.timeoutMs
+				? { signal: AbortSignal.timeout(params.timeoutMs) }
+				: {}),
 		},
 		onResponse: async (res) => {
 			if (!res.ok) {
