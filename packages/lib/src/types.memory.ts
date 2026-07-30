@@ -46,7 +46,6 @@ export type MemoryMongoDBConfig = {
 	heartbeatFrequencyMs?: number
 	serverMonitoringMode?: "auto" | "stream" | "poll"
 	waitQueueTimeoutMs?: number
-	embeddingCacheTtlDays?: number
 	memoryTtlDays?: number
 	enableChangeStreams?: boolean
 	changeStreamDebounceMs?: number

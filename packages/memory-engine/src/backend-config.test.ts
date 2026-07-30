@@ -322,30 +322,6 @@ describe("resolveMemoryBackendConfig", () => {
 		vi.unstubAllEnvs()
 	})
 
-	it("resolves embeddingCacheTtlDays with default 30", () => {
-		const cfg = {
-			agents: { defaults: { workspace: "/tmp/memory-test" } },
-			memory: {
-				backend: "mongodb",
-				mongodb: { uri: "mongodb://localhost:27017" },
-			},
-		} as unknown as MemongoConfig
-		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
-		expect(resolved.mongodb!.embeddingCacheTtlDays).toBe(30)
-	})
-
-	it("resolves custom embeddingCacheTtlDays", () => {
-		const cfg = {
-			agents: { defaults: { workspace: "/tmp/memory-test" } },
-			memory: {
-				backend: "mongodb",
-				mongodb: { uri: "mongodb://localhost:27017", embeddingCacheTtlDays: 7 },
-			},
-		} as unknown as MemongoConfig
-		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
-		expect(resolved.mongodb!.embeddingCacheTtlDays).toBe(7)
-	})
-
 	it("resolves memoryTtlDays with default 0 (disabled)", () => {
 		const cfg = {
 			agents: { defaults: { workspace: "/tmp/memory-test" } },

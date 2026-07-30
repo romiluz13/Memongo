@@ -5,7 +5,6 @@ import { describe, it, expect, vi, beforeEach } from "vitest"
 vi.mock("./mongodb-schema.js", () => ({
 	chunksCollection: vi.fn(),
 	filesCollection: vi.fn(),
-	embeddingCacheCollection: vi.fn(),
 	kbChunksCollection: vi.fn(),
 	structuredMemCollection: vi.fn(),
 }))
@@ -18,7 +17,6 @@ import {
 import {
 	chunksCollection,
 	filesCollection,
-	embeddingCacheCollection,
 	kbChunksCollection,
 	structuredMemCollection,
 } from "./mongodb-schema.js"
@@ -43,7 +41,6 @@ function createMockCol(overrides: Record<string, unknown> = {}): Collection {
 
 let mockChunks: Collection
 let mockFiles: Collection
-let mockCache: Collection
 let mockKbChunks: Collection
 let mockStructuredMem: Collection
 const db = {} as Db
@@ -52,12 +49,10 @@ beforeEach(() => {
 	vi.clearAllMocks()
 	mockChunks = createMockCol()
 	mockFiles = createMockCol()
-	mockCache = createMockCol()
 	mockKbChunks = createMockCol()
 	mockStructuredMem = createMockCol()
 	vi.mocked(chunksCollection).mockReturnValue(mockChunks)
 	vi.mocked(filesCollection).mockReturnValue(mockFiles)
-	vi.mocked(embeddingCacheCollection).mockReturnValue(mockCache)
 	vi.mocked(kbChunksCollection).mockReturnValue(mockKbChunks)
 	vi.mocked(structuredMemCollection).mockReturnValue(mockStructuredMem)
 })
@@ -72,7 +67,6 @@ describe("getMemoryStats", () => {
 
 		expect(stats.totalFiles).toBe(0)
 		expect(stats.totalChunks).toBe(0)
-		expect(stats.cachedEmbeddings).toBe(0)
 		expect(stats.sources).toEqual([])
 		expect(stats.staleFiles).toEqual([])
 		expect(stats.embeddingCoverage.coveragePercent).toBe(0)
@@ -86,7 +80,6 @@ describe("getMemoryStats", () => {
 		})
 		expect(stats.collectionSizes.files).toBe(0)
 		expect(stats.collectionSizes.chunks).toBe(0)
-		expect(stats.collectionSizes.embeddingCache).toBe(0)
 	})
 
 	it("#26: derives embedding status coverage from real embedding presence, not the unadvanced field", async () => {
@@ -427,22 +420,10 @@ describe("getMemoryStats", () => {
 		expect(stats.embeddingStatusCoverage.failed).toBe(0)
 	})
 
-	it("counts cached embeddings", async () => {
-		;(mockFiles.aggregate as ReturnType<typeof vi.fn>).mockReturnValue({
-			toArray: vi.fn(async () => []),
-		})
-		;(mockChunks.aggregate as ReturnType<typeof vi.fn>)
-			.mockReturnValueOnce({ toArray: vi.fn(async () => []) })
-			.mockReturnValueOnce({ toArray: vi.fn(async () => []) })
-		;(mockCache.countDocuments as ReturnType<typeof vi.fn>).mockResolvedValue(
-			42,
-		)
-
-		const stats = await getMemoryStats(db, "test_")
-
-		expect(stats.cachedEmbeddings).toBe(42)
-		expect(stats.collectionSizes.embeddingCache).toBe(42)
-	})
+	// #13: embedding_cache and its cachedEmbeddings stat were deleted outright —
+	// the engine is Atlas autoEmbed end-to-end, so no code path ever produced a
+	// client-side embedding to cache. The removal is enforced at compile time:
+	// mongodb-schema.ts no longer exports embeddingCacheCollection.
 })
 
 describe("measureEmbeddingCoverage on a server without numDocs", () => {

@@ -269,7 +269,6 @@ vi.mock("./mongodb-schema.js", () => ({
 	relevanceRunsCollection: vi.fn(),
 	recallTracesCollection: vi.fn(),
 	structuredMemCollection: vi.fn(),
-	embeddingCacheCollection: vi.fn(),
 	detectCapabilities: vi.fn(),
 	ensureCollections: vi.fn(),
 	ensureSchemaValidation: vi.fn(),

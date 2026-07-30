@@ -469,9 +469,8 @@ export type MemongoStatsResponse = {
 		unknown: number
 		basis: "stored-vector" | "search-index"
 	}
-	cachedEmbeddings: number
 	staleFiles: string[]
-	collectionSizes: { files: number; chunks: number; embeddingCache: number }
+	collectionSizes: { files: number; chunks: number }
 	indexStats: Array<{
 		collection: string
 		name: string

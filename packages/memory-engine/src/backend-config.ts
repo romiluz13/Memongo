@@ -45,7 +45,6 @@ export type ResolvedMongoDBConfig = {
 	heartbeatFrequencyMs?: number
 	serverMonitoringMode?: "auto" | "stream" | "poll"
 	waitQueueTimeoutMs?: number
-	embeddingCacheTtlDays: number
 	memoryTtlDays: number
 	enableChangeStreams: boolean
 	changeStreamDebounceMs: number
@@ -295,12 +294,6 @@ export function resolveMemoryBackendConfig(params: {
 					mongoCfg?.waitQueueTimeoutMs,
 					"MEMONGO_MONGODB_WAIT_QUEUE_TIMEOUT_MS",
 				),
-				embeddingCacheTtlDays:
-					typeof mongoCfg?.embeddingCacheTtlDays === "number" &&
-					Number.isFinite(mongoCfg.embeddingCacheTtlDays) &&
-					mongoCfg.embeddingCacheTtlDays >= 0
-						? Math.floor(mongoCfg.embeddingCacheTtlDays)
-						: 30,
 				memoryTtlDays:
 					typeof mongoCfg?.memoryTtlDays === "number" &&
 					Number.isFinite(mongoCfg.memoryTtlDays) &&

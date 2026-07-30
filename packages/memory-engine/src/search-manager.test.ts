@@ -23,7 +23,6 @@ function makeConfig(
 		numDimensions: 1024,
 		maxPoolSize: 10,
 		minPoolSize: 1,
-		embeddingCacheTtlDays: 7,
 		memoryTtlDays: 90,
 		enableChangeStreams: false,
 		changeStreamDebounceMs: 500,

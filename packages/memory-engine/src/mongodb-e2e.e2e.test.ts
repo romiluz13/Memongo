@@ -37,7 +37,6 @@ import {
 import {
 	chunksCollection,
 	filesCollection,
-	embeddingCacheCollection,
 	metaCollection,
 	eventsCollection,
 	entitiesCollection,
@@ -67,7 +66,6 @@ const TEST_PREFIX = "e2e_"
 const EXPECTED_COLLECTION_SUFFIXES = [
 	"chunks",
 	"files",
-	"embedding_cache",
 	"meta",
 	"knowledge_base",
 	"kb_chunks",
@@ -245,20 +243,13 @@ describe("E2E: MongoDB Collections and Indexes", () => {
 		expect(textIdx).toBeDefined()
 		expect(textIdx!.key).toHaveProperty("_fts", "text")
 
-		// Verify cache indexes
-		const cacheIndexes = await embeddingCacheCollection(
-			db,
-			TEST_PREFIX,
-		).indexes()
-		const cacheNames = cacheIndexes.map((i) => i.name)
-		expect(cacheNames).toContain("uq_embedding_cache_composite")
-		expect(cacheNames).toContain("idx_cache_updated")
-
-		// Verify the unique index
-		const uniqueIdx = cacheIndexes.find(
-			(i) => i.name === "uq_embedding_cache_composite",
-		)
-		expect(uniqueIdx?.unique).toBe(true)
+		// #13: embedding_cache was removed (Atlas autoEmbed engine never
+		// client-embeds), so bootstrap must not create it.
+		const collections = await db
+			.listCollections()
+			.map((c) => c.name)
+			.toArray()
+		expect(collections).not.toContain(`${TEST_PREFIX}embedding_cache`)
 	})
 
 	it("ensureStandardIndexes is idempotent", async () => {
@@ -890,12 +881,10 @@ describe("E2E: Collection Helpers", () => {
 	it("collection helpers return correct collection names", () => {
 		const chunks = chunksCollection(db, TEST_PREFIX)
 		const files = filesCollection(db, TEST_PREFIX)
-		const cache = embeddingCacheCollection(db, TEST_PREFIX)
 		const meta = metaCollection(db, TEST_PREFIX)
 
 		expect(chunks.collectionName).toBe(`${TEST_PREFIX}chunks`)
 		expect(files.collectionName).toBe(`${TEST_PREFIX}files`)
-		expect(cache.collectionName).toBe(`${TEST_PREFIX}embedding_cache`)
 		expect(meta.collectionName).toBe(`${TEST_PREFIX}meta`)
 	})
 })
@@ -1061,45 +1050,6 @@ describe("E2E: Transactions (replica set)", () => {
 // ===========================================================================
 
 describe("E2E: TTL Indexes", () => {
-	it("creates TTL index on embedding_cache when embeddingCacheTtlDays > 0", async () => {
-		// Drop and recreate to get fresh indexes
-		try {
-			await embeddingCacheCollection(db, TEST_PREFIX).drop()
-		} catch {
-			/* ok */
-		}
-		await db.createCollection(`${TEST_PREFIX}embedding_cache`)
-
-		await ensureStandardIndexes(db, TEST_PREFIX, { embeddingCacheTtlDays: 30 })
-
-		const indexes = await embeddingCacheCollection(db, TEST_PREFIX).indexes()
-		const ttlIdx = indexes.find((i) => i.name === "idx_cache_ttl")
-		expect(ttlIdx).toBeDefined()
-		expect(ttlIdx!.expireAfterSeconds).toBe(30 * 24 * 60 * 60)
-
-		// Regular idx_cache_updated should NOT exist (TTL replaces it)
-		const regularIdx = indexes.find((i) => i.name === "idx_cache_updated")
-		expect(regularIdx).toBeUndefined()
-	})
-
-	it("creates regular idx_cache_updated when TTL disabled", async () => {
-		try {
-			await embeddingCacheCollection(db, TEST_PREFIX).drop()
-		} catch {
-			/* ok */
-		}
-		await db.createCollection(`${TEST_PREFIX}embedding_cache`)
-
-		await ensureStandardIndexes(db, TEST_PREFIX, { embeddingCacheTtlDays: 0 })
-
-		const indexes = await embeddingCacheCollection(db, TEST_PREFIX).indexes()
-		const regularIdx = indexes.find((i) => i.name === "idx_cache_updated")
-		expect(regularIdx).toBeDefined()
-
-		const ttlIdx = indexes.find((i) => i.name === "idx_cache_ttl")
-		expect(ttlIdx).toBeUndefined()
-	})
-
 	it("creates TTL index on files when memoryTtlDays > 0", async () => {
 		try {
 			await filesCollection(db, TEST_PREFIX).drop()

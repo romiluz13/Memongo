@@ -9,7 +9,6 @@ import {
 	ensureStandardIndexes,
 	chunksCollection,
 	filesCollection,
-	embeddingCacheCollection,
 	metaCollection,
 	getExpectedSearchIndexTargets,
 	isSearchIndexTypeCompatible,
@@ -96,12 +95,6 @@ describe("collection helpers", () => {
 		const db = mockDb()
 		filesCollection(db, "oc_")
 		expect(db.collection).toHaveBeenCalledWith("oc_files")
-	})
-
-	it("embeddingCacheCollection returns prefixed collection", () => {
-		const db = mockDb()
-		embeddingCacheCollection(db, "oc_")
-		expect(db.collection).toHaveBeenCalledWith("oc_embedding_cache")
 	})
 
 	it("metaCollection returns prefixed collection", () => {
@@ -360,15 +353,11 @@ describe("ensureCollections", () => {
 	it("creates all collections when none exist, including both time series collections", async () => {
 		const db = mockDb([])
 		await ensureCollections(db, "test_")
-		// 30 = 29 baseline + 1 memory_quarantine (, )
-		expect(db.createCollection).toHaveBeenCalledTimes(30)
+		// 29 = 28 baseline + 1 memory_quarantine (embedding_cache removed, #13)
+		expect(db.createCollection).toHaveBeenCalledTimes(29)
 		// Non-validated collections: called with name only
 		expect(db.createCollection).toHaveBeenCalledWith(
 			"test_files",
-			expect.objectContaining({ validator: expect.any(Object) }),
-		)
-		expect(db.createCollection).toHaveBeenCalledWith(
-			"test_embedding_cache",
 			expect.objectContaining({ validator: expect.any(Object) }),
 		)
 		expect(db.createCollection).toHaveBeenCalledWith("test_meta")
@@ -444,12 +433,8 @@ describe("ensureCollections", () => {
 	it("skips already-existing collections", async () => {
 		const db = mockDb(["test_chunks", "test_files"])
 		await ensureCollections(db, "test_")
-		// 28 = 30 new total - 2 skipped. 29 baseline + 1 memory_quarantine.
-		expect(db.createCollection).toHaveBeenCalledTimes(28)
-		expect(db.createCollection).toHaveBeenCalledWith(
-			"test_embedding_cache",
-			expect.objectContaining({ validator: expect.any(Object) }),
-		)
+		// 27 = 29 new total - 2 skipped (embedding_cache removed, #13).
+		expect(db.createCollection).toHaveBeenCalledTimes(27)
 		expect(db.createCollection).toHaveBeenCalledWith("test_meta")
 		expect(db.createCollection).toHaveBeenCalledWith(
 			"test_knowledge_base",
@@ -478,7 +463,6 @@ describe("ensureCollections", () => {
 		const db = mockDb([
 			"oc_chunks",
 			"oc_files",
-			"oc_embedding_cache",
 			"oc_meta",
 			"oc_knowledge_base",
 			"oc_kb_chunks",
@@ -517,14 +501,11 @@ describe("ensureCollections", () => {
 // ---------------------------------------------------------------------------
 
 describe("ensureStandardIndexes", () => {
-	it("creates all standard indexes on chunks, embedding_cache, KB, and structured_mem", async () => {
+	it("creates all standard indexes on chunks, KB, and structured_mem", async () => {
 		const db = mockDb()
 		const count = await ensureStandardIndexes(db, "test_")
 
 		const chunks = db.collection("test_chunks") as unknown as {
-			createIndex: ReturnType<typeof vi.fn>
-		}
-		const cache = db.collection("test_embedding_cache") as unknown as {
 			createIndex: ReturnType<typeof vi.fn>
 		}
 		const kb = db.collection("test_knowledge_base") as unknown as {
@@ -555,7 +536,7 @@ describe("ensureStandardIndexes", () => {
 			createIndex: ReturnType<typeof vi.fn>
 		}
 
-		// 4 chunks + 2 cache + 5 KB + 4 KB chunks (3 + 1 wiki) + 8 structured (6 + 1 v2 scope + 1 sourceEvent) +
+		// 4 chunks + 5 KB + 4 KB chunks (3 + 1 wiki) + 8 structured (6 + 1 v2 scope + 1 sourceEvent) +
 		// 1 structured revisions + 3 relevance_runs + 2 relevance_artifacts +
 		// 2 relevance_regressions + 8 events (6 + 1 dreamerProcessedAt + 1 bi-temporal SE-1) + 5 entities (3 + 2 Phase 3.4) + 4 relations +
 		// 2 entity links + 4 episodes (3 + 1 promotion) + 1 ingest_runs + 1 projection_runs +
@@ -568,9 +549,8 @@ describe("ensureStandardIndexes", () => {
 		// + 3 session_chunks + 1 bi-temporal valid-time (#32)
 		// + 1 durable memory-job claim index + 1 extraction outbox partial index
 		// + 1 unique relation identity index = 89
-		expect(count).toBe(91)
+		expect(count).toBe(89)
 		expect(chunks.createIndex).toHaveBeenCalledTimes(4)
-		expect(cache.createIndex).toHaveBeenCalledTimes(2)
 		expect(kb.createIndex).toHaveBeenCalledTimes(5)
 		expect(kbChunks.createIndex).toHaveBeenCalledTimes(4)
 		expect(structured.createIndex).toHaveBeenCalledTimes(11)
@@ -688,7 +668,7 @@ describe("ensureStandardIndexes", () => {
 			) as unknown as {
 				createIndex: ReturnType<typeof vi.fn>
 			}
-			expect(count).toBe(95)
+			expect(count).toBe(93)
 			expect(memoryEvidence.createIndex).toHaveBeenCalledTimes(4)
 			expect(memoryEvidence.createIndex).toHaveBeenCalledWith(
 				{ canonicalId: 1 },
@@ -752,62 +732,6 @@ describe("ensureStandardIndexes", () => {
 		expect(textIndexCall![1]).toEqual({ name: "idx_chunks_text" })
 	})
 
-	it("creates TTL index on embedding_cache when ttlDays is set", async () => {
-		const db = mockDb()
-		await ensureStandardIndexes(db, "test_", { embeddingCacheTtlDays: 30 })
-
-		const cache = db.collection("test_embedding_cache") as unknown as {
-			createIndex: ReturnType<typeof vi.fn>
-		}
-		const calls = cache.createIndex.mock.calls
-		const ttlCall = calls.find(
-			(c: unknown[]) =>
-				c[1] &&
-				typeof c[1] === "object" &&
-				(c[1] as Record<string, unknown>).expireAfterSeconds !== undefined,
-		)
-		expect(ttlCall).toBeDefined()
-		expect(ttlCall![1]).toMatchObject({
-			expireAfterSeconds: 30 * 24 * 60 * 60,
-			name: "idx_cache_ttl",
-		})
-	})
-
-	it("skips regular idx_cache_updated when TTL is enabled (TTL index serves same purpose)", async () => {
-		const db = mockDb()
-		await ensureStandardIndexes(db, "test_", { embeddingCacheTtlDays: 7 })
-
-		const cache = db.collection("test_embedding_cache") as unknown as {
-			createIndex: ReturnType<typeof vi.fn>
-		}
-		const calls = cache.createIndex.mock.calls
-		const regularUpdatedCall = calls.find(
-			(c: unknown[]) =>
-				c[1] &&
-				typeof c[1] === "object" &&
-				(c[1] as Record<string, unknown>).name === "idx_cache_updated",
-		)
-		// Regular idx_cache_updated should NOT be created when TTL is active
-		expect(regularUpdatedCall).toBeUndefined()
-	})
-
-	it("creates regular idx_cache_updated when no TTL is configured", async () => {
-		const db = mockDb()
-		await ensureStandardIndexes(db, "test_")
-
-		const cache = db.collection("test_embedding_cache") as unknown as {
-			createIndex: ReturnType<typeof vi.fn>
-		}
-		const calls = cache.createIndex.mock.calls
-		const regularCall = calls.find(
-			(c: unknown[]) =>
-				c[1] &&
-				typeof c[1] === "object" &&
-				(c[1] as Record<string, unknown>).name === "idx_cache_updated",
-		)
-		expect(regularCall).toBeDefined()
-	})
-
 	it("creates TTL index on files collection when memoryTtlDays is set", async () => {
 		const db = mockDb()
 		await ensureStandardIndexes(db, "test_", { memoryTtlDays: 90 })
@@ -846,37 +770,17 @@ describe("ensureStandardIndexes", () => {
 		expect(ttlCall).toBeUndefined()
 	})
 
-	it("drops idx_cache_updated before creating idx_cache_ttl (F18)", async () => {
-		const db = mockDb()
-		await ensureStandardIndexes(db, "test_", { embeddingCacheTtlDays: 30 })
-
-		const cache = db.collection("test_embedding_cache") as unknown as {
-			dropIndex: ReturnType<typeof vi.fn>
-		}
-		expect(cache.dropIndex).toHaveBeenCalledWith("idx_cache_updated")
-	})
-
-	it("drops idx_cache_ttl before creating idx_cache_updated when no TTL (F18)", async () => {
-		const db = mockDb()
-		await ensureStandardIndexes(db, "test_")
-
-		const cache = db.collection("test_embedding_cache") as unknown as {
-			dropIndex: ReturnType<typeof vi.fn>
-		}
-		expect(cache.dropIndex).toHaveBeenCalledWith("idx_cache_ttl")
-	})
-
 	it("index count includes relevance telemetry indexes and v2 collection indexes", async () => {
 		const db = mockDb()
 		const count = await ensureStandardIndexes(db, "test_")
-		// 27 (v1 base) + 8 events (6 + 1 dreamerProcessedAt + 1 bi-temporal SE-1) + 3 entities + 4 relations +
+		// 25 (v1 base, embedding_cache removed #13) + 8 events (6 + 1 dreamerProcessedAt + 1 bi-temporal SE-1) + 3 entities + 4 relations +
 		// 2 entity links + 4 episodes (3 + 1 promotion) + 1 ingest_runs + 1 projection_runs +
 		// 1 structured scope + 1 structured revisions + 4 procedures + 1 procedure_revisions +
 		// 3 query_cache + 2 telemetry + 2 access_events + 3 memory_mutations
 		// + 1 lane_coverage + 1 consolidation_runs + 3 session_chunks
 		// + 1 bi-temporal valid-time (#32) + 1 durable job claim index
 		// + 1 extraction outbox partial index + 1 unique relation identity = 89
-		expect(count).toBe(91)
+		expect(count).toBe(89)
 	})
 
 	it("creates relevance TTL indexes when relevanceRetentionDays is set", async () => {
@@ -936,29 +840,6 @@ describe("ensureStandardIndexes", () => {
 		expect((ttlCall?.[1] as Record<string, unknown>).expireAfterSeconds).toBe(
 			30 * 24 * 60 * 60,
 		)
-	})
-
-	it("creates unique composite index on embedding_cache", async () => {
-		const db = mockDb()
-		await ensureStandardIndexes(db, "test_")
-
-		const cache = db.collection("test_embedding_cache") as unknown as {
-			createIndex: ReturnType<typeof vi.fn>
-		}
-		const calls = cache.createIndex.mock.calls
-		const uniqueCall = calls.find(
-			(c: unknown[]) =>
-				c[1] &&
-				typeof c[1] === "object" &&
-				(c[1] as Record<string, unknown>).unique === true,
-		)
-		expect(uniqueCall).toBeDefined()
-		expect(uniqueCall![0]).toEqual({
-			provider: 1,
-			model: 1,
-			providerKey: 1,
-			hash: 1,
-		})
 	})
 })
 
@@ -2797,8 +2678,8 @@ describe("ensureCollections total count with query_cache and time series", () =>
 	it("creates all regular collections plus telemetry and access-events time series collections", async () => {
 		const db = mockDb([])
 		await ensureCollections(db, "test_")
-		// 30 = 29 baseline + 1 memory_quarantine (, )
-		expect(db.createCollection).toHaveBeenCalledTimes(30)
+		// 29 = 28 baseline + 1 memory_quarantine (embedding_cache removed, #13)
+		expect(db.createCollection).toHaveBeenCalledTimes(29)
 	})
 })
 
@@ -2806,14 +2687,14 @@ describe("ensureStandardIndexes total count with query_cache and time series ind
 	it("returns updated total index count including query_cache, telemetry, access event, and session_chunks indexes", async () => {
 		const db = mockDb()
 		const count = await ensureStandardIndexes(db, "test_")
-		// 27 (v1 base) + 8 events (6 + 1 dreamerProcessedAt + 1 bi-temporal SE-1) + 3 entities + 4 relations +
+		// 25 (v1 base, embedding_cache removed #13) + 8 events (6 + 1 dreamerProcessedAt + 1 bi-temporal SE-1) + 3 entities + 4 relations +
 		// 2 entity links + 4 episodes (3 + 1 promotion) + 1 ingest_runs + 1 projection_runs +
 		// 1 structured scope + 1 structured revisions + 4 procedures + 1 procedure_revisions +
 		// 3 query_cache + 2 telemetry + 2 access_events + 3 memory_mutations
 		// + 1 lane_coverage + 1 consolidation_runs + 3 session_chunks
 		// + 1 bi-temporal valid-time (#32) + 1 durable job claim index
 		// + 1 extraction outbox partial index + 1 unique relation identity = 89
-		expect(count).toBe(91)
+		expect(count).toBe(89)
 	})
 })
 

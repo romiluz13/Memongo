@@ -55,10 +55,6 @@ export function filesCollection(db: Db, prefix: string): Collection {
 	return col(db, prefix, "files")
 }
 
-export function embeddingCacheCollection(db: Db, prefix: string): Collection {
-	return col(db, prefix, "embedding_cache")
-}
-
 export function metaCollection(db: Db, prefix: string): Collection {
 	return col(db, prefix, "meta")
 }
@@ -1451,19 +1447,10 @@ const VALIDATED_COLLECTIONS: Record<string, Document> = {
 	memory_jobs: MEMORY_JOBS_SCHEMA,
 	memory_quarantine: MEMORY_QUARANTINE_SCHEMA,
 	memory_evidence: MEMORY_EVIDENCE_SCHEMA,
-	// L2: embedding_cache and files use a TTL index on updatedAt. If updatedAt
-	// is missing or not a date, the TTL index silently no-ops (the document never
-	// expires). These validators ensure updatedAt is a BSON date so the TTL
-	// index actually evicts expired entries.
-	embedding_cache: {
-		$jsonSchema: {
-			bsonType: "object",
-			required: ["updatedAt"],
-			properties: {
-				updatedAt: { bsonType: "date" },
-			},
-		},
-	},
+	// L2: files uses a TTL index on updatedAt. If updatedAt is missing or not a
+	// date, the TTL index silently no-ops (the document never expires). This
+	// validator ensures updatedAt is a BSON date so the TTL index actually
+	// evicts expired entries.
 	files: {
 		$jsonSchema: {
 			bsonType: "object",
@@ -1485,7 +1472,6 @@ export async function ensureCollections(db: Db, prefix: string): Promise<void> {
 	const needed = [
 		"chunks",
 		"files",
-		"embedding_cache",
 		"meta",
 		"knowledge_base",
 		"kb_chunks",
@@ -1603,7 +1589,6 @@ export async function ensureStandardIndexes(
 	db: Db,
 	prefix: string,
 	ttlOpts?: {
-		embeddingCacheTtlDays?: number
 		memoryTtlDays?: number
 		relevanceRetentionDays?: number
 		revisionRetentionDays?: number
@@ -1626,54 +1611,6 @@ export async function ensureStandardIndexes(
 	// Only one $text index is allowed per collection.
 	await chunks.createIndex({ text: "text" }, { name: "idx_chunks_text" })
 	applied++
-
-	const cache = embeddingCacheCollection(db, prefix)
-	try {
-		await cache.createIndex(
-			{ provider: 1, model: 1, providerKey: 1, hash: 1 },
-			{ name: "uq_embedding_cache_composite", unique: true },
-		)
-		applied++
-	} catch (err) {
-		const msg = err instanceof Error ? err.message : String(err)
-		if (msg.includes("duplicate") || msg.includes("already exists")) {
-			log.warn(
-				"unique index uq_embedding_cache_composite: index exists or duplicates detected; skipping",
-			)
-			applied++
-		} else {
-			throw err
-		}
-	}
-
-	// TTL index on embedding_cache for auto-expiry (per `index-ttl` rule).
-	// When TTL is enabled, use TTL index instead of regular idx_cache_updated
-	// because MongoDB cannot have two indexes on the same field with different options.
-	// F18: Drop opposite-named index before creating to avoid IndexOptionsConflict.
-	if (ttlOpts?.embeddingCacheTtlDays && ttlOpts.embeddingCacheTtlDays > 0) {
-		try {
-			await cache.dropIndex("idx_cache_updated")
-		} catch {
-			// Index may not exist — safe to ignore
-		}
-		const seconds = ttlOpts.embeddingCacheTtlDays * 24 * 60 * 60
-		await cache.createIndex(
-			{ updatedAt: 1 },
-			{ name: "idx_cache_ttl", expireAfterSeconds: seconds },
-		)
-		applied++
-		log.info(
-			`created TTL index on embedding_cache: ${ttlOpts.embeddingCacheTtlDays} days`,
-		)
-	} else {
-		try {
-			await cache.dropIndex("idx_cache_ttl")
-		} catch {
-			// Index may not exist — safe to ignore
-		}
-		await cache.createIndex({ updatedAt: 1 }, { name: "idx_cache_updated" })
-		applied++
-	}
 
 	// Optional TTL on files for memory auto-expiry
 	// WARNING: This deletes memory files from MongoDB after ttlDays

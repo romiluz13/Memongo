@@ -4,7 +4,6 @@ import type { EmbeddingStatusCoverage } from "./mongodb-embedding-retry.js"
 import {
 	chunksCollection,
 	filesCollection,
-	embeddingCacheCollection,
 	kbChunksCollection,
 	structuredMemCollection,
 } from "./mongodb-schema.js"
@@ -44,12 +43,10 @@ export type MemoryStats = {
 	totalChunks: number
 	embeddingCoverage: EmbeddingCoverage
 	embeddingStatusCoverage: EmbeddingStatusCoverage
-	cachedEmbeddings: number
 	staleFiles: string[]
 	collectionSizes: {
 		files: number
 		chunks: number
-		embeddingCache: number
 	}
 	indexStats: IndexStatsEntry[]
 }
@@ -62,7 +59,6 @@ export async function getMemoryStats(
 ): Promise<MemoryStats> {
 	const chunksCol = chunksCollection(db, prefix)
 	const filesCol = filesCollection(db, prefix)
-	const cacheCol = embeddingCacheCollection(db, prefix)
 
 	// Per-source file breakdown
 	const sourceAgg: Document[] = await filesCol
@@ -125,9 +121,6 @@ export async function getMemoryStats(
 		embeddingMode,
 	)
 
-	// Cached embeddings count
-	const cachedEmbeddings = await cacheCol.countDocuments()
-
 	// Stale files (in DB but not on disk)
 	let staleFiles: string[] = []
 	if (validPaths) {
@@ -151,7 +144,7 @@ export async function getMemoryStats(
 	const totalFiles = await filesCol.countDocuments()
 
 	log.info(
-		`stats: files=${totalFiles} chunks=${totalChunks} cached=${cachedEmbeddings} ` +
+		`stats: files=${totalFiles} chunks=${totalChunks} ` +
 			`embeddingStatus={basis=${embeddingStatusCoverage.basis},success=${embeddingStatusCoverage.success},failed=${embeddingStatusCoverage.failed},pending=${embeddingStatusCoverage.pending},unknown=${embeddingStatusCoverage.unknown}} ` +
 			`stale=${staleFiles.length}`,
 	)
@@ -162,12 +155,10 @@ export async function getMemoryStats(
 		totalChunks,
 		embeddingCoverage,
 		embeddingStatusCoverage,
-		cachedEmbeddings,
 		staleFiles,
 		collectionSizes: {
 			files: totalFiles,
 			chunks: totalChunks,
-			embeddingCache: cachedEmbeddings,
 		},
 		indexStats,
 	}

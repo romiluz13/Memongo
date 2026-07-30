@@ -2190,7 +2190,6 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		// Ensure collections + schema validation + standard indexes
 		await ensureCollections(db, prefix)
 		await ensureStandardIndexes(db, prefix, {
-			embeddingCacheTtlDays: mongoCfg.embeddingCacheTtlDays,
 			memoryTtlDays: mongoCfg.memoryTtlDays,
 			relevanceRetentionDays: mongoCfg.relevance.retention.days,
 		})

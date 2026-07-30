@@ -486,7 +486,6 @@ describeIfMongo(
 			// Setup fresh collections and indexes
 			await ensureCollections(db, PREFIX)
 			await ensureStandardIndexes(db, PREFIX, {
-				embeddingCacheTtlDays: 0,
 				memoryTtlDays: 0,
 				relevanceRetentionDays: 14,
 			})
