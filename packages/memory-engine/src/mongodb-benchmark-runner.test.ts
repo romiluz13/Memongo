@@ -278,6 +278,56 @@ describe("mongodb benchmark runner", () => {
 		)
 	})
 
+	it("#70: a passed conversation-recall-regression result unblocks the gate", () => {
+		const report = buildBenchmarkRunReport({
+			datasetVersion: "longmem-v1",
+			datasetKind: "longmemeval",
+			cases: 1,
+			scoredCases: 1,
+			hitRate: 1,
+			emptyRate: 0,
+			avgTopScore: 0.9,
+			p95LatencyMs: 10,
+			conversationRecallRegression: {
+				status: "passed",
+				evidence: "vitest run: 8/8 recall regression tests passed",
+			},
+		})
+
+		const gate = report.releaseGates.find(
+			(entry) => entry.gate === "conversation-recall-regression",
+		)
+		expect(gate).toMatchObject({
+			status: "passed",
+			evidence: "vitest run: 8/8 recall regression tests passed",
+		})
+		expect(report.publicationDecision.blockingGates).not.toContain(
+			"conversation-recall-regression",
+		)
+	})
+
+	it("#70: a failed conversation-recall-regression result blocks publication", () => {
+		const report = buildBenchmarkRunReport({
+			datasetVersion: "longmem-v1",
+			datasetKind: "longmemeval",
+			cases: 1,
+			scoredCases: 1,
+			hitRate: 1,
+			emptyRate: 0,
+			avgTopScore: 0.9,
+			p95LatencyMs: 10,
+			conversationRecallRegression: {
+				status: "failed",
+				evidence: "vitest run: 2 of 8 recall regression tests failed",
+			},
+		})
+
+		expect(report.publicationDecision.publishable).toBe(false)
+		expect(report.publicationDecision.failedGates).toContain(
+			"conversation-recall-regression",
+		)
+	})
+
 	it("applies the declared LoCoMo answer coverage threshold", () => {
 		const build = (minAnswerCoverage: number) =>
 			buildBenchmarkRunReport({

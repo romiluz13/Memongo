@@ -228,6 +228,15 @@ type BenchmarkReportInput = {
 	cost?: BenchmarkCostAccounting
 	e2eQa?: BenchmarkE2eQaEnvelope
 	qualityThresholds?: BenchmarkQualityThresholds
+	/**
+	 * #70: real outcome of the conversation-recall regression suite for THIS
+	 * invocation. Absent means the suite did not run alongside the benchmark,
+	 * and the gate stays "not-run" — which blocks publication by design.
+	 */
+	conversationRecallRegression?: {
+		status: "passed" | "failed"
+		evidence: string
+	}
 }
 
 function readBuildIdentity(): MemoryBenchmarkRunReport["build"] {
@@ -697,12 +706,18 @@ export function buildBenchmarkRunReport(
 		buildQualityThresholdGate(params),
 		...(answerQualityGate ? [answerQualityGate] : []),
 		buildEvidenceCompletenessGate(params, build),
-		{
-			gate: "conversation-recall-regression",
-			status: "not-run",
-			evidence:
-				"Run packages/memory-engine/src/mongodb-conversation-recall-benchmark.test.ts for recall-affecting changes",
-		},
+		params.conversationRecallRegression
+			? {
+					gate: "conversation-recall-regression",
+					status: params.conversationRecallRegression.status,
+					evidence: params.conversationRecallRegression.evidence,
+				}
+			: {
+					gate: "conversation-recall-regression",
+					status: "not-run",
+					evidence:
+						"conversation-recall regression suite did not run alongside this benchmark invocation (scripts/run-benchmark.ts executes it automatically); absent results block publication",
+				},
 		{
 			gate: "query-governance",
 			status: "advisory-only",

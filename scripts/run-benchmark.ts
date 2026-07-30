@@ -83,6 +83,43 @@ async function writeSample(count: number): Promise<string> {
 	return target
 }
 
+/**
+ * #70: execute the conversation-recall regression suite for real and report
+ * its outcome, so the release gate reflects THIS invocation instead of a
+ * hard-coded "not-run" that made `publishable` structurally impossible.
+ */
+async function runRecallRegressionSuite(): Promise<{
+	status: "passed" | "failed"
+	evidence: string
+}> {
+	const engineDir = path.join(REPO_ROOT, "packages", "memory-engine")
+	const proc = Bun.spawnSync(
+		[
+			"bunx",
+			"vitest",
+			"run",
+			"src/mongodb-conversation-recall-benchmark.test.ts",
+		],
+		{ cwd: engineDir, stdout: "pipe", stderr: "pipe" },
+	)
+	const output = `${proc.stdout?.toString() ?? ""}${proc.stderr?.toString() ?? ""}`
+	const testsLine =
+		output
+			.split("\n")
+			.find((line) => line.includes("Tests"))
+			?.replace(/\x1b\[[0-9;]*m/g, "")
+			.trim() ?? "test summary unavailable"
+	return proc.exitCode === 0
+		? {
+				status: "passed",
+				evidence: `vitest run mongodb-conversation-recall-benchmark.test.ts: ${testsLine}`,
+			}
+		: {
+				status: "failed",
+				evidence: `vitest run mongodb-conversation-recall-benchmark.test.ts exited ${proc.exitCode}: ${testsLine}`,
+			}
+}
+
 async function main(): Promise<void> {
 	const { sample, json } = parseArgs()
 
@@ -127,6 +164,12 @@ async function main(): Promise<void> {
 	)
 	console.log("")
 
+	const recallRegression = await runRecallRegressionSuite()
+	console.log(
+		`recall gate : ${recallRegression.status} — ${recallRegression.evidence}`,
+	)
+	console.log("")
+
 	const started = Date.now()
 	const result = await memongoBridgeRelevanceBenchmark({
 		datasetPath,
@@ -135,6 +178,7 @@ async function main(): Promise<void> {
 		...(publishable
 			? { qualityThresholds: LONGMEMEVAL_RELEASE_V1.thresholds }
 			: {}),
+		conversationRecallRegression: recallRegression,
 	})
 	const elapsedSec = ((Date.now() - started) / 1000).toFixed(1)
 

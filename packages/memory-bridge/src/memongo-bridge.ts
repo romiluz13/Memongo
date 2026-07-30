@@ -1001,6 +1001,11 @@ export async function memongoBridgeRelevanceBenchmark(params: {
 	}
 	retrievalLane?: "native" | "raw-session"
 	qualityThresholds?: BenchmarkQualityThresholds
+	/** #70: real recall-regression suite outcome for this invocation. */
+	conversationRecallRegression?: {
+		status: "passed" | "failed"
+		evidence: string
+	}
 }): Promise<RelevanceBenchmarkResult> {
 	const m = await memongoBridgeGetManager(params.agentId)
 	return m.relevanceBenchmark({
@@ -1015,6 +1020,9 @@ export async function memongoBridgeRelevanceBenchmark(params: {
 		...(params.retrievalLane ? { retrievalLane: params.retrievalLane } : {}),
 		...(params.qualityThresholds
 			? { qualityThresholds: params.qualityThresholds }
+			: {}),
+		...(params.conversationRecallRegression
+			? { conversationRecallRegression: params.conversationRecallRegression }
 			: {}),
 	})
 }

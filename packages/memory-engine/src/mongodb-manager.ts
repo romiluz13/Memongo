@@ -451,6 +451,10 @@ function attachBenchmarkOperationsReport(
 	},
 	qualityThresholds?: BenchmarkQualityThresholds,
 	e2eQa?: BenchmarkE2eQaEnvelope,
+	conversationRecallRegression?: {
+		status: "passed" | "failed"
+		evidence: string
+	},
 ): RelevanceBenchmarkResult {
 	const queryGovernance = buildQueryGovernanceReport(result)
 	return {
@@ -461,6 +465,7 @@ function attachBenchmarkOperationsReport(
 			queryGovernance,
 			...(qualityThresholds ? { qualityThresholds } : {}),
 			...(e2eQa ? { e2eQa } : {}),
+			...(conversationRecallRegression ? { conversationRecallRegression } : {}),
 			...(parity
 				? {
 						runIdentity: parity.runIdentity,
@@ -3764,6 +3769,15 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		retrievalLane?: BenchmarkRetrievalLane
 		qualityThresholds?: BenchmarkQualityThresholds
 		/**
+		 * #70: real outcome of the conversation-recall regression suite executed
+		 * alongside this run (scripts/run-benchmark.ts runs it). Absent → the
+		 * gate stays "not-run" and blocks publication.
+		 */
+		conversationRecallRegression?: {
+			status: "passed" | "failed"
+			evidence: string
+		}
+		/**
 		 * Defaults to "shipped". Pass "diagnostic" to opt into the augmented
 		 * corpus (evidence documents + LLM enrichment) that the shipped pipeline
 		 * never writes — a diagnostic number must never be published as a
@@ -3865,6 +3879,8 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 				legacy.result,
 				parity,
 				qualityThresholds,
+				undefined,
+				params?.conversationRecallRegression,
 			)
 		}
 		if (
@@ -3907,6 +3923,8 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 				legacy.result,
 				parity,
 				qualityThresholds,
+				undefined,
+				params?.conversationRecallRegression,
 			)
 		}
 		const datasetVersion = datasetSha256
@@ -3934,6 +3952,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 			parity,
 			qualityThresholds,
 			scenario.e2eQa,
+			params?.conversationRecallRegression,
 		)
 	}
 
