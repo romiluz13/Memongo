@@ -1552,6 +1552,7 @@ export async function ensureSchemaValidation(
 	db: Db,
 	prefix: string,
 ): Promise<void> {
+	const failures: string[] = []
 	for (const [baseName, validator] of Object.entries(VALIDATED_COLLECTIONS)) {
 		if (baseName === "memory_evidence" && !isEvidenceMirrorEnabled()) {
 			continue
@@ -1576,8 +1577,18 @@ export async function ensureSchemaValidation(
 			) {
 				continue
 			}
+			failures.push(`${collName}: ${msg}`)
 			log.warn(`schema validation for ${collName} failed: ${msg}`)
 		}
+	}
+	// Fleet audit P2-1: per-collection warns scroll past — a deployment can
+	// otherwise run with ZERO $jsonSchema validation and no distinguishable
+	// signal. One error-level summary makes the degraded state visible without
+	// bricking least-privilege operators who cannot run collMod.
+	if (failures.length > 0) {
+		log.error(
+			`schema validation NOT active on ${failures.length} collection(s) — documents are not validated: ${failures.join("; ")}`,
+		)
 	}
 }
 
@@ -2456,6 +2467,15 @@ export async function ensureStandardIndexes(
 	} catch {
 		// The v1 index may not exist on fresh installations.
 	}
+	// TTL on completedAt: only terminal jobs (completed/failed/cancelled) carry
+	// the field, so pending/running jobs never expire. 30 days keeps failed
+	// jobs inspectable as a dead-letter record before pruning — without this,
+	// terminal jobs accumulated forever (fleet audit).
+	await memoryJobs.createIndex(
+		{ completedAt: 1 },
+		{ name: "idx_memory_jobs_completed_ttl", expireAfterSeconds: 30 * 86_400 },
+	)
+	applied++
 
 	// Session chunks (Option B session-evidence collection)
 	const sessionChunks = sessionChunksCollection(db, prefix)

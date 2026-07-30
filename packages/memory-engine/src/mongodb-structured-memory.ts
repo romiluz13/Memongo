@@ -219,11 +219,17 @@ function hasProcessedSourceEvents(
 	return sourceEventIds.every((eventId) => existingIds.has(eventId))
 }
 
+// Fleet audit P2-3: the union grows by every re-mention forever and is copied
+// whole into every revision snapshot. Keep the most recent N — provenance for
+// recent reinforcement, bounded document growth (mirrors the session-chunk cap
+// in mongodb-sync.ts).
+const MAX_SOURCE_EVENT_IDS = 200
+
 function mergeSourceEventIds(
 	existing: Document,
 	sourceEventIds: string[],
 ): string[] {
-	return Array.from(
+	const merged = Array.from(
 		new Set([
 			...(Array.isArray(existing.sourceEventIds)
 				? existing.sourceEventIds.map((value) => String(value))
@@ -231,6 +237,9 @@ function mergeSourceEventIds(
 			...sourceEventIds,
 		]),
 	)
+	return merged.length > MAX_SOURCE_EVENT_IDS
+		? merged.slice(merged.length - MAX_SOURCE_EVENT_IDS)
+		: merged
 }
 
 function hasStructuredValueChanged(

@@ -701,7 +701,7 @@ describe("resolveMemoryBackendConfig", () => {
 				mongodb: {
 					uri: "mongodb://localhost:27017",
 					episodes: { enabled: false, minEventsForEpisode: 20 },
-					graph: { enabled: false, maxGraphDepth: 5 },
+					graph: { enabled: false, maxGraphDepth: 3 },
 				},
 			},
 		} as unknown as MemongoConfig
@@ -712,7 +712,7 @@ describe("resolveMemoryBackendConfig", () => {
 		})
 		expect(resolved.mongodb!.graph).toEqual({
 			enabled: false,
-			maxGraphDepth: 5,
+			maxGraphDepth: 3,
 			entityExtraction: { method: "regex", model: undefined, timeoutMs: 5000 },
 		})
 	})
@@ -1089,16 +1089,17 @@ describe("resolveMemoryBackendConfig", () => {
 					uri: "mongodb://localhost:27017",
 					graph: {
 						enabled: false,
-						maxGraphDepth: 5,
+						maxGraphDepth: 5, // above the ≤4 clamp — must not pass through
 						entityExtraction: { method: "llm" },
 					},
 				},
 			},
 		} as unknown as MemongoConfig
 		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
-		// Existing graph fields preserved
+		// Existing graph fields preserved; depth clamps to 4 (16 MiB
+		// transitiveRelations blowup risk — $graphLookup ignores allowDiskUse)
 		expect(resolved.mongodb!.graph.enabled).toBe(false)
-		expect(resolved.mongodb!.graph.maxGraphDepth).toBe(5)
+		expect(resolved.mongodb!.graph.maxGraphDepth).toBe(4)
 		// New entityExtraction field works alongside
 		expect(resolved.mongodb!.graph.entityExtraction.method).toBe("llm")
 	})

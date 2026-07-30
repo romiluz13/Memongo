@@ -7,7 +7,12 @@ import {
 	type MemoryScope,
 	createSubsystemLogger,
 } from "@memongo/lib"
-import { chunkMarkdown, hashText, isDuplicateKeyError } from "./internal.js"
+import {
+	chunkMarkdown,
+	hashText,
+	isDuplicateKeyError,
+	runUnorderedBulkWriteCounted,
+} from "./internal.js"
 import type { EmbeddingStatus } from "./mongodb-embedding-retry.js"
 import { invalidateQueryCache } from "./mongodb-query-cache.js"
 import { kbCollection, kbChunksCollection } from "./mongodb-schema.js"
@@ -282,11 +287,15 @@ export async function ingestToKB(params: {
 					throw err
 				}
 				if (chunkOps.length > 0) {
-					const writeResult = await kbChunks.bulkWrite(chunkOps, {
-						ordered: false,
-					})
-					result.chunksCreated +=
-						writeResult.upsertedCount + writeResult.modifiedCount
+					const { applied, writeErrors } = await runUnorderedBulkWriteCounted(
+						() => kbChunks.bulkWrite(chunkOps, { ordered: false }),
+					)
+					result.chunksCreated += applied
+					if (writeErrors.length > 0) {
+						result.errors.push(
+							`${doc.title}: ${writeErrors.length} of ${chunkOps.length} chunk writes failed (${writeErrors[0]})`,
+						)
+					}
 				}
 			}
 

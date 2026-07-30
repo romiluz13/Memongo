@@ -441,11 +441,16 @@ export function resolveMemoryBackendConfig(params: {
 				},
 				graph: {
 					enabled: mongoCfg?.graph?.enabled !== false,
+					// Clamped ≤4: $graphLookup accumulates each seed's whole
+					// transitive closure into one transitiveRelations array, so an
+					// unclamped depth on a dense graph hard-errors the graph lane at
+					// the 16 MiB document limit ($graphLookup ignores allowDiskUse
+					// by design — no server setting can absorb it).
 					maxGraphDepth:
 						typeof mongoCfg?.graph?.maxGraphDepth === "number" &&
 						Number.isFinite(mongoCfg.graph.maxGraphDepth) &&
 						mongoCfg.graph.maxGraphDepth > 0
-							? Math.floor(mongoCfg.graph.maxGraphDepth)
+							? Math.min(Math.floor(mongoCfg.graph.maxGraphDepth), 4)
 							: 2,
 					entityExtraction: {
 						method: mongoCfg?.graph?.entityExtraction?.method ?? "regex",

@@ -1,4 +1,4 @@
-import type { Db } from "mongodb"
+import type { Db, Document } from "mongodb"
 import { createSubsystemLogger } from "@memongo/lib"
 import { telemetryCollection } from "./mongodb-schema.js"
 
@@ -128,9 +128,19 @@ export async function getLatencyStats(params: {
 		},
 	]
 
-	const results = await telemetryCollection(db, prefix)
-		.aggregate(pipeline)
-		.toArray()
+	// Telemetry is observability, not product behavior — an aggregation error
+	// here must never fail the caller (fleet audit P2-6).
+	let results: Document[]
+	try {
+		results = await telemetryCollection(db, prefix)
+			.aggregate(pipeline)
+			.toArray()
+	} catch (err) {
+		log.warn(
+			`latency stats aggregation failed: ${err instanceof Error ? err.message : String(err)}`,
+		)
+		return { p50: 0, p95: 0, p99: 0, count: 0 }
+	}
 	if (results.length === 0 || results[0].count === 0) {
 		return { p50: 0, p95: 0, p99: 0, count: 0 }
 	}
@@ -169,9 +179,17 @@ export async function getCacheHitRate(params: {
 		},
 	]
 
-	const results = await telemetryCollection(db, prefix)
-		.aggregate(pipeline)
-		.toArray()
+	let results: Document[]
+	try {
+		results = await telemetryCollection(db, prefix)
+			.aggregate(pipeline)
+			.toArray()
+	} catch (err) {
+		log.warn(
+			`cache hit-rate aggregation failed: ${err instanceof Error ? err.message : String(err)}`,
+		)
+		return { hitRate: 0, hits: 0, misses: 0, total: 0 }
+	}
 	let hits = 0
 	let misses = 0
 	for (const r of results) {
@@ -214,9 +232,17 @@ export async function getOperationDistribution(params: {
 		{ $sort: { count: -1 } },
 	]
 
-	const results = await telemetryCollection(db, prefix)
-		.aggregate(pipeline)
-		.toArray()
+	let results: Document[]
+	try {
+		results = await telemetryCollection(db, prefix)
+			.aggregate(pipeline)
+			.toArray()
+	} catch (err) {
+		log.warn(
+			`operation distribution aggregation failed: ${err instanceof Error ? err.message : String(err)}`,
+		)
+		return []
+	}
 	return results.map((r) => ({
 		operation: r._id as TelemetryOperation,
 		count: r.count as number,

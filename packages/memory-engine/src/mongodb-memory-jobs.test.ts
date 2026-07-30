@@ -145,16 +145,22 @@ describe("mongodb-memory-jobs", () => {
 					},
 				],
 			},
-			expect.objectContaining({
-				$inc: { attempts: 1 },
-				$set: expect.objectContaining({
-					status: "running",
-					leaseOwner: "worker-a",
-					heartbeatAt: now,
-					leaseExpiresAt: new Date(now.getTime() + 30_000),
-					leaseToken: expect.any(String),
-				}),
-			}),
+			// Pipeline update: lease timestamps come from server time ($$NOW),
+			// immune to cross-worker clock skew.
+			[
+				{
+					$set: expect.objectContaining({
+						status: "running",
+						startedAt: "$$NOW",
+						leaseOwner: "worker-a",
+						heartbeatAt: "$$NOW",
+						leaseExpiresAt: { $add: ["$$NOW", 30_000] },
+						attempts: { $add: [{ $ifNull: ["$attempts", 0] }, 1] },
+						leaseToken: expect.any(String),
+					}),
+				},
+				{ $unset: ["completedAt", "error", "stagedAt", "retryAt"] },
+			],
 			expect.objectContaining({
 				sort: { createdAt: 1, jobId: 1 },
 				returnDocument: "after",

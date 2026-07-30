@@ -326,6 +326,64 @@ describe("MongoDBChangeStreamWatcher — resume token resilience", () => {
 		await watcher.close()
 	})
 
+	it("re-opens from now and signals a gap on ChangeStreamInvalidated (346)", async () => {
+		// Collection drop/rename closes the cursor; previously code 346 landed
+		// in the log-only branch and the watcher went silently dark.
+		let watchCallCount = 0
+		const stream1 = createMockStream()
+		const stream2 = createMockStream()
+		const col = {
+			watch: vi.fn(() => {
+				watchCallCount++
+				return watchCallCount === 1 ? stream1 : stream2
+			}),
+		} as unknown as Collection
+
+		const watcher = new MongoDBChangeStreamWatcher(col, callback, 100)
+		await watcher.start()
+
+		stream1.emit(
+			"error",
+			Object.assign(new Error("change stream invalidated"), {
+				code: 346,
+				codeName: "ChangeStreamInvalidated",
+			}),
+		)
+
+		expect(watchCallCount).toBe(2)
+		expect(callbackArgs.some((e) => e.gapDetected?.from === "midstream")).toBe(
+			true,
+		)
+		await watcher.close()
+	})
+
+	it("re-opens from now when the stream closes without an error event", async () => {
+		let watchCallCount = 0
+		const stream1 = createMockStream()
+		const stream2 = createMockStream()
+		const col = {
+			watch: vi.fn(() => {
+				watchCallCount++
+				return watchCallCount === 1 ? stream1 : stream2
+			}),
+		} as unknown as Collection
+
+		const watcher = new MongoDBChangeStreamWatcher(col, callback, 100)
+		await watcher.start()
+
+		stream1.emit("close", undefined)
+
+		expect(watchCallCount).toBe(2)
+		expect(callbackArgs.some((e) => e.gapDetected?.from === "midstream")).toBe(
+			true,
+		)
+
+		// A deliberate close must NOT trigger another re-open.
+		await watcher.close()
+		stream2.emit("close", undefined)
+		expect(watchCallCount).toBe(2)
+	})
+
 	it("re-opens from now and signals a gap on a mid-stream 'Resume Token Not Found' error", async () => {
 		let watchCallCount = 0
 		const stream1 = createMockStream()

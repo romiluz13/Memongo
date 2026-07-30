@@ -87,9 +87,13 @@ export async function claimMemoryJob(params: {
 	leaseMs: number
 	now?: Date
 }): Promise<ClaimedMemoryJob | null> {
+	// Fleet audit P2: lease timestamps are stamped with server time ($$NOW via
+	// aggregation-pipeline update) so cross-worker clock skew cannot shorten or
+	// stretch a lease. The FILTER comparisons below still use the client clock
+	// (an $expr would defeat idx_memory_jobs_claim_v2's bounds) — that residual
+	// assumes workers are NTP-synced within the lease slack.
 	const now = params.now ?? new Date()
 	const leaseToken = randomUUID()
-	const leaseExpiresAt = new Date(now.getTime() + params.leaseMs)
 	const claimed = await memoryJobsCollection(
 		params.db,
 		params.prefix,
@@ -111,18 +115,20 @@ export async function claimMemoryJob(params: {
 				},
 			],
 		},
-		{
-			$set: {
-				status: "running",
-				startedAt: now,
-				leaseOwner: params.workerId,
-				leaseToken,
-				heartbeatAt: now,
-				leaseExpiresAt,
+		[
+			{
+				$set: {
+					status: "running",
+					startedAt: "$$NOW",
+					leaseOwner: params.workerId,
+					leaseToken,
+					heartbeatAt: "$$NOW",
+					leaseExpiresAt: { $add: ["$$NOW", params.leaseMs] },
+					attempts: { $add: [{ $ifNull: ["$attempts", 0] }, 1] },
+				},
 			},
-			$inc: { attempts: 1 },
-			$unset: { completedAt: "", error: "", stagedAt: "", retryAt: "" },
-		},
+			{ $unset: ["completedAt", "error", "stagedAt", "retryAt"] },
+		],
 		{
 			sort: { createdAt: 1, jobId: 1 },
 			returnDocument: "after",
@@ -152,12 +158,14 @@ export async function renewMemoryJobLease(params: {
 			leaseToken: params.leaseToken,
 			leaseExpiresAt: { $gt: now },
 		},
-		{
-			$set: {
-				heartbeatAt: now,
-				leaseExpiresAt: new Date(now.getTime() + params.leaseMs),
+		[
+			{
+				$set: {
+					heartbeatAt: "$$NOW",
+					leaseExpiresAt: { $add: ["$$NOW", params.leaseMs] },
+				},
 			},
-		},
+		],
 		{ writeConcern: DURABLE_JOB_WRITE_CONCERN },
 	)
 	return result.matchedCount === 1

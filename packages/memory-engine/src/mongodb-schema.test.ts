@@ -549,7 +549,7 @@ describe("ensureStandardIndexes", () => {
 		// + 3 session_chunks + 1 bi-temporal valid-time (#32)
 		// + 1 durable memory-job claim index + 1 extraction outbox partial index
 		// + 1 unique relation identity index = 89
-		expect(count).toBe(89)
+		expect(count).toBe(90)
 		expect(chunks.createIndex).toHaveBeenCalledTimes(4)
 		expect(kb.createIndex).toHaveBeenCalledTimes(5)
 		expect(kbChunks.createIndex).toHaveBeenCalledTimes(4)
@@ -668,7 +668,7 @@ describe("ensureStandardIndexes", () => {
 			) as unknown as {
 				createIndex: ReturnType<typeof vi.fn>
 			}
-			expect(count).toBe(93)
+			expect(count).toBe(94)
 			expect(memoryEvidence.createIndex).toHaveBeenCalledTimes(4)
 			expect(memoryEvidence.createIndex).toHaveBeenCalledWith(
 				{ canonicalId: 1 },
@@ -778,9 +778,9 @@ describe("ensureStandardIndexes", () => {
 		// 1 structured scope + 1 structured revisions + 4 procedures + 1 procedure_revisions +
 		// 3 query_cache + 2 telemetry + 2 access_events + 3 memory_mutations
 		// + 1 lane_coverage + 1 consolidation_runs + 3 session_chunks
-		// + 1 bi-temporal valid-time (#32) + 1 durable job claim index
+		// + 1 bi-temporal valid-time (#32) + 2 durable job claim/TTL indexes
 		// + 1 extraction outbox partial index + 1 unique relation identity = 89
-		expect(count).toBe(89)
+		expect(count).toBe(90)
 	})
 
 	it("creates relevance TTL indexes when relevanceRetentionDays is set", async () => {
@@ -2692,9 +2692,9 @@ describe("ensureStandardIndexes total count with query_cache and time series ind
 		// 1 structured scope + 1 structured revisions + 4 procedures + 1 procedure_revisions +
 		// 3 query_cache + 2 telemetry + 2 access_events + 3 memory_mutations
 		// + 1 lane_coverage + 1 consolidation_runs + 3 session_chunks
-		// + 1 bi-temporal valid-time (#32) + 1 durable job claim index
+		// + 1 bi-temporal valid-time (#32) + 2 durable job claim/TTL indexes
 		// + 1 extraction outbox partial index + 1 unique relation identity = 89
-		expect(count).toBe(89)
+		expect(count).toBe(90)
 	})
 })
 

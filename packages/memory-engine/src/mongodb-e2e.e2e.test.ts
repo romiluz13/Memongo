@@ -97,7 +97,7 @@ const EXPECTED_COLLECTION_SUFFIXES = [
 	"recall_traces",
 	"session_chunks",
 ] as const
-const EXPECTED_STANDARD_INDEX_COUNT = 91
+const EXPECTED_STANDARD_INDEX_COUNT = 90
 
 let client: MongoClient
 let db: Db
@@ -1021,7 +1021,7 @@ describe("E2E: Transactions (replica set)", () => {
 					)
 					executed = true
 				},
-				{ writeConcern: { w: "majority", wtimeout: 1000 } },
+				{ writeConcern: { w: "majority", wtimeoutMS: 5000 } },
 			)
 			expect(executed).toBe(true)
 

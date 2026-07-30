@@ -1,10 +1,13 @@
 import type { ClientSession, TransactionOptions } from "mongodb"
 
 export const MAJORITY_TRANSACTION_OPTIONS: TransactionOptions = {
-	// wtimeout prevents indefinite blocking when majority is unachievable
-	// (e.g. a secondary is down). Docs examples use wtimeout: 1000.
-	// See https://www.mongodb.com/docs/manual/reference/write-concern/
-	writeConcern: { w: "majority", wtimeout: 1000 },
+	// wtimeoutMS prevents indefinite blocking when majority is unachievable
+	// (e.g. a secondary is down). 5000 ms matches the manual's write-concern
+	// timeout example and tolerates transient replication lag — 1000 ms made
+	// every commit spin through UnknownTransactionCommitResult retries under
+	// lag. The `wtimeout` spelling is deprecated in driver 7.x (removed next
+	// major).
+	writeConcern: { w: "majority", wtimeoutMS: 5000 },
 }
 
 /** Extract a MongoDB server error code from an error-like object. */

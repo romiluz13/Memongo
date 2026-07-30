@@ -88,7 +88,7 @@ describe("writeStructuredMemory", () => {
 		})
 
 		expect(withTransaction).toHaveBeenCalledWith(expect.any(Function), {
-			writeConcern: { w: "majority", wtimeout: 1000 },
+			writeConcern: { w: "majority", wtimeoutMS: 5000 },
 		})
 	})
 

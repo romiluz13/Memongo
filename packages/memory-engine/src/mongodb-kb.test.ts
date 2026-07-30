@@ -503,7 +503,7 @@ describe("removeKBDocument", () => {
 		expect(clientMock.startSession).toHaveBeenCalled()
 		expect(sessionMock.withTransaction).toHaveBeenCalledWith(
 			expect.any(Function),
-			{ writeConcern: { w: "majority", wtimeout: 1000 } },
+			{ writeConcern: { w: "majority", wtimeoutMS: 5000 } },
 		)
 		expect(sessionMock.endSession).toHaveBeenCalled()
 	})
@@ -622,7 +622,7 @@ describe("ingestToKB — transaction wrapping for re-ingestion", () => {
 		expect(clientMock.startSession).toHaveBeenCalled()
 		expect(sessionMock.withTransaction).toHaveBeenCalledWith(
 			expect.any(Function),
-			{ writeConcern: { w: "majority", wtimeout: 1000 } },
+			{ writeConcern: { w: "majority", wtimeoutMS: 5000 } },
 		)
 		expect(sessionMock.endSession).toHaveBeenCalled()
 	})

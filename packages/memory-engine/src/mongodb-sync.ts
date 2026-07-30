@@ -17,6 +17,7 @@ import {
 	listMemoryFiles,
 	type MemoryChunk,
 	type MemoryFileEntry,
+	runUnorderedBulkWriteCounted,
 } from "./internal.js"
 import type { AnyBulkWriteOperation } from "mongodb"
 import type { EmbeddingStatus } from "./mongodb-embedding-retry.js"
@@ -200,8 +201,15 @@ async function upsertChunks(
 		embeddingStatus,
 	)
 
-	const result = await chunks.bulkWrite(ops, { ordered: false })
-	return result.upsertedCount + result.modifiedCount
+	const { applied, writeErrors } = await runUnorderedBulkWriteCounted(() =>
+		chunks.bulkWrite(ops, { ordered: false }),
+	)
+	if (writeErrors.length > 0) {
+		log.warn(
+			`chunk bulkWrite partially failed: ${writeErrors.length} of ${ops.length} ops rejected (${writeErrors[0]})`,
+		)
+	}
+	return applied
 }
 
 /**
@@ -217,6 +225,8 @@ async function upsertChunksBatched(
 ): Promise<number> {
 	let upserted = 0
 	await withTransactionBatched(session, ops, async (batch) => {
+		// Inside a transaction a write error aborts the whole batch, so no
+		// partial-count handling here — the transaction guarantees all-or-nothing.
 		const result = await chunks.bulkWrite(batch, { ordered: false, session })
 		upserted += result.upsertedCount + result.modifiedCount
 	})

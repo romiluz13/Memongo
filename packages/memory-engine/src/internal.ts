@@ -72,6 +72,40 @@ export function isDuplicateKeyError(err: unknown): boolean {
 	return message.includes("E11000") || message.includes("duplicate key")
 }
 
+/**
+ * Count the writes an unordered bulkWrite actually applied, surviving partial
+ * failure. With ordered:false the driver still THROWS MongoBulkWriteError
+ * after attempting every op, so a plain await counts partial success as total
+ * failure and derived counts (chunkCount, chunksCreated) drift from what is
+ * queryable (fleet audit P2-2). Returns applied counts plus the write errors
+ * so callers can report honestly.
+ */
+export async function runUnorderedBulkWriteCounted(
+	run: () => Promise<{ upsertedCount: number; modifiedCount: number }>,
+): Promise<{ applied: number; writeErrors: string[] }> {
+	try {
+		const result = await run()
+		return {
+			applied: result.upsertedCount + result.modifiedCount,
+			writeErrors: [],
+		}
+	} catch (err) {
+		const bulk = err as {
+			result?: { upsertedCount?: number; modifiedCount?: number }
+			writeErrors?: Array<{ errmsg?: string; err?: { errmsg?: string } }>
+		}
+		if (!bulk?.result) {
+			throw err
+		}
+		const applied =
+			(bulk.result.upsertedCount ?? 0) + (bulk.result.modifiedCount ?? 0)
+		const writeErrors = (bulk.writeErrors ?? []).map(
+			(w) => w.errmsg ?? w.err?.errmsg ?? "unknown write error",
+		)
+		return { applied, writeErrors }
+	}
+}
+
 export function ensureDir(dir: string): string {
 	try {
 		fsSync.mkdirSync(dir, { recursive: true })

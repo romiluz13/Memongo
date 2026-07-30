@@ -118,6 +118,7 @@ export class MongoDBChangeStreamWatcher {
 		if (!this.stream) {
 			return
 		}
+		const streamRef = this.stream
 		this.stream.on("change", (change: ChangeStreamDocument) => {
 			this.handleChange(change)
 		})
@@ -128,6 +129,14 @@ export class MongoDBChangeStreamWatcher {
 					"change streams not supported (standalone topology), closing watcher",
 				)
 				void this.close()
+			} else if (isChangeStreamInvalidated(err)) {
+				// Collection dropped/renamed. reopenFromNow opens a FRESH stream
+				// with no resume token, which is valid after invalidation, and
+				// its gap signal tells the manager to re-scan. Previously this
+				// landed in the log-only branch and the watcher went silently
+				// dark (fleet audit).
+				log.info("change stream invalidated (346), re-opening from now")
+				void this.reopenFromNow("midstream")
 			} else if (isResumeTokenInvalid(err)) {
 				log.info("resume token invalid mid-stream, re-opening from now")
 				void this.reopenFromNow("midstream")
@@ -135,6 +144,19 @@ export class MongoDBChangeStreamWatcher {
 				log.warn(`change stream error: ${msg}`)
 			}
 		})
+		// A server-side close with no error event (driver-version dependent on
+		// invalidate) otherwise left the watcher dark with isActive unpolled.
+		// The streamRef guard keeps the deliberate close inside reopenFromNow
+		// (which nulls this.stream first) from re-triggering a reopen.
+		const onStreamGone = (event: "close" | "end") => {
+			if (this.closed || this.stream !== streamRef) {
+				return
+			}
+			log.warn(`change stream ${event} without error, re-opening from now`)
+			void this.reopenFromNow("midstream")
+		}
+		this.stream.on("close", () => onStreamGone("close"))
+		this.stream.on("end", () => onStreamGone("end"))
 	}
 
 	/**
@@ -317,9 +339,10 @@ function isChangeStreamNotSupported(msg: string): boolean {
  * Sources: github.com/mongodb/mongo src/mongo/base/error_codes.yml;
  * src/mongo/db/exec/agg/change_stream_check_resumability_stage.cpp:61-66.
  *
- * NOTE: ChangeStreamInvalidated (346) is deliberately NOT included — it means
- * the collection was dropped/renamed, which requires startAfter, not a
- * from-now re-stream.
+ * NOTE: ChangeStreamInvalidated (346) is deliberately NOT included here — it
+ * means the collection was dropped/renamed. It is handled explicitly in the
+ * error handler via isChangeStreamInvalidated: reopenFromNow opens a fresh
+ * token-free stream (valid after invalidation) and emits a gap signal.
  */
 const RESUME_TOKEN_INVALID_CODES = new Set<number>([136, 260, 286])
 const RESUME_TOKEN_INVALID_CODE_NAMES = new Set<string>([
@@ -327,6 +350,15 @@ const RESUME_TOKEN_INVALID_CODE_NAMES = new Set<string>([
 	"InvalidResumeToken",
 	"ChangeStreamHistoryLost",
 ])
+
+export function isChangeStreamInvalidated(error: unknown): boolean {
+	if (error == null || typeof error !== "object") {
+		return false
+	}
+	const code = (error as { code?: unknown }).code
+	const codeName = (error as { codeName?: unknown }).codeName
+	return code === 346 || codeName === "ChangeStreamInvalidated"
+}
 
 export function isResumeTokenInvalid(error: unknown): boolean {
 	if (error != null && typeof error === "object") {

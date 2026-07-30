@@ -456,6 +456,12 @@ export async function reconcileEmbeddingStatus(
  * Aggregate $indexStats across key collections (chunks, kb_chunks, structured_mem).
  * Returns per-index access counts so users can identify unused indexes.
  * Fails gracefully if $indexStats is not supported (e.g., some MongoDB versions).
+ *
+ * CAVEAT (fleet audit P2-4): $indexStats is PER-NODE and resets on restart —
+ * on a replica set it reflects only the node this connection reads from, and
+ * `accesses: 0` may just mean "this node restarted recently" or "reads go to
+ * the other members". Never drop an index on this signal alone; check every
+ * node over a full workload cycle.
  */
 async function aggregateIndexStats(
 	db: Db,
