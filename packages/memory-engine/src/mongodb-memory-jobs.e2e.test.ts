@@ -653,14 +653,17 @@ describe("durable memory job leases (live MongoDB)", () => {
 			},
 		})
 
+		// Lease expiry is stamped with server $$NOW, so a synthetic `now` can no
+		// longer simulate a crashed worker. A negative leaseMs creates a lease
+		// that is genuinely expired in server time (a minute of headroom absorbs
+		// client/server clock skew on the reclaim comparison).
 		const first = await claimMemoryJob({
 			db,
 			prefix: PREFIX,
 			agentId,
 			jobType: "extraction",
 			workerId: "worker-before-crash",
-			leaseMs: 60_000,
-			now: new Date("2026-07-23T00:00:00.000Z"),
+			leaseMs: -60_000,
 		})
 		expect(first).not.toBeNull()
 
@@ -671,7 +674,6 @@ describe("durable memory job leases (live MongoDB)", () => {
 			jobType: "extraction",
 			workerId: "worker-after-crash",
 			leaseMs: 60_000,
-			now: new Date("2026-07-23T00:01:00.001Z"),
 		})
 		expect(recovered).toMatchObject({
 			jobId,
@@ -709,10 +711,7 @@ describe("durable memory job leases (live MongoDB)", () => {
 				agentId,
 				leaseOwner: recovered?.leaseOwner ?? "",
 				leaseToken: recovered?.leaseToken ?? "",
-				// Must be inside the recovered lease window (claimed at 00:01:00.001
-				// for 60s). Without this the real wall clock is used, so the lease
-				// reads as long expired and the completion is fenced.
-				now: new Date("2026-07-23T00:01:30.000Z"),
+				// Real clock: the recovered lease is 60 s in the future.
 			}),
 		).resolves.toBe(true)
 
@@ -741,18 +740,17 @@ describe("durable memory job leases (live MongoDB)", () => {
 				payload: { eventId: "event-expired-terminal" },
 			},
 		})
-		const claimedAt = new Date("2026-07-23T00:00:00.000Z")
+		// Negative leaseMs: the lease is stamped expired in server time (see the
+		// crash-reclaim test above for why a synthetic `now` no longer works).
 		const claimed = await claimMemoryJob({
 			db,
 			prefix: PREFIX,
 			agentId,
 			jobType: "extraction",
 			workerId: "worker-expired-terminal",
-			leaseMs: 1_000,
-			now: claimedAt,
+			leaseMs: -60_000,
 		})
 		expect(claimed).not.toBeNull()
-		const afterExpiry = new Date(claimedAt.getTime() + 1_001)
 
 		await expect(
 			completeClaimedMemoryJob({
@@ -762,7 +760,6 @@ describe("durable memory job leases (live MongoDB)", () => {
 				agentId,
 				leaseOwner: claimed?.leaseOwner ?? "",
 				leaseToken: claimed?.leaseToken ?? "",
-				now: afterExpiry,
 			}),
 		).resolves.toBe(false)
 		await expect(
@@ -773,7 +770,6 @@ describe("durable memory job leases (live MongoDB)", () => {
 				agentId,
 				leaseOwner: claimed?.leaseOwner ?? "",
 				leaseToken: claimed?.leaseToken ?? "",
-				now: afterExpiry,
 				error: "expired worker must not win",
 			}),
 		).resolves.toBe(false)
