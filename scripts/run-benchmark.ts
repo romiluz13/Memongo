@@ -107,6 +107,7 @@ async function runRecallRegressionSuite(): Promise<{
 		output
 			.split("\n")
 			.find((line) => line.includes("Tests"))
+			// biome-ignore lint/suspicious/noControlCharactersInRegex: strips ANSI color codes from vitest output
 			?.replace(/\x1b\[[0-9;]*m/g, "")
 			.trim() ?? "test summary unavailable"
 	return proc.exitCode === 0

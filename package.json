@@ -33,7 +33,7 @@
 		"agent-smoke": "bun scripts/real-agent-smoke.ts",
 		"capability-stress": "bun scripts/real-capability-stress.ts",
 		"benchmark:fetch": "bun scripts/fetch-benchmark-dataset.ts",
-		"benchmark": "bun scripts/run-benchmark.ts"
+		"benchmark": "turbo run build --filter=@memongo/memory-bridge... --output-logs=errors-only && bun scripts/run-benchmark.ts"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^2.4.0",

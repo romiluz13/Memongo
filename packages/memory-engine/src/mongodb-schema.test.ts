@@ -1076,6 +1076,87 @@ describe("ensureSearchIndexes", () => {
 		}
 	})
 
+	it("sets indexingMethod on every autoEmbed field when MEMONGO_VECTOR_INDEXING_METHOD=flat", async () => {
+		// Re-probed live on Atlas 8.3.7 (2026-07-30): field-level
+		// indexingMethod:"flat" on an autoEmbed field is now ACCEPTED and the
+		// index builds to READY/queryable — the 8.3.4 rejection ("Omit
+		// indexingMethod to use default HNSW") no longer holds. Flat indexes
+		// are the documented fit for selective-prefilter multitenant queries,
+		// which is exactly the scope/scopeRef pattern every lane uses. The
+		// default stays omit (server default HNSW); flat is a deliberate
+		// opt-in via env so the choice is recorded in benchmark run identity.
+		const previous = process.env.MEMONGO_VECTOR_INDEXING_METHOD
+		process.env.MEMONGO_VECTOR_INDEXING_METHOD = "flat"
+		try {
+			const db = mockDb()
+			await ensureSearchIndexes(db, "test_", "atlas-managed", "automated")
+
+			const vectorCalls: Document[] = []
+			for (const collectionName of [
+				"test_chunks",
+				"test_kb_chunks",
+				"test_structured_mem",
+				"test_procedures",
+				"test_events",
+				"test_query_cache",
+				"test_session_chunks",
+			]) {
+				const col = db.collection(collectionName) as unknown as {
+					createSearchIndex: ReturnType<typeof vi.fn>
+				}
+				for (const call of col.createSearchIndex.mock.calls) {
+					const spec = call[0] as Document
+					if (spec.type === "vectorSearch") {
+						vectorCalls.push(spec)
+					}
+				}
+			}
+			expect(vectorCalls.length).toBeGreaterThan(0)
+			for (const spec of vectorCalls) {
+				for (const field of spec.definition.fields as Document[]) {
+					if (field.type === "autoEmbed") {
+						expect(field.indexingMethod).toBe("flat")
+					}
+				}
+			}
+		} finally {
+			if (previous === undefined) {
+				delete process.env.MEMONGO_VECTOR_INDEXING_METHOD
+			} else {
+				process.env.MEMONGO_VECTOR_INDEXING_METHOD = previous
+			}
+		}
+	})
+
+	it("omits indexingMethod for hnsw, empty, and invalid MEMONGO_VECTOR_INDEXING_METHOD", async () => {
+		const previous = process.env.MEMONGO_VECTOR_INDEXING_METHOD
+		try {
+			for (const value of ["hnsw", "", "diskann"]) {
+				process.env.MEMONGO_VECTOR_INDEXING_METHOD = value
+				const db = mockDb()
+				await ensureSearchIndexes(db, "test_", "atlas-managed", "automated")
+				const chunks = db.collection("test_chunks") as unknown as {
+					createSearchIndex: ReturnType<typeof vi.fn>
+				}
+				const vectorCall = chunks.createSearchIndex.mock.calls.find(
+					(c: unknown[]) => (c[0] as Document).type === "vectorSearch",
+				)
+				expect(vectorCall).toBeDefined()
+				const fields = (vectorCall![0] as Document).definition
+					.fields as Document[]
+				expect(
+					fields.find((field) => field.type === "autoEmbed"),
+				).not.toHaveProperty("indexingMethod")
+			}
+		} finally {
+			if (previous === undefined) {
+				delete process.env.MEMONGO_VECTOR_INDEXING_METHOD
+			} else {
+				process.env.MEMONGO_VECTOR_INDEXING_METHOD = previous
+			}
+		}
+	})
+
 	it("includes filter fields (source, path, status) in vector index", async () => {
 		const db = mockDb()
 		await ensureSearchIndexes(db, "test_", "atlas-local-preview", "automated")

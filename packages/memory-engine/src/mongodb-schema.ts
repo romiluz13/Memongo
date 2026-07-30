@@ -3069,12 +3069,38 @@ function isRawSessionSearchIndexProfile(
 	)
 }
 
+/**
+ * Opt-in vector index structure. `flat` is the documented fit for
+ * selective-prefilter multitenant queries (filters matching <5% of
+ * documents) — exactly the scope/scopeRef pattern every lane uses.
+ * Re-probed live on Atlas 8.3.7 (2026-07-30): field-level
+ * indexingMethod:"flat" on an autoEmbed field is accepted and builds to
+ * READY, so the 8.3.4 rejection recorded below no longer applies to this
+ * one option. Default stays omit (server default HNSW); opting in via env
+ * keeps the choice visible in benchmark run identity.
+ */
+function vectorIndexingMethodFromEnv(): "flat" | undefined {
+	const raw = process.env.MEMONGO_VECTOR_INDEXING_METHOD?.trim().toLowerCase()
+	if (!raw || raw === "hnsw") {
+		return undefined
+	}
+	if (raw === "flat") {
+		return "flat"
+	}
+	log.warn(
+		`ignoring MEMONGO_VECTOR_INDEXING_METHOD="${raw}" (expected "flat" or "hnsw")`,
+	)
+	return undefined
+}
+
 function autoEmbedVectorField(path: string): Document {
+	const indexingMethod = vectorIndexingMethodFromEnv()
 	return {
 		type: "autoEmbed",
 		modality: "text",
 		path,
 		model: "voyage-4-large",
+		...(indexingMethod ? { indexingMethod } : {}),
 	}
 }
 
@@ -3101,6 +3127,14 @@ function autoEmbedVectorField(path: string): Document {
  * `indexingMethod` ("Omit indexingMethod to use default HNSW") on an autoEmbed
  * field: the embedding model determines all of them. So there is nothing here
  * to pin, and no irreversible choice to get wrong.
+ *
+ * One exception has since opened up: Atlas 8.3.7 (re-probed live
+ * 2026-07-30) accepts field-level `indexingMethod: "flat"` on autoEmbed
+ * fields and builds the index to READY. autoEmbedVectorField therefore adds
+ * it — and only it — behind the MEMONGO_VECTOR_INDEXING_METHOD opt-in.
+ * `storedSource` remains rejected in the `true` form; the documented
+ * `{include: [...]}` object form is accepted but stays off pending its own
+ * change (see DetectedCapabilities.storedSource).
  *
  * Re-enabling stored source later means `{include: [...]}` naming every field
  * the search projections read, plus flipping DetectedCapabilities.storedSource

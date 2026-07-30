@@ -4167,6 +4167,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 			"MEMONGO_STRICT_SEARCH_INDEX_READY",
 			"MEMONGO_TEMPORAL_COVERAGE_MODE",
 			"MEMONGO_USERFACT_EVIDENCE_MODE",
+			"MEMONGO_VECTOR_INDEXING_METHOD",
 		] as const
 		for (const key of environmentKeys) {
 			settings[`env.${key}`] = process.env[key]?.trim() || null
