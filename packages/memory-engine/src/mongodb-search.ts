@@ -260,6 +260,42 @@ function filterByScore(
  * divides by this same ceiling; doing it here too is what makes the two paths
  * interchangeable, which a fallback has to be.
  */
+/**
+ * Rescale raw `$scoreFusion` output into the same [0,1] space, then apply the
+ * caller's threshold.
+ *
+ * `normalization: "sigmoid"` maps every input-pipeline score into (0,1) and
+ * the `avg` combination weights-and-averages them, so the raw ceiling is
+ * `max(maxWeight, Σweights / 2)` — 0.7 with the 0.7/0.3 weights used here —
+ * never 1. (The docs do not pin down whether `avg` divides by all pipelines
+ * or only those that returned the document; this ceiling bounds both
+ * readings.) Thresholding the raw value against a [0,1] `minScore` is the
+ * same silent-empty-lane failure documented on
+ * {@link normalizeAndFilterRankFusionResults}.
+ */
+export function normalizeAndFilterScoreFusionResults(
+	results: MemorySearchResult[],
+	minScore: number,
+	vectorWeight: number,
+	textWeight: number,
+): MemorySearchResult[] {
+	const maxPossibleScore = Math.max(
+		vectorWeight,
+		textWeight,
+		(vectorWeight + textWeight) / 2,
+	)
+	if (!(maxPossibleScore > 0)) {
+		return []
+	}
+	return results
+		.filter((r) => r.score > 0)
+		.map((r) => ({
+			...r,
+			score: Number(Math.min(1, r.score / maxPossibleScore).toFixed(6)),
+		}))
+		.filter((r) => r.score >= minScore)
+}
+
 export function normalizeAndFilterRankFusionResults(
 	results: MemorySearchResult[],
 	minScore: number,
@@ -781,6 +817,12 @@ export async function hybridSearchScoreFusion(
 		return []
 	}
 
+	// The primary score comes from `$meta: "score"`, the only output shape the
+	// fusion docs guarantee. `scoreDetails` is an unstable audit artifact
+	// ("MongoDB does not guarantee any specific output format"), so it is
+	// requested only when explain asks for it — never on the hot path, and
+	// never as the score source.
+	const includeScoreDetails = opts.explain?.includeScoreDetails === true
 	const pipeline: Document[] = [
 		{
 			$scoreFusion: {
@@ -807,11 +849,13 @@ export async function hybridSearchScoreFusion(
 					},
 					method: "avg",
 				},
-				scoreDetails: true,
+				...(includeScoreDetails ? { scoreDetails: true } : {}),
 			},
 		},
 		{ $limit: opts.maxResults },
-		{ $addFields: { scoreDetails: { $meta: "scoreDetails" } } },
+		...(includeScoreDetails
+			? [{ $addFields: { scoreDetails: { $meta: "scoreDetails" } } }]
+			: []),
 		{
 			$project: {
 				_id: 0,
@@ -830,8 +874,8 @@ export async function hybridSearchScoreFusion(
 				unit: 1,
 				provenance: 1,
 				"metadata.sourceEventIds": 1,
-				score: "$scoreDetails.value",
-				...(opts.explain?.includeScoreDetails ? { scoreDetails: 1 } : {}),
+				score: { $meta: "score" },
+				...(includeScoreDetails ? { scoreDetails: 1 } : {}),
 			},
 		},
 	]
@@ -849,7 +893,12 @@ export async function hybridSearchScoreFusion(
 
 	const docs = await runSearchAggregateWithRetry(collection, pipeline)
 	const results = docs.map((doc) => toSearchResult(doc, "memory"))
-	return filterByScore(results, opts.minScore)
+	return normalizeAndFilterScoreFusionResults(
+		results,
+		opts.minScore,
+		opts.vectorWeight,
+		opts.textWeight,
+	)
 }
 
 // ---------------------------------------------------------------------------
@@ -899,6 +948,9 @@ export async function hybridSearchRankFusion(
 		return []
 	}
 
+	// Same score-source contract as the $scoreFusion lane above: `$meta:
+	// "score"` is the guaranteed shape; `scoreDetails` is explain-only.
+	const includeScoreDetails = opts.explain?.includeScoreDetails === true
 	const pipeline: Document[] = [
 		{
 			$rankFusion: {
@@ -923,11 +975,13 @@ export async function hybridSearchRankFusion(
 						text: opts.textWeight,
 					},
 				},
-				scoreDetails: true,
+				...(includeScoreDetails ? { scoreDetails: true } : {}),
 			},
 		},
 		{ $limit: opts.maxResults },
-		{ $addFields: { scoreDetails: { $meta: "scoreDetails" } } },
+		...(includeScoreDetails
+			? [{ $addFields: { scoreDetails: { $meta: "scoreDetails" } } }]
+			: []),
 		{
 			$project: {
 				_id: 0,
@@ -946,8 +1000,8 @@ export async function hybridSearchRankFusion(
 				unit: 1,
 				provenance: 1,
 				"metadata.sourceEventIds": 1,
-				score: "$scoreDetails.value",
-				...(opts.explain?.includeScoreDetails ? { scoreDetails: 1 } : {}),
+				score: { $meta: "score" },
+				...(includeScoreDetails ? { scoreDetails: 1 } : {}),
 			},
 		},
 	]

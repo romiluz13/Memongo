@@ -172,4 +172,115 @@ describe("$rankFusion score space", () => {
 		expect(maxScore).toBeCloseTo(ceiling, 8)
 		expect(ceiling).toBeLessThan(0.1)
 	})
+
+	it("projects the fused score via $meta:'score' without requesting scoreDetails", async () => {
+		// The engine's hot path now reads the score from the documented
+		// $meta:"score" and never asks for scoreDetails. This pins the
+		// server-side contract: the guaranteed metadata field carries the same
+		// value scoreDetails.value used to, with scoreDetails absent entirely.
+		const docs = await col
+			.aggregate([
+				{
+					$rankFusion: {
+						input: {
+							pipelines: {
+								vector: [
+									{
+										$vectorSearch: {
+											index: VECTOR_INDEX,
+											path: "embedding",
+											queryVector: QUERY_VECTOR,
+											numCandidates: 100,
+											limit: 20,
+										},
+									},
+								],
+								text: [
+									{
+										$search: {
+											index: TEXT_INDEX,
+											compound: {
+												should: [{ text: { query: QUERY, path: "text" } }],
+											},
+										},
+									},
+									{ $limit: 20 },
+								],
+							},
+						},
+						combination: {
+							weights: { vector: VECTOR_WEIGHT, text: TEXT_WEIGHT },
+						},
+					},
+				},
+				{ $project: { _id: 0, score: { $meta: "score" } } },
+			])
+			.toArray()
+
+		expect(docs.length).toBeGreaterThan(0)
+		const ceiling = (VECTOR_WEIGHT + TEXT_WEIGHT) / 61
+		const maxScore = Math.max(...docs.map((d) => d.score as number))
+		expect(maxScore).toBeGreaterThan(0)
+		expect(maxScore).toBeCloseTo(ceiling, 8)
+	})
+
+	it("keeps $scoreFusion sigmoid+avg output under the engine's rescale ceiling", async () => {
+		// normalizeAndFilterScoreFusionResults divides by
+		// max(maxWeight, Σweights/2) because the docs don't pin down the avg
+		// denominator. This asserts on a live cluster that the raw fused score
+		// (read via the guaranteed $meta:"score", no scoreDetails requested)
+		// actually stays under that ceiling, so the rescale can never inflate a
+		// score past 1.
+		const docs = await col
+			.aggregate([
+				{
+					$scoreFusion: {
+						input: {
+							pipelines: {
+								vector: [
+									{
+										$vectorSearch: {
+											index: VECTOR_INDEX,
+											path: "embedding",
+											queryVector: QUERY_VECTOR,
+											numCandidates: 100,
+											limit: 20,
+										},
+									},
+								],
+								text: [
+									{
+										$search: {
+											index: TEXT_INDEX,
+											compound: {
+												should: [{ text: { query: QUERY, path: "text" } }],
+											},
+										},
+									},
+									{ $limit: 20 },
+								],
+							},
+							normalization: "sigmoid",
+						},
+						combination: {
+							weights: { vector: VECTOR_WEIGHT, text: TEXT_WEIGHT },
+							method: "avg",
+						},
+					},
+				},
+				{ $project: { _id: 0, score: { $meta: "score" } } },
+			])
+			.toArray()
+
+		expect(docs.length).toBeGreaterThan(0)
+		const rescaleCeiling = Math.max(
+			VECTOR_WEIGHT,
+			TEXT_WEIGHT,
+			(VECTOR_WEIGHT + TEXT_WEIGHT) / 2,
+		)
+		for (const doc of docs) {
+			expect(doc.score).toBeGreaterThan(0)
+			expect(doc.score).toBeLessThanOrEqual(rescaleCeiling + 1e-9)
+		}
+	})
 })

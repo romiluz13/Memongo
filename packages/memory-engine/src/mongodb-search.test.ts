@@ -8,6 +8,7 @@ import {
 	vectorSearch,
 	keywordSearch,
 	hybridSearchRankFusion,
+	hybridSearchScoreFusion,
 	hybridSearchJSFallback,
 	mongoSearch,
 	splitAtlasSearchFilter,
@@ -616,11 +617,13 @@ describe("mongoSearch dispatcher", () => {
 		const projectStage = pipeline.at(-1).$project
 		expect(projectStage.canonicalId).toBe(1)
 		expect(projectStage["metadata.sourceEventIds"]).toBe(1)
-		expect(pipeline[0].$scoreFusion.scoreDetails).toBe(true)
-		expect(pipeline.at(-2).$addFields.scoreDetails).toEqual({
-			$meta: "scoreDetails",
-		})
-		expect(projectStage.score).toBe("$scoreDetails.value")
+		// The primary score must come from the documented $meta:"score", never
+		// from the unstable scoreDetails payload — and scoreDetails must not be
+		// requested at all on the hot path.
+		expect(pipeline[0].$scoreFusion.scoreDetails).toBeUndefined()
+		expect(pipeline.some((stage: Document) => stage.$addFields)).toBe(false)
+		expect(projectStage.scoreDetails).toBeUndefined()
+		expect(projectStage.score).toEqual({ $meta: "score" })
 	})
 
 	it("uses $rankFusion when fusionMethod=rankFusion (skips $scoreFusion)", async () => {
@@ -640,11 +643,10 @@ describe("mongoSearch dispatcher", () => {
 		const projectStage = pipeline.at(-1).$project
 		expect(projectStage.canonicalId).toBe(1)
 		expect(projectStage["metadata.sourceEventIds"]).toBe(1)
-		expect(pipeline[0].$rankFusion.scoreDetails).toBe(true)
-		expect(pipeline.at(-2).$addFields.scoreDetails).toEqual({
-			$meta: "scoreDetails",
-		})
-		expect(projectStage.score).toBe("$scoreDetails.value")
+		expect(pipeline[0].$rankFusion.scoreDetails).toBeUndefined()
+		expect(pipeline.some((stage: Document) => stage.$addFields)).toBe(false)
+		expect(projectStage.scoreDetails).toBeUndefined()
+		expect(projectStage.score).toEqual({ $meta: "score" })
 	})
 
 	it("rescales low RRF-scale $rankFusion scores instead of discarding them", async () => {
@@ -705,6 +707,51 @@ describe("mongoSearch dispatcher", () => {
 		expect(results2).toHaveLength(0)
 	})
 
+	it("rescales sigmoid-domain $scoreFusion scores instead of discarding them", async () => {
+		// $scoreFusion sigmoid+avg output shares no scale with the [0,1]
+		// minScore callers pass: with 0.7/0.3 weights the raw ceiling is 0.7
+		// (max weight), so a raw 0.35 is a mid-strength match. Thresholding it
+		// raw against minScore 0.4 silently emptied the lane — the same S2
+		// defect class the rankFusion path documents.
+		const sigmoidDocs: Document[] = [
+			{
+				path: "memory/sf.md",
+				startLine: 1,
+				endLine: 2,
+				text: "score fusion result",
+				source: "conversation",
+				score: 0.35,
+			},
+		]
+		const col = mockCollectionWithResults(sigmoidDocs)
+
+		const results = await hybridSearchScoreFusion(col, "test query", [0.1], {
+			maxResults: 10,
+			minScore: 0.4,
+			vectorIndexName: "chunks_vector",
+			textIndexName: "chunks_text",
+			vectorWeight: 0.7,
+			textWeight: 0.3,
+			embeddingMode: "automated",
+		})
+
+		expect(results).toHaveLength(1)
+		expect(results[0]?.score).toBeCloseTo(0.5, 3)
+
+		// ...and a threshold above the rescaled score still filters.
+		const results2 = await hybridSearchScoreFusion(col, "test query", [0.1], {
+			maxResults: 10,
+			minScore: 0.6,
+			vectorIndexName: "chunks_vector",
+			textIndexName: "chunks_text",
+			vectorWeight: 0.7,
+			textWeight: 0.3,
+			embeddingMode: "automated",
+		})
+
+		expect(results2).toHaveLength(0)
+	})
+
 	it("enables and surfaces $rankFusion scoreDetails for explain traces", async () => {
 		// 0.008 is roughly half the 1/61 ceiling these weights produce, so the
 		// rescaled score lands mid-range rather than clamping at 1.
@@ -750,7 +797,7 @@ describe("mongoSearch dispatcher", () => {
 			$meta: "scoreDetails",
 		})
 		expect(pipeline.at(-1).$project.scoreDetails).toBe(1)
-		expect(pipeline.at(-1).$project.score).toBe("$scoreDetails.value")
+		expect(pipeline.at(-1).$project.score).toEqual({ $meta: "score" })
 		// The reported score is rescaled out of raw RRF space, but scoreDetails
 		// is passed through untouched so explain traces still show what the
 		// server actually returned.
