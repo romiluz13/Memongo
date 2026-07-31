@@ -2898,8 +2898,14 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 				workspaceDir: this.workspaceDir,
 			})
 
+		// #66: measurement only — cost of the phases of this call that sit
+		// outside searchV2's lanes. Merged into the lane breakdown before it
+		// reaches the caller's sink.
+		const phaseLatency: Record<string, number> = {}
+
 		// Cache check: BEFORE search pipeline
 		if (mongoCfg.cache.enabled) {
+			const cacheCheckStartedAt = Date.now()
 			const cacheResult = await checkCache({
 				db: this.db,
 				prefix: this.prefix,
@@ -2909,6 +2915,11 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 				scopeRef: searchScopeRef,
 				config: mongoCfg.cache,
 			})
+			phaseLatency["phase:cache-check"] = Date.now() - cacheCheckStartedAt
+			if (cacheResult.latency) {
+				phaseLatency["phase:cache-exact"] = cacheResult.latency.exactMs
+				phaseLatency["phase:cache-semantic"] = cacheResult.latency.semanticMs
+			}
 			if (cacheResult.hit) {
 				this.setLastSearchMode(`v2:cache:${cacheResult.tier}`, {
 					pathUsed: cacheResult.pathUsed,
@@ -2946,6 +2957,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		}
 
 		const searchStart = Date.now()
+		let laneLatency: Record<string, number> = {}
 		try {
 			const v2 = await searchV2(this.db, this.prefix, cleaned, this.agentId, {
 				availablePaths,
@@ -2990,7 +3002,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 			})
 			const latencyMs = Date.now() - searchStart
 			const latencyByLane = v2.metadata.latencyByPath ?? {}
-			opts?.onLaneLatency?.(latencyByLane)
+			laneLatency = latencyByLane
 
 			const v2Details = {
 				plan: v2.metadata.plan.paths,
@@ -3030,6 +3042,9 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 					const ttlSec = hasKbPath
 						? mongoCfg.cache.kbTtlSec
 						: mongoCfg.cache.conversationTtlSec
+					// #66: writeCache is fire-and-forget, so this span bounds only the
+					// synchronous dispatch the search path actually pays for.
+					const cacheWriteStartedAt = Date.now()
 					writeCache({
 						db: this.db,
 						prefix: this.prefix,
@@ -3042,6 +3057,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 						sourceScope: "conversation",
 						ttlSec,
 					})
+					phaseLatency["phase:cache-write"] = Date.now() - cacheWriteStartedAt
 				}
 				this.recordSearchAccess(v2.results)
 				return v2.results
@@ -3131,6 +3147,22 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 				),
 			)
 			return fallbackResults
+		} finally {
+			// #66: `phase:total` is anchored on searchStart, so every span
+			// subtracted here sits inside it. The cache check runs before
+			// searchStart and is therefore reported alongside, not inside, total.
+			phaseLatency["phase:total"] = Date.now() - searchStart
+			const measuredInsideTotal =
+				(laneLatency["phase:plan"] ?? 0) +
+				(laneLatency["phase:lanes"] ?? 0) +
+				(laneLatency["phase:rewrite"] ?? 0) +
+				(laneLatency["phase:rerank"] ?? 0) +
+				(phaseLatency["phase:cache-write"] ?? 0)
+			phaseLatency["phase:unaccounted"] = Math.max(
+				0,
+				phaseLatency["phase:total"] - measuredInsideTotal,
+			)
+			opts?.onLaneLatency?.({ ...laneLatency, ...phaseLatency })
 		}
 	}
 
@@ -5769,6 +5801,9 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 							decompositionMode === "enabled" &&
 							params.executionProfile !== "shipped"
 						) {
+							// #66: decomposition sits outside search(), so its cost and the
+							// N sub-searches it fans out never reach the lane breakdown.
+							const decomposeStartedAt = Date.now()
 							const decomposed = await decomposeQuery({
 								provider: decompositionProvider,
 								model: process.env.MEMONGO_ENRICHMENT_MODEL?.trim() ?? "",
@@ -5789,7 +5824,9 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 									}
 								},
 							})
+							const decomposeMs = Date.now() - decomposeStartedAt
 							// Run each sub-query through the search pipeline
+							const subSearchStartedAt = Date.now()
 							const resultSets: MemorySearchResult[][] = []
 							for (const subQuery of decomposed.subQueries) {
 								const subResults = await scenarioManager.search(
@@ -5814,6 +5851,10 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 								params.runContext,
 							)
 							resultSets.push(originalResults)
+							latencyByLane = {
+								"phase:decompose": decomposeMs,
+								"phase:decompose-searches": Date.now() - subSearchStartedAt,
+							}
 							// Merge all result sets with RRF
 							results = mergeMultiQueryResults(
 								resultSets,
@@ -9722,7 +9763,24 @@ export async function searchV2(
 		const allowHybridBackstop =
 			context.searchOptions?.allowHybridBackstop ?? true
 
+		// #66: measurement only — records elapsed ms per lane and per non-lane
+		// phase without changing what runs. `finally` so a span that throws still
+		// reports its cost.
+		const latencyByPath: Record<string, number> = {}
+		const timeLane = async <T>(
+			laneKey: string,
+			run: () => Promise<T>,
+		): Promise<T> => {
+			const laneStartedAt = Date.now()
+			try {
+				return await run()
+			} finally {
+				latencyByPath[laneKey] = Date.now() - laneStartedAt
+			}
+		}
+
 		// Load lane coverage for planner (non-blocking: fallback to no coverage on error)
+		const planStartedAt = Date.now()
 		let laneCoverage:
 			| Record<
 					string,
@@ -9762,19 +9820,22 @@ export async function searchV2(
 				proceduralScope: context.searchOptions?.proceduralScope,
 			},
 		})
+		latencyByPath["phase:plan"] = Date.now() - planStartedAt
 
 		// Rewrite query for search execution (NOT for planner or cache key):
 		const qrConfig = context.searchOptions?.queryRewriteConfig
 		let searchQuery = query
 		let wasQueryRewritten = false
 		if (qrConfig?.enabled) {
-			const rewriteResult = await rewriteQuery({
-				db,
-				prefix,
-				agentId,
-				query,
-				config: qrConfig,
-			})
+			const rewriteResult = await timeLane("phase:rewrite", () =>
+				rewriteQuery({
+					db,
+					prefix,
+					agentId,
+					query,
+					config: qrConfig,
+				}),
+			)
 			if (rewriteResult.rewritten) {
 				searchQuery = rewriteResult.rewrittenQuery
 				wasQueryRewritten = true
@@ -9884,20 +9945,6 @@ export async function searchV2(
 		const resultsByPath: Record<string, number> = {}
 		// C3 audit fix: track per-path results for RRF score normalization
 		const perPathResults: Record<string, MemorySearchResult[]> = {}
-		// #66: measurement only — records elapsed ms per lane without changing
-		// what runs. `finally` so a lane that throws still reports its cost.
-		const latencyByPath: Record<string, number> = {}
-		const timeLane = async <T>(
-			laneKey: string,
-			run: () => Promise<T>,
-		): Promise<T> => {
-			const laneStartedAt = Date.now()
-			try {
-				return await run()
-			} finally {
-				latencyByPath[laneKey] = Date.now() - laneStartedAt
-			}
-		}
 
 		// Execute the top planned paths first, but keep hybrid as the backstop when
 		// specialized paths come back weak or empty.
@@ -10418,6 +10465,9 @@ export async function searchV2(
 			}
 		}
 
+		// #66: wall clock of the whole retrieval block — the lanes run
+		// concurrently, so summing per-lane samples overstates their cost.
+		const lanesStartedAt = Date.now()
 		const pathOutcomes = await Promise.all(
 			pathsToExecute.map((path) =>
 				timeLane(path, () => executeSearchPath(path)),
@@ -10536,6 +10586,7 @@ export async function searchV2(
 				log.warn(`searchV2 hybrid backstop failed: ${String(err)}`)
 			}
 		}
+		latencyByPath["phase:lanes"] = Date.now() - lanesStartedAt
 		// C3 audit fix: RRF score normalization across paths before reranking.
 		// Replace raw scores (incomparable across paths: vector 0-1, BM25 0-inf, episode 0.85-synthetic)
 		// with rank-based scores summed across paths. Uses existing rrfScore() from mongodb-hybrid.ts.
@@ -10685,27 +10736,29 @@ export async function searchV2(
 			const rerankInput = finalResults.filter(
 				(result) => result.provenance?.temporalTimeline !== true,
 			)
-			const rerankResult = await crossEncoderRerank({
-				db,
-				prefix,
-				agentId,
-				query,
-				results: rerankInput.length > 0 ? rerankInput : precisionScored,
-				config: rerankCfg,
-				onProviderCall: (outcome) => {
-					const accounting =
-						context.searchOptions?.benchmarkRunContext?.accounting
-					if (!accounting) return
-					const metadata = { provider: "voyage", model: rerankCfg.model }
-					if (outcome === "attempted") {
-						accounting.recordAttempt("rerank", metadata)
-					} else if (outcome === "succeeded") {
-						accounting.recordSuccess("rerank", metadata)
-					} else {
-						accounting.recordFailure("rerank", metadata)
-					}
-				},
-			})
+			const rerankResult = await timeLane("phase:rerank", () =>
+				crossEncoderRerank({
+					db,
+					prefix,
+					agentId,
+					query,
+					results: rerankInput.length > 0 ? rerankInput : precisionScored,
+					config: rerankCfg,
+					onProviderCall: (outcome) => {
+						const accounting =
+							context.searchOptions?.benchmarkRunContext?.accounting
+						if (!accounting) return
+						const metadata = { provider: "voyage", model: rerankCfg.model }
+						if (outcome === "attempted") {
+							accounting.recordAttempt("rerank", metadata)
+						} else if (outcome === "succeeded") {
+							accounting.recordSuccess("rerank", metadata)
+						} else {
+							accounting.recordFailure("rerank", metadata)
+						}
+					},
+				}),
+			)
 			if (rerankResult.reranked) {
 				const postRerankLaneControlled = applyLaneAwareResultControls({
 					query,

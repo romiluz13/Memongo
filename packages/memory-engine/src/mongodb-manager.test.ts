@@ -30,6 +30,7 @@ import {
 import { emitTelemetry } from "./mongodb-telemetry.js"
 import { checkCache, writeCache } from "./mongodb-query-cache.js"
 import { crossEncoderRerank } from "./mongodb-reranker.js"
+import { rewriteQuery } from "./mongodb-query-rewriter.js"
 import { resolveRegisteredBenchmarkQualityContract } from "./benchmark-quality-contracts.js"
 import { createBenchmarkRunContext } from "./benchmark-parity-envelope.js"
 import type { MemoryBenchmarkDataset, MemorySearchResult } from "./types.js"
@@ -293,6 +294,16 @@ vi.mock("./mongodb-query-cache.js", () => ({
 	checkCache: vi.fn(),
 	invalidateQueryCache: vi.fn(),
 	writeCache: vi.fn(),
+}))
+
+vi.mock("./mongodb-query-rewriter.js", () => ({
+	rewriteQuery: vi.fn(async ({ query }: { query: string }) => ({
+		originalQuery: query,
+		rewrittenQuery: query,
+		rewritten: false,
+		method: "synonym-expansion",
+		latencyMs: 0,
+	})),
 }))
 
 vi.mock("./mongodb-reranker.js", () => ({
@@ -6615,9 +6626,11 @@ describe("searchV2 lane latency instrumentation", () => {
 			},
 		)
 
-		expect(Object.keys(result.metadata.latencyByPath ?? {}).toSorted()).toEqual(
-			["episodic", "raw-window"],
-		)
+		expect(
+			Object.keys(result.metadata.latencyByPath ?? {})
+				.filter((key) => !key.startsWith("phase:"))
+				.toSorted(),
+		).toEqual(["episodic", "raw-window"])
 		expect(result.metadata.latencyByPath?.episodic).toBeGreaterThanOrEqual(0)
 		expect(
 			result.metadata.latencyByPath?.["raw-window"],
@@ -6707,5 +6720,206 @@ describe("searchV2 lane latency instrumentation", () => {
 
 		expect(seen).toHaveLength(1)
 		expect(seen[0].episodic).toBeGreaterThanOrEqual(0)
+	})
+})
+
+// ---------------------------------------------------------------------------
+// #66 step 3b: non-lane phase latency instrumentation
+// ---------------------------------------------------------------------------
+
+describe("searchV2 non-lane phase latency instrumentation", () => {
+	beforeEach(() => {
+		vi.clearAllMocks()
+		mocked(crossEncoderRerank).mockImplementation(async ({ results }) => ({
+			results,
+			reranked: false,
+			latencyMs: 0,
+		}))
+		mocked(rewriteQuery).mockResolvedValue({
+			originalQuery: "espresso",
+			rewrittenQuery: "espresso coffee",
+			rewritten: true,
+			method: "synonym-expansion",
+			latencyMs: 0,
+		})
+	})
+
+	it("records the planner and lane-fan-out phases alongside the lanes", async () => {
+		mocked(planRetrieval).mockReturnValue({
+			paths: ["episodic"],
+			confidence: "high",
+			reasoning: "phase probe",
+		})
+		mocked(searchEpisodes).mockResolvedValue([])
+
+		const result = await searchV2(fakeDb, fakePrefix, "espresso", "agent-1", {
+			availablePaths: new Set(["episodic"]),
+			searchOptions: { allowHybridBackstop: false },
+		})
+
+		const phases = result.metadata.latencyByPath ?? {}
+		expect(phases["phase:plan"]).toBeGreaterThanOrEqual(0)
+		expect(phases["phase:lanes"]).toBeGreaterThanOrEqual(0)
+		expect(phases.episodic).toBeGreaterThanOrEqual(0)
+	})
+
+	it("records phase:rewrite only when query rewriting runs", async () => {
+		mocked(planRetrieval).mockReturnValue({
+			paths: ["episodic"],
+			confidence: "high",
+			reasoning: "rewrite phase probe",
+		})
+		mocked(searchEpisodes).mockResolvedValue([])
+
+		const withoutRewrite = await searchV2(
+			fakeDb,
+			fakePrefix,
+			"espresso",
+			"agent-1",
+			{
+				availablePaths: new Set(["episodic"]),
+				searchOptions: { allowHybridBackstop: false },
+			},
+		)
+		const withRewrite = await searchV2(
+			fakeDb,
+			fakePrefix,
+			"espresso",
+			"agent-1",
+			{
+				availablePaths: new Set(["episodic"]),
+				searchOptions: {
+					allowHybridBackstop: false,
+					queryRewriteConfig: {
+						enabled: true,
+						method: "synonym-expansion",
+						maxTokens: 32,
+					},
+				},
+			},
+		)
+
+		expect(withoutRewrite.metadata.latencyByPath).not.toHaveProperty(
+			"phase:rewrite",
+		)
+		expect(
+			withRewrite.metadata.latencyByPath?.["phase:rewrite"],
+		).toBeGreaterThanOrEqual(0)
+	})
+
+	it("records phase:rerank only when reranking runs", async () => {
+		mocked(planRetrieval).mockReturnValue({
+			paths: ["episodic"],
+			confidence: "high",
+			reasoning: "rerank phase probe",
+		})
+		mocked(searchEpisodes).mockResolvedValue([])
+
+		const result = await searchV2(fakeDb, fakePrefix, "espresso", "agent-1", {
+			availablePaths: new Set(["episodic"]),
+			searchOptions: {
+				allowHybridBackstop: false,
+				rerankConfig: {
+					enabled: true,
+					model: "rerank-2.5-lite",
+					topN: 5,
+					minScore: 0,
+					voyageApiKey: "test-key",
+				},
+			},
+		})
+
+		expect(
+			result.metadata.latencyByPath?.["phase:rerank"],
+		).toBeGreaterThanOrEqual(0)
+	})
+})
+
+describe("search() phase latency reporting", () => {
+	beforeEach(() => {
+		vi.clearAllMocks()
+		mocked(crossEncoderRerank).mockImplementation(async ({ results }) => ({
+			results,
+			reranked: false,
+			latencyMs: 0,
+		}))
+	})
+
+	it("reports the cache check, cache write, total and unaccounted phases", async () => {
+		mocked(checkCache).mockResolvedValue({
+			hit: false,
+			tier: "miss",
+			results: [],
+			latency: { exactMs: 4, semanticMs: 11 },
+		} as never)
+		mocked(planRetrieval).mockReturnValue({
+			paths: ["episodic"],
+			confidence: "high",
+			reasoning: "phase sink contract",
+		})
+		mocked(searchEpisodes).mockResolvedValue([
+			{
+				episodeId: "ep-phase-1",
+				title: "Phase probe episode",
+				summary: "Evidence so the cache write path runs",
+				type: "daily",
+				agentId: "agent-1",
+				scope: "agent",
+				scopeRef: "agent:agent-1",
+				timeRange: { start: new Date(), end: new Date() },
+				sourceEventCount: 1,
+				updatedAt: new Date(),
+			},
+		])
+
+		const seen: Record<string, number>[] = []
+		const manager = buildMockManager()
+		await manager.search("what did we discuss?", {
+			onLaneLatency: (lanes) => {
+				seen.push(lanes)
+			},
+		})
+
+		expect(seen).toHaveLength(1)
+		const phases = seen[0]!
+		expect(phases["phase:cache-check"]).toBeGreaterThanOrEqual(0)
+		expect(phases["phase:cache-exact"]).toBe(4)
+		expect(phases["phase:cache-semantic"]).toBe(11)
+		expect(phases["phase:cache-write"]).toBeGreaterThanOrEqual(0)
+		expect(phases["phase:total"]).toBeGreaterThanOrEqual(0)
+		expect(phases["phase:unaccounted"]).toBeGreaterThanOrEqual(0)
+		expect(phases["phase:lanes"]).toBeGreaterThanOrEqual(0)
+	})
+
+	it("computes unaccounted as the total minus the measured phases", async () => {
+		mocked(checkCache).mockResolvedValue({
+			hit: false,
+			tier: "miss",
+			results: [],
+		} as never)
+		mocked(planRetrieval).mockReturnValue({
+			paths: ["episodic"],
+			confidence: "high",
+			reasoning: "unaccounted contract",
+		})
+		mocked(searchEpisodes).mockResolvedValue([])
+
+		let phases: Record<string, number> = {}
+		const manager = buildMockManager()
+		await manager.search("what did we discuss?", {
+			onLaneLatency: (lanes) => {
+				phases = lanes
+			},
+		})
+
+		const measuredInsideTotal =
+			(phases["phase:plan"] ?? 0) +
+			(phases["phase:lanes"] ?? 0) +
+			(phases["phase:rewrite"] ?? 0) +
+			(phases["phase:rerank"] ?? 0) +
+			(phases["phase:cache-write"] ?? 0)
+		expect(phases["phase:unaccounted"]).toBe(
+			Math.max(0, (phases["phase:total"] ?? 0) - measuredInsideTotal),
+		)
 	})
 })

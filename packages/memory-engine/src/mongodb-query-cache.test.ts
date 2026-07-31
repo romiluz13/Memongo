@@ -341,6 +341,52 @@ describe("checkCache", () => {
 		)
 	})
 
+	it("splits its reported latency into the exact lookup and the semantic probe", async () => {
+		vi.mocked(mockCol.findOne).mockResolvedValue(null)
+		;(mockCol as unknown as Record<string, unknown>).estimatedDocumentCount = vi
+			.fn()
+			.mockResolvedValue(3)
+		vi.mocked(buildVectorSearchStage).mockReturnValue({
+			index: "test_query_cache_vector",
+		} as never)
+
+		const result = await checkCache({
+			db: {} as Db,
+			prefix: PREFIX,
+			query: "test query",
+			agentId: AGENT_ID,
+			scope: SCOPE,
+			scopeRef: SCOPE_REF,
+			config: DEFAULT_CONFIG,
+		})
+
+		expect(result.latency?.exactMs).toBeGreaterThanOrEqual(0)
+		expect(result.latency?.semanticMs).toBeGreaterThanOrEqual(0)
+	})
+
+	it("reports a zero semantic probe cost when the exact tier hits", async () => {
+		vi.mocked(mockCol.findOne).mockResolvedValue({
+			_id: "doc-1",
+			results: [],
+			pathUsed: "test",
+			sourceScope: "conversation",
+			expiresAt: new Date(Date.now() + 60_000),
+		} as never)
+
+		const result = await checkCache({
+			db: {} as Db,
+			prefix: PREFIX,
+			query: "test query",
+			agentId: AGENT_ID,
+			scope: SCOPE,
+			scopeRef: SCOPE_REF,
+			config: DEFAULT_CONFIG,
+		})
+
+		expect(result.tier).toBe("exact")
+		expect(result.latency?.semanticMs).toBe(0)
+	})
+
 	it("Tier 1 increments hitCount on hit (fire-and-forget)", async () => {
 		const cachedDoc = {
 			_id: "doc-1",

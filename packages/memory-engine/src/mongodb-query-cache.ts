@@ -54,6 +54,12 @@ export type CacheCheckResult = {
 	results: MemorySearchResult[]
 	pathUsed?: string
 	sourceScope?: string
+	/**
+	 * #66: measurement only — cost of each tier of this check. The semantic
+	 * probe carries a server-side embedding round trip capped at
+	 * SEMANTIC_PROBE_MAX_TIME_MS, so it must be attributable on its own.
+	 */
+	latency?: { exactMs: number; semanticMs: number }
 }
 
 export async function invalidateQueryCache(params: {
@@ -126,12 +132,17 @@ export async function checkCache(params: {
 	}
 
 	const cacheStart = Date.now()
+	// #66: measurement only — the two tiers are reported separately so a slow
+	// check can be attributed to the lookup or to the embedding probe.
+	let exactMs = 0
+	let semanticMs = 0
 	const col = queryCacheCollection(db, prefix)
 	const qHash = hashQuery(normalized)
 	const now = new Date()
 
 	// Tier 1: Exact match
 	try {
+		const exactStart = Date.now()
 		const exact = await col.findOne({
 			queryHash: qHash,
 			agentId,
@@ -139,6 +150,7 @@ export async function checkCache(params: {
 			scopeRef,
 			expiresAt: { $gt: now },
 		})
+		exactMs = Date.now() - exactStart
 		if (exact) {
 			// Fire-and-forget hit count increment
 			col
@@ -161,9 +173,11 @@ export async function checkCache(params: {
 				results: exact.results as MemorySearchResult[],
 				pathUsed: exact.pathUsed as string,
 				sourceScope: exact.sourceScope as string,
+				latency: { exactMs, semanticMs },
 			}
 		}
 	} catch (err) {
+		exactMs = Date.now() - cacheStart
 		log.warn("cache exact lookup failed", { error: err })
 		emitTelemetry(db, prefix, {
 			meta: { agentId, operation: "cache-check" },
@@ -171,23 +185,35 @@ export async function checkCache(params: {
 			ok: false,
 			cacheHit: false,
 		})
-		return { hit: false, tier: "miss", results: [] }
+		return {
+			hit: false,
+			tier: "miss",
+			results: [],
+			latency: { exactMs, semanticMs },
+		}
 	}
 
 	// Tier 2: Semantic similarity via $vectorSearch with autoEmbed
+	const semanticStart = Date.now()
 	try {
 		// The semantic probe embeds the query server-side — a full provider
 		// round-trip (~2.4s measured on Atlas) — so never pay it against a cache
 		// that cannot hit. estimatedDocumentCount is a collstats metadata read.
 		const cachedEntries = await col.estimatedDocumentCount()
 		if (cachedEntries === 0) {
+			semanticMs = Date.now() - semanticStart
 			emitTelemetry(db, prefix, {
 				meta: { agentId, operation: "cache-check" },
 				durationMs: Date.now() - cacheStart,
 				ok: true,
 				cacheHit: false,
 			})
-			return { hit: false, tier: "miss", results: [] }
+			return {
+				hit: false,
+				tier: "miss",
+				results: [],
+				latency: { exactMs, semanticMs },
+			}
 		}
 		const indexName = params.vectorIndexName ?? `${prefix}query_cache_vector`
 		const vsStage = buildVectorSearchStage({
@@ -201,13 +227,19 @@ export async function checkCache(params: {
 			textFieldPath: "queryNorm",
 		})
 		if (!vsStage) {
+			semanticMs = Date.now() - semanticStart
 			emitTelemetry(db, prefix, {
 				meta: { agentId, operation: "cache-check" },
 				durationMs: Date.now() - cacheStart,
 				ok: true,
 				cacheHit: false,
 			})
-			return { hit: false, tier: "miss", results: [] }
+			return {
+				hit: false,
+				tier: "miss",
+				results: [],
+				latency: { exactMs, semanticMs },
+			}
 		}
 
 		const pipeline: Document[] = [
@@ -230,6 +262,7 @@ export async function checkCache(params: {
 		const candidates = await runSearchAggregateWithRetry(col, pipeline, {
 			aggregateOptions: { maxTimeMS: SEMANTIC_PROBE_MAX_TIME_MS },
 		})
+		semanticMs = Date.now() - semanticStart
 		if (
 			candidates.length > 0 &&
 			candidates[0].score >= config.similarityThreshold &&
@@ -257,9 +290,11 @@ export async function checkCache(params: {
 				results: match.results as MemorySearchResult[],
 				pathUsed: match.pathUsed as string,
 				sourceScope: match.sourceScope as string,
+				latency: { exactMs, semanticMs },
 			}
 		}
 	} catch (err) {
+		semanticMs = Date.now() - semanticStart
 		// Semantic tier failure is non-fatal — degrade to cache miss
 		log.warn("cache semantic lookup failed", { error: err })
 	}
@@ -270,7 +305,12 @@ export async function checkCache(params: {
 		ok: true,
 		cacheHit: false,
 	})
-	return { hit: false, tier: "miss", results: [] }
+	return {
+		hit: false,
+		tier: "miss",
+		results: [],
+		latency: { exactMs, semanticMs },
+	}
 }
 
 // ---------------------------------------------------------------------------
