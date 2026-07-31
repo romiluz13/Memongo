@@ -790,6 +790,7 @@ export async function hybridSearchScoreFusion(
 		embeddingMode?: MemoryMongoDBEmbeddingMode
 		numCandidates?: number
 		explain?: SearchExplainOptions
+		returnStoredSource?: boolean
 	},
 ): Promise<MemorySearchResult[]> {
 	const sourceFilter: Document = {}
@@ -811,6 +812,7 @@ export async function hybridSearchScoreFusion(
 		numCandidates: opts.numCandidates ?? Math.max(opts.maxResults * 20, 100),
 		limit: opts.maxResults * 4,
 		filter: mergedFilter,
+		returnStoredSource: opts.returnStoredSource ?? false,
 	})
 
 	if (!vsStage) {
@@ -921,6 +923,7 @@ export async function hybridSearchRankFusion(
 		embeddingMode?: MemoryMongoDBEmbeddingMode
 		numCandidates?: number
 		explain?: SearchExplainOptions
+		returnStoredSource?: boolean
 	},
 ): Promise<MemorySearchResult[]> {
 	const sourceFilter: Document = {}
@@ -942,6 +945,7 @@ export async function hybridSearchRankFusion(
 		numCandidates: opts.numCandidates ?? Math.max(opts.maxResults * 20, 100),
 		limit: opts.maxResults * 4,
 		filter: mergedFilter,
+		returnStoredSource: opts.returnStoredSource ?? false,
 	})
 
 	if (!vsStage) {

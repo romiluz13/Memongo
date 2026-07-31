@@ -3105,6 +3105,121 @@ function autoEmbedVectorField(path: string): Document {
 }
 
 /**
+ * storedSource include-lists for the search-lane vector indexes, from the
+ * 2026-07-31 field-usage map of every consumer of $vectorSearch results
+ * (issue #66). With `returnStoredSource: true` a query receives ONLY these
+ * fields (plus _id), so each list is the union of everything the pipeline
+ * projections and the JS mappers read — a missed field silently disappears
+ * from results.
+ *
+ * Deliberately absent:
+ * - events: recall pipelines $match on validAt/invalidAt AFTER
+ *   $vectorSearch; if those fields were missing from stored source the
+ *   $exists:false branches would pass every document and bi-temporal
+ *   enforcement would silently die. Events also carry the largest corpus,
+ *   so mirroring bodies into mongot is the most expensive place to start.
+ * - query_cache: its `results` field is an unbounded array of serialized
+ *   search results; storing it would inflate the index materially.
+ * - memory_evidence: no latency-critical consumer.
+ * Consolidator and novelty pipelines never pass returnStoredSource, so they
+ * keep reading full documents regardless of what the index stores.
+ *
+ * provenance/artifact/metadata subdocuments are stored whole because
+ * downstream code reads them with computed keys (e.g.
+ * `provenance?.[key]` in mongodb-search-executor.ts).
+ */
+const VECTOR_STORED_SOURCE_INCLUDE: Record<string, string[]> = {
+	chunks: [
+		"path",
+		"startLine",
+		"endLine",
+		"text",
+		"source",
+		"sessionId",
+		"sourceEventIds",
+		"updatedAt",
+		"timestamp",
+		"scope",
+		"scopeRef",
+		"canonicalId",
+		"unit",
+		"provenance",
+		"metadata.sourceEventIds",
+	],
+	session_chunks: [
+		"path",
+		"startLine",
+		"endLine",
+		"text",
+		"source",
+		"sessionId",
+		"sourceEventIds",
+		"updatedAt",
+		"timestamp",
+		"scope",
+		"scopeRef",
+		"canonicalId",
+		"unit",
+		"provenance",
+		"metadata.sourceEventIds",
+	],
+	kb_chunks: ["path", "startLine", "endLine", "text", "docId", "updatedAt"],
+	structured_mem: [
+		"type",
+		"key",
+		"value",
+		"context",
+		"confidence",
+		"tags",
+		"scope",
+		"scopeRef",
+		"state",
+		"salience",
+		"temporalScope",
+		"sessionId",
+		"updatedAt",
+		"provenance",
+		"sourceEventIds",
+		"sourceReliability",
+		"reinforcementCount",
+		"validFrom",
+		"validTo",
+		"reviewAt",
+		"lastConfirmedAt",
+		"artifact",
+	],
+	procedures: [
+		"procedureId",
+		"searchText",
+		"sessionId",
+		"updatedAt",
+		"state",
+		"scope",
+		"scopeRef",
+		"provenance",
+		"sourceEventIds",
+		"validFrom",
+		"validTo",
+		"confidence",
+	],
+}
+
+function vectorStoredSourceEnabled(): boolean {
+	return process.env.MEMONGO_VECTOR_STORED_SOURCE?.trim() === "1"
+}
+
+function withVectorStoredSource(
+	definition: Document,
+	collectionKind: string,
+): Document {
+	const include = VECTOR_STORED_SOURCE_INCLUDE[collectionKind]
+	if (!vectorStoredSourceEnabled() || !include) {
+		return definition
+	}
+	return { ...definition, storedSource: { include } }
+}
+
+/**
  * Build the vector search index definition for an auto-embedded text field.
  *
  * Exported so a live-server test can create one index from the exact shape
@@ -3323,15 +3438,18 @@ export async function ensureSearchIndexes(
 	if (rawSessionIndexProfile) {
 		const sessionChunks = sessionChunksCollection(db, prefix)
 		try {
-			const sessionVectorDef: Document = {
-				fields: [
-					autoEmbedVectorField("text"),
-					{ type: "filter", path: "agentId" },
-					{ type: "filter", path: "scope" },
-					{ type: "filter", path: "scopeRef" },
-					{ type: "filter", path: "sessionId" },
-				],
-			}
+			const sessionVectorDef: Document = withVectorStoredSource(
+				{
+					fields: [
+						autoEmbedVectorField("text"),
+						{ type: "filter", path: "agentId" },
+						{ type: "filter", path: "scope" },
+						{ type: "filter", path: "scopeRef" },
+						{ type: "filter", path: "sessionId" },
+					],
+				},
+				"session_chunks",
+			)
 			const vectorCreated = await ensureNamedSearchIndex({
 				collection: sessionChunks,
 				name: `${prefix}session_chunks_vector`,
@@ -3398,15 +3516,18 @@ export async function ensureSearchIndexes(
 
 	// Vector Search index
 	try {
-		const vectorDef: Document = buildAutoEmbedVectorDefinition("text", [
-			"source",
-			"path",
-			"agentId",
-			"scope",
-			"scopeRef",
-			"sessionId",
-			"status",
-		])
+		const vectorDef: Document = withVectorStoredSource(
+			buildAutoEmbedVectorDefinition("text", [
+				"source",
+				"path",
+				"agentId",
+				"scope",
+				"scopeRef",
+				"sessionId",
+				"status",
+			]),
+			"chunks",
+		)
 
 		vectorCreated = await ensureNamedSearchIndex({
 			collection: chunks,
@@ -3473,9 +3594,12 @@ export async function ensureSearchIndexes(
 				{ type: "filter", path: "scopeRef" },
 			]
 
-			const kbVectorDef: Document = {
-				fields: [autoEmbedVectorField("text"), ...kbFilterFields],
-			}
+			const kbVectorDef: Document = withVectorStoredSource(
+				{
+					fields: [autoEmbedVectorField("text"), ...kbFilterFields],
+				},
+				"kb_chunks",
+			)
 
 			vectorCreated = await ensureNamedSearchIndex({
 				collection: kbChunks,
@@ -3551,9 +3675,12 @@ export async function ensureSearchIndexes(
 			{ type: "filter", path: "validTo" },
 		]
 
-		const structVectorDef: Document = {
-			fields: [autoEmbedVectorField("value"), ...structFilterFields],
-		}
+		const structVectorDef: Document = withVectorStoredSource(
+			{
+				fields: [autoEmbedVectorField("value"), ...structFilterFields],
+			},
+			"structured_mem",
+		)
 
 		vectorCreated = await ensureNamedSearchIndex({
 			collection: structured,
@@ -3611,18 +3738,21 @@ export async function ensureSearchIndexes(
 	}
 
 	try {
-		const procedureVectorDef: Document = {
-			fields: [
-				autoEmbedVectorField("searchText"),
-				{ type: "filter", path: "intentTags" },
-				{ type: "filter", path: "agentId" },
-				{ type: "filter", path: "scope" },
-				{ type: "filter", path: "scopeRef" },
-				{ type: "filter", path: "state" },
-				{ type: "filter", path: "validFrom" },
-				{ type: "filter", path: "validTo" },
-			],
-		}
+		const procedureVectorDef: Document = withVectorStoredSource(
+			{
+				fields: [
+					autoEmbedVectorField("searchText"),
+					{ type: "filter", path: "intentTags" },
+					{ type: "filter", path: "agentId" },
+					{ type: "filter", path: "scope" },
+					{ type: "filter", path: "scopeRef" },
+					{ type: "filter", path: "state" },
+					{ type: "filter", path: "validFrom" },
+					{ type: "filter", path: "validTo" },
+				],
+			},
+			"procedures",
+		)
 
 		vectorCreated = await ensureNamedSearchIndex({
 			collection: procedures,
@@ -3790,9 +3920,12 @@ export async function ensureSearchIndexes(
 				{ type: "filter", path: "scopeRef" },
 				{ type: "filter", path: "sessionId" },
 			]
-			const sessionVectorDef: Document = {
-				fields: [autoEmbedVectorField("text"), ...sessionFilterFields],
-			}
+			const sessionVectorDef: Document = withVectorStoredSource(
+				{
+					fields: [autoEmbedVectorField("text"), ...sessionFilterFields],
+				},
+				"session_chunks",
+			)
 			vectorCreated = await ensureNamedSearchIndex({
 				collection: sessionChunks,
 				name: `${prefix}session_chunks_vector`,
@@ -4103,6 +4236,17 @@ export async function detectCapabilities(
 				vectorIndex !== undefined &&
 				isSearchIndexTypeCompatible(vectorIndex.type, "vectorSearch") &&
 				isSearchIndexQueryable(vectorIndex)
+			// storedSource reflects what the serving index was BUILT with (see
+			// the scar above): true only when the probe vector index definition
+			// actually carries a stored-source config. The server may stamp
+			// `storedSource: false` as a default — that is not enabled.
+			const vectorDefinition =
+				vectorIndex?.latestDefinition ?? vectorIndex?.definition
+			const storedSourceConfig = vectorDefinition?.storedSource
+			result.storedSource =
+				result.vectorSearch &&
+				typeof storedSourceConfig === "object" &&
+				storedSourceConfig !== null
 		} catch {
 			// Search index management is unavailable on this deployment.
 		}

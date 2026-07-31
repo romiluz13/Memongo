@@ -1157,6 +1157,168 @@ describe("ensureSearchIndexes", () => {
 		}
 	})
 
+	it("adds storedSource include-lists to search-lane vector indexes when MEMONGO_VECTOR_STORED_SOURCE=1", async () => {
+		// Include lists come from the 2026-07-31 field-usage map of every
+		// consumer of $vectorSearch results (issue #66). Scope is deliberate:
+		// events is excluded because its recall pipelines $match on
+		// validAt/invalidAt AFTER $vectorSearch — with returnStoredSource and
+		// those fields missing, $exists:false branches pass everything and
+		// bi-temporal enforcement silently dies; query_cache is excluded
+		// because its results blob is unbounded; memory_evidence keeps full
+		// lookup. Consolidator/novelty paths never pass returnStoredSource, so
+		// they keep reading full documents regardless.
+		const previous = process.env.MEMONGO_VECTOR_STORED_SOURCE
+		process.env.MEMONGO_VECTOR_STORED_SOURCE = "1"
+		try {
+			const db = mockDb()
+			await ensureSearchIndexes(db, "test_", "atlas-managed", "automated")
+
+			const vectorDefFor = (collectionName: string): Document => {
+				const col = db.collection(collectionName) as unknown as {
+					createSearchIndex: ReturnType<typeof vi.fn>
+				}
+				const call = col.createSearchIndex.mock.calls.find(
+					(c: unknown[]) => (c[0] as Document).type === "vectorSearch",
+				)
+				expect(call, collectionName).toBeDefined()
+				return (call![0] as Document).definition
+			}
+
+			expect(vectorDefFor("test_chunks").storedSource).toEqual({
+				include: [
+					"path",
+					"startLine",
+					"endLine",
+					"text",
+					"source",
+					"sessionId",
+					"sourceEventIds",
+					"updatedAt",
+					"timestamp",
+					"scope",
+					"scopeRef",
+					"canonicalId",
+					"unit",
+					"provenance",
+					"metadata.sourceEventIds",
+				],
+			})
+			expect(vectorDefFor("test_session_chunks").storedSource).toEqual({
+				include: [
+					"path",
+					"startLine",
+					"endLine",
+					"text",
+					"source",
+					"sessionId",
+					"sourceEventIds",
+					"updatedAt",
+					"timestamp",
+					"scope",
+					"scopeRef",
+					"canonicalId",
+					"unit",
+					"provenance",
+					"metadata.sourceEventIds",
+				],
+			})
+			expect(vectorDefFor("test_kb_chunks").storedSource).toEqual({
+				include: ["path", "startLine", "endLine", "text", "docId", "updatedAt"],
+			})
+			expect(vectorDefFor("test_structured_mem").storedSource).toEqual({
+				include: [
+					"type",
+					"key",
+					"value",
+					"context",
+					"confidence",
+					"tags",
+					"scope",
+					"scopeRef",
+					"state",
+					"salience",
+					"temporalScope",
+					"sessionId",
+					"updatedAt",
+					"provenance",
+					"sourceEventIds",
+					"sourceReliability",
+					"reinforcementCount",
+					"validFrom",
+					"validTo",
+					"reviewAt",
+					"lastConfirmedAt",
+					"artifact",
+				],
+			})
+			expect(vectorDefFor("test_procedures").storedSource).toEqual({
+				include: [
+					"procedureId",
+					"searchText",
+					"sessionId",
+					"updatedAt",
+					"state",
+					"scope",
+					"scopeRef",
+					"provenance",
+					"sourceEventIds",
+					"validFrom",
+					"validTo",
+					"confidence",
+				],
+			})
+
+			// Excluded collections must never carry storedSource, whichever of
+			// them created a vector index in this mode.
+			for (const excluded of [
+				"test_events",
+				"test_query_cache",
+				"test_memory_evidence",
+			]) {
+				const col = db.collection(excluded) as unknown as {
+					createSearchIndex: ReturnType<typeof vi.fn>
+				}
+				for (const call of col.createSearchIndex.mock.calls) {
+					const spec = call[0] as Document
+					if (spec.type === "vectorSearch") {
+						expect(spec.definition.storedSource, excluded).toBeUndefined()
+					}
+				}
+			}
+		} finally {
+			if (previous === undefined) {
+				delete process.env.MEMONGO_VECTOR_STORED_SOURCE
+			} else {
+				process.env.MEMONGO_VECTOR_STORED_SOURCE = previous
+			}
+		}
+	})
+
+	it("omits storedSource from all vector indexes when MEMONGO_VECTOR_STORED_SOURCE is unset", async () => {
+		const db = mockDb()
+		await ensureSearchIndexes(db, "test_", "atlas-managed", "automated")
+		for (const collectionName of [
+			"test_chunks",
+			"test_kb_chunks",
+			"test_structured_mem",
+			"test_procedures",
+			"test_events",
+			"test_query_cache",
+			"test_session_chunks",
+			"test_memory_evidence",
+		]) {
+			const col = db.collection(collectionName) as unknown as {
+				createSearchIndex: ReturnType<typeof vi.fn>
+			}
+			for (const call of col.createSearchIndex.mock.calls) {
+				const spec = call[0] as Document
+				if (spec.type === "vectorSearch") {
+					expect(spec.definition.storedSource, collectionName).toBeUndefined()
+				}
+			}
+		}
+	})
+
 	it("includes filter fields (source, path, status) in vector index", async () => {
 		const db = mockDb()
 		await ensureSearchIndexes(db, "test_", "atlas-local-preview", "automated")
@@ -2025,6 +2187,54 @@ describe("detectCapabilities", () => {
 		const caps = await detectCapabilities(db, "test_chunks")
 		expect(caps.vectorSearch).toBe(true)
 		expect(caps.textSearch).toBe(true)
+	})
+
+	it("reports storedSource capability from the probe vector index definition", async () => {
+		// The scar at detectCapabilities is explicit: storedSource must be set
+		// from what the serving index was BUILT with, never from buildInfo —
+		// returnStoredSource: true against an index that stores nothing errors.
+		const dbWith = (definition: Document | undefined) =>
+			({
+				admin: vi.fn(() => ({
+					command: vi.fn(async () => ({ versionArray: [8, 3, 0, 0] })),
+				})),
+				collection: vi.fn(() => ({
+					listSearchIndexes: vi.fn(() => ({
+						toArray: vi.fn(async () => [
+							{
+								name: "test_chunks_vector",
+								type: "vectorSearch",
+								status: "READY",
+								queryable: true,
+								latestDefinition: definition,
+							},
+						]),
+					})),
+				})),
+			}) as unknown as Db
+
+		const withStored = await detectCapabilities(
+			dbWith({
+				fields: [],
+				storedSource: { include: ["text"] },
+			}),
+			"test_chunks",
+		)
+		expect(withStored.storedSource).toBe(true)
+
+		const withoutStored = await detectCapabilities(
+			dbWith({ fields: [] }),
+			"test_chunks",
+		)
+		expect(withoutStored.storedSource).toBe(false)
+
+		// Server default `storedSource: false` in latestDefinition must not
+		// count as stored-source-enabled.
+		const withFalse = await detectCapabilities(
+			dbWith({ fields: [], storedSource: false }),
+			"test_chunks",
+		)
+		expect(withFalse.storedSource).toBe(false)
 	})
 
 	it("waits for search capabilities to become available", async () => {
