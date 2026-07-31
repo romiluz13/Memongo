@@ -800,6 +800,8 @@ export type RecallTrace = {
 	totalHits?: number
 	latencyMs?: number
 	hitsByLane?: Record<string, number>
+	/** #66: wall-clock ms per lane, hybrid sub-lane, and serial backstop. */
+	latencyByLane?: Record<string, number>
 	topHitIds?: string[]
 	tokenBudgetUsed?: number
 	bundleMode?: MemoryContextBundleMode
@@ -1100,8 +1102,16 @@ export type MemoryBenchmarkCaseOutcome = {
 		  }
 	empty: boolean
 	latencyMs: number
+	/** #66: wall-clock ms per lane, hybrid sub-lane, and serial backstop. */
+	latencyByLane?: Record<string, number>
 	failure?: { stage: "retrieval"; message: string }
 }
+
+/** #66: lane -> p95 latency over the cases where that lane actually ran. */
+export type MemoryBenchmarkLaneLatencySummary = Record<
+	string,
+	{ p95Ms: number; cases: number }
+>
 
 type BenchmarkCommonQualityThresholds = {
 	contractId: string

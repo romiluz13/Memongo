@@ -2863,6 +2863,12 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 			scope?: MemoryScope
 			scopeRef?: string
 			questionDate?: Date
+			/**
+			 * #66: receives the per-lane latency breakdown of this call. A sink
+			 * rather than instance state so concurrent searches (#67 scenario
+			 * runner) cannot cross-attribute each other's lane timings.
+			 */
+			onLaneLatency?: (latencyByLane: Record<string, number>) => void
 		},
 		benchmarkRunContext?: BenchmarkRunContext,
 	): Promise<MemorySearchResult[]> {
@@ -2983,6 +2989,8 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 				fusionMethod: mongoCfg.fusionMethod,
 			})
 			const latencyMs = Date.now() - searchStart
+			const latencyByLane = v2.metadata.latencyByPath ?? {}
+			opts?.onLaneLatency?.(latencyByLane)
 
 			const v2Details = {
 				plan: v2.metadata.plan.paths,
@@ -3007,6 +3015,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 						totalHits: v2.results.length,
 						latencyMs,
 						hitsByLane: v2.metadata.resultsByPath,
+						latencyByLane,
 						topHitIds: v2.results
 							.map((result) => result.canonicalId ?? result.path)
 							.slice(0, 5),
@@ -3051,6 +3060,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 					totalHits: 0,
 					latencyMs,
 					hitsByLane: v2.metadata.resultsByPath,
+					latencyByLane,
 					topHitIds: [],
 				},
 			}).catch((err) =>
@@ -5742,6 +5752,9 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 								: null
 
 						let results: MemorySearchResult[]
+						// #66: per-lane latency of the search that produced `results`.
+						// Only the plain search() path carries a lane breakdown.
+						let latencyByLane: Record<string, number> | undefined
 
 						if (rawSessionLane) {
 							results = await scenarioManager.searchBenchmarkRawSession(
@@ -5807,35 +5820,44 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 								params.maxResults,
 							) as MemorySearchResult[]
 						} else {
-							results =
+							const relevanceScope =
 								evaluation.sourceScope &&
 								scenarioManager.relevance &&
 								evaluation.sourceScope !== "all"
-									? (
-											await scenarioManager.relevanceExplain({
-												query: evaluation.query,
-												sourceScope: evaluation.sourceScope,
-												maxResults: params.maxResults,
-												minScore: params.minScore,
-												deep: false,
-												questionDate: validQuestionDate,
-											})
-										).results
-									: await scenarioManager.search(
-											evaluation.query,
-											{
-												maxResults: params.maxResults,
-												minScore: params.minScore,
-												questionDate: validQuestionDate,
+									? evaluation.sourceScope
+									: undefined
+							results = relevanceScope
+								? (
+										await scenarioManager.relevanceExplain({
+											query: evaluation.query,
+											sourceScope: relevanceScope,
+											maxResults: params.maxResults,
+											minScore: params.minScore,
+											deep: false,
+											questionDate: validQuestionDate,
+										})
+									).results
+								: await scenarioManager.search(
+										evaluation.query,
+										{
+											maxResults: params.maxResults,
+											minScore: params.minScore,
+											questionDate: validQuestionDate,
+											onLaneLatency: (lanes) => {
+												latencyByLane = lanes
 											},
-											params.runContext,
-										)
+										},
+										params.runContext,
+									)
 						}
 						executions.push(
 							evaluateRankingCase({
 								caseId: evaluation.caseId,
 								results,
 								latencyMs: Date.now() - startedAt,
+								...(latencyByLane && Object.keys(latencyByLane).length > 0
+									? { latencyByLane }
+									: {}),
 								relevantSessionIds: evaluation.expectedSessionIds,
 								relevantTurnIds: evaluation.expectedTurnIds,
 								relevantDialogIds: evaluation.expectedDialogIds,
@@ -6092,6 +6114,9 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 				emptyRate: summary.emptyRate,
 				avgTopScore: summary.avgTopScore,
 				p95LatencyMs: summary.p95LatencyMs,
+				...(summary.laneLatencyP95
+					? { laneLatencyP95: summary.laneLatencyP95 }
+					: {}),
 				rAt5: summary.rAt5,
 				rAt10: summary.rAt10,
 				ndcgAt10: summary.ndcgAt10,
@@ -9363,6 +9388,8 @@ export type V2SearchMetadata = {
 	reranked?: boolean
 	queryRewritten?: boolean
 	laneControls?: ReturnType<typeof applyLaneAwareResultControls>["summary"]
+	/** #66: wall-clock ms per executed lane, hybrid sub-lane, and serial backstop. */
+	latencyByPath?: Record<string, number>
 }
 
 const GRAPH_QUERY_STOPWORDS = new Set([
@@ -9857,6 +9884,20 @@ export async function searchV2(
 		const resultsByPath: Record<string, number> = {}
 		// C3 audit fix: track per-path results for RRF score normalization
 		const perPathResults: Record<string, MemorySearchResult[]> = {}
+		// #66: measurement only — records elapsed ms per lane without changing
+		// what runs. `finally` so a lane that throws still reports its cost.
+		const latencyByPath: Record<string, number> = {}
+		const timeLane = async <T>(
+			laneKey: string,
+			run: () => Promise<T>,
+		): Promise<T> => {
+			const laneStartedAt = Date.now()
+			try {
+				return await run()
+			} finally {
+				latencyByPath[laneKey] = Date.now() - laneStartedAt
+			}
+		}
 
 		// Execute the top planned paths first, but keep hybrid as the backstop when
 		// specialized paths come back weak or empty.
@@ -10111,86 +10152,92 @@ export async function searchV2(
 						const searches: Array<Promise<MemorySearchResult[]>> = []
 						if (conversationChunkFilter) {
 							searches.push(
-								(hybridMode === "vector-only"
-									? vectorSearch(chunksCollection(db, prefix), null, {
-											maxResults: context.maxResults ?? 10,
-											minScore,
-											numCandidates,
-											sessionKey: context.searchOptions?.sessionKey,
-											filter: conversationChunkFilter,
-											indexName: `${prefix}chunks_vector`,
-											queryText: searchQuery,
-											embeddingMode,
-										})
-									: mongoSearch(
-											chunksCollection(db, prefix),
-											searchQuery,
-											null,
-											{
+								timeLane("hybrid:chunks", () =>
+									(hybridMode === "vector-only"
+										? vectorSearch(chunksCollection(db, prefix), null, {
 												maxResults: context.maxResults ?? 10,
 												minScore,
 												numCandidates,
 												sessionKey: context.searchOptions?.sessionKey,
 												filter: conversationChunkFilter,
-												fusionMethod,
-												capabilities,
-												vectorIndexName: `${prefix}chunks_vector`,
-												textIndexName: `${prefix}chunks_text`,
-												vectorWeight: 0.7,
-												textWeight: 0.3,
+												indexName: `${prefix}chunks_vector`,
+												queryText: searchQuery,
 												embeddingMode,
-											},
+											})
+										: mongoSearch(
+												chunksCollection(db, prefix),
+												searchQuery,
+												null,
+												{
+													maxResults: context.maxResults ?? 10,
+													minScore,
+													numCandidates,
+													sessionKey: context.searchOptions?.sessionKey,
+													filter: conversationChunkFilter,
+													fusionMethod,
+													capabilities,
+													vectorIndexName: `${prefix}chunks_vector`,
+													textIndexName: `${prefix}chunks_text`,
+													vectorWeight: 0.7,
+													textWeight: 0.3,
+													embeddingMode,
+												},
+											)
+									).catch((err) => {
+										if (isBenchmarkStrictMode()) {
+											throw err
+										}
+										log.warn(
+											`searchV2 hybrid conversation path failed: ${String(err)}`,
 										)
-								).catch((err) => {
-									if (isBenchmarkStrictMode()) {
-										throw err
-									}
-									log.warn(
-										`searchV2 hybrid conversation path failed: ${String(err)}`,
-									)
-									return [] as MemorySearchResult[]
-								}),
+										return [] as MemorySearchResult[]
+									}),
+								),
 							)
 						}
 						if (bridgeChunkFilter) {
 							searches.push(
-								(hybridMode === "vector-only"
-									? vectorSearch(chunksCollection(db, prefix), null, {
-											maxResults: bridgeMaxResults,
-											minScore,
-											numCandidates,
-											sessionKey: context.searchOptions?.sessionKey,
-											filter: bridgeChunkFilter,
-											indexName: `${prefix}chunks_vector`,
-											queryText: searchQuery,
-											embeddingMode,
-										})
-									: mongoSearch(
-											chunksCollection(db, prefix),
-											searchQuery,
-											null,
-											{
+								timeLane("hybrid:bridge", () =>
+									(hybridMode === "vector-only"
+										? vectorSearch(chunksCollection(db, prefix), null, {
 												maxResults: bridgeMaxResults,
 												minScore,
 												numCandidates,
 												sessionKey: context.searchOptions?.sessionKey,
 												filter: bridgeChunkFilter,
-												fusionMethod,
-												capabilities,
-												vectorIndexName: `${prefix}chunks_vector`,
-												textIndexName: `${prefix}chunks_text`,
-												vectorWeight: 0.7,
-												textWeight: 0.3,
+												indexName: `${prefix}chunks_vector`,
+												queryText: searchQuery,
 												embeddingMode,
-											},
+											})
+										: mongoSearch(
+												chunksCollection(db, prefix),
+												searchQuery,
+												null,
+												{
+													maxResults: bridgeMaxResults,
+													minScore,
+													numCandidates,
+													sessionKey: context.searchOptions?.sessionKey,
+													filter: bridgeChunkFilter,
+													fusionMethod,
+													capabilities,
+													vectorIndexName: `${prefix}chunks_vector`,
+													textIndexName: `${prefix}chunks_text`,
+													vectorWeight: 0.7,
+													textWeight: 0.3,
+													embeddingMode,
+												},
+											)
+									).catch((err) => {
+										if (isBenchmarkStrictMode()) {
+											throw err
+										}
+										log.warn(
+											`searchV2 hybrid bridge path failed: ${String(err)}`,
 										)
-								).catch((err) => {
-									if (isBenchmarkStrictMode()) {
-										throw err
-									}
-									log.warn(`searchV2 hybrid bridge path failed: ${String(err)}`)
-									return [] as MemorySearchResult[]
-								}),
+										return [] as MemorySearchResult[]
+									}),
+								),
 							)
 						}
 						// Option B: parallel search on session_chunks collection (vector +
@@ -10212,45 +10259,47 @@ export async function searchV2(
 								scopeRef: agentScopeRef,
 							}
 							searches.push(
-								(hybridMode === "vector-only"
-									? vectorSearch(sessionChunksCollection(db, prefix), null, {
-											maxResults: sessionEvidenceMaxResults,
-											minScore,
-											numCandidates,
-											sessionKey: context.searchOptions?.sessionKey,
-											filter: sessionFilter,
-											indexName: `${prefix}session_chunks_vector`,
-											queryText: searchQuery,
-											embeddingMode,
-										})
-									: mongoSearch(
-											sessionChunksCollection(db, prefix),
-											searchQuery,
-											null,
-											{
+								timeLane("hybrid:session_chunks", () =>
+									(hybridMode === "vector-only"
+										? vectorSearch(sessionChunksCollection(db, prefix), null, {
 												maxResults: sessionEvidenceMaxResults,
 												minScore,
 												numCandidates,
 												sessionKey: context.searchOptions?.sessionKey,
 												filter: sessionFilter,
-												fusionMethod,
-												capabilities,
-												vectorIndexName: `${prefix}session_chunks_vector`,
-												textIndexName: `${prefix}session_chunks_text`,
-												vectorWeight: 0.7,
-												textWeight: 0.3,
+												indexName: `${prefix}session_chunks_vector`,
+												queryText: searchQuery,
 												embeddingMode,
-											},
+											})
+										: mongoSearch(
+												sessionChunksCollection(db, prefix),
+												searchQuery,
+												null,
+												{
+													maxResults: sessionEvidenceMaxResults,
+													minScore,
+													numCandidates,
+													sessionKey: context.searchOptions?.sessionKey,
+													filter: sessionFilter,
+													fusionMethod,
+													capabilities,
+													vectorIndexName: `${prefix}session_chunks_vector`,
+													textIndexName: `${prefix}session_chunks_text`,
+													vectorWeight: 0.7,
+													textWeight: 0.3,
+													embeddingMode,
+												},
+											)
+									).catch((err) => {
+										if (isBenchmarkStrictMode()) {
+											throw err
+										}
+										log.warn(
+											`searchV2 session_chunks path failed: ${String(err)}`,
 										)
-								).catch((err) => {
-									if (isBenchmarkStrictMode()) {
-										throw err
-									}
-									log.warn(
-										`searchV2 session_chunks path failed: ${String(err)}`,
-									)
-									return [] as MemorySearchResult[]
-								}),
+										return [] as MemorySearchResult[]
+									}),
+								),
 							)
 						}
 						if (isEvidenceMirrorEnabled()) {
@@ -10263,57 +10312,59 @@ export async function searchV2(
 								status: "active",
 							}
 							searches.push(
-								(hybridMode === "vector-only"
-									? vectorSearch(memoryEvidenceCollection(db, prefix), null, {
-											maxResults: evidenceMaxResults,
-											minScore,
-											numCandidates,
-											sessionKey: context.searchOptions?.sessionKey,
-											filter: evidenceFilter,
-											indexName: `${prefix}memory_evidence_vector`,
-											queryText: searchQuery,
-											embeddingMode,
-										})
-									: mongoSearch(
-											memoryEvidenceCollection(db, prefix),
-											searchQuery,
-											null,
-											{
+								timeLane("hybrid:memory_evidence", () =>
+									(hybridMode === "vector-only"
+										? vectorSearch(memoryEvidenceCollection(db, prefix), null, {
 												maxResults: evidenceMaxResults,
 												minScore,
 												numCandidates,
 												sessionKey: context.searchOptions?.sessionKey,
 												filter: evidenceFilter,
-												fusionMethod,
-												capabilities,
-												vectorIndexName: `${prefix}memory_evidence_vector`,
-												textIndexName: `${prefix}memory_evidence_text`,
-												vectorWeight: 0.65,
-												textWeight: 0.35,
+												indexName: `${prefix}memory_evidence_vector`,
+												queryText: searchQuery,
 												embeddingMode,
-											},
-										)
-								)
-									.then((hits) =>
-										hits.map((hit) => ({
-											...hit,
-											source: "conversation" as MemorySource,
-											sourceType: "conversation" as MemorySource,
-											provenance: {
-												...(hit.provenance ?? {}),
-												lane: "memory-evidence",
-											},
-										})),
+											})
+										: mongoSearch(
+												memoryEvidenceCollection(db, prefix),
+												searchQuery,
+												null,
+												{
+													maxResults: evidenceMaxResults,
+													minScore,
+													numCandidates,
+													sessionKey: context.searchOptions?.sessionKey,
+													filter: evidenceFilter,
+													fusionMethod,
+													capabilities,
+													vectorIndexName: `${prefix}memory_evidence_vector`,
+													textIndexName: `${prefix}memory_evidence_text`,
+													vectorWeight: 0.65,
+													textWeight: 0.35,
+													embeddingMode,
+												},
+											)
 									)
-									.catch((err) => {
-										if (isBenchmarkStrictMode()) {
-											throw err
-										}
-										log.warn(
-											`searchV2 memory_evidence path failed: ${String(err)}`,
+										.then((hits) =>
+											hits.map((hit) => ({
+												...hit,
+												source: "conversation" as MemorySource,
+												sourceType: "conversation" as MemorySource,
+												provenance: {
+													...(hit.provenance ?? {}),
+													lane: "memory-evidence",
+												},
+											})),
 										)
-										return [] as MemorySearchResult[]
-									}),
+										.catch((err) => {
+											if (isBenchmarkStrictMode()) {
+												throw err
+											}
+											log.warn(
+												`searchV2 memory_evidence path failed: ${String(err)}`,
+											)
+											return [] as MemorySearchResult[]
+										}),
+								),
 							)
 						}
 						pathResults =
@@ -10368,7 +10419,9 @@ export async function searchV2(
 		}
 
 		const pathOutcomes = await Promise.all(
-			pathsToExecute.map((path) => executeSearchPath(path)),
+			pathsToExecute.map((path) =>
+				timeLane(path, () => executeSearchPath(path)),
+			),
 		)
 		for (const [pathIndex, path] of pathsToExecute.entries()) {
 			const pathResults = pathOutcomes[pathIndex] ?? []
@@ -10387,13 +10440,13 @@ export async function searchV2(
 			!deduped.some((result) => result.path.startsWith("procedure:"))
 		if (needsExactProceduralBackstop) {
 			try {
-				const exactProcedureMatches = await findExactProcedureMatches(
-					proceduresCollection(db, prefix),
-					query,
-					{
-						maxResults: context.maxResults ?? 10,
-						filter: proceduralFilter,
-					},
+				const exactProcedureMatches = await timeLane(
+					"backstop:procedural-exact",
+					() =>
+						findExactProcedureMatches(proceduresCollection(db, prefix), query, {
+							maxResults: context.maxResults ?? 10,
+							filter: proceduralFilter,
+						}),
 				)
 				if (exactProcedureMatches.length > 0) {
 					pathsExecuted.push("procedural")
@@ -10418,20 +10471,22 @@ export async function searchV2(
 			deduped.length < Math.max(2, Math.ceil(maxResults / 3))
 		if (needsProceduralBackstop) {
 			try {
-				const procedureFallback = await searchProcedures(
-					proceduresCollection(db, prefix),
-					searchQuery,
-					null,
-					{
-						maxResults: context.maxResults ?? 10,
-						minScore,
-						filter: proceduralFilter,
-						numCandidates,
-						capabilities,
-						vectorIndexName: `${prefix}procedures_vector`,
-						textIndexName: `${prefix}procedures_text`,
-						embeddingMode,
-					},
+				const procedureFallback = await timeLane("backstop:procedural", () =>
+					searchProcedures(
+						proceduresCollection(db, prefix),
+						searchQuery,
+						null,
+						{
+							maxResults: context.maxResults ?? 10,
+							minScore,
+							filter: proceduralFilter,
+							numCandidates,
+							capabilities,
+							vectorIndexName: `${prefix}procedures_vector`,
+							textIndexName: `${prefix}procedures_text`,
+							embeddingMode,
+						},
+					),
 				)
 				if (procedureFallback.length > 0) {
 					pathsExecuted.push("procedural")
@@ -10456,16 +10511,18 @@ export async function searchV2(
 			try {
 				// Use searchQuery (already rewritten) for the backstop, but disable rewriting
 				// to prevent double-expansion (idempotent for synonyms but breaks future LLM/HyDE)
-				const fallback = await searchV2(db, prefix, searchQuery, agentId, {
-					...context,
-					availablePaths: new Set(["hybrid"]),
-					maxResults,
-					searchOptions: {
-						...context.searchOptions,
-						allowHybridBackstop: false,
-						queryRewriteConfig: undefined, // already rewritten — don't rewrite again
-					},
-				})
+				const fallback = await timeLane("backstop:hybrid", () =>
+					searchV2(db, prefix, searchQuery, agentId, {
+						...context,
+						availablePaths: new Set(["hybrid"]),
+						maxResults,
+						searchOptions: {
+							...context.searchOptions,
+							allowHybridBackstop: false,
+							queryRewriteConfig: undefined, // already rewritten — don't rewrite again
+						},
+					}),
+				)
 				if (fallback.results.length > 0) {
 					pathsExecuted.push("hybrid")
 					resultsByPath.hybrid = fallback.results.length
@@ -10695,6 +10752,7 @@ export async function searchV2(
 				reranked: wasReranked,
 				queryRewritten: wasQueryRewritten,
 				laneControls: laneControlSummary,
+				latencyByPath,
 			},
 		}
 	} catch (err) {

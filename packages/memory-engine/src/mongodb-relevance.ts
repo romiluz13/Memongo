@@ -96,6 +96,7 @@ export type RelevanceBenchmarkResult = {
 	emptyRate: number
 	avgTopScore: number
 	p95LatencyMs: number
+	laneLatencyP95?: import("./types.js").MemoryBenchmarkLaneLatencySummary
 	rAt5?: number
 	rAt10?: number
 	ndcgAt10?: number

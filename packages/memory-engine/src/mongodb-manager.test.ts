@@ -286,6 +286,7 @@ vi.mock("./mongodb-schema.js", () => ({
 	})),
 	getExpectedSearchIndexTargets: vi.fn(() => []),
 	sessionChunksCollection: vi.fn(),
+	memoryEvidenceCollection: vi.fn(),
 }))
 
 vi.mock("./mongodb-query-cache.js", () => ({
@@ -2795,6 +2796,7 @@ const {
 	proceduresCollection,
 	chunksCollection,
 	sessionChunksCollection,
+	memoryEvidenceCollection,
 	relevanceRunsCollection,
 } = await import("./mongodb-schema.js")
 
@@ -6063,56 +6065,56 @@ describe("MongoDBMemoryManager projection repair", () => {
 // resolved search scope, not hard-coded "agent"
 // ---------------------------------------------------------------------------
 
+function buildMockManager(overrides?: Record<string, unknown>) {
+	return Object.assign(Object.create(MongoDBMemoryManager.prototype), {
+		db: fakeDb,
+		prefix: fakePrefix,
+		agentId: "agent-1",
+		agentScopeRef: "agent:agent-1",
+		workspaceScopeRef: "workspace:agent-1",
+		client: undefined,
+		capabilities: {
+			vectorSearch: false,
+			textSearch: false,
+			rankFusion: false,
+			storedSource: false,
+			vectorIndexMethod: false,
+			scoreFusion: false,
+		},
+		config: {
+			mongodb: {
+				embeddingMode: "automated",
+				fusionMethod: "rankFusion",
+				numCandidates: 200,
+				cache: {
+					enabled: true,
+					conversationTtlSec: 300,
+					kbTtlSec: 600,
+				},
+				// sources omitted — getActiveSources defaults to all enabled
+				kb: { enabled: false },
+				episodes: { enabled: true, minEventsForEpisode: 6 },
+				graph: { enabled: false },
+				reranking: { enabled: false },
+				queryRewriting: { enabled: false },
+			},
+		},
+		extraMemoryPaths: [],
+		writeQueue: Promise.resolve(),
+		derivationQueue: Promise.resolve(),
+		chunkCount: 0,
+		dirty: true,
+		lastSearchMode: "legacy",
+		accessTracker: null,
+		relevance: null,
+		...overrides,
+	}) as MongoDBMemoryManager
+}
+
 describe("scope-safe cache writes", () => {
 	beforeEach(() => {
 		vi.clearAllMocks()
 	})
-
-	function buildMockManager(overrides?: Record<string, unknown>) {
-		return Object.assign(Object.create(MongoDBMemoryManager.prototype), {
-			db: fakeDb,
-			prefix: fakePrefix,
-			agentId: "agent-1",
-			agentScopeRef: "agent:agent-1",
-			workspaceScopeRef: "workspace:agent-1",
-			client: undefined,
-			capabilities: {
-				vectorSearch: false,
-				textSearch: false,
-				rankFusion: false,
-				storedSource: false,
-				vectorIndexMethod: false,
-				scoreFusion: false,
-			},
-			config: {
-				mongodb: {
-					embeddingMode: "automated",
-					fusionMethod: "rankFusion",
-					numCandidates: 200,
-					cache: {
-						enabled: true,
-						conversationTtlSec: 300,
-						kbTtlSec: 600,
-					},
-					// sources omitted — getActiveSources defaults to all enabled
-					kb: { enabled: false },
-					episodes: { enabled: true, minEventsForEpisode: 6 },
-					graph: { enabled: false },
-					reranking: { enabled: false },
-					queryRewriting: { enabled: false },
-				},
-			},
-			extraMemoryPaths: [],
-			writeQueue: Promise.resolve(),
-			derivationQueue: Promise.resolve(),
-			chunkCount: 0,
-			dirty: true,
-			lastSearchMode: "legacy",
-			accessTracker: null,
-			relevance: null,
-			...overrides,
-		}) as MongoDBMemoryManager
-	}
 
 	it("scales default searchDetailed numCandidates with requested top-k", async () => {
 		mocked(planRetrieval).mockReturnValue({
@@ -6576,5 +6578,134 @@ describe("resolveObservedSearchMethod", () => {
 			"vector",
 		)
 		expect(resolve([], { vectorSearch: false, textSearch: true })).toBe("text")
+	})
+})
+
+// ---------------------------------------------------------------------------
+// #66 step 3: per-lane latency instrumentation
+// ---------------------------------------------------------------------------
+
+describe("searchV2 lane latency instrumentation", () => {
+	beforeEach(() => {
+		vi.clearAllMocks()
+		mocked(crossEncoderRerank).mockImplementation(async ({ results }) => ({
+			results,
+			reranked: false,
+			latencyMs: 0,
+		}))
+	})
+
+	it("records a latency sample for every executed lane, including one that fails", async () => {
+		mocked(planRetrieval).mockReturnValue({
+			paths: ["episodic", "raw-window"],
+			confidence: "high",
+			reasoning: "latency probe",
+		})
+		mocked(searchEpisodes).mockRejectedValue(new Error("episodic broke"))
+		mocked(getEventsByTimeRange).mockResolvedValue([])
+
+		const result = await searchV2(
+			fakeDb,
+			fakePrefix,
+			"what happened recently",
+			"agent-1",
+			{
+				availablePaths: new Set(["episodic", "raw-window"]),
+				searchOptions: { allowHybridBackstop: false },
+			},
+		)
+
+		expect(Object.keys(result.metadata.latencyByPath ?? {}).toSorted()).toEqual(
+			["episodic", "raw-window"],
+		)
+		expect(result.metadata.latencyByPath?.episodic).toBeGreaterThanOrEqual(0)
+		expect(
+			result.metadata.latencyByPath?.["raw-window"],
+		).toBeGreaterThanOrEqual(0)
+	})
+
+	it("records a latency sample for each enabled hybrid sub-lane", async () => {
+		const previousSessionMode = process.env.MEMONGO_SESSION_EVIDENCE_MODE
+		const previousMirrorMode = process.env.MEMONGO_EVIDENCE_MIRROR_MODE
+		process.env.MEMONGO_SESSION_EVIDENCE_MODE = "B"
+		process.env.MEMONGO_EVIDENCE_MIRROR_MODE = "enabled"
+		try {
+			mocked(planRetrieval).mockReturnValue({
+				paths: ["hybrid"],
+				confidence: "high",
+				reasoning: "hybrid sub-lane latency probe",
+			})
+			const emptyAggregate = () =>
+				({
+					aggregate: vi.fn().mockReturnValue({
+						toArray: vi.fn().mockResolvedValue([]),
+					}),
+				}) as never
+			mocked(chunksCollection).mockReturnValue(emptyAggregate())
+			mocked(sessionChunksCollection).mockReturnValue(emptyAggregate())
+			mocked(memoryEvidenceCollection).mockReturnValue(emptyAggregate())
+
+			const result = await searchV2(fakeDb, fakePrefix, "espresso", "agent-1", {
+				availablePaths: new Set(["hybrid"]),
+				searchOptions: {
+					scope: "agent",
+					scopeRef: "agent:agent-1",
+					bridgeFilter: { agentId: "agent-1", source: { $in: ["files"] } },
+					capabilities: {
+						vectorSearch: false,
+						textSearch: true,
+						rankFusion: false,
+						storedSource: false,
+						vectorIndexMethod: false,
+						scoreFusion: false,
+					},
+					fusionMethod: "rankFusion",
+					embeddingMode: "automated",
+					allowHybridBackstop: false,
+				},
+			})
+
+			const laneKeys = Object.keys(result.metadata.latencyByPath ?? {})
+			expect(laneKeys).toContain("hybrid:chunks")
+			expect(laneKeys).toContain("hybrid:bridge")
+			expect(laneKeys).toContain("hybrid:session_chunks")
+			expect(laneKeys).toContain("hybrid:memory_evidence")
+		} finally {
+			if (previousSessionMode === undefined) {
+				delete process.env.MEMONGO_SESSION_EVIDENCE_MODE
+			} else {
+				process.env.MEMONGO_SESSION_EVIDENCE_MODE = previousSessionMode
+			}
+			if (previousMirrorMode === undefined) {
+				delete process.env.MEMONGO_EVIDENCE_MIRROR_MODE
+			} else {
+				process.env.MEMONGO_EVIDENCE_MIRROR_MODE = previousMirrorMode
+			}
+		}
+	})
+
+	it("search() hands the lane breakdown to the caller's onLaneLatency sink", async () => {
+		mocked(checkCache).mockResolvedValue({
+			hit: false,
+			tier: undefined,
+			results: [],
+		} as never)
+		mocked(planRetrieval).mockReturnValue({
+			paths: ["episodic"],
+			confidence: "high",
+			reasoning: "sink contract",
+		})
+		mocked(searchEpisodes).mockResolvedValue([])
+
+		const seen: Record<string, number>[] = []
+		const manager = buildMockManager()
+		await manager.search("what did we discuss?", {
+			onLaneLatency: (lanes) => {
+				seen.push(lanes)
+			},
+		})
+
+		expect(seen).toHaveLength(1)
+		expect(seen[0].episodic).toBeGreaterThanOrEqual(0)
 	})
 })

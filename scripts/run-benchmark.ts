@@ -203,6 +203,17 @@ async function main(): Promise<void> {
 	console.log(`  R@5            : ${result.rAt5?.toFixed(4) ?? "n/a"}`)
 	console.log(`  nDCG@10        : ${result.ndcgAt10?.toFixed(4) ?? "n/a"}`)
 	console.log(`  p95 latency ms : ${result.p95LatencyMs.toFixed(0)}`)
+	const laneLatency = Object.entries(result.laneLatencyP95 ?? {}).toSorted(
+		([, left], [, right]) => right.p95Ms - left.p95Ms,
+	)
+	if (laneLatency.length > 0) {
+		console.log("  per-lane p95 ms")
+		for (const [lane, stats] of laneLatency) {
+			console.log(
+				`    ${lane.padEnd(24)} ${stats.p95Ms.toFixed(0).padStart(6)}  (${stats.cases} cases)`,
+			)
+		}
+	}
 	if (result.officialMetrics) {
 		console.log(`  official       : ${JSON.stringify(result.officialMetrics)}`)
 	}

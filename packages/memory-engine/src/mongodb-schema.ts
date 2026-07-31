@@ -1262,6 +1262,7 @@ const RECALL_TRACES_SCHEMA: Document = {
 			totalHits: { bsonType: "number" },
 			latencyMs: { bsonType: "number" },
 			hitsByLane: { bsonType: "object" },
+			latencyByLane: { bsonType: "object" },
 			topHitIds: {
 				bsonType: "array",
 				items: { bsonType: "string" },

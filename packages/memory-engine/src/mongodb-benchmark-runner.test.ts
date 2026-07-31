@@ -1864,3 +1864,55 @@ describe("buildCaseDiagnostics", () => {
 		expect(diagnostics).toHaveLength(0)
 	})
 })
+
+// ---------------------------------------------------------------------------
+// #66 step 3: per-lane latency aggregation
+// ---------------------------------------------------------------------------
+
+describe("per-lane latency aggregation", () => {
+	function laneCase(caseId: string, latencyByLane?: Record<string, number>) {
+		return evaluateRankingCase({
+			caseId,
+			results: [makeResult({ path: caseId, score: 0.9, sessionId: "s1" })],
+			latencyMs: 5,
+			relevantSessionIds: ["s1"],
+			resolveSessionIds: (result) =>
+				result.sessionId ? [result.sessionId] : [],
+			...(latencyByLane ? { latencyByLane } : {}),
+		})
+	}
+
+	it("computes p95 per lane over only the cases where that lane ran", () => {
+		const summary = summarizeBenchmarkExecutions({
+			executions: [
+				laneCase("c1", { hybrid: 100, kb: 10 }),
+				laneCase("c2", { hybrid: 200 }),
+				laneCase("c3", { hybrid: 300, kb: 30 }),
+				laneCase("c4"),
+			],
+		})
+
+		expect(summary.laneLatencyP95).toEqual({
+			hybrid: { p95Ms: 300, cases: 3 },
+			kb: { p95Ms: 30, cases: 2 },
+		})
+	})
+
+	it("carries the per-lane latency sample onto the case outcome", () => {
+		const summary = summarizeBenchmarkExecutions({
+			executions: [laneCase("c1", { "hybrid:chunks": 42 })],
+		})
+
+		expect(summary.caseOutcomes[0]?.latencyByLane).toEqual({
+			"hybrid:chunks": 42,
+		})
+	})
+
+	it("omits the per-lane breakdown when no case recorded lane latency", () => {
+		const summary = summarizeBenchmarkExecutions({
+			executions: [laneCase("c1")],
+		})
+
+		expect(summary.laneLatencyP95).toBeUndefined()
+	})
+})

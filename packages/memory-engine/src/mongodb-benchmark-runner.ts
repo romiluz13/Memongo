@@ -23,6 +23,7 @@ import type {
 	MemoryBenchmarkDatasetKind,
 	MemoryBenchmarkCaseOutcome,
 	MemoryBenchmarkExecutionSummary,
+	MemoryBenchmarkLaneLatencySummary,
 	MemoryBenchmarkOfficialMetrics,
 	MemoryBenchmarkOfficialRetrievalMetrics,
 	MemoryBenchmarkQuestionTypeMetrics,
@@ -148,6 +149,7 @@ export type BenchmarkCaseExecution = {
 	empty: boolean
 	topScore: number
 	latencyMs: number
+	latencyByLane?: Record<string, number>
 	scored: boolean
 	hit: boolean
 	rAt5: number
@@ -185,6 +187,7 @@ export type BenchmarkSummary = {
 	emptyRate: number
 	avgTopScore: number
 	p95LatencyMs: number
+	laneLatencyP95?: MemoryBenchmarkLaneLatencySummary
 	rAt5: number
 	rAt10: number
 	ndcgAt10: number
@@ -918,6 +921,39 @@ export function buildQueryGovernanceReport(params: {
 	}
 }
 
+/**
+ * #66: p95 per lane. The denominator is the cases where that lane actually ran
+ * — not every case — so a lane that only fires on a query shape is not diluted.
+ */
+function summarizeLaneLatency(
+	executions: BenchmarkCaseExecution[],
+): MemoryBenchmarkLaneLatencySummary | undefined {
+	const samples = new Map<string, number[]>()
+	for (const execution of executions) {
+		for (const [lane, latencyMs] of Object.entries(
+			execution.latencyByLane ?? {},
+		)) {
+			const laneSamples = samples.get(lane)
+			if (laneSamples) {
+				laneSamples.push(latencyMs)
+			} else {
+				samples.set(lane, [latencyMs])
+			}
+		}
+	}
+	if (samples.size === 0) {
+		return undefined
+	}
+	const summary: MemoryBenchmarkLaneLatencySummary = {}
+	for (const [lane, laneSamples] of samples) {
+		summary[lane] = {
+			p95Ms: percentile(laneSamples, 95),
+			cases: laneSamples.length,
+		}
+	}
+	return summary
+}
+
 function percentile(values: number[], p: number): number {
 	if (values.length === 0) {
 		return 0
@@ -1165,6 +1201,8 @@ export function evaluateRankingCase(params: {
 	caseId?: string
 	results: MemorySearchResult[]
 	latencyMs: number
+	/** #66: wall-clock ms per retrieval lane for this case. */
+	latencyByLane?: Record<string, number>
 	relevantSessionIds: string[]
 	relevantTurnIds?: string[]
 	relevantDialogIds?: string[]
@@ -1373,6 +1411,7 @@ export function evaluateRankingCase(params: {
 		empty: params.results.length === 0,
 		topScore: params.results[0]?.score ?? 0,
 		latencyMs: params.latencyMs,
+		...(params.latencyByLane ? { latencyByLane: params.latencyByLane } : {}),
 		scored: executionStatus === "succeeded" && scoreEligibility === "retrieval",
 		hit,
 		rAt5: relevantSet.size > 0 ? relevantTop5 / relevantSet.size : 0,
@@ -1824,6 +1863,7 @@ export function summarizeBenchmarkExecutions(params: {
 		).length,
 		scoredCases: scored.length,
 	}
+	const laneLatencyP95 = summarizeLaneLatency(executions)
 	const caseOutcomes: MemoryBenchmarkCaseOutcome[] = executions.map(
 		(entry) => ({
 			caseId: entry.caseId,
@@ -1834,6 +1874,7 @@ export function summarizeBenchmarkExecutions(params: {
 			...(entry.officialMetric ? { officialMetric: entry.officialMetric } : {}),
 			empty: entry.empty,
 			latencyMs: entry.latencyMs,
+			...(entry.latencyByLane ? { latencyByLane: entry.latencyByLane } : {}),
 			...(entry.error
 				? { failure: { stage: "retrieval" as const, message: entry.error } }
 				: {}),
@@ -1861,6 +1902,7 @@ export function summarizeBenchmarkExecutions(params: {
 				? topScores.reduce((sum, value) => sum + value, 0) / topScores.length
 				: 0,
 		p95LatencyMs: percentile(latencies, 95),
+		...(laneLatencyP95 ? { laneLatencyP95 } : {}),
 		rAt5:
 			scored.length > 0
 				? scored.reduce((sum, entry) => sum + entry.rAt5, 0) / scored.length
