@@ -1,6 +1,6 @@
 {
 	"name": "@memongo/memory-engine",
-	"version": "1.1.0",
+	"version": "2.0.0",
 	"description": "MongoDB-native memory engine: embeddings, graph, episodes, search, knowledge base, reasoning chains, novelty detection, consolidation, analytics",
 	"type": "module",
 	"license": "Apache-2.0",
@@ -37,7 +37,7 @@
 		"test:e2e:tier-a": "vitest run --no-file-parallelism src/mongodb-kb-reingest.e2e.test.ts src/mongodb-kb-isolation.e2e.test.ts src/mongodb-legacy-search-isolation.e2e.test.ts src/mongodb-vector-index-shape.e2e.test.ts src/mongodb-rankfusion-score.e2e.test.ts src/mongodb-projection-repair.e2e.test.ts src/mongodb-temporal-validity.e2e.test.ts src/mongodb-memory-jobs.e2e.test.ts"
 	},
 	"dependencies": {
-		"@memongo/lib": "1.1.0",
+		"@memongo/lib": "2.0.0",
 		"chokidar": "^4.0.3",
 		"mongodb": "7.2.0"
 	},

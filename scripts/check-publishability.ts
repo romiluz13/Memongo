@@ -107,28 +107,46 @@ function runJson<T>(cmd: string, args: string[], cwd: string): T {
 	return JSON.parse(raw) as T
 }
 
+// npm <=11 emits `npm pack --json` results as a one-element array; npm 12
+// emits an object keyed by package name. Accept exactly one result either way.
+function singlePackResult<T>(
+	parsed: unknown,
+	packageDir: string,
+	label: string,
+): T {
+	if (Array.isArray(parsed) && parsed.length === 1) {
+		return parsed[0] as T
+	}
+	if (parsed !== null && typeof parsed === "object") {
+		const values = Object.values(parsed as Record<string, T>)
+		if (values.length === 1) {
+			return values[0]
+		}
+	}
+	fail(`unexpected ${label} output for ${packageDir}`)
+}
+
 function runNpmPackDryRun(packageDir: string): NpmPackDryRunResult {
-	const parsed = runJson<NpmPackDryRunResult[]>(
+	const parsed = runJson<unknown>(
 		"npm",
 		["pack", "--dry-run", "--json"],
 		packageDir,
 	)
-	if (!Array.isArray(parsed) || parsed.length !== 1) {
-		fail(`unexpected npm pack --dry-run output for ${packageDir}`)
-	}
-	return parsed[0]
+	return singlePackResult<NpmPackDryRunResult>(
+		parsed,
+		packageDir,
+		"npm pack --dry-run",
+	)
 }
 
 function createTarball(packageDir: string, packDir: string): string {
-	const parsed = runJson<NpmPackResult[]>(
+	const parsed = runJson<unknown>(
 		"npm",
 		["pack", "--json", "--pack-destination", packDir],
 		packageDir,
 	)
-	if (!Array.isArray(parsed) || parsed.length !== 1) {
-		fail(`unexpected npm pack output for ${packageDir}`)
-	}
-	return path.join(packDir, parsed[0].filename)
+	const result = singlePackResult<NpmPackResult>(parsed, packageDir, "npm pack")
+	return path.join(packDir, result.filename)
 }
 
 function unpackTarball(tarballPath: string, destDir: string) {
