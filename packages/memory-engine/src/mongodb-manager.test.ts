@@ -33,6 +33,7 @@ import { crossEncoderRerank } from "./mongodb-reranker.js"
 import { rewriteQuery } from "./mongodb-query-rewriter.js"
 import { resolveRegisteredBenchmarkQualityContract } from "./benchmark-quality-contracts.js"
 import { createBenchmarkRunContext } from "./benchmark-parity-envelope.js"
+import type { RelevanceBenchmarkResult } from "./mongodb-relevance.js"
 import type { MemoryBenchmarkDataset, MemorySearchResult } from "./types.js"
 
 const mocked = <T>(value: T): T => {
@@ -1802,6 +1803,257 @@ describe("benchmark scenario queue settling", () => {
 
 		expect(order[0]).toBe("stop")
 		expect(order.at(-1)).toBe("cleanup")
+	})
+
+	it("repeats only the measurement loop for extra measurement passes", async () => {
+		vi.stubEnv("MEMONGO_BENCHMARK_MEASUREMENT_PASSES", "3")
+		const { ingestBenchmarkConversations } = await import(
+			"./mongodb-benchmark-harness.js"
+		)
+		const order: string[] = []
+		mocked(ingestBenchmarkConversations).mockImplementation(async () => {
+			order.push("ingest")
+			return {
+				datasetPath: "/tmp/benchmark.jsonl",
+				datasetName: "measurement-passes",
+				conversationsIngested: 1,
+				turnsIngested: 1,
+				skippedConversations: 0,
+				failedLines: 0,
+				failedTurns: 0,
+				startedAt: new Date("2026-04-09T12:00:00.000Z"),
+				completedAt: new Date("2026-04-09T12:00:01.000Z"),
+			}
+		})
+		const search = vi.fn(async () => {
+			order.push("search")
+			return [
+				{
+					path: "memory://hit",
+					startLine: 1,
+					endLine: 1,
+					score: 0.9,
+					snippet: "hit",
+					source: "conversation",
+					sessionId: "session-1",
+				},
+			] satisfies MemorySearchResult[]
+		})
+		const scenarioManager = {
+			agentId: "benchmark-measurement-passes",
+			search,
+			stopMemoryJobWorker: vi.fn(async () => {}),
+		} as unknown as MongoDBMemoryManager
+		const flushBenchmarkQueryCache = vi.fn(async () => {
+			order.push("flush")
+		})
+		const manager = Object.assign(
+			Object.create(MongoDBMemoryManager.prototype),
+			{
+				db: {
+					collection: vi.fn(() => ({
+						aggregate: vi.fn(() => ({
+							toArray: vi.fn(async () => []),
+						})),
+					})),
+				},
+				prefix: "test_",
+				agentId: "benchmark-parent",
+				config: { mongodb: {} },
+				relevance: { persistRegression: vi.fn(async () => []) },
+				createBenchmarkScenarioManager: vi.fn(() => scenarioManager),
+				settleBenchmarkScenarioManager: vi.fn(async () => {}),
+				listBenchmarkEventEvidence: vi.fn(async () => ({
+					sessionIds: new Map(),
+					turnIds: new Map(),
+					dialogIds: new Map(),
+				})),
+				waitForBenchmarkSearchConvergence: vi.fn(async () => {
+					order.push("converge")
+				}),
+				flushBenchmarkQueryCache,
+				cleanupBenchmarkScenarioData: vi.fn(async () => {
+					order.push("cleanup")
+				}),
+			},
+		) as MongoDBMemoryManager
+		const dataset: MemoryBenchmarkDataset = {
+			name: "measurement-passes",
+			datasetKind: "generic",
+			conversations: [],
+			scenarios: [
+				{
+					scenarioId: "scenario-1",
+					conversations: [
+						{
+							sessionId: "session-1",
+							turns: [{ role: "user", body: "remember this" }],
+						},
+					],
+					evaluations: [
+						{
+							caseId: "case-1",
+							query: "what did I remember?",
+							expectedSessionIds: ["session-1"],
+						},
+					],
+				},
+			],
+		}
+
+		const result = (await (
+			MongoDBMemoryManager.prototype as unknown as {
+				runScenarioBenchmarkDataset: (
+					this: MongoDBMemoryManager,
+					params: {
+						datasetPath: string
+						dataset: MemoryBenchmarkDataset
+						datasetVersion: string
+						maxResults: number
+						minScore: number
+						retrievalLane: "native"
+						executionProfile: "shipped"
+						runContext: ReturnType<typeof testBenchmarkRunContext>
+					},
+				) => Promise<{ result: RelevanceBenchmarkResult }>
+			}
+		).runScenarioBenchmarkDataset.call(manager, {
+			datasetPath: "/tmp/benchmark.jsonl",
+			dataset,
+			datasetVersion: "dataset-v1",
+			maxResults: 50,
+			minScore: 0.01,
+			retrievalLane: "native",
+			executionProfile: "shipped",
+			runContext: testBenchmarkRunContext("measurement-passes"),
+		})) as { result: RelevanceBenchmarkResult }
+
+		// Ingest, convergence, and cleanup happen once; only the eval loop repeats.
+		expect(order).toEqual([
+			"ingest",
+			"converge",
+			"search",
+			"flush",
+			"search",
+			"flush",
+			"search",
+			"cleanup",
+		])
+		expect(flushBenchmarkQueryCache).toHaveBeenCalledWith(
+			"benchmark-measurement-passes",
+		)
+		// The published result is pass 1 only.
+		expect(result.result.cases).toBe(1)
+		expect(result.result.measurementPasses?.passes).toBe(3)
+		expect(result.result.measurementPasses?.gatePass).toBe(1)
+		expect(
+			result.result.measurementPasses?.samples.map((sample) => sample.pass),
+		).toEqual([1, 2, 3])
+		vi.unstubAllEnvs()
+	})
+
+	it("omits the measurement-pass report for the default single pass", async () => {
+		const { ingestBenchmarkConversations } = await import(
+			"./mongodb-benchmark-harness.js"
+		)
+		mocked(ingestBenchmarkConversations).mockResolvedValue({
+			datasetPath: "/tmp/benchmark.jsonl",
+			datasetName: "single-pass",
+			conversationsIngested: 1,
+			turnsIngested: 1,
+			skippedConversations: 0,
+			failedLines: 0,
+			failedTurns: 0,
+			startedAt: new Date("2026-04-09T12:00:00.000Z"),
+			completedAt: new Date("2026-04-09T12:00:01.000Z"),
+		})
+		const search = vi.fn(async () => [] as MemorySearchResult[])
+		const scenarioManager = {
+			agentId: "benchmark-single-pass",
+			search,
+			stopMemoryJobWorker: vi.fn(async () => {}),
+		} as unknown as MongoDBMemoryManager
+		const flushBenchmarkQueryCache = vi.fn(async () => {})
+		const manager = Object.assign(
+			Object.create(MongoDBMemoryManager.prototype),
+			{
+				db: {
+					collection: vi.fn(() => ({
+						aggregate: vi.fn(() => ({
+							toArray: vi.fn(async () => []),
+						})),
+					})),
+				},
+				prefix: "test_",
+				agentId: "benchmark-parent",
+				config: { mongodb: {} },
+				relevance: { persistRegression: vi.fn(async () => []) },
+				createBenchmarkScenarioManager: vi.fn(() => scenarioManager),
+				settleBenchmarkScenarioManager: vi.fn(async () => {}),
+				listBenchmarkEventEvidence: vi.fn(async () => ({
+					sessionIds: new Map(),
+					turnIds: new Map(),
+					dialogIds: new Map(),
+				})),
+				waitForBenchmarkSearchConvergence: vi.fn(async () => {}),
+				flushBenchmarkQueryCache,
+				cleanupBenchmarkScenarioData: vi.fn(async () => {}),
+			},
+		) as MongoDBMemoryManager
+		const dataset: MemoryBenchmarkDataset = {
+			name: "single-pass",
+			datasetKind: "generic",
+			conversations: [],
+			scenarios: [
+				{
+					scenarioId: "scenario-1",
+					conversations: [
+						{
+							sessionId: "session-1",
+							turns: [{ role: "user", body: "remember this" }],
+						},
+					],
+					evaluations: [
+						{
+							caseId: "case-1",
+							query: "what did I remember?",
+							expectedSessionIds: ["session-1"],
+						},
+					],
+				},
+			],
+		}
+
+		const result = (await (
+			MongoDBMemoryManager.prototype as unknown as {
+				runScenarioBenchmarkDataset: (
+					this: MongoDBMemoryManager,
+					params: {
+						datasetPath: string
+						dataset: MemoryBenchmarkDataset
+						datasetVersion: string
+						maxResults: number
+						minScore: number
+						retrievalLane: "native"
+						executionProfile: "shipped"
+						runContext: ReturnType<typeof testBenchmarkRunContext>
+					},
+				) => Promise<{ result: RelevanceBenchmarkResult }>
+			}
+		).runScenarioBenchmarkDataset.call(manager, {
+			datasetPath: "/tmp/benchmark.jsonl",
+			dataset,
+			datasetVersion: "dataset-v1",
+			maxResults: 50,
+			minScore: 0.01,
+			retrievalLane: "native",
+			executionProfile: "shipped",
+			runContext: testBenchmarkRunContext("single-pass"),
+		})) as { result: RelevanceBenchmarkResult }
+
+		expect(search).toHaveBeenCalledTimes(1)
+		expect(flushBenchmarkQueryCache).not.toHaveBeenCalled()
+		expect(result.result.measurementPasses).toBeUndefined()
 	})
 })
 

@@ -1113,6 +1113,37 @@ export type MemoryBenchmarkLaneLatencySummary = Record<
 	{ p95Ms: number; cases: number }
 >
 
+/**
+ * #66: one measurement pass over an already-ingested scenario corpus. Passes
+ * repeat only the evaluation loop, so N passes cost N eval loops and one
+ * ingest — which is what makes n>1 affordable.
+ */
+export type MemoryBenchmarkMeasurementPassSample = {
+	/** 1-based pass index. */
+	pass: number
+	cases: number
+	scoredCases: number
+	hitRate: number
+	p95LatencyMs: number
+	rAt5: number
+	rAt10: number
+	ndcgAt10: number
+	officialMetrics?: MemoryBenchmarkOfficialMetrics
+	laneLatencyP95?: MemoryBenchmarkLaneLatencySummary
+}
+
+export type MemoryBenchmarkMeasurementPasses = {
+	passes: number
+	/**
+	 * 1-based pass whose metrics are the published result and feed the release
+	 * gates. Always pass 1, so gate semantics are identical to a single-pass run.
+	 */
+	gatePass: number
+	samples: MemoryBenchmarkMeasurementPassSample[]
+	/** Across-pass noise band of p95. `stddev` is the population stddev. */
+	p95LatencyMs: { median: number; min: number; max: number; stddev: number }
+}
+
 type BenchmarkCommonQualityThresholds = {
 	contractId: string
 	version: string

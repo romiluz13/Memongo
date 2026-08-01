@@ -24,6 +24,7 @@ import type {
 	MemoryBenchmarkCaseOutcome,
 	MemoryBenchmarkExecutionSummary,
 	MemoryBenchmarkLaneLatencySummary,
+	MemoryBenchmarkMeasurementPasses,
 	MemoryBenchmarkOfficialMetrics,
 	MemoryBenchmarkOfficialRetrievalMetrics,
 	MemoryBenchmarkQuestionTypeMetrics,
@@ -1919,4 +1920,58 @@ export function summarizeBenchmarkExecutions(params: {
 		...(officialMetrics ? { officialMetrics } : {}),
 		...(params.ingest ? { ingest: params.ingest } : {}),
 	}
+}
+
+/**
+ * #66: fold pass-ordered summaries (index 0 = the gate pass) into a per-pass
+ * table plus the across-pass p95 noise band. A single pass carries no band, so
+ * the report is omitted and the run reads exactly like a pre-passes run.
+ */
+export function summarizeMeasurementPasses(
+	summaries: BenchmarkSummary[],
+): MemoryBenchmarkMeasurementPasses | undefined {
+	if (summaries.length < 2) {
+		return undefined
+	}
+	const p95Samples = summaries.map((summary) => summary.p95LatencyMs)
+	const mean =
+		p95Samples.reduce((sum, value) => sum + value, 0) / p95Samples.length
+	return {
+		passes: summaries.length,
+		gatePass: 1,
+		samples: summaries.map((summary, index) => ({
+			pass: index + 1,
+			cases: summary.cases,
+			scoredCases: summary.scoredCases,
+			hitRate: summary.hitRate,
+			p95LatencyMs: summary.p95LatencyMs,
+			rAt5: summary.rAt5,
+			rAt10: summary.rAt10,
+			ndcgAt10: summary.ndcgAt10,
+			...(summary.officialMetrics
+				? { officialMetrics: summary.officialMetrics }
+				: {}),
+			...(summary.laneLatencyP95
+				? { laneLatencyP95: summary.laneLatencyP95 }
+				: {}),
+		})),
+		p95LatencyMs: {
+			median: median(p95Samples),
+			min: Math.min(...p95Samples),
+			max: Math.max(...p95Samples),
+			stddev: Math.sqrt(
+				p95Samples.reduce((sum, value) => sum + (value - mean) ** 2, 0) /
+					p95Samples.length,
+			),
+		},
+	}
+}
+
+function median(values: number[]): number {
+	const sorted = [...values].toSorted((a, b) => a - b)
+	const middle = Math.floor(sorted.length / 2)
+	if (sorted.length % 2 === 1) {
+		return sorted[middle] ?? 0
+	}
+	return ((sorted[middle - 1] ?? 0) + (sorted[middle] ?? 0)) / 2
 }

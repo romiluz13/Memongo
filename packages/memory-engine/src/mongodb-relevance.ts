@@ -97,6 +97,8 @@ export type RelevanceBenchmarkResult = {
 	avgTopScore: number
 	p95LatencyMs: number
 	laneLatencyP95?: import("./types.js").MemoryBenchmarkLaneLatencySummary
+	/** #66: present only when more than one measurement pass ran. */
+	measurementPasses?: import("./types.js").MemoryBenchmarkMeasurementPasses
 	rAt5?: number
 	rAt10?: number
 	ndcgAt10?: number

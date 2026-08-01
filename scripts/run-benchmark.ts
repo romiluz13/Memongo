@@ -217,6 +217,20 @@ async function main(): Promise<void> {
 	if (result.officialMetrics) {
 		console.log(`  official       : ${JSON.stringify(result.officialMetrics)}`)
 	}
+	const passes = result.measurementPasses
+	if (passes) {
+		console.log(
+			`  measurement passes (gate = pass ${passes.gatePass}; --json carries per-pass official metrics and lane p95)`,
+		)
+		for (const sample of passes.samples) {
+			console.log(
+				`    pass ${String(sample.pass).padStart(2)}${sample.pass === passes.gatePass ? " (gate)" : "       "}  p95 ${sample.p95LatencyMs.toFixed(0).padStart(6)} ms  hitRate ${sample.hitRate.toFixed(4)}  nDCG@10 ${sample.ndcgAt10.toFixed(4)}`,
+			)
+		}
+		console.log(
+			`    p95 band          median ${passes.p95LatencyMs.median.toFixed(0)} ms  min ${passes.p95LatencyMs.min.toFixed(0)} ms  max ${passes.p95LatencyMs.max.toFixed(0)} ms  stddev ${passes.p95LatencyMs.stddev.toFixed(0)} ms`,
+		)
+	}
 
 	const report = result.benchmarkReport
 	if (report?.releaseGates?.length) {

@@ -51,6 +51,7 @@ import {
 	evaluateRankingCase,
 	buildQueryGovernanceReport,
 	summarizeBenchmarkExecutions,
+	summarizeMeasurementPasses,
 	buildMissLedger,
 	buildCaseDiagnostics,
 	projectBenchmarkParityFields,
@@ -212,6 +213,7 @@ import {
 	kbChunksCollection,
 	metaCollection,
 	proceduresCollection,
+	queryCacheCollection,
 	relevanceRunsCollection,
 	resolveSearchIndexReadinessTiming,
 	structuredMemCollection,
@@ -509,6 +511,20 @@ function isStrictSearchReadinessMode(): boolean {
 
 function isBenchmarkTurnPrecisionMode(): boolean {
 	return process.env.MEMONGO_BENCHMARK_TURN_PRECISION_MODE === "enabled"
+}
+
+/**
+ * #66: how many times the measurement (evaluation) loop runs over one
+ * already-ingested scenario corpus. Ingest costs ~48 minutes and dominates a
+ * run, so extra passes are the cheap way to get n>1 samples of the same
+ * condition. Default 1 reproduces single-sample behavior exactly.
+ */
+function resolveBenchmarkMeasurementPasses(): number {
+	const raw = Number(process.env.MEMONGO_BENCHMARK_MEASUREMENT_PASSES)
+	if (!Number.isFinite(raw) || raw < 1) {
+		return 1
+	}
+	return Math.floor(raw)
 }
 
 function isTemporalCoverageMode(): boolean {
@@ -4183,6 +4199,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 			"MEMONGO_BENCHMARK_FAST_INGEST",
 			"MEMONGO_BENCHMARK_FAST_INGEST_BATCH_SIZE",
 			"MEMONGO_BENCHMARK_KEEP_SCENARIO_DATA",
+			"MEMONGO_BENCHMARK_MEASUREMENT_PASSES",
 			"MEMONGO_BENCHMARK_QUEUE_SETTLE_TIMEOUT_MS",
 			"MEMONGO_BENCHMARK_TEMPORAL_COVERAGE_MODE",
 			"MEMONGO_BENCHMARK_TURN_PRECISION_MODE",
@@ -5087,6 +5104,34 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		}
 	}
 
+	/**
+	 * #66: drop the benchmark tenant's query cache between measurement passes.
+	 * Without this, pass 2+ replays pass 1 from `query_cache` — latencyMs ~0 and
+	 * bit-identical rankings — so every extra pass would be fake-fast noise-free
+	 * garbage. Deleting the scenario agent's entries keeps every pass as cold as
+	 * pass 1 without touching the shipped `checkCache`/`writeCache` path.
+	 *
+	 * `writeCache` is fire-and-forget, so an upsert issued by the previous
+	 * pass's last query can still land after this delete; at most one stale
+	 * entry per pass survives, which cannot move a p95 over a full dataset.
+	 */
+	private async flushBenchmarkQueryCache(agentId: string): Promise<void> {
+		try {
+			const deleted = await queryCacheCollection(
+				this.db,
+				this.prefix,
+			).deleteMany({ agentId })
+			log.info("benchmark query cache flushed between measurement passes", {
+				agentId,
+				deletedCount: deleted.deletedCount,
+			})
+		} catch (err) {
+			throw new Error(
+				`benchmark query cache flush failed for agentId=${agentId}: ${err instanceof Error ? err.message : String(err)}`,
+			)
+		}
+	}
+
 	private async listBenchmarkEventSessions(
 		agentId: string,
 	): Promise<Map<string, string>> {
@@ -5377,7 +5422,14 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		storage: BenchmarkTenantStorageMeasurement
 	}> {
 		const scenarios = params.dataset.scenarios ?? []
-		const executions: BenchmarkCaseExecution[] = []
+		const measurementPasses = resolveBenchmarkMeasurementPasses()
+		// #66: index 0 is the gate pass — the one the published result, the
+		// release gates, and the regression baseline are computed from.
+		const executionsByPass: BenchmarkCaseExecution[][] = Array.from(
+			{ length: measurementPasses },
+			() => [],
+		)
+		const executions = executionsByPass[0]!
 		const expectedSessionMap = new Map<string, string[]>()
 		const expectedTurnMap = new Map<string, string[]>()
 		const qaCases: E2eQaCase[] = []
@@ -5766,75 +5818,95 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 					eventEvidence = await this.listBenchmarkEventEvidence(this.agentId)
 				}
 
-				for (const evaluation of scenario.evaluations) {
-					const startedAt = Date.now()
-					// Parse questionDate from evaluation metadata for temporal scoring
-					const evalQuestionDate =
-						typeof evaluation.metadata?.questionDate === "string"
-							? new Date(evaluation.metadata.questionDate)
-							: undefined
-					const validQuestionDate =
-						evalQuestionDate && !Number.isNaN(evalQuestionDate.getTime())
-							? evalQuestionDate
-							: undefined
-					try {
-						// Query decomposition: break preference-style queries into sub-queries
-						const decompositionMode = resolveDecompositionMode(
-							process.env.MEMONGO_QUERY_DECOMPOSITION_MODE,
-						)
-						const decompositionProvider =
-							decompositionMode === "enabled"
-								? resolveEnrichmentProvider(process.env)
-								: null
-
-						let results: MemorySearchResult[]
-						// #66: per-lane latency of the search that produced `results`.
-						// Only the plain search() path carries a lane breakdown.
-						let latencyByLane: Record<string, number> | undefined
-
-						if (rawSessionLane) {
-							results = await scenarioManager.searchBenchmarkRawSession(
-								evaluation.query,
-								{
-									maxResults: params.maxResults,
-									minScore: params.minScore,
-								},
+				// #66: repeat ONLY the measurement loop. Ingest, evidence, settle,
+				// convergence, and cleanup each stay at exactly one per scenario, so
+				// n samples of a condition cost n eval loops instead of n full runs.
+				for (let pass = 0; pass < measurementPasses; pass++) {
+					const passExecutions = executionsByPass[pass]!
+					if (pass > 0) {
+						await this.flushBenchmarkQueryCache(scenarioManager.agentId)
+					}
+					for (const evaluation of scenario.evaluations) {
+						const startedAt = Date.now()
+						// Parse questionDate from evaluation metadata for temporal scoring
+						const evalQuestionDate =
+							typeof evaluation.metadata?.questionDate === "string"
+								? new Date(evaluation.metadata.questionDate)
+								: undefined
+						const validQuestionDate =
+							evalQuestionDate && !Number.isNaN(evalQuestionDate.getTime())
+								? evalQuestionDate
+								: undefined
+						try {
+							// Query decomposition: break preference-style queries into sub-queries
+							const decompositionMode = resolveDecompositionMode(
+								process.env.MEMONGO_QUERY_DECOMPOSITION_MODE,
 							)
-						} else if (
-							decompositionProvider &&
-							decompositionMode === "enabled" &&
-							params.executionProfile !== "shipped"
-						) {
-							// #66: decomposition sits outside search(), so its cost and the
-							// N sub-searches it fans out never reach the lane breakdown.
-							const decomposeStartedAt = Date.now()
-							const decomposed = await decomposeQuery({
-								provider: decompositionProvider,
-								model: process.env.MEMONGO_ENRICHMENT_MODEL?.trim() ?? "",
-								query: evaluation.query,
-								questionType: evaluation.questionType,
-								onProviderCall: (outcome) => {
-									const accounting = params.runContext.accounting
-									const metadata = {
-										provider: decompositionProvider.name,
-										model: process.env.MEMONGO_ENRICHMENT_MODEL?.trim() ?? "",
-									}
-									if (outcome === "attempted") {
-										accounting.recordAttempt("query-decomposition", metadata)
-									} else if (outcome === "succeeded") {
-										accounting.recordSuccess("query-decomposition", metadata)
-									} else {
-										accounting.recordFailure("query-decomposition", metadata)
-									}
-								},
-							})
-							const decomposeMs = Date.now() - decomposeStartedAt
-							// Run each sub-query through the search pipeline
-							const subSearchStartedAt = Date.now()
-							const resultSets: MemorySearchResult[][] = []
-							for (const subQuery of decomposed.subQueries) {
-								const subResults = await scenarioManager.search(
-									subQuery,
+							const decompositionProvider =
+								decompositionMode === "enabled"
+									? resolveEnrichmentProvider(process.env)
+									: null
+
+							let results: MemorySearchResult[]
+							// #66: per-lane latency of the search that produced `results`.
+							// Only the plain search() path carries a lane breakdown.
+							let latencyByLane: Record<string, number> | undefined
+
+							if (rawSessionLane) {
+								results = await scenarioManager.searchBenchmarkRawSession(
+									evaluation.query,
+									{
+										maxResults: params.maxResults,
+										minScore: params.minScore,
+									},
+								)
+							} else if (
+								decompositionProvider &&
+								decompositionMode === "enabled" &&
+								params.executionProfile !== "shipped"
+							) {
+								// #66: decomposition sits outside search(), so its cost and the
+								// N sub-searches it fans out never reach the lane breakdown.
+								const decomposeStartedAt = Date.now()
+								const decomposed = await decomposeQuery({
+									provider: decompositionProvider,
+									model: process.env.MEMONGO_ENRICHMENT_MODEL?.trim() ?? "",
+									query: evaluation.query,
+									questionType: evaluation.questionType,
+									onProviderCall: (outcome) => {
+										const accounting = params.runContext.accounting
+										const metadata = {
+											provider: decompositionProvider.name,
+											model: process.env.MEMONGO_ENRICHMENT_MODEL?.trim() ?? "",
+										}
+										if (outcome === "attempted") {
+											accounting.recordAttempt("query-decomposition", metadata)
+										} else if (outcome === "succeeded") {
+											accounting.recordSuccess("query-decomposition", metadata)
+										} else {
+											accounting.recordFailure("query-decomposition", metadata)
+										}
+									},
+								})
+								const decomposeMs = Date.now() - decomposeStartedAt
+								// Run each sub-query through the search pipeline
+								const subSearchStartedAt = Date.now()
+								const resultSets: MemorySearchResult[][] = []
+								for (const subQuery of decomposed.subQueries) {
+									const subResults = await scenarioManager.search(
+										subQuery,
+										{
+											maxResults: params.maxResults,
+											minScore: params.minScore,
+											questionDate: validQuestionDate,
+										},
+										params.runContext,
+									)
+									resultSets.push(subResults)
+								}
+								// Also run the original query to avoid losing good direct matches
+								const originalResults = await scenarioManager.search(
+									evaluation.query,
 									{
 										maxResults: params.maxResults,
 										minScore: params.minScore,
@@ -5842,161 +5914,160 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 									},
 									params.runContext,
 								)
-								resultSets.push(subResults)
-							}
-							// Also run the original query to avoid losing good direct matches
-							const originalResults = await scenarioManager.search(
-								evaluation.query,
-								{
-									maxResults: params.maxResults,
-									minScore: params.minScore,
-									questionDate: validQuestionDate,
-								},
-								params.runContext,
-							)
-							resultSets.push(originalResults)
-							latencyByLane = {
-								"phase:decompose": decomposeMs,
-								"phase:decompose-searches": Date.now() - subSearchStartedAt,
-							}
-							// Merge all result sets with RRF
-							results = mergeMultiQueryResults(
-								resultSets,
-								params.maxResults,
-							) as MemorySearchResult[]
-						} else {
-							const relevanceScope =
-								evaluation.sourceScope &&
-								scenarioManager.relevance &&
-								evaluation.sourceScope !== "all"
-									? evaluation.sourceScope
-									: undefined
-							results = relevanceScope
-								? (
-										await scenarioManager.relevanceExplain({
-											query: evaluation.query,
-											sourceScope: relevanceScope,
-											maxResults: params.maxResults,
-											minScore: params.minScore,
-											deep: false,
-											questionDate: validQuestionDate,
-										})
-									).results
-								: await scenarioManager.search(
-										evaluation.query,
-										{
-											maxResults: params.maxResults,
-											minScore: params.minScore,
-											questionDate: validQuestionDate,
-											onLaneLatency: (lanes) => {
-												latencyByLane = lanes
+								resultSets.push(originalResults)
+								latencyByLane = {
+									"phase:decompose": decomposeMs,
+									"phase:decompose-searches": Date.now() - subSearchStartedAt,
+								}
+								// Merge all result sets with RRF
+								results = mergeMultiQueryResults(
+									resultSets,
+									params.maxResults,
+								) as MemorySearchResult[]
+							} else {
+								const relevanceScope =
+									evaluation.sourceScope &&
+									scenarioManager.relevance &&
+									evaluation.sourceScope !== "all"
+										? evaluation.sourceScope
+										: undefined
+								results = relevanceScope
+									? (
+											await scenarioManager.relevanceExplain({
+												query: evaluation.query,
+												sourceScope: relevanceScope,
+												maxResults: params.maxResults,
+												minScore: params.minScore,
+												deep: false,
+												questionDate: validQuestionDate,
+											})
+										).results
+									: await scenarioManager.search(
+											evaluation.query,
+											{
+												maxResults: params.maxResults,
+												minScore: params.minScore,
+												questionDate: validQuestionDate,
+												onLaneLatency: (lanes) => {
+													latencyByLane = lanes
+												},
 											},
-										},
-										params.runContext,
-									)
-						}
-						executions.push(
-							evaluateRankingCase({
+											params.runContext,
+										)
+							}
+							passExecutions.push(
+								evaluateRankingCase({
+									caseId: evaluation.caseId,
+									results,
+									latencyMs: Date.now() - startedAt,
+									...(latencyByLane && Object.keys(latencyByLane).length > 0
+										? { latencyByLane }
+										: {}),
+									relevantSessionIds: evaluation.expectedSessionIds,
+									relevantTurnIds: evaluation.expectedTurnIds,
+									relevantDialogIds: evaluation.expectedDialogIds,
+									resolveSessionIds: (result) =>
+										this.resolveBenchmarkResultSessionIds(
+											result,
+											eventEvidence,
+										),
+									resolveTurnIds: (result) =>
+										this.resolveBenchmarkResultTurnIds(result, eventEvidence),
+									resolveDialogIds: (result) =>
+										this.resolveBenchmarkResultDialogIds(result, eventEvidence),
+									datasetKind: params.dataset.datasetKind,
+									officialRetrieval: evaluation.officialRetrieval,
+									questionType: evaluation.questionType,
+									abstention: evaluation.abstention,
+									traceOptions: { maxCandidates: 50 },
+								}),
+							)
+							// QA answers are graded once: extra passes measure retrieval,
+							// not the answer model.
+							if (pass === 0 && params.dataset.datasetKind === "locomo") {
+								qaCases.push({
+									caseId: evaluation.caseId,
+									question: evaluation.query,
+									goldAnswer:
+										typeof evaluation.answer === "string"
+											? evaluation.answer
+											: "",
+									contextPassages: results.map((result) => result.snippet),
+									abstention: evaluation.abstention,
+									...(typeof evaluation.answer !== "string"
+										? { upstreamFailure: "gold answer is missing" }
+										: {}),
+								})
+							}
+							// Track expected IDs for miss ledger
+							expectedSessionMap.set(
+								evaluation.caseId,
+								evaluation.expectedSessionIds,
+							)
+							expectedTurnMap.set(
+								evaluation.caseId,
+								evaluation.expectedTurnIds ?? [],
+							)
+						} catch (err) {
+							const message = err instanceof Error ? err.message : String(err)
+							if (isBenchmarkStrictMode()) {
+								throw new Error(
+									`benchmark evaluation query failed in strict mode: scenario=${scenario.scenarioId} case=${evaluation.caseId}: ${message}`,
+								)
+							}
+							log.warn("benchmark evaluation query failed", {
+								scenarioId: scenario.scenarioId,
 								caseId: evaluation.caseId,
-								results,
-								latencyMs: Date.now() - startedAt,
-								...(latencyByLane && Object.keys(latencyByLane).length > 0
-									? { latencyByLane }
-									: {}),
-								relevantSessionIds: evaluation.expectedSessionIds,
-								relevantTurnIds: evaluation.expectedTurnIds,
-								relevantDialogIds: evaluation.expectedDialogIds,
-								resolveSessionIds: (result) =>
-									this.resolveBenchmarkResultSessionIds(result, eventEvidence),
-								resolveTurnIds: (result) =>
-									this.resolveBenchmarkResultTurnIds(result, eventEvidence),
-								resolveDialogIds: (result) =>
-									this.resolveBenchmarkResultDialogIds(result, eventEvidence),
-								datasetKind: params.dataset.datasetKind,
-								officialRetrieval: evaluation.officialRetrieval,
-								questionType: evaluation.questionType,
-								abstention: evaluation.abstention,
-								traceOptions: { maxCandidates: 50 },
-							}),
-						)
-						if (params.dataset.datasetKind === "locomo") {
-							qaCases.push({
-								caseId: evaluation.caseId,
-								question: evaluation.query,
-								goldAnswer:
-									typeof evaluation.answer === "string"
-										? evaluation.answer
-										: "",
-								contextPassages: results.map((result) => result.snippet),
-								abstention: evaluation.abstention,
-								...(typeof evaluation.answer !== "string"
-									? { upstreamFailure: "gold answer is missing" }
-									: {}),
+								error: err instanceof Error ? err.message : String(err),
 							})
-						}
-						// Track expected IDs for miss ledger
-						expectedSessionMap.set(
-							evaluation.caseId,
-							evaluation.expectedSessionIds,
-						)
-						expectedTurnMap.set(
-							evaluation.caseId,
-							evaluation.expectedTurnIds ?? [],
-						)
-					} catch (err) {
-						const message = err instanceof Error ? err.message : String(err)
-						if (isBenchmarkStrictMode()) {
-							throw new Error(
-								`benchmark evaluation query failed in strict mode: scenario=${scenario.scenarioId} case=${evaluation.caseId}: ${message}`,
+							passExecutions.push(
+								evaluateRankingCase({
+									caseId: evaluation.caseId,
+									results: [],
+									latencyMs: Date.now() - startedAt,
+									relevantSessionIds: evaluation.expectedSessionIds,
+									relevantTurnIds: evaluation.expectedTurnIds,
+									relevantDialogIds: evaluation.expectedDialogIds,
+									resolveSessionIds: (result) =>
+										this.resolveBenchmarkResultSessionIds(
+											result,
+											eventEvidence,
+										),
+									resolveTurnIds: (result) =>
+										this.resolveBenchmarkResultTurnIds(result, eventEvidence),
+									resolveDialogIds: (result) =>
+										this.resolveBenchmarkResultDialogIds(result, eventEvidence),
+									datasetKind: params.dataset.datasetKind,
+									officialRetrieval: evaluation.officialRetrieval,
+									questionType: evaluation.questionType,
+									abstention: evaluation.abstention,
+									executionError: message,
+								}),
+							)
+							// QA answers are graded once: extra passes measure retrieval,
+							// not the answer model.
+							if (pass === 0 && params.dataset.datasetKind === "locomo") {
+								qaCases.push({
+									caseId: evaluation.caseId,
+									question: evaluation.query,
+									goldAnswer:
+										typeof evaluation.answer === "string"
+											? evaluation.answer
+											: "",
+									contextPassages: [],
+									abstention: evaluation.abstention,
+									upstreamFailure: message,
+								})
+							}
+							expectedSessionMap.set(
+								evaluation.caseId,
+								evaluation.expectedSessionIds,
+							)
+							expectedTurnMap.set(
+								evaluation.caseId,
+								evaluation.expectedTurnIds ?? [],
 							)
 						}
-						log.warn("benchmark evaluation query failed", {
-							scenarioId: scenario.scenarioId,
-							caseId: evaluation.caseId,
-							error: err instanceof Error ? err.message : String(err),
-						})
-						executions.push(
-							evaluateRankingCase({
-								caseId: evaluation.caseId,
-								results: [],
-								latencyMs: Date.now() - startedAt,
-								relevantSessionIds: evaluation.expectedSessionIds,
-								relevantTurnIds: evaluation.expectedTurnIds,
-								relevantDialogIds: evaluation.expectedDialogIds,
-								resolveSessionIds: (result) =>
-									this.resolveBenchmarkResultSessionIds(result, eventEvidence),
-								resolveTurnIds: (result) =>
-									this.resolveBenchmarkResultTurnIds(result, eventEvidence),
-								resolveDialogIds: (result) =>
-									this.resolveBenchmarkResultDialogIds(result, eventEvidence),
-								datasetKind: params.dataset.datasetKind,
-								officialRetrieval: evaluation.officialRetrieval,
-								questionType: evaluation.questionType,
-								abstention: evaluation.abstention,
-								executionError: message,
-							}),
-						)
-						if (params.dataset.datasetKind === "locomo") {
-							qaCases.push({
-								caseId: evaluation.caseId,
-								question: evaluation.query,
-								goldAnswer:
-									typeof evaluation.answer === "string"
-										? evaluation.answer
-										: "",
-								contextPassages: [],
-								abstention: evaluation.abstention,
-								upstreamFailure: message,
-							})
-						}
-						expectedSessionMap.set(
-							evaluation.caseId,
-							evaluation.expectedSessionIds,
-						)
-						expectedTurnMap.set(
-							evaluation.caseId,
-							evaluation.expectedTurnIds ?? [],
-						)
 					}
 				}
 				log.info("benchmark scenario complete", {
@@ -6098,14 +6169,21 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 			}
 		}
 
-		const summary = summarizeBenchmarkExecutions({
-			datasetName: params.dataset.name,
-			datasetKind: params.dataset.datasetKind,
-			retrievalLane: params.retrievalLane,
-			scenarios: scenarios.length,
-			executions,
-			ingest,
-		})
+		// #66: pass 1 is the gate pass — every published metric, release gate, and
+		// regression baseline below is computed from it alone, so gate semantics
+		// are identical whether one pass ran or ten.
+		const passSummaries = executionsByPass.map((passExecutions) =>
+			summarizeBenchmarkExecutions({
+				datasetName: params.dataset.name,
+				datasetKind: params.dataset.datasetKind,
+				retrievalLane: params.retrievalLane,
+				scenarios: scenarios.length,
+				executions: passExecutions,
+				ingest,
+			}),
+		)
+		const summary = passSummaries[0]!
+		const measurementPassReport = summarizeMeasurementPasses(passSummaries)
 		const regressions = await this.relevance!.persistRegression(
 			params.datasetVersion,
 			{
@@ -6161,6 +6239,9 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 				p95LatencyMs: summary.p95LatencyMs,
 				...(summary.laneLatencyP95
 					? { laneLatencyP95: summary.laneLatencyP95 }
+					: {}),
+				...(measurementPassReport
+					? { measurementPasses: measurementPassReport }
 					: {}),
 				rAt5: summary.rAt5,
 				rAt10: summary.rAt10,

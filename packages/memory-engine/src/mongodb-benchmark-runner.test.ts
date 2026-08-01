@@ -8,7 +8,9 @@ import {
 	projectBenchmarkParityFields,
 	rankResultSessions,
 	summarizeBenchmarkExecutions,
+	summarizeMeasurementPasses,
 	type BenchmarkCaseExecution,
+	type BenchmarkSummary,
 } from "./mongodb-benchmark-runner.js"
 import type { MemorySearchResult } from "./types.js"
 import type { MemoryBenchmarkOfficialMetrics } from "./types.js"
@@ -1914,5 +1916,81 @@ describe("per-lane latency aggregation", () => {
 		})
 
 		expect(summary.laneLatencyP95).toBeUndefined()
+	})
+})
+
+// ---------------------------------------------------------------------------
+
+describe("measurement pass aggregation", () => {
+	function passSummary(
+		p95LatencyMs: number,
+		overrides: Partial<BenchmarkSummary> = {},
+	): BenchmarkSummary {
+		return {
+			cases: 2,
+			scoredCases: 2,
+			skippedCases: 0,
+			execution: {
+				attemptedCases: 2,
+				succeededCases: 2,
+				failedCases: 0,
+				retrievalEligibleCases: 2,
+				abstentionCases: 0,
+				missingJudgmentCases: 0,
+				retrievalHits: 2,
+				retrievalMisses: 0,
+				scoredCases: 2,
+			},
+			caseOutcomes: [],
+			hitRate: 1,
+			emptyRate: 0,
+			avgTopScore: 0.9,
+			p95LatencyMs,
+			rAt5: 1,
+			rAt10: 1,
+			ndcgAt10: 1,
+			questionTypeBreakdown: [],
+			...overrides,
+		}
+	}
+
+	it("reports every pass plus the across-pass p95 noise band", () => {
+		const report = summarizeMeasurementPasses([
+			passSummary(2507, {
+				laneLatencyP95: { hybrid: { p95Ms: 900, cases: 2 } },
+			}),
+			passSummary(2611),
+			passSummary(1627),
+		])
+
+		expect(report?.passes).toBe(3)
+		expect(report?.gatePass).toBe(1)
+		expect(report?.samples.map((sample) => sample.pass)).toEqual([1, 2, 3])
+		expect(report?.samples.map((sample) => sample.p95LatencyMs)).toEqual([
+			2507, 2611, 1627,
+		])
+		expect(report?.samples[0]?.laneLatencyP95).toEqual({
+			hybrid: { p95Ms: 900, cases: 2 },
+		})
+		// median of [1627, 2507, 2611]; stddev is population stddev
+		expect(report?.p95LatencyMs.median).toBe(2507)
+		expect(report?.p95LatencyMs.min).toBe(1627)
+		expect(report?.p95LatencyMs.max).toBe(2611)
+		expect(report?.p95LatencyMs.stddev).toBeCloseTo(441.4, 1)
+	})
+
+	it("averages the two middle passes for an even pass count", () => {
+		const report = summarizeMeasurementPasses([
+			passSummary(1000),
+			passSummary(3000),
+			passSummary(2000),
+			passSummary(4000),
+		])
+
+		expect(report?.p95LatencyMs.median).toBe(2500)
+	})
+
+	it("omits the report for a single measurement pass", () => {
+		expect(summarizeMeasurementPasses([passSummary(2507)])).toBeUndefined()
 	})
 })
