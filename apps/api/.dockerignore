@@ -1,0 +1,14 @@
+node_modules
+dist
+.turbo
+.git
+.github
+docs
+apps/web
+apps/docs
+apps/mcp
+benchmarks
+*.md
+!apps/api/README.md
+.env*
+docker

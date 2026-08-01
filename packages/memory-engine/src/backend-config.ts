@@ -217,7 +217,10 @@ export function resolveMemoryBackendConfig(params: {
 			citations,
 			mongodb: {
 				uri,
-				database: mongoCfg?.database ?? "memongo",
+				database:
+					(process.env.MEMONGO_MONGODB_DATABASE?.trim() || undefined) ??
+					mongoCfg?.database ??
+					"memongo",
 				collectionPrefix:
 					(envCollectionPrefix && envCollectionPrefix.length > 0
 						? envCollectionPrefix

@@ -1,0 +1,73 @@
+# docker-compose.full.yml - Memongo full stack (API + optional local MongoDB)
+#
+# One-command local development:
+#   docker compose -f docker/docker-compose.full.yml --profile local up -d
+#
+# API only, connecting to MongoDB Atlas cloud:
+#   MEMONGO_MONGODB_URI="mongodb+srv://user:pass@cluster.mongodb.net/?appName=memongo" \
+#   MEMONGO_API_KEY="local-dev-secret" \
+#   docker compose -f docker/docker-compose.full.yml up -d
+#
+# With local MongoDB + auto-embeddings:
+#   VOYAGE_API_KEY="al-your-atlas-model-api-key" \
+#   MEMONGO_API_KEY="local-dev-secret" \
+#   docker compose -f docker/docker-compose.full.yml --profile local up -d
+#
+# Profiles:
+#   (default)  — API only, expects MEMONGO_MONGODB_URI (Atlas or external Mongo)
+#   local      — API + local MongoDB (mongodb-atlas-local preview container)
+
+services:
+  # ─── API server (always runs) ─────────────────────────────────────
+  api:
+    build:
+      context: ..
+      dockerfile: apps/api/Dockerfile
+    container_name: memongo-api
+    ports:
+      - "${MEMONGO_API_PORT:-3847}:3847"
+    environment:
+      - NODE_ENV=production
+      - MEMONGO_API_HOST=0.0.0.0
+      - MEMONGO_API_PORT=3847
+      - MEMONGO_API_KEY=${MEMONGO_API_KEY:-local-dev-secret}
+      - MEMONGO_AGENT_ID=${MEMONGO_AGENT_ID:-main}
+      # When using the local profile, point at the mongodb service container.
+      # When using Atlas (default), set MEMONGO_MONGODB_URI to your +srv URI.
+      - MEMONGO_MONGODB_URI=${MEMONGO_MONGODB_URI:-mongodb://mongodb:27017/?directConnection=true}
+    depends_on:
+      mongodb:
+        condition: service_healthy
+        required: false
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3847/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+
+  # ─── Local MongoDB (only with --profile local) ────────────────────
+  mongodb:
+    image: mongodb/mongodb-atlas-local:preview
+    container_name: memongo-preview
+    ports:
+      - "${MONGODB_PORT:-27017}:27017"
+    environment:
+      - VOYAGE_API_KEY=${VOYAGE_API_KEY:-}
+      - MONGODB_ATLAS_TELEMETRY_ENABLE=false
+    volumes:
+      - memongo_preview_data:/data/db
+      - memongo_preview_config:/data/configdb
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/runner", "healthcheck"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+    profiles: ["local"]
+
+volumes:
+  memongo_preview_data:
+  memongo_preview_config:

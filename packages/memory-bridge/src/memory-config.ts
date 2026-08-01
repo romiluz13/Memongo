@@ -54,10 +54,12 @@ export function buildMemongoConfig(
 	const uriFromFile = fromFile?.memory?.mongodb?.uri?.trim()
 	const uri = uriFromEnv || uriFromFile
 	const collectionPrefixFromEnv = env.MEMONGO_MONGODB_COLLECTION_PREFIX?.trim()
+	const databaseFromEnv = env.MEMONGO_MONGODB_DATABASE?.trim()
 
 	const mergedMongo: MemoryConfig["mongodb"] = {
 		...fromFile?.memory?.mongodb,
 		...(uri ? { uri } : {}),
+		...(databaseFromEnv ? { database: databaseFromEnv } : {}),
 		...(collectionPrefixFromEnv
 			? { collectionPrefix: collectionPrefixFromEnv }
 			: {}),
