@@ -6697,6 +6697,71 @@ describe("searchV2 lane latency instrumentation", () => {
 		}
 	})
 
+	it("records the reranking toggles in benchmark run identity", () => {
+		const previous = {
+			enabled: process.env.MEMONGO_RERANKING_ENABLED,
+			minScore: process.env.MEMONGO_RERANK_MIN_SCORE,
+		}
+		process.env.MEMONGO_RERANKING_ENABLED = "false"
+		process.env.MEMONGO_RERANK_MIN_SCORE = "0.5"
+		try {
+			const base = buildMockManager()
+			const baseCfg = (
+				base as unknown as { config: { mongodb: Record<string, unknown> } }
+			).config.mongodb
+			const manager = buildMockManager({
+				config: {
+					mongodb: {
+						...baseCfg,
+						deploymentProfile: "atlas",
+						numDimensions: 1024,
+						quantization: "float32",
+						sources: {
+							conversation: { enabled: true },
+							reference: { enabled: true },
+							structured: { enabled: true },
+						},
+						graph: {
+							enabled: false,
+							maxGraphDepth: 2,
+							entityExtraction: { method: "regex", timeoutMs: 1000 },
+						},
+					},
+				},
+			})
+			const snapshot = (
+				manager as unknown as {
+					snapshotBenchmarkRunConfiguration: (p: {
+						executionProfile: "shipped" | "diagnostic"
+						retrievalLane: string
+						maxResults: number
+						minScore: number
+					}) => { settings: Record<string, unknown> }
+				}
+			).snapshotBenchmarkRunConfiguration({
+				executionProfile: "shipped",
+				retrievalLane: "native",
+				maxResults: 10,
+				minScore: 0.01,
+			})
+
+			// A rerank-off run must not hash identically to a rerank-on run.
+			expect(snapshot.settings["env.MEMONGO_RERANKING_ENABLED"]).toBe("false")
+			expect(snapshot.settings["env.MEMONGO_RERANK_MIN_SCORE"]).toBe("0.5")
+		} finally {
+			for (const [key, value] of [
+				["MEMONGO_RERANKING_ENABLED", previous.enabled],
+				["MEMONGO_RERANK_MIN_SCORE", previous.minScore],
+			] as const) {
+				if (value === undefined) {
+					delete process.env[key]
+				} else {
+					process.env[key] = value
+				}
+			}
+		}
+	})
+
 	it("search() hands the lane breakdown to the caller's onLaneLatency sink", async () => {
 		mocked(checkCache).mockResolvedValue({
 			hit: false,

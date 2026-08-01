@@ -4203,6 +4203,10 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 			"MEMONGO_LLM_ENRICHMENT_TIMEOUT_MS",
 			"MEMONGO_PREFERENCE_EVIDENCE_MODE",
 			"MEMONGO_QUERY_DECOMPOSITION_MODE",
+			// #66: reranking costs ~715ms of p95 and changes ranking, so a
+			// rerank-off run must not hash identically to a rerank-on one.
+			"MEMONGO_RERANKING_ENABLED",
+			"MEMONGO_RERANK_MIN_SCORE",
 			"MEMONGO_RERANK_STRICT",
 			"MEMONGO_SCORING_ABLATION",
 			"MEMONGO_SESSION_EVIDENCE_MODE",
