@@ -20,6 +20,7 @@ memongo/
     client/          TypeScript HTTP client SDK
     tools/           AI SDK tool helpers
     lib/             Shared types and utilities
+    pi-extension/    Pi coding-agent extension (additive semantic memory)
   docker/
     mongodb/         Local MongoDB dev stack (atlas-local + mongot)
   docs/              Memongo documentation
@@ -50,6 +51,7 @@ memongo/
 - `@memongo/memory-bridge` -- facade
 - `@memongo/client` -- HTTP client SDK
 - `@memongo/tools` -- AI SDK tools
+- `@memongo/pi-extension` -- Pi coding-agent extension
 - `@memongo/lib` -- shared utilities (private)
 - `@memongo/api`, `@memongo/mcp`, `@memongo/web` -- apps (private)
 
@@ -62,3 +64,17 @@ memongo/
 
 - Never commit secrets. Use environment variables (`MEMONGO_MONGODB_URI`, `MEMONGO_API_KEY`, etc.).
 - Never publish real connection strings, API keys, or personal data in code or docs.
+
+## Agent skills
+
+### Issue tracker
+
+Issues live in the `romiluz13/Memongo` GitHub Issues, via the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The five canonical roles, each label string equal to its name. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`.

@@ -45,7 +45,8 @@ jobs:
             packages/memory-bridge \
             packages/memongo-memory \
             packages/client \
-            packages/tools
+            packages/tools \
+            packages/pi-extension
           do
             name=$(node -p "require('./$pkg/package.json').name")
             version=$(node -p "require('./$pkg/package.json').version")

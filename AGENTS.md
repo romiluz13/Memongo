@@ -20,6 +20,7 @@ memongo/
     client/          TypeScript HTTP client SDK
     tools/           AI SDK tool helpers
     lib/             Shared types and utilities
+    pi-extension/    Pi coding-agent extension (additive semantic memory)
   docker/
     mongodb/         Local MongoDB dev stack (atlas-local + mongot)
   docs/              Memongo documentation
@@ -50,6 +51,7 @@ memongo/
 - `@memongo/memory-bridge` -- facade
 - `@memongo/client` -- HTTP client SDK
 - `@memongo/tools` -- AI SDK tools
+- `@memongo/pi-extension` -- Pi coding-agent extension
 - `@memongo/lib` -- shared utilities (private)
 - `@memongo/api`, `@memongo/mcp`, `@memongo/web` -- apps (private)
 

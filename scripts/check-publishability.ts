@@ -25,6 +25,7 @@ type PublishablePackage = {
 	dir: string
 	name: string
 	supportedSurface: boolean
+	piExtension?: boolean
 }
 
 const rootDir = process.cwd()
@@ -58,6 +59,12 @@ const publishablePackages: PublishablePackage[] = [
 		dir: "packages/tools",
 		name: "@memongo/tools",
 		supportedSurface: true,
+	},
+	{
+		dir: "packages/pi-extension",
+		name: "@memongo/pi-extension",
+		supportedSurface: false,
+		piExtension: true,
 	},
 ] as const
 
@@ -197,29 +204,74 @@ function assertBuiltEntrypoints(
 	}
 }
 
+function assertPiExtensions(
+	packageDir: string,
+	packageJson: Record<string, unknown>,
+	packageRelPath: string,
+): string[] {
+	const pi = packageJson["pi"]
+	if (typeof pi !== "object" || pi === null) {
+		fail(`missing "pi" manifest in ${packageRelPath}`)
+	}
+	const ext = (pi as Record<string, unknown>).extensions
+	if (!Array.isArray(ext) || ext.length === 0) {
+		fail(`"pi.extensions" must be a non-empty array in ${packageRelPath}`)
+	}
+	const paths: string[] = []
+	for (const entry of ext) {
+		if (typeof entry !== "string") {
+			fail(`"pi.extensions" entries must be strings in ${packageRelPath}`)
+		}
+		const relPath = entry.replace(/^\.\//, "")
+		paths.push(relPath)
+		const resolved = path.join(packageDir, relPath)
+		if (!fs.existsSync(resolved)) {
+			fail(`missing pi extension entrypoint in ${packageRelPath}: ${relPath}`)
+		}
+	}
+	return paths
+}
+
 function assertTarballContents(
 	packageRelPath: string,
 	packageJson: Record<string, unknown>,
 	packResult: NpmPackDryRunResult,
+	piExtensionPaths?: string[],
 ) {
 	const tarballPaths = new Set(packResult.files.map((file) => file.path))
 	if (!tarballPaths.has("README.md")) {
 		fail(`package tarball is missing README.md: ${packageRelPath}`)
 	}
 
-	const main = assertStringField(packageJson, "main", packageRelPath).replace(
-		/^\.\//,
-		"",
-	)
-	const types = assertStringField(packageJson, "types", packageRelPath).replace(
-		/^\.\//,
-		"",
-	)
-	for (const requiredFile of [main, types]) {
-		if (!tarballPaths.has(requiredFile)) {
-			fail(
-				`package tarball is missing built entrypoint "${requiredFile}" in ${packageRelPath}`,
-			)
+	if (piExtensionPaths && piExtensionPaths.length > 0) {
+		for (const requiredFile of piExtensionPaths) {
+			// Entry can be a file or a directory. For directories, npm packs
+			// the files inside (e.g. "extensions/index.ts"), not the dir name.
+			const found =
+				tarballPaths.has(requiredFile) ||
+				[...tarballPaths].some((p) => p.startsWith(`${requiredFile}/`))
+			if (!found) {
+				fail(
+					`package tarball is missing pi extension entrypoint "${requiredFile}" in ${packageRelPath}`,
+				)
+			}
+		}
+	} else {
+		const main = assertStringField(packageJson, "main", packageRelPath).replace(
+			/^\.\//,
+			"",
+		)
+		const types = assertStringField(
+			packageJson,
+			"types",
+			packageRelPath,
+		).replace(/^\.\//, "")
+		for (const requiredFile of [main, types]) {
+			if (!tarballPaths.has(requiredFile)) {
+				fail(
+					`package tarball is missing built entrypoint "${requiredFile}" in ${packageRelPath}`,
+				)
+			}
 		}
 	}
 
@@ -278,10 +330,20 @@ function checkPackage(
 
 	const packageJson = readJson(packageJsonPath)
 	assertMetadata(packageJson, packageSpec.dir)
-	assertBuiltEntrypoints(packageDir, packageJson, packageSpec.dir)
+
+	let piExtensionPaths: string[] | undefined
+	if (packageSpec.piExtension) {
+		piExtensionPaths = assertPiExtensions(
+			packageDir,
+			packageJson,
+			packageSpec.dir,
+		)
+	} else {
+		assertBuiltEntrypoints(packageDir, packageJson, packageSpec.dir)
+	}
 
 	const dryRun = runNpmPackDryRun(packageDir)
-	assertTarballContents(packageSpec.dir, packageJson, dryRun)
+	assertTarballContents(packageSpec.dir, packageJson, dryRun, piExtensionPaths)
 
 	const tarballPath = createTarball(packageDir, packDir)
 	const unpackDir = fs.mkdtempSync(path.join(packDir, "unpack-"))
@@ -361,6 +423,39 @@ function installSmoke(
 		cwd: installDir,
 		stdio: "pipe",
 	})
+
+	if (targetPackage.piExtension) {
+		// Pi extensions are loaded by Pi's jiti loader, not Node module resolution.
+		// Verify the pi manifest + extension entrypoints exist in the installed tarball.
+		const installedPkg = readJson(
+			path.join(installDir, "node_modules", targetPackage.name, "package.json"),
+		)
+		const pi = installedPkg["pi"]
+		if (
+			typeof pi !== "object" ||
+			pi === null ||
+			!Array.isArray((pi as Record<string, unknown>).extensions)
+		) {
+			fail(
+				`installed pi extension missing "pi.extensions" manifest: ${targetPackage.name}`,
+			)
+		}
+		const ext = (pi as Record<string, unknown>).extensions as string[]
+		for (const entry of ext) {
+			const relPath = entry.replace(/^\.\//, "")
+			if (
+				!fs.existsSync(
+					path.join(installDir, "node_modules", targetPackage.name, relPath),
+				)
+			) {
+				fail(
+					`installed pi extension missing entrypoint "${relPath}": ${targetPackage.name}`,
+				)
+			}
+		}
+		return
+	}
+
 	execFileSync(
 		"node",
 		[

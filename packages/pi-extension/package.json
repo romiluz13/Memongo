@@ -1,0 +1,50 @@
+{
+	"name": "@memongo/pi-extension",
+	"version": "2.0.0",
+	"description": "Pi coding-agent extension — exposes Memongo's durable, cross-project, MongoDB-backed semantic memory as additive tools alongside pi-hermes-memory.",
+	"type": "module",
+	"license": "Apache-2.0",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/romiluz13/memongo.git",
+		"directory": "packages/pi-extension"
+	},
+	"author": "Rom Iluz",
+	"keywords": [
+		"pi-package",
+		"memongo",
+		"memory",
+		"mongodb",
+		"pi-extension"
+	],
+	"pi": {
+		"extensions": [
+			"./extensions"
+		]
+	},
+	"files": [
+		"extensions",
+		"README.md"
+	],
+	"scripts": {
+		"check-types": "node ../../node_modules/typescript/bin/tsc --noEmit -p tsconfig.json"
+	},
+	"dependencies": {
+		"@memongo/client": "2.0.0"
+	},
+	"peerDependencies": {
+		"@earendil-works/pi-ai": "*",
+		"@earendil-works/pi-coding-agent": "*",
+		"typebox": "*"
+	},
+	"devDependencies": {
+		"@earendil-works/pi-ai": "0.83.0",
+		"@earendil-works/pi-coding-agent": "0.83.0",
+		"typebox": "1.1.33",
+		"typescript": "^5.8.0"
+	},
+	"homepage": "https://github.com/romiluz13/memongo#readme",
+	"bugs": {
+		"url": "https://github.com/romiluz13/memongo/issues"
+	}
+}
