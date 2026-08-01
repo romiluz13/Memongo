@@ -16,6 +16,9 @@
  *   MEMONGO_AGENT_ID  — agent identity (default "pi-agent")
  */
 
+import * as fs from "node:fs"
+import * as path from "node:path"
+import * as os from "node:os"
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent"
 import { Type } from "typebox"
 import { StringEnum } from "@earendil-works/pi-ai"
@@ -27,6 +30,37 @@ const AGENT_ID = process.env.MEMONGO_AGENT_ID ?? "pi-agent"
 
 const SNIPPET_MAX = 400
 const DEFAULT_LIMIT = 5
+
+/**
+ * Detect the project name from cwd — mirrors pi-hermes-memory's detectProject:
+ * git repo root basename (so linked worktrees share one identity), or cwd
+ * basename outside Git. Returns null for home/root (no project).
+ */
+function detectProject(cwd: string): string | null {
+	const resolved = path.resolve(cwd)
+	const home = path.resolve(os.homedir())
+	if (resolved === home || resolved === "/" || !resolved) return null
+
+	// Walk up looking for a .git dir or file (worktree-aware at the top level).
+	let current = resolved
+	while (true) {
+		const dotGit = path.join(current, ".git")
+		let stat: fs.Stats | undefined
+		try {
+			stat = fs.statSync(dotGit)
+		} catch {
+			stat = undefined
+		}
+		if (stat) return path.basename(current)
+		const parent = path.dirname(current)
+		if (parent === current) break
+		current = parent
+	}
+
+	const name = path.basename(resolved)
+	if (!name || name === "." || name === "..") return null
+	return name
+}
 
 interface MemongoState {
 	client: MemongoClient
@@ -107,6 +141,12 @@ export default async function memongoExtension(
 					maximum: 20,
 				}),
 			),
+			project: Type.Optional(
+				Type.String({
+					description:
+						"Narrow to a specific project (repo basename). Omit for cross-project search (default — the main value of Memongo).",
+				}),
+			),
 			searchMode: Type.Optional(
 				StringEnum(["auto", "direct", "agentic"] as const, {
 					description:
@@ -121,7 +161,7 @@ export default async function memongoExtension(
 				}),
 			),
 		}),
-		async execute(_id, params, _signal, _onUpdate, _ctx) {
+		async execute(_id, params, _signal, _onUpdate, ctx) {
 			if (!state.available) {
 				return {
 					content: [
@@ -135,24 +175,35 @@ export default async function memongoExtension(
 			}
 			try {
 				const limit = params.limit ?? DEFAULT_LIMIT
+				// If a project filter is given, fetch more candidates then post-filter by
+				// scopeRef (repo basename) — Memongo's search API doesn't expose a
+				// direct scopeRef filter, so we over-fetch and narrow in the adapter.
+				const fetchLimit = params.project ? Math.min(limit * 4, 20) : limit
 				const res = await state.client.searchDetailed({
 					query: params.query,
 					agentId: AGENT_ID,
-					limit,
-					maxResults: limit,
+					limit: fetchLimit,
+					maxResults: fetchLimit,
 					searchMode: params.searchMode,
 					minScore: params.minScore,
 				})
-				const results = res.results ?? []
+				let results = res.results ?? []
+				if (params.project) {
+					results = results.filter((r) => r.scopeRef === params.project)
+				}
+				results = results.slice(0, limit)
 				if (results.length === 0) {
+					const scopeNote = params.project
+						? ` (filtered to project "${params.project}")`
+						: ""
 					return {
 						content: [
 							{
 								type: "text" as const,
-								text: `No Memongo results for "${params.query}".`,
+								text: `No Memongo results for "${params.query}"${scopeNote}.`,
 							},
 						],
-						details: { count: 0 },
+						details: { count: 0, project: params.project ?? null },
 					}
 				}
 				const lines = results.map((r, i) => `${i + 1}. ${formatResult(r)}`)
@@ -186,6 +237,7 @@ export default async function memongoExtension(
 			"Do NOT use for temporary task state — use the local memory tool for that.",
 			"Provide a concise `key` (slug) and the full observation as `value`.",
 			"Use scope='global' for knowledge that applies everywhere, 'user' for personal preferences, 'workspace' (default) for project-specific.",
+			"The current project (git repo basename) is auto-detected and set as scopeRef for workspace scope — you only need to pass scopeRef to override.",
 		],
 		parameters: Type.Object({
 			type: StringEnum(
@@ -233,7 +285,7 @@ export default async function memongoExtension(
 				}),
 			),
 		}),
-		async execute(_id, params, _signal, _onUpdate, _ctx) {
+		async execute(_id, params, _signal, _onUpdate, ctx) {
 			if (!state.available) {
 				return {
 					content: [
@@ -246,29 +298,46 @@ export default async function memongoExtension(
 				}
 			}
 			try {
+				const scope = params.scope ?? "workspace"
+				// Auto-detect project from cwd (mirrors pi-hermes-memory). For
+				// workspace scope, default scopeRef to the current git repo basename
+				// unless the agent explicitly overrides it.
+				let scopeRef = params.scopeRef
+				if (!scopeRef && scope === "workspace") {
+					const detected = ctx?.cwd ? detectProject(ctx.cwd) : undefined
+					scopeRef = detected ?? undefined
+				}
 				const entry: Record<string, unknown> = {
 					type: params.type,
 					key: params.key,
 					value: params.value,
-					scope: params.scope ?? "workspace",
+					scope,
 					salience: params.salience ?? "normal",
 				}
 				if (params.context) entry.context = params.context
-				if (params.scopeRef) entry.scopeRef = params.scopeRef
+				if (scopeRef) entry.scopeRef = scopeRef
 				if (params.tags) entry.tags = params.tags
 
 				const res = await state.client.writeStructured({
 					entry,
 					agentId: AGENT_ID,
 				})
+				const scopeSummary = scopeRef
+					? ` [${scope}/${scopeRef}]`
+					: ` [${scope}]`
 				return {
 					content: [
 						{
 							type: "text" as const,
-							text: `Saved to Memongo: ${params.type}/${params.key} (id: ${res.id})`,
+							text: `Saved to Memongo: ${params.type}/${params.key}${scopeSummary} (id: ${res.id})`,
 						},
 					],
-					details: { upserted: res.upserted, id: res.id },
+					details: {
+						upserted: res.upserted,
+						id: res.id,
+						scope,
+						scopeRef: scopeRef ?? null,
+					},
 				}
 			} catch (err) {
 				return {
