@@ -23,7 +23,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent"
 import { Type } from "typebox"
 import { StringEnum } from "@earendil-works/pi-ai"
 import { MemongoClient, MemongoClientError } from "@memongo/client"
-import type { MemongoSearchDetailedResult } from "@memongo/client"
+import type { MemongoSearchDetailedResponse } from "@memongo/client"
 
 // Defaults are baked in so the extension works even when Pi doesn't inherit
 // shell env vars (~/.zshrc). Env vars still override if present.
@@ -201,7 +201,7 @@ export default async function memongoExtension(
 						searchMode: params.searchMode,
 						minScore: params.minScore,
 					}),
-					signal,
+					signal: _signal,
 				})
 				if (!searchRes.ok) {
 					const errBody = await searchRes.text().catch(() => "")
@@ -216,7 +216,7 @@ export default async function memongoExtension(
 					}
 				}
 				const res = (await searchRes.json()) as {
-					results?: Array<MemongoSearchDetailedResult>
+					results?: Array<MemongoSearchDetailedResponse["results"][number]>
 				}
 				let results = res.results ?? []
 				if (params.project) {
