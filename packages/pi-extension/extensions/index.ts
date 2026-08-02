@@ -23,6 +23,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent"
 import { Type } from "typebox"
 import { StringEnum } from "@earendil-works/pi-ai"
 import { MemongoClient, MemongoClientError } from "@memongo/client"
+import type { MemongoSearchDetailedResult } from "@memongo/client"
 
 // Defaults are baked in so the extension works even when Pi doesn't inherit
 // shell env vars (~/.zshrc). Env vars still override if present.
@@ -181,14 +182,42 @@ export default async function memongoExtension(
 				// scopeRef (repo basename) — Memongo's search API doesn't expose a
 				// direct scopeRef filter, so we over-fetch and narrow in the adapter.
 				const fetchLimit = params.project ? Math.min(limit * 4, 20) : limit
-				const res = await state.client.searchDetailed({
-					query: params.query,
-					agentId: AGENT_ID,
-					limit: fetchLimit,
-					maxResults: fetchLimit,
-					searchMode: params.searchMode,
-					minScore: params.minScore,
+				// Search at `global` scope — Pi is single-user dogfood, so there's no
+				// tenant to isolate from. The API defaults to `agent` scope which
+				// returns 0 results for global-scoped memories. The client SDK's
+				// searchDetailed doesn't accept scope, so call the API directly.
+				const searchRes = await fetch(`${API_URL}/v1/search-detailed`, {
+					method: "POST",
+					headers: {
+						"Content-Type": "application/json",
+						...(API_KEY ? { Authorization: `Bearer ${API_KEY}` } : {}),
+					},
+					body: JSON.stringify({
+						query: params.query,
+						agentId: AGENT_ID,
+						scope: "global",
+						limit: fetchLimit,
+						maxResults: fetchLimit,
+						searchMode: params.searchMode,
+						minScore: params.minScore,
+					}),
+					signal,
 				})
+				if (!searchRes.ok) {
+					const errBody = await searchRes.text().catch(() => "")
+					return {
+						content: [
+							{
+								type: "text" as const,
+								text: `memongo_search failed: HTTP ${searchRes.status} ${truncate(errBody, 200)}`,
+							},
+						],
+						details: { error: true, status: searchRes.status },
+					}
+				}
+				const res = (await searchRes.json()) as {
+					results?: Array<MemongoSearchDetailedResult>
+				}
 				let results = res.results ?? []
 				if (params.project) {
 					results = results.filter((r) => r.scopeRef === params.project)
