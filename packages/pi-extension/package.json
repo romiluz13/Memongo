@@ -1,6 +1,6 @@
 {
 	"name": "@memongo/pi-extension",
-	"version": "2.1.0",
+	"version": "2.1.1",
 	"description": "Pi coding-agent extension — exposes Memongo's durable, cross-project, MongoDB-backed semantic memory as additive tools alongside pi-hermes-memory.",
 	"type": "module",
 	"license": "Apache-2.0",
