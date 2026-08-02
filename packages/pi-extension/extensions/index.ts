@@ -24,9 +24,11 @@ import { Type } from "typebox"
 import { StringEnum } from "@earendil-works/pi-ai"
 import { MemongoClient, MemongoClientError } from "@memongo/client"
 
+// Defaults are baked in so the extension works even when Pi doesn't inherit
+// shell env vars (~/.zshrc). Env vars still override if present.
 const API_URL = process.env.MEMONGO_API_URL ?? "http://127.0.0.1:3847"
-const API_KEY = process.env.MEMONGO_API_KEY ?? undefined
-const AGENT_ID = process.env.MEMONGO_AGENT_ID ?? "pi-agent"
+const API_KEY = process.env.MEMONGO_API_KEY ?? "local-dev-secret"
+const AGENT_ID = process.env.MEMONGO_AGENT_ID ?? "pi"
 
 const SNIPPET_MAX = 400
 const DEFAULT_LIMIT = 5
