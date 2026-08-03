@@ -78,3 +78,60 @@ export function mergeQueryClauses(
 		),
 	}
 }
+
+// ---------------------------------------------------------------------------
+// P4.4.1: TTL expiration (fix-plan-2026-08-03 P4.4.1)
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolved session-scope TTL settings (memory.mongodb.ttl). Off by default;
+ * when enabled, writes carrying a sessionId get an absolute `expiresAt` of
+ * recordedAt + sessionDays unless the caller passes an explicit expiresAt.
+ */
+export type MemoryTtlSettings = {
+	enabled: boolean
+	sessionDays: number
+}
+
+/**
+ * Read-side guard for the optional TTL indexes on `events` and
+ * `structured_mem`: MongoDB's TTL sweep only runs about every 60s, so an
+ * expired document can still be returned until the sweep deletes it. Every
+ * read path composes this clause to hide expired docs immediately. The
+ * `$exists: false` branch keeps the clause semantics-neutral for documents
+ * written without an expiresAt (TTL disabled), so it is applied
+ * unconditionally rather than gated on config.
+ */
+export function buildUnexpiredClause(
+	options: { asOf?: Date; field?: string } = {},
+): Document {
+	const asOf = resolveTemporalAsOf(options.asOf)
+	const field = options.field ?? "expiresAt"
+	return {
+		$or: [{ [field]: { $exists: false } }, { [field]: { $gt: asOf } }],
+	}
+}
+
+/**
+ * Resolve the expiresAt for one write. An explicit per-write value always
+ * wins; otherwise the session-scope default applies only when the config is
+ * enabled AND the write carries a sessionId. Returns undefined when no TTL
+ * applies, so callers can omit the field entirely (byte-identical writes
+ * when TTL is off).
+ */
+export function resolveWriteExpiresAt(params: {
+	explicit?: Date
+	sessionId?: string
+	ttl?: MemoryTtlSettings
+	now?: Date
+}): Date | undefined {
+	if (params.explicit instanceof Date) {
+		return params.explicit
+	}
+	const ttl = params.ttl
+	if (!ttl?.enabled || !params.sessionId) {
+		return undefined
+	}
+	const now = params.now ?? new Date()
+	return new Date(now.getTime() + ttl.sessionDays * 86_400_000)
+}

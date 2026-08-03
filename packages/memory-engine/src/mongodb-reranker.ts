@@ -22,6 +22,8 @@ export type RerankConfig = {
 	recencyBoost?: number
 	/** Post-CE access-count boost weight applied after reranking (0 disables). */
 	accessBoost?: number
+	/** Raw-window lane temporal-proximity weight (0 disables; default 0.1). */
+	temporalProximityBoost?: number
 }
 
 export type RerankResult = {

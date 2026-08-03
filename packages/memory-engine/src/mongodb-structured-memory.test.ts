@@ -6,6 +6,7 @@ import type { DetectedCapabilities } from "./mongodb-schema.js"
 import {
 	writeStructuredMemory,
 	searchStructuredMemory,
+	getStructuredMemoryByHandle,
 	getStructuredMemoryByType,
 	type StructuredMemoryEntry,
 } from "./mongodb-structured-memory.js"
@@ -717,8 +718,8 @@ describe("searchStructuredMemory", () => {
 
 		const pipeline = (col.aggregate as ReturnType<typeof vi.fn>).mock
 			.calls[0][0]
-		// Pipeline: $vectorSearch, $limit, $project
-		expect(pipeline[1].$limit).toBe(3)
+		// Pipeline: $vectorSearch, $match (P4.4.1 unexpired), $limit, $project
+		expect(pipeline[2].$limit).toBe(3)
 	})
 
 	it("uses textFieldPath 'value' for automated mode in structured memory (F5)", async () => {
@@ -907,7 +908,204 @@ describe("getStructuredMemoryByType", () => {
 		)
 
 		const findCall = (col.find as ReturnType<typeof vi.fn>).mock.calls[0]
-		expect(findCall[0]).toEqual({ type: "fact", agentId: "main" })
+		expect(findCall[0]).toEqual({
+			type: "fact",
+			agentId: "main",
+			$or: [
+				{ expiresAt: { $exists: false } },
+				{ expiresAt: { $gt: expect.any(Date) } },
+			],
+		})
 		expect(findCall[1]).toMatchObject({ sort: { updatedAt: -1 }, limit: 10 })
+	})
+})
+
+// ---------------------------------------------------------------------------
+// P4.4.1: TTL expiration — structured_mem writes and reads
+// ---------------------------------------------------------------------------
+
+describe("structured memory TTL expiration (P4.4.1)", () => {
+	function lastSetDoc(col: Collection): Record<string, unknown> {
+		const call = (col.updateOne as ReturnType<typeof vi.fn>).mock.calls[0]
+		return (call[1] as Record<string, Record<string, unknown>>).$set
+	}
+
+	it("persists an explicit per-write expiresAt", async () => {
+		const col = createMockStructuredCol()
+		const expiresAt = new Date("2026-09-01T00:00:00.000Z")
+
+		await writeStructuredMemory({
+			db: mockDb({
+				test_structured_mem: col,
+				test_structured_mem_revisions: createMockStructuredCol(),
+				test_query_cache: createMockStructuredCol(),
+			}),
+			prefix: "test_",
+			entry: {
+				type: "fact",
+				key: "expiring-fact",
+				value: "short-lived fact",
+				agentId: "main",
+				expiresAt,
+			},
+			embeddingMode: "automated",
+		})
+
+		expect(lastSetDoc(col).expiresAt).toBe(expiresAt)
+	})
+
+	it("derives expiresAt from the session-scope TTL default when the entry carries a sessionId", async () => {
+		const col = createMockStructuredCol()
+		const before = Date.now()
+
+		await writeStructuredMemory({
+			db: mockDb({
+				test_structured_mem: col,
+				test_structured_mem_revisions: createMockStructuredCol(),
+				test_query_cache: createMockStructuredCol(),
+			}),
+			prefix: "test_",
+			entry: {
+				type: "fact",
+				key: "session-fact",
+				value: "session-scoped fact",
+				agentId: "main",
+				sessionId: "sess-1",
+			},
+			embeddingMode: "automated",
+			ttl: { enabled: true, sessionDays: 7 },
+		})
+
+		const after = Date.now()
+		const expiresAt = lastSetDoc(col).expiresAt as Date
+		expect(expiresAt).toBeInstanceOf(Date)
+		expect(expiresAt.getTime()).toBeGreaterThanOrEqual(before + 7 * 86_400_000)
+		expect(expiresAt.getTime()).toBeLessThanOrEqual(after + 7 * 86_400_000)
+	})
+
+	it("lets an explicit expiresAt win over the session-scope default", async () => {
+		const col = createMockStructuredCol()
+		const expiresAt = new Date("2026-08-10T00:00:00.000Z")
+
+		await writeStructuredMemory({
+			db: mockDb({
+				test_structured_mem: col,
+				test_structured_mem_revisions: createMockStructuredCol(),
+				test_query_cache: createMockStructuredCol(),
+			}),
+			prefix: "test_",
+			entry: {
+				type: "fact",
+				key: "explicit-wins",
+				value: "explicit expiry",
+				agentId: "main",
+				sessionId: "sess-1",
+				expiresAt,
+			},
+			embeddingMode: "automated",
+			ttl: { enabled: true, sessionDays: 7 },
+		})
+
+		expect(lastSetDoc(col).expiresAt).toBe(expiresAt)
+	})
+
+	it("omits expiresAt when TTL is disabled and no explicit field is given", async () => {
+		const col = createMockStructuredCol()
+
+		await writeStructuredMemory({
+			db: mockDb({
+				test_structured_mem: col,
+				test_structured_mem_revisions: createMockStructuredCol(),
+				test_query_cache: createMockStructuredCol(),
+			}),
+			prefix: "test_",
+			entry: {
+				type: "fact",
+				key: "durable-fact",
+				value: "durable fact",
+				agentId: "main",
+				sessionId: "sess-1",
+			},
+			embeddingMode: "automated",
+			ttl: { enabled: false, sessionDays: 7 },
+		})
+
+		expect(lastSetDoc(col)).not.toHaveProperty("expiresAt")
+	})
+
+	it("excludes expired docs from the vector lane via a post-$vectorSearch $match", async () => {
+		const col = createMockStructuredCol()
+		vi.mocked(col.aggregate).mockReturnValueOnce({
+			toArray: vi.fn(async () => []),
+		} as unknown as ReturnType<Collection["aggregate"]>)
+
+		await searchStructuredMemory(col, "anything", [0.1, 0.2], {
+			maxResults: 5,
+			capabilities: baseCapabilities,
+			vectorIndexName: "test_vec",
+			embeddingMode: "automated",
+		})
+
+		const pipeline = (col.aggregate as ReturnType<typeof vi.fn>).mock
+			.calls[0][0] as Array<Record<string, unknown>>
+		expect(pipeline[0].$vectorSearch).toBeDefined()
+		expect(pipeline[1].$match).toEqual({
+			$or: [
+				{ expiresAt: { $exists: false } },
+				{ expiresAt: { $gt: expect.any(Date) } },
+			],
+		})
+		// The vector prefilter itself must NOT carry expiresAt — the serving
+		// vector index does not declare it as a filter field.
+		const vsStage = pipeline[0].$vectorSearch as Record<string, unknown>
+		expect(JSON.stringify(vsStage.filter ?? {})).not.toContain("expiresAt")
+	})
+
+	it("excludes expired docs from the $text fallback match", async () => {
+		const col = createMockStructuredCol()
+		vi.mocked(col.aggregate).mockReturnValueOnce({
+			toArray: vi.fn(async () => []),
+		} as unknown as ReturnType<Collection["aggregate"]>)
+
+		await searchStructuredMemory(col, "anything", null, {
+			maxResults: 5,
+			filter: { agentId: "main" },
+			capabilities: noSearchCapabilities,
+			vectorIndexName: "test_vec",
+			embeddingMode: "automated",
+		})
+
+		const pipeline = (col.aggregate as ReturnType<typeof vi.fn>).mock
+			.calls[0][0] as Array<Record<string, unknown>>
+		const match = pipeline[0].$match as Record<string, unknown>
+		expect(JSON.stringify(match)).toContain("expiresAt")
+		expect(JSON.stringify(match)).toContain("$exists")
+	})
+
+	it("getStructuredMemoryByHandle treats an expired record as gone (lifecycle read)", async () => {
+		const col = createMockStructuredCol()
+		vi.mocked(col.findOne).mockResolvedValueOnce(null)
+
+		const result = await getStructuredMemoryByHandle({
+			db: mockDb({ test_structured_mem: col }),
+			prefix: "test_",
+			handle: {
+				family: "structured",
+				agentId: "main",
+				scope: "agent",
+				scopeRef: "agent:main",
+				revision: 1,
+				state: "active",
+				structured: { type: "fact", key: "k" },
+			},
+		})
+
+		expect(result).toBeNull()
+		const filter = (col.findOne as ReturnType<typeof vi.fn>).mock
+			.calls[0][0] as Record<string, unknown>
+		const serialized = JSON.stringify(filter)
+		expect(serialized).toContain("expiresAt")
+		expect(serialized).toContain("$exists")
+		expect(serialized).toContain("$gt")
 	})
 })

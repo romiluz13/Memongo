@@ -20,7 +20,7 @@ import {
 	synthesizeProfile,
 	updateLaneCoverage,
 	writeCache,
-} from "@memongo/memory-engine"
+} from "@memongo/memory-engine/internal"
 import { buildMemongoConfig } from "../packages/memory-bridge/src/memory-config.ts"
 import { resolveMemoryBackendConfig } from "../packages/memory-engine/src/backend-config.ts"
 import { writeProofArtifact } from "./proof-artifacts.js"
@@ -1387,9 +1387,9 @@ async function main() {
 			dormantCapabilities: [
 				{
 					name: "batch-voyage",
-					classification: "dormant-capability",
+					classification: "removed",
 					reason:
-						"The Voyage batch embedding runner exists in the engine, but the supported Memongo contract is atlas-local-preview with embeddingMode=automated, so it is not part of the hot path. batch-openai and batch-gemini were removed as dead code.",
+						"The Voyage batch embedding cluster was deleted in P4.1 as dead code (zero non-test importers); the supported Memongo contract is atlas-local-preview with embeddingMode=automated.",
 				},
 			],
 			checks,

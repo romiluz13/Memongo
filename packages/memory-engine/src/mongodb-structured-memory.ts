@@ -30,8 +30,11 @@ import {
 } from "./mongodb-search.js"
 import {
 	buildCurrentValidityClause,
+	buildUnexpiredClause,
 	mergeQueryClauses,
 	resolveTemporalAsOf,
+	resolveWriteExpiresAt,
+	type MemoryTtlSettings,
 } from "./mongodb-temporal.js"
 import {
 	MAJORITY_TRANSACTION_OPTIONS,
@@ -196,6 +199,13 @@ export type StructuredMemoryEntry = {
 	 */
 	validFrom?: Date
 	validTo?: Date
+	/**
+	 * P4.4.1: optional absolute expiry instant. Set explicitly per write, or
+	 * derived from the caller's session-scope TTL default (session writes
+	 * only). Backed by a partial TTL index; read paths also filter
+	 * `expiresAt > now` because the TTL sweep lags ~60s.
+	 */
+	expiresAt?: Date
 	reviewAt?: Date
 	lastConfirmedAt?: Date
 	openedAt?: Date
@@ -833,6 +843,13 @@ export async function writeStructuredMemory(params: {
 	 * of a silent overwrite.
 	 */
 	expectedRevision?: number
+	/**
+	 * P4.4.1: resolved session-scope TTL settings (memory.mongodb.ttl). When
+	 * enabled and the entry carries a sessionId, the write derives
+	 * `expiresAt = now + sessionDays` unless the entry sets an explicit
+	 * expiresAt (which always wins).
+	 */
+	ttl?: MemoryTtlSettings
 }): Promise<{
 	upserted: boolean
 	id: string
@@ -869,6 +886,15 @@ export async function writeStructuredMemory(params: {
 	const state = entry.state ?? "active"
 	const reviewAt = inferReviewAt({ entry, salience, temporalScope, now })
 	const lastConfirmedAt = entry.lastConfirmedAt ?? now
+	// P4.4.1: explicit expiresAt wins over the session-scope TTL default;
+	// when neither applies the field is omitted entirely so a TTL-disabled
+	// deployment writes byte-identical documents.
+	const expiresAt = resolveWriteExpiresAt({
+		explicit: entry.expiresAt,
+		sessionId: entry.sessionId,
+		ttl: params.ttl,
+		now,
+	})
 	const setDoc: Document = {
 		type: entry.type,
 		key: entry.key,
@@ -913,6 +939,9 @@ export async function writeStructuredMemory(params: {
 	}
 	if (entry.validTo !== undefined) {
 		setDoc.validTo = entry.validTo
+	}
+	if (expiresAt !== undefined) {
+		setDoc.expiresAt = expiresAt
 	}
 	if (entry.openedAt !== undefined) {
 		setDoc.openedAt = entry.openedAt
@@ -1279,7 +1308,12 @@ export async function getStructuredMemoryByHandle(params: {
 	handle: MemoryStructuredStableHandle
 }): Promise<Extract<MemoryLifecycleItem, { family: "structured" }> | null> {
 	const doc = await structuredMemCollection(params.db, params.prefix).findOne(
-		structuredFilterFromHandle(params.handle),
+		// P4.4.1: an expired record reads as gone even before the TTL sweep
+		// removes it.
+		mergeQueryClauses(
+			structuredFilterFromHandle(params.handle),
+			buildUnexpiredClause(),
+		),
 	)
 	return doc ? structuredLifecycleItemFromDoc(doc) : null
 }
@@ -1804,6 +1838,11 @@ export async function searchStructuredMemory(
 			if (vsStage) {
 				const pipeline: Document[] = [
 					{ $vectorSearch: vsStage },
+					// P4.4.1: exclude expired docs AFTER $vectorSearch — the serving
+					// vector index does not declare expiresAt as a filter field, so
+					// the exclusion cannot live in the ANN prefilter. The TTL sweep
+					// deletes these docs within ~60s, bounding the starvation risk.
+					{ $match: buildUnexpiredClause() },
 					{ $limit: opts.maxResults },
 					{
 						$project: {
@@ -1875,6 +1914,8 @@ export async function searchStructuredMemory(
 		const matchFilter = mergeQueryClauses(
 			{ $text: { $search: query } },
 			buildSearchFilter(),
+			// P4.4.1: hide expired docs until the TTL sweep removes them.
+			buildUnexpiredClause(),
 		)
 
 		const docs = await collection
@@ -1947,7 +1988,11 @@ export async function getStructuredMemoryByType(
 	}>
 > {
 	const collection = structuredMemCollection(db, prefix)
-	const filter: Document = { type }
+	const filter: Document = {
+		type,
+		// P4.4.1: hide expired docs until the TTL sweep removes them.
+		...buildUnexpiredClause(),
+	}
 	if (agentId) {
 		filter.agentId = agentId
 	}

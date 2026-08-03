@@ -3,6 +3,9 @@
 	"version": "2.0.0",
 	"description": "Shared types and utilities for Memongo packages",
 	"type": "module",
+	"engines": {
+		"node": ">=20.19.0"
+	},
 	"license": "Apache-2.0",
 	"repository": {
 		"type": "git",
@@ -39,7 +42,8 @@
 	"scripts": {
 		"build": "node ../../node_modules/typescript/bin/tsc -p tsconfig.json",
 		"check-types": "node ../../node_modules/typescript/bin/tsc --noEmit -p tsconfig.json",
-		"test": "vitest run"
+		"test": "vitest run",
+		"prepublishOnly": "bun run build"
 	},
 	"devDependencies": {
 		"typescript": "^5.8.0",

@@ -10,6 +10,7 @@ import { isMemoryScopeValue, type MemoryScopeValue } from "@memongo/lib"
 import { pathToFileURL } from "node:url"
 import { startHttpTransport } from "./http-transport.js"
 import { selectEnabledTools, toWireTool, toolCatalog } from "./tool-registry.js"
+import { MEMONGO_SERVER_VERSION } from "./version.js"
 
 const memongo = new MemongoClient({
 	baseUrl: process.env.MEMONGO_API_URL,
@@ -103,7 +104,7 @@ export function createMemongoServer(): Server {
 	const server = new Server(
 		{
 			name: "memongo",
-			version: "0.1.0",
+			version: MEMONGO_SERVER_VERSION,
 		},
 		{
 			capabilities: { tools: {} },

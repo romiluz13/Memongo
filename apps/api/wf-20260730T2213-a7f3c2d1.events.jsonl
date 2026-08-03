@@ -1,0 +1,1 @@
+{"ts":"2026-07-30T02:26:00Z","wf":"wf-20260730T2213-a7f3c2d1","event":"result_persisted","phase":"plan","task_id":"1","agent":"router","decision":"MEMONGO_VERIFIED","reason":"Memongo stack live: mongo 27018 healthy, API 3847, add/search round-trip green"}

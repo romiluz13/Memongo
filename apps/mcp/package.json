@@ -3,6 +3,9 @@
 	"version": "0.1.0",
 	"description": "MCP server for Memongo (stdio + streamable HTTP; calls the Memongo HTTP API)",
 	"type": "module",
+	"engines": {
+		"node": ">=20.19.0"
+	},
 	"license": "Apache-2.0",
 	"repository": {
 		"type": "git",
@@ -37,7 +40,7 @@
 		"build": "node ../../node_modules/typescript/bin/tsc -p tsconfig.build.json",
 		"check-types": "node ../../node_modules/typescript/bin/tsc --noEmit -p tsconfig.json",
 		"test": "vitest run src",
-		"prepublishOnly": "npm run build"
+		"prepublishOnly": "bun run build"
 	},
 	"dependencies": {
 		"@memongo/client": "2.0.0",

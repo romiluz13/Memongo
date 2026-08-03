@@ -488,6 +488,11 @@ describe("writeEvent", () => {
 		expect(find).toHaveBeenCalledWith({
 			agentId: "agent-1",
 			extractionJobPendingAt: { $exists: true },
+			// P4.4.1: expired events are hidden until the TTL sweep runs.
+			$or: [
+				{ expiresAt: { $exists: false } },
+				{ expiresAt: { $gt: expect.any(Date) } },
+			],
 		})
 		expect(sort).toHaveBeenCalledWith({ extractionJobPendingAt: 1, _id: 1 })
 		expect(limit).toHaveBeenCalledWith(25)
@@ -903,6 +908,11 @@ describe("getEventsByTimeRange", () => {
 		expect(findFn).toHaveBeenCalledWith({
 			agentId: "agent-1",
 			timestamp: { $gte: start, $lte: end },
+			// P4.4.1: expired events are hidden until the TTL sweep runs.
+			$or: [
+				{ expiresAt: { $exists: false } },
+				{ expiresAt: { $gt: expect.any(Date) } },
+			],
 		})
 		expect(sortFn).toHaveBeenCalledWith({ timestamp: 1, _id: 1 })
 		expect(limitFn).toHaveBeenCalledWith(1000) // default limit
@@ -934,6 +944,11 @@ describe("getEventsByTimeRange", () => {
 			timestamp: { $gte: start, $lte: end },
 			scope: "session",
 			scopeRef: "session:sess-1",
+			// P4.4.1: expired events are hidden until the TTL sweep runs.
+			$or: [
+				{ expiresAt: { $exists: false } },
+				{ expiresAt: { $gt: expect.any(Date) } },
+			],
 		})
 	})
 })
@@ -981,6 +996,11 @@ describe("getEventsBySession", () => {
 		expect(findFn).toHaveBeenCalledWith({
 			agentId: "agent-1",
 			sessionId: "sess-1",
+			// P4.4.1: expired events are hidden until the TTL sweep runs.
+			$or: [
+				{ expiresAt: { $exists: false } },
+				{ expiresAt: { $gt: expect.any(Date) } },
+			],
 		})
 		expect(sortFn).toHaveBeenCalledWith({ timestamp: 1, _id: 1 })
 	})
@@ -1026,6 +1046,11 @@ describe("getUnprojectedEvents", () => {
 		expect(findFn).toHaveBeenCalledWith({
 			agentId: "agent-1",
 			projectedAt: { $exists: false },
+			// P4.4.1: expired events are hidden until the TTL sweep runs.
+			$or: [
+				{ expiresAt: { $exists: false } },
+				{ expiresAt: { $gt: expect.any(Date) } },
+			],
 		})
 		expect(limitFn).toHaveBeenCalledWith(500) // default limit
 	})
@@ -1411,6 +1436,11 @@ describe("getUnconsolidatedEvents", () => {
 		expect(findFn).toHaveBeenCalledWith({
 			agentId: "agent-1",
 			consolidatedAt: { $exists: false },
+			// P4.4.1: expired events are hidden until the TTL sweep runs.
+			$or: [
+				{ expiresAt: { $exists: false } },
+				{ expiresAt: { $gt: expect.any(Date) } },
+			],
 		})
 		expect(limitFn).toHaveBeenCalledWith(500) // default limit
 	})
@@ -1437,6 +1467,11 @@ describe("getUnconsolidatedEvents", () => {
 			consolidatedAt: { $exists: false },
 			scope: "session",
 			scopeRef: "session:sess-1",
+			// P4.4.1: expired events are hidden until the TTL sweep runs.
+			$or: [
+				{ expiresAt: { $exists: false } },
+				{ expiresAt: { $gt: expect.any(Date) } },
+			],
 		})
 	})
 
@@ -1638,5 +1673,164 @@ describe("getSessionEventsWithBound", () => {
 		expect(findFn).toHaveBeenCalledWith(
 			expect.objectContaining({ agentId: "agent-99", sessionId: "sess-1" }),
 		)
+	})
+})
+
+// ---------------------------------------------------------------------------
+// P4.4.1: TTL expiration — per-write expiresAt on events
+// ---------------------------------------------------------------------------
+
+describe("event TTL expiration (P4.4.1)", () => {
+	beforeEach(() => {
+		vi.clearAllMocks()
+	})
+
+	function lastSetOnInsertDoc(col: Collection): Record<string, unknown> {
+		const [, update] = vi.mocked(col.updateOne).mock.calls[0]
+		return (update as Record<string, Record<string, unknown>>).$setOnInsert
+	}
+
+	it("persists an explicit per-write expiresAt on the event document", async () => {
+		const col = createMockEventsCol()
+		vi.mocked(eventsCollection).mockReturnValue(col)
+		const expiresAt = new Date("2026-09-01T00:00:00.000Z")
+
+		await writeEvent({
+			db: mockDb(),
+			prefix: "test_",
+			event: {
+				eventId: "evt-expiring",
+				agentId: "agent-1",
+				role: "user",
+				body: "session fact that expires",
+				scope: "session",
+				sessionId: "sess-1",
+				expiresAt,
+			},
+		})
+
+		expect(lastSetOnInsertDoc(col).expiresAt).toBe(expiresAt)
+	})
+
+	it("omits expiresAt entirely when the write carries none", async () => {
+		const col = createMockEventsCol()
+		vi.mocked(eventsCollection).mockReturnValue(col)
+
+		await writeEvent({
+			db: mockDb(),
+			prefix: "test_",
+			event: {
+				eventId: "evt-durable",
+				agentId: "agent-1",
+				role: "user",
+				body: "durable event",
+				scope: "agent",
+			},
+		})
+
+		expect(lastSetOnInsertDoc(col)).not.toHaveProperty("expiresAt")
+	})
+
+	it("rejects an invalid expiresAt date", async () => {
+		const col = createMockEventsCol()
+		vi.mocked(eventsCollection).mockReturnValue(col)
+
+		await expect(
+			writeEvent({
+				db: mockDb(),
+				prefix: "test_",
+				event: {
+					eventId: "evt-bad-expiry",
+					agentId: "agent-1",
+					role: "user",
+					body: "bad expiry",
+					scope: "agent",
+					expiresAt: new Date(Number.NaN),
+				},
+			}),
+		).rejects.toThrow("invalid event expiresAt")
+		expect(col.updateOne).not.toHaveBeenCalled()
+	})
+
+	it("carries per-item expiresAt through the batch write", async () => {
+		const col = {
+			insertMany: vi.fn(async () => ({ acknowledged: true, insertedCount: 2 })),
+		} as unknown as Collection
+		vi.mocked(eventsCollection).mockReturnValue(col)
+		const expiresAt = new Date("2026-09-01T00:00:00.000Z")
+
+		const results = await writeEventsBatch({
+			db: mockDb(),
+			prefix: "test_",
+			events: [
+				{
+					eventId: "evt-b-exp",
+					agentId: "agent-1",
+					role: "user",
+					body: "expiring batch item",
+					scope: "session",
+					sessionId: "sess-1",
+					expiresAt,
+				},
+				{
+					eventId: "evt-b-durable",
+					agentId: "agent-1",
+					role: "user",
+					body: "durable batch item",
+					scope: "agent",
+				},
+			],
+		})
+
+		expect(results.every((r) => r.ok)).toBe(true)
+		const [docs] = vi.mocked(col.insertMany).mock.calls[0]
+		expect((docs as CanonicalEvent[])[0].expiresAt).toBe(expiresAt)
+		expect((docs as CanonicalEvent[])[1]).not.toHaveProperty("expiresAt")
+	})
+
+	it("getEventsByTimeRange excludes expired docs via the unexpired $or clause", async () => {
+		const toArrayFn = vi.fn(async () => [])
+		const limitFn = vi.fn(() => ({ toArray: toArrayFn }))
+		const sortFn = vi.fn(() => ({ limit: limitFn }))
+		const findFn = vi.fn(() => ({ sort: sortFn }))
+		const col = Object.assign(createMockEventsCol(), { find: findFn })
+		vi.mocked(eventsCollection).mockReturnValue(col)
+
+		const start = new Date("2026-08-01T00:00:00.000Z")
+		const end = new Date("2026-08-03T00:00:00.000Z")
+		await getEventsByTimeRange({
+			db: mockDb(),
+			prefix: "test_",
+			agentId: "agent-1",
+			start,
+			end,
+		})
+
+		const filter = findFn.mock.calls[0][0] as Record<string, unknown>
+		expect(filter.$or).toEqual([
+			{ expiresAt: { $exists: false } },
+			{ expiresAt: { $gt: expect.any(Date) } },
+		])
+	})
+
+	it("getUnconsolidatedEvents excludes expired docs via the unexpired $or clause", async () => {
+		const toArrayFn = vi.fn(async () => [])
+		const limitFn = vi.fn(() => ({ toArray: toArrayFn }))
+		const sortFn = vi.fn(() => ({ limit: limitFn }))
+		const findFn = vi.fn(() => ({ sort: sortFn }))
+		const col = Object.assign(createMockEventsCol(), { find: findFn })
+		vi.mocked(eventsCollection).mockReturnValue(col)
+
+		await getUnconsolidatedEvents({
+			db: mockDb(),
+			prefix: "test_",
+			agentId: "agent-1",
+		})
+
+		const filter = findFn.mock.calls[0][0] as Record<string, unknown>
+		expect(filter.$or).toEqual([
+			{ expiresAt: { $exists: false } },
+			{ expiresAt: { $gt: expect.any(Date) } },
+		])
 	})
 })

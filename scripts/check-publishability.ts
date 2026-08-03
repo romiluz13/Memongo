@@ -84,6 +84,7 @@ const removedPaths = [
 ] as const
 
 const requiredMetadata = ["license", "repository", "homepage", "bugs"] as const
+const requiredNodeEngine = ">=20.19.0"
 const forbiddenTarballPatterns = [
 	/^src\//,
 	/\.test\.ts$/,
@@ -101,6 +102,42 @@ const forbiddenPrivateDeps = new Set([
 
 function fail(message: string): never {
 	throw new Error(message)
+}
+
+type ToolRunResult = { ok: boolean; output: string }
+
+function runCapturing(cmd: string, args: string[], cwd: string): ToolRunResult {
+	try {
+		execFileSync(cmd, args, {
+			cwd,
+			encoding: "utf-8",
+			stdio: "pipe",
+			timeout: 180_000,
+		})
+		return { ok: true, output: "" }
+	} catch (err) {
+		const e = err as {
+			stdout?: string | Buffer
+			stderr?: string | Buffer
+			message?: string
+		}
+		const output = [e.stdout, e.stderr]
+			.filter((chunk) => chunk !== undefined && chunk !== null)
+			.map((chunk) => String(chunk).trim())
+			.filter((chunk) => chunk.length > 0)
+			.join("\n")
+		return { ok: false, output: output || (e.message ?? "unknown error") }
+	}
+}
+
+/** Probe whether a bunx-invoked tool can be installed and started. */
+function probeTool(binName: string): boolean {
+	return runCapturing("bunx", [binName, "--help"], rootDir).ok
+}
+
+type ExternalLintAvailability = {
+	publint: boolean
+	attw: boolean
 }
 
 function readJson(filePath: string): Record<string, unknown> {
@@ -189,6 +226,109 @@ function assertMetadata(
 			fail(`missing package metadata field "${field}" in ${packageRelPath}`)
 		}
 	}
+}
+
+function assertReleaseHygiene(
+	packageJson: Record<string, unknown>,
+	packageRelPath: string,
+) {
+	const engines = packageJson["engines"]
+	if (
+		typeof engines !== "object" ||
+		engines === null ||
+		(engines as Record<string, unknown>).node !== requiredNodeEngine
+	) {
+		fail(`missing "engines.node": "${requiredNodeEngine}" in ${packageRelPath}`)
+	}
+
+	const scripts = packageJson["scripts"]
+	const prepublishOnly =
+		typeof scripts === "object" && scripts !== null
+			? (scripts as Record<string, unknown>).prepublishOnly
+			: undefined
+	if (typeof prepublishOnly !== "string" || prepublishOnly.trim() === "") {
+		fail(`missing "prepublishOnly" build script in ${packageRelPath}`)
+	}
+
+	for (const depField of [
+		"dependencies",
+		"peerDependencies",
+		"optionalDependencies",
+	] as const) {
+		const deps = packageJson[depField]
+		if (typeof deps !== "object" || deps === null) {
+			continue
+		}
+		const mongodb = (deps as Record<string, unknown>).mongodb
+		if (typeof mongodb === "string" && /^\d+\.\d+\.\d+$/.test(mongodb)) {
+			fail(
+				`"mongodb" must use a semver range (e.g. ^7.2.0), not the exact pin "${mongodb}", in ${packageRelPath}`,
+			)
+		}
+	}
+}
+
+function readExportedVersion(filePath: string, exportName: string): string {
+	const relPath = path.relative(rootDir, filePath)
+	if (!fs.existsSync(filePath)) {
+		fail(`missing version source file: ${relPath}`)
+	}
+	const source = fs.readFileSync(filePath, "utf-8")
+	const match = source.match(
+		new RegExp(`export const ${exportName} = "([^"]+)"`),
+	)
+	if (!match) {
+		fail(`missing ${exportName} export in ${relPath}`)
+	}
+	return match[1]
+}
+
+function checkVersionConsistency() {
+	const rootPackageJson = readJson(path.join(rootDir, "package.json"))
+	const releaseVersion = assertStringField(
+		rootPackageJson,
+		"version",
+		"package.json",
+	)
+	const apiVersion = readExportedVersion(
+		path.join(rootDir, "apps/api/src/version.ts"),
+		"MEMONGO_API_VERSION",
+	)
+	const mcpVersion = readExportedVersion(
+		path.join(rootDir, "apps/mcp/src/version.ts"),
+		"MEMONGO_SERVER_VERSION",
+	)
+	if (apiVersion !== releaseVersion) {
+		fail(
+			`OpenAPI/version surface drift: apps/api reports ${apiVersion}, workspace release is ${releaseVersion}`,
+		)
+	}
+	if (mcpVersion !== releaseVersion) {
+		fail(
+			`MCP server version drift: apps/mcp reports ${mcpVersion}, workspace release is ${releaseVersion}`,
+		)
+	}
+
+	const clientPackageJson = readJson(
+		path.join(rootDir, "packages/client/package.json"),
+	)
+	const clientPackageVersion = assertStringField(
+		clientPackageJson,
+		"version",
+		"packages/client/package.json",
+	)
+	const clientHeaderVersion = readExportedVersion(
+		path.join(rootDir, "packages/client/src/version.ts"),
+		"MEMONGO_CLIENT_VERSION",
+	)
+	if (clientHeaderVersion !== clientPackageVersion) {
+		fail(
+			`client version header drift: x-memongo-client-version reports ${clientHeaderVersion}, packages/client is ${clientPackageVersion}`,
+		)
+	}
+	console.log(
+		`Version surfaces agree: OpenAPI/MCP ${releaseVersion}, client header ${clientHeaderVersion}.`,
+	)
 }
 
 function assertBuiltEntrypoints(
@@ -356,9 +496,51 @@ function assertPackedManifest(
 	}
 }
 
+function runExternalLintChecks(
+	packageSpec: PublishablePackage,
+	tarballPath: string,
+	unpackedPackageDir: string,
+	availability: ExternalLintAvailability,
+	skips: string[],
+) {
+	if (packageSpec.piExtension) {
+		// Pi extensions ship unbuilt TS loaded by Pi's jiti loader; they have no
+		// Node entrypoints for publint/attw to evaluate.
+		skips.push(
+			`publint/attw: ${packageSpec.name} (pi extension, no JS entrypoints)`,
+		)
+		return
+	}
+	if (availability.publint) {
+		const result = runCapturing("bunx", ["publint"], unpackedPackageDir)
+		if (!result.ok) {
+			fail(`publint failed for ${packageSpec.name}:\n${result.output}`)
+		}
+	} else {
+		skips.push(`publint: ${packageSpec.name} (tool unavailable offline)`)
+	}
+	if (availability.attw) {
+		// All publishable packages are deliberately ESM-only
+		// (engines.node >= 20.19.0), so the strict profile's node10/CJS-consumer
+		// rows do not apply.
+		const result = runCapturing(
+			"bunx",
+			["@arethetypeswrong/cli", "--profile", "esm-only", tarballPath],
+			rootDir,
+		)
+		if (!result.ok) {
+			fail(`attw failed for ${packageSpec.name}:\n${result.output}`)
+		}
+	} else {
+		skips.push(`attw: ${packageSpec.name} (tool unavailable offline)`)
+	}
+}
+
 function checkPackage(
 	packageSpec: PublishablePackage,
 	packDir: string,
+	availability: ExternalLintAvailability,
+	skips: string[],
 ): { name: string; tarballPath: string; supportedSurface: boolean } {
 	const packageDir = path.join(rootDir, packageSpec.dir)
 	const packageJsonPath = path.join(packageDir, "package.json")
@@ -373,6 +555,7 @@ function checkPackage(
 
 	const packageJson = readJson(packageJsonPath)
 	assertMetadata(packageJson, packageSpec.dir)
+	assertReleaseHygiene(packageJson, packageSpec.dir)
 
 	let piExtensionPaths: string[] | undefined
 	if (packageSpec.piExtension) {
@@ -396,6 +579,13 @@ function checkPackage(
 		path.join(unpackDir, "package", "package.json"),
 	)
 	assertPackedManifest(packageSpec, packedManifest)
+	runExternalLintChecks(
+		packageSpec,
+		tarballPath,
+		path.join(unpackDir, "package"),
+		availability,
+		skips,
+	)
 
 	return {
 		name: packageSpec.name,
@@ -517,10 +707,17 @@ function installSmoke(
 function main() {
 	checkRemovedPaths()
 	checkPublishWorkflow()
+	checkVersionConsistency()
+
+	const availability: ExternalLintAvailability = {
+		publint: probeTool("publint"),
+		attw: probeTool("@arethetypeswrong/cli"),
+	}
+	const skips: string[] = []
 
 	const packDir = fs.mkdtempSync(path.join(os.tmpdir(), "memongo-packs-"))
 	const tarballs = publishablePackages.map((packageSpec) =>
-		checkPackage(packageSpec, packDir),
+		checkPackage(packageSpec, packDir, availability, skips),
 	)
 	const tarballsByName = new Map(
 		tarballs.map((entry) => [entry.name, entry.tarballPath]),
@@ -530,6 +727,9 @@ function main() {
 		installSmoke(packageSpec, tarballsByName)
 	}
 
+	for (const skip of skips) {
+		console.log(`SKIP ${skip}`)
+	}
 	const supportedCount = tarballs.filter(
 		(entry) => entry.supportedSurface,
 	).length

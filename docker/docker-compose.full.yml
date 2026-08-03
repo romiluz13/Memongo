@@ -60,7 +60,7 @@ services:
     image: mongodb/mongodb-atlas-local:8.2.6-20260715T144108Z
     container_name: memongo-preview
     # Not published to the host: the API reaches MongoDB over the compose
-    # network. Use docker/docker-compose.preview.yml for host-side tooling.
+    # network. Use docker/docker-compose.yml for host-side tooling.
     expose:
       - "27017"
     environment:

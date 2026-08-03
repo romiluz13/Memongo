@@ -1230,6 +1230,51 @@ describe("resolveMemoryBackendConfig", () => {
 		expect(resolved.mongodb!.reranking.accessBoost).toBe(0)
 	})
 
+	it("resolves reranking temporalProximityBoost with a 0.1 default (P4.4.4)", () => {
+		const cfg = {
+			agents: { defaults: { workspace: "/tmp/memory-test" } },
+			memory: {
+				backend: "mongodb",
+				mongodb: { uri: "mongodb://localhost:27017" },
+			},
+		} as unknown as MemongoConfig
+		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
+		expect(resolved.mongodb!.reranking.temporalProximityBoost).toBe(0.1)
+
+		const custom = {
+			agents: { defaults: { workspace: "/tmp/memory-test" } },
+			memory: {
+				backend: "mongodb",
+				mongodb: {
+					uri: "mongodb://localhost:27017",
+					reranking: { temporalProximityBoost: 0 },
+				},
+			},
+		} as unknown as MemongoConfig
+		// 0 is the explicit off-switch and must survive resolution.
+		expect(
+			resolveMemoryBackendConfig({ cfg: custom, agentId: "main" }).mongodb!
+				.reranking.temporalProximityBoost,
+		).toBe(0)
+
+		const invalid = {
+			agents: { defaults: { workspace: "/tmp/memory-test" } },
+			memory: {
+				backend: "mongodb",
+				mongodb: {
+					uri: "mongodb://localhost:27017",
+					reranking: { temporalProximityBoost: -1 },
+				},
+			},
+		} as unknown as MemongoConfig
+		// Negative/non-finite weights fall back to the default so a
+		// misconfigured weight cannot invert ordering.
+		expect(
+			resolveMemoryBackendConfig({ cfg: invalid, agentId: "main" }).mongodb!
+				.reranking.temporalProximityBoost,
+		).toBe(0.1)
+	})
+
 	it("resolves reranking.voyageApiKey from env fallback", () => {
 		vi.stubEnv("VOYAGE_API_KEY", "voy-from-env")
 		try {
@@ -1437,5 +1482,67 @@ describe("resolveSearchDefaultScope (P1.4: MEMONGO_SEARCH_DEFAULT_SCOPE)", () =>
 		expect(() => resolveSearchDefaultScope("GLOBAL")).toThrow(
 			/not a valid memory scope/,
 		)
+	})
+})
+
+describe("memory.mongodb.ttl resolution (P4.4.1)", () => {
+	function resolveWithTtl(ttl: unknown) {
+		const cfg = {
+			agents: { defaults: { workspace: "/tmp/memory-test" } },
+			memory: {
+				backend: "mongodb",
+				mongodb: { uri: "mongodb://localhost:27017", ttl },
+			},
+		} as unknown as MemongoConfig
+		return resolveMemoryBackendConfig({ cfg, agentId: "main" }).mongodb!.ttl
+	}
+
+	it("is off by default when no ttl config is present", () => {
+		const cfg = {
+			agents: { defaults: { workspace: "/tmp/memory-test" } },
+			memory: {
+				backend: "mongodb",
+				mongodb: { uri: "mongodb://localhost:27017" },
+			},
+		} as unknown as MemongoConfig
+		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
+		expect(resolved.mongodb!.ttl).toEqual({ enabled: false, sessionDays: 30 })
+	})
+
+	it("stays off when only sessionDays is set (enabled is the explicit opt-in)", () => {
+		expect(resolveWithTtl({ sessionDays: 7 })).toEqual({
+			enabled: false,
+			sessionDays: 7,
+		})
+	})
+
+	it("resolves enabled with the configured sessionDays", () => {
+		expect(resolveWithTtl({ enabled: true, sessionDays: 14 })).toEqual({
+			enabled: true,
+			sessionDays: 14,
+		})
+	})
+
+	it("falls back to the 30-day default when enabled without sessionDays", () => {
+		expect(resolveWithTtl({ enabled: true })).toEqual({
+			enabled: true,
+			sessionDays: 30,
+		})
+	})
+
+	it("falls back to the default on invalid sessionDays values", () => {
+		for (const bad of [0, -5, Number.NaN, "abc", null]) {
+			expect(resolveWithTtl({ enabled: true, sessionDays: bad })).toEqual({
+				enabled: true,
+				sessionDays: 30,
+			})
+		}
+	})
+
+	it("accepts fractional sessionDays", () => {
+		expect(resolveWithTtl({ enabled: true, sessionDays: 0.5 })).toEqual({
+			enabled: true,
+			sessionDays: 0.5,
+		})
 	})
 })

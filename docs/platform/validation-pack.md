@@ -71,7 +71,7 @@ Use Atlas Local Preview for the local parity lane:
 
 ```bash
 export VOYAGE_API_KEY="al-your-atlas-model-api-key"
-docker compose -f docker/mongodb/docker-compose.preview.yml up -d
+docker compose -f docker/docker-compose.yml up -d
 export MEMONGO_MONGODB_URI="mongodb://127.0.0.1:27017/?directConnection=true"
 ```
 

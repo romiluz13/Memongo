@@ -20,6 +20,7 @@ import {
 	SCOPE_FIELD_DESCRIPTION,
 	SCOPE_REF_FIELD_DESCRIPTION,
 } from "@memongo/lib"
+import { MEMONGO_API_VERSION } from "./version.js"
 
 /** Canonical scope enum, derived from the single contract source (P2.2). */
 const memoryScopeEnum: readonly string[] = MEMORY_SCOPE_VALUES
@@ -657,7 +658,7 @@ const openApiSpecDocument = {
 	openapi: "3.0.3",
 	info: {
 		title: "Memongo API",
-		version: "1.0.0",
+		version: MEMONGO_API_VERSION,
 		description:
 			"HTTP API for the Memongo memory platform. Configure it with MEMONGO_MONGODB_URI and, optionally, ~/.memongo/memongo.json.",
 	},
@@ -2290,7 +2291,12 @@ const openApiSpecDocument = {
 		"/v1/status": {
 			get: {
 				summary: "Memory provider status",
-				responses: { "200": { description: "Status" } },
+				responses: {
+					"200": {
+						description:
+							"Status. Includes `version`, the Memongo release version of this server.",
+					},
+				},
 			},
 		},
 		"/v1/status/detailed": {

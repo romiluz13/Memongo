@@ -67,6 +67,14 @@ export type ResolvedMongoDBConfig = {
 	serverMonitoringMode?: "auto" | "stream" | "poll"
 	waitQueueTimeoutMs?: number
 	memoryTtlDays: number
+	/**
+	 * P4.4.1: optional per-document TTL (memory.mongodb.ttl). Always
+	 * populated; `enabled` is the explicit opt-in (off by default).
+	 */
+	ttl: {
+		enabled: boolean
+		sessionDays: number
+	}
 	enableChangeStreams: boolean
 	changeStreamDebounceMs: number
 	connectTimeoutMs: number
@@ -124,6 +132,7 @@ export type ResolvedMongoDBConfig = {
 		instruction?: string
 		recencyBoost: number
 		accessBoost: number
+		temporalProximityBoost: number
 	}
 	cache: {
 		enabled: boolean
@@ -353,6 +362,7 @@ export function resolveMemoryBackendConfig(params: {
 					mongoCfg.memoryTtlDays >= 0
 						? Math.floor(mongoCfg.memoryTtlDays)
 						: 0,
+				ttl: resolveTtlSettings(mongoCfg?.ttl),
 				enableChangeStreams: mongoCfg?.enableChangeStreams === true,
 				changeStreamDebounceMs:
 					typeof mongoCfg?.changeStreamDebounceMs === "number" &&
@@ -558,6 +568,13 @@ export function resolveMemoryBackendConfig(params: {
 					accessBoost: resolveRerankBoostWeight(
 						mongoCfg?.reranking?.accessBoost,
 					),
+					// P4.4.4: raw-window lane temporal-proximity weight. 0 is the
+					// off-switch; the 0.1 default is deliberately smaller than
+					// the post-CE boosts — it nudges ordering in one lane only.
+					temporalProximityBoost: resolveRerankBoostWeight(
+						mongoCfg?.reranking?.temporalProximityBoost,
+						0.1,
+					),
 				},
 				cache: {
 					enabled: mongoCfg?.cache?.enabled !== false,
@@ -726,12 +743,41 @@ function resolveEnvFloat(envKey: string, fallback: number): number {
 		: fallback
 }
 
-// P3.7: post-CE boost weights must be finite and non-negative; anything
-// else falls back to the 0.2 default so a bad config cannot invert ranking.
-function resolveRerankBoostWeight(value: number | undefined): number {
+// P3.7: boost weights must be finite and non-negative; anything else falls
+// back to the default so a bad config cannot invert ranking.
+function resolveRerankBoostWeight(
+	value: number | undefined,
+	fallback = 0.2,
+): number {
 	return typeof value === "number" && Number.isFinite(value) && value >= 0
 		? value
-		: 0.2
+		: fallback
+}
+
+const DEFAULT_TTL_SESSION_DAYS = 30
+
+/**
+ * P4.4.1: memory.mongodb.ttl — optional per-document TTL, off by default.
+ * `sessionDays` must be a positive finite number; anything else falls back
+ * to the 30-day default (with a warning when the caller DID supply a value)
+ * so a misconfigured retention window can never silently become "expire
+ * immediately" or "never expire".
+ */
+function resolveTtlSettings(ttlCfg?: {
+	enabled?: boolean
+	sessionDays?: number
+}): { enabled: boolean; sessionDays: number } {
+	const raw = ttlCfg?.sessionDays
+	const valid = typeof raw === "number" && Number.isFinite(raw) && raw > 0
+	if (raw !== undefined && !valid) {
+		log.warn(
+			`memory.mongodb.ttl.sessionDays "${String(raw)}" is not a positive number; falling back to ${DEFAULT_TTL_SESSION_DAYS} days`,
+		)
+	}
+	return {
+		enabled: ttlCfg?.enabled === true,
+		sessionDays: valid ? (raw as number) : DEFAULT_TTL_SESSION_DAYS,
+	}
 }
 
 function resolveEnvBoolean(envKey: string, fallback: boolean): boolean {

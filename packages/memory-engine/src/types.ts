@@ -1647,6 +1647,23 @@ export type ConsolidationOptions = {
 	 * is fenced off as stale.
 	 */
 	leaseMs?: number
+	/**
+	 * P4.4.2 — contradiction wiring inside the consolidation loop. When a
+	 * promotion candidate conflicts with an existing structured memory entry,
+	 * resolve instead of skip: detect contradictions, invalidate the losing
+	 * side, then re-evaluate the candidate. Requires an enrichment LLM; with
+	 * none configured the historical skip is preserved either way.
+	 * Default true.
+	 */
+	resolveContradictions?: boolean
+	/**
+	 * P4.4.3 — LLM-adjudicated dedup. Optional phase between the NOOP gate
+	 * (similarity 0.85) and prune: fact pairs in the similarity band
+	 * [0.75, 0.92] get a 1-by-1 LLM merge verdict; on MERGE the kept fact
+	 * gets the synthesized union text and the union of sourceEventIds as the
+	 * proof-count analog. Requires an enrichment LLM. Default false.
+	 */
+	llmDedup?: boolean
 }
 
 export type ConsolidationResult = {
@@ -1662,6 +1679,8 @@ export type ConsolidationResult = {
 	prunedCount?: number
 	/** New facts derived by the LLM deduction/induction phases (issue #31). */
 	factsInferred?: number
+	/** Fact pairs merged by the LLM-adjudicated dedup phase (P4.4.3). */
+	factsMerged?: number
 }
 
 // ---------------------------------------------------------------------------

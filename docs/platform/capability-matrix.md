@@ -78,6 +78,6 @@ This matrix maps the supported Memongo memory engine to the standalone product s
 - `package-publishability`: `bun run check-publishability`
 - `live-core`: `packages/memory-engine/src/production-readiness.e2e.test.ts`
 - `live-capability`:
-  - auto-embed/search: `packages/memory-engine/src/real-e2e-v2.e2e.test.ts` with managed Atlas cloud or `docker/mongodb/docker-compose.preview.yml` and an `al-...` Atlas Model key
+  - auto-embed/search: `packages/memory-engine/src/real-e2e-v2.e2e.test.ts` with managed Atlas cloud or `docker/docker-compose.yml` and an `al-...` Atlas Model key
   - replica-set-only features: `packages/memory-engine/src/mongodb-e2e.e2e.test.ts` with `docker/mongodb/docker-compose.mongodb.yml` `replicaset` or `fullstack`
 - Benchmark methodology: [benchmark-pack.md](benchmark-pack.md)

@@ -19,6 +19,7 @@ import {
 	type DetectedCapabilities,
 	eventsCollection,
 } from "./mongodb-schema.js"
+import { buildUnexpiredClause } from "./mongodb-temporal.js"
 import type {
 	ConversationRecallCitation,
 	ConversationRecallRequest,
@@ -305,6 +306,10 @@ function buildStandardFilter(params: {
 		filter.$and = [buildBitemporalFilter(params.asOf)]
 	}
 
+	// P4.4.1: TTL expiration — the sweep lags ~60s, so hide expired docs on
+	// the read path. Semantics-neutral for docs without expiresAt.
+	Object.assign(filter, buildUnexpiredClause())
+
 	return filter
 }
 
@@ -589,6 +594,10 @@ async function semanticRecall(params: {
 		...(params.nativeBitemporalPrefilter
 			? []
 			: [{ $match: buildBitemporalFilter(params.asOf) }]),
+		// P4.4.1: exclude expired docs post-$vectorSearch (expiresAt is not a
+		// declared filter field on the serving vector index, so the exclusion
+		// cannot live in the ANN prefilter).
+		{ $match: buildUnexpiredClause({ asOf: params.asOf }) },
 		{ $limit: params.effectiveLimit },
 		{ $project: buildEventProjection("vectorSearchScore") },
 	]
@@ -724,6 +733,10 @@ async function hybridRecall(params: {
 				scoreDetails: true,
 			},
 		},
+		// P4.4.1: exclude expired docs right after fusion (one stage covers
+		// both inner lanes) — expiresAt is not a declared filter field on the
+		// serving vector/search indexes.
+		{ $match: buildUnexpiredClause({ asOf: params.asOf }) },
 		{ $limit: params.effectiveLimit },
 		{ $addFields: { scoreDetails: { $meta: "scoreDetails" } } },
 		{

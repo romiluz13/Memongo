@@ -10,7 +10,7 @@
 
 set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-COMPOSE_FILE="$SCRIPT_DIR/docker-compose.preview.yml"
+COMPOSE_FILE="$SCRIPT_DIR/../docker-compose.yml"
 
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'

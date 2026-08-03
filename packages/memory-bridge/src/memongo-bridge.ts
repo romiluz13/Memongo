@@ -7,47 +7,52 @@ import type {
 	MemoryScope,
 } from "@memongo/lib/types/memory"
 import type {
+	MemoryContextBundle,
+	MemoryProviderStatus,
+	MemorySearchTimeRange,
+	MemoryFeedbackSignal,
+	MemoryActorRole,
+	MemoryStateFamily,
+	MemoryStableHandle,
+	MongoDBMemoryManager,
+	RelevanceExplainResult,
+	V2Status,
+} from "@memongo/memory-engine"
+// P4.1: deep engine symbols left the main barrel; during the deprecation
+// window they are reachable via the explicit internal subpath.
+import type {
 	ConversationRecallResponse,
 	DetectedCapabilities,
 	MemoryActiveSlate,
-	MemoryContextBundle,
 	MemoryDiscoveryProjection,
-	MemoryProviderStatus,
 	MemoryJob,
 	MemoryJobStatus,
 	MemoryJobType,
-	MemorySearchTimeRange,
 	MemoryAccessSummary,
 	MemoryAccessTrend,
 	MemoryBenchmarkIngestResult,
 	MemoryConversationImportResult,
-	MemoryFeedbackSignal,
 	AccessEventCollection,
 	BenchmarkQualityThresholds,
-	MemoryActorRole,
 	RecallTrace,
-	MemoryStateFamily,
 	MemoryStats,
 	MemoryLifecycleHistoryEntry,
 	MemoryLifecycleItem,
-	MemoryStableHandle,
-	MongoDBMemoryManager,
 	ProcedureLifecyclePatch,
 	ProcedureEntry,
+	ManagerReadResult,
 	RelevanceBenchmarkResult,
-	RelevanceExplainResult,
 	RelevanceReport,
 	RelevanceSampleState,
 	RelevanceSourceScope,
 	StructuredMemoryLifecyclePatch,
 	StructuredMemoryEntry,
-	V2Status,
-} from "@memongo/memory-engine"
+} from "@memongo/memory-engine/internal"
 import {
 	closeAllMemorySearchManagers,
 	getMemorySearchManager,
-	materializeBlocks,
 } from "@memongo/memory-engine"
+import { materializeBlocks } from "@memongo/memory-engine/internal"
 import { resolveBridgeConfig } from "./memory-config.js"
 
 /**
@@ -149,7 +154,7 @@ export async function memongoBridgeReadFile(params: {
 	from?: number
 	lines?: number
 	agentId?: string
-}) {
+}): Promise<ManagerReadResult> {
 	const m = await memongoBridgeGetManager(params.agentId)
 	return m.readFile({
 		relPath: params.relPath,
@@ -1014,11 +1019,11 @@ export async function memongoBridgeGetMemoryJob(params: {
 	return m.getMemoryJob({ jobId: params.jobId })
 }
 
+export type { MemoryStableHandle } from "@memongo/memory-engine"
 export type {
 	MemoryConversationImportResult,
 	MemoryLifecycleHistoryEntry,
 	MemoryLifecycleItem,
-	MemoryStableHandle,
 	ProcedureEntry,
 	StructuredMemoryEntry,
-} from "@memongo/memory-engine"
+} from "@memongo/memory-engine/internal"

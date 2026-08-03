@@ -69,6 +69,21 @@ export type MemoryMongoDBConfig = {
 	serverMonitoringMode?: "auto" | "stream" | "poll"
 	waitQueueTimeoutMs?: number
 	memoryTtlDays?: number
+	/**
+	 * P4.4.1: optional per-document TTL on `events` and `structured_mem`.
+	 * Off by default. When enabled, writes carrying a sessionId get an
+	 * absolute `expiresAt` of recordedAt + sessionDays unless the caller
+	 * passes an explicit per-write `expiresAt` (which always wins, even
+	 * when this group is disabled). Backed by partial TTL indexes
+	 * (`expireAfterSeconds: 0` keyed on `expiresAt`, partial on
+	 * `expiresAt: { $exists: true }`); read paths also exclude expired
+	 * documents because the TTL sweep lags ~60s.
+	 */
+	ttl?: {
+		enabled?: boolean
+		/** Session-scope default retention in days (must be positive). */
+		sessionDays?: number
+	}
 	enableChangeStreams?: boolean
 	changeStreamDebounceMs?: number
 	connectTimeoutMs?: number
@@ -110,6 +125,12 @@ export type MemoryMongoDBConfig = {
 		recencyBoost?: number
 		/** Post-cross-encoder access-count boost weight (0 disables; default 0.2). */
 		accessBoost?: number
+		/**
+		 * Raw-window lane temporal-proximity weight (P4.4.4): when the query
+		 * implies a temporal window, events nearer the window midpoint score
+		 * higher. 0 disables; default 0.1.
+		 */
+		temporalProximityBoost?: number
 	}
 	cache?: {
 		enabled?: boolean

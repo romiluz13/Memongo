@@ -3,6 +3,9 @@
 	"version": "2.0.1",
 	"description": "MongoDB-native memory engine: embeddings, graph, episodes, search, knowledge base, reasoning chains, novelty detection, consolidation, analytics",
 	"type": "module",
+	"engines": {
+		"node": ">=20.19.0"
+	},
 	"license": "Apache-2.0",
 	"repository": {
 		"type": "git",
@@ -27,6 +30,10 @@
 		".": {
 			"types": "./dist/index.d.ts",
 			"default": "./dist/index.js"
+		},
+		"./internal": {
+			"types": "./dist/internal-barrel.d.ts",
+			"default": "./dist/internal-barrel.js"
 		}
 	},
 	"scripts": {
@@ -34,12 +41,13 @@
 		"check-types": "node ../../node_modules/typescript/bin/tsc --noEmit -p tsconfig.json",
 		"test": "vitest run --exclude=src/**/*.e2e.test.ts",
 		"test:e2e": "vitest run --no-file-parallelism e2e.test.ts",
-		"test:e2e:tier-a": "vitest run --no-file-parallelism src/mongodb-kb-reingest.e2e.test.ts src/mongodb-kb-isolation.e2e.test.ts src/mongodb-legacy-search-isolation.e2e.test.ts src/mongodb-vector-index-shape.e2e.test.ts src/mongodb-rankfusion-score.e2e.test.ts src/mongodb-projection-repair.e2e.test.ts src/mongodb-temporal-validity.e2e.test.ts src/mongodb-memory-jobs.e2e.test.ts"
+		"test:e2e:tier-a": "vitest run --no-file-parallelism src/mongodb-kb-reingest.e2e.test.ts src/mongodb-kb-isolation.e2e.test.ts src/mongodb-legacy-search-isolation.e2e.test.ts src/mongodb-vector-index-shape.e2e.test.ts src/mongodb-rankfusion-score.e2e.test.ts src/mongodb-projection-repair.e2e.test.ts src/mongodb-temporal-validity.e2e.test.ts src/mongodb-memory-jobs.e2e.test.ts",
+		"prepublishOnly": "bun run build"
 	},
 	"dependencies": {
 		"@memongo/lib": "2.0.0",
 		"chokidar": "^4.0.3",
-		"mongodb": "7.2.0"
+		"mongodb": "^7.2.0"
 	},
 	"optionalDependencies": {
 		"node-llama-cpp": ">=3.0.0"

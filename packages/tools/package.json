@@ -3,6 +3,9 @@
 	"version": "2.0.0",
 	"description": "AI SDK tool helpers for Memongo (function-calling tools for search, add, profile, etc.)",
 	"type": "module",
+	"engines": {
+		"node": ">=20.19.0"
+	},
 	"license": "Apache-2.0",
 	"repository": {
 		"type": "git",
@@ -40,7 +43,8 @@
 	"scripts": {
 		"build": "node ../../node_modules/typescript/bin/tsc -p tsconfig.json",
 		"check-types": "node ../../node_modules/typescript/bin/tsc --noEmit -p tsconfig.json",
-		"test": "vitest run"
+		"test": "vitest run",
+		"prepublishOnly": "bun run build"
 	},
 	"dependencies": {
 		"@memongo/client": "2.0.0",

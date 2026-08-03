@@ -4,7 +4,7 @@ Memongo is data-plane memory you run next to your agents. This runbook describes
 
 ## Components
 
-1. MongoDB via managed Atlas cloud or `mongodb/mongodb-atlas-local` (pinned dated tag in `docker/mongodb/docker-compose.preview.yml`).
+1. MongoDB via managed Atlas cloud or `mongodb/mongodb-atlas-local` (pinned dated tag in `docker/docker-compose.yml`).
 2. `apps/api` - stateless HTTP service.
 3. Optional: `apps/web` and `apps/mcp`.
 
@@ -31,7 +31,7 @@ Atlas Local Preview:
 
 ```bash
 export VOYAGE_API_KEY="al-your-atlas-model-api-key"
-docker compose -f docker/mongodb/docker-compose.preview.yml up -d
+docker compose -f docker/docker-compose.yml up -d
 export MEMONGO_MONGODB_URI="mongodb://127.0.0.1:27017/?directConnection=true"
 ```
 

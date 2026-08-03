@@ -51,6 +51,7 @@ import type {
 	MemongoSelfEditResponse,
 	MemongoWriteEventsResponse,
 } from "./types.js"
+import { MEMONGO_CLIENT_VERSION } from "./version.js"
 
 export type MemongoClientOptions = {
 	/** Memongo API base URL (e.g. http://127.0.0.1:3847). */
@@ -174,7 +175,10 @@ function buildHeaders(
 	method: string,
 ): Record<string, string> {
 	const key = resolveApiKey(opts)
-	const headers: Record<string, string> = {}
+	const headers: Record<string, string> = {
+		// Version telemetry: lets the server log client/server version skew.
+		"x-memongo-client-version": MEMONGO_CLIENT_VERSION,
+	}
 	if (key) {
 		headers.Authorization = `Bearer ${key}`
 	}

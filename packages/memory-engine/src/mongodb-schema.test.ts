@@ -567,12 +567,13 @@ describe("ensureStandardIndexes", () => {
 		// + 1 unique relation identity index
 		// P3.8: −3 retired redundant indexes (idx_chunks_path, idx_structured_agentid,
 		// idx_relations_agent_scope_scoperef), +1 chunk ESR, +1 episode ESR,
-		// +1 entity ESR, +1 relationId locator = 93
-		expect(count).toBe(93)
+		// +1 entity ESR, +1 relationId locator
+		// P4.4.1: +2 partial TTL indexes (events, structured_mem) = 95
+		expect(count).toBe(95)
 		expect(chunks.createIndex).toHaveBeenCalledTimes(4)
 		expect(kb.createIndex).toHaveBeenCalledTimes(5)
 		expect(kbChunks.createIndex).toHaveBeenCalledTimes(4)
-		expect(structured.createIndex).toHaveBeenCalledTimes(10)
+		expect(structured.createIndex).toHaveBeenCalledTimes(11)
 		expect(structuredRevisions.createIndex).toHaveBeenCalledTimes(1)
 		expect(relevanceRuns.createIndex).toHaveBeenCalledTimes(3)
 		expect(relevanceArtifacts.createIndex).toHaveBeenCalledTimes(2)
@@ -600,7 +601,7 @@ describe("ensureStandardIndexes", () => {
 		const projectionRuns = db.collection("test_projection_runs") as unknown as {
 			createIndex: ReturnType<typeof vi.fn>
 		}
-		expect(events.createIndex).toHaveBeenCalledTimes(11)
+		expect(events.createIndex).toHaveBeenCalledTimes(12)
 		expect(events.createIndex).toHaveBeenCalledWith(
 			{ agentId: 1, extractionJobPendingAt: 1 },
 			{
@@ -697,9 +698,9 @@ describe("ensureStandardIndexes", () => {
 			) as unknown as {
 				createIndex: ReturnType<typeof vi.fn>
 			}
-			// 93 base (incl. 2 consolidation_runs + events idempotency key)
-			// + 4 evidence mirror indexes
-			expect(count).toBe(97)
+			// 95 base (incl. 2 consolidation_runs + events idempotency key
+			// + 2 P4.4.1 partial TTL indexes) + 4 evidence mirror indexes
+			expect(count).toBe(99)
 			expect(memoryEvidence.createIndex).toHaveBeenCalledTimes(4)
 			expect(memoryEvidence.createIndex).toHaveBeenCalledWith(
 				{ canonicalId: 1 },
@@ -811,8 +812,9 @@ describe("ensureStandardIndexes", () => {
 		// + 1 lane_coverage + 2 consolidation_runs + 3 session_chunks
 		// + 1 bi-temporal valid-time (#32) + 2 durable job claim/TTL indexes
 		// + 1 extraction outbox partial index + 1 unique relation identity
-		// P3.8: −3 retired redundant indexes + 3 ESR compounds + 1 relationId locator = 93
-		expect(count).toBe(93)
+		// P3.8: −3 retired redundant indexes + 3 ESR compounds + 1 relationId locator
+		// P4.4.1: +2 partial TTL indexes (events, structured_mem) = 95
+		expect(count).toBe(95)
 	})
 
 	it("creates relevance TTL indexes when relevanceRetentionDays is set", async () => {
@@ -1041,6 +1043,44 @@ describe("P3.8 index hygiene", () => {
 			collectionName: "test_episodes",
 			indexNames: ["episode_autocomplete"],
 		})
+	})
+})
+
+// ---------------------------------------------------------------------------
+// P4.4.1: TTL expiration — partial TTL indexes on events + structured_mem
+// ---------------------------------------------------------------------------
+
+describe("P4.4.1 TTL expiration indexes", () => {
+	it("creates the partial TTL index on events with expireAfterSeconds 0", async () => {
+		const db = mockDb()
+		await ensureStandardIndexes(db, "test_")
+		const events = db.collection("test_events") as unknown as {
+			createIndex: ReturnType<typeof vi.fn>
+		}
+		expect(events.createIndex).toHaveBeenCalledWith(
+			{ expiresAt: 1 },
+			{
+				name: "idx_events_ttl_expires_at",
+				expireAfterSeconds: 0,
+				partialFilterExpression: { expiresAt: { $exists: true } },
+			},
+		)
+	})
+
+	it("creates the partial TTL index on structured_mem with expireAfterSeconds 0", async () => {
+		const db = mockDb()
+		await ensureStandardIndexes(db, "test_")
+		const structured = db.collection("test_structured_mem") as unknown as {
+			createIndex: ReturnType<typeof vi.fn>
+		}
+		expect(structured.createIndex).toHaveBeenCalledWith(
+			{ expiresAt: 1 },
+			{
+				name: "idx_structured_ttl_expires_at",
+				expireAfterSeconds: 0,
+				partialFilterExpression: { expiresAt: { $exists: true } },
+			},
+		)
 	})
 })
 
@@ -3520,8 +3560,9 @@ describe("ensureStandardIndexes total count with query_cache and time series ind
 		// + 1 lane_coverage + 2 consolidation_runs + 3 session_chunks
 		// + 1 bi-temporal valid-time (#32) + 2 durable job claim/TTL indexes
 		// + 1 extraction outbox partial index + 1 unique relation identity
-		// P3.8: −3 retired redundant indexes + 3 ESR compounds + 1 relationId locator = 93
-		expect(count).toBe(93)
+		// P3.8: −3 retired redundant indexes + 3 ESR compounds + 1 relationId locator
+		// P4.4.1: +2 partial TTL indexes (events, structured_mem) = 95
+		expect(count).toBe(95)
 	})
 })
 

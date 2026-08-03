@@ -24,8 +24,47 @@ function clone<T>(value: T): T {
 	return structuredClone(value)
 }
 
+function matchesCondition(docValue: unknown, condition: unknown): boolean {
+	if (
+		condition !== null &&
+		typeof condition === "object" &&
+		!Array.isArray(condition) &&
+		!(condition instanceof Date)
+	) {
+		const ops = condition as Record<string, unknown>
+		const opKeys = Object.keys(ops)
+		if (opKeys.some((key) => key.startsWith("$"))) {
+			return opKeys.every((op) => {
+				switch (op) {
+					case "$exists":
+						return ops.$exists === false
+							? docValue === undefined
+							: docValue !== undefined
+					case "$gt":
+						return (
+							docValue instanceof Date &&
+							ops.$gt instanceof Date &&
+							docValue.getTime() > ops.$gt.getTime()
+						)
+					default:
+						throw new Error(`unsupported fake-matcher operator ${op}`)
+				}
+			})
+		}
+	}
+	return docValue === condition
+}
+
 function matchesFilter(doc: Document, filter: Document): boolean {
-	return Object.entries(filter).every(([key, value]) => doc[key] === value)
+	return Object.entries(filter).every(([key, value]) => {
+		if (key === "$and") {
+			return (value as Document[]).every((clause) => matchesFilter(doc, clause))
+		}
+		if (key === "$or") {
+			return (value as Document[]).some((clause) => matchesFilter(doc, clause))
+		}
+		return matchesCondition(doc[key], value)
+	})
 }
 
 class MemoryCollection {

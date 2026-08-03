@@ -51,6 +51,19 @@ function expectedBitemporalAnd(asOf: Date): Document[] {
 	]
 }
 
+/**
+ * P4.4.1: TTL expiration — every recall read path excludes documents whose
+ * expiresAt lies in the past (the TTL sweep lags ~60s). Docs without the
+ * field are always visible, so the clause is semantics-neutral for
+ * TTL-disabled deployments.
+ */
+function expectedUnexpiredOr(): Document[] {
+	return [
+		{ expiresAt: { $exists: false } },
+		{ expiresAt: { $gt: expect.any(Date) } },
+	]
+}
+
 function makeFindCollection(params?: {
 	results?: Document[]
 	findImpl?: (filter: Document) => unknown
@@ -138,6 +151,7 @@ describe("recallConversation", () => {
 				$lte: new Date("2026-04-10T12:00:00.000Z"),
 			},
 			$and: expectedBitemporalAnd(new Date("2026-04-10T12:00:00.000Z")),
+			$or: expectedUnexpiredOr(),
 		})
 
 		expect(response.metadata.searchMethod).toBe("standard")
@@ -236,6 +250,7 @@ describe("recallConversation", () => {
 				$lte: new Date("2026-04-09T03:59:59.999Z"),
 			},
 			$and: expectedBitemporalAnd(new Date("2026-04-12T00:00:00.000Z")),
+			$or: expectedUnexpiredOr(),
 		})
 	})
 
@@ -581,6 +596,7 @@ describe("recallConversation", () => {
 				$lte: new Date("2026-04-08T23:59:59.999Z"),
 			},
 			$and: expectedBitemporalAnd(new Date("2026-04-12T00:00:00.000Z")),
+			$or: expectedUnexpiredOr(),
 		})
 	})
 
@@ -890,7 +906,15 @@ describe("recallConversation", () => {
 				$or: [{ invalidAt: { $exists: false } }, { invalidAt: { $gt: asOf } }],
 			},
 		])
-		expect(pipeline.some((stage) => stage.$match !== undefined)).toBe(false)
+		// No bitemporal post-$match when the native prefilter serves validity;
+		// the P4.4.1 unexpired $match (expiresAt) is still present.
+		expect(
+			pipeline.some(
+				(stage) =>
+					stage.$match !== undefined &&
+					JSON.stringify(stage.$match).includes("validAt"),
+			),
+		).toBe(false)
 	})
 
 	it("recall overfetch (issue #41): hybridRecall $rankFusion vector inner lane over-fetches beyond the final limit", async () => {
@@ -975,7 +999,9 @@ describe("recallConversation", () => {
 		expect(textInner).toEqual(
 			expect.arrayContaining([{ $match: expectedBitemporalAnd(asOf)[0] }]),
 		)
-		expect(pipeline[1]).toEqual({ $limit: 5 })
+		// pipeline: $rankFusion, $match (P4.4.1 unexpired), $limit, ...
+		expect(pipeline[1]).toEqual({ $match: { $or: expectedUnexpiredOr() } })
+		expect(pipeline[2]).toEqual({ $limit: 5 })
 	})
 
 	it("bi-temporal safety: hybridRecall $rankFusion injects bi-temporal $match into BOTH vector and text inner pipelines", async () => {
@@ -1284,5 +1310,98 @@ describe("recallConversation", () => {
 
 		expect(response.results).toHaveLength(1)
 		expect(response.results[0]?.citation.eventId).toBe("evt-valid")
+	})
+})
+
+// ---------------------------------------------------------------------------
+// P4.4.1: TTL expiration — recall read paths exclude expired docs
+// ---------------------------------------------------------------------------
+
+describe("recallConversation TTL expiration (P4.4.1)", () => {
+	beforeEach(() => {
+		vi.clearAllMocks()
+	})
+
+	it("standard recall filter carries the unexpired $or clause", async () => {
+		const col = makeFindCollection({ results: [] })
+		vi.mocked(eventsCollection).mockReturnValue(col)
+
+		await recallConversation({
+			db: mockDb(),
+			prefix: "mem_",
+			request: { agentId: "agent-1", sessionId: "sess-1" },
+		})
+
+		const filter = vi.mocked(col.find).mock.calls[0]?.[0] as Document
+		expect(filter.$or).toEqual(expectedUnexpiredOr())
+	})
+
+	it("semantic recall adds a post-$vectorSearch unexpired $match and keeps expiresAt out of the vector prefilter", async () => {
+		const col = makeAggregateCollection({ results: [] })
+		vi.mocked(eventsCollection).mockReturnValue(col)
+
+		await recallConversation({
+			db: mockDb(),
+			prefix: "mem_",
+			request: { agentId: "agent-1", query: "launch" },
+			capabilities: {
+				vectorSearch: true,
+				textSearch: false,
+				rankFusion: false,
+				storedSource: false,
+				vectorIndexMethod: false,
+				scoreFusion: false,
+			},
+		})
+
+		const pipeline = vi.mocked(col.aggregate).mock.calls[0]?.[0] as Document[]
+		expect(pipeline[0]?.$vectorSearch).toBeDefined()
+		// The serving vector index does not declare expiresAt as a filter
+		// field, so the exclusion must NOT live in the $vectorSearch prefilter.
+		expect(
+			JSON.stringify(
+				(pipeline[0]?.$vectorSearch as { filter?: Document }).filter ?? {},
+			),
+		).not.toContain("expiresAt")
+		const matchStages = pipeline.filter((stage) => stage.$match !== undefined)
+		expect(matchStages.length).toBeGreaterThan(0)
+		expect(
+			matchStages.some((stage) =>
+				JSON.stringify(stage.$match).includes("expiresAt"),
+			),
+		).toBe(true)
+	})
+
+	it("hybrid recall excludes expired docs after $rankFusion", async () => {
+		const col = makeAggregateCollection({ results: [] })
+		vi.mocked(eventsCollection).mockReturnValue(col)
+
+		await recallConversation({
+			db: mockDb(),
+			prefix: "mem_",
+			request: { agentId: "agent-1", query: "launch" },
+			capabilities: {
+				vectorSearch: true,
+				textSearch: true,
+				rankFusion: true,
+				storedSource: false,
+				vectorIndexMethod: false,
+				scoreFusion: false,
+			},
+		})
+
+		const pipeline = vi.mocked(col.aggregate).mock.calls[0]?.[0] as Document[]
+		const fusionIdx = pipeline.findIndex(
+			(stage) => stage.$rankFusion !== undefined,
+		)
+		expect(fusionIdx).toBeGreaterThanOrEqual(0)
+		const postFusion = pipeline.slice(fusionIdx + 1)
+		expect(
+			postFusion.some(
+				(stage) =>
+					stage.$match !== undefined &&
+					JSON.stringify(stage.$match).includes("expiresAt"),
+			),
+		).toBe(true)
 	})
 })

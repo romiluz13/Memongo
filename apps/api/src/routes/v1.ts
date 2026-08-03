@@ -64,6 +64,7 @@ import {
 	resolveScopeInput,
 	VALID_SCOPE_VALUES,
 } from "../scope-identity.js"
+import { MEMONGO_API_VERSION } from "../version.js"
 
 const MAX_LIST_LIMIT = 100
 const MAX_HISTORY_LIMIT = 200
@@ -2023,7 +2024,9 @@ export function createV1Router(): Hono<V1RouterEnv> {
 		const agentId = c.req.query("agentId") ?? undefined
 		try {
 			const status = await memongoBridgeStatus({ agentId })
-			return c.json(status)
+			// Echo the server release version so clients can detect version skew
+			// against their `x-memongo-client-version` header.
+			return c.json({ version: MEMONGO_API_VERSION, ...status })
 		} catch (err) {
 			return internalError(c, err, "STATUS_FAILED")
 		}

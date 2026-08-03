@@ -8,6 +8,7 @@ import {
 import { recordProjectionRun } from "./mongodb-ops.js"
 import { eventsCollection, chunksCollection } from "./mongodb-schema.js"
 import { resolveScopeIdentity } from "./mongodb-scope.js"
+import { buildUnexpiredClause } from "./mongodb-temporal.js"
 
 const log = createSubsystemLogger("memory:mongodb:events")
 const DURABLE_EVENT_WRITE_CONCERN = {
@@ -117,6 +118,14 @@ export type CanonicalEvent = {
 	invalidAt?: Date
 	/** Transaction time when Memongo first persisted the event. */
 	recordedAt?: Date
+	/**
+	 * P4.4.1: optional absolute expiry instant. Set explicitly per write, or
+	 * derived at the manager write seam from `memory.mongodb.ttl.sessionDays`
+	 * for session-scoped writes. Backed by a partial TTL index
+	 * (expireAfterSeconds: 0); read paths also filter `expiresAt > now`
+	 * because the TTL sweep lags ~60s. Absent means the event never expires.
+	 */
+	expiresAt?: Date
 	/** Durable outbox marker cleared only after the extraction job is claimable. */
 	extractionJobPendingAt?: Date
 	projectedAt?: Date
@@ -188,6 +197,7 @@ function buildCanonicalEventDocument(event: EventWriteInput): CanonicalEvent {
 		["validAt", validAt],
 		["recordedAt", recordedAt],
 		["invalidAt", event.invalidAt],
+		["expiresAt", event.expiresAt],
 	] as const) {
 		if (value && Number.isNaN(value.getTime())) {
 			throw new Error(`invalid event ${label}`)
@@ -224,6 +234,7 @@ function buildCanonicalEventDocument(event: EventWriteInput): CanonicalEvent {
 		...(event.extractionJobPendingAt
 			? { extractionJobPendingAt: event.extractionJobPendingAt }
 			: {}),
+		...(event.expiresAt ? { expiresAt: event.expiresAt } : {}),
 	}
 }
 
@@ -374,6 +385,8 @@ export async function getPendingExtractionEvents(params: {
 		.find({
 			agentId: params.agentId,
 			extractionJobPendingAt: { $exists: true },
+			// P4.4.1: hide expired docs until the TTL sweep removes them.
+			...buildUnexpiredClause(),
 		})
 		.sort({ extractionJobPendingAt: 1, _id: 1 })
 		.limit(limit)
@@ -443,6 +456,8 @@ export async function getEventsByTimeRange(params: {
 	const filter: Document = {
 		agentId,
 		timestamp: { $gte: start, $lte: end },
+		// P4.4.1: hide expired docs until the TTL sweep removes them.
+		...buildUnexpiredClause(),
 	}
 	if (scope) {
 		filter.scope = scope
@@ -469,7 +484,12 @@ export async function getEventsBySession(params: {
 	const { db, prefix, agentId, sessionId, limit } = params
 	const collection = eventsCollection(db, prefix)
 	return (await collection
-		.find({ agentId, sessionId })
+		.find({
+			agentId,
+			sessionId,
+			// P4.4.1: hide expired docs until the TTL sweep removes them.
+			...buildUnexpiredClause(),
+		})
 		// oxlint-disable-next-line unicorn/no-array-sort -- MongoDB cursor .sort(), not Array
 		.sort({ timestamp: 1, _id: 1 })
 		.limit(limit ?? 1000)
@@ -485,7 +505,12 @@ export async function getUnprojectedEvents(params: {
 	const { db, prefix, agentId, limit } = params
 	const collection = eventsCollection(db, prefix)
 	return (await collection
-		.find({ agentId, projectedAt: { $exists: false } })
+		.find({
+			agentId,
+			projectedAt: { $exists: false },
+			// P4.4.1: hide expired docs until the TTL sweep removes them.
+			...buildUnexpiredClause(),
+		})
 		// oxlint-disable-next-line unicorn/no-array-sort -- MongoDB cursor .sort(), not Array
 		.sort({ timestamp: 1, _id: 1 })
 		.limit(limit ?? 500)
@@ -565,6 +590,8 @@ export async function getUnconsolidatedEvents(params: {
 	const filter: Document = {
 		agentId,
 		consolidatedAt: { $exists: false },
+		// P4.4.1: hide expired docs until the TTL sweep removes them.
+		...buildUnexpiredClause(),
 	}
 	if (scope) {
 		filter.scope = scope
@@ -597,7 +624,12 @@ export async function getSessionEventsWithBound(params: {
 	const { db, prefix, agentId, sessionId, scope, scopeRef } = params
 	const effectiveBound = Math.max(1, params.bound ?? 50)
 	const collection = eventsCollection(db, prefix)
-	const filter: Document = { agentId, sessionId }
+	const filter: Document = {
+		agentId,
+		sessionId,
+		// P4.4.1: hide expired docs until the TTL sweep removes them.
+		...buildUnexpiredClause(),
+	}
 	if (scope) {
 		filter.scope = scope
 	}

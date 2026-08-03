@@ -26,7 +26,7 @@ This uses `mongodb/mongodb-atlas-local` (pinned dated tag in the compose file, ~
 
 **Connection string:** `mongodb://localhost:27017/?directConnection=true` (no auth needed)
 
-**Docker Compose file:** `docker/mongodb/docker-compose.preview.yml`
+**Docker Compose file:** `docker/docker-compose.yml`
 
 For most users, this is all you need. The multi-container setup below is for advanced validation and environment-specific checks.
 

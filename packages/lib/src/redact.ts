@@ -41,16 +41,25 @@ export function redactSensitiveText(text: string): string {
 	let result = text
 	for (const pattern of DEFAULT_REDACT_PATTERNS) {
 		const regex = new RegExp(pattern.source, pattern.flags)
-		result = result.replace(regex, (match, ...groups) => {
+		result = result.replace(regex, (...args: unknown[]) => {
+			const match = args[0] as string
 			if (match.includes("PRIVATE KEY-----")) return redactPemBlock(match)
+			// Replace-callback varargs are: capture groups..., offset (number),
+			// input (string), [named-groups object]. Capture groups are only the
+			// entries before the numeric offset — the trailing input string must
+			// never be mistaken for a group (picking it made embedded secrets
+			// survive redaction and over-masked whole-line inputs).
+			const rest = args.slice(1)
+			const offsetIndex = rest.findIndex((arg) => typeof arg === "number")
+			const captures = offsetIndex === -1 ? rest : rest.slice(0, offsetIndex)
 			if (match.startsWith("mongodb")) {
-				const passwordGroup = groups[0]
+				const passwordGroup = captures[0]
 				if (typeof passwordGroup === "string")
 					return match.replace(passwordGroup, "***")
 				return match
 			}
 			const token =
-				groups
+				captures
 					.filter((g): g is string => typeof g === "string" && g.length > 0)
 					.at(-1) ?? match
 			const masked = maskToken(token)

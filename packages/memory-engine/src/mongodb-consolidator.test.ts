@@ -94,6 +94,27 @@ vi.mock("./mongodb-llm-enrichment.js", async () => {
 	return { ...actual, resolveEnrichmentProvider: resolveEnrichmentProviderMock }
 })
 
+const { resolveConflictedCandidateMock, adjudicateFactMergeMock } = vi.hoisted(
+	() => ({
+		resolveConflictedCandidateMock: vi.fn(async () => ({
+			resolved: false,
+			invalidatedCount: 0,
+		})),
+		adjudicateFactMergeMock: vi.fn(async () => ({ verdict: "NO_MERGE" })),
+	}),
+)
+
+vi.mock("./mongodb-consolidation-adjudication.js", async () => {
+	const actual = await vi.importActual<
+		typeof import("./mongodb-consolidation-adjudication.js")
+	>("./mongodb-consolidation-adjudication.js")
+	return {
+		...actual,
+		resolveConflictedCandidate: resolveConflictedCandidateMock,
+		adjudicateFactMerge: adjudicateFactMergeMock,
+	}
+})
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -2483,5 +2504,364 @@ describe("matchPatterns", () => {
 		]) {
 			expect(matchPatterns(body)?.type, body).not.toBe("decision")
 		}
+	})
+})
+
+// ---------------------------------------------------------------------------
+// P4.4.2 — contradiction wiring inside the consolidation loop
+// ---------------------------------------------------------------------------
+
+describe("P4.4.2 contradiction wiring", () => {
+	beforeEach(() => {
+		vi.clearAllMocks()
+	})
+
+	function makeConflictSetup() {
+		const consolidationRunsCol = mockCollection({
+			findOne: vi.fn(async () => null),
+		})
+		const eventsCol = mockCollection({
+			find: vi.fn(() => ({
+				sort: vi.fn(() => ({
+					limit: vi.fn(() => ({
+						toArray: vi.fn(async () => [
+							{
+								eventId: "e-conflict",
+								agentId: "agent-1",
+								body: "I prefer Python over JavaScript",
+								timestamp: new Date(),
+								role: "user",
+							},
+						]),
+					})),
+				})),
+			})),
+			updateMany: vi.fn(async () => ({ modifiedCount: 1 }) as UpdateResult),
+		})
+		// Existing same-key structured_mem entry in the conflicted state.
+		const structuredCol = mockCollection({
+			findOne: vi.fn(async () => ({
+				agentId: "agent-1",
+				type: "preference",
+				key: "Python over JavaScript",
+				value: "I prefer JavaScript over Python",
+				state: "conflicted",
+			})),
+		})
+		const db = mockDb({
+			test_consolidation_runs: consolidationRunsCol,
+			test_events: eventsCol,
+			test_structured_mem: structuredCol,
+		})
+		return { consolidationRunsCol, eventsCol, structuredCol, db }
+	}
+
+	const stubProvider = { name: "stub", chatCompletion: vi.fn() }
+
+	it("resolves a conflicting candidate instead of skipping (default on): loser invalidated, winner promoted", async () => {
+		const { consolidateMemory } = await import("./mongodb-consolidator.js")
+		const { writeStructuredMemory } = await import(
+			"./mongodb-structured-memory.js"
+		)
+		const { db } = makeConflictSetup()
+		resolveEnrichmentProviderMock.mockReturnValueOnce(stubProvider)
+		resolveConflictedCandidateMock.mockResolvedValueOnce({
+			resolved: true,
+			invalidatedCount: 1,
+		})
+
+		const result = await consolidateMemory({
+			db,
+			prefix: "test_",
+			agentId: "agent-1",
+			options: { minCombinedScore: 0 },
+		})
+
+		expect(result.factsPromoted).toBe(1)
+		expect(result.conflictsResolved).toBe(1)
+		expect(resolveConflictedCandidateMock).toHaveBeenCalledWith(
+			expect.objectContaining({
+				agentId: "agent-1",
+				candidate: expect.objectContaining({
+					key: "Python over JavaScript",
+					value: "I prefer Python over JavaScript",
+				}),
+			}),
+		)
+		// resolve (detect → invalidate inside the helper) happens BEFORE the
+		// candidate is re-evaluated and promoted.
+		expect(
+			resolveConflictedCandidateMock.mock.invocationCallOrder[0],
+		).toBeLessThan(vi.mocked(writeStructuredMemory).mock.invocationCallOrder[0])
+	})
+
+	it("drops the candidate when IT is the loser (no existing fact invalidated)", async () => {
+		const { consolidateMemory } = await import("./mongodb-consolidator.js")
+		const { writeStructuredMemory } = await import(
+			"./mongodb-structured-memory.js"
+		)
+		const { db } = makeConflictSetup()
+		resolveEnrichmentProviderMock.mockReturnValueOnce(stubProvider)
+		resolveConflictedCandidateMock.mockResolvedValueOnce({
+			resolved: false,
+			invalidatedCount: 0,
+		})
+
+		const result = await consolidateMemory({
+			db,
+			prefix: "test_",
+			agentId: "agent-1",
+			options: { minCombinedScore: 0 },
+		})
+
+		expect(result.factsPromoted).toBe(0)
+		expect(result.conflictsResolved).toBe(1)
+		expect(vi.mocked(writeStructuredMemory)).not.toHaveBeenCalled()
+	})
+
+	it("flag off preserves the exact old skip behavior (no resolution attempted)", async () => {
+		const { consolidateMemory } = await import("./mongodb-consolidator.js")
+		const { writeStructuredMemory } = await import(
+			"./mongodb-structured-memory.js"
+		)
+		const { db } = makeConflictSetup()
+		resolveEnrichmentProviderMock.mockReturnValueOnce(stubProvider)
+
+		const result = await consolidateMemory({
+			db,
+			prefix: "test_",
+			agentId: "agent-1",
+			options: { minCombinedScore: 0, resolveContradictions: false },
+		})
+
+		expect(result.factsPromoted).toBe(0)
+		expect(result.conflictsResolved).toBe(1)
+		expect(resolveConflictedCandidateMock).not.toHaveBeenCalled()
+		expect(vi.mocked(writeStructuredMemory)).not.toHaveBeenCalled()
+	})
+
+	it("preserves the old skip when no LLM is configured, even with the flag on", async () => {
+		const { consolidateMemory } = await import("./mongodb-consolidator.js")
+		const { db } = makeConflictSetup()
+		// resolveEnrichmentProviderMock defaults to null → resolution cannot run.
+
+		const result = await consolidateMemory({
+			db,
+			prefix: "test_",
+			agentId: "agent-1",
+			options: { minCombinedScore: 0 },
+		})
+
+		expect(result.factsPromoted).toBe(0)
+		expect(result.conflictsResolved).toBe(1)
+		expect(resolveConflictedCandidateMock).not.toHaveBeenCalled()
+	})
+})
+
+// ---------------------------------------------------------------------------
+// P4.4.3 — LLM-adjudicated dedup between the NOOP gate and prune
+// ---------------------------------------------------------------------------
+
+describe("P4.4.3 LLM-adjudicated dedup", () => {
+	beforeEach(() => {
+		vi.clearAllMocks()
+	})
+
+	const stubProvider = { name: "stub", chatCompletion: vi.fn() }
+
+	function makeDedupSetup(params: {
+		dupScore: number
+		keptSourceEventIds?: string[]
+		mergedAwaySourceEventIds?: string[]
+	}) {
+		const consolidationRunsCol = mockCollection({
+			findOne: vi.fn(async () => null),
+		})
+		// One event that matches no extraction pattern: phase 2 promotes
+		// nothing, so any structured_mem writes observed come from the dedup
+		// phase only.
+		const eventsCol = mockCollection({
+			find: vi.fn(() => ({
+				sort: vi.fn(() => ({
+					limit: vi.fn(() => ({
+						toArray: vi.fn(async () => [
+							{
+								eventId: "e-plain",
+								agentId: "agent-1",
+								body: "just an ordinary chat line",
+								timestamp: new Date(),
+								role: "user",
+							},
+						]),
+					})),
+				})),
+			})),
+			updateMany: vi.fn(async () => ({ modifiedCount: 1 }) as UpdateResult),
+		})
+		const keptFact = {
+			_id: "fact-kept",
+			agentId: "agent-1",
+			type: "fact",
+			key: "city",
+			value: "The user lives in Berlin",
+			state: "active",
+			scope: "agent",
+			scopeRef: "agent:agent-1",
+			updatedAt: new Date("2026-01-02T00:00:00Z"),
+			sourceEventIds: params.keptSourceEventIds ?? ["k1"],
+		}
+		const dupFact = {
+			_id: "fact-dup",
+			agentId: "agent-1",
+			type: "fact",
+			key: "city-detail",
+			value: "The user lives in Berlin, Germany",
+			state: "active",
+			scope: "agent",
+			scopeRef: "agent:agent-1",
+			updatedAt: new Date("2026-01-01T00:00:00Z"),
+			sourceEventIds: params.mergedAwaySourceEventIds ?? ["d1"],
+			score: params.dupScore,
+		}
+		const updateOneMock = vi.fn(
+			async () => ({ modifiedCount: 1 }) as UpdateResult,
+		)
+		const structuredCol = mockCollection({
+			findOne: vi.fn(async () => null),
+			find: vi.fn(() => ({
+				sort: vi.fn(() => ({
+					limit: vi.fn(() => ({
+						toArray: vi.fn(async () => [keptFact]),
+					})),
+				})),
+			})),
+			aggregate: vi.fn(() => ({
+				toArray: vi.fn(async () => [dupFact]),
+			})),
+			updateOne: updateOneMock,
+		})
+		const db = mockDb({
+			test_consolidation_runs: consolidationRunsCol,
+			test_events: eventsCol,
+			test_structured_mem: structuredCol,
+		})
+		return { db, updateOneMock, keptFact, dupFact }
+	}
+
+	it.each([
+		{ score: 0.74, expectedCalls: 0 },
+		{ score: 0.75, expectedCalls: 1 },
+		{ score: 0.92, expectedCalls: 1 },
+		{ score: 0.93, expectedCalls: 0 },
+	])("adjudicates only inside the band [0.75, 0.92] (score=$score → $expectedCalls calls)", async ({
+		score,
+		expectedCalls,
+	}) => {
+		const { consolidateMemory } = await import("./mongodb-consolidator.js")
+		const { db } = makeDedupSetup({ dupScore: score })
+		resolveEnrichmentProviderMock.mockReturnValueOnce(stubProvider)
+
+		await consolidateMemory({
+			db,
+			prefix: "test_",
+			agentId: "agent-1",
+			options: { minCombinedScore: 0, llmDedup: true },
+		})
+
+		expect(adjudicateFactMergeMock).toHaveBeenCalledTimes(expectedCalls)
+	})
+
+	it("MERGE verdict writes union text and folds sourceEventIds (cap respected); loser invalidated", async () => {
+		const { consolidateMemory } = await import("./mongodb-consolidator.js")
+		const keptIds = Array.from({ length: 150 }, (_, i) => `k${i + 1}`)
+		const dupIds = Array.from({ length: 100 }, (_, i) => `d${i + 1}`)
+		const { db, updateOneMock, keptFact, dupFact } = makeDedupSetup({
+			dupScore: 0.88,
+			keptSourceEventIds: keptIds,
+			mergedAwaySourceEventIds: dupIds,
+		})
+		resolveEnrichmentProviderMock.mockReturnValueOnce(stubProvider)
+		adjudicateFactMergeMock.mockResolvedValueOnce({
+			verdict: "MERGE",
+			mergedValue: "The user lives in Berlin, Germany",
+		})
+
+		const result = await consolidateMemory({
+			db,
+			prefix: "test_",
+			agentId: "agent-1",
+			options: { minCombinedScore: 0, llmDedup: true },
+		})
+
+		expect(result.factsMerged).toBe(1)
+
+		// The kept (newer) fact gets the synthesized union text and the folded
+		// sourceEventIds, capped at MAX_SOURCE_EVENT_IDS = 200 keeping the most
+		// recent entries.
+		const keptWrite = updateOneMock.mock.calls.find(
+			([filter]) => (filter as { _id?: unknown })._id === keptFact._id,
+		)
+		expect(keptWrite).toBeDefined()
+		const keptSet = (keptWrite?.[1] as { $set: Record<string, unknown> }).$set
+		expect(keptSet.value).toBe("The user lives in Berlin, Germany")
+		const folded = keptSet.sourceEventIds as string[]
+		expect(folded).toHaveLength(200)
+		expect(folded[0]).toBe("k51")
+		expect(folded[folded.length - 1]).toBe("d100")
+
+		// The merged-away (older) fact is invalidated per the prune mechanism.
+		expect(updateOneMock).toHaveBeenCalledWith(
+			{ _id: dupFact._id },
+			{ $set: { state: "invalidated" } },
+		)
+	})
+
+	it("NO-MERGE verdict leaves both facts untouched", async () => {
+		const { consolidateMemory } = await import("./mongodb-consolidator.js")
+		const { db, updateOneMock } = makeDedupSetup({ dupScore: 0.88 })
+		resolveEnrichmentProviderMock.mockReturnValueOnce(stubProvider)
+		adjudicateFactMergeMock.mockResolvedValueOnce({ verdict: "NO_MERGE" })
+
+		const result = await consolidateMemory({
+			db,
+			prefix: "test_",
+			agentId: "agent-1",
+			options: { minCombinedScore: 0, llmDedup: true },
+		})
+
+		expect(result.factsMerged ?? 0).toBe(0)
+		expect(updateOneMock).not.toHaveBeenCalled()
+	})
+
+	it("treats an adjudication failure as no-merge and never throws", async () => {
+		const { consolidateMemory } = await import("./mongodb-consolidator.js")
+		const { db, updateOneMock } = makeDedupSetup({ dupScore: 0.88 })
+		resolveEnrichmentProviderMock.mockReturnValueOnce(stubProvider)
+		adjudicateFactMergeMock.mockRejectedValueOnce(new Error("llm down"))
+
+		await expect(
+			consolidateMemory({
+				db,
+				prefix: "test_",
+				agentId: "agent-1",
+				options: { minCombinedScore: 0, llmDedup: true },
+			}),
+		).resolves.toMatchObject({ factsPromoted: 0 })
+		expect(updateOneMock).not.toHaveBeenCalled()
+	})
+
+	it("flag off (default) makes no adjudication calls at all", async () => {
+		const { consolidateMemory } = await import("./mongodb-consolidator.js")
+		const { db } = makeDedupSetup({ dupScore: 0.88 })
+		resolveEnrichmentProviderMock.mockReturnValueOnce(stubProvider)
+
+		await consolidateMemory({
+			db,
+			prefix: "test_",
+			agentId: "agent-1",
+			options: { minCombinedScore: 0 },
+		})
+
+		expect(adjudicateFactMergeMock).not.toHaveBeenCalled()
 	})
 })

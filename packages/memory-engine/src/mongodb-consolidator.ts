@@ -37,6 +37,13 @@ import { classifyInjection } from "./mongodb-injection-classifier.js"
 import { extractAndUpsertEntities } from "./mongodb-graph.js"
 import { resolveEnrichmentProvider } from "./mongodb-llm-enrichment.js"
 import {
+	LLM_DEDUP_MAX_SIMILARITY,
+	LLM_DEDUP_MIN_SIMILARITY,
+	adjudicateFactMerge,
+	foldSourceEventIds,
+	resolveConflictedCandidate,
+} from "./mongodb-consolidation-adjudication.js"
+import {
 	buildInferredMemoryEntry,
 	deduceFactsFromMemories,
 	induceFactsFromMemories,
@@ -346,6 +353,27 @@ export async function consolidateMemory(params: {
 	const importanceWeight =
 		options?.importanceWeight ?? DEFAULT_IMPORTANCE_WEIGHT
 	const accessWeight = options?.accessWeight ?? DEFAULT_ACCESS_WEIGHT
+
+	// P4.4.2 — contradiction wiring: resolve-instead-of-skip, default ON.
+	// P4.4.3 — LLM-adjudicated dedup: opt-in, default OFF.
+	const resolveContradictionsEnabled = options?.resolveContradictions ?? true
+	const llmDedupEnabled = options?.llmDedup ?? false
+
+	// Single LLM seam for the whole run: contradiction resolution (P4.4.2),
+	// deduction/induction (issue #31), and LLM-adjudicated dedup (P4.4.3) all
+	// share one provider resolution, so a misconfigured provider warns once
+	// and every LLM-dependent phase degrades together.
+	const llmProvider = (() => {
+		try {
+			return resolveEnrichmentProvider(process.env)
+		} catch (err) {
+			log.warn(
+				`enrichment provider resolution failed; LLM-dependent phases degrade: ${err instanceof Error ? err.message : String(err)}`,
+			)
+			return null
+		}
+	})()
+	const llmModel = process.env.MEMONGO_ENRICHMENT_MODEL?.trim() ?? ""
 
 	const emptyResult: ConsolidationResult = {
 		runId,
@@ -792,11 +820,42 @@ export async function consolidateMemory(params: {
 			})
 
 			if (conflicted) {
-				log.warn(
-					`conflict detected for ${match.type}/${match.key} from event=${candidate.eventId}, skipping promotion`,
-				)
+				// P4.4.2 — contradiction wiring: resolve instead of skip (default
+				// ON). detect → invalidate the LOSING side (per
+				// invalidateContradictedFacts semantics) → fall through so the
+				// surviving candidate is re-evaluated by the normal pipeline.
+				// Flag off, no LLM configured, or the candidate itself being the
+				// loser all preserve the historical skip exactly.
+				let conflictResolved = false
+				if (resolveContradictionsEnabled && llmProvider) {
+					const resolution = await resolveConflictedCandidate({
+						db,
+						prefix,
+						provider: llmProvider,
+						model: llmModel,
+						agentId,
+						candidate: {
+							key: match.key,
+							value: match.value,
+							...(candidateScope ? { scope: candidateScope } : {}),
+							...(candidateScopeRef ? { scopeRef: candidateScopeRef } : {}),
+						},
+						runId,
+					})
+					conflictResolved = resolution.resolved
+					if (conflictResolved) {
+						log.info(
+							`contradiction resolved for ${match.type}/${match.key} from event=${candidate.eventId}: invalidated ${resolution.invalidatedCount} contradicted fact(s), re-evaluating candidate`,
+						)
+					}
+				}
 				conflictsResolved++
-				continue
+				if (!conflictResolved) {
+					log.warn(
+						`conflict detected for ${match.type}/${match.key} from event=${candidate.eventId}, skipping promotion`,
+					)
+					continue
+				}
 			}
 
 			// Similarity check via $vectorSearch — decide ADD vs NOOP.
@@ -962,23 +1021,12 @@ export async function consolidateMemory(params: {
 	// fully corroborated. Degrades to the historical skip when no LLM is set.
 	// ===================================================================
 
-	const reasoningProvider = (() => {
-		try {
-			return resolveEnrichmentProvider(process.env)
-		} catch (err) {
-			log.warn(
-				`enrichment provider resolution failed; skipping reasoning phases: ${err instanceof Error ? err.message : String(err)}`,
-			)
-			return null
-		}
-	})()
-
-	if (!reasoningProvider) {
+	if (!llmProvider) {
 		log.info("deduction phase: no LLM configured, skipping")
 		log.info("induction phase: no LLM configured, skipping")
 	} else {
 		try {
-			const reasoningModel = process.env.MEMONGO_ENRICHMENT_MODEL?.trim() ?? ""
+			const reasoningModel = llmModel
 			// Reason over OBSERVED facts only: exclude prior inferences so a run
 			// cannot compound inference-on-inference and erode grounding.
 			const factFilter: Document = {
@@ -1022,12 +1070,12 @@ export async function consolidateMemory(params: {
 				if (group.values.length < 2) continue
 				const [deduced, induced] = await Promise.all([
 					deduceFactsFromMemories({
-						provider: reasoningProvider,
+						provider: llmProvider,
 						model: reasoningModel,
 						facts: group.values,
 					}),
 					induceFactsFromMemories({
-						provider: reasoningProvider,
+						provider: llmProvider,
 						model: reasoningModel,
 						facts: group.values,
 					}),
@@ -1079,6 +1127,164 @@ export async function consolidateMemory(params: {
 			log.warn(
 				`consolidation reasoning phases failed (non-blocking): ${err instanceof Error ? err.message : String(err)}`,
 			)
+		}
+	}
+
+	// ===================================================================
+	// Phase 4.6 — LLM-adjudicated dedup (P4.4.3, flag-gated default OFF)
+	//
+	// Optional phase between the NOOP gate (0.85) and prune: fact pairs in
+	// the similarity band [0.75, 0.92] get a 1-by-1 LLM merge verdict. Below
+	// the band the pair is distinct enough that merging is never right;
+	// above it the deterministic prune already handles the pair, so an LLM
+	// call would be wasted. On MERGE the kept (newer) fact gets the
+	// synthesized union text and the union of sourceEventIds as the
+	// proof-count analog (capped at MAX_SOURCE_EVENT_IDS); the merged-away
+	// (older) fact is invalidated via the same mechanism prune uses. LLM
+	// failure or malformed JSON is treated as no-merge — never throws.
+	// ===================================================================
+
+	let factsMerged = 0
+	if (llmDedupEnabled) {
+		if (!llmProvider) {
+			log.info("llm-dedup phase: no LLM configured, skipping")
+		} else {
+			try {
+				const dedupFilter: Document = {
+					agentId,
+					state: { $ne: "invalidated" },
+				}
+				if (options?.scope) dedupFilter.scope = options.scope
+				if (options?.scopeRef) dedupFilter.scopeRef = options.scopeRef
+
+				const recentFacts = await structuredCol
+					.find(dedupFilter)
+					.sort({ updatedAt: -1 })
+					.limit(50)
+					.toArray()
+
+				const retiredIds = new Set<string>()
+				const adjudicatedPairs = new Set<string>()
+
+				for (const fact of recentFacts) {
+					if (typeof fact.value !== "string" || !fact.value) continue
+					const factId = String(fact._id)
+					// Skip facts merged away by a prior iteration in this loop
+					if (retiredIds.has(factId)) continue
+
+					try {
+						const similars = await structuredCol
+							.aggregate([
+								{
+									$vectorSearch: {
+										index: `${prefix}structured_mem_vector`,
+										path: "value",
+										query: { text: fact.value },
+										model: "voyage-4-large",
+										numCandidates: 80,
+										limit: 4, // +1 to account for self-match consuming a slot
+										// Scope from the FACT, never from options — same
+										// tenant-isolation invariant prune enforces.
+										filter: {
+											agentId,
+											...(fact.scope ? { scope: fact.scope } : {}),
+											...(fact.scopeRef ? { scopeRef: fact.scopeRef } : {}),
+										},
+									},
+								},
+								{ $addFields: { score: { $meta: "vectorSearchScore" } } },
+								{
+									$match: {
+										_id: { $ne: fact._id },
+										state: { $ne: "invalidated" },
+									},
+								},
+							])
+							.toArray()
+
+						for (const dup of similars) {
+							// Tenant floor, belt-and-suspenders: never merge across
+							// scope/scopeRef, same as prune.
+							if (dup.scope !== fact.scope || dup.scopeRef !== fact.scopeRef) {
+								continue
+							}
+							const dupId = String(dup._id)
+							if (retiredIds.has(dupId)) continue
+							const dupScore = typeof dup.score === "number" ? dup.score : 0
+							if (
+								dupScore < LLM_DEDUP_MIN_SIMILARITY ||
+								dupScore > LLM_DEDUP_MAX_SIMILARITY
+							) {
+								continue
+							}
+							// Adjudicate each unordered pair at most once per run.
+							const pairKey = [factId, dupId].sort().join(" ")
+							if (adjudicatedPairs.has(pairKey)) continue
+							adjudicatedPairs.add(pairKey)
+
+							const verdict = await adjudicateFactMerge({
+								provider: llmProvider,
+								model: llmModel,
+								factA: {
+									key: typeof fact.key === "string" ? fact.key : "",
+									value: fact.value,
+								},
+								factB: {
+									key: typeof dup.key === "string" ? dup.key : "",
+									value: String(dup.value ?? ""),
+								},
+							})
+							if (verdict.verdict !== "MERGE" || !verdict.mergedValue) {
+								continue
+							}
+
+							// Same winner rule as prune: the NEWER fact survives, the
+							// older one is merged away.
+							const dupUpdated =
+								dup.updatedAt instanceof Date ? dup.updatedAt : new Date(0)
+							const factUpdated =
+								fact.updatedAt instanceof Date ? fact.updatedAt : new Date(0)
+							const keptDoc = dupUpdated > factUpdated ? dup : fact
+							const mergedAwayDoc = dupUpdated > factUpdated ? fact : dup
+
+							await structuredCol.updateOne(
+								{ _id: keptDoc._id },
+								{
+									$set: {
+										value: verdict.mergedValue,
+										sourceEventIds: foldSourceEventIds(
+											keptDoc.sourceEventIds,
+											mergedAwayDoc.sourceEventIds,
+										),
+										updatedAt: new Date(),
+									},
+								},
+							)
+							await structuredCol.updateOne(
+								{ _id: mergedAwayDoc._id },
+								{ $set: { state: "invalidated" } },
+							)
+							retiredIds.add(String(mergedAwayDoc._id))
+							factsMerged++
+							log.info(
+								`llm-dedup merged ${String(mergedAwayDoc._id)} into ${String(keptDoc._id)} (score=${dupScore.toFixed(3)})`,
+							)
+							// If the fact driving this scan was merged away, its remaining
+							// pairs are moot — the survivor keeps its own scan slot.
+							if (mergedAwayDoc === fact) break
+						}
+					} catch (err) {
+						// Graceful degradation: a failed pair is a no-merge, never fatal
+						log.warn(
+							`llm-dedup adjudication failed for fact=${factId}: ${err instanceof Error ? err.message : String(err)}`,
+						)
+					}
+				}
+			} catch (err) {
+				log.warn(
+					`llm-dedup phase failed: ${err instanceof Error ? err.message : String(err)}`,
+				)
+			}
 		}
 	}
 
@@ -1213,6 +1419,7 @@ export async function consolidateMemory(params: {
 			eventsProcessed: successfulEventIds.length,
 			factsPromoted,
 			factsInferred,
+			factsMerged,
 			factsPruned: prunedCount,
 			conflictsResolved,
 			durationMs,
@@ -1245,6 +1452,7 @@ export async function consolidateMemory(params: {
 		eventsProcessed: successfulEventIds.length,
 		factsPromoted,
 		factsInferred,
+		factsMerged,
 		factsPruned: prunedCount,
 		conflictsResolved,
 		durationMs,

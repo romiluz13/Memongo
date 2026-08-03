@@ -113,7 +113,7 @@
       "dependencies": {
         "@memongo/lib": "2.0.0",
         "chokidar": "^4.0.3",
-        "mongodb": "7.2.0",
+        "mongodb": "^7.2.0",
       },
       "devDependencies": {
         "@types/node": "^22.10.0",

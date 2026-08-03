@@ -53,7 +53,7 @@ Atlas Local Preview remains the local reproducibility lane:
 
 ```bash
 export VOYAGE_API_KEY="al-your-atlas-model-api-key"
-docker compose -f docker/mongodb/docker-compose.preview.yml up -d
+docker compose -f docker/docker-compose.yml up -d
 export MEMONGO_MONGODB_URI="mongodb://127.0.0.1:27017/?directConnection=true"
 ```
 
@@ -74,7 +74,7 @@ treated as skipped capability checks, not product proof.
 Capability lanes are separate from the core release lane and must be run with the environment they actually require.
 
 - Auto-embed/search lane:
-  Requires managed Atlas cloud or `docker/mongodb/docker-compose.preview.yml` and an Atlas Model key with the `al-...` prefix. A direct Voyage `pa-...` key is not a valid MongoDB auto-embed environment.
+  Requires managed Atlas cloud or `docker/docker-compose.yml` and an Atlas Model key with the `al-...` prefix. A direct Voyage `pa-...` key is not a valid MongoDB auto-embed environment.
 - Replica-set-only lane:
   Use `docker/mongodb/docker-compose.mongodb.yml` `replicaset` or `fullstack` (requires `ADMIN_PASSWORD` and `MONGOT_PASSWORD` to be set — no defaults), then run `packages/memory-engine/src/mongodb-e2e.e2e.test.ts` with:
 

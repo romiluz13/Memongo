@@ -22,6 +22,36 @@ This monorepo uses the `@memongo` npm scope. Publishing is maintainer-operated; 
 
 `@memongo/lib` is also published as a runtime support package because the engine and bridge depend on it, but it is not a primary integration surface.
 
+## Release flow
+
+1. **Bump versions.** The root `package.json` `version` is the canonical
+   workspace release version. Keep these surfaces in sync with it:
+   - `apps/api/src/version.ts` (`MEMONGO_API_VERSION`) — drives the OpenAPI
+     `info.version` and the `version` field echoed by `GET /v1/status`.
+   - `apps/mcp/src/version.ts` (`MEMONGO_SERVER_VERSION`) — drives the MCP
+     server handshake version.
+   - Per-package semver in each published `package.json`; for
+     `@memongo/client`, `packages/client/src/version.ts`
+     (`MEMONGO_CLIENT_VERSION`) must equal the client package version — it is
+     sent as the `x-memongo-client-version` request header.
+2. **Build.** `bun run build`. Every publishable package also has
+   `prepublishOnly: bun run build` so a manual `npm publish` never ships a
+   stale `dist/` (`@memongo/pi-extension` ships unbuilt TS and runs
+   `prepublishOnly: bun run check-types` instead).
+3. **Gate.** `bun run check-publishability`. In addition to tarball contents,
+   install smoke, and workflow checks it enforces:
+   - `engines.node: ">=20.19.0"` and a `prepublishOnly` script on every
+     publishable package;
+   - no exact-pinned `mongodb` dependency (semver ranges only);
+   - `bin` targets exist and start with `#!/usr/bin/env node`;
+   - cross-package version consistency for the surfaces above;
+   - `publint` and `@arethetypeswrong/cli` (attw) against every packed
+     tarball. These run via `bunx`; when the tools cannot be fetched (offline)
+     the gate reports `SKIP` instead of failing, and it always skips
+     `@memongo/pi-extension` (no JS entrypoints).
+4. **Publish** in dependency order (below) from `v*` tags via the GitHub
+   publish workflow.
+
 ## Publish mechanics
 
 From repo root, after all release-blocking lanes are green:

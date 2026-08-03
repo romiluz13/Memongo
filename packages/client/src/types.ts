@@ -385,6 +385,8 @@ export type MemongoReadFileResponse = {
 }
 
 export type MemongoStatusResponse = {
+	/** Memongo release version of the responding server. */
+	version?: string
 	backend: "mongodb"
 	provider: string
 	model?: string

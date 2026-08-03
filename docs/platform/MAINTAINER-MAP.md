@@ -45,7 +45,7 @@ Supported adapters around that core:
   `packages/memory-engine/src/mongodb-e2e.e2e.test.ts`
 
 Canonical local stack:
-- `docker/mongodb/docker-compose.preview.yml`
+- `docker/docker-compose.yml`
 - `VOYAGE_API_KEY=al-...`
 - `mongodb://127.0.0.1:27017/?directConnection=true`
 
