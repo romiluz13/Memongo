@@ -122,7 +122,7 @@ function turnEnd(turnIndex: number, text: string | null) {
 function register(
 	client: MemongoClient,
 	env: Record<string, string | undefined>,
-	extra: { flushEvery?: number; flushMs?: number } = {},
+	extra: { flushEvery?: number; flushMs?: number; maxSeenKeys?: number } = {},
 ) {
 	const { pi, handlers } = createFakePi()
 	const warn = vi.fn()
@@ -372,6 +372,27 @@ describe("turn-end auto-capture", () => {
 		await handle.flushCaptures()
 
 		expect(writeEvent).toHaveBeenCalledTimes(2)
+	})
+
+	it("bounds seenKeys: an evicted ancient turn may re-capture, recent ones still dedupe (B15.5)", async () => {
+		const { client, writeEvent } = createMockClient()
+		const { handlers, handle } = register(client, {}, { maxSeenKeys: 2 })
+
+		await handlers.get("agent_start")?.(agentStartEvent, fakeCtx)
+		await handlers.get("turn_end")?.(turnEnd(0, "answer 0"), fakeCtx)
+		await handlers.get("turn_end")?.(turnEnd(1, "answer 1"), fakeCtx)
+		await handlers.get("turn_end")?.(turnEnd(2, "answer 2"), fakeCtx)
+		await handle.flushCaptures()
+		expect(writeEvent).toHaveBeenCalledTimes(3)
+
+		// Turn 1 is still inside the dedup window (retry first: re-capturing
+		// the evicted turn 0 would cascade-evict turn 1). Turn 0's key was
+		// FIFO-evicted once the cap was exceeded, so its ancient retry
+		// re-buffers — the server idempotency key makes that duplicate a no-op.
+		await handlers.get("turn_end")?.(turnEnd(1, "answer 1"), fakeCtx)
+		await handlers.get("turn_end")?.(turnEnd(0, "answer 0"), fakeCtx)
+		await handle.flushCaptures()
+		expect(writeEvent).toHaveBeenCalledTimes(4)
 	})
 
 	it("batches captures: no write before the flush threshold", async () => {

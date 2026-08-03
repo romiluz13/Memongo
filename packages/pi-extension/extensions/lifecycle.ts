@@ -46,6 +46,10 @@ const SCOPES: readonly MemongoScope[] = [
 const DEFAULT_FLUSH_EVERY = 4
 const DEFAULT_FLUSH_MS = 5_000
 const DEFAULT_INJECTION_TIMEOUT_MS = 3_000
+// B15.5: the per-session dedup set must not grow without bound in a
+// long-running Pi session. 10k keys ≈ months of turns; FIFO eviction only
+// re-admits ancient turns, and the server idempotency key no-ops those.
+const MAX_SEEN_KEYS = 10_000
 const RECENT_MEMORIES_MAX = 5
 const PROFILE_ITEMS_PER_TYPE = 3
 const SNIPPET_MAX = 200
@@ -202,6 +206,8 @@ export interface MemongoLifecycleDeps {
 	flushEvery?: number
 	/** Flush the capture buffer T ms after the first buffered event (default 5000). */
 	flushMs?: number
+	/** Max turn-dedup keys retained per session (default 10_000, FIFO eviction). */
+	maxSeenKeys?: number
 	/** Max time before_agent_start waits for the prefetch (default 3000). */
 	injectionTimeoutMs?: number
 	warn?: (message: string) => void
@@ -242,6 +248,12 @@ export function registerMemongoLifecycle(
 	const warn = deps.warn ?? ((message: string) => console.warn(message))
 	const flushEvery = deps.flushEvery ?? DEFAULT_FLUSH_EVERY
 	const flushMs = deps.flushMs ?? DEFAULT_FLUSH_MS
+	const maxSeenKeys =
+		typeof deps.maxSeenKeys === "number" &&
+		Number.isInteger(deps.maxSeenKeys) &&
+		deps.maxSeenKeys > 0
+			? deps.maxSeenKeys
+			: MAX_SEEN_KEYS
 	const injectionTimeoutMs =
 		deps.injectionTimeoutMs ?? DEFAULT_INJECTION_TIMEOUT_MS
 
@@ -337,6 +349,14 @@ export function registerMemongoLifecycle(
 		let added = false
 		for (const item of items) {
 			if (seenKeys.has(item.key)) continue
+			if (seenKeys.size >= maxSeenKeys) {
+				// B15.5: FIFO-evict the oldest key (Set preserves insertion
+				// order) so the dedup set stays bounded. An ancient turn that
+				// re-arrives after eviction re-buffers once; the server-side
+				// idempotency key makes that duplicate write a no-op.
+				const oldest = seenKeys.values().next().value
+				if (oldest !== undefined) seenKeys.delete(oldest)
+			}
 			seenKeys.add(item.key)
 			buffer.push(item)
 			added = true
