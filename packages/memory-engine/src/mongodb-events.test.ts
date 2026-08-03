@@ -32,6 +32,7 @@ import {
 	isTransientMongoWriteError,
 	type CanonicalEvent,
 } from "./mongodb-events.js"
+import { computeIdempotencyFingerprint } from "./mongodb-idempotency-fingerprint.js"
 import { eventsCollection, chunksCollection } from "./mongodb-schema.js"
 
 // ---------------------------------------------------------------------------
@@ -1832,5 +1833,101 @@ describe("event TTL expiration (P4.4.1)", () => {
 			{ expiresAt: { $exists: false } },
 			{ expiresAt: { $gt: expect.any(Date) } },
 		])
+	})
+})
+
+describe("computeIdempotencyFingerprint (B4)", () => {
+	const BASE = {
+		role: "user" as const,
+		body: "hello",
+		sessionId: "s1",
+		timestamp: new Date("2026-04-09T12:00:00.000Z"),
+		validAt: new Date("2026-04-09T12:00:00.000Z"),
+		invalidAt: new Date("2026-05-09T12:00:00.000Z"),
+		metadata: { source: "chat", nested: { b: 2, a: 1 } },
+		expiresAt: new Date("2026-06-09T12:00:00.000Z"),
+	}
+
+	it("is stable for identical payloads", () => {
+		expect(computeIdempotencyFingerprint({ ...BASE }, "agent-1")).toBe(
+			computeIdempotencyFingerprint({ ...BASE }, "agent-1"),
+		)
+	})
+
+	it("normalizes metadata key order recursively", () => {
+		const a = computeIdempotencyFingerprint({ ...BASE }, "agent-1")
+		const b = computeIdempotencyFingerprint(
+			{ ...BASE, metadata: { nested: { a: 1, b: 2 }, source: "chat" } },
+			"agent-1",
+		)
+		expect(b).toBe(a)
+	})
+
+	it("treats omitted metadata as equivalent to empty metadata", () => {
+		const { metadata: _drop, ...withoutMetadata } = BASE
+		const a = computeIdempotencyFingerprint(withoutMetadata, "agent-1")
+		const b = computeIdempotencyFingerprint(
+			{ ...withoutMetadata, metadata: {} },
+			"agent-1",
+		)
+		expect(b).toBe(a)
+	})
+
+	it("normalizes dates to their ISO instant, not the Date object identity", () => {
+		const a = computeIdempotencyFingerprint({ ...BASE }, "agent-1")
+		const b = computeIdempotencyFingerprint(
+			{ ...BASE, timestamp: new Date("2026-04-09T12:00:00.000Z") },
+			"agent-1",
+		)
+		expect(b).toBe(a)
+	})
+
+	it("distinguishes an omitted timestamp from an explicit one", () => {
+		const { timestamp: _drop, ...omitted } = BASE
+		expect(computeIdempotencyFingerprint(omitted, "agent-1")).not.toBe(
+			computeIdempotencyFingerprint({ ...BASE }, "agent-1"),
+		)
+	})
+
+	it.each([
+		["timestamp", { timestamp: new Date("2026-04-10T12:00:00.000Z") }],
+		["validAt", { validAt: new Date("2026-04-08T12:00:00.000Z") }],
+		["invalidAt", { invalidAt: new Date("2026-05-10T12:00:00.000Z") }],
+		["expiresAt", { expiresAt: new Date("2026-06-10T12:00:00.000Z") }],
+		["metadata", { metadata: { source: "other", nested: { a: 1, b: 2 } } }],
+		["body", { body: "hello!" }],
+		["role", { role: "assistant" as const }],
+		["sessionId", { sessionId: "s2" }],
+	])("changes when %s changes", (_label, patch) => {
+		expect(
+			computeIdempotencyFingerprint({ ...BASE, ...patch }, "agent-1"),
+		).not.toBe(computeIdempotencyFingerprint({ ...BASE }, "agent-1"))
+	})
+
+	it("resolves scope with the same rule as the write (implicit session ≡ explicit session)", () => {
+		const implicit = computeIdempotencyFingerprint(
+			{ role: "user", body: "b", sessionId: "s1" },
+			"agent-1",
+		)
+		const explicit = computeIdempotencyFingerprint(
+			{
+				role: "user",
+				body: "b",
+				sessionId: "s1",
+				scope: "session",
+				scopeRef: "session:s1",
+			},
+			"agent-1",
+		)
+		expect(explicit).toBe(implicit)
+	})
+
+	it("omitting expiresAt is distinct from any explicit expiresAt (TTL default equivalence)", () => {
+		const { expiresAt: _drop, ...omitted } = BASE
+		// A write that accepted the TTL default must not collide with one that
+		// pinned an explicit instant — and must replay against its own retry.
+		const a = computeIdempotencyFingerprint(omitted, "agent-1")
+		expect(a).toBe(computeIdempotencyFingerprint({ ...omitted }, "agent-1"))
+		expect(a).not.toBe(computeIdempotencyFingerprint({ ...BASE }, "agent-1"))
 	})
 })

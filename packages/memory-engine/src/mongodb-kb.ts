@@ -154,8 +154,15 @@ export async function ingestToKB(params: {
 			// F10: Dedup check by source.path first, then content hash.
 			// If a document with the same path exists, replace it only if hash changed.
 			// These dedup lookups are OUTSIDE the transaction body (read-only I/O).
+			//
+			// C2: a same-content parent only skips when it is COMPLETE
+			// (chunksComplete === true). A parent whose chunk writes partially
+			// failed — or a legacy parent written before the marker existed —
+			// must be REPAIRED (chunks re-upserted, then flipped complete), not
+			// skipped: skipping froze the KB with permanently missing chunks.
 			let reIngestionOldId: string | null = null
 			let reIngestionOldDocId: unknown = null
+			let repairExistingDocId: string | null = null
 			if (!force) {
 				const sourcePath = doc.source.path ?? doc.title
 				const existingByPath = await kb.findOne({
@@ -164,19 +171,26 @@ export async function ingestToKB(params: {
 				})
 				if (existingByPath) {
 					if (existingByPath.hash === doc.hash) {
-						// Same content — skip
-						result.skipped++
-						continue
+						if (existingByPath.chunksComplete === true) {
+							// Same content, fully persisted — skip
+							result.skipped++
+							continue
+						}
+						repairExistingDocId = String(existingByPath._id)
+					} else {
+						// Hash changed — mark for re-ingestion (delete old + insert new)
+						reIngestionOldId = String(existingByPath._id)
+						reIngestionOldDocId = existingByPath._id
 					}
-					// Hash changed — mark for re-ingestion (delete old + insert new)
-					reIngestionOldId = String(existingByPath._id)
-					reIngestionOldDocId = existingByPath._id
 				} else {
 					// No path match — check hash as fallback
 					const existingByHash = await kb.findOne({ hash: doc.hash, scopeRef })
 					if (existingByHash) {
-						result.skipped++
-						continue
+						if (existingByHash.chunksComplete === true) {
+							result.skipped++
+							continue
+						}
+						repairExistingDocId = String(existingByHash._id)
 					}
 				}
 			}
@@ -188,8 +202,10 @@ export async function ingestToKB(params: {
 			// embedding-free on write and rely on autoEmbed indexes at query time.
 			const embeddingStatus: EmbeddingStatus = "pending"
 
-			// Generate a document ID
-			const docId = crypto.randomUUID()
+			// Generate a document ID — or reuse the incomplete parent's id on a
+			// C2 repair so the re-upserted chunks attach to the parent that
+			// already owns the hash.
+			const docId = repairExistingDocId ?? crypto.randomUUID()
 
 			// Prepare force-mode dedup lookup OUTSIDE transaction
 			let forceOldId: string | null = null
@@ -233,7 +249,12 @@ export async function ingestToKB(params: {
 				}
 			})
 
-			// The new KB document to insert
+			// The new KB document to insert. C2: parents are born INCOMPLETE and
+			// are flipped to chunksComplete only after every chunk write lands
+			// (transactional path flips inside the transaction, so a commit
+			// always implies complete). If the process dies mid-write, the
+			// leftover parent reads as incomplete and the next ingest repairs it
+			// instead of skipping it.
 			const newKBDoc: Record<string, unknown> = {
 				_id: docId,
 				agentId,
@@ -251,7 +272,35 @@ export async function ingestToKB(params: {
 				...(doc.category ? { category: doc.category } : {}),
 				hash: doc.hash,
 				chunkCount: chunks.length,
+				chunksComplete: false,
 				updatedAt: new Date(),
+			}
+
+			// C2: run the chunk upserts and flip the parent complete only when
+			// every chunk write lands. writeErrors (not the applied count) is
+			// the completeness signal: re-upserting identical chunk content
+			// matches without modifying, so a fully successful repair can
+			// legitimately apply 0 writes.
+			const persistChunksAndComplete = async (parentId: string) => {
+				if (chunkOps.length === 0) {
+					await kb.updateOne({ _id: parentId } as Record<string, unknown>, {
+						$set: { chunksComplete: true },
+					})
+					return
+				}
+				const { applied, writeErrors } = await runUnorderedBulkWriteCounted(
+					() => kbChunks.bulkWrite(chunkOps, { ordered: false }),
+				)
+				result.chunksCreated += applied
+				if (writeErrors.length > 0) {
+					result.errors.push(
+						`${doc.title}: ${writeErrors.length} of ${chunkOps.length} chunk writes failed (${writeErrors[0]})`,
+					)
+					return
+				}
+				await kb.updateOne({ _id: parentId } as Record<string, unknown>, {
+					$set: { chunksComplete: true },
+				})
 			}
 
 			// Determine whether we need a transaction (re-ingestion involves delete + insert)
@@ -259,7 +308,12 @@ export async function ingestToKB(params: {
 			const oldIdToDelete = reIngestionOldId ?? forceOldId
 			const oldDocIdToDelete = reIngestionOldDocId ?? forceOldDocId
 
-			if (needsTransaction && oldIdToDelete && oldDocIdToDelete) {
+			if (repairExistingDocId) {
+				// C2 repair: the parent already exists (incomplete) — do not
+				// re-insert it (its hash owns the unique index); re-upsert the
+				// chunks and flip complete when they all land.
+				await persistChunksAndComplete(repairExistingDocId)
+			} else if (needsTransaction && oldIdToDelete && oldDocIdToDelete) {
 				// Re-ingestion path: wrap delete-old + insert-new in withTransaction()
 				// for atomicity. Falls back to sequential on standalone topology.
 				const chunksCreated = await reIngestAtomically({
@@ -286,17 +340,7 @@ export async function ingestToKB(params: {
 					}
 					throw err
 				}
-				if (chunkOps.length > 0) {
-					const { applied, writeErrors } = await runUnorderedBulkWriteCounted(
-						() => kbChunks.bulkWrite(chunkOps, { ordered: false }),
-					)
-					result.chunksCreated += applied
-					if (writeErrors.length > 0) {
-						result.errors.push(
-							`${doc.title}: ${writeErrors.length} of ${chunkOps.length} chunk writes failed (${writeErrors[0]})`,
-						)
-					}
-				}
+				await persistChunksAndComplete(docId)
 			}
 
 			result.documentsProcessed++
@@ -401,6 +445,13 @@ async function reIngestAtomically(params: {
 					chunksCreated = 0
 					await performMetadataWrites(session)
 					chunksCreated = await runChunkBatch(chunkOps, session)
+					// C2: a commit implies every chunk persisted — flip the parent
+					// complete inside the same transaction.
+					await kb.updateOne(
+						{ _id: newKBDoc._id } as Record<string, unknown>,
+						{ $set: { chunksComplete: true } },
+						{ session },
+					)
 				}, MAJORITY_TRANSACTION_OPTIONS)
 				return chunksCreated
 			} finally {
@@ -420,7 +471,13 @@ async function reIngestAtomically(params: {
 
 	// Sequential fallback (no transaction)
 	await performMetadataWrites()
-	return runChunkBatch(chunkOps)
+	const chunksCreated = await runChunkBatch(chunkOps)
+	// C2: reaching here means every chunk write landed (runChunkBatch throws
+	// on partial failure, leaving the parent incomplete for a repair retry).
+	await kb.updateOne({ _id: newKBDoc._id } as Record<string, unknown>, {
+		$set: { chunksComplete: true },
+	})
+	return chunksCreated
 }
 
 // ---------------------------------------------------------------------------

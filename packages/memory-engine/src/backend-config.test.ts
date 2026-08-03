@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest"
 import type { MemongoConfig } from "@memongo/lib"
 import {
 	resolveMemoryBackendConfig,
+	resolveDefaultScope,
 	resolveSearchDefaultScope,
 } from "./backend-config.js"
 
@@ -1482,6 +1483,74 @@ describe("resolveSearchDefaultScope (P1.4: MEMONGO_SEARCH_DEFAULT_SCOPE)", () =>
 		expect(() => resolveSearchDefaultScope("GLOBAL")).toThrow(
 			/not a valid memory scope/,
 		)
+	})
+})
+
+describe("resolveDefaultScope (D1/B3: MEMONGO_DEFAULT_SCOPE)", () => {
+	it("defaults to agent when neither name is set", () => {
+		expect(resolveDefaultScope({ applyTo: "read" })).toBe("agent")
+		expect(resolveDefaultScope({ applyTo: "write" })).toBe("agent")
+		expect(
+			resolveDefaultScope({ value: "  ", legacyValue: "", applyTo: "read" }),
+		).toBe("agent")
+	})
+
+	it("MEMONGO_DEFAULT_SCOPE applies to BOTH reads and writes", () => {
+		for (const applyTo of ["read", "write"] as const) {
+			expect(resolveDefaultScope({ value: "global", applyTo })).toBe("global")
+			expect(resolveDefaultScope({ value: " tenant ", applyTo })).toBe("tenant")
+		}
+	})
+
+	it("throws on an invalid MEMONGO_DEFAULT_SCOPE like other enum envs", () => {
+		expect(() =>
+			resolveDefaultScope({ value: "everything", applyTo: "read" }),
+		).toThrow(/MEMONGO_DEFAULT_SCOPE "everything" is not a valid memory scope/)
+	})
+
+	it("the legacy name alone remains a read alias but does not move writes", () => {
+		expect(
+			resolveDefaultScope({ legacyValue: "global", applyTo: "read" }),
+		).toBe("global")
+		expect(
+			resolveDefaultScope({ legacyValue: "global", applyTo: "write" }),
+		).toBe("agent")
+	})
+
+	it("MEMONGO_DEFAULT_SCOPE wins over a conflicting legacy value and warns once", () => {
+		const warn = vi.fn()
+		expect(
+			resolveDefaultScope({
+				value: "global",
+				legacyValue: "user",
+				applyTo: "read",
+				warn,
+			}),
+		).toBe("global")
+		expect(warn).toHaveBeenCalledTimes(1)
+		expect(warn.mock.calls[0]?.[0]).toContain("MEMONGO_DEFAULT_SCOPE")
+		// Same conflict pair does not warn again (per-operation resolvers
+		// would otherwise spam every search/write).
+		resolveDefaultScope({
+			value: "global",
+			legacyValue: "user",
+			applyTo: "write",
+			warn,
+		})
+		expect(warn).toHaveBeenCalledTimes(1)
+	})
+
+	it("a matching legacy value does not warn", () => {
+		const warn = vi.fn()
+		expect(
+			resolveDefaultScope({
+				value: "global",
+				legacyValue: "global",
+				applyTo: "write",
+				warn,
+			}),
+		).toBe("global")
+		expect(warn).not.toHaveBeenCalled()
 	})
 })
 

@@ -226,11 +226,51 @@ describe("consolidateMemory", () => {
 		// recent run lives under a different gateKey and cannot collide.
 		expect(consolidationRunsCol.findOneAndUpdate).toHaveBeenCalledWith(
 			expect.objectContaining({
-				gateKey: `agent-1tenanttenant:A`,
+				gateKey: `7:"agent-1"|6:"tenant"|8:"tenant:A"`,
 			}),
 			expect.any(Array),
 			expect.objectContaining({ upsert: true }),
 		)
+	})
+
+	it("produces distinct gate keys for boundary-shifted identities (B7)", async () => {
+		const { consolidateMemory } = await import("./mongodb-consolidator.js")
+		// B7: the gate key was plain concatenation, so these two identities
+		// collapsed to one string ("agentsessionsess:1") and would share a
+		// gate lease — one tenant's run could rate-limit or fence another's.
+		const gateKeys: string[] = []
+		const makeDb = () => {
+			const consolidationRunsCol = mockCollection({
+				findOneAndUpdate: vi.fn(async (filter: Document) => {
+					gateKeys.push(filter.gateKey as string)
+					return null
+				}),
+			})
+			const eventsCol = mockCollection()
+			return mockDb({
+				test_consolidation_runs: consolidationRunsCol,
+				test_events: eventsCol,
+			})
+		}
+
+		await consolidateMemory({
+			db: makeDb(),
+			prefix: "test_",
+			agentId: "agent",
+			options: { scope: "session", scopeRef: "sess:1" },
+		})
+		await consolidateMemory({
+			db: makeDb(),
+			prefix: "test_",
+			agentId: "agentsession",
+			options: { scopeRef: "sess:1" },
+		})
+
+		expect(gateKeys).toHaveLength(2)
+		expect(gateKeys[0]).not.toBe(gateKeys[1])
+		// Length-prefixed JSON keeps component boundaries recoverable.
+		expect(gateKeys[0]).toBe('5:"agent"|7:"session"|6:"sess:1"')
+		expect(gateKeys[1]).toBe('12:"agentsession"|0:""|6:"sess:1"')
 	})
 
 	describe("phase-0 gate lease (P0.2)", () => {
@@ -323,7 +363,7 @@ describe("consolidateMemory", () => {
 			// Crashed 5 minutes ago (would be rate-limited by startedAt alone),
 			// but its lease is long expired — the gate must be claimable.
 			const consolidationRunsCol = makeStatefulGate({
-				gateKey: "agent-1\0",
+				gateKey: '7:"agent-1"|0:""|0:""',
 				agentId: "agent-1",
 				status: "running",
 				startedAt: new Date(Date.now() - 5 * 60_000),
@@ -344,7 +384,7 @@ describe("consolidateMemory", () => {
 		it("does not claim a gate whose lease is still live", async () => {
 			const { consolidateMemory } = await import("./mongodb-consolidator.js")
 			const consolidationRunsCol = makeStatefulGate({
-				gateKey: "agent-1\0",
+				gateKey: '7:"agent-1"|0:""|0:""',
 				agentId: "agent-1",
 				status: "running",
 				startedAt: new Date(),

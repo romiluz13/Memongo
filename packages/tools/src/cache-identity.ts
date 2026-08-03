@@ -99,6 +99,11 @@ export function cacheGet(key: string): string | undefined {
 		cache.delete(key)
 		return undefined
 	}
+	// B13: refresh recency on hit. Map preserves insertion order, so
+	// delete + re-set moves the entry to the most-recently-used position;
+	// without this the "LRU" was actually FIFO and evicted hot entries.
+	cache.delete(key)
+	cache.set(key, entry)
 	return entry.rendered
 }
 

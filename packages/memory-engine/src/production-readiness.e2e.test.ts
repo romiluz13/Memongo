@@ -86,6 +86,7 @@ import {
 	getCacheHitRate,
 	getOperationDistribution,
 } from "./mongodb-telemetry.js"
+import { kbLaneEnvironmentAvailable } from "./test-helpers/kb-path-visibility.js"
 import {
 	hasAtlasModelKey,
 	resolvePreviewMongoTestUri,
@@ -904,9 +905,7 @@ describeIfMongo(
 				expect(metadata.pathsExecuted.length).toBeGreaterThanOrEqual(1)
 			})
 
-			it("KB path routes through searchKB on kb-related queries", async () => {
-				// The KB path requires vector/text search indexes which may not be available
-				// in atlas-local. Test that the path either executes or fails gracefully.
+			it("KB path routes through searchKB on kb-related queries", async (ctx) => {
 				const { results, metadata } = await searchV2(
 					db,
 					PREFIX,
@@ -918,13 +917,34 @@ describeIfMongo(
 					},
 				)
 
-				// Either KB path executed and returned results, or it failed gracefully
-				// (search indexes missing in atlas-local without autoEmbed)
-				if (metadata.pathsExecuted.includes("kb")) {
-					expect(results.some((r) => r.source === "reference")).toBe(true)
+				// P1.9: no silent pass. The KB lane needs its search indexes; probe
+				// the collection and SKIP EXPLICITLY when this environment cannot
+				// run the lane (reported as a skip, not a pass). When any required
+				// index exists, the lane MUST execute and return reference
+				// results — a missing execution is a red regression, not a
+				// skipped assertion. (Previously the reference assertion sat
+				// behind `if (pathsExecuted.includes("kb"))`, so the test went
+				// green precisely when index visibility regressed.)
+				const availableIndexes = await kbChunksCollection(db, PREFIX)
+					.listSearchIndexes()
+					.toArray()
+					.then((indexes) => indexes.map((index) => index.name))
+					.catch(() => [] as string[])
+				if (
+					!kbLaneEnvironmentAvailable({
+						availableSearchIndexes: availableIndexes,
+						requiredIndexNames: [
+							`${PREFIX}kb_chunks_vector`,
+							`${PREFIX}kb_chunks_text`,
+						],
+					})
+				) {
+					ctx.skip(
+						`KB search indexes (${PREFIX}kb_chunks_vector/text) unavailable in this environment; the KB lane cannot run here`,
+					)
 				}
-				// No crash either way
-				expect(results).toBeDefined()
+				expect(metadata.pathsExecuted).toContain("kb")
+				expect(results.some((r) => r.source === "reference")).toBe(true)
 			})
 
 			it("resultsByPath accurately reports per-path counts", async () => {

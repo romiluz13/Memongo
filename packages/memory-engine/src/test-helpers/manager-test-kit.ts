@@ -158,6 +158,7 @@ export function conversationRecallModuleMock() {
 export function opsModuleMock() {
 	return {
 		recordIngestRun: vi.fn(),
+		recordProjectionRun: vi.fn(async () => "projection-run-id"),
 		getProjectionLag: vi.fn(),
 		getLatestIngestRun: vi.fn(),
 		getLatestProjectionRun: vi.fn(),
@@ -254,6 +255,7 @@ export function graphModuleMock() {
 		searchEntitiesAutocomplete: vi.fn(),
 		expandGraph: vi.fn(),
 		extractAndUpsertEntities: vi.fn(),
+		extractAndUpsertTypedRelations: vi.fn(),
 		findRelationByLocatorId: vi.fn(),
 	}
 }

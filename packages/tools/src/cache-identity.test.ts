@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest"
 import {
+	_clearCache,
+	cacheGet,
+	cacheSet,
 	computeCacheKey,
 	sha256Hex,
 	type CacheIdentity,
@@ -85,5 +88,32 @@ describe("computeCacheKey (P1.5 canonical cache identity)", () => {
 		})
 		expect(key).not.toContain(rawKey)
 		expect(key).not.toContain("recognizable")
+	})
+})
+
+describe("bounded LRU cache", () => {
+	it("refreshes recency on hit: a recently-read old entry survives eviction while an unread newer entry evicts (B13)", () => {
+		_clearCache()
+		// Fill to capacity (50): k0 is the oldest insertion.
+		for (let i = 0; i < 50; i++) cacheSet(`k${i}`, `v${i}`)
+		// Read the oldest entry — a true LRU moves it to most-recently-used.
+		expect(cacheGet("k0")).toBe("v0")
+		// Force exactly one eviction.
+		cacheSet("k50", "v50")
+		// FIFO (the B13 defect) evicts k0; LRU must evict k1, the oldest
+		// entry that was never re-read.
+		expect(cacheGet("k0")).toBe("v0")
+		expect(cacheGet("k1")).toBeUndefined()
+		expect(cacheGet("k50")).toBe("v50")
+		_clearCache()
+	})
+
+	it("still evicts the oldest entry when nothing was re-read", () => {
+		_clearCache()
+		for (let i = 0; i < 50; i++) cacheSet(`k${i}`, `v${i}`)
+		cacheSet("k50", "v50")
+		expect(cacheGet("k0")).toBeUndefined()
+		expect(cacheGet("k50")).toBe("v50")
+		_clearCache()
 	})
 })

@@ -14,6 +14,7 @@ import {
 import { checkCache, writeCache } from "./mongodb-query-cache.js"
 import { crossEncoderRerank } from "./mongodb-reranker.js"
 import { rewriteQuery } from "./mongodb-query-rewriter.js"
+import { normalizeSinglePathScores } from "./mongodb-search-v2.js"
 import type { MemorySearchResult } from "./types.js"
 import {
 	mocked,
@@ -2976,5 +2977,113 @@ describe("raw-window temporal proximity scoring (P4.4.4)", () => {
 			rerankConfig: { temporalProximityBoost: 0 },
 		})
 		expect(result.results[0]?.path).toBe("events/evt-later-but-far")
+	})
+
+	it("threads the caller-stamped reference date into temporal extraction and time-range resolution (B14)", async () => {
+		// B14: without a threaded reference clock, extractTemporalWindow and
+		// resolveTimeRangePreset read the wall clock, so two runs of the same
+		// benchmark query at different wall-clock times rank differently.
+		// The retrieval reference date is searchOptions.questionDate (the
+		// clock benchmarks already stamp); both derivations must use it.
+		mocked(extractTemporalWindow).mockClear()
+		mocked(resolveTimeRangePreset).mockClear()
+		const questionDate = new Date("2026-07-22T00:00:00Z")
+		mocked(planRetrieval).mockReturnValue({
+			paths: ["raw-window"],
+			confidence: "high",
+			reasoning: "reference clock probe",
+			constraints: {
+				timeRange: {
+					preset: "last-7d",
+					hard: false,
+					reason: "reference clock probe",
+				},
+			},
+		} as never)
+		mocked(getEventsByTimeRange).mockResolvedValue([nearOrigin] as never)
+		mocked(resolveTimeRangePreset).mockReturnValue({
+			start: new Date("2026-07-15T00:00:00Z"),
+			end: questionDate,
+		})
+		mocked(extractTemporalWindow).mockReturnValue({
+			origin: windowOrigin,
+			scaleDays: 7,
+			source: "relative-week",
+			matchedToken: "last week",
+		})
+
+		await runProbe({ questionDate })
+
+		expect(mocked(extractTemporalWindow)).toHaveBeenCalledWith(
+			"what happened last week",
+			questionDate,
+		)
+		expect(mocked(resolveTimeRangePreset)).toHaveBeenCalledWith(
+			"last-7d",
+			questionDate,
+		)
+	})
+})
+
+describe("normalizeSinglePathScores (C1: single-lane BM25 normalization)", () => {
+	const result = (id: string, score: number): MemorySearchResult =>
+		({
+			id,
+			path: `chunks/${id}`,
+			score,
+			snippet: `snippet ${id}`,
+			source: "conversation",
+		}) as MemorySearchResult
+
+	it("normalizes an unbounded lexical (BM25) lane into [0,1] preserving rank order", () => {
+		const input = [result("a", 12.4), result("b", 3.1), result("c", 0.4)]
+		const normalized = normalizeSinglePathScores(input, ["kb"])
+
+		for (const r of normalized) {
+			expect(r.score).toBeGreaterThanOrEqual(0)
+			expect(r.score).toBeLessThanOrEqual(1)
+		}
+		// Strictly monotonic with the BM25 order: a > b > c.
+		expect(normalized[0]?.id).toBe("a")
+		expect(normalized[1]?.id).toBe("b")
+		expect(normalized[2]?.id).toBe("c")
+		expect(normalized[0]!.score).toBeGreaterThan(normalized[1]!.score)
+		expect(normalized[1]!.score).toBeGreaterThan(normalized[2]!.score)
+	})
+
+	it("normalizes every lexical-capable lane, not just kb", () => {
+		for (const path of ["memory_evidence", "structured", "active-critical"]) {
+			const normalized = normalizeSinglePathScores(
+				[result("a", 9.5), result("b", 2.5)],
+				[path],
+			)
+			expect(normalized[0]!.score).toBeLessThanOrEqual(1)
+			expect(normalized[0]!.score).toBeGreaterThan(normalized[1]!.score)
+		}
+	})
+
+	it("leaves an already-[0,1] single lane (vector / server fusion) untouched", () => {
+		const input = [result("a", 0.9), result("b", 0.5)]
+		const normalized = normalizeSinglePathScores(input, ["kb"])
+		expect(normalized.map((r) => r.score)).toEqual([0.9, 0.5])
+	})
+
+	it("does not rescale bounded synthetic lanes that can exceed 1 (raw-window P4.4.4)", () => {
+		// raw-window assigns max(0.35, 1 - i*0.01 + termBoost + temporalBoost),
+		// a synthetic scale bounded near ~1.2 — sigmoid-squashing it would
+		// compress the temporal-proximity delta P4.4.4 relies on.
+		const input = [result("a", 1.15), result("b", 1.02), result("c", 0.98)]
+		const normalized = normalizeSinglePathScores(input, ["raw-window"])
+		expect(normalized.map((r) => r.score)).toEqual([1.15, 1.02, 0.98])
+	})
+
+	it("does not touch multi-lane results — the RRF block owns that case", () => {
+		const input = [result("a", 7.7), result("b", 0.2)]
+		const normalized = normalizeSinglePathScores(input, ["kb", "raw-window"])
+		expect(normalized.map((r) => r.score)).toEqual([7.7, 0.2])
+	})
+
+	it("returns empty for empty", () => {
+		expect(normalizeSinglePathScores([], ["kb"])).toEqual([])
 	})
 })

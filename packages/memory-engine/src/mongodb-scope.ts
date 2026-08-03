@@ -73,13 +73,17 @@ export function resolveScopeRef(params: ScopeRefParams): string {
  *   1. an explicit `scope` always wins;
  *   2. otherwise a present `sessionId` (writes) / `sessionKey` (reads —
  *      callers map it onto `sessionId` here) implies `scope: "session"`;
- *   3. otherwise the caller-provided `defaultScope` applies. Reads pass the
- *      `MEMONGO_SEARCH_DEFAULT_SCOPE`-resolved value (P1.4); writes omit it
- *      and fall through to `"agent"`.
+ *   3. otherwise the caller-provided `defaultScope` applies. D1/B3: BOTH
+ *      directions pass the unified `MEMONGO_DEFAULT_SCOPE`-resolved value;
+ *      the legacy `MEMONGO_SEARCH_DEFAULT_SCOPE` name is honored on reads
+ *      only (one deprecation window), and writes fall through to `"agent"`.
  *
  * Before P2.3, rule 2 existed only on reads: `add({ content, sessionId })`
  * wrote to `agent:<id>` while `search({ query, sessionKey })` read from
  * `session:<id>`, so the two directions silently hit different partitions.
+ * Before D1, rule 3 was read-only: the search default scope could not move
+ * where unscoped writes landed, so an unscoped add and unscoped search
+ * roundtripped only under the `agent` fallback.
  */
 export type ScopeIdentity = {
 	scope: MemoryScope

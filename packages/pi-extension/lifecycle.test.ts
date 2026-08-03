@@ -188,6 +188,39 @@ describe("resolveLifecycleConfig", () => {
 			resolveLifecycleConfig({ MEMONGO_PI_MEMORY_SCOPE: "bogus" }).scope,
 		).toBe("global")
 	})
+
+	it("D1/C4: one scope setting drives BOTH capture writes and context search", async () => {
+		const { client, profile, searchDetailed, writeEvent } = createMockClient()
+		profile.mockResolvedValue(PROFILE)
+		searchDetailed.mockResolvedValue(SEARCH)
+		const { handlers, handle } = register(client, {
+			MEMONGO_PI_MEMORY_SCOPE: "agent",
+		})
+
+		// Read direction: the session-start prefetch searches the SAME scope.
+		await handlers.get("session_start")?.(sessionStartEvent, fakeCtx)
+		await handlers.get("before_agent_start")?.(beforeAgentStartEvent, fakeCtx)
+		expect(profile).toHaveBeenCalledWith(
+			expect.objectContaining({ scope: "agent" }),
+		)
+		expect(searchDetailed).toHaveBeenCalledWith(
+			expect.objectContaining({ scope: "agent" }),
+		)
+
+		// Write direction: turn capture writes the SAME scope, so what Pi
+		// captures is what Pi later finds (the engine-side default scope must
+		// not split the directions either — see D1).
+		await handlers.get("agent_start")?.(agentStartEvent, fakeCtx)
+		await handlers.get("message_start")?.(
+			userMessageStart("scoped hello"),
+			fakeCtx,
+		)
+		await handlers.get("turn_end")?.(turnEnd(0, "scoped answer"), fakeCtx)
+		await handle.flushCaptures()
+		expect(writeEvent).toHaveBeenCalledWith(
+			expect.objectContaining({ scope: "agent" }),
+		)
+	})
 })
 
 describe("captureIdempotencyKey", () => {

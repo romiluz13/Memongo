@@ -405,6 +405,115 @@ describe("getMemorySearchManager runtime (P2.1)", () => {
 		}
 	})
 
+	it("B9: in-flight operation survives LRU eviction; evicted manager closes at quiescence exactly once", async () => {
+		vi.stubEnv("MEMONGO_SHARED_CLIENT", "1")
+		vi.stubEnv("MEMONGO_MANAGER_CACHE_MAX", "1")
+
+		let resolveOp: (value: string) => void = () => undefined
+		const inflight = new Promise<string>((resolve) => {
+			resolveOp = resolve
+		})
+
+		const { manager: managerA } = await getMemorySearchManager({
+			cfg,
+			agentId: "agent-a",
+		})
+		expect(managerA).not.toBeNull()
+		// Attach a controllable async operation to the created fake manager.
+		const rawA = createdManagers[0] as unknown as {
+			search: ReturnType<typeof vi.fn>
+		}
+		rawA.search = vi.fn(() => inflight)
+
+		// Start the in-flight operation through the handed-out manager.
+		const opResult = (
+			managerA as unknown as { search: (query: string) => Promise<string> }
+		).search("in-flight query")
+
+		// Fetching agent-b with cache max 1 evicts agent-a from the lookup…
+		await getMemorySearchManager({ cfg, agentId: "agent-b" })
+		// …but the evicted manager must stay alive while the operation runs.
+		expect(createdManagers[0]!.close).not.toHaveBeenCalled()
+
+		// Quiescence: once the operation settles, the deferred close runs once.
+		resolveOp("done")
+		await expect(opResult).resolves.toBe("done")
+		await vi.waitFor(() => {
+			expect(createdManagers[0]!.close).toHaveBeenCalledTimes(1)
+		})
+	})
+
+	it("B9: idle eviction defers close until in-flight operations settle", async () => {
+		vi.stubEnv("MEMONGO_SHARED_CLIENT", "1")
+		vi.stubEnv("MEMONGO_MANAGER_CACHE_IDLE_TTL_MS", "1000")
+
+		let resolveOp: (value: string) => void = () => undefined
+		const inflight = new Promise<string>((resolve) => {
+			resolveOp = resolve
+		})
+
+		vi.useFakeTimers()
+		try {
+			const { manager: managerA } = await getMemorySearchManager({
+				cfg,
+				agentId: "agent-a",
+			})
+			const rawA = createdManagers[0] as unknown as {
+				search: ReturnType<typeof vi.fn>
+			}
+			rawA.search = vi.fn(() => inflight)
+			const opResult = (
+				managerA as unknown as { search: (query: string) => Promise<string> }
+			).search("in-flight query")
+
+			vi.advanceTimersByTime(2_000)
+			await evictIdleMemorySearchManagers()
+
+			// Idle-past-TTL and evicted from the lookup, but not closed mid-flight.
+			expect(createdManagers[0]!.close).not.toHaveBeenCalled()
+
+			resolveOp("done")
+			await expect(opResult).resolves.toBe("done")
+			await vi.waitFor(() => {
+				expect(createdManagers[0]!.close).toHaveBeenCalledTimes(1)
+			})
+		} finally {
+			vi.useRealTimers()
+		}
+	})
+
+	it("B9: shutdown leaves the lookup immediately but closes after in-flight operations", async () => {
+		vi.stubEnv("MEMONGO_SHARED_CLIENT", "1")
+
+		let resolveOp: (value: string) => void = () => undefined
+		const inflight = new Promise<string>((resolve) => {
+			resolveOp = resolve
+		})
+
+		const { manager: managerA } = await getMemorySearchManager({
+			cfg,
+			agentId: "agent-a",
+		})
+		const rawA = createdManagers[0] as unknown as {
+			search: ReturnType<typeof vi.fn>
+		}
+		rawA.search = vi.fn(() => inflight)
+		const opResult = (
+			managerA as unknown as { search: (query: string) => Promise<string> }
+		).search("in-flight query")
+
+		// Shutdown starts but must not close the borrowed manager mid-flight.
+		const closeAllPromise = closeAllMemorySearchManagers()
+		expect(createdManagers[0]!.close).not.toHaveBeenCalled()
+
+		// A new request after shutdown re-initializes (the old entry is gone
+		// from the lookup immediately).
+		resolveOp("done")
+		await expect(opResult).resolves.toBe("done")
+		await closeAllPromise
+		expect(createdManagers[0]!.close).toHaveBeenCalledTimes(1)
+	})
+
 	it("close during initialization closes the manager instead of caching it", async () => {
 		let resolveCreate: ((manager: FakeManager) => void) | undefined
 		managerMocks.create.mockImplementation(

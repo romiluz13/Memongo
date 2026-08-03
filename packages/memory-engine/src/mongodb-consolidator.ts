@@ -288,9 +288,12 @@ async function hasConflict(params: {
 
 /**
  * Deterministic gate identity: one gate document per (agentId, scope,
- * scopeRef) triple. NUL separators cannot appear in any component (agentId is
- * sanitized, scope is an enum, scopeRef is scope-prefixed), matching the
- * groupKey convention used later in this module. Scoped and unscoped runs
+ * scopeRef) triple. B7: the key is a length-prefixed JSON tuple, not plain
+ * concatenation — `("agent","session","sess:1")` and `("agentsession","",
+ * "sess:1")` used to collapse to the same string and share one gate lease.
+ * Length prefixes keep component boundaries recoverable for any component
+ * content; absent scope/scopeRef encode as empty strings, preserving the
+ * established scoped-vs-unscoped gate granularity. Scoped and unscoped runs
  * are separate gates, as they were under the previous runScopeFilter.
  */
 function consolidationGateKey(identity: {
@@ -298,7 +301,12 @@ function consolidationGateKey(identity: {
 	scope?: MemoryScope
 	scopeRef?: string
 }): string {
-	return `${identity.agentId}${identity.scope ?? ""}${identity.scopeRef ?? ""}`
+	const parts = [
+		identity.agentId,
+		identity.scope ?? "",
+		identity.scopeRef ?? "",
+	]
+	return parts.map((part) => `${part.length}:${JSON.stringify(part)}`).join("|")
 }
 
 /**

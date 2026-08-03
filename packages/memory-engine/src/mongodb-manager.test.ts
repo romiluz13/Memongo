@@ -297,6 +297,89 @@ describe("P2.3 scope identity unification", () => {
 		expect(read.scopeRef).toBe(`session:${written.event.sessionId}`)
 	})
 
+	it("D1/B3: MEMONGO_DEFAULT_SCOPE moves BOTH directions — unscoped add and search roundtrip", async () => {
+		vi.stubEnv("MEMONGO_DEFAULT_SCOPE", "global")
+		try {
+			const { writeEvent } = await mockWritePath()
+			const writeManager = makeWriteManager()
+			await writeManager.writeConversationEvent({
+				role: "user",
+				body: "unscoped write under the unified default",
+			})
+			// Before D1 the write still landed in "agent" while the search
+			// queried "global" — the roundtrip only held under the agent fallback.
+			expect(mocked(writeEvent).mock.calls[0]?.[0]).toMatchObject({
+				event: expect.objectContaining({ scope: "global" }),
+			})
+
+			expect(await searchIdentityViaCache()).toEqual({
+				scope: "global",
+				scopeRef: "global",
+			})
+		} finally {
+			vi.unstubAllEnvs()
+		}
+	})
+
+	it("D1/B3: the legacy search-only name does NOT move writes (deprecation window)", async () => {
+		vi.stubEnv("MEMONGO_SEARCH_DEFAULT_SCOPE", "global")
+		try {
+			const { writeEvent } = await mockWritePath()
+			const writeManager = makeWriteManager()
+			await writeManager.writeConversationEvent({
+				role: "user",
+				body: "legacy env configured, write stays put",
+			})
+			// Reads honor the legacy alias…
+			expect(await searchIdentityViaCache()).toEqual({
+				scope: "global",
+				scopeRef: "global",
+			})
+			// …but writes keep the agent fallback, exactly as before D1.
+			expect(mocked(writeEvent).mock.calls[0]?.[0]).toMatchObject({
+				event: expect.objectContaining({ scope: "agent" }),
+			})
+		} finally {
+			vi.unstubAllEnvs()
+		}
+	})
+
+	it("D1/B3: explicit scope and session identity still beat the unified default", async () => {
+		vi.stubEnv("MEMONGO_DEFAULT_SCOPE", "global")
+		try {
+			const { writeEvent } = await mockWritePath()
+			const writeManager = makeWriteManager()
+
+			// Explicit scope wins on the write…
+			await writeManager.writeConversationEvent({
+				role: "user",
+				body: "explicit agent write under a global default",
+				scope: "agent",
+			})
+			expect(mocked(writeEvent).mock.calls[0]?.[0]).toMatchObject({
+				event: expect.objectContaining({ scope: "agent" }),
+			})
+
+			// …session identity implies the session scope on the write…
+			await writeManager.writeConversationEvent({
+				role: "user",
+				body: "session write",
+				sessionId: "s9",
+			})
+			expect(mocked(writeEvent).mock.calls[1]?.[0]).toMatchObject({
+				event: expect.objectContaining({ scope: "session" }),
+			})
+
+			// …and on the read.
+			expect(await searchIdentityViaCache({ sessionKey: "s9" })).toEqual({
+				scope: "session",
+				scopeRef: "session:s9",
+			})
+		} finally {
+			vi.unstubAllEnvs()
+		}
+	})
+
 	it("searchDetailed: conversationScope.sessionKey implies the session scope", async () => {
 		// searchDetailed always injects a searchConfig, so its cache seam is
 		// disabled by design (shouldUseDetailedSearchCache) — observe the

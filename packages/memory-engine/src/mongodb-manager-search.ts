@@ -2,7 +2,7 @@ import path from "node:path"
 import type { Document } from "mongodb"
 import type { MemoryMongoDBFusionMethod, MemoryScope } from "@memongo/lib"
 import { AccessTracker } from "./mongodb-access-tracker.js"
-import { resolveSearchDefaultScope } from "./backend-config.js"
+import { resolveDefaultScope } from "./backend-config.js"
 import type { ResolvedMongoDBConfig } from "./backend-config.js"
 import type { BenchmarkRunContext } from "./benchmark-parity-envelope.js"
 import { normalizeSearchResults } from "./mongodb-hybrid.js"
@@ -88,8 +88,9 @@ export class MongoDBManagerSearchOps {
 	 * way to produce them.
 	 *
 	 * P2.3: reads share the canonical identity rule with writes (explicit
-	 * scope wins; sessionKey implies "session"); the only read-specific input
-	 * is the P1.4 env-resolved fallback (MEMONGO_SEARCH_DEFAULT_SCOPE).
+	 * scope wins; sessionKey implies "session"); D1/B3: the fallback is the
+	 * unified MEMONGO_DEFAULT_SCOPE (legacy MEMONGO_SEARCH_DEFAULT_SCOPE
+	 * remains a read alias for one deprecation window).
 	 */
 	resolveSearchIdentity(opts?: {
 		scope?: MemoryScope
@@ -102,9 +103,12 @@ export class MongoDBManagerSearchOps {
 			agentId: this.host.agentId,
 			sessionId: opts?.sessionKey,
 			workspaceDir: this.host.workspaceDir,
-			defaultScope: resolveSearchDefaultScope(
-				process.env.MEMONGO_SEARCH_DEFAULT_SCOPE,
-			),
+			defaultScope: resolveDefaultScope({
+				value: process.env.MEMONGO_DEFAULT_SCOPE,
+				legacyValue: process.env.MEMONGO_SEARCH_DEFAULT_SCOPE,
+				applyTo: "read",
+				warn: (message) => log.warn(message),
+			}),
 		})
 	}
 
@@ -525,9 +529,10 @@ export class MongoDBManagerSearchOps {
 		)
 		const availablePaths = this.host.buildV2AvailablePaths(activeSources)
 
-		// P1.4 + P2.3: explicit scope wins; sessionKey implies "session";
-		// otherwise MEMONGO_SEARCH_DEFAULT_SCOPE overrides the "agent" fallback
-		// (single-user deployments). Same rule the write path applies.
+		// D1/B3: explicit scope wins; sessionKey implies "session"; otherwise
+		// the unified MEMONGO_DEFAULT_SCOPE fallback applies (the legacy
+		// MEMONGO_SEARCH_DEFAULT_SCOPE remains a read alias). Same rule the
+		// write path applies.
 		const { scope: searchScope, scopeRef: searchScopeRef } =
 			this.host.resolveSearchIdentity({
 				scope: opts?.scope,

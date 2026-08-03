@@ -18,6 +18,7 @@ import {
 	projectEventChunksBatch,
 	IdempotencyConflictError,
 } from "./mongodb-events.js"
+import { computeIdempotencyFingerprint } from "./mongodb-idempotency-fingerprint.js"
 import type { CanonicalEvent } from "./mongodb-events.js"
 import { extractAndUpsertEntities } from "./mongodb-graph.js"
 import type { Entity } from "./mongodb-graph.js"
@@ -37,6 +38,7 @@ import { emitTelemetry } from "./mongodb-telemetry.js"
 import { eventsCollection } from "./mongodb-schema.js"
 import { resolveScopeIdentity } from "./mongodb-scope.js"
 import { resolveWriteExpiresAt } from "./mongodb-temporal.js"
+import { resolveDefaultScope } from "./backend-config.js"
 import {
 	isTransactionUnsupported,
 	MAJORITY_TRANSACTION_OPTIONS,
@@ -393,6 +395,66 @@ export class MongoDBManagerWriteOps {
 	}
 
 	/**
+	 * D1/B3: the write-path fallback scope — unified MEMONGO_DEFAULT_SCOPE;
+	 * the legacy search-only name does not move writes. Resolved per call
+	 * (env-backed, like the read path) so tests and per-process config stay
+	 * authoritative.
+	 */
+	private resolveWriteDefaultScope(): MemoryScope {
+		return resolveDefaultScope({
+			value: process.env.MEMONGO_DEFAULT_SCOPE,
+			legacyValue: process.env.MEMONGO_SEARCH_DEFAULT_SCOPE,
+			applyTo: "write",
+			warn: (message) => log.warn(message),
+		})
+	}
+
+	/**
+	 * B4: does this request payload match the event previously persisted
+	 * under its idempotency key? Both write paths (single + batch) share this
+	 * one comparison. Docs written with a stored fingerprint (B4 onward)
+	 * compare the full canonical fingerprint — ANY changed immutable input
+	 * (timestamp, validAt, invalidAt, metadata, expiresAt, not just role/
+	 * body/session/scope) is a mismatch. Pre-B4 docs carry no fingerprint
+	 * and fall back to the legacy five-field compare so in-flight retries
+	 * across the upgrade still replay instead of false-conflicting.
+	 */
+	idempotencyPayloadMatches(
+		existing: CanonicalEvent,
+		event: {
+			role: "user" | "assistant" | "system" | "tool"
+			body: string
+			sessionId?: string
+			scope?: MemoryScope
+			scopeRef?: string
+			timestamp?: Date
+			validAt?: Date
+			invalidAt?: Date
+			metadata?: Record<string, unknown>
+			expiresAt?: Date
+		},
+	): boolean {
+		if (existing.idempotencyFingerprint) {
+			return (
+				existing.idempotencyFingerprint ===
+				computeIdempotencyFingerprint(
+					event,
+					this.host.agentId,
+					this.resolveWriteDefaultScope(),
+				)
+			)
+		}
+		const incoming = this.host.resolveIdempotencyFingerprint(event)
+		return (
+			existing.role === incoming.role &&
+			existing.body === incoming.body &&
+			(existing.sessionId ?? undefined) === incoming.sessionId &&
+			existing.scope === incoming.scope &&
+			existing.scopeRef === incoming.scopeRef
+		)
+	}
+
+	/**
 	 * Idempotency replay (IETF Idempotency-Key / Stripe): a retry carrying a
 	 * known key returns the original write's receipt instead of duplicating
 	 * the event. chunkCreated reports false because the chunk projection from
@@ -407,6 +469,11 @@ export class MongoDBManagerWriteOps {
 			sessionId?: string
 			scope?: MemoryScope
 			scopeRef?: string
+			timestamp?: Date
+			validAt?: Date
+			invalidAt?: Date
+			metadata?: Record<string, unknown>
+			expiresAt?: Date
 		}
 	}): Promise<{ eventId: string; chunkCreated: boolean } | null> {
 		const existing = (await eventsCollection(
@@ -419,14 +486,7 @@ export class MongoDBManagerWriteOps {
 		if (!existing) {
 			return null
 		}
-		const incoming = this.host.resolveIdempotencyFingerprint(params.event)
-		const samePayload =
-			existing.role === incoming.role &&
-			existing.body === incoming.body &&
-			(existing.sessionId ?? undefined) === incoming.sessionId &&
-			existing.scope === incoming.scope &&
-			existing.scopeRef === incoming.scopeRef
-		if (!samePayload) {
+		if (!this.idempotencyPayloadMatches(existing, params.event)) {
 			throw new IdempotencyConflictError(params.idempotencyKey)
 		}
 		return { eventId: existing.eventId, chunkCreated: false }
@@ -455,13 +515,17 @@ export class MongoDBManagerWriteOps {
 				}
 			}
 			const eventId = randomUUID()
-			// P2.3: the write side of the canonical identity rule — an implicit
+			// D1/B3: the write side of the canonical identity rule — an implicit
 			// sessionId lands the event in the SAME session scope a sessionKey
-			// search reads from (previously writes fell through to "agent").
+			// search reads from, and an unscoped write falls back to the SAME
+			// unified MEMONGO_DEFAULT_SCOPE an unscoped search queries (the
+			// legacy search-only name does not move writes).
+			const writeDefaultScope = this.resolveWriteDefaultScope()
 			const { scope } = resolveScopeIdentity({
 				scope: event.scope,
 				agentId: this.host.agentId,
 				sessionId: event.sessionId,
+				defaultScope: writeDefaultScope,
 			})
 			const postWriteDerivedWorkEnabled =
 				this.host.shouldRunPostWriteDerivedWork()
@@ -477,6 +541,19 @@ export class MongoDBManagerWriteOps {
 				sessionId: event.sessionId,
 				ttl: this.host.config.mongodb?.ttl,
 			})
+			// B4: persist the canonical fingerprint whenever the write carries a
+			// key. It fingerprints REQUEST-level inputs (explicit expiresAt
+			// only — the TTL-resolved value is time-dependent); keyless writes
+			// stay byte-identical. D1/B3: the fingerprint resolves scope with
+			// the same unified default the write used, so an unscoped write and
+			// the equivalent explicit-scope write fingerprint equal.
+			const idempotencyFingerprint = event.idempotencyKey
+				? computeIdempotencyFingerprint(
+						event,
+						this.host.agentId,
+						writeDefaultScope,
+					)
+				: undefined
 			const persistEvent = (session?: ClientSession) =>
 				writeEvent({
 					db: this.host.db,
@@ -495,6 +572,7 @@ export class MongoDBManagerWriteOps {
 						invalidAt: event.invalidAt,
 						metadata: event.metadata,
 						idempotencyKey: event.idempotencyKey,
+						...(idempotencyFingerprint ? { idempotencyFingerprint } : {}),
 						extractionJobPendingAt,
 						...(expiresAt ? { expiresAt } : {}),
 					},
@@ -812,13 +890,8 @@ export class MongoDBManagerWriteOps {
 					if (!doc) {
 						continue
 					}
-					const incoming = this.host.resolveIdempotencyFingerprint(event)
-					const samePayload =
-						doc.role === incoming.role &&
-						doc.body === incoming.body &&
-						(doc.sessionId ?? undefined) === incoming.sessionId &&
-						doc.scope === incoming.scope &&
-						doc.scopeRef === incoming.scopeRef
+					// B4: same full-fingerprint comparison as the single path.
+					const samePayload = this.idempotencyPayloadMatches(doc, event)
 					receipts[index] = samePayload
 						? {
 								ok: true,
@@ -847,15 +920,17 @@ export class MongoDBManagerWriteOps {
 				scope: MemoryScope
 			}
 			const pending: PendingItem[] = []
+			// D1/B3: same unified-default identity rule as the single write.
+			const writeDefaultScope = this.resolveWriteDefaultScope()
 			for (const [index, input] of events.entries()) {
 				if (receipts[index]) {
 					continue
 				}
-				// P2.3: same canonical identity rule as the single write.
 				const { scope } = resolveScopeIdentity({
 					scope: input.scope,
 					agentId: this.host.agentId,
 					sessionId: input.sessionId,
+					defaultScope: writeDefaultScope,
 				})
 				pending.push({ index, input, eventId: randomUUID(), scope })
 			}
@@ -887,6 +962,16 @@ export class MongoDBManagerWriteOps {
 						invalidAt: input.invalidAt,
 						metadata: input.metadata,
 						idempotencyKey: input.idempotencyKey,
+						// B4: same per-item fingerprint rule as the single write.
+						...(input.idempotencyKey
+							? {
+									idempotencyFingerprint: computeIdempotencyFingerprint(
+										input,
+										this.host.agentId,
+										writeDefaultScope,
+									),
+								}
+							: {}),
 						extractionJobPendingAt,
 						...(expiresAt ? { expiresAt } : {}),
 					}

@@ -4,6 +4,7 @@ import {
 	MongoDBMemoryManager,
 	writeEventAndProject,
 } from "./mongodb-manager.js"
+import { computeIdempotencyFingerprint } from "./mongodb-idempotency-fingerprint.js"
 import { emitTelemetry } from "./mongodb-telemetry.js"
 import { mocked, fakeDb, fakePrefix } from "./test-helpers/manager-test-kit.js"
 
@@ -381,6 +382,86 @@ describe("MongoDBMemoryManager write idempotency (P0.1)", () => {
 		).rejects.toMatchObject({ name: "IdempotencyConflictError" })
 	})
 
+	it("replays a stored-fingerprint write when only metadata key order differs (B4)", async () => {
+		const { eventsCollection } = await import("./mongodb-schema.js")
+		const { writeEvent } = await mockWritePathDefaults()
+		const original = {
+			role: "user" as const,
+			body: "fingerprinted hello",
+			scope: "agent" as const,
+			metadata: { source: "chat", nested: { a: 1, b: 2 } },
+			timestamp: new Date("2026-04-09T12:00:00.000Z"),
+		}
+		mocked(eventsCollection).mockReturnValue({
+			findOne: vi.fn(async () => ({
+				eventId: "evt-fp",
+				agentId: "agent-1",
+				...original,
+				scopeRef: "agent:agent-1",
+				idempotencyKey: "key-fp1",
+				idempotencyFingerprint: computeIdempotencyFingerprint(
+					original,
+					"agent-1",
+				),
+			})),
+		} as unknown as import("mongodb").Collection)
+
+		const manager = makeManager()
+		const result = await manager.writeConversationEvent({
+			...original,
+			// Same metadata, different key order at both levels: the canonical
+			// fingerprint must normalize this to the original write.
+			metadata: { nested: { b: 2, a: 1 }, source: "chat" },
+			idempotencyKey: "key-fp1",
+		})
+
+		expect(result).toEqual({ eventId: "evt-fp", chunkCreated: false })
+		expect(writeEvent).not.toHaveBeenCalled()
+	})
+
+	it.each([
+		["metadata", { metadata: { source: "other", nested: { a: 1, b: 2 } } }],
+		["timestamp", { timestamp: new Date("2026-04-10T12:00:00.000Z") }],
+		["validAt", { validAt: new Date("2026-04-08T12:00:00.000Z") }],
+		["invalidAt", { invalidAt: new Date("2026-05-09T12:00:00.000Z") }],
+		["expiresAt", { expiresAt: new Date("2026-06-09T12:00:00.000Z") }],
+	])("rejects with IdempotencyConflictError when a stored-fingerprint key is reused with changed %s (B4)", async (_label, patch) => {
+		const { eventsCollection } = await import("./mongodb-schema.js")
+		await mockWritePathDefaults()
+		const original = {
+			role: "user" as const,
+			body: "fingerprinted hello",
+			scope: "agent" as const,
+			metadata: { source: "chat", nested: { a: 1, b: 2 } },
+			timestamp: new Date("2026-04-09T12:00:00.000Z"),
+		}
+		// B4: with only role/body/session/scope compared, each of these
+		// changed immutable inputs replayed silently — the caller believed
+		// a write landed that never did.
+		mocked(eventsCollection).mockReturnValue({
+			findOne: vi.fn(async () => ({
+				eventId: "evt-fp",
+				agentId: "agent-1",
+				...original,
+				scopeRef: "agent:agent-1",
+				idempotencyKey: "key-fp2",
+				idempotencyFingerprint: computeIdempotencyFingerprint(
+					original,
+					"agent-1",
+				),
+			})),
+		} as unknown as import("mongodb").Collection)
+
+		const manager = makeManager()
+		await expect(
+			manager.writeConversationEvent({
+				...original,
+				...patch,
+				idempotencyKey: "key-fp2",
+			}),
+		).rejects.toMatchObject({ name: "IdempotencyConflictError" })
+	})
+
 	it("returns the winner's receipt when the unique index rejects a raced insert", async () => {
 		const { eventsCollection } = await import("./mongodb-schema.js")
 		const { writeEvent } = await import("./mongodb-events.js")
@@ -679,6 +760,70 @@ describe("MongoDBMemoryManager writeConversationEventsBatch (P3.9)", () => {
 		})
 		expect(receipts[1]).toMatchObject({ ok: true })
 		expect(mocked(writeEventsBatch).mock.calls[0][0].events).toHaveLength(1)
+	})
+
+	it("batch: stored fingerprint conflicts on changed metadata and replays on reordered metadata (B4)", async () => {
+		const { writeEventsBatch } = await mockBatchPath()
+		const { eventsCollection } = await import("./mongodb-schema.js")
+		const original = {
+			role: "user" as const,
+			body: "batched fingerprint hello",
+			scope: "agent" as const,
+			metadata: { source: "chat", nested: { a: 1, b: 2 } },
+			timestamp: new Date("2026-04-09T12:00:00.000Z"),
+		}
+		const find = vi.fn(() => ({
+			toArray: vi.fn(async () => [
+				{
+					eventId: "evt-batch-fp",
+					agentId: "agent-1",
+					...original,
+					scopeRef: "agent:agent-1",
+					idempotencyKey: "key-batch-fp",
+					idempotencyFingerprint: computeIdempotencyFingerprint(
+						original,
+						"agent-1",
+					),
+				},
+			]),
+		}))
+		mocked(eventsCollection).mockReturnValue({ find } as never)
+
+		const manager = makeManager()
+		// Changed metadata on the same key conflicts — the batch path shares
+		// the single path's full-fingerprint comparison.
+		const conflict = await manager.writeConversationEventsBatch([
+			{
+				...original,
+				metadata: { source: "other", nested: { a: 1, b: 2 } },
+				idempotencyKey: "key-batch-fp",
+			},
+		])
+		expect(conflict[0]).toMatchObject({
+			ok: false,
+			code: "IDEMPOTENCY_CONFLICT",
+		})
+
+		// Reordered (but equal) metadata replays the original receipt.
+		const replay = await manager.writeConversationEventsBatch([
+			{
+				...original,
+				metadata: { nested: { b: 2, a: 1 }, source: "chat" },
+				idempotencyKey: "key-batch-fp",
+			},
+		])
+		expect(replay[0]).toEqual({
+			ok: true,
+			eventId: "evt-batch-fp",
+			chunkCreated: false,
+			replayed: true,
+		})
+		// Neither the conflicted nor the replayed item reached the insert set
+		// (the batch seam still invokes the helper with an empty write set,
+		// which no-ops).
+		for (const call of mocked(writeEventsBatch).mock.calls) {
+			expect(call[0].events).toHaveLength(0)
+		}
 	})
 
 	it("replays the winner when the batch insert loses an idempotency race", async () => {

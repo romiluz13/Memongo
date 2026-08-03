@@ -401,7 +401,23 @@ export class MongoDBManagerJobsOps {
 						}).catch(() => {})
 					}
 				} catch (err) {
-					log.warn("typed relation extraction failed", { error: err })
+					// C3: no silent success. Record the failed pass in the
+					// projection ledger, then rethrow so the runner's outer catch
+					// routes the error through failClaimedMemoryJob — the job
+					// retries via the existing mechanism instead of completing
+					// with the relations silently lost.
+					await recordProjectionRun({
+						db: this.host.db,
+						prefix: this.host.prefix,
+						run: {
+							agentId: this.host.agentId,
+							projectionType: "relations",
+							status: "failed",
+							itemsProjected: 0,
+							durationMs: 0,
+						},
+					}).catch(() => {})
+					throw err
 				}
 			}
 

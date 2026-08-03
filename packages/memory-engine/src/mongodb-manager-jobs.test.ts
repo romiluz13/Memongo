@@ -2721,3 +2721,183 @@ describe("P3.9 extraction worker concurrency + session-batched LLM", () => {
 		vi.unstubAllEnvs()
 	})
 })
+
+describe("C3: typed-relation failure surfacing", () => {
+	function buildWorkerManager() {
+		const manager = Object.assign(
+			Object.create(MongoDBMemoryManager.prototype),
+			{
+				db: {} as import("mongodb").Db,
+				prefix: "test_",
+				agentId: "agent-1",
+				client: undefined,
+				config: { mongodb: { embeddingMode: "automated" } },
+				workspaceDir: "/tmp/memongo",
+				memoryJobWorkerId: "worker-c3",
+				memoryJobWorkerStopped: true,
+				memoryJobWorkerActive: false,
+				memoryJobWorkerPromise: Promise.resolve(),
+				memoryJobRunContexts: new Map(),
+			},
+		) as MongoDBMemoryManager & { memoryJobWorkerPromise: Promise<void> }
+		const lifecycle = MongoDBMemoryManager.prototype as unknown as {
+			startMemoryJobWorker: (this: MongoDBMemoryManager) => void
+			stopMemoryJobWorker: (this: MongoDBMemoryManager) => Promise<void>
+		}
+		return { manager, lifecycle }
+	}
+
+	async function primeExtractionJob() {
+		const { claimMemoryJob, completeClaimedMemoryJob, failClaimedMemoryJob } =
+			await import("./mongodb-memory-jobs.js")
+		const { eventsCollection, entitiesCollection } = await import(
+			"./mongodb-schema.js"
+		)
+		const { promoteDerivedMemoryFromEvent } = await import(
+			"./mongodb-derived-memory.js"
+		)
+		const { extractAndUpsertTypedRelations } = await import(
+			"./mongodb-graph.js"
+		)
+		const { recordProjectionRun } = await import("./mongodb-ops.js")
+
+		// This describe has no file-level beforeEach: clear call history AND
+		// implementations explicitly so one test's mocks cannot leak into the
+		// next (clearAllMocks elsewhere drops history but not implementations).
+		mocked(extractAndUpsertTypedRelations).mockReset()
+		mocked(recordProjectionRun).mockClear()
+		mocked(claimMemoryJob).mockClear()
+		mocked(completeClaimedMemoryJob).mockClear()
+		mocked(failClaimedMemoryJob).mockClear()
+		mocked(claimMemoryJob)
+			.mockResolvedValueOnce({
+				jobId: "extraction-c3",
+				jobType: "extraction",
+				agentId: "agent-1",
+				status: "running",
+				createdAt: new Date("2026-04-09T12:00:00.000Z"),
+				metadata: { eventId: "evt-c3" },
+				attempts: 1,
+				leaseOwner: "worker-c3",
+				leaseToken: "lease-c3",
+				heartbeatAt: new Date("2026-04-09T12:01:00.000Z"),
+				leaseExpiresAt: new Date("2026-04-09T12:02:00.000Z"),
+			})
+			.mockResolvedValueOnce(null)
+		mocked(completeClaimedMemoryJob).mockResolvedValue(true)
+		mocked(failClaimedMemoryJob).mockResolvedValue(true)
+		mocked(eventsCollection).mockReturnValue({
+			findOne: vi.fn(async () => ({
+				eventId: "evt-c3",
+				agentId: "agent-1",
+				role: "user",
+				body: "Alice reviewed the Bob proposal twice.",
+				timestamp: new Date("2026-04-09T12:00:00.000Z"),
+				scope: "agent",
+				scopeRef: "agent:agent-1",
+			})),
+		} as unknown as import("mongodb").Collection)
+		mocked(entitiesCollection).mockReturnValue({
+			find: vi.fn(() => ({
+				toArray: vi.fn(async () => [
+					{ entityId: "ent-alice", name: "Alice" },
+					{ entityId: "ent-bob", name: "Bob" },
+				]),
+			})),
+		} as unknown as import("mongodb").Collection)
+		mocked(promoteDerivedMemoryFromEvent).mockResolvedValue({
+			structuredCreated: 1,
+			proceduresCreated: 0,
+			skipped: false,
+		})
+
+		return {
+			claimMemoryJob,
+			completeClaimedMemoryJob,
+			failClaimedMemoryJob,
+			extractAndUpsertTypedRelations,
+			recordProjectionRun,
+		}
+	}
+
+	function stubEnrichmentEnv() {
+		vi.stubEnv("MEMONGO_ENRICHMENT_API_KEY", "test-key")
+		vi.stubEnv("MEMONGO_ENRICHMENT_BASE_URL", "https://llm.example/v1")
+		vi.stubEnv("MEMONGO_ENRICHMENT_MODEL", "test-model")
+	}
+
+	it("a typed-relation failure fails the job (retry path) instead of completing silently", async () => {
+		stubEnrichmentEnv()
+		try {
+			const {
+				completeClaimedMemoryJob,
+				failClaimedMemoryJob,
+				extractAndUpsertTypedRelations,
+				recordProjectionRun,
+			} = await primeExtractionJob()
+			mocked(extractAndUpsertTypedRelations).mockRejectedValue(
+				new Error("relation boom"),
+			)
+			const { manager, lifecycle } = buildWorkerManager()
+
+			lifecycle.startMemoryJobWorker.call(manager)
+			await manager.memoryJobWorkerPromise
+
+			// The failure must surface through the job retry mechanism…
+			expect(failClaimedMemoryJob).toHaveBeenCalledWith(
+				expect.objectContaining({
+					jobId: "extraction-c3",
+					error: expect.stringContaining("relation boom"),
+				}),
+			)
+			// …not be swallowed as a silent success…
+			expect(completeClaimedMemoryJob).not.toHaveBeenCalled()
+			// …and the projection ledger records the failed pass.
+			expect(recordProjectionRun).toHaveBeenCalledWith(
+				expect.objectContaining({
+					run: expect.objectContaining({
+						projectionType: "relations",
+						status: "failed",
+					}),
+				}),
+			)
+			await lifecycle.stopMemoryJobWorker.call(manager)
+		} finally {
+			vi.unstubAllEnvs()
+		}
+	})
+
+	it("a successful typed-relation pass completes and records ok", async () => {
+		stubEnrichmentEnv()
+		try {
+			const {
+				completeClaimedMemoryJob,
+				failClaimedMemoryJob,
+				extractAndUpsertTypedRelations,
+				recordProjectionRun,
+			} = await primeExtractionJob()
+			mocked(extractAndUpsertTypedRelations).mockResolvedValue(2)
+			const { manager, lifecycle } = buildWorkerManager()
+
+			lifecycle.startMemoryJobWorker.call(manager)
+			await manager.memoryJobWorkerPromise
+
+			expect(completeClaimedMemoryJob).toHaveBeenCalledWith(
+				expect.objectContaining({ jobId: "extraction-c3" }),
+			)
+			expect(failClaimedMemoryJob).not.toHaveBeenCalled()
+			expect(recordProjectionRun).toHaveBeenCalledWith(
+				expect.objectContaining({
+					run: expect.objectContaining({
+						projectionType: "relations",
+						status: "ok",
+						itemsProjected: 2,
+					}),
+				}),
+			)
+			await lifecycle.stopMemoryJobWorker.call(manager)
+		} finally {
+			vi.unstubAllEnvs()
+		}
+	})
+})

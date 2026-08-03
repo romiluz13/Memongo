@@ -846,3 +846,63 @@ export function resolveSearchDefaultScope(
 		`MEMONGO_SEARCH_DEFAULT_SCOPE "${envValue}" is not a valid memory scope. Use one of: ${MEMORY_SCOPES.join(", ")}.`,
 	)
 }
+
+/** D1/B3: a conflicting legacy pair warns once per process, not per operation. */
+let lastDefaultScopeConflictWarned: string | undefined
+
+/**
+ * D1 (B3): the ONE default scope applied to BOTH reads and writes.
+ *
+ * `MEMONGO_SEARCH_DEFAULT_SCOPE` (P1.4) fixed read invisibility for
+ * broader-scope memories but left writes defaulting to `agent`, so an
+ * unscoped add landed in one partition while the unscoped search queried
+ * another — no roundtrip. `MEMONGO_DEFAULT_SCOPE` generalizes the setting
+ * to both directions.
+ *
+ * Precedence:
+ *  1. `MEMONGO_DEFAULT_SCOPE` wins. If the legacy name is ALSO set with a
+ *     different value, a warning is logged (once per process) and the new
+ *     name still wins.
+ *  2. The legacy `MEMONGO_SEARCH_DEFAULT_SCOPE` alone remains a READ alias
+ *     for one deprecation window — pass `applyTo: "read"` to honor it or
+ *     `"write"` to ignore it (writes keep the `agent` fallback so existing
+ *     deployments don't silently start writing into new partitions).
+ *  3. Neither set: `agent`.
+ *
+ * Explicit scope still wins at the call site, and a session identity still
+ * implies the session scope — this is only the fallback. An invalid value
+ * throws, same fail-fast contract as resolveSearchDefaultScope.
+ */
+export function resolveDefaultScope(params: {
+	/** process.env.MEMONGO_DEFAULT_SCOPE */
+	value?: string
+	/** process.env.MEMONGO_SEARCH_DEFAULT_SCOPE (legacy) */
+	legacyValue?: string
+	/** Whether the legacy alias applies on this path. */
+	applyTo: "read" | "write"
+	warn?: (message: string) => void
+}): MemoryScope {
+	const raw = params.value?.trim()
+	if (raw) {
+		if ((MEMORY_SCOPES as readonly string[]).includes(raw)) {
+			const legacyRaw = params.legacyValue?.trim()
+			if (legacyRaw && legacyRaw !== raw) {
+				const conflictKey = `${raw}|${legacyRaw}`
+				if (lastDefaultScopeConflictWarned !== conflictKey) {
+					lastDefaultScopeConflictWarned = conflictKey
+					params.warn?.(
+						`MEMONGO_DEFAULT_SCOPE ("${raw}") and legacy MEMONGO_SEARCH_DEFAULT_SCOPE ("${legacyRaw}") disagree; MEMONGO_DEFAULT_SCOPE wins. Remove the legacy name to silence this warning.`,
+					)
+				}
+			}
+			return raw as MemoryScope
+		}
+		throw new Error(
+			`MEMONGO_DEFAULT_SCOPE "${params.value}" is not a valid memory scope. Use one of: ${MEMORY_SCOPES.join(", ")}.`,
+		)
+	}
+	if (params.applyTo === "read") {
+		return resolveSearchDefaultScope(params.legacyValue)
+	}
+	return "agent"
+}

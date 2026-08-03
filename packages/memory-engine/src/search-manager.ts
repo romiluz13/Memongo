@@ -22,6 +22,14 @@ const log = createSubsystemLogger("memory")
 type ManagerCacheEntry = {
 	manager: MemorySearchManager
 	lastUsedAt: number
+	/** B9: operations currently in flight on handed-out facades. */
+	borrows: number
+	/** B9: removed from the lookup; closes once borrows reach zero. */
+	evicted: boolean
+	/** B9: close has been initiated — the manager closes exactly once. */
+	closeInitiated: boolean
+	/** B9: resolves when the deferred close completes (shutdown waits on it). */
+	quiescence?: { promise: Promise<void>; resolve: () => void }
 }
 
 /**
@@ -101,6 +109,110 @@ async function closeManager(manager: MemorySearchManager): Promise<void> {
 	}
 }
 
+/**
+ * B9: close an evicted entry once it reaches quiescence. An entry with
+ * outstanding borrows is left alone — the last releasing operation calls
+ * this again. Entries are removed from the lookup the moment they are
+ * evicted, so no NEW operation can start on them; this deferral only
+ * protects operations already in flight (pre-B9 the eviction closed the
+ * manager mid-operation, failing or hanging the borrowed call). The
+ * closeInitiated flag keeps the close exactly-once.
+ */
+function closeEntryAtQuiescence(entry: ManagerCacheEntry): void {
+	if (!entry.evicted || entry.closeInitiated || entry.borrows > 0) {
+		return
+	}
+	entry.closeInitiated = true
+	void closeManager(entry.manager).finally(() => {
+		entry.quiescence?.resolve()
+	})
+}
+
+/**
+ * B9: remove an entry from service. The caller removes it from the lookup
+ * map first (no new operations can start); this marks it evicted, arms the
+ * quiescence promise shutdown waits on when borrows are outstanding, and
+ * closes immediately when idle.
+ */
+function evictEntry(entry: ManagerCacheEntry): void {
+	entry.evicted = true
+	if (entry.borrows > 0 && !entry.closeInitiated && !entry.quiescence) {
+		let resolve: () => void = () => undefined
+		const promise = new Promise<void>((res) => {
+			resolve = res
+		})
+		entry.quiescence = { promise, resolve }
+	}
+	closeEntryAtQuiescence(entry)
+}
+
+/**
+ * B9: hand out a facade that registers one borrow per method call for the
+ * duration of its returned promise. Eviction (LRU, idle TTL, shutdown)
+ * removes the cache entry from the lookup immediately but defers close()
+ * until the last in-flight operation settles. Borrowers need no release
+ * call — the facade's promise settlement IS the release, so no caller can
+ * forget it. Methods are applied to the raw target (never the proxy), so
+ * the manager's internal `this` access is unaffected; methods returning
+ * `this` are re-wrapped so they cannot escape tracking.
+ */
+function trackManagerBorrows(
+	manager: MemorySearchManager,
+	entry: ManagerCacheEntry,
+): MemorySearchManager {
+	return new Proxy(manager, {
+		get(target, prop) {
+			const value = Reflect.get(target, prop, target)
+			if (typeof value !== "function") {
+				return value
+			}
+			return (...args: unknown[]) => {
+				entry.borrows += 1
+				let released = false
+				const release = () => {
+					if (released) {
+						return
+					}
+					released = true
+					entry.borrows -= 1
+					closeEntryAtQuiescence(entry)
+				}
+				try {
+					const result = Reflect.apply(
+						value as (...fnArgs: unknown[]) => unknown,
+						target,
+						args,
+					)
+					if (
+						result &&
+						typeof (result as Promise<unknown>).then === "function"
+					) {
+						return (result as Promise<unknown>).then(
+							(resolved) => {
+								release()
+								return resolved === target
+									? trackManagerBorrows(manager, entry)
+									: resolved
+							},
+							(err) => {
+								release()
+								throw err
+							},
+						)
+					}
+					release()
+					return result === target
+						? trackManagerBorrows(manager, entry)
+						: result
+				} catch (err) {
+					release()
+					throw err
+				}
+			}
+		},
+	})
+}
+
 function ensureIdleSweepTimer(): void {
 	if (idleSweepTimer) {
 		return
@@ -126,8 +238,9 @@ export async function evictIdleMemorySearchManagers(): Promise<void> {
 		if (now - entry.lastUsedAt < ttl) {
 			continue
 		}
+		// B9: leave the lookup immediately; close only once borrows drain.
 		MONGODB_MANAGER_CACHE.delete(key)
-		await closeManager(entry.manager)
+		evictEntry(entry)
 	}
 	if (MONGODB_MANAGER_CACHE.size === 0) {
 		stopIdleSweepTimer()
@@ -138,10 +251,17 @@ export async function evictIdleMemorySearchManagers(): Promise<void> {
 async function cacheManager(
 	cacheKey: string,
 	manager: MemorySearchManager,
-): Promise<void> {
-	MONGODB_MANAGER_CACHE.set(cacheKey, { manager, lastUsedAt: Date.now() })
+): Promise<ManagerCacheEntry> {
+	const inserted: ManagerCacheEntry = {
+		manager,
+		lastUsedAt: Date.now(),
+		borrows: 0,
+		evicted: false,
+		closeInitiated: false,
+	}
+	MONGODB_MANAGER_CACHE.set(cacheKey, inserted)
 	if (!isSharedMongoClientEnabled()) {
-		return
+		return inserted
 	}
 	ensureIdleSweepTimer()
 	const max = resolveManagerCacheMax()
@@ -153,9 +273,14 @@ async function cacheManager(
 		const entry = MONGODB_MANAGER_CACHE.get(oldestKey)
 		MONGODB_MANAGER_CACHE.delete(oldestKey)
 		if (entry) {
-			await closeManager(entry.manager)
+			// B9: leave the lookup immediately; a borrowed entry closes when
+			// its last in-flight operation settles instead of mid-operation.
+			// The initializing call does NOT wait for that — eviction must
+			// not kill the borrowed manager, nor block on its workload.
+			evictEntry(entry)
 		}
 	}
+	return inserted
 }
 
 export async function getMemorySearchManager(params: {
@@ -196,7 +321,7 @@ export async function getMemorySearchManager(params: {
 			MONGODB_MANAGER_CACHE.delete(cacheKey)
 			MONGODB_MANAGER_CACHE.set(cacheKey, cached)
 		}
-		return { manager: cached.manager }
+		return { manager: trackManagerBorrows(cached.manager, cached) }
 	}
 
 	// Deduplicate concurrent initialization for the same cache key. Without
@@ -270,8 +395,8 @@ async function initializeManager(params: {
 				error: "memory managers closed during initialization",
 			}
 		}
-		await cacheManager(params.cacheKey, manager)
-		return { manager }
+		const entry = await cacheManager(params.cacheKey, manager)
+		return { manager: trackManagerBorrows(manager, entry) }
 	} catch (err) {
 		if (manager) {
 			// create() succeeded but a later step failed: close the manager so
@@ -300,9 +425,12 @@ export async function closeAllMemorySearchManagers(): Promise<void> {
 	stopIdleSweepTimer()
 	const entries = Array.from(MONGODB_MANAGER_CACHE.values())
 	MONGODB_MANAGER_CACHE.clear()
+	// B9: every entry leaves the lookup immediately; borrowed entries close
+	// at quiescence and shutdown waits for those deferred closes.
 	for (const entry of entries) {
-		await closeManager(entry.manager)
+		evictEntry(entry)
 	}
+	await Promise.all(entries.map((entry) => entry.quiescence?.promise))
 	await closeAllSharedMongoClients()
 }
 

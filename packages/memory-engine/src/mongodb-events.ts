@@ -137,6 +137,14 @@ export type CanonicalEvent = {
 	 * boost (P3.7) can modulate ranking. Absent on legacy rows.
 	 */
 	accessCount?: number
+	/**
+	 * B4: SHA-256 hex of the canonical idempotency fingerprint, stored when
+	 * the write carried an idempotencyKey. Replay compares request-side
+	 * fingerprints so ANY changed immutable input (not just role/body/
+	 * session/scope) surfaces as a 422 instead of a silent false replay.
+	 * Absent on pre-B4 rows; replay falls back to the legacy field compare.
+	 */
+	idempotencyFingerprint?: string
 }
 
 /**
@@ -231,6 +239,9 @@ function buildCanonicalEventDocument(event: EventWriteInput): CanonicalEvent {
 		...(event.channel && { channel: event.channel }),
 		...(event.metadata && { metadata: event.metadata }),
 		...(event.idempotencyKey ? { idempotencyKey: event.idempotencyKey } : {}),
+		...(event.idempotencyFingerprint
+			? { idempotencyFingerprint: event.idempotencyFingerprint }
+			: {}),
 		...(event.extractionJobPendingAt
 			? { extractionJobPendingAt: event.extractionJobPendingAt }
 			: {}),

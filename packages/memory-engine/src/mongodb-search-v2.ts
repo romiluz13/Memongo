@@ -8,12 +8,12 @@
 import type { Db, Document } from "mongodb"
 import type { MemoryScope } from "@memongo/lib"
 import type { ResolvedMongoDBConfig } from "./backend-config.js"
-import { resolveSearchDefaultScope } from "./backend-config.js"
+import { resolveDefaultScope } from "./backend-config.js"
 import { searchEpisodes } from "./mongodb-episodes.js"
 import type { BenchmarkRunContext } from "./benchmark-parity-envelope.js"
 import { getEventsByTimeRange } from "./mongodb-events.js"
 import { searchEntitiesAutocomplete, expandGraph } from "./mongodb-graph.js"
-import { rrfScore } from "./mongodb-hybrid.js"
+import { normalizeSearchResults, rrfScore } from "./mongodb-hybrid.js"
 import { searchKB } from "./mongodb-kb-search.js"
 import { getLaneCoverage } from "./mongodb-lane-coverage.js"
 import type { ProcedureState } from "./mongodb-procedures.js"
@@ -134,6 +134,50 @@ export type V2SearchMetadata = {
 }
 
 /**
+ * Paths whose underlying search can fall back to a lexical lane ($search
+ * keyword / $text) that emits raw BM25/textScore values on an unbounded
+ * [0, inf) scale. raw-window/graph/episodic/procedural assign their own
+ * bounded synthetic scores and must never be rescaled here.
+ */
+const LEXICAL_FALLBACK_PATHS = new Set([
+	"kb",
+	"memory_evidence",
+	"structured",
+	"active-critical",
+])
+
+/**
+ * C1: a single executed lane never enters the RRF normalization block (it
+ * requires >1 paths), and when that lane degraded to a lexical fallback its
+ * raw BM25 scores flowed straight into reranking, outranking honest [0,1]
+ * vector/fusion scores downstream. Vector and server-fusion producers are
+ * already ~[0,1], so gate on BOTH signals: the executed path is
+ * lexical-capable AND some score exceeds 1 (only a lexical lane produces
+ * those). Apply the method-aware BM25 normalizer from mongodb-hybrid in
+ * that case — strictly monotonic, so rank order is preserved — and leave
+ * every other single-lane or multi-lane result byte-identical (the RRF
+ * block owns the multi-lane case).
+ */
+export function normalizeSinglePathScores(
+	results: MemorySearchResult[],
+	executedPaths: readonly string[],
+): MemorySearchResult[] {
+	if (
+		executedPaths.length !== 1 ||
+		results.length === 0 ||
+		!LEXICAL_FALLBACK_PATHS.has(executedPaths[0] as string)
+	) {
+		return results
+	}
+	if (!results.some((result) => result.score > 1)) {
+		return results
+	}
+	return normalizeSearchResults(results, "text").toSorted(
+		(a, b) => b.score - a.score,
+	)
+}
+
+/**
  * searchV2 entry point: opens the per-request cost budget (P3.2) that every
  * lane, waterfall stage, and backstop consumes. When a budget is already
  * active — the recursive hybrid backstop re-entering searchV2 — the call
@@ -216,17 +260,21 @@ async function searchV2WithBudget(
 			context.knownEntityNames && context.knownEntityNames.length > 0
 				? context.knownEntityNames
 				: buildGraphQueryCandidates(query)
-		// P1.4 + P2.3: searchV2 is the single retrieval funnel; direct callers
-		// get the same identity rule (explicit scope > sessionKey implies
-		// "session" > env-resolved default) so they cannot bypass it.
+		// D1/B3: searchV2 is the single retrieval funnel; direct callers get
+		// the same identity rule (explicit scope > sessionKey implies
+		// "session" > unified MEMONGO_DEFAULT_SCOPE fallback, legacy name
+		// still honored on reads) so they cannot bypass it.
 		const { scope, scopeRef: agentScopeRef } = resolveScopeIdentity({
 			scope: context.searchOptions?.scope,
 			scopeRef: context.searchOptions?.scopeRef,
 			agentId,
 			sessionId: context.searchOptions?.sessionKey,
-			defaultScope: resolveSearchDefaultScope(
-				process.env.MEMONGO_SEARCH_DEFAULT_SCOPE,
-			),
+			defaultScope: resolveDefaultScope({
+				value: process.env.MEMONGO_DEFAULT_SCOPE,
+				legacyValue: process.env.MEMONGO_SEARCH_DEFAULT_SCOPE,
+				applyTo: "read",
+				warn: (message) => log.warn(message),
+			}),
 		})
 		const sessionMode = resolveSessionEvidenceMode(
 			process.env.MEMONGO_SESSION_EVIDENCE_MODE,
@@ -282,6 +330,13 @@ async function searchV2WithBudget(
 			Math.max(2, Math.ceil(maxResults / 3))
 		const allowHybridBackstop =
 			context.searchOptions?.allowHybridBackstop ?? true
+		// B14: one reference clock per request. Benchmarks stamp
+		// searchOptions.questionDate so fixed-clock ranking is deterministic;
+		// live traffic falls back to the wall clock. Every relative-time
+		// derivation below (time-range preset resolution, raw-window fallback
+		// bounds, temporal-window extraction) uses this clock instead of
+		// reading Date.now() independently.
+		const referenceDate = context.searchOptions?.questionDate ?? new Date()
 
 		// #66: measurement only — records elapsed ms per lane and per non-lane
 		// phase without changing what runs. `finally` so a span that throws still
@@ -382,7 +437,7 @@ async function searchV2WithBudget(
 				? plan.constraints.entities.names
 				: graphQueryCandidates
 		const timeRange = plan.constraints?.timeRange
-			? resolveTimeRangePreset(plan.constraints.timeRange.preset)
+			? resolveTimeRangePreset(plan.constraints.timeRange.preset, referenceDate)
 			: undefined
 		const normalizedStructuredState = normalizeStructuredState(
 			context.searchOptions?.structuredScope?.state,
@@ -559,8 +614,9 @@ async function searchV2WithBudget(
 							prefix,
 							agentId,
 							start:
-								timeRange?.start ?? new Date(Date.now() - 24 * 60 * 60 * 1000),
-							end: timeRange?.end ?? new Date(),
+								timeRange?.start ??
+								new Date(referenceDate.getTime() - 24 * 60 * 60 * 1000),
+							end: timeRange?.end ?? referenceDate,
 							scope,
 							scopeRef: agentScopeRef,
 							limit: rawWindowLimit,
@@ -571,7 +627,7 @@ async function searchV2WithBudget(
 						// midpoint (origin ± scaleDays) outrank equally matched far
 						// ones. Normalized to [0,1] by the window scale; weight 0
 						// disables (config reranking.temporalProximityBoost).
-						const temporalWindow = extractTemporalWindow(query)
+						const temporalWindow = extractTemporalWindow(query, referenceDate)
 						const temporalProximityWeight =
 							context.searchOptions?.rerankConfig?.temporalProximityBoost ??
 							DEFAULT_TEMPORAL_PROXIMITY_BOOST
@@ -1258,6 +1314,11 @@ async function searchV2WithBudget(
 				}
 			}
 			deduped.sort((a, b) => b.score - a.score)
+		} else {
+			// C1: the RRF block skips the single-lane case; normalize an
+			// unbounded lexical lane here instead of leaking raw BM25 into
+			// reranking.
+			deduped = normalizeSinglePathScores(deduped, Object.keys(perPathResults))
 		}
 
 		const heuristicReranked = rerankResults(deduped, query)

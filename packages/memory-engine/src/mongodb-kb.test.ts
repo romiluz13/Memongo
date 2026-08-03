@@ -43,9 +43,23 @@ function createMockKBCol(): Collection {
 			return docs.find((d) => d.hash === filter.hash) ?? null
 		}),
 		insertOne: vi.fn(async (doc: Record<string, unknown>) => {
-			docs.push(doc)
+			// Snapshot: updateOne mutates the stored doc, and tests assert the
+			// chunksComplete value as it was AT INSERT time.
+			docs.push({ ...doc })
 			return { insertedId: doc._id }
 		}),
+		updateOne: vi.fn(
+			async (
+				filter: Record<string, unknown>,
+				update: { $set?: Record<string, unknown> },
+			) => {
+				const doc = docs.find((d) => d._id === filter._id)
+				if (doc && update.$set) {
+					Object.assign(doc, update.$set)
+				}
+				return { modifiedCount: doc ? 1 : 0 }
+			},
+		),
 		deleteOne: vi.fn(async () => ({ deletedCount: 1 })),
 		find: vi.fn(() => ({
 			toArray: vi.fn(async () => docs),
@@ -238,10 +252,13 @@ describe("ingestToKB", () => {
 			hash,
 		}
 
-		// First, make findOne return existing doc with same hash
+		// First, make findOne return existing doc with same hash.
+		// C2: the fixture models a COMPLETE duplicate — an unmarked parent now
+		// triggers repair, not a skip.
 		vi.mocked(mockKB.findOne).mockResolvedValueOnce({
 			_id: "existing-id",
 			hash,
+			chunksComplete: true,
 		})
 
 		const result = await ingestToKB({
@@ -297,10 +314,12 @@ describe("ingestToKB", () => {
 		}
 
 		// Mock findOne to return existing doc by path with same hash
+		// (C2: complete, so the duplicate still skips).
 		vi.mocked(mockKB.findOne).mockResolvedValueOnce({
 			_id: "existing-id",
 			hash: doc.hash,
 			"source.path": "/docs/guide.md",
+			chunksComplete: true,
 		})
 
 		const result = await ingestToKB({
@@ -793,5 +812,108 @@ describe("ingestToKB — transaction wrapping for re-ingestion", () => {
 		expect(result.documentsProcessed).toBe(1)
 		// Transaction should NOT be used for fresh ingestion (no delete-old needed)
 		expect(clientMock.startSession).not.toHaveBeenCalled()
+	})
+})
+
+describe("ingestToKB — C2 partial-chunk completeness", () => {
+	const doc: KBDocument = {
+		title: "Partial Doc",
+		content: "# Heading\n\nsome content here that becomes at least one chunk",
+		source: { type: "manual", importedBy: "api" },
+		hash: "hash-partial-1",
+	}
+	const params = () => ({
+		db: mockDb(),
+		prefix: "test_",
+		scope: SCOPE,
+		documents: [doc],
+		embeddingMode: "automated" as const,
+	})
+	const bulkWriteFailure = (upsertedCount: number) => {
+		const err = new Error("bulk write failed") as Error & {
+			result: { upsertedCount: number; modifiedCount: number }
+			writeErrors: Array<{ errmsg: string }>
+		}
+		err.result = { upsertedCount, modifiedCount: 0 }
+		err.writeErrors = [{ errmsg: "chunk insert boom" }]
+		return err
+	}
+	const seedParent = (fields: Record<string, unknown>) =>
+		vi.mocked(mockKB.insertOne)({
+			hash: doc.hash,
+			scopeRef: SCOPE_REF,
+			title: doc.title,
+			source: doc.source,
+			...fields,
+		})
+
+	it("marks a fresh parent complete only after every chunk persists", async () => {
+		const result = await ingestToKB(params())
+		expect(result.errors).toEqual([])
+		// Parent starts incomplete…
+		const inserted = vi.mocked(mockKB.insertOne).mock.calls[0]?.[0] as Record<
+			string,
+			unknown
+		>
+		expect(inserted.chunksComplete).toBe(false)
+		// …and is flipped complete exactly once all chunk writes succeed.
+		expect(vi.mocked(mockKB.updateOne)).toHaveBeenCalledWith(
+			{ _id: expect.any(String) },
+			{ $set: { chunksComplete: true } },
+		)
+	})
+
+	it("partial chunk failure leaves the parent incomplete and records the error", async () => {
+		vi.mocked(mockKBChunks.bulkWrite).mockRejectedValueOnce(bulkWriteFailure(1))
+		const result = await ingestToKB(params())
+		expect(result.errors.length).toBeGreaterThan(0)
+		// The invariant: the parent must not read as complete.
+		expect(vi.mocked(mockKB.updateOne)).not.toHaveBeenCalled()
+		const inserted = vi.mocked(mockKB.insertOne).mock.calls[0]?.[0] as Record<
+			string,
+			unknown
+		>
+		expect(inserted.chunksComplete).toBe(false)
+	})
+
+	it("retry after partial failure repairs instead of skipping", async () => {
+		await seedParent({ _id: "existing-parent", chunksComplete: false })
+
+		const result = await ingestToKB(params())
+
+		expect(result.skipped).toBe(0)
+		// Chunks are re-upserted, attached to the EXISTING parent id…
+		expect(vi.mocked(mockKBChunks.bulkWrite)).toHaveBeenCalled()
+		const ops = vi.mocked(mockKBChunks.bulkWrite).mock.calls[0]?.[0] as Array<{
+			updateOne: { update: { $set: Record<string, unknown> } }
+		}>
+		expect(ops[0]?.updateOne.update.$set.docId).toBe("existing-parent")
+		// …and the parent flips complete once the repair fully lands.
+		expect(vi.mocked(mockKB.updateOne)).toHaveBeenCalledWith(
+			{ _id: "existing-parent" },
+			{ $set: { chunksComplete: true } },
+		)
+	})
+
+	it("treats a legacy parent without the marker as incomplete and repairs it", async () => {
+		await seedParent({ _id: "legacy-parent" })
+
+		const result = await ingestToKB(params())
+
+		expect(result.skipped).toBe(0)
+		expect(vi.mocked(mockKB.updateOne)).toHaveBeenCalledWith(
+			{ _id: "legacy-parent" },
+			{ $set: { chunksComplete: true } },
+		)
+	})
+
+	it("still skips a complete parent with no redundant chunk writes", async () => {
+		await seedParent({ _id: "done-parent", chunksComplete: true })
+
+		const result = await ingestToKB(params())
+
+		expect(result.skipped).toBe(1)
+		expect(vi.mocked(mockKBChunks.bulkWrite)).not.toHaveBeenCalled()
+		expect(vi.mocked(mockKB.updateOne)).not.toHaveBeenCalled()
 	})
 })

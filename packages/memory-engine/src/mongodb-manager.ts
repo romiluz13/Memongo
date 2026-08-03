@@ -957,8 +957,9 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 	 * way to produce them.
 	 *
 	 * P2.3: reads share the canonical identity rule with writes (explicit
-	 * scope wins; sessionKey implies "session"); the only read-specific input
-	 * is the P1.4 env-resolved fallback (MEMONGO_SEARCH_DEFAULT_SCOPE).
+	 * scope wins; sessionKey implies "session"); D1/B3: the fallback is the
+	 * unified MEMONGO_DEFAULT_SCOPE (legacy MEMONGO_SEARCH_DEFAULT_SCOPE
+	 * remains a read alias for one deprecation window).
 	 */
 	private resolveSearchIdentity(opts?: {
 		scope?: MemoryScope

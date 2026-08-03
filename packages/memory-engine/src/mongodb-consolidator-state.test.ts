@@ -113,8 +113,12 @@ function seedFact(
 	})
 }
 
+// B7: the unscoped gate key for AGENT under the length-prefixed JSON tuple
+// encoding (see consolidationGateKey in mongodb-consolidator.ts).
+const AGENT_GATE_KEY = '7:"agent-1"|0:""|0:""'
+
 function gateDoc(fake: ReturnType<typeof createStatefulMongoFake>) {
-	return fake.findDoc("consolidation_runs", { gateKey: AGENT })
+	return fake.findDoc("consolidation_runs", { gateKey: AGENT_GATE_KEY })
 }
 
 beforeEach(() => {
@@ -217,7 +221,7 @@ describe("consolidation gate + promotion — collection state", () => {
 		const fake = createStatefulMongoFake({ prefix: PREFIX })
 		// A crashed run: status running, lease long expired.
 		await fake.collection("consolidation_runs").insertOne({
-			gateKey: AGENT,
+			gateKey: AGENT_GATE_KEY,
 			agentId: AGENT,
 			runId: "stale-run",
 			status: "running",
