@@ -1,7 +1,11 @@
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
-import type { MemoryConfig, MemongoConfig } from "@memongo/lib"
+import {
+	type MemoryConfig,
+	type MemongoConfig,
+	applyMongoDbForceUriOverride,
+} from "@memongo/lib"
 
 export const MEMONGO_CONFIG_FILENAME = path.join(".memongo", "memongo.json")
 
@@ -49,10 +53,16 @@ export function buildMemongoConfig(
 	const filePath = resolveMemongoConfigFilePath(env)
 	const fromFile = readMemongoJsonFile(filePath)
 
-	const uriFromEnv =
-		env.MEMONGO_MONGODB_URI?.trim() || env.MEMONGO_FORCE_MONGODB_URI?.trim()
+	// P2.6: one URI precedence rule, shared with the engine via
+	// applyMongoDbForceUriOverride (@memongo/lib): MEMONGO_FORCE_MONGODB_URI
+	// wins over every other URI source, in every layer. Among the non-force
+	// sources the bridge is env-first (plain env URI beats the file URI).
+	const uriFromEnv = env.MEMONGO_MONGODB_URI?.trim()
 	const uriFromFile = fromFile?.memory?.mongodb?.uri?.trim()
-	const uri = uriFromEnv || uriFromFile
+	const uri = applyMongoDbForceUriOverride(
+		env.MEMONGO_FORCE_MONGODB_URI,
+		uriFromEnv || uriFromFile,
+	)
 	const collectionPrefixFromEnv = env.MEMONGO_MONGODB_COLLECTION_PREFIX?.trim()
 	const databaseFromEnv = env.MEMONGO_MONGODB_DATABASE?.trim()
 

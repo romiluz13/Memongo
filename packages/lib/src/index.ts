@@ -14,10 +14,30 @@ export type {
 export type { MemongoConfig, SecretInput } from "./types.js"
 
 export {
+	MEMORY_SCOPE_VALUES,
+	MEMORY_SCOPE_VALUES_TUPLE,
+	type MemoryScopeValue,
+	isMemoryScopeValue,
+	SCOPE_FIELD_DESCRIPTION,
+	SCOPE_REF_FIELD_DESCRIPTION,
+	AGENT_ID_FIELD_DESCRIPTION,
+	type ApiErrorBody,
+	API_ERROR_OPENAPI_SCHEMA,
+	API_ERROR_OPENAPI_REF,
+	apiErrorOpenApiResponse,
+	BEARER_SECURITY_SCHEME_NAME,
+	BEARER_SECURITY_SCHEME,
+	type ApiRouteMethod,
+	type ApiRouteContract,
+	MEMONGO_API_ROUTES,
+} from "./contract.js"
+
+export {
 	isTruthyEnvValue,
 	isFalsyEnvValue,
 	resolveEnv,
 	resolveEnvCascade,
+	applyMongoDbForceUriOverride,
 } from "./env.js"
 export {
 	formatErrorMessage,

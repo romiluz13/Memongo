@@ -3,8 +3,11 @@ set -e
 
 echo "Starting Memongo MongoDB initialization..."
 
-export MONGOT_PASSWORD=${MONGOT_PASSWORD:-mongotPassword}
-export ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin}
+# Fail closed: passwords must be provided by the environment (compose
+# enforces this via ${VAR:?}); there are no safe defaults.
+: "${MONGOT_PASSWORD:?set MONGOT_PASSWORD}"
+: "${ADMIN_PASSWORD:?set ADMIN_PASSWORD}"
+export MONGOT_PASSWORD ADMIN_PASSWORD
 
 # Wait for MongoDB to be ready (with timeout)
 echo "Waiting for MongoDB to be ready..."
@@ -28,7 +31,7 @@ echo "Creating mongotUser..."
 INIT_SCRIPT=$(mktemp /tmp/init-mongo-XXXXXX.js)
 cat > "$INIT_SCRIPT" << 'ENDOFSCRIPT'
 const adminDb = db.getSiblingDB('admin');
-const mongotPwd = process.env.MONGOT_PASSWORD || 'mongotPassword';
+const mongotPwd = process.env.MONGOT_PASSWORD;
 try {
   adminDb.createUser({
     user: 'mongotUser',
@@ -53,7 +56,7 @@ echo "Creating memongo admin user..."
 ADMIN_SCRIPT=$(mktemp /tmp/init-admin-XXXXXX.js)
 cat > "$ADMIN_SCRIPT" << 'ENDOFSCRIPT'
 const memongoDb = db.getSiblingDB('memongo');
-const adminPwd = process.env.ADMIN_PASSWORD || 'admin';
+const adminPwd = process.env.ADMIN_PASSWORD;
 try {
   memongoDb.createUser({
     user: 'memongo',

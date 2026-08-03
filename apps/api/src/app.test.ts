@@ -23,6 +23,7 @@ const bridgeMocks = vi.hoisted(() => ({
 	memongoBridgeListRecallTraces: vi.fn(),
 	memongoBridgeProbeEmbedding: vi.fn(),
 	memongoBridgeProbeVector: vi.fn(),
+	memongoBridgeCapabilities: vi.fn(),
 	memongoBridgeProfile: vi.fn(),
 	memongoBridgeRecallConversation: vi.fn(),
 	memongoBridgeReadFile: vi.fn(),
@@ -45,17 +46,32 @@ const bridgeMocks = vi.hoisted(() => ({
 	memongoBridgeScanNovelty: vi.fn(),
 	memongoBridgeConsolidate: vi.fn(),
 	memongoBridgeSelfEdit: vi.fn(),
+	memongoBridgePingMongo: vi.fn(),
+	buildMemongoConfig: vi.fn(),
 }))
 
 vi.mock("@memongo/memory-bridge", () => bridgeMocks)
 
 import { createApp, parseScopedApiKeyPolicies } from "./app.js"
+import {
+	deriveSearchLanes,
+	enforceRequiredVector,
+	formatCapabilityTable,
+	isRequireVectorEnabled,
+	probeBootCapabilities,
+	REQUIRE_VECTOR_FAILURE_MESSAGE,
+} from "./lib/capabilities.js"
 
 describe("createApp", () => {
 	const prevEnv = { ...process.env }
 
 	beforeEach(() => {
 		process.env = { ...prevEnv }
+		// Hermetic auth state: an ambient MEMONGO_API_KEY from the developer's
+		// shell (the dogfood lesson) must not activate auth in these tests —
+		// tests that need a key set it explicitly.
+		delete process.env.MEMONGO_API_KEY
+		delete process.env.MEMONGO_API_SCOPED_KEYS
 		process.env.MEMONGO_ALLOW_INSECURE_NO_AUTH = "true"
 		bridgeMocks.memongoBridgeSearch.mockReset()
 		bridgeMocks.memongoBridgeSearchDetailed.mockReset()
@@ -84,6 +100,8 @@ describe("createApp", () => {
 		bridgeMocks.memongoBridgeScanNovelty.mockReset()
 		bridgeMocks.memongoBridgeConsolidate.mockReset()
 		bridgeMocks.memongoBridgeSelfEdit.mockReset()
+		bridgeMocks.memongoBridgePingMongo.mockReset()
+		bridgeMocks.buildMemongoConfig.mockReset()
 		bridgeMocks.memongoBridgeUpdateLifecycleItem.mockReset()
 		bridgeMocks.memongoBridgeReportProcedureOutcome.mockReset()
 		bridgeMocks.memongoBridgeWriteConversationEvent.mockReset()
@@ -449,6 +467,224 @@ describe("createApp", () => {
 		})
 	})
 
+	describe("GET /ready", () => {
+		beforeEach(() => {
+			bridgeMocks.memongoBridgePingMongo.mockResolvedValue({ ok: true })
+			bridgeMocks.memongoBridgeProbeVector.mockResolvedValue(true)
+			bridgeMocks.memongoBridgeProbeEmbedding.mockResolvedValue({ ok: true })
+		})
+
+		it("returns 200 with all lanes ok when every probe passes", async () => {
+			const res = await createApp().request("/ready")
+
+			expect(res.status).toBe(200)
+			await expect(res.json()).resolves.toEqual({
+				ok: true,
+				lanes: {
+					mongo: { ok: true },
+					vector: { ok: true },
+					embedding: { ok: true },
+				},
+			})
+		})
+
+		it("returns 503 with lane detail when the vector probe fails", async () => {
+			bridgeMocks.memongoBridgeProbeVector.mockResolvedValue(false)
+
+			const res = await createApp().request("/ready")
+			const json = (await res.json()) as {
+				ok: boolean
+				lanes: {
+					mongo: { ok: boolean }
+					vector: { ok: boolean; message?: string }
+					embedding: { ok: boolean }
+				}
+			}
+
+			expect(res.status).toBe(503)
+			expect(json.ok).toBe(false)
+			expect(json.lanes.mongo.ok).toBe(true)
+			expect(json.lanes.embedding.ok).toBe(true)
+			expect(json.lanes.vector.ok).toBe(false)
+			expect(json.lanes.vector.message).toBeTruthy()
+		})
+
+		it("returns 503 when the mongo ping fails", async () => {
+			bridgeMocks.memongoBridgePingMongo.mockResolvedValue({
+				ok: false,
+				message: "mongodb memory unavailable: connection refused",
+			})
+
+			const res = await createApp().request("/ready")
+			const json = (await res.json()) as {
+				ok: boolean
+				lanes: { mongo: { ok: boolean; message?: string } }
+			}
+
+			expect(res.status).toBe(503)
+			expect(json.ok).toBe(false)
+			expect(json.lanes.mongo.ok).toBe(false)
+			expect(json.lanes.mongo.message).toContain("connection refused")
+		})
+
+		it("returns 503 when a probe throws", async () => {
+			bridgeMocks.memongoBridgePingMongo.mockRejectedValue(
+				new Error("mongodb memory unavailable: boom"),
+			)
+
+			const res = await createApp().request("/ready")
+			const json = (await res.json()) as {
+				ok: boolean
+				lanes: { mongo: { ok: boolean; message?: string } }
+			}
+
+			expect(res.status).toBe(503)
+			expect(json.lanes.mongo.ok).toBe(false)
+			expect(json.lanes.mongo.message).toContain("boom")
+		})
+
+		it("is not blocked by auth when MEMONGO_API_KEY is set", async () => {
+			process.env.MEMONGO_API_KEY = "secret-key"
+
+			const res = await createApp().request("/ready")
+
+			expect(res.status).toBe(200)
+		})
+	})
+
+	describe("validateBootEnv", () => {
+		it("throws the engine message when no MongoDB URI is resolvable", async () => {
+			bridgeMocks.buildMemongoConfig.mockReturnValue({
+				memory: { backend: "mongodb", mongodb: {} },
+			})
+			const { validateBootEnv } = await import("./lib/boot-env.js")
+
+			expect(() => validateBootEnv({})).toThrow(
+				/MongoDB URI required for Memongo.*MEMONGO_MONGODB_URI/,
+			)
+		})
+
+		it("passes when a MongoDB URI is resolvable", async () => {
+			bridgeMocks.buildMemongoConfig.mockReturnValue({
+				memory: {
+					backend: "mongodb",
+					mongodb: { uri: "mongodb://127.0.0.1:27017/memongo" },
+				},
+			})
+			const { validateBootEnv } = await import("./lib/boot-env.js")
+
+			expect(() => validateBootEnv({})).not.toThrow()
+		})
+	})
+
+	describe("boot search capabilities (P1.9)", () => {
+		const fullCaps = {
+			vectorSearch: true,
+			textSearch: true,
+			scoreFusion: true,
+			rankFusion: true,
+			storedSource: false,
+			vectorIndexMethod: false,
+		}
+
+		it("derives all lanes available from full capabilities", () => {
+			expect(deriveSearchLanes(fullCaps)).toEqual({
+				hybrid: true,
+				vector: true,
+				keyword: true,
+				text: true,
+			})
+		})
+
+		it("degrades hybrid and vector when the vector capability is absent", () => {
+			expect(deriveSearchLanes({ ...fullCaps, vectorSearch: false })).toEqual({
+				hybrid: false,
+				vector: false,
+				keyword: true,
+				text: true,
+			})
+		})
+
+		it("keeps only the $text fallback when capabilities are null", () => {
+			expect(deriveSearchLanes(null)).toEqual({
+				hybrid: false,
+				vector: false,
+				keyword: false,
+				text: true,
+			})
+		})
+
+		it("formats a degraded table with lane statuses and a banner", () => {
+			const table = formatCapabilityTable(
+				deriveSearchLanes({ ...fullCaps, vectorSearch: false }),
+			)
+			expect(table).toContain("hybrid:  unavailable")
+			expect(table).toContain("vector:  unavailable")
+			expect(table).toContain("keyword: available")
+			expect(table).toContain("text:    available")
+			expect(table).toContain("DEGRADED")
+		})
+
+		it("formats a healthy table without the degradation banner", () => {
+			const table = formatCapabilityTable(deriveSearchLanes(fullCaps))
+			expect(table).toContain("all retrieval lanes available")
+			expect(table).not.toContain("DEGRADED")
+		})
+
+		it("includes the probe error in the table when the probe failed", () => {
+			const table = formatCapabilityTable(deriveSearchLanes(null), "boom")
+			expect(table).toContain("capability probe failed: boom")
+		})
+
+		it("parses MEMONGO_REQUIRE_VECTOR only for 1/true", () => {
+			expect(isRequireVectorEnabled("1")).toBe(true)
+			expect(isRequireVectorEnabled("true")).toBe(true)
+			expect(isRequireVectorEnabled(" TRUE ")).toBe(true)
+			expect(isRequireVectorEnabled("0")).toBe(false)
+			expect(isRequireVectorEnabled("yes")).toBe(false)
+			expect(isRequireVectorEnabled(undefined)).toBe(false)
+		})
+
+		it("enforceRequiredVector passes when the vector lane is available", () => {
+			expect(() =>
+				enforceRequiredVector(deriveSearchLanes(fullCaps)),
+			).not.toThrow()
+		})
+
+		it("enforceRequiredVector throws a clear message when vector is unavailable", () => {
+			expect(() =>
+				enforceRequiredVector(
+					deriveSearchLanes({ ...fullCaps, vectorSearch: false }),
+				),
+			).toThrow(REQUIRE_VECTOR_FAILURE_MESSAGE)
+		})
+
+		it("enforceRequiredVector includes the probe error when present", () => {
+			expect(() =>
+				enforceRequiredVector(deriveSearchLanes(null), "connection refused"),
+			).toThrow(/Capability probe failed: connection refused/)
+		})
+
+		it("probeBootCapabilities returns derived lanes on success", async () => {
+			const report = await probeBootCapabilities(async () => fullCaps)
+			expect(report.probeError).toBeUndefined()
+			expect(report.lanes.vector).toBe(true)
+		})
+
+		it("probeBootCapabilities degrades lanes and captures probe failures", async () => {
+			const report = await probeBootCapabilities(async () => {
+				throw new Error("mongodb memory unavailable")
+			})
+			expect(report.probeError).toContain("mongodb memory unavailable")
+			expect(report.lanes).toEqual({
+				hybrid: false,
+				vector: false,
+				keyword: false,
+				text: true,
+			})
+		})
+	})
+
 	it("serves the OpenAPI document without auth", async () => {
 		const res = await createApp().request("/openapi.json")
 		const json = (await res.json()) as {
@@ -713,7 +949,12 @@ describe("createApp", () => {
 				"Content-Type": "application/json",
 			},
 			body: JSON.stringify({
-				entry: { agentId: "agent-A", key: "city", value: "Berlin" },
+				entry: {
+					agentId: "agent-A",
+					type: "fact",
+					key: "city",
+					value: "Berlin",
+				},
 			}),
 		})
 
@@ -744,7 +985,12 @@ describe("createApp", () => {
 				"Content-Type": "application/json",
 			},
 			body: JSON.stringify({
-				entry: { agentId: "agent-B", key: "city", value: "Berlin" },
+				entry: {
+					agentId: "agent-B",
+					type: "fact",
+					key: "city",
+					value: "Berlin",
+				},
 			}),
 		})
 
@@ -924,6 +1170,7 @@ describe("createApp", () => {
 					agentId: "agent-A",
 					scope: "tenant",
 					scopeRef: "ref-B",
+					type: "fact",
 					key: "city",
 					value: "Berlin",
 				},
@@ -967,7 +1214,9 @@ describe("createApp", () => {
 					agentId: "agent-A",
 					scope: "tenant",
 					scopeRef: "ref-B",
+					procedureId: "proc-deploy",
 					name: "deploy",
+					steps: ["build", "ship"],
 				},
 			}),
 		})
@@ -1401,7 +1650,7 @@ describe("createApp", () => {
 		}
 	})
 
-	it("does not emit CORS headers without an explicit origin allowlist", async () => {
+	it("denies unlisted origins when MEMONGO_CORS_ORIGINS is unset (dev defaults apply)", async () => {
 		delete process.env.MEMONGO_CORS_ORIGINS
 
 		const res = await createApp().request("/health", {
@@ -1409,6 +1658,25 @@ describe("createApp", () => {
 		})
 
 		expect(res.headers.get("Access-Control-Allow-Origin")).toBeNull()
+	})
+
+	it("applies dev-default CORS origins for the web console when MEMONGO_CORS_ORIGINS is unset", async () => {
+		delete process.env.MEMONGO_CORS_ORIGINS
+		const app = createApp()
+
+		const localhost = await app.request("/health", {
+			headers: { Origin: "http://localhost:3040" },
+		})
+		const loopback = await app.request("/health", {
+			headers: { Origin: "http://127.0.0.1:3040" },
+		})
+
+		expect(localhost.headers.get("Access-Control-Allow-Origin")).toBe(
+			"http://localhost:3040",
+		)
+		expect(loopback.headers.get("Access-Control-Allow-Origin")).toBe(
+			"http://127.0.0.1:3040",
+		)
 	})
 
 	it("emits CORS headers only for configured origins", async () => {
@@ -2567,6 +2835,285 @@ describe("createApp", () => {
 		})
 	})
 
+	it("rejects conversation import when datasetPath escapes the allowed roots", async () => {
+		bridgeMocks.memongoBridgeImportConversations.mockRejectedValue(
+			new Error(
+				"datasetPath must resolve inside the workspace or configured benchmark dataset directory",
+			),
+		)
+
+		const res = await createApp().request("/v1/import/conversations", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				agentId: "agent-42",
+				datasetPath: "/etc/passwd.json",
+			}),
+		})
+
+		expect(res.status).toBe(400)
+		await expect(res.json()).resolves.toEqual({
+			error: {
+				code: "VALIDATION_ERROR",
+				message:
+					"datasetPath must resolve inside the workspace or configured benchmark dataset directory",
+			},
+		})
+	})
+
+	it("rejects benchmark ingest when datasetPath escapes the allowed roots", async () => {
+		bridgeMocks.memongoBridgeBenchmarkIngest.mockRejectedValue(
+			new Error(
+				"datasetPath must resolve inside the workspace or configured benchmark dataset directory",
+			),
+		)
+
+		const res = await createApp().request("/v1/admin/benchmarks/ingest", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				agentId: "agent-42",
+				datasetPath: "/etc/secrets.jsonl",
+			}),
+		})
+
+		expect(res.status).toBe(400)
+		await expect(res.json()).resolves.toEqual({
+			error: {
+				code: "VALIDATION_ERROR",
+				message:
+					"datasetPath must resolve inside the workspace or configured benchmark dataset directory",
+			},
+		})
+	})
+
+	it("rejects relevance benchmark when datasetPath escapes the allowed roots", async () => {
+		bridgeMocks.memongoBridgeRelevanceBenchmark.mockRejectedValue(
+			new Error(
+				"datasetPath must resolve inside the workspace or configured benchmark dataset directory",
+			),
+		)
+
+		const res = await createApp().request("/v1/admin/relevance/benchmark", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				agentId: "agent-42",
+				datasetPath: "/etc/secrets.jsonl",
+			}),
+		})
+
+		expect(res.status).toBe(400)
+		await expect(res.json()).resolves.toEqual({
+			error: {
+				code: "VALIDATION_ERROR",
+				message:
+					"datasetPath must resolve inside the workspace or configured benchmark dataset directory",
+			},
+		})
+	})
+
+	it("forwards the Idempotency-Key header to write-event (header wins over customId)", async () => {
+		const res = await createApp().request("/v1/write-event", {
+			method: "POST",
+			headers: {
+				"Content-Type": "application/json",
+				"Idempotency-Key": "hdr-key-1",
+			},
+			body: JSON.stringify({
+				role: "user",
+				body: "hello",
+				agentId: "agent-42",
+				customId: "body-key-1",
+			}),
+		})
+
+		expect(res.status).toBe(200)
+		expect(
+			bridgeMocks.memongoBridgeWriteConversationEvent,
+		).toHaveBeenCalledWith(
+			expect.objectContaining({ idempotencyKey: "hdr-key-1" }),
+		)
+	})
+
+	it("forwards customId as the idempotency key when no header is present", async () => {
+		const res = await createApp().request("/v1/write-event", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				role: "user",
+				body: "hello",
+				agentId: "agent-42",
+				customId: "body-key-2",
+			}),
+		})
+
+		expect(res.status).toBe(200)
+		expect(
+			bridgeMocks.memongoBridgeWriteConversationEvent,
+		).toHaveBeenCalledWith(
+			expect.objectContaining({ idempotencyKey: "body-key-2" }),
+		)
+	})
+
+	it("forwards customId on /v1/add", async () => {
+		const res = await createApp().request("/v1/add", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				content: "remember this",
+				agentId: "agent-42",
+				customId: "add-key-1",
+			}),
+		})
+
+		expect(res.status).toBe(200)
+		expect(bridgeMocks.memongoBridgeAdd).toHaveBeenCalledWith(
+			expect.objectContaining({ idempotencyKey: "add-key-1" }),
+		)
+	})
+
+	it("returns 422 when an idempotency key is reused with a different payload", async () => {
+		bridgeMocks.memongoBridgeWriteConversationEvent.mockRejectedValue(
+			Object.assign(
+				new Error(
+					'idempotency key "body-key-3" was reused with a different payload',
+				),
+				{ name: "IdempotencyConflictError" },
+			),
+		)
+
+		const res = await createApp().request("/v1/write-event", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				role: "user",
+				body: "hello again",
+				agentId: "agent-42",
+				customId: "body-key-3",
+			}),
+		})
+
+		expect(res.status).toBe(422)
+		await expect(res.json()).resolves.toEqual({
+			error: {
+				code: "IDEMPOTENCY_CONFLICT",
+				message:
+					'idempotency key "body-key-3" was reused with a different payload',
+			},
+		})
+	})
+
+	it("returns a safe 500 envelope without leaking driver internals (P0.8)", async () => {
+		bridgeMocks.memongoBridgeSearch.mockRejectedValue(
+			Object.assign(
+				new Error(
+					"MongoServerError: connection to 10.0.0.5:27017 timed out at /data/db",
+				),
+				{ name: "MongoServerError" },
+			),
+		)
+
+		const res = await createApp().request("/v1/search", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ query: "q", agentId: "agent-42" }),
+		})
+
+		expect(res.status).toBe(500)
+		const body = (await res.json()) as {
+			error: { code: string; message: string }
+		}
+		expect(body.error.code).toBe("SEARCH_FAILED")
+		expect(body.error.message).not.toContain("10.0.0.5")
+		expect(body.error.message).not.toContain("27017")
+		expect(body.error.message).not.toContain("MongoServerError")
+		expect(body.error.message).not.toContain("/data/db")
+		// Detail is logged server-side under a request id; the body carries
+		// only the reference so operators can correlate reports.
+		expect(body.error.message).toMatch(
+			/internal server error \(request id: [0-9a-f-]{36}\)/i,
+		)
+	})
+
+	it("returns a safe 500 envelope on /v1/add without leaking internals (P0.8)", async () => {
+		bridgeMocks.memongoBridgeAdd.mockRejectedValue(
+			new Error(
+				"E11000 duplicate key error collection: memongo_events index: uq_x",
+			),
+		)
+
+		const res = await createApp().request("/v1/add", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ content: "hello", agentId: "agent-42" }),
+		})
+
+		expect(res.status).toBe(500)
+		const body = (await res.json()) as {
+			error: { code: string; message: string }
+		}
+		expect(body.error.code).toBe("ADD_FAILED")
+		expect(body.error.message).not.toContain("E11000")
+		expect(body.error.message).not.toContain("memongo_events")
+		expect(body.error.message).toMatch(
+			/internal server error \(request id: [0-9a-f-]{36}\)/i,
+		)
+	})
+
+	it("returns a safe 500 envelope on GET routes too (P0.8)", async () => {
+		bridgeMocks.memongoBridgeStatus.mockRejectedValue(
+			new Error(
+				"MongoNetworkTimeoutError: connection 5 to 127.0.0.1:27017 closed",
+			),
+		)
+
+		const res = await createApp().request("/v1/status?agentId=agent-42")
+
+		expect(res.status).toBe(500)
+		const body = (await res.json()) as {
+			error: { code: string; message: string }
+		}
+		expect(body.error.code).toBe("STATUS_FAILED")
+		expect(body.error.message).not.toContain("27017")
+		expect(body.error.message).not.toContain("MongoNetworkTimeoutError")
+	})
+
+	it("forwards a valid fusionMethod on /v1/search-kb (P0.10)", async () => {
+		const res = await createApp().request("/v1/search-kb", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				query: "architecture",
+				agentId: "agent-42",
+				fusionMethod: "scoreFusion",
+			}),
+		})
+
+		expect(res.status).toBe(200)
+		expect(bridgeMocks.memongoBridgeSearchKB).toHaveBeenCalledWith(
+			expect.objectContaining({ fusionMethod: "scoreFusion" }),
+		)
+	})
+
+	it("ignores an invalid fusionMethod on /v1/search-kb (P0.10)", async () => {
+		const res = await createApp().request("/v1/search-kb", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				query: "architecture",
+				agentId: "agent-42",
+				fusionMethod: "made-up",
+			}),
+		})
+
+		expect(res.status).toBe(200)
+		const call = bridgeMocks.memongoBridgeSearchKB.mock.calls.at(-1)?.[0] as {
+			fusionMethod?: string
+		}
+		expect(call.fusionMethod).toBeUndefined()
+	})
+
 	it("schedules background extraction for one event", async () => {
 		const res = await createApp().request("/v1/extract", {
 			method: "POST",
@@ -3599,5 +4146,342 @@ describe("createApp", () => {
 				message: "roles must contain only user|assistant|system|tool",
 			},
 		})
+	})
+
+	it("P1.3: maps Mongo driver network errors to 503 SERVICE_UNAVAILABLE so client retry means something", async () => {
+		const mongoDown = new Error("connection refused")
+		mongoDown.name = "MongoServerSelectionError"
+		bridgeMocks.memongoBridgeSearch.mockReset()
+		bridgeMocks.memongoBridgeSearch.mockRejectedValue(mongoDown)
+
+		const res = await createApp().request("/v1/search", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ query: "hello" }),
+		})
+
+		expect(res.status).toBe(503)
+		const json = (await res.json()) as {
+			error: { code: string; message: string }
+		}
+		expect(json.error.code).toBe("SERVICE_UNAVAILABLE")
+		// The raw driver message must not leak — only the request id reference.
+		expect(json.error.message).not.toContain("connection refused")
+		expect(json.error.message).toContain("request id:")
+	})
+
+	it.each([
+		"MongoNetworkError",
+		"MongoNetworkTimeoutError",
+		"MongoServerSelectionError",
+	])("P1.3: %s maps to 503", async (name) => {
+		const err = new Error("driver down")
+		err.name = name
+		bridgeMocks.memongoBridgeSearch.mockReset()
+		bridgeMocks.memongoBridgeSearch.mockRejectedValue(err)
+
+		const res = await createApp().request("/v1/search", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ query: "hello" }),
+		})
+
+		expect(res.status).toBe(503)
+	})
+
+	it("P1.3: a network error nested in an error cause chain still maps to 503", async () => {
+		const cause = new Error("socket hang up")
+		cause.name = "MongoNetworkError"
+		const err = new Error("bridge call failed", { cause })
+		bridgeMocks.memongoBridgeSearch.mockReset()
+		bridgeMocks.memongoBridgeSearch.mockRejectedValue(err)
+
+		const res = await createApp().request("/v1/search", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ query: "hello" }),
+		})
+
+		expect(res.status).toBe(503)
+	})
+
+	it("P1.3: a generic 500 must NOT become retriable noise — non-network errors stay 500 with the route code", async () => {
+		bridgeMocks.memongoBridgeSearch.mockReset()
+		bridgeMocks.memongoBridgeSearch.mockRejectedValue(
+			new Error("unexpected invariant violation"),
+		)
+
+		const res = await createApp().request("/v1/search", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ query: "hello" }),
+		})
+
+		expect(res.status).toBe(500)
+		const json = (await res.json()) as {
+			error: { code: string; message: string }
+		}
+		expect(json.error.code).toBe("SEARCH_FAILED")
+		expect(json.error.message).toContain("request id:")
+	})
+
+	it("P1.3: a message that merely mentions a network error name stays 500 (name-only classification)", async () => {
+		bridgeMocks.memongoBridgeSearch.mockReset()
+		bridgeMocks.memongoBridgeSearch.mockRejectedValue(
+			new Error("failed while handling MongoServerSelectionError fallback"),
+		)
+
+		const res = await createApp().request("/v1/search", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ query: "hello" }),
+		})
+
+		expect(res.status).toBe(500)
+	})
+})
+
+describe("P2.8 boundary input validation", () => {
+	const prevEnv = { ...process.env }
+
+	beforeEach(() => {
+		process.env = { ...prevEnv }
+		delete process.env.MEMONGO_API_KEY
+		delete process.env.MEMONGO_API_SCOPED_KEYS
+		process.env.MEMONGO_ALLOW_INSECURE_NO_AUTH = "true"
+		bridgeMocks.memongoBridgeSearch.mockReset()
+		bridgeMocks.memongoBridgeSearch.mockResolvedValue([])
+		bridgeMocks.memongoBridgeSearchKB.mockReset()
+		bridgeMocks.memongoBridgeSearchKB.mockResolvedValue([])
+		bridgeMocks.memongoBridgeWriteStructuredMemory.mockReset()
+		bridgeMocks.memongoBridgeWriteStructuredMemory.mockResolvedValue({
+			id: "s1",
+		})
+		bridgeMocks.memongoBridgeWriteProcedure.mockReset()
+		bridgeMocks.memongoBridgeWriteProcedure.mockResolvedValue({ id: "p1" })
+		bridgeMocks.memongoBridgeAdd.mockReset()
+		bridgeMocks.memongoBridgeAdd.mockResolvedValue({
+			eventId: "evt-1",
+			chunkCreated: true,
+		})
+		bridgeMocks.memongoBridgeWriteConversationEvent.mockReset()
+		bridgeMocks.memongoBridgeWriteConversationEvent.mockResolvedValue({
+			eventId: "evt-2",
+			chunkCreated: true,
+		})
+		bridgeMocks.memongoBridgeSync.mockReset()
+		bridgeMocks.memongoBridgeSync.mockResolvedValue(undefined)
+	})
+
+	afterEach(() => {
+		process.env = { ...prevEnv }
+	})
+
+	function postJson(path: string, body: unknown) {
+		return createApp().request(path, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: typeof body === "string" ? body : JSON.stringify(body),
+		})
+	}
+
+	it("malformed JSON on /v1/search returns 400 INVALID_JSON instead of silently running with {}", async () => {
+		const res = await postJson("/v1/search", "{")
+
+		expect(res.status).toBe(400)
+		const json = (await res.json()) as {
+			error: { code: string; message: string }
+		}
+		expect(json.error.code).toBe("INVALID_JSON")
+		expect(bridgeMocks.memongoBridgeSearch).not.toHaveBeenCalled()
+	})
+
+	it("a genuinely empty body still works where it does today (/v1/sync)", async () => {
+		const res = await createApp().request("/v1/sync", { method: "POST" })
+
+		expect(res.status).toBe(200)
+		expect(bridgeMocks.memongoBridgeSync).toHaveBeenCalledOnce()
+	})
+
+	it("write-structured rejects an entry missing type/key/value naming the field", async () => {
+		for (const [entry, field] of [
+			[{ key: "city", value: "Berlin" }, "entry.type"],
+			[{ type: "fact", value: "Berlin" }, "entry.key"],
+			[{ type: "fact", key: "city" }, "entry.value"],
+		] as const) {
+			const res = await postJson("/v1/write-structured", { entry })
+
+			expect(res.status).toBe(400)
+			const json = (await res.json()) as {
+				error: { code: string; message: string }
+			}
+			expect(json.error.code).toBe("VALIDATION_ERROR")
+			expect(json.error.message).toContain(field)
+		}
+		expect(
+			bridgeMocks.memongoBridgeWriteStructuredMemory,
+		).not.toHaveBeenCalled()
+	})
+
+	it("write-structured accepts a valid entry and forwards it to the bridge", async () => {
+		const res = await postJson("/v1/write-structured", {
+			entry: { type: "fact", key: "city", value: "Berlin" },
+		})
+
+		expect(res.status).toBe(200)
+		expect(
+			bridgeMocks.memongoBridgeWriteStructuredMemory,
+		).toHaveBeenCalledOnce()
+		expect(
+			bridgeMocks.memongoBridgeWriteStructuredMemory.mock.calls[0]?.[0]?.entry,
+		).toEqual({ type: "fact", key: "city", value: "Berlin" })
+	})
+
+	it("write-procedure rejects an entry missing procedureId/name/steps naming the field", async () => {
+		for (const [entry, field] of [
+			[{ name: "deploy", steps: ["build"] }, "entry.procedureId"],
+			[{ procedureId: "proc-1", steps: ["build"] }, "entry.name"],
+			[{ procedureId: "proc-1", name: "deploy" }, "entry.steps"],
+		] as const) {
+			const res = await postJson("/v1/write-procedure", { entry })
+
+			expect(res.status).toBe(400)
+			const json = (await res.json()) as {
+				error: { code: string; message: string }
+			}
+			expect(json.error.code).toBe("VALIDATION_ERROR")
+			expect(json.error.message).toContain(field)
+		}
+		expect(bridgeMocks.memongoBridgeWriteProcedure).not.toHaveBeenCalled()
+	})
+
+	it("/v1/add rejects operator-shaped metadata keys ($-prefixed, dotted)", async () => {
+		for (const metadata of [{ $where: "x" }, { "a.b": 1 }]) {
+			const res = await postJson("/v1/add", {
+				content: "remember this",
+				metadata,
+			})
+
+			expect(res.status).toBe(400)
+			const json = (await res.json()) as {
+				error: { code: string; message: string }
+			}
+			expect(json.error.code).toBe("VALIDATION_ERROR")
+			expect(json.error.message).toContain("metadata")
+		}
+		expect(bridgeMocks.memongoBridgeAdd).not.toHaveBeenCalled()
+	})
+
+	it("/v1/add accepts normal metadata and forwards it", async () => {
+		const res = await postJson("/v1/add", {
+			content: "remember this",
+			metadata: { source: "chat", turn: 3 },
+		})
+
+		expect(res.status).toBe(200)
+		expect(bridgeMocks.memongoBridgeAdd).toHaveBeenCalledWith(
+			expect.objectContaining({
+				metadata: { source: "chat", turn: 3 },
+			}),
+		)
+	})
+
+	it("/v1/write-event rejects operator-shaped metadata keys", async () => {
+		const res = await postJson("/v1/write-event", {
+			role: "user",
+			body: "hello",
+			metadata: { $set: "x" },
+		})
+
+		expect(res.status).toBe(400)
+		expect(
+			bridgeMocks.memongoBridgeWriteConversationEvent,
+		).not.toHaveBeenCalled()
+	})
+
+	it("search limit 9999 is clamped to 100 before reaching the bridge", async () => {
+		const res = await postJson("/v1/search", { query: "hello", limit: 9999 })
+
+		expect(res.status).toBe(200)
+		expect(bridgeMocks.memongoBridgeSearch).toHaveBeenCalledWith(
+			expect.objectContaining({ maxResults: 100 }),
+		)
+	})
+
+	it("search maxResults 9999 is clamped to 100; in-range limits pass through", async () => {
+		const clamped = await postJson("/v1/search", {
+			query: "hello",
+			maxResults: 9999,
+		})
+		expect(clamped.status).toBe(200)
+		expect(
+			bridgeMocks.memongoBridgeSearch.mock.calls.at(-1)?.[0]?.maxResults,
+		).toBe(100)
+
+		const passthrough = await postJson("/v1/search", {
+			query: "hello",
+			limit: 25,
+		})
+		expect(passthrough.status).toBe(200)
+		expect(
+			bridgeMocks.memongoBridgeSearch.mock.calls.at(-1)?.[0]?.maxResults,
+		).toBe(25)
+	})
+
+	it("/v1/search-kb rejects an untyped or operator-shaped filter", async () => {
+		for (const filter of [{ tags: "not-an-array" }, { $where: "1" }]) {
+			const res = await postJson("/v1/search-kb", {
+				query: "architecture",
+				filter,
+			})
+
+			expect(res.status).toBe(400)
+			const json = (await res.json()) as {
+				error: { code: string; message: string }
+			}
+			expect(json.error.code).toBe("VALIDATION_ERROR")
+			expect(json.error.message).toContain("filter")
+		}
+		expect(bridgeMocks.memongoBridgeSearchKB).not.toHaveBeenCalled()
+	})
+
+	it("/v1/search-kb accepts a typed filter and forwards it", async () => {
+		const res = await postJson("/v1/search-kb", {
+			query: "architecture",
+			filter: { tags: ["db"], category: "runbook" },
+		})
+
+		expect(res.status).toBe(200)
+		expect(bridgeMocks.memongoBridgeSearchKB).toHaveBeenCalledWith(
+			expect.objectContaining({
+				filter: { tags: ["db"], category: "runbook" },
+			}),
+		)
+	})
+
+	it("fuzz sweep: wrong-typed fields on the main write routes return 400, never 500", async () => {
+		const cases: Array<{ path: string; body: Record<string, unknown> }> = [
+			{ path: "/v1/add", body: { content: 42 } },
+			{ path: "/v1/add", body: { content: "x", metadata: "nope" } },
+			{ path: "/v1/write-event", body: { role: "bogus", body: "x" } },
+			{ path: "/v1/write-event", body: { role: "user", body: 42 } },
+			{ path: "/v1/write-structured", body: { entry: "nope" } },
+			{
+				path: "/v1/write-structured",
+				body: { entry: { type: 1, key: "k", value: "v" } },
+			},
+			{
+				path: "/v1/write-procedure",
+				body: { entry: { procedureId: "p", name: "n", steps: "nope" } },
+			},
+		]
+		for (const { path, body } of cases) {
+			const res = await postJson(path, body)
+			expect(res.status, `${path} with ${JSON.stringify(body)}`).toBe(400)
+			const json = (await res.json()) as {
+				error: { code: string; message: string }
+			}
+			expect(json.error.code).toBe("VALIDATION_ERROR")
+		}
 	})
 })

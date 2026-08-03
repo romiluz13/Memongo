@@ -726,6 +726,141 @@ describe("syncToMongoDB — session files", () => {
 })
 
 // ---------------------------------------------------------------------------
+// Partial chunk failure (P0.3): hash must not be advanced when chunks are lost
+// ---------------------------------------------------------------------------
+
+function makeMultiChunkMarkdown(sections: number): string {
+	const parts: string[] = []
+	for (let i = 0; i < sections; i++) {
+		parts.push(
+			`## Section ${i}\n\nThis is paragraph ${i} with enough text to form a chunk on its own. ` +
+				"Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt " +
+				"ut labore et dolore magna aliqua. Ut enim ad minim veniam.",
+		)
+	}
+	return parts.join("\n\n")
+}
+
+function makeBulkWriteError(
+	appliedCount: number,
+	errmsg: string,
+): Error & {
+	result: { upsertedCount: number; modifiedCount: number }
+	writeErrors: Array<{ errmsg: string }>
+} {
+	return Object.assign(new Error("bulk write error"), {
+		result: { upsertedCount: appliedCount, modifiedCount: 0 },
+		writeErrors: [{ errmsg }],
+	})
+}
+
+describe("syncToMongoDB — partial chunk failure (P0.3)", () => {
+	it("does not advance the metadata hash when a chunk op still fails after individual retry", async () => {
+		await writeMemoryFiles(tmpDir, {
+			"partial.md": makeMultiChunkMarkdown(40),
+		})
+
+		// File was previously synced with an older hash
+		mockFiles = createMockFilesCol(
+			new Map([["memory/partial.md", { hash: "old-hash", mtime: 0, size: 0 }]]),
+		)
+		vi.mocked(filesCollection).mockReturnValue(mockFiles)
+		mockChunks = createMockChunksCol()
+		vi.mocked(chunksCollection).mockReturnValue(mockChunks)
+
+		// First (unordered) bulk write partially fails; the individual retry of
+		// the first op keeps failing — that chunk is permanently lost this run.
+		let bulkOps: unknown[] = []
+		;(mockChunks.bulkWrite as ReturnType<typeof vi.fn>).mockImplementation(
+			async (ops: unknown[]) => {
+				if (ops.length > 1) {
+					bulkOps = ops
+					throw makeBulkWriteError(ops.length - 1, "E11000 duplicate key error")
+				}
+				if (ops[0] === bulkOps[0]) {
+					throw new Error("E11000 duplicate key error")
+				}
+				return { upsertedCount: 1, modifiedCount: 0 }
+			},
+		)
+
+		const result = await syncToMongoDB({
+			db: {} as Db,
+			prefix: "test_",
+			workspaceDir: tmpDir,
+			embeddingMode: "automated",
+		})
+
+		// Failure is visible in stats
+		expect(result.filesFailed).toBe(1)
+		expect(result.filesProcessed).toBe(0)
+
+		// Metadata with the NEW hash must NOT be written — the old hash is
+		// retained so the next sync re-attempts the file.
+		const metadataCalls = (mockFiles.updateOne as ReturnType<typeof vi.fn>).mock
+			.calls
+		const partialMeta = metadataCalls.find(
+			(call) =>
+				typeof call[0]?._id === "string" &&
+				call[0]._id.endsWith("::memory/partial.md"),
+		)
+		expect(partialMeta).toBeUndefined()
+
+		// Re-running sync retries the file (stored hash still the old one)
+		const callsBefore = (mockChunks.bulkWrite as ReturnType<typeof vi.fn>).mock
+			.calls.length
+		await syncToMongoDB({
+			db: {} as Db,
+			prefix: "test_",
+			workspaceDir: tmpDir,
+			embeddingMode: "automated",
+		})
+		const callsAfter = (mockChunks.bulkWrite as ReturnType<typeof vi.fn>).mock
+			.calls.length
+		expect(callsAfter).toBeGreaterThan(callsBefore)
+	})
+
+	it("salvages failed ops via individual retry and writes the metadata hash when all apply", async () => {
+		await writeMemoryFiles(tmpDir, {
+			"salvaged.md": makeMultiChunkMarkdown(40),
+		})
+
+		// Unordered bulk write reports one op failed, but the individual retry
+		// succeeds — nothing is lost, so the sync should complete normally.
+		;(mockChunks.bulkWrite as ReturnType<typeof vi.fn>).mockImplementation(
+			async (ops: unknown[]) => {
+				if (ops.length > 1) {
+					throw makeBulkWriteError(ops.length - 1, "E11000 duplicate key error")
+				}
+				return { upsertedCount: 1, modifiedCount: 0 }
+			},
+		)
+
+		const result = await syncToMongoDB({
+			db: {} as Db,
+			prefix: "test_",
+			workspaceDir: tmpDir,
+			embeddingMode: "automated",
+		})
+
+		expect(result.filesFailed).toBe(0)
+		expect(result.filesProcessed).toBe(1)
+		// All chunks accounted for after the salvage retry
+		expect(result.chunksUpserted).toBeGreaterThanOrEqual(2)
+
+		const metadataCalls = (mockFiles.updateOne as ReturnType<typeof vi.fn>).mock
+			.calls
+		const salvagedMeta = metadataCalls.find(
+			(call) =>
+				typeof call[0]?._id === "string" &&
+				call[0]._id.endsWith("::memory/salvaged.md"),
+		)
+		expect(salvagedMeta).toBeDefined()
+		expect(typeof salvagedMeta![1].$set.hash).toBe("string")
+	})
+})
+
+// ---------------------------------------------------------------------------
 // Transaction wrapping tests
 // ---------------------------------------------------------------------------
 

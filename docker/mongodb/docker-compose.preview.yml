@@ -1,5 +1,6 @@
 # docker-compose.preview.yml - Memongo one-command setup
-# Uses mongodb/mongodb-atlas-local:preview (the ONLY tag with auto-embeddings)
+# Uses mongodb/mongodb-atlas-local (pinned dated tag below; the image line
+# with auto-embedding support — plain mongo/mongo:7 does NOT work).
 #
 # Usage:
 #   docker compose -f docker/mongodb/docker-compose.preview.yml up -d
@@ -18,10 +19,12 @@
 
 services:
   mongodb:
-    image: mongodb/mongodb-atlas-local:preview
+    # Pinned to a dated tag (verify auto-embedding parity when bumping).
+    image: mongodb/mongodb-atlas-local:8.2.6-20260715T144108Z
     container_name: memongo-preview
     ports:
-      - "${MONGODB_PORT:-27017}:27017"
+      # Loopback-only publish (compose-spec short syntax).
+      - "127.0.0.1:${MONGODB_PORT:-27017}:27017"
     environment:
       - VOYAGE_API_KEY=${VOYAGE_API_KEY:-}
       - MONGODB_ATLAS_TELEMETRY_ENABLE=false

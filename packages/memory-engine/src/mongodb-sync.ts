@@ -179,6 +179,11 @@ function buildChunkOps(
 	})
 }
 
+type UpsertChunksResult = {
+	applied: number
+	failed: number
+}
+
 async function upsertChunks(
 	chunks: Collection,
 	path: string,
@@ -187,9 +192,9 @@ async function upsertChunks(
 	model: string,
 	embeddings: number[][] | null,
 	embeddingStatus: EmbeddingStatus,
-): Promise<number> {
+): Promise<UpsertChunksResult> {
 	if (chunkList.length === 0) {
-		return 0
+		return { applied: 0, failed: 0 }
 	}
 
 	const ops = buildChunkOps(
@@ -204,12 +209,30 @@ async function upsertChunks(
 	const { applied, writeErrors } = await runUnorderedBulkWriteCounted(() =>
 		chunks.bulkWrite(ops, { ordered: false }),
 	)
-	if (writeErrors.length > 0) {
-		log.warn(
-			`chunk bulkWrite partially failed: ${writeErrors.length} of ${ops.length} ops rejected (${writeErrors[0]})`,
-		)
+	if (writeErrors.length === 0) {
+		return { applied, failed: 0 }
 	}
-	return applied
+
+	// Partial failure: retry every op individually (ordered, one by one) to
+	// salvage what applies. Re-applying an op that already succeeded is
+	// idempotent (updateOne upsert with the same $set doc). Ops that still fail
+	// are reported so the caller can refuse to advance the file metadata hash —
+	// otherwise the next sync would skip the file and the lost chunks would
+	// never be retried (P0.3 silent recall gap).
+	log.warn(
+		`chunk bulkWrite partially failed for ${path}: ${writeErrors.length} of ${ops.length} ops rejected (${writeErrors[0]}); retrying individually`,
+	)
+	let stillFailed = 0
+	for (const op of ops) {
+		try {
+			await chunks.bulkWrite([op], { ordered: true })
+		} catch (err) {
+			stillFailed++
+			const msg = err instanceof Error ? err.message : String(err)
+			log.warn(`chunk upsert still failing for ${path}: ${msg}`)
+		}
+	}
+	return { applied: ops.length - stillFailed, failed: stillFailed }
 }
 
 /**
@@ -283,7 +306,11 @@ async function syncFileAtomically(params: {
 	model: string
 	embeddings: number[][] | null
 	embeddingStatus: EmbeddingStatus
-}): Promise<{ upserted: number; disableTransactions: boolean }> {
+}): Promise<{
+	upserted: number
+	disableTransactions: boolean
+	failed: boolean
+}> {
 	const {
 		client,
 		chunksCol,
@@ -298,7 +325,7 @@ async function syncFileAtomically(params: {
 
 	if (!client || !params.useTransactions) {
 		await deleteChunksForPath(chunksCol, file.path, namespace)
-		const upserted = await upsertChunks(
+		const result = await upsertChunks(
 			chunksCol,
 			file.path,
 			namespace,
@@ -307,8 +334,24 @@ async function syncFileAtomically(params: {
 			embeddings,
 			embeddingStatus,
 		)
+		if (result.failed > 0) {
+			// Chunks were lost — do NOT advance the metadata hash. Leaving the old
+			// hash (or no metadata) means the next sync re-attempts this file.
+			log.warn(
+				`sync: ${result.failed} chunk writes failed for ${file.path}; keeping old metadata hash so next sync retries`,
+			)
+			return {
+				upserted: result.applied,
+				disableTransactions: false,
+				failed: true,
+			}
+		}
 		await upsertFileMetadata(filesCol, file, namespace)
-		return { upserted, disableTransactions: false }
+		return {
+			upserted: result.applied,
+			disableTransactions: false,
+			failed: false,
+		}
 	}
 
 	const session = client.startSession()
@@ -331,14 +374,14 @@ async function syncFileAtomically(params: {
 		)
 		upserted = await upsertChunksBatched(chunksCol, session, chunkOps)
 		await upsertFileMetadata(filesCol, file, namespace, session)
-		return { upserted, disableTransactions: false }
+		return { upserted, disableTransactions: false, failed: false }
 	} catch (err) {
 		if (isTransactionUnsupported(err)) {
 			log.info(
 				"transactions not supported (standalone), falling back for file sync",
 			)
 			await deleteChunksForPath(chunksCol, file.path, namespace)
-			const upserted = await upsertChunks(
+			const result = await upsertChunks(
 				chunksCol,
 				file.path,
 				namespace,
@@ -347,8 +390,22 @@ async function syncFileAtomically(params: {
 				embeddings,
 				embeddingStatus,
 			)
+			if (result.failed > 0) {
+				log.warn(
+					`sync: ${result.failed} chunk writes failed for ${file.path}; keeping old metadata hash so next sync retries`,
+				)
+				return {
+					upserted: result.applied,
+					disableTransactions: true,
+					failed: true,
+				}
+			}
 			await upsertFileMetadata(filesCol, file, namespace)
-			return { upserted, disableTransactions: true }
+			return {
+				upserted: result.applied,
+				disableTransactions: true,
+				failed: false,
+			}
 		}
 		throw err
 	} finally {
@@ -366,6 +423,9 @@ export type SyncResult = {
 	staleDeleted: number
 	sessionFilesProcessed: number
 	sessionChunksUpserted: number
+	/** Files whose chunk writes failed even after individual retry; their
+	 * metadata hash was NOT advanced so the next sync re-attempts them. */
+	filesFailed: number
 }
 
 export async function syncToMongoDB(params: {
@@ -456,6 +516,7 @@ export async function syncToMongoDB(params: {
 
 	// Process each changed memory file
 	let filesProcessed = 0
+	let filesFailed = 0
 	let totalChunksUpserted = 0
 
 	for (const file of filesToProcess) {
@@ -467,26 +528,31 @@ export async function syncToMongoDB(params: {
 			const embeddingStatus: EmbeddingStatus = "pending"
 			const embeddings: number[][] | null = null
 
-			const { upserted, disableTransactions } = await syncFileAtomically({
-				client: params.client,
-				useTransactions,
-				chunksCol,
-				filesCol,
-				file,
-				namespace: memoryNamespace,
-				chunks,
-				model,
-				embeddings,
-				embeddingStatus,
-			})
+			const { upserted, disableTransactions, failed } =
+				await syncFileAtomically({
+					client: params.client,
+					useTransactions,
+					chunksCol,
+					filesCol,
+					file,
+					namespace: memoryNamespace,
+					chunks,
+					model,
+					embeddings,
+					embeddingStatus,
+				})
 			totalChunksUpserted += upserted
 			if (disableTransactions) {
 				useTransactions = false
 			}
 
-			filesProcessed++
+			if (failed) {
+				filesFailed++
+			} else {
+				filesProcessed++
+			}
 			progress?.({
-				completed: filesProcessed,
+				completed: filesProcessed + filesFailed,
 				total: filesToProcess.length,
 				label: file.path,
 			})
@@ -532,6 +598,7 @@ export async function syncToMongoDB(params: {
 			sessionFilesProcessed = sessionResult.filesProcessed
 			sessionChunksUpserted = sessionResult.chunksUpserted
 			sessionStaleDeleted = sessionResult.staleDeleted
+			filesFailed += sessionResult.filesFailed
 			// Propagate standalone detection from session sync to stale cleanup
 			if (!sessionResult.useTransactions) {
 				useTransactions = false
@@ -617,7 +684,7 @@ export async function syncToMongoDB(params: {
 	}
 
 	log.info(
-		`sync complete: memory=${filesProcessed} conversation=${sessionFilesProcessed} chunks=${totalChunksUpserted + sessionChunksUpserted} stale=${staleDeleted + sessionStaleDeleted}`,
+		`sync complete: memory=${filesProcessed} conversation=${sessionFilesProcessed} chunks=${totalChunksUpserted + sessionChunksUpserted} stale=${staleDeleted + sessionStaleDeleted} failed=${filesFailed}`,
 	)
 
 	return {
@@ -626,6 +693,7 @@ export async function syncToMongoDB(params: {
 		staleDeleted: staleDeleted + sessionStaleDeleted,
 		sessionFilesProcessed,
 		sessionChunksUpserted,
+		filesFailed,
 	}
 }
 
@@ -652,6 +720,7 @@ async function syncSessionFiles(params: {
 	chunksUpserted: number
 	staleDeleted: number
 	useTransactions: boolean
+	filesFailed: number
 }> {
 	const sessionNamespace: SyncNamespace = {
 		source: "sessions",
@@ -666,11 +735,13 @@ async function syncSessionFiles(params: {
 			chunksUpserted: 0,
 			staleDeleted: 0,
 			useTransactions: params.useTransactions,
+			filesFailed: 0,
 		}
 	}
 
 	log.info(`sync: found ${sessionPaths.length} session files`)
 	let filesProcessed = 0
+	let filesFailed = 0
 	let chunksUpserted = 0
 	let useTransactions = params.useTransactions
 	params.progress?.({
@@ -725,8 +796,8 @@ async function syncSessionFiles(params: {
 			const embeddings: number[][] | null = null
 
 			// Atomic write: delete + upsert + metadata (reuse syncFileAtomically)
-			const { upserted, disableTransactions } = await syncSessionFileAtomically(
-				{
+			const { upserted, disableTransactions, failed } =
+				await syncSessionFileAtomically({
 					client: params.client,
 					useTransactions,
 					chunksCol: params.chunksCol,
@@ -737,17 +808,20 @@ async function syncSessionFiles(params: {
 					model: params.model,
 					embeddings,
 					embeddingStatus,
-				},
-			)
+				})
 			chunksUpserted += upserted
 			if (disableTransactions) {
 				useTransactions = false
 			}
-			filesProcessed++
+			if (failed) {
+				filesFailed++
+			} else {
+				filesProcessed++
+			}
 			params.progress?.({
-				completed: filesProcessed,
+				completed: filesProcessed + filesFailed,
 				total: sessionPaths.length,
-				label: `Indexed conversation transcript ${filesProcessed}/${sessionPaths.length}`,
+				label: `Indexed conversation transcript ${filesProcessed + filesFailed}/${sessionPaths.length}`,
 			})
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err)
@@ -780,9 +854,15 @@ async function syncSessionFiles(params: {
 	}
 
 	log.info(
-		`sync: sessions processed=${filesProcessed} chunks=${chunksUpserted} stale=${staleDeleted}`,
+		`sync: sessions processed=${filesProcessed} chunks=${chunksUpserted} stale=${staleDeleted} failed=${filesFailed}`,
 	)
-	return { filesProcessed, chunksUpserted, staleDeleted, useTransactions }
+	return {
+		filesProcessed,
+		chunksUpserted,
+		staleDeleted,
+		useTransactions,
+		filesFailed,
+	}
 }
 
 /** Atomic session file sync — same pattern as syncFileAtomically but for SessionFileEntry. */
@@ -797,7 +877,11 @@ async function syncSessionFileAtomically(params: {
 	model: string
 	embeddings: number[][] | null
 	embeddingStatus: EmbeddingStatus
-}): Promise<{ upserted: number; disableTransactions: boolean }> {
+}): Promise<{
+	upserted: number
+	disableTransactions: boolean
+	failed: boolean
+}> {
 	const {
 		client,
 		chunksCol,
@@ -812,7 +896,7 @@ async function syncSessionFileAtomically(params: {
 
 	if (!client || !params.useTransactions) {
 		await deleteChunksForPath(chunksCol, entry.path, namespace)
-		const upserted = await upsertChunks(
+		const result = await upsertChunks(
 			chunksCol,
 			entry.path,
 			namespace,
@@ -821,8 +905,24 @@ async function syncSessionFileAtomically(params: {
 			embeddings,
 			embeddingStatus,
 		)
+		if (result.failed > 0) {
+			// Same P0.3 guard as memory files: keep the old metadata hash so the
+			// next sync re-attempts this session transcript.
+			log.warn(
+				`sync: ${result.failed} chunk writes failed for ${entry.path}; keeping old metadata hash so next sync retries`,
+			)
+			return {
+				upserted: result.applied,
+				disableTransactions: false,
+				failed: true,
+			}
+		}
 		await upsertSessionFileMetadata(filesCol, entry, namespace)
-		return { upserted, disableTransactions: false }
+		return {
+			upserted: result.applied,
+			disableTransactions: false,
+			failed: false,
+		}
 	}
 
 	const session = client.startSession()
@@ -844,14 +944,14 @@ async function syncSessionFileAtomically(params: {
 		)
 		upserted = await upsertChunksBatched(chunksCol, session, chunkOps)
 		await upsertSessionFileMetadata(filesCol, entry, namespace, session)
-		return { upserted, disableTransactions: false }
+		return { upserted, disableTransactions: false, failed: false }
 	} catch (err) {
 		if (isTransactionUnsupported(err)) {
 			log.info(
 				"transactions not supported (standalone), falling back for session sync",
 			)
 			await deleteChunksForPath(chunksCol, entry.path, namespace)
-			const upserted = await upsertChunks(
+			const result = await upsertChunks(
 				chunksCol,
 				entry.path,
 				namespace,
@@ -860,8 +960,22 @@ async function syncSessionFileAtomically(params: {
 				embeddings,
 				embeddingStatus,
 			)
+			if (result.failed > 0) {
+				log.warn(
+					`sync: ${result.failed} chunk writes failed for ${entry.path}; keeping old metadata hash so next sync retries`,
+				)
+				return {
+					upserted: result.applied,
+					disableTransactions: true,
+					failed: true,
+				}
+			}
 			await upsertSessionFileMetadata(filesCol, entry, namespace)
-			return { upserted, disableTransactions: true }
+			return {
+				upserted: result.applied,
+				disableTransactions: true,
+				failed: false,
+			}
 		}
 		throw err
 	} finally {

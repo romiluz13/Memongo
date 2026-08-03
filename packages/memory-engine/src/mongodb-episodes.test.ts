@@ -1043,6 +1043,84 @@ describe("mongodb-episodes", () => {
 			expect(result.reason).toBe("session_gap")
 		})
 
+		it("does not absorb events written between window selection and materialization", async () => {
+			// Window selection picks evt-0/evt-1 (session gap before evt-2).
+			const start = new Date("2026-03-15T10:00:00Z")
+			const windowEvents = [
+				{
+					eventId: "evt-0",
+					agentId: AGENT_ID,
+					role: "user",
+					body: "Start",
+					scope: "agent",
+					timestamp: start,
+				},
+				{
+					eventId: "evt-1",
+					agentId: AGENT_ID,
+					role: "assistant",
+					body: "Reply",
+					scope: "agent",
+					timestamp: new Date(start.getTime() + 60_000),
+				},
+				{
+					eventId: "evt-2",
+					agentId: AGENT_ID,
+					role: "user",
+					body: "After gap",
+					scope: "agent",
+					timestamp: new Date(start.getTime() + 60 * 60_000),
+				},
+			]
+			// An event written AFTER the window was selected but still inside the
+			// derived time range: the old time-range re-query absorbed it.
+			const lateEvent = {
+				eventId: "evt-late",
+				agentId: AGENT_ID,
+				role: "assistant",
+				body: "Late arrival",
+				scope: "agent",
+				timestamp: new Date(start.getTime() + 30_000),
+			}
+
+			vi.mocked(getUnconsolidatedEvents).mockResolvedValue(
+				windowEvents as never,
+			)
+			vi.mocked(getEventsByTimeRangeMock).mockResolvedValue([
+				windowEvents[0],
+				lateEvent,
+				windowEvents[1],
+			] as never)
+
+			const episodesCol = createMockCollection({
+				find: vi.fn().mockReturnValue({
+					sort: vi.fn().mockReturnValue({
+						limit: vi.fn().mockReturnValue({
+							toArray: vi.fn().mockResolvedValue([]),
+						}),
+					}),
+				}),
+			})
+			const db = createMockDb({ [`${PREFIX}episodes`]: episodesCol })
+
+			const result = await checkAutoEpisodeTriggers({
+				db,
+				prefix: PREFIX,
+				agentId: AGENT_ID,
+				summarizer: mockSummarizer,
+			})
+
+			expect(result.triggered).toBe(true)
+			expect(result.reason).toBe("session_gap")
+			// The late event must be NEITHER in the episode identity NOR marked
+			// consolidated — it stays unconsolidated for a later episode.
+			expect(result.episode?.sourceEventIds).toEqual(["evt-0", "evt-1"])
+			expect(result.episode?.sourceEventIds).not.toContain("evt-late")
+			const markedCall = vi.mocked(markEventsConsolidated).mock.calls[0]?.[0]
+			expect(markedCall?.eventIds).toEqual(["evt-0", "evt-1"])
+			expect(markedCall?.eventIds).not.toContain("evt-late")
+		})
+
 		it("triggers episode on event count (>50 default)", async () => {
 			// Generate 51 events with no gap > 30min (1-min intervals)
 			const start = new Date("2026-03-15T10:00:00Z")

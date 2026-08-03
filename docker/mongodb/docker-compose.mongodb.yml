@@ -15,7 +15,7 @@
 services:
   # One-time setup: generates keyfile, password files, optional Voyage API key files
   setup-generator:
-    image: alpine:latest
+    image: alpine:3.22
     container_name: memongo-setup
     volumes:
       - auth-files:/auth
@@ -23,8 +23,9 @@ services:
       - ./setup-generator.sh:/setup-generator.sh:ro
       - ./mongot.conf:/templates/mongot.conf:ro
     environment:
-      - MONGOT_PASSWORD=${MONGOT_PASSWORD:-mongotPassword}
-      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin}
+      # Required: fail closed if passwords are not set (no baked defaults).
+      - MONGOT_PASSWORD=${MONGOT_PASSWORD:?set MONGOT_PASSWORD}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:?set ADMIN_PASSWORD}
       - VOYAGE_API_KEY=${VOYAGE_API_KEY:-}
       - VOYAGE_API_QUERY_KEY=${VOYAGE_API_QUERY_KEY:-}
       - VOYAGE_API_INDEXING_KEY=${VOYAGE_API_INDEXING_KEY:-}
@@ -37,10 +38,11 @@ services:
 
   # Tier 1: Standalone MongoDB (simplest - no transactions, no search)
   mongod-standalone:
-    image: mongodb/mongodb-community-server:latest
+    image: mongodb/mongodb-community-server:8.0.13-ubuntu2204
     container_name: memongo-mongod-standalone
     ports:
-      - "${MONGODB_PORT:-27017}:27017"
+      # Loopback-only publish (compose-spec short syntax).
+      - "127.0.0.1:${MONGODB_PORT:-27017}:27017"
     volumes:
       - mongod_standalone_data:/data/db
     profiles:
@@ -54,19 +56,22 @@ services:
 
   # Tier 2 & 3: MongoDB with replica set (used by both replicaset and fullstack profiles)
   mongod:
-    image: mongodb/mongodb-community-server:latest
+    image: mongodb/mongodb-community-server:8.0.13-ubuntu2204
     container_name: memongo-mongod
     environment:
       MONGODB_INITDB_ROOT_USERNAME: admin
-      MONGODB_INITDB_ROOT_PASSWORD: ${ADMIN_PASSWORD:-admin}
-      MONGOT_PASSWORD: ${MONGOT_PASSWORD:-mongotPassword}
-      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin}
+      # Required: fail closed if passwords are not set (no baked defaults).
+      MONGODB_INITDB_ROOT_PASSWORD: ${ADMIN_PASSWORD:?set ADMIN_PASSWORD}
+      MONGOT_PASSWORD: ${MONGOT_PASSWORD:?set MONGOT_PASSWORD}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?set ADMIN_PASSWORD}
+    # replSetName comes from /etc/mongod.conf (rs0). The replica set is
+    # initiated by the one-shot rs-init service below.
     command: >-
       mongod
       --config /etc/mongod.conf
-      --replSetMember=memongo-mongod.memongo-net:27017
     ports:
-      - "${MONGODB_PORT:-27017}:27017"
+      # Loopback-only publish (compose-spec short syntax).
+      - "127.0.0.1:${MONGODB_PORT:-27017}:27017"
     volumes:
       - mongod_data:/data/db
       - mongod_configdb:/data/configdb
@@ -85,16 +90,39 @@ services:
       - replicaset
       - fullstack
 
+  # One-shot replica set initiator: mongod.conf sets replSetName rs0 but
+  # nothing else initiates it — without rs.initiate there is no primary, no
+  # oplog, no transactions, and mongot has nothing to sync from.
+  # Idempotent: an already-initialized set is treated as success.
+  rs-init:
+    image: mongodb/mongodb-community-server:8.0.13-ubuntu2204
+    container_name: memongo-rs-init
+    environment:
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?set ADMIN_PASSWORD}
+    depends_on:
+      mongod:
+        condition: service_healthy
+    volumes:
+      - ./rs-init.sh:/rs-init.sh:ro
+    networks:
+      - memongo-net
+    command: ["/bin/bash", "/rs-init.sh"]
+    restart: "no"
+    profiles:
+      - replicaset
+      - fullstack
+
   # Tier 3: mongot search engine (fullstack only)
   mongot:
-    image: mongodb/mongodb-community-search:latest
+    image: mongodb/mongodb-community-search:1.70.1
     container_name: memongo-mongot
     environment:
       MONGOT_EMBEDDING_PROVIDER_ENDPOINT: ${MONGOT_EMBEDDING_PROVIDER_ENDPOINT:-https://ai.mongodb.com/v1/embeddings}
     ports:
-      - "${MONGOT_GRPC_PORT:-27028}:27028"
-      - "${MONGOT_HEALTH_PORT:-8080}:8080"
-      - "${MONGOT_METRICS_PORT:-9946}:9946"
+      # Loopback-only publish (compose-spec short syntax).
+      - "127.0.0.1:${MONGOT_GRPC_PORT:-27028}:27028"
+      - "127.0.0.1:${MONGOT_HEALTH_PORT:-8080}:8080"
+      - "127.0.0.1:${MONGOT_METRICS_PORT:-9946}:9946"
     volumes:
       - mongot_data:/data/mongot
       - ./.runtime/mongot.generated.yml:/mongot-community/config.default.yml:ro
@@ -102,8 +130,10 @@ services:
     networks:
       - memongo-net
     depends_on:
-      mongod:
-        condition: service_healthy
+      # mongot syncs from the replica set oplog, so it must wait until
+      # rs-init has actually initiated rs0 (not just mongod being up).
+      rs-init:
+        condition: service_completed_successfully
     healthcheck:
       test:
         [

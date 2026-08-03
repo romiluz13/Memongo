@@ -1,0 +1,553 @@
+import { beforeEach, describe, expect, it, vi } from "vitest"
+import { MemongoClient, MemongoClientError } from "./client.js"
+
+/**
+ * First suite for the client package (P0.1 seeds it; P1.3 builds the full
+ * contract suite). fetch is stubbed globally — no server is needed.
+ */
+describe("MemongoClient write idempotency", () => {
+	beforeEach(() => {
+		vi.unstubAllGlobals()
+	})
+
+	function stubFetchSequence(
+		statuses: number[],
+		calls: Array<{ url: string; init: RequestInit }>,
+	) {
+		let i = 0
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (url: string, init?: RequestInit) => {
+				calls.push({ url: String(url), init: init ?? {} })
+				const status = statuses[Math.min(i, statuses.length - 1)]
+				i += 1
+				if (status === 200) {
+					return new Response(
+						JSON.stringify({ ok: true, eventId: "evt-1", chunkCreated: true }),
+						{
+							status: 200,
+							headers: { "Content-Type": "application/json" },
+						},
+					)
+				}
+				return new Response("upstream busy", { status })
+			}),
+		)
+	}
+
+	it("sends customId in the body and as a stable Idempotency-Key header across retries", async () => {
+		const calls: Array<{ url: string; init: RequestInit }> = []
+		stubFetchSequence([503, 200], calls)
+
+		const client = new MemongoClient({
+			baseUrl: "http://127.0.0.1:3100",
+			maxRetries: 1,
+		})
+		await client.add({ content: "hello", customId: "cid-1" })
+
+		expect(calls).toHaveLength(2)
+		for (const { url, init } of calls) {
+			expect(url).toBe("http://127.0.0.1:3100/v1/add")
+			expect((init.headers as Record<string, string>)["Idempotency-Key"]).toBe(
+				"cid-1",
+			)
+			expect(JSON.parse(String(init.body)).customId).toBe("cid-1")
+		}
+	})
+
+	it("sends fusionMethod on searchKB when provided (P0.10)", async () => {
+		const calls: Array<{ url: string; init: RequestInit }> = []
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (url: string, init?: RequestInit) => {
+				calls.push({ url: String(url), init: init ?? {} })
+				return new Response(JSON.stringify({ results: [] }), {
+					status: 200,
+					headers: { "Content-Type": "application/json" },
+				})
+			}),
+		)
+
+		const client = new MemongoClient({ baseUrl: "http://127.0.0.1:3100" })
+		await client.searchKB({
+			query: "architecture",
+			fusionMethod: "scoreFusion",
+		})
+
+		expect(calls).toHaveLength(1)
+		expect(JSON.parse(String(calls[0].init.body)).fusionMethod).toBe(
+			"scoreFusion",
+		)
+	})
+
+	it("generates one UUIDv4 key per logical write and reuses it across every retry", async () => {
+		const calls: Array<{ url: string; init: RequestInit }> = []
+		stubFetchSequence([503, 503, 200], calls)
+
+		const client = new MemongoClient({
+			baseUrl: "http://127.0.0.1:3100",
+			maxRetries: 2,
+		})
+		await client.writeEvent({ role: "user", body: "generated key please" })
+
+		expect(calls).toHaveLength(3)
+		const keys = calls.map(
+			({ init }) => (init.headers as Record<string, string>)["Idempotency-Key"],
+		)
+		const uuidV4 =
+			/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+		for (const key of keys) {
+			expect(key).toMatch(uuidV4)
+		}
+		expect(new Set(keys).size).toBe(1)
+		// The same key travels in the body so the API accepts either channel.
+		for (const { init } of calls) {
+			expect(JSON.parse(String(init.body)).customId).toBe(keys[0])
+		}
+	})
+})
+
+/**
+ * P1.3: the client must not be a lossy filter. Every scope/scopeRef the
+ * caller supplies reaches the wire; a scoped API key depends on this
+ * (missing scope fields are a guaranteed 403 on scoped routes).
+ */
+describe("MemongoClient scope forwarding (P1.3)", () => {
+	beforeEach(() => {
+		vi.unstubAllGlobals()
+	})
+
+	function stubJsonFetch(
+		calls: Array<{ url: string; init: RequestInit }>,
+		payload: unknown = { ok: true },
+	) {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (url: string, init?: RequestInit) => {
+				calls.push({ url: String(url), init: init ?? {} })
+				return new Response(JSON.stringify(payload), {
+					status: 200,
+					headers: { "Content-Type": "application/json" },
+				})
+			}),
+		)
+	}
+
+	function lastBody(
+		calls: Array<{ url: string; init: RequestInit }>,
+	): Record<string, unknown> {
+		return JSON.parse(String(calls.at(-1)?.init.body)) as Record<
+			string,
+			unknown
+		>
+	}
+
+	it("forwards scope/scopeRef/entityContext on add", async () => {
+		const calls: Array<{ url: string; init: RequestInit }> = []
+		stubJsonFetch(calls, { ok: true, eventId: "e1", chunkCreated: false })
+
+		const client = new MemongoClient({ baseUrl: "http://127.0.0.1:3100" })
+		await client.add({
+			content: "scoped note",
+			scope: "tenant",
+			scopeRef: "ref-A",
+			entityContext: "entity ctx",
+		})
+
+		const body = lastBody(calls)
+		expect(body.scope).toBe("tenant")
+		expect(body.scopeRef).toBe("ref-A")
+		expect(body.entityContext).toBe("entity ctx")
+	})
+
+	it("forwards scope/scopeRef on search", async () => {
+		const calls: Array<{ url: string; init: RequestInit }> = []
+		stubJsonFetch(calls, { results: [] })
+
+		const client = new MemongoClient({ baseUrl: "http://127.0.0.1:3100" })
+		await client.search({ query: "q", scope: "workspace", scopeRef: "ref-W" })
+
+		expect(calls[0].url).toBe("http://127.0.0.1:3100/v1/search")
+		const body = lastBody(calls)
+		expect(body.scope).toBe("workspace")
+		expect(body.scopeRef).toBe("ref-W")
+	})
+
+	it("forwards scope/scopeRef on searchDetailed", async () => {
+		const calls: Array<{ url: string; init: RequestInit }> = []
+		stubJsonFetch(calls, { results: [], metadata: {} })
+
+		const client = new MemongoClient({ baseUrl: "http://127.0.0.1:3100" })
+		await client.searchDetailed({ query: "q", scope: "global", limit: 3 })
+
+		expect(calls[0].url).toBe("http://127.0.0.1:3100/v1/search-detailed")
+		const body = lastBody(calls)
+		expect(body.scope).toBe("global")
+		expect(body.maxResults).toBeUndefined()
+	})
+
+	it("forwards scope/scopeRef on searchKB (scoped keys need scopeRef here)", async () => {
+		const calls: Array<{ url: string; init: RequestInit }> = []
+		stubJsonFetch(calls, { results: [] })
+
+		const client = new MemongoClient({ baseUrl: "http://127.0.0.1:3100" })
+		await client.searchKB({
+			query: "q",
+			scope: "tenant",
+			scopeRef: "ref-A",
+		})
+
+		expect(calls[0].url).toBe("http://127.0.0.1:3100/v1/search-kb")
+		const body = lastBody(calls)
+		expect(body.scope).toBe("tenant")
+		expect(body.scopeRef).toBe("ref-A")
+	})
+
+	it("forwards scope/scopeRef on recallConversation", async () => {
+		const calls: Array<{ url: string; init: RequestInit }> = []
+		stubJsonFetch(calls, { results: [], metadata: {} })
+
+		const client = new MemongoClient({ baseUrl: "http://127.0.0.1:3100" })
+		await client.recallConversation({
+			query: "q",
+			scope: "session",
+			scopeRef: "session:s1",
+		})
+
+		expect(calls[0].url).toBe("http://127.0.0.1:3100/v1/recall-conversation")
+		const body = lastBody(calls)
+		expect(body.scope).toBe("session")
+		expect(body.scopeRef).toBe("session:s1")
+	})
+
+	it("forwards scope/scopeRef on extract", async () => {
+		const calls: Array<{ url: string; init: RequestInit }> = []
+		stubJsonFetch(calls, { ok: true, jobId: "j1", scheduled: true })
+
+		const client = new MemongoClient({ baseUrl: "http://127.0.0.1:3100" })
+		await client.extract({
+			eventId: "evt-1",
+			scope: "tenant",
+			scopeRef: "ref-A",
+		})
+
+		expect(calls[0].url).toBe("http://127.0.0.1:3100/v1/extract")
+		const body = lastBody(calls)
+		expect(body.scope).toBe("tenant")
+		expect(body.scopeRef).toBe("ref-A")
+	})
+
+	it("forwards scopeRef on scanNovelty", async () => {
+		const calls: Array<{ url: string; init: RequestInit }> = []
+		stubJsonFetch(calls, { events: [], scannedCount: 0, agentId: "main" })
+
+		const client = new MemongoClient({ baseUrl: "http://127.0.0.1:3100" })
+		await client.scanNovelty({
+			agentId: "main",
+			scope: "tenant",
+			scopeRef: "ref-A",
+		})
+
+		expect(calls[0].url).toBe("http://127.0.0.1:3100/v1/novelty-scan")
+		const body = lastBody(calls)
+		expect(body.scope).toBe("tenant")
+		expect(body.scopeRef).toBe("ref-A")
+	})
+
+	it("throws on unserializable caller fields instead of dropping them", async () => {
+		const calls: Array<{ url: string; init: RequestInit }> = []
+		stubJsonFetch(calls)
+
+		const client = new MemongoClient({ baseUrl: "http://127.0.0.1:3100" })
+		const circular: Record<string, unknown> = {}
+		circular.self = circular
+
+		await expect(
+			client.add({
+				content: "x",
+				metadata: circular as Record<string, string>,
+			}),
+		).rejects.toThrow()
+		expect(calls).toHaveLength(0)
+	})
+})
+
+describe("MemongoClient error envelope (P1.3)", () => {
+	beforeEach(() => {
+		vi.unstubAllGlobals()
+	})
+
+	it("parses {error:{code,message}} into code and apiMessage", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(
+				async () =>
+					new Response(
+						JSON.stringify({
+							error: { code: "VALIDATION_ERROR", message: "query is required" },
+						}),
+						{ status: 400, headers: { "Content-Type": "application/json" } },
+					),
+			),
+		)
+
+		const client = new MemongoClient({ baseUrl: "http://127.0.0.1:3100" })
+		const err = (await client
+			.search({ query: "q" })
+			.catch((e: unknown) => e)) as MemongoClientError
+
+		expect(err).toBeInstanceOf(MemongoClientError)
+		expect(err.status).toBe(400)
+		expect(err.code).toBe("VALIDATION_ERROR")
+		expect(err.apiMessage).toBe("query is required")
+		expect(err.message).toBe(
+			"Memongo API 400 VALIDATION_ERROR: query is required",
+		)
+	})
+
+	it("keeps the raw-text behavior for non-envelope bodies", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => new Response("boom", { status: 500 })),
+		)
+
+		const client = new MemongoClient({ baseUrl: "http://127.0.0.1:3100" })
+		const err = (await client
+			.status()
+			.catch((e: unknown) => e)) as MemongoClientError
+
+		expect(err).toBeInstanceOf(MemongoClientError)
+		expect(err.code).toBeUndefined()
+		expect(err.apiMessage).toBeUndefined()
+		expect(err.message).toBe("Memongo API 500: boom")
+	})
+})
+
+describe("MemongoClient resilience (P1.3)", () => {
+	beforeEach(() => {
+		vi.unstubAllGlobals()
+	})
+
+	it("honors Retry-After on 429 before retrying", async () => {
+		vi.useFakeTimers()
+		try {
+			const calls: Array<{ url: string; init: RequestInit }> = []
+			let i = 0
+			vi.stubGlobal(
+				"fetch",
+				vi.fn(async (url: string, init?: RequestInit) => {
+					calls.push({ url: String(url), init: init ?? {} })
+					i += 1
+					if (i === 1) {
+						return new Response("rate limited", {
+							status: 429,
+							headers: { "Retry-After": "2" },
+						})
+					}
+					return new Response(JSON.stringify({ results: [] }), {
+						status: 200,
+						headers: { "Content-Type": "application/json" },
+					})
+				}),
+			)
+
+			const client = new MemongoClient({
+				baseUrl: "http://127.0.0.1:3100",
+				maxRetries: 1,
+			})
+			const promise = client.search({ query: "q" })
+			// Before the server-mandated 2s elapse, no retry may fire.
+			await vi.advanceTimersByTimeAsync(1999)
+			expect(calls).toHaveLength(1)
+			await vi.advanceTimersByTimeAsync(1)
+			await promise
+			expect(calls).toHaveLength(2)
+		} finally {
+			vi.useRealTimers()
+		}
+	})
+
+	it("caps an absurd Retry-After instead of parking the client", async () => {
+		vi.useFakeTimers()
+		try {
+			let i = 0
+			vi.stubGlobal(
+				"fetch",
+				vi.fn(async () => {
+					i += 1
+					if (i === 1) {
+						return new Response("rate limited", {
+							status: 429,
+							headers: { "Retry-After": "3600" },
+						})
+					}
+					return new Response(JSON.stringify({ results: [] }), {
+						status: 200,
+						headers: { "Content-Type": "application/json" },
+					})
+				}),
+			)
+
+			const client = new MemongoClient({
+				baseUrl: "http://127.0.0.1:3100",
+				maxRetries: 1,
+			})
+			const promise = client.search({ query: "q" })
+			// The cap is 10s: advancing 10s must complete the retry even though
+			// the server asked for an hour.
+			await vi.advanceTimersByTimeAsync(10_000)
+			await promise
+			expect(i).toBe(2)
+		} finally {
+			vi.useRealTimers()
+		}
+	})
+
+	it("aborts a hung request after timeoutMs", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(
+				(_url: string, init?: RequestInit) =>
+					new Promise<Response>((_resolve, reject) => {
+						init?.signal?.addEventListener("abort", () => {
+							reject(init.signal?.reason ?? new Error("aborted"))
+						})
+					}),
+			),
+		)
+
+		const client = new MemongoClient({
+			baseUrl: "http://127.0.0.1:3100",
+			timeoutMs: 20,
+		})
+		const err = await client.status().catch((e: unknown) => e)
+		expect(err).toBeInstanceOf(Error)
+		expect((err as Error).name).toBe("TimeoutError")
+	})
+
+	it("works when process is undefined (browser/edge runtimes)", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(
+				async () =>
+					new Response(JSON.stringify({ results: [] }), {
+						status: 200,
+						headers: { "Content-Type": "application/json" },
+					}),
+			),
+		)
+		vi.stubGlobal("process", undefined)
+
+		const client = new MemongoClient({ baseUrl: "http://127.0.0.1:3100" })
+		await expect(client.search({ query: "q" })).resolves.toEqual({
+			results: [],
+		})
+	})
+})
+
+describe("MemongoClient 404 -> null (P1.3)", () => {
+	beforeEach(() => {
+		vi.unstubAllGlobals()
+	})
+
+	function stub404() {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(
+				async () =>
+					new Response(
+						JSON.stringify({
+							error: { code: "NOT_FOUND", message: "not found" },
+						}),
+						{ status: 404, headers: { "Content-Type": "application/json" } },
+					),
+			),
+		)
+	}
+
+	it("getJob returns null on 404 (type said | null all along)", async () => {
+		stub404()
+		const client = new MemongoClient({ baseUrl: "http://127.0.0.1:3100" })
+		await expect(client.getJob({ jobId: "missing" })).resolves.toBeNull()
+	})
+
+	it("getRecallTrace returns null on 404", async () => {
+		stub404()
+		const client = new MemongoClient({ baseUrl: "http://127.0.0.1:3100" })
+		await expect(
+			client.getRecallTrace({ traceId: "missing" }),
+		).resolves.toBeNull()
+	})
+
+	it("getJob still throws on non-404 errors", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => new Response("boom", { status: 500 })),
+		)
+		const client = new MemongoClient({ baseUrl: "http://127.0.0.1:3100" })
+		await expect(client.getJob({ jobId: "x" })).rejects.toBeInstanceOf(
+			MemongoClientError,
+		)
+	})
+})
+
+describe("MemongoClient silent option (P1.5)", () => {
+	beforeEach(() => {
+		vi.unstubAllGlobals()
+	})
+
+	it("returns {results: []} on HTTP 500 instead of throwing", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => new Response("boom", { status: 500 })),
+		)
+		const client = new MemongoClient({
+			baseUrl: "http://127.0.0.1:3100",
+			silent: true,
+		})
+		await expect(client.search({ query: "anything" })).resolves.toEqual({
+			results: [],
+		})
+	})
+
+	it("returns an empty context bundle on HTTP 500 (middleware injects nothing)", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => new Response("boom", { status: 500 })),
+		)
+		const client = new MemongoClient({
+			baseUrl: "http://127.0.0.1:3100",
+			silent: true,
+		})
+		const bundle = await client.buildContextBundle({ agentId: "a" })
+		expect(bundle.rendered).toBe("")
+		expect(bundle.sections).toEqual([])
+	})
+
+	it("returns empty results on network failure (fetch rejects)", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => {
+				throw new Error("ECONNREFUSED")
+			}),
+		)
+		const client = new MemongoClient({
+			baseUrl: "http://127.0.0.1:3100",
+			silent: true,
+		})
+		await expect(client.searchDetailed({ query: "x" })).resolves.toMatchObject({
+			results: [],
+		})
+	})
+
+	it("still throws on HTTP 500 when silent is not set (strictly opt-in)", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => new Response("boom", { status: 500 })),
+		)
+		const client = new MemongoClient({ baseUrl: "http://127.0.0.1:3100" })
+		await expect(client.search({ query: "anything" })).rejects.toBeInstanceOf(
+			MemongoClientError,
+		)
+	})
+})

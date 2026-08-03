@@ -1,6 +1,7 @@
 import type { Collection, Document } from "mongodb"
 import {
 	type MemoryMongoDBEmbeddingMode,
+	type MemoryMongoDBFusionMethod,
 	createSubsystemLogger,
 } from "@memongo/lib"
 import { summarizeExplain } from "./mongodb-relevance.js"
@@ -8,6 +9,7 @@ import type { DetectedCapabilities } from "./mongodb-schema.js"
 import {
 	buildVectorSearchStage,
 	MONGODB_MAX_NUM_CANDIDATES,
+	normalizeAndFilterRankFusionResults,
 	runSearchAggregateWithRetry,
 	splitAtlasSearchFilter,
 	type SearchExplainOptions,
@@ -15,6 +17,12 @@ import {
 import type { MemorySearchResult } from "./types.js"
 
 const log = createSubsystemLogger("memory:mongodb:kb-search")
+
+// KB hybrid lane weights — the same 0.7/0.3 split the general search path
+// uses, kept as named constants so the score normalization and the pipeline
+// can never drift apart.
+const KB_FUSION_VECTOR_WEIGHT = 0.7
+const KB_FUSION_TEXT_WEIGHT = 0.3
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -117,6 +125,12 @@ export async function searchKB(
 		embeddingMode: MemoryMongoDBEmbeddingMode
 		numCandidates?: number
 		explain?: SearchExplainOptions
+		/**
+		 * Server-side fusion preference, mirroring the general search path:
+		 * "scoreFusion" tries $scoreFusion first (MongoDB 8.3+), "rankFusion"
+		 * goes straight to $rankFusion, "js-merge" skips server fusion.
+		 */
+		fusionMethod?: MemoryMongoDBFusionMethod
 	},
 ): Promise<MemorySearchResult[]> {
 	const canVector =
@@ -141,98 +155,157 @@ export async function searchKB(
 		MONGODB_MAX_NUM_CANDIDATES,
 	)
 
-	// F12: Try hybrid search (rankFusion) when both vector and text are available
-	if (canVector && canText && opts.capabilities.rankFusion) {
-		try {
-			const { compoundFilter, postMatch } = splitAtlasSearchFilter(chunkFilter)
-			const vsStage = buildVectorSearchStage({
-				queryVector,
-				queryText: query,
-				embeddingMode: opts.embeddingMode,
-				indexName: opts.vectorIndexName,
-				numCandidates,
-				limit: opts.maxResults,
-				filter: chunkFilter,
-				returnStoredSource: opts.capabilities.storedSource,
-			})
+	// F12/P0.10: server-side hybrid fusion, mirroring the general search
+	// path's waterfall (scoreFusion → rankFusion → lane fallbacks). Fusion is
+	// a first-class option (`fusionMethod`), resolved by the manager from
+	// `mongodb.fusionMethod`.
+	const fusionMethod = opts.fusionMethod ?? "rankFusion"
 
-			if (vsStage) {
-				const pipeline: Document[] = [
-					{
+	const runKbFusion = async (
+		method: "scoreFusion" | "rankFusion",
+	): Promise<MemorySearchResult[] | null> => {
+		const { compoundFilter, postMatch } = splitAtlasSearchFilter(chunkFilter)
+		const vsStage = buildVectorSearchStage({
+			queryVector,
+			queryText: query,
+			embeddingMode: opts.embeddingMode,
+			indexName: opts.vectorIndexName,
+			numCandidates,
+			limit: opts.maxResults,
+			filter: chunkFilter,
+			returnStoredSource: opts.capabilities.storedSource,
+		})
+		if (!vsStage) {
+			return null
+		}
+
+		const textPipeline: Document[] = [
+			{
+				$search: {
+					index: opts.textIndexName,
+					compound: {
+						must: [{ text: { query, path: "text" } }],
+						...(compoundFilter ? { filter: compoundFilter } : {}),
+					},
+				},
+			},
+			...(postMatch ? [{ $match: postMatch }] : []),
+			{ $limit: opts.maxResults * 4 },
+		]
+		const weights = {
+			vector: KB_FUSION_VECTOR_WEIGHT,
+			text: KB_FUSION_TEXT_WEIGHT,
+		}
+		// Locked decision #9: $scoreFusion (8.3+) uses minMaxScaler — the only
+		// officially documented normalization that yields a comparable [0,1]
+		// fused score, so the caller's minScore threshold applies directly.
+		const fusionStage =
+			method === "scoreFusion"
+				? {
+						$scoreFusion: {
+							input: {
+								pipelines: {
+									vector: [{ $vectorSearch: vsStage }],
+									text: textPipeline,
+								},
+								normalization: "minMaxScaler",
+							},
+							combination: { weights, method: "avg" },
+						},
+					}
+				: {
 						$rankFusion: {
 							input: {
 								pipelines: {
 									vector: [{ $vectorSearch: vsStage }],
-									text: [
-										{
-											$search: {
-												index: opts.textIndexName,
-												compound: {
-													must: [{ text: { query, path: "text" } }],
-													...(compoundFilter ? { filter: compoundFilter } : {}),
-												},
-											},
-										},
-										...(postMatch ? [{ $match: postMatch }] : []),
-										{ $limit: opts.maxResults * 4 },
-									],
+									text: textPipeline,
 								},
 							},
-							combination: {
-								weights: { vector: 0.7, text: 0.3 },
-							},
+							combination: { weights },
 						},
-					},
-					{ $limit: opts.maxResults },
-					{
-						$project: {
-							_id: 0,
-							path: 1,
-							startLine: 1,
-							endLine: 1,
-							text: 1,
-							docId: 1,
-							updatedAt: 1,
-							score: { $meta: "score" },
-						},
-					},
-				]
-
-				if (opts.explain?.enabled) {
-					try {
-						const cursor = kbChunks.aggregate(pipeline) as unknown as {
-							explain?: (verbosity?: string) => Promise<unknown>
-						}
-						if (typeof cursor.explain === "function") {
-							const explained = await cursor.explain("executionStats")
-							opts.explain.onArtifact?.({
-								artifactType: "fusionExplain",
-								summary: {
-									source: "kb",
-									method: "rankFusion",
-									...summarizeExplain(explained),
-								},
-								...(opts.explain.deep ? { rawExplain: explained } : {}),
-							})
-						}
-					} catch {
-						log.warn("KB search explain failed")
 					}
-				}
+		const pipeline: Document[] = [
+			fusionStage,
+			{ $limit: opts.maxResults },
+			{
+				$project: {
+					_id: 0,
+					path: 1,
+					startLine: 1,
+					endLine: 1,
+					text: 1,
+					docId: 1,
+					updatedAt: 1,
+					score: { $meta: "score" },
+				},
+			},
+		]
 
-				const docs = await runSearchAggregateWithRetry(kbChunks, pipeline)
-				const results = docs
-					.map(toKBSearchResult)
-					.filter((r) => r.score >= opts.minScore)
-				if (results.length > 0) {
+		if (opts.explain?.enabled) {
+			try {
+				const cursor = kbChunks.aggregate(pipeline) as unknown as {
+					explain?: (verbosity?: string) => Promise<unknown>
+				}
+				if (typeof cursor.explain === "function") {
+					const explained = await cursor.explain("executionStats")
+					opts.explain.onArtifact?.({
+						artifactType: "fusionExplain",
+						summary: {
+							source: "kb",
+							method,
+							...summarizeExplain(explained),
+						},
+						...(opts.explain.deep ? { rawExplain: explained } : {}),
+					})
+				}
+			} catch {
+				log.warn("KB search explain failed")
+			}
+		}
+
+		const docs = await runSearchAggregateWithRetry(kbChunks, pipeline)
+		const results = docs.map(toKBSearchResult)
+		if (method === "scoreFusion") {
+			// minMaxScaler output is already [0,1] — threshold directly.
+			return results.filter((r) => r.score >= opts.minScore)
+		}
+		// P0.10: raw RRF scores top out at Σweights/61 ≈ 0.0164 — rescale into
+		// [0,1] exactly like the general path before thresholding, or the lane
+		// silently empties under the default minScore.
+		return normalizeAndFilterRankFusionResults(
+			results,
+			opts.minScore,
+			KB_FUSION_VECTOR_WEIGHT,
+			KB_FUSION_TEXT_WEIGHT,
+		)
+	}
+
+	if (canVector && canText && fusionMethod !== "js-merge") {
+		if (fusionMethod === "scoreFusion" && opts.capabilities.scoreFusion) {
+			try {
+				const results = await runKbFusion("scoreFusion")
+				if (results && results.length > 0) {
 					return results
 				}
+			} catch (err) {
+				const msg = err instanceof Error ? err.message : String(err)
+				log.warn(
+					`KB hybrid search ($scoreFusion) failed, falling back to $rankFusion: ${msg}`,
+				)
 			}
-		} catch (err) {
-			const msg = err instanceof Error ? err.message : String(err)
-			log.warn(
-				`KB hybrid search ($rankFusion) failed, falling back to vector-only: ${msg}`,
-			)
+		}
+		if (opts.capabilities.rankFusion) {
+			try {
+				const results = await runKbFusion("rankFusion")
+				if (results && results.length > 0) {
+					return results
+				}
+			} catch (err) {
+				const msg = err instanceof Error ? err.message : String(err)
+				log.warn(
+					`KB hybrid search ($rankFusion) failed, falling back to vector-only: ${msg}`,
+				)
+			}
 		}
 	}
 

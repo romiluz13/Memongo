@@ -5,6 +5,8 @@ import {
 	type MemoryMongoDBEmbeddingMode,
 	type MemoryMongoDBFusionMethod,
 	type MemoryMongoDBRecallProfile,
+	type MemoryScope,
+	applyMongoDbForceUriOverride,
 	createSubsystemLogger,
 	resolveUserPath,
 } from "@memongo/lib"
@@ -126,12 +128,12 @@ const DEFAULT_RELEVANCE_DATASET = "~/.memongo/relevance/golden.jsonl"
 const DEFAULT_MONGODB_PROFILE: MemoryMongoDBDeploymentProfile =
 	"atlas-local-preview"
 const DEFAULT_MONGODB_EMBEDDING_MODE: MemoryMongoDBEmbeddingMode = "automated"
-
-function sanitizeName(input: string): string {
-	const lower = input.toLowerCase().replace(/[^a-z0-9-]+/g, "-")
-	const trimmed = lower.replace(/^-+|-+$/g, "")
-	return trimmed || "collection"
-}
+/**
+ * P2.1: shared default collection prefix. All agents share one physical
+ * collection set; per-agent isolation stays logical (agentId leads every
+ * document and index). Opt out with an explicit prefix.
+ */
+export const DEFAULT_MONGODB_COLLECTION_PREFIX = "memongo_"
 
 export function resolveMemoryBackendConfig(params: {
 	cfg: MemongoConfig
@@ -148,13 +150,19 @@ export function resolveMemoryBackendConfig(params: {
 
 	if (backend === "mongodb") {
 		const mongoCfg = params.cfg.memory?.mongodb
-		const forceUri = process.env.MEMONGO_FORCE_MONGODB_URI?.trim()
-		const uri =
-			forceUri ||
-			(typeof mongoCfg?.uri === "string" && mongoCfg.uri.trim()
+		// P2.6: one URI precedence rule, shared with the bridge via
+		// applyMongoDbForceUriOverride (@memongo/lib): MEMONGO_FORCE_MONGODB_URI
+		// wins over every other URI source, in every layer. Among the
+		// non-force sources an explicit memory.mongodb.uri is treated as
+		// intentional and beats the plain MEMONGO_MONGODB_URI fallback.
+		const configuredUri =
+			typeof mongoCfg?.uri === "string" && mongoCfg.uri.trim()
 				? mongoCfg.uri.trim()
-				: undefined) ||
-			process.env.MEMONGO_MONGODB_URI?.trim()
+				: undefined
+		const uri = applyMongoDbForceUriOverride(
+			process.env.MEMONGO_FORCE_MONGODB_URI,
+			configuredUri || process.env.MEMONGO_MONGODB_URI?.trim(),
+		)
 		if (!uri) {
 			throw new Error(
 				[
@@ -221,12 +229,18 @@ export function resolveMemoryBackendConfig(params: {
 					(process.env.MEMONGO_MONGODB_DATABASE?.trim() || undefined) ??
 					mongoCfg?.database ??
 					"memongo",
+				// P2.1: the default collection prefix is the shared `memongo_`
+				// prefix — every document and index already leads with agentId, so
+				// per-agent physical isolation is opt-in via an explicit prefix
+				// (config `memory.mongodb.collectionPrefix` or
+				// MEMONGO_MONGODB_COLLECTION_PREFIX). See
+				// scripts/migrate-to-shared-prefix.ts for existing deployments.
 				collectionPrefix:
 					(envCollectionPrefix && envCollectionPrefix.length > 0
 						? envCollectionPrefix
 						: undefined) ??
 					mongoCfg?.collectionPrefix ??
-					`memongo_${sanitizeName(params.agentId)}_`,
+					DEFAULT_MONGODB_COLLECTION_PREFIX,
 				deploymentProfile,
 				embeddingMode,
 				fusionMethod: resolveEnvFusionMethod(
@@ -695,4 +709,41 @@ function resolveEnvRecallProfile(
 		return raw
 	}
 	return fallback
+}
+
+const MEMORY_SCOPES: readonly MemoryScope[] = [
+	"session",
+	"user",
+	"agent",
+	"workspace",
+	"tenant",
+	"global",
+]
+
+/**
+ * P1.4: resolve `MEMONGO_SEARCH_DEFAULT_SCOPE` — the fallback scope for
+ * SEARCH reads (searchV2 and its callers) when the caller passes no explicit
+ * scope. Writes are unaffected. Lets single-user deployments search `global`
+ * (or `user`) by default instead of the multi-tenant `agent` default, so
+ * memories written under broader scopes stop being invisible.
+ *
+ * Unlike the fusion/recall envs above (which silently fall back), an invalid
+ * value here throws — a typo'd scope would silently change retrieval
+ * behavior, so it fails fast like the enum config settings in this file.
+ * Note: scopes that require a reference (session/user/tenant) still need a
+ * matching scopeRef at the call site; `global` and `workspace` work as-is.
+ */
+export function resolveSearchDefaultScope(
+	envValue: string | undefined,
+): MemoryScope {
+	const raw = envValue?.trim()
+	if (!raw) {
+		return "agent"
+	}
+	if ((MEMORY_SCOPES as readonly string[]).includes(raw)) {
+		return raw as MemoryScope
+	}
+	throw new Error(
+		`MEMONGO_SEARCH_DEFAULT_SCOPE "${envValue}" is not a valid memory scope. Use one of: ${MEMORY_SCOPES.join(", ")}.`,
+	)
 }

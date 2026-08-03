@@ -458,6 +458,72 @@ describe("writeEvent", () => {
 		expect(doc.scope).toBe("agent")
 	})
 
+	// P2.3: writes share the search identity rule — an implicit sessionId lands
+	// the event in the session scope a sessionKey search reads from.
+	it("P2.3: a sessionId with no explicit scope lands in the session scope", async () => {
+		const col = createMockEventsCol()
+		vi.mocked(eventsCollection).mockReturnValue(col)
+
+		const result = await writeEvent({
+			db: mockDb(),
+			prefix: "test_",
+			event: {
+				agentId: "agent-1",
+				role: "user",
+				body: "session-scoped hello",
+				sessionId: "s1",
+			} as Parameters<typeof writeEvent>[0]["event"],
+		})
+
+		const [, update] = vi.mocked(col.updateOne).mock.calls[0]
+		const doc = (update as Record<string, Record<string, unknown>>).$setOnInsert
+		expect(doc.scope).toBe("session")
+		expect(doc.scopeRef).toBe("session:s1")
+		expect(result.scopeRef).toBe("session:s1")
+	})
+
+	it("P2.3: explicit scope still wins over an implicit sessionId", async () => {
+		const col = createMockEventsCol()
+		vi.mocked(eventsCollection).mockReturnValue(col)
+
+		await writeEvent({
+			db: mockDb(),
+			prefix: "test_",
+			event: {
+				agentId: "agent-1",
+				role: "user",
+				body: "explicit agent scope with a session id",
+				scope: "agent",
+				sessionId: "s1",
+			},
+		})
+
+		const [, update] = vi.mocked(col.updateOne).mock.calls[0]
+		const doc = (update as Record<string, Record<string, unknown>>).$setOnInsert
+		expect(doc.scope).toBe("agent")
+		expect(doc.scopeRef).toBe("agent:agent-1")
+	})
+
+	it("stores idempotencyKey on the event document when provided", async () => {
+		const col = createMockEventsCol()
+		vi.mocked(eventsCollection).mockReturnValue(col)
+
+		await writeEvent({
+			db: mockDb(),
+			prefix: "test_",
+			event: {
+				agentId: "agent-1",
+				role: "user",
+				body: "Hello",
+				idempotencyKey: "key-9",
+			} as Parameters<typeof writeEvent>[0]["event"],
+		})
+
+		const [, update] = vi.mocked(col.updateOne).mock.calls[0]
+		const doc = (update as Record<string, Record<string, unknown>>).$setOnInsert
+		expect(doc.idempotencyKey).toBe("key-9")
+	})
+
 	it("preserves optional fields when provided", async () => {
 		const col = createMockEventsCol()
 		vi.mocked(eventsCollection).mockReturnValue(col)

@@ -1,6 +1,6 @@
 {
 	"name": "@memongo/memory-bridge",
-	"version": "2.0.0",
+	"version": "2.0.1",
 	"description": "Memongo bridge: stable facade for the memory engine used by HTTP API and MCP",
 	"type": "module",
 	"license": "Apache-2.0",
@@ -35,7 +35,7 @@
 	},
 	"dependencies": {
 		"@memongo/lib": "2.0.0",
-		"@memongo/memory-engine": "2.0.0"
+		"@memongo/memory-engine": "2.0.1"
 	},
 	"devDependencies": {
 		"@memongo/tools": "workspace:*",

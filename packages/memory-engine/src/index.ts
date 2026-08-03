@@ -231,6 +231,9 @@ export {
 	sessionChunksCollection,
 	ensureEntityAutocompleteIndex,
 } from "./mongodb-schema.js"
+// P2.2: exported so the bridge can type its capability surface with the real
+// engine type instead of re-declaring it.
+export type { DetectedCapabilities } from "./mongodb-schema.js"
 export {
 	resolveSessionEvidenceMode,
 	buildSessionEvidenceDocuments,

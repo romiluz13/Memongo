@@ -10,7 +10,12 @@
 #   docker build -t memongo-api -f apps/api/Dockerfile .
 # Run (connects to Atlas or any MongoDB via MEMONGO_MONGODB_URI):
 #   docker run -p 3847:3847 -e MEMONGO_MONGODB_URI="mongodb+srv://..." \
-#     -e MEMONGO_API_KEY="local-dev-secret" memongo-api
+#     -e MEMONGO_API_KEY="your-long-random-token" memongo-api
+#
+# Runtime env:
+#   MEMONGO_MONGODB_URI       — MongoDB connection string (required)
+#   MEMONGO_MONGODB_DATABASE  — database name (default: memongo)
+#   MEMONGO_API_KEY           — bearer token (required; no default)
 
 ARG NODE_VERSION=22
 
@@ -60,6 +65,6 @@ ENV MEMONGO_API_HOST=0.0.0.0
 ENV MEMONGO_API_PORT=3847
 
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 --start-period=40s \
-  CMD node -e "fetch('http://127.0.0.1:3847/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+  CMD node -e "fetch('http://127.0.0.1:3847/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
 CMD ["node", "apps/api/dist/server.js"]

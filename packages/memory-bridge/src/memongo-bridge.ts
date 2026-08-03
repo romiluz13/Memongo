@@ -2,13 +2,21 @@
  * Stable entry for the Memongo HTTP product layer: loads standalone config and
  * delegates to the MongoDB memory manager.
  */
-import type { MemoryScope } from "@memongo/lib/types/memory"
+import type {
+	MemoryMongoDBFusionMethod,
+	MemoryScope,
+} from "@memongo/lib/types/memory"
 import type {
 	ConversationRecallResponse,
+	DetectedCapabilities,
+	MemoryActiveSlate,
+	MemoryContextBundle,
+	MemoryDiscoveryProjection,
 	MemoryProviderStatus,
 	MemoryJob,
 	MemoryJobStatus,
 	MemoryJobType,
+	MemorySearchTimeRange,
 	MemoryAccessSummary,
 	MemoryAccessTrend,
 	MemoryBenchmarkIngestResult,
@@ -53,301 +61,12 @@ export async function memongoBridgeShutdown(): Promise<void> {
 	await closeAllMemorySearchManagers()
 }
 
-type MemongoBridgeActiveSlate = {
-	agentId: string
-	scope: MemoryScope
-	scopeRef: string
-	items: Array<{
-		kind: string
-		source: string
-		title: string
-		summary: string
-		path: string
-		canonicalId?: string
-		timestamp?: Date
-		scope?: MemoryScope
-		scopeRef?: string
-		state?: string
-		salience?: string
-		provenance?: Record<string, unknown>
-		sourceEventIds?: string[]
-	}>
-	metadata: {
-		maxItems: number
-		truncated: boolean
-		partial: boolean
-		countsByKind: Record<string, number>
-		sourceCounts: Record<string, number>
-	}
-	hydratedAt: Date
-}
-
-type MemongoBridgeDiscoveryProjection = {
-	kind: "entity-brief" | "topic-brief" | "what-changed" | "contradiction-report"
-	query?: string
-	title: string
-	summary: string
-	scope: MemoryScope
-	scopeRef: string
-	sections: Array<{
-		title: string
-		summary: string
-		evidence: Array<{
-			title: string
-			summary: string
-			path: string
-			source: string
-			canonicalId?: string
-			timestamp?: Date
-			scope?: MemoryScope
-			scopeRef?: string
-			sourceEventIds?: string[]
-		}>
-	}>
-	metadata: {
-		partial: boolean
-		evidenceCount: number
-		sourceCounts: Record<string, number>
-		timeRange?: {
-			label: string
-			start: Date
-			end: Date
-		}
-	}
-	builtAt: Date
-}
-
-type MemongoBridgeContextBundle = {
-	agentId: string
-	query?: string
-	scope: MemoryScope
-	scopeRef: string
-	sessionId?: string
-	rendered: string
-	sections: Array<{
-		kind:
-			| "active-slate"
-			| "query-evidence"
-			| "summary"
-			| "recent-events"
-			| "discovery-projection"
-			| "profile"
-		title: string
-		summary?: string
-		items: Array<{
-			title: string
-			summary: string
-			path?: string
-			source?: string
-			canonicalId?: string
-			timestamp?: Date
-			scope?: MemoryScope
-			scopeRef?: string
-			sourceEventIds?: string[]
-			trust?: {
-				score: number
-				confidence: "high" | "medium" | "low"
-				exactness: "exact-id" | "exact-locator" | "approximate"
-				freshness: "fresh" | "aging" | "stale" | "timeless" | "unknown"
-				contradiction: "none" | "conflicted" | "invalidated"
-				scopeMatch: "exact" | "partial" | "unknown" | "mismatch"
-				provenance: "dense" | "partial" | "sparse" | "none"
-				sourceDiversity: "single" | "multi"
-				factors: string[]
-			}
-			metadata?: Record<string, unknown>
-		}>
-		estimatedTokens: number
-		truncated: boolean
-		partial: boolean
-	}>
-	metadata: {
-		tokenBudget: number
-		estimatedTokensUsed: number
-		partial: boolean
-		truncated: boolean
-		pathsExecuted: string[]
-		trustSummary?: {
-			topScore: number | null
-			topConfidence: "high" | "medium" | "low" | null
-			averageScore: number | null
-			distribution: Record<"high" | "medium" | "low", number>
-			contradictionCount: number
-			staleCount: number
-			exactCount: number
-			sourceDiversity: "single" | "multi" | "none"
-		}
-		sectionsIncluded: Array<
-			| "active-slate"
-			| "query-evidence"
-			| "summary"
-			| "recent-events"
-			| "discovery-projection"
-			| "profile"
-		>
-	}
-	builtAt: Date
-}
-
-type ActiveSlateCapableManager = MongoDBMemoryManager & {
-	hydrateActiveSlate?: (params?: {
-		scope?: MemoryScope
-		scopeRef?: string
-		maxItems?: number
-	}) => Promise<MemongoBridgeActiveSlate>
-}
-
-type DiscoveryProjectionCapableManager = MongoDBMemoryManager & {
-	buildDiscoveryProjection?: (params: {
-		kind:
-			| "entity-brief"
-			| "topic-brief"
-			| "what-changed"
-			| "contradiction-report"
-		query?: string
-		scope?: MemoryScope
-		scopeRef?: string
-		maxItems?: number
-		timeRange?: {
-			preset?: string
-			start?: string
-			end?: string
-		}
-	}) => Promise<MemongoBridgeDiscoveryProjection>
-}
-
-type ContextBundleCapableManager = MongoDBMemoryManager & {
-	buildContextBundle?: (params?: {
-		query?: string
-		scope?: MemoryScope
-		scopeRef?: string
-		sessionId?: string
-		tokenBudget?: number
-		maxActiveItems?: number
-		maxEvidenceItems?: number
-		maxRecentEvents?: number
-		includeDiscoveryProjection?: boolean
-		discoveryKind?:
-			| "entity-brief"
-			| "topic-brief"
-			| "what-changed"
-			| "contradiction-report"
-		includeProfile?: boolean
-		timeRange?: {
-			preset?: string
-			start?: string
-			end?: string
-		}
-		mode?: "full" | "wake-up"
-	}) => Promise<MemongoBridgeContextBundle>
-}
-
-type ConversationRecallCapableManager = MongoDBMemoryManager & {
-	recallConversation?: (params: {
-		query?: string
-		sessionId?: string
-		roles?: Array<"user" | "assistant" | "system" | "tool">
-		startTime?: string
-		endTime?: string
-		asOf?: Date
-		timezone?: string
-		includeToolMessages?: boolean
-		limit?: number
-	}) => Promise<ConversationRecallResponse>
-}
-
-type ChainCapableManager = MongoDBMemoryManager & {
-	traceChain?: (params: {
-		factId: string
-		collection: string
-		options?: { maxDepth?: number }
-	}) => Promise<unknown>
-}
-
-type NoveltyCapableManager = MongoDBMemoryManager & {
-	scanNovelty?: (params?: {
-		limit?: number
-		scope?: string
-	}) => Promise<unknown>
-}
-
-type ConsolidateCapableManager = MongoDBMemoryManager & {
-	consolidate?: (params?: {
-		maxEvents?: number
-		minCombinedScore?: number
-		scope?: MemoryScope
-		scopeRef?: string
-	}) => Promise<unknown>
-}
-
-type SelfEditCapableManager = MongoDBMemoryManager & {
-	selfEditBlock?: (params: {
-		block: "user" | "persona" | "instructions"
-		action: "append" | "replace" | "prepend"
-		content: string
-	}) => Promise<{ upserted: boolean; id: string }>
-}
-
-type RecallTraceCapableManager = MongoDBMemoryManager & {
-	listRecallTraces?: (params?: { limit?: number }) => Promise<RecallTrace[]>
-	getRecallTrace?: (params: { traceId: string }) => Promise<RecallTrace | null>
-}
-
-type MemoryJobsCapableManager = MongoDBMemoryManager & {
-	listMemoryJobs?: (params?: {
-		status?: MemoryJobStatus
-		limit?: number
-		jobType?: MemoryJobType
-	}) => Promise<MemoryJob[]>
-	getMemoryJob?: (params: { jobId: string }) => Promise<MemoryJob | null>
-}
-
-type ExtractionCapableManager = MongoDBMemoryManager & {
-	extractEvent?: (params: {
-		eventId: string
-	}) => Promise<{ jobId: string; scheduled: boolean }>
-}
-
-type LifecycleCapableManager = MongoDBMemoryManager & {
-	getLifecycleItem?: (
-		handle: MemoryStableHandle,
-	) => Promise<MemoryLifecycleItem | null>
-	updateLifecycleItem?: (
-		handle: MemoryStableHandle,
-		patch: StructuredMemoryLifecyclePatch | ProcedureLifecyclePatch,
-	) => Promise<MemoryLifecycleItem | null>
-	invalidateLifecycleItem?: (
-		handle: MemoryStableHandle,
-		invalidatedBy?: Record<string, unknown>,
-	) => Promise<MemoryLifecycleItem | null>
-	getLifecycleHistory?: (params: {
-		handle: MemoryStableHandle
-		limit?: number
-	}) => Promise<MemoryLifecycleHistoryEntry[]>
-	reportProcedureOutcome?: (params: {
-		handle: Extract<MemoryStableHandle, { family: "procedure" }>
-		success: boolean
-		note?: string
-		actorRole?: MemoryActorRole
-	}) => Promise<Extract<MemoryLifecycleItem, { family: "procedure" }> | null>
-	applyMemoryFeedback?: (params: {
-		handle: Extract<MemoryStableHandle, { family: "structured" }>
-		signal: MemoryFeedbackSignal
-		patch?: StructuredMemoryLifecyclePatch
-		invalidatedBy?: Record<string, unknown>
-		note?: string
-		actorRole?: MemoryActorRole
-	}) => Promise<Extract<MemoryLifecycleItem, { family: "structured" }> | null>
-}
-
-type ConversationImportCapableManager = MongoDBMemoryManager & {
-	importConversations?: (params: {
-		datasetPath: string
-		scope?: MemoryScope
-		limitConversations?: number
-		limitTurnsPerConversation?: number
-	}) => Promise<MemoryConversationImportResult>
-}
+// P2.2: the engine's MemorySearchManager interface now declares every method
+// as non-optional (one backend exists), so the bridge calls the manager
+// directly. The 13 `*CapableManager` intersection types and the three
+// re-declared domain types (active slate / discovery projection / context
+// bundle) that used to live here were deleted — the bridge re-uses the real
+// engine types instead of keeping a third structural copy.
 
 export type MemongoBridgeContext = {
 	agentId: string
@@ -411,6 +130,7 @@ export async function memongoBridgeSearchKB(params: {
 	maxResults?: number
 	minScore?: number
 	filter?: { tags?: string[]; category?: string; source?: string }
+	fusionMethod?: MemoryMongoDBFusionMethod
 }) {
 	const m = await memongoBridgeGetManager(params.agentId)
 	return m.searchKB(params.query, {
@@ -420,6 +140,7 @@ export async function memongoBridgeSearchKB(params: {
 		// manager's default. Undefined falls back to the agent default in searchKB.
 		scopeRef: params.scopeRef,
 		filter: params.filter,
+		fusionMethod: params.fusionMethod,
 	})
 }
 
@@ -445,6 +166,7 @@ export async function memongoBridgeAdd(params: {
 	metadata?: Record<string, unknown>
 	scope?: MemoryScope
 	scopeRef?: string
+	idempotencyKey?: string
 }) {
 	return memongoBridgeWriteConversationEvent({
 		agentId: params.agentId,
@@ -454,6 +176,7 @@ export async function memongoBridgeAdd(params: {
 		metadata: params.metadata,
 		scope: params.scope,
 		scopeRef: params.scopeRef,
+		idempotencyKey: params.idempotencyKey,
 	})
 }
 
@@ -468,6 +191,7 @@ export async function memongoBridgeWriteConversationEvent(params: {
 	metadata?: Record<string, unknown>
 	scope?: MemoryScope
 	scopeRef?: string
+	idempotencyKey?: string
 }) {
 	const m = await memongoBridgeGetManager(params.agentId)
 	const timestamp = params.timestamp ? new Date(params.timestamp) : undefined
@@ -483,6 +207,7 @@ export async function memongoBridgeWriteConversationEvent(params: {
 		metadata: params.metadata,
 		scope: params.scope,
 		scopeRef: params.scopeRef,
+		idempotencyKey: params.idempotencyKey,
 	})
 }
 
@@ -492,12 +217,7 @@ export async function memongoBridgeExtractEvent(params: {
 	scopeRef?: string
 	eventId: string
 }): Promise<{ jobId: string; scheduled: boolean }> {
-	const m = (await memongoBridgeGetManager(
-		params.agentId,
-	)) as ExtractionCapableManager
-	if (!m.extractEvent) {
-		throw new Error("extractEvent is not available on this manager")
-	}
+	const m = await memongoBridgeGetManager(params.agentId)
 	// Tenant isolation: forward the authorized scope/scopeRef so extraction can
 	// only read an event within the caller's tenant.
 	return m.extractEvent({
@@ -574,13 +294,8 @@ export async function memongoBridgeHydrateActiveSlate(params: {
 	scope?: MemoryScope
 	scopeRef?: string
 	maxItems?: number
-}): Promise<MemongoBridgeActiveSlate> {
-	const m = (await memongoBridgeGetManager(
-		params.agentId,
-	)) as ActiveSlateCapableManager
-	if (!m.hydrateActiveSlate) {
-		throw new Error("hydrateActiveSlate is not available on this manager")
-	}
+}): Promise<MemoryActiveSlate> {
+	const m = await memongoBridgeGetManager(params.agentId)
 	return m.hydrateActiveSlate({
 		scope: params.scope,
 		scopeRef: params.scopeRef,
@@ -600,20 +315,17 @@ export async function memongoBridgeBuildDiscoveryProjection(params: {
 		start?: string
 		end?: string
 	}
-}): Promise<MemongoBridgeDiscoveryProjection> {
-	const m = (await memongoBridgeGetManager(
-		params.agentId,
-	)) as DiscoveryProjectionCapableManager
-	if (!m.buildDiscoveryProjection) {
-		throw new Error("buildDiscoveryProjection is not available on this manager")
-	}
+}): Promise<MemoryDiscoveryProjection> {
+	const m = await memongoBridgeGetManager(params.agentId)
 	return m.buildDiscoveryProjection({
 		kind: params.kind,
 		query: params.query,
 		scope: params.scope,
 		scopeRef: params.scopeRef,
 		maxItems: params.maxItems,
-		timeRange: params.timeRange,
+		// HTTP boundary type (preset: string) narrowed to the engine's preset
+		// union at the seam — same translation pattern as searchDetailed.
+		timeRange: params.timeRange as MemorySearchTimeRange | undefined,
 	})
 }
 
@@ -640,13 +352,8 @@ export async function memongoBridgeBuildContextBundle(params: {
 		end?: string
 	}
 	mode?: "full" | "wake-up"
-}): Promise<MemongoBridgeContextBundle> {
-	const m = (await memongoBridgeGetManager(
-		params.agentId,
-	)) as ContextBundleCapableManager
-	if (!m.buildContextBundle) {
-		throw new Error("buildContextBundle is not available on this manager")
-	}
+}): Promise<MemoryContextBundle> {
+	const m = await memongoBridgeGetManager(params.agentId)
 	return m.buildContextBundle({
 		query: params.query,
 		scope: params.scope,
@@ -659,7 +366,9 @@ export async function memongoBridgeBuildContextBundle(params: {
 		includeDiscoveryProjection: params.includeDiscoveryProjection,
 		discoveryKind: params.discoveryKind,
 		includeProfile: params.includeProfile,
-		timeRange: params.timeRange,
+		// HTTP boundary type (preset: string) narrowed to the engine's preset
+		// union at the seam — same translation pattern as searchDetailed.
+		timeRange: params.timeRange as MemorySearchTimeRange | undefined,
 		mode: params.mode,
 	})
 }
@@ -678,12 +387,7 @@ export async function memongoBridgeRecallConversation(params: {
 	includeToolMessages?: boolean
 	limit?: number
 }): Promise<ConversationRecallResponse> {
-	const m = (await memongoBridgeGetManager(
-		params.agentId,
-	)) as ConversationRecallCapableManager
-	if (!m.recallConversation) {
-		throw new Error("recallConversation is not available on this manager")
-	}
+	const m = await memongoBridgeGetManager(params.agentId)
 	const asOf = params.asOf ? new Date(params.asOf) : undefined
 	return m.recallConversation({
 		// Tenant isolation: forward the authorized scope/scopeRef so recall is
@@ -705,12 +409,7 @@ export async function memongoBridgeRecallConversation(params: {
 export async function memongoBridgeGetLifecycleItem(params: {
 	handle: MemoryStableHandle
 }): Promise<MemoryLifecycleItem | null> {
-	const m = (await memongoBridgeGetManager(
-		params.handle.agentId,
-	)) as LifecycleCapableManager
-	if (!m.getLifecycleItem) {
-		throw new Error("getLifecycleItem is not available on this manager")
-	}
+	const m = await memongoBridgeGetManager(params.handle.agentId)
 	return m.getLifecycleItem(params.handle)
 }
 
@@ -718,12 +417,7 @@ export async function memongoBridgeUpdateLifecycleItem(params: {
 	handle: MemoryStableHandle
 	patch: StructuredMemoryLifecyclePatch | ProcedureLifecyclePatch
 }): Promise<MemoryLifecycleItem | null> {
-	const m = (await memongoBridgeGetManager(
-		params.handle.agentId,
-	)) as LifecycleCapableManager
-	if (!m.updateLifecycleItem) {
-		throw new Error("updateLifecycleItem is not available on this manager")
-	}
+	const m = await memongoBridgeGetManager(params.handle.agentId)
 	return m.updateLifecycleItem(params.handle, params.patch)
 }
 
@@ -731,12 +425,7 @@ export async function memongoBridgeDeleteLifecycleItem(params: {
 	handle: MemoryStableHandle
 	invalidatedBy?: Record<string, unknown>
 }): Promise<MemoryLifecycleItem | null> {
-	const m = (await memongoBridgeGetManager(
-		params.handle.agentId,
-	)) as LifecycleCapableManager
-	if (!m.invalidateLifecycleItem) {
-		throw new Error("invalidateLifecycleItem is not available on this manager")
-	}
+	const m = await memongoBridgeGetManager(params.handle.agentId)
 	return m.invalidateLifecycleItem(params.handle, params.invalidatedBy)
 }
 
@@ -744,12 +433,7 @@ export async function memongoBridgeGetLifecycleHistory(params: {
 	handle: MemoryStableHandle
 	limit?: number
 }): Promise<MemoryLifecycleHistoryEntry[]> {
-	const m = (await memongoBridgeGetManager(
-		params.handle.agentId,
-	)) as LifecycleCapableManager
-	if (!m.getLifecycleHistory) {
-		throw new Error("getLifecycleHistory is not available on this manager")
-	}
+	const m = await memongoBridgeGetManager(params.handle.agentId)
 	return m.getLifecycleHistory({
 		handle: params.handle,
 		limit: params.limit,
@@ -762,12 +446,7 @@ export async function memongoBridgeReportProcedureOutcome(params: {
 	note?: string
 	actorRole?: MemoryActorRole
 }): Promise<Extract<MemoryLifecycleItem, { family: "procedure" }> | null> {
-	const m = (await memongoBridgeGetManager(
-		params.handle.agentId,
-	)) as LifecycleCapableManager
-	if (!m.reportProcedureOutcome) {
-		throw new Error("reportProcedureOutcome is not available on this manager")
-	}
+	const m = await memongoBridgeGetManager(params.handle.agentId)
 	return m.reportProcedureOutcome(params)
 }
 
@@ -779,12 +458,7 @@ export async function memongoBridgeApplyMemoryFeedback(params: {
 	note?: string
 	actorRole?: MemoryActorRole
 }): Promise<Extract<MemoryLifecycleItem, { family: "structured" }> | null> {
-	const m = (await memongoBridgeGetManager(
-		params.handle.agentId,
-	)) as LifecycleCapableManager
-	if (!m.applyMemoryFeedback) {
-		throw new Error("applyMemoryFeedback is not available on this manager")
-	}
+	const m = await memongoBridgeGetManager(params.handle.agentId)
 	return m.applyMemoryFeedback(params)
 }
 
@@ -962,6 +636,61 @@ export async function memongoBridgeProbeVector(params: { agentId?: string }) {
 	return m.probeVectorAvailability()
 }
 
+/**
+ * Serving capabilities detected by the engine at manager creation. Alias of
+ * the engine's `DetectedCapabilities` (re-exported through the engine package
+ * entry since P2.2 — previously redeclared here because the engine did not
+ * export the type). vectorSearch/textSearch are true only when the concrete
+ * serving Atlas Search indexes exist and are queryable — not merely when the
+ * deployment could support them.
+ */
+export type MemongoBridgeCapabilities = DetectedCapabilities
+
+/**
+ * P1.9 boot capability surface: exposes the manager's detected serving
+ * capabilities so deploy targets (memongo-api boot) can log a search-lane
+ * table and enforce MEMONGO_REQUIRE_VECTOR without re-probing Mongo
+ * themselves. Returns null when the manager predates the capability field.
+ */
+export async function memongoBridgeCapabilities(params: {
+	agentId?: string
+}): Promise<MemongoBridgeCapabilities | null> {
+	const m = await memongoBridgeGetManager(params.agentId)
+	return (
+		(m as unknown as { capabilities?: MemongoBridgeCapabilities })
+			.capabilities ?? null
+	)
+}
+
+/**
+ * Readiness probe for the Mongo lane (P1.7). `probeVectorAvailability` and
+ * `probeEmbeddingAvailability` are capability checks computed at manager
+ * creation — they cannot detect a MongoDB that died after boot, and
+ * `getDetailedStatus` intentionally swallows per-query failures. This probe
+ * forces a live, bounded round-trip (a limit-1 jobs read) through the cached
+ * manager and reports failure instead of throwing, so a `/ready` endpoint can
+ * answer 503 while Mongo is unreachable.
+ */
+export async function memongoBridgePingMongo(params: {
+	agentId?: string
+}): Promise<{ ok: boolean; message?: string }> {
+	try {
+		const m = await memongoBridgeGetManager(params.agentId)
+		await m.listMemoryJobs({ limit: 1 })
+		return { ok: true }
+	} catch (err) {
+		return {
+			ok: false,
+			message: err instanceof Error ? err.message : String(err),
+		}
+	}
+}
+
+// Re-exported so deploy targets (memongo-api boot validation) can resolve the
+// effective config exactly the way the bridge does at runtime (env first, then
+// ~/.memongo/memongo.json) instead of duplicating the merge rules.
+export { buildMemongoConfig } from "./memory-config.js"
+
 export async function memongoBridgeRelevanceExplain(params: {
 	agentId?: string
 	query: string
@@ -1066,12 +795,7 @@ export async function memongoBridgeImportConversations(params: {
 	limitConversations?: number
 	limitTurnsPerConversation?: number
 }): Promise<MemoryConversationImportResult> {
-	const m = (await memongoBridgeGetManager(
-		params.agentId,
-	)) as ConversationImportCapableManager
-	if (!m.importConversations) {
-		throw new Error("importConversations is not available on this manager")
-	}
+	const m = await memongoBridgeGetManager(params.agentId)
 	return m.importConversations({
 		datasetPath: params.datasetPath,
 		scope: params.scope,
@@ -1106,9 +830,6 @@ export async function memongoBridgeAccessSummaries(params: {
 	windowDays?: number
 }): Promise<MemoryAccessSummary[]> {
 	const m = await memongoBridgeGetManager(params.agentId)
-	if (!m.accessSummaries) {
-		return []
-	}
 	return m.accessSummaries({
 		collection: params.collection,
 		memoryIds: params.memoryIds,
@@ -1122,12 +843,7 @@ export async function memongoBridgeTraceChain(params: {
 	collection: string
 	maxDepth?: number
 }) {
-	const m = (await memongoBridgeGetManager(
-		params.agentId,
-	)) as ChainCapableManager
-	if (!m.traceChain) {
-		throw new Error("traceChain is not available on this manager")
-	}
+	const m = await memongoBridgeGetManager(params.agentId)
 	return m.traceChain({
 		factId: params.factId,
 		collection: params.collection,
@@ -1142,12 +858,7 @@ export async function memongoBridgeScanNovelty(params: {
 	scope?: string
 	scopeRef?: string
 }) {
-	const m = (await memongoBridgeGetManager(
-		params.agentId,
-	)) as NoveltyCapableManager
-	if (!m.scanNovelty) {
-		throw new Error("scanNovelty is not available on this manager")
-	}
+	const m = await memongoBridgeGetManager(params.agentId)
 	return m.scanNovelty({
 		limit: params.limit,
 		scope: params.scope,
@@ -1164,12 +875,7 @@ export async function memongoBridgeConsolidate(params: {
 	scope?: MemoryScope
 	scopeRef?: string
 }) {
-	const m = (await memongoBridgeGetManager(
-		params.agentId,
-	)) as ConsolidateCapableManager
-	if (!m.consolidate) {
-		throw new Error("consolidate is not available on this manager")
-	}
+	const m = await memongoBridgeGetManager(params.agentId)
 	return m.consolidate({
 		maxEvents: params.maxEvents,
 		minCombinedScore: params.minCombinedScore,
@@ -1186,12 +892,7 @@ export async function memongoBridgeSelfEdit(params: {
 	action: "append" | "replace" | "prepend"
 	content: string
 }): Promise<{ upserted: boolean; id: string }> {
-	const m = (await memongoBridgeGetManager(
-		params.agentId,
-	)) as SelfEditCapableManager
-	if (!m.selfEditBlock) {
-		throw new Error("selfEditBlock is not available on this manager")
-	}
+	const m = await memongoBridgeGetManager(params.agentId)
 	return m.selfEditBlock({
 		block: params.block,
 		action: params.action,
@@ -1223,12 +924,16 @@ export async function memongoBridgeGetState(params: {
 	])
 	const partial = results.some((r) => r.status === "rejected")
 	const profile =
-		results[0].status === "fulfilled" ? results[0].value : ({} as any)
+		results[0].status === "fulfilled"
+			? results[0].value
+			: ({} as MemoryStateFamily["profile"])
 	const slate = results[1].status === "fulfilled" ? results[1].value : null
 	const bundle =
-		results[2].status === "fulfilled" ? results[2].value : ({} as any)
+		results[2].status === "fulfilled"
+			? results[2].value
+			: ({} as MemoryStateFamily["bundle"])
 	const blocks = slate
-		? materializeBlocks(slate as Parameters<typeof materializeBlocks>[0])
+		? materializeBlocks(slate)
 		: { blocks: [], totalTokenBudget: 0, totalActualTokens: 0 }
 	return { profile, blocks, bundle, ...(partial ? { partial: true } : {}) }
 }
@@ -1237,12 +942,7 @@ export async function memongoBridgeListRecallTraces(params: {
 	agentId?: string
 	limit?: number
 }): Promise<RecallTrace[]> {
-	const m = (await memongoBridgeGetManager(
-		params.agentId,
-	)) as RecallTraceCapableManager
-	if (!m.listRecallTraces) {
-		throw new Error("listRecallTraces is not available on this manager")
-	}
+	const m = await memongoBridgeGetManager(params.agentId)
 	return m.listRecallTraces({ limit: params.limit })
 }
 
@@ -1250,12 +950,7 @@ export async function memongoBridgeGetRecallTrace(params: {
 	agentId?: string
 	traceId: string
 }): Promise<RecallTrace | null> {
-	const m = (await memongoBridgeGetManager(
-		params.agentId,
-	)) as RecallTraceCapableManager
-	if (!m.getRecallTrace) {
-		throw new Error("getRecallTrace is not available on this manager")
-	}
+	const m = await memongoBridgeGetManager(params.agentId)
 	return m.getRecallTrace({ traceId: params.traceId })
 }
 
@@ -1265,12 +960,7 @@ export async function memongoBridgeListMemoryJobs(params: {
 	limit?: number
 	jobType?: MemoryJobType
 }): Promise<MemoryJob[]> {
-	const m = (await memongoBridgeGetManager(
-		params.agentId,
-	)) as MemoryJobsCapableManager
-	if (!m.listMemoryJobs) {
-		throw new Error("listMemoryJobs is not available on this manager")
-	}
+	const m = await memongoBridgeGetManager(params.agentId)
 	return m.listMemoryJobs({
 		status: params.status,
 		limit: params.limit,
@@ -1282,12 +972,7 @@ export async function memongoBridgeGetMemoryJob(params: {
 	agentId?: string
 	jobId: string
 }): Promise<MemoryJob | null> {
-	const m = (await memongoBridgeGetManager(
-		params.agentId,
-	)) as MemoryJobsCapableManager
-	if (!m.getMemoryJob) {
-		throw new Error("getMemoryJob is not available on this manager")
-	}
+	const m = await memongoBridgeGetManager(params.agentId)
 	return m.getMemoryJob({ jobId: params.jobId })
 }
 

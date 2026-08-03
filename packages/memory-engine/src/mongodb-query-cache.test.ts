@@ -33,8 +33,8 @@ vi.mock("./mongodb-telemetry.js", () => ({
 import {
 	normalizeQuery,
 	hashQuery,
+	serializeKeyParams,
 	checkCache,
-	invalidateQueryCache,
 	writeCache,
 	DEFAULT_CACHE_CONFIG,
 	type QueryCacheConfig,
@@ -54,6 +54,7 @@ function createMockCollection(
 		findOne: vi.fn().mockResolvedValue(null),
 		findOneAndUpdate: vi.fn().mockResolvedValue(null),
 		estimatedDocumentCount: vi.fn().mockResolvedValue(1),
+		countDocuments: vi.fn().mockResolvedValue(1),
 		aggregate: vi
 			.fn()
 			.mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) }),
@@ -140,47 +141,6 @@ describe("DEFAULT_CACHE_CONFIG", () => {
 		expect(DEFAULT_CACHE_CONFIG.conversationTtlSec).toBe(300)
 		expect(DEFAULT_CACHE_CONFIG.kbTtlSec).toBe(3600)
 		expect(DEFAULT_CACHE_CONFIG.similarityThreshold).toBe(0.95)
-	})
-})
-
-describe("invalidateQueryCache", () => {
-	it("deletes only the mutated tenant namespace", async () => {
-		const mockCol = createMockCollection({
-			deleteMany: vi.fn().mockResolvedValue({ deletedCount: 3 }),
-		})
-		vi.mocked(queryCacheCollection).mockReturnValue(mockCol)
-
-		await expect(
-			invalidateQueryCache({
-				db: {} as Db,
-				prefix: PREFIX,
-				agentId: AGENT_ID,
-				scope: SCOPE,
-				scopeRef: SCOPE_REF,
-			}),
-		).resolves.toBe(3)
-		expect(mockCol.deleteMany).toHaveBeenCalledWith({
-			agentId: AGENT_ID,
-			scope: SCOPE,
-			scopeRef: SCOPE_REF,
-		})
-	})
-
-	it("does not fail a completed primary mutation when invalidation fails", async () => {
-		const mockCol = createMockCollection({
-			deleteMany: vi.fn().mockRejectedValue(new Error("cache unavailable")),
-		})
-		vi.mocked(queryCacheCollection).mockReturnValue(mockCol)
-
-		await expect(
-			invalidateQueryCache({
-				db: {} as Db,
-				prefix: PREFIX,
-				agentId: AGENT_ID,
-				scope: SCOPE,
-				scopeRef: SCOPE_REF,
-			}),
-		).resolves.toBe(0)
 	})
 })
 
@@ -289,14 +249,15 @@ describe("checkCache", () => {
 		)
 	})
 
-	it("skips the semantic tier entirely when the cache collection is empty", async () => {
-		// The tier-2 probe is a $vectorSearch with server-side query embedding —
-		// a full provider round-trip (~2.4s measured on Atlas) spent on a cache
-		// that cannot hit. estimatedDocumentCount is a metadata read.
+	it("skips the semantic tier entirely when the namespace has no live entries", async () => {
+		// P2.4 expected-win gate: the tier-2 probe is a $vectorSearch with
+		// server-side query embedding — a full provider round-trip spent on a
+		// cache that cannot hit. The gate is a bounded countDocuments against
+		// the caller's OWN (agentId, scope, scopeRef) namespace.
 		vi.mocked(mockCol.findOne).mockResolvedValue(null)
-		const estimatedDocumentCount = vi.fn().mockResolvedValue(0)
-		;(mockCol as unknown as Record<string, unknown>).estimatedDocumentCount =
-			estimatedDocumentCount
+		const countDocuments = vi.fn().mockResolvedValue(0)
+		;(mockCol as unknown as Record<string, unknown>).countDocuments =
+			countDocuments
 		vi.mocked(buildVectorSearchStage).mockReturnValue({
 			index: "test_query_cache_vector",
 		} as never)
@@ -312,13 +273,21 @@ describe("checkCache", () => {
 		})
 
 		expect(result.hit).toBe(false)
-		expect(estimatedDocumentCount).toHaveBeenCalled()
+		expect(countDocuments).toHaveBeenCalledWith(
+			{
+				agentId: AGENT_ID,
+				scope: SCOPE,
+				scopeRef: SCOPE_REF,
+				expiresAt: expect.objectContaining({ $gt: expect.any(Date) }),
+			},
+			{ limit: 1 },
+		)
 		expect(mockCol.aggregate).not.toHaveBeenCalled()
 	})
 
 	it("caps the semantic probe latency with maxTimeMS", async () => {
 		vi.mocked(mockCol.findOne).mockResolvedValue(null)
-		;(mockCol as unknown as Record<string, unknown>).estimatedDocumentCount = vi
+		;(mockCol as unknown as Record<string, unknown>).countDocuments = vi
 			.fn()
 			.mockResolvedValue(3)
 		vi.mocked(buildVectorSearchStage).mockReturnValue({
@@ -343,7 +312,7 @@ describe("checkCache", () => {
 
 	it("splits its reported latency into the exact lookup and the semantic probe", async () => {
 		vi.mocked(mockCol.findOne).mockResolvedValue(null)
-		;(mockCol as unknown as Record<string, unknown>).estimatedDocumentCount = vi
+		;(mockCol as unknown as Record<string, unknown>).countDocuments = vi
 			.fn()
 			.mockResolvedValue(3)
 		vi.mocked(buildVectorSearchStage).mockReturnValue({
@@ -657,6 +626,278 @@ describe("checkCache", () => {
 })
 
 // ---------------------------------------------------------------------------
+// P2.4 — cache key composition (maxResults/minScore/timeRange fold into hash)
+// ---------------------------------------------------------------------------
+
+describe("query cache key composition (P2.4)", () => {
+	it("folds maxResults into the hash: same query, different maxResults → distinct keys", () => {
+		const h1 = hashQuery(normalizeQuery("deploy runbook"), { maxResults: 10 })
+		const h2 = hashQuery(normalizeQuery("deploy runbook"), { maxResults: 20 })
+		expect(h1).not.toBe(h2)
+	})
+
+	it("folds minScore and timeRange into the hash", () => {
+		const base = hashQuery("deploy runbook", { maxResults: 10 })
+		expect(
+			hashQuery("deploy runbook", { maxResults: 10, minScore: 0.2 }),
+		).not.toBe(base)
+		expect(
+			hashQuery("deploy runbook", {
+				maxResults: 10,
+				timeRange: { start: "2026-01-01", end: "2026-02-01" },
+			}),
+		).not.toBe(base)
+	})
+
+	it("same effective params share one key regardless of how the request was spelled", () => {
+		// The manager resolves defaults BEFORE calling the cache, so an explicit
+		// maxResults=10 and a defaulted maxResults=10 arrive with identical
+		// keyParams and must produce the identical hash.
+		const explicit = hashQuery("deploy runbook", {
+			maxResults: 10,
+			minScore: 0.01,
+		})
+		const defaulted = hashQuery("deploy runbook", {
+			maxResults: 10,
+			minScore: 0.01,
+		})
+		expect(explicit).toBe(defaulted)
+	})
+
+	it("omitting keyParams keeps the legacy hash input (backwards compatible)", () => {
+		const expected = createHash("sha256").update("deploy runbook").digest("hex")
+		expect(hashQuery("deploy runbook")).toBe(expected)
+	})
+
+	it("serializes key params canonically (defined fields only, stable order)", () => {
+		expect(serializeKeyParams(undefined)).toBe("")
+		expect(serializeKeyParams({})).toBe("")
+		expect(
+			serializeKeyParams({
+				maxResults: 10,
+				minScore: 0.01,
+				timeRange: { start: "2026-01-01" },
+				questionDate: new Date("2026-04-09T00:00:00.000Z"),
+			}),
+		).toBe("k=10;s=0.01;t=|2026-01-01|;d=2026-04-09T00:00:00.000Z")
+	})
+
+	it("checkCache scopes the exact lookup by the folded key", async () => {
+		const mockCol = createMockCollection()
+		vi.mocked(queryCacheCollection).mockReturnValue(mockCol)
+		const keyParams = { maxResults: 10, minScore: 0.01 }
+
+		await checkCache({
+			db: {} as Db,
+			prefix: PREFIX,
+			query: "test query",
+			agentId: AGENT_ID,
+			scope: SCOPE,
+			scopeRef: SCOPE_REF,
+			config: DEFAULT_CONFIG,
+			keyParams,
+		})
+
+		expect(mockCol.findOne).toHaveBeenCalledWith(
+			expect.objectContaining({
+				queryHash: hashQuery(normalizeQuery("test query"), keyParams),
+			}),
+		)
+	})
+
+	it("tier 2 rejects a semantic candidate whose stored key params differ", async () => {
+		const mockCol = createMockCollection()
+		vi.mocked(queryCacheCollection).mockReturnValue(mockCol)
+		vi.mocked(mockCol.findOne).mockResolvedValue(null)
+		vi.mocked(buildVectorSearchStage).mockReturnValue({
+			index: "test_query_cache_vector",
+		} as never)
+		// Cached under maxResults=5 ("k=5"), requested with maxResults=10.
+		vi.mocked(mockCol.aggregate).mockReturnValue({
+			toArray: vi.fn().mockResolvedValue([
+				{
+					_id: "doc-2",
+					results: [],
+					pathUsed: "test",
+					sourceScope: "conversation",
+					expiresAt: new Date(Date.now() + 60_000),
+					score: 0.99,
+					keySuffix: "k=5",
+				},
+			]),
+		} as never)
+
+		const result = await checkCache({
+			db: {} as Db,
+			prefix: PREFIX,
+			query: "test query",
+			agentId: AGENT_ID,
+			scope: SCOPE,
+			scopeRef: SCOPE_REF,
+			config: DEFAULT_CONFIG,
+			keyParams: { maxResults: 10 },
+		})
+
+		expect(result.hit).toBe(false)
+		expect(result.tier).toBe("miss")
+	})
+
+	it("tier 2 accepts a semantic candidate whose stored key params match", async () => {
+		const mockCol = createMockCollection()
+		vi.mocked(queryCacheCollection).mockReturnValue(mockCol)
+		vi.mocked(mockCol.findOne).mockResolvedValue(null)
+		vi.mocked(buildVectorSearchStage).mockReturnValue({
+			index: "test_query_cache_vector",
+		} as never)
+		vi.mocked(mockCol.aggregate).mockReturnValue({
+			toArray: vi.fn().mockResolvedValue([
+				{
+					_id: "doc-3",
+					results: [{ path: "/a.md", snippet: "x", score: 0.9 }],
+					pathUsed: "test",
+					sourceScope: "conversation",
+					expiresAt: new Date(Date.now() + 60_000),
+					score: 0.99,
+					keySuffix: serializeKeyParams({ maxResults: 10 }),
+				},
+			]),
+		} as never)
+
+		const result = await checkCache({
+			db: {} as Db,
+			prefix: PREFIX,
+			query: "test query",
+			agentId: AGENT_ID,
+			scope: SCOPE,
+			scopeRef: SCOPE_REF,
+			config: DEFAULT_CONFIG,
+			keyParams: { maxResults: 10 },
+		})
+
+		expect(result.hit).toBe(true)
+		expect(result.tier).toBe("semantic")
+	})
+})
+
+// ---------------------------------------------------------------------------
+// P2.4 — probe concurrency + exactMs attribution
+// ---------------------------------------------------------------------------
+
+describe("checkCache probe concurrency (P2.4)", () => {
+	beforeEach(() => {
+		vi.clearAllMocks()
+	})
+
+	it("starts the namespace gate concurrently with the exact lookup", async () => {
+		vi.useFakeTimers()
+		try {
+			const mockCol = createMockCollection()
+			vi.mocked(queryCacheCollection).mockReturnValue(mockCol)
+			const callOrder: string[] = []
+			vi.mocked(mockCol.findOne).mockImplementation(
+				() =>
+					new Promise((resolve) => {
+						callOrder.push("exact")
+						setTimeout(() => resolve(null), 100)
+					}) as never,
+			)
+			;(mockCol as unknown as Record<string, unknown>).countDocuments = vi
+				.fn()
+				.mockImplementation(
+					() =>
+						new Promise((resolve) => {
+							callOrder.push("gate")
+							setTimeout(() => resolve(0), 250)
+						}),
+				)
+
+			const promise = checkCache({
+				db: {} as Db,
+				prefix: PREFIX,
+				query: "test query",
+				agentId: AGENT_ID,
+				scope: SCOPE,
+				scopeRef: SCOPE_REF,
+				config: DEFAULT_CONFIG,
+			})
+			// Both lanes were dispatched synchronously at t=0 — BEFORE either
+			// resolved. A serial implementation (exact → then gate) would leave
+			// the gate undispatched until t=100.
+			expect(callOrder).toContain("exact")
+			expect(callOrder).toContain("gate")
+			await vi.advanceTimersByTimeAsync(300)
+			const result = await promise
+
+			expect(result.hit).toBe(false)
+			expect(mockCol.aggregate).not.toHaveBeenCalled()
+		} finally {
+			vi.useRealTimers()
+		}
+	})
+
+	it("an exact hit short-circuits the probe path without waiting for the gate", async () => {
+		const mockCol = createMockCollection()
+		vi.mocked(queryCacheCollection).mockReturnValue(mockCol)
+		vi.mocked(mockCol.findOne).mockResolvedValue({
+			_id: "doc-1",
+			results: [],
+			pathUsed: "test",
+			sourceScope: "conversation",
+			expiresAt: new Date(Date.now() + 60_000),
+		} as never)
+		// The gate never resolves; a correct implementation must not await it
+		// once tier 1 has hit.
+		;(mockCol as unknown as Record<string, unknown>).countDocuments = vi
+			.fn()
+			.mockReturnValue(new Promise(() => {}))
+
+		const result = await checkCache({
+			db: {} as Db,
+			prefix: PREFIX,
+			query: "test query",
+			agentId: AGENT_ID,
+			scope: SCOPE,
+			scopeRef: SCOPE_REF,
+			config: DEFAULT_CONFIG,
+		})
+
+		expect(result.hit).toBe(true)
+		expect(result.tier).toBe("exact")
+		expect(mockCol.aggregate).not.toHaveBeenCalled()
+		expect(mockCol.findOneAndUpdate).toHaveBeenCalled()
+	})
+
+	it("measures exactMs as the tier-1 retrieval span, not setup-inclusive", async () => {
+		const mockCol = createMockCollection()
+		vi.mocked(queryCacheCollection).mockReturnValue(mockCol)
+		vi.mocked(mockCol.findOne).mockRejectedValue(new Error("boom"))
+		const nowSpy = vi
+			.spyOn(Date, "now")
+			.mockReturnValueOnce(1_000) // cacheStart
+			.mockReturnValueOnce(1_050) // exactStart (after normalization setup)
+			.mockReturnValueOnce(1_100) // catch: exactMs must be 1100-1050=50
+			.mockReturnValue(1_150) // telemetry durationMs
+
+		try {
+			const result = await checkCache({
+				db: {} as Db,
+				prefix: PREFIX,
+				query: "test query",
+				agentId: AGENT_ID,
+				scope: SCOPE,
+				scopeRef: SCOPE_REF,
+				config: DEFAULT_CONFIG,
+			})
+
+			expect(result.hit).toBe(false)
+			expect(result.latency?.exactMs).toBe(50)
+		} finally {
+			nowSpy.mockRestore()
+		}
+	})
+})
+
+// ---------------------------------------------------------------------------
 // writeCache
 // ---------------------------------------------------------------------------
 
@@ -865,6 +1106,45 @@ describe("writeCache", () => {
 		// expiresAt should be ~600 seconds from now
 		expect(expiresAt.getTime()).toBeGreaterThanOrEqual(beforeTime + 600_000)
 		expect(expiresAt.getTime()).toBeLessThanOrEqual(afterTime + 600_000)
+	})
+
+	it("folds keyParams into the hash and stores the canonical keySuffix", () => {
+		const keyParams = { maxResults: 10, minScore: 0.01 }
+
+		writeCache({
+			db: {} as Db,
+			prefix: PREFIX,
+			query: "test query",
+			agentId: AGENT_ID,
+			scope: SCOPE,
+			scopeRef: SCOPE_REF,
+			results: [
+				{
+					path: "/a.md",
+					snippet: "test",
+					score: 0.9,
+					source: "conversation",
+					startLine: 1,
+					endLine: 1,
+				},
+			],
+			pathUsed: "test",
+			sourceScope: "conversation",
+			ttlSec: 300,
+			keyParams,
+		})
+
+		const [filter, update] = vi.mocked(mockCol.updateOne).mock.calls[0]
+		expect(filter).toEqual(
+			expect.objectContaining({
+				queryHash: hashQuery(normalizeQuery("test query"), keyParams),
+			}),
+		)
+		expect((update as Document).$setOnInsert).toEqual(
+			expect.objectContaining({
+				keySuffix: serializeKeyParams(keyParams),
+			}),
+		)
 	})
 })
 

@@ -2467,17 +2467,22 @@ describeIfMongo(
 							{ $project: { text: 1, score: { $meta: "vectorSearchScore" } } },
 						]
 
-						try {
-							const results = await chunksCol.aggregate(pipeline).toArray()
-							// If index exists, results should have scores
-							if (results.length > 0) {
-								expect(results[0]).toHaveProperty("score")
-								expect(typeof results[0].score).toBe("number")
-							}
-						} catch {
-							// $vectorSearch index may not exist in this environment — graceful skip
-							expect(true).toBe(true)
-						}
+						// P1.9: explicit capability assertion - fail loudly when the
+						// serving vector index is absent instead of branching green
+						// (the old branch swallowed a missing index with a passing no-op).
+						const vectorIndexes = await chunksCol
+							.listSearchIndexes(`${PREFIX}chunks_vector_index`)
+							.toArray()
+						expect(
+							vectorIndexes.length,
+							`vector search index ${PREFIX}chunks_vector_index must exist in this environment`,
+						).toBeGreaterThan(0)
+						// No try/catch: a missing or non-queryable index must fail
+						// the test, not degrade silently.
+						const results = await chunksCol.aggregate(pipeline).toArray()
+						expect(results.length).toBeGreaterThan(0)
+						expect(results[0]).toHaveProperty("score")
+						expect(typeof results[0].score).toBe("number")
 					})
 				},
 			)
@@ -2501,16 +2506,22 @@ describeIfMongo(
 							{ $project: { text: 1, score: { $meta: "searchScore" } } },
 						]
 
-						try {
-							const results = await chunksCol.aggregate(pipeline).toArray()
-							if (results.length > 0) {
-								expect(results[0]).toHaveProperty("score")
-								expect(typeof results[0].score).toBe("number")
-							}
-						} catch {
-							// $search index may not exist in this environment — graceful skip
-							expect(true).toBe(true)
-						}
+						// P1.9: explicit capability assertion - fail loudly when the
+						// serving search index is absent instead of branching green
+						// (the old branch swallowed a missing index with a passing no-op).
+						const keywordIndexes = await chunksCol
+							.listSearchIndexes(`${PREFIX}chunks_search_index`)
+							.toArray()
+						expect(
+							keywordIndexes.length,
+							`search index ${PREFIX}chunks_search_index must exist in this environment`,
+						).toBeGreaterThan(0)
+						// No try/catch: a missing or non-queryable index must fail
+						// the test, not degrade silently.
+						const results = await chunksCol.aggregate(pipeline).toArray()
+						expect(results.length).toBeGreaterThan(0)
+						expect(results[0]).toHaveProperty("score")
+						expect(typeof results[0].score).toBe("number")
 					})
 				},
 			)

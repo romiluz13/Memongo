@@ -5,6 +5,15 @@
 
 export type MemongoContainerTag = string
 
+/** Tenant-isolation scope understood by the API. */
+export type MemongoScope =
+	| "session"
+	| "user"
+	| "agent"
+	| "workspace"
+	| "tenant"
+	| "global"
+
 export type MemongoAddInput = {
 	content: string
 	/** @deprecated Prefer `sessionId`. */
@@ -14,6 +23,8 @@ export type MemongoAddInput = {
 	metadata?: Record<string, string | number | boolean | null>
 	agentId?: string
 	sessionId?: string
+	scope?: MemongoScope
+	scopeRef?: string
 }
 
 export type MemongoSearchInput = {
@@ -24,6 +35,8 @@ export type MemongoSearchInput = {
 	agentId?: string
 	minScore?: number
 	sessionKey?: string
+	scope?: MemongoScope
+	scopeRef?: string
 }
 
 export type SearchConfig = {
@@ -60,6 +73,8 @@ export type MemongoConversationRecallInput = {
 	includeToolMessages?: boolean
 	limit?: number
 	agentId?: string
+	scope?: MemongoScope
+	scopeRef?: string
 }
 
 export type MemongoConversationImportInput = {
@@ -301,6 +316,7 @@ export type MemongoScanNoveltyInput = {
 	agentId?: string
 	limit?: number
 	scope?: string
+	scopeRef?: string
 }
 
 export type MemongoConsolidateInput = {
@@ -326,6 +342,8 @@ export type MemongoSelfEditResponse = {
 export type MemongoExtractInput = {
 	eventId: string
 	agentId?: string
+	scope?: MemongoScope
+	scopeRef?: string
 }
 
 export type MemongoExtractResponse = {

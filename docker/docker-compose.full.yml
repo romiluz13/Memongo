@@ -4,13 +4,13 @@
 #   docker compose -f docker/docker-compose.full.yml --profile local up -d
 #
 # API only, connecting to MongoDB Atlas cloud:
-#   MEMONGO_MONGODB_URI="mongodb+srv://user:pass@cluster.mongodb.net/?appName=memongo" \
-#   MEMONGO_API_KEY="local-dev-secret" \
+#   MEMONGO_MONGODB_URI="mongodb+***********************************/?appName=memongo" \
+#   MEMONGO_API_KEY="your-long-random-token" \
 #   docker compose -f docker/docker-compose.full.yml up -d
 #
 # With local MongoDB + auto-embeddings:
 #   VOYAGE_API_KEY="al-your-atlas-model-api-key" \
-#   MEMONGO_API_KEY="local-dev-secret" \
+#   MEMONGO_API_KEY="your-long-random-token" \
 #   docker compose -f docker/docker-compose.full.yml --profile local up -d
 #
 # Profiles:
@@ -25,16 +25,23 @@ services:
       dockerfile: apps/api/Dockerfile
     container_name: memongo-api
     ports:
-      - "${MEMONGO_API_PORT:-3847}:3847"
+      # Loopback-only publish (compose-spec short syntax): publishing on
+      # 0.0.0.0 exposes the API on every host interface, which Docker
+      # documents as insecure by default. Front with a reverse proxy or
+      # publish explicitly if remote access is intended.
+      - "127.0.0.1:${MEMONGO_API_PORT:-3847}:3847"
     environment:
       - NODE_ENV=production
       - MEMONGO_API_HOST=0.0.0.0
       - MEMONGO_API_PORT=3847
-      - MEMONGO_API_KEY=${MEMONGO_API_KEY:-local-dev-secret}
+      # Required: fail closed if MEMONGO_API_KEY is not set (no baked default).
+      - MEMONGO_API_KEY=${MEMONGO_API_KEY:?set MEMONGO_API_KEY}
       - MEMONGO_AGENT_ID=${MEMONGO_AGENT_ID:-main}
       # When using the local profile, point at the mongodb service container.
       # When using Atlas (default), set MEMONGO_MONGODB_URI to your +srv URI.
       - MEMONGO_MONGODB_URI=${MEMONGO_MONGODB_URI:-mongodb://mongodb:27017/?directConnection=true}
+      # Database name inside MongoDB (engine default: memongo).
+      - MEMONGO_MONGODB_DATABASE=${MEMONGO_MONGODB_DATABASE:-memongo}
     depends_on:
       mongodb:
         condition: service_healthy
@@ -49,10 +56,13 @@ services:
 
   # ─── Local MongoDB (only with --profile local) ────────────────────
   mongodb:
-    image: mongodb/mongodb-atlas-local:preview
+    # Pinned to a dated tag (verify auto-embedding parity when bumping).
+    image: mongodb/mongodb-atlas-local:8.2.6-20260715T144108Z
     container_name: memongo-preview
-    ports:
-      - "${MONGODB_PORT:-27017}:27017"
+    # Not published to the host: the API reaches MongoDB over the compose
+    # network. Use docker/docker-compose.preview.yml for host-side tooling.
+    expose:
+      - "27017"
     environment:
       - VOYAGE_API_KEY=${VOYAGE_API_KEY:-}
       - MONGODB_ATLAS_TELEMETRY_ENABLE=false

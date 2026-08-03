@@ -76,6 +76,104 @@ describe("memory-config standalone", () => {
 		expect(cfg.agents?.defaults?.workspace).toBeTruthy()
 	})
 
+	// ---------------------------------------------------------------------------
+	// P2.6: MEMONGO_FORCE_MONGODB_URI precedence matrix.
+	// Rule (shared with the engine via @memongo/lib): FORCE wins over every
+	// other URI source, in every layer. Among non-force sources the bridge is
+	// env-first (plain env URI beats the file-config URI).
+	// ---------------------------------------------------------------------------
+
+	function envWithFileConfig(
+		fileUri: string | undefined,
+		extra: NodeJS.ProcessEnv = {},
+	): { env: NodeJS.ProcessEnv; cleanup: () => void } {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "memongo-cfg-p26-"))
+		const cfgPath = path.join(dir, "memongo.json")
+		if (fileUri !== undefined) {
+			fs.writeFileSync(
+				cfgPath,
+				JSON.stringify({ memory: { mongodb: { uri: fileUri } } }),
+				"utf-8",
+			)
+		}
+		return {
+			env: { MEMONGO_CONFIG_PATH: cfgPath, ...extra },
+			cleanup: () => fs.rmSync(dir, { recursive: true, force: true }),
+		}
+	}
+
+	it("plain env URI only -> plain env URI wins", () => {
+		const { env, cleanup } = envWithFileConfig(undefined, {
+			MEMONGO_MONGODB_URI: "mongodb://plain:27017/db",
+		})
+		try {
+			const cfg = buildMemongoConfig(env)
+			expect(cfg.memory?.mongodb?.uri).toBe("mongodb://plain:27017/db")
+		} finally {
+			cleanup()
+		}
+	})
+
+	it("force env URI only -> force URI wins", () => {
+		const { env, cleanup } = envWithFileConfig(undefined, {
+			MEMONGO_FORCE_MONGODB_URI: "mongodb://force:27017/db",
+		})
+		try {
+			const cfg = buildMemongoConfig(env)
+			expect(cfg.memory?.mongodb?.uri).toBe("mongodb://force:27017/db")
+		} finally {
+			cleanup()
+		}
+	})
+
+	it("plain + force env URIs -> force URI wins (P2.6 conflict fix)", () => {
+		const { env, cleanup } = envWithFileConfig(undefined, {
+			MEMONGO_MONGODB_URI: "mongodb://plain:27017/db",
+			MEMONGO_FORCE_MONGODB_URI: "mongodb://force:27017/db",
+		})
+		try {
+			const cfg = buildMemongoConfig(env)
+			expect(cfg.memory?.mongodb?.uri).toBe("mongodb://force:27017/db")
+		} finally {
+			cleanup()
+		}
+	})
+
+	it("neither env URI + file-config URI -> file URI wins", () => {
+		const { env, cleanup } = envWithFileConfig("mongodb://file:27017/db")
+		try {
+			const cfg = buildMemongoConfig(env)
+			expect(cfg.memory?.mongodb?.uri).toBe("mongodb://file:27017/db")
+		} finally {
+			cleanup()
+		}
+	})
+
+	it("plain + force + file-config URI -> force URI wins over both", () => {
+		const { env, cleanup } = envWithFileConfig("mongodb://file:27017/db", {
+			MEMONGO_MONGODB_URI: "mongodb://plain:27017/db",
+			MEMONGO_FORCE_MONGODB_URI: "mongodb://force:27017/db",
+		})
+		try {
+			const cfg = buildMemongoConfig(env)
+			expect(cfg.memory?.mongodb?.uri).toBe("mongodb://force:27017/db")
+		} finally {
+			cleanup()
+		}
+	})
+
+	it("plain env URI + file-config URI -> plain env URI wins (env-first)", () => {
+		const { env, cleanup } = envWithFileConfig("mongodb://file:27017/db", {
+			MEMONGO_MONGODB_URI: "mongodb://plain:27017/db",
+		})
+		try {
+			const cfg = buildMemongoConfig(env)
+			expect(cfg.memory?.mongodb?.uri).toBe("mongodb://plain:27017/db")
+		} finally {
+			cleanup()
+		}
+	})
+
 	it("reads optional memongo.json when present", () => {
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "memongo-cfg-"))
 		const cfgPath = path.join(dir, "memongo.json")

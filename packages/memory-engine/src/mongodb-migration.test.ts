@@ -18,11 +18,67 @@ import { chunksCollection, eventsCollection } from "./mongodb-schema.js"
 function createMockChunksCol(
 	chunks: Record<string, unknown>[] = [],
 ): Collection {
+	const cursor = {
+		batchSize: vi.fn(),
+		[Symbol.asyncIterator]: async function* () {
+			for (const chunk of chunks) {
+				yield chunk
+			}
+		},
+	}
+	cursor.batchSize.mockReturnValue(cursor)
 	return {
-		find: vi.fn(() => ({
-			toArray: vi.fn(async () => chunks),
-		})),
+		find: vi.fn(() => cursor),
 	} as unknown as Collection
+}
+
+/**
+ * Two-tenant fixture (P2.7): a fake chunks collection that honors the
+ * agentId/scope/source filter the way the real MongoDB query planner would,
+ * so tests can prove the migration never reads another tenant's chunks.
+ */
+function createTenantAwareChunksCol(
+	allDocs: Record<string, unknown>[],
+): Collection {
+	const find = vi.fn((filter: Record<string, unknown>) => {
+		const matched = allDocs.filter((doc) => {
+			const sourceIn = (filter.source as { $in?: string[] } | undefined)?.$in
+			if (sourceIn && !sourceIn.includes(doc.source as string)) {
+				return false
+			}
+			if (filter.agentId !== undefined && doc.agentId !== filter.agentId) {
+				return false
+			}
+			const orClauses = filter.$or as Array<Record<string, unknown>> | undefined
+			if (orClauses) {
+				const scopeOk = orClauses.some((clause) => {
+					if (typeof clause.scope === "string") {
+						return doc.scope === clause.scope
+					}
+					const existsClause = clause.scope as { $exists?: boolean } | undefined
+					if (existsClause && existsClause.$exists === false) {
+						return doc.scope === undefined
+					}
+					return false
+				})
+				if (!scopeOk) {
+					return false
+				}
+			}
+			return true
+		})
+		const cursor = {
+			batchSize: vi.fn(),
+			[Symbol.asyncIterator]: async function* () {
+				for (const doc of matched) {
+					yield doc
+				}
+			},
+		}
+		cursor.batchSize.mockReturnValue(cursor)
+		return cursor
+	})
+	return { find } as unknown as Collection
 }
 
 function createMockEventsCol(): Collection {
@@ -354,5 +410,229 @@ describe("backfillEventsFromChunks", () => {
 		const ops = vi.mocked(eventsCol.bulkWrite).mock
 			.calls[0][0] as unknown as Array<Record<string, unknown>>
 		expect(ops.length).toBe(1)
+	})
+
+	// -----------------------------------------------------------------------
+	// P2.7: tenant isolation — shared-prefix collections must never leak one
+	// tenant's chunks into another tenant's event namespace.
+	// -----------------------------------------------------------------------
+
+	it("filters the source read by the caller's agentId", async () => {
+		const chunksCol = createMockChunksCol([
+			{
+				path: "sessions/msg-1",
+				text: "Hello",
+				hash: "abc123",
+				source: "conversation",
+				agentId: "agent-1",
+				updatedAt: new Date("2025-06-01"),
+			},
+		])
+		const eventsCol = createMockEventsCol()
+
+		vi.mocked(chunksCollection).mockReturnValue(chunksCol)
+		vi.mocked(eventsCollection).mockReturnValue(eventsCol)
+
+		await backfillEventsFromChunks({
+			db: mockDb(),
+			prefix: "test_",
+			agentId: "agent-1",
+		})
+
+		const filter = vi.mocked(chunksCol.find).mock.calls[0][0] as Record<
+			string,
+			unknown
+		>
+		expect(filter.agentId).toBe("agent-1")
+	})
+
+	it("copies only the caller's chunks in a shared-prefix two-tenant collection", async () => {
+		const allDocs = [
+			{
+				path: "sessions/a1-msg-1",
+				text: "agent-1 first",
+				hash: "a1h1",
+				source: "conversation",
+				agentId: "agent-1",
+				scope: "agent",
+				updatedAt: new Date("2025-06-01"),
+			},
+			{
+				path: "sessions/a1-msg-2",
+				text: "agent-1 second",
+				hash: "a1h2",
+				source: "sessions",
+				agentId: "agent-1",
+				scope: "agent",
+				updatedAt: new Date("2025-06-02"),
+			},
+			{
+				path: "sessions/a2-msg-1",
+				text: "agent-2 private",
+				hash: "a2h1",
+				source: "conversation",
+				agentId: "agent-2",
+				scope: "agent",
+				updatedAt: new Date("2025-06-01"),
+			},
+			{
+				path: "sessions/a2-msg-2",
+				text: "agent-2 also private",
+				hash: "a2h2",
+				source: "memory",
+				agentId: "agent-2",
+				scope: "agent",
+				updatedAt: new Date("2025-06-02"),
+			},
+		]
+
+		const chunksCol = createTenantAwareChunksCol(allDocs)
+		const eventsCol = createMockEventsCol()
+
+		vi.mocked(chunksCollection).mockReturnValue(chunksCol)
+		vi.mocked(eventsCollection).mockReturnValue(eventsCol)
+
+		const result = await backfillEventsFromChunks({
+			db: mockDb(),
+			prefix: "shared_",
+			agentId: "agent-1",
+		})
+
+		// Only agent-1's two chunks are read/processed — agent-2's never
+		// leave the source query.
+		expect(result.chunksProcessed).toBe(2)
+		expect(result.eventsCreated).toBe(2)
+		expect(result.skipped).toBe(0)
+
+		const ops = vi.mocked(eventsCol.bulkWrite).mock
+			.calls[0][0] as unknown as Array<{
+			updateOne: { update: { $setOnInsert: Record<string, unknown> } }
+		}>
+		expect(ops.length).toBe(2)
+		for (const op of ops) {
+			expect(op.updateOne.update.$setOnInsert.agentId).toBe("agent-1")
+			expect(op.updateOne.update.$setOnInsert.scopeRef).toBe("agent:agent-1")
+		}
+		const bodies = ops.map((op) => op.updateOne.update.$setOnInsert.body)
+		expect(bodies).toContain("agent-1 first")
+		expect(bodies).toContain("agent-1 second")
+		expect(bodies).not.toContain("agent-2 private")
+		expect(bodies).not.toContain("agent-2 also private")
+	})
+
+	it("does not convert chunks explicitly scoped outside agent scope", async () => {
+		const allDocs = [
+			{
+				path: "sessions/agent-scoped",
+				text: "agent scoped chunk",
+				hash: "h1",
+				source: "conversation",
+				agentId: "agent-1",
+				scope: "agent",
+				updatedAt: new Date("2025-06-01"),
+			},
+			{
+				path: "kb/workspace-scoped",
+				text: "workspace scoped chunk",
+				hash: "h2",
+				source: "memory",
+				agentId: "agent-1",
+				scope: "workspace",
+				updatedAt: new Date("2025-06-01"),
+			},
+		]
+
+		const chunksCol = createTenantAwareChunksCol(allDocs)
+		const eventsCol = createMockEventsCol()
+
+		vi.mocked(chunksCollection).mockReturnValue(chunksCol)
+		vi.mocked(eventsCollection).mockReturnValue(eventsCol)
+
+		const result = await backfillEventsFromChunks({
+			db: mockDb(),
+			prefix: "shared_",
+			agentId: "agent-1",
+		})
+
+		expect(result.chunksProcessed).toBe(1)
+		expect(result.eventsCreated).toBe(1)
+
+		const ops = vi.mocked(eventsCol.bulkWrite).mock
+			.calls[0][0] as unknown as Array<{
+			updateOne: { update: { $setOnInsert: { body: string } } }
+		}>
+		expect(ops[0].updateOne.update.$setOnInsert.body).toBe("agent scoped chunk")
+	})
+
+	it("derives distinct deterministic eventIds per tenant for identical path+hash", async () => {
+		const makeChunk = (agentId: string) => ({
+			path: "sessions/shared-path",
+			text: "same text",
+			hash: "samehash",
+			source: "conversation",
+			agentId,
+			scope: "agent",
+			updatedAt: new Date("2025-06-01"),
+		})
+
+		const eventIds: string[] = []
+		for (const tenant of ["agent-1", "agent-2"]) {
+			vi.clearAllMocks()
+			const chunksCol = createTenantAwareChunksCol([makeChunk(tenant)])
+			const eventsCol = createMockEventsCol()
+			vi.mocked(chunksCollection).mockReturnValue(chunksCol)
+			vi.mocked(eventsCollection).mockReturnValue(eventsCol)
+
+			await backfillEventsFromChunks({
+				db: mockDb(),
+				prefix: "shared_",
+				agentId: tenant,
+			})
+
+			const ops = vi.mocked(eventsCol.bulkWrite).mock
+				.calls[0][0] as unknown as Array<{
+				updateOne: { filter: { eventId: string } }
+			}>
+			eventIds.push(ops[0].updateOne.filter.eventId)
+		}
+
+		// Cross-tenant path+hash must NOT collide on the deterministic
+		// eventId (P2.7: agentId is part of the hash input).
+		expect(eventIds[0]).not.toBe(eventIds[1])
+	})
+
+	it("stays deterministic per tenant (same tenant + same chunk = same eventId)", async () => {
+		const chunk = {
+			path: "sessions/shared-path",
+			text: "same text",
+			hash: "samehash",
+			source: "conversation",
+			agentId: "agent-1",
+			scope: "agent",
+			updatedAt: new Date("2025-06-01"),
+		}
+
+		const eventIds: string[] = []
+		for (let run = 0; run < 2; run++) {
+			vi.clearAllMocks()
+			const chunksCol = createTenantAwareChunksCol([chunk])
+			const eventsCol = createMockEventsCol()
+			vi.mocked(chunksCollection).mockReturnValue(chunksCol)
+			vi.mocked(eventsCollection).mockReturnValue(eventsCol)
+
+			await backfillEventsFromChunks({
+				db: mockDb(),
+				prefix: "shared_",
+				agentId: "agent-1",
+			})
+
+			const ops = vi.mocked(eventsCol.bulkWrite).mock
+				.calls[0][0] as unknown as Array<{
+				updateOne: { filter: { eventId: string } }
+			}>
+			eventIds.push(ops[0].updateOne.filter.eventId)
+		}
+
+		expect(eventIds[0]).toBe(eventIds[1])
 	})
 })

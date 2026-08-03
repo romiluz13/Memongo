@@ -33,8 +33,8 @@
 		"check-types": "node ../../node_modules/typescript/bin/tsc --noEmit -p tsconfig.json"
 	},
 	"dependencies": {
-		"@memongo/memory-engine": "2.0.0",
-		"@memongo/memory-bridge": "2.0.0"
+		"@memongo/memory-engine": "2.0.1",
+		"@memongo/memory-bridge": "2.0.1"
 	},
 	"devDependencies": {
 		"typescript": "^5.8.0"

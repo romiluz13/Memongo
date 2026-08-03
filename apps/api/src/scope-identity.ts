@@ -1,27 +1,27 @@
+import {
+	isMemoryScopeValue,
+	MEMORY_SCOPE_VALUES,
+	type MemoryScopeValue,
+} from "@memongo/lib"
 import type { Context } from "hono"
 
 /**
- * The canonical set of scope values. This is the SINGLE source of truth shared
- * by request resolution (pickScope) and scoped-API-key policy validation, so the
- * authorization layer and the execution layer cannot disagree about which scope
- * strings are valid (issue #57 divergence class). A policy that authorizes a
- * non-canonical scope would let execution silently drop it and a nested
- * entry.scope smuggle survive — so policies are validated against this set at
- * config load and fail closed.
+ * The canonical set of scope values lives in the single contract source
+ * (@memongo/lib contract — P2.2); this module re-exports it so request
+ * resolution (pickScope), scoped-API-key policy validation, the OpenAPI
+ * document, and the MCP/zod tool schemas all validate against ONE array, so
+ * the authorization layer and the execution layer cannot disagree about
+ * which scope strings are valid (issue #57 divergence class). A policy that
+ * authorizes a non-canonical scope would let execution silently drop it and
+ * a nested entry.scope smuggle survive — so policies are validated against
+ * this set at config load and fail closed.
  */
-export const VALID_SCOPE_VALUES = [
-	"session",
-	"user",
-	"agent",
-	"workspace",
-	"tenant",
-	"global",
-] as const
+export const VALID_SCOPE_VALUES = MEMORY_SCOPE_VALUES
 
-export type ApiScope = (typeof VALID_SCOPE_VALUES)[number]
+export type ApiScope = MemoryScopeValue
 
 export function isValidScope(value: string): value is ApiScope {
-	return (VALID_SCOPE_VALUES as readonly string[]).includes(value)
+	return isMemoryScopeValue(value)
 }
 
 /**

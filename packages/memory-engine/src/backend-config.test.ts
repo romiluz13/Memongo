@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest"
 import type { MemongoConfig } from "@memongo/lib"
-import { resolveMemoryBackendConfig } from "./backend-config.js"
+import {
+	resolveMemoryBackendConfig,
+	resolveSearchDefaultScope,
+} from "./backend-config.js"
 
 describe("resolveMemoryBackendConfig", () => {
 	it("defaults to mongodb backend when config missing and env URI is set", () => {
@@ -44,7 +47,8 @@ describe("resolveMemoryBackendConfig", () => {
 		expect(resolved.mongodb).toBeDefined()
 		expect(resolved.mongodb!.uri).toBe("mongodb://localhost:27017")
 		expect(resolved.mongodb!.database).toBe("memongo")
-		expect(resolved.mongodb!.collectionPrefix).toBe("memongo_main_")
+		// P2.1: shared default prefix (was `memongo_<agent>_` before P2.1)
+		expect(resolved.mongodb!.collectionPrefix).toBe("memongo_")
 		expect(resolved.mongodb!.deploymentProfile).toBe("atlas-local-preview")
 		expect(resolved.mongodb!.embeddingMode).toBe("automated")
 		expect(resolved.mongodb!.fusionMethod).toBe("rankFusion")
@@ -131,6 +135,37 @@ describe("resolveMemoryBackendConfig", () => {
 		}
 	})
 
+	it("defaults every agent to the shared memongo_ collection prefix (P2.1)", () => {
+		const cfg = {
+			agents: { defaults: { workspace: "/tmp/memory-test" } },
+			memory: {
+				backend: "mongodb",
+				mongodb: { uri: "mongodb://localhost:27017" },
+			},
+		} as unknown as MemongoConfig
+
+		for (const agentId of ["main", "research-agent", "Agent With Spaces"]) {
+			const resolved = resolveMemoryBackendConfig({ cfg, agentId })
+			expect(resolved.mongodb!.collectionPrefix).toBe("memongo_")
+		}
+	})
+
+	it("keeps per-agent hard isolation opt-in via config collectionPrefix", () => {
+		const cfg = {
+			agents: { defaults: { workspace: "/tmp/memory-test" } },
+			memory: {
+				backend: "mongodb",
+				mongodb: {
+					uri: "mongodb://localhost:27017",
+					collectionPrefix: "memongo_main_",
+				},
+			},
+		} as unknown as MemongoConfig
+
+		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
+		expect(resolved.mongodb!.collectionPrefix).toBe("memongo_main_")
+	})
+
 	it("allows MEMONGO_MONGODB_COLLECTION_PREFIX to override config for benchmark isolation", () => {
 		vi.stubEnv("MEMONGO_MONGODB_COLLECTION_PREFIX", "bench_run_")
 		const cfg = {
@@ -211,6 +246,47 @@ describe("resolveMemoryBackendConfig", () => {
 			} as MemongoConfig
 			const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
 			expect(resolved.mongodb!.uri).toBe("mongodb://from-env:27017")
+		} finally {
+			vi.unstubAllEnvs()
+		}
+	})
+
+	// ---------------------------------------------------------------------------
+	// P2.6: MEMONGO_FORCE_MONGODB_URI precedence matrix.
+	// Rule (shared with the bridge via @memongo/lib): FORCE wins over every
+	// other URI source, in every layer. Among non-force sources the engine
+	// treats an explicit cfg.memory.mongodb.uri as intentional (it beats the
+	// plain MEMONGO_MONGODB_URI fallback).
+	// ---------------------------------------------------------------------------
+
+	it("FORCE wins when plain env URI and file config URI are both set", () => {
+		vi.stubEnv("MEMONGO_MONGODB_URI", "mongodb://from-env:27017")
+		vi.stubEnv("MEMONGO_FORCE_MONGODB_URI", "mongodb://from-force:27017/db")
+		try {
+			const cfg = {
+				agents: { defaults: { workspace: "/tmp/memory-test" } },
+				memory: {
+					backend: "mongodb",
+					mongodb: { uri: "mongodb://from-file:27017/db" },
+				},
+			} as unknown as MemongoConfig
+			const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
+			expect(resolved.mongodb!.uri).toBe("mongodb://from-force:27017/db")
+		} finally {
+			vi.unstubAllEnvs()
+		}
+	})
+
+	it("FORCE wins over plain env URI when no file config URI is set", () => {
+		vi.stubEnv("MEMONGO_MONGODB_URI", "mongodb://from-env:27017")
+		vi.stubEnv("MEMONGO_FORCE_MONGODB_URI", "mongodb://from-force:27017/db")
+		try {
+			const cfg = {
+				agents: { defaults: { workspace: "/tmp/memory-test" } },
+				memory: { backend: "mongodb", mongodb: {} },
+			} as MemongoConfig
+			const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
+			expect(resolved.mongodb!.uri).toBe("mongodb://from-force:27017/db")
 		} finally {
 			vi.unstubAllEnvs()
 		}
@@ -1178,5 +1254,37 @@ describe("resolveMemoryBackendConfig", () => {
 		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
 		expect(resolved.mongodb!.reranking.minScore).toBe(0.05)
 		vi.unstubAllEnvs()
+	})
+})
+
+describe("resolveSearchDefaultScope (P1.4: MEMONGO_SEARCH_DEFAULT_SCOPE)", () => {
+	it("defaults to agent when the env is unset, empty, or whitespace", () => {
+		expect(resolveSearchDefaultScope(undefined)).toBe("agent")
+		expect(resolveSearchDefaultScope("")).toBe("agent")
+		expect(resolveSearchDefaultScope("   ")).toBe("agent")
+	})
+
+	it("honors every canonical scope", () => {
+		for (const scope of [
+			"session",
+			"user",
+			"agent",
+			"workspace",
+			"tenant",
+			"global",
+		] as const) {
+			expect(resolveSearchDefaultScope(scope)).toBe(scope)
+		}
+		// Surrounding whitespace is tolerated.
+		expect(resolveSearchDefaultScope("  global  ")).toBe("global")
+	})
+
+	it("throws on invalid values like other enum envs", () => {
+		expect(() => resolveSearchDefaultScope("everything")).toThrow(
+			/MEMONGO_SEARCH_DEFAULT_SCOPE "everything" is not a valid memory scope/,
+		)
+		expect(() => resolveSearchDefaultScope("GLOBAL")).toThrow(
+			/not a valid memory scope/,
+		)
 	})
 })

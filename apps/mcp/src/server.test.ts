@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest"
-import { handleToolCall, toolList } from "./server.js"
+import { Client } from "@modelcontextprotocol/sdk/client/index.js"
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js"
+import { createMemongoServer, handleToolCall, toolList } from "./server.js"
+import { toolCatalog } from "./tool-registry.js"
 
 function parseTextPayload(result: { content: Array<{ text: string }> }) {
 	return JSON.parse(result.content[0]?.text ?? "null")
@@ -80,6 +83,47 @@ describe("toolList", () => {
 				"minAnswerCoverage",
 			]),
 		)
+	})
+})
+
+describe("server instructions (P1.4)", () => {
+	it("advertises a memory-policy block in the initialize response", async () => {
+		const server = createMemongoServer()
+		const [clientTransport, serverTransport] =
+			InMemoryTransport.createLinkedPair()
+		const client = new Client({ name: "test-client", version: "0.0.1" })
+		await Promise.all([
+			server.connect(serverTransport),
+			client.connect(clientTransport),
+		])
+		try {
+			const instructions = client.getInstructions()
+			expect(instructions).toBeDefined()
+			// Memory policy: when to SAVE, when to SEARCH, which tool for what.
+			expect(instructions).toMatch(/SAVE/)
+			expect(instructions).toMatch(/SEARCH/)
+			expect(instructions).toContain("memongo_write_event")
+			expect(instructions).toContain("memongo_search")
+			expect(instructions).toContain("memongo_recall_conversation")
+			expect(instructions).toContain("memongo_build_context_bundle")
+		} finally {
+			await client.close()
+			await server.close()
+		}
+	})
+})
+
+describe("core tool descriptions (P1.4)", () => {
+	it("gives every core tool explicit when-to-use guidance", () => {
+		const core = toolCatalog.filter((tool) => tool.category === "core")
+		expect(core).toHaveLength(12)
+		// Spot-assert the three highest-traffic tools.
+		const byName = new Map(core.map((tool) => [tool.name, tool.description]))
+		expect(byName.get("memongo_search")).toMatch(/[Uu]se when/)
+		expect(byName.get("memongo_write_event")).toMatch(/[Uu]se when/)
+		expect(byName.get("memongo_build_context_bundle")).toMatch(/[Uu]se when/)
+		// The write path must warn against saving ephemeral chatter.
+		expect(byName.get("memongo_write_event")).toMatch(/ephemeral/i)
 	})
 })
 
@@ -351,5 +395,185 @@ describe("handleToolCall", () => {
 			family: "structured",
 			data: { reinforcementCount: 4 },
 		})
+	})
+})
+
+describe("memongo_extract (P1.2)", () => {
+	it("forwards extract calls to the API client", async () => {
+		const extract = vi
+			.fn()
+			.mockResolvedValue({ ok: true, jobId: "job-1", scheduled: true })
+
+		const out = await handleToolCall(
+			"memongo_extract",
+			{ eventId: "evt-1", scope: "user", scopeRef: "user-1" },
+			{ extract } as any,
+		)
+
+		expect(extract).toHaveBeenCalledWith({
+			eventId: "evt-1",
+			agentId: undefined,
+			scope: "user",
+			scopeRef: "user-1",
+		})
+		expect(out.isError).toBeUndefined()
+		expect(parseTextPayload(out)).toEqual({
+			ok: true,
+			jobId: "job-1",
+			scheduled: true,
+		})
+		expect(out.structuredContent).toEqual({
+			ok: true,
+			jobId: "job-1",
+			scheduled: true,
+		})
+	})
+
+	it("rejects a missing eventId before calling the client", async () => {
+		const extract = vi.fn()
+
+		const out = await handleToolCall("memongo_extract", {}, { extract } as any)
+
+		expect(extract).not.toHaveBeenCalled()
+		expect(out.isError).toBe(true)
+		expect(parseTextPayload(out)).toEqual({ error: "eventId is required" })
+	})
+})
+
+describe("structuredContent envelopes (P1.2)", () => {
+	// Every registered tool must emit structuredContent alongside the text
+	// serialization, regardless of which env flags expose it.
+	const stubClient = new Proxy(
+		{},
+		{ get: () => async () => ({}) },
+	) as unknown as Parameters<typeof handleToolCall>[2]
+
+	// Minimal valid arguments for tools that validate inputs before calling
+	// the client; all other tools accept an empty argument object.
+	const minimalArgs: Record<string, Record<string, unknown>> = {
+		memongo_write_event: { role: "user", body: "hello" },
+		memongo_self_edit: { block: "user", action: "replace", content: "x" },
+		memongo_procedure_outcome: { handle: {}, success: true },
+		memongo_memory_feedback: { handle: {}, signal: "confirm" },
+		memongo_discovery_projection: { kind: "what-changed" },
+		memongo_benchmark_ingest: { datasetPath: "data.json" },
+		memongo_import_conversations: { datasetPath: "data.json" },
+		memongo_import_conversation_history: { datasetPath: "data.json" },
+		memongo_admin_access_summaries: {
+			collection: "events",
+			memoryIds: ["mem-1"],
+		},
+		memongo_admin_get_trace: { traceId: "trace-1" },
+		memongo_get_job: { jobId: "job-1" },
+		memongo_extract: { eventId: "evt-1" },
+	}
+
+	for (const tool of toolCatalog) {
+		it(`returns structuredContent for ${tool.name}`, async () => {
+			const out = await handleToolCall(
+				tool.name,
+				minimalArgs[tool.name] ?? {},
+				stubClient,
+			)
+
+			expect(out.isError).toBeUndefined()
+			expect(out.structuredContent).toBeDefined()
+			expect(typeof out.structuredContent).toBe("object")
+			expect(out.content[0]?.type).toBe("text")
+			expect(() => JSON.parse(out.content[0]?.text ?? "")).not.toThrow()
+		})
+	}
+})
+
+describe("scope validation (P2.8)", () => {
+	const SCOPE_ERROR = "scope must be session|user|agent|workspace|tenant|global"
+
+	it("rejects an invalid scope on memongo_hydrate_active_slate instead of casting it through", async () => {
+		const hydrateActiveSlate = vi.fn()
+
+		const out = await handleToolCall(
+			"memongo_hydrate_active_slate",
+			{ scope: "bogus" },
+			{ hydrateActiveSlate } as any,
+		)
+
+		expect(out.isError).toBe(true)
+		expect(parseTextPayload(out)).toEqual({ error: SCOPE_ERROR })
+		expect(hydrateActiveSlate).not.toHaveBeenCalled()
+	})
+
+	it("rejects an invalid scope on memongo_discovery_projection instead of casting it through", async () => {
+		const buildDiscoveryProjection = vi.fn()
+
+		const out = await handleToolCall(
+			"memongo_discovery_projection",
+			{ kind: "what-changed", scope: "bogus" },
+			{ buildDiscoveryProjection } as any,
+		)
+
+		expect(out.isError).toBe(true)
+		expect(parseTextPayload(out)).toEqual({ error: SCOPE_ERROR })
+		expect(buildDiscoveryProjection).not.toHaveBeenCalled()
+	})
+
+	it("rejects an invalid scope on memongo_state_unified instead of casting it through", async () => {
+		const state = vi.fn()
+
+		const out = await handleToolCall(
+			"memongo_state_unified",
+			{ scope: "bogus" },
+			{ state } as any,
+		)
+
+		expect(out.isError).toBe(true)
+		expect(parseTextPayload(out)).toEqual({ error: SCOPE_ERROR })
+		expect(state).not.toHaveBeenCalled()
+	})
+
+	it("rejects an invalid scope on memongo_write_event", async () => {
+		const writeEvent = vi.fn()
+
+		const out = await handleToolCall(
+			"memongo_write_event",
+			{ role: "user", body: "hello", scope: "bogus" },
+			{ writeEvent } as any,
+		)
+
+		expect(out.isError).toBe(true)
+		expect(parseTextPayload(out)).toEqual({ error: SCOPE_ERROR })
+		expect(writeEvent).not.toHaveBeenCalled()
+	})
+
+	it("passes a valid scope through on memongo_hydrate_active_slate", async () => {
+		const hydrateActiveSlate = vi.fn().mockResolvedValue({ items: [] })
+
+		const out = await handleToolCall(
+			"memongo_hydrate_active_slate",
+			{ scope: "workspace", scopeRef: "acme/platform" },
+			{ hydrateActiveSlate } as any,
+		)
+
+		expect(out.isError).toBeUndefined()
+		expect(hydrateActiveSlate).toHaveBeenCalledWith(
+			expect.objectContaining({
+				scope: "workspace",
+				scopeRef: "acme/platform",
+			}),
+		)
+	})
+
+	it("forwards scopeRef on memongo_novelty_scan", async () => {
+		const scanNovelty = vi.fn().mockResolvedValue({ novel: [] })
+
+		const out = await handleToolCall(
+			"memongo_novelty_scan",
+			{ scope: "tenant", scopeRef: "acme" },
+			{ scanNovelty } as any,
+		)
+
+		expect(out.isError).toBeUndefined()
+		expect(scanNovelty).toHaveBeenCalledWith(
+			expect.objectContaining({ scope: "tenant", scopeRef: "acme" }),
+		)
 	})
 })

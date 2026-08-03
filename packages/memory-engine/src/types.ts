@@ -1,4 +1,6 @@
-import type { MemoryScope } from "@memongo/lib"
+import type { MemoryMongoDBFusionMethod, MemoryScope } from "@memongo/lib"
+import type { ProcedureLifecyclePatch } from "./mongodb-procedures.js"
+import type { StructuredMemoryLifecyclePatch } from "./mongodb-structured-memory.js"
 
 export type MemorySource = "reference" | "conversation" | "structured"
 export type LegacyMemorySource = "memory" | "sessions" | "kb" | "structured"
@@ -637,6 +639,12 @@ export type MemoryContextBundleRequest = {
 	mode?: MemoryContextBundleMode
 }
 
+/**
+ * The memory manager contract. Exactly one backend exists
+ * (MongoDBMemoryManager), so every method is REQUIRED — optional members
+ * here previously forced the bridge to compensate with 13 structural
+ * `*CapableManager` casts (P2.2). Signatures mirror the concrete class.
+ */
 export interface MemorySearchManager {
 	search(
 		query: string,
@@ -648,62 +656,67 @@ export interface MemorySearchManager {
 			scopeRef?: string
 		},
 	): Promise<MemorySearchResult[]>
-	searchDetailed?(request: MemorySearchRequest): Promise<MemorySearchResponse>
-	buildDiscoveryProjection?(
+	searchDetailed(request: MemorySearchRequest): Promise<MemorySearchResponse>
+	buildDiscoveryProjection(
 		request: MemoryDiscoveryProjectionRequest,
 	): Promise<MemoryDiscoveryProjection>
-	hydrateActiveSlate?(params?: {
+	hydrateActiveSlate(params?: {
 		scope?: MemoryScope
 		scopeRef?: string
 		maxItems?: number
 	}): Promise<MemoryActiveSlate>
-	buildContextBundle?(
+	buildContextBundle(
 		request?: MemoryContextBundleRequest,
 	): Promise<MemoryContextBundle>
-	recallConversation?(
+	recallConversation(
 		request: Omit<ConversationRecallRequest, "agentId">,
 	): Promise<ConversationRecallResponse>
-	extractEvent?(params: {
+	extractEvent(params: {
 		eventId: string
+		scope?: MemoryScope
+		scopeRef?: string
 	}): Promise<{ jobId: string; scheduled: boolean }>
-	listRecallTraces?(params?: { limit?: number }): Promise<RecallTrace[]>
-	getRecallTrace?(params: { traceId: string }): Promise<RecallTrace | null>
-	listMemoryJobs?(params?: {
+	listRecallTraces(params?: { limit?: number }): Promise<RecallTrace[]>
+	getRecallTrace(params: { traceId: string }): Promise<RecallTrace | null>
+	listMemoryJobs(params?: {
 		status?: MemoryJobStatus
 		limit?: number
 		jobType?: MemoryJobType
 	}): Promise<MemoryJob[]>
-	getMemoryJob?(params: { jobId: string }): Promise<MemoryJob | null>
-	accessTrends?(params?: {
+	getMemoryJob(params: { jobId: string }): Promise<MemoryJob | null>
+	accessTrends(params?: {
 		collection?: AccessEventCollection
 		memoryIds?: string[]
 		windowDays?: number
 		limit?: number
 	}): Promise<MemoryAccessTrend[]>
-	accessSummaries?(params: {
+	accessSummaries(params: {
 		collection: AccessEventCollection
 		memoryIds: string[]
 		windowDays?: number
 	}): Promise<MemoryAccessSummary[]>
-	benchmarkIngest?(params: {
+	benchmarkIngest(params: {
 		datasetPath: string
 		scope?: MemoryScope
 		limitConversations?: number
 		limitTurnsPerConversation?: number
 	}): Promise<MemoryBenchmarkIngestResult>
-	importConversations?(params: {
+	importConversations(params: {
 		datasetPath: string
 		scope?: MemoryScope
 		limitConversations?: number
 		limitTurnsPerConversation?: number
 	}): Promise<MemoryConversationImportResult>
-	/** Direct KB search — optional, only available on MongoDB backend. */
-	searchKB?(
+	/** Direct KB search on the MongoDB backend. */
+	searchKB(
 		query: string,
 		opts?: {
 			maxResults?: number
 			minScore?: number
+			scopeRef?: string
 			filter?: { tags?: string[]; category?: string; source?: string }
+			/** Per-call override; defaults to the resolved config fusionMethod. */
+			fusionMethod?: MemoryMongoDBFusionMethod
 		},
 	): Promise<MemorySearchResult[]>
 	readFile(params: {
@@ -712,7 +725,7 @@ export interface MemorySearchManager {
 		lines?: number
 	}): Promise<MemoryReadResult>
 	status(): MemoryProviderStatus
-	sync?(params?: {
+	sync(params?: {
 		reason?: string
 		force?: boolean
 		sessionFiles?: string[]
@@ -720,7 +733,57 @@ export interface MemorySearchManager {
 	}): Promise<void>
 	probeEmbeddingAvailability(): Promise<MemoryEmbeddingProbeResult>
 	probeVectorAvailability(): Promise<boolean>
-	close?(): Promise<void>
+	getLifecycleItem(
+		handle: MemoryStableHandle,
+	): Promise<MemoryLifecycleItem | null>
+	updateLifecycleItem(
+		handle: MemoryStableHandle,
+		patch: StructuredMemoryLifecyclePatch | ProcedureLifecyclePatch,
+	): Promise<MemoryLifecycleItem | null>
+	invalidateLifecycleItem(
+		handle: MemoryStableHandle,
+		invalidatedBy?: Record<string, unknown>,
+	): Promise<MemoryLifecycleItem | null>
+	getLifecycleHistory(params: {
+		handle: MemoryStableHandle
+		limit?: number
+	}): Promise<MemoryLifecycleHistoryEntry[]>
+	reportProcedureOutcome(params: {
+		handle: Extract<MemoryStableHandle, { family: "procedure" }>
+		success: boolean
+		note?: string
+		actorRole?: MemoryActorRole
+	}): Promise<Extract<MemoryLifecycleItem, { family: "procedure" }> | null>
+	applyMemoryFeedback(params: {
+		handle: Extract<MemoryStableHandle, { family: "structured" }>
+		signal: MemoryFeedbackSignal
+		patch?: StructuredMemoryLifecyclePatch
+		invalidatedBy?: Record<string, unknown>
+		note?: string
+		actorRole?: MemoryActorRole
+	}): Promise<Extract<MemoryLifecycleItem, { family: "structured" }> | null>
+	selfEditBlock(params: {
+		block: MemorySelfEditBlock
+		action: MemorySelfEditAction
+		content: string
+	}): Promise<{ upserted: boolean; id: string }>
+	traceChain(params: {
+		factId: string
+		collection: string
+		options?: { maxDepth?: number }
+	}): Promise<ReasoningChain>
+	scanNovelty(params?: {
+		limit?: number
+		scope?: string
+		scopeRef?: string
+	}): Promise<NoveltyReport>
+	consolidate(params?: {
+		maxEvents?: number
+		minCombinedScore?: number
+		scope?: MemoryScope
+		scopeRef?: string
+	}): Promise<ConsolidationResult>
+	close(): Promise<void>
 }
 
 // ---------------------------------------------------------------------------
@@ -1570,6 +1633,13 @@ export type ConsolidationOptions = {
 	timeRange?: { from: Date; to: Date }
 	/** Filter events mentioning these entities (post-query regex filter) */
 	entitySet?: string[]
+	/**
+	 * Phase-0 gate lease duration. A run that crashes leaves the gate
+	 * "running"; the next claim may proceed once this lease has expired.
+	 * Must exceed the worst-case run duration or the run's own completion
+	 * is fenced off as stale.
+	 */
+	leaseMs?: number
 }
 
 export type ConsolidationResult = {

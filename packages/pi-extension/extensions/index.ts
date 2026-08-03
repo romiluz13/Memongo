@@ -14,6 +14,7 @@
  *   MEMONGO_API_URL   — HTTP API base (default http://127.0.0.1:3847)
  *   MEMONGO_API_KEY   — bearer token (optional for local dev)
  *   MEMONGO_AGENT_ID  — agent identity (default "pi-agent")
+ *   MEMONGO_PI_*      — lifecycle knobs (injection/capture/scope), see lifecycle.ts
  */
 
 import * as fs from "node:fs"
@@ -23,12 +24,49 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent"
 import { Type } from "typebox"
 import { StringEnum } from "@earendil-works/pi-ai"
 import { MemongoClient, MemongoClientError } from "@memongo/client"
-import type { MemongoSearchDetailedResponse } from "@memongo/client"
+import {
+	registerMemongoLifecycle,
+	resolveLifecycleConfig,
+} from "./lifecycle.js"
 
-// Defaults are baked in so the extension works even when Pi doesn't inherit
-// shell env vars (~/.zshrc). Env vars still override if present.
-const API_URL = process.env.MEMONGO_API_URL ?? "http://127.0.0.1:3847"
-const API_KEY = process.env.MEMONGO_API_KEY ?? "local-dev-secret"
+const DEFAULT_API_URL = "http://127.0.0.1:3847"
+const LOCAL_DEV_API_KEY = "local-dev-secret"
+
+/** True when the API URL points at a loopback interface (local dev only). */
+export function isLoopbackApiUrl(apiUrl: string): boolean {
+	let hostname: string
+	try {
+		hostname = new URL(apiUrl).hostname
+	} catch {
+		return false
+	}
+	// WHATWG URL keeps brackets around IPv6 literals (e.g. "[::1]").
+	const bare = hostname.replace(/^\[|\]$/g, "")
+	return bare === "127.0.0.1" || bare === "localhost" || bare === "::1"
+}
+
+/**
+ * Resolve the bearer token. An explicit MEMONGO_API_KEY always wins. The
+ * `local-dev-secret` default is baked in ONLY for loopback URLs so the local
+ * dogfood path keeps working even when Pi doesn't inherit shell env vars
+ * (~/.zshrc). For any non-loopback API URL, refuse to start without an
+ * explicit key — a shared baked default must never authenticate to a remote.
+ */
+export function resolveApiKey(
+	explicitKey: string | undefined,
+	apiUrl: string,
+): string {
+	if (explicitKey) return explicitKey
+	if (isLoopbackApiUrl(apiUrl)) return LOCAL_DEV_API_KEY
+	throw new Error(
+		`MEMONGO_API_KEY is required when MEMONGO_API_URL is not loopback (got "${apiUrl}"). Refusing to use a baked default credential against a remote API.`,
+	)
+}
+
+// Defaults are baked in for loopback so the extension works even when Pi
+// doesn't inherit shell env vars (~/.zshrc). Env vars still override.
+const API_URL = process.env.MEMONGO_API_URL ?? DEFAULT_API_URL
+const API_KEY = resolveApiKey(process.env.MEMONGO_API_KEY, API_URL)
 const AGENT_ID = process.env.MEMONGO_AGENT_ID ?? "pi"
 
 const SNIPPET_MAX = 400
@@ -120,6 +158,24 @@ export default async function memongoExtension(
 		new MemongoClient({ baseUrl: API_URL, apiKey: API_KEY }),
 	)
 
+	// P2.3: ONE scope knob (MEMONGO_PI_MEMORY_SCOPE, default "global") drives
+	// every direction — lifecycle injection AND capture, memongo_save AND
+	// memongo_search — so a default-scope save is always findable by a
+	// default-scope search. (Pre-P2.3 the tools diverged: save defaulted to
+	// "workspace" while search hardcoded "global".)
+	const lifecycleConfig = resolveLifecycleConfig()
+	const memoryScope = lifecycleConfig.scope
+
+	// Lifecycle hooks (P1.4): session-start context injection + turn-end
+	// auto-capture. Registered before tools so a slow API can never delay
+	// tool availability; all failures degrade to one warn log.
+	registerMemongoLifecycle(pi, {
+		client: state.client,
+		agentId: AGENT_ID,
+		isAvailable: () => state.available,
+		config: lifecycleConfig,
+	})
+
 	// ─── Tool: memongo_search ──────────────────────────────────────────
 	pi.registerTool({
 		name: "memongo_search",
@@ -182,43 +238,22 @@ export default async function memongoExtension(
 				// scopeRef (repo basename) — Memongo's search API doesn't expose a
 				// direct scopeRef filter, so we over-fetch and narrow in the adapter.
 				const fetchLimit = params.project ? Math.min(limit * 4, 20) : limit
-				// Search at `global` scope — Pi is single-user dogfood, so there's no
-				// tenant to isolate from. The API defaults to `agent` scope which
-				// returns 0 results for global-scoped memories. The client SDK's
-				// searchDetailed doesn't accept scope, so call the API directly.
-				const searchRes = await fetch(`${API_URL}/v1/search-detailed`, {
-					method: "POST",
-					headers: {
-						"Content-Type": "application/json",
-						...(API_KEY ? { Authorization: `Bearer ${API_KEY}` } : {}),
-					},
-					body: JSON.stringify({
-						query: params.query,
-						agentId: AGENT_ID,
-						scope: "global",
-						limit: fetchLimit,
-						maxResults: fetchLimit,
-						searchMode: params.searchMode,
-						minScore: params.minScore,
-					}),
-					signal: _signal,
+				// Search at the configured scope (P2.3: same knob as save —
+				// MEMONGO_PI_MEMORY_SCOPE, default "global"). Pi is single-user
+				// dogfood, so there's no tenant to isolate from. The API defaults
+				// to `agent` scope which returns 0 results for global-scoped
+				// memories. The client SDK forwards scope since P1.3, so no
+				// raw-fetch bypass is needed.
+				const res = await state.client.searchDetailed({
+					query: params.query,
+					agentId: AGENT_ID,
+					scope: memoryScope,
+					limit: fetchLimit,
+					maxResults: fetchLimit,
+					searchMode: params.searchMode,
+					minScore: params.minScore,
 				})
-				if (!searchRes.ok) {
-					const errBody = await searchRes.text().catch(() => "")
-					return {
-						content: [
-							{
-								type: "text" as const,
-								text: `memongo_search failed: HTTP ${searchRes.status} ${truncate(errBody, 200)}`,
-							},
-						],
-						details: { error: true, status: searchRes.status },
-					}
-				}
-				const res = (await searchRes.json()) as {
-					results?: Array<MemongoSearchDetailedResponse["results"][number]>
-				}
-				let results = res.results ?? []
+				let results = res.results
 				if (params.project) {
 					results = results.filter((r) => r.scopeRef === params.project)
 				}
@@ -267,7 +302,7 @@ export default async function memongoExtension(
 			"Use memongo_save for durable facts, decisions, preferences, or instructions worth recalling across sessions/projects.",
 			"Do NOT use for temporary task state — use the local memory tool for that.",
 			"Provide a concise `key` (slug) and the full observation as `value`.",
-			"Use scope='global' for knowledge that applies everywhere, 'user' for personal preferences, 'workspace' (default) for project-specific.",
+			"Use scope='global' for knowledge that applies everywhere, 'user' for personal preferences, 'workspace' for project-specific. The default scope is MEMONGO_PI_MEMORY_SCOPE (default 'global') — the same scope memongo_search reads, so default saves are always findable.",
 			"The current project (git repo basename) is auto-detected and set as scopeRef for workspace scope — you only need to pass scopeRef to override.",
 		],
 		parameters: Type.Object({
@@ -297,7 +332,10 @@ export default async function memongoExtension(
 			scope: Type.Optional(
 				StringEnum(
 					["user", "agent", "workspace", "tenant", "global"] as const,
-					{ description: "Memongo scope (default: workspace)" },
+					{
+						description:
+							"Memongo scope (default: MEMONGO_PI_MEMORY_SCOPE, or 'global' when unset)",
+					},
 				),
 			),
 			scopeRef: Type.Optional(
@@ -329,7 +367,10 @@ export default async function memongoExtension(
 				}
 			}
 			try {
-				const scope = params.scope ?? "workspace"
+				// P2.3: default to the same configured scope memongo_search reads
+				// (MEMONGO_PI_MEMORY_SCOPE, default "global") so a default save is
+				// always findable by a default search. An explicit param wins.
+				const scope = params.scope ?? memoryScope
 				// Auto-detect project from cwd (mirrors pi-hermes-memory). For
 				// workspace scope, default scopeRef to the current git repo basename
 				// unless the agent explicitly overrides it.

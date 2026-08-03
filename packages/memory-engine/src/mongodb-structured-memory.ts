@@ -5,6 +5,7 @@ import type {
 	Document,
 	MongoClient,
 } from "mongodb"
+import { MongoServerError } from "mongodb"
 import {
 	type MemoryMongoDBEmbeddingMode,
 	type MemoryScope,
@@ -46,6 +47,99 @@ import type {
 } from "./types.js"
 
 const log = createSubsystemLogger("memory:mongodb:structured")
+
+// ---------------------------------------------------------------------------
+// Concurrency errors (P2.5)
+// ---------------------------------------------------------------------------
+
+/**
+ * Compare-and-swap race: another writer bumped the document revision between
+ * our read and our update. This is TRANSIENT — retrying against a fresh read
+ * converges — so the error carries the driver's TransientTransactionError
+ * label, letting `withTransaction` retry the whole callback when the write
+ * runs inside a transaction. Sessionless callers retry internally
+ * (see persistWithRevisionCasRetry).
+ */
+export class StructuredMemoryRevisionConflictError extends MongoServerError {
+	constructor(message: string) {
+		super({ message })
+		this.addErrorLabel("TransientTransactionError")
+		// MongoServerError exposes `name` via a prototype getter — a plain
+		// assignment throws in strict mode, so shadow it with an own property.
+		Object.defineProperty(this, "name", {
+			value: "StructuredMemoryRevisionConflictError",
+			configurable: true,
+			writable: true,
+		})
+	}
+}
+
+/**
+ * A lifecycle handle is a point-in-time reference: it pins the revision and
+ * state the caller last observed. Applying a stale handle (older revision) or
+ * any update to an invalidated record is a PERMANENT conflict — retrying
+ * cannot help — so this error is deliberately not transaction-retryable.
+ */
+export class MemoryLifecycleConflictError extends Error {
+	readonly reason: "stale-revision" | "invalidated"
+	readonly expectedRevision?: number
+	readonly actualRevision?: number
+
+	constructor(params: {
+		reason: "stale-revision" | "invalidated"
+		expectedRevision?: number
+		actualRevision?: number
+	}) {
+		super(
+			params.reason === "invalidated"
+				? "memory handle targets an invalidated record; refusing to apply the update"
+				: `memory handle revision ${params.expectedRevision} is stale; current revision is ${params.actualRevision}`,
+		)
+		this.name = "MemoryLifecycleConflictError"
+		this.reason = params.reason
+		if (params.expectedRevision !== undefined) {
+			this.expectedRevision = params.expectedRevision
+		}
+		if (params.actualRevision !== undefined) {
+			this.actualRevision = params.actualRevision
+		}
+	}
+}
+
+/** A handle revision is enforced only when it is a real observed revision. */
+function enforceableHandleRevision(revision: number): boolean {
+	return Number.isInteger(revision) && revision >= 1
+}
+
+const MAX_REVISION_CAS_ATTEMPTS = 3
+
+/**
+ * Revision-CAS retry: a {@link StructuredMemoryRevisionConflictError} means
+ * another writer committed between our read and our update; re-running
+ * against the fresh document converges. Permanent conflicts
+ * ({@link MemoryLifecycleConflictError}, duplicate keys) propagate. Only for
+ * sessionless runs — inside a caller transaction the snapshot is fixed for
+ * the transaction's lifetime and the conflict error carries
+ * TransientTransactionError, letting the driver's withTransaction retry the
+ * WHOLE callback against a fresh snapshot.
+ */
+async function withRevisionCasRetry<T>(
+	operation: () => Promise<T>,
+): Promise<T> {
+	for (let attempt = 1; ; attempt++) {
+		try {
+			return await operation()
+		} catch (err) {
+			if (
+				err instanceof StructuredMemoryRevisionConflictError &&
+				attempt < MAX_REVISION_CAS_ATTEMPTS
+			) {
+				continue
+			}
+			throw err
+		}
+	}
+}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -137,6 +231,13 @@ export type StructuredMemoryLifecyclePatch = Partial<
 >
 
 type StructuredMemoryRevision = {
+	/**
+	 * Deterministic `_id` (`identity:rN`) makes the revision snapshot insert
+	 * idempotent: two writers superseding the same committed revision record
+	 * identical history — the loser's insert dedups on E11000 instead of
+	 * doubling the revision row.
+	 */
+	_id: string
 	type: StructuredMemoryType
 	key: string
 	value: string
@@ -395,6 +496,16 @@ function buildRevisionDoc(params: {
 					: params.now
 
 	return {
+		_id:
+			[
+				String(params.existing.agentId ?? ""),
+				params.scope,
+				params.scopeRef,
+				String(params.existing.type ?? ""),
+				String(params.existing.key ?? ""),
+			]
+				.map((part) => encodeURIComponent(part))
+				.join(":") + `:r${revision}`,
 		type: params.existing.type as StructuredMemoryType,
 		key: String(params.existing.key ?? ""),
 		value: String(params.existing.value ?? ""),
@@ -486,6 +597,28 @@ function buildRevisionDoc(params: {
 	}
 }
 
+/**
+ * Insert a revision snapshot, tolerating E11000 on the deterministic `_id`:
+ * a concurrent writer (or a retried CAS attempt) already recorded history for
+ * this exact revision, so the duplicate insert is a no-op, not a failure.
+ */
+async function insertRevisionSnapshot(
+	revisions: Collection,
+	doc: StructuredMemoryRevision,
+	session?: ClientSession,
+): Promise<void> {
+	try {
+		await revisions.insertOne(
+			doc as unknown as Document,
+			session ? { session } : undefined,
+		)
+	} catch (err) {
+		if (!isDuplicateKeyError(err)) {
+			throw err
+		}
+	}
+}
+
 function structuredFilterFromHandle(
 	handle: MemoryStructuredStableHandle,
 ): Document {
@@ -508,6 +641,42 @@ function structuredStateFromDoc(doc: Document): StructuredMemoryState {
 	return doc.state === "invalidated" || doc.state === "conflicted"
 		? doc.state
 		: "active"
+}
+
+/**
+ * (P2.5 d/f) A lifecycle handle is a point-in-time reference: it pins the
+ * revision and state the caller observed. Enforce both against the CURRENT
+ * document before a by-handle write:
+ * - `rejectInvalidated`: updates/confirmations must never resurrect or mutate
+ *   an invalidated record (invalidation itself stays an idempotent no-op).
+ * - an enforceable handle revision (a real observed revision, i.e. >= 1 —
+ *   internal callers like contradiction detection pass revision 0) that
+ *   mismatches the current revision is a permanent stale-handle conflict.
+ * Returns the current revision so callers can pin their update filter.
+ */
+function enforceStructuredHandleFreshness(params: {
+	handle: MemoryStructuredStableHandle
+	existing: Document
+	rejectInvalidated: boolean
+}): number {
+	const currentRevision = structuredRevisionFromDoc(params.existing)
+	if (
+		params.rejectInvalidated &&
+		structuredStateFromDoc(params.existing) === "invalidated"
+	) {
+		throw new MemoryLifecycleConflictError({ reason: "invalidated" })
+	}
+	if (
+		enforceableHandleRevision(params.handle.revision) &&
+		params.handle.revision !== currentRevision
+	) {
+		throw new MemoryLifecycleConflictError({
+			reason: "stale-revision",
+			expectedRevision: params.handle.revision,
+			actualRevision: currentRevision,
+		})
+	}
+	return currentRevision
 }
 
 function structuredHandleFromDoc(doc: Document): MemoryStructuredStableHandle {
@@ -655,6 +824,15 @@ export async function writeStructuredMemory(params: {
 	actorRole?: MemoryActorRole
 	mutationMeta?: MutationMeta
 	eventReceiptIds?: string[]
+	/**
+	 * Compare-and-swap precondition (P2.5): when set, the write applies only if
+	 * the current document is still at this revision. A mismatch throws
+	 * {@link MemoryLifecycleConflictError} — permanent, not retried. By-handle
+	 * lifecycle paths pass the revision they read so a concurrent writer
+	 * between the by-handle read and this write surfaces as a conflict instead
+	 * of a silent overwrite.
+	 */
+	expectedRevision?: number
 }): Promise<{
 	upserted: boolean
 	id: string
@@ -767,7 +945,7 @@ export async function writeStructuredMemory(params: {
 	let existingBeforeWrite: Document | null = null
 	let persistedSetDoc = setDoc
 
-	const persist = async (
+	const persistOnce = async (
 		session?: ClientSession,
 	): Promise<{
 		upserted: boolean
@@ -820,6 +998,19 @@ export async function writeStructuredMemory(params: {
 			Number.isFinite(existing.revision)
 				? existing.revision
 				: 1
+		// (P2.5 d/f) expected-revision precondition: a by-handle write pins the
+		// revision the caller read. A mismatch means a concurrent writer landed
+		// between the by-handle read and this write — permanent conflict.
+		if (
+			params.expectedRevision !== undefined &&
+			currentRevision !== params.expectedRevision
+		) {
+			throw new MemoryLifecycleConflictError({
+				reason: "stale-revision",
+				expectedRevision: params.expectedRevision,
+				actualRevision: currentRevision,
+			})
+		}
 		const currentValidFrom =
 			existing.validFrom instanceof Date
 				? existing.validFrom
@@ -830,8 +1021,11 @@ export async function writeStructuredMemory(params: {
 						: now
 
 		if (!hasStructuredValueChanged(existing, entry)) {
-			await collection.updateOne(
-				identityFilter,
+			// (P2.5 a) compare-and-swap: the update applies only if the document is
+			// still at the revision we read. A concurrent writer between our
+			// findOne and this update makes the filter match nothing.
+			const reinforceResult = await collection.updateOne(
+				{ ...identityFilter, revision: currentRevision },
 				{
 					$set: {
 						...persistedSetDoc,
@@ -845,6 +1039,11 @@ export async function writeStructuredMemory(params: {
 				},
 				session ? { session } : {},
 			)
+			if (reinforceResult.matchedCount === 0) {
+				throw new StructuredMemoryRevisionConflictError(
+					`structured memory reinforcement raced on ${entry.type}:${entry.key} at revision ${currentRevision}`,
+				)
+			}
 			return {
 				upserted: false,
 				id: entry.key,
@@ -853,9 +1052,10 @@ export async function writeStructuredMemory(params: {
 			}
 		}
 
-		await revisions.insertOne(
+		await insertRevisionSnapshot(
+			revisions,
 			buildRevisionDoc({ existing, scope, scopeRef, now }),
-			session ? { session } : {},
+			session,
 		)
 		// This path also fires for a same-value re-mention from a NEW event,
 		// because provenance/sourceEventIds differ per event (hasStructuredValueChanged).
@@ -906,8 +1106,12 @@ export async function writeStructuredMemory(params: {
 			nextUnset.validTo = ""
 		}
 
-		await collection.updateOne(
-			identityFilter,
+		// (P2.5 a) compare-and-swap: no upsert here — the document existed at
+		// findOne time, so a match failure means the revision moved under us
+		// (concurrent writer) or the document was deleted; both are resolved by
+		// the retry loop re-reading, not by resurrecting from a stale snapshot.
+		const updateResult = await collection.updateOne(
+			{ ...identityFilter, revision: currentRevision },
 			{
 				$set: nextSetDoc,
 				$setOnInsert: {
@@ -918,14 +1122,31 @@ export async function writeStructuredMemory(params: {
 				},
 				...(Object.keys(nextUnset).length > 0 ? { $unset: nextUnset } : {}),
 			},
-			{ upsert: true, ...(session ? { session } : {}) },
+			session ? { session } : {},
 		)
+		if (updateResult.matchedCount === 0) {
+			throw new StructuredMemoryRevisionConflictError(
+				`structured memory update raced on ${entry.type}:${entry.key} at revision ${currentRevision}`,
+			)
+		}
 		return {
 			upserted: false,
 			id: entry.key,
 			revision: currentRevision + 1,
 			changed: true,
 		}
+	}
+
+	// (P2.5 a) revision-CAS retry: see withRevisionCasRetry. Exactly one writer
+	// lands revision N+1 — the loser re-reads and either lands N+2 or
+	// short-circuits on the event receipt.
+	const persist = async (
+		session?: ClientSession,
+	): Promise<Awaited<ReturnType<typeof persistOnce>>> => {
+		if (session) {
+			return persistOnce(session)
+		}
+		return withRevisionCasRetry(() => persistOnce())
 	}
 
 	// Fleet audit P1-2: the committed-loser race. A concurrent writer that
@@ -1080,6 +1301,15 @@ export async function updateStructuredMemoryByHandle(params: {
 	if (!existing) {
 		return null
 	}
+	// (P2.5 d/f) enforce the handle's pinned state and revision, then carry
+	// the observed revision into the write as a compare-and-swap precondition:
+	// a concurrent writer between this read and the write surfaces as a
+	// permanent MemoryLifecycleConflictError instead of a silent overwrite.
+	const currentRevision = enforceStructuredHandleFreshness({
+		handle: params.handle,
+		existing,
+		rejectInvalidated: true,
+	})
 	await writeStructuredMemory({
 		db: params.db,
 		prefix: params.prefix,
@@ -1088,6 +1318,7 @@ export async function updateStructuredMemoryByHandle(params: {
 		client: params.client,
 		actorRole: params.actorRole,
 		mutationMeta: params.mutationMeta,
+		expectedRevision: currentRevision,
 	})
 	return getStructuredMemoryByHandle(params)
 }
@@ -1118,22 +1349,36 @@ export async function invalidateStructuredMemoryByHandle(params: {
 			return
 		}
 		oldSnapshot = existing
+		// (P2.5 f) a stale handle must not invalidate a record that has moved
+		// on. Re-invalidating an already-invalidated record stays an idempotent
+		// no-op, but only for a handle that still pins the current revision.
+		const currentRevision = enforceStructuredHandleFreshness({
+			handle: params.handle,
+			existing,
+			rejectInvalidated: false,
+		})
 		if (structuredStateFromDoc(existing) === "invalidated") {
 			newSnapshot = existing
 			return
 		}
-		const currentRevision = structuredRevisionFromDoc(existing)
 		const scope =
 			typeof existing.scope === "string"
 				? (existing.scope as MemoryScope)
 				: params.handle.scope
 		const scopeRef = String(existing.scopeRef ?? params.handle.scopeRef)
-		await revisions.insertOne(
+		// E11000-tolerant: a retried CAS attempt already recorded this exact
+		// revision snapshot.
+		await insertRevisionSnapshot(
+			revisions,
 			buildRevisionDoc({ existing, scope, scopeRef, now }),
-			session ? { session } : {},
+			session,
 		)
-		await collection.updateOne(
-			filter,
+		// (P2.5 f) compare-and-swap: the invalidation applies only if the
+		// document is still at the revision we read; a concurrent writer
+		// between our read and this update makes the filter match nothing and
+		// the retry loop (or withTransaction) re-reads.
+		const invalidateResult = await collection.updateOne(
+			{ ...filter, revision: currentRevision },
 			{
 				$set: {
 					state: "invalidated",
@@ -1145,6 +1390,11 @@ export async function invalidateStructuredMemoryByHandle(params: {
 			},
 			session ? { session } : {},
 		)
+		if (invalidateResult.matchedCount === 0) {
+			throw new StructuredMemoryRevisionConflictError(
+				`structured memory invalidation raced on ${params.handle.structured.type}:${params.handle.structured.key} at revision ${currentRevision}`,
+			)
+		}
 		newSnapshot = await collection.findOne(
 			filter,
 			session ? { session } : undefined,
@@ -1165,12 +1415,12 @@ export async function invalidateStructuredMemoryByHandle(params: {
 			log.info(
 				"transactions not supported for structured lifecycle, falling back to direct writes",
 			)
-			await persist()
+			await withRevisionCasRetry(() => persist())
 		} finally {
 			await session.endSession()
 		}
 	} else {
-		await persist()
+		await withRevisionCasRetry(() => persist())
 	}
 
 	if (!newSnapshot) {
@@ -1265,19 +1515,41 @@ export async function applyStructuredMemoryFeedbackByHandle(params: {
 	const collection = structuredMemCollection(params.db, params.prefix)
 	const filter = structuredFilterFromHandle(params.handle)
 	const now = new Date()
-	const oldSnapshot = await collection.findOneAndUpdate(
-		filter,
-		{
-			$set: {
-				lastConfirmedAt: now,
-				updatedAt: now,
+	// (P2.5 f) enforce the handle's pinned state and revision BEFORE the
+	// confirmation $inc, and pin the update filter to the observed revision:
+	// a stale handle must never reinforce a record that has moved on (or been
+	// invalidated) since the handle was issued.
+	const confirm = async (): Promise<Document | null> => {
+		const existing = await collection.findOne(filter)
+		if (!existing) {
+			return null
+		}
+		const currentRevision = enforceStructuredHandleFreshness({
+			handle: params.handle,
+			existing,
+			rejectInvalidated: true,
+		})
+		const oldSnapshot = await collection.findOneAndUpdate(
+			{ ...filter, revision: currentRevision },
+			{
+				$set: {
+					lastConfirmedAt: now,
+					updatedAt: now,
+				},
+				$inc: {
+					reinforcementCount: 1,
+				},
 			},
-			$inc: {
-				reinforcementCount: 1,
-			},
-		},
-		{ returnDocument: "before" },
-	)
+			{ returnDocument: "before" },
+		)
+		if (!oldSnapshot) {
+			throw new StructuredMemoryRevisionConflictError(
+				`structured memory confirmation raced on ${params.handle.structured.type}:${params.handle.structured.key} at revision ${currentRevision}`,
+			)
+		}
+		return oldSnapshot
+	}
+	const oldSnapshot = await withRevisionCasRetry(confirm)
 	if (!oldSnapshot) {
 		return null
 	}

@@ -1,5 +1,8 @@
 import { renderMemoryContextBlock } from "../memory-context.js"
-import type { MemongoCoreOptions } from "../vercel/index.js"
+import {
+	createMemongoMiddlewareCore,
+	type MemongoCoreOptions,
+} from "../middleware-core.js"
 
 /* ------------------------------------------------------------------ */
 /*  OpenAI-compatible chat message shape                              */
@@ -25,63 +28,8 @@ interface ChatCompletion {
 }
 
 /* ------------------------------------------------------------------ */
-/*  Helpers: shared with Vercel middleware via MemongoCoreOptions      */
+/*  Helpers                                                            */
 /* ------------------------------------------------------------------ */
-
-async function fetchContextBundle(
-	options: MemongoCoreOptions,
-	userQuery?: string,
-): Promise<string> {
-	const mode =
-		userQuery && options.mode !== "wake-up"
-			? "full"
-			: (options.mode ?? "wake-up")
-
-	const body: Record<string, unknown> = {
-		agentId: options.agentId ?? options.userId,
-		mode,
-	}
-	if (mode === "full" && userQuery) {
-		body.query = userQuery
-	}
-
-	try {
-		const res = await fetch(`${options.apiUrl}/v1/context-bundle`, {
-			method: "POST",
-			headers: {
-				"Content-Type": "application/json",
-				Authorization: `Bearer ${options.apiKey}`,
-			},
-			body: JSON.stringify(body),
-		})
-		if (!res.ok) return ""
-		const data = (await res.json()) as { rendered?: string }
-		return data.rendered ?? ""
-	} catch {
-		return ""
-	}
-}
-
-function fireWriteEvent(
-	options: MemongoCoreOptions,
-	role: "user" | "assistant",
-	body: string,
-): void {
-	fetch(`${options.apiUrl}/v1/write-event`, {
-		method: "POST",
-		headers: {
-			"Content-Type": "application/json",
-			Authorization: `Bearer ${options.apiKey}`,
-		},
-		body: JSON.stringify({
-			role,
-			body,
-			agentId: options.agentId ?? options.userId,
-		}),
-	}).catch((err) => {
-		console.warn("[memongo] write-event failed:", role, err)
-	})
-}
 
 function extractUserQuery(messages: ChatMessage[]): string | undefined {
 	for (let i = messages.length - 1; i >= 0; i--) {
@@ -100,16 +48,23 @@ function extractUserQuery(messages: ChatMessage[]): string | undefined {
  * Wrap an OpenAI client instance so that every `chat.completions.create()`
  * call is enriched with Memongo memory context. No runtime `openai` dependency
  * is required: the middleware accepts any object matching the shape.
+ *
+ * All Memongo traffic routes through `@memongo/client` (P1.5) with the
+ * canonical-identity cache shared with the Vercel middleware. The OpenAI
+ * chat-completions shape has no `providerOptions` channel, so identity comes
+ * from the constructor options (per middleware instance) only.
  */
 export function createOpenAIMiddleware<
 	T extends { chat: { completions: { create: (...args: any[]) => any } } },
 >(client: T, options: MemongoCoreOptions): T {
+	const core = createMemongoMiddlewareCore(options)
+
 	const completionsProxy = new Proxy(client.chat.completions, {
 		get(target, prop, receiver) {
 			if (prop === "create") {
 				return async (params: ChatCreateParams, ...rest: unknown[]) => {
 					const userQuery = extractUserQuery(params.messages)
-					const rendered = await fetchContextBundle(options, userQuery)
+					const rendered = await core.getContextBundle({}, userQuery)
 
 					const enrichedMessages = rendered
 						? [
@@ -126,24 +81,21 @@ export function createOpenAIMiddleware<
 						...rest,
 					)
 
-					// Fire-and-forget: save user message
-					if (userQuery) {
-						fireWriteEvent(options, "user", userQuery)
-					}
-
-					// Only extract assistant text for non-streaming calls
+					// After-turn capture (P1.4): awaited so the write lands before a
+					// serverless invocation can be frozen; captureTurn never throws
+					// (failures go to onError). Streaming calls capture the user
+					// message only — stream chunks are not interceptable via Proxy.
 					if (!params.stream) {
 						const completion = result as ChatCompletion
 						const assistantText =
 							completion?.choices?.[0]?.message?.content ?? ""
-						if (assistantText) {
-							fireWriteEvent(options, "assistant", assistantText)
-						}
+						await core.captureTurn(
+							{},
+							{ user: userQuery, assistant: assistantText },
+						)
+					} else if (userQuery) {
+						await core.captureTurn({}, { user: userQuery })
 					}
-					// Streaming calls: context is injected but assistant text
-					// is not saved (stream chunks are not interceptable via Proxy).
-					// Use writeEvent manually or use the Vercel AI SDK middleware
-					// which supports wrapStream natively.
 
 					return result
 				}

@@ -26,7 +26,10 @@ function resolvePreviewContainerName(): string {
 	}
 	for (const line of raw.split("\n")) {
 		const [name, image] = line.split("\t")
-		if (image === "mongodb/mongodb-atlas-local:preview") {
+		// Prefix match: docker stacks pin the atlas-local image to dated tags
+		// (P1.6), so an exact ":preview" comparison silently misses the
+		// container and falls back to a localhost URI nobody targeted.
+		if (image?.startsWith("mongodb/mongodb-atlas-local")) {
 			return name ?? ""
 		}
 	}

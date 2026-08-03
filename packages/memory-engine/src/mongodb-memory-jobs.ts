@@ -12,7 +12,7 @@ import type {
 const log = createSubsystemLogger("memory:mongodb:memory-jobs")
 const DEFAULT_LIST_LIMIT = 20
 const MAX_LIST_LIMIT = 100
-const DURABLE_JOB_WRITE_CONCERN = {
+export const DURABLE_JOB_WRITE_CONCERN = {
 	w: "majority" as const,
 	wtimeoutMS: 5_000,
 }

@@ -1,8 +1,12 @@
 import { createHash, timingSafeEqual } from "node:crypto"
 import { Hono, type Context, type MiddlewareHandler } from "hono"
+import { HTTPException } from "hono/http-exception"
 import { bodyLimit } from "hono/body-limit"
 import { cors } from "hono/cors"
+import { requestId } from "hono/request-id"
 import { openApiSpec } from "./openapi-spec.js"
+import { internalError } from "./lib/errors.js"
+import { checkReadiness } from "./lib/readiness.js"
 import { createV1Router } from "./routes/v1.js"
 import {
 	isValidScope,
@@ -58,6 +62,30 @@ function parseCorsOrigins(raw: string | undefined): string[] {
 		)
 	}
 	return [...new Set(origins)]
+}
+
+/**
+ * P1.7: when MEMONGO_CORS_ORIGINS is unset, fall back to dev defaults for the
+ * web console (apps/web dev/start port 3040) so the console works on a fresh
+ * clone. An explicit env list keeps the existing strict behavior — explicit
+ * origins only, wildcard still rejected by parseCorsOrigins.
+ */
+export const DEV_DEFAULT_CORS_ORIGINS: readonly string[] = [
+	"http://127.0.0.1:3040",
+	"http://localhost:3040",
+]
+
+export type CorsPolicy = {
+	origins: string[]
+	source: "env" | "dev-default"
+}
+
+export function resolveCorsPolicy(raw: string | undefined): CorsPolicy {
+	const fromEnv = parseCorsOrigins(raw)
+	if (fromEnv.length > 0) {
+		return { origins: fromEnv, source: "env" }
+	}
+	return { origins: [...DEV_DEFAULT_CORS_ORIGINS], source: "dev-default" }
 }
 
 // Hard ceiling on distinct rate-limit buckets. Beyond this the limiter fails
@@ -490,20 +518,33 @@ export function registerGracefulShutdown(
 
 export function createApp(): Hono {
 	const app = new Hono()
+	// P0.8: one canonical error envelope. Deliberate HTTPExceptions keep their
+	// status/body; anything unexpected is logged with a request id and returned
+	// as a generic INTERNAL 500 — never raw driver internals to the client.
+	app.onError((err, c) => {
+		if (err instanceof HTTPException) {
+			return err.getResponse()
+		}
+		return internalError(c, err, "INTERNAL")
+	})
 	const token = process.env.MEMONGO_API_KEY?.trim()
 	const scopedPolicies = parseScopedApiKeyPolicies()
 	const rateLimitCredentials = [
 		...(token ? [token] : []),
 		...scopedPolicies.map((policy) => policy.token),
 	]
-	const corsOrigins = parseCorsOrigins(process.env.MEMONGO_CORS_ORIGINS)
+	const corsPolicy = resolveCorsPolicy(process.env.MEMONGO_CORS_ORIGINS)
 	const allowInsecureNoAuth = parseBoolEnv(
 		process.env.MEMONGO_ALLOW_INSECURE_NO_AUTH,
 	)
 
-	if (corsOrigins.length > 0) {
-		app.use("/*", cors({ origin: corsOrigins }))
+	if (corsPolicy.origins.length > 0) {
+		app.use("/*", cors({ origin: corsPolicy.origins }))
 	}
+
+	// Request id first on /v1 so every downstream error (rate limit, auth,
+	// routes) can be correlated server-side via the P0.8 error envelope.
+	app.use("/v1/*", requestId())
 
 	// #28 network hardening on /v1: rate-limit first (cheapest rejection, also
 	// throttles unauthenticated auth attempts), then cap body size before any
@@ -630,6 +671,15 @@ export function createApp(): Hono {
 	}
 
 	app.get("/health", (c) => c.json({ ok: true, service: "memongo-api" }))
+	// P1.7: readiness (deep) beside liveness (cheap). Unauthenticated like
+	// /health — orchestrator probes carry no API key; the per-lane payload is
+	// sanitized in lib/readiness.ts so it cannot leak secrets. 503 until every
+	// required lane (mongo, vector, embedding) is up; the Docker HEALTHCHECK
+	// and any orchestrator readiness probe should target this route.
+	app.get("/ready", async (c) => {
+		const report = await checkReadiness()
+		return c.json(report, report.ok ? 200 : 503)
+	})
 	app.get("/openapi.json", (c) => c.json(openApiSpec))
 	app.route("/v1", createV1Router())
 

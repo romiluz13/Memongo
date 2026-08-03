@@ -17,7 +17,7 @@ VOYAGE_API_KEY=al-your-atlas-model-api-key ./docker/mongodb/start-preview.sh
 ./docker/mongodb/start-preview.sh stop
 ```
 
-This uses `mongodb/mongodb-atlas-local:preview` (~584 MB) -- a single container with everything Memongo needs:
+This uses `mongodb/mongodb-atlas-local` (pinned dated tag in the compose file, ~584 MB) -- a single container with everything Memongo needs:
 
 - mongod (MongoDB 8.x, single-node replica set)
 - mongot (community search engine)
@@ -57,6 +57,11 @@ Adapted from [mdb-community-search](https://github.com/JohnGUnderwood/mdb-commun
 
 ### Option 1: Use the start script (recommended)
 
+> The `replicaset` and `fullstack` tiers require `ADMIN_PASSWORD` and
+> `MONGOT_PASSWORD` to be set in the environment (no defaults — the stack
+> fails closed without them). A one-shot `rs-init` container initiates the
+> `rs0` replica set automatically after mongod is healthy.
+
 ```bash
 # Full stack (recommended) - transactions + vector search + auto-embedding
 ./docker/mongodb/start.sh fullstack
@@ -94,15 +99,15 @@ docker compose -f docker/mongodb/docker-compose.mongodb.yml --profile standalone
 | Tier       | Connection String                                                                                      |
 | ---------- | ------------------------------------------------------------------------------------------------------ |
 | standalone | `mongodb://localhost:27017/memongo`                                                                   |
-| replicaset | `mongodb://admin:admin@localhost:27017/memongo?authSource=admin&replicaSet=rs0&directConnection=true` |
-| fullstack  | `mongodb://admin:admin@localhost:27017/memongo?authSource=admin&replicaSet=rs0&directConnection=true` |
+| replicaset | `mongodb://admin@localhost:27017/memongo?authSource=admin&replicaSet=rs0&directConnection=true` |
+| fullstack  | `mongodb://admin@localhost:27017/memongo?authSource=admin&replicaSet=rs0&directConnection=true` |
 
 ## Environment Variables
 
 | Variable                             | Default                                  | Description                                   |
 | ------------------------------------ | ---------------------------------------- | --------------------------------------------- |
-| `ADMIN_PASSWORD`                     | `admin`                                  | Root admin password                           |
-| `MONGOT_PASSWORD`                    | `mongotPassword`                         | Password for mongot search coordinator        |
+| `ADMIN_PASSWORD`                     | _(required — no default)_               | Root admin password (replicaset/fullstack)    |
+| `MONGOT_PASSWORD`                    | _(required — no default)_               | Password for mongot search coordinator (fullstack) |
 | `MONGODB_PORT`                       | `27017`                                  | MongoDB port mapping                          |
 | `MONGOT_GRPC_PORT`                   | `27028`                                  | mongot gRPC port (fullstack only)             |
 | `MONGOT_HEALTH_PORT`                 | `8080`                                   | mongot health check port (fullstack only)     |
@@ -112,10 +117,15 @@ docker compose -f docker/mongodb/docker-compose.mongodb.yml --profile standalone
 | `VOYAGE_API_INDEXING_KEY`            | _(empty)_                               | Optional Atlas Model API key (`al-...`) for indexing-time embedding |
 | `MONGOT_EMBEDDING_PROVIDER_ENDPOINT` | `https://ai.mongodb.com/v1/embeddings` | MongoDB Atlas Embedding API endpoint          |
 
-### Custom Passwords
+### Passwords (required)
+
+The replicaset and fullstack tiers fail closed without passwords — set them
+before starting (there are no defaults):
 
 ```bash
-ADMIN_PASSWORD=mySecurePass MONGOT_PASSWORD=mongotPass ./docker/mongodb/start.sh fullstack
+export ADMIN_PASSWORD=mySecurePass
+export MONGOT_PASSWORD=mongotPass
+./docker/mongodb/start.sh fullstack
 ```
 
 ## Auto-Embedding with Voyage AI
@@ -195,7 +205,7 @@ starts, and the supervisor panics on its health check.
 ```bash
 # 1. Read the persisted name (start a standalone mongod on the volume)
 docker run --rm -d --name rs-probe -v mongodb_memongo_preview_data:/data/db \
-  -p 27021:27017 --entrypoint mongod mongodb/mongodb-atlas-local:preview \
+  -p 27021:27017 --entrypoint mongod mongodb/mongodb-atlas-local:8.2.6-20260715T144108Z \
   --dbpath /data/db --bind_ip_all
 mongosh "mongodb://127.0.0.1:27021/?directConnection=true" --quiet \
   --eval 'db.getSiblingDB("local").system.replset.findOne()._id'
@@ -206,7 +216,7 @@ docker run -d --name memongo-preview --hostname <THAT_NAME> -p 27019:27017 \
   -e VOYAGE_API_KEY=al-... -e MONGODB_ATLAS_TELEMETRY_ENABLE=false \
   -v mongodb_memongo_preview_data:/data/db \
   -v mongodb_memongo_preview_config:/data/configdb \
-  mongodb/mongodb-atlas-local:preview
+  mongodb/mongodb-atlas-local:8.2.6-20260715T144108Z
 ```
 
 Alternatively, discard the volume (`start-preview.sh clean`) and let the new
@@ -277,7 +287,7 @@ docker port memongo-mongod
 **Fix:**
 
 - Standalone tier has no auth (no password needed)
-- Replicaset/fullstack use `admin:admin` by default (or your `ADMIN_PASSWORD`)
+- Replicaset/fullstack require the `ADMIN_PASSWORD` you set (there is no default password)
 - Ensure `authSource=admin` is in your connection string
 
 ### mongot search indexes not working
@@ -339,6 +349,9 @@ To completely remove all data:
 ```
 
 ## Ports Reference
+
+All ports are published on `127.0.0.1` only (loopback) — they are reachable
+from host tooling on localhost but are not exposed on other host interfaces.
 
 | Port  | Service | Protocol | Description           |
 | ----- | ------- | -------- | --------------------- |

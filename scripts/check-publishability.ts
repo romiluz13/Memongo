@@ -66,6 +66,11 @@ const publishablePackages: PublishablePackage[] = [
 		supportedSurface: false,
 		piExtension: true,
 	},
+	{
+		dir: "apps/mcp",
+		name: "@memongo/mcp",
+		supportedSurface: true,
+	},
 ] as const
 
 const removedPaths = [
@@ -200,6 +205,44 @@ function assertBuiltEntrypoints(
 		}
 		if (!fs.existsSync(path.join(packageDir, relPath))) {
 			fail(`missing built entrypoint in ${packageRelPath}: ${relPath}`)
+		}
+	}
+}
+
+function assertBinShebangs(
+	packageDir: string,
+	packageJson: Record<string, unknown>,
+	packageRelPath: string,
+) {
+	const bin = packageJson["bin"]
+	if (bin === undefined) {
+		return
+	}
+	const targets =
+		typeof bin === "string"
+			? [bin]
+			: bin !== null && typeof bin === "object"
+				? Object.values(bin as Record<string, unknown>)
+				: []
+	if (targets.length === 0) {
+		fail(`"bin" must be a non-empty string or map in ${packageRelPath}`)
+	}
+	for (const target of targets) {
+		if (typeof target !== "string" || target.trim() === "") {
+			fail(`"bin" targets must be non-empty strings in ${packageRelPath}`)
+		}
+		const resolved = path.join(packageDir, target)
+		if (!fs.existsSync(resolved)) {
+			fail(`missing built bin target in ${packageRelPath}: ${target}`)
+		}
+		const fd = fs.openSync(resolved, "r")
+		const head = Buffer.alloc(19)
+		fs.readSync(fd, head, 0, head.length, 0)
+		fs.closeSync(fd)
+		if (head.toString("utf-8") !== "#!/usr/bin/env node") {
+			fail(
+				`bin target missing "#!/usr/bin/env node" shebang in ${packageRelPath}: ${target}`,
+			)
 		}
 	}
 }
@@ -341,6 +384,7 @@ function checkPackage(
 	} else {
 		assertBuiltEntrypoints(packageDir, packageJson, packageSpec.dir)
 	}
+	assertBinShebangs(packageDir, packageJson, packageSpec.dir)
 
 	const dryRun = runNpmPackDryRun(packageDir)
 	assertTarballContents(packageSpec.dir, packageJson, dryRun, piExtensionPaths)

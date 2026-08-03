@@ -21,8 +21,10 @@
  */
 
 import { randomUUID } from "node:crypto"
-import type { Db, Document } from "mongodb"
+import type { Collection, Db, Document } from "mongodb"
 import { createSubsystemLogger, type MemoryScope } from "@memongo/lib"
+import { isDuplicateKeyError } from "./internal.js"
+import { DURABLE_JOB_WRITE_CONCERN } from "./mongodb-memory-jobs.js"
 import { scanNovelty } from "./mongodb-novelty.js"
 import { traceReasoningChain } from "./mongodb-reasoning-chain.js"
 import { computeImportanceDecay } from "./mongodb-trust.js"
@@ -63,6 +65,11 @@ const DEFAULT_MAX_EVENTS = 100
 // belongs in retrieval ranking, not write eligibility.
 const DEFAULT_MIN_COMBINED_SCORE = 0.15
 const DEFAULT_MIN_INTERVAL_MS = 3_600_000 // 1 hour
+// Phase-0 gate lease. Must exceed the worst-case run duration (pattern
+// matching + $vectorSearch gates + optional LLM reasoning over up to
+// REASONING_MAX_FACTS facts); a completion arriving after expiry is fenced
+// off so a stale runner cannot overwrite its successor's gate state.
+const DEFAULT_CONSOLIDATION_LEASE_MS = 15 * 60_000
 const DEFAULT_NOVELTY_WEIGHT = 0.4
 // Raised from 0.3 to absorb the access weight below, keeping the score scale
 // near unity so the 0.15 threshold keeps the meaning callers already rely on.
@@ -268,6 +275,59 @@ async function hasConflict(params: {
 // Main consolidation pipeline
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Phase-0 gate — atomic lease (mirrors claimMemoryJob in mongodb-memory-jobs)
+// ---------------------------------------------------------------------------
+
+/**
+ * Deterministic gate identity: one gate document per (agentId, scope,
+ * scopeRef) triple. NUL separators cannot appear in any component (agentId is
+ * sanitized, scope is an enum, scopeRef is scope-prefixed), matching the
+ * groupKey convention used later in this module. Scoped and unscoped runs
+ * are separate gates, as they were under the previous runScopeFilter.
+ */
+function consolidationGateKey(identity: {
+	agentId: string
+	scope?: MemoryScope
+	scopeRef?: string
+}): string {
+	return `${identity.agentId}${identity.scope ?? ""}${identity.scopeRef ?? ""}`
+}
+
+/**
+ * Fenced terminal update: only the live lease holder may mark the run
+ * completed/failed. matchedCount === 0 means the lease expired (or was
+ * re-claimed) while this run was still working — its terminal state must not
+ * overwrite the successor's gate document.
+ */
+async function finishConsolidationRun(params: {
+	consolidationRuns: Collection
+	gateKey: string
+	runId: string
+	leaseToken: string
+	update: Document
+}): Promise<void> {
+	const result = await params.consolidationRuns.updateOne(
+		{
+			gateKey: params.gateKey,
+			runId: params.runId,
+			status: "running",
+			leaseToken: params.leaseToken,
+			leaseExpiresAt: { $gt: new Date() },
+		},
+		{
+			$set: params.update,
+			$unset: { leaseToken: "", leaseExpiresAt: "" },
+		},
+		{ writeConcern: DURABLE_JOB_WRITE_CONCERN },
+	)
+	if (result.matchedCount === 0) {
+		log.warn(
+			`consolidation completion fenced for run=${params.runId}: lease lost or expired`,
+		)
+	}
+}
+
 export async function consolidateMemory(params: {
 	db: Db
 	prefix: string
@@ -299,40 +359,100 @@ export async function consolidateMemory(params: {
 	}
 
 	// ===================================================================
-	// Phase 0 — Gate (rate limiter + event count check)
+	// Phase 0 — Gate (atomic lease claim + rate limiter)
 	// ===================================================================
-
+	//
+	// One gate document per scope identity, claimed atomically with the same
+	// lease pattern as claimMemoryJob: findOneAndUpdate + upsert keyed on the
+	// deterministic gateKey. Two replicas can no longer both pass the gate —
+	// the loser's upsert collides on uq_consolidation_runs_gate (E11000) —
+	// and a crashed run's lease expires so the next claim self-heals (no more
+	// status:"running" zombies). NOTE: legacy per-run docs (pre-lease, no
+	// gateKey) are invisible to this gate, so the first run after upgrade is
+	// not rate-limited by them; every phase is idempotent, so one extra run
+	// per scope is harmless.
 	const consolidationRuns = consolidationRunsCollection(db, prefix)
-	const runScopeFilter: Document = { agentId }
-	if (options?.scope) {
-		runScopeFilter.scope = options.scope
-	}
-	if (options?.scopeRef) {
-		runScopeFilter.scopeRef = options.scopeRef
-	}
-	const lastRun = await consolidationRuns.findOne(
-		{ ...runScopeFilter, status: { $in: ["completed", "running"] } },
-		{ sort: { startedAt: -1 } },
-	)
-
-	if (lastRun?.startedAt instanceof Date) {
-		const elapsed = Date.now() - lastRun.startedAt.getTime()
-		if (elapsed < minIntervalMs) {
-			log.info(
-				`consolidation rate-limited for agent=${agentId} (${elapsed}ms < ${minIntervalMs}ms)`,
-			)
-			emptyResult.durationMs = Date.now() - startMs
-			return emptyResult
-		}
-	}
-
-	// Record run start
-	await consolidationRuns.insertOne({
-		runId,
-		...runScopeFilter,
-		startedAt: new Date(),
-		status: "running",
+	const gateKey = consolidationGateKey({
+		agentId,
+		scope: options?.scope,
+		scopeRef: options?.scopeRef,
 	})
+	const leaseMs = options?.leaseMs ?? DEFAULT_CONSOLIDATION_LEASE_MS
+	const now = new Date()
+	const claimableStartedBefore = new Date(now.getTime() - minIntervalMs)
+	const leaseToken = randomUUID()
+	try {
+		await consolidationRuns.findOneAndUpdate(
+			{
+				gateKey,
+				$or: [
+					{
+						status: "completed",
+						startedAt: { $lte: claimableStartedBefore },
+					},
+					{ status: "failed", startedAt: { $lte: claimableStartedBefore } },
+					{ status: "running", leaseExpiresAt: { $lte: now } },
+					// Runs written before the lease existed are claimable immediately.
+					{ status: "running", leaseExpiresAt: { $exists: false } },
+				],
+			},
+			[
+				{
+					$set: {
+						gateKey,
+						agentId,
+						...(options?.scope ? { scope: options.scope } : {}),
+						...(options?.scopeRef ? { scopeRef: options.scopeRef } : {}),
+						runId,
+						status: "running",
+						// Server time ($$NOW) so cross-replica clock skew cannot shorten
+						// or stretch the lease; the FILTER comparisons above use the
+						// client clock (an $expr would defeat index bounds) and assume
+						// NTP-synced replicas, same residual as the job queue.
+						startedAt: "$$NOW",
+						leaseToken,
+						leaseExpiresAt: { $add: ["$$NOW", leaseMs] },
+					},
+				},
+				{
+					$unset: [
+						"completedAt",
+						"error",
+						"durationMs",
+						"eventsProcessed",
+						"factsPromoted",
+						"factsInferred",
+						"factsPruned",
+						"conflictsResolved",
+					],
+				},
+			],
+			{
+				upsert: true,
+				returnDocument: "after",
+				writeConcern: DURABLE_JOB_WRITE_CONCERN,
+			},
+		)
+	} catch (err) {
+		if (!isDuplicateKeyError(err)) {
+			throw err
+		}
+		// The gate doc exists but is not claimable: either another replica
+		// holds a live lease, or the last run finished inside minIntervalMs.
+		// Re-read only to log the right reason.
+		const gate = await consolidationRuns.findOne({ gateKey })
+		if (gate?.status === "running") {
+			log.info(
+				`consolidation already running for agent=${agentId} (lease held)`,
+			)
+		} else {
+			log.info(
+				`consolidation rate-limited for agent=${agentId} (< ${minIntervalMs}ms since last run)`,
+			)
+		}
+		emptyResult.durationMs = Date.now() - startMs
+		return emptyResult
+	}
 
 	// Query un-dreamer-processed events
 	const eventsCol = eventsCollection(db, prefix)
@@ -374,20 +494,21 @@ export async function consolidateMemory(params: {
 
 	if (events.length === 0) {
 		const durationMs = Date.now() - startMs
-		await consolidationRuns.updateOne(
-			{ runId },
-			{
-				$set: {
-					status: "completed",
-					completedAt: new Date(),
-					eventsProcessed: 0,
-					factsPromoted: 0,
-					factsPruned: 0,
-					conflictsResolved: 0,
-					durationMs,
-				},
+		await finishConsolidationRun({
+			consolidationRuns,
+			gateKey,
+			runId,
+			leaseToken,
+			update: {
+				status: "completed",
+				completedAt: new Date(),
+				eventsProcessed: 0,
+				factsPromoted: 0,
+				factsPruned: 0,
+				conflictsResolved: 0,
+				durationMs,
 			},
-		)
+		})
 		return { ...emptyResult, durationMs }
 	}
 
@@ -891,7 +1012,7 @@ export async function consolidateMemory(params: {
 					typeof doc.scope === "string" ? (doc.scope as MemoryScope) : undefined
 				const scopeRef =
 					typeof doc.scopeRef === "string" ? doc.scopeRef : undefined
-				const groupKey = `${scope ?? ""} ${scopeRef ?? ""}`
+				const groupKey = `${scope ?? ""}\u0000${scopeRef ?? ""}`
 				const group = groups.get(groupKey) ?? { scope, scopeRef, values: [] }
 				group.values.push(value)
 				groups.set(groupKey, group)
@@ -1081,29 +1202,30 @@ export async function consolidateMemory(params: {
 
 	const durationMs = Date.now() - startMs
 
-	await consolidationRuns.updateOne(
-		{ runId },
-		{
-			$set: {
-				status: firstCandidateError ? "failed" : "completed",
-				completedAt: new Date(),
-				eventsProcessed: successfulEventIds.length,
-				factsPromoted,
-				factsInferred,
-				factsPruned: prunedCount,
-				conflictsResolved,
-				durationMs,
-				...(firstCandidateError
-					? {
-							error:
-								firstCandidateError instanceof Error
-									? firstCandidateError.message
-									: String(firstCandidateError),
-						}
-					: {}),
-			},
+	await finishConsolidationRun({
+		consolidationRuns,
+		gateKey,
+		runId,
+		leaseToken,
+		update: {
+			status: firstCandidateError ? "failed" : "completed",
+			completedAt: new Date(),
+			eventsProcessed: successfulEventIds.length,
+			factsPromoted,
+			factsInferred,
+			factsPruned: prunedCount,
+			conflictsResolved,
+			durationMs,
+			...(firstCandidateError
+				? {
+						error:
+							firstCandidateError instanceof Error
+								? firstCandidateError.message
+								: String(firstCandidateError),
+					}
+				: {}),
 		},
-	)
+	})
 
 	if (firstCandidateError) {
 		throw firstCandidateError

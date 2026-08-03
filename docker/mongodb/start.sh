@@ -35,13 +35,16 @@ case "${1:-fullstack}" in
 
   replicaset)
     echo -e "${GREEN}Starting MongoDB (replica set mode)...${NC}"
+    # Passwords are required (no defaults); fail closed before doing anything.
+    : "${ADMIN_PASSWORD:?set ADMIN_PASSWORD (no default)}"
+    : "${MONGOT_PASSWORD:?set MONGOT_PASSWORD (no default)}"
     # Run setup first for auth files
     echo "Running setup (generates keyfile + auth files)..."
     docker compose -f "$COMPOSE_FILE" --profile setup run --rm setup-generator
     docker compose -f "$COMPOSE_FILE" --profile replicaset up -d
     echo ""
-    echo -e "${GREEN}MongoDB replica set is starting on port ${MONGODB_PORT:-27017}${NC}"
-    echo "Connection string: mongodb://admin:${ADMIN_PASSWORD:-admin}@localhost:${MONGODB_PORT:-27017}/memongo?authSource=admin&replicaSet=rs0&directConnection=true"
+    echo -e "${GREEN}MongoDB replica set is starting on port ${MONGODB_PORT:-27017} (loopback only)${NC}"
+    echo "Connection string: mongodb://admin@localhost:${MONGODB_PORT:-27017}/memongo?authSource=admin&replicaSet=rs0&directConnection=true"
     echo ""
     echo "Features available:"
     echo "  - ACID transactions (withTransaction)"
@@ -52,6 +55,9 @@ case "${1:-fullstack}" in
 
   fullstack)
     echo -e "${GREEN}Starting MongoDB (full stack: mongod + mongot)...${NC}"
+    # Passwords are required (no defaults); fail closed before doing anything.
+    : "${ADMIN_PASSWORD:?set ADMIN_PASSWORD (no default)}"
+    : "${MONGOT_PASSWORD:?set MONGOT_PASSWORD (no default)}"
     # Run setup first for auth files
     echo "Running setup (generates keyfile + auth files)..."
     docker compose -f "$COMPOSE_FILE" --profile setup run --rm setup-generator
@@ -60,10 +66,10 @@ case "${1:-fullstack}" in
     docker compose -f "$COMPOSE_FILE" --profile fullstack restart mongot
     echo ""
     echo -e "${GREEN}MongoDB full stack is starting...${NC}"
-    echo "  mongod: port ${MONGODB_PORT:-27017}"
-    echo "  mongot: gRPC port ${MONGOT_GRPC_PORT:-27028}, health port ${MONGOT_HEALTH_PORT:-8080}"
+    echo "  mongod: port ${MONGODB_PORT:-27017} (loopback only)"
+    echo "  mongot: gRPC port ${MONGOT_GRPC_PORT:-27028}, health port ${MONGOT_HEALTH_PORT:-8080} (loopback only)"
     echo ""
-    echo "Connection string: mongodb://admin:${ADMIN_PASSWORD:-admin}@localhost:${MONGODB_PORT:-27017}/memongo?authSource=admin&replicaSet=rs0&directConnection=true"
+    echo "Connection string: mongodb://admin@localhost:${MONGODB_PORT:-27017}/memongo?authSource=admin&replicaSet=rs0&directConnection=true"
     echo ""
     echo "Features available:"
     echo "  - ACID transactions (withTransaction)"

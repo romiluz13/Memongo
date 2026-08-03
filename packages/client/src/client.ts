@@ -38,6 +38,7 @@ import type {
 	MemongoProcedureOutcomeInput,
 	MemongoRecallTrace,
 	MemongoScanNoveltyInput,
+	MemongoScope,
 	MemongoSearchInput,
 	MemongoSearchKBResponse,
 	MemongoSearchResponse,
@@ -57,33 +58,110 @@ export type MemongoClientOptions = {
 	apiKey?: string
 	/** Max retries for 429/503 (default 2). */
 	maxRetries?: number
+	/** Per-request timeout in ms (default 30_000). */
+	timeoutMs?: number
+	/**
+	 * When true, search/read calls resolve to a benign empty result instead of
+	 * throwing on HTTP errors, timeouts, or network failures — so callers like
+	 * prompt middleware can inject "no memory" instead of breaking the request.
+	 * Strictly opt-in: the default (throwing `MemongoClientError`) is unchanged.
+	 */
+	silent?: boolean
+}
+
+/**
+ * Parse the API's `{error:{code,message}}` envelope (P0.8). Returns undefined
+ * fields for non-envelope bodies (plain text, proxies, older servers).
+ */
+function parseErrorEnvelope(body: string): {
+	code?: string
+	message?: string
+} {
+	try {
+		const parsed = JSON.parse(body) as {
+			error?: { code?: unknown; message?: unknown }
+		}
+		const err = parsed?.error
+		if (err && typeof err === "object") {
+			return {
+				code: typeof err.code === "string" ? err.code : undefined,
+				message: typeof err.message === "string" ? err.message : undefined,
+			}
+		}
+	} catch {
+		// Not a JSON envelope — fall through with empty fields.
+	}
+	return {}
 }
 
 /** Thrown when the Memongo HTTP API returns a non-OK status. */
 export class MemongoClientError extends Error {
 	readonly status: number
 	readonly body: string
+	/** Deliberate error code from the API envelope (e.g. "VALIDATION_ERROR"). */
+	readonly code?: string
+	/** Human-readable message from the API envelope. */
+	readonly apiMessage?: string
 
 	constructor(status: number, body: string, message?: string) {
-		super(message ?? `Memongo API ${status}: ${body || "(empty)"}`)
+		const envelope = parseErrorEnvelope(body)
+		super(
+			message ??
+				(envelope.message
+					? `Memongo API ${status}${envelope.code ? ` ${envelope.code}` : ""}: ${envelope.message}`
+					: `Memongo API ${status}: ${body || "(empty)"}`),
+		)
 		this.name = "MemongoClientError"
 		this.status = status
 		this.body = body
+		this.code = envelope.code
+		this.apiMessage = envelope.message
 	}
+}
+
+/** process.env is absent in browser/edge runtimes — guard every read. */
+function readEnv(name: string): string | undefined {
+	return typeof process !== "undefined" ? process.env?.[name] : undefined
 }
 
 function resolveBaseUrl(opts: MemongoClientOptions): string {
 	const raw =
-		opts.baseUrl ?? process.env.MEMONGO_API_URL ?? "http://127.0.0.1:3847"
+		opts.baseUrl ?? readEnv("MEMONGO_API_URL") ?? "http://127.0.0.1:3847"
 	return raw.replace(/\/$/, "")
 }
 
 function resolveApiKey(opts: MemongoClientOptions): string | undefined {
-	return opts.apiKey ?? process.env.MEMONGO_API_KEY ?? undefined
+	return opts.apiKey ?? readEnv("MEMONGO_API_KEY") ?? undefined
 }
 
 function shouldRetryStatus(status: number): boolean {
 	return status === 429 || status === 503
+}
+
+/**
+ * Hard ceiling for server-supplied Retry-After hints so a hostile or buggy
+ * server cannot park the client for minutes.
+ */
+const MAX_RETRY_DELAY_MS = 10_000
+
+/**
+ * Read the Retry-After header (seconds or HTTP-date per RFC 9110), capped at
+ * MAX_RETRY_DELAY_MS. Returns undefined when absent or unparseable.
+ */
+function retryAfterDelayMs(res: Response): number | undefined {
+	const raw = res.headers.get("Retry-After")
+	if (!raw) {
+		return undefined
+	}
+	const seconds = Number(raw)
+	if (Number.isFinite(seconds) && seconds >= 0) {
+		return Math.min(seconds * 1000, MAX_RETRY_DELAY_MS)
+	}
+	const dateMs = Date.parse(raw)
+	if (!Number.isNaN(dateMs)) {
+		return Math.min(Math.max(dateMs - Date.now(), 0), MAX_RETRY_DELAY_MS)
+	}
+	return undefined
 }
 
 function sleep(ms: number): Promise<void> {
@@ -113,10 +191,16 @@ async function apiFetch<T>(
 	const url = `${resolveBaseUrl(opts)}${path}`
 	const method = (init.method ?? "GET").toUpperCase()
 	const maxRetries = opts.maxRetries ?? 2
+	const timeoutMs = opts.timeoutMs ?? 30_000
 	let attempt = 0
 	for (;;) {
+		const timeoutSignal = AbortSignal.timeout(timeoutMs)
+		const signal = init.signal
+			? AbortSignal.any([init.signal, timeoutSignal])
+			: timeoutSignal
 		const res = await fetch(url, {
 			...init,
+			signal,
 			headers: { ...buildHeaders(opts, method), ...init.headers },
 		})
 		if (res.ok) {
@@ -125,7 +209,8 @@ async function apiFetch<T>(
 		const text = await res.text()
 		if (shouldRetryStatus(res.status) && attempt < maxRetries) {
 			attempt += 1
-			await sleep(200 * attempt)
+			// The server's Retry-After (set on 429) wins over local backoff, capped.
+			await sleep(retryAfterDelayMs(res) ?? 200 * attempt)
 			continue
 		}
 		throw new MemongoClientError(res.status, text)
@@ -136,10 +221,29 @@ async function apiPost<T>(
 	opts: MemongoClientOptions,
 	path: string,
 	body: Record<string, unknown>,
+	headers?: Record<string, string>,
 ): Promise<T> {
 	return apiFetch<T>(opts, path, {
 		method: "POST",
 		body: JSON.stringify(body),
+		...(headers ? { headers } : {}),
+	})
+}
+
+/**
+ * Stripe-style client-generated idempotency keys: opaque UUIDv4, generated
+ * once per logical write and reused across every retry of that call so the
+ * server can dedup instead of double-writing. WebCrypto first (Node 20+ and
+ * every modern browser expose it); Math.random fallback only for exotic
+ * runtimes where crypto is absent.
+ */
+function generateIdempotencyKey(): string {
+	if (globalThis.crypto?.randomUUID) {
+		return globalThis.crypto.randomUUID()
+	}
+	return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (ch) => {
+		const r = Math.floor(Math.random() * 16)
+		return (ch === "x" ? r : (r & 0x3) | 0x8).toString(16)
 	})
 }
 
@@ -444,20 +548,87 @@ export type MemongoStateResponse = {
 	partial?: boolean
 }
 
+/** Metadata shell for a silent-mode empty `searchDetailed` response. */
+const EMPTY_DETAILED_METADATA: MemongoSearchDetailedMetadata = {
+	mode: "auto",
+	classification: "none",
+	sourceOrder: [],
+	passes: [],
+	queriesTried: [],
+	constraintsApplied: [],
+	resultsRejected: [],
+	evidenceCoverage: "none",
+	pathsExecuted: [],
+	resultsByPath: {},
+	queryRewritten: false,
+	reranked: false,
+}
+
+/** Benign empty bundle for silent mode: `rendered: ""` injects nothing. */
+function emptyContextBundle(
+	input: MemongoContextBundleInput,
+): MemongoContextBundleResponse {
+	return {
+		agentId: input.agentId ?? "",
+		...(input.query ? { query: input.query } : {}),
+		scope: input.scope ?? "agent",
+		scopeRef: input.scopeRef ?? "",
+		...(input.sessionId ? { sessionId: input.sessionId } : {}),
+		rendered: "",
+		sections: [],
+		metadata: {
+			tokenBudget: 0,
+			estimatedTokensUsed: 0,
+			partial: true,
+			truncated: false,
+			pathsExecuted: [],
+			sectionsIncluded: [],
+		},
+		builtAt: new Date(0).toISOString(),
+	}
+}
+
 /** HTTP client for the supported Memongo API surface. */
 export class MemongoClient {
 	constructor(private readonly _opts: MemongoClientOptions = {}) {}
 
+	/**
+	 * silent-mode wrapper: search/read calls degrade to `empty` on any failure
+	 * (HTTP error, timeout, network). Writes never use this — a swallowed write
+	 * would look like data loss that never happened.
+	 */
+	private async _silently<T>(empty: T, call: () => Promise<T>): Promise<T> {
+		if (!this._opts.silent) {
+			return call()
+		}
+		try {
+			return await call()
+		} catch {
+			return empty
+		}
+	}
+
 	async add(
 		input: MemongoAddInput,
 	): Promise<{ ok: true; eventId: string; chunkCreated: boolean }> {
-		return apiPost(this._opts, "/v1/add", {
-			content: input.content,
-			agentId: input.agentId,
-			containerTag: input.containerTag,
-			sessionId: input.sessionId ?? input.containerTag,
-			metadata: normalizeMetadata(input.metadata),
-		})
+		// One key per logical write, stable across this call's retries (P0.1).
+		const idempotencyKey = input.customId ?? generateIdempotencyKey()
+		return apiPost(
+			this._opts,
+			"/v1/add",
+			{
+				content: input.content,
+				agentId: input.agentId,
+				containerTag: input.containerTag,
+				sessionId: input.sessionId ?? input.containerTag,
+				metadata: normalizeMetadata(input.metadata),
+				entityContext: input.entityContext,
+				scope: input.scope,
+				scopeRef: input.scopeRef,
+				customId: idempotencyKey,
+			},
+			{ "Idempotency-Key": idempotencyKey },
+		)
 	}
 
 	async search(
@@ -467,19 +638,25 @@ export class MemongoClient {
 			sessionKey?: string
 		},
 	): Promise<MemongoSearchResponse> {
-		return apiPost(this._opts, "/v1/search", {
-			query: input.query,
-			agentId: input.agentId,
-			limit: input.limit,
-			minScore: input.minScore,
-			containerTag: input.containerTag,
-			sessionKey: input.sessionKey ?? input.containerTag,
-		})
+		return this._silently<MemongoSearchResponse>({ results: [] }, () =>
+			apiPost(this._opts, "/v1/search", {
+				query: input.query,
+				agentId: input.agentId,
+				limit: input.limit,
+				minScore: input.minScore,
+				containerTag: input.containerTag,
+				sessionKey: input.sessionKey ?? input.containerTag,
+				scope: input.scope,
+				scopeRef: input.scopeRef,
+			}),
+		)
 	}
 
 	async searchDetailed(input: {
 		query: string
 		agentId?: string
+		scope?: MemongoScope
+		scopeRef?: string
 		limit?: number
 		maxResults?: number
 		minScore?: number
@@ -505,57 +682,86 @@ export class MemongoClient {
 		/** @deprecated This legacy alias is ignored by the canonical detailed search path. */
 		containerTag?: string
 	}): Promise<MemongoSearchDetailedResponse> {
-		return apiPost(this._opts, "/v1/search-detailed", {
-			query: input.query,
-			agentId: input.agentId,
-			limit: input.limit,
-			maxResults: input.maxResults,
-			minScore: input.minScore,
-			searchMode: input.searchMode,
-			sourcePreference: input.sourcePreference,
-			timeRange: input.timeRange,
-			needExactEvidence: input.needExactEvidence,
-			maxPasses: input.maxPasses,
-			returnPlan: input.returnPlan,
-			conversationScope: input.conversationScope,
-			structuredScope: input.structuredScope,
-			referenceScope: input.referenceScope,
-			proceduralScope: input.proceduralScope,
-			searchConfig: input.searchConfig,
-		})
+		return this._silently<MemongoSearchDetailedResponse>(
+			{ results: [], metadata: EMPTY_DETAILED_METADATA },
+			() =>
+				apiPost(this._opts, "/v1/search-detailed", {
+					query: input.query,
+					agentId: input.agentId,
+					scope: input.scope,
+					scopeRef: input.scopeRef,
+					limit: input.limit,
+					maxResults: input.maxResults,
+					minScore: input.minScore,
+					searchMode: input.searchMode,
+					sourcePreference: input.sourcePreference,
+					timeRange: input.timeRange,
+					needExactEvidence: input.needExactEvidence,
+					maxPasses: input.maxPasses,
+					returnPlan: input.returnPlan,
+					conversationScope: input.conversationScope,
+					structuredScope: input.structuredScope,
+					referenceScope: input.referenceScope,
+					proceduralScope: input.proceduralScope,
+					searchConfig: input.searchConfig,
+				}),
+		)
 	}
 
 	async searchKB(input: {
 		query: string
 		agentId?: string
+		scope?: MemongoScope
+		scopeRef?: string
 		limit?: number
 		minScore?: number
 		filter?: { tags?: string[]; category?: string; source?: string }
+		/** Server-side fusion preference for the KB lane (P0.10). */
+		fusionMethod?: "scoreFusion" | "rankFusion" | "js-merge"
 	}): Promise<MemongoSearchKBResponse> {
-		return apiPost(this._opts, "/v1/search-kb", {
-			query: input.query,
-			agentId: input.agentId,
-			limit: input.limit,
-			minScore: input.minScore,
-			filter: input.filter,
-		})
+		return this._silently<MemongoSearchKBResponse>({ results: [] }, () =>
+			apiPost(this._opts, "/v1/search-kb", {
+				query: input.query,
+				agentId: input.agentId,
+				scope: input.scope,
+				scopeRef: input.scopeRef,
+				limit: input.limit,
+				minScore: input.minScore,
+				filter: input.filter,
+				fusionMethod: input.fusionMethod,
+			}),
+		)
 	}
 
 	async recallConversation(
 		input: MemongoConversationRecallInput = {},
 	): Promise<MemongoConversationRecallResponse> {
-		return apiPost(this._opts, "/v1/recall-conversation", {
-			query: input.query,
-			sessionId: input.sessionId,
-			roles: input.roles,
-			startTime: input.startTime,
-			endTime: input.endTime,
-			asOf: input.asOf,
-			timezone: input.timezone,
-			includeToolMessages: input.includeToolMessages,
-			limit: input.limit,
-			agentId: input.agentId,
-		})
+		return this._silently<MemongoConversationRecallResponse>(
+			{
+				results: [],
+				metadata: {
+					totalMatched: 0,
+					filtersApplied: [],
+					searchMethod: "standard",
+					durationMs: 0,
+				},
+			},
+			() =>
+				apiPost(this._opts, "/v1/recall-conversation", {
+					query: input.query,
+					sessionId: input.sessionId,
+					roles: input.roles,
+					startTime: input.startTime,
+					endTime: input.endTime,
+					asOf: input.asOf,
+					timezone: input.timezone,
+					includeToolMessages: input.includeToolMessages,
+					limit: input.limit,
+					agentId: input.agentId,
+					scope: input.scope,
+					scopeRef: input.scopeRef,
+				}),
+		)
 	}
 
 	async getLifecycleItem(
@@ -625,12 +831,16 @@ export class MemongoClient {
 		lines?: number
 		agentId?: string
 	}): Promise<MemongoReadFileResponse> {
-		return apiPost(this._opts, "/v1/read-file", {
-			relPath: input.relPath,
-			from: input.from,
-			lines: input.lines,
-			agentId: input.agentId,
-		})
+		return this._silently<MemongoReadFileResponse>(
+			{ text: "", path: input.relPath },
+			() =>
+				apiPost(this._opts, "/v1/read-file", {
+					relPath: input.relPath,
+					from: input.from,
+					lines: input.lines,
+					agentId: input.agentId,
+				}),
+		)
 	}
 
 	async writeEvent(input: {
@@ -644,19 +854,29 @@ export class MemongoClient {
 		metadata?: Record<string, unknown>
 		scope?: string
 		scopeRef?: string
+		/** Idempotency key; a UUIDv4 is generated when omitted. */
+		customId?: string
 	}): Promise<{ ok: true; eventId: string; chunkCreated: boolean }> {
-		return apiPost(this._opts, "/v1/write-event", {
-			role: input.role,
-			body: input.body,
-			agentId: input.agentId,
-			sessionId: input.sessionId,
-			timestamp: input.timestamp,
-			validAt: input.validAt,
-			invalidAt: input.invalidAt,
-			metadata: input.metadata,
-			scope: input.scope,
-			scopeRef: input.scopeRef,
-		})
+		// One key per logical write, stable across this call's retries (P0.1).
+		const idempotencyKey = input.customId ?? generateIdempotencyKey()
+		return apiPost(
+			this._opts,
+			"/v1/write-event",
+			{
+				role: input.role,
+				body: input.body,
+				agentId: input.agentId,
+				sessionId: input.sessionId,
+				timestamp: input.timestamp,
+				validAt: input.validAt,
+				invalidAt: input.invalidAt,
+				metadata: input.metadata,
+				scope: input.scope,
+				scopeRef: input.scopeRef,
+				customId: idempotencyKey,
+			},
+			{ "Idempotency-Key": idempotencyKey },
+		)
 	}
 
 	async writeStructured(input: {
@@ -683,6 +903,8 @@ export class MemongoClient {
 		return apiPost(this._opts, "/v1/extract", {
 			eventId: input.eventId,
 			agentId: input.agentId,
+			scope: input.scope,
+			scopeRef: input.scopeRef,
 		})
 	}
 
@@ -748,22 +970,26 @@ export class MemongoClient {
 	async buildContextBundle(
 		input: MemongoContextBundleInput = {},
 	): Promise<MemongoContextBundleResponse> {
-		return apiPost(this._opts, "/v1/context-bundle", {
-			agentId: input.agentId,
-			query: input.query,
-			scope: input.scope,
-			scopeRef: input.scopeRef,
-			sessionId: input.sessionId,
-			tokenBudget: input.tokenBudget,
-			maxActiveItems: input.maxActiveItems,
-			maxEvidenceItems: input.maxEvidenceItems,
-			maxRecentEvents: input.maxRecentEvents,
-			includeDiscoveryProjection: input.includeDiscoveryProjection,
-			discoveryKind: input.discoveryKind,
-			includeProfile: input.includeProfile,
-			timeRange: input.timeRange,
-			mode: input.mode,
-		})
+		return this._silently<MemongoContextBundleResponse>(
+			emptyContextBundle(input),
+			() =>
+				apiPost(this._opts, "/v1/context-bundle", {
+					agentId: input.agentId,
+					query: input.query,
+					scope: input.scope,
+					scopeRef: input.scopeRef,
+					sessionId: input.sessionId,
+					tokenBudget: input.tokenBudget,
+					maxActiveItems: input.maxActiveItems,
+					maxEvidenceItems: input.maxEvidenceItems,
+					maxRecentEvents: input.maxRecentEvents,
+					includeDiscoveryProjection: input.includeDiscoveryProjection,
+					discoveryKind: input.discoveryKind,
+					includeProfile: input.includeProfile,
+					timeRange: input.timeRange,
+					mode: input.mode,
+				}),
+		)
 	}
 
 	async status(agentId?: string): Promise<MemongoStatusResponse> {
@@ -958,10 +1184,18 @@ export class MemongoClient {
 		traceId: string
 		agentId?: string
 	}): Promise<MemongoRecallTrace | null> {
-		return apiGet(
-			this._opts,
-			`/v1/admin/traces/${encodeURIComponent(input.traceId)}${q(input.agentId)}`,
-		)
+		try {
+			return await apiGet(
+				this._opts,
+				`/v1/admin/traces/${encodeURIComponent(input.traceId)}${q(input.agentId)}`,
+			)
+		} catch (err) {
+			// Type says `| null` — honor it: 404 is "absent", not an exception.
+			if (err instanceof MemongoClientError && err.status === 404) {
+				return null
+			}
+			throw err
+		}
 	}
 
 	async listJobs(input?: {
@@ -984,10 +1218,18 @@ export class MemongoClient {
 		jobId: string
 		agentId?: string
 	}): Promise<MemongoMemoryJob | null> {
-		return apiGet(
-			this._opts,
-			`/v1/jobs/${encodeURIComponent(input.jobId)}${q(input.agentId)}`,
-		)
+		try {
+			return await apiGet(
+				this._opts,
+				`/v1/jobs/${encodeURIComponent(input.jobId)}${q(input.agentId)}`,
+			)
+		} catch (err) {
+			// Type says `| null` — honor it: 404 is "absent", not an exception.
+			if (err instanceof MemongoClientError && err.status === 404) {
+				return null
+			}
+			throw err
+		}
 	}
 
 	async traceChain(
@@ -1008,6 +1250,7 @@ export class MemongoClient {
 			agentId: input?.agentId,
 			limit: input?.limit,
 			scope: input?.scope,
+			scopeRef: input?.scopeRef,
 		})
 	}
 

@@ -1,6 +1,63 @@
 import { serve } from "@hono/node-server"
-import { memongoBridgeShutdown } from "@memongo/memory-bridge"
-import { createApp, registerGracefulShutdown } from "./app.js"
+import {
+	memongoBridgeCapabilities,
+	memongoBridgeShutdown,
+} from "@memongo/memory-bridge"
+import {
+	createApp,
+	registerGracefulShutdown,
+	resolveCorsPolicy,
+} from "./app.js"
+import { validateBootEnv } from "./lib/boot-env.js"
+import {
+	enforceRequiredVector,
+	isRequireVectorEnabled,
+	logCapabilityTable,
+	probeBootCapabilities,
+} from "./lib/capabilities.js"
+
+// P1.7: fail fast on missing MongoDB configuration — before binding the port —
+// with the engine's own message, so a misconfigured container exits immediately
+// instead of booting "healthy" and serving per-request 500s.
+try {
+	validateBootEnv()
+} catch (err) {
+	console.error(err instanceof Error ? err.message : String(err))
+	process.exit(1)
+}
+
+// P1.7: log the active CORS policy once at boot so operators can tell whether
+// the web-console dev defaults or an explicit env allowlist are in effect.
+const corsPolicy = resolveCorsPolicy(process.env.MEMONGO_CORS_ORIGINS)
+console.log(
+	`memongo-api CORS: ${corsPolicy.source === "dev-default" ? "dev-default" : "env-configured"} origins=[${corsPolicy.origins.join(", ")}]`,
+)
+
+// P1.9: log the search capability table once at boot so operators can see
+// which retrieval lanes (hybrid/vector/keyword/text) this deployment can
+// actually serve. Capabilities come from the engine manager's detected
+// capabilities (serving-index existence + queryability), exposed through the
+// bridge's memongoBridgeCapabilities — the same signal family the /ready
+// vector lane uses. This warms the cached manager at boot, which also makes
+// the first real request fast. A probe failure degrades the table to
+// "unavailable" lanes instead of crashing an unstrict deployment.
+const bootCapabilities = await probeBootCapabilities(() =>
+	memongoBridgeCapabilities({}),
+)
+logCapabilityTable(bootCapabilities.lanes, bootCapabilities.probeError)
+
+// P1.9 strict mode: production deployments that cannot tolerate silent
+// $text-only degradation set MEMONGO_REQUIRE_VECTOR=1; boot refuses to
+// continue (exit 1) when the vector lane is unavailable or the capability
+// probe failed.
+if (isRequireVectorEnabled(process.env.MEMONGO_REQUIRE_VECTOR)) {
+	try {
+		enforceRequiredVector(bootCapabilities.lanes, bootCapabilities.probeError)
+	} catch (err) {
+		console.error(err instanceof Error ? err.message : String(err))
+		process.exit(1)
+	}
+}
 
 const app = createApp()
 

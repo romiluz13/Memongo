@@ -2,60 +2,54 @@ import type {
 	LanguageModelV2,
 	LanguageModelV2CallOptions,
 } from "@ai-sdk/provider"
+import type { MemongoScope } from "@memongo/client"
+// Canonical scope enum from the single contract source (P2.2).
+import { MEMORY_SCOPE_VALUES } from "@memongo/lib"
 import { wrapLanguageModel, type LanguageModelMiddleware } from "ai"
 import { renderMemoryContextBlock } from "../memory-context.js"
+import {
+	createMemongoMiddlewareCore,
+	type MemongoCoreOptions,
+	type MemongoRequestIdentity,
+} from "../middleware-core.js"
+import { _clearCache } from "../cache-identity.js"
 
-export interface MemongoCoreOptions {
-	apiUrl: string
-	apiKey: string
-	userId: string
-	agentId?: string
-	mode?: "wake-up" | "full"
-}
-
-/* ------------------------------------------------------------------ */
-/*  Simple LRU cache: Map with max 50 entries, 60s TTL                */
-/* ------------------------------------------------------------------ */
-
-interface CacheEntry {
-	rendered: string
-	expiresAt: number
-}
-
-const MAX_CACHE_SIZE = 50
-const CACHE_TTL_MS = 60_000
-
-const cache = new Map<string, CacheEntry>()
-
-function hashQuery(text: string): string {
-	let h = 0
-	for (let i = 0; i < text.length; i++) {
-		h = (Math.imul(31, h) + text.charCodeAt(i)) | 0
-	}
-	return String(h)
-}
-
-function cacheGet(key: string): string | undefined {
-	const entry = cache.get(key)
-	if (!entry) return undefined
-	if (Date.now() > entry.expiresAt) {
-		cache.delete(key)
-		return undefined
-	}
-	return entry.rendered
-}
-
-function cacheSet(key: string, rendered: string): void {
-	if (cache.size >= MAX_CACHE_SIZE) {
-		const oldest = cache.keys().next().value
-		if (oldest !== undefined) cache.delete(oldest)
-	}
-	cache.set(key, { rendered, expiresAt: Date.now() + CACHE_TTL_MS })
-}
+export type { MemongoCoreOptions } from "../middleware-core.js"
 
 /** Exported for testing only. */
-export function _clearCache(): void {
-	cache.clear()
+export { _clearCache }
+
+/* ------------------------------------------------------------------ */
+/*  Per-request identity via providerOptions (P1.5)                    */
+/*                                                                     */
+/*  The Vercel AI SDK's official channel into middleware is            */
+/*  `providerOptions` -> `params.providerOptions.memongo`:             */
+/*    { agentId?, userId?, scope?, sessionId?, mode? }                 */
+/*  Identity is read per request — never from module closures — so     */
+/*  concurrent Fluid Compute invocations for different tenants sharing */
+/*  one warm process can never be keyed together.                      */
+/* ------------------------------------------------------------------ */
+
+const VALID_SCOPES: ReadonlySet<string> = new Set(MEMORY_SCOPE_VALUES)
+
+function identityFromParams(
+	params: LanguageModelV2CallOptions,
+): MemongoRequestIdentity {
+	const raw = params.providerOptions?.memongo
+	if (!raw || typeof raw !== "object") {
+		return {}
+	}
+	const identity: MemongoRequestIdentity = {}
+	if (typeof raw.agentId === "string") identity.agentId = raw.agentId
+	if (typeof raw.userId === "string") identity.userId = raw.userId
+	if (typeof raw.sessionId === "string") identity.sessionId = raw.sessionId
+	if (typeof raw.scope === "string" && VALID_SCOPES.has(raw.scope)) {
+		identity.scope = raw.scope as MemongoScope
+	}
+	if (raw.mode === "wake-up" || raw.mode === "full") {
+		identity.mode = raw.mode
+	}
+	return identity
 }
 
 /* ------------------------------------------------------------------ */
@@ -86,76 +80,6 @@ function extractResponseText(
 }
 
 /* ------------------------------------------------------------------ */
-/*  Core: fetch context bundle from Memongo API                       */
-/* ------------------------------------------------------------------ */
-
-async function fetchContextBundle(
-	options: MemongoCoreOptions,
-	userQuery?: string,
-): Promise<string> {
-	const mode =
-		userQuery && options.mode !== "wake-up"
-			? "full"
-			: (options.mode ?? "wake-up")
-	const cacheKey = `${options.userId}:${hashQuery(userQuery ?? "")}`
-	const cached = cacheGet(cacheKey)
-	if (cached !== undefined) return cached
-
-	const body: Record<string, unknown> = {
-		agentId: options.agentId ?? options.userId,
-		mode,
-	}
-	if (mode === "full" && userQuery) {
-		body.query = userQuery
-	}
-
-	try {
-		const res = await fetch(`${options.apiUrl}/v1/context-bundle`, {
-			method: "POST",
-			headers: {
-				"Content-Type": "application/json",
-				Authorization: `Bearer ${options.apiKey}`,
-			},
-			body: JSON.stringify(body),
-		})
-
-		if (!res.ok) return ""
-
-		const data = (await res.json()) as { rendered?: string }
-		const rendered = data.rendered ?? ""
-		if (rendered) cacheSet(cacheKey, rendered)
-		return rendered
-	} catch {
-		return ""
-	}
-}
-
-/* ------------------------------------------------------------------ */
-/*  Fire-and-forget write-event                                       */
-/* ------------------------------------------------------------------ */
-
-function fireWriteEvent(
-	options: MemongoCoreOptions,
-	role: "user" | "assistant",
-	body: string,
-): void {
-	fetch(`${options.apiUrl}/v1/write-event`, {
-		method: "POST",
-		headers: {
-			"Content-Type": "application/json",
-			Authorization: `Bearer ${options.apiKey}`,
-		},
-		body: JSON.stringify({
-			role,
-			body,
-			agentId: options.agentId ?? options.userId,
-		}),
-	}).catch((err) => {
-		console.warn("[memongo] write-event failed:", role, err)
-	})
-}
-
-/* ------------------------------------------------------------------ */
 /*  Public API                                                        */
 /* ------------------------------------------------------------------ */
 
@@ -163,10 +87,13 @@ export function withMemongo(
 	model: LanguageModelV2,
 	options: MemongoCoreOptions,
 ): LanguageModelV2 {
+	const core = createMemongoMiddlewareCore(options)
+
 	const middleware: LanguageModelMiddleware = {
 		transformParams: async ({ params }) => {
+			const identity = identityFromParams(params)
 			const userQuery = extractUserQuery(params.prompt)
-			const rendered = await fetchContextBundle(options, userQuery)
+			const rendered = await core.getContextBundle(identity, userQuery)
 
 			if (!rendered) return params
 
@@ -181,35 +108,41 @@ export function withMemongo(
 		},
 
 		wrapGenerate: async ({ doGenerate, params }) => {
+			const identity = identityFromParams(params)
 			const result = await doGenerate()
 
-			// Fire-and-forget: save user message
+			// After-turn capture (P1.4). AI SDK v5's LanguageModelV2Middleware has
+			// no `onEnd` lifecycle callback — only transformParams / wrapGenerate /
+			// wrapStream — so capture runs here, after doGenerate resolves. It is
+			// awaited so a serverless invocation cannot be frozen before the write
+			// lands; captureTurn never throws (failures go to onError).
 			const userQuery = extractUserQuery(params.prompt)
-			if (userQuery) {
-				fireWriteEvent(options, "user", userQuery)
-			}
-
-			// Fire-and-forget: save assistant response
 			const responseText = extractResponseText(
 				result.content as Array<{ type: string; text?: string }>,
 			)
-			if (responseText) {
-				fireWriteEvent(options, "assistant", responseText)
-			}
+			await core.captureTurn(identity, {
+				user: userQuery,
+				assistant: responseText,
+			})
 
 			return result
 		},
 
 		wrapStream: async ({ doStream, params }) => {
+			const identity = identityFromParams(params)
 			const result = await doStream()
 
-			// Fire-and-forget: save user message
+			// Awaited capture of the user message before streaming starts (P1.4).
 			const userQuery = extractUserQuery(params.prompt)
 			if (userQuery) {
-				fireWriteEvent(options, "user", userQuery)
+				await core.captureTurn(identity, { user: userQuery })
 			}
 
-			// Collect streamed text chunks and save assistant message after stream ends
+			// Collect streamed text chunks; the TransformStream flush() is the
+			// stream equivalent of an onEnd callback — it runs after the last
+			// chunk and may return a promise the stream waits for, so the
+			// assistant capture is awaited there too. The user query is passed as
+			// hashSource so both roles of this logical turn share one turn id.
 			const originalStream = result.stream
 			const chunks: string[] = []
 			const transformedStream = originalStream.pipeThrough(
@@ -220,10 +153,14 @@ export function withMemongo(
 						}
 						controller.enqueue(chunk)
 					},
-					flush() {
+					async flush() {
 						const fullText = chunks.join("")
 						if (fullText) {
-							fireWriteEvent(options, "assistant", fullText)
+							await core.captureTurn(
+								identity,
+								{ assistant: fullText },
+								userQuery,
+							)
 						}
 					},
 				}),

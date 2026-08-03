@@ -148,6 +148,16 @@ vi.mock("./mongodb-events.js", () => ({
 	projectChunksFromEvents: vi.fn(),
 	projectEventChunk: vi.fn(),
 	getEventsByTimeRange: vi.fn(),
+	IdempotencyConflictError: class extends Error {
+		readonly idempotencyKey: string
+		constructor(idempotencyKey: string) {
+			super(
+				`idempotency key "${idempotencyKey}" was reused with a different payload`,
+			)
+			this.name = "IdempotencyConflictError"
+			this.idempotencyKey = idempotencyKey
+		}
+	},
 }))
 
 vi.mock("./benchmark-quality-contracts.js", async (importOriginal) => {
@@ -2150,6 +2160,69 @@ describe("importConversations", () => {
 		} finally {
 			await rm(workspaceDir, { recursive: true, force: true })
 			await rm(outsideDir, { recursive: true, force: true })
+		}
+	})
+
+	it("honors MEMONGO_DATASET_ROOT as an additional allowed root", async () => {
+		mocked(importConversationDataset).mockResolvedValue({
+			datasetPath: "/datasets/history.json",
+			datasetName: "history.json",
+			datasetKind: "generic",
+			conversationsImported: 1,
+			turnsImported: 2,
+			skippedConversations: 0,
+			failedLines: 0,
+			failedTurns: 0,
+			startedAt: new Date("2026-04-11T00:00:00.000Z"),
+			completedAt: new Date("2026-04-11T00:00:01.000Z"),
+		})
+
+		const workspaceDir = await mkdtemp(
+			path.join(os.tmpdir(), "memongo-manager-import-workspace-"),
+		)
+		const datasetRoot = await mkdtemp(
+			path.join(os.tmpdir(), "memongo-dataset-root-"),
+		)
+		const datasetPath = path.join(datasetRoot, "history.json")
+		const prevDatasetRoot = process.env.MEMONGO_DATASET_ROOT
+		process.env.MEMONGO_DATASET_ROOT = datasetRoot
+		try {
+			await writeFile(datasetPath, JSON.stringify({ conversations: [] }))
+			const expectedDatasetPath = await realpath(datasetPath)
+			const manager = {
+				workspaceDir,
+				config: {
+					mongodb: {
+						relevance: {
+							benchmark: {
+								datasetPath: path.join(workspaceDir, "imports", "default.json"),
+							},
+						},
+					},
+				},
+				getBenchmarkAllowedRoots:
+					MongoDBMemoryManager.prototype.getBenchmarkAllowedRoots,
+				writeConversationEvent: vi.fn(),
+			} as unknown as MongoDBMemoryManager
+
+			await MongoDBMemoryManager.prototype.importConversations.call(manager, {
+				datasetPath,
+			})
+
+			expect(importConversationDataset).toHaveBeenCalledWith(
+				expect.objectContaining({
+					datasetPath: expectedDatasetPath,
+					allowedRoots: expect.arrayContaining([datasetRoot]),
+				}),
+			)
+		} finally {
+			if (prevDatasetRoot === undefined) {
+				delete process.env.MEMONGO_DATASET_ROOT
+			} else {
+				process.env.MEMONGO_DATASET_ROOT = prevDatasetRoot
+			}
+			await rm(workspaceDir, { recursive: true, force: true })
+			await rm(datasetRoot, { recursive: true, force: true })
 		}
 	})
 })
@@ -5003,6 +5076,106 @@ describe("MongoDBMemoryManager background extraction", () => {
 		}
 	})
 
+	it("fences side-effecting stages when the extraction lease is lost before entity extraction (P2.5 b)", async () => {
+		vi.useFakeTimers()
+		try {
+			const {
+				claimMemoryJob,
+				completeClaimedMemoryJob,
+				createMemoryJob,
+				failClaimedMemoryJob,
+				renewMemoryJobLease,
+			} = await import("./mongodb-memory-jobs.js")
+			const { eventsCollection } = await import("./mongodb-schema.js")
+			const { extractAndUpsertEntities } = await import("./mongodb-graph.js")
+			const { promoteDerivedMemoryFromEvent } = await import(
+				"./mongodb-derived-memory.js"
+			)
+			const { getPendingExtractionEvents } = await import("./mongodb-events.js")
+			// The worker's outbox-repair pass runs before claiming: keep it empty
+			// so no residue from earlier tests' persisted mocks drives writes.
+			mocked(getPendingExtractionEvents).mockResolvedValue([])
+			mocked(createMemoryJob).mockResolvedValue("extraction-evt-fenced")
+			mocked(claimMemoryJob)
+				.mockResolvedValueOnce({
+					jobId: "extraction-evt-fenced",
+					jobType: "extraction",
+					agentId: "agent-1",
+					status: "running",
+					createdAt: new Date("2026-04-09T12:00:00.000Z"),
+					payload: { eventId: "evt-fenced" },
+					attempts: 1,
+					leaseOwner: "worker-fenced",
+					leaseToken: "lease-fenced",
+					heartbeatAt: new Date("2026-04-09T12:00:00.000Z"),
+					leaseExpiresAt: new Date("2026-04-09T12:01:00.000Z"),
+				})
+				.mockResolvedValueOnce(null)
+			// The lease renewal fails while the event read is still in flight —
+			// the lease is lost BEFORE the first side-effecting stage.
+			mocked(renewMemoryJobLease).mockResolvedValue(false)
+			let resolveEventDoc: ((doc: unknown) => void) | undefined
+			const findOne = vi.fn(
+				() =>
+					new Promise((resolve) => {
+						resolveEventDoc = resolve
+					}),
+			)
+			mocked(eventsCollection).mockReturnValue({
+				findOne,
+			} as unknown as import("mongodb").Collection)
+
+			const manager = Object.assign(
+				Object.create(MongoDBMemoryManager.prototype),
+				{
+					db: {} as import("mongodb").Db,
+					prefix: "test_",
+					agentId: "agent-1",
+					client: undefined,
+					config: { mongodb: { embeddingMode: "automated" } },
+					workspaceDir: "/tmp/memongo",
+					memoryJobWorkerId: "worker-fenced",
+					memoryJobWorkerStopped: false,
+					memoryJobWorkerActive: false,
+					memoryJobWorkerPromise: Promise.resolve(),
+					memoryJobRunContexts: new Map(),
+				},
+			) as MongoDBMemoryManager & { memoryJobWorkerPromise: Promise<void> }
+
+			await manager.extractEvent({ eventId: "evt-fenced" })
+			await vi.waitFor(() => {
+				expect(findOne).toHaveBeenCalled()
+			})
+			await vi.advanceTimersByTimeAsync(20_001)
+			expect(renewMemoryJobLease).toHaveBeenCalledWith(
+				expect.objectContaining({
+					jobId: "extraction-evt-fenced",
+					leaseOwner: "worker-fenced",
+					leaseToken: "lease-fenced",
+				}),
+			)
+			resolveEventDoc?.({
+				eventId: "evt-fenced",
+				agentId: "agent-1",
+				role: "user",
+				body: "Remember this fenced extraction.",
+				timestamp: new Date("2026-04-09T12:00:00.000Z"),
+				scope: "agent",
+				scopeRef: "agent:agent-1",
+			})
+			await manager.memoryJobWorkerPromise
+
+			// The lease was lost BEFORE the first side-effecting stage, so no
+			// entity/derived writes and no terminal write may commit.
+			expect(extractAndUpsertEntities).not.toHaveBeenCalled()
+			expect(promoteDerivedMemoryFromEvent).not.toHaveBeenCalled()
+			expect(completeClaimedMemoryJob).not.toHaveBeenCalled()
+			expect(failClaimedMemoryJob).not.toHaveBeenCalled()
+		} finally {
+			vi.useRealTimers()
+		}
+	})
+
 	it("waits for an active durable extraction before closing MongoDB", async () => {
 		let finishWorker: (() => void) | undefined
 		const worker = new Promise<void>((resolve) => {
@@ -5037,6 +5210,175 @@ describe("MongoDBMemoryManager background extraction", () => {
 		await closing
 
 		expect(closeClient).toHaveBeenCalledOnce()
+	})
+
+	describe("shutdown concurrency hardening (P2.5 e)", () => {
+		it("drains a queued write BEFORE stopping the job worker and closing MongoDB", async () => {
+			let finishQueuedWrite: (() => void) | undefined
+			const queuedWrite = new Promise<void>((resolve) => {
+				finishQueuedWrite = resolve
+			})
+			const order: string[] = []
+			const runContexts = new Map([["extraction-evt-orphan", {}]])
+			const manager = Object.assign(
+				Object.create(MongoDBMemoryManager.prototype),
+				{
+					closed: false,
+					watchTimer: null,
+					syncing: null,
+					writeQueue: queuedWrite.then(() => {
+						order.push("write-drained")
+					}),
+					derivationSchedulingQueue: Promise.resolve(),
+					derivationQueue: Promise.resolve(),
+					memoryJobRunContexts: runContexts,
+					stopMemoryJobWorker: vi.fn(async () => {
+						order.push("worker-stopped")
+					}),
+					watcher: null,
+					changeStreamWatcher: null,
+					accessTracker: null,
+					ownsClient: true,
+					client: {
+						close: vi.fn(async () => {
+							order.push("client-closed")
+						}),
+					},
+				},
+			) as MongoDBMemoryManager
+
+			const closing = manager.close()
+			await Promise.resolve()
+			await Promise.resolve()
+			// Blocked on the queued write: the worker is NOT stopped and the
+			// client is NOT closed while a write is still in flight.
+			expect(order).toEqual([])
+
+			finishQueuedWrite?.()
+			await closing
+
+			// The queued write completed BEFORE the worker stopped and before
+			// the client closed — nothing schedules work after worker stop.
+			expect(order).toEqual([
+				"write-drained",
+				"worker-stopped",
+				"client-closed",
+			])
+			// Run contexts for never-claimed jobs are dropped on shutdown.
+			expect(runContexts.size).toBe(0)
+		})
+
+		it("refuses new writes and extraction scheduling once closed", async () => {
+			const manager = Object.assign(
+				Object.create(MongoDBMemoryManager.prototype),
+				{ closed: true },
+			) as MongoDBMemoryManager
+
+			await expect(
+				manager.writeConversationEvent({ role: "user", body: "too late" }),
+			).rejects.toThrow(/closed/)
+			await expect(
+				manager.extractEvent({ eventId: "evt-too-late" }),
+			).rejects.toThrow(/closed/)
+		})
+
+		it("never restarts the memory job worker after close", () => {
+			const manager = Object.assign(
+				Object.create(MongoDBMemoryManager.prototype),
+				{
+					closed: true,
+					memoryJobWorkerStopped: true,
+					memoryJobWorkerTimer: null,
+					memoryJobWorkerActive: false,
+				},
+			) as MongoDBMemoryManager
+			const lifecycle = MongoDBMemoryManager.prototype as unknown as {
+				startMemoryJobWorker: (this: MongoDBMemoryManager) => void
+			}
+
+			lifecycle.startMemoryJobWorker.call(manager)
+
+			const internals = manager as unknown as {
+				memoryJobWorkerStopped: boolean
+				memoryJobWorkerTimer: unknown
+				memoryJobWorkerActive: boolean
+			}
+			expect(internals.memoryJobWorkerStopped).toBe(true)
+			expect(internals.memoryJobWorkerTimer).toBeNull()
+			expect(internals.memoryJobWorkerActive).toBe(false)
+		})
+
+		it("unrefs the watch debounce timer so it cannot hold the process open", () => {
+			const unref = vi.fn()
+			const fakeTimer = { unref, ref: vi.fn() }
+			const setTimeoutSpy = vi
+				.spyOn(globalThis, "setTimeout")
+				.mockReturnValue(fakeTimer as unknown as NodeJS.Timeout)
+			try {
+				const manager = Object.assign(
+					Object.create(MongoDBMemoryManager.prototype),
+					{
+						watchTimer: null,
+						config: { mongodb: { watchDebounceMs: 250 } },
+					},
+				) as MongoDBMemoryManager
+				const internals = manager as unknown as {
+					scheduleWatchSync: (this: MongoDBMemoryManager) => void
+					watchTimer: unknown
+				}
+
+				internals.scheduleWatchSync.call(manager)
+
+				expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), 250)
+				expect(unref).toHaveBeenCalledOnce()
+			} finally {
+				setTimeoutSpy.mockRestore()
+			}
+		})
+
+		it("drops the run context when the extraction job is already terminal", async () => {
+			const { createMemoryJob, getMemoryJob } = await import(
+				"./mongodb-memory-jobs.js"
+			)
+			mocked(createMemoryJob).mockRejectedValue({ code: 11000 })
+			mocked(getMemoryJob).mockResolvedValue({
+				jobId: "extraction-evt-done",
+				jobType: "extraction",
+				agentId: "agent-1",
+				status: "completed",
+				createdAt: new Date("2026-04-09T12:00:00.000Z"),
+				payload: { eventId: "evt-done" },
+			})
+			const runContexts = new Map([
+				["extraction-evt-done", testBenchmarkRunContext("run-terminal")],
+			])
+			const manager = Object.assign(
+				Object.create(MongoDBMemoryManager.prototype),
+				{
+					db: {} as import("mongodb").Db,
+					prefix: "test_",
+					agentId: "agent-1",
+					client: undefined,
+					config: { mongodb: { embeddingMode: "automated" } },
+					workspaceDir: "/tmp/memongo",
+					memoryJobWorkerId: "worker-terminal",
+					memoryJobWorkerStopped: false,
+					memoryJobWorkerActive: false,
+					memoryJobWorkerPromise: Promise.resolve(),
+					memoryJobRunContexts: runContexts,
+				},
+			) as MongoDBMemoryManager
+
+			const result = await manager.extractEvent({ eventId: "evt-done" })
+
+			expect(result).toEqual({
+				jobId: "extraction-evt-done",
+				scheduled: false,
+			})
+			// A terminal job is never claimed by this manager — the stale run
+			// context entry must not leak.
+			expect(runContexts.has("extraction-evt-done")).toBe(false)
+		})
 	})
 
 	it("wakes an existing pending extraction job instead of stranding it", async () => {
@@ -6283,6 +6625,220 @@ describe("MongoDBMemoryManager background extraction", () => {
 	})
 })
 
+describe("MongoDBMemoryManager write idempotency (P0.1)", () => {
+	beforeEach(() => {
+		vi.clearAllMocks()
+	})
+
+	function makeManager() {
+		return Object.assign(Object.create(MongoDBMemoryManager.prototype), {
+			db: {} as import("mongodb").Db,
+			prefix: "test_",
+			agentId: "agent-1",
+			client: undefined,
+			config: {
+				mongodb: {
+					embeddingMode: "automated",
+					episodes: { enabled: false, minEventsForEpisode: 6 },
+				},
+			},
+			workspaceDir: "/tmp/memongo",
+			writeQueue: Promise.resolve(),
+			derivationQueue: Promise.resolve(),
+			derivationSchedulingQueue: Promise.resolve(),
+			memoryJobWorkerId: "worker-1",
+			memoryJobWorkerStopped: false,
+			memoryJobWorkerActive: false,
+			memoryJobWorkerPromise: Promise.resolve(),
+			memoryJobRunContexts: new Map(),
+			chunkCount: 0,
+			dirty: true,
+		}) as MongoDBMemoryManager & {
+			derivationSchedulingQueue: Promise<void>
+			memoryJobWorkerPromise: Promise<void>
+		}
+	}
+
+	async function mockWritePathDefaults() {
+		const { writeEvent, projectEventChunk } = await import(
+			"./mongodb-events.js"
+		)
+		const { extractAndUpsertEntities } = await import("./mongodb-graph.js")
+		const { claimMemoryJob, createMemoryJob } = await import(
+			"./mongodb-memory-jobs.js"
+		)
+		const { promoteDerivedMemoryFromEvent } = await import(
+			"./mongodb-derived-memory.js"
+		)
+		mocked(writeEvent).mockResolvedValue({
+			eventId: "evt-new-attempt",
+			timestamp: new Date("2026-04-09T12:00:00.000Z"),
+			scopeRef: "agent:agent-1",
+		})
+		mocked(projectEventChunk).mockResolvedValue({ chunkCreated: false })
+		mocked(extractAndUpsertEntities).mockResolvedValue({
+			entities: [],
+			relationsCreated: 0,
+		})
+		mocked(createMemoryJob).mockResolvedValue("extraction-evt-new-attempt")
+		mocked(claimMemoryJob).mockResolvedValue(null)
+		mocked(promoteDerivedMemoryFromEvent).mockResolvedValue({
+			structuredCreated: 0,
+			proceduresCreated: 0,
+			skipped: true,
+			skipReason: "already-promoted",
+		})
+		return { writeEvent, createMemoryJob }
+	}
+
+	it("replays the original receipt when a key is retried with the same payload", async () => {
+		const { eventsCollection } = await import("./mongodb-schema.js")
+		const { writeEvent, createMemoryJob } = await mockWritePathDefaults()
+		const existingDoc = {
+			eventId: "evt-original",
+			agentId: "agent-1",
+			role: "user",
+			body: "idempotent hello",
+			scope: "agent",
+			scopeRef: "agent:agent-1",
+			idempotencyKey: "key-1",
+			timestamp: new Date("2026-04-09T12:00:00.000Z"),
+		}
+		mocked(eventsCollection).mockReturnValue({
+			findOne: vi.fn(async () => existingDoc),
+		} as unknown as import("mongodb").Collection)
+
+		const manager = makeManager()
+		const result = await manager.writeConversationEvent({
+			role: "user",
+			body: "idempotent hello",
+			scope: "agent",
+			idempotencyKey: "key-1",
+		})
+
+		expect(result).toEqual({ eventId: "evt-original", chunkCreated: false })
+		expect(writeEvent).not.toHaveBeenCalled()
+		expect(createMemoryJob).not.toHaveBeenCalled()
+	})
+
+	it("rejects with IdempotencyConflictError when a key is reused with a different payload", async () => {
+		const { eventsCollection } = await import("./mongodb-schema.js")
+		await mockWritePathDefaults()
+		mocked(eventsCollection).mockReturnValue({
+			findOne: vi.fn(async () => ({
+				eventId: "evt-original",
+				agentId: "agent-1",
+				role: "user",
+				body: "the ORIGINAL payload",
+				scope: "agent",
+				scopeRef: "agent:agent-1",
+				idempotencyKey: "key-2",
+				timestamp: new Date("2026-04-09T12:00:00.000Z"),
+			})),
+		} as unknown as import("mongodb").Collection)
+
+		const manager = makeManager()
+		await expect(
+			manager.writeConversationEvent({
+				role: "user",
+				body: "a DIFFERENT payload",
+				scope: "agent",
+				idempotencyKey: "key-2",
+			}),
+		).rejects.toMatchObject({ name: "IdempotencyConflictError" })
+	})
+
+	it("returns the winner's receipt when the unique index rejects a raced insert", async () => {
+		const { eventsCollection } = await import("./mongodb-schema.js")
+		const { writeEvent } = await import("./mongodb-events.js")
+		const { createMemoryJob } = await mockWritePathDefaults()
+		const winnerDoc = {
+			eventId: "evt-winner",
+			agentId: "agent-1",
+			role: "user",
+			body: "raced hello",
+			scope: "agent",
+			scopeRef: "agent:agent-1",
+			idempotencyKey: "key-3",
+			timestamp: new Date("2026-04-09T12:00:00.000Z"),
+		}
+		mocked(eventsCollection).mockReturnValue({
+			findOne: vi
+				.fn()
+				.mockResolvedValueOnce(null) // probe: no prior write
+				.mockResolvedValueOnce(winnerDoc), // replay read after E11000
+		} as unknown as import("mongodb").Collection)
+		mocked(writeEvent).mockRejectedValue(
+			Object.assign(new Error("E11000 duplicate key error"), { code: 11000 }),
+		)
+
+		const manager = makeManager()
+		const result = await manager.writeConversationEvent({
+			role: "user",
+			body: "raced hello",
+			scope: "agent",
+			idempotencyKey: "key-3",
+		})
+
+		expect(result).toEqual({ eventId: "evt-winner", chunkCreated: false })
+		expect(createMemoryJob).not.toHaveBeenCalled()
+	})
+
+	it("does not probe when no idempotency key is provided", async () => {
+		const { eventsCollection } = await import("./mongodb-schema.js")
+		await mockWritePathDefaults()
+		const findOne = vi.fn(async () => null)
+		mocked(eventsCollection).mockReturnValue({
+			findOne,
+		} as unknown as import("mongodb").Collection)
+
+		const manager = makeManager()
+		await manager.writeConversationEvent({
+			role: "user",
+			body: "plain write, no key",
+			scope: "agent",
+		})
+
+		expect(findOne).not.toHaveBeenCalled()
+	})
+
+	it("does not throw after commit when the staged job release fails — the outbox repair recovers", async () => {
+		const { clearEventExtractionJobPending } = await import(
+			"./mongodb-events.js"
+		)
+		const { releaseStagedMemoryJob, getMemoryJob } = await import(
+			"./mongodb-memory-jobs.js"
+		)
+		const { eventsCollection } = await import("./mongodb-schema.js")
+		await mockWritePathDefaults()
+		mocked(eventsCollection).mockReturnValue({
+			findOne: vi.fn(async () => null),
+		} as unknown as import("mongodb").Collection)
+		mocked(releaseStagedMemoryJob).mockResolvedValue(false)
+		mocked(getMemoryJob).mockResolvedValue({
+			jobId: "extraction-evt-new-attempt",
+			jobType: "extraction",
+			agentId: "agent-1",
+			status: "pending",
+			stagedAt: new Date(),
+		} as never)
+
+		const manager = makeManager()
+		const result = await manager.writeConversationEvent({
+			role: "user",
+			body: "committed, but the job release failed",
+			scope: "agent",
+		})
+		await manager.derivationSchedulingQueue
+		await manager.memoryJobWorkerPromise
+
+		// The write is acknowledged — the extractionJobPendingAt marker is left
+		// set so repairExtractionOutbox can re-stage the job.
+		expect(result).toEqual({ eventId: "evt-new-attempt", chunkCreated: false })
+		expect(clearEventExtractionJobPending).not.toHaveBeenCalled()
+	})
+})
+
 describe("MongoDBMemoryManager projection repair", () => {
 	beforeEach(() => {
 		vi.clearAllMocks()
@@ -6422,7 +6978,10 @@ describe("scope-safe cache writes", () => {
 		})
 
 		expect(top50.metadata.resolvedSearchConfig?.numCandidates).toBe(1000)
-		expect(top200.metadata.resolvedSearchConfig?.numCandidates).toBe(4000)
+		// P2.8: maxResults is clamped to the 100 ceiling at the manager entry
+		// point, so a top-200 request scales numCandidates from the clamped
+		// top-k (100 * 20), not the requested 200.
+		expect(top200.metadata.resolvedSearchConfig?.numCandidates).toBe(2000)
 	})
 
 	it("uses backend proof recall profile when request does not override it", async () => {
@@ -7238,5 +7797,450 @@ describe("search() phase latency reporting", () => {
 		expect(phases["phase:unaccounted"]).toBe(
 			Math.max(0, (phases["phase:total"] ?? 0) - measuredInsideTotal),
 		)
+	})
+})
+
+// ---------------------------------------------------------------------------
+// P2.1 shared Mongo runtime: client ownership + memory-job worker sweep
+// ---------------------------------------------------------------------------
+
+describe("P2.1 shared client close ownership", () => {
+	function buildCloseableManager(fields: Record<string, unknown>) {
+		return Object.assign(Object.create(MongoDBMemoryManager.prototype), {
+			closed: false,
+			client: { close: vi.fn(async () => {}) },
+			writeQueue: Promise.resolve(),
+			derivationQueue: Promise.resolve(),
+			derivationSchedulingQueue: Promise.resolve(),
+			memoryJobWorkerStopped: true,
+			memoryJobWorkerTimer: null,
+			memoryJobWorkerPromise: Promise.resolve(),
+			watchTimer: null,
+			watcher: null,
+			changeStreamWatcher: null,
+			syncing: null,
+			accessTracker: null,
+			...fields,
+		}) as MongoDBMemoryManager & {
+			client: { close: ReturnType<typeof vi.fn> }
+		}
+	}
+
+	it("does not close a shared client on manager close, but runs onClosed", async () => {
+		const onClosed = vi.fn()
+		const manager = buildCloseableManager({
+			ownsClient: false,
+			onClosed,
+		})
+
+		await manager.close()
+
+		expect(manager.client.close).not.toHaveBeenCalled()
+		expect(onClosed).toHaveBeenCalledTimes(1)
+	})
+
+	it("closes an owned client on manager close (legacy per-manager client)", async () => {
+		const manager = buildCloseableManager({ ownsClient: true })
+
+		await manager.close()
+
+		expect(manager.client.close).toHaveBeenCalledTimes(1)
+	})
+
+	it("invokes onClosed only once across repeated close calls", async () => {
+		const onClosed = vi.fn()
+		const manager = buildCloseableManager({ ownsClient: false, onClosed })
+
+		await manager.close()
+		await manager.close()
+
+		expect(onClosed).toHaveBeenCalledTimes(1)
+	})
+})
+
+describe("P2.1 memory-job worker sweep", () => {
+	function buildWorkerManager() {
+		return Object.assign(Object.create(MongoDBMemoryManager.prototype), {
+			db: {} as import("mongodb").Db,
+			prefix: "test_",
+			agentId: "agent-1",
+			config: { mongodb: { embeddingMode: "automated" } },
+			workspaceDir: "/tmp/memongo",
+			memoryJobWorkerId: "worker-sweep",
+			memoryJobWorkerStopped: true,
+			memoryJobWorkerActive: false,
+			memoryJobWakeRequested: false,
+			memoryJobWorkerPromise: Promise.resolve(),
+			memoryJobWorkerTimer: null,
+			memoryJobRunContexts: new Map(),
+			repairExtractionOutbox: vi.fn(async () => ({
+				eventsProcessed: 0,
+				jobsCreated: 0,
+				jobsReleased: 0,
+				eventsFailed: 0,
+			})),
+		}) as MongoDBMemoryManager & {
+			memoryJobWorkerPromise: Promise<void>
+		}
+	}
+
+	const lifecycle = MongoDBMemoryManager.prototype as unknown as {
+		startMemoryJobWorker: (this: MongoDBMemoryManager) => void
+		stopMemoryJobWorker: (this: MongoDBMemoryManager) => Promise<void>
+		wakeMemoryJobWorker: (this: MongoDBMemoryManager) => void
+	}
+
+	async function flushWorker(manager: MongoDBMemoryManager) {
+		await (
+			manager as MongoDBMemoryManager & {
+				memoryJobWorkerPromise: Promise<void>
+			}
+		).memoryJobWorkerPromise
+	}
+
+	it("resolveMemoryJobSweepMs: 30s default with shared runtime, 1s legacy, env override", async () => {
+		const { resolveMemoryJobSweepMs } = await import("./mongodb-manager.js")
+		vi.stubEnv("MEMONGO_JOB_SWEEP_MS", "")
+		vi.stubEnv("MEMONGO_SHARED_CLIENT", "")
+		expect(resolveMemoryJobSweepMs()).toBe(1_000)
+		vi.stubEnv("MEMONGO_SHARED_CLIENT", "1")
+		expect(resolveMemoryJobSweepMs()).toBe(30_000)
+		vi.stubEnv("MEMONGO_JOB_SWEEP_MS", "5000")
+		expect(resolveMemoryJobSweepMs()).toBe(5_000)
+		vi.stubEnv("MEMONGO_JOB_SWEEP_MS", "not-a-number")
+		expect(resolveMemoryJobSweepMs()).toBe(30_000)
+		vi.unstubAllEnvs()
+	})
+
+	it("shared runtime: no claim polls while idle; backstop fires at 30s", async () => {
+		const { claimMemoryJob } = await import("./mongodb-memory-jobs.js")
+		mocked(claimMemoryJob).mockResolvedValue(null)
+		vi.stubEnv("MEMONGO_SHARED_CLIENT", "1")
+		vi.stubEnv("MEMONGO_JOB_SWEEP_MS", "")
+		vi.useFakeTimers()
+		try {
+			const manager = buildWorkerManager()
+			lifecycle.startMemoryJobWorker.call(manager)
+			await flushWorker(manager)
+			// Immediate drain on start: exactly one claim attempt.
+			expect(mocked(claimMemoryJob).mock.calls.length).toBe(1)
+
+			// No 1s polling anymore: nothing fires for the next ~30s.
+			await vi.advanceTimersByTimeAsync(29_999)
+			expect(mocked(claimMemoryJob).mock.calls.length).toBe(1)
+
+			// Backstop sweep fires at 30s.
+			await vi.advanceTimersByTimeAsync(1)
+			await vi.advanceTimersByTimeAsync(0)
+			expect(mocked(claimMemoryJob).mock.calls.length).toBe(2)
+
+			await lifecycle.stopMemoryJobWorker.call(manager)
+		} finally {
+			vi.useRealTimers()
+			vi.unstubAllEnvs()
+		}
+	})
+
+	it("legacy runtime: backstop stays at the 1s poll (flag-off behavior unchanged)", async () => {
+		const { claimMemoryJob } = await import("./mongodb-memory-jobs.js")
+		mocked(claimMemoryJob).mockReset()
+		mocked(claimMemoryJob).mockResolvedValue(null)
+		vi.stubEnv("MEMONGO_SHARED_CLIENT", "")
+		vi.stubEnv("MEMONGO_JOB_SWEEP_MS", "")
+		vi.useFakeTimers()
+		try {
+			const manager = buildWorkerManager()
+			lifecycle.startMemoryJobWorker.call(manager)
+			await flushWorker(manager)
+			expect(mocked(claimMemoryJob).mock.calls.length).toBe(1)
+
+			await vi.advanceTimersByTimeAsync(999)
+			expect(mocked(claimMemoryJob).mock.calls.length).toBe(1)
+			await vi.advanceTimersByTimeAsync(1)
+			await vi.advanceTimersByTimeAsync(0)
+			expect(mocked(claimMemoryJob).mock.calls.length).toBe(2)
+
+			await lifecycle.stopMemoryJobWorker.call(manager)
+		} finally {
+			vi.useRealTimers()
+			vi.unstubAllEnvs()
+		}
+	})
+
+	it("a write wakes the worker immediately without waiting for the sweep", async () => {
+		const { claimMemoryJob } = await import("./mongodb-memory-jobs.js")
+		mocked(claimMemoryJob).mockReset()
+		mocked(claimMemoryJob).mockResolvedValue(null)
+		vi.stubEnv("MEMONGO_SHARED_CLIENT", "1")
+		vi.stubEnv("MEMONGO_JOB_SWEEP_MS", "")
+		vi.useFakeTimers()
+		try {
+			const manager = buildWorkerManager()
+			lifecycle.startMemoryJobWorker.call(manager)
+			await flushWorker(manager)
+			expect(mocked(claimMemoryJob).mock.calls.length).toBe(1)
+
+			// Wake-on-write: drain happens immediately, no timer advance needed.
+			lifecycle.wakeMemoryJobWorker.call(manager)
+			await flushWorker(manager)
+			expect(mocked(claimMemoryJob).mock.calls.length).toBe(2)
+
+			await lifecycle.stopMemoryJobWorker.call(manager)
+		} finally {
+			vi.useRealTimers()
+			vi.unstubAllEnvs()
+		}
+	})
+})
+
+// ---------------------------------------------------------------------------
+// P2.3 scope identity unification: writes and reads resolve the SAME
+// { scope, scopeRef } from the same hints. Rule: explicit scope wins;
+// sessionId/sessionKey implies "session"; otherwise the env-resolved default
+// ("agent" unless MEMONGO_SEARCH_DEFAULT_SCOPE overrides it on reads).
+// ---------------------------------------------------------------------------
+
+describe("P2.3 scope identity unification", () => {
+	beforeEach(() => {
+		vi.clearAllMocks()
+	})
+
+	function makeWriteManager() {
+		return Object.assign(Object.create(MongoDBMemoryManager.prototype), {
+			db: {} as import("mongodb").Db,
+			prefix: "test_",
+			agentId: "agent-1",
+			client: undefined,
+			config: {
+				mongodb: {
+					embeddingMode: "automated",
+					episodes: { enabled: false, minEventsForEpisode: 6 },
+				},
+			},
+			workspaceDir: "/tmp/memongo",
+			writeQueue: Promise.resolve(),
+			derivationQueue: Promise.resolve(),
+			derivationSchedulingQueue: Promise.resolve(),
+			memoryJobWorkerId: "worker-1",
+			memoryJobWorkerStopped: true,
+			memoryJobWorkerActive: false,
+			memoryJobWorkerPromise: Promise.resolve(),
+			memoryJobRunContexts: new Map(),
+			chunkCount: 0,
+			dirty: true,
+		}) as MongoDBMemoryManager
+	}
+
+	async function mockWritePath() {
+		const { writeEvent, projectEventChunk } = await import(
+			"./mongodb-events.js"
+		)
+		const { invalidateQueryCache } = await import("./mongodb-query-cache.js")
+		mocked(writeEvent).mockResolvedValue({
+			eventId: "evt-p23",
+			timestamp: new Date("2026-04-09T12:00:00.000Z"),
+			scopeRef: "agent:agent-1",
+		})
+		mocked(projectEventChunk).mockResolvedValue({ chunkCreated: false })
+		mocked(invalidateQueryCache).mockResolvedValue(undefined as never)
+		return { writeEvent, invalidateQueryCache }
+	}
+
+	// The identity a search actually queried with, observed at the cache seam
+	// (checkCache receives the resolved scope/scopeRef before any lane runs).
+	async function searchIdentityViaCache(
+		opts?: Parameters<MongoDBMemoryManager["search"]>[1],
+	): Promise<{ scope: string; scopeRef: string }> {
+		mocked(checkCache).mockResolvedValue({
+			hit: false,
+			tier: "miss",
+			results: [],
+		} as never)
+		mocked(planRetrieval).mockReturnValue({
+			paths: ["episodic"],
+			confidence: "high",
+			reasoning: "p2.3 identity probe",
+		})
+		mocked(searchEpisodes).mockResolvedValue([
+			{
+				episodeId: "ep-p23",
+				title: "probe",
+				summary: "evidence so the legacy fallback is skipped",
+				type: "daily",
+				agentId: "agent-1",
+				scope: "agent",
+				scopeRef: "agent:agent-1",
+				timeRange: { start: new Date(), end: new Date() },
+				sourceEventCount: 1,
+				updatedAt: new Date(),
+			},
+		] as never)
+		const manager = buildMockManager()
+		await manager.search("identity probe", opts)
+		const calls = mocked(checkCache).mock.calls
+		const call = calls[calls.length - 1]?.[0] as unknown as {
+			scope: string
+			scopeRef: string
+		}
+		return { scope: call.scope, scopeRef: call.scopeRef }
+	}
+
+	it("write: sessionId with no explicit scope lands in the session scope", async () => {
+		const { writeEvent, invalidateQueryCache } = await mockWritePath()
+		const manager = makeWriteManager()
+
+		await manager.writeConversationEvent({
+			role: "user",
+			body: "session-scoped write",
+			sessionId: "s1",
+		})
+
+		expect(mocked(writeEvent).mock.calls[0]?.[0]).toMatchObject({
+			event: expect.objectContaining({ scope: "session", sessionId: "s1" }),
+		})
+		expect(mocked(invalidateQueryCache)).toHaveBeenCalledWith(
+			expect.objectContaining({ scope: "session" }),
+		)
+	})
+
+	it("write: explicit scope wins over an implicit sessionId", async () => {
+		const { writeEvent } = await mockWritePath()
+		const manager = makeWriteManager()
+
+		await manager.writeConversationEvent({
+			role: "user",
+			body: "explicit agent scope with a session id",
+			scope: "agent",
+			sessionId: "s1",
+		})
+
+		expect(mocked(writeEvent).mock.calls[0]?.[0]).toMatchObject({
+			event: expect.objectContaining({ scope: "agent" }),
+		})
+	})
+
+	it("write: bare event still defaults to the agent scope", async () => {
+		const { writeEvent } = await mockWritePath()
+		const manager = makeWriteManager()
+
+		await manager.writeConversationEvent({
+			role: "user",
+			body: "plain write",
+		})
+
+		expect(mocked(writeEvent).mock.calls[0]?.[0]).toMatchObject({
+			event: expect.objectContaining({ scope: "agent" }),
+		})
+	})
+
+	it("read: sessionKey with no explicit scope queries the session scope", async () => {
+		const identity = await searchIdentityViaCache({ sessionKey: "s1" })
+		expect(identity).toEqual({ scope: "session", scopeRef: "session:s1" })
+	})
+
+	it("read: explicit scope wins over an implicit sessionKey", async () => {
+		const identity = await searchIdentityViaCache({
+			scope: "agent",
+			sessionKey: "s1",
+		})
+		expect(identity).toEqual({ scope: "agent", scopeRef: "agent:agent-1" })
+	})
+
+	it("read: bare search defaults to agent, or MEMONGO_SEARCH_DEFAULT_SCOPE when set", async () => {
+		expect(await searchIdentityViaCache()).toEqual({
+			scope: "agent",
+			scopeRef: "agent:agent-1",
+		})
+
+		vi.stubEnv("MEMONGO_SEARCH_DEFAULT_SCOPE", "global")
+		try {
+			expect(await searchIdentityViaCache()).toEqual({
+				scope: "global",
+				scopeRef: "global",
+			})
+			// Precedence proof: the session implication still beats the env default.
+			expect(await searchIdentityViaCache({ sessionKey: "s1" })).toEqual({
+				scope: "session",
+				scopeRef: "session:s1",
+			})
+		} finally {
+			vi.unstubAllEnvs()
+		}
+	})
+
+	it("roundtrip: add({sessionId}) and search({sessionKey}) hit the same partition", async () => {
+		const { writeEvent } = await mockWritePath()
+		const writeManager = makeWriteManager()
+		await writeManager.writeConversationEvent({
+			role: "user",
+			body: "remember the quokkaberry harvest",
+			sessionId: "s1",
+		})
+		const written = mocked(writeEvent).mock.calls[0]?.[0] as unknown as {
+			event: { scope: string; sessionId?: string }
+		}
+
+		const read = await searchIdentityViaCache({ sessionKey: "s1" })
+
+		// The write's scope plus the canonical session scopeRef (writeEvent
+		// resolves it via the same rule — see mongodb-events.test.ts) must equal
+		// the identity the search queried with.
+		expect(written.event.scope).toBe(read.scope)
+		expect(read.scopeRef).toBe(`session:${written.event.sessionId}`)
+	})
+
+	it("searchDetailed: conversationScope.sessionKey implies the session scope", async () => {
+		// searchDetailed always injects a searchConfig, so its cache seam is
+		// disabled by design (shouldUseDetailedSearchCache) — observe the
+		// identity at the conversation-lane pipeline instead.
+		mocked(planRetrieval).mockReturnValue({
+			paths: ["hybrid"],
+			confidence: "high",
+			reasoning: "p2.3 searchDetailed identity probe",
+		})
+		const aggregate = vi.fn().mockReturnValue({
+			toArray: vi.fn().mockResolvedValue([]),
+		})
+		const findArgs: unknown[] = []
+		const find = vi.fn((...args: unknown[]) => {
+			findArgs.push(args[0])
+			return {
+				sort: vi.fn().mockReturnThis(),
+				limit: vi.fn().mockReturnThis(),
+				toArray: vi.fn().mockResolvedValue([]),
+			}
+		})
+		mocked(chunksCollection).mockReturnValue({ aggregate, find } as never)
+
+		// textSearch capability on so the keyword lane actually issues an
+		// aggregate carrying the identity filter (all-off capabilities
+		// short-circuit every lane before it touches the collection).
+		const manager = buildMockManager({
+			capabilities: {
+				vectorSearch: false,
+				textSearch: true,
+				rankFusion: false,
+				storedSource: false,
+				vectorIndexMethod: false,
+				scoreFusion: false,
+			},
+		})
+		await manager.searchDetailed({
+			query: "identity probe",
+			conversationScope: { sessionKey: "s1" },
+		})
+
+		const observed = [
+			...aggregate.mock.calls.map((call) => JSON.stringify(call[0])),
+			...findArgs.map((filter) => JSON.stringify(filter)),
+		]
+		expect(observed.length).toBeGreaterThan(0)
+		expect(
+			observed.some(
+				(payload) =>
+					payload.includes('"scope":"session"') &&
+					payload.includes('"scopeRef":"session:s1"'),
+			),
+		).toBe(true)
 	})
 })

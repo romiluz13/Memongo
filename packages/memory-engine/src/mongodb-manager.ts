@@ -12,6 +12,7 @@ import {
 } from "mongodb"
 import {
 	type MemongoConfig,
+	type MemoryMongoDBFusionMethod,
 	type MemoryScope,
 	createSubsystemLogger,
 	resolveUserPath,
@@ -26,7 +27,9 @@ import type {
 	ResolvedMemoryBackendConfig,
 	ResolvedMongoDBConfig,
 } from "./backend-config.js"
-import { normalizeExtraMemoryPaths } from "./internal.js"
+import { resolveSearchDefaultScope } from "./backend-config.js"
+import { isDuplicateKeyError, normalizeExtraMemoryPaths } from "./internal.js"
+import { isSharedMongoClientEnabled } from "./mongodb-client-registry.js"
 import { getMemoryStats, type MemoryStats } from "./mongodb-analytics.js"
 import { MongoDBChangeStreamWatcher } from "./mongodb-change-stream.js"
 import {
@@ -80,6 +83,8 @@ import {
 	projectEventChunk,
 	getEventsByTimeRange,
 	renderEventChunkText,
+	IdempotencyConflictError,
+	type CanonicalEvent,
 } from "./mongodb-events.js"
 import {
 	extractAndUpsertEntities,
@@ -144,6 +149,8 @@ import {
 	invalidateQueryCache,
 	writeCache,
 } from "./mongodb-query-cache.js"
+import { QueryCacheInvalidationCoalescer } from "./mongodb-query-cache-invalidation.js"
+import { runSingleFlight } from "./mongodb-single-flight.js"
 import {
 	rewriteQuery,
 	type QueryRewriteConfig,
@@ -220,7 +227,7 @@ import {
 	waitForSearchIndexesQueryable,
 	sessionChunksCollection,
 } from "./mongodb-schema.js"
-import { resolveScopeRef } from "./mongodb-scope.js"
+import { resolveScopeIdentity, resolveScopeRef } from "./mongodb-scope.js"
 import {
 	buildVectorSearchStage,
 	MONGODB_MAX_NUM_CANDIDATES,
@@ -1806,6 +1813,22 @@ export function getActiveSources(
 // searchDetailed helpers
 // ---------------------------------------------------------------------------
 
+/**
+ * P2.8 defense-in-depth: the HTTP API clamps search limits at the route
+ * layer, but non-API callers (MCP stdio, direct engine embedding, internal
+ * fallbacks) can pass any maxResults. An unbounded result set blows up
+ * fusion/rerank memory, so every public search entry point clamps to this
+ * ceiling regardless of caller.
+ */
+export const MAX_SEARCH_MAX_RESULTS = 100
+
+export function clampSearchMaxResults(value: number): number {
+	if (!Number.isFinite(value)) {
+		return MAX_SEARCH_MAX_RESULTS
+	}
+	return Math.max(1, Math.min(MAX_SEARCH_MAX_RESULTS, Math.floor(value)))
+}
+
 function normalizeDetailedSearchRequest(
 	request: MemorySearchRequest,
 ): MemorySearchRequest {
@@ -1818,7 +1841,7 @@ function normalizeDetailedSearchRequest(
 		...configuredRequest,
 		query,
 		searchMode: configuredRequest.searchMode ?? "auto",
-		maxResults: configuredRequest.maxResults ?? 10,
+		maxResults: clampSearchMaxResults(configuredRequest.maxResults ?? 10),
 		minScore: configuredRequest.minScore ?? 0.1,
 		needExactEvidence: configuredRequest.needExactEvidence === true,
 		returnPlan: configuredRequest.returnPlan === true,
@@ -2068,6 +2091,65 @@ function redactMongoURI(uri: string): string {
  * Cleanup work should preserve those behavior boundaries even when code is
  * extracted into smaller modules later.
  */
+/**
+ * Build MongoClient options from the resolved mongodb config. Shared by the
+ * per-manager connect path and the shared-client registry (P2.1).
+ */
+export function buildMongoClientOptions(
+	mongoCfg: ResolvedMongoDBConfig,
+): MongoClientOptions {
+	const clientOptions: MongoClientOptions = {
+		serverSelectionTimeoutMS: mongoCfg.serverSelectionTimeoutMs,
+		connectTimeoutMS: mongoCfg.connectTimeoutMs,
+		maxPoolSize: mongoCfg.maxPoolSize,
+		minPoolSize: mongoCfg.minPoolSize,
+	}
+	if (mongoCfg.maxConnecting !== undefined) {
+		clientOptions.maxConnecting = mongoCfg.maxConnecting
+	}
+	if (mongoCfg.maxIdleTimeMs !== undefined) {
+		clientOptions.maxIdleTimeMS = mongoCfg.maxIdleTimeMs
+	}
+	if (mongoCfg.networkFamily !== undefined) {
+		clientOptions.family = mongoCfg.networkFamily
+	}
+	if (mongoCfg.socketTimeoutMs !== undefined) {
+		clientOptions.socketTimeoutMS = mongoCfg.socketTimeoutMs
+	}
+	if (mongoCfg.heartbeatFrequencyMs !== undefined) {
+		clientOptions.heartbeatFrequencyMS = mongoCfg.heartbeatFrequencyMs
+	}
+	if (mongoCfg.serverMonitoringMode !== undefined) {
+		clientOptions.serverMonitoringMode = mongoCfg.serverMonitoringMode
+	}
+	if (mongoCfg.waitQueueTimeoutMs !== undefined) {
+		clientOptions.waitQueueTimeoutMS = mongoCfg.waitQueueTimeoutMs
+	}
+	return clientOptions
+}
+
+/**
+ * Memory-job worker backstop sweep interval. Writes wake the worker
+ * immediately (wake-on-write); the interval only catches missed wakes.
+ * With the shared-client runtime on (P2.1) the default drops from a 1s poll
+ * to a 30s backstop so idle managers issue ~0 claim polls. Flag-off behavior
+ * is unchanged. MEMONGO_JOB_SWEEP_MS overrides both.
+ */
+const MEMORY_JOB_SWEEP_DEFAULT_MS = 30_000
+
+export function resolveMemoryJobSweepMs(): number {
+	const raw = process.env.MEMONGO_JOB_SWEEP_MS?.trim()
+	if (raw) {
+		const parsed = Number(raw)
+		if (Number.isFinite(parsed) && parsed > 0) {
+			return Math.floor(parsed)
+		}
+	}
+	return isSharedMongoClientEnabled()
+		? MEMORY_JOB_SWEEP_DEFAULT_MS
+		: MEMORY_JOB_POLL_MS
+}
+
 export class MongoDBMemoryManager implements MemorySearchManager {
 	private readonly client: MongoClient
 	private readonly db: Db
@@ -2088,6 +2170,13 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 	/** Guards against a re-scan storm from rapid gapDetected events. */
 	gapReSyncInFlight = false
 	private relevance: MongoDBRelevanceRuntime | null = null
+	/**
+	 * P2.1: when the manager was built on a shared client (MEMONGO_SHARED_CLIENT),
+	 * close() must not close the client — the process-level registry owns it.
+	 */
+	private readonly ownsClient: boolean
+	/** Invoked once at the end of close() (used to release shared-client refs). */
+	private readonly onClosed?: () => void
 	private closed = false
 	private dirty = true
 	private fileCount = 0
@@ -2118,8 +2207,12 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		nativeBitemporalVectorPrefilter: boolean
 		config: ResolvedMemoryBackendConfig
 		relevance?: MongoDBRelevanceRuntime | null
+		ownsClient?: boolean
+		onClosed?: () => void
 	}) {
 		this.client = params.client
+		this.ownsClient = params.ownsClient ?? true
+		this.onClosed = params.onClosed
 		this.db = params.db
 		this.prefix = params.prefix
 		this.agentId = params.agentId
@@ -2150,6 +2243,14 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		agentId: string
 		resolved: ResolvedMemoryBackendConfig
 		extraPaths?: string[]
+		/**
+		 * P2.1: pre-connected shared MongoClient owned by the process-level
+		 * registry (MEMONGO_SHARED_CLIENT). When provided, the manager skips
+		 * connect and never closes the client.
+		 */
+		client?: MongoClient
+		/** Invoked once when the manager finishes closing. */
+		onClosed?: () => void
 	}): Promise<MongoDBMemoryManager> {
 		const mongoCfg = params.resolved.mongodb
 		if (!mongoCfg) {
@@ -2159,50 +2260,33 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		}
 
 		const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId)
-		// Connect to MongoDB with a timeout to avoid hanging
 		const safeUri = redactMongoURI(mongoCfg.uri)
-		log.info(`connecting to MongoDB: ${safeUri} (db=${mongoCfg.database})`)
-		const clientOptions: MongoClientOptions = {
-			serverSelectionTimeoutMS: mongoCfg.serverSelectionTimeoutMs,
-			connectTimeoutMS: mongoCfg.connectTimeoutMs,
-			maxPoolSize: mongoCfg.maxPoolSize,
-			minPoolSize: mongoCfg.minPoolSize,
-		}
-		if (mongoCfg.maxConnecting !== undefined) {
-			clientOptions.maxConnecting = mongoCfg.maxConnecting
-		}
-		if (mongoCfg.maxIdleTimeMs !== undefined) {
-			clientOptions.maxIdleTimeMS = mongoCfg.maxIdleTimeMs
-		}
-		if (mongoCfg.networkFamily !== undefined) {
-			clientOptions.family = mongoCfg.networkFamily
-		}
-		if (mongoCfg.socketTimeoutMs !== undefined) {
-			clientOptions.socketTimeoutMS = mongoCfg.socketTimeoutMs
-		}
-		if (mongoCfg.heartbeatFrequencyMs !== undefined) {
-			clientOptions.heartbeatFrequencyMS = mongoCfg.heartbeatFrequencyMs
-		}
-		if (mongoCfg.serverMonitoringMode !== undefined) {
-			clientOptions.serverMonitoringMode = mongoCfg.serverMonitoringMode
-		}
-		if (mongoCfg.waitQueueTimeoutMs !== undefined) {
-			clientOptions.waitQueueTimeoutMS = mongoCfg.waitQueueTimeoutMs
-		}
-		const client = new MongoClient(mongoCfg.uri, clientOptions)
-		try {
-			await client.connect()
-			// Verify the connection actually works with a ping
-			await client.db("admin").command({ ping: 1 })
-		} catch (err) {
-			const msg = err instanceof Error ? err.message : String(err)
-			log.warn(`failed to connect to MongoDB (${safeUri}): ${msg}`)
+		let client: MongoClient
+		let ownsClient = true
+		if (params.client) {
+			log.info(
+				`using shared MongoDB client: ${safeUri} (db=${mongoCfg.database})`,
+			)
+			client = params.client
+			ownsClient = false
+		} else {
+			// Connect to MongoDB with a timeout to avoid hanging
+			log.info(`connecting to MongoDB: ${safeUri} (db=${mongoCfg.database})`)
+			client = new MongoClient(mongoCfg.uri, buildMongoClientOptions(mongoCfg))
 			try {
-				await client.close()
-			} catch {
-				// Ignore close errors during failed connect
+				await client.connect()
+				// Verify the connection actually works with a ping
+				await client.db("admin").command({ ping: 1 })
+			} catch (err) {
+				const msg = err instanceof Error ? err.message : String(err)
+				log.warn(`failed to connect to MongoDB (${safeUri}): ${msg}`)
+				try {
+					await client.close()
+				} catch {
+					// Ignore close errors during failed connect
+				}
+				throw new Error(`failed to connect to MongoDB (${safeUri}): ${msg}`)
 			}
-			throw new Error(`failed to connect to MongoDB (${safeUri}): ${msg}`)
 		}
 
 		const db = client.db(mongoCfg.database)
@@ -2364,6 +2448,8 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 			nativeBitemporalVectorPrefilter,
 			config: params.resolved,
 			relevance,
+			ownsClient,
+			onClosed: params.onClosed,
 		})
 
 		// Phase 4.1 — the tracker now writes raw access events to the time-series
@@ -2459,29 +2545,65 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 	// ---------------------------------------------------------------------------
 
 	/**
+	 * P2.4: lazily created so Object.create-built test managers (which skip
+	 * field initializers) get one on first write. Burst-coalesces the hot
+	 * write path's cache invalidation: a quiet namespace invalidates
+	 * immediately (leading), repeats inside the debounce window collapse
+	 * into a single trailing scope-level delete.
+	 */
+	private queryCacheInvalidationCoalescer?: QueryCacheInvalidationCoalescer
+
+	private scheduleQueryCacheInvalidation(params: {
+		agentId: string
+		scope: MemoryScope
+		scopeRef: string
+	}): void {
+		if (!this.queryCacheInvalidationCoalescer) {
+			this.queryCacheInvalidationCoalescer =
+				new QueryCacheInvalidationCoalescer()
+		}
+		const coalescer = this.queryCacheInvalidationCoalescer
+		coalescer.schedule(
+			`${params.agentId}|${params.scope}|${params.scopeRef}`,
+			() => {
+				void invalidateQueryCache({
+					db: this.db,
+					prefix: this.prefix,
+					agentId: params.agentId,
+					scope: params.scope,
+					scopeRef: params.scopeRef,
+				})
+			},
+		)
+	}
+
+	/**
 	 * Resolve the tenant identity a read must be confined to.
 	 *
 	 * Every read path resolves identity through here so that an absent `scope`
 	 * can never degrade into "all scopes" — the filter builders below take
 	 * `scope`/`scopeRef` as required arguments, and this is the only sanctioned
 	 * way to produce them.
+	 *
+	 * P2.3: reads share the canonical identity rule with writes (explicit
+	 * scope wins; sessionKey implies "session"); the only read-specific input
+	 * is the P1.4 env-resolved fallback (MEMONGO_SEARCH_DEFAULT_SCOPE).
 	 */
 	private resolveSearchIdentity(opts?: {
 		scope?: MemoryScope
 		scopeRef?: string
 		sessionKey?: string
 	}): { scope: MemoryScope; scopeRef: string } {
-		const scope: MemoryScope =
-			opts?.scope ?? (opts?.sessionKey ? "session" : "agent")
-		const scopeRef =
-			opts?.scopeRef ??
-			resolveScopeRef({
-				scope,
-				agentId: this.agentId,
-				sessionId: opts?.sessionKey,
-				workspaceDir: this.workspaceDir,
-			})
-		return { scope, scopeRef }
+		return resolveScopeIdentity({
+			scope: opts?.scope,
+			scopeRef: opts?.scopeRef,
+			agentId: this.agentId,
+			sessionId: opts?.sessionKey,
+			workspaceDir: this.workspaceDir,
+			defaultScope: resolveSearchDefaultScope(
+				process.env.MEMONGO_SEARCH_DEFAULT_SCOPE,
+			),
+		})
 	}
 
 	private buildConversationChunkFilter(params: {
@@ -2648,7 +2770,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		}
 
 		const mongoCfg = this.config.mongodb!
-		const maxResults = opts?.maxResults ?? 10
+		const maxResults = clampSearchMaxResults(opts?.maxResults ?? 10)
 		const minScore = opts?.minScore ?? 0.1
 		const startedAt = Date.now()
 		const sampled = this.relevance?.shouldSample() ?? false
@@ -2895,7 +3017,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		}
 
 		const mongoCfg = this.config.mongodb!
-		const maxResults = opts?.maxResults ?? 10
+		const maxResults = clampSearchMaxResults(opts?.maxResults ?? 10)
 		const minScore = opts?.minScore ?? mongoCfg.reranking?.minScore ?? 0.01
 		const activeSources = getActiveSources(
 			mongoCfg.sources,
@@ -2903,16 +3025,75 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		)
 		const availablePaths = this.buildV2AvailablePaths(activeSources)
 
-		const searchScope: MemoryScope =
-			opts?.scope ?? (opts?.sessionKey ? "session" : "agent")
-		const searchScopeRef =
-			opts?.scopeRef ??
-			resolveScopeRef({
-				scope: searchScope,
-				agentId: this.agentId,
-				sessionId: opts?.sessionKey,
-				workspaceDir: this.workspaceDir,
+		// P1.4 + P2.3: explicit scope wins; sessionKey implies "session";
+		// otherwise MEMONGO_SEARCH_DEFAULT_SCOPE overrides the "agent" fallback
+		// (single-user deployments). Same rule the write path applies.
+		const { scope: searchScope, scopeRef: searchScopeRef } =
+			this.resolveSearchIdentity({
+				scope: opts?.scope,
+				scopeRef: opts?.scopeRef,
+				sessionKey: opts?.sessionKey,
 			})
+
+		// P2.4: stampede protection — concurrent identical searches share ONE
+		// execution via an in-process single-flight keyed on the resolved
+		// effective query (agent + identity + query + resolved params, the same
+		// dimensions the query-cache key folds in). Benchmark runs measure
+		// per-call latency, so they bypass coalescing.
+		const searchBag = {
+			cleaned,
+			opts,
+			mongoCfg,
+			maxResults,
+			minScore,
+			activeSources,
+			availablePaths,
+			searchScope,
+			searchScopeRef,
+			benchmarkRunContext,
+		}
+		if (benchmarkRunContext) {
+			return this.executeSearchUncoalesced(searchBag)
+		}
+		const flightKey = [
+			this.agentId,
+			searchScope,
+			searchScopeRef,
+			cleaned,
+			maxResults,
+			minScore,
+			opts?.questionDate?.toISOString() ?? "",
+		].join("")
+		const { value } = await runSingleFlight(this, flightKey, () =>
+			this.executeSearchUncoalesced(searchBag),
+		)
+		return value
+	}
+
+	private async executeSearchUncoalesced(params: {
+		cleaned: string
+		opts?: Parameters<MongoDBMemoryManager["search"]>[1]
+		mongoCfg: ResolvedMongoDBConfig
+		maxResults: number
+		minScore: number
+		activeSources: ActiveSources
+		availablePaths: Set<RetrievalPath>
+		searchScope: MemoryScope
+		searchScopeRef: string
+		benchmarkRunContext?: BenchmarkRunContext
+	}): Promise<MemorySearchResult[]> {
+		const {
+			cleaned,
+			opts,
+			mongoCfg,
+			maxResults,
+			minScore,
+			activeSources,
+			availablePaths,
+			searchScope,
+			searchScopeRef,
+			benchmarkRunContext,
+		} = params
 
 		// #66: measurement only — cost of the phases of this call that sit
 		// outside searchV2's lanes. Merged into the lane breakdown before it
@@ -2930,6 +3111,13 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 				scope: searchScope,
 				scopeRef: searchScopeRef,
 				config: mongoCfg.cache,
+				// P2.4: resolved (post-default) params fold into the cache key, so
+				// a cached page can never serve a different parameterization.
+				keyParams: {
+					maxResults,
+					minScore,
+					...(opts?.questionDate ? { questionDate: opts.questionDate } : {}),
+				},
 			})
 			phaseLatency["phase:cache-check"] = Date.now() - cacheCheckStartedAt
 			if (cacheResult.latency) {
@@ -3072,6 +3260,14 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 						pathUsed: v2.metadata.pathsExecuted.join(","),
 						sourceScope: "conversation",
 						ttlSec,
+						// P2.4: same resolved params as the checkCache seam above.
+						keyParams: {
+							maxResults,
+							minScore,
+							...(opts?.questionDate
+								? { questionDate: opts.questionDate }
+								: {}),
+						},
 					})
 					phaseLatency["phase:cache-write"] = Date.now() - cacheWriteStartedAt
 				}
@@ -3200,16 +3396,12 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 			mongoCfg.kb.enabled,
 		)
 		const availablePaths = this.buildV2AvailablePaths(activeSources)
-		const searchScope: MemoryScope =
-			normalized.scope ??
-			(normalized.conversationScope?.sessionKey ? "session" : "agent")
-		const searchScopeRef =
-			normalized.scopeRef ??
-			resolveScopeRef({
-				scope: searchScope,
-				agentId: this.agentId,
-				sessionId: normalized.conversationScope?.sessionKey,
-				workspaceDir: this.workspaceDir,
+		// P1.4 + P2.3: same identity rule as search() and the write path.
+		const { scope: searchScope, scopeRef: searchScopeRef } =
+			this.resolveSearchIdentity({
+				scope: normalized.scope,
+				scopeRef: normalized.scopeRef,
+				sessionKey: normalized.conversationScope?.sessionKey,
 			})
 
 		const executorRequest = normalizeMemorySearchRequest(normalized)
@@ -3231,6 +3423,12 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 				scope: searchScope,
 				scopeRef: searchScopeRef,
 				config: mongoCfg.cache,
+				// P2.4: resolved (post-default) params fold into the cache key.
+				keyParams: {
+					maxResults: resolvedSearchConfig.maxResults,
+					minScore: normalized.minScore ?? 0.1,
+					...(normalized.timeRange ? { timeRange: normalized.timeRange } : {}),
+				},
 			})
 			if (cacheResult.hit) {
 				this.setLastSearchMode(`v2:cache:${cacheResult.tier}`, {
@@ -3405,6 +3603,14 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 					pathUsed: response.metadata.pathsExecuted.join(","),
 					sourceScope: "conversation",
 					ttlSec,
+					// P2.4: same resolved params as the checkCache seam above.
+					keyParams: {
+						maxResults: resolvedSearchConfig.maxResults,
+						minScore: normalized.minScore ?? 0.1,
+						...(normalized.timeRange
+							? { timeRange: normalized.timeRange }
+							: {}),
+					},
 				})
 			}
 			return response
@@ -4126,12 +4332,16 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 			.map((entry) => entry.trim())
 			.filter(Boolean)
 			.map((entry) => resolveUserPath(entry))
+		// Single-directory convenience knob for operators (containers): one
+		// dedicated datasets root instead of a path-delimited list.
+		const datasetRoot = process.env.MEMONGO_DATASET_ROOT?.trim()
 		return [
 			this.workspaceDir,
 			path.dirname(
 				this.config.mongodb?.relevance.benchmark.datasetPath ??
 					this.workspaceDir,
 			),
+			...(datasetRoot ? [resolveUserPath(datasetRoot)] : []),
 			...envRoots,
 		]
 	}
@@ -6372,6 +6582,8 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 			minScore?: number
 			scopeRef?: string
 			filter?: { tags?: string[]; category?: string; source?: string }
+			/** Per-call override; defaults to the resolved config fusionMethod. */
+			fusionMethod?: MemoryMongoDBFusionMethod
 		},
 	): Promise<MemorySearchResult[]> {
 		const cleaned = query.trim()
@@ -6380,7 +6592,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		}
 
 		const mongoCfg = this.config.mongodb!
-		const maxResults = opts?.maxResults ?? 5
+		const maxResults = clampSearchMaxResults(opts?.maxResults ?? 5)
 		const minScore = opts?.minScore ?? 0.1
 
 		// Direct KB search uses MongoDB query-time automatic embeddings.
@@ -6402,6 +6614,9 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 				textIndexName: `${this.prefix}kb_chunks_text`,
 				capabilities: this.capabilities,
 				embeddingMode: mongoCfg.embeddingMode,
+				// P0.10: KB fusion is a first-class option — per-call override,
+				// else the resolved config value (env/config, default rankFusion).
+				fusionMethod: opts?.fusionMethod ?? mongoCfg.fusionMethod,
 				kbDocs: kbCollection(this.db, this.prefix),
 			},
 		)
@@ -7580,6 +7795,8 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 				log.warn(`memory sync failed (watch): ${String(err)}`)
 			})
 		}, mongoCfg.watchDebounceMs)
+		// (P2.5 e) a pending watch debounce must not hold the process open.
+		this.watchTimer.unref?.()
 	}
 
 	// ---------------------------------------------------------------------------
@@ -8417,6 +8634,21 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		const heartbeatTimer = setInterval(heartbeat, MEMORY_JOB_HEARTBEAT_MS)
 		heartbeatTimer.unref?.()
 
+		// (P2.5 b) lease fencing is enforced BEFORE every side-effecting
+		// stage, not only before the terminal write: a worker that lost its
+		// lease must not commit entity/derived/relation writes at all. The new
+		// lease owner re-runs the job, and event-receipt idempotency
+		// (hasProcessedSourceEvents, wired through
+		// promoteDerivedMemoryFromEvent's eventReceiptIds) keeps that
+		// re-execution free of duplicate side effects.
+		const leaseFence = async (stage: string): Promise<boolean> => {
+			await heartbeatInFlight
+			if (leaseLost) {
+				log.warn(`extraction job lease lost before ${stage}: ${job.jobId}`)
+			}
+			return leaseLost
+		}
+
 		try {
 			const eventDoc = (await eventsCollection(this.db, this.prefix).findOne({
 				eventId,
@@ -8438,6 +8670,9 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 			} | null
 			if (!eventDoc) {
 				throw new Error(`event not found: ${eventId}`)
+			}
+			if (await leaseFence("entity extraction")) {
+				return
 			}
 			await extractAndUpsertEntities({
 				db: this.db,
@@ -8489,6 +8724,9 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 						})
 					: enrichmentProvider
 
+			if (await leaseFence("derived-memory promotion")) {
+				return
+			}
 			const result = await promoteDerivedMemoryFromEvent({
 				db: this.db,
 				prefix: this.prefix,
@@ -8675,6 +8913,12 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 	}
 
 	private startMemoryJobWorker(): void {
+		// (P2.5 e) never (re)start the worker during/after shutdown — a write
+		// drained by close() stages its extraction job for the NEXT boot's
+		// outbox repair instead of reviving a stopped worker mid-close.
+		if (this.closed) {
+			return
+		}
 		if (!this.memoryJobWorkerStopped && this.memoryJobWorkerTimer) {
 			return
 		}
@@ -8682,7 +8926,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		this.wakeMemoryJobWorker()
 		this.memoryJobWorkerTimer = setInterval(() => {
 			this.wakeMemoryJobWorker()
-		}, MEMORY_JOB_POLL_MS)
+		}, resolveMemoryJobSweepMs())
 		this.memoryJobWorkerTimer.unref?.()
 	}
 
@@ -8701,6 +8945,13 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		tenant?: { scope?: MemoryScope; scopeRef?: string },
 		runContext?: BenchmarkRunContext,
 	): Promise<{ jobId: string; scheduled: boolean }> {
+		// (P2.5 e) shutdown intake stop: scheduling after close would stage a
+		// job and wake workers that close() is stopping.
+		if (this.closed) {
+			throw new Error(
+				"MongoDBMemoryManager is closed; refusing to schedule extraction",
+			)
+		}
 		const jobId = `extraction-${eventId}`
 		const payload = {
 			eventId,
@@ -8744,6 +8995,11 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 					})
 				}
 				if (!recoverable) {
+					// (P2.5 e) a terminal job state (completed, or failed without a
+					// recoverable retry) will never be claimed by this manager —
+					// drop any stale benchmark run context instead of leaking the
+					// entry for the process lifetime.
+					this.memoryJobRunContexts?.delete(jobId)
 					return { jobId, scheduled: false }
 				}
 			} else {
@@ -8821,6 +9077,79 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		})
 	}
 
+	/**
+	 * Fingerprint used to detect key-reuse-with-different-payload (IETF §2.7).
+	 * scope/scopeRef are compared AFTER resolution so an explicit scopeRef and
+	 * the equivalent resolved one count as the same payload.
+	 */
+	private resolveIdempotencyFingerprint(event: {
+		role: "user" | "assistant" | "system" | "tool"
+		body: string
+		sessionId?: string
+		scope?: MemoryScope
+		scopeRef?: string
+	}): {
+		role: string
+		body: string
+		sessionId?: string
+		scope: MemoryScope
+		scopeRef: string
+	} {
+		// P2.3: the fingerprint must resolve scope with the SAME rule the write
+		// itself uses, or a retried implicit-session write would mismatch the
+		// stored document and surface as a false 422 conflict.
+		const { scope, scopeRef } = resolveScopeIdentity({
+			scope: event.scope,
+			scopeRef: event.scopeRef,
+			agentId: this.agentId,
+			sessionId: event.sessionId,
+		})
+		return {
+			role: event.role,
+			body: event.body,
+			sessionId: event.sessionId,
+			scope,
+			scopeRef,
+		}
+	}
+
+	/**
+	 * Idempotency replay (IETF Idempotency-Key / Stripe): a retry carrying a
+	 * known key returns the original write's receipt instead of duplicating
+	 * the event. chunkCreated reports false because the chunk projection from
+	 * the accepted write already exists (replaying the request does not create
+	 * a second one). Key reuse with a different payload is a 422 conflict.
+	 */
+	private async replayIdempotentEventWrite(params: {
+		idempotencyKey: string
+		event: {
+			role: "user" | "assistant" | "system" | "tool"
+			body: string
+			sessionId?: string
+			scope?: MemoryScope
+			scopeRef?: string
+		}
+	}): Promise<{ eventId: string; chunkCreated: boolean } | null> {
+		const existing = (await eventsCollection(this.db, this.prefix).findOne({
+			agentId: this.agentId,
+			idempotencyKey: params.idempotencyKey,
+		})) as CanonicalEvent | null
+		if (!existing) {
+			return null
+		}
+		const incoming = this.resolveIdempotencyFingerprint(params.event)
+		const samePayload =
+			existing.role === incoming.role &&
+			existing.body === incoming.body &&
+			(existing.sessionId ?? undefined) === incoming.sessionId &&
+			existing.scope === incoming.scope &&
+			existing.scopeRef === incoming.scopeRef
+		if (!samePayload) {
+			throw new IdempotencyConflictError(params.idempotencyKey)
+		}
+		return { eventId: existing.eventId, chunkCreated: false }
+	}
+
 	async writeConversationEvent(
 		event: {
 			role: "user" | "assistant" | "system" | "tool"
@@ -8832,12 +9161,42 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 			metadata?: Record<string, unknown>
 			scope?: MemoryScope
 			scopeRef?: string
+			/**
+			 * Optional idempotency key: retries with the same key replay the
+			 * original receipt (no duplicate event); reuse with a different
+			 * payload is rejected with IdempotencyConflictError (422 upstream).
+			 */
+			idempotencyKey?: string
 		},
 		benchmarkRunContext?: BenchmarkRunContext,
 	): Promise<{ eventId: string; chunkCreated: boolean }> {
+		// (P2.5 e) shutdown intake stop: once close() begins, no new writes
+		// enter the queue — a write queued during shutdown would schedule
+		// extraction jobs and derivations on workers that are stopping.
+		if (this.closed) {
+			throw new Error(
+				"MongoDBMemoryManager is closed; refusing to queue a new write",
+			)
+		}
 		const execute = async () => {
+			if (event.idempotencyKey) {
+				const replay = await this.replayIdempotentEventWrite({
+					idempotencyKey: event.idempotencyKey,
+					event,
+				})
+				if (replay) {
+					return replay
+				}
+			}
 			const eventId = randomUUID()
-			const scope = event.scope ?? ("agent" as MemoryScope)
+			// P2.3: the write side of the canonical identity rule — an implicit
+			// sessionId lands the event in the SAME session scope a sessionKey
+			// search reads from (previously writes fell through to "agent").
+			const { scope } = resolveScopeIdentity({
+				scope: event.scope,
+				agentId: this.agentId,
+				sessionId: event.sessionId,
+			})
 			const postWriteDerivedWorkEnabled = this.shouldRunPostWriteDerivedWork()
 			const extractionJobPendingAt = postWriteDerivedWorkEnabled
 				? new Date()
@@ -8859,6 +9218,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 						validAt: event.validAt,
 						invalidAt: event.invalidAt,
 						metadata: event.metadata,
+						idempotencyKey: event.idempotencyKey,
 						extractionJobPendingAt,
 					},
 				})
@@ -8886,39 +9246,55 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 				})
 			}
 			let written: Awaited<ReturnType<typeof writeEvent>>
-			if (postWriteDerivedWorkEnabled && this.client) {
-				const session = this.client.startSession()
-				try {
-					let transactionalWrite:
-						| Awaited<ReturnType<typeof writeEvent>>
-						| undefined
-					await session.withTransaction(async () => {
-						transactionalWrite = await persistEvent(session)
-						await stageExtractionJob(transactionalWrite, session)
-					}, MAJORITY_TRANSACTION_OPTIONS)
-					if (!transactionalWrite) {
-						throw new Error(
-							"event and extraction job transaction returned no event",
+			try {
+				if (postWriteDerivedWorkEnabled && this.client) {
+					const session = this.client.startSession()
+					try {
+						let transactionalWrite:
+							| Awaited<ReturnType<typeof writeEvent>>
+							| undefined
+						await session.withTransaction(async () => {
+							transactionalWrite = await persistEvent(session)
+							await stageExtractionJob(transactionalWrite, session)
+						}, MAJORITY_TRANSACTION_OPTIONS)
+						if (!transactionalWrite) {
+							throw new Error(
+								"event and extraction job transaction returned no event",
+							)
+						}
+						written = transactionalWrite
+					} catch (err) {
+						if (!isTransactionUnsupported(err)) {
+							throw err
+						}
+						log.info(
+							"transactions unavailable for event extraction outbox; using direct writes",
 						)
+						written = await persistEvent()
+						await stageExtractionJob(written)
+					} finally {
+						await session.endSession()
 					}
-					written = transactionalWrite
-				} catch (err) {
-					if (!isTransactionUnsupported(err)) {
-						throw err
-					}
-					log.info(
-						"transactions unavailable for event extraction outbox; using direct writes",
-					)
+				} else {
 					written = await persistEvent()
-					await stageExtractionJob(written)
-				} finally {
-					await session.endSession()
+					if (postWriteDerivedWorkEnabled) {
+						await stageExtractionJob(written)
+					}
 				}
-			} else {
-				written = await persistEvent()
-				if (postWriteDerivedWorkEnabled) {
-					await stageExtractionJob(written)
+			} catch (err) {
+				if (event.idempotencyKey && isDuplicateKeyError(err)) {
+					// Lost race: a concurrent request carrying the same key committed
+					// first and uq_events_agent_idempotency_key rejected our insert.
+					// Replay the winner's receipt (Stripe: same key, same result).
+					const replay = await this.replayIdempotentEventWrite({
+						idempotencyKey: event.idempotencyKey,
+						event,
+					})
+					if (replay) {
+						return replay
+					}
 				}
+				throw err
 			}
 			const projected = await projectEventChunk({
 				db: this.db,
@@ -8969,6 +9345,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 					jobId,
 					agentId: this.agentId,
 				})
+				let clearPendingMarker = released
 				if (!released) {
 					const existing = await getMemoryJob({
 						db: this.db,
@@ -8980,21 +9357,31 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 						!existing ||
 						(existing.status === "pending" && Boolean(existing.stagedAt))
 					) {
+						// P0.1: the event is already committed — throwing here turned a
+						// fully durable write into a client-visible 500 that invited
+						// duplicate retries. Leave extractionJobPendingAt SET so
+						// repairExtractionOutbox (which exists for exactly this) re-stages
+						// the job, and acknowledge the write.
 						this.memoryJobRunContexts.delete(jobId)
-						throw new Error(`failed to release staged extraction job: ${jobId}`)
+						clearPendingMarker = false
+						log.warn(
+							`staged extraction job ${jobId} was not released; leaving the outbox marker set for the repair pass`,
+						)
 					}
 				}
-				try {
-					await clearEventExtractionJobPending({
-						db: this.db,
-						prefix: this.prefix,
-						eventId: written.eventId,
-						agentId: this.agentId,
-					})
-				} catch (err) {
-					log.warn(
-						`extraction outbox cleanup failed for ${written.eventId}: ${String(err)}`,
-					)
+				if (clearPendingMarker) {
+					try {
+						await clearEventExtractionJobPending({
+							db: this.db,
+							prefix: this.prefix,
+							eventId: written.eventId,
+							agentId: this.agentId,
+						})
+					} catch (err) {
+						log.warn(
+							`extraction outbox cleanup failed for ${written.eventId}: ${String(err)}`,
+						)
+					}
 				}
 				if (this.memoryJobWorkerStopped) {
 					this.startMemoryJobWorker()
@@ -9014,9 +9401,11 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 				runContext: benchmarkRunContext,
 			})
 
-			await invalidateQueryCache({
-				db: this.db,
-				prefix: this.prefix,
+			// P2.4: the hot write path coalesces invalidation — a burst of
+			// writes collapses into a leading + single trailing scope-level
+			// delete instead of a deleteMany per write (which drove the cache
+			// hit rate to ~0 and put an extra round trip on every write).
+			this.scheduleQueryCacheInvalidation({
 				agentId: this.agentId,
 				scope,
 				scopeRef: written.scopeRef,
@@ -9164,9 +9553,26 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 			this.watchTimer = null
 		}
 
+		// (P2.5 e) shutdown ordering: intake is now stopped (closed — sync()
+		// no-ops and writeConversationEvent throws). Drain everything ALREADY
+		// queued BEFORE stopping the workers: a queued write stages extraction
+		// jobs and post-write derivations, so awaiting the writeQueue only
+		// after watcher/worker shutdown let queued writes schedule work on
+		// stopped workers.
+		if (this.syncing) {
+			try {
+				await this.syncing
+			} catch {
+				// Ignore sync errors during close — already logged in runSync
+			}
+		}
+		await this.writeQueue
 		await this.derivationSchedulingQueue
 		await this.derivationQueue
 		await this.stopMemoryJobWorker()
+		// (P2.5 e) benchmark run contexts for never-claimed jobs are moot once
+		// the worker has stopped; drop them instead of leaking the entries.
+		this.memoryJobRunContexts?.clear()
 
 		// Close the file watcher
 		if (this.watcher) {
@@ -9192,16 +9598,6 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 			this.changeStreamWatcher = null
 		}
 
-		// Wait for any in-flight sync to complete before closing the connection
-		if (this.syncing) {
-			try {
-				await this.syncing
-			} catch {
-				// Ignore sync errors during close — already logged in runSync
-			}
-		}
-		await this.writeQueue
-
 		// Flush and close access tracker. Never swallow failures silently
 		// (Bridge close durability): closing can lose buffered access events.
 		// If the flush fails we at least surface it via log.warn with context
@@ -9218,12 +9614,21 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 			this.accessTracker = null
 		}
 
-		// Close the MongoDB connection
+		// Close the MongoDB connection — but only when this manager owns it.
+		// Shared clients (MEMONGO_SHARED_CLIENT) are owned by the process-level
+		// registry and released via onClosed instead.
+		if (this.ownsClient !== false) {
+			try {
+				await this.client.close()
+			} catch (err) {
+				const msg = err instanceof Error ? err.message : String(err)
+				log.warn(`error closing MongoDB connection: ${msg}`)
+			}
+		}
 		try {
-			await this.client.close()
+			this.onClosed?.()
 		} catch (err) {
-			const msg = err instanceof Error ? err.message : String(err)
-			log.warn(`error closing MongoDB connection: ${msg}`)
+			log.warn(`onClosed hook failed: ${String(err)}`)
 		}
 	}
 }
@@ -9790,9 +10195,18 @@ export async function searchV2(
 			context.knownEntityNames && context.knownEntityNames.length > 0
 				? context.knownEntityNames
 				: buildGraphQueryCandidates(query)
-		const scope = context.searchOptions?.scope ?? "agent"
-		const agentScopeRef =
-			context.searchOptions?.scopeRef ?? resolveScopeRef({ scope, agentId })
+		// P1.4 + P2.3: searchV2 is the single retrieval funnel; direct callers
+		// get the same identity rule (explicit scope > sessionKey implies
+		// "session" > env-resolved default) so they cannot bypass it.
+		const { scope, scopeRef: agentScopeRef } = resolveScopeIdentity({
+			scope: context.searchOptions?.scope,
+			scopeRef: context.searchOptions?.scopeRef,
+			agentId,
+			sessionId: context.searchOptions?.sessionKey,
+			defaultScope: resolveSearchDefaultScope(
+				process.env.MEMONGO_SEARCH_DEFAULT_SCOPE,
+			),
+		})
 		const sessionMode = resolveSessionEvidenceMode(
 			process.env.MEMONGO_SESSION_EVIDENCE_MODE,
 		)

@@ -7,7 +7,7 @@ import {
 } from "@memongo/lib"
 import { recordProjectionRun } from "./mongodb-ops.js"
 import { eventsCollection, chunksCollection } from "./mongodb-schema.js"
-import { resolveScopeRef } from "./mongodb-scope.js"
+import { resolveScopeIdentity } from "./mongodb-scope.js"
 
 const log = createSubsystemLogger("memory:mongodb:events")
 const DURABLE_EVENT_WRITE_CONCERN = {
@@ -104,6 +104,12 @@ export type CanonicalEvent = {
 	metadata?: Record<string, unknown>
 	scope: MemoryScope
 	scopeRef: string
+	/**
+	 * Client-supplied idempotency key (IETF Idempotency-Key / Stripe model):
+	 * unique per logical write within an agent. Retries carrying the same key
+	 * replay the original write's receipt instead of duplicating the event.
+	 */
+	idempotencyKey?: string
 	timestamp: Date
 	/** Event-valid time. Legacy rows may omit it; new writes always set it. */
 	validAt?: Date
@@ -116,6 +122,30 @@ export type CanonicalEvent = {
 	projectedAt?: Date
 	consolidatedAt?: Date
 	consolidatedIntoEpisodeId?: string
+}
+
+/**
+ * IETF draft-ietf-httpapi-idempotency-key-header §2.7 / Stripe
+ * idempotency_error: the key was seen before with a DIFFERENT payload.
+ * The API maps this to 422. Checked across package boundaries by `name`
+ * (class instances do not survive every consumer's module graph).
+ */
+export class IdempotencyConflictError extends Error {
+	readonly idempotencyKey: string
+
+	constructor(idempotencyKey: string) {
+		super(
+			`idempotency key "${idempotencyKey}" was reused with a different payload`,
+		)
+		this.name = "IdempotencyConflictError"
+		this.idempotencyKey = idempotencyKey
+	}
+}
+
+export function isIdempotencyConflictError(
+	err: unknown,
+): err is IdempotencyConflictError {
+	return err instanceof Error && err.name === "IdempotencyConflictError"
 }
 
 export function renderEventChunkText(
@@ -161,9 +191,11 @@ export async function writeEvent(params: {
 	if (event.invalidAt && event.invalidAt.getTime() <= validAt.getTime()) {
 		throw new Error("event invalidAt must be later than validAt")
 	}
-	const scope = event.scope ?? ("agent" as MemoryScope)
-	const scopeRef = resolveScopeRef({
-		scope,
+	// P2.3: the write side of the canonical identity rule — an implicit
+	// sessionId lands the event in the SAME session scope a sessionKey search
+	// reads from (previously writes fell through to "agent").
+	const { scope, scopeRef } = resolveScopeIdentity({
+		scope: event.scope,
 		scopeRef: event.scopeRef,
 		agentId: event.agentId,
 		sessionId: event.sessionId,
@@ -183,6 +215,7 @@ export async function writeEvent(params: {
 		...(event.sessionId && { sessionId: event.sessionId }),
 		...(event.channel && { channel: event.channel }),
 		...(event.metadata && { metadata: event.metadata }),
+		...(event.idempotencyKey ? { idempotencyKey: event.idempotencyKey } : {}),
 		...(event.extractionJobPendingAt
 			? { extractionJobPendingAt: event.extractionJobPendingAt }
 			: {}),

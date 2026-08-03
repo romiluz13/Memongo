@@ -14,13 +14,14 @@ export type MemoryMongoDBFusionMethod =
 
 export type MemoryMongoDBRecallProfile = "latency" | "balanced" | "proof"
 
-export type MemoryScope =
-	| "session"
-	| "user"
-	| "agent"
-	| "workspace"
-	| "tenant"
-	| "global"
+import type { MemoryScopeValue } from "./contract.js"
+
+/**
+ * Memory isolation scope. Derived from the canonical MEMORY_SCOPE_VALUES in
+ * ./contract.ts (P2.2 single contract source) so the type can never drift
+ * from the runtime enum the API/MCP/zod layers validate against.
+ */
+export type MemoryScope = MemoryScopeValue
 export type MemorySourceToggleConfig = {
 	enabled?: boolean
 }

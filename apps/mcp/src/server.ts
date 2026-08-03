@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 import { Server } from "@modelcontextprotocol/sdk/server/index.js"
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import {
@@ -5,7 +6,10 @@ import {
 	ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js"
 import { MemongoClient } from "@memongo/client"
+import { isMemoryScopeValue, type MemoryScopeValue } from "@memongo/lib"
 import { pathToFileURL } from "node:url"
+import { startHttpTransport } from "./http-transport.js"
+import { selectEnabledTools, toWireTool, toolCatalog } from "./tool-registry.js"
 
 const memongo = new MemongoClient({
 	baseUrl: process.env.MEMONGO_API_URL,
@@ -39,86 +43,42 @@ const IMPORT_TOOL_NAMES = new Set([
 	"memongo_import_conversation_history",
 ])
 
-const benchmarkCommonThresholdProperties = {
-	contractId: { type: "string", minLength: 1 },
-	version: { type: "string", minLength: 1 },
-	minHitRate: { type: "number", minimum: 0, maximum: 1 },
-	maxEmptyRate: { type: "number", minimum: 0, maximum: 1 },
-	minRAt5: { type: "number", minimum: 0, maximum: 1 },
-	minNdcgAt10: { type: "number", minimum: 0, maximum: 1 },
-	maxP95LatencyMs: { type: "number", exclusiveMinimum: 0 },
-} as const
+// P1.2: toolList remains the FULL catalog (all categories) for schema
+// inspection and tests. What a host actually sees over the wire is governed
+// by selectEnabledTools(process.env) in createMemongoServer below.
+export const toolList = toolCatalog.map(toWireTool)
 
-const benchmarkCommonThresholdRequired = [
-	"contractId",
-	"version",
-	"datasetKind",
-	"minHitRate",
-	"maxEmptyRate",
-	"minRAt5",
-	"minNdcgAt10",
-	"maxP95LatencyMs",
-] as const
+/**
+ * P1.4: memory-policy block shipped in the MCP `initialize` response (the
+ * spec's server `instructions` field). Works on any MCP host — no prompt
+ * primitive support required. Tells the agent WHEN to save, WHEN to search,
+ * and which tool to reach for.
+ */
+export const MEMONGO_SERVER_INSTRUCTIONS = `Memongo memory policy — when to SAVE and when to SEARCH:
+- SAVE durable facts, user preferences, decisions, and project context with memongo_write_event (or memongo_write_structured for typed type+key facts). Do NOT save ephemeral chatter or transient task state.
+- After saving an important event, call memongo_extract with its eventId to derive structured memories.
+- SEARCH before answering questions about prior work, user preferences, or earlier decisions — and at every session start.
+- Tool choice: memongo_search for quick semantic lookup; memongo_search_detailed when you need scores/provenance; memongo_recall_conversation for exact past messages with citations; memongo_build_context_bundle (mode wake-up) or memongo_profile at session start.`
 
-const benchmarkQualityThresholdsSchema = {
-	oneOf: [
-		{
-			type: "object",
-			additionalProperties: false,
-			properties: {
-				...benchmarkCommonThresholdProperties,
-				datasetKind: { type: "string", enum: ["longmemeval"] },
-				minSessionRecallAnyAt10: {
-					type: "number",
-					minimum: 0,
-					maximum: 1,
-				},
-				minSessionNdcgAnyAt10: {
-					type: "number",
-					minimum: 0,
-					maximum: 1,
-				},
-			},
-			required: [
-				...benchmarkCommonThresholdRequired,
-				"minSessionRecallAnyAt10",
-				"minSessionNdcgAnyAt10",
-			],
-		},
-		{
-			type: "object",
-			additionalProperties: false,
-			properties: {
-				...benchmarkCommonThresholdProperties,
-				datasetKind: { type: "string", enum: ["locomo"] },
-				minSessionEvidenceRecallAt10: {
-					type: "number",
-					minimum: 0,
-					maximum: 1,
-				},
-				minDialogEvidenceRecallAt10: {
-					type: "number",
-					minimum: 0,
-					maximum: 1,
-				},
-				minAnswerAccuracy: { type: "number", minimum: 0, maximum: 1 },
-				maxJudgeFalsePositiveRate: {
-					type: "number",
-					minimum: 0,
-					maximum: 1,
-				},
-				minAnswerCoverage: { type: "number", minimum: 0, maximum: 1 },
-			},
-			required: [
-				...benchmarkCommonThresholdRequired,
-				"minSessionEvidenceRecallAt10",
-				"minAnswerAccuracy",
-				"maxJudgeFalsePositiveRate",
-				"minAnswerCoverage",
-			],
-		},
-	],
-} as const
+/**
+ * P2.8: validate a raw `scope` argument against the canonical 6-value enum
+ * (single contract source, @memongo/lib) BEFORE it reaches a typed position.
+ * Several tools previously cast arbitrary strings to scope literals
+ * (`args.scope as "user"`), letting an invalid scope flow through to the API
+ * instead of failing here with a clear tool error.
+ */
+function readScopeArg(
+	args: Record<string, unknown>,
+): MemoryScopeValue | undefined {
+	const scope = args.scope
+	if (scope === undefined) {
+		return undefined
+	}
+	if (typeof scope === "string" && isMemoryScopeValue(scope)) {
+		return scope
+	}
+	throw new Error("scope must be session|user|agent|workspace|tenant|global")
+}
 
 function jsonResult(payload: unknown, isError = false) {
 	const structuredContent =
@@ -134,1006 +94,44 @@ function jsonResult(payload: unknown, isError = false) {
 	}
 }
 
-export const toolList = [
-	{
-		name: "memongo_search",
-		description: "Search Memongo memory",
-		inputSchema: {
-			type: "object",
-			properties: {
-				query: { type: "string" },
-				agentId: { type: "string" },
-				limit: { type: "number" },
-				minScore: { type: "number" },
-			},
-			required: ["query"],
-		},
-	},
-	{
-		name: "memongo_search_kb",
-		description: "Search Memongo knowledge base",
-		inputSchema: {
-			type: "object",
-			properties: {
-				query: { type: "string" },
-				agentId: { type: "string" },
-				limit: { type: "number" },
-			},
-			required: ["query"],
-		},
-	},
-	{
-		name: "memongo_read_file",
-		description: "Read memory file by path (memory_get parity)",
-		inputSchema: {
-			type: "object",
-			properties: {
-				relPath: { type: "string" },
-				agentId: { type: "string" },
-				from: { type: "number" },
-				lines: { type: "number" },
-			},
-			required: ["relPath"],
-		},
-	},
-	{
-		name: "memongo_add",
-		description: "Add user message to memory",
-		inputSchema: {
-			type: "object",
-			properties: {
-				content: { type: "string" },
-				agentId: { type: "string" },
-				sessionId: { type: "string" },
-			},
-			required: ["content"],
-		},
-	},
-	{
-		name: "memongo_write_event",
-		description: "Write conversation event (any role)",
-		inputSchema: {
-			type: "object",
-			properties: {
-				role: { type: "string", enum: ["user", "assistant", "system", "tool"] },
-				body: { type: "string" },
-				agentId: { type: "string" },
-				sessionId: { type: "string" },
-				timestamp: { type: "string", format: "date-time" },
-				validAt: { type: "string", format: "date-time" },
-				invalidAt: { type: "string", format: "date-time" },
-				scope: {
-					type: "string",
-					enum: ["session", "user", "agent", "workspace", "tenant", "global"],
-				},
-				scopeRef: { type: "string" },
-			},
-			required: ["role", "body"],
-		},
-	},
-	{
-		name: "memongo_profile",
-		description: "Synthesize profile from Memongo memory",
-		inputSchema: {
-			type: "object",
-			properties: {
-				agentId: { type: "string" },
-				scopeRef: { type: "string" },
-			},
-		},
-	},
-	{
-		name: "memongo_build_context_bundle",
-		description: "Build a prompt-ready context bundle from Memongo memory",
-		inputSchema: {
-			type: "object",
-			properties: {
-				query: { type: "string" },
-				agentId: { type: "string" },
-				scope: {
-					type: "string",
-					enum: ["session", "user", "agent", "workspace", "tenant", "global"],
-				},
-				scopeRef: { type: "string" },
-				sessionId: { type: "string" },
-				tokenBudget: { type: "number" },
-				maxActiveItems: { type: "number" },
-				maxEvidenceItems: { type: "number" },
-				maxRecentEvents: { type: "number" },
-				includeDiscoveryProjection: { type: "boolean" },
-				discoveryKind: {
-					type: "string",
-					enum: [
-						"entity-brief",
-						"topic-brief",
-						"what-changed",
-						"contradiction-report",
-					],
-				},
-				includeProfile: { type: "boolean" },
-				mode: {
-					type: "string",
-					enum: ["full", "wake-up"],
-					description:
-						"wake-up returns a compact 250-token projection for session start",
-				},
-				timeRange: {
-					type: "object",
-					properties: {
-						preset: { type: "string" },
-						start: { type: "string" },
-						end: { type: "string" },
-					},
-				},
-			},
-		},
-	},
-	{
-		name: "memongo_recall_conversation",
-		description:
-			"Search and retrieve past conversation messages with canonical citations. Use exact ISO 8601 timestamps (for example `2026-04-08T14:30:00Z`); for date-only input (`2026-04-08`), include timezone to resolve local day boundaries correctly. Tool messages are excluded by default unless includeToolMessages is true.",
-		inputSchema: {
-			type: "object",
-			properties: {
-				query: {
-					type: "string",
-					description:
-						"Semantic search query for conversation content. Omit for filter-only recall.",
-				},
-				agentId: { type: "string" },
-				sessionId: {
-					type: "string",
-					description: "Filter to a specific conversation session.",
-				},
-				roles: {
-					type: "array",
-					items: {
-						type: "string",
-						enum: ["user", "assistant", "system", "tool"],
-					},
-					description: "Filter to specific message roles.",
-				},
-				startTime: {
-					type: "string",
-					description:
-						"Inclusive start of time range. ISO 8601: `YYYY-MM-DD` or `YYYY-MM-DDTHH:MM:SSZ`.",
-				},
-				endTime: {
-					type: "string",
-					description:
-						"Inclusive end of time range. ISO 8601: `YYYY-MM-DD` or `YYYY-MM-DDTHH:MM:SSZ`.",
-				},
-				asOf: {
-					type: "string",
-					format: "date-time",
-					description:
-						"Evaluate event validity at this historical instant. Defaults to now.",
-				},
-				timezone: {
-					type: "string",
-					description:
-						"IANA timezone such as `America/New_York` for date-only boundaries.",
-				},
-				includeToolMessages: {
-					type: "boolean",
-					description: "Include tool messages in results. Default false.",
-				},
-				limit: {
-					type: "number",
-					description: "Maximum results to return. Default 50, max 200.",
-				},
-			},
-		},
-	},
-	{
-		name: "memongo_recall_messages",
-		description:
-			"Semantic alias for memongo_recall_conversation. Recall past messages with exact time/session/role filters and canonical citations from the same runtime truth.",
-		inputSchema: {
-			type: "object",
-			properties: {
-				query: {
-					type: "string",
-					description:
-						"Semantic search query for conversation content. Omit for filter-only recall.",
-				},
-				agentId: { type: "string" },
-				sessionId: {
-					type: "string",
-					description: "Filter to a specific conversation session.",
-				},
-				roles: {
-					type: "array",
-					items: {
-						type: "string",
-						enum: ["user", "assistant", "system", "tool"],
-					},
-					description: "Filter to specific message roles.",
-				},
-				startTime: {
-					type: "string",
-					description:
-						"Inclusive start of time range. ISO 8601: `YYYY-MM-DD` or `YYYY-MM-DDTHH:MM:SSZ`.",
-				},
-				endTime: {
-					type: "string",
-					description:
-						"Inclusive end of time range. ISO 8601: `YYYY-MM-DD` or `YYYY-MM-DDTHH:MM:SSZ`.",
-				},
-				asOf: {
-					type: "string",
-					format: "date-time",
-					description:
-						"Evaluate event validity at this historical instant. Defaults to now.",
-				},
-				timezone: {
-					type: "string",
-					description:
-						"IANA timezone such as `America/New_York` for date-only boundaries.",
-				},
-				includeToolMessages: {
-					type: "boolean",
-					description: "Include tool messages in results. Default false.",
-				},
-				limit: {
-					type: "number",
-					description: "Maximum results to return. Default 50, max 200.",
-				},
-			},
-		},
-	},
-	{
-		name: "memongo_lifecycle_get",
-		description:
-			"Get the current structured memory or procedure referenced by a stable lifecycle handle.",
-		inputSchema: {
-			type: "object",
-			properties: {
-				handle: {
-					type: "object",
-					description:
-						"Stable lifecycle handle. Include family, id, agentId, scope, scopeRef, revision, state, and either structured.{type,key} or procedure.{procedureId}.",
-				},
-			},
-			required: ["handle"],
-		},
-	},
-	{
-		name: "memongo_memory_get",
-		description:
-			"Semantic alias for memongo_lifecycle_get. Fetch the current structured memory or procedure for a stable memory handle.",
-		inputSchema: {
-			type: "object",
-			properties: {
-				handle: {
-					type: "object",
-					description:
-						"Stable memory handle. Include family, id, agentId, scope, scopeRef, revision, state, and either structured.{type,key} or procedure.{procedureId}.",
-				},
-			},
-			required: ["handle"],
-		},
-	},
-	{
-		name: "memongo_lifecycle_update",
-		description:
-			"Update a structured memory or procedure via its stable lifecycle handle. Creates a new current revision and preserves history.",
-		inputSchema: {
-			type: "object",
-			properties: {
-				handle: {
-					type: "object",
-					description:
-						"Stable lifecycle handle. Use the handle returned by lifecycle get/history responses.",
-				},
-				patch: {
-					type: "object",
-					description:
-						"Family-specific patch. Structured supports value/context/confidence/source/sessionId/tags/salience/temporalScope/provenance/sourceEventIds/validTo/reviewAt/lastConfirmedAt/sourceReliability/sourceAgent/artifact. Procedures support name/intentTags/triggerQueries/steps/successSignals/confidence/provenance/sourceEventIds/sourceAgent.",
-				},
-			},
-			required: ["handle", "patch"],
-		},
-	},
-	{
-		name: "memongo_memory_update",
-		description:
-			"Semantic alias for memongo_lifecycle_update. Update a memory item by stable handle while preserving revision history.",
-		inputSchema: {
-			type: "object",
-			properties: {
-				handle: {
-					type: "object",
-					description:
-						"Stable memory handle. Use the handle returned by memory get/history responses.",
-				},
-				patch: {
-					type: "object",
-					description:
-						"Family-specific patch. Structured supports value/context/confidence/source/sessionId/tags/salience/temporalScope/provenance/sourceEventIds/validTo/reviewAt/lastConfirmedAt/sourceReliability/sourceAgent/artifact. Procedures support name/intentTags/triggerQueries/steps/successSignals/confidence/provenance/sourceEventIds/sourceAgent.",
-				},
-			},
-			required: ["handle", "patch"],
-		},
-	},
-	{
-		name: "memongo_lifecycle_delete",
-		description:
-			"Delete a memory item using Memongo lifecycle semantics. This invalidates the current version and preserves history instead of hard-deleting it.",
-		inputSchema: {
-			type: "object",
-			properties: {
-				handle: {
-					type: "object",
-					description:
-						"Stable lifecycle handle. Use the handle returned by lifecycle get/history responses.",
-				},
-				invalidatedBy: {
-					type: "object",
-					description:
-						"Optional metadata about why the current version was invalidated.",
-				},
-			},
-			required: ["handle"],
-		},
-	},
-	{
-		name: "memongo_memory_delete",
-		description:
-			"Semantic alias for memongo_lifecycle_delete. Delete a memory item using invalidate-with-history semantics rather than hard delete.",
-		inputSchema: {
-			type: "object",
-			properties: {
-				handle: {
-					type: "object",
-					description:
-						"Stable memory handle. Use the handle returned by memory get/history responses.",
-				},
-				invalidatedBy: {
-					type: "object",
-					description:
-						"Optional metadata about why the current version was invalidated.",
-				},
-			},
-			required: ["handle"],
-		},
-	},
-	{
-		name: "memongo_lifecycle_history",
-		description:
-			"Fetch ordered revision history for a structured memory or procedure from its stable lifecycle handle.",
-		inputSchema: {
-			type: "object",
-			properties: {
-				handle: {
-					type: "object",
-					description:
-						"Stable lifecycle handle. Use the handle returned by lifecycle get/history responses.",
-				},
-				limit: {
-					type: "number",
-					description:
-						"Maximum history entries to return. Default 50, max 200.",
-				},
-			},
-			required: ["handle"],
-		},
-	},
-	{
-		name: "memongo_memory_history",
-		description:
-			"Semantic alias for memongo_lifecycle_history. Fetch ordered memory revision history from a stable handle.",
-		inputSchema: {
-			type: "object",
-			properties: {
-				handle: {
-					type: "object",
-					description:
-						"Stable memory handle. Use the handle returned by memory get/history responses.",
-				},
-				limit: {
-					type: "number",
-					description:
-						"Maximum history entries to return. Default 50, max 200.",
-				},
-			},
-			required: ["handle"],
-		},
-	},
-	{
-		name: "memongo_procedure_outcome",
-		description:
-			"Record whether a procedure succeeded or failed using its stable handle. Updates outcome counters without bypassing the canonical procedure record.",
-		inputSchema: {
-			type: "object",
-			properties: {
-				handle: {
-					type: "object",
-					description:
-						"Stable procedure handle. Use the handle returned by lifecycle get/history responses.",
-				},
-				success: {
-					type: "boolean",
-					description: "True for success, false for failure.",
-				},
-				note: {
-					type: "string",
-					description: "Optional free-text note explaining the outcome.",
-				},
-				actorRole: {
-					type: "string",
-					enum: ["user", "assistant", "system"],
-					description:
-						"Optional role for the actor providing the outcome signal.",
-				},
-			},
-			required: ["handle", "success"],
-		},
-	},
-	{
-		name: "memongo_memory_feedback",
-		description:
-			"Apply confirm/correct/irrelevant feedback to a structured memory using its stable handle. Confirm reinforces, correct routes through revision-aware updates, and irrelevant invalidates with history.",
-		inputSchema: {
-			type: "object",
-			properties: {
-				handle: {
-					type: "object",
-					description:
-						"Stable structured memory handle. Use the handle returned by lifecycle get/history responses.",
-				},
-				signal: {
-					type: "string",
-					enum: ["confirm", "correct", "irrelevant"],
-					description:
-						"Feedback signal. confirm reinforces; correct requires patch; irrelevant invalidates the current memory.",
-				},
-				patch: {
-					type: "object",
-					description:
-						"Structured lifecycle patch required for signal=correct. Supports the same fields as lifecycle update for structured memories.",
-				},
-				invalidatedBy: {
-					type: "object",
-					description: "Optional provenance metadata when signal=irrelevant.",
-				},
-				note: {
-					type: "string",
-					description: "Optional free-text note explaining the feedback.",
-				},
-				actorRole: {
-					type: "string",
-					enum: ["user", "assistant", "system"],
-					description:
-						"Optional role for the actor providing the feedback signal.",
-				},
-			},
-			required: ["handle", "signal"],
-		},
-	},
-	{
-		name: "memongo_status",
-		description: "Memory provider status",
-		inputSchema: {
-			type: "object",
-			properties: {
-				agentId: { type: "string" },
-			},
-		},
-	},
-	{
-		name: "memongo_chain_trace",
-		description:
-			"Trace the provenance chain of a derived fact back to its source events",
-		inputSchema: {
-			type: "object",
-			properties: {
-				factId: { type: "string" },
-				collection: {
-					type: "string",
-					enum: [
-						"structured_mem",
-						"entities",
-						"relations",
-						"procedures",
-						"entity_links",
-					],
-				},
-				agentId: { type: "string" },
-				maxDepth: { type: "number" },
-			},
-			required: ["factId", "collection"],
-		},
-	},
-	{
-		name: "memongo_novelty_scan",
-		description:
-			"Scan for the most novel/surprising events using vector distance scoring",
-		inputSchema: {
-			type: "object",
-			properties: {
-				agentId: { type: "string" },
-				limit: { type: "number" },
-				scope: { type: "string" },
-			},
-		},
-	},
-	{
-		name: "memongo_consolidate",
-		description:
-			"Run the consolidation pipeline to promote high-value events to structured facts",
-		inputSchema: {
-			type: "object",
-			properties: {
-				agentId: { type: "string" },
-				maxEvents: { type: "number" },
-				minCombinedScore: { type: "number" },
-				scope: { type: "string" },
-				scopeRef: { type: "string" },
-			},
-		},
-	},
-	{
-		name: "memongo_self_edit",
-		description:
-			"Edit your own core memory blocks directly. Use 'user' for user preferences/profile, 'persona' for your identity/behavior, 'instructions' for task instructions. Changes persist across sessions.",
-		inputSchema: {
-			type: "object",
-			required: ["block", "action", "content"],
-			properties: {
-				block: {
-					type: "string",
-					enum: ["user", "persona", "instructions"],
-					description: "Which core memory block to edit",
-				},
-				action: {
-					type: "string",
-					enum: ["append", "replace", "prepend"],
-					description: "How to modify the block",
-				},
-				content: {
-					type: "string",
-					description: "The content to write",
-				},
-				agentId: { type: "string" },
-			},
-		},
-	},
-	{
-		name: "memongo_state_unified",
-		description:
-			"Get all three state surfaces (profile, blocks, bundle) in one call",
-		inputSchema: {
-			type: "object",
-			properties: {
-				agentId: { type: "string" },
-				scope: { type: "string" },
-				scopeRef: { type: "string" },
-			},
-		},
-	},
-	{
-		name: "memongo_benchmark_ingest",
-		description:
-			"Replay a benchmark conversation dataset through the canonical writeConversationEvent() pipeline",
-		inputSchema: {
-			type: "object",
-			properties: {
-				datasetPath: { type: "string", minLength: 1 },
-				agentId: { type: "string" },
-				scope: {
-					type: "string",
-					enum: ["session", "user", "agent", "workspace", "tenant", "global"],
-				},
-				limitConversations: { type: "integer", minimum: 1 },
-				limitTurnsPerConversation: { type: "integer", minimum: 1 },
-			},
-			required: ["datasetPath"],
-		},
-	},
-	{
-		name: "memongo_import_conversations",
-		description:
-			"Import conversation history through the canonical writeConversationEvent() pipeline",
-		inputSchema: {
-			type: "object",
-			properties: {
-				datasetPath: { type: "string", minLength: 1 },
-				agentId: { type: "string" },
-				scope: {
-					type: "string",
-					enum: ["session", "user", "agent", "workspace", "tenant", "global"],
-				},
-				limitConversations: { type: "integer", minimum: 1 },
-				limitTurnsPerConversation: { type: "integer", minimum: 1 },
-			},
-			required: ["datasetPath"],
-		},
-	},
-	{
-		name: "memongo_import_conversation_history",
-		description:
-			"Semantic alias for memongo_import_conversations. Import conversation history through the same canonical writeConversationEvent() runtime path.",
-		inputSchema: {
-			type: "object",
-			properties: {
-				datasetPath: { type: "string", minLength: 1 },
-				agentId: { type: "string" },
-				scope: {
-					type: "string",
-					enum: ["session", "user", "agent", "workspace", "tenant", "global"],
-				},
-				limitConversations: { type: "integer", minimum: 1 },
-				limitTurnsPerConversation: { type: "integer", minimum: 1 },
-			},
-			required: ["datasetPath"],
-		},
-	},
-	{
-		name: "memongo_admin_access_trends",
-		description:
-			"Inspect rolling 7-day access trends from the access_events time series collection",
-		inputSchema: {
-			type: "object",
-			properties: {
-				agentId: { type: "string" },
-				collection: {
-					type: "string",
-					enum: [
-						"events",
-						"structured_mem",
-						"procedures",
-						"episodes",
-						"entities",
-						"relations",
-					],
-				},
-				memoryIds: {
-					type: "array",
-					items: { type: "string", minLength: 1 },
-				},
-				windowDays: { type: "integer", minimum: 1 },
-				limit: { type: "integer", minimum: 1, maximum: 100 },
-			},
-		},
-	},
-	{
-		name: "memongo_admin_access_summaries",
-		description:
-			"Inspect aggregate access counts and last-access timestamps from the access_events time series collection",
-		inputSchema: {
-			type: "object",
-			properties: {
-				agentId: { type: "string" },
-				collection: {
-					type: "string",
-					enum: [
-						"events",
-						"structured_mem",
-						"procedures",
-						"episodes",
-						"entities",
-						"relations",
-					],
-				},
-				memoryIds: {
-					type: "array",
-					items: { type: "string", minLength: 1 },
-				},
-				windowDays: { type: "integer", minimum: 1 },
-			},
-			required: ["collection", "memoryIds"],
-		},
-	},
-	{
-		name: "memongo_admin_list_traces",
-		description: "List recent recall traces for operator debugging",
-		inputSchema: {
-			type: "object",
-			properties: {
-				agentId: { type: "string" },
-				limit: { type: "integer", minimum: 1, maximum: 100 },
-			},
-		},
-	},
-	{
-		name: "memongo_admin_get_trace",
-		description: "Fetch one recall trace by traceId",
-		inputSchema: {
-			type: "object",
-			properties: {
-				traceId: { type: "string", minLength: 1 },
-				agentId: { type: "string" },
-			},
-			required: ["traceId"],
-		},
-	},
-	{
-		name: "memongo_list_jobs",
-		description: "List memory jobs for an agent",
-		inputSchema: {
-			type: "object",
-			properties: {
-				agentId: { type: "string" },
-				status: {
-					type: "string",
-					enum: ["pending", "running", "completed", "failed", "cancelled"],
-				},
-				limit: { type: "integer", minimum: 1, maximum: 100 },
-				jobType: {
-					type: "string",
-					enum: [
-						"consolidation",
-						"extraction",
-						"import",
-						"materialization",
-						"enrichment",
-					],
-				},
-			},
-		},
-	},
-	{
-		name: "memongo_get_job",
-		description: "Fetch one memory job by jobId",
-		inputSchema: {
-			type: "object",
-			properties: {
-				jobId: { type: "string", minLength: 1 },
-				agentId: { type: "string" },
-			},
-			required: ["jobId"],
-		},
-	},
-	{
-		name: "memongo_search_detailed",
-		description:
-			"Full CRAG search pipeline with scored results, trust annotations, and source provenance",
-		inputSchema: {
-			type: "object",
-			properties: {
-				query: { type: "string" },
-				agentId: { type: "string" },
-				limit: { type: "number" },
-				maxResults: { type: "number" },
-				minScore: { type: "number" },
-				searchMode: { type: "string", enum: ["auto", "direct", "agentic"] },
-				maxPasses: { type: "number" },
-				returnPlan: { type: "boolean" },
-				searchConfig: {
-					type: "object",
-					properties: {
-						recipe: {
-							type: "string",
-							enum: ["fast", "hybrid", "deep", "temporal", "chain-of-thought"],
-						},
-						maxResults: { type: "number" },
-						searchMode: {
-							type: "string",
-							enum: ["auto", "direct", "agentic"],
-						},
-						maxPasses: { type: "number" },
-						sourcePreference: {
-							type: "array",
-							items: { type: "string" },
-						},
-						timeRange: {
-							type: "object",
-							properties: {
-								preset: { type: "string" },
-								start: { type: "string" },
-								end: { type: "string" },
-							},
-						},
-						needExactEvidence: { type: "boolean" },
-						recallProfile: {
-							type: "string",
-							enum: ["latency", "balanced", "proof"],
-						},
-						numCandidates: { type: "number" },
-						fusionMethod: {
-							type: "string",
-							enum: ["scoreFusion", "rankFusion", "js-merge"],
-						},
-						hybridMode: {
-							type: "string",
-							enum: ["hybrid", "vector-only"],
-						},
-						allowHybridBackstop: { type: "boolean" },
-						lexicalPrefilter: {
-							type: "string",
-							enum: ["disabled", "experimental"],
-						},
-					},
-				},
-			},
-			required: ["query"],
-		},
-	},
-	{
-		name: "memongo_hydrate_active_slate",
-		description:
-			"Load the highest-salience active memories (hot context for current session)",
-		inputSchema: {
-			type: "object",
-			properties: {
-				agentId: { type: "string" },
-				scope: { type: "string" },
-				scopeRef: { type: "string" },
-				maxItems: { type: "number" },
-			},
-		},
-	},
-	{
-		name: "memongo_discovery_projection",
-		description:
-			"Build a discovery projection (entity-brief, topic-brief, what-changed, contradiction-report)",
-		inputSchema: {
-			type: "object",
-			properties: {
-				kind: {
-					type: "string",
-					enum: [
-						"entity-brief",
-						"topic-brief",
-						"what-changed",
-						"contradiction-report",
-					],
-				},
-				query: { type: "string" },
-				agentId: { type: "string" },
-				scope: { type: "string" },
-				scopeRef: { type: "string" },
-				maxItems: { type: "number" },
-			},
-			required: ["kind"],
-		},
-	},
-	{
-		name: "memongo_write_structured",
-		description: "Write a structured memory entry directly",
-		inputSchema: {
-			type: "object",
-			properties: {
-				entry: { type: "object" },
-				agentId: { type: "string" },
-			},
-			required: ["entry"],
-		},
-	},
-	{
-		name: "memongo_write_procedure",
-		description: "Write a step-by-step procedure",
-		inputSchema: {
-			type: "object",
-			properties: {
-				entry: { type: "object" },
-				agentId: { type: "string" },
-			},
-			required: ["entry"],
-		},
-	},
-	{
-		name: "memongo_status_detailed",
-		description:
-			"Detailed health status: events, entities, projection lag, lane coverage, diagnostics",
-		inputSchema: {
-			type: "object",
-			properties: { agentId: { type: "string" } },
-		},
-	},
-	{
-		name: "memongo_stats",
-		description:
-			"Memory statistics: source counts, embedding coverage, index stats",
-		inputSchema: {
-			type: "object",
-			properties: { agentId: { type: "string" } },
-		},
-	},
-	{
-		name: "memongo_sync",
-		description: "Trigger a memory sync operation",
-		inputSchema: {
-			type: "object",
-			properties: {
-				agentId: { type: "string" },
-				reason: { type: "string" },
-				force: { type: "boolean" },
-			},
-		},
-	},
-	{
-		name: "memongo_probe_embedding",
-		description: "Probe embedding model availability",
-		inputSchema: {
-			type: "object",
-			properties: { agentId: { type: "string" } },
-		},
-	},
-	{
-		name: "memongo_probe_vector",
-		description: "Probe vector search availability",
-		inputSchema: {
-			type: "object",
-			properties: { agentId: { type: "string" } },
-		},
-	},
-	{
-		name: "memongo_relevance_explain",
-		description:
-			"Detailed relevance diagnostics for a query: artifacts, health, scores",
-		inputSchema: {
-			type: "object",
-			properties: {
-				query: { type: "string" },
-				agentId: { type: "string" },
-				sourceScope: {
-					type: "string",
-					enum: ["all", "memory", "kb", "structured"],
-				},
-				maxResults: { type: "number" },
-				minScore: { type: "number" },
-				deep: { type: "boolean" },
-			},
-			required: ["query"],
-		},
-	},
-	{
-		name: "memongo_relevance_benchmark",
-		description: "Run relevance benchmark suite",
-		inputSchema: {
-			type: "object",
-			properties: {
-				agentId: { type: "string" },
-				datasetPath: { type: "string" },
-				maxResults: { type: "number" },
-				minScore: { type: "number" },
-				retrievalLane: {
-					type: "string",
-					enum: ["native", "raw-session"],
-				},
-				datasetSha256: { type: "string" },
-				embeddingConfig: { type: "object" },
-				rerankerConfig: { type: "object" },
-				qualityThresholds: benchmarkQualityThresholdsSchema,
-			},
-		},
-	},
-	{
-		name: "memongo_relevance_report",
-		description: "Relevance health report: hit rate, empty rate, fallback rate",
-		inputSchema: {
-			type: "object",
-			properties: {
-				agentId: { type: "string" },
-				windowMs: { type: "number" },
-			},
-		},
-	},
-	{
-		name: "memongo_relevance_sample_rate",
-		description: "Current relevance sampling rate and degraded signal count",
-		inputSchema: {
-			type: "object",
-			properties: { agentId: { type: "string" } },
-		},
-	},
-] as const
+export function createMemongoServer(): Server {
+	// P1.2 surface diet: default = core tools only; MEMONGO_MCP_ADMIN=1 adds
+	// admin/benchmark tools; MEMONGO_MCP_ALIASES=1 adds semantic aliases.
+	const enabledTools = selectEnabledTools(process.env)
+	const enabledNames = new Set(enabledTools.map((tool) => tool.name))
 
-const server = new Server(
-	{
-		name: "memongo",
-		version: "0.1.0",
-	},
-	{
-		capabilities: { tools: {} },
-	},
-)
+	const server = new Server(
+		{
+			name: "memongo",
+			version: "0.1.0",
+		},
+		{
+			capabilities: { tools: {} },
+			instructions: MEMONGO_SERVER_INSTRUCTIONS,
+		},
+	)
 
-server.setRequestHandler(ListToolsRequestSchema, async () => ({
-	tools: [...toolList],
-}))
+	server.setRequestHandler(ListToolsRequestSchema, async () => ({
+		tools: enabledTools.map(toWireTool),
+	}))
+
+	server.setRequestHandler(CallToolRequestSchema, async (request) => {
+		if (!enabledNames.has(request.params.name)) {
+			return jsonResult(
+				{
+					error: `tool "${request.params.name}" is not enabled by this server (admin/benchmark tools require MEMONGO_MCP_ADMIN=1, semantic aliases require MEMONGO_MCP_ALIASES=1)`,
+				},
+				true,
+			)
+		}
+		return handleToolCall(
+			request.params.name,
+			(request.params.arguments ?? {}) as Record<string, unknown>,
+		)
+	})
+
+	return server
+}
 
 export async function handleToolCall(
 	name: string,
@@ -1149,7 +147,7 @@ export async function handleToolCall(
 				limit: typeof args.limit === "number" ? args.limit : undefined,
 				minScore: typeof args.minScore === "number" ? args.minScore : undefined,
 			})
-			return { content: [{ type: "text", text: JSON.stringify(out) }] }
+			return jsonResult(out)
 		}
 		if (name === "memongo_search_kb") {
 			const out = await memongo.searchKB({
@@ -1157,7 +155,7 @@ export async function handleToolCall(
 				agentId: typeof args.agentId === "string" ? args.agentId : undefined,
 				limit: typeof args.limit === "number" ? args.limit : undefined,
 			})
-			return { content: [{ type: "text", text: JSON.stringify(out) }] }
+			return jsonResult(out)
 		}
 		if (name === "memongo_read_file") {
 			const out = await memongo.readFile({
@@ -1166,7 +164,7 @@ export async function handleToolCall(
 				from: typeof args.from === "number" ? args.from : undefined,
 				lines: typeof args.lines === "number" ? args.lines : undefined,
 			})
-			return { content: [{ type: "text", text: JSON.stringify(out) }] }
+			return jsonResult(out)
 		}
 		if (name === "memongo_add") {
 			const out = await memongo.add({
@@ -1175,7 +173,7 @@ export async function handleToolCall(
 				sessionId:
 					typeof args.sessionId === "string" ? args.sessionId : undefined,
 			})
-			return { content: [{ type: "text", text: JSON.stringify(out) }] }
+			return jsonResult(out)
 		}
 		if (name === "memongo_write_event") {
 			const role = args.role
@@ -1198,31 +196,33 @@ export async function handleToolCall(
 				validAt: typeof args.validAt === "string" ? args.validAt : undefined,
 				invalidAt:
 					typeof args.invalidAt === "string" ? args.invalidAt : undefined,
-				scope: typeof args.scope === "string" ? args.scope : undefined,
+				scope: readScopeArg(args),
 				scopeRef: typeof args.scopeRef === "string" ? args.scopeRef : undefined,
 			})
-			return { content: [{ type: "text", text: JSON.stringify(out) }] }
+			return jsonResult(out)
+		}
+		if (name === "memongo_extract") {
+			if (typeof args.eventId !== "string" || !args.eventId.trim()) {
+				throw new Error("eventId is required")
+			}
+			const scope = readScopeArg(args)
+			const out = await memongo.extract({
+				eventId: args.eventId,
+				agentId: typeof args.agentId === "string" ? args.agentId : undefined,
+				scope,
+				scopeRef: typeof args.scopeRef === "string" ? args.scopeRef : undefined,
+			})
+			return jsonResult(out)
 		}
 		if (name === "memongo_profile") {
 			const out = await memongo.profile({
 				agentId: typeof args.agentId === "string" ? args.agentId : undefined,
 				scopeRef: typeof args.scopeRef === "string" ? args.scopeRef : undefined,
 			})
-			return { content: [{ type: "text", text: JSON.stringify(out) }] }
+			return jsonResult(out)
 		}
 		if (name === "memongo_build_context_bundle") {
-			const scope = args.scope
-			if (
-				scope !== undefined &&
-				scope !== "session" &&
-				scope !== "user" &&
-				scope !== "agent" &&
-				scope !== "workspace" &&
-				scope !== "tenant" &&
-				scope !== "global"
-			) {
-				throw new Error("invalid scope")
-			}
+			const scope = readScopeArg(args)
 			const discoveryKind = args.discoveryKind
 			if (
 				discoveryKind !== undefined &&
@@ -1233,15 +233,6 @@ export async function handleToolCall(
 			) {
 				throw new Error("invalid discoveryKind")
 			}
-			const validatedScope =
-				scope === "session" ||
-				scope === "user" ||
-				scope === "agent" ||
-				scope === "workspace" ||
-				scope === "tenant" ||
-				scope === "global"
-					? scope
-					: undefined
 			const validatedDiscoveryKind =
 				discoveryKind === "entity-brief" ||
 				discoveryKind === "topic-brief" ||
@@ -1258,7 +249,7 @@ export async function handleToolCall(
 			const out = await memongo.buildContextBundle({
 				query: typeof args.query === "string" ? args.query : undefined,
 				agentId: typeof args.agentId === "string" ? args.agentId : undefined,
-				scope: validatedScope,
+				scope,
 				scopeRef: typeof args.scopeRef === "string" ? args.scopeRef : undefined,
 				sessionId:
 					typeof args.sessionId === "string" ? args.sessionId : undefined,
@@ -1304,7 +295,7 @@ export async function handleToolCall(
 						? args.mode
 						: undefined,
 			})
-			return { content: [{ type: "text", text: JSON.stringify(out) }] }
+			return jsonResult(out)
 		}
 		if (name === "memongo_status") {
 			const out = await memongo.status(
@@ -1332,9 +323,7 @@ export async function handleToolCall(
 					"context bundle assembly",
 				],
 			}
-			return {
-				content: [{ type: "text", text: JSON.stringify({ ...out, guidance }) }],
-			}
+			return jsonResult({ ...out, guidance })
 		}
 		if (RECALL_TOOL_NAMES.has(name)) {
 			const roles = Array.isArray(args.roles)
@@ -1518,15 +507,16 @@ export async function handleToolCall(
 				agentId: typeof args.agentId === "string" ? args.agentId : undefined,
 				maxDepth: typeof args.maxDepth === "number" ? args.maxDepth : undefined,
 			})
-			return { content: [{ type: "text", text: JSON.stringify(out) }] }
+			return jsonResult(out)
 		}
 		if (name === "memongo_novelty_scan") {
 			const out = await memongo.scanNovelty({
 				agentId: typeof args.agentId === "string" ? args.agentId : undefined,
 				limit: typeof args.limit === "number" ? args.limit : undefined,
-				scope: typeof args.scope === "string" ? args.scope : undefined,
+				scope: readScopeArg(args),
+				scopeRef: typeof args.scopeRef === "string" ? args.scopeRef : undefined,
 			})
-			return { content: [{ type: "text", text: JSON.stringify(out) }] }
+			return jsonResult(out)
 		}
 		if (name === "memongo_consolidate") {
 			const out = await memongo.consolidate({
@@ -1537,10 +527,10 @@ export async function handleToolCall(
 					typeof args.minCombinedScore === "number"
 						? args.minCombinedScore
 						: undefined,
-				scope: typeof args.scope === "string" ? args.scope : undefined,
+				scope: readScopeArg(args),
 				scopeRef: typeof args.scopeRef === "string" ? args.scopeRef : undefined,
 			})
-			return { content: [{ type: "text", text: JSON.stringify(out) }] }
+			return jsonResult(out)
 		}
 		if (name === "memongo_self_edit") {
 			const block = typeof args.block === "string" ? args.block : ""
@@ -1548,30 +538,16 @@ export async function handleToolCall(
 			const validBlocks = ["user", "persona", "instructions"]
 			const validActions = ["append", "replace", "prepend"]
 			if (!validBlocks.includes(block)) {
-				return {
-					content: [
-						{
-							type: "text",
-							text: JSON.stringify({
-								error: "block must be user|persona|instructions",
-							}),
-						},
-					],
-					isError: true,
-				}
+				return jsonResult(
+					{ error: "block must be user|persona|instructions" },
+					true,
+				)
 			}
 			if (!validActions.includes(action)) {
-				return {
-					content: [
-						{
-							type: "text",
-							text: JSON.stringify({
-								error: "action must be append|replace|prepend",
-							}),
-						},
-					],
-					isError: true,
-				}
+				return jsonResult(
+					{ error: "action must be append|replace|prepend" },
+					true,
+				)
 			}
 			const out = await memongo.selfEdit({
 				block: block as "user" | "persona" | "instructions",
@@ -1579,7 +555,7 @@ export async function handleToolCall(
 				content: typeof args.content === "string" ? args.content : "",
 				agentId: typeof args.agentId === "string" ? args.agentId : undefined,
 			})
-			return { content: [{ type: "text", text: JSON.stringify(out) }] }
+			return jsonResult(out)
 		}
 		if (name === "memongo_search_detailed") {
 			const searchConfig =
@@ -1710,17 +686,16 @@ export async function handleToolCall(
 						}
 					: undefined,
 			})
-			return { content: [{ type: "text", text: JSON.stringify(out) }] }
+			return jsonResult(out)
 		}
 		if (name === "memongo_hydrate_active_slate") {
 			const out = await memongo.hydrateActiveSlate({
 				agentId: typeof args.agentId === "string" ? args.agentId : undefined,
-				scope:
-					typeof args.scope === "string" ? (args.scope as "user") : undefined,
+				scope: readScopeArg(args),
 				scopeRef: typeof args.scopeRef === "string" ? args.scopeRef : undefined,
 				maxItems: typeof args.maxItems === "number" ? args.maxItems : undefined,
 			})
-			return { content: [{ type: "text", text: JSON.stringify(out) }] }
+			return jsonResult(out)
 		}
 		if (name === "memongo_discovery_projection") {
 			const kind = args.kind
@@ -1738,12 +713,11 @@ export async function handleToolCall(
 				kind,
 				query: typeof args.query === "string" ? args.query : undefined,
 				agentId: typeof args.agentId === "string" ? args.agentId : undefined,
-				scope:
-					typeof args.scope === "string" ? (args.scope as "user") : undefined,
+				scope: readScopeArg(args),
 				scopeRef: typeof args.scopeRef === "string" ? args.scopeRef : undefined,
 				maxItems: typeof args.maxItems === "number" ? args.maxItems : undefined,
 			})
-			return { content: [{ type: "text", text: JSON.stringify(out) }] }
+			return jsonResult(out)
 		}
 		if (name === "memongo_write_structured") {
 			const entry =
@@ -1754,7 +728,7 @@ export async function handleToolCall(
 				entry,
 				agentId: typeof args.agentId === "string" ? args.agentId : undefined,
 			})
-			return { content: [{ type: "text", text: JSON.stringify(out) }] }
+			return jsonResult(out)
 		}
 		if (name === "memongo_write_procedure") {
 			const entry =
@@ -1765,19 +739,19 @@ export async function handleToolCall(
 				entry,
 				agentId: typeof args.agentId === "string" ? args.agentId : undefined,
 			})
-			return { content: [{ type: "text", text: JSON.stringify(out) }] }
+			return jsonResult(out)
 		}
 		if (name === "memongo_status_detailed") {
 			const out = await memongo.getDetailedStatus(
 				typeof args.agentId === "string" ? args.agentId : undefined,
 			)
-			return { content: [{ type: "text", text: JSON.stringify(out) }] }
+			return jsonResult(out)
 		}
 		if (name === "memongo_stats") {
 			const out = await memongo.stats(
 				typeof args.agentId === "string" ? args.agentId : undefined,
 			)
-			return { content: [{ type: "text", text: JSON.stringify(out) }] }
+			return jsonResult(out)
 		}
 		if (name === "memongo_sync") {
 			const out = await memongo.sync({
@@ -1785,19 +759,19 @@ export async function handleToolCall(
 				reason: typeof args.reason === "string" ? args.reason : undefined,
 				force: typeof args.force === "boolean" ? args.force : undefined,
 			})
-			return { content: [{ type: "text", text: JSON.stringify(out) }] }
+			return jsonResult(out)
 		}
 		if (name === "memongo_probe_embedding") {
 			const out = await memongo.probeEmbedding(
 				typeof args.agentId === "string" ? args.agentId : undefined,
 			)
-			return { content: [{ type: "text", text: JSON.stringify(out) }] }
+			return jsonResult(out)
 		}
 		if (name === "memongo_probe_vector") {
 			const out = await memongo.probeVector(
 				typeof args.agentId === "string" ? args.agentId : undefined,
 			)
-			return { content: [{ type: "text", text: JSON.stringify(out) }] }
+			return jsonResult(out)
 		}
 		if (name === "memongo_relevance_explain") {
 			const out = await memongo.relevanceExplain({
@@ -1815,7 +789,7 @@ export async function handleToolCall(
 				minScore: typeof args.minScore === "number" ? args.minScore : undefined,
 				deep: typeof args.deep === "boolean" ? args.deep : undefined,
 			})
-			return { content: [{ type: "text", text: JSON.stringify(out) }] }
+			return jsonResult(out)
 		}
 		if (name === "memongo_relevance_benchmark") {
 			type BenchmarkInput = NonNullable<
@@ -1853,44 +827,28 @@ export async function handleToolCall(
 						? (args.qualityThresholds as BenchmarkInput["qualityThresholds"])
 						: undefined,
 			})
-			return { content: [{ type: "text", text: JSON.stringify(out) }] }
+			return jsonResult(out)
 		}
 		if (name === "memongo_relevance_report") {
 			const out = await memongo.relevanceReport(
 				typeof args.agentId === "string" ? args.agentId : undefined,
 				typeof args.windowMs === "number" ? args.windowMs : undefined,
 			)
-			return { content: [{ type: "text", text: JSON.stringify(out) }] }
+			return jsonResult(out)
 		}
 		if (name === "memongo_relevance_sample_rate") {
 			const out = await memongo.relevanceSampleRate(
 				typeof args.agentId === "string" ? args.agentId : undefined,
 			)
-			return { content: [{ type: "text", text: JSON.stringify(out) }] }
+			return jsonResult(out)
 		}
 		if (name === "memongo_state_unified") {
 			const out = await memongo.state({
 				agentId: typeof args.agentId === "string" ? args.agentId : undefined,
-				scope:
-					typeof args.scope === "string"
-						? (args.scope as
-								| "session"
-								| "user"
-								| "agent"
-								| "workspace"
-								| "tenant"
-								| "global")
-						: undefined,
+				scope: readScopeArg(args),
 				scopeRef: typeof args.scopeRef === "string" ? args.scopeRef : undefined,
 			})
-			return {
-				content: [
-					{
-						type: "text",
-						text: JSON.stringify(out),
-					},
-				],
-			}
+			return jsonResult(out)
 		}
 		if (name === "memongo_benchmark_ingest") {
 			if (
@@ -1920,7 +878,7 @@ export async function handleToolCall(
 						? args.limitTurnsPerConversation
 						: undefined,
 			})
-			return { content: [{ type: "text", text: JSON.stringify(out) }] }
+			return jsonResult(out)
 		}
 		if (IMPORT_TOOL_NAMES.has(name)) {
 			if (
@@ -1977,7 +935,7 @@ export async function handleToolCall(
 						? Math.max(1, Math.min(100, Math.floor(args.limit)))
 						: undefined,
 			})
-			return { content: [{ type: "text", text: JSON.stringify(out) }] }
+			return jsonResult(out)
 		}
 		if (name === "memongo_admin_access_summaries") {
 			const memoryIds = Array.isArray(args.memoryIds)
@@ -2006,7 +964,7 @@ export async function handleToolCall(
 				windowDays:
 					typeof args.windowDays === "number" ? args.windowDays : undefined,
 			})
-			return { content: [{ type: "text", text: JSON.stringify(out) }] }
+			return jsonResult(out)
 		}
 		if (name === "memongo_admin_list_traces") {
 			const out = await memongo.listRecallTraces({
@@ -2016,7 +974,7 @@ export async function handleToolCall(
 						? Math.max(1, Math.min(100, Math.floor(args.limit)))
 						: undefined,
 			})
-			return { content: [{ type: "text", text: JSON.stringify(out) }] }
+			return jsonResult(out)
 		}
 		if (name === "memongo_admin_get_trace") {
 			if (typeof args.traceId !== "string" || !args.traceId.trim()) {
@@ -2026,7 +984,7 @@ export async function handleToolCall(
 				traceId: args.traceId,
 				agentId: typeof args.agentId === "string" ? args.agentId : undefined,
 			})
-			return { content: [{ type: "text", text: JSON.stringify(out) }] }
+			return jsonResult(out)
 		}
 		if (name === "memongo_list_jobs") {
 			const out = await memongo.listJobs({
@@ -2052,7 +1010,7 @@ export async function handleToolCall(
 						? args.jobType
 						: undefined,
 			})
-			return { content: [{ type: "text", text: JSON.stringify(out) }] }
+			return jsonResult(out)
 		}
 		if (name === "memongo_get_job") {
 			if (typeof args.jobId !== "string" || !args.jobId.trim()) {
@@ -2062,7 +1020,7 @@ export async function handleToolCall(
 				jobId: args.jobId,
 				agentId: typeof args.agentId === "string" ? args.agentId : undefined,
 			})
-			return { content: [{ type: "text", text: JSON.stringify(out) }] }
+			return jsonResult(out)
 		}
 		throw new Error(`unknown tool: ${name}`)
 	} catch (err) {
@@ -2071,16 +1029,18 @@ export async function handleToolCall(
 	}
 }
 
-server.setRequestHandler(CallToolRequestSchema, async (request) => {
-	return handleToolCall(
-		request.params.name,
-		(request.params.arguments ?? {}) as Record<string, unknown>,
-	)
-})
-
 async function main(): Promise<void> {
-	const transport = new StdioServerTransport()
-	await server.connect(transport)
+	const transportKind = process.env.MEMONGO_MCP_TRANSPORT ?? "stdio"
+	if (transportKind === "http") {
+		await startHttpTransport({ createMcpServer: createMemongoServer })
+		return
+	}
+	if (transportKind !== "stdio") {
+		throw new Error(
+			`unknown MEMONGO_MCP_TRANSPORT "${transportKind}" (expected "stdio" or "http")`,
+		)
+	}
+	await createMemongoServer().connect(new StdioServerTransport())
 }
 
 const entrypointHref = process.argv[1]

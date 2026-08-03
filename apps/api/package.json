@@ -13,9 +13,11 @@
 	},
 	"dependencies": {
 		"@hono/node-server": "^1.19.0",
+		"@memongo/lib": "workspace:*",
 		"@memongo/memory-bridge": "workspace:*",
 		"hono": "^4.12.0",
-		"tsx": "^4.19.0"
+		"tsx": "^4.19.0",
+		"zod": "^3.25.0"
 	},
 	"devDependencies": {
 		"@types/node": "^22.10.0",

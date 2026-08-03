@@ -538,18 +538,19 @@ describe("ensureStandardIndexes", () => {
 
 		// 4 chunks + 5 KB + 4 KB chunks (3 + 1 wiki) + 8 structured (6 + 1 v2 scope + 1 sourceEvent) +
 		// 1 structured revisions + 3 relevance_runs + 2 relevance_artifacts +
-		// 2 relevance_regressions + 8 events (6 + 1 dreamerProcessedAt + 1 bi-temporal SE-1) + 5 entities (3 + 2 Phase 3.4) + 4 relations +
+		// 2 relevance_regressions + 9 events (6 + 1 dreamerProcessedAt + 1 bi-temporal SE-1 + 1 idempotency) + 5 entities (3 + 2 Phase 3.4) + 4 relations +
 		// 2 entity links + 4 episodes (3 + 1 promotion) + 1 ingest_runs + 1 projection_runs +
 		// 4 procedures + 1 procedure_revisions + 3 query_cache + 2 telemetry + 2 access_events
 		// + 3 memory_mutations (compound + TTL + per-document)
 		// + 1 lane_coverage (unique agentId)
-		// + 1 consolidation_runs (agent_time)
+		// + 2 consolidation_runs (agent_time + gate lease)
+		// + 1 events idempotency key (unique partial)
 		// + 3 sourceRef dedup (events, structured, procedures)
 		// + 1 partial index (structured active facts) + 2 sourceEvent dedup indexes
 		// + 3 session_chunks + 1 bi-temporal valid-time (#32)
 		// + 1 durable memory-job claim index + 1 extraction outbox partial index
-		// + 1 unique relation identity index = 89
-		expect(count).toBe(90)
+		// + 1 unique relation identity index = 92
+		expect(count).toBe(92)
 		expect(chunks.createIndex).toHaveBeenCalledTimes(4)
 		expect(kb.createIndex).toHaveBeenCalledTimes(5)
 		expect(kbChunks.createIndex).toHaveBeenCalledTimes(4)
@@ -581,13 +582,23 @@ describe("ensureStandardIndexes", () => {
 		const projectionRuns = db.collection("test_projection_runs") as unknown as {
 			createIndex: ReturnType<typeof vi.fn>
 		}
-		expect(events.createIndex).toHaveBeenCalledTimes(10)
+		expect(events.createIndex).toHaveBeenCalledTimes(11)
 		expect(events.createIndex).toHaveBeenCalledWith(
 			{ agentId: 1, extractionJobPendingAt: 1 },
 			{
 				name: "idx_events_agent_extraction_pending",
 				partialFilterExpression: {
 					extractionJobPendingAt: { $type: "date" },
+				},
+			},
+		)
+		expect(events.createIndex).toHaveBeenCalledWith(
+			{ agentId: 1, idempotencyKey: 1 },
+			{
+				name: "uq_events_agent_idempotency_key",
+				unique: true,
+				partialFilterExpression: {
+					idempotencyKey: { $type: "string" },
 				},
 			},
 		)
@@ -668,7 +679,9 @@ describe("ensureStandardIndexes", () => {
 			) as unknown as {
 				createIndex: ReturnType<typeof vi.fn>
 			}
-			expect(count).toBe(94)
+			// 92 base (incl. 2 consolidation_runs + events idempotency key)
+			// + 4 evidence mirror indexes
+			expect(count).toBe(96)
 			expect(memoryEvidence.createIndex).toHaveBeenCalledTimes(4)
 			expect(memoryEvidence.createIndex).toHaveBeenCalledWith(
 				{ canonicalId: 1 },
@@ -773,14 +786,14 @@ describe("ensureStandardIndexes", () => {
 	it("index count includes relevance telemetry indexes and v2 collection indexes", async () => {
 		const db = mockDb()
 		const count = await ensureStandardIndexes(db, "test_")
-		// 25 (v1 base, embedding_cache removed #13) + 8 events (6 + 1 dreamerProcessedAt + 1 bi-temporal SE-1) + 3 entities + 4 relations +
+		// 25 (v1 base, embedding_cache removed #13) + 9 events (6 + 1 dreamerProcessedAt + 1 bi-temporal SE-1 + 1 idempotency) + 3 entities + 4 relations +
 		// 2 entity links + 4 episodes (3 + 1 promotion) + 1 ingest_runs + 1 projection_runs +
 		// 1 structured scope + 1 structured revisions + 4 procedures + 1 procedure_revisions +
 		// 3 query_cache + 2 telemetry + 2 access_events + 3 memory_mutations
-		// + 1 lane_coverage + 1 consolidation_runs + 3 session_chunks
+		// + 1 lane_coverage + 2 consolidation_runs + 3 session_chunks
 		// + 1 bi-temporal valid-time (#32) + 2 durable job claim/TTL indexes
-		// + 1 extraction outbox partial index + 1 unique relation identity = 89
-		expect(count).toBe(90)
+		// + 1 extraction outbox partial index + 1 unique relation identity = 92
+		expect(count).toBe(92)
 	})
 
 	it("creates relevance TTL indexes when relevanceRetentionDays is set", async () => {
@@ -2978,14 +2991,14 @@ describe("ensureStandardIndexes total count with query_cache and time series ind
 	it("returns updated total index count including query_cache, telemetry, access event, and session_chunks indexes", async () => {
 		const db = mockDb()
 		const count = await ensureStandardIndexes(db, "test_")
-		// 25 (v1 base, embedding_cache removed #13) + 8 events (6 + 1 dreamerProcessedAt + 1 bi-temporal SE-1) + 3 entities + 4 relations +
+		// 25 (v1 base, embedding_cache removed #13) + 9 events (6 + 1 dreamerProcessedAt + 1 bi-temporal SE-1 + 1 idempotency) + 3 entities + 4 relations +
 		// 2 entity links + 4 episodes (3 + 1 promotion) + 1 ingest_runs + 1 projection_runs +
 		// 1 structured scope + 1 structured revisions + 4 procedures + 1 procedure_revisions +
 		// 3 query_cache + 2 telemetry + 2 access_events + 3 memory_mutations
-		// + 1 lane_coverage + 1 consolidation_runs + 3 session_chunks
+		// + 1 lane_coverage + 2 consolidation_runs + 3 session_chunks
 		// + 1 bi-temporal valid-time (#32) + 2 durable job claim/TTL indexes
-		// + 1 extraction outbox partial index + 1 unique relation identity = 89
-		expect(count).toBe(90)
+		// + 1 extraction outbox partial index + 1 unique relation identity = 92
+		expect(count).toBe(92)
 	})
 })
 

@@ -1,7 +1,29 @@
 /**
  * OpenAPI 3.0 document for the Memongo HTTP API.
  * Keep this aligned with the supported route contract in `routes/v1.ts`.
+ *
+ * P2.2: shared fragments derive from the single contract source in
+ * @memongo/lib (canonical scope enum, ApiError envelope, bearer scheme,
+ * route table). `withContractConformance` below fills every contract
+ * route's error responses with the ApiError $ref so error bodies cannot
+ * drift, and apps/api/src/contract-conformance.test.ts fails CI when the
+ * hand-written paths and the live router disagree.
  */
+import {
+	AGENT_ID_FIELD_DESCRIPTION,
+	API_ERROR_OPENAPI_SCHEMA,
+	apiErrorOpenApiResponse,
+	BEARER_SECURITY_SCHEME,
+	BEARER_SECURITY_SCHEME_NAME,
+	MEMONGO_API_ROUTES,
+	MEMORY_SCOPE_VALUES,
+	SCOPE_FIELD_DESCRIPTION,
+	SCOPE_REF_FIELD_DESCRIPTION,
+} from "@memongo/lib"
+
+/** Canonical scope enum, derived from the single contract source (P2.2). */
+const memoryScopeEnum: readonly string[] = MEMORY_SCOPE_VALUES
+
 const benchmarkOfficialRetrievalMetricsSchema = {
 	type: "object",
 	required: [
@@ -434,7 +456,7 @@ const lifecycleStructuredHandleSchema = {
 		agentId: { type: "string" },
 		scope: {
 			type: "string",
-			enum: ["session", "user", "agent", "workspace", "tenant", "global"],
+			enum: memoryScopeEnum,
 		},
 		scopeRef: { type: "string" },
 		revision: { type: "integer", minimum: 1 },
@@ -471,7 +493,7 @@ const lifecycleProcedureHandleSchema = {
 		agentId: { type: "string" },
 		scope: {
 			type: "string",
-			enum: ["session", "user", "agent", "workspace", "tenant", "global"],
+			enum: memoryScopeEnum,
 		},
 		scopeRef: { type: "string" },
 		revision: { type: "integer", minimum: 1 },
@@ -631,7 +653,7 @@ const lifecycleHistoryEntrySchema = {
 	],
 } as const
 
-export const openApiSpec = {
+const openApiSpecDocument = {
 	openapi: "3.0.3",
 	info: {
 		title: "Memongo API",
@@ -674,14 +696,7 @@ export const openApiSpec = {
 									},
 									scope: {
 										type: "string",
-										enum: [
-											"session",
-											"user",
-											"agent",
-											"workspace",
-											"tenant",
-											"global",
-										],
+										enum: memoryScopeEnum,
 										description:
 											"Optional memory isolation scope for retrieval.",
 									},
@@ -728,14 +743,7 @@ export const openApiSpec = {
 									query: { type: "string" },
 									scope: {
 										type: "string",
-										enum: [
-											"session",
-											"user",
-											"agent",
-											"workspace",
-											"tenant",
-											"global",
-										],
+										enum: memoryScopeEnum,
 										description:
 											"Optional memory isolation scope for retrieval.",
 									},
@@ -1115,14 +1123,7 @@ export const openApiSpec = {
 									agentId: { type: "string" },
 									scope: {
 										type: "string",
-										enum: [
-											"session",
-											"user",
-											"agent",
-											"workspace",
-											"tenant",
-											"global",
-										],
+										enum: memoryScopeEnum,
 									},
 									scopeRef: { type: "string" },
 									maxItems: {
@@ -1211,14 +1212,7 @@ export const openApiSpec = {
 									query: { type: "string" },
 									scope: {
 										type: "string",
-										enum: [
-											"session",
-											"user",
-											"agent",
-											"workspace",
-											"tenant",
-											"global",
-										],
+										enum: memoryScopeEnum,
 									},
 									scopeRef: { type: "string" },
 									maxItems: { type: "number" },
@@ -1324,14 +1318,7 @@ export const openApiSpec = {
 									query: { type: "string" },
 									scope: {
 										type: "string",
-										enum: [
-											"session",
-											"user",
-											"agent",
-											"workspace",
-											"tenant",
-											"global",
-										],
+										enum: memoryScopeEnum,
 									},
 									scopeRef: { type: "string" },
 									sessionId: { type: "string" },
@@ -1460,14 +1447,7 @@ export const openApiSpec = {
 						in: "query",
 						schema: {
 							type: "string",
-							enum: [
-								"session",
-								"user",
-								"agent",
-								"workspace",
-								"tenant",
-								"global",
-							],
+							enum: memoryScopeEnum,
 						},
 					},
 					{
@@ -1682,14 +1662,7 @@ export const openApiSpec = {
 									datasetPath: { type: "string", minLength: 1 },
 									scope: {
 										type: "string",
-										enum: [
-											"session",
-											"user",
-											"agent",
-											"workspace",
-											"tenant",
-											"global",
-										],
+										enum: memoryScopeEnum,
 									},
 									limitConversations: { type: "integer", minimum: 1 },
 									limitTurnsPerConversation: {
@@ -2012,6 +1985,26 @@ export const openApiSpec = {
 		"/v1/read-file": {
 			post: {
 				summary: "Read memory file or structured path",
+				requestBody: {
+					required: true,
+					content: {
+						"application/json": {
+							schema: {
+								type: "object",
+								required: ["relPath"],
+								properties: {
+									relPath: { type: "string", minLength: 1 },
+									agentId: {
+										type: "string",
+										description: AGENT_ID_FIELD_DESCRIPTION,
+									},
+									from: { type: "number" },
+									lines: { type: "number" },
+								},
+							},
+						},
+					},
+				},
 				responses: { "200": { description: "File read result" } },
 			},
 		},
@@ -2066,14 +2059,7 @@ export const openApiSpec = {
 									sessionId: { type: "string" },
 									scope: {
 										type: "string",
-										enum: [
-											"session",
-											"user",
-											"agent",
-											"workspace",
-											"tenant",
-											"global",
-										],
+										enum: memoryScopeEnum,
 									},
 									scopeRef: { type: "string" },
 									timestamp: { type: "string", format: "date-time" },
@@ -2122,12 +2108,72 @@ export const openApiSpec = {
 		"/v1/write-structured": {
 			post: {
 				summary: "Structured memory write",
+				requestBody: {
+					required: true,
+					content: {
+						"application/json": {
+							schema: {
+								type: "object",
+								required: ["entry"],
+								properties: {
+									entry: {
+										type: "object",
+										description: "Structured memory entry to upsert.",
+									},
+									agentId: {
+										type: "string",
+										description: AGENT_ID_FIELD_DESCRIPTION,
+									},
+									scope: {
+										type: "string",
+										enum: memoryScopeEnum,
+										description: SCOPE_FIELD_DESCRIPTION,
+									},
+									scopeRef: {
+										type: "string",
+										description: SCOPE_REF_FIELD_DESCRIPTION,
+									},
+								},
+							},
+						},
+					},
+				},
 				responses: { "200": { description: "Upsert result" } },
 			},
 		},
 		"/v1/write-procedure": {
 			post: {
 				summary: "Upsert procedure",
+				requestBody: {
+					required: true,
+					content: {
+						"application/json": {
+							schema: {
+								type: "object",
+								required: ["entry"],
+								properties: {
+									entry: {
+										type: "object",
+										description: "Procedure memory entry to upsert.",
+									},
+									agentId: {
+										type: "string",
+										description: AGENT_ID_FIELD_DESCRIPTION,
+									},
+									scope: {
+										type: "string",
+										enum: memoryScopeEnum,
+										description: SCOPE_FIELD_DESCRIPTION,
+									},
+									scopeRef: {
+										type: "string",
+										description: SCOPE_REF_FIELD_DESCRIPTION,
+									},
+								},
+							},
+						},
+					},
+				},
 				responses: { "200": { description: "Upsert result" } },
 			},
 		},
@@ -2142,14 +2188,7 @@ export const openApiSpec = {
 								properties: {
 									scope: {
 										type: "string",
-										enum: [
-											"session",
-											"user",
-											"agent",
-											"workspace",
-											"tenant",
-											"global",
-										],
+										enum: memoryScopeEnum,
 										description:
 											"Optional scope for profile synthesis. Defaults to agent.",
 									},
@@ -2215,6 +2254,32 @@ export const openApiSpec = {
 		"/v1/admin/relevance/explain": {
 			post: {
 				summary: "Relevance explain (diagnostic)",
+				requestBody: {
+					required: true,
+					content: {
+						"application/json": {
+							schema: {
+								type: "object",
+								required: ["query"],
+								properties: {
+									query: { type: "string", minLength: 1 },
+									agentId: {
+										type: "string",
+										description: AGENT_ID_FIELD_DESCRIPTION,
+									},
+									sourceScope: {
+										type: "string",
+										enum: ["all", "memory", "kb", "structured"],
+									},
+									sessionKey: { type: "string" },
+									maxResults: { type: "integer", minimum: 1 },
+									minScore: { type: "number", minimum: 0 },
+									deep: { type: "boolean" },
+								},
+							},
+						},
+					},
+				},
 				responses: { "200": { description: "Explain payload" } },
 			},
 		},
@@ -2439,14 +2504,7 @@ export const openApiSpec = {
 									datasetPath: { type: "string", minLength: 1 },
 									scope: {
 										type: "string",
-										enum: [
-											"session",
-											"user",
-											"agent",
-											"workspace",
-											"tenant",
-											"global",
-										],
+										enum: memoryScopeEnum,
 									},
 									limitConversations: { type: "integer", minimum: 1 },
 									limitTurnsPerConversation: {
@@ -2781,23 +2839,105 @@ export const openApiSpec = {
 				},
 			},
 		},
-	},
-	components: {
-		schemas: {
-			ApiError: {
-				type: "object",
-				required: ["error"],
-				properties: {
-					error: {
-						type: "object",
-						required: ["code", "message"],
-						properties: {
-							code: { type: "string" },
-							message: { type: "string" },
+		"/v1/self-edit": {
+			post: {
+				summary:
+					"Directly edit a core memory block (user/persona/instructions)",
+				requestBody: {
+					required: true,
+					content: {
+						"application/json": {
+							schema: {
+								type: "object",
+								required: ["block", "content"],
+								properties: {
+									block: {
+										type: "string",
+										enum: ["user", "persona", "instructions"],
+										description: "Core memory block to edit.",
+									},
+									action: {
+										type: "string",
+										enum: ["append", "replace", "prepend"],
+										description:
+											"Edit action; defaults to replace when omitted.",
+									},
+									content: { type: "string", minLength: 1 },
+									agentId: {
+										type: "string",
+										description: AGENT_ID_FIELD_DESCRIPTION,
+									},
+								},
+							},
 						},
+					},
+				},
+				responses: {
+					"200": { description: "Self-edit result" },
+					"422": {
+						description:
+							"Self-edit rejected by the injection screen (SELF_EDIT_REJECTED)",
 					},
 				},
 			},
 		},
 	},
+	components: {
+		schemas: {
+			ApiError: API_ERROR_OPENAPI_SCHEMA,
+		},
+		securitySchemes: {
+			[BEARER_SECURITY_SCHEME_NAME]: BEARER_SECURITY_SCHEME,
+		},
+	},
+	security: [{ [BEARER_SECURITY_SCHEME_NAME]: [] }],
 } as const
+
+/**
+ * P2.2 derivation pass: every contract route's documented error statuses get
+ * the shared ApiError envelope ($ref), so no route can drift to its own error
+ * body shape. Existing descriptions are preserved; missing statuses are
+ * added. Path/method coverage itself is enforced by
+ * apps/api/src/contract-conformance.test.ts against the live router.
+ */
+const ERROR_STATUS_DESCRIPTIONS: Record<number, string> = {
+	400: "Validation error",
+	404: "Not found",
+	422: "Request rejected",
+	500: "Internal server error",
+}
+
+function withContractConformance<T>(document: T): T {
+	type MutableRecord = Record<string, unknown>
+	const doc = document as MutableRecord
+	const paths = doc.paths as MutableRecord
+	for (const route of MEMONGO_API_ROUTES) {
+		const pathItem = paths[route.path] as MutableRecord | undefined
+		const operation = pathItem?.[route.method] as MutableRecord | undefined
+		if (!operation) {
+			// The conformance test fails on the missing operation; nothing to
+			// derive onto here.
+			continue
+		}
+		const existingResponses = (operation.responses ?? {}) as MutableRecord
+		const responses: MutableRecord = { ...existingResponses }
+		for (const status of route.errorStatuses) {
+			const key = String(status)
+			const existing = existingResponses[key] as MutableRecord | undefined
+			const fragment = apiErrorOpenApiResponse(
+				(typeof existing?.description === "string"
+					? existing.description
+					: undefined) ??
+					ERROR_STATUS_DESCRIPTIONS[status] ??
+					"Error",
+			)
+			responses[key] = existing
+				? { ...existing, content: fragment.content }
+				: fragment
+		}
+		operation.responses = responses
+	}
+	return document
+}
+
+export const openApiSpec = withContractConformance(openApiSpecDocument)

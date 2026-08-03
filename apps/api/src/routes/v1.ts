@@ -47,7 +47,15 @@ import {
 	type ProcedureEntry,
 	type StructuredMemoryEntry,
 } from "@memongo/memory-bridge"
-import { jsonError } from "../lib/errors.js"
+import { internalError, jsonError } from "../lib/errors.js"
+import {
+	InvalidJsonError,
+	kbFilterSchema,
+	procedureEntrySchema,
+	structuredEntrySchema,
+	validateMetadata,
+	validateWithSchema,
+} from "../lib/validation.js"
 import {
 	type ApiScope,
 	resolveRequestAgentId,
@@ -67,15 +75,43 @@ const MAX_HISTORY_LIMIT = 200
 // default partition). Shared with the auth layer via ./scope-identity.
 const readAgentId = resolveRequestAgentId
 
-async function readJsonBody(c: Context): Promise<Record<string, unknown>> {
+// P2.8: parse the request body once, in the v1 body-validation middleware.
+// Read the raw text rather than c.req.json() so an unparseable body is
+// distinguishable from an empty one. Hono's body cache keeps a later
+// c.req.json() (scope-identity) working off this same read.
+async function parseJsonRequestBody(
+	c: Context,
+): Promise<Record<string, unknown>> {
+	let text: string
 	try {
-		return (await c.req.json()) as Record<string, unknown>
+		text = await c.req.text()
 	} catch (error) {
+		// The body-limit middleware's rejection keeps its own mapping.
 		if (error instanceof Error && error.name === "BodyLimitError") {
 			throw error
 		}
+		// A cached json() parse failure from an earlier layer (auth) surfaces
+		// here as a rejected bodyCache promise — same client error.
+		throw new InvalidJsonError()
+	}
+	// A genuinely empty body stays `{}` (bodiless POSTs rely on this), but a
+	// non-empty body that fails to parse is a client error. Previously it
+	// silently became `{}` and the request ran on defaults.
+	if (!text.trim()) {
 		return {}
 	}
+	try {
+		return JSON.parse(text) as Record<string, unknown>
+	} catch {
+		throw new InvalidJsonError()
+	}
+}
+
+async function readJsonBody(c: Context): Promise<Record<string, unknown>> {
+	// The v1 body-validation middleware pre-parses every non-GET request and
+	// stashes the result (malformed JSON never reaches here — it is a 400
+	// INVALID_JSON from the middleware), so route handlers share one parse.
+	return (c.get("jsonBody") as Record<string, unknown> | undefined) ?? {}
 }
 
 function parseListLimit(raw?: string): number | undefined {
@@ -104,10 +140,19 @@ function readQuery(body: Record<string, unknown>): string {
 }
 
 function readLimit(body: Record<string, unknown>): number | undefined {
-	if (typeof body.limit === "number") {
-		return body.limit
+	const raw =
+		typeof body.limit === "number"
+			? body.limit
+			: typeof body.maxResults === "number"
+				? body.maxResults
+				: undefined
+	if (raw === undefined || !Number.isFinite(raw)) {
+		return undefined
 	}
-	return typeof body.maxResults === "number" ? body.maxResults : undefined
+	// P2.8: search-like routes forwarded `limit` uncapped, letting a caller
+	// force unbounded result sets through fusion/rerank. Clamp to the same
+	// ceiling as the list routes (defense-in-depth with the engine clamp).
+	return Math.max(1, Math.min(MAX_LIST_LIMIT, Math.floor(raw)))
 }
 
 function pickSessionId(input: Record<string, unknown>): string | undefined {
@@ -451,6 +496,45 @@ function isRecallConversationValidationError(error: unknown): boolean {
 		message.includes("Invalid time zone specified") ||
 		message.includes("roles must contain only")
 	)
+}
+
+// Mirrors the validation throws in the engine's resolveBenchmarkDatasetPath
+// (packages/memory-engine/src/mongodb-benchmark-dataset.ts): path confinement
+// and shape rejections are caller errors (400), never server failures (500).
+function isDatasetPathValidationError(error: unknown): boolean {
+	const message = error instanceof Error ? error.message : String(error)
+	return (
+		message.includes("datasetPath is required") ||
+		message.includes(
+			"datasetPath must not contain parent-directory traversal",
+		) ||
+		message.includes("benchmark dataset does not exist or is not accessible") ||
+		message.includes("benchmark dataset must be a .json or .jsonl file") ||
+		message.includes("datasetPath must resolve inside the workspace")
+	)
+}
+
+// IETF draft-ietf-httpapi-idempotency-key-header: the header is the canonical
+// channel; the `customId` body field is the SDK-friendly fallback. The header
+// wins when both are present so a client and a proxy can never disagree.
+function readIdempotencyKey(
+	c: Context,
+	body: Record<string, unknown>,
+): string | undefined {
+	const header = c.req.header("Idempotency-Key")?.trim()
+	if (header) {
+		return header
+	}
+	const customId = body.customId
+	return typeof customId === "string" && customId.trim()
+		? customId.trim()
+		: undefined
+}
+
+// Engine throws IdempotencyConflictError (mongodb-events.ts); the class does
+// not cross the bridge boundary reliably, so match on its stable name.
+function isIdempotencyConflictError(error: unknown): boolean {
+	return error instanceof Error && error.name === "IdempotencyConflictError"
 }
 
 type LifecycleSourceAgent = {
@@ -813,8 +897,37 @@ function readProcedureLifecyclePatch(
 	return Object.keys(patch).length > 0 ? patch : null
 }
 
-export function createV1Router(): Hono {
-	const v1 = new Hono()
+/** Router env carrying the P2.8 pre-parsed JSON body (see the middleware). */
+type V1RouterEnv = {
+	Variables: { jsonBody: Record<string, unknown> }
+}
+
+export function createV1Router(): Hono<V1RouterEnv> {
+	const v1 = new Hono<V1RouterEnv>()
+
+	// P2.8: pre-parse the JSON body ONCE for every non-GET route. A non-empty
+	// unparseable body is a deliberate 400 INVALID_JSON returned here — Hono's
+	// compose sends errors thrown in handlers straight to the app's onError,
+	// bypassing wrapping middleware, so the mapping cannot live downstream.
+	// The parsed body is stashed for readJsonBody; a genuinely empty body
+	// stays `{}` as before.
+	v1.use("*", async (c, next) => {
+		if (c.req.method === "GET" || c.req.method === "HEAD") {
+			await next()
+			return
+		}
+		let body: Record<string, unknown>
+		try {
+			body = await parseJsonRequestBody(c)
+		} catch (error) {
+			if (error instanceof InvalidJsonError) {
+				return jsonError(c, 400, "INVALID_JSON", error.message)
+			}
+			throw error
+		}
+		c.set("jsonBody", body)
+		await next()
+	})
 
 	v1.post("/search", async (c) => {
 		const body = (await readJsonBody(c)) as Record<string, unknown>
@@ -838,8 +951,7 @@ export function createV1Router(): Hono {
 			})
 			return c.json({ results })
 		} catch (err) {
-			const message = err instanceof Error ? err.message : String(err)
-			return jsonError(c, 500, "SEARCH_FAILED", message)
+			return internalError(c, err, "SEARCH_FAILED")
 		}
 	})
 
@@ -849,17 +961,23 @@ export function createV1Router(): Hono {
 		if (!query.trim()) {
 			return jsonError(c, 400, "VALIDATION_ERROR", "query is required")
 		}
+		// P2.8: the KB filter feeds a MongoDB query — validate it (typed fields,
+		// no operator-shaped keys) instead of casting the raw object through.
+		let filter:
+			| { tags?: string[]; category?: string; source?: string }
+			| undefined
+		if (body.filter !== undefined) {
+			const parsedFilter = validateWithSchema(
+				kbFilterSchema,
+				body.filter,
+				"filter",
+			)
+			if (!parsedFilter.ok) {
+				return jsonError(c, 400, "VALIDATION_ERROR", parsedFilter.message)
+			}
+			filter = parsedFilter.value
+		}
 		try {
-			const filter =
-				typeof body.filter === "object" &&
-				body.filter !== null &&
-				!Array.isArray(body.filter)
-					? (body.filter as {
-							tags?: string[]
-							category?: string
-							source?: string
-						})
-					: undefined
 			const results = await memongoBridgeSearchKB({
 				query,
 				agentId: await readAgentId(c),
@@ -867,11 +985,16 @@ export function createV1Router(): Hono {
 				maxResults: readLimit(body),
 				minScore: typeof body.minScore === "number" ? body.minScore : undefined,
 				filter,
+				fusionMethod:
+					body.fusionMethod === "scoreFusion" ||
+					body.fusionMethod === "rankFusion" ||
+					body.fusionMethod === "js-merge"
+						? body.fusionMethod
+						: undefined,
 			})
 			return c.json({ results })
 		} catch (err) {
-			const message = err instanceof Error ? err.message : String(err)
-			return jsonError(c, 500, "SEARCH_KB_FAILED", message)
+			return internalError(c, err, "SEARCH_KB_FAILED")
 		}
 	})
 
@@ -916,7 +1039,7 @@ export function createV1Router(): Hono {
 			if (isRecallConversationValidationError(err)) {
 				return jsonError(c, 400, "VALIDATION_ERROR", message)
 			}
-			return jsonError(c, 500, "RECALL_CONVERSATION_FAILED", message)
+			return internalError(c, err, "RECALL_CONVERSATION_FAILED")
 		}
 	})
 
@@ -946,7 +1069,10 @@ export function createV1Router(): Hono {
 			return c.json(result)
 		} catch (err) {
 			const message = err instanceof Error ? err.message : String(err)
-			return jsonError(c, 500, "CONVERSATION_IMPORT_FAILED", message)
+			if (isDatasetPathValidationError(err)) {
+				return jsonError(c, 400, "VALIDATION_ERROR", message)
+			}
+			return internalError(c, err, "CONVERSATION_IMPORT_FAILED")
 		}
 	})
 
@@ -972,8 +1098,7 @@ export function createV1Router(): Hono {
 			}
 			return c.json(item)
 		} catch (err) {
-			const message = err instanceof Error ? err.message : String(err)
-			return jsonError(c, 500, "LIFECYCLE_GET_FAILED", message)
+			return internalError(c, err, "LIFECYCLE_GET_FAILED")
 		}
 	})
 
@@ -1011,8 +1136,7 @@ export function createV1Router(): Hono {
 			}
 			return c.json(item)
 		} catch (err) {
-			const message = err instanceof Error ? err.message : String(err)
-			return jsonError(c, 500, "LIFECYCLE_UPDATE_FAILED", message)
+			return internalError(c, err, "LIFECYCLE_UPDATE_FAILED")
 		}
 	})
 
@@ -1051,8 +1175,7 @@ export function createV1Router(): Hono {
 			}
 			return c.json(item)
 		} catch (err) {
-			const message = err instanceof Error ? err.message : String(err)
-			return jsonError(c, 500, "LIFECYCLE_DELETE_FAILED", message)
+			return internalError(c, err, "LIFECYCLE_DELETE_FAILED")
 		}
 	})
 
@@ -1091,8 +1214,7 @@ export function createV1Router(): Hono {
 			}
 			return c.json(history)
 		} catch (err) {
-			const message = err instanceof Error ? err.message : String(err)
-			return jsonError(c, 500, "LIFECYCLE_HISTORY_FAILED", message)
+			return internalError(c, err, "LIFECYCLE_HISTORY_FAILED")
 		}
 	})
 
@@ -1138,8 +1260,7 @@ export function createV1Router(): Hono {
 			}
 			return c.json(item)
 		} catch (err) {
-			const message = err instanceof Error ? err.message : String(err)
-			return jsonError(c, 500, "PROCEDURE_OUTCOME_FAILED", message)
+			return internalError(c, err, "PROCEDURE_OUTCOME_FAILED")
 		}
 	})
 
@@ -1220,8 +1341,7 @@ export function createV1Router(): Hono {
 			}
 			return c.json(item)
 		} catch (err) {
-			const message = err instanceof Error ? err.message : String(err)
-			return jsonError(c, 500, "MEMORY_FEEDBACK_FAILED", message)
+			return internalError(c, err, "MEMORY_FEEDBACK_FAILED")
 		}
 	})
 
@@ -1339,8 +1459,7 @@ export function createV1Router(): Hono {
 			})
 			return c.json(result)
 		} catch (err) {
-			const message = err instanceof Error ? err.message : String(err)
-			return jsonError(c, 500, "SEARCH_DETAILED_FAILED", message)
+			return internalError(c, err, "SEARCH_DETAILED_FAILED")
 		}
 	})
 
@@ -1359,8 +1478,7 @@ export function createV1Router(): Hono {
 			})
 			return c.json(slate)
 		} catch (err) {
-			const message = err instanceof Error ? err.message : String(err)
-			return jsonError(c, 500, "ACTIVE_SLATE_FAILED", message)
+			return internalError(c, err, "ACTIVE_SLATE_FAILED")
 		}
 	})
 
@@ -1400,8 +1518,7 @@ export function createV1Router(): Hono {
 			})
 			return c.json(projection)
 		} catch (err) {
-			const message = err instanceof Error ? err.message : String(err)
-			return jsonError(c, 500, "DISCOVERY_PROJECTION_FAILED", message)
+			return internalError(c, err, "DISCOVERY_PROJECTION_FAILED")
 		}
 	})
 
@@ -1466,8 +1583,7 @@ export function createV1Router(): Hono {
 			})
 			return c.json(bundle)
 		} catch (err) {
-			const message = err instanceof Error ? err.message : String(err)
-			return jsonError(c, 500, "CONTEXT_BUNDLE_FAILED", message)
+			return internalError(c, err, "CONTEXT_BUNDLE_FAILED")
 		}
 	})
 
@@ -1486,8 +1602,7 @@ export function createV1Router(): Hono {
 			})
 			return c.json(out)
 		} catch (err) {
-			const message = err instanceof Error ? err.message : String(err)
-			return jsonError(c, 500, "READ_FILE_FAILED", message)
+			return internalError(c, err, "READ_FILE_FAILED")
 		}
 	})
 
@@ -1501,20 +1616,20 @@ export function createV1Router(): Hono {
 		if (scopeError) {
 			return jsonError(c, 400, "VALIDATION_ERROR", scopeError)
 		}
-		const metadata =
-			typeof body.metadata === "object" &&
-			body.metadata !== null &&
-			!Array.isArray(body.metadata)
-				? (body.metadata as Record<string, unknown>)
-				: undefined
+		// P2.8: metadata is stored verbatim — reject operator-shaped keys.
+		const metadata = validateMetadata(body.metadata)
+		if (!metadata.ok) {
+			return jsonError(c, 400, "VALIDATION_ERROR", metadata.message)
+		}
 		try {
 			const out = await memongoBridgeAdd({
 				content,
 				agentId: await readAgentId(c),
 				sessionId: await readSessionId(c),
-				metadata,
+				metadata: metadata.value,
 				scope: await readScope(c),
 				scopeRef: await readScopeRef(c),
+				idempotencyKey: readIdempotencyKey(c, body),
 			})
 			return c.json({
 				ok: true,
@@ -1523,7 +1638,10 @@ export function createV1Router(): Hono {
 			})
 		} catch (err) {
 			const message = err instanceof Error ? err.message : String(err)
-			return jsonError(c, 500, "ADD_FAILED", message)
+			if (isIdempotencyConflictError(err)) {
+				return jsonError(c, 422, "IDEMPOTENCY_CONFLICT", message)
+			}
+			return internalError(c, err, "ADD_FAILED")
 		}
 	})
 
@@ -1573,12 +1691,11 @@ export function createV1Router(): Hono {
 		if (scopeError) {
 			return jsonError(c, 400, "VALIDATION_ERROR", scopeError)
 		}
-		const metadata =
-			typeof body.metadata === "object" &&
-			body.metadata !== null &&
-			!Array.isArray(body.metadata)
-				? (body.metadata as Record<string, unknown>)
-				: undefined
+		// P2.8: metadata is stored verbatim — reject operator-shaped keys.
+		const metadata = validateMetadata(body.metadata)
+		if (!metadata.ok) {
+			return jsonError(c, 400, "VALIDATION_ERROR", metadata.message)
+		}
 		const scope = await readScope(c)
 		try {
 			const out = await memongoBridgeWriteConversationEvent({
@@ -1589,9 +1706,10 @@ export function createV1Router(): Hono {
 				timestamp: timestamp?.toISOString(),
 				validAt: validAt?.toISOString(),
 				invalidAt: invalidAt?.toISOString(),
-				metadata,
+				metadata: metadata.value,
 				scope,
 				scopeRef: await readScopeRef(c),
+				idempotencyKey: readIdempotencyKey(c, body),
 			})
 			return c.json({
 				ok: true,
@@ -1600,7 +1718,10 @@ export function createV1Router(): Hono {
 			})
 		} catch (err) {
 			const message = err instanceof Error ? err.message : String(err)
-			return jsonError(c, 500, "WRITE_EVENT_FAILED", message)
+			if (isIdempotencyConflictError(err)) {
+				return jsonError(c, 422, "IDEMPOTENCY_CONFLICT", message)
+			}
+			return internalError(c, err, "WRITE_EVENT_FAILED")
 		}
 	})
 
@@ -1624,47 +1745,49 @@ export function createV1Router(): Hono {
 			if (err instanceof Error && err.name === "EventNotInScopeError") {
 				return jsonError(c, 404, "EVENT_NOT_FOUND", message)
 			}
-			return jsonError(c, 500, "EXTRACT_FAILED", message)
+			return internalError(c, err, "EXTRACT_FAILED")
 		}
 	})
 
 	v1.post("/write-structured", async (c) => {
 		const body = (await readJsonBody(c)) as Record<string, unknown>
-		const entry = body.entry
-		if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
-			return jsonError(c, 400, "VALIDATION_ERROR", "entry object is required")
+		// P2.8: validate the entry instead of casting — a missing key used to
+		// land `undefined` in the MongoDB identity filter.
+		const entry = validateWithSchema(structuredEntrySchema, body.entry, "entry")
+		if (!entry.ok) {
+			return jsonError(c, 400, "VALIDATION_ERROR", entry.message)
 		}
 		try {
 			const out = await memongoBridgeWriteStructuredMemory({
 				agentId: await readAgentId(c),
 				scope: await readScope(c),
 				scopeRef: await readScopeRef(c),
-				entry: entry as StructuredMemoryEntry,
+				entry: entry.value as StructuredMemoryEntry,
 			})
 			return c.json(out)
 		} catch (err) {
-			const message = err instanceof Error ? err.message : String(err)
-			return jsonError(c, 500, "WRITE_STRUCTURED_FAILED", message)
+			return internalError(c, err, "WRITE_STRUCTURED_FAILED")
 		}
 	})
 
 	v1.post("/write-procedure", async (c) => {
 		const body = (await readJsonBody(c)) as Record<string, unknown>
-		const entry = body.entry
-		if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
-			return jsonError(c, 400, "VALIDATION_ERROR", "entry object is required")
+		// P2.8: validate the entry instead of casting — procedureId feeds the
+		// MongoDB identity filter the same way `key` does for structured memory.
+		const entry = validateWithSchema(procedureEntrySchema, body.entry, "entry")
+		if (!entry.ok) {
+			return jsonError(c, 400, "VALIDATION_ERROR", entry.message)
 		}
 		try {
 			const out = await memongoBridgeWriteProcedure({
 				agentId: await readAgentId(c),
 				scope: await readScope(c),
 				scopeRef: await readScopeRef(c),
-				entry: entry as ProcedureEntry,
+				entry: entry.value as ProcedureEntry,
 			})
 			return c.json(out)
 		} catch (err) {
-			const message = err instanceof Error ? err.message : String(err)
-			return jsonError(c, 500, "WRITE_PROCEDURE_FAILED", message)
+			return internalError(c, err, "WRITE_PROCEDURE_FAILED")
 		}
 	})
 
@@ -1692,8 +1815,7 @@ export function createV1Router(): Hono {
 			})
 			return c.json(profile)
 		} catch (err) {
-			const message = err instanceof Error ? err.message : String(err)
-			return jsonError(c, 500, "PROFILE_FAILED", message)
+			return internalError(c, err, "PROFILE_FAILED")
 		}
 	})
 
@@ -1709,8 +1831,7 @@ export function createV1Router(): Hono {
 			const state = await memongoBridgeGetState({ agentId, scope, scopeRef })
 			return c.json(state)
 		} catch (err) {
-			const message = err instanceof Error ? err.message : String(err)
-			return jsonError(c, 500, "STATE_FAILED", message)
+			return internalError(c, err, "STATE_FAILED")
 		}
 	})
 
@@ -1720,8 +1841,7 @@ export function createV1Router(): Hono {
 			const status = await memongoBridgeStatus({ agentId })
 			return c.json(status)
 		} catch (err) {
-			const message = err instanceof Error ? err.message : String(err)
-			return jsonError(c, 500, "STATUS_FAILED", message)
+			return internalError(c, err, "STATUS_FAILED")
 		}
 	})
 
@@ -1731,8 +1851,7 @@ export function createV1Router(): Hono {
 			const status = await memongoBridgeGetDetailedStatus({ agentId })
 			return c.json(status)
 		} catch (err) {
-			const message = err instanceof Error ? err.message : String(err)
-			return jsonError(c, 500, "DETAILED_STATUS_FAILED", message)
+			return internalError(c, err, "DETAILED_STATUS_FAILED")
 		}
 	})
 
@@ -1742,8 +1861,7 @@ export function createV1Router(): Hono {
 			const stats = await memongoBridgeStats({ agentId })
 			return c.json(stats)
 		} catch (err) {
-			const message = err instanceof Error ? err.message : String(err)
-			return jsonError(c, 500, "STATS_FAILED", message)
+			return internalError(c, err, "STATS_FAILED")
 		}
 	})
 
@@ -1757,8 +1875,7 @@ export function createV1Router(): Hono {
 			})
 			return c.json({ ok: true })
 		} catch (err) {
-			const message = err instanceof Error ? err.message : String(err)
-			return jsonError(c, 500, "SYNC_FAILED", message)
+			return internalError(c, err, "SYNC_FAILED")
 		}
 	})
 
@@ -1768,8 +1885,7 @@ export function createV1Router(): Hono {
 			const result = await memongoBridgeProbeEmbedding({ agentId })
 			return c.json(result)
 		} catch (err) {
-			const message = err instanceof Error ? err.message : String(err)
-			return jsonError(c, 500, "PROBE_EMBEDDING_FAILED", message)
+			return internalError(c, err, "PROBE_EMBEDDING_FAILED")
 		}
 	})
 
@@ -1779,8 +1895,7 @@ export function createV1Router(): Hono {
 			const ok = await memongoBridgeProbeVector({ agentId })
 			return c.json({ ok })
 		} catch (err) {
-			const message = err instanceof Error ? err.message : String(err)
-			return jsonError(c, 500, "PROBE_VECTOR_FAILED", message)
+			return internalError(c, err, "PROBE_VECTOR_FAILED")
 		}
 	})
 
@@ -1811,8 +1926,7 @@ export function createV1Router(): Hono {
 			})
 			return c.json(out)
 		} catch (err) {
-			const message = err instanceof Error ? err.message : String(err)
-			return jsonError(c, 500, "RELEVANCE_EXPLAIN_FAILED", message)
+			return internalError(c, err, "RELEVANCE_EXPLAIN_FAILED")
 		}
 	})
 
@@ -1899,7 +2013,10 @@ export function createV1Router(): Hono {
 			}
 		} catch (err) {
 			const message = err instanceof Error ? err.message : String(err)
-			return jsonError(c, 500, "RELEVANCE_BENCHMARK_FAILED", message)
+			if (isDatasetPathValidationError(err)) {
+				return jsonError(c, 400, "VALIDATION_ERROR", message)
+			}
+			return internalError(c, err, "RELEVANCE_BENCHMARK_FAILED")
 		}
 	})
 
@@ -1927,7 +2044,10 @@ export function createV1Router(): Hono {
 			return c.json(out)
 		} catch (err) {
 			const message = err instanceof Error ? err.message : String(err)
-			return jsonError(c, 500, "BENCHMARK_INGEST_FAILED", message)
+			if (isDatasetPathValidationError(err)) {
+				return jsonError(c, 400, "VALIDATION_ERROR", message)
+			}
+			return internalError(c, err, "BENCHMARK_INGEST_FAILED")
 		}
 	})
 
@@ -1942,8 +2062,7 @@ export function createV1Router(): Hono {
 			})
 			return c.json(out)
 		} catch (err) {
-			const message = err instanceof Error ? err.message : String(err)
-			return jsonError(c, 500, "RELEVANCE_REPORT_FAILED", message)
+			return internalError(c, err, "RELEVANCE_REPORT_FAILED")
 		}
 	})
 
@@ -1953,8 +2072,7 @@ export function createV1Router(): Hono {
 			const out = await memongoBridgeRelevanceSampleRate({ agentId })
 			return c.json(out)
 		} catch (err) {
-			const message = err instanceof Error ? err.message : String(err)
-			return jsonError(c, 500, "RELEVANCE_SAMPLE_RATE_FAILED", message)
+			return internalError(c, err, "RELEVANCE_SAMPLE_RATE_FAILED")
 		}
 	})
 
@@ -1983,8 +2101,7 @@ export function createV1Router(): Hono {
 			})
 			return c.json(out)
 		} catch (err) {
-			const message = err instanceof Error ? err.message : String(err)
-			return jsonError(c, 500, "ACCESS_TRENDS_FAILED", message)
+			return internalError(c, err, "ACCESS_TRENDS_FAILED")
 		}
 	})
 
@@ -2017,8 +2134,7 @@ export function createV1Router(): Hono {
 			})
 			return c.json(out)
 		} catch (err) {
-			const message = err instanceof Error ? err.message : String(err)
-			return jsonError(c, 500, "ACCESS_SUMMARIES_FAILED", message)
+			return internalError(c, err, "ACCESS_SUMMARIES_FAILED")
 		}
 	})
 
@@ -2032,8 +2148,7 @@ export function createV1Router(): Hono {
 			})
 			return c.json(traces)
 		} catch (err) {
-			const message = err instanceof Error ? err.message : String(err)
-			return jsonError(c, 500, "TRACE_LIST_FAILED", message)
+			return internalError(c, err, "TRACE_LIST_FAILED")
 		}
 	})
 
@@ -2052,8 +2167,7 @@ export function createV1Router(): Hono {
 			}
 			return c.json(trace)
 		} catch (err) {
-			const message = err instanceof Error ? err.message : String(err)
-			return jsonError(c, 500, "TRACE_GET_FAILED", message)
+			return internalError(c, err, "TRACE_GET_FAILED")
 		}
 	})
 
@@ -2085,8 +2199,7 @@ export function createV1Router(): Hono {
 			})
 			return c.json(jobs)
 		} catch (err) {
-			const message = err instanceof Error ? err.message : String(err)
-			return jsonError(c, 500, "JOB_LIST_FAILED", message)
+			return internalError(c, err, "JOB_LIST_FAILED")
 		}
 	})
 
@@ -2105,8 +2218,7 @@ export function createV1Router(): Hono {
 			}
 			return c.json(job)
 		} catch (err) {
-			const message = err instanceof Error ? err.message : String(err)
-			return jsonError(c, 500, "JOB_GET_FAILED", message)
+			return internalError(c, err, "JOB_GET_FAILED")
 		}
 	})
 
@@ -2130,8 +2242,7 @@ export function createV1Router(): Hono {
 			})
 			return c.json(chain)
 		} catch (err) {
-			const message = err instanceof Error ? err.message : String(err)
-			return jsonError(c, 500, "CHAIN_TRACE_FAILED", message)
+			return internalError(c, err, "CHAIN_TRACE_FAILED")
 		}
 	})
 
@@ -2146,8 +2257,7 @@ export function createV1Router(): Hono {
 			})
 			return c.json(report)
 		} catch (err) {
-			const message = err instanceof Error ? err.message : String(err)
-			return jsonError(c, 500, "NOVELTY_SCAN_FAILED", message)
+			return internalError(c, err, "NOVELTY_SCAN_FAILED")
 		}
 	})
 
@@ -2167,8 +2277,7 @@ export function createV1Router(): Hono {
 			})
 			return c.json(result)
 		} catch (err) {
-			const message = err instanceof Error ? err.message : String(err)
-			return jsonError(c, 500, "CONSOLIDATE_FAILED", message)
+			return internalError(c, err, "CONSOLIDATE_FAILED")
 		}
 	})
 
@@ -2213,7 +2322,7 @@ export function createV1Router(): Hono {
 			if (err instanceof Error && err.name === "SelfEditRejectedError") {
 				return jsonError(c, 422, "SELF_EDIT_REJECTED", message)
 			}
-			return jsonError(c, 500, "SELF_EDIT_FAILED", message)
+			return internalError(c, err, "SELF_EDIT_FAILED")
 		}
 	})
 

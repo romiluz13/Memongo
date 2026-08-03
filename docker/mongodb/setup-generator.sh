@@ -7,8 +7,10 @@ template_file="${MONGOT_TEMPLATE_FILE:-$template_dir/mongot.conf}"
 generated_file="${MONGOT_GENERATED_FILE:-$auth_dir/mongot.generated.yml}"
 provider_endpoint="${MONGOT_EMBEDDING_PROVIDER_ENDPOINT:-https://ai.mongodb.com/v1/embeddings}"
 
-mongot_password="${MONGOT_PASSWORD:-mongotPassword}"
-admin_password="${ADMIN_PASSWORD:-admin}"
+# Fail closed: passwords must be provided by the environment (compose
+# enforces this via ${VAR:?}); there are no safe defaults.
+mongot_password="${MONGOT_PASSWORD:?set MONGOT_PASSWORD}"
+admin_password="${ADMIN_PASSWORD:?set ADMIN_PASSWORD}"
 query_key="${VOYAGE_API_QUERY_KEY:-${VOYAGE_API_KEY:-}}"
 indexing_key="${VOYAGE_API_INDEXING_KEY:-${VOYAGE_API_KEY:-}}"
 mongo_uid="${MONGODB_UID:-1000}"

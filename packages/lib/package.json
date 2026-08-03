@@ -38,10 +38,12 @@
 	},
 	"scripts": {
 		"build": "node ../../node_modules/typescript/bin/tsc -p tsconfig.json",
-		"check-types": "node ../../node_modules/typescript/bin/tsc --noEmit -p tsconfig.json"
+		"check-types": "node ../../node_modules/typescript/bin/tsc --noEmit -p tsconfig.json",
+		"test": "vitest run"
 	},
 	"devDependencies": {
-		"typescript": "^5.8.0"
+		"typescript": "^5.8.0",
+		"vitest": "^4.1.0"
 	},
 	"homepage": "https://github.com/romiluz13/memongo#readme",
 	"bugs": {

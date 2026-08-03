@@ -94,6 +94,9 @@ export class AccessTracker {
 			}
 			void this.startBackgroundFlush("interval")
 		}, this.config.flushIntervalMs)
+		// P2.5(e): a periodic flush must never hold the event loop open on
+		// shutdown — the manager's close() flushes deterministically.
+		this.timer.unref?.()
 	}
 
 	recordAccess(id: string, collection: AccessEventCollection): void {

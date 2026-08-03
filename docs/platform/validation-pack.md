@@ -62,7 +62,7 @@ This validates:
 Use managed Atlas cloud for the control lane:
 
 ```bash
-export MEMONGO_MONGODB_URI="mongodb+srv://<user>:<password>@<cluster>.mongodb.net/?appName=memongo"
+export MEMONGO_MONGODB_URI="mongodb+srv://<cluster>.mongodb.net/?appName=memongo"
 export VOYAGE_API_KEY="al-your-atlas-model-api-key"
 bun run mongodb:parity
 ```
@@ -93,10 +93,10 @@ These lanes are real but environment-specific:
 - Auto-embed/search:
   `packages/memory-engine/src/real-e2e-v2.e2e.test.ts` against managed Atlas cloud or the preview stack with a valid `al-...` Atlas Model key.
 - Replica-set-only:
-  `packages/memory-engine/src/mongodb-e2e.e2e.test.ts` against `docker/mongodb/docker-compose.mongodb.yml` `replicaset` or `fullstack` using:
+  `packages/memory-engine/src/mongodb-e2e.e2e.test.ts` against `docker/mongodb/docker-compose.mongodb.yml` `replicaset` or `fullstack` (requires `ADMIN_PASSWORD` and `MONGOT_PASSWORD` to be set — no defaults) using:
 
 ```bash
-MONGODB_TEST_URI="mongodb://admin:admin@localhost:27017/memongo?authSource=admin&replicaSet=rs0&directConnection=true"
+MONGODB_TEST_URI="mongodb://admin@localhost:27017/memongo?authSource=admin&replicaSet=rs0&directConnection=true"
 ```
 
 ### 6. `real-agent`

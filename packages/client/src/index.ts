@@ -64,6 +64,7 @@ export type {
 	MemongoRelevanceSampleRateResponse,
 	MemongoRecallTrace,
 	MemongoScanNoveltyInput,
+	MemongoScope,
 	MemongoSearchInput,
 	MemongoSearchKBResponse,
 	MemongoSearchResponse,

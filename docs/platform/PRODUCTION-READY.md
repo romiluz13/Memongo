@@ -44,7 +44,7 @@ Use a real MongoDB stack for the core live path.
 Managed Atlas cloud is the control lane for serious benchmark and release validation:
 
 ```bash
-export MEMONGO_MONGODB_URI="mongodb+srv://<user>:<password>@<cluster>.mongodb.net/?appName=memongo"
+export MEMONGO_MONGODB_URI="mongodb+srv://<cluster>.mongodb.net/?appName=memongo"
 export VOYAGE_API_KEY="al-your-atlas-model-api-key"
 bun run mongodb:parity
 ```
@@ -76,10 +76,10 @@ Capability lanes are separate from the core release lane and must be run with th
 - Auto-embed/search lane:
   Requires managed Atlas cloud or `docker/mongodb/docker-compose.preview.yml` and an Atlas Model key with the `al-...` prefix. A direct Voyage `pa-...` key is not a valid MongoDB auto-embed environment.
 - Replica-set-only lane:
-  Use `docker/mongodb/docker-compose.mongodb.yml` `replicaset` or `fullstack`, then run `packages/memory-engine/src/mongodb-e2e.e2e.test.ts` with:
+  Use `docker/mongodb/docker-compose.mongodb.yml` `replicaset` or `fullstack` (requires `ADMIN_PASSWORD` and `MONGOT_PASSWORD` to be set — no defaults), then run `packages/memory-engine/src/mongodb-e2e.e2e.test.ts` with:
 
 ```bash
-MONGODB_TEST_URI="mongodb://admin:admin@localhost:27017/memongo?authSource=admin&replicaSet=rs0&directConnection=true"
+MONGODB_TEST_URI="mongodb://admin@localhost:27017/memongo?authSource=admin&replicaSet=rs0&directConnection=true"
 ```
 
 This lane covers transactions, change streams, and other replica-set-specific behavior. Do not treat the preview connection string as proof for those features unless that lane is green too.

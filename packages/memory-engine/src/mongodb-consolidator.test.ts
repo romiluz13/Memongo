@@ -11,6 +11,7 @@ function mockCollection(
 ): Collection {
 	return {
 		findOne: vi.fn(async () => null),
+		findOneAndUpdate: vi.fn(async () => ({ status: "running" })),
 		find: vi.fn(() => ({
 			sort: vi.fn(() => ({
 				limit: vi.fn(() => ({
@@ -153,7 +154,14 @@ describe("consolidateMemory", () => {
 
 	it("rate-limits within minIntervalMs", async () => {
 		const { consolidateMemory } = await import("./mongodb-consolidator.js")
+		// The gate doc exists but its last run completed inside minIntervalMs,
+		// so the claim upsert collides on uq_consolidation_runs_gate.
 		const consolidationRunsCol = mockCollection({
+			findOneAndUpdate: vi.fn(async () => {
+				throw Object.assign(new Error("E11000 duplicate key error"), {
+					code: 11000,
+				})
+			}),
 			findOne: vi.fn(async () => ({
 				agentId: "agent-1",
 				status: "completed",
@@ -175,19 +183,7 @@ describe("consolidateMemory", () => {
 
 	it("does not let a recent run in another scope rate-limit this tenant", async () => {
 		const { consolidateMemory } = await import("./mongodb-consolidator.js")
-		const consolidationRunsCol = mockCollection({
-			findOne: vi.fn(async (filter: Document) =>
-				filter.scope === "tenant" && filter.scopeRef === "tenant:A"
-					? null
-					: {
-							agentId: "agent-1",
-							scope: "tenant",
-							scopeRef: "tenant:B",
-							status: "completed",
-							startedAt: new Date(),
-						},
-			),
-		})
+		const consolidationRunsCol = mockCollection()
 		const eventsCol = mockCollection()
 		const db = mockDb({
 			test_consolidation_runs: consolidationRunsCol,
@@ -205,7 +201,185 @@ describe("consolidateMemory", () => {
 			},
 		})
 
-		expect(consolidationRunsCol.insertOne).toHaveBeenCalledOnce()
+		// The gate is keyed on the full scope identity, so another scope's
+		// recent run lives under a different gateKey and cannot collide.
+		expect(consolidationRunsCol.findOneAndUpdate).toHaveBeenCalledWith(
+			expect.objectContaining({
+				gateKey: `agent-1tenanttenant:A`,
+			}),
+			expect.any(Array),
+			expect.objectContaining({ upsert: true }),
+		)
+	})
+
+	describe("phase-0 gate lease (P0.2)", () => {
+		/**
+		 * Minimal server emulation for the gate claim: applies the claim filter's
+		 * $or clauses against a stored gate doc, simulates the upsert-insert when
+		 * no doc exists (applying the pipeline's lease fields as the server
+		 * would), and raises E11000 when the doc exists but is not claimable —
+		 * exactly what uq_consolidation_runs_gate does on a lost race.
+		 */
+		function makeStatefulGate(initialDoc: Document | null) {
+			let doc = initialDoc
+			const col = mockCollection({
+				findOneAndUpdate: vi.fn(async (filter: Document) => {
+					const clauses = (filter.$or ?? []) as Document[]
+					const matches =
+						doc !== null &&
+						clauses.some((c) => {
+							if (c.status !== doc.status) {
+								return false
+							}
+							if (c.startedAt?.$lte instanceof Date) {
+								return (
+									doc.startedAt instanceof Date &&
+									doc.startedAt <= c.startedAt.$lte
+								)
+							}
+							if (c.leaseExpiresAt?.$lte instanceof Date) {
+								return (
+									doc.leaseExpiresAt instanceof Date &&
+									doc.leaseExpiresAt <= c.leaseExpiresAt.$lte
+								)
+							}
+							if (c.leaseExpiresAt?.$exists === false) {
+								return doc.leaseExpiresAt === undefined
+							}
+							return false
+						})
+					if (matches) {
+						doc = {
+							...doc,
+							status: "running",
+							leaseToken: "claimed",
+							leaseExpiresAt: new Date(Date.now() + 900_000),
+						}
+						return doc
+					}
+					if (doc !== null) {
+						throw Object.assign(new Error("E11000 duplicate key error"), {
+							code: 11000,
+						})
+					}
+					// upsert-insert: the pipeline stamps lease fields server-side
+					doc = {
+						gateKey: filter.gateKey,
+						status: "running",
+						leaseToken: "claimed",
+						leaseExpiresAt: new Date(Date.now() + 900_000),
+					}
+					return doc
+				}),
+				findOne: vi.fn(async () => doc),
+			})
+			return col
+		}
+
+		it("claims the gate atomically when two runs race: exactly one proceeds", async () => {
+			const { consolidateMemory } = await import("./mongodb-consolidator.js")
+			const consolidationRunsCol = makeStatefulGate(null)
+			const eventsCol = mockCollection()
+			const db = mockDb({
+				test_consolidation_runs: consolidationRunsCol,
+				test_events: eventsCol,
+			})
+
+			const [a, b] = await Promise.all([
+				consolidateMemory({ db, prefix: "test_", agentId: "agent-1" }),
+				consolidateMemory({ db, prefix: "test_", agentId: "agent-1" }),
+			])
+
+			expect(consolidationRunsCol.findOneAndUpdate).toHaveBeenCalledTimes(2)
+			// Exactly one run made it past the gate to the events query.
+			expect(eventsCol.find).toHaveBeenCalledTimes(1)
+			expect(a.eventsProcessed).toBe(0)
+			expect(b.eventsProcessed).toBe(0)
+		})
+
+		it("re-claims a crashed run once its lease has expired", async () => {
+			const { consolidateMemory } = await import("./mongodb-consolidator.js")
+			// Crashed 5 minutes ago (would be rate-limited by startedAt alone),
+			// but its lease is long expired — the gate must be claimable.
+			const consolidationRunsCol = makeStatefulGate({
+				gateKey: "agent-1\0",
+				agentId: "agent-1",
+				status: "running",
+				startedAt: new Date(Date.now() - 5 * 60_000),
+				leaseExpiresAt: new Date(Date.now() - 10 * 60_000),
+			})
+			const eventsCol = mockCollection()
+			const db = mockDb({
+				test_consolidation_runs: consolidationRunsCol,
+				test_events: eventsCol,
+			})
+
+			await consolidateMemory({ db, prefix: "test_", agentId: "agent-1" })
+
+			expect(consolidationRunsCol.findOneAndUpdate).toHaveBeenCalledOnce()
+			expect(eventsCol.find).toHaveBeenCalledTimes(1)
+		})
+
+		it("does not claim a gate whose lease is still live", async () => {
+			const { consolidateMemory } = await import("./mongodb-consolidator.js")
+			const consolidationRunsCol = makeStatefulGate({
+				gateKey: "agent-1\0",
+				agentId: "agent-1",
+				status: "running",
+				startedAt: new Date(),
+				leaseExpiresAt: new Date(Date.now() + 10 * 60_000),
+			})
+			const eventsCol = mockCollection()
+			const db = mockDb({
+				test_consolidation_runs: consolidationRunsCol,
+				test_events: eventsCol,
+			})
+
+			const result = await consolidateMemory({
+				db,
+				prefix: "test_",
+				agentId: "agent-1",
+			})
+
+			expect(result.eventsProcessed).toBe(0)
+			expect(consolidationRunsCol.findOneAndUpdate).toHaveBeenCalledOnce()
+			expect(eventsCol.find).not.toHaveBeenCalled()
+		})
+
+		it("fences run completion by lease token", async () => {
+			const { consolidateMemory } = await import("./mongodb-consolidator.js")
+			const consolidationRunsCol = mockCollection({
+				updateOne: vi.fn(
+					async () => ({ matchedCount: 0, modifiedCount: 0 }) as UpdateResult,
+				),
+			})
+			const eventsCol = mockCollection()
+			const db = mockDb({
+				test_consolidation_runs: consolidationRunsCol,
+				test_events: eventsCol,
+			})
+
+			await consolidateMemory({ db, prefix: "test_", agentId: "agent-1" })
+
+			expect(consolidationRunsCol.updateOne).toHaveBeenCalledWith(
+				expect.objectContaining({
+					gateKey: expect.any(String),
+					runId: expect.any(String),
+					status: "running",
+					leaseToken: expect.any(String),
+					leaseExpiresAt: expect.objectContaining({
+						$gt: expect.any(Date),
+					}),
+				}),
+				expect.objectContaining({
+					$set: expect.objectContaining({ status: "completed" }),
+					$unset: expect.objectContaining({ leaseToken: "" }),
+				}),
+				expect.objectContaining({
+					writeConcern: expect.objectContaining({ w: "majority" }),
+				}),
+			)
+		})
 	})
 
 	it("returns empty result when no unprocessed events", async () => {
@@ -357,6 +531,7 @@ describe("consolidateMemory", () => {
 					eventsProcessed: 1,
 				}),
 			}),
+			expect.anything(),
 		)
 	})
 
@@ -912,22 +1087,29 @@ describe("consolidateMemory", () => {
 			agentId: "agent-1",
 		})
 
-		// Should have called insertOne (run start) and updateOne (run completion)
-		expect(consolidationRunsCol.insertOne).toHaveBeenCalledWith(
+		// Should have claimed the gate atomically (run start) and recorded
+		// completion through the lease fence (run completion).
+		expect(consolidationRunsCol.findOneAndUpdate).toHaveBeenCalledWith(
 			expect.objectContaining({
-				agentId: "agent-1",
-				status: "running",
+				gateKey: expect.any(String),
+				$or: expect.any(Array),
 			}),
+			expect.any(Array),
+			expect.objectContaining({ upsert: true }),
 		)
 		expect(consolidationRunsCol.updateOne).toHaveBeenCalledWith(
 			expect.objectContaining({
+				gateKey: expect.any(String),
 				runId: expect.any(String),
+				status: "running",
+				leaseToken: expect.any(String),
 			}),
 			expect.objectContaining({
 				$set: expect.objectContaining({
 					status: "completed",
 				}),
 			}),
+			expect.anything(),
 		)
 	})
 

@@ -1923,5 +1923,149 @@ describe("mongodb-graph", () => {
 				expect(limitStage!.$limit).toBe(10)
 			})
 		})
+
+		describe("bulkWrite duplicate-key recovery (P2.5 c)", () => {
+			it("retries a losing entity upsert as a plain update so its side effects land on the winner", async () => {
+				// The winner's document: a concurrent extractor already committed
+				// the insert for the same unique identity.
+				const winnerDoc: Document = {
+					entityId: "ent-winner",
+					name: "alice",
+					type: "person",
+					agentId: "agent-1",
+					scope: "agent",
+					scopeRef: "agent:agent-1",
+					mentionCount: 1,
+					createdAt: new Date("2026-04-09T10:00:00.000Z"),
+					extractedAt: new Date("2026-04-09T10:00:00.000Z"),
+					confidenceSource: "inferred",
+					updatedAt: new Date("2026-04-09T10:00:00.000Z"),
+				}
+				const updateOne = vi.fn(
+					async (
+						_filter: Document,
+						update: Document,
+						options?: { upsert?: boolean },
+					) => {
+						expect(options?.upsert).toBe(false)
+						if (update.$set) {
+							Object.assign(winnerDoc, update.$set)
+						}
+						if (update.$inc) {
+							for (const [key, amount] of Object.entries(update.$inc)) {
+								winnerDoc[key] = Number(winnerDoc[key] ?? 0) + Number(amount)
+							}
+						}
+						return { matchedCount: 1, modifiedCount: 1, upsertedCount: 0 }
+					},
+				)
+				const entitiesCol = createMockCollection({
+					// Single-op batch: the driver surfaces the loser's E11000 as a
+					// plain duplicate-key server error.
+					bulkWrite: vi.fn().mockRejectedValue(
+						Object.assign(new Error("E11000 duplicate key error"), {
+							code: 11000,
+						}),
+					),
+					updateOne,
+				})
+				const db = createMockDb({
+					[`${PREFIX}entities`]: entitiesCol,
+					[`${PREFIX}relations`]: createMockCollection(),
+					[`${PREFIX}entity_links`]: createMockCollection(),
+				})
+
+				const result = await extractAndUpsertEntities({
+					db,
+					prefix: PREFIX,
+					agentId: "agent-1",
+					eventContent: "Talked to @alice about the project",
+					scope: "agent",
+				})
+
+				expect(result.entities).toHaveLength(1)
+				expect(updateOne).toHaveBeenCalledOnce()
+				const [filter] = updateOne.mock.calls[0] as [Document]
+				expect(filter).toEqual({
+					entityId: result.entities[0].entityId,
+					agentId: "agent-1",
+					scope: "agent",
+					scopeRef: "agent:agent-1",
+				})
+				// The losing op's $inc was not silently dropped: the final state
+				// reflects BOTH the winner's insert and the loser's mention.
+				expect(winnerDoc.mentionCount).toBe(2)
+			})
+
+			it("retries only the duplicate-key writeErrors of a multi-op batch", async () => {
+				const updateOne = vi.fn().mockResolvedValue({
+					matchedCount: 1,
+					modifiedCount: 1,
+					upsertedCount: 0,
+				})
+				const entitiesCol = createMockCollection({
+					bulkWrite: vi.fn().mockRejectedValue(
+						Object.assign(new Error("batch failed"), {
+							writeErrors: [
+								{ index: 1, code: 11000, errmsg: "E11000 duplicate key" },
+							],
+						}),
+					),
+					updateOne,
+				})
+				const db = createMockDb({
+					[`${PREFIX}entities`]: entitiesCol,
+					[`${PREFIX}relations`]: createMockCollection(),
+					[`${PREFIX}entity_links`]: createMockCollection(),
+				})
+
+				const result = await extractAndUpsertEntities({
+					db,
+					prefix: PREFIX,
+					agentId: "agent-1",
+					eventContent: "Working on #frontend #refactor today",
+					scope: "agent",
+				})
+
+				expect(result.entities).toHaveLength(2)
+				// Only the losing op (index 1) is replayed, as a plain update.
+				expect(updateOne).toHaveBeenCalledOnce()
+				const [filter, , options] = updateOne.mock.calls[0] as [
+					Document,
+					Document,
+					{ upsert?: boolean },
+				]
+				expect(filter.entityId).toBe(result.entities[1].entityId)
+				expect(options?.upsert).toBe(false)
+			})
+
+			it("keeps warn-and-continue for non-duplicate bulk failures (no retry)", async () => {
+				const updateOne = vi.fn()
+				const entitiesCol = createMockCollection({
+					bulkWrite: vi.fn().mockRejectedValue(
+						Object.assign(new Error("batch failed"), {
+							writeErrors: [{ index: 0, code: 42, errmsg: "some other error" }],
+						}),
+					),
+					updateOne,
+				})
+				const db = createMockDb({
+					[`${PREFIX}entities`]: entitiesCol,
+					[`${PREFIX}relations`]: createMockCollection(),
+					[`${PREFIX}entity_links`]: createMockCollection(),
+				})
+
+				await expect(
+					extractAndUpsertEntities({
+						db,
+						prefix: PREFIX,
+						agentId: "agent-1",
+						eventContent: "Talked to @alice about the project",
+						scope: "agent",
+					}),
+				).resolves.toBeDefined()
+				expect(updateOne).not.toHaveBeenCalled()
+			})
+		})
 	})
 })

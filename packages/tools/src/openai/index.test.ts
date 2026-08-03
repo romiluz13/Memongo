@@ -1,4 +1,8 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest"
+import {
+	MemongoClient,
+	type MemongoContextBundleResponse,
+} from "@memongo/client"
 import { createOpenAIMiddleware } from "./index.js"
 import type { MemongoCoreOptions } from "../vercel/index.js"
 
@@ -143,5 +147,50 @@ describe("createOpenAIMiddleware (OpenAI SDK middleware)", () => {
 		const result = await proxied.models.list()
 		expect(result).toEqual({ data: [] })
 		expect(client.models.list).toHaveBeenCalledTimes(1)
+	})
+
+	it("P1.5: routes context retrieval through @memongo/client (no hand-rolled fetch)", async () => {
+		const bundle: MemongoContextBundleResponse = {
+			agentId: "agent-1",
+			scope: "agent",
+			scopeRef: "",
+			rendered: "client-routed memory",
+			sections: [],
+			metadata: {
+				tokenBudget: 0,
+				estimatedTokensUsed: 0,
+				partial: false,
+				truncated: false,
+				pathsExecuted: [],
+				sectionsIncluded: [],
+			},
+			builtAt: new Date(0).toISOString(),
+		}
+		const spy = vi
+			.spyOn(MemongoClient.prototype, "buildContextBundle")
+			.mockResolvedValue(bundle)
+		mockFetchForContextBundle() // write-events still hit global fetch
+		try {
+			const client = createMockOpenAIClient()
+			const proxied = createOpenAIMiddleware(client as any, BASE_OPTIONS)
+
+			await proxied.chat.completions.create({
+				model: "gpt-4",
+				messages: [{ role: "user", content: "remember?" }],
+			})
+
+			expect(spy).toHaveBeenCalledWith(
+				expect.objectContaining({
+					agentId: "agent-1",
+					mode: "full",
+					query: "remember?",
+				}),
+			)
+			const injected = client.chat.completions.create.mock.calls[0][0]
+				.messages[0].content as string
+			expect(injected).toContain("client-routed memory")
+		} finally {
+			spy.mockRestore()
+		}
 	})
 })

@@ -1,6 +1,13 @@
 import { createHash } from "node:crypto"
-import type { ClientSession, Db, Document, MongoClient } from "mongodb"
+import type {
+	ClientSession,
+	Collection,
+	Db,
+	Document,
+	MongoClient,
+} from "mongodb"
 import { type MemoryScope, createSubsystemLogger } from "@memongo/lib"
+import { isDuplicateKeyError } from "./internal.js"
 import {
 	type EntityExtractor,
 	type ExtractedEntity as ExtractorExtractedEntity,
@@ -1396,6 +1403,86 @@ function makeEntityId(
 
 type ExtractedEntity = { entityId: string; name: string; type: EntityType }
 
+type BulkUpdateOneOp = {
+	updateOne: {
+		filter: Record<string, unknown>
+		update: Record<string, unknown> | Array<Record<string, unknown>>
+		upsert: boolean
+	}
+}
+
+/**
+ * Indexes of the ops that failed with E11000 inside a MongoBulkWriteError.
+ * A single-op batch can also surface as a plain duplicate-key server error.
+ */
+function duplicateKeyWriteErrorIndexes(err: unknown): number[] {
+	if (typeof err !== "object" || err === null) {
+		return []
+	}
+	const writeErrors = (err as { writeErrors?: unknown }).writeErrors
+	if (Array.isArray(writeErrors)) {
+		return writeErrors
+			.filter(
+				(writeError): writeError is { index: number; code: number } =>
+					typeof writeError === "object" &&
+					writeError !== null &&
+					(writeError as { code?: unknown }).code === 11000 &&
+					typeof (writeError as { index?: unknown }).index === "number",
+			)
+			.map((writeError) => writeError.index)
+	}
+	return isDuplicateKeyError(err) ? [0] : []
+}
+
+/**
+ * (P2.5 c) Bulk-write upsert ops with duplicate-key recovery. Two concurrent
+ * extractors racing the same unique identity both upsert; the loser's insert
+ * is rejected with E11000 even though its UPDATE would have applied cleanly
+ * against the winner's now-existing document. Swallowing the whole batch as a
+ * "partial failure" silently drops the losing op's update (mentionCount,
+ * sourceEventIds, link confidence). Retry each duplicate-key writeError as a
+ * plain update (upsert: false) — the same E11000-retry pattern the engine
+ * already uses on the structured/event write paths. Non-duplicate failures
+ * keep the previous warn-and-continue behavior.
+ */
+async function bulkWriteUpsertsWithDuplicateKeyRetry(params: {
+	collection: Collection
+	ops: BulkUpdateOneOp[]
+	context: string
+}): Promise<void> {
+	try {
+		await params.collection.bulkWrite(params.ops, { ordered: false })
+		return
+	} catch (bulkErr) {
+		const duplicateIndexes = duplicateKeyWriteErrorIndexes(bulkErr)
+		if (duplicateIndexes.length === 0) {
+			log.warn(`bulkWrite ${params.context} partial failure`, {
+				error: bulkErr,
+			})
+			return
+		}
+		for (const index of duplicateIndexes) {
+			const op = params.ops[index]
+			if (!op) {
+				continue
+			}
+			try {
+				// The winner's document exists now — replay the losing op as a
+				// plain update so its side effects are not silently dropped.
+				await params.collection.updateOne(
+					op.updateOne.filter,
+					op.updateOne.update,
+					{ upsert: false },
+				)
+			} catch (retryErr) {
+				log.warn(`bulkWrite ${params.context} duplicate-key retry failed`, {
+					error: retryErr,
+				})
+			}
+		}
+	}
+}
+
 /**
  * Extract structural entities from event content and upsert them.
  * Uses a pluggable EntityExtractor (defaults to RegexEntityExtractor).
@@ -1588,13 +1675,11 @@ export async function extractAndUpsertEntities(params: {
 			}
 		})
 		if (entityOps.length > 0) {
-			try {
-				await entitiesCollection(db, prefix).bulkWrite(entityOps, {
-					ordered: false,
-				})
-			} catch (bulkErr) {
-				log.warn("bulkWrite entity upserts partial failure", { error: bulkErr })
-			}
+			await bulkWriteUpsertsWithDuplicateKeyRetry({
+				collection: entitiesCollection(db, prefix),
+				ops: entityOps,
+				context: "entity upserts",
+			})
 		}
 
 		// H1 audit fix: batch relation + entity-link upserts (replaces sequential loops)
@@ -1698,26 +1783,18 @@ export async function extractAndUpsertEntities(params: {
 			}
 
 			if (relationOps.length > 0) {
-				try {
-					await relationsCollection(db, prefix).bulkWrite(relationOps, {
-						ordered: false,
-					})
-				} catch (bulkErr) {
-					log.warn("bulkWrite relation upserts partial failure", {
-						error: bulkErr,
-					})
-				}
+				await bulkWriteUpsertsWithDuplicateKeyRetry({
+					collection: relationsCollection(db, prefix),
+					ops: relationOps,
+					context: "relation upserts",
+				})
 			}
 			if (linkOps.length > 0) {
-				try {
-					await entityLinksCollection(db, prefix).bulkWrite(linkOps, {
-						ordered: false,
-					})
-				} catch (bulkErr) {
-					log.warn("bulkWrite entity-link upserts partial failure", {
-						error: bulkErr,
-					})
-				}
+				await bulkWriteUpsertsWithDuplicateKeyRetry({
+					collection: entityLinksCollection(db, prefix),
+					ops: linkOps,
+					context: "entity-link upserts",
+				})
 			}
 		}
 

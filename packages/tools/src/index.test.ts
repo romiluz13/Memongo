@@ -52,4 +52,27 @@ describe("createMemongoTools", () => {
 
 		expect(recallConversation).toHaveBeenCalledWith(input)
 	})
+
+	it("accepts scopeRef on the scanNovelty/consolidate schemas (P2.8)", async () => {
+		const scanNovelty = vi.fn(async () => ({ novel: [] }))
+		const consolidate = vi.fn(async () => ({ consolidated: 0 }))
+		const tools = createMemongoTools({
+			scanNovelty,
+			consolidate,
+		} as unknown as MemongoClient)
+		const noveltyTool = tools.memongo_novelty_scan as ExecutableTool
+		const consolidateTool = tools.memongo_consolidate as ExecutableTool
+
+		const noveltyInput = { scope: "tenant", scopeRef: "acme" }
+		expect(noveltyTool.inputSchema.parse(noveltyInput)).toEqual(noveltyInput)
+		await noveltyTool.execute(noveltyInput, {})
+		expect(scanNovelty).toHaveBeenCalledWith(noveltyInput)
+
+		const consolidateInput = { scope: "workspace", scopeRef: "acme/platform" }
+		expect(consolidateTool.inputSchema.parse(consolidateInput)).toEqual(
+			consolidateInput,
+		)
+		await consolidateTool.execute(consolidateInput, {})
+		expect(consolidate).toHaveBeenCalledWith(consolidateInput)
+	})
 })

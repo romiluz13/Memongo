@@ -1,13 +1,34 @@
 # MongoDB only — run `apps/api` on the host with e.g.
 # MEMONGO_MONGODB_URI=mongodb://127.0.0.1:27017
 # (or `mongodb://mongodb:27017/...` when the API runs in another container on the same network).
+#
+# Uses mongodb/mongodb-atlas-local (NOT plain mongo): Memongo requires
+# $vectorSearch / Atlas Search and transactions, which a standalone mongo:7
+# silently cannot serve. This single container bundles mongod (single-node
+# replica set) + mongot + Atlas Search/Vector Search. VOYAGE_API_KEY=al-...
+# additionally enables auto-embeddings.
 services:
   mongodb:
-    image: mongo:7
+    # Pinned to a dated tag (verify auto-embedding parity when bumping).
+    image: mongodb/mongodb-atlas-local:8.2.6-20260715T144108Z
+    container_name: memongo-minimal
     ports:
-      - "27017:27017"
+      # Loopback-only publish: reachable from host tooling on localhost,
+      # not exposed on other host interfaces.
+      - "127.0.0.1:${MONGODB_PORT:-27017}:27017"
+    environment:
+      - VOYAGE_API_KEY=${VOYAGE_API_KEY:-}
+      - MONGODB_ATLAS_TELEMETRY_ENABLE=false
     volumes:
       - memongo_mongo_data:/data/db
+      - memongo_mongo_config:/data/configdb
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/runner", "healthcheck"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
 
 volumes:
   memongo_mongo_data: {}
+  memongo_mongo_config: {}

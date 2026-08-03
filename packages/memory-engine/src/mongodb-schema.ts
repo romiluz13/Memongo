@@ -1932,6 +1932,23 @@ export async function ensureStandardIndexes(
 		},
 	)
 	applied++
+	// Write idempotency (IETF/Stripe): one event per (agentId, idempotencyKey).
+	// Tenant field first (ESR) so identical keys in different tenants never
+	// collide — a global-unique key would leak another tenant's receipt on
+	// replay. Partial on string-typed keys only: legacy keyless writes are
+	// untouched (the single-null trap for unique indexes), so no backfill or
+	// online-build dance is needed on existing collections.
+	await events.createIndex(
+		{ agentId: 1, idempotencyKey: 1 },
+		{
+			name: "uq_events_agent_idempotency_key",
+			unique: true,
+			partialFilterExpression: {
+				idempotencyKey: { $type: "string" },
+			},
+		},
+	)
+	applied++
 	await events.createIndex(
 		{ consolidatedAt: 1 },
 		{ name: "idx_events_consolidated", sparse: true },
@@ -2336,6 +2353,20 @@ export async function ensureStandardIndexes(
 	await consolidationRuns.createIndex(
 		{ agentId: 1, startedAt: -1 },
 		{ name: "idx_consolidation_runs_agent_time" },
+	)
+	applied++
+
+	// One Phase-0 gate document per scope identity (atomic lease, see
+	// consolidateMemory). Partial so legacy per-run docs without a gateKey
+	// never collide on the unique key (the single-null trap for unique
+	// indexes); only string-typed gateKeys are constrained.
+	await consolidationRuns.createIndex(
+		{ gateKey: 1 },
+		{
+			name: "uq_consolidation_runs_gate",
+			unique: true,
+			partialFilterExpression: { gateKey: { $type: "string" } },
+		},
 	)
 	applied++
 

@@ -44,6 +44,7 @@
 	},
 	"dependencies": {
 		"@memongo/client": "2.0.0",
+		"@memongo/lib": "2.0.0",
 		"zod": "^3.25.0"
 	},
 	"devDependencies": {

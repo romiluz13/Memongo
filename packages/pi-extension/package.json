@@ -27,7 +27,8 @@
 		"README.md"
 	],
 	"scripts": {
-		"check-types": "node ../../node_modules/typescript/bin/tsc --noEmit -p tsconfig.json"
+		"check-types": "node ../../node_modules/typescript/bin/tsc --noEmit -p tsconfig.json",
+		"test": "vitest run"
 	},
 	"dependencies": {
 		"@memongo/client": "2.0.0"

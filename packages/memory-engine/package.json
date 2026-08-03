@@ -1,6 +1,6 @@
 {
 	"name": "@memongo/memory-engine",
-	"version": "2.0.0",
+	"version": "2.0.1",
 	"description": "MongoDB-native memory engine: embeddings, graph, episodes, search, knowledge base, reasoning chains, novelty detection, consolidation, analytics",
 	"type": "module",
 	"license": "Apache-2.0",

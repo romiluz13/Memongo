@@ -300,6 +300,150 @@ describe("searchKB", () => {
 		})
 	})
 
+	it("normalizes raw $rankFusion scores into [0,1] before applying minScore (P0.10)", async () => {
+		const hybridCaps: DetectedCapabilities = {
+			...baseCapabilities,
+			rankFusion: true,
+		}
+		// Raw RRF output ceiling is (0.7+0.3) * rrfScore(1) = 1/61 ≈ 0.0164;
+		// half of the ceiling must read as a 0.5 relevance, not 0.008.
+		const col = mockKBChunksCol([
+			{
+				path: "mid.md",
+				startLine: 1,
+				endLine: 5,
+				text: "half-ceiling RRF result",
+				score: 0.0082,
+			},
+		])
+
+		const results = await searchKB(col, "test", [0.1], {
+			maxResults: 5,
+			minScore: 0.4,
+			scopeRef: "agent:test",
+			vectorIndexName: "idx",
+			textIndexName: "txt",
+			capabilities: hybridCaps,
+			embeddingMode: "automated",
+		})
+
+		expect(results).toHaveLength(1)
+		expect(results[0].score).toBeCloseTo(0.5002, 4)
+	})
+
+	it("uses $scoreFusion with minMaxScaler when fusionMethod=scoreFusion and capable (P0.10)", async () => {
+		const hybridCaps: DetectedCapabilities = {
+			...baseCapabilities,
+			scoreFusion: true,
+			rankFusion: true,
+		}
+		const col = mockKBChunksCol([
+			{
+				path: "fused.md",
+				startLine: 1,
+				endLine: 5,
+				text: "score-fused result",
+				score: 0.62,
+			},
+		])
+
+		const results = await searchKB(col, "test", [0.1], {
+			maxResults: 5,
+			minScore: 0.1,
+			scopeRef: "agent:test",
+			vectorIndexName: "idx",
+			textIndexName: "txt",
+			capabilities: hybridCaps,
+			embeddingMode: "automated",
+			fusionMethod: "scoreFusion",
+		})
+
+		expect(results).toHaveLength(1)
+		// minMaxScaler yields a native [0,1] fused score — no local rescale.
+		expect(results[0].score).toBeCloseTo(0.62, 4)
+		const pipeline = (col.aggregate as ReturnType<typeof vi.fn>).mock
+			.calls[0][0]
+		expect(pipeline[0].$scoreFusion.input.normalization).toBe("minMaxScaler")
+	})
+
+	it("falls back from $scoreFusion to $rankFusion when the server rejects it (P0.10)", async () => {
+		const hybridCaps: DetectedCapabilities = {
+			...baseCapabilities,
+			scoreFusion: true,
+			rankFusion: true,
+		}
+		let call = 0
+		const col = {
+			aggregate: vi.fn(() => ({
+				toArray: vi.fn(async () => {
+					call += 1
+					if (call === 1) {
+						throw new Error("$scoreFusion is not supported on this server")
+					}
+					return [
+						{
+							path: "rank.md",
+							startLine: 1,
+							endLine: 5,
+							text: "rank-fusion fallback",
+							score: 0.9,
+						},
+					]
+				}),
+			})),
+		} as unknown as Collection
+
+		const results = await searchKB(col, "test", [0.1], {
+			maxResults: 5,
+			minScore: 0.1,
+			scopeRef: "agent:test",
+			vectorIndexName: "idx",
+			textIndexName: "txt",
+			capabilities: hybridCaps,
+			embeddingMode: "automated",
+			fusionMethod: "scoreFusion",
+		})
+
+		expect(results).toHaveLength(1)
+		const secondPipeline = (col.aggregate as ReturnType<typeof vi.fn>).mock
+			.calls[1][0]
+		expect(secondPipeline[0].$rankFusion).toBeDefined()
+	})
+
+	it("skips server-side fusion when fusionMethod=js-merge (P0.10)", async () => {
+		const hybridCaps: DetectedCapabilities = {
+			...baseCapabilities,
+			scoreFusion: true,
+			rankFusion: true,
+		}
+		const col = mockKBChunksCol([
+			{
+				path: "vector.md",
+				startLine: 1,
+				endLine: 5,
+				text: "vector-only lane",
+				score: 0.9,
+			},
+		])
+
+		const results = await searchKB(col, "test", [0.1], {
+			maxResults: 5,
+			minScore: 0.1,
+			scopeRef: "agent:test",
+			vectorIndexName: "idx",
+			textIndexName: "txt",
+			capabilities: hybridCaps,
+			embeddingMode: "automated",
+			fusionMethod: "js-merge",
+		})
+
+		expect(results).toHaveLength(1)
+		const pipeline = (col.aggregate as ReturnType<typeof vi.fn>).mock
+			.calls[0][0]
+		expect(pipeline[0].$rankFusion).toBeUndefined()
+		expect(pipeline[0].$scoreFusion).toBeUndefined()
+	})
+
 	it("pushes KB docId filters into the text-side compound.filter", async () => {
 		const hybridCaps: DetectedCapabilities = {
 			...baseCapabilities,

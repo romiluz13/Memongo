@@ -3,8 +3,15 @@ import type { MemongoClient } from "@memongo/client"
  * Vercel AI SDK–compatible tool definitions that call the Memongo HTTP API
  * (same integration role as @supermemory/tools).
  */
+import { MEMORY_SCOPE_VALUES_TUPLE } from "@memongo/lib"
 import { tool, type Tool } from "ai"
 import { z } from "zod"
+
+/**
+ * Canonical scope enum from the single contract source (@memongo/lib, P2.2).
+ * Previously re-typed at six sites in this file.
+ */
+const memoryScopeSchema = z.enum(MEMORY_SCOPE_VALUES_TUPLE)
 
 /* ------------------------------------------------------------------ */
 /*  SDK middleware re-exports                                          */
@@ -18,9 +25,7 @@ const searchSchema = z.object({
 	agentId: z.string().optional(),
 	limit: z.number().optional(),
 	minScore: z.number().optional(),
-	scope: z
-		.enum(["session", "user", "agent", "workspace", "tenant", "global"])
-		.optional(),
+	scope: memoryScopeSchema.optional(),
 	scopeRef: z.string().optional(),
 })
 
@@ -41,9 +46,7 @@ const addSchema = z.object({
 	content: z.string(),
 	agentId: z.string().optional(),
 	sessionId: z.string().optional(),
-	scope: z
-		.enum(["session", "user", "agent", "workspace", "tenant", "global"])
-		.optional(),
+	scope: memoryScopeSchema.optional(),
 	scopeRef: z.string().optional(),
 })
 
@@ -55,9 +58,7 @@ const writeEventSchema = z.object({
 	timestamp: z.string().datetime().optional(),
 	validAt: z.string().datetime().optional(),
 	invalidAt: z.string().datetime().optional(),
-	scope: z
-		.enum(["session", "user", "agent", "workspace", "tenant", "global"])
-		.optional(),
+	scope: memoryScopeSchema.optional(),
 	scopeRef: z.string().optional(),
 })
 
@@ -69,9 +70,7 @@ const profileSchema = z.object({
 const contextBundleSchema = z.object({
 	query: z.string().optional(),
 	agentId: z.string().optional(),
-	scope: z
-		.enum(["session", "user", "agent", "workspace", "tenant", "global"])
-		.optional(),
+	scope: memoryScopeSchema.optional(),
 	scopeRef: z.string().optional(),
 	sessionId: z.string().optional(),
 	tokenBudget: z.number().optional(),
@@ -111,14 +110,7 @@ const recallConversationSchema = z.object({
 	limit: z.number().int().positive().max(200).optional(),
 })
 
-const lifecycleScopeSchema = z.enum([
-	"session",
-	"user",
-	"agent",
-	"workspace",
-	"tenant",
-	"global",
-])
+const lifecycleScopeSchema = memoryScopeSchema
 
 const lifecycleStateSchema = z.enum(["active", "invalidated", "conflicted"])
 
@@ -269,9 +261,7 @@ const statusSchema = z.object({
 const benchmarkIngestSchema = z.object({
 	datasetPath: z.string().min(1),
 	agentId: z.string().optional(),
-	scope: z
-		.enum(["session", "user", "agent", "workspace", "tenant", "global"])
-		.optional(),
+	scope: memoryScopeSchema.optional(),
 	limitConversations: z.number().int().positive().optional(),
 	limitTurnsPerConversation: z.number().int().positive().optional(),
 })
@@ -425,6 +415,7 @@ export function createMemongoTools(client: MemongoClient): MemongoToolSet {
 				agentId: z.string().optional(),
 				limit: z.number().optional(),
 				scope: z.string().optional(),
+				scopeRef: z.string().optional(),
 			}),
 			execute: async (input) => client.scanNovelty(input),
 		}),
@@ -436,6 +427,7 @@ export function createMemongoTools(client: MemongoClient): MemongoToolSet {
 				maxEvents: z.number().optional(),
 				minCombinedScore: z.number().optional(),
 				scope: z.string().optional(),
+				scopeRef: z.string().optional(),
 			}),
 			execute: async (input) => client.consolidate(input),
 		}),
@@ -455,9 +447,7 @@ export function createMemongoTools(client: MemongoClient): MemongoToolSet {
 				"Get all three state surfaces (profile, blocks, bundle) in one call.",
 			inputSchema: z.object({
 				agentId: z.string().optional(),
-				scope: z
-					.enum(["session", "user", "agent", "workspace", "tenant", "global"])
-					.optional(),
+				scope: memoryScopeSchema.optional(),
 				scopeRef: z.string().optional(),
 			}),
 			execute: async (input) => client.state(input),
