@@ -40,6 +40,7 @@ const bridgeMocks = vi.hoisted(() => ({
 	memongoBridgeUpdateLifecycleItem: vi.fn(),
 	memongoBridgeReportProcedureOutcome: vi.fn(),
 	memongoBridgeWriteConversationEvent: vi.fn(),
+	memongoBridgeWriteConversationEventsBatch: vi.fn(),
 	memongoBridgeWriteProcedure: vi.fn(),
 	memongoBridgeWriteStructuredMemory: vi.fn(),
 	memongoBridgeTraceChain: vi.fn(),
@@ -105,6 +106,7 @@ describe("createApp", () => {
 		bridgeMocks.memongoBridgeUpdateLifecycleItem.mockReset()
 		bridgeMocks.memongoBridgeReportProcedureOutcome.mockReset()
 		bridgeMocks.memongoBridgeWriteConversationEvent.mockReset()
+		bridgeMocks.memongoBridgeWriteConversationEventsBatch.mockReset()
 		bridgeMocks.memongoBridgeSearch.mockResolvedValue([])
 		bridgeMocks.memongoBridgeSearchDetailed.mockResolvedValue({
 			results: [],
@@ -136,6 +138,14 @@ describe("createApp", () => {
 			eventId: "evt-2",
 			chunkCreated: true,
 		})
+		bridgeMocks.memongoBridgeWriteConversationEventsBatch.mockImplementation(
+			async ({ events }: { events: Array<{ body: string }> }) =>
+				events.map((_, index) => ({
+					ok: true,
+					eventId: `evt-batch-${index}`,
+					chunkCreated: true,
+				})),
+		)
 		bridgeMocks.memongoBridgeProfile.mockResolvedValue({ profile: [] })
 		bridgeMocks.memongoBridgeHydrateActiveSlate.mockResolvedValue({
 			agentId: "main",
@@ -2072,6 +2082,263 @@ describe("createApp", () => {
 		expect(
 			bridgeMocks.memongoBridgeWriteConversationEvent,
 		).not.toHaveBeenCalled()
+	})
+
+	describe("/v1/write-events (P3.9 bulk write)", () => {
+		function postBatch(body: unknown, headers?: Record<string, string>) {
+			return createApp().request("/v1/write-events", {
+				method: "POST",
+				headers: { "Content-Type": "application/json", ...headers },
+				body: JSON.stringify(body),
+			})
+		}
+
+		it("writes a batch in ONE bridge call and returns per-item receipts", async () => {
+			const res = await postBatch({
+				agentId: "codex",
+				events: [
+					{ role: "user", body: "first event", sessionId: "s-1" },
+					{
+						role: "assistant",
+						body: "second event",
+						customId: "key-2",
+						scope: "agent",
+					},
+				],
+			})
+
+			expect(res.status).toBe(200)
+			const json = await res.json()
+			expect(json).toEqual({
+				ok: true,
+				receipts: [
+					{ ok: true, eventId: "evt-batch-0", chunkCreated: true },
+					{ ok: true, eventId: "evt-batch-1", chunkCreated: true },
+				],
+			})
+			expect(
+				bridgeMocks.memongoBridgeWriteConversationEventsBatch,
+			).toHaveBeenCalledTimes(1)
+			expect(
+				bridgeMocks.memongoBridgeWriteConversationEventsBatch,
+			).toHaveBeenCalledWith({
+				agentId: "codex",
+				events: [
+					expect.objectContaining({
+						role: "user",
+						body: "first event",
+						sessionId: "s-1",
+					}),
+					expect.objectContaining({
+						role: "assistant",
+						body: "second event",
+						scope: "agent",
+						idempotencyKey: "key-2",
+					}),
+				],
+			})
+		})
+
+		it("maps a per-item idempotency conflict to a receipt entry, not a batch error", async () => {
+			bridgeMocks.memongoBridgeWriteConversationEventsBatch.mockResolvedValue([
+				{
+					ok: false,
+					code: "IDEMPOTENCY_CONFLICT",
+					message:
+						'idempotency key "key-c" was reused with a different payload',
+				},
+				{ ok: true, eventId: "evt-new", chunkCreated: true },
+			])
+
+			const res = await postBatch({
+				events: [
+					{ role: "user", body: "conflicting payload", customId: "key-c" },
+					{ role: "user", body: "fresh event" },
+				],
+			})
+
+			expect(res.status).toBe(200)
+			const json = (await res.json()) as {
+				receipts: Array<Record<string, unknown>>
+			}
+			expect(json.receipts[0]).toEqual({
+				ok: false,
+				code: "IDEMPOTENCY_CONFLICT",
+				message: 'idempotency key "key-c" was reused with a different payload',
+			})
+			expect(json.receipts[1]).toEqual({
+				ok: true,
+				eventId: "evt-new",
+				chunkCreated: true,
+			})
+		})
+
+		it("isolates per-item validation failures and still writes the valid items", async () => {
+			const res = await postBatch({
+				events: [
+					{ role: "bogus", body: "bad role" },
+					{ role: "user", body: "good event" },
+					{ role: "user", body: "" },
+					{ role: "user", body: "bad dates", timestamp: "not-a-date" },
+				],
+			})
+
+			expect(res.status).toBe(200)
+			const json = (await res.json()) as {
+				ok: boolean
+				receipts: Array<Record<string, unknown>>
+			}
+			expect(json.ok).toBe(true)
+			expect(json.receipts).toHaveLength(4)
+			expect(json.receipts[0]).toMatchObject({
+				ok: false,
+				code: "VALIDATION_ERROR",
+			})
+			expect(json.receipts[1]).toMatchObject({
+				ok: true,
+				eventId: "evt-batch-0",
+			})
+			expect(json.receipts[2]).toMatchObject({
+				ok: false,
+				code: "VALIDATION_ERROR",
+			})
+			expect(json.receipts[3]).toMatchObject({
+				ok: false,
+				code: "VALIDATION_ERROR",
+			})
+			// Only the valid item reached the engine.
+			expect(
+				bridgeMocks.memongoBridgeWriteConversationEventsBatch,
+			).toHaveBeenCalledTimes(1)
+			const call =
+				bridgeMocks.memongoBridgeWriteConversationEventsBatch.mock.calls[0][0]
+			expect(call.events).toHaveLength(1)
+			expect(call.events[0]).toMatchObject({ body: "good event" })
+		})
+
+		it("rejects a malformed envelope with 400 and skips the bridge", async () => {
+			for (const body of [
+				{},
+				{ events: [] },
+				{ events: "not-an-array" },
+				{
+					events: Array.from({ length: 501 }, () => ({
+						role: "user",
+						body: "x",
+					})),
+				},
+			]) {
+				const res = await postBatch(body)
+				expect(res.status).toBe(400)
+			}
+			expect(
+				bridgeMocks.memongoBridgeWriteConversationEventsBatch,
+			).not.toHaveBeenCalled()
+		})
+
+		it("rejects per-item tenant fields that contradict the authorized identity", async () => {
+			const res = await postBatch({
+				scope: "agent",
+				scopeRef: "agent:codex",
+				sessionId: "s-auth",
+				events: [
+					{ role: "user", body: "matching event", scope: "agent" },
+					{
+						role: "user",
+						body: "cross-scope smuggle",
+						scope: "tenant",
+					},
+					{
+						role: "user",
+						body: "cross-session smuggle",
+						sessionId: "s-other",
+					},
+					{
+						role: "user",
+						body: "cross-scoperef smuggle",
+						scopeRef: "agent:other",
+					},
+				],
+			})
+
+			expect(res.status).toBe(200)
+			const json = (await res.json()) as {
+				receipts: Array<Record<string, unknown>>
+			}
+			expect(json.receipts[0]).toMatchObject({ ok: true })
+			expect(json.receipts[1]).toMatchObject({
+				ok: false,
+				code: "VALIDATION_ERROR",
+			})
+			expect(json.receipts[2]).toMatchObject({
+				ok: false,
+				code: "VALIDATION_ERROR",
+			})
+			expect(json.receipts[3]).toMatchObject({
+				ok: false,
+				code: "VALIDATION_ERROR",
+			})
+			const call =
+				bridgeMocks.memongoBridgeWriteConversationEventsBatch.mock.calls[0][0]
+			expect(call.events).toHaveLength(1)
+			expect(call.events[0]).toMatchObject({
+				scope: "agent",
+				scopeRef: "agent:codex",
+				sessionId: "s-auth",
+			})
+		})
+
+		it("rejects operator-shaped metadata keys per item", async () => {
+			const res = await postBatch({
+				events: [
+					{ role: "user", body: "ok event" },
+					{
+						role: "user",
+						body: "operator smuggle",
+						metadata: { $where: "x" },
+					},
+				],
+			})
+
+			expect(res.status).toBe(200)
+			const json = (await res.json()) as {
+				receipts: Array<Record<string, unknown>>
+			}
+			expect(json.receipts[0]).toMatchObject({ ok: true })
+			expect(json.receipts[1]).toMatchObject({
+				ok: false,
+				code: "VALIDATION_ERROR",
+			})
+		})
+
+		it("enforces the same bearer auth as the single-write route", async () => {
+			process.env.MEMONGO_API_KEY = "secret"
+
+			const unauthorized = await postBatch({
+				events: [{ role: "user", body: "unauthorized" }],
+			})
+			expect(unauthorized.status).toBe(401)
+
+			const authorized = await postBatch(
+				{ events: [{ role: "user", body: "authorized" }] },
+				{ Authorization: "Bearer secret" },
+			)
+			expect(authorized.status).toBe(200)
+		})
+
+		it("maps a bridge failure to 500", async () => {
+			bridgeMocks.memongoBridgeWriteConversationEventsBatch.mockRejectedValue(
+				new Error("engine exploded"),
+			)
+
+			const res = await postBatch({
+				events: [{ role: "user", body: "event" }],
+			})
+
+			expect(res.status).toBe(500)
+			const json = (await res.json()) as { error: { code: string } }
+			expect(json.error.code).toBe("WRITE_EVENTS_FAILED")
+		})
 	})
 
 	it("rejects invalid scope values before calling the bridge", async () => {
@@ -4265,10 +4532,19 @@ describe("P2.8 boundary input validation", () => {
 			chunkCreated: true,
 		})
 		bridgeMocks.memongoBridgeWriteConversationEvent.mockReset()
+		bridgeMocks.memongoBridgeWriteConversationEventsBatch.mockReset()
 		bridgeMocks.memongoBridgeWriteConversationEvent.mockResolvedValue({
 			eventId: "evt-2",
 			chunkCreated: true,
 		})
+		bridgeMocks.memongoBridgeWriteConversationEventsBatch.mockImplementation(
+			async ({ events }: { events: Array<{ body: string }> }) =>
+				events.map((_, index) => ({
+					ok: true,
+					eventId: `evt-batch-${index}`,
+					chunkCreated: true,
+				})),
+		)
 		bridgeMocks.memongoBridgeSync.mockReset()
 		bridgeMocks.memongoBridgeSync.mockResolvedValue(undefined)
 	})

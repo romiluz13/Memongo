@@ -19,6 +19,7 @@ import {
 	deleteEntityConservative,
 	extractAndUpsertEntities,
 	searchEntitiesAutocomplete,
+	findRelationByLocatorId,
 	type Entity,
 	type Relation,
 } from "./mongodb-graph.js"
@@ -205,6 +206,21 @@ describe("mongodb-graph", () => {
 			expect(update.$set.agentId).toBe("agent-1")
 			expect(update.$set.scope).toBe("agent")
 			expect(opts).toEqual({ upsert: true })
+		})
+
+		it("persists a relationId locator field as fromEntityId-toEntityId (P3.8)", async () => {
+			const relationsCol = createMockCollection()
+			const db = createMockDb({ [`${PREFIX}relations`]: relationsCol })
+
+			await upsertRelation({
+				db,
+				prefix: PREFIX,
+				relation: makeRelation(),
+			})
+
+			const [, update] = (relationsCol.updateOne as ReturnType<typeof vi.fn>)
+				.mock.calls[0]
+			expect(update.$set.relationId).toBe("ent-1-ent-2")
 		})
 
 		it("tracks lifecycle metadata on a new relation", async () => {
@@ -1879,6 +1895,7 @@ describe("mongodb-graph", () => {
 					scope: "agent",
 					scopeRef: "agent:agent-1",
 					query: "New York",
+					textSearchAvailable: true,
 				})
 
 				expect(results).toHaveLength(1)
@@ -1895,6 +1912,10 @@ describe("mongodb-graph", () => {
 				const compound = searchStage.compound as Record<string, unknown>
 				const shouldClauses = compound.should as Array<Record<string, unknown>>
 				expect(shouldClauses[0]).toHaveProperty("autocomplete")
+
+				// P3.8: user-driven $search pipelines carry a maxTimeMS ceiling
+				const options = aggCalls[0][1] as { maxTimeMS?: number } | undefined
+				expect(typeof options?.maxTimeMS).toBe("number")
 			})
 
 			it("defaults limit to 10", async () => {
@@ -1914,6 +1935,7 @@ describe("mongodb-graph", () => {
 					scope: "agent",
 					scopeRef: "agent:agent-1",
 					query: "test",
+					textSearchAvailable: true,
 				})
 
 				const pipeline = (entCol.aggregate as ReturnType<typeof vi.fn>).mock
@@ -1921,6 +1943,186 @@ describe("mongodb-graph", () => {
 				const limitStage = pipeline.find((s: Document) => "$limit" in s)
 				expect(limitStage).toBeDefined()
 				expect(limitStage!.$limit).toBe(10)
+			})
+
+			it("uses the escaped $regex path without attempting $search when textSearch capability is off (P3.8)", async () => {
+				const findResult = {
+					sort: vi.fn().mockReturnValue({
+						limit: vi.fn().mockReturnValue({
+							toArray: vi.fn().mockResolvedValue([
+								{
+									entityId: "ent-1",
+									name: "C++ (beta) notes",
+									type: "concept",
+									agentId: "agent-1",
+									scope: "agent",
+									updatedAt: new Date(),
+								},
+							]),
+						}),
+					}),
+				}
+				const entCol = createMockCollection({
+					find: vi.fn().mockReturnValue(findResult),
+				})
+				const db = createMockDb({
+					[`${PREFIX}entities`]: entCol,
+				})
+
+				const results = await searchEntitiesAutocomplete({
+					db,
+					prefix: PREFIX,
+					agentId: "agent-1",
+					scope: "agent",
+					scopeRef: "agent:agent-1",
+					query: "C++ (beta)",
+					textSearchAvailable: false,
+				})
+
+				// No wasted $search round trip when mongot is known-absent
+				expect(entCol.aggregate).not.toHaveBeenCalled()
+				expect(results).toHaveLength(1)
+
+				// The regex fallback must stay escaped — metacharacters in the query
+				// cannot become regex operators.
+				const [filter] = (entCol.find as ReturnType<typeof vi.fn>).mock.calls[0]
+				const nameClause = filter.$or?.[0]?.name?.$regex as RegExp
+				expect(nameClause).toBeInstanceOf(RegExp)
+				expect(nameClause.source).toBe("C\\+\\+ \\(beta\\)")
+			})
+
+			it("falls back to the escaped $regex path when $search fails at runtime", async () => {
+				const findResult = {
+					sort: vi.fn().mockReturnValue({
+						limit: vi.fn().mockReturnValue({
+							toArray: vi.fn().mockResolvedValue([]),
+						}),
+					}),
+				}
+				const entCol = createMockCollection({
+					aggregate: vi.fn().mockReturnValue({
+						toArray: vi.fn().mockRejectedValue(new Error("mongot unavailable")),
+					}),
+					find: vi.fn().mockReturnValue(findResult),
+				})
+				const db = createMockDb({
+					[`${PREFIX}entities`]: entCol,
+				})
+
+				await searchEntitiesAutocomplete({
+					db,
+					prefix: PREFIX,
+					agentId: "agent-1",
+					scope: "agent",
+					scopeRef: "agent:agent-1",
+					query: "fallback",
+					textSearchAvailable: true,
+				})
+
+				expect(entCol.aggregate).toHaveBeenCalledOnce()
+				expect(entCol.find).toHaveBeenCalledOnce()
+			})
+		})
+
+		describe("findRelationByLocatorId (P3.8)", () => {
+			it("resolves a relation with one findOne on the relationId index — no full-scan JS matching", async () => {
+				const relationDoc = {
+					fromEntityId: "ent-1",
+					toEntityId: "ent-2",
+					type: "works_on",
+					relationId: "ent-1-ent-2",
+					agentId: "agent-1",
+					scope: "agent",
+					scopeRef: "agent:agent-1",
+					updatedAt: new Date(),
+				}
+				const relationsCol = createMockCollection({
+					findOne: vi.fn().mockResolvedValue(relationDoc),
+				})
+				const db = createMockDb({
+					[`${PREFIX}relations`]: relationsCol,
+				})
+
+				const result = await findRelationByLocatorId({
+					db,
+					prefix: PREFIX,
+					agentId: "agent-1",
+					scope: "agent",
+					scopeRef: "agent:agent-1",
+					relationId: "ent-1-ent-2",
+				})
+
+				expect(result).toEqual(relationDoc)
+				expect(relationsCol.findOne).toHaveBeenCalledWith(
+					{
+						agentId: "agent-1",
+						scope: "agent",
+						scopeRef: "agent:agent-1",
+						relationId: "ent-1-ent-2",
+					},
+					{ sort: { updatedAt: -1, _id: 1 } },
+				)
+				// The old path fetched up to 50 relations and matched in JS.
+				expect(relationsCol.find).not.toHaveBeenCalled()
+			})
+
+			it("falls back to the legacy scan for relations written before relationId existed", async () => {
+				const legacyDoc = {
+					fromEntityId: "ent-3",
+					toEntityId: "ent-4",
+					type: "owns",
+					agentId: "agent-1",
+					scope: "agent",
+					scopeRef: "agent:agent-1",
+					updatedAt: new Date(),
+				}
+				const relationsCol = createMockCollection({
+					findOne: vi.fn().mockResolvedValue(null),
+					find: vi.fn().mockReturnValue({
+						toArray: vi
+							.fn()
+							.mockResolvedValue([
+								{ fromEntityId: "ent-9", toEntityId: "ent-8" },
+								legacyDoc,
+							]),
+					}),
+				})
+				const db = createMockDb({
+					[`${PREFIX}relations`]: relationsCol,
+				})
+
+				const result = await findRelationByLocatorId({
+					db,
+					prefix: PREFIX,
+					agentId: "agent-1",
+					scope: "agent",
+					scopeRef: "agent:agent-1",
+					relationId: "ent-3-ent-4",
+				})
+
+				expect(result).toEqual(legacyDoc)
+				expect(relationsCol.findOne).toHaveBeenCalledOnce()
+				expect(relationsCol.find).toHaveBeenCalledOnce()
+			})
+
+			it("returns null when no relation matches the locator id", async () => {
+				const relationsCol = createMockCollection({
+					findOne: vi.fn().mockResolvedValue(null),
+				})
+				const db = createMockDb({
+					[`${PREFIX}relations`]: relationsCol,
+				})
+
+				const result = await findRelationByLocatorId({
+					db,
+					prefix: PREFIX,
+					agentId: "agent-1",
+					scope: "agent",
+					scopeRef: "agent:agent-1",
+					relationId: "nope-nada",
+				})
+
+				expect(result).toBeNull()
 			})
 		})
 

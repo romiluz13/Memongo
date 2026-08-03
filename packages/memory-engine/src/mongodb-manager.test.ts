@@ -143,6 +143,9 @@ describe("preference grounding signal boost", () => {
 
 vi.mock("./mongodb-events.js", () => ({
 	writeEvent: vi.fn(),
+	writeEventsBatch: vi.fn(),
+	projectEventChunksBatch: vi.fn(),
+	clearEventExtractionJobPendingBatch: vi.fn().mockResolvedValue(0),
 	clearEventExtractionJobPending: vi.fn().mockResolvedValue(true),
 	getPendingExtractionEvents: vi.fn().mockResolvedValue([]),
 	projectChunksFromEvents: vi.fn(),
@@ -265,6 +268,7 @@ vi.mock("./mongodb-graph.js", () => ({
 	searchEntitiesAutocomplete: vi.fn(),
 	expandGraph: vi.fn(),
 	extractAndUpsertEntities: vi.fn(),
+	findRelationByLocatorId: vi.fn(),
 }))
 
 vi.mock("./mongodb-schema.js", () => ({
@@ -334,6 +338,7 @@ vi.mock("./mongodb-memory-jobs.js", () => ({
 	claimMemoryJob: vi.fn(),
 	completeClaimedMemoryJob: vi.fn(),
 	createMemoryJob: vi.fn(),
+	createMemoryJobsBatch: vi.fn(),
 	failClaimedMemoryJob: vi.fn(),
 	getMemoryJob: vi.fn(),
 	listMemoryJobs: vi.fn(),
@@ -3131,10 +3136,12 @@ const {
 	episodesCollection,
 	proceduresCollection,
 	chunksCollection,
+	structuredMemCollection,
 	sessionChunksCollection,
 	memoryEvidenceCollection,
 	relevanceRunsCollection,
 } = await import("./mongodb-schema.js")
+const { getLaneCoverage } = await import("./mongodb-lane-coverage.js")
 
 // Fake Db — the real calls are mocked at the module level
 const fakeDb = {} as unknown as import("mongodb").Db
@@ -3399,6 +3406,125 @@ describe("searchV2", () => {
 		expect(result.results.length).toBeGreaterThan(0)
 		expect(result.metadata.pathsExecuted).toContain("raw-window")
 		expect(result.metadata.pathsExecuted).not.toContain("episodic")
+	})
+
+	it("threads the textSearch capability into the episodic lane lookup (P3.8)", async () => {
+		mocked(planRetrieval).mockReturnValue({
+			paths: ["episodic"],
+			confidence: "high",
+			reasoning: "episodic keywords",
+		})
+		mocked(searchEpisodes).mockResolvedValue([])
+
+		await searchV2(fakeDb, fakePrefix, "summarize today", "agent-1", {
+			availablePaths: new Set(["episodic"]),
+			searchOptions: {
+				allowHybridBackstop: false,
+				capabilities: {
+					vectorSearch: false,
+					textSearch: true,
+					scoreFusion: false,
+					rankFusion: false,
+					storedSource: false,
+					vectorIndexMethod: false,
+				},
+			},
+		})
+
+		expect(searchEpisodes).toHaveBeenCalledWith(
+			expect.objectContaining({ textSearchAvailable: true }),
+		)
+
+		mocked(searchEpisodes).mockClear()
+		await searchV2(fakeDb, fakePrefix, "summarize today", "agent-1", {
+			availablePaths: new Set(["episodic"]),
+			searchOptions: {
+				allowHybridBackstop: false,
+				capabilities: {
+					vectorSearch: false,
+					textSearch: false,
+					scoreFusion: false,
+					rankFusion: false,
+					storedSource: false,
+					vectorIndexMethod: false,
+				},
+			},
+		})
+
+		expect(searchEpisodes).toHaveBeenCalledWith(
+			expect.objectContaining({ textSearchAvailable: false }),
+		)
+	})
+
+	it("threads the textSearch capability into the graph lane entity lookup (P3.8)", async () => {
+		mocked(planRetrieval).mockReturnValue({
+			paths: ["graph"],
+			confidence: "high",
+			reasoning: "known entity detected",
+		})
+		mocked(searchEntitiesAutocomplete).mockResolvedValue([])
+
+		await searchV2(fakeDb, fakePrefix, "what does Alice work on", "agent-1", {
+			availablePaths: new Set(["graph"]),
+			knownEntityNames: ["Alice"],
+			searchOptions: {
+				allowHybridBackstop: false,
+				capabilities: {
+					vectorSearch: false,
+					textSearch: true,
+					scoreFusion: false,
+					rankFusion: false,
+					storedSource: false,
+					vectorIndexMethod: false,
+				},
+			},
+		})
+
+		expect(searchEntitiesAutocomplete).toHaveBeenCalledWith(
+			expect.objectContaining({ textSearchAvailable: true }),
+		)
+	})
+
+	it("applies maxTimeMS to the user-driven conversation-evidence $search pipeline (P3.8)", async () => {
+		mocked(planRetrieval).mockReturnValue({
+			paths: [],
+			confidence: "low",
+			reasoning: "no lanes planned",
+		})
+		const aggregate = vi.fn(() => ({
+			toArray: vi.fn(async () => []),
+		}))
+		mocked(eventsCollection).mockReturnValue({ aggregate } as never)
+
+		await searchV2(
+			fakeDb,
+			fakePrefix,
+			"what did we discuss about the roadmap?",
+			"agent-1",
+			{
+				availablePaths: new Set(["hybrid"]),
+				searchOptions: {
+					allowHybridBackstop: false,
+					capabilities: {
+						vectorSearch: false,
+						textSearch: true,
+						scoreFusion: false,
+						rankFusion: false,
+						storedSource: false,
+						vectorIndexMethod: false,
+					},
+				},
+			},
+		)
+
+		// The conversation-evidence lane matches "did we" and runs a direct
+		// $search aggregate that bypasses runSearchAggregateWithRetry.
+		expect(aggregate.mock.calls.length).toBeGreaterThan(0)
+		for (const call of aggregate.mock.calls) {
+			const options = call[1] as { maxTimeMS?: number } | undefined
+			expect(typeof options?.maxTimeMS).toBe("number")
+			expect(options!.maxTimeMS).toBeGreaterThan(0)
+		}
 	})
 
 	it("ranks raw-window events by query relevance before pure recency", async () => {
@@ -4002,6 +4128,10 @@ describe("searchV2", () => {
 							topN: 10,
 							minScore: 0,
 							voyageApiKey: "test-key",
+							// P3.7: isolate the preference-evidence behavior under test
+							// from the orthogonal post-CE recency/access boost.
+							recencyBoost: 0,
+							accessBoost: 0,
 						},
 					},
 				},
@@ -4017,6 +4147,490 @@ describe("searchV2", () => {
 				process.env.MEMONGO_BENCHMARK_TURN_PRECISION_MODE = previousMode
 			}
 		}
+	})
+})
+
+// ---------------------------------------------------------------------------
+// 8.2b: P3.1/P3.2 search cost — fused lanes, per-search budget, backstop gating
+// ---------------------------------------------------------------------------
+
+describe("searchV2 cost controls (P3.1/P3.2)", () => {
+	beforeEach(() => {
+		vi.clearAllMocks()
+		mocked(crossEncoderRerank).mockImplementation(async ({ results }) => ({
+			results,
+			reranked: false,
+			latencyMs: 0,
+		}))
+	})
+
+	it("fuses conversation and bridge chunk lanes into one embedded search per request (P3.1)", async () => {
+		mocked(planRetrieval).mockReturnValue({
+			paths: ["hybrid"],
+			confidence: "high",
+			reasoning: "fusion probe",
+		})
+		const chunkDoc = {
+			path: "events/evt-1",
+			startLine: 0,
+			endLine: 0,
+			text: "fused lane result",
+			source: "conversation",
+			score: 0.9,
+		}
+		const aggregate = vi.fn().mockReturnValue({
+			toArray: vi.fn().mockResolvedValue([chunkDoc]),
+		})
+		mocked(chunksCollection).mockReturnValue({ aggregate } as never)
+
+		// Production-shaped filters (same identity + status; only the source
+		// set differs) — exactly what the manager's filter builders emit when
+		// the caller's identity IS the workspace.
+		const conversationFilter = {
+			source: { $in: ["conversation", "sessions"] },
+			agentId: "agent-1",
+			scope: "workspace",
+			scopeRef: "workspace:agent-1",
+			status: { $ne: "deleted" },
+		}
+		const bridgeFilter = {
+			source: { $in: ["conversation", "memory"] },
+			agentId: "agent-1",
+			scope: "workspace",
+			scopeRef: "workspace:agent-1",
+			status: { $ne: "deleted" },
+		}
+
+		const result = await searchV2(
+			fakeDb,
+			fakePrefix,
+			"fused lane probe",
+			"agent-1",
+			{
+				availablePaths: new Set(["hybrid"]),
+				searchOptions: {
+					scope: "workspace",
+					scopeRef: "workspace:agent-1",
+					conversationFilter,
+					bridgeFilter,
+					capabilities: {
+						vectorSearch: true,
+						textSearch: true,
+						scoreFusion: false,
+						rankFusion: true,
+						storedSource: false,
+						vectorIndexMethod: false,
+					},
+					fusionMethod: "rankFusion",
+					embeddingMode: "automated",
+					allowHybridBackstop: false,
+				},
+			},
+		)
+
+		// ONE fused lane: one aggregation, one server-side embedding (was 2).
+		expect(aggregate).toHaveBeenCalledTimes(1)
+		const pipeline = aggregate.mock.calls[0]?.[0] as Record<string, any>[]
+		const vsStage =
+			pipeline[0]?.$rankFusion?.input?.pipelines?.vector?.[0]?.$vectorSearch
+		expect(vsStage).toBeDefined()
+		expect(vsStage.filter.source.$in).toEqual([
+			"conversation",
+			"sessions",
+			"memory",
+		])
+		expect(result.metadata.budget?.embeds).toBe(1)
+		expect(result.metadata.budget?.aggregations).toBe(1)
+		expect(result.results.length).toBeGreaterThan(0)
+	})
+
+	it("keeps split hybrid sub-lanes when the filters are structurally incompatible", async () => {
+		mocked(planRetrieval).mockReturnValue({
+			paths: ["hybrid"],
+			confidence: "high",
+			reasoning: "incompatible filters probe",
+		})
+		const aggregate = vi.fn().mockReturnValue({
+			toArray: vi.fn().mockResolvedValue([]),
+		})
+		mocked(chunksCollection).mockReturnValue({ aggregate } as never)
+
+		await searchV2(fakeDb, fakePrefix, "split lanes probe", "agent-1", {
+			availablePaths: new Set(["hybrid"]),
+			searchOptions: {
+				scope: "agent",
+				scopeRef: "agent:agent-1",
+				conversationFilter: {
+					source: { $in: ["conversation"] },
+					agentId: "agent-1",
+					scope: "agent",
+					scopeRef: "agent:agent-1",
+					status: { $ne: "deleted" },
+				},
+				// Different identity shape than the conversation filter — must NOT
+				// be fused into a lane that would widen or narrow either read.
+				bridgeFilter: { agentId: "agent-1", source: { $in: ["files"] } },
+				allowHybridBackstop: false,
+			},
+		})
+
+		expect(aggregate).toHaveBeenCalledTimes(2)
+	})
+
+	it("does not fire the recursive hybrid backstop when lane coverage says no data (P3.2)", async () => {
+		mocked(planRetrieval).mockReturnValue({
+			paths: ["episodic"],
+			confidence: "low",
+			reasoning: "sparse query",
+		})
+		mocked(searchEpisodes).mockResolvedValue([])
+		mocked(getLaneCoverage).mockResolvedValue({
+			agentId: "agent-1",
+			lanes: {
+				hybrid: { count: 0, lastUpdated: null, hasData: false },
+			},
+			updatedAt: new Date(),
+		} as never)
+		const aggregate = vi.fn().mockReturnValue({
+			toArray: vi.fn().mockResolvedValue([]),
+		})
+		mocked(chunksCollection).mockReturnValue({ aggregate } as never)
+
+		const result = await searchV2(
+			fakeDb,
+			fakePrefix,
+			"qzx sparse marker",
+			"agent-1",
+			{
+				availablePaths: new Set(["episodic", "hybrid"]),
+				maxResults: 10,
+				searchOptions: {},
+			},
+		)
+
+		// Empty ≠ error: with lane coverage reporting no hybrid data, the
+		// recursive hybrid backstop must not re-run the search.
+		expect(result.results).toEqual([])
+		expect(aggregate).not.toHaveBeenCalled()
+		expect(result.metadata.pathsExecuted).not.toContain("hybrid")
+	})
+
+	it("does not fire the recursive hybrid backstop when no coverage document exists", async () => {
+		mocked(planRetrieval).mockReturnValue({
+			paths: ["episodic"],
+			confidence: "low",
+			reasoning: "cold tenant",
+		})
+		mocked(searchEpisodes).mockResolvedValue([])
+		mocked(getLaneCoverage).mockResolvedValue(null)
+		const aggregate = vi.fn().mockReturnValue({
+			toArray: vi.fn().mockResolvedValue([]),
+		})
+		mocked(chunksCollection).mockReturnValue({ aggregate } as never)
+
+		const result = await searchV2(
+			fakeDb,
+			fakePrefix,
+			"qzx cold tenant marker",
+			"agent-1",
+			{
+				availablePaths: new Set(["episodic", "hybrid"]),
+				maxResults: 10,
+				searchOptions: {},
+			},
+		)
+
+		expect(result.results).toEqual([])
+		expect(aggregate).not.toHaveBeenCalled()
+	})
+
+	it("fires the recursive hybrid backstop when lane coverage says data exists", async () => {
+		mocked(planRetrieval).mockReturnValue({
+			paths: ["episodic"],
+			confidence: "low",
+			reasoning: "sparse but populated",
+		})
+		mocked(searchEpisodes).mockResolvedValue([])
+		mocked(getLaneCoverage).mockResolvedValue({
+			agentId: "agent-1",
+			lanes: {
+				hybrid: { count: 3, lastUpdated: new Date(), hasData: true },
+			},
+			updatedAt: new Date(),
+		} as never)
+		const chunkDoc = {
+			path: "events/evt-backstop",
+			startLine: 0,
+			endLine: 0,
+			text: "backstop hit",
+			source: "conversation",
+			score: 0.9,
+		}
+		const aggregate = vi.fn().mockReturnValue({
+			toArray: vi.fn().mockResolvedValue([chunkDoc]),
+		})
+		mocked(chunksCollection).mockReturnValue({ aggregate } as never)
+
+		const result = await searchV2(
+			fakeDb,
+			fakePrefix,
+			"qzx backstop marker",
+			"agent-1",
+			{
+				availablePaths: new Set(["episodic", "hybrid"]),
+				maxResults: 10,
+				searchOptions: {},
+			},
+		)
+
+		expect(aggregate).toHaveBeenCalled()
+		expect(result.results.length).toBeGreaterThan(0)
+		expect(result.metadata.pathsExecuted).toContain("hybrid")
+	})
+
+	it("keeps an empty-corpus sparse query within the aggregation budget (P3.2)", async () => {
+		mocked(planRetrieval).mockReturnValue({
+			paths: ["structured", "hybrid"],
+			confidence: "low",
+			reasoning: "empty corpus",
+		})
+		mocked(getLaneCoverage).mockResolvedValue(null)
+		const chunksAggregate = vi.fn().mockReturnValue({
+			toArray: vi.fn().mockResolvedValue([]),
+		})
+		const structuredAggregate = vi.fn().mockReturnValue({
+			toArray: vi.fn().mockResolvedValue([]),
+		})
+		const proceduresAggregate = vi.fn().mockReturnValue({
+			toArray: vi.fn().mockResolvedValue([]),
+		})
+		mocked(chunksCollection).mockReturnValue({
+			aggregate: chunksAggregate,
+		} as never)
+		mocked(structuredMemCollection).mockReturnValue({
+			aggregate: structuredAggregate,
+		} as never)
+		mocked(proceduresCollection).mockReturnValue({
+			aggregate: proceduresAggregate,
+			find: vi.fn().mockReturnValue({
+				toArray: vi.fn().mockResolvedValue([]),
+			}),
+		} as never)
+
+		const result = await searchV2(
+			fakeDb,
+			fakePrefix,
+			"qzx empty corpus marker",
+			"agent-1",
+			{
+				availablePaths: new Set(["structured", "hybrid", "procedural"]),
+				maxResults: 10,
+				searchOptions: {},
+			},
+		)
+
+		const totalAggregations =
+			chunksAggregate.mock.calls.length +
+			structuredAggregate.mock.calls.length +
+			proceduresAggregate.mock.calls.length
+		// Was 15+ (6-deep mongoSearch waterfall per lane + procedural backstop +
+		// recursive hybrid backstop); now: hybrid fusion (1) + structured
+		// vector/$text (2) + gated backstops (0).
+		expect(totalAggregations).toBeLessThanOrEqual(6)
+		expect(result.results).toEqual([])
+		expect(result.metadata.budget).toBeDefined()
+		expect(result.metadata.budget?.aggregations ?? 0).toBeLessThanOrEqual(
+			totalAggregations,
+		)
+	})
+
+	it("surfaces accessCount from the raw-window lane so the post-CE boost activates", async () => {
+		mocked(planRetrieval).mockReturnValue({
+			paths: ["raw-window"],
+			confidence: "high",
+			reasoning: "accessCount probe",
+		})
+		mocked(getEventsByTimeRange).mockResolvedValue([
+			{
+				eventId: "evt-hot",
+				body: "hot event body",
+				role: "user",
+				timestamp: new Date("2026-04-01T00:00:00Z"),
+				agentId: "agent-1",
+				scope: "agent",
+				scopeRef: "agent:agent-1",
+				accessCount: 7,
+			},
+		] as never)
+
+		const result = await searchV2(
+			fakeDb,
+			fakePrefix,
+			"hot event access probe",
+			"agent-1",
+			{
+				availablePaths: new Set(["raw-window"]),
+				searchOptions: { allowHybridBackstop: false },
+			},
+		)
+
+		expect(result.results[0]?.path).toBe("events/evt-hot")
+		expect(result.results[0]?.accessCount).toBe(7)
+	})
+
+	it("projects accessCount in the turn-precision events lane", async () => {
+		const previousMode = process.env.MEMONGO_BENCHMARK_TURN_PRECISION_MODE
+		process.env.MEMONGO_BENCHMARK_TURN_PRECISION_MODE = "enabled"
+		try {
+			mocked(planRetrieval).mockReturnValue({
+				paths: ["raw-window"],
+				confidence: "high",
+				reasoning: "accessCount projection probe",
+			})
+			mocked(getEventsByTimeRange).mockResolvedValue([
+				{
+					_id: "evt-seed",
+					eventId: "evt-seed",
+					body: "seed event for session expansion",
+					role: "user",
+					timestamp: new Date("2023-05-30T10:00:00Z"),
+					agentId: "agent-1",
+					scope: "agent",
+					scopeRef: "agent:agent-1",
+					sessionId: "sess-projection",
+					channel: "default",
+				},
+			])
+			const aggregate = vi.fn().mockReturnValue({
+				toArray: vi.fn().mockResolvedValue([
+					{
+						eventId: "evt-turn",
+						body: "turn precision hit with reinforcement",
+						role: "user",
+						sessionId: "sess-projection",
+						timestamp: new Date("2023-05-30T10:01:00Z"),
+						scope: "agent",
+						scopeRef: "agent:agent-1",
+						score: 0.9,
+						accessCount: 11,
+					},
+				]),
+			})
+			mocked(eventsCollection).mockReturnValue({ aggregate } as never)
+
+			const result = await searchV2(
+				fakeDb,
+				fakePrefix,
+				"turn precision accessCount probe",
+				"agent-1",
+				{
+					availablePaths: new Set(["raw-window"]),
+					searchOptions: {
+						allowHybridBackstop: false,
+						capabilities: {
+							vectorSearch: false,
+							textSearch: true,
+							scoreFusion: false,
+							rankFusion: false,
+							storedSource: false,
+							vectorIndexMethod: false,
+						},
+					},
+				},
+			)
+
+			const pipelines = aggregate.mock.calls.map(
+				(call) => call[0] as Record<string, any>[],
+			)
+			const projectStages = pipelines
+				.map((pipeline) => pipeline.find((stage) => stage.$project))
+				.filter(Boolean)
+			expect(projectStages.length).toBeGreaterThan(0)
+			for (const project of projectStages) {
+				expect(project.$project.accessCount).toBe(1)
+			}
+			const turnHit = result.results.find(
+				(entry) => entry.path === "events/evt-turn",
+			)
+			expect(turnHit?.accessCount).toBe(11)
+		} finally {
+			if (previousMode === undefined) {
+				delete process.env.MEMONGO_BENCHMARK_TURN_PRECISION_MODE
+			} else {
+				process.env.MEMONGO_BENCHMARK_TURN_PRECISION_MODE = previousMode
+			}
+		}
+	})
+})
+
+describe("legacySearch fallback opt-in (P3.2)", () => {
+	beforeEach(() => {
+		vi.clearAllMocks()
+	})
+
+	it("returns empty without re-running legacySearch when the fallback is not opted in", async () => {
+		mocked(checkCache).mockResolvedValue({
+			hit: false,
+			tier: "miss",
+			results: [],
+		})
+		mocked(planRetrieval).mockReturnValue({
+			paths: [],
+			confidence: "low",
+			reasoning: "empty plan",
+		})
+		const aggregate = vi.fn().mockReturnValue({
+			toArray: vi.fn().mockResolvedValue([]),
+		})
+		mocked(chunksCollection).mockReturnValue({ aggregate } as never)
+
+		const manager = buildMockManager()
+		const results = await manager.search("qzx legacy opt-out marker")
+
+		// Empty ≠ error: the v2 empty answer stands; legacySearch does not
+		// re-run the whole retrieval (its chunks aggregate never fires).
+		expect(results).toEqual([])
+		expect(aggregate).not.toHaveBeenCalled()
+	})
+
+	it("runs legacySearch when legacySearchFallback is opted in", async () => {
+		mocked(checkCache).mockResolvedValue({
+			hit: false,
+			tier: "miss",
+			results: [],
+		})
+		mocked(planRetrieval).mockReturnValue({
+			paths: [],
+			confidence: "low",
+			reasoning: "empty plan",
+		})
+		const legacyDoc = {
+			path: "memory/legacy.md",
+			startLine: 1,
+			endLine: 5,
+			text: "legacy fallback hit",
+			source: "conversation",
+			score: 0.9,
+		}
+		const aggregate = vi.fn().mockReturnValue({
+			toArray: vi.fn().mockResolvedValue([legacyDoc]),
+		})
+		mocked(chunksCollection).mockReturnValue({ aggregate } as never)
+
+		const base = buildMockManager()
+		const baseCfg = (
+			base as unknown as { config: { mongodb: Record<string, unknown> } }
+		).config.mongodb
+		const manager = buildMockManager({
+			config: {
+				mongodb: { ...baseCfg, legacySearchFallback: true },
+			},
+		})
+		const results = await manager.search("qzx legacy opt-in marker")
+
+		expect(aggregate).toHaveBeenCalled()
+		expect(results.length).toBeGreaterThan(0)
+		expect(results[0]?.snippet).toContain("legacy fallback hit")
 	})
 })
 
@@ -5498,7 +6112,9 @@ describe("MongoDBMemoryManager background extraction", () => {
 				heartbeatAt: new Date("2026-04-09T12:00:01.000Z"),
 				leaseExpiresAt: new Date("2026-04-09T12:01:01.000Z"),
 			})
-			.mockResolvedValueOnce(null)
+			// P3.9: the worker claims up to K jobs per round, so further polls
+			// return null until the queue idles.
+			.mockResolvedValue(null)
 		mocked(createMemoryJob).mockResolvedValue("extraction-evt-late-wake")
 		mocked(completeClaimedMemoryJob).mockResolvedValue(true)
 		mocked(eventsCollection).mockReturnValue({
@@ -5511,6 +6127,7 @@ describe("MongoDBMemoryManager background extraction", () => {
 				scope: "agent",
 				scopeRef: "agent:agent-1",
 			})),
+			find: vi.fn(() => ({ toArray: vi.fn(async () => []) })),
 		} as unknown as import("mongodb").Collection)
 		mocked(promoteDerivedMemoryFromEvent).mockResolvedValue({
 			structuredCreated: 1,
@@ -5545,9 +6162,12 @@ describe("MongoDBMemoryManager background extraction", () => {
 		await manager.extractEvent({ eventId: "evt-late-wake" })
 		finishEmptyClaim?.(null)
 
+		// 4 claims: the in-flight empty claim, the wake-preserved round's
+		// job claim + in-round empty poll, and one final empty poll (P3.9
+		// claims up to K per round).
 		await vi.waitFor(
 			() => {
-				expect(claimMemoryJob).toHaveBeenCalledTimes(3)
+				expect(claimMemoryJob).toHaveBeenCalledTimes(4)
 			},
 			{ timeout: 200 },
 		)
@@ -6839,6 +7459,449 @@ describe("MongoDBMemoryManager write idempotency (P0.1)", () => {
 	})
 })
 
+describe("P3.9 lane-coverage counting is regex-only (no per-candidate findOne)", () => {
+	beforeEach(() => {
+		vi.clearAllMocks()
+	})
+
+	function makeManager() {
+		return Object.assign(Object.create(MongoDBMemoryManager.prototype), {
+			db: {} as import("mongodb").Db,
+			prefix: "test_",
+			agentId: "agent-1",
+			client: undefined,
+			config: {
+				mongodb: {
+					embeddingMode: "automated",
+					episodes: { enabled: false, minEventsForEpisode: 6 },
+				},
+			},
+			workspaceDir: "/tmp/memongo",
+			writeQueue: Promise.resolve(),
+			derivationQueue: Promise.resolve(),
+			derivationSchedulingQueue: Promise.resolve(),
+			memoryJobWorkerId: "worker-1",
+			memoryJobWorkerStopped: true,
+			memoryJobWorkerActive: false,
+			memoryJobWorkerPromise: Promise.resolve(),
+			memoryJobRunContexts: new Map(),
+			chunkCount: 0,
+			dirty: true,
+		}) as MongoDBMemoryManager
+	}
+
+	it("counts structured candidates without touching the database", async () => {
+		const { writeEvent, projectEventChunk } = await import(
+			"./mongodb-events.js"
+		)
+		const { extractAndUpsertEntities } = await import("./mongodb-graph.js")
+		const { claimMemoryJob, createMemoryJob } = await import(
+			"./mongodb-memory-jobs.js"
+		)
+		const {
+			extractStructuredCandidatesFromEvent,
+			extractProcedureCandidatesFromEvent,
+			resolveStructuredCandidatesForPromotion,
+		} = await import("./mongodb-derived-memory.js")
+		const { eventsCollection, structuredMemCollection } = await import(
+			"./mongodb-schema.js"
+		)
+		const { updateLaneCoverage } = await import("./mongodb-lane-coverage.js")
+
+		mocked(writeEvent).mockResolvedValue({
+			eventId: "evt-p39-lane",
+			timestamp: new Date("2026-04-09T12:00:00.000Z"),
+			scopeRef: "agent:agent-1",
+		})
+		mocked(projectEventChunk).mockResolvedValue({ chunkCreated: false })
+		mocked(extractAndUpsertEntities).mockResolvedValue({
+			entities: [],
+			relationsCreated: 0,
+		})
+		mocked(createMemoryJob).mockResolvedValue("extraction-evt-p39-lane")
+		mocked(claimMemoryJob).mockResolvedValue(null)
+		mocked(extractStructuredCandidatesFromEvent).mockReturnValue([
+			{
+				type: "fact",
+				key: "fact-a",
+				value: "deployment is blocked",
+				confidence: 0.9,
+				source: "session",
+				agentId: "agent-1",
+				scope: "agent",
+				scopeRef: "agent:agent-1",
+				salience: "critical",
+				promotionPolicy: "immediate",
+			},
+			{
+				type: "preference",
+				key: "pref-a",
+				value: "prefers tabs",
+				confidence: 0.8,
+				source: "user",
+				agentId: "agent-1",
+				scope: "agent",
+				scopeRef: "agent:agent-1",
+				promotionPolicy: "requires-reinforcement",
+			},
+		] as never)
+		mocked(extractProcedureCandidatesFromEvent).mockReturnValue([
+			{ procedureId: "procedure-a" },
+		] as never)
+
+		const manager = makeManager()
+		await manager.writeConversationEvent({
+			role: "assistant",
+			body: "Remember this: deployment is blocked. Procedure for deploys: 1) build 2) ship.",
+			scope: "agent",
+		})
+
+		// Regex-only counting: the DB-touching promotion resolver and its
+		// per-candidate findOne existence checks stay off the write path.
+		expect(resolveStructuredCandidatesForPromotion).not.toHaveBeenCalled()
+		expect(structuredMemCollection).not.toHaveBeenCalled()
+		expect(eventsCollection).not.toHaveBeenCalled()
+		expect(extractStructuredCandidatesFromEvent).toHaveBeenCalled()
+		expect(updateLaneCoverage).toHaveBeenCalledWith(
+			expect.objectContaining({
+				agentId: "agent-1",
+				increments: {
+					"raw-window": 1,
+					hybrid: 0,
+					structured: 2,
+					"active-critical": 1,
+					procedural: 1,
+				},
+			}),
+		)
+	})
+})
+
+describe("MongoDBMemoryManager writeConversationEventsBatch (P3.9)", () => {
+	beforeEach(() => {
+		vi.clearAllMocks()
+	})
+
+	function makeManager(writeQueue: Promise<void> = Promise.resolve()) {
+		return Object.assign(Object.create(MongoDBMemoryManager.prototype), {
+			db: {} as import("mongodb").Db,
+			prefix: "test_",
+			agentId: "agent-1",
+			client: undefined,
+			closed: false,
+			config: {
+				mongodb: {
+					embeddingMode: "automated",
+					episodes: { enabled: false, minEventsForEpisode: 6 },
+				},
+			},
+			workspaceDir: "/tmp/memongo",
+			writeQueue,
+			derivationQueue: Promise.resolve(),
+			derivationSchedulingQueue: Promise.resolve(),
+			memoryJobWorkerId: "worker-1",
+			memoryJobWorkerStopped: false,
+			memoryJobWorkerActive: false,
+			memoryJobWorkerPromise: Promise.resolve(),
+			memoryJobRunContexts: new Map(),
+			chunkCount: 0,
+			dirty: true,
+		}) as MongoDBMemoryManager & {
+			writeQueue: Promise<void>
+			memoryJobWorkerPromise: Promise<void>
+		}
+	}
+
+	async function mockBatchPath() {
+		const {
+			writeEventsBatch,
+			projectEventChunksBatch,
+			clearEventExtractionJobPendingBatch,
+		} = await import("./mongodb-events.js")
+		const { extractAndUpsertEntities } = await import("./mongodb-graph.js")
+		const { claimMemoryJob, createMemoryJobsBatch } = await import(
+			"./mongodb-memory-jobs.js"
+		)
+		mocked(writeEventsBatch).mockImplementation(
+			async ({ events }: { events: Array<{ eventId?: string }> }) =>
+				events.map((event) => ({
+					ok: true as const,
+					eventId: event.eventId ?? "evt-generated",
+					timestamp: new Date("2026-04-09T12:00:00.000Z"),
+					scopeRef: "agent:agent-1",
+				})),
+		)
+		mocked(projectEventChunksBatch).mockImplementation(
+			async ({ events }: { events: Array<{ eventId: string }> }) =>
+				events.map((_, index) => ({ chunkCreated: index === 0 })),
+		)
+		mocked(clearEventExtractionJobPendingBatch).mockResolvedValue(2)
+		mocked(extractAndUpsertEntities).mockResolvedValue({
+			entities: [],
+			relationsCreated: 0,
+		})
+		mocked(createMemoryJobsBatch).mockImplementation(
+			async ({ jobs }: { jobs: Array<{ jobId: string }> }) =>
+				jobs.map((job) => ({ ok: true as const, jobId: job.jobId })),
+		)
+		mocked(claimMemoryJob).mockResolvedValue(null)
+		return {
+			writeEventsBatch,
+			projectEventChunksBatch,
+			createMemoryJobsBatch,
+			clearEventExtractionJobPendingBatch,
+		}
+	}
+
+	it("amortizes a batch into one insertMany/bulkWrite pass with per-item receipts", async () => {
+		const {
+			writeEventsBatch,
+			projectEventChunksBatch,
+			createMemoryJobsBatch,
+			clearEventExtractionJobPendingBatch,
+		} = await mockBatchPath()
+		const { eventsCollection } = await import("./mongodb-schema.js")
+		const { updateLaneCoverage } = await import("./mongodb-lane-coverage.js")
+		const find = vi.fn(() => ({ toArray: vi.fn(async () => []) }))
+		mocked(eventsCollection).mockReturnValue({ find } as never)
+
+		const manager = makeManager()
+		const receipts = await manager.writeConversationEventsBatch([
+			{ role: "user", body: "first batched event", scope: "agent" },
+			{
+				role: "assistant",
+				body: "second batched event",
+				scope: "agent",
+				idempotencyKey: "key-b2",
+			},
+		])
+		await manager.memoryJobWorkerPromise
+
+		expect(receipts).toHaveLength(2)
+		expect(receipts[0]).toMatchObject({ ok: true, chunkCreated: true })
+		expect(receipts[1]).toMatchObject({ ok: true, chunkCreated: false })
+
+		// ONE insertMany for events, ONE bulkWrite for chunks, ONE insertMany
+		// for jobs, ONE updateMany clearing the outbox markers.
+		expect(writeEventsBatch).toHaveBeenCalledTimes(1)
+		expect(mocked(writeEventsBatch).mock.calls[0][0].events).toHaveLength(2)
+		expect(projectEventChunksBatch).toHaveBeenCalledTimes(1)
+		expect(createMemoryJobsBatch).toHaveBeenCalledTimes(1)
+		expect(clearEventExtractionJobPendingBatch).toHaveBeenCalledTimes(1)
+		// Lane coverage is aggregated into a single update for the batch.
+		expect(updateLaneCoverage).toHaveBeenCalledTimes(1)
+		expect(updateLaneCoverage).toHaveBeenCalledWith(
+			expect.objectContaining({
+				increments: expect.objectContaining({
+					"raw-window": 2,
+					hybrid: 1,
+				}),
+			}),
+		)
+		expect(manager.chunkCount).toBe(1)
+	})
+
+	it("replays a known idempotency key from ONE batched lookup and writes the rest", async () => {
+		const { writeEventsBatch, createMemoryJobsBatch } = await mockBatchPath()
+		const { eventsCollection } = await import("./mongodb-schema.js")
+		const find = vi.fn(() => ({
+			toArray: vi.fn(async () => [
+				{
+					eventId: "evt-original",
+					agentId: "agent-1",
+					role: "user",
+					body: "idempotent hello",
+					scope: "agent",
+					scopeRef: "agent:agent-1",
+					idempotencyKey: "key-replay",
+					timestamp: new Date("2026-04-09T12:00:00.000Z"),
+				},
+			]),
+		}))
+		mocked(eventsCollection).mockReturnValue({ find } as never)
+
+		const manager = makeManager()
+		const receipts = await manager.writeConversationEventsBatch([
+			{
+				role: "user",
+				body: "idempotent hello",
+				scope: "agent",
+				idempotencyKey: "key-replay",
+			},
+			{ role: "user", body: "brand new event", scope: "agent" },
+		])
+
+		expect(receipts[0]).toEqual({
+			ok: true,
+			eventId: "evt-original",
+			chunkCreated: false,
+			replayed: true,
+		})
+		expect(receipts[1]).toMatchObject({ ok: true, chunkCreated: true })
+		// ONE batched $in lookup, and only the non-replayed item was inserted.
+		expect(find).toHaveBeenCalledTimes(1)
+		expect(find).toHaveBeenCalledWith({
+			agentId: "agent-1",
+			idempotencyKey: { $in: ["key-replay"] },
+		})
+		expect(mocked(writeEventsBatch).mock.calls[0][0].events).toHaveLength(1)
+		expect(createMemoryJobsBatch).toHaveBeenCalledTimes(1)
+	})
+
+	it("maps key+payload mismatch to a per-item conflict receipt; the sibling writes", async () => {
+		const { writeEventsBatch } = await mockBatchPath()
+		const { eventsCollection } = await import("./mongodb-schema.js")
+		const find = vi.fn(() => ({
+			toArray: vi.fn(async () => [
+				{
+					eventId: "evt-original",
+					agentId: "agent-1",
+					role: "user",
+					body: "the ORIGINAL payload",
+					scope: "agent",
+					scopeRef: "agent:agent-1",
+					idempotencyKey: "key-conflict",
+					timestamp: new Date("2026-04-09T12:00:00.000Z"),
+				},
+			]),
+		}))
+		mocked(eventsCollection).mockReturnValue({ find } as never)
+
+		const manager = makeManager()
+		const receipts = await manager.writeConversationEventsBatch([
+			{
+				role: "user",
+				body: "a DIFFERENT payload",
+				scope: "agent",
+				idempotencyKey: "key-conflict",
+			},
+			{ role: "user", body: "unrelated event", scope: "agent" },
+		])
+
+		expect(receipts[0]).toMatchObject({
+			ok: false,
+			code: "IDEMPOTENCY_CONFLICT",
+		})
+		expect(receipts[1]).toMatchObject({ ok: true })
+		expect(mocked(writeEventsBatch).mock.calls[0][0].events).toHaveLength(1)
+	})
+
+	it("replays the winner when the batch insert loses an idempotency race", async () => {
+		const { writeEventsBatch } = await mockBatchPath()
+		const { eventsCollection } = await import("./mongodb-schema.js")
+		const find = vi.fn(() => ({ toArray: vi.fn(async () => []) }))
+		const findOne = vi.fn(async () => ({
+			eventId: "evt-winner",
+			agentId: "agent-1",
+			role: "user",
+			body: "raced hello",
+			scope: "agent",
+			scopeRef: "agent:agent-1",
+			idempotencyKey: "key-race",
+			timestamp: new Date("2026-04-09T12:00:00.000Z"),
+		}))
+		mocked(eventsCollection).mockReturnValue({ find, findOne } as never)
+		mocked(writeEventsBatch).mockResolvedValue([
+			{
+				ok: false,
+				eventId: "evt-loser",
+				duplicateKey: true,
+				message: "E11000 duplicate key error",
+			},
+		])
+
+		const manager = makeManager()
+		const receipts = await manager.writeConversationEventsBatch([
+			{
+				role: "user",
+				body: "raced hello",
+				scope: "agent",
+				idempotencyKey: "key-race",
+			},
+		])
+
+		expect(receipts[0]).toEqual({
+			ok: true,
+			eventId: "evt-winner",
+			chunkCreated: false,
+			replayed: true,
+		})
+	})
+
+	it("isolates a per-item write failure without failing the batch", async () => {
+		const { writeEventsBatch } = await mockBatchPath()
+		const { eventsCollection } = await import("./mongodb-schema.js")
+		mocked(eventsCollection).mockReturnValue({
+			find: vi.fn(() => ({ toArray: vi.fn(async () => []) })),
+		} as never)
+		mocked(writeEventsBatch).mockResolvedValue([
+			{
+				ok: true,
+				eventId: "evt-good",
+				timestamp: new Date("2026-04-09T12:00:00.000Z"),
+				scopeRef: "agent:agent-1",
+			},
+			{
+				ok: false,
+				eventId: "evt-bad",
+				duplicateKey: false,
+				message: "invalid event timestamp",
+			},
+		])
+
+		const manager = makeManager()
+		const receipts = await manager.writeConversationEventsBatch([
+			{ role: "user", body: "good event", scope: "agent" },
+			{ role: "user", body: "bad event", scope: "agent" },
+		])
+
+		expect(receipts[0]).toMatchObject({ ok: true, chunkCreated: true })
+		expect(receipts[1]).toMatchObject({ ok: false, code: "WRITE_ERROR" })
+	})
+
+	it("queues the whole batch behind a previously queued write", async () => {
+		const { writeEventsBatch } = await mockBatchPath()
+		const { eventsCollection } = await import("./mongodb-schema.js")
+		mocked(eventsCollection).mockReturnValue({
+			find: vi.fn(() => ({ toArray: vi.fn(async () => []) })),
+		} as never)
+
+		let releasePrior: (() => void) | undefined
+		const prior = new Promise<void>((resolve) => {
+			releasePrior = () => resolve()
+		})
+		const manager = makeManager(prior)
+
+		let batchRan = false
+		const batch = manager
+			.writeConversationEventsBatch([
+				{ role: "user", body: "queued batch event", scope: "agent" },
+			])
+			.then((receipts) => {
+				batchRan = true
+				return receipts
+			})
+
+		await new Promise((resolve) => setTimeout(resolve, 10))
+		expect(batchRan).toBe(false)
+		expect(writeEventsBatch).not.toHaveBeenCalled()
+
+		releasePrior?.()
+		await expect(batch).resolves.toHaveLength(1)
+		expect(writeEventsBatch).toHaveBeenCalledTimes(1)
+	})
+
+	it("refuses to queue a batch after close", async () => {
+		const manager = makeManager()
+		;(manager as unknown as { closed: boolean }).closed = true
+		await expect(
+			manager.writeConversationEventsBatch([
+				{ role: "user", body: "too late", scope: "agent" },
+			]),
+		).rejects.toThrow(/closed/)
+	})
+})
+
 describe("MongoDBMemoryManager projection repair", () => {
 	beforeEach(() => {
 		vi.clearAllMocks()
@@ -7994,6 +9057,287 @@ describe("P2.1 memory-job worker sweep", () => {
 })
 
 // ---------------------------------------------------------------------------
+// P3.9 extraction worker: K=3 concurrent claims per drain round, per-session
+// batched LLM extraction, per-job lease fencing preserved under concurrency.
+// ---------------------------------------------------------------------------
+
+describe("P3.9 extraction worker concurrency + session-batched LLM", () => {
+	beforeEach(() => {
+		vi.clearAllMocks()
+	})
+
+	function makeExtractionJob(eventId: string) {
+		return {
+			jobId: `extraction-${eventId}`,
+			jobType: "extraction" as const,
+			agentId: "agent-1",
+			status: "running" as const,
+			createdAt: new Date("2026-04-09T12:00:00.000Z"),
+			payload: {
+				eventId,
+				scope: "agent" as const,
+				scopeRef: "agent:agent-1",
+			},
+			attempts: 1,
+			leaseOwner: "worker-1",
+			leaseToken: `lease-${eventId}`,
+			heartbeatAt: new Date("2026-04-09T12:00:00.000Z"),
+			leaseExpiresAt: new Date("2026-04-09T12:01:00.000Z"),
+		}
+	}
+
+	function makeEventDoc(eventId: string, sessionId?: string) {
+		return {
+			eventId,
+			agentId: "agent-1",
+			role: "user" as const,
+			body: `Remember this fact from ${eventId}.`,
+			timestamp: new Date("2026-04-09T12:00:00.000Z"),
+			...(sessionId ? { sessionId } : {}),
+			scope: "agent" as const,
+			scopeRef: "agent:agent-1",
+		}
+	}
+
+	function makeDrainManager() {
+		return Object.assign(Object.create(MongoDBMemoryManager.prototype), {
+			db: {} as import("mongodb").Db,
+			prefix: "test_",
+			agentId: "agent-1",
+			client: undefined,
+			config: { mongodb: { embeddingMode: "automated" } },
+			workspaceDir: "/tmp/memongo",
+			memoryJobWorkerId: "worker-1",
+			memoryJobWorkerStopped: false,
+			memoryJobWorkerActive: false,
+			memoryJobWorkerPromise: Promise.resolve(),
+			memoryJobRunContexts: new Map(),
+			repairExtractionOutbox: vi.fn(async () => ({
+				eventsProcessed: 0,
+				jobsCreated: 0,
+				jobsReleased: 0,
+				eventsFailed: 0,
+			})),
+		}) as MongoDBMemoryManager
+	}
+
+	const drainLifecycle = MongoDBMemoryManager.prototype as unknown as {
+		drainMemoryJobQueue: (this: MongoDBMemoryManager) => Promise<void>
+	}
+
+	async function mockJobRunBase(docs: Array<ReturnType<typeof makeEventDoc>>) {
+		const { claimMemoryJob, completeClaimedMemoryJob, renewMemoryJobLease } =
+			await import("./mongodb-memory-jobs.js")
+		const { eventsCollection, entitiesCollection } = await import(
+			"./mongodb-schema.js"
+		)
+		const { extractAndUpsertEntities } = await import("./mongodb-graph.js")
+		const { promoteDerivedMemoryFromEvent } = await import(
+			"./mongodb-derived-memory.js"
+		)
+		mocked(eventsCollection).mockReturnValue({
+			findOne: vi.fn(async (filter: { eventId?: string }) =>
+				docs.find((doc) => doc.eventId === filter.eventId),
+			),
+			find: vi.fn(() => ({
+				toArray: vi.fn(async () => docs),
+			})),
+		} as unknown as import("mongodb").Collection)
+		mocked(entitiesCollection).mockReturnValue({
+			find: vi.fn(() => ({ toArray: vi.fn(async () => []) })),
+		} as never)
+		mocked(extractAndUpsertEntities).mockResolvedValue({
+			entities: [],
+			relationsCreated: 0,
+		})
+		mocked(renewMemoryJobLease).mockResolvedValue(true)
+		mocked(completeClaimedMemoryJob).mockResolvedValue(true)
+		return {
+			claimMemoryJob,
+			completeClaimedMemoryJob,
+			renewMemoryJobLease,
+			promoteDerivedMemoryFromEvent,
+		}
+	}
+
+	it("processes up to 3 claimed jobs concurrently per drain round", async () => {
+		const docs = [
+			makeEventDoc("evt-c1"),
+			makeEventDoc("evt-c2"),
+			makeEventDoc("evt-c3"),
+		]
+		const {
+			claimMemoryJob,
+			completeClaimedMemoryJob,
+			promoteDerivedMemoryFromEvent,
+		} = await mockJobRunBase(docs)
+		mocked(claimMemoryJob)
+			.mockResolvedValueOnce(makeExtractionJob("evt-c1"))
+			.mockResolvedValueOnce(makeExtractionJob("evt-c2"))
+			.mockResolvedValueOnce(makeExtractionJob("evt-c3"))
+			.mockResolvedValue(null)
+		const started: string[] = []
+		let releaseGate: (() => void) | undefined
+		const gate = new Promise<void>((resolve) => {
+			releaseGate = () => resolve()
+		})
+		mocked(promoteDerivedMemoryFromEvent).mockImplementation(
+			async (params: { event: { eventId: string } }) => {
+				started.push(params.event.eventId)
+				await gate
+				return { structuredCreated: 0, proceduresCreated: 0, skipped: false }
+			},
+		)
+
+		const manager = makeDrainManager()
+		const drain = drainLifecycle.drainMemoryJobQueue.call(manager)
+
+		// All three promotions start BEFORE any completes — sequential claiming
+		// would deadlock here against the gate.
+		await vi.waitFor(() => {
+			expect(started).toHaveLength(3)
+		})
+		releaseGate?.()
+		await drain
+
+		expect(claimMemoryJob).toHaveBeenCalledTimes(4) // 3 claims + empty poll
+		expect(completeClaimedMemoryJob).toHaveBeenCalledTimes(3)
+	})
+
+	it("batches LLM fact extraction per session across the round", async () => {
+		const enrichment = await import("./mongodb-llm-enrichment.js")
+		const provider = {
+			name: "mock-provider",
+			chatCompletion: vi.fn(async () => ({
+				content: JSON.stringify({
+					facts: ["shared session fact"],
+					qa_pairs: [],
+					has_personal_content: true,
+				}),
+			})),
+		}
+		const providerSpy = vi
+			.spyOn(enrichment, "resolveEnrichmentProvider")
+			.mockReturnValue(provider as never)
+		try {
+			const docs = [
+				makeEventDoc("evt-s1a", "session-1"),
+				makeEventDoc("evt-s1b", "session-1"),
+				makeEventDoc("evt-s2", "session-2"),
+			]
+			const { claimMemoryJob, promoteDerivedMemoryFromEvent } =
+				await mockJobRunBase(docs)
+			mocked(claimMemoryJob)
+				.mockResolvedValueOnce(makeExtractionJob("evt-s1a"))
+				.mockResolvedValueOnce(makeExtractionJob("evt-s1b"))
+				.mockResolvedValueOnce(makeExtractionJob("evt-s2"))
+				.mockResolvedValue(null)
+			mocked(promoteDerivedMemoryFromEvent).mockResolvedValue({
+				structuredCreated: 1,
+				proceduresCreated: 0,
+				skipped: false,
+			})
+
+			const manager = makeDrainManager()
+			await drainLifecycle.drainMemoryJobQueue.call(manager)
+
+			// ONE provider call for the two session-1 events; the session-2
+			// singleton keeps its per-event path (no prefetch call).
+			expect(provider.chatCompletion).toHaveBeenCalledTimes(1)
+			const promoteCalls = mocked(promoteDerivedMemoryFromEvent).mock.calls
+			const byEvent = new Map(
+				promoteCalls.map((call) => [
+					(call[0] as { event: { eventId: string } }).event.eventId,
+					call[0] as { prefetchedLlmFacts?: string[] },
+				]),
+			)
+			expect(byEvent.get("evt-s1a")?.prefetchedLlmFacts).toEqual([
+				"shared session fact",
+			])
+			expect(byEvent.get("evt-s1b")?.prefetchedLlmFacts).toEqual([
+				"shared session fact",
+			])
+			expect(byEvent.get("evt-s2")?.prefetchedLlmFacts).toBeUndefined()
+		} finally {
+			providerSpy.mockRestore()
+		}
+	})
+
+	it("fences a job that loses its lease mid-batch while its sibling completes", async () => {
+		vi.useFakeTimers()
+		try {
+			const docs = [makeEventDoc("evt-fenced"), makeEventDoc("evt-healthy")]
+			const {
+				claimMemoryJob,
+				completeClaimedMemoryJob,
+				renewMemoryJobLease,
+				promoteDerivedMemoryFromEvent,
+			} = await mockJobRunBase(docs)
+			const { failClaimedMemoryJob } = await import("./mongodb-memory-jobs.js")
+			mocked(claimMemoryJob)
+				.mockResolvedValueOnce(makeExtractionJob("evt-fenced"))
+				.mockResolvedValueOnce(makeExtractionJob("evt-healthy"))
+				.mockResolvedValue(null)
+			// The fenced job's heartbeat renewal fails; the sibling's succeeds.
+			mocked(renewMemoryJobLease).mockImplementation(
+				async ({ jobId }: { jobId: string }) =>
+					jobId !== "extraction-evt-fenced",
+			)
+			const started: string[] = []
+			let releaseGate: (() => void) | undefined
+			const gate = new Promise<void>((resolve) => {
+				releaseGate = () => resolve()
+			})
+			mocked(promoteDerivedMemoryFromEvent).mockImplementation(
+				async (params: { event: { eventId: string } }) => {
+					started.push(params.event.eventId)
+					await gate
+					return {
+						structuredCreated: 1,
+						proceduresCreated: 0,
+						skipped: false,
+					}
+				},
+			)
+
+			const manager = makeDrainManager()
+			const drain = drainLifecycle.drainMemoryJobQueue.call(manager)
+			await vi.waitFor(() => {
+				expect(started).toHaveLength(2)
+			})
+			// Both jobs are mid-promotion when the heartbeat interval fires and
+			// the fenced job loses its lease.
+			await vi.advanceTimersByTimeAsync(20_001)
+			releaseGate?.()
+			await drain
+
+			const completedJobIds = mocked(completeClaimedMemoryJob).mock.calls.map(
+				(call) => (call[0] as { jobId: string }).jobId,
+			)
+			expect(completedJobIds).toEqual(["extraction-evt-healthy"])
+			expect(failClaimedMemoryJob).not.toHaveBeenCalled()
+		} finally {
+			vi.useRealTimers()
+		}
+	})
+
+	it("resolveMemoryJobWorkerConcurrency: default 3, env override, clamped", async () => {
+		const { resolveMemoryJobWorkerConcurrency } = await import(
+			"./mongodb-manager.js"
+		)
+		vi.stubEnv("MEMONGO_JOB_WORKER_CONCURRENCY", "")
+		expect(resolveMemoryJobWorkerConcurrency()).toBe(3)
+		vi.stubEnv("MEMONGO_JOB_WORKER_CONCURRENCY", "5")
+		expect(resolveMemoryJobWorkerConcurrency()).toBe(5)
+		vi.stubEnv("MEMONGO_JOB_WORKER_CONCURRENCY", "not-a-number")
+		expect(resolveMemoryJobWorkerConcurrency()).toBe(3)
+		vi.stubEnv("MEMONGO_JOB_WORKER_CONCURRENCY", "999")
+		expect(resolveMemoryJobWorkerConcurrency()).toBe(16)
+		vi.unstubAllEnvs()
+	})
+})
+
+// ---------------------------------------------------------------------------
 // P2.3 scope identity unification: writes and reads resolve the SAME
 // { scope, scopeRef } from the same hints. Rule: explicit scope wins;
 // sessionId/sessionKey implies "session"; otherwise the env-resolved default
@@ -8235,12 +9579,16 @@ describe("P2.3 scope identity unification", () => {
 			...findArgs.map((filter) => JSON.stringify(filter)),
 		]
 		expect(observed.length).toBeGreaterThan(0)
-		expect(
-			observed.some(
-				(payload) =>
-					payload.includes('"scope":"session"') &&
-					payload.includes('"scopeRef":"session:s1"'),
-			),
-		).toBe(true)
+		// The identity reaches lane pipelines in two syntaxes: BSON filters
+		// (`"scope":"session"`, the legacy/find shape) and $search compound
+		// filters (`{"path":"scope","value":"session"}`, the v2 keyword lane).
+		// P3.2 made the legacySearch re-run opt-in, so the v2 $search shape is
+		// now the one that carries the identity in this probe.
+		const carriesSessionIdentity = (payload: string) =>
+			(payload.includes('"scope":"session"') &&
+				payload.includes('"scopeRef":"session:s1"')) ||
+			(payload.includes('"path":"scope","value":"session"') &&
+				payload.includes('"path":"scopeRef","value":"session:s1"'))
+		expect(observed.some(carriesSessionIdentity)).toBe(true)
 	})
 })

@@ -78,6 +78,64 @@ export async function createMemoryJob(params: {
 	return doc.jobId
 }
 
+export type MemoryJobBatchItemResult =
+	| { ok: true; jobId: string }
+	| { ok: false; jobId: string; duplicate: boolean; message: string }
+
+/**
+ * P3.9: insert many jobs in ONE unordered insertMany with the durable write
+ * concern. Per-item receipts isolate failures; E11000 (the deterministic
+ * `extraction-<eventId>` job already exists) maps to duplicate:true so the
+ * caller can treat an existing job as satisfied instead of an error.
+ */
+export async function createMemoryJobsBatch(params: {
+	db: Db
+	prefix: string
+	jobs: Array<Omit<MemoryJob, "createdAt">>
+}): Promise<MemoryJobBatchItemResult[]> {
+	const { db, prefix, jobs } = params
+	if (jobs.length === 0) {
+		return []
+	}
+	const docs: MemoryJob[] = jobs.map((job) => ({
+		...job,
+		createdAt: new Date(),
+		attempts: job.attempts ?? 0,
+	}))
+	const results: MemoryJobBatchItemResult[] = docs.map((doc) => ({
+		ok: true,
+		jobId: doc.jobId,
+	}))
+	try {
+		await memoryJobsCollection(db, prefix).insertMany(docs, {
+			ordered: false,
+			writeConcern: DURABLE_JOB_WRITE_CONCERN,
+		})
+	} catch (err) {
+		const writeErrors = (
+			err as {
+				writeErrors?: Array<{ index: number; code?: number; errmsg?: string }>
+			}
+		)?.writeErrors
+		if (!Array.isArray(writeErrors)) {
+			throw err
+		}
+		for (const writeError of writeErrors) {
+			const doc = docs[writeError.index]
+			if (!doc) {
+				continue
+			}
+			results[writeError.index] = {
+				ok: false,
+				jobId: doc.jobId,
+				duplicate: writeError.code === 11000,
+				message: writeError.errmsg ?? "job insert failed",
+			}
+		}
+	}
+	return results
+}
+
 export async function claimMemoryJob(params: {
 	db: Db
 	prefix: string

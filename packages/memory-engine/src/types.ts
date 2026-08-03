@@ -68,6 +68,13 @@ export type MemorySearchResult = {
 	canonicalId?: string
 	sessionId?: string
 	timestamp?: Date
+	/**
+	 * Denormalized reinforcement counter maintained by the access tracker
+	 * ($inc on the source document per retrieval). Surfaced here so the
+	 * post-cross-encoder recency/access boost can modulate ranking; absent
+	 * on lanes that do not project it (treated as neutral by the boost).
+	 */
+	accessCount?: number
 	scope?: MemoryScope
 	scopeRef?: string
 	state?: string

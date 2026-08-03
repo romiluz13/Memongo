@@ -16,6 +16,9 @@ vi.mock("./mongodb-schema.js", () => ({
 
 import {
 	writeEvent,
+	writeEventsBatch,
+	projectEventChunksBatch,
+	clearEventExtractionJobPendingBatch,
 	getPendingExtractionEvents,
 	clearEventExtractionJobPending,
 	getEventsByTimeRange,
@@ -69,6 +72,296 @@ function createMockChunksCol(): Collection {
 function mockDb(): Db {
 	return {} as unknown as Db
 }
+
+// ---------------------------------------------------------------------------
+// Tests: writeEventsBatch (P3.9)
+// ---------------------------------------------------------------------------
+
+describe("writeEventsBatch", () => {
+	beforeEach(() => {
+		vi.clearAllMocks()
+	})
+
+	function createBatchEventsCol(
+		overrides: Record<string, unknown> = {},
+	): Collection {
+		return {
+			insertMany: vi.fn(async () => ({
+				acknowledged: true,
+				insertedCount: 2,
+			})),
+			updateMany: vi.fn(async () => ({ matchedCount: 2, modifiedCount: 2 })),
+			...overrides,
+		} as unknown as Collection
+	}
+
+	it("inserts every event in ONE insertMany with unordered majority writes", async () => {
+		const col = createBatchEventsCol()
+		vi.mocked(eventsCollection).mockReturnValue(col)
+
+		const results = await writeEventsBatch({
+			db: mockDb(),
+			prefix: "test_",
+			events: [
+				{
+					eventId: "evt-b1",
+					agentId: "agent-1",
+					role: "user",
+					body: "first batch event",
+					scope: "agent",
+				},
+				{
+					eventId: "evt-b2",
+					agentId: "agent-1",
+					role: "assistant",
+					body: "second batch event",
+					scope: "agent",
+				},
+			],
+		})
+
+		expect(col.insertMany).toHaveBeenCalledTimes(1)
+		const [docs, opts] = vi.mocked(col.insertMany).mock.calls[0]
+		expect(opts).toEqual({
+			ordered: false,
+			writeConcern: { w: "majority", wtimeoutMS: 5_000 },
+		})
+		expect(docs).toHaveLength(2)
+		expect((docs as CanonicalEvent[])[0].eventId).toBe("evt-b1")
+		expect((docs as CanonicalEvent[])[0].scopeRef).toBe("agent:agent-1")
+		expect((docs as CanonicalEvent[])[0].recordedAt).toBeInstanceOf(Date)
+		expect(results).toHaveLength(2)
+		expect(results[0]).toMatchObject({ ok: true, eventId: "evt-b1" })
+		expect(results[1]).toMatchObject({ ok: true, eventId: "evt-b2" })
+	})
+
+	it("isolates a per-item validation failure without failing the batch", async () => {
+		const col = createBatchEventsCol()
+		vi.mocked(eventsCollection).mockReturnValue(col)
+
+		const results = await writeEventsBatch({
+			db: mockDb(),
+			prefix: "test_",
+			events: [
+				{
+					eventId: "evt-ok",
+					agentId: "agent-1",
+					role: "user",
+					body: "valid event",
+					scope: "agent",
+				},
+				{
+					eventId: "evt-bad-dates",
+					agentId: "agent-1",
+					role: "user",
+					body: "invalidAt before validAt",
+					scope: "agent",
+					validAt: new Date("2026-04-10T12:00:00.000Z"),
+					invalidAt: new Date("2026-04-09T12:00:00.000Z"),
+				},
+			],
+		})
+
+		expect(results).toHaveLength(2)
+		expect(results[0]).toMatchObject({ ok: true, eventId: "evt-ok" })
+		expect(results[1]).toMatchObject({
+			ok: false,
+			duplicateKey: false,
+		})
+		// The invalid item is excluded from the insert.
+		const [docs] = vi.mocked(col.insertMany).mock.calls[0]
+		expect(docs).toHaveLength(1)
+		expect((docs as CanonicalEvent[])[0].eventId).toBe("evt-ok")
+	})
+
+	it("maps a bulk E11000 to a per-item duplicateKey receipt and keeps siblings ok", async () => {
+		const bulkError = Object.assign(new Error("BulkWriteError"), {
+			name: "MongoBulkWriteError",
+			writeErrors: [
+				{
+					index: 1,
+					code: 11000,
+					errmsg: "E11000 duplicate key error collection: test_events",
+				},
+			],
+		})
+		const col = createBatchEventsCol({
+			insertMany: vi.fn(async () => {
+				throw bulkError
+			}),
+		})
+		vi.mocked(eventsCollection).mockReturnValue(col)
+
+		const results = await writeEventsBatch({
+			db: mockDb(),
+			prefix: "test_",
+			events: [
+				{
+					eventId: "evt-fresh",
+					agentId: "agent-1",
+					role: "user",
+					body: "fresh event",
+					scope: "agent",
+				},
+				{
+					eventId: "evt-dupe",
+					agentId: "agent-1",
+					role: "user",
+					body: "raced idempotency key",
+					scope: "agent",
+					idempotencyKey: "key-dupe",
+				},
+			],
+		})
+
+		expect(results).toHaveLength(2)
+		expect(results[0]).toMatchObject({ ok: true, eventId: "evt-fresh" })
+		expect(results[1]).toMatchObject({ ok: false, duplicateKey: true })
+	})
+
+	it("returns an empty receipt list for an empty batch", async () => {
+		const col = createBatchEventsCol()
+		vi.mocked(eventsCollection).mockReturnValue(col)
+		await expect(
+			writeEventsBatch({ db: mockDb(), prefix: "test_", events: [] }),
+		).resolves.toEqual([])
+		expect(col.insertMany).not.toHaveBeenCalled()
+	})
+})
+
+// ---------------------------------------------------------------------------
+// Tests: projectEventChunksBatch (P3.9)
+// ---------------------------------------------------------------------------
+
+describe("projectEventChunksBatch", () => {
+	beforeEach(() => {
+		vi.clearAllMocks()
+	})
+
+	function makeEvent(eventId: string): CanonicalEvent {
+		return {
+			eventId,
+			agentId: "agent-1",
+			role: "user",
+			body: `body of ${eventId}`,
+			scope: "agent",
+			scopeRef: "agent:agent-1",
+			timestamp: new Date("2026-04-09T12:00:00.000Z"),
+		}
+	}
+
+	it("projects every chunk in ONE bulkWrite and marks events projected once", async () => {
+		const bulkWrite = vi.fn(async () => ({
+			upsertedCount: 1,
+			upsertedIds: { 1: "chunk-id-2" },
+			matchedCount: 1,
+		}))
+		const chunksCol = { bulkWrite } as unknown as Collection
+		vi.mocked(chunksCollection).mockReturnValue(chunksCol)
+		const eventsCol = {
+			updateMany: vi.fn(async () => ({ modifiedCount: 2 })),
+		} as unknown as Collection
+		vi.mocked(eventsCollection).mockReturnValue(eventsCol)
+
+		const results = await projectEventChunksBatch({
+			db: mockDb(),
+			prefix: "test_",
+			events: [makeEvent("evt-c1"), makeEvent("evt-c2")],
+		})
+
+		expect(bulkWrite).toHaveBeenCalledTimes(1)
+		const [ops, opts] = bulkWrite.mock.calls[0]
+		expect(opts).toEqual({ ordered: false })
+		expect(ops).toHaveLength(2)
+		expect(ops[0]).toMatchObject({
+			updateOne: {
+				filter: { path: "events/evt-c1" },
+				upsert: true,
+			},
+		})
+		// Only index 1 upserted → only the second chunk reports created.
+		expect(results).toEqual([{ chunkCreated: false }, { chunkCreated: true }])
+		expect(eventsCol.updateMany).toHaveBeenCalledTimes(1)
+		expect(eventsCol.updateMany).toHaveBeenCalledWith(
+			{ eventId: { $in: ["evt-c1", "evt-c2"] } },
+			{ $set: { projectedAt: expect.any(Date) } },
+		)
+	})
+
+	it("degrades to chunkCreated:false for all when the bulk write fails outright", async () => {
+		const chunksCol = {
+			bulkWrite: vi.fn(async () => {
+				throw new Error("bulk projection unavailable")
+			}),
+		} as unknown as Collection
+		vi.mocked(chunksCollection).mockReturnValue(chunksCol)
+		const eventsCol = {
+			updateMany: vi.fn(async () => ({ modifiedCount: 0 })),
+		} as unknown as Collection
+		vi.mocked(eventsCollection).mockReturnValue(eventsCol)
+
+		const results = await projectEventChunksBatch({
+			db: mockDb(),
+			prefix: "test_",
+			events: [makeEvent("evt-c1"), makeEvent("evt-c2")],
+		})
+
+		expect(results).toEqual([{ chunkCreated: false }, { chunkCreated: false }])
+		// Events stay unprojected so the repair pass can project them later.
+		expect(eventsCol.updateMany).not.toHaveBeenCalled()
+	})
+})
+
+// ---------------------------------------------------------------------------
+// Tests: clearEventExtractionJobPendingBatch (P3.9)
+// ---------------------------------------------------------------------------
+
+describe("clearEventExtractionJobPendingBatch", () => {
+	beforeEach(() => {
+		vi.clearAllMocks()
+	})
+
+	it("clears the outbox marker for many events in one updateMany", async () => {
+		const col = {
+			updateMany: vi.fn(async () => ({ matchedCount: 2, modifiedCount: 2 })),
+		} as unknown as Collection
+		vi.mocked(eventsCollection).mockReturnValue(col)
+
+		const cleared = await clearEventExtractionJobPendingBatch({
+			db: mockDb(),
+			prefix: "test_",
+			eventIds: ["evt-1", "evt-2"],
+			agentId: "agent-1",
+		})
+
+		expect(cleared).toBe(2)
+		expect(col.updateMany).toHaveBeenCalledWith(
+			{
+				eventId: { $in: ["evt-1", "evt-2"] },
+				agentId: "agent-1",
+				extractionJobPendingAt: { $exists: true },
+			},
+			{ $unset: { extractionJobPendingAt: "" } },
+			{ writeConcern: { w: "majority", wtimeoutMS: 5_000 } },
+		)
+	})
+
+	it("no-ops on an empty id list", async () => {
+		const col = {
+			updateMany: vi.fn(async () => ({ matchedCount: 0, modifiedCount: 0 })),
+		} as unknown as Collection
+		vi.mocked(eventsCollection).mockReturnValue(col)
+		await expect(
+			clearEventExtractionJobPendingBatch({
+				db: mockDb(),
+				prefix: "test_",
+				eventIds: [],
+				agentId: "agent-1",
+			}),
+		).resolves.toBe(0)
+		expect(col.updateMany).not.toHaveBeenCalled()
+	})
+})
 
 // ---------------------------------------------------------------------------
 // Tests: writeEvent

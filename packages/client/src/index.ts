@@ -79,4 +79,6 @@ export type {
 	MemongoTraceChainResponse,
 	MemongoSelfEditInput,
 	MemongoSelfEditResponse,
+	MemongoWriteEventReceipt,
+	MemongoWriteEventsResponse,
 } from "./types.js"

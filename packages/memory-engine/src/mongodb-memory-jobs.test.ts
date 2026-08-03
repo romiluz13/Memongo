@@ -344,4 +344,101 @@ describe("mongodb-memory-jobs", () => {
 			expect.any(Object),
 		)
 	})
+
+	it("creates many jobs in ONE unordered majority insertMany (P3.9)", async () => {
+		const { createMemoryJobsBatch } = await import("./mongodb-memory-jobs.js")
+		const insertMany = vi.fn(async () => ({
+			acknowledged: true,
+			insertedCount: 2,
+		}))
+		const db = mockDb({
+			test_memory_jobs: mockCollection({ insertMany }),
+		})
+
+		const results = await createMemoryJobsBatch({
+			db,
+			prefix: "test_",
+			jobs: [
+				{
+					jobId: "extraction-evt-1",
+					jobType: "extraction",
+					agentId: "agent-1",
+					status: "pending",
+					payload: { eventId: "evt-1" },
+				},
+				{
+					jobId: "extraction-evt-2",
+					jobType: "extraction",
+					agentId: "agent-1",
+					status: "pending",
+					payload: { eventId: "evt-2" },
+				},
+			],
+		})
+
+		expect(insertMany).toHaveBeenCalledTimes(1)
+		const [docs, opts] = insertMany.mock.calls[0]
+		expect(opts).toEqual({
+			ordered: false,
+			writeConcern: { w: "majority", wtimeoutMS: 5_000 },
+		})
+		expect(docs).toHaveLength(2)
+		expect(docs[0]).toMatchObject({
+			jobId: "extraction-evt-1",
+			attempts: 0,
+		})
+		expect(docs[0].createdAt).toBeInstanceOf(Date)
+		expect(results).toEqual([
+			{ ok: true, jobId: "extraction-evt-1" },
+			{ ok: true, jobId: "extraction-evt-2" },
+		])
+	})
+
+	it("maps per-item bulk failures, flagging E11000 as duplicate (P3.9)", async () => {
+		const { createMemoryJobsBatch } = await import("./mongodb-memory-jobs.js")
+		const bulkError = Object.assign(new Error("BulkWriteError"), {
+			name: "MongoBulkWriteError",
+			writeErrors: [
+				{
+					index: 1,
+					code: 11000,
+					errmsg: "E11000 duplicate key error collection: test_memory_jobs",
+				},
+			],
+		})
+		const insertMany = vi.fn(async () => {
+			throw bulkError
+		})
+		const db = mockDb({
+			test_memory_jobs: mockCollection({ insertMany }),
+		})
+
+		const results = await createMemoryJobsBatch({
+			db,
+			prefix: "test_",
+			jobs: [
+				{
+					jobId: "extraction-evt-1",
+					jobType: "extraction",
+					agentId: "agent-1",
+					status: "pending",
+					payload: { eventId: "evt-1" },
+				},
+				{
+					jobId: "extraction-evt-dupe",
+					jobType: "extraction",
+					agentId: "agent-1",
+					status: "pending",
+					payload: { eventId: "evt-dupe" },
+				},
+			],
+		})
+
+		expect(results[0]).toEqual({ ok: true, jobId: "extraction-evt-1" })
+		expect(results[1]).toMatchObject({
+			ok: false,
+			jobId: "extraction-evt-dupe",
+			duplicate: true,
+		})
+	})
 })

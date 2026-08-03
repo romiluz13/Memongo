@@ -338,6 +338,128 @@ describe("resolveMemoryBackendConfig", () => {
 		expect(resolved.mongodb!.numDimensions).toBe(768)
 	})
 
+	// P3.1 dead knob: numDimensions is accepted for config-schema compat but
+	// ignored — autoEmbed indexes are server-managed, the embedding model
+	// determines dimensions. The knob logs at error level when set.
+	it("logs at error level that an explicitly configured numDimensions is ignored (P3.1)", () => {
+		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {})
+		try {
+			const cfg = {
+				agents: { defaults: { workspace: "/tmp/memory-test" } },
+				memory: {
+					backend: "mongodb",
+					mongodb: { uri: "mongodb://localhost:27017", numDimensions: 768 },
+				},
+			} as unknown as MemongoConfig
+			const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
+			// Schema compat: the value still resolves, it is just inert.
+			expect(resolved.mongodb!.numDimensions).toBe(768)
+			const logged = errorSpy.mock.calls.flat().join(" ")
+			expect(logged).toContain("numDimensions")
+			expect(logged).toContain("ignored")
+		} finally {
+			errorSpy.mockRestore()
+		}
+	})
+
+	it("does not log the numDimensions dead-knob error when it is not configured", () => {
+		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {})
+		try {
+			const cfg = {
+				agents: { defaults: { workspace: "/tmp/memory-test" } },
+				memory: {
+					backend: "mongodb",
+					mongodb: { uri: "mongodb://localhost:27017" },
+				},
+			} as unknown as MemongoConfig
+			resolveMemoryBackendConfig({ cfg, agentId: "main" })
+			const logged = errorSpy.mock.calls.flat().join(" ")
+			expect(logged).not.toContain("numDimensions")
+		} finally {
+			errorSpy.mockRestore()
+		}
+	})
+
+	it("defaults legacySearchFallback to off (opt-in, P3.2)", () => {
+		const cfg = {
+			agents: { defaults: { workspace: "/tmp/memory-test" } },
+			memory: {
+				backend: "mongodb",
+				mongodb: { uri: "mongodb://localhost:27017" },
+			},
+		} as unknown as MemongoConfig
+		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
+		expect(resolved.mongodb!.legacySearchFallback).toBe(false)
+	})
+
+	it("honors legacySearchFallback when explicitly enabled", () => {
+		const cfg = {
+			agents: { defaults: { workspace: "/tmp/memory-test" } },
+			memory: {
+				backend: "mongodb",
+				mongodb: {
+					uri: "mongodb://localhost:27017",
+					legacySearchFallback: true,
+				},
+			},
+		} as unknown as MemongoConfig
+		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
+		expect(resolved.mongodb!.legacySearchFallback).toBe(true)
+	})
+
+	it("resolves the per-search budget with defaults and valid overrides (P3.2)", () => {
+		const baseCfg = {
+			agents: { defaults: { workspace: "/tmp/memory-test" } },
+			memory: {
+				backend: "mongodb",
+				mongodb: { uri: "mongodb://localhost:27017" },
+			},
+		} as unknown as MemongoConfig
+		const defaults = resolveMemoryBackendConfig({
+			cfg: baseCfg,
+			agentId: "main",
+		})
+		expect(defaults.mongodb!.searchBudget.maxAggregations).toBeGreaterThan(0)
+		expect(defaults.mongodb!.searchBudget.maxEmbeds).toBeGreaterThan(0)
+
+		const customCfg = {
+			agents: { defaults: { workspace: "/tmp/memory-test" } },
+			memory: {
+				backend: "mongodb",
+				mongodb: {
+					uri: "mongodb://localhost:27017",
+					searchBudget: { maxAggregations: 4, maxEmbeds: 2 },
+				},
+			},
+		} as unknown as MemongoConfig
+		const custom = resolveMemoryBackendConfig({
+			cfg: customCfg,
+			agentId: "main",
+		})
+		expect(custom.mongodb!.searchBudget).toEqual({
+			maxAggregations: 4,
+			maxEmbeds: 2,
+		})
+
+		const invalidCfg = {
+			agents: { defaults: { workspace: "/tmp/memory-test" } },
+			memory: {
+				backend: "mongodb",
+				mongodb: {
+					uri: "mongodb://localhost:27017",
+					searchBudget: { maxAggregations: 0, maxEmbeds: -1 },
+				},
+			},
+		} as unknown as MemongoConfig
+		const invalid = resolveMemoryBackendConfig({
+			cfg: invalidCfg,
+			agentId: "main",
+		})
+		expect(invalid.mongodb!.searchBudget).toEqual(
+			defaults.mongodb!.searchBudget,
+		)
+	})
+
 	it("resolves maxPoolSize with default 10", () => {
 		const cfg = {
 			agents: { defaults: { workspace: "/tmp/memory-test" } },
@@ -1077,6 +1199,35 @@ describe("resolveMemoryBackendConfig", () => {
 		expect(resolved.mongodb!.reranking.topN).toBe(10)
 		expect(resolved.mongodb!.reranking.minScore).toBe(0.3)
 		expect(resolved.mongodb!.reranking.voyageApiKey).toBe("voy-test-key")
+	})
+
+	it("defaults reranking recency/access boost weights to 0.2", () => {
+		const cfg = {
+			agents: { defaults: { workspace: "/tmp/memory-test" } },
+			memory: {
+				backend: "mongodb",
+				mongodb: { uri: "mongodb://localhost:27017" },
+			},
+		} as unknown as MemongoConfig
+		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
+		expect(resolved.mongodb!.reranking.recencyBoost).toBe(0.2)
+		expect(resolved.mongodb!.reranking.accessBoost).toBe(0.2)
+	})
+
+	it("resolves custom reranking recency/access boost weights", () => {
+		const cfg = {
+			agents: { defaults: { workspace: "/tmp/memory-test" } },
+			memory: {
+				backend: "mongodb",
+				mongodb: {
+					uri: "mongodb://localhost:27017",
+					reranking: { recencyBoost: 0.5, accessBoost: 0 },
+				},
+			},
+		} as unknown as MemongoConfig
+		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
+		expect(resolved.mongodb!.reranking.recencyBoost).toBe(0.5)
+		expect(resolved.mongodb!.reranking.accessBoost).toBe(0)
 	})
 
 	it("resolves reranking.voyageApiKey from env fallback", () => {

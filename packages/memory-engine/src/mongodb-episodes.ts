@@ -9,6 +9,7 @@ import {
 } from "./mongodb-events.js"
 import { recordProjectionRun } from "./mongodb-ops.js"
 import { episodesCollection } from "./mongodb-schema.js"
+import { resolveUserSearchMaxTimeMs } from "./mongodb-search-budget.js"
 import { resolveScopeRef } from "./mongodb-scope.js"
 
 const log = createSubsystemLogger("memory:mongodb:episodes")
@@ -540,6 +541,13 @@ export async function searchEpisodes(params: {
 	scopeRef?: string
 	timeRange?: { start: Date; end: Date }
 	limit?: number
+	/**
+	 * P3.8: detected textSearch capability. When true, lookup routes through
+	 * the episode_autocomplete $search index; when false/omitted (no mongot),
+	 * the escaped $regex fallback runs directly instead of paying a failed
+	 * $search round trip per lookup.
+	 */
+	textSearchAvailable?: boolean
 }): Promise<Episode[]> {
 	const { db, prefix, query, agentId, scope, scopeRef, timeRange, limit } =
 		params
@@ -549,9 +557,56 @@ export async function searchEpisodes(params: {
 		return []
 	}
 
-	try {
-		const col = episodesCollection(db, prefix)
+	const col = episodesCollection(db, prefix)
 
+	// P3.8: serve episode lookup from the purpose-built episode_autocomplete
+	// search index when mongot is present; the unanchored case-insensitive
+	// $regex below remains the no-textSearch fallback.
+	if (params.textSearchAvailable === true) {
+		try {
+			const searchFilters: Document[] = [
+				{ equals: { path: "agentId", value: agentId } },
+			]
+			if (scope) {
+				searchFilters.push({ equals: { path: "scope", value: scope } })
+			}
+			if (scopeRef) {
+				searchFilters.push({ equals: { path: "scopeRef", value: scopeRef } })
+			}
+			const postMatch: Document = { status: { $ne: "deleted" } }
+			if (timeRange) {
+				postMatch["timeRange.start"] = { $lte: timeRange.end }
+				postMatch["timeRange.end"] = { $gte: timeRange.start }
+			}
+			const pipeline: Document[] = [
+				{
+					$search: {
+						index: "episode_autocomplete",
+						compound: {
+							should: [
+								{ autocomplete: { query, path: "title" } },
+								{ autocomplete: { query, path: "summary" } },
+							],
+							filter: searchFilters,
+						},
+					},
+				},
+				{ $match: postMatch },
+				{ $limit: limit ?? 50 },
+			]
+			const docs = await col
+				// P3.8: user-driven $search pipelines carry a maxTimeMS ceiling.
+				.aggregate(pipeline, { maxTimeMS: resolveUserSearchMaxTimeMs() })
+				.toArray()
+			return docs as unknown as Episode[]
+		} catch (err) {
+			log.warn(
+				`searchEpisodes $search failed, falling back to regex: ${err instanceof Error ? err.message : String(err)}`,
+			)
+		}
+	}
+
+	try {
 		// Use a keyword-aware regex so summary-style queries can reopen episodes
 		// without requiring the full prompt to appear verbatim.
 		const regex = buildEpisodeSearchRegex(query)

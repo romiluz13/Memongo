@@ -41,6 +41,7 @@ import {
 	memongoBridgeUpdateLifecycleItem,
 	memongoBridgeReportProcedureOutcome,
 	memongoBridgeWriteConversationEvent,
+	memongoBridgeWriteConversationEventsBatch,
 	memongoBridgeWriteProcedure,
 	memongoBridgeWriteStructuredMemory,
 	type MemoryStableHandle,
@@ -66,6 +67,9 @@ import {
 
 const MAX_LIST_LIMIT = 100
 const MAX_HISTORY_LIMIT = 200
+// P3.9: cap the bulk write batch so one request cannot stage an unbounded
+// insertMany (the default 1MB body limit binds item size too).
+const MAX_WRITE_EVENTS_BATCH = 500
 // VALID_SCOPE_VALUES / ApiScope now live in scope-identity.ts (single source of
 // truth shared with scoped-API-key policy validation — issue #57 divergence).
 
@@ -1722,6 +1726,186 @@ export function createV1Router(): Hono<V1RouterEnv> {
 				return jsonError(c, 422, "IDEMPOTENCY_CONFLICT", message)
 			}
 			return internalError(c, err, "WRITE_EVENT_FAILED")
+		}
+	})
+
+	// P3.9: bulk variant of /write-event. Per-item validation/idempotency
+	// failures become per-item receipts (never a batch-level 4xx), mirroring
+	// the single-write receipt shape; only a malformed envelope is a 400.
+	v1.post("/write-events", async (c) => {
+		const body = (await readJsonBody(c)) as Record<string, unknown>
+		const rawEvents = body.events
+		if (!Array.isArray(rawEvents) || rawEvents.length === 0) {
+			return jsonError(
+				c,
+				400,
+				"VALIDATION_ERROR",
+				"events must be a non-empty array",
+			)
+		}
+		if (rawEvents.length > MAX_WRITE_EVENTS_BATCH) {
+			return jsonError(
+				c,
+				400,
+				"VALIDATION_ERROR",
+				`events must contain at most ${MAX_WRITE_EVENTS_BATCH} items`,
+			)
+		}
+		const scopeError = await readScopeInputError(c)
+		if (scopeError) {
+			return jsonError(c, 400, "VALIDATION_ERROR", scopeError)
+		}
+		// The authorized tenant identity (the SAME values the auth layer
+		// validated). Per-item scope/scopeRef/sessionId refine these for an
+		// unscoped caller but can never contradict them — a mismatch fails
+		// closed with a per-item receipt instead of crossing a tenant boundary.
+		const authorizedScope = await readScope(c)
+		const authorizedScopeRef = await readScopeRef(c)
+		const authorizedSessionId = await readSessionId(c)
+
+		type BatchReceipt =
+			| { ok: true; eventId: string; chunkCreated: boolean; replayed?: boolean }
+			| { ok: false; code: string; message: string }
+		const receipts: Array<BatchReceipt | undefined> = rawEvents.map(
+			() => undefined,
+		)
+		type ValidItem = {
+			index: number
+			event: {
+				role: "user" | "assistant" | "system" | "tool"
+				body: string
+				sessionId?: string
+				timestamp?: string
+				validAt?: string
+				invalidAt?: string
+				metadata?: Record<string, unknown>
+				scope?: ApiScope
+				scopeRef?: string
+				idempotencyKey?: string
+			}
+		}
+		const validItems: ValidItem[] = []
+		for (const [index, raw] of rawEvents.entries()) {
+			const fail = (message: string) => {
+				receipts[index] = { ok: false, code: "VALIDATION_ERROR", message }
+			}
+			if (!isRecord(raw)) {
+				fail("each event must be an object")
+				continue
+			}
+			const role = raw.role
+			if (
+				role !== "user" &&
+				role !== "assistant" &&
+				role !== "system" &&
+				role !== "tool"
+			) {
+				fail("role must be user|assistant|system|tool")
+				continue
+			}
+			const bodyText = typeof raw.body === "string" ? raw.body : ""
+			if (!bodyText.trim()) {
+				fail("body is required")
+				continue
+			}
+			const timestamp = readDateValue(raw.timestamp)
+			const validAt = readDateValue(raw.validAt)
+			const invalidAt = readDateValue(raw.invalidAt)
+			if (timestamp === null || validAt === null || invalidAt === null) {
+				fail(
+					"timestamp, validAt, and invalidAt must be valid date strings when provided",
+				)
+				continue
+			}
+			if (
+				invalidAt &&
+				invalidAt.getTime() <= (validAt ?? timestamp ?? new Date()).getTime()
+			) {
+				fail("invalidAt must be later than validAt or timestamp")
+				continue
+			}
+			// P2.8: metadata is stored verbatim — reject operator-shaped keys.
+			const metadata = validateMetadata(raw.metadata)
+			if (!metadata.ok) {
+				fail(metadata.message)
+				continue
+			}
+			const itemScope =
+				typeof raw.scope === "string" && raw.scope.trim()
+					? raw.scope.trim()
+					: undefined
+			if (
+				itemScope !== undefined &&
+				!VALID_SCOPE_VALUES.includes(itemScope as ApiScope)
+			) {
+				fail("scope must be session|user|agent|workspace|tenant|global")
+				continue
+			}
+			if (
+				authorizedScope !== undefined &&
+				itemScope !== undefined &&
+				itemScope !== authorizedScope
+			) {
+				fail("scope does not match the authorized scope")
+				continue
+			}
+			const itemScopeRef =
+				typeof raw.scopeRef === "string" && raw.scopeRef.trim()
+					? raw.scopeRef.trim()
+					: undefined
+			if (
+				authorizedScopeRef !== undefined &&
+				itemScopeRef !== undefined &&
+				itemScopeRef !== authorizedScopeRef
+			) {
+				fail("scopeRef does not match the authorized scopeRef")
+				continue
+			}
+			const itemSessionId =
+				typeof raw.sessionId === "string" && raw.sessionId.trim()
+					? raw.sessionId.trim()
+					: undefined
+			if (
+				authorizedSessionId !== undefined &&
+				itemSessionId !== undefined &&
+				itemSessionId !== authorizedSessionId
+			) {
+				fail("sessionId does not match the authorized sessionId")
+				continue
+			}
+			validItems.push({
+				index,
+				event: {
+					role,
+					body: bodyText,
+					sessionId: itemSessionId ?? authorizedSessionId,
+					timestamp: timestamp?.toISOString(),
+					validAt: validAt?.toISOString(),
+					invalidAt: invalidAt?.toISOString(),
+					metadata: metadata.value,
+					scope: (itemScope ?? authorizedScope) as ApiScope | undefined,
+					scopeRef: itemScopeRef ?? authorizedScopeRef,
+					idempotencyKey:
+						typeof raw.customId === "string" && raw.customId.trim()
+							? raw.customId.trim()
+							: undefined,
+				},
+			})
+		}
+		try {
+			const engineReceipts =
+				validItems.length > 0
+					? await memongoBridgeWriteConversationEventsBatch({
+							agentId: await readAgentId(c),
+							events: validItems.map(({ event }) => event),
+						})
+					: []
+			for (const [position, { index }] of validItems.entries()) {
+				receipts[index] = engineReceipts[position] as BatchReceipt
+			}
+			return c.json({ ok: true, receipts })
+		} catch (err) {
+			return internalError(c, err, "WRITE_EVENTS_FAILED")
 		}
 	})
 

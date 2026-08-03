@@ -37,7 +37,6 @@ import {
 	promoteDerivedMemoryFromEvent,
 	extractStructuredCandidatesFromEvent,
 	extractProcedureCandidatesFromEvent,
-	resolveStructuredCandidatesForPromotion,
 } from "./mongodb-derived-memory.js"
 import { searchEpisodes } from "./mongodb-episodes.js"
 import { checkAutoEpisodeTriggers } from "./mongodb-episodes.js"
@@ -77,10 +76,13 @@ import { resolveRegisteredBenchmarkQualityContract } from "./benchmark-quality-c
 import { readSearchIndexStatus } from "./mongodb-benchmark-readiness.js"
 import {
 	clearEventExtractionJobPending,
+	clearEventExtractionJobPendingBatch,
 	getPendingExtractionEvents,
 	writeEvent,
+	writeEventsBatch,
 	projectChunksFromEvents,
 	projectEventChunk,
+	projectEventChunksBatch,
 	getEventsByTimeRange,
 	renderEventChunkText,
 	IdempotencyConflictError,
@@ -91,6 +93,7 @@ import {
 	extractAndUpsertTypedRelations,
 	searchEntitiesAutocomplete,
 	expandGraph,
+	findRelationByLocatorId,
 	type Entity,
 	type RelationType,
 } from "./mongodb-graph.js"
@@ -114,6 +117,7 @@ import {
 	claimMemoryJob,
 	completeClaimedMemoryJob,
 	createMemoryJob,
+	createMemoryJobsBatch,
 	failClaimedMemoryJob,
 	getMemoryJob,
 	listMemoryJobs,
@@ -186,6 +190,7 @@ import {
 	resolveEnrichmentStrictMode,
 	resolveEnrichmentProvider,
 	enrichSessionsWithLLM,
+	extractSessionEnrichment,
 } from "./mongodb-llm-enrichment.js"
 import { runE2eQa, type E2eQaCase } from "./mongodb-e2e-qa.js"
 import {
@@ -234,6 +239,18 @@ import {
 	mongoSearch,
 	vectorSearch,
 } from "./mongodb-search.js"
+import {
+	getSearchBudgetSnapshot,
+	hasActiveSearchBudget,
+	resolveSearchBudgetLimits,
+	resolveUserSearchMaxTimeMs,
+	runWithSearchBudget,
+	type SearchBudgetLimits,
+	type SearchBudgetSnapshot,
+	tryConsumeSearchAggregation,
+	tryConsumeSearchEmbed,
+} from "./mongodb-search-budget.js"
+import { applyCapabilityProbeResult } from "./mongodb-capability-registry.js"
 import type {
 	SearchExplainOptions,
 	SearchExplainTraceArtifact,
@@ -578,6 +595,11 @@ function mapEventSearchDocToResult(
 			? { scope: doc.scope as MemoryScope }
 			: {}),
 		...(typeof doc.scopeRef === "string" ? { scopeRef: doc.scopeRef } : {}),
+		// P3.7 wiring: project the reinforcement counter where the lane has it
+		// (events) so the post-CE access boost reads a real value.
+		...(typeof doc.accessCount === "number" && Number.isFinite(doc.accessCount)
+			? { accessCount: doc.accessCount }
+			: {}),
 		sourceEventIds: [eventId],
 		provenance: {
 			lane,
@@ -696,6 +718,84 @@ function applyPreferenceEvidenceBoostAfterRerank(
 			},
 			index,
 		}))
+		.toSorted(
+			(left, right) =>
+				right.result.score - left.result.score || left.index - right.index,
+		)
+		.map(({ result }) => result)
+}
+
+// P3.7: post-cross-encoder recency/access boost. The CE rerank overwrites
+// `score`, erasing every pre-CE boost; this hook reintroduces recency and
+// reinforcement as multiplicative factors on the CE score:
+//   score *= (1 + alpha * (recencyNorm - 0.5)) * (1 + beta * (accessNorm - 0.5))
+// Both norms are min-max normalized to [0,1] across the result set, so the
+// factors are relative to the set and calibration-free. Degenerate sets
+// (single value, missing fields) normalize to 0.5, i.e. a neutral factor.
+const DEFAULT_RECENCY_ACCESS_BOOST_WEIGHT = 0.2
+
+function normalizeRecencyAccessValues(
+	values: (number | undefined)[],
+): (number | undefined)[] {
+	const present = values.filter(
+		(value): value is number => typeof value === "number",
+	)
+	if (present.length <= 1) {
+		// Degenerate set: every present value is neutral.
+		return values.map((value) => (typeof value === "number" ? 0.5 : undefined))
+	}
+	const min = Math.min(...present)
+	const max = Math.max(...present)
+	if (max === min) {
+		return values.map((value) => (typeof value === "number" ? 0.5 : undefined))
+	}
+	return values.map((value) =>
+		typeof value === "number" ? (value - min) / (max - min) : undefined,
+	)
+}
+
+export function applyRecencyAccessBoostAfterRerank(
+	results: MemorySearchResult[],
+	options?: { recencyBoost?: number; accessBoost?: number },
+): MemorySearchResult[] {
+	const recencyBoost =
+		options?.recencyBoost ?? DEFAULT_RECENCY_ACCESS_BOOST_WEIGHT
+	const accessBoost =
+		options?.accessBoost ?? DEFAULT_RECENCY_ACCESS_BOOST_WEIGHT
+	// Zero weights are the off-switch: skip the pass so scores stay
+	// bit-identical to the CE output.
+	if (recencyBoost === 0 && accessBoost === 0) {
+		return results
+	}
+	const recencyNorms = normalizeRecencyAccessValues(
+		results.map((result) =>
+			result.timestamp instanceof Date ? result.timestamp.getTime() : undefined,
+		),
+	)
+	const accessNorms = normalizeRecencyAccessValues(
+		results.map((result) =>
+			typeof result.accessCount === "number" &&
+			Number.isFinite(result.accessCount)
+				? result.accessCount
+				: undefined,
+		),
+	)
+	return results
+		.map((result, index) => {
+			// Missing fields degrade to a neutral factor, never a penalty.
+			const recencyNorm = recencyNorms[index] ?? 0.5
+			const accessNorm = accessNorms[index] ?? 0.5
+			return {
+				result: {
+					...result,
+					score:
+						result.score *
+						(1 + recencyBoost * (recencyNorm - 0.5)) *
+						(1 + accessBoost * (accessNorm - 0.5)),
+				},
+				index,
+			}
+		})
 		.toSorted(
 			(left, right) =>
 				right.result.score - left.result.score || left.index - right.index,
@@ -1149,6 +1249,7 @@ async function expandTemporalCoverageSessionEvents(params: {
 					timestamp: 1,
 					scope: 1,
 					scopeRef: 1,
+					accessCount: 1,
 				},
 				sort: { timestamp: 1 },
 				limit: Math.max(params.maxEvents * 4, sessionIds.length * 6),
@@ -1316,13 +1417,20 @@ async function searchTemporalCoverageEvents(params: {
 				timestamp: 1,
 				scope: 1,
 				scopeRef: 1,
+				accessCount: 1,
 				score: { $meta: "searchScore" },
 			},
 		},
 	]
 
+	// P3.2: this direct aggregate bypasses runSearchAggregateWithRetry, so it
+	// consumes the per-request budget here.
+	if (!tryConsumeSearchAggregation()) {
+		return []
+	}
 	const docs = await eventsCollection(params.db, params.prefix)
-		.aggregate(pipeline)
+		// P3.8: user-driven $search pipelines carry a maxTimeMS ceiling.
+		.aggregate(pipeline, { maxTimeMS: resolveUserSearchMaxTimeMs() })
 		.toArray()
 	const mapped = docs
 		.map((doc) => mapEventSearchDocToResult(doc, "turn-text"))
@@ -1407,7 +1515,12 @@ async function searchTurnEventsWithinSessions(params: {
 	const searches: Array<Promise<MemorySearchResult[]>> = []
 	if (
 		params.capabilities.vectorSearch &&
-		params.embeddingMode === "automated"
+		params.embeddingMode === "automated" &&
+		// P3.2: these inline $vectorSearch pipelines bypass
+		// buildVectorSearchStage, so they consume the per-request aggregation +
+		// server-side embed budget here.
+		tryConsumeSearchAggregation() &&
+		tryConsumeSearchEmbed()
 	) {
 		const vectorPipeline: Document[] = [
 			{
@@ -1431,13 +1544,15 @@ async function searchTurnEventsWithinSessions(params: {
 					timestamp: 1,
 					scope: 1,
 					scopeRef: 1,
+					accessCount: 1,
 					score: { $meta: "vectorSearchScore" },
 				},
 			},
 		]
 		searches.push(
 			events
-				.aggregate(vectorPipeline)
+				// P3.8: user-driven $vectorSearch pipelines carry a maxTimeMS ceiling.
+				.aggregate(vectorPipeline, { maxTimeMS: resolveUserSearchMaxTimeMs() })
 				.toArray()
 				.then((docs) =>
 					docs
@@ -1446,7 +1561,8 @@ async function searchTurnEventsWithinSessions(params: {
 				),
 		)
 	}
-	if (params.capabilities.textSearch) {
+	// P3.2: direct aggregates consume the per-request budget here.
+	if (params.capabilities.textSearch && tryConsumeSearchAggregation()) {
 		const textPipeline: Document[] = [
 			{
 				$search: {
@@ -1468,13 +1584,15 @@ async function searchTurnEventsWithinSessions(params: {
 					timestamp: 1,
 					scope: 1,
 					scopeRef: 1,
+					accessCount: 1,
 					score: { $meta: "searchScore" },
 				},
 			},
 		]
 		searches.push(
 			events
-				.aggregate(textPipeline)
+				// P3.8: user-driven $search pipelines carry a maxTimeMS ceiling.
+				.aggregate(textPipeline, { maxTimeMS: resolveUserSearchMaxTimeMs() })
 				.toArray()
 				.then((docs) =>
 					docs
@@ -1549,7 +1667,12 @@ async function searchConversationEvidenceEvents(params: {
 	const searches: Array<Promise<MemorySearchResult[]>> = []
 	if (
 		params.capabilities.vectorSearch &&
-		params.embeddingMode === "automated"
+		params.embeddingMode === "automated" &&
+		// P3.2: these inline $vectorSearch pipelines bypass
+		// buildVectorSearchStage, so they consume the per-request aggregation +
+		// server-side embed budget here.
+		tryConsumeSearchAggregation() &&
+		tryConsumeSearchEmbed()
 	) {
 		const vectorPipeline: Document[] = [
 			{
@@ -1573,13 +1696,15 @@ async function searchConversationEvidenceEvents(params: {
 					timestamp: 1,
 					scope: 1,
 					scopeRef: 1,
+					accessCount: 1,
 					score: { $meta: "vectorSearchScore" },
 				},
 			},
 		]
 		searches.push(
 			events
-				.aggregate(vectorPipeline)
+				// P3.8: user-driven $vectorSearch pipelines carry a maxTimeMS ceiling.
+				.aggregate(vectorPipeline, { maxTimeMS: resolveUserSearchMaxTimeMs() })
 				.toArray()
 				.then((docs) =>
 					docs
@@ -1589,7 +1714,8 @@ async function searchConversationEvidenceEvents(params: {
 		)
 	}
 
-	if (params.capabilities.textSearch) {
+	// P3.2: direct aggregates consume the per-request budget here.
+	if (params.capabilities.textSearch && tryConsumeSearchAggregation()) {
 		const should: Document[] = []
 		if (params.questionDate && !Number.isNaN(params.questionDate.getTime())) {
 			should.push({
@@ -1623,13 +1749,15 @@ async function searchConversationEvidenceEvents(params: {
 					timestamp: 1,
 					scope: 1,
 					scopeRef: 1,
+					accessCount: 1,
 					score: { $meta: "searchScore" },
 				},
 			},
 		]
 		searches.push(
 			events
-				.aggregate(textPipeline)
+				// P3.8: user-driven $search pipelines carry a maxTimeMS ceiling.
+				.aggregate(textPipeline, { maxTimeMS: resolveUserSearchMaxTimeMs() })
 				.toArray()
 				.then((docs) =>
 					docs
@@ -2150,6 +2278,58 @@ export function resolveMemoryJobSweepMs(): number {
 		: MEMORY_JOB_POLL_MS
 }
 
+/**
+ * P3.9: how many extraction jobs the durable memory-job worker processes
+ * concurrently per drain round (MEMONGO_JOB_WORKER_CONCURRENCY, default 3).
+ * CAS claims (findOneAndUpdate) make concurrent claiming safe; lease fencing
+ * inside the job runner is per-job and unchanged.
+ */
+const MEMORY_JOB_WORKER_CONCURRENCY_DEFAULT = 3
+const MEMORY_JOB_WORKER_CONCURRENCY_MAX = 16
+
+export function resolveMemoryJobWorkerConcurrency(): number {
+	const raw = process.env.MEMONGO_JOB_WORKER_CONCURRENCY?.trim()
+	if (raw) {
+		const parsed = Number(raw)
+		if (Number.isFinite(parsed) && parsed >= 1) {
+			return Math.min(Math.floor(parsed), MEMORY_JOB_WORKER_CONCURRENCY_MAX)
+		}
+	}
+	return MEMORY_JOB_WORKER_CONCURRENCY_DEFAULT
+}
+
+/** Input shape shared by writeConversationEvent and its batch variant. */
+export type WriteConversationEventInput = {
+	role: "user" | "assistant" | "system" | "tool"
+	body: string
+	sessionId?: string
+	timestamp?: Date
+	validAt?: Date
+	invalidAt?: Date
+	metadata?: Record<string, unknown>
+	scope?: MemoryScope
+	scopeRef?: string
+	/**
+	 * Optional idempotency key: retries with the same key replay the
+	 * original receipt (no duplicate event); reuse with a different
+	 * payload is rejected with IdempotencyConflictError (422 upstream).
+	 */
+	idempotencyKey?: string
+}
+
+/**
+ * P3.9 per-item batch receipt, mirroring the single-write receipt shape.
+ * A replayed receipt reports chunkCreated:false (the chunk from the accepted
+ * write already exists). A failed item never fails its siblings.
+ */
+export type WriteConversationEventReceipt =
+	| { ok: true; eventId: string; chunkCreated: boolean; replayed?: boolean }
+	| {
+			ok: false
+			code: "IDEMPOTENCY_CONFLICT" | "WRITE_ERROR"
+			message: string
+	  }
+
 export class MongoDBMemoryManager implements MemorySearchManager {
 	private readonly client: MongoClient
 	private readonly db: Db
@@ -2294,14 +2474,20 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 
 		// Ensure collections + schema validation + standard indexes
 		await ensureCollections(db, prefix)
-		await ensureStandardIndexes(db, prefix, {
-			memoryTtlDays: mongoCfg.memoryTtlDays,
-			relevanceRetentionDays: mongoCfg.relevance.retention.days,
-		})
 
 		const chunksCollectionName = chunksCollection(db, prefix).collectionName
 		const searchIndexManagementAvailable =
 			await isSearchIndexManagementAvailable(db, chunksCollectionName)
+
+		await ensureStandardIndexes(db, prefix, {
+			memoryTtlDays: mongoCfg.memoryTtlDays,
+			relevanceRetentionDays: mongoCfg.relevance.retention.days,
+			// P3.8: the BSON $text indexes are the no-mongot fallback — with
+			// Search Index Management present the $search indexes serve every
+			// text lane, so maintaining six $text duplicates is pure write
+			// amplification.
+			textFallbackIndexes: !searchIndexManagementAvailable,
+		})
 
 		// Detect concrete serving readiness. Fusion capability is server-version
 		// based, while Search capabilities require named queryable indexes.
@@ -2321,6 +2507,17 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 				mongoCfg.quantization,
 				mongoCfg.numDimensions,
 			)
+			// P3.2: the quantization-on-autoEmbed rejection is a probe outcome
+			// recorded during index creation — fold it into the capabilities so
+			// the search paths see the adopted gate state (detectCapabilities ran
+			// before the probe was recorded).
+			capabilities = {
+				...capabilities,
+				capabilityGates: applyCapabilityProbeResult(
+					capabilities.capabilityGates ?? {},
+					"autoembed-quantization",
+				),
+			}
 			if (ensuredSearchIndexes.text || ensuredSearchIndexes.vector) {
 				const { timeoutMs: readinessTimeoutMs, pollMs: readinessPollMs } =
 					resolveSearchIndexReadinessTiming()
@@ -3190,6 +3387,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 					rerankConfig: mongoCfg.reranking,
 					queryRewriteConfig: mongoCfg.queryRewriting,
 					questionDate: opts?.questionDate,
+					budget: mongoCfg.searchBudget,
 					...(benchmarkRunContext ? { benchmarkRunContext } : {}),
 				},
 			})
@@ -3299,6 +3497,13 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 					`searchV2 returned no results; legacy fallback disabled; paths=${v2.metadata.pathsExecuted.join(",") || "none"} hitsByLane=${JSON.stringify(v2.metadata.resultsByPath)}`,
 				)
 			}
+			// P3.2: the legacySearch re-run is opt-in (empty ≠ error — the v2
+			// empty answer stands unless the deployment asks for the double
+			// retrieval via memory.mongodb.legacySearchFallback).
+			if (!mongoCfg.legacySearchFallback) {
+				this.setLastSearchMode("v2:empty", v2Details)
+				return []
+			}
 			const fallbackResults = await this.legacySearch(cleaned, opts)
 			this.setLastSearchMode("v2->legacy-empty", {
 				...v2Details,
@@ -3333,6 +3538,11 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 			log.warn(
 				`planner search failed, falling back to legacy search: ${message}`,
 			)
+			// P3.2: legacySearch re-run is opt-in (see the empty-result site).
+			if (!mongoCfg.legacySearchFallback) {
+				this.setLastSearchMode("v2:error", { error: message })
+				return []
+			}
 			const fallbackResults = await this.legacySearch(cleaned, opts)
 			this.setLastSearchMode("v2->legacy-error", {
 				error: message,
@@ -3534,6 +3744,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 						rerankConfig: mongoCfg.reranking,
 						queryRewriteConfig: mongoCfg.queryRewriting,
 						searchConfig: resolvedSearchConfig,
+						budget: mongoCfg.searchBudget,
 					},
 				}),
 			trustContext: {
@@ -3621,6 +3832,11 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 			return response
 		}
 
+		// P3.2: legacySearch re-run is opt-in (see the search() sites).
+		if (!mongoCfg.legacySearchFallback) {
+			this.setLastSearchMode("v2:empty", v2Details)
+			return response
+		}
 		const fallbackResults = await this.legacySearch(normalized.query, {
 			maxResults: normalized.maxResults,
 			minScore: normalized.minScore,
@@ -6943,26 +7159,17 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 				throw new Error("path required")
 			}
 			const query = new URLSearchParams(queryString ?? "")
-			const scope = query.get("scope") ?? "agent"
+			const scope = (query.get("scope") ?? "agent") as MemoryScope
 			const scopeRef = query.get("scopeRef") ?? this.agentScopeRef
-			const relation = (
-				await relationsCollection(this.db, this.prefix)
-					.find(
-						{
-							agentId: this.agentId,
-							scope,
-							scopeRef,
-						},
-						{
-							sort: { updatedAt: -1, _id: 1 },
-							limit: 50,
-						},
-					)
-					.toArray()
-			).find((candidate) => {
-				const fromEntityId = String(candidate.fromEntityId ?? "")
-				const toEntityId = String(candidate.toEntityId ?? "")
-				return `${fromEntityId}-${toEntityId}` === relationId
+			// P3.8: one findOne on the relationId index — the old path fetched up
+			// to 50 relations per read and JS-matched the pair.
+			const relation = await findRelationByLocatorId({
+				db: this.db,
+				prefix: this.prefix,
+				agentId: this.agentId,
+				scope,
+				scopeRef,
+				relationId,
 			})
 			if (!relation) {
 				return {
@@ -8217,6 +8424,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 									: undefined,
 							rerankConfig: mongoCfg.reranking,
 							queryRewriteConfig: mongoCfg.queryRewriting,
+							budget: mongoCfg.searchBudget,
 						},
 					},
 				)
@@ -8583,6 +8791,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 
 	private async runClaimedBackgroundExtractionJob(
 		job: ClaimedMemoryJob,
+		prefetchedLlmFacts?: string[],
 	): Promise<void> {
 		const payloadEventId = job.payload?.eventId?.trim()
 		const metadataEventId =
@@ -8740,6 +8949,9 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 				temporalProvider,
 				contradictionProvider,
 				model: enrichmentModel,
+				// P3.9: facts from the round's session-batched extraction; when
+				// present, promotion skips its own per-event provider call.
+				...(prefetchedLlmFacts ? { prefetchedLlmFacts } : {}),
 			})
 			await heartbeatInFlight
 			if (leaseLost) {
@@ -8875,20 +9087,178 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 				`extraction outbox repair left ${repaired.eventsFailed} event(s) pending retry`,
 			)
 		}
+		// P3.9: claim up to K jobs per round and process them concurrently.
+		// Claims stay sequential findOneAndUpdate CAS operations, so two
+		// rounds/workers can never claim the same job; lease fencing inside
+		// the job runner is per-job and unchanged (P2.5). Within a round, LLM
+		// fact extraction is batched per session (one provider call for every
+		// claimed event sharing a session, mirroring enrichSessionsWithLLM).
+		const concurrency = resolveMemoryJobWorkerConcurrency()
 		while (!this.memoryJobWorkerStopped) {
-			const job = await claimMemoryJob({
-				db: this.db,
-				prefix: this.prefix,
-				agentId: this.agentId,
-				jobType: "extraction",
-				workerId: this.memoryJobWorkerId,
-				leaseMs: MEMORY_JOB_LEASE_MS,
-			})
-			if (!job) {
+			const jobs: ClaimedMemoryJob[] = []
+			for (let claimed = 0; claimed < concurrency; claimed++) {
+				const job = await claimMemoryJob({
+					db: this.db,
+					prefix: this.prefix,
+					agentId: this.agentId,
+					jobType: "extraction",
+					workerId: this.memoryJobWorkerId,
+					leaseMs: MEMORY_JOB_LEASE_MS,
+				})
+				if (!job) {
+					break
+				}
+				jobs.push(job)
+			}
+			if (jobs.length === 0) {
 				return
 			}
-			await this.runClaimedBackgroundExtractionJob(job)
+			const sessionFacts = await this.prefetchExtractionSessionFacts(jobs)
+			await Promise.all(
+				jobs.map((job) => {
+					const eventId =
+						job.payload?.eventId?.trim() ||
+						(typeof job.metadata?.eventId === "string"
+							? job.metadata.eventId.trim()
+							: "")
+					return this.runClaimedBackgroundExtractionJob(
+						job,
+						eventId ? sessionFacts.get(eventId) : undefined,
+					)
+				}),
+			)
 		}
+	}
+
+	/**
+	 * P3.9: batch the round's LLM fact extraction per session. One batched
+	 * read fetches the claimed events; every group of 2+ events sharing a
+	 * session gets ONE extractSessionEnrichment call whose facts are handed
+	 * to each event's promotion (per-event events keep their own call inside
+	 * the job runner). Purely read-only: a job that loses its lease mid-round
+	 * is still fenced before any side effect — the prefetch only wastes an
+	 * LLM call, never a write.
+	 */
+	private async prefetchExtractionSessionFacts(
+		jobs: ClaimedMemoryJob[],
+	): Promise<Map<string, string[]>> {
+		const facts = new Map<string, string[]>()
+		if (jobs.length < 2) {
+			return facts
+		}
+		let provider: EnrichmentProvider | null = null
+		try {
+			provider = resolveEnrichmentProvider(process.env)
+		} catch (err) {
+			log.warn(
+				`session-batched extraction prefetch skipped; provider resolution failed: ${err instanceof Error ? err.message : String(err)}`,
+			)
+			return facts
+		}
+		if (!provider) {
+			return facts
+		}
+		const model = process.env.MEMONGO_ENRICHMENT_MODEL?.trim() ?? ""
+
+		const jobByEventId = new Map<string, ClaimedMemoryJob>()
+		for (const job of jobs) {
+			const eventId =
+				job.payload?.eventId?.trim() ||
+				(typeof job.metadata?.eventId === "string"
+					? job.metadata.eventId.trim()
+					: "")
+			if (eventId) {
+				jobByEventId.set(eventId, job)
+			}
+		}
+		if (jobByEventId.size < 2) {
+			return facts
+		}
+
+		type PrefetchEventDoc = {
+			eventId: string
+			sessionId?: string
+			body: string
+			scope: MemoryScope
+			scopeRef: string
+		}
+		const docs = (await eventsCollection(this.db, this.prefix)
+			.find(
+				{
+					agentId: this.agentId,
+					eventId: { $in: [...jobByEventId.keys()] },
+				},
+				{
+					projection: {
+						eventId: 1,
+						sessionId: 1,
+						body: 1,
+						scope: 1,
+						scopeRef: 1,
+					},
+				},
+			)
+			.toArray()
+			.catch((err) => {
+				log.warn(
+					`session-batched extraction prefetch read failed; falling back to per-event extraction: ${String(err)}`,
+				)
+				return []
+			})) as unknown as PrefetchEventDoc[]
+		const groups = new Map<string, PrefetchEventDoc[]>()
+		for (const doc of docs) {
+			if (!doc.sessionId) {
+				continue
+			}
+			const key = `${doc.scope}::${doc.scopeRef}::${doc.sessionId}`
+			const group = groups.get(key) ?? []
+			group.push(doc)
+			groups.set(key, group)
+		}
+		const eligible = [...groups.values()].filter((group) => group.length >= 2)
+		await Promise.all(
+			eligible.map(async (group) => {
+				const sessionText = group
+					.map((doc) => doc.body)
+					.filter((body) => body.trim().length > 0)
+					.join("\n")
+				if (!sessionText) {
+					return
+				}
+				// Benchmark accounting parity with the per-event path: instrument
+				// with the first group member's run context when one is registered.
+				const firstJob = jobByEventId.get(group[0].eventId)
+				const runContext = firstJob
+					? this.memoryJobRunContexts?.get(firstJob.jobId)
+					: undefined
+				const structuredProvider = runContext
+					? instrumentBenchmarkProvider({
+							provider,
+							runContext,
+							operation: "structured-extraction",
+							model,
+						})
+					: provider
+				try {
+					const enrichment = await extractSessionEnrichment(
+						structuredProvider,
+						sessionText,
+						model,
+					)
+					if (enrichment.facts.length === 0) {
+						return
+					}
+					for (const doc of group) {
+						facts.set(doc.eventId, enrichment.facts)
+					}
+				} catch (err) {
+					log.warn(
+						`session-batched LLM extraction failed for ${group.length} event(s); falling back to per-event extraction: ${err instanceof Error ? err.message : String(err)}`,
+					)
+				}
+			}),
+		)
+		return facts
 	}
 
 	private wakeMemoryJobWorker(): void {
@@ -9151,23 +9521,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 	}
 
 	async writeConversationEvent(
-		event: {
-			role: "user" | "assistant" | "system" | "tool"
-			body: string
-			sessionId?: string
-			timestamp?: Date
-			validAt?: Date
-			invalidAt?: Date
-			metadata?: Record<string, unknown>
-			scope?: MemoryScope
-			scopeRef?: string
-			/**
-			 * Optional idempotency key: retries with the same key replay the
-			 * original receipt (no duplicate event); reuse with a different
-			 * payload is rejected with IdempotencyConflictError (422 upstream).
-			 */
-			idempotencyKey?: string
-		},
+		event: WriteConversationEventInput,
 		benchmarkRunContext?: BenchmarkRunContext,
 	): Promise<{ eventId: string; chunkCreated: boolean }> {
 		// (P2.5 e) shutdown intake stop: once close() begins, no new writes
@@ -9425,21 +9779,20 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 				// Regex-only on purpose: this is a synchronous coverage counter on
 				// the hot write path. The LLM-augmented promotion (issue #30) runs
 				// in the background job, so this count is a cheap regex lower bound,
-				// not a blocking LLM call duplicated per event.
+				// not a blocking LLM call duplicated per event. P3.9: count by
+				// regex/classification ONLY — the promotion resolver did a
+				// per-candidate findOne existence check (N+1) and the counts only
+				// feed planner hints, never durable writes.
 				const candidates = postWriteDerivedWorkEnabled
-					? await resolveStructuredCandidatesForPromotion({
-							db: this.db,
-							prefix: this.prefix,
-							event: {
-								eventId: written.eventId,
-								agentId: this.agentId,
-								role: event.role,
-								body: event.body,
-								timestamp: written.timestamp,
-								sessionId: event.sessionId,
-								scope,
-								scopeRef: written.scopeRef,
-							},
+					? extractStructuredCandidatesFromEvent({
+							eventId: written.eventId,
+							agentId: this.agentId,
+							role: event.role,
+							body: event.body,
+							timestamp: written.timestamp,
+							sessionId: event.sessionId,
+							scope,
+							scopeRef: written.scopeRef,
 						})
 					: []
 				if (candidates.length > 0) {
@@ -9480,6 +9833,397 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 
 			this.dirty = false
 			return { eventId: written.eventId, chunkCreated: projected.chunkCreated }
+		}
+
+		const next = this.writeQueue.then(execute, execute)
+		this.writeQueue = next.then(
+			() => undefined,
+			() => undefined,
+		)
+		return next
+	}
+
+	/**
+	 * P3.9: batch variant of writeConversationEvent. The whole batch occupies
+	 * ONE slot in the per-agent write queue (ordering against single writes is
+	 * preserved) and amortizes round trips: one batched idempotency lookup,
+	 * one insertMany for events, one bulkWrite for chunk projection, one
+	 * insertMany for extraction jobs, one updateMany clearing outbox markers,
+	 * and one aggregated lane-coverage update. Per-item receipts mirror the
+	 * single-write receipt shape; a failed item never fails its siblings.
+	 */
+	async writeConversationEventsBatch(
+		events: WriteConversationEventInput[],
+		benchmarkRunContext?: BenchmarkRunContext,
+	): Promise<WriteConversationEventReceipt[]> {
+		// (P2.5 e) shutdown intake stop: same contract as the single write.
+		if (this.closed) {
+			throw new Error(
+				"MongoDBMemoryManager is closed; refusing to queue a new write",
+			)
+		}
+		const execute = async (): Promise<WriteConversationEventReceipt[]> => {
+			const receipts: Array<WriteConversationEventReceipt | undefined> =
+				events.map(() => undefined)
+
+			// 1. Batched idempotency replay: ONE $in lookup for every key in the
+			// batch instead of a findOne per keyed write (P0.1 semantics per
+			// item: same key + same payload replays; different payload conflicts).
+			const keyedIndexes = events
+				.map((event, index) => ({ event, index }))
+				.filter(({ event }) => Boolean(event.idempotencyKey))
+			if (keyedIndexes.length > 0) {
+				const keys = [
+					...new Set(
+						keyedIndexes.map(({ event }) => event.idempotencyKey as string),
+					),
+				]
+				const existing = (await eventsCollection(this.db, this.prefix)
+					.find({ agentId: this.agentId, idempotencyKey: { $in: keys } })
+					.toArray()) as unknown as CanonicalEvent[]
+				const byKey = new Map(
+					existing.map((doc) => [doc.idempotencyKey as string, doc]),
+				)
+				for (const { event, index } of keyedIndexes) {
+					const doc = byKey.get(event.idempotencyKey as string)
+					if (!doc) {
+						continue
+					}
+					const incoming = this.resolveIdempotencyFingerprint(event)
+					const samePayload =
+						doc.role === incoming.role &&
+						doc.body === incoming.body &&
+						(doc.sessionId ?? undefined) === incoming.sessionId &&
+						doc.scope === incoming.scope &&
+						doc.scopeRef === incoming.scopeRef
+					receipts[index] = samePayload
+						? {
+								ok: true,
+								eventId: doc.eventId,
+								chunkCreated: false,
+								replayed: true,
+							}
+						: {
+								ok: false,
+								code: "IDEMPOTENCY_CONFLICT",
+								message: `idempotency key "${event.idempotencyKey}" was reused with a different payload`,
+							}
+				}
+			}
+
+			// 2. Build the write set for the non-replayed items.
+			const postWriteDerivedWorkEnabled = this.shouldRunPostWriteDerivedWork()
+			const extractionJobPendingAt = postWriteDerivedWorkEnabled
+				? new Date()
+				: undefined
+			type PendingItem = {
+				index: number
+				input: WriteConversationEventInput
+				eventId: string
+				scope: MemoryScope
+			}
+			const pending: PendingItem[] = []
+			for (const [index, input] of events.entries()) {
+				if (receipts[index]) {
+					continue
+				}
+				// P2.3: same canonical identity rule as the single write.
+				const { scope } = resolveScopeIdentity({
+					scope: input.scope,
+					agentId: this.agentId,
+					sessionId: input.sessionId,
+				})
+				pending.push({ index, input, eventId: randomUUID(), scope })
+			}
+
+			// 3. ONE insertMany for the whole batch (unordered: a per-item
+			// failure — validation or an E11000 idempotency race — does not
+			// abort its siblings).
+			const writeResults = await writeEventsBatch({
+				db: this.db,
+				prefix: this.prefix,
+				events: pending.map(({ input, eventId, scope }) => ({
+					eventId,
+					agentId: this.agentId,
+					sessionId: input.sessionId,
+					role: input.role,
+					body: input.body,
+					scope,
+					scopeRef: input.scopeRef,
+					timestamp: input.timestamp,
+					validAt: input.validAt,
+					invalidAt: input.invalidAt,
+					metadata: input.metadata,
+					idempotencyKey: input.idempotencyKey,
+					extractionJobPendingAt,
+				})),
+			})
+			const written: Array<
+				PendingItem & { timestamp: Date; scopeRef: string }
+			> = []
+			for (const [position, result] of writeResults.entries()) {
+				const item = pending[position]
+				if (result.ok) {
+					written.push({
+						...item,
+						timestamp: result.timestamp,
+						scopeRef: result.scopeRef,
+					})
+					continue
+				}
+				if (result.duplicateKey && item.input.idempotencyKey) {
+					// Lost race: a concurrent same-key write committed first. Replay
+					// the winner's receipt (Stripe: same key, same result); a payload
+					// mismatch is a per-item 422-style conflict.
+					try {
+						const replay = await this.replayIdempotentEventWrite({
+							idempotencyKey: item.input.idempotencyKey,
+							event: item.input,
+						})
+						if (replay) {
+							receipts[item.index] = {
+								ok: true,
+								eventId: replay.eventId,
+								chunkCreated: false,
+								replayed: true,
+							}
+							continue
+						}
+					} catch (err) {
+						if (err instanceof IdempotencyConflictError) {
+							receipts[item.index] = {
+								ok: false,
+								code: "IDEMPOTENCY_CONFLICT",
+								message: err.message,
+							}
+							continue
+						}
+						throw err
+					}
+				}
+				receipts[item.index] = {
+					ok: false,
+					code: "WRITE_ERROR",
+					message: result.message,
+				}
+			}
+
+			// 4. ONE bulkWrite for chunk projection + ONE updateMany marking the
+			// events projected. A projection failure degrades to
+			// chunkCreated:false without failing the (already durable) writes —
+			// the projection repair pass recovers them.
+			if (written.length > 0) {
+				const chunkResults = await projectEventChunksBatch({
+					db: this.db,
+					prefix: this.prefix,
+					events: written.map((item) => ({
+						eventId: item.eventId,
+						agentId: this.agentId,
+						role: item.input.role,
+						body: item.input.body,
+						scope: item.scope,
+						scopeRef: item.scopeRef,
+						timestamp: item.timestamp,
+						validAt: item.input.validAt ?? item.timestamp,
+						...(item.input.invalidAt
+							? { invalidAt: item.input.invalidAt }
+							: {}),
+						...(item.input.sessionId
+							? { sessionId: item.input.sessionId }
+							: {}),
+						...(item.input.metadata ? { metadata: item.input.metadata } : {}),
+					})),
+				})
+				for (const [position, item] of written.entries()) {
+					const chunkCreated = chunkResults[position]?.chunkCreated ?? false
+					if (chunkCreated) {
+						this.chunkCount += 1
+					}
+					receipts[item.index] = {
+						ok: true,
+						eventId: item.eventId,
+						chunkCreated,
+					}
+				}
+			}
+
+			// 5. Entity extraction per item (sync rule-based, non-blocking) —
+			// same derived-work contract as the single write; feeds the graph
+			// lane coverage increment below.
+			const entityCounts = new Map<number, number>()
+			if (postWriteDerivedWorkEnabled) {
+				for (const item of written) {
+					try {
+						const entityResult = await extractAndUpsertEntities({
+							db: this.db,
+							prefix: this.prefix,
+							agentId: this.agentId,
+							eventContent: item.input.body,
+							scope: item.scope,
+							scopeRef: item.scopeRef,
+							sourceEventId: item.eventId,
+						})
+						entityCounts.set(item.index, entityResult.entities.length)
+					} catch (err) {
+						log.warn("entity extraction failed after batch event write", {
+							error: err,
+						})
+					}
+				}
+			}
+
+			// 6. ONE insertMany for the extraction jobs (directly claimable —
+			// the batch has no transaction to stage through), then ONE
+			// updateMany clearing the outbox markers for events whose job is
+			// durable. A failed job insert leaves the marker set for the outbox
+			// repair pass, the same recovery contract as the single path.
+			if (postWriteDerivedWorkEnabled && written.length > 0) {
+				const jobResults = await createMemoryJobsBatch({
+					db: this.db,
+					prefix: this.prefix,
+					jobs: written.map((item) => ({
+						jobId: `extraction-${item.eventId}`,
+						jobType: "extraction" as const,
+						agentId: this.agentId,
+						status: "pending" as const,
+						metadata: { eventId: item.eventId },
+						payload: {
+							eventId: item.eventId,
+							scope: item.scope,
+							scopeRef: item.scopeRef,
+						},
+					})),
+				})
+				const claimableEventIds: string[] = []
+				for (const [position, jobResult] of jobResults.entries()) {
+					const item = written[position]
+					// A duplicate means the deterministic extraction-<eventId> job
+					// already exists (pre-created by /v1/extract or a prior attempt)
+					// and is claimable — satisfied, not an error.
+					if (jobResult.ok || jobResult.duplicate) {
+						claimableEventIds.push(item.eventId)
+						if (benchmarkRunContext) {
+							this.memoryJobRunContexts.set(
+								`extraction-${item.eventId}`,
+								benchmarkRunContext,
+							)
+						}
+					} else {
+						log.warn(
+							`batch extraction job insert failed for ${item.eventId}; leaving the outbox marker for the repair pass: ${jobResult.message}`,
+						)
+					}
+				}
+				if (claimableEventIds.length > 0) {
+					try {
+						await clearEventExtractionJobPendingBatch({
+							db: this.db,
+							prefix: this.prefix,
+							eventIds: claimableEventIds,
+							agentId: this.agentId,
+						})
+					} catch (err) {
+						log.warn(`batch extraction outbox cleanup failed: ${String(err)}`)
+					}
+				}
+				if (this.memoryJobWorkerStopped) {
+					this.startMemoryJobWorker()
+				} else {
+					this.wakeMemoryJobWorker()
+				}
+			}
+
+			// 7. Post-write derivations + coalesced query-cache invalidation
+			// per item (in-process scheduling queues, no extra round trips).
+			for (const item of written) {
+				await this.schedulePostWriteDerivations({
+					eventId: item.eventId,
+					role: item.input.role,
+					body: item.input.body,
+					sessionId: item.input.sessionId,
+					timestamp: item.timestamp,
+					scope: item.scope,
+					scopeRef: item.scopeRef,
+					runContext: benchmarkRunContext,
+				})
+				this.scheduleQueryCacheInvalidation({
+					agentId: this.agentId,
+					scope: item.scope,
+					scopeRef: item.scopeRef,
+				})
+			}
+
+			// 8. Lane coverage: aggregate the per-item increments across the
+			// batch into ONE update. Regex-only candidate counting (P3.9) — the
+			// counts only feed planner hints.
+			try {
+				const increments: Record<string, number> = {}
+				const bump = (lane: string, by: number) => {
+					if (by > 0) {
+						increments[lane] = (increments[lane] ?? 0) + by
+					}
+				}
+				for (const item of written) {
+					bump("raw-window", 1)
+					const receipt = receipts[item.index]
+					bump("hybrid", receipt && receipt.ok && receipt.chunkCreated ? 1 : 0)
+					bump("graph", entityCounts.get(item.index) ?? 0)
+					if (postWriteDerivedWorkEnabled) {
+						const candidates = extractStructuredCandidatesFromEvent({
+							eventId: item.eventId,
+							agentId: this.agentId,
+							role: item.input.role,
+							body: item.input.body,
+							timestamp: item.timestamp,
+							sessionId: item.input.sessionId,
+							scope: item.scope,
+							scopeRef: item.scopeRef,
+						})
+						bump("structured", candidates.length)
+						bump(
+							"active-critical",
+							candidates.filter(
+								(c) => c.salience === "critical" || c.salience === "high",
+							).length,
+						)
+						bump(
+							"procedural",
+							extractProcedureCandidatesFromEvent({
+								eventId: item.eventId,
+								agentId: this.agentId,
+								role: item.input.role,
+								body: item.input.body,
+								timestamp: item.timestamp,
+								sessionId: item.input.sessionId,
+								scope: item.scope,
+								scopeRef: item.scopeRef,
+							}).length,
+						)
+					}
+				}
+				if (written.length > 0) {
+					await updateLaneCoverage({
+						db: this.db,
+						prefix: this.prefix,
+						agentId: this.agentId,
+						increments,
+					})
+				}
+			} catch (err) {
+				log.warn("lane coverage update failed after batch event write", {
+					error: err instanceof Error ? err.message : String(err),
+				})
+			}
+
+			this.dirty = false
+			return receipts.map(
+				(receipt): WriteConversationEventReceipt =>
+					receipt ?? {
+						ok: false,
+						code: "WRITE_ERROR",
+						message: "event write not attempted",
+					},
+			)
 		}
 
 		const next = this.writeQueue.then(execute, execute)
@@ -9800,22 +10544,19 @@ export async function writeEventAndProject(
 			if (entityCount > 0) {
 				increments.graph = entityCount
 			}
-			// Structured lane tracks durable promotion eligibility, not just raw
-			// extraction hits, so deferred candidates do not inflate coverage.
-			// Regex-only, matching this function's regex-only promotion above.
-			const candidates = await resolveStructuredCandidatesForPromotion({
-				db,
-				prefix,
-				event: {
-					eventId: written.eventId,
-					agentId: event.agentId,
-					role: event.role as "user" | "assistant" | "system" | "tool",
-					body: event.body,
-					timestamp: written.timestamp,
-					sessionId: event.sessionId,
-					scope: event.scope as MemoryScope,
-					scopeRef: written.scopeRef,
-				},
+			// Structured lane counts regex/classification candidates only (P3.9):
+			// the promotion resolver did a per-candidate findOne existence check
+			// (N+1) and the counts only feed planner hints, never durable writes.
+			// Regex-only, matching this function.s regex-only promotion above.
+			const candidates = extractStructuredCandidatesFromEvent({
+				eventId: written.eventId,
+				agentId: event.agentId,
+				role: event.role as "user" | "assistant" | "system" | "tool",
+				body: event.body,
+				timestamp: written.timestamp,
+				sessionId: event.sessionId,
+				scope: event.scope as MemoryScope,
+				scopeRef: written.scopeRef,
 			})
 			if (candidates.length > 0) {
 				increments.structured = candidates.length
@@ -9921,6 +10662,12 @@ export type V2SearchMetadata = {
 	laneControls?: ReturnType<typeof applyLaneAwareResultControls>["summary"]
 	/** #66: wall-clock ms per executed lane, hybrid sub-lane, and serial backstop. */
 	latencyByPath?: Record<string, number>
+	/**
+	 * P3.2: per-request cost ledger (aggregations + server-side embeddings
+	 * consumed, and whether the storm budget was hit). See
+	 * mongodb-search-budget.ts.
+	 */
+	budget?: SearchBudgetSnapshot
 }
 
 const GRAPH_QUERY_STOPWORDS = new Set([
@@ -10149,46 +10896,116 @@ function computeRawWindowEventQueryScore(
  * Execute a v2 retrieval plan: call planRetrieval, execute top 3 paths, deduplicate results.
  * Each path has its own try/catch so one failure doesn't kill the whole search.
  */
+/**
+ * P3.1: the conversation and bridge chunk lanes read the SAME collection
+ * with the SAME query text, and under autoEmbed each $vectorSearch re-embeds
+ * that text server-side — two lanes cost two paid embeddings per request.
+ * When both filters pin the same identity fields they differ only in the
+ * `source` set, so they fuse into ONE lane with the union of sources: one
+ * aggregation, one embedding. Structurally incompatible filters (different
+ * identity, non-$in source sets) keep the split lanes — a fusion must never
+ * widen or narrow either read. Returns undefined when fusion is unsafe.
+ */
+function fuseChunkLaneFilters(
+	conversation: Document,
+	bridge: Document | undefined,
+): Document | undefined {
+	if (!bridge) {
+		return conversation
+	}
+	for (const key of ["agentId", "scope", "scopeRef", "status"] as const) {
+		if (JSON.stringify(conversation[key]) !== JSON.stringify(bridge[key])) {
+			return undefined
+		}
+	}
+	const conversationSources = (conversation.source as { $in?: unknown[] })?.$in
+	const bridgeSources = (bridge.source as { $in?: unknown[] })?.$in
+	if (!Array.isArray(conversationSources) || !Array.isArray(bridgeSources)) {
+		return undefined
+	}
+	return {
+		...conversation,
+		source: { $in: [...new Set([...conversationSources, ...bridgeSources])] },
+	}
+}
+
+/**
+ * searchV2 entry point: opens the per-request cost budget (P3.2) that every
+ * lane, waterfall stage, and backstop consumes. When a budget is already
+ * active — the recursive hybrid backstop re-entering searchV2 — the call
+ * shares it instead of opening a fresh one, so a backstop can never reset
+ * the storm counter.
+ */
 export async function searchV2(
 	db: Db,
 	prefix: string,
 	query: string,
 	agentId: string,
-	context: {
-		availablePaths: Set<RetrievalPath>
-		knownEntityNames?: string[]
-		hasEpisodes?: boolean
-		hasGraphData?: boolean
-		maxResults?: number
-		searchOptions?: {
-			minScore?: number
-			sessionKey?: string
-			numCandidates?: number
-			capabilities?: DetectedCapabilities
-			fusionMethod?: ResolvedMongoDBConfig["fusionMethod"]
-			embeddingMode?: ResolvedMongoDBConfig["embeddingMode"]
-			conversationFilter?: Document
-			bridgeFilter?: Document
-			bridgeMaxResults?: number
-			scope?: MemoryScope
-			scopeRef?: string
-			allowHybridBackstop?: boolean
-			rerankConfig?: RerankConfig
-			queryRewriteConfig?: QueryRewriteConfig
-			projection?: "full" | "ids-only"
-			sourcePreference?: MemorySearchRequest["sourcePreference"]
-			needExactEvidence?: boolean
-			timeRange?: MemorySearchRequest["timeRange"]
-			conversationScope?: MemorySearchRequest["conversationScope"]
-			structuredScope?: MemorySearchRequest["structuredScope"]
-			referenceScope?: MemorySearchRequest["referenceScope"]
-			proceduralScope?: MemorySearchRequest["proceduralScope"]
-			graphMaxDepth?: number
-			searchConfig?: ResolvedSearchConfig
-			questionDate?: Date
-			benchmarkRunContext?: BenchmarkRunContext
+	context: SearchV2Context,
+): Promise<{ results: MemorySearchResult[]; metadata: V2SearchMetadata }> {
+	if (hasActiveSearchBudget()) {
+		const value = await searchV2WithBudget(db, prefix, query, agentId, context)
+		return {
+			results: value.results,
+			metadata: {
+				...value.metadata,
+				...(getSearchBudgetSnapshot()
+					? { budget: getSearchBudgetSnapshot() }
+					: {}),
+			},
 		}
-	},
+	}
+	const limits = resolveSearchBudgetLimits(context.searchOptions?.budget)
+	const { value, budget } = await runWithSearchBudget(limits, () =>
+		searchV2WithBudget(db, prefix, query, agentId, context),
+	)
+	return { results: value.results, metadata: { ...value.metadata, budget } }
+}
+
+export type SearchV2Context = {
+	availablePaths: Set<RetrievalPath>
+	knownEntityNames?: string[]
+	hasEpisodes?: boolean
+	hasGraphData?: boolean
+	maxResults?: number
+	searchOptions?: {
+		minScore?: number
+		sessionKey?: string
+		numCandidates?: number
+		capabilities?: DetectedCapabilities
+		fusionMethod?: ResolvedMongoDBConfig["fusionMethod"]
+		embeddingMode?: ResolvedMongoDBConfig["embeddingMode"]
+		conversationFilter?: Document
+		bridgeFilter?: Document
+		bridgeMaxResults?: number
+		scope?: MemoryScope
+		scopeRef?: string
+		allowHybridBackstop?: boolean
+		rerankConfig?: RerankConfig
+		queryRewriteConfig?: QueryRewriteConfig
+		projection?: "full" | "ids-only"
+		sourcePreference?: MemorySearchRequest["sourcePreference"]
+		needExactEvidence?: boolean
+		timeRange?: MemorySearchRequest["timeRange"]
+		conversationScope?: MemorySearchRequest["conversationScope"]
+		structuredScope?: MemorySearchRequest["structuredScope"]
+		referenceScope?: MemorySearchRequest["referenceScope"]
+		proceduralScope?: MemorySearchRequest["proceduralScope"]
+		graphMaxDepth?: number
+		searchConfig?: ResolvedSearchConfig
+		questionDate?: Date
+		benchmarkRunContext?: BenchmarkRunContext
+		/** P3.2: per-request cost budget overrides (resolved over defaults). */
+		budget?: Partial<SearchBudgetLimits>
+	}
+}
+
+async function searchV2WithBudget(
+	db: Db,
+	prefix: string,
+	query: string,
+	agentId: string,
+	context: SearchV2Context,
 ): Promise<{ results: MemorySearchResult[]; metadata: V2SearchMetadata }> {
 	try {
 		const graphQueryCandidates =
@@ -10286,8 +11103,13 @@ export async function searchV2(
 					{ hasData: boolean; count: number; lastUpdated: Date | null }
 			  >
 			| undefined
+		// P3.2: distinguishes "coverage read failed" (backstops keep the old
+		// behavior) from "coverage read succeeded and there is no data" (a
+		// cold tenant — backstops must not fire, empty ≠ error).
+		let laneCoverageLoaded = false
 		try {
 			const coverageDoc = await getLaneCoverage({ db, prefix, agentId })
+			laneCoverageLoaded = true
 			if (coverageDoc) {
 				laneCoverage = coverageDoc.lanes
 			}
@@ -10297,6 +11119,15 @@ export async function searchV2(
 				agentId,
 			})
 		}
+		/**
+		 * P3.2 — "empty ≠ error" (fix-plan-2026-08-03, Appendix C): escalation
+		 * machinery (search backstops) fires only when lane coverage says data
+		 * EXISTS. A coverage read failure keeps the old permissive behavior; a
+		 * cold tenant (no coverage document, or hasData=false) never triggers
+		 * a re-run — its empty answer stands.
+		 */
+		const laneHasData = (lane: string): boolean =>
+			!laneCoverageLoaded || laneCoverage?.[lane]?.hasData === true
 
 		const plan = planRetrieval(query, {
 			availablePaths: context.availablePaths,
@@ -10446,8 +11277,21 @@ export async function searchV2(
 		const perPathResults: Record<string, MemorySearchResult[]> = {}
 
 		// Execute the top planned paths first, but keep hybrid as the backstop when
-		// specialized paths come back weak or empty.
-		const pathsToExecute = plan.paths.slice(0, 3)
+		// specialized paths come back weak or empty. Intersect with availablePaths
+		// (the planner already filters; a stubbed planner in tests does not) and
+		// honor the planner contract that hybrid is the baseline lane whenever it
+		// is available — a search must never silently execute zero lanes while
+		// hybrid is on the table.
+		const plannedPaths = plan.paths.filter((path) =>
+			context.availablePaths.has(path),
+		)
+		const pathsToExecute = (
+			plannedPaths.length > 0
+				? plannedPaths
+				: context.availablePaths.has("hybrid")
+					? (["hybrid"] as RetrievalPath[])
+					: []
+		).slice(0, 3)
 
 		// Each path is an independent read over its own collections, and most
 		// pay a server-side embedding round-trip inside $vectorSearch — run
@@ -10558,6 +11402,12 @@ export async function searchV2(
 							sourceEventIds: [e.eventId],
 							sourceReliability: 0.95,
 							reinforcementCount: 1,
+							// P3.7 wiring: the denormalized reinforcement counter the
+							// access tracker maintains on the event document, surfaced
+							// so the post-CE access boost can modulate ranking.
+							...(typeof e.accessCount === "number"
+								? { accessCount: e.accessCount }
+								: {}),
 							provenance: {
 								lane: "raw-window",
 								eventId: e.eventId,
@@ -10579,6 +11429,9 @@ export async function searchV2(
 											scope,
 											scopeRef: agentScopeRef,
 											limit: 5,
+											// P3.8: route through entity_autocomplete $search only when
+											// mongot is present; otherwise the escaped $regex fallback.
+											textSearchAvailable: capabilities.textSearch,
 										}),
 									),
 								)
@@ -10635,7 +11488,7 @@ export async function searchV2(
 						break
 					}
 					case "episodic": {
-						// Use original query for regex-based episodic search (synonym expansion breaks regex matching)
+						// Use original query for episodic search (synonym expansion breaks matching)
 						const episodes = await searchEpisodes({
 							db,
 							prefix,
@@ -10644,6 +11497,9 @@ export async function searchV2(
 							scope,
 							scopeRef: agentScopeRef,
 							...(timeRange ? { timeRange } : {}),
+							// P3.8: route through episode_autocomplete $search only when
+							// mongot is present; otherwise the escaped $regex fallback.
+							textSearchAvailable: capabilities.textSearch,
 						})
 						pathResults = episodes.map((ep, i) => ({
 							path: `episode:${ep.episodeId}`,
@@ -10696,7 +11552,65 @@ export async function searchV2(
 							break
 						}
 						const searches: Array<Promise<MemorySearchResult[]>> = []
-						if (conversationChunkFilter) {
+						// P3.1: the conversation and bridge lanes read the same
+						// collection with the same query text, and under autoEmbed
+						// every $vectorSearch embeds that text server-side — two
+						// lanes cost two paid embeddings per request. When both
+						// filters pin the same identity they differ only in the
+						// `source` set, so fuse them into ONE lane with the union of
+						// sources: one aggregation, one embedding. The bridge budget
+						// folds into the lane's (larger) conversation budget; the
+						// results were merged into one pool downstream anyway.
+						// Incompatible filters keep the split lanes below — a fusion
+						// must never widen or narrow either read.
+						const fusedChunkFilter = conversationChunkFilter
+							? fuseChunkLaneFilters(conversationChunkFilter, bridgeChunkFilter)
+							: undefined
+						if (fusedChunkFilter) {
+							searches.push(
+								timeLane("hybrid:chunks", () =>
+									(hybridMode === "vector-only"
+										? vectorSearch(chunksCollection(db, prefix), null, {
+												maxResults: context.maxResults ?? 10,
+												minScore,
+												numCandidates,
+												sessionKey: context.searchOptions?.sessionKey,
+												filter: fusedChunkFilter,
+												indexName: `${prefix}chunks_vector`,
+												queryText: searchQuery,
+												embeddingMode,
+											})
+										: mongoSearch(
+												chunksCollection(db, prefix),
+												searchQuery,
+												null,
+												{
+													maxResults: context.maxResults ?? 10,
+													minScore,
+													numCandidates,
+													sessionKey: context.searchOptions?.sessionKey,
+													filter: fusedChunkFilter,
+													fusionMethod,
+													capabilities,
+													vectorIndexName: `${prefix}chunks_vector`,
+													textIndexName: `${prefix}chunks_text`,
+													vectorWeight: 0.7,
+													textWeight: 0.3,
+													embeddingMode,
+												},
+											)
+									).catch((err) => {
+										if (isBenchmarkStrictMode()) {
+											throw err
+										}
+										log.warn(
+											`searchV2 hybrid chunks path failed: ${String(err)}`,
+										)
+										return [] as MemorySearchResult[]
+									}),
+								),
+							)
+						} else if (conversationChunkFilter) {
 							searches.push(
 								timeLane("hybrid:chunks", () =>
 									(hybridMode === "vector-only"
@@ -10741,7 +11655,7 @@ export async function searchV2(
 								),
 							)
 						}
-						if (bridgeChunkFilter) {
+						if (!fusedChunkFilter && bridgeChunkFilter) {
 							searches.push(
 								timeLane("hybrid:bridge", () =>
 									(hybridMode === "vector-only"
@@ -11017,7 +11931,8 @@ export async function searchV2(
 			context.availablePaths.has("procedural") &&
 			!pathsToExecute.includes("procedural") &&
 			!pathsExecuted.includes("procedural") &&
-			deduped.length < Math.max(2, Math.ceil(maxResults / 3))
+			deduped.length < Math.max(2, Math.ceil(maxResults / 3)) &&
+			laneHasData("procedural")
 		if (needsProceduralBackstop) {
 			try {
 				const procedureFallback = await timeLane("backstop:procedural", () =>
@@ -11055,7 +11970,10 @@ export async function searchV2(
 			allowHybridBackstop &&
 			context.availablePaths.has("hybrid") &&
 			!pathsExecuted.includes("hybrid") &&
-			deduped.length < Math.max(2, Math.ceil(maxResults / 3))
+			deduped.length < Math.max(2, Math.ceil(maxResults / 3)) &&
+			// P3.2: the recursive hybrid backstop re-runs the whole search — it
+			// is only justified when lane coverage says data EXISTS to find.
+			laneHasData("hybrid")
 		if (needsHybridBackstop) {
 			try {
 				// Use searchQuery (already rewritten) for the backstop, but disable rewriting
@@ -11265,7 +12183,10 @@ export async function searchV2(
 						deduplicateSearchResults([
 							...applyPreferenceEvidenceBoostAfterRerank(
 								query,
-								rerankResult.results,
+								applyRecencyAccessBoostAfterRerank(rerankResult.results, {
+									recencyBoost: rerankCfg.recencyBoost,
+									accessBoost: rerankCfg.accessBoost,
+								}),
 							),
 							...timelineResults,
 						]),

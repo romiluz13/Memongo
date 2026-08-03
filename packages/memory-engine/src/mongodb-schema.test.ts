@@ -2,9 +2,14 @@
 import type { Db, Collection, Document } from "mongodb"
 import { describe, it, expect, vi } from "vitest"
 import {
+	isCapabilityEnabled,
+	resetCapabilityProbes,
+} from "./mongodb-capability-registry.js"
+import {
 	assertIndexBudget,
 	detectCapabilities,
 	ensureCollections,
+	ensureSchemaValidation,
 	ensureSearchIndexes,
 	ensureStandardIndexes,
 	chunksCollection,
@@ -55,7 +60,10 @@ function mockCollection(name: string): Collection {
 	} as unknown as Collection
 }
 
-function mockDb(existingCollections: string[] = []): Db {
+function mockDb(
+	existingCollections: string[] = [],
+	versionArray?: unknown,
+): Db {
 	const collections = new Map<string, Collection>()
 
 	const db = {
@@ -66,6 +74,13 @@ function mockDb(existingCollections: string[] = []): Db {
 			return collections.get(name)!
 		}),
 		command: vi.fn(async () => ({ ok: 1 })),
+		...(versionArray !== undefined
+			? {
+					admin: vi.fn(() => ({
+						command: vi.fn(async () => ({ versionArray })),
+					})),
+				}
+			: {}),
 		createCollection: vi.fn(async (name: string) => {
 			collections.set(name, mockCollection(name))
 			return collections.get(name)!
@@ -536,9 +551,9 @@ describe("ensureStandardIndexes", () => {
 			createIndex: ReturnType<typeof vi.fn>
 		}
 
-		// 4 chunks + 5 KB + 4 KB chunks (3 + 1 wiki) + 8 structured (6 + 1 v2 scope + 1 sourceEvent) +
+		// 4 chunks (path+hash, updated, text, P3.8 agent+path+startLine ESR) + 5 KB + 4 KB chunks (3 + 1 wiki) + 8 structured (6 + 1 v2 scope + 1 sourceEvent) +
 		// 1 structured revisions + 3 relevance_runs + 2 relevance_artifacts +
-		// 2 relevance_regressions + 9 events (6 + 1 dreamerProcessedAt + 1 bi-temporal SE-1 + 1 idempotency) + 5 entities (3 + 2 Phase 3.4) + 4 relations +
+		// 2 relevance_regressions + 9 events (6 + 1 dreamerProcessedAt + 1 bi-temporal SE-1 + 1 idempotency) + 6 entities (3 + 2 Phase 3.4 + 1 P3.8 agent/updatedAt ESR) + 4 relations +
 		// 2 entity links + 4 episodes (3 + 1 promotion) + 1 ingest_runs + 1 projection_runs +
 		// 4 procedures + 1 procedure_revisions + 3 query_cache + 2 telemetry + 2 access_events
 		// + 3 memory_mutations (compound + TTL + per-document)
@@ -549,12 +564,15 @@ describe("ensureStandardIndexes", () => {
 		// + 1 partial index (structured active facts) + 2 sourceEvent dedup indexes
 		// + 3 session_chunks + 1 bi-temporal valid-time (#32)
 		// + 1 durable memory-job claim index + 1 extraction outbox partial index
-		// + 1 unique relation identity index = 92
-		expect(count).toBe(92)
+		// + 1 unique relation identity index
+		// P3.8: −3 retired redundant indexes (idx_chunks_path, idx_structured_agentid,
+		// idx_relations_agent_scope_scoperef), +1 chunk ESR, +1 episode ESR,
+		// +1 entity ESR, +1 relationId locator = 93
+		expect(count).toBe(93)
 		expect(chunks.createIndex).toHaveBeenCalledTimes(4)
 		expect(kb.createIndex).toHaveBeenCalledTimes(5)
 		expect(kbChunks.createIndex).toHaveBeenCalledTimes(4)
-		expect(structured.createIndex).toHaveBeenCalledTimes(11)
+		expect(structured.createIndex).toHaveBeenCalledTimes(10)
 		expect(structuredRevisions.createIndex).toHaveBeenCalledTimes(1)
 		expect(relevanceRuns.createIndex).toHaveBeenCalledTimes(3)
 		expect(relevanceArtifacts.createIndex).toHaveBeenCalledTimes(2)
@@ -602,7 +620,7 @@ describe("ensureStandardIndexes", () => {
 				},
 			},
 		)
-		expect(entities.createIndex).toHaveBeenCalledTimes(5)
+		expect(entities.createIndex).toHaveBeenCalledTimes(6)
 		expect(relations.createIndex).toHaveBeenCalledTimes(6)
 		expect(relations.createIndex).toHaveBeenCalledWith(
 			{
@@ -616,7 +634,7 @@ describe("ensureStandardIndexes", () => {
 			{ name: "uq_relations_identity", unique: true },
 		)
 		expect(entityLinks.createIndex).toHaveBeenCalledTimes(2)
-		expect(episodes.createIndex).toHaveBeenCalledTimes(5)
+		expect(episodes.createIndex).toHaveBeenCalledTimes(6)
 		expect(ingestRuns.createIndex).toHaveBeenCalledTimes(1)
 		expect(projectionRuns.createIndex).toHaveBeenCalledTimes(1)
 
@@ -679,9 +697,9 @@ describe("ensureStandardIndexes", () => {
 			) as unknown as {
 				createIndex: ReturnType<typeof vi.fn>
 			}
-			// 92 base (incl. 2 consolidation_runs + events idempotency key)
+			// 93 base (incl. 2 consolidation_runs + events idempotency key)
 			// + 4 evidence mirror indexes
-			expect(count).toBe(96)
+			expect(count).toBe(97)
 			expect(memoryEvidence.createIndex).toHaveBeenCalledTimes(4)
 			expect(memoryEvidence.createIndex).toHaveBeenCalledWith(
 				{ canonicalId: 1 },
@@ -792,8 +810,9 @@ describe("ensureStandardIndexes", () => {
 		// 3 query_cache + 2 telemetry + 2 access_events + 3 memory_mutations
 		// + 1 lane_coverage + 2 consolidation_runs + 3 session_chunks
 		// + 1 bi-temporal valid-time (#32) + 2 durable job claim/TTL indexes
-		// + 1 extraction outbox partial index + 1 unique relation identity = 92
-		expect(count).toBe(92)
+		// + 1 extraction outbox partial index + 1 unique relation identity
+		// P3.8: −3 retired redundant indexes + 3 ESR compounds + 1 relationId locator = 93
+		expect(count).toBe(93)
 	})
 
 	it("creates relevance TTL indexes when relevanceRetentionDays is set", async () => {
@@ -857,8 +876,232 @@ describe("ensureStandardIndexes", () => {
 })
 
 // ---------------------------------------------------------------------------
+// P3.8: index hygiene — redundant index retirement, ESR compounds,
+// conditional $text fallback indexes, relationId locator index
+// ---------------------------------------------------------------------------
+
+describe("P3.8 index hygiene", () => {
+	it("drops the three strict-prefix-redundant indexes and never recreates them", async () => {
+		const db = mockDb()
+		await ensureStandardIndexes(db, "test_")
+
+		const chunks = db.collection("test_chunks") as unknown as {
+			createIndex: ReturnType<typeof vi.fn>
+			dropIndex: ReturnType<typeof vi.fn>
+		}
+		const structured = db.collection("test_structured_mem") as unknown as {
+			createIndex: ReturnType<typeof vi.fn>
+			dropIndex: ReturnType<typeof vi.fn>
+		}
+		const relations = db.collection("test_relations") as unknown as {
+			createIndex: ReturnType<typeof vi.fn>
+			dropIndex: ReturnType<typeof vi.fn>
+		}
+
+		// Existing deployments keep a retired index unless bootstrap drops it —
+		// the structured_mem unique-index create/drop dance is the precedent.
+		expect(chunks.dropIndex).toHaveBeenCalledWith("idx_chunks_path")
+		expect(structured.dropIndex).toHaveBeenCalledWith("idx_structured_agentid")
+		expect(relations.dropIndex).toHaveBeenCalledWith(
+			"idx_relations_agent_scope_scoperef",
+		)
+
+		const createdNames = (col: {
+			createIndex: ReturnType<typeof vi.fn>
+		}): string[] =>
+			col.createIndex.mock.calls.map(
+				(c: unknown[]) => (c[1] as { name?: string })?.name ?? "",
+			)
+		expect(createdNames(chunks)).not.toContain("idx_chunks_path")
+		expect(createdNames(structured)).not.toContain("idx_structured_agentid")
+		expect(createdNames(relations)).not.toContain(
+			"idx_relations_agent_scope_scoperef",
+		)
+	})
+
+	it("creates the chunk ESR compound {agentId, path, startLine}", async () => {
+		const db = mockDb()
+		await ensureStandardIndexes(db, "test_")
+		const chunks = db.collection("test_chunks") as unknown as {
+			createIndex: ReturnType<typeof vi.fn>
+		}
+		expect(chunks.createIndex).toHaveBeenCalledWith(
+			{ agentId: 1, path: 1, startLine: 1 },
+			{ name: "idx_chunks_agent_path_startline" },
+		)
+	})
+
+	it("creates the episode ESR compound {agentId, type, updatedAt desc}", async () => {
+		const db = mockDb()
+		await ensureStandardIndexes(db, "test_")
+		const episodes = db.collection("test_episodes") as unknown as {
+			createIndex: ReturnType<typeof vi.fn>
+		}
+		expect(episodes.createIndex).toHaveBeenCalledWith(
+			{ agentId: 1, type: 1, updatedAt: -1 },
+			{ name: "idx_episodes_agent_type_updated" },
+		)
+	})
+
+	it("creates the entity ESR compound {agentId, updatedAt desc}", async () => {
+		const db = mockDb()
+		await ensureStandardIndexes(db, "test_")
+		const entities = db.collection("test_entities") as unknown as {
+			createIndex: ReturnType<typeof vi.fn>
+		}
+		expect(entities.createIndex).toHaveBeenCalledWith(
+			{ agentId: 1, updatedAt: -1 },
+			{ name: "idx_entities_agent_updated" },
+		)
+	})
+
+	it("creates the relationId locator index on relations", async () => {
+		const db = mockDb()
+		await ensureStandardIndexes(db, "test_")
+		const relations = db.collection("test_relations") as unknown as {
+			createIndex: ReturnType<typeof vi.fn>
+		}
+		expect(relations.createIndex).toHaveBeenCalledWith(
+			{ agentId: 1, scope: 1, scopeRef: 1, relationId: 1 },
+			{ name: "idx_relations_agent_scope_scoperef_relationid" },
+		)
+	})
+
+	it("creates all six $text fallback indexes by default", async () => {
+		const db = mockDb()
+		await ensureStandardIndexes(db, "test_")
+		const textIndexNames = [
+			["test_chunks", "idx_chunks_text"],
+			["test_kb_chunks", "idx_kbchunks_text"],
+			["test_structured_mem", "idx_structured_text"],
+			["test_entities", "idx_entities_text"],
+			["test_episodes", "idx_episodes_text"],
+			["test_procedures", "idx_procedures_text"],
+		] as const
+		for (const [collectionName, indexName] of textIndexNames) {
+			const col = db.collection(collectionName) as unknown as {
+				createIndex: ReturnType<typeof vi.fn>
+			}
+			const found = col.createIndex.mock.calls.some(
+				(c: unknown[]) => (c[1] as { name?: string })?.name === indexName,
+			)
+			expect(found, `${indexName} on ${collectionName}`).toBe(true)
+		}
+	})
+
+	it("skips all six $text fallback indexes when textFallbackIndexes is false", async () => {
+		const db = mockDb()
+		await ensureStandardIndexes(db, "test_", { textFallbackIndexes: false })
+		const textIndexNames = [
+			["test_chunks", "idx_chunks_text"],
+			["test_kb_chunks", "idx_kbchunks_text"],
+			["test_structured_mem", "idx_structured_text"],
+			["test_entities", "idx_entities_text"],
+			["test_episodes", "idx_episodes_text"],
+			["test_procedures", "idx_procedures_text"],
+		] as const
+		for (const [collectionName, indexName] of textIndexNames) {
+			const col = db.collection(collectionName) as unknown as {
+				createIndex: ReturnType<typeof vi.fn>
+			}
+			const found = col.createIndex.mock.calls.some(
+				(c: unknown[]) => (c[1] as { name?: string })?.name === indexName,
+			)
+			expect(found, `${indexName} on ${collectionName}`).toBe(false)
+		}
+	})
+
+	it("creates the episode_autocomplete search index alongside entity_autocomplete", async () => {
+		const db = mockDb()
+		await ensureSearchIndexes(db, "test_", "atlas-local-preview", "automated")
+		const episodes = db.collection("test_episodes") as unknown as {
+			createSearchIndex: ReturnType<typeof vi.fn>
+		}
+		const episodeCall = episodes.createSearchIndex.mock.calls.find(
+			(c: unknown[]) =>
+				(c[0] as { name?: string })?.name === "episode_autocomplete",
+		) as unknown[] | undefined
+		expect(episodeCall).toBeDefined()
+		const spec = episodeCall![0] as Document
+		expect(spec.type).toBe("search")
+		const fields = spec.definition?.mappings?.fields ?? {}
+		expect(fields.title?.type).toBe("autocomplete")
+		expect(fields.summary?.type).toBe("autocomplete")
+		expect(fields.agentId?.type).toBe("token")
+		expect(fields.scope?.type).toBe("token")
+		expect(fields.scopeRef?.type).toBe("token")
+	})
+
+	it("plans the episode_autocomplete target in the default search index list", () => {
+		const targets = getExpectedSearchIndexTargets(
+			"test_",
+			"atlas-local-preview",
+		)
+		expect(targets).toContainEqual({
+			collectionName: "test_episodes",
+			indexNames: ["episode_autocomplete"],
+		})
+	})
+})
+
+// ---------------------------------------------------------------------------
 // ensureSearchIndexes
 // ---------------------------------------------------------------------------
+
+describe("validationAction version gate (P3.5)", () => {
+	it("uses errorAndLog on MongoDB 8.1+ when creating collections", async () => {
+		const db = mockDb([], [8, 1, 0, 0])
+		await ensureCollections(db, "test_")
+		expect(db.createCollection).toHaveBeenCalledWith(
+			"test_chunks",
+			expect.objectContaining({ validationAction: "errorAndLog" }),
+		)
+		expect(db.createCollection).toHaveBeenCalledWith(
+			"test_knowledge_base",
+			expect.objectContaining({ validationAction: "errorAndLog" }),
+		)
+	})
+
+	it("keeps error below MongoDB 8.1 when creating collections", async () => {
+		const db = mockDb([], [8, 0, 13, 0])
+		await ensureCollections(db, "test_")
+		expect(db.createCollection).toHaveBeenCalledWith(
+			"test_chunks",
+			expect.objectContaining({ validationAction: "error" }),
+		)
+	})
+
+	it("keeps error when the server version is unknown", async () => {
+		const db = mockDb([])
+		await ensureCollections(db, "test_")
+		expect(db.createCollection).toHaveBeenCalledWith(
+			"test_chunks",
+			expect.objectContaining({ validationAction: "error" }),
+		)
+	})
+
+	it("uses errorAndLog on MongoDB 8.1+ for collMod schema validation", async () => {
+		const db = mockDb([], [8, 2, 6, 0])
+		await ensureSchemaValidation(db, "test_")
+		expect(db.command).toHaveBeenCalledWith(
+			expect.objectContaining({
+				collMod: "test_chunks",
+				validationAction: "errorAndLog",
+			}),
+		)
+	})
+
+	it("keeps error below MongoDB 8.1 for collMod schema validation", async () => {
+		const db = mockDb([], [8, 0, 13, 0])
+		await ensureSchemaValidation(db, "test_")
+		expect(db.command).toHaveBeenCalledWith(
+			expect.objectContaining({
+				collMod: "test_chunks",
+				validationAction: "error",
+			}),
+		)
+	})
+})
 
 describe("ensureSearchIndexes", () => {
 	it("treats autoEmbed listSearchIndexes type as vectorSearch-compatible", () => {
@@ -1332,6 +1575,181 @@ describe("ensureSearchIndexes", () => {
 		}
 	})
 
+	it("enables storedSource include-lists by default on MongoDB 8.3.7+ (P3.3)", async () => {
+		const previous = process.env.MEMONGO_VECTOR_STORED_SOURCE
+		delete process.env.MEMONGO_VECTOR_STORED_SOURCE
+		try {
+			const db = mockDb([], [8, 3, 7, 0])
+			await ensureSearchIndexes(db, "test_", "atlas-managed", "automated")
+
+			const chunks = db.collection("test_chunks") as unknown as {
+				createSearchIndex: ReturnType<typeof vi.fn>
+			}
+			const vectorCall = chunks.createSearchIndex.mock.calls.find(
+				(c: unknown[]) => (c[0] as Document).type === "vectorSearch",
+			)
+			expect(vectorCall).toBeDefined()
+			expect((vectorCall![0] as Document).definition.storedSource).toEqual({
+				include: expect.arrayContaining(["text", "path", "provenance"]),
+			})
+
+			// Events stays excluded: its recall pipelines $match on
+			// validAt/invalidAt AFTER $vectorSearch.
+			const events = db.collection("test_events") as unknown as {
+				createSearchIndex: ReturnType<typeof vi.fn>
+			}
+			for (const call of events.createSearchIndex.mock.calls) {
+				const spec = call[0] as Document
+				if (spec.type === "vectorSearch") {
+					expect(spec.definition.storedSource).toBeUndefined()
+				}
+			}
+		} finally {
+			if (previous === undefined) {
+				delete process.env.MEMONGO_VECTOR_STORED_SOURCE
+			} else {
+				process.env.MEMONGO_VECTOR_STORED_SOURCE = previous
+			}
+		}
+	})
+
+	it("keeps storedSource off below MongoDB 8.3.7 when the env var is unset (P3.3)", async () => {
+		const previous = process.env.MEMONGO_VECTOR_STORED_SOURCE
+		delete process.env.MEMONGO_VECTOR_STORED_SOURCE
+		try {
+			const db = mockDb([], [8, 3, 0, 0])
+			await ensureSearchIndexes(db, "test_", "atlas-managed", "automated")
+			const chunks = db.collection("test_chunks") as unknown as {
+				createSearchIndex: ReturnType<typeof vi.fn>
+			}
+			const vectorCall = chunks.createSearchIndex.mock.calls.find(
+				(c: unknown[]) => (c[0] as Document).type === "vectorSearch",
+			)
+			expect(vectorCall).toBeDefined()
+			expect(
+				(vectorCall![0] as Document).definition.storedSource,
+			).toBeUndefined()
+		} finally {
+			if (previous === undefined) {
+				delete process.env.MEMONGO_VECTOR_STORED_SOURCE
+			} else {
+				process.env.MEMONGO_VECTOR_STORED_SOURCE = previous
+			}
+		}
+	})
+
+	it("MEMONGO_VECTOR_STORED_SOURCE=0 forces storedSource off even on 8.3.7+ (P3.3)", async () => {
+		const previous = process.env.MEMONGO_VECTOR_STORED_SOURCE
+		process.env.MEMONGO_VECTOR_STORED_SOURCE = "0"
+		try {
+			const db = mockDb([], [8, 3, 7, 0])
+			await ensureSearchIndexes(db, "test_", "atlas-managed", "automated")
+			const chunks = db.collection("test_chunks") as unknown as {
+				createSearchIndex: ReturnType<typeof vi.fn>
+			}
+			const vectorCall = chunks.createSearchIndex.mock.calls.find(
+				(c: unknown[]) => (c[0] as Document).type === "vectorSearch",
+			)
+			expect(vectorCall).toBeDefined()
+			expect(
+				(vectorCall![0] as Document).definition.storedSource,
+			).toBeUndefined()
+		} finally {
+			if (previous === undefined) {
+				delete process.env.MEMONGO_VECTOR_STORED_SOURCE
+			} else {
+				process.env.MEMONGO_VECTOR_STORED_SOURCE = previous
+			}
+		}
+	})
+
+	it("passes the configured quantization into autoEmbed vector fields (P3.4)", async () => {
+		resetCapabilityProbes()
+		try {
+			const db = mockDb()
+			await ensureSearchIndexes(
+				db,
+				"test_",
+				"atlas-local-preview",
+				"automated",
+				"scalar",
+			)
+			const chunks = db.collection("test_chunks") as unknown as {
+				createSearchIndex: ReturnType<typeof vi.fn>
+			}
+			const vectorCall = chunks.createSearchIndex.mock.calls.find(
+				(c: unknown[]) => (c[0] as Document).type === "vectorSearch",
+			)
+			expect(vectorCall).toBeDefined()
+			const fields = (vectorCall![0] as Document).definition
+				.fields as Document[]
+			const autoEmbedField = fields.find((f) => f.type === "autoEmbed")
+			expect(autoEmbedField?.quantization).toBe("scalar")
+			// Accepting fake: the probe-adopt capability stays on.
+			expect(isCapabilityEnabled("autoembed-quantization", {})).toBe(true)
+		} finally {
+			resetCapabilityProbes()
+		}
+	})
+
+	it("defaults to no quantization on autoEmbed vector fields (P3.4)", async () => {
+		const db = mockDb()
+		await ensureSearchIndexes(db, "test_", "atlas-local-preview", "automated")
+		const chunks = db.collection("test_chunks") as unknown as {
+			createSearchIndex: ReturnType<typeof vi.fn>
+		}
+		const vectorCall = chunks.createSearchIndex.mock.calls.find(
+			(c: unknown[]) => (c[0] as Document).type === "vectorSearch",
+		)
+		const fields = (vectorCall![0] as Document).definition.fields as Document[]
+		const autoEmbedField = fields.find((f) => f.type === "autoEmbed")
+		expect(autoEmbedField).toBeDefined()
+		expect(autoEmbedField && "quantization" in autoEmbedField).toBe(false)
+	})
+
+	it("records the capability off and retries without quantization when the server rejects it (P3.4)", async () => {
+		resetCapabilityProbes()
+		try {
+			const db = mockDb()
+			const chunks = db.collection("test_chunks") as unknown as {
+				createSearchIndex: ReturnType<typeof vi.fn>
+			}
+			// Rejecting fake mirrors the live 8.3.4 server message on any
+			// autoEmbed definition that carries quantization.
+			chunks.createSearchIndex.mockImplementation(async (spec: Document) => {
+				const fields = (spec.definition?.fields ?? []) as Document[]
+				const autoEmbed = fields.find((f) => f.type === "autoEmbed")
+				if (autoEmbed && "quantization" in autoEmbed) {
+					throw new Error("Omit quantization to use the default (float)")
+				}
+				return spec.name
+			})
+
+			const result = await ensureSearchIndexes(
+				db,
+				"test_",
+				"atlas-local-preview",
+				"automated",
+				"scalar",
+			)
+			// Index creation still succeeds — the retry ships the server default.
+			expect(result.vector).toBe(true)
+			expect(isCapabilityEnabled("autoembed-quantization", {})).toBe(false)
+
+			const vectorSpecs = chunks.createSearchIndex.mock.calls
+				.map((c: unknown[]) => c[0] as Document)
+				.filter((spec) => spec.type === "vectorSearch")
+			const retried = vectorSpecs.at(-1)
+			expect(retried).toBeDefined()
+			const fields = retried!.definition.fields as Document[]
+			const autoEmbedField = fields.find((f) => f.type === "autoEmbed")
+			expect(autoEmbedField).toBeDefined()
+			expect(autoEmbedField && "quantization" in autoEmbedField).toBe(false)
+		} finally {
+			resetCapabilityProbes()
+		}
+	})
+
 	it("includes filter fields (source, path, status) in vector index", async () => {
 		const db = mockDb()
 		await ensureSearchIndexes(db, "test_", "atlas-local-preview", "automated")
@@ -1696,6 +2114,10 @@ describe("search index readiness helpers", () => {
 				collectionName: "test_entities",
 				indexNames: ["entity_autocomplete"],
 			},
+			{
+				collectionName: "test_episodes",
+				indexNames: ["episode_autocomplete"],
+			},
 		])
 	})
 
@@ -1822,6 +2244,20 @@ describe("assertIndexBudget", () => {
 		const result = assertIndexBudget("atlas-managed", 50)
 		expect(result.budget).toBe("unbounded")
 		expect(result.withinBudget).toBe(true)
+	})
+
+	it("community-mongot has a real numeric budget sized to the fullest planned profile", () => {
+		// P3.8: budget enforcement was dead code while every profile was
+		// "unbounded". The community mongot profile gets a numeric ceiling so
+		// adding a search index becomes a deliberate act.
+		const within = assertIndexBudget("community-mongot", 17)
+		expect(typeof within.budget).toBe("number")
+		expect(within.withinBudget).toBe(true)
+		const beyond = assertIndexBudget(
+			"community-mongot",
+			(within.budget as number) + 1,
+		)
+		expect(beyond.withinBudget).toBe(false)
 	})
 })
 
@@ -2206,10 +2642,12 @@ describe("detectCapabilities", () => {
 		// The scar at detectCapabilities is explicit: storedSource must be set
 		// from what the serving index was BUILT with, never from buildInfo —
 		// returnStoredSource: true against an index that stores nothing errors.
+		// Since P3.3 the probe result is additionally gated by the registry
+		// (MongoDB 8.3.7+ or MEMONGO_VECTOR_STORED_SOURCE=1).
 		const dbWith = (definition: Document | undefined) =>
 			({
 				admin: vi.fn(() => ({
-					command: vi.fn(async () => ({ versionArray: [8, 3, 0, 0] })),
+					command: vi.fn(async () => ({ versionArray: [8, 3, 7, 0] })),
 				})),
 				collection: vi.fn(() => ({
 					listSearchIndexes: vi.fn(() => ({
@@ -2248,6 +2686,90 @@ describe("detectCapabilities", () => {
 			"test_chunks",
 		)
 		expect(withFalse.storedSource).toBe(false)
+	})
+
+	it("keeps storedSource off when the registry gate is closed, whatever the probe index carries (P3.3)", async () => {
+		const dbWith = (versionArray: number[]) =>
+			({
+				admin: vi.fn(() => ({
+					command: vi.fn(async () => ({ versionArray })),
+				})),
+				collection: vi.fn(() => ({
+					listSearchIndexes: vi.fn(() => ({
+						toArray: vi.fn(async () => [
+							{
+								name: "test_chunks_vector",
+								type: "vectorSearch",
+								status: "READY",
+								queryable: true,
+								latestDefinition: {
+									fields: [],
+									storedSource: { include: ["text"] },
+								},
+							},
+						]),
+					})),
+				})),
+			}) as unknown as Db
+
+		// Server below 8.3.7, env unset → gate closed.
+		const tooOld = await detectCapabilities(dbWith([8, 3, 0, 0]), "test_chunks")
+		expect(tooOld.storedSource).toBe(false)
+
+		// Kill-switch: env=0 forces off even on 8.3.7 with a stored-source index.
+		const previous = process.env.MEMONGO_VECTOR_STORED_SOURCE
+		process.env.MEMONGO_VECTOR_STORED_SOURCE = "0"
+		try {
+			const killed = await detectCapabilities(
+				dbWith([8, 3, 7, 0]),
+				"test_chunks",
+			)
+			expect(killed.storedSource).toBe(false)
+		} finally {
+			if (previous === undefined) {
+				delete process.env.MEMONGO_VECTOR_STORED_SOURCE
+			} else {
+				process.env.MEMONGO_VECTOR_STORED_SOURCE = previous
+			}
+		}
+	})
+
+	it("evaluates the capability re-enable registry against buildInfo", async () => {
+		// P3.6: every gated feature self-evaluates inside detectCapabilities so
+		// a server upgrade flips it on without a code change.
+		const db = {
+			admin: vi.fn(() => ({
+				command: vi.fn(async () => ({ versionArray: [8, 3, 7, 0] })),
+			})),
+			collection: vi.fn(() => ({
+				listSearchIndexes: vi.fn(() => ({
+					toArray: vi.fn(async () => []),
+				})),
+			})),
+		} as unknown as Db
+
+		const caps = await detectCapabilities(db, "test_chunks")
+		expect(caps.capabilityGates).toBeDefined()
+		expect(caps.capabilityGates?.["vector-stored-source"]).toBe(true)
+		expect(caps.capabilityGates?.["autoembed-quantization"]).toBe(true)
+		expect(caps.capabilityGates?.["rerank-stage"]).toBe(false)
+		expect(caps.capabilityGates?.["lexical-prefilters"]).toBe(false)
+	})
+
+	it("keeps the storedSource gate closed below MongoDB 8.3.7", async () => {
+		const db = {
+			admin: vi.fn(() => ({
+				command: vi.fn(async () => ({ versionArray: [8, 0, 13, 0] })),
+			})),
+			collection: vi.fn(() => ({
+				listSearchIndexes: vi.fn(() => ({
+					toArray: vi.fn(async () => []),
+				})),
+			})),
+		} as unknown as Db
+
+		const caps = await detectCapabilities(db, "test_chunks")
+		expect(caps.capabilityGates?.["vector-stored-source"]).toBe(false)
 	})
 
 	it("waits for search capabilities to become available", async () => {
@@ -2763,7 +3285,7 @@ describe("query_cache vector search index", () => {
 		expect(filterPaths).toContain("scopeRef")
 	})
 
-	it("assertIndexBudget uses 13 for total search index count", async () => {
+	it("assertIndexBudget accommodates the full planned search index count on unbounded profiles", async () => {
 		const db = mockDb()
 		// This should NOT fail for unbounded Atlas profiles.
 		await ensureSearchIndexes(db, "test_", "atlas-local-preview", "automated")
@@ -2997,8 +3519,9 @@ describe("ensureStandardIndexes total count with query_cache and time series ind
 		// 3 query_cache + 2 telemetry + 2 access_events + 3 memory_mutations
 		// + 1 lane_coverage + 2 consolidation_runs + 3 session_chunks
 		// + 1 bi-temporal valid-time (#32) + 2 durable job claim/TTL indexes
-		// + 1 extraction outbox partial index + 1 unique relation identity = 92
-		expect(count).toBe(92)
+		// + 1 extraction outbox partial index + 1 unique relation identity
+		// P3.8: −3 retired redundant indexes + 3 ESR compounds + 1 relationId locator = 93
+		expect(count).toBe(93)
 	})
 })
 

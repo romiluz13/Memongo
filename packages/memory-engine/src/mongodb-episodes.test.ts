@@ -576,6 +576,108 @@ describe("mongodb-episodes", () => {
 			expect(filter.$or).toBeDefined()
 			expect(filter.$or).toHaveLength(2)
 		})
+
+		it("routes through $search autocomplete on episode_autocomplete when textSearch capability is on (P3.8)", async () => {
+			const episodeDoc = makeEpisodeDoc()
+			const episodesCol = createMockCollection({
+				aggregate: vi.fn().mockReturnValue({
+					toArray: vi.fn().mockResolvedValue([episodeDoc]),
+				}),
+			})
+			const db = createMockDb({ [`${PREFIX}episodes`]: episodesCol })
+
+			const results = await searchEpisodes({
+				db,
+				prefix: PREFIX,
+				query: "standup",
+				agentId: AGENT_ID,
+				textSearchAvailable: true,
+			})
+
+			expect(results).toHaveLength(1)
+			expect(results[0].title).toBe("Daily Standup Notes")
+
+			// No request-path $regex scan when the search index can serve it
+			expect(episodesCol.find).not.toHaveBeenCalled()
+			const aggCalls = (episodesCol.aggregate as ReturnType<typeof vi.fn>).mock
+				.calls
+			expect(aggCalls).toHaveLength(1)
+			const pipeline = aggCalls[0][0] as Document[]
+			const searchStage = pipeline[0].$search as Record<string, unknown>
+			expect(searchStage.index).toBe("episode_autocomplete")
+			const compound = searchStage.compound as Record<string, unknown>
+			const shouldClauses = compound.should as Array<Record<string, unknown>>
+			expect(shouldClauses[0]).toHaveProperty("autocomplete")
+			// Tenant isolation is a search filter, not a post-filter
+			const filterClauses = compound.filter as Array<Record<string, unknown>>
+			expect(filterClauses).toContainEqual({
+				equals: { path: "agentId", value: AGENT_ID },
+			})
+			// P3.8: user-driven $search pipelines carry a maxTimeMS ceiling
+			const options = aggCalls[0][1] as { maxTimeMS?: number } | undefined
+			expect(typeof options?.maxTimeMS).toBe("number")
+		})
+
+		it("falls back to the escaped $regex path when $search fails at runtime", async () => {
+			const episodeDoc = makeEpisodeDoc()
+			const findResult = {
+				sort: vi.fn().mockReturnValue({
+					limit: vi.fn().mockReturnValue({
+						toArray: vi.fn().mockResolvedValue([episodeDoc]),
+					}),
+				}),
+			}
+			const episodesCol = createMockCollection({
+				aggregate: vi.fn().mockReturnValue({
+					toArray: vi.fn().mockRejectedValue(new Error("mongot unavailable")),
+				}),
+				find: vi.fn().mockReturnValue(findResult),
+			})
+			const db = createMockDb({ [`${PREFIX}episodes`]: episodesCol })
+
+			const results = await searchEpisodes({
+				db,
+				prefix: PREFIX,
+				query: "standup",
+				agentId: AGENT_ID,
+				textSearchAvailable: true,
+			})
+
+			expect(episodesCol.aggregate).toHaveBeenCalledOnce()
+			expect(episodesCol.find).toHaveBeenCalledOnce()
+			expect(results).toHaveLength(1)
+		})
+
+		it("keeps the regex fallback escaped when textSearch capability is off", async () => {
+			const findResult = {
+				sort: vi.fn().mockReturnValue({
+					limit: vi.fn().mockReturnValue({
+						toArray: vi.fn().mockResolvedValue([]),
+					}),
+				}),
+			}
+			const episodesCol = createMockCollection({
+				aggregate: vi.fn(),
+				find: vi.fn().mockReturnValue(findResult),
+			})
+			const db = createMockDb({ [`${PREFIX}episodes`]: episodesCol })
+
+			await searchEpisodes({
+				db,
+				prefix: PREFIX,
+				query: "a+b testing",
+				agentId: AGENT_ID,
+				textSearchAvailable: false,
+			})
+
+			expect(episodesCol.aggregate).not.toHaveBeenCalled()
+			const [filter] = (episodesCol.find as ReturnType<typeof vi.fn>).mock
+				.calls[0]
+			const titleRegex = filter.$or?.[0]?.title?.$regex as RegExp
+			expect(titleRegex).toBeInstanceOf(RegExp)
+			// Metacharacters inside a keyword must be escaped, not interpreted.
+			expect(titleRegex.source).toBe("a\\+b|testing")
+		})
 	})
 
 	// Covered by live episode materialization and scope-aware upserts.

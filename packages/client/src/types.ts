@@ -352,6 +352,21 @@ export type MemongoExtractResponse = {
 	scheduled: boolean
 }
 
+/**
+ * P3.9 per-item receipt from /v1/write-events, mirroring the single-write
+ * receipt shape. A failed item carries a stable code
+ * (VALIDATION_ERROR | IDEMPOTENCY_CONFLICT | WRITE_ERROR) and never fails
+ * its siblings.
+ */
+export type MemongoWriteEventReceipt =
+	| { ok: true; eventId: string; chunkCreated: boolean; replayed?: boolean }
+	| { ok: false; code: string; message: string }
+
+export type MemongoWriteEventsResponse = {
+	ok: true
+	receipts: MemongoWriteEventReceipt[]
+}
+
 // ---------------------------------------------------------------------------
 // Response types for typed client methods (JSON wire format — dates as strings)
 // ---------------------------------------------------------------------------

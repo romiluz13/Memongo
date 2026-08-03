@@ -10,6 +10,7 @@ import {
 	createSubsystemLogger,
 	resolveUserPath,
 } from "@memongo/lib"
+import { resolveSearchBudgetLimits } from "./mongodb-search-budget.js"
 
 const log = createSubsystemLogger("memory:backend-config")
 
@@ -36,7 +37,25 @@ export type ResolvedMongoDBConfig = {
 	recallProfile: MemoryMongoDBRecallProfile
 	quantization: "none" | "scalar" | "binary"
 	watchDebounceMs: number
+	/**
+	 * Dead knob under autoEmbed (fix-plan-2026-08-03 P3.2): Atlas/Voyage
+	 * decide the dimensions server-side; this value only flows into validator
+	 * warnings and the generic index preset. Setting it logs an error.
+	 */
 	numDimensions: number
+	/**
+	 * P3.2: opt-in legacySearch re-run after searchV2 returns empty or
+	 * errors. Default OFF — "empty ≠ error": the v2 empty answer stands.
+	 */
+	legacySearchFallback: boolean
+	/**
+	 * P3.2: resolved per-search cost budget (mongodb-search-budget.ts) —
+	 * user overrides applied over DEFAULT_SEARCH_BUDGET, always populated.
+	 */
+	searchBudget: {
+		maxAggregations: number
+		maxEmbeds: number
+	}
 	maxPoolSize: number
 	minPoolSize: number
 	maxConnecting?: number
@@ -103,6 +122,8 @@ export type ResolvedMongoDBConfig = {
 		minScore: number
 		voyageApiKey: string
 		instruction?: string
+		recencyBoost: number
+		accessBoost: number
 	}
 	cache: {
 		enabled: boolean
@@ -179,10 +200,12 @@ export function resolveMemoryBackendConfig(params: {
 			rawDeploymentProfile === "community-mongot"
 				? "atlas-local-preview"
 				: rawDeploymentProfile
+		// P3.1: honor the configured embeddingMode (validated below against the
+		// supported set) instead of hardcoding the default — "automated" stays
+		// the default when unset.
 		const rawEmbeddingMode =
 			mongoCfg?.embeddingMode ?? DEFAULT_MONGODB_EMBEDDING_MODE
-		const embeddingMode: MemoryMongoDBEmbeddingMode =
-			DEFAULT_MONGODB_EMBEDDING_MODE
+		const embeddingMode: MemoryMongoDBEmbeddingMode = rawEmbeddingMode
 		const envCollectionPrefix =
 			process.env.MEMONGO_MONGODB_COLLECTION_PREFIX?.trim()
 
@@ -220,6 +243,15 @@ export function resolveMemoryBackendConfig(params: {
 			)
 		}
 
+		// P3.1: numDimensions is a dead knob under autoEmbed — the embedding
+		// model fixes the dimensions server-side. The value still resolves for
+		// config-schema compat, but it is inert; say so loudly at error level.
+		if (mongoCfg?.numDimensions !== undefined) {
+			log.error(
+				`memory.mongodb.numDimensions is ignored under embeddingMode "automated": the server-managed embedding model determines vector dimensions (configured value ${String(mongoCfg.numDimensions)} resolves for compatibility but has no effect)`,
+			)
+		}
+
 		const result: ResolvedMemoryBackendConfig = {
 			backend: "mongodb",
 			citations,
@@ -251,6 +283,10 @@ export function resolveMemoryBackendConfig(params: {
 					"MEMONGO_MONGODB_RECALL_PROFILE",
 					mongoCfg?.recallProfile ?? "balanced",
 				),
+				// P3.2: legacySearch re-runs the whole retrieval stack after
+				// searchV2 — opt-in only, off by default (empty ≠ error).
+				legacySearchFallback: mongoCfg?.legacySearchFallback ?? false,
+				searchBudget: resolveSearchBudgetLimits(mongoCfg?.searchBudget),
 				quantization: mongoCfg?.quantization ?? "none",
 				watchDebounceMs:
 					typeof mongoCfg?.watchDebounceMs === "number" &&
@@ -513,6 +549,15 @@ export function resolveMemoryBackendConfig(params: {
 						process.env.VOYAGE_API_KEY ??
 						"",
 					instruction: mongoCfg?.reranking?.instruction,
+					// P3.7: post-cross-encoder recency/access boost weights. 0 is
+					// the off-switch; non-finite or negative values fall back to
+					// the default so a misconfigured weight cannot invert ranking.
+					recencyBoost: resolveRerankBoostWeight(
+						mongoCfg?.reranking?.recencyBoost,
+					),
+					accessBoost: resolveRerankBoostWeight(
+						mongoCfg?.reranking?.accessBoost,
+					),
 				},
 				cache: {
 					enabled: mongoCfg?.cache?.enabled !== false,
@@ -679,6 +724,14 @@ function resolveEnvFloat(envKey: string, fallback: number): number {
 	return Number.isFinite(parsed) && parsed >= 0 && parsed <= 1
 		? parsed
 		: fallback
+}
+
+// P3.7: post-CE boost weights must be finite and non-negative; anything
+// else falls back to the 0.2 default so a bad config cannot invert ranking.
+function resolveRerankBoostWeight(value: number | undefined): number {
+	return typeof value === "number" && Number.isFinite(value) && value >= 0
+		? value
+		: 0.2
 }
 
 function resolveEnvBoolean(envKey: string, fallback: boolean): boolean {

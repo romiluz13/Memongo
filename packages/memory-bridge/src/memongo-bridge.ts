@@ -211,6 +211,44 @@ export async function memongoBridgeWriteConversationEvent(params: {
 	})
 }
 
+/**
+ * P3.9: batch variant of memongoBridgeWriteConversationEvent. One bridge
+ * call writes the whole array through the engine's amortized batch write
+ * (insertMany + bulkWrite) and returns per-item receipts mirroring the
+ * single-write receipt shape; a failed item never fails its siblings.
+ */
+export async function memongoBridgeWriteConversationEventsBatch(params: {
+	agentId?: string
+	events: Array<{
+		role: "user" | "assistant" | "system" | "tool"
+		body: string
+		sessionId?: string
+		timestamp?: string
+		validAt?: string
+		invalidAt?: string
+		metadata?: Record<string, unknown>
+		scope?: MemoryScope
+		scopeRef?: string
+		idempotencyKey?: string
+	}>
+}) {
+	const m = await memongoBridgeGetManager(params.agentId)
+	return m.writeConversationEventsBatch(
+		params.events.map((event) => ({
+			role: event.role,
+			body: event.body,
+			sessionId: event.sessionId,
+			timestamp: event.timestamp ? new Date(event.timestamp) : undefined,
+			validAt: event.validAt ? new Date(event.validAt) : undefined,
+			invalidAt: event.invalidAt ? new Date(event.invalidAt) : undefined,
+			metadata: event.metadata,
+			scope: event.scope,
+			scopeRef: event.scopeRef,
+			idempotencyKey: event.idempotencyKey,
+		})),
+	)
+}
+
 export async function memongoBridgeExtractEvent(params: {
 	agentId?: string
 	scope?: MemoryScope

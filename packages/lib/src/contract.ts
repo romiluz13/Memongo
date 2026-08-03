@@ -311,6 +311,16 @@ export const MEMONGO_API_ROUTES: readonly ApiRouteContract[] = [
 		tools: ["memongo_write_event"],
 	},
 	{
+		path: "/v1/write-events",
+		method: "post",
+		operationId: "writeConversationEventsBatch",
+		summary:
+			"Write a batch of conversation events with per-item idempotency receipts",
+		requiredFields: ["events"],
+		errorStatuses: [400, 500],
+		tools: [],
+	},
+	{
 		path: "/v1/extract",
 		method: "post",
 		operationId: "extractEvent",

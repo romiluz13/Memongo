@@ -122,6 +122,12 @@ export type CanonicalEvent = {
 	projectedAt?: Date
 	consolidatedAt?: Date
 	consolidatedIntoEpisodeId?: string
+	/**
+	 * Denormalized reinforcement counter maintained by the access tracker on
+	 * the event document; surfaced on search results so the post-CE access
+	 * boost (P3.7) can modulate ranking. Absent on legacy rows.
+	 */
+	accessCount?: number
 }
 
 /**
@@ -159,21 +165,20 @@ export function renderEventChunkText(
 // Write
 // ---------------------------------------------------------------------------
 
-export async function writeEvent(params: {
-	db: Db
-	prefix: string
-	session?: ClientSession
-	event: Omit<
-		CanonicalEvent,
-		"eventId" | "timestamp" | "scopeRef" | "recordedAt"
-	> & {
-		eventId?: string
-		timestamp?: Date
-		scopeRef?: string
-	}
-}): Promise<{ eventId: string; timestamp: Date; scopeRef: string }> {
-	const { db, prefix, event } = params
-	const collection = eventsCollection(db, prefix)
+type EventWriteInput = Omit<
+	CanonicalEvent,
+	"eventId" | "timestamp" | "scopeRef" | "recordedAt"
+> & {
+	eventId?: string
+	timestamp?: Date
+	scopeRef?: string
+}
+
+/**
+ * Build the canonical event document for a write, applying the shared date
+ * validation and the P2.3 scope-identity rule. Throws on invalid input.
+ */
+function buildCanonicalEventDocument(event: EventWriteInput): CanonicalEvent {
 	const eventId = event.eventId ?? randomUUID()
 	const timestamp = event.timestamp ?? new Date()
 	const validAt = event.validAt ?? timestamp
@@ -201,7 +206,7 @@ export async function writeEvent(params: {
 		sessionId: event.sessionId,
 	})
 
-	const doc: CanonicalEvent = {
+	return {
 		eventId,
 		agentId: event.agentId,
 		role: event.role,
@@ -220,6 +225,18 @@ export async function writeEvent(params: {
 			? { extractionJobPendingAt: event.extractionJobPendingAt }
 			: {}),
 	}
+}
+
+export async function writeEvent(params: {
+	db: Db
+	prefix: string
+	session?: ClientSession
+	event: EventWriteInput
+}): Promise<{ eventId: string; timestamp: Date; scopeRef: string }> {
+	const { db, prefix, event } = params
+	const collection = eventsCollection(db, prefix)
+	const doc = buildCanonicalEventDocument(event)
+	const eventId = doc.eventId
 
 	await retryTransientMongoWrite("events.updateOne", () =>
 		collection.updateOne(
@@ -232,7 +249,118 @@ export async function writeEvent(params: {
 	)
 
 	log.info(`event written: ${eventId} role=${event.role}`)
-	return { eventId, timestamp, scopeRef }
+	return { eventId, timestamp: doc.timestamp, scopeRef: doc.scopeRef }
+}
+
+// ---------------------------------------------------------------------------
+// Batch write (P3.9)
+// ---------------------------------------------------------------------------
+
+export type EventBatchItemResult =
+	| { ok: true; eventId: string; timestamp: Date; scopeRef: string }
+	| { ok: false; eventId?: string; duplicateKey: boolean; message: string }
+
+type BulkWriteFailure = {
+	writeErrors?: Array<{ index: number; code?: number; errmsg?: string }>
+}
+
+function asBulkWriteFailure(err: unknown): BulkWriteFailure | null {
+	if (!err || typeof err !== "object") {
+		return null
+	}
+	const writeErrors = (err as BulkWriteFailure).writeErrors
+	if (!Array.isArray(writeErrors)) {
+		return null
+	}
+	return err as BulkWriteFailure
+}
+
+/**
+ * P3.9: insert many canonical events in ONE unordered insertMany with the
+ * same durable write concern as the single-write path. Per-item receipts keep
+ * a partial failure (validation or E11000 on the idempotency-key unique
+ * index) from failing its siblings; the caller maps a duplicateKey receipt to
+ * the idempotency replay path. Unlike `writeEvent` (upsert-on-eventId), the
+ * batch strictly inserts: a duplicate eventId surfaces as duplicateKey.
+ */
+export async function writeEventsBatch(params: {
+	db: Db
+	prefix: string
+	events: EventWriteInput[]
+}): Promise<EventBatchItemResult[]> {
+	const { db, prefix, events } = params
+	if (events.length === 0) {
+		return []
+	}
+	const collection = eventsCollection(db, prefix)
+
+	const docs: CanonicalEvent[] = []
+	const docIndexes: number[] = []
+	const results: EventBatchItemResult[] = events.map(() => ({
+		ok: false as const,
+		duplicateKey: false,
+		message: "event write not attempted",
+	}))
+	for (const [index, event] of events.entries()) {
+		try {
+			docs.push(buildCanonicalEventDocument(event))
+			docIndexes.push(index)
+		} catch (err) {
+			results[index] = {
+				ok: false,
+				...(event.eventId ? { eventId: event.eventId } : {}),
+				duplicateKey: false,
+				message: err instanceof Error ? err.message : String(err),
+			}
+		}
+	}
+	if (docs.length === 0) {
+		return results
+	}
+
+	const markInserted = () => {
+		for (const [position, doc] of docs.entries()) {
+			results[docIndexes[position]] = {
+				ok: true,
+				eventId: doc.eventId,
+				timestamp: doc.timestamp,
+				scopeRef: doc.scopeRef,
+			}
+		}
+	}
+
+	try {
+		await retryTransientMongoWrite("events.insertMany", () =>
+			collection.insertMany(docs, {
+				ordered: false,
+				writeConcern: DURABLE_EVENT_WRITE_CONCERN,
+			}),
+		)
+		markInserted()
+	} catch (err) {
+		const bulk = asBulkWriteFailure(err)
+		if (!bulk?.writeErrors) {
+			throw err
+		}
+		// Unordered inserts apply every doc that did not error; only the
+		// indexed failures get an error receipt.
+		markInserted()
+		for (const writeError of bulk.writeErrors) {
+			const doc = docs[writeError.index]
+			if (!doc) {
+				continue
+			}
+			results[docIndexes[writeError.index]] = {
+				ok: false,
+				eventId: doc.eventId,
+				duplicateKey: writeError.code === 11000,
+				message: writeError.errmsg ?? "event insert failed",
+			}
+		}
+	}
+
+	log.info(`event batch written: ${docs.length} event(s)`)
+	return results
 }
 
 export async function getPendingExtractionEvents(params: {
@@ -268,6 +396,32 @@ export async function clearEventExtractionJobPending(params: {
 		{ writeConcern: DURABLE_EVENT_WRITE_CONCERN },
 	)
 	return result.matchedCount === 1
+}
+
+/**
+ * P3.9: batch variant of clearEventExtractionJobPending — one updateMany for
+ * every event whose extraction job became claimable in a batch write.
+ * Returns the number of events whose marker was cleared.
+ */
+export async function clearEventExtractionJobPendingBatch(params: {
+	db: Db
+	prefix: string
+	eventIds: string[]
+	agentId: string
+}): Promise<number> {
+	if (params.eventIds.length === 0) {
+		return 0
+	}
+	const result = await eventsCollection(params.db, params.prefix).updateMany(
+		{
+			eventId: { $in: params.eventIds },
+			agentId: params.agentId,
+			extractionJobPendingAt: { $exists: true },
+		},
+		{ $unset: { extractionJobPendingAt: "" } },
+		{ writeConcern: DURABLE_EVENT_WRITE_CONCERN },
+	)
+	return result.matchedCount
 }
 
 // ---------------------------------------------------------------------------
@@ -534,6 +688,111 @@ export async function projectChunksFromEvents(params: {
 		`projected ${chunksCreated} chunks from ${events.length} events for agent=${agentId}`,
 	)
 	return { eventsProcessed: events.length, chunksCreated }
+}
+
+/**
+ * P3.9: batch variant of projectEventChunk — one unordered bulkWrite for all
+ * chunk upserts plus one updateMany marking the events projected, instead of
+ * three round trips per event. A total bulk failure degrades to
+ * chunkCreated:false for every item WITHOUT marking events projected, so the
+ * projection repair pass recovers them later; the event writes themselves are
+ * already durable and stay acknowledged.
+ */
+export async function projectEventChunksBatch(params: {
+	db: Db
+	prefix: string
+	events: CanonicalEvent[]
+	recordRun?: boolean
+}): Promise<Array<{ chunkCreated: boolean }>> {
+	const { db, prefix, events } = params
+	const startMs = Date.now()
+	if (events.length === 0) {
+		return []
+	}
+	const chunks = chunksCollection(db, prefix)
+	const ops = events.map((event) => {
+		const path = `events/${event.eventId}`
+		const text = renderEventChunkText(event)
+		const hash = createHash("sha256").update(text).digest("hex")
+		return {
+			updateOne: {
+				filter: { path },
+				update: {
+					$setOnInsert: {
+						path,
+						text,
+						hash,
+						source: "conversation",
+						agentId: event.agentId,
+						scope: event.scope,
+						scopeRef: event.scopeRef,
+						...(event.sessionId ? { sessionId: event.sessionId } : {}),
+						timestamp: event.timestamp,
+						updatedAt: new Date(),
+					},
+				},
+				upsert: true,
+			},
+		}
+	})
+
+	let upsertedIndexes: Set<number>
+	let failedIndexes: Set<number>
+	try {
+		const result = await retryTransientMongoWrite("chunks.bulkWrite", () =>
+			chunks.bulkWrite(ops, { ordered: false }),
+		)
+		upsertedIndexes = new Set(
+			Object.keys(result.upsertedIds ?? {}).map((key) => Number(key)),
+		)
+		failedIndexes = new Set()
+	} catch (err) {
+		const bulk = asBulkWriteFailure(err)
+		if (!bulk?.writeErrors) {
+			log.warn(
+				`batch chunk projection failed outright for ${events.length} event(s); leaving them unprojected for the repair pass: ${String(err)}`,
+			)
+			return events.map(() => ({ chunkCreated: false }))
+		}
+		const partial = (
+			err as { result?: { upsertedIds?: Record<number, unknown> } }
+		).result
+		upsertedIndexes = new Set(
+			Object.keys(partial?.upsertedIds ?? {}).map((key) => Number(key)),
+		)
+		failedIndexes = new Set(bulk.writeErrors.map((we) => we.index))
+		log.warn(
+			`batch chunk projection had ${failedIndexes.size} per-item failure(s): ${String(err)}`,
+		)
+	}
+
+	// Mark projected only for events whose chunk now durably exists (upserted
+	// or matched); failed items stay unprojected for the repair pass.
+	const projectableIds = events
+		.filter((_, index) => !failedIndexes.has(index))
+		.map((event) => event.eventId)
+	await retryTransientMongoWrite("events.markProjectedBatch", () =>
+		markEventsProjected({ db, prefix, eventIds: projectableIds }),
+	)
+
+	const results = events.map((_, index) => ({
+		chunkCreated: upsertedIndexes.has(index),
+	}))
+	const chunksCreated = results.filter((r) => r.chunkCreated).length
+	if (params.recordRun !== false) {
+		await recordProjectionRun({
+			db,
+			prefix,
+			run: {
+				agentId: events[0].agentId,
+				projectionType: "chunks",
+				status: failedIndexes.size > 0 ? "failed" : "ok",
+				itemsProjected: chunksCreated,
+				durationMs: Date.now() - startMs,
+			},
+		}).catch(() => {})
+	}
+	return results
 }
 
 export async function projectEventChunk(params: {

@@ -97,7 +97,9 @@ const EXPECTED_COLLECTION_SUFFIXES = [
 	"recall_traces",
 	"session_chunks",
 ] as const
-const EXPECTED_STANDARD_INDEX_COUNT = 90
+// P3.8: −3 retired redundant indexes (idx_chunks_path, idx_structured_agentid,
+// idx_relations_agent_scope_scoperef), +3 ESR compounds, +1 relationId locator.
+const EXPECTED_STANDARD_INDEX_COUNT = 91
 
 let client: MongoClient
 let db: Db
@@ -233,7 +235,10 @@ describe("E2E: MongoDB Collections and Indexes", () => {
 		// Verify chunks indexes
 		const chunksIndexes = await chunksCollection(db, TEST_PREFIX).indexes()
 		const indexNames = chunksIndexes.map((i) => i.name)
-		expect(indexNames).toContain("idx_chunks_path")
+		// P3.8: idx_chunks_path retired (strict prefix of idx_chunks_path_hash);
+		// the ESR compound serves agent+path chunk reads.
+		expect(indexNames).not.toContain("idx_chunks_path")
+		expect(indexNames).toContain("idx_chunks_agent_path_startline")
 		expect(indexNames).toContain("idx_chunks_path_hash")
 		expect(indexNames).toContain("idx_chunks_updated")
 		expect(indexNames).toContain("idx_chunks_text")

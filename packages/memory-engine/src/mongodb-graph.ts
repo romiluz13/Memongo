@@ -23,6 +23,7 @@ import {
 	entityLinksCollection,
 	relationsCollection,
 } from "./mongodb-schema.js"
+import { resolveUserSearchMaxTimeMs } from "./mongodb-search-budget.js"
 import { resolveScopeRef } from "./mongodb-scope.js"
 import { emitTelemetry } from "./mongodb-telemetry.js"
 import {
@@ -488,6 +489,10 @@ export async function upsertRelation(params: {
 			const setDoc: Document = {
 				fromEntityId: relation.fromEntityId,
 				toEntityId: relation.toEntityId,
+				// P3.8: denormalized locator id ("from-to") so readFile's relation
+				// locator resolves with one findOne instead of scanning up to 50
+				// relations and JS-matching the pair.
+				relationId: `${relation.fromEntityId}-${relation.toEntityId}`,
 				type: relation.type,
 				agentId: relation.agentId,
 				scope: relation.scope,
@@ -1763,6 +1768,8 @@ export async function extractAndUpsertEntities(params: {
 								$set: {
 									fromEntityId: extracted[i].entityId,
 									toEntityId: extracted[j].entityId,
+									// P3.8: denormalized locator id (see upsertRelation).
+									relationId: `${extracted[i].entityId}-${extracted[j].entityId}`,
 									type: "mentioned_with",
 									weight: 0.2,
 									agentId,
@@ -1965,7 +1972,11 @@ export async function extractAndUpsertTypedRelations(params: {
 
 /**
  * Search entities using Atlas Search autocomplete on name/aliases.
- * Falls back to regex search if $search is unavailable.
+ *
+ * P3.8: the request path is capability-gated — callers pass the detected
+ * textSearch capability so deployments without mongot go straight to the
+ * escaped $regex fallback instead of paying a failed $search round trip per
+ * lookup. A runtime $search failure still degrades to the same fallback.
  */
 export async function searchEntitiesAutocomplete(params: {
 	db: Db
@@ -1975,9 +1986,23 @@ export async function searchEntitiesAutocomplete(params: {
 	scopeRef: string
 	query: string
 	limit?: number
+	/** Detected textSearch capability; false/omitted uses the regex fallback. */
+	textSearchAvailable?: boolean
 }): Promise<Entity[]> {
 	const { db, prefix, agentId, scope, scopeRef, query, limit } = params
 	const maxResults = limit ?? 10
+
+	if (params.textSearchAvailable !== true) {
+		return findEntitiesByName({
+			db,
+			prefix,
+			query,
+			agentId,
+			scope,
+			scopeRef,
+			limit: maxResults,
+		})
+	}
 
 	try {
 		const collection = entitiesCollection(db, prefix)
@@ -2011,7 +2036,10 @@ export async function searchEntitiesAutocomplete(params: {
 			{ $limit: maxResults },
 		]
 
-		const docs = await collection.aggregate(pipeline).toArray()
+		const docs = await collection
+			// P3.8: user-driven $search pipelines carry a maxTimeMS ceiling.
+			.aggregate(pipeline, { maxTimeMS: resolveUserSearchMaxTimeMs() })
+			.toArray()
 		return docs as unknown as Entity[]
 	} catch (err) {
 		log.warn(
@@ -2028,4 +2056,52 @@ export async function searchEntitiesAutocomplete(params: {
 			limit: maxResults,
 		})
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Relation locator lookup (P3.8)
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolve a relation by its locator id ("fromEntityId-toEntityId", the id
+ * embedded in `relation:` chunk paths) with a single findOne on the
+ * idx_relations_agent_scope_scoperef_relationid index.
+ *
+ * Relations written before the relationId field existed fall back to the
+ * legacy bounded scan (up to 50 most-recent relations, JS-matched) so old
+ * deployments keep resolving until those edges are re-upserted.
+ */
+export async function findRelationByLocatorId(params: {
+	db: Db
+	prefix: string
+	agentId: string
+	scope: MemoryScope
+	scopeRef: string
+	relationId: string
+}): Promise<Document | null> {
+	const { db, prefix, agentId, scope, scopeRef, relationId } = params
+	const collection = relationsCollection(db, prefix)
+	const direct = await collection.findOne(
+		{ agentId, scope, scopeRef, relationId },
+		{ sort: { updatedAt: -1, _id: 1 } },
+	)
+	if (direct) {
+		return direct
+	}
+	const candidates = await collection
+		.find(
+			{ agentId, scope, scopeRef },
+			{
+				sort: { updatedAt: -1, _id: 1 },
+				limit: 50,
+			},
+		)
+		.toArray()
+	return (
+		candidates.find((candidate) => {
+			const fromEntityId = String(candidate.fromEntityId ?? "")
+			const toEntityId = String(candidate.toEntityId ?? "")
+			return `${fromEntityId}-${toEntityId}` === relationId
+		}) ?? null
+	)
 }

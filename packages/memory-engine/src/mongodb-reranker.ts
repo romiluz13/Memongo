@@ -18,6 +18,10 @@ export type RerankConfig = {
 	voyageApiKey: string
 	/** Optional instruction prepended to query for rerank-2.5 instruction-following. */
 	instruction?: string
+	/** Post-CE recency boost weight applied after reranking (0 disables). */
+	recencyBoost?: number
+	/** Post-CE access-count boost weight applied after reranking (0 disables). */
+	accessBoost?: number
 }
 
 export type RerankResult = {

@@ -6,6 +6,11 @@ import {
 	createSubsystemLogger,
 } from "@memongo/lib"
 import { mergeHybridResultsMongoDB, rrfScore } from "./mongodb-hybrid.js"
+import {
+	resolveUserSearchMaxTimeMs,
+	tryConsumeSearchAggregation,
+	tryConsumeSearchEmbed,
+} from "./mongodb-search-budget.js"
 import { summarizeExplain } from "./mongodb-relevance.js"
 import type { DetectedCapabilities } from "./mongodb-schema.js"
 import type {
@@ -75,12 +80,6 @@ function warnOrThrowFallback(
 	log.warn(message)
 }
 
-function shouldStopInsteadOfFallback(opts: {
-	strictNoFallback?: boolean
-}): boolean {
-	return isStrictSearchFallbackDisabled(opts)
-}
-
 async function captureAggregateExplain(
 	collection: Collection,
 	pipeline: Document[],
@@ -137,11 +136,24 @@ export async function runSearchAggregateWithRetry(
 		aggregateOptions?: AggregateOptions
 	} = {},
 ): Promise<Document[]> {
+	// P3.2: every aggregation in the search path consumes the per-request
+	// budget. Exhaustion degrades to an empty result (empty ≠ error), which
+	// also stops the caller's escalation machinery from re-firing.
+	if (!tryConsumeSearchAggregation()) {
+		return []
+	}
+	// P3.8: user-driven pipelines carry a maxTimeMS ceiling. Callers with
+	// their own deadline (the query-cache semantic probe) override it via
+	// aggregateOptions; everything else gets the resolved default.
+	const options: AggregateOptions = {
+		maxTimeMS: resolveUserSearchMaxTimeMs(),
+		...aggregateOptions,
+	}
 	let attempt = 0
 	let delayMs = initialDelayMs
 	while (true) {
 		try {
-			return await collection.aggregate(pipeline, aggregateOptions).toArray()
+			return await collection.aggregate(pipeline, options).toArray()
 		} catch (error) {
 			if (!isSearchIndexWarmupError(error) || attempt >= maxAttempts - 1) {
 				throw error
@@ -584,6 +596,13 @@ export function buildVectorSearchStage(input: {
 	}
 
 	if (input.embeddingMode === "automated" && input.queryText) {
+		// P3.1/P3.2: an autoEmbed stage embeds the query text server-side — a
+		// paid embedding per pipeline. Charge the per-request budget; when it
+		// is exhausted the stage is withheld and the lane degrades to empty
+		// (empty ≠ error) instead of firing another embedding.
+		if (!tryConsumeSearchEmbed()) {
+			return null
+		}
 		base.query = { text: input.queryText }
 		base.model = input.model ?? "voyage-4-large"
 		base.path = input.textFieldPath ?? "text"
@@ -1092,6 +1111,23 @@ export async function mongoSearch(
 		returnStoredSource: opts.capabilities.storedSource,
 	}
 
+	// P3.2 — "empty ≠ error" (fix-plan-2026-08-03, Appendix C): an empty
+	// result is a valid answer, not a trigger for escalation. Every stage
+	// below that includes the vector lane returns nearest neighbors for ANY
+	// query as long as documents exist under the filter, so an empty stage
+	// result proves there is nothing retrievable for this query+filter —
+	// re-running the same query through the next waterfall stage (and
+	// re-embedding it server-side) is pure cost. Only ERRORS escalate.
+	const emptyResult = (method: SearchTraceEvent["method"]) => {
+		opts.onTrace?.({
+			event: "method",
+			method,
+			ok: false,
+			message: "empty results",
+		})
+		return [] as MemorySearchResult[]
+	}
+
 	// Attempt hybrid search first (best quality).
 	// Respect the user's fusionMethod preference:
 	//   "scoreFusion" → try $scoreFusion, fall back to $rankFusion, then JS merge
@@ -1111,19 +1147,7 @@ export async function mongoSearch(
 					opts.onTrace?.({ event: "method", method: "scoreFusion", ok: true })
 					return results
 				}
-				opts.onTrace?.({
-					event: "method",
-					method: "scoreFusion",
-					ok: false,
-					message: "empty results",
-				})
-				if (shouldStopInsteadOfFallback(opts)) {
-					return []
-				}
-				warnOrThrowFallback(
-					opts,
-					"$scoreFusion returned no hits, trying fallback path",
-				)
+				return emptyResult("scoreFusion")
 			} catch (err) {
 				if (err instanceof SearchFallbackDisabledError) {
 					throw err
@@ -1155,19 +1179,7 @@ export async function mongoSearch(
 					opts.onTrace?.({ event: "method", method: "rankFusion", ok: true })
 					return results
 				}
-				opts.onTrace?.({
-					event: "method",
-					method: "rankFusion",
-					ok: false,
-					message: "empty results",
-				})
-				if (shouldStopInsteadOfFallback(opts)) {
-					return []
-				}
-				warnOrThrowFallback(
-					opts,
-					"$rankFusion returned no hits, trying fallback path",
-				)
+				return emptyResult("rankFusion")
 			} catch (err) {
 				if (err instanceof SearchFallbackDisabledError) {
 					throw err
@@ -1208,19 +1220,10 @@ export async function mongoSearch(
 				opts.onTrace?.({ event: "method", method: "js-merge", ok: true })
 				return merged
 			}
-			opts.onTrace?.({
-				event: "method",
-				method: "js-merge",
-				ok: false,
-				message: "empty results",
-			})
-			if (shouldStopInsteadOfFallback(opts)) {
-				return []
-			}
-			warnOrThrowFallback(
-				opts,
-				"hybrid JS merge returned no hits, trying fallback path",
-			)
+			// Stopping here also dedupes the old js-merge → vector-only double
+			// vectorSearch: the identical vector search just ran inside the
+			// merge, and it returned nothing.
+			return emptyResult("js-merge")
 		} catch (err) {
 			if (err instanceof SearchFallbackDisabledError) {
 				throw err
@@ -1248,19 +1251,7 @@ export async function mongoSearch(
 				opts.onTrace?.({ event: "method", method: "vector", ok: true })
 				return results
 			}
-			opts.onTrace?.({
-				event: "method",
-				method: "vector",
-				ok: false,
-				message: "empty results",
-			})
-			if (shouldStopInsteadOfFallback(opts)) {
-				return []
-			}
-			warnOrThrowFallback(
-				opts,
-				"vector search returned no hits, trying fallback path",
-			)
+			return emptyResult("vector")
 		} catch (err) {
 			if (err instanceof SearchFallbackDisabledError) {
 				throw err
@@ -1287,19 +1278,7 @@ export async function mongoSearch(
 				opts.onTrace?.({ event: "method", method: "keyword", ok: true })
 				return results
 			}
-			opts.onTrace?.({
-				event: "method",
-				method: "keyword",
-				ok: false,
-				message: "empty results",
-			})
-			if (shouldStopInsteadOfFallback(opts)) {
-				return []
-			}
-			warnOrThrowFallback(
-				opts,
-				"keyword search returned no hits, trying $text fallback",
-			)
+			return emptyResult("keyword")
 		} catch (err) {
 			if (err instanceof SearchFallbackDisabledError) {
 				throw err
@@ -1319,6 +1298,11 @@ export async function mongoSearch(
 	if (isStrictSearchFallbackDisabled(opts)) {
 		throw new SearchFallbackDisabledError("$text fallback would be required")
 	}
+	// P3.2: the $text aggregate bypasses runSearchAggregateWithRetry, so it
+	// consumes the budget directly.
+	if (!tryConsumeSearchAggregation()) {
+		return []
+	}
 	try {
 		const sourceFilter = resolveLegacySourceFilter(opts.sessionKey)
 		const filter = mergeFilters(
@@ -1327,22 +1311,26 @@ export async function mongoSearch(
 			opts.filter,
 		) ?? { $text: { $search: query } }
 		const docs = await collection
-			.aggregate([
-				{ $match: filter },
-				{
-					$project: {
-						_id: 0,
-						path: 1,
-						startLine: 1,
-						endLine: 1,
-						text: 1,
-						source: 1,
-						score: { $meta: "textScore" },
+			.aggregate(
+				[
+					{ $match: filter },
+					{
+						$project: {
+							_id: 0,
+							path: 1,
+							startLine: 1,
+							endLine: 1,
+							text: 1,
+							source: 1,
+							score: { $meta: "textScore" },
+						},
 					},
-				},
-				{ $sort: { score: { $meta: "textScore" } } },
-				{ $limit: opts.maxResults },
-			])
+					{ $sort: { score: { $meta: "textScore" } } },
+					{ $limit: opts.maxResults },
+				],
+				// P3.8: user-driven pipelines carry a maxTimeMS ceiling.
+				{ maxTimeMS: resolveUserSearchMaxTimeMs() },
+			)
 			.toArray()
 		opts.onTrace?.({ event: "method", method: "$text", ok: true })
 		return docs

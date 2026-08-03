@@ -419,24 +419,35 @@ async function mergeStructuredCandidates(
 	provider?: EnrichmentProvider | null,
 	temporalProvider?: EnrichmentProvider | null,
 	model?: string,
+	prefetchedLlmFacts?: string[],
 ): Promise<DerivedStructuredCandidate[]> {
 	const regexCandidates = extractStructuredCandidatesFromEvent(event)
-	if (!provider) {
+	if (!provider && prefetchedLlmFacts === undefined) {
 		return regexCandidates
 	}
 
 	let llmCandidates: DerivedStructuredCandidate[] = []
-	try {
-		llmCandidates = await extractLlmStructuredCandidates({
+	if (prefetchedLlmFacts !== undefined) {
+		// P3.9: session-batched extraction — the worker already made the LLM
+		// call for this event's session; build candidates from the shared
+		// facts instead of a per-event provider call.
+		llmCandidates = buildLlmStructuredCandidatesFromFacts(
 			event,
-			provider,
-			model: model ?? "",
-		})
-	} catch (err) {
-		log.warn(
-			`LLM structured extraction failed for ${event.eventId}, using regex only: ${String(err)}`,
+			prefetchedLlmFacts,
 		)
-		return regexCandidates
+	} else if (provider) {
+		try {
+			llmCandidates = await extractLlmStructuredCandidates({
+				event,
+				provider,
+				model: model ?? "",
+			})
+		} catch (err) {
+			log.warn(
+				`LLM structured extraction failed for ${event.eventId}, using regex only: ${String(err)}`,
+			)
+			return regexCandidates
+		}
 	}
 
 	const merged = new Map<string, DerivedStructuredCandidate>()
@@ -448,10 +459,16 @@ async function mergeStructuredCandidates(
 	}
 
 	// Refine each candidate's valid-time from its own text (#32). Anchored to the
-	// event timestamp, which is also the explicit fallback. Never throws.
+	// event timestamp, which is also the explicit fallback. Never throws. When no
+	// provider exists at all (prefetched facts only), candidates already carry
+	// the event-timestamp baseline, so refinement is simply skipped.
+	const refineProvider = temporalProvider ?? provider
+	if (!refineProvider) {
+		return [...merged.values()]
+	}
 	return refineCandidatesValidTime({
 		candidates: [...merged.values()],
-		provider: temporalProvider ?? provider,
+		provider: refineProvider,
 		model: model ?? "",
 		referenceTime: event.timestamp,
 	})
@@ -464,13 +481,27 @@ export async function resolveStructuredCandidatesForPromotion(params: {
 	provider?: EnrichmentProvider | null
 	temporalProvider?: EnrichmentProvider | null
 	model?: string
+	/**
+	 * P3.9: facts from a session-batched LLM extraction made by the worker.
+	 * When provided, the per-event provider call is skipped entirely.
+	 */
+	prefetchedLlmFacts?: string[]
 }): Promise<StructuredMemoryEntry[]> {
-	const { db, prefix, event, provider, temporalProvider, model } = params
+	const {
+		db,
+		prefix,
+		event,
+		provider,
+		temporalProvider,
+		model,
+		prefetchedLlmFacts,
+	} = params
 	const candidates = await mergeStructuredCandidates(
 		event,
 		provider,
 		temporalProvider,
 		model,
+		prefetchedLlmFacts,
 	)
 	if (candidates.length === 0) {
 		return []
@@ -644,6 +675,11 @@ export async function promoteDerivedMemoryFromEvent(params: {
 	temporalProvider?: EnrichmentProvider | null
 	contradictionProvider?: EnrichmentProvider | null
 	model?: string
+	/**
+	 * P3.9: facts from a session-batched LLM extraction made by the worker.
+	 * When provided, the per-event provider call is skipped entirely.
+	 */
+	prefetchedLlmFacts?: string[]
 }): Promise<{
 	structuredCreated: number
 	proceduresCreated: number
@@ -660,6 +696,7 @@ export async function promoteDerivedMemoryFromEvent(params: {
 		temporalProvider,
 		contradictionProvider,
 		model,
+		prefetchedLlmFacts,
 	} = params
 
 	let structuredCreated = 0
@@ -678,6 +715,7 @@ export async function promoteDerivedMemoryFromEvent(params: {
 			provider,
 			temporalProvider,
 			model,
+			prefetchedLlmFacts,
 		})
 	).filter((candidate) => !isDerivableFromContext(candidate.value))
 	totalCandidateCount += promotable.length
@@ -851,7 +889,19 @@ export async function extractLlmStructuredCandidates(params: {
 	}
 
 	const enrichment = await extractSessionEnrichment(provider, body, model)
-	if (enrichment.facts.length === 0) {
+	return buildLlmStructuredCandidatesFromFacts(event, enrichment.facts)
+}
+
+/**
+ * Build LLM fact candidates from an ALREADY-EXTRACTED fact list. P3.9: the
+ * extraction worker batches the LLM call per session and hands each event the
+ * shared facts, so no per-event provider call happens here.
+ */
+function buildLlmStructuredCandidatesFromFacts(
+	event: ConversationEvent,
+	facts: string[],
+): DerivedStructuredCandidate[] {
+	if (facts.length === 0) {
 		return []
 	}
 
@@ -877,7 +927,7 @@ export async function extractLlmStructuredCandidates(params: {
 	} satisfies Partial<StructuredMemoryEntry>
 
 	const candidates = new Map<string, DerivedStructuredCandidate>()
-	for (const factText of enrichment.facts) {
+	for (const factText of facts) {
 		const value = normalizeWhitespace(factText)
 		if (!value) {
 			continue

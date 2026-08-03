@@ -36,7 +36,28 @@ export type MemoryMongoDBConfig = {
 	recallProfile?: MemoryMongoDBRecallProfile
 	quantization?: "none" | "scalar" | "binary"
 	watchDebounceMs?: number
+	/**
+	 * Dead knob under autoEmbed (fix-plan-2026-08-03 P3.2): Atlas/Voyage
+	 * decide the dimensions server-side, so this value only flows into
+	 * validator warnings and the generic index preset. resolveMongoDBConfig
+	 * logs an error when it is set.
+	 */
 	numDimensions?: number
+	/**
+	 * P3.2: opt-in legacySearch re-run after searchV2 returns empty or
+	 * errors. Default OFF — "empty ≠ error": the v2 empty answer stands.
+	 */
+	legacySearchFallback?: boolean
+	/**
+	 * P3.2: per-search cost budget overrides (see
+	 * packages/memory-engine/src/mongodb-search-budget.ts). Caps the
+	 * aggregations and paid server-side query embeddings one search request
+	 * may consume; exhaustion degrades remaining lanes to empty results.
+	 */
+	searchBudget?: {
+		maxAggregations?: number
+		maxEmbeds?: number
+	}
 	maxPoolSize?: number
 	minPoolSize?: number
 	maxConnecting?: number
@@ -85,6 +106,10 @@ export type MemoryMongoDBConfig = {
 		minScore?: number
 		voyageApiKey?: string
 		instruction?: string
+		/** Post-cross-encoder recency boost weight (0 disables; default 0.2). */
+		recencyBoost?: number
+		/** Post-cross-encoder access-count boost weight (0 disables; default 0.2). */
+		accessBoost?: number
 	}
 	cache?: {
 		enabled?: boolean

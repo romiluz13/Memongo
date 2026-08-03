@@ -2084,6 +2084,78 @@ const openApiSpecDocument = {
 				responses: { "200": { description: "Event id" } },
 			},
 		},
+		"/v1/write-events": {
+			post: {
+				summary:
+					"Write a batch of conversation events (P3.9) with per-item receipts",
+				description:
+					"Bulk variant of /v1/write-event: one request writes up to 500 events through an amortized insertMany/bulkWrite path. Per-item idempotency keys (customId) follow the same IETF/Stripe semantics as the single write — a replayed item returns its original receipt, a key reused with a different payload yields a per-item IDEMPOTENCY_CONFLICT entry, and a failed item never fails the batch.",
+				requestBody: {
+					required: true,
+					content: {
+						"application/json": {
+							schema: {
+								type: "object",
+								required: ["events"],
+								properties: {
+									events: {
+										type: "array",
+										minItems: 1,
+										maxItems: 500,
+										items: {
+											type: "object",
+											required: ["role", "body"],
+											properties: {
+												role: {
+													type: "string",
+													enum: ["user", "assistant", "system", "tool"],
+												},
+												body: { type: "string", minLength: 1 },
+												sessionId: { type: "string" },
+												scope: {
+													type: "string",
+													enum: memoryScopeEnum,
+												},
+												scopeRef: { type: "string" },
+												timestamp: { type: "string", format: "date-time" },
+												validAt: { type: "string", format: "date-time" },
+												invalidAt: { type: "string", format: "date-time" },
+												metadata: { type: "object" },
+												customId: {
+													type: "string",
+													description:
+														"Per-item idempotency key (same semantics as the Idempotency-Key header on /v1/write-event).",
+												},
+											},
+										},
+									},
+									agentId: { type: "string" },
+									sessionId: {
+										type: "string",
+										description: "Default sessionId for items that omit one.",
+									},
+									scope: {
+										type: "string",
+										enum: memoryScopeEnum,
+										description: SCOPE_FIELD_DESCRIPTION,
+									},
+									scopeRef: {
+										type: "string",
+										description: SCOPE_REF_FIELD_DESCRIPTION,
+									},
+								},
+							},
+						},
+					},
+				},
+				responses: {
+					"200": {
+						description:
+							"Per-item receipts mirroring the single-write receipt shape",
+					},
+				},
+			},
+		},
 		"/v1/extract": {
 			post: {
 				summary: "Schedule background extraction for one canonical event",

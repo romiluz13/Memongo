@@ -222,6 +222,63 @@ describe("mongodb-derived-memory", () => {
 		})
 	})
 
+	it("builds candidates from prefetched session facts without a per-event extraction call (P3.9)", async () => {
+		const structuredCol = createMockCollection()
+		const eventsCol = createMockCollection({
+			find: vi.fn(() => ({
+				sort: vi.fn().mockReturnValue({
+					limit: vi.fn().mockReturnValue({
+						toArray: vi.fn(async () => [
+							{
+								eventId: "evt-sibling",
+								body: "The user grows cherry tomatoes in their garden.",
+								timestamp: new Date("2026-03-20T10:00:00Z"),
+							},
+						]),
+					}),
+				}),
+			})),
+		})
+		const chatCompletion = vi.fn(async () => ({ content: "{}" }))
+		const provider = { name: "mock", chatCompletion }
+
+		const promotable = await resolveStructuredCandidatesForPromotion({
+			db: createMockDb({
+				test_structured_mem: structuredCol,
+				test_events: eventsCol,
+			}),
+			prefix: "test_",
+			event: {
+				eventId: "evt-batch-1",
+				agentId: "agent-1",
+				role: "user",
+				body: "tending the garden again today",
+				timestamp: new Date("2026-03-21T10:00:00Z"),
+				scope: "agent",
+				scopeRef: "agent:agent-1",
+			},
+			provider: provider as unknown as EnrichmentProvider,
+			model: "mock-model",
+			prefetchedLlmFacts: ["The user grows cherry tomatoes in their garden."],
+		})
+
+		// The per-event FACT EXTRACTION call is what gets batched — temporal
+		// refinement may still call the provider, but never with the
+		// fact-extraction prompt.
+		const extractionCalls = chatCompletion.mock.calls.filter((call) =>
+			JSON.stringify(call[0]).includes(
+				"Extract memory facts and QA pairs from the transcript below.",
+			),
+		)
+		expect(extractionCalls).toHaveLength(0)
+		expect(promotable).toHaveLength(1)
+		expect(promotable[0]?.type).toBe("fact")
+		expect(promotable[0]?.value).toContain("cherry tomatoes")
+		expect(promotable[0]?.provenance).toMatchObject({
+			promotionTrigger: "repeated-evidence",
+		})
+	})
+
 	it("promotes explicit remember instructions immediately without waiting for reinforcement", async () => {
 		const structuredCol = createMockCollection()
 		const eventsCol = createMockCollection()

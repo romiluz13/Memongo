@@ -2,6 +2,7 @@
 
 import type { Collection, Document } from "mongodb"
 import { describe, it, expect, vi } from "vitest"
+import { runWithSearchBudget } from "./mongodb-search-budget.js"
 import type { DetectedCapabilities } from "./mongodb-schema.js"
 import {
 	isSearchIndexWarmupError,
@@ -14,6 +15,7 @@ import {
 	splitAtlasSearchFilter,
 	buildVectorSearchStage,
 	normalizeAndFilterRankFusionResults,
+	runSearchAggregateWithRetry,
 } from "./mongodb-search.js"
 
 // ---------------------------------------------------------------------------
@@ -116,6 +118,62 @@ const NO_CAPS: DetectedCapabilities = {
 	storedSource: false,
 	vectorIndexMethod: false,
 }
+
+// ---------------------------------------------------------------------------
+// runSearchAggregateWithRetry — P3.8 maxTimeMS on user-driven pipelines
+// ---------------------------------------------------------------------------
+
+describe("runSearchAggregateWithRetry maxTimeMS (P3.8)", () => {
+	it("applies a default maxTimeMS ceiling when the caller passes no options", async () => {
+		const aggregate = vi.fn(() => ({
+			toArray: vi.fn(async () => SAMPLE_DOCS),
+		}))
+		const col = { aggregate } as unknown as Collection
+
+		await runSearchAggregateWithRetry(col, [{ $match: {} }])
+
+		expect(aggregate).toHaveBeenCalledOnce()
+		const options = aggregate.mock.calls[0][1] as { maxTimeMS?: number }
+		expect(typeof options?.maxTimeMS).toBe("number")
+		expect(options.maxTimeMS).toBeGreaterThan(0)
+	})
+
+	it("respects a caller-provided maxTimeMS over the default", async () => {
+		const aggregate = vi.fn(() => ({
+			toArray: vi.fn(async () => SAMPLE_DOCS),
+		}))
+		const col = { aggregate } as unknown as Collection
+
+		await runSearchAggregateWithRetry(col, [{ $match: {} }], {
+			aggregateOptions: { maxTimeMS: 1_500 },
+		})
+
+		const options = aggregate.mock.calls[0][1] as { maxTimeMS?: number }
+		expect(options.maxTimeMS).toBe(1_500)
+	})
+
+	it("honors the MEMONGO_SEARCH_MAX_TIME_MS override for the default ceiling", async () => {
+		const previous = process.env.MEMONGO_SEARCH_MAX_TIME_MS
+		process.env.MEMONGO_SEARCH_MAX_TIME_MS = "4200"
+		try {
+			const aggregate = vi.fn(() => ({
+				toArray: vi.fn(async () => SAMPLE_DOCS),
+			}))
+			const col = { aggregate } as unknown as Collection
+
+			await runSearchAggregateWithRetry(col, [{ $match: {} }])
+
+			const options = aggregate.mock.calls[0][1] as { maxTimeMS?: number }
+			expect(options.maxTimeMS).toBe(4_200)
+		} finally {
+			if (previous === undefined) {
+				delete process.env.MEMONGO_SEARCH_MAX_TIME_MS
+			} else {
+				process.env.MEMONGO_SEARCH_MAX_TIME_MS = previous
+			}
+		}
+	})
+})
 
 // ---------------------------------------------------------------------------
 // vectorSearch
@@ -838,17 +896,15 @@ describe("mongoSearch dispatcher", () => {
 		expect(results).toHaveLength(2)
 	})
 
-	it("falls back when $scoreFusion returns empty results", async () => {
-		let callCount = 0
+	it("stops the waterfall when $scoreFusion returns empty results (empty ≠ error, P3.2)", async () => {
+		// fix-plan-2026-08-03 Appendix C: an empty result is a valid answer, not
+		// a trigger for escalation. The fusion stage includes the vector lane,
+		// which returns nearest neighbors for ANY query when documents exist
+		// under the filter — an empty fusion proves no retrievable documents,
+		// so re-running the same query through more stages is pure cost.
 		const col = {
 			aggregate: vi.fn(() => ({
-				toArray: vi.fn(async () => {
-					callCount++
-					if (callCount === 1) {
-						return []
-					}
-					return SAMPLE_DOCS
-				}),
+				toArray: vi.fn(async () => []),
 			})),
 			find: vi.fn(() => ({
 				sort: vi.fn(() => ({
@@ -866,8 +922,127 @@ describe("mongoSearch dispatcher", () => {
 			embeddingMode: "automated",
 		})
 
+		expect(col.aggregate).toHaveBeenCalledTimes(1)
+		expect(results).toEqual([])
+	})
+
+	it("stops the waterfall after a rankFusion empty (default fusion method)", async () => {
+		const col = {
+			aggregate: vi.fn(() => ({
+				toArray: vi.fn(async () => []),
+			})),
+		} as unknown as Collection
+
+		const results = await mongoSearch(col, "sparse query", null, {
+			...baseOpts,
+			fusionMethod: "rankFusion",
+			capabilities: FULL_CAPS,
+			embeddingMode: "automated",
+		})
+
+		expect(col.aggregate).toHaveBeenCalledTimes(1)
+		expect(results).toEqual([])
+	})
+
+	it("does not re-run the js-merge vector search as a vector-only fallback (P3.2 dedupe)", async () => {
+		// js-merge already ran the identical vectorSearch + keywordSearch; on an
+		// empty merge the old waterfall re-ran the SAME vectorSearch, then
+		// keyword, then $text — 5 aggregations for one lane on an empty corpus.
+		const col = {
+			aggregate: vi.fn(() => ({
+				toArray: vi.fn(async () => []),
+			})),
+		} as unknown as Collection
+
+		const results = await mongoSearch(col, "sparse query", null, {
+			...baseOpts,
+			fusionMethod: "js-merge",
+			capabilities: {
+				...FULL_CAPS,
+				scoreFusion: false,
+				rankFusion: false,
+			},
+			embeddingMode: "automated",
+		})
+
+		// Exactly the js-merge pair: one vector + one keyword aggregation.
 		expect(col.aggregate).toHaveBeenCalledTimes(2)
+		expect(results).toEqual([])
+	})
+
+	it("still falls back when a stage fails (errors, unlike empties, escalate)", async () => {
+		let callCount = 0
+		const col = {
+			aggregate: vi.fn(() => ({
+				toArray: vi.fn(async () => {
+					callCount++
+					if (callCount === 1) {
+						throw new Error("$rankFusion is not supported on this server")
+					}
+					return SAMPLE_DOCS
+				}),
+			})),
+		} as unknown as Collection
+
+		const results = await mongoSearch(col, "test query", null, {
+			...baseOpts,
+			fusionMethod: "rankFusion",
+			capabilities: FULL_CAPS,
+			embeddingMode: "automated",
+		})
+
+		// rankFusion error (1 call) escalates to the js-merge pair (2 calls).
+		expect(col.aggregate).toHaveBeenCalledTimes(3)
 		expect(results).toHaveLength(2)
+	})
+
+	it("enforces the per-search aggregation budget when stages keep failing", async () => {
+		const col = {
+			aggregate: vi.fn(() => ({
+				toArray: vi.fn(async () => {
+					throw new Error("stage unsupported")
+				}),
+			})),
+		} as unknown as Collection
+
+		const { value, budget } = await runWithSearchBudget(
+			{ maxAggregations: 1, maxEmbeds: 5 },
+			async () =>
+				mongoSearch(col, "sparse query", null, {
+					...baseOpts,
+					fusionMethod: "scoreFusion",
+					capabilities: FULL_CAPS,
+					embeddingMode: "automated",
+				}),
+		)
+
+		// Budget exhausted after the first stage: later stages never reach the
+		// server even though every stage error would have escalated.
+		expect((col.aggregate as ReturnType<typeof vi.fn>).mock.calls.length).toBe(
+			1,
+		)
+		expect(value).toEqual([])
+		expect(budget.aggregations).toBe(1)
+		expect(budget.exhausted).toBe(true)
+	})
+
+	it("counts one server-side embed per $vectorSearch stage through the budget", async () => {
+		const col = mockCollectionWithResults(SAMPLE_DOCS)
+
+		const { value, budget } = await runWithSearchBudget(
+			{ maxAggregations: 12, maxEmbeds: 5 },
+			async () =>
+				mongoSearch(col, "test query", null, {
+					...baseOpts,
+					fusionMethod: "rankFusion",
+					capabilities: FULL_CAPS,
+					embeddingMode: "automated",
+				}),
+		)
+
+		expect(value).toHaveLength(2)
+		expect(budget.embeds).toBe(1)
+		expect(budget.aggregations).toBe(1)
 	})
 
 	it("returns empty instead of falling back when strictNoFallback sees no hits", async () => {

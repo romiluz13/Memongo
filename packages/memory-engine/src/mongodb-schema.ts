@@ -4,6 +4,13 @@ import {
 	type MemoryMongoDBEmbeddingMode,
 	createSubsystemLogger,
 } from "@memongo/lib"
+import {
+	evaluateCapabilityGates,
+	isCapabilityEnabled,
+	logDisabledCapabilityGates,
+	recordCapabilityProbe,
+	serverVersionAtLeast,
+} from "./mongodb-capability-registry.js"
 import { isEvidenceMirrorEnabled } from "./mongodb-evidence-mirror.js"
 import { sortObject } from "./search-utils.js"
 
@@ -30,6 +37,13 @@ export type DetectedCapabilities = {
 	 * See: mongodb.com/docs/atlas/vector-search/vector-search-overview/
 	 */
 	vectorIndexMethod: boolean
+	/**
+	 * capabilityGates: per-feature evaluation of the capability re-enable
+	 * registry (P3.6, mongodb-capability-registry.ts) against this server's
+	 * buildInfo. Optional so existing DetectedCapabilities literals in
+	 * callers and tests keep compiling.
+	 */
+	capabilityGates?: Record<string, boolean>
 }
 
 export type MongoIndexBudgetCheck = {
@@ -287,8 +301,9 @@ export function memoryEvidenceCollection(db: Db, prefix: string): Collection {
 // ---------------------------------------------------------------------------
 
 // JSON Schema validators for MongoDB-native collections.
-// Uses $jsonSchema with validationAction: "error" so invalid docs are rejected
-// at write time, keeping persisted memory collections structurally consistent.
+// Uses $jsonSchema with validationAction: "errorAndLog" (MongoDB 8.1+;
+// "error" below) so invalid docs are rejected at write time and logged
+// server-side, keeping persisted memory collections structurally consistent.
 
 const KB_SCHEMA: Document = {
 	$jsonSchema: {
@@ -1500,6 +1515,16 @@ export async function ensureCollections(db: Db, prefix: string): Promise<void> {
 		"memory_quarantine",
 		...(isEvidenceMirrorEnabled() ? ["memory_evidence"] : []),
 	].map((n) => `${prefix}${n}`)
+	// errorAndLog is GA since MongoDB 8.1 (P3.5): rejections are additionally
+	// recorded in the mongod log with document and reason. Older servers and
+	// deployments where buildInfo is unavailable keep plain "error".
+	const validationAction = serverVersionAtLeast(
+		await detectServerVersionArray(db),
+		8,
+		1,
+	)
+		? "errorAndLog"
+		: "error"
 	for (const name of needed) {
 		if (!existing.has(name)) {
 			// Strip prefix to look up validator
@@ -1509,7 +1534,7 @@ export async function ensureCollections(db: Db, prefix: string): Promise<void> {
 				await db.createCollection(name, {
 					validator,
 					validationLevel: "moderate",
-					validationAction: "error",
+					validationAction,
 				})
 			} else {
 				await db.createCollection(name)
@@ -1547,12 +1572,20 @@ export async function ensureCollections(db: Db, prefix: string): Promise<void> {
 /**
  * Apply JSON Schema validation to existing collections that were created
  * before validation was added. Idempotent — safe to call on every startup.
- * Uses validationAction: "error" so invalid writes fail fast.
+ * Uses validationAction: "errorAndLog" on MongoDB 8.1+ ("error" below) so
+ * invalid writes fail fast AND leave a server-side record (P3.5).
  */
 export async function ensureSchemaValidation(
 	db: Db,
 	prefix: string,
 ): Promise<void> {
+	const validationAction = serverVersionAtLeast(
+		await detectServerVersionArray(db),
+		8,
+		1,
+	)
+		? "errorAndLog"
+		: "error"
 	const failures: string[] = []
 	for (const [baseName, validator] of Object.entries(VALIDATED_COLLECTIONS)) {
 		if (baseName === "memory_evidence" && !isEvidenceMirrorEnabled()) {
@@ -1564,7 +1597,7 @@ export async function ensureSchemaValidation(
 				collMod: collName,
 				validator,
 				validationLevel: "moderate",
-				validationAction: "error",
+				validationAction,
 			})
 			log.info(`applied schema validation to ${collName}`)
 		} catch (err) {
@@ -1635,12 +1668,36 @@ export async function ensureStandardIndexes(
 		memoryTtlDays?: number
 		relevanceRetentionDays?: number
 		revisionRetentionDays?: number
+		/**
+		 * P3.8: the six BSON $text indexes are the no-mongot fallback — when
+		 * Search Index Management is available the $search indexes serve every
+		 * text lane and the $text duplicates are pure write amplification.
+		 * The manager bootstrap passes `!searchIndexManagementAvailable`; direct
+		 * callers default to true (create) to preserve the fallback guarantee.
+		 */
+		textFallbackIndexes?: boolean
 	},
 ): Promise<number> {
 	let applied = 0
+	const textFallbackIndexes = ttlOpts?.textFallbackIndexes ?? true
 
 	const chunks = chunksCollection(db, prefix)
-	await chunks.createIndex({ path: 1 }, { name: "idx_chunks_path" })
+	// P3.8: idx_chunks_path retired — a strict prefix of idx_chunks_path_hash
+	// and of the ESR compound below, so it was pure write amplification. Drop
+	// it explicitly: removing it from the spec alone would leave it live on
+	// existing deployments (the structured_mem create/drop dance precedent).
+	try {
+		await chunks.dropIndex("idx_chunks_path")
+	} catch {
+		// Index may not exist — safe to ignore
+	}
+	// ESR compound for chunk reads: equality on (agentId, path), sort on
+	// startLine (readConversationChunk / readBridgeChunk previously filtered
+	// path only and sorted in memory).
+	await chunks.createIndex(
+		{ agentId: 1, path: 1, startLine: 1 },
+		{ name: "idx_chunks_agent_path_startline" },
+	)
 	applied++
 	// F17: Removed idx_chunks_source — low-cardinality index (only "memory"/"sessions" values)
 	await chunks.createIndex(
@@ -1652,8 +1709,10 @@ export async function ensureStandardIndexes(
 	applied++
 	// Keep a BSON $text index as a defensive last-resort fallback if Search is unavailable.
 	// Only one $text index is allowed per collection.
-	await chunks.createIndex({ text: "text" }, { name: "idx_chunks_text" })
-	applied++
+	if (textFallbackIndexes) {
+		await chunks.createIndex({ text: "text" }, { name: "idx_chunks_text" })
+		applied++
+	}
 
 	// Optional TTL on files for memory auto-expiry
 	// WARNING: This deletes memory files from MongoDB after ttlDays
@@ -1743,8 +1802,10 @@ export async function ensureStandardIndexes(
 		applied++
 	}
 	// $text index on kb_chunks text field for text search fallback
-	await kbChunks.createIndex({ text: "text" }, { name: "idx_kbchunks_text" })
-	applied++
+	if (textFallbackIndexes) {
+		await kbChunks.createIndex({ text: "text" }, { name: "idx_kbchunks_text" })
+		applied++
+	}
 
 	// Structured Memory indexes
 	const structured = structuredMemCollection(db, prefix)
@@ -1777,11 +1838,14 @@ export async function ensureStandardIndexes(
 		{ name: "idx_structured_type_updated" },
 	)
 	applied++
-	await structured.createIndex(
-		{ agentId: 1 },
-		{ name: "idx_structured_agentid" },
-	)
-	applied++
+	// P3.8: idx_structured_agentid retired — a strict prefix of the unique
+	// (agentId, scope, scopeRef, type, key) index and of
+	// idx_structured_agent_source_event, so it was pure write amplification.
+	try {
+		await structured.dropIndex("idx_structured_agentid")
+	} catch {
+		// Index may not exist — safe to ignore
+	}
 	await structured.createIndex({ tags: 1 }, { name: "idx_structured_tags" })
 	applied++
 	await structured.createIndex(
@@ -1795,11 +1859,13 @@ export async function ensureStandardIndexes(
 	)
 	applied++
 	// $text index on structured_mem for text search fallback
-	await structured.createIndex(
-		{ value: "text", context: "text" },
-		{ name: "idx_structured_text" },
-	)
-	applied++
+	if (textFallbackIndexes) {
+		await structured.createIndex(
+			{ value: "text", context: "text" },
+			{ name: "idx_structured_text" },
+		)
+		applied++
+	}
 	// Bi-temporal valid-time index (#32): serves buildCurrentValidityClause's
 	// "as of T" predicate (validFrom <= T AND (validTo absent OR > T)). The
 	// current-facts read composes it with state:"active" as an equality, so under
@@ -1993,9 +2059,18 @@ export async function ensureStandardIndexes(
 		{ name: "idx_entities_agent_scope_scoperef_type_name" },
 	)
 	applied++
+	if (textFallbackIndexes) {
+		await entities.createIndex(
+			{ name: "text", aliases: "text" },
+			{ name: "idx_entities_text" },
+		)
+		applied++
+	}
+	// P3.8 ESR compound: entity lookups (findEntitiesByName, getEntitiesByType)
+	// filter agentId and sort updatedAt desc with no supporting index before.
 	await entities.createIndex(
-		{ name: "text", aliases: "text" },
-		{ name: "idx_entities_text" },
+		{ agentId: 1, updatedAt: -1 },
+		{ name: "idx_entities_agent_updated" },
 	)
 	applied++
 	// Phase 3.4: entity alias lookup + mention count ranking
@@ -2058,9 +2133,20 @@ export async function ensureStandardIndexes(
 		{ name: "idx_relations_agent_scope_scoperef_to" },
 	)
 	applied++
+	// P3.8: idx_relations_agent_scope_scoperef retired — a strict prefix of the
+	// unique uq_relations_identity index (and of the _from_type compound), so
+	// it was pure write amplification.
+	try {
+		await relations.dropIndex("idx_relations_agent_scope_scoperef")
+	} catch {
+		// Index may not exist — safe to ignore
+	}
+	// P3.8: relation locator index. readFile("relation:from-to") used to fetch
+	// up to 50 relations and JS-match the pair; the denormalized relationId
+	// field makes it a single findOne.
 	await relations.createIndex(
-		{ agentId: 1, scope: 1, scopeRef: 1 },
-		{ name: "idx_relations_agent_scope_scoperef" },
+		{ agentId: 1, scope: 1, scopeRef: 1, relationId: 1 },
+		{ name: "idx_relations_agent_scope_scoperef_relationid" },
 	)
 	applied++
 	// C2/M3 audit fix: toEntityId-prefixed index for correlated $lookup in profile synthesis.
@@ -2145,9 +2231,18 @@ export async function ensureStandardIndexes(
 		handleUniqueIndexCreationError(err, "uq_episodes_source_events")
 		applied++
 	}
+	if (textFallbackIndexes) {
+		await episodes.createIndex(
+			{ summary: "text", title: "text" },
+			{ name: "idx_episodes_text" },
+		)
+		applied++
+	}
+	// P3.8 ESR compound: getEpisodesByType filters (agentId, type) equality and
+	// sorts updatedAt desc with no supporting index before.
 	await episodes.createIndex(
-		{ summary: "text", title: "text" },
-		{ name: "idx_episodes_text" },
+		{ agentId: 1, type: 1, updatedAt: -1 },
+		{ name: "idx_episodes_agent_type_updated" },
 	)
 	applied++
 
@@ -2234,11 +2329,13 @@ export async function ensureStandardIndexes(
 		{ name: "idx_procedures_agent_source_event" },
 	)
 	applied++
-	await procedures.createIndex(
-		{ searchText: "text", name: "text" },
-		{ name: "idx_procedures_text" },
-	)
-	applied++
+	if (textFallbackIndexes) {
+		await procedures.createIndex(
+			{ searchText: "text", name: "text" },
+			{ name: "idx_procedures_text" },
+		)
+		applied++
+	}
 
 	const procedureRevisions = procedureRevisionsCollection(db, prefix)
 	await procedureRevisions.createIndex(
@@ -2583,22 +2680,17 @@ function isSearchIndexManagementUnavailable(message: string): boolean {
 	)
 }
 
-function hasServerVersionAtLeast(
-	versionArray: unknown,
-	minimumMajor: number,
-	minimumMinor: number,
-): boolean {
-	if (!Array.isArray(versionArray) || versionArray.length < 2) {
-		return false
+// Version gating goes through serverVersionAtLeast from the capability
+// registry (mongodb-capability-registry.ts), so every gate in this file and
+// the registry share one comparison.
+
+async function detectServerVersionArray(db: Db): Promise<unknown> {
+	try {
+		const buildInfo = await db.admin().command({ buildInfo: 1 })
+		return (buildInfo as { versionArray?: unknown }).versionArray
+	} catch {
+		return undefined
 	}
-	const major = Number(versionArray[0])
-	const minor = Number(versionArray[1])
-	if (!Number.isFinite(major) || !Number.isFinite(minor)) {
-		return false
-	}
-	return (
-		major > minimumMajor || (major === minimumMajor && minor >= minimumMinor)
-	)
 }
 
 export type SearchIndexDescription = {
@@ -2972,6 +3064,43 @@ export async function ensureEntityAutocompleteIndex(
 	}
 }
 
+/**
+ * Ensure Atlas Search autocomplete index on episodes collection for
+ * title/summary episode lookup (P3.8) — the episode counterpart of
+ * ensureEntityAutocompleteIndex, retiring the request-path $regex scan.
+ */
+export async function ensureEpisodeAutocompleteIndex(
+	db: Db,
+	prefix: string,
+): Promise<void> {
+	const episodes = episodesCollection(db, prefix)
+	try {
+		await ensureNamedSearchIndex({
+			collection: episodes,
+			name: "episode_autocomplete",
+			type: "search",
+			definition: {
+				mappings: {
+					dynamic: false,
+					fields: {
+						title: { type: "autocomplete" },
+						summary: { type: "autocomplete" },
+						agentId: { type: "token" },
+						scope: { type: "token" },
+						scopeRef: { type: "token" },
+					},
+				},
+			},
+			label: "episode autocomplete",
+		})
+	} catch (err) {
+		const msg = err instanceof Error ? err.message : String(err)
+		if (!msg.includes("already exists") && !msg.includes("duplicate")) {
+			log.warn(`episode autocomplete index creation failed: ${msg}`)
+		}
+	}
+}
+
 export function getExpectedSearchIndexTargets(
 	prefix: string,
 	profile: MemoryMongoDBDeploymentProfile,
@@ -2981,8 +3110,8 @@ export function getExpectedSearchIndexTargets(
 	const plannedSearchIndexCount = rawSessionIndexProfile
 		? 1
 		: evidenceMirrorEnabled
-			? 16
-			: 14
+			? 17
+			: 15
 	const budget = assertIndexBudget(profile, plannedSearchIndexCount)
 	const reducedBudget =
 		!budget.withinBudget &&
@@ -3077,6 +3206,10 @@ export function getExpectedSearchIndexTargets(
 			collectionName: `${prefix}entities`,
 			indexNames: ["entity_autocomplete"],
 		},
+		{
+			collectionName: `${prefix}episodes`,
+			indexNames: ["episode_autocomplete"],
+		},
 	]
 }
 
@@ -3125,7 +3258,10 @@ function vectorIndexingMethodFromEnv(): "flat" | undefined {
 	return undefined
 }
 
-function autoEmbedVectorField(path: string): Document {
+function autoEmbedVectorField(
+	path: string,
+	quantization: "none" | "scalar" | "binary" = "none",
+): Document {
 	const indexingMethod = vectorIndexingMethodFromEnv()
 	return {
 		type: "autoEmbed",
@@ -3133,6 +3269,10 @@ function autoEmbedVectorField(path: string): Document {
 		path,
 		model: "voyage-4-large",
 		...(indexingMethod ? { indexingMethod } : {}),
+		// P3.4 probe-adopt: the configured quantization ships in the definition;
+		// a server rejection is caught in ensureSearchIndexes, recorded in the
+		// capability registry, and retried with the server default.
+		...(quantization !== "none" ? { quantization } : {}),
 	}
 }
 
@@ -3236,16 +3376,25 @@ const VECTOR_STORED_SOURCE_INCLUDE: Record<string, string[]> = {
 	],
 }
 
-function vectorStoredSourceEnabled(): boolean {
-	return process.env.MEMONGO_VECTOR_STORED_SOURCE?.trim() === "1"
+// P3.3: stored source is default-on from MongoDB 8.3.7 (the version that
+// fixed the server rejection of the {include: [...]} form), with
+// MEMONGO_VECTOR_STORED_SOURCE kept as an override — "0" kills it even when
+// the version gate passes, "1" forces it on. The condition lives in the
+// capability registry so it self-enables as servers advance.
+function vectorStoredSourceEnabled(versionArray: unknown): boolean {
+	return isCapabilityEnabled("vector-stored-source", {
+		versionArray,
+		env: process.env,
+	})
 }
 
 function withVectorStoredSource(
 	definition: Document,
 	collectionKind: string,
+	versionArray?: unknown,
 ): Document {
 	const include = VECTOR_STORED_SOURCE_INCLUDE[collectionKind]
-	if (!vectorStoredSourceEnabled() || !include) {
+	if (!include || !vectorStoredSourceEnabled(versionArray)) {
 		return definition
 	}
 	return { ...definition, storedSource: { include } }
@@ -3275,31 +3424,56 @@ function withVectorStoredSource(
  * field: the embedding model determines all of them. So there is nothing here
  * to pin, and no irreversible choice to get wrong.
  *
- * One exception has since opened up: Atlas 8.3.7 (re-probed live
- * 2026-07-30) accepts field-level `indexingMethod: "flat"` on autoEmbed
- * fields and builds the index to READY. autoEmbedVectorField therefore adds
- * it — and only it — behind the MEMONGO_VECTOR_INDEXING_METHOD opt-in.
- * `storedSource` remains rejected in the `true` form; the documented
- * `{include: [...]}` object form is accepted but stays off pending its own
- * change (see DetectedCapabilities.storedSource).
+ * Two exceptions have since opened up, both tracked in the capability
+ * registry (mongodb-capability-registry.ts) so they self-enable as servers
+ * advance:
  *
- * Re-enabling stored source later means `{include: [...]}` naming every field
- * the search projections read, plus flipping DetectedCapabilities.storedSource
- * to match. Getting that list wrong drops fields from results silently, so it
- * needs its own change with its own live test — not a version check.
+ * - Atlas 8.3.7 (re-probed live 2026-07-30) accepts field-level
+ *   `indexingMethod: "flat"` on autoEmbed fields and builds the index to
+ *   READY. autoEmbedVectorField therefore adds it behind the
+ *   MEMONGO_VECTOR_INDEXING_METHOD opt-in.
+ * - `storedSource` in the documented `{include: [...]}` object form ships
+ *   from MongoDB 8.3.7 (P3.3) via withVectorStoredSource, naming every field
+ *   the search projections read — the boolean `true` form remains rejected
+ *   on every version.
+ *
+ * `quantization` is probe-adopted (P3.4): the configured value ships in the
+ * definition and a server rejection degrades to the default at ensure time.
  */
 export function buildAutoEmbedVectorDefinition(
 	path: string,
 	filterPaths: string[] = [],
+	quantization: "none" | "scalar" | "binary" = "none",
 ): Document {
 	return {
 		fields: [
-			autoEmbedVectorField(path),
+			autoEmbedVectorField(path, quantization),
 			...filterPaths.map((filterPath) => ({
 				type: "filter",
 				path: filterPath,
 			})),
 		],
+	}
+}
+
+/**
+ * Strip quantization from autoEmbed fields — the retry shape after a server
+ * rejection during probe-adopt (P3.4).
+ */
+function withoutFieldQuantization(definition: Document): Document {
+	const fields = definition.fields
+	if (!Array.isArray(fields)) {
+		return definition
+	}
+	return {
+		...definition,
+		fields: fields.map((field: Document) =>
+			field?.type === "autoEmbed" && "quantization" in field
+				? Object.fromEntries(
+						Object.entries(field).filter(([key]) => key !== "quantization"),
+					)
+				: field,
+		),
 	}
 }
 
@@ -3432,13 +3606,48 @@ export async function ensureSearchIndexes(
 	numDimensions: number = 1024,
 ): Promise<{ text: boolean; vector: boolean }> {
 	void embeddingMode
-	void quantization
 	void numDimensions
 
-	// 14 search indexes total: chunks, kb_chunks, structured_mem, procedures,
+	// Server version gates storedSource include-lists (P3.3) through the
+	// capability registry; undefined (buildInfo unavailable) keeps them off.
+	const serverVersionArray = await detectServerVersionArray(db)
+
+	// Probe-adopt quantization (P3.4): the configured value ships in every
+	// autoEmbed vector definition. If the server rejects it, record the
+	// capability off in the registry and retry that index with the server
+	// default — index creation never fails over a tuning knob.
+	let activeQuantization = quantization
+	const ensureVectorIndex = async (params: {
+		collection: Collection
+		name: string
+		definition: Document
+		label: string
+	}): Promise<boolean> => {
+		try {
+			return await ensureNamedSearchIndex({ ...params, type: "vectorSearch" })
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err)
+			if (activeQuantization !== "none" && msg.includes("quantization")) {
+				activeQuantization = "none"
+				recordCapabilityProbe("autoembed-quantization", false)
+				log.warn(
+					`server rejected quantization on autoEmbed index definitions; capability recorded off, using the server default: ${msg}`,
+				)
+				return await ensureNamedSearchIndex({
+					...params,
+					type: "vectorSearch",
+					definition: withoutFieldQuantization(params.definition),
+				})
+			}
+			throw err
+		}
+	}
+
+	// 15 search indexes total: chunks, kb_chunks, structured_mem, procedures,
 	// events, and session_chunks each get text + vector indexes, plus query_cache
-	// gets 1 vector index, plus entities gets 1 autocomplete index. The optional
-	// evidence mirror adds two more indexes only when explicitly enabled.
+	// gets 1 vector index, plus entities and episodes get 1 autocomplete index
+	// each (P3.8). The optional evidence mirror adds two more indexes only when
+	// explicitly enabled.
 	// Keep the budget helper explicit so future constrained/free-tier profiles
 	// can safely reduce index count without changing index definitions.
 	const evidenceMirrorEnabled = isEvidenceMirrorEnabled()
@@ -3446,8 +3655,8 @@ export async function ensureSearchIndexes(
 	const plannedSearchIndexCount = rawSessionIndexProfile
 		? 1
 		: evidenceMirrorEnabled
-			? 16
-			: 14
+			? 17
+			: 15
 	const budget = assertIndexBudget(profile, plannedSearchIndexCount)
 	const reducedBudget =
 		!budget.withinBudget &&
@@ -3473,7 +3682,7 @@ export async function ensureSearchIndexes(
 			const sessionVectorDef: Document = withVectorStoredSource(
 				{
 					fields: [
-						autoEmbedVectorField("text"),
+						autoEmbedVectorField("text", activeQuantization),
 						{ type: "filter", path: "agentId" },
 						{ type: "filter", path: "scope" },
 						{ type: "filter", path: "scopeRef" },
@@ -3481,11 +3690,11 @@ export async function ensureSearchIndexes(
 					],
 				},
 				"session_chunks",
+				serverVersionArray,
 			)
-			const vectorCreated = await ensureNamedSearchIndex({
+			const vectorCreated = await ensureVectorIndex({
 				collection: sessionChunks,
 				name: `${prefix}session_chunks_vector`,
-				type: "vectorSearch",
 				definition: sessionVectorDef,
 				label: "session_chunks vector",
 			})
@@ -3549,22 +3758,26 @@ export async function ensureSearchIndexes(
 	// Vector Search index
 	try {
 		const vectorDef: Document = withVectorStoredSource(
-			buildAutoEmbedVectorDefinition("text", [
-				"source",
-				"path",
-				"agentId",
-				"scope",
-				"scopeRef",
-				"sessionId",
-				"status",
-			]),
+			buildAutoEmbedVectorDefinition(
+				"text",
+				[
+					"source",
+					"path",
+					"agentId",
+					"scope",
+					"scopeRef",
+					"sessionId",
+					"status",
+				],
+				activeQuantization,
+			),
 			"chunks",
+			serverVersionArray,
 		)
 
-		vectorCreated = await ensureNamedSearchIndex({
+		vectorCreated = await ensureVectorIndex({
 			collection: chunks,
 			name: `${prefix}chunks_vector`,
-			type: "vectorSearch",
 			definition: vectorDef,
 			label: "chunks vector",
 		})
@@ -3628,15 +3841,18 @@ export async function ensureSearchIndexes(
 
 			const kbVectorDef: Document = withVectorStoredSource(
 				{
-					fields: [autoEmbedVectorField("text"), ...kbFilterFields],
+					fields: [
+						autoEmbedVectorField("text", activeQuantization),
+						...kbFilterFields,
+					],
 				},
 				"kb_chunks",
+				serverVersionArray,
 			)
 
-			vectorCreated = await ensureNamedSearchIndex({
+			vectorCreated = await ensureVectorIndex({
 				collection: kbChunks,
 				name: `${prefix}kb_chunks_vector`,
-				type: "vectorSearch",
 				definition: kbVectorDef,
 				label: "kb_chunks vector",
 			})
@@ -3709,15 +3925,18 @@ export async function ensureSearchIndexes(
 
 		const structVectorDef: Document = withVectorStoredSource(
 			{
-				fields: [autoEmbedVectorField("value"), ...structFilterFields],
+				fields: [
+					autoEmbedVectorField("value", activeQuantization),
+					...structFilterFields,
+				],
 			},
 			"structured_mem",
+			serverVersionArray,
 		)
 
-		vectorCreated = await ensureNamedSearchIndex({
+		vectorCreated = await ensureVectorIndex({
 			collection: structured,
 			name: `${prefix}structured_mem_vector`,
-			type: "vectorSearch",
 			definition: structVectorDef,
 			label: "structured_mem vector",
 		})
@@ -3773,7 +3992,7 @@ export async function ensureSearchIndexes(
 		const procedureVectorDef: Document = withVectorStoredSource(
 			{
 				fields: [
-					autoEmbedVectorField("searchText"),
+					autoEmbedVectorField("searchText", activeQuantization),
 					{ type: "filter", path: "intentTags" },
 					{ type: "filter", path: "agentId" },
 					{ type: "filter", path: "scope" },
@@ -3784,12 +4003,12 @@ export async function ensureSearchIndexes(
 				],
 			},
 			"procedures",
+			serverVersionArray,
 		)
 
-		vectorCreated = await ensureNamedSearchIndex({
+		vectorCreated = await ensureVectorIndex({
 			collection: procedures,
 			name: `${prefix}procedures_vector`,
-			type: "vectorSearch",
 			definition: procedureVectorDef,
 			label: "procedures vector",
 		})
@@ -3855,12 +4074,14 @@ export async function ensureSearchIndexes(
 			{ type: "filter", path: "invalidAt" },
 		]
 		const eventsVectorDef: Document = {
-			fields: [autoEmbedVectorField("body"), ...eventsFilterFields],
+			fields: [
+				autoEmbedVectorField("body", activeQuantization),
+				...eventsFilterFields,
+			],
 		}
-		vectorCreated = await ensureNamedSearchIndex({
+		vectorCreated = await ensureVectorIndex({
 			collection: events,
 			name: `${prefix}events_vector`,
-			type: "vectorSearch",
 			definition: eventsVectorDef,
 			label: "events vector",
 		})
@@ -3883,17 +4104,16 @@ export async function ensureSearchIndexes(
 		try {
 			const cacheVectorDef: Document = {
 				fields: [
-					autoEmbedVectorField("queryNorm"),
+					autoEmbedVectorField("queryNorm", activeQuantization),
 					{ type: "filter", path: "agentId" },
 					{ type: "filter", path: "scope" },
 					{ type: "filter", path: "scopeRef" },
 					{ type: "filter", path: "expiresAt" },
 				],
 			}
-			vectorCreated = await ensureNamedSearchIndex({
+			vectorCreated = await ensureVectorIndex({
 				collection: queryCache,
 				name: `${prefix}query_cache_vector`,
-				type: "vectorSearch",
 				definition: cacheVectorDef,
 				label: "query_cache vector",
 			})
@@ -3954,14 +4174,17 @@ export async function ensureSearchIndexes(
 			]
 			const sessionVectorDef: Document = withVectorStoredSource(
 				{
-					fields: [autoEmbedVectorField("text"), ...sessionFilterFields],
+					fields: [
+						autoEmbedVectorField("text", activeQuantization),
+						...sessionFilterFields,
+					],
 				},
 				"session_chunks",
+				serverVersionArray,
 			)
-			vectorCreated = await ensureNamedSearchIndex({
+			vectorCreated = await ensureVectorIndex({
 				collection: sessionChunks,
 				name: `${prefix}session_chunks_vector`,
-				type: "vectorSearch",
 				definition: sessionVectorDef,
 				label: "session_chunks vector",
 			})
@@ -4026,12 +4249,14 @@ export async function ensureSearchIndexes(
 				{ type: "filter", path: "timestamp" },
 			]
 			const evidenceVectorDef: Document = {
-				fields: [autoEmbedVectorField("text"), ...evidenceFilterFields],
+				fields: [
+					autoEmbedVectorField("text", activeQuantization),
+					...evidenceFilterFields,
+				],
 			}
-			vectorCreated = await ensureNamedSearchIndex({
+			vectorCreated = await ensureVectorIndex({
 				collection: memoryEvidence,
 				name: `${prefix}memory_evidence_vector`,
-				type: "vectorSearch",
 				definition: evidenceVectorDef,
 				label: "memory_evidence vector",
 			})
@@ -4048,7 +4273,7 @@ export async function ensureSearchIndexes(
 		}
 	}
 
-	// Entity autocomplete search index (separate from standard indexes)
+	// Entity + episode autocomplete search indexes (separate from standard indexes)
 	if (!longMemEvalIndexProfile) {
 		try {
 			await ensureEntityAutocompleteIndex(db, prefix)
@@ -4061,6 +4286,17 @@ export async function ensureSearchIndexes(
 				log.warn(`entity autocomplete search index creation failed: ${msg}`)
 			}
 		}
+		try {
+			await ensureEpisodeAutocompleteIndex(db, prefix)
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err)
+			if (isSearchIndexManagementUnavailable(msg)) {
+				log.warn(`search index management unavailable: ${msg}`)
+				return { text: textCreated, vector: vectorCreated }
+			} else {
+				log.warn(`episode autocomplete search index creation failed: ${msg}`)
+			}
+		}
 	}
 
 	return { text: textCreated, vector: vectorCreated }
@@ -4070,10 +4306,20 @@ export async function ensureSearchIndexes(
 // Index budget
 // ---------------------------------------------------------------------------
 
-const PROFILE_BUDGETS: Record<MemoryMongoDBDeploymentProfile, "unbounded"> = {
+// P3.8: budget enforcement was dead code while every profile was "unbounded".
+// community-mongot (self-hosted mongot, finite heap per indexed collection)
+// gets a real numeric ceiling sized to the fullest planned profile (15 default
+// + 2 evidence-mirror indexes). Exceeding it degrades to the reduced
+// chunks-only target list, so adding a search index becomes a deliberate act
+// that must bump this budget. The rest of the budget machinery is targeted
+// for deletion under P4.1 — do not build on it further.
+const PROFILE_BUDGETS: Record<
+	MemoryMongoDBDeploymentProfile,
+	number | "unbounded"
+> = {
 	"atlas-local-preview": "unbounded",
 	"atlas-managed": "unbounded",
-	"community-mongot": "unbounded",
+	"community-mongot": 17,
 }
 
 export function assertIndexBudget(
@@ -4184,11 +4430,12 @@ export async function detectCapabilities(
 	// Prefer server-version gating for fusion stages because the MongoDB docs
 	// define availability by server version. Fall back to stage probes only when
 	// buildInfo is unavailable.
+	let versionArray: unknown
 	try {
 		const buildInfo = await db.admin().command({ buildInfo: 1 })
-		const versionArray = (buildInfo as { versionArray?: unknown }).versionArray
-		result.rankFusion = hasServerVersionAtLeast(versionArray, 8, 1)
-		result.scoreFusion = hasServerVersionAtLeast(versionArray, 8, 3)
+		versionArray = (buildInfo as { versionArray?: unknown }).versionArray
+		result.rankFusion = serverVersionAtLeast(versionArray, 8, 1)
+		result.scoreFusion = serverVersionAtLeast(versionArray, 8, 3)
 		// storedSource and vectorIndexMethod stay false: these describe what
 		// THIS deployment's indexes were built with, not what the server
 		// version could support. ensureSearchIndexes ships auto-embedding
@@ -4270,19 +4517,36 @@ export async function detectCapabilities(
 				isSearchIndexQueryable(vectorIndex)
 			// storedSource reflects what the serving index was BUILT with (see
 			// the scar above): true only when the probe vector index definition
-			// actually carries a stored-source config. The server may stamp
-			// `storedSource: false` as a default — that is not enabled.
+			// actually carries a stored-source config AND the registry gate is
+			// open (MongoDB 8.3.7+, or MEMONGO_VECTOR_STORED_SOURCE=1; "0" kills
+			// it regardless). The server may stamp `storedSource: false` as a
+			// default — that is not enabled.
 			const vectorDefinition =
 				vectorIndex?.latestDefinition ?? vectorIndex?.definition
 			const storedSourceConfig = vectorDefinition?.storedSource
 			result.storedSource =
 				result.vectorSearch &&
+				isCapabilityEnabled("vector-stored-source", {
+					versionArray,
+					env: process.env,
+				}) &&
 				typeof storedSourceConfig === "object" &&
 				storedSourceConfig !== null
 		} catch {
 			// Search index management is unavailable on this deployment.
 		}
 	}
+
+	// Capability re-enable registry (P3.6): every gated feature self-evaluates
+	// here so a server upgrade flips it on without a code change. The
+	// build-side decisions (withVectorStoredSource, ensureSearchIndexes)
+	// consult the same gates; probe-based results above stay dominant for
+	// what the serving indexes were actually built with.
+	result.capabilityGates = evaluateCapabilityGates({
+		versionArray,
+		env: process.env,
+	})
+	logDisabledCapabilityGates({ versionArray, env: process.env })
 
 	log.info(`detected capabilities: ${JSON.stringify(result)}`)
 	return result

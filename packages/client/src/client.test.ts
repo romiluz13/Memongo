@@ -142,6 +142,89 @@ describe("MemongoClient scope forwarding (P1.3)", () => {
 		>
 	}
 
+	it("posts a batch to /v1/write-events with per-item idempotency keys (P3.9)", async () => {
+		const calls: Array<{ url: string; init: RequestInit }> = []
+		stubJsonFetch(calls, {
+			ok: true,
+			receipts: [
+				{ ok: true, eventId: "evt-1", chunkCreated: true },
+				{ ok: true, eventId: "evt-2", chunkCreated: false, replayed: true },
+			],
+		})
+
+		const client = new MemongoClient({ baseUrl: "http://127.0.0.1:3100" })
+		const response = await client.writeEvents({
+			agentId: "codex",
+			events: [
+				{ role: "user", body: "first", sessionId: "s-1" },
+				{ role: "assistant", body: "second", customId: "key-explicit" },
+			],
+		})
+
+		expect(calls).toHaveLength(1)
+		expect(calls[0].url).toBe("http://127.0.0.1:3100/v1/write-events")
+		const body = lastBody(calls)
+		expect(body.agentId).toBe("codex")
+		const events = body.events as Array<Record<string, unknown>>
+		expect(events).toHaveLength(2)
+		expect(events[0].role).toBe("user")
+		expect(events[0].sessionId).toBe("s-1")
+		// A UUIDv4 key is generated for items without customId.
+		expect(String(events[0].customId)).toMatch(
+			/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+		)
+		// An explicit customId is preserved verbatim.
+		expect(events[1].customId).toBe("key-explicit")
+		expect(response).toEqual({
+			ok: true,
+			receipts: [
+				{ ok: true, eventId: "evt-1", chunkCreated: true },
+				{ ok: true, eventId: "evt-2", chunkCreated: false, replayed: true },
+			],
+		})
+	})
+
+	it("keeps per-item keys stable across batch retries", async () => {
+		const calls: Array<{ url: string; init: RequestInit }> = []
+		let i = 0
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (url: string, init?: RequestInit) => {
+				calls.push({ url: String(url), init: init ?? {} })
+				i += 1
+				if (i < 2) {
+					return new Response("upstream busy", { status: 503 })
+				}
+				return new Response(
+					JSON.stringify({
+						ok: true,
+						receipts: [{ ok: true, eventId: "evt-1", chunkCreated: true }],
+					}),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				)
+			}),
+		)
+
+		const client = new MemongoClient({
+			baseUrl: "http://127.0.0.1:3100",
+			maxRetries: 1,
+		})
+		await client.writeEvents({
+			events: [{ role: "user", body: "retry me" }],
+		})
+
+		expect(calls).toHaveLength(2)
+		const keys = calls.map(
+			({ init }) =>
+				(
+					JSON.parse(String(init.body)) as {
+						events: Array<{ customId: string }>
+					}
+				).events[0].customId,
+		)
+		expect(new Set(keys).size).toBe(1)
+	})
+
 	it("forwards scope/scopeRef/entityContext on add", async () => {
 		const calls: Array<{ url: string; init: RequestInit }> = []
 		stubJsonFetch(calls, { ok: true, eventId: "e1", chunkCreated: false })

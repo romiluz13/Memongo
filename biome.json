@@ -23,7 +23,9 @@
 			"!coverage",
 			"!**/coverage",
 			"!docker",
-			"!**/docker"
+			"!**/docker",
+			"!droid-wiki",
+			"!**/droid-wiki"
 		]
 	},
 	"formatter": {

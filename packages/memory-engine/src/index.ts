@@ -104,6 +104,9 @@ export {
 // v2 modules
 export {
 	writeEvent,
+	writeEventsBatch,
+	projectEventChunksBatch,
+	clearEventExtractionJobPendingBatch,
 	getEventsByTimeRange,
 	getEventsBySession,
 	getUnprojectedEvents,
@@ -114,6 +117,7 @@ export {
 	getSessionEventsWithBound,
 	renderEventChunkText,
 	type CanonicalEvent,
+	type EventBatchItemResult,
 } from "./mongodb-events.js"
 export {
 	buildMemoryEvidenceDocuments,
@@ -134,6 +138,7 @@ export {
 	deleteEntityConservative,
 	extractAndUpsertEntities,
 	searchEntitiesAutocomplete,
+	findRelationByLocatorId,
 	type Entity,
 	type EntityType,
 	type Relation,
@@ -169,9 +174,11 @@ export {
 } from "./mongodb-recall-traces.js"
 export {
 	createMemoryJob,
+	createMemoryJobsBatch,
 	updateMemoryJob,
 	listMemoryJobs,
 	getMemoryJob,
+	type MemoryJobBatchItemResult,
 } from "./mongodb-memory-jobs.js"
 export type { MemoryStats } from "./mongodb-analytics.js"
 export {
@@ -197,10 +204,13 @@ export {
 export { backfillEventsFromChunks } from "./mongodb-migration.js"
 export {
 	rerankResults,
+	resolveMemoryJobWorkerConcurrency,
 	MongoDBMemoryManager,
 	type RerankWeights,
 	type RelevanceExplainResult,
 	type V2Status,
+	type WriteConversationEventInput,
+	type WriteConversationEventReceipt,
 } from "./mongodb-manager.js"
 export {
 	AccessTracker,
@@ -230,10 +240,24 @@ export {
 	memoryJobsCollection,
 	sessionChunksCollection,
 	ensureEntityAutocompleteIndex,
+	ensureEpisodeAutocompleteIndex,
 } from "./mongodb-schema.js"
 // P2.2: exported so the bridge can type its capability surface with the real
 // engine type instead of re-declaring it.
 export type { DetectedCapabilities } from "./mongodb-schema.js"
+// P3.6: capability re-enable registry — the single surface where gated
+// MongoDB features declare their unblock condition.
+export {
+	applyCapabilityProbeResult,
+	CAPABILITY_GATES,
+	evaluateCapabilityGates,
+	getCapabilityGate,
+	isCapabilityEnabled,
+	recordCapabilityProbe,
+	serverVersionAtLeast,
+	type CapabilityGate,
+	type CapabilityGateContext,
+} from "./mongodb-capability-registry.js"
 export {
 	resolveSessionEvidenceMode,
 	buildSessionEvidenceDocuments,

@@ -49,6 +49,7 @@ import type {
 	MemongoTraceChainResponse,
 	MemongoSelfEditInput,
 	MemongoSelfEditResponse,
+	MemongoWriteEventsResponse,
 } from "./types.js"
 
 export type MemongoClientOptions = {
@@ -877,6 +878,46 @@ export class MemongoClient {
 			},
 			{ "Idempotency-Key": idempotencyKey },
 		)
+	}
+
+	/**
+	 * P3.9: bulk variant of writeEvent — one POST writes the whole batch
+	 * through the server's amortized insertMany/bulkWrite path and returns
+	 * per-item receipts mirroring the single-write receipt shape. Each item
+	 * gets its own idempotency key (customId, or a generated UUIDv4 stable
+	 * across this call's retries); a failed item never fails the batch.
+	 */
+	async writeEvents(input: {
+		events: Array<{
+			role: "user" | "assistant" | "system" | "tool"
+			body: string
+			sessionId?: string
+			timestamp?: string
+			validAt?: string
+			invalidAt?: string
+			metadata?: Record<string, unknown>
+			scope?: string
+			scopeRef?: string
+			/** Per-item idempotency key; a UUIDv4 is generated when omitted. */
+			customId?: string
+		}>
+		agentId?: string
+	}): Promise<MemongoWriteEventsResponse> {
+		return apiPost(this._opts, "/v1/write-events", {
+			events: input.events.map((event) => ({
+				role: event.role,
+				body: event.body,
+				sessionId: event.sessionId,
+				timestamp: event.timestamp,
+				validAt: event.validAt,
+				invalidAt: event.invalidAt,
+				metadata: event.metadata,
+				scope: event.scope,
+				scopeRef: event.scopeRef,
+				customId: event.customId ?? generateIdempotencyKey(),
+			})),
+			agentId: input.agentId,
+		})
 	}
 
 	async writeStructured(input: {
