@@ -39,6 +39,10 @@ import type { MemoryScope } from "@memongo/lib"
 
 const log = createSubsystemLogger("memory:mongodb")
 
+function elapsedMsSince(startedAt: Date): number {
+	return Math.max(0, Date.now() - startedAt.getTime())
+}
+
 /**
  * Memory-job/worker seam extracted from `mongodb-manager.ts` (P4.3): worker
  * tuning constants and the `ManagerJobsOps` collaborator the facade
@@ -404,7 +408,7 @@ export class MongoDBManagerJobsOps {
 					leaseOwner: job.leaseOwner,
 					leaseToken: job.leaseToken,
 					completedAt: new Date(),
-					durationMs: Date.now() - startedAt.getTime(),
+					durationMs: elapsedMsSince(startedAt),
 					inputCount: 1,
 					outputCount: result.structuredCreated + result.proceduresCreated,
 					metadata: {
@@ -434,7 +438,7 @@ export class MongoDBManagerJobsOps {
 					leaseOwner: job.leaseOwner,
 					leaseToken: job.leaseToken,
 					completedAt: new Date(),
-					durationMs: Date.now() - startedAt.getTime(),
+					durationMs: elapsedMsSince(startedAt),
 					error: err instanceof Error ? err.message : String(err),
 					metadata: { eventId },
 					attempts: job.attempts,

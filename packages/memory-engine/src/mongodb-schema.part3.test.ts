@@ -370,7 +370,10 @@ describe("detectCapabilities", () => {
 		// returnStoredSource: true against an index that stores nothing errors.
 		// Since P3.3 the probe result is additionally gated by the registry
 		// (MongoDB 8.3.7+ or MEMONGO_VECTOR_STORED_SOURCE=1).
-		const dbWith = (definition: Document | undefined) =>
+		const dbWith = (
+			definition: Document | undefined,
+			storedSourceProbeError?: Error,
+		) =>
 			({
 				admin: vi.fn(() => ({
 					command: vi.fn(async () => ({ versionArray: [8, 3, 7, 0] })),
@@ -387,12 +390,37 @@ describe("detectCapabilities", () => {
 							},
 						]),
 					})),
+					aggregate: vi.fn((pipeline: Document[]) => ({
+						toArray: vi.fn(async () => {
+							if (pipeline[0]?.$listSearchIndexes) {
+								return [
+									{
+										name: "test_chunks_vector",
+										type: "vectorSearch",
+										status: "READY",
+										queryable: true,
+										latestDefinition: definition,
+									},
+								]
+							}
+							if (storedSourceProbeError) {
+								throw storedSourceProbeError
+							}
+							return []
+						}),
+					})),
 				})),
 			}) as unknown as Db
 
 		const withStored = await detectCapabilities(
 			dbWith({
-				fields: [],
+				fields: [
+					{
+						type: "autoEmbed",
+						path: "text",
+						model: "voyage-4-large",
+					},
+				],
 				storedSource: { include: ["text"] },
 			}),
 			"test_chunks",
@@ -412,6 +440,24 @@ describe("detectCapabilities", () => {
 			"test_chunks",
 		)
 		expect(withFalse.storedSource).toBe(false)
+
+		const rejectedAtQueryTime = await detectCapabilities(
+			dbWith(
+				{
+					fields: [
+						{
+							type: "autoEmbed",
+							path: "text",
+							model: "voyage-4-large",
+						},
+					],
+					storedSource: { include: ["text"] },
+				},
+				new Error("storedSource is not configured for this index"),
+			),
+			"test_chunks",
+		)
+		expect(rejectedAtQueryTime.storedSource).toBe(false)
 	})
 
 	it("keeps storedSource off when the registry gate is closed, whatever the probe index carries (P3.3)", async () => {

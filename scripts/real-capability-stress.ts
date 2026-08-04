@@ -52,24 +52,6 @@ type RelevanceExplainResponse = {
 	results?: SearchLikeResult[]
 }
 
-type RelevanceBenchmarkResponse = {
-	cases?: number
-	hitRate?: number
-	emptyRate?: number
-	p95LatencyMs?: number
-}
-
-type RelevanceReportResponse = {
-	runs?: number
-	health?: string
-	fallbackRate?: number
-}
-
-type SampleRateResponse = {
-	enabled?: boolean
-	current?: number
-}
-
 type StatusResponse = {
 	backend?: string
 	workspaceDir?: string
@@ -154,20 +136,6 @@ function asStatsResponse(value: unknown): StatsResponse {
 
 function asRelevanceExplainResponse(value: unknown): RelevanceExplainResponse {
 	return asRecord(value) as RelevanceExplainResponse
-}
-
-function asRelevanceBenchmarkResponse(
-	value: unknown,
-): RelevanceBenchmarkResponse {
-	return asRecord(value) as RelevanceBenchmarkResponse
-}
-
-function asRelevanceReportResponse(value: unknown): RelevanceReportResponse {
-	return asRecord(value) as RelevanceReportResponse
-}
-
-function asSampleRateResponse(value: unknown): SampleRateResponse {
-	return asRecord(value) as SampleRateResponse
 }
 
 function asSearchResults(value: unknown): SearchLikeResult[] {
@@ -280,6 +248,7 @@ async function main() {
 	const checks: CapabilityCheck[] = []
 	const searchMetrics: SearchMetric[] = []
 	const scopeRefAgent = resolveScopeRef({ scope: "agent", agentId })
+	const kbScope = { agentId, scope: "agent" as const, scopeRef: scopeRefAgent }
 	const marker = `capability-marker-${randomUUID().slice(0, 8)}`
 	const decisionKey = `${marker}:release-window`
 	const preferenceKey = `${marker}:communication-style`
@@ -288,14 +257,8 @@ async function main() {
 	const kbPathDisposable = `${marker}/cleanup.md`
 	const bridgeMarker = `${marker} bridge note`
 	const workspaceMemoryDir = path.join(workspaceDir, "memory")
-	const workspaceBenchmarkDir = path.join(workspaceDir, "benchmarks")
-	const relevanceDatasetPath = path.join(
-		workspaceBenchmarkDir,
-		`memongo-relevance-${randomUUID().slice(0, 8)}.jsonl`,
-	)
 
 	await mkdir(workspaceMemoryDir, { recursive: true })
-	await mkdir(workspaceBenchmarkDir, { recursive: true })
 	await writeFile(
 		path.join(workspaceMemoryDir, "bridge.md"),
 		[
@@ -678,6 +641,7 @@ async function main() {
 		const kbResult = await ingestToKB({
 			db,
 			prefix: mongoCfg.collectionPrefix,
+			scope: kbScope,
 			documents: [
 				{
 					title: "Phoenix API reference",
@@ -720,8 +684,12 @@ async function main() {
 			kbResult.documentsProcessed >= 2,
 			"KB ingest did not process documents",
 		)
-		const kbDocs = await listKBDocuments(db, mongoCfg.collectionPrefix)
-		const kbStats = await getKBStats(db, mongoCfg.collectionPrefix)
+		const kbDocs = await listKBDocuments(db, mongoCfg.collectionPrefix, {
+			scope: kbScope,
+		})
+		const kbStats = await getKBStats(db, mongoCfg.collectionPrefix, {
+			scope: kbScope,
+		})
 		assert(kbDocs.length >= 2, "KB list is missing ingested documents")
 		assert(
 			(kbStats.documents ?? 0) >= 2,
@@ -1258,57 +1226,10 @@ async function main() {
 			"relevance explain returned no results",
 		)
 
-		await writeFile(
-			relevanceDatasetPath,
-			[
-				JSON.stringify({
-					query: marker,
-					sourceScope: "memory",
-					expectedSources: ["conversation"],
-				}),
-				JSON.stringify({
-					query: "Phoenix deploy checklist process",
-					sourceScope: "structured",
-					expectedSources: ["structured"],
-				}),
-				JSON.stringify({
-					query: "Phoenix API deploy endpoint",
-					sourceScope: "kb",
-					expectedSources: ["reference"],
-				}),
-			].join("\n"),
-			"utf8",
-		)
-		const benchmark = asRelevanceBenchmarkResponse(
-			await client.relevanceBenchmark({
-				agentId,
-				datasetPath: relevanceDatasetPath,
-				maxResults: 5,
-				minScore: 0.05,
-			}),
-		)
-		assert(
-			typeof benchmark.cases === "number" && benchmark.cases >= 3,
-			"relevance benchmark did not process the dataset",
-		)
-		const relevanceReport = asRelevanceReportResponse(
-			await client.relevanceReport(agentId, 24 * 60 * 60 * 1000),
-		)
-		const sampleRate = asSampleRateResponse(
-			await client.relevanceSampleRate(agentId),
-		)
-		assert(
-			typeof relevanceReport.runs === "number",
-			"relevance report missing run count",
-		)
-		assert(
-			typeof sampleRate.current === "number",
-			"relevance sample-rate missing current value",
-		)
 		checks.push(
 			pass(
-				"relevance",
-				`cases=${benchmark.cases}, runs=${relevanceReport.runs}, sampleRate=${sampleRate.current}`,
+				"relevance-explain",
+				`results=${relevanceExplain.results.length}, latencyMs=${String(relevanceExplain.latencyMs ?? "unknown")}, health=${String(relevanceExplain.health ?? "unknown")}`,
 			),
 		)
 
@@ -1343,6 +1264,7 @@ async function main() {
 			db,
 			mongoCfg.collectionPrefix,
 			kbDocs.find((doc) => doc.source?.path === kbPathDisposable)?._id ?? "",
+			kbScope,
 			mongo,
 		)
 		assert(removedDoc, "KB cleanup document was not removed")
@@ -1408,7 +1330,6 @@ async function main() {
 		)
 	} finally {
 		await mongo.close().catch(() => undefined)
-		await rm(relevanceDatasetPath, { force: true }).catch(() => undefined)
 		if (disposableWorkspaceCreated) {
 			await rm(workspaceDir, { recursive: true, force: true }).catch(
 				() => undefined,

@@ -790,12 +790,11 @@ export class MongoDBManagerBenchmarkOps {
 											params.dataset.datasetKind ?? "generic",
 										benchmarkScenarioId: scenario.scenarioId,
 									},
-									writeTurn: async (turn) => {
-										await scenarioManager.writeConversationEvent(
-											turn,
+									writeTurns: async (turns) =>
+										scenarioManager.writeConversationEventsBatch(
+											turns,
 											params.runContext,
-										)
-									},
+										),
 								})
 					ingest.conversationsIngested += scenarioIngest.conversationsIngested
 					ingest.turnsIngested += scenarioIngest.turnsIngested

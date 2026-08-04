@@ -217,13 +217,14 @@ describe("P3.9 extraction worker concurrency + session-batched LLM", () => {
 		vi.clearAllMocks()
 	})
 
-	function makeExtractionJob(eventId: string) {
+	function makeExtractionJob(eventId: string, startedAt?: Date) {
 		return {
 			jobId: `extraction-${eventId}`,
 			jobType: "extraction" as const,
 			agentId: "agent-1",
 			status: "running" as const,
 			createdAt: new Date("2026-04-09T12:00:00.000Z"),
+			...(startedAt ? { startedAt } : {}),
 			payload: {
 				eventId,
 				scope: "agent" as const,
@@ -353,6 +354,32 @@ describe("P3.9 extraction worker concurrency + session-batched LLM", () => {
 
 		expect(claimMemoryJob).toHaveBeenCalledTimes(4) // 3 claims + empty poll
 		expect(completeClaimedMemoryJob).toHaveBeenCalledTimes(3)
+	})
+
+	it("clamps job duration when the server claim timestamp is ahead", async () => {
+		const docs = [makeEventDoc("evt-clock-skew")]
+		const {
+			claimMemoryJob,
+			completeClaimedMemoryJob,
+			promoteDerivedMemoryFromEvent,
+		} = await mockJobRunBase(docs)
+		mocked(claimMemoryJob)
+			.mockResolvedValueOnce(
+				makeExtractionJob("evt-clock-skew", new Date(Date.now() + 60_000)),
+			)
+			.mockResolvedValue(null)
+		mocked(promoteDerivedMemoryFromEvent).mockResolvedValue({
+			structuredCreated: 0,
+			proceduresCreated: 0,
+			skipped: false,
+		})
+
+		const manager = makeDrainManager()
+		await drainLifecycle.drainMemoryJobQueue.call(manager)
+
+		expect(completeClaimedMemoryJob).toHaveBeenCalledWith(
+			expect.objectContaining({ durationMs: 0 }),
+		)
 	})
 
 	it("batches LLM fact extraction per session across the round", async () => {

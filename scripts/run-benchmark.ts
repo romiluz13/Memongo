@@ -93,15 +93,14 @@ async function runRecallRegressionSuite(): Promise<{
 	status: "passed" | "failed"
 	evidence: string
 }> {
-	const engineDir = path.join(REPO_ROOT, "packages", "memory-engine")
 	const proc = Bun.spawnSync(
 		[
 			"bunx",
 			"vitest",
 			"run",
-			"src/mongodb-conversation-recall-benchmark.test.ts",
+			"scripts/benchmark/mongodb-conversation-recall-benchmark.test.ts",
 		],
-		{ cwd: engineDir, stdout: "pipe", stderr: "pipe" },
+		{ cwd: REPO_ROOT, stdout: "pipe", stderr: "pipe" },
 	)
 	const output = `${proc.stdout?.toString() ?? ""}${proc.stderr?.toString() ?? ""}`
 	const testsLine =
@@ -114,11 +113,11 @@ async function runRecallRegressionSuite(): Promise<{
 	return proc.exitCode === 0
 		? {
 				status: "passed",
-				evidence: `vitest run mongodb-conversation-recall-benchmark.test.ts: ${testsLine}`,
+				evidence: `vitest run scripts/benchmark/mongodb-conversation-recall-benchmark.test.ts: ${testsLine}`,
 			}
 		: {
 				status: "failed",
-				evidence: `vitest run mongodb-conversation-recall-benchmark.test.ts exited ${proc.exitCode}: ${testsLine}`,
+				evidence: `vitest run scripts/benchmark/mongodb-conversation-recall-benchmark.test.ts exited ${proc.exitCode}: ${testsLine}`,
 			}
 }
 

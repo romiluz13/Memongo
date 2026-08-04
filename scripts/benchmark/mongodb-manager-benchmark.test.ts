@@ -3,7 +3,10 @@ import { describe, it, expect, vi, beforeEach } from "vitest"
 import { MongoDBMemoryManager } from "../../packages/memory-engine/src/mongodb-manager.js"
 import type { MongoDBManagerHost } from "../../packages/memory-engine/src/mongodb-manager-host.js"
 import { MongoDBManagerBenchmarkOps } from "./mongodb-manager-benchmark.js"
-import { ingestBenchmarkDataset } from "./mongodb-benchmark-harness.js"
+import {
+	ingestBenchmarkConversations,
+	ingestBenchmarkDataset,
+} from "./mongodb-benchmark-harness.js"
 import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
@@ -424,6 +427,90 @@ describe("benchmarkIngest", () => {
 			await rm(workspaceDir, { recursive: true, force: true })
 			await rm(outsideDir, { recursive: true, force: true })
 		}
+	})
+})
+
+describe("scenario benchmark ingestion", () => {
+	beforeEach(() => {
+		vi.clearAllMocks()
+	})
+
+	it("routes shipped-profile scenario turns through the canonical batch writer", async () => {
+		mocked(ingestBenchmarkConversations).mockResolvedValue({
+			datasetPath: "/workspace/benchmarks/dataset.jsonl",
+			datasetName: "dataset.jsonl",
+			conversationsIngested: 1,
+			turnsIngested: 2,
+			skippedConversations: 0,
+			failedLines: 0,
+			failedTurns: 0,
+			startedAt: new Date("2026-04-09T00:00:00.000Z"),
+			completedAt: new Date("2026-04-09T00:00:01.000Z"),
+		})
+		const runContext = { accounting: {} } as never
+		const writeConversationEventsBatch = vi
+			.fn()
+			.mockResolvedValue([{ ok: true, eventId: "event-1", chunkCreated: true }])
+		const scenarioManager = {
+			agentId: "benchmark-scenario-agent",
+			writeConversationEventsBatch,
+			stopMemoryJobWorker: vi.fn(async () => {
+				throw new Error("stop after ingestion")
+			}),
+		} as unknown as MongoDBMemoryManager
+		const manager = {
+			agentId: "benchmark-root-agent",
+			createBenchmarkScenarioManager: vi.fn(() => scenarioManager),
+			settleBenchmarkScenarioManager: vi.fn(async () => {
+				throw new Error("stop after ingestion")
+			}),
+		} as unknown as MongoDBMemoryManager
+
+		await expect(
+			benchmarkOps(manager).runScenarioBenchmarkDataset({
+				datasetPath: "/workspace/benchmarks/dataset.jsonl",
+				dataset: {
+					name: "dataset.jsonl",
+					datasetKind: "longmemeval",
+					scenarios: [
+						{
+							scenarioId: "scenario-1",
+							conversations: [
+								{
+									sessionId: "session-1",
+									turns: [
+										{ role: "user", body: "Remember this" },
+										{ role: "assistant", body: "Remembered" },
+									],
+								},
+							],
+							evaluations: [],
+						},
+					],
+				} as never,
+				datasetVersion: "dataset-version",
+				maxResults: 5,
+				minScore: 0,
+				executionProfile: "shipped",
+				runContext,
+			}),
+		).rejects.toThrow("stop after ingestion")
+
+		const harnessParams = mocked(ingestBenchmarkConversations).mock
+			.calls[0]?.[0]
+		expect(harnessParams?.writeTurns).toBeTypeOf("function")
+		expect(harnessParams?.writeTurn).toBeUndefined()
+		const turns = [
+			{
+				role: "user" as const,
+				body: "Remember this",
+				sessionId: "session-1",
+				scope: "agent" as const,
+				idempotencyKey: "key-1",
+			},
+		]
+		await harnessParams?.writeTurns?.(turns)
+		expect(writeConversationEventsBatch).toHaveBeenCalledWith(turns, runContext)
 	})
 })
 

@@ -1,0 +1,274 @@
+{
+	"ok": true,
+	"baseUrl": "http://127.0.0.1:3857",
+	"agentId": "b16-capability-20260804-1717",
+	"sessionId": "b16-capability-session-20260804-1717",
+	"workspaceDir": "/tmp/memongo-b16-workspace-20260804",
+	"retrievalLanes": [
+		{
+			"lane": "active-critical",
+			"count": 4,
+			"hasData": true
+		},
+		{
+			"lane": "hybrid",
+			"count": 10,
+			"hasData": true
+		},
+		{
+			"lane": "raw-window",
+			"count": 10,
+			"hasData": true
+		},
+		{
+			"lane": "structured",
+			"count": 6,
+			"hasData": true
+		},
+		{
+			"lane": "graph",
+			"count": 10,
+			"hasData": true
+		}
+	],
+	"searchMetrics": [
+		{
+			"name": "conversation",
+			"evidenceCoverage": "direct",
+			"topConfidence": "high",
+			"staleCount": 0,
+			"contradictionCount": 0,
+			"latencyMs": 1415,
+			"pathsExecuted": ["raw-window", "hybrid"]
+		},
+		{
+			"name": "structured",
+			"evidenceCoverage": "direct",
+			"topConfidence": "high",
+			"staleCount": 0,
+			"contradictionCount": 0,
+			"latencyMs": 1560,
+			"pathsExecuted": ["active-critical", "structured"]
+		},
+		{
+			"name": "procedural",
+			"evidenceCoverage": "direct",
+			"topConfidence": "high",
+			"staleCount": 0,
+			"contradictionCount": 0,
+			"latencyMs": 1893,
+			"pathsExecuted": ["procedural"]
+		},
+		{
+			"name": "graph",
+			"evidenceCoverage": "direct",
+			"topConfidence": "high",
+			"staleCount": 0,
+			"contradictionCount": 0,
+			"latencyMs": 1626,
+			"pathsExecuted": ["graph"]
+		},
+		{
+			"name": "episodic",
+			"evidenceCoverage": "direct",
+			"topConfidence": "high",
+			"staleCount": 0,
+			"contradictionCount": 0,
+			"latencyMs": 632,
+			"pathsExecuted": ["episodic"]
+		},
+		{
+			"name": "kb-detailed",
+			"evidenceCoverage": "direct",
+			"topConfidence": "high",
+			"staleCount": 0,
+			"contradictionCount": 0,
+			"latencyMs": 1070,
+			"pathsExecuted": ["kb"]
+		}
+	],
+	"dormantCapabilities": [
+		{
+			"name": "batch-voyage",
+			"classification": "removed",
+			"reason": "The Voyage batch embedding cluster was deleted in P4.1 as dead code (zero non-test importers); the supported Memongo contract is atlas-local-preview with embeddingMode=automated."
+		}
+	],
+	"checks": [
+		{
+			"name": "health",
+			"ok": true,
+			"details": "service=memongo-api"
+		},
+		{
+			"name": "openapi",
+			"ok": true,
+			"details": "core memory routes present"
+		},
+		{
+			"name": "status",
+			"ok": true,
+			"details": "backend=mongodb, workspace=/tmp/memongo-b16-workspace-20260804"
+		},
+		{
+			"name": "sync-read-bridge",
+			"ok": true,
+			"details": "path=memory/bridge.md"
+		},
+		{
+			"name": "conversation-write",
+			"ok": true,
+			"details": "eventId=2cd71d12-fdcd-4024-9bb0-fb231c3584e1, session=b16-capability-session-20260804-1717"
+		},
+		{
+			"name": "structured-write",
+			"ok": true,
+			"details": "id=6a71f66d2b09f0b1ece175e3, critical decision stored"
+		},
+		{
+			"name": "procedure-write",
+			"ok": true,
+			"details": "id=capability-marker-6cf1bf49:deploy"
+		},
+		{
+			"name": "procedure-evolution",
+			"ok": true,
+			"details": "outcome and version evolution recorded"
+		},
+		{
+			"name": "active-slate",
+			"ok": true,
+			"details": "items=6, kinds=active-critical,active-critical,active-critical,active-critical,procedure,procedure"
+		},
+		{
+			"name": "discovery-what-changed",
+			"ok": true,
+			"details": "sections=2, evidence=6"
+		},
+		{
+			"name": "discovery-contradictions",
+			"ok": true,
+			"details": "sections=2, evidence=4"
+		},
+		{
+			"name": "graph-extract-expand",
+			"ok": true,
+			"details": "entities=5, relations=10"
+		},
+		{
+			"name": "episode-materialize",
+			"ok": true,
+			"details": "episode=c0fc1643-8d6a-4c84-9e4d-3cd2102d4498"
+		},
+		{
+			"name": "kb-ingest",
+			"ok": true,
+			"details": "documents=2, chunks=2"
+		},
+		{
+			"name": "conversation-search-read",
+			"ok": true,
+			"details": "paths=raw-window,hybrid"
+		},
+		{
+			"name": "structured-search-read",
+			"ok": true,
+			"details": "paths=active-critical,structured"
+		},
+		{
+			"name": "procedural-search-read",
+			"ok": true,
+			"details": "paths=procedural"
+		},
+		{
+			"name": "graph-search",
+			"ok": true,
+			"details": "paths=graph"
+		},
+		{
+			"name": "graph-read",
+			"ok": true,
+			"details": "locator=relation:0384ecb18b80b105-4048a70d9f78caea"
+		},
+		{
+			"name": "episodic-search",
+			"ok": true,
+			"details": "paths=episodic"
+		},
+		{
+			"name": "episodic-read",
+			"ok": true,
+			"details": "locator=episode:c0fc1643-8d6a-4c84-9e4d-3cd2102d4498"
+		},
+		{
+			"name": "kb-detailed-search",
+			"ok": true,
+			"details": "paths=kb"
+		},
+		{
+			"name": "kb-search-read",
+			"ok": true,
+			"details": "results=2, path=kb:capability-marker-6cf1bf49/phoenix-api.md"
+		},
+		{
+			"name": "profile-api-entities",
+			"ok": true,
+			"details": "API profile included entities"
+		},
+		{
+			"name": "profile-api-episodes",
+			"ok": true,
+			"details": "API profile included episodes"
+		},
+		{
+			"name": "profile",
+			"ok": true,
+			"details": "profile API covered both agent entities and session episodes"
+		},
+		{
+			"name": "detailed-status",
+			"ok": true,
+			"details": "detailed status exposed runtime diagnostics"
+		},
+		{
+			"name": "status-stats",
+			"ok": true,
+			"details": "chunks=28"
+		},
+		{
+			"name": "probes",
+			"ok": true,
+			"details": "embedding=true, vector=true"
+		},
+		{
+			"name": "query-cache",
+			"ok": true,
+			"details": "tier=exact, hitRate=0.33"
+		},
+		{
+			"name": "relevance-explain",
+			"ok": true,
+			"details": "results=5, latencyMs=2462, health=ok"
+		},
+		{
+			"name": "telemetry",
+			"ok": true,
+			"details": "p95=1557, ops=projection-run,search,rerank,profile-synthesis,cache-check,graph-expansion,entity-extraction,active-slate-hydration"
+		},
+		{
+			"name": "kb-remove",
+			"ok": true,
+			"details": "removed=capability-marker-6cf1bf49/cleanup.md"
+		},
+		{
+			"name": "lane-coverage",
+			"ok": true,
+			"details": "active-critical:4, hybrid:10, raw-window:10, structured:6, graph:10"
+		},
+		{
+			"name": "real-agent",
+			"ok": true,
+			"details": "skipped: MEMONGO_LLM_* env not set"
+		}
+	]
+}

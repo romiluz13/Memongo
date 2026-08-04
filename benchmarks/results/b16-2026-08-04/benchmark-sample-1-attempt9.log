@@ -1,0 +1,595 @@
+$ turbo run build --filter=@memongo/memory-bridge... --output-logs=errors-only && bun scripts/run-benchmark.ts --sample "1"
+• turbo 2.9.5
+
+   • Packages in scope: @memongo/client, @memongo/lib, @memongo/memory-bridge, @memongo/memory-engine, @memongo/tools
+   • Running build in 5 packages
+   • Remote caching disabled
+
+
+ Tasks:    5 successful, 5 total
+Cached:    3 cached, 5 total
+  Time:    5.889s
+
+
+profile     : shipped
+dataset     : benchmarks/data/longmemeval_sample_1.json
+scope       : sample of 1
+contract    : none — SAMPLE RUNS ARE NOT PUBLISHABLE
+
+recall gate : passed — vitest run scripts/benchmark/mongodb-conversation-recall-benchmark.test.ts: Tests  6 passed (6)
+
+00:15:31.882 [memory:mongodb] info: connecting to MongoDB: mongodb+srv://ro***:***@memongo.suw50.mongodb.net/?appName=memongo (db=memongo_b16_20260804)
+00:15:32.429 [memory:mongodb:schema] info: applied schema validation to memongo_bench_b16_20260804_chunks
+00:15:32.445 [memory:mongodb:schema] info: applied schema validation to memongo_bench_b16_20260804_knowledge_base
+00:15:32.465 [memory:mongodb:schema] info: applied schema validation to memongo_bench_b16_20260804_kb_chunks
+00:15:32.484 [memory:mongodb:schema] info: applied schema validation to memongo_bench_b16_20260804_structured_mem
+00:15:32.501 [memory:mongodb:schema] info: applied schema validation to memongo_bench_b16_20260804_structured_mem_revisions
+00:15:32.518 [memory:mongodb:schema] info: applied schema validation to memongo_bench_b16_20260804_procedures
+00:15:32.536 [memory:mongodb:schema] info: applied schema validation to memongo_bench_b16_20260804_procedure_revisions
+00:15:32.554 [memory:mongodb:schema] info: applied schema validation to memongo_bench_b16_20260804_relevance_runs
+00:15:32.571 [memory:mongodb:schema] info: applied schema validation to memongo_bench_b16_20260804_relevance_artifacts
+00:15:32.589 [memory:mongodb:schema] info: applied schema validation to memongo_bench_b16_20260804_relevance_regressions
+00:15:32.605 [memory:mongodb:schema] info: applied schema validation to memongo_bench_b16_20260804_events
+00:15:32.621 [memory:mongodb:schema] info: applied schema validation to memongo_bench_b16_20260804_entities
+00:15:32.638 [memory:mongodb:schema] info: applied schema validation to memongo_bench_b16_20260804_relations
+00:15:32.656 [memory:mongodb:schema] info: applied schema validation to memongo_bench_b16_20260804_entity_links
+00:15:32.679 [memory:mongodb:schema] info: applied schema validation to memongo_bench_b16_20260804_episodes
+00:15:32.695 [memory:mongodb:schema] info: applied schema validation to memongo_bench_b16_20260804_ingest_runs
+00:15:32.712 [memory:mongodb:schema] info: applied schema validation to memongo_bench_b16_20260804_projection_runs
+00:15:32.726 [memory:mongodb:schema] info: applied schema validation to memongo_bench_b16_20260804_query_cache
+00:15:32.740 [memory:mongodb:schema] info: applied schema validation to memongo_bench_b16_20260804_memory_mutations
+00:15:32.755 [memory:mongodb:schema] info: applied schema validation to memongo_bench_b16_20260804_recall_traces
+00:15:32.773 [memory:mongodb:schema] info: applied schema validation to memongo_bench_b16_20260804_memory_jobs
+00:15:32.788 [memory:mongodb:schema] info: applied schema validation to memongo_bench_b16_20260804_memory_quarantine
+00:15:32.802 [memory:mongodb:schema] info: applied schema validation to memongo_bench_b16_20260804_files
+00:15:34.585 [memory:mongodb:schema] info: ensured 37 standard indexes
+00:15:35.279 [memory:mongodb:schema] warn: storedSource operational probe failed for memongo_bench_b16_20260804_chunks_vector; disabling returnStoredSource: Executor error during aggregate command on namespace: memongo_b16_20260804.memongo_bench_b16_20260804_chunks :: caused by :: storedSource is not configured for this index.
+00:15:35.280 [memory:mongodb:capabilities] info: capability rerank-stage disabled: blocked on Atlas Search Preview; Atlas-managed deployments only; fix-plan-2026-08-03 P3.6 — adopt when $rerank reaches GA
+00:15:35.280 [memory:mongodb:capabilities] info: capability lexical-prefilters disabled: blocked on Atlas Search Preview; fix-plan-2026-08-03 P3.6 — adopt when lexical prefilters reach GA
+00:15:35.280 [memory:mongodb:capabilities] info: capability flat-indexes disabled: requires MongoDB >= 8.3.7; fix-plan-2026-08-03 P3.6 — drop the env opt-in when flat indexingMethod is GA
+00:15:35.280 [memory:mongodb:schema] info: detected capabilities: {"vectorSearch":true,"textSearch":true,"scoreFusion":true,"rankFusion":true,"storedSource":false,"vectorIndexMethod":false,"capabilityGates":{"vector-stored-source":true,"autoembed-quantization":true,"rerank-stage":false,"lexical-prefilters":false,"flat-indexes":false}}
+00:15:35.280 [memory:mongodb] info: capabilities: {"vectorSearch":true,"textSearch":true,"scoreFusion":true,"rankFusion":true,"storedSource":false,"vectorIndexMethod":false,"capabilityGates":{"vector-stored-source":true,"autoembed-quantization":true,"rerank-stage":false,"lexical-prefilters":false,"flat-indexes":false}}
+00:15:41.355 [memory:mongodb:schema] warn: storedSource operational probe failed for memongo_bench_b16_20260804_chunks_vector; disabling returnStoredSource: Executor error during aggregate command on namespace: memongo_b16_20260804.memongo_bench_b16_20260804_chunks :: caused by :: storedSource is not configured for this index.
+00:15:41.355 [memory:mongodb:capabilities] info: capability rerank-stage disabled: blocked on Atlas Search Preview; Atlas-managed deployments only; fix-plan-2026-08-03 P3.6 — adopt when $rerank reaches GA
+00:15:41.355 [memory:mongodb:capabilities] info: capability lexical-prefilters disabled: blocked on Atlas Search Preview; fix-plan-2026-08-03 P3.6 — adopt when lexical prefilters reach GA
+00:15:41.355 [memory:mongodb:capabilities] info: capability flat-indexes disabled: requires MongoDB >= 8.3.7; fix-plan-2026-08-03 P3.6 — drop the env opt-in when flat indexingMethod is GA
+00:15:41.355 [memory:mongodb:schema] info: detected capabilities: {"vectorSearch":true,"textSearch":true,"scoreFusion":true,"rankFusion":true,"storedSource":false,"vectorIndexMethod":false,"capabilityGates":{"vector-stored-source":true,"autoembed-quantization":true,"rerank-stage":false,"lexical-prefilters":false,"flat-indexes":false}}
+00:15:41.382 [memory:mongodb:sync] info: sync: found 1 memory files on disk (reason=startup)
+00:15:41.388 [memory:mongodb:sync] info: sync: 1/1 memory files need re-indexing
+00:15:41.509 [memory:mongodb:sync] info: sync complete: memory=1 conversation=0 chunks=1 stale=0 failed=0
+00:15:41.539 [memory:mongodb] info: sync complete: processed=1+0 chunks=1+0 totals=12 files, 475 chunks
+00:15:41.556 [memory:mongodb] info: ready: profile=atlas-managed embedding=automated fusion=rankFusion caps={"vectorSearch":true,"textSearch":true,"scoreFusion":true,"rankFusion":true,"storedSource":false,"vectorIndexMethod":false,"capabilityGates":{"vector-stored-source":true,"autoembed-quantization":true,"rerank-stage":false,"lexical-prefilters":false,"flat-indexes":false}}
+00:15:41.618 [memory:mongodb] info: benchmark scenario start {"scenarioId":"e47becba","index":0,"totalScenarios":1,"conversations":53,"evaluations":1,"retrievalLane":"native"}
+00:15:41.884 [memory:mongodb:events] info: event batch written: 500 event(s)
+00:15:42.380 [memory:mongodb:graph] info: extracted 1 entities and 0 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:42.813 [memory:mongodb:graph] info: extracted 5 entities and 10 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:42.910 [memory:mongodb:graph] info: extracted 5 entities and 10 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:43.019 [memory:mongodb:graph] info: extracted 1 entities and 0 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:43.051 [memory:mongodb:graph] info: extracted 1 entities and 0 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:43.086 [memory:mongodb:graph] info: extracted 1 entities and 0 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:43.168 [memory:mongodb:graph] info: extracted 6 entities and 15 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:43.197 [memory:mongodb:graph] info: extracted 1 entities and 0 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:43.226 [memory:mongodb:graph] info: extracted 1 entities and 0 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:43.294 [memory:mongodb:graph] info: extracted 2 entities and 1 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:43.360 [memory:mongodb:graph] info: extracted 2 entities and 1 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:43.392 [memory:mongodb:graph] info: extracted 1 entities and 0 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:43.420 [memory:mongodb:graph] info: extracted 1 entities and 0 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:43.467 [memory:mongodb:graph] info: extracted 1 entities and 0 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:43.960 [memory:mongodb:graph] info: extracted 1 entities and 0 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:44.006 [memory:mongodb:graph] info: extracted 1 entities and 0 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:44.056 [memory:mongodb:graph] info: extracted 1 entities and 0 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:44.103 [memory:mongodb:graph] info: extracted 1 entities and 0 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:44.188 [memory:mongodb:graph] info: extracted 2 entities and 1 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:44.328 [memory:mongodb:graph] info: extracted 1 entities and 0 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:44.409 [memory:mongodb:graph] info: extracted 3 entities and 3 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:44.454 [memory:mongodb:graph] info: extracted 1 entities and 0 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:44.528 [memory:mongodb:graph] info: extracted 2 entities and 1 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:44.606 [memory:mongodb:graph] info: extracted 1 entities and 0 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:44.921 [memory:mongodb:graph] info: extracted 4 entities and 6 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:45.039 [memory:mongodb:graph] info: extracted 1 entities and 0 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:45.122 [memory:mongodb:graph] info: extracted 2 entities and 1 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:45.241 [memory:mongodb:graph] info: extracted 1 entities and 0 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:45.355 [memory:mongodb:graph] info: extracted 2 entities and 1 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:45.467 [memory:mongodb:graph] info: extracted 2 entities and 1 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:45.548 [memory:mongodb:graph] info: extracted 2 entities and 1 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:45.596 [memory:mongodb:graph] info: extracted 1 entities and 0 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:47.026 [memory:mongodb:graph] info: extracted 1 entities and 0 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:47.789 [memory:mongodb:graph] info: extracted 1 entities and 0 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:47.821 [memory:mongodb:graph] info: extracted 1 entities and 0 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:48.018 [memory:mongodb:graph] info: extracted 4 entities and 6 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:48.061 [memory:mongodb:graph] info: extracted 1 entities and 0 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:48.403 [memory:mongodb:graph] info: extracted 1 entities and 0 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:48.962 [memory:mongodb:graph] info: extracted 2 entities and 1 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:49.014 [memory:mongodb:graph] info: extracted 1 entities and 0 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:49.216 [memory:mongodb:graph] info: extracted 3 entities and 3 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:49.302 [memory:mongodb:graph] info: extracted 1 entities and 0 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:49.349 [memory:mongodb:graph] info: extracted 1 entities and 0 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:49.448 [memory:mongodb:graph] info: extracted 8 entities and 15 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:49.695 [memory:mongodb:graph] info: extracted 1 entities and 0 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:49.770 [memory:mongodb:graph] info: extracted 1 entities and 0 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:50.656 [memory:mongodb:graph] info: extracted 1 entities and 0 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:50.801 [memory:mongodb:graph] info: extracted 1 entities and 0 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:51.184 [memory:mongodb:graph] info: extracted 2 entities and 1 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:51.262 [memory:mongodb:graph] info: extracted 2 entities and 1 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:51.367 [memory:mongodb:graph] info: extracted 1 entities and 0 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:51.557 [memory:mongodb:graph] info: extracted 2 entities and 1 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:51.638 [memory:mongodb:graph] info: extracted 2 entities and 1 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:51.785 [memory:mongodb:graph] info: extracted 1 entities and 0 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:51.862 [memory:mongodb:graph] info: extracted 2 entities and 1 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:51.953 [memory:mongodb:graph] info: extracted 2 entities and 1 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:52.068 [memory:mongodb:graph] info: extracted 4 entities and 6 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:52.149 [memory:mongodb:graph] info: extracted 2 entities and 1 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:52.276 [memory:mongodb:graph] info: extracted 2 entities and 1 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:52.378 [memory:mongodb:graph] info: extracted 12 entities and 15 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:53.020 [memory:mongodb:events] info: event batch written: 50 event(s)
+00:15:53.055 [memory:mongodb:episodes] info: episode materialized: cf8e3da8-8a17-472d-ac81-7fb49a8213f4 type=thread events=2 agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:53.098 [memory:mongodb:events] info: marked 2 events consolidated into episode=cf8e3da8-8a17-472d-ac81-7fb49a8213f4
+00:15:53.098 [memory:mongodb:episodes] info: auto episode triggered: reason=session_gap episode=cf8e3da8-8a17-472d-ac81-7fb49a8213f4 events=2 agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:53.217 [memory:mongodb:procedures] info: procedure created: id=procedure-b5706d7a5779 revision=1
+00:15:53.233 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-c2c581cc5b39 revision=1
+00:15:53.273 [memory:mongodb:episodes] info: episode materialized: 7c5df839-a29f-464c-b33d-f4ffddaae750 type=thread events=12 agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:53.305 [memory:mongodb:events] info: marked 12 events consolidated into episode=7c5df839-a29f-464c-b33d-f4ffddaae750
+00:15:53.305 [memory:mongodb:episodes] info: auto episode triggered: reason=session_gap episode=7c5df839-a29f-464c-b33d-f4ffddaae750 events=12 agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:53.492 [memory:mongodb:episodes] info: episode materialized: 12f4a09e-0a61-4bfd-b060-389db61d6946 type=thread events=8 agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:53.538 [memory:mongodb:events] info: marked 8 events consolidated into episode=12f4a09e-0a61-4bfd-b060-389db61d6946
+00:15:53.538 [memory:mongodb:episodes] info: auto episode triggered: reason=session_gap episode=12f4a09e-0a61-4bfd-b060-389db61d6946 events=8 agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:53.581 [memory:mongodb:procedures] info: procedure created: id=procedure-d8d9630210ba revision=1
+00:15:53.582 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-24ccb3a6f2c9 revision=1
+00:15:53.670 [memory:mongodb:episodes] info: episode materialized: 7910959e-7a24-4388-96b0-c48277785753 type=thread events=8 agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:53.701 [memory:mongodb:events] info: marked 8 events consolidated into episode=7910959e-7a24-4388-96b0-c48277785753
+00:15:53.701 [memory:mongodb:episodes] info: auto episode triggered: reason=session_gap episode=7910959e-7a24-4388-96b0-c48277785753 events=8 agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:53.756 [memory:mongodb:graph] info: extracted 3 entities and 3 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:53.848 [memory:mongodb:episodes] info: episode materialized: d32a04f8-e5bb-46f0-ad57-07337b95525a type=thread events=4 agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:53.884 [memory:mongodb:events] info: marked 4 events consolidated into episode=d32a04f8-e5bb-46f0-ad57-07337b95525a
+00:15:53.884 [memory:mongodb:episodes] info: auto episode triggered: reason=session_gap episode=d32a04f8-e5bb-46f0-ad57-07337b95525a events=4 agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:53.903 [memory:mongodb:procedures] info: procedure created: id=procedure-b309813c5b25 revision=1
+00:15:54.044 [memory:mongodb:graph] info: extracted 1 entities and 0 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:54.054 [memory:mongodb:episodes] info: episode materialized: 4093d4a3-3fd8-4a95-bf42-70d94b3c4f1a type=thread events=12 agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:54.096 [memory:mongodb:events] info: marked 12 events consolidated into episode=4093d4a3-3fd8-4a95-bf42-70d94b3c4f1a
+00:15:54.096 [memory:mongodb:episodes] info: auto episode triggered: reason=session_gap episode=4093d4a3-3fd8-4a95-bf42-70d94b3c4f1a events=12 agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:54.258 [memory:mongodb:graph] info: extracted 4 entities and 6 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:54.302 [memory:mongodb:graph] info: extracted 1 entities and 0 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:54.356 [memory:mongodb:episodes] info: episode materialized: efce2b8d-5035-4307-89d5-424ab624957e type=thread events=12 agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:54.385 [memory:mongodb:events] info: marked 12 events consolidated into episode=efce2b8d-5035-4307-89d5-424ab624957e
+00:15:54.385 [memory:mongodb:episodes] info: auto episode triggered: reason=session_gap episode=efce2b8d-5035-4307-89d5-424ab624957e events=12 agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:54.432 [memory:mongodb:graph] info: extracted 2 entities and 1 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:54.442 [memory:mongodb] info: benchmark scenario ingested {"scenarioId":"e47becba","agentId":"benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a","conversationsIngested":53,"turnsIngested":550,"failedTurns":0}
+00:15:54.445 [memory:mongodb:procedures] info: procedure created: id=procedure-cd64ca14bd86 revision=1
+00:15:54.528 [memory:mongodb:procedures] info: procedure created: id=procedure-0bd1e226e8c1 revision=1
+00:15:54.542 [memory:mongodb:episodes] info: episode materialized: da736242-013a-4928-ba65-3e5738921f5c type=thread events=6 agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:54.576 [memory:mongodb:events] info: marked 6 events consolidated into episode=da736242-013a-4928-ba65-3e5738921f5c
+00:15:54.576 [memory:mongodb:episodes] info: auto episode triggered: reason=session_gap episode=da736242-013a-4928-ba65-3e5738921f5c events=6 agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:54.664 [memory:mongodb:graph] info: extracted 1 entities and 0 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:54.709 [memory:mongodb:episodes] info: episode materialized: 16c43044-3530-4d6a-b342-f4142590f3c7 type=thread events=9 agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:54.741 [memory:mongodb:events] info: marked 9 events consolidated into episode=16c43044-3530-4d6a-b342-f4142590f3c7
+00:15:54.741 [memory:mongodb:episodes] info: auto episode triggered: reason=session_gap episode=16c43044-3530-4d6a-b342-f4142590f3c7 events=9 agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:54.772 [memory:mongodb:graph] info: extracted 1 entities and 0 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:54.826 [memory:mongodb:procedures] info: procedure created: id=procedure-a37337e62cc7 revision=1
+00:15:55.010 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-d1868cd67d89 revision=1
+00:15:55.213 [memory:mongodb:episodes] info: episode materialized: 4179168b-7d6f-43b4-ba22-9da9659d9868 type=thread events=6 agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:55.244 [memory:mongodb:events] info: marked 6 events consolidated into episode=4179168b-7d6f-43b4-ba22-9da9659d9868
+00:15:55.244 [memory:mongodb:episodes] info: auto episode triggered: reason=session_gap episode=4179168b-7d6f-43b4-ba22-9da9659d9868 events=6 agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:55.385 [memory:mongodb:episodes] info: episode materialized: 51a2c670-f46d-4ab8-aef8-d86f376c65dd type=thread events=16 agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:55.410 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-1b9dec07e338 revision=1
+00:15:55.418 [memory:mongodb:events] info: marked 16 events consolidated into episode=51a2c670-f46d-4ab8-aef8-d86f376c65dd
+00:15:55.418 [memory:mongodb:episodes] info: auto episode triggered: reason=session_gap episode=51a2c670-f46d-4ab8-aef8-d86f376c65dd events=16 agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:55.498 [memory:mongodb:procedures] info: procedure created: id=procedure-fb003506ca57 revision=1
+00:15:55.677 [memory:mongodb:structured] info: structured memory created: type=fact key=active-context-62d67a28be67 revision=1
+00:15:55.690 [memory:mongodb:episodes] info: episode materialized: fd59a66e-8f55-4763-922f-6a361b355eef type=thread events=12 agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:55.709 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-7e8c9926a3c8 revision=1
+00:15:55.720 [memory:mongodb:events] info: marked 12 events consolidated into episode=fd59a66e-8f55-4763-922f-6a361b355eef
+00:15:55.720 [memory:mongodb:episodes] info: auto episode triggered: reason=session_gap episode=fd59a66e-8f55-4763-922f-6a361b355eef events=12 agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:55.864 [memory:mongodb:episodes] info: episode materialized: be1eb33d-a290-4255-8591-ef4ad1565c32 type=thread events=12 agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:55.885 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-abf83847e164 revision=1
+00:15:55.896 [memory:mongodb:events] info: marked 12 events consolidated into episode=be1eb33d-a290-4255-8591-ef4ad1565c32
+00:15:55.896 [memory:mongodb:episodes] info: auto episode triggered: reason=session_gap episode=be1eb33d-a290-4255-8591-ef4ad1565c32 events=12 agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:56.313 [memory:mongodb:episodes] info: episode materialized: 161b50e1-3f7f-46fc-9641-f7abbe2501b1 type=thread events=12 agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:56.347 [memory:mongodb:events] info: marked 12 events consolidated into episode=161b50e1-3f7f-46fc-9641-f7abbe2501b1
+00:15:56.347 [memory:mongodb:episodes] info: auto episode triggered: reason=session_gap episode=161b50e1-3f7f-46fc-9641-f7abbe2501b1 events=12 agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:56.385 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-eeae3492de95 revision=1
+00:15:56.490 [memory:mongodb:episodes] info: episode materialized: 336e6058-605d-47e6-b038-a40ab2a2d8d8 type=thread events=22 agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:56.523 [memory:mongodb:events] info: marked 22 events consolidated into episode=336e6058-605d-47e6-b038-a40ab2a2d8d8
+00:15:56.523 [memory:mongodb:episodes] info: auto episode triggered: reason=session_gap episode=336e6058-605d-47e6-b038-a40ab2a2d8d8 events=22 agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:56.720 [memory:mongodb:episodes] info: episode materialized: fe2ecae2-2fb8-4563-adf0-308bbc414614 type=thread events=24 agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:56.753 [memory:mongodb:events] info: marked 24 events consolidated into episode=fe2ecae2-2fb8-4563-adf0-308bbc414614
+00:15:56.753 [memory:mongodb:episodes] info: auto episode triggered: reason=session_gap episode=fe2ecae2-2fb8-4563-adf0-308bbc414614 events=24 agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:56.884 [memory:mongodb:episodes] info: episode materialized: 7a4c49d3-3392-44ec-ae08-ed2fa7cd3393 type=thread events=2 agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:56.917 [memory:mongodb:events] info: marked 2 events consolidated into episode=7a4c49d3-3392-44ec-ae08-ed2fa7cd3393
+00:15:56.917 [memory:mongodb:episodes] info: auto episode triggered: reason=session_gap episode=7a4c49d3-3392-44ec-ae08-ed2fa7cd3393 events=2 agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:57.021 [memory:mongodb:graph] info: extracted 2 entities and 1 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:57.044 [memory:mongodb:episodes] info: episode materialized: 8b258ade-55ca-4b7a-8126-090161f31975 type=thread events=12 agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:57.086 [memory:mongodb:events] info: marked 12 events consolidated into episode=8b258ade-55ca-4b7a-8126-090161f31975
+00:15:57.086 [memory:mongodb:episodes] info: auto episode triggered: reason=session_gap episode=8b258ade-55ca-4b7a-8126-090161f31975 events=12 agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:57.101 [memory:mongodb:procedures] info: procedure created: id=procedure-8973d8f8ebf7 revision=1
+00:15:57.215 [memory:mongodb:episodes] info: episode materialized: 345525c5-9be3-434a-bd75-efaec10984f1 type=thread events=15 agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:57.227 [memory:mongodb:graph] info: extracted 1 entities and 0 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:57.259 [memory:mongodb:events] info: marked 15 events consolidated into episode=345525c5-9be3-434a-bd75-efaec10984f1
+00:15:57.259 [memory:mongodb:episodes] info: auto episode triggered: reason=session_gap episode=345525c5-9be3-434a-bd75-efaec10984f1 events=15 agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:57.298 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-76b0bb34fb16 revision=1
+00:15:57.381 [memory:mongodb:procedures] info: procedure created: id=procedure-ab841b4d1516 revision=1
+00:15:57.385 [memory:mongodb:episodes] info: episode materialized: 87bd60e0-819e-4304-b3ba-3c114706e9b0 type=thread events=12 agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:57.415 [memory:mongodb:events] info: marked 12 events consolidated into episode=87bd60e0-819e-4304-b3ba-3c114706e9b0
+00:15:57.415 [memory:mongodb:episodes] info: auto episode triggered: reason=session_gap episode=87bd60e0-819e-4304-b3ba-3c114706e9b0 events=12 agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:57.533 [memory:mongodb:episodes] info: episode materialized: 63d60574-3e6d-4272-be72-db534652874b type=thread events=12 agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:57.568 [memory:mongodb:events] info: marked 12 events consolidated into episode=63d60574-3e6d-4272-be72-db534652874b
+00:15:57.568 [memory:mongodb:episodes] info: auto episode triggered: reason=session_gap episode=63d60574-3e6d-4272-be72-db534652874b events=12 agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:57.571 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-89f0b3a5a1f2 revision=1
+00:15:57.799 [memory:mongodb:episodes] info: episode materialized: 45d02916-a524-4b90-bf45-7f855d94c76f type=thread events=2 agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:57.838 [memory:mongodb:events] info: marked 2 events consolidated into episode=45d02916-a524-4b90-bf45-7f855d94c76f
+00:15:57.839 [memory:mongodb:episodes] info: auto episode triggered: reason=session_gap episode=45d02916-a524-4b90-bf45-7f855d94c76f events=2 agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:57.867 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-31e54c09760f revision=1
+00:15:57.868 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-cf5c106148da revision=1
+00:15:57.994 [memory:mongodb:episodes] info: episode materialized: 32602d34-cdf8-49b2-8d1f-6f72b9da3377 type=thread events=14 agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:58.026 [memory:mongodb:events] info: marked 14 events consolidated into episode=32602d34-cdf8-49b2-8d1f-6f72b9da3377
+00:15:58.026 [memory:mongodb:episodes] info: auto episode triggered: reason=session_gap episode=32602d34-cdf8-49b2-8d1f-6f72b9da3377 events=14 agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:58.246 [memory:mongodb:episodes] info: episode materialized: 32486b28-ce96-4263-93f5-4a68639eb697 type=thread events=20 agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:58.301 [memory:mongodb:events] info: marked 20 events consolidated into episode=32486b28-ce96-4263-93f5-4a68639eb697
+00:15:58.301 [memory:mongodb:episodes] info: auto episode triggered: reason=session_gap episode=32486b28-ce96-4263-93f5-4a68639eb697 events=20 agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:58.320 [memory:mongodb:graph] info: extracted 1 entities and 0 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:58.393 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-757b4d7fa866 revision=1
+00:15:58.466 [memory:mongodb:episodes] info: episode materialized: bb7d6ad3-1dcd-4724-85c2-c7f0f44007da type=thread events=12 agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:58.501 [memory:mongodb:events] info: marked 12 events consolidated into episode=bb7d6ad3-1dcd-4724-85c2-c7f0f44007da
+00:15:58.501 [memory:mongodb:episodes] info: auto episode triggered: reason=session_gap episode=bb7d6ad3-1dcd-4724-85c2-c7f0f44007da events=12 agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:58.587 [memory:mongodb:graph] info: extracted 2 entities and 1 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:58.654 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-ca672d3e29d3 revision=1
+00:15:58.736 [memory:mongodb:episodes] info: episode materialized: c4a4bee1-acd8-44e4-99a6-7597662853f4 type=thread events=14 agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:58.775 [memory:mongodb:events] info: marked 14 events consolidated into episode=c4a4bee1-acd8-44e4-99a6-7597662853f4
+00:15:58.775 [memory:mongodb:episodes] info: auto episode triggered: reason=session_gap episode=c4a4bee1-acd8-44e4-99a6-7597662853f4 events=14 agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:58.959 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-feb1ebc19789 revision=1
+00:15:59.255 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-1b35624f6c30 revision=1
+00:15:59.257 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-19d3fdfd7834 revision=1
+00:15:59.264 [memory:mongodb:episodes] info: episode materialized: 77d236bc-6deb-4faf-848a-beb2a43632b5 type=thread events=25 agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:59.345 [memory:mongodb:procedures] info: procedure created: id=procedure-5a37adf4dae2 revision=1
+00:15:59.346 [memory:mongodb:procedures] info: procedure created: id=procedure-80f948a593df revision=1
+00:15:59.347 [memory:mongodb:events] info: marked 25 events consolidated into episode=77d236bc-6deb-4faf-848a-beb2a43632b5
+00:15:59.347 [memory:mongodb:episodes] info: auto episode triggered: reason=session_gap episode=77d236bc-6deb-4faf-848a-beb2a43632b5 events=25 agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:59.552 [memory:mongodb:episodes] info: episode materialized: 1b805018-0ca6-47c8-93c5-f15522bdce0e type=thread events=12 agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:59.586 [memory:mongodb:events] info: marked 12 events consolidated into episode=1b805018-0ca6-47c8-93c5-f15522bdce0e
+00:15:59.586 [memory:mongodb:episodes] info: auto episode triggered: reason=session_gap episode=1b805018-0ca6-47c8-93c5-f15522bdce0e events=12 agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:59.587 [memory:mongodb:graph] info: extracted 1 entities and 0 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:59.658 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-a550aa90a702 revision=1
+00:15:59.809 [memory:mongodb:episodes] info: episode materialized: 3fea931d-9471-430d-9b33-e29b1981a3f3 type=thread events=2 agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:15:59.850 [memory:mongodb:events] info: marked 2 events consolidated into episode=3fea931d-9471-430d-9b33-e29b1981a3f3
+00:15:59.850 [memory:mongodb:episodes] info: auto episode triggered: reason=session_gap episode=3fea931d-9471-430d-9b33-e29b1981a3f3 events=2 agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:16:00.099 [memory:mongodb:episodes] info: episode materialized: 2ba4baf3-5394-42b6-8215-acff61bcc366 type=thread events=12 agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:16:00.147 [memory:mongodb:events] info: marked 12 events consolidated into episode=2ba4baf3-5394-42b6-8215-acff61bcc366
+00:16:00.147 [memory:mongodb:episodes] info: auto episode triggered: reason=session_gap episode=2ba4baf3-5394-42b6-8215-acff61bcc366 events=12 agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:16:00.308 [memory:mongodb:episodes] info: episode materialized: a26212ac-3e9f-4376-b432-e9cf68e6a335 type=thread events=4 agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:16:00.309 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-c77831957b88 revision=1
+00:16:00.311 [memory:mongodb:procedures] info: procedure created: id=procedure-3fcceea305c0 revision=1
+00:16:00.352 [memory:mongodb:events] info: marked 4 events consolidated into episode=a26212ac-3e9f-4376-b432-e9cf68e6a335
+00:16:00.352 [memory:mongodb:episodes] info: auto episode triggered: reason=session_gap episode=a26212ac-3e9f-4376-b432-e9cf68e6a335 events=4 agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:16:00.633 [memory:mongodb:episodes] info: episode materialized: 61517300-6b59-4792-b40a-88c16e7b6687 type=thread events=12 agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:16:00.673 [memory:mongodb:events] info: marked 12 events consolidated into episode=61517300-6b59-4792-b40a-88c16e7b6687
+00:16:00.673 [memory:mongodb:episodes] info: auto episode triggered: reason=session_gap episode=61517300-6b59-4792-b40a-88c16e7b6687 events=12 agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:16:00.765 [memory:mongodb:graph] info: extracted 2 entities and 1 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:16:00.781 [memory:mongodb:procedures] info: procedure created: id=procedure-d2c8106ea051 revision=1
+00:16:00.806 [memory:mongodb:episodes] info: episode materialized: b2caa3c9-7938-4b02-ba55-37d853739423 type=thread events=12 agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:16:00.835 [memory:mongodb:procedures] info: procedure created: id=procedure-a611886ccdac revision=1
+00:16:00.839 [memory:mongodb:events] info: marked 12 events consolidated into episode=b2caa3c9-7938-4b02-ba55-37d853739423
+00:16:00.839 [memory:mongodb:episodes] info: auto episode triggered: reason=session_gap episode=b2caa3c9-7938-4b02-ba55-37d853739423 events=12 agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:16:00.941 [memory:mongodb:episodes] info: episode materialized: 8d20189f-306d-4efc-9bd3-45ea335a4ce2 type=thread events=12 agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:16:00.978 [memory:mongodb:events] info: marked 12 events consolidated into episode=8d20189f-306d-4efc-9bd3-45ea335a4ce2
+00:16:00.978 [memory:mongodb:episodes] info: auto episode triggered: reason=session_gap episode=8d20189f-306d-4efc-9bd3-45ea335a4ce2 events=12 agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:16:01.026 [memory:mongodb:procedures] info: procedure created: id=procedure-12430a4bd37a revision=1
+00:16:01.029 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-a49c92ab8190 revision=1
+00:16:01.120 [memory:mongodb:procedures] info: procedure created: id=procedure-d72d0b9219a4 revision=1
+00:16:01.221 [memory:mongodb:episodes] info: episode materialized: 40321ded-e924-457e-aa47-dc154ea7cb59 type=thread events=12 agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:16:01.272 [memory:mongodb:events] info: marked 12 events consolidated into episode=40321ded-e924-457e-aa47-dc154ea7cb59
+00:16:01.272 [memory:mongodb:episodes] info: auto episode triggered: reason=session_gap episode=40321ded-e924-457e-aa47-dc154ea7cb59 events=12 agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:16:01.388 [memory:mongodb:graph] info: extracted 1 entities and 0 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:16:01.425 [memory:mongodb:episodes] info: episode materialized: 92b07362-f716-49b3-9c23-b60a95359f85 type=thread events=8 agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:16:01.454 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-96429707ce39 revision=1
+00:16:01.457 [memory:mongodb:events] info: marked 8 events consolidated into episode=92b07362-f716-49b3-9c23-b60a95359f85
+00:16:01.457 [memory:mongodb:episodes] info: auto episode triggered: reason=session_gap episode=92b07362-f716-49b3-9c23-b60a95359f85 events=8 agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:16:01.470 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-a614a2cbabee revision=1
+00:16:01.575 [memory:mongodb:episodes] info: episode materialized: 919a8ca5-1c76-4d88-901e-e40a4938775c type=thread events=14 agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:16:01.609 [memory:mongodb:events] info: marked 14 events consolidated into episode=919a8ca5-1c76-4d88-901e-e40a4938775c
+00:16:01.610 [memory:mongodb:episodes] info: auto episode triggered: reason=session_gap episode=919a8ca5-1c76-4d88-901e-e40a4938775c events=14 agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:16:01.631 [memory:mongodb:graph] info: extracted 1 entities and 0 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:16:01.736 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-ebffee088e19 revision=1
+00:16:01.858 [memory:mongodb:episodes] info: episode materialized: fb61ba68-c2d9-4e91-8244-a09be4e746ec type=thread events=12 agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:16:01.889 [memory:mongodb:events] info: marked 12 events consolidated into episode=fb61ba68-c2d9-4e91-8244-a09be4e746ec
+00:16:01.889 [memory:mongodb:episodes] info: auto episode triggered: reason=session_gap episode=fb61ba68-c2d9-4e91-8244-a09be4e746ec events=12 agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:16:01.908 [memory:mongodb:graph] info: extracted 4 entities and 6 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:16:01.979 [memory:mongodb:episodes] info: episode materialized: b15991d3-e1b9-429a-8efd-2144120bcb33 type=thread events=12 agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:16:01.985 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-4352969fadcf revision=1
+00:16:02.008 [memory:mongodb:events] info: marked 12 events consolidated into episode=b15991d3-e1b9-429a-8efd-2144120bcb33
+00:16:02.008 [memory:mongodb:episodes] info: auto episode triggered: reason=session_gap episode=b15991d3-e1b9-429a-8efd-2144120bcb33 events=12 agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:16:02.174 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-fa8ca2534cfa revision=1
+00:16:02.225 [memory:mongodb:episodes] info: episode materialized: 81019472-e4a2-4d54-aec4-9e2d424abaeb type=thread events=11 agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:16:02.258 [memory:mongodb:events] info: marked 11 events consolidated into episode=81019472-e4a2-4d54-aec4-9e2d424abaeb
+00:16:02.258 [memory:mongodb:episodes] info: auto episode triggered: reason=session_gap episode=81019472-e4a2-4d54-aec4-9e2d424abaeb events=11 agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:16:02.355 [memory:mongodb:episodes] info: episode materialized: 71dc6762-4298-4517-a500-daa5d7b59513 type=thread events=2 agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:16:02.388 [memory:mongodb:events] info: marked 2 events consolidated into episode=71dc6762-4298-4517-a500-daa5d7b59513
+00:16:02.388 [memory:mongodb:episodes] info: auto episode triggered: reason=session_gap episode=71dc6762-4298-4517-a500-daa5d7b59513 events=2 agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:16:02.396 [memory:mongodb:graph] info: extracted 1 entities and 0 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:16:02.488 [memory:mongodb:episodes] info: episode materialized: 1fafce30-253b-4366-ac04-4e1371803c52 type=thread events=12 agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:16:02.489 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-408d5427a384 revision=1
+00:16:02.519 [memory:mongodb:events] info: marked 12 events consolidated into episode=1fafce30-253b-4366-ac04-4e1371803c52
+00:16:02.519 [memory:mongodb:episodes] info: auto episode triggered: reason=session_gap episode=1fafce30-253b-4366-ac04-4e1371803c52 events=12 agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:16:02.595 [memory:mongodb:episodes] info: episode materialized: 976f9b93-7eb8-43eb-91e5-d4296ab39179 type=thread events=12 agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:16:02.628 [memory:mongodb:graph] info: extracted 1 entities and 0 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:16:02.631 [memory:mongodb:events] info: marked 12 events consolidated into episode=976f9b93-7eb8-43eb-91e5-d4296ab39179
+00:16:02.631 [memory:mongodb:episodes] info: auto episode triggered: reason=session_gap episode=976f9b93-7eb8-43eb-91e5-d4296ab39179 events=12 agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:16:02.686 [memory:mongodb:procedures] info: procedure created: id=procedure-1d726eefa8b7 revision=1
+00:16:02.687 [memory:mongodb:procedures] info: procedure created: id=procedure-afa7cc037664 revision=1
+00:16:02.695 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-6938fd4dbcf5 revision=1
+00:16:02.727 [memory:mongodb:episodes] info: episode materialized: 96ac91c0-8a27-4a12-b762-1f9e5a0c41b7 type=thread events=26 agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:16:02.757 [memory:mongodb:events] info: marked 26 events consolidated into episode=96ac91c0-8a27-4a12-b762-1f9e5a0c41b7
+00:16:02.757 [memory:mongodb:episodes] info: auto episode triggered: reason=session_gap episode=96ac91c0-8a27-4a12-b762-1f9e5a0c41b7 events=26 agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:16:02.760 [memory:mongodb:structured] info: structured memory created: type=fact key=active-context-f55ba3b807bc revision=1
+00:16:02.828 [memory:mongodb:episodes] info: episode materialized: c78bb16d-5845-4ba4-8bbd-ee003a38d9b2 type=thread events=12 agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:16:02.862 [memory:mongodb:events] info: marked 12 events consolidated into episode=c78bb16d-5845-4ba4-8bbd-ee003a38d9b2
+00:16:02.862 [memory:mongodb:episodes] info: auto episode triggered: reason=session_gap episode=c78bb16d-5845-4ba4-8bbd-ee003a38d9b2 events=12 agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:16:02.913 [memory:mongodb:graph] info: extracted 2 entities and 1 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:16:02.919 [memory:mongodb:episodes] info: episode materialized: be6d0112-af2d-449c-ab97-743ca9f1cafc type=thread events=10 agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:16:02.934 [memory:mongodb:procedures] info: procedure created: id=procedure-c1570611ac28 revision=1
+00:16:02.948 [memory:mongodb:events] info: marked 10 events consolidated into episode=be6d0112-af2d-449c-ab97-743ca9f1cafc
+00:16:02.948 [memory:mongodb:episodes] info: auto episode triggered: reason=session_gap episode=be6d0112-af2d-449c-ab97-743ca9f1cafc events=10 agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:16:02.968 [memory:mongodb:procedures] info: procedure created: id=procedure-2c4690614ef9 revision=1
+00:16:02.981 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-621a935ab23e revision=1
+00:16:03.013 [memory:mongodb:episodes] info: episode materialized: fb8f1ab1-fbcc-4bf2-bc4c-672d61c10563 type=thread events=12 agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:16:03.043 [memory:mongodb:events] info: marked 12 events consolidated into episode=fb8f1ab1-fbcc-4bf2-bc4c-672d61c10563
+00:16:03.043 [memory:mongodb:episodes] info: auto episode triggered: reason=session_gap episode=fb8f1ab1-fbcc-4bf2-bc4c-672d61c10563 events=12 agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:16:03.057 [memory:mongodb:procedures] info: procedure created: id=procedure-ba06d85da608 revision=1
+00:16:03.231 [memory:mongodb:episodes] info: episode materialized: 97e998a0-d133-4ae6-b480-28d590cbf573 type=thread events=10 agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:16:03.264 [memory:mongodb:events] info: marked 10 events consolidated into episode=97e998a0-d133-4ae6-b480-28d590cbf573
+00:16:03.264 [memory:mongodb:episodes] info: auto episode triggered: reason=event_count episode=97e998a0-d133-4ae6-b480-28d590cbf573 events=10 agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:16:03.407 [memory:mongodb:procedures] info: procedure created: id=procedure-c3499c272973 revision=1
+00:16:03.675 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-d38f82c5013d revision=1
+00:16:03.678 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-b7f8963cfb09 revision=1
+00:16:03.752 [memory:mongodb:procedures] info: procedure created: id=procedure-eb406a57dd66 revision=1
+00:16:03.757 [memory:mongodb:procedures] info: procedure created: id=procedure-f073392964bf revision=1
+00:16:03.961 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-5f890eb71042 revision=1
+00:16:04.121 [memory:mongodb:graph] info: extracted 2 entities and 1 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:16:04.187 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-d5023fa44713 revision=1
+00:16:04.267 [memory:mongodb:procedures] info: procedure created: id=procedure-346ad07fde2b revision=1
+00:16:04.414 [memory:mongodb:graph] info: extracted 2 entities and 1 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:16:04.483 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-5e7703ae13bc revision=1
+00:16:04.564 [memory:mongodb:procedures] info: procedure created: id=procedure-c3d3a1caea6b revision=1
+00:16:04.858 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-b8dff9d432e3 revision=1
+00:16:05.030 [memory:mongodb:procedures] info: procedure created: id=procedure-de8f4b442ba1 revision=1
+00:16:05.035 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-214f6dea49ea revision=1
+00:16:05.212 [memory:mongodb:graph] info: extracted 12 entities and 15 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:16:05.271 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-a10eb76cf305 revision=1
+00:16:05.390 [memory:mongodb:graph] info: extracted 1 entities and 0 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:16:05.433 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-4d3304dc61e0 revision=1
+00:16:05.458 [memory:mongodb:procedures] info: procedure created: id=procedure-10a41fed337d revision=1
+00:16:05.508 [memory:mongodb:procedures] info: procedure created: id=procedure-4501dafd7d0f revision=1
+00:16:05.630 [memory:mongodb:graph] info: extracted 1 entities and 0 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:16:05.673 [memory:mongodb:graph] info: extracted 4 entities and 6 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:16:05.675 [memory:mongodb:structured] info: structured memory created: type=fact key=active-context-f3dae0b376ef revision=1
+00:16:05.804 [memory:mongodb:graph] info: extracted 1 entities and 0 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:16:05.864 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-1f88ee1f46db revision=1
+00:16:06.038 [memory:mongodb:graph] info: extracted 6 entities and 15 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:16:06.101 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-86d072c488e5 revision=1
+00:16:06.561 [memory:mongodb:graph] info: extracted 1 entities and 0 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:16:06.629 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-ed70c7c97026 revision=1
+00:16:06.635 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-f7470c30a4c0 revision=1
+00:16:06.714 [memory:mongodb:procedures] info: procedure created: id=procedure-ef15f48c9654 revision=1
+00:16:06.838 [memory:mongodb:graph] info: extracted 1 entities and 0 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:16:06.910 [memory:mongodb:structured] info: structured memory created: type=decision key=decision-3a52ce780950 revision=1
+00:16:06.986 [memory:mongodb:procedures] info: procedure created: id=procedure-f670d479e1c2 revision=1
+00:16:07.483 [memory:mongodb:graph] info: extracted 1 entities and 0 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:16:07.552 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-78f77f54050f revision=1
+00:16:07.642 [memory:mongodb:procedures] info: procedure created: id=procedure-165b45f5844b revision=1
+00:16:07.808 [memory:mongodb:graph] info: extracted 1 entities and 0 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:16:08.182 [memory:mongodb:procedures] info: procedure created: id=procedure-1ebc7597b143 revision=1
+00:16:08.183 [memory:mongodb:procedures] info: procedure created: id=procedure-198ab1f2aa63 revision=1
+00:16:08.308 [memory:mongodb:graph] info: extracted 1 entities and 0 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:16:08.351 [memory:mongodb:graph] info: extracted 5 entities and 10 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:16:08.375 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-f5198577a266 revision=1
+00:16:08.420 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-376e0fd78325 revision=1
+00:16:08.468 [memory:mongodb:procedures] info: procedure created: id=procedure-665418362f23 revision=1
+00:16:08.635 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-c1bd3e79f604 revision=1
+00:16:08.716 [memory:mongodb:procedures] info: procedure created: id=procedure-8bc62d7878f0 revision=1
+00:16:09.078 [memory:mongodb:procedures] info: procedure created: id=procedure-b877c68ada8e revision=1
+00:16:09.433 [memory:mongodb:procedures] info: procedure created: id=procedure-2618bf27f2d4 revision=1
+00:16:09.434 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-5a0d4826de49 revision=1
+00:16:09.592 [memory:mongodb:graph] info: extracted 3 entities and 3 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:16:09.611 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-5681e5baabc3 revision=1
+00:16:09.659 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-7267e27709b7 revision=1
+00:16:09.694 [memory:mongodb:procedures] info: procedure created: id=procedure-cc12c031c48f revision=1
+00:16:09.819 [memory:mongodb:graph] info: extracted 1 entities and 0 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:16:09.851 [memory:mongodb:graph] info: extracted 2 entities and 1 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:16:09.883 [memory:mongodb:procedures] info: procedure created: id=procedure-2dfe0c171d35 revision=1
+00:16:09.930 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-154ab7a1092b revision=1
+00:16:10.004 [memory:mongodb:structured] info: structured memory updated: type=decision key=decision-3a52ce780950 revision=2
+00:16:10.132 [memory:mongodb:graph] info: extracted 1 entities and 0 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:16:10.331 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-6ffa888d361c revision=1
+00:16:10.496 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-8d4073bfa6fd revision=1
+00:16:10.569 [memory:mongodb:procedures] info: procedure created: id=procedure-f87d417dfceb revision=1
+00:16:10.909 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-c037f28d1d06 revision=1
+00:16:11.063 [memory:mongodb:procedures] info: procedure created: id=procedure-4d99b00767ad revision=1
+00:16:11.284 [memory:mongodb:graph] info: extracted 1 entities and 0 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:16:11.327 [memory:mongodb:procedures] info: procedure created: id=procedure-3277d57bf563 revision=1
+00:16:11.349 [memory:mongodb:structured] info: structured memory created: type=fact key=active-context-8fbb9f18cd64 revision=1
+00:16:11.358 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-6ffb2a409e76 revision=1
+00:16:11.412 [memory:mongodb:structured] info: structured memory created: type=decision key=decision-8e02f85faa1e revision=1
+00:16:11.479 [memory:mongodb:procedures] info: procedure created: id=procedure-3550596a6111 revision=1
+00:16:11.592 [memory:mongodb:graph] info: extracted 1 entities and 0 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:16:11.656 [memory:mongodb:structured] info: structured memory created: type=fact key=active-context-125cd5a92f80 revision=1
+00:16:11.860 [memory:mongodb:procedures] info: procedure created: id=procedure-7cc2b4aa9391 revision=1
+00:16:11.979 [memory:mongodb:graph] info: extracted 1 entities and 0 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:16:12.035 [memory:mongodb:structured] info: structured memory created: type=fact key=active-context-676ef1065e98 revision=1
+00:16:12.244 [memory:mongodb:procedures] info: procedure created: id=procedure-32226434d160 revision=1
+00:16:12.262 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-9c489e57234c revision=1
+00:16:12.334 [memory:mongodb:structured] info: structured memory updated: type=decision key=decision-3a52ce780950 revision=3
+00:16:12.403 [memory:mongodb:procedures] info: procedure created: id=procedure-f86928bde9d9 revision=1
+00:16:12.664 [memory:mongodb:graph] info: extracted 3 entities and 3 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:16:12.676 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-e74b93bf09c4 revision=1
+00:16:12.693 [memory:mongodb:structured] info: structured memory updated: type=decision key=decision-3a52ce780950 revision=4
+00:16:12.784 [memory:mongodb:procedures] info: procedure created: id=procedure-ba8290fee38e revision=1
+00:16:12.954 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-c1ba9600c734 revision=1
+00:16:12.957 [memory:mongodb:procedures] info: procedure created: id=procedure-aa468bf9c6c1 revision=1
+00:16:13.048 [memory:mongodb:procedures] info: procedure created: id=procedure-4c53982b880e revision=1
+00:16:13.288 [memory:mongodb:graph] info: extracted 5 entities and 10 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:16:13.475 [memory:mongodb:procedures] info: procedure created: id=procedure-433ae9af5317 revision=1
+00:16:13.627 [memory:mongodb:graph] info: extracted 2 entities and 1 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:16:13.693 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-0c41d42dcf0e revision=1
+00:16:13.867 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-5de5a70ae38e revision=1
+00:16:13.870 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-e14bd5a7afdf revision=1
+00:16:14.046 [memory:mongodb:structured] info: structured memory created: type=fact key=active-context-b7e812ed7eac revision=1
+00:16:15.178 [memory:mongodb:procedures] info: procedure created: id=procedure-85a82084f006 revision=1
+00:16:15.725 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-dc230b9c4a3a revision=1
+00:16:16.427 [memory:mongodb:procedures] info: procedure created: id=procedure-2cd531216721 revision=1
+00:16:16.966 [memory:mongodb:graph] info: extracted 1 entities and 0 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:16:17.194 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-41f8f484f2a3 revision=1
+00:16:17.199 [memory:mongodb:procedures] info: procedure updated: id=procedure-8973d8f8ebf7 revision=2
+00:16:17.461 [memory:mongodb:procedures] info: procedure created: id=procedure-c33a954bf465 revision=1
+00:16:17.960 [memory:mongodb:graph] info: extracted 1 entities and 0 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:16:18.183 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-d8680c6363c5 revision=1
+00:16:19.686 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-ff200301fbca revision=1
+00:16:19.687 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-c2266a756899 revision=1
+00:16:19.926 [memory:mongodb:procedures] info: procedure created: id=procedure-020dca8b448e revision=1
+00:16:20.223 [memory:mongodb:graph] info: extracted 1 entities and 0 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:16:20.934 [memory:mongodb:procedures] info: procedure created: id=procedure-4a5552cdb0ec revision=1
+00:16:21.481 [memory:mongodb:procedures] info: procedure created: id=procedure-73ba395ed9f2 revision=1
+00:16:22.706 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-cf9c13d22245 revision=1
+00:16:22.785 [memory:mongodb:procedures] info: procedure created: id=procedure-7584a803e0a2 revision=1
+00:16:23.018 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-9d7c797ff7f3 revision=1
+00:16:23.089 [memory:mongodb:procedures] info: procedure created: id=procedure-7b07819be91a revision=1
+00:16:23.425 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-defbb1ae6435 revision=1
+00:16:23.700 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-5600c67547cd revision=1
+00:16:24.424 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-cd8f2b61d5e1 revision=1
+00:16:24.502 [memory:mongodb:procedures] info: procedure created: id=procedure-88f6916f1a2b revision=1
+00:16:25.189 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-becc42b4dfe0 revision=1
+00:16:25.215 [memory:mongodb:graph] info: extracted 8 entities and 15 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:16:25.426 [memory:mongodb:procedures] info: procedure created: id=procedure-66b215482a45 revision=1
+00:16:25.474 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-e19d0a21d0bb revision=1
+00:16:25.728 [memory:mongodb:procedures] info: procedure created: id=procedure-87fec7803316 revision=1
+00:16:26.207 [memory:mongodb:graph] info: extracted 1 entities and 0 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:16:26.426 [memory:mongodb:graph] info: extracted 2 entities and 1 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:16:26.427 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-f30fa9cdbd05 revision=1
+00:16:26.428 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-3f4079a9a8c8 revision=1
+00:16:26.698 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-1f8ef81a8c88 revision=1
+00:16:27.714 [memory:mongodb:graph] info: extracted 2 entities and 1 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:16:27.930 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-3e8eedf08f74 revision=1
+00:16:28.465 [memory:mongodb:graph] info: extracted 2 entities and 1 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:16:28.676 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-06e72bca363a revision=1
+00:16:28.677 [memory:mongodb:procedures] info: procedure created: id=procedure-3dd8ca803a87 revision=1
+00:16:29.227 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-fb51fb54d77d revision=1
+00:16:29.929 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-2335e79438af revision=1
+00:16:29.929 [memory:mongodb:procedures] info: procedure created: id=procedure-984a273bc102 revision=1
+00:16:29.929 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-1111a0e63c16 revision=1
+00:16:30.177 [memory:mongodb:procedures] info: procedure created: id=procedure-a85c3ab10a14 revision=1
+00:16:30.861 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-88a21f57cd47 revision=1
+00:16:31.738 [memory:mongodb:graph] info: extracted 4 entities and 6 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:16:31.932 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-49d503f63678 revision=1
+00:16:32.423 [memory:mongodb:graph] info: extracted 2 entities and 1 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:16:32.492 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-b0224cb8b487 revision=1
+00:16:33.176 [memory:mongodb:procedures] info: procedure created: id=procedure-5a8e232c6716 revision=1
+00:16:33.424 [memory:mongodb:procedures] info: procedure created: id=procedure-b170c67f73db revision=1
+00:16:33.685 [memory:mongodb:procedures] info: procedure created: id=procedure-40fb0fe4cac0 revision=1
+00:16:34.179 [memory:mongodb:structured] info: structured memory created: type=fact key=active-context-2facfdc141f5 revision=1
+00:16:34.426 [memory:mongodb:procedures] info: procedure created: id=procedure-5b839f10aa90 revision=1
+00:16:34.926 [memory:mongodb:graph] info: extracted 2 entities and 1 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:16:34.927 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-a63b342f825e revision=1
+00:16:35.178 [memory:mongodb:procedures] info: procedure created: id=procedure-9f776f7b95f7 revision=1
+00:16:35.732 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-5527158915bf revision=1
+00:16:35.928 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-9b05de33cd45 revision=1
+00:16:35.929 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-b48fe5dee9ce revision=1
+00:16:36.176 [memory:mongodb:structured] info: structured memory created: type=fact key=active-context-b3631e0fa6f2 revision=1
+00:16:36.177 [memory:mongodb:procedures] info: procedure created: id=procedure-1ffc109bfac5 revision=1
+00:16:36.679 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-355a9f496864 revision=1
+00:16:36.972 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-1d5389b9b3fb revision=1
+00:16:38.184 [memory:mongodb:procedures] info: procedure created: id=procedure-5f211788abca revision=1
+00:16:38.482 [memory:mongodb:graph] info: extracted 1 entities and 0 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:16:38.556 [memory:mongodb:graph] info: extracted 1 entities and 0 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:16:39.427 [memory:mongodb:procedures] info: procedure created: id=procedure-88a2ef070709 revision=1
+00:16:39.428 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-61212578162d revision=1
+00:16:39.428 [memory:mongodb:procedures] info: procedure created: id=procedure-3038eeda456d revision=1
+00:16:40.256 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-2f16a47c8b87 revision=1
+00:16:40.443 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-77c83707bcb8 revision=1
+00:16:40.522 [memory:mongodb:procedures] info: procedure created: id=procedure-d08d98ed99bb revision=1
+00:16:40.687 [memory:mongodb:graph] info: extracted 2 entities and 1 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:16:40.702 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-261f9e6e2a29 revision=1
+00:16:40.757 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-69f1aa6bf29e revision=1
+00:16:40.780 [memory:mongodb:procedures] info: procedure created: id=procedure-aa862f566a8d revision=1
+00:16:41.137 [memory:mongodb:graph] info: extracted 1 entities and 0 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:16:41.298 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-5f0599f874e0 revision=1
+00:16:41.382 [memory:mongodb:procedures] info: procedure created: id=procedure-ae664c0a5cf1 revision=1
+00:16:41.581 [memory:mongodb:procedures] info: procedure updated: id=procedure-198ab1f2aa63 revision=2
+00:16:41.609 [memory:mongodb:structured] info: structured memory created: type=decision key=decision-5bab61eb5317 revision=1
+00:16:41.827 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-ad9631b9529f revision=1
+00:16:41.828 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-83c3804f3a1b revision=1
+00:16:41.838 [memory:mongodb:procedures] info: procedure created: id=procedure-0abe0274b677 revision=1
+00:16:41.917 [memory:mongodb:procedures] info: procedure created: id=procedure-7b3ab500bdb4 revision=1
+00:16:42.149 [memory:mongodb:graph] info: extracted 1 entities and 0 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:16:42.318 [memory:mongodb:procedures] info: procedure created: id=procedure-3adb9573dfaf revision=1
+00:16:42.502 [memory:mongodb:graph] info: extracted 2 entities and 1 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:16:42.726 [memory:mongodb:graph] info: extracted 2 entities and 1 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:16:42.755 [memory:mongodb:procedures] info: procedure created: id=procedure-596fd0ef2f04 revision=1
+00:16:42.936 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-3d17bbadb28d revision=1
+00:16:42.942 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-eddc919a0d2a revision=1
+00:16:43.007 [memory:mongodb:procedures] info: procedure created: id=procedure-cb8564319e88 revision=1
+00:16:43.023 [memory:mongodb:procedures] info: procedure created: id=procedure-86fa03abb008 revision=1
+00:16:43.151 [memory:mongodb:graph] info: extracted 1 entities and 0 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:16:43.257 [memory:mongodb:graph] info: extracted 1 entities and 0 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:16:43.320 [memory:mongodb:procedures] info: procedure updated: id=procedure-198ab1f2aa63 revision=3
+00:16:43.499 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-185d54c26f3a revision=1
+00:16:43.578 [memory:mongodb:procedures] info: procedure created: id=procedure-a3f70af9d9e0 revision=1
+00:16:43.789 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-ab63efaa66be revision=1
+00:16:43.956 [memory:mongodb:graph] info: extracted 3 entities and 3 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:16:44.055 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-5399473a9f43 revision=1
+00:16:44.220 [memory:mongodb:graph] info: extracted 4 entities and 6 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:16:44.230 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-4b1100f1b090 revision=1
+00:16:44.290 [memory:mongodb:procedures] info: procedure created: id=procedure-9778eb31c049 revision=1
+00:16:44.311 [memory:mongodb:procedures] info: procedure created: id=procedure-3a3bed245729 revision=1
+00:16:44.462 [memory:mongodb:graph] info: extracted 1 entities and 0 relations from event content for agent=benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a
+00:16:44.657 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-752a11eefa31 revision=1
+00:16:44.851 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-6ff747c54a38 revision=1
+00:16:44.876 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-2036f5012f37 revision=1
+00:16:44.963 [memory:mongodb:procedures] info: procedure created: id=procedure-eeef80fdda15 revision=1
+00:16:45.152 [memory:mongodb:procedures] info: procedure created: id=procedure-61faeb727117 revision=1
+00:16:45.152 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-94953a3885fa revision=1
+00:16:45.153 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-dd172425c4a3 revision=1
+00:16:45.337 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-6f9aad3c8615 revision=1
+00:16:45.353 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-e781fd622271 revision=1
+00:16:45.582 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-f28ce2eeccb8 revision=1
+00:16:45.663 [memory:mongodb:procedures] info: procedure created: id=procedure-f2c89d234f74 revision=1
+00:16:45.885 [memory:mongodb:procedures] info: procedure created: id=procedure-ee8d301a4077 revision=1
+00:16:46.092 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-d031220b1283 revision=1
+00:16:46.511 [memory:mongodb:procedures] info: procedure updated: id=procedure-c3499c272973 revision=2
+00:16:46.722 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-3356da43c59f revision=1
+00:16:46.724 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-109f577d288e revision=1
+00:16:46.946 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-39366a69783a revision=1
+00:16:53.518 [memory:mongodb] info: benchmark scenario complete {"scenarioId":"e47becba","agentId":"benchmark-b16-benchmark-20260804-r9-269c2052-9cf2609c525a","index":0,"totalScenarios":1,"evaluations":1,"elapsedMs":71900}
+metrics
+  cases          : 1
+  scoredCases    : 1
+  hitRate        : 1.0000
+  emptyRate      : 0.0000
+  R@5            : 1.0000
+  nDCG@10        : 1.0000
+  p95 latency ms : 1796
+  per-lane p95 ms
+    phase:total                1763  (1 cases)
+    phase:lanes                 957  (1 cases)
+    hybrid                      936  (1 cases)
+    hybrid:chunks               933  (1 cases)
+    phase:rerank                409  (1 cases)
+    phase:unaccounted           379  (1 cases)
+    episodic                     74  (1 cases)
+    raw-window                   56  (1 cases)
+    phase:cache-check            30  (1 cases)
+    phase:cache-exact            26  (1 cases)
+    backstop:procedural-exact     20  (1 cases)
+    phase:plan                   17  (1 cases)
+    phase:cache-write             1  (1 cases)
+    phase:cache-semantic          0  (1 cases)
+  official       : {"longMemEval":{"evaluator":{"suite":"longmemeval","sourceRepository":"xiaowu0162/LongMemEval","sourceCommit":"9e0b455f4ef0e2ab8f2e582289761153549043fc","evaluatorPath":"src/retrieval/eval_utils.py","evaluatorBlob":"9c43a835e7c41aff0eb3272c448f5cbe76bbbd45","aggregationEntrypoint":"src/retrieval/run_retrieval.py","cutoffs":[1,3,5,10,30,50],"eligibilityPolicy":"exclude-abstention-and-no-user-answer-target","candidateProjection":"native-source-attribution-flattened","comparability":"canonical"},"totalCases":1,"eligibleCases":1,"retrievalCases":1,"abstentionCases":0,"ineligibleCases":0,"projectionFailureCases":0,"executionFailureCases":0,"session":{"recallAnyAt1":1,"recallAllAt1":1,"ndcgAnyAt1":1,"recallAnyAt3":1,"recallAllAt3":1,"ndcgAnyAt3":1,"recallAnyAt5":1,"recallAllAt5":1,"ndcgAnyAt5":1,"recallAnyAt10":1,"recallAllAt10":1,"ndcgAnyAt10":1,"recallAnyAt30":1,"recallAllAt30":1,"ndcgAnyAt30":1,"recallAnyAt50":1,"recallAllAt50":1,"ndcgAnyAt50":1},"turn":{"recallAnyAt1":0,"recallAllAt1":0,"ndcgAnyAt1":0,"recallAnyAt3":0,"recallAllAt3":0,"ndcgAnyAt3":0,"recallAnyAt5":0,"recallAllAt5":0,"ndcgAnyAt5":0,"recallAnyAt10":0,"recallAllAt10":0,"ndcgAnyAt10":0,"recallAnyAt30":0,"recallAllAt30":0,"ndcgAnyAt30":0,"recallAnyAt50":0,"recallAllAt50":0,"ndcgAnyAt50":0}}}
+
+release gates
+  passed        official-retrieval
+  passed        internal-retrieval
+  passed        execution-completeness
+  failed        quality-thresholds
+  failed        evidence-completeness
+  passed        conversation-recall-regression
+  advisory-only query-governance
+
+elapsed: 83.0s
+
+⚠ sample run — no quality contract applied. Do not publish this number.

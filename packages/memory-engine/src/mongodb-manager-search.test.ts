@@ -496,6 +496,43 @@ describe("searchV2", () => {
 		expect(result.results[0].snippet).toContain("Morning standup")
 	})
 
+	it("keeps final scores within [0,1] after compounding ranking boosts", async () => {
+		mocked(planRetrieval).mockReturnValue({
+			paths: ["episodic"],
+			confidence: "high",
+			reasoning: "episodic keywords",
+		})
+		mocked(searchEpisodes).mockResolvedValue([
+			{
+				episodeId: "ep-boosted",
+				title: "Phoenix Release",
+				summary: "Phoenix Release planning for Phoenix",
+				type: "thread",
+				agentId: "agent-1",
+				scope: "agent",
+				scopeRef: "agent:agent-1",
+				timeRange: { start: new Date(), end: new Date() },
+				sourceEventCount: 1,
+				updatedAt: new Date(),
+			},
+		])
+
+		const result = await searchV2(
+			fakeDb,
+			fakePrefix,
+			"Phoenix Release",
+			"agent-1",
+			{
+				availablePaths: new Set(["episodic"]),
+				searchOptions: { allowHybridBackstop: false },
+			},
+		)
+
+		expect(result.results).toHaveLength(1)
+		expect(result.results[0]?.score).toBeGreaterThanOrEqual(0)
+		expect(result.results[0]?.score).toBeLessThanOrEqual(1)
+	})
+
 	it("executes planned paths concurrently, not serially", async () => {
 		// Most paths pay a server-side embedding round-trip inside
 		// $vectorSearch; run serially the loop costs the SUM of its lanes

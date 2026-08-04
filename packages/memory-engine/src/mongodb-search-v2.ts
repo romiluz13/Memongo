@@ -178,6 +178,32 @@ export function normalizeSinglePathScores(
 }
 
 /**
+ * Ranking boosts are additive and may push otherwise bounded scores above 1.
+ * Scale the whole final result set by its finite maximum instead of clamping
+ * each result independently, which would collapse meaningful score gaps and
+ * turn distinct top results into ties.
+ */
+function normalizeFinalSearchScores(
+	results: MemorySearchResult[],
+): MemorySearchResult[] {
+	const maxFiniteScore = results.reduce(
+		(maxScore, result) =>
+			Number.isFinite(result.score)
+				? Math.max(maxScore, result.score)
+				: maxScore,
+		1,
+	)
+	return results.map((result) => ({
+		...result,
+		score: Number.isFinite(result.score)
+			? Math.max(0, Math.min(1, result.score / maxFiniteScore))
+			: result.score > 0
+				? 1
+				: 0,
+	}))
+}
+
+/**
  * searchV2 entry point: opens the per-request cost budget (P3.2) that every
  * lane, waterfall stage, and backstop consumes. When a budget is already
  * active — the recursive hybrid backstop re-entering searchV2 — the call
@@ -1504,7 +1530,10 @@ async function searchV2WithBudget(
 			}
 		}
 
-		const sliced = finalResults.slice(0, maxResults)
+		// Ranking boosts run after lane normalization and can compound above 1.
+		// Preserve their ordering and relative score gaps while enforcing the
+		// public searchV2 score contract for every lane and reranker branch.
+		const sliced = normalizeFinalSearchScores(finalResults).slice(0, maxResults)
 
 		// Phase 9: Tiered retrieval — strip text for ids-only projection mode
 		const projectionMode = context.searchOptions?.projection ?? "full"

@@ -33,6 +33,51 @@ function isStageUnsupported(message: string): boolean {
 	)
 }
 
+async function canReturnStoredSource(
+	db: Db,
+	collectionName: string,
+	indexName: string,
+	definition: Record<string, unknown>,
+): Promise<boolean> {
+	const fields = Array.isArray(definition.fields) ? definition.fields : []
+	const autoEmbedField = fields.find(
+		(field): field is { type: "autoEmbed"; path: string } =>
+			typeof field === "object" &&
+			field !== null &&
+			(field as { type?: unknown }).type === "autoEmbed" &&
+			typeof (field as { path?: unknown }).path === "string",
+	)
+	if (!autoEmbedField) {
+		return false
+	}
+
+	try {
+		await db
+			.collection(collectionName)
+			.aggregate([
+				{
+					$vectorSearch: {
+						index: indexName,
+						path: autoEmbedField.path,
+						query: { text: "__memongo_stored_source_capability_probe__" },
+						numCandidates: 1,
+						limit: 1,
+						returnStoredSource: true,
+					},
+				},
+				{ $limit: 1 },
+			])
+			.toArray()
+		return true
+	} catch (err) {
+		const message = err instanceof Error ? err.message : String(err)
+		log.warn(
+			`storedSource operational probe failed for ${indexName}; disabling returnStoredSource: ${message}`,
+		)
+		return false
+	}
+}
+
 export async function detectCapabilities(
 	db: Db,
 	probeCollectionName?: string,
@@ -148,7 +193,7 @@ export async function detectCapabilities(
 			const vectorDefinition =
 				vectorIndex?.latestDefinition ?? vectorIndex?.definition
 			const storedSourceConfig = vectorDefinition?.storedSource
-			result.storedSource =
+			const storedSourceConfigured =
 				result.vectorSearch &&
 				isCapabilityEnabled("vector-stored-source", {
 					versionArray,
@@ -157,6 +202,15 @@ export async function detectCapabilities(
 				}) &&
 				typeof storedSourceConfig === "object" &&
 				storedSourceConfig !== null
+			result.storedSource =
+				storedSourceConfigured &&
+				vectorDefinition !== undefined &&
+				(await canReturnStoredSource(
+					db,
+					probeCollectionName,
+					`${probeCollectionName}_vector`,
+					vectorDefinition,
+				))
 		} catch {
 			// Search index management is unavailable on this deployment.
 		}
