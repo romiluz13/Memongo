@@ -2905,3 +2905,177 @@ describe("P4.4.3 LLM-adjudicated dedup", () => {
 		expect(adjudicateFactMergeMock).not.toHaveBeenCalled()
 	})
 })
+
+describe("consolidateMemory TTL expiry guards (B1)", () => {
+	beforeEach(() => {
+		vi.clearAllMocks()
+	})
+
+	const unexpiredClause = {
+		$or: [
+			{ expiresAt: { $exists: false } },
+			{ expiresAt: { $gt: expect.any(Date) } },
+		],
+	}
+
+	function makeTtlRunDb(structuredCol: Collection): Db {
+		const consolidationRunsCol = mockCollection({
+			findOne: vi.fn(async () => null),
+		})
+		const eventsCol = mockCollection({
+			find: vi.fn(() => ({
+				sort: vi.fn(() => ({
+					limit: vi.fn(() => ({
+						toArray: vi.fn(async () => [
+							{
+								eventId: "e-ttl",
+								agentId: "agent-1",
+								body: "I prefer TypeScript over JavaScript",
+								timestamp: new Date("2026-01-02T00:00:00Z"),
+								role: "user",
+							},
+						]),
+					})),
+				})),
+			})),
+			updateMany: vi.fn(async () => ({ modifiedCount: 1 }) as UpdateResult),
+		})
+		return mockDb({
+			test_consolidation_runs: consolidationRunsCol,
+			test_events: eventsCol,
+			test_structured_mem: structuredCol,
+		})
+	}
+
+	it("hasConflict lookup excludes expired structured docs", async () => {
+		const { consolidateMemory } = await import("./mongodb-consolidator.js")
+		const findOneMock = vi.fn(async () => null)
+		const structuredCol = mockCollection({ findOne: findOneMock })
+		const db = makeTtlRunDb(structuredCol)
+
+		await consolidateMemory({
+			db,
+			prefix: "test_",
+			agentId: "agent-1",
+			options: { minCombinedScore: 0 },
+		})
+
+		expect(findOneMock).toHaveBeenCalled()
+		expect(findOneMock.mock.calls[0]?.[0]).toMatchObject(unexpiredClause)
+	})
+
+	it("candidate similarity search excludes expired structured docs", async () => {
+		const { consolidateMemory } = await import("./mongodb-consolidator.js")
+		const aggregateMock = vi.fn(() => ({
+			toArray: vi.fn(async () => []),
+		}))
+		const structuredCol = mockCollection({ aggregate: aggregateMock })
+		const db = makeTtlRunDb(structuredCol)
+
+		await consolidateMemory({
+			db,
+			prefix: "test_",
+			agentId: "agent-1",
+			options: { minCombinedScore: 0 },
+		})
+
+		expect(aggregateMock).toHaveBeenCalled()
+		const pipeline = aggregateMock.mock.calls[0]?.[0] as Document[]
+		const matchStages = pipeline.filter((stage) => stage.$match)
+		expect(matchStages).toEqual(
+			expect.arrayContaining([
+				{ $match: expect.objectContaining(unexpiredClause) },
+			]),
+		)
+	})
+
+	it("prune phase fact sweep excludes expired structured docs", async () => {
+		const { consolidateMemory } = await import("./mongodb-consolidator.js")
+		const findMock = vi.fn(() => ({
+			sort: vi.fn(() => ({
+				limit: vi.fn(() => ({
+					toArray: vi.fn(async () => []),
+				})),
+			})),
+		}))
+		const structuredCol = mockCollection({ find: findMock })
+		const db = makeTtlRunDb(structuredCol)
+
+		await consolidateMemory({
+			db,
+			prefix: "test_",
+			agentId: "agent-1",
+			options: { minCombinedScore: 0 },
+		})
+
+		const pruneCall = findMock.mock.calls.find(
+			(call) =>
+				(call[0] as Document | undefined)?.state !== undefined &&
+				(call[0] as Document).type === undefined,
+		)
+		expect(pruneCall).toBeDefined()
+		expect(pruneCall?.[0]).toMatchObject(unexpiredClause)
+	})
+
+	it("reasoning and llm-dedup phases exclude expired structured docs", async () => {
+		const { consolidateMemory } = await import("./mongodb-consolidator.js")
+		const fact = {
+			_id: "fact-1",
+			agentId: "agent-1",
+			type: "fact",
+			key: "city",
+			value: "The user lives in Berlin",
+			state: "active",
+			scope: "agent",
+			scopeRef: "agent:agent-1",
+			updatedAt: new Date("2026-01-01T00:00:00Z"),
+		}
+		const findMock = vi.fn(() => ({
+			sort: vi.fn(() => ({
+				limit: vi.fn(() => ({
+					toArray: vi.fn(async () => [fact]),
+				})),
+			})),
+		}))
+		const aggregateMock = vi.fn(() => ({
+			toArray: vi.fn(async () => []),
+		}))
+		const structuredCol = mockCollection({
+			find: findMock,
+			aggregate: aggregateMock,
+			findOne: vi.fn(async () => null),
+		})
+		const db = makeTtlRunDb(structuredCol)
+		resolveEnrichmentProviderMock.mockReturnValueOnce({
+			name: "stub",
+			chatCompletion: vi.fn(),
+		})
+
+		await consolidateMemory({
+			db,
+			prefix: "test_",
+			agentId: "agent-1",
+			options: { minCombinedScore: 0, llmDedup: true },
+		})
+
+		// Reasoning fact sweep, llm-dedup candidate sweep, and prune sweep —
+		// every find against structured_mem must hide expired docs.
+		expect(findMock.mock.calls.length).toBeGreaterThanOrEqual(3)
+		for (const call of findMock.mock.calls) {
+			expect(call[0]).toMatchObject(unexpiredClause)
+		}
+		// Every structured_mem aggregate pipeline (candidate similarity,
+		// llm-dedup similars, prune duplicates) must carry the clause in a
+		// $match stage.
+		expect(aggregateMock.mock.calls.length).toBeGreaterThanOrEqual(3)
+		for (const call of aggregateMock.mock.calls) {
+			const pipeline = call[0] as Document[]
+			const matchStages = pipeline.filter((stage) => stage.$match)
+			expect(matchStages).toEqual(
+				expect.arrayContaining([
+					{ $match: expect.objectContaining(unexpiredClause) },
+				]),
+			)
+		}
+	})
+})

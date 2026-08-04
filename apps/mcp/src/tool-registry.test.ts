@@ -107,6 +107,8 @@ describe("input schema guidance (P1.2)", () => {
 			"limit",
 			"minScore",
 			"query",
+			"scope",
+			"scopeRef",
 		])
 		for (const { description } of descriptions) {
 			expect(typeof description).toBe("string")
@@ -119,6 +121,11 @@ describe("input schema guidance (P1.2)", () => {
 		expect(descriptions.map((d) => d.key).sort()).toEqual([
 			"agentId",
 			"content",
+			"customId",
+			"expiresAt",
+			"metadata",
+			"scope",
+			"scopeRef",
 			"sessionId",
 		])
 		for (const { description } of descriptions) {

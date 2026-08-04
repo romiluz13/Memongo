@@ -249,7 +249,10 @@ import {
 	tryConsumeSearchAggregation,
 	tryConsumeSearchEmbed,
 } from "./mongodb-search-budget.js"
-import { applyCapabilityProbeResult } from "./mongodb-capability-registry.js"
+import {
+	applyCapabilityProbeResult,
+	mongodbDeploymentIdentity,
+} from "./mongodb-capability-registry.js"
 import type {
 	SearchExplainOptions,
 	SearchExplainTraceArtifact,
@@ -529,7 +532,12 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 	private readonly agentScopeRef: string
 	private readonly workspaceScopeRef: string
 	private readonly extraMemoryPaths: string[]
-	private readonly capabilities: DetectedCapabilities
+	/**
+	 * Serving capabilities detected at manager creation (B2a: public so the
+	 * bridge can expose them to deploy targets without a type-guard cast;
+	 * readonly — they are recomputed on construction, never mutated).
+	 */
+	readonly capabilities: DetectedCapabilities
 	private nativeBitemporalVectorPrefilter: boolean
 	private nativeBitemporalPrefilterCheckedAt = Date.now()
 	private readonly config: ResolvedMemoryBackendConfig
@@ -631,6 +639,13 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 
 		const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId)
 		const safeUri = redactMongoURI(mongoCfg.uri)
+		// B10: credential-free deployment identity (hosts + database + appName,
+		// never userinfo) so capability probe outcomes are scoped to this
+		// deployment only. Never log this key material.
+		const capabilityDeployment = mongodbDeploymentIdentity(
+			mongoCfg.uri,
+			mongoCfg.database,
+		)
 		let client: MongoClient
 		let ownsClient = true
 		if (params.client) {
@@ -681,7 +696,11 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 
 		// Detect concrete serving readiness. Fusion capability is server-version
 		// based, while Search capabilities require named queryable indexes.
-		let capabilities = await detectCapabilities(db, chunksCollectionName)
+		let capabilities = await detectCapabilities(
+			db,
+			chunksCollectionName,
+			capabilityDeployment,
+		)
 		log.info(`capabilities: ${JSON.stringify(capabilities)}`)
 		let nativeBitemporalVectorPrefilter = false
 
@@ -696,6 +715,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 				mongoCfg.embeddingMode,
 				mongoCfg.quantization,
 				mongoCfg.numDimensions,
+				capabilityDeployment,
 			)
 			// P3.2: the quantization-on-autoEmbed rejection is a probe outcome
 			// recorded during index creation — fold it into the capabilities so
@@ -706,6 +726,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 				capabilityGates: applyCapabilityProbeResult(
 					capabilities.capabilityGates ?? {},
 					"autoembed-quantization",
+					capabilityDeployment,
 				),
 			}
 			if (ensuredSearchIndexes.text || ensuredSearchIndexes.vector) {
@@ -780,7 +801,11 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 					}
 					log.warn(readinessMessage)
 				}
-				capabilities = await detectCapabilities(db, chunksCollectionName)
+				capabilities = await detectCapabilities(
+					db,
+					chunksCollectionName,
+					capabilityDeployment,
+				)
 			}
 		} else {
 			log.info(
@@ -1772,6 +1797,8 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 	async consolidate(params?: {
 		maxEvents?: number
 		minCombinedScore?: number
+		resolveContradictions?: boolean
+		llmDedup?: boolean
 		scope?: MemoryScope
 		scopeRef?: string
 	}) {

@@ -30,6 +30,7 @@ export {
 	type ApiRouteMethod,
 	type ApiRouteContract,
 	MEMONGO_API_ROUTES,
+	MEMONGO_MCP_TOOL_FIELDS,
 } from "./contract.js"
 
 export {

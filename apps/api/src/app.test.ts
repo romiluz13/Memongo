@@ -3271,6 +3271,226 @@ describe("createApp", () => {
 		})
 	})
 
+	it("forwards expiresAt on /v1/write-event (B1)", async () => {
+		const expiresAt = new Date(Date.now() + 3_600_000).toISOString()
+		const res = await createApp().request("/v1/write-event", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				role: "user",
+				body: "session-scoped note",
+				expiresAt,
+			}),
+		})
+
+		expect(res.status).toBe(200)
+		expect(
+			bridgeMocks.memongoBridgeWriteConversationEvent,
+		).toHaveBeenCalledWith(expect.objectContaining({ expiresAt }))
+	})
+
+	it("returns 400 for an invalid expiresAt on /v1/write-event (B1)", async () => {
+		const res = await createApp().request("/v1/write-event", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				role: "user",
+				body: "hello",
+				expiresAt: "not-a-date",
+			}),
+		})
+
+		expect(res.status).toBe(400)
+		await expect(res.json()).resolves.toEqual({
+			error: {
+				code: "VALIDATION_ERROR",
+				message: "expiresAt must be a valid date string when provided",
+			},
+		})
+		expect(
+			bridgeMocks.memongoBridgeWriteConversationEvent,
+		).not.toHaveBeenCalled()
+	})
+
+	it("returns 400 for a past expiresAt on /v1/write-event (B1)", async () => {
+		const res = await createApp().request("/v1/write-event", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				role: "user",
+				body: "hello",
+				expiresAt: new Date(Date.now() - 1_000).toISOString(),
+			}),
+		})
+
+		expect(res.status).toBe(400)
+		await expect(res.json()).resolves.toEqual({
+			error: {
+				code: "VALIDATION_ERROR",
+				message: "expiresAt must be in the future",
+			},
+		})
+		expect(
+			bridgeMocks.memongoBridgeWriteConversationEvent,
+		).not.toHaveBeenCalled()
+	})
+
+	it("forwards expiresAt on /v1/add (B1)", async () => {
+		const expiresAt = new Date(Date.now() + 3_600_000).toISOString()
+		const res = await createApp().request("/v1/add", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ content: "remember briefly", expiresAt }),
+		})
+
+		expect(res.status).toBe(200)
+		expect(bridgeMocks.memongoBridgeAdd).toHaveBeenCalledWith(
+			expect.objectContaining({ expiresAt }),
+		)
+	})
+
+	it("returns 400 for an invalid expiresAt on /v1/add (B1)", async () => {
+		const res = await createApp().request("/v1/add", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ content: "remember briefly", expiresAt: 42 }),
+		})
+
+		expect(res.status).toBe(400)
+		expect(bridgeMocks.memongoBridgeAdd).not.toHaveBeenCalled()
+	})
+
+	it("forwards per-item expiresAt on /v1/write-events (B1)", async () => {
+		const expiresAt = new Date(Date.now() + 3_600_000).toISOString()
+		bridgeMocks.memongoBridgeWriteConversationEventsBatch.mockResolvedValue([
+			{ ok: true, eventId: "evt-1", chunkCreated: true },
+		])
+
+		const res = await createApp().request("/v1/write-events", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				events: [{ role: "user", body: "one", expiresAt }],
+			}),
+		})
+
+		expect(res.status).toBe(200)
+		expect(
+			bridgeMocks.memongoBridgeWriteConversationEventsBatch,
+		).toHaveBeenCalledWith(
+			expect.objectContaining({
+				events: [expect.objectContaining({ expiresAt })],
+			}),
+		)
+	})
+
+	it("fails only the item with an invalid expiresAt on /v1/write-events (B1)", async () => {
+		bridgeMocks.memongoBridgeWriteConversationEventsBatch.mockResolvedValue([
+			{ ok: true, eventId: "evt-2", chunkCreated: true },
+		])
+
+		const res = await createApp().request("/v1/write-events", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				events: [
+					{ role: "user", body: "bad", expiresAt: "not-a-date" },
+					{ role: "user", body: "good" },
+				],
+			}),
+		})
+
+		expect(res.status).toBe(200)
+		const payload = (await res.json()) as {
+			receipts: Array<Record<string, unknown>>
+		}
+		expect(payload.receipts[0]).toEqual({
+			ok: false,
+			code: "VALIDATION_ERROR",
+			message: "expiresAt must be a valid date string when provided",
+		})
+		expect(payload.receipts[1]).toEqual({
+			ok: true,
+			eventId: "evt-2",
+			chunkCreated: true,
+		})
+	})
+
+	it("forwards entry.expiresAt as a Date on /v1/write-structured (B1)", async () => {
+		bridgeMocks.memongoBridgeWriteStructuredMemory.mockReset()
+		bridgeMocks.memongoBridgeWriteStructuredMemory.mockResolvedValue({
+			id: "s1",
+		})
+		const expiresAt = new Date(Date.now() + 3_600_000).toISOString()
+
+		const res = await createApp().request("/v1/write-structured", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				entry: {
+					type: "fact",
+					key: "temporary-fact",
+					value: "expires soon",
+					expiresAt,
+				},
+			}),
+		})
+
+		expect(res.status).toBe(200)
+		const call =
+			bridgeMocks.memongoBridgeWriteStructuredMemory.mock.calls[0]?.[0]
+		expect(call?.entry?.expiresAt).toBeInstanceOf(Date)
+		expect((call?.entry?.expiresAt as Date).toISOString()).toBe(expiresAt)
+	})
+
+	it("returns 400 for an invalid entry.expiresAt on /v1/write-structured (B1)", async () => {
+		bridgeMocks.memongoBridgeWriteStructuredMemory.mockReset()
+		const res = await createApp().request("/v1/write-structured", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				entry: {
+					type: "fact",
+					key: "temporary-fact",
+					value: "expires soon",
+					expiresAt: "not-a-date",
+				},
+			}),
+		})
+
+		expect(res.status).toBe(400)
+		expect(
+			bridgeMocks.memongoBridgeWriteStructuredMemory,
+		).not.toHaveBeenCalled()
+	})
+
+	it("returns 400 for a past entry.expiresAt on /v1/write-structured (B1)", async () => {
+		bridgeMocks.memongoBridgeWriteStructuredMemory.mockReset()
+		const res = await createApp().request("/v1/write-structured", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				entry: {
+					type: "fact",
+					key: "temporary-fact",
+					value: "expires soon",
+					expiresAt: new Date(Date.now() - 1_000).toISOString(),
+				},
+			}),
+		})
+
+		expect(res.status).toBe(400)
+		await expect(res.json()).resolves.toEqual({
+			error: {
+				code: "VALIDATION_ERROR",
+				message: "entry.expiresAt must be in the future",
+			},
+		})
+		expect(
+			bridgeMocks.memongoBridgeWriteStructuredMemory,
+		).not.toHaveBeenCalled()
+	})
+
 	it("returns a safe 500 envelope without leaking driver internals (P0.8)", async () => {
 		bridgeMocks.memongoBridgeSearch.mockRejectedValue(
 			Object.assign(
@@ -3549,6 +3769,8 @@ describe("createApp", () => {
 				agentId: "agent-42",
 				maxEvents: 20,
 				minCombinedScore: 0.15,
+				resolveContradictions: false,
+				llmDedup: true,
 				scope: "workspace",
 			}),
 		})
@@ -3565,8 +3787,30 @@ describe("createApp", () => {
 			agentId: "agent-42",
 			maxEvents: 20,
 			minCombinedScore: 0.15,
+			resolveContradictions: false,
+			llmDedup: true,
 			scope: "workspace",
 		})
+	})
+
+	it.each([
+		["resolveContradictions", "false"],
+		["llmDedup", 1],
+	])("rejects malformed consolidate %s", async (field, value) => {
+		const res = await createApp().request("/v1/consolidate", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ [field]: value }),
+		})
+
+		expect(res.status).toBe(400)
+		await expect(res.json()).resolves.toEqual({
+			error: {
+				code: "VALIDATION_ERROR",
+				message: `${field} must be a boolean when provided`,
+			},
+		})
+		expect(bridgeMocks.memongoBridgeConsolidate).not.toHaveBeenCalled()
 	})
 
 	it("edits core memory block via self-edit", async () => {

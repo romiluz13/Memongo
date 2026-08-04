@@ -5,6 +5,7 @@ import {
 	proceduresCollection,
 	structuredMemCollection,
 } from "./mongodb-schema.js"
+import { buildUnexpiredClause } from "./mongodb-temporal.js"
 import { emitTelemetry } from "./mongodb-telemetry.js"
 import type {
 	MemoryActiveSlate,
@@ -224,6 +225,9 @@ export async function hydrateActiveSlate(params: {
 			{ validTo: { $gt: now } },
 		],
 	}
+	// P4.4.1 (B1): hide TTL-expired docs until the sweep removes them. Kept
+	// in $and because nonExpiredFilter already occupies the top-level $or.
+	const ttlGuard = { $and: [buildUnexpiredClause()] }
 
 	try {
 		const [activeCriticalDocs, procedureDocs, durableDocs, anchorDocs] =
@@ -248,6 +252,7 @@ export async function hydrateActiveSlate(params: {
 								],
 							},
 							...nonExpiredFilter,
+							...ttlGuard,
 						})
 						.sort({ updatedAt: -1 })
 						.limit(sourceLimit)
@@ -307,6 +312,7 @@ export async function hydrateActiveSlate(params: {
 								],
 							},
 							...nonExpiredFilter,
+							...ttlGuard,
 						})
 						.sort({ updatedAt: -1 })
 						.limit(sourceLimit)
@@ -326,7 +332,10 @@ export async function hydrateActiveSlate(params: {
 				),
 				settled("recent-anchors", () =>
 					eventsCollection(db, prefix)
-						.find(scopeFilter)
+						.find({
+							...scopeFilter,
+							...buildUnexpiredClause(),
+						})
 						.sort({ timestamp: -1 })
 						.limit(sourceLimit)
 						.project({

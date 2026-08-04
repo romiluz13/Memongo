@@ -55,6 +55,76 @@ describe("MemongoClient write idempotency", () => {
 		}
 	})
 
+	it("sends expiresAt on add, writeEvent, and writeEvents items (B1)", async () => {
+		const calls: Array<{ url: string; init: RequestInit }> = []
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (url: string, init?: RequestInit) => {
+				calls.push({ url: String(url), init: init ?? {} })
+				const isBatch = String(url).endsWith("/v1/write-events")
+				return new Response(
+					JSON.stringify(
+						isBatch
+							? { ok: true, receipts: [] }
+							: { eventId: "evt-1", chunkCreated: true },
+					),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				)
+			}),
+		)
+
+		const client = new MemongoClient({ baseUrl: "http://127.0.0.1:3100" })
+		const expiresAt = "2030-01-01T00:00:00.000Z"
+		await client.add({ content: "brief", expiresAt })
+		await client.writeEvent({ role: "user", body: "brief", expiresAt })
+		await client.writeEvents({
+			events: [{ role: "user", body: "brief", expiresAt }],
+		})
+
+		expect(calls).toHaveLength(3)
+		expect(calls[0].url).toBe("http://127.0.0.1:3100/v1/add")
+		expect(JSON.parse(String(calls[0].init.body)).expiresAt).toBe(expiresAt)
+		expect(calls[1].url).toBe("http://127.0.0.1:3100/v1/write-event")
+		expect(JSON.parse(String(calls[1].init.body)).expiresAt).toBe(expiresAt)
+		expect(calls[2].url).toBe("http://127.0.0.1:3100/v1/write-events")
+		expect(JSON.parse(String(calls[2].init.body)).events[0].expiresAt).toBe(
+			expiresAt,
+		)
+	})
+
+	it("sends consolidation control flags (B8)", async () => {
+		const calls: Array<{ url: string; init: RequestInit }> = []
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (url: string, init?: RequestInit) => {
+				calls.push({ url: String(url), init: init ?? {} })
+				return new Response(
+					JSON.stringify({
+						factsExtracted: 0,
+						eventsProcessed: 0,
+						skipped: 0,
+					}),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				)
+			}),
+		)
+
+		const client = new MemongoClient({ baseUrl: "http://127.0.0.1:3100" })
+		await client.consolidate({
+			resolveContradictions: false,
+			llmDedup: true,
+		})
+
+		expect(calls).toHaveLength(1)
+		expect(calls[0].url).toBe("http://127.0.0.1:3100/v1/consolidate")
+		expect(JSON.parse(String(calls[0].init.body))).toEqual(
+			expect.objectContaining({
+				resolveContradictions: false,
+				llmDedup: true,
+			}),
+		)
+	})
+
 	it("sends fusionMethod on searchKB when provided (P0.10)", async () => {
 		const calls: Array<{ url: string; init: RequestInit }> = []
 		vi.stubGlobal(

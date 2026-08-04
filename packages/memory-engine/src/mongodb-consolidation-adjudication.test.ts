@@ -415,4 +415,29 @@ describe("resolveConflictedCandidate", () => {
 			}),
 		).resolves.toEqual({ resolved: false, invalidatedCount: 0 })
 	})
+
+	it("excludes expired facts from the adjudication candidate set (B1)", async () => {
+		const { resolveConflictedCandidate } = await import(
+			"./mongodb-consolidation-adjudication.js"
+		)
+		const { db, findMock } = mockDbWithFacts([])
+
+		const result = await resolveConflictedCandidate({
+			db,
+			prefix: "test_",
+			provider,
+			model: "test-model",
+			agentId: "agent-1",
+			candidate: { key: "city", value: "The user lives in Berlin" },
+		})
+
+		expect(result).toEqual({ resolved: false, invalidatedCount: 0 })
+		expect(findMock).toHaveBeenCalled()
+		expect(findMock.mock.calls[0]?.[0]).toMatchObject({
+			$or: [
+				{ expiresAt: { $exists: false } },
+				{ expiresAt: { $gt: expect.any(Date) } },
+			],
+		})
+	})
 })

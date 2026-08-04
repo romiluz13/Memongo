@@ -1494,9 +1494,10 @@ export class MongoDBManagerBenchmarkOps {
 			scope: params.scope,
 			limitConversations: params.limitConversations,
 			limitTurnsPerConversation: params.limitTurnsPerConversation,
-			writeTurn: async (turn) => {
-				await this.host.writeConversationEvent(turn)
-			},
+			// B6: bounded batches through the canonical batch write API (per-item
+			// idempotency + receipts) instead of one write per turn.
+			writeTurns: async (turns) =>
+				this.host.writeConversationEventsBatch(turns),
 		})
 	}
 
@@ -1519,18 +1520,22 @@ export class MongoDBManagerBenchmarkOps {
 			scope: params.scope,
 			limitConversations: params.limitConversations,
 			limitTurnsPerConversation: params.limitTurnsPerConversation,
-			writeTurn: async (turn) => {
-				// Tenant isolation: force the caller's authorized scope/scopeRef onto
-				// every imported turn so a dataset that declares its own
-				// conversation.scope cannot land events outside the caller's tenant.
-				await this.host.writeConversationEvent({
-					...turn,
-					...(params.scope !== undefined ? { scope: params.scope } : {}),
-					...(params.scopeRef !== undefined
-						? { scopeRef: params.scopeRef }
-						: {}),
-				})
-			},
+			// B6: bounded batches through the canonical batch write API (per-item
+			// idempotency + receipts) instead of one write per turn.
+			writeTurns: async (turns) =>
+				this.host.writeConversationEventsBatch(
+					turns.map((turn) => ({
+						...turn,
+						// Tenant isolation: force the caller's authorized scope/scopeRef
+						// onto every imported turn so a dataset that declares its own
+						// conversation.scope cannot land events outside the caller's
+						// tenant.
+						...(params.scope !== undefined ? { scope: params.scope } : {}),
+						...(params.scopeRef !== undefined
+							? { scopeRef: params.scopeRef }
+							: {}),
+					})),
+				),
 		})
 	}
 

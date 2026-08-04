@@ -13,10 +13,15 @@ const writeProcedure = vi.fn(async (entry: { agentId?: string }) => ({
 	id: "p1",
 	...entry,
 }))
+const consolidate = vi.fn(async () => ({
+	factsExtracted: 0,
+	eventsProcessed: 0,
+	skipped: 0,
+}))
 
 vi.mock("@memongo/memory-engine", () => ({
 	getMemorySearchManager: vi.fn(async ({ agentId }: { agentId: string }) => ({
-		manager: { agentId, writeStructuredMemory, writeProcedure },
+		manager: { agentId, writeStructuredMemory, writeProcedure, consolidate },
 		error: null,
 	})),
 	closeAllMemorySearchManagers: vi.fn(),
@@ -29,6 +34,7 @@ vi.mock("./memory-config.js", () => ({
 
 import { getMemorySearchManager } from "@memongo/memory-engine"
 import {
+	memongoBridgeConsolidate,
 	memongoBridgeWriteProcedure,
 	memongoBridgeWriteStructuredMemory,
 } from "./memongo-bridge.js"
@@ -37,6 +43,7 @@ describe("bridge tenant identity (issue #42)", () => {
 	beforeEach(() => {
 		writeStructuredMemory.mockClear()
 		writeProcedure.mockClear()
+		consolidate.mockClear()
 		vi.mocked(getMemorySearchManager).mockClear()
 	})
 
@@ -112,5 +119,20 @@ describe("bridge tenant identity (issue #42)", () => {
 		// No authorized scope was provided — do not wipe the entry's own value.
 		expect(stored.scope).toBe("tenant")
 		expect(stored.scopeRef).toBe("ref-B")
+	})
+
+	it("forwards consolidation control flags to the engine manager", async () => {
+		await memongoBridgeConsolidate({
+			agentId: "agent-A",
+			resolveContradictions: false,
+			llmDedup: true,
+		})
+
+		expect(consolidate).toHaveBeenCalledWith(
+			expect.objectContaining({
+				resolveContradictions: false,
+				llmDedup: true,
+			}),
+		)
 	})
 })

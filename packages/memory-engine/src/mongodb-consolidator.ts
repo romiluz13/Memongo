@@ -24,6 +24,7 @@ import { randomUUID } from "node:crypto"
 import type { Collection, Db, Document } from "mongodb"
 import { createSubsystemLogger, type MemoryScope } from "@memongo/lib"
 import { isDuplicateKeyError } from "./internal.js"
+import { buildUnexpiredClause } from "./mongodb-temporal.js"
 import { DURABLE_JOB_WRITE_CONCERN } from "./mongodb-memory-jobs.js"
 import { scanNovelty } from "./mongodb-novelty.js"
 import { traceReasoningChain } from "./mongodb-reasoning-chain.js"
@@ -264,6 +265,9 @@ async function hasConflict(params: {
 		type,
 		key,
 		state: { $ne: "invalidated" },
+		// P4.4.1 (B1): an expired entry reads as gone, so it must not block
+		// promotion as a conflict ahead of the TTL sweep.
+		...buildUnexpiredClause(),
 	}
 	if (scope) filter.scope = scope
 	if (scopeRef) filter.scopeRef = scopeRef
@@ -889,6 +893,10 @@ export async function consolidateMemory(params: {
 							},
 						},
 						{ $addFields: { score: { $meta: "vectorSearchScore" } } },
+						// P4.4.1 (B1): an expired lookalike must not force a NOOP —
+						// expiresAt is not a serving-index filter field, so exclude
+						// post-ANN until the TTL sweep removes the doc.
+						{ $match: buildUnexpiredClause() },
 						{ $limit: 5 },
 					])
 					.toArray()
@@ -1042,6 +1050,9 @@ export async function consolidateMemory(params: {
 				type: "fact",
 				state: { $ne: "invalidated" },
 				"provenance.origin": { $ne: "llm-inference" },
+				// P4.4.1 (B1): expired facts read as gone — they must not feed
+				// deduction/induction ahead of the TTL sweep.
+				...buildUnexpiredClause(),
 			}
 			if (options?.scope) factFilter.scope = options.scope
 			if (options?.scopeRef) factFilter.scopeRef = options.scopeRef
@@ -1161,6 +1172,9 @@ export async function consolidateMemory(params: {
 				const dedupFilter: Document = {
 					agentId,
 					state: { $ne: "invalidated" },
+					// P4.4.1 (B1): expired facts read as gone — exclude them from
+					// merge candidacy ahead of the TTL sweep.
+					...buildUnexpiredClause(),
 				}
 				if (options?.scope) dedupFilter.scope = options.scope
 				if (options?.scopeRef) dedupFilter.scopeRef = options.scopeRef
@@ -1205,6 +1219,10 @@ export async function consolidateMemory(params: {
 									$match: {
 										_id: { $ne: fact._id },
 										state: { $ne: "invalidated" },
+										// P4.4.1 (B1): expired docs read as gone — never merge
+										// against them (post-ANN; the serving index has no
+										// expiresAt filter field).
+										...buildUnexpiredClause(),
 									},
 								},
 							])
@@ -1308,6 +1326,9 @@ export async function consolidateMemory(params: {
 		const pruneFilter: Document = {
 			agentId,
 			state: { $ne: "invalidated" },
+			// P4.4.1 (B1): expired facts read as gone — they must not drive
+			// near-duplicate invalidation of live facts.
+			...buildUnexpiredClause(),
 		}
 		if (options?.scope) pruneFilter.scope = options.scope
 		if (options?.scopeRef) pruneFilter.scopeRef = options.scopeRef
@@ -1352,6 +1373,10 @@ export async function consolidateMemory(params: {
 							$match: {
 								_id: { $ne: fact._id },
 								state: { $ne: "invalidated" },
+								// P4.4.1 (B1): expired docs read as gone — never prune a
+								// live fact against one (post-ANN; the serving index has
+								// no expiresAt filter field).
+								...buildUnexpiredClause(),
 							},
 						},
 					])

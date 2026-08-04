@@ -53,7 +53,7 @@ describe("createMemongoTools", () => {
 		expect(recallConversation).toHaveBeenCalledWith(input)
 	})
 
-	it("accepts scopeRef on the scanNovelty/consolidate schemas (P2.8)", async () => {
+	it("accepts scopeRef and control flags on consolidation schemas (P2.8, B8)", async () => {
 		const scanNovelty = vi.fn(async () => ({ novel: [] }))
 		const consolidate = vi.fn(async () => ({ consolidated: 0 }))
 		const tools = createMemongoTools({
@@ -68,7 +68,12 @@ describe("createMemongoTools", () => {
 		await noveltyTool.execute(noveltyInput, {})
 		expect(scanNovelty).toHaveBeenCalledWith(noveltyInput)
 
-		const consolidateInput = { scope: "workspace", scopeRef: "acme/platform" }
+		const consolidateInput = {
+			scope: "workspace",
+			scopeRef: "acme/platform",
+			resolveContradictions: false,
+			llmDedup: true,
+		}
 		expect(consolidateTool.inputSchema.parse(consolidateInput)).toEqual(
 			consolidateInput,
 		)

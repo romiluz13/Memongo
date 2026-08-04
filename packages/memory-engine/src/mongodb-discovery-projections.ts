@@ -2,6 +2,7 @@ import type { Db, Document } from "mongodb"
 import { type MemoryScope, createSubsystemLogger } from "@memongo/lib"
 import { recordProjectionRun } from "./mongodb-ops.js"
 import { resolveTimeRangePreset } from "./mongodb-retrieval-planner.js"
+import { buildUnexpiredClause } from "./mongodb-temporal.js"
 import {
 	entitiesCollection,
 	episodesCollection,
@@ -494,6 +495,9 @@ async function buildEntityBrief(params: {
 							],
 						}
 					: {}),
+				// P4.4.1 (B1): hide TTL-expired docs until the sweep removes them;
+				// $and because the regex lane may occupy the top-level $or.
+				$and: [buildUnexpiredClause()],
 			})
 			.sort({ updatedAt: -1 })
 			.limit(maxItems)
@@ -589,6 +593,9 @@ async function buildTopicBrief(params: {
 							],
 						}
 					: {}),
+				// P4.4.1 (B1): hide TTL-expired docs until the sweep removes them;
+				// $and because the regex lane may occupy the top-level $or.
+				$and: [buildUnexpiredClause()],
 			})
 			.sort({ updatedAt: -1 })
 			.limit(maxItems)
@@ -717,6 +724,10 @@ async function buildWhatChanged(params: {
 						...scopeFilter,
 						state: "active",
 						$or: revisionFilters,
+						// P4.4.1 (B1): an expired "current" record reads as gone even
+						// before the TTL sweep; $and because $or carries the revision
+						// identity set.
+						$and: [buildUnexpiredClause()],
 					})
 					.toArray(),
 			)
@@ -888,6 +899,9 @@ async function buildContradictionReport(params: {
 							],
 						}
 					: {}),
+				// P4.4.1 (B1): hide TTL-expired docs until the sweep removes them;
+				// $and because the regex lane may occupy the top-level $or.
+				$and: [buildUnexpiredClause()],
 			})
 			.sort({ updatedAt: -1 })
 			.limit(maxItems)

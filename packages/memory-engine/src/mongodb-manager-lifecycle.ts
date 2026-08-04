@@ -573,6 +573,8 @@ export class MongoDBManagerLifecycleOps {
 	async consolidate(params?: {
 		maxEvents?: number
 		minCombinedScore?: number
+		resolveContradictions?: boolean
+		llmDedup?: boolean
 		scope?: MemoryScope
 		scopeRef?: string
 	}) {

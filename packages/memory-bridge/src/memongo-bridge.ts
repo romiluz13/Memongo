@@ -172,6 +172,7 @@ export async function memongoBridgeAdd(params: {
 	scope?: MemoryScope
 	scopeRef?: string
 	idempotencyKey?: string
+	expiresAt?: string
 }) {
 	return memongoBridgeWriteConversationEvent({
 		agentId: params.agentId,
@@ -182,6 +183,7 @@ export async function memongoBridgeAdd(params: {
 		scope: params.scope,
 		scopeRef: params.scopeRef,
 		idempotencyKey: params.idempotencyKey,
+		expiresAt: params.expiresAt,
 	})
 }
 
@@ -197,11 +199,13 @@ export async function memongoBridgeWriteConversationEvent(params: {
 	scope?: MemoryScope
 	scopeRef?: string
 	idempotencyKey?: string
+	expiresAt?: string
 }) {
 	const m = await memongoBridgeGetManager(params.agentId)
 	const timestamp = params.timestamp ? new Date(params.timestamp) : undefined
 	const validAt = params.validAt ? new Date(params.validAt) : undefined
 	const invalidAt = params.invalidAt ? new Date(params.invalidAt) : undefined
+	const expiresAt = params.expiresAt ? new Date(params.expiresAt) : undefined
 	return m.writeConversationEvent({
 		role: params.role,
 		body: params.body,
@@ -213,6 +217,7 @@ export async function memongoBridgeWriteConversationEvent(params: {
 		scope: params.scope,
 		scopeRef: params.scopeRef,
 		idempotencyKey: params.idempotencyKey,
+		expiresAt,
 	})
 }
 
@@ -235,6 +240,7 @@ export async function memongoBridgeWriteConversationEventsBatch(params: {
 		scope?: MemoryScope
 		scopeRef?: string
 		idempotencyKey?: string
+		expiresAt?: string
 	}>
 }) {
 	const m = await memongoBridgeGetManager(params.agentId)
@@ -250,6 +256,7 @@ export async function memongoBridgeWriteConversationEventsBatch(params: {
 			scope: event.scope,
 			scopeRef: event.scopeRef,
 			idempotencyKey: event.idempotencyKey,
+			expiresAt: event.expiresAt ? new Date(event.expiresAt) : undefined,
 		})),
 	)
 }
@@ -693,16 +700,15 @@ export type MemongoBridgeCapabilities = DetectedCapabilities
  * P1.9 boot capability surface: exposes the manager's detected serving
  * capabilities so deploy targets (memongo-api boot) can log a search-lane
  * table and enforce MEMONGO_REQUIRE_VECTOR without re-probing Mongo
- * themselves. Returns null when the manager predates the capability field.
+ * themselves. B2a: the manager declares `capabilities` publicly, so this is
+ * a typed read (the `| null` return shape is kept for callers compiled
+ * against the pre-typed surface).
  */
 export async function memongoBridgeCapabilities(params: {
 	agentId?: string
 }): Promise<MemongoBridgeCapabilities | null> {
 	const m = await memongoBridgeGetManager(params.agentId)
-	return (
-		(m as unknown as { capabilities?: MemongoBridgeCapabilities })
-			.capabilities ?? null
-	)
+	return m.capabilities
 }
 
 /**
@@ -915,6 +921,8 @@ export async function memongoBridgeConsolidate(params: {
 	agentId?: string
 	maxEvents?: number
 	minCombinedScore?: number
+	resolveContradictions?: boolean
+	llmDedup?: boolean
 	scope?: MemoryScope
 	scopeRef?: string
 }) {
@@ -922,6 +930,8 @@ export async function memongoBridgeConsolidate(params: {
 	return m.consolidate({
 		maxEvents: params.maxEvents,
 		minCombinedScore: params.minCombinedScore,
+		resolveContradictions: params.resolveContradictions,
+		llmDedup: params.llmDedup,
 		scope: params.scope,
 		// Tenant isolation: forward the authorized scopeRef so consolidation only
 		// processes the caller's tenant events (consolidateMemory filters on it).

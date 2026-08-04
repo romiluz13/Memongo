@@ -14,6 +14,7 @@
  */
 
 import type { Db, Document } from "mongodb"
+import { buildUnexpiredClause } from "./mongodb-temporal.js"
 import type {
 	ReasoningChain,
 	ReasoningChainNode,
@@ -89,7 +90,10 @@ export async function traceReasoningChain(params: {
 	// Traverses sourceEventIds -> key links within the same collection.
 	// $graphLookup follows: startWith "$sourceEventIds", connect sourceEventIds -> key.
 	const pipeline: Document[] = [
-		{ $match: { [idField]: factId, agentId } },
+		// P4.4.1 (B1): hide TTL-expired docs from the trace (starting fact and
+		// traversed premises) until the sweep removes them. Semantics-neutral
+		// for collections without expiresAt via the $exists:false branch.
+		{ $match: { [idField]: factId, agentId, ...buildUnexpiredClause() } },
 		{
 			$graphLookup: {
 				from: fullCollectionName,
@@ -99,7 +103,7 @@ export async function traceReasoningChain(params: {
 				as: "premises",
 				maxDepth,
 				depthField: "hopDistance",
-				restrictSearchWithMatch: { agentId },
+				restrictSearchWithMatch: { agentId, ...buildUnexpiredClause() },
 			},
 		},
 	]

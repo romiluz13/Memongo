@@ -3,9 +3,11 @@ import os from "node:os"
 import path from "node:path"
 import { describe, expect, it, vi } from "vitest"
 import {
+	IMPORT_WRITE_BATCH_SIZE,
 	ingestBenchmarkDataset,
 	importConversationDataset,
 	loadBenchmarkDataset,
+	type ConversationReplayBatchTurn,
 } from "./mongodb-benchmark-harness.js"
 
 describe("benchmark harness", () => {
@@ -400,6 +402,190 @@ describe("benchmark harness", () => {
 		} finally {
 			await rm(allowedDir, { recursive: true, force: true })
 			await rm(outsideDir, { recursive: true, force: true })
+		}
+	})
+})
+
+describe("conversation import batch routing (B6)", () => {
+	it("routes imports through bounded batches in dataset order", async () => {
+		const dir = await mkdtemp(path.join(os.tmpdir(), "memongo-import-batch-"))
+		const datasetPath = path.join(dir, "history.json")
+		const totalTurns = IMPORT_WRITE_BATCH_SIZE + 2
+		try {
+			await writeFile(
+				datasetPath,
+				JSON.stringify({
+					conversations: [
+						{
+							conversationId: "conv-batch",
+							turns: Array.from({ length: totalTurns }, (_, index) => ({
+								role: "user",
+								body: `batch turn ${index}`,
+							})),
+						},
+					],
+				}),
+			)
+			const writeTurns = vi.fn(async (turns: ConversationReplayBatchTurn[]) =>
+				turns.map(() => ({ ok: true as const })),
+			)
+
+			const result = await importConversationDataset({
+				datasetPath,
+				scope: "agent",
+				writeTurns,
+			})
+
+			expect(result.turnsImported).toBe(totalTurns)
+			expect(result.failedTurns).toBe(0)
+			expect(writeTurns).toHaveBeenCalledTimes(2)
+			expect(writeTurns.mock.calls[0]?.[0]).toHaveLength(
+				IMPORT_WRITE_BATCH_SIZE,
+			)
+			expect(writeTurns.mock.calls[1]?.[0]).toHaveLength(2)
+			const orderedBodies = writeTurns.mock.calls.flatMap(([turns]) =>
+				turns.map((turn) => turn.body),
+			)
+			expect(orderedBodies).toEqual(
+				Array.from({ length: totalTurns }, (_, index) => `batch turn ${index}`),
+			)
+		} finally {
+			await rm(dir, { recursive: true, force: true })
+		}
+	})
+
+	it("stamps a deterministic idempotency identity on every batched item", async () => {
+		const dir = await mkdtemp(path.join(os.tmpdir(), "memongo-import-keys-"))
+		const datasetPath = path.join(dir, "history.json")
+		try {
+			await writeFile(
+				datasetPath,
+				JSON.stringify({
+					conversations: [
+						{
+							conversationId: "conv-keys",
+							turns: [
+								{ role: "user", body: "first keyed turn" },
+								{ role: "assistant", body: "second keyed turn" },
+								{ role: "user", body: "third keyed turn" },
+							],
+						},
+					],
+				}),
+			)
+			const runKeys: string[][] = []
+			for (let run = 0; run < 2; run++) {
+				const writeTurns = vi.fn(async (turns: ConversationReplayBatchTurn[]) =>
+					turns.map(() => ({ ok: true as const })),
+				)
+
+				const result = await importConversationDataset({
+					datasetPath,
+					writeTurns,
+				})
+
+				expect(result.turnsImported).toBe(3)
+				const keys = writeTurns.mock.calls.flatMap(([turns]) =>
+					turns.map((turn) => turn.idempotencyKey),
+				)
+				expect(keys).toHaveLength(3)
+				for (const key of keys) {
+					expect(typeof key).toBe("string")
+					expect(key.length).toBeGreaterThan(0)
+				}
+				runKeys.push(keys)
+			}
+			// Re-running the same import yields the same per-item identity, so
+			// the batch write API replays instead of duplicating.
+			expect(runKeys[0]).toEqual(runKeys[1])
+			expect(new Set(runKeys[0]).size).toBe(3)
+		} finally {
+			await rm(dir, { recursive: true, force: true })
+		}
+	})
+
+	it("counts failed batch items while keeping successful siblings", async () => {
+		const dir = await mkdtemp(path.join(os.tmpdir(), "memongo-import-partial-"))
+		const datasetPath = path.join(dir, "history.json")
+		try {
+			await writeFile(
+				datasetPath,
+				JSON.stringify({
+					conversations: [
+						{
+							conversationId: "conv-partial",
+							turns: [
+								{ role: "user", body: "succeeds" },
+								{ role: "assistant", body: "fails" },
+								{ role: "user", body: "also succeeds" },
+							],
+						},
+					],
+				}),
+			)
+			const writeTurns = vi.fn(async (turns: ConversationReplayBatchTurn[]) =>
+				turns.map((_, index) =>
+					index === 1
+						? {
+								ok: false as const,
+								code: "WRITE_ERROR",
+								message: "boom",
+							}
+						: { ok: true as const },
+				),
+			)
+
+			const result = await importConversationDataset({
+				datasetPath,
+				writeTurns,
+			})
+
+			expect(result.conversationsImported).toBe(1)
+			expect(result.turnsImported).toBe(2)
+			expect(result.failedTurns).toBe(1)
+		} finally {
+			await rm(dir, { recursive: true, force: true })
+		}
+	})
+
+	it("counts every item of a throwing batch as failed and continues with the next batch", async () => {
+		const dir = await mkdtemp(path.join(os.tmpdir(), "memongo-import-throw-"))
+		const datasetPath = path.join(dir, "history.json")
+		const totalTurns = IMPORT_WRITE_BATCH_SIZE + 1
+		try {
+			await writeFile(
+				datasetPath,
+				JSON.stringify({
+					conversations: [
+						{
+							conversationId: "conv-throw",
+							turns: Array.from({ length: totalTurns }, (_, index) => ({
+								role: "user",
+								body: `throw turn ${index}`,
+							})),
+						},
+					],
+				}),
+			)
+			let call = 0
+			const writeTurns = vi.fn(async (turns: ConversationReplayBatchTurn[]) => {
+				call += 1
+				if (call === 1) {
+					throw new Error("batch exploded")
+				}
+				return turns.map(() => ({ ok: true as const }))
+			})
+
+			const result = await importConversationDataset({
+				datasetPath,
+				writeTurns,
+			})
+
+			expect(writeTurns).toHaveBeenCalledTimes(2)
+			expect(result.turnsImported).toBe(1)
+			expect(result.failedTurns).toBe(IMPORT_WRITE_BATCH_SIZE)
+		} finally {
+			await rm(dir, { recursive: true, force: true })
 		}
 	})
 })

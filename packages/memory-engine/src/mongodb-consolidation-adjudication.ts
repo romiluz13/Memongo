@@ -6,6 +6,7 @@ import {
 } from "./mongodb-contradiction.js"
 import type { EnrichmentProvider } from "./mongodb-llm-enrichment.js"
 import { structuredMemCollection } from "./mongodb-schema.js"
+import { buildUnexpiredClause } from "./mongodb-temporal.js"
 
 /**
  * LLM adjudication helpers for the consolidation loop (P4.4).
@@ -140,6 +141,9 @@ export async function resolveConflictedCandidate(params: {
 					type: "fact",
 					state: "active",
 					key: { $ne: candidate.key },
+					// P4.4.1 (B1): an expired fact reads as gone — it must not feed
+					// the comparison set ahead of the TTL sweep.
+					...buildUnexpiredClause(),
 				},
 				{ projection: { key: 1, value: 1, _id: 0 } },
 			)

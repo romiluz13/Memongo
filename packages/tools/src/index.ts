@@ -426,6 +426,8 @@ export function createMemongoTools(client: MemongoClient): MemongoToolSet {
 				agentId: z.string().optional(),
 				maxEvents: z.number().optional(),
 				minCombinedScore: z.number().optional(),
+				resolveContradictions: z.boolean().optional(),
+				llmDedup: z.boolean().optional(),
 				scope: z.string().optional(),
 				scopeRef: z.string().optional(),
 			}),

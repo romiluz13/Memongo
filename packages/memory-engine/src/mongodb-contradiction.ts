@@ -3,6 +3,7 @@ import { type MemoryScope, createSubsystemLogger } from "@memongo/lib"
 import type { EnrichmentProvider } from "./mongodb-llm-enrichment.js"
 import { structuredMemCollection } from "./mongodb-schema.js"
 import { invalidateStructuredMemoryByHandle } from "./mongodb-structured-memory.js"
+import { buildUnexpiredClause } from "./mongodb-temporal.js"
 
 /**
  * LLM contradiction detection (issue #33).
@@ -172,6 +173,9 @@ export async function invalidateContradictedFacts(params: {
 					type: "fact",
 					state: "active",
 					key: { $nin: [...newKeys] },
+					// P4.4.1 (B1): an expired fact reads as gone — it must not feed
+					// the comparison set ahead of the TTL sweep.
+					...buildUnexpiredClause(),
 				},
 				{ projection: { key: 1, value: 1, _id: 0 } },
 			)

@@ -11,6 +11,7 @@ import {
 } from "./mongodb-schema.js"
 import type { MemoryScope } from "@memongo/lib"
 import type { Document } from "mongodb"
+import { buildUnexpiredClause } from "./mongodb-temporal.js"
 
 /**
  * Read seam extracted from `mongodb-manager.ts` (P4.3): locator-based reads
@@ -62,6 +63,9 @@ export class MongoDBManagerReadOps {
 				key,
 				...(scope ? { scope } : {}),
 				...(scopeRef ? { scopeRef } : {}),
+				// P4.4.1 (B1): an expired record reads as gone even before the
+				// TTL sweep removes it.
+				...buildUnexpiredClause(),
 			})
 			if (!record) {
 				return {
@@ -500,6 +504,7 @@ export class MongoDBManagerReadOps {
 		).findOne({
 			agentId: this.host.agentId,
 			eventId,
+			...buildUnexpiredClause(),
 		})
 		if (!event) {
 			return {
@@ -637,6 +642,7 @@ export class MongoDBManagerReadOps {
 				.find({
 					agentId: this.host.agentId,
 					eventId: { $in: sourceEventIds },
+					...buildUnexpiredClause(),
 				})
 				.toArray()
 			const eventOrder = new Map(

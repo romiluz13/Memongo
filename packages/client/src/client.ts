@@ -631,6 +631,7 @@ export class MemongoClient {
 				scope: input.scope,
 				scopeRef: input.scopeRef,
 				customId: idempotencyKey,
+				expiresAt: input.expiresAt,
 			},
 			{ "Idempotency-Key": idempotencyKey },
 		)
@@ -861,6 +862,8 @@ export class MemongoClient {
 		scopeRef?: string
 		/** Idempotency key; a UUIDv4 is generated when omitted. */
 		customId?: string
+		/** Absolute expiry instant (ISO 8601, must be future); P4.4.1 TTL. */
+		expiresAt?: string
 	}): Promise<{ ok: true; eventId: string; chunkCreated: boolean }> {
 		// One key per logical write, stable across this call's retries (P0.1).
 		const idempotencyKey = input.customId ?? generateIdempotencyKey()
@@ -879,6 +882,7 @@ export class MemongoClient {
 				scope: input.scope,
 				scopeRef: input.scopeRef,
 				customId: idempotencyKey,
+				expiresAt: input.expiresAt,
 			},
 			{ "Idempotency-Key": idempotencyKey },
 		)
@@ -904,6 +908,8 @@ export class MemongoClient {
 			scopeRef?: string
 			/** Per-item idempotency key; a UUIDv4 is generated when omitted. */
 			customId?: string
+			/** Absolute expiry instant (ISO 8601, must be future); P4.4.1 TTL. */
+			expiresAt?: string
 		}>
 		agentId?: string
 	}): Promise<MemongoWriteEventsResponse> {
@@ -919,6 +925,7 @@ export class MemongoClient {
 				scope: event.scope,
 				scopeRef: event.scopeRef,
 				customId: event.customId ?? generateIdempotencyKey(),
+				expiresAt: event.expiresAt,
 			})),
 			agentId: input.agentId,
 		})
@@ -1306,6 +1313,8 @@ export class MemongoClient {
 			agentId: input?.agentId,
 			maxEvents: input?.maxEvents,
 			minCombinedScore: input?.minCombinedScore,
+			resolveContradictions: input?.resolveContradictions,
+			llmDedup: input?.llmDedup,
 			scope: input?.scope,
 			scopeRef: input?.scopeRef,
 		})

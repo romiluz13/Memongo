@@ -14,6 +14,34 @@ export const adminTools: readonly McpToolDefinition[] = [
 				query: { type: "string" },
 				agentId: { type: "string" },
 				limit: { type: "number" },
+				scopeRef: {
+					type: "string",
+					description:
+						"Restrict results to this KB scope reference (for example a workspace path). Defaults to the agent KB scope.",
+				},
+				minScore: {
+					type: "number",
+					description:
+						"Minimum relevance score (0-1) for a result to be included.",
+				},
+				filter: {
+					type: "object",
+					description:
+						"Optional KB metadata filter (typed fields only; query-operator keys are rejected).",
+					properties: {
+						tags: {
+							type: "array",
+							items: { type: "string" },
+						},
+						category: { type: "string" },
+						source: { type: "string" },
+					},
+				},
+				fusionMethod: {
+					type: "string",
+					enum: ["scoreFusion", "rankFusion", "js-merge"],
+					description: "Server-side fusion preference for the KB lane.",
+				},
 			},
 			required: ["query"],
 		},
@@ -208,6 +236,8 @@ export const adminTools: readonly McpToolDefinition[] = [
 				agentId: { type: "string" },
 				maxEvents: { type: "number" },
 				minCombinedScore: { type: "number" },
+				resolveContradictions: { type: "boolean" },
+				llmDedup: { type: "boolean" },
 				scope: { type: "string" },
 				scopeRef: { type: "string" },
 			},

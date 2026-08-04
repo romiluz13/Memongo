@@ -701,6 +701,80 @@ describe("mongodb-derived-memory", () => {
 	})
 })
 
+describe("TTL expiry guards (B1)", () => {
+	beforeEach(() => {
+		vi.clearAllMocks()
+	})
+
+	it("excludes expired events when searching for supporting evidence", async () => {
+		const supportingFind = vi.fn(() => ({
+			sort: vi.fn().mockReturnValue({
+				limit: vi.fn().mockReturnValue({
+					toArray: vi.fn(async () => []),
+				}),
+			}),
+		}))
+		const structuredCol = createMockCollection()
+		const eventsCol = createMockCollection({ find: supportingFind })
+
+		await resolveStructuredCandidatesForPromotion({
+			db: createMockDb({
+				test_structured_mem: structuredCol,
+				test_events: eventsCol,
+			}),
+			prefix: "test_",
+			event: {
+				eventId: "evt-ttl-1",
+				agentId: "agent-1",
+				role: "user",
+				body: "I prefer concise answers with direct tradeoffs.",
+				timestamp: new Date("2026-03-21T10:00:00Z"),
+				scope: "agent",
+				scopeRef: "agent:agent-1",
+			},
+		})
+
+		expect(supportingFind).toHaveBeenCalled()
+		expect(supportingFind.mock.calls[0]?.[0]).toMatchObject({
+			$or: [
+				{ expiresAt: { $exists: false } },
+				{ expiresAt: { $gt: expect.any(Date) } },
+			],
+		})
+	})
+
+	it("excludes expired durable memories from the promotion identity lookup", async () => {
+		const identityFindOne = vi.fn(async () => null)
+		const structuredCol = createMockCollection({ findOne: identityFindOne })
+		const eventsCol = createMockCollection()
+
+		await resolveStructuredCandidatesForPromotion({
+			db: createMockDb({
+				test_structured_mem: structuredCol,
+				test_events: eventsCol,
+			}),
+			prefix: "test_",
+			event: {
+				eventId: "evt-ttl-2",
+				agentId: "agent-1",
+				role: "user",
+				body: "I prefer concise answers with direct tradeoffs.",
+				timestamp: new Date("2026-03-21T10:00:00Z"),
+				scope: "agent",
+				scopeRef: "agent:agent-1",
+			},
+		})
+
+		expect(identityFindOne).toHaveBeenCalled()
+		expect(identityFindOne.mock.calls[0]?.[0]).toMatchObject({
+			$or: [
+				{ expiresAt: { $exists: false } },
+				{ expiresAt: { $gt: expect.any(Date) } },
+			],
+		})
+	})
+})
+
 describe("extractLlmStructuredCandidates", () => {
 	const event = {
 		eventId: "evt-llm-1",

@@ -82,6 +82,11 @@ export const structuredEntrySchema = z
 			.optional(),
 		provenance: z.record(z.unknown()).optional(),
 		sourceEventIds: z.array(z.string()).optional(),
+		// B1: optional absolute expiry instant (P4.4.1 engine TTL). Validated
+		// as an ISO datetime string here; the route converts it to a Date —
+		// without this the passthrough string silently failed the engine's
+		// `instanceof Date` check and the write never expired.
+		expiresAt: z.string().datetime({ offset: true }).optional(),
 	})
 	.passthrough()
 

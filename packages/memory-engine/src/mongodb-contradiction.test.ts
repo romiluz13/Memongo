@@ -2,6 +2,21 @@ import { describe, expect, it, vi } from "vitest"
 import { detectContradictions } from "./mongodb-contradiction.js"
 import type { EnrichmentProvider } from "./mongodb-llm-enrichment.js"
 
+const { invalidateByHandleMock, structuredMemCollectionMock } = vi.hoisted(
+	() => ({
+		invalidateByHandleMock: vi.fn(),
+		structuredMemCollectionMock: vi.fn(),
+	}),
+)
+
+vi.mock("./mongodb-schema.js", () => ({
+	structuredMemCollection: structuredMemCollectionMock,
+}))
+
+vi.mock("./mongodb-structured-memory.js", () => ({
+	invalidateStructuredMemoryByHandle: invalidateByHandleMock,
+}))
+
 function providerReturning(content: string): EnrichmentProvider {
 	return {
 		name: "mock",
@@ -134,5 +149,43 @@ describe("detectContradictions", () => {
 			existingFacts: EXISTING,
 		})
 		expect(result).toHaveLength(1)
+	})
+})
+
+describe("invalidateContradictedFacts TTL guard (B1)", () => {
+	it("excludes expired facts from the contradiction candidate set", async () => {
+		const { invalidateContradictedFacts } = await import(
+			"./mongodb-contradiction.js"
+		)
+		const findMock = vi.fn(() => ({
+			sort: vi.fn(() => ({
+				limit: vi.fn(() => ({
+					toArray: vi.fn(async () => []),
+				})),
+			})),
+		}))
+		structuredMemCollectionMock.mockReturnValue({
+			find: findMock,
+		} as unknown as import("mongodb").Collection)
+
+		const count = await invalidateContradictedFacts({
+			db: {} as import("mongodb").Db,
+			prefix: "test_",
+			provider: providerReturning(JSON.stringify({ contradictions: [] })),
+			model: "m",
+			agentId: "agent-1",
+			scope: "agent",
+			scopeRef: "agent:agent-1",
+			newFacts: [NEW_FACT],
+		})
+
+		expect(count).toBe(0)
+		expect(findMock).toHaveBeenCalled()
+		expect(findMock.mock.calls[0]?.[0]).toMatchObject({
+			$or: [
+				{ expiresAt: { $exists: false } },
+				{ expiresAt: { $gt: expect.any(Date) } },
+			],
+		})
 	})
 })

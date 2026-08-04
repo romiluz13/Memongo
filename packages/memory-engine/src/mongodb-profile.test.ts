@@ -655,4 +655,24 @@ describe("mongodb-profile", () => {
 		expect(addExpr.$add).toBeDefined()
 		expect(addExpr.$add.length).toBe(2)
 	})
+
+	// 23. TTL guard (B1): expired structured docs never reach profile synthesis
+	it("synthesizeProfile excludes TTL-expired structured docs from the $facet match (B1)", async () => {
+		setupEmptyMocks()
+
+		await synthesizeProfile(defaultParams())
+
+		const structuredCol = vi.mocked(structuredMemCollection).mock.results[0]
+			.value
+		const pipeline = vi.mocked(structuredCol.aggregate).mock
+			.calls[0][0] as Document[]
+		expect(pipeline[0]).toMatchObject({
+			$match: {
+				$or: [
+					{ expiresAt: { $exists: false } },
+					{ expiresAt: { $gt: expect.any(Date) } },
+				],
+			},
+		})
+	})
 })

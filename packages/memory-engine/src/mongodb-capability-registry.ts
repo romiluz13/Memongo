@@ -25,6 +25,14 @@ export type CapabilityGateContext = {
 	versionArray?: unknown
 	/** Environment overrides; defaults to process.env at call sites. */
 	env?: NodeJS.ProcessEnv
+	/**
+	 * Credential-free deployment identity (see mongodbDeploymentIdentity).
+	 * Probe outcomes are keyed per deployment so one deployment's rejection
+	 * never disables the feature for another deployment in the same process
+	 * (B10). Callers that omit it share a single default bucket — the
+	 * pre-B10 process-global behavior.
+	 */
+	deployment?: string
 }
 
 export type CapabilityGate = {
@@ -74,17 +82,128 @@ export function serverVersionAtLeast(
 }
 
 // Runtime probe records for probe-adopt features: a server rejection observed
-// at index-creation time flips the capability off for this process, so the
-// next deployment against a fixed server self-enables again.
-const probeResults = new Map<string, boolean>()
+// at index-creation time flips the capability off for THIS deployment (B10),
+// so the next deployment against a fixed server self-enables again while
+// other deployments in the same process keep their own verdicts. Keyed by
+// deployment identity (see mongodbDeploymentIdentity) -> capability id ->
+// verdict. Callers without a deployment context share the default bucket,
+// which preserves the pre-B10 process-global behavior for legacy call sites.
+const DEFAULT_DEPLOYMENT_KEY = "__default__"
 
-export function recordCapabilityProbe(id: string, supported: boolean): void {
-	probeResults.set(id, supported)
+const probeResults = new Map<string, Map<string, boolean>>()
+
+function probeBucketKey(deployment: string | undefined): string {
+	return deployment ?? DEFAULT_DEPLOYMENT_KEY
 }
 
-/** Test hook: clear recorded probe results between runs. */
-export function resetCapabilityProbes(): void {
-	probeResults.clear()
+function probeRejected(id: string, deployment: string | undefined): boolean {
+	return probeResults.get(probeBucketKey(deployment))?.get(id) === false
+}
+
+export function recordCapabilityProbe(
+	id: string,
+	supported: boolean,
+	deployment?: string,
+): void {
+	const key = probeBucketKey(deployment)
+	let bucket = probeResults.get(key)
+	if (!bucket) {
+		bucket = new Map()
+		probeResults.set(key, bucket)
+	}
+	bucket.set(id, supported)
+}
+
+/**
+ * Test hook / shutdown hook: clear recorded probe results between runs.
+ * Scoped to one deployment when an identity is passed (a closing manager
+ * clears only its own deployment's state); clears every deployment when
+ * called with no argument.
+ */
+export function resetCapabilityProbes(deployment?: string): void {
+	if (deployment === undefined) {
+		probeResults.clear()
+		return
+	}
+	probeResults.delete(deployment)
+}
+
+/**
+ * Derive a credential-free identity for a MongoDB deployment from its
+ * connection URI and database. Probe outcomes are keyed by this identity so
+ * two deployments can hold opposite capability verdicts in one process (B10).
+ *
+ * The key is built from non-secret parts only: host(s)+port, the database,
+ * and the optional appName connection option. Userinfo (username/password)
+ * is never included — the WHATWG URL parser separates it from the host, and
+ * the manual fallback (multi-host standard URIs are not valid WHATWG URLs)
+ * discards everything up to the last "@" in the authority. The key is never
+ * logged by this module.
+ */
+export function mongodbDeploymentIdentity(
+	uri: string,
+	database?: string,
+): string {
+	try {
+		const parsed = new URL(uri)
+		const dbFromUri = parsed.pathname.replace(/^\//, "") || undefined
+		return joinDeploymentIdentity(
+			parsed.host || "unknown",
+			database ?? dbFromUri,
+			parsed.searchParams.get("appName") ?? undefined,
+		)
+	} catch {
+		// Multi-host standard URIs ("mongodb://h1:27017,h2:27018/db") fail
+		// WHATWG URL parsing; split manually, still dropping any userinfo.
+		const withoutScheme = uri.replace(/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//, "")
+		const [authorityAndPath, query] = splitOnce(withoutScheme, "?")
+		const [authority, path] = splitOnce(authorityAndPath, "/")
+		// userinfo ends at the last "@" inside the authority; discard it.
+		const hosts = authority.slice(authority.lastIndexOf("@") + 1)
+		const appName = query ? queryParamValue(query, "appName") : undefined
+		return joinDeploymentIdentity(
+			hosts || "unknown",
+			database ?? (path || undefined),
+			appName,
+		)
+	}
+}
+
+function splitOnce(value: string, separator: string): [string, string?] {
+	const index = value.indexOf(separator)
+	if (index === -1) {
+		return [value, undefined]
+	}
+	return [value.slice(0, index), value.slice(index + separator.length)]
+}
+
+function queryParamValue(query: string, name: string): string | undefined {
+	for (const pair of query.split("&")) {
+		const [key, rawValue] = splitOnce(pair, "=")
+		if (key === name && rawValue !== undefined) {
+			try {
+				return decodeURIComponent(rawValue)
+			} catch {
+				return rawValue
+			}
+		}
+	}
+	return undefined
+}
+
+function joinDeploymentIdentity(
+	hosts: string,
+	database: string | undefined,
+	appName: string | undefined,
+): string {
+	const parts = [hosts.toLowerCase()]
+	if (database) {
+		parts.push(database)
+	}
+	if (appName) {
+		parts.push(`app=${appName}`)
+	}
+	return parts.join("/")
 }
 
 export const CAPABILITY_GATES: readonly CapabilityGate[] = [
@@ -160,7 +279,7 @@ export function getCapabilityGate(id: string): CapabilityGate | undefined {
 
 /**
  * Evaluate one gate: its static condition, overridden by a recorded probe
- * rejection. Unknown ids are never enabled.
+ * rejection for the context's deployment. Unknown ids are never enabled.
  */
 export function isCapabilityEnabled(
 	id: string,
@@ -170,7 +289,7 @@ export function isCapabilityEnabled(
 	if (!gate) {
 		return false
 	}
-	if (probeResults.get(id) === false) {
+	if (probeRejected(id, context.deployment)) {
 		return false
 	}
 	return gate.shouldEnable(context)
@@ -192,13 +311,14 @@ export function evaluateCapabilityGates(
  * detectCapabilities runs before ensureSearchIndexes, so a rejection observed
  * during index creation is surfaced onto the manager's capabilities object
  * through this instead of re-running detection. With no recorded rejection
- * the evaluation is returned unchanged.
+ * for this deployment the evaluation is returned unchanged.
  */
 export function applyCapabilityProbeResult(
 	evaluation: Record<string, boolean>,
 	id: string,
+	deployment?: string,
 ): Record<string, boolean> {
-	if (probeResults.get(id) === false) {
+	if (probeRejected(id, deployment)) {
 		return { ...evaluation, [id]: false }
 	}
 	return evaluation

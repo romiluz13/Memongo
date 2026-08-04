@@ -6,6 +6,7 @@ import {
 	episodesCollection,
 	eventsCollection,
 } from "./mongodb-schema.js"
+import { buildUnexpiredClause } from "./mongodb-temporal.js"
 import { emitTelemetry } from "./mongodb-telemetry.js"
 
 const log = createSubsystemLogger("memory:mongodb:profile")
@@ -126,7 +127,15 @@ export async function synthesizeProfile(params: {
 				settled("structured", () =>
 					structuredMemCollection(db, prefix)
 						.aggregate([
-							{ $match: { ...scopeFilter, state: "active" } },
+							// P4.4.1 (B1): hide TTL-expired docs until the sweep removes
+							// them.
+							{
+								$match: {
+									...scopeFilter,
+									state: "active",
+									...buildUnexpiredClause(),
+								},
+							},
 							{
 								$facet: {
 									preferences: [

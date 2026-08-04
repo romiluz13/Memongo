@@ -40,6 +40,18 @@ describe("toolList", () => {
 		)
 	})
 
+	it("publishes consolidation control flags", () => {
+		const consolidate = toolList.find(
+			(tool) => tool.name === "memongo_consolidate",
+		)
+		expect(consolidate?.inputSchema.properties).toEqual(
+			expect.objectContaining({
+				resolveContradictions: expect.objectContaining({ type: "boolean" }),
+				llmDedup: expect.objectContaining({ type: "boolean" }),
+			}),
+		)
+	})
+
 	it("keeps benchmark-only controls off detailed search", () => {
 		const detailedSearch = toolList.find(
 			(tool) => tool.name === "memongo_search_detailed",
@@ -187,6 +199,46 @@ describe("handleToolCall", () => {
 				invalidAt: "2026-04-09T12:00:00.000Z",
 			}),
 		)
+	})
+
+	it("forwards consolidation control flags", async () => {
+		const consolidate = vi.fn().mockResolvedValue({ factsExtracted: 0 })
+
+		const out = await handleToolCall(
+			"memongo_consolidate",
+			{
+				resolveContradictions: false,
+				llmDedup: true,
+			},
+			{ consolidate } as any,
+		)
+
+		expect(consolidate).toHaveBeenCalledWith(
+			expect.objectContaining({
+				resolveContradictions: false,
+				llmDedup: true,
+			}),
+		)
+		expect(out.isError).toBeUndefined()
+	})
+
+	it.each([
+		["resolveContradictions", "false"],
+		["llmDedup", 1],
+	])("rejects malformed consolidation %s", async (field, value) => {
+		const consolidate = vi.fn()
+
+		const out = await handleToolCall(
+			"memongo_consolidate",
+			{ [field]: value },
+			{ consolidate } as any,
+		)
+
+		expect(consolidate).not.toHaveBeenCalled()
+		expect(out.isError).toBe(true)
+		expect(parseTextPayload(out)).toEqual({
+			error: `${field} must be a boolean when provided`,
+		})
 	})
 
 	it("returns a tool execution error when semantic recall alias receives invalid roles", async () => {
@@ -450,11 +502,48 @@ describe("structuredContent envelopes (P1.2)", () => {
 
 	// Minimal valid arguments for tools that validate inputs before calling
 	// the client; all other tools accept an empty argument object.
+	const validStructuredHandle = {
+		family: "structured",
+		id: "mem-1",
+		agentId: "agent-1",
+		scope: "agent",
+		scopeRef: "agent-1",
+		revision: 1,
+		state: "active",
+		structured: { type: "fact", key: "k" },
+	}
+	const validProcedureHandle = {
+		family: "procedure",
+		id: "proc-1",
+		agentId: "agent-1",
+		scope: "agent",
+		scopeRef: "agent-1",
+		revision: 1,
+		state: "active",
+		procedure: { procedureId: "proc-1" },
+	}
 	const minimalArgs: Record<string, Record<string, unknown>> = {
 		memongo_write_event: { role: "user", body: "hello" },
 		memongo_self_edit: { block: "user", action: "replace", content: "x" },
-		memongo_procedure_outcome: { handle: {}, success: true },
-		memongo_memory_feedback: { handle: {}, signal: "confirm" },
+		memongo_procedure_outcome: { handle: validProcedureHandle, success: true },
+		memongo_memory_feedback: {
+			handle: validStructuredHandle,
+			signal: "confirm",
+		},
+		memongo_lifecycle_get: { handle: validStructuredHandle },
+		memongo_lifecycle_update: {
+			handle: validStructuredHandle,
+			patch: { value: "v" },
+		},
+		memongo_lifecycle_delete: { handle: validStructuredHandle },
+		memongo_lifecycle_history: { handle: validStructuredHandle },
+		memongo_memory_get: { handle: validStructuredHandle },
+		memongo_memory_update: {
+			handle: validStructuredHandle,
+			patch: { value: "v" },
+		},
+		memongo_memory_delete: { handle: validStructuredHandle },
+		memongo_memory_history: { handle: validStructuredHandle },
 		memongo_discovery_projection: { kind: "what-changed" },
 		memongo_benchmark_ingest: { datasetPath: "data.json" },
 		memongo_import_conversations: { datasetPath: "data.json" },
@@ -575,5 +664,266 @@ describe("scope validation (P2.8)", () => {
 		expect(scanNovelty).toHaveBeenCalledWith(
 			expect.objectContaining({ scope: "tenant", scopeRef: "acme" }),
 		)
+	})
+})
+
+describe("handleToolCall B2a contract field forwarding", () => {
+	it("forwards scope and scopeRef on memongo_search", async () => {
+		const search = vi.fn().mockResolvedValue({ results: [] })
+
+		const out = await handleToolCall(
+			"memongo_search",
+			{ query: "deploy plan", scope: "workspace", scopeRef: "acme/platform" },
+			{ search } as any,
+		)
+
+		expect(out.isError).toBeUndefined()
+		expect(search).toHaveBeenCalledWith(
+			expect.objectContaining({
+				query: "deploy plan",
+				scope: "workspace",
+				scopeRef: "acme/platform",
+			}),
+		)
+	})
+
+	it("rejects an invalid scope on memongo_search", async () => {
+		const search = vi.fn()
+
+		const out = await handleToolCall(
+			"memongo_search",
+			{ query: "deploy plan", scope: "bogus" },
+			{ search } as any,
+		)
+
+		expect(out.isError).toBe(true)
+		expect(search).not.toHaveBeenCalled()
+	})
+
+	it("forwards the full KB field set on memongo_search_kb", async () => {
+		const searchKB = vi.fn().mockResolvedValue({ results: [] })
+
+		const out = await handleToolCall(
+			"memongo_search_kb",
+			{
+				query: "runbook",
+				scopeRef: "acme/platform",
+				minScore: 0.4,
+				filter: { tags: ["ops"], category: "runbook", source: "wiki" },
+				fusionMethod: "rankFusion",
+			},
+			{ searchKB } as any,
+		)
+
+		expect(out.isError).toBeUndefined()
+		expect(searchKB).toHaveBeenCalledWith(
+			expect.objectContaining({
+				query: "runbook",
+				scopeRef: "acme/platform",
+				minScore: 0.4,
+				filter: { tags: ["ops"], category: "runbook", source: "wiki" },
+				fusionMethod: "rankFusion",
+			}),
+		)
+	})
+
+	it("rejects a malformed KB filter on memongo_search_kb", async () => {
+		const searchKB = vi.fn()
+
+		const out = await handleToolCall(
+			"memongo_search_kb",
+			{ query: "runbook", filter: { tags: "ops" } },
+			{ searchKB } as any,
+		)
+
+		expect(out.isError).toBe(true)
+		expect(searchKB).not.toHaveBeenCalled()
+	})
+
+	it("rejects an unknown fusionMethod on memongo_search_kb", async () => {
+		const searchKB = vi.fn()
+
+		const out = await handleToolCall(
+			"memongo_search_kb",
+			{ query: "runbook", fusionMethod: "superFusion" },
+			{ searchKB } as any,
+		)
+
+		expect(out.isError).toBe(true)
+		expect(searchKB).not.toHaveBeenCalled()
+	})
+
+	it("forwards metadata, scope, scopeRef, and customId on memongo_add", async () => {
+		const add = vi.fn().mockResolvedValue({ eventId: "evt-1" })
+
+		const out = await handleToolCall(
+			"memongo_add",
+			{
+				content: "remember this",
+				metadata: { origin: "test" },
+				scope: "workspace",
+				scopeRef: "acme/platform",
+				customId: "add-key-1",
+			},
+			{ add } as any,
+		)
+
+		expect(out.isError).toBeUndefined()
+		expect(add).toHaveBeenCalledWith(
+			expect.objectContaining({
+				content: "remember this",
+				metadata: { origin: "test" },
+				scope: "workspace",
+				scopeRef: "acme/platform",
+				customId: "add-key-1",
+			}),
+		)
+	})
+
+	it("forwards metadata and customId on memongo_write_event", async () => {
+		const writeEvent = vi.fn().mockResolvedValue({ eventId: "evt-1" })
+
+		const out = await handleToolCall(
+			"memongo_write_event",
+			{
+				role: "assistant",
+				body: "decision recorded",
+				metadata: { origin: "test" },
+				customId: "evt-key-1",
+			},
+			{ writeEvent } as any,
+		)
+
+		expect(out.isError).toBeUndefined()
+		expect(writeEvent).toHaveBeenCalledWith(
+			expect.objectContaining({
+				metadata: { origin: "test" },
+				customId: "evt-key-1",
+			}),
+		)
+	})
+
+	it("C4: one scope pair drives BOTH the MCP add write and the MCP search read", async () => {
+		const add = vi.fn().mockResolvedValue({ eventId: "evt-1" })
+		const search = vi.fn().mockResolvedValue({ results: [] })
+		const scope = { scope: "workspace", scopeRef: "acme/platform" }
+
+		const addOut = await handleToolCall(
+			"memongo_add",
+			{ content: "the deploy runbook lives in the wiki", ...scope },
+			{ add } as any,
+		)
+		const searchOut = await handleToolCall(
+			"memongo_search",
+			{ query: "deploy runbook", ...scope },
+			{ search } as any,
+		)
+
+		expect(addOut.isError).toBeUndefined()
+		expect(searchOut.isError).toBeUndefined()
+		expect(add).toHaveBeenCalledWith(expect.objectContaining(scope))
+		expect(search).toHaveBeenCalledWith(expect.objectContaining(scope))
+	})
+
+	it("forwards expiresAt on memongo_add and memongo_write_event (B1)", async () => {
+		const add = vi.fn().mockResolvedValue({ eventId: "evt-1" })
+		const writeEvent = vi.fn().mockResolvedValue({ eventId: "evt-2" })
+		const expiresAt = "2030-01-01T00:00:00.000Z"
+
+		const addOut = await handleToolCall(
+			"memongo_add",
+			{ content: "brief note", expiresAt },
+			{ add } as any,
+		)
+		const eventOut = await handleToolCall(
+			"memongo_write_event",
+			{ role: "user", body: "brief note", expiresAt },
+			{ writeEvent } as any,
+		)
+
+		expect(addOut.isError).toBeUndefined()
+		expect(eventOut.isError).toBeUndefined()
+		expect(add).toHaveBeenCalledWith(expect.objectContaining({ expiresAt }))
+		expect(writeEvent).toHaveBeenCalledWith(
+			expect.objectContaining({ expiresAt }),
+		)
+	})
+})
+
+describe("handleToolCall B2a typed lifecycle handles", () => {
+	const validProcedureHandle = {
+		family: "procedure",
+		id: "proc-1",
+		agentId: "agent-1",
+		scope: "agent",
+		scopeRef: "agent-1",
+		revision: 3,
+		state: "active",
+		procedure: { procedureId: "proc-1" },
+	}
+
+	it("rejects a handle with an unknown family before calling the client", async () => {
+		const getLifecycleItem = vi.fn()
+
+		const out = await handleToolCall(
+			"memongo_memory_get",
+			{ handle: { family: "bogus", id: "x" } },
+			{ getLifecycleItem } as any,
+		)
+
+		expect(out.isError).toBe(true)
+		expect(getLifecycleItem).not.toHaveBeenCalled()
+	})
+
+	it("rejects a structured handle missing its type/key payload", async () => {
+		const updateLifecycleItem = vi.fn()
+
+		const out = await handleToolCall(
+			"memongo_memory_update",
+			{
+				handle: {
+					family: "structured",
+					id: "mem-1",
+					agentId: "agent-1",
+					scope: "workspace",
+					scopeRef: "acme/platform",
+					revision: 1,
+					state: "active",
+				},
+				patch: { value: "new value" },
+			},
+			{ updateLifecycleItem } as any,
+		)
+
+		expect(out.isError).toBe(true)
+		expect(updateLifecycleItem).not.toHaveBeenCalled()
+	})
+
+	it("rejects a non-object handle instead of fabricating one", async () => {
+		const deleteLifecycleItem = vi.fn()
+
+		const out = await handleToolCall(
+			"memongo_memory_delete",
+			{ handle: "mem-1" },
+			{ deleteLifecycleItem } as any,
+		)
+
+		expect(out.isError).toBe(true)
+		expect(deleteLifecycleItem).not.toHaveBeenCalled()
+	})
+
+	it("passes a valid procedure handle through typed", async () => {
+		const getLifecycleItem = vi.fn().mockResolvedValue({ family: "procedure" })
+
+		const out = await handleToolCall(
+			"memongo_lifecycle_get",
+			{ handle: validProcedureHandle },
+			{ getLifecycleItem } as any,
+		)
+
+		expect(out.isError).toBeUndefined()
+		expect(getLifecycleItem).toHaveBeenCalledWith({
+			handle: validProcedureHandle,
+		})
 	})
 })

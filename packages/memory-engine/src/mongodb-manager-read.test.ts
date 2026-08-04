@@ -177,3 +177,107 @@ describe("MongoDBMemoryManager conversation recall", () => {
 		)
 	})
 })
+
+describe("MongoDBManagerReadOps structured locator TTL guard (B1)", () => {
+	it("excludes expired structured records from locator reads", async () => {
+		const { MongoDBManagerReadOps } = await import("./mongodb-manager-read.js")
+		const { structuredMemCollection } = await import("./mongodb-schema.js")
+		const findOne = vi.fn(async () => null)
+		mocked(structuredMemCollection).mockReturnValue({
+			findOne,
+			updateOne: vi.fn(async () => ({ modifiedCount: 0 })),
+		} as unknown as import("mongodb").Collection)
+
+		const ops = new MongoDBManagerReadOps({
+			db: {} as import("mongodb").Db,
+			prefix: "test_",
+			agentId: "agent-1",
+		} as unknown as import("./mongodb-manager-host.js").MongoDBManagerHost)
+
+		const result = await ops.readFile({
+			relPath: "structured:preference:editor-theme",
+		})
+
+		expect(result.text).toBe("")
+		expect(findOne).toHaveBeenCalledWith(
+			expect.objectContaining({
+				$or: [
+					{ expiresAt: { $exists: false } },
+					{ expiresAt: { $gt: expect.any(Date) } },
+				],
+			}),
+		)
+	})
+
+	it("excludes expired events from canonical event locator reads (B1)", async () => {
+		const { MongoDBManagerReadOps } = await import("./mongodb-manager-read.js")
+		const { eventsCollection } = await import("./mongodb-schema.js")
+		const findOne = vi.fn(async () => null)
+		mocked(eventsCollection).mockReturnValue({
+			findOne,
+		} as unknown as import("mongodb").Collection)
+
+		const ops = new MongoDBManagerReadOps({
+			db: {} as import("mongodb").Db,
+			prefix: "test_",
+			agentId: "agent-1",
+		} as unknown as import("./mongodb-manager-host.js").MongoDBManagerHost)
+
+		const result = await ops.readCanonicalEvent(
+			"evt-expired",
+			"event:evt-expired",
+		)
+
+		expect(result.text).toBe("")
+		expect(findOne).toHaveBeenCalledWith(
+			expect.objectContaining({
+				$or: [
+					{ expiresAt: { $exists: false } },
+					{ expiresAt: { $gt: expect.any(Date) } },
+				],
+			}),
+		)
+	})
+
+	it("excludes expired events from episode expansion reads (B1)", async () => {
+		const { MongoDBManagerReadOps } = await import("./mongodb-manager-read.js")
+		const { episodesCollection, eventsCollection } = await import(
+			"./mongodb-schema.js"
+		)
+		mocked(episodesCollection).mockReturnValue({
+			findOne: vi.fn(async () => ({
+				episodeId: "ep-1",
+				type: "review",
+				title: "Episode",
+				sourceEventIds: ["evt-1"],
+			})),
+		} as unknown as import("mongodb").Collection)
+		const find = vi.fn().mockReturnValue({
+			toArray: vi.fn(async () => []),
+		})
+		mocked(eventsCollection).mockReturnValue({
+			find,
+		} as unknown as import("mongodb").Collection)
+
+		const ops = new MongoDBManagerReadOps({
+			db: {} as import("mongodb").Db,
+			prefix: "test_",
+			agentId: "agent-1",
+		} as unknown as import("./mongodb-manager-host.js").MongoDBManagerHost)
+
+		await ops.readEpisodeLocator({
+			rawPath: "episode:ep-1?expand=events",
+			episodeId: "ep-1",
+			expandEvents: true,
+		})
+
+		expect(find).toHaveBeenCalledWith(
+			expect.objectContaining({
+				$or: [
+					{ expiresAt: { $exists: false } },
+					{ expiresAt: { $gt: expect.any(Date) } },
+				],
+			}),
+		)
+	})
+})

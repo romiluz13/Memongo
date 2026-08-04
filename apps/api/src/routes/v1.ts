@@ -1626,6 +1626,27 @@ export function createV1Router(): Hono<V1RouterEnv> {
 		if (!metadata.ok) {
 			return jsonError(c, 400, "VALIDATION_ERROR", metadata.message)
 		}
+		// B1: optional absolute expiry. Deterministic policy: unparseable or
+		// already-past expiry is a 400 — writing an instantly-invisible
+		// document is always a caller bug (validity history uses validAt/
+		// invalidAt, never expiresAt).
+		const expiresAt = readDateValue(body.expiresAt)
+		if (expiresAt === null) {
+			return jsonError(
+				c,
+				400,
+				"VALIDATION_ERROR",
+				"expiresAt must be a valid date string when provided",
+			)
+		}
+		if (expiresAt && expiresAt.getTime() <= Date.now()) {
+			return jsonError(
+				c,
+				400,
+				"VALIDATION_ERROR",
+				"expiresAt must be in the future",
+			)
+		}
 		try {
 			const out = await memongoBridgeAdd({
 				content,
@@ -1635,6 +1656,7 @@ export function createV1Router(): Hono<V1RouterEnv> {
 				scope: await readScope(c),
 				scopeRef: await readScopeRef(c),
 				idempotencyKey: readIdempotencyKey(c, body),
+				expiresAt: expiresAt?.toISOString(),
 			})
 			return c.json({
 				ok: true,
@@ -1701,6 +1723,24 @@ export function createV1Router(): Hono<V1RouterEnv> {
 		if (!metadata.ok) {
 			return jsonError(c, 400, "VALIDATION_ERROR", metadata.message)
 		}
+		// B1: same deterministic expiresAt policy as /v1/add.
+		const expiresAt = readDateValue(body.expiresAt)
+		if (expiresAt === null) {
+			return jsonError(
+				c,
+				400,
+				"VALIDATION_ERROR",
+				"expiresAt must be a valid date string when provided",
+			)
+		}
+		if (expiresAt && expiresAt.getTime() <= Date.now()) {
+			return jsonError(
+				c,
+				400,
+				"VALIDATION_ERROR",
+				"expiresAt must be in the future",
+			)
+		}
 		const scope = await readScope(c)
 		try {
 			const out = await memongoBridgeWriteConversationEvent({
@@ -1715,6 +1755,7 @@ export function createV1Router(): Hono<V1RouterEnv> {
 				scope,
 				scopeRef: await readScopeRef(c),
 				idempotencyKey: readIdempotencyKey(c, body),
+				expiresAt: expiresAt?.toISOString(),
 			})
 			return c.json({
 				ok: true,
@@ -1783,6 +1824,7 @@ export function createV1Router(): Hono<V1RouterEnv> {
 				scope?: ApiScope
 				scopeRef?: string
 				idempotencyKey?: string
+				expiresAt?: string
 			}
 		}
 		const validItems: ValidItem[] = []
@@ -1829,6 +1871,16 @@ export function createV1Router(): Hono<V1RouterEnv> {
 			const metadata = validateMetadata(raw.metadata)
 			if (!metadata.ok) {
 				fail(metadata.message)
+				continue
+			}
+			// B1: per-item expiry, same policy as the single-write routes.
+			const expiresAt = readDateValue(raw.expiresAt)
+			if (expiresAt === null) {
+				fail("expiresAt must be a valid date string when provided")
+				continue
+			}
+			if (expiresAt && expiresAt.getTime() <= Date.now()) {
+				fail("expiresAt must be in the future")
 				continue
 			}
 			const itemScope =
@@ -1890,6 +1942,7 @@ export function createV1Router(): Hono<V1RouterEnv> {
 						typeof raw.customId === "string" && raw.customId.trim()
 							? raw.customId.trim()
 							: undefined,
+					expiresAt: expiresAt?.toISOString(),
 				},
 			})
 		}
@@ -1942,12 +1995,29 @@ export function createV1Router(): Hono<V1RouterEnv> {
 		if (!entry.ok) {
 			return jsonError(c, 400, "VALIDATION_ERROR", entry.message)
 		}
+		// B1: convert the validated ISO string to a Date (the engine ignores a
+		// string expiresAt via its instanceof check) and apply the same
+		// deterministic past-expiry policy as the event write routes.
+		const entryExpiresAt = entry.value.expiresAt
+			? new Date(entry.value.expiresAt)
+			: undefined
+		if (entryExpiresAt && entryExpiresAt.getTime() <= Date.now()) {
+			return jsonError(
+				c,
+				400,
+				"VALIDATION_ERROR",
+				"entry.expiresAt must be in the future",
+			)
+		}
 		try {
 			const out = await memongoBridgeWriteStructuredMemory({
 				agentId: await readAgentId(c),
 				scope: await readScope(c),
 				scopeRef: await readScopeRef(c),
-				entry: entry.value as StructuredMemoryEntry,
+				entry: {
+					...entry.value,
+					...(entryExpiresAt ? { expiresAt: entryExpiresAt } : {}),
+				} as StructuredMemoryEntry,
 			})
 			return c.json(out)
 		} catch (err) {
@@ -2450,6 +2520,16 @@ export function createV1Router(): Hono<V1RouterEnv> {
 
 	v1.post("/consolidate", async (c) => {
 		const body = (await readJsonBody(c)) as Record<string, unknown>
+		for (const field of ["resolveContradictions", "llmDedup"] as const) {
+			if (field in body && typeof body[field] !== "boolean") {
+				return jsonError(
+					c,
+					400,
+					"VALIDATION_ERROR",
+					`${field} must be a boolean when provided`,
+				)
+			}
+		}
 		try {
 			const result = await memongoBridgeConsolidate({
 				agentId: await readAgentId(c),
@@ -2459,6 +2539,12 @@ export function createV1Router(): Hono<V1RouterEnv> {
 					typeof body.minCombinedScore === "number"
 						? body.minCombinedScore
 						: undefined,
+				resolveContradictions:
+					typeof body.resolveContradictions === "boolean"
+						? body.resolveContradictions
+						: undefined,
+				llmDedup:
+					typeof body.llmDedup === "boolean" ? body.llmDedup : undefined,
 				scope: await readScope(c),
 				scopeRef: await readScopeRef(c),
 			})

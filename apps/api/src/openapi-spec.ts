@@ -25,6 +25,31 @@ import { MEMONGO_API_VERSION } from "./version.js"
 /** Canonical scope enum, derived from the single contract source (P2.2). */
 const memoryScopeEnum: readonly string[] = MEMORY_SCOPE_VALUES
 
+/**
+ * Shared idempotency wording (B2a). The header is the transport-preferred
+ * channel; the `customId` body field is the SDK-friendly fallback — the
+ * header wins when both are present (routes/v1.ts readIdempotencyKey).
+ */
+const IDEMPOTENCY_KEY_FIELD_DESCRIPTION =
+	"Idempotency key for this write (IETF/Stripe semantics): a replay returns the original receipt, a key reused with a different payload yields 422 IDEMPOTENCY_CONFLICT. The Idempotency-Key header takes precedence when both are sent."
+
+const IDEMPOTENCY_KEY_HEADER_PARAMETER = {
+	name: "Idempotency-Key",
+	in: "header",
+	required: false,
+	schema: { type: "string" },
+	description: IDEMPOTENCY_KEY_FIELD_DESCRIPTION,
+} as const
+
+/**
+ * Shared TTL wording (B1). expiresAt is an absolute retention instant —
+ * after it the document is invisible to reads and a MongoDB TTL index
+ * removes it (sweep lag ~60s). It is about retention, not event validity;
+ * historical fact windows belong in validAt/invalidAt.
+ */
+const EXPIRES_AT_FIELD_DESCRIPTION =
+	"ISO 8601 instant after which this document expires (P4.4.1 TTL). Must be in the future; an invalid or past value is rejected with 400 VALIDATION_ERROR."
+
 const benchmarkOfficialRetrievalMetricsSchema = {
 	type: "object",
 	required: [
@@ -1973,8 +1998,36 @@ const openApiSpecDocument = {
 								required: ["query"],
 								properties: {
 									query: { type: "string" },
+									agentId: {
+										type: "string",
+										description: AGENT_ID_FIELD_DESCRIPTION,
+									},
+									scopeRef: {
+										type: "string",
+										description:
+											"Restrict results to this KB scope reference (for example a workspace path). Defaults to the agent KB scope.",
+									},
 									limit: { type: "number" },
 									minScore: { type: "number" },
+									filter: {
+										type: "object",
+										description:
+											"Optional KB metadata filter (typed fields only; query-operator keys are rejected).",
+										properties: {
+											tags: {
+												type: "array",
+												items: { type: "string" },
+											},
+											category: { type: "string" },
+											source: { type: "string" },
+										},
+									},
+									fusionMethod: {
+										type: "string",
+										enum: ["scoreFusion", "rankFusion", "js-merge"],
+										description:
+											"Server-side fusion preference for the KB lane.",
+									},
 								},
 							},
 						},
@@ -2012,6 +2065,7 @@ const openApiSpecDocument = {
 		"/v1/add": {
 			post: {
 				summary: "Append a user message to conversational memory",
+				parameters: [IDEMPOTENCY_KEY_HEADER_PARAMETER],
 				requestBody: {
 					content: {
 						"application/json": {
@@ -2032,6 +2086,29 @@ const openApiSpecDocument = {
 										description:
 											"Deprecated compatibility alias for sessionId.",
 									},
+									scope: {
+										type: "string",
+										enum: memoryScopeEnum,
+										description: SCOPE_FIELD_DESCRIPTION,
+									},
+									scopeRef: {
+										type: "string",
+										description: SCOPE_REF_FIELD_DESCRIPTION,
+									},
+									metadata: {
+										type: "object",
+										description:
+											"Optional metadata stored verbatim with the event (query-operator keys are rejected).",
+									},
+									customId: {
+										type: "string",
+										description: IDEMPOTENCY_KEY_FIELD_DESCRIPTION,
+									},
+									expiresAt: {
+										type: "string",
+										format: "date-time",
+										description: EXPIRES_AT_FIELD_DESCRIPTION,
+									},
 								},
 							},
 						},
@@ -2043,6 +2120,7 @@ const openApiSpecDocument = {
 		"/v1/write-event": {
 			post: {
 				summary: "Write conversation event (any role)",
+				parameters: [IDEMPOTENCY_KEY_HEADER_PARAMETER],
 				requestBody: {
 					required: true,
 					content: {
@@ -2077,6 +2155,15 @@ const openApiSpecDocument = {
 											"When the event stopped being valid; omitted means still valid.",
 									},
 									metadata: { type: "object" },
+									customId: {
+										type: "string",
+										description: IDEMPOTENCY_KEY_FIELD_DESCRIPTION,
+									},
+									expiresAt: {
+										type: "string",
+										format: "date-time",
+										description: EXPIRES_AT_FIELD_DESCRIPTION,
+									},
 								},
 							},
 						},
@@ -2127,6 +2214,12 @@ const openApiSpecDocument = {
 													description:
 														"Per-item idempotency key (same semantics as the Idempotency-Key header on /v1/write-event).",
 												},
+												expiresAt: {
+													type: "string",
+													format: "date-time",
+													description:
+														"Per-item TTL instant; an invalid or past value fails only this item with a VALIDATION_ERROR receipt.",
+												},
 											},
 										},
 									},
@@ -2170,6 +2263,15 @@ const openApiSpecDocument = {
 								properties: {
 									eventId: { type: "string", minLength: 1 },
 									agentId: { type: "string" },
+									scope: {
+										type: "string",
+										enum: memoryScopeEnum,
+										description: SCOPE_FIELD_DESCRIPTION,
+									},
+									scopeRef: {
+										type: "string",
+										description: SCOPE_REF_FIELD_DESCRIPTION,
+									},
 								},
 							},
 						},
@@ -2191,7 +2293,15 @@ const openApiSpecDocument = {
 								properties: {
 									entry: {
 										type: "object",
-										description: "Structured memory entry to upsert.",
+										description:
+											"Structured memory entry to upsert (type, key, value, plus optional fields such as context, confidence, tags, salience, temporalScope).",
+										properties: {
+											expiresAt: {
+												type: "string",
+												format: "date-time",
+												description: EXPIRES_AT_FIELD_DESCRIPTION,
+											},
+										},
 									},
 									agentId: {
 										type: "string",
@@ -2901,6 +3011,16 @@ const openApiSpecDocument = {
 									minCombinedScore: {
 										type: "number",
 										description: "Minimum combined score threshold.",
+									},
+									resolveContradictions: {
+										type: "boolean",
+										description:
+											"Whether consolidation resolves contradictory facts. Defaults to true.",
+									},
+									llmDedup: {
+										type: "boolean",
+										description:
+											"Whether consolidation uses LLM-assisted deduplication. Defaults to false.",
 									},
 									scope: {
 										type: "string",

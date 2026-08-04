@@ -25,6 +25,8 @@ export type MemongoAddInput = {
 	sessionId?: string
 	scope?: MemongoScope
 	scopeRef?: string
+	/** Absolute expiry instant (ISO 8601, must be future); P4.4.1 TTL. */
+	expiresAt?: string
 }
 
 export type MemongoSearchInput = {
@@ -323,6 +325,8 @@ export type MemongoConsolidateInput = {
 	agentId?: string
 	maxEvents?: number
 	minCombinedScore?: number
+	resolveContradictions?: boolean
+	llmDedup?: boolean
 	scope?: string
 	scopeRef?: string
 }

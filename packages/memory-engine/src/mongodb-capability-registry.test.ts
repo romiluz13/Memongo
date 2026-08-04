@@ -5,6 +5,7 @@ import {
 	evaluateCapabilityGates,
 	getCapabilityGate,
 	isCapabilityEnabled,
+	mongodbDeploymentIdentity,
 	recordCapabilityProbe,
 	resetCapabilityProbes,
 	serverVersionAtLeast,
@@ -166,6 +167,201 @@ describe("probe-adopt capabilities", () => {
 		expect(applyCapabilityProbeResult(gates, "autoembed-quantization")).toEqual(
 			gates,
 		)
+	})
+})
+
+describe("deployment-scoped probe results (B10)", () => {
+	// Two fake deployments derived from URIs the way the manager derives them.
+	const DEP_A = mongodbDeploymentIdentity(
+		"mongodb://deploy-a.example.net:27017",
+		"memongo_a",
+	)
+	const DEP_B = mongodbDeploymentIdentity(
+		"mongodb+srv://cluster-b.example.net/memongo_b",
+	)
+
+	it("two deployments hold opposite support verdicts concurrently", () => {
+		resetCapabilityProbes()
+		try {
+			// Deployment A accepted quantization on its autoEmbed definitions;
+			// deployment B rejected it. Both verdicts must coexist in one process.
+			recordCapabilityProbe("autoembed-quantization", true, DEP_A)
+			recordCapabilityProbe("autoembed-quantization", false, DEP_B)
+
+			expect(
+				isCapabilityEnabled("autoembed-quantization", {
+					versionArray: [8, 3, 7, 0],
+					env: {},
+					deployment: DEP_A,
+				}),
+			).toBe(true)
+			expect(
+				isCapabilityEnabled("autoembed-quantization", {
+					versionArray: [8, 3, 7, 0],
+					env: {},
+					deployment: DEP_B,
+				}),
+			).toBe(false)
+
+			// Probing B again must not overwrite A's verdict.
+			recordCapabilityProbe("autoembed-quantization", false, DEP_B)
+			expect(
+				isCapabilityEnabled("autoembed-quantization", {
+					versionArray: [8, 3, 7, 0],
+					env: {},
+					deployment: DEP_A,
+				}),
+			).toBe(true)
+
+			// A scoped rejection does not leak into the unscoped default bucket
+			// that legacy callers (no deployment in context) share.
+			expect(
+				isCapabilityEnabled("autoembed-quantization", {
+					versionArray: [8, 3, 7, 0],
+					env: {},
+				}),
+			).toBe(true)
+		} finally {
+			resetCapabilityProbes()
+		}
+	})
+
+	it("evaluateCapabilityGates and applyCapabilityProbeResult respect the deployment key", () => {
+		resetCapabilityProbes()
+		try {
+			recordCapabilityProbe("autoembed-quantization", false, DEP_B)
+
+			const forA = evaluateCapabilityGates({
+				versionArray: [8, 3, 7, 0],
+				env: {},
+				deployment: DEP_A,
+			})
+			const forB = evaluateCapabilityGates({
+				versionArray: [8, 3, 7, 0],
+				env: {},
+				deployment: DEP_B,
+			})
+			expect(forA["autoembed-quantization"]).toBe(true)
+			expect(forB["autoembed-quantization"]).toBe(false)
+
+			const gates = { "autoembed-quantization": true }
+			expect(
+				applyCapabilityProbeResult(gates, "autoembed-quantization", DEP_B),
+			).toEqual({ "autoembed-quantization": false })
+			expect(
+				applyCapabilityProbeResult(gates, "autoembed-quantization", DEP_A),
+			).toEqual(gates)
+		} finally {
+			resetCapabilityProbes()
+		}
+	})
+
+	it("a scoped reset clears only its own deployment's state", () => {
+		resetCapabilityProbes()
+		try {
+			recordCapabilityProbe("autoembed-quantization", false, DEP_A)
+			recordCapabilityProbe("autoembed-quantization", false, DEP_B)
+
+			resetCapabilityProbes(DEP_A)
+			expect(
+				isCapabilityEnabled("autoembed-quantization", {
+					versionArray: [8, 3, 7, 0],
+					env: {},
+					deployment: DEP_A,
+				}),
+			).toBe(true)
+			expect(
+				isCapabilityEnabled("autoembed-quantization", {
+					versionArray: [8, 3, 7, 0],
+					env: {},
+					deployment: DEP_B,
+				}),
+			).toBe(false)
+		} finally {
+			resetCapabilityProbes()
+		}
+	})
+
+	it("an unscoped reset still clears every deployment", () => {
+		resetCapabilityProbes()
+		recordCapabilityProbe("autoembed-quantization", false, DEP_A)
+		recordCapabilityProbe("autoembed-quantization", false, DEP_B)
+		resetCapabilityProbes()
+		for (const deployment of [DEP_A, DEP_B]) {
+			expect(
+				isCapabilityEnabled("autoembed-quantization", {
+					versionArray: [8, 3, 7, 0],
+					env: {},
+					deployment,
+				}),
+			).toBe(true)
+		}
+	})
+})
+
+describe("mongodbDeploymentIdentity", () => {
+	it("never includes credentials from the connection URI", () => {
+		const identity = mongodbDeploymentIdentity(
+			"mongodb://memongo-user:s3cret-password@host1.example.net:27017/memdb",
+		)
+		expect(identity).not.toContain("memongo-user")
+		expect(identity).not.toContain("s3cret-password")
+		expect(identity).not.toContain("@")
+		expect(identity).toContain("host1.example.net:27017")
+		expect(identity).toContain("memdb")
+	})
+
+	it("strips credentials from mongodb+srv and multi-host URIs", () => {
+		const srv = mongodbDeploymentIdentity(
+			"mongodb+srv://memongo-user:s3cret-password@cluster0.example.net/memdb",
+		)
+		expect(srv).not.toContain("memongo-user")
+		expect(srv).not.toContain("s3cret-password")
+		expect(srv).toContain("cluster0.example.net")
+		expect(srv).toContain("memdb")
+
+		// Multi-host standard URIs are not valid WHATWG URLs; the fallback
+		// parser must still drop the userinfo segment.
+		const multi = mongodbDeploymentIdentity(
+			"mongodb://memongo-user:s3cret-password@h1.example.net:27017,h2.example.net:27018/memdb?replicaSet=rs0",
+		)
+		expect(multi).not.toContain("memongo-user")
+		expect(multi).not.toContain("s3cret-password")
+		expect(multi).not.toContain("@")
+		expect(multi).toContain("h1.example.net:27017")
+		expect(multi).toContain("h2.example.net:27018")
+		expect(multi).toContain("memdb")
+	})
+
+	it("distinguishes deployments by host and database, not by credentials", () => {
+		const one = mongodbDeploymentIdentity(
+			"mongodb://user-a:pass-a@host1.example.net:27017/memdb",
+		)
+		const two = mongodbDeploymentIdentity(
+			"mongodb://user-b:pass-b@host1.example.net:27017/memdb",
+		)
+		// Same server + database with different logins is one deployment: a
+		// capability verdict is a property of the server, not the credential.
+		expect(one).toBe(two)
+
+		const otherDb = mongodbDeploymentIdentity(
+			"mongodb://user-a:pass-a@host1.example.net:27017/otherdb",
+		)
+		expect(otherDb).not.toBe(one)
+
+		const otherHost = mongodbDeploymentIdentity(
+			"mongodb://user-a:pass-a@host2.example.net:27017/memdb",
+		)
+		expect(otherHost).not.toBe(one)
+	})
+
+	it("prefers the explicit database argument over the URI path", () => {
+		const identity = mongodbDeploymentIdentity(
+			"mongodb://host1.example.net:27017/uri_db",
+			"config_db",
+		)
+		expect(identity).toContain("config_db")
+		expect(identity).not.toContain("uri_db")
 	})
 })
 

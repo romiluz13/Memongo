@@ -744,10 +744,14 @@ const VECTOR_STORED_SOURCE_INCLUDE: Record<string, string[]> = {
 // MEMONGO_VECTOR_STORED_SOURCE kept as an override — "0" kills it even when
 // the version gate passes, "1" forces it on. The condition lives in the
 // capability registry so it self-enables as servers advance.
-function vectorStoredSourceEnabled(versionArray: unknown): boolean {
+function vectorStoredSourceEnabled(
+	versionArray: unknown,
+	deployment?: string,
+): boolean {
 	return isCapabilityEnabled("vector-stored-source", {
 		versionArray,
 		env: process.env,
+		deployment,
 	})
 }
 
@@ -755,9 +759,10 @@ function withVectorStoredSource(
 	definition: Document,
 	collectionKind: string,
 	versionArray?: unknown,
+	deployment?: string,
 ): Document {
 	const include = VECTOR_STORED_SOURCE_INCLUDE[collectionKind]
-	if (!include || !vectorStoredSourceEnabled(versionArray)) {
+	if (!include || !vectorStoredSourceEnabled(versionArray, deployment)) {
 		return definition
 	}
 	return { ...definition, storedSource: { include } }
@@ -967,6 +972,11 @@ export async function ensureSearchIndexes(
 	embeddingMode: MemoryMongoDBEmbeddingMode,
 	quantization: "none" | "scalar" | "binary" = "none",
 	numDimensions: number = 1024,
+	/**
+	 * B10: credential-free deployment identity (mongodbDeploymentIdentity) so
+	 * probe outcomes recorded here are scoped to this deployment only.
+	 */
+	deployment?: string,
 ): Promise<{ text: boolean; vector: boolean }> {
 	void embeddingMode
 	void numDimensions
@@ -992,7 +1002,7 @@ export async function ensureSearchIndexes(
 			const msg = err instanceof Error ? err.message : String(err)
 			if (activeQuantization !== "none" && msg.includes("quantization")) {
 				activeQuantization = "none"
-				recordCapabilityProbe("autoembed-quantization", false)
+				recordCapabilityProbe("autoembed-quantization", false, deployment)
 				log.warn(
 					`server rejected quantization on autoEmbed index definitions; capability recorded off, using the server default: ${msg}`,
 				)
@@ -1054,6 +1064,7 @@ export async function ensureSearchIndexes(
 				},
 				"session_chunks",
 				serverVersionArray,
+				deployment,
 			)
 			const vectorCreated = await ensureVectorIndex({
 				collection: sessionChunks,
@@ -1136,6 +1147,7 @@ export async function ensureSearchIndexes(
 			),
 			"chunks",
 			serverVersionArray,
+			deployment,
 		)
 
 		vectorCreated = await ensureVectorIndex({
@@ -1211,6 +1223,7 @@ export async function ensureSearchIndexes(
 				},
 				"kb_chunks",
 				serverVersionArray,
+				deployment,
 			)
 
 			vectorCreated = await ensureVectorIndex({
@@ -1295,6 +1308,7 @@ export async function ensureSearchIndexes(
 			},
 			"structured_mem",
 			serverVersionArray,
+			deployment,
 		)
 
 		vectorCreated = await ensureVectorIndex({
@@ -1367,6 +1381,7 @@ export async function ensureSearchIndexes(
 			},
 			"procedures",
 			serverVersionArray,
+			deployment,
 		)
 
 		vectorCreated = await ensureVectorIndex({
@@ -1544,6 +1559,7 @@ export async function ensureSearchIndexes(
 				},
 				"session_chunks",
 				serverVersionArray,
+				deployment,
 			)
 			vectorCreated = await ensureVectorIndex({
 				collection: sessionChunks,

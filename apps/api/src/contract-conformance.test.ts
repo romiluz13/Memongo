@@ -150,6 +150,69 @@ describe("contract conformance: routes vs OpenAPI document", () => {
 		expect(failures).toEqual([])
 	})
 
+	it("documents the contract's full optional request field sets (B2a)", () => {
+		const failures: string[] = []
+		for (const route of MEMONGO_API_ROUTES) {
+			if (route.optionalFields.length === 0) {
+				continue
+			}
+			const operation = operationFor(route.path, route.method)
+			if (!operation) {
+				failures.push(`${route.method} ${route.path}: operation missing`)
+				continue
+			}
+			if (route.method === "post") {
+				const schema =
+					operation.requestBody?.content?.["application/json"]?.schema
+				const variants = schema?.oneOf ?? (schema ? [schema] : [])
+				// An optional field is documented when ANY accepted body variant
+				// declares it (variants are alternative shapes of the same request).
+				const documented = new Set(
+					variants.flatMap((variant) => Object.keys(variant.properties ?? {})),
+				)
+				for (const field of route.optionalFields) {
+					if (!documented.has(field)) {
+						failures.push(
+							`${route.method} ${route.path}: optional body field "${field}" not documented`,
+						)
+					}
+				}
+			} else {
+				const documented = new Set(
+					(operation.parameters ?? [])
+						.filter((p) => p.in === "query")
+						.map((p) => p.name),
+				)
+				for (const field of route.optionalFields) {
+					if (!documented.has(field)) {
+						failures.push(
+							`${route.method} ${route.path}: optional query field "${field}" not documented`,
+						)
+					}
+				}
+			}
+		}
+		expect(failures).toEqual([])
+	})
+
+	it("documents declared header parameters (B2a)", () => {
+		const failures: string[] = []
+		for (const route of MEMONGO_API_ROUTES) {
+			for (const header of route.headerFields ?? []) {
+				const operation = operationFor(route.path, route.method)
+				const parameter = (operation?.parameters ?? []).find(
+					(p) => p.name === header && p.in === "header",
+				)
+				if (!parameter) {
+					failures.push(
+						`${route.method} ${route.path}: header parameter "${header}" not documented`,
+					)
+				}
+			}
+		}
+		expect(failures).toEqual([])
+	})
+
 	it("documents every contract error status with the ApiError envelope", () => {
 		const failures: string[] = []
 		for (const route of MEMONGO_API_ROUTES) {

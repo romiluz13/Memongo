@@ -164,6 +164,78 @@ describe("benchmarkIngest", () => {
 		}
 	})
 
+	it("routes benchmark ingest through writeConversationEventsBatch", async () => {
+		mocked(ingestBenchmarkDataset).mockResolvedValue({
+			datasetPath: "/workspace/benchmarks/dataset.jsonl",
+			datasetName: "dataset.jsonl",
+			conversationsIngested: 1,
+			turnsIngested: 2,
+			skippedConversations: 0,
+			failedLines: 0,
+			failedTurns: 0,
+			startedAt: new Date("2026-04-09T00:00:00.000Z"),
+			completedAt: new Date("2026-04-09T00:00:01.000Z"),
+		})
+
+		const workspaceDir = await mkdtemp(
+			path.join(os.tmpdir(), "memongo-manager-workspace-"),
+		)
+		const datasetDir = path.join(workspaceDir, "benchmarks")
+		const datasetPath = path.join(datasetDir, "dataset.jsonl")
+		try {
+			await mkdir(datasetDir, { recursive: true })
+			await writeFile(datasetPath, "")
+			const writeConversationEventsBatch = vi.fn(
+				async (events: Array<Record<string, unknown>>) =>
+					events.map(() => ({
+						ok: true as const,
+						eventId: "evt-1",
+						chunkCreated: false,
+					})),
+			)
+			const manager = {
+				workspaceDir,
+				config: {
+					mongodb: {
+						relevance: {
+							benchmark: {
+								datasetPath: path.join(datasetDir, "default.jsonl"),
+							},
+						},
+					},
+				},
+				getBenchmarkAllowedRoots:
+					MongoDBMemoryManager.prototype.getBenchmarkAllowedRoots,
+				writeConversationEventsBatch,
+			} as unknown as MongoDBMemoryManager
+
+			await MongoDBMemoryManager.prototype.benchmarkIngest.call(manager, {
+				datasetPath: "benchmarks/dataset.jsonl",
+			})
+
+			const harnessParams = mocked(ingestBenchmarkDataset).mock.calls[0]?.[0]
+			expect(harnessParams?.writeTurns).toBeTypeOf("function")
+			await harnessParams?.writeTurns?.([
+				{
+					role: "user",
+					body: "benchmark turn",
+					sessionId: "conv-1",
+					scope: "agent",
+					idempotencyKey: "key-1",
+				},
+			])
+			expect(writeConversationEventsBatch).toHaveBeenCalledTimes(1)
+			expect(writeConversationEventsBatch).toHaveBeenCalledWith([
+				expect.objectContaining({
+					body: "benchmark turn",
+					idempotencyKey: "key-1",
+				}),
+			])
+		} finally {
+			await rm(workspaceDir, { recursive: true, force: true })
+		}
+	})
+
 	it("rejects benchmark datasets outside allowed roots", async () => {
 		const workspaceDir = await mkdtemp(
 			path.join(os.tmpdir(), "memongo-manager-workspace-"),
@@ -1815,6 +1887,97 @@ describe("importConversations", () => {
 			}
 			await rm(workspaceDir, { recursive: true, force: true })
 			await rm(datasetRoot, { recursive: true, force: true })
+		}
+	})
+
+	it("routes imports through writeConversationEventsBatch with the authorized scope forced on every item", async () => {
+		mocked(importConversationDataset).mockResolvedValue({
+			datasetPath: "/workspace/imports/history.json",
+			datasetName: "history.json",
+			datasetKind: "generic",
+			conversationsImported: 1,
+			turnsImported: 2,
+			skippedConversations: 0,
+			failedLines: 0,
+			failedTurns: 0,
+			startedAt: new Date("2026-04-11T00:00:00.000Z"),
+			completedAt: new Date("2026-04-11T00:00:01.000Z"),
+		})
+
+		const workspaceDir = await mkdtemp(
+			path.join(os.tmpdir(), "memongo-manager-import-workspace-"),
+		)
+		const importDir = path.join(workspaceDir, "imports")
+		const datasetPath = path.join(importDir, "history.json")
+		try {
+			await mkdir(importDir, { recursive: true })
+			await writeFile(datasetPath, JSON.stringify({ conversations: [] }))
+			const writeConversationEventsBatch = vi.fn(
+				async (events: Array<Record<string, unknown>>) =>
+					events.map(() => ({
+						ok: true as const,
+						eventId: "evt-1",
+						chunkCreated: false,
+					})),
+			)
+			const manager = {
+				workspaceDir,
+				config: {
+					mongodb: {
+						relevance: {
+							benchmark: {
+								datasetPath: path.join(importDir, "default.json"),
+							},
+						},
+					},
+				},
+				getBenchmarkAllowedRoots:
+					MongoDBMemoryManager.prototype.getBenchmarkAllowedRoots,
+				writeConversationEventsBatch,
+			} as unknown as MongoDBMemoryManager
+
+			await MongoDBMemoryManager.prototype.importConversations.call(manager, {
+				datasetPath: "imports/history.json",
+				scope: "agent",
+				scopeRef: "tenant-1",
+			})
+
+			const harnessParams = mocked(importConversationDataset).mock.calls[0]?.[0]
+			expect(harnessParams?.writeTurns).toBeTypeOf("function")
+			await harnessParams?.writeTurns?.([
+				{
+					role: "user",
+					body: "first imported turn",
+					sessionId: "sess-1",
+					// A dataset-declared scope must never win over the caller's
+					// authorized tenant identity.
+					scope: "workspace",
+					idempotencyKey: "key-1",
+				},
+				{
+					role: "assistant",
+					body: "second imported turn",
+					sessionId: "sess-1",
+					idempotencyKey: "key-2",
+				},
+			])
+			expect(writeConversationEventsBatch).toHaveBeenCalledTimes(1)
+			expect(writeConversationEventsBatch).toHaveBeenCalledWith([
+				expect.objectContaining({
+					body: "first imported turn",
+					scope: "agent",
+					scopeRef: "tenant-1",
+					idempotencyKey: "key-1",
+				}),
+				expect.objectContaining({
+					body: "second imported turn",
+					scope: "agent",
+					scopeRef: "tenant-1",
+					idempotencyKey: "key-2",
+				}),
+			])
+		} finally {
+			await rm(workspaceDir, { recursive: true, force: true })
 		}
 	})
 })

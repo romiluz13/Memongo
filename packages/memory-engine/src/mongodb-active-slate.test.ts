@@ -296,6 +296,60 @@ describe("mongodb-active-slate", () => {
 		expect(slate.items[0]?.kind).toBe("procedure")
 		expect(slate.metadata.partial).toBe(true)
 	})
+
+	it("excludes TTL-expired structured docs from slate hydration (B1)", async () => {
+		vi.mocked(structuredMemCollection)
+			.mockReturnValueOnce(createMockFindCollection([]))
+			.mockReturnValueOnce(createMockFindCollection([]))
+		vi.mocked(proceduresCollection).mockReturnValue(
+			createMockFindCollection([]),
+		)
+		vi.mocked(eventsCollection).mockReturnValue(createMockFindCollection([]))
+
+		await hydrateActiveSlate(defaultParams())
+
+		const structuredFilters = vi
+			.mocked(structuredMemCollection)
+			.mock.results.map(
+				(result) =>
+					vi.mocked(result.value.find).mock.calls[0]?.[0] as
+						| Document
+						| undefined,
+			)
+		expect(structuredFilters).toHaveLength(2)
+		for (const filter of structuredFilters) {
+			expect(filter).toMatchObject({
+				$and: expect.arrayContaining([
+					{
+						$or: [
+							{ expiresAt: { $exists: false } },
+							{ expiresAt: { $gt: expect.any(Date) } },
+						],
+					},
+				]),
+			})
+		}
+	})
+
+	it("excludes TTL-expired events from recent anchors (B1)", async () => {
+		vi.mocked(structuredMemCollection)
+			.mockReturnValueOnce(createMockFindCollection([]))
+			.mockReturnValueOnce(createMockFindCollection([]))
+		vi.mocked(proceduresCollection).mockReturnValue(
+			createMockFindCollection([]),
+		)
+		const eventsFind = createMockFindCollection([])
+		vi.mocked(eventsCollection).mockReturnValue(eventsFind)
+
+		await hydrateActiveSlate(defaultParams())
+
+		expect(vi.mocked(eventsFind.find).mock.calls[0]?.[0]).toMatchObject({
+			$or: [
+				{ expiresAt: { $exists: false } },
+				{ expiresAt: { $gt: expect.any(Date) } },
+			],
+		})
+	})
 })
 
 describe("materializeBlocks", () => {

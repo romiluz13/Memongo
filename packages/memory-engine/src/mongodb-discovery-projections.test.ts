@@ -430,3 +430,118 @@ describe("mongodb-discovery-projections", () => {
 		)
 	})
 })
+
+describe("TTL expiry guards (B1)", () => {
+	beforeEach(() => {
+		vi.clearAllMocks()
+	})
+
+	const unexpiredClause = {
+		$or: [
+			{ expiresAt: { $exists: false } },
+			{ expiresAt: { $gt: expect.any(Date) } },
+		],
+	}
+
+	function mockSiblingCollectionsEmpty(): void {
+		vi.mocked(entitiesCollection).mockReturnValue(createMockFindCollection([]))
+		vi.mocked(relationsCollection).mockReturnValue(createMockFindCollection([]))
+		vi.mocked(episodesCollection).mockReturnValue(createMockFindCollection([]))
+		vi.mocked(eventsCollection).mockReturnValue(createMockFindCollection([]))
+		vi.mocked(proceduresCollection).mockReturnValue(
+			createMockFindCollection([]),
+		)
+		vi.mocked(structuredMemRevisionsCollection).mockReturnValue(
+			createMockFindCollection([]),
+		)
+	}
+
+	function captureStructuredFind(): ReturnType<typeof vi.fn> {
+		const structuredFind = vi.fn().mockReturnValue({
+			sort: vi.fn().mockReturnValue({
+				limit: vi.fn().mockReturnValue({
+					toArray: vi.fn().mockResolvedValue([]),
+				}),
+			}),
+			toArray: vi.fn().mockResolvedValue([]),
+		})
+		vi.mocked(structuredMemCollection).mockReturnValue({
+			find: structuredFind,
+		} as unknown as Collection)
+		return structuredFind
+	}
+
+	it("entity brief excludes expired structured records", async () => {
+		mockSiblingCollectionsEmpty()
+		const structuredFind = captureStructuredFind()
+
+		await buildDiscoveryProjection({
+			...defaultParams(),
+			kind: "entity-brief",
+			query: "Phoenix",
+		})
+
+		expect(structuredFind).toHaveBeenCalled()
+		expect(structuredFind.mock.calls[0]?.[0]).toMatchObject({
+			$and: expect.arrayContaining([unexpiredClause]),
+		})
+	})
+
+	it("topic brief excludes expired structured records", async () => {
+		mockSiblingCollectionsEmpty()
+		const structuredFind = captureStructuredFind()
+
+		await buildDiscoveryProjection({
+			...defaultParams(),
+			kind: "topic-brief",
+			query: "rollback",
+		})
+
+		expect(structuredFind).toHaveBeenCalled()
+		expect(structuredFind.mock.calls[0]?.[0]).toMatchObject({
+			$and: expect.arrayContaining([unexpiredClause]),
+		})
+	})
+
+	it("what-changed current-state lane excludes expired structured records", async () => {
+		mockSiblingCollectionsEmpty()
+		vi.mocked(structuredMemRevisionsCollection).mockReturnValue(
+			createMockFindCollection([
+				{
+					type: "decision",
+					key: "routing-policy",
+					value: "Old routing policy",
+					supersededAt: new Date("2026-04-04T10:00:00.000Z"),
+					scope: SCOPE,
+					scopeRef: SCOPE_REF,
+				},
+			]),
+		)
+		const structuredFind = captureStructuredFind()
+
+		await buildDiscoveryProjection({
+			...defaultParams(),
+			kind: "what-changed",
+		})
+
+		expect(structuredFind).toHaveBeenCalled()
+		expect(structuredFind.mock.calls[0]?.[0]).toMatchObject({
+			$and: expect.arrayContaining([unexpiredClause]),
+		})
+	})
+
+	it("contradiction report excludes expired structured records", async () => {
+		mockSiblingCollectionsEmpty()
+		const structuredFind = captureStructuredFind()
+
+		await buildDiscoveryProjection({
+			...defaultParams(),
+			kind: "contradiction-report",
+		})
+
+		expect(structuredFind).toHaveBeenCalled()
+		expect(structuredFind.mock.calls[0]?.[0]).toMatchObject({
+			$and: expect.arrayContaining([unexpiredClause]),
+		})
+	})
+})

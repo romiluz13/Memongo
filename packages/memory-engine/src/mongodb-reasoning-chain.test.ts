@@ -417,4 +417,42 @@ describe("traceReasoningChain", () => {
 		expect(result.collection).toBe("procedures")
 		expect(result.factId).toBe("proc-1")
 	})
+
+	it("excludes TTL-expired docs from the starting match and premise traversal (B1)", async () => {
+		const db = createMockDb({
+			aggregateResults: { [`${PREFIX}structured_mem`]: [] },
+		})
+
+		await traceReasoningChain({
+			db,
+			prefix: PREFIX,
+			agentId: AGENT_ID,
+			factId: "fact-1",
+			collection: "structured_mem",
+		})
+
+		const structuredCol = vi.mocked(db.collection).mock.results[0]
+			?.value as unknown as {
+			aggregate: ReturnType<typeof vi.fn>
+		}
+		const pipeline = structuredCol.aggregate.mock.calls[0]?.[0] as Document[]
+		expect(pipeline[0]).toMatchObject({
+			$match: {
+				$or: [
+					{ expiresAt: { $exists: false } },
+					{ expiresAt: { $gt: expect.any(Date) } },
+				],
+			},
+		})
+		expect(pipeline[1]).toMatchObject({
+			$graphLookup: {
+				restrictSearchWithMatch: {
+					$or: [
+						{ expiresAt: { $exists: false } },
+						{ expiresAt: { $gt: expect.any(Date) } },
+					],
+				},
+			},
+		})
+	})
 })

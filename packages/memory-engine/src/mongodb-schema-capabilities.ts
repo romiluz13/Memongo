@@ -36,6 +36,11 @@ function isStageUnsupported(message: string): boolean {
 export async function detectCapabilities(
 	db: Db,
 	probeCollectionName?: string,
+	/**
+	 * B10: credential-free deployment identity (mongodbDeploymentIdentity) so
+	 * capability gate evaluation reads this deployment's probe outcomes only.
+	 */
+	deployment?: string,
 ): Promise<DetectedCapabilities> {
 	const result: DetectedCapabilities = {
 		vectorSearch: false,
@@ -148,6 +153,7 @@ export async function detectCapabilities(
 				isCapabilityEnabled("vector-stored-source", {
 					versionArray,
 					env: process.env,
+					deployment,
 				}) &&
 				typeof storedSourceConfig === "object" &&
 				storedSourceConfig !== null
@@ -164,8 +170,9 @@ export async function detectCapabilities(
 	result.capabilityGates = evaluateCapabilityGates({
 		versionArray,
 		env: process.env,
+		deployment,
 	})
-	logDisabledCapabilityGates({ versionArray, env: process.env })
+	logDisabledCapabilityGates({ versionArray, env: process.env, deployment })
 
 	log.info(`detected capabilities: ${JSON.stringify(result)}`)
 	return result
@@ -179,11 +186,14 @@ export async function waitForSearchCapabilities(
 		pollMs = 1_000,
 		requireVector = true,
 		requireText = true,
+		deployment,
 	}: {
 		timeoutMs?: number
 		pollMs?: number
 		requireVector?: boolean
 		requireText?: boolean
+		/** B10: credential-free deployment identity for probe-scoped gates. */
+		deployment?: string
 	} = {},
 ): Promise<DetectedCapabilities> {
 	const deadline = Date.now() + timeoutMs
@@ -197,7 +207,7 @@ export async function waitForSearchCapabilities(
 	}
 
 	while (Date.now() < deadline) {
-		latest = await detectCapabilities(db, probeCollectionName)
+		latest = await detectCapabilities(db, probeCollectionName, deployment)
 		const vectorReady = !requireVector || latest.vectorSearch
 		const textReady = !requireText || latest.textSearch
 		if (vectorReady && textReady) {

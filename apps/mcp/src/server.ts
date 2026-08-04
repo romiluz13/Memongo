@@ -6,6 +6,13 @@ import {
 	ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js"
 import { MemongoClient } from "@memongo/client"
+import type {
+	MemongoProcedureLifecyclePatch,
+	MemongoProcedureStableHandle,
+	MemongoStableHandle,
+	MemongoStructuredLifecyclePatch,
+	MemongoStructuredStableHandle,
+} from "@memongo/client"
 import { isMemoryScopeValue, type MemoryScopeValue } from "@memongo/lib"
 import { pathToFileURL } from "node:url"
 import { startHttpTransport } from "./http-transport.js"
@@ -81,6 +88,228 @@ function readScopeArg(
 	throw new Error("scope must be session|user|agent|workspace|tenant|global")
 }
 
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value)
+}
+
+/**
+ * B2a: lifecycle handles are tenant-addressing identity — parse them into
+ * the client's typed MemongoStableHandle instead of casting `args.handle`
+ * through `as any` (which fabricated `{}` handles on malformed input and
+ * pushed invalid tenant coordinates straight onto the wire). Field rules
+ * mirror the API's readLifecycleHandle (routes/v1.ts).
+ */
+function readLifecycleHandleArg(
+	args: Record<string, unknown>,
+): MemongoStableHandle {
+	const raw = args.handle
+	if (!isPlainRecord(raw)) {
+		throw new Error("handle must be an object")
+	}
+	const family = raw.family
+	if (family !== "structured" && family !== "procedure") {
+		throw new Error("handle.family must be structured|procedure")
+	}
+	const id = typeof raw.id === "string" ? raw.id.trim() : ""
+	const agentId = typeof raw.agentId === "string" ? raw.agentId.trim() : ""
+	const scope =
+		typeof raw.scope === "string" && isMemoryScopeValue(raw.scope)
+			? raw.scope
+			: undefined
+	const scopeRef = typeof raw.scopeRef === "string" ? raw.scopeRef.trim() : ""
+	const revision =
+		typeof raw.revision === "number" && Number.isInteger(raw.revision)
+			? raw.revision
+			: Number.NaN
+	const state =
+		raw.state === "active" ||
+		raw.state === "invalidated" ||
+		raw.state === "conflicted"
+			? raw.state
+			: undefined
+	if (!id) {
+		throw new Error("handle.id must be a non-empty string")
+	}
+	if (!agentId) {
+		throw new Error("handle.agentId must be a non-empty string")
+	}
+	if (!scope) {
+		throw new Error(
+			"handle.scope must be session|user|agent|workspace|tenant|global",
+		)
+	}
+	if (!scopeRef) {
+		throw new Error("handle.scopeRef must be a non-empty string")
+	}
+	if (!(revision >= 1)) {
+		throw new Error("handle.revision must be an integer >= 1")
+	}
+	if (!state) {
+		throw new Error("handle.state must be active|invalidated|conflicted")
+	}
+	const optionalDates = {
+		...(typeof raw.validFrom === "string" ? { validFrom: raw.validFrom } : {}),
+		...(typeof raw.validTo === "string" ? { validTo: raw.validTo } : {}),
+		...(typeof raw.updatedAt === "string" ? { updatedAt: raw.updatedAt } : {}),
+	}
+	if (family === "structured") {
+		const structured = raw.structured
+		if (!isPlainRecord(structured)) {
+			throw new Error("handle.structured must be an object with type and key")
+		}
+		const type =
+			typeof structured.type === "string" ? structured.type.trim() : ""
+		const key = typeof structured.key === "string" ? structured.key.trim() : ""
+		if (!type || !key) {
+			throw new Error(
+				"handle.structured.type and handle.structured.key must be non-empty strings",
+			)
+		}
+		const handle: MemongoStructuredStableHandle = {
+			family,
+			id,
+			agentId,
+			scope,
+			scopeRef,
+			revision,
+			state,
+			structured: { type, key },
+			...optionalDates,
+		}
+		return handle
+	}
+	const procedure = raw.procedure
+	if (!isPlainRecord(procedure)) {
+		throw new Error("handle.procedure must be an object with procedureId")
+	}
+	const procedureId =
+		typeof procedure.procedureId === "string"
+			? procedure.procedureId.trim()
+			: ""
+	if (!procedureId) {
+		throw new Error("handle.procedure.procedureId must be a non-empty string")
+	}
+	const handle: MemongoProcedureStableHandle = {
+		family,
+		id,
+		agentId,
+		scope,
+		scopeRef,
+		revision,
+		state,
+		procedure: { procedureId },
+		...optionalDates,
+	}
+	return handle
+}
+
+/** B2a: patches stay opaque at this boundary (the API validates their shape
+ * server-side, P2.8) but must at least be plain objects — never fabricated. */
+function readPatchArg(args: Record<string, unknown>): Record<string, unknown> {
+	if (!isPlainRecord(args.patch)) {
+		throw new Error("patch must be an object")
+	}
+	return args.patch
+}
+
+// B2a: metadata is stored verbatim by the API, which rejects operator-shaped
+// keys; the MCP boundary only enforces the plain-object shape and lets the
+// API remain the authority on key validation.
+function readMetadataArg(
+	args: Record<string, unknown>,
+): Record<string, unknown> | undefined {
+	const metadata = args.metadata
+	if (metadata === undefined) {
+		return undefined
+	}
+	if (isPlainRecord(metadata)) {
+		return metadata
+	}
+	throw new Error("metadata must be an object")
+}
+
+// B2a: the client SDK's add input narrows metadata to primitive values
+// (normalizeMetadata stringifies); enforce that contract at the boundary.
+function readPrimitiveMetadataArg(
+	args: Record<string, unknown>,
+): Record<string, string | number | boolean | null> | undefined {
+	const metadata = readMetadataArg(args)
+	if (metadata === undefined) {
+		return undefined
+	}
+	for (const [key, value] of Object.entries(metadata)) {
+		if (
+			value !== null &&
+			typeof value !== "string" &&
+			typeof value !== "number" &&
+			typeof value !== "boolean"
+		) {
+			throw new Error(
+				`metadata.${key} must be a string, number, boolean, or null`,
+			)
+		}
+	}
+	return metadata as Record<string, string | number | boolean | null>
+}
+
+// B2a: the KB filter feeds a MongoDB query server-side — validate the typed
+// shape here (mirroring the API's kbFilterSchema) instead of casting through.
+function readKbFilterArg(args: Record<string, unknown>):
+	| {
+			tags?: string[]
+			category?: string
+			source?: string
+	  }
+	| undefined {
+	const raw = args.filter
+	if (raw === undefined) {
+		return undefined
+	}
+	if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+		throw new Error(
+			"filter must be an object with optional tags (string[]), category (string), and source (string)",
+		)
+	}
+	const record = raw as Record<string, unknown>
+	const tags = record.tags
+	if (
+		tags !== undefined &&
+		(!Array.isArray(tags) || tags.some((tag) => typeof tag !== "string"))
+	) {
+		throw new Error("filter.tags must be an array of strings")
+	}
+	if (record.category !== undefined && typeof record.category !== "string") {
+		throw new Error("filter.category must be a string")
+	}
+	if (record.source !== undefined && typeof record.source !== "string") {
+		throw new Error("filter.source must be a string")
+	}
+	return {
+		...(tags ? { tags: tags as string[] } : {}),
+		...(typeof record.category === "string"
+			? { category: record.category }
+			: {}),
+		...(typeof record.source === "string" ? { source: record.source } : {}),
+	}
+}
+
+function readFusionMethodArg(
+	args: Record<string, unknown>,
+): "scoreFusion" | "rankFusion" | "js-merge" | undefined {
+	const fusionMethod = args.fusionMethod
+	if (fusionMethod === undefined) {
+		return undefined
+	}
+	if (
+		fusionMethod === "scoreFusion" ||
+		fusionMethod === "rankFusion" ||
+		fusionMethod === "js-merge"
+	) {
+		return fusionMethod
+	}
+	throw new Error("fusionMethod must be scoreFusion|rankFusion|js-merge")
+}
+
 function jsonResult(payload: unknown, isError = false) {
 	const structuredContent =
 		payload !== null && typeof payload === "object"
@@ -147,6 +376,8 @@ export async function handleToolCall(
 				agentId: typeof args.agentId === "string" ? args.agentId : undefined,
 				limit: typeof args.limit === "number" ? args.limit : undefined,
 				minScore: typeof args.minScore === "number" ? args.minScore : undefined,
+				scope: readScopeArg(args),
+				scopeRef: typeof args.scopeRef === "string" ? args.scopeRef : undefined,
 			})
 			return jsonResult(out)
 		}
@@ -155,6 +386,10 @@ export async function handleToolCall(
 				query: typeof args.query === "string" ? args.query : "",
 				agentId: typeof args.agentId === "string" ? args.agentId : undefined,
 				limit: typeof args.limit === "number" ? args.limit : undefined,
+				scopeRef: typeof args.scopeRef === "string" ? args.scopeRef : undefined,
+				minScore: typeof args.minScore === "number" ? args.minScore : undefined,
+				filter: readKbFilterArg(args),
+				fusionMethod: readFusionMethodArg(args),
 			})
 			return jsonResult(out)
 		}
@@ -173,6 +408,12 @@ export async function handleToolCall(
 				agentId: typeof args.agentId === "string" ? args.agentId : undefined,
 				sessionId:
 					typeof args.sessionId === "string" ? args.sessionId : undefined,
+				metadata: readPrimitiveMetadataArg(args),
+				scope: readScopeArg(args),
+				scopeRef: typeof args.scopeRef === "string" ? args.scopeRef : undefined,
+				customId: typeof args.customId === "string" ? args.customId : undefined,
+				expiresAt:
+					typeof args.expiresAt === "string" ? args.expiresAt : undefined,
 			})
 			return jsonResult(out)
 		}
@@ -199,6 +440,10 @@ export async function handleToolCall(
 					typeof args.invalidAt === "string" ? args.invalidAt : undefined,
 				scope: readScopeArg(args),
 				scopeRef: typeof args.scopeRef === "string" ? args.scopeRef : undefined,
+				metadata: readMetadataArg(args),
+				customId: typeof args.customId === "string" ? args.customId : undefined,
+				expiresAt:
+					typeof args.expiresAt === "string" ? args.expiresAt : undefined,
 			})
 			return jsonResult(out)
 		}
@@ -363,32 +608,28 @@ export async function handleToolCall(
 		}
 		if (LIFECYCLE_GET_TOOL_NAMES.has(name)) {
 			const out = await memongo.getLifecycleItem({
-				handle:
-					typeof args.handle === "object" && args.handle !== null
-						? (args.handle as any)
-						: ({} as any),
+				handle: readLifecycleHandleArg(args),
 			})
 			return jsonResult(out)
 		}
 		if (LIFECYCLE_UPDATE_TOOL_NAMES.has(name)) {
-			const out = await memongo.updateLifecycleItem({
-				handle:
-					typeof args.handle === "object" && args.handle !== null
-						? (args.handle as any)
-						: ({} as any),
-				patch:
-					typeof args.patch === "object" && args.patch !== null
-						? (args.patch as any)
-						: ({} as any),
-			})
+			const handle = readLifecycleHandleArg(args)
+			const patch = readPatchArg(args)
+			const out =
+				handle.family === "structured"
+					? await memongo.updateLifecycleItem({
+							handle,
+							patch: patch as MemongoStructuredLifecyclePatch,
+						})
+					: await memongo.updateLifecycleItem({
+							handle,
+							patch: patch as MemongoProcedureLifecyclePatch,
+						})
 			return jsonResult(out)
 		}
 		if (LIFECYCLE_DELETE_TOOL_NAMES.has(name)) {
 			const out = await memongo.deleteLifecycleItem({
-				handle:
-					typeof args.handle === "object" && args.handle !== null
-						? (args.handle as any)
-						: ({} as any),
+				handle: readLifecycleHandleArg(args),
 				...(typeof args.invalidatedBy === "object" &&
 				args.invalidatedBy !== null
 					? { invalidatedBy: args.invalidatedBy as Record<string, unknown> }
@@ -398,10 +639,7 @@ export async function handleToolCall(
 		}
 		if (LIFECYCLE_HISTORY_TOOL_NAMES.has(name)) {
 			const out = await memongo.getLifecycleHistory({
-				handle:
-					typeof args.handle === "object" && args.handle !== null
-						? (args.handle as any)
-						: ({} as any),
+				handle: readLifecycleHandleArg(args),
 				limit:
 					typeof args.limit === "number"
 						? Math.max(1, Math.min(200, Math.floor(args.limit)))
@@ -427,11 +665,12 @@ export async function handleToolCall(
 				args.actorRole === "system"
 					? args.actorRole
 					: undefined
+			const procedureHandle = readLifecycleHandleArg(args)
+			if (procedureHandle.family !== "procedure") {
+				throw new Error("handle.family must be procedure for procedure outcome")
+			}
 			const out = await memongo.reportProcedureOutcome({
-				handle:
-					typeof args.handle === "object" && args.handle !== null
-						? (args.handle as any)
-						: ({} as any),
+				handle: procedureHandle,
 				success: args.success,
 				...(typeof args.note === "string" ? { note: args.note } : {}),
 				...(actorRole ? { actorRole } : {}),
@@ -462,12 +701,12 @@ export async function handleToolCall(
 				args.actorRole === "system"
 					? args.actorRole
 					: undefined
-			const handle =
-				typeof args.handle === "object" && args.handle !== null
-					? (args.handle as any)
-					: ({} as any)
+			const feedbackHandle = readLifecycleHandleArg(args)
+			if (feedbackHandle.family !== "structured") {
+				throw new Error("handle.family must be structured for memory feedback")
+			}
 			const common = {
-				handle,
+				handle: feedbackHandle,
 				...(typeof args.note === "string" ? { note: args.note } : {}),
 				...(actorRole ? { actorRole } : {}),
 			}
@@ -476,10 +715,7 @@ export async function handleToolCall(
 					? await memongo.applyMemoryFeedback({
 							...common,
 							signal,
-							patch:
-								typeof args.patch === "object" && args.patch !== null
-									? (args.patch as any)
-									: ({} as any),
+							patch: readPatchArg(args) as MemongoStructuredLifecyclePatch,
 						})
 					: signal === "irrelevant"
 						? await memongo.applyMemoryFeedback({
@@ -520,6 +756,11 @@ export async function handleToolCall(
 			return jsonResult(out)
 		}
 		if (name === "memongo_consolidate") {
+			for (const field of ["resolveContradictions", "llmDedup"] as const) {
+				if (field in args && typeof args[field] !== "boolean") {
+					throw new Error(`${field} must be a boolean when provided`)
+				}
+			}
 			const out = await memongo.consolidate({
 				agentId: typeof args.agentId === "string" ? args.agentId : undefined,
 				maxEvents:
@@ -528,6 +769,12 @@ export async function handleToolCall(
 					typeof args.minCombinedScore === "number"
 						? args.minCombinedScore
 						: undefined,
+				resolveContradictions:
+					typeof args.resolveContradictions === "boolean"
+						? args.resolveContradictions
+						: undefined,
+				llmDedup:
+					typeof args.llmDedup === "boolean" ? args.llmDedup : undefined,
 				scope: readScopeArg(args),
 				scopeRef: typeof args.scopeRef === "string" ? args.scopeRef : undefined,
 			})

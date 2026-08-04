@@ -18,6 +18,7 @@ import {
 	structuredMemCollection,
 } from "./mongodb-schema.js"
 import { invalidateContradictedFacts } from "./mongodb-contradiction.js"
+import { buildUnexpiredClause } from "./mongodb-temporal.js"
 import { refineCandidatesValidTime } from "./mongodb-temporal-extraction.js"
 import {
 	type StructuredMemoryEntry,
@@ -398,6 +399,9 @@ async function findSupportingEventIds(params: {
 			body: {
 				$regex: new RegExp(escapeRegex(candidate.value.trim()), "i"),
 			},
+			// P4.4.1 (B1): an expired event must not count as supporting
+			// evidence — the TTL sweep lags ~60s behind the expiry instant.
+			...buildUnexpiredClause(),
 		})
 		.sort({ timestamp: -1, _id: -1 })
 		.limit(3)
@@ -523,7 +527,12 @@ export async function resolveStructuredCandidatesForPromotion(params: {
 			type: candidate.type,
 			key: candidate.key,
 		}
-		const existing = await structured.findOne(identityFilter)
+		// P4.4.1 (B1): an expired durable memory reads as gone, so it must not
+		// satisfy the identity lookup ahead of the TTL sweep.
+		const existing = await structured.findOne({
+			...identityFilter,
+			...buildUnexpiredClause(),
+		})
 		if (existing) {
 			promotable.push(
 				stripPromotionMetadata({

@@ -33,6 +33,16 @@ export const coreTools: readonly McpToolDefinition[] = [
 					description:
 						"Minimum relevance score (0-1) for a result to be included.",
 				},
+				scope: {
+					type: "string",
+					enum: memoryScopeEnum,
+					description: "Optional memory isolation scope for retrieval.",
+				},
+				scopeRef: {
+					type: "string",
+					description:
+						"Optional scope reference, for example a workspace path.",
+				},
 			},
 			required: ["query"],
 		},
@@ -125,6 +135,32 @@ export const coreTools: readonly McpToolDefinition[] = [
 					description:
 						"Conversation session this message belongs to; groups related messages for recall.",
 				},
+				metadata: {
+					type: "object",
+					description:
+						"Optional metadata stored verbatim with the event (query-operator keys are rejected).",
+				},
+				scope: {
+					type: "string",
+					enum: memoryScopeEnum,
+					description: "Visibility scope for the memory.",
+				},
+				scopeRef: {
+					type: "string",
+					description:
+						"Scope reference (user id, workspace path, ...) when scope is set.",
+				},
+				customId: {
+					type: "string",
+					description:
+						"Idempotency key for this write: a replay returns the original receipt, a key reused with a different payload is rejected.",
+				},
+				expiresAt: {
+					type: "string",
+					format: "date-time",
+					description:
+						"Instant after which this memory expires (TTL). Must be in the future.",
+				},
 			},
 			required: ["content"],
 		},
@@ -149,6 +185,22 @@ export const coreTools: readonly McpToolDefinition[] = [
 					enum: memoryScopeEnum,
 				},
 				scopeRef: { type: "string" },
+				metadata: {
+					type: "object",
+					description:
+						"Optional metadata stored verbatim with the event (query-operator keys are rejected).",
+				},
+				customId: {
+					type: "string",
+					description:
+						"Idempotency key for this write: a replay returns the original receipt, a key reused with a different payload is rejected.",
+				},
+				expiresAt: {
+					type: "string",
+					format: "date-time",
+					description:
+						"Instant after which this event expires (TTL). Must be in the future.",
+				},
 			},
 			required: ["role", "body"],
 		},
@@ -237,6 +289,12 @@ export const coreTools: readonly McpToolDefinition[] = [
 							type: "string",
 							description:
 								"Scope reference (user id, workspace path, ...) when scope is set.",
+						},
+						expiresAt: {
+							type: "string",
+							format: "date-time",
+							description:
+								"Instant after which this entry expires (TTL). Must be in the future.",
 						},
 					},
 					required: ["type", "key", "value"],
