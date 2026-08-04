@@ -53,31 +53,12 @@ jobs:
             version=$(node -p "require('./$pkg/package.json').version")
             is_private=$(node -e "console.log(require('./$pkg/package.json').private === true)")
             if [ "$is_private" = "true" ]; then
-              continue
-            fi
-
-            if npm view "$name@$version" version >/dev/null 2>&1; then
-              echo "Skipping $name@$version; already published."
-              continue
+              echo "Refusing to skip private package $name@$version."
+              exit 1
             fi
 
             echo "Publishing $name@$version..."
-            publish_log=$(mktemp)
-            if (cd "$pkg" && npm publish --access public --provenance) >"$publish_log" 2>&1; then
-              cat "$publish_log"
-              rm -f "$publish_log"
-              continue
-            fi
-
-            cat "$publish_log"
-            if grep -q "previously published versions" "$publish_log"; then
-              echo "Skipping $name@$version; npm reports this exact version was already published."
-              rm -f "$publish_log"
-              continue
-            fi
-
-            rm -f "$publish_log"
-            exit 1
+            (cd "$pkg" && npm publish --access public --provenance)
           done
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

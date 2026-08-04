@@ -29,10 +29,11 @@ import path from "node:path"
 import { pipeline } from "node:stream/promises"
 import { fileURLToPath } from "node:url"
 import {
-	memongoBridgeRelevanceBenchmark,
+	memongoBridgeGetManager,
 	memongoBridgeShutdown,
 } from "@memongo/memory-bridge"
-import { LONGMEMEVAL_RELEASE_V1 } from "../packages/memory-engine/src/benchmark-quality-contracts.js"
+import { LONGMEMEVAL_RELEASE_V1 } from "./benchmark/benchmark-quality-contracts.js"
+import { MongoDBManagerBenchmarkOps } from "./benchmark/mongodb-manager-benchmark.js"
 
 const REPO_ROOT = path.resolve(
 	path.dirname(fileURLToPath(import.meta.url)),
@@ -172,7 +173,10 @@ async function main(): Promise<void> {
 	console.log("")
 
 	const started = Date.now()
-	const result = await memongoBridgeRelevanceBenchmark({
+	const manager = await memongoBridgeGetManager()
+	const result = await new MongoDBManagerBenchmarkOps(
+		manager,
+	).relevanceBenchmark({
 		datasetPath,
 		// The contract binds thresholds to the dataset digest, so it can only be
 		// applied to the full artifact it pins.
@@ -278,8 +282,10 @@ async function main(): Promise<void> {
 	console.log("\n✓ publishable — all release gates passed\n")
 }
 
-try {
-	await main()
-} finally {
-	await memongoBridgeShutdown().catch(() => {})
+if (import.meta.main) {
+	try {
+		await main()
+	} finally {
+		await memongoBridgeShutdown().catch(() => {})
+	}
 }

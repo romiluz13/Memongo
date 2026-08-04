@@ -19,6 +19,8 @@ This monorepo uses the `@memongo` npm scope. Publishing is maintainer-operated; 
 | Barrel | `@memongo/memory` (`packages/memongo-memory`) | Single import for engine + bridge |
 | Client | `@memongo/client` | Apps using the HTTP API |
 | Tools | `@memongo/tools` | Vercel AI SDK tool helpers |
+| Pi extension | `@memongo/pi-extension` | Pi coding-agent users |
+| MCP server | `@memongo/mcp` | MCP clients over stdio or HTTP |
 
 `@memongo/lib` is also published as a runtime support package because the engine and bridge depend on it, but it is not a primary integration surface.
 
@@ -34,10 +36,11 @@ This monorepo uses the `@memongo` npm scope. Publishing is maintainer-operated; 
      `@memongo/client`, `packages/client/src/version.ts`
      (`MEMONGO_CLIENT_VERSION`) must equal the client package version — it is
      sent as the `x-memongo-client-version` request header.
-2. **Build.** `bun run build`. Every publishable package also has
-   `prepublishOnly: bun run build` so a manual `npm publish` never ships a
-   stale `dist/` (`@memongo/pi-extension` ships unbuilt TS and runs
-   `prepublishOnly: bun run check-types` instead).
+2. **Build.** `bun run build`. Every publishable package runs its package-local
+   `clean` script before building, and `prepublishOnly: bun run build` ensures a
+   manual `npm publish` never ships stale `dist/`. `@memongo/pi-extension`
+   ships unbuilt TS, so its build cleans any stray `dist/` and type-checks the
+   extension sources.
 3. **Gate.** `bun run check-publishability`. In addition to tarball contents,
    install smoke, and workflow checks it enforces:
    - `engines.node: ">=20.19.0"` and a `prepublishOnly` script on every
@@ -45,6 +48,10 @@ This monorepo uses the `@memongo` npm scope. Publishing is maintainer-operated; 
    - no exact-pinned `mongodb` dependency (semver ranges only);
    - `bin` targets exist and start with `#!/usr/bin/env node`;
    - cross-package version consistency for the surfaces above;
+   - every coordinated package version is still unpublished on npm;
+   - internal runtime dependencies use the coordinated caret range;
+   - clean and deliberately dirty `dist/` states produce identical output;
+   - no orphan output or compiled test artifact can enter a tarball;
    - `publint` and `@arethetypeswrong/cli` (attw) against every packed
      tarball. These run via `bunx`; when the tools cannot be fetched (offline)
      the gate reports `SKIP` instead of failing, and it always skips
@@ -87,6 +94,8 @@ order so install smoke and downstream resolution stay clean:
 4. `@memongo/memory`
 5. `@memongo/client`
 6. `@memongo/tools`
+7. `@memongo/pi-extension`
+8. `@memongo/mcp`
 
 ## Docker
 

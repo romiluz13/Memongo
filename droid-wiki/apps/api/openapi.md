@@ -1,10 +1,10 @@
 # OpenAPI Specification
 
-The API's OpenAPI document is a **hand-written, contract-checked** OpenAPI 3.0.3 spec in `apps/api/src/openapi-spec.ts` (~3,000 LOC), served live at `GET /openapi.json` (unauthenticated, mounted in `apps/api/src/app.ts`). It is not generated from code annotations, and nothing is generated from it — its correctness is enforced by a CI conformance test against the real router instead.
+The API's OpenAPI document is a **hand-written, contract-checked** OpenAPI 3.0.3 spec assembled in `apps/api/src/openapi-spec.ts` from domain path modules, served live at `GET /openapi.json` (unauthenticated, mounted in `apps/api/src/app.ts`). It is not generated from code annotations, and nothing is generated from it — its correctness is enforced by a CI conformance test against the real router instead.
 
 Document header (`apps/api/src/openapi-spec.ts`):
 
-- `openapi: "3.0.3"`, `info.title: "Memongo API"`, `info.version: "1.0.0"`.
+- `openapi: "3.0.3"`, `info.title: "Memongo API"`, with `info.version` sourced from `MEMONGO_API_VERSION`.
 - `servers: [{ url: "/" }]` — the spec is host-relative.
 - Global `security: [{ bearerAuth: [] }]` with the `bearerAuth` HTTP bearer scheme defined in `components.securitySchemes`.
 - `components.schemas.ApiError` — the single shared error envelope.
@@ -12,11 +12,10 @@ Document header (`apps/api/src/openapi-spec.ts`):
 ## What it covers
 
 - **`/health`** and **`/openapi.json`** — the infra endpoints, documented alongside the v1 API.
-- **Every `/v1/*` route** registered in `apps/api/src/routes/v1.ts` — all 45 of them; the conformance test fails if any registered route lacks a documented path + method.
+- **Every `/v1/*` route** registered by `apps/api/src/routes/v1.ts`; the conformance test fails if any registered route lacks a documented path + method.
 - **Request bodies** for the search, write, lifecycle, and admin families, including:
   - The canonical scope enum (`session, user, agent, workspace, tenant, global`) applied to every `scope` field.
   - Deprecated compatibility aliases marked `deprecated: true` — `q` / `maxResults` / `containerTag` on `/v1/search` and similar — so consumers know the modern field names without breaking old clients.
-  - Rich nested schemas for the benchmark family (`/v1/admin/relevance/benchmark`, `/v1/admin/benchmarks/ingest`): dataset contracts (`longmemeval`, `locomo`), quality thresholds, retrieval metric grids (`recallAny/All@1/3/5/10/30/50`, `ndcgAny/All@...`), and evaluator provenance (source repository, commit, eligibility policy, candidate projection, comparability).
 - **Error responses**: every contract route's documented error statuses use the shared `ApiError` `$ref`, so no route can drift to its own error body shape.
 
 ## The single contract source

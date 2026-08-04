@@ -1,6 +1,6 @@
 {
 	"name": "@memongo/mcp",
-	"version": "0.1.0",
+	"version": "2.0.1",
 	"description": "MCP server for Memongo (stdio + streamable HTTP; calls the Memongo HTTP API)",
 	"type": "module",
 	"engines": {
@@ -37,14 +37,15 @@
 	},
 	"scripts": {
 		"start": "node dist/server.js",
-		"build": "node ../../node_modules/typescript/bin/tsc -p tsconfig.build.json",
+		"clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
+		"build": "bun run clean && node ../../node_modules/typescript/bin/tsc -p tsconfig.build.json",
 		"check-types": "node ../../node_modules/typescript/bin/tsc --noEmit -p tsconfig.json",
 		"test": "vitest run src",
 		"prepublishOnly": "bun run build"
 	},
 	"dependencies": {
-		"@memongo/client": "2.0.0",
-		"@memongo/lib": "2.0.0",
+		"@memongo/client": "^2.0.1",
+		"@memongo/lib": "^2.0.1",
 		"@modelcontextprotocol/sdk": "^1.25.0"
 	},
 	"devDependencies": {

@@ -1,4 +1,5 @@
-import { execFileSync } from "node:child_process"
+import { execFileSync, spawnSync } from "node:child_process"
+import { createHash } from "node:crypto"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
@@ -90,6 +91,10 @@ const forbiddenTarballPatterns = [
 	/\.test\.ts$/,
 	/\.e2e\.test\.ts$/,
 	/\.test-mocks\.ts$/,
+	/(?:^|\/)[^/]*\.test\.(?:js|d\.ts|js\.map|d\.ts\.map)$/,
+	/(?:^|\/)[^/]*\.test-mocks\.(?:js|d\.ts|js\.map|d\.ts\.map)$/,
+	/^dist\/(?:benchmark-|mongodb-benchmark-|mongodb-manager-benchmark|mongodb-conversation-recall-benchmark)/,
+	/^dist\/(?:fact-extraction-eval|mongodb-e2e-qa)/,
 	/^test\//,
 	/^tsconfig\.json$/,
 ] as const
@@ -102,6 +107,44 @@ const forbiddenPrivateDeps = new Set([
 
 function fail(message: string): never {
 	throw new Error(message)
+}
+
+export function findForbiddenPackageArtifact(
+	artifactPaths: string[],
+): string | undefined {
+	return artifactPaths.find((artifactPath) =>
+		forbiddenTarballPatterns.some((pattern) => pattern.test(artifactPath)),
+	)
+}
+
+export function assertAlignedInternalDependencies(
+	packageJson: Record<string, unknown>,
+	publishedVersions: ReadonlyMap<string, string>,
+) {
+	const packageName = assertStringField(packageJson, "name", "package.json")
+	for (const dependencyField of [
+		"dependencies",
+		"optionalDependencies",
+	] as const) {
+		const dependencies = packageJson[dependencyField]
+		if (typeof dependencies !== "object" || dependencies === null) {
+			continue
+		}
+		for (const [dependencyName, dependencyRange] of Object.entries(
+			dependencies as Record<string, unknown>,
+		)) {
+			const expectedVersion = publishedVersions.get(dependencyName)
+			if (!expectedVersion) {
+				continue
+			}
+			const expectedRange = `^${expectedVersion}`
+			if (dependencyRange !== expectedRange) {
+				fail(
+					`${packageName} must depend on ${dependencyName} using "${expectedRange}", found ${JSON.stringify(dependencyRange)}`,
+				)
+			}
+		}
+	}
 }
 
 type ToolRunResult = { ok: boolean; output: string }
@@ -154,6 +197,108 @@ function runJson<T>(cmd: string, args: string[], cwd: string): T {
 		stdio: "pipe",
 	})
 	return JSON.parse(raw) as T
+}
+
+function assertVersionIsUnpublished(packageName: string, version: string) {
+	const result = spawnSync(
+		"npm",
+		["view", `${packageName}@${version}`, "version", "--json"],
+		{
+			cwd: rootDir,
+			encoding: "utf-8",
+			stdio: "pipe",
+			timeout: 30_000,
+		},
+	)
+	if (result.status === 0 && result.stdout.trim() !== "") {
+		fail(`release version already exists on npm: ${packageName}@${version}`)
+	}
+	const output = `${result.stdout}\n${result.stderr}`
+	if (
+		result.status === 1 &&
+		/(?:E404|is not in this registry|No match found for version)/i.test(output)
+	) {
+		return
+	}
+	fail(
+		`could not verify npm version availability for ${packageName}@${version}: ${output.trim() || `npm exited ${result.status}`}`,
+	)
+}
+
+function listFilesRecursively(dir: string): string[] {
+	if (!fs.existsSync(dir)) {
+		return []
+	}
+	return fs
+		.readdirSync(dir, { recursive: true, withFileTypes: true })
+		.filter((entry) => entry.isFile())
+		.map((entry) => path.relative(dir, path.join(entry.parentPath, entry.name)))
+		.sort()
+}
+
+function hashDirectory(dir: string): string {
+	const hash = createHash("sha256")
+	for (const relPath of listFilesRecursively(dir)) {
+		hash.update(relPath)
+		hash.update("\0")
+		hash.update(fs.readFileSync(path.join(dir, relPath)))
+		hash.update("\0")
+	}
+	return hash.digest("hex")
+}
+
+function assertNoOrphanDistArtifacts(
+	packageDir: string,
+	packageRelPath: string,
+) {
+	const distDir = path.join(packageDir, "dist")
+	const srcDir = path.join(packageDir, "src")
+	for (const relPath of listFilesRecursively(distDir)) {
+		const sourceStem = relPath
+			.replace(/\.d\.ts\.map$/, "")
+			.replace(/\.js\.map$/, "")
+			.replace(/\.d\.ts$/, "")
+			.replace(/\.js$/, "")
+		const candidates = [".ts", ".tsx", ".mts", ".cts"].map((extension) =>
+			path.join(srcDir, `${sourceStem}${extension}`),
+		)
+		if (!candidates.some((candidate) => fs.existsSync(candidate))) {
+			fail(`orphan dist artifact "${relPath}" found in ${packageRelPath}`)
+		}
+	}
+}
+
+function assertReproducibleBuild(packageSpec: PublishablePackage) {
+	const packageDir = path.join(rootDir, packageSpec.dir)
+	const packageJson = readJson(path.join(packageDir, "package.json"))
+	const scripts = packageJson["scripts"] as Record<string, unknown> | undefined
+	if (typeof scripts?.build !== "string") {
+		fail(`missing build script in ${packageSpec.dir}`)
+	}
+
+	execFileSync("bun", ["run", "build"], {
+		cwd: packageDir,
+		stdio: "pipe",
+	})
+	const cleanHash = hashDirectory(path.join(packageDir, "dist"))
+
+	const staleDir = path.join(packageDir, "dist")
+	fs.mkdirSync(staleDir, { recursive: true })
+	fs.writeFileSync(
+		path.join(staleDir, "__memongo_stale_release_artifact__.test.js"),
+		"throw new Error('stale release artifact')\n",
+	)
+	execFileSync("bun", ["run", "build"], {
+		cwd: packageDir,
+		stdio: "pipe",
+	})
+	const dirtyHash = hashDirectory(path.join(packageDir, "dist"))
+	if (cleanHash !== dirtyHash) {
+		fail(
+			`clean and dirty dist builds differ for ${packageSpec.name}: ${cleanHash} != ${dirtyHash}`,
+		)
+	}
+	assertNoOrphanDistArtifacts(packageDir, packageSpec.dir)
 }
 
 // npm <=11 emits `npm pack --json` results as a one-element array; npm 12
@@ -242,10 +387,24 @@ function assertReleaseHygiene(
 	}
 
 	const scripts = packageJson["scripts"]
+	const clean =
+		typeof scripts === "object" && scripts !== null
+			? (scripts as Record<string, unknown>).clean
+			: undefined
+	const build =
+		typeof scripts === "object" && scripts !== null
+			? (scripts as Record<string, unknown>).build
+			: undefined
 	const prepublishOnly =
 		typeof scripts === "object" && scripts !== null
 			? (scripts as Record<string, unknown>).prepublishOnly
 			: undefined
+	if (typeof clean !== "string" || !clean.includes("rmSync('dist'")) {
+		fail(`missing package-local dist clean script in ${packageRelPath}`)
+	}
+	if (typeof build !== "string" || !build.startsWith("bun run clean && ")) {
+		fail(`build must run package-local clean first in ${packageRelPath}`)
+	}
 	if (typeof prepublishOnly !== "string" || prepublishOnly.trim() === "") {
 		fail(`missing "prepublishOnly" build script in ${packageRelPath}`)
 	}
@@ -283,7 +442,7 @@ function readExportedVersion(filePath: string, exportName: string): string {
 	return match[1]
 }
 
-function checkVersionConsistency() {
+function checkVersionConsistency(): Map<string, string> {
 	const rootPackageJson = readJson(path.join(rootDir, "package.json"))
 	const releaseVersion = assertStringField(
 		rootPackageJson,
@@ -326,9 +485,38 @@ function checkVersionConsistency() {
 			`client version header drift: x-memongo-client-version reports ${clientHeaderVersion}, packages/client is ${clientPackageVersion}`,
 		)
 	}
+	const publishedVersions = new Map<string, string>()
+	for (const packageSpec of publishablePackages) {
+		const packageJson = readJson(
+			path.join(rootDir, packageSpec.dir, "package.json"),
+		)
+		const packageName = assertStringField(
+			packageJson,
+			"name",
+			`${packageSpec.dir}/package.json`,
+		)
+		const packageVersion = assertStringField(
+			packageJson,
+			"version",
+			`${packageSpec.dir}/package.json`,
+		)
+		if (!packageSpec.piExtension && packageVersion !== releaseVersion) {
+			fail(
+				`package version drift: ${packageName} is ${packageVersion}, workspace release is ${releaseVersion}`,
+			)
+		}
+		publishedVersions.set(packageName, packageVersion)
+	}
+	for (const packageSpec of publishablePackages) {
+		const packageJson = readJson(
+			path.join(rootDir, packageSpec.dir, "package.json"),
+		)
+		assertAlignedInternalDependencies(packageJson, publishedVersions)
+	}
 	console.log(
 		`Version surfaces agree: OpenAPI/MCP ${releaseVersion}, client header ${clientHeaderVersion}.`,
 	)
+	return publishedVersions
 }
 
 function assertBuiltEntrypoints(
@@ -611,6 +799,15 @@ function checkPublishWorkflow() {
 	if (publishWorkflow.includes("|| true")) {
 		fail("publish workflow still swallows publish failures with || true")
 	}
+	if (
+		publishWorkflow.includes('npm view "$name@$version"') ||
+		publishWorkflow.includes("previously published versions") ||
+		publishWorkflow.includes("Skipping $name@$version")
+	) {
+		fail(
+			"publish workflow still silently skips packages whose version already exists",
+		)
+	}
 
 	const legacyWorkflowPath = path.join(
 		rootDir,
@@ -707,7 +904,13 @@ function installSmoke(
 function main() {
 	checkRemovedPaths()
 	checkPublishWorkflow()
-	checkVersionConsistency()
+	const publishedVersions = checkVersionConsistency()
+	for (const [packageName, version] of publishedVersions) {
+		assertVersionIsUnpublished(packageName, version)
+	}
+	for (const packageSpec of publishablePackages) {
+		assertReproducibleBuild(packageSpec)
+	}
 
 	const availability: ExternalLintAvailability = {
 		publint: probeTool("publint"),
@@ -738,4 +941,6 @@ function main() {
 	)
 }
 
-main()
+if (import.meta.main) {
+	main()
+}

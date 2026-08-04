@@ -37,7 +37,7 @@ This matrix maps the supported Memongo memory engine to the standalone product s
 | Embedding probe | `probeEmbeddingAvailability()` | `memongoBridgeProbeEmbedding()` | `GET /v1/probes/embedding` | `probeEmbedding()` | `scripts/proof-pack.ts` |
 | Vector probe | `probeVectorAvailability()` | `memongoBridgeProbeVector()` | `GET /v1/probes/vector` | `probeVector()` | `scripts/proof-pack.ts` |
 | Relevance explain | `packages/memory-engine/src/mongodb-relevance.ts` | `memongoBridgeRelevanceExplain()` | `POST /v1/admin/relevance/explain` | `relevanceExplain()` | `packages/memory-engine` unit suite |
-| Relevance benchmark | `relevanceBenchmark()` | `memongoBridgeRelevanceBenchmark()` | `POST /v1/admin/relevance/benchmark` | `relevanceBenchmark()` | `packages/memory-engine/src/production-readiness.e2e.test.ts` |
+| Relevance benchmark | `scripts/benchmark/mongodb-manager-benchmark.ts` | -- | -- | -- | `scripts/benchmark/*.test.ts` |
 | Relevance report | `relevanceReport()` | `memongoBridgeRelevanceReport()` | `GET /v1/admin/relevance/report` | `relevanceReport()` | `scripts/proof-pack.ts` |
 | Relevance sample rate | `relevanceSampleRate()` | `memongoBridgeRelevanceSampleRate()` | `GET /v1/admin/relevance/sample-rate` | `relevanceSampleRate()` | `packages/memory-engine` unit suite |
 | Reasoning chain trace | `packages/memory-engine/src/mongodb-reasoning-chain.ts` | `memongoBridgeTraceChain()` | `POST /v1/chain-trace` | `traceChain()` | `packages/memory-engine` unit suite |

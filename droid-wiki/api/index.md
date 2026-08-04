@@ -81,10 +81,8 @@ This page is the endpoint map. For the middleware stack (auth, rate limiting, CO
 | Endpoint | Method | Purpose |
 |----------|--------|---------|
 | `/v1/admin/relevance/explain` | POST | Explain a relevance decision (`v1.ts:2087`) |
-| `/v1/admin/relevance/benchmark` | POST | Run relevance benchmark (`v1.ts:2118`) |
 | `/v1/admin/relevance/report` | GET | Relevance report (`v1.ts:2239`) |
 | `/v1/admin/relevance/sample-rate` | GET | Telemetry sample rate (`v1.ts:2254`) |
-| `/v1/admin/benchmarks/ingest` | POST | Ingest benchmark results (`v1.ts:2208`) |
 | `/v1/admin/access-trends` | GET | Access trends (`v1.ts:2264`) |
 | `/v1/admin/access-summaries` | GET | Access summaries (`v1.ts:2293`) |
 | `/v1/admin/traces` | GET | List recall traces (`v1.ts:2326`) |

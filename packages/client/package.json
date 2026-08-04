@@ -1,6 +1,6 @@
 {
 	"name": "@memongo/client",
-	"version": "2.0.0",
+	"version": "2.0.1",
 	"description": "TypeScript client SDK for the Memongo HTTP API",
 	"type": "module",
 	"engines": {
@@ -33,7 +33,8 @@
 		}
 	},
 	"scripts": {
-		"build": "node ../../node_modules/typescript/bin/tsc -p tsconfig.json",
+		"clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
+		"build": "bun run clean && node ../../node_modules/typescript/bin/tsc -p tsconfig.json",
 		"check-types": "node ../../node_modules/typescript/bin/tsc --noEmit -p tsconfig.json",
 		"test": "vitest run",
 		"prepublishOnly": "bun run build"

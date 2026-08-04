@@ -1,6 +1,6 @@
 {
 	"name": "@memongo/memory",
-	"version": "2.0.0",
+	"version": "2.0.1",
 	"description": "Memongo memory: published re-export surface for the memory engine and bridge",
 	"type": "module",
 	"engines": {
@@ -32,13 +32,14 @@
 		}
 	},
 	"scripts": {
-		"build": "node ../../node_modules/typescript/bin/tsc -p tsconfig.json",
+		"clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
+		"build": "bun run clean && node ../../node_modules/typescript/bin/tsc -p tsconfig.json",
 		"check-types": "node ../../node_modules/typescript/bin/tsc --noEmit -p tsconfig.json",
 		"prepublishOnly": "bun run build"
 	},
 	"dependencies": {
-		"@memongo/memory-engine": "2.0.1",
-		"@memongo/memory-bridge": "2.0.1"
+		"@memongo/memory-engine": "^2.0.1",
+		"@memongo/memory-bridge": "^2.0.1"
 	},
 	"devDependencies": {
 		"typescript": "^5.8.0"

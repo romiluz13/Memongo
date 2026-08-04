@@ -35,14 +35,14 @@ The e2e service container runs with the image's own healthcheck, so tests start 
 
 ## Publish readiness
 
-`bun run check-publishability` validates the six published packages (`@memongo/memory-engine`, `memory-bridge`, `memory`, `client`, `tools`, `pi-extension`) before `publish.yml` ships them. Release rules live in `docs/platform/publish.md`.
+`bun run check-publishability` validates all eight coordinated packages (`@memongo/lib`, `memory-engine`, `memory-bridge`, `memory`, `client`, `tools`, `pi-extension`, and `mcp`) before `publish.yml` ships them. Release rules live in `docs/platform/publish.md`.
 
 ## Benchmark scripts
 
-- `benchmarks/` holds benchmark data (`benchmarks/data`); the harness itself compiles from `packages/memory-engine/src/mongodb-benchmark-*.ts` and `benchmark-*.ts` (see [Cleanup opportunities](../cleanup-opportunities/index.md) for the plan to move it out of the published package).
+- `benchmarks/` holds benchmark data (`benchmarks/data`); the harness and release contracts live under `scripts/benchmark/` so benchmark-only implementation is not shipped in `@memongo/memory-engine`.
 - Knobs are env-driven: `MEMONGO_BENCHMARK_*` (dataset root/SHA, measurement passes, fast-ingest batch size, settle timeouts, strict gate, retrieval lane selection) — full list in [Configuration](../reference/configuration.md).
 - Release-gate contracts (`benchmark-quality-contracts.ts`, `benchmark-parity-envelope.ts`) turn benchmark results into pass/fail gates.
-- Results ingest into MongoDB via `POST /v1/admin/benchmarks/ingest` for trend analysis.
+- Release evidence is saved under `benchmarks/results/` with its configuration and dataset identity.
 
 ## Docs tooling
 

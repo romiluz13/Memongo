@@ -27,7 +27,7 @@ bun run benchmark:fetch            # LongMemEval_S, ~265 MB
 
 The file is downloaded to `benchmarks/data/` (gitignored — too large to vendor)
 and its SHA-256 is verified against the digest pinned in
-`packages/memory-engine/src/benchmark-quality-contracts.ts`. A mismatch deletes
+`scripts/benchmark/benchmark-quality-contracts.ts`. A mismatch deletes
 the download and exits non-zero rather than installing it, because a benchmark
 measured on different bytes is not comparable to a published number.
 

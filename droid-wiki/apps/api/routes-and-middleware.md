@@ -75,8 +75,6 @@ Everything under `/v1/admin/` is treated as agent-global: scope-restricted keys 
 | Route | Bridge call | Purpose |
 |-------|-------------|---------|
 | `POST /v1/admin/relevance/explain` | `memongoBridgeRelevanceExplain` | Explain a relevance decision |
-| `POST /v1/admin/relevance/benchmark` | `memongoBridgeRelevanceBenchmark` | Run a relevance benchmark (dataset + quality-threshold contracts validated in the handler) |
-| `POST /v1/admin/benchmarks/ingest` | `memongoBridgeBenchmarkIngest` | Ingest benchmark data |
 | `GET /v1/admin/relevance/report` | `memongoBridgeRelevanceReport` | Relevance report |
 | `GET /v1/admin/relevance/sample-rate` | `memongoBridgeRelevanceSampleRate` | Relevance sampling rate |
 | `GET /v1/admin/access-trends` | `memongoBridgeAccessTrends` | Access trends analytics |

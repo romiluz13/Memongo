@@ -32,10 +32,10 @@ bun run proof-pack
 
 ## Retrieval benchmark (engine)
 
-For deep relevance and admin APIs, use the engine’s **relevance benchmark** endpoints and tests (see [capability-matrix.md](capability-matrix.md) “Relevance benchmark” row):
+For deep relevance validation, use the standalone benchmark harness and tests (see [capability-matrix.md](capability-matrix.md) “Relevance benchmark” row):
 
-- `POST /v1/admin/relevance/benchmark` (when exposed by your build)
-- `packages/memory-engine` E2E: `production-readiness.e2e.test.ts`
+- `bun run benchmark`
+- `bunx vitest run scripts/benchmark`
 
 Record: dataset description, MongoDB version, index definitions, embedding model, and **query set** (do not use toy one-word queries for serious claims).
 

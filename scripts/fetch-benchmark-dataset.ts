@@ -27,7 +27,7 @@ import path from "node:path"
 import { Readable } from "node:stream"
 import { pipeline } from "node:stream/promises"
 import { fileURLToPath } from "node:url"
-import { LONGMEMEVAL_RELEASE_V1 } from "../packages/memory-engine/src/benchmark-quality-contracts.js"
+import { LONGMEMEVAL_RELEASE_V1 } from "./benchmark/benchmark-quality-contracts.js"
 
 const REPO_ROOT = path.resolve(
 	path.dirname(fileURLToPath(import.meta.url)),

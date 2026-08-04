@@ -33,14 +33,14 @@ For benchmark-specific work, include the focused engine/API tests that cover the
 touched lane. At minimum:
 
 ```bash
-bunx vitest run packages/memory-engine/src/mongodb-benchmark-runner.test.ts
+bunx vitest run scripts/benchmark/mongodb-benchmark-runner.test.ts
 bunx vitest run packages/memory-engine/src/mongodb-manager.test.ts
-bunx vitest run packages/memory-engine/src/mongodb-conversation-recall-benchmark.test.ts
+bunx vitest run scripts/benchmark/mongodb-conversation-recall-benchmark.test.ts
 ```
 
 ## Report envelope
 
-Every `POST /v1/admin/relevance/benchmark` response includes a
+Every standalone benchmark run through `bun run benchmark` includes a
 `benchmarkReport` envelope with:
 
 - `generatedAt`

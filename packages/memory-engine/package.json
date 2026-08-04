@@ -37,7 +37,8 @@
 		}
 	},
 	"scripts": {
-		"build": "node ../../node_modules/typescript/bin/tsc -p tsconfig.json",
+		"clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
+		"build": "bun run clean && node ../../node_modules/typescript/bin/tsc -p tsconfig.json",
 		"check-types": "node ../../node_modules/typescript/bin/tsc --noEmit -p tsconfig.json",
 		"test": "vitest run --exclude=src/**/*.e2e.test.ts",
 		"test:e2e": "vitest run --no-file-parallelism e2e.test.ts",
@@ -45,7 +46,7 @@
 		"prepublishOnly": "bun run build"
 	},
 	"dependencies": {
-		"@memongo/lib": "2.0.0",
+		"@memongo/lib": "^2.0.1",
 		"chokidar": "^4.0.3",
 		"mongodb": "^7.2.0"
 	},

@@ -55,7 +55,7 @@ Most frequently changed files (commits touching the file):
 | packages/memory-engine/src/mongodb-consolidator.ts | 16 |
 | packages/memory-bridge/src/memongo-bridge.ts | 16 |
 | packages/memory-engine/src/mongodb-search.ts | 15 |
-| packages/memory-engine/src/mongodb-benchmark-runner.test.ts | 15 |
+| scripts/benchmark/mongodb-benchmark-runner.test.ts | 15 |
 
 ## AI co-authorship
 
