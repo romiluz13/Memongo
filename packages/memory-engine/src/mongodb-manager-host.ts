@@ -16,12 +16,7 @@ import type {
 	ResolvedMemoryBackendConfig,
 	ResolvedMongoDBConfig,
 } from "./backend-config.js"
-import type {
-	BenchmarkExecutionProfile,
-	BenchmarkRetrievalLane,
-	BenchmarkRunContext,
-	BenchmarkRunConfiguration,
-} from "./benchmark-parity-envelope.js"
+import type { OperationRunContext } from "./mongodb-operation-accounting.js"
 import { isDuplicateKeyError } from "./internal.js"
 import type { AccessTracker } from "./mongodb-access-tracker.js"
 import { hydrateActiveSlate } from "./mongodb-active-slate.js"
@@ -34,7 +29,6 @@ import { buildDiscoveryProjection } from "./mongodb-discovery-projections.js"
 import type { SearchMethod } from "./mongodb-hybrid.js"
 import { searchKB } from "./mongodb-kb-search.js"
 import type { V2Status } from "./mongodb-manager-admin.js"
-import type { BenchmarkEventEvidenceMaps } from "./mongodb-manager-benchmark.js"
 import type { ManagerReadResult } from "./mongodb-manager-read.js"
 import type {
 	WriteConversationEventInput,
@@ -58,7 +52,6 @@ import type {
 } from "./mongodb-recall-traces.js"
 import type { MongoDBRelevanceRuntime } from "./mongodb-relevance.js"
 import type {
-	RelevanceBenchmarkResult,
 	RelevanceReport,
 	RelevanceSampleState,
 	RelevanceSourceScope,
@@ -79,9 +72,6 @@ import type {
 import type {
 	ConversationRecallRequest,
 	ConversationRecallResponse,
-	BenchmarkE2eQaEnvelope,
-	BenchmarkQualityThresholds,
-	BenchmarkTenantStorageMeasurement,
 	MemoryActiveSlate,
 	AccessEventCollection,
 	MemoryContextBundle,
@@ -91,10 +81,6 @@ import type {
 	MemoryEmbeddingProbeResult,
 	MemoryAccessSummary,
 	MemoryAccessTrend,
-	MemoryBenchmarkDataset,
-	MemoryBenchmarkDatasetKind,
-	MemoryBenchmarkConversation,
-	MemoryBenchmarkIngestResult,
 	MemoryConversationImportResult,
 	MemoryFeedbackSignal,
 	MemoryLifecycleHistoryEntry,
@@ -109,19 +95,13 @@ import type {
 	MemorySyncProgressUpdate,
 	MemoryActorRole,
 	ClaimedMemoryJob,
-	BenchmarkLatencyDistribution,
-	BenchmarkRerankerConfig,
 	MemoryJobType,
-	BenchmarkEmbeddingConfig,
-	BenchmarkStorageFootprint,
-	BenchmarkCostAccounting,
 	MemoryJobStatus,
-	BenchmarkRunIdentity,
 } from "./types.js"
 import type { MemoryMongoDBFusionMethod, MemoryScope } from "@memongo/lib"
 import type { FSWatcher } from "chokidar"
 import type { MongoClient } from "mongodb"
-import type { Collection, Db, Document } from "mongodb"
+import type { Db, Document } from "mongodb"
 
 export interface MongoDBManagerHost {
 	readonly client: MongoClient
@@ -156,18 +136,11 @@ export interface MongoDBManagerHost {
 	memoryJobWakeRequested: boolean
 	memoryJobWorkerPromise: Promise<void>
 	memoryJobWorkerTimer: NodeJS.Timeout | null
-	memoryJobRunContexts: Map<string, BenchmarkRunContext>
+	memoryJobOperationContexts: Map<string, OperationRunContext>
 	lastSearchMode: string
 	lastSearchDetails: Record<string, unknown> | undefined
 	accessTracker: AccessTracker | null
-	benchmarkShippedProfile: boolean
 	queryCacheInvalidationCoalescer?: QueryCacheInvalidationCoalescer
-
-	/** Private facade helper kept for the private-constructor call. */
-	createBenchmarkScenarioManager(
-		agentId: string,
-		shippedProfile?: boolean,
-	): MongoDBManagerHost
 
 	// ---- Facade delegates (P4.3) ----
 	resolveSearchIdentity(opts?: {
@@ -218,7 +191,7 @@ export interface MongoDBManagerHost {
 			 */
 			onLaneLatency?: (latencyByLane: Record<string, number>) => void
 		},
-		benchmarkRunContext?: BenchmarkRunContext,
+		operationRunContext?: OperationRunContext,
 	): Promise<MemorySearchResult[]>
 	executeSearchUncoalesced(params: {
 		cleaned: string
@@ -230,7 +203,7 @@ export interface MongoDBManagerHost {
 		availablePaths: Set<RetrievalPath>
 		searchScope: MemoryScope
 		searchScopeRef: string
-		benchmarkRunContext?: BenchmarkRunContext
+		operationRunContext?: OperationRunContext
 	}): Promise<MemorySearchResult[]>
 	searchDetailed(request: MemorySearchRequest): Promise<MemorySearchResponse>
 	searchKB(
@@ -258,177 +231,8 @@ export interface MongoDBManagerHost {
 		deep?: boolean
 		questionDate?: Date
 	}): Promise<RelevanceExplainResult>
-	relevanceBenchmark(params?: {
-		datasetPath?: string
-		maxResults?: number
-		minScore?: number
-		// Task 1.A envelope-parity pass-through — accepted today, wired into
-		// the envelope by Task 5.E2E (envelope emitter already supports them).
-		datasetSha256?: string
-		embeddingConfig?: {
-			model: string
-			dimensions: number
-			quantization: "float32" | "int8" | "binary"
-		}
-		rerankerConfig?: {
-			model: string
-			version: string | null
-			stage: "post-fusion" | "pre-fusion" | "none"
-		}
-		retrievalLane?: BenchmarkRetrievalLane
-		qualityThresholds?: BenchmarkQualityThresholds
-		/**
-		 * #70: real outcome of the conversation-recall regression suite executed
-		 * alongside this run (scripts/run-benchmark.ts runs it). Absent → the
-		 * gate stays "not-run" and blocks publication.
-		 */
-		conversationRecallRegression?: {
-			status: "passed" | "failed"
-			evidence: string
-		}
-		/**
-		 * Defaults to "shipped". Pass "diagnostic" to opt into the augmented
-		 * corpus (evidence documents + LLM enrichment) that the shipped pipeline
-		 * never writes — a diagnostic number must never be published as a
-		 * product number.
-		 */
-		executionProfile?: BenchmarkExecutionProfile
-	}): Promise<RelevanceBenchmarkResult>
-	buildBenchmarkParityBundle(params: {
-		datasetPath: string
-		datasetKind?: MemoryBenchmarkDatasetKind | "legacy-query"
-		retrievalLane?: BenchmarkRetrievalLane
-		datasetSha256Override?: string
-		latencySamples: number[]
-		runContext: BenchmarkRunContext
-		tenantStorage?: BenchmarkTenantStorageMeasurement
-	}): Promise<{
-		runIdentity: import("./types.js").BenchmarkRunIdentity
-		embedding: import("./types.js").BenchmarkEmbeddingConfig
-		reranker: import("./types.js").BenchmarkRerankerConfig
-		storage: import("./types.js").BenchmarkStorageFootprint
-		latency: import("./types.js").BenchmarkLatencyDistribution
-		cost: import("./types.js").BenchmarkCostAccounting
-	}>
 	relevanceReport(params?: { windowMs?: number }): Promise<RelevanceReport>
 	relevanceSampleRate(): RelevanceSampleState
-	getBenchmarkAllowedRoots(): string[]
-	snapshotBenchmarkRunConfiguration(params: {
-		executionProfile: "shipped" | "diagnostic"
-		retrievalLane: BenchmarkRetrievalLane
-		maxResults: number
-		minScore: number
-		qualityContractId?: string
-		qualityContractVersion?: string
-	}): BenchmarkRunConfiguration
-	settleBenchmarkScenarioManager(manager: MongoDBManagerHost): Promise<void>
-	shouldUseBenchmarkFastIngest(): boolean
-	insertBenchmarkDocumentsInBatches(
-		collection: Collection<Document>,
-		docs: Document[],
-	): Promise<void>
-	fastIngestBenchmarkConversations(params: {
-		datasetPath: string
-		datasetName?: string
-		datasetKind?: MemoryBenchmarkDatasetKind
-		conversations: MemoryBenchmarkConversation[]
-		failedLines?: number
-		scope?: MemoryScope
-		metadata?: Record<string, unknown>
-	}): Promise<MemoryBenchmarkIngestResult>
-	waitForBenchmarkSearchConvergence(params: {
-		agentId: string
-		retrievalLane?: BenchmarkRetrievalLane
-		scope?: MemoryScope
-		scopeRef?: string
-		sessionId?: string
-	}): Promise<void>
-	waitForBenchmarkSearchReadiness(params?: {
-		retrievalLane?: BenchmarkRetrievalLane
-		scope?: MemoryScope
-		scopeRef?: string
-		sessionId?: string
-	}): Promise<void>
-	waitForBenchmarkVectorSearchCollectionConvergence(params: {
-		agentId: string
-		scope?: MemoryScope
-		scopeRef?: string
-		sessionId?: string
-		label: string
-		collection: Collection<Document>
-		collectionName: string
-		indexName: string
-		textPath: string
-		requireSearchableDocuments?: boolean
-	}): Promise<void>
-	waitForBenchmarkEventSearchConvergence(agentId: string): Promise<void>
-	waitForBenchmarkSearchCollectionConvergence(params: {
-		agentId: string
-		scope?: MemoryScope
-		scopeRef?: string
-		sessionId?: string
-		label: string
-		collection: Collection<Document>
-		collectionName: string
-		indexName: string
-		textPath: string
-	}): Promise<void>
-	cleanupBenchmarkScenarioData(agentId: string): Promise<void>
-	flushBenchmarkQueryCache(agentId: string): Promise<void>
-	listBenchmarkEventSessions(agentId: string): Promise<Map<string, string>>
-	listBenchmarkEventEvidence(
-		agentId: string,
-	): Promise<BenchmarkEventEvidenceMaps>
-	collectBenchmarkResultSourceEventIds(result: MemorySearchResult): string[]
-	resolveBenchmarkResultSessionIds(
-		result: MemorySearchResult,
-		evidence: BenchmarkEventEvidenceMaps | Map<string, string>,
-	): string[]
-	resolveBenchmarkResultTurnIds(
-		result: MemorySearchResult,
-		evidence: BenchmarkEventEvidenceMaps,
-	): string[]
-	resolveBenchmarkResultDialogIds(
-		result: MemorySearchResult,
-		evidence: BenchmarkEventEvidenceMaps,
-	): string[]
-	buildBenchmarkDatasetVersion(datasetPath: string): Promise<string>
-	searchBenchmarkRawSession(
-		query: string,
-		opts: {
-			maxResults: number
-			minScore: number
-		},
-	): Promise<MemorySearchResult[]>
-	runLegacyRelevanceBenchmark(params: {
-		datasetPath: string
-		maxResults: number
-		minScore: number
-	}): Promise<{
-		result: RelevanceBenchmarkResult
-		latencySamples: number[]
-	}>
-	runScenarioBenchmarkDataset(params: {
-		datasetPath: string
-		dataset: MemoryBenchmarkDataset
-		datasetVersion: string
-		maxResults: number
-		minScore: number
-		retrievalLane?: BenchmarkRetrievalLane
-		executionProfile?: "shipped" | "diagnostic"
-		runContext: BenchmarkRunContext
-	}): Promise<{
-		result: RelevanceBenchmarkResult
-		latencySamples: number[]
-		e2eQa?: BenchmarkE2eQaEnvelope
-		storage: BenchmarkTenantStorageMeasurement
-	}>
-	benchmarkIngest(params: {
-		datasetPath: string
-		scope?: MemoryScope
-		limitConversations?: number
-		limitTurnsPerConversation?: number
-	}): Promise<MemoryBenchmarkIngestResult>
 	importConversations(params: {
 		datasetPath: string
 		scope?: MemoryScope
@@ -480,7 +284,7 @@ export interface MongoDBManagerHost {
 	scheduleBackgroundExtraction(
 		eventId: string,
 		tenant?: { scope?: MemoryScope; scopeRef?: string },
-		runContext?: BenchmarkRunContext,
+		runContext?: OperationRunContext,
 	): Promise<{ jobId: string; scheduled: boolean }>
 	schedulePostWriteDerivations(params: {
 		eventId: string
@@ -490,7 +294,7 @@ export interface MongoDBManagerHost {
 		timestamp: Date
 		scope: MemoryScope
 		scopeRef: string
-		runContext?: BenchmarkRunContext
+		runContext?: OperationRunContext
 	}): Promise<void>
 	scheduleQueryCacheInvalidation(params: {
 		agentId: string
@@ -522,11 +326,11 @@ export interface MongoDBManagerHost {
 	}): Promise<{ eventId: string; chunkCreated: boolean } | null>
 	writeConversationEvent(
 		event: WriteConversationEventInput,
-		benchmarkRunContext?: BenchmarkRunContext,
+		operationRunContext?: OperationRunContext,
 	): Promise<{ eventId: string; chunkCreated: boolean }>
 	writeConversationEventsBatch(
 		events: WriteConversationEventInput[],
-		benchmarkRunContext?: BenchmarkRunContext,
+		operationRunContext?: OperationRunContext,
 	): Promise<WriteConversationEventReceipt[]>
 	extractEvent(params: {
 		eventId: string

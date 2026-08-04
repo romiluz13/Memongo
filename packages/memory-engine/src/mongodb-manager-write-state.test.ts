@@ -41,7 +41,7 @@ function buildStatefulManager(
 		agentId: AGENT,
 		closed: false,
 		memoryJobWorkerStopped: true,
-		memoryJobRunContexts: new Map(),
+		memoryJobOperationContexts: new Map(),
 		// In-process scheduling seams: stubbed so the test surface stays the
 		// durable write path. Everything that touches a collection runs for
 		// real against the fake.

@@ -3,11 +3,11 @@
  *
  * P4.1 trim: the stable surface is the manager, its configuration, and the
  * request/response types of the memory API (~50 symbols). Everything that was
- * previously re-exported here (module-level helpers, collection accessors,
- * benchmark/eval machinery) remains available during the deprecation window
- * behind the explicit `@memongo/memory-engine/internal` subpath
- * (src/internal-barrel.ts) and is slated for removal from the package surface
- * in the next major version.
+ * previously re-exported here (module-level helpers and collection accessors)
+ * remains available during the deprecation window behind the explicit
+ * `@memongo/memory-engine/internal` subpath (src/internal-barrel.ts) and is
+ * slated for removal from the package surface in the next major version.
+ * Benchmark and evaluation tooling lives outside the published package.
  */
 export type {
 	MemoryActorRole,

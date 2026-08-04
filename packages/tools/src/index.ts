@@ -258,15 +258,13 @@ const statusSchema = z.object({
 	agentId: z.string().optional(),
 })
 
-const benchmarkIngestSchema = z.object({
+const conversationImportSchema = z.object({
 	datasetPath: z.string().min(1),
 	agentId: z.string().optional(),
 	scope: memoryScopeSchema.optional(),
 	limitConversations: z.number().int().positive().optional(),
 	limitTurnsPerConversation: z.number().int().positive().optional(),
 })
-
-const conversationImportSchema = benchmarkIngestSchema
 
 const accessTrendsSchema = z.object({
 	agentId: z.string().optional(),
@@ -453,12 +451,6 @@ export function createMemongoTools(client: MemongoClient): MemongoToolSet {
 				scopeRef: z.string().optional(),
 			}),
 			execute: async (input) => client.state(input),
-		}),
-		memongo_benchmark_ingest: tool({
-			description:
-				"Replay a benchmark conversation dataset through the canonical writeConversationEvent() pipeline.",
-			inputSchema: benchmarkIngestSchema,
-			execute: async (input) => client.benchmarkIngest(input),
 		}),
 		memongo_import_conversations: tool({
 			description:

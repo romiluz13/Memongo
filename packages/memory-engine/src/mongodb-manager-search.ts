@@ -4,7 +4,7 @@ import type { MemoryMongoDBFusionMethod, MemoryScope } from "@memongo/lib"
 import { AccessTracker } from "./mongodb-access-tracker.js"
 import { resolveDefaultScope } from "./backend-config.js"
 import type { ResolvedMongoDBConfig } from "./backend-config.js"
-import type { BenchmarkRunContext } from "./benchmark-parity-envelope.js"
+import type { OperationRunContext } from "./mongodb-operation-accounting.js"
 import { normalizeSearchResults } from "./mongodb-hybrid.js"
 import type { SearchMethod } from "./mongodb-hybrid.js"
 import { searchKB } from "./mongodb-kb-search.js"
@@ -512,7 +512,7 @@ export class MongoDBManagerSearchOps {
 			 */
 			onLaneLatency?: (latencyByLane: Record<string, number>) => void
 		},
-		benchmarkRunContext?: BenchmarkRunContext,
+		operationRunContext?: OperationRunContext,
 	): Promise<MemorySearchResult[]> {
 		const cleaned = query.trim()
 		if (!cleaned) {
@@ -555,9 +555,9 @@ export class MongoDBManagerSearchOps {
 			availablePaths,
 			searchScope,
 			searchScopeRef,
-			benchmarkRunContext,
+			operationRunContext,
 		}
-		if (benchmarkRunContext) {
+		if (operationRunContext) {
 			return this.host.executeSearchUncoalesced(searchBag)
 		}
 		const flightKey = [
@@ -585,7 +585,7 @@ export class MongoDBManagerSearchOps {
 		availablePaths: Set<RetrievalPath>
 		searchScope: MemoryScope
 		searchScopeRef: string
-		benchmarkRunContext?: BenchmarkRunContext
+		operationRunContext?: OperationRunContext
 	}): Promise<MemorySearchResult[]> {
 		const {
 			cleaned,
@@ -597,7 +597,7 @@ export class MongoDBManagerSearchOps {
 			availablePaths,
 			searchScope,
 			searchScopeRef,
-			benchmarkRunContext,
+			operationRunContext,
 		} = params
 
 		// #66: measurement only — cost of the phases of this call that sit
@@ -704,7 +704,7 @@ export class MongoDBManagerSearchOps {
 						queryRewriteConfig: mongoCfg.queryRewriting,
 						questionDate: opts?.questionDate,
 						budget: mongoCfg.searchBudget,
-						...(benchmarkRunContext ? { benchmarkRunContext } : {}),
+						...(operationRunContext ? { operationRunContext } : {}),
 					},
 				},
 			)

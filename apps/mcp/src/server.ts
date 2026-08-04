@@ -326,7 +326,7 @@ function jsonResult(payload: unknown, isError = false) {
 
 export function createMemongoServer(): Server {
 	// P1.2 surface diet: default = core tools only; MEMONGO_MCP_ADMIN=1 adds
-	// admin/benchmark tools; MEMONGO_MCP_ALIASES=1 adds semantic aliases.
+	// admin tools; MEMONGO_MCP_ALIASES=1 adds semantic aliases.
 	const enabledTools = selectEnabledTools(process.env)
 	const enabledNames = new Set(enabledTools.map((tool) => tool.name))
 
@@ -349,7 +349,7 @@ export function createMemongoServer(): Server {
 		if (!enabledNames.has(request.params.name)) {
 			return jsonResult(
 				{
-					error: `tool "${request.params.name}" is not enabled by this server (admin/benchmark tools require MEMONGO_MCP_ADMIN=1, semantic aliases require MEMONGO_MCP_ALIASES=1)`,
+					error: `tool "${request.params.name}" is not enabled by this server (admin tools require MEMONGO_MCP_ADMIN=1, semantic aliases require MEMONGO_MCP_ALIASES=1)`,
 				},
 				true,
 			)
@@ -1039,44 +1039,6 @@ export async function handleToolCall(
 			})
 			return jsonResult(out)
 		}
-		if (name === "memongo_relevance_benchmark") {
-			type BenchmarkInput = NonNullable<
-				Parameters<typeof memongo.relevanceBenchmark>[0]
-			>
-			const out = await memongo.relevanceBenchmark({
-				agentId: typeof args.agentId === "string" ? args.agentId : undefined,
-				datasetPath:
-					typeof args.datasetPath === "string" ? args.datasetPath : undefined,
-				maxResults:
-					typeof args.maxResults === "number" ? args.maxResults : undefined,
-				minScore: typeof args.minScore === "number" ? args.minScore : undefined,
-				retrievalLane:
-					args.retrievalLane === "native" ||
-					args.retrievalLane === "raw-session"
-						? args.retrievalLane
-						: undefined,
-				datasetSha256:
-					typeof args.datasetSha256 === "string"
-						? args.datasetSha256
-						: undefined,
-				embeddingConfig:
-					typeof args.embeddingConfig === "object" &&
-					args.embeddingConfig !== null
-						? (args.embeddingConfig as BenchmarkInput["embeddingConfig"])
-						: undefined,
-				rerankerConfig:
-					typeof args.rerankerConfig === "object" &&
-					args.rerankerConfig !== null
-						? (args.rerankerConfig as BenchmarkInput["rerankerConfig"])
-						: undefined,
-				qualityThresholds:
-					typeof args.qualityThresholds === "object" &&
-					args.qualityThresholds !== null
-						? (args.qualityThresholds as BenchmarkInput["qualityThresholds"])
-						: undefined,
-			})
-			return jsonResult(out)
-		}
 		if (name === "memongo_relevance_report") {
 			const out = await memongo.relevanceReport(
 				typeof args.agentId === "string" ? args.agentId : undefined,
@@ -1095,36 +1057,6 @@ export async function handleToolCall(
 				agentId: typeof args.agentId === "string" ? args.agentId : undefined,
 				scope: readScopeArg(args),
 				scopeRef: typeof args.scopeRef === "string" ? args.scopeRef : undefined,
-			})
-			return jsonResult(out)
-		}
-		if (name === "memongo_benchmark_ingest") {
-			if (
-				typeof args.datasetPath !== "string" ||
-				args.datasetPath.length === 0
-			) {
-				throw new Error("datasetPath is required")
-			}
-			const out = await memongo.benchmarkIngest({
-				datasetPath: args.datasetPath,
-				agentId: typeof args.agentId === "string" ? args.agentId : undefined,
-				scope:
-					args.scope === "session" ||
-					args.scope === "user" ||
-					args.scope === "agent" ||
-					args.scope === "workspace" ||
-					args.scope === "tenant" ||
-					args.scope === "global"
-						? args.scope
-						: undefined,
-				limitConversations:
-					typeof args.limitConversations === "number"
-						? args.limitConversations
-						: undefined,
-				limitTurnsPerConversation:
-					typeof args.limitTurnsPerConversation === "number"
-						? args.limitTurnsPerConversation
-						: undefined,
 			})
 			return jsonResult(out)
 		}

@@ -185,7 +185,8 @@ describe("streamable HTTP transport", () => {
 		}
 		const names = listPayload.result.tools.map((tool) => tool.name)
 		expect(names).toContain("memongo_status")
-		expect(names).toContain("memongo_relevance_benchmark")
+		expect(names).not.toContain("memongo_relevance_benchmark")
+		expect(names).not.toContain("memongo_benchmark_ingest")
 		expect(names).not.toContain("memongo_recall_messages")
 	})
 

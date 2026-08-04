@@ -62,7 +62,7 @@ Violations throw `SsrFBlockedError`.
 
 - **Provider keys** resolve from environment only, via `resolveApiKeyForProvider` (`packages/lib/src/auth.ts`) with per-provider mappings (OpenAI, Anthropic, Google/Gemini, Voyage, Mistral, Groq, DeepSeek, Together, Fireworks, Perplexity, Cohere, xAI) and a generic `<PROVIDER>_API_KEY` / `MEMONGO_<PROVIDER>_API_KEY` fallback. `ApiKeyRotation` supports comma-separated multi-key env vars.
 - **Secret references:** engine config accepts `{ secretRef: "ENV_NAME" }` instead of inline secrets; `normalizeOptionalSecretInput` resolves the env var at runtime (`packages/lib/src/secrets.ts`).
-- **No secrets in images:** the API container requires `MEMONGO_API_KEY` at runtime (`${MEMONGO_API_KEY:?}` in `docker/docker-compose.full.yml`); the Dockerfile bakes no defaults and runs as the non-root `node` user (`apps/api/Dockerfile`).
+- **No secrets in images:** the API container requires `MEMONGO_API_KEY` at runtime (`${MEMONGO_API_KEY:?}` in `docker/compose.yaml`); the Dockerfile bakes no defaults and runs as the non-root `node` user (`apps/api/Dockerfile`).
 
 ## Deployment posture
 

@@ -25,8 +25,6 @@ const contractFixtures = {
 		"/v1/probes/embedding",
 		"/v1/probes/vector",
 		"/v1/admin/relevance/explain",
-		"/v1/admin/relevance/benchmark",
-		"/v1/admin/benchmarks/ingest",
 		"/v1/admin/relevance/report",
 		"/v1/admin/relevance/sample-rate",
 		"/v1/admin/access-summaries",

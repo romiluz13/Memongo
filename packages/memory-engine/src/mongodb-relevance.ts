@@ -1,5 +1,4 @@
 import { createHash, randomUUID } from "node:crypto"
-import { readFile } from "node:fs/promises"
 import type { Db } from "mongodb"
 import { createSubsystemLogger } from "@memongo/lib"
 import type { ResolvedMongoDBConfig } from "./backend-config.js"
@@ -9,14 +8,7 @@ import {
 	relevanceRegressionsCollection,
 	relevanceRunsCollection,
 } from "./mongodb-schema.js"
-import type {
-	MemoryBenchmarkDatasetKind,
-	MemoryBenchmarkOfficialMetrics,
-	MemoryBenchmarkQuestionTypeMetrics,
-	MemoryBenchmarkRunReport,
-	MemorySearchResult,
-	QueryGovernanceReport,
-} from "./types.js"
+import type { MemorySearchResult } from "./types.js"
 
 const log = createSubsystemLogger("memory:mongodb:relevance")
 
@@ -75,55 +67,6 @@ export type RelevanceReport = {
 	}
 }
 
-export type RelevanceBenchmarkCase = {
-	query: string
-	sourceScope?: RelevanceSourceScope
-	minTopScore?: number
-	expectedSources?: string[]
-}
-
-export type RelevanceBenchmarkResult = {
-	datasetVersion: string
-	datasetName?: string
-	datasetKind?: MemoryBenchmarkDatasetKind | "legacy-query"
-	scenarios?: number
-	cases: number
-	scoredCases?: number
-	skippedCases?: number
-	execution?: import("./types.js").MemoryBenchmarkExecutionSummary
-	caseOutcomes?: import("./types.js").MemoryBenchmarkCaseOutcome[]
-	hitRate: number
-	emptyRate: number
-	avgTopScore: number
-	p95LatencyMs: number
-	laneLatencyP95?: import("./types.js").MemoryBenchmarkLaneLatencySummary
-	/** #66: present only when more than one measurement pass ran. */
-	measurementPasses?: import("./types.js").MemoryBenchmarkMeasurementPasses
-	rAt5?: number
-	rAt10?: number
-	ndcgAt10?: number
-	questionTypeBreakdown?: MemoryBenchmarkQuestionTypeMetrics[]
-	officialMetrics?: MemoryBenchmarkOfficialMetrics
-	ingest?: {
-		conversationsIngested: number
-		turnsIngested: number
-		skippedConversations: number
-		failedLines: number
-		failedTurns: number
-	}
-	regressions: Array<{
-		metricName: string
-		baseline: number
-		current: number
-		delta: number
-		severity: "low" | "medium" | "high"
-	}>
-	queryGovernance?: QueryGovernanceReport
-	benchmarkReport?: MemoryBenchmarkRunReport
-	missLedger?: import("./mongodb-benchmark-runner.js").BenchmarkMissLedgerEntry[]
-	caseDiagnostics?: import("./mongodb-benchmark-runner.js").BenchmarkCaseDiagnosticEntry[]
-}
-
 type RecentSignal = {
 	empty: boolean
 	lowScore: boolean
@@ -142,28 +85,6 @@ function hashQuery(query: string): string {
 function redactQuery(query: string): string {
 	// Keep shape and spacing while redacting letters/digits.
 	return query.replace(/[A-Za-z0-9]/g, "x")
-}
-
-function percentile(values: number[], p: number): number {
-	if (values.length === 0) {
-		return 0
-	}
-	const sorted = [...values].toSorted((a, b) => a - b)
-	const rank = Math.min(
-		sorted.length - 1,
-		Math.max(0, Math.ceil((p / 100) * sorted.length) - 1),
-	)
-	return sorted[rank] ?? 0
-}
-
-function detectSeverity(deltaAbs: number): "low" | "medium" | "high" {
-	if (deltaAbs >= 0.25) {
-		return "high"
-	}
-	if (deltaAbs >= 0.1) {
-		return "medium"
-	}
-	return "low"
 }
 
 function extractNumberByKeys(
@@ -468,163 +389,6 @@ export class MongoDBRelevanceRuntime {
 					? latestRegression[0].ts.toISOString()
 					: undefined,
 			profileCapabilities: this.profileCapabilities,
-		}
-	}
-
-	async loadBenchmarkDataset(
-		pathname: string,
-	): Promise<RelevanceBenchmarkCase[]> {
-		const raw = await readFile(pathname, "utf-8")
-		const rows = raw
-			.split("\n")
-			.map((line) => line.trim())
-			.filter((line) => line.length > 0 && !line.startsWith("#"))
-		const cases: RelevanceBenchmarkCase[] = []
-		let skippedRows = 0
-		for (const row of rows) {
-			try {
-				const parsed = JSON.parse(row) as RelevanceBenchmarkCase
-				if (
-					typeof parsed.query !== "string" ||
-					parsed.query.trim().length === 0
-				) {
-					skippedRows++
-					continue
-				}
-				cases.push(parsed)
-			} catch {
-				skippedRows++
-			}
-		}
-		if (skippedRows > 0) {
-			log.warn(`legacy benchmark dataset skipped ${skippedRows} invalid rows`)
-		}
-		return cases
-	}
-
-	async persistRegression(
-		datasetVersion: string,
-		currentMetrics: Record<
-			| "hitRate"
-			| "emptyRate"
-			| "avgTopScore"
-			| "p95LatencyMs"
-			| "rAt5"
-			| "rAt10"
-			| "ndcgAt10",
-			number
-		>,
-	): Promise<RelevanceBenchmarkResult["regressions"]> {
-		const metricNames = [
-			"hitRate",
-			"emptyRate",
-			"avgTopScore",
-			"p95LatencyMs",
-			"rAt5",
-			"rAt10",
-			"ndcgAt10",
-		] as const
-		const now = new Date()
-		const regressions: RelevanceBenchmarkResult["regressions"] = []
-
-		for (const metricName of metricNames) {
-			const previous = await this.regressions
-				.find(
-					{
-						agentId: this.agentId,
-						datasetVersion,
-						metricName,
-					},
-					{ sort: { ts: -1 }, limit: 1, projection: { current: 1 } },
-				)
-				.toArray()
-			const current = currentMetrics[metricName]
-			const baseline =
-				typeof previous[0]?.current === "number" &&
-				Number.isFinite(previous[0].current)
-					? previous[0].current
-					: current
-			const delta = current - baseline
-			const severity = detectSeverity(Math.abs(delta))
-			regressions.push({
-				metricName,
-				baseline,
-				current,
-				delta,
-				severity,
-			})
-
-			try {
-				await this.regressions.insertOne({
-					regressionId: randomUUID(),
-					agentId: this.agentId,
-					ts: now,
-					datasetVersion,
-					metricName,
-					baseline,
-					current,
-					delta,
-					severity,
-					failingCases: [],
-				})
-			} catch (err) {
-				log.warn("failed to persist benchmark regression metric", {
-					datasetVersion,
-					metricName,
-					error: err instanceof Error ? err.message : String(err),
-				})
-			}
-		}
-
-		return regressions
-	}
-
-	static buildCaseSummary(
-		results: MemorySearchResult[],
-		latencyMs: number,
-	): {
-		empty: boolean
-		hitSources: string[]
-		topScore: number
-		latencyMs: number
-	} {
-		const hitSources = Array.from(
-			new Set(results.map((result) => result.source)),
-		)
-		return {
-			empty: results.length === 0,
-			hitSources,
-			topScore: results[0]?.score ?? 0,
-			latencyMs,
-		}
-	}
-
-	static summarizeBenchmarkCases(
-		cases: Array<{
-			empty: boolean
-			topScore: number
-			latencyMs: number
-			pass: boolean
-		}>,
-	): {
-		hitRate: number
-		emptyRate: number
-		avgTopScore: number
-		p95LatencyMs: number
-	} {
-		if (cases.length === 0) {
-			return { hitRate: 0, emptyRate: 0, avgTopScore: 0, p95LatencyMs: 0 }
-		}
-		const hitCount = cases.filter((entry) => entry.pass).length
-		const emptyCount = cases.filter((entry) => entry.empty).length
-		const topScores = cases.map((entry) => entry.topScore)
-		const latencies = cases.map((entry) => entry.latencyMs)
-		return {
-			hitRate: hitCount / cases.length,
-			emptyRate: emptyCount / cases.length,
-			avgTopScore:
-				topScores.reduce((sum, value) => sum + value, 0) / topScores.length,
-			p95LatencyMs: percentile(latencies, 95),
 		}
 	}
 

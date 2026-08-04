@@ -1,10 +1,6 @@
 import { describe, expect, it, vi } from "vitest"
 import type { MemongoConfig } from "@memongo/lib"
-import {
-	resolveMemoryBackendConfig,
-	resolveDefaultScope,
-	resolveSearchDefaultScope,
-} from "./backend-config.js"
+import { resolveMemoryBackendConfig } from "./backend-config.js"
 
 describe("resolveMemoryBackendConfig", () => {
 	it("defaults to mongodb backend when config missing and env URI is set", () => {
@@ -46,32 +42,32 @@ describe("resolveMemoryBackendConfig", () => {
 		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
 		expect(resolved.backend).toBe("mongodb")
 		expect(resolved.mongodb).toBeDefined()
-		expect(resolved.mongodb!.uri).toBe("mongodb://localhost:27017")
-		expect(resolved.mongodb!.database).toBe("memongo")
+		expect(resolved.mongodb?.uri).toBe("mongodb://localhost:27017")
+		expect(resolved.mongodb?.database).toBe("memongo")
 		// P2.1: shared default prefix (was `memongo_<agent>_` before P2.1)
-		expect(resolved.mongodb!.collectionPrefix).toBe("memongo_")
-		expect(resolved.mongodb!.deploymentProfile).toBe("atlas-local-preview")
-		expect(resolved.mongodb!.embeddingMode).toBe("automated")
-		expect(resolved.mongodb!.fusionMethod).toBe("rankFusion")
-		expect(resolved.mongodb!.recallProfile).toBe("balanced")
-		expect(resolved.mongodb!.quantization).toBe("none")
-		expect(resolved.mongodb!.relevance.enabled).toBe(true)
-		expect(resolved.mongodb!.relevance.telemetry.enabled).toBe(true)
-		expect(resolved.mongodb!.relevance.telemetry.baseSampleRate).toBe(0.01)
-		expect(resolved.mongodb!.relevance.telemetry.adaptive.enabled).toBe(true)
-		expect(resolved.mongodb!.relevance.telemetry.adaptive.maxSampleRate).toBe(
+		expect(resolved.mongodb?.collectionPrefix).toBe("memongo_")
+		expect(resolved.mongodb?.deploymentProfile).toBe("atlas-local-preview")
+		expect(resolved.mongodb?.embeddingMode).toBe("automated")
+		expect(resolved.mongodb?.fusionMethod).toBe("rankFusion")
+		expect(resolved.mongodb?.recallProfile).toBe("balanced")
+		expect(resolved.mongodb?.quantization).toBe("none")
+		expect(resolved.mongodb?.relevance.enabled).toBe(true)
+		expect(resolved.mongodb?.relevance.telemetry.enabled).toBe(true)
+		expect(resolved.mongodb?.relevance.telemetry.baseSampleRate).toBe(0.01)
+		expect(resolved.mongodb?.relevance.telemetry.adaptive.enabled).toBe(true)
+		expect(resolved.mongodb?.relevance.telemetry.adaptive.maxSampleRate).toBe(
 			0.1,
 		)
-		expect(resolved.mongodb!.relevance.telemetry.adaptive.minWindowSize).toBe(
+		expect(resolved.mongodb?.relevance.telemetry.adaptive.minWindowSize).toBe(
 			200,
 		)
-		expect(resolved.mongodb!.relevance.telemetry.persistRawExplain).toBe(true)
-		expect(resolved.mongodb!.relevance.telemetry.queryPrivacyMode).toBe(
+		expect(resolved.mongodb?.relevance.telemetry.persistRawExplain).toBe(true)
+		expect(resolved.mongodb?.relevance.telemetry.queryPrivacyMode).toBe(
 			"redacted-hash",
 		)
-		expect(resolved.mongodb!.relevance.retention.days).toBe(14)
-		expect(resolved.mongodb!.relevance.benchmark.enabled).toBe(true)
-		expect(resolved.mongodb!.relevance.benchmark.datasetPath).toContain(
+		expect(resolved.mongodb?.relevance.retention.days).toBe(14)
+		expect(resolved.mongodb?.relevance.benchmark.enabled).toBe(true)
+		expect(resolved.mongodb?.relevance.benchmark.datasetPath).toContain(
 			".memongo/relevance/golden.jsonl",
 		)
 	})
@@ -94,14 +90,14 @@ describe("resolveMemoryBackendConfig", () => {
 			},
 		} as unknown as MemongoConfig
 		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
-		expect(resolved.mongodb!.uri).toBe("mongodb://localhost:27017")
-		expect(resolved.mongodb!.database).toBe("mydb")
-		expect(resolved.mongodb!.collectionPrefix).toBe("custom_")
-		expect(resolved.mongodb!.deploymentProfile).toBe("atlas-local-preview")
-		expect(resolved.mongodb!.embeddingMode).toBe("automated")
-		expect(resolved.mongodb!.fusionMethod).toBe("rankFusion")
-		expect(resolved.mongodb!.recallProfile).toBe("proof")
-		expect(resolved.mongodb!.quantization).toBe("scalar")
+		expect(resolved.mongodb?.uri).toBe("mongodb://localhost:27017")
+		expect(resolved.mongodb?.database).toBe("mydb")
+		expect(resolved.mongodb?.collectionPrefix).toBe("custom_")
+		expect(resolved.mongodb?.deploymentProfile).toBe("atlas-local-preview")
+		expect(resolved.mongodb?.embeddingMode).toBe("automated")
+		expect(resolved.mongodb?.fusionMethod).toBe("rankFusion")
+		expect(resolved.mongodb?.recallProfile).toBe("proof")
+		expect(resolved.mongodb?.quantization).toBe("scalar")
 	})
 
 	it("resolves MongoDB recall profile from env and ignores invalid values", () => {
@@ -115,7 +111,7 @@ describe("resolveMemoryBackendConfig", () => {
 				},
 			} as unknown as MemongoConfig
 			const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
-			expect(resolved.mongodb!.recallProfile).toBe("proof")
+			expect(resolved.mongodb?.recallProfile).toBe("proof")
 		} finally {
 			vi.unstubAllEnvs()
 		}
@@ -130,7 +126,7 @@ describe("resolveMemoryBackendConfig", () => {
 				},
 			} as unknown as MemongoConfig
 			const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
-			expect(resolved.mongodb!.recallProfile).toBe("balanced")
+			expect(resolved.mongodb?.recallProfile).toBe("balanced")
 		} finally {
 			vi.unstubAllEnvs()
 		}
@@ -147,7 +143,7 @@ describe("resolveMemoryBackendConfig", () => {
 
 		for (const agentId of ["main", "research-agent", "Agent With Spaces"]) {
 			const resolved = resolveMemoryBackendConfig({ cfg, agentId })
-			expect(resolved.mongodb!.collectionPrefix).toBe("memongo_")
+			expect(resolved.mongodb?.collectionPrefix).toBe("memongo_")
 		}
 	})
 
@@ -164,7 +160,7 @@ describe("resolveMemoryBackendConfig", () => {
 		} as unknown as MemongoConfig
 
 		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
-		expect(resolved.mongodb!.collectionPrefix).toBe("memongo_main_")
+		expect(resolved.mongodb?.collectionPrefix).toBe("memongo_main_")
 	})
 
 	it("allows MEMONGO_MONGODB_COLLECTION_PREFIX to override config for benchmark isolation", () => {
@@ -182,7 +178,7 @@ describe("resolveMemoryBackendConfig", () => {
 
 		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
 
-		expect(resolved.mongodb!.collectionPrefix).toBe("bench_run_")
+		expect(resolved.mongodb?.collectionPrefix).toBe("bench_run_")
 		vi.unstubAllEnvs()
 	})
 
@@ -216,21 +212,21 @@ describe("resolveMemoryBackendConfig", () => {
 			},
 		} as unknown as MemongoConfig
 		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
-		expect(resolved.mongodb!.relevance.enabled).toBe(false)
-		expect(resolved.mongodb!.relevance.telemetry.enabled).toBe(true)
-		expect(resolved.mongodb!.relevance.telemetry.baseSampleRate).toBe(0.05)
-		expect(resolved.mongodb!.relevance.telemetry.adaptive.enabled).toBe(true)
-		expect(resolved.mongodb!.relevance.telemetry.adaptive.maxSampleRate).toBe(
+		expect(resolved.mongodb?.relevance.enabled).toBe(false)
+		expect(resolved.mongodb?.relevance.telemetry.enabled).toBe(true)
+		expect(resolved.mongodb?.relevance.telemetry.baseSampleRate).toBe(0.05)
+		expect(resolved.mongodb?.relevance.telemetry.adaptive.enabled).toBe(true)
+		expect(resolved.mongodb?.relevance.telemetry.adaptive.maxSampleRate).toBe(
 			0.2,
 		)
-		expect(resolved.mongodb!.relevance.telemetry.adaptive.minWindowSize).toBe(
+		expect(resolved.mongodb?.relevance.telemetry.adaptive.minWindowSize).toBe(
 			500,
 		)
-		expect(resolved.mongodb!.relevance.telemetry.persistRawExplain).toBe(false)
-		expect(resolved.mongodb!.relevance.telemetry.queryPrivacyMode).toBe("raw")
-		expect(resolved.mongodb!.relevance.retention.days).toBe(21)
-		expect(resolved.mongodb!.relevance.benchmark.enabled).toBe(false)
-		expect(resolved.mongodb!.relevance.benchmark.datasetPath).toContain(
+		expect(resolved.mongodb?.relevance.telemetry.persistRawExplain).toBe(false)
+		expect(resolved.mongodb?.relevance.telemetry.queryPrivacyMode).toBe("raw")
+		expect(resolved.mongodb?.relevance.retention.days).toBe(21)
+		expect(resolved.mongodb?.relevance.benchmark.enabled).toBe(false)
+		expect(resolved.mongodb?.relevance.benchmark.datasetPath).toContain(
 			"datasets/relevance-golden.jsonl",
 		)
 	})
@@ -246,7 +242,7 @@ describe("resolveMemoryBackendConfig", () => {
 				},
 			} as MemongoConfig
 			const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
-			expect(resolved.mongodb!.uri).toBe("mongodb://from-env:27017")
+			expect(resolved.mongodb?.uri).toBe("mongodb://from-env:27017")
 		} finally {
 			vi.unstubAllEnvs()
 		}
@@ -272,7 +268,7 @@ describe("resolveMemoryBackendConfig", () => {
 				},
 			} as unknown as MemongoConfig
 			const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
-			expect(resolved.mongodb!.uri).toBe("mongodb://from-force:27017/db")
+			expect(resolved.mongodb?.uri).toBe("mongodb://from-force:27017/db")
 		} finally {
 			vi.unstubAllEnvs()
 		}
@@ -287,7 +283,7 @@ describe("resolveMemoryBackendConfig", () => {
 				memory: { backend: "mongodb", mongodb: {} },
 			} as MemongoConfig
 			const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
-			expect(resolved.mongodb!.uri).toBe("mongodb://from-force:27017/db")
+			expect(resolved.mongodb?.uri).toBe("mongodb://from-force:27017/db")
 		} finally {
 			vi.unstubAllEnvs()
 		}
@@ -309,7 +305,7 @@ describe("resolveMemoryBackendConfig", () => {
 				},
 			} as unknown as MemongoConfig
 			const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
-			expect(resolved.mongodb!.uri).toBe("mongodb://from-force:27017/memongo")
+			expect(resolved.mongodb?.uri).toBe("mongodb://from-force:27017/memongo")
 		} finally {
 			vi.unstubAllEnvs()
 		}
@@ -324,7 +320,7 @@ describe("resolveMemoryBackendConfig", () => {
 			},
 		} as unknown as MemongoConfig
 		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
-		expect(resolved.mongodb!.numDimensions).toBe(1024)
+		expect(resolved.mongodb?.numDimensions).toBe(1024)
 	})
 
 	it("resolves custom numDimensions", () => {
@@ -336,7 +332,7 @@ describe("resolveMemoryBackendConfig", () => {
 			},
 		} as unknown as MemongoConfig
 		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
-		expect(resolved.mongodb!.numDimensions).toBe(768)
+		expect(resolved.mongodb?.numDimensions).toBe(768)
 	})
 
 	// P3.1 dead knob: numDimensions is accepted for config-schema compat but
@@ -354,7 +350,7 @@ describe("resolveMemoryBackendConfig", () => {
 			} as unknown as MemongoConfig
 			const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
 			// Schema compat: the value still resolves, it is just inert.
-			expect(resolved.mongodb!.numDimensions).toBe(768)
+			expect(resolved.mongodb?.numDimensions).toBe(768)
 			const logged = errorSpy.mock.calls.flat().join(" ")
 			expect(logged).toContain("numDimensions")
 			expect(logged).toContain("ignored")
@@ -390,7 +386,7 @@ describe("resolveMemoryBackendConfig", () => {
 			},
 		} as unknown as MemongoConfig
 		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
-		expect(resolved.mongodb!.legacySearchFallback).toBe(false)
+		expect(resolved.mongodb?.legacySearchFallback).toBe(false)
 	})
 
 	it("honors legacySearchFallback when explicitly enabled", () => {
@@ -405,7 +401,7 @@ describe("resolveMemoryBackendConfig", () => {
 			},
 		} as unknown as MemongoConfig
 		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
-		expect(resolved.mongodb!.legacySearchFallback).toBe(true)
+		expect(resolved.mongodb?.legacySearchFallback).toBe(true)
 	})
 
 	it("resolves the per-search budget with defaults and valid overrides (P3.2)", () => {
@@ -420,8 +416,8 @@ describe("resolveMemoryBackendConfig", () => {
 			cfg: baseCfg,
 			agentId: "main",
 		})
-		expect(defaults.mongodb!.searchBudget.maxAggregations).toBeGreaterThan(0)
-		expect(defaults.mongodb!.searchBudget.maxEmbeds).toBeGreaterThan(0)
+		expect(defaults.mongodb?.searchBudget.maxAggregations).toBeGreaterThan(0)
+		expect(defaults.mongodb?.searchBudget.maxEmbeds).toBeGreaterThan(0)
 
 		const customCfg = {
 			agents: { defaults: { workspace: "/tmp/memory-test" } },
@@ -437,7 +433,7 @@ describe("resolveMemoryBackendConfig", () => {
 			cfg: customCfg,
 			agentId: "main",
 		})
-		expect(custom.mongodb!.searchBudget).toEqual({
+		expect(custom.mongodb?.searchBudget).toEqual({
 			maxAggregations: 4,
 			maxEmbeds: 2,
 		})
@@ -456,8 +452,8 @@ describe("resolveMemoryBackendConfig", () => {
 			cfg: invalidCfg,
 			agentId: "main",
 		})
-		expect(invalid.mongodb!.searchBudget).toEqual(
-			defaults.mongodb!.searchBudget,
+		expect(invalid.mongodb?.searchBudget).toEqual(
+			defaults.mongodb?.searchBudget,
 		)
 	})
 
@@ -470,7 +466,7 @@ describe("resolveMemoryBackendConfig", () => {
 			},
 		} as unknown as MemongoConfig
 		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
-		expect(resolved.mongodb!.maxPoolSize).toBe(10)
+		expect(resolved.mongodb?.maxPoolSize).toBe(10)
 	})
 
 	it("resolves custom maxPoolSize", () => {
@@ -482,7 +478,7 @@ describe("resolveMemoryBackendConfig", () => {
 			},
 		} as unknown as MemongoConfig
 		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
-		expect(resolved.mongodb!.maxPoolSize).toBe(20)
+		expect(resolved.mongodb?.maxPoolSize).toBe(20)
 	})
 
 	it("resolves MongoDB connection pool overrides from env", () => {
@@ -507,17 +503,17 @@ describe("resolveMemoryBackendConfig", () => {
 
 		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
 
-		expect(resolved.mongodb!.maxPoolSize).toBe(6)
-		expect(resolved.mongodb!.minPoolSize).toBe(0)
-		expect(resolved.mongodb!.maxConnecting).toBe(2)
-		expect(resolved.mongodb!.maxIdleTimeMs).toBe(120000)
-		expect(resolved.mongodb!.socketTimeoutMs).toBe(180000)
-		expect(resolved.mongodb!.waitQueueTimeoutMs).toBe(30000)
-		expect(resolved.mongodb!.connectTimeoutMs).toBe(30000)
-		expect(resolved.mongodb!.serverSelectionTimeoutMs).toBe(120000)
-		expect(resolved.mongodb!.heartbeatFrequencyMs).toBe(5000)
-		expect(resolved.mongodb!.serverMonitoringMode).toBe("poll")
-		expect(resolved.mongodb!.networkFamily).toBe(4)
+		expect(resolved.mongodb?.maxPoolSize).toBe(6)
+		expect(resolved.mongodb?.minPoolSize).toBe(0)
+		expect(resolved.mongodb?.maxConnecting).toBe(2)
+		expect(resolved.mongodb?.maxIdleTimeMs).toBe(120000)
+		expect(resolved.mongodb?.socketTimeoutMs).toBe(180000)
+		expect(resolved.mongodb?.waitQueueTimeoutMs).toBe(30000)
+		expect(resolved.mongodb?.connectTimeoutMs).toBe(30000)
+		expect(resolved.mongodb?.serverSelectionTimeoutMs).toBe(120000)
+		expect(resolved.mongodb?.heartbeatFrequencyMs).toBe(5000)
+		expect(resolved.mongodb?.serverMonitoringMode).toBe("poll")
+		expect(resolved.mongodb?.networkFamily).toBe(4)
 		vi.unstubAllEnvs()
 	})
 
@@ -530,7 +526,7 @@ describe("resolveMemoryBackendConfig", () => {
 			},
 		} as unknown as MemongoConfig
 		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
-		expect(resolved.mongodb!.memoryTtlDays).toBe(0)
+		expect(resolved.mongodb?.memoryTtlDays).toBe(0)
 	})
 
 	it("resolves enableChangeStreams with default false", () => {
@@ -542,7 +538,7 @@ describe("resolveMemoryBackendConfig", () => {
 			},
 		} as MemongoConfig
 		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
-		expect(resolved.mongodb!.enableChangeStreams).toBe(false)
+		expect(resolved.mongodb?.enableChangeStreams).toBe(false)
 	})
 
 	it("resolves enableChangeStreams when true", () => {
@@ -557,7 +553,7 @@ describe("resolveMemoryBackendConfig", () => {
 			},
 		} as MemongoConfig
 		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
-		expect(resolved.mongodb!.enableChangeStreams).toBe(true)
+		expect(resolved.mongodb?.enableChangeStreams).toBe(true)
 	})
 
 	it("resolves changeStreamDebounceMs with default 1000", () => {
@@ -569,7 +565,7 @@ describe("resolveMemoryBackendConfig", () => {
 			},
 		} as MemongoConfig
 		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
-		expect(resolved.mongodb!.changeStreamDebounceMs).toBe(1000)
+		expect(resolved.mongodb?.changeStreamDebounceMs).toBe(1000)
 	})
 
 	it("defaults embeddingMode to automated for atlas-local-preview profile", () => {
@@ -584,7 +580,7 @@ describe("resolveMemoryBackendConfig", () => {
 			},
 		} as MemongoConfig
 		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
-		expect(resolved.mongodb!.embeddingMode).toBe("automated")
+		expect(resolved.mongodb?.embeddingMode).toBe("automated")
 	})
 
 	it("infers atlas-managed profile for MongoDB Atlas SRV URIs", () => {
@@ -598,8 +594,8 @@ describe("resolveMemoryBackendConfig", () => {
 			},
 		} as MemongoConfig
 		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
-		expect(resolved.mongodb!.deploymentProfile).toBe("atlas-managed")
-		expect(resolved.mongodb!.embeddingMode).toBe("automated")
+		expect(resolved.mongodb?.deploymentProfile).toBe("atlas-managed")
+		expect(resolved.mongodb?.embeddingMode).toBe("automated")
 	})
 
 	it("accepts explicit atlas-managed profile", () => {
@@ -614,7 +610,7 @@ describe("resolveMemoryBackendConfig", () => {
 			},
 		} as MemongoConfig
 		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
-		expect(resolved.mongodb!.deploymentProfile).toBe("atlas-managed")
+		expect(resolved.mongodb?.deploymentProfile).toBe("atlas-managed")
 	})
 
 	it("rejects unsupported community-bare profile", () => {
@@ -678,7 +674,7 @@ describe("resolveMemoryBackendConfig", () => {
 			},
 		} as MemongoConfig
 		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
-		expect(resolved.mongodb!.numCandidates).toBe(10000)
+		expect(resolved.mongodb?.numCandidates).toBe(10000)
 	})
 
 	it("defaults fusionMethod to rankFusion (F8)", () => {
@@ -690,7 +686,7 @@ describe("resolveMemoryBackendConfig", () => {
 			},
 		} as MemongoConfig
 		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
-		expect(resolved.mongodb!.fusionMethod).toBe("rankFusion")
+		expect(resolved.mongodb?.fusionMethod).toBe("rankFusion")
 	})
 
 	it("allows explicit scoreFusion override", () => {
@@ -705,7 +701,7 @@ describe("resolveMemoryBackendConfig", () => {
 			},
 		} as MemongoConfig
 		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
-		expect(resolved.mongodb!.fusionMethod).toBe("scoreFusion")
+		expect(resolved.mongodb?.fusionMethod).toBe("scoreFusion")
 	})
 
 	it("allows fusionMethod override via MEMONGO_MONGODB_FUSION_METHOD env var", () => {
@@ -721,7 +717,7 @@ describe("resolveMemoryBackendConfig", () => {
 			},
 		} as MemongoConfig
 		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
-		expect(resolved.mongodb!.fusionMethod).toBe("js-merge")
+		expect(resolved.mongodb?.fusionMethod).toBe("js-merge")
 	})
 
 	it("throws when mongodb backend has no URI", () => {
@@ -750,7 +746,7 @@ describe("resolveMemoryBackendConfig", () => {
 				},
 			} as MemongoConfig
 			const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
-			expect(resolved.mongodb!.uri).toBe("mongodb://from-config:27017")
+			expect(resolved.mongodb?.uri).toBe("mongodb://from-config:27017")
 		} finally {
 			vi.unstubAllEnvs()
 		}
@@ -769,12 +765,12 @@ describe("resolveMemoryBackendConfig", () => {
 			},
 		} as MemongoConfig
 		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
-		expect(resolved.mongodb!.kb).toBeDefined()
-		expect(resolved.mongodb!.kb.enabled).toBe(true)
-		expect(resolved.mongodb!.kb.chunking.tokens).toBe(600)
-		expect(resolved.mongodb!.kb.chunking.overlap).toBe(100)
-		expect(resolved.mongodb!.kb.autoImportPaths).toEqual([])
-		expect(resolved.mongodb!.kb.maxDocumentSize).toBe(10 * 1024 * 1024)
+		expect(resolved.mongodb?.kb).toBeDefined()
+		expect(resolved.mongodb?.kb.enabled).toBe(true)
+		expect(resolved.mongodb?.kb.chunking.tokens).toBe(600)
+		expect(resolved.mongodb?.kb.chunking.overlap).toBe(100)
+		expect(resolved.mongodb?.kb.autoImportPaths).toEqual([])
+		expect(resolved.mongodb?.kb.maxDocumentSize).toBe(10 * 1024 * 1024)
 	})
 
 	// ---------------------------------------------------------------------------
@@ -790,7 +786,7 @@ describe("resolveMemoryBackendConfig", () => {
 			},
 		} as MemongoConfig
 		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
-		expect(resolved.mongodb!.maxSessionChunks).toBe(50)
+		expect(resolved.mongodb?.maxSessionChunks).toBe(50)
 	})
 
 	it("resolves custom maxSessionChunks value", () => {
@@ -802,7 +798,7 @@ describe("resolveMemoryBackendConfig", () => {
 			},
 		} as MemongoConfig
 		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
-		expect(resolved.mongodb!.maxSessionChunks).toBe(100)
+		expect(resolved.mongodb?.maxSessionChunks).toBe(100)
 	})
 
 	it("clamps invalid maxSessionChunks to default 50", () => {
@@ -814,7 +810,7 @@ describe("resolveMemoryBackendConfig", () => {
 			},
 		} as MemongoConfig
 		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
-		expect(resolved.mongodb!.maxSessionChunks).toBe(50)
+		expect(resolved.mongodb?.maxSessionChunks).toBe(50)
 	})
 
 	it("floors fractional maxSessionChunks value", () => {
@@ -826,7 +822,7 @@ describe("resolveMemoryBackendConfig", () => {
 			},
 		} as MemongoConfig
 		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
-		expect(resolved.mongodb!.maxSessionChunks).toBe(75)
+		expect(resolved.mongodb?.maxSessionChunks).toBe(75)
 	})
 
 	// ---------------------------------------------------------------------------
@@ -842,8 +838,8 @@ describe("resolveMemoryBackendConfig", () => {
 			},
 		} as unknown as MemongoConfig
 		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
-		expect(resolved.mongodb!.episodes.enabled).toBe(true)
-		expect(resolved.mongodb!.graph.enabled).toBe(true)
+		expect(resolved.mongodb?.episodes.enabled).toBe(true)
+		expect(resolved.mongodb?.graph.enabled).toBe(true)
 	})
 
 	it("allows disabling episodes explicitly", () => {
@@ -858,7 +854,7 @@ describe("resolveMemoryBackendConfig", () => {
 			},
 		} as unknown as MemongoConfig
 		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
-		expect(resolved.mongodb!.episodes.enabled).toBe(false)
+		expect(resolved.mongodb?.episodes.enabled).toBe(false)
 	})
 
 	it("allows disabling graph explicitly", () => {
@@ -873,7 +869,7 @@ describe("resolveMemoryBackendConfig", () => {
 			},
 		} as unknown as MemongoConfig
 		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
-		expect(resolved.mongodb!.graph.enabled).toBe(false)
+		expect(resolved.mongodb?.graph.enabled).toBe(false)
 	})
 
 	it("ignores old runtimeMode field without error (backward compat)", () => {
@@ -905,11 +901,11 @@ describe("resolveMemoryBackendConfig", () => {
 			},
 		} as unknown as MemongoConfig
 		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
-		expect(resolved.mongodb!.episodes).toEqual({
+		expect(resolved.mongodb?.episodes).toEqual({
 			enabled: false,
 			minEventsForEpisode: 20,
 		})
-		expect(resolved.mongodb!.graph).toEqual({
+		expect(resolved.mongodb?.graph).toEqual({
 			enabled: false,
 			maxGraphDepth: 3,
 			entityExtraction: { method: "regex", model: undefined, timeoutMs: 5000 },
@@ -933,11 +929,11 @@ describe("resolveMemoryBackendConfig", () => {
 			},
 		} as MemongoConfig
 		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
-		expect(resolved.mongodb!.kb.enabled).toBe(false)
-		expect(resolved.mongodb!.kb.chunking.tokens).toBe(800)
-		expect(resolved.mongodb!.kb.chunking.overlap).toBe(150)
-		expect(resolved.mongodb!.kb.autoImportPaths).toEqual(["/docs", "/wiki"])
-		expect(resolved.mongodb!.kb.maxDocumentSize).toBe(5 * 1024 * 1024)
+		expect(resolved.mongodb?.kb.enabled).toBe(false)
+		expect(resolved.mongodb?.kb.chunking.tokens).toBe(800)
+		expect(resolved.mongodb?.kb.chunking.overlap).toBe(150)
+		expect(resolved.mongodb?.kb.autoImportPaths).toEqual(["/docs", "/wiki"])
+		expect(resolved.mongodb?.kb.maxDocumentSize).toBe(5 * 1024 * 1024)
 	})
 
 	// ---------------------------------------------------------------------------
@@ -953,10 +949,10 @@ describe("resolveMemoryBackendConfig", () => {
 			},
 		} as unknown as MemongoConfig
 		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
-		expect(resolved.mongodb!.cache.enabled).toBe(true)
-		expect(resolved.mongodb!.cache.conversationTtlSec).toBe(300)
-		expect(resolved.mongodb!.cache.kbTtlSec).toBe(3600)
-		expect(resolved.mongodb!.cache.similarityThreshold).toBe(0.95)
+		expect(resolved.mongodb?.cache.enabled).toBe(true)
+		expect(resolved.mongodb?.cache.conversationTtlSec).toBe(300)
+		expect(resolved.mongodb?.cache.kbTtlSec).toBe(3600)
+		expect(resolved.mongodb?.cache.similarityThreshold).toBe(0.95)
 	})
 
 	it("resolves cache config with custom values", () => {
@@ -976,10 +972,10 @@ describe("resolveMemoryBackendConfig", () => {
 			},
 		} as unknown as MemongoConfig
 		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
-		expect(resolved.mongodb!.cache.enabled).toBe(true)
-		expect(resolved.mongodb!.cache.conversationTtlSec).toBe(600)
-		expect(resolved.mongodb!.cache.kbTtlSec).toBe(7200)
-		expect(resolved.mongodb!.cache.similarityThreshold).toBe(0.9)
+		expect(resolved.mongodb?.cache.enabled).toBe(true)
+		expect(resolved.mongodb?.cache.conversationTtlSec).toBe(600)
+		expect(resolved.mongodb?.cache.kbTtlSec).toBe(7200)
+		expect(resolved.mongodb?.cache.similarityThreshold).toBe(0.9)
 	})
 
 	it("resolves cache disabled when explicitly set to false", () => {
@@ -994,11 +990,11 @@ describe("resolveMemoryBackendConfig", () => {
 			},
 		} as unknown as MemongoConfig
 		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
-		expect(resolved.mongodb!.cache.enabled).toBe(false)
+		expect(resolved.mongodb?.cache.enabled).toBe(false)
 		// Defaults still apply for other fields
-		expect(resolved.mongodb!.cache.conversationTtlSec).toBe(300)
-		expect(resolved.mongodb!.cache.kbTtlSec).toBe(3600)
-		expect(resolved.mongodb!.cache.similarityThreshold).toBe(0.95)
+		expect(resolved.mongodb?.cache.conversationTtlSec).toBe(300)
+		expect(resolved.mongodb?.cache.kbTtlSec).toBe(3600)
+		expect(resolved.mongodb?.cache.similarityThreshold).toBe(0.95)
 	})
 
 	it("resolves cache enabled when cache section is undefined (default-enable pattern)", () => {
@@ -1011,7 +1007,7 @@ describe("resolveMemoryBackendConfig", () => {
 		} as unknown as MemongoConfig
 		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
 		// cache?.enabled !== false => true when undefined
-		expect(resolved.mongodb!.cache.enabled).toBe(true)
+		expect(resolved.mongodb?.cache.enabled).toBe(true)
 	})
 
 	it("resolves cache with partial overrides", () => {
@@ -1026,10 +1022,10 @@ describe("resolveMemoryBackendConfig", () => {
 			},
 		} as unknown as MemongoConfig
 		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
-		expect(resolved.mongodb!.cache.enabled).toBe(true) // default
-		expect(resolved.mongodb!.cache.conversationTtlSec).toBe(300) // default
-		expect(resolved.mongodb!.cache.kbTtlSec).toBe(1800) // overridden
-		expect(resolved.mongodb!.cache.similarityThreshold).toBe(0.95) // default
+		expect(resolved.mongodb?.cache.enabled).toBe(true) // default
+		expect(resolved.mongodb?.cache.conversationTtlSec).toBe(300) // default
+		expect(resolved.mongodb?.cache.kbTtlSec).toBe(1800) // overridden
+		expect(resolved.mongodb?.cache.similarityThreshold).toBe(0.95) // default
 	})
 
 	it("uses conversation TTL for conversation scope and KB TTL for KB scope", () => {
@@ -1048,8 +1044,8 @@ describe("resolveMemoryBackendConfig", () => {
 		} as unknown as MemongoConfig
 		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
 		// The resolved config stores both TTLs; the search() method decides which to use
-		expect(resolved.mongodb!.cache.conversationTtlSec).toBe(120)
-		expect(resolved.mongodb!.cache.kbTtlSec).toBe(4800)
+		expect(resolved.mongodb?.cache.conversationTtlSec).toBe(120)
+		expect(resolved.mongodb?.cache.kbTtlSec).toBe(4800)
 	})
 
 	it("applies !== false pattern for cache.enabled", () => {
@@ -1063,8 +1059,8 @@ describe("resolveMemoryBackendConfig", () => {
 			},
 		} as unknown as MemongoConfig
 		expect(
-			resolveMemoryBackendConfig({ cfg: cfgUndefined, agentId: "main" })
-				.mongodb!.cache.enabled,
+			resolveMemoryBackendConfig({ cfg: cfgUndefined, agentId: "main" }).mongodb
+				?.cache.enabled,
 		).toBe(true)
 
 		const cfgTrue = {
@@ -1075,8 +1071,8 @@ describe("resolveMemoryBackendConfig", () => {
 			},
 		} as unknown as MemongoConfig
 		expect(
-			resolveMemoryBackendConfig({ cfg: cfgTrue, agentId: "main" }).mongodb!
-				.cache.enabled,
+			resolveMemoryBackendConfig({ cfg: cfgTrue, agentId: "main" }).mongodb
+				?.cache.enabled,
 		).toBe(true)
 
 		const cfgFalse = {
@@ -1090,8 +1086,8 @@ describe("resolveMemoryBackendConfig", () => {
 			},
 		} as unknown as MemongoConfig
 		expect(
-			resolveMemoryBackendConfig({ cfg: cfgFalse, agentId: "main" }).mongodb!
-				.cache.enabled,
+			resolveMemoryBackendConfig({ cfg: cfgFalse, agentId: "main" }).mongodb
+				?.cache.enabled,
 		).toBe(false)
 	})
 
@@ -1108,9 +1104,9 @@ describe("resolveMemoryBackendConfig", () => {
 			},
 		} as unknown as MemongoConfig
 		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
-		expect(resolved.mongodb!.queryRewriting.enabled).toBe(false)
-		expect(resolved.mongodb!.queryRewriting.method).toBe("synonym-expansion")
-		expect(resolved.mongodb!.queryRewriting.maxTokens).toBe(128)
+		expect(resolved.mongodb?.queryRewriting.enabled).toBe(false)
+		expect(resolved.mongodb?.queryRewriting.method).toBe("synonym-expansion")
+		expect(resolved.mongodb?.queryRewriting.maxTokens).toBe(128)
 	})
 
 	it("resolves queryRewriting with explicit supported values", () => {
@@ -1129,9 +1125,9 @@ describe("resolveMemoryBackendConfig", () => {
 			},
 		} as unknown as MemongoConfig
 		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
-		expect(resolved.mongodb!.queryRewriting.enabled).toBe(true)
-		expect(resolved.mongodb!.queryRewriting.method).toBe("synonym-expansion")
-		expect(resolved.mongodb!.queryRewriting.maxTokens).toBe(256)
+		expect(resolved.mongodb?.queryRewriting.enabled).toBe(true)
+		expect(resolved.mongodb?.queryRewriting.method).toBe("synonym-expansion")
+		expect(resolved.mongodb?.queryRewriting.maxTokens).toBe(256)
 	})
 
 	it("rejects unsupported queryRewriting methods at config resolution time", () => {
@@ -1166,11 +1162,11 @@ describe("resolveMemoryBackendConfig", () => {
 				},
 			} as unknown as MemongoConfig
 			const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
-			expect(resolved.mongodb!.reranking.enabled).toBe(true)
-			expect(resolved.mongodb!.reranking.model).toBe("rerank-2.5")
-			expect(resolved.mongodb!.reranking.topN).toBe(20)
-			expect(resolved.mongodb!.reranking.minScore).toBe(0.01)
-			expect(resolved.mongodb!.reranking.voyageApiKey).toBe("")
+			expect(resolved.mongodb?.reranking.enabled).toBe(true)
+			expect(resolved.mongodb?.reranking.model).toBe("rerank-2.5")
+			expect(resolved.mongodb?.reranking.topN).toBe(20)
+			expect(resolved.mongodb?.reranking.minScore).toBe(0.01)
+			expect(resolved.mongodb?.reranking.voyageApiKey).toBe("")
 		} finally {
 			vi.unstubAllEnvs()
 		}
@@ -1195,11 +1191,11 @@ describe("resolveMemoryBackendConfig", () => {
 			},
 		} as unknown as MemongoConfig
 		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
-		expect(resolved.mongodb!.reranking.enabled).toBe(true)
-		expect(resolved.mongodb!.reranking.model).toBe("rerank-2.5-lite")
-		expect(resolved.mongodb!.reranking.topN).toBe(10)
-		expect(resolved.mongodb!.reranking.minScore).toBe(0.3)
-		expect(resolved.mongodb!.reranking.voyageApiKey).toBe("voy-test-key")
+		expect(resolved.mongodb?.reranking.enabled).toBe(true)
+		expect(resolved.mongodb?.reranking.model).toBe("rerank-2.5-lite")
+		expect(resolved.mongodb?.reranking.topN).toBe(10)
+		expect(resolved.mongodb?.reranking.minScore).toBe(0.3)
+		expect(resolved.mongodb?.reranking.voyageApiKey).toBe("voy-test-key")
 	})
 
 	it("defaults reranking recency/access boost weights to 0.2", () => {
@@ -1211,8 +1207,8 @@ describe("resolveMemoryBackendConfig", () => {
 			},
 		} as unknown as MemongoConfig
 		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
-		expect(resolved.mongodb!.reranking.recencyBoost).toBe(0.2)
-		expect(resolved.mongodb!.reranking.accessBoost).toBe(0.2)
+		expect(resolved.mongodb?.reranking.recencyBoost).toBe(0.2)
+		expect(resolved.mongodb?.reranking.accessBoost).toBe(0.2)
 	})
 
 	it("resolves custom reranking recency/access boost weights", () => {
@@ -1227,8 +1223,8 @@ describe("resolveMemoryBackendConfig", () => {
 			},
 		} as unknown as MemongoConfig
 		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
-		expect(resolved.mongodb!.reranking.recencyBoost).toBe(0.5)
-		expect(resolved.mongodb!.reranking.accessBoost).toBe(0)
+		expect(resolved.mongodb?.reranking.recencyBoost).toBe(0.5)
+		expect(resolved.mongodb?.reranking.accessBoost).toBe(0)
 	})
 
 	it("resolves reranking temporalProximityBoost with a 0.1 default (P4.4.4)", () => {
@@ -1240,7 +1236,7 @@ describe("resolveMemoryBackendConfig", () => {
 			},
 		} as unknown as MemongoConfig
 		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
-		expect(resolved.mongodb!.reranking.temporalProximityBoost).toBe(0.1)
+		expect(resolved.mongodb?.reranking.temporalProximityBoost).toBe(0.1)
 
 		const custom = {
 			agents: { defaults: { workspace: "/tmp/memory-test" } },
@@ -1254,8 +1250,8 @@ describe("resolveMemoryBackendConfig", () => {
 		} as unknown as MemongoConfig
 		// 0 is the explicit off-switch and must survive resolution.
 		expect(
-			resolveMemoryBackendConfig({ cfg: custom, agentId: "main" }).mongodb!
-				.reranking.temporalProximityBoost,
+			resolveMemoryBackendConfig({ cfg: custom, agentId: "main" }).mongodb
+				?.reranking.temporalProximityBoost,
 		).toBe(0)
 
 		const invalid = {
@@ -1271,8 +1267,8 @@ describe("resolveMemoryBackendConfig", () => {
 		// Negative/non-finite weights fall back to the default so a
 		// misconfigured weight cannot invert ordering.
 		expect(
-			resolveMemoryBackendConfig({ cfg: invalid, agentId: "main" }).mongodb!
-				.reranking.temporalProximityBoost,
+			resolveMemoryBackendConfig({ cfg: invalid, agentId: "main" }).mongodb
+				?.reranking.temporalProximityBoost,
 		).toBe(0.1)
 	})
 
@@ -1287,7 +1283,7 @@ describe("resolveMemoryBackendConfig", () => {
 				},
 			} as unknown as MemongoConfig
 			const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
-			expect(resolved.mongodb!.reranking.voyageApiKey).toBe("voy-from-env")
+			expect(resolved.mongodb?.reranking.voyageApiKey).toBe("voy-from-env")
 		} finally {
 			vi.unstubAllEnvs()
 		}
@@ -1304,7 +1300,7 @@ describe("resolveMemoryBackendConfig", () => {
 				},
 			} as unknown as MemongoConfig
 			const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
-			expect(resolved.mongodb!.reranking.enabled).toBe(false)
+			expect(resolved.mongodb?.reranking.enabled).toBe(false)
 		} finally {
 			vi.unstubAllEnvs()
 		}
@@ -1323,9 +1319,9 @@ describe("resolveMemoryBackendConfig", () => {
 			},
 		} as unknown as MemongoConfig
 		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
-		expect(resolved.mongodb!.graph.entityExtraction.method).toBe("regex")
-		expect(resolved.mongodb!.graph.entityExtraction.model).toBeUndefined()
-		expect(resolved.mongodb!.graph.entityExtraction.timeoutMs).toBe(5000)
+		expect(resolved.mongodb?.graph.entityExtraction.method).toBe("regex")
+		expect(resolved.mongodb?.graph.entityExtraction.model).toBeUndefined()
+		expect(resolved.mongodb?.graph.entityExtraction.timeoutMs).toBe(5000)
 	})
 
 	it("resolves graph.entityExtraction with llm method", () => {
@@ -1346,11 +1342,11 @@ describe("resolveMemoryBackendConfig", () => {
 			},
 		} as unknown as MemongoConfig
 		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
-		expect(resolved.mongodb!.graph.entityExtraction.method).toBe("llm")
-		expect(resolved.mongodb!.graph.entityExtraction.model).toBe(
+		expect(resolved.mongodb?.graph.entityExtraction.method).toBe("llm")
+		expect(resolved.mongodb?.graph.entityExtraction.model).toBe(
 			"claude-3-haiku",
 		)
-		expect(resolved.mongodb!.graph.entityExtraction.timeoutMs).toBe(10000)
+		expect(resolved.mongodb?.graph.entityExtraction.timeoutMs).toBe(10000)
 	})
 
 	it("preserves existing graph.enabled and maxGraphDepth behavior", () => {
@@ -1371,10 +1367,10 @@ describe("resolveMemoryBackendConfig", () => {
 		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
 		// Existing graph fields preserved; depth clamps to 4 (16 MiB
 		// transitiveRelations blowup risk — $graphLookup ignores allowDiskUse)
-		expect(resolved.mongodb!.graph.enabled).toBe(false)
-		expect(resolved.mongodb!.graph.maxGraphDepth).toBe(4)
+		expect(resolved.mongodb?.graph.enabled).toBe(false)
+		expect(resolved.mongodb?.graph.maxGraphDepth).toBe(4)
 		// New entityExtraction field works alongside
-		expect(resolved.mongodb!.graph.entityExtraction.method).toBe("llm")
+		expect(resolved.mongodb?.graph.entityExtraction.method).toBe("llm")
 	})
 
 	// H2 audit fix: warn when entity extraction method is 'llm' but no LLM function injected
@@ -1390,7 +1386,7 @@ describe("resolveMemoryBackendConfig", () => {
 			},
 		} as unknown as MemongoConfig
 		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
-		expect(resolved.mongodb!.graph.entityExtraction.method).toBe("llm")
+		expect(resolved.mongodb?.graph.entityExtraction.method).toBe("llm")
 		// The warning is logged via createSubsystemLogger, which we cannot easily spy on
 		// in this test setup. Instead, verify the config is preserved correctly.
 		warnSpy.mockRestore()
@@ -1410,7 +1406,7 @@ describe("resolveMemoryBackendConfig", () => {
 			},
 		} as MemongoConfig
 		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
-		expect(resolved.mongodb!.numCandidates).toBe(500)
+		expect(resolved.mongodb?.numCandidates).toBe(500)
 	})
 
 	it("defaults reranking.minScore to 0.01 for recall-oriented retrieval", () => {
@@ -1422,7 +1418,7 @@ describe("resolveMemoryBackendConfig", () => {
 			},
 		} as unknown as MemongoConfig
 		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
-		expect(resolved.mongodb!.reranking.minScore).toBe(0.01)
+		expect(resolved.mongodb?.reranking.minScore).toBe(0.01)
 	})
 
 	it("allows numCandidates override via MEMONGO_NUM_CANDIDATES env var", () => {
@@ -1435,7 +1431,7 @@ describe("resolveMemoryBackendConfig", () => {
 			},
 		} as MemongoConfig
 		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
-		expect(resolved.mongodb!.numCandidates).toBe(300)
+		expect(resolved.mongodb?.numCandidates).toBe(300)
 		vi.unstubAllEnvs()
 	})
 
@@ -1449,169 +1445,7 @@ describe("resolveMemoryBackendConfig", () => {
 			},
 		} as unknown as MemongoConfig
 		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
-		expect(resolved.mongodb!.reranking.minScore).toBe(0.05)
+		expect(resolved.mongodb?.reranking.minScore).toBe(0.05)
 		vi.unstubAllEnvs()
-	})
-})
-
-describe("resolveSearchDefaultScope (P1.4: MEMONGO_SEARCH_DEFAULT_SCOPE)", () => {
-	it("defaults to agent when the env is unset, empty, or whitespace", () => {
-		expect(resolveSearchDefaultScope(undefined)).toBe("agent")
-		expect(resolveSearchDefaultScope("")).toBe("agent")
-		expect(resolveSearchDefaultScope("   ")).toBe("agent")
-	})
-
-	it("honors every canonical scope", () => {
-		for (const scope of [
-			"session",
-			"user",
-			"agent",
-			"workspace",
-			"tenant",
-			"global",
-		] as const) {
-			expect(resolveSearchDefaultScope(scope)).toBe(scope)
-		}
-		// Surrounding whitespace is tolerated.
-		expect(resolveSearchDefaultScope("  global  ")).toBe("global")
-	})
-
-	it("throws on invalid values like other enum envs", () => {
-		expect(() => resolveSearchDefaultScope("everything")).toThrow(
-			/MEMONGO_SEARCH_DEFAULT_SCOPE "everything" is not a valid memory scope/,
-		)
-		expect(() => resolveSearchDefaultScope("GLOBAL")).toThrow(
-			/not a valid memory scope/,
-		)
-	})
-})
-
-describe("resolveDefaultScope (D1/B3: MEMONGO_DEFAULT_SCOPE)", () => {
-	it("defaults to agent when neither name is set", () => {
-		expect(resolveDefaultScope({ applyTo: "read" })).toBe("agent")
-		expect(resolveDefaultScope({ applyTo: "write" })).toBe("agent")
-		expect(
-			resolveDefaultScope({ value: "  ", legacyValue: "", applyTo: "read" }),
-		).toBe("agent")
-	})
-
-	it("MEMONGO_DEFAULT_SCOPE applies to BOTH reads and writes", () => {
-		for (const applyTo of ["read", "write"] as const) {
-			expect(resolveDefaultScope({ value: "global", applyTo })).toBe("global")
-			expect(resolveDefaultScope({ value: " tenant ", applyTo })).toBe("tenant")
-		}
-	})
-
-	it("throws on an invalid MEMONGO_DEFAULT_SCOPE like other enum envs", () => {
-		expect(() =>
-			resolveDefaultScope({ value: "everything", applyTo: "read" }),
-		).toThrow(/MEMONGO_DEFAULT_SCOPE "everything" is not a valid memory scope/)
-	})
-
-	it("the legacy name alone remains a read alias but does not move writes", () => {
-		expect(
-			resolveDefaultScope({ legacyValue: "global", applyTo: "read" }),
-		).toBe("global")
-		expect(
-			resolveDefaultScope({ legacyValue: "global", applyTo: "write" }),
-		).toBe("agent")
-	})
-
-	it("MEMONGO_DEFAULT_SCOPE wins over a conflicting legacy value and warns once", () => {
-		const warn = vi.fn()
-		expect(
-			resolveDefaultScope({
-				value: "global",
-				legacyValue: "user",
-				applyTo: "read",
-				warn,
-			}),
-		).toBe("global")
-		expect(warn).toHaveBeenCalledTimes(1)
-		expect(warn.mock.calls[0]?.[0]).toContain("MEMONGO_DEFAULT_SCOPE")
-		// Same conflict pair does not warn again (per-operation resolvers
-		// would otherwise spam every search/write).
-		resolveDefaultScope({
-			value: "global",
-			legacyValue: "user",
-			applyTo: "write",
-			warn,
-		})
-		expect(warn).toHaveBeenCalledTimes(1)
-	})
-
-	it("a matching legacy value does not warn", () => {
-		const warn = vi.fn()
-		expect(
-			resolveDefaultScope({
-				value: "global",
-				legacyValue: "global",
-				applyTo: "write",
-				warn,
-			}),
-		).toBe("global")
-		expect(warn).not.toHaveBeenCalled()
-	})
-})
-
-describe("memory.mongodb.ttl resolution (P4.4.1)", () => {
-	function resolveWithTtl(ttl: unknown) {
-		const cfg = {
-			agents: { defaults: { workspace: "/tmp/memory-test" } },
-			memory: {
-				backend: "mongodb",
-				mongodb: { uri: "mongodb://localhost:27017", ttl },
-			},
-		} as unknown as MemongoConfig
-		return resolveMemoryBackendConfig({ cfg, agentId: "main" }).mongodb!.ttl
-	}
-
-	it("is off by default when no ttl config is present", () => {
-		const cfg = {
-			agents: { defaults: { workspace: "/tmp/memory-test" } },
-			memory: {
-				backend: "mongodb",
-				mongodb: { uri: "mongodb://localhost:27017" },
-			},
-		} as unknown as MemongoConfig
-		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
-		expect(resolved.mongodb!.ttl).toEqual({ enabled: false, sessionDays: 30 })
-	})
-
-	it("stays off when only sessionDays is set (enabled is the explicit opt-in)", () => {
-		expect(resolveWithTtl({ sessionDays: 7 })).toEqual({
-			enabled: false,
-			sessionDays: 7,
-		})
-	})
-
-	it("resolves enabled with the configured sessionDays", () => {
-		expect(resolveWithTtl({ enabled: true, sessionDays: 14 })).toEqual({
-			enabled: true,
-			sessionDays: 14,
-		})
-	})
-
-	it("falls back to the 30-day default when enabled without sessionDays", () => {
-		expect(resolveWithTtl({ enabled: true })).toEqual({
-			enabled: true,
-			sessionDays: 30,
-		})
-	})
-
-	it("falls back to the default on invalid sessionDays values", () => {
-		for (const bad of [0, -5, Number.NaN, "abc", null]) {
-			expect(resolveWithTtl({ enabled: true, sessionDays: bad })).toEqual({
-				enabled: true,
-				sessionDays: 30,
-			})
-		}
-	})
-
-	it("accepts fractional sessionDays", () => {
-		expect(resolveWithTtl({ enabled: true, sessionDays: 0.5 })).toEqual({
-			enabled: true,
-			sessionDays: 0.5,
-		})
 	})
 })

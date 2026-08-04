@@ -40,40 +40,12 @@ import {
 } from "./mongodb-derived-memory.js"
 import { searchEpisodes } from "./mongodb-episodes.js"
 import { checkAutoEpisodeTriggers } from "./mongodb-episodes.js"
-import {
-	ingestBenchmarkDataset,
-	ingestBenchmarkConversations,
-	importConversationDataset,
-	loadBenchmarkDataset,
-	resolveBenchmarkDatasetPath,
-} from "./mongodb-benchmark-harness.js"
 import { recallConversation as recallConversationCore } from "./mongodb-conversation-recall.js"
 import {
-	buildBenchmarkRunReport,
-	evaluateRankingCase,
-	buildQueryGovernanceReport,
-	summarizeBenchmarkExecutions,
-	summarizeMeasurementPasses,
-	buildMissLedger,
-	buildCaseDiagnostics,
-	projectBenchmarkParityFields,
-	type BenchmarkCaseExecution,
-} from "./mongodb-benchmark-runner.js"
-import {
-	createBenchmarkRunContext,
-	assertBenchmarkRunConfiguration,
-	collectBenchmarkTenantStorage,
-	instrumentBenchmarkProvider,
-	resolveDatasetSha256,
-	resolveBenchmarkRetrievalLane,
-	resolveBenchmarkExecutionProfile,
-	type BenchmarkExecutionProfile,
-	type BenchmarkRetrievalLane,
-	type BenchmarkRunContext,
-	type BenchmarkRunConfiguration,
-} from "./benchmark-parity-envelope.js"
-import { resolveRegisteredBenchmarkQualityContract } from "./benchmark-quality-contracts.js"
-import { readSearchIndexStatus } from "./mongodb-benchmark-readiness.js"
+	importConversationDataset,
+	resolveConversationDatasetPath,
+} from "./mongodb-conversation-import.js"
+import type { OperationRunContext } from "./mongodb-operation-accounting.js"
 import {
 	clearEventExtractionJobPending,
 	clearEventExtractionJobPendingBatch,
@@ -162,7 +134,6 @@ import {
 import {
 	MongoDBRelevanceRuntime,
 	type RelevanceArtifact,
-	type RelevanceBenchmarkResult,
 	type RelevanceHealth,
 	type RelevanceReport,
 	type RelevanceSampleState,
@@ -291,9 +262,6 @@ import {
 import type {
 	ConversationRecallRequest,
 	ConversationRecallResponse,
-	BenchmarkE2eQaEnvelope,
-	BenchmarkQualityThresholds,
-	BenchmarkTenantStorageMeasurement,
 	MemoryActiveSlate,
 	AccessEventCollection,
 	MemoryContextBundle,
@@ -303,12 +271,6 @@ import type {
 	MemoryEmbeddingProbeResult,
 	MemoryAccessSummary,
 	MemoryAccessTrend,
-	MemoryBenchmarkDataset,
-	MemoryBenchmarkDatasetKind,
-	MemoryBenchmarkConversation,
-	MemoryBenchmarkTurn,
-	MemoryBenchmarkScenario,
-	MemoryBenchmarkIngestResult,
 	MemoryConversationImportResult,
 	MemoryFeedbackSignal,
 	MemoryLifecycleHistoryEntry,
@@ -337,7 +299,6 @@ import {
 	emptySearchMetadata,
 	getActiveSources,
 	getActiveSourcesForStatus,
-	isBenchmarkStrictMode,
 	normalizeDetailedSearchRequest,
 	rerankResults,
 	resolveExplainSources,
@@ -352,19 +313,6 @@ import {
 	resolveMemoryJobSweepMs,
 	resolveMemoryJobWorkerConcurrency,
 } from "./mongodb-manager-jobs.js"
-import {
-	BENCHMARK_SCENARIO_COLLECTION_SUFFIXES,
-	attachBenchmarkOperationsReport,
-	benchmarkConvergenceFilter,
-	benchmarkSearchEqualsFilters,
-	benchmarkSearchProbeTerm,
-	buildBenchmarkReplayMetadata,
-	hasBenchmarkSearchableText,
-	isLegacyBenchmarkFallbackCandidate,
-	parseBenchmarkTurnTimestamp,
-	resolveBenchmarkMeasurementPasses,
-	type BenchmarkEventEvidenceMaps,
-} from "./mongodb-manager-benchmark.js"
 import type {
 	WriteConversationEventInput,
 	WriteConversationEventReceipt,
@@ -385,7 +333,6 @@ import { MongoDBManagerAdminOps } from "./mongodb-manager-admin.js"
 import { MongoDBManagerWriteOps } from "./mongodb-manager-write.js"
 import { MongoDBManagerJobsOps } from "./mongodb-manager-jobs.js"
 import { MongoDBManagerSyncOps } from "./mongodb-manager-sync.js"
-import { MongoDBManagerBenchmarkOps } from "./mongodb-manager-benchmark.js"
 import { MongoDBManagerRelevanceOps } from "./mongodb-manager-relevance.js"
 import { MongoDBManagerSearchOps } from "./mongodb-manager-search.js"
 
@@ -568,11 +515,10 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 	private memoryJobWakeRequested = false
 	private memoryJobWorkerPromise: Promise<void> = Promise.resolve()
 	private memoryJobWorkerTimer: NodeJS.Timeout | null = null
-	private memoryJobRunContexts = new Map<string, BenchmarkRunContext>()
+	private memoryJobOperationContexts = new Map<string, OperationRunContext>()
 	private lastSearchMode = "legacy"
 	private lastSearchDetails: Record<string, unknown> | undefined
 	private accessTracker: AccessTracker | null = null
-	private benchmarkShippedProfile = false
 
 	private constructor(params: {
 		client: MongoClient
@@ -1079,9 +1025,9 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 			 */
 			onLaneLatency?: (latencyByLane: Record<string, number>) => void
 		},
-		benchmarkRunContext?: BenchmarkRunContext,
+		operationRunContext?: OperationRunContext,
 	): Promise<MemorySearchResult[]> {
-		return searchOpsOf(this).search(query, opts, benchmarkRunContext)
+		return searchOpsOf(this).search(query, opts, operationRunContext)
 	}
 
 	private async executeSearchUncoalesced(params: {
@@ -1094,7 +1040,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		availablePaths: Set<RetrievalPath>
 		searchScope: MemoryScope
 		searchScopeRef: string
-		benchmarkRunContext?: BenchmarkRunContext
+		operationRunContext?: OperationRunContext
 	}): Promise<MemorySearchResult[]> {
 		return searchOpsOf(this).executeSearchUncoalesced(params)
 	}
@@ -1117,331 +1063,27 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		return relevanceOpsOf(this).relevanceExplain(params)
 	}
 
-	async relevanceBenchmark(params?: {
-		datasetPath?: string
-		maxResults?: number
-		minScore?: number
-		// Task 1.A envelope-parity pass-through — accepted today, wired into
-		// the envelope by Task 5.E2E (envelope emitter already supports them).
-		datasetSha256?: string
-		embeddingConfig?: {
-			model: string
-			dimensions: number
-			quantization: "float32" | "int8" | "binary"
-		}
-		rerankerConfig?: {
-			model: string
-			version: string | null
-			stage: "post-fusion" | "pre-fusion" | "none"
-		}
-		retrievalLane?: BenchmarkRetrievalLane
-		qualityThresholds?: BenchmarkQualityThresholds
-		/**
-		 * #70: real outcome of the conversation-recall regression suite executed
-		 * alongside this run (scripts/run-benchmark.ts runs it). Absent → the
-		 * gate stays "not-run" and blocks publication.
-		 */
-		conversationRecallRegression?: {
-			status: "passed" | "failed"
-			evidence: string
-		}
-		/**
-		 * Defaults to "shipped". Pass "diagnostic" to opt into the augmented
-		 * corpus (evidence documents + LLM enrichment) that the shipped pipeline
-		 * never writes — a diagnostic number must never be published as a
-		 * product number.
-		 */
-		executionProfile?: BenchmarkExecutionProfile
-	}): Promise<RelevanceBenchmarkResult> {
-		return benchmarkOpsOf(this).relevanceBenchmark(params)
-	}
-
-	/**
-	 * Task 1.A projection: assemble the parity-envelope bundle from
-	 * runtime signals (resolved backend config, run-scoped counters,
-	 * latency samples, live `collStats`).
-	 */
-	private async buildBenchmarkParityBundle(params: {
-		datasetPath: string
-		datasetKind?: MemoryBenchmarkDatasetKind | "legacy-query"
-		retrievalLane?: BenchmarkRetrievalLane
-		datasetSha256Override?: string
-		latencySamples: number[]
-		runContext: BenchmarkRunContext
-		tenantStorage?: BenchmarkTenantStorageMeasurement
-	}): Promise<{
-		runIdentity: import("./types.js").BenchmarkRunIdentity
-		embedding: import("./types.js").BenchmarkEmbeddingConfig
-		reranker: import("./types.js").BenchmarkRerankerConfig
-		storage: import("./types.js").BenchmarkStorageFootprint
-		latency: import("./types.js").BenchmarkLatencyDistribution
-		cost: import("./types.js").BenchmarkCostAccounting
-	}> {
-		return benchmarkOpsOf(this).buildBenchmarkParityBundle(params)
-	}
-
 	async relevanceReport(params?: {
 		windowMs?: number
 	}): Promise<RelevanceReport> {
-		return benchmarkOpsOf(this).relevanceReport(params)
+		if (!this.relevance) {
+			throw new Error("relevance runtime is unavailable")
+		}
+		return this.relevance.buildReport(params?.windowMs ?? 24 * 60 * 60 * 1000)
 	}
 
 	relevanceSampleRate(): RelevanceSampleState {
-		return benchmarkOpsOf(this).relevanceSampleRate()
-	}
-
-	private getBenchmarkAllowedRoots(): string[] {
-		return benchmarkOpsOf(this).getBenchmarkAllowedRoots()
-	}
-
-	private snapshotBenchmarkRunConfiguration(params: {
-		executionProfile: "shipped" | "diagnostic"
-		retrievalLane: BenchmarkRetrievalLane
-		maxResults: number
-		minScore: number
-		qualityContractId?: string
-		qualityContractVersion?: string
-	}): BenchmarkRunConfiguration {
-		return benchmarkOpsOf(this).snapshotBenchmarkRunConfiguration(params)
-	}
-
-	private createBenchmarkScenarioManager(
-		agentId: string,
-		shippedProfile = false,
-	): MongoDBMemoryManager {
-		const mongoCfg = this.config.mongodb
-		const relevance =
-			mongoCfg?.relevance.enabled === true
-				? new MongoDBRelevanceRuntime(
-						this.db,
-						this.prefix,
-						agentId,
-						mongoCfg,
-						this.capabilities,
-					)
-				: null
-		const scenario = new MongoDBMemoryManager({
-			client: this.client,
-			db: this.db,
-			prefix: this.prefix,
-			agentId,
-			workspaceDir: this.workspaceDir,
-			extraMemoryPaths: this.extraMemoryPaths,
-			capabilities: this.capabilities,
-			nativeBitemporalVectorPrefilter: this.nativeBitemporalVectorPrefilter,
-			config: this.config,
-			relevance,
-		})
-		scenario.benchmarkShippedProfile = shippedProfile
-		return scenario
-	}
-
-	private async settleBenchmarkScenarioManager(
-		manager: MongoDBManagerHost,
-	): Promise<void> {
-		return benchmarkOpsOf(this).settleBenchmarkScenarioManager(manager)
-	}
-
-	private shouldUseBenchmarkFastIngest(): boolean {
-		return benchmarkOpsOf(this).shouldUseBenchmarkFastIngest()
-	}
-
-	private async insertBenchmarkDocumentsInBatches(
-		collection: Collection<Document>,
-		docs: Document[],
-	): Promise<void> {
-		return benchmarkOpsOf(this).insertBenchmarkDocumentsInBatches(
-			collection,
-			docs,
-		)
-	}
-
-	private async fastIngestBenchmarkConversations(params: {
-		datasetPath: string
-		datasetName?: string
-		datasetKind?: MemoryBenchmarkDatasetKind
-		conversations: MemoryBenchmarkConversation[]
-		failedLines?: number
-		scope?: MemoryScope
-		metadata?: Record<string, unknown>
-	}): Promise<MemoryBenchmarkIngestResult> {
-		return benchmarkOpsOf(this).fastIngestBenchmarkConversations(params)
-	}
-
-	private async waitForBenchmarkSearchConvergence(params: {
-		agentId: string
-		retrievalLane?: BenchmarkRetrievalLane
-		scope?: MemoryScope
-		scopeRef?: string
-		sessionId?: string
-	}): Promise<void> {
-		return benchmarkOpsOf(this).waitForBenchmarkSearchConvergence(params)
-	}
-
-	async waitForBenchmarkSearchReadiness(params?: {
-		retrievalLane?: BenchmarkRetrievalLane
-		scope?: MemoryScope
-		scopeRef?: string
-		sessionId?: string
-	}): Promise<void> {
-		return benchmarkOpsOf(this).waitForBenchmarkSearchReadiness(params)
-	}
-
-	private async waitForBenchmarkVectorSearchCollectionConvergence(params: {
-		agentId: string
-		scope?: MemoryScope
-		scopeRef?: string
-		sessionId?: string
-		label: string
-		collection: Collection<Document>
-		collectionName: string
-		indexName: string
-		textPath: string
-		requireSearchableDocuments?: boolean
-	}): Promise<void> {
-		return benchmarkOpsOf(
-			this,
-		).waitForBenchmarkVectorSearchCollectionConvergence(params)
-	}
-
-	private async waitForBenchmarkEventSearchConvergence(
-		agentId: string,
-	): Promise<void> {
-		return benchmarkOpsOf(this).waitForBenchmarkEventSearchConvergence(agentId)
-	}
-
-	private async waitForBenchmarkSearchCollectionConvergence(params: {
-		agentId: string
-		scope?: MemoryScope
-		scopeRef?: string
-		sessionId?: string
-		label: string
-		collection: Collection<Document>
-		collectionName: string
-		indexName: string
-		textPath: string
-	}): Promise<void> {
-		return benchmarkOpsOf(this).waitForBenchmarkSearchCollectionConvergence(
-			params,
-		)
-	}
-
-	private async cleanupBenchmarkScenarioData(agentId: string): Promise<void> {
-		return benchmarkOpsOf(this).cleanupBenchmarkScenarioData(agentId)
-	}
-
-	/**
-	 * #66: drop the benchmark tenant's query cache between measurement passes.
-	 * Without this, pass 2+ replays pass 1 from `query_cache` — latencyMs ~0 and
-	 * bit-identical rankings — so every extra pass would be fake-fast noise-free
-	 * garbage. Deleting the scenario agent's entries keeps every pass as cold as
-	 * pass 1 without touching the shipped `checkCache`/`writeCache` path.
-	 *
-	 * `writeCache` is fire-and-forget, so an upsert issued by the previous
-	 * pass's last query can still land after this delete; at most one stale
-	 * entry per pass survives, which cannot move a p95 over a full dataset.
-	 */
-	private async flushBenchmarkQueryCache(agentId: string): Promise<void> {
-		return benchmarkOpsOf(this).flushBenchmarkQueryCache(agentId)
-	}
-
-	private async listBenchmarkEventSessions(
-		agentId: string,
-	): Promise<Map<string, string>> {
-		return benchmarkOpsOf(this).listBenchmarkEventSessions(agentId)
-	}
-
-	private async listBenchmarkEventEvidence(
-		agentId: string,
-	): Promise<BenchmarkEventEvidenceMaps> {
-		return benchmarkOpsOf(this).listBenchmarkEventEvidence(agentId)
-	}
-
-	private collectBenchmarkResultSourceEventIds(
-		result: MemorySearchResult,
-	): string[] {
-		return benchmarkOpsOf(this).collectBenchmarkResultSourceEventIds(result)
-	}
-
-	private resolveBenchmarkResultSessionIds(
-		result: MemorySearchResult,
-		evidence: BenchmarkEventEvidenceMaps | Map<string, string>,
-	): string[] {
-		return benchmarkOpsOf(this).resolveBenchmarkResultSessionIds(
-			result,
-			evidence,
-		)
-	}
-
-	private resolveBenchmarkResultTurnIds(
-		result: MemorySearchResult,
-		evidence: BenchmarkEventEvidenceMaps,
-	): string[] {
-		return benchmarkOpsOf(this).resolveBenchmarkResultTurnIds(result, evidence)
-	}
-
-	private resolveBenchmarkResultDialogIds(
-		result: MemorySearchResult,
-		evidence: BenchmarkEventEvidenceMaps,
-	): string[] {
-		return benchmarkOpsOf(this).resolveBenchmarkResultDialogIds(
-			result,
-			evidence,
-		)
-	}
-
-	private async buildBenchmarkDatasetVersion(
-		datasetPath: string,
-	): Promise<string> {
-		return benchmarkOpsOf(this).buildBenchmarkDatasetVersion(datasetPath)
-	}
-
-	private async searchBenchmarkRawSession(
-		query: string,
-		opts: {
-			maxResults: number
-			minScore: number
-		},
-	): Promise<MemorySearchResult[]> {
-		return benchmarkOpsOf(this).searchBenchmarkRawSession(query, opts)
-	}
-
-	private async runLegacyRelevanceBenchmark(params: {
-		datasetPath: string
-		maxResults: number
-		minScore: number
-	}): Promise<{
-		result: RelevanceBenchmarkResult
-		latencySamples: number[]
-	}> {
-		return benchmarkOpsOf(this).runLegacyRelevanceBenchmark(params)
-	}
-
-	private async runScenarioBenchmarkDataset(params: {
-		datasetPath: string
-		dataset: MemoryBenchmarkDataset
-		datasetVersion: string
-		maxResults: number
-		minScore: number
-		retrievalLane?: BenchmarkRetrievalLane
-		executionProfile?: "shipped" | "diagnostic"
-		runContext: BenchmarkRunContext
-	}): Promise<{
-		result: RelevanceBenchmarkResult
-		latencySamples: number[]
-		e2eQa?: BenchmarkE2eQaEnvelope
-		storage: BenchmarkTenantStorageMeasurement
-	}> {
-		return benchmarkOpsOf(this).runScenarioBenchmarkDataset(params)
-	}
-
-	async benchmarkIngest(params: {
-		datasetPath: string
-		scope?: MemoryScope
-		limitConversations?: number
-		limitTurnsPerConversation?: number
-	}): Promise<MemoryBenchmarkIngestResult> {
-		return benchmarkOpsOf(this).benchmarkIngest(params)
+		if (!this.relevance) {
+			return {
+				enabled: false,
+				current: 0,
+				base: 0,
+				max: 0,
+				windowSize: 0,
+				degradedSignals: 0,
+			}
+		}
+		return this.relevance.getSampleState()
 	}
 
 	async importConversations(params: {
@@ -1451,7 +1093,40 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		limitConversations?: number
 		limitTurnsPerConversation?: number
 	}): Promise<MemoryConversationImportResult> {
-		return benchmarkOpsOf(this).importConversations(params)
+		const envRoots = (process.env.MEMONGO_DATASET_ROOTS ?? "")
+			.split(path.delimiter)
+			.map((entry) => entry.trim())
+			.filter(Boolean)
+			.map((entry) => resolveUserPath(entry))
+		const datasetRoot = process.env.MEMONGO_DATASET_ROOT?.trim()
+		const allowedRoots = [
+			this.workspaceDir,
+			...(datasetRoot ? [resolveUserPath(datasetRoot)] : []),
+			...envRoots,
+		]
+		const datasetPath = await resolveConversationDatasetPath({
+			datasetPath: params.datasetPath,
+			baseDir: this.workspaceDir,
+			allowedRoots,
+		})
+		return importConversationDataset({
+			datasetPath,
+			baseDir: this.workspaceDir,
+			allowedRoots,
+			scope: params.scope,
+			limitConversations: params.limitConversations,
+			limitTurnsPerConversation: params.limitTurnsPerConversation,
+			writeTurns: async (turns) =>
+				this.writeConversationEventsBatch(
+					turns.map((turn) => ({
+						...turn,
+						...(params.scope !== undefined ? { scope: params.scope } : {}),
+						...(params.scopeRef !== undefined
+							? { scopeRef: params.scopeRef }
+							: {}),
+					})),
+				),
+		})
 	}
 
 	async accessTrends(params?: {
@@ -1885,7 +1560,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 	private async scheduleBackgroundExtraction(
 		eventId: string,
 		tenant?: { scope?: MemoryScope; scopeRef?: string },
-		runContext?: BenchmarkRunContext,
+		runContext?: OperationRunContext,
 	): Promise<{ jobId: string; scheduled: boolean }> {
 		return jobsOpsOf(this).scheduleBackgroundExtraction(
 			eventId,
@@ -1902,7 +1577,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		timestamp: Date
 		scope: MemoryScope
 		scopeRef: string
-		runContext?: BenchmarkRunContext
+		runContext?: OperationRunContext
 	}): Promise<void> {
 		return jobsOpsOf(this).schedulePostWriteDerivations(params)
 	}
@@ -1950,9 +1625,9 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 
 	async writeConversationEvent(
 		event: WriteConversationEventInput,
-		benchmarkRunContext?: BenchmarkRunContext,
+		operationRunContext?: OperationRunContext,
 	): Promise<{ eventId: string; chunkCreated: boolean }> {
-		return writeOpsOf(this).writeConversationEvent(event, benchmarkRunContext)
+		return writeOpsOf(this).writeConversationEvent(event, operationRunContext)
 	}
 
 	/**
@@ -1966,11 +1641,11 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 	 */
 	async writeConversationEventsBatch(
 		events: WriteConversationEventInput[],
-		benchmarkRunContext?: BenchmarkRunContext,
+		operationRunContext?: OperationRunContext,
 	): Promise<WriteConversationEventReceipt[]> {
 		return writeOpsOf(this).writeConversationEventsBatch(
 			events,
-			benchmarkRunContext,
+			operationRunContext,
 		)
 	}
 
@@ -2025,7 +1700,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		await this.stopMemoryJobWorker()
 		// (P2.5 e) benchmark run contexts for never-claimed jobs are moot once
 		// the worker has stopped; drop them instead of leaking the entries.
-		this.memoryJobRunContexts?.clear()
+		this.memoryJobOperationContexts?.clear()
 
 		// Close the file watcher
 		if (this.watcher) {
@@ -2108,20 +1783,6 @@ function relevanceOpsOf(
 		)
 	}
 	return holder._relevanceOps
-}
-
-function benchmarkOpsOf(
-	self: MongoDBMemoryManager,
-): MongoDBManagerBenchmarkOps {
-	const holder = self as unknown as {
-		_benchmarkOps?: MongoDBManagerBenchmarkOps
-	}
-	if (!holder._benchmarkOps) {
-		holder._benchmarkOps = new MongoDBManagerBenchmarkOps(
-			self as unknown as MongoDBManagerHost,
-		)
-	}
-	return holder._benchmarkOps
 }
 
 function syncOpsOf(self: MongoDBMemoryManager): MongoDBManagerSyncOps {

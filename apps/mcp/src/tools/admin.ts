@@ -1,9 +1,8 @@
 import { MEMORY_SCOPE_VALUES } from "@memongo/lib"
 import type { McpToolDefinition } from "../tool-registry.js"
 
-// Admin/benchmark tools (P1.2): operator diagnostics, lifecycle handle
-// management, jobs/traces, sync/probes, and benchmark harnesses. Registered
-// only when MEMONGO_MCP_ADMIN=1.
+// Admin tools (P1.2): operator diagnostics, lifecycle handle management,
+// jobs/traces, sync, and probes. Registered only when MEMONGO_MCP_ADMIN=1.
 export const adminTools: readonly McpToolDefinition[] = [
 	{
 		name: "memongo_search_kb",
@@ -486,6 +485,48 @@ export const adminTools: readonly McpToolDefinition[] = [
 	{
 		name: "memongo_probe_vector",
 		description: "Probe vector search availability",
+		inputSchema: {
+			type: "object",
+			properties: { agentId: { type: "string" } },
+		},
+		category: "admin",
+	},
+	{
+		name: "memongo_relevance_explain",
+		description:
+			"Detailed relevance diagnostics for a query: artifacts, health, scores",
+		inputSchema: {
+			type: "object",
+			properties: {
+				query: { type: "string" },
+				agentId: { type: "string" },
+				sourceScope: {
+					type: "string",
+					enum: ["all", "memory", "kb", "structured"],
+				},
+				maxResults: { type: "number" },
+				minScore: { type: "number" },
+				deep: { type: "boolean" },
+			},
+			required: ["query"],
+		},
+		category: "admin",
+	},
+	{
+		name: "memongo_relevance_report",
+		description: "Relevance health report: hit rate, empty rate, fallback rate",
+		inputSchema: {
+			type: "object",
+			properties: {
+				agentId: { type: "string" },
+				windowMs: { type: "number" },
+			},
+		},
+		category: "admin",
+	},
+	{
+		name: "memongo_relevance_sample_rate",
+		description: "Current relevance sampling rate and degraded signal count",
 		inputSchema: {
 			type: "object",
 			properties: { agentId: { type: "string" } },

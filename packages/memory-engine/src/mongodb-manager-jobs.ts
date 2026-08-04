@@ -1,6 +1,8 @@
 import path from "node:path"
-import { instrumentBenchmarkProvider } from "./benchmark-parity-envelope.js"
-import type { BenchmarkRunContext } from "./benchmark-parity-envelope.js"
+import {
+	instrumentOperationProvider,
+	type OperationRunContext,
+} from "./mongodb-operation-accounting.js"
 import { isDuplicateKeyError } from "./internal.js"
 import { isSharedMongoClientEnabled } from "./mongodb-client-registry.js"
 import {
@@ -119,34 +121,6 @@ export class MongoDBManagerJobsOps {
 	}
 
 	shouldRunPostWriteDerivedWork(): boolean {
-		if (this.host.benchmarkShippedProfile) {
-			return true
-		}
-		const mode =
-			process.env.MEMONGO_BENCHMARK_DERIVED_WORK_MODE?.trim().toLowerCase()
-		if (
-			mode === "enabled" ||
-			mode === "on" ||
-			mode === "1" ||
-			mode === "true"
-		) {
-			return true
-		}
-		const benchmarkAgent =
-			this.host.agentId.startsWith("benchmark-") ||
-			this.host.agentId.startsWith("canary-")
-		if (
-			mode === "disabled" ||
-			mode === "off" ||
-			mode === "none" ||
-			mode === "0" ||
-			mode === "false"
-		) {
-			return false
-		}
-		if (benchmarkAgent) {
-			return false
-		}
 		return true
 	}
 
@@ -191,7 +165,7 @@ export class MongoDBManagerJobsOps {
 		}
 		const scope = job.payload?.scope
 		const scopeRef = job.payload?.scopeRef
-		const runContext = this.host.memoryJobRunContexts?.get(job.jobId)
+		const runContext = this.host.memoryJobOperationContexts?.get(job.jobId)
 		const startedAt = job.startedAt ?? new Date()
 		let leaseLost = false
 		let heartbeatInFlight = Promise.resolve()
@@ -288,7 +262,7 @@ export class MongoDBManagerJobsOps {
 			const enrichmentModel = process.env.MEMONGO_ENRICHMENT_MODEL?.trim() ?? ""
 			const structuredProvider =
 				enrichmentProvider && runContext
-					? instrumentBenchmarkProvider({
+					? instrumentOperationProvider({
 							provider: enrichmentProvider,
 							runContext,
 							operation: "structured-extraction",
@@ -297,7 +271,7 @@ export class MongoDBManagerJobsOps {
 					: enrichmentProvider
 			const temporalProvider =
 				enrichmentProvider && runContext
-					? instrumentBenchmarkProvider({
+					? instrumentOperationProvider({
 							provider: enrichmentProvider,
 							runContext,
 							operation: "temporal-extraction",
@@ -306,7 +280,7 @@ export class MongoDBManagerJobsOps {
 					: enrichmentProvider
 			const contradictionProvider =
 				enrichmentProvider && runContext
-					? instrumentBenchmarkProvider({
+					? instrumentOperationProvider({
 							provider: enrichmentProvider,
 							runContext,
 							operation: "contradiction-detection",
@@ -365,7 +339,7 @@ export class MongoDBManagerJobsOps {
 						.filter((e) => e.entityId && e.name)
 					if (eventEntities.length >= 2) {
 						const relationProvider = runContext
-							? instrumentBenchmarkProvider({
+							? instrumentOperationProvider({
 									provider: enrichmentProvider,
 									runContext,
 									operation: "relation-extraction",
@@ -473,7 +447,7 @@ export class MongoDBManagerJobsOps {
 		} finally {
 			clearInterval(heartbeatTimer)
 			await heartbeatInFlight
-			this.host.memoryJobRunContexts?.delete(job.jobId)
+			this.host.memoryJobOperationContexts?.delete(job.jobId)
 		}
 	}
 
@@ -626,10 +600,10 @@ export class MongoDBManagerJobsOps {
 				// with the first group member's run context when one is registered.
 				const firstJob = jobByEventId.get(group[0].eventId)
 				const runContext = firstJob
-					? this.host.memoryJobRunContexts?.get(firstJob.jobId)
+					? this.host.memoryJobOperationContexts?.get(firstJob.jobId)
 					: undefined
 				const structuredProvider = runContext
-					? instrumentBenchmarkProvider({
+					? instrumentOperationProvider({
 							provider,
 							runContext,
 							operation: "structured-extraction",
@@ -710,7 +684,7 @@ export class MongoDBManagerJobsOps {
 	async scheduleBackgroundExtraction(
 		eventId: string,
 		tenant?: { scope?: MemoryScope; scopeRef?: string },
-		runContext?: BenchmarkRunContext,
+		runContext?: OperationRunContext,
 	): Promise<{ jobId: string; scheduled: boolean }> {
 		// (P2.5 e) shutdown intake stop: scheduling after close would stage a
 		// job and wake workers that close() is stopping.
@@ -766,7 +740,7 @@ export class MongoDBManagerJobsOps {
 					// recoverable retry) will never be claimed by this manager —
 					// drop any stale benchmark run context instead of leaking the
 					// entry for the process lifetime.
-					this.host.memoryJobRunContexts?.delete(jobId)
+					this.host.memoryJobOperationContexts?.delete(jobId)
 					return { jobId, scheduled: false }
 				}
 			} else {
@@ -775,8 +749,11 @@ export class MongoDBManagerJobsOps {
 		}
 
 		if (runContext) {
-			this.host.memoryJobRunContexts ??= new Map<string, BenchmarkRunContext>()
-			this.host.memoryJobRunContexts.set(jobId, runContext)
+			this.host.memoryJobOperationContexts ??= new Map<
+				string,
+				OperationRunContext
+			>()
+			this.host.memoryJobOperationContexts.set(jobId, runContext)
 		}
 		if (this.host.memoryJobWorkerStopped) {
 			this.host.startMemoryJobWorker()
@@ -794,7 +771,7 @@ export class MongoDBManagerJobsOps {
 		timestamp: Date
 		scope: MemoryScope
 		scopeRef: string
-		runContext?: BenchmarkRunContext
+		runContext?: OperationRunContext
 	}): Promise<void> {
 		const mongoCfg = this.host.config.mongodb
 		if (!mongoCfg) {

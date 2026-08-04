@@ -1,6 +1,11 @@
 # docker-compose.mongodb.yml - MongoDB setup for Memongo
 # Adapted from github.com/JohnGUnderwood/mdb-community-search
 #
+# Advanced validation stack. Most users should use docker/compose.yaml for
+# the API or docker/docker-compose.yml for the one-container Atlas Local
+# database. This file exposes lower-level standalone, replica-set, and mongot
+# profiles for capability testing.
+#
 # Usage:
 #   Full stack (mongod + mongot + vector search):
 #     docker compose -f docker/mongodb/docker-compose.mongodb.yml --profile setup run --rm setup-generator

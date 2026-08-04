@@ -30,10 +30,8 @@ import type {
 	MemoryJobType,
 	MemoryAccessSummary,
 	MemoryAccessTrend,
-	MemoryBenchmarkIngestResult,
 	MemoryConversationImportResult,
 	AccessEventCollection,
-	BenchmarkQualityThresholds,
 	RecallTrace,
 	MemoryStats,
 	MemoryLifecycleHistoryEntry,
@@ -41,7 +39,6 @@ import type {
 	ProcedureLifecyclePatch,
 	ProcedureEntry,
 	ManagerReadResult,
-	RelevanceBenchmarkResult,
 	RelevanceReport,
 	RelevanceSampleState,
 	RelevanceSourceScope,
@@ -109,22 +106,6 @@ export async function memongoBridgeSearch(params: {
 		sessionKey: params.sessionKey,
 		scope: params.scope,
 		scopeRef: params.scopeRef,
-	})
-}
-
-export async function memongoBridgeWaitForBenchmarkSearchReadiness(params: {
-	agentId?: string
-	retrievalLane?: "native" | "raw-session"
-	scope?: MemoryScope
-	scopeRef?: string
-	sessionId?: string
-}) {
-	const m = await memongoBridgeGetManager(params.agentId)
-	await m.waitForBenchmarkSearchReadiness({
-		retrievalLane: params.retrievalLane,
-		scope: params.scope,
-		scopeRef: params.scopeRef,
-		sessionId: params.sessionId,
 	})
 }
 
@@ -760,51 +741,6 @@ export async function memongoBridgeRelevanceExplain(params: {
 	})
 }
 
-export async function memongoBridgeRelevanceBenchmark(params: {
-	agentId?: string
-	datasetPath?: string
-	maxResults?: number
-	minScore?: number
-	/** Task 1.A parity envelope — optional pass-through. */
-	datasetSha256?: string
-	embeddingConfig?: {
-		model: string
-		dimensions: number
-		quantization: "float32" | "int8" | "binary"
-	}
-	rerankerConfig?: {
-		model: string
-		version: string | null
-		stage: "post-fusion" | "pre-fusion" | "none"
-	}
-	retrievalLane?: "native" | "raw-session"
-	qualityThresholds?: BenchmarkQualityThresholds
-	/** #70: real recall-regression suite outcome for this invocation. */
-	conversationRecallRegression?: {
-		status: "passed" | "failed"
-		evidence: string
-	}
-}): Promise<RelevanceBenchmarkResult> {
-	const m = await memongoBridgeGetManager(params.agentId)
-	return m.relevanceBenchmark({
-		datasetPath: params.datasetPath,
-		maxResults: params.maxResults,
-		minScore: params.minScore,
-		...(params.datasetSha256 ? { datasetSha256: params.datasetSha256 } : {}),
-		...(params.embeddingConfig
-			? { embeddingConfig: params.embeddingConfig }
-			: {}),
-		...(params.rerankerConfig ? { rerankerConfig: params.rerankerConfig } : {}),
-		...(params.retrievalLane ? { retrievalLane: params.retrievalLane } : {}),
-		...(params.qualityThresholds
-			? { qualityThresholds: params.qualityThresholds }
-			: {}),
-		...(params.conversationRecallRegression
-			? { conversationRecallRegression: params.conversationRecallRegression }
-			: {}),
-	})
-}
-
 export async function memongoBridgeRelevanceReport(params: {
 	agentId?: string
 	windowMs?: number
@@ -818,22 +754,6 @@ export async function memongoBridgeRelevanceSampleRate(params: {
 }): Promise<RelevanceSampleState> {
 	const m = await memongoBridgeGetManager(params.agentId)
 	return m.relevanceSampleRate()
-}
-
-export async function memongoBridgeBenchmarkIngest(params: {
-	agentId?: string
-	datasetPath: string
-	scope?: MemoryScope
-	limitConversations?: number
-	limitTurnsPerConversation?: number
-}): Promise<MemoryBenchmarkIngestResult> {
-	const m = await memongoBridgeGetManager(params.agentId)
-	return m.benchmarkIngest({
-		datasetPath: params.datasetPath,
-		scope: params.scope,
-		limitConversations: params.limitConversations,
-		limitTurnsPerConversation: params.limitTurnsPerConversation,
-	})
 }
 
 export async function memongoBridgeImportConversations(params: {

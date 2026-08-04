@@ -3,9 +3,9 @@
  *
  * P4.1: this module backs the explicit `@memongo/memory-engine/internal`
  * subpath. It carries every symbol that was removed from the main barrel
- * (`src/index.ts`) during the P4.1 trim — module-level helpers, collection
- * accessors, eval/benchmark machinery, and advanced types — so existing
- * consumers keep compiling through the deprecation window.
+ * (`src/index.ts`) during the P4.1 trim, including module-level helpers,
+ * collection accessors, and advanced types. Existing consumers keep compiling
+ * through the deprecation window.
  *
  * @deprecated Nothing here is covered by the package's SemVer guarantee.
  * Migrate to the main barrel (`@memongo/memory-engine`: manager + config +
@@ -38,14 +38,6 @@ export type {
 	MemoryLifecycleState,
 	MemoryLifecycleStructuredData,
 	MemorySearchManager,
-	MemoryBenchmarkBuildIdentity,
-	MemoryBenchmarkCaseOutcome,
-	MemoryBenchmarkExecutionSummary,
-	MemoryBenchmarkReleaseGate,
-	MemoryBenchmarkRunReport,
-	BenchmarkQualityThresholds,
-	QueryGovernanceCandidate,
-	QueryGovernanceReport,
 	RejectedResultSummary,
 } from "./types.js"
 export { sortObject } from "./search-utils.js"
@@ -182,17 +174,7 @@ export {
 	getAccessTrends,
 	type AccessTrackerConfig,
 } from "./mongodb-access-tracker.js"
-export {
-	loadBenchmarkDataset,
-	ingestBenchmarkDataset,
-	importConversationDataset,
-} from "./mongodb-benchmark-harness.js"
-export {
-	evaluateRankingCase,
-	buildQueryGovernanceReport,
-	rankResultSessions,
-	summarizeBenchmarkExecutions,
-} from "./mongodb-benchmark-runner.js"
+export { importConversationDataset } from "./mongodb-conversation-import.js"
 export {
 	queryCacheCollection,
 	telemetryCollection,
@@ -315,11 +297,7 @@ export type {
 	AccessEventDocument,
 	MemoryAccessSummary,
 	MemoryAccessTrend,
-	MemoryBenchmarkConversation,
-	MemoryBenchmarkDataset,
-	MemoryBenchmarkIngestResult,
 	MemoryConversationImportResult,
-	MemoryBenchmarkTurn,
 	MemoryConfidenceSource,
 	MemorySourceAgent,
 	MemoryArtifact,
@@ -355,7 +333,6 @@ export {
 export type { RelevanceSourceScope } from "./mongodb-relevance.js"
 export type {
 	RelevanceArtifact,
-	RelevanceBenchmarkResult,
 	RelevanceHealth,
 	RelevanceReport,
 	RelevanceSampleState,

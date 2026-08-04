@@ -1,0 +1,31 @@
+# Local-development conveniences merged automatically with compose.yaml when
+# `docker compose` runs from this directory.
+
+services:
+  api:
+    depends_on:
+      mongodb:
+        condition: service_healthy
+
+  mongodb:
+    image: mongodb/mongodb-atlas-local:8.2.6-20260715T144108Z
+    container_name: memongo-preview
+    ports:
+      - "127.0.0.1:${MONGODB_PORT:-27017}:27017"
+    environment:
+      - VOYAGE_API_KEY=${VOYAGE_API_KEY:-}
+      - MONGODB_ATLAS_TELEMETRY_ENABLE=false
+    volumes:
+      - memongo_preview_data:/data/db
+      - memongo_preview_config:/data/configdb
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/runner", "healthcheck"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+
+volumes:
+  memongo_preview_data:
+  memongo_preview_config:

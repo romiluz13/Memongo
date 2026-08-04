@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto"
 import path from "node:path"
-import type { BenchmarkRunContext } from "./benchmark-parity-envelope.js"
+import type { OperationRunContext } from "./mongodb-operation-accounting.js"
 import { isDuplicateKeyError } from "./internal.js"
 import {
 	extractStructuredCandidatesFromEvent,
@@ -494,7 +494,7 @@ export class MongoDBManagerWriteOps {
 
 	async writeConversationEvent(
 		event: WriteConversationEventInput,
-		benchmarkRunContext?: BenchmarkRunContext,
+		operationRunContext?: OperationRunContext,
 	): Promise<{ eventId: string; chunkCreated: boolean }> {
 		// (P2.5 e) shutdown intake stop: once close() begins, no new writes
 		// enter the queue — a write queued during shutdown would schedule
@@ -691,8 +691,8 @@ export class MongoDBManagerWriteOps {
 			}
 			if (postWriteDerivedWorkEnabled) {
 				const jobId = `extraction-${written.eventId}`
-				if (benchmarkRunContext) {
-					this.host.memoryJobRunContexts.set(jobId, benchmarkRunContext)
+				if (operationRunContext) {
+					this.host.memoryJobOperationContexts.set(jobId, operationRunContext)
 				}
 				const released = await releaseStagedMemoryJob({
 					db: this.host.db,
@@ -717,7 +717,7 @@ export class MongoDBManagerWriteOps {
 						// duplicate retries. Leave extractionJobPendingAt SET so
 						// repairExtractionOutbox (which exists for exactly this) re-stages
 						// the job, and acknowledge the write.
-						this.host.memoryJobRunContexts.delete(jobId)
+						this.host.memoryJobOperationContexts.delete(jobId)
 						clearPendingMarker = false
 						log.warn(
 							`staged extraction job ${jobId} was not released; leaving the outbox marker set for the repair pass`,
@@ -753,7 +753,7 @@ export class MongoDBManagerWriteOps {
 				timestamp: written.timestamp,
 				scope,
 				scopeRef: written.scopeRef,
-				runContext: benchmarkRunContext,
+				runContext: operationRunContext,
 			})
 
 			// P2.4: the hot write path coalesces invalidation — a burst of
@@ -855,7 +855,7 @@ export class MongoDBManagerWriteOps {
 	 */
 	async writeConversationEventsBatch(
 		events: WriteConversationEventInput[],
-		benchmarkRunContext?: BenchmarkRunContext,
+		operationRunContext?: OperationRunContext,
 	): Promise<WriteConversationEventReceipt[]> {
 		// (P2.5 e) shutdown intake stop: same contract as the single write.
 		if (this.host.closed) {
@@ -1121,10 +1121,10 @@ export class MongoDBManagerWriteOps {
 					// and is claimable — satisfied, not an error.
 					if (jobResult.ok || jobResult.duplicate) {
 						claimableEventIds.push(item.eventId)
-						if (benchmarkRunContext) {
-							this.host.memoryJobRunContexts.set(
+						if (operationRunContext) {
+							this.host.memoryJobOperationContexts.set(
 								`extraction-${item.eventId}`,
-								benchmarkRunContext,
+								operationRunContext,
 							)
 						}
 					} else {
@@ -1163,7 +1163,7 @@ export class MongoDBManagerWriteOps {
 					timestamp: item.timestamp,
 					scope: item.scope,
 					scopeRef: item.scopeRef,
-					runContext: benchmarkRunContext,
+					runContext: operationRunContext,
 				})
 				this.host.scheduleQueryCacheInvalidation({
 					agentId: this.host.agentId,

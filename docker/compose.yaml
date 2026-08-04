@@ -1,0 +1,46 @@
+# Production-safe Memongo API deployment.
+#
+# This base file intentionally contains no local database service or
+# development port. Supply an external MongoDB 8.x deployment with Atlas
+# Search / Vector Search:
+#
+#   MEMONGO_API_KEY="your-long-random-token" \
+#   MEMONGO_MONGODB_URI="mongodb+srv://..." \
+#   docker compose -f docker/compose.yaml up -d
+#
+# For local development, run `docker compose` from this directory. Compose
+# automatically merges compose.override.yaml and starts Atlas Local.
+
+services:
+  api:
+    build:
+      context: ..
+      dockerfile: apps/api/Dockerfile
+    container_name: memongo-api
+    ports:
+      - "127.0.0.1:${MEMONGO_API_PORT:-3847}:3847"
+    environment:
+      - NODE_ENV=production
+      - MEMONGO_API_HOST=0.0.0.0
+      - MEMONGO_API_PORT=3847
+      - MEMONGO_API_KEY=${MEMONGO_API_KEY:?set MEMONGO_API_KEY}
+      - MEMONGO_AGENT_ID=${MEMONGO_AGENT_ID:-main}
+      # The local fallback resolves only when compose.override.yaml adds the
+      # mongodb service. Base-only deployments remain visibly unready until an
+      # external URI is supplied.
+      - MEMONGO_MONGODB_URI=${MEMONGO_MONGODB_URI:-mongodb://mongodb:27017/?directConnection=true}
+      - MEMONGO_MONGODB_DATABASE=${MEMONGO_MONGODB_DATABASE:-memongo}
+      - VOYAGE_API_KEY=${VOYAGE_API_KEY:-}
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3847/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s

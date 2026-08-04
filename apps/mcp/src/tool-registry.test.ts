@@ -6,11 +6,11 @@ import {
 } from "./tool-registry.js"
 
 // P1.2 surface diet: the catalog is partitioned into core (always on),
-// admin/benchmark (MEMONGO_MCP_ADMIN=1), and semantic aliases
+// admin (MEMONGO_MCP_ADMIN=1), and semantic aliases
 // (MEMONGO_MCP_ALIASES=1). These counts are regression anchors — update them
 // deliberately when tools are added, removed, or recategorized.
 const CORE_COUNT = 12
-const ADMIN_COUNT = 31
+const ADMIN_COUNT = 29
 const ALIAS_COUNT = 6
 
 const CORE_TOOL_NAMES = [
@@ -58,12 +58,13 @@ describe("selectEnabledTools", () => {
 		expect(names.has("memongo_recall_messages")).toBe(false)
 	})
 
-	it("MEMONGO_MCP_ADMIN=1 adds admin/benchmark tools but not aliases", () => {
+	it("MEMONGO_MCP_ADMIN=1 adds admin tools but not aliases", () => {
 		const tools = selectEnabledTools({ MEMONGO_MCP_ADMIN: "1" })
 		expect(tools).toHaveLength(CORE_COUNT + ADMIN_COUNT)
 		const names = new Set(tools.map((tool) => tool.name))
 		expect(names.has("memongo_status")).toBe(true)
-		expect(names.has("memongo_relevance_benchmark")).toBe(true)
+		expect(names.has("memongo_relevance_benchmark")).toBe(false)
+		expect(names.has("memongo_benchmark_ingest")).toBe(false)
 		expect(names.has("memongo_admin_list_traces")).toBe(true)
 		expect(names.has("memongo_recall_messages")).toBe(false)
 	})

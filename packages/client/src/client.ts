@@ -3,8 +3,6 @@ import type {
 	MemongoAccessSummaryResponse,
 	MemongoAccessTrendResponse,
 	MemongoActiveSlateInput,
-	MemongoBenchmarkIngestResponse,
-	MemongoBenchmarkQualityThresholds,
 	MemongoConsolidateInput,
 	MemongoConsolidateResponse,
 	MemongoConversationImportInput,
@@ -31,7 +29,6 @@ import type {
 	MemongoProfileInput,
 	MemongoProfileResponse,
 	MemongoReadFileResponse,
-	MemongoRelevanceBenchmarkResponse,
 	MemongoRelevanceExplainResponse,
 	MemongoRelevanceReportResponse,
 	MemongoRelevanceSampleRateResponse,
@@ -1097,54 +1094,6 @@ export class MemongoClient {
 			maxResults: input.maxResults,
 			minScore: input.minScore,
 			deep: input.deep,
-		})
-	}
-
-	async relevanceBenchmark(input?: {
-		agentId?: string
-		datasetPath?: string
-		maxResults?: number
-		minScore?: number
-		retrievalLane?: "native" | "raw-session"
-		datasetSha256?: string
-		embeddingConfig?: {
-			model: string
-			dimensions: number
-			quantization: "float32" | "int8" | "binary"
-		}
-		rerankerConfig?: {
-			model: string
-			version: string | null
-			stage: "post-fusion" | "pre-fusion" | "none"
-		}
-		qualityThresholds?: MemongoBenchmarkQualityThresholds
-	}): Promise<MemongoRelevanceBenchmarkResponse> {
-		return apiPost(this._opts, "/v1/admin/relevance/benchmark", {
-			agentId: input?.agentId,
-			datasetPath: input?.datasetPath,
-			maxResults: input?.maxResults,
-			minScore: input?.minScore,
-			retrievalLane: input?.retrievalLane,
-			datasetSha256: input?.datasetSha256,
-			embeddingConfig: input?.embeddingConfig,
-			rerankerConfig: input?.rerankerConfig,
-			qualityThresholds: input?.qualityThresholds,
-		})
-	}
-
-	async benchmarkIngest(input: {
-		datasetPath: string
-		agentId?: string
-		scope?: "session" | "user" | "agent" | "workspace" | "tenant" | "global"
-		limitConversations?: number
-		limitTurnsPerConversation?: number
-	}): Promise<MemongoBenchmarkIngestResponse> {
-		return apiPost(this._opts, "/v1/admin/benchmarks/ingest", {
-			datasetPath: input.datasetPath,
-			agentId: input.agentId,
-			scope: input.scope,
-			limitConversations: input.limitConversations,
-			limitTurnsPerConversation: input.limitTurnsPerConversation,
 		})
 	}
 

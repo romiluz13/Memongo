@@ -1,12 +1,11 @@
 import { adminTools } from "./tools/admin.js"
 import { aliasTools } from "./tools/aliases.js"
-import { benchmarkTools } from "./tools/benchmark.js"
 import { coreTools } from "./tools/core.js"
 
 // P1.2: the MCP surface is partitioned into three categories so hosts only pay
 // prompt tokens for the core write/recall loop by default.
 // - core: always registered.
-// - admin: operator/benchmark tooling, requires MEMONGO_MCP_ADMIN=1.
+// - admin: operator tooling, requires MEMONGO_MCP_ADMIN=1.
 // - alias: semantic duplicates of canonical tools, requires MEMONGO_MCP_ALIASES=1.
 export type McpToolCategory = "core" | "admin" | "alias"
 
@@ -33,7 +32,6 @@ export type McpWireTool = {
 export const toolCatalog: readonly McpToolDefinition[] = [
 	...coreTools,
 	...adminTools,
-	...benchmarkTools,
 	...aliasTools,
 ]
 

@@ -1,22 +1,21 @@
 # Deployment
 
-Memongo deploys as two pieces: a **MongoDB 8.x deployment with Atlas Search / Vector Search** (mongod + mongot) and the **API container**. Plain `mongo:7` does not work — Memongo requires `$vectorSearch`, Atlas Search indexes, and transactions, which a standalone `mongod` silently cannot serve (`docker/docker-compose.minimal.yml` header comment).
+Memongo deploys as two pieces: a **MongoDB 8.x deployment with Atlas Search / Vector Search** (mongod + mongot) and the **API container**. Plain `mongo:7` does not work because Memongo requires `$vectorSearch`, Atlas Search indexes, and transactions.
 
-## The three compose files
+## Compose files
 
-All compose files pin the same image: `mongodb/mongodb-atlas-local:8.2.6-20260715T144108Z` — a single container bundling mongod (single-node replica set), mongot (community search engine), Atlas Search, and Vector Search.
+The local MongoDB files pin `mongodb/mongodb-atlas-local:8.2.6-20260715T144108Z`, a single container bundling mongod (single-node replica set), mongot, Atlas Search, and Vector Search.
 
 | File | Contents | Use |
 |------|----------|-----|
+| `docker/compose.yaml` | Production-safe API base, external MongoDB required | Deploy the API against Atlas or another managed deployment |
+| `docker/compose.override.yaml` | Local Atlas Local service and loopback database port | Automatically merged for local development from `docker/` |
 | `docker/docker-compose.yml` | MongoDB only, published on `127.0.0.1:27017` | One-command local database |
-| `docker/docker-compose.full.yml` | API (always) + MongoDB (`--profile local`) | Full stack, or API-only against Atlas |
-| `docker/docker-compose.minimal.yml` | MongoDB only | Run `apps/api` on the host against the container |
-
-A fourth file, `docker/mongodb/docker-compose.preview.yml`, backs the preview script (`docker/mongodb/start-preview.sh`).
+| `docker/mongodb/docker-compose.mongodb.yml` | Advanced standalone, replica-set, and mongot profiles | Capability validation and low-level diagnostics |
 
 ### Common MongoDB settings
 
-- **Loopback-only publishing:** `127.0.0.1:${MONGODB_PORT:-27017}:27017`. Publishing on `0.0.0.0` would expose the database on every host interface; the full-stack compose file does not publish MongoDB at all — the API reaches it over the compose network (`docker/docker-compose.full.yml`).
+- **Loopback-only publishing:** `127.0.0.1:${MONGODB_PORT:-27017}:27017`. Publishing on `0.0.0.0` would expose the database on every host interface. The production base contains no database service or development database port.
 - **Healthcheck:** the image's built-in `/usr/local/bin/runner healthcheck` verifies both mongod and mongot (10s interval, 10 retries, 30s start period).
 - **Telemetry off:** `MONGODB_ATLAS_TELEMETRY_ENABLE=false`.
 - **Named volumes** for `/data/db` and `/data/configdb`.
@@ -46,7 +45,7 @@ graph LR
 | `MEMONGO_API_PORT` / `MEMONGO_API_HOST` | no | Container listens on `0.0.0.0:3847`; published loopback-only as `127.0.0.1:3847` |
 | `MEMONGO_AGENT_ID` | no | Default `main` |
 
-The compose healthcheck hits `GET /health` every 30s; orchestrator readiness probes should target `/ready`, which returns 503 until the mongo, vector, and embedding lanes are all up (`apps/api/src/app.ts`). See [Debugging](how-to-contribute/debugging.md).
+The compose healthcheck hits `GET /ready` every 30s. It returns 503 until the mongo, vector, and embedding lanes are all up, while `GET /health` remains a process-liveness probe (`apps/api/src/app.ts`). See [Debugging](how-to-contribute/debugging.md).
 
 ## Recipes
 
@@ -57,12 +56,12 @@ docker compose -f docker/docker-compose.yml up -d
 # Full local stack (API + MongoDB + optional auto-embeddings)
 MEMONGO_API_KEY="your-long-random-token" \
 VOYAGE_API_KEY="al-your-atlas-model-api-key" \
-docker compose -f docker/docker-compose.full.yml --profile local up -d
+docker compose -f docker/compose.yaml -f docker/compose.override.yaml up -d
 
 # API container against MongoDB Atlas
 MEMONGO_MONGODB_URI="mongodb+srv://.../?appName=memongo" \
 MEMONGO_API_KEY="your-long-random-token" \
-docker compose -f docker/docker-compose.full.yml up -d
+docker compose -f docker/compose.yaml up -d
 
 # Preview script equivalent
 ./docker/mongodb/start-preview.sh

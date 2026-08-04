@@ -13,12 +13,6 @@ vi.mock("./mongodb-events.js", async () =>
 	(await import("./test-helpers/manager-test-kit.js")).eventsModuleMock(),
 )
 
-vi.mock("./benchmark-quality-contracts.js", async (importOriginal) =>
-	(
-		await import("./test-helpers/manager-test-kit.js")
-	).benchmarkQualityContractsModuleMock(importOriginal),
-)
-
 vi.mock("./mongodb-conversation-recall.js", async () =>
 	(
 		await import("./test-helpers/manager-test-kit.js")
@@ -27,12 +21,6 @@ vi.mock("./mongodb-conversation-recall.js", async () =>
 
 vi.mock("./mongodb-ops.js", async () =>
 	(await import("./test-helpers/manager-test-kit.js")).opsModuleMock(),
-)
-
-vi.mock("./mongodb-benchmark-harness.js", async () =>
-	(
-		await import("./test-helpers/manager-test-kit.js")
-	).benchmarkHarnessModuleMock(),
 )
 
 vi.mock("./mongodb-retrieval-planner.js", async () =>
@@ -83,12 +71,6 @@ vi.mock("./mongodb-derived-memory.js", async () =>
 	(
 		await import("./test-helpers/manager-test-kit.js")
 	).derivedMemoryModuleMock(),
-)
-
-vi.mock("./mongodb-benchmark-readiness.js", async () =>
-	(
-		await import("./test-helpers/manager-test-kit.js")
-	).benchmarkReadinessModuleMock(),
 )
 
 vi.mock("./mongodb-telemetry.js", async () =>

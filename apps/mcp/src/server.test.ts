@@ -66,35 +66,10 @@ describe("toolList", () => {
 		expect(properties).not.toHaveProperty("qualityThresholds")
 	})
 
-	it("publishes the dataset-discriminated benchmark quality contract", () => {
-		const benchmark = toolList.find(
-			(tool) => tool.name === "memongo_relevance_benchmark",
-		)
-		const qualityThresholds = (
-			benchmark?.inputSchema.properties as Record<string, unknown>
-		).qualityThresholds as { oneOf?: Array<{ required?: string[] }> }
-
-		expect(qualityThresholds.oneOf).toHaveLength(2)
-		expect(qualityThresholds.oneOf?.[0]?.required).toEqual(
-			expect.arrayContaining([
-				"contractId",
-				"version",
-				"datasetKind",
-				"minSessionRecallAnyAt10",
-				"minSessionNdcgAnyAt10",
-			]),
-		)
-		expect(qualityThresholds.oneOf?.[1]?.required).toEqual(
-			expect.arrayContaining([
-				"contractId",
-				"version",
-				"datasetKind",
-				"minSessionEvidenceRecallAt10",
-				"minAnswerAccuracy",
-				"maxJudgeFalsePositiveRate",
-				"minAnswerCoverage",
-			]),
-		)
+	it("does not publish benchmark tools", () => {
+		const names = new Set(toolList.map((tool) => tool.name))
+		expect(names.has("memongo_relevance_benchmark")).toBe(false)
+		expect(names.has("memongo_benchmark_ingest")).toBe(false)
 	})
 })
 
@@ -545,7 +520,6 @@ describe("structuredContent envelopes (P1.2)", () => {
 		memongo_memory_delete: { handle: validStructuredHandle },
 		memongo_memory_history: { handle: validStructuredHandle },
 		memongo_discovery_projection: { kind: "what-changed" },
-		memongo_benchmark_ingest: { datasetPath: "data.json" },
 		memongo_import_conversations: { datasetPath: "data.json" },
 		memongo_import_conversation_history: { datasetPath: "data.json" },
 		memongo_admin_access_summaries: {

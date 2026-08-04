@@ -112,10 +112,11 @@ The web console runs on port 3000 by default.
 
 ```bash
 # Full stack (API + local MongoDB)
-docker compose -f docker/docker-compose.full.yml --profile local up -d
+MEMONGO_API_KEY="your-key" \
+docker compose -f docker/compose.yaml -f docker/compose.override.yaml up -d
 
 # API only (connect to Atlas)
 MEMONGO_MONGODB_URI="mongodb+srv://..." \
 MEMONGO_API_KEY="your-key" \
-docker compose -f docker/docker-compose.full.yml up -d
+docker compose -f docker/compose.yaml up -d
 ```

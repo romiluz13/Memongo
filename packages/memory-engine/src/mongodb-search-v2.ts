@@ -10,7 +10,7 @@ import type { MemoryScope } from "@memongo/lib"
 import type { ResolvedMongoDBConfig } from "./backend-config.js"
 import { resolveDefaultScope } from "./backend-config.js"
 import { searchEpisodes } from "./mongodb-episodes.js"
-import type { BenchmarkRunContext } from "./benchmark-parity-envelope.js"
+import type { OperationRunContext } from "./mongodb-operation-accounting.js"
 import { getEventsByTimeRange } from "./mongodb-events.js"
 import { searchEntitiesAutocomplete, expandGraph } from "./mongodb-graph.js"
 import { normalizeSearchResults, rrfScore } from "./mongodb-hybrid.js"
@@ -242,7 +242,7 @@ export type SearchV2Context = {
 		graphMaxDepth?: number
 		searchConfig?: ResolvedSearchConfig
 		questionDate?: Date
-		benchmarkRunContext?: BenchmarkRunContext
+		operationRunContext?: OperationRunContext
 		/** P3.2: per-request cost budget overrides (resolved over defaults). */
 		budget?: Partial<SearchBudgetLimits>
 	}
@@ -1460,7 +1460,7 @@ async function searchV2WithBudget(
 					config: rerankCfg,
 					onProviderCall: (outcome) => {
 						const accounting =
-							context.searchOptions?.benchmarkRunContext?.accounting
+							context.searchOptions?.operationRunContext?.accounting
 						if (!accounting) return
 						const metadata = { provider: "voyage", model: rerankCfg.model }
 						if (outcome === "attempted") {

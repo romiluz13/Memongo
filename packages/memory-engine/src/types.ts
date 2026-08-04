@@ -702,12 +702,6 @@ export interface MemorySearchManager {
 		memoryIds: string[]
 		windowDays?: number
 	}): Promise<MemoryAccessSummary[]>
-	benchmarkIngest(params: {
-		datasetPath: string
-		scope?: MemoryScope
-		limitConversations?: number
-		limitTurnsPerConversation?: number
-	}): Promise<MemoryBenchmarkIngestResult>
 	importConversations(params: {
 		datasetPath: string
 		scope?: MemoryScope
@@ -1006,7 +1000,7 @@ export type MemoryBenchmarkIngestResult = {
 export type MemoryConversationImportResult = {
 	datasetPath: string
 	datasetName?: string
-	datasetKind?: MemoryBenchmarkDatasetKind
+	datasetKind?: "generic"
 	conversationsImported: number
 	turnsImported: number
 	skippedConversations: number

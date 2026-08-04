@@ -3,7 +3,7 @@
 // test file (Vitest hoists them per-file), but the mock factories and the
 // manager/collection scaffolding live here exactly once.
 import { vi } from "vitest"
-import { createBenchmarkRunContext } from "../benchmark-parity-envelope.js"
+import { createOperationRunContext } from "../mongodb-operation-accounting.js"
 import type { MongoDBMemoryManager } from "../mongodb-manager.js"
 
 // This module is also loaded from inside vi.mock factories via dynamic
@@ -27,8 +27,8 @@ export const mocked = <T>(value: T): T => {
 	return maybeMocked?.(value) ?? value
 }
 
-export function testBenchmarkRunContext(runId: string) {
-	return createBenchmarkRunContext({
+export function testOperationRunContext(runId: string) {
+	return createOperationRunContext({
 		runId,
 		configuration: {
 			executionProfile: "diagnostic",
@@ -137,7 +137,7 @@ export function eventsModuleMock() {
 
 export async function benchmarkQualityContractsModuleMock(
 	importOriginal: () => Promise<
-		typeof import("../benchmark-quality-contracts.js")
+		typeof import("../../../../scripts/benchmark/benchmark-quality-contracts.js")
 	>,
 ) {
 	const actual = await importOriginal()
