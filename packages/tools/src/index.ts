@@ -33,6 +33,8 @@ const searchKbSchema = z.object({
 	query: z.string(),
 	agentId: z.string().optional(),
 	limit: z.number().optional(),
+	scope: memoryScopeSchema.optional(),
+	scopeRef: z.string().optional(),
 })
 
 const readFileSchema = z.object({
@@ -64,6 +66,7 @@ const writeEventSchema = z.object({
 
 const profileSchema = z.object({
 	agentId: z.string().optional(),
+	scope: memoryScopeSchema.optional(),
 	scopeRef: z.string().optional(),
 })
 
@@ -100,6 +103,8 @@ const contextBundleSchema = z.object({
 const recallConversationSchema = z.object({
 	query: z.string().optional(),
 	agentId: z.string().optional(),
+	scope: memoryScopeSchema.optional(),
+	scopeRef: z.string().optional(),
 	sessionId: z.string().optional(),
 	roles: z.array(z.enum(["user", "assistant", "system", "tool"])).optional(),
 	startTime: z.string().optional(),
@@ -262,6 +267,7 @@ const conversationImportSchema = z.object({
 	datasetPath: z.string().min(1),
 	agentId: z.string().optional(),
 	scope: memoryScopeSchema.optional(),
+	scopeRef: z.string().optional(),
 	limitConversations: z.number().int().positive().optional(),
 	limitTurnsPerConversation: z.number().int().positive().optional(),
 })
@@ -317,6 +323,8 @@ export function createMemongoTools(client: MemongoClient): MemongoToolSet {
 					query: input.query,
 					agentId: input.agentId,
 					limit: input.limit,
+					scope: input.scope,
+					scopeRef: input.scopeRef,
 				})
 				return { results }
 			},
@@ -412,7 +420,7 @@ export function createMemongoTools(client: MemongoClient): MemongoToolSet {
 			inputSchema: z.object({
 				agentId: z.string().optional(),
 				limit: z.number().optional(),
-				scope: z.string().optional(),
+				scope: memoryScopeSchema.optional(),
 				scopeRef: z.string().optional(),
 			}),
 			execute: async (input) => client.scanNovelty(input),
@@ -426,7 +434,7 @@ export function createMemongoTools(client: MemongoClient): MemongoToolSet {
 				minCombinedScore: z.number().optional(),
 				resolveContradictions: z.boolean().optional(),
 				llmDedup: z.boolean().optional(),
-				scope: z.string().optional(),
+				scope: memoryScopeSchema.optional(),
 				scopeRef: z.string().optional(),
 			}),
 			execute: async (input) => client.consolidate(input),

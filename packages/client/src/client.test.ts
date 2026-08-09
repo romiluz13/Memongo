@@ -1,5 +1,27 @@
-import { beforeEach, describe, expect, it, vi } from "vitest"
+import { beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest"
 import { MemongoClient, MemongoClientError } from "./client.js"
+import type {
+	MemongoConsolidateInput,
+	MemongoScanNoveltyInput,
+	MemongoScope,
+} from "./index.js"
+
+describe("public scope input types", () => {
+	it("use the canonical MemongoScope union", () => {
+		expectTypeOf<MemongoScanNoveltyInput["scope"]>().toEqualTypeOf<
+			MemongoScope | undefined
+		>()
+		expectTypeOf<MemongoConsolidateInput["scope"]>().toEqualTypeOf<
+			MemongoScope | undefined
+		>()
+		expectTypeOf<
+			Parameters<MemongoClient["writeEvent"]>[0]["scope"]
+		>().toEqualTypeOf<MemongoScope | undefined>()
+		expectTypeOf<
+			Parameters<MemongoClient["writeEvents"]>[0]["events"][number]["scope"]
+		>().toEqualTypeOf<MemongoScope | undefined>()
+	})
+})
 
 /**
  * First suite for the client package (P0.1 seeds it; P1.3 builds the full
@@ -331,11 +353,17 @@ describe("MemongoClient scope forwarding (P1.3)", () => {
 		stubJsonFetch(calls, { results: [], metadata: {} })
 
 		const client = new MemongoClient({ baseUrl: "http://127.0.0.1:3100" })
-		await client.searchDetailed({ query: "q", scope: "global", limit: 3 })
+		await client.searchDetailed({
+			query: "q",
+			scope: "workspace",
+			scopeRef: "acme/platform",
+			limit: 3,
+		})
 
 		expect(calls[0].url).toBe("http://127.0.0.1:3100/v1/search-detailed")
 		const body = lastBody(calls)
-		expect(body.scope).toBe("global")
+		expect(body.scope).toBe("workspace")
+		expect(body.scopeRef).toBe("acme/platform")
 		expect(body.maxResults).toBeUndefined()
 	})
 
@@ -373,6 +401,61 @@ describe("MemongoClient scope forwarding (P1.3)", () => {
 		expect(body.scopeRef).toBe("session:s1")
 	})
 
+	it("forwards scopeRef on importConversations", async () => {
+		const calls: Array<{ url: string; init: RequestInit }> = []
+		stubJsonFetch(calls, { conversationsImported: 0 })
+
+		const client = new MemongoClient({ baseUrl: "http://127.0.0.1:3100" })
+		await client.importConversations({
+			datasetPath: "imports/history.json",
+			scope: "workspace",
+			scopeRef: "acme/platform",
+		})
+
+		expect(calls[0].url).toBe("http://127.0.0.1:3100/v1/import/conversations")
+		const body = lastBody(calls)
+		expect(body.scope).toBe("workspace")
+		expect(body.scopeRef).toBe("acme/platform")
+	})
+
+	it("forwards scope/scopeRef on profile", async () => {
+		const calls: Array<{ url: string; init: RequestInit }> = []
+		stubJsonFetch(calls, { preferences: [] })
+
+		const client = new MemongoClient({ baseUrl: "http://127.0.0.1:3100" })
+		await client.profile({
+			scope: "user",
+			scopeRef: "user-1",
+		})
+
+		expect(calls[0].url).toBe("http://127.0.0.1:3100/v1/profile")
+		const body = lastBody(calls)
+		expect(body.scope).toBe("user")
+		expect(body.scopeRef).toBe("user-1")
+	})
+
+	it("preserves detailed-status data completeness health fields", async () => {
+		const calls: Array<{ url: string; init: RequestInit }> = []
+		stubJsonFetch(calls, {
+			health: {
+				dataCompleteness: "partial",
+				failedChecks: ["entities.count", "projectionLag.entities"],
+			},
+		})
+
+		const client = new MemongoClient({ baseUrl: "http://127.0.0.1:3100" })
+		const status = await client.getDetailedStatus("agent-1")
+
+		expect(calls[0].url).toBe(
+			"http://127.0.0.1:3100/v1/status/detailed?agentId=agent-1",
+		)
+		expect(status.health.dataCompleteness).toBe("partial")
+		expect(status.health.failedChecks).toEqual([
+			"entities.count",
+			"projectionLag.entities",
+		])
+	})
+
 	it("forwards scope/scopeRef on extract", async () => {
 		const calls: Array<{ url: string; init: RequestInit }> = []
 		stubJsonFetch(calls, { ok: true, jobId: "j1", scheduled: true })
@@ -405,6 +488,53 @@ describe("MemongoClient scope forwarding (P1.3)", () => {
 		const body = lastBody(calls)
 		expect(body.scope).toBe("tenant")
 		expect(body.scopeRef).toBe("ref-A")
+	})
+
+	it("forwards canonical scopes on event writes and consolidation", async () => {
+		const calls: Array<{ url: string; init: RequestInit }> = []
+		stubJsonFetch(calls)
+
+		const client = new MemongoClient({ baseUrl: "http://127.0.0.1:3100" })
+		await client.writeEvent({
+			role: "user",
+			body: "tenant event",
+			scope: "tenant",
+			scopeRef: "tenant-A",
+		})
+		await client.writeEvents({
+			events: [
+				{
+					role: "assistant",
+					body: "workspace event",
+					scope: "workspace",
+					scopeRef: "acme/platform",
+				},
+			],
+		})
+		await client.consolidate({
+			scope: "agent",
+			scopeRef: "agent-1",
+		})
+
+		expect(calls.map(({ url }) => url)).toEqual([
+			"http://127.0.0.1:3100/v1/write-event",
+			"http://127.0.0.1:3100/v1/write-events",
+			"http://127.0.0.1:3100/v1/consolidate",
+		])
+		expect(JSON.parse(String(calls[0].init.body))).toEqual(
+			expect.objectContaining({ scope: "tenant", scopeRef: "tenant-A" }),
+		)
+		expect(
+			(JSON.parse(String(calls[1].init.body)) as { events: unknown[] }).events,
+		).toEqual([
+			expect.objectContaining({
+				scope: "workspace",
+				scopeRef: "acme/platform",
+			}),
+		])
+		expect(JSON.parse(String(calls[2].init.body))).toEqual(
+			expect.objectContaining({ scope: "agent", scopeRef: "agent-1" }),
+		)
 	})
 
 	it("throws on unserializable caller fields instead of dropping them", async () => {

@@ -52,6 +52,54 @@ describe("toolList", () => {
 		)
 	})
 
+	it.each([
+		"memongo_novelty_scan",
+		"memongo_consolidate",
+		"memongo_hydrate_active_slate",
+		"memongo_discovery_projection",
+		"memongo_state_unified",
+	])("%s publishes the canonical memory scope values", (toolName) => {
+		const tool = toolList.find((candidate) => candidate.name === toolName)
+
+		expect(tool?.inputSchema.properties).toEqual(
+			expect.objectContaining({
+				scope: expect.objectContaining({
+					type: "string",
+					enum: ["session", "user", "agent", "workspace", "tenant", "global"],
+				}),
+			}),
+		)
+	})
+
+	it("publishes scopeRef on novelty scan", () => {
+		const noveltyScan = toolList.find(
+			(tool) => tool.name === "memongo_novelty_scan",
+		)
+
+		expect(noveltyScan?.inputSchema.properties).toEqual(
+			expect.objectContaining({
+				scopeRef: expect.objectContaining({ type: "string" }),
+			}),
+		)
+	})
+
+	it.each([
+		"memongo_recall_messages",
+		"memongo_import_conversation_history",
+	])("%s publishes canonical tenant coordinates", (toolName) => {
+		const tool = toolList.find((candidate) => candidate.name === toolName)
+
+		expect(tool?.inputSchema.properties).toEqual(
+			expect.objectContaining({
+				scope: expect.objectContaining({
+					type: "string",
+					enum: ["session", "user", "agent", "workspace", "tenant", "global"],
+				}),
+				scopeRef: expect.objectContaining({ type: "string" }),
+			}),
+		)
+	})
+
 	it("keeps benchmark-only controls off detailed search", () => {
 		const detailedSearch = toolList.find(
 			(tool) => tool.name === "memongo_search_detailed",
@@ -124,6 +172,8 @@ describe("handleToolCall", () => {
 			"memongo_recall_messages",
 			{
 				query: "rollback plan",
+				scope: "tenant",
+				scopeRef: "tenant-1",
 				roles: ["assistant", "tool"],
 				limit: 999,
 				includeToolMessages: true,
@@ -137,6 +187,8 @@ describe("handleToolCall", () => {
 		expect(recallConversation).toHaveBeenCalledWith({
 			query: "rollback plan",
 			agentId: undefined,
+			scope: "tenant",
+			scopeRef: "tenant-1",
 			sessionId: undefined,
 			roles: ["assistant", "tool"],
 			startTime: undefined,
@@ -324,6 +376,7 @@ describe("handleToolCall", () => {
 			{
 				datasetPath: "imports/history.json",
 				scope: "workspace",
+				scopeRef: "acme/platform",
 				limitConversations: 3,
 			},
 			{
@@ -335,6 +388,7 @@ describe("handleToolCall", () => {
 			datasetPath: "imports/history.json",
 			agentId: undefined,
 			scope: "workspace",
+			scopeRef: "acme/platform",
 			limitConversations: 3,
 			limitTurnsPerConversation: undefined,
 		})
@@ -551,6 +605,31 @@ describe("structuredContent envelopes (P1.2)", () => {
 describe("scope validation (P2.8)", () => {
 	const SCOPE_ERROR = "scope must be session|user|agent|workspace|tenant|global"
 
+	it.each([
+		["memongo_search_detailed", "searchDetailed", { query: "q" }],
+		["memongo_search_kb", "searchKB", { query: "q" }],
+		["memongo_recall_conversation", "recallConversation", {}],
+		["memongo_profile", "profile", {}],
+		["memongo_novelty_scan", "scanNovelty", {}],
+		["memongo_consolidate", "consolidate", {}],
+		[
+			"memongo_import_conversations",
+			"importConversations",
+			{ datasetPath: "data.json" },
+		],
+	] as const)("rejects an invalid scope on %s", async (toolName, clientMethod, requiredArgs) => {
+		const clientCall = vi.fn()
+		const out = await handleToolCall(
+			toolName,
+			{ ...requiredArgs, scope: "bogus" },
+			{ [clientMethod]: clientCall } as any,
+		)
+
+		expect(out.isError).toBe(true)
+		expect(parseTextPayload(out)).toEqual({ error: SCOPE_ERROR })
+		expect(clientCall).not.toHaveBeenCalled()
+	})
+
 	it("rejects an invalid scope on memongo_hydrate_active_slate instead of casting it through", async () => {
 		const hydrateActiveSlate = vi.fn()
 
@@ -642,6 +721,135 @@ describe("scope validation (P2.8)", () => {
 })
 
 describe("handleToolCall B2a contract field forwarding", () => {
+	it("exposes and forwards scope/scopeRef on memongo_search_detailed", async () => {
+		const detailedSearch = toolList.find(
+			(tool) => tool.name === "memongo_search_detailed",
+		)
+		expect(detailedSearch?.inputSchema.properties).toEqual(
+			expect.objectContaining({
+				scope: expect.objectContaining({
+					type: "string",
+					enum: ["session", "user", "agent", "workspace", "tenant", "global"],
+				}),
+				scopeRef: expect.objectContaining({ type: "string" }),
+			}),
+		)
+
+		const searchDetailed = vi.fn().mockResolvedValue({ results: [] })
+		const out = await handleToolCall(
+			"memongo_search_detailed",
+			{
+				query: "deploy plan",
+				scope: "workspace",
+				scopeRef: "acme/platform",
+			},
+			{ searchDetailed } as any,
+		)
+
+		expect(out.isError).toBeUndefined()
+		expect(searchDetailed).toHaveBeenCalledWith(
+			expect.objectContaining({
+				query: "deploy plan",
+				scope: "workspace",
+				scopeRef: "acme/platform",
+			}),
+		)
+	})
+
+	it("exposes and forwards scope/scopeRef on memongo_recall_conversation", async () => {
+		const recallTool = toolList.find(
+			(tool) => tool.name === "memongo_recall_conversation",
+		)
+		expect(recallTool?.inputSchema.properties).toEqual(
+			expect.objectContaining({
+				scope: expect.objectContaining({
+					type: "string",
+					enum: ["session", "user", "agent", "workspace", "tenant", "global"],
+				}),
+				scopeRef: expect.objectContaining({ type: "string" }),
+			}),
+		)
+
+		const recallConversation = vi.fn().mockResolvedValue({ results: [] })
+		const out = await handleToolCall(
+			"memongo_recall_conversation",
+			{
+				query: "rollback plan",
+				scope: "session",
+				scopeRef: "session-1",
+			},
+			{ recallConversation } as any,
+		)
+
+		expect(out.isError).toBeUndefined()
+		expect(recallConversation).toHaveBeenCalledWith(
+			expect.objectContaining({
+				query: "rollback plan",
+				scope: "session",
+				scopeRef: "session-1",
+			}),
+		)
+	})
+
+	it("exposes and forwards scope/scopeRef on memongo_profile", async () => {
+		const profileTool = toolList.find((tool) => tool.name === "memongo_profile")
+		expect(profileTool?.inputSchema.properties).toEqual(
+			expect.objectContaining({
+				scope: expect.objectContaining({
+					type: "string",
+					enum: ["session", "user", "agent", "workspace", "tenant", "global"],
+				}),
+				scopeRef: expect.objectContaining({ type: "string" }),
+			}),
+		)
+
+		const profile = vi.fn().mockResolvedValue({ preferences: [] })
+		const out = await handleToolCall(
+			"memongo_profile",
+			{ scope: "user", scopeRef: "user-1" },
+			{ profile } as any,
+		)
+
+		expect(out.isError).toBeUndefined()
+		expect(profile).toHaveBeenCalledWith(
+			expect.objectContaining({
+				scope: "user",
+				scopeRef: "user-1",
+			}),
+		)
+	})
+
+	it("exposes and forwards scopeRef on memongo_import_conversations", async () => {
+		const importTool = toolList.find(
+			(tool) => tool.name === "memongo_import_conversations",
+		)
+		expect(importTool?.inputSchema.properties).toEqual(
+			expect.objectContaining({
+				scopeRef: expect.objectContaining({ type: "string" }),
+			}),
+		)
+
+		const importConversations = vi.fn().mockResolvedValue({ importedTurns: 12 })
+		const out = await handleToolCall(
+			"memongo_import_conversations",
+			{
+				datasetPath: "imports/history.json",
+				scope: "workspace",
+				scopeRef: "acme/platform",
+			},
+			{ importConversations } as any,
+		)
+
+		expect(out.isError).toBeUndefined()
+		expect(importConversations).toHaveBeenCalledWith(
+			expect.objectContaining({
+				datasetPath: "imports/history.json",
+				scope: "workspace",
+				scopeRef: "acme/platform",
+			}),
+		)
+	})
+
 	it("forwards scope and scopeRef on memongo_search", async () => {
 		const search = vi.fn().mockResolvedValue({ results: [] })
 
@@ -674,13 +882,27 @@ describe("handleToolCall B2a contract field forwarding", () => {
 		expect(search).not.toHaveBeenCalled()
 	})
 
-	it("forwards the full KB field set on memongo_search_kb", async () => {
+	it("exposes and forwards the full KB field set on memongo_search_kb", async () => {
+		const searchKbTool = toolList.find(
+			(tool) => tool.name === "memongo_search_kb",
+		)
+		expect(searchKbTool?.inputSchema.properties).toEqual(
+			expect.objectContaining({
+				scope: expect.objectContaining({
+					type: "string",
+					enum: ["session", "user", "agent", "workspace", "tenant", "global"],
+				}),
+				scopeRef: expect.objectContaining({ type: "string" }),
+			}),
+		)
+
 		const searchKB = vi.fn().mockResolvedValue({ results: [] })
 
 		const out = await handleToolCall(
 			"memongo_search_kb",
 			{
 				query: "runbook",
+				scope: "workspace",
 				scopeRef: "acme/platform",
 				minScore: 0.4,
 				filter: { tags: ["ops"], category: "runbook", source: "wiki" },
@@ -693,6 +915,7 @@ describe("handleToolCall B2a contract field forwarding", () => {
 		expect(searchKB).toHaveBeenCalledWith(
 			expect.objectContaining({
 				query: "runbook",
+				scope: "workspace",
 				scopeRef: "acme/platform",
 				minScore: 0.4,
 				filter: { tags: ["ops"], category: "runbook", source: "wiki" },

@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/unbound-method -- Vitest mock method assertions */
 import type { Db } from "mongodb"
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest"
+import { describe, it, expect, vi, beforeEach } from "vitest"
 
 // ---------------------------------------------------------------------------
 // Mock telemetry before importing module under test
@@ -70,15 +70,8 @@ function mockFetchSuccess(
 // ---------------------------------------------------------------------------
 
 describe("crossEncoderRerank", () => {
-	let originalFetch: typeof globalThis.fetch
-
 	beforeEach(() => {
 		vi.clearAllMocks()
-		originalFetch = globalThis.fetch
-	})
-
-	afterEach(() => {
-		globalThis.fetch = originalFetch
 	})
 
 	// --- Early returns (no API call) ---
@@ -161,8 +154,6 @@ describe("crossEncoderRerank", () => {
 			{ index: 1, relevance_score: 0.85 },
 			{ index: 2, relevance_score: 0.75 },
 		])
-		globalThis.fetch = mockFetch
-
 		await crossEncoderRerank({
 			db: DB,
 			prefix: PREFIX,
@@ -170,6 +161,7 @@ describe("crossEncoderRerank", () => {
 			query: QUERY,
 			results,
 			config,
+			fetchFn: mockFetch,
 		})
 
 		expect(mockFetch).toHaveBeenCalledOnce()
@@ -191,7 +183,7 @@ describe("crossEncoderRerank", () => {
 		const results = makeResults(3)
 		const config = makeConfig()
 		// Voyage returns reversed order: index 2 is highest
-		globalThis.fetch = mockFetchSuccess([
+		const fetchFn = mockFetchSuccess([
 			{ index: 0, relevance_score: 0.3 },
 			{ index: 1, relevance_score: 0.5 },
 			{ index: 2, relevance_score: 0.9 },
@@ -204,6 +196,7 @@ describe("crossEncoderRerank", () => {
 			query: QUERY,
 			results,
 			config,
+			fetchFn,
 		})
 
 		expect(out.reranked).toBe(true)
@@ -226,7 +219,7 @@ describe("crossEncoderRerank", () => {
 		const results = [...aboveMin, ...belowMin]
 		const config = makeConfig({ minScore: 0.1 })
 
-		globalThis.fetch = mockFetchSuccess([
+		const fetchFn = mockFetchSuccess([
 			{ index: 0, relevance_score: 0.6 },
 			{ index: 1, relevance_score: 0.8 },
 		])
@@ -238,6 +231,7 @@ describe("crossEncoderRerank", () => {
 			query: QUERY,
 			results,
 			config,
+			fetchFn,
 		})
 
 		expect(out.reranked).toBe(true)
@@ -252,7 +246,7 @@ describe("crossEncoderRerank", () => {
 		const results = makeResults(5)
 		const config = makeConfig({ topN: 3 })
 
-		globalThis.fetch = mockFetchSuccess([
+		const fetchFn = mockFetchSuccess([
 			{ index: 0, relevance_score: 0.95 },
 			{ index: 1, relevance_score: 0.85 },
 			{ index: 2, relevance_score: 0.75 },
@@ -265,14 +259,12 @@ describe("crossEncoderRerank", () => {
 			query: QUERY,
 			results,
 			config,
+			fetchFn,
 		})
 
 		expect(out.reranked).toBe(true)
 		// 3 reranked + 2 remainder (below topN threshold but above minScore, these go to remainder)
-		const body = JSON.parse(
-			(globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0][1]
-				.body as string,
-		)
+		const body = JSON.parse(fetchFn.mock.calls[0][1].body as string)
 		expect(body.documents.length).toBe(3)
 	})
 
@@ -280,7 +272,7 @@ describe("crossEncoderRerank", () => {
 		const results = makeResults(2)
 		const config = makeConfig()
 
-		globalThis.fetch = mockFetchSuccess([
+		const fetchFn = mockFetchSuccess([
 			{ index: 0, relevance_score: 1.5 },
 			{ index: 1, relevance_score: -0.3 },
 		])
@@ -292,6 +284,7 @@ describe("crossEncoderRerank", () => {
 			query: QUERY,
 			results,
 			config,
+			fetchFn,
 		})
 
 		expect(out.reranked).toBe(true)
@@ -303,7 +296,7 @@ describe("crossEncoderRerank", () => {
 		const results = makeResults(2)
 		const config = makeConfig({ model: "rerank-2.5-lite" })
 
-		globalThis.fetch = mockFetchSuccess([
+		const fetchFn = mockFetchSuccess([
 			{ index: 0, relevance_score: 0.9 },
 			{ index: 1, relevance_score: 0.8 },
 		])
@@ -315,12 +308,10 @@ describe("crossEncoderRerank", () => {
 			query: QUERY,
 			results,
 			config,
+			fetchFn,
 		})
 
-		const body = JSON.parse(
-			(globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0][1]
-				.body as string,
-		)
+		const body = JSON.parse(fetchFn.mock.calls[0][1].body as string)
 		expect(body.model).toBe("rerank-2.5-lite")
 	})
 
@@ -331,7 +322,7 @@ describe("crossEncoderRerank", () => {
 				"This is agent conversation memory. Prioritize recent results.",
 		})
 
-		globalThis.fetch = mockFetchSuccess([
+		const fetchFn = mockFetchSuccess([
 			{ index: 0, relevance_score: 0.9 },
 			{ index: 1, relevance_score: 0.8 },
 		])
@@ -343,12 +334,10 @@ describe("crossEncoderRerank", () => {
 			query: QUERY,
 			results,
 			config,
+			fetchFn,
 		})
 
-		const body = JSON.parse(
-			(globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0][1]
-				.body as string,
-		)
+		const body = JSON.parse(fetchFn.mock.calls[0][1].body as string)
 		expect(body.query).toBe(
 			`This is agent conversation memory. Prioritize recent results.\n${QUERY}`,
 		)
@@ -361,7 +350,7 @@ describe("crossEncoderRerank", () => {
 		const config = makeConfig()
 		const providerOutcomes: Array<"attempted" | "succeeded" | "failed"> = []
 
-		globalThis.fetch = vi.fn().mockResolvedValue({
+		const fetchFn = vi.fn().mockResolvedValue({
 			ok: false,
 			status: 429,
 			json: () => Promise.resolve({ error: "rate limited" }),
@@ -375,6 +364,7 @@ describe("crossEncoderRerank", () => {
 			results,
 			config,
 			onProviderCall: (outcome) => providerOutcomes.push(outcome),
+			fetchFn,
 		})
 
 		expect(out.reranked).toBe(false)
@@ -385,7 +375,7 @@ describe("crossEncoderRerank", () => {
 	it("disables automatic redirects on reranker requests", async () => {
 		const results = makeResults(3)
 		const config = makeConfig()
-		globalThis.fetch = vi.fn().mockResolvedValue({
+		const fetchFn = vi.fn().mockResolvedValue({
 			ok: false,
 			status: 302,
 		})
@@ -397,18 +387,17 @@ describe("crossEncoderRerank", () => {
 			query: QUERY,
 			results,
 			config,
+			fetchFn,
 		})
 
-		expect(
-			(globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0]?.[1],
-		).toMatchObject({ redirect: "manual" })
+		expect(fetchFn.mock.calls[0]?.[1]).toMatchObject({ redirect: "manual" })
 	})
 
 	it("falls back on network error", async () => {
 		const results = makeResults(3)
 		const config = makeConfig()
 
-		globalThis.fetch = vi.fn().mockRejectedValue(new Error("network timeout"))
+		const fetchFn = vi.fn().mockRejectedValue(new Error("network timeout"))
 
 		const out = await crossEncoderRerank({
 			db: DB,
@@ -417,6 +406,7 @@ describe("crossEncoderRerank", () => {
 			query: QUERY,
 			results,
 			config,
+			fetchFn,
 		})
 
 		expect(out.reranked).toBe(false)
@@ -427,7 +417,7 @@ describe("crossEncoderRerank", () => {
 		const results = makeResults(3)
 		const config = makeConfig()
 
-		globalThis.fetch = vi.fn().mockResolvedValue({
+		const fetchFn = vi.fn().mockResolvedValue({
 			ok: true,
 			json: () => Promise.reject(new Error("invalid json")),
 		})
@@ -439,6 +429,7 @@ describe("crossEncoderRerank", () => {
 			query: QUERY,
 			results,
 			config,
+			fetchFn,
 		})
 
 		expect(out.reranked).toBe(false)
@@ -449,7 +440,7 @@ describe("crossEncoderRerank", () => {
 		const results = makeResults(3)
 		const config = makeConfig()
 
-		globalThis.fetch = vi.fn().mockResolvedValue({
+		const fetchFn = vi.fn().mockResolvedValue({
 			ok: true,
 			json: () => Promise.resolve({ results: [] }), // wrong key: 'results' instead of 'data'
 		})
@@ -461,6 +452,7 @@ describe("crossEncoderRerank", () => {
 			query: QUERY,
 			results,
 			config,
+			fetchFn,
 		})
 
 		expect(out.reranked).toBe(false)
@@ -473,7 +465,7 @@ describe("crossEncoderRerank", () => {
 		const results = makeResults(3)
 		const config = makeConfig()
 
-		globalThis.fetch = mockFetchSuccess([
+		const fetchFn = mockFetchSuccess([
 			{ index: 0, relevance_score: 0.9 },
 			{ index: 1, relevance_score: 0.8 },
 			{ index: 2, relevance_score: 0.7 },
@@ -486,6 +478,7 @@ describe("crossEncoderRerank", () => {
 			query: QUERY,
 			results,
 			config,
+			fetchFn,
 		})
 
 		expect(out.reranked).toBe(true)
@@ -505,7 +498,7 @@ describe("crossEncoderRerank", () => {
 		const results = makeResults(3)
 		const config = makeConfig()
 
-		globalThis.fetch = vi.fn().mockRejectedValue(new Error("network down"))
+		const fetchFn = vi.fn().mockRejectedValue(new Error("network down"))
 
 		const out = await crossEncoderRerank({
 			db: DB,
@@ -514,6 +507,7 @@ describe("crossEncoderRerank", () => {
 			query: QUERY,
 			results,
 			config,
+			fetchFn,
 		})
 
 		expect(out.reranked).toBe(false)
@@ -535,7 +529,7 @@ describe("crossEncoderRerank", () => {
 		const config = makeConfig()
 
 		// Mock fetch that respects the AbortSignal (like real fetch does)
-		globalThis.fetch = vi.fn(
+		const fetchFn = vi.fn(
 			(_url: string | URL | Request, init?: RequestInit) => {
 				return new Promise<Response>((_resolve, reject) => {
 					if (init?.signal) {
@@ -557,14 +551,14 @@ describe("crossEncoderRerank", () => {
 			query: QUERY,
 			results,
 			config,
+			fetchFn,
 		})
 
 		// Should fall back gracefully, not hang
 		expect(out.reranked).toBe(false)
 		expect(out.results).toBe(results)
 		// Verify AbortSignal.timeout was passed
-		const fetchCall = (globalThis.fetch as ReturnType<typeof vi.fn>).mock
-			.calls[0]
+		const fetchCall = fetchFn.mock.calls[0]
 		expect(fetchCall[1].signal).toBeDefined()
 	}, 15_000)
 
@@ -580,7 +574,7 @@ describe("crossEncoderRerank", () => {
 		const config = makeConfig()
 
 		// Mock fetch to return reranked indices for non-empty docs only
-		globalThis.fetch = mockFetchSuccess([
+		const fetchFn = mockFetchSuccess([
 			{ index: 0, relevance_score: 0.95 },
 			{ index: 1, relevance_score: 0.85 },
 		])
@@ -592,14 +586,12 @@ describe("crossEncoderRerank", () => {
 			query: QUERY,
 			results,
 			config,
+			fetchFn,
 		})
 
 		expect(out.reranked).toBe(true)
 		// Only 2 non-empty snippets should be sent to API
-		const body = JSON.parse(
-			(globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0][1]
-				.body as string,
-		)
+		const body = JSON.parse(fetchFn.mock.calls[0][1].body as string)
 		expect(body.documents.length).toBe(2)
 		expect(body.documents).toEqual([
 			"Alice works on ProjectX",
@@ -635,7 +627,7 @@ describe("crossEncoderRerank", () => {
 		const results = makeResults(3)
 		const config = makeConfig()
 
-		globalThis.fetch = vi.fn().mockRejectedValue(new Error("network error"))
+		const fetchFn = vi.fn().mockRejectedValue(new Error("network error"))
 
 		const out = await crossEncoderRerank({
 			db: DB,
@@ -644,6 +636,7 @@ describe("crossEncoderRerank", () => {
 			query: QUERY,
 			results,
 			config,
+			fetchFn,
 		})
 
 		expect(out.reranked).toBe(false)

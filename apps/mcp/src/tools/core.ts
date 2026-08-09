@@ -57,6 +57,11 @@ export const coreTools: readonly McpToolDefinition[] = [
 			properties: {
 				query: { type: "string" },
 				agentId: { type: "string" },
+				scope: {
+					type: "string",
+					enum: memoryScopeEnum,
+				},
+				scopeRef: { type: "string" },
 				limit: { type: "number" },
 				maxResults: { type: "number" },
 				minScore: { type: "number" },
@@ -322,6 +327,15 @@ export const coreTools: readonly McpToolDefinition[] = [
 						"Semantic search query for conversation content. Omit for filter-only recall.",
 				},
 				agentId: { type: "string" },
+				scope: {
+					type: "string",
+					enum: memoryScopeEnum,
+					description: "Optional memory isolation scope for recall.",
+				},
+				scopeRef: {
+					type: "string",
+					description: "Optional reference for the selected memory scope.",
+				},
 				sessionId: {
 					type: "string",
 					description: "Filter to a specific conversation session.",
@@ -423,6 +437,10 @@ export const coreTools: readonly McpToolDefinition[] = [
 			type: "object",
 			properties: {
 				agentId: { type: "string" },
+				scope: {
+					type: "string",
+					enum: memoryScopeEnum,
+				},
 				scopeRef: { type: "string" },
 			},
 		},
@@ -436,7 +454,10 @@ export const coreTools: readonly McpToolDefinition[] = [
 			type: "object",
 			properties: {
 				agentId: { type: "string" },
-				scope: { type: "string" },
+				scope: {
+					type: "string",
+					enum: memoryScopeEnum,
+				},
 				scopeRef: { type: "string" },
 			},
 		},

@@ -13,6 +13,11 @@ export const adminTools: readonly McpToolDefinition[] = [
 				query: { type: "string" },
 				agentId: { type: "string" },
 				limit: { type: "number" },
+				scope: {
+					type: "string",
+					enum: [...MEMORY_SCOPE_VALUES],
+					description: "Restrict results to this memory isolation scope.",
+				},
 				scopeRef: {
 					type: "string",
 					description:
@@ -220,7 +225,11 @@ export const adminTools: readonly McpToolDefinition[] = [
 			properties: {
 				agentId: { type: "string" },
 				limit: { type: "number" },
-				scope: { type: "string" },
+				scope: {
+					type: "string",
+					enum: [...MEMORY_SCOPE_VALUES],
+				},
+				scopeRef: { type: "string" },
 			},
 		},
 		category: "admin",
@@ -237,7 +246,10 @@ export const adminTools: readonly McpToolDefinition[] = [
 				minCombinedScore: { type: "number" },
 				resolveContradictions: { type: "boolean" },
 				llmDedup: { type: "boolean" },
-				scope: { type: "string" },
+				scope: {
+					type: "string",
+					enum: [...MEMORY_SCOPE_VALUES],
+				},
 				scopeRef: { type: "string" },
 			},
 		},
@@ -257,6 +269,7 @@ export const adminTools: readonly McpToolDefinition[] = [
 					// Canonical scope enum from the single contract source (P2.2).
 					enum: [...MEMORY_SCOPE_VALUES],
 				},
+				scopeRef: { type: "string" },
 				limitConversations: { type: "integer", minimum: 1 },
 				limitTurnsPerConversation: { type: "integer", minimum: 1 },
 			},
@@ -394,7 +407,10 @@ export const adminTools: readonly McpToolDefinition[] = [
 			type: "object",
 			properties: {
 				agentId: { type: "string" },
-				scope: { type: "string" },
+				scope: {
+					type: "string",
+					enum: [...MEMORY_SCOPE_VALUES],
+				},
 				scopeRef: { type: "string" },
 				maxItems: { type: "number" },
 			},
@@ -419,7 +435,10 @@ export const adminTools: readonly McpToolDefinition[] = [
 				},
 				query: { type: "string" },
 				agentId: { type: "string" },
-				scope: { type: "string" },
+				scope: {
+					type: "string",
+					enum: [...MEMORY_SCOPE_VALUES],
+				},
 				scopeRef: { type: "string" },
 				maxItems: { type: "number" },
 			},

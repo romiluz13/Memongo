@@ -173,31 +173,33 @@ describe("extractTypedRelations", () => {
 		expect(provider.chatCompletion).not.toHaveBeenCalled()
 	})
 
-	it("degrades to [] when the LLM throws", async () => {
+	it("surfaces LLM failures so the durable job can retry", async () => {
 		const provider: EnrichmentProvider = {
 			name: "mock",
 			chatCompletion: vi.fn(async () => {
 				throw new Error("boom")
 			}),
 		}
-		const result = await extractTypedRelations({
-			provider,
-			model: "m",
-			text: "x",
-			entities: ENTITIES,
-		})
-		expect(result).toEqual([])
+		await expect(
+			extractTypedRelations({
+				provider,
+				model: "m",
+				text: "x",
+				entities: ENTITIES,
+			}),
+		).rejects.toThrow("boom")
 	})
 
-	it("degrades to [] on unparseable JSON", async () => {
+	it("surfaces unparseable responses so the durable job can retry", async () => {
 		const provider = providerReturning("not json")
-		const result = await extractTypedRelations({
-			provider,
-			model: "m",
-			text: "x",
-			entities: ENTITIES,
-		})
-		expect(result).toEqual([])
+		await expect(
+			extractTypedRelations({
+				provider,
+				model: "m",
+				text: "x",
+				entities: ENTITIES,
+			}),
+		).rejects.toThrow()
 	})
 
 	it("deduplicates identical (from,to,type) triples", async () => {

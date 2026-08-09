@@ -1891,7 +1891,8 @@ export async function extractAndUpsertEntities(params: {
  * relation reuses upsertRelation (so it inherits the same versioning/exclusivity
  * machinery as any other edge) and carries the extraction confidence as weight
  * plus llm-relation-extraction provenance. Tenant-scoped by (agentId, scope,
- * scopeRef) from the event; never throws.
+ * scopeRef) from the event. Provider and persistence failures propagate so the
+ * durable extraction job can retry.
  */
 export async function extractAndUpsertTypedRelations(params: {
 	db: Db
@@ -1906,6 +1907,7 @@ export async function extractAndUpsertTypedRelations(params: {
 	model: string
 	sourceEventId?: string
 	validFrom?: Date
+	leaseFence?: () => Promise<boolean>
 }): Promise<number> {
 	const {
 		db,
@@ -1931,6 +1933,9 @@ export async function extractAndUpsertTypedRelations(params: {
 		})
 		let created = 0
 		for (const rel of relations) {
+			if (params.leaseFence && (await params.leaseFence())) {
+				return created
+			}
 			const result = await upsertRelation({
 				db,
 				prefix,
@@ -1962,7 +1967,7 @@ export async function extractAndUpsertTypedRelations(params: {
 		log.warn(
 			`extractAndUpsertTypedRelations failed: ${err instanceof Error ? err.message : String(err)}`,
 		)
-		return 0
+		throw err
 	}
 }
 

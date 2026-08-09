@@ -14,7 +14,10 @@ import {
 	extractAndUpsertEntities,
 	extractAndUpsertTypedRelations,
 } from "./mongodb-graph.js"
-import { updateLaneCoverage } from "./mongodb-lane-coverage.js"
+import {
+	markLaneAvailable,
+	updateLaneCoverage,
+} from "./mongodb-lane-coverage.js"
 import {
 	resolveEnrichmentProvider,
 	enrichSessionsWithLLM,
@@ -41,6 +44,23 @@ const log = createSubsystemLogger("memory:mongodb")
 
 function elapsedMsSince(startedAt: Date): number {
 	return Math.max(0, Date.now() - startedAt.getTime())
+}
+
+function normalizeFactEvidence(value: string): string {
+	return value
+		.normalize("NFKC")
+		.toLowerCase()
+		.replace(/[^\p{L}\p{N}]+/gu, " ")
+		.trim()
+}
+
+function bodySupportsFact(body: string, fact: string): boolean {
+	const normalizedBody = normalizeFactEvidence(body)
+	const normalizedFact = normalizeFactEvidence(fact)
+	return (
+		normalizedFact.length > 0 &&
+		` ${normalizedBody} `.includes(` ${normalizedFact} `)
+	)
 }
 
 /**
@@ -242,7 +262,7 @@ export class MongoDBManagerJobsOps {
 			if (await leaseFence("entity extraction")) {
 				return
 			}
-			await extractAndUpsertEntities({
+			const entityResult = await extractAndUpsertEntities({
 				db: this.host.db,
 				prefix: this.host.prefix,
 				agentId: this.host.agentId,
@@ -252,6 +272,21 @@ export class MongoDBManagerJobsOps {
 				sourceEventId: eventDoc.eventId,
 				role: eventDoc.role,
 			})
+			if (entityResult.entities.length > 0) {
+				if (await leaseFence("graph lane availability")) {
+					return
+				}
+				// Availability is a separate idempotent bit from the useful
+				// successful-job count. Persist it as soon as graph entities exist
+				// so a permanent failure in promotion or relation extraction cannot
+				// leave those entities gated from retrieval.
+				await markLaneAvailable({
+					db: this.host.db,
+					prefix: this.host.prefix,
+					agentId: this.host.agentId,
+					lane: "graph",
+				})
+			}
 
 			// LLM fact extraction (issue #30): degrade to regex-only when the
 			// provider is unconfigured or misconfigured.
@@ -319,7 +354,7 @@ export class MongoDBManagerJobsOps {
 			}
 
 			// Typed semantic edge extraction (issue #34): LLM-only, background-only.
-			// Read the entities already upserted synchronously for this event — do
+			// Read the entities already upserted earlier in this job for the event — do
 			// NOT re-extract, which would double-increment the indexed mentionCount.
 			if (enrichmentProvider) {
 				try {
@@ -342,6 +377,9 @@ export class MongoDBManagerJobsOps {
 						}))
 						.filter((e) => e.entityId && e.name)
 					if (eventEntities.length >= 2) {
+						if (await leaseFence("typed relation extraction")) {
+							return
+						}
 						const relationProvider = runContext
 							? instrumentOperationProvider({
 									provider: enrichmentProvider,
@@ -363,6 +401,7 @@ export class MongoDBManagerJobsOps {
 							model: enrichmentModel,
 							sourceEventId: eventDoc.eventId,
 							validFrom: eventDoc.timestamp,
+							leaseFence: () => leaseFence("typed relation write"),
 						})
 						// Surface the pass so silent degradation to mentioned_with-only
 						// is observable rather than an invisible no-op.
@@ -489,8 +528,37 @@ export class MongoDBManagerJobsOps {
 				return
 			}
 			const sessionFacts = await this.host.prefetchExtractionSessionFacts(jobs)
+			const stillOwned = await Promise.all(
+				jobs.map(async (job) => {
+					try {
+						const renewed = await renewMemoryJobLease({
+							db: this.host.db,
+							prefix: this.host.prefix,
+							jobId: job.jobId,
+							agentId: this.host.agentId,
+							leaseOwner: job.leaseOwner,
+							leaseToken: job.leaseToken,
+							leaseMs: MEMORY_JOB_LEASE_MS,
+						})
+						if (!renewed) {
+							log.warn(
+								`extraction job lease lost during session prefetch: ${job.jobId}`,
+							)
+						}
+						return renewed
+					} catch (err) {
+						log.warn(
+							`extraction job ownership check failed after session prefetch: ${job.jobId}: ${String(err)}`,
+						)
+						return false
+					}
+				}),
+			)
 			await Promise.all(
-				jobs.map((job) => {
+				jobs.map((job, index) => {
+					if (!stillOwned[index]) {
+						return Promise.resolve()
+					}
 					const eventId =
 						job.payload?.eventId?.trim() ||
 						(typeof job.metadata?.eventId === "string"
@@ -508,11 +576,11 @@ export class MongoDBManagerJobsOps {
 	/**
 	 * P3.9: batch the round's LLM fact extraction per session. One batched
 	 * read fetches the claimed events; every group of 2+ events sharing a
-	 * session gets ONE extractSessionEnrichment call whose facts are handed
-	 * to each event's promotion (per-event events keep their own call inside
-	 * the job runner). Purely read-only: a job that loses its lease mid-round
-	 * is still fenced before any side effect — the prefetch only wastes an
-	 * LLM call, never a write.
+	 * session gets ONE extractSessionEnrichment call. Each fact is handed only
+	 * to events whose own body supports it; unsupported events keep the
+	 * per-event provider fallback inside the job runner. Purely read-only: a
+	 * job that loses its lease mid-round is still fenced before any side
+	 * effect — the prefetch only wastes an LLM call, never a write.
 	 */
 	async prefetchExtractionSessionFacts(
 		jobs: ClaimedMemoryJob[],
@@ -585,7 +653,7 @@ export class MongoDBManagerJobsOps {
 			if (!doc.sessionId) {
 				continue
 			}
-			const key = `${doc.scope}::${doc.scopeRef}::${doc.sessionId}`
+			const key = JSON.stringify([doc.scope, doc.scopeRef, doc.sessionId])
 			const group = groups.get(key) ?? []
 			group.push(doc)
 			groups.set(key, group)
@@ -624,7 +692,12 @@ export class MongoDBManagerJobsOps {
 						return
 					}
 					for (const doc of group) {
-						facts.set(doc.eventId, enrichment.facts)
+						const supportedFacts = enrichment.facts.filter((fact) =>
+							bodySupportsFact(doc.body, fact),
+						)
+						if (supportedFacts.length > 0) {
+							facts.set(doc.eventId, supportedFacts)
+						}
 					}
 				} catch (err) {
 					log.warn(

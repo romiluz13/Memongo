@@ -128,6 +128,8 @@ export const MEMONGO_API_ROUTES: readonly ApiRouteContract[] = [
 		optionalFields: [
 			"agentId",
 			"query",
+			"scope",
+			"scopeRef",
 			"sessionId",
 			"roles",
 			"startTime",
@@ -149,6 +151,7 @@ export const MEMONGO_API_ROUTES: readonly ApiRouteContract[] = [
 		optionalFields: [
 			"agentId",
 			"scope",
+			"scopeRef",
 			"limitConversations",
 			"limitTurnsPerConversation",
 		],

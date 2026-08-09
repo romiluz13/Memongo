@@ -238,12 +238,12 @@ describe("P3.9 extraction worker concurrency + session-batched LLM", () => {
 		}
 	}
 
-	function makeEventDoc(eventId: string, sessionId?: string) {
+	function makeEventDoc(eventId: string, sessionId?: string, body?: string) {
 		return {
 			eventId,
 			agentId: "agent-1",
 			role: "user" as const,
-			body: `Remember this fact from ${eventId}.`,
+			body: body ?? `Remember this fact from ${eventId}.`,
 			timestamp: new Date("2026-04-09T12:00:00.000Z"),
 			...(sessionId ? { sessionId } : {}),
 			scope: "agent" as const,
@@ -399,8 +399,16 @@ describe("P3.9 extraction worker concurrency + session-batched LLM", () => {
 			.mockReturnValue(provider as never)
 		try {
 			const docs = [
-				makeEventDoc("evt-s1a", "session-1"),
-				makeEventDoc("evt-s1b", "session-1"),
+				makeEventDoc(
+					"evt-s1a",
+					"session-1",
+					"Remember this shared session fact.",
+				),
+				makeEventDoc(
+					"evt-s1b",
+					"session-1",
+					"Remember this shared session fact.",
+				),
 				makeEventDoc("evt-s2", "session-2"),
 			]
 			const { claimMemoryJob, promoteDerivedMemoryFromEvent } =
@@ -441,6 +449,241 @@ describe("P3.9 extraction worker concurrency + session-batched LLM", () => {
 		}
 	})
 
+	it("keeps delimiter-bearing scope tuples in separate extraction batches", async () => {
+		const enrichment = await import("./mongodb-llm-enrichment.js")
+		const provider = {
+			name: "mock-provider",
+			chatCompletion: vi.fn(async () => ({
+				content: JSON.stringify({
+					facts: ["alpha tuple fact", "beta tuple fact"],
+					qa_pairs: [],
+					has_personal_content: true,
+				}),
+			})),
+		}
+		const providerSpy = vi
+			.spyOn(enrichment, "resolveEnrichmentProvider")
+			.mockReturnValue(provider as never)
+		vi.stubEnv("MEMONGO_JOB_WORKER_CONCURRENCY", "4")
+		try {
+			const docs = [
+				{
+					...makeEventDoc(
+						"evt-alpha-1",
+						"tail",
+						"Remember this alpha tuple fact.",
+					),
+					scopeRef: "left::right",
+				},
+				{
+					...makeEventDoc(
+						"evt-alpha-2",
+						"tail",
+						"Remember this alpha tuple fact.",
+					),
+					scopeRef: "left::right",
+				},
+				{
+					...makeEventDoc(
+						"evt-beta-1",
+						"right::tail",
+						"Remember this beta tuple fact.",
+					),
+					scopeRef: "left",
+				},
+				{
+					...makeEventDoc(
+						"evt-beta-2",
+						"right::tail",
+						"Remember this beta tuple fact.",
+					),
+					scopeRef: "left",
+				},
+			]
+			const { claimMemoryJob, promoteDerivedMemoryFromEvent } =
+				await mockJobRunBase(docs)
+			for (const doc of docs) {
+				mocked(claimMemoryJob).mockResolvedValueOnce(
+					makeExtractionJob(doc.eventId),
+				)
+			}
+			mocked(claimMemoryJob).mockResolvedValue(null)
+			mocked(promoteDerivedMemoryFromEvent).mockResolvedValue({
+				structuredCreated: 1,
+				proceduresCreated: 0,
+				skipped: false,
+			})
+
+			const manager = makeDrainManager()
+			await drainLifecycle.drainMemoryJobQueue.call(manager)
+
+			expect(provider.chatCompletion).toHaveBeenCalledTimes(2)
+			const byEvent = new Map(
+				mocked(promoteDerivedMemoryFromEvent).mock.calls.map((call) => [
+					(call[0] as { event: { eventId: string } }).event.eventId,
+					(call[0] as { prefetchedLlmFacts?: string[] }).prefetchedLlmFacts,
+				]),
+			)
+			expect(byEvent.get("evt-alpha-1")).toEqual(["alpha tuple fact"])
+			expect(byEvent.get("evt-alpha-2")).toEqual(["alpha tuple fact"])
+			expect(byEvent.get("evt-beta-1")).toEqual(["beta tuple fact"])
+			expect(byEvent.get("evt-beta-2")).toEqual(["beta tuple fact"])
+		} finally {
+			providerSpy.mockRestore()
+			vi.unstubAllEnvs()
+		}
+	})
+
+	it("prefetches a session fact only to events whose bodies support it", async () => {
+		const enrichment = await import("./mongodb-llm-enrichment.js")
+		const provider = {
+			name: "mock-provider",
+			chatCompletion: vi.fn(async () => ({
+				content: JSON.stringify({
+					facts: ["Alice owns a blue bicycle."],
+					qa_pairs: [],
+					has_personal_content: true,
+				}),
+			})),
+		}
+		const providerSpy = vi
+			.spyOn(enrichment, "resolveEnrichmentProvider")
+			.mockReturnValue(provider as never)
+		try {
+			const docs = [
+				makeEventDoc(
+					"evt-evidence-a",
+					"session-evidence",
+					"ALICE owns a blue, bicycle!",
+				),
+				makeEventDoc(
+					"evt-evidence-b",
+					"session-evidence",
+					"Bob owns a red scooter.",
+				),
+			]
+			const { claimMemoryJob, promoteDerivedMemoryFromEvent } =
+				await mockJobRunBase(docs)
+			mocked(claimMemoryJob)
+				.mockResolvedValueOnce(makeExtractionJob("evt-evidence-a"))
+				.mockResolvedValueOnce(makeExtractionJob("evt-evidence-b"))
+				.mockResolvedValue(null)
+			mocked(promoteDerivedMemoryFromEvent).mockResolvedValue({
+				structuredCreated: 1,
+				proceduresCreated: 0,
+				skipped: false,
+			})
+
+			const manager = makeDrainManager()
+			await drainLifecycle.drainMemoryJobQueue.call(manager)
+
+			expect(provider.chatCompletion).toHaveBeenCalledTimes(1)
+			const promoteCalls = mocked(promoteDerivedMemoryFromEvent).mock.calls
+			const byEvent = new Map(
+				promoteCalls.map((call) => [
+					(call[0] as { event: { eventId: string } }).event.eventId,
+					call[0] as { prefetchedLlmFacts?: string[] },
+				]),
+			)
+			expect(byEvent.get("evt-evidence-a")?.prefetchedLlmFacts).toEqual([
+				"Alice owns a blue bicycle.",
+			])
+			expect(byEvent.get("evt-evidence-b")?.prefetchedLlmFacts).toBeUndefined()
+		} finally {
+			providerSpy.mockRestore()
+		}
+	})
+
+	it("discards prefetched work for a reclaimed job while its sibling proceeds", async () => {
+		const enrichment = await import("./mongodb-llm-enrichment.js")
+		const { extractAndUpsertEntities, extractAndUpsertTypedRelations } =
+			await import("./mongodb-graph.js")
+		let releasePrefetch: (() => void) | undefined
+		const prefetchGate = new Promise<void>((resolve) => {
+			releasePrefetch = resolve
+		})
+		const provider = {
+			name: "mock-provider",
+			chatCompletion: vi.fn(async () => {
+				await prefetchGate
+				return {
+					content: JSON.stringify({
+						facts: ["owned fact"],
+						qa_pairs: [],
+						has_personal_content: true,
+					}),
+				}
+			}),
+		}
+		const providerSpy = vi
+			.spyOn(enrichment, "resolveEnrichmentProvider")
+			.mockReturnValue(provider as never)
+		try {
+			const docs = [
+				makeEventDoc(
+					"evt-reclaimed",
+					"session-owned",
+					"Remember this owned fact.",
+				),
+				makeEventDoc("evt-owned", "session-owned", "Remember this owned fact."),
+			]
+			const {
+				claimMemoryJob,
+				completeClaimedMemoryJob,
+				renewMemoryJobLease,
+				promoteDerivedMemoryFromEvent,
+			} = await mockJobRunBase(docs)
+			const { failClaimedMemoryJob } = await import("./mongodb-memory-jobs.js")
+			mocked(claimMemoryJob)
+				.mockResolvedValueOnce(makeExtractionJob("evt-reclaimed"))
+				.mockResolvedValueOnce(makeExtractionJob("evt-owned"))
+				.mockResolvedValue(null)
+			mocked(renewMemoryJobLease).mockImplementation(
+				async ({ jobId }: { jobId: string }) =>
+					jobId !== "extraction-evt-reclaimed",
+			)
+			mocked(promoteDerivedMemoryFromEvent).mockResolvedValue({
+				structuredCreated: 1,
+				proceduresCreated: 0,
+				skipped: false,
+			})
+
+			const manager = makeDrainManager()
+			const drain = drainLifecycle.drainMemoryJobQueue.call(manager)
+			await vi.waitFor(() => {
+				expect(provider.chatCompletion).toHaveBeenCalledOnce()
+			})
+			releasePrefetch?.()
+			await drain
+
+			expect(renewMemoryJobLease).toHaveBeenCalledWith(
+				expect.objectContaining({ jobId: "extraction-evt-reclaimed" }),
+			)
+			expect(renewMemoryJobLease).toHaveBeenCalledWith(
+				expect.objectContaining({ jobId: "extraction-evt-owned" }),
+			)
+			expect(
+				mocked(extractAndUpsertEntities).mock.calls.map(
+					(call) => (call[0] as { sourceEventId: string }).sourceEventId,
+				),
+			).toEqual(["evt-owned"])
+			expect(
+				mocked(promoteDerivedMemoryFromEvent).mock.calls.map(
+					(call) => (call[0] as { event: { eventId: string } }).event.eventId,
+				),
+			).toEqual(["evt-owned"])
+			expect(extractAndUpsertTypedRelations).not.toHaveBeenCalled()
+			expect(
+				mocked(completeClaimedMemoryJob).mock.calls.map(
+					(call) => (call[0] as { jobId: string }).jobId,
+				),
+			).toEqual(["extraction-evt-owned"])
+			expect(failClaimedMemoryJob).not.toHaveBeenCalled()
+		} finally {
+			providerSpy.mockRestore()
+		}
+	})
+
 	it("fences a job that loses its lease mid-batch while its sibling completes", async () => {
 		vi.useFakeTimers()
 		try {
@@ -456,10 +699,15 @@ describe("P3.9 extraction worker concurrency + session-batched LLM", () => {
 				.mockResolvedValueOnce(makeExtractionJob("evt-fenced"))
 				.mockResolvedValueOnce(makeExtractionJob("evt-healthy"))
 				.mockResolvedValue(null)
-			// The fenced job's heartbeat renewal fails; the sibling's succeeds.
+			// Both jobs pass the post-prefetch ownership check. The fenced job
+			// then loses its lease on the first in-run heartbeat.
+			const renewalsByJob = new Map<string, number>()
 			mocked(renewMemoryJobLease).mockImplementation(
-				async ({ jobId }: { jobId: string }) =>
-					jobId !== "extraction-evt-fenced",
+				async ({ jobId }: { jobId: string }) => {
+					const renewal = (renewalsByJob.get(jobId) ?? 0) + 1
+					renewalsByJob.set(jobId, renewal)
+					return jobId !== "extraction-evt-fenced" || renewal === 1
+				},
 			)
 			const started: string[] = []
 			let releaseGate: (() => void) | undefined
@@ -541,27 +789,36 @@ describe("C3: typed-relation failure surfacing", () => {
 	}
 
 	async function primeExtractionJob() {
-		const { claimMemoryJob, completeClaimedMemoryJob, failClaimedMemoryJob } =
-			await import("./mongodb-memory-jobs.js")
+		const {
+			claimMemoryJob,
+			completeClaimedMemoryJob,
+			failClaimedMemoryJob,
+			renewMemoryJobLease,
+		} = await import("./mongodb-memory-jobs.js")
 		const { eventsCollection, entitiesCollection } = await import(
 			"./mongodb-schema.js"
 		)
 		const { promoteDerivedMemoryFromEvent } = await import(
 			"./mongodb-derived-memory.js"
 		)
-		const { extractAndUpsertTypedRelations } = await import(
-			"./mongodb-graph.js"
-		)
+		const { extractAndUpsertEntities, extractAndUpsertTypedRelations } =
+			await import("./mongodb-graph.js")
 		const { recordProjectionRun } = await import("./mongodb-ops.js")
 
 		// This describe has no file-level beforeEach: clear call history AND
 		// implementations explicitly so one test's mocks cannot leak into the
 		// next (clearAllMocks elsewhere drops history but not implementations).
 		mocked(extractAndUpsertTypedRelations).mockReset()
+		mocked(extractAndUpsertEntities).mockReset()
+		mocked(extractAndUpsertEntities).mockResolvedValue({
+			entities: [],
+			relationsCreated: 0,
+		})
 		mocked(recordProjectionRun).mockClear()
 		mocked(claimMemoryJob).mockClear()
 		mocked(completeClaimedMemoryJob).mockClear()
 		mocked(failClaimedMemoryJob).mockClear()
+		mocked(renewMemoryJobLease).mockReset()
 		mocked(claimMemoryJob)
 			.mockResolvedValueOnce({
 				jobId: "extraction-c3",
@@ -579,6 +836,7 @@ describe("C3: typed-relation failure surfacing", () => {
 			.mockResolvedValueOnce(null)
 		mocked(completeClaimedMemoryJob).mockResolvedValue(true)
 		mocked(failClaimedMemoryJob).mockResolvedValue(true)
+		mocked(renewMemoryJobLease).mockResolvedValue(true)
 		mocked(eventsCollection).mockReturnValue({
 			findOne: vi.fn(async () => ({
 				eventId: "evt-c3",
@@ -608,6 +866,7 @@ describe("C3: typed-relation failure surfacing", () => {
 			claimMemoryJob,
 			completeClaimedMemoryJob,
 			failClaimedMemoryJob,
+			renewMemoryJobLease,
 			extractAndUpsertTypedRelations,
 			recordProjectionRun,
 		}
@@ -618,6 +877,53 @@ describe("C3: typed-relation failure surfacing", () => {
 		vi.stubEnv("MEMONGO_ENRICHMENT_BASE_URL", "https://llm.example/v1")
 		vi.stubEnv("MEMONGO_ENRICHMENT_MODEL", "test-model")
 	}
+
+	it("fences typed relation writes after lease loss during entity loading", async () => {
+		vi.useFakeTimers()
+		stubEnrichmentEnv()
+		try {
+			const {
+				completeClaimedMemoryJob,
+				failClaimedMemoryJob,
+				renewMemoryJobLease,
+				extractAndUpsertTypedRelations,
+			} = await primeExtractionJob()
+			const { entitiesCollection } = await import("./mongodb-schema.js")
+			mocked(renewMemoryJobLease)
+				.mockResolvedValueOnce(true)
+				.mockResolvedValue(false)
+			let releaseEntities: (() => void) | undefined
+			const entityGate = new Promise<void>((resolve) => {
+				releaseEntities = resolve
+			})
+			const toArray = vi.fn(async () => {
+				await entityGate
+				return [
+					{ entityId: "ent-alice", name: "Alice" },
+					{ entityId: "ent-bob", name: "Bob" },
+				]
+			})
+			mocked(entitiesCollection).mockReturnValue({
+				find: vi.fn(() => ({ toArray })),
+			} as unknown as import("mongodb").Collection)
+			const { manager, lifecycle } = buildWorkerManager()
+
+			lifecycle.startMemoryJobWorker.call(manager)
+			await vi.waitFor(() => {
+				expect(toArray).toHaveBeenCalledOnce()
+			})
+			await vi.advanceTimersByTimeAsync(20_001)
+			releaseEntities?.()
+			await manager.memoryJobWorkerPromise
+
+			expect(extractAndUpsertTypedRelations).not.toHaveBeenCalled()
+			expect(completeClaimedMemoryJob).not.toHaveBeenCalled()
+			expect(failClaimedMemoryJob).not.toHaveBeenCalled()
+		} finally {
+			vi.useRealTimers()
+			vi.unstubAllEnvs()
+		}
+	})
 
 	it("a typed-relation failure fails the job (retry path) instead of completing silently", async () => {
 		stubEnrichmentEnv()
@@ -677,6 +983,9 @@ describe("C3: typed-relation failure surfacing", () => {
 
 			expect(completeClaimedMemoryJob).toHaveBeenCalledWith(
 				expect.objectContaining({ jobId: "extraction-c3" }),
+			)
+			expect(extractAndUpsertTypedRelations).toHaveBeenCalledWith(
+				expect.objectContaining({ leaseFence: expect.any(Function) }),
 			)
 			expect(failClaimedMemoryJob).not.toHaveBeenCalled()
 			expect(recordProjectionRun).toHaveBeenCalledWith(

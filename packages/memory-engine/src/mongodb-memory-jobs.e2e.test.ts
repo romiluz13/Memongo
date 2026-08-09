@@ -12,6 +12,7 @@ import {
 	failClaimedMemoryJob,
 	MEMORY_JOB_MAX_ATTEMPTS,
 	releaseStagedMemoryJob,
+	renewMemoryJobLease,
 	retryFailedMemoryJob,
 } from "./mongodb-memory-jobs.js"
 import { extractAndUpsertEntities, upsertRelation } from "./mongodb-graph.js"
@@ -144,6 +145,68 @@ describe("durable memory job leases (live MongoDB)", () => {
 				status: "running",
 			}),
 		).toBe(1)
+	})
+
+	it("rejects the stale lease token after a replacement worker reclaims", async () => {
+		const db = client.db(TEST_DB)
+		const agentId = `${AGENT}-replacement`
+		const jobId = `extraction-replacement-${randomUUID()}`
+		await createMemoryJob({
+			db,
+			prefix: PREFIX,
+			job: {
+				jobId,
+				jobType: "extraction",
+				agentId,
+				status: "pending",
+				payload: { eventId: "event-replacement" },
+			},
+		})
+		const original = await claimMemoryJob({
+			db,
+			prefix: PREFIX,
+			agentId,
+			jobType: "extraction",
+			workerId: "worker-original",
+			leaseMs: 60_000,
+		})
+		expect(original).not.toBeNull()
+		await memoryJobsCollection(db, PREFIX).updateOne(
+			{ jobId },
+			{ $set: { leaseExpiresAt: new Date(Date.now() - 1_000) } },
+		)
+		const replacement = await claimMemoryJob({
+			db,
+			prefix: PREFIX,
+			agentId,
+			jobType: "extraction",
+			workerId: "worker-replacement",
+			leaseMs: 60_000,
+		})
+		expect(replacement).not.toBeNull()
+
+		await expect(
+			renewMemoryJobLease({
+				db,
+				prefix: PREFIX,
+				jobId,
+				agentId,
+				leaseOwner: original?.leaseOwner ?? "",
+				leaseToken: original?.leaseToken ?? "",
+				leaseMs: 60_000,
+			}),
+		).resolves.toBe(false)
+		await expect(
+			renewMemoryJobLease({
+				db,
+				prefix: PREFIX,
+				jobId,
+				agentId,
+				leaseOwner: replacement?.leaseOwner ?? "",
+				leaseToken: replacement?.leaseToken ?? "",
+				leaseMs: 60_000,
+			}),
+		).resolves.toBe(true)
 	})
 
 	it("breaks equal-createdAt claim ties by jobId", async () => {

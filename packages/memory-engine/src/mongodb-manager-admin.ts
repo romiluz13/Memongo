@@ -100,6 +100,10 @@ export type V2Status = {
 		retrieval: "ok" | "retrieval-degraded" | "health-uncertain"
 		recentNoRelevantResults: boolean
 		canonicalIngest: "ok" | "canonical-ingest-failed" | "health-uncertain"
+		/** Whether every query used to assemble this status response succeeded. */
+		dataCompleteness?: "complete" | "partial"
+		/** Query labels whose values were replaced with safe fallbacks. */
+		failedChecks?: string[]
 		derivedProducts: Record<
 			string,
 			| "ok"
@@ -113,6 +117,31 @@ export type V2Status = {
 }
 
 const PROJECTION_BEHIND_SECONDS = 5 * 60
+const V2_STATUS_CHECK_LABELS = [
+	"events.count",
+	"entities.count",
+	"relations.count",
+	"episodes.count",
+	"procedures.count",
+	"projectionLag.chunks",
+	"projectionLag.entities",
+	"projectionLag.relations",
+	"projectionLag.episodes",
+	"projectionLag.structured-promotion",
+	"projectionLag.procedures",
+	"latestIngestRun",
+	"latestProjectionRun.chunks",
+	"latestProjectionRun.entities",
+	"latestProjectionRun.relations",
+	"latestProjectionRun.episodes",
+	"latestProjectionRun.structured-promotion",
+	"latestProjectionRun.procedures",
+	"laneCoverage",
+	"latestRetrievalRun",
+	"events.latestTimestamp",
+	"episodes.latestTimestamp",
+	"procedures.latestTimestamp",
+] as const
 
 export function classifyCanonicalIngestHealth(
 	latestIngestRun: Pick<IngestRun, "status"> | null,
@@ -314,6 +343,9 @@ export async function getV2Status(
 		const latestProcedure = val(settled[22], null) as {
 			updatedAt?: Date
 		} | null
+		const failedChecks = settled.flatMap((result, index) =>
+			result.status === "rejected" ? [V2_STATUS_CHECK_LABELS[index]] : [],
+		)
 
 		const canonicalIngest = classifyCanonicalIngestHealth(latestIngest)
 		const retrievalHealth = classifyRetrievalHealth({
@@ -373,18 +405,16 @@ export async function getV2Status(
 		const overall = computeOverallV2Health({
 			retrieval: retrievalHealth.state,
 			canonicalIngest,
-			derivedProducts: [
-				derivedProducts.chunks,
-				derivedProducts.entities,
-				derivedProducts.relations,
-				derivedProducts.episodes,
-			],
+			derivedProducts: Object.values(derivedProducts),
 		})
 
 		// Log any individual failures for diagnostics
-		for (const r of settled) {
+		for (const [index, r] of settled.entries()) {
 			if (r.status === "rejected") {
-				log.error("getV2Status partial failure", { error: r.reason })
+				log.error("getV2Status partial failure", {
+					check: V2_STATUS_CHECK_LABELS[index],
+					error: r.reason,
+				})
 			}
 		}
 
@@ -418,6 +448,8 @@ export async function getV2Status(
 				retrieval: retrievalHealth.state,
 				recentNoRelevantResults: retrievalHealth.recentNoRelevantResults,
 				canonicalIngest,
+				dataCompleteness: failedChecks.length === 0 ? "complete" : "partial",
+				failedChecks,
 				derivedProducts,
 				diagnostics,
 			},

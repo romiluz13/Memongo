@@ -855,7 +855,7 @@ export class MemongoClient {
 		validAt?: string
 		invalidAt?: string
 		metadata?: Record<string, unknown>
-		scope?: string
+		scope?: MemongoScope
 		scopeRef?: string
 		/** Idempotency key; a UUIDv4 is generated when omitted. */
 		customId?: string
@@ -901,7 +901,7 @@ export class MemongoClient {
 			validAt?: string
 			invalidAt?: string
 			metadata?: Record<string, unknown>
-			scope?: string
+			scope?: MemongoScope
 			scopeRef?: string
 			/** Per-item idempotency key; a UUIDv4 is generated when omitted. */
 			customId?: string
@@ -1104,6 +1104,7 @@ export class MemongoClient {
 			datasetPath: input.datasetPath,
 			agentId: input.agentId,
 			scope: input.scope,
+			scopeRef: input.scopeRef,
 			limitConversations: input.limitConversations,
 			limitTurnsPerConversation: input.limitTurnsPerConversation,
 		})

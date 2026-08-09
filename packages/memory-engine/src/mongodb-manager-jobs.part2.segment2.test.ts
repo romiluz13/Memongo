@@ -75,8 +75,10 @@ vi.mock("./mongodb-telemetry.js", async () =>
 )
 
 describe("MongoDBMemoryManager background extraction", () => {
-	beforeEach(() => {
+	beforeEach(async () => {
 		vi.clearAllMocks()
+		const { renewMemoryJobLease } = await import("./mongodb-memory-jobs.js")
+		mocked(renewMemoryJobLease).mockResolvedValue(true)
 	})
 
 	it("atomically retries a failed extraction job when explicitly scheduled again", async () => {

@@ -80,4 +80,47 @@ describe("createMemongoTools", () => {
 		await consolidateTool.execute(consolidateInput, {})
 		expect(consolidate).toHaveBeenCalledWith(consolidateInput)
 	})
+
+	it.each([
+		[
+			"memongo_search_kb",
+			"searchKB",
+			{ query: "runbook", scope: "workspace", scopeRef: "acme/platform" },
+			{ results: [] },
+		],
+		[
+			"memongo_profile",
+			"profile",
+			{ scope: "user", scopeRef: "user-1" },
+			{ preferences: [] },
+		],
+		[
+			"memongo_recall_conversation",
+			"recallConversation",
+			{ query: "rollback", scope: "session", scopeRef: "session-1" },
+			{ results: [] },
+		],
+		[
+			"memongo_import_conversations",
+			"importConversations",
+			{
+				datasetPath: "imports/history.json",
+				scope: "tenant",
+				scopeRef: "tenant-1",
+			},
+			{ conversationsImported: 0 },
+		],
+	] as const)("%s preserves and forwards tenant coordinates", async (toolName, clientMethod, input, response) => {
+		const clientCall = vi.fn(async () => response)
+		const tools = createMemongoTools({
+			[clientMethod]: clientCall,
+		} as unknown as MemongoClient)
+		const sdkTool = tools[toolName] as ExecutableTool
+
+		const parsed = sdkTool.inputSchema.parse(input)
+		expect(parsed).toEqual(input)
+		await sdkTool.execute(parsed, {})
+
+		expect(clientCall).toHaveBeenCalledWith(input)
+	})
 })

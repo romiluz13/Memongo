@@ -28,9 +28,10 @@ vi.mock("./mongodb-retrieval-planner.js", async () =>
 	).retrievalPlannerModuleMock(),
 )
 
-vi.mock("./mongodb-episodes.js", async () =>
-	(await import("./test-helpers/manager-test-kit.js")).episodesModuleMock(),
-)
+vi.mock("./mongodb-episodes.js", async () => ({
+	...(await import("./test-helpers/manager-test-kit.js")).episodesModuleMock(),
+	checkAutoEpisodeTriggers: vi.fn(),
+}))
 
 vi.mock("./mongodb-graph.js", async () =>
 	(await import("./test-helpers/manager-test-kit.js")).graphModuleMock(),
@@ -482,6 +483,7 @@ describe("MongoDBMemoryManager write idempotency (P0.1)", () => {
 
 	it("does not probe when no idempotency key is provided", async () => {
 		const { eventsCollection } = await import("./mongodb-schema.js")
+		const { extractAndUpsertEntities } = await import("./mongodb-graph.js")
 		await mockWritePathDefaults()
 		const findOne = vi.fn(async () => null)
 		mocked(eventsCollection).mockReturnValue({
@@ -496,6 +498,7 @@ describe("MongoDBMemoryManager write idempotency (P0.1)", () => {
 		})
 
 		expect(findOne).not.toHaveBeenCalled()
+		expect(extractAndUpsertEntities).not.toHaveBeenCalled()
 	})
 
 	it("does not throw after commit when the staged job release fails — the outbox repair recovers", async () => {
@@ -618,6 +621,7 @@ describe("MongoDBMemoryManager writeConversationEventsBatch (P3.9)", () => {
 			createMemoryJobsBatch,
 			clearEventExtractionJobPendingBatch,
 		} = await mockBatchPath()
+		const { extractAndUpsertEntities } = await import("./mongodb-graph.js")
 		const { eventsCollection } = await import("./mongodb-schema.js")
 		const { updateLaneCoverage } = await import("./mongodb-lane-coverage.js")
 		const find = vi.fn(() => ({ toArray: vi.fn(async () => []) }))
@@ -646,6 +650,9 @@ describe("MongoDBMemoryManager writeConversationEventsBatch (P3.9)", () => {
 		expect(projectEventChunksBatch).toHaveBeenCalledTimes(1)
 		expect(createMemoryJobsBatch).toHaveBeenCalledTimes(1)
 		expect(clearEventExtractionJobPendingBatch).toHaveBeenCalledTimes(1)
+		// The durable extraction jobs own entity extraction. The write path must
+		// not extract and persist the same entities before those jobs run.
+		expect(extractAndUpsertEntities).not.toHaveBeenCalled()
 		// Lane coverage is aggregated into a single update for the batch.
 		expect(updateLaneCoverage).toHaveBeenCalledTimes(1)
 		expect(updateLaneCoverage).toHaveBeenCalledWith(
@@ -704,6 +711,74 @@ describe("MongoDBMemoryManager writeConversationEventsBatch (P3.9)", () => {
 		})
 		expect(mocked(writeEventsBatch).mock.calls[0][0].events).toHaveLength(1)
 		expect(createMemoryJobsBatch).toHaveBeenCalledTimes(1)
+	})
+
+	it("evaluates automatic episode triggers once per scope identity in a batch", async () => {
+		await mockBatchPath()
+		const { writeEventsBatch } = await import("./mongodb-events.js")
+		const { checkAutoEpisodeTriggers } = await import("./mongodb-episodes.js")
+		const { eventsCollection } = await import("./mongodb-schema.js")
+		mocked(eventsCollection).mockReturnValue({
+			find: vi.fn(() => ({ toArray: vi.fn(async () => []) })),
+		} as never)
+		mocked(writeEventsBatch).mockImplementationOnce(
+			async ({
+				events,
+			}: {
+				events: Array<{
+					eventId?: string
+					scopeRef?: string
+				}>
+			}) =>
+				events.map((event) => ({
+					ok: true as const,
+					eventId: event.eventId ?? "evt-generated",
+					timestamp: new Date("2026-04-09T12:00:00.000Z"),
+					scopeRef: event.scopeRef ?? "agent:agent-1",
+				})),
+		)
+		mocked(checkAutoEpisodeTriggers).mockResolvedValue({ triggered: false })
+
+		const manager = makeManager()
+		if (!manager.config.mongodb) {
+			throw new Error("test manager requires MongoDB configuration")
+		}
+		manager.config.mongodb.episodes.enabled = true
+		await manager.writeConversationEventsBatch([
+			{
+				role: "user",
+				body: "workspace one, first event",
+				scope: "workspace",
+				scopeRef: "workspace:one",
+			},
+			{
+				role: "assistant",
+				body: "workspace one, second event",
+				scope: "workspace",
+				scopeRef: "workspace:one",
+			},
+			{
+				role: "user",
+				body: "workspace two",
+				scope: "workspace",
+				scopeRef: "workspace:two",
+			},
+		])
+		await manager.derivationQueue
+
+		expect(checkAutoEpisodeTriggers).toHaveBeenCalledTimes(2)
+		expect(checkAutoEpisodeTriggers).toHaveBeenCalledWith(
+			expect.objectContaining({
+				scope: "workspace",
+				scopeRef: "workspace:one",
+			}),
+		)
+		expect(checkAutoEpisodeTriggers).toHaveBeenCalledWith(
+			expect.objectContaining({
+				scope: "workspace",
+				scopeRef: "workspace:two",
+			}),
+		)
 	})
 
 	it("maps key+payload mismatch to a per-item conflict receipt; the sibling writes", async () => {

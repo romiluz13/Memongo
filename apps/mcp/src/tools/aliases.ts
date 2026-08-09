@@ -10,6 +10,11 @@ const recallMessagesInputSchema = {
 				"Semantic search query for conversation content. Omit for filter-only recall.",
 		},
 		agentId: { type: "string" },
+		scope: {
+			type: "string",
+			enum: [...MEMORY_SCOPE_VALUES],
+		},
+		scopeRef: { type: "string" },
 		sessionId: {
 			type: "string",
 			description: "Filter to a specific conversation session.",
@@ -162,6 +167,7 @@ export const aliasTools: readonly McpToolDefinition[] = [
 					// Canonical scope enum from the single contract source (P2.2).
 					enum: [...MEMORY_SCOPE_VALUES],
 				},
+				scopeRef: { type: "string" },
 				limitConversations: { type: "integer", minimum: 1 },
 				limitTurnsPerConversation: { type: "integer", minimum: 1 },
 			},

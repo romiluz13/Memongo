@@ -15,6 +15,7 @@ function createMockCollection(
 		findOneAndUpdate: ReturnType<typeof vi.fn>
 		insertOne: ReturnType<typeof vi.fn>
 		updateOne: ReturnType<typeof vi.fn>
+		deleteMany: ReturnType<typeof vi.fn>
 	}> = {},
 ): Collection {
 	return {
@@ -34,6 +35,11 @@ function createMockCollection(
 				matchedCount: 1,
 				upsertedCount: 0,
 				upsertedId: null,
+			})),
+		deleteMany:
+			overrides.deleteMany ??
+			vi.fn(async () => ({
+				deletedCount: 0,
 			})),
 	} as unknown as Collection
 }
@@ -89,6 +95,7 @@ describe("recordProcedureOutcome", () => {
 		expect(updateCall[1].$inc).toEqual({ successCount: 1 })
 		// Should set lastSuccessAt
 		expect(updateCall[1].$set.lastSuccessAt).toBeInstanceOf(Date)
+		expect(updateCall[1].$set.updatedAt).toBeUndefined()
 		// Should NOT set lastFailureAt
 		expect(updateCall[1].$set.lastFailureAt).toBeUndefined()
 	})
@@ -122,6 +129,7 @@ describe("recordProcedureOutcome", () => {
 		expect(updateCall[1].$inc).toEqual({ failCount: 1 })
 		expect(updateCall[1].$set.lastFailureAt).toBeInstanceOf(Date)
 		expect(updateCall[1].$set.lastSuccessAt).toBeUndefined()
+		expect(updateCall[1].$set.updatedAt).toBeUndefined()
 	})
 
 	it("sets lastSuccessAt/lastFailureAt timestamps", async () => {
@@ -215,7 +223,7 @@ describe("evolveProcedure", () => {
 
 		expect(result.newVersion).toBe(4)
 		const updateCall = (col.updateOne as ReturnType<typeof vi.fn>).mock.calls[0]
-		expect(updateCall[1].$inc).toEqual({ version: 1 })
+		expect(updateCall[1].$set.version).toBe(4)
 	})
 
 	it("updates steps", async () => {
@@ -254,6 +262,8 @@ describe("evolveProcedure", () => {
 
 		const updateCall = (col.updateOne as ReturnType<typeof vi.fn>).mock.calls[0]
 		expect(updateCall[1].$set.steps).toEqual(["new step 1", "new step 2"])
+		expect(updateCall[1].$set.searchText).toContain("new step 2")
+		expect(updateCall[1].$set.revision).toBe(2)
 		expect(updateCall[1].$set.updatedAt).toBeInstanceOf(Date)
 	})
 
@@ -408,6 +418,64 @@ describe("evolveProcedure", () => {
 		// The evolution history entry records the *current* version before increment
 		const pushOp = updateCall[1].$push
 		expect(pushOp.evolutionHistory.$each[0].version).toBe(1)
+	})
+
+	it("retries when another evolution wins the expected-version CAS", async () => {
+		const firstRead = {
+			procedureId: "proc-1",
+			name: "Deploy safely",
+			agentId: "agent-1",
+			scope: "agent",
+			scopeRef: "agent:agent-1",
+			revision: 3,
+			version: 3,
+			steps: ["old step"],
+			evolutionHistory: [],
+		}
+		const secondRead = {
+			...firstRead,
+			revision: 4,
+			version: 4,
+			steps: ["concurrent step"],
+		}
+		const col = createMockCollection({
+			findOne: vi
+				.fn()
+				.mockResolvedValueOnce(firstRead)
+				.mockResolvedValueOnce(secondRead),
+			updateOne: vi
+				.fn()
+				.mockResolvedValueOnce({ matchedCount: 0 })
+				.mockResolvedValueOnce({ matchedCount: 1 }),
+		})
+		const revisions = createMockCollection()
+		const db = mockDb({
+			test_procedures: col,
+			test_procedure_revisions: revisions,
+		})
+
+		const result = await evolveProcedure({
+			db,
+			prefix: "test_",
+			procedureId: "proc-1",
+			agentId: "agent-1",
+			scope: "agent",
+			scopeRef: "agent:agent-1",
+			newSteps: ["new step"],
+			changeType: "fix",
+			changeDescription: "Fix race",
+		})
+
+		expect(result).toEqual({ newVersion: 5 })
+		expect(col.updateOne).toHaveBeenCalledTimes(2)
+		expect(vi.mocked(col.updateOne).mock.calls[0]?.[0]).toMatchObject({
+			revision: 3,
+			version: 3,
+		})
+		expect(vi.mocked(col.updateOne).mock.calls[1]?.[0]).toMatchObject({
+			revision: 4,
+			version: 4,
+		})
 	})
 })
 

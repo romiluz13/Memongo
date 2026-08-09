@@ -125,7 +125,7 @@ export async function extractTypedRelations(params: {
 		log.warn("relation extraction LLM call failed", {
 			error: err instanceof Error ? err.message : String(err),
 		})
-		return []
+		throw err
 	}
 
 	let parsed: unknown
@@ -134,11 +134,11 @@ export async function extractTypedRelations(params: {
 			.replace(/^```(?:json)?\s*\n?/i, "")
 			.replace(/\n?```\s*$/i, "")
 		parsed = JSON.parse(stripped)
-	} catch {
+	} catch (err) {
 		log.warn("relation extraction JSON parse failed", {
 			preview: content.slice(0, 200),
 		})
-		return []
+		throw err
 	}
 
 	if (!parsed || typeof parsed !== "object") return []

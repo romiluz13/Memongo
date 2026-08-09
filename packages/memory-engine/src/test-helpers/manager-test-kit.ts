@@ -329,6 +329,7 @@ export function rerankerModuleMock() {
 export function laneCoverageModuleMock() {
 	return {
 		getLaneCoverage: vi.fn().mockResolvedValue(null),
+		markLaneAvailable: vi.fn(),
 		updateLaneCoverage: vi.fn(),
 	}
 }

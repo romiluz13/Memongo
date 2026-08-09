@@ -112,4 +112,42 @@ describe("conversation dataset import", () => {
 		)
 		expect(batch[0]?.idempotencyKey).not.toBe(batch[1]?.idempotencyKey)
 	})
+
+	it("scopes replay idempotency keys to the import tenant", async () => {
+		const workspace = await temporaryDirectory("memongo-import-workspace-")
+		const datasetPath = path.join(workspace, "history.json")
+		await writeFile(
+			datasetPath,
+			JSON.stringify({
+				conversations: [
+					{
+						sessionId: "session-1",
+						turns: [{ role: "user", body: "Remember espresso." }],
+					},
+				],
+			}),
+		)
+		const replayKey = async (scopeRef: string): Promise<string> => {
+			let key = ""
+			await importConversationDataset({
+				datasetPath,
+				baseDir: workspace,
+				allowedRoots: [workspace],
+				scope: "workspace",
+				scopeRef,
+				writeTurns: vi.fn(async (turns: ConversationReplayBatchTurn[]) => {
+					key = turns[0]?.idempotencyKey ?? ""
+					return [{ ok: true as const }]
+				}),
+			})
+			return key
+		}
+
+		const firstTenantKey = await replayKey("workspace:first")
+		const secondTenantKey = await replayKey("workspace:second")
+		const repeatedFirstTenantKey = await replayKey("workspace:first")
+
+		expect(firstTenantKey).not.toBe(secondTenantKey)
+		expect(repeatedFirstTenantKey).toBe(firstTenantKey)
+	})
 })

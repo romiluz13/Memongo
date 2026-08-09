@@ -81,7 +81,8 @@ export type MemongoConversationRecallInput = {
 
 export type MemongoConversationImportInput = {
 	datasetPath: string
-	scope?: "session" | "user" | "agent" | "workspace" | "tenant" | "global"
+	scope?: MemongoScope
+	scopeRef?: string
 	limitConversations?: number
 	limitTurnsPerConversation?: number
 	agentId?: string
@@ -104,7 +105,7 @@ type MemongoStableHandleBase = {
 	family: MemongoLifecycleFamily
 	id: string
 	agentId: string
-	scope: "session" | "user" | "agent" | "workspace" | "tenant" | "global"
+	scope: MemongoScope
 	scopeRef: string
 	revision: number
 	state: MemongoLifecycleState
@@ -284,7 +285,7 @@ export type MemongoProfileInput = {
 	/** @deprecated Prefer `scopeRef`. */
 	containerTag?: MemongoContainerTag
 	agentId?: string
-	scope?: "session" | "user" | "agent" | "workspace" | "tenant" | "global"
+	scope?: MemongoScope
 	scopeRef?: string
 	maxEntities?: number
 	maxEpisodes?: number
@@ -292,7 +293,7 @@ export type MemongoProfileInput = {
 
 export type MemongoActiveSlateInput = {
 	agentId?: string
-	scope?: "session" | "user" | "agent" | "workspace" | "tenant" | "global"
+	scope?: MemongoScope
 	scopeRef?: string
 	maxItems?: number
 }
@@ -301,7 +302,7 @@ export type MemongoDiscoveryProjectionInput = {
 	agentId?: string
 	kind: "entity-brief" | "topic-brief" | "what-changed" | "contradiction-report"
 	query?: string
-	scope?: "session" | "user" | "agent" | "workspace" | "tenant" | "global"
+	scope?: MemongoScope
 	scopeRef?: string
 	maxItems?: number
 	timeRange?: { preset?: string; start?: string; end?: string }
@@ -317,7 +318,7 @@ export type MemongoTraceChainInput = {
 export type MemongoScanNoveltyInput = {
 	agentId?: string
 	limit?: number
-	scope?: string
+	scope?: MemongoScope
 	scopeRef?: string
 }
 
@@ -327,7 +328,7 @@ export type MemongoConsolidateInput = {
 	minCombinedScore?: number
 	resolveContradictions?: boolean
 	llmDedup?: boolean
-	scope?: string
+	scope?: MemongoScope
 	scopeRef?: string
 }
 
@@ -472,6 +473,10 @@ export type MemongoDetailedStatusResponse = {
 		retrieval: "ok" | "retrieval-degraded" | "health-uncertain"
 		recentNoRelevantResults: boolean
 		canonicalIngest: "ok" | "canonical-ingest-failed" | "health-uncertain"
+		/** Whether every query used to assemble the status response succeeded. */
+		dataCompleteness?: "complete" | "partial"
+		/** Query labels whose values were replaced with safe fallbacks. */
+		failedChecks?: string[]
 		derivedProducts: Record<
 			string,
 			| "ok"
@@ -770,7 +775,7 @@ export type MemongoSearchResponse = {
 export type MemongoContextBundleInput = {
 	agentId?: string
 	query?: string
-	scope?: "session" | "user" | "agent" | "workspace" | "tenant" | "global"
+	scope?: MemongoScope
 	scopeRef?: string
 	sessionId?: string
 	tokenBudget?: number

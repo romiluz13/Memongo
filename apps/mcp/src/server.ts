@@ -386,6 +386,7 @@ export async function handleToolCall(
 				query: typeof args.query === "string" ? args.query : "",
 				agentId: typeof args.agentId === "string" ? args.agentId : undefined,
 				limit: typeof args.limit === "number" ? args.limit : undefined,
+				scope: readScopeArg(args),
 				scopeRef: typeof args.scopeRef === "string" ? args.scopeRef : undefined,
 				minScore: typeof args.minScore === "number" ? args.minScore : undefined,
 				filter: readKbFilterArg(args),
@@ -463,6 +464,7 @@ export async function handleToolCall(
 		if (name === "memongo_profile") {
 			const out = await memongo.profile({
 				agentId: typeof args.agentId === "string" ? args.agentId : undefined,
+				scope: readScopeArg(args),
 				scopeRef: typeof args.scopeRef === "string" ? args.scopeRef : undefined,
 			})
 			return jsonResult(out)
@@ -587,6 +589,8 @@ export async function handleToolCall(
 			const out = await memongo.recallConversation({
 				query: typeof args.query === "string" ? args.query : undefined,
 				agentId: typeof args.agentId === "string" ? args.agentId : undefined,
+				scope: readScopeArg(args),
+				scopeRef: typeof args.scopeRef === "string" ? args.scopeRef : undefined,
 				sessionId:
 					typeof args.sessionId === "string" ? args.sessionId : undefined,
 				roles,
@@ -842,6 +846,8 @@ export async function handleToolCall(
 			const out = await memongo.searchDetailed({
 				query: typeof args.query === "string" ? args.query : "",
 				agentId: typeof args.agentId === "string" ? args.agentId : undefined,
+				scope: readScopeArg(args),
+				scopeRef: typeof args.scopeRef === "string" ? args.scopeRef : undefined,
 				limit: typeof args.limit === "number" ? args.limit : undefined,
 				maxResults:
 					typeof args.maxResults === "number" ? args.maxResults : undefined,
@@ -1070,15 +1076,8 @@ export async function handleToolCall(
 			const out = await memongo.importConversations({
 				datasetPath: args.datasetPath,
 				agentId: typeof args.agentId === "string" ? args.agentId : undefined,
-				scope:
-					args.scope === "session" ||
-					args.scope === "user" ||
-					args.scope === "agent" ||
-					args.scope === "workspace" ||
-					args.scope === "tenant" ||
-					args.scope === "global"
-						? args.scope
-						: undefined,
+				scope: readScopeArg(args),
+				scopeRef: typeof args.scopeRef === "string" ? args.scopeRef : undefined,
 				limitConversations:
 					typeof args.limitConversations === "number"
 						? args.limitConversations

@@ -1286,7 +1286,7 @@ describe("ensureStandardIndexes total count with query_cache and time series ind
 		const db = mockDb()
 		const count = await ensureStandardIndexes(db, "test_")
 		// 25 (v1 base, embedding_cache removed #13) + 9 events (6 + 1 dreamerProcessedAt + 1 bi-temporal SE-1 + 1 idempotency) + 3 entities + 4 relations +
-		// 2 entity links + 4 episodes (3 + 1 promotion) + 1 ingest_runs + 1 projection_runs +
+		// 2 entity links + 5 episodes (4 + 1 promotion) + 1 ingest_runs + 1 projection_runs +
 		// 1 structured scope + 1 structured revisions + 4 procedures + 1 procedure_revisions +
 		// 3 query_cache + 2 telemetry + 2 access_events + 3 memory_mutations
 		// + 1 lane_coverage + 2 consolidation_runs + 3 session_chunks

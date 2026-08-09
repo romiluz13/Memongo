@@ -10,6 +10,7 @@ import {
 	type MemoryScope,
 	createSubsystemLogger,
 } from "@memongo/lib"
+import { isDuplicateKeyError } from "./internal.js"
 import { recordMutation, type MutationMeta } from "./mongodb-mutations.js"
 import { invalidateQueryCache } from "./mongodb-query-cache.js"
 import { summarizeExplain } from "./mongodb-relevance.js"
@@ -42,8 +43,36 @@ import type {
 	MemorySearchResult,
 	MemorySourceAgent,
 } from "./types.js"
+import { MemoryLifecycleConflictError } from "./mongodb-structured-memory.js"
 
 const log = createSubsystemLogger("memory:mongodb:procedures")
+
+class ProcedureRevisionConflictError extends Error {
+	constructor(message: string) {
+		super(message)
+		this.name = "ProcedureRevisionConflictError"
+	}
+}
+
+const MAX_REVISION_CAS_ATTEMPTS = 3
+
+async function withProcedureRevisionCasRetry<T>(
+	operation: () => Promise<T>,
+): Promise<T> {
+	for (let attempt = 1; ; attempt++) {
+		try {
+			return await operation()
+		} catch (err) {
+			if (
+				err instanceof ProcedureRevisionConflictError &&
+				attempt < MAX_REVISION_CAS_ATTEMPTS
+			) {
+				continue
+			}
+			throw err
+		}
+	}
+}
 
 export type ProcedureState = "active" | "invalidated" | "conflicted"
 
@@ -84,6 +113,7 @@ export type ProcedureLifecyclePatch = Partial<
 >
 
 type ProcedureRevision = ProcedureEntry & {
+	_id: string
 	scope: MemoryScope
 	scopeRef: string
 	state: ProcedureState
@@ -102,6 +132,36 @@ function arraysEqual(
 	const a = left ?? []
 	const b = right ?? []
 	return a.length === b.length && a.every((value, index) => value === b[index])
+}
+
+function memorySourceAgentFromValue(
+	value: unknown,
+): MemorySourceAgent | undefined {
+	if (!value || typeof value !== "object" || Array.isArray(value)) {
+		return undefined
+	}
+	const candidate = value as Record<string, unknown>
+	if (
+		typeof candidate.id !== "string" ||
+		typeof candidate.name !== "string" ||
+		(candidate.runId !== undefined && typeof candidate.runId !== "string")
+	) {
+		return undefined
+	}
+	return {
+		id: candidate.id,
+		name: candidate.name,
+		...(typeof candidate.runId === "string" ? { runId: candidate.runId } : {}),
+	}
+}
+
+function sourceAgentsEqual(left: unknown, right: unknown): boolean {
+	const a = memorySourceAgentFromValue(left)
+	const b = memorySourceAgentFromValue(right)
+	if (!a || !b) {
+		return a === b
+	}
+	return a.id === b.id && a.name === b.name && a.runId === b.runId
 }
 
 function hasProcessedSourceEvents(
@@ -146,6 +206,42 @@ function buildSearchText(entry: ProcedureEntry): string {
 		.join("\n")
 }
 
+function buildProcedureSetDoc(params: {
+	entry: ProcedureEntry
+	scope: MemoryScope
+	scopeRef: string
+	searchText: string
+	updatedAt: Date
+}): Document {
+	const { entry, scope, scopeRef, searchText, updatedAt } = params
+	return {
+		procedureId: entry.procedureId,
+		name: entry.name,
+		agentId: entry.agentId,
+		scope,
+		scopeRef,
+		steps: entry.steps,
+		state: entry.state ?? "active",
+		searchText,
+		updatedAt,
+		...(entry.intentTags !== undefined ? { intentTags: entry.intentTags } : {}),
+		...(entry.triggerQueries !== undefined
+			? { triggerQueries: entry.triggerQueries }
+			: {}),
+		...(entry.successSignals !== undefined
+			? { successSignals: entry.successSignals }
+			: {}),
+		...(entry.confidence !== undefined ? { confidence: entry.confidence } : {}),
+		...(entry.provenance !== undefined ? { provenance: entry.provenance } : {}),
+		...(entry.sourceEventIds !== undefined
+			? { sourceEventIds: entry.sourceEventIds }
+			: {}),
+		...(entry.sourceAgent !== undefined
+			? { sourceAgent: entry.sourceAgent }
+			: {}),
+	}
+}
+
 function computeChangedFields(oldDoc: Document, newDoc: Document): string[] {
 	const fields = new Set<string>()
 	const allKeys = new Set([...Object.keys(oldDoc), ...Object.keys(newDoc)])
@@ -168,7 +264,6 @@ function applyProcedureOutcomeSnapshot(
 	now: Date,
 ): Document {
 	const updated = structuredClone(doc) as Document
-	updated.updatedAt = now
 	if (success) {
 		updated.successCount = Number(updated.successCount ?? 0) + 1
 		updated.lastSuccessAt = now
@@ -227,6 +322,7 @@ function hasProcedureChanged(
 				: undefined,
 			entry.sourceEventIds,
 		) ||
+		!sourceAgentsEqual(existing.sourceAgent, entry.sourceAgent) ||
 		String(existing.searchText ?? "") !== searchText
 	)
 }
@@ -250,8 +346,18 @@ function buildRevisionDoc(params: {
 				: params.existing.updatedAt instanceof Date
 					? params.existing.updatedAt
 					: params.now
+	const sourceAgent = memorySourceAgentFromValue(params.existing.sourceAgent)
 
 	return {
+		_id: `${[
+			"procedure",
+			String(params.existing.agentId ?? ""),
+			params.scope,
+			params.scopeRef,
+			String(params.existing.procedureId ?? ""),
+		]
+			.map((part) => encodeURIComponent(part))
+			.join(":")}:r${revision}`,
 		procedureId: String(params.existing.procedureId ?? ""),
 		name: String(params.existing.name ?? ""),
 		agentId: String(params.existing.agentId ?? ""),
@@ -304,9 +410,31 @@ function buildRevisionDoc(params: {
 					),
 				}
 			: {}),
+		...(sourceAgent ? { sourceAgent } : {}),
 		...(params.existing.createdAt instanceof Date
 			? { createdAt: params.existing.createdAt }
 			: {}),
+	}
+}
+
+async function ensureProcedureRevisionSnapshot(
+	revisions: Collection,
+	doc: ProcedureRevision,
+	session?: ClientSession,
+): Promise<void> {
+	try {
+		await revisions.updateOne(
+			{ _id: doc._id } as unknown as Document,
+			{ $setOnInsert: doc as unknown as Document },
+			{ upsert: true, ...(session ? { session } : {}) },
+		)
+	} catch (err) {
+		if (!isDuplicateKeyError(err)) {
+			throw err
+		}
+		throw new ProcedureRevisionConflictError(
+			`procedure revision snapshot raced on ${doc.procedureId} at revision ${doc.revision}`,
+		)
 	}
 }
 
@@ -327,10 +455,51 @@ function procedureRevisionFromDoc(doc: Document): number {
 		: 1
 }
 
+function procedureRevisionCasFilter(
+	identityFilter: Document,
+	existing: Document,
+): Document {
+	return {
+		...identityFilter,
+		revision: Object.hasOwn(existing, "revision")
+			? existing.revision
+			: { $exists: false },
+	}
+}
+
 function procedureStateFromDoc(doc: Document): ProcedureState {
 	return doc.state === "invalidated" || doc.state === "conflicted"
 		? doc.state
 		: "active"
+}
+
+function enforceableHandleRevision(revision: number): boolean {
+	return Number.isInteger(revision) && revision >= 1
+}
+
+function enforceProcedureHandleFreshness(params: {
+	handle: MemoryProcedureStableHandle
+	existing: Document
+	rejectInvalidated: boolean
+}): number {
+	const currentRevision = procedureRevisionFromDoc(params.existing)
+	if (
+		params.rejectInvalidated &&
+		procedureStateFromDoc(params.existing) === "invalidated"
+	) {
+		throw new MemoryLifecycleConflictError({ reason: "invalidated" })
+	}
+	if (
+		enforceableHandleRevision(params.handle.revision) &&
+		params.handle.revision !== currentRevision
+	) {
+		throw new MemoryLifecycleConflictError({
+			reason: "stale-revision",
+			expectedRevision: params.handle.revision,
+			actualRevision: currentRevision,
+		})
+	}
+	return currentRevision
 }
 
 function procedureHandleFromDoc(doc: Document): MemoryProcedureStableHandle {
@@ -457,12 +626,12 @@ export async function writeProcedure(params: {
 	actorRole?: MemoryActorRole
 	mutationMeta?: MutationMeta
 	eventReceiptIds?: string[]
+	expectedRevision?: number
 }): Promise<{ upserted: boolean; id: string }> {
 	const { db, prefix, entry } = params
 	void params.embeddingMode
 	const collection = proceduresCollection(db, prefix)
 	const revisions = procedureRevisionsCollection(db, prefix)
-	const now = new Date()
 	const scope = entry.scope ?? "agent"
 	const scopeRef = resolveScopeRef({
 		scope,
@@ -474,50 +643,17 @@ export async function writeProcedure(params: {
 		tenantId: entry.tenantId,
 	})
 	const searchText = buildSearchText(entry)
-	const state = entry.state ?? "active"
 	const identityFilter = {
 		procedureId: entry.procedureId,
 		agentId: entry.agentId,
 		scope,
 		scopeRef,
 	}
-	const setDoc: Document = {
-		procedureId: entry.procedureId,
-		name: entry.name,
-		agentId: entry.agentId,
-		scope,
-		scopeRef,
-		steps: entry.steps,
-		state,
-		searchText,
-		updatedAt: now,
-	}
-	if (entry.intentTags !== undefined) {
-		setDoc.intentTags = entry.intentTags
-	}
-	if (entry.triggerQueries !== undefined) {
-		setDoc.triggerQueries = entry.triggerQueries
-	}
-	if (entry.successSignals !== undefined) {
-		setDoc.successSignals = entry.successSignals
-	}
-	if (entry.confidence !== undefined) {
-		setDoc.confidence = entry.confidence
-	}
-	if (entry.provenance !== undefined) {
-		setDoc.provenance = entry.provenance
-	}
-	if (entry.sourceEventIds !== undefined) {
-		setDoc.sourceEventIds = entry.sourceEventIds
-	}
-	if (entry.sourceAgent !== undefined) {
-		setDoc.sourceAgent = entry.sourceAgent
-	}
 
 	let existingBeforeWrite: Document | null = null
-	let persistedSetDoc = setDoc
+	let persistedSetDoc: Document = {}
 
-	const persist = async (
+	const persistOnce = async (
 		session?: ClientSession,
 	): Promise<{
 		upserted: boolean
@@ -525,29 +661,54 @@ export async function writeProcedure(params: {
 		revision: number
 		changed: boolean
 	}> => {
+		const now = new Date()
+		const setDoc = buildProcedureSetDoc({
+			entry,
+			scope,
+			scopeRef,
+			searchText,
+			updatedAt: now,
+		})
 		const existing = await collection.findOne(
 			identityFilter,
 			session ? { session } : undefined,
 		)
 		existingBeforeWrite = existing
 		if (!existing) {
-			const result = await collection.updateOne(
-				identityFilter,
-				{
-					$set: { ...setDoc, revision: 1, validFrom: now },
-					$setOnInsert: {
-						createdAt: now,
-						openedCount: 0,
-						version: 1,
-						successCount: 0,
-						failCount: 0,
-						evolutionHistory: [],
+			let result: Awaited<ReturnType<Collection["updateOne"]>>
+			try {
+				result = await collection.updateOne(
+					identityFilter,
+					{
+						$setOnInsert: {
+							...setDoc,
+							revision: 1,
+							validFrom: now,
+							createdAt: now,
+							openedCount: 0,
+							version: 1,
+							successCount: 0,
+							failCount: 0,
+							evolutionHistory: [],
+						},
 					},
-				},
-				{ upsert: true, ...(session ? { session } : {}) },
-			)
+					{ upsert: true, ...(session ? { session } : {}) },
+				)
+			} catch (err) {
+				if (!isDuplicateKeyError(err)) {
+					throw err
+				}
+				throw new ProcedureRevisionConflictError(
+					`procedure creation raced on ${entry.procedureId}`,
+				)
+			}
+			if (result.upsertedCount === 0) {
+				throw new ProcedureRevisionConflictError(
+					`procedure creation raced on ${entry.procedureId}`,
+				)
+			}
 			return {
-				upserted: result.upsertedCount > 0,
+				upserted: true,
 				id: entry.procedureId,
 				revision: 1,
 				changed: true,
@@ -561,68 +722,68 @@ export async function writeProcedure(params: {
 				changed: false,
 			}
 		}
-		persistedSetDoc = entry.sourceEventIds
-			? {
-					...setDoc,
-					sourceEventIds: mergeSourceEventIds(existing, entry.sourceEventIds),
-				}
-			: setDoc
+		const effectiveEntry = procedureEntryFromDoc(existing, {
+			...entry,
+			...(entry.sourceEventIds
+				? {
+						sourceEventIds: mergeSourceEventIds(existing, entry.sourceEventIds),
+					}
+				: {}),
+		})
+		const effectiveSearchText = buildSearchText(effectiveEntry)
+		persistedSetDoc = buildProcedureSetDoc({
+			entry: effectiveEntry,
+			scope,
+			scopeRef,
+			searchText: effectiveSearchText,
+			updatedAt: now,
+		})
 
 		const currentRevision =
 			typeof existing.revision === "number" &&
 			Number.isFinite(existing.revision)
 				? existing.revision
 				: 1
-		const currentValidFrom =
-			existing.validFrom instanceof Date
-				? existing.validFrom
-				: existing.createdAt instanceof Date
-					? existing.createdAt
-					: existing.updatedAt instanceof Date
-						? existing.updatedAt
-						: now
-
-		if (!hasProcedureChanged(existing, entry, searchText)) {
-			await collection.updateOne(
-				identityFilter,
-				{
-					$set: {
-						...persistedSetDoc,
-						revision: currentRevision,
-						validFrom: currentValidFrom,
-					},
-				},
-				session ? { session } : {},
-			)
+		if (
+			params.expectedRevision !== undefined &&
+			currentRevision !== params.expectedRevision
+		) {
+			throw new MemoryLifecycleConflictError({
+				reason: "stale-revision",
+				expectedRevision: params.expectedRevision,
+				actualRevision: currentRevision,
+			})
+		}
+		if (!hasProcedureChanged(existing, effectiveEntry, effectiveSearchText)) {
 			return {
 				upserted: false,
 				id: entry.procedureId,
 				revision: currentRevision,
-				changed: true,
+				changed: false,
 			}
 		}
 
-		await revisions.insertOne(
+		await ensureProcedureRevisionSnapshot(
+			revisions,
 			buildRevisionDoc({ existing, now, scope, scopeRef }),
-			session ? { session } : {},
+			session,
 		)
-		await collection.updateOne(
-			identityFilter,
+		const updateResult = await collection.updateOne(
+			procedureRevisionCasFilter(identityFilter, existing),
 			{
 				$set: {
 					...persistedSetDoc,
 					revision: currentRevision + 1,
 					validFrom: now,
 				},
-				$setOnInsert: {
-					createdAt:
-						existing.createdAt instanceof Date ? existing.createdAt : now,
-					openedCount:
-						typeof existing.openedCount === "number" ? existing.openedCount : 0,
-				},
 			},
-			{ upsert: true, ...(session ? { session } : {}) },
+			session ? { session } : {},
 		)
+		if (updateResult.matchedCount === 0) {
+			throw new ProcedureRevisionConflictError(
+				`procedure update raced on ${entry.procedureId} at revision ${currentRevision}`,
+			)
+		}
 		return {
 			upserted: false,
 			id: entry.procedureId,
@@ -631,9 +792,18 @@ export async function writeProcedure(params: {
 		}
 	}
 
+	const persist = async (
+		session?: ClientSession,
+	): Promise<Awaited<ReturnType<typeof persistOnce>>> => {
+		if (session) {
+			return persistOnce(session)
+		}
+		return withProcedureRevisionCasRetry(() => persistOnce())
+	}
+
 	const client = params.client
 	const outcome = client
-		? await (async () => {
+		? await withProcedureRevisionCasRetry(async () => {
 				const session = client.startSession()
 				try {
 					let result:
@@ -666,7 +836,7 @@ export async function writeProcedure(params: {
 				} finally {
 					await session.endSession()
 				}
-			})()
+			})
 		: await persist()
 	if (!outcome.changed) {
 		return { upserted: false, id: outcome.id }
@@ -740,6 +910,11 @@ export async function updateProcedureByHandle(params: {
 	if (!existing) {
 		return null
 	}
+	const currentRevision = enforceProcedureHandleFreshness({
+		handle: params.handle,
+		existing,
+		rejectInvalidated: true,
+	})
 	await writeProcedure({
 		db: params.db,
 		prefix: params.prefix,
@@ -748,6 +923,7 @@ export async function updateProcedureByHandle(params: {
 		client: params.client,
 		actorRole: params.actorRole,
 		mutationMeta: params.mutationMeta,
+		expectedRevision: currentRevision,
 	})
 	return getProcedureByHandle(params)
 }
@@ -764,12 +940,11 @@ export async function invalidateProcedureByHandle(params: {
 	const collection = proceduresCollection(params.db, params.prefix)
 	const revisions = procedureRevisionsCollection(params.db, params.prefix)
 	const filter = procedureFilterFromHandle(params.handle)
-	const now = new Date()
 	let oldSnapshot: Document | null = null
 	let newSnapshot: Document | null = null
 	let changed = false
 
-	const persist = async (session?: ClientSession) => {
+	const persistOnce = async (session?: ClientSession) => {
 		const existing = await collection.findOne(
 			filter,
 			session ? { session } : undefined,
@@ -778,22 +953,28 @@ export async function invalidateProcedureByHandle(params: {
 			return
 		}
 		oldSnapshot = existing
+		const currentRevision = enforceProcedureHandleFreshness({
+			handle: params.handle,
+			existing,
+			rejectInvalidated: false,
+		})
 		if (procedureStateFromDoc(existing) === "invalidated") {
 			newSnapshot = existing
 			return
 		}
-		const currentRevision = procedureRevisionFromDoc(existing)
+		const now = new Date()
 		const scope =
 			typeof existing.scope === "string"
 				? (existing.scope as MemoryScope)
 				: params.handle.scope
 		const scopeRef = String(existing.scopeRef ?? params.handle.scopeRef)
-		await revisions.insertOne(
+		await ensureProcedureRevisionSnapshot(
+			revisions,
 			buildRevisionDoc({ existing, now, scope, scopeRef }),
-			session ? { session } : {},
+			session,
 		)
-		await collection.updateOne(
-			filter,
+		const updateResult = await collection.updateOne(
+			procedureRevisionCasFilter(filter, existing),
 			{
 				$set: {
 					state: "invalidated",
@@ -805,6 +986,11 @@ export async function invalidateProcedureByHandle(params: {
 			},
 			session ? { session } : {},
 		)
+		if (updateResult.matchedCount === 0) {
+			throw new ProcedureRevisionConflictError(
+				`procedure invalidation raced on ${params.handle.procedure.procedureId} at revision ${currentRevision}`,
+			)
+		}
 		newSnapshot = await collection.findOne(
 			filter,
 			session ? { session } : undefined,
@@ -812,23 +998,35 @@ export async function invalidateProcedureByHandle(params: {
 		changed = true
 	}
 
-	if (params.client) {
-		const session = params.client.startSession()
-		try {
-			await session.withTransaction(async () => {
-				await persist(session)
-			}, MAJORITY_TRANSACTION_OPTIONS)
-		} catch (err) {
-			if (!isTransactionUnsupported(err)) {
-				throw err
-			}
-			log.info(
-				"transactions not supported for procedure lifecycle, falling back to direct writes",
-			)
-			await persist()
-		} finally {
-			await session.endSession()
+	const persist = async (session?: ClientSession): Promise<void> => {
+		if (session) {
+			return persistOnce(session)
 		}
+		return withProcedureRevisionCasRetry(() => persistOnce())
+	}
+
+	if (params.client) {
+		await withProcedureRevisionCasRetry(async () => {
+			const session = params.client?.startSession()
+			if (!session) {
+				return persist()
+			}
+			try {
+				await session.withTransaction(async () => {
+					await persist(session)
+				}, MAJORITY_TRANSACTION_OPTIONS)
+			} catch (err) {
+				if (!isTransactionUnsupported(err)) {
+					throw err
+				}
+				log.info(
+					"transactions not supported for procedure lifecycle, falling back to direct writes",
+				)
+				await persist()
+			} finally {
+				await session.endSession()
+			}
+		})
 	} else {
 		await persist()
 	}
@@ -925,7 +1123,9 @@ export async function getProcedureHistoryByHandle(params: {
 
 /**
  * Record a success or failure outcome on an existing procedure.
- * Uses atomic $inc for counters and $set for timestamp.
+ * Outcome fields are current operational metrics, not semantic procedure
+ * content: they do not advance revision or semantic updatedAt.
+ * Uses atomic $inc for counters and $set for the outcome timestamp.
  * Returns false if procedure not found (no upsert).
  */
 export async function recordProcedureOutcome(params: {
@@ -959,9 +1159,7 @@ export async function recordProcedureOutcome(params: {
 	try {
 		const update: Document = {
 			$inc: success ? { successCount: 1 } : { failCount: 1 },
-			$set: success
-				? { lastSuccessAt: now, updatedAt: now }
-				: { lastFailureAt: now, updatedAt: now },
+			$set: success ? { lastSuccessAt: now } : { lastFailureAt: now },
 		}
 		const oldSnapshot = await collection.findOneAndUpdate(filter, update, {
 			returnDocument: "before",
@@ -1012,9 +1210,7 @@ export async function reportProcedureOutcomeByHandle(params: {
 		filter,
 		{
 			$inc: params.success ? { successCount: 1 } : { failCount: 1 },
-			$set: params.success
-				? { lastSuccessAt: now, updatedAt: now }
-				: { lastFailureAt: now, updatedAt: now },
+			$set: params.success ? { lastSuccessAt: now } : { lastFailureAt: now },
 		},
 		{ returnDocument: "before" },
 	)
@@ -1082,45 +1278,95 @@ export async function evolveProcedure(params: {
 		changeDescription,
 	} = params
 	const collection = proceduresCollection(db, prefix)
-	const now = new Date()
+	const revisions = procedureRevisionsCollection(db, prefix)
 	const filter: Document = { procedureId, agentId, scope }
 	if (scopeRef !== undefined) {
 		filter.scopeRef = scopeRef
 	}
 	try {
-		// Read current version to record in history entry
-		const existing = await collection.findOne(filter)
-		if (!existing) {
-			throw new Error(`Procedure not found: ${procedureId}`)
-		}
-		const currentVersion =
-			typeof existing.version === "number" && Number.isFinite(existing.version)
-				? existing.version
-				: 1
+		const newVersion = await withProcedureRevisionCasRetry(async () => {
+			const now = new Date()
+			const existing = await collection.findOne(filter)
+			if (!existing) {
+				throw new Error(`Procedure not found: ${procedureId}`)
+			}
+			const currentVersion =
+				typeof existing.version === "number" &&
+				Number.isFinite(existing.version)
+					? existing.version
+					: 1
+			const currentRevision = procedureRevisionFromDoc(existing)
+			const persistedScope =
+				typeof existing.scope === "string"
+					? (existing.scope as MemoryScope)
+					: scope
+			const persistedScopeRef = String(
+				existing.scopeRef ?? scopeRef ?? `agent:${agentId}`,
+			)
+			const evolvedEntry = procedureEntryFromDoc(existing, { steps: newSteps })
+			const historyEntry = {
+				version: currentVersion,
+				changeType,
+				changeDescription,
+				timestamp: now,
+			}
 
-		const historyEntry = {
-			version: currentVersion,
-			changeType,
-			changeDescription,
-			timestamp: now,
-		}
-
-		const update: Document = {
-			$inc: { version: 1 },
-			$set: { steps: newSteps, updatedAt: now },
-			$push: {
-				evolutionHistory: {
-					$each: [historyEntry],
-					$slice: -20,
+			await ensureProcedureRevisionSnapshot(
+				revisions,
+				buildRevisionDoc({
+					existing,
+					now,
+					scope: persistedScope,
+					scopeRef: persistedScopeRef,
+				}),
+			)
+			const update: Document = {
+				$set: {
+					steps: newSteps,
+					searchText: buildSearchText(evolvedEntry),
+					version: currentVersion + 1,
+					revision: currentRevision + 1,
+					validFrom: now,
+					updatedAt: now,
 				},
-			},
-		}
-
-		await collection.updateOne(filter, update)
-		const newVersion = currentVersion + 1
-		log.info(
-			`evolveProcedure: ${procedureId} v${currentVersion} -> v${newVersion}`,
-		)
+				$push: {
+					evolutionHistory: {
+						$each: [historyEntry],
+						$slice: -20,
+					},
+				},
+			}
+			const updateResult = await collection.updateOne(
+				{
+					...procedureRevisionCasFilter(
+						{
+							...filter,
+							scope: persistedScope,
+							scopeRef: persistedScopeRef,
+						},
+						existing,
+					),
+					version: Object.hasOwn(existing, "version")
+						? existing.version
+						: { $exists: false },
+				},
+				update,
+			)
+			if (updateResult.matchedCount === 0) {
+				throw new ProcedureRevisionConflictError(
+					`procedure evolution raced on ${procedureId} at revision ${currentRevision}`,
+				)
+			}
+			return currentVersion + 1
+		})
+		await invalidateQueryCache({
+			db,
+			prefix,
+			agentId,
+			scope,
+			scopeRef: scopeRef ?? `agent:${agentId}`,
+		})
+		log.info(`evolveProcedure: ${procedureId} evolved to v${newVersion}`)
 		return { newVersion }
 	} catch (err) {
 		if (err instanceof Error && err.message.startsWith("Procedure not found")) {

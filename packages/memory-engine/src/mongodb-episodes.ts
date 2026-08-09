@@ -719,6 +719,31 @@ export type AutoEpisodeTriggerResult = {
 	episode?: Episode
 }
 
+async function hasRecentEpisodeWrite(params: {
+	db: Db
+	prefix: string
+	agentId: string
+	since: Date
+	scope?: MemoryScope
+	scopeRef?: string
+}): Promise<boolean> {
+	const recent = await episodesCollection(params.db, params.prefix)
+		.find({
+			agentId: params.agentId,
+			status: { $ne: "deleted" },
+			...(params.scope ? { scope: params.scope } : {}),
+			...(params.scopeRef ? { scopeRef: params.scopeRef } : {}),
+			// updatedAt is set on both insert and re-materialization, so this
+			// measures episode write recency rather than source-event recency.
+			updatedAt: { $gte: params.since },
+		})
+		// oxlint-disable-next-line unicorn/no-array-sort -- MongoDB cursor .sort(), not Array
+		.sort({ updatedAt: -1 })
+		.limit(1)
+		.toArray()
+	return recent.length > 0
+}
+
 // ---------------------------------------------------------------------------
 // Check if auto episode materialization should trigger
 // ---------------------------------------------------------------------------
@@ -731,7 +756,8 @@ export type AutoEpisodeTriggerResult = {
  * (c) Explicit: force=true (user-triggered)
  *
  * MUST be async (not blocking write path) -- the summarizer is an LLM call.
- * Rate limited: max 1 episode per rateLimitMinutes per agent.
+ * The recent-write cooldown is best-effort: it suppresses work observed after
+ * a completed episode write, but it is not a distributed scheduling claim.
  */
 export async function checkAutoEpisodeTriggers(params: {
 	db: Db
@@ -759,7 +785,27 @@ export async function checkAutoEpisodeTriggers(params: {
 	} = params
 
 	try {
-		// 1. Get unconsolidated events
+		// 1. Best-effort cooldown check (unless forced). Run it before loading
+		// up to 500 unconsolidated event documents.
+		if (!force) {
+			const now = new Date()
+			const rateLimitWindow = new Date(
+				now.getTime() - rateLimitMinutes * 60 * 1000,
+			)
+			const rateLimited = await hasRecentEpisodeWrite({
+				db,
+				prefix,
+				agentId,
+				since: rateLimitWindow,
+				...(scope ? { scope } : {}),
+				...(scopeRef ? { scopeRef } : {}),
+			})
+			if (rateLimited) {
+				return { triggered: false, reason: "rate_limited" }
+			}
+		}
+
+		// 2. Get unconsolidated events only when an episode may be created.
 		const events = await getUnconsolidatedEvents({
 			db,
 			prefix,
@@ -772,26 +818,6 @@ export async function checkAutoEpisodeTriggers(params: {
 		// Need at least 2 events for any episode
 		if (events.length < 2) {
 			return { triggered: false, reason: "insufficient_events" }
-		}
-
-		// 2. Rate limit check (unless forced)
-		if (!force) {
-			const now = new Date()
-			const rateLimitWindow = new Date(
-				now.getTime() - rateLimitMinutes * 60 * 1000,
-			)
-			const recentEpisodes = await getEpisodesByTimeRange({
-				db,
-				prefix,
-				agentId,
-				start: rateLimitWindow,
-				end: now,
-				...(scope ? { scope } : {}),
-				...(scopeRef ? { scopeRef } : {}),
-			})
-			if (recentEpisodes.length > 0) {
-				return { triggered: false, reason: "rate_limited" }
-			}
 		}
 
 		// 3. Determine trigger reason

@@ -19,7 +19,9 @@ export function resolveApiKeyForProvider(
 	env: NodeJS.ProcessEnv = process.env,
 ): string | undefined {
 	const lower = provider.toLowerCase().replace(/-/g, "")
-	const mappings = PROVIDER_ENV_MAPPINGS[lower]
+	const mappings = Object.hasOwn(PROVIDER_ENV_MAPPINGS, lower)
+		? PROVIDER_ENV_MAPPINGS[lower]
+		: undefined
 	if (mappings) {
 		for (const key of mappings) {
 			const val = env[key]?.trim()

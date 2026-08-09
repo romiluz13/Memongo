@@ -149,8 +149,8 @@ describe("mongodb-procedures", () => {
 			scope: "agent",
 			scopeRef: "agent:main",
 		})
-		expect(updateCall[1].$set.searchText).toContain("Rotate auth keys")
-		expect(updateCall[1].$set.searchText).toContain("Validate clients")
+		expect(updateCall[1].$setOnInsert.searchText).toContain("Rotate auth keys")
+		expect(updateCall[1].$setOnInsert.searchText).toContain("Validate clients")
 		expect(queryCache.deleteMany).toHaveBeenCalledWith({
 			agentId: "main",
 			scope: "agent",

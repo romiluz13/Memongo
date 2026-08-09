@@ -3,6 +3,7 @@ import {
 	updateLaneCoverage,
 	getLaneCoverage,
 	emptyLaneCoverage,
+	markLaneAvailable,
 } from "./mongodb-lane-coverage.js"
 
 // ---------------------------------------------------------------------------
@@ -118,6 +119,33 @@ describe("updateLaneCoverage", () => {
 		const [, update] = mockUpdateOne.mock.calls[0]
 		expect(update.$inc).toEqual({ "lanes.hybrid.count": 2 })
 		expect(update.$set["lanes.graph.hasData"]).toBeUndefined()
+	})
+})
+
+describe("markLaneAvailable", () => {
+	beforeEach(() => {
+		vi.clearAllMocks()
+		mockUpdateOne.mockResolvedValue({ modifiedCount: 1 })
+	})
+
+	it("sets availability without incrementing the useful lane count on retries", async () => {
+		const params = {
+			db: fakeDb,
+			prefix: fakePrefix,
+			agentId: "agent-1",
+			lane: "graph" as const,
+		}
+
+		await markLaneAvailable(params)
+		await markLaneAvailable(params)
+
+		expect(mockUpdateOne).toHaveBeenCalledTimes(2)
+		for (const [, update, options] of mockUpdateOne.mock.calls) {
+			expect(update.$inc).toBeUndefined()
+			expect(update.$max).toEqual({ "lanes.graph.count": 0 })
+			expect(update.$set["lanes.graph.hasData"]).toBe(true)
+			expect(options).toEqual({ upsert: true })
+		}
 	})
 })
 

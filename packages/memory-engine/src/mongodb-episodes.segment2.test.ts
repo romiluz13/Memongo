@@ -373,7 +373,7 @@ describe("mongodb-episodes", () => {
 			expect(result.triggered).toBe(false)
 		})
 
-		it("respects rate limit (max 1 per hour per agent)", async () => {
+		it("best-effort suppresses work after a recent episode write", async () => {
 			const start = new Date("2026-03-15T10:00:00Z")
 			const events = [
 				{
@@ -426,6 +426,71 @@ describe("mongodb-episodes", () => {
 
 			expect(result.triggered).toBe(false)
 			expect(result.reason).toBe("rate_limited")
+			expect(getUnconsolidatedEvents).not.toHaveBeenCalled()
+		})
+
+		it("bases the best-effort cooldown on episode write time", async () => {
+			const oldEvents = [
+				{
+					eventId: "evt-old-0",
+					agentId: AGENT_ID,
+					role: "user",
+					body: "Old start",
+					scope: "workspace",
+					scopeRef: "workspace:one",
+					timestamp: new Date("2020-01-01T10:00:00Z"),
+				},
+				{
+					eventId: "evt-old-1",
+					agentId: AGENT_ID,
+					role: "assistant",
+					body: "Old reply",
+					scope: "workspace",
+					scopeRef: "workspace:one",
+					timestamp: new Date("2020-01-01T11:00:00Z"),
+				},
+			]
+			vi.mocked(getUnconsolidatedEvents).mockResolvedValue(oldEvents as never)
+
+			const recentEpisode = makeEpisodeDoc({
+				scope: "workspace",
+				scopeRef: "workspace:one",
+				timeRange: {
+					start: new Date("2020-01-01T10:00:00Z"),
+					end: new Date("2020-01-01T11:00:00Z"),
+				},
+				updatedAt: new Date(),
+			})
+			const find = vi.fn((filter: Document) => ({
+				sort: vi.fn().mockReturnValue({
+					limit: vi.fn().mockReturnValue({
+						toArray: vi
+							.fn()
+							.mockResolvedValue(filter.updatedAt ? [recentEpisode] : []),
+					}),
+				}),
+			}))
+			const episodesCol = createMockCollection({ find })
+			const db = createMockDb({ [`${PREFIX}episodes`]: episodesCol })
+
+			const result = await checkAutoEpisodeTriggers({
+				db,
+				prefix: PREFIX,
+				agentId: AGENT_ID,
+				summarizer: mockSummarizer,
+				scope: "workspace",
+				scopeRef: "workspace:one",
+			})
+
+			expect(result).toEqual({ triggered: false, reason: "rate_limited" })
+			expect(find).toHaveBeenCalledWith({
+				agentId: AGENT_ID,
+				scope: "workspace",
+				scopeRef: "workspace:one",
+				status: { $ne: "deleted" },
+				updatedAt: { $gte: expect.any(Date) },
+			})
+			expect(getUnconsolidatedEvents).not.toHaveBeenCalled()
 		})
 
 		it("calls markEventsConsolidated after episode creation", async () => {

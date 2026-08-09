@@ -10,11 +10,13 @@ import {
 	expandGraph,
 	deleteEntityConservative,
 	extractAndUpsertEntities,
+	extractAndUpsertTypedRelations,
 	searchEntitiesAutocomplete,
 	findRelationByLocatorId,
 	type Entity,
 	type Relation,
 } from "./mongodb-graph.js"
+import type { EnrichmentProvider } from "./mongodb-llm-enrichment.js"
 import { emitTelemetry } from "./mongodb-telemetry.js"
 
 // ---------------------------------------------------------------------------
@@ -90,6 +92,49 @@ function _makeRelation(overrides: Partial<Relation> = {}): Relation {
 		...overrides,
 	}
 }
+
+describe("typed relation lease fencing", () => {
+	it("checks ownership after provider extraction before writing relations", async () => {
+		const collection = createMockCollection()
+		const db = createMockDb({ test_relations: collection })
+		const leaseFence = vi.fn(async () => true)
+		const provider: EnrichmentProvider = {
+			name: "mock",
+			chatCompletion: vi.fn(async () => ({
+				content: JSON.stringify({
+					relations: [
+						{
+							from: "entity-a",
+							to: "entity-b",
+							type: "depends_on",
+							confidence: 0.9,
+						},
+					],
+				}),
+			})),
+		}
+
+		const created = await extractAndUpsertTypedRelations({
+			db,
+			prefix: "test_",
+			agentId: "agent-1",
+			scope: "agent",
+			scopeRef: "agent:agent-1",
+			eventContent: "A depends on B",
+			entities: [
+				{ entityId: "entity-a", name: "A" },
+				{ entityId: "entity-b", name: "B" },
+			],
+			provider,
+			model: "test-model",
+			leaseFence,
+		})
+
+		expect(created).toBe(0)
+		expect(leaseFence).toHaveBeenCalledOnce()
+		expect(collection.updateOne).not.toHaveBeenCalled()
+	})
+})
 
 const PREFIX = "test_"
 

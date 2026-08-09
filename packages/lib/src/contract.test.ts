@@ -12,6 +12,7 @@ import {
 	isMemoryScopeValue,
 	type MemoryScopeValue,
 } from "./contract.js"
+import { MEMONGO_MCP_TOOL_FIELDS } from "./contract-mcp.js"
 import type { MemoryScope } from "./types.memory.js"
 
 describe("contract: canonical scope enum", () => {
@@ -110,5 +111,16 @@ describe("contract: /v1 route table", () => {
 		expect(selfEdit?.method).toBe("post")
 		expect(selfEdit?.requiredFields).toEqual(["block", "content"])
 		expect(selfEdit?.errorStatuses).toContain(422)
+	})
+})
+
+describe("contract: MCP alias tenant coordinates", () => {
+	it("keeps alias field sets aligned with their canonical tools", () => {
+		expect(MEMONGO_MCP_TOOL_FIELDS.memongo_recall_messages).toEqual(
+			MEMONGO_MCP_TOOL_FIELDS.memongo_recall_conversation,
+		)
+		expect(MEMONGO_MCP_TOOL_FIELDS.memongo_import_conversation_history).toEqual(
+			MEMONGO_MCP_TOOL_FIELDS.memongo_import_conversations,
+		)
 	})
 })

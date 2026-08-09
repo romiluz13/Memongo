@@ -23,6 +23,8 @@ export const MEMONGO_MCP_TOOL_FIELDS: Readonly<
 	memongo_search_detailed: [
 		"query",
 		"agentId",
+		"scope",
+		"scopeRef",
 		"limit",
 		"maxResults",
 		"minScore",
@@ -59,6 +61,8 @@ export const MEMONGO_MCP_TOOL_FIELDS: Readonly<
 	memongo_recall_conversation: [
 		"query",
 		"agentId",
+		"scope",
+		"scopeRef",
 		"sessionId",
 		"roles",
 		"startTime",
@@ -84,7 +88,7 @@ export const MEMONGO_MCP_TOOL_FIELDS: Readonly<
 		"mode",
 		"timeRange",
 	],
-	memongo_profile: ["agentId", "scopeRef"],
+	memongo_profile: ["agentId", "scope", "scopeRef"],
 	memongo_state_unified: ["agentId", "scope", "scopeRef"],
 	memongo_self_edit: ["block", "action", "content", "agentId"],
 	memongo_memory_feedback: [
@@ -102,6 +106,7 @@ export const MEMONGO_MCP_TOOL_FIELDS: Readonly<
 		"query",
 		"agentId",
 		"limit",
+		"scope",
 		"scopeRef",
 		"minScore",
 		"filter",
@@ -115,7 +120,7 @@ export const MEMONGO_MCP_TOOL_FIELDS: Readonly<
 	memongo_procedure_outcome: ["handle", "success", "note", "actorRole"],
 	memongo_status: ["agentId"],
 	memongo_chain_trace: ["factId", "collection", "agentId", "maxDepth"],
-	memongo_novelty_scan: ["agentId", "limit", "scope"],
+	memongo_novelty_scan: ["agentId", "limit", "scope", "scopeRef"],
 	memongo_consolidate: [
 		"agentId",
 		"maxEvents",
@@ -129,6 +134,7 @@ export const MEMONGO_MCP_TOOL_FIELDS: Readonly<
 		"datasetPath",
 		"agentId",
 		"scope",
+		"scopeRef",
 		"limitConversations",
 		"limitTurnsPerConversation",
 	],
@@ -179,6 +185,8 @@ export const MEMONGO_MCP_TOOL_FIELDS: Readonly<
 	memongo_recall_messages: [
 		"query",
 		"agentId",
+		"scope",
+		"scopeRef",
 		"sessionId",
 		"roles",
 		"startTime",
@@ -196,6 +204,7 @@ export const MEMONGO_MCP_TOOL_FIELDS: Readonly<
 		"datasetPath",
 		"agentId",
 		"scope",
+		"scopeRef",
 		"limitConversations",
 		"limitTurnsPerConversation",
 	],

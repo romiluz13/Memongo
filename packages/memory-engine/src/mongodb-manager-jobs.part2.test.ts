@@ -75,8 +75,10 @@ vi.mock("./mongodb-telemetry.js", async () =>
 )
 
 describe("MongoDBMemoryManager background extraction", () => {
-	beforeEach(() => {
+	beforeEach(async () => {
 		vi.clearAllMocks()
+		const { renewMemoryJobLease } = await import("./mongodb-memory-jobs.js")
+		mocked(renewMemoryJobLease).mockResolvedValue(true)
 	})
 
 	it("schedules and runs a single-event extraction job", async () => {
@@ -128,7 +130,19 @@ describe("MongoDBMemoryManager background extraction", () => {
 			skipped: false,
 		})
 		mocked(extractAndUpsertEntities).mockResolvedValue({
-			entities: [],
+			entities: [
+				{
+					entityId: "entity-1",
+					name: "Batch F",
+					type: "project",
+					agentId: "agent-1",
+					scope: "agent",
+					scopeRef: "agent:agent-1",
+					mentionCount: 1,
+					createdAt: new Date("2026-04-09T12:00:00.000Z"),
+					updatedAt: new Date("2026-04-09T12:00:00.000Z"),
+				},
+			],
 			relationsCreated: 0,
 		})
 
@@ -214,6 +228,100 @@ describe("MongoDBMemoryManager background extraction", () => {
 				outputCount: 1,
 			}),
 		)
+	})
+
+	it("marks graph coverage available before a later extraction stage fails", async () => {
+		const { extractAndUpsertEntities } = await import("./mongodb-graph.js")
+		const { markLaneAvailable } = await import("./mongodb-lane-coverage.js")
+		const {
+			claimMemoryJob,
+			completeClaimedMemoryJob,
+			createMemoryJob,
+			failClaimedMemoryJob,
+		} = await import("./mongodb-memory-jobs.js")
+		const { eventsCollection } = await import("./mongodb-schema.js")
+		const { promoteDerivedMemoryFromEvent } = await import(
+			"./mongodb-derived-memory.js"
+		)
+
+		mocked(createMemoryJob).mockResolvedValue("extraction-evt-graph")
+		mocked(claimMemoryJob)
+			.mockResolvedValueOnce({
+				jobId: "extraction-evt-graph",
+				jobType: "extraction",
+				agentId: "agent-1",
+				status: "running",
+				createdAt: new Date("2026-04-09T12:00:00.000Z"),
+				payload: { eventId: "evt-graph" },
+				attempts: 1,
+				leaseOwner: "worker-1",
+				leaseToken: "lease-graph",
+			})
+			.mockResolvedValueOnce(null)
+		mocked(eventsCollection).mockReturnValue({
+			findOne: vi.fn(async () => ({
+				eventId: "evt-graph",
+				agentId: "agent-1",
+				role: "user",
+				body: "Discuss @Alice before promotion fails.",
+				timestamp: new Date("2026-04-09T12:00:00.000Z"),
+				scope: "agent",
+				scopeRef: "agent:agent-1",
+			})),
+		} as unknown as import("mongodb").Collection)
+		mocked(extractAndUpsertEntities).mockResolvedValue({
+			entities: [
+				{
+					entityId: "entity-alice",
+					name: "Alice",
+					type: "person",
+					agentId: "agent-1",
+					scope: "agent",
+					scopeRef: "agent:agent-1",
+					mentionCount: 1,
+					createdAt: new Date("2026-04-09T12:00:00.000Z"),
+					updatedAt: new Date("2026-04-09T12:00:00.000Z"),
+				},
+			],
+			relationsCreated: 0,
+		})
+		mocked(markLaneAvailable).mockResolvedValue(undefined)
+		mocked(promoteDerivedMemoryFromEvent).mockRejectedValue(
+			new Error("permanent promotion failure"),
+		)
+		mocked(failClaimedMemoryJob).mockResolvedValue(true)
+
+		const manager = Object.assign(
+			Object.create(MongoDBMemoryManager.prototype),
+			{
+				db: {} as import("mongodb").Db,
+				prefix: "test_",
+				agentId: "agent-1",
+				client: undefined,
+				config: { mongodb: { embeddingMode: "automated" } },
+				workspaceDir: "/tmp/memongo",
+				memoryJobWorkerId: "worker-1",
+				memoryJobWorkerStopped: false,
+				memoryJobWorkerPromise: Promise.resolve(),
+			},
+		) as MongoDBMemoryManager & { memoryJobWorkerPromise: Promise<void> }
+
+		await manager.extractEvent({ eventId: "evt-graph" })
+		await manager.memoryJobWorkerPromise
+
+		expect(markLaneAvailable).toHaveBeenCalledWith({
+			db: manager.db,
+			prefix: "test_",
+			agentId: "agent-1",
+			lane: "graph",
+		})
+		expect(failClaimedMemoryJob).toHaveBeenCalledWith(
+			expect.objectContaining({
+				jobId: "extraction-evt-graph",
+				error: "permanent promotion failure",
+			}),
+		)
+		expect(completeClaimedMemoryJob).not.toHaveBeenCalled()
 	})
 
 	it("repairs a pending extraction outbox event into a claimable job", async () => {
@@ -503,7 +611,9 @@ describe("MongoDBMemoryManager background extraction", () => {
 					leaseExpiresAt: new Date("2026-04-09T12:01:00.000Z"),
 				})
 				.mockResolvedValueOnce(null)
-			mocked(renewMemoryJobLease).mockResolvedValue(false)
+			mocked(renewMemoryJobLease)
+				.mockResolvedValueOnce(true)
+				.mockResolvedValue(false)
 			mocked(eventsCollection).mockReturnValue({
 				findOne: vi.fn(async () => ({
 					eventId: "evt-long",
@@ -603,9 +713,9 @@ describe("MongoDBMemoryManager background extraction", () => {
 					leaseExpiresAt: new Date("2026-04-09T12:01:01.000Z"),
 				})
 				.mockResolvedValueOnce(null)
-			mocked(renewMemoryJobLease).mockRejectedValue(
-				new Error("heartbeat outcome unknown"),
-			)
+			mocked(renewMemoryJobLease)
+				.mockResolvedValueOnce(true)
+				.mockRejectedValue(new Error("heartbeat outcome unknown"))
 			mocked(eventsCollection).mockReturnValue({
 				findOne: vi.fn(async () => ({
 					eventId: "evt-uncertain-lease",
@@ -699,7 +809,9 @@ describe("MongoDBMemoryManager background extraction", () => {
 				.mockResolvedValueOnce(null)
 			// The lease renewal fails while the event read is still in flight —
 			// the lease is lost BEFORE the first side-effecting stage.
-			mocked(renewMemoryJobLease).mockResolvedValue(false)
+			mocked(renewMemoryJobLease)
+				.mockResolvedValueOnce(true)
+				.mockResolvedValue(false)
 			let resolveEventDoc: ((doc: unknown) => void) | undefined
 			const findOne = vi.fn(
 				() =>

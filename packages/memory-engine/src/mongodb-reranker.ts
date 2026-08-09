@@ -74,6 +74,7 @@ export async function crossEncoderRerank(params: {
 	results: MemorySearchResult[]
 	config: RerankConfig
 	onProviderCall?: (outcome: "attempted" | "succeeded" | "failed") => void
+	fetchFn?: typeof globalThis.fetch
 }): Promise<RerankResult> {
 	const { db, prefix, agentId, query, results, config } = params
 	const rerankStart = Date.now()
@@ -131,6 +132,7 @@ export async function crossEncoderRerank(params: {
 		recordProviderCall("attempted")
 		const response = await withRemoteHttpResponse({
 			url: rerankUrl,
+			fetchFn: params.fetchFn,
 			init: {
 				method: "POST",
 				headers: {

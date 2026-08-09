@@ -1179,6 +1179,7 @@ describe("createApp", () => {
 				agentId: "agent-42",
 				datasetPath: "/tmp/history.json",
 				scope: "workspace",
+				scopeRef: "workspace:acme",
 				limitConversations: 2,
 				limitTurnsPerConversation: 4,
 			}),
@@ -1196,6 +1197,7 @@ describe("createApp", () => {
 			agentId: "agent-42",
 			datasetPath: "/tmp/history.json",
 			scope: "workspace",
+			scopeRef: "workspace:acme",
 			limitConversations: 2,
 			limitTurnsPerConversation: 4,
 		})

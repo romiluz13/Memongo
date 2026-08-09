@@ -199,6 +199,7 @@ export type MemoryLifecycleProcedureData = {
 	confidence?: number
 	provenance?: Record<string, unknown>
 	sourceEventIds?: string[]
+	/** Current operational metrics; they are not part of semantic revision history. */
 	successCount?: number
 	failCount?: number
 	lastSuccessAt?: Date
@@ -705,6 +706,7 @@ export interface MemorySearchManager {
 	importConversations(params: {
 		datasetPath: string
 		scope?: MemoryScope
+		scopeRef?: string
 		limitConversations?: number
 		limitTurnsPerConversation?: number
 	}): Promise<MemoryConversationImportResult>

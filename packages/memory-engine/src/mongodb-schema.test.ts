@@ -535,7 +535,7 @@ describe("ensureStandardIndexes", () => {
 		// 4 chunks (path+hash, updated, text, P3.8 agent+path+startLine ESR) + 5 KB + 4 KB chunks (3 + 1 wiki) + 8 structured (6 + 1 v2 scope + 1 sourceEvent) +
 		// 1 structured revisions + 3 relevance_runs + 2 relevance_artifacts +
 		// 2 relevance_regressions + 9 events (6 + 1 dreamerProcessedAt + 1 bi-temporal SE-1 + 1 idempotency) + 6 entities (3 + 2 Phase 3.4 + 1 P3.8 agent/updatedAt ESR) + 4 relations +
-		// 2 entity links + 4 episodes (3 + 1 promotion) + 1 ingest_runs + 1 projection_runs +
+		// 2 entity links + 7 episodes (6 base + 1 promotion) + 1 ingest_runs + 1 projection_runs +
 		// 4 procedures + 1 procedure_revisions + 3 query_cache + 2 telemetry + 2 access_events
 		// + 3 memory_mutations (compound + TTL + per-document)
 		// + 1 lane_coverage (unique agentId)
@@ -549,7 +549,8 @@ describe("ensureStandardIndexes", () => {
 		// P3.8: −3 retired redundant indexes (idx_chunks_path, idx_structured_agentid,
 		// idx_relations_agent_scope_scoperef), +1 chunk ESR, +1 episode ESR,
 		// +1 entity ESR, +1 relationId locator
-		// P4.4.1: +2 partial TTL indexes (events, structured_mem) = 95
+		// P4.4.1: +2 partial TTL indexes (events, structured_mem)
+		// Total = 95
 		expect(count).toBe(95)
 		expect(chunks.createIndex).toHaveBeenCalledTimes(4)
 		expect(kb.createIndex).toHaveBeenCalledTimes(5)
@@ -571,9 +572,6 @@ describe("ensureStandardIndexes", () => {
 			createIndex: ReturnType<typeof vi.fn>
 		}
 		const entityLinks = db.collection("test_entity_links") as unknown as {
-			createIndex: ReturnType<typeof vi.fn>
-		}
-		const episodes = db.collection("test_episodes") as unknown as {
 			createIndex: ReturnType<typeof vi.fn>
 		}
 		const ingestRuns = db.collection("test_ingest_runs") as unknown as {
@@ -616,7 +614,6 @@ describe("ensureStandardIndexes", () => {
 			{ name: "uq_relations_identity", unique: true },
 		)
 		expect(entityLinks.createIndex).toHaveBeenCalledTimes(2)
-		expect(episodes.createIndex).toHaveBeenCalledTimes(6)
 		expect(ingestRuns.createIndex).toHaveBeenCalledTimes(1)
 		expect(projectionRuns.createIndex).toHaveBeenCalledTimes(1)
 
@@ -680,7 +677,8 @@ describe("ensureStandardIndexes", () => {
 				createIndex: ReturnType<typeof vi.fn>
 			}
 			// 95 base (incl. 2 consolidation_runs + events idempotency key
-			// + 2 P4.4.1 partial TTL indexes) + 4 evidence mirror indexes
+			// and 2 P4.4.1 partial TTL indexes)
+			// + 4 evidence mirror indexes
 			expect(count).toBe(99)
 			expect(memoryEvidence.createIndex).toHaveBeenCalledTimes(4)
 			expect(memoryEvidence.createIndex).toHaveBeenCalledWith(
@@ -787,14 +785,15 @@ describe("ensureStandardIndexes", () => {
 		const db = mockDb()
 		const count = await ensureStandardIndexes(db, "test_")
 		// 25 (v1 base, embedding_cache removed #13) + 9 events (6 + 1 dreamerProcessedAt + 1 bi-temporal SE-1 + 1 idempotency) + 3 entities + 4 relations +
-		// 2 entity links + 4 episodes (3 + 1 promotion) + 1 ingest_runs + 1 projection_runs +
+		// 2 entity links + 7 episodes (6 base + 1 promotion) + 1 ingest_runs + 1 projection_runs +
 		// 1 structured scope + 1 structured revisions + 4 procedures + 1 procedure_revisions +
 		// 3 query_cache + 2 telemetry + 2 access_events + 3 memory_mutations
 		// + 1 lane_coverage + 2 consolidation_runs + 3 session_chunks
 		// + 1 bi-temporal valid-time (#32) + 2 durable job claim/TTL indexes
 		// + 1 extraction outbox partial index + 1 unique relation identity
 		// P3.8: −3 retired redundant indexes + 3 ESR compounds + 1 relationId locator
-		// P4.4.1: +2 partial TTL indexes (events, structured_mem) = 95
+		// P4.4.1: +2 partial TTL indexes (events, structured_mem)
+		// Total = 95
 		expect(count).toBe(95)
 	})
 

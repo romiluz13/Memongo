@@ -77,7 +77,8 @@ vi.mock("./mongodb-telemetry.js", async () =>
 	(await import("./test-helpers/manager-test-kit.js")).telemetryModuleMock(),
 )
 
-const { getProjectionLag } = await import("./mongodb-ops.js")
+const { getLatestIngestRun, getLatestProjectionRun, getProjectionLag } =
+	await import("./mongodb-ops.js")
 const {
 	eventsCollection,
 	entitiesCollection,
@@ -229,6 +230,49 @@ describe("getV2Status", () => {
 		)
 	})
 
+	it.each([
+		"structured-promotion",
+		"procedures",
+	] as const)("includes %s health when computing overall health", async (failedProjection) => {
+		const collection = {
+			countDocuments: vi.fn().mockResolvedValue(1),
+			findOne: vi.fn().mockResolvedValue({ updatedAt: new Date() }),
+		} as unknown as import("mongodb").Collection<import("mongodb").Document>
+		const eventCollection = {
+			countDocuments: vi.fn().mockResolvedValue(1),
+			findOne: vi.fn().mockResolvedValue({ timestamp: new Date() }),
+		} as unknown as import("mongodb").Collection<import("mongodb").Document>
+		const relevanceCollection = {
+			findOne: vi
+				.fn()
+				.mockResolvedValue({ status: "ok", hitSources: ["structured"] }),
+		} as unknown as import("mongodb").Collection<import("mongodb").Document>
+
+		mocked(eventsCollection).mockReturnValue(eventCollection)
+		mocked(entitiesCollection).mockReturnValue(collection)
+		mocked(relationsCollection).mockReturnValue(collection)
+		mocked(episodesCollection).mockReturnValue(collection)
+		mocked(proceduresCollection).mockReturnValue(collection)
+		mocked(relevanceRunsCollection).mockReturnValue(relevanceCollection)
+		mocked(getProjectionLag).mockResolvedValue(10)
+		mocked(getLatestIngestRun).mockResolvedValue({
+			status: "ok",
+		} as Awaited<ReturnType<typeof getLatestIngestRun>>)
+		mocked(getLatestProjectionRun).mockImplementation(
+			async ({ projectionType }) =>
+				({
+					status: projectionType === failedProjection ? "failed" : "ok",
+				}) as Awaited<ReturnType<typeof getLatestProjectionRun>>,
+		)
+
+		const status = await getV2Status(fakeDb, fakePrefix, "agent-1")
+
+		expect(status.health.derivedProducts[failedProjection]).toBe(
+			"derived-product-unavailable",
+		)
+		expect(status.health.overall).toBe("degraded")
+	})
+
 	it("returns partial results when some queries fail (Promise.allSettled)", async () => {
 		// Events collection works, but entities/relations/episodes reject
 		const workingCol = {
@@ -274,5 +318,13 @@ describe("getV2Status", () => {
 		expect(status.procedures.count).toBe(0)
 		expect(status.projectionLag.entities).toBeNull()
 		expect(status.projectionLag.episodes).toBeNull()
+		expect(status.health.dataCompleteness).toBe("partial")
+		expect(status.health.failedChecks).toEqual(
+			expect.arrayContaining([
+				"entities.count",
+				"projectionLag.entities",
+				"episodes.latestTimestamp",
+			]),
+		)
 	})
 })

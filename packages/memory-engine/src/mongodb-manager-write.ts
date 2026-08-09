@@ -21,7 +21,6 @@ import {
 import { computeIdempotencyFingerprint } from "./mongodb-idempotency-fingerprint.js"
 import type { CanonicalEvent } from "./mongodb-events.js"
 import { extractAndUpsertEntities } from "./mongodb-graph.js"
-import type { Entity } from "./mongodb-graph.js"
 import { updateLaneCoverage } from "./mongodb-lane-coverage.js"
 import type { MongoDBManagerHost } from "./mongodb-manager-host.js"
 import {
@@ -671,24 +670,6 @@ export class MongoDBManagerWriteOps {
 			if (projected.chunkCreated) {
 				this.host.chunkCount += 1
 			}
-			// Entity extraction (sync rule-based, non-blocking)
-			let entityCount = 0
-			if (postWriteDerivedWorkEnabled) {
-				try {
-					const entityResult = await extractAndUpsertEntities({
-						db: this.host.db,
-						prefix: this.host.prefix,
-						agentId: this.host.agentId,
-						eventContent: event.body,
-						scope,
-						scopeRef: written.scopeRef,
-						sourceEventId: written.eventId,
-					})
-					entityCount = entityResult.entities.length
-				} catch (err) {
-					log.warn("entity extraction failed after event write", { error: err })
-				}
-			}
 			if (postWriteDerivedWorkEnabled) {
 				const jobId = `extraction-${written.eventId}`
 				if (operationRunContext) {
@@ -773,9 +754,6 @@ export class MongoDBManagerWriteOps {
 				const increments: Record<string, number> = {
 					"raw-window": 1,
 					hybrid: projected.chunkCreated ? 1 : 0,
-				}
-				if (entityCount > 0) {
-					increments.graph = entityCount
 				}
 				// Regex-only on purpose: this is a synchronous coverage counter on
 				// the hot write path. The LLM-augmented promotion (issue #30) runs
@@ -1066,32 +1044,7 @@ export class MongoDBManagerWriteOps {
 				}
 			}
 
-			// 5. Entity extraction per item (sync rule-based, non-blocking) —
-			// same derived-work contract as the single write; feeds the graph
-			// lane coverage increment below.
-			const entityCounts = new Map<number, number>()
-			if (postWriteDerivedWorkEnabled) {
-				for (const item of written) {
-					try {
-						const entityResult = await extractAndUpsertEntities({
-							db: this.host.db,
-							prefix: this.host.prefix,
-							agentId: this.host.agentId,
-							eventContent: item.input.body,
-							scope: item.scope,
-							scopeRef: item.scopeRef,
-							sourceEventId: item.eventId,
-						})
-						entityCounts.set(item.index, entityResult.entities.length)
-					} catch (err) {
-						log.warn("entity extraction failed after batch event write", {
-							error: err,
-						})
-					}
-				}
-			}
-
-			// 6. ONE insertMany for the extraction jobs (directly claimable —
+			// 5. ONE insertMany for the extraction jobs (directly claimable —
 			// the batch has no transaction to stage through), then ONE
 			// updateMany clearing the outbox markers for events whose job is
 			// durable. A failed job insert leaves the marker set for the outbox
@@ -1152,19 +1105,26 @@ export class MongoDBManagerWriteOps {
 				}
 			}
 
-			// 7. Post-write derivations + coalesced query-cache invalidation
-			// per item (in-process scheduling queues, no extra round trips).
+			// 6. Post-write derivations + coalesced query-cache invalidation.
+			// Episode triggers inspect the whole unconsolidated scope backlog, so
+			// evaluating once per event in the same batch only repeats the same
+			// expensive scan. Schedule at most once per tenant scope identity.
+			const scheduledDerivationScopes = new Set<string>()
 			for (const item of written) {
-				await this.host.schedulePostWriteDerivations({
-					eventId: item.eventId,
-					role: item.input.role,
-					body: item.input.body,
-					sessionId: item.input.sessionId,
-					timestamp: item.timestamp,
-					scope: item.scope,
-					scopeRef: item.scopeRef,
-					runContext: operationRunContext,
-				})
+				const scopeIdentity = `${item.scope}\u0000${item.scopeRef}`
+				if (!scheduledDerivationScopes.has(scopeIdentity)) {
+					scheduledDerivationScopes.add(scopeIdentity)
+					await this.host.schedulePostWriteDerivations({
+						eventId: item.eventId,
+						role: item.input.role,
+						body: item.input.body,
+						sessionId: item.input.sessionId,
+						timestamp: item.timestamp,
+						scope: item.scope,
+						scopeRef: item.scopeRef,
+						runContext: operationRunContext,
+					})
+				}
 				this.host.scheduleQueryCacheInvalidation({
 					agentId: this.host.agentId,
 					scope: item.scope,
@@ -1172,7 +1132,7 @@ export class MongoDBManagerWriteOps {
 				})
 			}
 
-			// 8. Lane coverage: aggregate the per-item increments across the
+			// 7. Lane coverage: aggregate the per-item increments across the
 			// batch into ONE update. Regex-only candidate counting (P3.9) — the
 			// counts only feed planner hints.
 			try {
@@ -1186,7 +1146,6 @@ export class MongoDBManagerWriteOps {
 					bump("raw-window", 1)
 					const receipt = receipts[item.index]
 					bump("hybrid", receipt && receipt.ok && receipt.chunkCreated ? 1 : 0)
-					bump("graph", entityCounts.get(item.index) ?? 0)
 					if (postWriteDerivedWorkEnabled) {
 						const candidates = extractStructuredCandidatesFromEvent({
 							eventId: item.eventId,

@@ -75,31 +75,34 @@ function buildReplayMetadata(params: {
 
 /**
  * B6: deterministic idempotency identity for a replayed turn. The key mixes
- * the dataset path with the running turn ordinal and the turn content, so
- * re-running the same import reproduces the same keys (the batch write API
- * replays them instead of duplicating) while a content change under an
- * existing key surfaces as an idempotency conflict rather than a silent
- * wrong replay.
+ * tenant scope, dataset path, turn ordinal, and content, so re-running the same
+ * tenant import reproduces the same keys without colliding with another scope.
+ * A content change under an existing key surfaces as an idempotency conflict
+ * rather than a silent wrong replay.
  */
 function buildReplayIdempotencyKey(params: {
 	datasetPath: string
 	metadataFlavor: "import"
 	turnOrdinal: number
 	sessionId: string
+	scope?: MemoryScope
+	scopeRef?: string
 	role: ConversationDatasetTurn["role"]
 	body: string
 	timestamp?: Date
 }): string {
 	const fingerprint = createHash("sha256")
 		.update(
-			[
+			JSON.stringify([
 				params.datasetPath,
+				params.scope ?? "",
+				params.scopeRef ?? "",
 				String(params.turnOrdinal),
 				params.sessionId,
 				params.role,
 				params.body,
 				params.timestamp?.toISOString() ?? "",
-			].join("\n"),
+			]),
 		)
 		.digest("hex")
 	return `dataset-replay-${params.metadataFlavor}:${fingerprint}`
@@ -112,6 +115,7 @@ async function replayConversationDataset(params: {
 	conversations: ConversationDatasetConversation[]
 	failedLines?: number
 	scope?: MemoryScope
+	scopeRef?: string
 	limitConversations?: number
 	limitTurnsPerConversation?: number
 	metadata?: Record<string, unknown>
@@ -251,6 +255,8 @@ async function replayConversationDataset(params: {
 							metadataFlavor: params.metadataFlavor,
 							turnOrdinal: ordinal,
 							sessionId,
+							scope,
+							scopeRef: params.scopeRef,
 							role: turn.role,
 							body: turn.body,
 							timestamp: payload.timestamp,
@@ -298,6 +304,7 @@ export async function importConversationDataset(params: {
 	baseDir?: string
 	allowedRoots?: string[]
 	scope?: MemoryScope
+	scopeRef?: string
 	limitConversations?: number
 	limitTurnsPerConversation?: number
 	metadata?: Record<string, unknown>
@@ -317,6 +324,7 @@ export async function importConversationDataset(params: {
 		conversations: dataset.conversations,
 		failedLines: dataset.failedLines,
 		scope: params.scope,
+		scopeRef: params.scopeRef,
 		limitConversations: params.limitConversations,
 		limitTurnsPerConversation: params.limitTurnsPerConversation,
 		metadata: params.metadata,

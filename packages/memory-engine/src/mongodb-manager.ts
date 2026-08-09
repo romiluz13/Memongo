@@ -1114,6 +1114,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 			baseDir: this.workspaceDir,
 			allowedRoots,
 			scope: params.scope,
+			scopeRef: params.scopeRef,
 			limitConversations: params.limitConversations,
 			limitTurnsPerConversation: params.limitTurnsPerConversation,
 			writeTurns: async (turns) =>

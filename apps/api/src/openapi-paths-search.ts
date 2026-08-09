@@ -468,6 +468,15 @@ export const searchPaths = {
 							type: "object",
 							properties: {
 								agentId: { type: "string" },
+								scope: {
+									type: "string",
+									enum: memoryScopeEnum,
+								},
+								scopeRef: {
+									type: "string",
+									description:
+										"Optional scope reference used for tenant isolation.",
+								},
 								query: {
 									type: "string",
 									description:
@@ -609,6 +618,11 @@ export const searchPaths = {
 								scope: {
 									type: "string",
 									enum: memoryScopeEnum,
+								},
+								scopeRef: {
+									type: "string",
+									description:
+										"Optional scope reference applied to every imported turn.",
 								},
 								limitConversations: { type: "integer", minimum: 1 },
 								limitTurnsPerConversation: {

@@ -85,6 +85,10 @@ describe("auth: resolveApiKeyForProvider", () => {
 		expect(resolveApiKeyForProvider("unknown-llm", {})).toBeUndefined()
 	})
 
+	it("ignores inherited provider mapping keys", () => {
+		expect(resolveApiKeyForProvider("__proto__", {})).toBeUndefined()
+	})
+
 	it("never returns a blank or untrimmed key (property)", () => {
 		fc.assert(
 			fc.property(fc.string(), fc.string(), (provider, value) => {

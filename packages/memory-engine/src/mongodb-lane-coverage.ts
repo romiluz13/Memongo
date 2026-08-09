@@ -76,6 +76,34 @@ export async function updateLaneCoverage(params: {
 }
 
 /**
+ * Idempotently make a retrieval lane available without changing its count.
+ * Repeated calls preserve the existing count, while $max initializes a
+ * missing count to zero for a newly upserted lane document.
+ */
+export async function markLaneAvailable(params: {
+	db: Db
+	prefix: string
+	agentId: string
+	lane: RetrievalPath
+}): Promise<void> {
+	const { db, prefix, agentId, lane } = params
+	const now = new Date()
+	await laneCoverageCollection(db, prefix).updateOne(
+		{ agentId },
+		{
+			$max: { [`lanes.${lane}.count`]: 0 },
+			$set: {
+				[`lanes.${lane}.hasData`]: true,
+				[`lanes.${lane}.lastUpdated`]: now,
+				updatedAt: now,
+			},
+			$setOnInsert: { agentId },
+		},
+		{ upsert: true },
+	)
+}
+
+/**
  * Get lane coverage for an agent.
  * Returns null if no coverage document exists.
  */

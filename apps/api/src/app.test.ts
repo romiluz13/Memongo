@@ -749,6 +749,26 @@ describe("createApp", () => {
 				"application/json"
 			]?.schema?.properties?.roles?.items?.enum,
 		).toEqual(["user", "assistant", "system", "tool"])
+		expect(
+			json.paths?.["/v1/recall-conversation"]?.post?.requestBody?.content?.[
+				"application/json"
+			]?.schema?.properties,
+		).toEqual(
+			expect.objectContaining({
+				scope: expect.any(Object),
+				scopeRef: expect.any(Object),
+			}),
+		)
+		expect(
+			json.paths?.["/v1/import/conversations"]?.post?.requestBody?.content?.[
+				"application/json"
+			]?.schema?.properties,
+		).toEqual(
+			expect.objectContaining({
+				scope: expect.any(Object),
+				scopeRef: expect.any(Object),
+			}),
+		)
 		expect(json.paths?.["/v1/lifecycle/get"]?.post).toBeDefined()
 		expect(json.paths?.["/v1/lifecycle/update"]?.post).toBeDefined()
 		expect(json.paths?.["/v1/lifecycle/delete"]?.post?.summary).toContain(

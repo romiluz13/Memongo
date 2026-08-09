@@ -329,7 +329,6 @@ export async function ensureGraphStandardIndexes(
 		{ name: "idx_episodes_agent_type_updated" },
 	)
 	applied++
-
 	// Ingest runs indexes
 	return applied
 }
