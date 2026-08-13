@@ -48,6 +48,7 @@ describe("resolveMemoryBackendConfig", () => {
 		expect(resolved.mongodb?.collectionPrefix).toBe("memongo_")
 		expect(resolved.mongodb?.deploymentProfile).toBe("atlas-local-preview")
 		expect(resolved.mongodb?.embeddingMode).toBe("automated")
+		expect(resolved.mongodb?.queryEmbeddingModel).toBe("voyage-4-lite")
 		expect(resolved.mongodb?.fusionMethod).toBe("rankFusion")
 		expect(resolved.mongodb?.recallProfile).toBe("balanced")
 		expect(resolved.mongodb?.quantization).toBe("none")
@@ -70,6 +71,61 @@ describe("resolveMemoryBackendConfig", () => {
 		expect(resolved.mongodb?.relevance.benchmark.datasetPath).toContain(
 			".memongo/relevance/golden.jsonl",
 		)
+	})
+
+	it("resolves the query embedding model from config and lets env override it", () => {
+		const configured = resolveMemoryBackendConfig({
+			cfg: {
+				agents: { defaults: { workspace: "/tmp/memory-test" } },
+				memory: {
+					backend: "mongodb",
+					mongodb: {
+						uri: "mongodb://localhost:27017",
+						queryEmbeddingModel: "voyage-4",
+					},
+				},
+			} as unknown as MemongoConfig,
+			agentId: "main",
+		})
+		expect(configured.mongodb?.queryEmbeddingModel).toBe("voyage-4")
+
+		vi.stubEnv("MEMONGO_QUERY_EMBEDDING_MODEL", "voyage-4-large")
+		try {
+			const overridden = resolveMemoryBackendConfig({
+				cfg: {
+					agents: { defaults: { workspace: "/tmp/memory-test" } },
+					memory: {
+						backend: "mongodb",
+						mongodb: {
+							uri: "mongodb://localhost:27017",
+							queryEmbeddingModel: "voyage-4",
+						},
+					},
+				} as unknown as MemongoConfig,
+				agentId: "main",
+			})
+			expect(overridden.mongodb?.queryEmbeddingModel).toBe("voyage-4-large")
+		} finally {
+			vi.unstubAllEnvs()
+		}
+	})
+
+	it("rejects unsupported query embedding models", () => {
+		const resolve = () =>
+			resolveMemoryBackendConfig({
+				cfg: {
+					agents: { defaults: { workspace: "/tmp/memory-test" } },
+					memory: {
+						backend: "mongodb",
+						mongodb: {
+							uri: "mongodb://localhost:27017",
+							queryEmbeddingModel: "voyage-code-3",
+						},
+					},
+				} as unknown as MemongoConfig,
+				agentId: "main",
+			})
+		expect(resolve).toThrow(/queryEmbeddingModel "voyage-code-3"/)
 	})
 
 	it("resolves mongodb with custom config values", () => {
@@ -721,16 +777,22 @@ describe("resolveMemoryBackendConfig", () => {
 	})
 
 	it("throws when mongodb backend has no URI", () => {
-		const cfg = {
-			agents: { defaults: { workspace: "/tmp/memory-test" } },
-			memory: {
-				backend: "mongodb",
-				mongodb: {},
-			},
-		} as MemongoConfig
-		expect(() => resolveMemoryBackendConfig({ cfg, agentId: "main" })).toThrow(
-			/MongoDB URI required/,
-		)
+		vi.stubEnv("MEMONGO_MONGODB_URI", "")
+		vi.stubEnv("MEMONGO_FORCE_MONGODB_URI", "")
+		try {
+			const cfg = {
+				agents: { defaults: { workspace: "/tmp/memory-test" } },
+				memory: {
+					backend: "mongodb",
+					mongodb: {},
+				},
+			} as MemongoConfig
+			expect(() =>
+				resolveMemoryBackendConfig({ cfg, agentId: "main" }),
+			).toThrow(/MongoDB URI required/)
+		} finally {
+			vi.unstubAllEnvs()
+		}
 	})
 
 	it("config URI takes precedence over env var", () => {

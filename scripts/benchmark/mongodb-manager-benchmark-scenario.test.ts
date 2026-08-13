@@ -4,6 +4,9 @@ import type { MongoDBMemoryManager } from "../../packages/memory-engine/src/mong
 import type { MongoDBManagerHost } from "../../packages/memory-engine/src/mongodb-manager-host.js"
 import type { MemorySearchResult } from "../../packages/memory-engine/src/types.js"
 import { MongoDBManagerBenchmarkOps } from "./mongodb-manager-benchmark.js"
+import { MongoDBManagerBenchmarkScenarioOps } from "./mongodb-manager-benchmark-scenario.js"
+import type { BenchmarkCheckpoint } from "./mongodb-benchmark-checkpoint.js"
+import { createOperationRunContext } from "../../packages/memory-engine/src/mongodb-operation-accounting.js"
 import { createHash } from "node:crypto"
 import { mkdtemp, rm, writeFile } from "node:fs/promises"
 import os from "node:os"
@@ -189,6 +192,92 @@ vi.mock("../../packages/memory-engine/src/mongodb-telemetry.js", async () =>
 	).telemetryModuleMock(),
 )
 
+describe("benchmark run configuration identity", () => {
+	it("records query model and conversation evidence mode", () => {
+		vi.stubEnv("MEMONGO_SEARCH_MAX_TIME_MS", "4321")
+		const host = {
+			config: {
+				mongodb: {
+					uri: "mongodb+srv://user:secret@example.mongodb.net",
+					database: "benchmark_db",
+					collectionPrefix: "benchmark_",
+					deploymentProfile: "atlas-managed",
+					numCandidates: 500,
+					fusionMethod: "rankFusion",
+					embeddingMode: "automated",
+					queryEmbeddingModel: "voyage-4-lite",
+					conversationEvidenceMode: "parallel",
+					numDimensions: 1024,
+					quantization: "none",
+					cache: {
+						enabled: false,
+						conversationTtlSec: 300,
+						kbTtlSec: 600,
+						similarityThreshold: 0.92,
+					},
+					reranking: {
+						enabled: false,
+						model: "rerank-2.5",
+						topN: 20,
+						minScore: 0.01,
+					},
+					queryRewriting: {
+						enabled: false,
+						method: "rules",
+						maxTokens: 128,
+					},
+					sources: {
+						conversation: { enabled: true },
+						reference: { enabled: true },
+						structured: { enabled: true },
+					},
+					kb: { enabled: true },
+					graph: {
+						enabled: false,
+						maxGraphDepth: 2,
+						entityExtraction: {
+							method: "regex",
+							timeoutMs: 1_000,
+						},
+					},
+					episodes: { enabled: true, minEventsForEpisode: 6 },
+				},
+			},
+			capabilities: {
+				vectorSearch: true,
+				textSearch: true,
+				scoreFusion: false,
+				rankFusion: true,
+			},
+		} as unknown as MongoDBManagerHost
+		try {
+			const configuration = new MongoDBManagerBenchmarkScenarioOps(
+				host,
+			).snapshotBenchmarkRunConfiguration({
+				executionProfile: "shipped",
+				retrievalLane: "native",
+				maxResults: 50,
+				minScore: 0.01,
+			})
+
+			expect(configuration.settings).toEqual(
+				expect.objectContaining({
+					queryEmbeddingModel: "voyage-4-lite",
+					conversationEvidenceMode: "parallel",
+					deploymentIdentitySha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+					collectionPrefix: "benchmark_",
+					searchBudgetMaxAggregations: 12,
+					searchBudgetMaxEmbeds: 5,
+					userSearchMaxTimeMs: 4321,
+				}),
+			)
+			expect(JSON.stringify(configuration)).not.toContain("secret")
+		} finally {
+			vi.unstubAllEnvs()
+		}
+	})
+})
+
 describe("runScenarioBenchmarkDataset", () => {
 	it("continues after an individual query failure without scoring it as a miss", async () => {
 		vi.stubEnv("MEMONGO_ENRICHMENT_API_KEY", "")
@@ -279,6 +368,137 @@ describe("runScenarioBenchmarkDataset", () => {
 		// (scripts/mongodb-e2e-qa.ts); the manager no longer populates e2eQa.
 		expect(result.e2eQa).toBeUndefined()
 		vi.unstubAllEnvs()
+	})
+
+	it("restores completed scenarios and runs only the remaining work", async () => {
+		const runContext = createOperationRunContext({
+			runId: "run-resume",
+			configuration: {
+				executionProfile: "shipped",
+				retrievalLane: "native",
+				maxResults: 10,
+				minScore: 0.1,
+				settings: {},
+			},
+		})
+		const search = vi.fn().mockResolvedValue([
+			{
+				path: "memory://second",
+				startLine: 1,
+				endLine: 1,
+				score: 0.9,
+				snippet: "second memory",
+				source: "conversation",
+				sessionId: "session-2",
+			},
+		] satisfies MemorySearchResult[])
+		const manager = {
+			agentId: "agent-1",
+			relevance: {
+				persistRegression: vi.fn().mockResolvedValue([]),
+			},
+			search,
+			listBenchmarkEventEvidence: vi.fn().mockResolvedValue({
+				sessionIds: new Map<string, string>(),
+				turnIds: new Map<string, string>(),
+				dialogIds: new Map<string, string>(),
+			}),
+		} as unknown as MongoDBMemoryManager
+		const resumeCheckpoint: BenchmarkCheckpoint = {
+			version: 1,
+			runId: runContext.runId,
+			datasetSha256: "a".repeat(64),
+			configurationHash: runContext.configurationHash,
+			totalScenarios: 2,
+			scenarioIds: ["scenario-1", "scenario-2"],
+			completedScenarios: [
+				{
+					index: 0,
+					scenarioId: "scenario-1",
+					executionsByPass: [
+						[
+							{
+								caseId: "case-1",
+								datasetKind: "locomo",
+								executionStatus: "success",
+								scoreEligibility: "retrieval",
+								retrievalOutcome: "hit",
+								empty: false,
+								topScore: 0.9,
+								latencyMs: 10,
+								scored: true,
+								hit: true,
+								rAt5: 1,
+								rAt10: 1,
+								ndcgAt10: 1,
+							},
+						],
+					],
+					ingest: {
+						conversationsIngested: 0,
+						turnsIngested: 0,
+						skippedConversations: 0,
+						failedTurns: 0,
+					},
+					expectedSessionEntries: [["case-1", ["session-1"]]],
+					expectedTurnEntries: [["case-1", []]],
+					storageCollections: [],
+					storageFailure:
+						"scenario-1: scenario did not use an isolated benchmark agent",
+				},
+			],
+			accounting: runContext.accounting.snapshot(),
+			updatedAt: new Date().toISOString(),
+		}
+
+		const result = await benchmarkOps(manager).runScenarioBenchmarkDataset({
+			datasetPath: "/tmp/benchmark.json",
+			dataset: {
+				name: "LoCoMo sample",
+				datasetKind: "locomo",
+				scenarios: [
+					{
+						scenarioId: "scenario-1",
+						conversations: [],
+						evaluations: [
+							{
+								caseId: "case-1",
+								query: "First question",
+								expectedSessionIds: ["session-1"],
+							},
+						],
+					},
+					{
+						scenarioId: "scenario-2",
+						conversations: [],
+						evaluations: [
+							{
+								caseId: "case-2",
+								query: "Second question",
+								expectedSessionIds: ["session-2"],
+							},
+						],
+					},
+				],
+				evaluations: [],
+				conversations: [],
+			},
+			datasetVersion: "dataset-v1",
+			maxResults: 10,
+			minScore: 0.1,
+			executionProfile: "shipped",
+			resumeCheckpoint,
+			runContext,
+		})
+
+		expect(search).toHaveBeenCalledOnce()
+		expect(search).toHaveBeenCalledWith(
+			"Second question",
+			expect.any(Object),
+			runContext,
+		)
+		expect(result.result.cases).toBe(2)
+		expect(result.result.scoredCases).toBe(2)
 	})
 
 	it("hashes the raw dataset file to build scenario datasetVersion", async () => {

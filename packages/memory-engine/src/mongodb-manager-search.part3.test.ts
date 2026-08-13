@@ -141,6 +141,76 @@ describe("searchV2 non-lane phase latency instrumentation", () => {
 		expect(phases.episodic).toBeGreaterThanOrEqual(0)
 	})
 
+	it("attributes the always-on result processing phases", async () => {
+		mocked(planRetrieval).mockReturnValue({
+			paths: ["episodic"],
+			confidence: "high",
+			reasoning: "result processing phase probe",
+		})
+		mocked(searchEpisodes).mockResolvedValue([])
+
+		const result = await searchV2(fakeDb, fakePrefix, "espresso", "agent-1", {
+			availablePaths: new Set(["episodic"]),
+			searchOptions: { allowHybridBackstop: false },
+		})
+
+		expect(Object.keys(result.metadata.latencyByPath ?? {})).toEqual(
+			expect.arrayContaining([
+				"phase:result-normalization",
+				"phase:heuristic-rerank",
+				"phase:post-retrieval-scoring",
+				"phase:conversation-evidence",
+				"phase:temporal-candidate-merge",
+				"phase:precision-merge",
+				"phase:lane-controls-pre-rerank",
+				"phase:final-normalize",
+				"phase:projection",
+			]),
+		)
+	})
+
+	it("attributes conditional temporal and turn-precision phases when enabled", async () => {
+		const previousTemporalMode =
+			process.env.MEMONGO_BENCHMARK_TEMPORAL_COVERAGE_MODE
+		const previousTurnPrecisionMode =
+			process.env.MEMONGO_BENCHMARK_TURN_PRECISION_MODE
+		process.env.MEMONGO_BENCHMARK_TEMPORAL_COVERAGE_MODE = "enabled"
+		process.env.MEMONGO_BENCHMARK_TURN_PRECISION_MODE = "enabled"
+		try {
+			mocked(planRetrieval).mockReturnValue({
+				paths: ["episodic"],
+				confidence: "high",
+				reasoning: "conditional phase probe",
+			})
+			mocked(searchEpisodes).mockResolvedValue([])
+
+			const result = await searchV2(fakeDb, fakePrefix, "espresso", "agent-1", {
+				availablePaths: new Set(["episodic"]),
+				searchOptions: { allowHybridBackstop: false },
+			})
+
+			expect(result.metadata.latencyByPath).toEqual(
+				expect.objectContaining({
+					"phase:temporal-coverage": expect.any(Number),
+					"phase:turn-precision": expect.any(Number),
+				}),
+			)
+		} finally {
+			if (previousTemporalMode === undefined) {
+				delete process.env.MEMONGO_BENCHMARK_TEMPORAL_COVERAGE_MODE
+			} else {
+				process.env.MEMONGO_BENCHMARK_TEMPORAL_COVERAGE_MODE =
+					previousTemporalMode
+			}
+			if (previousTurnPrecisionMode === undefined) {
+				delete process.env.MEMONGO_BENCHMARK_TURN_PRECISION_MODE
+			} else {
+				process.env.MEMONGO_BENCHMARK_TURN_PRECISION_MODE =
+					previousTurnPrecisionMode
+			}
+		}
+	})
+
 	it("records phase:rewrite only when query rewriting runs", async () => {
 		mocked(planRetrieval).mockReturnValue({
 			paths: ["episodic"],
@@ -209,6 +279,41 @@ describe("searchV2 non-lane phase latency instrumentation", () => {
 
 		expect(
 			result.metadata.latencyByPath?.["phase:rerank"],
+		).toBeGreaterThanOrEqual(0)
+		expect(
+			result.metadata.latencyByPath?.["phase:rerank-input"],
+		).toBeGreaterThanOrEqual(0)
+	})
+
+	it("attributes post-rerank result controls when reranking succeeds", async () => {
+		mocked(planRetrieval).mockReturnValue({
+			paths: ["episodic"],
+			confidence: "high",
+			reasoning: "post-rerank controls phase probe",
+		})
+		mocked(searchEpisodes).mockResolvedValue([])
+		mocked(crossEncoderRerank).mockResolvedValue({
+			results: [],
+			reranked: true,
+			latencyMs: 0,
+		})
+
+		const result = await searchV2(fakeDb, fakePrefix, "espresso", "agent-1", {
+			availablePaths: new Set(["episodic"]),
+			searchOptions: {
+				allowHybridBackstop: false,
+				rerankConfig: {
+					enabled: true,
+					model: "rerank-2.5-lite",
+					topN: 5,
+					minScore: 0,
+					voyageApiKey: "test-key",
+				},
+			},
+		})
+
+		expect(
+			result.metadata.latencyByPath?.["phase:lane-controls-post-rerank"],
 		).toBeGreaterThanOrEqual(0)
 	})
 })
@@ -284,18 +389,38 @@ describe("search() phase latency reporting", () => {
 
 		let phases: Record<string, number> = {}
 		const manager = buildMockManager()
-		await manager.search("what did we discuss?", {
-			onLaneLatency: (lanes) => {
-				phases = lanes
-			},
-		})
+		let now = 0
+		const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now++)
+		try {
+			await manager.search("what did we discuss?", {
+				onLaneLatency: (lanes) => {
+					phases = lanes
+				},
+			})
+		} finally {
+			nowSpy.mockRestore()
+		}
 
-		const measuredInsideTotal =
-			(phases["phase:plan"] ?? 0) +
-			(phases["phase:lanes"] ?? 0) +
-			(phases["phase:rewrite"] ?? 0) +
-			(phases["phase:rerank"] ?? 0) +
-			(phases["phase:cache-write"] ?? 0)
+		const measuredInsideTotal = [
+			"phase:plan",
+			"phase:lanes",
+			"phase:rewrite",
+			"phase:result-normalization",
+			"phase:heuristic-rerank",
+			"phase:post-retrieval-scoring",
+			"phase:conversation-evidence",
+			"phase:temporal-coverage",
+			"phase:temporal-candidate-merge",
+			"phase:turn-precision",
+			"phase:precision-merge",
+			"phase:lane-controls-pre-rerank",
+			"phase:rerank-input",
+			"phase:rerank",
+			"phase:lane-controls-post-rerank",
+			"phase:final-normalize",
+			"phase:projection",
+			"phase:cache-write",
+		].reduce((total, phase) => total + (phases[phase] ?? 0), 0)
 		expect(phases["phase:unaccounted"]).toBe(
 			Math.max(0, (phases["phase:total"] ?? 0) - measuredInsideTotal),
 		)

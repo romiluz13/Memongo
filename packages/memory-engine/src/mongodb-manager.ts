@@ -192,6 +192,7 @@ import {
 	getExpectedSearchIndexTargets,
 	isEventsVectorBitemporalPrefilterReady,
 	isSearchIndexManagementAvailable,
+	shouldEnsureTextFallbackIndexes,
 	kbChunksCollection,
 	metaCollection,
 	proceduresCollection,
@@ -630,16 +631,6 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		const searchIndexManagementAvailable =
 			await isSearchIndexManagementAvailable(db, chunksCollectionName)
 
-		await ensureStandardIndexes(db, prefix, {
-			memoryTtlDays: mongoCfg.memoryTtlDays,
-			relevanceRetentionDays: mongoCfg.relevance.retention.days,
-			// P3.8: the BSON $text indexes are the no-mongot fallback — with
-			// Search Index Management present the $search indexes serve every
-			// text lane, so maintaining six $text duplicates is pure write
-			// amplification.
-			textFallbackIndexes: !searchIndexManagementAvailable,
-		})
-
 		// Detect concrete serving readiness. Fusion capability is server-version
 		// based, while Search capabilities require named queryable indexes.
 		let capabilities = await detectCapabilities(
@@ -675,7 +666,12 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 					capabilityDeployment,
 				),
 			}
-			if (ensuredSearchIndexes.text || ensuredSearchIndexes.vector) {
+			if (
+				ensuredSearchIndexes.text ||
+				ensuredSearchIndexes.vector ||
+				!capabilities.textSearch ||
+				!capabilities.vectorSearch
+			) {
 				const { timeoutMs: readinessTimeoutMs, pollMs: readinessPollMs } =
 					resolveSearchIndexReadinessTiming()
 				const readinessResults = await Promise.all(
@@ -758,6 +754,14 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 				"search index management unavailable; skipping search index bootstrap",
 			)
 		}
+		await ensureStandardIndexes(db, prefix, {
+			memoryTtlDays: mongoCfg.memoryTtlDays,
+			relevanceRetentionDays: mongoCfg.relevance.retention.days,
+			// BSON $text indexes are retained whenever named serving text indexes
+			// are not queryable. Management API availability alone does not prove
+			// that $search can serve traffic.
+			textFallbackIndexes: shouldEnsureTextFallbackIndexes(capabilities),
+		})
 		if (
 			isStrictSearchReadinessMode() &&
 			(!capabilities.textSearch || !capabilities.vectorSearch)

@@ -83,6 +83,7 @@ const OBSERVED_PROVIDER_OPERATIONS = [
 export function createOperationRunContext(params: {
 	runId: string
 	configuration: OperationRunConfiguration
+	initialAccounting?: BenchmarkCostAccounting
 }): OperationRunContext {
 	const configuration: Readonly<OperationRunConfiguration> = Object.freeze({
 		...params.configuration,
@@ -103,6 +104,17 @@ export function createOperationRunContext(params: {
 			succeeded: 0,
 			failed: 0,
 		})
+	}
+	for (const entry of params.initialAccounting?.operations ?? []) {
+		if (entry.operation === "embedding") continue
+		const key = operationKey(entry.operation, {
+			provider: entry.provider,
+			model: entry.model,
+		})
+		if (entry.provider || entry.model) {
+			operations.delete(operationKey(entry.operation))
+		}
+		operations.set(key, { ...entry })
 	}
 	const measuredOperation = (
 		operation: Exclude<BenchmarkOperationName, "embedding">,

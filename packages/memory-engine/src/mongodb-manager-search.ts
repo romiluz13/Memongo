@@ -334,6 +334,7 @@ export class MongoDBManagerSearchOps {
 							vectorWeight: 0.7,
 							textWeight: 0.3,
 							embeddingMode: mongoCfg.embeddingMode,
+							queryEmbeddingModel: mongoCfg.queryEmbeddingModel,
 							explain: explainOpts,
 							onTrace: (event) => {
 								traceEvents.push(event)
@@ -359,6 +360,7 @@ export class MongoDBManagerSearchOps {
 							vectorWeight: 0.7,
 							textWeight: 0.3,
 							embeddingMode: mongoCfg.embeddingMode,
+							queryEmbeddingModel: mongoCfg.queryEmbeddingModel,
 							explain: explainOpts,
 							onTrace: (event) => {
 								traceEvents.push(event)
@@ -380,6 +382,7 @@ export class MongoDBManagerSearchOps {
 							textIndexName: `${this.host.prefix}kb_chunks_text`,
 							capabilities: this.host.capabilities,
 							embeddingMode: mongoCfg.embeddingMode,
+							queryEmbeddingModel: mongoCfg.queryEmbeddingModel,
 							kbDocs: kbCollection(this.host.db, this.host.prefix),
 							explain: explainOpts,
 						},
@@ -408,6 +411,7 @@ export class MongoDBManagerSearchOps {
 							capabilities: this.host.capabilities,
 							vectorIndexName: `${this.host.prefix}structured_mem_vector`,
 							embeddingMode: mongoCfg.embeddingMode,
+							queryEmbeddingModel: mongoCfg.queryEmbeddingModel,
 							explain: explainOpts,
 						},
 					).catch((err) => {
@@ -616,11 +620,16 @@ export class MongoDBManagerSearchOps {
 				scope: searchScope,
 				scopeRef: searchScopeRef,
 				config: mongoCfg.cache,
+				queryEmbeddingModel: mongoCfg.queryEmbeddingModel,
 				// P2.4: resolved (post-default) params fold into the cache key, so
 				// a cached page can never serve a different parameterization.
 				keyParams: {
 					maxResults,
 					minScore,
+					queryEmbeddingModel: mongoCfg.queryEmbeddingModel,
+					conversationEvidenceMode: mongoCfg.conversationEvidenceMode,
+					fusionMethod: mongoCfg.fusionMethod,
+					reranker: mongoCfg.reranking,
 					...(opts?.questionDate ? { questionDate: opts.questionDate } : {}),
 				},
 			})
@@ -685,6 +694,8 @@ export class MongoDBManagerSearchOps {
 						capabilities: this.host.capabilities,
 						fusionMethod: mongoCfg.fusionMethod,
 						embeddingMode: mongoCfg.embeddingMode,
+						queryEmbeddingModel: mongoCfg.queryEmbeddingModel,
+						conversationEvidenceMode: mongoCfg.conversationEvidenceMode,
 						graphMaxDepth: mongoCfg.graph.maxGraphDepth,
 						conversationFilter: this.host.buildConversationChunkFilter({
 							scope: searchScope,
@@ -779,6 +790,10 @@ export class MongoDBManagerSearchOps {
 						keyParams: {
 							maxResults,
 							minScore,
+							queryEmbeddingModel: mongoCfg.queryEmbeddingModel,
+							conversationEvidenceMode: mongoCfg.conversationEvidenceMode,
+							fusionMethod: mongoCfg.fusionMethod,
+							reranker: mongoCfg.reranking,
 							...(opts?.questionDate
 								? { questionDate: opts.questionDate }
 								: {}),
@@ -891,15 +906,30 @@ export class MongoDBManagerSearchOps {
 			// subtracted here sits inside it. The cache check runs before
 			// searchStart and is therefore reported alongside, not inside, total.
 			phaseLatency["phase:total"] = Date.now() - searchStart
-			const measuredInsideTotal =
-				(laneLatency["phase:plan"] ?? 0) +
-				(laneLatency["phase:lanes"] ?? 0) +
-				(laneLatency["phase:rewrite"] ?? 0) +
-				(laneLatency["phase:rerank"] ?? 0) +
-				(phaseLatency["phase:cache-write"] ?? 0)
+			const measuredInsideTotal = [
+				"phase:plan",
+				"phase:lanes",
+				"phase:rewrite",
+				"phase:result-normalization",
+				"phase:heuristic-rerank",
+				"phase:post-retrieval-scoring",
+				"phase:conversation-evidence",
+				"phase:temporal-coverage",
+				"phase:temporal-candidate-merge",
+				"phase:turn-precision",
+				"phase:precision-merge",
+				"phase:lane-controls-pre-rerank",
+				"phase:rerank-input",
+				"phase:rerank",
+				"phase:lane-controls-post-rerank",
+				"phase:final-normalize",
+				"phase:projection",
+			].reduce((total, phase) => total + (laneLatency[phase] ?? 0), 0)
 			phaseLatency["phase:unaccounted"] = Math.max(
 				0,
-				phaseLatency["phase:total"] - measuredInsideTotal,
+				phaseLatency["phase:total"] -
+					measuredInsideTotal -
+					(phaseLatency["phase:cache-write"] ?? 0),
 			)
 			opts?.onLaneLatency?.({ ...laneLatency, ...phaseLatency })
 		}
@@ -950,10 +980,15 @@ export class MongoDBManagerSearchOps {
 				scope: searchScope,
 				scopeRef: searchScopeRef,
 				config: mongoCfg.cache,
+				queryEmbeddingModel: mongoCfg.queryEmbeddingModel,
 				// P2.4: resolved (post-default) params fold into the cache key.
 				keyParams: {
 					maxResults: resolvedSearchConfig.maxResults,
 					minScore: normalized.minScore ?? 0.1,
+					queryEmbeddingModel: mongoCfg.queryEmbeddingModel,
+					conversationEvidenceMode: mongoCfg.conversationEvidenceMode,
+					fusionMethod: resolvedSearchConfig.fusionMethod,
+					reranker: mongoCfg.reranking,
 					...(normalized.timeRange ? { timeRange: normalized.timeRange } : {}),
 				},
 			})
@@ -1036,6 +1071,8 @@ export class MongoDBManagerSearchOps {
 						capabilities: this.host.capabilities,
 						fusionMethod: resolvedSearchConfig.fusionMethod,
 						embeddingMode: mongoCfg.embeddingMode,
+						queryEmbeddingModel: mongoCfg.queryEmbeddingModel,
+						conversationEvidenceMode: mongoCfg.conversationEvidenceMode,
 						graphMaxDepth: mongoCfg.graph.maxGraphDepth,
 						conversationFilter: this.host.buildConversationChunkFilter({
 							scope: searchScope,
@@ -1138,6 +1175,10 @@ export class MongoDBManagerSearchOps {
 					keyParams: {
 						maxResults: resolvedSearchConfig.maxResults,
 						minScore: normalized.minScore ?? 0.1,
+						queryEmbeddingModel: mongoCfg.queryEmbeddingModel,
+						conversationEvidenceMode: mongoCfg.conversationEvidenceMode,
+						fusionMethod: resolvedSearchConfig.fusionMethod,
+						reranker: mongoCfg.reranking,
 						...(normalized.timeRange
 							? { timeRange: normalized.timeRange }
 							: {}),
@@ -1218,6 +1259,7 @@ export class MongoDBManagerSearchOps {
 				textIndexName: `${this.host.prefix}kb_chunks_text`,
 				capabilities: this.host.capabilities,
 				embeddingMode: mongoCfg.embeddingMode,
+				queryEmbeddingModel: mongoCfg.queryEmbeddingModel,
 				// P0.10: KB fusion is a first-class option — per-call override,
 				// else the resolved config value (env/config, default rankFusion).
 				fusionMethod: opts?.fusionMethod ?? mongoCfg.fusionMethod,

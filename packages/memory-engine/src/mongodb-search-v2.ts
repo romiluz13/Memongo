@@ -6,9 +6,10 @@
  */
 
 import type { Db, Document } from "mongodb"
-import type { MemoryScope } from "@memongo/lib"
+import { createSubsystemLogger, type MemoryScope } from "@memongo/lib"
 import type { ResolvedMongoDBConfig } from "./backend-config.js"
 import { resolveDefaultScope } from "./backend-config.js"
+import { resolveConversationEvidenceMode } from "./mongodb-conversation-evidence-mode.js"
 import { searchEpisodes } from "./mongodb-episodes.js"
 import type { OperationRunContext } from "./mongodb-operation-accounting.js"
 import { getEventsByTimeRange } from "./mongodb-events.js"
@@ -59,6 +60,7 @@ import {
 	runWithSearchBudget,
 	type SearchBudgetLimits,
 	type SearchBudgetSnapshot,
+	tryReserveSearchBudget,
 } from "./mongodb-search-budget.js"
 import type {
 	StructuredMemorySalience,
@@ -75,7 +77,6 @@ import type {
 	MemorySource,
 	ResolvedSearchConfig,
 } from "./types.js"
-import { createSubsystemLogger } from "@memongo/lib"
 import {
 	applyPreferenceEvidenceBoostAfterRerank,
 	applyRecencyAccessBoostAfterRerank,
@@ -91,7 +92,10 @@ import {
 	searchResultIdentityKey,
 	stripSessionSummaryTurnProvenance,
 } from "./mongodb-search-ranking.js"
-import { orderTimelineAfterSourceEvidence } from "./mongodb-search-temporal.js"
+import {
+	isConversationEvidenceQuery,
+	orderTimelineAfterSourceEvidence,
+} from "./mongodb-search-temporal.js"
 import {
 	buildGraphQueryCandidates,
 	computeRawWindowEventQueryScore,
@@ -249,6 +253,8 @@ export type SearchV2Context = {
 		capabilities?: DetectedCapabilities
 		fusionMethod?: ResolvedMongoDBConfig["fusionMethod"]
 		embeddingMode?: ResolvedMongoDBConfig["embeddingMode"]
+		queryEmbeddingModel?: ResolvedMongoDBConfig["queryEmbeddingModel"]
+		conversationEvidenceMode?: ResolvedMongoDBConfig["conversationEvidenceMode"]
 		conversationFilter?: Document
 		bridgeFilter?: Document
 		bridgeMaxResults?: number
@@ -349,6 +355,13 @@ async function searchV2WithBudget(
 		}
 		const fusionMethod = context.searchOptions?.fusionMethod ?? "rankFusion"
 		const embeddingMode = context.searchOptions?.embeddingMode ?? "automated"
+		const queryEmbeddingModel =
+			context.searchOptions?.queryEmbeddingModel ?? "voyage-4-lite"
+		const conversationEvidenceMode =
+			context.searchOptions?.conversationEvidenceMode ??
+			resolveConversationEvidenceMode(
+				process.env.MEMONGO_CONVERSATION_EVIDENCE_MODE,
+			)
 		const hybridMode =
 			context.searchOptions?.searchConfig?.hybridMode ?? "hybrid"
 		const bridgeMaxResults =
@@ -603,6 +616,7 @@ async function searchV2WithBudget(
 								capabilities,
 								vectorIndexName: `${prefix}structured_mem_vector`,
 								embeddingMode,
+								queryEmbeddingModel,
 							},
 						).catch((err) => {
 							log.warn(`searchV2 active-critical path failed: ${String(err)}`)
@@ -624,6 +638,7 @@ async function searchV2WithBudget(
 								capabilities,
 								vectorIndexName: `${prefix}structured_mem_vector`,
 								embeddingMode,
+								queryEmbeddingModel,
 							},
 						).catch((err) => {
 							log.warn(`searchV2 structured path failed: ${String(err)}`)
@@ -856,6 +871,7 @@ async function searchV2WithBudget(
 								vectorIndexName: `${prefix}procedures_vector`,
 								textIndexName: `${prefix}procedures_text`,
 								embeddingMode,
+								queryEmbeddingModel,
 							},
 						).catch((err) => {
 							log.warn(`searchV2 procedural path failed: ${String(err)}`)
@@ -897,6 +913,7 @@ async function searchV2WithBudget(
 												indexName: `${prefix}chunks_vector`,
 												queryText: searchQuery,
 												embeddingMode,
+												queryEmbeddingModel,
 											})
 										: mongoSearch(
 												chunksCollection(db, prefix),
@@ -915,6 +932,7 @@ async function searchV2WithBudget(
 													vectorWeight: 0.7,
 													textWeight: 0.3,
 													embeddingMode,
+													queryEmbeddingModel,
 												},
 											)
 									).catch((err) => {
@@ -941,6 +959,7 @@ async function searchV2WithBudget(
 												indexName: `${prefix}chunks_vector`,
 												queryText: searchQuery,
 												embeddingMode,
+												queryEmbeddingModel,
 											})
 										: mongoSearch(
 												chunksCollection(db, prefix),
@@ -959,6 +978,7 @@ async function searchV2WithBudget(
 													vectorWeight: 0.7,
 													textWeight: 0.3,
 													embeddingMode,
+													queryEmbeddingModel,
 												},
 											)
 									).catch((err) => {
@@ -986,6 +1006,7 @@ async function searchV2WithBudget(
 												indexName: `${prefix}chunks_vector`,
 												queryText: searchQuery,
 												embeddingMode,
+												queryEmbeddingModel,
 											})
 										: mongoSearch(
 												chunksCollection(db, prefix),
@@ -1004,6 +1025,7 @@ async function searchV2WithBudget(
 													vectorWeight: 0.7,
 													textWeight: 0.3,
 													embeddingMode,
+													queryEmbeddingModel,
 												},
 											)
 									).catch((err) => {
@@ -1048,6 +1070,7 @@ async function searchV2WithBudget(
 												indexName: `${prefix}session_chunks_vector`,
 												queryText: searchQuery,
 												embeddingMode,
+												queryEmbeddingModel,
 											})
 										: mongoSearch(
 												sessionChunksCollection(db, prefix),
@@ -1066,6 +1089,7 @@ async function searchV2WithBudget(
 													vectorWeight: 0.7,
 													textWeight: 0.3,
 													embeddingMode,
+													queryEmbeddingModel,
 												},
 											)
 									).catch((err) => {
@@ -1101,6 +1125,7 @@ async function searchV2WithBudget(
 												indexName: `${prefix}memory_evidence_vector`,
 												queryText: searchQuery,
 												embeddingMode,
+												queryEmbeddingModel,
 											})
 										: mongoSearch(
 												memoryEvidenceCollection(db, prefix),
@@ -1119,6 +1144,7 @@ async function searchV2WithBudget(
 													vectorWeight: 0.65,
 													textWeight: 0.35,
 													embeddingMode,
+													queryEmbeddingModel,
 												},
 											)
 									)
@@ -1171,6 +1197,8 @@ async function searchV2WithBudget(
 								textIndexName: `${prefix}kb_chunks_text`,
 								capabilities,
 								embeddingMode,
+								queryEmbeddingModel,
+								fusionMethod,
 								kbDocs: kbCollection(db, prefix),
 							},
 						).catch((err) => {
@@ -1194,6 +1222,80 @@ async function searchV2WithBudget(
 				// Continue with other paths
 				return []
 			}
+		}
+
+		const runConversationEvidence = async (
+			reservation?: ReturnType<typeof tryReserveSearchBudget>,
+		): Promise<MemorySearchResult[]> =>
+			timeLane("phase:conversation-evidence", async () => {
+				try {
+					return await searchConversationEvidenceEvents({
+						db,
+						prefix,
+						query: searchQuery,
+						questionDate: context.searchOptions?.questionDate,
+						agentId,
+						scope,
+						scopeRef: agentScopeRef,
+						maxResults: Math.min(maxResults, 20),
+						numCandidates,
+						capabilities,
+						embeddingMode,
+						queryEmbeddingModel,
+						budgetReservation: reservation,
+					})
+				} catch (err) {
+					if (isBenchmarkStrictMode()) {
+						throw err
+					}
+					log.warn(`conversation evidence search failed: ${String(err)}`)
+					return []
+				} finally {
+					reservation?.release()
+				}
+			})
+
+		type ConversationEvidenceOutcome =
+			| { results: MemorySearchResult[] }
+			| { error: unknown }
+		const captureConversationEvidence = (
+			promise: Promise<MemorySearchResult[]>,
+		): Promise<ConversationEvidenceOutcome> =>
+			promise.then(
+				(results) => ({ results }),
+				(error: unknown) => ({ error }),
+			)
+
+		let parallelConversationEvidence:
+			| Promise<ConversationEvidenceOutcome>
+			| undefined
+		const conversationRetrievalAvailable = (
+			["raw-window", "hybrid", "graph", "episodic"] as const
+		).some((path) => context.availablePaths.has(path))
+		if (
+			conversationEvidenceMode === "parallel" &&
+			conversationRetrievalAvailable
+		) {
+			const isEvidenceQuery = isConversationEvidenceQuery(
+				searchQuery,
+				context.searchOptions?.questionDate,
+			)
+			const reservation = isEvidenceQuery
+				? tryReserveSearchBudget({
+						aggregations:
+							(capabilities.vectorSearch && embeddingMode === "automated"
+								? 1
+								: 0) + (capabilities.textSearch ? 1 : 0),
+						embeds:
+							capabilities.vectorSearch && embeddingMode === "automated"
+								? 1
+								: 0,
+					})
+				: undefined
+			parallelConversationEvidence =
+				isEvidenceQuery && !reservation
+					? Promise.resolve({ results: [] })
+					: captureConversationEvidence(runConversationEvidence(reservation))
 		}
 
 		// #66: wall clock of the whole retrieval block — the lanes run
@@ -1267,6 +1369,7 @@ async function searchV2WithBudget(
 							vectorIndexName: `${prefix}procedures_vector`,
 							textIndexName: `${prefix}procedures_text`,
 							embeddingMode,
+							queryEmbeddingModel,
 						},
 					),
 				)
@@ -1325,6 +1428,7 @@ async function searchV2WithBudget(
 		// C3 audit fix: RRF score normalization across paths before reranking.
 		// Replace raw scores (incomparable across paths: vector 0-1, BM25 0-inf, episode 0.85-synthetic)
 		// with rank-based scores summed across paths. Uses existing rrfScore() from mongodb-hybrid.ts.
+		const resultNormalizationStartedAt = Date.now()
 		if (Object.keys(perPathResults).length > 1) {
 			const rrfMap = new Map<string, number>()
 			for (const [_pathName, pathRes] of Object.entries(perPathResults)) {
@@ -1346,85 +1450,96 @@ async function searchV2WithBudget(
 			// reranking.
 			deduped = normalizeSinglePathScores(deduped, Object.keys(perPathResults))
 		}
+		latencyByPath["phase:result-normalization"] =
+			Date.now() - resultNormalizationStartedAt
 
+		const heuristicRerankStartedAt = Date.now()
 		const heuristicReranked = rerankResults(deduped, query)
+		latencyByPath["phase:heuristic-rerank"] =
+			Date.now() - heuristicRerankStartedAt
 
 		// Post-retrieval scoring: keyword, temporal, entity, quoted-phrase boosts
 		// Applied AFTER heuristic rerank, BEFORE cross-encoder rerank
+		const postRetrievalScoringStartedAt = Date.now()
 		const postScored = applyPostRetrievalScoring(query, heuristicReranked, {
 			questionDate: context.searchOptions?.questionDate,
 		})
-		const conversationEvidenceResults = await searchConversationEvidenceEvents({
-			db,
-			prefix,
-			query: searchQuery,
-			questionDate: context.searchOptions?.questionDate,
-			agentId,
-			scope,
-			scopeRef: agentScopeRef,
-			maxResults: Math.min(maxResults, 20),
-			numCandidates,
-			capabilities,
-			embeddingMode,
-		}).catch((err) => {
-			if (isBenchmarkStrictMode()) {
-				throw err
+		latencyByPath["phase:post-retrieval-scoring"] =
+			Date.now() - postRetrievalScoringStartedAt
+		let conversationEvidenceResults: MemorySearchResult[] = []
+		if (conversationEvidenceMode === "parallel") {
+			const outcome = await parallelConversationEvidence
+			if (outcome && "error" in outcome) {
+				throw outcome.error
 			}
-			log.warn(`conversation evidence search failed: ${String(err)}`)
-			return [] as MemorySearchResult[]
-		})
+			conversationEvidenceResults = outcome?.results ?? []
+		} else if (
+			conversationEvidenceMode === "serial" &&
+			conversationRetrievalAvailable
+		) {
+			conversationEvidenceResults = await runConversationEvidence()
+		}
 		const temporalCoverageResults = isTemporalCoverageMode()
-			? await searchTemporalCoverageEvents({
-					db,
-					prefix,
-					query: searchQuery,
-					questionDate: context.searchOptions?.questionDate,
-					agentId,
-					scope,
-					scopeRef: agentScopeRef,
-					maxResults: Math.min(maxResults, 20),
-					capabilities,
-				}).catch((err) => {
-					if (isBenchmarkStrictMode()) {
-						throw err
-					}
-					log.warn(`temporal coverage search failed: ${String(err)}`)
-					return [] as MemorySearchResult[]
-				})
+			? await timeLane("phase:temporal-coverage", () =>
+					searchTemporalCoverageEvents({
+						db,
+						prefix,
+						query: searchQuery,
+						questionDate: context.searchOptions?.questionDate,
+						agentId,
+						scope,
+						scopeRef: agentScopeRef,
+						maxResults: Math.min(maxResults, 20),
+						capabilities,
+					}).catch((err) => {
+						if (isBenchmarkStrictMode()) {
+							throw err
+						}
+						log.warn(`temporal coverage search failed: ${String(err)}`)
+						return [] as MemorySearchResult[]
+					}),
+				)
 			: []
+		const temporalCandidateMergeStartedAt = Date.now()
 		const temporalCandidateBase =
 			temporalCoverageResults.length > 0
 				? deduplicateSearchResults([...temporalCoverageResults, ...postScored])
 				: postScored
+		latencyByPath["phase:temporal-candidate-merge"] =
+			Date.now() - temporalCandidateMergeStartedAt
 		const turnPrecisionResults = isBenchmarkTurnPrecisionMode()
-			? await searchTurnEventsWithinSessions({
-					db,
-					prefix,
-					query: searchQuery,
-					agentId,
-					scope,
-					scopeRef: agentScopeRef,
-					sessionIds: temporalCandidateBase.slice(0, 15).flatMap((result) => {
-						const ids: string[] = []
-						if (result.sessionId) ids.push(result.sessionId)
-						const sessionIdFromCanonical = extractSessionIdFromCanonicalId(
-							result.canonicalId,
-						)
-						if (sessionIdFromCanonical) ids.push(sessionIdFromCanonical)
-						return ids
+			? await timeLane("phase:turn-precision", () =>
+					searchTurnEventsWithinSessions({
+						db,
+						prefix,
+						query: searchQuery,
+						agentId,
+						scope,
+						scopeRef: agentScopeRef,
+						sessionIds: temporalCandidateBase.slice(0, 15).flatMap((result) => {
+							const ids: string[] = []
+							if (result.sessionId) ids.push(result.sessionId)
+							const sessionIdFromCanonical = extractSessionIdFromCanonicalId(
+								result.canonicalId,
+							)
+							if (sessionIdFromCanonical) ids.push(sessionIdFromCanonical)
+							return ids
+						}),
+						maxResults: Math.min(maxResults, 20),
+						numCandidates,
+						capabilities,
+						embeddingMode,
+						queryEmbeddingModel,
+					}).catch((err) => {
+						if (isBenchmarkStrictMode()) {
+							throw err
+						}
+						log.warn(`turn precision rerank failed: ${String(err)}`)
+						return [] as MemorySearchResult[]
 					}),
-					maxResults: Math.min(maxResults, 20),
-					numCandidates,
-					capabilities,
-					embeddingMode,
-				}).catch((err) => {
-					if (isBenchmarkStrictMode()) {
-						throw err
-					}
-					log.warn(`turn precision rerank failed: ${String(err)}`)
-					return [] as MemorySearchResult[]
-				})
+				)
 			: []
+		const precisionMergeStartedAt = Date.now()
 		const precisionScored =
 			turnPrecisionResults.length > 0 || temporalCoverageResults.length > 0
 				? (() => {
@@ -1450,6 +1565,9 @@ async function searchV2WithBudget(
 							...stripSessionSummaryTurnProvenance(postScored),
 						])
 					: postScored
+		latencyByPath["phase:precision-merge"] =
+			Date.now() - precisionMergeStartedAt
+		const preRerankLaneControlsStartedAt = Date.now()
 		const laneControlled = applyLaneAwareResultControls({
 			query,
 			results: precisionScored,
@@ -1463,6 +1581,8 @@ async function searchV2WithBudget(
 			}),
 			planPaths: plan.paths,
 		})
+		latencyByPath["phase:lane-controls-pre-rerank"] =
+			Date.now() - preRerankLaneControlsStartedAt
 
 		// Cross-encoder re-ranking via Voyage API (after heuristic, before final slice)
 		const rerankCfg = context.searchOptions?.rerankConfig
@@ -1470,12 +1590,14 @@ async function searchV2WithBudget(
 		let laneControlSummary = laneControlled.summary
 		let wasReranked = false
 		if (rerankCfg?.enabled) {
+			const rerankInputStartedAt = Date.now()
 			const timelineResults = finalResults.filter(
 				(result) => result.provenance?.temporalTimeline === true,
 			)
 			const rerankInput = finalResults.filter(
 				(result) => result.provenance?.temporalTimeline !== true,
 			)
+			latencyByPath["phase:rerank-input"] = Date.now() - rerankInputStartedAt
 			const rerankResult = await timeLane("phase:rerank", () =>
 				crossEncoderRerank({
 					db,
@@ -1500,6 +1622,7 @@ async function searchV2WithBudget(
 				}),
 			)
 			if (rerankResult.reranked) {
+				const postRerankLaneControlsStartedAt = Date.now()
 				const postRerankLaneControlled = applyLaneAwareResultControls({
 					query,
 					results: orderTimelineAfterSourceEvidence(
@@ -1524,6 +1647,8 @@ async function searchV2WithBudget(
 					}),
 					planPaths: plan.paths,
 				})
+				latencyByPath["phase:lane-controls-post-rerank"] =
+					Date.now() - postRerankLaneControlsStartedAt
 				finalResults = postRerankLaneControlled.results
 				laneControlSummary = postRerankLaneControlled.summary
 				wasReranked = true
@@ -1533,14 +1658,19 @@ async function searchV2WithBudget(
 		// Ranking boosts run after lane normalization and can compound above 1.
 		// Preserve their ordering and relative score gaps while enforcing the
 		// public searchV2 score contract for every lane and reranker branch.
+		const finalNormalizeStartedAt = Date.now()
 		const sliced = normalizeFinalSearchScores(finalResults).slice(0, maxResults)
+		latencyByPath["phase:final-normalize"] =
+			Date.now() - finalNormalizeStartedAt
 
 		// Phase 9: Tiered retrieval — strip text for ids-only projection mode
 		const projectionMode = context.searchOptions?.projection ?? "full"
+		const projectionStartedAt = Date.now()
 		const projected =
 			projectionMode === "ids-only"
 				? sliced.map((r) => ({ ...r, snippet: "" }))
 				: sliced
+		latencyByPath["phase:projection"] = Date.now() - projectionStartedAt
 
 		return {
 			results: projected,

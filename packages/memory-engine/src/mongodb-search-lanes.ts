@@ -12,6 +12,7 @@ import type { DetectedCapabilities } from "./mongodb-schema.js"
 import { eventsCollection } from "./mongodb-schema.js"
 import {
 	resolveUserSearchMaxTimeMs,
+	type SearchBudgetReservation,
 	tryConsumeSearchAggregation,
 	tryConsumeSearchEmbed,
 } from "./mongodb-search-budget.js"
@@ -312,6 +313,7 @@ export async function searchTurnEventsWithinSessions(params: {
 	numCandidates: number
 	capabilities: DetectedCapabilities
 	embeddingMode: ResolvedMongoDBConfig["embeddingMode"]
+	queryEmbeddingModel: ResolvedMongoDBConfig["queryEmbeddingModel"]
 }): Promise<MemorySearchResult[]> {
 	const sessionIds = Array.from(new Set(params.sessionIds)).filter(
 		(value) => value.trim().length > 0,
@@ -348,10 +350,11 @@ export async function searchTurnEventsWithinSessions(params: {
 					index: `${params.prefix}events_vector`,
 					path: "body",
 					query: { text: params.query },
-					model: "voyage-4-large",
+					model: params.queryEmbeddingModel,
 					filter: vectorFilter,
 					numCandidates: params.numCandidates,
 					limit: params.maxResults,
+					returnStoredSource: false,
 				},
 			},
 			{
@@ -447,6 +450,8 @@ export async function searchConversationEvidenceEvents(params: {
 	numCandidates: number
 	capabilities: DetectedCapabilities
 	embeddingMode: ResolvedMongoDBConfig["embeddingMode"]
+	queryEmbeddingModel: ResolvedMongoDBConfig["queryEmbeddingModel"]
+	budgetReservation?: SearchBudgetReservation
 }): Promise<MemorySearchResult[]> {
 	if (!isConversationEvidenceQuery(params.query, params.questionDate)) {
 		return []
@@ -461,6 +466,29 @@ export async function searchConversationEvidenceEvents(params: {
 	}
 
 	const events = eventsCollection(params.db, params.prefix)
+	const queryTime =
+		params.questionDate && !Number.isNaN(params.questionDate.getTime())
+			? params.questionDate
+			: new Date()
+	const lifecycleMatch: Document = {
+		$and: [
+			{
+				$or: [
+					{ validAt: { $exists: false } },
+					{ validAt: { $lte: queryTime } },
+				],
+			},
+			{
+				$or: [{ invalidAt: null }, { invalidAt: { $gt: queryTime } }],
+			},
+			{
+				$or: [
+					{ expiresAt: { $exists: false } },
+					{ expiresAt: { $gt: new Date() } },
+				],
+			},
+		],
+	}
 	const vectorFilter: Document = {
 		agentId: params.agentId,
 		scope: params.scope,
@@ -491,8 +519,12 @@ export async function searchConversationEvidenceEvents(params: {
 		// P3.2: these inline $vectorSearch pipelines bypass
 		// buildVectorSearchStage, so they consume the per-request aggregation +
 		// server-side embed budget here.
-		tryConsumeSearchAggregation() &&
-		tryConsumeSearchEmbed()
+		(params.budgetReservation
+			? params.budgetReservation.tryConsumeAggregation()
+			: tryConsumeSearchAggregation()) &&
+		(params.budgetReservation
+			? params.budgetReservation.tryConsumeEmbed()
+			: tryConsumeSearchEmbed())
 	) {
 		const vectorPipeline: Document[] = [
 			{
@@ -500,12 +532,14 @@ export async function searchConversationEvidenceEvents(params: {
 					index: `${params.prefix}events_vector`,
 					path: "body",
 					query: { text: params.query },
-					model: "voyage-4-large",
+					model: params.queryEmbeddingModel,
 					filter: vectorFilter,
 					numCandidates: params.numCandidates,
 					limit: params.maxResults,
+					returnStoredSource: false,
 				},
 			},
+			{ $match: lifecycleMatch },
 			{
 				$project: {
 					_id: 0,
@@ -535,7 +569,12 @@ export async function searchConversationEvidenceEvents(params: {
 	}
 
 	// P3.2: direct aggregates consume the per-request budget here.
-	if (params.capabilities.textSearch && tryConsumeSearchAggregation()) {
+	if (
+		params.capabilities.textSearch &&
+		(params.budgetReservation
+			? params.budgetReservation.tryConsumeAggregation()
+			: tryConsumeSearchAggregation())
+	) {
 		const should: Document[] = []
 		if (params.questionDate && !Number.isNaN(params.questionDate.getTime())) {
 			should.push({
@@ -558,6 +597,7 @@ export async function searchConversationEvidenceEvents(params: {
 					},
 				},
 			},
+			{ $match: lifecycleMatch },
 			{ $limit: params.maxResults },
 			{
 				$project: {

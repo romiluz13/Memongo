@@ -743,6 +743,24 @@ describe("searchStructuredMemory", () => {
 		expect(vsStage.path).toBe("value")
 	})
 
+	it("returns stored source when the serving vector index supports it", async () => {
+		const col = createMockStructuredCol()
+		vi.mocked(col.aggregate).mockReturnValueOnce({
+			toArray: vi.fn(async () => []),
+		} as unknown as ReturnType<Collection["aggregate"]>)
+
+		await searchStructuredMemory(col, "architecture", null, {
+			maxResults: 5,
+			capabilities: { ...baseCapabilities, storedSource: true },
+			vectorIndexName: "test_structured_mem_vector",
+			embeddingMode: "automated",
+		})
+
+		const pipeline = (col.aggregate as ReturnType<typeof vi.fn>).mock
+			.calls[0][0]
+		expect(pipeline[0].$vectorSearch.returnStoredSource).toBe(true)
+	})
+
 	it("filters by type when provided", async () => {
 		const col = createMockStructuredCol()
 		vi.mocked(col.aggregate).mockReturnValueOnce({

@@ -416,15 +416,31 @@ describe("searchKB", () => {
 			scoreFusion: true,
 			rankFusion: true,
 		}
-		const col = mockKBChunksCol([
-			{
-				path: "vector.md",
-				startLine: 1,
-				endLine: 5,
-				text: "vector-only lane",
-				score: 0.9,
-			},
-		])
+		const col = {
+			aggregate: vi.fn((pipeline: Document[]) => ({
+				toArray: vi.fn(async () =>
+					pipeline[0]?.$vectorSearch
+						? [
+								{
+									path: "vector.md",
+									startLine: 1,
+									endLine: 5,
+									text: "vector lane",
+									score: 0.9,
+								},
+							]
+						: [
+								{
+									path: "lexical.md",
+									startLine: 1,
+									endLine: 5,
+									text: "lexical-only lane",
+									score: 8,
+								},
+							],
+				),
+			})),
+		} as unknown as Collection
 
 		const results = await searchKB(col, "test", [0.1], {
 			maxResults: 5,
@@ -437,11 +453,22 @@ describe("searchKB", () => {
 			fusionMethod: "js-merge",
 		})
 
-		expect(results).toHaveLength(1)
-		const pipeline = (col.aggregate as ReturnType<typeof vi.fn>).mock
-			.calls[0][0]
-		expect(pipeline[0].$rankFusion).toBeUndefined()
-		expect(pipeline[0].$scoreFusion).toBeUndefined()
+		expect(results.map((result) => result.path)).toEqual(
+			expect.arrayContaining(["kb:vector.md", "kb:lexical.md"]),
+		)
+		const pipelines = (
+			col.aggregate as ReturnType<typeof vi.fn>
+		).mock.calls.map(([pipeline]) => pipeline)
+		expect(pipelines).toHaveLength(2)
+		expect(pipelines[0][0].$vectorSearch).toBeDefined()
+		expect(pipelines[1][0].$search).toBeDefined()
+		expect(
+			pipelines.some(
+				(pipeline) =>
+					pipeline[0].$rankFusion !== undefined ||
+					pipeline[0].$scoreFusion !== undefined,
+			),
+		).toBe(false)
 	})
 
 	it("pushes KB docId filters into the text-side compound.filter", async () => {

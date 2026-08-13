@@ -1,5 +1,8 @@
 import type { Collection, Db, Document } from "mongodb"
-import { createSubsystemLogger } from "@memongo/lib"
+import {
+	createSubsystemLogger,
+	type MemoryMongoDBQueryEmbeddingModel,
+} from "@memongo/lib"
 import {
 	buildBitemporalFilter,
 	buildVectorBitemporalFilter,
@@ -548,6 +551,7 @@ async function semanticRecall(params: {
 	startDate?: Date
 	endDate?: Date
 	vectorIndexName: string
+	queryEmbeddingModel?: MemoryMongoDBQueryEmbeddingModel
 	asOf: Date
 	nativeBitemporalPrefilter: boolean
 	scoreDetailsWarnings?: ScoreDetailsWarningState
@@ -568,6 +572,7 @@ async function semanticRecall(params: {
 		queryVector: null,
 		queryText,
 		embeddingMode: "automated",
+		model: params.queryEmbeddingModel,
 		indexName: params.vectorIndexName,
 		numCandidates: semanticFetch.numCandidates,
 		limit: semanticFetch.limit,
@@ -615,6 +620,7 @@ async function hybridRecall(params: {
 	endDate?: Date
 	vectorIndexName: string
 	textIndexName: string
+	queryEmbeddingModel?: MemoryMongoDBQueryEmbeddingModel
 	asOf: Date
 	nativeBitemporalPrefilter: boolean
 	scoreDetailsWarnings?: ScoreDetailsWarningState
@@ -651,6 +657,7 @@ async function hybridRecall(params: {
 		queryVector: null,
 		queryText,
 		embeddingMode: "automated",
+		model: params.queryEmbeddingModel,
 		indexName: params.vectorIndexName,
 		numCandidates: hybridFetch.numCandidates,
 		limit: hybridFetch.limit,
@@ -757,6 +764,7 @@ export async function recallConversation(params: {
 	request: ConversationRecallRequest
 	vectorIndexName?: string
 	textIndexName?: string
+	queryEmbeddingModel?: MemoryMongoDBQueryEmbeddingModel
 	capabilities?: DetectedCapabilities
 	nativeBitemporalVectorPrefilter?: boolean
 }): Promise<ConversationRecallResponse> {
@@ -862,6 +870,7 @@ export async function recallConversation(params: {
 				vectorIndexName:
 					params.vectorIndexName ?? `${params.prefix}events_vector`,
 				textIndexName: params.textIndexName ?? `${params.prefix}events_text`,
+				queryEmbeddingModel: params.queryEmbeddingModel,
 				asOf,
 				scoreDetailsWarnings,
 				temporalWindow,
@@ -886,6 +895,7 @@ export async function recallConversation(params: {
 				endDate,
 				vectorIndexName:
 					params.vectorIndexName ?? `${params.prefix}events_vector`,
+				queryEmbeddingModel: params.queryEmbeddingModel,
 				asOf,
 				scoreDetailsWarnings,
 				nativeBitemporalPrefilter:

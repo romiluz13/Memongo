@@ -22,6 +22,13 @@ import type {
 } from "./benchmark-parity-envelope.js"
 import { resolveRegisteredBenchmarkQualityContract } from "./benchmark-quality-contracts.js"
 import {
+	readBenchmarkCheckpoint,
+	writeBenchmarkCheckpointAtomic,
+	type BenchmarkCheckpoint,
+	type BenchmarkCheckpointScenario,
+} from "./mongodb-benchmark-checkpoint.js"
+import { withMongoBenchmarkRetry } from "./mongodb-benchmark-retry.js"
+import {
 	ingestBenchmarkDataset,
 	ingestBenchmarkConversations,
 	importConversationDataset,
@@ -329,6 +336,8 @@ export class MongoDBManagerBenchmarkOps {
 		 * product number.
 		 */
 		executionProfile?: BenchmarkExecutionProfile
+		checkpointPath?: string
+		resume?: boolean
 	}): Promise<RelevanceBenchmarkResult> {
 		if (!this.host.relevance) {
 			throw new Error("relevance runtime is unavailable")
@@ -376,16 +385,17 @@ export class MongoDBManagerBenchmarkOps {
 			retrievalLane,
 			hasQualityContract: Boolean(qualityThresholds),
 		})
-		const runContext = createBenchmarkRunContext({
+		const runConfiguration = this.snapshotBenchmarkRunConfiguration({
+			executionProfile,
+			retrievalLane,
+			maxResults,
+			minScore,
+			qualityContractId: qualityThresholds?.contractId,
+			qualityContractVersion: qualityThresholds?.version,
+		})
+		let runContext = createBenchmarkRunContext({
 			runId: randomUUID(),
-			configuration: this.snapshotBenchmarkRunConfiguration({
-				executionProfile,
-				retrievalLane,
-				maxResults,
-				minScore,
-				qualityContractId: qualityThresholds?.contractId,
-				qualityContractVersion: qualityThresholds?.version,
-			}),
+			configuration: runConfiguration,
 		})
 		let dataset: MemoryBenchmarkDataset
 		try {
@@ -470,6 +480,29 @@ export class MongoDBManagerBenchmarkOps {
 				params?.conversationRecallRegression,
 			)
 		}
+		const checkpointPath = params?.checkpointPath
+			? resolveUserPath(params.checkpointPath)
+			: undefined
+		if (params?.resume && !checkpointPath) {
+			throw new Error("benchmark resume requires checkpointPath")
+		}
+		const resumeCheckpoint =
+			params?.resume && checkpointPath
+				? await readBenchmarkCheckpoint(checkpointPath, {
+						datasetSha256,
+						configurationHash: runContext.configurationHash,
+						scenarioIds: (dataset.scenarios ?? []).map(
+							(scenario) => scenario.scenarioId,
+						),
+					})
+				: undefined
+		if (resumeCheckpoint) {
+			runContext = createBenchmarkRunContext({
+				runId: resumeCheckpoint.runId,
+				configuration: runConfiguration,
+				initialAccounting: resumeCheckpoint.accounting,
+			})
+		}
 		const datasetVersion = datasetSha256
 		const scenario = await this.runScenarioBenchmarkDataset({
 			datasetPath: resolvedDatasetPath,
@@ -479,6 +512,10 @@ export class MongoDBManagerBenchmarkOps {
 			minScore,
 			retrievalLane,
 			executionProfile,
+			publicationRun: Boolean(qualityThresholds),
+			checkpointPath,
+			resumeCheckpoint,
+			datasetSha256,
 			runContext,
 		})
 		const parity = await this.buildBenchmarkParityBundle({
@@ -710,6 +747,10 @@ export class MongoDBManagerBenchmarkOps {
 		minScore: number
 		retrievalLane?: BenchmarkRetrievalLane
 		executionProfile?: "shipped" | "diagnostic"
+		publicationRun?: boolean
+		checkpointPath?: string
+		resumeCheckpoint?: BenchmarkCheckpoint
+		datasetSha256?: string
 		runContext: BenchmarkRunContext
 	}): Promise<{
 		result: RelevanceBenchmarkResult
@@ -742,9 +783,104 @@ export class MongoDBManagerBenchmarkOps {
 			failedLines: params.dataset.failedLines ?? 0,
 			failedTurns: 0,
 		}
+		if (params.publicationRun && ingest.failedLines > 0) {
+			throw new Error(
+				`publication benchmark dataset parse incomplete: failedLines=${ingest.failedLines}`,
+			)
+		}
+		if (params.checkpointPath && !params.datasetSha256) {
+			throw new Error(
+				"benchmark checkpointing requires the resolved dataset digest",
+			)
+		}
+		const completedCheckpointScenarios = [
+			...(params.resumeCheckpoint?.completedScenarios ?? []),
+		]
+		const completedCheckpointIndexes = new Set(
+			completedCheckpointScenarios.map((scenario) => scenario.index),
+		)
+		const addStorageRows = (
+			rows: BenchmarkTenantStorageMeasurement["collections"],
+		) => {
+			for (const entry of rows) {
+				const current = storageCollections.get(entry.collectionName) ?? {
+					documents: 0,
+					logicalBytes: 0,
+				}
+				current.documents += entry.documents
+				current.logicalBytes += entry.logicalBytes
+				storageCollections.set(entry.collectionName, current)
+			}
+		}
+		for (const checkpointScenario of completedCheckpointScenarios) {
+			if (checkpointScenario.executionsByPass.length !== measurementPasses) {
+				throw new Error(
+					`benchmark checkpoint measurement pass count does not match: scenario=${checkpointScenario.scenarioId}`,
+				)
+			}
+			for (let pass = 0; pass < measurementPasses; pass++) {
+				executionsByPass[pass]!.push(
+					...(checkpointScenario.executionsByPass[pass] ?? []),
+				)
+			}
+			ingest.conversationsIngested +=
+				checkpointScenario.ingest.conversationsIngested
+			ingest.turnsIngested += checkpointScenario.ingest.turnsIngested
+			ingest.skippedConversations +=
+				checkpointScenario.ingest.skippedConversations
+			ingest.failedTurns += checkpointScenario.ingest.failedTurns
+			for (const [
+				caseId,
+				sessionIds,
+			] of checkpointScenario.expectedSessionEntries) {
+				expectedSessionMap.set(caseId, sessionIds)
+			}
+			for (const [caseId, turnIds] of checkpointScenario.expectedTurnEntries) {
+				expectedTurnMap.set(caseId, turnIds)
+			}
+			addStorageRows(checkpointScenario.storageCollections)
+			if (checkpointScenario.storageFailure) {
+				storageFailures.push(checkpointScenario.storageFailure)
+			}
+		}
+		const runForegroundRead = <T>(
+			label: string,
+			operation: () => Promise<T>,
+		): Promise<T> =>
+			withMongoBenchmarkRetry(label, operation, {
+				onRetry: ({ attempt, maxAttempts, delayMs, error }) => {
+					log.warn("retrying transient benchmark MongoDB read", {
+						label,
+						attempt,
+						maxAttempts,
+						delayMs,
+						error: error instanceof Error ? error.message : String(error),
+					})
+				},
+			})
 
 		for (const [index, scenario] of scenarios.entries()) {
+			if (completedCheckpointIndexes.has(index)) {
+				log.info("benchmark scenario restored from checkpoint", {
+					scenarioId: scenario.scenarioId,
+					index,
+					totalScenarios: scenarios.length,
+				})
+				continue
+			}
 			const scenarioStartedAt = Date.now()
+			const passExecutionOffsets = executionsByPass.map(
+				(passExecutions) => passExecutions.length,
+			)
+			const scenarioIngestTotals = {
+				conversationsIngested: 0,
+				turnsIngested: 0,
+				skippedConversations: 0,
+				failedTurns: 0,
+			}
+			let scenarioStorageCollections: BenchmarkTenantStorageMeasurement["collections"] =
+				[]
+			let scenarioStorageFailure: string | undefined
 			let scenarioManager: MongoDBManagerHost = this.host
 			let scenarioOps = this
 			let eventEvidence: BenchmarkEventEvidenceMaps = {
@@ -800,6 +936,17 @@ export class MongoDBManagerBenchmarkOps {
 					ingest.turnsIngested += scenarioIngest.turnsIngested
 					ingest.skippedConversations += scenarioIngest.skippedConversations
 					ingest.failedTurns += scenarioIngest.failedTurns
+					scenarioIngestTotals.conversationsIngested +=
+						scenarioIngest.conversationsIngested
+					scenarioIngestTotals.turnsIngested += scenarioIngest.turnsIngested
+					scenarioIngestTotals.skippedConversations +=
+						scenarioIngest.skippedConversations
+					scenarioIngestTotals.failedTurns += scenarioIngest.failedTurns
+					if (params.publicationRun && scenarioIngest.failedTurns > 0) {
+						throw new Error(
+							`publication benchmark scenario ingest incomplete: scenario=${scenario.scenarioId} failedTurns=${scenarioIngest.failedTurns}`,
+						)
+					}
 					log.info("benchmark scenario ingested", {
 						scenarioId: scenario.scenarioId,
 						agentId: scenarioManager.agentId,
@@ -808,8 +955,9 @@ export class MongoDBManagerBenchmarkOps {
 						failedTurns: scenarioIngest.failedTurns,
 					})
 					await this.settleBenchmarkScenarioManager(scenarioManager)
-					eventEvidence = await this.listBenchmarkEventEvidence(
-						scenarioManager.agentId,
+					eventEvidence = await runForegroundRead(
+						`event evidence for ${scenario.scenarioId}`,
+						() => this.listBenchmarkEventEvidence(scenarioManager.agentId),
 					)
 
 					// Session evidence: create session-level documents for retrieval
@@ -1119,13 +1267,18 @@ export class MongoDBManagerBenchmarkOps {
 							await new Promise((r) => setTimeout(r, settleMs))
 						}
 					}
-					await this.waitForBenchmarkSearchConvergence({
-						agentId: scenarioManager.agentId,
-						retrievalLane: params.retrievalLane,
-					})
+					await runForegroundRead(
+						`search convergence for ${scenario.scenarioId}`,
+						() =>
+							this.waitForBenchmarkSearchConvergence({
+								agentId: scenarioManager.agentId,
+								retrievalLane: params.retrievalLane,
+							}),
+					)
 				} else {
-					eventEvidence = await this.listBenchmarkEventEvidence(
-						this.host.agentId,
+					eventEvidence = await runForegroundRead(
+						`event evidence for ${scenario.scenarioId}`,
+						() => this.listBenchmarkEventEvidence(this.host.agentId),
 					)
 				}
 
@@ -1164,12 +1317,13 @@ export class MongoDBManagerBenchmarkOps {
 							let latencyByLane: Record<string, number> | undefined
 
 							if (rawSessionLane) {
-								results = await scenarioOps.searchBenchmarkRawSession(
-									evaluation.query,
-									{
-										maxResults: params.maxResults,
-										minScore: params.minScore,
-									},
+								results = await runForegroundRead(
+									`raw-session search for ${evaluation.caseId}`,
+									() =>
+										scenarioOps.searchBenchmarkRawSession(evaluation.query, {
+											maxResults: params.maxResults,
+											minScore: params.minScore,
+										}),
 								)
 							} else if (
 								decompositionProvider &&
@@ -1204,26 +1358,34 @@ export class MongoDBManagerBenchmarkOps {
 								const subSearchStartedAt = Date.now()
 								const resultSets: MemorySearchResult[][] = []
 								for (const subQuery of decomposed.subQueries) {
-									const subResults = await scenarioManager.search(
-										subQuery,
-										{
-											maxResults: params.maxResults,
-											minScore: params.minScore,
-											questionDate: validQuestionDate,
-										},
-										params.runContext,
+									const subResults = await runForegroundRead(
+										`decomposed search for ${evaluation.caseId}`,
+										() =>
+											scenarioManager.search(
+												subQuery,
+												{
+													maxResults: params.maxResults,
+													minScore: params.minScore,
+													questionDate: validQuestionDate,
+												},
+												params.runContext,
+											),
 									)
 									resultSets.push(subResults)
 								}
 								// Also run the original query to avoid losing good direct matches
-								const originalResults = await scenarioManager.search(
-									evaluation.query,
-									{
-										maxResults: params.maxResults,
-										minScore: params.minScore,
-										questionDate: validQuestionDate,
-									},
-									params.runContext,
+								const originalResults = await runForegroundRead(
+									`original decomposed search for ${evaluation.caseId}`,
+									() =>
+										scenarioManager.search(
+											evaluation.query,
+											{
+												maxResults: params.maxResults,
+												minScore: params.minScore,
+												questionDate: validQuestionDate,
+											},
+											params.runContext,
+										),
 								)
 								resultSets.push(originalResults)
 								latencyByLane = {
@@ -1244,26 +1406,34 @@ export class MongoDBManagerBenchmarkOps {
 										: undefined
 								results = relevanceScope
 									? (
-											await scenarioManager.relevanceExplain({
-												query: evaluation.query,
-												sourceScope: relevanceScope,
-												maxResults: params.maxResults,
-												minScore: params.minScore,
-												deep: false,
-												questionDate: validQuestionDate,
-											})
+											await runForegroundRead(
+												`relevance search for ${evaluation.caseId}`,
+												() =>
+													scenarioManager.relevanceExplain({
+														query: evaluation.query,
+														sourceScope: relevanceScope,
+														maxResults: params.maxResults,
+														minScore: params.minScore,
+														deep: false,
+														questionDate: validQuestionDate,
+													}),
+											)
 										).results
-									: await scenarioManager.search(
-											evaluation.query,
-											{
-												maxResults: params.maxResults,
-												minScore: params.minScore,
-												questionDate: validQuestionDate,
-												onLaneLatency: (lanes) => {
-													latencyByLane = lanes
-												},
-											},
-											params.runContext,
+									: await runForegroundRead(
+											`search for ${evaluation.caseId}`,
+											() =>
+												scenarioManager.search(
+													evaluation.query,
+													{
+														maxResults: params.maxResults,
+														minScore: params.minScore,
+														questionDate: validQuestionDate,
+														onLaneLatency: (lanes) => {
+															latencyByLane = lanes
+														},
+													},
+													params.runContext,
+												),
 										)
 							}
 							passExecutions.push(
@@ -1368,23 +1538,14 @@ export class MongoDBManagerBenchmarkOps {
 						),
 					})
 					if (measurement.unavailableReason) {
-						storageFailures.push(
-							`${scenario.scenarioId}: ${measurement.unavailableReason}`,
-						)
+						scenarioStorageFailure = `${scenario.scenarioId}: ${measurement.unavailableReason}`
+						storageFailures.push(scenarioStorageFailure)
 					}
-					for (const entry of measurement.collections) {
-						const current = storageCollections.get(entry.collectionName) ?? {
-							documents: 0,
-							logicalBytes: 0,
-						}
-						current.documents += entry.documents
-						current.logicalBytes += entry.logicalBytes
-						storageCollections.set(entry.collectionName, current)
-					}
+					scenarioStorageCollections = measurement.collections
+					addStorageRows(measurement.collections)
 				} else {
-					storageFailures.push(
-						`${scenario.scenarioId}: scenario did not use an isolated benchmark agent`,
-					)
+					scenarioStorageFailure = `${scenario.scenarioId}: scenario did not use an isolated benchmark agent`
+					storageFailures.push(scenarioStorageFailure)
 				}
 				if (
 					scenarioManager !== this.host &&
@@ -1392,6 +1553,49 @@ export class MongoDBManagerBenchmarkOps {
 				) {
 					await this.cleanupBenchmarkScenarioData(scenarioManager.agentId)
 				}
+			}
+			if (params.checkpointPath) {
+				const datasetSha256 = params.datasetSha256
+				if (!datasetSha256) {
+					throw new Error(
+						"benchmark checkpointing requires the resolved dataset digest",
+					)
+				}
+				const checkpointScenario: BenchmarkCheckpointScenario = {
+					index,
+					scenarioId: scenario.scenarioId,
+					executionsByPass: executionsByPass.map((passExecutions, pass) =>
+						passExecutions.slice(passExecutionOffsets[pass]),
+					),
+					ingest: scenarioIngestTotals,
+					expectedSessionEntries: scenario.evaluations.map((evaluation) => [
+						evaluation.caseId,
+						expectedSessionMap.get(evaluation.caseId) ?? [],
+					]),
+					expectedTurnEntries: scenario.evaluations.map((evaluation) => [
+						evaluation.caseId,
+						expectedTurnMap.get(evaluation.caseId) ?? [],
+					]),
+					storageCollections: scenarioStorageCollections,
+					...(scenarioStorageFailure
+						? { storageFailure: scenarioStorageFailure }
+						: {}),
+				}
+				completedCheckpointScenarios.push(checkpointScenario)
+				completedCheckpointScenarios.sort(
+					(left, right) => left.index - right.index,
+				)
+				await writeBenchmarkCheckpointAtomic(params.checkpointPath, {
+					version: 1,
+					runId: params.runContext.runId,
+					datasetSha256,
+					configurationHash: params.runContext.configurationHash,
+					totalScenarios: scenarios.length,
+					scenarioIds: scenarios.map((entry) => entry.scenarioId),
+					completedScenarios: completedCheckpointScenarios,
+					accounting: params.runContext.accounting.snapshot(),
+					updatedAt: new Date().toISOString(),
+				})
 			}
 		}
 

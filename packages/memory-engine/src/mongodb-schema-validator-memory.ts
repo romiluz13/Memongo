@@ -81,6 +81,11 @@ export const EVENTS_SCHEMA: Document = {
 				description:
 					"Bi-temporal: when the assertion stopped being true; null = still valid",
 			},
+			expiresAt: {
+				bsonType: "date",
+				description:
+					"Optional absolute expiry for TTL and serving-time filtering",
+			},
 		},
 	},
 }

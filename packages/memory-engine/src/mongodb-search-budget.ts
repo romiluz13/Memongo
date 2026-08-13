@@ -41,6 +41,12 @@ export type SearchBudgetSnapshot = SearchBudgetLimits & {
 	exhausted: boolean
 }
 
+export type SearchBudgetReservation = {
+	tryConsumeAggregation(): boolean
+	tryConsumeEmbed(): boolean
+	release(): void
+}
+
 /**
  * Defaults are storm caps, not lane shapers: a typical search (fused chunks
  * lane + structured + kb + evidence) costs ~4 aggregations and ~3-4 embeds,
@@ -82,6 +88,8 @@ type ActiveSearchBudget = {
 	limits: SearchBudgetLimits
 	aggregations: number
 	embeds: number
+	reservedAggregations: number
+	reservedEmbeds: number
 	exhausted: boolean
 }
 
@@ -143,6 +151,8 @@ export async function runWithSearchBudget<T>(
 		limits,
 		aggregations: 0,
 		embeds: 0,
+		reservedAggregations: 0,
+		reservedEmbeds: 0,
 		exhausted: false,
 	}
 	const value = await budgetStorage.run(budget, fn)
@@ -159,7 +169,11 @@ function tryConsume(
 	if (!budget) {
 		return true
 	}
-	if (budget[kind] >= limit(budget.limits)) {
+	const reserved =
+		kind === "aggregations"
+			? budget.reservedAggregations
+			: budget.reservedEmbeds
+	if (budget[kind] + reserved >= limit(budget.limits)) {
 		if (!budget.exhausted) {
 			budget.exhausted = true
 			log.warn(
@@ -189,4 +203,88 @@ export function tryConsumeSearchAggregation(): boolean {
  */
 export function tryConsumeSearchEmbed(): boolean {
 	return tryConsume("embeds", (limits) => limits.maxEmbeds)
+}
+
+function normalizeReservationCount(value: number): number {
+	return Number.isFinite(value) && value > 0 ? Math.floor(value) : 0
+}
+
+/**
+ * Atomically reserve aggregation and embed capacity before concurrent work
+ * starts. Normal consumers cannot spend reserved capacity. The returned token
+ * converts reserved units to consumed units exactly once and releases unused
+ * capacity when the owner finishes.
+ */
+export function tryReserveSearchBudget(request: {
+	aggregations: number
+	embeds: number
+}): SearchBudgetReservation | undefined {
+	const requestedAggregations = normalizeReservationCount(request.aggregations)
+	const requestedEmbeds = normalizeReservationCount(request.embeds)
+	const budget = budgetStorage.getStore()
+
+	if (
+		budget &&
+		(budget.aggregations + budget.reservedAggregations + requestedAggregations >
+			budget.limits.maxAggregations ||
+			budget.embeds + budget.reservedEmbeds + requestedEmbeds >
+				budget.limits.maxEmbeds)
+	) {
+		if (!budget.exhausted) {
+			budget.exhausted = true
+			log.warn(
+				"per-search budget cannot satisfy reservation; degrading reserved lane to empty results",
+				{
+					...toSnapshot(budget),
+					requestedAggregations,
+					requestedEmbeds,
+				},
+			)
+		}
+		return undefined
+	}
+
+	if (budget) {
+		budget.reservedAggregations += requestedAggregations
+		budget.reservedEmbeds += requestedEmbeds
+	}
+
+	let remainingAggregations = requestedAggregations
+	let remainingEmbeds = requestedEmbeds
+	let released = false
+
+	const consume = (kind: "aggregations" | "embeds"): boolean => {
+		if (released) return false
+		if (kind === "aggregations") {
+			if (remainingAggregations <= 0) return false
+			remainingAggregations -= 1
+			if (budget) {
+				budget.reservedAggregations -= 1
+				budget.aggregations += 1
+			}
+			return true
+		}
+		if (remainingEmbeds <= 0) return false
+		remainingEmbeds -= 1
+		if (budget) {
+			budget.reservedEmbeds -= 1
+			budget.embeds += 1
+		}
+		return true
+	}
+
+	return {
+		tryConsumeAggregation: () => consume("aggregations"),
+		tryConsumeEmbed: () => consume("embeds"),
+		release: () => {
+			if (released) return
+			released = true
+			if (budget) {
+				budget.reservedAggregations -= remainingAggregations
+				budget.reservedEmbeds -= remainingEmbeds
+			}
+			remainingAggregations = 0
+			remainingEmbeds = 0
+		},
+	}
 }

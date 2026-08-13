@@ -2,6 +2,7 @@ import type { AggregateOptions, Collection, Document } from "mongodb"
 import {
 	type MemoryMongoDBEmbeddingMode,
 	type MemoryMongoDBFusionMethod,
+	type MemoryMongoDBQueryEmbeddingModel,
 	type MemoryScope,
 	createSubsystemLogger,
 } from "@memongo/lib"
@@ -556,7 +557,7 @@ export function buildVectorSearchStage(input: {
 	queryText: string | null
 	embeddingMode: MemoryMongoDBEmbeddingMode
 	indexName: string
-	model?: string
+	model?: MemoryMongoDBQueryEmbeddingModel
 	numCandidates: number
 	limit: number
 	filter?: Document
@@ -604,7 +605,7 @@ export function buildVectorSearchStage(input: {
 			return null
 		}
 		base.query = { text: input.queryText }
-		base.model = input.model ?? "voyage-4-large"
+		base.model = input.model ?? "voyage-4-lite"
 		base.path = input.textFieldPath ?? "text"
 	} else {
 		return null
@@ -628,6 +629,7 @@ export async function vectorSearch(
 		indexName: string
 		queryText?: string
 		embeddingMode?: MemoryMongoDBEmbeddingMode
+		queryEmbeddingModel?: MemoryMongoDBQueryEmbeddingModel
 		numCandidates?: number
 		explain?: SearchExplainOptions
 		returnStoredSource?: boolean
@@ -647,6 +649,7 @@ export async function vectorSearch(
 		queryVector,
 		queryText: opts.queryText ?? null,
 		embeddingMode: opts.embeddingMode ?? "automated",
+		model: opts.queryEmbeddingModel,
 		indexName: opts.indexName,
 		numCandidates: opts.numCandidates ?? Math.max(opts.maxResults * 20, 100),
 		limit: opts.maxResults,
@@ -807,6 +810,7 @@ export async function hybridSearchScoreFusion(
 		vectorWeight: number
 		textWeight: number
 		embeddingMode?: MemoryMongoDBEmbeddingMode
+		queryEmbeddingModel?: MemoryMongoDBQueryEmbeddingModel
 		numCandidates?: number
 		explain?: SearchExplainOptions
 		returnStoredSource?: boolean
@@ -827,6 +831,7 @@ export async function hybridSearchScoreFusion(
 		queryVector,
 		queryText: query,
 		embeddingMode: opts.embeddingMode ?? "automated",
+		model: opts.queryEmbeddingModel,
 		indexName: opts.vectorIndexName,
 		numCandidates: opts.numCandidates ?? Math.max(opts.maxResults * 20, 100),
 		limit: opts.maxResults * 4,
@@ -940,6 +945,7 @@ export async function hybridSearchRankFusion(
 		vectorWeight: number
 		textWeight: number
 		embeddingMode?: MemoryMongoDBEmbeddingMode
+		queryEmbeddingModel?: MemoryMongoDBQueryEmbeddingModel
 		numCandidates?: number
 		explain?: SearchExplainOptions
 		returnStoredSource?: boolean
@@ -960,6 +966,7 @@ export async function hybridSearchRankFusion(
 		queryVector,
 		queryText: query,
 		embeddingMode: opts.embeddingMode ?? "automated",
+		model: opts.queryEmbeddingModel,
 		indexName: opts.vectorIndexName,
 		numCandidates: opts.numCandidates ?? Math.max(opts.maxResults * 20, 100),
 		limit: opts.maxResults * 4,
@@ -1092,6 +1099,7 @@ export async function mongoSearch(
 		vectorWeight?: number
 		textWeight?: number
 		embeddingMode?: MemoryMongoDBEmbeddingMode
+		queryEmbeddingModel?: MemoryMongoDBQueryEmbeddingModel
 		explain?: SearchExplainOptions
 		onTrace?: (event: SearchTraceEvent) => void
 		strictNoFallback?: boolean

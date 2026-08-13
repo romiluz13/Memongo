@@ -82,6 +82,11 @@ vi.mock("./mongodb-derived-memory.js", async () =>
 	).derivedMemoryModuleMock(),
 )
 
+vi.mock("./mongodb-kb-search.js", async (importOriginal) => ({
+	...(await importOriginal<typeof import("./mongodb-kb-search.js")>()),
+	searchKB: vi.fn(),
+}))
+
 vi.mock("./mongodb-telemetry.js", async () =>
 	(await import("./test-helpers/manager-test-kit.js")).telemetryModuleMock(),
 )
@@ -102,6 +107,7 @@ const {
 	memoryEvidenceCollection,
 } = await import("./mongodb-schema.js")
 const { getLaneCoverage } = await import("./mongodb-lane-coverage.js")
+const { searchKB } = await import("./mongodb-kb-search.js")
 
 // ---------------------------------------------------------------------------
 // 8.2b: P3.1/P3.2 search cost — fused lanes, per-search budget, backstop gating
@@ -176,6 +182,7 @@ describe("searchV2 cost controls (P3.1/P3.2)", () => {
 					},
 					fusionMethod: "rankFusion",
 					embeddingMode: "automated",
+					queryEmbeddingModel: "voyage-4-large",
 					allowHybridBackstop: false,
 				},
 			},
@@ -187,6 +194,7 @@ describe("searchV2 cost controls (P3.1/P3.2)", () => {
 		const vsStage =
 			pipeline[0]?.$rankFusion?.input?.pipelines?.vector?.[0]?.$vectorSearch
 		expect(vsStage).toBeDefined()
+		expect(vsStage.model).toBe("voyage-4-large")
 		expect(vsStage.filter.source.$in).toEqual([
 			"conversation",
 			"sessions",
@@ -195,6 +203,162 @@ describe("searchV2 cost controls (P3.1/P3.2)", () => {
 		expect(result.metadata.budget?.embeds).toBe(1)
 		expect(result.metadata.budget?.aggregations).toBe(1)
 		expect(result.results.length).toBeGreaterThan(0)
+	})
+
+	it("starts conversation evidence while the primary retrieval lane is still pending", async () => {
+		mocked(planRetrieval).mockReturnValue({
+			paths: ["hybrid"],
+			confidence: "high",
+			reasoning: "parallel evidence probe",
+		})
+		let releasePrimary: (() => void) | undefined
+		const primaryGate = new Promise<void>((resolve) => {
+			releasePrimary = resolve
+		})
+		const chunkAggregate = vi.fn().mockReturnValue({
+			toArray: vi.fn(async () => {
+				await primaryGate
+				return []
+			}),
+		})
+		const evidenceAggregate = vi.fn().mockReturnValue({
+			toArray: vi.fn().mockResolvedValue([]),
+		})
+		const questionDate = new Date("2026-08-12T12:00:00.000Z")
+		mocked(chunksCollection).mockReturnValue({
+			aggregate: chunkAggregate,
+		} as never)
+		mocked(eventsCollection).mockReturnValue({
+			aggregate: evidenceAggregate,
+		} as never)
+
+		const searchPromise = searchV2(
+			fakeDb,
+			fakePrefix,
+			"What did I say about espresso?",
+			"agent-1",
+			{
+				availablePaths: new Set(["hybrid"]),
+				searchOptions: {
+					scope: "agent",
+					scopeRef: "agent:agent-1",
+					conversationFilter: {
+						source: { $in: ["conversation"] },
+						agentId: "agent-1",
+						scope: "agent",
+						scopeRef: "agent:agent-1",
+					},
+					capabilities: {
+						vectorSearch: true,
+						textSearch: false,
+						scoreFusion: false,
+						rankFusion: false,
+						storedSource: true,
+						vectorIndexMethod: false,
+					},
+					embeddingMode: "automated",
+					queryEmbeddingModel: "voyage-4-lite",
+					conversationEvidenceMode: "parallel",
+					questionDate,
+					allowHybridBackstop: false,
+				},
+			},
+		)
+
+		await vi.waitFor(() => expect(chunkAggregate).toHaveBeenCalledOnce())
+		expect(evidenceAggregate).toHaveBeenCalledOnce()
+		const evidencePipeline = evidenceAggregate.mock.calls[0]?.[0]
+		expect(evidencePipeline?.[0].$vectorSearch.returnStoredSource).toBe(false)
+		expect(evidencePipeline).toEqual(
+			expect.arrayContaining([
+				{
+					$match: {
+						$and: [
+							{
+								$or: [
+									{ validAt: { $exists: false } },
+									{ validAt: { $lte: questionDate } },
+								],
+							},
+							{
+								$or: [
+									{ invalidAt: null },
+									{ invalidAt: { $gt: questionDate } },
+								],
+							},
+							{
+								$or: [
+									{ expiresAt: { $exists: false } },
+									{ expiresAt: { $gt: expect.any(Date) } },
+								],
+							},
+						],
+					},
+				},
+			]),
+		)
+		releasePrimary?.()
+		await searchPromise
+	})
+
+	it("forwards the resolved fusion method to the KB lane", async () => {
+		mocked(planRetrieval).mockReturnValue({
+			paths: ["kb"],
+			confidence: "high",
+			reasoning: "reference query",
+		})
+		mocked(searchKB).mockResolvedValue([])
+
+		await searchV2(fakeDb, fakePrefix, "MongoDB index guide", "agent-1", {
+			availablePaths: new Set(["kb"]),
+			searchOptions: {
+				scope: "agent",
+				scopeRef: "agent:agent-1",
+				fusionMethod: "js-merge",
+				allowHybridBackstop: false,
+			},
+		})
+
+		expect(searchKB).toHaveBeenCalledOnce()
+		expect(searchKB).toHaveBeenCalledWith(
+			undefined,
+			"MongoDB index guide",
+			null,
+			expect.objectContaining({ fusionMethod: "js-merge" }),
+		)
+	})
+
+	it("does not run conversation evidence when conversation retrieval is unavailable", async () => {
+		mocked(planRetrieval).mockReturnValue({
+			paths: ["kb"],
+			confidence: "high",
+			reasoning: "reference-only query",
+		})
+		mocked(searchKB).mockResolvedValue([])
+		const evidenceAggregate = vi.fn().mockReturnValue({
+			toArray: vi.fn().mockResolvedValue([]),
+		})
+		mocked(eventsCollection).mockReturnValue({
+			aggregate: evidenceAggregate,
+		} as never)
+
+		await searchV2(
+			fakeDb,
+			fakePrefix,
+			"What did I say about the reference guide?",
+			"agent-1",
+			{
+				availablePaths: new Set(["kb"]),
+				searchOptions: {
+					scope: "agent",
+					scopeRef: "agent:agent-1",
+					conversationEvidenceMode: "parallel",
+					allowHybridBackstop: false,
+				},
+			},
+		)
+
+		expect(evidenceAggregate).not.toHaveBeenCalled()
 	})
 
 	it("keeps split hybrid sub-lanes when the filters are structurally incompatible", async () => {

@@ -4,6 +4,13 @@ import { ensureCoreStandardIndexes } from "./mongodb-schema-standard-indexes-cor
 import { ensureGraphStandardIndexes } from "./mongodb-schema-standard-indexes-graph.js"
 import { ensureOperationalStandardIndexes } from "./mongodb-schema-standard-indexes-operations.js"
 import type { StandardIndexOptions } from "./mongodb-schema-standard-index-types.js"
+import type { DetectedCapabilities } from "./mongodb-schema-types.js"
+
+export function shouldEnsureTextFallbackIndexes(
+	capabilities: Pick<DetectedCapabilities, "textSearch">,
+): boolean {
+	return !capabilities.textSearch
+}
 
 export async function ensureStandardIndexes(
 	db: Db,

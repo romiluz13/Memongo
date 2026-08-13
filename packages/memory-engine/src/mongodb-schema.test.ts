@@ -6,6 +6,7 @@ import {
 	ensureSchemaValidation,
 	ensureSearchIndexes,
 	ensureStandardIndexes,
+	shouldEnsureTextFallbackIndexes,
 	chunksCollection,
 	filesCollection,
 	metaCollection,
@@ -316,6 +317,7 @@ describe("schema constants", () => {
 		// invalidAt accepts `date` OR null per the retrieval filter
 		// `invalidAt IS NULL OR invalidAt > queryTime`.
 		expect(schema.properties.invalidAt.bsonType).toEqual(["date", "null"])
+		expect(schema.properties.expiresAt.bsonType).toBe("date")
 	})
 
 	it("chunks collection has polymorphic schema validation (F15)", async () => {
@@ -863,6 +865,19 @@ describe("ensureStandardIndexes", () => {
 // ---------------------------------------------------------------------------
 
 describe("P3.8 index hygiene", () => {
+	it("decides BSON text fallbacks from serving readiness, not management API availability", () => {
+		expect(
+			shouldEnsureTextFallbackIndexes({
+				textSearch: false,
+			}),
+		).toBe(true)
+		expect(
+			shouldEnsureTextFallbackIndexes({
+				textSearch: true,
+			}),
+		).toBe(false)
+	})
+
 	it("drops the three strict-prefix-redundant indexes and never recreates them", async () => {
 		const db = mockDb()
 		await ensureStandardIndexes(db, "test_")

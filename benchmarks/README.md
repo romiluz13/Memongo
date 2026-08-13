@@ -47,6 +47,22 @@ That digest is the official HuggingFace artifact byte-for-byte. It is not a
 hash of some local file only we possess — verify it yourself against the
 HuggingFace API before trusting anything else in this directory.
 
+## Running and resuming
+
+```bash
+bun run benchmark --sample 5
+bun run benchmark
+bun run benchmark --resume
+```
+
+Each completed scenario is written atomically to
+`benchmarks/results/checkpoints/`. `--resume` accepts that checkpoint only when
+the dataset digest, complete scenario manifest, and configuration hash match.
+Use `--checkpoint <path>` to choose another file or `--no-checkpoint` for a
+throwaway run. Transient MongoDB read failures are retried at bounded
+idempotent boundaries; incomplete ingest and unsettled workers fail publication
+runs rather than producing partial metrics.
+
 ### Why LongMemEval first, and not LoCoMo
 
 LongMemEval is MIT-licensed, peer-reviewed (ICLR 2025), and downloadable in CI

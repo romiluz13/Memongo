@@ -42,6 +42,21 @@ const REPO_ROOT = path.resolve(
 const DATA_DIR = path.join(REPO_ROOT, "benchmarks", "data")
 const DATASET = path.join(DATA_DIR, "longmemeval_s_cleaned.json")
 
+export function includeBenchmarkAllowedRoot(
+	current: string | undefined,
+	requiredRoot: string,
+): string {
+	const roots = (current ?? "")
+		.split(path.delimiter)
+		.map((entry) => entry.trim())
+		.filter(Boolean)
+	const resolvedRequiredRoot = path.resolve(requiredRoot)
+	if (roots.some((entry) => path.resolve(entry) === resolvedRequiredRoot)) {
+		return roots.join(path.delimiter)
+	}
+	return [...roots, resolvedRequiredRoot].join(path.delimiter)
+}
+
 function fail(message: string): never {
 	console.error(`\n✗ ${message}\n`)
 	process.exit(1)
@@ -55,7 +70,33 @@ function parseArgs() {
 	if (sampleFlag >= 0 && (!Number.isFinite(sample) || sample <= 0)) {
 		fail("--sample requires a positive integer")
 	}
-	return { sample, json: argv.includes("--json") }
+	const checkpointFlag = argv.indexOf("--checkpoint")
+	const checkpointArgument = argv[checkpointFlag + 1]?.trim()
+	if (
+		checkpointFlag >= 0 &&
+		(!checkpointArgument || checkpointArgument.startsWith("--"))
+	) {
+		fail("--checkpoint requires a file path")
+	}
+	const checkpointTarget = argv.includes("--no-checkpoint")
+		? undefined
+		: checkpointFlag >= 0
+			? checkpointArgument
+			: path.join(
+					"benchmarks",
+					"results",
+					"checkpoints",
+					`longmemeval-${sample > 0 ? `sample-${sample}` : "full"}.json`,
+				)
+	const checkpointPath = checkpointTarget
+		? path.resolve(REPO_ROOT, checkpointTarget)
+		: undefined
+	return {
+		sample,
+		json: argv.includes("--json"),
+		resume: argv.includes("--resume"),
+		checkpointPath,
+	}
 }
 
 async function sha256OfFile(filePath: string): Promise<string> {
@@ -122,7 +163,7 @@ async function runRecallRegressionSuite(): Promise<{
 }
 
 async function main(): Promise<void> {
-	const { sample, json } = parseArgs()
+	const { sample, json, resume, checkpointPath } = parseArgs()
 
 	if (!process.env.MEMONGO_MONGODB_URI?.trim()) {
 		fail(
@@ -163,6 +204,10 @@ async function main(): Promise<void> {
 	console.log(
 		`contract    : ${publishable ? `${LONGMEMEVAL_RELEASE_V1.thresholds.contractId}@${LONGMEMEVAL_RELEASE_V1.thresholds.version}` : "none — SAMPLE RUNS ARE NOT PUBLISHABLE"}`,
 	)
+	console.log(
+		`checkpoint  : ${checkpointPath ? path.relative(REPO_ROOT, checkpointPath) : "disabled"}`,
+	)
+	console.log(`resume      : ${resume ? "enabled" : "disabled"}`)
 	console.log("")
 
 	const recallRegression = await runRecallRegressionSuite()
@@ -172,6 +217,10 @@ async function main(): Promise<void> {
 	console.log("")
 
 	const started = Date.now()
+	process.env.MEMONGO_BENCHMARK_ALLOWED_ROOTS = includeBenchmarkAllowedRoot(
+		process.env.MEMONGO_BENCHMARK_ALLOWED_ROOTS,
+		DATA_DIR,
+	)
 	const manager = await memongoBridgeGetManager()
 	const result = await new MongoDBManagerBenchmarkOps(
 		manager,
@@ -182,6 +231,8 @@ async function main(): Promise<void> {
 		...(publishable
 			? { qualityThresholds: LONGMEMEVAL_RELEASE_V1.thresholds }
 			: {}),
+		...(checkpointPath ? { checkpointPath } : {}),
+		resume,
 		conversationRecallRegression: recallRegression,
 	})
 	const elapsedSec = ((Date.now() - started) / 1000).toFixed(1)

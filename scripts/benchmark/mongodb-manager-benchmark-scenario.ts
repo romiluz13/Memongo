@@ -14,6 +14,8 @@ import type {
 	BenchmarkRunConfiguration,
 } from "./benchmark-parity-envelope.js"
 import { readSearchIndexStatus } from "./mongodb-benchmark-readiness.js"
+import { withMongoBenchmarkRetry } from "./mongodb-benchmark-retry.js"
+import { mongodbDeploymentIdentity } from "../../packages/memory-engine/src/mongodb-capability-registry.js"
 import { renderEventChunkText } from "../../packages/memory-engine/src/mongodb-events.js"
 import {
 	isEvidenceMirrorEnabled,
@@ -47,6 +49,10 @@ import {
 import { resolveScopeRef } from "../../packages/memory-engine/src/mongodb-scope.js"
 import { isBenchmarkStrictMode } from "../../packages/memory-engine/src/mongodb-search-ranking.js"
 import {
+	DEFAULT_SEARCH_BUDGET,
+	resolveUserSearchMaxTimeMs,
+} from "../../packages/memory-engine/src/mongodb-search-budget.js"
+import {
 	buildVectorSearchStage,
 	vectorSearch,
 } from "../../packages/memory-engine/src/mongodb-search.js"
@@ -63,6 +69,23 @@ import type { Collection, Document } from "mongodb"
 
 const log = createSubsystemLogger("memory:mongodb")
 
+function runBenchmarkRead<T>(
+	label: string,
+	operation: () => Promise<T>,
+): Promise<T> {
+	return withMongoBenchmarkRetry(label, operation, {
+		onRetry: ({ attempt, maxAttempts, delayMs, error }) => {
+			log.warn("retrying transient benchmark MongoDB read", {
+				label,
+				attempt,
+				maxAttempts,
+				delayMs,
+				error: error instanceof Error ? error.message : String(error),
+			})
+		},
+	})
+}
+
 export class MongoDBManagerBenchmarkScenarioOps {
 	constructor(private readonly host: MongoDBManagerHost) {}
 
@@ -75,13 +98,20 @@ export class MongoDBManagerBenchmarkScenarioOps {
 		qualityContractVersion?: string
 	}): BenchmarkRunConfiguration {
 		const mongoCfg = this.host.config.mongodb!
+		const deploymentIdentitySha256 = createHash("sha256")
+			.update(mongodbDeploymentIdentity(mongoCfg.uri, mongoCfg.database))
+			.digest("hex")
 		const settings: BenchmarkRunConfiguration["settings"] = {
 			qualityContractId: params.qualityContractId ?? null,
 			qualityContractVersion: params.qualityContractVersion ?? null,
+			deploymentIdentitySha256,
+			collectionPrefix: mongoCfg.collectionPrefix,
 			deploymentProfile: mongoCfg.deploymentProfile,
 			numCandidates: mongoCfg.numCandidates,
 			fusionMethod: mongoCfg.fusionMethod,
 			embeddingMode: mongoCfg.embeddingMode,
+			queryEmbeddingModel: mongoCfg.queryEmbeddingModel,
+			conversationEvidenceMode: mongoCfg.conversationEvidenceMode,
 			embeddingDimensions: mongoCfg.numDimensions,
 			embeddingQuantization: mongoCfg.quantization,
 			cacheEnabled: mongoCfg.cache.enabled,
@@ -120,6 +150,9 @@ export class MongoDBManagerBenchmarkScenarioOps {
 			textSearchCapability: this.host.capabilities.textSearch,
 			scoreFusionCapability: this.host.capabilities.scoreFusion,
 			rankFusionCapability: this.host.capabilities.rankFusion,
+			searchBudgetMaxAggregations: DEFAULT_SEARCH_BUDGET.maxAggregations,
+			searchBudgetMaxEmbeds: DEFAULT_SEARCH_BUDGET.maxEmbeds,
+			userSearchMaxTimeMs: resolveUserSearchMaxTimeMs(),
 		}
 		const environmentKeys = [
 			"MEMONGO_BENCHMARK_STRICT",
@@ -131,6 +164,9 @@ export class MongoDBManagerBenchmarkScenarioOps {
 			"MEMONGO_BENCHMARK_KEEP_SCENARIO_DATA",
 			"MEMONGO_BENCHMARK_MEASUREMENT_PASSES",
 			"MEMONGO_BENCHMARK_QUEUE_SETTLE_TIMEOUT_MS",
+			"MEMONGO_BENCHMARK_RETRY_ATTEMPTS",
+			"MEMONGO_BENCHMARK_RETRY_BASE_DELAY_MS",
+			"MEMONGO_BENCHMARK_RETRY_MAX_DELAY_MS",
 			"MEMONGO_BENCHMARK_TEMPORAL_COVERAGE_MODE",
 			"MEMONGO_BENCHMARK_TURN_PRECISION_MODE",
 			"MEMONGO_BENCHMARK_VECTOR_SEARCH_PROBE_MAX_TIME_MS",
@@ -156,6 +192,7 @@ export class MongoDBManagerBenchmarkScenarioOps {
 			"MEMONGO_RERANK_MIN_SCORE",
 			"MEMONGO_RERANK_STRICT",
 			"MEMONGO_SCORING_ABLATION",
+			"MEMONGO_SEARCH_MAX_TIME_MS",
 			"MEMONGO_SESSION_EVIDENCE_MODE",
 			"MEMONGO_STRICT_SEARCH_INDEX_READY",
 			"MEMONGO_TEMPORAL_COVERAGE_MODE",
@@ -241,9 +278,9 @@ export class MongoDBManagerBenchmarkScenarioOps {
 				return
 			}
 		}
-		log.warn("benchmark scenario manager did not fully settle after retries", {
-			agentId: manager.agentId,
-		})
+		throw new Error(
+			`benchmark scenario manager did not fully settle after 8 attempts: agentId=${manager.agentId}`,
+		)
 	}
 
 	shouldUseBenchmarkFastIngest(): boolean {
@@ -601,15 +638,19 @@ export class MongoDBManagerBenchmarkScenarioOps {
 			return
 		}
 
-		const expectedDocs = await collection
-			.find(
-				{
-					...scopeFilter,
-					[textPath]: { $type: "string", $ne: "" },
-				},
-				{ projection: { [textPath]: 1 } },
-			)
-			.toArray()
+		const expectedDocs = await runBenchmarkRead(
+			`${label} vector convergence source read`,
+			() =>
+				collection
+					.find(
+						{
+							...scopeFilter,
+							[textPath]: { $type: "string", $ne: "" },
+						},
+						{ projection: { [textPath]: 1 } },
+					)
+					.toArray(),
+		)
 		const expectedCount = expectedDocs.filter((doc) =>
 			hasBenchmarkSearchableText(doc[textPath]),
 		).length
@@ -636,10 +677,9 @@ export class MongoDBManagerBenchmarkScenarioOps {
 					: 0
 		if (timeoutMs === 0) return
 
-		const readinessProbe = await readSearchIndexStatus(
-			this.host.db,
-			collectionName,
-			indexName,
+		const readinessProbe = await runBenchmarkRead(
+			`${label} vector index readiness`,
+			() => readSearchIndexStatus(this.host.db, collectionName, indexName),
 		)
 		if (readinessProbe.kind === "ok") {
 			if (
@@ -795,15 +835,19 @@ export class MongoDBManagerBenchmarkScenarioOps {
 			return
 		}
 
-		const expectedDocs = await collection
-			.find(
-				{
-					...scopeFilter,
-					[textPath]: { $type: "string", $ne: "" },
-				},
-				{ projection: { [textPath]: 1 } },
-			)
-			.toArray()
+		const expectedDocs = await runBenchmarkRead(
+			`${label} text convergence source read`,
+			() =>
+				collection
+					.find(
+						{
+							...scopeFilter,
+							[textPath]: { $type: "string", $ne: "" },
+						},
+						{ projection: { [textPath]: 1 } },
+					)
+					.toArray(),
+		)
 		const expectedCount = expectedDocs.filter((doc) =>
 			hasBenchmarkSearchableText(doc[textPath]),
 		).length
@@ -824,10 +868,9 @@ export class MongoDBManagerBenchmarkScenarioOps {
 					: 0
 		if (timeoutMs === 0) return
 
-		const readinessProbe = await readSearchIndexStatus(
-			this.host.db,
-			collectionName,
-			indexName,
+		const readinessProbe = await runBenchmarkRead(
+			`${label} text index readiness`,
+			() => readSearchIndexStatus(this.host.db, collectionName, indexName),
 		)
 		if (readinessProbe.kind === "ok") {
 			if (readinessProbe.queryable) {
@@ -1038,18 +1081,20 @@ export class MongoDBManagerBenchmarkScenarioOps {
 	async listBenchmarkEventEvidence(
 		agentId: string,
 	): Promise<BenchmarkEventEvidenceMaps> {
-		const rows = await eventsCollection(this.host.db, this.host.prefix)
-			.find(
-				{ agentId },
-				{
-					projection: {
-						eventId: 1,
-						sessionId: 1,
-						metadata: 1,
+		const rows = await runBenchmarkRead("benchmark event evidence", () =>
+			eventsCollection(this.host.db, this.host.prefix)
+				.find(
+					{ agentId },
+					{
+						projection: {
+							eventId: 1,
+							sessionId: 1,
+							metadata: 1,
+						},
 					},
-				},
-			)
-			.toArray()
+				)
+				.toArray(),
+		)
 		const evidence: BenchmarkEventEvidenceMaps = {
 			sessionIds: new Map<string, string>(),
 			turnIds: new Map<string, string>(),

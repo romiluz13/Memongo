@@ -409,6 +409,8 @@ export class MongoDBManagerLifecycleOps {
 							capabilities: this.host.capabilities,
 							fusionMethod: mongoCfg.fusionMethod,
 							embeddingMode: mongoCfg.embeddingMode,
+							queryEmbeddingModel: mongoCfg.queryEmbeddingModel,
+							conversationEvidenceMode: mongoCfg.conversationEvidenceMode,
 							graphMaxDepth: mongoCfg.graph.maxGraphDepth,
 							conversationFilter: this.host.buildConversationChunkFilter({
 								scope: params.scope,
@@ -506,6 +508,8 @@ export class MongoDBManagerLifecycleOps {
 			},
 			vectorIndexName: `${this.host.prefix}events_vector`,
 			textIndexName: `${this.host.prefix}events_text`,
+			queryEmbeddingModel:
+				this.host.config?.mongodb?.queryEmbeddingModel ?? "voyage-4-lite",
 			capabilities: this.host.capabilities,
 			nativeBitemporalVectorPrefilter,
 		})

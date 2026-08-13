@@ -4,6 +4,7 @@ import {
 	type MemoryMongoDBDeploymentProfile,
 	type MemoryMongoDBEmbeddingMode,
 	type MemoryMongoDBFusionMethod,
+	type MemoryMongoDBQueryEmbeddingModel,
 	type MemoryMongoDBRecallProfile,
 	type MemoryScope,
 	applyMongoDbForceUriOverride,
@@ -11,6 +12,10 @@ import {
 	resolveUserPath,
 } from "@memongo/lib"
 import { resolveSearchBudgetLimits } from "./mongodb-search-budget.js"
+import {
+	type ConversationEvidenceMode,
+	resolveConversationEvidenceMode,
+} from "./mongodb-conversation-evidence-mode.js"
 
 const log = createSubsystemLogger("memory:backend-config")
 
@@ -18,7 +23,7 @@ const log = createSubsystemLogger("memory:backend-config")
 const KNOWN_MODEL_DIMENSIONS: Record<string, number> = {
 	"voyage-4-large": 1024,
 	"voyage-4": 1024,
-	"voyage-4-lite": 512,
+	"voyage-4-lite": 1024,
 	"voyage-3": 1024,
 	"voyage-3-lite": 512,
 	"voyage-code-3": 1024,
@@ -33,6 +38,8 @@ export type ResolvedMongoDBConfig = {
 	collectionPrefix: string
 	deploymentProfile: MemoryMongoDBDeploymentProfile
 	embeddingMode: MemoryMongoDBEmbeddingMode
+	queryEmbeddingModel: MemoryMongoDBQueryEmbeddingModel
+	conversationEvidenceMode: ConversationEvidenceMode
 	fusionMethod: MemoryMongoDBFusionMethod
 	recallProfile: MemoryMongoDBRecallProfile
 	quantization: "none" | "scalar" | "binary"
@@ -158,6 +165,8 @@ const DEFAULT_RELEVANCE_DATASET = "~/.memongo/relevance/golden.jsonl"
 const DEFAULT_MONGODB_PROFILE: MemoryMongoDBDeploymentProfile =
 	"atlas-local-preview"
 const DEFAULT_MONGODB_EMBEDDING_MODE: MemoryMongoDBEmbeddingMode = "automated"
+const DEFAULT_QUERY_EMBEDDING_MODEL: MemoryMongoDBQueryEmbeddingModel =
+	"voyage-4-lite"
 /**
  * P2.1: shared default collection prefix. All agents share one physical
  * collection set; per-agent isolation stays logical (agentId leads every
@@ -284,6 +293,13 @@ export function resolveMemoryBackendConfig(params: {
 					DEFAULT_MONGODB_COLLECTION_PREFIX,
 				deploymentProfile,
 				embeddingMode,
+				queryEmbeddingModel: resolveQueryEmbeddingModel(
+					process.env.MEMONGO_QUERY_EMBEDDING_MODEL,
+					mongoCfg?.queryEmbeddingModel,
+				),
+				conversationEvidenceMode: resolveConversationEvidenceMode(
+					process.env.MEMONGO_CONVERSATION_EVIDENCE_MODE,
+				),
 				fusionMethod: resolveEnvFusionMethod(
 					"MEMONGO_MONGODB_FUSION_METHOD",
 					mongoCfg?.fusionMethod ?? "rankFusion",
@@ -797,6 +813,26 @@ function resolveEnvFusionMethod(
 		return raw
 	}
 	return fallback
+}
+
+function resolveQueryEmbeddingModel(
+	envValue: string | undefined,
+	configValue: unknown,
+): MemoryMongoDBQueryEmbeddingModel {
+	const value =
+		(envValue?.trim() || undefined) ??
+		configValue ??
+		DEFAULT_QUERY_EMBEDDING_MODEL
+	if (
+		value === "voyage-4-large" ||
+		value === "voyage-4" ||
+		value === "voyage-4-lite"
+	) {
+		return value
+	}
+	throw new Error(
+		`memory.mongodb.queryEmbeddingModel "${String(value)}" is not supported; use "voyage-4-large", "voyage-4", or "voyage-4-lite"`,
+	)
 }
 
 function resolveEnvRecallProfile(

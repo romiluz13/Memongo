@@ -8,6 +8,7 @@ import type {
 import { MongoServerError } from "mongodb"
 import {
 	type MemoryMongoDBEmbeddingMode,
+	type MemoryMongoDBQueryEmbeddingModel,
 	type MemoryScope,
 	createSubsystemLogger,
 } from "@memongo/lib"
@@ -1764,6 +1765,7 @@ export async function searchStructuredMemory(
 		capabilities: DetectedCapabilities
 		vectorIndexName: string
 		embeddingMode: MemoryMongoDBEmbeddingMode
+		queryEmbeddingModel?: MemoryMongoDBQueryEmbeddingModel
 		numCandidates?: number
 		explain?: SearchExplainOptions
 	},
@@ -1828,11 +1830,13 @@ export async function searchStructuredMemory(
 				queryVector,
 				queryText: query,
 				embeddingMode: opts.embeddingMode,
+				model: opts.queryEmbeddingModel,
 				indexName: opts.vectorIndexName,
 				numCandidates,
 				limit: opts.maxResults,
 				filter: Object.keys(filter).length > 0 ? filter : undefined,
 				textFieldPath: "value", // structured memory stores text in "value" field
+				returnStoredSource: opts.capabilities.storedSource,
 			})
 
 			if (vsStage) {

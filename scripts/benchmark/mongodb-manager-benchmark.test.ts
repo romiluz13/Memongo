@@ -512,6 +512,71 @@ describe("scenario benchmark ingestion", () => {
 		await harnessParams?.writeTurns?.(turns)
 		expect(writeConversationEventsBatch).toHaveBeenCalledWith(turns, runContext)
 	})
+
+	it("fails a publication run when scenario ingest drops any turns", async () => {
+		mocked(ingestBenchmarkConversations).mockResolvedValue({
+			datasetPath: "/workspace/benchmarks/dataset.jsonl",
+			datasetName: "dataset.jsonl",
+			conversationsIngested: 1,
+			turnsIngested: 1,
+			skippedConversations: 0,
+			failedLines: 0,
+			failedTurns: 1,
+			startedAt: new Date("2026-04-09T00:00:00.000Z"),
+			completedAt: new Date("2026-04-09T00:00:01.000Z"),
+		})
+		const scenarioManager = {
+			agentId: "benchmark-scenario-agent",
+			writeConversationEventsBatch: vi.fn(),
+			stopMemoryJobWorker: vi.fn(async () => {}),
+		} as unknown as MongoDBMemoryManager
+		const manager = {
+			agentId: "benchmark-root-agent",
+			db: {
+				collection: vi.fn(() => ({
+					aggregate: vi.fn(() => ({
+						toArray: vi.fn(async () => []),
+					})),
+				})),
+			},
+			prefix: "test_",
+			createBenchmarkScenarioManager: vi.fn(() => scenarioManager),
+			settleBenchmarkScenarioManager: vi.fn(async () => {
+				throw new Error("continued after incomplete ingest")
+			}),
+			cleanupBenchmarkScenarioData: vi.fn(async () => {}),
+		} as unknown as MongoDBMemoryManager
+
+		await expect(
+			benchmarkOps(manager).runScenarioBenchmarkDataset({
+				datasetPath: "/workspace/benchmarks/dataset.jsonl",
+				dataset: {
+					name: "dataset.jsonl",
+					datasetKind: "longmemeval",
+					scenarios: [
+						{
+							scenarioId: "scenario-1",
+							conversations: [
+								{
+									sessionId: "session-1",
+									turns: [{ role: "user", body: "Remember this" }],
+								},
+							],
+							evaluations: [],
+						},
+					],
+				} as never,
+				datasetVersion: "dataset-version",
+				maxResults: 50,
+				minScore: 0.01,
+				executionProfile: "shipped",
+				publicationRun: true,
+				runContext: { accounting: {} } as never,
+			}),
+		).rejects.toThrow(
+			"publication benchmark scenario ingest incomplete: scenario=scenario-1 failedTurns=1",
+		)
+	})
 })
 
 describe("benchmark event search convergence", () => {
@@ -1023,7 +1088,7 @@ describe("benchmark event search convergence", () => {
 								sessionId: "bench-17",
 							},
 							index: "test_session_chunks_vector",
-							model: "voyage-4-large",
+							model: "voyage-4-lite",
 							path: "text",
 							query: { text: "benchmark vector readiness probe" },
 						}),

@@ -48,7 +48,10 @@ export {
 	ensureCollections,
 	ensureSchemaValidation,
 } from "./mongodb-schema-validators.js"
-export { ensureStandardIndexes } from "./mongodb-schema-standard-indexes.js"
+export {
+	ensureStandardIndexes,
+	shouldEnsureTextFallbackIndexes,
+} from "./mongodb-schema-standard-indexes.js"
 export {
 	isSearchIndexQueryable,
 	isSearchIndexReadyWithFilterFields,

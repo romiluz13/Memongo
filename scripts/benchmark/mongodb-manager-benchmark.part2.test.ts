@@ -387,6 +387,20 @@ describe("benchmark scenario queue settling", () => {
 		}
 	})
 
+	it("fails closed when queue identities never quiesce", async () => {
+		const manager = {
+			agentId: "benchmark-agent-churning",
+			get writeQueue() {
+				return Promise.resolve()
+			},
+			derivationQueue: Promise.resolve(),
+		} as unknown as MongoDBMemoryManager
+
+		await expect(callSettle(manager)).rejects.toThrow(
+			"benchmark scenario manager did not fully settle after 8 attempts",
+		)
+	})
+
 	it("stops an isolated durable worker before measuring and cleaning its scenario", async () => {
 		const { ingestBenchmarkConversations } = await import(
 			"./mongodb-benchmark-harness.js"

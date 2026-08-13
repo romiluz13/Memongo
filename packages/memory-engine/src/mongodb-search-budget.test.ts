@@ -7,6 +7,7 @@ import {
 	runWithSearchBudget,
 	tryConsumeSearchAggregation,
 	tryConsumeSearchEmbed,
+	tryReserveSearchBudget,
 } from "./mongodb-search-budget.js"
 
 describe("mongodb-search-budget", () => {
@@ -108,5 +109,79 @@ describe("mongodb-search-budget", () => {
 		)
 		expect(budget.aggregations).toBe(2)
 		expect(budget.embeds).toBe(1)
+	})
+
+	it("reserves capacity atomically before concurrent consumers run", async () => {
+		const { budget } = await runWithSearchBudget(
+			{ maxAggregations: 3, maxEmbeds: 2 },
+			async () => {
+				const reservation = tryReserveSearchBudget({
+					aggregations: 2,
+					embeds: 1,
+				})
+				expect(reservation).toBeDefined()
+
+				expect(tryConsumeSearchAggregation()).toBe(true)
+				expect(tryConsumeSearchAggregation()).toBe(false)
+				expect(tryConsumeSearchEmbed()).toBe(true)
+				expect(tryConsumeSearchEmbed()).toBe(false)
+
+				expect(reservation?.tryConsumeAggregation()).toBe(true)
+				expect(reservation?.tryConsumeAggregation()).toBe(true)
+				expect(reservation?.tryConsumeAggregation()).toBe(false)
+				expect(reservation?.tryConsumeEmbed()).toBe(true)
+				expect(reservation?.tryConsumeEmbed()).toBe(false)
+				reservation?.release()
+			},
+		)
+		expect(budget.aggregations).toBe(3)
+		expect(budget.embeds).toBe(2)
+	})
+
+	it("fails an over-budget reservation without consuming partial capacity", async () => {
+		const { budget } = await runWithSearchBudget(
+			{ maxAggregations: 2, maxEmbeds: 1 },
+			async () => {
+				expect(
+					tryReserveSearchBudget({ aggregations: 2, embeds: 2 }),
+				).toBeUndefined()
+				expect(tryConsumeSearchAggregation()).toBe(true)
+				expect(tryConsumeSearchAggregation()).toBe(true)
+				expect(tryConsumeSearchEmbed()).toBe(true)
+			},
+		)
+		expect(budget.aggregations).toBe(2)
+		expect(budget.embeds).toBe(1)
+	})
+
+	it("releases unused reserved capacity without charging it as consumed", async () => {
+		const { budget } = await runWithSearchBudget(
+			{ maxAggregations: 2, maxEmbeds: 1 },
+			async () => {
+				const reservation = tryReserveSearchBudget({
+					aggregations: 2,
+					embeds: 1,
+				})
+				expect(reservation?.tryConsumeAggregation()).toBe(true)
+				reservation?.release()
+
+				expect(tryConsumeSearchAggregation()).toBe(true)
+				expect(tryConsumeSearchEmbed()).toBe(true)
+			},
+		)
+		expect(budget.aggregations).toBe(2)
+		expect(budget.embeds).toBe(1)
+	})
+
+	it("returns a bounded reservation outside a budget context", () => {
+		const reservation = tryReserveSearchBudget({
+			aggregations: 1,
+			embeds: 1,
+		})
+		expect(reservation?.tryConsumeAggregation()).toBe(true)
+		expect(reservation?.tryConsumeAggregation()).toBe(false)
+		expect(reservation?.tryConsumeEmbed()).toBe(true)
+		expect(reservation?.tryConsumeEmbed()).toBe(false)
+		reservation?.release()
 	})
 })

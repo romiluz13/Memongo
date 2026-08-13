@@ -7,6 +7,11 @@ export type MemoryMongoDBDeploymentProfile =
 
 export type MemoryMongoDBEmbeddingMode = "automated"
 
+export type MemoryMongoDBQueryEmbeddingModel =
+	| "voyage-4-large"
+	| "voyage-4"
+	| "voyage-4-lite"
+
 export type MemoryMongoDBFusionMethod =
 	| "scoreFusion"
 	| "rankFusion"
@@ -32,6 +37,11 @@ export type MemoryMongoDBConfig = {
 	collectionPrefix?: string
 	deploymentProfile?: MemoryMongoDBDeploymentProfile
 	embeddingMode?: MemoryMongoDBEmbeddingMode
+	/**
+	 * Voyage model used to embed read-path queries. Voyage 4 models share an
+	 * embedding space, so this may differ from the index-time model.
+	 */
+	queryEmbeddingModel?: MemoryMongoDBQueryEmbeddingModel
 	fusionMethod?: MemoryMongoDBFusionMethod
 	recallProfile?: MemoryMongoDBRecallProfile
 	quantization?: "none" | "scalar" | "binary"

@@ -7,6 +7,7 @@ import type {
 } from "mongodb"
 import {
 	type MemoryMongoDBEmbeddingMode,
+	type MemoryMongoDBQueryEmbeddingModel,
 	type MemoryScope,
 	createSubsystemLogger,
 } from "@memongo/lib"
@@ -1526,6 +1527,7 @@ export async function searchProcedures(
 		vectorIndexName: string
 		textIndexName?: string
 		embeddingMode: MemoryMongoDBEmbeddingMode
+		queryEmbeddingModel?: MemoryMongoDBQueryEmbeddingModel
 		numCandidates?: number
 		explain?: SearchExplainOptions
 	},
@@ -1574,6 +1576,7 @@ export async function searchProcedures(
 				queryVector,
 				queryText: query,
 				embeddingMode: opts.embeddingMode,
+				model: opts.queryEmbeddingModel,
 				indexName: opts.vectorIndexName,
 				numCandidates,
 				limit: opts.maxResults,

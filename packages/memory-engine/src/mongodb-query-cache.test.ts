@@ -664,6 +664,61 @@ describe("query cache key composition (P2.4)", () => {
 		expect(explicit).toBe(defaulted)
 	})
 
+	it("separates cache identity by query model and conversation evidence mode", () => {
+		const parallelLite = hashQuery("deploy runbook", {
+			queryEmbeddingModel: "voyage-4-lite",
+			conversationEvidenceMode: "parallel",
+		})
+		expect(
+			hashQuery("deploy runbook", {
+				queryEmbeddingModel: "voyage-4-large",
+				conversationEvidenceMode: "parallel",
+			}),
+		).not.toBe(parallelLite)
+		expect(
+			hashQuery("deploy runbook", {
+				queryEmbeddingModel: "voyage-4-lite",
+				conversationEvidenceMode: "serial",
+			}),
+		).not.toBe(parallelLite)
+	})
+
+	it("separates cache identity by fusion and reranking configuration", () => {
+		const jsMerge = hashQuery("deploy runbook", {
+			fusionMethod: "js-merge",
+			reranker: {
+				enabled: true,
+				model: "rerank-2.5",
+				topN: 20,
+				minScore: 0.01,
+				instruction: "Prefer exact operational evidence.",
+			},
+		})
+		expect(
+			hashQuery("deploy runbook", {
+				fusionMethod: "rankFusion",
+				reranker: {
+					enabled: true,
+					model: "rerank-2.5",
+					topN: 20,
+					minScore: 0.01,
+					instruction: "Prefer exact operational evidence.",
+				},
+			}),
+		).not.toBe(jsMerge)
+		expect(
+			hashQuery("deploy runbook", {
+				fusionMethod: "js-merge",
+				reranker: {
+					enabled: false,
+					model: "rerank-2.5-lite",
+					topN: 10,
+					minScore: 0.1,
+				},
+			}),
+		).not.toBe(jsMerge)
+	})
+
 	it("omitting keyParams keeps the legacy hash input (backwards compatible)", () => {
 		const expected = createHash("sha256").update("deploy runbook").digest("hex")
 		expect(hashQuery("deploy runbook")).toBe(expected)

@@ -51,6 +51,9 @@ Thumbs.db
 # pinned in benchmark-quality-contracts.ts. Too large to vendor (~265 MB).
 benchmarks/data/
 
+# Runtime benchmark checkpoints are resumable local state, not release artifacts.
+benchmarks/results/checkpoints/
+
 # Review scratch + runtime workflow logs (B15.2/B15.3)
 .tmp-review/
 *.events.jsonl

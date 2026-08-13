@@ -277,6 +277,7 @@ describe("recallConversation", () => {
 				startTime: "2026-04-01",
 				limit: 999,
 			},
+			queryEmbeddingModel: "voyage-4-large",
 			capabilities: {
 				vectorSearch: true,
 				textSearch: false,

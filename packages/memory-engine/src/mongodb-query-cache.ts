@@ -1,6 +1,13 @@
 import { createHash } from "node:crypto"
 import type { Collection, Db, Document } from "mongodb"
-import { type MemoryScope, createSubsystemLogger } from "@memongo/lib"
+import {
+	type MemoryMongoDBFusionMethod,
+	type MemoryMongoDBQueryEmbeddingModel,
+	type MemoryScope,
+	createSubsystemLogger,
+} from "@memongo/lib"
+import type { ConversationEvidenceMode } from "./mongodb-conversation-evidence-mode.js"
+import type { RerankConfig } from "./mongodb-reranker.js"
 import { queryCacheCollection } from "./mongodb-schema.js"
 import {
 	buildVectorSearchStage,
@@ -37,6 +44,20 @@ export type QueryCacheKeyParams = {
 	minScore?: number
 	timeRange?: { preset?: string; start?: string; end?: string }
 	questionDate?: Date
+	queryEmbeddingModel?: MemoryMongoDBQueryEmbeddingModel
+	conversationEvidenceMode?: ConversationEvidenceMode
+	fusionMethod?: MemoryMongoDBFusionMethod
+	reranker?: Pick<
+		RerankConfig,
+		| "enabled"
+		| "model"
+		| "topN"
+		| "minScore"
+		| "instruction"
+		| "recencyBoost"
+		| "accessBoost"
+		| "temporalProximityBoost"
+	>
 }
 
 export type QueryCacheEntry = {
@@ -96,7 +117,8 @@ export function normalizeQuery(query: string): string {
 /**
  * Canonical serialization of cache key params: defined fields only, stable
  * order. `k` = maxResults, `s` = minScore, `t` = timeRange (preset|start|end),
- * `d` = questionDate.
+ * `d` = questionDate, `q` = query embedding model, `e` = conversation
+ * evidence mode, `f` = fusion method, `r` = reranker fingerprint.
  */
 export function serializeKeyParams(params?: QueryCacheKeyParams): string {
 	if (!params) {
@@ -117,6 +139,33 @@ export function serializeKeyParams(params?: QueryCacheKeyParams): string {
 	}
 	if (params.questionDate) {
 		parts.push(`d=${params.questionDate.toISOString()}`)
+	}
+	if (params.queryEmbeddingModel) {
+		parts.push(`q=${params.queryEmbeddingModel}`)
+	}
+	if (params.conversationEvidenceMode) {
+		parts.push(`e=${params.conversationEvidenceMode}`)
+	}
+	if (params.fusionMethod) {
+		parts.push(`f=${params.fusionMethod}`)
+	}
+	if (params.reranker) {
+		const reranker = params.reranker
+		const instructionSha256 = reranker.instruction
+			? createHash("sha256").update(reranker.instruction).digest("hex")
+			: ""
+		parts.push(
+			[
+				`r=${reranker.enabled ? "1" : "0"}`,
+				reranker.model,
+				reranker.topN,
+				reranker.minScore,
+				instructionSha256,
+				reranker.recencyBoost ?? "",
+				reranker.accessBoost ?? "",
+				reranker.temporalProximityBoost ?? "",
+			].join("|"),
+		)
 	}
 	return parts.join(";")
 }
@@ -193,6 +242,7 @@ export async function checkCache(params: {
 	scope: MemoryScope
 	scopeRef: string
 	config: QueryCacheConfig
+	queryEmbeddingModel?: MemoryMongoDBQueryEmbeddingModel
 	vectorIndexName?: string
 	keyParams?: QueryCacheKeyParams
 }): Promise<CacheCheckResult> {
@@ -311,6 +361,7 @@ export async function checkCache(params: {
 			queryVector: null,
 			queryText: normalized,
 			embeddingMode: "automated",
+			model: params.queryEmbeddingModel,
 			indexName,
 			numCandidates: 20,
 			limit: 1,

@@ -6,6 +6,7 @@ export type {
 	MemoryMongoDBDeploymentProfile,
 	MemoryMongoDBEmbeddingMode,
 	MemoryMongoDBFusionMethod,
+	MemoryMongoDBQueryEmbeddingModel,
 	MemoryMongoDBRecallProfile,
 	MemoryScope,
 	MemorySourceToggleConfig,
