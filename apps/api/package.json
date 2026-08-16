@@ -12,16 +12,16 @@
 		"test": "vitest run src/app.test.ts src/app.segment*.test.ts"
 	},
 	"dependencies": {
-		"@hono/node-server": "^1.19.0",
+		"@hono/node-server": "^1.19.17",
 		"@memongo/lib": "workspace:*",
 		"@memongo/memory-bridge": "workspace:*",
-		"hono": "^4.12.0",
-		"tsx": "^4.19.0",
+		"hono": "^4.13.2",
+		"tsx": "^4.23.12",
 		"zod": "^3.25.0"
 	},
 	"devDependencies": {
-		"@types/node": "^22.10.0",
+		"@types/node": "^22.20.1",
 		"typescript": "^5.8.0",
-		"vitest": "^4.1.0"
+		"vitest": "^4.1.10"
 	}
 }

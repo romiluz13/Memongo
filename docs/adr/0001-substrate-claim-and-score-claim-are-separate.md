@@ -31,8 +31,10 @@ Concretely this means:
 - `$graphLookup` is claimable for **traversal only**. Typed edges come from an LLM
   (`mongodb-graph.ts:1842`), not from MongoDB, and degrade to `mentioned_with@0.2`
   co-occurrence when no enrichment provider is configured.
-- `$rankFusion` is a footnote, not a claim. We ship `js-merge`, a client-side RRF fallback
-  our own code describes as producing a matching ranking, so we cannot claim the native
-  operator improves relevance. Any claim for it must rest on data movement, measured.
+- Native `$scoreFusion` is the preferred hybrid-fusion path after a controlled
+  August 2026 comparison against `$rankFusion` and `js-merge`. The client-side
+  `js-merge` implementation remains a fallback and diagnostic path, not the
+  preferred architecture. This is a Memongo benchmark decision, not a universal
+  claim that `$scoreFusion` improves every workload.
 - MongoDB's published reranking figures (+23.84% over full-text, +10.82% over vector) are
   MongoDB's numbers on MongoDB's benchmark. They are never cited as ours.

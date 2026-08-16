@@ -509,7 +509,7 @@ export class MongoDBManagerLifecycleOps {
 			vectorIndexName: `${this.host.prefix}events_vector`,
 			textIndexName: `${this.host.prefix}events_text`,
 			queryEmbeddingModel:
-				this.host.config?.mongodb?.queryEmbeddingModel ?? "voyage-4-lite",
+				this.host.config?.mongodb?.queryEmbeddingModel ?? "voyage-4-large",
 			capabilities: this.host.capabilities,
 			nativeBitemporalVectorPrefilter,
 		})

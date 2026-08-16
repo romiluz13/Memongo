@@ -2,6 +2,7 @@ import { createHash, timingSafeEqual } from "node:crypto"
 import { Hono, type Context, type MiddlewareHandler } from "hono"
 import { HTTPException } from "hono/http-exception"
 import { bodyLimit } from "hono/body-limit"
+import { secureHeaders } from "hono/secure-headers"
 import { cors } from "hono/cors"
 import { requestId } from "hono/request-id"
 import { openApiSpec } from "./openapi-spec.js"
@@ -518,6 +519,7 @@ export function registerGracefulShutdown(
 
 export function createApp(): Hono {
 	const app = new Hono()
+	app.use("*", secureHeaders())
 	// P0.8: one canonical error envelope. Deliberate HTTPExceptions keep their
 	// status/body; anything unexpected is logged with a request id and returned
 	// as a generic INTERNAL 500 — never raw driver internals to the client.

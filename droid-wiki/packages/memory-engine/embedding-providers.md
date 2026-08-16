@@ -97,6 +97,10 @@ Enforcement is conservative and byte-based (`embedding-input-limits.ts`):
 
 ## Auto-embed vs client-side embedding
 
+> **Preview:** MongoDB Automated Embedding is an upstream Preview feature that
+> MongoDB says not to use in production. The current auto-embed mode is suitable
+> for evaluation and controlled preview deployments.
+
 ```mermaid
 flowchart LR
     subgraph Automated["embeddingMode: automated (only supported mode)"]

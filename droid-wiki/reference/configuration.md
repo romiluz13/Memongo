@@ -30,7 +30,8 @@ Resolved in `packages/memory-engine/src/backend-config.ts`.
 | `MEMONGO_FORCE_MONGODB_URI` | Override applied last (tests/tooling) |
 | `MEMONGO_MONGODB_DATABASE` | Database name (default `memongo`) |
 | `MEMONGO_MONGODB_COLLECTION_PREFIX` | Per-agent collection prefix; empty selects shared collections with `agentId` discriminator |
-| `MEMONGO_MONGODB_FUSION_METHOD` | `scoreFusion` \| `rankFusion` \| `js-merge` |
+| `MEMONGO_MONGODB_FUSION_METHOD` | `scoreFusion` (default) \| `rankFusion` \| `js-merge` |
+| `MEMONGO_QUERY_EMBEDDING_MODEL` | Compatible Voyage 4 query model (default `voyage-4-large`) |
 | `MEMONGO_MONGODB_RECALL_PROFILE` | `latency` \| `balanced` \| `proof` |
 | `MEMONGO_NUM_CANDIDATES` | Vector-search `numCandidates` |
 | `MEMONGO_MONGODB_MAX_POOL_SIZE` / `MIN_POOL_SIZE` / `MAX_CONNECTING` | Driver pool tuning |

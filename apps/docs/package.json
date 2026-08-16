@@ -8,6 +8,6 @@
 		"validate:mintlify": "node ../../scripts/validate-mintlify-build.mjs"
 	},
 	"devDependencies": {
-		"mintlify": "^4.2.112"
+		"mintlify": "^4.2.804"
 	}
 }

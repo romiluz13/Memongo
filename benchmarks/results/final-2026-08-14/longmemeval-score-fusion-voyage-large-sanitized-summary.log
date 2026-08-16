@@ -1,0 +1,36 @@
+Memongo final LongMemEval benchmark, sanitized completion excerpt
+
+profile: shipped
+scope: full (500 questions)
+contract: longmemeval-release@1
+configuration: native scoreFusion; voyage-4-large; parallel conversation evidence; Voyage rerank-2.5; LLM enrichment none
+conversation recall regression: 6/6 passed
+
+Recovered warnings:
+00:02:58.505 [memory:mongodb] warn: memory job worker failed: MongoServerSelectionError: connection <monitor> to <REDACTED_HOST>:27017 timed out
+00:02:59.390 [memory:mongodb] warn: memory job worker failed: MongoServerSelectionError: Socket secureConnect timed out after 10094ms (connectTimeoutMS: 10000)
+
+Final metrics:
+cases: 500
+scoredCases: 470
+hitRate: 0.9894
+emptyRate: 0.0000
+R@5: 0.9315
+R@10: 0.9716
+nDCG@10: 0.8938
+p50 latency ms: 792
+p95 latency ms: 1244
+over 1000 ms: 80/470
+
+Release gates:
+passed official-retrieval
+passed internal-retrieval
+passed execution-completeness
+failed quality-thresholds: p95LatencyMs 1244 <= 1000
+failed evidence-completeness
+passed conversation-recall-regression
+advisory-only query-governance
+
+NOT PUBLISHABLE
+blocking: quality-thresholds, evidence-completeness
+benchmark command exit: 1

@@ -1590,7 +1590,7 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 
 			expect(stage).not.toBeNull()
 			expect(stage!.query).toEqual({ text: "data pipeline architecture" })
-			expect(stage!.model).toBe("voyage-4-lite")
+			expect(stage!.model).toBe("voyage-4-large")
 			expect(stage!.path).toBe("text")
 			expect(stage!.index).toBe(`${PREFIX}chunks_vector`)
 			expect(stage!.numCandidates).toBe(100)

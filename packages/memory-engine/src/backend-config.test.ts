@@ -48,8 +48,8 @@ describe("resolveMemoryBackendConfig", () => {
 		expect(resolved.mongodb?.collectionPrefix).toBe("memongo_")
 		expect(resolved.mongodb?.deploymentProfile).toBe("atlas-local-preview")
 		expect(resolved.mongodb?.embeddingMode).toBe("automated")
-		expect(resolved.mongodb?.queryEmbeddingModel).toBe("voyage-4-lite")
-		expect(resolved.mongodb?.fusionMethod).toBe("rankFusion")
+		expect(resolved.mongodb?.queryEmbeddingModel).toBe("voyage-4-large")
+		expect(resolved.mongodb?.fusionMethod).toBe("scoreFusion")
 		expect(resolved.mongodb?.recallProfile).toBe("balanced")
 		expect(resolved.mongodb?.quantization).toBe("none")
 		expect(resolved.mongodb?.relevance.enabled).toBe(true)
@@ -733,7 +733,7 @@ describe("resolveMemoryBackendConfig", () => {
 		expect(resolved.mongodb?.numCandidates).toBe(10000)
 	})
 
-	it("defaults fusionMethod to rankFusion (F8)", () => {
+	it("defaults fusionMethod to scoreFusion (F8)", () => {
 		const cfg = {
 			agents: { defaults: { workspace: "/tmp/memory-test" } },
 			memory: {
@@ -742,7 +742,7 @@ describe("resolveMemoryBackendConfig", () => {
 			},
 		} as MemongoConfig
 		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
-		expect(resolved.mongodb?.fusionMethod).toBe("rankFusion")
+		expect(resolved.mongodb?.fusionMethod).toBe("scoreFusion")
 	})
 
 	it("allows explicit scoreFusion override", () => {

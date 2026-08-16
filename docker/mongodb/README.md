@@ -2,6 +2,11 @@
 
 Atlas Local preview is the canonical Memongo MongoDB stack.
 
+> [!WARNING]
+> MongoDB Automated Embedding is an upstream Preview feature that MongoDB says
+> not to use in production. The auto-embedding instructions below are for local
+> evaluation and controlled preview deployments.
+
 ## Recommended: Preview (Single Container)
 
 The fastest way to run Memongo's full MongoDB stack:

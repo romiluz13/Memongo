@@ -60,6 +60,12 @@ to a MongoDB Atlas Model API key with the `al-...` prefix when you want MongoDB
 auto-embeddings. Without it, you can still use local development paths that do
 not require auto-embed.
 
+> [!WARNING]
+> [MongoDB Automated Embedding](https://www.mongodb.com/docs/vector-search/crud-embeddings/automated-embedding/)
+> is an upstream Preview feature. MongoDB says not to use it in production.
+> Memongo's current automated semantic-search lane is therefore for evaluation
+> and controlled preview deployments, not production certification.
+
 Start the API:
 
 ```bash
@@ -150,6 +156,8 @@ Common variables:
 | `MEMONGO_API_KEY` | Recommended bearer token for API requests |
 | `MEMONGO_AGENT_ID` | Default memory isolation key |
 | `MEMONGO_MONGODB_RECALL_PROFILE` | `latency`, `balanced`, or `proof`; default `balanced` |
+| `MEMONGO_MONGODB_FUSION_METHOD` | `scoreFusion`, `rankFusion`, or `js-merge`; default `scoreFusion` with capability fallback |
+| `MEMONGO_QUERY_EMBEDDING_MODEL` | Compatible Voyage 4 query model; default `voyage-4-large` |
 | `VOYAGE_API_KEY` | Atlas Model API key for MongoDB auto-embed lanes |
 | `MEMONGO_ENRICHMENT_BASE_URL` | Optional OpenAI-compatible or Anthropic endpoint for LLM enrichment |
 | `MEMONGO_ENRICHMENT_API_KEY` | API key for the enrichment endpoint |
@@ -165,9 +173,30 @@ For managed Atlas and Atlas Local Preview notes, see [Configuration](apps/docs/g
 
 ## Benchmarks
 
-Memongo benchmark evidence is scoped by lane. Current public evidence supports selected MemPalace P0 retrieval-lane comparisons only. Broader ecosystem benchmarks, including Mem0 LongMemEval judged-answer rows, are still under audit. No Mem0 LongMemEval win is claimed.
+In a complete 500-question LongMemEval retrieval run, Memongo returned every
+scenario successfully and achieved:
 
-Read the evidence page before quoting any number: [Benchmark Evidence](docs/benchmarks/BENCHMARKS.md).
+| Metric | Result |
+|---|---:|
+| Official session RecallAny@10 | **98.57%** |
+| Official session RecallAll@10 | **94.75%** |
+| Internal R@5 | **93.15%** |
+| Internal R@10 | **97.16%** |
+| Internal hit rate | **98.94%** |
+
+The run used MongoDB-native `$scoreFusion`, Voyage 4 Large query embeddings,
+Voyage `rerank-2.5`, and no generative LLM enrichment. These are retrieval
+metrics, not generated-answer accuracy. The registered release contract still
+classifies the run as **not publishable** because its 1,244 ms p95 exceeded the
+1,000 ms gate and build, cost, and native-operation evidence was incomplete.
+
+Competitor headline numbers use different evaluators and units. Mem0 and Zep
+publish generated-answer accuracy, Supermemory publishes a differently
+aggregated Recall@15 result, and Letta's public 74.0% result is on LoCoMo. None
+is an apples-to-apples comparison with Memongo's retrieval-only result.
+
+Read the methodology, competitor context, and failed gates before quoting any
+number: [Benchmark Evidence](docs/benchmarks/BENCHMARKS.md).
 
 Benchmark rules:
 

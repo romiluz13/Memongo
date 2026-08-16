@@ -166,7 +166,7 @@ const DEFAULT_MONGODB_PROFILE: MemoryMongoDBDeploymentProfile =
 	"atlas-local-preview"
 const DEFAULT_MONGODB_EMBEDDING_MODE: MemoryMongoDBEmbeddingMode = "automated"
 const DEFAULT_QUERY_EMBEDDING_MODEL: MemoryMongoDBQueryEmbeddingModel =
-	"voyage-4-lite"
+	"voyage-4-large"
 /**
  * P2.1: shared default collection prefix. All agents share one physical
  * collection set; per-agent isolation stays logical (agentId leads every
@@ -302,7 +302,7 @@ export function resolveMemoryBackendConfig(params: {
 				),
 				fusionMethod: resolveEnvFusionMethod(
 					"MEMONGO_MONGODB_FUSION_METHOD",
-					mongoCfg?.fusionMethod ?? "rankFusion",
+					mongoCfg?.fusionMethod ?? "scoreFusion",
 				),
 				recallProfile: resolveEnvRecallProfile(
 					"MEMONGO_MONGODB_RECALL_PROFILE",

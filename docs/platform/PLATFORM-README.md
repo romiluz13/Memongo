@@ -37,6 +37,10 @@ bun install
 
 **MongoDB:** use either managed MongoDB Atlas cloud or Atlas Local Preview. Both lanes use MongoDB Search, Vector Search, and auto-embeddings with an Atlas Model API key.
 
+MongoDB Automated Embedding is an upstream Preview feature that MongoDB says
+not to use in production. Use Memongo's automated lane for evaluation and
+controlled preview deployments, not production certification.
+
 Managed Atlas cloud:
 
 ```bash
@@ -79,7 +83,6 @@ Standalone mode uses environment variables and optional `~/.memongo/memongo.json
 - [Benchmark pack](benchmark-pack.md)
 - [Self-host runbook](self-host.md)
 - [Publishing](publish.md)
-- [Production-ready checklist](PRODUCTION-READY.md)
 - [Production-ready checklist](PRODUCTION-READY.md)
 
 ## Tests

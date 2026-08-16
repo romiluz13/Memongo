@@ -353,10 +353,10 @@ async function searchV2WithBudget(
 			storedSource: false,
 			vectorIndexMethod: false,
 		}
-		const fusionMethod = context.searchOptions?.fusionMethod ?? "rankFusion"
+		const fusionMethod = context.searchOptions?.fusionMethod ?? "scoreFusion"
 		const embeddingMode = context.searchOptions?.embeddingMode ?? "automated"
 		const queryEmbeddingModel =
-			context.searchOptions?.queryEmbeddingModel ?? "voyage-4-lite"
+			context.searchOptions?.queryEmbeddingModel ?? "voyage-4-large"
 		const conversationEvidenceMode =
 			context.searchOptions?.conversationEvidenceMode ??
 			resolveConversationEvidenceMode(

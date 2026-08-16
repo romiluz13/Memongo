@@ -91,7 +91,7 @@ vector-only assertions in `production-readiness.e2e.test.ts` will skip.
 
 These lanes are real but environment-specific:
 - Auto-embed/search:
-  `packages/memory-engine/src/real-e2e-v2.e2e.test.ts` against managed Atlas cloud or the preview stack with a valid `al-...` Atlas Model key.
+  `packages/memory-engine/src/real-e2e-v2.e2e.test.ts` against managed Atlas cloud or the preview stack with a valid `al-...` Atlas Model key. MongoDB Automated Embedding is Preview and not for production use, so this is preview capability evidence only.
 - Replica-set-only:
   `packages/memory-engine/src/mongodb-e2e.e2e.test.ts` against `docker/mongodb/docker-compose.mongodb.yml` `replicaset` or `fullstack` (requires `ADMIN_PASSWORD` and `MONGOT_PASSWORD` to be set — no defaults) using:
 

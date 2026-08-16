@@ -1,0 +1,244 @@
+{
+	"accounting": {
+		"currency": null,
+		"operations": [
+			{
+				"attempted": null,
+				"failed": null,
+				"observability": "unknown",
+				"operation": "embedding",
+				"succeeded": null,
+				"unavailableReason": "MongoDB automated embedding calls are not exposed to the calling process"
+			},
+			{
+				"attempted": null,
+				"failed": null,
+				"observability": "unknown",
+				"operation": "vector-query",
+				"succeeded": null,
+				"unavailableReason": "MongoDB search execution does not expose per-stage vector operation counts"
+			},
+			{
+				"attempted": 0,
+				"failed": 0,
+				"observability": "not-run",
+				"operation": "enrichment",
+				"succeeded": 0
+			},
+			{
+				"attempted": 0,
+				"failed": 0,
+				"observability": "not-run",
+				"operation": "query-decomposition",
+				"succeeded": 0
+			},
+			{
+				"attempted": 0,
+				"failed": 0,
+				"observability": "not-run",
+				"operation": "answer-generation",
+				"succeeded": 0
+			},
+			{
+				"attempted": 0,
+				"failed": 0,
+				"observability": "not-run",
+				"operation": "answer-judge",
+				"succeeded": 0
+			},
+			{
+				"attempted": 0,
+				"failed": 0,
+				"observability": "not-run",
+				"operation": "decoy-judge",
+				"succeeded": 0
+			},
+			{
+				"attempted": 0,
+				"failed": 0,
+				"observability": "not-run",
+				"operation": "structured-extraction",
+				"succeeded": 0
+			},
+			{
+				"attempted": 0,
+				"failed": 0,
+				"observability": "not-run",
+				"operation": "temporal-extraction",
+				"succeeded": 0
+			},
+			{
+				"attempted": 0,
+				"failed": 0,
+				"observability": "not-run",
+				"operation": "contradiction-detection",
+				"succeeded": 0
+			},
+			{
+				"attempted": 0,
+				"failed": 0,
+				"observability": "not-run",
+				"operation": "relation-extraction",
+				"succeeded": 0
+			},
+			{
+				"attempted": 505,
+				"failed": 3,
+				"model": "rerank-2.5",
+				"observability": "measured",
+				"operation": "rerank",
+				"provider": "voyage",
+				"succeeded": 502
+			}
+		],
+		"totalCost": null,
+		"unavailableReason": "provider token usage and prices are not instrumented"
+	},
+	"configuration": {
+		"conversationEvidenceMode": "parallel",
+		"fusionMethod": "scoreFusion",
+		"llmEnrichmentMode": "none",
+		"queryEmbeddingModel": "voyage-4-large",
+		"rerankerModel": "rerank-2.5",
+		"rerankerProvider": "voyage"
+	},
+	"execution": {
+		"abstentions": 30,
+		"attempted": 500,
+		"failed": 0,
+		"scored": 470,
+		"skipped": 30,
+		"succeeded": 500
+	},
+	"generatedAt": "2026-08-14T07:52:39.070927+00:00",
+	"internalMetrics": {
+		"averageTopScore": 0.9296752007093192,
+		"emptyRate": 0.0,
+		"hitRate": 0.9893617021276596,
+		"ndcgAt10": 0.8938011296791722,
+		"recallAt10": 0.9716312056737589,
+		"recallAt5": 0.9314539007092197
+	},
+	"latency": {
+		"over1000Count": 80,
+		"p50Ms": 792,
+		"p95Ms": 1244,
+		"scoredSamples": 470
+	},
+	"officialMetrics": {
+		"longMemEval": {
+			"abstentionCases": 30,
+			"eligibleCases": 419,
+			"evaluator": {
+				"aggregationEntrypoint": "src/retrieval/run_retrieval.py",
+				"candidateProjection": "native-source-attribution-flattened",
+				"comparability": "canonical",
+				"cutoffs": [1, 3, 5, 10, 30, 50],
+				"eligibilityPolicy": "exclude-abstention-and-no-user-answer-target",
+				"evaluatorBlob": "9c43a835e7c41aff0eb3272c448f5cbe76bbbd45",
+				"evaluatorPath": "src/retrieval/eval_utils.py",
+				"sourceCommit": "9e0b455f4ef0e2ab8f2e582289761153549043fc",
+				"sourceRepository": "xiaowu0162/LongMemEval",
+				"suite": "longmemeval"
+			},
+			"executionFailureCases": 0,
+			"ineligibleCases": 81,
+			"projectionFailureCases": 0,
+			"retrievalCases": 419,
+			"session": {
+				"ndcgAnyAt1": 0.7995226730310262,
+				"ndcgAnyAt10": 0.8763117331958732,
+				"ndcgAnyAt3": 0.823674911263459,
+				"ndcgAnyAt30": 0.8793683674630368,
+				"ndcgAnyAt5": 0.8600682556289594,
+				"ndcgAnyAt50": 0.8808905171361859,
+				"recallAllAt1": 0.2386634844868735,
+				"recallAllAt10": 0.9474940334128878,
+				"recallAllAt3": 0.7326968973747017,
+				"recallAllAt30": 0.9713603818615751,
+				"recallAllAt5": 0.8854415274463007,
+				"recallAllAt50": 0.9832935560859188,
+				"recallAnyAt1": 0.7995226730310262,
+				"recallAnyAt10": 0.9856801909307876,
+				"recallAnyAt3": 0.9355608591885441,
+				"recallAnyAt30": 0.9928400954653938,
+				"recallAnyAt5": 0.9618138424821002,
+				"recallAnyAt50": 0.9976133651551312
+			},
+			"totalCases": 500,
+			"turn": {
+				"ndcgAnyAt1": 0.2720763723150358,
+				"ndcgAnyAt10": 0.2863312825488689,
+				"ndcgAnyAt3": 0.2583101984529496,
+				"ndcgAnyAt30": 0.31486750204583236,
+				"ndcgAnyAt5": 0.2769291160204679,
+				"ndcgAnyAt50": 0.3375550518276586,
+				"recallAllAt1": 0.0883054892601432,
+				"recallAllAt10": 0.20763723150357996,
+				"recallAllAt3": 0.16945107398568018,
+				"recallAllAt30": 0.324582338902148,
+				"recallAllAt5": 0.18854415274463007,
+				"recallAllAt50": 0.45346062052505964,
+				"recallAnyAt1": 0.2720763723150358,
+				"recallAnyAt10": 0.4630071599045346,
+				"recallAnyAt3": 0.36992840095465396,
+				"recallAnyAt30": 0.5799522673031027,
+				"recallAnyAt5": 0.43675417661097854,
+				"recallAnyAt50": 0.6897374701670644
+			}
+		}
+	},
+	"publicationStatus": "not-publishable",
+	"releaseGates": [
+		{
+			"gate": "official-retrieval",
+			"status": "passed"
+		},
+		{
+			"gate": "internal-retrieval",
+			"status": "passed"
+		},
+		{
+			"gate": "execution-completeness",
+			"status": "passed"
+		},
+		{
+			"evidence": "p95LatencyMs 1244 <= 1000 failed; all other registered quality thresholds passed",
+			"gate": "quality-thresholds",
+			"status": "failed"
+		},
+		{
+			"evidence": "Build commit identity was not injected; monetary cost unavailable; AutoEmbed/vector operation counts unavailable to benchmark process",
+			"gate": "evidence-completeness",
+			"status": "failed"
+		},
+		{
+			"evidence": "6/6 tests passed",
+			"gate": "conversation-recall-regression",
+			"status": "passed"
+		},
+		{
+			"gate": "query-governance",
+			"status": "advisory-only"
+		}
+	],
+	"run": {
+		"configurationHash": "d9080d34aa242855b78416b31db967d5a3c8ff77da8640d8911b307d6a901abf",
+		"contract": "longmemeval-release@1",
+		"datasetSha256": "d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442",
+		"elapsedSeconds": 23445.7,
+		"profile": "shipped",
+		"runId": "dce34699-9935-4745-b87f-b3af1ff6a484",
+		"totalScenarios": 500
+	},
+	"schemaVersion": 1,
+	"sourceArtifacts": {
+		"checkpoint": "benchmarks/results/checkpoints/longmemeval-full-score-fusion-voyage-large-no-vpn.json",
+		"temporaryRawLog": "not published; local source contained sensitive connection information"
+	},
+	"warnings": [
+		"30 benchmark cases were skipped as abstentions/non-scored cases",
+		"Two early MongoDB server-selection timeout warnings recovered automatically",
+		"The benchmark command exited 1 because publication gates failed, not because case execution failed"
+	]
+}

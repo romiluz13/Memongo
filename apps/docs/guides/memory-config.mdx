@@ -10,13 +10,15 @@ Memongo reads configuration from environment variables and an optional JSON conf
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `MEMONGO_MONGODB_URI` | MongoDB connection string for managed Atlas cloud or Atlas Local Preview | `mongodb://localhost:27017` |
+| `MEMONGO_MONGODB_URI` | Required MongoDB connection string for managed Atlas cloud or Atlas Local Preview | (none) |
 | `MEMONGO_AGENT_ID` | Agent identifier for memory isolation | `default` |
 | `MEMONGO_API_KEY` | Bearer token for the HTTP server; recommended outside trusted local dev | (none) |
 | `MEMONGO_API_PORT` | API listen port | `3847` |
 | `MEMONGO_API_HOST` | API bind address | `127.0.0.1` |
 | `MEMONGO_CONFIG_PATH` | Alternate JSON config file path | `~/.memongo/memongo.json` |
 | `MEMONGO_WORKSPACE_DIR` | Workspace directory used by the bridge | `~/.memongo/workspace` |
+| `MEMONGO_MONGODB_FUSION_METHOD` | Hybrid fusion preference: `scoreFusion`, `rankFusion`, or `js-merge` | `scoreFusion` |
+| `MEMONGO_QUERY_EMBEDDING_MODEL` | Compatible Voyage 4 query embedding model | `voyage-4-large` |
 | `VOYAGE_API_KEY` | Atlas Model API key for MongoDB auto-embed lanes | (none) |
 | `MEMONGO_ENRICHMENT_BASE_URL` | Optional OpenAI-compatible or Anthropic endpoint for LLM enrichment | (none) |
 | `MEMONGO_ENRICHMENT_API_KEY` | API key for LLM enrichment | (none) |
@@ -42,6 +44,8 @@ Create `~/.memongo/memongo.json`:
 
 - `MEMONGO_MONGODB_URI` is the quickest way to point the API at MongoDB during development.
 - When `MEMONGO_API_KEY` and scoped keys are unset, `/v1` routes are unauthenticated and the API logs a startup warning.
-- Managed Atlas cloud and Atlas Local Preview both use `embeddingMode: "automated"` with MongoDB auto-embed.
+- Managed Atlas cloud and Atlas Local Preview both use `embeddingMode: "automated"` with MongoDB Automated Embedding.
+- [MongoDB Automated Embedding](https://www.mongodb.com/docs/vector-search/crud-embeddings/automated-embedding/) is an upstream Preview feature that MongoDB says not to use in production. Treat this mode as evaluation or controlled-preview infrastructure until the feature is generally available or Memongo ships a production-supported client-side embedding path.
+- `$scoreFusion` is the default after the August 2026 benchmark comparison. On MongoDB versions without `$scoreFusion`, Memongo capability detection falls back to `$rankFusion`, then to client-side merge if needed.
 - The engine infers `deploymentProfile: "atlas-managed"` for `mongodb+srv://...mongodb.net` URIs and `deploymentProfile: "atlas-local-preview"` for local preview URIs unless you set it explicitly.
 - The supported runtime backend is MongoDB.

@@ -399,6 +399,14 @@ describe("createApp", () => {
 		})
 	})
 
+	it("sets baseline security headers on public responses", async () => {
+		const res = await createApp().request("/health")
+
+		expect(res.headers.get("x-content-type-options")).toBe("nosniff")
+		expect(res.headers.get("x-frame-options")).toBe("SAMEORIGIN")
+		expect(res.headers.get("referrer-policy")).toBe("no-referrer")
+	})
+
 	describe("GET /ready", () => {
 		beforeEach(() => {
 			bridgeMocks.memongoBridgePingMongo.mockResolvedValue({ ok: true })

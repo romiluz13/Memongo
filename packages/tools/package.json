@@ -53,9 +53,9 @@
 		"zod": "^3.25.0"
 	},
 	"devDependencies": {
-		"ai": "^5.0.0",
+		"ai": "^5.0.237",
 		"typescript": "^5.8.0",
-		"vitest": "^4.1.0"
+		"vitest": "^4.1.10"
 	},
 	"peerDependencies": {
 		"ai": ">=5.0.0"

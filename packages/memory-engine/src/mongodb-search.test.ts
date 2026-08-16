@@ -207,7 +207,7 @@ describe("vectorSearch", () => {
 		const vsStage = pipeline[0].$vectorSearch
 		expect(vsStage.index).toBe("test_vector")
 		expect(vsStage.query).toEqual({ text: "search query" })
-		expect(vsStage.model).toBe("voyage-4-lite")
+		expect(vsStage.model).toBe("voyage-4-large")
 		expect(vsStage.path).toBe("text")
 		expect(vsStage.queryVector).toBeUndefined()
 		expect(vsStage.numCandidates).toBeGreaterThanOrEqual(100)
@@ -247,7 +247,7 @@ describe("vectorSearch", () => {
 			.calls[0][0]
 		const vsStage = pipeline[0].$vectorSearch
 		expect(vsStage.query).toEqual({ text: "search query" })
-		expect(vsStage.model).toBe("voyage-4-lite")
+		expect(vsStage.model).toBe("voyage-4-large")
 		expect(vsStage.path).toBe("text")
 		expect(vsStage.queryVector).toBeUndefined()
 		expect(results).toHaveLength(2)
@@ -926,7 +926,7 @@ describe("mongoSearch dispatcher", () => {
 		expect(results).toEqual([])
 	})
 
-	it("stops the waterfall after a rankFusion empty (default fusion method)", async () => {
+	it("stops the waterfall after a rankFusion empty", async () => {
 		const col = {
 			aggregate: vi.fn(() => ({
 				toArray: vi.fn(async () => []),
@@ -1311,7 +1311,7 @@ describe("buildVectorSearchStage ENN", () => {
 		expect(stage!.numCandidates).toBeUndefined()
 		expect(stage!.limit).toBe(10)
 		expect(stage!.query).toEqual({ text: "test query" })
-		expect(stage!.model).toBe("voyage-4-lite")
+		expect(stage!.model).toBe("voyage-4-large")
 	})
 
 	it("honors an explicit compatible query model", () => {

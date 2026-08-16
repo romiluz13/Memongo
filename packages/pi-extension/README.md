@@ -20,6 +20,9 @@ Memongo durable memory for the [Pi coding agent](https://pi.dev).
 ```bash
 cd /Users/rom.iluz/Dev/memongo
 
+# Optional automated semantic search (Preview; Atlas Model API key):
+export VOYAGE_API_KEY="al-..."
+
 # Start MongoDB (Atlas Local Preview — includes mongod + mongot + Atlas Search + auto-embed)
 docker compose -f docker/docker-compose.yml up -d
 
@@ -27,10 +30,9 @@ docker compose -f docker/docker-compose.yml up -d
 cd apps/api && bun run dev
 ```
 
-Get a [Voyage AI API key](https://docs.voyageai.com/) (free tier, `al-...` prefix) and export it:
-```bash
-export VOYAGE_API_KEY="al-..."
-```
+`VOYAGE_API_KEY` must be a MongoDB Atlas Model API key with the `al-...`
+prefix, not a direct Voyage `pa-...` key. MongoDB Automated Embedding is an
+upstream Preview feature that MongoDB says not to use in production.
 
 ### 2. Wire into Pi
 

@@ -69,6 +69,13 @@ bunx vitest run \
 Without an `al-...` Atlas Model key, auto-embed/vector assertions should be
 treated as skipped capability checks, not product proof.
 
+> [!IMPORTANT]
+> MongoDB Automated Embedding is an upstream Preview feature that MongoDB says
+> not to use in production. A green auto-embed capability lane proves preview
+> behavior only; it cannot certify a production release. Memongo needs either
+> upstream general availability or a production-supported client-side embedding
+> path before this lane can support a production-readiness claim.
+
 ### 5. `live-capability`
 
 Capability lanes are separate from the core release lane and must be run with the environment they actually require.

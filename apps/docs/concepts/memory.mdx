@@ -21,9 +21,10 @@ relationships.
 
 ## Hybrid search
 
-Memongo combines two search strategies using MongoDB hybrid search. `$rankFusion`
-is the default broad retrieval lane; `$scoreFusion` is used only as a supported
-score-normalized lane when that row is explicitly selected and measured:
+Memongo combines two search strategies using MongoDB hybrid search.
+`$scoreFusion` is the preferred default lane. Capability detection falls back
+to `$rankFusion`, then to client-side merge when the deployment does not support
+the preferred stage:
 
 1. **Vector search** -- semantic similarity via automated Voyage AI embeddings
 2. **Full-text search** -- keyword matching via MongoDB Atlas Search / mongot
@@ -34,4 +35,11 @@ For the full framework taxonomy, see [Memory Taxonomy](/concepts/memory-taxonomy
 
 ## Automated embeddings
 
-When you add content to Memongo, embeddings are generated automatically using Voyage AI. No manual embedding step is required -- just send text and Memongo handles the rest.
+When you add content to Memongo in automated mode, MongoDB generates embeddings
+using Voyage AI. No manual embedding step is required.
+
+<Warning>
+MongoDB Automated Embedding is an upstream Preview feature, and MongoDB says
+not to use it in production. Memongo's current automated semantic-search lane
+is intended for evaluation and controlled preview deployments.
+</Warning>

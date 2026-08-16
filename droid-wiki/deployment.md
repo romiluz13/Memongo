@@ -21,6 +21,10 @@ The local MongoDB files pin `mongodb/mongodb-atlas-local:8.2.6-20260715T144108Z`
 - **Named volumes** for `/data/db` and `/data/configdb`.
 - **Auto-embeddings:** setting `VOYAGE_API_KEY` enables mongot-side auto-embedding through Voyage AI. The key must be an **Atlas Model API key** (`al-...` prefix); direct Voyage keys (`pa-...`) do not work because mongot routes through `ai.mongodb.com` (`docker/docker-compose.yml` header comment).
 
+MongoDB Automated Embedding is an upstream Preview feature that MongoDB says
+not to use in production. Treat the auto-embedding deployment path as preview
+infrastructure.
+
 ## The API container
 
 `apps/api/Dockerfile` is a three-stage build:

@@ -63,9 +63,17 @@ queries in one place.
 
 ## Evaluation posture
 
-Benchmark evidence is scoped by lane. Memongo currently publishes selected
-MemPalace retrieval-lane evidence only. Broader ecosystem and judged-answer
-benchmarks remain under audit, and no Mem0 LongMemEval win is claimed.
+Memongo's latest complete 500-question LongMemEval retrieval run achieved
+98.57% official session RecallAny@10, 94.75% session RecallAll@10, and 98.94%
+internal hit rate with MongoDB-native `$scoreFusion` and no generative LLM
+enrichment.
+
+Those are retrieval metrics, not generated-answer accuracy. The run remains
+non-reportable under the registered release contract because latency and
+evidence-completeness gates failed. Competitor answer-quality percentages are
+therefore not presented as direct comparisons. See [Benchmark
+Evidence](https://github.com/romiluz13/memongo/blob/main/docs/benchmarks/BENCHMARKS.md)
+for the full result and caveats.
 
 <CardGroup cols={2}>
   <Card title="Memory Framework" icon="network" href="/concepts/framework">

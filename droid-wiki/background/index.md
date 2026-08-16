@@ -9,10 +9,14 @@ Memongo bets on a **single store** instead of the polyglot stack most memory fra
 - **Vector search** — `$vectorSearch` stages, with server-side auto-embedding through mongot + Voyage (`docker/docker-compose.yml`)
 - **Full-text search** — Atlas Search indexes (`packages/memory-engine/src/mongodb-schema.ts`)
 - **Graph traversal** — `$graphLookup` for entity/relation walks (`packages/memory-engine/src/mongodb-graph.ts`)
-- **Hybrid fusion** — `$rankFusion`/`scoreFusion`, with a client-side RRF fallback (`js-merge`)
+- **Hybrid fusion** — `$rankFusion`/`$scoreFusion`, with a client-side RRF fallback (`js-merge`)
 - **Transactions, TTL, change streams, `$jsonSchema` validators, durable job leases** — all native
 
-The claim discipline around this bet is written down in `docs/adr/0001-substrate-claim-and-score-claim-are-separate.md`: the **substrate claim** ("the architecture is better because MongoDB is the substrate") may only be proven by *self-facts* — verifiable properties of MongoDB and of Memongo's own code — never by competitor comparisons, which rot. The ADR also records the honest limits: `$graphLookup` is claimable for traversal only (typed edges come from an LLM, `mongodb-graph.ts`), and `$rankFusion` is a footnote because the shipped `js-merge` fallback produces a matching ranking. `docs/research/memory-framework-comparison.md` positions Memongo against Mem0, Graphiti, Zep, Cognee, LangMem, and Letta as maintainer research context.
+MongoDB Automated Embedding is currently an upstream Preview feature and is not
+for production use. This limitation does not apply to MongoDB Search, Vector
+Search, or the collection substrate themselves.
+
+The claim discipline around this bet is written down in `docs/adr/0001-substrate-claim-and-score-claim-are-separate.md`: the **substrate claim** ("the architecture is better because MongoDB is the substrate") may only be proven by *self-facts* — verifiable properties of MongoDB and of Memongo's own code — never by competitor comparisons, which rot. The ADR also records the honest limits: `$graphLookup` is claimable for traversal only (typed edges come from an LLM, `mongodb-graph.ts`), and native `$scoreFusion` is the measured preferred path while `js-merge` remains a fallback and diagnostic option. `docs/research/memory-framework-comparison.md` positions Memongo against Mem0, Graphiti, Zep, Cognee, LangMem, and Letta as maintainer research context.
 
 The single-store bet costs something: plain `mongo:7` cannot serve the stack, so local development requires the `mongodb-atlas-local` preview container (see [Deployment](../deployment.md)). The project accepts that coupling deliberately and manages it with version-gated capability detection (`packages/memory-engine/src/mongodb-capability-registry.ts`).
 

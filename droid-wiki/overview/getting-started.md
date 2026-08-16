@@ -28,6 +28,10 @@ export VOYAGE_API_KEY="al-your-atlas-model-api-key"
 
 Without `VOYAGE_API_KEY`, you can still use local development paths that do not require auto-embed.
 
+> **Preview:** MongoDB Automated Embedding is an upstream Preview feature that
+> MongoDB says not to use in production. Use this path for evaluation and
+> controlled preview deployments.
+
 ## Start the API
 
 ```bash

@@ -162,7 +162,7 @@ export async function searchKB(
 	// path's waterfall (scoreFusion → rankFusion → lane fallbacks). Fusion is
 	// a first-class option (`fusionMethod`), resolved by the manager from
 	// `mongodb.fusionMethod`.
-	const fusionMethod = opts.fusionMethod ?? "rankFusion"
+	const fusionMethod = opts.fusionMethod ?? "scoreFusion"
 
 	const runKbFusion = async (
 		method: "scoreFusion" | "rankFusion",

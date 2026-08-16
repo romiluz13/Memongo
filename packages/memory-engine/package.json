@@ -48,15 +48,15 @@
 	"dependencies": {
 		"@memongo/lib": "^2.0.1",
 		"chokidar": "^4.0.3",
-		"mongodb": "^7.2.0"
+		"mongodb": "^7.5.0"
 	},
 	"optionalDependencies": {
-		"node-llama-cpp": ">=3.0.0"
+		"node-llama-cpp": ">=3.20.0"
 	},
 	"devDependencies": {
-		"@types/node": "^22.10.0",
+		"@types/node": "^22.20.1",
 		"typescript": "^5.8.0",
-		"vitest": "^4.1.0"
+		"vitest": "^4.1.10"
 	},
 	"homepage": "https://github.com/romiluz13/memongo#readme",
 	"bugs": {

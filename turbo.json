@@ -4,6 +4,7 @@
 	"tasks": {
 		"build": {
 			"dependsOn": ["^build"],
+			"env": ["MEMONGO_WEB_STATIC_EXPORT", "NEXT_PUBLIC_MEMONGO_API_URL"],
 			"inputs": ["$TURBO_DEFAULT$", ".env*"],
 			"outputs": [
 				".next/**",

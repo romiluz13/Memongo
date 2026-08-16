@@ -18,6 +18,11 @@ Memongo is data-plane memory you run next to your agents. This runbook describes
 
 Optional file config: `~/.memongo/memongo.json` or `MEMONGO_CONFIG_PATH`. See `apps/docs/guides/memory-config.mdx`.
 
+> [!WARNING]
+> MongoDB Automated Embedding is an upstream Preview feature that MongoDB says
+> not to use in production. The current automated semantic-search path is for
+> evaluation and controlled preview deployments.
+
 ## MongoDB runtimes
 
 Managed Atlas cloud:

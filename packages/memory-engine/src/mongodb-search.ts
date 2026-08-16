@@ -605,7 +605,7 @@ export function buildVectorSearchStage(input: {
 			return null
 		}
 		base.query = { text: input.queryText }
-		base.model = input.model ?? "voyage-4-lite"
+		base.model = input.model ?? "voyage-4-large"
 		base.path = input.textFieldPath ?? "text"
 	} else {
 		return null

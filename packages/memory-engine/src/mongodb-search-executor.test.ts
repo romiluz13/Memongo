@@ -53,7 +53,7 @@ describe("normalizeMemorySearchRequest", () => {
 		expect(normalized.searchConfig).toEqual(
 			expect.objectContaining({
 				recipe: "chain-of-thought",
-				fusionMethod: "rankFusion",
+				fusionMethod: "scoreFusion",
 			}),
 		)
 	})
