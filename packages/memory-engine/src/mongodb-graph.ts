@@ -1354,6 +1354,7 @@ export async function deleteEntityConservative(params: {
 						oldValue: entityDoc as unknown as Document,
 						newValue: null,
 						actorRole: "system",
+						severity: "warning",
 					},
 				}),
 			])

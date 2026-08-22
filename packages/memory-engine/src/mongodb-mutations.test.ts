@@ -71,6 +71,7 @@ describe("mongodb-mutations", () => {
 			expect(doc.operation).toBe("create")
 			expect(doc.agentId).toBe("agent-1")
 			expect(doc.timestamp).toBeInstanceOf(Date)
+			expect(doc.severity).toBe("info")
 		})
 
 		it("stores oldValue as null for create operations", async () => {
@@ -141,6 +142,71 @@ describe("mongodb-mutations", () => {
 			expect(doc.changedFields).toEqual(["state", "validTo"])
 		})
 
+		it("defaults severity to info when not specified", async () => {
+			const mutCol = createMockCollection()
+			const db = createMockDb({ [`${PREFIX}memory_mutations`]: mutCol })
+
+			await recordMutation({
+				db,
+				prefix: PREFIX,
+				mutation: {
+					collectionName: "structured_mem",
+					documentId: "doc-sev-default",
+					operation: "create",
+					agentId: "agent-1",
+					oldValue: null,
+					newValue: { key: "test" },
+				},
+			})
+
+			const [doc] = (mutCol.insertOne as ReturnType<typeof vi.fn>).mock.calls[0]
+			expect(doc.severity).toBe("info")
+		})
+
+		it("stores severity warning when provided", async () => {
+			const mutCol = createMockCollection()
+			const db = createMockDb({ [`${PREFIX}memory_mutations`]: mutCol })
+
+			await recordMutation({
+				db,
+				prefix: PREFIX,
+				mutation: {
+					collectionName: "structured_mem",
+					documentId: "doc-sev-warn",
+					operation: "invalidate",
+					agentId: "agent-1",
+					oldValue: { state: "active" },
+					newValue: { state: "invalidated" },
+					severity: "warning",
+				},
+			})
+
+			const [doc] = (mutCol.insertOne as ReturnType<typeof vi.fn>).mock.calls[0]
+			expect(doc.severity).toBe("warning")
+		})
+
+		it("stores severity critical when provided", async () => {
+			const mutCol = createMockCollection()
+			const db = createMockDb({ [`${PREFIX}memory_mutations`]: mutCol })
+
+			await recordMutation({
+				db,
+				prefix: PREFIX,
+				mutation: {
+					collectionName: "structured_mem",
+					documentId: "doc-sev-critical",
+					operation: "delete",
+					agentId: "agent-1",
+					oldValue: { state: "active" },
+					newValue: null,
+					severity: "critical",
+				},
+			})
+
+			const [doc] = (mutCol.insertOne as ReturnType<typeof vi.fn>).mock.calls[0]
+			expect(doc.severity).toBe("critical")
+		})
+
 		it("stores optional mutation meta for feedback and outcome provenance", async () => {
 			const mutCol = createMockCollection()
 			const db = createMockDb({ [`${PREFIX}memory_mutations`]: mutCol })
@@ -184,6 +250,7 @@ describe("mongodb-mutations", () => {
 					oldValue: null,
 					newValue: { key: "test" },
 					timestamp: new Date(),
+					severity: "info",
 				},
 			]
 

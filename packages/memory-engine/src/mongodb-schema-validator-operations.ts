@@ -173,6 +173,11 @@ export const MEMORY_MUTATIONS_SCHEMA: Document = {
 				description:
 					"Optional provenance metadata for the mutation source (for example feedback or outcome context)",
 			},
+			severity: {
+				enum: ["info", "warning", "critical"],
+				description:
+					"Audit severity: info (routine create/update), warning (consequential invalidate/delete), critical (reserved for future high-stakes mutations)",
+			},
 		},
 	},
 }

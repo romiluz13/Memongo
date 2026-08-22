@@ -13,6 +13,17 @@ const log = createSubsystemLogger("memory:mongodb:mutations")
 export type MutationOperation = "create" | "update" | "delete" | "invalidate"
 export type MutationMeta = Record<string, unknown>
 
+/**
+ * Audit severity for a mutation record, inspired by the Anthropic CMA
+ * cookbook's `build_audit_event` severity field.
+ *
+ * - `"info"` (default) — routine create/update operations
+ * - `"warning"` — consequential state changes: invalidations, deletions,
+ *   contradiction-driven expirations
+ * - `"critical"` — reserved for future high-stakes mutations
+ */
+export type MutationSeverity = "info" | "warning" | "critical"
+
 export type MutationRecord = {
 	mutationId: string
 	collectionName: string
@@ -23,6 +34,7 @@ export type MutationRecord = {
 	newValue: Document | null
 	changedFields?: string[]
 	timestamp: Date
+	severity: MutationSeverity
 	actorRole?: MemoryActorRole
 	meta?: MutationMeta
 }
@@ -38,10 +50,13 @@ export type MutationRecord = {
 export async function recordMutation(params: {
 	db: Db
 	prefix: string
-	mutation: Omit<MutationRecord, "mutationId" | "timestamp">
+	mutation: Omit<MutationRecord, "mutationId" | "timestamp" | "severity"> & {
+		severity?: MutationSeverity
+	}
 }): Promise<{ mutationId: string }> {
 	const { db, prefix, mutation } = params
 	const mutationId = randomUUID()
+	const severity = mutation.severity ?? "info"
 	const doc: MutationRecord = {
 		mutationId,
 		collectionName: mutation.collectionName,
@@ -51,6 +66,7 @@ export async function recordMutation(params: {
 		oldValue: mutation.oldValue,
 		newValue: mutation.newValue,
 		timestamp: new Date(),
+		severity,
 		...(mutation.changedFields
 			? { changedFields: mutation.changedFields }
 			: {}),

@@ -1481,6 +1481,7 @@ export async function invalidateStructuredMemoryByHandle(params: {
 				newValue: newSnapshot,
 				changedFields: ["state", "validTo", "revision", "invalidatedBy"],
 				actorRole: params.actorRole ?? "system",
+				severity: "warning",
 				...(params.mutationMeta ? { meta: params.mutationMeta } : {}),
 			},
 		}).catch((err) => {
