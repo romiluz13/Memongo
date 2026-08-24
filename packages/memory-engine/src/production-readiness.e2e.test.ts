@@ -58,6 +58,7 @@ import {
 	ensureCollections,
 	ensureSearchIndexes,
 	ensureStandardIndexes,
+	waitForSearchIndexesQueryable,
 	eventsCollection,
 	entitiesCollection,
 	episodesCollection,
@@ -495,6 +496,14 @@ describeIfMongo(
 				relevanceRetentionDays: 14,
 			})
 			await ensureSearchIndexes(db, PREFIX, "atlas-local-preview", "automated")
+
+			// Wait for search indexes to leave INITIAL_SYNC so $vectorSearch
+			// and $search tests don't race the index builder on slower images.
+			const chunksCol = db.collection(`${PREFIX}chunks`)
+			await waitForSearchIndexesQueryable(chunksCol, {
+				indexNames: [`${PREFIX}chunks_text`, `${PREFIX}chunks_vector`],
+				timeoutMs: 90_000,
+			})
 
 			// Clean any leftover data for our agent + stale KB docs from previous runs
 			const allCollections = await db.listCollections().toArray()
