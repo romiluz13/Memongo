@@ -1,91 +1,63 @@
 # Deployment
 
-Memongo deploys as two pieces: a **MongoDB 8.x deployment with Atlas Search / Vector Search** (mongod + mongot) and the **API container**. Plain `mongo:7` does not work because Memongo requires `$vectorSearch`, Atlas Search indexes, and transactions.
+Active contributors: Rom Iluz
 
-## Compose files
+How Memongo runs locally, in CI, and in production — Docker Compose for development, a multi-stage Dockerfile for the API, GitHub Actions for quality/e2e gates and npm publishing, and Cloudflare Workers for the web console. For the app's internal request-handling architecture see [API app](apps/api/index.md); for the wire API see [API](api/index.md).
 
-The local MongoDB files pin `mongodb/mongodb-atlas-local:8.2.6-20260715T144108Z`, a single container bundling mongod (single-node replica set), mongot, Atlas Search, and Vector Search.
+## Local development: Docker Compose
 
-| File | Contents | Use |
-|------|----------|-----|
-| `docker/compose.yaml` | Production-safe API base, external MongoDB required | Deploy the API against Atlas or another managed deployment |
-| `docker/compose.override.yaml` | Local Atlas Local service and loopback database port | Automatically merged for local development from `docker/` |
-| `docker/docker-compose.yml` | MongoDB only, published on `127.0.0.1:27017` | One-command local database |
-| `docker/mongodb/docker-compose.mongodb.yml` | Advanced standalone, replica-set, and mongot profiles | Capability validation and low-level diagnostics |
+Two compose layouts exist for different purposes:
 
-### Common MongoDB settings
+- **`docker/docker-compose.yml`** — the original one-command setup: a single `mongodb/mongodb-atlas-local:preview` container (mongod + mongot, Atlas Search + Vector Search, auto-embeddings via Voyage AI when `VOYAGE_API_KEY` is set), bound to `127.0.0.1` only. Run with `docker compose -f docker/docker-compose.yml up -d`.
+- **`docker/compose.yaml`** + **`docker/compose.override.yaml`** — a split base/override pair. `compose.yaml` alone defines only the `api` service and is production-safe (no local database, expects an external `MEMONGO_MONGODB_URI`). Running plain `docker compose` from `docker/` auto-merges `compose.override.yaml`, which adds the local `mongodb` service (Atlas Local, pinned dated tag `8.2.6-20260715T144108Z`) and makes `api` wait on its healthcheck (`depends_on: condition: service_healthy`).
 
-- **Loopback-only publishing:** `127.0.0.1:${MONGODB_PORT:-27017}:27017`. Publishing on `0.0.0.0` would expose the database on every host interface. The production base contains no database service or development database port.
-- **Healthcheck:** the image's built-in `/usr/local/bin/runner healthcheck` verifies both mongod and mongot (10s interval, 10 retries, 30s start period).
-- **Telemetry off:** `MONGODB_ATLAS_TELEMETRY_ENABLE=false`.
-- **Named volumes** for `/data/db` and `/data/configdb`.
-- **Auto-embeddings:** setting `VOYAGE_API_KEY` enables mongot-side auto-embedding through Voyage AI. The key must be an **Atlas Model API key** (`al-...` prefix); direct Voyage keys (`pa-...`) do not work because mongot routes through `ai.mongodb.com` (`docker/docker-compose.yml` header comment).
+Both Mongo services publish `27017` on loopback only and use the Atlas Local image's built-in `runner healthcheck` command (verifies mongod and mongot together), never a plain `mongo:7` image — auto-embedding needs mongot.
 
-MongoDB Automated Embedding is an upstream Preview feature that MongoDB says
-not to use in production. Treat the auto-embedding deployment path as preview
-infrastructure.
+`compose.yaml` fails closed on a missing admin token: `MEMONGO_API_KEY=${MEMONGO_API_KEY:?set MEMONGO_API_KEY}` aborts compose startup rather than booting an unauthenticated API.
 
-## The API container
+## The API image
 
 `apps/api/Dockerfile` is a three-stage build:
 
+1. **`prepare`** (`node:22-slim` + `turbo prune --docker @memongo/api`) — extracts only `apps/api` and its workspace dependencies (`@memongo/memory-bridge`, `@memongo/memory-engine`, `@memongo/lib`) from the monorepo.
+2. **`installer`** (`oven/bun:1-debian`) — `bun install --frozen-lockfile` against the pruned lockfile, then `bun run turbo build --filter=@memongo/api...`. The root `tsconfig.base.json` is copied explicitly because `turbo prune`'s `out/full/` omits root-level config files.
+3. **`runner`** (`node:22-slim`) — copies only `dist/`, `package.json` files, `packages/`, and `node_modules/` into a non-root (`USER node`) runtime image, and runs the built JS directly with plain `node` (no `tsx`, no TypeScript at runtime).
+
+The final image binds `MEMONGO_API_HOST=0.0.0.0` (required inside a container; the process defaults to loopback otherwise) and `MEMONGO_API_PORT=3847`, and declares a `HEALTHCHECK` that curls `/ready` via `node -e "fetch(...)"` — no extra `curl`/`wget` binary needed in the slim image. `apps/api/.dockerignore` excludes `apps/web`, `apps/docs`, `apps/mcp`, `benchmarks`, and markdown files from the build context to keep it small.
+
+## CI pipeline
+
+`.github/workflows/ci.yml` runs on every pull request and push to `main`, with two jobs:
+
 ```mermaid
-graph LR
-    S1[Stage 1: node:22-slim\nturbo prune --docker @memongo/api] --> S2[Stage 2: oven/bun:1-debian\nbun install --frozen-lockfile\nturbo build --filter=@memongo/api...]
-    S2 --> S3[Stage 3: node:22-slim\nUSER node, dist + packages + node_modules]
+flowchart LR
+    A[quality job] -->|typecheck, lint, build,\ncheck-publishability, test| B((green))
+    C[e2e job] -->|spin up mongodb-atlas-local\nservice container| D[bun run test:e2e:tier-a]
+    D --> B
 ```
 
-1. **Prune** — `turbo prune --docker @memongo/api` extracts only the API and its workspace deps (`@memongo/memory-bridge`, `@memongo/memory-engine`, `@memongo/lib`).
-2. **Install + build** — Bun installs from the pruned lockfile and builds to plain JS via `tsc`.
-3. **Run** — `node:22-slim` running as the non-root `node` user; no `tsx` at runtime.
+- **`quality`** — `bun install --frozen-lockfile`, then `bun run check-types`, `bun run lint`, `bun run build`, `bun run check-publishability` (the same publish gate described in `docs/platform/publish.md`), and `bun run test`.
+- **`e2e`** — starts a `mongodb/mongodb-atlas-local:preview` service container (same image as local dev), waits on its `runner healthcheck`, builds, then runs `bun run --filter @memongo/memory-engine test:e2e:tier-a` against `mongodb://127.0.0.1:27017/?directConnection=true`. Tier A is scoped to paths that need only MongoDB — transactions, indexes, tenant isolation, background jobs — so every PR is gated without requiring any secret.
 
-### Runtime environment
+## Nightly e2e (full suite)
 
-| Variable | Required | Notes |
-|----------|----------|-------|
-| `MEMONGO_API_KEY` | **yes** | Compose uses `${MEMONGO_API_KEY:?set MEMONGO_API_KEY}` — the container refuses to start without it (fail closed, no baked default) |
-| `MEMONGO_MONGODB_URI` | yes | Atlas `mongodb+srv://...` or `mongodb://mongodb:27017/?directConnection=true` with the local profile |
-| `MEMONGO_MONGODB_DATABASE` | no | Default `memongo` |
-| `MEMONGO_API_PORT` / `MEMONGO_API_HOST` | no | Container listens on `0.0.0.0:3847`; published loopback-only as `127.0.0.1:3847` |
-| `MEMONGO_AGENT_ID` | no | Default `main` |
+`.github/workflows/e2e-nightly.yml` runs on a `0 3 * * *` cron (plus manual dispatch) and extends tier A with the paths that need external model access: the Mongo service container is given `VOYAGE_API_KEY` directly (auto-embeddings are served by mongot *inside* the container, so the key must be present there, not just in the test process), and the job runs `bun run --filter @memongo/memory-engine test:e2e` — the full suite, covering auto-embedding search quality and LLM-assisted extraction/enrichment (`MEMONGO_ENRICHMENT_MODEL`). A 60-minute timeout bounds the job.
 
-The compose healthcheck hits `GET /ready` every 30s. It returns 503 until the mongo, vector, and embedding lanes are all up, while `GET /health` remains a process-liveness probe (`apps/api/src/app.ts`). See [Debugging](how-to-contribute/debugging.md).
+## Publish workflow
 
-## Recipes
+`.github/workflows/publish.yml` triggers on a `v*` git tag push or manual dispatch. It installs with Bun, builds, runs the full test suite and `check-publishability` again (belt-and-suspenders with CI), then loops over the coordinated package list — `packages/lib`, `memory-engine`, `memory-bridge`, `memongo-memory`, `client`, `tools`, `pi-extension`, `apps/mcp` — publishing each with `npm publish --access public --provenance` using an `NPM_TOKEN` secret. A package marked `private: true` in this loop is treated as a hard failure (`exit 1`), not a silent skip. See `docs/platform/publish.md` for the full release checklist, version-sync rules across `apps/api/src/version.ts` / `apps/mcp/src/version.ts` / `packages/client/src/version.ts`, and the recommended dependency-ordered publish sequence.
 
-```bash
-# Database only (host tooling reachable on localhost)
-docker compose -f docker/docker-compose.yml up -d
+## Wiki refresh
 
-# Full local stack (API + MongoDB + optional auto-embeddings)
-MEMONGO_API_KEY="your-long-random-token" \
-VOYAGE_API_KEY="al-your-atlas-model-api-key" \
-docker compose -f docker/compose.yaml -f docker/compose.override.yaml up -d
+`.github/workflows/droid-wiki-refresh.yml` runs on every push to `main` (plus manual dispatch): it installs the Factory Droid CLI, configures a Grove-hosted Claude Sonnet model via `~/.factory/settings.json`, and runs `droid exec "/wiki"` to regenerate this wiki and commit it back to the repo.
 
-# API container against MongoDB Atlas
-MEMONGO_MONGODB_URI="mongodb+srv://.../?appName=memongo" \
-MEMONGO_API_KEY="your-long-random-token" \
-docker compose -f docker/compose.yaml up -d
+## Web console: Cloudflare Workers via OpenNext
 
-# Preview script equivalent
-./docker/mongodb/start-preview.sh
-```
+`apps/web` (Next.js) deploys to Cloudflare Workers through OpenNext:
 
-## Helper scripts (`docker/mongodb/`)
+- `apps/web/open-next.config.ts` uses `defineCloudflareConfig()` with no overrides — the default OpenNext-for-Cloudflare adapter behavior.
+- `apps/web/wrangler.jsonc` points Workers at the OpenNext build output (`main: ".open-next/worker.js"`, static assets from `.open-next/assets`), enables `nodejs_compat` and `global_fetch_strictly_public` compatibility flags, binds a `WORKER_SELF_REFERENCE` service to itself (the standard OpenNext pattern for Cloudflare's incremental static regeneration/revalidation callbacks), and turns on Workers observability.
 
-- `start-preview.sh` — canonical one-command preview stack (start/stop)
-- `start.sh`, `init-mongo.sh`, `rs-init.sh`, `setup-generator.sh` — replica-set init and the older non-preview path (`docker/mongodb/docker-compose.mongodb.yml`)
-- `mongod.conf`, `mongot.conf` — daemon configs for the manual stack
-- `README.md` — operator documentation for the stack
+## Self-hosting
 
-## Production notes
-
-- **Graceful shutdown:** the API registers SIGTERM/SIGINT handlers that stop accepting connections, close the memory bridge (flushing the access tracker and Mongo clients), then exit — with a 15s force-exit deadline so the container runtime's kill window is never blocked (`apps/api/src/server.ts`, `apps/api/src/app.ts:432`).
-- **Strict vector mode:** production deployments that cannot tolerate silent `$text`-only degradation set `MEMONGO_REQUIRE_VECTOR=1`; boot exits 1 when the vector lane is unavailable (`apps/api/src/server.ts:55-62`).
-- **CI parity:** the e2e CI job runs the same pinned `mongodb-atlas-local` image as a service container (`.github/workflows/ci.yml`), so local Docker behavior matches CI.
-
-## Related pages
-
-- [API app](apps/api/index.md) — the containerized app
-- [Security](security.md) — fail-closed auth and loopback networking posture
-- [Configuration](reference/configuration.md) — every environment variable
+`docs/platform/self-host.md` is the canonical self-host runbook — read it in full before a production deployment. In summary: run MongoDB (managed Atlas cloud, or the Atlas Local Preview image for reproducibility), run `apps/api` as a stateless process or container behind your own TLS-terminating ingress, and optionally run `apps/web` and `apps/mcp`. Required/notable configuration: `MEMONGO_MONGODB_URI`, `MEMONGO_API_KEY` (mandatory on any untrusted network), `MEMONGO_API_SCOPED_KEYS` for narrower agent-facing tokens (see [Security](security.md) and [Multi-tenancy and scopes](features/multi-tenancy-and-scopes.md)), and `VOYAGE_API_KEY` for auto-embed/hybrid retrieval quality. Liveness/readiness/status checks are `GET /health`, `GET /ready`, and `GET /v1/status` respectively ([API](api/index.md) has the full route reference).

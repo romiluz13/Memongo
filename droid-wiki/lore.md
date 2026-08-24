@@ -1,68 +1,39 @@
-# Lore: The History of Memongo
+# Lore
 
-Memongo's history is short and dense: 202 commits in under three months, from an initial release on May 6, 2026 to a gated, benchmark-driven memory platform by August. The git log reads in four distinct eras, each with its own cadence and obsession.
+A history of Memongo as told by its own commit log — 219 commits, one author (Rom Iluz), 2026-05-06 to 2026-08-24. See [Background](background/index.md) for the ADR and benchmark story behind some of these events, and [By the numbers](by-the-numbers.md) for the activity data these eras are built from.
 
-```mermaid
-xychart-beta
-    title "Commits per month — the shape of the eras"
-    x-axis ["2026-05", "2026-06", "2026-07", "2026-08"]
-    y-axis "Commits" 0 --> 100
-    bar [86, 22, 83, 11]
-```
+## Era 1: initial release and checkpoint scaffolding (2026-05-06 to 2026-05-12)
 
-## Era 1 — Initial Release and the Gate Campaign (May 2026, 86 commits)
+The repository opens with `65d193d chore: initial Memongo release` on 2026-05-06. The very next commits, all on 2026-05-12, are dozens of `scope-1:`, `scope-2:`, `scope-3:`, `scope-4:` prefixed commits carrying explicit task numbers (`Task 0.1`, `Task 0.5`, `Task 1.-1` through `Task 1.9`) and "remfix" (remediation-fix) follow-ups against a "Phase 1 Gate 1" checkpoint. This pattern — parallel scoped workstreams merged back with `Merge pull request` / `Merge branch` commits — appears nowhere else in the history at this density, and reads like a structured, agent-driven build-out against a written plan rather than organic day-to-day development.
 
-**May 6, 2026** — `65d193dbdf chore: initial Memongo release`. The full architecture lands in a single commit: the MongoDB engine with its central `MongoDBMemoryManager`, the HTTP API, the MCP server, and the benchmark harness skeleton.
+## Era 2: benchmark hardening and evidence discipline (2026-05-12 to 2026-06-24)
 
-**May 12** — the single most intense day in repo history. Work was organized into four parallel scopes, each merged through an explicit phase gate:
+From mid-May onward the commit messages shift toward benchmark integrity: `ab8be35 mongodb: add managed atlas runtime checks`, `ef227e5 benchmarks: enforce strict artifact gates`, `bf4c9b4 benchmarks: lock full runs behind canary size`, `86a6aa6 docs: add mongodb flaws ledger`, culminating in `5036ec0 license: switch Memongo to BSL 1.1` and `47b9869 docs: replace unproven benchmark claims` on 2026-05-27. Mem0-comparison evidence work continues into June (`82bf4c5 benchmark: add mem0 evidence proof pack`, `630ad27 benchmarks: disclose mem0 evidence pack`, both 2026-06-13/14). The project appears to have spent this era making sure its benchmark claims could survive scrutiny before going public.
 
-- **Scope 1 → Phase 1 Gate 1 (Harness Reliability).** Canary env-var contracts, benchmark envelope parity, a 9-class failure taxonomy, per-scenario progress emitters, forced-failure gate proofs, and `fast-check` property tests.
-- **Scope 2 → Phase 2 Gate 2 (Retrieval & Ranking).** Bitemporal schema (`validAt`/`invalidAt`) with compound indexes, retrieval observability, an injection classifier with a `memory_quarantine` collection, and the access tracker. Two commits on this day even share an identical message — "scope-2 remfix: Dreamer scope integrity (HIGH-2 + CRIT-3)" — a remfix that had to be done twice.
-- **Scope 3 (Docs & Benchmarks).** A MemPalace forensic audit, a MongoDB 8.3+ capability survey, and a held-out private split protocol for benchmark integrity.
-- **Scope 4 (API Security).** Export canonicalization with HMAC-SHA256 signing, graceful shutdown, and timing-safe bearer comparison.
+## Era 3: public OSS launch (2026-06-24 to 2026-06-25)
 
-**May 12 evening** — Phase 3 Gate 3 becomes the first great debugging saga. A deterministic benchmark miss (case `00ca467f`) was root-caused to temporal recall, fixed with a `extractTemporalWindow` gauss-decay root fix injected into the text lane of `$rankFusion`, and closed with an "n=3 canary" sampling discipline: `bc8baae264 Phase 3 Gate 3 post-gauss n=3 SUCCESS — 00ca467f resolved`.
+A tight two-day burst: `ef1d9e9 launch: prepare open source release`, `6d6ac17 web: add animated launch landing page`, `0fdd7b0 web: add Cloudflare deployment config` (2026-06-24), then on 2026-06-25 a sequence of `release:` commits (`093477d release: publish packages with npm`, `7a681cf release: make npm publish idempotent`, `a99d325 release: tolerate published npm versions`) and `a162a3d launch: clean public release surface` / `dcf9180 chore: final OSS polish — logger, NOTICE, README, drop internal tags`. `CHANGELOG.md` records this as **1.1.0 (2026-06-24)**: "Prepared the public Apache-2.0 open-source release."
 
-**May 18–27** — managed Atlas runtime checks, strict artifact gates, and the benchmark publication campaign. On May 27 the license switched to **BSL 1.1** (`5036ec09a3 license: switch Memongo to BSL 1.1`) and the MemPalace publication pack was assembled — including `47b98690aa docs: replace unproven benchmark claims`, a commit that quietly removed claims the evidence couldn't yet back.
+## Era 4: security and tenant-isolation hardening (2026-07-19 to 2026-07-31)
 
-## Era 2 — Stabilization and Open Source Launch (June 2026, 22 commits)
+The largest sustained push in the history. Commit messages carry consistent `fix(security):` / `feat(security):` tags: `0b13acc feat(security): enforce scope/scopeRef as a hard tenant-isolation boundary`, `6754ed6 feat(security): baseline network hardening — SSRF guard, body cap, rate limit (#28)`, `356e8da feat(security): retrieval-path prompt-injection defense (#29)`, alongside engine-correctness work tagged with numbered issues (`#30`–`#71`) covering bi-temporal recall, contradiction-driven invalidation, LLM fact extraction, and change-stream robustness. This era closes with `bdad0fb release: bump all public packages to 2.0.0` on 2026-07-31. `CHANGELOG.md`'s **2.0.0** entry matches the commit messages closely: "Major release: security hardening, tenant isolation, and engine robustness," including the explicitly breaking tenant-write identity fix.
 
-The quietest month, and the one that made the project public.
+## Era 5: builder-queue, pi-extension, and wiki (2026-08-01 to 2026-08-24)
 
-- **June 13–16** — benchmark hardening continues: a recovery campaign, a mem0 evidence proof pack, and rehydrated source evidence packs. Two of the repo's few merged pull requests (#15, #16) land here.
-- **June 24–25** — the open-source launch sprint: `ef1d9e9b85 launch: prepare open source release`, an animated landing page for the web app, Cloudflare deployment config, and a "final OSS polish" pass adding the NOTICE file and dropping internal tags.
-- **June 25** — first npm publication: `093477dce5 release: publish packages with npm`, followed immediately by idempotency fixes for the publish workflow.
+August opens with `737b9fe pi-extension: add @memongo/pi-extension — Pi coding-agent memory bridge` (2026-08-01) and a short pi-extension polish run, then a `builder-queue` batch (`fad3a3f feat: builder-queue contract and surface parity`, `a5b0473 fix: builder-queue correctness batch`, `ab68243 chore: builder-queue architecture and deploy`, 2026-08-03 to 2026-08-04) — another plan-driven, lettered-batch (`B1`–`B15`) workstream in the same style as Era 1's scoped tasks. The month tapers into scattered `feat(memory):`/`fix(memory):` hardening commits through mid-August, then closes with the CI/wiki infrastructure that produced this page: `5cfadda ci: add Droid Wiki refresh action` (2026-08-23) through `500ac6d ci: use Grove custom model for wiki refresh` (2026-08-24, the latest commit in the repo at time of writing).
 
-## Era 3 — Feature Expansion and the Security Waves (July 2026, 83 commits)
+## Longest-standing features
 
-July is the biggest feature month, opening with a burst of LLM-reasoning capabilities on **July 19–20**:
+`packages/memory-engine/src/mongodb-manager.ts` and the core search/write path trace back to the initial commit (`65d193d`, 2026-05-06) and have been the single most-touched file in the entire history since — 40 commits in the last 90 days alone (see [By the numbers](by-the-numbers.md)). The manager has effectively been under continuous revision for the whole 4-month life of the project rather than being written once and left alone.
 
-- LLM fact extraction for structured candidates (#30)
-- LLM deduction/induction wired into consolidation (#31)
-- Real bitemporal valid-time: LLM extraction, indexed "as of T" retrieval (#32)
-- Contradiction-driven fact invalidation (#33)
-- LLM typed semantic edge extraction for the graph (#34)
-- An honest e2e QA answer+judge producer (Wave 4 / #24)
+## Deprecated and scoped-out surfaces
 
-The same days carried a systematic **security campaign**: forced stored `agentId` to the authorized identity (#42), SSRF guard + body cap + rate limit (#28), retrieval-path prompt-injection defense (#29), and the promotion of `scope`/`scopeRef` to a hard tenant-isolation boundary across recall, KB search, novelty-scan, consolidate, extract, and import.
+`CONTRIBUTING.md` states plainly: "Historical, experimental, or comparison material should not be expanded into first-class product scope unless there is a clear ownership decision first." `docs/platform/PLATFORM-README.md` names the concrete surfaces this applies to: `apps/browser-extension`, `apps/memory-graph-playground`, and `packages/memory-graph` are called out as "not part of the supported product core" — optional or historical surfaces that exist in the codebase's history or periphery but were deliberately kept out of the maintained product.
 
-Mid-to-late July hardened everything:
+## Major rewrites
 
-- **July 23–24** — engine robustness batch (PR #60): change streams, transactions, correct MongoDB error codes, plus `storedSource` and `indexingMethod` options for MongoDB 8.3+.
-- **July 26** — CI begins gating PRs on e2e tests against a real MongoDB (#61); two days later the nightly e2e job was discovered to have never actually run its tests (`f5409e7058 fix(ci): make the nightly e2e job actually run its tests`).
-- **July 27–30** — a methodical fix train with its own ticket codes (S1, S2, C4, C8, V1): `$rankFusion` scores rescaled into [0,1], `$`-operator mistranslation fixed, job retries against an attempt budget, and vector index options that MongoDB 8.3 rejects removed.
-- **July 29–30** — the benchmark became real: the actual LongMemEval dataset fetched and verified, a runnable benchmark entrypoint, the native lane made canonical (#65), concurrent retrieval paths (#66), ablation switches (#40), and the conversation-recall regression wired into the release gate (#70).
-- **July 31** — `bdad0fbf28 release: bump all public packages to 2.0.0`.
+No commit message at the scale of "rewrite" or "migration" turns up in `git log --oneline | grep -iE "rewrite|migrat|refactor"` across the 219 commits. The history instead shows continuous, incrementally numbered hardening batches (the `#30`–`#71` issue-tagged fixes of Era 4, the `B1`–`B15` builder-queue batches of Era 5) rather than any single big-bang rewrite of a subsystem.
 
-## Era 4 — The Fix Plan Lands (August 2026, 11 commits)
+## Growth trajectory
 
-- **August 1** — per-lane latency instrumentation, repeated benchmark measurement passes, and the birth of `@memongo/pi-extension`: `737b9fed6c pi-extension: add @memongo/pi-extension — Pi coding-agent memory bridge`.
-- **August 1–2** — the API gets containerized (`aad1931cfb api: containerize`), and the pi-extension goes through rapid iteration: auto-detecting the project from cwd, baking local dev defaults so it works without shell env, bumping to 2.1.1, and switching to global-scope search by default for the single-user case.
-- **August 3** — the latest commit: `45d4ea4b7f fix: land fix-plan phases P0-P2 across engine, api, mcp, client, docker` — a master fix plan touching every layer of the stack in one landing.
-
-## Recurring motifs
-
-- **Gates and remfixes.** The May campaign institutionalized a pattern that persists: land a scope, run a gate, fix the gate's findings in a dedicated "remfix" commit, then merge.
-- **Honesty commits.** "docs: replace unproven benchmark claims", "honest e2eQa answer+judge producer", "fix(engine): delete dead embedding_cache collection and its lying stat (#13)" — the log repeatedly chooses accurate over flattering.
-- **Ticket-coded fix trains.** July's S1/S2/C4/C8/V1 and P0–P2 phases show work driven by verified findings lists rather than ad-hoc patches.
-- **The two identical commits.** `2b42508013` and `4926e4c3e9` both read "scope-2 remfix: Dreamer scope integrity (HIGH-2 + CRIT-3)", three minutes apart — even the Dreamer needed a second pass.
+A 4-month, single-branch, single-contributor history doesn't show much workspace-member growth to trace: the package/app layout visible today was largely present from the early scope-checkpoint commits, with `@memongo/pi-extension` (2026-08-01) the one clearly new package added after initial release. This section stays short because there isn't more honest signal to report at this project's age.

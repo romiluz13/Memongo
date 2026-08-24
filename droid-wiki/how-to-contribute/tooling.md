@@ -1,55 +1,27 @@
 # Tooling
 
-The build, lint, type-check, CI, and benchmark toolchain.
+## Build system
 
-## Build system: Turborepo + Bun
+Bun workspaces (`package.json`'s `workspaces: ["apps/*", "packages/*"]`) plus Turborepo (`turbo.json`) for task orchestration. There is no separate monorepo tool layered on top — `bun install` resolves and links every workspace package, and `turbo run <task>` walks the dependency graph declared implicitly by each package's own `dependencies`. See [Development workflow](development-workflow.md#how-turborepo-orders-work-across-the-monorepo) for how the `^build`/`^check-types` task-dependency ordering works in practice.
 
-- **Bun 1.2+** is the package manager; `bun.lock` pins everything and CI installs with `--frozen-lockfile`.
-- **Turborepo** (`turbo.json`) orchestrates tasks across the workspace with the TUI enabled (`"ui": "tui"`). Task graph: `build` (→ `^build`, outputs `dist/**` / `.next/**`), `test` (→ `^build`), `test:e2e` (→ `^build`, never cached), `lint`, `check-types` (→ `^build`, `^check-types`), `dev` (persistent).
-- Build outputs are plain JS from `tsc` for packages and the API/MCP apps (`tsconfig.build.json`); the web app builds through Next.js.
-- **Docker builds reuse the same graph:** `apps/api/Dockerfile` runs `turbo prune --docker @memongo/api` to extract the minimal pruned workspace, then `turbo build --filter=@memongo/api...` inside the image.
+## Lint and format: Biome only
 
-## Lint and format: Biome
+`biome.json` is the single source for both linting and formatting — there is no separate ESLint or Prettier config in this repo. `bun run lint` runs `biome check . --diagnostic-level=error`; `bun run format` runs `biome format .`. Both have `:fix` variants (`lint:fix`, `format:fix`) that write changes rather than just reporting them. See [Patterns and conventions](patterns-and-conventions.md#language-and-formatting) for the specific rules Biome enforces (tabs, double quotes, `noUnusedVariables`/`noUnusedImports`/`noNonNullAssertion` warnings, `useAsConstAssertion`/`useSelfClosingElements` errors).
 
-- Config: `biome.json` at the repo root. Style: **tabs, double quotes**, semicolons as needed.
-- `bun run lint` runs Biome with `--diagnostic-level=error`, so warnings are suppressed in CI — only errors gate.
-- `bun run lint:fix` / `bun run format` auto-fix.
-- Keep files under ~500 LOC and use `.js` extensions on relative imports (NodeNext resolution); see [Patterns and conventions](patterns-and-conventions.md).
+## The `scripts/` directory
 
-## Type checking
+`scripts/` is internal tooling, not shipped product code — most files here have a colocated `*.test.ts` and are invoked via `bun scripts/<name>.ts` or a root `package.json` script alias. They fall into four groups:
 
-- `bun run check-types` — TypeScript 5.8 strict across the monorepo (per-package `tsc --noEmit`; the web app runs `next typegen` first).
-- Strict typing, no `any`. Shared config in `tsconfig.base.json` at the repo root.
+| Group | Scripts | Purpose |
+|---|---|---|
+| Release-gate checks | `check-publishability.ts` | Validates package metadata, reproducible builds (clean vs. dirty `dist/` hash comparison), tarball contents (no `src/`, no test files leaking into a published package), version consistency across every publishable package's `package.json` and version-header exports, and runs `publint`/`arethetypeswrong` where available. Run via `bun run check-publishability`; gates every PR in `ci.yml` and every release. |
+| | `proof-pack.ts` | Live-validation script that hits a running API's `/health` and `/openapi.json` endpoints and checks the response against a baseline (`scripts/proof-pack-baseline.ts`) of required routes. Needs `MEMONGO_API_URL`/`MEMONGO_API_KEY`; not run in CI, used for manual release verification per `docs/platform/validation-pack.md`. |
+| Benchmark tooling | `run-benchmark.ts`, `fetch-benchmark-dataset.ts`, `compare-memory-eval.ts`, `memory-eval-core.ts` | `run-benchmark.ts` runs the LongMemEval benchmark through the shipped retrieval pipeline and scores it against a registered quality contract (`scripts/benchmark/benchmark-quality-contracts.ts`); it refuses to run against a dataset that doesn't match the SHA-256 pinned in that contract. `fetch-benchmark-dataset.ts` downloads and verifies that dataset (too large to vendor — LongMemEval_S is ~265 MB). `memory-eval-core.ts` and `compare-memory-eval.ts` run and diff a separate live-API evaluation suite (context bundles, discovery projections, active-slate hydration) against a baseline run, used to catch retrieval quality regressions between two API deployments. |
+| MongoDB runtime tooling | `prepare-mongodb-runtime.ts`, `check-mongodb-runtime-parity.ts`, `mongodb-cluster-preflight.ts`, `mongodb-e2e-qa.ts` | `prepare-mongodb-runtime.ts` provisions collections and search/vector indexes against a target deployment (calls the same `mongodb-schema.ts` helpers the production manager uses). `check-mongodb-runtime-parity.ts` compares index shape and capability detection across two runtimes (e.g. Atlas-managed vs. Atlas Local Preview) to catch drift before it surfaces as a production bug. `mongodb-cluster-preflight.ts` verifies a target cluster is safe to run destructive tests against (empty database, required env vars present, Atlas Model API key valid) before an e2e or benchmark run touches it. `mongodb-e2e-qa.ts` was moved out of the shipped engine (`packages/memory-engine/src/`) specifically because it's benchmark-calibration machinery, not production code (see the comment at its top) — it generates answers from retrieved context and has an LLM judge score them against gold answers, the answer-accuracy leg the retrieval-only benchmark harness doesn't cover. |
+| Stress / smoke testing | `real-agent-smoke.ts`, `real-capability-stress.ts`, `stress-test.ts` | `real-agent-smoke.ts` (`bun run agent-smoke`) drives a live API through a realistic agent conversation loop (tool calls included) as a release-gate smoke check. `real-capability-stress.ts` (`bun run capability-stress`) exercises specific memory capabilities against a live API more aggressively than the smoke test. `stress-test.ts` runs a four-phase load test (write stress, search stress, admin/diagnostics, endurance/concurrency) against a live API to surface latency and stability issues under sustained load — none of these three are part of `bun run test`; they need a running API and are for manual or scheduled release validation. |
 
-## CI: GitHub Actions
+Most of these scripts read `MEMONGO_API_URL` / `MEMONGO_API_KEY` (or a raw MongoDB URI) from the environment rather than taking it as a CLI flag — check each script's top-level `process.env` reads before running it, and never point one at a production deployment without understanding what it writes.
 
-Three workflows in `.github/workflows/`:
+## Root `package.json` scripts
 
-| Workflow | Trigger | Jobs |
-|----------|---------|------|
-| `ci.yml` | PR + push to `main` | **quality**: typecheck → lint → build → check-publishability → test. **e2e**: tier-A e2e against a `mongodb/mongodb-atlas-local` service container (same pinned image as local Docker) |
-| `e2e-nightly.yml` | schedule | Broader e2e set |
-| `publish.yml` | release | npm publish of the public packages |
-
-The e2e service container runs with the image's own healthcheck, so tests start only when mongod **and** mongot are up — matching local Docker behavior.
-
-## Publish readiness
-
-`bun run check-publishability` validates all eight coordinated packages (`@memongo/lib`, `memory-engine`, `memory-bridge`, `memory`, `client`, `tools`, `pi-extension`, and `mcp`) before `publish.yml` ships them. Release rules live in `docs/platform/publish.md`.
-
-## Benchmark scripts
-
-- `benchmarks/` holds benchmark data (`benchmarks/data`); the harness and release contracts live under `scripts/benchmark/` so benchmark-only implementation is not shipped in `@memongo/memory-engine`.
-- Knobs are env-driven: `MEMONGO_BENCHMARK_*` (dataset root/SHA, measurement passes, fast-ingest batch size, settle timeouts, strict gate, retrieval lane selection) — full list in [Configuration](../reference/configuration.md).
-- Release-gate contracts (`benchmark-quality-contracts.ts`, `benchmark-parity-envelope.ts`) turn benchmark results into pass/fail gates.
-- Release evidence is saved under `benchmarks/results/` with its configuration and dataset identity.
-
-## Docs tooling
-
-`apps/docs` has no Mintlify build in CI; its `build` script runs `scripts/check-docs-integrity.mjs` (fails the monorepo build on broken docs) and `validate:mintlify` runs `scripts/validate-mintlify-build.mjs` (`apps/docs/package.json`).
-
-## Related pages
-
-- [Development workflow](development-workflow.md) — the daily loop on top of these tools
-- [Testing](testing.md)
-- [Dependencies](../reference/dependencies.md) — versions of everything above
+The scripts above are wired to root-level aliases so contributors don't need to memorize file paths — the full list is in `package.json`'s `scripts` block (`build`, `dev`, `test`, `test:e2e`, `check-types`, `check-publishability`, `lint`, `lint:fix`, `format`, `format:fix`, `web:preview`, `web:deploy`, `proof-pack`, `mongodb:parity`, `mongodb:prepare`, `mongodb:cluster-preflight`, `memory-eval`, `compare-memory-eval`, `agent-smoke`, `capability-stress`, `benchmark:fetch`, `benchmark`). Day-to-day contribution only needs the six covered in [How to contribute](index.md#definition-of-done); the rest are release, benchmark, and ops tooling.

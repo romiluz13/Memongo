@@ -1,80 +1,55 @@
-# Memongo overview
+# Memongo platform overview
 
-Memongo is a MongoDB-native long-term AI memory framework. It stores conversations, facts, procedures, knowledge-base chunks, episodes, and graph relationships in one MongoDB-backed memory engine, then retrieves context using vector search, full-text search, and hybrid ranking.
-
-The system is designed for AI applications, coding agents, and teams that need durable, retrievable memory across sessions. It provides an HTTP API, an MCP server, a TypeScript client SDK, AI SDK tool wrappers, a web console, and a Pi coding-agent extension.
+Memongo is a MongoDB-native long-term memory system for AI agents and apps. It stores conversations, facts, procedures, knowledge-base chunks, episodes, and graph relationships in MongoDB, then retrieves relevant context with vector search, full-text search, and hybrid ranking.
 
 ## What it does
 
-- **Stores memories** as structured facts, conversation events, episodes, graph entities/relations, procedures, and knowledge-base documents
-- **Retrieves context** through an 8-lane retrieval planner that combines vector search, Atlas Search, graph traversal, conversation recall, and active-slate assembly
-- **Consolidates memories** through a 5-phase "Dreamer" pipeline that detects novelty, extracts patterns, runs LLM reasoning, and merges near-duplicates
-- **Scores trust** across 7 dimensions: exactness, contradiction, scope match, freshness, provenance, confidence, and source diversity
-- **Tracks time** with bitemporal validity (validFrom/validTo) on every memory type
-- **Provides durable jobs** with leases, heartbeats, retries, and dead-letter handling
+An AI agent talks to Memongo through an HTTP API, a TypeScript SDK, an MCP server, or AI SDK tool helpers. Memongo writes what it's told to remember, derives structured facts and procedures from raw events in the background, and answers `search` and `recall` calls with ranked, provenance-tagged results. The [memory taxonomy](../features/memory-taxonomy.md) organizes what's stored; the [scope model](../features/multi-tenancy-and-scopes.md) controls who can see it.
 
-## Architecture at a glance
+The public repository ships a runnable product: an HTTP API, an MCP server, a TypeScript client, AI SDK tool helpers, a web console, docs, a Docker MongoDB setup, and release checks. Historical, experimental, and comparison material (other retrieval backends, abandoned prototypes) is intentionally kept out of this repo's supported surface — see `CONTRIBUTING.md`.
 
-```mermaid
-graph LR
-    subgraph Clients
-        CLI[Coding Agents]
-        SDK[Client SDK]
-        MCP[MCP Server]
-        AISDK[AI SDK Tools]
-    end
+## Who uses it
 
-    subgraph API["HTTP API (Hono)"]
-        ROUTES[Route handlers]
-        AUTH[Auth + scope]
-    end
+- **Agent builders** wire an AI agent to Memongo via `packages/client` (`MemongoClient`) or `packages/tools` (Vercel AI SDK / OpenAI tool helpers) so the agent can save and recall memory mid-conversation.
+- **MCP-compatible hosts** (coding agents, chat clients) attach `apps/mcp` as a stdio MCP server and get the same operations as typed tools.
+- **Operators** run `apps/api` against a MongoDB Atlas (cloud or Atlas Local Preview) cluster and watch it through `apps/web`, the operator console.
 
-    subgraph Engine["Memory Engine"]
-        MGR[Memory manager]
-        SEARCH[Retrieval planner]
-        CONSOL[Consolidator]
-        EMB[Embeddings]
-        GRAPH[Graph + episodes]
-        JOBS[Job queue]
-    end
+## Quick links
 
-    subgraph Storage["MongoDB"]
-        VEC[Vector indexes]
-        SRCH[Atlas Search indexes]
-        COLL[Collections]
-    end
+- [Architecture](architecture.md) — how the API, bridge, engine, and MongoDB fit together
+- [Getting started](getting-started.md) — install, run MongoDB, start the API, add and search memory
+- [Glossary](glossary.md) — Memongo-specific vocabulary
+- [Memory taxonomy](../features/memory-taxonomy.md) — the six memory types and core operations
+- [Packages](../packages/index.md) and [Apps](../apps/index.md) — the workspace map
+- [By the numbers](../by-the-numbers.md) — codebase size and activity snapshot
 
-    CLI --> MCP
-    SDK --> ROUTES
-    MCP --> SDK
-    AISDK --> SDK
-    ROUTES --> AUTH
-    AUTH --> MGR
-    MGR --> SEARCH
-    MGR --> CONSOL
-    MGR --> EMB
-    MGR --> GRAPH
-    MGR --> JOBS
-    SEARCH --> VEC
-    SEARCH --> SRCH
-    MGR --> COLL
+## Repository layout
+
+```text
+memongo/
+  apps/
+    api/          HTTP API server (Hono)
+    mcp/          MCP server (stdio, calls the HTTP API)
+    web/          Next.js operator console
+    docs/         Public docs (Mintlify)
+  packages/
+    memory-engine/   Core MongoDB memory: embeddings, graph, episodes, search, KB, analytics
+    memory-bridge/   Stable facade over the engine, used by apps/api
+    memongo-memory/  Published `@memongo/memory` re-export barrel
+    client/          TypeScript HTTP client SDK
+    tools/           AI SDK tool helpers (Vercel AI SDK, OpenAI)
+    lib/             Shared types, auth, and utilities (internal)
+    pi-extension/    Pi coding-agent extension (additive semantic memory)
+  docker/            Local MongoDB dev stack (Atlas Local Preview + mongot)
+  scripts/           Benchmark, proof-pack, and release-gate scripts
+  docs/              Platform docs, ADRs, and benchmark evidence
 ```
 
-## Tech stack
+## Product framework contract
 
-- **Runtime:** Node.js 20+, Bun 1.2+ as package manager
-- **Language:** TypeScript (ESM, strict)
-- **Database:** MongoDB 8.x with Atlas Search / Vector Search (mongot)
-- **API framework:** Hono
-- **MCP:** Model Context Protocol SDK (stdio + Streamable HTTP)
-- **Web:** Next.js
-- **Build:** Turborepo + Biome
-- **Test:** Vitest + V8 coverage
+Memongo's public framework contract, repeated throughout this wiki:
 
-## Key links
-
-- [Architecture](architecture.md) — system architecture and data flows
-- [Getting started](getting-started.md) — prerequisites, install, build, test, run
-- [Glossary](glossary.md) — project-specific terms and vocabulary
-- [By the numbers](../by-the-numbers.md) — codebase statistics snapshot
-- [History](../lore.md) — timeline and eras of the codebase
+- **Memory taxonomy**: episodic events, semantic facts, procedural playbooks, profile preferences, workspace knowledge, and provenance.
+- **Core operations**: recall, context bundles, remember, update, forget, feedback, and trace.
+- **Scope model**: `session`, `user`, `agent`, `workspace`, `tenant`, and `global`.
+- **Safety model**: read by default; write only on explicit user, app, operator, test, or import intent.

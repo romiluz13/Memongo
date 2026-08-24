@@ -1,73 +1,50 @@
-# @memongo/pi-extension
+# Pi extension
 
-A [Pi coding agent](https://github.com/earendil-works/pi-coding-agent) extension that gives Pi durable, cross-project memory backed by Memongo. It is **additive**: it sits alongside Pi's built-in `pi-hermes-memory` (local SQLite FTS5 keyword search) and exposes Memongo's hybrid vector + full-text + graph retrieval as *new* tools — it does not replace any existing Pi memory tool.
+Active contributors: Rom Iluz
 
-Source: `packages/pi-extension/extensions/` (`index.ts`, `lifecycle.ts`).
+`packages/pi-extension` (`@memongo/pi-extension`) is an extension for the [Pi coding agent](https://pi.dev) that adds Memongo's durable, cross-project, MongoDB-backed semantic memory as new tools. Per `packages/pi-extension/README.md`, it is explicitly **additive**: it sits alongside Pi's own `pi-hermes-memory` (local SQLite FTS5) and `pi-observational-memory`, and does not replace either. It is the one package in this repo that is an agent-side plugin rather than a Memongo product surface — it never touches MongoDB or the engine directly; it calls the HTTP API exclusively through `@memongo/client`, the same SDK used by `packages/tools` and `apps/mcp`. See [`../overview/architecture.md`](../overview/architecture.md) for where the HTTP API sits relative to its callers.
 
-## Tools
+## What it ships
 
-Three tools are registered from `packages/pi-extension/extensions/index.ts`:
+`packages/pi-extension/extensions/index.ts` registers three tools and one slash command against Pi's `ExtensionAPI`:
 
-| Tool | Purpose |
-|------|---------|
-| `memongo_search` | Semantic/cross-project search over durable memory via hybrid retrieval. The prompt guidelines steer the agent to use it when local keyword FTS5 can't find something, and to fall back (not retry) when Memongo is unavailable |
-| `memongo_save` | Persist a durable structured fact/decision/preference |
-| `memongo_status` | Probe Memongo API + vector search availability |
+- `memongo_search` — hybrid vector + full-text + graph search over durable memory, for semantic or cross-project/cross-session recall that Pi's local FTS5 tool can't do.
+- `memongo_save` — persists a durable structured memory (fact, decision, preference, instruction, problem, person, project, or architecture note).
+- `memongo_status` — probes API health and vector-search availability.
+- `/memongo` — a slash command wrapping the same status probe for a quick manual check.
 
-Result formatting includes score, scope/scopeRef, lifecycle state, and timestamp with a 400-character snippet cap. The extension probes the API at load (`client.status(agentId)`) and tracks availability so a down API degrades gracefully instead of failing tool calls.
+All three tools degrade to a clean error message (not a crash) when the Memongo API is unreachable, and the extension's guidance nudges the agent to fall back to Pi's local `memory_search` tool in that case.
 
-Project identity is detected from the git repo root basename (worktree-aware, so linked worktrees share one identity), falling back to the cwd basename outside Git, and `null` for home/root.
+One configuration knob, `MEMONGO_PI_MEMORY_SCOPE` (default `"global"`), drives both `memongo_save`'s default scope and `memongo_search`'s query scope, so a default-scope save is always found by a default-scope search — an earlier version let save default to `"workspace"` while search hardcoded `"global"`, splitting the two directions.
+
+`resolveApiKey()` in `extensions/index.ts` will only fall back to a baked `local-dev-secret` credential when the configured `MEMONGO_API_URL` resolves to a loopback address (`127.0.0.1`, `localhost`, `::1`); for any non-loopback API URL it refuses to start without an explicit `MEMONGO_API_KEY`, so a shared local-dev default can never authenticate against a remote deployment.
 
 ## Lifecycle hooks
 
-The LLM almost never calls memory tools on its own, so the extension also nudges at the prompt layer via hooks in `packages/pi-extension/extensions/lifecycle.ts` (P1.4):
+`packages/pi-extension/extensions/lifecycle.ts` is what the tools alone can't do: since an LLM rarely calls `memongo_save`/`memongo_search` unprompted, the extension hooks Pi's event lifecycle to nudge memory in and out at the prompt layer:
 
-```mermaid
-sequenceDiagram
-    participant Pi as Pi agent
-    participant Ext as pi-extension
-    participant API as Memongo API
+- **Session-start injection** — on `session_start`, it prefetches the agent's profile plus a bounded recent-memories search at the configured scope, then injects the rendered result once per session via `before_agent_start` as a persistent `customType: "memongo-context"` message (not shown to the user, `display: false`).
+- **Turn-end auto-capture** — on `turn_end` (and the preceding `message_start`/`agent_start`), it buffers user and assistant turn text and writes it to Memongo via `writeEvent` (`/v1/write-event`), batched/debounced (flush every 4 buffered events or 5s, whichever comes first) so a long session doesn't fire one HTTP call per turn. Idempotency keys are derived from `(sessionId, agentRunIndex, turnIndex, role)` via `captureIdempotencyKey()`, so a retried capture of the same turn dedupes server-side instead of double-writing.
 
-    Pi->>Ext: session_start
-    Ext->>API: profile + recent-memories search (prefetch)
-    Pi->>Ext: before_agent_start
-    Ext->>Pi: inject "memongo-context" message<br/>(once per session)
-    loop each turn
-        Pi->>Ext: message_start / turn_end
-        Ext->>Ext: buffer user + assistant text
-    end
-    Ext->>API: writeEvent batch (debounced,<br/>idempotency-keyed)
-```
+Both behaviors are controlled independently (`MEMONGO_PI_AUTO_CAPTURE`, `MEMONGO_PI_SESSION_INJECTION`, both default on) and both fail silently with at most one `warn` log — a down Memongo API must never break a Pi session.
 
-- **Session-start injection:** on `session_start`, prefetch the agent profile plus a bounded recent-memories search (generic query: "recent project context, decisions, preferences, and open problems"); inject the rendered context once per session via `before_agent_start` as a persistent `customType: "memongo-context"` message. Renders at most 3 profile items per type and 5 recent memories; returns nothing when both are empty so noise is never injected. The prefetch is time-boxed (default 3s).
-- **Turn-end auto-capture:** buffer user/assistant turn text and write it as conversation events with idempotency keys `pi-{sessionId}-r{agentRunIndex}-t{turnIndex}-{role}` (Pi resets `turnIndex` per agent run, so the run index is part of the stable identity — P0.1). Flushes are batched/debounced (default every 4 turns or 5s) so a long session doesn't fire per-turn HTTP; `session_shutdown` flushes the remainder.
-- **Fail-silent everywhere:** a down Memongo API must never break the Pi session — every failure degrades to a single warn log. Hooks are registered before tools so a slow API never delays tool availability.
+## How it differs from the other apps
 
-## Configuration
+Every other Memongo surface (`apps/api`, `apps/mcp`, `apps/web`) ships or exposes Memongo itself as a product. `packages/pi-extension` is the reverse: it is packaged for and loaded by a third-party host (Pi, via `pi.extensions` in `packages/pi-extension/package.json`, pointing at `./extensions`), and its only job is to call into an already-running Memongo deployment as a client. It has a single runtime dependency, `@memongo/client`, and peer dependencies on Pi's own packages (`@earendil-works/pi-ai`, `@earendil-works/pi-coding-agent`, `typebox`) rather than on any other Memongo workspace package.
 
-Environment variables (defaults are baked in for loopback so the extension works even when Pi doesn't inherit shell env vars):
+## Integration points
 
-| Variable | Default | Purpose |
-|----------|---------|---------|
-| `MEMONGO_API_URL` | `http://127.0.0.1:3847` | HTTP API base |
-| `MEMONGO_API_KEY` | `local-dev-secret` **(loopback only)** | Bearer token. `resolveApiKey` refuses to use the baked default against any non-loopback URL — a shared baked credential must never authenticate to a remote |
-| `MEMONGO_AGENT_ID` | `pi` | Agent identity |
-| `MEMONGO_PI_MEMORY_SCOPE` | `global` | One scope knob (P2.3) driving **every** direction — injection and capture, save and search — so a default-scope save is always findable by a default-scope search |
-| `MEMONGO_PI_AUTO_CAPTURE` | on (`0`/`false` disables) | Turn-end capture |
-| `MEMONGO_PI_SESSION_INJECTION` | on (`0`/`false` disables) | Session-start injection |
+- Calls `@memongo/client`'s `MemongoClient` directly (`status`, `searchDetailed`, `writeStructured`, `writeEvent`, `profile`, `probeVector`) — see [`packages/client.md`](client.md).
+- Talks to `apps/api`'s `/v1/*` HTTP routes over the network; it does not import `packages/memory-engine`, `packages/memory-bridge`, or `packages/lib`.
+- Tests (`packages/pi-extension/index.test.ts`, `packages/pi-extension/lifecycle.test.ts`) mock `@memongo/client` entirely, confirming the extension's only integration surface is that client.
 
-## Key files
+## Key source files
 
 | File | Role |
-|------|------|
-| `packages/pi-extension/extensions/index.ts` | Extension entry: API key resolution, project detection, tool registration |
-| `packages/pi-extension/extensions/lifecycle.ts` | Session-start injection + turn-end capture hooks |
-
-**Top contributors:** Rom Iluz (7 commits).
-
-## Related pages
-
-- [Packages overview](./index.md)
-- [@memongo/client](./client.md) — the transport (`MemongoClient`, `MemongoClientError`)
-- [Multi-tenancy](../features/multi-tenancy.md) — the scope model `MEMONGO_PI_MEMORY_SCOPE` selects from
-- [REST API reference](../api/index.md)
+|---|---|
+| `packages/pi-extension/README.md` | Positioning ("additive"), setup instructions, config table, architecture diagram |
+| `packages/pi-extension/extensions/index.ts` | Tool registration (`memongo_search`, `memongo_save`, `memongo_status`), `/memongo` command, loopback-aware API key resolution |
+| `packages/pi-extension/extensions/lifecycle.ts` | Session-start context injection and turn-end auto-capture hooks, idempotency key derivation |
+| `packages/pi-extension/index.test.ts` | Tests for loopback detection, API key resolution, and save/search scope consistency |
+| `packages/pi-extension/lifecycle.test.ts` | Tests for lifecycle config parsing, injection, capture batching/dedup, and bounded key eviction |
+| `packages/pi-extension/package.json` | `pi.extensions` entry point, `@memongo/client` dependency, Pi peer dependencies |

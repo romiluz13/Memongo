@@ -1,46 +1,15 @@
-# Engine systems
+# Systems
 
-The memory engine is built from a set of cross-cutting systems that every API call flows through. Each system owns one concern — retrieval, consolidation, storage shape, or background work — and they compose inside `MongoDBMemoryManager` (`packages/memory-engine/src/mongodb-manager.ts`).
+The systems lens covers the memory-engine's major subsystems in depth, one concern per page. Start with [Architecture](../overview/architecture.md) for how these fit together end to end, and [Glossary](../overview/glossary.md) for shared vocabulary.
 
-```mermaid
-graph LR
-    REQ[API / MCP / SDK request]
-    subgraph Engine["@memongo/memory-engine"]
-        RP[Retrieval pipeline<br/>8-lane planner]
-        MM[Memory model<br/>6 memory types]
-        CON[Consolidation<br/>5-phase Dreamer]
-        JQ[Job queue<br/>durable leases]
-    end
-    MONGO[(MongoDB 8.x<br/>Atlas Search + Vector Search)]
+- [Retrieval and search](retrieval-and-search.md) — hybrid vector/text search, fusion methods, reranking, and recall profiles.
+- [Consolidation and novelty](consolidation-and-novelty.md) — the offline "Dreamer" pipeline that merges, promotes, or invalidates memories, and surprisal-based novelty detection.
+- [Graph, episodes, and entities](graph-episodes-and-entities.md) — entity/relation extraction, graph traversal, and episode summarization from conversation events.
+- [Temporal and bitemporal](temporal-and-bitemporal.md) — valid-time vs. transaction-time tracking and point-in-time queries.
+- [Structured memory and procedures](structured-memory-and-procedures.md) — typed facts and stored playbooks, their stable-handle addressing and active/invalidated/conflicted lifecycle.
+- [Schema, migrations, and indexes](schema-migrations-and-indexes.md) — collection setup, Atlas Search/Vector Search index management, schema validators, capability detection, and data migrations.
+- [Embeddings and providers](embeddings-and-providers.md) — embedding generation, provider integrations, and automated vs. client-side embedding modes.
+- [Provenance and evidence](provenance-and-evidence.md) — tracing search results back to source events and trust/confidence scoring.
+- [Jobs, telemetry, and sync](jobs-telemetry-and-sync.md) — the background job queue, change-stream sync, and operational telemetry.
 
-    REQ --> RP
-    REQ --> MM
-    RP --> MONGO
-    CON --> MM
-    JQ --> CON
-    JQ --> MM
-    CON --> MONGO
-```
-
-## The systems
-
-| System | What it owns | Detail page |
-|--------|--------------|-------------|
-| Retrieval pipeline | Query intent classification, 8-lane plan, vector + Atlas Search execution, hybrid fusion, reranking, MMR, trust scoring, context bundles | [Retrieval pipeline](retrieval-pipeline.md) |
-| Consolidation | The 5-phase "Dreamer": novelty detection, pattern extraction, LLM deduction/induction, near-duplicate merge, run gating | [Consolidation](consolidation.md) |
-| Memory model | Six memory types (events, structured memories, episodes, graph entities/relations, KB), salience, temporal scope, bitemporal validity | [Memory model](memory-model.md) |
-| Job queue | Durable background jobs with leases, heartbeats, `$$NOW` server time, retries, dead-letter, outbox repair | [Job queue](job-queue.md) |
-
-## How they interact
-
-- **Writes** land as events (memory model), stamp an `extractionJobPendingAt` outbox marker, and the **job queue** drains extraction work (entities, derived memories, typed relations) in the background.
-- **Consolidation** reads unprocessed events from the memory model, promotes durable facts into structured memory, and is itself rate-limited by a lease-gated run document that mirrors the job queue's claim protocol.
-- **Retrieval** reads across every memory type through a single planner, then fuses, reranks, dedupes, and trust-scores results before returning them or assembling a token-budgeted context bundle.
-
-## Related pages
-
-- [Core engine package](../packages/memory-engine/index.md) — package-level overview of `@memongo/memory-engine`
-- [Architecture](../overview/architecture.md) — monorepo layering and data flows
-- [Bitemporal memory](../features/bitemporal-memory.md) — the validity model enforced by the memory model
-- [Trust scoring](../features/trust-scoring.md) — the 7-dimension scoring applied at the end of retrieval
-- [Knowledge base](../features/knowledge-base.md) — KB ingestion and search behind the `kb` retrieval lane
+See also `packages/memory-engine/index.md` for the package's public surface, and `security.md` for security-specific concerns such as the injection classifier.

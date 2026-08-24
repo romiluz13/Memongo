@@ -1,48 +1,51 @@
-# Web console (`apps/web`)
+# Web console
 
-`@memongo/web` is a minimal Next.js 15 (React 19) app with two routes: a marketing landing page and an operational console. It is a private package and talks to the API directly from the browser via `MemongoClient`.
+Active contributors: Rom Iluz
 
-## Key files
+`apps/web` is a Next.js 15 app with two jobs: a marketing landing page at `/` and an operator console at `/console` for exercising a running `apps/api` instance by hand. It is also the public "Live Site" linked from the repo README (`https://memongo.rom-88f.workers.dev`).
 
-- `apps/web/app/page.tsx` (~351 LOC) — landing page: memory-layer narrative, capability grid, code sample; GSAP-driven scroll animation with a `prefers-reduced-motion` guard
-- `apps/web/app/console/page.tsx` (~623 LOC) — the console itself
-- `apps/web/app/layout.tsx` — metadata (title, OpenGraph, `metadataBase` pointing at the Cloudflare Workers deployment)
-- `apps/web/next.config.ts` — static-export switch, monorepo tracing, webpack extension alias
-- `apps/web/package.json` — scripts, including the OpenNext/Cloudflare deploy path
-- `apps/web/wrangler.jsonc`, `apps/web/open-next.config.ts` — Cloudflare deployment config
+## Landing page
 
-## The console
+`apps/web/app/page.tsx` renders the product's public pitch — hero section, memory-layer explainer, capability tiles, and a quickstart code sample — with GSAP-driven scroll animations (`ScrollTrigger`) that are skipped entirely when `prefers-reduced-motion: reduce` is set. `apps/web/app/layout.tsx` sets the page's `<title>`, description, and Open Graph/Twitter metadata, hardcoding `siteUrl` to the Cloudflare Workers deployment. `apps/web/app/globals.css` holds the hand-rolled CSS for the landing page (no CSS framework).
 
-`console/page.tsx` is a single client component with five tabs (`Tab = "overview" | "search" | "kb" | "profile" | "write"`, `apps/web/app/console/page.tsx:9`):
+## Operator console
 
-- **Overview** — hits `/health`, `/v1/status`, `/v1/stats`, and counts paths in `/openapi.json`
-- **Search** — semantic search against `/v1/search`
-- **KB** — knowledge-base search
-- **Profile** — agent profile view
-- **Write** — add a memory
+`apps/web/app/console/page.tsx` is a single client component (`"use client"`) that wraps `@memongo/client`'s `MemongoClient` in a form-driven UI. An operator sets the API base URL, an optional bearer API key, an agent ID, and a session/scope value, then switches between five tabs — Overview, Search, KB, Profile, Write — each calling one `MemongoClient` method (or a raw `fetch` for `/health` and `/openapi.json`) and rendering the JSON response in a pre-formatted output pane. There is no server-side state; every action is a direct client-side call to the configured API.
 
-The API base URL comes from `NEXT_PUBLIC_MEMONGO_API_URL`, defaulting to `http://127.0.0.1:3847` (`apps/web/app/console/page.tsx:7`). There is no server-side proxy: the browser calls the API directly, which is why the API's CORS dev defaults allow `http://localhost:3040` and `http://127.0.0.1:3040` (see `apps/api/src/app.ts:71-76` and [Security](../security.md)).
+The console's default API base URL comes from `NEXT_PUBLIC_MEMONGO_API_URL`, falling back to `http://127.0.0.1:3847` (`apps/web/app/console/page.tsx:8-9`) — this is a Next.js public env var, so it must be set at build time to point at a non-local API, not just at runtime. The base URL field in the UI can override it per-session without a rebuild.
 
-## Build and deployment
+## Deployment: Cloudflare Workers via OpenNext
 
-- **Dev/start on port 3040** (`apps/web/package.json` scripts).
-- **Monorepo-aware build:** `outputFileTracingRoot` points at the repo root and `@memongo/client` is in `transpilePackages`; a webpack `extensionAlias` maps `.js` imports to `.ts/.tsx` sources so the client's ESM imports resolve (`apps/web/next.config.ts`).
-- **Static export:** `MEMONGO_WEB_STATIC_EXPORT=true` flips `output: "export"` and unoptimizes images.
-- **Cloudflare:** `preview`/`deploy` scripts run `opennextjs-cloudflare` + `wrangler`; the deployed site is the `metadataBase` in `apps/web/app/layout.tsx:8`.
+The app builds as a normal Next.js app but deploys to Cloudflare Workers, not Vercel or Node hosting:
 
-```mermaid
-graph LR
-    BROWSER[Browser] -->|page.tsx| LANDING[Landing /]
-    BROWSER -->|console/page.tsx| CONSOLE[Console /console]
-    CONSOLE -->|MemongoClient| API[apps/api on :3847]
-    subgraph Build
-        STATIC[MEMONGO_WEB_STATIC_EXPORT=true\nnext export]
-        CF[opennextjs-cloudflare + wrangler]
-    end
-```
+- `apps/web/open-next.config.ts` calls `defineCloudflareConfig()` from `@opennextjs/cloudflare`, which adapts the Next.js build output (server components, route handlers, static assets) into a Cloudflare Workers-compatible bundle under `.open-next/`.
+- `apps/web/wrangler.jsonc` points Wrangler at that bundle (`main: ".open-next/worker.js"`), binds the static assets directory (`.open-next/assets`) to `ASSETS`, and declares a `WORKER_SELF_REFERENCE` service binding (the worker can invoke itself, which OpenNext uses for some Next.js runtime behaviors like ISR revalidation). `compatibility_flags` enables Node.js compatibility APIs in the Workers runtime.
+- `apps/web/next.config.ts` also supports a static-export mode gated by `MEMONGO_WEB_STATIC_EXPORT=true` (sets `output: "export"` and unoptimized images), and pins `outputFileTracingRoot` to the monorepo root and `transpilePackages: ["@memongo/client"]` so the workspace package builds correctly inside Next's bundler.
 
-## Related pages
+`apps/web/package.json` scripts:
 
-- [Apps overview](index.md)
-- [API app](api/index.md) — CORS policy that whitelists this console
-- [Configuration](../reference/configuration.md) — `NEXT_PUBLIC_MEMONGO_API_URL`, `MEMONGO_WEB_STATIC_EXPORT`
+| Script | Command | Purpose |
+|---|---|---|
+| `dev` | `next dev -p 3040` | Local dev server on port 3040 |
+| `build` | `next build` | Standard Next.js production build |
+| `preview` | `opennextjs-cloudflare build && wrangler dev` | Build the Workers bundle and run it locally under Wrangler |
+| `deploy` | `opennextjs-cloudflare build && opennextjs-cloudflare deploy` | Build and publish to Cloudflare Workers |
+
+See [Deployment](../deployment.md) for the CI/release side of shipping this app, and [Getting started](../overview/getting-started.md) for the local dev command (`cd apps/web && bun run dev`, served at `http://127.0.0.1:3040`).
+
+## Modifying the console
+
+To add a new console action (e.g. a new API operation), add a tab to the `Tab` union and the tab-button list in `apps/web/app/console/page.tsx`, then extend `runCurrentTab()` with a branch that calls the corresponding `MemongoClient` method — see [API](../apps/api/index.md) for the routes it can call.
+
+## Key source files
+
+| File | Role |
+|---|---|
+| `apps/web/app/page.tsx` | Public landing page, GSAP scroll animations |
+| `apps/web/app/layout.tsx` | Root layout, page metadata, Open Graph/Twitter tags |
+| `apps/web/app/console/page.tsx` | Operator console: connection form, tabbed actions, output pane |
+| `apps/web/app/globals.css` | Landing page and console styling |
+| `apps/web/next.config.ts` | Next.js config: static export toggle, workspace path tracing |
+| `apps/web/open-next.config.ts` | OpenNext Cloudflare adapter entry point |
+| `apps/web/wrangler.jsonc` | Cloudflare Workers deployment config (bundle, assets, bindings) |
+| `apps/web/package.json` | Scripts for dev, build, preview, and deploy |

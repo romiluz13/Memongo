@@ -1,45 +1,33 @@
-# @memongo/memory
+# Memongo memory
 
-The published npm surface for in-process Memongo use. The entire implementation is two lines in `packages/memongo-memory/src/index.ts`:
+Active contributors: Rom Iluz
 
-```typescript
+`@memongo/memory` (package directory `packages/memongo-memory`) is a thin convenience barrel: it re-exports everything from `@memongo/memory-bridge` and `@memongo/memory-engine` under a single npm package, for consumers who want one import path instead of pulling both packages separately.
+
+## Key source files
+
+| File | Role |
+| --- | --- |
+| `packages/memongo-memory/src/index.ts` | The entire implementation — two re-export statements. |
+| `packages/memongo-memory/package.json` | Declares `@memongo/memory-engine` and `@memongo/memory-bridge` as dependencies; `main`/`types` point at `dist/index.js`/`dist/index.d.ts`. |
+| `packages/memongo-memory/README.md` | The npm-facing install and usage story. |
+
+## What it re-exports
+
+`packages/memongo-memory/src/index.ts` is exactly:
+
+```ts
 export * from "@memongo/memory-bridge"
 export * from "@memongo/memory-engine"
 ```
 
+So `@memongo/memory` exposes the full public surface of both packages: every `memongoBridge*` function from [`@memongo/memory-bridge`](memory-bridge.md) (search, writes, lifecycle, recall, status, analytics, shutdown) and every symbol `@memongo/memory-engine` exports from its main barrel (`getMemorySearchManager`, `closeAllMemorySearchManagers`, `MongoDBMemoryManager`, and related types) — see [`@memongo/memory-engine`](../packages/memory-engine/index.md) for what the engine barrel contains. It does not re-export the engine's `@memongo/memory-engine/internal` subpath.
+
 ## Why it exists
 
-Memongo's real code lives in two packages with different audiences:
+Per `packages/memongo-memory/README.md`, this package targets internal tooling and consumers who don't need a narrow dependency surface — one `npm install @memongo/memory` instead of installing the bridge and engine packages separately and importing from both. The README explicitly recommends the direct packages (`@memongo/memory-bridge`, `@memongo/memory-engine`) instead when a narrower dependency surface matters.
 
-- [`@memongo/memory-engine`](../packages/memory-engine/index.md) — the core engine, large and fast-moving
-- [`@memongo/memory-bridge`](./memory-bridge.md) — the stable facade (config loading + delegation)
+## Integration points
 
-`@memongo/memory` (package description: "Memongo memory: published re-export surface for the memory engine and bridge") gives consumers **one install** that covers both: the facade functions for the common path and the engine types/classes for advanced use, without forcing users to understand the internal two-package split. It carries no code of its own, so there is nothing to drift — the re-exports always reflect whatever bridge and engine versions are installed.
-
-```mermaid
-graph LR
-    USER["Consumer application"]
-    MEM["@memongo/memory<br/>(2-line re-export)"]
-    BRIDGE["@memongo/memory-bridge"]
-    ENGINE["@memongo/memory-engine"]
-    USER --> MEM
-    MEM --> BRIDGE
-    MEM --> ENGINE
-    BRIDGE --> ENGINE
-```
-
-Use this package when embedding Memongo **in-process** (your Node process talks to MongoDB directly). For access over HTTP to a running Memongo API server, use [`@memongo/client`](./client.md) instead.
-
-## Key file
-
-| File | Role |
-|------|------|
-| `packages/memongo-memory/src/index.ts` | Re-exports the bridge and engine surfaces (2 LOC) |
-
-**Top contributors:** Rom Iluz (8 commits).
-
-## Related pages
-
-- [Packages overview](./index.md)
-- [@memongo/memory-bridge](./memory-bridge.md)
-- [The core engine](./memory-engine/index.md)
+- Depends on `@memongo/memory-bridge` (`^2.0.1`) and `@memongo/memory-engine` (`^2.0.1`) as its only runtime dependencies.
+- Not consumed by any other workspace package or app — `apps/api` imports the bridge and engine directly. This package exists purely as a published npm convenience for external consumers; see the root `README.md` for the install story.

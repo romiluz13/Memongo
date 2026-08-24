@@ -1,112 +1,164 @@
-# REST API
+# API
 
-The Memongo HTTP API is a Hono app serving **44 endpoints** under `/v1`, plus three unauthenticated utility routes (`/health`, `/ready`, `/openapi.json`). Every route is registered in `apps/api/src/routes/v1.ts` (~2,515 LOC) and delegates to the stable bridge facade (`@memongo/memory-bridge`) — route handlers never touch the engine directly.
+This is the wire-level reference for callers of the Memongo HTTP API: what endpoints exist, how to authenticate, and what shapes to send and expect. For how the API app is built internally (middleware order, router composition, file layout), see [API app](../apps/api/index.md) and [Routes and middleware](../apps/api/routes-and-middleware.md).
 
-This page is the endpoint map. For the middleware stack (auth, rate limiting, CORS, body limits), see [API app](../apps/api/index.md); for auth mechanics, see [Security](../security.md).
+The API is a Hono server (`apps/api/src/app.ts`) that listens on port 3847 by default and exposes everything under `/v1/*`, plus three unauthenticated infrastructure routes.
 
-## Endpoint groups
+## Authentication
 
-### Search and retrieval
+Every `/v1/*` route requires a bearer token unless `MEMONGO_ALLOW_INSECURE_NO_AUTH` is set for local development:
 
-| Endpoint | Method | Purpose |
-|----------|--------|---------|
-| `/v1/search` | POST | Hybrid semantic search (`apps/api/src/routes/v1.ts:936`) |
-| `/v1/search-kb` | POST | Knowledge-base search (`v1.ts:962`) |
-| `/v1/search-detailed` | POST | Search with scores/provenance (`v1.ts:1352`) |
-| `/v1/recall-conversation` | POST | Exact past messages with citations (`v1.ts:1005`) |
-| `/v1/context-bundle` | POST | Answer-ready context bundle, incl. wake-up mode (`v1.ts:1529`) |
-| `/v1/hydrate-active-slate` | POST | Rebuild the active working slate (`v1.ts:1470`) |
-| `/v1/discovery-projection` | POST | Discovery projection build (`v1.ts:1489`) |
-| `/v1/chain-trace` | POST | Recall chain tracing (`v1.ts:2410`) |
-| `/v1/profile` | POST | Agent profile (`v1.ts:1979`) |
-| `/v1/read-file` | POST | Server-side file read (admin-only for scoped keys, `v1.ts:1594`) |
-
-### Write and import
-
-| Endpoint | Method | Purpose |
-|----------|--------|---------|
-| `/v1/add` | POST | Quick add (`v1.ts:1613`) |
-| `/v1/write-event` | POST | Write one conversation event (`v1.ts:1652`) |
-| `/v1/write-events` | POST | Batch write, capped at 500 events (`v1.ts:1735`) |
-| `/v1/extract` | POST | Extract structured memories from an event (`v1.ts:1913`) |
-| `/v1/write-structured` | POST | Typed type+key fact (`v1.ts:1937`) |
-| `/v1/write-procedure` | POST | Procedural memory (`v1.ts:1958`) |
-| `/v1/import/conversations` | POST | Bulk conversation import (admin-only, `v1.ts:1050`) |
-
-### Lifecycle
-
-| Endpoint | Method | Purpose |
-|----------|--------|---------|
-| `/v1/lifecycle/get` | POST | Fetch one memory item (`v1.ts:1083`) |
-| `/v1/lifecycle/update` | POST | Update with revision semantics (`v1.ts:1109`) |
-| `/v1/lifecycle/delete` | POST | Delete (`v1.ts:1147`) |
-| `/v1/lifecycle/history` | POST | Revision history (`v1.ts:1186`) |
-| `/v1/procedures/outcome` | POST | Report procedure outcome (`v1.ts:1225`) |
-| `/v1/memory/feedback` | POST | Apply memory feedback (`v1.ts:1271`) |
-| `/v1/self-edit` | POST | Agent-identity self-edit (`v1.ts:2469`) |
-| `/v1/sync` | POST | Sync (`v1.ts:2053`) |
-
-### Consolidation
-
-| Endpoint | Method | Purpose |
-|----------|--------|---------|
-| `/v1/novelty-scan` | POST | Novelty detection (`v1.ts:2434`) |
-| `/v1/consolidate` | POST | Run the Dreamer pipeline (`v1.ts:2449`) |
-
-### Status and stats
-
-| Endpoint | Method | Purpose |
-|----------|--------|---------|
-| `/v1/state` | GET | Unified state (`v1.ts:2007`) |
-| `/v1/status` | GET | Status (`v1.ts:2023`) |
-| `/v1/status/detailed` | GET | Detailed status (`v1.ts:2033`) |
-| `/v1/stats` | GET | Stats (`v1.ts:2043`) |
-
-### Probes
-
-| Endpoint | Method | Purpose |
-|----------|--------|---------|
-| `/v1/probes/embedding` | GET | Embedding lane probe (`v1.ts:2067`) |
-| `/v1/probes/vector` | GET | Vector index probe (`v1.ts:2077`) |
-
-### Jobs
-
-| Endpoint | Method | Purpose |
-|----------|--------|---------|
-| `/v1/jobs` | GET | List durable memory jobs (`v1.ts:2359`) |
-| `/v1/jobs/:jobId` | GET | Job detail (`v1.ts:2391`) |
-
-### Admin
-
-| Endpoint | Method | Purpose |
-|----------|--------|---------|
-| `/v1/admin/relevance/explain` | POST | Explain a relevance decision (`v1.ts:2087`) |
-| `/v1/admin/relevance/report` | GET | Relevance report (`v1.ts:2239`) |
-| `/v1/admin/relevance/sample-rate` | GET | Telemetry sample rate (`v1.ts:2254`) |
-| `/v1/admin/access-trends` | GET | Access trends (`v1.ts:2264`) |
-| `/v1/admin/access-summaries` | GET | Access summaries (`v1.ts:2293`) |
-| `/v1/admin/traces` | GET | List recall traces (`v1.ts:2326`) |
-| `/v1/admin/traces/:traceId` | GET | Trace detail (`v1.ts:2340`) |
-
-## Cross-cutting behavior
-
-- **Body parsing once.** A v1 middleware pre-parses every non-GET JSON body; malformed JSON is a 400 `INVALID_JSON` from the middleware, never a 500 (`apps/api/src/routes/v1.ts:77-114`).
-- **List caps.** `MAX_LIST_LIMIT = 100`, `MAX_HISTORY_LIMIT = 200`, `MAX_WRITE_EVENTS_BATCH = 500` (`v1.ts:69-74`).
-- **Identity resolution.** `agentId`/`scope`/`scopeRef` are resolved through `apps/api/src/scope-identity.ts`, the *same* module the auth layer uses, so authorization and partition selection cannot diverge (issue #57).
-- **Machine-readable contract.** The full spec is served at `/openapi.json` from `apps/api/src/openapi-spec.ts` (~3,016 LOC), and `apps/api/src/contract-conformance.test.ts` keeps routes conformant with `MEMONGO_API_ROUTES` in `packages/lib/src/contract.ts:144`.
-
-```mermaid
-graph TD
-    REQ[Request] --> MW[requestId → rate limit → body limit → auth]
-    MW --> V1[/v1 router]
-    V1 --> BRIDGE[memongoBridge* functions]
-    BRIDGE --> ENGINE[memory-engine]
-    V1 --> ERR[typed error envelope\nerror.code + request id]
+```bash
+curl -s http://127.0.0.1:3847/v1/search \
+  -H "content-type: application/json" \
+  -H "authorization: Bearer $MEMONGO_API_KEY" \
+  -d '{"query":"..."}'
 ```
 
-## Related pages
+Two credential shapes are accepted, checked with a constant-time comparison (`timingSafeBearerEquals` in `apps/api/src/app.ts`):
 
-- [API app](../apps/api/index.md) — middleware, scoped keys, graceful shutdown
-- [MCP server](../apps/mcp.md) — the tool layer over these endpoints
-- [Security](../security.md) — authentication and hardening
-- [Debugging](../how-to-contribute/debugging.md) — health/readiness/probe endpoints in practice
+- **`MEMONGO_API_KEY`** — a single admin token with full access to every route, including agent-global routes (status, stats, jobs, admin analytics, self-edit) that have no tenant scope to restrict.
+- **`MEMONGO_API_SCOPED_KEYS`** — a JSON policy list binding individual tokens to explicit `agentId` / `scope` / `scopeRef` constraints. A scoped key is rejected from agent-global routes and from server-file routes (`/v1/read-file`, `/v1/import/conversations`) because there is no tenant boundary on those to enforce.
+
+The full scope model (`session|user|agent|workspace|tenant|global`, `scopeRef`, how a request's identity is resolved) is covered in [Multi-tenancy and scopes](../features/multi-tenancy-and-scopes.md) — this page only covers the wire contract.
+
+Requests to `/v1/*` with no valid bearer get `401 UNAUTHORIZED`; if neither `MEMONGO_API_KEY` nor `MEMONGO_API_SCOPED_KEYS` nor the insecure flag is set, every `/v1/*` request gets `401 AUTH_NOT_CONFIGURED`.
+
+## Discovering the full contract
+
+`GET /openapi.json` serves a generated OpenAPI 3.0 document (`apps/api/src/openapi-spec.ts`) covering every route below with full request/response schemas. It is built from per-family path fragments (`openapi-paths-search.ts`, `openapi-paths-write.ts`, etc.) and shared schema fragments in `apps/api/src/openapi-schemas.ts`, and is kept honest against the live router by `apps/api/src/contract-conformance.test.ts` — that test fails CI if a route exists in the router but not in the documented contract, or vice versa. Point any OpenAPI-aware client generator or explorer at this URL.
+
+## Infrastructure routes (unauthenticated)
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/health` | Liveness — always `{ok:true,service:"memongo-api"}` if the process is up. |
+| GET | `/ready` | Readiness — 200 only once MongoDB, vector search, and the embedding path all check out; 503 otherwise. Use this for orchestrator health checks, not `/health`. |
+| GET | `/openapi.json` | The full OpenAPI document described above. |
+
+## Route table
+
+All `/v1` routes below require the bearer described above. Routes marked **admin-only** reject scoped API keys outright.
+
+### Write (`apps/api/src/routes/v1-write-routes.ts`)
+
+| Method | Path | Purpose |
+|---|---|---|
+| POST | `/v1/add` | Add a memory (freeform content), the primary write path used by most agents. |
+| POST | `/v1/write-event` | Write a single typed conversation turn (`role`, `body`, timestamps). |
+| POST | `/v1/write-events` | Bulk-write conversation turns; per-item validation failures become per-item receipts, never a batch-level 4xx. |
+| POST | `/v1/extract` | Trigger structured-fact extraction from a previously written event. |
+| POST | `/v1/write-structured` | Upsert a structured memory entry (key/value fact with lifecycle state). |
+| POST | `/v1/write-procedure` | Upsert a procedural memory entry (a named, reusable procedure). |
+
+### Search (`apps/api/src/routes/v1-search-routes.ts`)
+
+| Method | Path | Purpose |
+|---|---|---|
+| POST | `/v1/search` | Primary semantic/hybrid search over an agent's memory. |
+| POST | `/v1/search-kb` | Search the knowledge base collection, with optional tag/category/source filter and fusion method. |
+| POST | `/v1/recall-conversation` | Time- and role-filtered recall of raw conversation history. |
+| POST | `/v1/import/conversations` | **Admin-only.** Bulk-import a conversation dataset from a server-local path. |
+| POST | `/v1/search-detailed` | Full-control search: recipe/recall-profile tuning, per-source scoping (structured/reference/procedural), plan return. |
+
+### Context (`apps/api/src/routes/v1-context-routes.ts`)
+
+| Method | Path | Purpose |
+|---|---|---|
+| POST | `/v1/hydrate-active-slate` | Build the "active slate" — the working set of currently-relevant memories for a session. |
+| POST | `/v1/discovery-projection` | Build a discovery view (`entity-brief`, `topic-brief`, `what-changed`, `contradiction-report`). |
+| POST | `/v1/context-bundle` | Compose a token-budgeted context bundle (active slate + evidence + discovery projection) for injection into an agent prompt. |
+| POST | `/v1/read-file` | **Admin-only.** Read a slice of a server-local file by relative path. |
+
+### Lifecycle (`apps/api/src/routes/v1-lifecycle-routes.ts`)
+
+| Method | Path | Purpose |
+|---|---|---|
+| POST | `/v1/lifecycle/get` | Fetch a structured or procedure memory by its stable handle. |
+| POST | `/v1/lifecycle/update` | Patch a structured or procedure memory in place. |
+| POST | `/v1/lifecycle/delete` | Invalidate (soft-delete) a memory, recording `invalidatedBy`. |
+| POST | `/v1/lifecycle/history` | Fetch the bitemporal validity history of a memory. |
+| POST | `/v1/procedures/outcome` | Report a success/failure outcome for a procedure, feeding its reliability score. |
+| POST | `/v1/memory/feedback` | Apply a `confirm`/`correct`/`irrelevant` feedback signal to a structured memory. |
+
+Every lifecycle route resolves the handle's owning identity and rejects a mismatched caller with `403 FORBIDDEN` — a scoped key cannot reach a handle outside its authorized scope even if it knows the handle string.
+
+### Admin (`apps/api/src/routes/v1-admin-routes.ts`) — all agent-global, admin-key only
+
+| Method | Path | Purpose |
+|---|---|---|
+| POST | `/v1/admin/relevance/explain` | Explain why a query would or would not surface a given result set. |
+| GET | `/v1/admin/relevance/report` | Aggregate relevance-sampling report for an agent (or all agents). |
+| GET | `/v1/admin/relevance/sample-rate` | Current relevance-sampling rate. |
+| GET | `/v1/admin/access-trends` | Access-frequency trend series for a set of memory ids. |
+| GET | `/v1/admin/access-summaries` | Access-count summaries for a set of memory ids. |
+| GET | `/v1/admin/traces` | List recorded recall traces. |
+| GET | `/v1/admin/traces/:traceId` | Fetch one recall trace by id. |
+| GET | `/v1/jobs` | List background memory jobs (consolidation, extraction, import, materialization, enrichment), filterable by status/type. |
+| GET | `/v1/jobs/:jobId` | Fetch one background job by id. |
+
+### Maintenance (`apps/api/src/routes/v1-maintenance-routes.ts`)
+
+| Method | Path | Purpose |
+|---|---|---|
+| POST | `/v1/chain-trace` | Trace the provenance chain of a fact back through its supporting events. |
+| POST | `/v1/novelty-scan` | Scan recent writes for novel (not-yet-consolidated) content. |
+| POST | `/v1/consolidate` | Run consolidation — dedup, contradiction resolution, and (optionally) LLM-assisted merge — over an agent's memory. |
+| POST | `/v1/self-edit` | **Agent-global.** Edit an agent's own persona/instructions/user block; rejected with `422 SELF_EDIT_REJECTED` if the content fails the prompt-injection screen (see [Security](../security.md)). |
+
+### Status (`apps/api/src/routes/v1-status-routes.ts`)
+
+| Method | Path | Purpose |
+|---|---|---|
+| POST | `/v1/profile` | Build a profile summary (entities, episodes, recent activity) for a scope. |
+| GET | `/v1/state` | Current state snapshot for a scope. |
+| GET | `/v1/status` | **Agent-global.** Overall service status; echoes `version` (the release version, for client/server skew detection against `x-memongo-client-version`). |
+| GET | `/v1/status/detailed` | **Agent-global.** Deeper status breakdown (per-lane readiness detail). |
+| GET | `/v1/stats` | **Agent-global.** Memory volume statistics. |
+| POST | `/v1/sync` | **Agent-global.** Force a sync/reindex pass. |
+| GET | `/v1/probes/embedding` | **Agent-global.** Probe the configured embedding path end-to-end. |
+| GET | `/v1/probes/vector` | **Agent-global.** Probe that Atlas Vector Search is reachable and returning results. |
+
+## Example: add and search
+
+From the root `README.md`:
+
+```bash
+curl -s http://127.0.0.1:3847/health
+
+curl -s http://127.0.0.1:3847/v1/add \
+  -H "content-type: application/json" \
+  -H "authorization: Bearer local-dev-secret" \
+  -d '{"content":"The user prefers TypeScript and concise release notes.","sessionId":"demo-user"}'
+
+curl -s http://127.0.0.1:3847/v1/search \
+  -H "content-type: application/json" \
+  -H "authorization: Bearer local-dev-secret" \
+  -d '{"query":"What does the user prefer?","sessionKey":"demo-user","maxResults":5}'
+```
+
+`/v1/add` responds:
+
+```json
+{ "ok": true, "eventId": "...", "chunkCreated": true }
+```
+
+`/v1/search` responds:
+
+```json
+{ "results": [ /* scored memory hits */ ] }
+```
+
+Semantic search returns `{"results":[]}` until `VOYAGE_API_KEY` is configured — embeddings are required to match stored memories by meaning.
+
+## Error envelope
+
+Every error response, from validation failures through unhandled exceptions, uses one shape (`apps/api/src/lib/errors.ts`):
+
+```json
+{ "error": { "code": "VALIDATION_ERROR", "message": "content is required" } }
+```
+
+Common codes: `VALIDATION_ERROR` (400), `UNAUTHORIZED` / `AUTH_NOT_CONFIGURED` (401), `FORBIDDEN` (403), `NOT_FOUND` (404), `IDEMPOTENCY_CONFLICT` / `SELF_EDIT_REJECTED` (422), `RATE_LIMITED` (429), `PAYLOAD_TOO_LARGE` (413), `SERVICE_UNAVAILABLE` (503, MongoDB unreachable), and a generic `INTERNAL` (500) for anything unexpected — unexpected errors never leak raw driver messages, hostnames, or stack traces to the client; those go to the server log keyed by the request id that the message references.
+
+See [Routes and middleware](../apps/api/routes-and-middleware.md) for how the router composes this behavior, and [Security](../security.md) for the auth, rate-limit, and body-size mechanics that sit in front of every route.

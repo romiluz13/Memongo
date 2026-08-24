@@ -1,51 +1,17 @@
-# Fun Facts
+# Fun facts
 
-*Data collected on 2026-08-03.*
+## One author, four months, 188,000 lines
 
-## 1. The god module is one-seventh of all the TypeScript
+Memongo's entire history — 219 commits, roughly 188,323 lines of TypeScript/TSX, 429 `.ts` files — was written by a single contributor (Rom Iluz) between 2026-05-06 and 2026-08-24, about four months. That's an average of close to 47,000 lines of TypeScript per month from one person. Commit messages throughout carry agent-workflow markers — `scope-1:`/`scope-4:` checkpoint tags, `Task 0.5`/`Task 1.9` identifiers, `B1`–`B15` builder-queue batches (see [Lore](lore.md)) — which points to a heavily AI-agent-assisted build process rather than unusually fast solo typing. The repository doesn't state this explicitly anywhere, so treat it as what the commit pattern suggests, not a documented fact.
 
-`packages/memory-engine/src/mongodb-manager.ts` is **12,449 lines** — the longest file in the repo by a wide margin (the runner-up source file, `mongodb-schema.ts`, is 4,591). That single file is:
+## The biggest file in the repo is a test, not a feature
 
-- ~7.4% of every TypeScript line in the repo
-- ~20% of the engine's source LOC
-- touched by **47 of 202 commits (23%)** — nearly one commit in four pokes the god module
+`apps/api/src/production-readiness.e2e.test.ts` is 3,766 lines long — bigger than the largest production source file, `packages/memory-engine/src/mongodb-graph.ts`, by more than 1,600 lines (see [By the numbers](by-the-numbers.md)). The top three files in the whole repository by line count are all end-to-end test suites (`production-readiness.e2e.test.ts`, `real-e2e-v2.e2e.test.ts`, `e2e-evaluation.e2e.test.ts`), which says something about how much this project leans on end-to-end proof over any single production module.
 
-Its test file, `mongodb-manager.test.ts`, is itself 9,307 lines — bigger than any other source file in the repo except the schema.
+## The consolidation pipeline has a nickname: "Dreamer"
 
-## 2. Only 6 TODOs, and two of them are test bait
+`docs/platform/PLATFORM-README.md` refers to the offline memory-consolidation agent — the background job that merges, promotes, or invalidates memories in `packages/memory-engine/src/mongodb-consolidator.ts` — by the internal name "Consolidation agent (Dreamer)." It runs behind `POST /v1/consolidate` and is one of the codebase's few pieces of internal codenaming to survive into the shipped documentation.
 
-The entire repo contains just **6 TODO/FIXME lines across 4 files** (source only, build output excluded) — remarkably clean for 85K+ lines of shipping code. And even those 6 are deliberate:
+## A written rule for which sentences the team is allowed to say
 
-- 3 live in `mongodb-capability-registry.ts`, where gated features must declare a *tracked* TODO reference to be re-enabled — TODOs as a managed registry, not litter.
-- 1 is the consolidator's regex that *detects* "TODO:" and "FIXME:" inside memory content it extracts.
-- 2 are in tests feeding strings like `"TODO: fix the login bug by Friday"` to that regex as fixtures.
-
-## 3. The 2-line published package
-
-The npm package `@memongo/memory` (directory `packages/memongo-memory`) is literally this, in full:
-
-```ts
-export * from "@memongo/memory-bridge"
-export * from "@memongo/memory-engine"
-```
-
-Two lines, zero exported declarations of its own, average file size: 2 LOC. It exists purely so consumers can install one name and get the bridge plus the engine.
-
-## 4. The tests outweigh the code they test
-
-Inside `@memongo/memory-engine`, test code beats source code on both axes:
-
-| | Files | LOC |
-|---|---|---|
-| Source | 118 | 60,673 |
-| Tests | 125 | 73,138 |
-
-That's a **1.2 : 1 test-to-source ratio** — 12,465 more lines of test than of shipping code. Repo-wide the ratio is 0.97 : 1 (82,813 test vs 85,591 source), with 147 test files against 197 source files.
-
-## 5. The name is a portmanteau
-
-**Memongo = Memory + MongoDB.** The project is MongoDB-native long-term AI memory — no external vector database, no sidecar search service — and the name just says it.
-
-## Bonus: the biggest file in the repo isn't code
-
-`benchmarks/data/longmemeval_s_cleaned.json` is **1,101,877 lines** — about 87% of all lines in the repository on disk. It's the real LongMemEval benchmark dataset, fetched and checked in so the release-gate benchmarks run against verified data rather than synthetic stand-ins. One data file outweighs all 168K lines of TypeScript six times over.
+`CONTEXT.md` and the [glossary](overview/glossary.md) define two formally separate claim types: the **substrate claim** ("Memongo's architecture is better because MongoDB is its substrate," provable only by self-facts about MongoDB or Memongo's own code) and the **score claim** ("Memongo is the best memory framework," earned only by beating competitors on LongMemEval under identical methodology). The two are deliberately kept independent — a strong self-fact can't be used to prop up the score claim, and a good benchmark number can't be used to prop up the substrate claim. It's an unusually formal, almost legal-style constraint on marketing language for a project this size.

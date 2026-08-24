@@ -1,125 +1,123 @@
-# HTTP API App (`@memongo/api`)
+# API
 
-The Memongo HTTP API is a private Hono application in `apps/api/` that exposes the memory engine over REST. It is the network boundary of the platform: the [MCP server](../mcp/index.md), the [web console](../web/index.md), the [client SDK](../../packages/client.md), and any external agent all reach memory through this server. In-process it delegates everything to the [memory bridge](../../packages/memory-bridge.md) (`@memongo/memory-bridge`), never to the engine directly.
+Active contributors: Rom Iluz
 
-Key facts (from `apps/api/package.json`):
+`apps/api` is the Hono HTTP server that fronts Memongo's memory engine. In a standard deployment it is the only process that opens a MongoDB connection: everything else (the web console, the MCP server, the client SDK, AI SDK tools) talks to MongoDB indirectly by calling this app over HTTP. See [Architecture](../../overview/architecture.md) for how it fits into the four-layer system (surfaces -> facade -> engine -> MongoDB) and [Memory bridge](../../packages/memory-bridge.md) for the facade it calls into.
 
-- Runtime entry: `apps/api/src/server.ts` via `node --import tsx` (`bun run start`, `bun run dev` with `--watch`).
-- Dependencies: `hono` ^4.12, `@hono/node-server` ^1.19, `@memongo/memory-bridge`, `@memongo/lib`, `zod` ^3.25.
-- Production build: `tsc` to `dist/`, run with plain Node (no tsx) — see `apps/api/Dockerfile`.
-- Default bind: `127.0.0.1:3847` (`MEMONGO_API_HOST` / `MEMONGO_API_PORT` in `apps/api/src/server.ts`).
+This page covers the app's internal shape: directory layout, the request pipeline, and where to make changes. For the wire contract (endpoints, request/response bodies) see [API](../../api/index.md). For auth, CORS, and rate-limiting design rationale, see [Security](../../security.md). For the scope/tenant model enforced by scoped API keys, see [Multi-tenancy and scopes](../../features/multi-tenancy-and-scopes.md). For how the app is containerized and deployed, see [Deployment](../../deployment.md).
 
-## How the server starts
+Route registration, middleware detail, and the OpenAPI document assembly are covered in [Routes and middleware](routes-and-middleware.md).
 
-`apps/api/src/server.ts` runs a strict boot sequence before it binds the port:
+## Directory layout
 
-1. **Validate MongoDB config** — `validateBootEnv()` (`apps/api/src/lib/boot-env.ts`) resolves config through the bridge's `buildMemongoConfig` (env first, then `~/.memongo/memongo.json`). If no URI is resolvable it prints the engine's canonical message and `process.exit(1)` — the server never boots "healthy" while misconfigured.
-2. **Log the CORS policy** — `resolveCorsPolicy()` reports whether origins come from `MEMONGO_CORS_ORIGINS` or the dev defaults, so operators can tell which mode is in effect.
-3. **Probe search capabilities** — `probeBootCapabilities()` (`apps/api/src/lib/capabilities.ts`) calls `memongoBridgeCapabilities` and logs a lane table (hybrid / vector / keyword / text). This also warms the cached engine manager so the first real request is fast. A probe failure degrades the table instead of crashing boot.
-4. **Strict vector mode** — when `MEMONGO_REQUIRE_VECTOR=1`, `enforceRequiredVector()` refuses to boot (exit 1) if the vector lane is unavailable, rather than silently degrading every query to `$text`.
-5. **Build the app and serve** — `createApp()` from `apps/api/src/app.ts` constructs the Hono app; `@hono/node-server` binds it.
-6. **Register graceful shutdown** — `registerGracefulShutdown()` (in `apps/api/src/app.ts`) listens for SIGTERM/SIGINT, stops accepting connections, closes the bridge (flushing the access tracker and Mongo clients), then exits 0 — or exits 1 if the 15-second timeout elapses first, so it never blocks a container runtime's kill window.
-
-```mermaid
-flowchart TD
-    A[server.ts] --> B{validateBootEnv<br/>Mongo URI resolvable?}
-    B -- no --> X[exit 1]
-    B -- yes --> C[Log CORS policy]
-    C --> D[probeBootCapabilities<br/>log lane table]
-    D --> E{MEMONGO_REQUIRE_VECTOR<br/>and vector unavailable?}
-    E -- yes --> X
-    E -- no --> F[createApp: Hono]
-    F --> G[serve on HOST:PORT]
-    G --> H[registerGracefulShutdown<br/>SIGTERM/SIGINT]
+```
+apps/api/
+  src/
+    app.ts                  Hono app factory: auth, CORS, rate limit, body limit, health/ready, graceful shutdown
+    server.ts               process entry point: boot validation, capability probe, serve(), signal handlers
+    scope-identity.ts        shared scope/agentId/scopeRef resolution (auth and routes read identity identically)
+    version.ts               MEMONGO_API_VERSION, must match root package.json
+    openapi-spec.ts           assembles the OpenAPI document from the path fragments below
+    openapi-schemas.ts        shared OpenAPI schema fragments (scope enum, idempotency, TTL wording)
+    openapi-paths-*.ts        one file per route family's OpenAPI path definitions
+    routes/
+      v1.ts                   router entry point: body pre-parse middleware, registers each route family
+      v1-helpers.ts           shared request-body readers, validation-error mapping, limits
+      v1-search-routes.ts      search, search-kb, recall-conversation, import, search-detailed
+      v1-context-routes.ts     hydrate-active-slate, discovery-projection, context-bundle, read-file
+      v1-write-routes.ts       add, write-event(s), extract, write-structured, write-procedure
+      v1-lifecycle-routes.ts   lifecycle get/update/delete/history, procedure outcome, memory feedback
+      v1-status-routes.ts      profile, state, status, stats, sync, embedding/vector probes
+      v1-admin-routes.ts       relevance explain/report, access trends/summaries, traces, jobs
+      v1-maintenance-routes.ts chain-trace, novelty-scan, consolidate, self-edit
+    lib/
+      boot-env.ts             fail-fast check that a MongoDB URI resolves before the port binds
+      capabilities.ts          derives/logs which search lanes (vector/keyword/hybrid/text) are available at boot
+      errors.ts                canonical `{ error: { code, message } }` envelope, dependency-unavailable -> 503 mapping
+      readiness.ts             GET /ready lane checks: mongo ping, vector probe, embedding probe
+      validation.ts            Zod schemas for write-family bodies, KB filters, and free-form metadata
+  Dockerfile                 multi-stage production image (turbo prune + bun build + node runtime)
 ```
 
-## Environment variables
+## Key abstractions
 
-| Variable | Default | Purpose |
-|----------|---------|---------|
-| `MEMONGO_MONGODB_URI` | — (required) | MongoDB connection string; validated at boot (`apps/api/src/lib/boot-env.ts`) |
-| `MEMONGO_MONGODB_DATABASE` | `memongo` | Database name |
-| `MEMONGO_FORCE_MONGODB_URI` | — | Override a file-configured URI (used by memongo-api/CI) |
-| `MEMONGO_API_KEY` | — | Static bearer token for `/v1/*` |
-| `MEMONGO_API_SCOPED_KEYS` | — | JSON array/object of scoped key policies (`agentIds` / `scopes` / `scopeRefs` allow-lists); see [routes and middleware](routes-and-middleware.md) |
-| `MEMONGO_ALLOW_INSECURE_NO_AUTH` | off | Permit unauthenticated `/v1` for trusted local dev (logs a loud warning) |
-| `MEMONGO_CORS_ORIGINS` | dev defaults | Comma-separated explicit origins; `*` is rejected (`parseCorsOrigins` in `apps/api/src/app.ts`) |
-| `MEMONGO_API_RATE_LIMIT` | `600` | Requests per window per identity; `0` disables |
-| `MEMONGO_API_RATE_WINDOW_MS` | `60000` | Rate-limit window |
-| `MEMONGO_API_MAX_BODY_BYTES` | `1000000` | Body cap, enforced before JSON parsing; `0` disables |
-| `MEMONGO_TRUST_PROXY` | off | Trust `X-Forwarded-For` for rate-limit identity |
-| `MEMONGO_REQUIRE_VECTOR` | off | Refuse to boot without vector search (`apps/api/src/lib/capabilities.ts`) |
-| `MEMONGO_API_PORT` | `3847` | Listen port |
-| `MEMONGO_API_HOST` | `127.0.0.1` | Listen host (`0.0.0.0` in Docker) |
+| Concern | File(s) |
+|---|---|
+| App factory, auth, CORS, rate limit, body limit | `apps/api/src/app.ts` |
+| Process entry point, boot checks, graceful shutdown wiring | `apps/api/src/server.ts` |
+| Shared scope/agentId/scopeRef resolution (auth <-> routes) | `apps/api/src/scope-identity.ts` |
+| Route registration and body pre-parse | `apps/api/src/routes/v1.ts` |
+| Route families (8 files) | `apps/api/src/routes/v1-*-routes.ts` |
+| Shared route helpers (readers, limits, idempotency) | `apps/api/src/routes/v1-helpers.ts` |
+| Boot-time MongoDB URI check | `apps/api/src/lib/boot-env.ts` |
+| Search-lane capability detection and logging | `apps/api/src/lib/capabilities.ts` |
+| Error envelope and 503 classification | `apps/api/src/lib/errors.ts` |
+| Liveness/readiness checks | `apps/api/src/lib/readiness.ts` |
+| Zod input validation | `apps/api/src/lib/validation.ts` |
+| OpenAPI document assembly | `apps/api/src/openapi-spec.ts`, `apps/api/src/openapi-schemas.ts`, `apps/api/src/openapi-paths-*.ts` |
+| Release version constant | `apps/api/src/version.ts` |
+| Production container image | `apps/api/Dockerfile` |
 
-Auth is fail-closed: with no `MEMONGO_API_KEY`, no scoped keys, and no insecure override, every `/v1/*` request gets `401 AUTH_NOT_CONFIGURED` (`apps/api/src/app.ts`). Full auth detail is in [routes and middleware](routes-and-middleware.md); the security model as a whole is in [security](../../security.md).
+## How it works: request path
 
-## Health, readiness, and discovery endpoints
-
-Three unauthenticated routes live outside `/v1` (`apps/api/src/app.ts`):
-
-- **`GET /health`** — cheap liveness: `{ ok: true, service: "memongo-api" }`.
-- **`GET /ready`** — deep readiness from `checkReadiness()` (`apps/api/src/lib/readiness.ts`). Three lanes, all required, probed in parallel: `mongo` (live round-trip through the bridge), `vector` (vector-search availability), `embedding` (embedding-provider availability). Returns 200 only when all lanes are up, 503 otherwise. Lane messages are sanitized — URI credentials are redacted (`mongodb://***@`) and messages capped at 300 chars — because the route is infra-facing and unauthenticated.
-- **`GET /openapi.json`** — the full OpenAPI 3.0.3 document; see [openapi](openapi.md).
-
-The Docker `HEALTHCHECK` in `apps/api/Dockerfile` polls `/ready`.
-
-## Scope identity resolution
-
-Tenant identity (`agentId`, `scope`, `scopeRef`, session identifiers) is resolved by `apps/api/src/scope-identity.ts`, which exists to fix the auth-vs-execution divergence class (issue #57): the auth layer and the route layer must derive identity from **the same merged input**, or a request could pass auth under one identity while executing under another.
-
-- `resolveScopeInput(c)` merges query params with the JSON body (body wins), using Hono's cached `c.req.json()` so it is safe to call from both middleware and handlers.
-- `resolveScopeField(input, field)` searches the top-level object plus the nested containers the API accepts (`handle`, `entry`, `memory`, `params`); the first non-empty trimmed string wins, top-level first.
-- `resolveRequestAgentId(c)` is the authoritative agentId used for manager/partition selection.
-- The canonical scope enum is re-exported from `@memongo/lib` (`MEMORY_SCOPE_VALUES`: `session, user, agent, workspace, tenant, global`), so auth policy validation, request resolution, the OpenAPI document, and MCP tool schemas all validate against one array.
-
-## Containerization
-
-`apps/api/Dockerfile` is a three-stage build: `turbo prune --docker @memongo/api` (Node slim) → install and build with Bun → a minimal `node:22-slim` runner running as the `node` user (UID 1001), `EXPOSE 3847`, `MEMONGO_API_HOST=0.0.0.0`, with a `HEALTHCHECK` hitting `/ready`. See [deployment](../../deployment.md) for compose stacks.
-
-## Request pipeline at a glance
+Every `/v1/*` request passes through the same middleware chain before it reaches a route handler. Order matters: request-id assignment happens first so every later rejection can be correlated, rate limiting happens before body parsing so an attacker cannot spend CPU on JSON parsing before being throttled, and the body-size cap runs before any handler reads the body.
 
 ```mermaid
 sequenceDiagram
-    participant C as Client
-    participant H as Hono app (createApp)
-    participant V as /v1 router
-    participant B as Memory bridge
-    C->>H: POST /v1/search
-    H->>H: CORS (/*) -> requestId -> rate limit -> body limit -> auth
-    H->>V: matched route
-    V->>V: pre-parse JSON body once (400 INVALID_JSON on malformed)
-    V->>B: memongoBridgeSearch(resolved identity)
-    B-->>V: results
-    V-->>C: 200 {results} or {error:{code,message}}
+    participant Caller
+    participant App as apps/api/src/app.ts
+    participant V1 as routes/v1.ts
+    participant Route as route family handler
+    participant Bridge as memory-bridge
+
+    Caller->>App: HTTP request
+    App->>App: secureHeaders(), CORS check
+    App->>App: requestId() (on /v1/*)
+    App->>App: rate limiter (per credential or trusted-proxy IP)
+    App->>App: bodyLimit() (default 1 MB, before JSON parsing)
+    App->>App: bearer auth: MEMONGO_API_KEY or a scoped API key policy
+    App->>App: scoped-key checks: route policy, admin-only paths, agent-global paths
+    App-->>Caller: 401/403/429/413 (short-circuit on any failure)
+    App->>V1: next()
+    V1->>V1: parseJsonRequestBody() once, stash on context
+    V1->>Route: dispatch by path
+    Route->>Route: scope-identity.ts resolves agentId/scope/scopeRef; lib/validation.ts validates body
+    Route->>Bridge: memongoBridge*(params)
+    Bridge-->>Route: typed result or thrown error
+    Route-->>Caller: 200 {...} or a mapped error envelope
 ```
 
-## Source map
+Two failure paths bypass this chain deliberately: a deliberate `HTTPException` thrown by Hono internals (e.g. the body-limit middleware) returns its own response via `app.onError`, and anything unexpected falls through to `lib/errors.ts`'s `internalError`, which logs the raw error server-side under the request id and returns a generic `INTERNAL` 500 (or `SERVICE_UNAVAILABLE` 503 for a recognized MongoDB network failure) — raw driver messages, hostnames, and stack traces never reach the client.
+
+`GET /health` (liveness) and `GET /ready` (deep readiness: mongo ping + vector probe + embedding probe, from `apps/api/src/lib/readiness.ts`) sit outside the `/v1/*` auth chain because container orchestrators probe them without an API key. `GET /openapi.json` serves the assembled OpenAPI document unauthenticated as well.
+
+## Integration points
+
+- **Calls into `packages/memory-bridge`**: every route handler's terminal action is a `memongoBridge*` function call (for example `memongoBridgeSearch`, `memongoBridgeAdd`, `memongoBridgeWriteConversationEvent`). The app never imports `packages/memory-engine` directly.
+- **Calls into `packages/lib`**: the canonical scope enum (`MEMORY_SCOPE_VALUES`), the `ApiError` envelope schema, the bearer security scheme, and the route table used for OpenAPI/route conformance checking all come from `packages/lib/src/contract.ts` and friends, re-exported through `apps/api/src/scope-identity.ts` and `apps/api/src/openapi-spec.ts`.
+- **Consumed by**: `packages/client`'s `MemongoClient` (HTTP calls), `apps/mcp` (stdio MCP server that proxies tool calls to `/v1/*`), and `apps/web` (the console, via `MEMONGO_API_URL`). None of these call MongoDB directly — see [Architecture](../../overview/architecture.md).
+- **Contract conformance**: `apps/api/src/contract-conformance.test.ts` fails CI if the hand-written OpenAPI paths and the live router disagree, keeping `apps/api/src/openapi-spec.ts` honest against `apps/api/src/routes/v1.ts`.
+
+## Entry points for modification
+
+- **Add a new `/v1` endpoint**: add the field/route definition to `packages/lib/src/contract.ts` first, then add the handler to the relevant `apps/api/src/routes/v1-*-routes.ts` file (or create a new route family file and register it in `apps/api/src/routes/v1.ts`), then add its OpenAPI path fragment to the matching `apps/api/src/openapi-paths-*.ts` file. The conformance test enforces that all three agree.
+- **Change auth or rate-limit behavior**: `apps/api/src/app.ts` (scoped API key policy parsing, `AGENT_GLOBAL_V1_PATHS`, `ADMIN_ONLY_V1_PATHS`, rate limiter bucket logic).
+- **Change how identity is resolved from a request**: `apps/api/src/scope-identity.ts` — edit here, not in individual routes, so auth and execution cannot diverge (see the issue #57 comments in that file).
+- **Add input validation**: `apps/api/src/lib/validation.ts` (Zod schemas), consumed by the write and search route families.
+- **Change boot behavior**: `apps/api/src/server.ts` and `apps/api/src/lib/boot-env.ts` / `apps/api/src/lib/capabilities.ts`.
+- **Change the container image**: `apps/api/Dockerfile`.
+
+## Key source files
 
 | File | Role |
-|------|------|
-| `apps/api/src/server.ts` | Boot sequence, serve, graceful shutdown wiring |
-| `apps/api/src/app.ts` | `createApp()`: CORS, request ID, rate limit, body limit, auth middleware, health routes |
-| `apps/api/src/routes/v1.ts` | All 45 v1 route handlers |
-| `apps/api/src/openapi-spec.ts` | OpenAPI 3.0.3 document (see [openapi](openapi.md)) |
-| `apps/api/src/scope-identity.ts` | Shared scope/identity resolution (issue #57) |
-| `apps/api/src/lib/errors.ts` | Error envelope, 500/503 classification |
-| `apps/api/src/lib/readiness.ts` | `/ready` three-lane probe |
-| `apps/api/src/lib/boot-env.ts` | Boot-time MongoDB URI validation |
-| `apps/api/src/lib/capabilities.ts` | Search-lane capability table, strict vector mode |
-| `apps/api/src/lib/validation.ts` | zod boundary schemas, `InvalidJsonError` |
-| `apps/api/src/contract-conformance.test.ts` | CI gate: router vs OpenAPI vs contract table |
-| `apps/api/Dockerfile` | Production image |
-
-## Related pages
-
-- [Routes and middleware](routes-and-middleware.md) — route catalog and middleware details
-- [OpenAPI spec](openapi.md) — spec generation and contract conformance
-- [API endpoint reference](../../api/index.md) — per-endpoint request/response reference
-- [Client SDK](../../packages/client.md) — HTTP client that calls this API
-- [Memory bridge](../../packages/memory-bridge.md) — in-process facade the API delegates to
-- [Security](../../security.md) — auth model, SSRF, secrets handling
-- [Deployment](../../deployment.md) — Docker and compose deployment
-
----
-Active contributors: Rom Iluz (19 commits touching `apps/api/`).
+|---|---|
+| `apps/api/src/app.ts` | Hono app factory, auth, CORS, rate limiting, body limit, health/ready, graceful shutdown |
+| `apps/api/src/server.ts` | Process entry point: boot validation, capability probe, `serve()`, signal handlers |
+| `apps/api/src/scope-identity.ts` | Shared scope/agentId/scopeRef resolution used by both auth and routes |
+| `apps/api/src/routes/v1.ts` | Router entry point and body pre-parse middleware |
+| `apps/api/src/lib/errors.ts` | Canonical error envelope and dependency-unavailable classification |
+| `apps/api/src/lib/readiness.ts` | `/ready` lane checks (mongo, vector, embedding) |
+| `apps/api/src/lib/validation.ts` | Zod schemas for write/search bodies and metadata |
+| `apps/api/src/openapi-spec.ts` | Assembles the OpenAPI document and enforces contract conformance |
+| `apps/api/src/version.ts` | `MEMONGO_API_VERSION` constant |
+| `apps/api/Dockerfile` | Production multi-stage image |

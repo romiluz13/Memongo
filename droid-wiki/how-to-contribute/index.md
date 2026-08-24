@@ -1,53 +1,76 @@
 # How to contribute
 
-Memongo is a focused memory product. The contribution rules exist to keep the supported surface clean: everything in this section traces to `CONTRIBUTING.md` and `docs/agents/`.
+Memongo is maintained by one person (`romiluz13`). There is no review queue with multiple maintainers rotating through it, no on-call, and no SLA on issue responses — read `CONTRIBUTING.md`'s "Maintainer map" pointers (`docs/platform/MAINTAINER-MAP.md`, `docs/platform/PACKAGE-STATUS.md`) for the current state of things before assuming a feature has a dedicated owner. External pull requests are still explicitly welcome per `CONTRIBUTING.md` — the solo-maintainer fact just means turnaround time depends on one person's availability, and PRs that don't follow the checklist below take longer to land because they need back-and-forth instead of a quick merge.
 
 ## Picking up work
 
-Issues live in GitHub Issues on `romiluz13/memongo`, driven with the `gh` CLI (`docs/agents/issue-tracker.md`):
+There is no formal "good first issue" triage process. If you want to contribute:
 
-```bash
-gh issue list --state open --label ready-for-agent
-gh issue view <number> --comments
-```
+1. Check open issues in `romiluz13/memongo` on GitHub for something matching your interest.
+2. For anything nontrivial, open an issue first describing the change before writing code — this avoids wasted work if the maintainer has a different direction in mind for that area.
+3. Stay inside the [supported surface](#supported-surface) below unless you've discussed expanding it.
 
-Work is triaged with five canonical labels (`docs/agents/triage-labels.md`):
+## The PR process
 
-| Label | Meaning |
-|-------|---------|
-| `needs-triage` | Maintainer needs to evaluate |
-| `needs-info` | Waiting on reporter |
-| `ready-for-agent` | Fully specified; ready for an AFK agent |
-| `ready-for-human` | Requires human implementation |
-| `wontfix` | Will not be actioned |
+From `CONTRIBUTING.md`:
 
-## The supported surface
-
-Actively shaped as the product (`CONTRIBUTING.md`):
-
-- `apps/api`, `apps/mcp`, `apps/web`, `apps/docs`
-- `packages/memory-engine`, `packages/memory-bridge`, `packages/memongo-memory`, `packages/client`, `packages/tools`
-
-`packages/lib` is internal runtime support — published only because public packages depend on it. Historical/experimental material should not expand into product scope without an ownership decision.
-
-## PR process
-
-1. Fork and clone; branch from `main` (`git checkout -b my-fix`).
-2. Follow the [local workflow](development-workflow.md) — all gates must pass *before* opening the PR.
-3. Commit with a short, action-oriented message (e.g. `engine: fix graph edge dedup`).
-4. Open the PR against `romiluz13/memongo:main` and fill in the PR template.
-5. **One logical change per PR** — it keeps review fast.
+1. Fork the repo and clone your fork.
+2. Branch from `main`: `git checkout -b my-fix`.
+3. Make your change and run the full local workflow (see [Development workflow](development-workflow.md)) before opening a PR.
+4. Commit with a short, action-oriented message scoped to a package or area, e.g. `engine: fix graph edge dedup` (see [Patterns and conventions](patterns-and-conventions.md#commit-style) for the full commit convention).
+5. Push and open a PR against `romiluz13/memongo:main`.
+6. Fill in the PR template. **One logical change per PR** — bundling an unrelated refactor with a fix slows review down and makes it harder to revert independently.
+7. A maintainer reviews and either merges or asks for changes. Address feedback with **new commits, not force-pushes** — this keeps the review thread's diff history intact so earlier comments still point at the right lines.
 
 ## Review expectations
 
-- A maintainer reviews; address feedback with **new commits, not force-pushes** (`CONTRIBUTING.md`).
-- PRs that break tests or type-checking will not be merged — the CI quality job (typecheck → lint → build → publishability → test) and the e2e tier-A gate must both pass (`.github/workflows/ci.yml`).
-- Documentation changes follow the docs split: public story in `README.md`, `apps/docs`, `docs/platform`; research under `docs/research`; never teach deprecated aliases as the primary API shape.
+Because there is a single reviewer, expect review turnaround to vary. A PR that fails CI (see [Development workflow](development-workflow.md)) will not be looked at until it's green — fix build, lint, or test failures before requesting review, not after.
 
-## In this section
+## Definition of done
 
-- [Development workflow](development-workflow.md) — branch → code → test → PR → merge, Turborepo tasks
-- [Testing](testing.md) — Vitest setup, e2e tiers, test helpers, mock patterns
-- [Debugging](debugging.md) — logs, health/readiness, probes, common errors
-- [Tooling](tooling.md) — Turborepo, Biome, type checking, CI, benchmarks
-- [Patterns and conventions](patterns-and-conventions.md) — coding style and quality gates
+`CONTRIBUTING.md` states plainly: **PRs that break tests or type-checking will not be merged.** Before opening a PR, run:
+
+```bash
+bun install
+bun run lint
+bun run check-types
+bun run build
+bun run test
+bun run check-publishability
+```
+
+All five must pass locally — this is the same sequence CI runs (see [Development workflow](development-workflow.md)). `bun run check-publishability` (`scripts/check-publishability.ts`) is not optional busywork: it validates package metadata, reproducible builds, tarball contents, and version consistency across every publishable package, and a change that breaks packaging invisibly to `bun run build` will still fail here.
+
+Changes touching the live API or memory behavior should additionally be checked against the release docs referenced from `CONTRIBUTING.md`:
+
+- `docs/platform/PRODUCTION-READY.md`
+- `docs/platform/validation-pack.md`
+- `docs/platform/publish.md`
+
+## Supported surface
+
+`CONTRIBUTING.md` draws a hard line around what counts as the product. These are actively shaped and reviewed as first-class:
+
+| Path | Role |
+|---|---|
+| `apps/api` | HTTP API server |
+| `apps/mcp` | MCP server |
+| `apps/web` | Web console |
+| `apps/docs` | Public documentation site |
+| `packages/memory-engine` | Core MongoDB memory engine |
+| `packages/memory-bridge` | Stable facade over the engine |
+| `packages/memongo-memory` | Published re-export package (`@memongo/memory`) |
+| `packages/client` | HTTP client SDK |
+| `packages/tools` | AI SDK tool helpers |
+
+`packages/lib` is different: it is **internal-only but still published**, because the packages above depend on it at runtime. Treat it as implementation detail, not a public API to design around — see `scripts/check-publishability.ts`'s `supportedSurface: false` marker on it.
+
+Anything outside this list — historical, experimental, or comparison material under `docs/migration`, `docs/research`, `docs/experiments`, or `docs/plans` — is explicitly out of scope for "product" changes. Per `CONTRIBUTING.md`, this material should not be expanded into first-class product scope without a prior ownership decision, and prefer deleting dead surfaces over carrying them as implied commitments.
+
+## Related pages
+
+- [Development workflow](development-workflow.md) — the branch/build/test/CI cycle in detail.
+- [Testing](testing.md) — unit, e2e, and contract-conformance conventions.
+- [Tooling](tooling.md) — the build system and `scripts/` directory.
+- [Patterns and conventions](patterns-and-conventions.md) — error handling, retries, logging, and commit style.
+- [Debugging](debugging.md) — diagnosing failures locally.

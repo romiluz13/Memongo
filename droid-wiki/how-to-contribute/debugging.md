@@ -1,62 +1,51 @@
 # Debugging
 
-Where to look when Memongo misbehaves, from cheapest signal to deepest.
+Active contributors: Rom Iluz
 
-## Health, readiness, and status endpoints
+## Turn on debug logging
 
-| Endpoint | Auth | Tells you |
-|----------|------|-----------|
-| `GET /health` | none | Process is up: `{ ok: true, service: "memongo-api" }` — liveness only |
-| `GET /ready` | none | Deep readiness: 200 only when **all** required lanes (mongo, vector, embedding) are up; 503 otherwise. Payload is per-lane and sanitized so it cannot leak secrets (`apps/api/src/lib/readiness.ts`) |
-| `GET /v1/status` | bearer | Manager status |
-| `GET /v1/status/detailed` | bearer | Per-subsystem detail |
-| `GET /v1/stats` | bearer | Memory counts |
-| `GET /v1/probes/embedding` | bearer | Can the embedding provider actually embed? |
-| `GET /v1/probes/vector` | bearer | Is the vector index present and queryable? |
+The API's logger (`packages/lib/src/logger.ts`) resolves its minimum level from environment variables at call time:
 
-Debug flow: `/health` (is it up?) → `/ready` (which lane is down?) → `/v1/probes/*` (is it Mongo or the provider?) → `/v1/status/detailed`.
-
-## Logs
-
-- Engine and API log through `createSubsystemLogger` (`packages/lib/src/logger.ts`); every line carries a subsystem prefix like `memory:mongodb:planner`, `memory:mongodb:capabilities`, or `memory:backend-config` — grep by subsystem to isolate a lane.
-- Verbosity: `MEMONGO_LOG_LEVEL`, `MEMONGO_DEBUG`, `MEMONGO_DEBUG_EMBEDDINGS`.
-- **Boot logs to read first:** the CORS policy line, the retrieval-lane capability table, and any `MEMONGO_REQUIRE_VECTOR` enforcement (`apps/api/src/server.ts`). The capability table shows which lanes (hybrid/vector/keyword/text) this deployment can actually serve *before* the first request.
-- Logs are redacted through `packages/lib/src/redact.ts`; if you see `abcdef***wxyz`, that is the redactor, not corruption.
-
-## Common errors
-
-| Symptom | Meaning | Fix |
-|---------|---------|-----|
-| `401 AUTH_NOT_CONFIGURED` | No `MEMONGO_API_KEY` or scoped keys set | Set one, or `MEMONGO_ALLOW_INSECURE_NO_AUTH=1` for trusted local dev |
-| `401 UNAUTHORIZED` | Bearer didn't match any configured credential | Check the key; comparison is constant-time so it is never a timing flake |
-| `403 FORBIDDEN` (scoped key) | Policy rejected the request: missing/disallowed `agentId`/`scope`/`scopeRef`, admin-only route, or agent-global route with a scope-constrained key | Align the request identity with the key policy (`apps/api/src/app.ts`) |
-| `400 INVALID_JSON` | Body failed to parse (non-empty) | Fix the payload; empty bodies are fine |
-| `413 PAYLOAD_TOO_LARGE` | Over `MEMONGO_API_MAX_BODY_BYTES` (default 1 MB) | Split the batch (`/v1/write-events` caps at 500 events) or raise the limit |
-| `429 RATE_LIMITED` | Over `MEMONGO_API_RATE_LIMIT` (default 600/60s) | Back off using `Retry-After`; raise the limit or disable with `0` for local dev |
-| Boot exit: "missing MongoDB configuration" | `validateBootEnv` failed before binding the port | Set `MEMONGO_MONGODB_URI` |
-| Boot exit under `MEMONGO_REQUIRE_VECTOR=1` | Vector lane unavailable or capability probe failed | Check `mongot` is healthy (`docker compose ps`), indexes reached READY |
-| `SsrFBlockedError` | Outbound fetch hit a private/blocked host | Expected for metadata IPs and RFC-1918; opt in via `allowPrivateNetwork` policy only for legitimate private endpoints (`packages/lib/src/ssrf.ts`) |
-| `Missing API key for provider "…"` | Provider key not in env | Set `<PROVIDER>_API_KEY` or `MEMONGO_<PROVIDER>_API_KEY` (`packages/lib/src/auth.ts`) |
-| Search returns `$text`-only results | Vector/search indexes not READY | `/v1/probes/vector`; check `MEMONGO_STRICT_SEARCH_INDEX_READY` and index readiness timeouts |
-
-## Container-level checks
+- `MEMONGO_LOG_LEVEL=debug` (or `trace`) — explicit level, checked first.
+- `MEMONGO_DEBUG=1` or `DEBUG=1` — shortcut that forces `debug` if `MEMONGO_LOG_LEVEL` is unset.
+- Default is `info`.
 
 ```bash
-docker compose -f docker/docker-compose.yml ps          # mongod + mongot health
-docker logs memongo-preview                             # mongot/index build output
-curl -s localhost:3847/ready | jq                       # per-lane readiness
+MEMONGO_LOG_LEVEL=debug bun run dev
+# or
+MEMONGO_DEBUG=1 bun run dev
 ```
 
-The MongoDB image's own healthcheck (`/usr/local/bin/runner healthcheck`) verifies **both** mongod and mongot — a "healthy" container means search is up, not just the database.
+Each log line is `HH:MM:SS.mmm [subsystem] level: message {meta}`, written to stdout/stderr via `console.*`. There's no file transport or third-party logging library — `createSubsystemLogger()` in `packages/lib/src/logger.ts` is the whole implementation, so raising the level is enough to see everything a subsystem emits.
 
-## Test-level debugging
+## Reading the error envelope
 
-- E2E suites share one MongoDB deployment; run a single file with `bunx vitest run src/<file>.e2e.test.ts --no-file-parallelism` from `packages/memory-engine`.
-- If tests *skip* rather than fail, suspect a blown hook budget — Vitest skips a file's tests when its `beforeAll` exceeds the timeout (`packages/memory-engine/vitest.config.ts` explains the budgets).
-- Every error response carries a `requestId` (Hono `requestId` middleware is first on `/v1`), so client-side failures correlate to server logs.
+Every API error is `{ error: { code: string, message: string } }` (`apps/api/src/lib/errors.ts`, `ApiErrorBody`). Codes observed across `apps/api/src` (grep for `code: "` in `apps/api/src/app.ts`, `apps/api/src/routes/v1.ts`, and the route files):
+
+| Code | HTTP status | When it fires |
+|---|---|---|
+| `UNAUTHORIZED` | 401 | Bearer token doesn't match the configured API key or any scoped policy. |
+| `FORBIDDEN` | 403 | A scoped API key hit a route, scope, or agent-global path its policy doesn't allow. |
+| `AUTH_NOT_CONFIGURED` | 401 | No `MEMONGO_API_KEY` and no scoped policies are set, and insecure-no-auth mode isn't enabled — `apps/api/src/app.ts:666`. |
+| `RATE_LIMITED` | 429 | Per-key/IP rate limiter tripped (`apps/api/src/app.ts:147`). |
+| `PAYLOAD_TOO_LARGE` | 413 | Request body exceeds `MEMONGO_API_MAX_BODY_BYTES` (`apps/api/src/app.ts:584`). |
+| `INVALID_JSON` | 400 | Body parsing failed — malformed JSON on a non-empty body (`apps/api/src/routes/v1.ts:34`). |
+| `VALIDATION_ERROR` | 400 | Route-level input validation failed (missing/invalid field); the most common code, thrown per-route across `apps/api/src/routes/*`. |
+| `IDEMPOTENCY_CONFLICT` | 409/other | A request reused an idempotency key with a different payload. |
+| `SERVICE_UNAVAILABLE` | 503 | A MongoDB network/selection error was caught and classified as a retriable dependency failure (`apps/api/src/lib/errors.ts`, `isDependencyUnavailableError`). |
+| generic 500 (route-supplied code) | 500 | Anything else — `internalError()` in `apps/api/src/lib/errors.ts` logs the full error (name, message, stack, request id) server-side and returns only the code plus the request id to the client. |
+
+`internalError()` deliberately never leaks driver messages, hostnames, or stack traces to the client — it logs them under `requestId` and returns `internal server error (request id: ...)`. To see the real cause of a 500, grep the API's stdout for that request id.
+
+## Common local-dev failure modes
+
+- **MongoDB not running, or `MEMONGO_MONGODB_URI` wrong.** `/ready` returns 503 with `lanes.mongo.ok: false` and a sanitized connection error (credentials stripped by `apps/api/src/lib/readiness.ts`). Start the stack with `cd docker && docker compose up` and confirm the URI points at it.
+- **`MEMONGO_API_KEY` not set.** Every `/v1/*` request returns 401 `AUTH_NOT_CONFIGURED` unless `MEMONGO_ALLOW_INSECURE_NO_AUTH` is explicitly enabled for trusted local dev (`apps/api/src/app.ts`). Set `MEMONGO_API_KEY` and send `Authorization: Bearer <key>`.
+- **Semantic search returns `{"results":[]}`.** `VOYAGE_API_KEY` isn't set, or it's a direct Voyage key (`pa-...`) instead of a MongoDB **Atlas Model API key** (`al-...` prefix). Auto-embedding runs inside `mongot` against the Atlas Model API, not a direct Voyage call, so only the `al-` key works locally — see the warning in `README.md`.
+- **A deployment seems stuck / half-up.** Check `/health` first — it's a cheap liveness check (`{ ok: true, service: "memongo-api" }`, no dependency calls) that only confirms the process is alive. Then check `/ready`, which runs three required lanes in parallel (`mongo`, `vector`, `embedding`, see `apps/api/src/lib/readiness.ts`) and returns 503 until all three pass. A 200 `/health` with a 503 `/ready` means the process is up but a dependency (MongoDB, vector search, or the embedding provider) isn't — read `lanes.<name>.message` for the sanitized cause.
 
 ## Related pages
 
 - [Testing](testing.md)
-- [Configuration](../reference/configuration.md) — every knob mentioned above
-- [REST API](../api/index.md)
+- [Patterns and conventions](patterns-and-conventions.md)
+- [Architecture](../overview/architecture.md)

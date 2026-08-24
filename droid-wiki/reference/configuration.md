@@ -1,103 +1,141 @@
 # Configuration
 
-Memongo is configured almost entirely through environment variables. Engine behavior is resolved into a typed `ResolvedMongoDBConfig` in `packages/memory-engine/src/backend-config.ts` (~803 LOC), which applies defaults over the user-facing `MemongoConfig` / `MemoryMongoDBConfig` shapes in `packages/lib/src/types.memory.ts`.
+Memongo resolves settings from environment variables and an optional `~/.memongo/memongo.json` config file. Env vars generally take precedence over the file; see [Precedence](#precedence) below. For deployment context see `docs/platform/self-host.md` and `droid-wiki/overview/architecture.md`.
 
-## API server
+## MongoDB connection
 
-Read by `apps/api/src/app.ts` and `apps/api/src/server.ts`.
+| Variable | Default | Purpose |
+|---|---|---|
+| `MEMONGO_MONGODB_URI` | none (required) | MongoDB connection string. Required unless `memory.mongodb.uri` is set in the config file. |
+| `MEMONGO_FORCE_MONGODB_URI` | unset | Overrides every other URI source at every config layer (env, config file). Used by the API/CI to pin a URI regardless of what a config file specifies. |
+| `MEMONGO_MONGODB_DATABASE` | `memongo` | Database name inside MongoDB. |
+| `MEMONGO_MONGODB_COLLECTION_PREFIX` | `memongo_` | Shared physical collection prefix; per-agent isolation stays logical (agentId leads every document/index). Set explicitly to opt into per-agent physical separation. |
+| `MEMONGO_MONGODB_MAX_POOL_SIZE` | `10` | Driver connection pool max size. |
+| `MEMONGO_MONGODB_MIN_POOL_SIZE` | `2` | Driver connection pool min size. |
+| `MEMONGO_MONGODB_MAX_CONNECTING` | driver default | Max concurrent connection-establishment operations. |
+| `MEMONGO_MONGODB_MAX_IDLE_TIME_MS` | driver default | Max idle time before a pooled connection is closed. |
+| `MEMONGO_MONGODB_NETWORK_FAMILY` | driver default | Force IPv4 (`4`) or IPv6 (`6`) resolution. |
+| `MEMONGO_MONGODB_SOCKET_TIMEOUT_MS` | driver default | Socket timeout for MongoDB operations. |
+| `MEMONGO_MONGODB_SERVER_SELECTION_TIMEOUT_MS` | falls back to connect timeout, `10000` | Server selection timeout. |
+| `MEMONGO_MONGODB_CONNECT_TIMEOUT_MS` | `10000` | Initial connection timeout. |
+| `MEMONGO_MONGODB_HEARTBEAT_FREQUENCY_MS` | driver default | SDAM heartbeat frequency. |
+| `MEMONGO_MONGODB_SERVER_MONITORING_MODE` | driver default | `auto`, `stream`, or `poll`. |
+| `MEMONGO_MONGODB_WAIT_QUEUE_TIMEOUT_MS` | driver default | Max wait time for a pooled connection. |
+| `MEMONGO_NUM_CANDIDATES` | `500` | Default vector search `numCandidates` (hard-capped at MongoDB's max of `10000`). |
 
-| Variable | Default | Meaning |
-|----------|---------|---------|
-| `MEMONGO_API_KEY` | — | Bearer token for `/v1`. Unset + no scoped keys ⇒ 401 `AUTH_NOT_CONFIGURED` |
-| `MEMONGO_API_SCOPED_KEYS` | — | JSON array/object of scoped key policies (`agentIds`, `scopes`, `scopeRefs`) |
-| `MEMONGO_ALLOW_INSECURE_NO_AUTH` | off | Opt out of auth (trusted local dev only; logs a warning) |
-| `MEMONGO_API_HOST` / `MEMONGO_API_PORT` | `127.0.0.1` / `3847` | Bind address |
-| `MEMONGO_CORS_ORIGINS` | dev defaults (`localhost:3040`) | Explicit origins only; wildcard is a boot error |
-| `MEMONGO_API_RATE_LIMIT` | `600` | Requests per window per identity (`0` disables) |
-| `MEMONGO_API_RATE_WINDOW_MS` | `60000` | Rate-limit window |
-| `MEMONGO_API_MAX_BODY_BYTES` | `1000000` | Body cap, enforced before JSON parse (`0` disables) |
-| `MEMONGO_TRUST_PROXY` | off | Trust `X-Forwarded-For` for rate-limit identity |
-| `MEMONGO_REQUIRE_VECTOR` | off | Strict mode: boot exits 1 if the vector lane is unavailable |
-| `MEMONGO_AGENT_ID` | `main` | Default agent partition |
+## HTTP API (`apps/api`)
 
-## MongoDB connection and engine
+| Variable | Default | Purpose |
+|---|---|---|
+| `MEMONGO_API_HOST` | `127.0.0.1` | Bind host. |
+| `MEMONGO_API_PORT` | `3847` | Bind port. |
+| `MEMONGO_API_KEY` | none | Admin bearer token for `/v1/*` routes. Required in any untrusted network. |
+| `MEMONGO_API_SCOPED_KEYS` | unset | JSON array (or object) of scoped API key policies (`token`, `agentIds`, `scopes`, `scopeRefs`), each constrained to a concrete value. Fail-closed: invalid JSON or an unconstrained policy prevents the API from starting. See `apps/api/src/app.ts`. |
+| `MEMONGO_ALLOW_INSECURE_NO_AUTH` | `false` | Runs `/v1/*` unauthenticated when no `MEMONGO_API_KEY`/scoped keys are set. Logs a warning once per process. Local development only. |
+| `MEMONGO_CORS_ORIGINS` | dev defaults (`http://127.0.0.1:3040`, `http://localhost:3040`) | Comma-separated explicit origin allow-list. Wildcard `*` is rejected. |
+| `MEMONGO_API_RATE_LIMIT` | `600` | Requests per window per identity; `0` disables rate limiting. |
+| `MEMONGO_API_RATE_WINDOW_MS` | `60000` | Rate-limit fixed window size. |
+| `MEMONGO_TRUST_PROXY` | `false` | When true, unauthenticated rate-limit buckets key on `X-Forwarded-For` instead of one shared anonymous bucket. Only enable behind a trusted proxy. |
+| `MEMONGO_API_MAX_BODY_BYTES` | `1000000` | Max request body size before JSON parsing; `0` disables the cap. |
 
-Resolved in `packages/memory-engine/src/backend-config.ts`.
+## Memory defaults
 
-| Variable | Meaning |
-|----------|---------|
-| `MEMONGO_MONGODB_URI` | Connection string (required) |
-| `MEMONGO_FORCE_MONGODB_URI` | Override applied last (tests/tooling) |
-| `MEMONGO_MONGODB_DATABASE` | Database name (default `memongo`) |
-| `MEMONGO_MONGODB_COLLECTION_PREFIX` | Per-agent collection prefix; empty selects shared collections with `agentId` discriminator |
-| `MEMONGO_MONGODB_FUSION_METHOD` | `scoreFusion` (default) \| `rankFusion` \| `js-merge` |
-| `MEMONGO_QUERY_EMBEDDING_MODEL` | Compatible Voyage 4 query model (default `voyage-4-large`) |
-| `MEMONGO_MONGODB_RECALL_PROFILE` | `latency` \| `balanced` \| `proof` |
-| `MEMONGO_NUM_CANDIDATES` | Vector-search `numCandidates` |
-| `MEMONGO_MONGODB_MAX_POOL_SIZE` / `MIN_POOL_SIZE` / `MAX_CONNECTING` | Driver pool tuning |
-| `MEMONGO_MONGODB_MAX_IDLE_TIME_MS` / `SOCKET_TIMEOUT_MS` / `CONNECT_TIMEOUT_MS` / `SERVER_SELECTION_TIMEOUT_MS` / `WAIT_QUEUE_TIMEOUT_MS` / `HEARTBEAT_FREQUENCY_MS` | Driver timeouts |
-| `MEMONGO_MONGODB_NETWORK_FAMILY` | `4` or `6` |
-| `MEMONGO_MONGODB_SERVER_MONITORING_MODE` | `auto` \| `stream` \| `poll` |
-| `MEMONGO_MONGODB_TRANSIENT_WRITE_RETRY_ATTEMPTS` / `MIN_DELAY_MS` / `MAX_DELAY_MS` | Transient write retry policy |
-| `MEMONGO_SKIP_OPTIONAL_SEARCH_INDEXES` | Skip non-critical search index creation |
-| `MEMONGO_STRICT_SEARCH_INDEX_READY` | Fail when search indexes never reach READY |
-| `MEMONGO_SEARCH_INDEX_READINESS_POLL_MS` / `TIMEOUT_MS` | Index-readiness polling |
-| `MEMONGO_SEARCH_MAX_TIME_MS` | Server-side per-search time cap |
-| `MEMONGO_SEARCH_DEFAULT_SCOPE` | Default scope for searches |
-| `MEMONGO_VECTOR_INDEXING_METHOD` / `MEMONGO_VECTOR_STORED_SOURCE` | Vector index shape overrides |
-| `MEMONGO_MANAGER_CACHE_MAX` / `IDLE_TTL_MS` / `SWEEP_MS` | Per-agent manager cache bounds |
-| `MEMONGO_JOB_SWEEP_MS` / `MEMONGO_JOB_WORKER_CONCURRENCY` | Job-queue sweep interval and worker count |
-| `MEMONGO_EVIDENCE_MIRROR_MODE` / `MEMONGO_EVIDENCE_SETTLE_MS` | Optional `memory_evidence` mirror collection |
+| Variable | Default | Purpose |
+|---|---|---|
+| `MEMONGO_AGENT_ID` | `main` | Default memory isolation key (agent identity). |
+| `MEMONGO_DEFAULT_SCOPE` | `agent` | Default scope applied to both reads and writes when a request omits `scope`. Wins over the legacy `MEMONGO_SEARCH_DEFAULT_SCOPE`. |
+| `MEMONGO_SEARCH_DEFAULT_SCOPE` | `agent` | Legacy read-only default-scope alias; deprecated in favor of `MEMONGO_DEFAULT_SCOPE`. |
+| `MEMONGO_MONGODB_RECALL_PROFILE` | `balanced` | `latency`, `balanced`, or `proof`. |
+| `MEMONGO_MONGODB_FUSION_METHOD` | `scoreFusion` | `scoreFusion`, `rankFusion`, or `js-merge`, with capability fallback. |
+| `MEMONGO_QUERY_EMBEDDING_MODEL` | `voyage-4-large` | Read-path query embedding model (`voyage-4-large`, `voyage-4`, or `voyage-4-lite`; all share one embedding space). |
+| `MEMONGO_CONVERSATION_EVIDENCE_MODE` | `parallel` | `parallel`, `serial`, or `disabled` — controls whether conversation evidence retrieval overlaps primary retrieval. |
+| `MEMONGO_RERANKING_ENABLED` | `true` | Enable/disable the Voyage rerank stage. |
+| `MEMONGO_RERANK_MIN_SCORE` | `0.01` | Minimum score threshold applied post-rerank. |
 
-## MCP server
+## Logging
 
-Read by `apps/mcp/src/server.ts` and `apps/mcp/src/http-transport.ts`.
+| Variable | Default | Purpose |
+|---|---|---|
+| `MEMONGO_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, or `error`. |
 
-| Variable | Default | Meaning |
-|----------|---------|---------|
-| `MEMONGO_API_URL` / `MEMONGO_API_KEY` | — | Where the MemongoClient points |
-| `MEMONGO_MCP_TRANSPORT` | `stdio` | `stdio` or `http` |
-| `MEMONGO_MCP_HTTP_HOST` / `MEMONGO_MCP_HTTP_PORT` | `127.0.0.1` / `3110` | HTTP transport bind |
-| `MEMONGO_MCP_ADMIN` | off | Enable admin/benchmark tools |
-| `MEMONGO_MCP_ALIASES` | off | Enable semantic alias tools |
+## Embedding and rerank providers (Voyage AI)
 
-## Providers, enrichment, reranking
+| Variable | Default | Purpose |
+|---|---|---|
+| `VOYAGE_API_KEY` | none | Atlas Model API key (`al-...` prefix) for MongoDB auto-embed and rerank. Generic fallback for the specific sub-keys below. |
+| `VOYAGE_API_INDEXING_KEY` | none | Overrides `VOYAGE_API_KEY` for index-time embedding calls. |
+| `VOYAGE_API_QUERY_KEY` | none | Overrides `VOYAGE_API_KEY` for query-time embedding calls. |
+| `VOYAGE_RERANK_API_KEY` | none | Overrides `VOYAGE_API_KEY` for rerank calls. |
 
-| Variable | Meaning |
-|----------|---------|
-| `<PROVIDER>_API_KEY` / `MEMONGO_<PROVIDER>_API_KEY` | Provider keys (OpenAI, Anthropic, Google/Gemini, Voyage, Mistral, Groq, DeepSeek, Together, Fireworks, Perplexity, Cohere, xAI) — resolution in `packages/lib/src/auth.ts` |
-| `MEMONGO_ENRICHMENT_PROVIDER` / `BASE_URL` / `API_KEY` / `MODEL` / `CONCURRENCY` / `AUTH_STYLE` / `TOKEN_PARAM` | LLM enrichment endpoint |
-| `MEMONGO_ENRICHMENT_ALLOW_PRIVATE_NETWORK` | SSRF opt-in for private enrichment endpoints |
-| `MEMONGO_LLM_ENRICHMENT_MODE` / `STRICT` / `MAX_RETRIES` / `MAX_TOKENS` / `TIMEOUT_MS` | Enrichment behavior |
-| `MEMONGO_RERANKING_ENABLED` / `MEMONGO_RERANK_MIN_SCORE` / `MEMONGO_RERANK_STRICT` | Voyage cross-encoder reranking |
-| `MEMONGO_EXPORT_SIGNING_KEY` | Signing key for export artifacts |
+See `droid-wiki/systems/embeddings-and-providers.md` for how these keys flow through the search pipeline.
 
-## Config file and resolution
+## LLM enrichment (optional, OpenAI-compatible or Anthropic)
 
-`MemongoConfig` (`packages/lib/src/types.memory.ts`) is the typed in-repo config shape: `backend`, `citations`, per-source toggles (`reference`/`conversation`/`structured`), and the full `mongodb` block (pool, TTL, KB chunking, episodes, graph, query rewriting, reranking, cache, relevance telemetry). Agent-level overrides come from an `agents` map resolved in `packages/memory-engine/src/agent-config.ts` (`agents.list[].id`, `agents.defaults.workspace`); per-agent workspace dirs default to `~/.memongo/agents/<id>`.
+Two independent credential sets exist: `MEMONGO_ENRICHMENT_*` (background memory enrichment) and `MEMONGO_LLM_*` (general LLM calls, for example graph entity extraction with `method: "llm"`).
 
-## Capability detection and version gating
+| Variable | Default | Purpose |
+|---|---|---|
+| `MEMONGO_ENRICHMENT_API_KEY` | none | API key for the enrichment endpoint. |
+| `MEMONGO_ENRICHMENT_BASE_URL` | `https://api.openai.com/v1` | OpenAI-compatible or Anthropic endpoint. |
+| `MEMONGO_ENRICHMENT_MODEL` | `gpt-4o-mini` | Model used for enrichment when enabled. |
+| `MEMONGO_ENRICHMENT_AUTH_STYLE` | `authorization-bearer` | `authorization-bearer`, `api-key`, or `x-api-key`, for gateways needing a provider-specific header. |
+| `MEMONGO_ENRICHMENT_TOKEN_PARAM` | `max_tokens` | Set to `max_completion_tokens` for gateways requiring the newer completion token naming. |
+| `MEMONGO_LLM_API_KEY` | none | API key for general LLM calls. |
+| `MEMONGO_LLM_BASE_URL` | `https://api.openai.com/v1` | Endpoint for general LLM calls. |
+| `MEMONGO_LLM_MODEL` | `gpt-4o-mini` | Model for general LLM calls. |
+| `MEMONGO_LLM_AUTH_STYLE` | `authorization-bearer` | Same options as `MEMONGO_ENRICHMENT_AUTH_STYLE`. |
+| `MEMONGO_LLM_TOKEN_PARAM` | `max_tokens` | Same options as `MEMONGO_ENRICHMENT_TOKEN_PARAM`. |
 
-Memongo adopts MongoDB features aggressively and gates them on server version so older deployments degrade instead of breaking.
+## Workspace and config file paths
 
-- **`mongodb-capability-registry.ts`** is the single registry where every gated feature declares its `minServerVersion` (or the external fix that unblocks it), a re-enable condition, and a tracked TODO. `detectCapabilities` evaluates every gate against the server's `buildInfo` `versionArray`; `serverVersionAtLeast` returns false for unknown versions — an unknown version never lights a gate up. Features with no trustworthy static gate start optimistic and record a server rejection via `recordCapabilityProbe`.
-- **Example gates:** `$jsonSchema` `validationAction: "errorAndLog"` requires MongoDB ≥ 8.1 (`packages/memory-engine/src/mongodb-schema.ts:1518`); `storedSource`, quantization, and `returnStoredSource` all moved through this registry.
-- **Boot surface:** the API logs the retrieval-lane capability table once at boot and fails fast under `MEMONGO_REQUIRE_VECTOR=1` (`apps/api/src/server.ts`).
+| Variable | Default | Purpose |
+|---|---|---|
+| `MEMONGO_WORKSPACE_DIR` | `~/.memongo/workspace` | Standalone workspace directory (see `packages/memory-bridge/src/memory-config.ts`). |
+| `MEMONGO_CONFIG_PATH` | `~/.memongo/memongo.json` | Path to the optional JSON config file. |
 
-## Testing and tooling variables
+## Docker community stack
 
-| Variable | Meaning |
-|----------|---------|
-| `MONGODB_TEST_URI` / `MEMONGO_TEST_MONGODB_URI` | E2E target; `mongodb+srv://` scales vitest timeouts up for Atlas |
-| `MEMONGO_E2E_TIER` | E2E tier selection (see `turbo.json`) |
-| `MEMONGO_BENCHMARK_*` | Benchmark harness knobs (dataset root/SHA, measurement passes, settle timeouts, strict gate, ingest batch size, …) |
-| `MEMONGO_LOG_LEVEL` / `MEMONGO_DEBUG` / `MEMONGO_DEBUG_EMBEDDINGS` | Logging verbosity |
-| `MEMONGO_BUILD_ID` / `MEMONGO_BUILD_COMMIT` / `MEMONGO_BUILD_LABEL` | Build provenance stamped into status output |
-| `MEMONGO_WEB_STATIC_EXPORT` | Next.js static export for `apps/web` |
-| `MEMONGO_PI_*` | Pi-extension behavior (`AUTO_CAPTURE`, `SESSION_INJECTION`, `MEMORY_SCOPE`) |
+Used by `docker/mongodb/docker-compose.mongodb.yml` (replicaset/fullstack tiers). Both are required with no defaults — compose fails closed when unset.
 
-## Related pages
+| Variable | Default | Purpose |
+|---|---|---|
+| `ADMIN_PASSWORD` | none (required) | MongoDB admin password for the community stack. |
+| `MONGOT_PASSWORD` | none (required) | `mongot` search process password. |
 
-- [Security](../security.md) — auth-related variables in context
-- [Deployment](../deployment.md) — container environment
-- [Dependencies](dependencies.md)
+The simpler one-command stack at `docker/docker-compose.yml` (`mongodb/mongodb-atlas-local:preview`) only reads `VOYAGE_API_KEY` and an optional `MONGODB_PORT` (default `27017`); see `droid-wiki/reference/dependencies.md` for the image details.
+
+## The `~/.memongo/memongo.json` config file
+
+README.md documents an optional file config path as an alternative to environment variables. Its shape mirrors `MemongoConfig` (`packages/lib/src/types.ts`) and `MemoryConfig` (`packages/lib/src/types.memory.ts`):
+
+```json
+{
+  "memory": {
+    "backend": "mongodb",
+    "citations": "auto",
+    "mongodb": {
+      "uri": "mongodb://127.0.0.1:27017/?directConnection=true",
+      "database": "memongo",
+      "recallProfile": "balanced",
+      "fusionMethod": "scoreFusion"
+    }
+  },
+  "agents": {
+    "defaults": { "workspace": "~/.memongo/agents/main" }
+  }
+}
+```
+
+Every field under `memory.mongodb` in the config file has a matching resolver in `packages/memory-engine/src/backend-config.ts` (`resolveMemoryBackendConfig`), including nested `kb`, `episodes`, `graph`, `reranking`, `cache`, and `relevance` blocks not exposed as top-level env vars.
+
+## Precedence
+
+Precedence is not uniform across every field — it is decided per-field in `packages/memory-bridge/src/memory-config.ts` and `packages/memory-engine/src/backend-config.ts`:
+
+1. **`MEMONGO_FORCE_MONGODB_URI`** always wins for the MongoDB URI, overriding both the plain env var and the config file, at every layer (`applyMongoDbForceUriOverride`). This exists so operators (for example the API process or CI) can pin a URI regardless of what a config file specifies.
+2. For most `memory.mongodb.*` settings resolved in the engine (`backend-config.ts`), a dedicated env var (for example `MEMONGO_MONGODB_MAX_POOL_SIZE`) takes precedence over the config-file value, which takes precedence over a hardcoded default.
+3. For the MongoDB URI specifically at the engine layer, an explicit `memory.mongodb.uri` in the config file is treated as intentional and beats the plain `MEMONGO_MONGODB_URI` env fallback (the opposite order from the bridge layer, which is env-first). See the comments in `packages/memory-engine/src/backend-config.ts` (`configuredUri || process.env.MEMONGO_MONGODB_URI`) versus `packages/memory-bridge/src/memory-config.ts` (`uriFromEnv || uriFromFile`).
+4. `MEMONGO_MONGODB_DATABASE` and `MEMONGO_MONGODB_COLLECTION_PREFIX` env vars always beat their config-file counterparts at both layers.
+5. Enum-like settings (`fusionMethod`, `recallProfile`, `queryEmbeddingModel`) fall back silently to the config-file value or a hardcoded default when the env var is unset or invalid, except `queryEmbeddingModel` and `MEMONGO_DEFAULT_SCOPE`, which throw on an invalid explicit value instead of silently falling back.
+
+Related pages: `droid-wiki/overview/architecture.md`, `droid-wiki/overview/getting-started.md`, `docs/platform/self-host.md`.

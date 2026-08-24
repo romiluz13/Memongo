@@ -1,69 +1,119 @@
-# Background: design decisions and rationale
+# Background
 
-Why Memongo looks the way it does. Each section is a bet the project made, with the evidence that anchors it.
+Active contributors: Rom Iluz
 
-## Why MongoDB-only
+Memongo's design record is small and deliberate: one architecture decision
+record governs how the project is allowed to talk about itself, and one
+benchmark run stands as the evidence base (and the cautionary tale) behind
+the release-gate discipline described in
+`docs/platform/PRODUCTION-READY.md` and summarized in
+[Deployment](../deployment.md).
 
-Memongo bets on a **single store** instead of the polyglot stack most memory frameworks assemble (vector DB + search engine + graph DB + relational store). One MongoDB deployment provides every primitive the system needs:
+## The substrate claim / score claim split
 
-- **Vector search** — `$vectorSearch` stages, with server-side auto-embedding through mongot + Voyage (`docker/docker-compose.yml`)
-- **Full-text search** — Atlas Search indexes (`packages/memory-engine/src/mongodb-schema.ts`)
-- **Graph traversal** — `$graphLookup` for entity/relation walks (`packages/memory-engine/src/mongodb-graph.ts`)
-- **Hybrid fusion** — `$rankFusion`/`$scoreFusion`, with a client-side RRF fallback (`js-merge`)
-- **Transactions, TTL, change streams, `$jsonSchema` validators, durable job leases** — all native
+`docs/adr/0001-substrate-claim-and-score-claim-are-separate.md` is the
+project's only ADR, and it is load-bearing for everything the project is
+allowed to publicly claim.
 
-MongoDB Automated Embedding is currently an upstream Preview feature and is not
-for production use. This limitation does not apply to MongoDB Search, Vector
-Search, or the collection substrate themselves.
+Memongo makes two separate claims, and they may never share evidence:
 
-The claim discipline around this bet is written down in `docs/adr/0001-substrate-claim-and-score-claim-are-separate.md`: the **substrate claim** ("the architecture is better because MongoDB is the substrate") may only be proven by *self-facts* — verifiable properties of MongoDB and of Memongo's own code — never by competitor comparisons, which rot. The ADR also records the honest limits: `$graphLookup` is claimable for traversal only (typed edges come from an LLM, `mongodb-graph.ts`), and native `$scoreFusion` is the measured preferred path while `js-merge` remains a fallback and diagnostic option. `docs/research/memory-framework-comparison.md` positions Memongo against Mem0, Graphiti, Zep, Cognee, LangMem, and Letta as maintainer research context.
+- The **substrate claim** ("this architecture is better because MongoDB is
+  the substrate") is proven only by **self-facts** — verifiable properties
+  of MongoDB and of Memongo's own code.
+- The **score claim** ("best memory framework") is proven only by beating
+  competitors on LongMemEval under identical methodology, per spec #64.
 
-The single-store bet costs something: plain `mongo:7` cannot serve the stack, so local development requires the `mongodb-atlas-local` preview container (see [Deployment](../deployment.md)). The project accepts that coupling deliberately and manages it with version-gated capability detection (`packages/memory-engine/src/mongodb-capability-registry.ts`).
+The ADR's reasoning for splitting them: 74.6% of LongMemEval failures are
+reading failures — reasoning over evidence already retrieved — which the
+retrieval substrate has no hand in. Binding the substrate claim to the score
+would make MongoDB answerable for a reader-side problem, and a disappointing
+score would discredit an architecture that had nothing to do with it.
 
-## Why bitemporal
+Two options were considered and rejected:
 
-Every memory type carries `validAt` (when the assertion became true) and `invalidAt` (when it stopped being true; null = still valid). Retrieval at time `T` returns only memories satisfying `validAt <= T AND (invalidAt IS NULL OR invalidAt > T)` (`packages/memory-engine/src/mongodb-bitemporal.ts`).
+- **Bind them** — only claim "because of MongoDB" where a MongoDB-native
+  capability earned benchmark points. Rejected as too strict: most native
+  capabilities are operational wins, not accuracy wins, so this would leave
+  almost nothing sayable.
+- **Substrate claim as headline** — rejected because it reverses spec #64's
+  priority (the score claim leads).
 
-The reasoning: agent memory is full of facts that *stop* being true — a preference changes, a decision is superseded, a dependency version moves. A store that only knows "now" forces deletion (losing history) or contradiction (returning stale facts as current). Bitemporal validity lets Memongo answer both "what is true" and "what was true when the agent made that decision," and lets corrections land as new validity windows instead of destructive edits. Pre-migration rows without `validAt` are treated as valid so retrieval stays monotonic across the rollout (`mongodb-bitemporal.ts:29`). Vector-search prefilters cannot express BSON null, so canonical writes *omit* `invalidAt` for open windows (`mongodb-bitemporal.ts:63`).
+The substrate claim is scoped to self-facts only, never claims about
+competitors, because competitor-facts rot the moment someone ships a
+feature. The project cites one specific prior burn: a claim that
+"competitors need five bolt-on datastores" was believed provable and turned
+out to be false.
 
-## Why 8-lane retrieval
+Concrete examples the ADR gives for what counts as a legitimate self-fact
+claim:
 
-Search is not one query against one index. `RetrievalPath` (`packages/memory-engine/src/mongodb-retrieval-planner.ts:14`) enumerates eight lanes:
+- `autoEmbed` is claimable, but only with "Public Preview" stated alongside
+  it — it is an upstream MongoDB preview feature, not a shipped guarantee.
+- `$graphLookup` is claimable for **traversal only**. Typed edges come from
+  an LLM (`packages/memory-engine/src/mongodb-graph.ts:1842`), not from
+  MongoDB itself, and degrade to `mentioned_with@0.2` co-occurrence edges
+  when no enrichment provider is configured. The database executes the
+  traversal; it does not manufacture the semantics of the edges.
+- Native `$scoreFusion` is the preferred hybrid-fusion path after a
+  controlled August 2026 comparison against `$rankFusion` and the
+  client-side `js-merge` fallback. This is explicitly called out as a
+  **Memongo benchmark decision**, not a universal claim that `$scoreFusion`
+  improves every workload — `js-merge` remains a supported fallback and
+  diagnostic path, not a deprecated one.
+- MongoDB's own published reranking figures (+23.84% over full-text,
+  +10.82% over vector) are MongoDB's numbers on MongoDB's benchmark and are
+  never cited as Memongo's.
 
-```
-active-critical · structured · raw-window · graph · hybrid · kb · episodic · procedural
-```
+See [Glossary](../overview/glossary.md) for the full claims/lane vocabulary this ADR
+established (substrate claim, score claim, self-fact, competitor-fact) —
+it is not repeated here.
 
-The project's glossary (`CONTEXT.md`) fixes the rule: **lanes are fused, not chosen between.** Vector similarity finds meaning but misses exact names; full-text catches identifiers but misses paraphrase; graph recovers relationships; episodic and procedural lanes serve time-ordered and how-to memory. A planner classifies intent, assembles an ordered lane set (`PATH_PRIORITY`, `mongodb-retrieval-planner.ts:228`), fuses scores, and attaches trust metadata so the answer can point back to its evidence. Lane-coverage telemetry lets the planner skip *empty* lanes — except a `NEVER_SKIP_LANES` set that always runs (`mongodb-retrieval-planner.ts:1012`), because "empty ≠ error" for lanes that must speak up when they do have something.
+## The benchmark result and why it was still gated
 
-## Why trust scoring
+The root `README.md` Benchmarks section and `docs/benchmarks/BENCHMARKS.md`
+report a complete 500-question LongMemEval retrieval run:
 
-Retrieval results carry a trust object so consumers can inspect *why* a memory ranked, instead of trusting a bare score. The trust input spans seven dimensions (`packages/memory-engine/src/mongodb-trust.ts:214-219`):
+| Metric | Result |
+|---|---:|
+| Official session RecallAny@10 | 98.57% |
+| Official session RecallAll@10 | 94.75% |
+| Internal R@5 | 93.15% |
+| Internal R@10 | 97.16% |
+| Internal hit rate | 98.94% |
 
-1. **exactness** — exact-id vs exact-locator vs fuzzy
-2. **freshness** — fresh vs stale, anchored on document timestamps
-3. **contradiction** — whether the memory contradicts others
-4. **scope match** — exact scope vs mismatch (`mongodb-trust.ts:239`)
-5. **provenance** — source-event lineage
-6. **source diversity** — single vs multi
-7. **confidence** — the memory's own confidence, used as a weight multiplier (`mongodb-trust.ts:299`)
+The run used MongoDB-native `$scoreFusion`, Voyage 4 Large query embeddings,
+Voyage `rerank-2.5`, and no generative LLM enrichment. These are retrieval
+metrics, not generated-answer accuracy — a deliberate scope limit, since
+Mem0 and Zep publish generated-answer accuracy, Supermemory publishes a
+differently aggregated Recall@15, and Letta's public 74.0% figure is on a
+different benchmark (LoCoMo) entirely. None of those numbers are an
+apples-to-apples comparison with Memongo's retrieval-only result, which is
+why the README states that explicitly rather than juxtaposing the numbers.
 
-The design goal is *operational truth*: health, provenance, and stale/current labeling are first-class outputs, so memory can be inspected rather than trusted blindly.
+Despite a 98.57% headline recall number, the registered release contract
+classified the run as **not publishable**, because its 1,244 ms p95 latency
+exceeded the 1,000 ms gate, and build, cost, and native-operation evidence
+was incomplete. This is the project's clearest lesson in its own discipline:
+a strong accuracy number does not override a failed operational gate, and
+the project's benchmark rules — no question-ID tuning, no hidden fallback,
+retrieval recall and judged answer quality reported separately, no broad
+ecosystem-leadership claim from one benchmark family — are enforced even
+against a result the team would otherwise want to publish.
 
-## Why the Dreamer consolidation
+## The release-gate checklist
 
-Writing is explicit by default (`docs/research/memory-framework-comparison.md`: "Keep explicit-write-only as the default until background consolidation has a separate privacy, provenance, and rollback design"). The **Dreamer** is the offline pipeline that turns accumulated events into durable structured memory without blocking the write path (`packages/memory-engine/src/mongodb-consolidator.ts`):
+`docs/platform/PRODUCTION-READY.md` defines six release-blocking lanes that
+must all be green before npm publish, release tags, or public
+production-ready claims: `repo-foundation`, `api-contract`,
+`package-publishability`, `live-core`, `live-capability`, and `real-agent`.
+The checklist is strict by design and calls out its own limits explicitly:
+passing these gates does not certify hosting SLAs, backups, monitoring, or
+org security review, and a green auto-embed capability lane proves preview
+behavior only — it cannot certify a production release, because MongoDB
+Automated Embedding is itself an upstream preview feature.
 
-- **Phase 0 — Gate:** atomic lease claim + rate limiter; every phase is idempotent, so an extra run is harmless
-- **Phase 1 — Orient:** `$facet` parallel stats (unprocessed count, roles, top scopes)
-- **Phase 2 — Extract + Decide:** 8-category pattern matching + `$vectorSearch` similarity for ADD/NOOP decisions; Phase 2.5 extracts entities; Phase 3.7 quality-filters memories derivable from code/context
-- **Phases 3–4 — Deduction / Induction:** stubs reserved for future LLM reasoning (issue #31)
-- **Phase 5 — Prune + Profile:** near-duplicate merge via `$vectorSearch` at > 0.92 similarity
-
-The bet: memory quality compounds if consolidation is *offline, lease-gated, and idempotent* — never a hidden side effect of a search or write. The LLM-reasoning phases are deliberately left as stubs until their privacy/provenance/rollback design exists.
-
-## Related pages
-
-- [Architecture](../overview/architecture.md)
-- [Cleanup opportunities](../cleanup-opportunities/index.md) — where the current code falls short of these ideals
-- [Data models](../reference/data-models.md)
+The same discipline that produced the "not publishable" benchmark
+classification shows up here: the checklist refuses to let a passing test
+lane stand in for a claim it doesn't actually support (for example,
+treating a preview connection string as proof for replica-set-only features
+it never exercised).

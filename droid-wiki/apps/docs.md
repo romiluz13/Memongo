@@ -1,48 +1,42 @@
-# Docs site (`apps/docs`)
+# Docs site
 
-`@memongo/docs` is the public documentation site, built with [Mintlify](https://mintlify.com) (theme `mint`, MongoDB-green palette `#00684A` / `#00ED64`, `apps/docs/docs.json`). It is a private package with no compile step of its own.
+Active contributors: Rom Iluz
 
-## Key files
-
-- `apps/docs/docs.json` — site config: navigation, tabs, redirects, branding
-- `apps/docs/introduction.mdx` — "What is Memongo?" landing content
-- `apps/docs/quickstart.mdx` — clone → install → start MongoDB → add/search loop
-- `apps/docs/package.json` — scripts (`dev`, `build`, `validate:mintlify`)
+`apps/docs` is the public, product-facing documentation site, built with [Mintlify](https://mintlify.com). It documents Memongo for people integrating the product (agent builders, MCP host authors, operators); this wiki, by contrast, documents the codebase itself for contributors working on Memongo's source. The two are deliberately separate: this wiki links to `apps/docs` pages for product concepts rather than restating them, and `apps/docs` never describes internal module layout.
 
 ## Structure
 
-Navigation is declared entirely in `docs.json` (Mintlify's declarative model). Two tabs:
+`apps/docs/docs.json` is Mintlify's site configuration — theme colors (MongoDB green), logo, navbar, and the navigation tree. It defines two top-level tabs:
 
-**Documentation tab**
+- **Documentation** — Getting Started (introduction, quickstart, and a Concepts group: `concepts/framework.mdx`, `concepts/memory-taxonomy.mdx`, `concepts/memory.mdx`, `concepts/architecture.mdx`) and Guides (a Company Brain group: `guides/company-brain.mdx`, `guides/writeback-policy.mdx`, `guides/adapters.mdx`; an MCP group: `guides/cli-memory.mdx`; a Configuration group: `guides/memory-config.mdx`, `guides/open-source.mdx`).
+- **API Reference** — `api/overview.mdx`, the single page covering the HTTP endpoint surface.
 
-| Anchor | Groups | Pages |
-|--------|--------|-------|
-| Getting Started | Overview | `introduction`, `quickstart` |
-| | Concepts | `concepts/framework`, `concepts/memory-taxonomy`, `concepts/memory`, `concepts/architecture` |
-| Guides | Company Brain | `guides/company-brain`, `guides/writeback-policy`, `guides/adapters` |
-| | MCP | `guides/cli-memory` |
-| | Configuration | `guides/memory-config`, `guides/open-source` |
+`apps/docs/introduction.mdx` frames Memongo as a "MongoDB-native Company Brain memory framework," summarizes the memory taxonomy and runtime shape, and links out to quickstart, concepts, and API pages. `apps/docs/quickstart.mdx` walks through cloning the repo, starting MongoDB, starting the API, and running an add/search loop in both TypeScript and cURL — it mirrors (with product framing) the steps in [Getting started](../overview/getting-started.md).
 
-**API Reference tab**
+## Build and serve
 
-| Anchor | Group | Pages |
-|--------|-------|-------|
-| Endpoints | Memory API | `api/overview` |
+`apps/docs/package.json` scripts:
 
-The root path redirects to `/introduction` (`apps/docs/docs.json` redirects). Supporting assets live in `apps/docs/logo/` and `apps/docs/favicon.png`.
+| Script | Command | Purpose |
+|---|---|---|
+| `dev` | `mintlify dev --port 3003` | Local Mintlify preview server |
+| `build` | `node ../../scripts/check-docs-integrity.mjs` | Validates doc content/link integrity (not a static site build) |
+| `validate:mintlify` | `node ../../scripts/validate-mintlify-build.mjs` | Validates the site against Mintlify's build requirements |
 
-## Scripts
+Mintlify itself hosts and renders the site from `docs.json` plus the `.mdx` files; there is no separate bundler step to produce static HTML in this repo — Mintlify's own hosting/CLI does that.
 
-- `bun run dev` — `mintlify dev --port 3003`
-- `bun run build` — runs `scripts/check-docs-integrity.mjs` (a repo-level integrity check, not a Mintlify build), so broken docs fail the monorepo build through Turborepo
-- `bun run validate:mintlify` — `scripts/validate-mintlify-build.mjs`
+## Relationship to product claims
 
-## Relationship to the repo docs
+`apps/docs/introduction.mdx` also carries Memongo's evaluation posture (LongMemEval retrieval numbers and their scoped, non-comparative framing) — the same posture documented in [Architecture](../overview/architecture.md)'s note on the substrate claim vs. score claim, and in `docs/adr/0001-substrate-claim-and-score-claim-are-separate.md`.
 
-`apps/docs` is the *public product story*; the repo keeps maintainer-facing material elsewhere. `CONTRIBUTING.md` assigns the split: public story in `README.md`, `apps/docs`, and `docs/platform`; research/brainstorm under `docs/research`; ADRs under `docs/adr`.
+## Key source files
 
-## Related pages
-
-- [Apps overview](index.md)
-- [How to contribute](../how-to-contribute/index.md) — documentation rules for contributors
-- [Tooling](../how-to-contribute/tooling.md) — how the docs-integrity check runs in CI
+| File | Role |
+|---|---|
+| `apps/docs/docs.json` | Mintlify site config: theme, navbar, navigation tree |
+| `apps/docs/introduction.mdx` | Landing/overview page for the product docs |
+| `apps/docs/quickstart.mdx` | Product-facing install-and-run walkthrough |
+| `apps/docs/api/overview.mdx` | HTTP API reference page |
+| `apps/docs/concepts/` | Framework, memory taxonomy, memory, and architecture concept pages |
+| `apps/docs/guides/` | Company Brain, writeback policy, adapters, MCP, config, and open-source guides |
+| `apps/docs/package.json` | Scripts for local preview and doc validation |

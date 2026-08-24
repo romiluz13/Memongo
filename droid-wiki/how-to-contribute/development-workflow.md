@@ -1,69 +1,62 @@
 # Development workflow
 
-The branch → code → test → PR → merge cycle, with the Turborepo task graph underneath.
+## The cycle
 
-## Setup
+1. **Branch** from `main`: `git checkout -b my-fix`.
+2. **Code** the change, staying inside one package or app where possible (see [How to contribute](index.md#supported-surface) for the boundary) and following [Patterns and conventions](patterns-and-conventions.md).
+3. **Test locally** — run the workflow below before pushing. Don't rely on CI to catch a broken build; the feedback loop is slower and ties up the shared e2e MongoDB service container.
+4. **Commit** with a short, action-oriented, scoped message (see [Patterns and conventions](patterns-and-conventions.md#commit-style)).
+5. **Open a PR** against `main`. See [How to contribute](index.md#the-pr-process) for the full checklist.
+6. **Address review** with new commits; a maintainer merges once the checklist is green and the change is scoped correctly.
 
-```bash
-git clone https://github.com/romiluz13/memongo.git
-cd memongo
-bun install          # Bun 1.2+, Node 20+
-```
+## Local workflow
 
-Start the local database before doing anything engine-facing:
-
-```bash
-docker compose -f docker/docker-compose.yml up -d   # or ./docker/mongodb/start-preview.sh
-export MEMONGO_MONGODB_URI="mongodb://localhost:27017/?directConnection=true"
-```
-
-## The local gate sequence
-
-`CONTRIBUTING.md` defines the pre-PR workflow — run it in this order and confirm every step passes:
+From `CONTRIBUTING.md` (also documented with setup steps in [Getting started](../overview/getting-started.md)):
 
 ```bash
-bun run lint                  # Biome, errors only
-bun run check-types           # TypeScript strict, whole monorepo
-bun run build                 # Turborepo build
-bun run test                  # Vitest unit tests
-bun run check-publishability  # npm publish readiness
+bun install
+bun run lint
+bun run check-types
+bun run build
+bun run test
+bun run check-publishability
 ```
 
-For API and live-memory verification, the release docs add `docs/platform/PRODUCTION-READY.md`, `docs/platform/validation-pack.md`, and `docs/platform/publish.md`.
+Every one of these is a Turborepo task (`turbo run <task>`, defined in `turbo.json`) except `check-publishability`, which is a standalone script (`scripts/check-publishability.ts`, see [Tooling](tooling.md)).
 
-## Turborepo task graph
+## How Turborepo orders work across the monorepo
 
-Tasks are declared in `turbo.json` and orchestrated with the TUI (`"ui": "tui"`):
+`turbo.json` declares four cacheable tasks with dependency edges:
 
-| Task | Depends on | Notes |
-|------|-----------|-------|
-| `build` | `^build` | Outputs `dist/**`, `.next/**` |
-| `test` | `^build` | Unit tests per package |
-| `test:e2e` | `^build` | Never cached; env: `MONGODB_TEST_URI`, `MEMONGO_TEST_MONGODB_URI`, `VOYAGE_API_KEY`, `MEMONGO_E2E_TIER` |
-| `lint` | `^lint` | |
-| `check-types` | `^build`, `^check-types` | |
-| `dev` | — | Persistent, uncached |
+```json
+{
+	"build":       { "dependsOn": ["^build"] },
+	"test":        { "dependsOn": ["^build"] },
+	"check-types": { "dependsOn": ["^build", "^check-types"] },
+	"lint":        { "dependsOn": ["^lint"] }
+}
+```
 
-`^build` means dependencies build first — e.g. `apps/api` builds only after `@memongo/memory-bridge`, `@memongo/memory-engine`, and `@memongo/lib`. Root scripts (`package.json:17-18`) are thin: `"test": "turbo run test"`, `"test:e2e": "turbo run test:e2e"`.
+The `^` prefix means "this task's dependencies in other workspace packages, not this package's own task." In practice:
 
-To work on one package, filter: `bun run turbo build --filter=@memongo/memory-engine...` (the same pattern the Dockerfile uses).
+- Running `bun run build` at the root builds every package's *dependencies* before the package itself. If `packages/memory-bridge` depends on `packages/memory-engine`, Turborepo builds `memory-engine` first, then `memory-bridge`, in whatever order the dependency graph requires — you never have to sequence this by hand.
+- `test` depends on `^build`, not `^test` — a package's tests run against its dependencies' **built** output, not against their test results. This is why `bun run test` alone (without `bun run build` first) still works: Turborepo builds the dependency chain implicitly before running tests.
+- `check-types` depends on both `^build` and `^check-types` in upstream packages, since type declarations often come from a package's build output (`.d.ts` files in `dist/`), not just its source.
+- `lint` only depends on `^lint`, not `^build` — Biome lints source text and doesn't need built artifacts from other packages.
 
-## Branch and commit cycle
+`dev` is marked `"cache": false, "persistent": true` — it's a long-running process (e.g. `apps/api`'s dev server), not a batch task, so Turborepo never tries to cache or short-circuit it.
 
-1. Branch from `main`: `git checkout -b engine-fix-graph-dedup`.
-2. Make the change with tests colocated (`*.test.ts` next to source).
-3. Run the gate sequence above.
-4. Commit with a concise, action-oriented message, prefixed by area: `engine: …`, `api: …`, `mcp: …`, `client: …`, `docker: …` (see `git log` for the pattern, e.g. `fix: land fix-plan phases P0-P2 across engine, api, mcp, client, docker`).
-5. Group related changes; never bundle unrelated refactors into one PR.
-6. Push, open the PR, iterate with **new commits** (no force-pushes during review).
+Turborepo caches task outputs (see each task's `outputs` array in `turbo.json`, e.g. `dist/**` for `build`) keyed by a hash of inputs. A second `bun run build` with no source changes replays cached output instead of rebuilding — this is why CI and local iteration both stay fast even though the monorepo has 15+ workspace packages.
 
-## Merging
+## What CI gates a PR
 
-Merge happens after maintainer review with green CI (quality job + e2e tier A, `.github/workflows/ci.yml`). Releases are separate: `publish.yml` handles npm publishing, gated by `bun run check-publishability` and the rules in `docs/platform/publish.md`.
+`.github/workflows/ci.yml` runs on every pull request and every push to `main`, as two jobs:
 
-## Related pages
+| Job | What it runs | Needs |
+|---|---|---|
+| `quality` | `bun run check-types`, `bun run lint`, `bun run build`, `bun run check-publishability`, `bun run test` | Nothing beyond `bun install --frozen-lockfile` |
+| `e2e` (tier A) | `bun run --filter @memongo/memory-engine test:e2e:tier-a` | A `mongodb/mongodb-atlas-local:preview` service container, no API keys |
 
-- [Testing](testing.md)
-- [Tooling](tooling.md)
-- [Patterns and conventions](patterns-and-conventions.md)
-- [Debugging](debugging.md)
+Tier A e2e covers the paths that only need a live MongoDB — transactions, indexes, tenant isolation, background jobs — so it can gate every PR without needing secrets in a fork's CI run. Tiers needing a Voyage/LLM key run in `.github/workflows/e2e-nightly.yml` on a schedule, not per-PR — see [Testing](testing.md) for the tier breakdown and [Deployment](../deployment.md) for the full CI/CD and release-publishing picture (the `publish.yml` workflow, versioning, and npm publication are out of scope for a day-to-day contribution and covered there instead).
+
+A PR only needs the `quality` and `e2e` (tier A) jobs green to be mergeable — matching exactly the local workflow above plus tier A e2e, so there should be no surprises between "passes locally" and "passes in CI."

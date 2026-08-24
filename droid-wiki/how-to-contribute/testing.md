@@ -1,74 +1,47 @@
 # Testing
 
-Vitest + V8 coverage, tests colocated with source as `*.test.ts`. The suite is deliberately large — test LOC (~82k) exceeds source LOC (~79k) — because the e2e tier is the release contract.
+## Unit tests
 
-## Layout and commands
+Colocated `*.test.ts` files next to the source they cover, run with Vitest and V8 coverage — see [Patterns and conventions](patterns-and-conventions.md) for the file-organization convention this follows. `bun run test` runs `turbo run test`, which fans out to every package's own `test` script.
 
-| Kind | Naming | Runs against | Command |
-|------|--------|--------------|---------|
-| Unit | `*.test.ts` | mocks / in-process | `bun run test` |
-| E2E | `*.e2e.test.ts` | real MongoDB | `bun run test:e2e` |
-| E2E tier A | curated subset | real MongoDB | `bun run test:e2e:tier-a` (in `packages/memory-engine`) |
+Typical unit test shape: mock the layer below with `vi.mock` / `vi.hoisted` and assert on the boundary's behavior. `apps/api/src/app.test.ts` mocks the entire `@memongo/memory-bridge` surface (every `memongoBridge*` function) so route-level tests exercise HTTP wiring, validation, and error mapping without a real MongoDB connection. Shared request/response payloads for these tests live in fixture modules such as `apps/api/src/__fixtures__/contract-fixtures.ts`, which enumerates the full set of API route paths and alias cases used across the contract-conformance and app-level tests — reuse an existing fixture module before inventing a new payload literal in a test file.
 
-The engine's unit script explicitly excludes e2e files (`vitest run --exclude=src/**/*.e2e.test.ts`), and e2e runs with `--no-file-parallelism` because all suites share one MongoDB deployment (`packages/memory-engine/package.json:35-37`). CI runs tier A on every PR; `e2e-nightly.yml` runs the broader set.
+### Property-based testing with fast-check
 
-## E2E environment
+`fast-check` is a root devDependency (`package.json`). Most usage is plain example-based Vitest, but `packages/memory-engine/src/mongodb-bitemporal.test.ts` uses it for real property tests: `fc.assert(fc.property(...), { seed, numRuns })` generates hundreds of randomized memory/query-time combinations and checks an invariant holds for all of them (e.g. "no retrieval returns a memory where `invalidAt <= queryTime`"), rather than hand-picking example dates. When adding a test for an invariant that should hold across a range of inputs (not just a handful of examples), consider `fc.property` over enumerating cases by hand, and pin a `seed` so a failing run reproduces deterministically. `packages/memory-engine/src/fast-check-smoke.test.ts` is a minimal smoke test confirming the library imports and runs, not a template for real property tests.
 
-- Target database: `MONGODB_TEST_URI` or `MEMONGO_TEST_MONGODB_URI`, defaulting to the local atlas-local container.
-- **Timeout scaling:** `packages/memory-engine/vitest.config.ts` detects a remote Atlas cluster by the `mongodb+srv://` scheme and scales hook/test budgets up (900s/600s remote vs 240s/120s local). This exists because a blown *hook* budget makes Vitest **skip** the file's tests — a remote run once reported 190 skipped tests that read as "green with gaps." The budgets are give-up limits, not expected runtimes.
-- Tier A currently covers: KB reingest, KB isolation, legacy-search isolation, vector index shape, rankFusion scoring, projection repair, temporal validity, and memory jobs (`packages/memory-engine/package.json:37`).
+## Contract-conformance tests
 
-## Test helpers
+A specific pattern worth knowing before touching an API route or MCP tool: `apps/api/src/contract-conformance.test.ts` and `apps/mcp/src/mcp-contract-conformance.test.ts` assert that HTTP routes, the OpenAPI document, and MCP tool schemas all agree with the single source of truth in `packages/lib/src/contract.ts`. These tests exist to catch drift, not to test business logic — see [Patterns and conventions](patterns-and-conventions.md#single-source-of-contract-truth) for why this module exists and what changing a contract field requires.
 
-`packages/memory-engine/src/test-helpers/`:
+## End-to-end tests
 
-| Helper | Purpose |
-|--------|---------|
-| `fetch-mock.ts` | `FetchMock` type + `withFetchPreconnect` wrapper for mocking provider HTTP |
-| `ssrf.ts` | `mockPublicPinnedHostname` — deterministic DNS answers for SSRF-guard tests |
-| `model-auth-mock.ts` | `createModelAuthMockModule` — fake provider auth for `vi.mock("@memongo/lib")` |
-| `preview-env.ts` | Atlas-local preview environment helpers |
-| `memory-eval-fixtures.ts` | Eval fixtures |
+Files named `*.e2e.test.ts` need a real MongoDB connection — they are excluded from the plain `test` task and run through a separate `test:e2e` / `test:e2e:tier-a` script per package. In `packages/memory-engine/package.json`:
 
-## Mock patterns
-
-The canonical unit-test mock, from `packages/memory-engine/src/embeddings-voyage.test.ts`:
-
-```ts
-// The SSRF guard resolves hostnames for real; unit tests must not depend on
-// DNS, so pin a deterministic public address instead.
-vi.mock("node:dns/promises", () => ({
-	lookup: vi.fn(async () => [{ address: "93.184.216.34", family: 4 }]),
-}))
-
-vi.mock("@memongo/lib", async (importOriginal) => {
-	const original = await importOriginal<typeof import("@memongo/lib")>()
-	const { createModelAuthMockModule } = await import(
-		"./test-helpers/model-auth-mock.js"
-	)
-	return { ...original, ...createModelAuthMockModule() }
-})
+```json
+"test:e2e": "vitest run --no-file-parallelism e2e.test.ts",
+"test:e2e:tier-a": "vitest run --no-file-parallelism src/mongodb-kb-reingest.e2e.test.ts src/mongodb-kb-isolation.e2e.test.ts ..."
 ```
 
-Principles this encodes:
+`--no-file-parallelism` is deliberate: e2e suites share one MongoDB deployment and mutate real collections, so running files in parallel would race against each other.
 
-- **Mock at system boundaries** (DNS, `fetch`, auth), never the module under test.
-- **`importOriginal` + spread** so partial mocks keep real behavior elsewhere.
-- **Deterministic network answers** — a public IP, so the SSRF guard's private-IP check still runs for real.
+### Tiers
 
-## API tests
+| Tier | Runs | Trigger | Needs |
+|---|---|---|---|
+| Tier A | A fixed list of `*.e2e.test.ts` files covering transactions, indexes, tenant isolation, background jobs (`packages/memory-engine/package.json`'s `test:e2e:tier-a` script) | Every PR, via `.github/workflows/ci.yml`'s `e2e` job | Only a MongoDB service container — no API keys, so it runs safely on forked PRs |
+| Full / nightly | The complete `test:e2e` suite, including paths needing Voyage auto-embeddings and LLM enrichment | Nightly cron + manual `workflow_dispatch`, via `.github/workflows/e2e-nightly.yml` | `VOYAGE_API_KEY` and `MEMONGO_ENRICHMENT_MODEL` secrets, injected into the MongoDB container itself (not just the test process) because `mongot` proxies auto-embedding calls |
 
-`apps/api/src/app.test.ts` (~4,752 LOC) builds the Hono app in-process and exercises routes, auth, rate limiting, and the error envelope without a server; `apps/api/src/contract-conformance.test.ts` keeps routes conformant with `MEMONGO_API_ROUTES` (`packages/lib/src/contract.ts:144`). Shutdown logic takes injected `process`/`exit` dependencies so tests drive it without exiting (`apps/api/src/app.ts:432`).
+Relevant env vars, declared in `turbo.json`'s `test:e2e` task so Turborepo passes them through: `MONGODB_TEST_URI`, `MEMONGO_TEST_MONGODB_URI`, `VOYAGE_API_KEY`, `MEMONGO_E2E_TIER`.
 
-## Writing a new test
+## Running tests locally
 
-1. Colocate: `foo.ts` → `foo.test.ts`.
-2. Unit-test pure logic with mocked boundaries; anything needing indexes, change streams, or `$vectorSearch` is an e2e test (`*.e2e.test.ts`) and must tolerate the shared deployment.
-3. Never hardcode a hook/test timeout — set it once in the vitest config pattern, or your file re-breaks the tier-A gate.
-4. American English, tabs, double quotes (Biome will enforce).
+```bash
+bun run test                                          # unit tests, all packages
+bun run --filter @memongo/memory-engine test:e2e:tier-a   # tier A e2e, needs local MongoDB only
+bun run --filter @memongo/memory-engine test:e2e          # full e2e, needs VOYAGE_API_KEY too
+```
 
-## Related pages
+Start a local MongoDB per [Getting started](../overview/getting-started.md#start-mongodb) first, then export `MONGODB_TEST_URI` (and `VOYAGE_API_KEY` for the full suite) before running the e2e commands above.
 
-- [Development workflow](development-workflow.md)
-- [Debugging](debugging.md) — probes and health endpoints for live verification
-- [Tooling](tooling.md) — CI gates these tests feed
+See [Debugging](debugging.md) for diagnosing a failing test or a flaky e2e run.

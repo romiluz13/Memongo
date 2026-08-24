@@ -1,150 +1,96 @@
 # Architecture
 
-Memongo is a Turborepo/Bun monorepo with four apps and seven packages. The core memory engine sits at the center, wrapped by a bridge facade, an HTTP API, an MCP server, client SDK, AI SDK tools, and a Pi coding-agent extension.
+Memongo has four layers: product surfaces that talk to callers, a stable facade, a MongoDB-native engine, and MongoDB itself. Every surface eventually calls the same engine through the same facade, so behavior stays consistent whether a caller is an HTTP client, an MCP host, or an AI SDK tool.
 
-## Package dependency graph
+## Layers
 
 ```mermaid
 graph TD
-    LIB["@memongo/lib<br/>shared types + utils"]
-    ENGINE["@memongo/memory-engine<br/>core MongoDB memory"]
-    BRIDGE["@memongo/memory-bridge<br/>stable facade"]
-    MEM["@memongo/memory<br/>re-export package"]
-    CLIENT["@memongo/client<br/>HTTP client SDK"]
-    TOOLS["@memongo/tools<br/>AI SDK wrappers"]
-    PI["@memongo/pi-extension<br/>Pi coding-agent ext"]
-    API["@memongo/api<br/>HTTP API (Hono)"]
-    MCP["@memongo/mcp<br/>MCP server"]
-    WEB["@memongo/web<br/>Next.js console"]
-    DOCS["@memongo/docs<br/>Mintlify docs"]
+    Client["Caller: app, agent, or MCP host"]
+    SDK["packages/client — MemongoClient"]
+    Tools["packages/tools — AI SDK tool helpers"]
+    MCP["apps/mcp — stdio MCP server"]
+    API["apps/api — Hono HTTP server"]
+    Bridge["packages/memory-bridge — stable facade"]
+    Engine["packages/memory-engine — MongoDBMemoryManager"]
+    Mongo["MongoDB — Atlas or Atlas Local Preview\nSearch + Vector Search + collections"]
 
-    LIB --> ENGINE
-    ENGINE --> BRIDGE
-    BRIDGE --> MEM
-    LIB --> CLIENT
-    CLIENT --> TOOLS
-    CLIENT --> PI
-    BRIDGE --> API
-    CLIENT --> MCP
-    CLIENT --> API
+    Client -->|HTTP requests| SDK
+    Client -->|tool calls| Tools
+    Client -->|MCP tool calls| MCP
+    SDK -->|HTTP /v1/*| API
+    Tools -->|HTTP /v1/*| API
+    MCP -->|HTTP /v1/*| API
+    API -->|typed calls| Bridge
+    Bridge -->|manager methods| Engine
+    Engine -->|driver queries, $search, $vectorSearch| Mongo
 ```
 
-## Layering
+- `apps/api` (`apps/api/src/app.ts`) is the only process that talks to MongoDB in a standard deployment. It authenticates requests, enforces rate limits and body-size caps, and maps HTTP paths to typed calls into the bridge.
+- `apps/mcp` (`apps/mcp/src/server.ts`) and `packages/tools` never touch MongoDB directly — they call the HTTP API through `packages/client`'s `MemongoClient`, so the API's auth and validation apply uniformly.
+- `packages/memory-bridge` (`packages/memory-bridge/src/memongo-bridge.ts`) is the seam between the product surface and the engine. It resolves standalone config (`packages/memory-bridge/src/memory-config.ts`) and calls `getMemorySearchManager` to obtain a cached `MongoDBMemoryManager` per agent.
+- `packages/memory-engine` (`packages/memory-engine/src/mongodb-manager.ts`) owns every MongoDB interaction: writes, reads, hybrid search, graph traversal, consolidation, and schema management. It is organized as one `MongoDBMemoryManager` class assembled from focused `mongodb-manager-*.ts` mixins (admin, read, write, search, sync, jobs, relevance, lifecycle, host).
 
-The system has five layers, each with a clear responsibility:
-
-1. **`@memongo/lib`** — shared types (`MemoryScope`, `MemoryScopeValue`), utilities (SSRF guard, redaction, retry, auth, env, errors, logger). No MongoDB dependency. Imported by every other package.
-
-2. **`@memongo/memory-engine`** — the core. 118 source files implementing MongoDB connection management, schema/index definitions, search execution, embeddings (6 providers), graph extraction, episodes, consolidation, knowledge base, benchmark harness, and durable jobs. The central class is `MongoDBMemoryManager` in `packages/memory-engine/src/mongodb-manager.ts` (~12,400 LOC).
-
-3. **`@memongo/memory-bridge`** — a stable facade (`MemongoBridge`) that loads config and delegates to the engine. Used by the API server for in-process access. 1,025 LOC in `packages/memory-bridge/src/memongo-bridge.ts`.
-
-4. **`@memongo/client`** — HTTP client SDK (`MemongoClient`) that calls the API over HTTP. Used by the MCP server, AI SDK tools, and Pi extension. 1,131 LOC of types in `packages/client/src/types.ts`, implementation in `packages/client/src/client.ts`.
-
-5. **Apps** — `@memongo/api` (Hono HTTP server), `@memongo/mcp` (MCP server calling the API via client SDK), `@memongo/web` (Next.js console), `@memongo/docs` (Mintlify documentation site).
-
-## Data flow: write path
+## Request lifecycle: search
 
 ```mermaid
 sequenceDiagram
-    participant Agent as AI Agent
-    participant API as HTTP API
-    participant Bridge as MemongoBridge
-    participant Mgr as Memory Manager
+    participant Caller
+    participant API as apps/api (Hono)
+    participant Bridge as memory-bridge
+    participant Manager as MongoDBMemoryManager
     participant Mongo as MongoDB
 
-    Agent->>API: POST /v1/add {content, sessionId}
-    API->>API: Auth + scope resolution
-    API->>Bridge: add(input)
-    Bridge->>Mgr: addMemory(input)
-    Mgr->>Mgr: Extract entities + relations
-    Mgr->>Mgr: Generate embeddings
-    Mgr->>Mongo: Insert event document
-    Mgr->>Mongo: Project to structured memories
-    Mgr->>Mongo: Update graph (entities, relations, links)
-    Mgr->>Mongo: Enqueue extraction job
-    Mongo-->>Mgr: Write receipts
-    Mgr-->>Bridge: MemoryReadResult
-    Bridge-->>API: Response
-    API-->>Agent: {id, status}
+    Caller->>API: POST /v1/search {query, scope, scopeRef}
+    API->>API: auth, rate limit, body-size check, scope resolution
+    API->>Bridge: memongoBridgeSearch(params)
+    Bridge->>Manager: manager.search(query, options)
+    Manager->>Mongo: $rankFusion / $scoreFusion over vector + text lanes
+    Mongo-->>Manager: ranked documents
+    Manager->>Manager: rerank, trust scoring, novelty/decay adjustments
+    Manager-->>Bridge: MemorySearchResult[]
+    Bridge-->>API: results
+    API-->>Caller: 200 {results}
 ```
 
-## Data flow: retrieval path
+See [Retrieval and search](../systems/retrieval-and-search.md) for how the fusion lanes and reranker work, and [Multi-tenancy and scopes](../features/multi-tenancy-and-scopes.md) for how `scope`/`scopeRef` map onto MongoDB tenant partitioning.
+
+## Write and background enrichment
+
+Writing a conversation event is synchronous and cheap; deriving structured facts, procedures, and graph edges from it happens in a background job queue so the write path stays fast.
 
 ```mermaid
-sequenceDiagram
-    participant Agent as AI Agent
-    participant API as HTTP API
-    participant Mgr as Memory Manager
-    participant Search as Retrieval Planner
-    participant Mongo as MongoDB
+graph LR
+    Write["POST /v1/write-event"] -->|writeEvent| Events["mongodb-events.ts\ncanonical event store"]
+    Events -->|enqueue| Jobs["mongodb-memory-jobs.ts\nMongoDB-backed job queue"]
+    Jobs -->|claim + process| Extract["mongodb-derived-memory.ts\nextraction + promotion"]
+    Extract --> Structured["Structured facts"]
+    Extract --> Procedures["Procedures"]
+    Extract --> Graph["Graph entities/relations"]
+    Jobs -->|periodic| Consolidator["mongodb-consolidator.ts\nDreamer consolidation"]
+```
 
-    Agent->>API: POST /v1/search {query}
-    API->>API: Auth + scope resolution
-    API->>Mgr: search(request)
-    Mgr->>Search: planSearch(request)
-    Search->>Search: Classify intent
-    Search->>Search: Select lanes (up to 8)
-    par Multiple lanes
-        Search->>Mongo: $vectorSearch
-        Search->>Mongo: $search (Atlas Search)
-        Search->>Mongo: $graphLookup
-        Search->>Mongo: Conversation recall
+See [Structured memory and procedures](../systems/structured-memory-and-procedures.md), [Graph, episodes, and entities](../systems/graph-episodes-and-entities.md), and [Consolidation and novelty](../systems/consolidation-and-novelty.md).
+
+## MongoDB as the substrate
+
+Memongo's architecture bet is that a single MongoDB cluster — collections, Atlas Search, Atlas Vector Search, `$rankFusion`/`$scoreFusion`, `$graphLookup`, change streams, and transactions — can carry conversation memory, structured facts, a knowledge base, and a relationship graph without bolting on separate vector, graph, or search databases. `docs/adr/0001-substrate-claim-and-score-claim-are-separate.md` is explicit that this "substrate claim" is proven only by self-facts (verifiable properties of MongoDB and of Memongo's own code), kept separate from the "score claim" (beating competitors on a benchmark). See [Background](../background/index.md).
+
+## Deployment shape
+
+```mermaid
+graph TD
+    subgraph "Local dev"
+        DockerCompose["docker/docker-compose.yml\nmongodb/mongodb-atlas-local:preview"]
     end
-    Search->>Search: RRF / scoreFusion
-    Search->>Search: Post-retrieval scoring
-    Search->>Mongo: Reranker (Voyage CE)
-    Search->>Search: MMR dedup
-    Search->>Search: Trust scoring
-    Search-->>Mgr: SearchResponse
-    Mgr-->>API: Results
-    API-->>Agent: {results, scoreDetails}
+    subgraph "Processes"
+        ApiProc["apps/api (port 3847)"]
+        WebProc["apps/web (port 3040, Cloudflare Workers via OpenNext)"]
+        McpProc["apps/mcp (stdio, spawned by the MCP host)"]
+    end
+    DockerCompose -.->|MEMONGO_MONGODB_URI| ApiProc
+    ApiProc -->|MEMONGO_API_URL| WebProc
+    ApiProc -->|MEMONGO_API_URL| McpProc
 ```
 
-## Memory model
-
-Memongo stores six primary memory types:
-
-| Type | Collection prefix | Description |
-|------|-------------------|-------------|
-| Events | `events` | Raw conversation messages, immutable, time-series |
-| Structured memories | `structured_mem` | Facts, preferences, decisions, procedures with lifecycle state |
-| Episodes | `episodes` | Summarized conversation windows with trigger conditions |
-| Graph entities | `entities` | People, places, concepts with typed relations |
-| Graph relations | `relations` | Typed edges between entities (8 relation types) |
-| Knowledge base | `kb_documents` + `kb_chunks` | Ingested documents, chunked and embedded |
-
-All memory types carry:
-- `agentId` — tenant discriminator
-- Bitemporal fields (`validFrom`, `validTo`, `invalidAt`)
-- Trust metadata (7 dimensions)
-- Provenance (source event IDs, scope, scopeRef)
-
-## Multi-tenancy model
-
-Memongo supports two deployment modes:
-
-- **Single-tenant (default):** each agent gets a collection prefix `memongo_{agentId}_`. Physical isolation.
-- **Multi-tenant (shared):** all agents share `memongo_*` collections with `agentId` as a discriminator field in every index and query filter. One shared `MongoClient`, one set of search indexes.
-
-The shared model is what MongoDB officially recommends for vector search multi-tenancy. Single-tenant is the simpler default for self-hosted single-agent deployments.
-
-## Key source files
-
-| File | Purpose |
-|------|---------|
-| `packages/memory-engine/src/mongodb-manager.ts` | Central memory manager (connection, search, write, jobs, shutdown) |
-| `packages/memory-engine/src/mongodb-schema.ts` | Index definitions, JSON schema validators, collection setup |
-| `packages/memory-engine/src/mongodb-search.ts` | Search execution, hybrid fusion, normalization |
-| `packages/memory-engine/src/mongodb-retrieval-planner.ts` | 8-lane retrieval planning with intent classification |
-| `packages/memory-engine/src/mongodb-consolidator.ts` | 5-phase consolidation ("Dreamer") pipeline |
-| `packages/memory-engine/src/mongodb-graph.ts` | Entity extraction, relation extraction, graph traversal |
-| `packages/memory-engine/src/backend-config.ts` | MongoDB config resolution, embedding mode, capability detection |
-| `packages/memory-bridge/src/memongo-bridge.ts` | Stable facade delegating to the engine |
-| `packages/client/src/client.ts` | HTTP client SDK implementation |
-| `apps/api/src/app.ts` | Hono app setup, auth middleware, CORS, rate limiting |
-| `apps/api/src/routes/v1.ts` | All v1 API route handlers |
-| `apps/mcp/src/server.ts` | MCP server with tool registry |
-| `packages/tools/src/index.ts` | AI SDK tool definitions (zod schemas) |
-| `packages/tools/src/vercel/index.ts` | Vercel AI SDK middleware (auto-inject + capture) |
-| `packages/pi-extension/extensions/index.ts` | Pi coding-agent extension entry |
+`apps/api` and `apps/mcp` are Node processes; `apps/web` builds with Next.js and deploys to Cloudflare Workers via OpenNext (`apps/web/wrangler.jsonc`, `apps/web/open-next.config.ts`). See [Deployment](../deployment.md).

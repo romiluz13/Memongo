@@ -1,188 +1,106 @@
-# API Routes and Middleware
+# Routes and middleware
 
-All v1 routes are defined in `apps/api/src/routes/v1.ts` (45 handlers, ~2,500 LOC) and mounted by `createApp()` in `apps/api/src/app.ts` at `/v1`. Every handler is a thin adapter: it resolves the authorized identity, validates input, calls one `memongoBridge*` function from the [memory bridge](../../packages/memory-bridge.md), and maps failures into the shared error envelope. No route talks to the engine or MongoDB directly.
+Active contributors: Rom Iluz
 
-For the endpoint-by-endpoint request/response reference, see the [API reference](../../api/index.md). This page covers the route catalog by category and the middleware/auth machinery in front of it.
-
-## Route catalog by category
-
-### Search and retrieval
-
-| Route | Bridge call | Purpose |
-|-------|-------------|---------|
-| `POST /v1/search` | `memongoBridgeSearch` | Hybrid memory search (`query` required; deprecated aliases `q`, `maxResults`, `containerTag` accepted) |
-| `POST /v1/search-detailed` | `memongoBridgeSearchDetailed` | Advanced search: CRAG corrective retrieval, MMR diversity, constraint relaxation, multi-source fusion, `searchMode: auto|direct|agentic` |
-| `POST /v1/search-kb` | `memongoBridgeSearchKB` | Knowledge-base search; scoped keys need a concrete `scopeRefs` constraint |
-| `POST /v1/recall-conversation` | `memongoBridgeRecallConversation` | Recall a conversation window by session |
-| `POST /v1/context-bundle` | `memongoBridgeBuildContextBundle` | Assemble a working-context bundle for a task |
-| `POST /v1/hydrate-active-slate` | `memongoBridgeHydrateActiveSlate` | Hydrate the agent's active slate |
-| `POST /v1/discovery-projection` | `memongoBridgeBuildDiscoveryProjection` | Build a discovery projection |
-| `GET /v1/state` | `memongoBridgeGetState` | Current memory state |
-| `POST /v1/profile` | `memongoBridgeProfile` | Agent profile read/update |
-| `POST /v1/read-file` | `memongoBridgeReadFile` | Server-side file read (admin-only for scoped keys) |
-
-### Write
-
-| Route | Bridge call | Purpose |
-|-------|-------------|---------|
-| `POST /v1/add` | `memongoBridgeAdd` | Add a memory from free content |
-| `POST /v1/write-event` | `memongoBridgeWriteConversationEvent` | Write one conversation event |
-| `POST /v1/write-events` | `memongoBridgeWriteConversationEventsBatch` | Bulk event write, capped at 500 items per request (`MAX_WRITE_EVENTS_BATCH`) so one request cannot stage an unbounded `insertMany` |
-| `POST /v1/extract` | `memongoBridgeExtractEvent` | Extract an event from raw text |
-| `POST /v1/write-structured` | `memongoBridgeWriteStructuredMemory` | Write a typed structured memory (zod-validated entry: `type`, `key`, `value` required) |
-| `POST /v1/write-procedure` | `memongoBridgeWriteProcedure` | Write a procedural memory (zod-validated) |
-| `POST /v1/import/conversations` | `memongoBridgeImportConversations` | Bulk conversation import (admin-only for scoped keys) |
-| `POST /v1/memory/feedback` | `memongoBridgeApplyMemoryFeedback` | Apply feedback to a memory |
-| `POST /v1/procedures/outcome` | `memongoBridgeReportProcedureOutcome` | Report a procedure execution outcome |
-| `POST /v1/self-edit` | `memongoBridgeSelfEdit` | Agent self-edit, gated by the injection screen (`SELF_EDIT_REJECTED`) |
-
-### Lifecycle
-
-Lifecycle routes take a full client-supplied stable handle. Because the bridge uses the handle's `agentId`/`scope`/`scopeRef` verbatim to select the manager and partition, `lifecycleHandleIdentityError()` (in `apps/api/src/routes/v1.ts`) requires the handle's tenant coordinates to exactly equal the identity the auth layer validated — failing closed so a scoped key cannot pass auth under a decoy identity while the handle points at another tenant's data (issue #57).
-
-| Route | Bridge call | Purpose |
-|-------|-------------|---------|
-| `POST /v1/lifecycle/get` | `memongoBridgeGetLifecycleItem` | Fetch one item by stable handle |
-| `POST /v1/lifecycle/update` | `memongoBridgeUpdateLifecycleItem` | Patch a structured/procedure item |
-| `POST /v1/lifecycle/delete` | `memongoBridgeDeleteLifecycleItem` | Delete by handle |
-| `POST /v1/lifecycle/history` | `memongoBridgeGetLifecycleHistory` | Bitemporal history for an item (limit capped at 200) |
-
-### Maintenance, jobs, and consolidation
-
-| Route | Bridge call | Purpose |
-|-------|-------------|---------|
-| `POST /v1/consolidate` | `memongoBridgeConsolidate` | Run the consolidation ("Dreamer") pipeline |
-| `POST /v1/novelty-scan` | `memongoBridgeScanNovelty` | Novelty scan |
-| `POST /v1/sync` | `memongoBridgeSync` | Sync (agent-global) |
-| `POST /v1/chain-trace` | `memongoBridgeTraceChain` | Trace a provenance chain (agent-global) |
-| `GET /v1/jobs` | `memongoBridgeListMemoryJobs` | List durable memory jobs (agent-global; limit capped at 100) |
-| `GET /v1/jobs/:jobId` | `memongoBridgeGetMemoryJob` | Get one job (agent-global) |
-
-### Status and probes
-
-| Route | Bridge call | Purpose |
-|-------|-------------|---------|
-| `GET /v1/status` | `memongoBridgeStatus` | Operational status (agent-global) |
-| `GET /v1/status/detailed` | `memongoBridgeGetDetailedStatus` | Detailed status (agent-global) |
-| `GET /v1/stats` | `memongoBridgeStats` | Memory statistics (agent-global) |
-| `GET /v1/probes/embedding` | `memongoBridgeProbeEmbedding` | Embedding-provider probe (agent-global) |
-| `GET /v1/probes/vector` | `memongoBridgeProbeVector` | Vector-search probe (agent-global) |
-
-### Admin
-
-Everything under `/v1/admin/` is treated as agent-global: scope-restricted keys are rejected outright (Class-G, below).
-
-| Route | Bridge call | Purpose |
-|-------|-------------|---------|
-| `POST /v1/admin/relevance/explain` | `memongoBridgeRelevanceExplain` | Explain a relevance decision |
-| `GET /v1/admin/relevance/report` | `memongoBridgeRelevanceReport` | Relevance report |
-| `GET /v1/admin/relevance/sample-rate` | `memongoBridgeRelevanceSampleRate` | Relevance sampling rate |
-| `GET /v1/admin/access-trends` | `memongoBridgeAccessTrends` | Access trends analytics |
-| `GET /v1/admin/access-summaries` | `memongoBridgeAccessSummaries` | Access summaries (collection filter: events, structured_mem, procedures, episodes, entities, relations) |
-| `GET /v1/admin/traces` | `memongoBridgeListRecallTraces` | List recall traces |
-| `GET /v1/admin/traces/:traceId` | `memongoBridgeGetRecallTrace` | Get one recall trace |
+This page details the middleware pipeline in `apps/api/src/app.ts`, the eight route families under `apps/api/src/routes/`, and how the OpenAPI document is assembled from the `apps/api/src/openapi-*.ts` files. See [API](index.md) for the app's overall shape and directory layout, and [Security](../../security.md) for the security rationale behind auth, CORS, and rate limiting.
 
 ## Middleware pipeline
 
-`createApp()` in `apps/api/src/app.ts` stacks middleware in a deliberate order — cheapest rejection first:
+`createApp()` in `apps/api/src/app.ts` builds the Hono app by registering middleware in a fixed order:
+
+1. `secureHeaders()` on `*` — baseline hardening headers on every response, including `/health`.
+2. `app.onError` — catches every error thrown anywhere below. A deliberate `HTTPException` returns its own response; anything else goes through `lib/errors.ts`'s `internalError`, which logs the raw error under a request id and returns a sanitized envelope.
+3. `cors()` on `/*` — only if `MEMONGO_CORS_ORIGINS` resolves to a non-empty origin list. `resolveCorsPolicy` falls back to `DEV_DEFAULT_CORS_ORIGINS` (the web console's dev ports) when the env var is unset, and rejects a `*` wildcard outright.
+4. `requestId()` on `/v1/*` — assigned before rate limiting or auth so every rejection downstream can be correlated in logs.
+5. Rate limiter on `/v1/*` (skipped if `MEMONGO_API_RATE_LIMIT=0`) — a fixed-window, in-memory, per-app-instance limiter (`createRateLimiter`). The bucket key is a SHA-256 hash of a matched bearer credential, or the trusted-proxy `X-Forwarded-For` IP, or a single `anonymous` bucket — never the raw attacker-supplied token, and never an unbounded set of buckets (`RATE_LIMIT_MAX_BUCKETS` fails closed for new identities once saturated).
+6. `bodyLimit()` on `/v1/*` (skipped if `MEMONGO_API_MAX_BODY_BYTES=0`, default 1,000,000 bytes) — runs before any JSON parsing so an oversized payload is rejected without being buffered.
+7. Bearer auth on `/v1/*` — see "Auth resolution" below. If neither `MEMONGO_API_KEY` nor any scoped policy is configured, all `/v1/*` requests get `401 AUTH_NOT_CONFIGURED` unless `MEMONGO_ALLOW_INSECURE_NO_AUTH=1` is set (development only; logs a one-time warning).
+8. `GET /health`, `GET /ready`, `GET /openapi.json` — registered after the `/v1/*` middleware but on different paths, so they are unauthenticated and unaffected by the rate limiter or body limit.
+9. `app.route("/v1", createV1Router())` — mounts the route tree covered below.
+
+### Auth resolution
+
+Two credential shapes are accepted on `/v1/*`:
+
+- **`MEMONGO_API_KEY`**: a single bearer token with unrestricted access to every route.
+- **Scoped API keys** (`MEMONGO_API_SCOPED_KEYS`, JSON array or object of `{ token, agentIds?, scopeRefs?, scopes? }` policies): each policy must constrain at least one of `agentIds`/`scopes`/`scopeRefs` with a concrete (non-`"*"`) value (`requireValidScopedPolicies`), and any `scopes` value must be one of the canonical `MEMORY_SCOPE_VALUES` — a non-canonical scope in a policy would let a request pass auth for a scope value the execution layer silently drops, reopening the identity-divergence bug tracked as issue #57.
+
+For a scoped key, `authorizeScopedApiKey` re-resolves `agentId`/`scope`/`scopeRef` from the request via `resolveScopeInput`/`resolveScopeField` (`apps/api/src/scope-identity.ts`) — the same helpers the route handlers use — so auth and execution can never disagree about identity. Three further checks apply only to scoped keys:
+
+- `routePolicyError`: `/v1/search-kb` requires a concrete `scopeRefs` constraint.
+- `ADMIN_ONLY_V1_PATHS` (`/v1/read-file`, `/v1/import/conversations`): always rejected for scoped keys — these read server-side files or bulk-import data and have no per-request tenant boundary to check.
+- `AGENT_GLOBAL_V1_PATHS` and any `/v1/admin/*` or `/v1/jobs*` path: rejected for a scope-constrained key (one whose policy narrows `scopes` or `scopeRefs`, not just `agentIds`), because these routes operate across an agent's entire memory with no scope to filter by.
+
+See [Multi-tenancy and scopes](../../features/multi-tenancy-and-scopes.md) for the scope model itself and [Security](../../security.md) for the threat this defends against.
+
+## Route registration
+
+`createV1Router()` (`apps/api/src/routes/v1.ts`) registers one middleware before any route family: for every non-GET/HEAD request it calls `parseJsonRequestBody` once (`apps/api/src/routes/v1-helpers.ts`), turning a non-empty unparseable body into a `400 INVALID_JSON` at this single point, and stashes the parsed body on the Hono context (`c.set("jsonBody", ...)`) so every downstream handler reads the same parse via `readJsonBody`. It then calls each family's `register*Routes(v1)` function in turn.
 
 ```mermaid
-flowchart LR
-    A[Request] --> B["CORS on /*<br/>explicit origins only, * rejected"]
-    B --> C["requestId on /v1/*"]
-    C --> D["Rate limiter<br/>429 RATE_LIMITED + Retry-After"]
-    D --> E["Body limit<br/>413 PAYLOAD_TOO_LARGE"]
-    E --> F["Auth middleware<br/>401 UNAUTHORIZED / 403 FORBIDDEN"]
-    F --> G["v1 body-validation middleware<br/>400 INVALID_JSON"]
-    G --> H["Route handler<br/>zod VALIDATION_ERROR / bridge call"]
-    H --> I["app.onError<br/>HTTPException passthrough or 500/503 envelope"]
+graph TD
+    V1["routes/v1.ts\nbody pre-parse middleware"]
+    V1 --> Search["v1-search-routes.ts"]
+    V1 --> Lifecycle["v1-lifecycle-routes.ts"]
+    V1 --> Context["v1-context-routes.ts"]
+    V1 --> Write["v1-write-routes.ts"]
+    V1 --> Status["v1-status-routes.ts"]
+    V1 --> Admin["v1-admin-routes.ts"]
+    V1 --> Maintenance["v1-maintenance-routes.ts"]
+    Search --> Bridge["packages/memory-bridge"]
+    Lifecycle --> Bridge
+    Context --> Bridge
+    Write --> Bridge
+    Status --> Bridge
+    Admin --> Bridge
+    Maintenance --> Bridge
 ```
 
-1. **CORS** (`/*`, only when origins are configured) — `resolveCorsPolicy()` returns an explicit `MEMONGO_CORS_ORIGINS` allowlist or the dev defaults (`http://127.0.0.1:3040`, `http://localhost:3040` for the web console). A wildcard in the env list throws at boot.
-2. **Request ID** (`/v1/*`) — Hono's `requestId()`, first on the v1 chain so every downstream failure (rate limit, auth, route) can be correlated in server logs.
-3. **Rate limiting** — below.
-4. **Body limit** — Hono `bodyLimit`, default 1 MB (`MEMONGO_API_MAX_BODY_BYTES`), enforced *before* JSON parsing so an oversized payload is rejected without being buffered; `0` disables. Rejects with `413 PAYLOAD_TOO_LARGE`.
-5. **Auth** — below.
-6. **v1 body-validation middleware** (`apps/api/src/routes/v1.ts`) — for every non-GET/HEAD request it reads the raw body once: a genuinely empty body stays `{}` (bodiless POSTs rely on this), but a non-empty body that fails `JSON.parse` is a deliberate `400 INVALID_JSON` — previously it silently became `{}` and the request ran on defaults. The parsed body is stashed as `jsonBody` so auth, scope resolution, and handlers share one parse.
+### Route families
 
-## Authentication and authorization
+Each family is one file exporting a `register*Routes(v1: Hono<V1RouterEnv>)` function. This lists the family and its purpose; see [API](../../api/index.md) for the full endpoint reference (paths, request/response shapes).
 
-Auth is configured entirely by environment and is **fail-closed** in both directions (`apps/api/src/app.ts`):
+| Family | File | Purpose |
+|---|---|---|
+| Search | `apps/api/src/routes/v1-search-routes.ts` | `search`, `search-kb`, `recall-conversation`, `import/conversations`, `search-detailed` — the hybrid/vector/text retrieval surface |
+| Context | `apps/api/src/routes/v1-context-routes.ts` | `hydrate-active-slate`, `discovery-projection`, `context-bundle`, `read-file` — assembling context payloads for an agent turn |
+| Write | `apps/api/src/routes/v1-write-routes.ts` | `add`, `write-event(s)`, `extract`, `write-structured`, `write-procedure` — all memory ingestion paths |
+| Lifecycle | `apps/api/src/routes/v1-lifecycle-routes.ts` | `lifecycle/get`, `lifecycle/update`, `lifecycle/delete`, `lifecycle/history`, `procedures/outcome`, `memory/feedback` — mutating or retiring existing memory items |
+| Status | `apps/api/src/routes/v1-status-routes.ts` | `profile`, `state`, `status`, `status/detailed`, `stats`, `sync`, `probes/embedding`, `probes/vector` — operational and agent-identity endpoints |
+| Admin | `apps/api/src/routes/v1-admin-routes.ts` | `admin/relevance/*`, `admin/access-trends`, `admin/access-summaries`, `admin/traces*`, `jobs*` — analytics, audit trails, and background job introspection |
+| Maintenance | `apps/api/src/routes/v1-maintenance-routes.ts` | `chain-trace`, `novelty-scan`, `consolidate`, `self-edit` — background maintenance operations exposed for manual/administrative triggering |
 
-- With `MEMONGO_API_KEY` and/or `MEMONGO_API_SCOPED_KEYS` set, `/v1/*` requires a matching bearer.
-- With neither set and `MEMONGO_ALLOW_INSECURE_NO_AUTH` unset, every `/v1/*` request gets `401 AUTH_NOT_CONFIGURED` — the API refuses to run unauthenticated by default.
-- The insecure override logs a single loud warning at boot and is intended only for trusted local development.
+`apps/api/src/routes/v1-helpers.ts` (693 lines) is the shared layer under all seven families: request-field readers (`readAgentId`, `readScope`, `readScopeRef`, `readSessionId`, `readLimit`, ...), idempotency-key handling, and constants like `MAX_LIST_LIMIT`, `MAX_HISTORY_LIMIT`, and `MAX_WRITE_EVENTS_BATCH` (caps a bulk write batch so one request cannot stage an unbounded `insertMany`).
 
-### Constant-time bearer comparison
+Every route handler follows the same shape: read and validate fields from the pre-parsed body (via `v1-helpers.ts` readers and, for the write/search families, `apps/api/src/lib/validation.ts` Zod schemas), call one `memongoBridge*` function from `packages/memory-bridge`, and map the result or a thrown error to a JSON response via `apps/api/src/lib/errors.ts`'s `jsonError`/`internalError`.
 
-`timingSafeBearerEquals()` hashes both inputs with SHA-256 before `crypto.timingSafeEqual` (so differing raw lengths cannot bypass the comparison) and rejects empty bearers. A plain `===` would short-circuit on the first mismatched byte and leak the token prefix through response timing.
+## OpenAPI document assembly
 
-### Scoped API keys
+`apps/api/src/openapi-spec.ts` builds the document served at `GET /openapi.json`:
 
-`MEMONGO_API_SCOPED_KEYS` is a JSON array (or token-keyed object) of policies `{ token, agentIds?, scopes?, scopeRefs? }`, parsed and validated by `parseScopedApiKeyPolicies()`. Validation is strict at config load:
+- `info`, `servers`, `security`, and `components.securitySchemes` are hand-written, pulling the bearer scheme and `ApiError` schema from `packages/lib` (`BEARER_SECURITY_SCHEME`, `API_ERROR_OPENAPI_SCHEMA`).
+- `paths` is a spread merge of seven `apps/api/src/openapi-paths-*.ts` files, one per route family (`openapi-paths-search.ts`, `-context.ts`, `-lifecycle.ts`, `-write.ts`, `-status.ts`, `-admin.ts`, `-maintenance.ts`), each hand-authoring its family's path items.
+- `apps/api/src/openapi-schemas.ts` holds fragments shared across path files: the canonical scope enum (re-exported from `packages/lib`), idempotency-key wording and header parameter, and TTL (`expiresAt`) field description.
+- `withContractConformance` is a derivation pass that runs after the document is assembled: for every route listed in `packages/lib`'s `MEMONGO_API_ROUTES` contract table, it fills in the `ApiError` `$ref` for each of that route's declared `errorStatuses`, so no hand-written path can drift to a bespoke error body shape.
+- `apps/api/src/contract-conformance.test.ts` is the enforcement mechanism: it diffs the hand-written paths and the live `createV1Router()` route table and fails CI on any mismatch (missing path, extra path, or method mismatch).
 
-- At least one policy, and every policy must constrain at least one dimension with a concrete value (`"*"` alone is not a constraint).
-- `"*"` must be the only value when used.
-- Every `scopes` value must be canonical (`session, user, agent, workspace, tenant, global` from `@memongo/lib`) — a policy authorizing a non-canonical scope would let execution silently drop it (issue #57), so the server refuses to boot with one.
+`apps/api/src/version.ts`'s `MEMONGO_API_VERSION` feeds `info.version`; it must equal the root `package.json` version or `scripts/check-publishability.ts` fails the release gate.
 
-At request time, `authorizeScopedApiKey()` resolves `agentId`, `scope`, and `scopeRef` from the **same merged input** the route layer uses (`apps/api/src/scope-identity.ts`) and returns a `403 FORBIDDEN` message when a required dimension is absent or not allowed. Two additional route-level gates apply to scoped keys:
+## Key source files
 
-- **Admin-only paths** (`/v1/read-file`, `/v1/import/conversations`): scoped keys are always rejected — these routes touch server files / bulk import.
-- **Class-G agent-global paths**: routes that read or mutate across an agent's whole memory (`/v1/status*`, `/v1/stats`, `/v1/sync`, `/v1/probes/*`, `/v1/chain-trace`, `/v1/self-edit`, `/v1/read-file`, all `/v1/admin/*`, all `/v1/jobs*`) have no tenant boundary to enforce, so any *scope-constrained* key (concrete `scopes` or `scopeRefs`) is rejected with `403`. An agentId-only key is not scope-constrained and may still use them.
-- **search-kb** additionally requires a concrete `scopeRefs` constraint (`routePolicyError`).
-
-```mermaid
-sequenceDiagram
-    participant C as Client
-    participant A as Auth middleware
-    participant S as scope-identity
-    participant R as Route handler
-    C->>A: Authorization: Bearer k, POST /v1/search
-    A->>A: timingSafeBearerEquals(k, MEMONGO_API_KEY)?
-    alt static key match
-        A->>R: next()
-    else scoped policy match
-        A->>S: resolveScopeInput + resolveScopeField
-        S-->>A: {agentId, scope, scopeRef}
-        A->>A: policy allows identity? route gate? Class-G gate?
-        alt any check fails
-            A-->>C: 403 FORBIDDEN {error:{code,message}}
-        else all pass
-            A->>R: next()
-        end
-    else no match
-        A-->>C: 401 UNAUTHORIZED
-    end
-```
-
-## Rate limiting
-
-`createRateLimiter()` in `apps/api/src/app.ts` is a fixed-window in-memory limiter, state per app instance (single-process; a shared store is tracked with the durability work):
-
-- **Identity**: a bearer participates in rate-limit identity only after it matches a configured credential — the bucket key is `credential:<sha256>`. Invalid or missing bearers share the trusted-proxy IP bucket (`X-Forwarded-For` first hop, only when `MEMONGO_TRUST_PROXY=1`) or one `anonymous` bucket, so attacker-chosen tokens can neither evade the limiter nor exhaust its bucket map.
-- **Fail closed on saturation**: the bucket map is hard-capped at 100,000 identities; a *new* identity beyond that is rejected with 429 rather than growing memory without bound (defense against key-rotation exhaustion).
-- **Amortized sweeping**: expired buckets are swept at most once per window.
-- Rejection: `429 RATE_LIMITED` with a `Retry-After` header. `MEMONGO_API_RATE_LIMIT=0` disables the limiter entirely.
-
-## Error handling
-
-One canonical envelope everywhere: `{ error: { code, message } }` (`apiErrorJson` in `apps/api/src/lib/errors.ts`).
-
-- `app.onError` (`apps/api/src/app.ts`): deliberate `HTTPException`s keep their own status/body; anything unexpected goes through `internalError()`.
-- `internalError()` (`apps/api/src/lib/errors.ts`): logs the full error (name, message, stack) server-side under the request ID, then returns a sanitized body. `isDependencyUnavailableError()` walks the cause chain (bounded at 4) for the MongoDB driver's clear network-layer names — `MongoNetworkError`, `MongoNetworkTimeoutError`, `MongoServerSelectionError` — and maps those to `503 SERVICE_UNAVAILABLE` so client retry means something; everything else stays a generic `500`. Message matching was deliberately rejected as too fuzzy, so a generic 500 never becomes retriable noise.
-- Route-level deliberate codes include `400 VALIDATION_ERROR` (zod, naming the first offending field), `400 INVALID_JSON`, `404 NOT_FOUND`, `422`-class rejections (e.g. `SELF_EDIT_REJECTED`), and handler-specific codes like `SEARCH_FAILED` on the 500 path.
-
-## Input validation at the boundary
-
-`apps/api/src/lib/validation.ts` holds the zod schemas for the write family (`structuredEntrySchema`, `procedureEntrySchema`, `kbFilterSchema`) and `validateMetadata()`, which rejects operator-shaped metadata keys (`$where`, dotted paths) before they reach stored documents. `validateWithSchema()` reports the first zod issue as `<fieldPrefix>.<path>: <message>` so the 400 names the offending field without leaking schema internals. Search-like routes clamp `limit`/`maxResults` to 100 (`MAX_LIST_LIMIT`) so a caller cannot force unbounded result sets through fusion/rerank.
-
-## Related pages
-
-- [API app overview](index.md) — boot sequence, env, health endpoints
-- [OpenAPI spec](openapi.md) — the documented contract for these routes
-- [API endpoint reference](../../api/index.md) — per-endpoint details
-- [Security](../../security.md) — the wider auth/SSRF/secrets model
-- [Memory bridge](../../packages/memory-bridge.md) — the facade every handler calls
-
----
-Active contributors: Rom Iluz (19 commits touching `apps/api/`).
+| File | Role |
+|---|---|
+| `apps/api/src/app.ts` | Middleware pipeline, auth policy parsing and enforcement |
+| `apps/api/src/routes/v1.ts` | Route tree entry point, body pre-parse |
+| `apps/api/src/routes/v1-helpers.ts` | Shared field readers, limits, idempotency handling |
+| `apps/api/src/routes/v1-search-routes.ts` | Search family |
+| `apps/api/src/routes/v1-context-routes.ts` | Context family |
+| `apps/api/src/routes/v1-write-routes.ts` | Write family |
+| `apps/api/src/routes/v1-lifecycle-routes.ts` | Lifecycle family |
+| `apps/api/src/routes/v1-status-routes.ts` | Status family |
+| `apps/api/src/routes/v1-admin-routes.ts` | Admin family |
+| `apps/api/src/routes/v1-maintenance-routes.ts` | Maintenance family |
+| `apps/api/src/openapi-spec.ts` | OpenAPI document assembly and contract conformance derivation |
+| `apps/api/src/openapi-schemas.ts` | Shared OpenAPI schema fragments |
+| `apps/api/src/openapi-paths-*.ts` | Per-family OpenAPI path definitions |
+| `apps/api/src/contract-conformance.test.ts` | Enforces hand-written OpenAPI paths match the live router |
