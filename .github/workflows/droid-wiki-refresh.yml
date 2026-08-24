@@ -3,17 +3,27 @@ name: Droid Wiki Refresh
 on:
   push:
     branches: [main]
+  workflow_dispatch:
 
 jobs:
   wiki-refresh:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
       - name: Install Factory Droid
         run: curl -fsSL https://app.factory.ai/cli | sh
 
+      - name: Configure git identity
+        run: |
+          git config --global user.name "Droid Wiki Bot"
+          git config --global user.email "actions@github.com"
+
       - name: Generate wiki
         run: droid exec --auto high "/wiki"
         env:
           FACTORY_API_KEY: ${{ secrets.FACTORY_API_KEY }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
