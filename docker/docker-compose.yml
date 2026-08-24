@@ -20,7 +20,7 @@
 services:
   mongodb:
     # Pinned to a dated tag (verify auto-embedding parity when bumping).
-    image: mongodb/mongodb-atlas-local:8.2.6-20260715T144108Z
+    image: mongodb/mongodb-atlas-local:preview
     container_name: memongo-preview
     ports:
       # Loopback-only publish (compose-spec short syntax).

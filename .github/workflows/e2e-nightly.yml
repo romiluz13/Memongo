@@ -15,7 +15,7 @@ jobs:
     timeout-minutes: 60
     services:
       mongodb:
-        image: mongodb/mongodb-atlas-local:8.2.6-20260715T144108Z
+        image: mongodb/mongodb-atlas-local:preview
         ports:
           - 27017:27017
         env:
