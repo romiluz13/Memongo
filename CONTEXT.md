@@ -33,3 +33,24 @@ _Avoid_: competitive moat
 One scoring path within a single search — vector, text, or graph. Lanes are fused, not
 chosen between.
 _Avoid_: channel, strategy, branch
+
+### Guardrails
+
+**Silent-failure tripwire**:
+A startup check that makes a configuration which would silently degrade or expose the
+system fail loudly instead. Adapted from `mongodb-partners/agent-memory` patterns.
+_Avoid_: validation, health check, smoke test
+
+**Dimension consistency check (G1)**:
+Startup assertion that `queryEmbeddingModel` dimensions match the autoEmbed index model
+dimensions. Prevents silent empty `$vectorSearch` results from model mismatch.
+
+**Model migration refusal (G2)**:
+Startup preflight that refuses to proceed when an existing autoEmbed index has a different
+model than the one about to be deployed, protecting against expensive surprise re-embeds.
+Override: `MEMONGO_ALLOW_EMBEDDING_MODEL_CHANGE=true`.
+
+**Routable-bind refusal (G3)**:
+Startup check that refuses to bind a non-loopback address with authentication disabled.
+Two-layer override: `MEMONGO_ALLOW_INSECURE_NO_AUTH=true` (loopback) and
+`MEMONGO_ALLOW_INSECURE_REMOTE=true` (non-loopback, both required).

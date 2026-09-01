@@ -60,8 +60,10 @@ USER node
 
 EXPOSE 3847
 ENV NODE_ENV=production
-# In Docker the API must bind to all interfaces (not 127.0.0.1)
-ENV MEMONGO_API_HOST=0.0.0.0
+# Default to loopback for safety. Operators binding to 0.0.0.0 must also
+# set MEMONGO_API_KEY or explicitly accept the risk with
+# MEMONGO_ALLOW_INSECURE_NO_AUTH=true and MEMONGO_ALLOW_INSECURE_REMOTE=true.
+ENV MEMONGO_API_HOST=127.0.0.1
 ENV MEMONGO_API_PORT=3847
 
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 --start-period=40s \

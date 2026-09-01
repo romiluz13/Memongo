@@ -1,4 +1,5 @@
 import { serve } from "@hono/node-server"
+import { refuseToServeOpen } from "@memongo/lib"
 import {
 	memongoBridgeCapabilities,
 	memongoBridgeShutdown,
@@ -63,6 +64,11 @@ const app = createApp()
 
 const port = Number(process.env.MEMONGO_API_PORT ?? "3847")
 const host = process.env.MEMONGO_API_HOST ?? "127.0.0.1"
+
+// Guardrail 3: refuse to bind a routable address without authentication.
+const hasApiKey = Boolean(process.env.MEMONGO_API_KEY)
+const hasScopedKeys = Boolean(process.env.MEMONGO_API_SCOPED_KEYS)
+refuseToServeOpen(host, hasApiKey || hasScopedKeys)
 
 const server = serve({ fetch: app.fetch, port, hostname: host }, (info) => {
 	console.error(`memongo-api listening on http://${info.address}:${info.port}`)

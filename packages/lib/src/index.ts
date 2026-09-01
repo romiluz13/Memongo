@@ -93,3 +93,7 @@ export {
 } from "./redact.js"
 export { detectMime, isTextMime, isImageMime, isAudioMime } from "./mime.js"
 export { normalizeOptionalSecretInput } from "./secrets.js"
+export {
+	isLoopbackBindHost,
+	refuseToServeOpen,
+} from "./bind-guard.js"

@@ -6,6 +6,7 @@ import {
 } from "node:http"
 import type { Server as McpServer } from "@modelcontextprotocol/sdk/server/index.js"
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js"
+import { refuseToServeOpen } from "@memongo/lib"
 
 export const MCP_HTTP_PATH = "/mcp"
 export const DEFAULT_MCP_HTTP_PORT = 3110
@@ -64,6 +65,13 @@ export async function startHttpTransport(
 ): Promise<NodeHttpServer> {
 	const port = resolvePort(options.port)
 	const host = resolveHost(options.host)
+
+	// Guardrail 3: refuse to bind a routable address without authentication.
+	// MCP HTTP transport has no auth of its own — it proxies to the API server
+	// via MemongoClient. The API key it uses authenticates upstream, but the
+	// MCP endpoint itself is open. Check the API key presence as the auth signal.
+	const hasApiKey = Boolean(process.env.MEMONGO_API_KEY)
+	refuseToServeOpen(host, hasApiKey)
 
 	const httpServer = createNodeHttpServer((req, res) => {
 		const url = new URL(

@@ -48,9 +48,14 @@ Use managed Atlas cloud for benchmark/control runs and Atlas Local Preview for l
 cd /opt/memongo
 bun install --frozen-lockfile
 export MEMONGO_MONGODB_URI="mongodb://..."
+export MEMONGO_API_KEY="your-secret-key"
 export MEMONGO_API_HOST="0.0.0.0"
 cd apps/api && bun run start
 ```
+
+The API defaults to `127.0.0.1` (loopback only). To bind a non-loopback address you must also set `MEMONGO_API_KEY` (or `MEMONGO_API_SCOPED_KEYS`) so the server is authenticated. Without auth, the server refuses to start on a non-loopback bind to prevent unauthenticated network access to all memories.
+
+If you have a trusted network and need no auth (e.g. behind a gateway), set both `MEMONGO_ALLOW_INSECURE_NO_AUTH=true` and `MEMONGO_ALLOW_INSECURE_REMOTE=true` to explicitly accept the risk.
 
 Put TLS termination and your preferred ingress in front of `apps/api` when exposing it outside localhost.
 

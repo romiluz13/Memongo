@@ -254,6 +254,13 @@ export function vectorIndexingMethodFromEnv(): "flat" | undefined {
 	return undefined
 }
 
+/**
+ * The autoEmbed model hardcoded in every vector index definition.
+ * Exported as the single source of truth so guardrails can compare against
+ * the same value the index definitions use — see embedding-validation.ts.
+ */
+export const INDEX_AUTOEMBED_MODEL = "voyage-4-large"
+
 export function autoEmbedVectorField(
 	path: string,
 	quantization: "none" | "scalar" | "binary" = "none",
@@ -263,7 +270,7 @@ export function autoEmbedVectorField(
 		type: "autoEmbed",
 		modality: "text",
 		path,
-		model: "voyage-4-large",
+		model: INDEX_AUTOEMBED_MODEL,
 		...(indexingMethod ? { indexingMethod } : {}),
 		// P3.4 probe-adopt: the configured quantization ships in the definition;
 		// a server rejection is caught in ensureSearchIndexes, recorded in the

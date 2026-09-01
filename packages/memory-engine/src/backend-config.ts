@@ -20,7 +20,8 @@ import {
 const log = createSubsystemLogger("memory:backend-config")
 
 // Known embedding model dimensions for numDimensions validation (F22)
-const KNOWN_MODEL_DIMENSIONS: Record<string, number> = {
+// Exported for use by embedding-validation guardrails (dimension consistency check).
+export const KNOWN_MODEL_DIMENSIONS: Record<string, number> = {
 	"voyage-4-large": 1024,
 	"voyage-4": 1024,
 	"voyage-4-lite": 1024,

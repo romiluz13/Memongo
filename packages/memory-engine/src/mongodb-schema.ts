@@ -53,6 +53,7 @@ export {
 	shouldEnsureTextFallbackIndexes,
 } from "./mongodb-schema-standard-indexes.js"
 export {
+	INDEX_AUTOEMBED_MODEL,
 	isSearchIndexQueryable,
 	isSearchIndexReadyWithFilterFields,
 	isEventsVectorBitemporalPrefilterReady,

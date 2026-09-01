@@ -190,6 +190,7 @@ import {
 	memoryEvidenceCollection,
 	filesCollection,
 	getExpectedSearchIndexTargets,
+	INDEX_AUTOEMBED_MODEL,
 	isEventsVectorBitemporalPrefilterReady,
 	isSearchIndexManagementAvailable,
 	shouldEnsureTextFallbackIndexes,
@@ -203,6 +204,10 @@ import {
 	waitForSearchIndexesQueryable,
 	sessionChunksCollection,
 } from "./mongodb-schema.js"
+import {
+	assertQueryModelDimensionsMatch,
+	refuseToStrandExistingDocuments,
+} from "./embedding-validation.js"
 import { resolveScopeIdentity, resolveScopeRef } from "./mongodb-scope.js"
 import {
 	buildVectorSearchStage,
@@ -640,6 +645,25 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		)
 		log.info(`capabilities: ${JSON.stringify(capabilities)}`)
 		let nativeBitemporalVectorPrefilter = false
+
+		// Guardrail 1: verify query embedding model dimensions match the
+		// autoEmbed index model dimensions. Prevents silent $vectorSearch
+		// recall failure when query and index models produce different-
+		// dimension vectors.
+		assertQueryModelDimensionsMatch(mongoCfg.queryEmbeddingModel)
+
+		// Guardrail 2: refuse to proceed when the autoEmbed index model
+		// changed and existing documents would be re-embedded server-side.
+		// Prevents expensive, surprising full re-embed on accidental model
+		// changes.
+		if (searchIndexManagementAvailable) {
+			await refuseToStrandExistingDocuments(
+				db,
+				prefix,
+				mongoCfg.deploymentProfile,
+				INDEX_AUTOEMBED_MODEL,
+			)
+		}
 
 		// Only bootstrap Search indexes when the deployment can talk to Search
 		// Index Management at all. This keeps runtime startup responsive on

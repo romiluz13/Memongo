@@ -43,6 +43,7 @@ import {
 } from "./mongodb-schema-search-readiness.js"
 
 export {
+	INDEX_AUTOEMBED_MODEL,
 	buildAutoEmbedVectorDefinition,
 	ensureEntityAutocompleteIndex,
 	ensureEpisodeAutocompleteIndex,
