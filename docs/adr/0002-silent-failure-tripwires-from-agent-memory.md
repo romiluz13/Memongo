@@ -34,8 +34,12 @@ agent-memory prevents three classes of silent failure that Memongo was vulnerabl
 ## Consequences
 
 - **Docker breaking change**: existing deployments binding `0.0.0.0` without auth will
-  refuse to start. Operators must set `MEMONGO_API_KEY`, bind to `127.0.0.1`, or set both
+  refuse to start. Operators must set `MEMONGO_API_KEY` or set both
   `MEMONGO_ALLOW_INSECURE_NO_AUTH=true` and `MEMONGO_ALLOW_INSECURE_REMOTE=true`.
+  Inside Docker, the app must bind `0.0.0.0` (binding `127.0.0.1` inside a container
+  makes it unreachable); the security boundary is the port publish
+  (`-p 127.0.0.1:3847:3847`) and auth, not the bind address. The guardrail enforces
+  auth, not the bind address.
 - **Guardrail 2 is a blast-radius tripwire, not data-loss prevention**: MongoDB autoEmbed
   re-embeds documents server-side on model change (unlike client-side embedding where
   vectors are stranded forever). The guardrail prevents surprise re-embed cost, not

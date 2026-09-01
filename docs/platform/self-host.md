@@ -59,6 +59,25 @@ If you have a trusted network and need no auth (e.g. behind a gateway), set both
 
 Put TLS termination and your preferred ingress in front of `apps/api` when exposing it outside localhost.
 
+## Docker
+
+Inside a Docker container the app **must** bind `0.0.0.0` — binding `127.0.0.1` inside the container's network namespace makes it unreachable from outside, even with `-p` port publishing. The Dockerfile defaults to `MEMONGO_API_HOST=0.0.0.0` for this reason.
+
+The security boundary in Docker is the **port publish** and the **auth layer**, not the app's bind address:
+
+```bash
+# Safe: host-only access + auth
+docker run -p 127.0.0.1:3847:3847 \
+  -e MEMONGO_MONGODB_URI="mongodb+srv://..." \
+  -e MEMONGO_API_KEY="your-long-random-token" \
+  memongo-api
+
+# Public exposure: put a reverse proxy (Caddy/Nginx/Traefik) in front
+# and let it handle TLS + rate limiting
+```
+
+The `docker/compose.yaml` already publishes to `127.0.0.1` on the host and requires `MEMONGO_API_KEY`. The guardrail enforces auth at startup: if `MEMONGO_API_KEY` is not set, the container refuses to start with a clear error message listing all remediation options.
+
 ## Scoped API keys
 
 `MEMONGO_API_KEY` is the admin bearer token. For agent-facing integrations, prefer a scoped token so a valid client cannot freely choose another agent or memory namespace:

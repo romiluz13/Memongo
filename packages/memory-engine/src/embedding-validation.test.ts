@@ -217,9 +217,7 @@ describe("Guardrail 2: findStrandingModelChanges", () => {
 		const db = makeDb({
 			test_chunks: {
 				collectionName: "test_chunks",
-				countDocuments: vi
-					.fn()
-					.mockRejectedValue(new Error("connection lost")),
+				countDocuments: vi.fn().mockRejectedValue(new Error("connection lost")),
 			} as unknown as Collection,
 		})
 		const findings = await findStrandingModelChanges(

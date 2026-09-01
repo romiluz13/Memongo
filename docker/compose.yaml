@@ -21,7 +21,10 @@ services:
       - "127.0.0.1:${MEMONGO_API_PORT:-3847}:3847"
     environment:
       - NODE_ENV=production
-      - MEMONGO_API_HOST=${MEMONGO_API_HOST:-127.0.0.1}
+      # Inside Docker the app must bind 0.0.0.0 for port mapping to work.
+      # The security boundary is the ports section (127.0.0.1:host) and
+      # MEMONGO_API_KEY (required above), not the internal bind address.
+      - MEMONGO_API_HOST=0.0.0.0
       - MEMONGO_API_PORT=3847
       - MEMONGO_API_KEY=${MEMONGO_API_KEY:?set MEMONGO_API_KEY}
       - MEMONGO_AGENT_ID=${MEMONGO_AGENT_ID:-main}

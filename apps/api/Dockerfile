@@ -60,10 +60,14 @@ USER node
 
 EXPOSE 3847
 ENV NODE_ENV=production
-# Default to loopback for safety. Operators binding to 0.0.0.0 must also
-# set MEMONGO_API_KEY or explicitly accept the risk with
-# MEMONGO_ALLOW_INSECURE_NO_AUTH=true and MEMONGO_ALLOW_INSECURE_REMOTE=true.
-ENV MEMONGO_API_HOST=127.0.0.1
+# Inside a Docker container the app MUST bind 0.0.0.0 — binding 127.0.0.1
+# inside the container's network namespace makes it unreachable from outside
+# (the published port cannot forward to a loopback-only listener). The
+# security boundary in Docker is the port publish (-p 127.0.0.1:3847:3847)
+# and the auth layer (MEMONGO_API_KEY), not the app's bind address. The
+# guardrail (bind-guard.ts) enforces auth at startup: if MEMONGO_API_KEY is
+# not set, the container refuses to start with a clear error.
+ENV MEMONGO_API_HOST=0.0.0.0
 ENV MEMONGO_API_PORT=3847
 
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 --start-period=40s \

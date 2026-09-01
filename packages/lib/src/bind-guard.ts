@@ -93,8 +93,11 @@ export function refuseToServeOpen(host: string, authConfigured: boolean): void {
 			`that can reach this port could read or permanently erase any user's ` +
 			`memories.\n` +
 			`  • To secure it: set MEMONGO_API_KEY (or MEMONGO_API_SCOPED_KEYS).\n` +
-			`  • For local development: use MEMONGO_API_HOST=127.0.0.1 (the ` +
-			`default; ${host} was requested).\n` +
+			`  • For local development (not Docker): set ` +
+			`MEMONGO_API_HOST=127.0.0.1 instead of ${host}.\n` +
+			`  • Inside Docker: keep MEMONGO_API_HOST=0.0.0.0 and set ` +
+			`MEMONGO_API_KEY — binding 127.0.0.1 inside a container makes it ` +
+			`unreachable.\n` +
 			`  • To accept the risk on a trusted network: set both ` +
 			`MEMONGO_ALLOW_INSECURE_NO_AUTH=true and ` +
 			`MEMONGO_ALLOW_INSECURE_REMOTE=true.`,
