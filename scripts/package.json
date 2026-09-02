@@ -1,0 +1,18 @@
+{
+	"name": "@memongo/scripts",
+	"version": "0.0.0",
+	"private": true,
+	"description": "QA corpus and operational scripts: publishability policy, memory-eval core, proof pack, e2e QA, benchmarks",
+	"type": "module",
+	"scripts": {
+		"test": "vitest run --exclude=**/*.e2e.test.ts",
+		"test:e2e": "vitest run --no-file-parallelism mongodb-e2e-qa.e2e.test.ts"
+	},
+	"dependencies": {
+		"@memongo/client": "workspace:*",
+		"@memongo/memory-bridge": "workspace:*"
+	},
+	"devDependencies": {
+		"vitest": "^4.1.10"
+	}
+}

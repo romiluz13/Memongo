@@ -1,0 +1,631 @@
+# DDD Claim Ledger
+# Atomic statements extracted from locked evidence.
+# Legacy claim ledger schema
+
+schema_version: 0.1.0
+
+entries:
+
+  - id: C-001
+    schema_version: 0.1.0
+    statement: "The MCP HTTP transport MUST authenticate every request before proxying to the API: reject unauthenticated callers with 401 and WWW-Authenticate, validate Origin and Host per the MCP spec authorization guidance, and stop treating upstream MEMONGO_API_KEY presence as endpoint authentication."
+    rationale: "refuseToServeOpen treats env-var presence as auth, so a non-loopback bind with the API key configured exposes every MCP tool, including admin tools when MEMONGO_MCP_ADMIN=1, to unauthenticated network callers. The integration review ranks this its single P0 and the security review independently flags the missing spec-level authorization."
+    sources:
+      - ref: "EL-010#recommendations"
+        authority_domain: security
+        entailment: explicit
+    claim_kind: api
+    impact: critical
+    tier: T3
+    status: known-and-supported
+    constructs: ["apps/mcp/src/http-transport.ts#refuseToServeOpen", apps/mcp/src/http-transport.ts]
+    validations: []
+    exceptions: []
+
+  - id: C-002
+    schema_version: 0.1.0
+    statement: "Secrets MUST be redacted at the logging boundary: the client registry MUST log a redacted alias instead of the raw URI, the redactSensitiveText utility MUST be wired into the subsystem logger and the API error envelope, and no diagnostic path may emit raw credentials, connection strings, or raw query text."
+    rationale: The registry logs the raw MongoDB URI with credentials on close failure while a tested redaction utility is wired to zero production paths; driver errors and API error envelopes can both carry credentials and raw query strings.
+    sources:
+      - ref: "EL-007#recommendations"
+        authority_domain: security
+        entailment: paraphrase
+    claim_kind: operational
+    impact: critical
+    tier: T3
+    status: known-and-supported
+    constructs: [packages/memory-engine/src/mongodb-client-registry.ts, "packages/lib/src/redact.ts#redactSensitiveText", "packages/lib/src/logger.ts#formatLine", apps/api/src/lib/errors.ts]
+    validations: []
+    exceptions: []
+
+  - id: C-003
+    schema_version: 0.1.0
+    statement: "A tenant-level erasure primitive deleteAllForAgent(agentId, scope) MUST exist and delete from every collection that stores tenant data, including events, chunks, structured memories and revisions, entities, relations, episodes, jobs, ledgers, caches, and telemetry, returning per-collection receipts and writing an audit record; it MUST be exposed through the bridge, an API route, and an MCP tool."
+    rationale: "No bulk erasure exists anywhere in the engine: memories can only be soft-invalidated one handle at a time, so every auxiliary collection retains tenant data forever. This is a right-to-erasure compliance liability and the lifecycle review ranks it P0."
+    sources:
+      - ref: "EL-004#recommendations"
+        authority_domain: data-lifecycle
+        entailment: paraphrase
+    claim_kind: architectural
+    impact: critical
+    tier: T3
+    status: known-and-supported
+    constructs: [packages/memory-engine/src/mongodb-manager.ts, packages/memory-bridge/src/memongo-bridge.ts, apps/api/src/app.ts]
+    validations: []
+    exceptions: []
+
+  - id: C-004
+    schema_version: 0.1.0
+    statement: "Quarantined memories MUST have a review lifecycle: list, promote, and reject operations surfaced through MCP tools and the web console, decision metadata recorded, and a retention cap or TTL on unreviewed entries."
+    rationale: "Poison-classified memories currently land in a collection with no review path, no TTL, and no surfacing, so classifier false positives are silent permanent data loss."
+    sources:
+      - ref: "EL-001#recommendations"
+        authority_domain: data-lifecycle
+        entailment: paraphrase
+    claim_kind: architectural
+    impact: critical
+    tier: T3
+    status: known-and-supported
+    constructs: [packages/memory-engine/src/mongodb-schema.ts, packages/memory-engine/src/mongodb-manager-read.ts, apps/mcp/src/tool-registry.ts]
+    validations: []
+    exceptions: []
+
+  - id: C-005
+    schema_version: 0.1.0
+    statement: "Event retention MUST propagate to chunk projections: chunks MUST carry expiresAt with a TTL index, or a sweeper MUST delete chunks whose source event no longer exists, and until then the retention documentation MUST carry an explicit warning."
+    rationale: "Events expire on TTL while their embedded chunks persist forever, so the retention policy silently fails on the primary retrieval surface."
+    sources:
+      - ref: "EL-001#recommendations"
+        authority_domain: data-lifecycle
+        entailment: explicit
+    claim_kind: behavioral
+    impact: critical
+    tier: T3
+    status: known-and-supported
+    constructs: [packages/memory-engine/src/mongodb-sync.ts, packages/memory-engine/src/mongodb-schema.ts]
+    validations: []
+    exceptions: []
+
+  - id: C-006
+    schema_version: 0.1.0
+    statement: "Idempotency fingerprints MUST have a retention policy: TTL or count cap on completed-write fingerprint state so deduplication support does not accumulate forever behind its unique index."
+    rationale: "Fingerprints are retained forever with no expiry, an unbounded-growth and privacy-retention exposure bundled with the erasure obligation."
+    sources:
+      - ref: "EL-006#recommendations"
+        authority_domain: api-contracts
+        entailment: explicit
+    claim_kind: mechanical
+    impact: medium
+    tier: T1
+    status: known-and-supported
+    constructs: [packages/memory-engine/src/mongodb-events.ts, packages/memory-engine/src/mongodb-manager-write.ts]
+    validations: []
+    exceptions: []
+
+  - id: C-007
+    schema_version: 0.1.0
+    statement: "The autoEmbed dependency on MongoDB Preview MUST be de-risked: declare the Preview posture as an explicit supported-target contract or add a tested client-side fallback, centralize the duplicated voyage-4-large literal into one configuration point, and remove or quarantine the dead provider stack."
+    rationale: "The whole vector pipeline depends on a Preview feature that can change or retire with only a warn-and-continue deprecation path and no fallback; the model literal is duplicated across nine sites and a 1,600-line provider stack is unreachable dead code."
+    sources:
+      - ref: "EL-002#recommendations"
+        authority_domain: embedding-pipeline
+        entailment: paraphrase
+    claim_kind: architectural
+    impact: critical
+    tier: T3
+    status: known-and-supported
+    constructs: [packages/memory-engine/src/mongodb-schema-search-definitions.ts, packages/memory-engine/src/mongodb-sync.ts, packages/memory-engine/src/backend-config.ts]
+    validations: []
+    exceptions: []
+
+  - id: C-008
+    schema_version: 0.1.0
+    statement: "The prompt-injection defense MUST cover every injection surface: the untrusted-memory quarantine envelope MUST be applied to pi-extension session context and search injection points, classifyInjection MUST run on write-structured entries, and the pi default memory scope MUST stop being global."
+    rationale: "The codebase already implements a forgery-proof quarantine envelope for the AI-SDK tools surface, while the sibling pi surface renders raw profile and memory text as trusted session context, and write-structured bypasses the classifier entirely; the default global scope lets one project poison every project."
+    sources:
+      - ref: "EL-010#recommendations"
+        authority_domain: security
+        entailment: paraphrase
+    claim_kind: behavioral
+    impact: critical
+    tier: T3
+    status: known-and-supported
+    constructs: ["packages/pi-extension/extensions/lifecycle.ts#renderSessionContext", "packages/tools/src/memory-context.ts#renderMemoryContextBlock", apps/api/src/routes/v1-write-routes.ts]
+    validations: []
+    exceptions: []
+
+  - id: C-009
+    schema_version: 0.1.0
+    statement: "Deployment defaults MUST be safe at moderate scale: shared-client mode with its bounded pool MUST be the default, the manager cache MUST be bounded unconditionally with LRU idle eviction, and the non-shared poll interval MUST become a sweep rather than 1 Hz polling."
+    rationale: "Default mode spawns one connection pool per agent plus 1 Hz polling per manager, so roughly 150 agents exhaust an M10 cluster connection budget; the bounded-pool and quiescence machinery already exists and only the default is wrong."
+    sources:
+      - ref: "EL-009#recommendations"
+        authority_domain: performance-cost
+        entailment: paraphrase
+    claim_kind: operational
+    impact: critical
+    tier: T3
+    status: known-and-supported
+    constructs: [packages/memory-engine/src/search-manager.ts, packages/memory-engine/src/mongodb-client-registry.ts, packages/memory-engine/src/backend-config.ts]
+    validations: []
+    exceptions: []
+
+  - id: C-010
+    schema_version: 0.1.0
+    statement: "CI MUST execute the test suites that already exist: apps/api tests including the OpenAPI drift guard MUST run, the scripts test corpus MUST execute in CI, and the nightly E2E and publish workflows MUST fail when executed-test count is zero or expected suites are skipped."
+    rationale: "CI currently never runs 27 existing passing apps/api tests including the OpenAPI contract drift guard, the 203-case scripts corpus is dead in CI, and the nightly gate reports green with every suite skipped, so no other gate is actually verified."
+    sources:
+      - ref: "EL-008#recommendations"
+        authority_domain: ci-observability
+        entailment: explicit
+    claim_kind: operational
+    impact: high
+    tier: T3
+    status: known-and-supported
+    constructs: [apps/api/package.json, .github/workflows/ci.yml, .github/workflows/e2e-nightly.yml, .github/workflows/publish.yml]
+    validations: [V-026, V-027, V-028, V-029]
+    exceptions: []
+
+  - id: C-011
+    schema_version: 0.1.0
+    statement: "The HTTP client MUST NOT retry non-idempotent mutations automatically: retries MUST be restricted to requests carrying an Idempotency-Key, or the affected mutation endpoints MUST gain server-side natural idempotency."
+    rationale: "Automatic retries of non-idempotent endpoints can double-apply lifecycle mutations and increment outcome counters twice, breaking the revision-CAS trust path."
+    sources:
+      - ref: "EL-006#recommendations"
+        authority_domain: api-contracts
+        entailment: explicit
+    claim_kind: api
+    impact: high
+    tier: T2
+    status: known-and-supported
+    constructs: ["packages/client/src/client.ts#apiFetch"]
+    validations: []
+    exceptions: []
+
+  - id: C-012
+    schema_version: 0.1.0
+    statement: "The search-detailed endpoint MUST validate nested filter objects with zod schemas of the same strictness as kbFilterSchema, including the type-cast objects and timeRange casts on the context routes."
+    rationale: search-detailed is the last unvalidated boundary on an otherwise strictly validated API; operator-shaped keys reach MongoDB query construction through type casts only.
+    sources:
+      - ref: "EL-006#recommendations"
+        authority_domain: api-contracts
+        entailment: explicit
+    claim_kind: api
+    impact: high
+    tier: T2
+    status: known-and-supported
+    constructs: [apps/api/src/routes/v1-search-routes.ts, "apps/api/src/lib/validation.ts#kbFilterSchema", apps/api/src/routes/v1-context-routes.ts]
+    validations: []
+    exceptions: []
+
+  - id: C-013
+    schema_version: 0.1.0
+    statement: "The mode parameter MUST be single-sourced: the API MUST validate mode as an enum and reject invalid values with 400, and the accepted value set MUST match across API, client, MCP schema, and tools schema."
+    rationale: "The client and MCP schemas accept a mode value the API silently ignores, so callers can believe they requested full context while receiving default behavior."
+    sources:
+      - ref: "EL-006#recommendations"
+        authority_domain: api-contracts
+        entailment: explicit
+    claim_kind: api
+    impact: medium
+    tier: T1
+    status: known-and-supported
+    constructs: [apps/api/src/routes/v1-search-routes.ts, packages/client/src/client.ts, apps/mcp/src/server.ts]
+    validations: []
+    exceptions: []
+
+  - id: C-014
+    schema_version: 0.1.0
+    statement: "The x-memongo-client-version header MUST be read by the server and logged on mismatch, or the header and its decorative telemetry comments MUST be removed."
+    rationale: The client sends the header on every request and no server code reads it; decorative telemetry creates false confidence in contract drift detection.
+    sources:
+      - ref: "EL-006#recommendations"
+        authority_domain: api-contracts
+        entailment: explicit
+    claim_kind: api
+    impact: low
+    tier: T1
+    status: known-and-supported
+    constructs: [packages/client/src/client.ts, apps/api/src/app.ts]
+    validations: []
+    exceptions: []
+
+  - id: C-015
+    schema_version: 0.1.0
+    statement: "The chain-trace endpoint MUST return 400 for collection names outside the engine allowlist instead of fabricating a chainComplete true response, and the tools package collection enum MUST mirror the allowlist."
+    rationale: "An invalid collection name produces a fabricated success response, the exact silent-degradation pattern the review flags system-wide."
+    sources:
+      - ref: "EL-006#recommendations"
+        authority_domain: api-contracts
+        entailment: explicit
+    claim_kind: api
+    impact: medium
+    tier: T1
+    status: known-and-supported
+    constructs: [apps/api/src/routes/v1-maintenance-routes.ts, packages/tools/src/index.ts]
+    validations: []
+    exceptions: []
+
+  - id: C-016
+    schema_version: 0.1.0
+    statement: "Capability checks MUST be re-verified at runtime, not only at boot: index readiness MUST re-poll on lane failure and surface in status, the ready vector lane MUST become a live probe, the pi-extension availability probe MUST retry with backoff instead of caching a startup failure, and the change-stream watcher MUST be supervised with exponential-backoff re-open and a liveness flag."
+    rationale: "Every capability is verified once at boot and never again: a broken search lane keeps receiving traffic, a dead watcher never recovers, and an API that boots after the extension leaves semantic memory silently degraded for a whole session."
+    sources:
+      - ref: "EL-007#recommendations"
+        authority_domain: mongodb-operations
+        entailment: paraphrase
+    claim_kind: behavioral
+    impact: high
+    tier: T2
+    status: known-and-supported
+    constructs: [apps/api/src/lib/readiness.ts, packages/memory-engine/src/mongodb-change-stream.ts, "packages/pi-extension/extensions/index.ts#probeClient", packages/memory-engine/src/mongodb-manager-admin.ts]
+    validations: []
+    exceptions: []
+
+  - id: C-017
+    schema_version: 0.1.0
+    statement: "Cost MUST be observable end to end: the chat-completion transport MUST return token usage and thread it through enrichment accounting, indexing-time embedding spend MUST be counted, per-tenant per-day token sums MUST surface through the accounting module, and telemetry MUST gain sampling and a kill switch."
+    rationale: "Token usage is discarded at every LLM transport and the dominant cost, indexing-time embeddings, is uncounted, so denial-of-wallet is as reachable as denial-of-service and neither is observable."
+    sources:
+      - ref: "EL-009#recommendations"
+        authority_domain: performance-cost
+        entailment: paraphrase
+    claim_kind: behavioral
+    impact: high
+    tier: T2
+    status: known-and-supported
+    constructs: [packages/memory-engine/src/mongodb-llm-enrichment.ts, packages/memory-engine/src/mongodb-operation-accounting.ts, packages/memory-engine/src/mongodb-telemetry.ts]
+    validations: []
+    exceptions: []
+
+  - id: C-018
+    schema_version: 0.1.0
+    statement: "Search and autoEmbed concurrency MUST have admission control with a token bucket sized to the deployment rate limits, budget exhaustion surfaced as a distinct throttling outcome, and a backlog-depth gauge on the job queue with an alert threshold."
+    rationale: "Without admission control, provider rate limits surface as empty results or invisible queuing; the review measured a 13.5-second worst-case latency path and an unobservable backlog as the failure modes."
+    sources:
+      - ref: "EL-009#recommendations"
+        authority_domain: performance-cost
+        entailment: explicit
+    claim_kind: operational
+    impact: high
+    tier: T3
+    status: known-and-supported
+    constructs: [packages/memory-engine/src/mongodb-manager-jobs.ts, packages/memory-engine/src/mongodb-manager-write.ts, packages/memory-engine/src/mongodb-search-v2.ts]
+    validations: []
+    exceptions: []
+
+  - id: C-019
+    schema_version: 0.1.0
+    statement: "Degradation MUST be distinguishable from healthy emptiness: the client MUST distinguish 401 and 403 from empty memory in silent mode, throttling MUST be reported as throttling rather than no memories found, and rerank skip MUST emit a telemetry marker so off is distinguishable from failed."
+    rationale: "An operator cannot tell healthy from degraded without opening MongoDB by hand, and an agent cannot tell no relevant memory from memory system broken, which is the worse failure for a memory product."
+    sources:
+      - ref: "EL-009#recommendations"
+        authority_domain: performance-cost
+        entailment: paraphrase
+    claim_kind: behavioral
+    impact: high
+    tier: T2
+    status: known-and-supported
+    constructs: [packages/client/src/client.ts, packages/memory-engine/src/mongodb-reranker.ts, packages/memory-engine/src/mongodb-search-v2.ts]
+    validations: []
+    exceptions: []
+
+  - id: C-020
+    schema_version: 0.1.0
+    statement: "Consolidation MUST be scheduled for API-only deployments: the worker MUST claim consolidation job types in addition to extraction, or the manager MUST gain an interval trigger, so decay, dedupe, and contradiction resolution actually run."
+    rationale: "The worker claims only extraction jobs and no cron exists in the API app, so the entire decay and contradiction half of the lifecycle is dead code for API-only deployments."
+    sources:
+      - ref: "EL-004#recommendations"
+        authority_domain: memory-lifecycle
+        entailment: explicit
+    claim_kind: behavioral
+    impact: high
+    tier: T2
+    status: known-and-supported
+    constructs: [packages/memory-engine/src/mongodb-manager-jobs.ts, packages/memory-engine/src/mongodb-consolidator.ts]
+    validations: []
+    exceptions: []
+
+  - id: C-021
+    schema_version: 0.1.0
+    statement: "Dead-lettered jobs MUST be loud and durable: a telemetry event MUST fire and failed-job counts MUST surface on the status endpoint when a job hits max attempts, and dead letters MUST be exempt from the terminal-job TTL so the record of lost extractions does not evaporate."
+    rationale: "Failed extractions are silently dropped and then deleted after 30 days, so data loss is invisible and unauditable."
+    sources:
+      - ref: "EL-004#recommendations"
+        authority_domain: memory-lifecycle
+        entailment: explicit
+    claim_kind: operational
+    impact: medium
+    tier: T2
+    status: known-and-supported
+    constructs: [packages/memory-engine/src/mongodb-memory-jobs.ts, apps/api/src/routes/v1-status-routes.ts, packages/memory-engine/src/mongodb-schema.ts]
+    validations: []
+    exceptions: []
+
+  - id: C-022
+    schema_version: 0.1.0
+    statement: "Episodes MUST have a lifecycle: a per-scope episode cap plus TTL, or merge and coalescing of overlapping episodes during consolidation."
+    rationale: "Episodes grow unbounded today with no cap, TTL, or coalescing, part of the system-wide pattern where nothing ever forgets."
+    sources:
+      - ref: "EL-004#recommendations"
+        authority_domain: memory-lifecycle
+        entailment: explicit
+    claim_kind: behavioral
+    impact: medium
+    tier: T2
+    status: known-and-supported
+    constructs: [packages/memory-engine/src/mongodb-episodes.ts]
+    validations: []
+    exceptions: []
+
+  - id: C-023
+    schema_version: 0.1.0
+    statement: "The batch write path MUST stage extraction jobs inside the same transaction the single-write path uses, or a backstop sweep MUST stage jobs for durable events that lack them."
+    rationale: "The batch path can commit events without staging their extraction jobs, leaving memories that are written but never processed."
+    sources:
+      - ref: "EL-007#recommendations"
+        authority_domain: mongodb-operations
+        entailment: explicit
+    claim_kind: behavioral
+    impact: high
+    tier: T2
+    status: known-and-supported
+    constructs: [packages/memory-engine/src/mongodb-manager-write.ts]
+    validations: []
+    exceptions: []
+
+  - id: C-024
+    schema_version: 0.1.0
+    statement: "Orphan detection MUST cover every relation type: relations to entities, entity links to entities, chunks to events, and episodes to events, and deleteEntity MUST cascade to entity links."
+    rationale: "Integrity checks currently cover only the knowledge-base surface, so referential orphans accumulate silently in four relation types."
+    sources:
+      - ref: "EL-001#recommendations"
+        authority_domain: data-model
+        entailment: paraphrase
+    claim_kind: behavioral
+    impact: medium
+    tier: T2
+    status: known-and-supported
+    constructs: [packages/memory-engine/src/mongodb-schema-integrity.ts, packages/memory-engine/src/mongodb-manager-admin.ts]
+    validations: []
+    exceptions: []
+
+  - id: C-025
+    schema_version: 0.1.0
+    statement: "The relation locator relationId MUST incorporate the relation type as from-to-type with a data migration for existing documents, and findRelationByLocatorId MUST accept an optional type filter until the migration lands."
+    rationale: "The locator is ambiguous today: two relations between the same entities with different types collide on one relationId."
+    sources:
+      - ref: "EL-001#recommendations"
+        authority_domain: data-model
+        entailment: explicit
+    claim_kind: mechanical
+    impact: medium
+    tier: T1
+    status: known-and-supported
+    constructs: ["packages/memory-engine/src/mongodb-graph.ts#findRelationByLocatorId", packages/memory-engine/src/mongodb-manager-read.ts]
+    validations: []
+    exceptions: []
+
+  - id: C-026
+    schema_version: 0.1.0
+    statement: "Chunk projections MUST carry validAt and invalidAt and the chunks search lane MUST apply the bitemporal filter, so soft-invalidated events stop matching on the primary retrieval surface."
+    rationale: "Chunk projection lacks bitemporal invalidation, so soft-invalidated events keep matching searches through their embedded chunks."
+    sources:
+      - ref: "EL-001#recommendations"
+        authority_domain: data-model
+        entailment: explicit
+    claim_kind: behavioral
+    impact: high
+    tier: T2
+    status: known-and-supported
+    constructs: [packages/memory-engine/src/mongodb-sync.ts, packages/memory-engine/src/mongodb-search-v2.ts]
+    validations: []
+    exceptions: []
+
+  - id: C-027
+    schema_version: 0.1.0
+    statement: "Exclusive-relation invalidation MUST set validTo from the superseding relation validFrom with a now fallback, and invalidatedBy.at MUST be stored as a Date rather than a string."
+    rationale: "The current invalidation writes wrong types and timestamps, corrupting the temporal-validity semantics the product claims as a strength."
+    sources:
+      - ref: "EL-001#recommendations"
+        authority_domain: data-model
+        entailment: explicit
+    claim_kind: mechanical
+    impact: medium
+    tier: T1
+    status: known-and-supported
+    constructs: [packages/memory-engine/src/mongodb-graph.ts]
+    validations: []
+    exceptions: []
+
+  - id: C-028
+    schema_version: 0.1.0
+    statement: "sourceEventIds provenance arrays MUST be bounded with recency eviction on entities, relations, and structured memories."
+    rationale: "Unbounded provenance arrays grow without limit on high-frequency identities, degrading documents and index behavior over time."
+    sources:
+      - ref: "EL-001#recommendations"
+        authority_domain: data-model
+        entailment: explicit
+    claim_kind: mechanical
+    impact: medium
+    tier: T1
+    status: known-and-supported
+    constructs: ["packages/memory-engine/src/mongodb-structured-memory.ts#mergeSourceEventIds", packages/memory-engine/src/mongodb-graph.ts]
+    validations: []
+    exceptions: []
+
+  - id: C-029
+    schema_version: 0.1.0
+    statement: "The BM25 lane MUST adopt a real analyzer strategy: lucene.folding or a config-selected language analyzer for natural-language fields and a dual keyword-plus-folding field for identifier-heavy fields, shipped behind config with a search-index rebuild and migration path."
+    rationale: "lucene.standard everywhere underserves natural-language recall with no stemming or folding and splits identifiers, while the eval harness exists to prove the improvement safely."
+    sources:
+      - ref: "EL-003#recommendations"
+        authority_domain: retrieval-quality
+        entailment: explicit
+    claim_kind: architectural
+    impact: high
+    tier: T2
+    status: known-and-supported
+    constructs: [packages/memory-engine/src/mongodb-schema-search-indexes.ts, packages/memory-engine/src/mongodb-search-ranking.ts]
+    validations: []
+    exceptions: []
+
+  - id: C-030
+    schema_version: 0.1.0
+    statement: "Query length MUST be clamped before the hot path consumes it, about 2,000 characters for conversation queries with a telemetry event, ahead of autoEmbed, BM25, the cache probe, and rerank."
+    rationale: "Unclamped query strings are embedded, searched, cached, and reranked at full length, an unbounded cost and latency input."
+    sources:
+      - ref: "EL-003#recommendations"
+        authority_domain: retrieval-quality
+        entailment: explicit
+    claim_kind: mechanical
+    impact: medium
+    tier: T1
+    status: known-and-supported
+    constructs: ["packages/memory-engine/src/mongodb-search-ranking.ts#normalizeDetailedSearchRequest"]
+    validations: []
+    exceptions: []
+
+  - id: C-031
+    schema_version: 0.1.0
+    statement: The rerank timeout MUST derive from the remaining latency budget or lower its fixed default so one provider cannot double the P95 contract ceiling.
+    rationale: The fixed 2-second rerank timeout stacks on probe-miss and slow-lane worst cases for a 13.5-second arithmetic worst case that no test measures.
+    sources:
+      - ref: "EL-003#recommendations"
+        authority_domain: retrieval-quality
+        entailment: explicit
+    claim_kind: behavioral
+    impact: medium
+    tier: T2
+    status: known-and-supported
+    constructs: [packages/memory-engine/src/mongodb-reranker.ts]
+    validations: []
+    exceptions: []
+
+  - id: C-032
+    schema_version: 0.1.0
+    statement: The embedding coverage probe MUST use exact nearest-neighbor with no numCandidates so the probe measures actual coverage rather than an approximation that can fabricate coverage.
+    rationale: "The probe passes numCandidates to an ENN query where it is ignored, so the coverage signal can report coverage that approximate search would not reproduce."
+    sources:
+      - ref: "EL-002#recommendations"
+        authority_domain: embedding-pipeline
+        entailment: explicit
+    claim_kind: mechanical
+    impact: low
+    tier: T0
+    status: known-and-supported
+    constructs: [packages/memory-engine/src/mongodb-manager-admin.ts]
+    validations: []
+    exceptions: []
+
+  - id: C-033
+    schema_version: 0.1.0
+    statement: "Context expansion MUST parallelize per-session fetches with a bounded concurrency cap or a single facet-grouped query, removing the sequential N-plus-one from the search hot path."
+    rationale: The only sequential N+1 on the search hot path multiplies latency by session count.
+    sources:
+      - ref: "EL-009#recommendations"
+        authority_domain: performance-cost
+        entailment: explicit
+    claim_kind: behavioral
+    impact: medium
+    tier: T2
+    status: known-and-supported
+    constructs: [packages/memory-engine/src/mongodb-context-expansion.ts]
+    validations: []
+    exceptions: []
+
+  - id: C-034
+    schema_version: 0.1.0
+    statement: "The episode auto-trigger cooldown MUST memoize its negative result per agent for about 60 seconds or move the 500-event scan fully into the background job, so the write path pays only a one-query cooldown check."
+    rationale: "In the cold window the 500-event scan runs once per write, amplifying write cost by a constant factor."
+    sources:
+      - ref: "EL-009#recommendations"
+        authority_domain: performance-cost
+        entailment: explicit
+    claim_kind: mechanical
+    impact: medium
+    tier: T1
+    status: known-and-supported
+    constructs: [packages/memory-engine/src/mongodb-episodes.ts, packages/memory-engine/src/mongodb-manager-write.ts]
+    validations: []
+    exceptions: []
+
+  - id: C-035
+    schema_version: 0.1.0
+    statement: "The kb locator query in readFile MUST be scoped with agentId, scope, and scopeRef filters, with a regression test, closing the only unfiltered cross-tenant read path."
+    rationale: "The kb locator is the only MongoDB query without an agentId or scope filter, making knowledge-base content readable across tenants."
+    sources:
+      - ref: "EL-005#recommendations"
+        authority_domain: security
+        entailment: explicit
+    claim_kind: behavioral
+    impact: high
+    tier: T2
+    status: known-and-supported
+    constructs: ["packages/memory-engine/src/mongodb-manager-read.ts#readFile"]
+    validations: []
+    exceptions: []
+
+  - id: C-036
+    schema_version: 0.1.0
+    statement: "pi-extension auto-capture MUST be explicit opt-in with a default off or a first-run notice, and MUST state exactly what is sent, which is raw user and assistant turns."
+    rationale: "Auto-capture is on by default and ships raw conversation turns with no consent gate or redaction, so pasted credentials in chat become durable API-side records by default."
+    sources:
+      - ref: "EL-010#recommendations"
+        authority_domain: security
+        entailment: explicit
+    claim_kind: behavioral
+    impact: high
+    tier: T2
+    status: known-and-supported
+    constructs: [packages/pi-extension/extensions/lifecycle.ts]
+    validations: []
+    exceptions: []
+
+  - id: C-037
+    schema_version: 0.1.0
+    statement: "The Docker build context MUST be effectively ignored: a root .dockerignore or Dockerfile-specific ignore file MUST exist so the build stops shipping .git, node_modules, benchmarks, and root dot-env files into context and cache."
+    rationale: The existing .dockerignore is never applied because Docker resolves ignore files from the context root and the compose build uses the repo root as context.
+    sources:
+      - ref: "EL-010#recommendations"
+        authority_domain: integration-dx
+        entailment: explicit
+    claim_kind: mechanical
+    impact: medium
+    tier: T1
+    status: known-and-supported
+    constructs: [docker/compose.yaml, apps/api/Dockerfile]
+    validations: []
+    exceptions: []
+
+  - id: C-038
+    schema_version: 0.1.0
+    statement: The publish workflow MUST gate on the secret-free tier-A e2e suite and a post-publish npm install smoke test before packages reach the registry.
+    rationale: Published packages currently reach npm without the e2e or install proofs that already exist in the repository.
+    sources:
+      - ref: "EL-008#recommendations"
+        authority_domain: ci-observability
+        entailment: explicit
+    claim_kind: operational
+    impact: medium
+    tier: T2
+    status: known-and-supported
+    constructs: [.github/workflows/publish.yml]
+    validations: []
+    exceptions: []
+
+  - id: C-039
+    schema_version: 0.1.0
+    statement: "The nightly schedule MUST run at least a sample-mode benchmark and the mongodb e2e QA suite, and the LongMemEval contract MUST add LLM-judged answer accuracy so numbers are comparable to the official protocol."
+    rationale: "Nightly currently runs neither, and the eval contract measures retrieval only, so quality regressions surface late and incomparably."
+    sources:
+      - ref: "EL-008#recommendations"
+        authority_domain: ci-observability
+        entailment: explicit
+    claim_kind: operational
+    impact: medium
+    tier: T2
+    status: known-and-supported
+    constructs: [.github/workflows/e2e-nightly.yml, packages/memory-engine/src/types.ts]
+    validations: []
+    exceptions: []

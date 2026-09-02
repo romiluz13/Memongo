@@ -10,7 +10,8 @@
 	},
 	"workspaces": [
 		"apps/*",
-		"packages/*"
+		"packages/*",
+		"scripts"
 	],
 	"overrides": {
 		"body-parser": "2.3.0",

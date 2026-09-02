@@ -1,0 +1,266 @@
+# DDD Evidence Lock
+# Immutable, append-only record of source provenance and captured representations.
+# Each active entry records an exact cache path in addition to source metadata.
+# Updated by: remediation bootstrap 2026-09-02 (GLM-5.3 review corpus)
+# EL-007/EL-008 content_digest re-locked 2026-09-02: example credentials in the
+# cache notes were sanitized to placeholders before first commit; digests updated
+# to match. No other entry modified.
+# Schema: SPEC.md 7.3
+
+# Entries are appended, never modified. Supersession creates a new entry.
+schema_version: 0.1.0
+
+entries:
+
+  - id: EL-001
+    subject: "GLM-5.3 review 01 - memory model and schema (memongo at 1d98eb36f1)"
+    schema_version: 0.1.0
+    source_class: code-derived
+    source_url: "file:///tmp/memongo-glm53-review/findings/01-memory-model-schema.md"
+    publisher: "GLM-5.3 via Grove gateway"
+    product: "memongo full-framework review 2026-09-02"
+    version: "1d98eb36f1"
+    retrieved_at: "2026-09-02T13:41:39.966Z"
+    content_digest: "sha256:0cfbe1107ee7531508219a17c350dd4b2d7808c86ab12a6d87725e2b36d35df2"
+    doc_version: "1d98eb36f1"
+    cache_path: cache/glm53-01-memory-model-schema.md
+    sections: ["executive summary", "checklist verification", "correctness bugs", "unknown unknowns", "competitor comparison", "external docs alignment", "recommendations"]
+    status: informative
+    authority_for: [data-model, data-lifecycle, remediation-priorities]
+    freshness: "365d"
+    adapter: agent-review
+    license: project-internal
+    independence: agent-proposed-human-approved
+    superseded_by: null
+    content_type: "text/markdown"
+    notes: "GLM-5.3 full-framework review, EL-001 (01-memory-model-schema.md). Reviewed tree at commit 1d98eb36f1. Commissioned by the maintainer and approved as remediation-plan input on 2026-09-02; per-finding approval is recorded when the owning workstream lands. Captured from /tmp/memongo-glm53-review/findings/01-memory-model-schema.md."
+
+  - id: EL-002
+    subject: "GLM-5.3 review 02 - embedding and vector pipeline (memongo at 1d98eb36f1)"
+    schema_version: 0.1.0
+    source_class: code-derived
+    source_url: "file:///tmp/memongo-glm53-review/findings/02-embedding-vector-pipeline.md"
+    publisher: "GLM-5.3 via Grove gateway"
+    product: "memongo full-framework review 2026-09-02"
+    version: "1d98eb36f1"
+    retrieved_at: "2026-09-02T13:41:39.966Z"
+    content_digest: "sha256:2afa6799eed69f2766d4afcdf907b5633019f510a1d19789e262200fef2e08b2"
+    doc_version: "1d98eb36f1"
+    cache_path: cache/glm53-02-embedding-vector-pipeline.md
+    sections: ["executive summary", "checklist verification", "correctness findings", "unknown unknowns", "competitor comparison", "external documentation alignment", "recommendations"]
+    status: informative
+    authority_for: [embedding-pipeline, remediation-priorities]
+    freshness: "365d"
+    adapter: agent-review
+    license: project-internal
+    independence: agent-proposed-human-approved
+    superseded_by: null
+    content_type: "text/markdown"
+    notes: "GLM-5.3 full-framework review, EL-002 (02-embedding-vector-pipeline.md). Reviewed tree at commit 1d98eb36f1. Commissioned by the maintainer and approved as remediation-plan input on 2026-09-02; per-finding approval is recorded when the owning workstream lands. Captured from /tmp/memongo-glm53-review/findings/02-embedding-vector-pipeline.md."
+
+  - id: EL-003
+    subject: "GLM-5.3 review 03 - retrieval and search quality (memongo at 1d98eb36f1)"
+    schema_version: 0.1.0
+    source_class: code-derived
+    source_url: "file:///tmp/memongo-glm53-review/findings/03-retrieval-search-quality.md"
+    publisher: "GLM-5.3 via Grove gateway"
+    product: "memongo full-framework review 2026-09-02"
+    version: "1d98eb36f1"
+    retrieved_at: "2026-09-02T13:41:39.966Z"
+    content_digest: "sha256:bf74e627a791ae18bdfa683ca7c1cd956911b734a51f5cc6f0c676fa159c52ef"
+    doc_version: "1d98eb36f1"
+    cache_path: cache/glm53-03-retrieval-search-quality.md
+    sections: ["executive summary", "checklist verification", "correctness bugs", "unknown unknowns", "competitor comparison", "external docs alignment", "recommendations"]
+    status: informative
+    authority_for: [retrieval-quality, remediation-priorities]
+    freshness: "365d"
+    adapter: agent-review
+    license: project-internal
+    independence: agent-proposed-human-approved
+    superseded_by: null
+    content_type: "text/markdown"
+    notes: "GLM-5.3 full-framework review, EL-003 (03-retrieval-search-quality.md). Reviewed tree at commit 1d98eb36f1. Commissioned by the maintainer and approved as remediation-plan input on 2026-09-02; per-finding approval is recorded when the owning workstream lands. Captured from /tmp/memongo-glm53-review/findings/03-retrieval-search-quality.md."
+
+  - id: EL-004
+    subject: "GLM-5.3 review 04 - lifecycle, consolidation, and decay (memongo at 1d98eb36f1)"
+    schema_version: 0.1.0
+    source_class: code-derived
+    source_url: "file:///tmp/memongo-glm53-review/findings/04-lifecycle-consolidation-decay.md"
+    publisher: "GLM-5.3 via Grove gateway"
+    product: "memongo full-framework review 2026-09-02"
+    version: "1d98eb36f1"
+    retrieved_at: "2026-09-02T13:41:39.966Z"
+    content_digest: "sha256:fea8a43cb31178f9dc5c95c5d13f2f1d10bbf433895b5738bb1747a4b006dbe4"
+    doc_version: "1d98eb36f1"
+    cache_path: cache/glm53-04-lifecycle-consolidation-decay.md
+    sections: ["executive summary", "checklist verification", "correctness bugs", "unknown unknowns", "competitor comparison", "external docs alignment", "recommendations"]
+    status: informative
+    authority_for: [memory-lifecycle, data-lifecycle, remediation-priorities]
+    freshness: "365d"
+    adapter: agent-review
+    license: project-internal
+    independence: agent-proposed-human-approved
+    superseded_by: null
+    content_type: "text/markdown"
+    notes: "GLM-5.3 full-framework review, EL-004 (04-lifecycle-consolidation-decay.md). Reviewed tree at commit 1d98eb36f1. Commissioned by the maintainer and approved as remediation-plan input on 2026-09-02; per-finding approval is recorded when the owning workstream lands. Captured from /tmp/memongo-glm53-review/findings/04-lifecycle-consolidation-decay.md."
+
+  - id: EL-005
+    subject: "GLM-5.3 review 05 - security, tenancy, and access (memongo at 1d98eb36f1)"
+    schema_version: 0.1.0
+    source_class: code-derived
+    source_url: "file:///tmp/memongo-glm53-review/findings/05-security-tenancy-access.md"
+    publisher: "GLM-5.3 via Grove gateway"
+    product: "memongo full-framework review 2026-09-02"
+    version: "1d98eb36f1"
+    retrieved_at: "2026-09-02T13:41:39.966Z"
+    content_digest: "sha256:5293e0c0e7307e305ff39699cfe78d88b4689e85ce86d080dd4a8bf62f77cbdb"
+    doc_version: "1d98eb36f1"
+    cache_path: cache/glm53-05-security-tenancy-access.md
+    sections: ["executive summary", "checklist verification", "findings (severity-ranked)", "positives worth keeping", "unknown unknowns", "competitor comparison", "external standards alignment", "prioritized recommendations", "recommendations"]
+    status: informative
+    authority_for: [security, remediation-priorities]
+    freshness: "365d"
+    adapter: agent-review
+    license: project-internal
+    independence: agent-proposed-human-approved
+    superseded_by: null
+    content_type: "text/markdown"
+    notes: "GLM-5.3 full-framework review, EL-005 (05-security-tenancy-access.md). Reviewed tree at commit 1d98eb36f1. Commissioned by the maintainer and approved as remediation-plan input on 2026-09-02; per-finding approval is recorded when the owning workstream lands. Captured from /tmp/memongo-glm53-review/findings/05-security-tenancy-access.md."
+
+  - id: EL-006
+    subject: "GLM-5.3 review 06 - API and client contracts (memongo at 1d98eb36f1)"
+    schema_version: 0.1.0
+    source_class: code-derived
+    source_url: "file:///tmp/memongo-glm53-review/findings/06-api-client-contracts.md"
+    publisher: "GLM-5.3 via Grove gateway"
+    product: "memongo full-framework review 2026-09-02"
+    version: "1d98eb36f1"
+    retrieved_at: "2026-09-02T13:41:39.966Z"
+    content_digest: "sha256:cadf9ca9aee7d9b3a8b6a6d5f2b38f26c17538cb25c491e0670c1e1f147eaaac"
+    doc_version: "1d98eb36f1"
+    cache_path: cache/glm53-06-api-client-contracts.md
+    sections: ["executive summary", "checklist verification", "correctness bugs", "unknown unknowns", "competitor comparison", "external docs alignment", "recommendations"]
+    status: informative
+    authority_for: [api-contracts, security, remediation-priorities]
+    freshness: "365d"
+    adapter: agent-review
+    license: project-internal
+    independence: agent-proposed-human-approved
+    superseded_by: null
+    content_type: "text/markdown"
+    notes: "GLM-5.3 full-framework review, EL-006 (06-api-client-contracts.md). Reviewed tree at commit 1d98eb36f1. Commissioned by the maintainer and approved as remediation-plan input on 2026-09-02; per-finding approval is recorded when the owning workstream lands. Captured from /tmp/memongo-glm53-review/findings/06-api-client-contracts.md."
+
+  - id: EL-007
+    subject: "GLM-5.3 review 07 - MongoDB operations and resilience (memongo at 1d98eb36f1)"
+    schema_version: 0.1.0
+    source_class: code-derived
+    source_url: "file:///tmp/memongo-glm53-review/findings/07-mongodb-operations-resilience.md"
+    publisher: "GLM-5.3 via Grove gateway"
+    product: "memongo full-framework review 2026-09-02"
+    version: "1d98eb36f1"
+    retrieved_at: "2026-09-02T13:41:39.966Z"
+    content_digest: "sha256:e8805388dd134cf59c42bc34a1484e156c63d856cb8c8cefc03d2c0cd73cac16"
+    doc_version: "1d98eb36f1"
+    cache_path: cache/glm53-07-mongodb-operations-resilience.md
+    sections: ["executive summary", "checklist verification", "correctness bugs", "unknown unknowns", "competitor comparison", "external docs alignment", "recommendations"]
+    status: informative
+    authority_for: [mongodb-operations, security, remediation-priorities]
+    freshness: "365d"
+    adapter: agent-review
+    license: project-internal
+    independence: agent-proposed-human-approved
+    superseded_by: null
+    content_type: "text/markdown"
+    notes: "GLM-5.3 full-framework review, EL-007 (07-mongodb-operations-resilience.md). Reviewed tree at commit 1d98eb36f1. Commissioned by the maintainer and approved as remediation-plan input on 2026-09-02; per-finding approval is recorded when the owning workstream lands. Captured from /tmp/memongo-glm53-review/findings/07-mongodb-operations-resilience.md."
+
+  - id: EL-008
+    subject: "GLM-5.3 review 08 - observability, testing, and QA (memongo at 1d98eb36f1)"
+    schema_version: 0.1.0
+    source_class: code-derived
+    source_url: "file:///tmp/memongo-glm53-review/findings/08-observability-testing-qa.md"
+    publisher: "GLM-5.3 via Grove gateway"
+    product: "memongo full-framework review 2026-09-02"
+    version: "1d98eb36f1"
+    retrieved_at: "2026-09-02T13:41:39.966Z"
+    content_digest: "sha256:97a94754b4fc9ae3b6bb57545dffc4ff1d94d4ede5afe61b9a2e92697a878c70"
+    doc_version: "1d98eb36f1"
+    cache_path: cache/glm53-08-observability-testing-qa.md
+    sections: ["executive summary", "checklist verification", "correctness bugs", "unknown unknowns", "competitor comparison", "external docs alignment", "recommendations"]
+    status: informative
+    authority_for: [ci-observability, remediation-priorities]
+    freshness: "365d"
+    adapter: agent-review
+    license: project-internal
+    independence: agent-proposed-human-approved
+    superseded_by: null
+    content_type: "text/markdown"
+    notes: "GLM-5.3 full-framework review, EL-008 (08-observability-testing-qa.md). Reviewed tree at commit 1d98eb36f1. Commissioned by the maintainer and approved as remediation-plan input on 2026-09-02; per-finding approval is recorded when the owning workstream lands. Captured from /tmp/memongo-glm53-review/findings/08-observability-testing-qa.md."
+
+  - id: EL-009
+    subject: "GLM-5.3 review 09 - performance, scale, and cost (memongo at 1d98eb36f1)"
+    schema_version: 0.1.0
+    source_class: code-derived
+    source_url: "file:///tmp/memongo-glm53-review/findings/09-performance-scale-cost.md"
+    publisher: "GLM-5.3 via Grove gateway"
+    product: "memongo full-framework review 2026-09-02"
+    version: "1d98eb36f1"
+    retrieved_at: "2026-09-02T13:41:39.966Z"
+    content_digest: "sha256:80efb49e7b18ecedcc6fa342d1dc031e7e6a343a1682f109f2a5849f3071c1fe"
+    doc_version: "1d98eb36f1"
+    cache_path: cache/glm53-09-performance-scale-cost.md
+    sections: ["executive summary", "checklist verification", "correctness bugs", "unknown unknowns", "competitor comparison", "external docs alignment", "recommendations"]
+    status: informative
+    authority_for: [performance-cost, remediation-priorities]
+    freshness: "365d"
+    adapter: agent-review
+    license: project-internal
+    independence: agent-proposed-human-approved
+    superseded_by: null
+    content_type: "text/markdown"
+    notes: "GLM-5.3 full-framework review, EL-009 (09-performance-scale-cost.md). Reviewed tree at commit 1d98eb36f1. Commissioned by the maintainer and approved as remediation-plan input on 2026-09-02; per-finding approval is recorded when the owning workstream lands. Captured from /tmp/memongo-glm53-review/findings/09-performance-scale-cost.md."
+
+  - id: EL-010
+    subject: "GLM-5.3 review 10 - integration, DX, and deployment (memongo at 1d98eb36f1)"
+    schema_version: 0.1.0
+    source_class: code-derived
+    source_url: "file:///tmp/memongo-glm53-review/findings/10-integration-dx-deployment.md"
+    publisher: "GLM-5.3 via Grove gateway"
+    product: "memongo full-framework review 2026-09-02"
+    version: "1d98eb36f1"
+    retrieved_at: "2026-09-02T13:41:39.966Z"
+    content_digest: "sha256:90b881b0180f97e3bc1316a1cba78ba4db57f3cbe081627ebae920de09b85b47"
+    doc_version: "1d98eb36f1"
+    cache_path: cache/glm53-10-integration-dx-deployment.md
+    sections: ["executive summary", "checklist verification", "correctness bugs", "unknown unknowns", "competitor / prior-art comparison", "external docs alignment", "recommendations", "verification notes and caveats"]
+    status: informative
+    authority_for: [integration-dx, security, remediation-priorities]
+    freshness: "365d"
+    adapter: agent-review
+    license: project-internal
+    independence: agent-proposed-human-approved
+    superseded_by: null
+    content_type: "text/markdown"
+    notes: "GLM-5.3 full-framework review, EL-010 (10-integration-dx-deployment.md). Reviewed tree at commit 1d98eb36f1. Commissioned by the maintainer and approved as remediation-plan input on 2026-09-02; per-finding approval is recorded when the owning workstream lands. Captured from /tmp/memongo-glm53-review/findings/10-integration-dx-deployment.md."
+
+  - id: EL-011
+    subject: "GLM-5.3 review synthesis - cross-category inventory and ranking (memongo at 1d98eb36f1)"
+    schema_version: 0.1.0
+    source_class: code-derived
+    source_url: "file:///tmp/memongo-glm53-review/findings/99-SYNTHESIS.md"
+    publisher: "GLM-5.3 via Grove gateway"
+    product: "memongo full-framework review 2026-09-02"
+    version: "1d98eb36f1"
+    retrieved_at: "2026-09-02T13:41:39.966Z"
+    content_digest: "sha256:34fd42e27f78aa678aa2a4bf1ede18ed3f543a9fc7a56d01c1d184d9b81d66bd"
+    doc_version: "1d98eb36f1"
+    cache_path: cache/glm53-99-synthesis.md
+    sections: ["findings inventory", "the nine p0s", "cross-category unknown unknowns", "systemic risks", "ranked recommendations", "strengths", "method and verification status", "recommendations"]
+    status: informative
+    authority_for: [remediation-priorities, data-model, data-lifecycle, embedding-pipeline, retrieval-quality, memory-lifecycle, security, api-contracts, mongodb-operations, ci-observability, performance-cost, integration-dx]
+    freshness: "365d"
+    adapter: agent-review
+    license: project-internal
+    independence: agent-proposed-human-approved
+    superseded_by: null
+    content_type: "text/markdown"
+    notes: "GLM-5.3 full-framework review, EL-011 (99-SYNTHESIS.md). Reviewed tree at commit 1d98eb36f1. Commissioned by the maintainer and approved as remediation-plan input on 2026-09-02; per-finding approval is recorded when the owning workstream lands. Captured from /tmp/memongo-glm53-review/findings/99-SYNTHESIS.md."

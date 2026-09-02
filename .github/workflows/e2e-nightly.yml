@@ -12,7 +12,7 @@ jobs:
   e2e-full:
     name: Full E2E against real MongoDB
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 75
     services:
       mongodb:
         image: mongodb/mongodb-atlas-local:preview
@@ -44,9 +44,57 @@ jobs:
       - name: Build
         run: bun run build
 
+      # Fail loudly when a gate env var is missing instead of letting
+      # describe.skipIf() silently skip every gated suite and report green.
+      # The full suite needs an Atlas Model key (auto-embeddings) and an
+      # enrichment provider (LLM extraction suites).
+      - name: Assert e2e gates are armed (no silent skips)
+        env:
+          VOYAGE_API_KEY: ${{ secrets.VOYAGE_API_KEY }}
+          MEMONGO_ENRICHMENT_API_KEY: ${{ secrets.MEMONGO_ENRICHMENT_API_KEY }}
+          MEMONGO_ENRICHMENT_BASE_URL: ${{ vars.MEMONGO_ENRICHMENT_BASE_URL }}
+          MEMONGO_ENRICHMENT_MODEL: ${{ vars.MEMONGO_ENRICHMENT_MODEL }}
+        run: bash scripts/ci/assert-e2e-env.sh
+
       - name: E2E (full suite)
         env:
           MONGODB_TEST_URI: mongodb://127.0.0.1:27017/?directConnection=true
           VOYAGE_API_KEY: ${{ secrets.VOYAGE_API_KEY }}
+          MEMONGO_ENRICHMENT_API_KEY: ${{ secrets.MEMONGO_ENRICHMENT_API_KEY }}
+          MEMONGO_ENRICHMENT_BASE_URL: ${{ vars.MEMONGO_ENRICHMENT_BASE_URL }}
           MEMONGO_ENRICHMENT_MODEL: ${{ vars.MEMONGO_ENRICHMENT_MODEL }}
         run: bun run --filter @memongo/memory-engine test:e2e
+
+      # Skip-green guard: every env-gated suite must have executed at least
+      # one test. Without this, a missing key degrades the "full" nightly to
+      # a green run of the ungated subset. Require-suites are file-path
+      # anchored (.e2e.test.ts) so a lexeme appearing in another suite's
+      # test titles can never satisfy the check.
+      - name: Verify gated e2e suites ran (skip-green guard)
+        run: >
+          bun scripts/ci/verify-tests-ran.mjs
+          --expect packages/memory-engine/test-results/junit.xml
+          --require-suite real-e2e-v2.e2e.test.ts
+          --require-suite e2e-evaluation.e2e.test.ts
+          --require-suite mongodb-embedding-coverage.e2e.test.ts
+          --require-suite production-readiness.e2e.test.ts
+          --require-suite mongodb-temporal-extraction.e2e.test.ts
+          --require-suite mongodb-relation-extraction.e2e.test.ts
+          --require-suite mongodb-contradiction.e2e.test.ts
+          --require-suite mongodb-consolidation-reasoning.e2e.test.ts
+          --require-suite mongodb-temporal-promotion.e2e.test.ts
+
+      # The scripts e2e QA (answer+judge over a live LLM) is the live half of
+      # the QA corpus; its unit half runs in the PR quality job.
+      - name: E2E QA (scripts answer+judge, live LLM)
+        env:
+          MEMONGO_ENRICHMENT_API_KEY: ${{ secrets.MEMONGO_ENRICHMENT_API_KEY }}
+          MEMONGO_ENRICHMENT_BASE_URL: ${{ vars.MEMONGO_ENRICHMENT_BASE_URL }}
+          MEMONGO_ENRICHMENT_MODEL: ${{ vars.MEMONGO_ENRICHMENT_MODEL }}
+        run: bun run --filter @memongo/scripts test:e2e
+
+      - name: Verify scripts e2e QA ran (skip-green guard)
+        run: >
+          bun scripts/ci/verify-tests-ran.mjs
+          --expect scripts/test-results/junit.xml
+          --require-suite mongodb-e2e-qa.e2e.test.ts

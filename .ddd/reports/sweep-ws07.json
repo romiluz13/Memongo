@@ -1,0 +1,561 @@
+{
+	"schema_version": "0.1.0",
+	"direction": "both",
+	"checked_at": "2026-09-02T21:51:21.086Z",
+	"claims_checked": 39,
+	"traces_checked": 84,
+	"violations": [
+		{
+			"type": "claim-without-validation",
+			"claim_id": "C-001",
+			"message": "Claim C-001 is T3 and requires validation."
+		},
+		{
+			"type": "trace-without-validation",
+			"claim_id": "C-001",
+			"trace_id": "TR-001",
+			"message": "Trace TR-001 implements T3 claim C-001 without validation."
+		},
+		{
+			"type": "trace-without-validation",
+			"claim_id": "C-001",
+			"trace_id": "TR-002",
+			"message": "Trace TR-002 implements T3 claim C-001 without validation."
+		},
+		{
+			"type": "t3-without-refutation",
+			"claim_id": "C-001",
+			"message": "T3 claim C-001 has no sustained independent refutation report."
+		},
+		{
+			"type": "claim-without-validation",
+			"claim_id": "C-002",
+			"message": "Claim C-002 is T3 and requires validation."
+		},
+		{
+			"type": "trace-without-validation",
+			"claim_id": "C-002",
+			"trace_id": "TR-003",
+			"message": "Trace TR-003 implements T3 claim C-002 without validation."
+		},
+		{
+			"type": "trace-without-validation",
+			"claim_id": "C-002",
+			"trace_id": "TR-004",
+			"message": "Trace TR-004 implements T3 claim C-002 without validation."
+		},
+		{
+			"type": "trace-without-validation",
+			"claim_id": "C-002",
+			"trace_id": "TR-005",
+			"message": "Trace TR-005 implements T3 claim C-002 without validation."
+		},
+		{
+			"type": "trace-without-validation",
+			"claim_id": "C-002",
+			"trace_id": "TR-006",
+			"message": "Trace TR-006 implements T3 claim C-002 without validation."
+		},
+		{
+			"type": "t3-without-refutation",
+			"claim_id": "C-002",
+			"message": "T3 claim C-002 has no sustained independent refutation report."
+		},
+		{
+			"type": "claim-without-validation",
+			"claim_id": "C-003",
+			"message": "Claim C-003 is T3 and requires validation."
+		},
+		{
+			"type": "trace-without-validation",
+			"claim_id": "C-003",
+			"trace_id": "TR-007",
+			"message": "Trace TR-007 implements T3 claim C-003 without validation."
+		},
+		{
+			"type": "trace-without-validation",
+			"claim_id": "C-003",
+			"trace_id": "TR-008",
+			"message": "Trace TR-008 implements T3 claim C-003 without validation."
+		},
+		{
+			"type": "trace-without-validation",
+			"claim_id": "C-003",
+			"trace_id": "TR-009",
+			"message": "Trace TR-009 implements T3 claim C-003 without validation."
+		},
+		{
+			"type": "t3-without-refutation",
+			"claim_id": "C-003",
+			"message": "T3 claim C-003 has no sustained independent refutation report."
+		},
+		{
+			"type": "claim-without-validation",
+			"claim_id": "C-004",
+			"message": "Claim C-004 is T3 and requires validation."
+		},
+		{
+			"type": "trace-without-validation",
+			"claim_id": "C-004",
+			"trace_id": "TR-010",
+			"message": "Trace TR-010 implements T3 claim C-004 without validation."
+		},
+		{
+			"type": "trace-without-validation",
+			"claim_id": "C-004",
+			"trace_id": "TR-011",
+			"message": "Trace TR-011 implements T3 claim C-004 without validation."
+		},
+		{
+			"type": "trace-without-validation",
+			"claim_id": "C-004",
+			"trace_id": "TR-012",
+			"message": "Trace TR-012 implements T3 claim C-004 without validation."
+		},
+		{
+			"type": "t3-without-refutation",
+			"claim_id": "C-004",
+			"message": "T3 claim C-004 has no sustained independent refutation report."
+		},
+		{
+			"type": "claim-without-validation",
+			"claim_id": "C-005",
+			"message": "Claim C-005 is T3 and requires validation."
+		},
+		{
+			"type": "trace-without-validation",
+			"claim_id": "C-005",
+			"trace_id": "TR-013",
+			"message": "Trace TR-013 implements T3 claim C-005 without validation."
+		},
+		{
+			"type": "trace-without-validation",
+			"claim_id": "C-005",
+			"trace_id": "TR-014",
+			"message": "Trace TR-014 implements T3 claim C-005 without validation."
+		},
+		{
+			"type": "t3-without-refutation",
+			"claim_id": "C-005",
+			"message": "T3 claim C-005 has no sustained independent refutation report."
+		},
+		{
+			"type": "claim-without-validation",
+			"claim_id": "C-007",
+			"message": "Claim C-007 is T3 and requires validation."
+		},
+		{
+			"type": "trace-without-validation",
+			"claim_id": "C-007",
+			"trace_id": "TR-017",
+			"message": "Trace TR-017 implements T3 claim C-007 without validation."
+		},
+		{
+			"type": "trace-without-validation",
+			"claim_id": "C-007",
+			"trace_id": "TR-018",
+			"message": "Trace TR-018 implements T3 claim C-007 without validation."
+		},
+		{
+			"type": "trace-without-validation",
+			"claim_id": "C-007",
+			"trace_id": "TR-019",
+			"message": "Trace TR-019 implements T3 claim C-007 without validation."
+		},
+		{
+			"type": "t3-without-refutation",
+			"claim_id": "C-007",
+			"message": "T3 claim C-007 has no sustained independent refutation report."
+		},
+		{
+			"type": "claim-without-validation",
+			"claim_id": "C-008",
+			"message": "Claim C-008 is T3 and requires validation."
+		},
+		{
+			"type": "trace-without-validation",
+			"claim_id": "C-008",
+			"trace_id": "TR-020",
+			"message": "Trace TR-020 implements T3 claim C-008 without validation."
+		},
+		{
+			"type": "trace-without-validation",
+			"claim_id": "C-008",
+			"trace_id": "TR-021",
+			"message": "Trace TR-021 implements T3 claim C-008 without validation."
+		},
+		{
+			"type": "trace-without-validation",
+			"claim_id": "C-008",
+			"trace_id": "TR-022",
+			"message": "Trace TR-022 implements T3 claim C-008 without validation."
+		},
+		{
+			"type": "t3-without-refutation",
+			"claim_id": "C-008",
+			"message": "T3 claim C-008 has no sustained independent refutation report."
+		},
+		{
+			"type": "claim-without-validation",
+			"claim_id": "C-009",
+			"message": "Claim C-009 is T3 and requires validation."
+		},
+		{
+			"type": "trace-without-validation",
+			"claim_id": "C-009",
+			"trace_id": "TR-023",
+			"message": "Trace TR-023 implements T3 claim C-009 without validation."
+		},
+		{
+			"type": "trace-without-validation",
+			"claim_id": "C-009",
+			"trace_id": "TR-024",
+			"message": "Trace TR-024 implements T3 claim C-009 without validation."
+		},
+		{
+			"type": "trace-without-validation",
+			"claim_id": "C-009",
+			"trace_id": "TR-025",
+			"message": "Trace TR-025 implements T3 claim C-009 without validation."
+		},
+		{
+			"type": "t3-without-refutation",
+			"claim_id": "C-009",
+			"message": "T3 claim C-009 has no sustained independent refutation report."
+		},
+		{
+			"type": "claim-without-validation",
+			"claim_id": "C-011",
+			"message": "Claim C-011 is T2 and requires validation."
+		},
+		{
+			"type": "trace-without-validation",
+			"claim_id": "C-011",
+			"trace_id": "TR-030",
+			"message": "Trace TR-030 implements T2 claim C-011 without validation."
+		},
+		{
+			"type": "claim-without-validation",
+			"claim_id": "C-012",
+			"message": "Claim C-012 is T2 and requires validation."
+		},
+		{
+			"type": "trace-without-validation",
+			"claim_id": "C-012",
+			"trace_id": "TR-031",
+			"message": "Trace TR-031 implements T2 claim C-012 without validation."
+		},
+		{
+			"type": "trace-without-validation",
+			"claim_id": "C-012",
+			"trace_id": "TR-032",
+			"message": "Trace TR-032 implements T2 claim C-012 without validation."
+		},
+		{
+			"type": "trace-without-validation",
+			"claim_id": "C-012",
+			"trace_id": "TR-033",
+			"message": "Trace TR-033 implements T2 claim C-012 without validation."
+		},
+		{
+			"type": "claim-without-validation",
+			"claim_id": "C-016",
+			"message": "Claim C-016 is T2 and requires validation."
+		},
+		{
+			"type": "trace-without-validation",
+			"claim_id": "C-016",
+			"trace_id": "TR-041",
+			"message": "Trace TR-041 implements T2 claim C-016 without validation."
+		},
+		{
+			"type": "trace-without-validation",
+			"claim_id": "C-016",
+			"trace_id": "TR-042",
+			"message": "Trace TR-042 implements T2 claim C-016 without validation."
+		},
+		{
+			"type": "trace-without-validation",
+			"claim_id": "C-016",
+			"trace_id": "TR-043",
+			"message": "Trace TR-043 implements T2 claim C-016 without validation."
+		},
+		{
+			"type": "trace-without-validation",
+			"claim_id": "C-016",
+			"trace_id": "TR-044",
+			"message": "Trace TR-044 implements T2 claim C-016 without validation."
+		},
+		{
+			"type": "claim-without-validation",
+			"claim_id": "C-017",
+			"message": "Claim C-017 is T2 and requires validation."
+		},
+		{
+			"type": "trace-without-validation",
+			"claim_id": "C-017",
+			"trace_id": "TR-045",
+			"message": "Trace TR-045 implements T2 claim C-017 without validation."
+		},
+		{
+			"type": "trace-without-validation",
+			"claim_id": "C-017",
+			"trace_id": "TR-046",
+			"message": "Trace TR-046 implements T2 claim C-017 without validation."
+		},
+		{
+			"type": "trace-without-validation",
+			"claim_id": "C-017",
+			"trace_id": "TR-047",
+			"message": "Trace TR-047 implements T2 claim C-017 without validation."
+		},
+		{
+			"type": "claim-without-validation",
+			"claim_id": "C-018",
+			"message": "Claim C-018 is T3 and requires validation."
+		},
+		{
+			"type": "trace-without-validation",
+			"claim_id": "C-018",
+			"trace_id": "TR-048",
+			"message": "Trace TR-048 implements T3 claim C-018 without validation."
+		},
+		{
+			"type": "trace-without-validation",
+			"claim_id": "C-018",
+			"trace_id": "TR-049",
+			"message": "Trace TR-049 implements T3 claim C-018 without validation."
+		},
+		{
+			"type": "trace-without-validation",
+			"claim_id": "C-018",
+			"trace_id": "TR-050",
+			"message": "Trace TR-050 implements T3 claim C-018 without validation."
+		},
+		{
+			"type": "t3-without-refutation",
+			"claim_id": "C-018",
+			"message": "T3 claim C-018 has no sustained independent refutation report."
+		},
+		{
+			"type": "claim-without-validation",
+			"claim_id": "C-019",
+			"message": "Claim C-019 is T2 and requires validation."
+		},
+		{
+			"type": "trace-without-validation",
+			"claim_id": "C-019",
+			"trace_id": "TR-051",
+			"message": "Trace TR-051 implements T2 claim C-019 without validation."
+		},
+		{
+			"type": "trace-without-validation",
+			"claim_id": "C-019",
+			"trace_id": "TR-052",
+			"message": "Trace TR-052 implements T2 claim C-019 without validation."
+		},
+		{
+			"type": "trace-without-validation",
+			"claim_id": "C-019",
+			"trace_id": "TR-053",
+			"message": "Trace TR-053 implements T2 claim C-019 without validation."
+		},
+		{
+			"type": "claim-without-validation",
+			"claim_id": "C-020",
+			"message": "Claim C-020 is T2 and requires validation."
+		},
+		{
+			"type": "trace-without-validation",
+			"claim_id": "C-020",
+			"trace_id": "TR-054",
+			"message": "Trace TR-054 implements T2 claim C-020 without validation."
+		},
+		{
+			"type": "trace-without-validation",
+			"claim_id": "C-020",
+			"trace_id": "TR-055",
+			"message": "Trace TR-055 implements T2 claim C-020 without validation."
+		},
+		{
+			"type": "claim-without-validation",
+			"claim_id": "C-021",
+			"message": "Claim C-021 is T2 and requires validation."
+		},
+		{
+			"type": "trace-without-validation",
+			"claim_id": "C-021",
+			"trace_id": "TR-056",
+			"message": "Trace TR-056 implements T2 claim C-021 without validation."
+		},
+		{
+			"type": "trace-without-validation",
+			"claim_id": "C-021",
+			"trace_id": "TR-057",
+			"message": "Trace TR-057 implements T2 claim C-021 without validation."
+		},
+		{
+			"type": "trace-without-validation",
+			"claim_id": "C-021",
+			"trace_id": "TR-058",
+			"message": "Trace TR-058 implements T2 claim C-021 without validation."
+		},
+		{
+			"type": "claim-without-validation",
+			"claim_id": "C-022",
+			"message": "Claim C-022 is T2 and requires validation."
+		},
+		{
+			"type": "trace-without-validation",
+			"claim_id": "C-022",
+			"trace_id": "TR-059",
+			"message": "Trace TR-059 implements T2 claim C-022 without validation."
+		},
+		{
+			"type": "claim-without-validation",
+			"claim_id": "C-023",
+			"message": "Claim C-023 is T2 and requires validation."
+		},
+		{
+			"type": "trace-without-validation",
+			"claim_id": "C-023",
+			"trace_id": "TR-060",
+			"message": "Trace TR-060 implements T2 claim C-023 without validation."
+		},
+		{
+			"type": "claim-without-validation",
+			"claim_id": "C-024",
+			"message": "Claim C-024 is T2 and requires validation."
+		},
+		{
+			"type": "trace-without-validation",
+			"claim_id": "C-024",
+			"trace_id": "TR-061",
+			"message": "Trace TR-061 implements T2 claim C-024 without validation."
+		},
+		{
+			"type": "trace-without-validation",
+			"claim_id": "C-024",
+			"trace_id": "TR-062",
+			"message": "Trace TR-062 implements T2 claim C-024 without validation."
+		},
+		{
+			"type": "claim-without-validation",
+			"claim_id": "C-026",
+			"message": "Claim C-026 is T2 and requires validation."
+		},
+		{
+			"type": "trace-without-validation",
+			"claim_id": "C-026",
+			"trace_id": "TR-065",
+			"message": "Trace TR-065 implements T2 claim C-026 without validation."
+		},
+		{
+			"type": "trace-without-validation",
+			"claim_id": "C-026",
+			"trace_id": "TR-066",
+			"message": "Trace TR-066 implements T2 claim C-026 without validation."
+		},
+		{
+			"type": "claim-without-validation",
+			"claim_id": "C-029",
+			"message": "Claim C-029 is T2 and requires validation."
+		},
+		{
+			"type": "trace-without-validation",
+			"claim_id": "C-029",
+			"trace_id": "TR-070",
+			"message": "Trace TR-070 implements T2 claim C-029 without validation."
+		},
+		{
+			"type": "trace-without-validation",
+			"claim_id": "C-029",
+			"trace_id": "TR-071",
+			"message": "Trace TR-071 implements T2 claim C-029 without validation."
+		},
+		{
+			"type": "claim-without-validation",
+			"claim_id": "C-031",
+			"message": "Claim C-031 is T2 and requires validation."
+		},
+		{
+			"type": "trace-without-validation",
+			"claim_id": "C-031",
+			"trace_id": "TR-073",
+			"message": "Trace TR-073 implements T2 claim C-031 without validation."
+		},
+		{
+			"type": "claim-without-validation",
+			"claim_id": "C-033",
+			"message": "Claim C-033 is T2 and requires validation."
+		},
+		{
+			"type": "trace-without-validation",
+			"claim_id": "C-033",
+			"trace_id": "TR-075",
+			"message": "Trace TR-075 implements T2 claim C-033 without validation."
+		},
+		{
+			"type": "claim-without-validation",
+			"claim_id": "C-035",
+			"message": "Claim C-035 is T2 and requires validation."
+		},
+		{
+			"type": "trace-without-validation",
+			"claim_id": "C-035",
+			"trace_id": "TR-078",
+			"message": "Trace TR-078 implements T2 claim C-035 without validation."
+		},
+		{
+			"type": "claim-without-validation",
+			"claim_id": "C-036",
+			"message": "Claim C-036 is T2 and requires validation."
+		},
+		{
+			"type": "trace-without-validation",
+			"claim_id": "C-036",
+			"trace_id": "TR-079",
+			"message": "Trace TR-079 implements T2 claim C-036 without validation."
+		},
+		{
+			"type": "claim-without-validation",
+			"claim_id": "C-038",
+			"message": "Claim C-038 is T2 and requires validation."
+		},
+		{
+			"type": "trace-without-validation",
+			"claim_id": "C-038",
+			"trace_id": "TR-082",
+			"message": "Trace TR-082 implements T2 claim C-038 without validation."
+		},
+		{
+			"type": "claim-without-validation",
+			"claim_id": "C-039",
+			"message": "Claim C-039 is T2 and requires validation."
+		},
+		{
+			"type": "trace-without-validation",
+			"claim_id": "C-039",
+			"trace_id": "TR-083",
+			"message": "Trace TR-083 implements T2 claim C-039 without validation."
+		},
+		{
+			"type": "trace-without-validation",
+			"claim_id": "C-039",
+			"trace_id": "TR-084",
+			"message": "Trace TR-084 implements T2 claim C-039 without validation."
+		}
+	],
+	"verdict": "NONCONFORMANT",
+	"scope": "declared-constructs",
+	"capabilities": {
+		"evidence_integrity": "tool-enforced",
+		"trace_graph": "tool-enforced",
+		"tier_requirements": "tool-enforced",
+		"entailment": "recorded-attestation",
+		"reverse_sweep": "declared-constructs-only",
+		"validation_records": "tool-enforced",
+		"refutation_independence": "recorded-metadata"
+	},
+	"pass": false
+}

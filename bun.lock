@@ -159,6 +159,17 @@
         "ai": ">=5.0.0",
       },
     },
+    "scripts": {
+      "name": "@memongo/scripts",
+      "version": "0.0.0",
+      "dependencies": {
+        "@memongo/client": "workspace:*",
+        "@memongo/memory-bridge": "workspace:*",
+      },
+      "devDependencies": {
+        "vitest": "^4.1.10",
+      },
+    },
   },
   "overrides": {
     "body-parser": "2.3.0",
@@ -604,6 +615,8 @@
     "@memongo/memory-engine": ["@memongo/memory-engine@workspace:packages/memory-engine"],
 
     "@memongo/pi-extension": ["@memongo/pi-extension@workspace:packages/pi-extension"],
+
+    "@memongo/scripts": ["@memongo/scripts@workspace:scripts"],
 
     "@memongo/tools": ["@memongo/tools@workspace:packages/tools"],
 

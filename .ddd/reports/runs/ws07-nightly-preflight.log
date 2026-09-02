@@ -1,0 +1,7 @@
+== nightly preflight, disarmed (no gate env): must FAIL ==
+::error::VOYAGE_API_KEY is empty: e2e-evaluation (real embeddings), real-e2e-v2, embedding-coverage, and production-readiness would all silently skip
+exit=1
+
+== nightly preflight, armed (placeholder values): must PASS ==
+e2e gates armed: Atlas Model key (al-*) and enrichment provider (key, base URL, model) all present.
+exit=0

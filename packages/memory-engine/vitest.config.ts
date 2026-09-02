@@ -37,5 +37,12 @@ export default defineConfig({
 		// hook or test still fails, just later.
 		hookTimeout: isRemoteCluster ? 900_000 : 240_000,
 		testTimeout: isRemoteCluster ? 600_000 : 120_000,
+		// CI (GitHub Actions sets CI=true) additionally emits JUnit XML to
+		// test-results/junit.xml, which scripts/ci/verify-tests-ran.mjs parses
+		// to fail the build when a green run turns out to contain no executed
+		// tests. Locally (CI unset) the default reporter stays the only one.
+		reporters: process.env.CI
+			? ["default", ["junit", { outputFile: "test-results/junit.xml" }]]
+			: "default",
 	},
 })

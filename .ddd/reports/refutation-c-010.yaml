@@ -1,0 +1,91 @@
+# Independent refutation report for T3 claim C-010
+# ("CI MUST execute the test suites that already exist ... and the nightly E2E
+# and publish workflows MUST fail when executed-test count is zero or expected
+# suites are skipped.")
+claim_id: C-010
+verdict: sustained
+independence_verified: true
+refuter_id: "factory-droid worker subagent, session 9c4a431e-7175-4060-8b01-cf2f45bf0ce9 (independent instance, not the implementer)"
+implementer_id: "factory-droid primary agent, WS-07 implementer"
+refuted_rounds: 1
+sustained_rounds: 2
+attempt_log_dir: .ddd/reports/runs/
+
+attempts:
+  - id: attempt-1-revert-script
+    description: >
+      Revert apps/api/package.json test script to the old exclusionary form
+      `vitest run src/app.test.ts src/app.segment*.test.ts` (drops
+      src/contract-conformance.test.ts from the run), regenerate the api junit
+      in CI mode, then run the exact ci.yml quality guard invocation.
+    round_1_outcome: refuted
+    round_1_detail: >
+      Guard passed (exit 0) with the OpenAPI drift guard silently excluded.
+      `--require-suite contract-conformance` substring-matched apps/mcp's
+      src/mcp-contract-conformance.test.ts suite, so the requirement was
+      satisfied by the wrong package. The landed defense did not pin the api
+      drift guard.
+    round_2_outcome: caught
+    round_2_detail: >
+      After the implementer re-anchored the require-suite to the file path
+      `src/contract-conformance.test.ts` (unique to apps/api across all nine
+      junit files), the same attack fails: guard exit 1 with
+      `required suite absent: "src/contract-conformance.test.ts" (no testsuite
+      or testcase matches it in any expected file)`.
+    evidence: refutation-c-010-attempt1-revert-script.log
+
+  - id: attempt-2-skip-injection
+    description: >
+      Inject `describe.skipIf(!process.env.MEMONGO_REFUTATION_ARM)` on the
+      top-level describe of apps/api/src/contract-conformance.test.ts with the
+      env var unset (a silent skip of the required suite), regenerate the api
+      junit in CI mode, then run the exact ci.yml quality guard invocation.
+    round_1_outcome: refuted
+    round_1_detail: >
+      Vitest exited 0 (skip-green at runner level); api junit showed 208
+      tests, 9 skipped. The guard passed (exit 0) because the same MCP
+      substring collision satisfied the required-suite check while every
+      conformance entry was skipped.
+    round_2_outcome: caught
+    round_2_detail: >
+      After the fix, the same attack fails: guard exit 1 with
+      `required suite all-skipped: "src/contract-conformance.test.ts" (matched
+      but every entry is skipped — its gate env is missing)`.
+    evidence: refutation-c-010-attempt2-skip-injection.log
+
+  - id: attempt-3-openapi-drift
+    description: >
+      Add an undocumented route (GET /v1/refutation-probe) to the real /v1
+      router in apps/api/src/routes/v1.ts without adding it to the OpenAPI
+      contract, then run the conformance suite.
+    round_1_outcome: caught
+    round_1_detail: >
+      The conformance suite failed (exit 1) with
+      `expected [ 'GET /v1/refutation-probe' ] to deeply equal []` (route-table
+      test: `expected [ 'get /v1/refutation-probe' ] to deeply equal []`).
+      When the suite runs, it catches contract drift. Post-restore rerun: 9/9
+      passed, exit 0.
+    evidence: refutation-c-010-attempt3-openapi-drift.log
+
+fix_applied_between_rounds: >
+  The initial defense used lexeme require-suites. Round 1 proved two of them
+  could be satisfied by the wrong suite (the MCP contract-conformance
+  collision). The implementer re-anchored every require-suite in ci.yml,
+  publish.yml, and e2e-nightly.yml to file-path forms:
+  `src/contract-conformance.test.ts` for the quality/publish guards and
+  `<file>.e2e.test.ts` for all tier-A, nightly gated, and scripts QA guards,
+  so a require-suite can only be satisfied by the exact test file it names.
+
+conclusion: >
+  Round 1 refuted the initial defense on attempts 1 and 2 (green guard despite
+  exclusion and despite a silent skip); the claim's defense did not hold as
+  first landed. After the file-path-anchored fix, round 2 re-ran the same
+  attacks and both were caught with the exact expected violations, and attempt
+  3 (drift) was caught in both rounds. No remaining path was found to a green
+  guard with the api OpenAPI drift guard excluded or skipped. Verdict:
+  sustained.
+
+tree_hygiene: >
+  All scratch edits were restored byte-identically (cmp exit 0 for every
+  touched file, both rounds); no git-mutating commands were run; evidence logs
+  in refutation-c-010-tree-clean.log.

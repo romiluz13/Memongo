@@ -1,0 +1,158 @@
+# DDD Knowledge Map
+# Initialized for the GLM-5.3 remediation program (2026-09-02).
+# Maps remediation domains to review evidence and the open questions each
+# workstream must resolve. Domain gaps are the review's unknown unknowns;
+# they close as workstreams land evidence.
+
+schema_version: 0.1.0
+
+domains:
+  - id: security-auth-injection
+    name: "Security, authentication, and injection defense"
+    trigger: "MCP transport auth, untrusted memory rendering, write-structured classification, kb scoping, auto-capture consent"
+    questions:
+      - "Which MCP spec authorization mechanisms apply to the HTTP transport?"
+      - "Should write-structured reject or quarantine injection-likely values?"
+      - "What is the pi-extension default memory scope after remediation?"
+    expected_decisions: ["MCP transport auth design", "Injection classifier coverage matrix"]
+    authority_type: project-review
+    confidence: medium
+    risk_if_omitted: "Unauthenticated tool access, cross-tenant reads, poisoned session context"
+    evidence: [EL-005, EL-006, EL-010]
+    gaps:
+      - "MCP spec transport authorization text not yet locked as vendor-doc evidence"
+      - "Quarantine-vs-reject decision for write-structured injection values unresolved"
+
+  - id: data-lifecycle-retention
+    name: "Data lifecycle, erasure, and retention"
+    trigger: "Tenant erasure, quarantine review, TTL propagation, fingerprint retention, episodes lifecycle"
+    questions:
+      - "Which collections must deleteAllForAgent sweep, including projection ledgers and caches?"
+      - "What retention cap fits unreviewed quarantined memories?"
+      - "Should chunk TTL ride expiresAt or a sweeper?"
+    expected_decisions: ["Erasure primitive contract", "Retention policy per collection"]
+    authority_type: project-review
+    confidence: medium
+    risk_if_omitted: "Right-to-erasure noncompliance, silent permanent data loss, unbounded growth"
+    evidence: [EL-001, EL-004, EL-006]
+    gaps:
+      - "Full collection inventory for erasure not yet enumerated against the schema"
+
+  - id: embedding-pipeline
+    name: "Embedding pipeline and vector index"
+    trigger: "autoEmbed Preview dependency, model literal duplication, coverage probe, fallback design"
+    questions:
+      - "Is the Preview posture an acceptable supported-target contract?"
+      - "What fallback embedding path is testable without Preview?"
+      - "Where does the model literal get centralized?"
+    expected_decisions: ["Preview support contract", "Fallback design", "Model configuration point"]
+    authority_type: project-review
+    confidence: medium
+    risk_if_omitted: "Vendor deprecation becomes a production incident with no fallback"
+    evidence: [EL-002]
+    gaps:
+      - "MongoDB autoEmbedding Preview roadmap evidence not yet locked as vendor-doc"
+
+  - id: retrieval-quality
+    name: "Retrieval and search quality"
+    trigger: "BM25 analyzers, query clamping, rerank budget, result caching"
+    questions:
+      - "Which analyzer per field class, proven by the eval harness?"
+      - "What query-length clamp per surface?"
+      - "How does rerank timeout derive from the remaining budget?"
+    expected_decisions: ["Analyzer configuration", "Clamp policy", "Latency budget arithmetic"]
+    authority_type: project-review
+    confidence: medium
+    risk_if_omitted: "Recall underserved on natural language, unbounded hot-path cost"
+    evidence: [EL-003]
+    gaps:
+      - "Analyzer A/B evidence from the eval harness not yet produced"
+
+  - id: api-contracts
+    name: "API and client contracts"
+    trigger: "Request validation, mode parameter, retry idempotency, version skew, chain-trace"
+    questions:
+      - "Which zod schemas mirror kbFilterSchema strictness on search-detailed?"
+      - "Do retries wait for Idempotency-Key or natural idempotency?"
+      - "Is version-skew telemetry worth keeping?"
+    expected_decisions: ["Validation parity", "Retry policy", "Header contract"]
+    authority_type: project-review
+    confidence: medium
+    risk_if_omitted: "Double-applied mutations, ignored caller intent, fabricated successes"
+    evidence: [EL-006]
+    gaps: []
+
+  - id: mongodb-operations
+    name: "MongoDB operations and resilience"
+    trigger: "Transactions, change-stream supervision, readiness, connection defaults"
+    questions:
+      - "Does batch write stage jobs in the same transaction as single write?"
+      - "What backoff policy supervises the change-stream watcher?"
+      - "What connection budget fits each deployment tier?"
+    expected_decisions: ["Transaction boundary parity", "Watcher supervision", "Default mode"]
+    authority_type: project-review
+    confidence: medium
+    risk_if_omitted: "Unprocessed durable events, unrecoverable watchers, pool exhaustion"
+    evidence: [EL-007, EL-009]
+    gaps:
+      - "Per-tier connection budgets not yet measured"
+
+  - id: ci-observability
+    name: "CI, testing, and release engineering"
+    trigger: "Test wiring, publish gating, nightly schedule, eval contract"
+    questions:
+      - "Which suites must run before publish?"
+      - "What does nightly actually execute?"
+      - "Does the eval contract add LLM-judged answer accuracy?"
+    expected_decisions: ["CI wiring fix", "Publish gate", "Nightly contract"]
+    authority_type: project-review
+    confidence: medium
+    risk_if_omitted: "Green CI that verifies nothing, unverified publishes"
+    evidence: [EL-008]
+    gaps:
+      - "LLM-judge cost budget for the eval contract unresolved"
+
+  - id: performance-cost
+    name: "Performance, admission control, and cost"
+    trigger: "Rate limits, token accounting, hot-path N+1, episode cooldown"
+    questions:
+      - "What token-bucket sizing fits each provider tier?"
+      - "Where do token sums surface per tenant per day?"
+      - "Does context expansion parallelize with what cap?"
+    expected_decisions: ["Admission control design", "Cost accounting design"]
+    authority_type: project-review
+    confidence: medium
+    risk_if_omitted: "Denial-of-wallet, provider bans, invisible backlog"
+    evidence: [EL-009]
+    gaps:
+      - "Rate-limit tier sizing not yet derived from provider limits"
+
+  - id: lifecycle-scheduling
+    name: "Memory lifecycle scheduling and durability"
+    trigger: "Consolidation scheduling, dead letters, episodes, decay"
+    questions:
+      - "Does the worker claim consolidation jobs or does a cron trigger them?"
+      - "How are dead letters kept audible and durable?"
+      - "What cap and TTL fit episodes?"
+    expected_decisions: ["Scheduling model", "Dead-letter policy", "Episode lifecycle"]
+    authority_type: project-review
+    confidence: medium
+    risk_if_omitted: "Dead decay and contradiction code, silent extraction loss"
+    evidence: [EL-004]
+    gaps: []
+
+  - id: integration-dx
+    name: "Integration, DX, and deployment"
+    trigger: "pi-extension consent, Docker build context, bootstrap, migration"
+    questions:
+      - "What consent gate fits auto-capture?"
+      - "Where does the effective .dockerignore live?"
+      - "How do migrations run for existing deployments?"
+    expected_decisions: ["Consent default", "Build context hygiene", "Migration path"]
+    authority_type: project-review
+    confidence: medium
+    risk_if_omitted: "Raw turns recorded without consent, bloated build context, stuck deployments"
+    evidence: [EL-010]
+    gaps: []
+
+gaps: []

@@ -1,0 +1,81 @@
+# DDD Stack Inventory
+# Locked versions from bun.lock at commit 1d98eb36f1, plus services and
+# platforms the remediation program touches. evidence_refs are intentionally
+# empty at plan stage: each workstream's change envelope must lock component
+# evidence (SPEC 5) before evaluate-case; missing stack evidence yields
+# INDETERMINATE rather than a pass.
+
+schema_version: 0.5.0
+components:
+  - kind: dependency
+    name: mongodb
+    versions: ["7.5.0"]
+    evidence_refs: []
+  - kind: dependency
+    name: hono
+    versions: ["4.13.2"]
+    evidence_refs: []
+  - kind: dependency
+    name: zod
+    versions: ["3.25.76"]
+    evidence_refs: []
+  - kind: dependency
+    name: "@modelcontextprotocol/sdk"
+    versions: ["1.30.0"]
+    evidence_refs: []
+  - kind: dependency
+    name: "@hono/node-server"
+    versions: ["1.19.17"]
+    evidence_refs: []
+  - kind: dependency
+    name: ai
+    versions: ["5.0.237"]
+    evidence_refs: []
+  - kind: dependency
+    name: chokidar
+    versions: ["4.0.3"]
+    evidence_refs: []
+  - kind: dependency
+    name: next
+    versions: ["15.5.23"]
+    evidence_refs: []
+  - kind: dependency
+    name: react
+    versions: ["19.2.8"]
+    evidence_refs: []
+  - kind: dependency
+    name: react-dom
+    versions: ["19.2.8"]
+    evidence_refs: []
+  - kind: dependency
+    name: tsx
+    versions: ["4.23.12"]
+    evidence_refs: []
+  - kind: dependency
+    name: gsap
+    versions: ["3.15.0"]
+    evidence_refs: []
+  - kind: service
+    name: mongodb-atlas
+    versions: ["atlas-search", "autoembedding-preview"]
+    evidence_refs: []
+  - kind: service
+    name: voyage-ai
+    versions: []
+    evidence_refs: []
+  - kind: platform
+    name: node
+    versions: ["20"]
+    evidence_refs: []
+  - kind: platform
+    name: bun
+    versions: ["1.2"]
+    evidence_refs: []
+  - kind: platform
+    name: docker
+    versions: ["compose-v2"]
+    evidence_refs: []
+  - kind: frontend
+    name: "@memongo/web"
+    versions: ["0.1.0"]
+    evidence_refs: []

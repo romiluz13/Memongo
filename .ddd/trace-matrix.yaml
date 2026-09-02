@@ -1,0 +1,847 @@
+# DDD Trace Matrix
+# Generated view of the evidence graph: trace entries mapping claims <-> constructs.
+# Legacy trace entry schema
+
+schema_version: 0.1.0
+
+traces:
+  - id: TR-001
+    schema_version: 0.1.0
+    change_id: WS-01
+    claim_id: C-001
+    construct_id: "apps/mcp/src/http-transport.ts#refuseToServeOpen"
+    validation_id: null
+    direction: forward
+    sweep_pass: false
+    checked_at: "2026-09-02T13:41:40.029Z"
+    notes: WS-01 MCP HTTP transport authentication (planned change envelope)
+  - id: TR-002
+    schema_version: 0.1.0
+    change_id: WS-01
+    claim_id: C-001
+    construct_id: apps/mcp/src/http-transport.ts
+    validation_id: null
+    direction: forward
+    sweep_pass: false
+    checked_at: "2026-09-02T13:41:40.030Z"
+    notes: WS-01 MCP HTTP transport authentication (planned change envelope)
+  - id: TR-003
+    schema_version: 0.1.0
+    change_id: WS-02
+    claim_id: C-002
+    construct_id: packages/memory-engine/src/mongodb-client-registry.ts
+    validation_id: null
+    direction: forward
+    sweep_pass: false
+    checked_at: "2026-09-02T13:41:40.030Z"
+    notes: WS-02 Secret redaction at logging boundaries (planned change envelope)
+  - id: TR-004
+    schema_version: 0.1.0
+    change_id: WS-02
+    claim_id: C-002
+    construct_id: "packages/lib/src/redact.ts#redactSensitiveText"
+    validation_id: null
+    direction: forward
+    sweep_pass: false
+    checked_at: "2026-09-02T13:41:40.032Z"
+    notes: WS-02 Secret redaction at logging boundaries (planned change envelope)
+  - id: TR-005
+    schema_version: 0.1.0
+    change_id: WS-02
+    claim_id: C-002
+    construct_id: "packages/lib/src/logger.ts#formatLine"
+    validation_id: null
+    direction: forward
+    sweep_pass: false
+    checked_at: "2026-09-02T13:41:40.033Z"
+    notes: WS-02 Secret redaction at logging boundaries (planned change envelope)
+  - id: TR-006
+    schema_version: 0.1.0
+    change_id: WS-02
+    claim_id: C-002
+    construct_id: apps/api/src/lib/errors.ts
+    validation_id: null
+    direction: forward
+    sweep_pass: false
+    checked_at: "2026-09-02T13:41:40.034Z"
+    notes: WS-02 Secret redaction at logging boundaries (planned change envelope)
+  - id: TR-007
+    schema_version: 0.1.0
+    change_id: WS-03
+    claim_id: C-003
+    construct_id: packages/memory-engine/src/mongodb-manager.ts
+    validation_id: null
+    direction: forward
+    sweep_pass: false
+    checked_at: "2026-09-02T13:41:40.034Z"
+    notes: WS-03 Tenant erasure and retention lifecycle (planned change envelope)
+  - id: TR-008
+    schema_version: 0.1.0
+    change_id: WS-03
+    claim_id: C-003
+    construct_id: packages/memory-bridge/src/memongo-bridge.ts
+    validation_id: null
+    direction: forward
+    sweep_pass: false
+    checked_at: "2026-09-02T13:41:40.035Z"
+    notes: WS-03 Tenant erasure and retention lifecycle (planned change envelope)
+  - id: TR-009
+    schema_version: 0.1.0
+    change_id: WS-03
+    claim_id: C-003
+    construct_id: apps/api/src/app.ts
+    validation_id: null
+    direction: forward
+    sweep_pass: false
+    checked_at: "2026-09-02T13:41:40.036Z"
+    notes: WS-03 Tenant erasure and retention lifecycle (planned change envelope)
+  - id: TR-010
+    schema_version: 0.1.0
+    change_id: WS-03
+    claim_id: C-004
+    construct_id: packages/memory-engine/src/mongodb-schema.ts
+    validation_id: null
+    direction: forward
+    sweep_pass: false
+    checked_at: "2026-09-02T13:41:40.037Z"
+    notes: WS-03 Tenant erasure and retention lifecycle (planned change envelope)
+  - id: TR-011
+    schema_version: 0.1.0
+    change_id: WS-03
+    claim_id: C-004
+    construct_id: packages/memory-engine/src/mongodb-manager-read.ts
+    validation_id: null
+    direction: forward
+    sweep_pass: false
+    checked_at: "2026-09-02T13:41:40.037Z"
+    notes: WS-03 Tenant erasure and retention lifecycle (planned change envelope)
+  - id: TR-012
+    schema_version: 0.1.0
+    change_id: WS-03
+    claim_id: C-004
+    construct_id: apps/mcp/src/tool-registry.ts
+    validation_id: null
+    direction: forward
+    sweep_pass: false
+    checked_at: "2026-09-02T13:41:40.038Z"
+    notes: WS-03 Tenant erasure and retention lifecycle (planned change envelope)
+  - id: TR-013
+    schema_version: 0.1.0
+    change_id: WS-03
+    claim_id: C-005
+    construct_id: packages/memory-engine/src/mongodb-sync.ts
+    validation_id: null
+    direction: forward
+    sweep_pass: false
+    checked_at: "2026-09-02T13:41:40.039Z"
+    notes: WS-03 Tenant erasure and retention lifecycle (planned change envelope)
+  - id: TR-014
+    schema_version: 0.1.0
+    change_id: WS-03
+    claim_id: C-005
+    construct_id: packages/memory-engine/src/mongodb-schema.ts
+    validation_id: null
+    direction: forward
+    sweep_pass: false
+    checked_at: "2026-09-02T13:41:40.039Z"
+    notes: WS-03 Tenant erasure and retention lifecycle (planned change envelope)
+  - id: TR-015
+    schema_version: 0.1.0
+    change_id: WS-03
+    claim_id: C-006
+    construct_id: packages/memory-engine/src/mongodb-events.ts
+    validation_id: null
+    direction: forward
+    sweep_pass: false
+    checked_at: "2026-09-02T13:41:40.040Z"
+    notes: WS-03 Tenant erasure and retention lifecycle (planned change envelope)
+  - id: TR-016
+    schema_version: 0.1.0
+    change_id: WS-03
+    claim_id: C-006
+    construct_id: packages/memory-engine/src/mongodb-manager-write.ts
+    validation_id: null
+    direction: forward
+    sweep_pass: false
+    checked_at: "2026-09-02T13:41:40.041Z"
+    notes: WS-03 Tenant erasure and retention lifecycle (planned change envelope)
+  - id: TR-017
+    schema_version: 0.1.0
+    change_id: WS-04
+    claim_id: C-007
+    construct_id: packages/memory-engine/src/mongodb-schema-search-definitions.ts
+    validation_id: null
+    direction: forward
+    sweep_pass: false
+    checked_at: "2026-09-02T13:41:40.042Z"
+    notes: WS-04 autoEmbed Preview de-risking (planned change envelope)
+  - id: TR-018
+    schema_version: 0.1.0
+    change_id: WS-04
+    claim_id: C-007
+    construct_id: packages/memory-engine/src/mongodb-sync.ts
+    validation_id: null
+    direction: forward
+    sweep_pass: false
+    checked_at: "2026-09-02T13:41:40.042Z"
+    notes: WS-04 autoEmbed Preview de-risking (planned change envelope)
+  - id: TR-019
+    schema_version: 0.1.0
+    change_id: WS-04
+    claim_id: C-007
+    construct_id: packages/memory-engine/src/backend-config.ts
+    validation_id: null
+    direction: forward
+    sweep_pass: false
+    checked_at: "2026-09-02T13:41:40.043Z"
+    notes: WS-04 autoEmbed Preview de-risking (planned change envelope)
+  - id: TR-020
+    schema_version: 0.1.0
+    change_id: WS-05
+    claim_id: C-008
+    construct_id: "packages/pi-extension/extensions/lifecycle.ts#renderSessionContext"
+    validation_id: null
+    direction: forward
+    sweep_pass: false
+    checked_at: "2026-09-02T13:41:40.044Z"
+    notes: WS-05 Prompt-injection defense unification (planned change envelope)
+  - id: TR-021
+    schema_version: 0.1.0
+    change_id: WS-05
+    claim_id: C-008
+    construct_id: "packages/tools/src/memory-context.ts#renderMemoryContextBlock"
+    validation_id: null
+    direction: forward
+    sweep_pass: false
+    checked_at: "2026-09-02T13:41:40.045Z"
+    notes: WS-05 Prompt-injection defense unification (planned change envelope)
+  - id: TR-022
+    schema_version: 0.1.0
+    change_id: WS-05
+    claim_id: C-008
+    construct_id: apps/api/src/routes/v1-write-routes.ts
+    validation_id: null
+    direction: forward
+    sweep_pass: false
+    checked_at: "2026-09-02T13:41:40.045Z"
+    notes: WS-05 Prompt-injection defense unification (planned change envelope)
+  - id: TR-023
+    schema_version: 0.1.0
+    change_id: WS-06
+    claim_id: C-009
+    construct_id: packages/memory-engine/src/search-manager.ts
+    validation_id: null
+    direction: forward
+    sweep_pass: false
+    checked_at: "2026-09-02T13:41:40.046Z"
+    notes: WS-06 Deployment-safe defaults (planned change envelope)
+  - id: TR-024
+    schema_version: 0.1.0
+    change_id: WS-06
+    claim_id: C-009
+    construct_id: packages/memory-engine/src/mongodb-client-registry.ts
+    validation_id: null
+    direction: forward
+    sweep_pass: false
+    checked_at: "2026-09-02T13:41:40.047Z"
+    notes: WS-06 Deployment-safe defaults (planned change envelope)
+  - id: TR-025
+    schema_version: 0.1.0
+    change_id: WS-06
+    claim_id: C-009
+    construct_id: packages/memory-engine/src/backend-config.ts
+    validation_id: null
+    direction: forward
+    sweep_pass: false
+    checked_at: "2026-09-02T13:41:40.048Z"
+    notes: WS-06 Deployment-safe defaults (planned change envelope)
+  - id: TR-026
+    schema_version: 0.1.0
+    change_id: WS-07
+    claim_id: C-010
+    construct_id: apps/api/package.json
+    validation_id: V-026
+    direction: forward
+    sweep_pass: true
+    checked_at: "2026-09-02T21:40:21.000Z"
+    notes: WS-07 CI executes existing tests (planned change envelope)
+  - id: TR-027
+    schema_version: 0.1.0
+    change_id: WS-07
+    claim_id: C-010
+    construct_id: .github/workflows/ci.yml
+    validation_id: V-027
+    direction: forward
+    sweep_pass: true
+    checked_at: "2026-09-02T21:40:21.000Z"
+    notes: WS-07 CI executes existing tests (planned change envelope)
+  - id: TR-028
+    schema_version: 0.1.0
+    change_id: WS-07
+    claim_id: C-010
+    construct_id: .github/workflows/e2e-nightly.yml
+    validation_id: V-028
+    direction: forward
+    sweep_pass: true
+    checked_at: "2026-09-02T21:40:21.000Z"
+    notes: WS-07 CI executes existing tests (planned change envelope)
+  - id: TR-029
+    schema_version: 0.1.0
+    change_id: WS-07
+    claim_id: C-010
+    construct_id: .github/workflows/publish.yml
+    validation_id: V-029
+    direction: forward
+    sweep_pass: true
+    checked_at: "2026-09-02T21:40:21.000Z"
+    notes: WS-07 CI executes existing tests (planned change envelope)
+  - id: TR-030
+    schema_version: 0.1.0
+    change_id: WS-08
+    claim_id: C-011
+    construct_id: "packages/client/src/client.ts#apiFetch"
+    validation_id: null
+    direction: forward
+    sweep_pass: false
+    checked_at: "2026-09-02T13:41:40.051Z"
+    notes: WS-08 API contract hardening (planned change envelope)
+  - id: TR-031
+    schema_version: 0.1.0
+    change_id: WS-08
+    claim_id: C-012
+    construct_id: apps/api/src/routes/v1-search-routes.ts
+    validation_id: null
+    direction: forward
+    sweep_pass: false
+    checked_at: "2026-09-02T13:41:40.053Z"
+    notes: WS-08 API contract hardening (planned change envelope)
+  - id: TR-032
+    schema_version: 0.1.0
+    change_id: WS-08
+    claim_id: C-012
+    construct_id: "apps/api/src/lib/validation.ts#kbFilterSchema"
+    validation_id: null
+    direction: forward
+    sweep_pass: false
+    checked_at: "2026-09-02T13:41:40.054Z"
+    notes: WS-08 API contract hardening (planned change envelope)
+  - id: TR-033
+    schema_version: 0.1.0
+    change_id: WS-08
+    claim_id: C-012
+    construct_id: apps/api/src/routes/v1-context-routes.ts
+    validation_id: null
+    direction: forward
+    sweep_pass: false
+    checked_at: "2026-09-02T13:41:40.055Z"
+    notes: WS-08 API contract hardening (planned change envelope)
+  - id: TR-034
+    schema_version: 0.1.0
+    change_id: WS-08
+    claim_id: C-013
+    construct_id: apps/api/src/routes/v1-search-routes.ts
+    validation_id: null
+    direction: forward
+    sweep_pass: false
+    checked_at: "2026-09-02T13:41:40.055Z"
+    notes: WS-08 API contract hardening (planned change envelope)
+  - id: TR-035
+    schema_version: 0.1.0
+    change_id: WS-08
+    claim_id: C-013
+    construct_id: packages/client/src/client.ts
+    validation_id: null
+    direction: forward
+    sweep_pass: false
+    checked_at: "2026-09-02T13:41:40.056Z"
+    notes: WS-08 API contract hardening (planned change envelope)
+  - id: TR-036
+    schema_version: 0.1.0
+    change_id: WS-08
+    claim_id: C-013
+    construct_id: apps/mcp/src/server.ts
+    validation_id: null
+    direction: forward
+    sweep_pass: false
+    checked_at: "2026-09-02T13:41:40.057Z"
+    notes: WS-08 API contract hardening (planned change envelope)
+  - id: TR-037
+    schema_version: 0.1.0
+    change_id: WS-08
+    claim_id: C-014
+    construct_id: packages/client/src/client.ts
+    validation_id: null
+    direction: forward
+    sweep_pass: false
+    checked_at: "2026-09-02T13:41:40.058Z"
+    notes: WS-08 API contract hardening (planned change envelope)
+  - id: TR-038
+    schema_version: 0.1.0
+    change_id: WS-08
+    claim_id: C-014
+    construct_id: apps/api/src/app.ts
+    validation_id: null
+    direction: forward
+    sweep_pass: false
+    checked_at: "2026-09-02T13:41:40.060Z"
+    notes: WS-08 API contract hardening (planned change envelope)
+  - id: TR-039
+    schema_version: 0.1.0
+    change_id: WS-08
+    claim_id: C-015
+    construct_id: apps/api/src/routes/v1-maintenance-routes.ts
+    validation_id: null
+    direction: forward
+    sweep_pass: false
+    checked_at: "2026-09-02T13:41:40.061Z"
+    notes: WS-08 API contract hardening (planned change envelope)
+  - id: TR-040
+    schema_version: 0.1.0
+    change_id: WS-08
+    claim_id: C-015
+    construct_id: packages/tools/src/index.ts
+    validation_id: null
+    direction: forward
+    sweep_pass: false
+    checked_at: "2026-09-02T13:41:40.062Z"
+    notes: WS-08 API contract hardening (planned change envelope)
+  - id: TR-041
+    schema_version: 0.1.0
+    change_id: WS-09
+    claim_id: C-016
+    construct_id: apps/api/src/lib/readiness.ts
+    validation_id: null
+    direction: forward
+    sweep_pass: false
+    checked_at: "2026-09-02T13:41:40.063Z"
+    notes: WS-09 Runtime capability re-verification (planned change envelope)
+  - id: TR-042
+    schema_version: 0.1.0
+    change_id: WS-09
+    claim_id: C-016
+    construct_id: packages/memory-engine/src/mongodb-change-stream.ts
+    validation_id: null
+    direction: forward
+    sweep_pass: false
+    checked_at: "2026-09-02T13:41:40.064Z"
+    notes: WS-09 Runtime capability re-verification (planned change envelope)
+  - id: TR-043
+    schema_version: 0.1.0
+    change_id: WS-09
+    claim_id: C-016
+    construct_id: "packages/pi-extension/extensions/index.ts#probeClient"
+    validation_id: null
+    direction: forward
+    sweep_pass: false
+    checked_at: "2026-09-02T13:41:40.065Z"
+    notes: WS-09 Runtime capability re-verification (planned change envelope)
+  - id: TR-044
+    schema_version: 0.1.0
+    change_id: WS-09
+    claim_id: C-016
+    construct_id: packages/memory-engine/src/mongodb-manager-admin.ts
+    validation_id: null
+    direction: forward
+    sweep_pass: false
+    checked_at: "2026-09-02T13:41:40.066Z"
+    notes: WS-09 Runtime capability re-verification (planned change envelope)
+  - id: TR-045
+    schema_version: 0.1.0
+    change_id: WS-10
+    claim_id: C-017
+    construct_id: packages/memory-engine/src/mongodb-llm-enrichment.ts
+    validation_id: null
+    direction: forward
+    sweep_pass: false
+    checked_at: "2026-09-02T13:41:40.067Z"
+    notes: WS-10 Cost observability (planned change envelope)
+  - id: TR-046
+    schema_version: 0.1.0
+    change_id: WS-10
+    claim_id: C-017
+    construct_id: packages/memory-engine/src/mongodb-operation-accounting.ts
+    validation_id: null
+    direction: forward
+    sweep_pass: false
+    checked_at: "2026-09-02T13:41:40.068Z"
+    notes: WS-10 Cost observability (planned change envelope)
+  - id: TR-047
+    schema_version: 0.1.0
+    change_id: WS-10
+    claim_id: C-017
+    construct_id: packages/memory-engine/src/mongodb-telemetry.ts
+    validation_id: null
+    direction: forward
+    sweep_pass: false
+    checked_at: "2026-09-02T13:41:40.069Z"
+    notes: WS-10 Cost observability (planned change envelope)
+  - id: TR-048
+    schema_version: 0.1.0
+    change_id: WS-11
+    claim_id: C-018
+    construct_id: packages/memory-engine/src/mongodb-manager-jobs.ts
+    validation_id: null
+    direction: forward
+    sweep_pass: false
+    checked_at: "2026-09-02T13:41:40.069Z"
+    notes: WS-11 Admission control and backlog visibility (planned change envelope)
+  - id: TR-049
+    schema_version: 0.1.0
+    change_id: WS-11
+    claim_id: C-018
+    construct_id: packages/memory-engine/src/mongodb-manager-write.ts
+    validation_id: null
+    direction: forward
+    sweep_pass: false
+    checked_at: "2026-09-02T13:41:40.070Z"
+    notes: WS-11 Admission control and backlog visibility (planned change envelope)
+  - id: TR-050
+    schema_version: 0.1.0
+    change_id: WS-11
+    claim_id: C-018
+    construct_id: packages/memory-engine/src/mongodb-search-v2.ts
+    validation_id: null
+    direction: forward
+    sweep_pass: false
+    checked_at: "2026-09-02T13:41:40.071Z"
+    notes: WS-11 Admission control and backlog visibility (planned change envelope)
+  - id: TR-051
+    schema_version: 0.1.0
+    change_id: WS-12
+    claim_id: C-019
+    construct_id: packages/client/src/client.ts
+    validation_id: null
+    direction: forward
+    sweep_pass: false
+    checked_at: "2026-09-02T13:41:40.072Z"
+    notes: WS-12 Distinguishable degradation (planned change envelope)
+  - id: TR-052
+    schema_version: 0.1.0
+    change_id: WS-12
+    claim_id: C-019
+    construct_id: packages/memory-engine/src/mongodb-reranker.ts
+    validation_id: null
+    direction: forward
+    sweep_pass: false
+    checked_at: "2026-09-02T13:41:40.073Z"
+    notes: WS-12 Distinguishable degradation (planned change envelope)
+  - id: TR-053
+    schema_version: 0.1.0
+    change_id: WS-12
+    claim_id: C-019
+    construct_id: packages/memory-engine/src/mongodb-search-v2.ts
+    validation_id: null
+    direction: forward
+    sweep_pass: false
+    checked_at: "2026-09-02T13:41:40.074Z"
+    notes: WS-12 Distinguishable degradation (planned change envelope)
+  - id: TR-054
+    schema_version: 0.1.0
+    change_id: WS-13
+    claim_id: C-020
+    construct_id: packages/memory-engine/src/mongodb-manager-jobs.ts
+    validation_id: null
+    direction: forward
+    sweep_pass: false
+    checked_at: "2026-09-02T13:41:40.075Z"
+    notes: WS-13 Lifecycle scheduling and durability (planned change envelope)
+  - id: TR-055
+    schema_version: 0.1.0
+    change_id: WS-13
+    claim_id: C-020
+    construct_id: packages/memory-engine/src/mongodb-consolidator.ts
+    validation_id: null
+    direction: forward
+    sweep_pass: false
+    checked_at: "2026-09-02T13:41:40.075Z"
+    notes: WS-13 Lifecycle scheduling and durability (planned change envelope)
+  - id: TR-056
+    schema_version: 0.1.0
+    change_id: WS-13
+    claim_id: C-021
+    construct_id: packages/memory-engine/src/mongodb-memory-jobs.ts
+    validation_id: null
+    direction: forward
+    sweep_pass: false
+    checked_at: "2026-09-02T13:41:40.076Z"
+    notes: WS-13 Lifecycle scheduling and durability (planned change envelope)
+  - id: TR-057
+    schema_version: 0.1.0
+    change_id: WS-13
+    claim_id: C-021
+    construct_id: apps/api/src/routes/v1-status-routes.ts
+    validation_id: null
+    direction: forward
+    sweep_pass: false
+    checked_at: "2026-09-02T13:41:40.077Z"
+    notes: WS-13 Lifecycle scheduling and durability (planned change envelope)
+  - id: TR-058
+    schema_version: 0.1.0
+    change_id: WS-13
+    claim_id: C-021
+    construct_id: packages/memory-engine/src/mongodb-schema.ts
+    validation_id: null
+    direction: forward
+    sweep_pass: false
+    checked_at: "2026-09-02T13:41:40.078Z"
+    notes: WS-13 Lifecycle scheduling and durability (planned change envelope)
+  - id: TR-059
+    schema_version: 0.1.0
+    change_id: WS-13
+    claim_id: C-022
+    construct_id: packages/memory-engine/src/mongodb-episodes.ts
+    validation_id: null
+    direction: forward
+    sweep_pass: false
+    checked_at: "2026-09-02T13:41:40.079Z"
+    notes: WS-13 Lifecycle scheduling and durability (planned change envelope)
+  - id: TR-060
+    schema_version: 0.1.0
+    change_id: WS-13
+    claim_id: C-023
+    construct_id: packages/memory-engine/src/mongodb-manager-write.ts
+    validation_id: null
+    direction: forward
+    sweep_pass: false
+    checked_at: "2026-09-02T13:41:40.081Z"
+    notes: WS-13 Lifecycle scheduling and durability (planned change envelope)
+  - id: TR-061
+    schema_version: 0.1.0
+    change_id: WS-14
+    claim_id: C-024
+    construct_id: packages/memory-engine/src/mongodb-schema-integrity.ts
+    validation_id: null
+    direction: forward
+    sweep_pass: false
+    checked_at: "2026-09-02T13:41:40.082Z"
+    notes: WS-14 Referential integrity beyond KB (planned change envelope)
+  - id: TR-062
+    schema_version: 0.1.0
+    change_id: WS-14
+    claim_id: C-024
+    construct_id: packages/memory-engine/src/mongodb-manager-admin.ts
+    validation_id: null
+    direction: forward
+    sweep_pass: false
+    checked_at: "2026-09-02T13:41:40.083Z"
+    notes: WS-14 Referential integrity beyond KB (planned change envelope)
+  - id: TR-063
+    schema_version: 0.1.0
+    change_id: WS-15
+    claim_id: C-025
+    construct_id: "packages/memory-engine/src/mongodb-graph.ts#findRelationByLocatorId"
+    validation_id: null
+    direction: forward
+    sweep_pass: false
+    checked_at: "2026-09-02T13:41:40.084Z"
+    notes: WS-15 Data-model temporal correctness (planned change envelope)
+  - id: TR-064
+    schema_version: 0.1.0
+    change_id: WS-15
+    claim_id: C-025
+    construct_id: packages/memory-engine/src/mongodb-manager-read.ts
+    validation_id: null
+    direction: forward
+    sweep_pass: false
+    checked_at: "2026-09-02T13:41:40.085Z"
+    notes: WS-15 Data-model temporal correctness (planned change envelope)
+  - id: TR-065
+    schema_version: 0.1.0
+    change_id: WS-15
+    claim_id: C-026
+    construct_id: packages/memory-engine/src/mongodb-sync.ts
+    validation_id: null
+    direction: forward
+    sweep_pass: false
+    checked_at: "2026-09-02T13:41:40.086Z"
+    notes: WS-15 Data-model temporal correctness (planned change envelope)
+  - id: TR-066
+    schema_version: 0.1.0
+    change_id: WS-15
+    claim_id: C-026
+    construct_id: packages/memory-engine/src/mongodb-search-v2.ts
+    validation_id: null
+    direction: forward
+    sweep_pass: false
+    checked_at: "2026-09-02T13:41:40.087Z"
+    notes: WS-15 Data-model temporal correctness (planned change envelope)
+  - id: TR-067
+    schema_version: 0.1.0
+    change_id: WS-15
+    claim_id: C-027
+    construct_id: packages/memory-engine/src/mongodb-graph.ts
+    validation_id: null
+    direction: forward
+    sweep_pass: false
+    checked_at: "2026-09-02T13:41:40.088Z"
+    notes: WS-15 Data-model temporal correctness (planned change envelope)
+  - id: TR-068
+    schema_version: 0.1.0
+    change_id: WS-15
+    claim_id: C-028
+    construct_id: "packages/memory-engine/src/mongodb-structured-memory.ts#mergeSourceEventIds"
+    validation_id: null
+    direction: forward
+    sweep_pass: false
+    checked_at: "2026-09-02T13:41:40.089Z"
+    notes: WS-15 Data-model temporal correctness (planned change envelope)
+  - id: TR-069
+    schema_version: 0.1.0
+    change_id: WS-15
+    claim_id: C-028
+    construct_id: packages/memory-engine/src/mongodb-graph.ts
+    validation_id: null
+    direction: forward
+    sweep_pass: false
+    checked_at: "2026-09-02T13:41:40.090Z"
+    notes: WS-15 Data-model temporal correctness (planned change envelope)
+  - id: TR-070
+    schema_version: 0.1.0
+    change_id: WS-16
+    claim_id: C-029
+    construct_id: packages/memory-engine/src/mongodb-schema-search-indexes.ts
+    validation_id: null
+    direction: forward
+    sweep_pass: false
+    checked_at: "2026-09-02T13:41:40.091Z"
+    notes: WS-16 Retrieval quality and hot-path cost (planned change envelope)
+  - id: TR-071
+    schema_version: 0.1.0
+    change_id: WS-16
+    claim_id: C-029
+    construct_id: packages/memory-engine/src/mongodb-search-ranking.ts
+    validation_id: null
+    direction: forward
+    sweep_pass: false
+    checked_at: "2026-09-02T13:41:40.092Z"
+    notes: WS-16 Retrieval quality and hot-path cost (planned change envelope)
+  - id: TR-072
+    schema_version: 0.1.0
+    change_id: WS-16
+    claim_id: C-030
+    construct_id: "packages/memory-engine/src/mongodb-search-ranking.ts#normalizeDetailedSearchRequest"
+    validation_id: null
+    direction: forward
+    sweep_pass: false
+    checked_at: "2026-09-02T13:41:40.093Z"
+    notes: WS-16 Retrieval quality and hot-path cost (planned change envelope)
+  - id: TR-073
+    schema_version: 0.1.0
+    change_id: WS-16
+    claim_id: C-031
+    construct_id: packages/memory-engine/src/mongodb-reranker.ts
+    validation_id: null
+    direction: forward
+    sweep_pass: false
+    checked_at: "2026-09-02T13:41:40.094Z"
+    notes: WS-16 Retrieval quality and hot-path cost (planned change envelope)
+  - id: TR-074
+    schema_version: 0.1.0
+    change_id: WS-16
+    claim_id: C-032
+    construct_id: packages/memory-engine/src/mongodb-manager-admin.ts
+    validation_id: null
+    direction: forward
+    sweep_pass: false
+    checked_at: "2026-09-02T13:41:40.095Z"
+    notes: WS-16 Retrieval quality and hot-path cost (planned change envelope)
+  - id: TR-075
+    schema_version: 0.1.0
+    change_id: WS-16
+    claim_id: C-033
+    construct_id: packages/memory-engine/src/mongodb-context-expansion.ts
+    validation_id: null
+    direction: forward
+    sweep_pass: false
+    checked_at: "2026-09-02T13:41:40.096Z"
+    notes: WS-16 Retrieval quality and hot-path cost (planned change envelope)
+  - id: TR-076
+    schema_version: 0.1.0
+    change_id: WS-16
+    claim_id: C-034
+    construct_id: packages/memory-engine/src/mongodb-episodes.ts
+    validation_id: null
+    direction: forward
+    sweep_pass: false
+    checked_at: "2026-09-02T13:41:40.097Z"
+    notes: WS-16 Retrieval quality and hot-path cost (planned change envelope)
+  - id: TR-077
+    schema_version: 0.1.0
+    change_id: WS-16
+    claim_id: C-034
+    construct_id: packages/memory-engine/src/mongodb-manager-write.ts
+    validation_id: null
+    direction: forward
+    sweep_pass: false
+    checked_at: "2026-09-02T13:41:40.098Z"
+    notes: WS-16 Retrieval quality and hot-path cost (planned change envelope)
+  - id: TR-078
+    schema_version: 0.1.0
+    change_id: WS-17
+    claim_id: C-035
+    construct_id: "packages/memory-engine/src/mongodb-manager-read.ts#readFile"
+    validation_id: null
+    direction: forward
+    sweep_pass: false
+    checked_at: "2026-09-02T13:41:40.099Z"
+    notes: WS-17 Privacy and tenancy boundaries (planned change envelope)
+  - id: TR-079
+    schema_version: 0.1.0
+    change_id: WS-17
+    claim_id: C-036
+    construct_id: packages/pi-extension/extensions/lifecycle.ts
+    validation_id: null
+    direction: forward
+    sweep_pass: false
+    checked_at: "2026-09-02T13:41:40.100Z"
+    notes: WS-17 Privacy and tenancy boundaries (planned change envelope)
+  - id: TR-080
+    schema_version: 0.1.0
+    change_id: WS-18
+    claim_id: C-037
+    construct_id: docker/compose.yaml
+    validation_id: null
+    direction: forward
+    sweep_pass: false
+    checked_at: "2026-09-02T13:41:40.101Z"
+    notes: WS-18 Release engineering (planned change envelope)
+  - id: TR-081
+    schema_version: 0.1.0
+    change_id: WS-18
+    claim_id: C-037
+    construct_id: apps/api/Dockerfile
+    validation_id: null
+    direction: forward
+    sweep_pass: false
+    checked_at: "2026-09-02T13:41:40.102Z"
+    notes: WS-18 Release engineering (planned change envelope)
+  - id: TR-082
+    schema_version: 0.1.0
+    change_id: WS-18
+    claim_id: C-038
+    construct_id: .github/workflows/publish.yml
+    validation_id: null
+    direction: forward
+    sweep_pass: false
+    checked_at: "2026-09-02T13:41:40.103Z"
+    notes: WS-18 Release engineering (planned change envelope)
+  - id: TR-083
+    schema_version: 0.1.0
+    change_id: WS-18
+    claim_id: C-039
+    construct_id: .github/workflows/e2e-nightly.yml
+    validation_id: null
+    direction: forward
+    sweep_pass: false
+    checked_at: "2026-09-02T13:41:40.104Z"
+    notes: WS-18 Release engineering (planned change envelope)
+  - id: TR-084
+    schema_version: 0.1.0
+    change_id: WS-18
+    claim_id: C-039
+    construct_id: packages/memory-engine/src/types.ts
+    validation_id: null
+    direction: forward
+    sweep_pass: false
+    checked_at: "2026-09-02T13:41:40.106Z"
+    notes: WS-18 Release engineering (planned change envelope)

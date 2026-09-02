@@ -9,7 +9,7 @@
 		"dev": "node --import tsx --watch src/server.ts",
 		"build": "node ../../node_modules/typescript/bin/tsc -p tsconfig.json --noEmit false --rootDir src --outDir dist",
 		"check-types": "node ../../node_modules/typescript/bin/tsc --noEmit -p tsconfig.json",
-		"test": "vitest run src/app.test.ts src/app.segment*.test.ts"
+		"test": "vitest run src"
 	},
 	"dependencies": {
 		"@hono/node-server": "^1.19.17",

@@ -1,0 +1,50 @@
+=== FINAL TREE-CLEANLINESS PROOF ===
+--- cmp backup vs original for every touched file ---
+cmp apps/api/package.json exit=0
+cmp apps/api/src/contract-conformance.test.ts exit=0
+cmp apps/api/src/routes/v1.ts exit=0
+--- backups present ---
+apps-api-package.json
+apps-api-src-contract-conformance.test.ts
+apps-api-src-routes-v1.ts
+--- restored files ---
+apps/api/package.json (test script reverted then restored)
+apps/api/src/contract-conformance.test.ts (skipIf injected then restored)
+apps/api/src/routes/v1.ts (probe route added then restored)
+--- sanity: no scratch edits remain ---
+0
+no MEMONGO_REFUTATION_ARM remaining
+0
+no refutation-probe remaining
+		"test": "vitest run src"
+--- sanity: apps/api junit reflects a full run (208 tests, 0 skipped) ---
+testsuite name="src/app.segment2.test.ts"
+testsuite name="src/app.segment3.test.ts"
+testsuite name="src/app.segment4.test.ts"
+testsuite name="src/app.segment5.test.ts"
+testsuite name="src/app.test.ts"
+testsuite name="src/contract-conformance.test.ts"
+testsuite name="src/lib/validation.test.ts"
+0
+no skipped entries in api junit
+
+== re-run round ==
+--- cmp proofs (re-run backups) ---
+cmp apps/api/package.json exit=0
+cmp apps/api/src/contract-conformance.test.ts exit=0
+--- api junit final state ---
+testsuite name="src/app.segment2.test.ts"
+testsuite name="src/app.segment3.test.ts"
+testsuite name="src/app.segment4.test.ts"
+testsuite name="src/app.segment5.test.ts"
+testsuite name="src/app.test.ts"
+testsuite name="src/contract-conformance.test.ts"
+testsuite name="src/lib/validation.test.ts"
+suite count: 7
+0
+0 skipped entries in api junit
+last summary line of restored api run: Tests  208 passed (208)
+--- no scratch edits remain ---
+0
+no MEMONGO_REFUTATION_ARM remaining
+		"test": "vitest run src"

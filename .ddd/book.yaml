@@ -1,0 +1,59 @@
+# DDD Book - memongo GLM-5.3 remediation program
+schema_version: 0.1.0
+version: 0.5.0
+released_at: null
+profile: assurance
+manifest_digest: sha256:715b8b65bcb940ebc009a275c5733ac4b2b7bd28bf8fcc83093cd41e7233aab8
+
+requirements:
+  - path: CONTEXT.md
+    authority: product-approved
+    independence: agent-proposed-human-approved
+    digest: sha256:f0cf7875873a26fdc51fec25aad0410fd88e9c66bcac48b5c1511eaec7324d3d
+    description: "Memongo domain glossary and product vocabulary"
+
+  - path: docs/adr/0001-substrate-claim-and-score-claim-are-separate.md
+    authority: product-approved
+    independence: agent-proposed-human-approved
+    digest: sha256:eb799584df7dce5060537cfe515c952899e4f800a0a79ba7c7821d93eb456af7
+    description: "ADR 0001 - substrate claims and score claims are separate"
+
+  - path: docs/adr/0002-silent-failure-tripwires-from-agent-memory.md
+    authority: product-approved
+    independence: agent-proposed-human-approved
+    digest: sha256:45ce5edbfb61a4cf68d2e76bd81bac1d77122354165d7149a128a25d11367af1
+    description: "ADR 0002 - silent-failure tripwires from agent-memory"
+
+agent_context:
+  - path: AGENTS.md
+    status: working-document
+    independence: agent-proposed-human-approved
+    digest: sha256:a39a0516da7ab556ad04b0f80e4e95afde9e60bf57c5052b77797cf8ef6e8171
+    description: "Agent runtime instructions for the memongo repository"
+
+  - path: CLAUDE.md
+    status: working-document
+    independence: agent-proposed-human-approved
+    digest: sha256:ca18a5be40749403231de40e3a310dc17367f1f399cdab8f0d5cd2842eeec969
+    description: "Claude-code instructions mirror of AGENTS.md"
+
+evidence_lock: evidence.lock
+claims: claims.yaml
+trace_matrix: trace-matrix.yaml
+stack_inventory: stack.yaml
+knowledge_map: knowledge-map.yaml
+interactions: interactions.yaml
+cases: cases/
+packets: packets/
+reports: reports/
+
+proofline_spec_version: 0.5.0-experimental
+compatibility_interface: ddd
+supported_boundary: code-derived-remediation-evidence
+experimental_boundary: typescript-openapi-json-schema
+
+coverage:
+  mode: change-envelope
+  repository_construct_inventory: not-evaluated
+
+initialized_at: "2026-09-02T13:41:39.966Z"

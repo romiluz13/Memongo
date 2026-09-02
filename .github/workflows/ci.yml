@@ -38,6 +38,26 @@ jobs:
       - name: Test
         run: bun run test
 
+      # Skip-green guard: a green run must contain executed tests. Catches
+      # suites that silently skip (describe.skipIf on missing env), packages
+      # that lose their test script, and JUnit emission breaking. The
+      # conformance require-suite is file-path anchored so only the api's
+      # OpenAPI drift guard satisfies it: reverting the api test script to
+      # an exclusionary form fails here.
+      - name: Verify tests ran (skip-green guard)
+        run: >
+          bun scripts/ci/verify-tests-ran.mjs
+          --expect apps/api/test-results/junit.xml
+          --expect apps/mcp/test-results/junit.xml
+          --expect packages/client/test-results/junit.xml
+          --expect packages/lib/test-results/junit.xml
+          --expect packages/memory-bridge/test-results/junit.xml
+          --expect packages/memory-engine/test-results/junit.xml
+          --expect packages/pi-extension/test-results/junit.xml
+          --expect packages/tools/test-results/junit.xml
+          --expect scripts/test-results/junit.xml
+          --require-suite src/contract-conformance.test.ts
+
   e2e:
     name: E2E against real MongoDB (tier A)
     runs-on: ubuntu-latest
@@ -76,3 +96,19 @@ jobs:
         env:
           MONGODB_TEST_URI: mongodb://127.0.0.1:27017/?directConnection=true
         run: bun run --filter @memongo/memory-engine test:e2e:tier-a
+
+      # Skip-green guard for tier A: every gated file must have executed at
+      # least one test, so a renamed file or a newly added skip cannot shrink
+      # the tier silently.
+      - name: Verify tier A suites ran (skip-green guard)
+        run: >
+          bun scripts/ci/verify-tests-ran.mjs
+          --expect packages/memory-engine/test-results/junit.xml
+          --require-suite mongodb-kb-reingest.e2e.test.ts
+          --require-suite mongodb-kb-isolation.e2e.test.ts
+          --require-suite mongodb-legacy-search-isolation.e2e.test.ts
+          --require-suite mongodb-vector-index-shape.e2e.test.ts
+          --require-suite mongodb-rankfusion-score.e2e.test.ts
+          --require-suite mongodb-projection-repair.e2e.test.ts
+          --require-suite mongodb-temporal-validity.e2e.test.ts
+          --require-suite mongodb-memory-jobs.e2e.test.ts

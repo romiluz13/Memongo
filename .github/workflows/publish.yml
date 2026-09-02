@@ -34,6 +34,24 @@ jobs:
       - name: Test
         run: bun run test
 
+      # Skip-green guard: publishing gates on a run that actually executed
+      # the full suite, not on a green exit with silently skipped packages.
+      # The conformance require-suite keeps the OpenAPI drift guard in the
+      # run that gates publishing.
+      - name: Verify tests ran (skip-green guard)
+        run: >
+          bun scripts/ci/verify-tests-ran.mjs
+          --expect apps/api/test-results/junit.xml
+          --expect apps/mcp/test-results/junit.xml
+          --expect packages/client/test-results/junit.xml
+          --expect packages/lib/test-results/junit.xml
+          --expect packages/memory-bridge/test-results/junit.xml
+          --expect packages/memory-engine/test-results/junit.xml
+          --expect packages/pi-extension/test-results/junit.xml
+          --expect packages/tools/test-results/junit.xml
+          --expect scripts/test-results/junit.xml
+          --require-suite src/contract-conformance.test.ts
+
       - name: Check publishability
         run: bun run check-publishability
 

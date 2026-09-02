@@ -1,0 +1,17 @@
+
+ Tasks:    14 successful, 14 total
+Cached:    5 cached, 14 total
+  Time:    11.662s 
+
+turbo OK
+verify-tests-ran: apps/api/test-results/junit.xml: 208 tests, 0 skipped, 208 executed, 0 failed
+verify-tests-ran: apps/mcp/test-results/junit.xml: 125 tests, 0 skipped, 125 executed, 0 failed
+verify-tests-ran: packages/client/test-results/junit.xml: 33 tests, 0 skipped, 33 executed, 0 failed
+verify-tests-ran: packages/lib/test-results/junit.xml: 131 tests, 0 skipped, 131 executed, 0 failed
+verify-tests-ran: packages/memory-bridge/test-results/junit.xml: 69 tests, 0 skipped, 69 executed, 0 failed
+verify-tests-ran: packages/memory-engine/test-results/junit.xml: 2049 tests, 0 skipped, 2049 executed, 0 failed
+verify-tests-ran: packages/pi-extension/test-results/junit.xml: 38 tests, 0 skipped, 38 executed, 0 failed
+verify-tests-ran: packages/tools/test-results/junit.xml: 45 tests, 0 skipped, 45 executed, 0 failed
+verify-tests-ran: scripts/test-results/junit.xml: 208 tests, 0 skipped, 208 executed, 0 failed
+verify-tests-ran: OK — 9 files, 2906 tests, 0 skipped, 2906 executed, 0 failed; 1 required suites all ran
+guard exit=0

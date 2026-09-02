@@ -1,0 +1,203 @@
+=== ATTEMPT 1: revert apps/api test script to exclusionary form ===
+--- scratch edit: package.json test script ---
+		"test": "vitest run src/app.test.ts src/app.segment*.test.ts"
+--- step 3: cd apps/api && CI=true bun run test ---
+$ vitest run src/app.test.ts src/app.segment*.test.ts
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/apps/api[39m
+
+[90mstderr[2m | src/app.segment5.test.ts[2m > [22m[2mcreateApp[2m > [22m[2mforwards recall-conversation filters and returns cited results
+[22m[39mWARNING: MEMONGO_ALLOW_INSECURE_NO_AUTH is enabled; /v1 routes are unauthenticated. Use only for trusted local development.
+
+[90mstderr[2m | src/app.segment2.test.ts[2m > [22m[2mcreateApp[2m > [22m[2m#28: rate limiting can be disabled with MEMONGO_API_RATE_LIMIT=0
+[22m[39mWARNING: MEMONGO_ALLOW_INSECURE_NO_AUTH is enabled; /v1 routes are unauthenticated. Use only for trusted local development.
+
+[90mstderr[2m | src/app.segment4.test.ts[2m > [22m[2mcreateApp[2m > [22m[2mforwards the Idempotency-Key header to write-event (header wins over customId)
+[22m[39mWARNING: MEMONGO_ALLOW_INSECURE_NO_AUTH is enabled; /v1 routes are unauthenticated. Use only for trusted local development.
+
+[90mstderr[2m | src/app.segment3.test.ts[2m > [22m[2mcreateApp[2m > [22m[2m/v1/write-events (P3.9 bulk write)[2m > [22m[2mwrites a batch in ONE bridge call and returns per-item receipts
+[22m[39mWARNING: MEMONGO_ALLOW_INSECURE_NO_AUTH is enabled; /v1 routes are unauthenticated. Use only for trusted local development.
+
+[90mstderr[2m | src/app.test.ts[2m > [22m[2mcreateApp[2m > [22m[2mpreserves search alias payload
+[22m[39mWARNING: MEMONGO_ALLOW_INSECURE_NO_AUTH is enabled; /v1 routes are unauthenticated. Use only for trusted local development.
+
+[90mstderr[2m | src/app.segment3.test.ts[2m > [22m[2mcreateApp[2m > [22m[2m/v1/write-events (P3.9 bulk write)[2m > [22m[2mmaps a bridge failure to 500
+[22m[39m{"level":"error","msg":"request failed","requestId":"ccf0505b-ad9b-46ef-9d8f-866c2f33839d","code":"WRITE_EVENTS_FAILED","method":"POST","path":"/v1/write-events","error":{"name":"Error","message":"engine exploded","stack":"Error: engine exploded\n    at /Users/rom.iluz/Dev/memongo/apps/api/src/app.segment3.test.ts:607:5\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:302:11\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:26\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2326:20\n    at new Promise (<anonymous>)\n    at runWithCancel (file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2323:10)\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2305:20\n    at new Promise (<anonymous>)\n    at runWithTimeout (file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2272:10)\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2955:64"}}
+
+[90mstderr[2m | src/app.segment4.test.ts[2m > [22m[2mcreateApp[2m > [22m[2mreturns a safe 500 envelope without leaking driver internals (P0.8)
+[22m[39m{"level":"error","msg":"request failed","requestId":"b1a50413-d394-435f-a198-8f24950a6217","code":"SEARCH_FAILED","method":"POST","path":"/v1/search","error":{"name":"MongoServerError","message":"MongoServerError: connection to 10.0.0.5:27017 timed out at /data/db","stack":"MongoServerError: MongoServerError: connection to 10.0.0.5:27017 timed out at /data/db\n    at /Users/rom.iluz/Dev/memongo/apps/api/src/app.segment4.test.ts:677:5\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:302:11\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:26\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2326:20\n    at new Promise (<anonymous>)\n    at runWithCancel (file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2323:10)\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2305:20\n    at new Promise (<anonymous>)\n    at runWithTimeout (file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2272:10)\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2955:64"}}
+
+[90mstderr[2m | src/app.segment4.test.ts[2m > [22m[2mcreateApp[2m > [22m[2mreturns a safe 500 envelope on /v1/add without leaking internals (P0.8)
+[22m[39m{"level":"error","msg":"request failed","requestId":"870faab9-369b-428b-8475-d35cbe454849","code":"ADD_FAILED","method":"POST","path":"/v1/add","error":{"name":"Error","message":"E11000 duplicate key error collection: memongo_events index: uq_x","stack":"Error: E11000 duplicate key error collection: memongo_events index: uq_x\n    at /Users/rom.iluz/Dev/memongo/apps/api/src/app.segment4.test.ts:708:4\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:302:11\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:26\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2326:20\n    at new Promise (<anonymous>)\n    at runWithCancel (file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2323:10)\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2305:20\n    at new Promise (<anonymous>)\n    at runWithTimeout (file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2272:10)\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2955:64"}}
+
+[90mstderr[2m | src/app.segment4.test.ts[2m > [22m[2mcreateApp[2m > [22m[2mreturns a safe 500 envelope on GET routes too (P0.8)
+[22m[39m{"level":"error","msg":"request failed","requestId":"1f3bec0c-4b6c-4d91-9f5e-8f577a7e2120","code":"STATUS_FAILED","method":"GET","path":"/v1/status","error":{"name":"Error","message":"MongoNetworkTimeoutError: connection 5 to 127.0.0.1:27017 closed","stack":"Error: MongoNetworkTimeoutError: connection 5 to 127.0.0.1:27017 closed\n    at /Users/rom.iluz/Dev/memongo/apps/api/src/app.segment4.test.ts:733:4\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:302:11\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:26\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2326:20\n    at new Promise (<anonymous>)\n    at runWithCancel (file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2323:10)\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2305:20\n    at new Promise (<anonymous>)\n    at runWithTimeout (file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2272:10)\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2955:64"}}
+
+ [32m✓[39m src/app.segment3.test.ts [2m([22m[2m27 tests[22m[2m)[22m[32m 108[2mms[22m[39m
+[90mstderr[2m | src/app.segment5.test.ts[2m > [22m[2mcreateApp[2m > [22m[2mP1.3: maps Mongo driver network errors to 503 SERVICE_UNAVAILABLE so client retry means something
+[22m[39m{"level":"error","msg":"request failed","requestId":"2ee93bc1-031e-4513-b138-bc5f4a65847e","code":"SEARCH_FAILED","method":"POST","path":"/v1/search","error":{"name":"MongoServerSelectionError","message":"connection refused","stack":"MongoServerSelectionError: connection refused\n    at /Users/rom.iluz/Dev/memongo/apps/api/src/app.segment5.test.ts:992:21\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:302:11\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:26\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2326:20\n    at new Promise (<anonymous>)\n    at runWithCancel (file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2323:10)\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2305:20\n    at new Promise (<anonymous>)\n    at runWithTimeout (file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2272:10)\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2955:64"}}
+
+[90mstderr[2m | src/app.segment5.test.ts[2m > [22m[2mcreateApp[2m > [22m[2mP1.3: MongoNetworkError maps to 503
+[22m[39m{"level":"error","msg":"request failed","requestId":"d084c156-f5a7-474f-b536-a20dbcebfbc8","code":"SEARCH_FAILED","method":"POST","path":"/v1/search","error":{"name":"MongoNetworkError","message":"driver down","stack":"MongoNetworkError: driver down\n    at /Users/rom.iluz/Dev/memongo/apps/api/src/app.segment5.test.ts:1018:15\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2027:60\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:302:11\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:26\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2326:20\n    at new Promise (<anonymous>)\n    at runWithCancel (file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2323:10)\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2305:20\n    at new Promise (<anonymous>)\n    at runWithTimeout (file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2272:10)"}}
+
+[90mstderr[2m | src/app.segment5.test.ts[2m > [22m[2mcreateApp[2m > [22m[2mP1.3: MongoNetworkTimeoutError maps to 503
+[22m[39m{"level":"error","msg":"request failed","requestId":"38e24d00-b311-4329-97b5-ae9f699144ed","code":"SEARCH_FAILED","method":"POST","path":"/v1/search","error":{"name":"MongoNetworkTimeoutError","message":"driver down","stack":"MongoNetworkTimeoutError: driver down\n    at /Users/rom.iluz/Dev/memongo/apps/api/src/app.segment5.test.ts:1018:15\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2027:60\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:302:11\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:26\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2326:20\n    at new Promise (<anonymous>)\n    at runWithCancel (file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2323:10)\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2305:20\n    at new Promise (<anonymous>)\n    at runWithTimeout (file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2272:10)"}}
+
+[90mstderr[2m | src/app.segment5.test.ts[2m > [22m[2mcreateApp[2m > [22m[2mP1.3: MongoServerSelectionError maps to 503
+[22m[39m{"level":"error","msg":"request failed","requestId":"584ea1db-0eaa-4b1e-b1df-4d0f71d33852","code":"SEARCH_FAILED","method":"POST","path":"/v1/search","error":{"name":"MongoServerSelectionError","message":"driver down","stack":"MongoServerSelectionError: driver down\n    at /Users/rom.iluz/Dev/memongo/apps/api/src/app.segment5.test.ts:1018:15\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2027:60\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:302:11\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:26\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2326:20\n    at new Promise (<anonymous>)\n    at runWithCancel (file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2323:10)\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2305:20\n    at new Promise (<anonymous>)\n    at runWithTimeout (file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2272:10)"}}
+
+[90mstderr[2m | src/app.segment5.test.ts[2m > [22m[2mcreateApp[2m > [22m[2mP1.3: a network error nested in an error cause chain still maps to 503
+[22m[39m{"level":"error","msg":"request failed","requestId":"8774220a-fe51-4ae6-ae92-134408ea405c","code":"SEARCH_FAILED","method":"POST","path":"/v1/search","error":{"name":"Error","message":"bridge call failed","stack":"Error: bridge call failed\n    at /Users/rom.iluz/Dev/memongo/apps/api/src/app.segment5.test.ts:1035:15\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:302:11\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:26\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2326:20\n    at new Promise (<anonymous>)\n    at runWithCancel (file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2323:10)\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2305:20\n    at new Promise (<anonymous>)\n    at runWithTimeout (file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2272:10)\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2955:64"}}
+
+[90mstderr[2m | src/app.segment5.test.ts[2m > [22m[2mcreateApp[2m > [22m[2mP1.3: a generic 500 must NOT become retriable noise — non-network errors stay 500 with the route code
+[22m[39m{"level":"error","msg":"request failed","requestId":"365affd8-8dc6-4d73-9962-c381f58e1320","code":"SEARCH_FAILED","method":"POST","path":"/v1/search","error":{"name":"Error","message":"unexpected invariant violation","stack":"Error: unexpected invariant violation\n    at /Users/rom.iluz/Dev/memongo/apps/api/src/app.segment5.test.ts:1051:4\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:302:11\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:26\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2326:20\n    at new Promise (<anonymous>)\n    at runWithCancel (file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2323:10)\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2305:20\n    at new Promise (<anonymous>)\n    at runWithTimeout (file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2272:10)\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2955:64"}}
+
+[90mstderr[2m | src/app.segment5.test.ts[2m > [22m[2mcreateApp[2m > [22m[2mP1.3: a message that merely mentions a network error name stays 500 (name-only classification)
+[22m[39m{"level":"error","msg":"request failed","requestId":"fbf45d82-e660-4a8b-b771-fc5f9e2bd7c0","code":"SEARCH_FAILED","method":"POST","path":"/v1/search","error":{"name":"Error","message":"failed while handling MongoServerSelectionError fallback","stack":"Error: failed while handling MongoServerSelectionError fallback\n    at /Users/rom.iluz/Dev/memongo/apps/api/src/app.segment5.test.ts:1071:4\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:302:11\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:26\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2326:20\n    at new Promise (<anonymous>)\n    at runWithCancel (file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2323:10)\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2305:20\n    at new Promise (<anonymous>)\n    at runWithTimeout (file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2272:10)\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2955:64"}}
+
+ [32m✓[39m src/app.segment4.test.ts [2m([22m[2m34 tests[22m[2m)[22m[32m 121[2mms[22m[39m
+ [32m✓[39m src/app.test.ts [2m([22m[2m53 tests[22m[2m)[22m[32m 116[2mms[22m[39m
+[90mstderr[2m | src/app.segment2.test.ts[2m > [22m[2mcreateApp[2m > [22m[2mforwards add scope and scopeRef when provided
+[22m[39mWARNING: MEMONGO_ALLOW_INSECURE_NO_AUTH is enabled; /v1 routes are unauthenticated. Use only for trusted local development.
+
+ [32m✓[39m src/app.segment2.test.ts [2m([22m[2m30 tests[22m[2m)[22m[32m 133[2mms[22m[39m
+ [32m✓[39m src/app.segment5.test.ts [2m([22m[2m37 tests[22m[2m)[22m[32m 135[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m5 passed[39m[22m[90m (5)[39m
+[2m      Tests [22m [1m[32m181 passed[39m[22m[90m (181)[39m
+[2m   Start at [22m 00:32:32
+[2m   Duration [22m 665ms[2m (transform 1.12s, setup 0ms, import 1.72s, tests 613ms, environment 0ms)[22m
+
+JUNIT report written to /Users/rom.iluz/Dev/memongo/apps/api/test-results/junit.xml
+api test exit=0
+--- step 4: ci.yml quality guard invocation ---
+verify-tests-ran: apps/api/test-results/junit.xml: 181 tests, 0 skipped, 181 executed, 0 failed
+verify-tests-ran: apps/mcp/test-results/junit.xml: 125 tests, 0 skipped, 125 executed, 0 failed
+verify-tests-ran: packages/client/test-results/junit.xml: 33 tests, 0 skipped, 33 executed, 0 failed
+verify-tests-ran: packages/lib/test-results/junit.xml: 131 tests, 0 skipped, 131 executed, 0 failed
+verify-tests-ran: packages/memory-bridge/test-results/junit.xml: 69 tests, 0 skipped, 69 executed, 0 failed
+verify-tests-ran: packages/memory-engine/test-results/junit.xml: 2049 tests, 0 skipped, 2049 executed, 0 failed
+verify-tests-ran: packages/pi-extension/test-results/junit.xml: 38 tests, 0 skipped, 38 executed, 0 failed
+verify-tests-ran: packages/tools/test-results/junit.xml: 45 tests, 0 skipped, 45 executed, 0 failed
+verify-tests-ran: scripts/test-results/junit.xml: 208 tests, 0 skipped, 208 executed, 0 failed
+verify-tests-ran: OK — 9 files, 2879 tests, 0 skipped, 2879 executed, 0 failed; 1 required suites all ran
+guard exit=0
+
+=== ANALYSIS: guard exit=0 despite exclusion ===
+junit suites in apps/api/test-results/junit.xml after reverted run:
+testsuite name="src/app.segment2.test.ts"
+testsuite name="src/app.segment3.test.ts"
+testsuite name="src/app.segment4.test.ts"
+testsuite name="src/app.segment5.test.ts"
+testsuite name="src/app.test.ts"
+Reason guard stayed green: --require-suite contract-conformance is a SUBSTRING match;
+apps/mcp/test-results/junit.xml contains testsuite src/mcp-contract-conformance.test.ts which satisfies it:
+testsuite name="src/mcp-contract-conformance.test.ts"
+
+=== REFUTATION RESULT: ATTEMPT 1 SUCCEEDED — guard green (exit 0) with OpenAPI drift guard excluded ===
+
+--- step 5: restore apps/api/package.json from backup ---
+cmp exit=0 (0 = byte-identical restore)
+		"test": "vitest run src"
+--- regenerate apps/api junit with restored full script ---
+[2m Test Files [22m [1m[32m7 passed[39m[22m[90m (7)[39m
+[2m      Tests [22m [1m[32m208 passed[39m[22m[90m (208)[39m
+[2m   Start at [22m 00:33:19
+[2m   Duration [22m 1.15s[2m (transform 1.58s, setup 0ms, import 2.66s, tests 506ms, environment 0ms)[22m
+
+JUNIT report written to /Users/rom.iluz/Dev/memongo/apps/api/test-results/junit.xml
+api full test exit=0
+
+== re-run after file-path-anchored fix ==
+--- scratch edit: package.json test script ---
+		"test": "vitest run src/app.test.ts src/app.segment*.test.ts"
+--- step 3: cd apps/api && CI=true bun run test ---
+$ vitest run src/app.test.ts src/app.segment*.test.ts
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/apps/api[39m
+
+[90mstderr[2m | src/app.segment2.test.ts[2m > [22m[2mcreateApp[2m > [22m[2m#28: rate limiting can be disabled with MEMONGO_API_RATE_LIMIT=0
+[22m[39mWARNING: MEMONGO_ALLOW_INSECURE_NO_AUTH is enabled; /v1 routes are unauthenticated. Use only for trusted local development.
+
+[90mstderr[2m | src/app.segment4.test.ts[2m > [22m[2mcreateApp[2m > [22m[2mforwards the Idempotency-Key header to write-event (header wins over customId)
+[22m[39mWARNING: MEMONGO_ALLOW_INSECURE_NO_AUTH is enabled; /v1 routes are unauthenticated. Use only for trusted local development.
+
+[90mstderr[2m | src/app.segment5.test.ts[2m > [22m[2mcreateApp[2m > [22m[2mforwards recall-conversation filters and returns cited results
+[22m[39mWARNING: MEMONGO_ALLOW_INSECURE_NO_AUTH is enabled; /v1 routes are unauthenticated. Use only for trusted local development.
+
+[90mstderr[2m | src/app.segment3.test.ts[2m > [22m[2mcreateApp[2m > [22m[2m/v1/write-events (P3.9 bulk write)[2m > [22m[2mwrites a batch in ONE bridge call and returns per-item receipts
+[22m[39mWARNING: MEMONGO_ALLOW_INSECURE_NO_AUTH is enabled; /v1 routes are unauthenticated. Use only for trusted local development.
+
+[90mstderr[2m | src/app.test.ts[2m > [22m[2mcreateApp[2m > [22m[2mpreserves search alias payload
+[22m[39mWARNING: MEMONGO_ALLOW_INSECURE_NO_AUTH is enabled; /v1 routes are unauthenticated. Use only for trusted local development.
+
+[90mstderr[2m | src/app.segment3.test.ts[2m > [22m[2mcreateApp[2m > [22m[2m/v1/write-events (P3.9 bulk write)[2m > [22m[2mmaps a bridge failure to 500
+[22m[39m{"level":"error","msg":"request failed","requestId":"926057fb-3305-475c-9607-36c3f6bd4589","code":"WRITE_EVENTS_FAILED","method":"POST","path":"/v1/write-events","error":{"name":"Error","message":"engine exploded","stack":"Error: engine exploded\n    at /Users/rom.iluz/Dev/memongo/apps/api/src/app.segment3.test.ts:607:5\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:302:11\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:26\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2326:20\n    at new Promise (<anonymous>)\n    at runWithCancel (file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2323:10)\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2305:20\n    at new Promise (<anonymous>)\n    at runWithTimeout (file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2272:10)\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2955:64"}}
+
+[90mstderr[2m | src/app.segment4.test.ts[2m > [22m[2mcreateApp[2m > [22m[2mreturns a safe 500 envelope without leaking driver internals (P0.8)
+[22m[39m{"level":"error","msg":"request failed","requestId":"e0e126c2-5ac3-470a-be3d-d4a8daacb7f2","code":"SEARCH_FAILED","method":"POST","path":"/v1/search","error":{"name":"MongoServerError","message":"MongoServerError: connection to 10.0.0.5:27017 timed out at /data/db","stack":"MongoServerError: MongoServerError: connection to 10.0.0.5:27017 timed out at /data/db\n    at /Users/rom.iluz/Dev/memongo/apps/api/src/app.segment4.test.ts:677:5\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:302:11\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:26\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2326:20\n    at new Promise (<anonymous>)\n    at runWithCancel (file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2323:10)\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2305:20\n    at new Promise (<anonymous>)\n    at runWithTimeout (file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2272:10)\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2955:64"}}
+
+[90mstderr[2m | src/app.segment4.test.ts[2m > [22m[2mcreateApp[2m > [22m[2mreturns a safe 500 envelope on /v1/add without leaking internals (P0.8)
+[22m[39m{"level":"error","msg":"request failed","requestId":"4be1f823-e11a-4429-892f-186426ab8f17","code":"ADD_FAILED","method":"POST","path":"/v1/add","error":{"name":"Error","message":"E11000 duplicate key error collection: memongo_events index: uq_x","stack":"Error: E11000 duplicate key error collection: memongo_events index: uq_x\n    at /Users/rom.iluz/Dev/memongo/apps/api/src/app.segment4.test.ts:708:4\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:302:11\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:26\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2326:20\n    at new Promise (<anonymous>)\n    at runWithCancel (file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2323:10)\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2305:20\n    at new Promise (<anonymous>)\n    at runWithTimeout (file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2272:10)\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2955:64"}}
+
+[90mstderr[2m | src/app.segment4.test.ts[2m > [22m[2mcreateApp[2m > [22m[2mreturns a safe 500 envelope on GET routes too (P0.8)
+[22m[39m{"level":"error","msg":"request failed","requestId":"5872a060-d86d-42b9-bdd0-74d4a7d684ed","code":"STATUS_FAILED","method":"GET","path":"/v1/status","error":{"name":"Error","message":"MongoNetworkTimeoutError: connection 5 to 127.0.0.1:27017 closed","stack":"Error: MongoNetworkTimeoutError: connection 5 to 127.0.0.1:27017 closed\n    at /Users/rom.iluz/Dev/memongo/apps/api/src/app.segment4.test.ts:733:4\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:302:11\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:26\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2326:20\n    at new Promise (<anonymous>)\n    at runWithCancel (file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2323:10)\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2305:20\n    at new Promise (<anonymous>)\n    at runWithTimeout (file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2272:10)\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2955:64"}}
+
+[90mstderr[2m | src/app.segment5.test.ts[2m > [22m[2mcreateApp[2m > [22m[2mP1.3: maps Mongo driver network errors to 503 SERVICE_UNAVAILABLE so client retry means something
+[22m[39m{"level":"error","msg":"request failed","requestId":"47e10779-d3df-458e-8e11-30b4ea0dc224","code":"SEARCH_FAILED","method":"POST","path":"/v1/search","error":{"name":"MongoServerSelectionError","message":"connection refused","stack":"MongoServerSelectionError: connection refused\n    at /Users/rom.iluz/Dev/memongo/apps/api/src/app.segment5.test.ts:992:21\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:302:11\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:26\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2326:20\n    at new Promise (<anonymous>)\n    at runWithCancel (file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2323:10)\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2305:20\n    at new Promise (<anonymous>)\n    at runWithTimeout (file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2272:10)\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2955:64"}}
+
+[90mstderr[2m | src/app.segment5.test.ts[2m > [22m[2mcreateApp[2m > [22m[2mP1.3: MongoNetworkError maps to 503
+[22m[39m{"level":"error","msg":"request failed","requestId":"504d1c58-1358-4bfc-b4a3-8b64dfa6cc52","code":"SEARCH_FAILED","method":"POST","path":"/v1/search","error":{"name":"MongoNetworkError","message":"driver down","stack":"MongoNetworkError: driver down\n    at /Users/rom.iluz/Dev/memongo/apps/api/src/app.segment5.test.ts:1018:15\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2027:60\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:302:11\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:26\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2326:20\n    at new Promise (<anonymous>)\n    at runWithCancel (file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2323:10)\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2305:20\n    at new Promise (<anonymous>)\n    at runWithTimeout (file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2272:10)"}}
+
+[90mstderr[2m | src/app.segment5.test.ts[2m > [22m[2mcreateApp[2m > [22m[2mP1.3: MongoNetworkTimeoutError maps to 503
+[22m[39m{"level":"error","msg":"request failed","requestId":"fe7c5262-91a0-4e6d-875f-45a59a2a8dc7","code":"SEARCH_FAILED","method":"POST","path":"/v1/search","error":{"name":"MongoNetworkTimeoutError","message":"driver down","stack":"MongoNetworkTimeoutError: driver down\n    at /Users/rom.iluz/Dev/memongo/apps/api/src/app.segment5.test.ts:1018:15\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2027:60\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:302:11\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:26\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2326:20\n    at new Promise (<anonymous>)\n    at runWithCancel (file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2323:10)\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2305:20\n    at new Promise (<anonymous>)\n    at runWithTimeout (file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2272:10)"}}
+
+[90mstderr[2m | src/app.segment5.test.ts[2m > [22m[2mcreateApp[2m > [22m[2mP1.3: MongoServerSelectionError maps to 503
+[22m[39m{"level":"error","msg":"request failed","requestId":"3ebdef13-17e5-497c-83c5-60b7972aed2e","code":"SEARCH_FAILED","method":"POST","path":"/v1/search","error":{"name":"MongoServerSelectionError","message":"driver down","stack":"MongoServerSelectionError: driver down\n    at /Users/rom.iluz/Dev/memongo/apps/api/src/app.segment5.test.ts:1018:15\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2027:60\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:302:11\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:26\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2326:20\n    at new Promise (<anonymous>)\n    at runWithCancel (file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2323:10)\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2305:20\n    at new Promise (<anonymous>)\n    at runWithTimeout (file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2272:10)"}}
+
+ [32m✓[39m src/app.segment3.test.ts [2m([22m[2m27 tests[22m[2m)[22m[32m 197[2mms[22m[39m
+[90mstderr[2m | src/app.segment5.test.ts[2m > [22m[2mcreateApp[2m > [22m[2mP1.3: a network error nested in an error cause chain still maps to 503
+[22m[39m{"level":"error","msg":"request failed","requestId":"d00e6e03-9150-4090-b53c-008066bf2b67","code":"SEARCH_FAILED","method":"POST","path":"/v1/search","error":{"name":"Error","message":"bridge call failed","stack":"Error: bridge call failed\n    at /Users/rom.iluz/Dev/memongo/apps/api/src/app.segment5.test.ts:1035:15\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:302:11\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:26\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2326:20\n    at new Promise (<anonymous>)\n    at runWithCancel (file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2323:10)\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2305:20\n    at new Promise (<anonymous>)\n    at runWithTimeout (file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2272:10)\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2955:64"}}
+
+[90mstderr[2m | src/app.segment5.test.ts[2m > [22m[2mcreateApp[2m > [22m[2mP1.3: a generic 500 must NOT become retriable noise — non-network errors stay 500 with the route code
+[22m[39m{"level":"error","msg":"request failed","requestId":"1f0d3b7f-c0a4-408c-87eb-e7536f7776dc","code":"SEARCH_FAILED","method":"POST","path":"/v1/search","error":{"name":"Error","message":"unexpected invariant violation","stack":"Error: unexpected invariant violation\n    at /Users/rom.iluz/Dev/memongo/apps/api/src/app.segment5.test.ts:1051:4\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:302:11\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:26\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2326:20\n    at new Promise (<anonymous>)\n    at runWithCancel (file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2323:10)\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2305:20\n    at new Promise (<anonymous>)\n    at runWithTimeout (file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2272:10)\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2955:64"}}
+
+[90mstderr[2m | src/app.segment5.test.ts[2m > [22m[2mcreateApp[2m > [22m[2mP1.3: a message that merely mentions a network error name stays 500 (name-only classification)
+[22m[39m{"level":"error","msg":"request failed","requestId":"c6bc2021-ff65-4071-afaa-ca183125ffce","code":"SEARCH_FAILED","method":"POST","path":"/v1/search","error":{"name":"Error","message":"failed while handling MongoServerSelectionError fallback","stack":"Error: failed while handling MongoServerSelectionError fallback\n    at /Users/rom.iluz/Dev/memongo/apps/api/src/app.segment5.test.ts:1071:4\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:302:11\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:26\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2326:20\n    at new Promise (<anonymous>)\n    at runWithCancel (file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2323:10)\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2305:20\n    at new Promise (<anonymous>)\n    at runWithTimeout (file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2272:10)\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2955:64"}}
+
+[90mstderr[2m | src/app.segment2.test.ts[2m > [22m[2mcreateApp[2m > [22m[2mforwards add scope and scopeRef when provided
+[22m[39mWARNING: MEMONGO_ALLOW_INSECURE_NO_AUTH is enabled; /v1 routes are unauthenticated. Use only for trusted local development.
+
+ [32m✓[39m src/app.segment2.test.ts [2m([22m[2m30 tests[22m[2m)[22m[32m 226[2mms[22m[39m
+ [32m✓[39m src/app.segment4.test.ts [2m([22m[2m34 tests[22m[2m)[22m[32m 224[2mms[22m[39m
+ [32m✓[39m src/app.test.ts [2m([22m[2m53 tests[22m[2m)[22m[32m 199[2mms[22m[39m
+ [32m✓[39m src/app.segment5.test.ts [2m([22m[2m37 tests[22m[2m)[22m[32m 242[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m5 passed[39m[22m[90m (5)[39m
+[2m      Tests [22m [1m[32m181 passed[39m[22m[90m (181)[39m
+[2m   Start at [22m 00:36:49
+[2m   Duration [22m 710ms[2m (transform 1.07s, setup 0ms, import 1.63s, tests 1.09s, environment 0ms)[22m
+
+JUNIT report written to /Users/rom.iluz/Dev/memongo/apps/api/test-results/junit.xml
+api test exit=0
+--- step 4: FIXED ci.yml quality guard invocation ---
+verify-tests-ran: apps/api/test-results/junit.xml: 181 tests, 0 skipped, 181 executed, 0 failed
+verify-tests-ran: apps/mcp/test-results/junit.xml: 125 tests, 0 skipped, 125 executed, 0 failed
+verify-tests-ran: packages/client/test-results/junit.xml: 33 tests, 0 skipped, 33 executed, 0 failed
+verify-tests-ran: packages/lib/test-results/junit.xml: 131 tests, 0 skipped, 131 executed, 0 failed
+verify-tests-ran: packages/memory-bridge/test-results/junit.xml: 69 tests, 0 skipped, 69 executed, 0 failed
+verify-tests-ran: packages/memory-engine/test-results/junit.xml: 6 tests, 0 skipped, 6 executed, 0 failed
+verify-tests-ran: packages/pi-extension/test-results/junit.xml: 38 tests, 0 skipped, 38 executed, 0 failed
+verify-tests-ran: packages/tools/test-results/junit.xml: 45 tests, 0 skipped, 45 executed, 0 failed
+verify-tests-ran: scripts/test-results/junit.xml: 1 tests, 1 skipped, 0 executed, 0 failed
+verify-tests-ran: violations:
+  - no executed tests: scripts/test-results/junit.xml (1 tests, 1 skipped — suites silently skipped or empty run)
+  - required suite absent: "src/contract-conformance.test.ts" (no testsuite or testcase matches it in any expected file)
+guard exit=1
+
+--- step 5: restore apps/api/package.json from backup ---
+cmp exit=0 (0 = byte-identical restore)
+		"test": "vitest run src"
+NOTE: stale junit for scripts/ and packages/memory-engine/ (1 and 6 tests resp., mtime ~00:36:16-17)
+predates this re-run's api test execution and was not produced by the refuter; it added unrelated
+violations but did not affect the expected 'required suite absent' signal.

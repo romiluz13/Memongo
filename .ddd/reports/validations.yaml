@@ -1,0 +1,42 @@
+# Validation records referenced by claims.yaml (one per gated trace).
+# Evidence hashes cover the captured run logs in .ddd/reports/runs/.
+entries:
+  - id: V-026
+    claim_id: C-010
+    construct: apps/api/package.json
+    method: manual
+    target: .ddd/reports/runs/ws07-ci-quality-sim.log
+    result: pass
+    run_at: "2026-09-02T21:39:00.000Z"
+    evidence_hash: sha256:e9d64974e57e67d84696d2a8f7455108d798349821c9fecccd1baf686cb45831
+    notes: "CI-mode simulation of the quality job (turbo run test with CI=true) executes the api suite via `vitest run src`: 7 files / 208 tests including src/contract-conformance.test.ts (previously excluded by the old script), 0 skipped, 0 failed. The guard in the same log confirms `src/contract-conformance.test.ts` executed. The PR CI run supersedes this local evidence once landed."
+
+  - id: V-027
+    claim_id: C-010
+    construct: .github/workflows/ci.yml
+    method: manual
+    target: .ddd/reports/runs/ws07-tier-a-guard-local.log
+    result: pass
+    run_at: "2026-09-02T21:36:00.000Z"
+    evidence_hash: sha256:87a7d94f12fb9e1a971c4aaa748bd58f9cd76c6da3112ec5d28ccc267887f73a
+    notes: "Quality job: exact guard invocation from ci.yml (9 --expect junit files + --require-suite src/contract-conformance.test.ts) passes on the CI-mode simulation, see companion log ws07-ci-quality-sim.log (sha256:e9d64974e57e67d84696d2a8f7455108d798349821c9fecccd1baf686cb45831). Tier-A e2e job: a real tier-A file (mongodb-temporal-validity.e2e.test.ts, 6 tests) runs against a local atlas-local container and its file-anchored require-suite guard passes (this log). Workflow YAML parses (ws07-workflow-yaml-parse.log). Negative paths (missing junit, all-skipped run) fail the guard: ws07-guard-negative-missing-file.log, ws07-nightly-guard-negative.log."
+
+  - id: V-028
+    claim_id: C-010
+    construct: .github/workflows/e2e-nightly.yml
+    method: manual
+    target: .ddd/reports/runs/ws07-nightly-preflight.log
+    result: pass
+    run_at: "2026-09-02T21:36:00.000Z"
+    evidence_hash: sha256:07f193f141a6fee0829ea6dc5a997d4f484dc2f5ce8fe7f6124321deb210590b
+    notes: "Preflight (scripts/ci/assert-e2e-env.sh): disarmed (no gate env) fails exit 1 naming the suites each missing key would silently skip; armed (placeholder values) passes exit 0. Today's nightly condition (MEMONGO_ENRICHMENT_API_KEY unset) is caught end-to-end in companion log ws07-nightly-guard-negative.log (sha256:df6ff8a2c2a0f65fa68bd976fab5caba5a352b6bf228972d82bfedddd99f0f68): scripts e2e QA skips (1 test, 1 skipped) and its guard fails exit 1 with `no executed tests` + `required suite all-skipped: mongodb-e2e-qa.e2e.test.ts`. Gated-suite require-suites are file-path anchored; the enrichment env vars are now passed to the e2e and QA steps. The landed nightly run supersedes this local evidence."
+
+  - id: V-029
+    claim_id: C-010
+    construct: .github/workflows/publish.yml
+    method: manual
+    target: .ddd/reports/runs/ws07-ci-quality-sim.log
+    result: pass
+    run_at: "2026-09-02T21:39:00.000Z"
+    evidence_hash: sha256:e9d64974e57e67d84696d2a8f7455108d798349821c9fecccd1baf686cb45831
+    notes: "Publish gates on `bun run test` followed by the same skip-green guard as the quality job (9 --expect files + --require-suite src/contract-conformance.test.ts). The guard invocation is verified green on the CI-mode simulation (this log); publish.yml parses (ws07-workflow-yaml-parse.log, sha256:9790e8c662e549e8740c3a543e3b9303a6870ea069bb5ba5d49771c51a695102). Negative paths fail the guard identically (ws07-guard-negative-missing-file.log, ws07-nightly-guard-negative.log). The tag-triggered publish run supersedes this local evidence."

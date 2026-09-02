@@ -1088,7 +1088,7 @@ describe("benchmark event search convergence", () => {
 								sessionId: "bench-17",
 							},
 							index: "test_session_chunks_vector",
-							model: "voyage-4-lite",
+							model: "voyage-4-large",
 							path: "text",
 							query: { text: "benchmark vector readiness probe" },
 						}),

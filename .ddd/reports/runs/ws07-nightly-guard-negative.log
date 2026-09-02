@@ -1,0 +1,13 @@
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/scripts[39m
+
+ [2m[90m↓[39m[22m mongodb-e2e-qa.e2e.test.ts [2m([22m[2m1 test[22m[2m | [22m[33m1 skipped[39m[2m)[22m
+
+[2m Test Files [22m [33m1 skipped[39m[90m (1)[39m
+[2m      Tests [22m [33m1 skipped[39m[90m (1)[39m
+[2m   Start at [22m 00:36:17
+[2m   Duration [22m 176ms[2m (transform 67ms, setup 0ms, import 90ms, tests 0ms, environment 0ms)[22m
+
+JUNIT report written to /Users/rom.iluz/Dev/memongo/scripts/test-results/junit.xml
+error: Module not found "../ci/verify-tests-ran.mjs"
+guard exit=1

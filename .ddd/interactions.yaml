@@ -1,0 +1,6 @@
+# DDD Interactions
+# Cross-layer interactions are recorded per change envelope (SPEC 5) when a
+# workstream locks its packet; none are declared at plan stage.
+
+schema_version: 0.5.0
+interactions: []

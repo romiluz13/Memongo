@@ -57,3 +57,7 @@ benchmarks/results/checkpoints/
 # Review scratch + runtime workflow logs (B15.2/B15.3)
 .tmp-review/
 *.events.jsonl
+
+# Vitest JUnit output, emitted only when CI=true; parsed by
+# scripts/ci/verify-tests-ran.mjs (skip-green guard).
+test-results/

@@ -1,0 +1,196 @@
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/packages/memory-engine[39m
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m00:36:15.804 [memory:mongodb:schema] info: created collection temporal_chunks
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m00:36:15.812 [memory:mongodb:schema] info: created collection temporal_files
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m00:36:15.821 [memory:mongodb:schema] info: created collection temporal_meta
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m00:36:15.828 [memory:mongodb:schema] info: created collection temporal_knowledge_base
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m00:36:15.835 [memory:mongodb:schema] info: created collection temporal_kb_chunks
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m00:36:15.841 [memory:mongodb:schema] info: created collection temporal_structured_mem
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m00:36:15.849 [memory:mongodb:schema] info: created collection temporal_structured_mem_revisions
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m00:36:15.857 [memory:mongodb:schema] info: created collection temporal_procedures
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m00:36:15.863 [memory:mongodb:schema] info: created collection temporal_procedure_revisions
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m00:36:15.869 [memory:mongodb:schema] info: created collection temporal_relevance_runs
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m00:36:15.877 [memory:mongodb:schema] info: created collection temporal_relevance_artifacts
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m00:36:15.884 [memory:mongodb:schema] info: created collection temporal_relevance_regressions
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m00:36:15.893 [memory:mongodb:schema] info: created collection temporal_events
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m00:36:15.900 [memory:mongodb:schema] info: created collection temporal_entities
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m00:36:15.907 [memory:mongodb:schema] info: created collection temporal_relations
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m00:36:15.915 [memory:mongodb:schema] info: created collection temporal_entity_links
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m00:36:15.921 [memory:mongodb:schema] info: created collection temporal_episodes
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m00:36:15.928 [memory:mongodb:schema] info: created collection temporal_ingest_runs
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m00:36:15.934 [memory:mongodb:schema] info: created collection temporal_projection_runs
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m00:36:15.940 [memory:mongodb:schema] info: created collection temporal_query_cache
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m00:36:15.949 [memory:mongodb:schema] info: created collection temporal_memory_mutations
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m00:36:15.957 [memory:mongodb:schema] info: created collection temporal_lane_coverage
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m00:36:15.965 [memory:mongodb:schema] info: created collection temporal_consolidation_runs
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m00:36:15.973 [memory:mongodb:schema] info: created collection temporal_recall_traces
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m00:36:15.981 [memory:mongodb:schema] info: created collection temporal_memory_jobs
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m00:36:15.993 [memory:mongodb:schema] info: created collection temporal_session_chunks
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m00:36:16.003 [memory:mongodb:schema] info: created collection temporal_memory_quarantine
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m00:36:16.021 [memory:mongodb:schema] info: created time series collection temporal_memory_telemetry
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m00:36:16.021 [memory:mongodb:schema] info: created telemetry collection temporal_memory_telemetry
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m00:36:16.030 [memory:mongodb:schema] info: created time series collection temporal_access_events
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m00:36:16.030 [memory:mongodb:schema] info: created access events collection temporal_access_events
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m00:36:16.034 [memory:mongodb:schema] info: applied schema validation to temporal_chunks
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m00:36:16.036 [memory:mongodb:schema] info: applied schema validation to temporal_knowledge_base
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m00:36:16.038 [memory:mongodb:schema] info: applied schema validation to temporal_kb_chunks
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m00:36:16.041 [memory:mongodb:schema] info: applied schema validation to temporal_structured_mem
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m00:36:16.045 [memory:mongodb:schema] info: applied schema validation to temporal_structured_mem_revisions
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m00:36:16.049 [memory:mongodb:schema] info: applied schema validation to temporal_procedures
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m00:36:16.050 [memory:mongodb:schema] info: applied schema validation to temporal_procedure_revisions
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m00:36:16.054 [memory:mongodb:schema] info: applied schema validation to temporal_relevance_runs
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m00:36:16.057 [memory:mongodb:schema] info: applied schema validation to temporal_relevance_artifacts
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m00:36:16.059 [memory:mongodb:schema] info: applied schema validation to temporal_relevance_regressions
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m00:36:16.061 [memory:mongodb:schema] info: applied schema validation to temporal_events
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m00:36:16.062 [memory:mongodb:schema] info: applied schema validation to temporal_entities
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m00:36:16.064 [memory:mongodb:schema] info: applied schema validation to temporal_relations
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m00:36:16.065 [memory:mongodb:schema] info: applied schema validation to temporal_entity_links
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m00:36:16.067 [memory:mongodb:schema] info: applied schema validation to temporal_episodes
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m00:36:16.068 [memory:mongodb:schema] info: applied schema validation to temporal_ingest_runs
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m00:36:16.069 [memory:mongodb:schema] info: applied schema validation to temporal_projection_runs
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m00:36:16.071 [memory:mongodb:schema] info: applied schema validation to temporal_query_cache
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m00:36:16.073 [memory:mongodb:schema] info: applied schema validation to temporal_memory_mutations
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m00:36:16.074 [memory:mongodb:schema] info: applied schema validation to temporal_recall_traces
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m00:36:16.077 [memory:mongodb:schema] info: applied schema validation to temporal_memory_jobs
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m00:36:16.080 [memory:mongodb:schema] info: applied schema validation to temporal_memory_quarantine
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m00:36:16.083 [memory:mongodb:schema] info: applied schema validation to temporal_files
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m00:36:16.532 [memory:mongodb:schema] info: ensured 38 standard indexes
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m00:36:16.537 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-open revision=1
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m00:36:16.546 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-closed revision=1
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)[2m > [22m[2mdoes not push validFrom forward when the same fact is re-mentioned later (#32 review F1)
+[22m[39m00:36:16.555 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-rementioned revision=1
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)[2m > [22m[2mdoes not push validFrom forward when the same fact is re-mentioned later (#32 review F1)
+[22m[39m00:36:16.563 [memory:mongodb:structured] info: structured memory updated: type=fact key=fact-rementioned revision=2
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)[2m > [22m[2mclears a stale validTo when the value genuinely changes (#32 review F2)
+[22m[39m00:36:16.569 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-relocation revision=1
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)[2m > [22m[2mclears a stale validTo when the value genuinely changes (#32 review F2)
+[22m[39m00:36:16.573 [memory:mongodb:structured] info: structured memory updated: type=fact key=fact-relocation revision=2
+
+ [32m✓[39m src/mongodb-temporal-validity.e2e.test.ts [2m([22m[2m6 tests[22m[2m)[22m[33m 917[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m1 passed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[32m6 passed[39m[22m[90m (6)[39m
+[2m   Start at [22m 00:36:15
+[2m   Duration [22m 1.35s[2m (transform 212ms, setup 0ms, import 340ms, tests 917ms, environment 0ms)[22m
+
+JUNIT report written to /Users/rom.iluz/Dev/memongo/packages/memory-engine/test-results/junit.xml
+verify-tests-ran: ../../packages/memory-engine/test-results/junit.xml: 6 tests, 0 skipped, 6 executed, 0 failed
+verify-tests-ran: OK — 1 files, 6 tests, 0 skipped, 6 executed, 0 failed; 1 required suites all ran
