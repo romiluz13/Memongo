@@ -1,0 +1,34 @@
+ ✓ src/auth.test.ts (26 tests) 6ms
+ ✓ src/mcp-contract-conformance.test.ts (4 tests) 2ms
+ ✓ src/tool-registry.test.ts (10 tests) 4ms
+ ✓ src/server.test.ts (105 tests) 20ms
+stderr | src/http-transport.test.ts > HTTP transport authentication (WS-01) > returns 403 for a disallowed Host header
+stderr | src/http-transport.test.ts > HTTP transport authentication (WS-01) > returns 403 for a foreign Origin header
+stderr | src/http-transport.test.ts > HTTP transport authentication (WS-01) > returns 403 (not a crash) for an empty Host header
+ ❯ src/http-transport.test.ts (18 tests | 3 failed) 70ms
+     ✓ answers the MCP initialize handshake over HTTP 23ms
+     ✓ serves tools/list over HTTP after initialize 9ms
+     ✓ gates admin and alias tools behind env flags (P1.2) 8ms
+     ✓ exposes admin tools when MEMONGO_MCP_ADMIN=1 (P1.2) 4ms
+     ✓ returns 404 for non-MCP paths 1ms
+     ✓ exposes a default HTTP port that does not collide with api/web 0ms
+     ✓ rejects unauthenticated requests with 401 + WWW-Authenticate: Bearer 1ms
+     ✓ rejects an invalid token with 401 + invalid_token challenge 1ms
+     ✓ serves the handshake to a valid standard token 3ms
+     ✓ hides admin tools from the standard scope even when MEMONGO_MCP_ADMIN=1 3ms
+     ✓ exposes admin tools to the admin credential scope 3ms
+     ✓ leaves admin tools unreachable when MEMONGO_MCP_ADMIN=1 but no admin token is set (fail closed) 4ms
+     × returns 403 for a disallowed Host header 4ms
+     × returns 403 for a foreign Origin header 1ms
+     × returns 403 (not a crash) for an empty Host header 1ms
+     ✓ sanitizes the 500 error envelope 1ms
+     ✓ refuses a non-loopback bind without a transport token 1ms
+     ✓ requires authentication on a non-loopback bind once a token is configured 1ms
+ FAIL  src/http-transport.test.ts > HTTP transport authentication (WS-01) > returns 403 for a disallowed Host header
+ ❯ src/http-transport.test.ts:400:27
+ FAIL  src/http-transport.test.ts > HTTP transport authentication (WS-01) > returns 403 for a foreign Origin header
+ ❯ src/http-transport.test.ts:411:27
+ FAIL  src/http-transport.test.ts > HTTP transport authentication (WS-01) > returns 403 (not a crash) for an empty Host header
+ ❯ src/http-transport.test.ts:421:27
+ Test Files  1 failed | 4 passed (5)
+      Tests  3 failed | 160 passed (163)

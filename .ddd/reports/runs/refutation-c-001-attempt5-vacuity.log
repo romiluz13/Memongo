@@ -1,0 +1,177 @@
+$ vitest run src
+
+ RUN  v4.1.10 /Users/rom.iluz/Dev/memongo/apps/mcp
+
+ ✓ src/auth.test.ts (26 tests) 25ms
+ ✓ src/mcp-contract-conformance.test.ts (4 tests) 5ms
+ ✓ src/tool-registry.test.ts (10 tests) 12ms
+stderr | src/http-transport.test.ts > streamable HTTP transport > answers the MCP initialize handshake over HTTP
+memongo-mcp: no MEMONGO_MCP_AUTH_TOKEN set — local trust mode; keep the bind on loopback
+
+stderr | src/http-transport.test.ts > streamable HTTP transport > answers the MCP initialize handshake over HTTP
+memongo-mcp: streamable HTTP transport listening on http://127.0.0.1:62290/mcp (local trust, no authentication)
+
+ ✓ src/server.test.ts (105 tests) 23ms
+stderr | src/http-transport.test.ts > streamable HTTP transport > serves tools/list over HTTP after initialize
+memongo-mcp: no MEMONGO_MCP_AUTH_TOKEN set — local trust mode; keep the bind on loopback
+
+stderr | src/http-transport.test.ts > streamable HTTP transport > serves tools/list over HTTP after initialize
+memongo-mcp: streamable HTTP transport listening on http://127.0.0.1:62292/mcp (local trust, no authentication)
+
+stderr | src/http-transport.test.ts > streamable HTTP transport > gates admin and alias tools behind env flags (P1.2)
+memongo-mcp: no MEMONGO_MCP_AUTH_TOKEN set — local trust mode; keep the bind on loopback
+
+stderr | src/http-transport.test.ts > streamable HTTP transport > gates admin and alias tools behind env flags (P1.2)
+memongo-mcp: streamable HTTP transport listening on http://127.0.0.1:62295/mcp (local trust, no authentication)
+
+stderr | src/http-transport.test.ts > streamable HTTP transport > exposes admin tools when MEMONGO_MCP_ADMIN=1 (P1.2)
+memongo-mcp: no MEMONGO_MCP_AUTH_TOKEN set — local trust mode; keep the bind on loopback
+
+stderr | src/http-transport.test.ts > streamable HTTP transport > exposes admin tools when MEMONGO_MCP_ADMIN=1 (P1.2)
+memongo-mcp: streamable HTTP transport listening on http://127.0.0.1:62298/mcp (local trust, no authentication)
+
+stderr | src/http-transport.test.ts > streamable HTTP transport > returns 404 for non-MCP paths
+memongo-mcp: no MEMONGO_MCP_AUTH_TOKEN set — local trust mode; keep the bind on loopback
+
+stderr | src/http-transport.test.ts > streamable HTTP transport > returns 404 for non-MCP paths
+memongo-mcp: streamable HTTP transport listening on http://127.0.0.1:62301/mcp (local trust, no authentication)
+
+stderr | src/http-transport.test.ts > HTTP transport authentication (WS-01) > rejects unauthenticated requests with 401 + WWW-Authenticate: Bearer
+memongo-mcp: streamable HTTP transport listening on http://127.0.0.1:62303/mcp (bearer authentication required)
+
+stderr | src/http-transport.test.ts > HTTP transport authentication (WS-01) > rejects an invalid token with 401 + invalid_token challenge
+memongo-mcp: streamable HTTP transport listening on http://127.0.0.1:62305/mcp (bearer authentication required)
+
+stderr | src/http-transport.test.ts > HTTP transport authentication (WS-01) > serves the handshake to a valid standard token
+memongo-mcp: streamable HTTP transport listening on http://127.0.0.1:62307/mcp (bearer authentication required)
+
+stderr | src/http-transport.test.ts > HTTP transport authentication (WS-01) > hides admin tools from the standard scope even when MEMONGO_MCP_ADMIN=1
+memongo-mcp: streamable HTTP transport listening on http://127.0.0.1:62309/mcp (bearer authentication required)
+
+stderr | src/http-transport.test.ts > HTTP transport authentication (WS-01) > exposes admin tools to the admin credential scope
+memongo-mcp: streamable HTTP transport listening on http://127.0.0.1:62312/mcp (bearer authentication required)
+
+stderr | src/http-transport.test.ts > HTTP transport authentication (WS-01) > leaves admin tools unreachable when MEMONGO_MCP_ADMIN=1 but no admin token is set (fail closed)
+WARNING: MEMONGO_MCP_ADMIN=1 without MEMONGO_MCP_ADMIN_TOKEN — admin tools are unreachable over HTTP (fail closed). Set MEMONGO_MCP_ADMIN_TOKEN to expose them to an admin credential.
+
+stderr | src/http-transport.test.ts > HTTP transport authentication (WS-01) > leaves admin tools unreachable when MEMONGO_MCP_ADMIN=1 but no admin token is set (fail closed)
+memongo-mcp: streamable HTTP transport listening on http://127.0.0.1:62315/mcp (bearer authentication required)
+
+stderr | src/http-transport.test.ts > HTTP transport authentication (WS-01) > returns 403 for a disallowed Host header
+memongo-mcp: streamable HTTP transport listening on http://127.0.0.1:62318/mcp (bearer authentication required)
+
+stderr | src/http-transport.test.ts > HTTP transport authentication (WS-01) > returns 403 for a foreign Origin header
+memongo-mcp: streamable HTTP transport listening on http://127.0.0.1:62320/mcp (bearer authentication required)
+
+stderr | src/http-transport.test.ts > HTTP transport authentication (WS-01) > requires authentication on a non-loopback bind once a token is configured
+memongo-mcp: streamable HTTP transport listening on http://0.0.0.0:62324/mcp (bearer authentication required)
+
+ ❯ src/http-transport.test.ts (17 tests | 5 failed) 83ms
+     ✓ answers the MCP initialize handshake over HTTP 28ms
+     ✓ serves tools/list over HTTP after initialize 10ms
+     ✓ gates admin and alias tools behind env flags (P1.2) 8ms
+     ✓ exposes admin tools when MEMONGO_MCP_ADMIN=1 (P1.2) 4ms
+     ✓ returns 404 for non-MCP paths 2ms
+     ✓ exposes a default HTTP port that does not collide with api/web 0ms
+     × rejects unauthenticated requests with 401 + WWW-Authenticate: Bearer 7ms
+     × rejects an invalid token with 401 + invalid_token challenge 5ms
+     ✓ serves the handshake to a valid standard token 2ms
+     × hides admin tools from the standard scope even when MEMONGO_MCP_ADMIN=1 3ms
+     ✓ exposes admin tools to the admin credential scope 3ms
+     × leaves admin tools unreachable when MEMONGO_MCP_ADMIN=1 but no admin token is set (fail closed) 4ms
+     ✓ returns 403 for a disallowed Host header 3ms
+     ✓ returns 403 for a foreign Origin header 1ms
+     ✓ sanitizes the 500 error envelope 2ms
+     ✓ refuses a non-loopback bind without a transport token 1ms
+     × requires authentication on a non-loopback bind once a token is configured 2ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 5 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/http-transport.test.ts > HTTP transport authentication (WS-01) > rejects unauthenticated requests with 401 + WWW-Authenticate: Bearer
+AssertionError: expected 200 to be 401 // Object.is equality
+
+- Expected
++ Received
+
+- 401
++ 200
+
+ ❯ src/http-transport.test.ts:287:27
+    285|   const response = await postMcp(port, initializeBody("ws01-noauth"))
+    286|
+    287|   expect(response.status).toBe(401)
+       |                           ^
+    288|   expect(response.headers.get("www-authenticate")).toBe("Bearer")
+    289|   const body = (await response.json()) as { error: string }
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/5]⎯
+
+ FAIL  src/http-transport.test.ts > HTTP transport authentication (WS-01) > rejects an invalid token with 401 + invalid_token challenge
+AssertionError: expected 200 to be 401 // Object.is equality
+
+- Expected
++ Received
+
+- 401
++ 200
+
+ ❯ src/http-transport.test.ts:300:27
+    298|   })
+    299|
+    300|   expect(response.status).toBe(401)
+       |                           ^
+    301|   expect(response.headers.get("www-authenticate")).toBe(
+    302|    'Bearer error="invalid_token"',
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/5]⎯
+
+ FAIL  src/http-transport.test.ts > HTTP transport authentication (WS-01) > hides admin tools from the standard scope even when MEMONGO_MCP_ADMIN=1
+AssertionError: expected [ 'memongo_search', …(40) ] to not include 'memongo_status'
+ ❯ src/http-transport.test.ts:330:21
+    328|
+    329|   expect(names).toContain("memongo_extract")
+    330|   expect(names).not.toContain("memongo_status")
+       |                     ^
+    331|  })
+    332|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/5]⎯
+
+ FAIL  src/http-transport.test.ts > HTTP transport authentication (WS-01) > leaves admin tools unreachable when MEMONGO_MCP_ADMIN=1 but no admin token is set (fail closed)
+AssertionError: expected [ 'memongo_search', …(40) ] to not include 'memongo_status'
+ ❯ src/http-transport.test.ts:352:21
+    350|
+    351|   const names = await listToolNames(port, STANDARD_TOKEN)
+    352|   expect(names).not.toContain("memongo_status")
+       |                     ^
+    353|
+    354|   const call = await postMcp(
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/5]⎯
+
+ FAIL  src/http-transport.test.ts > HTTP transport authentication (WS-01) > requires authentication on a non-loopback bind once a token is configured
+AssertionError: expected 200 to be 401 // Object.is equality
+
+- Expected
++ Received
+
+- 401
++ 200
+
+ ❯ src/http-transport.test.ts:436:27
+    434|   const response = await postMcp(port, initializeBody("ws01-public"))
+    435|
+    436|   expect(response.status).toBe(401)
+       |                           ^
+    437|   expect(response.headers.get("www-authenticate")).toBe("Bearer")
+    438|  })
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[5/5]⎯
+
+
+ Test Files  1 failed | 4 passed (5)
+      Tests  5 failed | 157 passed (162)
+   Start at  01:17:37
+   Duration  649ms (transform 827ms, setup 0ms, import 1.64s, tests 148ms, environment 0ms)
+
+error: script "test" exited with code 1

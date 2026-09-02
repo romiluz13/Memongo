@@ -40,3 +40,23 @@ entries:
     run_at: "2026-09-02T21:39:00.000Z"
     evidence_hash: sha256:e9d64974e57e67d84696d2a8f7455108d798349821c9fecccd1baf686cb45831
     notes: "Publish gates on `bun run test` followed by the same skip-green guard as the quality job (9 --expect files + --require-suite src/contract-conformance.test.ts). The guard invocation is verified green on the CI-mode simulation (this log); publish.yml parses (ws07-workflow-yaml-parse.log, sha256:9790e8c662e549e8740c3a543e3b9303a6870ea069bb5ba5d49771c51a695102). Negative paths fail the guard identically (ws07-guard-negative-missing-file.log, ws07-nightly-guard-negative.log). The tag-triggered publish run supersedes this local evidence."
+
+  - id: V-030
+    claim_id: C-001
+    construct: "apps/mcp/src/http-transport.ts#refuseToServeOpen"
+    method: test
+    target: .ddd/reports/runs/ws01-mcp-suite.log
+    result: pass
+    run_at: "2026-09-02T22:25:52.000Z"
+    evidence_hash: sha256:3900007ab7afddb043c7eff851a9c6d144f5c65f6ca0668f22f1e1b7942d543c
+    notes: "Bind-guard and credential-model evidence from the WS-01 mcp suite (5 files / 163 tests, this log): the transport battery proves a non-loopback bind without MEMONGO_MCP_AUTH_TOKEN refuses to start and that a token-configured wildcard bind then requires credentials, while the 26-case auth unit battery covers resolveMcpAuthConfig precedence (explicit options over env), authenticateBearer scheme parsing (non-bearer scheme, case variants, bare and empty bearer, admin-token precedence) using the timing-safe comparison shared from @memongo/lib, allowedHostNames derivation (loopback family for loopback binds, the bind literal for specific binds, nothing implicit for wildcard binds, plus MEMONGO_MCP_ALLOWED_HOSTS), and validateHostAndOrigin (missing host, disallowed host, port and IPv6 normalization, foreign and malformed Origin). Upstream MEMONGO_API_KEY is never an auth signal. Companion logs re-verify the shared comparison in its new home: lib suite (ws01-lib-suite.log, sha256:8e81078d9ad38fca9f9e52b9ceb65d61049421363bef12ef97b4240cc2989635, 6 files / 131 tests) and api suite (ws01-api-suite.log, sha256:7b234c1c0799177a89dda7902bede7381ea4eb5db2d73be7f6f7932d6ed08393, 7 files / 208 tests)."
+
+  - id: V-031
+    claim_id: C-001
+    construct: apps/mcp/src/http-transport.ts
+    method: test
+    target: .ddd/reports/runs/ws01-mcp-suite.log
+    result: pass
+    run_at: "2026-09-02T22:25:52.000Z"
+    evidence_hash: sha256:3900007ab7afddb043c7eff851a9c6d144f5c65f6ca0668f22f1e1b7942d543c
+    notes: "End-to-end transport evidence from the WS-01 mcp suite (this log): the 11-case HTTP authentication battery drives a real started server over node:http, raw sockets, and fetch — 401 with WWW-Authenticate Bearer for missing credentials, 401 with the invalid_token challenge for a wrong token, a valid-token initialize handshake, credential-scope gating (admin tools hidden from tools/list under the standard token even with MEMONGO_MCP_ADMIN=1, exposed under the admin token, and unreachable when MEMONGO_MCP_ADMIN=1 is set without MEMONGO_MCP_ADMIN_TOKEN), 403 for a spoofed Host header, 403 for a foreign Origin, 403 (not a parser crash) for an empty Host header — the round-1 refutation finding, fixed by moving the Host/Origin gate ahead of the URL parse with a 400 fallback for unparseable request targets — a sanitized 500 envelope whose full detail goes only to the server log, and startup refusal for a 0.0.0.0 bind without a transport token. 18 transport tests total including the pre-existing handshake and 404 cases. The PR CI run supersedes this local evidence once landed."

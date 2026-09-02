@@ -1,0 +1,24 @@
+admin-category tools in catalog: 29 (e.g. memongo_search_kb, memongo_read_file, memongo_lifecycle_get)
+=== A3a: standard token only, MEMONGO_MCP_ADMIN=1 ===
+WARNING: MEMONGO_MCP_ADMIN=1 without MEMONGO_MCP_ADMIN_TOKEN — admin tools are unreachable over HTTP (fail closed). Set MEMONGO_MCP_ADMIN_TOKEN to expose them to an admin credential.
+memongo-mcp: streamable HTTP transport listening on http://127.0.0.1:62207/mcp (bearer authentication required)
+tools/list with standard token: 12 tools, admin leaked: 0
+PASS(defense): no admin tools visible
+tools/call memongo_status w/ standard token -> status 200 isError=true :: {"error":"tool \"memongo_status\" is not enabled by this server (admin tools require MEMONGO_MCP_ADMIN=1 and the admin c
+PASS(defense): memongo_status dispatch blocked
+tools/call memongo_admin_list_traces w/ standard token -> status 200 isError=true :: {"error":"tool \"memongo_admin_list_traces\" is not enabled by this server (admin tools require MEMONGO_MCP_ADMIN=1 and 
+PASS(defense): memongo_admin_list_traces dispatch blocked
+=== A3b: token confusion — standard token value == admin token value ===
+memongo-mcp: streamable HTTP transport listening on http://127.0.0.1:62209/mcp (bearer authentication required)
+same secret for both: admin tools visible: 29 (documented operator choice: admin wins)
+=== A3c: admin token ABSENT, standard token tries admin scope ===
+WARNING: MEMONGO_MCP_ADMIN=1 without MEMONGO_MCP_ADMIN_TOKEN — admin tools are unreachable over HTTP (fail closed). Set MEMONGO_MCP_ADMIN_TOKEN to expose them to an admin credential.
+memongo-mcp: streamable HTTP transport listening on http://127.0.0.1:62211/mcp (bearer authentication required)
+bearer "admin" -> status 401
+bearer "standard-token-std:admin" -> status 401
+bearer "(none)" -> status 401
+=== A3d: only ADMIN token configured; standard-scope guess rejected ===
+memongo-mcp: streamable HTTP transport listening on http://127.0.0.1:62213/mcp (bearer authentication required)
+random bearer -> status 401 (expect 401)
+admin token tools/list: 41 tools, admin visible: 29 (expect all 29 with ADMIN=1)
+tools/call memongo_admin_list_traces w/ admin token -> isError=true :: {"error":"Memongo API 503 SERVICE_UNAVAILABLE: dependency unavailable (request id: 191bd83f-d2cb-4c2 (dispatch passes gate; API call itself may error w/o backend)

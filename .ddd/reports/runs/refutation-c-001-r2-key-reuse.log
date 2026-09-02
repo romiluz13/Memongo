@@ -1,0 +1,5 @@
+memongo-mcp: streamable HTTP transport listening on http://127.0.0.1:62818/mcp (bearer authentication required)
+A1a bearer = MEMONGO_API_KEY value -> 401 www-auth="Bearer error="invalid_token"" PASS(defense)
+A1a control bearer = MCP token -> 400 (non-401 = past gate)
+A1b bind 0.0.0.0 + only MEMONGO_API_KEY -> threw: Refusing to bind 0.0.0.0 with authentication disabled. Any client that can reach this port could read or permanently erase any user's memories.
+A1b PASS(defense): refused open bind

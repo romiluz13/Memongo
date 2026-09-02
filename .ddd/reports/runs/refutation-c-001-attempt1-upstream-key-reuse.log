@@ -1,0 +1,13 @@
+=== A1a: MEMONGO_API_KEY value reused as transport bearer ===
+memongo-mcp: streamable HTTP transport listening on http://127.0.0.1:61824/mcp (bearer authentication required)
+bearer=MEMONGO_API_KEY value -> status 401 body {"error":"unauthorized"} www-auth=Bearer error="invalid_token"
+PASS(defense): upstream key rejected
+no Authorization header -> status 401 www-auth=Bearer
+bearer=MEMONGO_MCP_AUTH_TOKEN value -> status 406 (positive control)
+=== A1b: bind 0.0.0.0 with ONLY MEMONGO_API_KEY (no MCP token) ===
+startHttpTransport threw: Refusing to bind 0.0.0.0 with authentication disabled. Any client that can reach this port could read or permanently erase any user's memories.
+PASS(defense): 0.0.0.0 + only MEMONGO_API_KEY refused to start
+=== A1c: loopback + only MEMONGO_API_KEY = local trust (documented) ===
+memongo-mcp: no MEMONGO_MCP_AUTH_TOKEN set — local trust mode; keep the bind on loopback
+memongo-mcp: streamable HTTP transport listening on http://127.0.0.1:61826/mcp (local trust, no authentication)
+loopback no-token mode, bearer=upstream key -> status 406 (local-trust posture, not part of C-001 gate)

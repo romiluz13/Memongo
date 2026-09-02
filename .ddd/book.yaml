@@ -3,7 +3,7 @@ schema_version: 0.1.0
 version: 0.5.0
 released_at: null
 profile: assurance
-manifest_digest: sha256:715b8b65bcb940ebc009a275c5733ac4b2b7bd28bf8fcc83093cd41e7233aab8
+manifest_digest: sha256:9f1914419659fd17b0a82ac31226a75ab6e69431c2a21e70b0b6978266ce9042
 
 requirements:
   - path: CONTEXT.md
@@ -23,6 +23,12 @@ requirements:
     independence: agent-proposed-human-approved
     digest: sha256:45ce5edbfb61a4cf68d2e76bd81bac1d77122354165d7149a128a25d11367af1
     description: "ADR 0002 - silent-failure tripwires from agent-memory"
+
+  - path: docs/adr/0003-dual-static-bearer-mcp-transport-auth.md
+    authority: product-approved
+    independence: agent-proposed-human-approved
+    digest: sha256:3cfe39f23f57ea91d5232e32cf3ac1ba01a035035ceaf4c6911a9afc85f480f6
+    description: "ADR 0003 - dual static bearer credentials for the MCP HTTP transport (WS-01, C-001)"
 
 agent_context:
   - path: AGENTS.md

@@ -1,0 +1,27 @@
+memongo-mcp: streamable HTTP transport listening on http://127.0.0.1:61850/mcp (bearer authentication required)
+probe server on 127.0.0.1:61850
+403  Host: evil.example :: {"error":"forbidden: host not allowed"}
+403  Host: localhost.evil.example (suffix) :: {"error":"forbidden: host not allowed"}
+403  Host: localhost. (trailing dot) :: {"error":"forbidden: host not allowed"}
+403  Host: user@localhost (userinfo) :: {"error":"forbidden: host not allowed"}
+403  Host: localhost@evil.example :: {"error":"forbidden: host not allowed"}
+403  Host: 2130706433 (decimal 127.0.0.1) :: {"error":"forbidden: host not allowed"}
+403  Host: 0x7f000001 (hex) :: {"error":"forbidden: host not allowed"}
+403  Host: 127.0.0.1.evil.example :: {"error":"forbidden: host not allowed"}
+403  Host: [::ffff:127.0.0.1] :: {"error":"forbidden: host not allowed"}
+403  Host: [::2] (non-loopback v6) :: {"error":"forbidden: host not allowed"}
+400  Host: localhost:1 (weird port) :: {"jsonrpc":"2.0","error":{"code":-32700,"message":"Parse error: Invalid JSON-RPC message"}
+400  Host: LOCALHOST (case) :: {"jsonrpc":"2.0","error":{"code":-32700,"message":"Parse error: Invalid JSON-RPC message"}
+400  Host: [::1]:9999 :: {"jsonrpc":"2.0","error":{"code":-32700,"message":"Parse error: Invalid JSON-RPC message"}
+400  Host: ' localhost' (leading space) :: {"jsonrpc":"2.0","error":{"code":-32700,"message":"Parse error: Invalid JSON-RPC message"}
+400  no Host header at all :: {"jsonrpc":"2.0","error":{"code":-32700,"message":"Parse error: Invalid JSON-RPC message"}
+403  Host ok + Origin http://evil.example :: {"error":"forbidden: origin not allowed"}
+403  Host ok + Origin http://localhost.evil.example :: {"error":"forbidden: origin not allowed"}
+403  Host ok + Origin null :: {"error":"forbidden: invalid origin"}
+403  Host ok + Origin 'not a url' :: {"error":"forbidden: invalid origin"}
+400  Host ok + Origin http://localhost:9999 (allowed) :: {"jsonrpc":"2.0","error":{"code":-32700,"message":"Parse error: Invalid JSON-RPC message"}
+400  Host ok + Origin javascript://localhost (odd scheme) :: {"jsonrpc":"2.0","error":{"code":-32700,"message":"Parse error: Invalid JSON-RPC message"}
+400  positive control: Host 127.0.0.1:<port>, no Origin :: {"jsonrpc":"2.0","error":{"code":-32700,"message":"Parse error: Invalid JSON-RPC message"}
+401  valid Host but NO bearer :: {"error":"unauthorized"}
+absolute-form request-target -> HTTP/1.1 400 Bad Request
+RESULT: no host/origin bypass found

@@ -19,7 +19,7 @@ entries:
     tier: T3
     status: known-and-supported
     constructs: ["apps/mcp/src/http-transport.ts#refuseToServeOpen", apps/mcp/src/http-transport.ts]
-    validations: []
+    validations: [V-030, V-031]
     exceptions: []
 
   - id: C-002

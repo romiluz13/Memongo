@@ -1,10 +1,11 @@
-import { createHash, timingSafeEqual } from "node:crypto"
+import { createHash } from "node:crypto"
 import { Hono, type Context, type MiddlewareHandler } from "hono"
 import { HTTPException } from "hono/http-exception"
 import { bodyLimit } from "hono/body-limit"
 import { secureHeaders } from "hono/secure-headers"
 import { cors } from "hono/cors"
 import { requestId } from "hono/request-id"
+import { timingSafeBearerEquals } from "@memongo/lib"
 import { openApiSpec } from "./openapi-spec.js"
 import { internalError } from "./lib/errors.js"
 import { checkReadiness } from "./lib/readiness.js"
@@ -177,21 +178,9 @@ function createRateLimiter(
 	}
 }
 
-/**
- * Constant-time bearer comparison. Using `===` would short-circuit on the
- * first mismatched byte and leak the token prefix via response timing.
- * Hash both inputs before `timingSafeEqual` so different raw lengths do not
- * bypass the constant-time comparison. Empty bearers are always rejected so
- * the caller never matches by accident.
- */
-export function timingSafeBearerEquals(a: string, b: string): boolean {
-	if (!a || !b) {
-		return false
-	}
-	const aDigest = createHash("sha256").update(a, "utf8").digest()
-	const bDigest = createHash("sha256").update(b, "utf8").digest()
-	return timingSafeEqual(aDigest, bDigest) && a.length === b.length
-}
+// WS-01: the constant-time comparison now lives in @memongo/lib so the MCP
+// HTTP transport shares it; re-exported here for existing importers.
+export { timingSafeBearerEquals }
 
 type ScopedApiKeyPolicy = {
 	token: string

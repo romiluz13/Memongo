@@ -1,0 +1,32 @@
+memongo-mcp: streamable HTTP transport listening on http://127.0.0.1:61875/mcp (bearer authentication required)
+HTTP/1.1, no Host header
+  -> HTTP/1.1 400 Bad Request :: 
+
+HTTP/1.0, no Host header
+  -> HTTP/1.1 403 Forbidden :: {"error":"forbidden: missing host"}
+
+109 | 				"MEMONGO_MCP_ADMIN_TOKEN to expose them to an admin credential.",
+110 | 		)
+111 | 	}
+112 | 
+113 | 	const httpServer = createNodeHttpServer((req, res) => {
+114 | 		const url = new URL(
+                    ^
+TypeError: "/mcp" cannot be parsed as a URL against "http://"
+ code: "ERR_INVALID_URL"
+
+      at <anonymous> (/Users/rom.iluz/Dev/memongo/apps/mcp/src/http-transport.ts:114:15)
+      at emit (node:events:98:22)
+      at onNodeHTTPRequest (node:_http_server:367:22)
+HTTP/1.1, empty Host header
+  -> HTTP/1.1 200 OK :: 0
+
+HTTP/1.1, duplicate Host (first allowed, second evil)
+  -> HTTP/1.1 403 Forbidden :: {"error":"forbidden: host not allowed"}
+
+HTTP/1.1, duplicate Host (first evil, second allowed)
+  -> HTTP/1.1 400 Bad Request :: {"jsonrpc":"2.0","error":{"code":-32700,"message":"Parse error: Invalid JSON-RPC message"},"id":null
+
+control: valid Host
+  -> HTTP/1.1 400 Bad Request :: {"jsonrpc":"2.0","error":{"code":-32700,"message":"Parse error: Invalid JSON-RPC message"},"id":null
+

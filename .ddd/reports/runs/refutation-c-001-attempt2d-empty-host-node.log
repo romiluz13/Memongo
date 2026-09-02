@@ -1,0 +1,3 @@
+node v24.19.0 repro on :62378
+NODE: uncaughtException -> TypeError: Invalid URL
+NODE: without this handler the process would have EXITED (default).

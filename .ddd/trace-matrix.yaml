@@ -10,20 +10,20 @@ traces:
     change_id: WS-01
     claim_id: C-001
     construct_id: "apps/mcp/src/http-transport.ts#refuseToServeOpen"
-    validation_id: null
+    validation_id: V-030
     direction: forward
-    sweep_pass: false
-    checked_at: "2026-09-02T13:41:40.029Z"
+    sweep_pass: true
+    checked_at: "2026-09-02T22:11:14.000Z"
     notes: WS-01 MCP HTTP transport authentication (planned change envelope)
   - id: TR-002
     schema_version: 0.1.0
     change_id: WS-01
     claim_id: C-001
     construct_id: apps/mcp/src/http-transport.ts
-    validation_id: null
+    validation_id: V-031
     direction: forward
-    sweep_pass: false
-    checked_at: "2026-09-02T13:41:40.030Z"
+    sweep_pass: true
+    checked_at: "2026-09-02T22:11:14.000Z"
     notes: WS-01 MCP HTTP transport authentication (planned change envelope)
   - id: TR-003
     schema_version: 0.1.0

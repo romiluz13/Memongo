@@ -1,0 +1,2 @@
+stderr | src/http-transport.test.ts > HTTP transport authentication (WS-01) > returns 403 (not a crash) for an empty Host header
+      Tests  163 passed (163)

@@ -1,0 +1,41 @@
+memongo-mcp: streamable HTTP transport listening on http://127.0.0.1:62715/mcp (bearer authentication required)
+R1-WEAKNESS empty Host + valid bearer
+  -> HTTP/1.1 403 Forbidden :: {"error":"forbidden: missing host"}
+empty Host + NO bearer (which gate wins?)
+  -> HTTP/1.1 403 Forbidden :: {"error":"forbidden: missing host"}
+HTTP/1.0 no Host
+  -> HTTP/1.1 403 Forbidden :: {"error":"forbidden: missing host"}
+asterisk-form OPTIONS * + valid host + bearer
+  -> HTTP/1.1 400 Bad Request :: 
+asterisk-form OPTIONS * + valid host, no bearer
+  -> HTTP/1.1 400 Bad Request :: 
+absolute-form POST http://evil.example/mcp + valid Host + bearer
+  -> HTTP/1.1 400 Bad Request :: {"jsonrpc":"2.0","error":{"code":-32700,"message":"Parse error: Invalid JSON-RPC message"},"id":null}
+absolute-form to foreign host, Host also foreign
+  -> HTTP/1.1 403 Forbidden :: {"error":"forbidden: host not allowed"}
+garbage target 'POST  /mcp' (double space)
+  -> HTTP/1.1 400 Bad Request :: 
+tab in target
+  -> HTTP/1.1 505 HTTP Version Not Supported :: 
+path /mcp/ (trailing slash) + bearer
+  -> HTTP/1.1 404 Not Found :: {"error":"not found"}
+path //mcp + bearer
+  -> HTTP/1.1 404 Not Found :: {"error":"not found"}
+path /mcp%2f.. + bearer
+  -> HTTP/1.1 404 Not Found :: {"error":"not found"}
+foreign Host evil.example
+  -> HTTP/1.1 403 Forbidden :: {"error":"forbidden: host not allowed"}
+Host localhost. trailing dot
+  -> HTTP/1.1 403 Forbidden :: {"error":"forbidden: host not allowed"}
+valid Host + foreign Origin
+  -> HTTP/1.1 403 Forbidden :: {"error":"forbidden: origin not allowed"}
+dup Host (allowed, evil)
+  -> HTTP/1.1 403 Forbidden :: {"error":"forbidden: host not allowed"}
+dup Host (evil, allowed)
+  -> HTTP/1.1 400 Bad Request :: {"jsonrpc":"2.0","error":{"code":-32700,"message":"Parse error: Invalid JSON-RPC message"},"id":null}
+valid Host, NO bearer (auth gate after reorder)
+  -> HTTP/1.1 401 Unauthorized :: {"error":"unauthorized"}
+CONTROL valid initialize
+  -> HTTP/1.1 200 OK :: {"result":{"protocolVersion":"2025-03-26","capabilities":{"tools":{}},"serverInfo":{"name":"memongo","version"
+post-abuse alive check: ALIVE (initialize served)
+uncaught exceptions observed: 0

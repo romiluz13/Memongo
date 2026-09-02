@@ -1,0 +1,187 @@
+# Independent refutation report for T3 claim C-001
+# ("The MCP HTTP transport MUST authenticate every request before proxying to
+# the API: reject unauthenticated callers with 401 and WWW-Authenticate,
+# validate Origin and Host per the MCP spec authorization guidance, and stop
+# treating upstream MEMONGO_API_KEY presence as endpoint authentication.")
+claim_id: C-001
+verdict: sustained
+independence_verified: true
+refuter_id: "factory-droid worker subagent, session a092a9e5-1f4f-45d6-9261-af2094e761f5 (independent instance, not the implementer)"
+implementer_id: "factory-droid primary agent, WS-01 implementer"
+refuted_rounds: 1
+sustained_rounds: 2
+attempt_log_dir: .ddd/reports/runs/
+
+attempts:
+  - id: attempt-1-upstream-key-reuse
+    description: >
+      Present the upstream MEMONGO_API_KEY value as the transport bearer
+      token on a gated transport, and bind 0.0.0.0 with only
+      MEMONGO_API_KEY configured (the pre-remediation semantics in which
+      that key's presence counted as endpoint auth).
+    round_1_outcome: caught
+    round_1_detail: >
+      Bearer = API key value -> 401 with WWW-Authenticate Bearer
+      error="invalid_token"; no header -> 401 with WWW-Authenticate Bearer;
+      the dedicated MEMONGO_MCP_AUTH_TOKEN passes. Binding 0.0.0.0 with
+      only MEMONGO_API_KEY set refuses to start ("Refusing to bind 0.0.0.0
+      with authentication disabled"). Upstream key presence is never an
+      auth signal. Loopback without an MCP token still serves
+      unauthenticated — the documented local-trust posture, outside the
+      claim's gate.
+    round_2_outcome: caught
+    round_2_detail: >
+      Same probes on the fixed tree: identical results (401 challenges, bind
+      refusal). No regression.
+    evidence: >
+      refutation-c-001-attempt1-upstream-key-reuse.log;
+      round 2: refutation-c-001-r2-key-reuse.log
+
+  - id: attempt-2-host-origin-spoof
+    description: >
+      23 spoofed or ambiguous Host values (foreign names, trailing-dot
+      localhost, userinfo forms, decimal and hex IPv4, IPv6 literals and
+      brackets), foreign Origins, duplicate-Host orderings, absolute-form
+      and asterisk-form request targets, and an empty Host header — all
+      pre-authentication, via node:http and raw sockets.
+    round_1_outcome: refuted
+    round_1_detail: >
+      All foreign Hosts and Origins 403'd; duplicate-Host could not smuggle
+      (Node surfaces the last header value, which is also what the server
+      routes on — no desync). But the empty Host header (Host:\r\n) crashed
+      the process: the handler built new URL(req.url, http://<host>) before
+      validateHostAndOrigin ran, "" is not nullish so the localhost fallback
+      was skipped, the constructor threw, and the exception escaped the
+      request listener uncaught (confirmed reaching process uncaughtException
+      under Bun; default process termination under Node). One
+      unauthenticated packet per server kill. Not an auth bypass — the
+      request was never served — but the Host validation the claim mandates
+      never executed, so the defense did not hold as first landed.
+    round_2_outcome: caught
+    round_2_detail: >
+      After the fix (validateHostAndOrigin moved ahead of the URL parse, 400
+      fallback for unparseable request targets, raw-socket regression test),
+      the same attack returns 403 {"error":"forbidden: missing host"} with
+      zero uncaught exceptions under both Bun and Node v24, and the server
+      survives a 19-case abuse battery (post-abuse initialize 200). The
+      reorder opened no new pre-auth reachability: OPTIONS * and malformed
+      targets -> 400, absolute-form foreign host -> 403, path traversals
+      -> 404, valid Host without a bearer still 401.
+    evidence: >
+      refutation-c-001-attempt2-host-origin-spoof.log,
+      refutation-c-001-attempt2b-missing-host.log,
+      refutation-c-001-attempt2c-empty-host.log,
+      refutation-c-001-attempt2d-empty-host-node.log;
+      round 2: refutation-c-001-r2-empty-host-spoof.log,
+      refutation-c-001-r2-empty-host-node.log,
+      refutation-c-001-r2-node-suite-evidence.log
+
+  - id: attempt-3-scope-escalation
+    description: >
+      With only the standard token configured and MEMONGO_MCP_ADMIN=1, list
+      and call admin-category tools; probe token-confusion variants
+      (standard value equal to admin value, admin token absent, guesses at
+      admin-scope credentials).
+    round_1_outcome: caught
+    round_1_detail: >
+      tools/list under the standard credential showed 12 tools with 0 of the
+      29 admin-category tools leaked; tools/call memongo_status and
+      memongo_admin_list_traces returned isError=true ("not enabled by this
+      server"), blocked before dispatch. A standard token whose value equals
+      the admin token yields admin scope — the documented operator choice in
+      apps/mcp/src/auth.ts — and with no admin token configured every
+      admin-scope credential guess got 401.
+    round_2_outcome: caught
+    round_2_detail: >
+      Same result on the fixed tree: 12 tools listed, 0 admin leaked,
+      memongo_status blocked pre-dispatch.
+    evidence: >
+      refutation-c-001-attempt3-scope-escalation.log;
+      round 2: refutation-c-001-r2-scope-headers.log
+
+  - id: attempt-4-header-parsing
+    description: >
+      21 Authorization header edge cases: wrong scheme (Basic), scheme case
+      variants, bare and empty Bearer, whitespace-only values, glued
+      schemes, multi-word tokens, duplicate-merge, NBSP separators.
+    round_1_outcome: caught
+    round_1_detail: >
+      Basic -> 401; bare "Bearer" and empty values -> 401 (presented but
+      unusable); case variants pass per RFC 6750 only with the exact
+      configured token; glued, duplicate-merge, and NBSP forms -> 401.
+      Lenient whitespace handling only ever accepts the exact configured
+      token after trim — no bypass.
+    round_2_outcome: caught
+    round_2_detail: >
+      Representative re-run on the fixed tree: identical outcomes (Basic
+      401, bare Bearer 401, BEARER <token> 200, extra-word 401, empty and
+      absent 401, valid 200).
+    evidence: >
+      refutation-c-001-attempt4-header-parsing.log;
+      round 2: refutation-c-001-r2-scope-headers.log
+
+  - id: attempt-5-vacuity
+    description: >
+      Neutralize the gate in apps/mcp/src/http-transport.ts (round 1: skip
+      the authenticateBearer branch; round 2: skip the Host/Origin 403
+      branch) and run the mcp suite — the landed battery must fail, proving
+      the tests pin the defense rather than pass vacuously.
+    round_1_outcome: caught
+    round_1_detail: >
+      With the auth gate skipped, 5 tests failed (unauthenticated 401,
+      invalid-token 401, standard-scope admin hiding, fail-closed admin,
+      wildcard-bind auth requirement), 157 passed; restored byte-identical
+      (cmp), control run 162/162.
+    round_2_outcome: caught
+    round_2_detail: >
+      With the Host/Origin 403 branch skipped on the fixed tree, exactly 3
+      tests failed (the new empty-Host regression, disallowed-Host 403,
+      foreign-Origin 403), 160 passed; restored byte-identical (cmp),
+      control run 163/163.
+    evidence: >
+      refutation-c-001-attempt5-vacuity.log,
+      refutation-c-001-attempt5b-post-restore-control.log;
+      round 2: refutation-c-001-r2-vacuity.log,
+      refutation-c-001-r2-post-restore-control.log
+
+fix_applied_between_rounds: >
+  Round 1 refuted the Host-validation half of the defense: the request
+  handler parsed req.url against the Host header before validating it, so
+  an empty Host value threw inside new URL and crashed the process
+  uncaught — the mandated Host/Origin check never ran for that request.
+  The implementer moved validateHostAndOrigin ahead of the URL
+  construction (empty or missing Host is now 403 "forbidden: missing
+  host") and wrapped the URL parse in try/catch (unparseable request
+  targets return 400), plus a raw-socket regression test pinning the
+  empty-Host 403.
+
+conclusion: >
+  Round 1 found one refuting weakness — a pre-auth crash that preempted
+  the Host validation the claim mandates — while the auth gate itself held
+  (no bypass, no admin exposure via the standard credential). After the
+  reorder fix, round 2 re-ran the same attacks: the crash is gone (403),
+  no new pre-auth reachability opened, and every category is caught. The
+  test battery provably pins both the auth gate (5 failures when
+  neutralized) and the Host/Origin gate (3 failures when neutralized). No
+  remaining path was found to a served request that should have been
+  rejected, or to admin tools via the standard credential. Verdict:
+  sustained.
+
+tree_hygiene: >
+  All scratch edits were restored byte-identically (cmp exit 0 for every
+  touched file in both rounds; http-transport.ts sha256
+  2b9950863a423c3d180414f4ee0b2745f36ef5ba8c2b4009f0c20346e30a5749
+  before and after round 1, 941d48941f263352e56102a0c25a4b0c0d32d4bb437
+  c85387e7fe39a2302286a before and after round 2); all /tmp probes and
+  backups deleted; no git-mutating commands were run; the only repo
+  additions are the refutation-c-001-*.log and refutation-c-001-r2-*.log
+  evidence files in .ddd/reports/runs/.
+
+non_blocking_observations: >
+  Origin validation checks the hostname only, not the URL scheme
+  (javascript://localhost would pass the Origin half); browsers never send
+  such Origins so impact today is nil, but pinning http/https schemes would
+  tighten it. Bearer parsing trims whitespace around the token; harmless
+  since the exact configured token must still match, but a strict
+  single-space grammar would be spec-tighter. Both are recorded for a
+  future hardening pass, not as correctness gaps in C-001.

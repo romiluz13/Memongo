@@ -27,6 +27,9 @@ memongo-mcp
 | `MEMONGO_MCP_TRANSPORT` | `stdio`                 | `stdio` (default) or `http`.                                           |
 | `MEMONGO_MCP_HTTP_PORT` | `3110`                  | Port for the HTTP transport.                                           |
 | `MEMONGO_MCP_HTTP_HOST` | `127.0.0.1`             | Bind address for the HTTP transport.                                   |
+| `MEMONGO_MCP_AUTH_TOKEN` | —                     | Client credential for the HTTP transport (`Authorization: Bearer`). Required for non-loopback binds. |
+| `MEMONGO_MCP_ADMIN_TOKEN` | —                    | Optional admin credential; requests bearing it unlock admin tools (with `MEMONGO_MCP_ADMIN=1`). |
+| `MEMONGO_MCP_ALLOWED_HOSTS` | —                  | Comma-separated extra hostnames the `Host` header (and browser `Origin`) may carry; needed behind reverse proxies. |
 | `MEMONGO_MCP_ADMIN`     | off                     | `1`/`true` also registers admin/benchmark tools (status, jobs, traces, relevance/benchmark suites). |
 | `MEMONGO_MCP_ALIASES`   | off                     | `1`/`true` also registers semantic alias tools (e.g. `memongo_recall_messages`, `memongo_memory_*`). |
 
@@ -73,9 +76,32 @@ request/response JSON (no session state, no SSE stream required). It still
 calls the same Memongo HTTP API — this is a transport adapter, not a second
 server implementation.
 
-Point a remote MCP client at `http://<host>:3110/mcp`. Bind a non-loopback
-address with `MEMONGO_MCP_HTTP_HOST=0.0.0.0` only behind a trusted network
-boundary — the HTTP transport itself performs no authentication.
+Point a remote MCP client at `http://<host>:3110/mcp`.
+
+### Authentication
+
+The HTTP transport authenticates callers with a dedicated bearer credential —
+distinct from `MEMONGO_API_KEY`, which authenticates this server to the
+upstream API and says nothing about who may call this endpoint:
+
+- `MEMONGO_MCP_AUTH_TOKEN` — when set, every request must present
+  `Authorization: Bearer <token>`; anything else gets `401` with
+  `WWW-Authenticate: Bearer` (the MCP authorization spec's minimum).
+  Comparisons are constant-time. A non-loopback bind refuses to start
+  without this token.
+- `MEMONGO_MCP_ADMIN_TOKEN` — optional admin credential. Requests bearing it
+  get the admin tool scope (when `MEMONGO_MCP_ADMIN=1`); the standard token
+  never does. `MEMONGO_MCP_ADMIN=1` without an admin token leaves admin
+  tools unreachable over HTTP (fail closed).
+- No token + loopback bind — local-trust mode, unchanged for development.
+
+Every request (all paths) is also checked against the `Host` header — and
+against `Origin` when a browser sends one — returning `403` on mismatch as a
+DNS-rebinding defense. Loopback binds allow the loopback names
+(`localhost`, `127.0.0.1`, `::1`); a specific non-loopback bind allows its
+own hostname; wildcard binds (`0.0.0.0`) allow nothing implicitly, so
+declare names via `MEMONGO_MCP_ALLOWED_HOSTS` (reverse proxies rewrite
+`Host` to the public name).
 
 ## Development (from a monorepo checkout)
 

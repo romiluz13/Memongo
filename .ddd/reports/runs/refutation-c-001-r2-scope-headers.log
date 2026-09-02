@@ -1,0 +1,13 @@
+WARNING: MEMONGO_MCP_ADMIN=1 without MEMONGO_MCP_ADMIN_TOKEN — admin tools are unreachable over HTTP (fail closed). Set MEMONGO_MCP_ADMIN_TOKEN to expose them to an admin credential.
+memongo-mcp: streamable HTTP transport listening on http://127.0.0.1:62825/mcp (bearer authentication required)
+A3 tools/list (standard, ADMIN=1): 12 tools, admin leaked: 0 PASS(defense)
+A3 tools/call memongo_status (standard) -> isError=true PASS(defense): blocked pre-dispatch
+WARNING: MEMONGO_MCP_ADMIN=1 without MEMONGO_MCP_ADMIN_TOKEN — admin tools are unreachable over HTTP (fail closed). Set MEMONGO_MCP_ADMIN_TOKEN to expose them to an admin credential.
+memongo-mcp: streamable HTTP transport listening on http://127.0.0.1:62827/mcp (bearer authentication required)
+A4 [401] Basic b64(token) ok
+A4 [401] bare 'Bearer' ok
+A4 [200] BEARER <token> (case-insensitive) ok
+A4 [401] token + extra word ok
+A4 [401] empty header value ok
+A4 [401] header absent ok
+A4 [200] valid token ok

@@ -97,3 +97,4 @@ export {
 	isLoopbackBindHost,
 	refuseToServeOpen,
 } from "./bind-guard.js"
+export { timingSafeBearerEquals } from "./bearer-auth.js"

@@ -15,6 +15,7 @@ import type {
 } from "@memongo/client"
 import { isMemoryScopeValue, type MemoryScopeValue } from "@memongo/lib"
 import { pathToFileURL } from "node:url"
+import type { McpAuthScope } from "./auth.js"
 import { startHttpTransport } from "./http-transport.js"
 import { selectEnabledTools, toWireTool, toolCatalog } from "./tool-registry.js"
 import { MEMONGO_SERVER_VERSION } from "./version.js"
@@ -324,10 +325,19 @@ function jsonResult(payload: unknown, isError = false) {
 	}
 }
 
-export function createMemongoServer(): Server {
+export function createMemongoServer(scope: McpAuthScope = "local"): Server {
 	// P1.2 surface diet: default = core tools only; MEMONGO_MCP_ADMIN=1 adds
 	// admin tools; MEMONGO_MCP_ALIASES=1 adds semantic aliases.
-	const enabledTools = selectEnabledTools(process.env)
+	// WS-01: over the HTTP transport the authenticated scope additionally
+	// gates reachability — "standard" never sees admin tools even when
+	// MEMONGO_MCP_ADMIN=1; only the admin credential ("admin") unlocks them,
+	// and then only if the env flag also enables them. "local" (stdio, or
+	// loopback HTTP without a token) keeps env-flag gating.
+	const envEnabled = selectEnabledTools(process.env)
+	const enabledTools =
+		scope === "standard"
+			? envEnabled.filter((tool) => tool.category !== "admin")
+			: envEnabled
 	const enabledNames = new Set(enabledTools.map((tool) => tool.name))
 
 	const server = new Server(
@@ -349,7 +359,7 @@ export function createMemongoServer(): Server {
 		if (!enabledNames.has(request.params.name)) {
 			return jsonResult(
 				{
-					error: `tool "${request.params.name}" is not enabled by this server (admin tools require MEMONGO_MCP_ADMIN=1, semantic aliases require MEMONGO_MCP_ALIASES=1)`,
+					error: `tool "${request.params.name}" is not enabled by this server (admin tools require MEMONGO_MCP_ADMIN=1 and the admin credential scope, semantic aliases require MEMONGO_MCP_ALIASES=1)`,
 				},
 				true,
 			)

@@ -1,0 +1,12 @@
+memongo-mcp: streamable HTTP transport listening on http://127.0.0.1:62419/mcp (bearer authentication required)
+
+stderr | src/http-transport.test.ts > HTTP transport authentication (WS-01) > requires authentication on a non-loopback bind once a token is configured
+memongo-mcp: streamable HTTP transport listening on http://0.0.0.0:62425/mcp (bearer authentication required)
+
+ ✓ src/http-transport.test.ts (17 tests) 76ms
+
+ Test Files  5 passed (5)
+      Tests  162 passed (162)
+   Start at  01:18:04
+   Duration  512ms (transform 484ms, setup 0ms, import 1.03s, tests 125ms, environment 0ms)
+
