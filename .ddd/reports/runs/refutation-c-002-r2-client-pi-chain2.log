@@ -1,0 +1,44 @@
+# [hygiene 2026-09-03] Credential-shaped spans in captured probe output
+# were replaced with bracketed shape descriptors ([uri-userinfo],
+# [key-assignment], [auth-header], ...) so secret scanners stay clear of
+# this evidence log; masked-output spans carry a :*** suffix. Vector
+# names, leak flags, verdicts, and line ordering are unchanged from the
+# original capture; only the shape-bearing bytes inside them were
+# substituted.
+COMMAND: corrected temporary Vitest probe stubs global fetch for real MemongoClient 500 bodies, then drives resulting MemongoClientError into Pi default warning
+PROBE_BEFORE: ABSENT
+PROBE_SHA256: [b64-run]  packages/pi-extension/refutation-c-002-r2-client-pi.test.ts
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/packages/pi-extension[39m
+
+CLIENT_PI_WARN=[memongo] session context fetch failed (profile: Memongo API 500: upstream failed at [uri-userinfo]host/db; search: Memongo API 500: upstream failed at [uri-userinfo]host/db)
+SECRET_COUNT=2
+ [31m❯[39m refutation-c-002-r2-client-pi.test.ts [2m([22m[2m1 test[22m[2m | [22m[31m1 failed[39m[2m)[22m[32m 20[2mms[22m[39m
+[31m   [31m×[31m does not propagate raw response credentials from client to Pi warning[39m[32m 19[2mms[22m[39m
+
+[31m⎯⎯⎯⎯⎯⎯⎯[39m[1m[41m Failed Tests 1 [49m[22m[31m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[41m[1m FAIL [22m[49m refutation-c-002-r2-client-pi.test.ts[2m > [22mdoes not propagate raw response credentials from client to Pi warning
+[31m[1mAssertionError[22m: expected '[memongo] session context fetch faile…' not to contain 'dummy-cred-0000-0000'[39m
+
+Expected: [32m"dummy-cred-0000-0000"[39m
+Received: [31m"[memongo] session context fetch failed (profile: Memongo API 500: upstream failed at [uri-userinfo]host/db; search: Memongo API 500: upstream failed at [uri-userinfo]host/db)"[39m
+
+[36m [2m❯[22m refutation-c-002-r2-client-pi.test.ts:[2m23:21[22m[39m
+    [90m 21|[39m  process.stdout.write(`CLIENT_PI_WARN=${output}\nSECRET_COUNT=${output…
+    [90m 22|[39m  vi[33m.[39m[34munstubAllGlobals[39m()
+    [90m 23|[39m  [34mexpect[39m(output)[33m.[39mnot[33m.[39m[34mtoContain[39m(secret)
+    [90m   |[39m                     [31m^[39m
+    [90m 24|[39m })
+    [90m 25|[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯[22m[39m
+
+
+[2m Test Files [22m [1m[31m1 failed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[31m1 failed[39m[22m[90m (1)[39m
+[2m   Start at [22m 02:03:01
+[2m   Duration [22m 241ms[2m (transform 46ms, setup 0ms, import 64ms, tests 20ms, environment 0ms)[22m
+
+TEST_EXIT: 1
+PROBE_AFTER: ABSENT

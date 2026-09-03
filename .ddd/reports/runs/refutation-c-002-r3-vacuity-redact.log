@@ -1,0 +1,415 @@
+# [hygiene 2026-09-03] Credential-shaped spans in captured probe output
+# were replaced with bracketed shape descriptors ([uri-userinfo],
+# [key-assignment], [auth-header], ...) so secret scanners stay clear of
+# this evidence log; masked-output spans carry a :*** suffix. Vector
+# names, leak flags, verdicts, and line ordering are unchanged from the
+# original capture; only the shape-bearing bytes inside them were
+# substituted.
+mutation=redactSensitiveText immediate no-op return
+before_sha256=[b64-run]
+mutated_sha256=[b64-run]
+vitest_exit=1
+after_sha256=[b64-run]
+cmp_restore_exit=0
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/packages/lib[39m
+
+ [31m❯[39m src/redact.test.ts [2m([22m[2m31 tests[22m[2m | [22m[31m21 failed[39m[2m)[22m[32m 12[2mms[22m[39m
+     [32m✓[39m returns falsy input unchanged[32m 1[2mms[22m[39m
+     [32m✓[39m leaves ordinary text untouched[32m 0[2mms[22m[39m
+     [32m✓[39m exposes redactSecrets as an alias with identical behavior[32m 0[2mms[22m[39m
+[31m     [31m×[31m replaces the key body but keeps the BEGIN/END markers[39m[32m 3[2mms[22m[39m
+[31m     [31m×[31m redacts PEM blocks embedded in surrounding text[39m[32m 1[2mms[22m[39m
+     [32m✓[39m is idempotent on PEM blocks[32m 0[2mms[22m[39m
+[31m     [31m×[31m redacts every PEM block when several appear[39m[32m 0[2mms[22m[39m
+[31m     [31m×[31m masks only the password in a standard connection string[39m[32m 1[2mms[22m[39m
+[31m     [31m×[31m masks the password in a +srv connection string[39m[32m 1[2mms[22m[39m
+[31m     [31m×[31m redacts connection strings embedded in log text[39m[32m 0[2mms[22m[39m
+     [32m✓[39m is idempotent on connection strings[32m 0[2mms[22m[39m
+     [32m✓[39m returns a non-empty list of compilable regex sources[32m 1[2mms[22m[39m
+     [32m✓[39m returns copies that do not mutate module state[32m 0[2mms[22m[39m
+[31m     [31m×[31m redacts KEY=value secrets embedded in surrounding text[39m[32m 0[2mms[22m[39m
+[31m     [31m×[31m redacts Bearer tokens embedded in surrounding text[39m[32m 0[2mms[22m[39m
+[31m     [31m×[31m redacts sk- tokens embedded in surrounding text[39m[32m 0[2mms[22m[39m
+[31m     [31m×[31m redacts JSON apiKey values[39m[32m 0[2mms[22m[39m
+[31m     [31m×[31m masks the matched span and never the whole line[39m[32m 0[2mms[22m[39m
+[31m     [31m×[31m masks the password in a postgres connection string[39m[32m 0[2mms[22m[39m
+[31m     [31m×[31m masks the password in a redis connection string with an empty user[39m[32m 0[2mms[22m[39m
+[31m     [31m×[31m masks scheme credentials embedded in driver error text[39m[32m 0[2mms[22m[39m
+     [32m✓[39m leaves URIs without a password untouched[32m 0[2mms[22m[39m
+[31m     [31m×[31m truncates Slack-style webhook URLs to the host[39m[32m 0[2mms[22m[39m
+[31m     [31m×[31m truncates Discord webhook URLs to the route prefix[39m[32m 0[2mms[22m[39m
+[31m     [31m×[31m truncates URLs whose path carries a secret token segment[39m[32m 0[2mms[22m[39m
+[31m     [31m×[31m truncates reset-token style paths[39m[32m 0[2mms[22m[39m
+     [32m✓[39m does not mask paths that merely contain a credential-like prefix[32m 0[2mms[22m[39m
+[31m     [31m×[31m redacts custom auth header values[39m[32m 0[2mms[22m[39m
+[31m     [31m×[31m redacts quoted auth header names in serialized objects[39m[32m 0[2mms[22m[39m
+[31m     [31m×[31m redacts credential-named assignments[39m[32m 0[2mms[22m[39m
+     [32m✓[39m leaves Authorization scheme names without assignments intact[32m 0[2mms[22m[39m
+
+[31m⎯⎯⎯⎯⎯⎯[39m[1m[41m Failed Tests 21 [49m[22m[31m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[41m[1m FAIL [22m[49m src/redact.test.ts[2m > [22mredact: PEM private key blocks[2m > [22mreplaces the key body but keeps the BEGIN/END markers
+[31m[1mAssertionError[22m: expected '[pem-marker]-----\nMIIabc12…' to be '[pem-marker]-----\n***redac…' // Object.is equality[39m
+
+[32m- Expected[39m
+[31m+ Received[39m
+
+[2m  [pem-marker]-----[22m
+[32m- ***redacted***[39m
+[31m+ MIIabc123def456[39m
+[31m+ MIIghi789jkl000[39m
+[2m  [pem-marker] PRIVATE KEY-----[22m
+
+[36m [2m❯[22m src/redact.test.ts:[2m44:36[22m[39m
+    [90m 42|[39m   [35mconst[39m pem [33m=[39m
+    [90m 43|[39m    "[pem-marker]-----\nMIIabc123def456\nMIIghi789jkl000\n---…
+    [90m 44|[39m   [34mexpect[39m([34mredactSensitiveText[39m(pem))[33m.[39m[34mtoBe[39m(
+    [90m   |[39m                                    [31m^[39m
+    [90m 45|[39m    "[pem-marker]-----\n***redacted***\n[pem-marker] PRIVATE KEY-…
+    [90m 46|[39m   )
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/21]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/redact.test.ts[2m > [22mredact: PEM private key blocks[2m > [22mredacts PEM blocks embedded in surrounding text
+[31m[1mAssertionError[22m: expected 'cert dump:\n[pem-marker] RSA PRIVATE KE…' to be 'cert dump:\n[pem-marker] RSA PRIVATE KE…' // Object.is equality[39m
+
+[32m- Expected[39m
+[31m+ Received[39m
+
+[2m  cert dump:[22m
+[2m  [pem-marker]-----[22m
+[32m- ***redacted***[39m
+[31m+ ABC123[39m
+[2m  [pem-marker] RSA PRIVATE KEY-----[22m
+[2m  end of dump[22m
+
+[36m [2m❯[22m src/redact.test.ts:[2m52:37[22m[39m
+    [90m 50|[39m   [35mconst[39m text [33m=[39m
+    [90m 51|[39m    "cert dump:\n[pem-marker]-----\nABC123\n[pem-marker] RSA …
+    [90m 52|[39m   [34mexpect[39m([34mredactSensitiveText[39m(text))[33m.[39m[34mtoBe[39m(
+    [90m   |[39m                                     [31m^[39m
+    [90m 53|[39m    "cert dump:\n[pem-marker]-----\n***redacted***\n-----…
+    [90m 54|[39m   )
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/21]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/redact.test.ts[2m > [22mredact: PEM private key blocks[2m > [22mredacts every PEM block when several appear
+[31m[1mAssertionError[22m: expected '[pem-marker]-----\nAAA\n---…' not to contain 'AAA'[39m
+
+[32m- Expected[39m
+[31m+ Received[39m
+
+[31m+ [pem-marker]-----[39m
+[2m  AAA[22m
+[31m+ [pem-marker] PRIVATE KEY-----[39m
+[31m+ middle[39m
+[31m+ [pem-marker]-----[39m
+[31m+ BBB[39m
+[31m+ [pem-marker] EC PRIVATE KEY-----[39m
+
+[36m [2m❯[22m src/redact.test.ts:[2m67:22[22m[39m
+    [90m 65|[39m    "[pem-marker]-----\nAAA\n[pem-marker] PRIVATE KEY-----\nmiddl…
+    [90m 66|[39m   [35mconst[39m result [33m=[39m [34mredactSensitiveText[39m(text)
+    [90m 67|[39m   [34mexpect[39m(result)[33m.[39mnot[33m.[39m[34mtoContain[39m([32m"AAA"[39m)
+    [90m   |[39m                      [31m^[39m
+    [90m 68|[39m   [34mexpect[39m(result)[33m.[39mnot[33m.[39m[34mtoContain[39m([32m"BBB"[39m)
+    [90m 69|[39m   [34mexpect[39m(result)[33m.[39m[34mtoContain[39m([32m"middle"[39m)
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/21]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/redact.test.ts[2m > [22mredact: MongoDB connection strings[2m > [22mmasks only the password in a standard connection string
+[31m[1mAssertionError[22m: expected '[uri-userinfo]host:27…' to be '[uri-userinfo:***]host:27017/db' // Object.is equality[39m
+
+Expected: [32m"[uri-userinfo:***]host:27017/db"[39m
+Received: [31m"[uri-userinfo]host:27017/db"[39m
+
+[36m [2m❯[22m src/redact.test.ts:[2m76:59[22m[39m
+    [90m 74|[39m [34mdescribe[39m([32m"redact: MongoDB connection strings"[39m[33m,[39m () [33m=>[39m {
+    [90m 75|[39m  [34mit[39m([32m"masks only the password in a standard connection string"[39m[33m,[39m () [33m=>[39m {
+    [90m 76|[39m   [34mexpect[39m([34mredactSensitiveText[39m([34mmongoUri[39m([32m"dummy-pass-001"[39m)))[33m.[39m[34mtoBe[39m(
+    [90m   |[39m                                                           [31m^[39m
+    [90m 77|[39m    [34mmongoUri[39m([32m"***"[39m)[33m,[39m
+    [90m 78|[39m   )
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/21]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/redact.test.ts[2m > [22mredact: MongoDB connection strings[2m > [22mmasks the password in a +srv connection string
+[31m[1mAssertionError[22m: expected '[uri-userinfo]host:…' to be '[uri-userinfo:***]host:27017/db' // Object.is equality[39m
+
+Expected: [32m"[uri-userinfo:***]host:27017/db"[39m
+Received: [31m"[uri-userinfo]host:27017/db"[39m
+
+[36m [2m❯[22m src/redact.test.ts:[2m82:63[22m[39m
+    [90m 80|[39m
+    [90m 81|[39m  [34mit[39m([32m"masks the password in a +srv connection string"[39m[33m,[39m () [33m=>[39m {
+    [90m 82|[39m   [34mexpect[39m([34mredactSensitiveText[39m([34mmongoUri[39m([32m"s3cr3ts3cr3t"[39m[33m,[39m [35mtrue[39m)))[33m.[39m[34mtoBe[39m(
+    [90m   |[39m                                                               [31m^[39m
+    [90m 83|[39m    [34mmongoUri[39m([32m"***"[39m[33m,[39m [35mtrue[39m)[33m,[39m
+    [90m 84|[39m   )
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[5/21]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/redact.test.ts[2m > [22mredact: MongoDB connection strings[2m > [22mredacts connection strings embedded in log text
+[31m[1mAssertionError[22m: expected 'connect failed for mongodb://user:hun…' to be 'connect failed for mongodb://user:***…' // Object.is equality[39m
+
+Expected: [32m"connect failed for [uri-userinfo:***]host:27017/db retrying"[39m
+Received: [31m"connect failed for [uri-userinfo]host:27017/db retrying"[39m
+
+[36m [2m❯[22m src/redact.test.ts:[2m91:18[22m[39m
+    [90m 89|[39m    [32m`connect failed for [39m[36m${[39m[34mmongoUri[39m([32m"dummy-pass-001"[39m)[36m}[39m[32m retrying`[39m[33m,[39m
+    [90m 90|[39m   )
+    [90m 91|[39m   [34mexpect[39m(result)[33m.[39m[34mtoBe[39m([32m`connect failed for [39m[36m${[39m[34mmongoUri[39m([32m"***"[39m)[36m}[39m[32m retrying`[39m)
+    [90m   |[39m                  [31m^[39m
+    [90m 92|[39m   [34mexpect[39m(result)[33m.[39mnot[33m.[39m[34mtoContain[39m([32m"dummy-pass-001"[39m)
+    [90m 93|[39m  })
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[6/21]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/redact.test.ts[2m > [22mredact: generic token path (regression guard for the fixed varargs bug)[2m > [22mredacts KEY=value secrets embedded in surrounding text
+[31m[1mAssertionError[22m: expected 'log [key-assignment] end' to be 'log [key-assignment:***] end' // Object.is equality[39m
+
+Expected: [32m"log [key-assignment:***] end"[39m
+Received: [31m"log [key-assignment] end"[39m
+
+[36m [2m❯[22m src/redact.test.ts:[2m127:71[22m[39m
+    [90m125|[39m describe("redact: generic token path (regression guard for the fixed v…
+    [90m126|[39m  [34mit[39m([32m"redacts KEY=value secrets embedded in surrounding text"[39m[33m,[39m () [33m=>[39m {
+    [90m127|[39m   expect(redactSensitiveText("log [key-assignment] end")).…
+    [90m   |[39m                                                                       [31m^[39m
+    [90m128|[39m    [32m"log [key-assignment:***] end"[39m[33m,[39m
+    [90m129|[39m   )
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[7/21]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/redact.test.ts[2m > [22mredact: generic token path (regression guard for the fixed varargs bug)[2m > [22mredacts Bearer tokens embedded in surrounding text
+[31m[1mAssertionError[22m: expected 'log [bearer-token]…' to be 'log Bearer dummy-***aaaa end' // Object.is equality[39m
+
+Expected: [32m"log Bearer dummy-[7m***[27maaaa end"[39m
+Received: [31m"log Bearer dummy-[7mtoken-aaaaaaaaaa[27maaaa end"[39m
+
+[36m [2m❯[22m src/redact.test.ts:[2m135:5[22m[39m
+    [90m133|[39m   [34mexpect[39m(
+    [90m134|[39m    [34mredactSensitiveText[39m([32m"log [bearer-token] end"[39m)[33m,[39m
+    [90m135|[39m   )[33m.[39m[34mtoBe[39m([32m"log Bearer dummy-***aaaa end"[39m)
+    [90m   |[39m     [31m^[39m
+    [90m136|[39m  })
+    [90m137|[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[8/21]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/redact.test.ts[2m > [22mredact: generic token path (regression guard for the fixed varargs bug)[2m > [22mredacts sk- tokens embedded in surrounding text
+[31m[1mAssertionError[22m: expected 'key sk-dummy-token-aaaaaaaaaaaaaa ok' to be 'key sk-dum***aaaa ok' // Object.is equality[39m
+
+Expected: [32m"key sk-abc[7m***[27mwxyz ok"[39m
+Received: [31m"key sk-abc[7mdefghijklmnopqrstuv[27mwxyz ok"[39m
+
+[36m [2m❯[22m src/redact.test.ts:[2m139:71[22m[39m
+    [90m137|[39m
+    [90m138|[39m  [34mit[39m([32m"redacts sk- tokens embedded in surrounding text"[39m[33m,[39m () [33m=>[39m {
+    [90m139|[39m   expect(redactSensitiveText("key sk-dummy-token-aaaaaaaaaaaaaa ok")).…
+    [90m   |[39m                                                                       [31m^[39m
+    [90m140|[39m    [32m"key sk-dum***aaaa ok"[39m[33m,[39m
+    [90m141|[39m   )
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[9/21]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/redact.test.ts[2m > [22mredact: generic token path (regression guard for the fixed varargs bug)[2m > [22mredacts JSON apiKey values
+[31m[1mAssertionError[22m: expected '{"[key-assignment]' to be '{"[key-assignment:***]"}' // Object.is equality[39m
+
+Expected: [32m"{"[key-assignment:***]"}"[39m
+Received: [31m"{"[key-assignment]"}"[39m
+
+[36m [2m❯[22m src/redact.test.ts:[2m147:5[22m[39m
+    [90m145|[39m   [34mexpect[39m(
+    [90m146|[39m    [34mredactSensitiveText[39m([32m'{"[key-assignment]"}'[39m)[33m,[39m
+    [90m147|[39m   )[33m.[39m[34mtoBe[39m([32m'{"[key-assignment:***]"}'[39m)
+    [90m   |[39m     [31m^[39m
+    [90m148|[39m  })
+    [90m149|[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[10/21]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/redact.test.ts[2m > [22mredact: generic token path (regression guard for the fixed varargs bug)[2m > [22mmasks the matched span and never the whole line
+[31m[1mAssertionError[22m: expected '[auth-header]…' to be '[auth-header] dummy-***aaaa' // Object.is equality[39m
+
+Expected: [32m"[auth-header] dummy-[7m***[27maaaa"[39m
+Received: [31m"[auth-header] dummy-[7mtoken-aaaaaaaaaaaaaaaaaaaa[27maaaa"[39m
+
+[36m [2m❯[22m src/redact.test.ts:[2m155:5[22m[39m
+    [90m153|[39m     [32m"[auth-header]"[39m[33m,[39m
+    [90m154|[39m    )[33m,[39m
+    [90m155|[39m   )[33m.[39m[34mtoBe[39m([32m"[auth-header] dummy-***aaaa"[39m)
+    [90m   |[39m     [31m^[39m
+    [90m156|[39m  })
+    [90m157|[39m })
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[11/21]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/redact.test.ts[2m > [22mredact: non-MongoDB scheme credentials (C-002 round 2)[2m > [22mmasks the password in a postgres connection string
+[31m[1mAssertionError[22m: expected '[uri-userinfo]db.in…' to be '[uri-userinfo:***]db.internal:5…' // Object.is equality[39m
+
+Expected: [32m"[uri-userinfo:***]db.internal:5432/app"[39m
+Received: [31m"[uri-userinfo]db.internal:5432/app"[39m
+
+[36m [2m❯[22m src/redact.test.ts:[2m165:36[22m[39m
+    [90m163|[39m  [34mit[39m([32m"masks the password in a postgres connection string"[39m[33m,[39m () [33m=>[39m {
+    [90m164|[39m   [35mconst[39m uri [33m=[39m [32m"[uri-userinfo]db.internal:5432/app"[39m
+    [90m165|[39m   [34mexpect[39m([34mredactSensitiveText[39m(uri))[33m.[39m[34mtoBe[39m(
+    [90m   |[39m                                    [31m^[39m
+    [90m166|[39m    [32m"[uri-userinfo:***]db.internal:5432/app"[39m[33m,[39m
+    [90m167|[39m   )
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[12/21]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/redact.test.ts[2m > [22mredact: non-MongoDB scheme credentials (C-002 round 2)[2m > [22mmasks the password in a redis connection string with an empty user
+[31m[1mAssertionError[22m: expected 'redis://:dummy-pass-000@cache.interna…' to be 'redis://:***@cache.internal:6379/0' // Object.is equality[39m
+
+Expected: [32m"redis://:[7m***[27m@cache.internal:6379/0"[39m
+Received: [31m"redis://:[7mdummy-pass-000[27m@cache.internal:6379/0"[39m
+
+[36m [2m❯[22m src/redact.test.ts:[2m172:36[22m[39m
+    [90m170|[39m  it("masks the password in a redis connection string with an empty use…
+    [90m171|[39m   [35mconst[39m uri [33m=[39m [32m"redis://:dummy-pass-000@cache.internal:6379/0"[39m
+    [90m172|[39m   expect(redactSensitiveText(uri)).toBe("redis://:***@cache.internal:6…
+    [90m   |[39m                                    [31m^[39m
+    [90m173|[39m  })
+    [90m174|[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[13/21]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/redact.test.ts[2m > [22mredact: non-MongoDB scheme credentials (C-002 round 2)[2m > [22mmasks scheme credentials embedded in driver error text
+[31m[1mAssertionError[22m: expected 'connect ECONNREFUSED amqp://guest:amq…' not to contain 'dummy-cred-0000'[39m
+
+Expected: [32m"dummy-cred-0000"[39m
+Received: [31m"connect ECONNREFUSED [uri-userinfo]mq.internal:5672/vhost retrying"[39m
+
+[36m [2m❯[22m src/redact.test.ts:[2m178:22[22m[39m
+    [90m176|[39m   const text = `connect ECONNREFUSED [uri-userinfo]mq.i…
+    [90m177|[39m   [35mconst[39m result [33m=[39m [34mredactSensitiveText[39m(text)
+    [90m178|[39m   [34mexpect[39m(result)[33m.[39mnot[33m.[39m[34mtoContain[39m([32m"dummy-cred-0000"[39m)
+    [90m   |[39m                      [31m^[39m
+    [90m179|[39m   [34mexpect[39m(result)[33m.[39m[34mtoContain[39m([32m"[uri-userinfo:***]mq.internal:5672/vhost"[39m)
+    [90m180|[39m  })
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[14/21]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/redact.test.ts[2m > [22mredact: webhook and credential-path URLs (C-002 round 2)[2m > [22mtruncates Slack-style webhook URLs to the host
+[31m[1mAssertionError[22m: expected 'https://hooks.slack.com/services/T000…' to be 'https://hooks.slack.com/***' // Object.is equality[39m
+
+Expected: [32m"https://hooks.slack.com/[7m***[27m"[39m
+Received: [31m"https://hooks.slack.com/[[b64-run][27m"[39m
+
+[36m [2m❯[22m src/redact.test.ts:[2m192:36[22m[39m
+    [90m190|[39m   [35mconst[39m url [33m=[39m
+    [90m191|[39m    "https://hooks.slack.[b64-run]…
+    [90m192|[39m   [34mexpect[39m([34mredactSensitiveText[39m(url))[33m.[39m[34mtoBe[39m([32m"https://hooks.slack.com/***"[39m)
+    [90m   |[39m                                    [31m^[39m
+    [90m193|[39m  })
+    [90m194|[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[15/21]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/redact.test.ts[2m > [22mredact: webhook and credential-path URLs (C-002 round 2)[2m > [22mtruncates Discord webhook URLs to the route prefix
+[31m[1mAssertionError[22m: expected 'https://discord.com/api/webhooks/1234…' to be 'https://discord.com/api/webhooks/***' // Object.is equality[39m
+
+Expected: [32m"https://discord.com/api/webhooks/[7m***[27m"[39m
+Received: [31m"https://discord.com/api/webhooks/[7m1234567890/dumm-0000000000[27m"[39m
+
+[36m [2m❯[22m src/redact.test.ts:[2m197:36[22m[39m
+    [90m195|[39m  [34mit[39m([32m"truncates Discord webhook URLs to the route prefix"[39m[33m,[39m () [33m=>[39m {
+    [90m196|[39m   const url = "https://discord.com/api/webhooks/1234567890/abc-def-ghi…
+    [90m197|[39m   [34mexpect[39m([34mredactSensitiveText[39m(url))[33m.[39m[34mtoBe[39m(
+    [90m   |[39m                                    [31m^[39m
+    [90m198|[39m    [32m"https://discord.com/api/webhooks/***"[39m[33m,[39m
+    [90m199|[39m   )
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[16/21]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/redact.test.ts[2m > [22mredact: webhook and credential-path URLs (C-002 round 2)[2m > [22mtruncates URLs whose path carries a secret token segment
+[31m[1mAssertionError[22m: expected 'https://hooks.example/services/path-s…' to be 'https://hooks.example/***' // Object.is equality[39m
+
+Expected: [32m"https://hooks.example/[7m***[27m"[39m
+Received: [31m"https://hooks.example/[7mservices/path-dummy-00000/callback[27m"[39m
+
+[36m [2m❯[22m src/redact.test.ts:[2m204:36[22m[39m
+    [90m202|[39m  [34mit[39m([32m"truncates URLs whose path carries a secret token segment"[39m[33m,[39m () [33m=>[39m {
+    [90m203|[39m   const url = "https://hooks.example/services/path-dummy-00000/callbac…
+    [90m204|[39m   [34mexpect[39m([34mredactSensitiveText[39m(url))[33m.[39m[34mtoBe[39m([32m"https://hooks.example/***"[39m)
+    [90m   |[39m                                    [31m^[39m
+    [90m205|[39m  })
+    [90m206|[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[17/21]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/redact.test.ts[2m > [22mredact: webhook and credential-path URLs (C-002 round 2)[2m > [22mtruncates reset-token style paths
+[31m[1mAssertionError[22m: expected 'https://api.example.com/v1/reset/toke…' to be 'https://api.example.com/***' // Object.is equality[39m
+
+Expected: [32m"https://api.example.com/[7m***[27m"[39m
+Received: [31m"https://api.example.com/[7mv1/reset/token/dummytoken000000[27m"[39m
+
+[36m [2m❯[22m src/redact.test.ts:[2m209:36[22m[39m
+    [90m207|[39m  [34mit[39m([32m"truncates reset-token style paths"[39m[33m,[39m () [33m=>[39m {
+    [90m208|[39m   [35mconst[39m url [33m=[39m [32m"https://api.example.com/v1/reset/token/dummytoken000000"[39m
+    [90m209|[39m   [34mexpect[39m([34mredactSensitiveText[39m(url))[33m.[39m[34mtoBe[39m([32m"https://api.example.com/***"[39m)
+    [90m   |[39m                                    [31m^[39m
+    [90m210|[39m  })
+    [90m211|[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[18/21]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/redact.test.ts[2m > [22mredact: AUTH/CREDENTIAL-named assignments (C-002 round 2)[2m > [22mredacts custom auth header values
+[31m[1mAssertionError[22m: expected '[masked-header-line]' not to contain '[masked-value]'[39m
+
+Expected: [32m"dummy-auth-000-000"[39m
+Received: [31m"[7mX-Custom-Auth: [27mdummy-auth-000-000"[39m
+
+[36m [2m❯[22m src/redact.test.ts:[2m222:22[22m[39m
+    [90m220|[39m   [35mconst[39m line [33m=[39m [32m"[masked-header-assignment]"[39m
+    [90m221|[39m   [35mconst[39m result [33m=[39m [34mredactSensitiveText[39m(line)
+    [90m222|[39m   [34mexpect[39m(result)[33m.[39mnot[33m.[39m[34mtoContain[39m([32m"dummy-auth-000-000"[39m)
+    [90m   |[39m                      [31m^[39m
+    [90m223|[39m   [34mexpect[39m(result)[33m.[39m[34mtoContain[39m([32m"X-Custom-Auth: dummy-***-000"[39m)
+    [90m224|[39m  })
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[19/21]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/redact.test.ts[2m > [22mredact: AUTH/CREDENTIAL-named assignments (C-002 round 2)[2m > [22mredacts quoted auth header names in serialized objects
+[31m[1mAssertionError[22m: expected '[masked-header-assertion]' not to contain '[masked-value]'[39m
+
+Expected: [32m"dummy-auth-000-000"[39m
+Received: [31m"[7m{"X-Custom-Auth": "[27mdummy-auth-000-000[7m", "ok": 1}[27m"[39m
+
+[36m [2m❯[22m src/redact.test.ts:[2m229:22[22m[39m
+    [90m227|[39m   [35mconst[39m line [33m=[39m [32m'{"[masked-header-name]": "[masked]", "ok": 1}'[39m
+    [90m228|[39m   [35mconst[39m result [33m=[39m [34mredactSensitiveText[39m(line)
+    [90m229|[39m   [34mexpect[39m(result)[33m.[39mnot[33m.[39m[34mtoContain[39m([32m"dummy-auth-000-000"[39m)
+    [90m   |[39m                      [31m^[39m
+    [90m230|[39m   [34mexpect[39m(result)[33m.[39m[34mtoContain[39m([32m'"ok": 1'[39m)
+    [90m231|[39m  })
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[20/21]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/redact.test.ts[2m > [22mredact: AUTH/CREDENTIAL-named assignments (C-002 round 2)[2m > [22mredacts credential-named assignments
+[31m[1mAssertionError[22m: expected '[key-assignment-line]' not to contain 'dummy-cred-000-00000'[39m
+
+Expected: [32m"dummy-cred-000-00000"[39m
+Received: [31m"[7mcredentials: [27mdummy-cred-000-00000"[39m
+
+[36m [2m❯[22m src/redact.test.ts:[2m235:22[22m[39m
+    [90m233|[39m  [34mit[39m([32m"redacts credential-named assignments"[39m[33m,[39m () [33m=>[39m {
+    [90m234|[39m   const result = redactSensitiveText("[key-assignment-placeholder]…
+    [90m235|[39m   [34mexpect[39m(result)[33m.[39mnot[33m.[39m[34mtoContain[39m([32m"dummy-cred-000-00000"[39m)
+    [90m   |[39m                      [31m^[39m
+    [90m236|[39m  })
+    [90m237|[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[21/21]⎯[22m[39m
+
+
+[2m Test Files [22m [1m[31m1 failed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[31m21 failed[39m[22m[2m | [22m[1m[32m10 passed[39m[22m[90m (31)[39m
+[2m   Start at [22m 02:28:13
+[2m   Duration [22m 172ms[2m (transform 20ms, setup 0ms, import 28ms, tests 12ms, environment 0ms)[22m
+
+error: "vitest" exited with code 1

@@ -1,0 +1,80 @@
+# [hygiene 2026-09-03] Credential-shaped spans in captured probe output
+# were replaced with bracketed shape descriptors ([uri-userinfo],
+# [key-assignment], [auth-header], ...) so secret scanners stay clear of
+# this evidence log; masked-output spans carry a :*** suffix. Vector
+# names, leak flags, verdicts, and line ordering are unchanged from the
+# original capture; only the shape-bearing bytes inside them were
+# substituted.
+COMMAND: remove internalError log redaction wrappers, then cd apps/api && bunx vitest run src/lib/errors.test.ts; restore with cp and verify cmp
+BEFORE_SHA256: [b64-run]  apps/api/src/lib/errors.ts
+NEUTRALIZED_SHA256: [b64-run]  apps/api/src/lib/errors.ts
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/apps/api[39m
+
+ [31m❯[39m src/lib/errors.test.ts [2m([22m[2m6 tests[22m[2m | [22m[31m3 failed[39m[2m)[22m[32m 21[2mms[22m[39m
+[31m     [31m×[31m logs redacted detail and returns a generic 500 envelope[39m[32m 18[2mms[22m[39m
+[31m     [31m×[31m redacts credentials embedded in the logged stack[39m[32m 1[2mms[22m[39m
+[31m     [31m×[31m redacts non-Error values logged as strings[39m[32m 1[2mms[22m[39m
+     [32m✓[39m maps dependency-unavailable failures to 503 SERVICE_UNAVAILABLE[32m 1[2mms[22m[39m
+     [32m✓[39m matches the closed set of driver network names[32m 0[2mms[22m[39m
+     [32m✓[39m walks a bounded cause chain[32m 0[2mms[22m[39m
+
+[31m⎯⎯⎯⎯⎯⎯⎯[39m[1m[41m Failed Tests 3 [49m[22m[31m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[41m[1m FAIL [22m[49m src/lib/errors.test.ts[2m > [22minternalError (C-002: redacted server-side log, generic client body)[2m > [22mlogs redacted detail and returns a generic 500 envelope
+[31m[1mAssertionError[22m: expected '{"level":"error","msg":"request faile…' not to contain 'dummy-cred-000'[39m
+
+Expected: [32m"dummy-cred-000"[39m
+Received: [31m"{"level":"error","msg":"request failed","requestId":"req-c002","code":"INTERNAL","method":"GET","path":"/boom","error":{"name":"Error","message":"driver failed: [uri-userinfo]host.example.net:27017","stack":"Error: driver failed: [uri-userinfo]host.example.net:27017\n    at Array.<anonymous> (/Users/rom.[b64-run].test.ts:23:5)\n    at Hono.#dispatch (file:///Users/rom.iluz/Dev/memongo/node_modules/hono/dist/hono-base.js:294:38)\n    at Hono.fetch (file:///Users/rom.iluz/Dev/memongo/node_modules/hono/dist/hono-base.js:331:26)\n    at Hono.request (file:///Users/rom.iluz/Dev/memongo/node_modules/hono/dist/hono-base.js:350:17)\n    at /Users/rom.[b64-run].test.ts:30:25\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:302:11\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:26\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2326:20\n    at new Promise (<anonymous>)\n    at runWithCancel (file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2323:10)"}}"[39m
+
+[36m [2m❯[22m src/lib/errors.test.ts:[2m42:22[22m[39m
+    [90m 40|[39m   [34mexpect[39m(logged)[33m.[39m[34mtoContain[39m([32m"req-c002"[39m)
+    [90m 41|[39m   [34mexpect[39m(logged)[33m.[39m[34mtoContain[39m([32m"INTERNAL"[39m)
+    [90m 42|[39m   [34mexpect[39m(logged)[33m.[39mnot[33m.[39m[34mtoContain[39m([32m"dummy-cred-000"[39m)
+    [90m   |[39m                      [31m^[39m
+    [90m 43|[39m  })
+    [90m 44|[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/3]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/lib/errors.test.ts[2m > [22minternalError (C-002: redacted server-side log, generic client body)[2m > [22mredacts credentials embedded in the logged stack
+[31m[1mAssertionError[22m: expected '{"level":"error","msg":"request faile…' not to contain 'dummy-cred-000'[39m
+
+Expected: [32m"dummy-cred-000"[39m
+Received: [31m"{"level":"error","msg":"request failed","requestId":"req-stack","code":"INTERNAL","method":"GET","path":"/boom","error":{"name":"Error","message":"plain failure","stack":"Error: plain failure\n    at foo ([uri-userinfo]h.example.net:27017/x.ts:1:1)"}}"[39m
+
+[36m [2m❯[22m src/lib/errors.test.ts:[2m59:22[22m[39m
+    [90m 57|[39m   [35mconst[39m logged [33m=[39m [34mcapturedCalls[39m(errorLog)
+    [90m 58|[39m   [34mexpect[39m(logged)[33m.[39m[34mtoContain[39m([32m"plain failure"[39m)
+    [90m 59|[39m   [34mexpect[39m(logged)[33m.[39mnot[33m.[39m[34mtoContain[39m([32m"dummy-cred-000"[39m)
+    [90m   |[39m                      [31m^[39m
+    [90m 60|[39m  })
+    [90m 61|[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/3]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/lib/errors.test.ts[2m > [22minternalError (C-002: redacted server-side log, generic client body)[2m > [22mredacts non-Error values logged as strings
+[31m[1mAssertionError[22m: expected '{"level":"error","msg":"request faile…' not to contain 'dummy-token-aaaaaaaaaaaaaaaaaa'[39m
+
+Expected: [32m"dummy-token-aaaaaaaaaaaaaaaaaa"[39m
+Received: [31m"[7m{"level":"error","msg":"request failed","requestId":"req-str","code":"INTERNAL","method":"GET","path":"/boom","error":"[key-assignment]"}[27m"[39m
+
+[36m [2m❯[22m src/lib/errors.test.ts:[2m77:22[22m[39m
+    [90m 75|[39m
+    [90m 76|[39m   [35mconst[39m logged [33m=[39m [34mcapturedCalls[39m(errorLog)
+    [90m 77|[39m   [34mexpect[39m(logged)[33m.[39mnot[33m.[39m[34mtoContain[39m([32m"dummy-token-aaaaaaaaaaaaaaaaaa"[39m)
+    [90m   |[39m                      [31m^[39m
+    [90m 78|[39m  })
+    [90m 79|[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/3]⎯[22m[39m
+
+
+[2m Test Files [22m [1m[31m1 failed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[31m3 failed[39m[22m[2m | [22m[1m[32m3 passed[39m[22m[90m (6)[39m
+[2m   Start at [22m 01:51:08
+[2m   Duration [22m 211ms[2m (transform 18ms, setup 0ms, import 37ms, tests 21ms, environment 0ms)[22m
+
+TEST_EXIT: 1
+AFTER_SHA256: [b64-run]  apps/api/src/lib/errors.ts
+CMP_EXIT: 0

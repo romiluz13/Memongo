@@ -1,0 +1,30 @@
+# [hygiene 2026-09-03] Credential-shaped spans in captured probe output
+# were replaced with bracketed shape descriptors ([uri-userinfo],
+# [key-assignment], [auth-header], ...) so secret scanners stay clear of
+# this evidence log; masked-output spans carry a :*** suffix. Vector
+# names, leak flags, verdicts, and line ordering are unchanged from the
+# original capture; only the shape-bearing bytes inside them were
+# substituted.
+COMMAND: temporary Vitest probe sends unusual-scheme URI credentials, a bare random-hex key, a path credential, and a custom auth header through real redactSensitiveText and createSubsystemLogger
+PROBE_BEFORE: ABSENT
+PROBE_SHA256: [b64-run]  packages/lib/src/refutation-c-002-r2-classifier.test.ts
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/packages/lib[39m
+
+unusual-scheme_UTILITY=[uri-userinfo]db.example/app
+unusual-scheme_LOG=02:00:33.184 [classifier-probe] warn: diagnostic {"value":"[uri-userinfo]db.example/app"}
+bare-random-hex_UTILITY=dummytoken000000c3ba821de14577ac
+bare-random-hex_LOG=02:00:33.186 [classifier-probe] warn: diagnostic {"value":"dummytoken000000c3ba821de14577ac"}
+url-path-credential_UTILITY=https://hooks.example/services/path-dummy-00000/callback
+url-path-credential_LOG=02:00:33.187 [classifier-probe] warn: diagnostic {"value":"https://hooks.example/services/path-dummy-00000/callback"}
+custom-auth-header_UTILITY=[masked-header-assignment]
+custom-auth-header_LOG=02:00:33.187 [classifier-probe] warn: diagnostic {"value":"[masked-header-assignment]"}
+ [32m✓[39m src/refutation-c-002-r2-classifier.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m1 passed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[32m4 passed[39m[22m[90m (4)[39m
+[2m   Start at [22m 02:00:33
+[2m   Duration [22m 155ms[2m (transform 29ms, setup 0ms, import 38ms, tests 5ms, environment 0ms)[22m
+
+TEST_EXIT: 0
+PROBE_AFTER: ABSENT

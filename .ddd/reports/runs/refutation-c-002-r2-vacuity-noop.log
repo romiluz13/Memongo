@@ -1,0 +1,84 @@
+# [hygiene 2026-09-03] Credential-shaped spans in captured probe output
+# were replaced with bracketed shape descriptors ([uri-userinfo],
+# [key-assignment], [auth-header], ...) so secret scanners stay clear of
+# this evidence log; masked-output spans carry a :*** suffix. Vector
+# names, leak flags, verdicts, and line ordering are unchanged from the
+# original capture; only the shape-bearing bytes inside them were
+# substituted.
+COMMAND: neutralize redactQueryEcho to return text unchanged, run query-diagnostics.test.ts, restore from backup, verify sha256 and cmp
+BEFORE_SHA256: [b64-run]  packages/memory-engine/src/query-diagnostics.ts
+NEUTRALIZED_SHA256: [b64-run]  packages/memory-engine/src/query-diagnostics.ts
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/packages/memory-engine[39m
+
+ [31m❯[39m src/query-diagnostics.test.ts [2m([22m[2m7 tests[22m[2m | [22m[31m3 failed[39m[2m)[22m[32m 16[2mms[22m[39m
+     [32m✓[39m never includes the raw query text[32m 2[2mms[22m[39m
+     [32m✓[39m produces a stable, correlatable digest[32m 1[2mms[22m[39m
+     [32m✓[39m redacts credential-bearing error chains[32m 0[2mms[22m[39m
+[31m     [31m×[31m replaces a downstream error that echoes the query verbatim[39m[32m 4[2mms[22m[39m
+[31m     [31m×[31m replaces the echo even after credential redaction altered it[39m[32m 1[2mms[22m[39m
+     [32m✓[39m leaves short fragments intact to avoid mangling log detail[32m 0[2mms[22m[39m
+[31m     [31m×[31m logs no raw query text when a lane probe fails with an echoing error[39m[32m 7[2mms[22m[39m
+
+[31m⎯⎯⎯⎯⎯⎯⎯[39m[1m[41m Failed Tests 3 [49m[22m[31m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[41m[1m FAIL [22m[49m src/query-diagnostics.test.ts[2m > [22mqueryFailureMeta (C-002: raw query text never enters diagnostics)[2m > [22mreplaces a downstream error that echoes the query verbatim
+[31m[1mAssertionError[22m: expected 'command failed: SEARCH-NEEDLE-xyzzy S…' not to contain 'SEARCH-NEEDLE'[39m
+
+Expected: [32m"SEARCH-NEEDLE"[39m
+Received: [31m"command failed: SEARCH-NEEDLE-xyzzy SELECT secret"[39m
+
+[36m [2m❯[22m src/query-diagnostics.test.ts:[2m42:26[22m[39m
+    [90m 40|[39m   const meta = queryFailureMeta(query, new Error(`command failed: ${qu…
+    [90m 41|[39m
+    [90m 42|[39m   [34mexpect[39m(meta[33m.[39merror)[33m.[39mnot[33m.[39m[34mtoContain[39m([32m"SEARCH-NEEDLE"[39m)
+    [90m   |[39m                          [31m^[39m
+    [90m 43|[39m   [34mexpect[39m(meta[33m.[39merror)[33m.[39mnot[33m.[39m[34mtoContain[39m([32m"SELECT secret"[39m)
+    [90m 44|[39m   [34mexpect[39m(meta[33m.[39merror)[33m.[39m[34mtoContain[39m([32m`[query:[39m[36m${[39mmeta[33m.[39mqueryDigest[36m}[39m[32m]`[39m)
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/3]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/query-diagnostics.test.ts[2m > [22mqueryFailureMeta (C-002: raw query text never enters diagnostics)[2m > [22mreplaces the echo even after credential redaction altered it
+[31m[1mAssertionError[22m: expected 'lookup failed: connect via mongodb+sr…' not to contain 'connect via'[39m
+
+Expected: [32m"connect via"[39m
+Received: [31m"lookup failed: connect via [uri-userinfo:***]host.local/db please"[39m
+
+[36m [2m❯[22m src/query-diagnostics.test.ts:[2m56:26[22m[39m
+    [90m 54|[39m   [90m// the redacted variant of the query must still be fully replaced.[39m
+    [90m 55|[39m   [34mexpect[39m(meta[33m.[39merror)[33m.[39mnot[33m.[39m[34mtoContain[39m([32m"supersample99"[39m)
+    [90m 56|[39m   [34mexpect[39m(meta[33m.[39merror)[33m.[39mnot[33m.[39m[34mtoContain[39m([32m"connect via"[39m)
+    [90m   |[39m                          [31m^[39m
+    [90m 57|[39m   [34mexpect[39m(meta[33m.[39merror)[33m.[39mnot[33m.[39m[34mtoContain[39m([34mredactSensitiveText[39m(query))
+    [90m 58|[39m   [34mexpect[39m(meta[33m.[39merror)[33m.[39m[34mtoContain[39m([32m`[query:[39m[36m${[39mmeta[33m.[39mqueryDigest[36m}[39m[32m]`[39m)
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/3]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/query-diagnostics.test.ts[2m > [22mplanRetrieval failure diagnostics (C-002 catch seam)[2m > [22mlogs no raw query text when a lane probe fails with an echoing error
+[31m[1mAssertionError[22m: expected '02:00:00.889 [memory:mongodb:planner]…' to match /\[query:[0-9a-f]{12}\]/[39m
+
+[32m- Expected:[39m
+/\[query:[0-9a-f]{12}\]/
+
+[31m+ Received:[39m
+"02:00:00.889 [memory:mongodb:planner] error: planRetrieval failed {\"queryLength\":34,\"queryDigest\":\"c1cca772d6ab\",\"error\":\"lane probe failed: SEARCH-NEEDLE-xyzzy recent changes\"}"
+
+[36m [2m❯[22m src/query-diagnostics.test.ts:[2m97:19[22m[39m
+    [90m 95|[39m     [33m.[39m[34mjoin[39m([32m"\n"[39m)
+    [90m 96|[39m    [34mexpect[39m(logged)[33m.[39m[34mtoContain[39m([32m"planRetrieval failed"[39m)
+    [90m 97|[39m    [34mexpect[39m(logged)[33m.[39m[34mtoMatch[39m([36m/\[query:[0-9a-f]{12}\]/[39m)
+    [90m   |[39m                   [31m^[39m
+    [90m 98|[39m    [34mexpect[39m(logged)[33m.[39mnot[33m.[39m[34mtoContain[39m([32m"SEARCH-NEEDLE"[39m)
+    [90m 99|[39m   } [35mfinally[39m {
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/3]⎯[22m[39m
+
+
+[2m Test Files [22m [1m[31m1 failed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[31m3 failed[39m[22m[2m | [22m[1m[32m4 passed[39m[22m[90m (7)[39m
+[2m   Start at [22m 02:00:00
+[2m   Duration [22m 269ms[2m (transform 77ms, setup 0ms, import 102ms, tests 16ms, environment 0ms)[22m
+
+TEST_EXIT: 1
+AFTER_SHA256: [b64-run]  packages/memory-engine/src/query-diagnostics.ts
+CMP_EXIT: 0

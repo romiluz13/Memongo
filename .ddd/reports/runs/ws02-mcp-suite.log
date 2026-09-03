@@ -1,0 +1,80 @@
+# WS-02 C-002 final-state suite run: apps/mcp (shape-free assembly rework)
+# Run: cd apps/mcp && bunx vitest run
+# Date: 2026-09-03T08:57:20Z
+
+ RUN  v4.1.10 /Users/rom.iluz/Dev/memongo/apps/mcp
+
+ ✓ src/auth.test.ts (26 tests) 27ms
+ ✓ src/tool-registry.test.ts (10 tests) 43ms
+ ✓ src/mcp-contract-conformance.test.ts (4 tests) 24ms
+stderr | src/http-transport.test.ts > streamable HTTP transport > answers the MCP initialize handshake over HTTP
+memongo-mcp: no MEMONGO_MCP_AUTH_TOKEN set — local trust mode; keep the bind on loopback
+
+stderr | src/http-transport.test.ts > streamable HTTP transport > answers the MCP initialize handshake over HTTP
+memongo-mcp: streamable HTTP transport listening on http://127.0.0.1:62655/mcp (local trust, no authentication)
+
+stderr | src/http-transport.test.ts > streamable HTTP transport > serves tools/list over HTTP after initialize
+memongo-mcp: no MEMONGO_MCP_AUTH_TOKEN set — local trust mode; keep the bind on loopback
+
+stderr | src/http-transport.test.ts > streamable HTTP transport > serves tools/list over HTTP after initialize
+memongo-mcp: streamable HTTP transport listening on http://127.0.0.1:62657/mcp (local trust, no authentication)
+
+stderr | src/http-transport.test.ts > streamable HTTP transport > gates admin and alias tools behind env flags (P1.2)
+memongo-mcp: no MEMONGO_MCP_AUTH_TOKEN set — local trust mode; keep the bind on loopback
+
+stderr | src/http-transport.test.ts > streamable HTTP transport > gates admin and alias tools behind env flags (P1.2)
+memongo-mcp: streamable HTTP transport listening on http://127.0.0.1:62660/mcp (local trust, no authentication)
+
+ ✓ src/server.test.ts (105 tests) 72ms
+stderr | src/http-transport.test.ts > streamable HTTP transport > exposes admin tools when MEMONGO_MCP_ADMIN=1 (P1.2)
+memongo-mcp: no MEMONGO_MCP_AUTH_TOKEN set — local trust mode; keep the bind on loopback
+
+stderr | src/http-transport.test.ts > streamable HTTP transport > exposes admin tools when MEMONGO_MCP_ADMIN=1 (P1.2)
+memongo-mcp: streamable HTTP transport listening on http://127.0.0.1:62665/mcp (local trust, no authentication)
+
+stderr | src/http-transport.test.ts > streamable HTTP transport > returns 404 for non-MCP paths
+memongo-mcp: no MEMONGO_MCP_AUTH_TOKEN set — local trust mode; keep the bind on loopback
+
+stderr | src/http-transport.test.ts > streamable HTTP transport > returns 404 for non-MCP paths
+memongo-mcp: streamable HTTP transport listening on http://127.0.0.1:62670/mcp (local trust, no authentication)
+
+stderr | src/http-transport.test.ts > HTTP transport authentication (WS-01) > rejects unauthenticated requests with 401 + WWW-Authenticate: Bearer
+memongo-mcp: streamable HTTP transport listening on http://127.0.0.1:62672/mcp (bearer authentication required)
+
+stderr | src/http-transport.test.ts > HTTP transport authentication (WS-01) > rejects an invalid token with 401 + invalid_token challenge
+memongo-mcp: streamable HTTP transport listening on http://127.0.0.1:62676/mcp (bearer authentication required)
+
+stderr | src/http-transport.test.ts > HTTP transport authentication (WS-01) > serves the handshake to a valid standard token
+memongo-mcp: streamable HTTP transport listening on http://127.0.0.1:62678/mcp (bearer authentication required)
+
+stderr | src/http-transport.test.ts > HTTP transport authentication (WS-01) > hides admin tools from the standard scope even when MEMONGO_MCP_ADMIN=1
+memongo-mcp: streamable HTTP transport listening on http://127.0.0.1:62680/mcp (bearer authentication required)
+
+stderr | src/http-transport.test.ts > HTTP transport authentication (WS-01) > exposes admin tools to the admin credential scope
+memongo-mcp: streamable HTTP transport listening on http://127.0.0.1:62683/mcp (bearer authentication required)
+
+stderr | src/http-transport.test.ts > HTTP transport authentication (WS-01) > leaves admin tools unreachable when MEMONGO_MCP_ADMIN=1 but no admin token is set (fail closed)
+WARNING: MEMONGO_MCP_ADMIN=1 without MEMONGO_MCP_ADMIN_TOKEN — admin tools are unreachable over HTTP (fail closed). Set MEMONGO_MCP_ADMIN_TOKEN to expose them to an admin credential.
+
+stderr | src/http-transport.test.ts > HTTP transport authentication (WS-01) > leaves admin tools unreachable when MEMONGO_MCP_ADMIN=1 but no admin token is set (fail closed)
+memongo-mcp: streamable HTTP transport listening on http://127.0.0.1:62686/mcp (bearer authentication required)
+
+stderr | src/http-transport.test.ts > HTTP transport authentication (WS-01) > returns 403 for a disallowed Host header
+memongo-mcp: streamable HTTP transport listening on http://127.0.0.1:62689/mcp (bearer authentication required)
+
+stderr | src/http-transport.test.ts > HTTP transport authentication (WS-01) > returns 403 for a foreign Origin header
+memongo-mcp: streamable HTTP transport listening on http://127.0.0.1:62691/mcp (bearer authentication required)
+
+stderr | src/http-transport.test.ts > HTTP transport authentication (WS-01) > returns 403 (not a crash) for an empty Host header
+memongo-mcp: streamable HTTP transport listening on http://127.0.0.1:62693/mcp (bearer authentication required)
+
+stderr | src/http-transport.test.ts > HTTP transport authentication (WS-01) > requires authentication on a non-loopback bind once a token is configured
+memongo-mcp: streamable HTTP transport listening on http://0.0.0.0:62697/mcp (bearer authentication required)
+
+ ✓ src/http-transport.test.ts (18 tests) 257ms
+
+ Test Files  5 passed (5)
+      Tests  163 passed (163)
+   Start at  11:24:10
+   Duration  1.72s (transform 1.45s, setup 0ms, import 3.43s, tests 422ms, environment 1ms)
+

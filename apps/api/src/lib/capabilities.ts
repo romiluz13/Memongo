@@ -1,4 +1,5 @@
 import type { MemongoBridgeCapabilities } from "@memongo/memory-bridge"
+import { formatErrorMessage, redactSensitiveText } from "@memongo/lib"
 
 /**
  * P1.9 boot-time search-lane visibility. When Atlas Search/vector indexes
@@ -60,7 +61,11 @@ export function formatCapabilityTable(
 		)
 	}
 	if (probeError) {
-		lines.push(`  capability probe failed: ${probeError}`)
+		// C-002: probeError can carry credentials (a failed connection echoes
+		// the URI). probeBootCapabilities redacts at the origin, but the table
+		// is the render boundary — redacting here keeps every direct caller
+		// safe too, not just the boot chain.
+		lines.push(`  capability probe failed: ${redactSensitiveText(probeError)}`)
 	}
 	return lines.join("\n")
 }
@@ -88,9 +93,13 @@ export function enforceRequiredVector(
 	if (lanes.vector) {
 		return
 	}
+	// C-002: probeError can carry credentials (a failed connection echoes the
+	// URI). It is redacted at the origin in probeBootCapabilities; redacting
+	// again here keeps the thrown boot-refusal message safe even when a
+	// direct caller passes an unredacted probe report.
 	throw new Error(
 		probeError
-			? `${REQUIRE_VECTOR_FAILURE_MESSAGE} Capability probe failed: ${probeError}`
+			? `${REQUIRE_VECTOR_FAILURE_MESSAGE} Capability probe failed: ${redactSensitiveText(probeError)}`
 			: REQUIRE_VECTOR_FAILURE_MESSAGE,
 	)
 }
@@ -112,9 +121,13 @@ export async function probeBootCapabilities(
 	try {
 		return { lanes: deriveSearchLanes(await probe()) }
 	} catch (err) {
+		// C-002: the probe error can echo the connection URI (or other
+		// credentials). The message flows into the boot capability table
+		// (console.log — no formatErrorMessage boundary) and into the strict
+		// boot-refusal throw, so it must be redacted at the origin.
 		return {
 			lanes: deriveSearchLanes(null),
-			probeError: err instanceof Error ? err.message : String(err),
+			probeError: formatErrorMessage(err),
 		}
 	}
 }

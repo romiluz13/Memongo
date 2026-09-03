@@ -108,7 +108,13 @@ export class MemongoClientError extends Error {
 			message ??
 				(envelope.message
 					? `Memongo API ${status}${envelope.code ? ` ${envelope.code}` : ""}: ${envelope.message}`
-					: `Memongo API ${status}: ${body || "(empty)"}`),
+					: // C-002: non-envelope bodies come from proxies and raw 500s
+						// that can echo request content (queries, credentials).
+						// The message stays structural; the raw body remains
+						// available on the `body` property for programmatic use.
+						body
+						? `Memongo API ${status} (non-JSON body, ${body.length} bytes)`
+						: `Memongo API ${status} (empty body)`),
 		)
 		this.name = "MemongoClientError"
 		this.status = status

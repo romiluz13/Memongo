@@ -588,7 +588,7 @@ describe("MemongoClient error envelope (P1.3)", () => {
 		)
 	})
 
-	it("keeps the raw-text behavior for non-envelope bodies", async () => {
+	it("keeps non-envelope bodies off the error message (C-002)", async () => {
 		vi.stubGlobal(
 			"fetch",
 			vi.fn(async () => new Response("boom", { status: 500 })),
@@ -602,7 +602,36 @@ describe("MemongoClient error envelope (P1.3)", () => {
 		expect(err).toBeInstanceOf(MemongoClientError)
 		expect(err.code).toBeUndefined()
 		expect(err.apiMessage).toBeUndefined()
-		expect(err.message).toBe("Memongo API 500: boom")
+		// The message is structural; raw proxy/500 bodies (which can echo
+		// request content) stay on the property, never on the message.
+		expect(err.message).toBe("Memongo API 500 (non-JSON body, 4 bytes)")
+		expect(err.body).toBe("boom")
+	})
+
+	it("never lets a credential-bearing non-envelope body reach the message (C-002)", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(
+				() =>
+					new Response(
+						["upstream echo: ", "apiKey", "=dummy-", "token-00000000"].join(""),
+						{
+							status: 502,
+						},
+					),
+			),
+		)
+
+		const client = new MemongoClient({ baseUrl: "http://127.0.0.1:3100" })
+		const err = (await client
+			.status()
+			.catch((e: unknown) => e)) as MemongoClientError
+
+		expect(err).toBeInstanceOf(MemongoClientError)
+		expect(err.message).toBe("Memongo API 502 (non-JSON body, 42 bytes)")
+		expect(err.message).not.toContain("apiKey")
+		// The raw body is still programmatically available when needed.
+		expect(err.body).toContain("apiKey")
 	})
 })
 

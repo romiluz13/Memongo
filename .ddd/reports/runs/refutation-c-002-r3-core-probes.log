@@ -1,0 +1,47 @@
+# [hygiene 2026-09-03] Credential-shaped spans in captured probe output
+# were replaced with bracketed shape descriptors ([uri-userinfo],
+# [key-assignment], [auth-header], ...) so secret scanners stay clear of
+# this evidence log; masked-output spans carry a :*** suffix. Vector
+# names, leak flags, verdicts, and line ordering are unchanged from the
+# original capture; only the shape-bearing bytes inside them were
+# substituted.
+=== classifier exotic payloads ===
+{"name":"ipv6 password URI","payload":"[uri-userinfo][2001:db8::1]/memongo","out":"[uri-userinfo:***][2001:db8::1]/memongo","leakedPass":false,"leakedTail":false}
+{"name":"userinfo without password","payload":"redis://dummy-pass-001@[::1]:6379/0","out":"redis://dummy-pass-001@[::1]:6379/0","leakedPass":true,"leakedTail":false}
+{"name":"quoted multiword assignment","payload":"password=\"dummy-pass-001 dummy-pass-002\"","out":"password=\"dummy-pass-001 dummy-pass-002\"","leakedPass":true,"leakedTail":true}
+{"name":"unicode-obfuscated assignment","payload":"api​Key=dummy-pass-001","out":"api​Key=***","leakedPass":false,"leakedTail":false}
+=== subsystem logger boundary ===
+02:27:42.316 [refute] warn: driver failed [key-assignment] dummy-pass-002" {"uri":"redis://dummy-pass-001@[::1]:6379/0"}
+{"loggerLeakedPass":true,"loggerLeakedTail":true}
+=== queryFailureMeta variants ===
+{"name":"case-folded full","query":"MySecretSearchTerm","echo":"mysecretsearchterm","error":"driver echoed: [query:fe2134ec7f98]","leakedEcho":false}
+{"name":"whitespace/split","query":"My Secret Search Term","echo":"my ... Secret\tSearch -- Term","error":"driver echoed: [query:9bae34251a91]","leakedEcho":false}
+{"name":"whole-word prefix","query":"purge the orphaned episodes before friday","echo":"purge the orphaned","error":"driver echoed: [query:c3d6a462d26c]","leakedEcho":false}
+{"name":"long single full","query":"dummyprojectname0000000","echo":"dummyprojectname0000000","error":"driver echoed: [query:54df911ee8da]","leakedEcho":false}
+{"name":"single-token truncated prefix","query":"dummyprojectname0000000","echo":"dummyprojectname000","error":"driver echoed: dummyprojectname000","leakedEcho":true}
+{"name":"single-token middle fragment","query":"dummyprojectname0000000","echo":"projectname000","error":"driver echoed: projectname000","leakedEcho":true}
+{"name":"gap over bound","query":"My Secret Search Term","echo":"My ................................. Secret Search Term","error":"driver echoed: My ................................. [query:9bae34251a91]","leakedEcho":false}
+=== planner catch integration, truncated single-token echo ===
+02:27:42.323 [memory:mongodb:planner] error: planRetrieval failed {"queryLength":29,"queryDigest":"4112a10a9c56","error":"driver echoed dummyprojectname000"}
+{"plannerLeakedTruncatedEcho":true,"plannerAliased":false}
+=== searchV2 exact outer catch seam ===
+02:27:42.411 [memory:mongodb:planner] error: planRetrieval failed {"queryLength":28,"queryDigest":"26208f33df4c","error":"driver echoed: [query:26208f33df4c]"}
+02:27:42.412 [memory:mongodb] error: searchV2 failed {"queryLength":28,"queryDigest":"26208f33df4c","error":"driver echoed: [query:26208f33df4c]"}
+{"outerRawQueryLeaked":false,"outerAliased":true}
+=== searchV2 swallowed inner diagnostic ===
+02:27:42.412 [memory:mongodb] warn: Failed to load lane coverage for planner {"error":"database diagnostic echoed inner diagnostic raw query xqzzy","agentId":"agent"}
+{"innerRawQueryLeaked":true,"innerAliased":false}
+=== capabilities normal chain and direct formatter ===
+{"normalTable":"memongo-api search capability lanes:\n  hybrid:  unavailable\n  vector:  unavailable\n  keyword: unavailable\n  text:    available (standard $text fallback)\n  DEGRADED: queries on unavailable lanes silently fall back to $text\n  capability probe failed: probe failed at [uri-userinfo:***][2001:db8::1]/memongo","normalLeaked":false}
+{"enforceMessage":"MEMONGO_REQUIRE_VECTOR is set but vector search is not available on this MongoDB deployment (serving vector index missing or not queryable). Refusing to boot. Capability probe failed: direct failed at [uri-userinfo:***][2001:db8::1]/memongo","enforceLeaked":false}
+{"directTable":"memongo-api search capability lanes:\n  hybrid:  unavailable\n  vector:  unavailable\n  keyword: unavailable\n  text:    available (standard $text fallback)\n  DEGRADED: queries on unavailable lanes silently fall back to $text\n  capability probe failed: direct failed at [uri-userinfo][2001:db8::1]/memongo","directFormatterLeaked":true}
+{"directLogTable":"memongo-api search capability lanes:\n  hybrid:  unavailable\n  vector:  unavailable\n  keyword: unavailable\n  text:    available (standard $text fallback)\n  DEGRADED: queries on unavailable lanes silently fall back to $text\n  capability probe failed: direct failed at [uri-userinfo][2001:db8::1]/memongo","directLoggerLeaked":true}
+=== client error body ===
+{"message":"Memongo API 502 (non-JSON body, 67 bytes)","body":"proxy failed [uri-userinfo][2001:db8::1]/memongo","messageLeaked":false,"bodyContainsRaw":true}
+=== API error envelope ===
+{"envelope":{"error":{"code":"REFUTE","message":"request failed at [uri-userinfo][2001:db8::1]/memongo"}},"envelopeLeaked":true}
+{"level":"error","msg":"request failed","requestId":"req-refute","code":"INTERNAL","method":"GET","path":"/v1/refute","error":{"name":"Error","message":"internal failed at [uri-userinfo:***][2001:db8::1]/memongo","stack":"Error: internal failed at [uri-userinfo:***][2001:db8::1]/memongo\n    at /private/tmp/refute-r3/core-probes.ts:115:39\n    at asyncModuleEvaluation (native:2)"}}
+{"internalLogLeaked":false}
+=== client registry alias ===
+02:27:42.414 [memory:mongodb-client-registry] warn: failed to close shared MongoDB client (shared-client-dc0b38db): close failed at [uri-userinfo:***][2001:db8::1]/memongo
+{"registryRawUriLeaked":false,"registryHasAlias":true}

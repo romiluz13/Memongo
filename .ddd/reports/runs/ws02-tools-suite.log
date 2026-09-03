@@ -1,0 +1,54 @@
+# WS-02 C-002 final-state suite run: packages/tools (shape-free assembly rework)
+# Run: cd packages/tools && bunx vitest run
+# Date: 2026-09-03T08:57:20Z
+
+ RUN  v4.1.10 /Users/rom.iluz/Dev/memongo/packages/tools
+
+ ✓ src/cache-identity.test.ts (10 tests) 6ms
+ ✓ src/memory-context.test.ts (4 tests) 2ms
+ ✓ src/middleware-core.test.ts (3 tests) 19ms
+stderr | src/openai/index.test.ts > createOpenAIMiddleware (OpenAI SDK middleware) > #29: quarantines an injection payload from retrieved memory
+[memongo] capture failed; suppressing further warnings for this middleware instance (pass onError to observe every failure): Body is unusable: Body has already been read
+
+stderr | src/openai/index.test.ts > createOpenAIMiddleware (OpenAI SDK middleware) > injects system message before create call
+[memongo] capture failed; suppressing further warnings for this middleware instance (pass onError to observe every failure): Body is unusable: Body has already been read
+
+stderr | src/openai/index.test.ts > createOpenAIMiddleware (OpenAI SDK middleware) > saves assistant response as event after create
+[memongo] capture failed; suppressing further warnings for this middleware instance (pass onError to observe every failure): Body is unusable: Body has already been read
+
+stderr | src/openai/index.test.ts > createOpenAIMiddleware (OpenAI SDK middleware) > P1.5: routes context retrieval through @memongo/client (no hand-rolled fetch)
+[memongo] capture failed; suppressing further warnings for this middleware instance (pass onError to observe every failure): Body is unusable: Body has already been read
+
+ ✓ src/openai/index.test.ts (5 tests) 78ms
+ ✓ src/index.test.ts (7 tests) 5ms
+stderr | src/vercel/index.test.ts > withMemongo (Vercel AI SDK middleware) > injects memory context into the system prompt
+[memongo] capture failed; suppressing further warnings for this middleware instance (pass onError to observe every failure): Body is unusable: Body has already been read
+
+stderr | src/vercel/index.test.ts > withMemongo (Vercel AI SDK middleware) > #29: quarantines an injection payload from retrieved memory (does not inject it as a raw system instruction)
+[memongo] capture failed; suppressing further warnings for this middleware instance (pass onError to observe every failure): Body is unusable: Body has already been read
+
+stderr | src/vercel/index.test.ts > withMemongo (Vercel AI SDK middleware) > saves user and assistant messages as events after generate
+[memongo] capture failed; suppressing further warnings for this middleware instance (pass onError to observe every failure): Body is unusable: Body has already been read
+
+stderr | src/vercel/index.test.ts > withMemongo (Vercel AI SDK middleware) > uses LRU cache on second identical call
+[memongo] capture failed; suppressing further warnings for this middleware instance (pass onError to observe every failure): Body is unusable: Body has already been read
+
+stderr | src/vercel/index.test.ts > withMemongo (Vercel AI SDK middleware) > uses wake-up mode by default when no user query is present
+[memongo] capture failed; suppressing further warnings for this middleware instance (pass onError to observe every failure): Body is unusable: Body has already been read
+
+stderr | src/vercel/index.test.ts > withMemongo (Vercel AI SDK middleware) > gracefully degrades when API returns 500
+[memongo] inject failed; suppressing further warnings for this middleware instance (pass onError to observe every failure): Memongo API 500 (non-JSON body, 21 bytes)
+
+stderr | src/vercel/index.test.ts > withMemongo (Vercel AI SDK middleware) > gracefully degrades when fetch throws (network error)
+[memongo] inject failed; suppressing further warnings for this middleware instance (pass onError to observe every failure): ECONNREFUSED
+
+stderr | src/vercel/index.test.ts > withMemongo (Vercel AI SDK middleware) > upgrades to full mode when user query is present
+[memongo] capture failed; suppressing further warnings for this middleware instance (pass onError to observe every failure): Body is unusable: Body has already been read
+
+ ✓ src/vercel/index.test.ts (19 tests) 242ms
+
+ Test Files  6 passed (6)
+      Tests  48 passed (48)
+   Start at  11:56:02
+   Duration  575ms (transform 302ms, setup 0ms, import 606ms, tests 352ms, environment 1ms)
+

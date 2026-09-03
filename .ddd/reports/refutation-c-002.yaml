@@ -1,0 +1,323 @@
+# Independent refutation report for T3 claim C-002
+# ("Secrets MUST be redacted at the logging boundary: the client registry MUST
+# log a redacted alias instead of the raw URI, the redactSensitiveText utility
+# MUST be wired into the subsystem logger and the API error envelope, and no
+# diagnostic path may emit raw credentials, connection strings, or raw query
+# text.")
+claim_id: C-002
+verdict: sustained
+independence_verified: true
+refuter_id: "factory-droid worker subagent, C-002 independent refuter (same refuter across all three rounds; did not author or apply any implementation)"
+implementer_id: "factory-droid primary agent, WS-02 implementer"
+refuted_rounds: 2
+sustained_rounds: 1
+attempt_log_dir: .ddd/reports/runs/
+
+attempts:
+  - id: attempt-1-vacuity
+    description: >
+      Mutate each central defense and require its focused tests to fail:
+      neutralize logger formatLine redaction, return the raw URI from
+      uriAlias, remove API internalError redaction, inject the raw query into
+      queryFailureMeta, neutralize redactQueryEcho, and replace its safe alias
+      target with the raw query.
+    round_1_outcome: caught
+    round_1_detail: >
+      Logger mutation failed 2/4 tests; registry alias mutation failed 2/12;
+      API mutation failed 3/6; raw query injection failed the helper test.
+      The 54 planner tests remained green under the raw-query helper mutation,
+      demonstrating that the planner catch seam was not pinned in round 1.
+      Every source mutation was restored with cmp exit 0.
+    round_2_outcome: caught
+    round_2_detail: >
+      Neutralizing redactQueryEcho failed 3/7 tests, including the planner
+      seam; replacing the safe alias with the raw query also failed 3/7.
+      Both mutations were restored with cmp exit 0 and identical before/after
+      sha256 deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef.
+    evidence: >
+      refutation-c-002-a1-logger-vacuity.log,
+      refutation-c-002-a2-registry-vacuity.log,
+      refutation-c-002-a3-api-vacuity.log,
+      refutation-c-002-a4-query-vacuity.log;
+      round 2: refutation-c-002-r2-vacuity-noop.log,
+      refutation-c-002-r2-vacuity-alias.log;
+      round 3: refutation-c-002-r3-vacuity-redact.log,
+      refutation-c-002-r3-vacuity-query.log,
+      refutation-c-002-r3-tree-hygiene.log,
+      refutation-c-002-r3-focused-tests.log
+    round_3_outcome: caught
+    round_3_detail: >
+      Both central defenses re-mutated to immediate no-op returns: the
+      redactSensitiveText mutation failed 21/31 lib redact tests and the
+      redactQueryEcho mutation failed 11/16 query-diagnostics tests
+      (vitest exit 1 each). Both restores were byte-identical (cmp exit 0;
+      redact.ts sha256 deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef
+      and query-diagnostics.ts sha256 deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef
+      before and after). The focused batteries are non-vacuous against their
+      defenses.
+
+  - id: attempt-2-declared-credential-surfaces
+    description: >
+      Drive credential-bearing failures through the shared-client registry,
+      API internalError path (message and stack), MCP HTTP handler, tools
+      middleware default warning, and subsystem logger serialized metadata.
+    round_1_outcome: caught
+    round_1_detail: >
+      All five focused real-code probes passed; their captured diagnostics
+      excluded the seeded credentials and client envelopes stayed generic.
+    round_2_outcome: caught
+    round_2_detail: >
+      Representative probes were repeated unchanged after the query fix and
+      all five remained green. The restored-tree focused controls also passed.
+    evidence: >
+      refutation-c-002-b-credential-surfaces.log;
+      round 2: refutation-c-002-r2-credential-regression.log,
+      refutation-c-002-r2-focused-controls.log;
+      round 3: refutation-c-002-r3-post-fix-probes.log
+    round_3_outcome: caught
+    round_3_detail: >
+      The declared surfaces re-probed post-fix through real code: registry
+      close-failure warns carry the shared-client-<sha256-8> alias with no raw
+      URI, the subsystem logger line and its serialized meta are redacted,
+      the API error envelope excludes the seeded URI, the client error
+      message is structural, and the tools middleware default warn is
+      redacted. The post-fix re-probe asserts non-empty sink capture (every
+      console method patched) so the checks cannot pass vacuously.
+
+  - id: attempt-3-query-echo
+    description: >
+      Drive planRetrieval and searchV2 catch paths with downstream failures
+      that echo the query, then attack the replacement with case changes,
+      whitespace normalization, inserted segment delimiters, truncation,
+      larger-word embedding, and short queries.
+    round_1_outcome: refuted
+    round_1_detail: >
+      Both real catch paths emitted the complete verbatim query
+      "SEARCH-NEEDLE-xyzzy SELECT secret" through QueryFailureMeta.error.
+    round_2_outcome: refuted
+    round_2_detail: >
+      The exact original echo is now replaced by [query:<12-hex>] in both
+      planner and searchV2. Exact echoes embedded in larger words are also
+      replaced. However, the defense is exact-string-only: a case-folded
+      query, whitespace-normalized query, query split by a segment marker,
+      and a meaningful 41-character truncation all survived in full through
+      the real planner logging seam. These are recognizable user query
+      content, not harmless fragments, so the claim's unqualified prohibition
+      on raw query text/content is not sustained.
+    evidence: >
+      refutation-c-002-c-query-surface.log;
+      round 2: refutation-c-002-r2-query-attacks.log (superseded harness),
+      refutation-c-002-r2-query-attacks2.log;
+      round 3: refutation-c-002-r3-vacuity-query.log,
+      refutation-c-002-r3-focused-tests.log
+    round_3_outcome: caught
+    round_3_detail: >
+      The defense is no longer exact-string-only: redactQueryFragments
+      replaces case-folded, whitespace-mangled, separator-split, truncated-
+      prefix, middle-fragment, long-single-word, mid-word, and re-segmented
+      echoes of the query, and the query-diagnostics battery pins each
+      variant individually (19 tests) plus the planner catch seam, the
+      searchV2 funnel catch seam, and the lane-coverage inner-warn seam.
+      The short-fragment guard is pinned at its exact four-character floor.
+      The vacuity mutation of redactQueryEcho failed 11/16 tests.
+
+  - id: attempt-4-redaction-classifier-bypass
+    description: >
+      Pass an unusual-scheme credentials-bearing connection string, a bare
+      random-hex API key, a credential-bearing URL path, and a custom
+      authentication-header value through both redactSensitiveText and the
+      real subsystem logger.
+    round_1_outcome: not_run
+    round_1_detail: >
+      Deferred because round 1 stopped immediately after the query-echo
+      refutation, as required.
+    round_2_outcome: refuted
+    round_2_detail: >
+      Every value survived unchanged in both utility output and subsystem-log
+      output. The bare random hex value is intrinsically ambiguous and is only
+      a hardening observation. The PostgreSQL credentials-bearing URI,
+      credential-bearing webhook path, and X-Custom-Auth value are explicit
+      credential/connection-string classes, so they contradict C-002's broad
+      "no diagnostic path may emit raw credentials, connection strings"
+      language. EL-007 itself only prescribed MongoDB registry URI redaction;
+      this also shows that C-002 overstates that narrower normative source.
+    evidence: >
+      round 2: refutation-c-002-r2-classifier-bypass.log;
+      round 3: refutation-c-002-r3-core-probes.log,
+      refutation-c-002-r3-post-fix-probes.log
+    round_3_outcome: caught
+    round_3_detail: >
+      Pre-fix, the refuter's exotic payloads leaked: username-only userinfo
+      (redis://dummy-pass-001@[::1]:6379/0 survived in full) and the quoted
+      multiword assignment (password="dummy-pass-001 dummy-pass-002"
+      survived in full). Post-fix, the classifier stars username-only
+      userinfo in full, masks quoted and escaped-quoted multiword
+      assignments, truncates webhook and credential-path URLs to the host,
+      masks X-Custom-Auth values, and full-stars long passwords; the lib
+      battery grew to 40 tests pinning each shape, and the post-fix re-probe
+      runs all of them through the real code paths. One additional variant
+      the refuter did not try was surfaced by the implementer's own
+      post-fix re-probe and closed before landing: an assignment riding
+      inside a JSON-serialized meta value has its quotes escaped
+      (password=\"two words\"), and the value alternatives needed optional
+      backslash tolerance or the pair survived raw. Pinned in the lib,
+      logger, and pi batteries.
+
+  - id: attempt-5-missed-diagnostic-sites
+    description: >
+      Sweep production packages/apps for diagnostics bypassing the shared
+      redaction boundary, inspect MemongoClientError raw-body propagation,
+      and drive reachable API boot and Pi lifecycle warning paths.
+    round_1_outcome: not_run
+    round_1_detail: >
+      Deferred because round 1 stopped immediately after the query-echo
+      refutation, as required.
+    round_2_outcome: refuted
+    round_2_detail: >
+      apps/api/src/lib/capabilities.ts preserves a failed capability probe's
+      raw message and logCapabilityTable emits it directly. A real probe
+      failure containing a MongoDB URI exposed dummy-cred-00000 and
+      SEARCH-NEEDLE-boot-private-query once each. Independently,
+      packages/client/src/client.ts embeds a raw non-envelope response body in
+      MemongoClientError.message; packages/pi-extension/extensions/lifecycle.ts
+      forwards that message to its default console.warn. A real client with a
+      stubbed 500 response exposed dummy-cred-0000-0000 twice in the Pi
+      warning. Both are production-reachable diagnostic paths.
+    evidence: >
+      round 2: refutation-c-002-r2-diagnostic-sweep.log,
+      refutation-c-002-r2-missed-api-diagnostic.log,
+      refutation-c-002-r2-pi-diagnostic.log (direct-error probe),
+      refutation-c-002-r2-pi-diagnostic2.log,
+      refutation-c-002-r2-client-pi-chain.log (superseded harness),
+      refutation-c-002-r2-client-pi-chain2.log;
+      round 3: refutation-c-002-r3-core-probes.log,
+      refutation-c-002-r3-pi-probes.log,
+      refutation-c-002-r3-post-fix-probes.log
+    round_3_outcome: caught
+    round_3_detail: >
+      Pre-fix, the refuter re-demonstrated the round-2 leaks live: the API
+      boot capability table rendered a probe error carrying the seeded
+      MongoDB URI (envelopeLeaked true), the API error envelope carried the
+      raw URI, MemongoClientError embedded the raw non-envelope 502 body and
+      the pi lifecycle warn forwarded a quoted multiword assignment
+      (lifecycleLeakedPass and lifecycleLeakedTail true), and the extension's
+      main diagnostic emitted the raw URI from the client chain. Post-fix:
+      formatCapabilityTable redacts the probe error at the render boundary
+      (12-test battery), apiErrorJson wraps the envelope message, the client
+      message is structural for non-JSON bodies with the raw body retained
+      on .body for programmatic use, and the extension funnels every warn
+      and tool response through the sanitizeDiagnostic/errMessage choke
+      point (12-test battery, parity-pinned with the lib shapes). The
+      post-fix re-probe drives each of these through real code and is clean.
+
+  - id: attempt-6-threshold-and-alias-spoof
+    description: >
+      Exercise the deliberate 1-3 character guard and inject a pre-existing
+      [query:<12-hex>] token beside a genuine query echo.
+    round_1_outcome: not_run
+    round_1_detail: >
+      These attacks target the round-2 implementation.
+    round_2_outcome: caught_with_observations
+    round_2_detail: >
+      A three-character query ("pwd") survives in the real planner log by
+      design. EL-007 is scoped to the registry's credentials-bearing MongoDB
+      URI and says nothing about query fragments; three characters provide
+      negligible content, so this is non-blocking. A literal
+      [query:deadbeef0000] survives beside the true digest alias, allowing
+      correlation spoofing but not disclosure; this is low-severity
+      observability hardening, not a C-002 confidentiality refutation.
+    evidence: >
+      round 2: refutation-c-002-r2-query-attacks2.log;
+      round 3: refutation-c-002-r3-focused-tests.log
+    round_3_outcome: caught_with_observations
+    round_3_detail: >
+      Not re-attacked with new payloads in round 3 (the round focused on the
+      newly discovered surfaces); the round-2 observations stand with their
+      status now explicit in pinned tests: the short-fragment guard is
+      pinned at its exact four-character floor and full-query echoes down to
+      four characters are replaced, while alias-shaped attacker text can
+      still spoof log correlation without disclosing protected content. Low
+      severity, observability-only, non-blocking.
+
+fix_applied_between_rounds: >
+  The implementer added redactQueryEcho to queryFailureMeta. It computes the
+  existing twelve-hex SHA-256 digest once and replaces every exact occurrence
+  of both the verbatim query and redactSensitiveText(query) in formatted error
+  detail with [query:<digest>], except variants whose trimmed length is under
+  four. Unit tests now cover exact and credential-redacted echoes, the short
+  guard, and the planner catch seam. The original round-1 verbatim attack is
+  blocked in both planner and searchV2.
+
+fix_applied_round_3: >
+  After the round-2 refutation the implementer landed fixes A-F: (A) the
+  API capability-table render boundary redacts the probe error via
+  formatErrorMessage; (B) the classifier's assignment value alternatives
+  capture quoted multiword values; (C) webhook and credential-path URL
+  patterns truncate to the host; (D) long passwords full-star and
+  username-only userinfo stars the username; (E) MemongoClientError carries
+  a structural message for non-JSON bodies with the raw body on .body; (F)
+  the pi-extension funnels lifecycle warns and tool responses through a new
+  sanitizeDiagnostic/errMessage choke point, parity-pinned with the lib
+  battery. Two further defects found while landing were repaired the same
+  session and pinned: the classifier's userinfo branch dispatch silently
+  fell into a fallback when its source-string prefix probe failed (now
+  bound by pattern identity via indexOf on the const regexes), and the
+  escaped-quote serialized-meta gap described under attempt 4.
+
+conclusion: >
+  Verdict: sustained. Round 1 refuted the claim (registry raw-URI logging,
+  verbatim query echo) and round 2 refuted it again (exact-string-only query
+  defense, classifier bypasses on explicit credential and connection-string
+  classes, and five unwired diagnostic boundaries). The round-3 attacks
+  found no counterexample that survives the landed tree: every declared and
+  newly wired boundary excludes the seeded credentials and raw query text
+  through real-code probes, the query defense replaces every echo variant
+  the refuter demonstrated (verbatim, credential-redacted, case-folded,
+  whitespace-mangled, separator-split, truncated, fragmented, re-segmented),
+  the vacuity mutations fail their focused batteries, and the post-fix
+  re-probe is clean across all vectors with non-empty capture asserted. The
+  residual observations are observability-only (alias-shaped correlation
+  spoofing, the four-character fragment floor) and are recorded as
+  non-blocking below. One additional classifier variant (escaped-quoted
+  assignments inside serialized meta) was surfaced by the implementer's own
+  post-fix re-probe rather than the independent refuter; it was fixed and
+  pinned in the lib, logger, and pi batteries before landing.
+
+tree_hygiene: >
+  All round-1 and round-2 scratch source mutations were restored
+  byte-identically (cmp exit 0). query-diagnostics.ts sha256 was
+  deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef
+  before and after both round-2 vacuity mutations. Every temporary probe file
+  was removed and verified absent. No git-mutating commands were run. The only
+  intended persistent round-2 additions are this report and
+  refutation-c-002-r2-*.log evidence files under .ddd/reports/runs/. Round 3:
+  both vacuity mutations were restored byte-identically (cmp exit 0;
+  redact.ts sha256 deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef,
+  query-diagnostics.ts sha256 deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef,
+  both stable before and after, recorded in
+  refutation-c-002-r3-tree-hygiene.log). The implementer's post-fix probe
+  script lives under /tmp and is removed after evidence capture; the
+  intended persistent round-3 additions are the
+  refutation-c-002-r3-*.log evidence files and this report update.
+
+non_blocking_observations: >
+  The searchV2 outer catch is not pinned by a dedicated test file, although
+  source inspection and the round-2 live probe confirm it imports and calls
+  the same queryFailureMeta helper as planRetrieval. The three-character echo
+  guard is documented and low-information. Alias-shaped attacker text can
+  spoof log correlation but does not disclose protected content. The bare
+  random-hex classifier miss is ambiguous without external knowledge that it
+  is a key. Static bind/listening warnings are safe. Subsystem logger call
+  sites inherit the central classifier and therefore are safe only for its
+  recognized classes. The first planner and real-client/Pi probe harnesses did
+  not reach their intended paths; corrected reruns are explicitly identified
+  above and both superseded logs are retained for auditability. Round 3 adds
+  two methodology observations: a boundary check that patches only one
+  console method can pass vacuously when the boundary writes through another
+  (the error level writes via console.error), so probes must patch every
+  sink and assert non-empty capture — the first post-fix re-probe version
+  learned this the hard way and the final version encodes it; and the
+  classifier's completeness is pinned only against demonstrated shapes, so
+  the escaped-quoted-assignment variant surfaced by the implementer's
+  re-probe is now part of the battery, and future variants should follow the
+  same extend-and-pin path rather than assuming completeness.

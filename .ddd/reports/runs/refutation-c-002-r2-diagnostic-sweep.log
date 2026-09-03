@@ -1,0 +1,312 @@
+COMMAND: rg production packages/apps for direct console/process diagnostic writes and error/query/URI interpolation, then inspect client raw-body errors and Pi warnings
+
+=== DIRECT CONSOLE OR PROCESS WRITES ===
+packages/lib/src/bind-guard.ts:83:		console.warn(
+packages/memory-engine/src/embedding-validation.ts:212:				console.warn(
+packages/lib/src/logger.ts:76:		console.error(line)
+packages/lib/src/logger.ts:78:		console.warn(line)
+packages/lib/src/logger.ts:82:		console.log(line)
+packages/pi-extension/extensions/lifecycle.ts:248:	const warn = deps.warn ?? ((message: string) => console.warn(message))
+packages/tools/src/middleware-core.ts:24: *   ONE console.warn is emitted per middleware instance (not per request).
+packages/tools/src/middleware-core.ts:54:	 * instead. When omitted, ONE default `console.warn` is emitted per
+packages/tools/src/middleware-core.ts:128:		console.warn(
+apps/docs/quickstart.mdx:91:console.log(results);
+apps/mcp/src/http-transport.ts:101:		console.error(
+apps/mcp/src/http-transport.ts:106:		console.error(
+apps/mcp/src/http-transport.ts:167:			console.error(
+apps/mcp/src/http-transport.ts:189:	console.error(
+apps/mcp/src/server.ts:1241:		console.error(err)
+apps/api/src/server.ts:26:	console.error(err instanceof Error ? err.message : String(err))
+apps/api/src/server.ts:33:console.log(
+apps/api/src/server.ts:58:		console.error(err instanceof Error ? err.message : String(err))
+apps/api/src/server.ts:74:	console.error(`memongo-api listening on http://${info.address}:${info.port}`)
+apps/api/src/lib/errors.ts:69:	console.error(
+apps/api/src/lib/capabilities.ts:71:	log: (message: string) => void = (message) => console.log(message),
+apps/api/src/app.ts:482:				console.error(
+apps/api/src/app.ts:489:				console.error(
+apps/api/src/app.ts:648:			console.warn(
+
+=== ERROR INTERPOLATION INTO LOGGER ===
+packages/pi-extension/extensions/lifecycle.ts:141:	return err instanceof Error ? err.message : String(err)
+packages/pi-extension/extensions/index.ts:121:	return err instanceof Error ? err.message : String(err)
+apps/api/src/server.ts:26:	console.error(err instanceof Error ? err.message : String(err))
+apps/api/src/server.ts:58:		console.error(err instanceof Error ? err.message : String(err))
+apps/api/src/routes/v1-helpers.ts:279:	const message = error instanceof Error ? error.message : String(error)
+apps/api/src/routes/v1-helpers.ts:292:	const message = error instanceof Error ? error.message : String(error)
+apps/api/src/routes/v1-write-routes.ts:90:			const message = err instanceof Error ? err.message : String(err)
+apps/api/src/routes/v1-write-routes.ts:189:			const message = err instanceof Error ? err.message : String(err)
+apps/api/src/routes/v1-write-routes.ts:404:			const message = err instanceof Error ? err.message : String(err)
+apps/api/src/lib/capabilities.ts:117:			probeError: err instanceof Error ? err.message : String(err),
+apps/api/src/routes/v1-search-routes.ts:135:			const message = err instanceof Error ? err.message : String(err)
+apps/api/src/routes/v1-search-routes.ts:168:			const message = err instanceof Error ? err.message : String(err)
+apps/api/src/lib/readiness.ts:51:				err instanceof Error ? err.message : String(err),
+apps/api/src/routes/v1-maintenance-routes.ts:129:			const message = err instanceof Error ? err.message : String(err)
+apps/api/src/lib/errors.ts:87:					: redactSensitiveText(String(err)),
+packages/memory-bridge/src/memongo-bridge.ts:714:			message: err instanceof Error ? err.message : String(err),
+packages/lib/src/errors.ts:36:		formatted = String(err)
+apps/mcp/src/server.ts:1216:		const message = err instanceof Error ? err.message : String(err)
+apps/mcp/src/http-transport.ts:92:			`${error instanceof Error ? error.message : String(error)}\n` +
+packages/memory-engine/src/mongodb-conversation-import.ts:195:			const error = err instanceof Error ? err.message : String(err)
+packages/memory-engine/src/mongodb-conversation-import.ts:280:					error: err instanceof Error ? err.message : String(err),
+packages/memory-engine/src/mongodb-schema-validators.ts:215:			const msg = err instanceof Error ? err.message : String(err)
+packages/memory-engine/src/mongodb-episodes.ts:434:			`materializeEpisode failed: ${err instanceof Error ? err.message : String(err)}`,
+packages/memory-engine/src/mongodb-episodes.ts:486:			`getEpisodesByTimeRange failed: ${err instanceof Error ? err.message : String(err)}`,
+packages/memory-engine/src/mongodb-episodes.ts:525:			`getEpisodesByType failed: ${err instanceof Error ? err.message : String(err)}`,
+packages/memory-engine/src/mongodb-episodes.ts:604:				`searchEpisodes $search failed, falling back to regex: ${err instanceof Error ? err.message : String(err)}`,
+packages/memory-engine/src/mongodb-episodes.ts:640:			`searchEpisodes failed: ${err instanceof Error ? err.message : String(err)}`,
+packages/memory-engine/src/mongodb-episodes.ts:667:			`updateEpisodeStatus failed: ${err instanceof Error ? err.message : String(err)}`,
+packages/memory-engine/src/mongodb-episodes.ts:701:			`getEpisodesByIds failed: ${err instanceof Error ? err.message : String(err)}`,
+packages/memory-engine/src/mongodb-episodes.ts:899:			`checkAutoEpisodeTriggers failed: ${err instanceof Error ? err.message : String(err)}`,
+packages/memory-engine/src/mongodb-llm-enrichment.ts:833:		message: String(err).slice(0, 500),
+packages/memory-engine/src/mongodb-manager-sync.ts:181:							error: err instanceof Error ? err.message : String(err),
+packages/memory-engine/src/mongodb-manager-sync.ts:222:					`extraction outbox repair failed for ${event.eventId}: ${String(err)}`,
+packages/memory-engine/src/mongodb-manager-sync.ts:283:			const msg = err instanceof Error ? err.message : String(err)
+packages/memory-engine/src/mongodb-manager-sync.ts:300:			const msg = err instanceof Error ? err.message : String(err)
+packages/memory-engine/src/mongodb-manager-sync.ts:315:			const msg = err instanceof Error ? err.message : String(err)
+packages/memory-engine/src/mongodb-manager-sync.ts:327:			const msg = err instanceof Error ? err.message : String(err)
+packages/memory-engine/src/mongodb-manager-sync.ts:387:			const msg = err instanceof Error ? err.message : String(err)
+packages/memory-engine/src/mongodb-manager-sync.ts:418:			log.warn(`file watcher error: ${String(err)}`)
+packages/memory-engine/src/mongodb-manager-sync.ts:430:				log.warn(`memory sync failed (watch): ${String(err)}`)
+packages/memory-engine/src/mongodb-schema-standard-indexes-operations.ts:183:		const msg = err instanceof Error ? err.message : String(err)
+packages/memory-engine/src/mongodb-schema-standard-indexes-operations.ts:200:		const msg = err instanceof Error ? err.message : String(err)
+packages/memory-engine/src/mongodb-schema-standard-indexes-operations.ts:436:			const msg = err instanceof Error ? err.message : String(err)
+packages/memory-engine/src/mongodb-embedding-retry.ts:68:			lastError = err instanceof Error ? err : new Error(String(err))
+packages/memory-engine/src/mongodb-consolidator.ts:383:				`enrichment provider resolution failed; LLM-dependent phases degrade: ${err instanceof Error ? err.message : String(err)}`,
+packages/memory-engine/src/mongodb-consolidator.ts:630:			`orient phase failed, continuing without stats: ${err instanceof Error ? err.message : String(err)}`,
+packages/memory-engine/src/mongodb-consolidator.ts:819:					`reasoning chain trace failed for event=${candidate.eventId}: ${String(err)}`,
+packages/memory-engine/src/mongodb-consolidator.ts:920:					`similarity check failed for event=${candidate.eventId}, defaulting to ADD: ${err instanceof Error ? err.message : String(err)}`,
+packages/memory-engine/src/mongodb-consolidator.ts:975:				`candidate processing failed for event=${candidate.eventId}: ${err instanceof Error ? err.message : String(err)}`,
+packages/memory-engine/src/mongodb-consolidator.ts:1027:			`entity extraction during consolidation failed (non-blocking): ${err instanceof Error ? err.message : String(err)}`,
+packages/memory-engine/src/mongodb-consolidator.ts:1135:							`inferred fact write failed during consolidation: ${err instanceof Error ? err.message : String(err)}`,
+packages/memory-engine/src/mongodb-consolidator.ts:1147:				`consolidation reasoning phases failed (non-blocking): ${err instanceof Error ? err.message : String(err)}`,
+packages/memory-engine/src/mongodb-consolidator.ts:1305:							`llm-dedup adjudication failed for fact=${factId}: ${err instanceof Error ? err.message : String(err)}`,
+packages/memory-engine/src/mongodb-consolidator.ts:1311:					`llm-dedup phase failed: ${err instanceof Error ? err.message : String(err)}`,
+packages/memory-engine/src/mongodb-consolidator.ts:1414:					`prune similarity check failed for fact=${String(fact._id)}: ${err instanceof Error ? err.message : String(err)}`,
+packages/memory-engine/src/mongodb-consolidator.ts:1420:			`prune phase failed: ${err instanceof Error ? err.message : String(err)}`,
+packages/memory-engine/src/mongodb-relation-extraction.ts:126:			error: err instanceof Error ? err.message : String(err),
+packages/memory-engine/src/mongodb-consolidation-adjudication.ts:188:			error: err instanceof Error ? err.message : String(err),
+packages/memory-engine/src/mongodb-consolidation-adjudication.ts:258:			error: err instanceof Error ? err.message : String(err),
+packages/memory-engine/src/mongodb-kb.ts:348:			const msg = err instanceof Error ? err.message : String(err)
+packages/memory-engine/src/mongodb-kb.ts:552:			const msg = err instanceof Error ? err.message : String(err)
+packages/memory-engine/src/mongodb-kb.ts:579:			const msg = err instanceof Error ? err.message : String(err)
+packages/memory-engine/src/mongodb-transactions.ts:28:	const message = error instanceof Error ? error.message : String(error)
+packages/memory-engine/src/mongodb-transactions.ts:44:	const message = error instanceof Error ? error.message : String(error)
+packages/memory-engine/src/mongodb-structured-memory.ts:1284:				`structured memory audit failed: ${err instanceof Error ? err.message : String(err)}`,
+packages/memory-engine/src/mongodb-structured-memory.ts:1488:			log.warn("structured memory invalidate audit failed", { error: err })
+packages/memory-engine/src/mongodb-structured-memory.ts:1608:		log.warn("structured memory feedback audit failed", { error: err })
+packages/memory-engine/src/mongodb-structured-memory.ts:1899:						log.warn("structured vector explain failed", { error: err })
+packages/memory-engine/src/mongodb-structured-memory.ts:1912:			const msg = err instanceof Error ? err.message : String(err)
+packages/memory-engine/src/mongodb-change-stream.ts:73:			const msg = err instanceof Error ? err.message : String(err)
+packages/memory-engine/src/mongodb-change-stream.ts:126:			const msg = err.message ?? String(err)
+packages/memory-engine/src/mongodb-change-stream.ts:155:			log.warn(`change stream ${event} without error, re-opening from now`)
+packages/memory-engine/src/mongodb-change-stream.ts:193:			const msg = err instanceof Error ? err.message : String(err)
+packages/memory-engine/src/mongodb-change-stream.ts:208:			const msg = err instanceof Error ? err.message : String(err)
+packages/memory-engine/src/mongodb-change-stream.ts:285:			const msg = err instanceof Error ? err.message : String(err)
+packages/memory-engine/src/mongodb-procedures.ts:877:		log.warn("procedure audit failed", { error: err })
+packages/memory-engine/src/mongodb-procedures.ts:1062:			log.warn("procedure invalidate audit failed", { error: err })
+packages/memory-engine/src/mongodb-procedures.ts:1195:		log.error("recordProcedureOutcome failed", { procedureId, error: err })
+packages/memory-engine/src/mongodb-procedures.ts:1377:		log.error("evolveProcedure failed", { procedureId, error: err })
+packages/memory-engine/src/mongodb-procedures.ts:1628:						log.warn("procedure vector explain failed", { error: err })
+packages/memory-engine/src/mongodb-procedures.ts:1640:			const msg = err instanceof Error ? err.message : String(err)
+packages/memory-engine/src/mongodb-procedures.ts:1698:			const msg = err instanceof Error ? err.message : String(err)
+packages/memory-engine/src/mongodb-derived-memory.ts:50:			`${params.context} projection run recording failed: ${err instanceof Error ? err.message : String(err)}`,
+packages/memory-engine/src/mongodb-derived-memory.ts:451:				`LLM structured extraction failed for ${event.eventId}, using regex only: ${String(err)}`,
+packages/memory-engine/src/mongodb-derived-memory.ts:764:				`structured candidate promotion failed for ${event.eventId} key=${candidate.key}: ${String(err)}`,
+packages/memory-engine/src/mongodb-derived-memory.ts:841:				`procedure candidate promotion failed for ${event.eventId} id=${candidate.procedureId}: ${String(err)}`,
+packages/memory-engine/src/mongodb-search-v2.ts:417:				error: err instanceof Error ? err.message : String(err),
+packages/memory-engine/src/mongodb-search-v2.ts:623:							log.warn(`searchV2 active-critical path failed: ${String(err)}`)
+packages/memory-engine/src/mongodb-search-v2.ts:645:							log.warn(`searchV2 structured path failed: ${String(err)}`)
+packages/memory-engine/src/mongodb-search-v2.ts:878:							log.warn(`searchV2 procedural path failed: ${String(err)}`)
+packages/memory-engine/src/mongodb-search-v2.ts:944:											`searchV2 hybrid chunks path failed: ${String(err)}`,
+packages/memory-engine/src/mongodb-search-v2.ts:990:											`searchV2 hybrid conversation path failed: ${String(err)}`,
+packages/memory-engine/src/mongodb-search-v2.ts:1037:											`searchV2 hybrid bridge path failed: ${String(err)}`,
+packages/memory-engine/src/mongodb-search-v2.ts:1101:											`searchV2 session_chunks path failed: ${String(err)}`,
+packages/memory-engine/src/mongodb-search-v2.ts:1168:												`searchV2 memory_evidence path failed: ${String(err)}`,
+packages/memory-engine/src/mongodb-search-v2.ts:1209:							log.warn(`searchV2 kb path failed: ${String(err)}`)
+packages/memory-engine/src/mongodb-search-v2.ts:1222:				log.error(`searchV2 path ${path} failed`, { error: pathErr })
+packages/memory-engine/src/mongodb-search-v2.ts:1252:					log.warn(`conversation evidence search failed: ${String(err)}`)
+packages/memory-engine/src/mongodb-search-v2.ts:1348:				log.warn(`searchV2 exact procedural backstop failed: ${String(err)}`)
+packages/memory-engine/src/mongodb-search-v2.ts:1387:				log.warn(`searchV2 procedural backstop failed: ${String(err)}`)
+packages/memory-engine/src/mongodb-search-v2.ts:1425:				log.warn(`searchV2 hybrid backstop failed: ${String(err)}`)
+packages/memory-engine/src/mongodb-search-v2.ts:1499:						log.warn(`temporal coverage search failed: ${String(err)}`)
+packages/memory-engine/src/mongodb-search-v2.ts:1538:						log.warn(`turn precision rerank failed: ${String(err)}`)
+packages/memory-engine/src/mongodb-manager-write.ts:165:				error: err instanceof Error ? err.message : String(err),
+packages/memory-engine/src/mongodb-manager-write.ts:195:				{ error: err, eventId: written.eventId },
+packages/memory-engine/src/mongodb-manager-write.ts:214:				error: err instanceof Error ? err.message : String(err),
+packages/memory-engine/src/mongodb-manager-write.ts:278:				error: err instanceof Error ? err.message : String(err),
+packages/memory-engine/src/mongodb-manager-write.ts:328:		log.error("writeEventAndProject failed", { error: err })
+packages/memory-engine/src/mongodb-manager-write.ts:718:							`extraction outbox cleanup failed for ${written.eventId}: ${String(err)}`,
+packages/memory-engine/src/mongodb-manager-write.ts:809:					error: err instanceof Error ? err.message : String(err),
+packages/memory-engine/src/mongodb-manager-write.ts:1098:						log.warn(`batch extraction outbox cleanup failed: ${String(err)}`)
+packages/memory-engine/src/mongodb-manager-write.ts:1192:					error: err instanceof Error ? err.message : String(err),
+packages/memory-engine/src/mongodb-manager-relevance.ts:306:							log.warn(`relevanceExplain KB search failed: ${String(err)}`)
+packages/memory-engine/src/mongodb-manager-relevance.ts:333:								`relevanceExplain structured memory search failed: ${String(err)}`,
+packages/memory-engine/src/mongodb-telemetry.ts:71:				error: err instanceof Error ? err.message : String(err),
+packages/memory-engine/src/mongodb-telemetry.ts:140:			`latency stats aggregation failed: ${err instanceof Error ? err.message : String(err)}`,
+packages/memory-engine/src/mongodb-telemetry.ts:189:			`cache hit-rate aggregation failed: ${err instanceof Error ? err.message : String(err)}`,
+packages/memory-engine/src/mongodb-telemetry.ts:242:			`operation distribution aggregation failed: ${err instanceof Error ? err.message : String(err)}`,
+packages/memory-engine/src/mongodb-active-slate.ts:202:		log.warn(`hydrateActiveSlate: ${label} query failed`, { error })
+packages/memory-engine/src/mongodb-ops.ts:73:		log.error("recordIngestRun failed", { runId, error: err })
+packages/memory-engine/src/mongodb-ops.ts:96:		log.error("recordProjectionRun failed", { runId, error: err })
+packages/memory-engine/src/mongodb-ops.ts:121:		log.error("getRecentIngestRuns failed", { agentId, error: err })
+packages/memory-engine/src/mongodb-ops.ts:150:			error: err instanceof Error ? err.message : String(err),
+packages/memory-engine/src/mongodb-ops.ts:169:		log.error("getLatestIngestRun failed", { agentId, error: err })
+packages/memory-engine/src/mongodb-ops.ts:191:			error: err instanceof Error ? err.message : String(err),
+packages/memory-engine/src/mongodb-ops.ts:218:			error: err instanceof Error ? err.message : String(err),
+packages/memory-engine/src/mongodb-kb-search.ts:295:				const msg = err instanceof Error ? err.message : String(err)
+packages/memory-engine/src/mongodb-kb-search.ts:308:				const msg = err instanceof Error ? err.message : String(err)
+packages/memory-engine/src/mongodb-kb-search.ts:450:			const msg = err instanceof Error ? err.message : String(err)
+packages/memory-engine/src/mongodb-kb-search.ts:467:			const msg = err instanceof Error ? err.message : String(err)
+packages/memory-engine/src/mongodb-kb-search.ts:479:			const msg = err instanceof Error ? err.message : String(err)
+packages/memory-engine/src/mongodb-discovery-projections.ts:212:		log.warn(`buildDiscoveryProjection: ${label} query failed`, { error })
+packages/memory-engine/src/internal.ts:71:				: String(err)
+packages/memory-engine/src/mongodb-profile.ts:117:			log.warn(`synthesizeProfile: ${label} query failed`, { error: err })
+packages/memory-engine/src/mongodb-profile.ts:323:		log.error("synthesizeProfile failed", { agentId, error: err })
+packages/memory-engine/src/mongodb-schema-search-indexes.ts:104:			const msg = err instanceof Error ? err.message : String(err)
+packages/memory-engine/src/mongodb-schema-search-indexes.ts:179:			const msg = err instanceof Error ? err.message : String(err)
+packages/memory-engine/src/mongodb-schema-search-indexes.ts:223:		const msg = err instanceof Error ? err.message : String(err)
+packages/memory-engine/src/mongodb-schema-search-indexes.ts:262:		const msg = err instanceof Error ? err.message : String(err)
+packages/memory-engine/src/mongodb-schema-search-indexes.ts:300:			const msg = err instanceof Error ? err.message : String(err)
+packages/memory-engine/src/mongodb-schema-search-indexes.ts:338:			const msg = err instanceof Error ? err.message : String(err)
+packages/memory-engine/src/mongodb-schema-search-indexes.ts:379:		const msg = err instanceof Error ? err.message : String(err)
+packages/memory-engine/src/mongodb-schema-search-indexes.ts:423:		const msg = err instanceof Error ? err.message : String(err)
+packages/memory-engine/src/mongodb-schema-search-indexes.ts:459:		const msg = err instanceof Error ? err.message : String(err)
+packages/memory-engine/src/mongodb-schema-search-indexes.ts:496:		const msg = err instanceof Error ? err.message : String(err)
+packages/memory-engine/src/mongodb-schema-search-indexes.ts:533:		const msg = err instanceof Error ? err.message : String(err)
+packages/memory-engine/src/mongodb-schema-search-indexes.ts:569:		const msg = err instanceof Error ? err.message : String(err)
+packages/memory-engine/src/mongodb-schema-search-indexes.ts:601:			const msg = err instanceof Error ? err.message : String(err)
+packages/memory-engine/src/mongodb-schema-search-indexes.ts:637:			const msg = err instanceof Error ? err.message : String(err)
+packages/memory-engine/src/mongodb-schema-search-indexes.ts:673:			const msg = err instanceof Error ? err.message : String(err)
+packages/memory-engine/src/mongodb-schema-search-indexes.ts:711:			const msg = err instanceof Error ? err.message : String(err)
+packages/memory-engine/src/mongodb-schema-search-indexes.ts:745:			const msg = err instanceof Error ? err.message : String(err)
+packages/memory-engine/src/mongodb-schema-search-indexes.ts:762:			const msg = err instanceof Error ? err.message : String(err)
+packages/memory-engine/src/mongodb-schema-search-indexes.ts:773:			const msg = err instanceof Error ? err.message : String(err)
+packages/memory-engine/src/mongodb-schema-standard-indexes-graph.ts:168:		const msg = err instanceof Error ? err.message : String(err)
+packages/memory-engine/src/mongodb-schema-standard-indexes-graph.ts:185:		const msg = err instanceof Error ? err.message : String(err)
+packages/memory-engine/src/mongodb-mutations.ts:80:		log.warn("recordMutation failed", { mutationId, error: err })
+packages/memory-engine/src/mongodb-mutations.ts:130:		log.error("getMutationHistory failed", { agentId, error: err })
+packages/memory-engine/src/mongodb-reranker.ts:226:		log.warn("rerank failed, falling back to input order", { error: err })
+packages/memory-engine/src/mongodb-temporal-extraction.ts:106:			error: err instanceof Error ? err.message : String(err),
+packages/memory-engine/src/mongodb-manager-search.ts:393:						log.warn(`KB search failed: ${String(err)}`)
+packages/memory-engine/src/mongodb-manager-search.ts:421:						log.warn(`structured memory search failed: ${String(err)}`)
+packages/memory-engine/src/mongodb-manager-search.ts:670:						`search recall trace write failed on cache hit: ${String(err)}`,
+packages/memory-engine/src/mongodb-manager-search.ts:766:					log.warn(`search recall trace write failed: ${String(err)}`),
+packages/memory-engine/src/mongodb-manager-search.ts:825:				log.warn(`empty search recall trace write failed: ${String(err)}`),
+packages/memory-engine/src/mongodb-manager-search.ts:860:				log.warn(`search fallback recall trace write failed: ${String(err)}`),
+packages/memory-engine/src/mongodb-manager-search.ts:864:			const message = err instanceof Error ? err.message : String(err)
+packages/memory-engine/src/mongodb-manager-search.ts:1142:			log.warn(`searchDetailed recall trace write failed: ${String(err)}`),
+packages/memory-engine/src/search-manager.ts:108:		log.warn(`failed to close mongodb memory manager: ${String(err)}`)
+packages/memory-engine/src/search-manager.ts:295:		const message = err instanceof Error ? err.message : String(err)
+packages/memory-engine/src/search-manager.ts:408:		const message = err instanceof Error ? err.message : String(err)
+packages/memory-engine/src/mongodb-graph.ts:422:				`entity audit failed: ${err instanceof Error ? err.message : String(err)}`,
+packages/memory-engine/src/mongodb-graph.ts:429:			`upsertEntity failed: ${err instanceof Error ? err.message : String(err)}`,
+packages/memory-engine/src/mongodb-graph.ts:688:				`relation audit failed: ${err instanceof Error ? err.message : String(err)}`,
+packages/memory-engine/src/mongodb-graph.ts:695:			`upsertRelation failed: ${err instanceof Error ? err.message : String(err)}`,
+packages/memory-engine/src/mongodb-graph.ts:767:			`upsertEntityLink failed: ${err instanceof Error ? err.message : String(err)}`,
+packages/memory-engine/src/mongodb-graph.ts:898:			`findEntitiesByName failed: ${err instanceof Error ? err.message : String(err)}`,
+packages/memory-engine/src/mongodb-graph.ts:936:			`getEntitiesByType failed: ${err instanceof Error ? err.message : String(err)}`,
+packages/memory-engine/src/mongodb-graph.ts:1225:			`expandGraph failed: ${err instanceof Error ? err.message : String(err)}`,
+packages/memory-engine/src/mongodb-graph.ts:1265:			`deleteEntity failed: ${err instanceof Error ? err.message : String(err)}`,
+packages/memory-engine/src/mongodb-graph.ts:1364:				`deleteEntityConservative audit failed: ${err instanceof Error ? err.message : String(err)}`,
+packages/memory-engine/src/mongodb-graph.ts:1380:			`deleteEntityConservative failed: ${err instanceof Error ? err.message : String(err)}`,
+packages/memory-engine/src/mongodb-graph.ts:1883:			`extractAndUpsertEntities failed: ${err instanceof Error ? err.message : String(err)}`,
+packages/memory-engine/src/mongodb-graph.ts:1969:			`extractAndUpsertTypedRelations failed: ${err instanceof Error ? err.message : String(err)}`,
+packages/memory-engine/src/mongodb-graph.ts:2052:			`searchEntitiesAutocomplete $search failed, falling back to regex: ${err instanceof Error ? err.message : String(err)}`,
+packages/memory-engine/src/session-files.ts:138:		log.debug(`Failed reading session file ${absPath}: ${String(err)}`)
+packages/memory-engine/src/mongodb-tiered-summary.ts:131:				error: err instanceof Error ? err.message : String(err),
+packages/memory-engine/src/mongodb-relevance.ts:396:		const message = err instanceof Error ? err.message : String(err)
+packages/memory-engine/src/mongodb-novelty.ts:233:		const msg = err instanceof Error ? err.message : String(err)
+packages/memory-engine/src/mongodb-search.ts:97:		const message = err instanceof Error ? err.message : String(err)
+packages/memory-engine/src/mongodb-search.ts:118:	const message = error instanceof Error ? error.message : String(error)
+packages/memory-engine/src/mongodb-search.ts:162:			const message = error instanceof Error ? error.message : String(error)
+packages/memory-engine/src/mongodb-search.ts:1163:				const msg = err instanceof Error ? err.message : String(err)
+packages/memory-engine/src/mongodb-search.ts:1195:				const msg = err instanceof Error ? err.message : String(err)
+packages/memory-engine/src/mongodb-search.ts:1239:			const msg = err instanceof Error ? err.message : String(err)
+packages/memory-engine/src/mongodb-search.ts:1267:			const msg = err instanceof Error ? err.message : String(err)
+packages/memory-engine/src/mongodb-search.ts:1294:			const msg = err instanceof Error ? err.message : String(err)
+packages/memory-engine/src/mongodb-search.ts:1348:		const message = err instanceof Error ? err.message : String(err)
+packages/memory-engine/src/mongodb-events.ts:36:	const message = err instanceof Error ? err.message : String(err)
+packages/memory-engine/src/mongodb-events.ts:71:			const message = err instanceof Error ? err.message : String(err)
+packages/memory-engine/src/mongodb-events.ts:335:				message: err instanceof Error ? err.message : String(err),
+packages/memory-engine/src/mongodb-events.ts:712:		const msg = err instanceof Error ? err.message : String(err)
+packages/memory-engine/src/mongodb-events.ts:796:				`batch chunk projection failed outright for ${events.length} event(s); leaving them unprojected for the repair pass: ${String(err)}`,
+packages/memory-engine/src/mongodb-events.ts:808:			`batch chunk projection had ${failedIndexes.size} per-item failure(s): ${String(err)}`,
+packages/memory-engine/src/mongodb-query-cache.ts:215:		log.warn("cache namespace gate failed", { error: err })
+packages/memory-engine/src/mongodb-query-cache.ts:295:		log.warn("cache exact lookup failed", { error: err })
+packages/memory-engine/src/mongodb-query-cache.ts:319:				log.warn("cache hit count update failed", { error: err })
+packages/memory-engine/src/mongodb-query-cache.ts:423:					log.warn("cache hit count update failed (semantic)", { error: err })
+packages/memory-engine/src/mongodb-query-cache.ts:443:		log.warn("cache semantic lookup failed", { error: err })
+packages/memory-engine/src/mongodb-query-cache.ts:527:			log.warn("cache write failed", { error: err })
+packages/memory-engine/src/mongodb-schema-collections.ts:164:		const msg = err instanceof Error ? err.message : String(err)
+packages/memory-engine/src/mongodb-consolidation-reasoning.ts:131:			error: err instanceof Error ? err.message : String(err),
+packages/memory-engine/src/mongodb-sync.ts:231:			const msg = err instanceof Error ? err.message : String(err)
+packages/memory-engine/src/mongodb-sync.ts:491:			const msg = err instanceof Error ? err.message : String(err)
+packages/memory-engine/src/mongodb-sync.ts:560:			const msg = err instanceof Error ? err.message : String(err)
+packages/memory-engine/src/mongodb-sync.ts:607:			const msg = err instanceof Error ? err.message : String(err)
+packages/memory-engine/src/mongodb-sync.ts:827:			const msg = err instanceof Error ? err.message : String(err)
+packages/memory-engine/src/mongodb-migration.ts:84:			const msg = err instanceof Error ? err.message : String(err)
+packages/memory-engine/src/mongodb-contradiction.ts:93:			error: err instanceof Error ? err.message : String(err),
+packages/memory-engine/src/mongodb-contradiction.ts:228:			error: err instanceof Error ? err.message : String(err),
+apps/web/app/console/page.tsx:215:				body: error instanceof Error ? error.message : String(error),
+packages/memory-engine/src/mongodb-manager-admin.ts:468:		log.error("getV2Status failed", { error: err })
+packages/memory-engine/src/mongodb-entity-extractor.ts:278:				error: err instanceof Error ? err.message : String(err),
+packages/memory-engine/src/mongodb-query-cache-invalidation.ts:38:		log.warn(`query cache invalidation failed: ${String(err)}`)
+packages/memory-engine/src/mongodb-query-cache-invalidation.ts:94:			log.warn(`query cache invalidation dispatch failed: ${String(err)}`)
+packages/memory-engine/src/mongodb-query-cache-invalidation.ts:125:				log.warn(`query cache invalidation dispatch failed: ${String(err)}`)
+packages/memory-engine/src/mongodb-context-expansion.ts:125:				{ error: err },
+packages/memory-engine/src/mongodb-manager.ts:618:				const msg = err instanceof Error ? err.message : String(err)
+packages/memory-engine/src/mongodb-manager.ts:718:								const message = err instanceof Error ? err.message : String(err)
+packages/memory-engine/src/mongodb-manager.ts:750:						`could not verify native event bitemporal prefilter readiness: ${String(err)}`,
+packages/memory-engine/src/mongodb-manager.ts:819:			const msg = err instanceof Error ? err.message : String(err)
+packages/memory-engine/src/mongodb-manager.ts:851:			const msg = err instanceof Error ? err.message : String(err)
+packages/memory-engine/src/mongodb-manager.ts:863:				`startup projection repair failed; remaining canonical events will be retried on restart: ${String(err)}`,
+packages/memory-engine/src/mongodb-manager.ts:888:								.catch((err) => log.warn(`gap re-scan failed: ${String(err)}`))
+packages/memory-engine/src/mongodb-manager.ts:1768:				const msg = err instanceof Error ? err.message : String(err)
+packages/memory-engine/src/mongodb-manager.ts:1781:				const msg = err instanceof Error ? err.message : String(err)
+packages/memory-engine/src/mongodb-manager.ts:1788:			log.warn(`onClosed hook failed: ${String(err)}`)
+packages/memory-engine/src/mongodb-schema-capabilities.ts:73:		const message = err instanceof Error ? err.message : String(err)
+packages/memory-engine/src/mongodb-schema-capabilities.ts:135:			const msg = err instanceof Error ? err.message : String(err)
+packages/memory-engine/src/mongodb-schema-capabilities.ts:158:			const msg = err instanceof Error ? err.message : String(err)
+packages/memory-engine/src/mongodb-schema-index-utils.ts:20:	const msg = err instanceof Error ? err.message : String(err)
+packages/memory-engine/src/mongodb-manager-lifecycle.ts:492:			log.warn(`buildContextBundle recall trace write failed: ${String(err)}`),
+packages/memory-engine/src/mongodb-manager-lifecycle.ts:543:				`could not refresh native bitemporal prefilter readiness: ${String(err)}`,
+packages/memory-engine/src/mongodb-manager-lifecycle.ts:605:				`createMemoryJob failed for ${jobId}: ${err instanceof Error ? err.message : String(err)}`,
+packages/memory-engine/src/mongodb-manager-lifecycle.ts:651:						`updateMemoryJob failed for ${jobId}: ${err instanceof Error ? err.message : String(err)}`,
+packages/memory-engine/src/mongodb-manager-lifecycle.ts:667:						error: err instanceof Error ? err.message : String(err),
+packages/memory-engine/src/mongodb-access-tracker.ts:139:				const msg = err instanceof Error ? err.message : String(err)
+packages/memory-engine/src/mongodb-access-tracker.ts:226:				const msg = err instanceof Error ? err.message : String(err)
+packages/memory-engine/src/mongodb-access-tracker.ts:245:				const msg = err instanceof Error ? err.message : String(err)
+packages/memory-engine/src/mongodb-context-bundle.ts:313:		log.warn(`buildContextBundle: ${label} query failed`, { error })
+packages/memory-engine/src/mongodb-schema-search-definitions.ts:56:		const msg = err instanceof Error ? err.message : String(err)
+packages/memory-engine/src/mongodb-schema-search-definitions.ts:93:		const msg = err instanceof Error ? err.message : String(err)
+packages/memory-engine/src/mongodb-schema-search-definitions.ts:511:			lastError = err instanceof Error ? err.message : String(err)
+packages/memory-engine/src/mongodb-schema-search-readiness.ts:348:				log.warn(`${params.label} search index exists but is not yet queryable`)
+packages/memory-engine/src/mongodb-schema-search-readiness.ts:353:		const msg = err instanceof Error ? err.message : String(err)
+packages/memory-engine/src/mongodb-conversation-recall.ts:882:			const message = error instanceof Error ? error.message : String(error)
+packages/memory-engine/src/mongodb-conversation-recall.ts:906:			const message = error instanceof Error ? error.message : String(error)
+packages/memory-engine/src/mongodb-manager-jobs.ts:121:				log.warn(`derived memory work failed: ${String(err)}`)
+packages/memory-engine/src/mongodb-manager-jobs.ts:136:				log.warn(`derived memory scheduling failed: ${String(err)}`)
+packages/memory-engine/src/mongodb-manager-jobs.ts:164:					: String(err)
+packages/memory-engine/src/mongodb-manager-jobs.ts:215:						`memory job heartbeat failed for ${job.jobId}: ${String(err)}`,
+packages/memory-engine/src/mongodb-manager-jobs.ts:298:					error: err instanceof Error ? err.message : String(err),
+packages/memory-engine/src/mongodb-manager-jobs.ts:467:					`completeClaimedMemoryJob failed for ${job.jobId}: ${err instanceof Error ? err.message : String(err)}`,
+packages/memory-engine/src/mongodb-manager-jobs.ts:481:					error: err instanceof Error ? err.message : String(err),
+packages/memory-engine/src/mongodb-manager-jobs.ts:551:							`extraction job ownership check failed after session prefetch: ${job.jobId}: ${String(err)}`,
+packages/memory-engine/src/mongodb-manager-jobs.ts:597:				`session-batched extraction prefetch skipped; provider resolution failed: ${err instanceof Error ? err.message : String(err)}`,
+packages/memory-engine/src/mongodb-manager-jobs.ts:647:					`session-batched extraction prefetch read failed; falling back to per-event extraction: ${String(err)}`,
+packages/memory-engine/src/mongodb-manager-jobs.ts:704:						`session-batched LLM extraction failed for ${group.length} event(s); falling back to per-event extraction: ${err instanceof Error ? err.message : String(err)}`,
+packages/memory-engine/src/mongodb-manager-jobs.ts:723:			log.warn(`memory job worker failed: ${String(err)}`)
+packages/memory-engine/src/mongodb-manager-jobs.ts:895:					`auto episode trigger failed after event write: ${String(err)}`,
+
+=== CLIENT RAW RESPONSE BODY ===
+97:export class MemongoClientError extends Error {
+111:					: `Memongo API ${status}: ${body || "(empty)"}`),
+115:		this.body = body
+218:		throw new MemongoClientError(res.status, text)
+
+=== PI RAW WARNING PATH ===
+packages/pi-extension/extensions/lifecycle.ts:140:function errMessage(err: unknown): string {
+packages/pi-extension/extensions/lifecycle.ts:248:	const warn = deps.warn ?? ((message: string) => console.warn(message))
+packages/pi-extension/extensions/lifecycle.ts:298:			warn(`[memongo] session context fetch failed (${failures.join("; ")})`)
+packages/pi-extension/extensions/lifecycle.ts:334:				warn(
+packages/pi-extension/extensions/lifecycle.ts:382:			warn(`[memongo] session context fetch failed: ${errMessage(err)}`)

@@ -1,0 +1,47 @@
+# [hygiene 2026-09-03] Credential-shaped spans in captured probe output
+# were replaced with bracketed shape descriptors ([uri-userinfo],
+# [key-assignment], [auth-header], ...) so secret scanners stay clear of
+# this evidence log; masked-output spans carry a :*** suffix. Vector
+# names, leak flags, verdicts, and line ordering are unchanged from the
+# original capture; only the shape-bearing bytes inside them were
+# substituted.
+COMMAND: add raw query to queryFailureMeta return, then cd packages/memory-engine && bunx vitest run src/query-diagnostics.test.ts src/mongodb-retrieval-planner.test.ts; no mongodb-search-v2 test file exists; restore with cp and verify cmp
+BEFORE_SHA256: [b64-run]  packages/memory-engine/src/query-diagnostics.ts
+NEUTRALIZED_SHA256: [b64-run]  packages/memory-engine/src/query-diagnostics.ts
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/packages/memory-engine[39m
+
+ [31m❯[39m src/query-diagnostics.test.ts [2m([22m[2m3 tests[22m[2m | [22m[31m1 failed[39m[2m)[22m[32m 5[2mms[22m[39m
+[31m     [31m×[31m never includes the raw query text[39m[32m 4[2mms[22m[39m
+     [32m✓[39m produces a stable, correlatable digest[32m 0[2mms[22m[39m
+     [32m✓[39m redacts credential-bearing error chains[32m 0[2mms[22m[39m
+ [32m✓[39m src/mongodb-retrieval-planner.test.ts [2m([22m[2m54 tests[22m[2m)[22m[32m 12[2mms[22m[39m
+
+[31m⎯⎯⎯⎯⎯⎯⎯[39m[1m[41m Failed Tests 1 [49m[22m[31m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[41m[1m FAIL [22m[49m src/query-diagnostics.test.ts[2m > [22mqueryFailureMeta (C-002: raw query text never enters diagnostics)[2m > [22mnever includes the raw query text
+[31m[1mAssertionError[22m: expected '{"query":"the launch code is azure-sp…' not to contain 'azure-spoon-77'[39m
+
+Expected: [32m"azure-spoon-77"[39m
+Received: [31m"{"query":"the launch code is azure-spoon-77","queryLength":33,"queryDigest":"08a57a51dfbe","error":"boom"}"[39m
+
+[36m [2m❯[22m src/query-diagnostics.test.ts:[2m9:36[22m[39m
+    [90m  7|[39m   [35mconst[39m meta [33m=[39m [34mqueryFailureMeta[39m(query[33m,[39m [35mnew[39m [33mError[39m([32m"boom"[39m))
+    [90m  8|[39m
+    [90m  9|[39m   [34mexpect[39m([33mJSON[39m[33m.[39m[34mstringify[39m(meta))[33m.[39mnot[33m.[39m[34mtoContain[39m([32m"azure-spoon-77"[39m)
+    [90m   |[39m                                    [31m^[39m
+    [90m 10|[39m   [34mexpect[39m(meta[33m.[39mqueryLength)[33m.[39m[34mtoBe[39m(query[33m.[39mlength)
+    [90m 11|[39m  })
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯[22m[39m
+
+
+[2m Test Files [22m [1m[31m1 failed[39m[22m[2m | [22m[1m[32m1 passed[39m[22m[90m (2)[39m
+[2m      Tests [22m [1m[31m1 failed[39m[22m[2m | [22m[1m[32m56 passed[39m[22m[90m (57)[39m
+[2m   Start at [22m 01:51:16
+[2m   Duration [22m 201ms[2m (transform 126ms, setup 0ms, import 172ms, tests 17ms, environment 0ms)[22m
+
+TEST_EXIT: 1
+AFTER_SHA256: [b64-run]  packages/memory-engine/src/query-diagnostics.ts
+CMP_EXIT: 0
+SEARCH_V2_TEST_FILES: 

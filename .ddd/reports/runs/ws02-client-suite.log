@@ -1,0 +1,14 @@
+# WS-02 C-002 final-state suite run: packages/client (shape-free assembly rework)
+# Run: cd packages/client && bunx vitest run
+# Date: 2026-09-03T08:57:20Z
+
+ RUN  v4.1.10 /Users/rom.iluz/Dev/memongo/packages/client
+
+ ✓ src/client.test.ts (34 tests) 1090ms
+     ✓ generates one UUIDv4 key per logical write and reuses it across every retry  604ms
+
+ Test Files  1 passed (1)
+      Tests  34 passed (34)
+   Start at  11:24:12
+   Duration  1.35s (transform 63ms, setup 0ms, import 86ms, tests 1.09s, environment 0ms)
+

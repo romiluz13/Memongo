@@ -5,7 +5,7 @@ import { bodyLimit } from "hono/body-limit"
 import { secureHeaders } from "hono/secure-headers"
 import { cors } from "hono/cors"
 import { requestId } from "hono/request-id"
-import { timingSafeBearerEquals } from "@memongo/lib"
+import { formatErrorMessage, timingSafeBearerEquals } from "@memongo/lib"
 import { openApiSpec } from "./openapi-spec.js"
 import { internalError } from "./lib/errors.js"
 import { checkReadiness } from "./lib/readiness.js"
@@ -479,14 +479,16 @@ export function registerGracefulShutdown(
 			try {
 				await closeServer()
 			} catch (err) {
-				const msg = err instanceof Error ? err.message : String(err)
-				console.error(`graceful shutdown: closeServer failed: ${msg}`)
+				console.error(
+					`graceful shutdown: closeServer failed: ${formatErrorMessage(err)}`,
+				)
 			}
 			try {
 				await closeBridge()
 			} catch (err) {
-				const msg = err instanceof Error ? err.message : String(err)
-				console.error(`graceful shutdown: closeBridge failed: ${msg}`)
+				console.error(
+					`graceful shutdown: closeBridge failed: ${formatErrorMessage(err)}`,
+				)
 			}
 			if (timedOut) {
 				return

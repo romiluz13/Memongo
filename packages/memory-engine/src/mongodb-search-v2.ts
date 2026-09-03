@@ -7,6 +7,7 @@
 
 import type { Db, Document } from "mongodb"
 import { createSubsystemLogger, type MemoryScope } from "@memongo/lib"
+import { queryFailureMeta } from "./query-diagnostics.js"
 import type { ResolvedMongoDBConfig } from "./backend-config.js"
 import { resolveDefaultScope } from "./backend-config.js"
 import { resolveConversationEvidenceMode } from "./mongodb-conversation-evidence-mode.js"
@@ -412,9 +413,12 @@ async function searchV2WithBudget(
 				laneCoverage = coverageDoc.lanes
 			}
 		} catch (err) {
+			// C-002: the coverage read can echo the query-bearing filter or
+			// credentials in its driver message; queryFailureMeta redacts both
+			// and preserves digest correlation, same as the outer failure seam.
 			log.warn("Failed to load lane coverage for planner", {
-				error: err instanceof Error ? err.message : String(err),
 				agentId,
+				...queryFailureMeta(query, err),
 			})
 		}
 		/**
@@ -1685,7 +1689,9 @@ async function searchV2WithBudget(
 			},
 		}
 	} catch (err) {
-		log.error("searchV2 failed", { query, error: err })
+		// C-002: raw query text never enters diagnostics — length + digest
+		// preserve correlation without content (see query-diagnostics.ts).
+		log.error("searchV2 failed", queryFailureMeta(query, err))
 		throw err
 	}
 }

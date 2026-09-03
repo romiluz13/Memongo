@@ -30,41 +30,41 @@ traces:
     change_id: WS-02
     claim_id: C-002
     construct_id: packages/memory-engine/src/mongodb-client-registry.ts
-    validation_id: null
+    validation_id: V-032
     direction: forward
-    sweep_pass: false
-    checked_at: "2026-09-02T13:41:40.030Z"
-    notes: WS-02 Secret redaction at logging boundaries (planned change envelope)
+    sweep_pass: true
+    checked_at: "2026-09-03T00:15:00.000Z"
+    notes: WS-02 registry close-failure warns log a shared-client-<sha256-8> URI alias plus formatErrorMessage-redacted detail; pinned by the registry battery in the final-state engine suite log
   - id: TR-004
     schema_version: 0.1.0
     change_id: WS-02
     claim_id: C-002
     construct_id: "packages/lib/src/redact.ts#redactSensitiveText"
-    validation_id: null
+    validation_id: V-033
     direction: forward
-    sweep_pass: false
-    checked_at: "2026-09-02T13:41:40.032Z"
-    notes: WS-02 Secret redaction at logging boundaries (planned change envelope)
+    sweep_pass: true
+    checked_at: "2026-09-03T00:15:00.000Z"
+    notes: WS-02 central classifier wired to every diagnostic boundary; 40-test battery pins userinfo (password-only and username-only), assignments (bare/quoted/single/escaped/unterminated), vendor tokens, webhooks, and credential-path URLs
   - id: TR-005
     schema_version: 0.1.0
     change_id: WS-02
     claim_id: C-002
     construct_id: "packages/lib/src/logger.ts#formatLine"
-    validation_id: null
+    validation_id: V-034
     direction: forward
-    sweep_pass: false
-    checked_at: "2026-09-02T13:41:40.033Z"
-    notes: WS-02 Secret redaction at logging boundaries (planned change envelope)
+    sweep_pass: true
+    checked_at: "2026-09-03T00:15:00.000Z"
+    notes: WS-02 every subsystem-log line redacted at the boundary (message + JSON.stringify(meta) + raw()); 5-test battery incl. escaped-quoted credential riding inside a meta value
   - id: TR-006
     schema_version: 0.1.0
     change_id: WS-02
     claim_id: C-002
     construct_id: apps/api/src/lib/errors.ts
-    validation_id: null
+    validation_id: V-035
     direction: forward
-    sweep_pass: false
-    checked_at: "2026-09-02T13:41:40.034Z"
-    notes: WS-02 Secret redaction at logging boundaries (planned change envelope)
+    sweep_pass: true
+    checked_at: "2026-09-03T00:15:00.000Z"
+    notes: WS-02 API error envelope redacted (apiErrorJson message + internalError message/stack); 8-test battery in the final-state api suite log
   - id: TR-007
     schema_version: 0.1.0
     change_id: WS-03
@@ -845,3 +845,63 @@ traces:
     sweep_pass: false
     checked_at: "2026-09-02T13:41:40.106Z"
     notes: WS-18 Release engineering (planned change envelope)
+  - id: TR-085
+    schema_version: 0.1.0
+    change_id: WS-02
+    claim_id: C-002
+    construct_id: packages/memory-engine/src/query-diagnostics.ts
+    validation_id: V-036
+    direction: forward
+    sweep_pass: true
+    checked_at: "2026-09-03T00:15:00.000Z"
+    notes: WS-02 query-echo seam — redactQueryEcho/queryFailureMeta replace verbatim, re-segmented, and credential-redacted query echoes with the [query:<digest>] alias; 19-test battery pins the planner catch seam and the short guard
+  - id: TR-086
+    schema_version: 0.1.0
+    change_id: WS-02
+    claim_id: C-002
+    construct_id: apps/api/src/lib/capabilities.ts
+    validation_id: V-037
+    direction: forward
+    sweep_pass: true
+    checked_at: "2026-09-03T00:15:00.000Z"
+    notes: WS-02 capability-table render boundary — formatCapabilityTable redacts the probe error at render; 12-test battery incl. the round-3 render-boundary leak vector
+  - id: TR-087
+    schema_version: 0.1.0
+    change_id: WS-02
+    claim_id: C-002
+    construct_id: packages/tools/src/middleware-core.ts
+    validation_id: V-038
+    direction: forward
+    sweep_pass: true
+    checked_at: "2026-09-03T00:15:00.000Z"
+    notes: WS-02 tools middleware defaultWarn runs formatErrorMessage over the one-time warn; battery pins credential-bearing warn output
+  - id: TR-088
+    schema_version: 0.1.0
+    change_id: WS-02
+    claim_id: C-002
+    construct_id: "packages/client/src/client.ts#MemongoClientError"
+    validation_id: V-039
+    direction: forward
+    sweep_pass: true
+    checked_at: "2026-09-03T00:15:00.000Z"
+    notes: WS-02 client error message is structural for non-JSON bodies (status + byte count, no raw body text); raw body retained on .body for programmatic use
+  - id: TR-089
+    schema_version: 0.1.0
+    change_id: WS-02
+    claim_id: C-002
+    construct_id: packages/pi-extension/extensions/diagnostics.ts
+    validation_id: V-040
+    direction: forward
+    sweep_pass: true
+    checked_at: "2026-09-03T00:15:00.000Z"
+    notes: WS-02 pi-extension local classifier — sanitizeDiagnostic/errMessage is the single choke point for extension warns and tool responses; 12-test battery mirrors the lib shapes (published package cannot import @memongo/lib)
+  - id: TR-090
+    schema_version: 0.1.0
+    change_id: WS-02
+    claim_id: C-002
+    construct_id: "packages/lib/src/redact.ts#DEFAULT_REDACT_PATTERNS"
+    validation_id: V-041
+    direction: forward
+    sweep_pass: true
+    checked_at: "2026-09-03T00:15:00.000Z"
+    notes: WS-02 pattern-table integrity — identity-based branch dispatch (indexOf on const patterns, repaired after the round-3 escaped-slash prefix probe silently dropped both userinfo branches) and escaped-quote tolerance for assignments riding inside serialized meta; post-fix re-probe evidence over all 24 round-2/3 vectors

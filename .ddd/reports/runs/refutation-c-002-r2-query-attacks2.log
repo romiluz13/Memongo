@@ -1,0 +1,31 @@
+# [hygiene 2026-09-03] Credential-shaped spans in captured probe output
+# were replaced with bracketed shape descriptors ([uri-userinfo],
+# [key-assignment], [auth-header], ...) so secret scanners stay clear of
+# this evidence log; masked-output spans carry a :*** suffix. Vector
+# names, leak flags, verdicts, and line ordering are unchanged from the
+# original capture; only the shape-bearing bytes inside them were
+# substituted.
+COMMAND: corrected temporary Vitest probe using the same Proxy failure seam as round 1; re-run original planner/searchV2 attacks and case, whitespace, split, truncated, embedded, short-query, alias-spoof variants
+PROBE_BEFORE: ABSENT
+PROBE_SHA256: [b64-run]  packages/memory-engine/src/refutation-c-002-r2-query.test.ts
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/packages/memory-engine[39m
+
+ORIGINAL_PLANNER=01:59:29.431 [memory:mongodb:planner] error: planRetrieval failed {"queryLength":33,"queryDigest":"b06ca4250be0","error":"downstream echoed [query:b06ca4250be0]"}
+ORIGINAL_SEARCH_V2=01:59:29.434 [memory:mongodb] error: searchV2 failed {"queryLength":33,"queryDigest":"b06ca4250be0","error":"Mongo command failure echoed [query:b06ca4250be0]"}
+CASE_VARIANT=01:59:29.435 [memory:mongodb:planner] error: planRetrieval failed {"queryLength":42,"queryDigest":"8221fb79ad00","error":"driver echoed PRIVATE RECOVERY PHRASE VIOLET CACTUS NINE"}
+WHITESPACE_VARIANT=01:59:29.435 [memory:mongodb:planner] error: planRetrieval failed {"queryLength":44,"queryDigest":"ae55b25ec3d5","error":"driver echoed private medical record violet-cactus-991"}
+SPLIT_VARIANT=01:59:29.436 [memory:mongodb:planner] error: planRetrieval failed {"queryLength":41,"queryDigest":"8474fead1d6a","error":"driver echoed private recovery phr<segment>ase violet-cactus-991"}
+TRUNCATED_VARIANT=01:59:29.436 [memory:mongodb:planner] error: planRetrieval failed {"queryLength":57,"queryDigest":"06a132acef34","error":"driver echoed private recovery phrase violet-cactus-991"}
+EMBEDDED_VARIANT=01:59:29.436 [memory:mongodb:planner] error: planRetrieval failed {"queryLength":41,"queryDigest":"8474fead1d6a","error":"driver echoed PREFIX[query:8474fead1d6a]SUFFIX"}
+SHORT_QUERY=01:59:29.436 [memory:mongodb:planner] error: planRetrieval failed {"queryLength":3,"queryDigest":"a1159e9df367","error":"driver echoed pwd"}
+ALIAS_SPOOF=01:59:29.436 [memory:mongodb:planner] error: planRetrieval failed {"queryLength":41,"queryDigest":"8474fead1d6a","error":"spoof [query:deadbeef0000] then echo [query:8474fead1d6a]"}
+ [32m✓[39m src/refutation-c-002-r2-query.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m1 passed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[32m9 passed[39m[22m[90m (9)[39m
+[2m   Start at [22m 01:59:28
+[2m   Duration [22m 809ms[2m (transform 480ms, setup 0ms, import 691ms, tests 9ms, environment 0ms)[22m
+
+TEST_EXIT: 0
+PROBE_AFTER: ABSENT

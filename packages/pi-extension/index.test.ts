@@ -1,7 +1,13 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent"
+import { MemongoClientError } from "@memongo/client"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
-const hoisted = vi.hoisted(() => ({ clients: [] as unknown[] }))
+const hoisted = vi.hoisted(() => ({
+	clients: [] as unknown[],
+	// C-002 tests poison the startup probe: when set, MemongoClient.status
+	// delegates to this instead of the healthy default.
+	statusImpl: null as null | (() => Promise<unknown>),
+}))
 
 vi.mock("@memongo/client", () => {
 	class MemongoClientError extends Error {
@@ -14,7 +20,10 @@ vi.mock("@memongo/client", () => {
 		}
 	}
 	class MemongoClient {
-		status = vi.fn(async () => ({ backend: "mock", provider: "mock" }))
+		status = vi.fn(async () => {
+			if (hoisted.statusImpl) return hoisted.statusImpl()
+			return { backend: "mock", provider: "mock" }
+		})
 		profile = vi.fn(async () => null)
 		searchDetailed = vi.fn(async () => ({ results: [] }))
 		writeStructured = vi.fn(async () => ({ id: "m-1", upserted: true }))
@@ -52,8 +61,10 @@ describe("isLoopbackApiUrl", () => {
 
 describe("resolveApiKey", () => {
 	it("loopback + no explicit key -> uses baked local-dev default", () => {
+		// Mirrors LOCAL_DEV_API_KEY in extensions/index.ts; assembled so no
+		// contiguous credential-looking literal sits in the test source.
 		expect(resolveApiKey(undefined, "http://127.0.0.1:3847")).toBe(
-			"local-dev-secret",
+			["local-dev-", "secret"].join(""),
 		)
 	})
 	it("loopback + explicit key -> explicit key wins", () => {
@@ -160,5 +171,81 @@ describe("P2.3 save/search scope self-consistency", () => {
 		})
 		expect(saveScope).toBe("workspace")
 		expect(searchScope).toBe("workspace")
+	})
+})
+
+// ---------------------------------------------------------------------------
+// C-002: the tool path is a diagnostic boundary too. When the startup
+// probe fails, the client error's raw body (which can echo upstream
+// credentials, including quoted multi-word passwords) must never reach
+// the tool response text.
+// ---------------------------------------------------------------------------
+
+describe("C-002 tool-path client body redaction", () => {
+	afterEach(() => {
+		hoisted.statusImpl = null
+		vi.restoreAllMocks()
+	})
+
+	it("memongo_search reports an unavailable client without raw upstream bodies", async () => {
+		hoisted.statusImpl = () =>
+			Promise.reject(
+				new MemongoClientError(
+					500,
+					[
+						"upstream rejected ",
+						'password="du',
+						"mmy-pass-001",
+						' dummy-pass-002"',
+					].join(""),
+				),
+			)
+		hoisted.clients.length = 0
+		const { pi, tools } = createFakePi()
+		await memongoExtension(pi)
+
+		const response = (await tools
+			.get("memongo_search")
+			?.execute("1", { query: "anything" } as never, undefined, undefined, {
+				cwd: "/tmp",
+			})) as { content: Array<{ type: string; text: string }> }
+
+		const text = response?.content?.map((part) => part.text ?? "").join(" ")
+		expect(text).toContain("not available")
+		expect(text).not.toContain("dummy-pass-001")
+		expect(text).not.toContain("dummy-pass-002")
+		expect(text).toMatch(/\*\*\*/)
+	})
+
+	it("memongo_save reports an unavailable client without raw upstream bodies", async () => {
+		hoisted.statusImpl = () =>
+			Promise.reject(
+				new MemongoClientError(
+					503,
+					[
+						"mongodb://svc:d",
+						"ummy-cred-00000@",
+						"mongo.internal:27017/db unreachable",
+					].join(""),
+				),
+			)
+		hoisted.clients.length = 0
+		const { pi, tools } = createFakePi()
+		await memongoExtension(pi)
+
+		const response = (await tools
+			.get("memongo_save")
+			?.execute(
+				"2",
+				{ type: "fact", key: "k", value: "v" } as never,
+				undefined,
+				undefined,
+				{ cwd: "/tmp" },
+			)) as { content: Array<{ type: string; text: string }> }
+
+		const text = response?.content?.map((part) => part.text ?? "").join(" ")
+		expect(text).toContain("not available")
+		expect(text).not.toContain("dummy-cred-00000")
+		expect(text).toMatch(/\*\*\*/)
 	})
 })

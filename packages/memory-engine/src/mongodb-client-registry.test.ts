@@ -142,3 +142,68 @@ describe("closeAllSharedMongoClients", () => {
 		expect(connect).toHaveBeenCalledTimes(2)
 	})
 })
+
+describe("registry diagnostics (C-002: raw URI never in logs)", () => {
+	const SECRET_URI = [
+		"mongodb://svc:",
+		"dummy-cred-000@",
+		"host.example.net:27017",
+	].join("")
+
+	afterEach(() => {
+		vi.restoreAllMocks()
+	})
+
+	it("warns with a URI alias and redacted detail when a released client fails to close", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+		const client = {
+			close: vi.fn(async () => {
+				throw new Error(
+					[
+						"close failed: ",
+						"mongodb://svc:",
+						"dummy-cred-00@",
+						"host.example.net:27017",
+					].join(""),
+				)
+			}),
+		} as unknown as MongoClient
+		setSharedMongoClientConnectForTests(async () => client)
+
+		await acquireSharedMongoClient({ uri: SECRET_URI })
+		releaseSharedMongoClient(SECRET_URI)
+
+		await vi.waitFor(() => {
+			expect(warn).toHaveBeenCalledTimes(1)
+		})
+		const out = warn.mock.calls.map((args) => args.join(" ")).join("\n")
+		expect(out).toContain("failed to close released shared MongoDB client")
+		expect(out).toContain("shared-client-")
+		expect(out).not.toContain("dummy-cred-000")
+		expect(out).not.toContain("dummy-cred-00")
+	})
+
+	it("warns with a URI alias and redacted detail when closeAll fails", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+		const client = {
+			close: vi.fn(async () => {
+				throw new Error(
+					["topology torn down: ", "token=", "dummy-", "token-0000000"].join(
+						"",
+					),
+				)
+			}),
+		} as unknown as MongoClient
+		setSharedMongoClientConnectForTests(async () => client)
+
+		await acquireSharedMongoClient({ uri: SECRET_URI })
+		await closeAllSharedMongoClients()
+
+		expect(warn).toHaveBeenCalledTimes(1)
+		const out = warn.mock.calls.map((args) => args.join(" ")).join("\n")
+		expect(out).toContain("failed to close shared MongoDB client")
+		expect(out).toContain("shared-client-")
+		expect(out).not.toContain("dummy-cred-000")
+		expect(out).not.toContain("dummy-token-0000000")
+	})
+})

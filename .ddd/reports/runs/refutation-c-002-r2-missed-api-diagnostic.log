@@ -1,0 +1,60 @@
+# [hygiene 2026-09-03] Credential-shaped spans in captured probe output
+# were replaced with bracketed shape descriptors ([uri-userinfo],
+# [key-assignment], [auth-header], ...) so secret scanners stay clear of
+# this evidence log; masked-output spans carry a :*** suffix. Vector
+# names, leak flags, verdicts, and line ordering are unchanged from the
+# original capture; only the shape-bearing bytes inside them were
+# substituted.
+COMMAND: temporary Vitest probe drives a credential/query-bearing capability probe error through probeBootCapabilities and logCapabilityTable, the same production boot diagnostic path
+PROBE_BEFORE: ABSENT
+PROBE_SHA256: [b64-run]  apps/api/src/lib/refutation-c-002-r2-capabilities.test.ts
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/apps/api[39m
+
+CAPABILITY_LOG=memongo-api search capability lanes:
+  hybrid:  unavailable
+  vector:  unavailable
+  keyword: unavailable
+  text:    available (standard $text fallback)
+  DEGRADED: queries on unavailable lanes silently fall back to $text
+  capability probe failed: probe failed for [uri-userinfo]host/db; command echoed SEARCH-NEEDLE-boot-private-query
+SECRET_COUNT=1
+QUERY_COUNT=1
+ [31m❯[39m src/lib/refutation-c-002-r2-capabilities.test.ts [2m([22m[2m1 test[22m[2m | [22m[31m1 failed[39m[2m)[22m[32m 5[2mms[22m[39m
+[31m   [31m×[31m does not expose a credential or query through the capability diagnostic[39m[32m 4[2mms[22m[39m
+
+[31m⎯⎯⎯⎯⎯⎯⎯[39m[1m[41m Failed Tests 1 [49m[22m[31m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[41m[1m FAIL [22m[49m src/lib/refutation-c-002-r2-capabilities.test.ts[2m > [22mdoes not expose a credential or query through the capability diagnostic
+[31m[1mAssertionError[22m: expected 'memongo-api search capability lanes:\…' not to contain 'dummy-cred-00000'[39m
+
+[32m- Expected[39m
+[31m+ Received[39m
+
+[32m- dummy-cred-00000[39m
+[31m+ memongo-api search capability lanes:[39m
+[31m+   hybrid:  unavailable[39m
+[31m+   vector:  unavailable[39m
+[31m+   keyword: unavailable[39m
+[31m+   text:    available (standard $text fallback)[39m
+[31m+   DEGRADED: queries on unavailable lanes silently fall back to $text[39m
+[31m+   capability probe failed: probe failed for [uri-userinfo]host/db; command echoed SEARCH-NEEDLE-boot-private-query[39m
+
+[36m [2m❯[22m src/lib/refutation-c-002-r2-capabilities.test.ts:[2m15:21[22m[39m
+    [90m 13|[39m  [35mconst[39m output [33m=[39m log[33m.[39mmock[33m.[39mcalls[33m.[39m[34mmap[39m((args) [33m=>[39m args[33m.[39m[34mjoin[39m([32m" "[39m))[33m.[39m[34mjoin[39m([32m"\n"[39m)
+    [90m 14|[39m  process.stdout.write(`CAPABILITY_LOG=${output}\nSECRET_COUNT=${output…
+    [90m 15|[39m  [34mexpect[39m(output)[33m.[39mnot[33m.[39m[34mtoContain[39m(secret)
+    [90m   |[39m                     [31m^[39m
+    [90m 16|[39m  [34mexpect[39m(output)[33m.[39mnot[33m.[39m[34mtoContain[39m(query)
+    [90m 17|[39m })
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯[22m[39m
+
+
+[2m Test Files [22m [1m[31m1 failed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[31m1 failed[39m[22m[90m (1)[39m
+[2m   Start at [22m 02:01:42
+[2m   Duration [22m 178ms[2m (transform 23ms, setup 0ms, import 31ms, tests 5ms, environment 0ms)[22m
+
+TEST_EXIT: 1
+PROBE_AFTER: ABSENT

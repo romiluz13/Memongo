@@ -14,7 +14,10 @@
  * degrade or expensively re-embed the entire collection.
  */
 import type { Db } from "mongodb"
-import type { MemoryMongoDBDeploymentProfile } from "@memongo/lib"
+import {
+	formatErrorMessage,
+	type MemoryMongoDBDeploymentProfile,
+} from "@memongo/lib"
 import { KNOWN_MODEL_DIMENSIONS } from "./backend-config.js"
 import {
 	INDEX_AUTOEMBED_MODEL,
@@ -205,9 +208,10 @@ export async function findStrandingModelChanges(
 				// Not an Atlas deployment, or search is unavailable. Fail open
 				// but log — the operator should know the scan was incomplete.
 				// Matches agent-memory's pattern of warning on mid-scan errors.
+				// C-002: the error chain is redacted before it reaches the log.
 				console.warn(
 					`[guardrail] Could not inspect search indexes on ` +
-						`${target.collectionName}: ${err}. Proceeding; if the model ` +
+						`${target.collectionName}: ${formatErrorMessage(err)}. Proceeding; if the model ` +
 						`did change, existing documents will be re-embedded on startup.`,
 				)
 				return []

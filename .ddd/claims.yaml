@@ -34,8 +34,8 @@ entries:
     impact: critical
     tier: T3
     status: known-and-supported
-    constructs: [packages/memory-engine/src/mongodb-client-registry.ts, "packages/lib/src/redact.ts#redactSensitiveText", "packages/lib/src/logger.ts#formatLine", apps/api/src/lib/errors.ts]
-    validations: []
+    constructs: [packages/memory-engine/src/mongodb-client-registry.ts, "packages/lib/src/redact.ts#redactSensitiveText", "packages/lib/src/redact.ts#DEFAULT_REDACT_PATTERNS", "packages/lib/src/logger.ts#formatLine", apps/api/src/lib/errors.ts, packages/memory-engine/src/query-diagnostics.ts, apps/api/src/lib/capabilities.ts, packages/tools/src/middleware-core.ts, "packages/client/src/client.ts#MemongoClientError", packages/pi-extension/extensions/diagnostics.ts]
+    validations: [V-032, V-033, V-034, V-035, V-036, V-037, V-038, V-039, V-040, V-041]
     exceptions: []
 
   - id: C-003

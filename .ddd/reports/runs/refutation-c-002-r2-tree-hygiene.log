@@ -1,0 +1,44 @@
+# [hygiene 2026-09-03] Credential-shaped spans in captured probe output
+# were replaced with bracketed shape descriptors ([uri-userinfo],
+# [key-assignment], [auth-header], ...) so secret scanners stay clear of
+# this evidence log; masked-output spans carry a :*** suffix. Vector
+# names, leak flags, verdicts, and line ordering are unchanged from the
+# original capture; only the shape-bearing bytes inside them were
+# substituted.
+COMMAND: parse final YAML, verify restored source hash and all temporary probes absent, then record git status
+YAML_PARSE=ok verdict=refuted attempts=6
+QUERY_DIAGNOSTICS_SHA256: [b64-run]  packages/memory-engine/src/query-diagnostics.ts
+ABSENT: packages/memory-engine/src/refutation-c-002-r2-query.test.ts
+ABSENT: packages/lib/src/refutation-c-002-r2-classifier.test.ts
+ABSENT: apps/api/src/lib/refutation-c-002-r2-capabilities.test.ts
+ABSENT: packages/pi-extension/refutation-c-002-r2-pi.test.ts
+ABSENT: packages/pi-extension/refutation-c-002-r2-client-pi.test.ts
+REPORT_SHA256: [b64-run]  .ddd/reports/refutation-c-002.yaml
+
+GIT_STATUS_FILTERED:
+ M apps/api/src/lib/errors.ts
+ M packages/lib/src/logger.ts
+ M packages/memory-engine/src/mongodb-client-registry.ts
+?? .ddd/reports/refutation-c-002.yaml
+?? .ddd/reports/runs/refutation-c-002-a1-logger-vacuity.log
+?? .ddd/reports/runs/refutation-c-002-a2-registry-vacuity.log
+?? .ddd/reports/runs/refutation-c-002-a3-api-vacuity.log
+?? .ddd/reports/runs/refutation-c-002-a4-query-vacuity.log
+?? .ddd/reports/runs/refutation-c-002-b-credential-surfaces.log
+?? .ddd/reports/runs/refutation-c-002-c-query-surface.log
+?? .ddd/reports/runs/refutation-c-002-r2-classifier-bypass.log
+?? .ddd/reports/runs/refutation-c-002-r2-client-pi-chain.log
+?? .ddd/reports/runs/refutation-c-002-r2-client-pi-chain2.log
+?? .ddd/reports/runs/refutation-c-002-r2-credential-regression.log
+?? .ddd/reports/runs/refutation-c-002-r2-diagnostic-sweep.log
+?? .ddd/reports/runs/refutation-c-002-r2-focused-controls.log
+?? .ddd/reports/runs/refutation-c-002-r2-missed-api-diagnostic.log
+?? .ddd/reports/runs/refutation-c-002-r2-pi-diagnostic.log
+?? .ddd/reports/runs/refutation-c-002-r2-pi-diagnostic2.log
+?? .ddd/reports/runs/refutation-c-002-r2-query-attacks.log
+?? .ddd/reports/runs/refutation-c-002-r2-query-attacks2.log
+?? .ddd/reports/runs/refutation-c-002-r2-tree-hygiene.log
+?? .ddd/reports/runs/refutation-c-002-r2-vacuity-alias.log
+?? .ddd/reports/runs/refutation-c-002-r2-vacuity-noop.log
+?? .ddd/reports/runs/refutation-c-002-tree-hygiene.log
+?? packages/memory-engine/src/query-diagnostics.ts

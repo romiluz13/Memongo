@@ -1,3 +1,5 @@
+import { redactSensitiveText } from "./redact.js"
+
 export type LogLevel =
 	| "trace"
 	| "debug"
@@ -59,9 +61,14 @@ function formatLine(
 	meta?: Record<string, unknown>,
 ): string {
 	const ts = formatTimestamp()
+	// C-002: every subsystem-log line is redacted at the boundary — messages
+	// and serialized meta can carry driver/client error chains with
+	// credentials or connection strings.
 	const metaStr =
-		meta && Object.keys(meta).length > 0 ? ` ${JSON.stringify(meta)}` : ""
-	return `${ts} [${subsystem}] ${level}: ${message}${metaStr}`
+		meta && Object.keys(meta).length > 0
+			? ` ${redactSensitiveText(JSON.stringify(meta))}`
+			: ""
+	return `${ts} [${subsystem}] ${level}: ${redactSensitiveText(message)}${metaStr}`
 }
 
 function writeConsoleLine(level: LogLevel, line: string) {
@@ -97,7 +104,8 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
 		error: (message, meta) => emit("error", message, meta),
 		fatal: (message, meta) => emit("fatal", message, meta),
 		raw: (message) => {
-			if (shouldLog("info")) writeConsoleLine("info", message)
+			if (shouldLog("info"))
+				writeConsoleLine("info", redactSensitiveText(message))
 		},
 		child: (name) => createSubsystemLogger(`${subsystem}/${name}`),
 	}

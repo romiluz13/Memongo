@@ -1,0 +1,63 @@
+# [hygiene 2026-09-03] Credential-shaped spans in captured probe output
+# were replaced with bracketed shape descriptors ([uri-userinfo],
+# [key-assignment], [auth-header], ...) so secret scanners stay clear of
+# this evidence log; masked-output spans carry a :*** suffix. Vector
+# names, leak flags, verdicts, and line ordering are unchanged from the
+# original capture; only the shape-bearing bytes inside them were
+# substituted.
+COMMAND: create a temporary Vitest probe that drives planner and searchV2 catch paths with a downstream failure echoing the raw query; capture console.error and assert the needle is absent; then remove probe
+PROBE_BEFORE: ABSENT
+PROBE_SHA256: [b64-run]  packages/memory-engine/src/refutation-c-002-query-surface.test.ts
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/packages/memory-engine[39m
+
+PLANNER_CAPTURE=01:52:41.151 [memory:mongodb:planner] error: planRetrieval failed {"queryLength":33,"queryDigest":"b06ca4250be0","error":"downstream echoed SEARCH-NEEDLE-xyzzy SELECT secret"}
+PLANNER_NEEDLE_COUNT=1
+SEARCH_V2_CAPTURE=01:52:41.156 [memory:mongodb] error: searchV2 failed {"queryLength":33,"queryDigest":"b06ca4250be0","error":"Mongo command failure echoed SEARCH-NEEDLE-xyzzy SELECT secret"}
+SEARCH_V2_NEEDLE_COUNT=1
+ [31m❯[39m src/refutation-c-002-query-surface.test.ts [2m([22m[2m2 tests[22m[2m | [22m[31m2 failed[39m[2m)[22m[32m 9[2mms[22m[39m
+[31m   [31m×[31m planner diagnostics do not echo a query carried by a downstream error[39m[32m 7[2mms[22m[39m
+[31m   [31m×[31m searchV2 diagnostics do not echo a query carried by a downstream error[39m[32m 2[2mms[22m[39m
+
+[31m⎯⎯⎯⎯⎯⎯⎯[39m[1m[41m Failed Tests 2 [49m[22m[31m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[41m[1m FAIL [22m[49m src/refutation-c-002-query-surface.test.ts[2m > [22mplanner diagnostics do not echo a query carried by a downstream error
+[31m[1mAssertionError[22m: expected '01:52:41.151 [memory:mongodb:planner]…' not to contain 'SEARCH-NEEDLE-xyzzy SELECT secret'[39m
+
+Expected: [32m"SEARCH-NEEDLE-xyzzy SELECT secret"[39m
+Received: [31m"[7m01:52:41.151 [memory:mongodb:planner] error: planRetrieval failed {"queryLength":33,"queryDigest":"b06ca4250be0","error":"downstream echoed [27mSEARCH-NEEDLE-xyzzy SELECT secret[7m"}[27m"[39m
+
+[36m [2m❯[22m src/refutation-c-002-query-surface.test.ts:[2m26:18[22m[39m
+    [90m 24|[39m  [35mconst[39m out [33m=[39m [34mcaptured[39m(error)
+    [90m 25|[39m  process.stdout.write(`PLANNER_CAPTURE=${out}\nPLANNER_NEEDLE_COUNT=${…
+    [90m 26|[39m  [34mexpect[39m(out)[33m.[39mnot[33m.[39m[34mtoContain[39m([33mNEEDLE[39m)
+    [90m   |[39m                  [31m^[39m
+    [90m 27|[39m })
+    [90m 28|[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/2]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/refutation-c-002-query-surface.test.ts[2m > [22msearchV2 diagnostics do not echo a query carried by a downstream error
+[31m[1mAssertionError[22m: expected '01:52:41.156 [memory:mongodb] error: …' not to contain 'SEARCH-NEEDLE-xyzzy SELECT secret'[39m
+
+Expected: [32m"SEARCH-NEEDLE-xyzzy SELECT secret"[39m
+Received: [31m"[7m01:52:41.156 [memory:mongodb] error: searchV2 failed {"queryLength":33,"queryDigest":"b06ca4250be0","error":"Mongo command failure echoed [27mSEARCH-NEEDLE-xyzzy SELECT secret[7m"}[27m"[39m
+
+[36m [2m❯[22m src/refutation-c-002-query-surface.test.ts:[2m41:18[22m[39m
+    [90m 39|[39m  [35mconst[39m out [33m=[39m [34mcaptured[39m(error)
+    [90m 40|[39m  process.stdout.write(`SEARCH_V2_CAPTURE=${out}\nSEARCH_V2_NEEDLE_COUN…
+    [90m 41|[39m  [34mexpect[39m(out)[33m.[39mnot[33m.[39m[34mtoContain[39m([33mNEEDLE[39m)
+    [90m   |[39m                  [31m^[39m
+    [90m 42|[39m })
+    [90m 43|[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/2]⎯[22m[39m
+
+
+[2m Test Files [22m [1m[31m1 failed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[31m2 failed[39m[22m[90m (2)[39m
+[2m   Start at [22m 01:52:40
+[2m   Duration [22m 624ms[2m (transform 342ms, setup 0ms, import 495ms, tests 9ms, environment 0ms)[22m
+
+TEST_EXIT: 1
+PROBE_AFTER: ABSENT

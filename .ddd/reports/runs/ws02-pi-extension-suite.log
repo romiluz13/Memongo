@@ -1,0 +1,16 @@
+# WS-02 C-002 final-state suite run: packages/pi-extension (Shield-safe placeholder rework)
+# Run: cd packages/pi-extension && bunx vitest run
+# Date: 2026-09-03T09:52:51Z
+
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/packages/pi-extension[39m
+
+ [32m✓[39m extensions/diagnostics.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m lifecycle.test.ts [2m([22m[2m30 tests[22m[2m)[22m[32m 11[2mms[22m[39m
+ [32m✓[39m index.test.ts [2m([22m[2m13 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m3 passed[39m[22m[90m (3)[39m
+[2m      Tests [22m [1m[32m55 passed[39m[22m[90m (55)[39m
+[2m   Start at [22m 12:52:52
+[2m   Duration [22m 465ms[2m (transform 76ms, setup 0ms, import 435ms, tests 21ms, environment 0ms)[22m
+

@@ -1,4 +1,5 @@
-import { createSubsystemLogger } from "@memongo/lib"
+import { createHash } from "node:crypto"
+import { createSubsystemLogger, formatErrorMessage } from "@memongo/lib"
 import { MongoClient, type MongoClientOptions } from "mongodb"
 
 const log = createSubsystemLogger("memory:mongodb-client-registry")
@@ -24,6 +25,15 @@ export type SharedMongoClientConnect = (
 ) => Promise<MongoClient>
 
 const REGISTRY = new Map<string, RegistryEntry>()
+
+/**
+ * C-002: stable non-secret alias for a registered URI. Registry diagnostics
+ * must never carry the raw connection string; the hash lets an operator
+ * correlate log lines across the same client without exposing credentials.
+ */
+function uriAlias(uri: string): string {
+	return `shared-client-${createHash("sha256").update(uri).digest("hex").slice(0, 8)}`
+}
 
 async function defaultSharedMongoClientConnect(
 	uri: string,
@@ -102,7 +112,12 @@ export function releaseSharedMongoClient(uri: string): void {
 	void entry.ready
 		.then((client) => client.close())
 		.catch((err) => {
-			log.warn(`failed to close released shared MongoDB client: ${String(err)}`)
+			// C-002: alias + redacted error detail — the raw URI never appears.
+			log.warn(
+				`failed to close released shared MongoDB client (${uriAlias(
+					entry.uri,
+				)}): ${formatErrorMessage(err)}`,
+			)
 		})
 }
 
@@ -115,8 +130,11 @@ export async function closeAllSharedMongoClients(): Promise<void> {
 			const client = await entry.ready
 			await client.close()
 		} catch (err) {
+			// C-002: alias + redacted error detail — the raw URI never appears.
 			log.warn(
-				`failed to close shared MongoDB client (${entry.uri}): ${String(err)}`,
+				`failed to close shared MongoDB client (${uriAlias(
+					entry.uri,
+				)}): ${formatErrorMessage(err)}`,
 			)
 		}
 	}

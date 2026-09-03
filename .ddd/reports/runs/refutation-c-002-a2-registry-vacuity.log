@@ -1,0 +1,70 @@
+# [hygiene 2026-09-03] Credential-shaped spans in captured probe output
+# were replaced with bracketed shape descriptors ([uri-userinfo],
+# [key-assignment], [auth-header], ...) so secret scanners stay clear of
+# this evidence log; masked-output spans carry a :*** suffix. Vector
+# names, leak flags, verdicts, and line ordering are unchanged from the
+# original capture; only the shape-bearing bytes inside them were
+# substituted.
+COMMAND: neutralize uriAlias to return raw URI, then cd packages/memory-engine && bunx vitest run src/mongodb-client-registry.test.ts; restore with cp and verify cmp
+BEFORE_SHA256: [b64-run]  packages/memory-engine/src/mongodb-client-registry.ts
+NEUTRALIZED_SHA256: [b64-run]  packages/memory-engine/src/mongodb-client-registry.ts
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/packages/memory-engine[39m
+
+ [31m❯[39m src/mongodb-client-registry.test.ts [2m([22m[2m12 tests[22m[2m | [22m[31m2 failed[39m[2m)[22m[32m 112[2mms[22m[39m
+     [32m✓[39m is disabled by default[32m 1[2mms[22m[39m
+     [32m✓[39m is enabled for truthy env values[32m 0[2mms[22m[39m
+     [32m✓[39m stays disabled for other values[32m 0[2mms[22m[39m
+     [32m✓[39m connects once per URI across many acquires (one pool per URI)[32m 1[2mms[22m[39m
+     [32m✓[39m connects separately per distinct URI[32m 0[2mms[22m[39m
+     [32m✓[39m evicts a failed connect so the next acquire retries[32m 1[2mms[22m[39m
+     [32m✓[39m closes the client only when the last reference is released[32m 53[2mms[22m[39m
+     [32m✓[39m is a no-op for unknown URIs[32m 0[2mms[22m[39m
+     [32m✓[39m closes every registered client regardless of ref count[32m 0[2mms[22m[39m
+     [32m✓[39m allows re-acquire after close (fresh connect)[32m 0[2mms[22m[39m
+[31m     [31m×[31m warns with a URI alias and redacted detail when a released client fails to close[39m[32m 54[2mms[22m[39m
+[31m     [31m×[31m warns with a URI alias and redacted detail when closeAll fails[39m[32m 1[2mms[22m[39m
+
+[31m⎯⎯⎯⎯⎯⎯⎯[39m[1m[41m Failed Tests 2 [49m[22m[31m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[41m[1m FAIL [22m[49m src/mongodb-client-registry.test.ts[2m > [22mregistry diagnostics (C-002: raw URI never in logs)[2m > [22mwarns with a URI alias and redacted detail when a released client fails to close
+[31m[1mAssertionError[22m: expected '01:51:01.564 [memory:mongodb-client-r…' to contain 'shared-client-'[39m
+
+Expected: [32m"shared-client-"[39m
+Received: [31m"01:51:01.564 [memory:mongodb-client-registry] warn: failed to close released shared MongoDB client ([uri-userinfo:***]host.example.net:27017): close failed: [uri-userinfo:***]host.example.net:27017"[39m
+
+[36m [2m❯[22m src/mongodb-client-registry.test.ts:[2m172:15[22m[39m
+    [90m170|[39m   [35mconst[39m out [33m=[39m warn[33m.[39mmock[33m.[39mcalls[33m.[39m[34mmap[39m((args) [33m=>[39m args[33m.[39m[34mjoin[39m([32m" "[39m))[33m.[39m[34mjoin[39m([32m"\n"[39m)
+    [90m171|[39m   expect(out).toContain("failed to close released shared MongoDB clien…
+    [90m172|[39m   [34mexpect[39m(out)[33m.[39m[34mtoContain[39m([32m"shared-client-"[39m)
+    [90m   |[39m               [31m^[39m
+    [90m173|[39m   [34mexpect[39m(out)[33m.[39mnot[33m.[39m[34mtoContain[39m([32m"dummy-cred-000"[39m)
+    [90m174|[39m   [34mexpect[39m(out)[33m.[39mnot[33m.[39m[34mtoContain[39m([32m"dummy-cred-00"[39m)
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/2]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/mongodb-client-registry.test.ts[2m > [22mregistry diagnostics (C-002: raw URI never in logs)[2m > [22mwarns with a URI alias and redacted detail when closeAll fails
+[31m[1mAssertionError[22m: expected '01:51:01.617 [memory:mongodb-client-r…' to contain 'shared-client-'[39m
+
+Expected: [32m"shared-client-"[39m
+Received: [31m"01:51:01.617 [memory:mongodb-client-registry] warn: failed to close shared MongoDB client ([uri-userinfo:***]host.example.net:27017): topology torn down: token=***"[39m
+
+[36m [2m❯[22m src/mongodb-client-registry.test.ts:[2m192:15[22m[39m
+    [90m190|[39m   [35mconst[39m out [33m=[39m warn[33m.[39mmock[33m.[39mcalls[33m.[39m[34mmap[39m((args) [33m=>[39m args[33m.[39m[34mjoin[39m([32m" "[39m))[33m.[39m[34mjoin[39m([32m"\n"[39m)
+    [90m191|[39m   [34mexpect[39m(out)[33m.[39m[34mtoContain[39m([32m"failed to close shared MongoDB client"[39m)
+    [90m192|[39m   [34mexpect[39m(out)[33m.[39m[34mtoContain[39m([32m"shared-client-"[39m)
+    [90m   |[39m               [31m^[39m
+    [90m193|[39m   [34mexpect[39m(out)[33m.[39mnot[33m.[39m[34mtoContain[39m([32m"dummy-cred-000"[39m)
+    [90m194|[39m   [34mexpect[39m(out)[33m.[39mnot[33m.[39m[34mtoContain[39m([32m"dummy-token-0000000"[39m)
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/2]⎯[22m[39m
+
+
+[2m Test Files [22m [1m[31m1 failed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[31m2 failed[39m[22m[2m | [22m[1m[32m10 passed[39m[22m[90m (12)[39m
+[2m   Start at [22m 01:51:01
+[2m   Duration [22m 374ms[2m (transform 59ms, setup 0ms, import 160ms, tests 112ms, environment 0ms)[22m
+
+TEST_EXIT: 1
+AFTER_SHA256: [b64-run]  packages/memory-engine/src/mongodb-client-registry.ts
+CMP_EXIT: 0

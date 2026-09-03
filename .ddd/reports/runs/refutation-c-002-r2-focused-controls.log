@@ -1,0 +1,53 @@
+COMMANDS: run fixed query diagnostics and representative credential controls on the restored tree
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/packages/memory-engine[39m
+
+ [32m✓[39m src/query-diagnostics.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/mongodb-client-registry.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 108[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m2 passed[39m[22m[90m (2)[39m
+[2m      Tests [22m [1m[32m19 passed[39m[22m[90m (19)[39m
+[2m   Start at [22m 02:03:21
+[2m   Duration [22m 369ms[2m (transform 114ms, setup 0ms, import 241ms, tests 115ms, environment 0ms)[22m
+
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/apps/api[39m
+
+ [32m✓[39m src/lib/errors.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 15[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m1 passed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[32m6 passed[39m[22m[90m (6)[39m
+[2m   Start at [22m 02:03:22
+[2m   Duration [22m 196ms[2m (transform 54ms, setup 0ms, import 85ms, tests 15ms, environment 0ms)[22m
+
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/apps/mcp[39m
+
+ [32m✓[39m src/http-transport.test.ts [2m([22m[2m18 tests[22m[2m | [22m[33m17 skipped[39m[2m)[22m[32m 51[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m1 passed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[32m1 passed[39m[22m[2m | [22m[33m17 skipped[39m[90m (18)[39m
+[2m   Start at [22m 02:03:22
+[2m   Duration [22m 508ms[2m (transform 145ms, setup 0ms, import 339ms, tests 51ms, environment 0ms)[22m
+
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/packages/tools[39m
+
+ [32m✓[39m src/middleware-core.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 19[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m1 passed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[32m3 passed[39m[22m[90m (3)[39m
+[2m   Start at [22m 02:03:23
+[2m   Duration [22m 204ms[2m (transform 65ms, setup 0ms, import 89ms, tests 19ms, environment 0ms)[22m
+
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/packages/lib[39m
+
+ [32m✓[39m src/logger.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m1 passed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[32m4 passed[39m[22m[90m (4)[39m
+[2m   Start at [22m 02:03:23
+[2m   Duration [22m 138ms[2m (transform 28ms, setup 0ms, import 38ms, tests 8ms, environment 0ms)[22m
+
+EXITS engine=0 api=0 mcp=0 tools=0 lib=0

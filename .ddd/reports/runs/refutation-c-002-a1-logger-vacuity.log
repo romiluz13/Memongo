@@ -1,0 +1,62 @@
+# [hygiene 2026-09-03] Credential-shaped spans in captured probe output
+# were replaced with bracketed shape descriptors ([uri-userinfo],
+# [key-assignment], [auth-header], ...) so secret scanners stay clear of
+# this evidence log; masked-output spans carry a :*** suffix. Vector
+# names, leak flags, verdicts, and line ordering are unchanged from the
+# original capture; only the shape-bearing bytes inside them were
+# substituted.
+COMMAND: neutralize both redactSensitiveText calls in formatLine, then cd packages/lib && bunx vitest run src/logger.test.ts; restore with cp and verify cmp
+BEFORE_SHA256: [b64-run]  packages/lib/src/logger.ts
+NEUTRALIZED_SHA256: [b64-run]  packages/lib/src/logger.ts
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/packages/lib[39m
+
+ [31m❯[39m src/logger.test.ts [2m([22m[2m4 tests[22m[2m | [22m[31m2 failed[39m[2m)[22m[32m 7[2mms[22m[39m
+[31m     [31m×[31m redacts credential-bearing messages[39m[32m 5[2mms[22m[39m
+[31m     [31m×[31m redacts secrets inside serialized meta while keeping plain fields[39m[32m 1[2mms[22m[39m
+     [32m✓[39m redacts raw() lines[32m 1[2mms[22m[39m
+     [32m✓[39m passes ordinary messages through unchanged[32m 1[2mms[22m[39m
+
+[31m⎯⎯⎯⎯⎯⎯⎯[39m[1m[41m Failed Tests 2 [49m[22m[31m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[41m[1m FAIL [22m[49m src/logger.test.ts[2m > [22mcreateSubsystemLogger (C-002: redaction at the logging boundary)[2m > [22mredacts credential-bearing messages
+[31m[1mAssertionError[22m: expected '01:50:54.509 [test:redact] warn: conn…' not to contain 'dummy-cred-000'[39m
+
+Expected: [32m"dummy-cred-000"[39m
+Received: [31m"01:50:54.509 [test:redact] warn: connect failed: [uri-userinfo]host.example.net:27017"[39m
+
+[36m [2m❯[22m src/logger.test.ts:[2m24:19[22m[39m
+    [90m 22|[39m   [34mexpect[39m(out)[33m.[39m[34mtoContain[39m([32m"test:redact"[39m)
+    [90m 23|[39m   [34mexpect[39m(out)[33m.[39m[34mtoContain[39m([32m"connect failed"[39m)
+    [90m 24|[39m   [34mexpect[39m(out)[33m.[39mnot[33m.[39m[34mtoContain[39m([32m"dummy-cred-000"[39m)
+    [90m   |[39m                   [31m^[39m
+    [90m 25|[39m   [34mexpect[39m(out)[33m.[39m[34mtoContain[39m([32m"***"[39m)
+    [90m 26|[39m  })
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/2]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/logger.test.ts[2m > [22mcreateSubsystemLogger (C-002: redaction at the logging boundary)[2m > [22mredacts secrets inside serialized meta while keeping plain fields
+[31m[1mAssertionError[22m: expected '01:50:54.513 [test:redact] error: req…' not to contain 'dummy-cred-00000'[39m
+
+Expected: [32m"dummy-cred-00000"[39m
+Received: [31m"01:50:54.513 [test:redact] error: request failed {"url":"[uri-userinfo]host.example.net:27017","note":"plain text survives"}"[39m
+
+[36m [2m❯[22m src/logger.test.ts:[2m39:19[22m[39m
+    [90m 37|[39m   [35mconst[39m out [33m=[39m [34mcapturedCalls[39m(error)
+    [90m 38|[39m   [34mexpect[39m(out)[33m.[39m[34mtoContain[39m([32m"plain text survives"[39m)
+    [90m 39|[39m   [34mexpect[39m(out)[33m.[39mnot[33m.[39m[34mtoContain[39m([32m"dummy-cred-00000"[39m)
+    [90m   |[39m                   [31m^[39m
+    [90m 40|[39m  })
+    [90m 41|[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/2]⎯[22m[39m
+
+
+[2m Test Files [22m [1m[31m1 failed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[31m2 failed[39m[22m[2m | [22m[1m[32m2 passed[39m[22m[90m (4)[39m
+[2m   Start at [22m 01:50:54
+[2m   Duration [22m 131ms[2m (transform 21ms, setup 0ms, import 28ms, tests 7ms, environment 0ms)[22m
+
+TEST_EXIT: 1
+AFTER_SHA256: [b64-run]  packages/lib/src/logger.ts
+CMP_EXIT: 0

@@ -1,0 +1,139 @@
+# [hygiene 2026-09-03] Credential-shaped spans in captured probe output
+# were replaced with bracketed shape descriptors ([uri-userinfo],
+# [key-assignment], [auth-header], ...) so secret scanners stay clear of
+# this evidence log; masked-output spans carry a :*** suffix. Vector
+# names, leak flags, verdicts, and line ordering are unchanged from the
+# original capture; only the shape-bearing bytes inside them were
+# substituted.
+COMMAND: temporary Vitest probe re-runs original planner/searchV2 echo attacks and exercises case, whitespace, split, truncated, embedded, short-query, and alias-spoof variants through real diagnostics
+PROBE_BEFORE: ABSENT
+PROBE_SHA256: [b64-run]  packages/memory-engine/src/refutation-c-002-r2-query.test.ts
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/packages/memory-engine[39m
+
+ORIGINAL_SEARCH_V2=01:59:05.244 [memory:mongodb] error: searchV2 failed {"queryLength":33,"queryDigest":"b06ca4250be0","error":"Mongo command failure echoed [query:b06ca4250be0]"}
+ [31m❯[39m src/refutation-c-002-r2-query.test.ts [2m([22m[2m9 tests[22m[2m | [22m[31m8 failed[39m[2m)[22m[32m 12[2mms[22m[39m
+[31m   [31m×[31m blocks the original planner refutation[39m[32m 5[2mms[22m[39m
+   [32m✓[39m blocks the original searchV2 refutation[32m 3[2mms[22m[39m
+[31m   [31m×[31m case-modified full content survives[39m[32m 1[2mms[22m[39m
+[31m   [31m×[31m whitespace-normalized full content survives[39m[32m 0[2mms[22m[39m
+[31m   [31m×[31m split full content survives across a separator[39m[32m 0[2mms[22m[39m
+[31m   [31m×[31m meaningful truncated content survives[39m[32m 0[2mms[22m[39m
+[31m   [31m×[31m exact echo embedded inside a larger word is blocked[39m[32m 0[2mms[22m[39m
+[31m   [31m×[31m short query survives through real planner seam by design[39m[32m 0[2mms[22m[39m
+[31m   [31m×[31m attacker-supplied alias-shaped text survives and coexists with true alias[39m[32m 0[2mms[22m[39m
+
+[31m⎯⎯⎯⎯⎯⎯⎯[39m[1m[41m Failed Tests 8 [49m[22m[31m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[41m[1m FAIL [22m[49m src/refutation-c-002-r2-query.test.ts[2m > [22mblocks the original planner refutation
+[31m[1mAssertionError[22m: expected [Function] to throw an error[39m
+[36m [2m❯[22m plannerLog src/refutation-c-002-r2-query.test.ts:[2m16:46[22m[39m
+    [90m 14|[39m   laneCoverage: { graph: { hasData: true, count: 1, lastUpdated: { get…
+    [90m 15|[39m  } [35mas[39m unknown [35mas[39m [33mRetrievalContext[39m
+    [90m 16|[39m  [34mexpect[39m(() [33m=>[39m [34mplanRetrieval[39m(query[33m,[39m context))[33m.[39m[34mtoThrow[39m()
+    [90m   |[39m                                              [31m^[39m
+    [90m 17|[39m  [35mreturn[39m [34mcaptured[39m(error)
+    [90m 18|[39m }
+[90m [2m❯[22m src/refutation-c-002-r2-query.test.ts:[2m23:14[22m[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/8]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/refutation-c-002-r2-query.test.ts[2m > [22mcase-modified full content survives
+[31m[1mAssertionError[22m: expected [Function] to throw an error[39m
+[36m [2m❯[22m plannerLog src/refutation-c-002-r2-query.test.ts:[2m16:46[22m[39m
+    [90m 14|[39m   laneCoverage: { graph: { hasData: true, count: 1, lastUpdated: { get…
+    [90m 15|[39m  } [35mas[39m unknown [35mas[39m [33mRetrievalContext[39m
+    [90m 16|[39m  [34mexpect[39m(() [33m=>[39m [34mplanRetrieval[39m(query[33m,[39m context))[33m.[39m[34mtoThrow[39m()
+    [90m   |[39m                                              [31m^[39m
+    [90m 17|[39m  [35mreturn[39m [34mcaptured[39m(error)
+    [90m 18|[39m }
+[90m [2m❯[22m src/refutation-c-002-r2-query.test.ts:[2m49:14[22m[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/8]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/refutation-c-002-r2-query.test.ts[2m > [22mwhitespace-normalized full content survives
+[31m[1mAssertionError[22m: expected [Function] to throw an error[39m
+[36m [2m❯[22m plannerLog src/refutation-c-002-r2-query.test.ts:[2m16:46[22m[39m
+    [90m 14|[39m   laneCoverage: { graph: { hasData: true, count: 1, lastUpdated: { get…
+    [90m 15|[39m  } [35mas[39m unknown [35mas[39m [33mRetrievalContext[39m
+    [90m 16|[39m  [34mexpect[39m(() [33m=>[39m [34mplanRetrieval[39m(query[33m,[39m context))[33m.[39m[34mtoThrow[39m()
+    [90m   |[39m                                              [31m^[39m
+    [90m 17|[39m  [35mreturn[39m [34mcaptured[39m(error)
+    [90m 18|[39m }
+[90m [2m❯[22m src/refutation-c-002-r2-query.test.ts:[2m57:14[22m[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/8]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/refutation-c-002-r2-query.test.ts[2m > [22msplit full content survives across a separator
+[31m[1mAssertionError[22m: expected [Function] to throw an error[39m
+[36m [2m❯[22m plannerLog src/refutation-c-002-r2-query.test.ts:[2m16:46[22m[39m
+    [90m 14|[39m   laneCoverage: { graph: { hasData: true, count: 1, lastUpdated: { get…
+    [90m 15|[39m  } [35mas[39m unknown [35mas[39m [33mRetrievalContext[39m
+    [90m 16|[39m  [34mexpect[39m(() [33m=>[39m [34mplanRetrieval[39m(query[33m,[39m context))[33m.[39m[34mtoThrow[39m()
+    [90m   |[39m                                              [31m^[39m
+    [90m 17|[39m  [35mreturn[39m [34mcaptured[39m(error)
+    [90m 18|[39m }
+[90m [2m❯[22m src/refutation-c-002-r2-query.test.ts:[2m66:14[22m[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/8]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/refutation-c-002-r2-query.test.ts[2m > [22mmeaningful truncated content survives
+[31m[1mAssertionError[22m: expected [Function] to throw an error[39m
+[36m [2m❯[22m plannerLog src/refutation-c-002-r2-query.test.ts:[2m16:46[22m[39m
+    [90m 14|[39m   laneCoverage: { graph: { hasData: true, count: 1, lastUpdated: { get…
+    [90m 15|[39m  } [35mas[39m unknown [35mas[39m [33mRetrievalContext[39m
+    [90m 16|[39m  [34mexpect[39m(() [33m=>[39m [34mplanRetrieval[39m(query[33m,[39m context))[33m.[39m[34mtoThrow[39m()
+    [90m   |[39m                                              [31m^[39m
+    [90m 17|[39m  [35mreturn[39m [34mcaptured[39m(error)
+    [90m 18|[39m }
+[90m [2m❯[22m src/refutation-c-002-r2-query.test.ts:[2m74:14[22m[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[5/8]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/refutation-c-002-r2-query.test.ts[2m > [22mexact echo embedded inside a larger word is blocked
+[31m[1mAssertionError[22m: expected [Function] to throw an error[39m
+[36m [2m❯[22m plannerLog src/refutation-c-002-r2-query.test.ts:[2m16:46[22m[39m
+    [90m 14|[39m   laneCoverage: { graph: { hasData: true, count: 1, lastUpdated: { get…
+    [90m 15|[39m  } [35mas[39m unknown [35mas[39m [33mRetrievalContext[39m
+    [90m 16|[39m  [34mexpect[39m(() [33m=>[39m [34mplanRetrieval[39m(query[33m,[39m context))[33m.[39m[34mtoThrow[39m()
+    [90m   |[39m                                              [31m^[39m
+    [90m 17|[39m  [35mreturn[39m [34mcaptured[39m(error)
+    [90m 18|[39m }
+[90m [2m❯[22m src/refutation-c-002-r2-query.test.ts:[2m81:14[22m[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[6/8]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/refutation-c-002-r2-query.test.ts[2m > [22mshort query survives through real planner seam by design
+[31m[1mAssertionError[22m: expected [Function] to throw an error[39m
+[36m [2m❯[22m plannerLog src/refutation-c-002-r2-query.test.ts:[2m16:46[22m[39m
+    [90m 14|[39m   laneCoverage: { graph: { hasData: true, count: 1, lastUpdated: { get…
+    [90m 15|[39m  } [35mas[39m unknown [35mas[39m [33mRetrievalContext[39m
+    [90m 16|[39m  [34mexpect[39m(() [33m=>[39m [34mplanRetrieval[39m(query[33m,[39m context))[33m.[39m[34mtoThrow[39m()
+    [90m   |[39m                                              [31m^[39m
+    [90m 17|[39m  [35mreturn[39m [34mcaptured[39m(error)
+    [90m 18|[39m }
+[90m [2m❯[22m src/refutation-c-002-r2-query.test.ts:[2m89:14[22m[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[7/8]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/refutation-c-002-r2-query.test.ts[2m > [22mattacker-supplied alias-shaped text survives and coexists with true alias
+[31m[1mAssertionError[22m: expected [Function] to throw an error[39m
+[36m [2m❯[22m plannerLog src/refutation-c-002-r2-query.test.ts:[2m16:46[22m[39m
+    [90m 14|[39m   laneCoverage: { graph: { hasData: true, count: 1, lastUpdated: { get…
+    [90m 15|[39m  } [35mas[39m unknown [35mas[39m [33mRetrievalContext[39m
+    [90m 16|[39m  [34mexpect[39m(() [33m=>[39m [34mplanRetrieval[39m(query[33m,[39m context))[33m.[39m[34mtoThrow[39m()
+    [90m   |[39m                                              [31m^[39m
+    [90m 17|[39m  [35mreturn[39m [34mcaptured[39m(error)
+    [90m 18|[39m }
+[90m [2m❯[22m src/refutation-c-002-r2-query.test.ts:[2m96:14[22m[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[8/8]⎯[22m[39m
+
+
+[2m Test Files [22m [1m[31m1 failed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[31m8 failed[39m[22m[2m | [22m[1m[32m1 passed[39m[22m[90m (9)[39m
+[2m   Start at [22m 01:59:04
+[2m   Duration [22m 697ms[2m (transform 405ms, setup 0ms, import 563ms, tests 12ms, environment 0ms)[22m
+
+TEST_EXIT: 1
+PROBE_AFTER: ABSENT

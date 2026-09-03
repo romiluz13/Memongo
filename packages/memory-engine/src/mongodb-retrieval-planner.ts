@@ -1,4 +1,5 @@
 import { createSubsystemLogger } from "@memongo/lib"
+import { queryFailureMeta } from "./query-diagnostics.js"
 import type {
 	MemoryConversationScope,
 	MemoryProceduralScope,
@@ -1060,7 +1061,9 @@ export function planRetrieval(
 			...(skippedLanes.length > 0 ? { skippedLanes } : {}),
 		}
 	} catch (err) {
-		log.error("planRetrieval failed", { query, error: err })
+		// C-002: raw query text never enters diagnostics — length + digest
+		// preserve correlation without content (see query-diagnostics.ts).
+		log.error("planRetrieval failed", queryFailureMeta(query, err))
 		throw err
 	}
 }

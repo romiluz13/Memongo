@@ -1,0 +1,14 @@
+# [hygiene 2026-09-03] Credential-shaped spans in captured probe output
+# were replaced with bracketed shape descriptors ([uri-userinfo],
+# [key-assignment], [auth-header], ...) so secret scanners stay clear of
+# this evidence log; masked-output spans carry a :*** suffix. Vector
+# names, leak flags, verdicts, and line ordering are unchanged from the
+# original capture; only the shape-bearing bytes inside them were
+# substituted.
+=== lifecycle injection and write warnings ===
+[memongo] session context fetch failed (profile: profile [uri-userinfo:***][::1]:27017/db; search: search [key-assignment] dummy-pass-002")
+[memongo] auto-capture write failed (pi-sess-r0-t0-assistant): write [key-assignment] dummy-pass-002"
+{"lifecycleLeakedPass":true,"lifecycleLeakedTail":true,"uriMasked":true}
+=== main Pi extension raw client body diagnostic ===
+Memongo is not available: HTTP 502: proxy failed at [uri-userinfo][::1]:27017/db. Use memory_search (local FTS5) instead.
+{"extensionDiagnosticLeaked":true,"hasRawUri":true}

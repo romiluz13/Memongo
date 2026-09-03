@@ -24,6 +24,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent"
 import { Type } from "typebox"
 import { StringEnum } from "@earendil-works/pi-ai"
 import { MemongoClient, MemongoClientError } from "@memongo/client"
+import { sanitizeDiagnostic } from "./diagnostics.js"
 import {
 	registerMemongoLifecycle,
 	resolveLifecycleConfig,
@@ -115,10 +116,16 @@ function truncate(text: string, max: number): string {
 }
 
 function errMsg(err: unknown): string {
+	// C-002: MemongoClientError.body is the raw upstream response body — it
+	// can echo credentials. The structural .message is already safe; the
+	// body must pass the local sanitizer before it reaches tool responses
+	// (the published package cannot depend on @memongo/lib).
 	if (err instanceof MemongoClientError) {
-		return `HTTP ${err.status}: ${truncate(err.body || err.message, 200)}`
+		return sanitizeDiagnostic(
+			`HTTP ${err.status}: ${truncate(err.body || err.message, 200)}`,
+		)
 	}
-	return err instanceof Error ? err.message : String(err)
+	return sanitizeDiagnostic(err instanceof Error ? err.message : String(err))
 }
 
 function formatResult(r: {

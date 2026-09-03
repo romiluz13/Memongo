@@ -26,9 +26,13 @@ vi.mock("./mongodb-schema-search-definitions.js", () => ({
 	]),
 }))
 
-vi.mock("@memongo/lib", () => ({
-	createSubsystemLogger: () => ({ info: vi.fn(), warn: vi.fn() }),
-}))
+vi.mock("@memongo/lib", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("@memongo/lib")>()
+	return {
+		...actual,
+		createSubsystemLogger: () => ({ info: vi.fn(), warn: vi.fn() }),
+	}
+})
 
 const { listSearchIndexes } = await import(
 	"./mongodb-schema-search-readiness.js"
@@ -195,9 +199,18 @@ describe("Guardrail 2: findStrandingModelChanges", () => {
 		expect(findings).toEqual([])
 	})
 
-	it("returns empty findings and warns when listSearchIndexes throws", async () => {
+	it("returns empty findings and warns with redacted detail when listSearchIndexes throws (C-002)", async () => {
 		const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {})
-		mockedListSearchIndexes.mockRejectedValue(new Error("not Atlas"))
+		mockedListSearchIndexes.mockRejectedValue(
+			new Error(
+				[
+					"not Atlas: ",
+					"mongodb://svc:du",
+					"mmy-cred-000000@",
+					"host.example.net:27017",
+				].join(""),
+			),
+		)
 		const db = makeDb({ test_chunks: makeCollection("test_chunks", 100) })
 		const findings = await findStrandingModelChanges(
 			db,
@@ -207,6 +220,10 @@ describe("Guardrail 2: findStrandingModelChanges", () => {
 		)
 		expect(findings).toEqual([])
 		expect(warnSpy).toHaveBeenCalled()
+		const out = warnSpy.mock.calls.map((args) => args.join(" ")).join("\n")
+		expect(out).toContain("test_chunks")
+		expect(out).toContain("[guardrail] Could not inspect search indexes")
+		expect(out).not.toContain("dummy-cred-000000")
 		warnSpy.mockRestore()
 	})
 

@@ -1,0 +1,32 @@
+# C-002 round-3 post-fix re-probe (implementer re-verification, final)
+# Vectors mirror refutation-c-002-r3-core-probes.log / r3-pi-probes.log / r2-classifier-bypass.log,
+# plus the escaped-quoted-assignment-in-serialized-meta vector surfaced by this re-probe itself.
+# Sinks: every console method patched (error level writes via console.error; the first
+# re-probe version patched only console.log, which made the logger check vacuous);
+# non-empty capture asserted. Run: bun /tmp/refute-r3-postfix/probe.ts against the landed tree
+# (post fixes A-F, userinfo branch-index repair, escaped-quote assignment repair).
+# Re-run 2026-09-03 after the dummy-vocabulary rework (exact-length fixtures).
+{"vector":"redact: mongodb+srv userinfo","leaked":false,"leakedWhat":[]}
+{"vector":"redact: postgres userinfo","leaked":false,"leakedWhat":[]}
+{"vector":"redact: username-only userinfo","leaked":false,"leakedWhat":[]}
+{"vector":"redact: long password full-star","leaked":false,"leakedWhat":[]}
+{"vector":"redact: quoted-space assignment","leaked":false,"leakedWhat":[]}
+{"vector":"redact: escaped-quoted assignment in serialized meta","leaked":false,"leakedWhat":[]}
+{"vector":"redact: webhook url","leaked":false,"leakedWhat":[]}
+{"vector":"redact: X-Custom-Auth","leaked":false,"leakedWhat":[]}
+{"vector":"redact: ordinary text control","passthrough":true,"sample":"search completed in 42ms for user alice (collection: memories)"}
+{"vector":"logger: error line + meta (incl. escaped-quote assignment)","leaked":false,"leakedWhat":[]}
+{"vector":"lib errors: formatErrorMessage chain","leaked":false,"leakedWhat":[]}
+{"vector":"api capabilities: formatCapabilityTable","leaked":false,"leakedWhat":[]}
+{"vector":"api capabilities: logCapabilityTable","leaked":false,"leakedWhat":[]}
+{"vector":"api errors: apiErrorJson envelope","leaked":false,"leakedWhat":[]}
+{"vector":"client: MemongoClientError message","leaked":false,"leakedWhat":[]}
+{"vector":"client: body property retained (programmatic)","bodyRetained":true}
+{"vector":"pi diagnostics: quoted-space","leaked":false,"leakedWhat":[]}
+{"vector":"pi diagnostics: escaped-quoted assignment in serialized meta","leaked":false,"leakedWhat":[]}
+{"vector":"pi diagnostics: connection string","leaked":false,"leakedWhat":[]}
+{"vector":"pi diagnostics: bearer token","leaked":false,"leakedWhat":[]}
+{"vector":"pi diagnostics: webhook","leaked":false,"leakedWhat":[]}
+{"vector":"pi diagnostics: errMessage(Error)","leaked":false,"leakedWhat":[]}
+{"vector":"pi diagnostics: ordinary text control","passthrough":true}
+{"verdict":"ALL_VECTORS_CLEAN"}

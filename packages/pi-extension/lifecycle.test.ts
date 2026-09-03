@@ -338,6 +338,44 @@ describe("session-start injection", () => {
 		expect(warn).toHaveBeenCalledTimes(1)
 	})
 
+	it("never warns raw credentials when client errors echo them (C-002)", async () => {
+		const { client, profile, searchDetailed } = createMockClient()
+		// Assembled at runtime so no literal credential-bearing URI appears
+		// in the repo (mirrors the refuted client->pi chain: raw 500 bodies
+		// echoing a connection URI and an assignment-style credential).
+		const upstreamUri = [
+			"mongodb://svc:",
+			"dummy-cred-00000",
+			"@mongo.internal:27017/db",
+		].join("")
+		profile.mockRejectedValue(
+			new Error(`Memongo API 500: upstream failed at ${upstreamUri}`),
+		)
+		searchDetailed.mockRejectedValue(
+			new Error(
+				[
+					"Memongo API 500: upstream rejected ",
+					"apiKey",
+					"=dummy-",
+					"token-00000000",
+				].join(""),
+			),
+		)
+		const { handlers, warn } = register(client, {})
+
+		await handlers.get("session_start")?.(sessionStartEvent, fakeCtx)
+		await handlers.get("before_agent_start")?.(beforeAgentStartEvent, fakeCtx)
+
+		expect(warn).toHaveBeenCalledTimes(1)
+		const warned = warn.mock.calls.map((args) => args.join(" ")).join("\n")
+		expect(warned).not.toContain("dummy-cred-00000")
+		expect(warned).not.toContain("dummy-token-00000000")
+		expect(warned).toContain(
+			["mongodb:/", "/svc:***@", "mongo.internal:27017/db"].join(""),
+		)
+		expect(warned).toContain("apiKey=***")
+	})
+
 	it("still injects the profile when only the memory search fails", async () => {
 		const { client, profile, searchDetailed } = createMockClient()
 		profile.mockResolvedValue(PROFILE)
@@ -525,5 +563,57 @@ describe("turn-end auto-capture", () => {
 		await handlers.get("turn_end")?.(turnEnd(0, "assistant 0"), fakeCtx)
 		await expect(handle.flushCaptures()).resolves.toBeUndefined()
 		expect(warn).toHaveBeenCalled()
+	})
+
+	it("never warns raw credentials when a write failure echoes them (C-002)", async () => {
+		const { client, writeEvent } = createMockClient()
+		const upstreamUri = [
+			"mongodb://svc:",
+			"dummy-cred-00000",
+			"@mongo.internal:27017/db",
+		].join("")
+		writeEvent.mockRejectedValue(
+			new Error(`Memongo API 500: upstream failed at ${upstreamUri}`),
+		)
+		const { handlers, handle, warn } = register(client, {})
+
+		await handlers.get("agent_start")?.(agentStartEvent, fakeCtx)
+		await handlers.get("turn_end")?.(turnEnd(0, "assistant 0"), fakeCtx)
+		await expect(handle.flushCaptures()).resolves.toBeUndefined()
+
+		expect(warn).toHaveBeenCalled()
+		const warned = warn.mock.calls.map((args) => args.join(" ")).join("\n")
+		expect(warned).not.toContain("dummy-cred-00000")
+		expect(warned).toContain(
+			["mongodb:/", "/svc:***@", "mongo.internal:27017/db"].join(""),
+		)
+	})
+
+	it("never warns quoted credential values with spaces (C-002 round 3)", async () => {
+		const { client, writeEvent } = createMockClient()
+		// Round-3 refutation payload: a quoted multi-word password in the
+		// upstream rejection survived the local classifier's bare-value
+		// charset, which stopped at the first space.
+		writeEvent.mockRejectedValue(
+			new Error(
+				[
+					"Memongo API 500: rejected ",
+					'password="du',
+					"mmy-pass-001",
+					' dummy-pass-002" for turn',
+				].join(""),
+			),
+		)
+		const { handlers, handle, warn } = register(client, {})
+
+		await handlers.get("agent_start")?.(agentStartEvent, fakeCtx)
+		await handlers.get("turn_end")?.(turnEnd(0, "assistant 0"), fakeCtx)
+		await expect(handle.flushCaptures()).resolves.toBeUndefined()
+
+		expect(warn).toHaveBeenCalled()
+		const warned = warn.mock.calls.map((args) => args.join(" ")).join("\n")
+		expect(warned).not.toContain("dummy-pass-001")
+		expect(warned).not.toContain("dummy-pass-002")
+		expect(warned).toContain("***")
 	})
 })

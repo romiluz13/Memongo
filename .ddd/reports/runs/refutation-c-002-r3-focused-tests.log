@@ -1,0 +1,64 @@
+=== lib redact/logger ===
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/packages/lib[39m
+
+ [32m✓[39m src/redact.test.ts [2m([22m[2m31 tests[22m[2m)[22m[32m 14[2mms[22m[39m
+ [32m✓[39m src/logger.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 20[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m2 passed[39m[22m[90m (2)[39m
+[2m      Tests [22m [1m[32m35 passed[39m[22m[90m (35)[39m
+[2m   Start at [22m 02:28:39
+[2m   Duration [22m 256ms[2m (transform 165ms, setup 0ms, import 224ms, tests 34ms, environment 0ms)[22m
+
+exit=0
+=== engine query/registry ===
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/packages/memory-engine[39m
+
+ [32m✓[39m src/mongodb-client-registry.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 143[2mms[22m[39m
+ [32m✓[39m src/query-diagnostics.test.ts [2m([22m[2m16 tests[22m[2m)[22m[32m 77[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m2 passed[39m[22m[90m (2)[39m
+[2m      Tests [22m [1m[32m28 passed[39m[22m[90m (28)[39m
+[2m   Start at [22m 02:28:40
+[2m   Duration [22m 2.68s[2m (transform 2.18s, setup 0ms, import 2.92s, tests 221ms, environment 0ms)[22m
+
+exit=0
+=== api capabilities/errors ===
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/apps/api[39m
+
+ [32m✓[39m src/lib/capabilities.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/lib/errors.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 40[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m2 passed[39m[22m[90m (2)[39m
+[2m      Tests [22m [1m[32m17 passed[39m[22m[90m (17)[39m
+[2m   Start at [22m 02:28:43
+[2m   Duration [22m 451ms[2m (transform 223ms, setup 0ms, import 359ms, tests 45ms, environment 2ms)[22m
+
+exit=0
+=== client ===
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/packages/client[39m
+
+ [32m✓[39m src/client.test.ts [2m([22m[2m34 tests[22m[2m)[22m[33m 1123[2mms[22m[39m
+     [33m[2m✓[22m[39m generates one UUIDv4 key per logical write and reuses it across every retry [33m 609[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m1 passed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[32m34 passed[39m[22m[90m (34)[39m
+[2m   Start at [22m 02:28:44
+[2m   Duration [22m 1.49s[2m (transform 116ms, setup 0ms, import 156ms, tests 1.12s, environment 0ms)[22m
+
+exit=0
+=== pi lifecycle ===
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/packages/pi-extension[39m
+
+ [32m✓[39m lifecycle.test.ts [2m([22m[2m29 tests[22m[2m)[22m[32m 47[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m1 passed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[32m29 passed[39m[22m[90m (29)[39m
+[2m   Start at [22m 02:28:46
+[2m   Duration [22m 288ms[2m (transform 55ms, setup 0ms, import 74ms, tests 47ms, environment 0ms)[22m
+
+exit=0

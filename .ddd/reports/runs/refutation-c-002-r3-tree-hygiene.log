@@ -1,0 +1,129 @@
+# [hygiene 2026-09-03] Credential-shaped spans in captured probe output
+# were replaced with bracketed shape descriptors ([uri-userinfo],
+# [key-assignment], [auth-header], ...) so secret scanners stay clear of
+# this evidence log; masked-output spans carry a :*** suffix. Vector
+# names, leak flags, verdicts, and line ordering are unchanged from the
+# original capture; only the shape-bearing bytes inside them were
+# substituted.
+Temporary source mutation restoration checks:
+redact_current=[b64-run]
+redact_backup=[b64-run]
+redact_cmp=0
+query_current=[b64-run]
+query_backup=[b64-run]
+query_cmp=0
+
+Evidence logs created:
+/Users/rom.iluz/Dev/memongo/.ddd/reports/runs/refutation-c-002-r3-core-probes.log
+/Users/rom.iluz/Dev/memongo/.ddd/reports/runs/refutation-c-002-r3-focused-tests.log
+/Users/rom.iluz/Dev/memongo/.ddd/reports/runs/refutation-c-002-r3-pi-probes.log
+/Users/rom.iluz/Dev/memongo/.ddd/reports/runs/refutation-c-002-r3-tree-hygiene.log
+/Users/rom.iluz/Dev/memongo/.ddd/reports/runs/refutation-c-002-r3-vacuity-query.log
+/Users/rom.iluz/Dev/memongo/.ddd/reports/runs/refutation-c-002-r3-vacuity-redact.log
+
+Git status (read-only; pre-existing dirty tree retained):
+## main...origin/main [ahead 2]
+ M .ddd/reports/validations.yaml
+ M apps/api/src/app.ts
+ M apps/api/src/lib/capabilities.ts
+ M apps/api/src/lib/errors.ts
+ M apps/mcp/src/http-transport.test.ts
+ M apps/mcp/src/http-transport.ts
+ M packages/client/src/client.test.ts
+ M packages/client/src/client.ts
+ M packages/lib/src/logger.ts
+ M packages/lib/src/redact.test.ts
+ M packages/lib/src/redact.ts
+ M packages/memory-engine/src/embedding-validation.test.ts
+ M packages/memory-engine/src/embedding-validation.ts
+ M packages/memory-engine/src/mongodb-client-registry.test.ts
+ M packages/memory-engine/src/mongodb-client-registry.ts
+ M packages/memory-engine/src/mongodb-retrieval-planner.ts
+ M packages/memory-engine/src/mongodb-search-v2.ts
+ M packages/pi-extension/extensions/lifecycle.ts
+ M packages/pi-extension/lifecycle.test.ts
+ M packages/tools/src/middleware-core.ts
+?? .ddd/reports/landing-progress.md
+?? .ddd/reports/refutation-c-002.yaml
+?? .ddd/reports/runs/refutation-c-002-a1-logger-vacuity.log
+?? .ddd/reports/runs/refutation-c-002-a2-registry-vacuity.log
+?? .ddd/reports/runs/refutation-c-002-a3-api-vacuity.log
+?? .ddd/reports/runs/refutation-c-002-a4-query-vacuity.log
+?? .ddd/reports/runs/refutation-c-002-b-credential-surfaces.log
+?? .ddd/reports/runs/refutation-c-002-c-query-surface.log
+?? .ddd/reports/runs/refutation-c-002-r2-classifier-bypass.log
+?? .ddd/reports/runs/refutation-c-002-r2-client-pi-chain.log
+?? .ddd/reports/runs/refutation-c-002-r2-client-pi-chain2.log
+?? .ddd/reports/runs/refutation-c-002-r2-credential-regression.log
+?? .ddd/reports/runs/refutation-c-002-r2-diagnostic-sweep.log
+?? .ddd/reports/runs/refutation-c-002-r2-focused-controls.log
+?? .ddd/reports/runs/refutation-c-002-r2-missed-api-diagnostic.log
+?? .ddd/reports/runs/refutation-c-002-r2-pi-diagnostic.log
+?? .ddd/reports/runs/refutation-c-002-r2-pi-diagnostic2.log
+?? .ddd/reports/runs/refutation-c-002-r2-query-attacks.log
+?? .ddd/reports/runs/refutation-c-002-r2-query-attacks2.log
+?? .ddd/reports/runs/refutation-c-002-r2-tree-hygiene.log
+?? .ddd/reports/runs/refutation-c-002-r2-vacuity-alias.log
+?? .ddd/reports/runs/refutation-c-002-r2-vacuity-noop.log
+?? .ddd/reports/runs/refutation-c-002-r3-core-probes.log
+?? .ddd/reports/runs/refutation-c-002-r3-focused-tests.log
+?? .ddd/reports/runs/refutation-c-002-r3-pi-probes.log
+?? .ddd/reports/runs/refutation-c-002-r3-tree-hygiene.log
+?? .ddd/reports/runs/refutation-c-002-r3-vacuity-query.log
+?? .ddd/reports/runs/refutation-c-002-r3-vacuity-redact.log
+?? .ddd/reports/runs/refutation-c-002-tree-hygiene.log
+?? .ddd/reports/runs/ws02-api-suite.log
+?? .ddd/reports/runs/ws02-client-suite.log
+?? .ddd/reports/runs/ws02-lib-suite.log
+?? .ddd/reports/runs/ws02-mcp-suite.log
+?? .ddd/reports/runs/ws02-memory-engine-suite.log
+?? .ddd/reports/runs/ws02-pi-extension-suite.log
+?? .ddd/reports/runs/ws02-tools-suite.log
+?? apps/api/src/lib/capabilities.test.ts
+?? apps/api/src/lib/errors.test.ts
+?? benchmarks/results/b16-2026-08-04/benchmark-full-voyage-lite-parallel-js-merge-m30.log
+?? benchmarks/results/b16-2026-08-04/benchmark-sample-5-attempt1.log
+?? benchmarks/results/b16-2026-08-04/benchmark-sample-5-attempt2.log
+?? benchmarks/results/b16-2026-08-04/benchmark-sample-5-attempt3.log
+?? benchmarks/results/b16-2026-08-04/benchmark-sample-5-attempt4.log
+?? benchmarks/results/b16-2026-08-04/benchmark-sample-5-attempt5.log
+?? benchmarks/results/b16-2026-08-04/benchmark-sample-5-attempt6.log
+?? benchmarks/results/b16-2026-08-04/benchmark-sample-5-attempt7.log
+?? benchmarks/results/b16-2026-08-04/benchmark-sample-5-voyage-lite-parallel-js-merge-m30.log
+?? benchmarks/results/b16-2026-08-04/benchmark-sample-5-voyage-lite-parallel-m30.log
+?? benchmarks/results/b16-2026-08-04/benchmark-sample-5-voyage-lite-parallel-no-rerank-m30.log
+?? benchmarks/results/b16-2026-08-04/benchmark-sample-5-voyage-lite-parallel.log
+?? benchmarks/results/prebenchmark-2026-08-09/sample-5-attempt2.log
+?? benchmarks/results/prebenchmark-2026-08-09/sample-5-attempt3.log
+?? benchmarks/results/prebenchmark-2026-08-09/sample-5-attempt4.log
+?? benchmarks/results/prebenchmark-2026-08-09/sample-5-attempt5.log
+?? benchmarks/results/prebenchmark-2026-08-09/sample-5-attempt6.log
+?? benchmarks/results/prebenchmark-2026-08-09/sample-5-attempt7.log
+?? benchmarks/results/prebenchmark-2026-08-09/sample-5.log
+?? docs/handoff/2026-08-05-master-plan.md
+?? docs/handoff/2026-08-05-prebenchmark-builder-master.md
+?? docs/handoff/2026-08-09-latency-fix-handoff.md
+?? docs/handoff/2026-08-12-deep-research-synthesis-v2.md
+?? docs/handoff/2026-08-12-deep-research-synthesis.md
+?? docs/handoff/2026-08-14-final-longmemeval-session-handoff.md
+?? docs/handoff/2026-09-02-glm53-remediation-plan.md
+?? docs/research-sales-agents.md
+?? docs/research/handoff-2026-08-04.md
+?? docs/research/master-findings-recommendations-2026-08-04.md
+?? droid-wiki/apps/api/openapi.md
+?? droid-wiki/apps/mcp.md
+?? droid-wiki/cleanup-opportunities/index.md
+?? droid-wiki/features/bitemporal-memory.md
+?? droid-wiki/features/multi-tenancy.md
+?? droid-wiki/packages/memory-engine/embedding-providers.md
+?? droid-wiki/packages/memory-engine/manager-and-schema.md
+?? droid-wiki/systems/consolidation.md
+?? droid-wiki/systems/memory-model.md
+?? droid-wiki/systems/retrieval-pipeline.md
+?? packages/lib/.ddd-tmp.log
+?? packages/lib/src/logger.test.ts
+?? packages/memory-engine/.ddd-tmp.log
+?? packages/memory-engine/src/query-diagnostics.test.ts
+?? packages/memory-engine/src/query-diagnostics.ts
+?? packages/tools/.ddd-tmp.log
+?? packages/tools/src/middleware-core.test.ts

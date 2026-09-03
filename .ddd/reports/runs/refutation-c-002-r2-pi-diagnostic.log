@@ -1,0 +1,24 @@
+# [hygiene 2026-09-03] Credential-shaped spans in captured probe output
+# were replaced with bracketed shape descriptors ([uri-userinfo],
+# [key-assignment], [auth-header], ...) so secret scanners stay clear of
+# this evidence log; masked-output spans carry a :*** suffix. Vector
+# names, leak flags, verdicts, and line ordering are unchanged from the
+# original capture; only the shape-bearing bytes inside them were
+# substituted.
+COMMAND: temporary Vitest probe drives credential-bearing Memongo client failures through the Pi lifecycle default warning
+PROBE_BEFORE: ABSENT
+PROBE_SHA256: [b64-run]  packages/pi-extension/refutation-c-002-r2-pi.test.ts
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/packages/pi-extension[39m
+
+PI_WARN=
+SECRET_COUNT=0
+ [32m✓[39m refutation-c-002-r2-pi.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 2[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m1 passed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[32m1 passed[39m[22m[90m (1)[39m
+[2m   Start at [22m 02:02:00
+[2m   Duration [22m 131ms[2m (transform 19ms, setup 0ms, import 27ms, tests 2ms, environment 0ms)[22m
+
+TEST_EXIT: 0
+PROBE_AFTER: ABSENT

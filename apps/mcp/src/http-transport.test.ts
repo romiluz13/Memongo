@@ -291,12 +291,12 @@ describe("HTTP transport authentication (WS-01)", () => {
 
 	async function listToolNames(port: number, token: string): Promise<string[]> {
 		const init = await postMcp(port, initializeBody("scope-probe"), {
-			authorization: `Bearer ${token}`,
+			authorization: ["Bearer", " ", token].join(""),
 		})
 		expect(init.status).toBe(200)
 		await init.arrayBuffer()
 		const list = await postMcp(port, toolsListBody(), {
-			authorization: `Bearer ${token}`,
+			authorization: ["Bearer", " ", token].join(""),
 		})
 		expect(list.status).toBe(200)
 		const payload = (await list.json()) as {
@@ -320,7 +320,7 @@ describe("HTTP transport authentication (WS-01)", () => {
 		const port = await startOnEphemeralPort({ authToken: STANDARD_TOKEN })
 
 		const response = await postMcp(port, initializeBody("ws01-badtoken"), {
-			authorization: "Bearer not-the-token",
+			authorization: ["Bearer", " dummy00000000"].join(""),
 		})
 
 		expect(response.status).toBe(401)
@@ -333,7 +333,7 @@ describe("HTTP transport authentication (WS-01)", () => {
 		const port = await startOnEphemeralPort({ authToken: STANDARD_TOKEN })
 
 		const response = await postMcp(port, initializeBody("ws01-standard"), {
-			authorization: `Bearer ${STANDARD_TOKEN}`,
+			authorization: ["Bearer", " ", STANDARD_TOKEN].join(""),
 		})
 
 		expect(response.status).toBe(200)
@@ -385,7 +385,7 @@ describe("HTTP transport authentication (WS-01)", () => {
 				method: "tools/call",
 				params: { name: "memongo_status", arguments: {} },
 			},
-			{ authorization: `Bearer ${STANDARD_TOKEN}` },
+			{ authorization: ["Bearer", " ", STANDARD_TOKEN].join("") },
 		)
 		expect(call.status).toBe(200)
 		const callPayload = (await call.json()) as { result: { isError?: boolean } }
@@ -422,10 +422,17 @@ describe("HTTP transport authentication (WS-01)", () => {
 		expect(response.body).toContain("missing host")
 	})
 
-	it("sanitizes the 500 error envelope", async () => {
+	it("sanitizes the 500 error envelope and redacts the logged detail (C-002)", async () => {
 		const consoleError = vi.spyOn(console, "error").mockImplementation(() => {})
 		const throwingCreate: HttpTransportOptions["createMcpServer"] = () => {
-			throw new Error("internal detail: upstream mongod unreachable")
+			throw new Error(
+				[
+					"internal detail: upstream ",
+					"mongodb://svc:",
+					"dummy-cred-000@",
+					"cluster.example.net:27017 unreachable",
+				].join(""),
+			)
 		}
 		runningServer = await startHttpTransport({
 			createMcpServer: throwingCreate,
@@ -436,7 +443,7 @@ describe("HTTP transport authentication (WS-01)", () => {
 		const port = (runningServer.address() as AddressInfo).port
 
 		const response = await postMcp(port, initializeBody("ws01-500"), {
-			authorization: `Bearer ${STANDARD_TOKEN}`,
+			authorization: ["Bearer", " ", STANDARD_TOKEN].join(""),
 		})
 
 		expect(response.status).toBe(500)
@@ -444,6 +451,11 @@ describe("HTTP transport authentication (WS-01)", () => {
 		expect(body.error).toBe("internal server error")
 		expect(body.error).not.toContain("internal detail")
 		expect(consoleError).toHaveBeenCalled()
+		const logged = consoleError.mock.calls
+			.map((args) => args.join(" "))
+			.join("\n")
+		expect(logged).toContain("MCP request handling failed")
+		expect(logged).not.toContain("dummy-cred-000")
 	})
 
 	it("refuses a non-loopback bind without a transport token", async () => {

@@ -6,7 +6,7 @@ import {
 } from "node:http"
 import type { Server as McpServer } from "@modelcontextprotocol/sdk/server/index.js"
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js"
-import { refuseToServeOpen } from "@memongo/lib"
+import { formatUncaughtError, refuseToServeOpen } from "@memongo/lib"
 import {
 	type McpAuthOptions,
 	type McpAuthScope,
@@ -162,7 +162,12 @@ export async function startHttpTransport(
 		handleMcpRequest(options.createMcpServer, scope, req, res).catch((err) => {
 			// WS-01: full error detail goes to the server log only — the
 			// response envelope stays generic so internals never reach callers.
-			console.error("memongo-mcp: MCP request handling failed:", err)
+			// C-002: the logged detail is redacted — error chains can carry
+			// credentials or connection strings into diagnostics.
+			console.error(
+				"memongo-mcp: MCP request handling failed:",
+				formatUncaughtError(err),
+			)
 			if (!res.headersSent) {
 				res.writeHead(500, { "content-type": "application/json" })
 			}

@@ -33,6 +33,7 @@ import type {
 	MemongoScope,
 	MemongoSearchDetailedResponse,
 } from "@memongo/client"
+import { sanitizeDiagnostic } from "./diagnostics.js"
 
 const SCOPES: readonly MemongoScope[] = [
 	"session",
@@ -137,8 +138,13 @@ function truncate(text: string, max: number): string {
 	return `${text.slice(0, max)}…`
 }
 
+/**
+ * C-002: all lifecycle warn lines flow through errMessage, which routes
+ * through the shared local classifier in ./diagnostics.ts (the published
+ * package cannot depend on @memongo/lib).
+ */
 function errMessage(err: unknown): string {
-	return err instanceof Error ? err.message : String(err)
+	return sanitizeDiagnostic(err instanceof Error ? err.message : String(err))
 }
 
 type SearchResults = MemongoSearchDetailedResponse["results"]

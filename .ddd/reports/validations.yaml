@@ -60,3 +60,103 @@ entries:
     run_at: "2026-09-02T22:25:52.000Z"
     evidence_hash: sha256:3900007ab7afddb043c7eff851a9c6d144f5c65f6ca0668f22f1e1b7942d543c
     notes: "End-to-end transport evidence from the WS-01 mcp suite (this log): the 11-case HTTP authentication battery drives a real started server over node:http, raw sockets, and fetch — 401 with WWW-Authenticate Bearer for missing credentials, 401 with the invalid_token challenge for a wrong token, a valid-token initialize handshake, credential-scope gating (admin tools hidden from tools/list under the standard token even with MEMONGO_MCP_ADMIN=1, exposed under the admin token, and unreachable when MEMONGO_MCP_ADMIN=1 is set without MEMONGO_MCP_ADMIN_TOKEN), 403 for a spoofed Host header, 403 for a foreign Origin, 403 (not a parser crash) for an empty Host header — the round-1 refutation finding, fixed by moving the Host/Origin gate ahead of the URL parse with a 400 fallback for unparseable request targets — a sanitized 500 envelope whose full detail goes only to the server log, and startup refusal for a 0.0.0.0 bind without a transport token. 18 transport tests total including the pre-existing handshake and 404 cases. The PR CI run supersedes this local evidence once landed."
+
+  - id: V-032
+    claim_id: C-002
+    construct: packages/memory-engine/src/mongodb-client-registry.ts
+    method: test
+    target: .ddd/reports/runs/ws02-memory-engine-suite.log
+    result: pass
+    run_at: "2026-09-03T07:42:33.000Z"
+    evidence_hash: sha256:961849c45ba373fe877efaea432afcf580072b85c88063c13e7913f7ebaf28d4
+    notes: "Registry boundary evidence from the final-state WS-02 engine suite (this log, canonical script `vitest run --exclude=src/**/*.e2e.test.ts`, 123 files / 2070 tests passed, exit 0): the mongodb-client-registry.test.ts close-failure battery proves both warn sites (releaseSharedMongoClient and closeAllSharedMongoClients) log a shared-client-<sha256-8> URI alias plus a formatErrorMessage-redacted detail — the raw credential-bearing URI never appears in captured warn output. Companion engine batteries in the same log pin the remaining diagnostic seams this change hardened: embedding-validation.test.ts (listSearchIndexes failure warns through formatErrorMessage — credential-bearing error chains excluded from captured output), the 19-test query-diagnostics battery (raw query excluded, stable digest, credential redaction, every echo variant the round-2/3 refuter demonstrated — verbatim, credential-redacted, case-folded, whitespace-mangled, separator-split, truncated-prefix, middle-fragment, long-single-word, mid-word, re-segmented — replaced by the correlatable [query:<digest>] alias, fragments under 4 chars left intact), and the planRetrieval catch-seam test driving the planner's live failure path with an echoing lane-probe error and asserting the captured log line carries the alias, never the needle."
+
+  - id: V-033
+    claim_id: C-002
+    construct: "packages/lib/src/redact.ts#redactSensitiveText"
+    method: test
+    target: .ddd/reports/runs/ws02-lib-suite.log
+    result: pass
+    run_at: "2026-09-03T07:42:33.000Z"
+    evidence_hash: sha256:7861f89f02132b364cde54839f445f7e481f628e299a0e7d42b0a5e510b884cc
+    notes: "Utility-wiring evidence from the final-state WS-02 lib suite (this log, 158 passed, exit 0, post fixes A-F plus the round-3 userinfo branch-index and escaped-quote repairs): redactSensitiveText is the choke point for every diagnostic boundary this change touched — the subsystem logger (formatLine message + JSON-serialized meta, and raw()), the registry close-failure warns (via formatErrorMessage from packages/lib/src/errors.ts, which runs redactSensitiveText over message and chain), the API internalError server log (message and stack) and capability-table render, the tools middleware default one-time warn, the mcp transport handler-error log (via formatUncaughtError), and the client's non-JSON error messages. The redact.test.ts battery grew to 40 tests: the pre-existing credential/connection-string/token patterns plus the round-2 exotic shapes (username-only userinfo, quoted multiword assignments, webhook and credential-path URLs, X-Custom-Auth, long-password full-star) and the round-3 escaped-quoted assignment inside serialized meta. Downstream wiring is corroborated by the final-state per-package logs: ws02-memory-engine-suite.log (sha256:961849c45ba373fe877efaea432afcf580072b85c88063c13e7913f7ebaf28d4), ws02-api-suite.log (sha256:47d051b40c45fcf27221ea645fcf5a25a09adaf69dca1ee76ce59610a0c4ae45), ws02-tools-suite.log (sha256:0d60a4359a4b1eff99b3184df3dbe1d60507d743aab071478e4780c3442bd94f), ws02-mcp-suite.log (sha256:6415aae07e6907382b79d7d3e832eb4e5d9e6b4227ffbf4d7c4ff1be3ec1b097), ws02-client-suite.log (sha256:f5146bc51bf605e61f6b3f7089e15d1e5d567c03a018dc12d9c6419a1b7a95b8), ws02-pi-extension-suite.log (sha256:4c22188e8721a9a6c2be32a102b298e7e5671453ce93e015ef5da366ec0f6a40)."
+
+  - id: V-034
+    claim_id: C-002
+    construct: "packages/lib/src/logger.ts#formatLine"
+    method: test
+    target: .ddd/reports/runs/ws02-lib-suite.log
+    result: pass
+    run_at: "2026-09-03T07:42:33.000Z"
+    evidence_hash: sha256:7861f89f02132b364cde54839f445f7e481f628e299a0e7d42b0a5e510b884cc
+    notes: "Logger-boundary evidence from the packages/lib/src/logger.test.ts battery in the final-state WS-02 lib suite (this log, 158 passed): a credential-bearing message is redacted in the formatted line; a secret hidden inside a JSON-serialized meta object is redacted (redaction runs after serialization, so nested values are covered); an escaped-quoted assignment riding inside a serialized meta value — the round-3 gap, JSON.stringify doubles the inner quotes — is redacted; raw() output lines are redacted; ordinary unclassified messages pass through unchanged (no over-redaction breaking log legibility). The same suite confirms no regression in the logger's consumers. The final-state engine suite (ws02-memory-engine-suite.log, sha256:961849c45ba373fe877efaea432afcf580072b85c88063c13e7913f7ebaf28d4) corroborates at scale: every subsystem diagnostic across 123 engine test files flows through this boundary with 2070 tests passing."
+
+  - id: V-035
+    claim_id: C-002
+    construct: apps/api/src/lib/errors.ts
+    method: test
+    target: .ddd/reports/runs/ws02-api-suite.log
+    result: pass
+    run_at: "2026-09-03T07:42:33.000Z"
+    evidence_hash: sha256:47d051b40c45fcf27221ea645fcf5a25a09adaf69dca1ee76ce59610a0c4ae45
+    notes: "API error-envelope evidence from the apps/api/src/lib/errors.test.ts battery in the final-state WS-02 api suite (this log, 456 passed, exit 0): the server-side internalError log emits redactSensitiveText(err.message) and redactSensitiveText(err.stack) — a credential embedded in a stack line is excluded from the log — while the client-facing 500 body stays generic (status + message only, no stack, no detail), even when the thrown value is a non-Error (string/undefined redaction path). The same battery pins the dependency-unavailable surface from WS-03 prep: 503 mapping with retry-after and the isDependencyUnavailableError closed-set + cause-chain classifier. Companion boundaries in the same final-state run: the mcp transport handler-error log (ws02-mcp-suite.log, 163 passed) and the tools middleware default warn (ws02-tools-suite.log, 48 passed) both prove credential-bearing error output is redacted at their batteries."
+
+  - id: V-036
+    claim_id: C-002
+    construct: packages/memory-engine/src/query-diagnostics.ts
+    method: test
+    target: .ddd/reports/runs/ws02-memory-engine-suite.log
+    result: pass
+    run_at: "2026-09-03T07:42:33.000Z"
+    evidence_hash: sha256:961849c45ba373fe877efaea432afcf580072b85c88063c13e7913f7ebaf28d4
+    notes: "Query-echo seam evidence from the query-diagnostics.test.ts battery in the final-state engine suite (this log): redactQueryEcho/queryFailureMeta replace every echo variant the round-2/3 refuter demonstrated — verbatim, credential-redacted, case-folded, whitespace-mangled, separator-split, truncated-prefix, middle-fragment, long-single-word, mid-word, and re-segmented — with the correlatable [query:<digest>] alias while leaving fragments under 4 characters intact; the battery (19 tests) also pins the digest-alias stability, the searchV2 funnel catch seam, the lane-coverage inner-warn seam, and the planner catch seam via a live lane-probe error whose captured log line carries the alias, never the needle. The redactQueryEcho vacuity mutation (immediate no-op return) failed 11/16 of this battery pre-fix (refutation-c-002-r3-vacuity-query.log) and the source restore was byte-identical."
+
+  - id: V-037
+    claim_id: C-002
+    construct: apps/api/src/lib/capabilities.ts
+    method: test
+    target: .ddd/reports/runs/ws02-api-suite.log
+    result: pass
+    run_at: "2026-09-03T07:42:33.000Z"
+    evidence_hash: sha256:47d051b40c45fcf27221ea645fcf5a25a09adaf69dca1ee76ce59610a0c4ae45
+    notes: "Capability-render boundary evidence from the capabilities.test.ts battery (12 tests) in the final-state api suite (this log): formatCapabilityTable runs formatErrorMessage over each probe error before rendering, so a probe failure carrying a credential-bearing MongoDB URI renders as the redacted message — the round-3 render-boundary leak (envelopeLeaked true pre-fix, refutation-c-002-r3-core-probes.log) is closed at the boundary itself, with ready/failed markers, probe counts, and table structure preserved."
+
+  - id: V-038
+    claim_id: C-002
+    construct: packages/tools/src/middleware-core.ts
+    method: test
+    target: .ddd/reports/runs/ws02-tools-suite.log
+    result: pass
+    run_at: "2026-09-03T07:42:33.000Z"
+    evidence_hash: sha256:0d60a4359a4b1eff99b3184df3dbe1d60507d743aab071478e4780c3442bd94f
+    notes: "Tools middleware-core evidence from the final-state tools suite (this log, 48 passed, exit 0): the default one-time warn (emitted when an engine operation fails and the response degrades to an error tool result) runs formatErrorMessage over the error, so a credential-bearing engine failure never reaches the console raw; the battery pins credential-bearing warn output, warn-once behavior, and the tool-result error path."
+
+  - id: V-039
+    claim_id: C-002
+    construct: "packages/client/src/client.ts#MemongoClientError"
+    method: test
+    target: .ddd/reports/runs/ws02-client-suite.log
+    result: pass
+    run_at: "2026-09-03T07:42:33.000Z"
+    evidence_hash: sha256:f5146bc51bf605e61f6b3f7089e15d1e5d567c03a018dc12d9c6419a1b7a95b8
+    notes: "Client error-message evidence from the final-state client suite (this log, 34 passed, exit 0): MemongoClientError's message is structural for non-JSON bodies (status + byte count, no raw body text), so a 502 HTML page from a proxy — the round-3 leak vector where the raw non-envelope body was embedded verbatim — no longer carries body content into the message; the raw body remains available on .body for programmatic use, and API envelope messages (structured JSON errors) still surface their server-provided detail, which is redacted upstream at the API boundary (V-035)."
+
+  - id: V-040
+    claim_id: C-002
+    construct: packages/pi-extension/extensions/diagnostics.ts
+    method: test
+    target: .ddd/reports/runs/ws02-pi-extension-suite.log
+    result: pass
+    run_at: "2026-09-03T07:42:33.000Z"
+    evidence_hash: sha256:4c22188e8721a9a6c2be32a102b298e7e5671453ce93e015ef5da366ec0f6a40
+    notes: "Pi-extension choke-point evidence from the diagnostics.test.ts battery (12 tests) in the final-state pi-extension suite (this log, 55 passed, exit 0): the published package cannot import @memongo/lib, so it carries a local classifier that mirrors the lib shapes; sanitizeDiagnostic/errMessage is the single funnel for lifecycle warns and tool responses, including escaped-quoted assignments inside serialized text (parity with the lib round-3 repair) — the round-3 lifecycle leak (quoted multiword assignment forwarded raw) and the extension diagnostic emitting the client chain's raw URI are both closed, pinned by tests that drive the same code paths the refuter probed."
+
+  - id: V-041
+    claim_id: C-002
+    construct: "packages/lib/src/redact.ts#DEFAULT_REDACT_PATTERNS"
+    method: test
+    target: .ddd/reports/runs/ws02-lib-suite.log
+    result: pass
+    run_at: "2026-09-03T07:42:33.000Z"
+    evidence_hash: sha256:7861f89f02132b364cde54839f445f7e481f628e299a0e7d42b0a5e510b884cc
+    notes: "Pattern-table integrity evidence from the redact.test.ts battery (40 tests) in the final-state lib suite (this log): branch dispatch is bound by pattern identity (indexOf over the const regexes) after the round-3 repair — the original source-string prefix probe silently dropped both userinfo branches when the escaped-slash prefix probe failed to match, sending username-only userinfo into an unmasked fallback — and the assignment value alternatives tolerate the optional backslash before opening/closing quotes, closing the escaped-quote serialized-meta gap (JSON.stringify doubles inner quotes). Real-code confirmation: the post-fix re-probe (refutation-c-002-r3-post-fix-probes.log, sha256:c8a19ced75a7011e1410d48efc7cfe42a2e74c833dbfe71c02d8b99a70eeaadb) drives all 24 round-2/3 vectors through the actual logger, registry, API, client, tools, and pi-extension boundaries with every console method patched and non-empty capture asserted — all vectors clean, exit 0."

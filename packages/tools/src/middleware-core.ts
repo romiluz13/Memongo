@@ -1,4 +1,5 @@
 import { MemongoClient, type MemongoScope } from "@memongo/client"
+import { formatErrorMessage } from "@memongo/lib"
 import {
 	cacheGet,
 	cacheSet,
@@ -120,9 +121,13 @@ export function createMemongoMiddlewareCore(
 		}
 		if (defaultWarned) return
 		defaultWarned = true
+		// C-002: the default warning is a diagnostic path — the error chain
+		// (which can carry request URLs or credential-bearing client errors)
+		// is redacted. onError receives the raw error: it is a programmatic
+		// callback, not a log.
 		console.warn(
 			`[memongo] ${phase} failed; suppressing further warnings for this middleware instance (pass onError to observe every failure):`,
-			err,
+			formatErrorMessage(err),
 		)
 	}
 

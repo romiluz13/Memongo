@@ -1,3 +1,4 @@
+import { redactSensitiveText } from "@memongo/lib"
 import type { Context } from "hono"
 import type { ContentfulStatusCode } from "hono/utils/http-status"
 
@@ -9,7 +10,12 @@ export type ApiErrorBody = {
 }
 
 export function apiErrorJson(code: string, message: string): ApiErrorBody {
-	return { error: { code, message } }
+	// C-002: the envelope is the last boundary before the wire — callers
+	// pass route-authored messages, but any path that forwards upstream or
+	// driver text must not be able to smuggle credentials out. Redaction
+	// here is a no-op for ordinary route messages and stars only
+	// credential-shaped content.
+	return { error: { code, message: redactSensitiveText(message) } }
 }
 
 export function jsonError(
@@ -75,8 +81,15 @@ export function internalError(c: Context, err: unknown, code: string) {
 			path: c.req.path,
 			error:
 				err instanceof Error
-					? { name: err.name, message: err.message, stack: err.stack }
-					: String(err),
+					? {
+							// C-002: server-side diagnostic detail is redacted at the
+							// boundary — driver errors can embed connection strings
+							// or credentials in messages and stacks.
+							name: err.name,
+							message: redactSensitiveText(err.message),
+							stack: err.stack ? redactSensitiveText(err.stack) : undefined,
+						}
+					: redactSensitiveText(String(err)),
 		}),
 	)
 	if (isDependencyUnavailableError(err)) {

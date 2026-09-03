@@ -1,0 +1,230 @@
+# [hygiene 2026-09-03] Credential-shaped spans in captured probe output
+# were replaced with bracketed shape descriptors ([uri-userinfo],
+# [key-assignment], [auth-header], ...) so secret scanners stay clear of
+# this evidence log; masked-output spans carry a :*** suffix. Vector
+# names, leak flags, verdicts, and line ordering are unchanged from the
+# original capture; only the shape-bearing bytes inside them were
+# substituted.
+mutation=redactQueryEcho immediate no-op return
+before_sha256=[b64-run]
+mutated_sha256=[b64-run]
+vitest_exit=1
+after_sha256=[b64-run]
+cmp_restore_exit=0
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/packages/memory-engine[39m
+
+ [31m❯[39m src/query-diagnostics.test.ts [2m([22m[2m16 tests[22m[2m | [22m[31m11 failed[39m[2m)[22m[32m 17[2mms[22m[39m
+     [32m✓[39m never includes the raw query text[32m 2[2mms[22m[39m
+     [32m✓[39m produces a stable, correlatable digest[32m 0[2mms[22m[39m
+     [32m✓[39m redacts credential-bearing error chains[32m 0[2mms[22m[39m
+[31m     [31m×[31m replaces a downstream error that echoes the query verbatim[39m[32m 3[2mms[22m[39m
+[31m     [31m×[31m replaces the echo even after credential redaction altered it[39m[32m 1[2mms[22m[39m
+     [32m✓[39m leaves short fragments intact to avoid mangling log detail[32m 0[2mms[22m[39m
+[31m     [31m×[31m replaces a case-folded echo of the query[39m[32m 0[2mms[22m[39m
+[31m     [31m×[31m replaces a whitespace-mangled echo of the query[39m[32m 1[2mms[22m[39m
+[31m     [31m×[31m replaces a query echo split with separator junk[39m[32m 0[2mms[22m[39m
+[31m     [31m×[31m replaces a truncated echo of the query prefix[39m[32m 0[2mms[22m[39m
+[31m     [31m×[31m replaces a middle fragment echo of the query[39m[32m 0[2mms[22m[39m
+[31m     [31m×[31m replaces an echo of a long single-word query[39m[32m 0[2mms[22m[39m
+[31m     [31m×[31m replaces a four-character full-query echo (exact-pass floor)[39m[32m 0[2mms[22m[39m
+     [32m✓[39m does not scrub ordinary two-word collisions from unrelated detail[32m 0[2mms[22m[39m
+[31m     [31m×[31m logs no raw query text when a lane probe fails with an echoing error[39m[32m 4[2mms[22m[39m
+[31m     [31m×[31m logs no raw query text when the search funnel fails with an echoing error[39m[32m 4[2mms[22m[39m
+
+[31m⎯⎯⎯⎯⎯⎯[39m[1m[41m Failed Tests 11 [49m[22m[31m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[41m[1m FAIL [22m[49m src/query-diagnostics.test.ts[2m > [22mqueryFailureMeta (C-002: raw query text never enters diagnostics)[2m > [22mreplaces a downstream error that echoes the query verbatim
+[31m[1mAssertionError[22m: expected 'command failed: SEARCH-NEEDLE-xyzzy S…' not to contain 'SEARCH-NEEDLE'[39m
+
+Expected: [32m"SEARCH-NEEDLE"[39m
+Received: [31m"command failed: SEARCH-NEEDLE-xyzzy SELECT secret"[39m
+
+[36m [2m❯[22m src/query-diagnostics.test.ts:[2m52:26[22m[39m
+    [90m 50|[39m   const meta = queryFailureMeta(query, new Error(`command failed: ${qu…
+    [90m 51|[39m
+    [90m 52|[39m   [34mexpect[39m(meta[33m.[39merror)[33m.[39mnot[33m.[39m[34mtoContain[39m([32m"SEARCH-NEEDLE"[39m)
+    [90m   |[39m                          [31m^[39m
+    [90m 53|[39m   [34mexpect[39m(meta[33m.[39merror)[33m.[39mnot[33m.[39m[34mtoContain[39m([32m"SELECT secret"[39m)
+    [90m 54|[39m   [34mexpect[39m(meta[33m.[39merror)[33m.[39m[34mtoContain[39m([32m`[query:[39m[36m${[39mmeta[33m.[39mqueryDigest[36m}[39m[32m]`[39m)
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/11]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/query-diagnostics.test.ts[2m > [22mqueryFailureMeta (C-002: raw query text never enters diagnostics)[2m > [22mreplaces the echo even after credential redaction altered it
+[31m[1mAssertionError[22m: expected 'lookup failed: connect via mongodb+sr…' not to contain 'connect via'[39m
+
+Expected: [32m"connect via"[39m
+Received: [31m"lookup failed: connect via [uri-userinfo:***]host.local/db please"[39m
+
+[36m [2m❯[22m src/query-diagnostics.test.ts:[2m66:26[22m[39m
+    [90m 64|[39m   [90m// the redacted variant of the query must still be fully replaced.[39m
+    [90m 65|[39m   [34mexpect[39m(meta[33m.[39merror)[33m.[39mnot[33m.[39m[34mtoContain[39m([32m"supersample99"[39m)
+    [90m 66|[39m   [34mexpect[39m(meta[33m.[39merror)[33m.[39mnot[33m.[39m[34mtoContain[39m([32m"connect via"[39m)
+    [90m   |[39m                          [31m^[39m
+    [90m 67|[39m   [34mexpect[39m(meta[33m.[39merror)[33m.[39mnot[33m.[39m[34mtoContain[39m([34mredactSensitiveText[39m(query))
+    [90m 68|[39m   [34mexpect[39m(meta[33m.[39merror)[33m.[39m[34mtoContain[39m([32m`[query:[39m[36m${[39mmeta[33m.[39mqueryDigest[36m}[39m[32m]`[39m)
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/11]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/query-diagnostics.test.ts[2m > [22mqueryFailureMeta echo variants (C-002 round 2)[2m > [22mreplaces a case-folded echo of the query
+[31m[1mAssertionError[22m: expected 'command failed: deploy the cluster no…' not to contain 'deploy the cluster'[39m
+
+Expected: [32m"deploy the cluster"[39m
+Received: [31m"[7mcommand failed: [27mdeploy the cluster[7m now please[27m"[39m
+
+[36m [2m❯[22m src/query-diagnostics.test.ts:[2m90:26[22m[39m
+    [90m 88|[39m   )
+    [90m 89|[39m
+    [90m 90|[39m   [34mexpect[39m(meta[33m.[39merror)[33m.[39mnot[33m.[39m[34mtoContain[39m([32m"deploy the cluster"[39m)
+    [90m   |[39m                          [31m^[39m
+    [90m 91|[39m   [34mexpect[39m(meta[33m.[39merror)[33m.[39mnot[33m.[39m[34mtoContain[39m([32m"cluster now"[39m)
+    [90m 92|[39m   [34mexpect[39m(meta[33m.[39merror)[33m.[39m[34mtoContain[39m([32m`[query:[39m[36m${[39mmeta[33m.[39mqueryDigest[36m}[39m[32m]`[39m)
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/11]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/query-diagnostics.test.ts[2m > [22mqueryFailureMeta echo variants (C-002 round 2)[2m > [22mreplaces a whitespace-mangled echo of the query
+[31m[1mAssertionError[22m: expected 'lookup failed: rotate\tthe\ncredentia…' not to contain 'rotate'[39m
+
+[32m- Expected[39m
+[31m+ Received[39m
+
+[32m- rotate[39m
+[31m+ lookup failed: rotate	the[39m
+[31m+ credentials  next   quarter[39m
+
+[36m [2m❯[22m src/query-diagnostics.test.ts:[2m103:26[22m[39m
+    [90m101|[39m   )
+    [90m102|[39m
+    [90m103|[39m   [34mexpect[39m(meta[33m.[39merror)[33m.[39mnot[33m.[39m[34mtoContain[39m([32m"rotate"[39m)
+    [90m   |[39m                          [31m^[39m
+    [90m104|[39m   [34mexpect[39m(meta[33m.[39merror)[33m.[39mnot[33m.[39m[34mtoContain[39m([32m"next   quarter"[39m)
+    [90m105|[39m   [34mexpect[39m(meta[33m.[39merror)[33m.[39m[34mtoContain[39m([32m`[query:[39m[36m${[39mmeta[33m.[39mqueryDigest[36m}[39m[32m]`[39m)
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/11]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/query-diagnostics.test.ts[2m > [22mqueryFailureMeta echo variants (C-002 round 2)[2m > [22mreplaces a query echo split with separator junk
+[31m[1mAssertionError[22m: expected 'plan failed: reindex \'the vector\' s…' not to contain 'reindex'[39m
+
+Expected: [32m"reindex"[39m
+Received: [31m"plan failed: reindex 'the vector' store -- overnight"[39m
+
+[36m [2m❯[22m src/query-diagnostics.test.ts:[2m115:26[22m[39m
+    [90m113|[39m   )
+    [90m114|[39m
+    [90m115|[39m   [34mexpect[39m(meta[33m.[39merror)[33m.[39mnot[33m.[39m[34mtoContain[39m([32m"reindex"[39m)
+    [90m   |[39m                          [31m^[39m
+    [90m116|[39m   [34mexpect[39m(meta[33m.[39merror)[33m.[39mnot[33m.[39m[34mtoContain[39m([32m"vector"[39m)
+    [90m117|[39m   [34mexpect[39m(meta[33m.[39merror)[33m.[39mnot[33m.[39m[34mtoContain[39m([32m"overnight"[39m)
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[5/11]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/query-diagnostics.test.ts[2m > [22mqueryFailureMeta echo variants (C-002 round 2)[2m > [22mreplaces a truncated echo of the query prefix
+[31m[1mAssertionError[22m: expected 'command failed: purge the orphaned' not to contain 'purge the orphaned'[39m
+
+Expected: [32m"purge the orphaned"[39m
+Received: [31m"[7mcommand failed: [27mpurge the orphaned"[39m
+
+[36m [2m❯[22m src/query-diagnostics.test.ts:[2m128:26[22m[39m
+    [90m126|[39m   )
+    [90m127|[39m
+    [90m128|[39m   [34mexpect[39m(meta[33m.[39merror)[33m.[39mnot[33m.[39m[34mtoContain[39m([32m"purge the orphaned"[39m)
+    [90m   |[39m                          [31m^[39m
+    [90m129|[39m   [34mexpect[39m(meta[33m.[39merror)[33m.[39mnot[33m.[39m[34mtoContain[39m([32m"the orphaned"[39m)
+    [90m130|[39m   [34mexpect[39m(meta[33m.[39merror)[33m.[39m[34mtoContain[39m([32m`[query:[39m[36m${[39mmeta[33m.[39mqueryDigest[36m}[39m[32m]`[39m)
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[6/11]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/query-diagnostics.test.ts[2m > [22mqueryFailureMeta echo variants (C-002 round 2)[2m > [22mreplaces a middle fragment echo of the query
+[31m[1mAssertionError[22m: expected 'while reading: the incident channel f…' not to contain 'incident channel'[39m
+
+Expected: [32m"incident channel"[39m
+Received: [31m"[7mwhile reading: the [27mincident channel[7m for the[27m"[39m
+
+[36m [2m❯[22m src/query-diagnostics.test.ts:[2m140:26[22m[39m
+    [90m138|[39m   )
+    [90m139|[39m
+    [90m140|[39m   [34mexpect[39m(meta[33m.[39merror)[33m.[39mnot[33m.[39m[34mtoContain[39m([32m"incident channel"[39m)
+    [90m   |[39m                          [31m^[39m
+    [90m141|[39m   [34mexpect[39m(meta[33m.[39merror)[33m.[39m[34mtoContain[39m([32m`[query:[39m[36m${[39mmeta[33m.[39mqueryDigest[36m}[39m[32m]`[39m)
+    [90m142|[39m   [34mexpect[39m(meta[33m.[39merror)[33m.[39m[34mtoContain[39m([32m"while reading:"[39m)
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[7/11]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/query-diagnostics.test.ts[2m > [22mqueryFailureMeta echo variants (C-002 round 2)[2m > [22mreplaces an echo of a long single-word query
+[31m[1mAssertionError[22m: expected 'resolver failed for confidentialproje…' not to contain 'dummy-project-name-0000'[39m
+
+Expected: [32m"dummy-project-name-0000"[39m
+Received: [31m"[7mresolver failed for [27mdummy-project-name-0000[7m at stage 2[27m"[39m
+
+[36m [2m❯[22m src/query-diagnostics.test.ts:[2m152:26[22m[39m
+    [90m150|[39m   )
+    [90m151|[39m
+    [90m152|[39m   [34mexpect[39m(meta[33m.[39merror)[33m.[39mnot[33m.[39m[34mtoContain[39m([32m"dummy-project-name-0000"[39m)
+    [90m   |[39m                          [31m^[39m
+    [90m153|[39m   [34mexpect[39m(meta[33m.[39merror)[33m.[39m[34mtoContain[39m([32m`[query:[39m[36m${[39mmeta[33m.[39mqueryDigest[36m}[39m[32m]`[39m)
+    [90m154|[39m   [34mexpect[39m(meta[33m.[39merror)[33m.[39m[34mtoContain[39m([32m"at stage 2"[39m)
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[8/11]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/query-diagnostics.test.ts[2m > [22mqueryFailureMeta echo variants (C-002 round 2)[2m > [22mreplaces a four-character full-query echo (exact-pass floor)
+[31m[1mAssertionError[22m: expected 'failed at abcd stage' to be 'failed at [query:88d4266fd4e6] stage' // Object.is equality[39m
+
+Expected: [32m"failed at [7m[query:88d4266fd4e6][27m stage"[39m
+Received: [31m"failed at [7mabcd[27m stage"[39m
+
+[36m [2m❯[22m src/query-diagnostics.test.ts:[2m160:22[22m[39m
+    [90m158|[39m   const meta = queryFailureMeta("abcd", new Error("failed at abcd stag…
+    [90m159|[39m
+    [90m160|[39m   expect(meta.error).toBe(`failed at [query:${meta.queryDigest}] stage…
+    [90m   |[39m                      [31m^[39m
+    [90m161|[39m  })
+    [90m162|[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[9/11]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/query-diagnostics.test.ts[2m > [22mplanRetrieval failure diagnostics (C-002 catch seam)[2m > [22mlogs no raw query text when a lane probe fails with an echoing error
+[31m[1mAssertionError[22m: expected '02:28:30.805 [memory:mongodb:planner]…' to match /\[query:[0-9a-f]{12}\]/[39m
+
+[32m- Expected:[39m
+/\[query:[0-9a-f]{12}\]/
+
+[31m+ Received:[39m
+"02:28:30.805 [memory:mongodb:planner] error: planRetrieval failed {\"queryLength\":34,\"queryDigest\":\"c1cca772d6ab\",\"error\":\"lane probe failed: SEARCH-NEEDLE-xyzzy recent changes\"}"
+
+[36m [2m❯[22m src/query-diagnostics.test.ts:[2m203:19[22m[39m
+    [90m201|[39m     [33m.[39m[34mjoin[39m([32m"\n"[39m)
+    [90m202|[39m    [34mexpect[39m(logged)[33m.[39m[34mtoContain[39m([32m"planRetrieval failed"[39m)
+    [90m203|[39m    [34mexpect[39m(logged)[33m.[39m[34mtoMatch[39m([36m/\[query:[0-9a-f]{12}\]/[39m)
+    [90m   |[39m                   [31m^[39m
+    [90m204|[39m    [34mexpect[39m(logged)[33m.[39mnot[33m.[39m[34mtoContain[39m([32m"SEARCH-NEEDLE"[39m)
+    [90m205|[39m   } [35mfinally[39m {
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[10/11]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/query-diagnostics.test.ts[2m > [22msearchV2 failure diagnostics (C-002 catch seam)[2m > [22mlogs no raw query text when the search funnel fails with an echoing error
+[31m[1mAssertionError[22m: expected '02:28:30.811 [memory:mongodb:planner]…' to match /\[query:[0-9a-f]{12}\]/[39m
+
+[32m- Expected:[39m
+/\[query:[0-9a-f]{12}\]/
+
+[31m+ Received:[39m
+"02:28:30.811 [memory:mongodb:planner] error: planRetrieval failed {\"queryLength\":34,\"queryDigest\":\"50d834d8a24e\",\"error\":\"lane sweep failed: SEARCH-NEEDLE-xyzzy recent numbers\"}
+02:28:30.811 [memory:mongodb] error: searchV2 failed {\"queryLength\":34,\"queryDigest\":\"50d834d8a24e\",\"error\":\"lane sweep failed: SEARCH-NEEDLE-xyzzy recent numbers\"}"
+
+[36m [2m❯[22m src/query-diagnostics.test.ts:[2m246:19[22m[39m
+    [90m244|[39m     [33m.[39m[34mjoin[39m([32m"\n"[39m)
+    [90m245|[39m    [34mexpect[39m(logged)[33m.[39m[34mtoContain[39m([32m"searchV2 failed"[39m)
+    [90m246|[39m    [34mexpect[39m(logged)[33m.[39m[34mtoMatch[39m([36m/\[query:[0-9a-f]{12}\]/[39m)
+    [90m   |[39m                   [31m^[39m
+    [90m247|[39m    [34mexpect[39m(logged)[33m.[39mnot[33m.[39m[34mtoContain[39m([32m"SEARCH-NEEDLE"[39m)
+    [90m248|[39m   } [35mfinally[39m {
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[11/11]⎯[22m[39m
+
+
+[2m Test Files [22m [1m[31m1 failed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[31m11 failed[39m[22m[2m | [22m[1m[32m5 passed[39m[22m[90m (16)[39m
+[2m   Start at [22m 02:28:30
+[2m   Duration [22m 745ms[2m (transform 411ms, setup 0ms, import 590ms, tests 17ms, environment 0ms)[22m
+
+error: "vitest" exited with code 1
