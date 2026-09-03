@@ -147,7 +147,8 @@ Sweep violations at WS-04 landing: 67 (was 72 at WS-03; zero for C-007).
   --exclude='src/**/*.e2e.test.ts' — a bare `vitest run` drags in
   live-MongoDB e2e files whose 240s hook budgets make the run appear
   hung for tens of minutes at ~0 CPU.
-- WS-04 landing (autoEmbed Preview de-risk, C-007): three obligations
+- WS-04 landing (autoEmbed Preview de-risk, C-007): commit 0d6c811edb,
+  three obligations
   landed. F1 declare-contract arm: EMBEDDING_PIPELINE_SUPPORT v1 in
   backend-config (embeddingMode automated-only; deploymentProfiles
   atlas-local-preview + atlas-managed; featureStage preview-accepted;
