@@ -115,7 +115,7 @@ entries:
     tier: T3
     status: known-and-supported
     constructs: [packages/memory-engine/src/mongodb-schema-search-definitions.ts, packages/memory-engine/src/mongodb-sync.ts, packages/memory-engine/src/backend-config.ts]
-    validations: []
+    validations: [V-052, V-053, V-054]
     exceptions: []
 
   - id: C-008

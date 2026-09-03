@@ -54,3 +54,12 @@ Override: `MEMONGO_ALLOW_EMBEDDING_MODEL_CHANGE=true`.
 Startup check that refuses to bind a non-loopback address with authentication disabled.
 Two-layer override: `MEMONGO_ALLOW_INSECURE_NO_AUTH=true` (loopback) and
 `MEMONGO_ALLOW_INSECURE_REMOTE=true` (non-loopback, both required).
+
+**Supported-target contract (embedding pipeline)**:
+The declared, versioned posture of the embedding pipeline
+(`EMBEDDING_PIPELINE_SUPPORT` in backend-config.ts): Atlas Automated Embeddings
+only, Preview stage knowingly accepted, on `atlas-local-preview` or
+`atlas-managed`, with `embeddingMode "automated"` as the only mode and no
+client-side fallback existing or implied. A Preview deprecation surfaces as a
+loud startup failure, never as a silent client-side detour.
+_Avoid_: client fallback, embedding provider, calling the pipeline generally available

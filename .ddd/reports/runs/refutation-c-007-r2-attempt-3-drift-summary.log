@@ -1,0 +1,28 @@
+  78 [31m[1mError[22m: memory.mongodb.queryEmbeddingModel "voyage-sentinel" is not supported; use "voyage-4-large", "voyage-4", or "voyage-4-lite"[39m
+   7 [31m[1mAssertionError[22m: expected 'voyage-sentinel' to be 'voyage-4-large' // Object.is equality[39m
+   5 [90mstdout[2m | src/mongodb-sync.test.ts[2m > [22m[2msyncToMongoDB — transaction wrapping[2m > [22m[2mfalls back to non-transactional when transactions are not supported
+   3 [22m[39m19:55:03.763 [memory] warn: memory backend resolution failed: memory.mongodb.queryEmbeddingModel "voyage-sentinel" is not supported; use "voyage-4-large", "voyage-4", or "voyage-4-lite"
+   2 [31m+   "model": "voyage-sentinel",[39m
+   2 [22m[39m19:55:03.771 [memory] warn: memory backend resolution failed: memory.mongodb.queryEmbeddingModel "voyage-sentinel" is not supported; use "voyage-4-large", "voyage-4", or "voyage-4-lite"
+   2 [22m[39m19:55:03.765 [memory] warn: memory backend resolution failed: memory.mongodb.queryEmbeddingModel "voyage-sentinel" is not supported; use "voyage-4-large", "voyage-4", or "voyage-4-lite"
+   2 [22m[39m19:55:03.762 [memory] warn: memory backend resolution failed: memory.mongodb.queryEmbeddingModel "voyage-sentinel" is not supported; use "voyage-4-large", "voyage-4", or "voyage-4-lite"
+   1 [90mstdout[2m | src/mongodb-change-stream.test.ts[2m > [22m[2mMongoDBChangeStreamWatcher[2m > [22m[2mreturns false on start when change streams not supported
+   1 [31m⎯⎯⎯⎯⎯⎯[39m[1m[41m Failed Tests 98 [49m[22m[31m⎯⎯⎯⎯⎯⎯⎯[39m
+   1 [31m+ export const INDEX_AUTOEMBED_MODEL = "voyage-sentinel"[39m
+   1 [31m+  * rejects the first outright — "storedSource: true is not supported for vector[39m
+   1 [2m Test Files [22m [1m[31m8 failed[39m[22m[2m | [22m[1m[32m113 passed[39m[22m[90m (121)[39m
+   1 [2m      Tests [22m [1m[31m98 failed[39m[22m[2m | [22m[1m[32m1962 passed[39m[22m[90m (2060)[39m
+   1 [22m[39m19:55:07.384 [memory:mongodb:kb-search] warn: KB hybrid search ($scoreFusion) failed, falling back to $rankFusion: $scoreFusion is not supported on this server
+   1 [22m[39m19:55:05.955 [memory:mongodb:changestream] info: change streams not supported (standalone topology)
+   1 [22m[39m19:55:04.775 [memory] warn: memory backend resolution failed: memory.mongodb.queryEmbeddingModel "voyage-sentinel" is not supported; use "voyage-4-large", "voyage-4", or "voyage-4-lite"
+   1 [22m[39m19:55:04.737 [memory:mongodb:kb] info: transactions not supported for KB re-ingestion, falling back to direct writes
+   1 [22m[39m19:55:04.728 [memory:mongodb:kb] info: transactions not supported for removeKBDocument, falling back to direct writes
+   1 [22m[39m19:55:04.407 [memory:mongodb:sync] info: transactions not supported (standalone), falling back for session sync
+   1 [22m[39m19:55:04.240 [memory:mongodb:search] warn: $rankFusion failed, trying separate queries + JS merge: $rankFusion is not supported on this server
+   1 [22m[39m19:55:03.769 [memory] warn: memory backend resolution failed: memory.mongodb.queryEmbeddingModel "voyage-sentinel" is not supported; use "voyage-4-large", "voyage-4", or "voyage-4-lite"
+   1 [22m[39m19:55:03.768 [memory] warn: memory backend resolution failed: memory.mongodb.queryEmbeddingModel "voyage-sentinel" is not supported; use "voyage-4-large", "voyage-4", or "voyage-4-lite"
+   1 [22m[39m19:55:03.764 [memory] warn: memory backend resolution failed: memory.mongodb.queryEmbeddingModel "voyage-sentinel" is not supported; use "voyage-4-large", "voyage-4", or "voyage-4-lite"
+   1 [22m[39m19:55:03.761 [memory] warn: memory backend resolution failed: memory.mongodb.queryEmbeddingModel "voyage-sentinel" is not supported; use "voyage-4-large", "voyage-4", or "voyage-4-lite"
+   1 [22m[39m19:55:03.759 [memory] warn: memory backend resolution failed: memory.mongodb.queryEmbeddingModel "voyage-sentinel" is not supported; use "voyage-4-large", "voyage-4", or "voyage-4-lite"
+   1 [22m[39m19:55:03.748 [memory] warn: memory backend resolution failed: memory.mongodb.queryEmbeddingModel "voyage-sentinel" is not supported; use "voyage-4-large", "voyage-4", or "voyage-4-lite"
+   1 [22m[39m19:55:03.564 [memory:mongodb:schema] info: created plain collection test_telemetry with TTL index (time series unsupported: time series collections are not supported)

@@ -260,3 +260,33 @@ entries:
     run_at: "2026-09-03T14:10:10.000Z"
     evidence_hash: sha256:41501eb9b87c2248ff48b3e82fbdac92e02a1064fda1f88e45a0950e0af544dd
     notes: "Retention enforcement wiring evidence from the manager-facade and worker-drain describes of the mongodb-idempotency-retention.test.ts battery in the final-state engine suite (this log): the write-ops facade runs the prune on the real write path against the stateful fake behind an hourly gate (no re-prune within the window, immediate run when the gate is due or forced), a prune failure is swallowed after logging so a retention hiccup cannot fail tenant writes, and drainMemoryJobQueue awaits the prune after outbox repair so the background worker exercises the same retention policy — the deduplication support is bounded in every path that writes fingerprinted events."
+
+  - id: V-052
+    claim_id: C-007
+    construct: packages/memory-engine/src/backend-config.ts
+    method: test
+    target: .ddd/reports/runs/ws04-round2-engine-suite.log
+    result: pass
+    run_at: "2026-09-03T17:00:35.000Z"
+    evidence_hash: sha256:bc9ea475ab4de8c4f8733d4bed56b693cf7c79cb2727dd9411052262c4c4f446
+    notes: "Supported-target contract evidence (F1 arm, declare-contract) from the contract describe in backend-config.test.ts plus the final-state engine suite (this log, 121 files / 2060 tests): EMBEDDING_PIPELINE_SUPPORT declares contractVersion 1, embeddingMode 'automated' as the only supported mode, deploymentProfiles ['atlas-local-preview', 'atlas-managed'], featureStage 'preview-accepted', clientSideFallback 'none'; assertEmbeddingPipelineSupport cross-checks the resolved (deploymentProfile, embeddingMode) pair on the single production funnel (memory-bridge -> getMemorySearchManager -> resolveMemoryBackendConfig, verified end-to-end by the round-2 refuter, no direct manager construction in apps) so a Preview deprecation or unsupported profile surfaces as a loud startup throw instead of a silent client-side detour. Five contract tests pin: declaration shape, both declared targets resolve in-contract, community-mongot normalization lands in-contract, out-of-contract drift throws, and DEFAULT_QUERY_EMBEDDING_MODEL === INDEX_AUTOEMBED_MODEL (the F22 numDimensions warning derives from the same default). Refutation: round 1 found the typed-const literal revert escaping the pin test; after the pattern fix, round 2 (report .ddd/reports/refutation-c-007-round2.yaml) caught all four mandated vacuity mutations including that revert, plus kb/consolidator reverts and the no-op assertion, and the drift spike produced 98 loud failures (78 config-resolution throws plus pins) — nothing silent."
+
+  - id: V-053
+    claim_id: C-007
+    construct: packages/memory-engine/src/mongodb-schema-search-definitions.ts
+    method: test
+    target: .ddd/reports/runs/ws04-round2-engine-suite.log
+    result: pass
+    run_at: "2026-09-03T17:00:35.000Z"
+    evidence_hash: sha256:bc9ea475ab4de8c4f8733d4bed56b693cf7c79cb2727dd9411052262c4c4f446
+    notes: "Model single-source evidence (F2) from embedding-model-single-source.test.ts plus the final-state engine suite (this log): INDEX_AUTOEMBED_MODEL in the autoEmbed index definitions module is now the sole production source of the model literal, with all former fallback sites importing it — mongodb-search.ts:609, mongodb-search-v2.ts:361, mongodb-manager-lifecycle.ts:513, mongodb-kb.ts:127, mongodb-sync.ts:449, mongodb-consolidator.ts:890/1206/1358, mongodb-novelty.ts:168, plus backend-config.ts DEFAULT_QUERY_EMBEDDING_MODEL (line 174) and the F22 warning default, and (round-2 follow-up) scripts/benchmark/benchmark-parity-envelope.ts:236 via the same import, re-exported as BENCHMARK_AUTOEMBED_MODEL with its test pinning the derivation (ws04-benchmark-hardening.log, 37/37). The pin test scans every production .ts file (excluding tests, dist, node_modules, test-helpers, and the definitions module itself) for three forbidden forms — nullish default ?? literal, stage property model: literal, and any assignment/declaration = literal with a (?<![=!]) lookbehind that excludes === comparisons — and anchors the source-of-truth literal by equality. Only the documented literal survivors remain (the definition itself, the KNOWN_MODEL_DIMENSIONS key, allow-list === comparisons, error message text). Refutation: round 1 escaped a typed-const revert because the old const-keyword regex could not match type annotations; the broadened pattern now catches it (self-check log ws04-pin-selfcheck.log, and round 2 mutation (d) caught with the pin naming backend-config.ts); round 2 also confirmed planted ?? fallbacks in search/kb/sync and consolidator model: reverts are each caught by name."
+
+  - id: V-054
+    claim_id: C-007
+    construct: packages/memory-engine/src/mongodb-sync.ts
+    method: test
+    target: .ddd/reports/runs/ws04-round2-engine-suite.log
+    result: pass
+    run_at: "2026-09-03T17:00:35.000Z"
+    evidence_hash: sha256:bc9ea475ab4de8c4f8733d4bed56b693cf7c79cb2727dd9411052262c4c4f446
+    notes: "Sync-pathway and dead-stack-removal evidence (F9) from the final-state engine suite (this log, 121 files / 2060 tests) and the round-1/round-2 refutation batteries: the sync pipeline's model default derives from INDEX_AUTOEMBED_MODEL (mongodb-sync.ts:449, the former bare ?? fallback removed) and every embedding consumer the sync path relies on survived the provider-stack deletion — embedding-inputs/embedding-input-limits (byte estimation via internal.ts), embedding-validation, and mongodb-embedding-retry are intact with live importers while the 19-file dead family (embeddings, embeddings-{voyage,gemini,ollama,openai,mistral,remote-client,remote-fetch,remote-provider}, embedding-vectors, embeddings-model-normalize, embeddings-debug plus their 7 test files, 3192 lines: 1312 production + 1880 test) is gone with zero residual references anywhere in the repo (code, tsconfig, vitest, package.json, biome, turbo, apps) — repo check-types 15/15 and build 11/11 green, and the full package matrix green (memory-bridge 82, client 39, tools 48, lib 158, pi-extension 55, api 240, mcp 175, web typecheck). Round-2 vacuity mutation (c) (re-planting the bare ?? fallback in mongodb-sync.ts) is caught by the pin test naming the file, proving the derivation is enforced, not incidental."

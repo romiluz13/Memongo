@@ -1,0 +1,322 @@
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/packages/memory-engine[39m
+
+ [32m✓[39m src/embedding-model-single-source.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 40[2mms[22m[39m
+[90mstderr[2m | src/backend-config.test.ts[2m > [22m[2mresolveMemoryBackendConfig[2m > [22m[2mresolves custom numDimensions
+[22m[39m19:39:24.039 [memory:backend-config] error: memory.mongodb.numDimensions is ignored under embeddingMode "automated": the server-managed embedding model determines vector dimensions (configured value 768 resolves for compatibility but has no effect)
+19:39:24.042 [memory:backend-config] warn: numDimensions=768 may not match expected dimensions for voyage-4-large (1024). Mismatched dimensions will cause vector search errors.
+
+[90mstderr[2m | src/backend-config.test.ts[2m > [22m[2mresolveMemoryBackendConfig[2m > [22m[2mlogs at error level that an explicitly configured numDimensions is ignored (P3.1)
+[22m[39m19:39:24.042 [memory:backend-config] warn: numDimensions=768 may not match expected dimensions for voyage-4-large (1024). Mismatched dimensions will cause vector search errors.
+
+[90mstderr[2m | src/backend-config.test.ts[2m > [22m[2mresolveMemoryBackendConfig[2m > [22m[2mresolves graph.entityExtraction with llm method
+[22m[39m19:39:24.047 [memory:backend-config] warn: entity extraction method 'llm' configured but LLM function not injected — regex extractor will be used at runtime. Set graph.entityExtraction.method to 'regex' to suppress this warning.
+
+[90mstderr[2m | src/backend-config.test.ts[2m > [22m[2mresolveMemoryBackendConfig[2m > [22m[2mpreserves existing graph.enabled and maxGraphDepth behavior
+[22m[39m19:39:24.047 [memory:backend-config] warn: entity extraction method 'llm' configured but LLM function not injected — regex extractor will be used at runtime. Set graph.entityExtraction.method to 'regex' to suppress this warning.
+
+ [31m❯[39m src/backend-config.test.ts [2m([22m[2m82 tests[22m[2m | [22m[31m1 failed[39m[2m)[22m[32m 18[2mms[22m[39m
+     [32m✓[39m defaults to mongodb backend when config missing and env URI is set[32m 1[2mms[22m[39m
+     [32m✓[39m rejects unsupported non-mongodb backends[32m 0[2mms[22m[39m
+     [32m✓[39m resolves mongodb backend with all defaults[32m 0[2mms[22m[39m
+     [32m✓[39m resolves the query embedding model from config and lets env override it[32m 0[2mms[22m[39m
+     [32m✓[39m rejects unsupported query embedding models[32m 0[2mms[22m[39m
+       [32m✓[39m declares the Preview posture explicitly: automated-only, two supported targets, no client-side fallback[32m 0[2mms[22m[39m
+       [32m✓[39m resolves every declared target inside the contract[32m 0[2mms[22m[39m
+       [32m✓[39m normalizes community-mongot into the contract instead of failing it[32m 0[2mms[22m[39m
+[31m       [31m×[31m throws when the resolved pair drifts outside the declared contract[39m[32m 4[2mms[22m[39m
+       [32m✓[39m keeps the default query model pinned to the autoEmbed index model (EL-002 F2)[32m 0[2mms[22m[39m
+     [32m✓[39m resolves mongodb with custom config values[32m 0[2mms[22m[39m
+     [32m✓[39m resolves MongoDB recall profile from env and ignores invalid values[32m 0[2mms[22m[39m
+     [32m✓[39m defaults every agent to the shared memongo_ collection prefix (P2.1)[32m 0[2mms[22m[39m
+     [32m✓[39m keeps per-agent hard isolation opt-in via config collectionPrefix[32m 0[2mms[22m[39m
+     [32m✓[39m allows MEMONGO_MONGODB_COLLECTION_PREFIX to override config for benchmark isolation[32m 0[2mms[22m[39m
+     [32m✓[39m resolves mongodb relevance config overrides[32m 0[2mms[22m[39m
+     [32m✓[39m resolves mongodb URI from MEMONGO_MONGODB_URI env var[32m 0[2mms[22m[39m
+     [32m✓[39m FORCE wins when plain env URI and file config URI are both set[32m 0[2mms[22m[39m
+     [32m✓[39m FORCE wins over plain env URI when no file config URI is set[32m 0[2mms[22m[39m
+     [32m✓[39m MEMONGO_FORCE_MONGODB_URI overrides memory.mongodb.uri from config[32m 0[2mms[22m[39m
+     [32m✓[39m resolves numDimensions with default 1024[32m 0[2mms[22m[39m
+     [32m✓[39m resolves custom numDimensions[32m 2[2mms[22m[39m
+     [32m✓[39m logs at error level that an explicitly configured numDimensions is ignored (P3.1)[32m 1[2mms[22m[39m
+     [32m✓[39m does not log the numDimensions dead-knob error when it is not configured[32m 0[2mms[22m[39m
+     [32m✓[39m defaults legacySearchFallback to off (opt-in, P3.2)[32m 0[2mms[22m[39m
+     [32m✓[39m honors legacySearchFallback when explicitly enabled[32m 0[2mms[22m[39m
+     [32m✓[39m resolves the per-search budget with defaults and valid overrides (P3.2)[32m 1[2mms[22m[39m
+     [32m✓[39m resolves maxPoolSize with default 10[32m 0[2mms[22m[39m
+     [32m✓[39m resolves custom maxPoolSize[32m 0[2mms[22m[39m
+     [32m✓[39m resolves MongoDB connection pool overrides from env[32m 0[2mms[22m[39m
+     [32m✓[39m resolves memoryTtlDays with default 0 (disabled)[32m 0[2mms[22m[39m
+     [32m✓[39m resolves enableChangeStreams with default false[32m 0[2mms[22m[39m
+     [32m✓[39m resolves enableChangeStreams when true[32m 0[2mms[22m[39m
+     [32m✓[39m resolves changeStreamDebounceMs with default 1000[32m 0[2mms[22m[39m
+     [32m✓[39m defaults embeddingMode to automated for atlas-local-preview profile[32m 0[2mms[22m[39m
+     [32m✓[39m infers atlas-managed profile for MongoDB Atlas SRV URIs[32m 0[2mms[22m[39m
+     [32m✓[39m accepts explicit atlas-managed profile[32m 0[2mms[22m[39m
+     [32m✓[39m rejects unsupported community-bare profile[32m 0[2mms[22m[39m
+     [32m✓[39m rejects unsupported atlas profile[32m 0[2mms[22m[39m
+     [32m✓[39m rejects unsupported managed embedding mode[32m 0[2mms[22m[39m
+     [32m✓[39m caps numCandidates at 10000 in config resolution (F1)[32m 0[2mms[22m[39m
+     [32m✓[39m defaults fusionMethod to scoreFusion (F8)[32m 0[2mms[22m[39m
+     [32m✓[39m allows explicit scoreFusion override[32m 0[2mms[22m[39m
+     [32m✓[39m allows fusionMethod override via MEMONGO_MONGODB_FUSION_METHOD env var[32m 0[2mms[22m[39m
+     [32m✓[39m throws when mongodb backend has no URI[32m 0[2mms[22m[39m
+     [32m✓[39m config URI takes precedence over env var[32m 0[2mms[22m[39m
+     [32m✓[39m resolves KB defaults for MongoDB backend[32m 0[2mms[22m[39m
+     [32m✓[39m resolves maxSessionChunks with default 50[32m 0[2mms[22m[39m
+     [32m✓[39m resolves custom maxSessionChunks value[32m 0[2mms[22m[39m
+     [32m✓[39m clamps invalid maxSessionChunks to default 50[32m 0[2mms[22m[39m
+     [32m✓[39m floors fractional maxSessionChunks value[32m 0[2mms[22m[39m
+     [32m✓[39m enables episodes by default[32m 0[2mms[22m[39m
+     [32m✓[39m allows disabling episodes explicitly[32m 0[2mms[22m[39m
+     [32m✓[39m allows disabling graph explicitly[32m 0[2mms[22m[39m
+     [32m✓[39m ignores old runtimeMode field without error (backward compat)[32m 0[2mms[22m[39m
+     [32m✓[39m resolves custom episode and graph config[32m 0[2mms[22m[39m
+     [32m✓[39m resolves custom KB config for MongoDB backend[32m 0[2mms[22m[39m
+     [32m✓[39m resolves cache config with defaults (enabled by default)[32m 0[2mms[22m[39m
+     [32m✓[39m resolves cache config with custom values[32m 0[2mms[22m[39m
+     [32m✓[39m resolves cache disabled when explicitly set to false[32m 0[2mms[22m[39m
+     [32m✓[39m resolves cache enabled when cache section is undefined (default-enable pattern)[32m 0[2mms[22m[39m
+     [32m✓[39m resolves cache with partial overrides[32m 0[2mms[22m[39m
+     [32m✓[39m uses conversation TTL for conversation scope and KB TTL for KB scope[32m 0[2mms[22m[39m
+     [32m✓[39m applies !== false pattern for cache.enabled[32m 0[2mms[22m[39m
+     [32m✓[39m resolves queryRewriting defaults (disabled, synonym-expansion, 128)[32m 0[2mms[22m[39m
+     [32m✓[39m resolves queryRewriting with explicit supported values[32m 0[2mms[22m[39m
+     [32m✓[39m rejects unsupported queryRewriting methods at config resolution time[32m 0[2mms[22m[39m
+     [32m✓[39m resolves reranking defaults (enabled, rerank-2.5, topN=20, minScore=0.01)[32m 0[2mms[22m[39m
+     [32m✓[39m resolves reranking with explicit values[32m 0[2mms[22m[39m
+     [32m✓[39m defaults reranking recency/access boost weights to 0.2[32m 0[2mms[22m[39m
+     [32m✓[39m resolves custom reranking recency/access boost weights[32m 0[2mms[22m[39m
+     [32m✓[39m resolves reranking temporalProximityBoost with a 0.1 default (P4.4.4)[32m 0[2mms[22m[39m
+     [32m✓[39m resolves reranking.voyageApiKey from env fallback[32m 0[2mms[22m[39m
+     [32m✓[39m allows reranking.enabled override via MEMONGO_RERANKING_ENABLED env var[32m 0[2mms[22m[39m
+     [32m✓[39m resolves graph.entityExtraction defaults (regex, timeoutMs=5000)[32m 0[2mms[22m[39m
+     [32m✓[39m resolves graph.entityExtraction with llm method[32m 1[2mms[22m[39m
+     [32m✓[39m preserves existing graph.enabled and maxGraphDepth behavior[32m 0[2mms[22m[39m
+     [32m✓[39m logs warning when entityExtraction.method is 'llm'[32m 0[2mms[22m[39m
+     [32m✓[39m defaults numCandidates to 500 for recall-oriented retrieval[32m 0[2mms[22m[39m
+     [32m✓[39m defaults reranking.minScore to 0.01 for recall-oriented retrieval[32m 0[2mms[22m[39m
+     [32m✓[39m allows numCandidates override via MEMONGO_NUM_CANDIDATES env var[32m 0[2mms[22m[39m
+     [32m✓[39m allows reranking.minScore override via MEMONGO_RERANK_MIN_SCORE env var[32m 0[2mms[22m[39m
+
+[31m⎯⎯⎯⎯⎯⎯⎯[39m[1m[41m Failed Tests 1 [49m[22m[31m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[41m[1m FAIL [22m[49m src/backend-config.test.ts[2m > [22mresolveMemoryBackendConfig[2m > [22membedding pipeline supported-target contract (C-007 / EL-002 F1)[2m > [22mthrows when the resolved pair drifts outside the declared contract
+[31m[1mAssertionError[22m: expected [Function] to throw an error[39m
+
+[32m- Expected:[39m
+null
+
+[31m+ Received:[39m
+undefined
+
+[36m [2m❯[22m src/backend-config.test.ts:[2m210:6[22m[39m
+    [90m208|[39m      embeddingMode[33m:[39m [32m"client"[39m [35mas[39m unknown [35mas[39m [32m"automated"[39m[33m,[39m
+    [90m209|[39m     })[33m,[39m
+    [90m210|[39m    )[33m.[39m[34mtoThrow[39m([36m/no client-side fallback exists/[39m)
+    [90m   |[39m      [31m^[39m
+    [90m211|[39m   })
+    [90m212|[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯[22m[39m
+
+
+[2m Test Files [22m [1m[31m1 failed[39m[22m[2m | [22m[1m[32m1 passed[39m[22m[90m (2)[39m
+[2m      Tests [22m [1m[31m1 failed[39m[22m[2m | [22m[1m[32m83 passed[39m[22m[90m (84)[39m
+[2m   Start at [22m 19:39:23
+[2m   Duration [22m 378ms[2m (transform 223ms, setup 0ms, import 277ms, tests 58ms, environment 0ms)[22m
+
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/packages/memory-engine[39m
+
+ [32m✓[39m src/embedding-model-single-source.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 40[2mms[22m[39m
+[90mstderr[2m | src/backend-config.test.ts[2m > [22m[2mresolveMemoryBackendConfig[2m > [22m[2mresolves custom numDimensions
+[22m[39m19:39:32.919 [memory:backend-config] error: memory.mongodb.numDimensions is ignored under embeddingMode "automated": the server-managed embedding model determines vector dimensions (configured value 768 resolves for compatibility but has no effect)
+19:39:32.922 [memory:backend-config] warn: numDimensions=768 may not match expected dimensions for voyage-4-large (1024). Mismatched dimensions will cause vector search errors.
+
+[90mstderr[2m | src/backend-config.test.ts[2m > [22m[2mresolveMemoryBackendConfig[2m > [22m[2mlogs at error level that an explicitly configured numDimensions is ignored (P3.1)
+[22m[39m19:39:32.923 [memory:backend-config] warn: numDimensions=768 may not match expected dimensions for voyage-4-large (1024). Mismatched dimensions will cause vector search errors.
+
+[90mstderr[2m | src/backend-config.test.ts[2m > [22m[2mresolveMemoryBackendConfig[2m > [22m[2mresolves graph.entityExtraction with llm method
+[22m[39m19:39:32.928 [memory:backend-config] warn: entity extraction method 'llm' configured but LLM function not injected — regex extractor will be used at runtime. Set graph.entityExtraction.method to 'regex' to suppress this warning.
+
+[90mstderr[2m | src/backend-config.test.ts[2m > [22m[2mresolveMemoryBackendConfig[2m > [22m[2mpreserves existing graph.enabled and maxGraphDepth behavior
+[22m[39m19:39:32.929 [memory:backend-config] warn: entity extraction method 'llm' configured but LLM function not injected — regex extractor will be used at runtime. Set graph.entityExtraction.method to 'regex' to suppress this warning.
+
+ [32m✓[39m src/backend-config.test.ts [2m([22m[2m82 tests[22m[2m)[22m[32m 15[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m2 passed[39m[22m[90m (2)[39m
+[2m      Tests [22m [1m[32m84 passed[39m[22m[90m (84)[39m
+[2m   Start at [22m 19:39:32
+[2m   Duration [22m 362ms[2m (transform 216ms, setup 0ms, import 272ms, tests 56ms, environment 0ms)[22m
+
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/packages/memory-engine[39m
+
+ [31m❯[39m src/embedding-model-single-source.test.ts [2m([22m[2m2 tests[22m[2m | [22m[31m1 failed[39m[2m)[22m[32m 44[2mms[22m[39m
+[31m     [31m×[31m keeps every default and stage model derived from INDEX_AUTOEMBED_MODEL[39m[32m 42[2mms[22m[39m
+     [32m✓[39m pins the single source of truth in the definitions module[32m 0[2mms[22m[39m
+[90mstderr[2m | src/backend-config.test.ts[2m > [22m[2mresolveMemoryBackendConfig[2m > [22m[2mresolves custom numDimensions
+[22m[39m19:39:42.359 [memory:backend-config] error: memory.mongodb.numDimensions is ignored under embeddingMode "automated": the server-managed embedding model determines vector dimensions (configured value 768 resolves for compatibility but has no effect)
+19:39:42.362 [memory:backend-config] warn: numDimensions=768 may not match expected dimensions for voyage-4-large (1024). Mismatched dimensions will cause vector search errors.
+
+[90mstderr[2m | src/backend-config.test.ts[2m > [22m[2mresolveMemoryBackendConfig[2m > [22m[2mlogs at error level that an explicitly configured numDimensions is ignored (P3.1)
+[22m[39m19:39:42.362 [memory:backend-config] warn: numDimensions=768 may not match expected dimensions for voyage-4-large (1024). Mismatched dimensions will cause vector search errors.
+
+[90mstderr[2m | src/backend-config.test.ts[2m > [22m[2mresolveMemoryBackendConfig[2m > [22m[2mresolves graph.entityExtraction with llm method
+[22m[39m19:39:42.366 [memory:backend-config] warn: entity extraction method 'llm' configured but LLM function not injected — regex extractor will be used at runtime. Set graph.entityExtraction.method to 'regex' to suppress this warning.
+
+[90mstderr[2m | src/backend-config.test.ts[2m > [22m[2mresolveMemoryBackendConfig[2m > [22m[2mpreserves existing graph.enabled and maxGraphDepth behavior
+[22m[39m19:39:42.367 [memory:backend-config] warn: entity extraction method 'llm' configured but LLM function not injected — regex extractor will be used at runtime. Set graph.entityExtraction.method to 'regex' to suppress this warning.
+
+ [32m✓[39m src/backend-config.test.ts [2m([22m[2m82 tests[22m[2m)[22m[32m 14[2mms[22m[39m
+
+[31m⎯⎯⎯⎯⎯⎯⎯[39m[1m[41m Failed Tests 1 [49m[22m[31m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[41m[1m FAIL [22m[49m src/embedding-model-single-source.test.ts[2m > [22mautoEmbed model single source (C-007 / EL-002 F2)[2m > [22mkeeps every default and stage model derived from INDEX_AUTOEMBED_MODEL
+[31m[1mAssertionError[22m: expected [ Array(1) ] to deeply equal [][39m
+
+[32m- Expected[39m
+[31m+ Received[39m
+
+[32m- [][39m
+[31m+ [[39m
+[31m+   "mongodb-sync.ts: nullish default `?? \"voyage-4-large\"`",[39m
+[31m+ ][39m
+
+[36m [2m❯[22m src/embedding-model-single-source.test.ts:[2m71:22[22m[39m
+    [90m 69|[39m    }
+    [90m 70|[39m   }
+    [90m 71|[39m   [34mexpect[39m(violations)[33m.[39m[34mtoEqual[39m([])
+    [90m   |[39m                      [31m^[39m
+    [90m 72|[39m  })
+    [90m 73|[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯[22m[39m
+
+
+[2m Test Files [22m [1m[31m1 failed[39m[22m[2m | [22m[1m[32m1 passed[39m[22m[90m (2)[39m
+[2m      Tests [22m [1m[31m1 failed[39m[22m[2m | [22m[1m[32m83 passed[39m[22m[90m (84)[39m
+[2m   Start at [22m 19:39:42
+[2m   Duration [22m 323ms[2m (transform 163ms, setup 0ms, import 216ms, tests 57ms, environment 0ms)[22m
+
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/packages/memory-engine[39m
+
+ [32m✓[39m src/embedding-model-single-source.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 83[2mms[22m[39m
+[90mstderr[2m | src/backend-config.test.ts[2m > [22m[2mresolveMemoryBackendConfig[2m > [22m[2mresolves custom numDimensions
+[22m[39m19:39:48.302 [memory:backend-config] error: memory.mongodb.numDimensions is ignored under embeddingMode "automated": the server-managed embedding model determines vector dimensions (configured value 768 resolves for compatibility but has no effect)
+19:39:48.305 [memory:backend-config] warn: numDimensions=768 may not match expected dimensions for voyage-4-large (1024). Mismatched dimensions will cause vector search errors.
+
+[90mstderr[2m | src/backend-config.test.ts[2m > [22m[2mresolveMemoryBackendConfig[2m > [22m[2mlogs at error level that an explicitly configured numDimensions is ignored (P3.1)
+[22m[39m19:39:48.306 [memory:backend-config] warn: numDimensions=768 may not match expected dimensions for voyage-4-large (1024). Mismatched dimensions will cause vector search errors.
+
+[90mstderr[2m | src/backend-config.test.ts[2m > [22m[2mresolveMemoryBackendConfig[2m > [22m[2mresolves graph.entityExtraction with llm method
+[22m[39m19:39:48.310 [memory:backend-config] warn: entity extraction method 'llm' configured but LLM function not injected — regex extractor will be used at runtime. Set graph.entityExtraction.method to 'regex' to suppress this warning.
+
+[90mstderr[2m | src/backend-config.test.ts[2m > [22m[2mresolveMemoryBackendConfig[2m > [22m[2mpreserves existing graph.enabled and maxGraphDepth behavior
+[22m[39m19:39:48.311 [memory:backend-config] warn: entity extraction method 'llm' configured but LLM function not injected — regex extractor will be used at runtime. Set graph.entityExtraction.method to 'regex' to suppress this warning.
+
+ [32m✓[39m src/backend-config.test.ts [2m([22m[2m82 tests[22m[2m)[22m[32m 14[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m2 passed[39m[22m[90m (2)[39m
+[2m      Tests [22m [1m[32m84 passed[39m[22m[90m (84)[39m
+[2m   Start at [22m 19:39:47
+[2m   Duration [22m 394ms[2m (transform 210ms, setup 0ms, import 272ms, tests 98ms, environment 0ms)[22m
+
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/packages/memory-engine[39m
+
+ [32m✓[39m src/embedding-model-single-source.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 47[2mms[22m[39m
+[90mstderr[2m | src/backend-config.test.ts[2m > [22m[2mresolveMemoryBackendConfig[2m > [22m[2mresolves custom numDimensions
+[22m[39m19:40:04.430 [memory:backend-config] error: memory.mongodb.numDimensions is ignored under embeddingMode "automated": the server-managed embedding model determines vector dimensions (configured value 768 resolves for compatibility but has no effect)
+19:40:04.432 [memory:backend-config] warn: numDimensions=768 may not match expected dimensions for voyage-4-large (1024). Mismatched dimensions will cause vector search errors.
+
+[90mstderr[2m | src/backend-config.test.ts[2m > [22m[2mresolveMemoryBackendConfig[2m > [22m[2mlogs at error level that an explicitly configured numDimensions is ignored (P3.1)
+[22m[39m19:40:04.433 [memory:backend-config] warn: numDimensions=768 may not match expected dimensions for voyage-4-large (1024). Mismatched dimensions will cause vector search errors.
+
+[90mstderr[2m | src/backend-config.test.ts[2m > [22m[2mresolveMemoryBackendConfig[2m > [22m[2mresolves graph.entityExtraction with llm method
+[22m[39m19:40:04.438 [memory:backend-config] warn: entity extraction method 'llm' configured but LLM function not injected — regex extractor will be used at runtime. Set graph.entityExtraction.method to 'regex' to suppress this warning.
+
+[90mstderr[2m | src/backend-config.test.ts[2m > [22m[2mresolveMemoryBackendConfig[2m > [22m[2mpreserves existing graph.enabled and maxGraphDepth behavior
+[22m[39m19:40:04.438 [memory:backend-config] warn: entity extraction method 'llm' configured but LLM function not injected — regex extractor will be used at runtime. Set graph.entityExtraction.method to 'regex' to suppress this warning.
+
+ [32m✓[39m src/backend-config.test.ts [2m([22m[2m82 tests[22m[2m)[22m[32m 14[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m2 passed[39m[22m[90m (2)[39m
+[2m      Tests [22m [1m[32m84 passed[39m[22m[90m (84)[39m
+[2m   Start at [22m 19:40:04
+[2m   Duration [22m 335ms[2m (transform 164ms, setup 0ms, import 220ms, tests 61ms, environment 0ms)[22m
+
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/packages/memory-engine[39m
+
+ [32m✓[39m src/embedding-model-single-source.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 57[2mms[22m[39m
+[90mstderr[2m | src/backend-config.test.ts[2m > [22m[2mresolveMemoryBackendConfig[2m > [22m[2mresolves custom numDimensions
+[22m[39m19:40:22.745 [memory:backend-config] error: memory.mongodb.numDimensions is ignored under embeddingMode "automated": the server-managed embedding model determines vector dimensions (configured value 768 resolves for compatibility but has no effect)
+19:40:22.748 [memory:backend-config] warn: numDimensions=768 may not match expected dimensions for voyage-4-large (1024). Mismatched dimensions will cause vector search errors.
+
+[90mstderr[2m | src/backend-config.test.ts[2m > [22m[2mresolveMemoryBackendConfig[2m > [22m[2mlogs at error level that an explicitly configured numDimensions is ignored (P3.1)
+[22m[39m19:40:22.749 [memory:backend-config] warn: numDimensions=768 may not match expected dimensions for voyage-4-large (1024). Mismatched dimensions will cause vector search errors.
+
+[90mstderr[2m | src/backend-config.test.ts[2m > [22m[2mresolveMemoryBackendConfig[2m > [22m[2mresolves graph.entityExtraction with llm method
+[22m[39m19:40:22.753 [memory:backend-config] warn: entity extraction method 'llm' configured but LLM function not injected — regex extractor will be used at runtime. Set graph.entityExtraction.method to 'regex' to suppress this warning.
+
+[90mstderr[2m | src/backend-config.test.ts[2m > [22m[2mresolveMemoryBackendConfig[2m > [22m[2mpreserves existing graph.enabled and maxGraphDepth behavior
+[22m[39m19:40:22.754 [memory:backend-config] warn: entity extraction method 'llm' configured but LLM function not injected — regex extractor will be used at runtime. Set graph.entityExtraction.method to 'regex' to suppress this warning.
+
+ [32m✓[39m src/backend-config.test.ts [2m([22m[2m82 tests[22m[2m)[22m[32m 15[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m2 passed[39m[22m[90m (2)[39m
+[2m      Tests [22m [1m[32m84 passed[39m[22m[90m (84)[39m
+[2m   Start at [22m 19:40:22
+[2m   Duration [22m 535ms[2m (transform 284ms, setup 0ms, import 369ms, tests 72ms, environment 0ms)[22m
+
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/packages/memory-engine[39m
+
+ [32m✓[39m src/embedding-model-single-source.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 48[2mms[22m[39m
+[90mstderr[2m | src/backend-config.test.ts[2m > [22m[2mresolveMemoryBackendConfig[2m > [22m[2mresolves custom numDimensions
+[22m[39m19:40:45.592 [memory:backend-config] error: memory.mongodb.numDimensions is ignored under embeddingMode "automated": the server-managed embedding model determines vector dimensions (configured value 768 resolves for compatibility but has no effect)
+19:40:45.595 [memory:backend-config] warn: numDimensions=768 may not match expected dimensions for voyage-4-large (1024). Mismatched dimensions will cause vector search errors.
+
+[90mstderr[2m | src/backend-config.test.ts[2m > [22m[2mresolveMemoryBackendConfig[2m > [22m[2mlogs at error level that an explicitly configured numDimensions is ignored (P3.1)
+[22m[39m19:40:45.596 [memory:backend-config] warn: numDimensions=768 may not match expected dimensions for voyage-4-large (1024). Mismatched dimensions will cause vector search errors.
+
+[90mstderr[2m | src/backend-config.test.ts[2m > [22m[2mresolveMemoryBackendConfig[2m > [22m[2mresolves graph.entityExtraction with llm method
+[22m[39m19:40:45.601 [memory:backend-config] warn: entity extraction method 'llm' configured but LLM function not injected — regex extractor will be used at runtime. Set graph.entityExtraction.method to 'regex' to suppress this warning.
+
+[90mstderr[2m | src/backend-config.test.ts[2m > [22m[2mresolveMemoryBackendConfig[2m > [22m[2mpreserves existing graph.enabled and maxGraphDepth behavior
+[22m[39m19:40:45.602 [memory:backend-config] warn: entity extraction method 'llm' configured but LLM function not injected — regex extractor will be used at runtime. Set graph.entityExtraction.method to 'regex' to suppress this warning.
+
+ [32m✓[39m src/backend-config.test.ts [2m([22m[2m82 tests[22m[2m)[22m[32m 15[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m2 passed[39m[22m[90m (2)[39m
+[2m      Tests [22m [1m[32m84 passed[39m[22m[90m (84)[39m
+[2m   Start at [22m 19:40:45
+[2m   Duration [22m 350ms[2m (transform 177ms, setup 0ms, import 236ms, tests 63ms, environment 0ms)[22m
+
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/packages/memory-engine[39m
+
+ [32m✓[39m src/embedding-model-single-source.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 39[2mms[22m[39m
+[90mstderr[2m | src/backend-config.test.ts[2m > [22m[2mresolveMemoryBackendConfig[2m > [22m[2mresolves custom numDimensions
+[22m[39m19:40:54.736 [memory:backend-config] error: memory.mongodb.numDimensions is ignored under embeddingMode "automated": the server-managed embedding model determines vector dimensions (configured value 768 resolves for compatibility but has no effect)
+19:40:54.738 [memory:backend-config] warn: numDimensions=768 may not match expected dimensions for voyage-4-large (1024). Mismatched dimensions will cause vector search errors.
+
+[90mstderr[2m | src/backend-config.test.ts[2m > [22m[2mresolveMemoryBackendConfig[2m > [22m[2mlogs at error level that an explicitly configured numDimensions is ignored (P3.1)
+[22m[39m19:40:54.739 [memory:backend-config] warn: numDimensions=768 may not match expected dimensions for voyage-4-large (1024). Mismatched dimensions will cause vector search errors.
+
+[90mstderr[2m | src/backend-config.test.ts[2m > [22m[2mresolveMemoryBackendConfig[2m > [22m[2mresolves graph.entityExtraction with llm method
+[22m[39m19:40:54.743 [memory:backend-config] warn: entity extraction method 'llm' configured but LLM function not injected — regex extractor will be used at runtime. Set graph.entityExtraction.method to 'regex' to suppress this warning.
+
+[90mstderr[2m | src/backend-config.test.ts[2m > [22m[2mresolveMemoryBackendConfig[2m > [22m[2mpreserves existing graph.enabled and maxGraphDepth behavior
+[22m[39m19:40:54.744 [memory:backend-config] warn: entity extraction method 'llm' configured but LLM function not injected — regex extractor will be used at runtime. Set graph.entityExtraction.method to 'regex' to suppress this warning.
+
+ [32m✓[39m src/backend-config.test.ts [2m([22m[2m82 tests[22m[2m)[22m[32m 13[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m2 passed[39m[22m[90m (2)[39m
+[2m      Tests [22m [1m[32m84 passed[39m[22m[90m (84)[39m
+[2m   Start at [22m 19:40:54
+[2m   Duration [22m 323ms[2m (transform 159ms, setup 0ms, import 207ms, tests 52ms, environment 0ms)[22m
+

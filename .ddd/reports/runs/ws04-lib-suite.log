@@ -1,0 +1,17 @@
+$ vitest run
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/packages/lib[39m
+
+ [32m✓[39m src/bind-guard.test.ts [2m([22m[2m23 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/ssrf.test.ts [2m([22m[2m28 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m src/redact.test.ts [2m([22m[2m40 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/auth.test.ts [2m([22m[2m25 tests[22m[2m)[22m[32m 14[2mms[22m[39m
+ [32m✓[39m src/logger.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/contract.test.ts [2m([22m[2m13 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/retry.test.ts [2m([22m[2m24 tests[22m[2m)[22m[32m 225[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m7 passed[39m[22m[90m (7)[39m
+[2m      Tests [22m [1m[32m158 passed[39m[22m[90m (158)[39m
+[2m   Start at [22m 19:35:34
+[2m   Duration [22m 464ms[2m (transform 255ms, setup 0ms, import 396ms, tests 273ms, environment 0ms)[22m
+

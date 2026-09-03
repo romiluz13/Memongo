@@ -170,30 +170,30 @@ traces:
     change_id: WS-04
     claim_id: C-007
     construct_id: packages/memory-engine/src/mongodb-schema-search-definitions.ts
-    validation_id: null
+    validation_id: V-053
     direction: forward
-    sweep_pass: false
-    checked_at: "2026-09-02T13:41:40.042Z"
+    sweep_pass: true
+    checked_at: "2026-09-03T17:00:35.000Z"
     notes: WS-04 autoEmbed Preview de-risking (planned change envelope)
   - id: TR-018
     schema_version: 0.1.0
     change_id: WS-04
     claim_id: C-007
     construct_id: packages/memory-engine/src/mongodb-sync.ts
-    validation_id: null
+    validation_id: V-054
     direction: forward
-    sweep_pass: false
-    checked_at: "2026-09-02T13:41:40.042Z"
+    sweep_pass: true
+    checked_at: "2026-09-03T17:00:35.000Z"
     notes: WS-04 autoEmbed Preview de-risking (planned change envelope)
   - id: TR-019
     schema_version: 0.1.0
     change_id: WS-04
     claim_id: C-007
     construct_id: packages/memory-engine/src/backend-config.ts
-    validation_id: null
+    validation_id: V-052
     direction: forward
-    sweep_pass: false
-    checked_at: "2026-09-02T13:41:40.043Z"
+    sweep_pass: true
+    checked_at: "2026-09-03T17:00:35.000Z"
     notes: WS-04 autoEmbed Preview de-risking (planned change envelope)
   - id: TR-020
     schema_version: 0.1.0

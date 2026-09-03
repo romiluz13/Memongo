@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from "vitest"
 import type { MemongoConfig } from "@memongo/lib"
-import { resolveMemoryBackendConfig } from "./backend-config.js"
+import {
+	assertEmbeddingPipelineSupport,
+	EMBEDDING_PIPELINE_SUPPORT,
+	resolveMemoryBackendConfig,
+} from "./backend-config.js"
+import { INDEX_AUTOEMBED_MODEL } from "./mongodb-schema-search-definitions.js"
 
 describe("resolveMemoryBackendConfig", () => {
 	it("defaults to mongodb backend when config missing and env URI is set", () => {
@@ -126,6 +131,98 @@ describe("resolveMemoryBackendConfig", () => {
 				agentId: "main",
 			})
 		expect(resolve).toThrow(/queryEmbeddingModel "voyage-code-3"/)
+	})
+
+	describe("embedding pipeline supported-target contract (C-007 / EL-002 F1)", () => {
+		it("declares the Preview posture explicitly: automated-only, two supported targets, no client-side fallback", () => {
+			expect(EMBEDDING_PIPELINE_SUPPORT).toEqual({
+				contractVersion: 1,
+				embeddingMode: "automated",
+				deploymentProfiles: ["atlas-local-preview", "atlas-managed"],
+				featureStage: "preview-accepted",
+				clientSideFallback: "none",
+			})
+		})
+
+		it("resolves every declared target inside the contract", () => {
+			for (const deploymentProfile of EMBEDDING_PIPELINE_SUPPORT.deploymentProfiles) {
+				const resolved = resolveMemoryBackendConfig({
+					cfg: {
+						agents: { defaults: { workspace: "/tmp/memory-test" } },
+						memory: {
+							backend: "mongodb",
+							mongodb: {
+								uri: "mongodb://localhost:27017",
+								deploymentProfile,
+							},
+						},
+					} as unknown as MemongoConfig,
+					agentId: "main",
+				})
+				expect(() =>
+					assertEmbeddingPipelineSupport({
+						deploymentProfile: resolved.mongodb?.deploymentProfile ?? "",
+						embeddingMode: resolved.mongodb?.embeddingMode ?? "",
+					} as Parameters<typeof assertEmbeddingPipelineSupport>[0]),
+				).not.toThrow()
+			}
+		})
+
+		it("normalizes community-mongot into the contract instead of failing it", () => {
+			const resolved = resolveMemoryBackendConfig({
+				cfg: {
+					agents: { defaults: { workspace: "/tmp/memory-test" } },
+					memory: {
+						backend: "mongodb",
+						mongodb: {
+							uri: "mongodb://localhost:27017",
+							deploymentProfile: "community-mongot",
+							embeddingMode: "automated",
+						},
+					},
+				} as unknown as MemongoConfig,
+				agentId: "main",
+			})
+			expect(resolved.mongodb?.deploymentProfile).toBe("atlas-local-preview")
+			expect(() =>
+				assertEmbeddingPipelineSupport({
+					deploymentProfile: resolved.mongodb?.deploymentProfile ?? "",
+					embeddingMode: resolved.mongodb?.embeddingMode ?? "",
+				} as Parameters<typeof assertEmbeddingPipelineSupport>[0]),
+			).not.toThrow()
+		})
+
+		it("throws when the resolved pair drifts outside the declared contract", () => {
+			expect(() =>
+				assertEmbeddingPipelineSupport({
+					deploymentProfile: "community-mongot",
+					embeddingMode: "automated",
+				}),
+			).toThrow(/supported-target contract v1 violated/)
+			expect(() =>
+				assertEmbeddingPipelineSupport({
+					deploymentProfile: "atlas-managed",
+					// deliberate out-of-contract probe: the type admits only
+					// "automated", so a client-mode value can only arrive via
+					// untyped config — exactly the drift this assertion catches
+					embeddingMode: "client" as unknown as "automated",
+				}),
+			).toThrow(/no client-side fallback exists/)
+		})
+
+		it("keeps the default query model pinned to the autoEmbed index model (EL-002 F2)", () => {
+			const resolved = resolveMemoryBackendConfig({
+				cfg: {
+					agents: { defaults: { workspace: "/tmp/memory-test" } },
+					memory: {
+						backend: "mongodb",
+						mongodb: { uri: "mongodb://localhost:27017" },
+					},
+				} as unknown as MemongoConfig,
+				agentId: "main",
+			})
+			expect(resolved.mongodb?.queryEmbeddingModel).toBe(INDEX_AUTOEMBED_MODEL)
+		})
 	})
 
 	it("resolves mongodb with custom config values", () => {

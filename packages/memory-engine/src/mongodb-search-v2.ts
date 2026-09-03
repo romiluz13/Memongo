@@ -34,6 +34,7 @@ import {
 } from "./mongodb-session-evidence.js"
 import { isEvidenceMirrorEnabled } from "./mongodb-evidence-mirror.js"
 import { resolveUserfactEvidenceMode } from "./mongodb-userfact-evidence.js"
+import { INDEX_AUTOEMBED_MODEL } from "./mongodb-schema-search-definitions.js"
 import { resolveEnrichmentMode } from "./mongodb-llm-enrichment.js"
 import { crossEncoderRerank, type RerankConfig } from "./mongodb-reranker.js"
 import {
@@ -357,7 +358,7 @@ async function searchV2WithBudget(
 		const fusionMethod = context.searchOptions?.fusionMethod ?? "scoreFusion"
 		const embeddingMode = context.searchOptions?.embeddingMode ?? "automated"
 		const queryEmbeddingModel =
-			context.searchOptions?.queryEmbeddingModel ?? "voyage-4-large"
+			context.searchOptions?.queryEmbeddingModel ?? INDEX_AUTOEMBED_MODEL
 		const conversationEvidenceMode =
 			context.searchOptions?.conversationEvidenceMode ??
 			resolveConversationEvidenceMode(

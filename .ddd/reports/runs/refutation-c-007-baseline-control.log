@@ -1,0 +1,24 @@
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/packages/memory-engine[39m
+
+ [32m✓[39m src/embedding-model-single-source.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 55[2mms[22m[39m
+[90mstderr[2m | src/backend-config.test.ts[2m > [22m[2mresolveMemoryBackendConfig[2m > [22m[2mresolves custom numDimensions
+[22m[39m19:39:04.291 [memory:backend-config] error: memory.mongodb.numDimensions is ignored under embeddingMode "automated": the server-managed embedding model determines vector dimensions (configured value 768 resolves for compatibility but has no effect)
+19:39:04.294 [memory:backend-config] warn: numDimensions=768 may not match expected dimensions for voyage-4-large (1024). Mismatched dimensions will cause vector search errors.
+
+[90mstderr[2m | src/backend-config.test.ts[2m > [22m[2mresolveMemoryBackendConfig[2m > [22m[2mlogs at error level that an explicitly configured numDimensions is ignored (P3.1)
+[22m[39m19:39:04.295 [memory:backend-config] warn: numDimensions=768 may not match expected dimensions for voyage-4-large (1024). Mismatched dimensions will cause vector search errors.
+
+[90mstderr[2m | src/backend-config.test.ts[2m > [22m[2mresolveMemoryBackendConfig[2m > [22m[2mresolves graph.entityExtraction with llm method
+[22m[39m19:39:04.299 [memory:backend-config] warn: entity extraction method 'llm' configured but LLM function not injected — regex extractor will be used at runtime. Set graph.entityExtraction.method to 'regex' to suppress this warning.
+
+[90mstderr[2m | src/backend-config.test.ts[2m > [22m[2mresolveMemoryBackendConfig[2m > [22m[2mpreserves existing graph.enabled and maxGraphDepth behavior
+[22m[39m19:39:04.299 [memory:backend-config] warn: entity extraction method 'llm' configured but LLM function not injected — regex extractor will be used at runtime. Set graph.entityExtraction.method to 'regex' to suppress this warning.
+
+ [32m✓[39m src/backend-config.test.ts [2m([22m[2m82 tests[22m[2m)[22m[32m 14[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m2 passed[39m[22m[90m (2)[39m
+[2m      Tests [22m [1m[32m84 passed[39m[22m[90m (84)[39m
+[2m   Start at [22m 19:39:03
+[2m   Duration [22m 350ms[2m (transform 202ms, setup 0ms, import 251ms, tests 69ms, environment 0ms)[22m
+

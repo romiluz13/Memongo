@@ -40,6 +40,8 @@ export type {
 	OperationRunConfiguration as BenchmarkRunConfiguration,
 	OperationRunContext as BenchmarkRunContext,
 } from "../../packages/memory-engine/src/mongodb-operation-accounting.js"
+import { INDEX_AUTOEMBED_MODEL } from "../../packages/memory-engine/src/mongodb-schema-search-definitions.js"
+export { INDEX_AUTOEMBED_MODEL as BENCHMARK_AUTOEMBED_MODEL }
 
 export async function collectBenchmarkTenantStorage(params: {
 	db: Pick<Db, "collection">
@@ -230,7 +232,8 @@ export function resolveBenchmarkEmbeddingConfig(
 	mongoCfg: ResolvedEmbeddingInput,
 ): BenchmarkEmbeddingConfig {
 	const envModel = process.env.MEMONGO_BENCHMARK_EMBEDDING_MODEL?.trim()
-	const model = envModel && envModel.length > 0 ? envModel : "voyage-4-large"
+	const model =
+		envModel && envModel.length > 0 ? envModel : INDEX_AUTOEMBED_MODEL
 	return {
 		model,
 		dimensions: mongoCfg.numDimensions,

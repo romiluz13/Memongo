@@ -1,0 +1,13 @@
+DELETED_MODULE_GREP_EXIT=1
+packages/memory-engine/src/backend-config.ts
+packages/memory-engine/src/embedding-input-limits.ts
+packages/memory-engine/src/embedding-validation.test.ts
+packages/memory-engine/src/internal.ts
+packages/memory-engine/src/mongodb-analytics.ts
+packages/memory-engine/src/mongodb-embedding-retry.test.ts
+packages/memory-engine/src/mongodb-embedding-retry.ts
+packages/memory-engine/src/mongodb-kb.ts
+packages/memory-engine/src/mongodb-manager.ts
+packages/memory-engine/src/mongodb-schema-search-definitions.ts
+packages/memory-engine/src/mongodb-structured-memory.ts
+packages/memory-engine/src/mongodb-sync.ts

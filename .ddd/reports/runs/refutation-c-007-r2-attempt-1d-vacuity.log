@@ -1,0 +1,18 @@
+[31m⎯⎯⎯⎯⎯⎯⎯[39m[1m[41m Failed Tests 1 [49m[22m[31m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[41m[1m FAIL [22m[49m src/embedding-model-single-source.test.ts[2m > [22mautoEmbed model single source (C-007 / EL-002 F2)[2m > [22mkeeps every default and stage model derived from INDEX_AUTOEMBED_MODEL
+[31m[1mAssertionError[22m: expected [ Array(1) ] to deeply equal [][39m
+
+[32m- Expected[39m
+[31m+ Received[39m
+
+[32m- [][39m
+--
+[31m+   "backend-config.ts: assignment or declaration `= \"voyage-4-large\"`",[39m
+[31m+ ][39m
+
+--
+[2m Test Files [22m [1m[31m1 failed[39m[22m[2m | [22m[1m[32m1 passed[39m[22m[90m (2)[39m
+[2m      Tests [22m [1m[31m1 failed[39m[22m[2m | [22m[1m[32m83 passed[39m[22m[90m (84)[39m
+[2m   Start at [22m 19:52:23
+[2m   Duration [22m 394ms[2m (transform 187ms, setup 0ms, import 246ms, tests 74ms, environment 0ms)[22m

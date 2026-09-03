@@ -34,6 +34,7 @@ import {
 	consolidationRunsCollection,
 	memoryQuarantineCollection,
 } from "./mongodb-schema.js"
+import { INDEX_AUTOEMBED_MODEL } from "./mongodb-schema-search-definitions.js"
 import { classifyInjection } from "./mongodb-injection-classifier.js"
 import { extractAndUpsertEntities } from "./mongodb-graph.js"
 import { resolveEnrichmentProvider } from "./mongodb-llm-enrichment.js"
@@ -886,7 +887,7 @@ export async function consolidateMemory(params: {
 								index: `${prefix}structured_mem_vector`,
 								path: "value",
 								query: { text: candidate.body },
-								model: "voyage-4-large",
+								model: INDEX_AUTOEMBED_MODEL,
 								numCandidates: 100,
 								limit: 5,
 								filter: simFilter,
@@ -1202,7 +1203,7 @@ export async function consolidateMemory(params: {
 										index: `${prefix}structured_mem_vector`,
 										path: "value",
 										query: { text: fact.value },
-										model: "voyage-4-large",
+										model: INDEX_AUTOEMBED_MODEL,
 										numCandidates: 80,
 										limit: 4, // +1 to account for self-match consuming a slot
 										// Scope from the FACT, never from options — same
@@ -1354,7 +1355,7 @@ export async function consolidateMemory(params: {
 								index: `${prefix}structured_mem_vector`,
 								path: "value",
 								query: { text: fact.value },
-								model: "voyage-4-large",
+								model: INDEX_AUTOEMBED_MODEL,
 								numCandidates: 80,
 								limit: 4, // +1 to account for self-match consuming a slot
 								// Scope from the FACT, never from options: with options.scope

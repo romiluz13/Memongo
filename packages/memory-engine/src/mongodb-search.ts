@@ -14,6 +14,7 @@ import {
 } from "./mongodb-search-budget.js"
 import { summarizeExplain } from "./mongodb-relevance.js"
 import type { DetectedCapabilities } from "./mongodb-schema.js"
+import { INDEX_AUTOEMBED_MODEL } from "./mongodb-schema-search-definitions.js"
 import type {
 	InternalMemoryStoredSource,
 	LegacyMemorySource,
@@ -605,7 +606,7 @@ export function buildVectorSearchStage(input: {
 			return null
 		}
 		base.query = { text: input.queryText }
-		base.model = input.model ?? "voyage-4-large"
+		base.model = input.model ?? INDEX_AUTOEMBED_MODEL
 		base.path = input.textFieldPath ?? "text"
 	} else {
 		return null

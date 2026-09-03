@@ -16,6 +16,7 @@ import {
 import type { EmbeddingStatus } from "./mongodb-embedding-retry.js"
 import { invalidateQueryCache } from "./mongodb-query-cache.js"
 import { kbCollection, kbChunksCollection } from "./mongodb-schema.js"
+import { INDEX_AUTOEMBED_MODEL } from "./mongodb-schema-search-definitions.js"
 import { resolveScopeRef } from "./mongodb-scope.js"
 import {
 	MAJORITY_TRANSACTION_OPTIONS,
@@ -123,7 +124,7 @@ export async function ingestToKB(params: {
 		MAX_DOC_SIZE_CEILING,
 	)
 	const chunking = params.chunking ?? { tokens: 600, overlap: 100 }
-	const model = params.model ?? "voyage-4-large"
+	const model = params.model ?? INDEX_AUTOEMBED_MODEL
 	const kb = kbCollection(db, prefix)
 	const kbChunks = kbChunksCollection(db, prefix)
 

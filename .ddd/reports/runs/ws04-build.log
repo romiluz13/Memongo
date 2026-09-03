@@ -1,0 +1,70 @@
+$ turbo run build
+• turbo 2.10.10
+
+   • Packages in scope: @memongo/api, @memongo/client, @memongo/docs, @memongo/lib, @memongo/mcp, @memongo/memory, @memongo/memory-bridge, @memongo/memory-engine, @memongo/pi-extension, @memongo/scripts, @memongo/tools, @memongo/web
+   • Running build in 12 packages
+   • Remote caching disabled
+
+@memongo/client:build: cache hit, replaying logs c1d386c6713a4c07
+@memongo/lib:build: cache hit, replaying logs 66257a4c9e6c5438
+@memongo/client:build: $ bun run clean && node ../../node_modules/typescript/bin/tsc -p tsconfig.json
+@memongo/client:build: $ node -e "require('node:fs').rmSync('dist', { recursive: true, force: true })"
+@memongo/lib:build: $ bun run clean && node ../../node_modules/typescript/bin/tsc -p tsconfig.json
+@memongo/lib:build: $ node -e "require('node:fs').rmSync('dist', { recursive: true, force: true })"
+@memongo/docs:build: cache hit, replaying logs 93b9002b582d4b88
+@memongo/docs:build: $ node ../../scripts/check-docs-integrity.mjs
+@memongo/docs:build: Docs integrity checks passed for 13 pages.
+@memongo/memory-engine:build: cache miss, executing 86f8ea420d0198ab
+@memongo/tools:build: cache hit, replaying logs 2a115f0d17dab79a
+@memongo/tools:build: $ bun run clean && node ../../node_modules/typescript/bin/tsc -p tsconfig.json
+@memongo/tools:build: $ node -e "require('node:fs').rmSync('dist', { recursive: true, force: true })"
+@memongo/pi-extension:build: cache hit, replaying logs 8acfa785a8e2f490
+@memongo/pi-extension:build: $ bun run clean && bun run check-types
+@memongo/pi-extension:build: $ node -e "require('node:fs').rmSync('dist', { recursive: true, force: true })"
+@memongo/pi-extension:build: $ node ../../node_modules/typescript/bin/tsc --noEmit -p tsconfig.json
+@memongo/mcp:build: cache hit, replaying logs 1ed8ab39ecf349c8
+@memongo/mcp:build: $ bun run clean && node ../../node_modules/typescript/bin/tsc -p tsconfig.build.json
+@memongo/mcp:build: $ node -e "require('node:fs').rmSync('dist', { recursive: true, force: true })"
+@memongo/web:build: cache hit, replaying logs e320e44a7231e0a6
+@memongo/web:build: $ node ../../node_modules/next/dist/bin/next build
+@memongo/web:build:    [1m[38;2;173;127;168m▲ Next.js 15.5.23[39m[22m
+@memongo/web:build: 
+@memongo/web:build:  [37m[1m [22m[39m Creating an optimized production build ...
+@memongo/web:build:  [32m[1m✓[22m[39m Compiled successfully in 2.9s
+@memongo/web:build:  [37m[1m [22m[39m Linting and checking validity of types ...
+@memongo/web:build:  [37m[1m [22m[39m Collecting page data ...
+@memongo/web:build:  [37m[1m [22m[39m Generating static pages (0/5) ...
+@memongo/web:build:  [37m[1m [22m[39m Generating static pages (1/5) 
+@memongo/web:build:  [37m[1m [22m[39m Generating static pages (2/5) 
+@memongo/web:build:  [37m[1m [22m[39m Generating static pages (3/5) 
+@memongo/web:build:  [32m[1m✓[22m[39m Generating static pages (5/5)
+@memongo/web:build:  [37m[1m [22m[39m Finalizing page optimization ...
+@memongo/web:build:  [37m[1m [22m[39m Collecting build traces ...
+@memongo/web:build: 
+@memongo/web:build: [4mRoute (app)[24m                                 [4mSize[24m  [4mFirst Load JS[24m  [4m[24m  [4m[24m
+@memongo/web:build: ┌ ○ /                                    3.27 kB         [37m[1m106 kB[22m[39m
+@memongo/web:build: ├ ○ /_not-found                            990 B         [37m[1m104 kB[22m[39m
+@memongo/web:build: └ ○ /console                             7.11 kB         [37m[1m110 kB[22m[39m
+@memongo/web:build: + First Load JS shared by all             [37m[1m103 kB[22m[39m
+@memongo/web:build:   ├ chunks/18-536e344942e9442c.js        46.4 kB
+@memongo/web:build:   ├ chunks/87c73c54-24122e7b92478d00.js  54.2 kB
+@memongo/web:build:   └ other shared chunks (total)             2 kB
+@memongo/web:build: 
+@memongo/web:build: 
+@memongo/web:build: ○  (Static)  prerendered as static content
+@memongo/web:build: 
+@memongo/memory-engine:build: $ bun run clean && node ../../node_modules/typescript/bin/tsc -p tsconfig.json
+@memongo/memory-engine:build: $ node -e "require('node:fs').rmSync('dist', { recursive: true, force: true })"
+@memongo/memory-bridge:build: cache miss, executing edcaeeef3954a9af
+@memongo/memory-bridge:build: $ bun run clean && node ../../node_modules/typescript/bin/tsc -p tsconfig.json
+@memongo/memory-bridge:build: $ node -e "require('node:fs').rmSync('dist', { recursive: true, force: true })"
+@memongo/api:build: cache miss, executing 419dfb004ad27c22
+@memongo/memory:build: cache miss, executing 145b579ca1991588
+@memongo/api:build: $ node ../../node_modules/typescript/bin/tsc -p tsconfig.json --noEmit false --rootDir src --outDir dist
+@memongo/memory:build: $ bun run clean && node ../../node_modules/typescript/bin/tsc -p tsconfig.json
+@memongo/memory:build: $ node -e "require('node:fs').rmSync('dist', { recursive: true, force: true })"
+
+ Tasks:    11 successful, 11 total
+Cached:    7 cached, 11 total
+  Time:    3.774s 
+

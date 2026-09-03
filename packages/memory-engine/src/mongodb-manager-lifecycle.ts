@@ -30,6 +30,7 @@ import {
 	eventsCollection,
 	isEventsVectorBitemporalPrefilterReady,
 } from "./mongodb-schema.js"
+import { INDEX_AUTOEMBED_MODEL } from "./mongodb-schema-search-definitions.js"
 import { resolveScopeRef } from "./mongodb-scope.js"
 import { getActiveSources } from "./mongodb-search-ranking.js"
 import { searchV2 } from "./mongodb-search-v2.js"
@@ -509,7 +510,7 @@ export class MongoDBManagerLifecycleOps {
 			vectorIndexName: `${this.host.prefix}events_vector`,
 			textIndexName: `${this.host.prefix}events_text`,
 			queryEmbeddingModel:
-				this.host.config?.mongodb?.queryEmbeddingModel ?? "voyage-4-large",
+				this.host.config?.mongodb?.queryEmbeddingModel ?? INDEX_AUTOEMBED_MODEL,
 			capabilities: this.host.capabilities,
 			nativeBitemporalVectorPrefilter,
 		})

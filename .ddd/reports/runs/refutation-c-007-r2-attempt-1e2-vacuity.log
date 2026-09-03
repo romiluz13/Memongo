@@ -1,0 +1,8 @@
+[31m⎯⎯⎯⎯⎯⎯⎯[39m[1m[41m Failed Tests 1 [49m[22m[31m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[41m[1m FAIL [22m[49m src/embedding-model-single-source.test.ts[2m > [22mautoEmbed model single source (C-007 / EL-002 F2)[2m > [22mkeeps every default and stage model derived from INDEX_AUTOEMBED_MODEL
+[31m[1mAssertionError[22m: expected [ Array(1) ] to deeply equal [][39m
+--
+[31m+   "mongodb-consolidator.ts: stage property `model: \"voyage-4-large\"`",[39m
+[31m+ ][39m
+--

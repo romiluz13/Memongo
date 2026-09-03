@@ -22,6 +22,7 @@ import {
 import type { AnyBulkWriteOperation } from "mongodb"
 import type { EmbeddingStatus } from "./mongodb-embedding-retry.js"
 import { chunksCollection, filesCollection } from "./mongodb-schema.js"
+import { INDEX_AUTOEMBED_MODEL } from "./mongodb-schema-search-definitions.js"
 import { resolveScopeRef } from "./mongodb-scope.js"
 import {
 	MAJORITY_TRANSACTION_OPTIONS,
@@ -445,7 +446,7 @@ export async function syncToMongoDB(params: {
 	progress?: (update: MemorySyncProgressUpdate) => void
 }): Promise<SyncResult> {
 	const { db, prefix, embeddingMode, progress } = params
-	const model = params.model ?? "voyage-4-large"
+	const model = params.model ?? INDEX_AUTOEMBED_MODEL
 	const chunking = params.chunking ?? { tokens: 400, overlap: 80 }
 	const memoryNamespace: SyncNamespace = {
 		source: "conversation",

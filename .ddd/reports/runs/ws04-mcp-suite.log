@@ -1,0 +1,78 @@
+$ vitest run src
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/apps/mcp[39m
+
+ [32m✓[39m src/auth.test.ts [2m([22m[2m26 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/mcp-contract-conformance.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/tool-registry.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+[90mstderr[2m | src/http-transport.test.ts[2m > [22m[2mstreamable HTTP transport[2m > [22m[2manswers the MCP initialize handshake over HTTP
+[22m[39mmemongo-mcp: no MEMONGO_MCP_AUTH_TOKEN set — local trust mode; keep the bind on loopback
+
+[90mstderr[2m | src/http-transport.test.ts[2m > [22m[2mstreamable HTTP transport[2m > [22m[2manswers the MCP initialize handshake over HTTP
+[22m[39mmemongo-mcp: streamable HTTP transport listening on http://127.0.0.1:63062/mcp (local trust, no authentication)
+
+[90mstderr[2m | src/http-transport.test.ts[2m > [22m[2mstreamable HTTP transport[2m > [22m[2mserves tools/list over HTTP after initialize
+[22m[39mmemongo-mcp: no MEMONGO_MCP_AUTH_TOKEN set — local trust mode; keep the bind on loopback
+
+[90mstderr[2m | src/http-transport.test.ts[2m > [22m[2mstreamable HTTP transport[2m > [22m[2mserves tools/list over HTTP after initialize
+[22m[39mmemongo-mcp: streamable HTTP transport listening on http://127.0.0.1:63064/mcp (local trust, no authentication)
+
+[90mstderr[2m | src/http-transport.test.ts[2m > [22m[2mstreamable HTTP transport[2m > [22m[2mgates admin and alias tools behind env flags (P1.2)
+[22m[39mmemongo-mcp: no MEMONGO_MCP_AUTH_TOKEN set — local trust mode; keep the bind on loopback
+
+[90mstderr[2m | src/http-transport.test.ts[2m > [22m[2mstreamable HTTP transport[2m > [22m[2mgates admin and alias tools behind env flags (P1.2)
+[22m[39mmemongo-mcp: streamable HTTP transport listening on http://127.0.0.1:63067/mcp (local trust, no authentication)
+
+[90mstderr[2m | src/http-transport.test.ts[2m > [22m[2mstreamable HTTP transport[2m > [22m[2mexposes admin tools when MEMONGO_MCP_ADMIN=1 (P1.2)
+[22m[39mmemongo-mcp: no MEMONGO_MCP_AUTH_TOKEN set — local trust mode; keep the bind on loopback
+
+[90mstderr[2m | src/http-transport.test.ts[2m > [22m[2mstreamable HTTP transport[2m > [22m[2mexposes admin tools when MEMONGO_MCP_ADMIN=1 (P1.2)
+[22m[39mmemongo-mcp: streamable HTTP transport listening on http://127.0.0.1:63070/mcp (local trust, no authentication)
+
+ [32m✓[39m src/server.test.ts [2m([22m[2m117 tests[22m[2m)[22m[32m 22[2mms[22m[39m
+[90mstderr[2m | src/http-transport.test.ts[2m > [22m[2mstreamable HTTP transport[2m > [22m[2mreturns 404 for non-MCP paths
+[22m[39mmemongo-mcp: no MEMONGO_MCP_AUTH_TOKEN set — local trust mode; keep the bind on loopback
+
+[90mstderr[2m | src/http-transport.test.ts[2m > [22m[2mstreamable HTTP transport[2m > [22m[2mreturns 404 for non-MCP paths
+[22m[39mmemongo-mcp: streamable HTTP transport listening on http://127.0.0.1:63073/mcp (local trust, no authentication)
+
+[90mstderr[2m | src/http-transport.test.ts[2m > [22m[2mHTTP transport authentication (WS-01)[2m > [22m[2mrejects unauthenticated requests with 401 + WWW-Authenticate: Bearer
+[22m[39mmemongo-mcp: streamable HTTP transport listening on http://127.0.0.1:63075/mcp (bearer authentication required)
+
+[90mstderr[2m | src/http-transport.test.ts[2m > [22m[2mHTTP transport authentication (WS-01)[2m > [22m[2mrejects an invalid token with 401 + invalid_token challenge
+[22m[39mmemongo-mcp: streamable HTTP transport listening on http://127.0.0.1:63077/mcp (bearer authentication required)
+
+[90mstderr[2m | src/http-transport.test.ts[2m > [22m[2mHTTP transport authentication (WS-01)[2m > [22m[2mserves the handshake to a valid standard token
+[22m[39mmemongo-mcp: streamable HTTP transport listening on http://127.0.0.1:63079/mcp (bearer authentication required)
+
+[90mstderr[2m | src/http-transport.test.ts[2m > [22m[2mHTTP transport authentication (WS-01)[2m > [22m[2mhides admin tools from the standard scope even when MEMONGO_MCP_ADMIN=1
+[22m[39mmemongo-mcp: streamable HTTP transport listening on http://127.0.0.1:63081/mcp (bearer authentication required)
+
+[90mstderr[2m | src/http-transport.test.ts[2m > [22m[2mHTTP transport authentication (WS-01)[2m > [22m[2mexposes admin tools to the admin credential scope
+[22m[39mmemongo-mcp: streamable HTTP transport listening on http://127.0.0.1:63084/mcp (bearer authentication required)
+
+[90mstderr[2m | src/http-transport.test.ts[2m > [22m[2mHTTP transport authentication (WS-01)[2m > [22m[2mleaves admin tools unreachable when MEMONGO_MCP_ADMIN=1 but no admin token is set (fail closed)
+[22m[39mWARNING: MEMONGO_MCP_ADMIN=1 without MEMONGO_MCP_ADMIN_TOKEN — admin tools are unreachable over HTTP (fail closed). Set MEMONGO_MCP_ADMIN_TOKEN to expose them to an admin credential.
+
+[90mstderr[2m | src/http-transport.test.ts[2m > [22m[2mHTTP transport authentication (WS-01)[2m > [22m[2mleaves admin tools unreachable when MEMONGO_MCP_ADMIN=1 but no admin token is set (fail closed)
+[22m[39mmemongo-mcp: streamable HTTP transport listening on http://127.0.0.1:63087/mcp (bearer authentication required)
+
+[90mstderr[2m | src/http-transport.test.ts[2m > [22m[2mHTTP transport authentication (WS-01)[2m > [22m[2mreturns 403 for a disallowed Host header
+[22m[39mmemongo-mcp: streamable HTTP transport listening on http://127.0.0.1:63090/mcp (bearer authentication required)
+
+[90mstderr[2m | src/http-transport.test.ts[2m > [22m[2mHTTP transport authentication (WS-01)[2m > [22m[2mreturns 403 for a foreign Origin header
+[22m[39mmemongo-mcp: streamable HTTP transport listening on http://127.0.0.1:63092/mcp (bearer authentication required)
+
+[90mstderr[2m | src/http-transport.test.ts[2m > [22m[2mHTTP transport authentication (WS-01)[2m > [22m[2mreturns 403 (not a crash) for an empty Host header
+[22m[39mmemongo-mcp: streamable HTTP transport listening on http://127.0.0.1:63097/mcp (bearer authentication required)
+
+[90mstderr[2m | src/http-transport.test.ts[2m > [22m[2mHTTP transport authentication (WS-01)[2m > [22m[2mrequires authentication on a non-loopback bind once a token is configured
+[22m[39mmemongo-mcp: streamable HTTP transport listening on http://0.0.0.0:63101/mcp (bearer authentication required)
+
+ [32m✓[39m src/http-transport.test.ts [2m([22m[2m18 tests[22m[2m)[22m[32m 79[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m5 passed[39m[22m[90m (5)[39m
+[2m      Tests [22m [1m[32m175 passed[39m[22m[90m (175)[39m
+[2m   Start at [22m 19:35:37
+[2m   Duration [22m 418ms[2m (transform 311ms, setup 0ms, import 779ms, tests 115ms, environment 0ms)[22m
+

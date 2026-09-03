@@ -1,0 +1,25 @@
+    [90m   |[39m                                [31m^[39m
+    [90m530|[39m   })
+    [90m531|[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[97/98]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/search-manager.test.ts[2m > [22mgetMemorySearchManager runtime (P2.1)[2m > [22mfailed initialization releases the shared client reference
+[31m[1mAssertionError[22m: expected "vi.fn()" to be called 1 times, but got 0 times[39m
+[36m [2m❯[22m src/search-manager.test.ts:[2m555:25[22m[39m
+    [90m553|[39m   const result = await getMemorySearchManager({ cfg, agentId: "agent-a…
+    [90m554|[39m   [34mexpect[39m(result[33m.[39mmanager)[33m.[39m[34mtoBeNull[39m()
+    [90m555|[39m   [34mexpect[39m(sharedConnect)[33m.[39m[34mtoHaveBeenCalledTimes[39m([34m1[39m)
+    [90m   |[39m                         [31m^[39m
+    [90m556|[39m
+    [90m557|[39m   [90m// The released client is closed once its last reference drops.[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[98/98]⎯[22m[39m
+
+
+[2m Test Files [22m [1m[31m8 failed[39m[22m[2m | [22m[1m[32m113 passed[39m[22m[90m (121)[39m
+[2m      Tests [22m [1m[31m98 failed[39m[22m[2m | [22m[1m[32m1962 passed[39m[22m[90m (2060)[39m
+[2m   Start at [22m 19:54:47
+[2m   Duration [22m 7.07s[2m (transform 10.25s, setup 0ms, import 32.26s, tests 14.29s, environment 10ms)[22m
+
+error: script "test" exited with code 1

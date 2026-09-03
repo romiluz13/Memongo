@@ -1,0 +1,15 @@
+     [32m✓[39m resolves reranking temporalProximityBoost with a 0.1 default (P4.4.4)[32m 0[2mms[22m[39m
+     [32m✓[39m resolves reranking.voyageApiKey from env fallback[32m 0[2mms[22m[39m
+     [32m✓[39m allows reranking.enabled override via MEMONGO_RERANKING_ENABLED env var[32m 0[2mms[22m[39m
+     [32m✓[39m resolves graph.entityExtraction defaults (regex, timeoutMs=5000)[32m 0[2mms[22m[39m
+     [32m✓[39m resolves graph.entityExtraction with llm method[32m 1[2mms[22m[39m
+     [32m✓[39m preserves existing graph.enabled and maxGraphDepth behavior[32m 0[2mms[22m[39m
+     [32m✓[39m logs warning when entityExtraction.method is 'llm'[32m 0[2mms[22m[39m
+     [32m✓[39m defaults numCandidates to 500 for recall-oriented retrieval[32m 0[2mms[22m[39m
+     [32m✓[39m defaults reranking.minScore to 0.01 for recall-oriented retrieval[32m 0[2mms[22m[39m
+     [32m✓[39m allows numCandidates override via MEMONGO_NUM_CANDIDATES env var[32m 0[2mms[22m[39m
+     [32m✓[39m allows reranking.minScore override via MEMONGO_RERANK_MIN_SCORE env var[32m 0[2mms[22m[39m
+[31m⎯⎯⎯⎯⎯⎯⎯[39m[1m[41m Failed Tests 1 [49m[22m[31m⎯⎯⎯⎯⎯⎯⎯[39m
+[41m[1m FAIL [22m[49m src/backend-config.test.ts[2m > [22mresolveMemoryBackendConfig[2m > [22membedding pipeline supported-target contract (C-007 / EL-002 F1)[2m > [22mthrows when the resolved pair drifts outside the declared contract
+[2m Test Files [22m [1m[31m1 failed[39m[22m[2m | [22m[1m[32m1 passed[39m[22m[90m (2)[39m
+[2m      Tests [22m [1m[31m1 failed[39m[22m[2m | [22m[1m[32m83 passed[39m[22m[90m (84)[39m

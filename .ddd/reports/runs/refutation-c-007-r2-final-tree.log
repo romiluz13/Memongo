@@ -1,0 +1,30 @@
+ M CONTEXT.md
+ M packages/memory-engine/src/backend-config.test.ts
+ M packages/memory-engine/src/backend-config.ts
+D  packages/memory-engine/src/embedding-vectors.ts
+D  packages/memory-engine/src/embeddings-debug.ts
+D  packages/memory-engine/src/embeddings-gemini.test.ts
+D  packages/memory-engine/src/embeddings-gemini.ts
+D  packages/memory-engine/src/embeddings-mistral.test.ts
+D  packages/memory-engine/src/embeddings-mistral.ts
+D  packages/memory-engine/src/embeddings-model-normalize.test.ts
+D  packages/memory-engine/src/embeddings-model-normalize.ts
+D  packages/memory-engine/src/embeddings-ollama.test.ts
+D  packages/memory-engine/src/embeddings-ollama.ts
+D  packages/memory-engine/src/embeddings-openai.ts
+D  packages/memory-engine/src/embeddings-remote-client.ts
+D  packages/memory-engine/src/embeddings-remote-fetch.test.ts
+D  packages/memory-engine/src/embeddings-remote-fetch.ts
+D  packages/memory-engine/src/embeddings-remote-provider.ts
+D  packages/memory-engine/src/embeddings-voyage.test.ts
+D  packages/memory-engine/src/embeddings-voyage.ts
+D  packages/memory-engine/src/embeddings.test.ts
+D  packages/memory-engine/src/embeddings.ts
+ M packages/memory-engine/src/mongodb-consolidator.ts
+ M packages/memory-engine/src/mongodb-kb.ts
+ M packages/memory-engine/src/mongodb-manager-lifecycle.ts
+ M packages/memory-engine/src/mongodb-novelty.ts
+ M packages/memory-engine/src/mongodb-search-v2.ts
+ M packages/memory-engine/src/mongodb-search.ts
+ M packages/memory-engine/src/mongodb-sync.ts
+ M scripts/benchmark/benchmark-parity-envelope.ts

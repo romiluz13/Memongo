@@ -16,6 +16,7 @@ import {
 	type ConversationEvidenceMode,
 	resolveConversationEvidenceMode,
 } from "./mongodb-conversation-evidence-mode.js"
+import { INDEX_AUTOEMBED_MODEL } from "./mongodb-schema-search-definitions.js"
 
 const log = createSubsystemLogger("memory:backend-config")
 
@@ -166,8 +167,63 @@ const DEFAULT_RELEVANCE_DATASET = "~/.memongo/relevance/golden.jsonl"
 const DEFAULT_MONGODB_PROFILE: MemoryMongoDBDeploymentProfile =
 	"atlas-local-preview"
 const DEFAULT_MONGODB_EMBEDDING_MODE: MemoryMongoDBEmbeddingMode = "automated"
+// C-007 / EL-002 F2: the default query model must be the same model the
+// autoEmbed index definitions pin (INDEX_AUTOEMBED_MODEL), derived rather
+// than duplicated so a model change cannot strand query-side defaults.
 const DEFAULT_QUERY_EMBEDDING_MODEL: MemoryMongoDBQueryEmbeddingModel =
-	"voyage-4-large"
+	INDEX_AUTOEMBED_MODEL
+
+/**
+ * C-007 (EL-002 F1): the embedding pipeline's supported-target contract.
+ *
+ * Memongo's vector pipeline runs exclusively on Atlas Automated Embeddings
+ * (server-side embedding at index time), which MongoDB ships as a Preview
+ * feature. This declaration makes that posture an explicit, versioned
+ * contract instead of an implicit accident:
+ *
+ * - Supported targets: deploymentProfile "atlas-local-preview" (the local
+ *   atlas-local + mongot container stack) and "atlas-managed" (Atlas
+ *   clusters), both accepting Preview semantics knowingly.
+ * - The only supported embeddingMode is "automated" — client-side embedding
+ *   has no implementation; the dead provider stack was removed with this
+ *   contract, and no client-side fallback exists or is implied.
+ * - A Preview deprecation or removal therefore surfaces as a loud startup
+ *   failure (index creation or search), never as a silent client-side
+ *   detour.
+ *
+ * assertEmbeddingPipelineSupport checks the resolved config against this
+ * declaration, so the resolver and the contract cannot drift apart silently.
+ */
+export const EMBEDDING_PIPELINE_SUPPORT = {
+	contractVersion: 1,
+	embeddingMode: "automated" as MemoryMongoDBEmbeddingMode,
+	deploymentProfiles: [
+		"atlas-local-preview",
+		"atlas-managed",
+	] as readonly MemoryMongoDBDeploymentProfile[],
+	featureStage: "preview-accepted" as const,
+	clientSideFallback: "none" as const,
+}
+
+export function assertEmbeddingPipelineSupport(params: {
+	deploymentProfile: MemoryMongoDBDeploymentProfile
+	embeddingMode: MemoryMongoDBEmbeddingMode
+}): void {
+	if (
+		params.embeddingMode !== EMBEDDING_PIPELINE_SUPPORT.embeddingMode ||
+		!EMBEDDING_PIPELINE_SUPPORT.deploymentProfiles.includes(
+			params.deploymentProfile,
+		)
+	) {
+		throw new Error(
+			[
+				`embedding pipeline supported-target contract v${EMBEDDING_PIPELINE_SUPPORT.contractVersion} violated:`,
+				`deploymentProfile "${params.deploymentProfile}" with embeddingMode "${params.embeddingMode}".`,
+				`Supported: embeddingMode "${EMBEDDING_PIPELINE_SUPPORT.embeddingMode}" on deploymentProfile ${EMBEDDING_PIPELINE_SUPPORT.deploymentProfiles.map((profile) => `"${profile}"`).join(" or ")} — Atlas Automated Embeddings (${EMBEDDING_PIPELINE_SUPPORT.featureStage}); no client-side fallback exists.`,
+			].join(" "),
+		)
+	}
+}
 /**
  * P2.1: shared default collection prefix. All agents share one physical
  * collection set; per-agent isolation stays logical (agentId leads every
@@ -250,6 +306,11 @@ export function resolveMemoryBackendConfig(params: {
 				].join(" "),
 			)
 		}
+		// C-007 (EL-002 F1): cross-check the resolved pair against the declared
+		// supported-target contract — the raw-input throws above stay the input
+		// validation layer; this keeps the declaration and the resolver locked
+		// together.
+		assertEmbeddingPipelineSupport({ deploymentProfile, embeddingMode })
 		if (
 			typeof mongoCfg?.queryRewriting?.method === "string" &&
 			mongoCfg.queryRewriting.method !== "synonym-expansion"
@@ -626,7 +687,7 @@ export function resolveMemoryBackendConfig(params: {
 		// F22: numDimensions validation warning — check if configured dimensions
 		// match known model dimensions for the default embedding model
 		const resolvedNumDims = mongodb?.numDimensions
-		const defaultModel = "voyage-4-large"
+		const defaultModel = DEFAULT_QUERY_EMBEDDING_MODEL
 		const expectedDims = KNOWN_MODEL_DIMENSIONS[defaultModel]
 		if (
 			mongoCfg?.numDimensions &&

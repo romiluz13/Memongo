@@ -1,0 +1,5 @@
+f2a038b943cae4ebf8c4ae0da87ea8e42250136a75385860892a9f48c8f227a4  packages/memory-engine/src/backend-config.ts
+91247ea5ec1ba9c996ce2356c2163ce89fb29ed6882dca0a33f159cd7904ada6  packages/memory-engine/src/mongodb-search.ts
+b1fe2cf2f14634f3bcba4a6333a326fd21133606ccb603a95dd06d1a9ed1dadd  packages/memory-engine/src/mongodb-sync.ts
+72da9efb87e317af3aa0dbd61347b0104909d64ebb59ce0fba2e4150190d825a  packages/memory-engine/src/mongodb-schema-search-definitions.ts
+01c7abcc8982092038591767aaaa6636d0ecebf673cd2a7ac6a4c03226d30fc6  packages/memory-engine/src/embedding-model-single-source.test.ts

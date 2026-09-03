@@ -1,0 +1,3 @@
+$ node ../../node_modules/next/dist/bin/next typegen && node ../../node_modules/typescript/bin/tsc --noEmit -p tsconfig.json
+Generating route types...
+✓ Route types generated successfully

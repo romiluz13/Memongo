@@ -23,6 +23,7 @@
 import type { Db, Document } from "mongodb"
 import { createSubsystemLogger } from "@memongo/lib"
 import type { NoveltyEvent, NoveltyOptions, NoveltyReport } from "./types.js"
+import { INDEX_AUTOEMBED_MODEL } from "./mongodb-schema-search-definitions.js"
 
 export type { NoveltyEvent, NoveltyReport, NoveltyOptions }
 
@@ -164,7 +165,7 @@ export async function scanNovelty(params: {
 						index: eventsVectorIndex(prefix),
 						path: "body",
 						query: { text: candidateBody },
-						model: "voyage-4-large",
+						model: INDEX_AUTOEMBED_MODEL,
 						numCandidates,
 						limit: searchLimit,
 						filter: vsFilter,

@@ -42,7 +42,7 @@ This file is the compaction anchor: any future instance resumes from here.
 | WS-01 | C-001 | T3 | MCP transport auth | LANDED ce00d6f183 |
 | WS-02 | C-002 | T3 | Secret redaction at logging boundaries | LANDED 3546e7d6bd |
 | WS-03 | C-003,004,005,006 | T3,T3,T3,T1 | Tenant erasure + retention lifecycle | LANDED (see session log) |
-| WS-04 | C-007 | T3 | autoEmbed Preview de-risk | pending |
+| WS-04 | C-007 | T3 | autoEmbed Preview de-risk | LANDED (see session log) |
 | WS-05 | C-008 | T3 | Prompt-injection coverage | pending |
 | WS-06 | C-009 | T3 | Deployment defaults (shared client, cache bound, sweep) | pending |
 | WS-07 | C-010 | T3 | CI executes suites | LANDED 5115d889c7 |
@@ -59,9 +59,10 @@ This file is the compaction anchor: any future instance resumes from here.
 | WS-18 | C-037,038,039 | T1,T2,T2 | dockerignore; publish gates; nightly eval | pending |
 
 T3 needing refutation: C-002, C-003, C-004, C-005, C-007, C-008, C-009, C-018.
-Validation IDs used so far: V-001..V-051 (next free: V-052).
+Validation IDs used so far: V-001..V-054 (next free: V-055).
 Sweep violations at WS-01 landing: 92 (was 96 pre-WS-01).
 Sweep violations at WS-02 landing: 86 (was 92; zero for C-002).
+Sweep violations at WS-04 landing: 67 (was 72 at WS-03; zero for C-007).
 
 ## Session log
 
@@ -146,3 +147,59 @@ Sweep violations at WS-02 landing: 86 (was 92; zero for C-002).
   --exclude='src/**/*.e2e.test.ts' — a bare `vitest run` drags in
   live-MongoDB e2e files whose 240s hook budgets make the run appear
   hung for tens of minutes at ~0 CPU.
+- WS-04 landing (autoEmbed Preview de-risk, C-007): three obligations
+  landed. F1 declare-contract arm: EMBEDDING_PIPELINE_SUPPORT v1 in
+  backend-config (embeddingMode automated-only; deploymentProfiles
+  atlas-local-preview + atlas-managed; featureStage preview-accepted;
+  clientSideFallback none) with assertEmbeddingPipelineSupport
+  cross-checking the resolved pair on the production funnel
+  (memory-bridge -> getMemorySearchManager -> resolveMemoryBackendConfig,
+  refuter-traced) so a Preview retirement is a loud startup throw; 5-test
+  contract describe pins declaration shape, in-contract resolution,
+  community-mongot normalization, drift throw, and default-model
+  identity. F2: INDEX_AUTOEMBED_MODEL in the autoEmbed index definitions
+  module is the single production source; all 9 former fallback sites
+  (search 609, search-v2 361, lifecycle 513, kb 127, sync 449,
+  consolidator 890/1206/1358, novelty 168) plus backend-config's default +
+  F22 warning and the benchmark envelope derive from it; the new
+  embedding-model-single-source.test.ts scans all production .ts for
+  three forbidden literal forms and anchors the source by equality; only
+  documented survivors remain (definition, KNOWN_MODEL_DIMENSIONS key,
+  === allow-list, error text). F9: the dead client-side provider stack
+  deleted — 19 files, 3,192 lines (1,312 production + 1,880 test), zero
+  residual references repo-wide; embedding-inputs/input-limits/
+  validation/mongodb-embedding-retry kept with live importers.
+  Refutation: round 1 partially_refuted — a typed-const literal revert
+  (const X: SomeType = "voyage-4-large" in backend-config) escaped the
+  pin test because its const-keyword regex cannot match type annotations;
+  fixed by broadening the forbidden pattern to any
+  (?<![=!])= "voyage-4-large" assignment/declaration. Round 2 SUSTAINED:
+  9 vacuity mutations (the escaped one re-run verbatim, kb/consolidator/
+  benchmark/split-literal/backtick shapes) — the escaped revert now
+  caught with the pin naming backend-config.ts, planted ?? fallbacks
+  caught by name, no-op assertion caught by the contract drift test;
+  sentinel model spike 98 loud failures; dead-stack zero refs with
+  check-types 15/15 + build 11/11; no missed sites. Reports
+  refutation-c-007.yaml / refutation-c-007-round2.yaml. Post-sustain
+  hardening (out-of-envelope, per round-2 obs 1): benchmark parity test
+  changed from value pin to derivation pin (toBe(BENCHMARK_AUTOEMBED_MODEL))
+  — first cut referenced the re-export alias inside the module body (an
+  export { X as Y } alias binds nothing locally — ReferenceError), caught
+  by the hardened battery and fixed to the imported binding, 37/37
+  (ws04-benchmark-hardening.log). Two lessons: (1) pipe-exit masking —
+  `vitest run | tail` reports tail's exit code, so a red run read green;
+  always set -o pipefail and grep the Tests line; (2) a pin-test regex
+  must be validated against the exact mutation shapes it claims to catch
+  — the round-1 escape was precisely an untested regex claim. Suite
+  state: engine 121 files/2060 tests, bridge 82, client 39, tools 48,
+  lib 158, pi 55, api 240, mcp 175, web typecheck clean, build 11 tasks,
+  root check-types 15/15. Artifacts: V-052..V-054 (hashes anchored to
+  ws04-round2-engine-suite.log), C-007 validations filled, TR-017/018/019
+  patched (V-053/V-054/V-052 + sweep_pass true), ADR-0006 + book.yaml
+  entry + CONTEXT.md domain term + manifest recomputed (a05c9a05...),
+  sweep-ws04.json 67 violations, zero for C-007. Non-blocking
+  observations recorded in the ADR: vestigial analytics "client" branch
+  (unreachable, embeds nothing), e2e-only preview-env literal
+  (deliberately outside the scan boundary), stale droid-wiki generated
+  docs, contract assertion structurally unreachable from raw input
+  (validators reject first — it is the declaration-resolver drift lock).

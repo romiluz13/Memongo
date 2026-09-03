@@ -1,0 +1,373 @@
+# Independent refutation report for T3 claim C-007 — ROUND 2
+# ("The autoEmbed dependency on MongoDB Preview MUST be de-risked: declare the
+# Preview posture as an explicit supported-target contract or add a tested
+# client-side fallback, centralize the duplicated voyage-4-large literal into
+# one configuration point, and remove or quarantine the dead provider stack.")
+schema_version: 0.1.0
+claim_id: C-007
+round: 2
+verdict: sustained
+independence_verified: true
+refuter_id: "factory-droid worker subagent, independent C-007 round-2 refuter (did not author the implementation or the round-1 fix)"
+implementer_id: "factory-droid primary agent, WS-04 implementer"
+refuted_rounds: 1
+sustained_rounds: 1
+attempt_log_dir: .ddd/reports/runs/
+baseline_control: >
+  Baseline before any mutation: focused battery (backend-config.test.ts +
+  embedding-model-single-source.test.ts) 84/84 green; baseline sha256 ledger
+  recorded for all 13 mutation-target/tracked files. Benchmark fix verified
+  in tree before testing: scripts/benchmark/benchmark-parity-envelope.ts:43-44
+  imports INDEX_AUTOEMBED_MODEL and re-exports it as BENCHMARK_AUTOEMBED_MODEL,
+  and resolveBenchmarkEmbeddingConfig (line 236) derives the default from it.
+
+attempts:
+  - id: attempt-1-vacuity
+    description: >
+      Round-2 vacuity battery. All mandated round-1 mutations re-run fresh
+      plus new shapes. Each mutation applied one at a time, battery run,
+      file restored byte-identically (cp from /tmp backup, sha256 verified
+      against the round-2 baseline ledger) before the next mutation.
+    round_2_outcome: caught
+    mutations:
+      - id: a-neutralize-pin-plus-planted-literal
+        change: >
+          FORBIDDEN_FALLBACK_PATTERNS in embedding-model-single-source.test.ts
+          replaced with unmatchable patterns (/ never1/, / never2/,
+          /(?<![=!])=\s*"never3"/) AND mongodb-search.ts:609 reverted to a bare
+          `input.model ?? "voyage-4-large"` fallback.
+        outcome: not_caught
+        detail: >
+          Battery passed 84/84. As in round 1, this is the control
+          experiment: the pin test is the sole static gate for the planted-
+          literal class in engine sources; with the gate neutralized nothing
+          else fires. The un-neutralized gate is proven working by mutations
+          (c), (d), (e1), (e2) below. Not a weakness — the control confirms
+          exactly which gate carries the load.
+        log: refutation-c-007-r2-attempt-1a-vacuity.log
+      - id: b-noop-contract-assertion
+        change: >
+          assertEmbeddingPipelineSupport body replaced with `void params;
+          return` (never throws) in backend-config.ts.
+        outcome: caught
+        detail: >
+          backend-config.test.ts > "embedding pipeline supported-target
+          contract (C-007 / EL-002 F1)" > "throws when the resolved pair
+          drifts outside the declared contract" failed (1 failed / 83 passed).
+        log: refutation-c-007-r2-attempt-1b-vacuity.log
+      - id: c-bare-fallback-mongodb-sync
+        change: >
+          mongodb-sync.ts:449 `const model = params.model ??
+          INDEX_AUTOEMBED_MODEL` reverted to `?? "voyage-4-large"`.
+        outcome: caught
+        detail: >
+          embedding-model-single-source.test.ts > "keeps every default and
+          stage model derived from INDEX_AUTOEMBED_MODEL" failed with
+          violations array non-empty (AssertionError: expected [ Array(1) ]
+          to deeply equal []; the ?? pattern entry for mongodb-sync.ts).
+        log: refutation-c-007-r2-attempt-1c-vacuity.log
+      - id: d-round-1-escape-typed-literal
+        change: >
+          THE ROUND-1 ESCAPE, verbatim: backend-config.ts
+          DEFAULT_QUERY_EMBEDDING_MODEL reverted to the single-line typed
+          literal `const DEFAULT_QUERY_EMBEDDING_MODEL:
+          MemoryMongoDBQueryEmbeddingModel = "voyage-4-large"`.
+        outcome: caught
+        detail: >
+          FIX VERIFIED INDEPENDENTLY. The battery now fails: pin test reports
+          exactly `backend-config.ts: assignment or declaration
+          `= "voyage-4-large"`` (1 failed / 83 passed). The broadened pattern
+          /(?<![=!])=\s*"voyage-4-large"/ closes the round-1 gap; the
+          lookbehind still permits the === allow-list comparisons (battery
+          green on the unmutated tree, 84/84).
+        log: refutation-c-007-r2-attempt-1d-vacuity.log
+      - id: e1-bare-fallback-mongodb-kb
+        change: "mongodb-kb.ts:127 `?? INDEX_AUTOEMBED_MODEL` reverted to `?? \"voyage-4-large\"`."
+        outcome: caught
+        detail: >
+          Pin test failed naming `mongodb-kb.ts: nullish default
+          `?? "voyage-4-large"``.
+        log: refutation-c-007-r2-attempt-1e1-vacuity.log
+      - id: e2-stage-property-consolidator
+        change: "mongodb-consolidator.ts:890 `model: INDEX_AUTOEMBED_MODEL,` reverted to `model: \"voyage-4-large\",`."
+        outcome: caught
+        detail: >
+          Pin test failed naming `mongodb-consolidator.ts: stage property
+          `model: "voyage-4-large"``.
+        log: refutation-c-007-r2-attempt-1e2-vacuity.log
+      - id: e3-benchmark-default-revert
+        change: >
+          scripts/benchmark/benchmark-parity-envelope.ts:236 derivation
+          reverted to the bare literal `: "voyage-4-large"`.
+        outcome: not_caught
+        detail: >
+          BOTH batteries pass: benchmark-parity-envelope.test.ts 37/37 and
+          the engine focused battery 84/84. The pin test's scan root is
+          packages/memory-engine/src only, so scripts/ is outside the static
+          gate; benchmark-parity-envelope.test.ts:194 anchors the VALUE
+          (`toBe("voyage-4-large")`), not the derivation, so even at
+          INDEX_AUTOEMBED_MODEL drift the reverted benchmark would pass
+          silently (the test pins the old literal regardless of source).
+          Outside the claim's declared constructs (diagnostic tooling); the
+          tree itself satisfies F2. Recorded as the top non-blocking
+          observation with a hardening recommendation.
+        log: refutation-c-007-r2-attempt-1e3-vacuity.log
+      - id: e4-split-literal-with-cast
+        change: >
+          backend-config.ts DEFAULT_QUERY_EMBEDDING_MODEL reverted to
+          `"voyage-4-" + "large" as MemoryMongoDBQueryEmbeddingModel`
+          (deliberate-obfuscation shape).
+        outcome: not_caught
+        detail: >
+          Battery 84/84 green AND `bun run check-types` exit 0 (verified the
+          cast semantics independently with a scratch tsc compile: the
+          expression parses as `("voyage-4-" + "large") as <union>`, which
+          tsc accepts). No static gate can match a split literal; the runtime
+          value equals the source of truth so value-equality pins pass in the
+          static tree. Drift-time net EXISTS: backend-config.test.ts:224
+          (`expect(resolved.mongodb?.queryEmbeddingModel).toBe(INDEX_AUTOEMBED_MODEL)`)
+          fails the moment INDEX_AUTOEMBED_MODEL changes. Classified as
+          deliberate adversarial evasion, not a realistic regression shape —
+          non-blocking observation.
+        log: refutation-c-007-r2-attempt-1e4-vacuity.log
+      - id: e5-backtick-template-literal
+        change: >
+          backend-config.ts DEFAULT_QUERY_EMBEDDING_MODEL reverted to a
+          backtick template literal `` `voyage-4-large` ``.
+        outcome: not_caught
+        detail: >
+          Battery 84/84 green and check-types exit 0 (no-substitution
+          template literals carry the literal type). Same evasion class as
+          e4: patterns only match double-quoted literals; drift-time equality
+          pin (backend-config.test.ts:224) still catches it. Non-blocking
+          observation.
+        log: refutation-c-007-r2-attempt-1e5-vacuity.log
+
+  - id: attempt-2-declared-surfaces
+    description: >
+      Verify the contract is enforced on the real production path and that
+      only the documented literal survivors remain repo-wide.
+    round_2_outcome: caught
+    detail: >
+      Production funnel re-verified: packages/memory-bridge/src/memongo-bridge.ts:90
+      -> getMemorySearchManager (packages/memory-engine/src/search-manager.ts:293)
+      -> resolveMemoryBackendConfig (backend-config.ts:234) ->
+      assertEmbeddingPipelineSupport at backend-config.ts:313, after the
+      community-mongot normalization and the raw-input validators. No app
+      constructs MemorySearchManager directly (rg over apps/: zero matches).
+      Mutation (b) proves the contract describe fails when the assertion is
+      gutted. Derivation sites re-verified by grep: mongodb-search.ts:609,
+      mongodb-search-v2.ts:361, mongodb-manager-lifecycle.ts:513,
+      mongodb-kb.ts:127, mongodb-sync.ts:449, mongodb-consolidator.ts:890/
+      1206/1358, mongodb-novelty.ts:168, backend-config.ts:174, and now
+      scripts/benchmark/benchmark-parity-envelope.ts:43-44/236. Repo-wide rg
+      for "voyage-4-large" (excluding node_modules/dist/.ddd/droid-wiki)
+      reconciles every hit: production survivors are exactly
+      mongodb-schema-search-definitions.ts:262 (source of truth),
+      backend-config.ts:26 (KNOWN_MODEL_DIMENSIONS key), backend-config.ts:889
+      (allow-list comparison), backend-config.ts:896 (error text); all other
+      hits are tests, e2e tests, test-helpers/preview-env.ts:153 (e2e-only),
+      packages/lib/src/types.memory.ts:11 (type-union member, registry form),
+      docs, .env.example, README, docker README, and benchmark result logs.
+      CONTEXT.md documents the contract (automated-only, preview-accepted,
+      no client-side fallback).
+    evidence: refutation-c-007-r2-attempt-1b-vacuity.log, rg transcripts in this report
+
+  - id: attempt-3-drift
+    description: >
+      Sentinel spike: INDEX_AUTOEMBED_MODEL set to "voyage-sentinel" in
+      mongodb-schema-search-definitions.ts; full engine unit suite run.
+    round_2_outcome: caught
+    detail: >
+      98 failed / 1962 passed across 8 test files (121 files total) —
+      identical wave to round 1. Composition: 78 loud config-resolution
+      throws (`memory.mongodb.queryEmbeddingModel "voyage-sentinel" is not
+      supported; use "voyage-4-large", ...` — the allow-list is deliberately
+      decoupled from the source of truth, so a model change is a LOUD
+      failure, never silent drift), 7 value-equality assertion failures
+      (`expected 'voyage-sentinel' to be 'voyage-4-large'`), the pin test's
+      source-of-truth anchor failure (received
+      `export const INDEX_AUTOEMBED_MODEL = "voyage-sentinel"`), index
+      definition pins (mongodb-schema.part2/part3/part4), stage-model pins
+      (mongodb-search.test.ts), and search-manager knock-on failures. Nothing
+      passed silently. Restored byte-identically (sha256
+      72da9efb87e317af3aa0dbd61347b0104909d64ebb59ce0fba2e4150190d825a) with
+      an 84/84 green focused control after restore.
+    evidence: >
+      refutation-c-007-r2-attempt-3-drift.log,
+      refutation-c-007-r2-attempt-3-drift-summary.log,
+      refutation-c-007-r2-post-restore-control.log
+
+  - id: attempt-4-dead-stack
+    description: >
+      Verify the 12 deleted provider modules and 7 test files have zero
+      residual references; kept modules intact; check-types and build pass.
+    round_2_outcome: caught
+    detail: >
+      Repo-wide rg for every deleted module name (embeddings,
+      embeddings-voyage/-gemini/-ollama/-openai/-mistral,
+      embeddings-remote-client/-fetch/-provider, embedding-vectors,
+      embeddings-model-normalize, embeddings-debug, embeddings.ts,
+      'embeddings' import forms) across ALL file types (code, config, docs),
+      excluding node_modules/dist/.ddd/droid-wiki/benchmarks-results: ZERO
+      matches (exit 1). Nothing in tsconfig paths, vitest configs,
+      package.json exports, biome.json, or turbo.json. Kept modules intact
+      with live importers: embedding-inputs.ts (imported by internal.ts:11
+      and embedding-input-limits.ts:1), embedding-input-limits.ts,
+      embedding-validation.ts, mongodb-embedding-retry.ts (importers include
+      internal.ts, mongodb-analytics.ts, mongodb-kb.ts, mongodb-manager.ts,
+      mongodb-schema-search-definitions.ts, mongodb-structured-memory.ts,
+      mongodb-sync.ts, backend-config.ts). `bun run check-types` from repo
+      root: 15/15 Turbo tasks successful. `bun run build`: 11/11 Turbo tasks
+      successful.
+    evidence: >
+      refutation-c-007-r2-attempt-4-dead-stack.log,
+      refutation-c-007-r2-attempt-4-checktypes.log,
+      refutation-c-007-r2-attempt-4-build.log
+
+  - id: attempt-5-missed-sites
+    description: >
+      Hunt for claim overstatements: residual client-side embedding, other
+      duplicated literals, config surfaces bypassing the contract.
+    round_2_outcome: caught_with_observations
+    detail: >
+      No production path computes embeddings client-side: the dead provider
+      stack is fully removed (attempt 4) and no replacement client-side
+      embedder exists; the vestigial mongodb-analytics.ts "client" branch
+      (lines 95/239-250) only measures stored `$embedding` vectors, embeds
+      nothing, and is unreachable from production because
+      mongodb-manager-admin.ts:538 always passes the resolved
+      (automated-only) embeddingMode. No other duplicated model literal in
+      production code (attempt 2 reconciliation). No config surface bypasses
+      the contract: resolveMemoryBackendConfig is the single resolution
+      funnel and the assertion fires inside it; raw user input is rejected
+      earlier by the input validators, making the assertion a drift lock
+      between declaration and resolver (as designed). The claim's
+      obligations are all true in tree.
+    evidence: rg transcripts in this report; refutation-c-007-r2-attempt-4-dead-stack.log
+
+real_weaknesses: []
+
+non_blocking_observations:
+  - id: obs-1-benchmark-outside-pin-root
+    text: >
+      STRONGEST OBSERVATION. The pin test scans only
+      packages/memory-engine/src. A revert of the round-2 benchmark fix
+      (scripts/benchmark/benchmark-parity-envelope.ts:236 back to the bare
+      literal, mutation e3) passes every gate — engine battery 84/84 AND
+      benchmark battery 37/37 — and, unlike engine decoupling, has NO
+      drift-time net: benchmark-parity-envelope.test.ts:194 anchors the value
+      literal (`toBe("voyage-4-large")`), not the derivation, so at
+      INDEX_AUTOEMBED_MODEL drift the reverted benchmark passes silently.
+      Outside the claim's declared constructs (diagnostic tooling); the tree
+      satisfies F2. Recommended hardening (not required by the claim):
+      extend the pin scan root to scripts/benchmark or change
+      benchmark-parity-envelope.test.ts:194 to
+      `expect(cfg.model).toBe(BENCHMARK_AUTOEMBED_MODEL)`.
+  - id: obs-2-deliberate-evasion-class
+    text: >
+      The regex static gate cannot match deliberately obfuscated literals:
+      a split literal with cast (`"voyage-4-" + "large" as
+      MemoryMongoDBQueryEmbeddingModel`, mutation e4) or a backtick template
+      literal (mutation e5) in backend-config.ts pass the battery AND
+      check-types (tsc exit 0, verified). Both retain a drift-time net via
+      the value-equality pin backend-config.test.ts:224 (fails the moment
+      INDEX_AUTOEMBED_MODEL changes). These shapes require deliberate
+      adversarial construction and are not realistic accidental regressions;
+      the round-1 escape (the natural typed-const form) IS now caught.
+  - id: obs-3-e2e-test-helper-literal
+    text: >
+      packages/memory-engine/src/test-helpers/preview-env.ts:153 keeps an
+      e2e-only `?? "voyage-4-large"` direct-Voyage embedder; the pin test
+      deliberately skips test-helpers/. Carried over from round 1;
+      unchanged.
+  - id: obs-4-vestigial-analytics-client-branch
+    text: >
+      mongodb-analytics.ts retains the "client" measurement branch (embeds
+      nothing; unreachable from production because the manager always passes
+      the resolved automated-only embeddingMode). Unchanged from round 1.
+  - id: obs-5-pin-test-is-sole-static-gate
+    text: >
+      Control experiment (mutation a) re-confirms the pin test is the sole
+      static gate for planted literals in engine sources: with its patterns
+      neutralized, a bare `?? "voyage-4-large"` in mongodb-search.ts passes
+      84/84. The un-neutralized gate catches every realistic shape tested
+      (mutations c, d, e1, e2). This is a design fact, not a hole — but any
+      future regression of the pin test itself (e.g. an over-broadened
+      allow-list) would be invisible.
+
+mutation_ledger:
+  - file: packages/memory-engine/src/embedding-model-single-source.test.ts
+    sha256_before_mutation: 094f2740d5f78a194611c3b31e3ec4c86d767e67bf4e1edf93ef7504ea18a026
+    sha256_after_restore: 094f2740d5f78a194611c3b31e3ec4c86d767e67bf4e1edf93ef7504ea18a026
+    outcome: restored_byte_identical
+  - file: packages/memory-engine/src/mongodb-search.ts
+    sha256_before_mutation: 91247ea5ec1ba9c996ce2356c2163ce89fb29ed6882dca0a33f159cd7904ada6
+    sha256_after_restore: 91247ea5ec1ba9c996ce2356c2163ce89fb29ed6882dca0a33f159cd7904ada6
+    outcome: restored_byte_identical
+  - file: packages/memory-engine/src/backend-config.ts
+    sha256_before_mutation: f2a038b943cae4ebf8c4ae0da87ea8e42250136a75385860892a9f48c8f227a4
+    sha256_after_restore: f2a038b943cae4ebf8c4ae0da87ea8e42250136a75385860892a9f48c8f227a4
+    outcome: restored_byte_identical (three mutations: b, d, e4, e5 — restored and hash-verified after each)
+  - file: packages/memory-engine/src/mongodb-sync.ts
+    sha256_before_mutation: b1fe2cf2f14634f3bcba4a6333a326fd21133606ccb603a95dd06d1a9ed1dadd
+    sha256_after_restore: b1fe2cf2f14634f3bcba4a6333a326fd21133606ccb603a95dd06d1a9ed1dadd
+    outcome: restored_byte_identical
+  - file: packages/memory-engine/src/mongodb-kb.ts
+    sha256_before_mutation: b686a0a484fde14a54be4c6e3dd47460a4d71e5c6f95c2421ddeb72f129dcfb4
+    sha256_after_restore: b686a0a484fde14a54be4c6e3dd47460a4d71e5c6f95c2421ddeb72f129dcfb4
+    outcome: restored_byte_identical
+  - file: packages/memory-engine/src/mongodb-consolidator.ts
+    sha256_before_mutation: d0d6a024623c2ee1c6b93bdf5bffd94f88d5a8a6251352c146b2b88195ecb882
+    sha256_after_restore: d0d6a024623c2ee1c6b93bdf5bffd94f88d5a8a6251352c146b2b88195ecb882
+    outcome: restored_byte_identical
+  - file: scripts/benchmark/benchmark-parity-envelope.ts
+    sha256_before_mutation: 1c42ac0ada8b6013b77e586fbc7d6ee6183632209e57a23438f05ccf9b11a1a3
+    sha256_after_restore: 1c42ac0ada8b6013b77e586fbc7d6ee6183632209e57a23438f05ccf9b11a1a3
+    outcome: restored_byte_identical
+  - file: packages/memory-engine/src/mongodb-schema-search-definitions.ts
+    sha256_before_mutation: 72da9efb87e317af3aa0dbd61347b0104909d64ebb59ce0fba2e4150190d825a
+    sha256_after_restore: 72da9efb87e317af3aa0dbd61347b0104909d64ebb59ce0fba2e4150190d825a
+    outcome: restored_byte_identical
+
+conclusion: >
+  Verdict: sustained. The round-1 weakness is closed and independently
+  verified: the exact escape mutation (typed-const `= "voyage-4-large"` in
+  backend-config.ts) now fails the pin test naming the file and form. Every
+  realistic centralization-regression shape tested (bare ?? fallbacks in
+  mongodb-search/sync/kb, stage-property literals in consolidator, typed and
+  untyped const declarations) is caught by a named assertion failure. The
+  contract assertion is load-bearing (no-op mutation caught) and wired into
+  the single production resolution funnel (memory-bridge ->
+  getMemorySearchManager -> resolveMemoryBackendConfig ->
+  assertEmbeddingPipelineSupport). The sentinel spike proves drift is loud
+  (98 failures: 78 config-resolution throws + value pins + pin anchor +
+  stage pins). The dead provider stack is fully removed with zero residual
+  references; kept modules intact; check-types (15/15) and build (11/11)
+  pass; final engine suite 121 files / 2060 tests green. Remaining gaps are
+  non-blocking: the pin gate does not cover scripts/benchmark (no static or
+  drift-time net there — recommended hardening), and deliberately
+  obfuscated literal shapes (split-with-cast, backtick) evade the regex
+  gate but retain a drift-time equality net. Neither makes any claim
+  statement false in tree.
+
+tree_hygiene: >
+  No git-mutating command was run (no commit, stash, push, or branch
+  change). All mutations were applied one at a time and restored from /tmp
+  backups with sha256 verified equal to the round-2 baseline after every
+  restore. Final verification: full sha256 ledger of all 13
+  mutation-target/tracked files matches the session-start baseline exactly
+  (diff empty); `git status --short` tracked-file section is identical to
+  session start (11 modified + 19 deleted files, the WS-04 change set). The
+  only new files are this report and the round-2 logs under
+  .ddd/reports/runs/ (refutation-c-007-r2-attempt-1a..1e5-vacuity.log,
+  refutation-c-007-r2-attempt-3-drift.log,
+  refutation-c-007-r2-attempt-3-drift-summary.log,
+  refutation-c-007-r2-post-restore-control.log,
+  refutation-c-007-r2-attempt-4-dead-stack.log,
+  refutation-c-007-r2-attempt-4-checktypes.log,
+  refutation-c-007-r2-attempt-4-build.log,
+  refutation-c-007-r2-final-engine-suite.log,
+  refutation-c-007-r2-final-tree.log). The monorepo build regenerated
+  gitignored dist/ outputs only. Temporary /tmp backups remain outside the
+  repo. No e2e, docker, or network access was used.

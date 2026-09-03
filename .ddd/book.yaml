@@ -3,13 +3,13 @@ schema_version: 0.1.0
 version: 0.5.0
 released_at: null
 profile: assurance
-manifest_digest: sha256:6da56d5772fbf07e4ad2bd162a662fd4e6eeffbc3fa77c6c49925ff5776894f5
+manifest_digest: sha256:a05c9a052a21ca892f7873c6d589b404cabb76801be977475b3ba930fc67cd30
 
 requirements:
   - path: CONTEXT.md
     authority: product-approved
     independence: agent-proposed-human-approved
-    digest: sha256:f0cf7875873a26fdc51fec25aad0410fd88e9c66bcac48b5c1511eaec7324d3d
+    digest: sha256:2464cef218c8e8b80db376438cc6f9aad7913bbc4aaef76de10085bb5ca1000b
     description: "Memongo domain glossary and product vocabulary"
 
   - path: docs/adr/0001-substrate-claim-and-score-claim-are-separate.md
@@ -41,6 +41,12 @@ requirements:
     independence: agent-proposed-human-approved
     digest: sha256:ed31b088a19bbfba343d89992b8c081d7a35d2cf79fe9a0fde15ff3086580c58
     description: "ADR 0005 - tenant erasure and retention lifecycle (WS-03, C-003/C-004/C-005/C-006)"
+
+  - path: docs/adr/0006-autoembed-preview-supported-target-contract.md
+    authority: product-approved
+    independence: agent-proposed-human-approved
+    digest: sha256:4ccb593b66cbcd05d4256a693a0135d180770cb900fb1d079f3766bea1d83643
+    description: "ADR 0006 - autoEmbed Preview supported-target contract, single model source, dead provider stack removal (WS-04, C-007)"
 
 agent_context:
   - path: AGENTS.md

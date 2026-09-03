@@ -11,6 +11,7 @@
 
 import { describe, expect, it, vi } from "vitest"
 import {
+	BENCHMARK_AUTOEMBED_MODEL,
 	BENCHMARK_RETRIEVAL_UNIT,
 	assertBenchmarkRunConfiguration,
 	collectBenchmarkTenantStorage,
@@ -191,7 +192,10 @@ describe("resolveBenchmarkEmbeddingConfig", () => {
 			numDimensions: 1024,
 			quantization: "none",
 		})
-		expect(cfg.model).toBe("voyage-4-large")
+		// C-007 round-2 hardening: pin the DERIVATION (re-exported
+		// INDEX_AUTOEMBED_MODEL), not the value, so the benchmark default
+		// cannot silently strand if the source-of-truth model changes.
+		expect(cfg.model).toBe(BENCHMARK_AUTOEMBED_MODEL)
 		expect(cfg.dimensions).toBe(1024)
 		expect(cfg.quantization).toBe("float32")
 	})
