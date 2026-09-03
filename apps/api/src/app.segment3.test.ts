@@ -7,6 +7,7 @@ const bridgeMocks = vi.hoisted(() => ({
 	memongoBridgeImportConversations: vi.fn(),
 	memongoBridgeBuildContextBundle: vi.fn(),
 	memongoBridgeBuildDiscoveryProjection: vi.fn(),
+	memongoBridgeDeleteAllForAgent: vi.fn(),
 	memongoBridgeDeleteLifecycleItem: vi.fn(),
 	memongoBridgeApplyMemoryFeedback: vi.fn(),
 	memongoBridgeGetState: vi.fn(),
@@ -18,9 +19,11 @@ const bridgeMocks = vi.hoisted(() => ({
 	memongoBridgeGetRecallTrace: vi.fn(),
 	memongoBridgeHydrateActiveSlate: vi.fn(),
 	memongoBridgeListMemoryJobs: vi.fn(),
+	memongoBridgeListQuarantined: vi.fn(),
 	memongoBridgeListRecallTraces: vi.fn(),
 	memongoBridgeProbeEmbedding: vi.fn(),
 	memongoBridgeProbeVector: vi.fn(),
+	memongoBridgePromoteQuarantined: vi.fn(),
 	memongoBridgeCapabilities: vi.fn(),
 	memongoBridgeProfile: vi.fn(),
 	memongoBridgeRecallConversation: vi.fn(),
@@ -28,6 +31,7 @@ const bridgeMocks = vi.hoisted(() => ({
 	memongoBridgeRelevanceExplain: vi.fn(),
 	memongoBridgeRelevanceReport: vi.fn(),
 	memongoBridgeRelevanceSampleRate: vi.fn(),
+	memongoBridgeRejectQuarantined: vi.fn(),
 	memongoBridgeSearch: vi.fn(),
 	memongoBridgeSearchDetailed: vi.fn(),
 	memongoBridgeSearchKB: vi.fn(),
@@ -71,6 +75,7 @@ describe("createApp", () => {
 		bridgeMocks.memongoBridgeImportConversations.mockReset()
 		bridgeMocks.memongoBridgeBuildContextBundle.mockReset()
 		bridgeMocks.memongoBridgeBuildDiscoveryProjection.mockReset()
+		bridgeMocks.memongoBridgeDeleteAllForAgent.mockReset()
 		bridgeMocks.memongoBridgeDeleteLifecycleItem.mockReset()
 		bridgeMocks.memongoBridgeApplyMemoryFeedback.mockReset()
 		bridgeMocks.memongoBridgeExtractEvent.mockReset()
@@ -82,6 +87,7 @@ describe("createApp", () => {
 		bridgeMocks.memongoBridgeProfile.mockReset()
 		bridgeMocks.memongoBridgeRecallConversation.mockReset()
 		bridgeMocks.memongoBridgeListMemoryJobs.mockReset()
+		bridgeMocks.memongoBridgeListQuarantined.mockReset()
 		bridgeMocks.memongoBridgeListRecallTraces.mockReset()
 		bridgeMocks.memongoBridgeStatus.mockReset()
 		bridgeMocks.memongoBridgeTraceChain.mockReset()
@@ -89,6 +95,8 @@ describe("createApp", () => {
 		bridgeMocks.memongoBridgeConsolidate.mockReset()
 		bridgeMocks.memongoBridgeSelfEdit.mockReset()
 		bridgeMocks.memongoBridgePingMongo.mockReset()
+		bridgeMocks.memongoBridgePromoteQuarantined.mockReset()
+		bridgeMocks.memongoBridgeRejectQuarantined.mockReset()
 		bridgeMocks.buildMemongoConfig.mockReset()
 		bridgeMocks.memongoBridgeUpdateLifecycleItem.mockReset()
 		bridgeMocks.memongoBridgeReportProcedureOutcome.mockReset()
@@ -1114,6 +1122,318 @@ describe("createApp", () => {
 			agentId: "agent-42",
 			traceId: "trace-1",
 		})
+	})
+
+	it("erases a tenant via admin route and returns the per-collection receipt", async () => {
+		bridgeMocks.memongoBridgeDeleteAllForAgent.mockResolvedValue({
+			agentId: "agent-42",
+			status: "complete",
+			receipts: [
+				{ collection: "events", deleted: 12 },
+				{ collection: "chunks", deleted: 30 },
+			],
+			mutationId: "mut-1",
+			completedAt: "2026-08-15T00:00:00.000Z",
+		})
+
+		const res = await createApp().request("/v1/admin/erase", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ confirm: "erase", agentId: "agent-42" }),
+		})
+
+		expect(res.status).toBe(200)
+		await expect(res.json()).resolves.toEqual(
+			expect.objectContaining({ agentId: "agent-42", status: "complete" }),
+		)
+		expect(bridgeMocks.memongoBridgeDeleteAllForAgent).toHaveBeenCalledWith({
+			agentId: "agent-42",
+		})
+	})
+
+	it("rejects tenant erasure without the literal confirm string", async () => {
+		for (const body of [{}, { confirm: true }, { confirm: "yes" }]) {
+			const res = await createApp().request("/v1/admin/erase", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify(body),
+			})
+			expect(res.status).toBe(400)
+			const json = (await res.json()) as { error: { code: string } }
+			expect(json.error.code).toBe("VALIDATION_ERROR")
+		}
+		expect(bridgeMocks.memongoBridgeDeleteAllForAgent).not.toHaveBeenCalled()
+	})
+
+	it("returns ERASE_FAILED when the bridge throws", async () => {
+		bridgeMocks.memongoBridgeDeleteAllForAgent.mockRejectedValue(
+			new Error("wipe failed"),
+		)
+
+		const res = await createApp().request("/v1/admin/erase", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ confirm: "erase" }),
+		})
+
+		expect(res.status).toBe(500)
+		const json = (await res.json()) as { error: { code: string } }
+		expect(json.error.code).toBe("ERASE_FAILED")
+	})
+
+	it("rejects a scoped API key from the admin-only erase route", async () => {
+		process.env.MEMONGO_API_KEY = ""
+		process.env.MEMONGO_API_SCOPED_KEYS = JSON.stringify([
+			{ token: "scoped-A", agentIds: ["agent-42"] },
+		])
+		bridgeMocks.memongoBridgeDeleteAllForAgent.mockResolvedValue({
+			agentId: "agent-42",
+			status: "complete",
+			receipts: [],
+			completedAt: "2026-08-15T00:00:00.000Z",
+		})
+
+		const res = await createApp().request("/v1/admin/erase", {
+			method: "POST",
+			headers: {
+				Authorization: "Bearer scoped-A",
+				"Content-Type": "application/json",
+			},
+			body: JSON.stringify({ confirm: "erase", agentId: "agent-42" }),
+		})
+
+		expect(res.status).toBe(403)
+		const json = (await res.json()) as {
+			error: { code: string; message: string }
+		}
+		expect(json.error.code).toBe("FORBIDDEN")
+		expect(json.error.message).toBe(
+			"scoped API key cannot access an admin-only route",
+		)
+		expect(bridgeMocks.memongoBridgeDeleteAllForAgent).not.toHaveBeenCalled()
+	})
+
+	it("lists the quarantine review queue with status and limit filters", async () => {
+		bridgeMocks.memongoBridgeListQuarantined.mockResolvedValue([
+			{
+				quarantineId: "q-1",
+				agentId: "agent-42",
+				content: "I prefer tabs over spaces",
+				status: "pending-review",
+				matchedPatterns: ["instruction-override"],
+				createdAt: "2026-08-15T00:00:00.000Z",
+			},
+		])
+		const res = await createApp().request(
+			"/v1/admin/quarantine?agentId=agent-42&status=pending-review&limit=25",
+		)
+		expect(res.status).toBe(200)
+		const json = (await res.json()) as Array<Record<string, unknown>>
+		expect(json).toHaveLength(1)
+		expect(json[0]).toMatchObject({
+			quarantineId: "q-1",
+			status: "pending-review",
+		})
+		expect(bridgeMocks.memongoBridgeListQuarantined).toHaveBeenCalledWith({
+			agentId: "agent-42",
+			status: "pending-review",
+			limit: 25,
+		})
+	})
+
+	it("drops an invalid quarantine status filter instead of erroring", async () => {
+		bridgeMocks.memongoBridgeListQuarantined.mockResolvedValue([])
+		const res = await createApp().request("/v1/admin/quarantine?status=garbage")
+		expect(res.status).toBe(200)
+		expect(bridgeMocks.memongoBridgeListQuarantined).toHaveBeenCalledWith({
+			agentId: undefined,
+			status: undefined,
+			limit: undefined,
+		})
+	})
+
+	it("returns QUARANTINE_LIST_FAILED when the bridge throws", async () => {
+		bridgeMocks.memongoBridgeListQuarantined.mockRejectedValue(
+			new Error("queue read failed"),
+		)
+		const res = await createApp().request("/v1/admin/quarantine")
+		expect(res.status).toBe(500)
+		const json = (await res.json()) as { error: { code: string } }
+		expect(json.error.code).toBe("QUARANTINE_LIST_FAILED")
+	})
+
+	it("promotes a quarantined memory with reviewer metadata", async () => {
+		bridgeMocks.memongoBridgePromoteQuarantined.mockResolvedValue({
+			quarantineId: "q-1",
+			agentId: "agent-42",
+			status: "promoted",
+			reviewedAt: "2026-08-15T01:00:00.000Z",
+			memoryId: "mem-1",
+			mutationId: "mut-1",
+		})
+		const res = await createApp().request("/v1/admin/quarantine/promote", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				quarantineId: "q-1",
+				agentId: "agent-42",
+				reviewerId: "reviewer-7",
+				reviewNotes: "false positive",
+			}),
+		})
+		expect(res.status).toBe(200)
+		await expect(res.json()).resolves.toEqual(
+			expect.objectContaining({ status: "promoted", memoryId: "mem-1" }),
+		)
+		expect(bridgeMocks.memongoBridgePromoteQuarantined).toHaveBeenCalledWith({
+			agentId: "agent-42",
+			quarantineId: "q-1",
+			reviewerId: "reviewer-7",
+			reviewNotes: "false positive",
+		})
+	})
+
+	it("rejects a quarantined memory with reviewer metadata", async () => {
+		bridgeMocks.memongoBridgeRejectQuarantined.mockResolvedValue({
+			quarantineId: "q-2",
+			agentId: "agent-42",
+			status: "rejected",
+			reviewedAt: "2026-08-15T01:00:00.000Z",
+			mutationId: "mut-2",
+		})
+		const res = await createApp().request("/v1/admin/quarantine/reject", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				quarantineId: "q-2",
+				agentId: "agent-42",
+				reviewerId: "reviewer-7",
+				reviewNotes: "confirmed injection",
+			}),
+		})
+		expect(res.status).toBe(200)
+		await expect(res.json()).resolves.toEqual(
+			expect.objectContaining({ status: "rejected", mutationId: "mut-2" }),
+		)
+		expect(bridgeMocks.memongoBridgeRejectQuarantined).toHaveBeenCalledWith({
+			agentId: "agent-42",
+			quarantineId: "q-2",
+			reviewerId: "reviewer-7",
+			reviewNotes: "confirmed injection",
+		})
+	})
+
+	it("requires quarantineId on promote and reject", async () => {
+		for (const path of [
+			"/v1/admin/quarantine/promote",
+			"/v1/admin/quarantine/reject",
+		]) {
+			for (const body of [{}, { quarantineId: "" }, { quarantineId: 42 }]) {
+				const res = await createApp().request(path, {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify(body),
+				})
+				expect(res.status).toBe(400)
+				const json = (await res.json()) as { error: { code: string } }
+				expect(json.error.code).toBe("VALIDATION_ERROR")
+			}
+		}
+		expect(bridgeMocks.memongoBridgePromoteQuarantined).not.toHaveBeenCalled()
+		expect(bridgeMocks.memongoBridgeRejectQuarantined).not.toHaveBeenCalled()
+	})
+
+	it("maps promote and reject bridge failures to distinct error codes", async () => {
+		bridgeMocks.memongoBridgePromoteQuarantined.mockRejectedValue(
+			new Error("already reviewed (status=promoted)"),
+		)
+		bridgeMocks.memongoBridgeRejectQuarantined.mockRejectedValue(
+			new Error("quarantine entry not found"),
+		)
+
+		const promoteRes = await createApp().request(
+			"/v1/admin/quarantine/promote",
+			{
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ quarantineId: "q-1" }),
+			},
+		)
+		expect(promoteRes.status).toBe(500)
+		await expect(promoteRes.json()).resolves.toEqual(
+			expect.objectContaining({
+				error: expect.objectContaining({ code: "QUARANTINE_PROMOTE_FAILED" }),
+			}),
+		)
+
+		const rejectRes = await createApp().request("/v1/admin/quarantine/reject", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ quarantineId: "q-1" }),
+		})
+		expect(rejectRes.status).toBe(500)
+		await expect(rejectRes.json()).resolves.toEqual(
+			expect.objectContaining({
+				error: expect.objectContaining({ code: "QUARANTINE_REJECT_FAILED" }),
+			}),
+		)
+	})
+
+	it("rejects scoped AND agent-scoped API keys from the admin-only quarantine routes", async () => {
+		process.env.MEMONGO_API_KEY = ""
+		process.env.MEMONGO_API_SCOPED_KEYS = JSON.stringify([
+			{ token: "scoped-A", agentIds: ["agent-42"] },
+		])
+		bridgeMocks.memongoBridgeListQuarantined.mockResolvedValue([])
+		bridgeMocks.memongoBridgePromoteQuarantined.mockResolvedValue({
+			quarantineId: "q-1",
+			status: "promoted",
+		})
+
+		for (const request of [
+			() =>
+				createApp().request("/v1/admin/quarantine?agentId=agent-42", {
+					headers: { Authorization: "Bearer scoped-A" },
+				}),
+			() =>
+				createApp().request("/v1/admin/quarantine/promote", {
+					method: "POST",
+					headers: {
+						Authorization: "Bearer scoped-A",
+						"Content-Type": "application/json",
+					},
+					body: JSON.stringify({
+						quarantineId: "q-1",
+						agentId: "agent-42",
+					}),
+				}),
+			() =>
+				createApp().request("/v1/admin/quarantine/reject", {
+					method: "POST",
+					headers: {
+						Authorization: "Bearer scoped-A",
+						"Content-Type": "application/json",
+					},
+					body: JSON.stringify({
+						quarantineId: "q-1",
+						agentId: "agent-42",
+					}),
+				}),
+		]) {
+			const res = await request()
+			expect(res.status).toBe(403)
+			const json = (await res.json()) as {
+				error: { code: string; message: string }
+			}
+			expect(json.error.code).toBe("FORBIDDEN")
+			expect(json.error.message).toBe(
+				"scoped API key cannot access an admin-only route",
+			)
+		}
+		// No quarantine payload ever reached the bridge under a scoped key.
+		expect(bridgeMocks.memongoBridgeListQuarantined).not.toHaveBeenCalled()
+		expect(bridgeMocks.memongoBridgePromoteQuarantined).not.toHaveBeenCalled()
+		expect(bridgeMocks.memongoBridgeRejectQuarantined).not.toHaveBeenCalled()
 	})
 
 	it("returns access trends via admin route", async () => {

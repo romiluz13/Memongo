@@ -41,7 +41,7 @@ This file is the compaction anchor: any future instance resumes from here.
 |----|--------|---------|--------|--------|
 | WS-01 | C-001 | T3 | MCP transport auth | LANDED ce00d6f183 |
 | WS-02 | C-002 | T3 | Secret redaction at logging boundaries | LANDED 3546e7d6bd |
-| WS-03 | C-003,004,005,006 | T3,T3,T3,T1 | Tenant erasure + retention lifecycle | pending |
+| WS-03 | C-003,004,005,006 | T3,T3,T3,T1 | Tenant erasure + retention lifecycle | LANDED (see session log) |
 | WS-04 | C-007 | T3 | autoEmbed Preview de-risk | pending |
 | WS-05 | C-008 | T3 | Prompt-injection coverage | pending |
 | WS-06 | C-009 | T3 | Deployment defaults (shared client, cache bound, sweep) | pending |
@@ -59,7 +59,7 @@ This file is the compaction anchor: any future instance resumes from here.
 | WS-18 | C-037,038,039 | T1,T2,T2 | dockerignore; publish gates; nightly eval | pending |
 
 T3 needing refutation: C-002, C-003, C-004, C-005, C-007, C-008, C-009, C-018.
-Validation IDs used so far: V-001..V-041 (next free: V-042).
+Validation IDs used so far: V-001..V-051 (next free: V-052).
 Sweep violations at WS-01 landing: 92 (was 96 pre-WS-01).
 Sweep violations at WS-02 landing: 86 (was 92; zero for C-002).
 
@@ -118,3 +118,31 @@ Sweep violations at WS-02 landing: 86 (was 92; zero for C-002).
   runs, true bytes recovered via hex dump) neutralized with bracketed
   descriptors. Landed as 3546e7d6bd with gitleaks clean, trufflehog 0/0,
   and no Shield block.
+- WS-03 landing (tenant erasure + retention lifecycle, C-003..C-006):
+  C-003/C-004 sustained in their refutation rounds (reports
+  refutation-c-003.yaml / refutation-c-004.yaml). C-005 was refuted in
+  round 1 with 7 defect classes (manager write handoff dropping expiresAt
+  on single+batch paths; $setOnInsert projector unable to backfill;
+  outbox repair dropping expiry; window projection neither guarding nor
+  stamping; bridge/direct readers unguarded during TTL lag; session
+  evidence without expiry; no session_chunks TTL index) — all fixed:
+  projector $set self-heal, write handoff propagation (single+batch),
+  outbox spread, window max-expiry with $set/$unset recompute + unexpired
+  fetch guard, unexpired clauses on bridge filter/readers/vector lane,
+  session evidence resolver + TTL index, types.memory.ts JSDoc. Round-2
+  refutation SUSTAINED: 186 pinning tests, 8 independent stateful probes
+  on the real manager path, 7 vacuity mutations all caught, full suite
+  127 files/2122 tests. Non-blocking fail-closed observations recorded in
+  the report and ADR-0005 (vectorSearch null-vs-missing needs one live
+  mongot check; bounded window leak until window expiry; writeEventAndProject
+  dead code lacks TTL handoff). C-006 (T1) validated by its
+  idempotency-retention battery. Suite state: engine 2122, bridge 82,
+  api 480, mcp 175, client 39, tools 48, pi 55, lib 158, web typecheck
+  clean, build 11 tasks. Artifacts: V-042..V-051, claims validations
+  filled, trace-matrix 10 traces patched (validation ids + sweep_pass
+  true), ADR-0005 + book.yaml entry + manifest_digest recomputed
+  (6da56d57...), logs ws03-*-suite.log captured and hashed. Methodology
+  lesson (re-learned): the engine suite canonical run requires
+  --exclude='src/**/*.e2e.test.ts' — a bare `vitest run` drags in
+  live-MongoDB e2e files whose 240s hook budgets make the run appear
+  hung for tens of minutes at ~0 CPU.

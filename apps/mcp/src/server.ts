@@ -1025,6 +1025,64 @@ export async function handleToolCall(
 			})
 			return jsonResult(out)
 		}
+		if (name === "memongo_erase_agent") {
+			// C-003: gate the destructive tool on the typed confirmation before
+			// it reaches the API, matching the route's 400 contract.
+			if (args.confirm !== "erase") {
+				throw new Error("confirm must be the literal string 'erase'")
+			}
+			const out = await memongo.eraseAgent({
+				confirm: "erase",
+				agentId: typeof args.agentId === "string" ? args.agentId : undefined,
+			})
+			return jsonResult(out)
+		}
+		if (name === "memongo_quarantine_list") {
+			const out = await memongo.listQuarantined({
+				agentId: typeof args.agentId === "string" ? args.agentId : undefined,
+				status:
+					args.status === "pending-review" ||
+					args.status === "promoted" ||
+					args.status === "rejected"
+						? args.status
+						: undefined,
+				limit:
+					typeof args.limit === "number"
+						? Math.max(1, Math.min(100, Math.floor(args.limit)))
+						: undefined,
+			})
+			return jsonResult(out)
+		}
+		if (name === "memongo_quarantine_promote") {
+			// C-004: mirror the route's 400 contract for the missing id before
+			// the call leaves the process.
+			if (typeof args.quarantineId !== "string" || !args.quarantineId.trim()) {
+				throw new Error("quarantineId is required")
+			}
+			const out = await memongo.promoteQuarantined({
+				quarantineId: args.quarantineId,
+				agentId: typeof args.agentId === "string" ? args.agentId : undefined,
+				reviewerId:
+					typeof args.reviewerId === "string" ? args.reviewerId : undefined,
+				reviewNotes:
+					typeof args.reviewNotes === "string" ? args.reviewNotes : undefined,
+			})
+			return jsonResult(out)
+		}
+		if (name === "memongo_quarantine_reject") {
+			if (typeof args.quarantineId !== "string" || !args.quarantineId.trim()) {
+				throw new Error("quarantineId is required")
+			}
+			const out = await memongo.rejectQuarantined({
+				quarantineId: args.quarantineId,
+				agentId: typeof args.agentId === "string" ? args.agentId : undefined,
+				reviewerId:
+					typeof args.reviewerId === "string" ? args.reviewerId : undefined,
+				reviewNotes:
+					typeof args.reviewNotes === "string" ? args.reviewNotes : undefined,
+			})
+			return jsonResult(out)
+		}
 		if (name === "memongo_probe_embedding") {
 			const out = await memongo.probeEmbedding(
 				typeof args.agentId === "string" ? args.agentId : undefined,

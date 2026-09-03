@@ -328,6 +328,7 @@ import {
 	getV2Status,
 	type V2Status,
 } from "./mongodb-manager-admin.js"
+import type { TenantErasureReceipt } from "./mongodb-erasure.js"
 import { searchV2 } from "./mongodb-search-v2.js"
 import type { MongoDBManagerHost } from "./mongodb-manager-host.js"
 import { MongoDBManagerLifecycleOps } from "./mongodb-manager-lifecycle.js"
@@ -389,6 +390,12 @@ export {
 	getV2Status,
 } from "./mongodb-manager-admin.js"
 export type { V2Status } from "./mongodb-manager-admin.js"
+export type { TenantErasureReceipt } from "./mongodb-erasure.js"
+export type {
+	QuarantinedEntry,
+	QuarantineReviewReceipt,
+	QuarantineStatus,
+} from "./mongodb-quarantine-review.js"
 
 const log = createSubsystemLogger("memory:mongodb")
 
@@ -1436,6 +1443,50 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		return adminOpsOf(this).getDetailedStatus()
 	}
 
+	/**
+	 * C-003 tenant-level erasure: delete every document this agent owns
+	 * across every collection. Irreversible; returns per-collection receipts
+	 * and the proof-of-erasure audit record id.
+	 */
+	async deleteAllForAgent(): Promise<TenantErasureReceipt> {
+		return adminOpsOf(this).deleteAllForAgent()
+	}
+
+	/** C-004: list this agent's quarantine review queue, oldest first. */
+	async listQuarantined(params?: {
+		status?: import("./mongodb-quarantine-review.js").QuarantineStatus
+		limit?: number
+	}) {
+		return readOpsOf(this).listQuarantined(params)
+	}
+
+	/**
+	 * C-004: promote a quarantined candidate to structured memory, recording
+	 * the review decision.
+	 */
+	async promoteQuarantined(params: {
+		quarantineId: string
+		reviewerId?: string
+		reviewNotes?: string
+	}): Promise<
+		import("./mongodb-quarantine-review.js").QuarantineReviewReceipt
+	> {
+		return adminOpsOf(this).promoteQuarantined(params)
+	}
+
+	/**
+	 * C-004: reject a quarantined candidate, recording the review decision.
+	 */
+	async rejectQuarantined(params: {
+		quarantineId: string
+		reviewerId?: string
+		reviewNotes?: string
+	}): Promise<
+		import("./mongodb-quarantine-review.js").QuarantineReviewReceipt
+	> {
+		return adminOpsOf(this).rejectQuarantined(params)
+	}
+
 	// C2-manager audit fix: synthesizeProfile delegation to standalone function
 	async synthesizeProfile(
 		params: {
@@ -1657,6 +1708,21 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		operationRunContext?: OperationRunContext,
 	): Promise<{ eventId: string; chunkCreated: boolean }> {
 		return writeOpsOf(this).writeConversationEvent(event, operationRunContext)
+	}
+
+	/**
+	 * C-006: retention enforcement for idempotency fingerprint state.
+	 * $Unsets idempotencyKey/idempotencyFingerprint from completed writes
+	 * older than the retention window (default 90 days, env override
+	 * MEMONGO_IDEMPOTENCY_RETENTION_DAYS). The memory-job worker sweep runs
+	 * this automatically (hourly in-process gate); `force` bypasses the gate
+	 * for explicit operator/test invocation.
+	 */
+	async pruneIdempotencyFingerprints(params?: {
+		olderThanDays?: number
+		force?: boolean
+	}): Promise<{ pruned: number }> {
+		return writeOpsOf(this).pruneIdempotencyFingerprints(params)
 	}
 
 	/**

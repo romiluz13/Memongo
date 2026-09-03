@@ -1,0 +1,50 @@
+what: Partial-failure and phase-1 relevance-join failure attack
+run: Inject multiple deleteMany failures, then inject relevance_runs.find failure and inspect status, receipts, audit, and survivors
+date: 2026-09-03T12:41:35Z
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/packages/memory-engine[39m
+
+[90mstderr[2m | src/refutation-c-003-partial.test.ts[2m > [22m[2mC-003 partial failure attack[2m > [22m[2mcontinues after multiple delete failures, reports partial, and audits failures
+[22m[39m15:41:35.993 [memory:mongodb:erasure] warn: tenant erasure completed with failures {"agentId":"agent-1","failed":["chunks","entities"]}
+
+[90mstderr[2m | src/refutation-c-003-partial.test.ts[2m > [22m[2mC-003 partial failure attack[2m > [22m[2mEXPOSES: phase-1 read failure leaves artifact but reports complete with no artifact receipt
+[22m[39m15:41:35.997 [memory:mongodb:erasure] warn: relevance run id collection failed; artifacts may survive {"agentId":"agent-1","error":{}}
+
+[90mstdout[2m | src/refutation-c-003-partial.test.ts[2m > [22m[2mC-003 partial failure attack[2m > [22m[2mEXPOSES: phase-1 read failure leaves artifact but reports complete with no artifact receipt
+[22m[39m15:41:35.997 [memory:mongodb:erasure] info: tenant erasure complete {"agentId":"agent-1","collections":28}
+
+ [32m✓[39m src/refutation-c-003-partial.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 14[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m1 passed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[32m2 passed[39m[22m[90m (2)[39m
+[2m   Start at [22m 15:41:35
+[2m   Duration [22m 321ms[2m (transform 158ms, setup 0ms, import 198ms, tests 14ms, environment 0ms)[22m
+
+counterexample=phase-1 relevance_runs.find failure leaves tenant relevance_artifacts, omits its receipt, and nevertheless returns/audits status complete
+judgment=REFUTATION: the claim is absolute about deleting every tenant-data collection and returning per-collection receipts; a known surviving tenant payload cannot be described as complete merely because a warning documents the degradation
+scratch_deleted=/Users/rom.iluz/Dev/memongo/packages/memory-engine/src/refutation-c-003-partial.test.ts
+supplement-what: Audit-write failure status-integrity attack
+supplement-run: Inject memory_mutations.insertOne failure after successful sweep and inspect returned status/audit
+supplement-date: 2026-09-03T12:42:46Z
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/packages/memory-engine[39m
+
+[90mstderr[2m | src/refutation-c-003-audit-failure.test.ts[2m > [22m[2mC-003 audit failure semantics[2m > [22m[2mEXPOSES: an audit insert failure still reports complete and leaves no audit
+[22m[39m15:42:47.356 [memory:mongodb:mutations] warn: recordMutation failed {"mutationId":"91a2a0de-2f1b-4acc-9739-b1e2be734d9d","error":{}}
+
+[90mstdout[2m | src/refutation-c-003-audit-failure.test.ts[2m > [22m[2mC-003 audit failure semantics[2m > [22m[2mEXPOSES: an audit insert failure still reports complete and leaves no audit
+[22m[39m15:42:47.359 [memory:mongodb:erasure] info: tenant erasure complete {"agentId":"agent-1","collections":28}
+
+[90mstderr[2m | src/refutation-c-003-audit-failure.test.ts[2m > [22m[2mC-003 audit failure semantics[2m > [22m[2mEXPOSES: an audit insert failure still reports complete and leaves no audit
+[22m[39m15:42:47.359 [memory:mongodb:erasure] warn: tenant erasure audit record failed {"agentId":"agent-1","error":{}}
+
+ [32m✓[39m src/refutation-c-003-audit-failure.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 12[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m1 passed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[32m1 passed[39m[22m[90m (1)[39m
+[2m   Start at [22m 15:42:47
+[2m   Duration [22m 314ms[2m (transform 149ms, setup 0ms, import 190ms, tests 12ms, environment 0ms)[22m
+
+second_counterexample=audit insert failure returns status complete with mutationId absent and no audit record
+second_judgment=REFUTATION: writing an audit record is an explicit MUST; best-effort swallowing without partial status or an error receipt misrepresents completion
+scratch_deleted=/Users/rom.iluz/Dev/memongo/packages/memory-engine/src/refutation-c-003-audit-failure.test.ts

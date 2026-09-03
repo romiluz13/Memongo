@@ -171,6 +171,75 @@ export function isIdempotencyConflictError(
 	return err instanceof Error && err.name === "IdempotencyConflictError"
 }
 
+// ---------------------------------------------------------------------------
+// Idempotency fingerprint retention (C-006)
+// ---------------------------------------------------------------------------
+
+/**
+ * Default retention window (days) for completed-write idempotency state.
+ * Mirrors the memory_mutations audit TTL so the deduplication window and the
+ * audit window expire together.
+ */
+export const IDEMPOTENCY_FINGERPRINT_RETENTION_DAYS = 90
+
+/**
+ * In-process gate for the prune sweep: at most one prune per hour per
+ * manager instance, so the worker drain loop (which wakes on every write)
+ * pays a Date.now() comparison and nothing else between prunes.
+ */
+export const IDEMPOTENCY_FINGERPRINT_PRUNE_INTERVAL_MS = 60 * 60 * 1000
+
+/**
+ * Retention window with a MEMONGO_IDEMPOTENCY_RETENTION_DAYS override (days;
+ * 0 prunes every completed write on each sweep). Falls back to the 90-day
+ * default on missing/invalid input.
+ */
+export function resolveIdempotencyRetentionDays(): number {
+	const raw = process.env.MEMONGO_IDEMPOTENCY_RETENTION_DAYS?.trim()
+	if (raw) {
+		const parsed = Number(raw)
+		if (Number.isFinite(parsed) && parsed >= 0) {
+			return Math.floor(parsed)
+		}
+	}
+	return IDEMPOTENCY_FINGERPRINT_RETENTION_DAYS
+}
+
+/**
+ * C-006 retention policy for idempotency deduplication state. Fingerprints
+ * ride ON canonical event documents (there is no separate fingerprint
+ * collection), so a TTL index cannot expire them without deleting the event
+ * itself — the policy is a field-level prune. Once a completed write is
+ * older than the retention window its idempotencyKey/idempotencyFingerprint
+ * pair is $unset, releasing the unique-index slot and the stored payload
+ * digest. After the prune, a retried write inserts a NEW event instead of
+ * replaying: the deduplication guarantee intentionally expires with the
+ * window (the Stripe idempotency-key model — 24h there, 90 days here).
+ * The event body itself is untouched.
+ */
+export async function pruneIdempotencyFingerprints(params: {
+	db: Db
+	prefix: string
+	agentId: string
+	olderThanDays?: number
+	now?: Date
+}): Promise<{ pruned: number }> {
+	const { db, prefix, agentId } = params
+	const retentionDays =
+		params.olderThanDays ?? resolveIdempotencyRetentionDays()
+	const now = params.now ?? new Date()
+	const cutoff = new Date(now.getTime() - retentionDays * 86_400_000)
+	const result = await eventsCollection(db, prefix).updateMany(
+		{
+			agentId,
+			idempotencyKey: { $exists: true },
+			timestamp: { $lt: cutoff },
+		},
+		{ $unset: { idempotencyKey: "", idempotencyFingerprint: "" } },
+	)
+	return { pruned: result.modifiedCount }
+}
+
 export function renderEventChunkText(
 	event: Pick<CanonicalEvent, "role" | "body">,
 ): string {
@@ -773,6 +842,10 @@ export async function projectEventChunksBatch(params: {
 						timestamp: event.timestamp,
 						updatedAt: new Date(),
 					},
+					// C-005: see projectEventChunk — expiry propagates from the
+					// event to its chunk, in $set so re-projection also heals
+					// chunks an older path wrote without an expiry.
+					...(event.expiresAt ? { $set: { expiresAt: event.expiresAt } } : {}),
 				},
 				upsert: true,
 			},
@@ -866,6 +939,15 @@ export async function projectEventChunk(params: {
 					timestamp: event.timestamp,
 					updatedAt: new Date(),
 				},
+				// C-005: propagate the event's expiry onto the chunk. Same
+				// model as the events partial TTL index: absent means the
+				// chunk never expires; a partial chunks TTL index deletes
+				// expired chunks and the unexpired guard keeps reads from
+				// surfacing them between sweeps. Carried in $set (not
+				// $setOnInsert) so re-projection also HEALS a chunk that an
+				// older projection path wrote without an expiry — events are
+				// immutable, so re-setting the value is idempotent.
+				...(event.expiresAt ? { $set: { expiresAt: event.expiresAt } } : {}),
 			},
 			{ upsert: true },
 		),

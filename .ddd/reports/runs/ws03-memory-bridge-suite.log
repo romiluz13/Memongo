@@ -1,0 +1,18 @@
+# WS-03 final-state suite run: packages/memory-bridge
+# Run: cd packages/memory-bridge && bunx vitest run
+# Date: 2026-09-03T14:12:31Z
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/packages/memory-bridge[39m
+
+ [32m✓[39m src/memongo-bridge-erasure.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m src/memongo-bridge-quarantine.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m src/memongo-export.test.ts [2m([22m[2m15 tests[22m[2m)[22m[32m 41[2mms[22m[39m
+ [32m✓[39m src/memory-config.test.ts [2m([22m[2m14 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m src/memongo-bridge-identity.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/memongo-bridge-wiring.test.ts [2m([22m[2m40 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m6 passed[39m[22m[90m (6)[39m
+[2m      Tests [22m [1m[32m82 passed[39m[22m[90m (82)[39m
+[2m   Start at [22m 17:12:32
+[2m   Duration [22m 992ms[2m (transform 1.20s, setup 0ms, import 1.95s, tests 78ms, environment 0ms)[22m
+

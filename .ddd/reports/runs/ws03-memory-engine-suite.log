@@ -1,0 +1,43 @@
+# WS-03 C-005 final-state suite run: packages/memory-engine
+# Run: cd packages/memory-engine && bunx vitest run --exclude=src/**/*.e2e.test.ts
+# Date: 2026-09-03T14:10:10Z
+17:10:33.717 [memory:backend-config] warn: memory.mongodb.ttl.sessionDays "abc" is not a positive number; falling back to 30 days
+17:10:33.717 [memory:backend-config] warn: memory.mongodb.ttl.sessionDays "null" is not a positive number; falling back to 30 days
+
+ [32m✓[39m src/backend-config.part2.test.ts [2m([22m[2m15 tests[22m[2m)[22m[32m 20[2mms[22m[39m
+ [32m✓[39m src/mongodb-context-expansion.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 13[2mms[22m[39m
+[90mstderr[2m | src/mongodb-consolidation-reasoning.test.ts[2m > [22m[2mdeduceFactsFromMemories[2m > [22m[2mdegrades to an empty result when the LLM returns unparseable content
+[22m[39m17:10:33.748 [memory:mongodb:consolidation-reasoning] warn: consolidation reasoning JSON parse failed {"kind":"deduction","preview":"not json at all"}
+
+ [32m✓[39m src/mongodb-consolidation-reasoning.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 29[2mms[22m[39m
+ [32m✓[39m src/embedding-validation.test.ts [2m([22m[2m21 tests[22m[2m)[22m[32m 18[2mms[22m[39m
+[90mstderr[2m | src/mongodb-manager-jobs.test.ts[2m > [22m[2mMongoDBMemoryManager consolidate job tracking[2m > [22m[2mdoes not abort consolidation when createMemoryJob fails
+[22m[39m17:10:33.802 [memory:mongodb] warn: createMemoryJob failed for consolidation-8c53d572-bd2c-4fd8-8323-783a63134120: job create failed
+
+[90mstderr[2m | src/mongodb-manager-jobs.test.ts[2m > [22m[2mMongoDBMemoryManager consolidate job tracking[2m > [22m[2mpreserves the original consolidation error when failed job update also fails
+[22m[39m17:10:33.811 [memory:mongodb] warn: updateMemoryJob failed for consolidation-19c3a73d-97da-4975-a7f2-a488457dd5c8: job update failed
+
+ [32m✓[39m src/mongodb-manager-jobs.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 12[2mms[22m[39m
+ [32m✓[39m src/mongodb-lane-coverage.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 16[2mms[22m[39m
+ [32m✓[39m src/mongodb-recency-access-boost.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m src/test-helpers/kb-path-visibility.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 80[2mms[22m[39m
+ [32m✓[39m src/mongodb-scope.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 10[2mms[22m[39m
+ [32m✓[39m src/test-helpers/memory-eval-fixtures.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 41[2mms[22m[39m
+ [32m✓[39m src/test-helpers/preview-env.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 50[2mms[22m[39m
+ [32m✓[39m src/mongodb-operation-accounting.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/agent-config.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 49[2mms[22m[39m
+ [32m✓[39m src/mongodb-conversation-evidence-mode.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/fast-check-smoke.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/embeddings-mistral.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/embeddings-model-normalize.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/mongodb-manager-sync.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/mongodb-manager-lifecycle.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/mongodb-manager-relevance.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/mongodb-manager-search-limit.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/mongodb-kb-fusion-plumbing.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m127 passed[39m[22m[90m (127)[39m
+[2m      Tests [22m [1m[32m2122 passed[39m[22m[90m (2122)[39m
+[2m   Start at [22m 17:10:11
+[2m   Duration [22m 23.35s[2m (transform 54.48s, setup 0ms, import 125.56s, tests 32.04s, environment 20ms)[22m
+

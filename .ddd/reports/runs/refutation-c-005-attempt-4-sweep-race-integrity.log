@@ -1,0 +1,237 @@
+WHAT: TTL-sweep race attacks across guarded conversation reads, unguarded bridge/locator reads, and a malformed-guard mutation.
+RUN: Stateful-fake visibility probes, temporary guard mutation with focused failure, SHA-256/cmp restoration, and green control.
+DATE: 2026-09-03T13:26:51Z
+
+BASELINE_SHA256
+72225599eaac245ca69b587cf1aed697d12b145e3c007e8a224c84428d2a0df9  src/mongodb-manager-search.ts
+
+CONVERSATION_GUARD_CONTROL
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/packages/memory-engine[39m
+
+ [32m✓[39m src/mongodb-chunk-retention.test.ts [2m([22m[2m6 tests[22m[2m | [22m[33m4 skipped[39m[2m)[22m[32m 3[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m1 passed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[32m2 passed[39m[22m[2m | [22m[33m4 skipped[39m[90m (6)[39m
+[2m   Start at [22m 16:26:52
+[2m   Duration [22m 664ms[2m (transform 403ms, setup 0ms, import 561ms, tests 3ms, environment 0ms)[22m
+
+CONVERSATION_CONTROL_EXIT=0
+
+UNGUARDED_BRIDGE_AND_LOCATOR_COUNTEREXAMPLE
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/packages/memory-engine[39m
+
+ [32m✓[39m src/c005-refuter-probe.test.ts [2m([22m[2m7 tests[22m[2m | [22m[33m6 skipped[39m[2m)[22m[32m 2[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m1 passed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[32m1 passed[39m[22m[2m | [22m[33m6 skipped[39m[90m (7)[39m
+[2m   Start at [22m 16:26:52
+[2m   Duration [22m 675ms[2m (transform 431ms, setup 0ms, import 581ms, tests 2ms, environment 0ms)[22m
+
+BRIDGE_COUNTEREXAMPLE_EXIT=0
+
+MUTATION_REPLACE_GUARD_WITH_PAST_ONLY_LT
+eebee45b1ddb10dbcf6535b580f3d613bb6b5ae06b08ed2eb873f8be31879b4c  src/mongodb-manager-search.ts
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/packages/memory-engine[39m
+
+ [31m❯[39m src/mongodb-chunk-retention.test.ts [2m([22m[2m6 tests[22m[2m | [22m[31m2 failed[39m[2m | [22m[33m4 skipped[39m[2m)[22m[32m 9[2mms[22m[39m
+     [2m[90m↓[39m[22m carries the event expiry onto the projected chunk
+     [2m[90m↓[39m[22m omits expiresAt entirely when the event never expires
+     [2m[90m↓[39m[22m propagates expiry per chunk in a mixed batch
+[31m     [31m×[31m composes the unexpired clause with the tenant filter[39m[32m 7[2mms[22m[39m
+[31m     [31m×[31m hides expired chunks on a real find while keeping live and no-expiry chunks[39m[32m 1[2mms[22m[39m
+     [2m[90m↓[39m[22m accepts expiresAt as an optional date on the traditional chunk variant
+
+[31m⎯⎯⎯⎯⎯⎯⎯[39m[1m[41m Failed Tests 2 [49m[22m[31m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[41m[1m FAIL [22m[49m src/mongodb-chunk-retention.test.ts[2m > [22mbuildConversationChunkFilter — unexpired guard (C-005)[2m > [22mcomposes the unexpired clause with the tenant filter
+[31m[1mAssertionError[22m: expected { '$and': [ { …(5) }, { …(1) } ] } to match object { '$and': [ { …(5) }, …(1) ] }
+(2 matching properties omitted from actual)[39m
+
+[32m- Expected[39m
+[31m+ Received[39m
+
+[33m@@ -12,20 +12,11 @@[39m
+[2m        "status": {[22m
+[2m          "$ne": "deleted",[22m
+[2m        },[22m
+[2m      },[22m
+[2m      {[22m
+[32m-       "$or": [[39m
+[32m-         {[39m
+[2m        "expiresAt": {[22m
+[32m-             "$exists": false,[39m
+[32m-           },[39m
+[32m-         },[39m
+[32m-         {[39m
+[32m-           "expiresAt": {[39m
+[32m-             "$gt": Any<Date>,[39m
+[32m-           },[39m
+[31m+         "$lt": 2026-09-03T13:26:54.596Z,[39m
+[2m        },[22m
+[32m-       ],[39m
+[2m      },[22m
+[2m    ],[22m
+[2m  }[22m
+
+[36m [2m❯[22m src/mongodb-chunk-retention.test.ts:[2m111:18[22m[39m
+    [90m109|[39m    scopeRef[33m:[39m [32m"session:s-1"[39m[33m,[39m
+    [90m110|[39m   })
+    [90m111|[39m   [34mexpect[39m(filter)[33m.[39m[34mtoMatchObject[39m({
+    [90m   |[39m                  [31m^[39m
+    [90m112|[39m    $and[33m:[39m [
+    [90m113|[39m     {
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/2]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/mongodb-chunk-retention.test.ts[2m > [22mbuildConversationChunkFilter — unexpired guard (C-005)[2m > [22mhides expired chunks on a real find while keeping live and no-expiry chunks
+[31m[1mAssertionError[22m: expected [ 'events/evt-expired', …(1) ] to deeply equal [ 'events/evt-live', …(1) ][39m
+
+[32m- Expected[39m
+[31m+ Received[39m
+
+[2m  [[22m
+[32m-   "events/evt-live",[39m
+[31m+   "events/evt-expired",[39m
+[2m    "events/evt-no-expiry",[22m
+[2m  ][22m
+
+[36m [2m❯[22m src/mongodb-chunk-retention.test.ts:[2m191:17[22m[39m
+    [90m189|[39m   [35mconst[39m paths [33m=[39m visible[33m.[39m[34mmap[39m((doc) [33m=>[39m doc[33m.[39mpath)[33m.[39m[34msort[39m()
+    [90m190|[39m
+    [90m191|[39m   [34mexpect[39m(paths)[33m.[39m[34mtoEqual[39m([[32m"events/evt-live"[39m[33m,[39m [32m"events/evt-no-expiry"[39m])
+    [90m   |[39m                 [31m^[39m
+    [90m192|[39m  })
+    [90m193|[39m })
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/2]⎯[22m[39m
+
+
+[2m Test Files [22m [1m[31m1 failed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[31m2 failed[39m[22m[2m | [22m[33m4 skipped[39m[90m (6)[39m
+[2m   Start at [22m 16:26:53
+[2m   Duration [22m 641ms[2m (transform 385ms, setup 0ms, import 539ms, tests 9ms, environment 0ms)[22m
+
+MUTATION_EXIT=1
+RESTORE_CMP=0
+72225599eaac245ca69b587cf1aed697d12b145e3c007e8a224c84428d2a0df9  src/mongodb-manager-search.ts
+
+POST_RESTORE_CONTROL
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/packages/memory-engine[39m
+
+ [32m✓[39m src/mongodb-chunk-retention.test.ts [2m([22m[2m6 tests[22m[2m | [22m[33m4 skipped[39m[2m)[22m[32m 3[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m1 passed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[32m2 passed[39m[22m[2m | [22m[33m4 skipped[39m[90m (6)[39m
+[2m   Start at [22m 16:26:54
+[2m   Duration [22m 579ms[2m (transform 354ms, setup 0ms, import 487ms, tests 3ms, environment 0ms)[22m
+
+POST_RESTORE_EXIT=0
+
+DIRECT_READ_SOURCE_WITHOUT_UNEXPIRED_CLAUSE
+   436		async readConversationChunk(
+   437			rawPath: string,
+   438			from?: number,
+   439			lines?: number,
+   440		): Promise<ManagerReadResult> {
+   441			const normalizedPath = rawPath.startsWith("conversation:")
+   442				? rawPath.slice("conversation:".length).trim()
+   443				: rawPath
+   444			if (!normalizedPath) {
+   445				throw new Error("path required")
+   446			}
+   447			const start = Math.max(1, from ?? 1)
+   448			const count = Math.max(1, lines ?? Number.MAX_SAFE_INTEGER)
+   449			const end = start + count - 1
+   450			const docs = await chunksCollection(this.host.db, this.host.prefix)
+   451				.find({
+   452					path: normalizedPath,
+   453					source: { $in: ["sessions", "conversation"] },
+   454					agentId: this.host.agentId,
+   455					...(from || lines
+   456						? {
+   457								$or: [
+   458									{ startLine: { $gte: start, $lte: end } },
+   459									{ endLine: { $gte: start, $lte: end } },
+   460									{ startLine: { $lte: start }, endLine: { $gte: end } },
+   461								],
+   462							}
+   463						: {}),
+   464				})
+   465				// oxlint-disable-next-line unicorn/no-array-sort -- MongoDB cursor .sort(), not Array
+   466				.sort({ startLine: 1 })
+   467				.toArray()
+   468			if (docs.length === 0) {
+   469				if (normalizedPath.startsWith("events/")) {
+   470					const eventId = normalizedPath.slice("events/".length).trim()
+   471					if (eventId) {
+   472						return await this.host.readCanonicalEvent(
+   536		async readBridgeChunk(
+   537			rawPath: string,
+   538			from?: number,
+   539			lines?: number,
+   540		): Promise<ManagerReadResult> {
+   541			const start = Math.max(1, from ?? 1)
+   542			const count = Math.max(1, lines ?? Number.MAX_SAFE_INTEGER)
+   543			const end = start + count - 1
+   544			const docs = await chunksCollection(this.host.db, this.host.prefix)
+   545				.find({
+   546					path: rawPath,
+   547					source: { $in: ["conversation", "memory"] },
+   548					agentId: this.host.agentId,
+   549					scope: "workspace",
+   550					scopeRef: this.host.workspaceScopeRef,
+   551					...(from || lines
+   552						? {
+   553								$or: [
+   554									{ startLine: { $gte: start, $lte: end } },
+   555									{ endLine: { $gte: start, $lte: end } },
+   556									{ startLine: { $lte: start }, endLine: { $gte: end } },
+   557								],
+   558							}
+   559						: {}),
+   560				})
+   561				// oxlint-disable-next-line unicorn/no-array-sort -- MongoDB cursor .sort(), not Array
+   562				.sort({ startLine: 1 })
+   563				.toArray()
+   564			if (docs.length === 0) {
+   565				return {
+   566					text: "",
+
+BRIDGE_FILTER_SOURCE_WITHOUT_UNEXPIRED_CLAUSE
+   147			// C-005: hide expired chunks immediately. The chunks TTL index
+   148			// (idx_chunks_ttl_expires_at) only sweeps about every 60s, so an
+   149			// expired chunk can still surface in reads until the sweep deletes
+   150			// it — every surface fed by this filter composes the unexpired
+   151			// clause, mirroring the events read guard (buildUnexpiredClause on
+   152			// expiresAt). The $exists:false branch keeps the clause
+   153			// semantics-neutral for chunks written without an expiry.
+   154			return mergeQueryClauses(
+   155				{
+   156					source: { $in: sources },
+   157					agentId: this.host.agentId,
+   158					scope: params.scope,
+   159					scopeRef: params.scopeRef,
+   160					status: { $ne: "deleted" },
+   161				},
+   162				buildUnexpiredClause({ field: "expiresAt" }),
+   163			)
+   164		}
+   165	
+   166		buildBridgeChunkFilter(): Document {
+   167			return {
+   168				source: { $in: ["conversation", "memory"] },
+   169				agentId: this.host.agentId,
+   170				scope: "workspace",
+   171				scopeRef: this.host.workspaceScopeRef,
+   172				status: { $ne: "deleted" },
+   173			}
+   174		}
+   175	
+
+JUDGMENT
+The conversation search guard correctly excludes already-expired chunks while retaining future-expiry and expiresAt-absent chunks, and the malformed $lt-only mutation is caught.
+REFUTED: the bridge search filter, readConversationChunk locator, and readBridgeChunk locator omit the unexpired clause. The stateful fake retains a past-expiry chunk (simulating TTL monitor lag), and all three unguarded surfaces return its text immediately.

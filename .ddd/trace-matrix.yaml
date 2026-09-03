@@ -70,100 +70,100 @@ traces:
     change_id: WS-03
     claim_id: C-003
     construct_id: packages/memory-engine/src/mongodb-manager.ts
-    validation_id: null
+    validation_id: V-042
     direction: forward
-    sweep_pass: false
-    checked_at: "2026-09-02T13:41:40.034Z"
+    sweep_pass: true
+    checked_at: "2026-09-03T14:59:18.000Z"
     notes: WS-03 Tenant erasure and retention lifecycle (planned change envelope)
   - id: TR-008
     schema_version: 0.1.0
     change_id: WS-03
     claim_id: C-003
     construct_id: packages/memory-bridge/src/memongo-bridge.ts
-    validation_id: null
+    validation_id: V-043
     direction: forward
-    sweep_pass: false
-    checked_at: "2026-09-02T13:41:40.035Z"
+    sweep_pass: true
+    checked_at: "2026-09-03T14:59:18.000Z"
     notes: WS-03 Tenant erasure and retention lifecycle (planned change envelope)
   - id: TR-009
     schema_version: 0.1.0
     change_id: WS-03
     claim_id: C-003
     construct_id: apps/api/src/app.ts
-    validation_id: null
+    validation_id: V-044
     direction: forward
-    sweep_pass: false
-    checked_at: "2026-09-02T13:41:40.036Z"
+    sweep_pass: true
+    checked_at: "2026-09-03T14:59:18.000Z"
     notes: WS-03 Tenant erasure and retention lifecycle (planned change envelope)
   - id: TR-010
     schema_version: 0.1.0
     change_id: WS-03
     claim_id: C-004
     construct_id: packages/memory-engine/src/mongodb-schema.ts
-    validation_id: null
+    validation_id: V-045
     direction: forward
-    sweep_pass: false
-    checked_at: "2026-09-02T13:41:40.037Z"
+    sweep_pass: true
+    checked_at: "2026-09-03T14:59:18.000Z"
     notes: WS-03 Tenant erasure and retention lifecycle (planned change envelope)
   - id: TR-011
     schema_version: 0.1.0
     change_id: WS-03
     claim_id: C-004
     construct_id: packages/memory-engine/src/mongodb-manager-read.ts
-    validation_id: null
+    validation_id: V-046
     direction: forward
-    sweep_pass: false
-    checked_at: "2026-09-02T13:41:40.037Z"
+    sweep_pass: true
+    checked_at: "2026-09-03T14:59:18.000Z"
     notes: WS-03 Tenant erasure and retention lifecycle (planned change envelope)
   - id: TR-012
     schema_version: 0.1.0
     change_id: WS-03
     claim_id: C-004
     construct_id: apps/mcp/src/tool-registry.ts
-    validation_id: null
+    validation_id: V-047
     direction: forward
-    sweep_pass: false
-    checked_at: "2026-09-02T13:41:40.038Z"
+    sweep_pass: true
+    checked_at: "2026-09-03T14:59:18.000Z"
     notes: WS-03 Tenant erasure and retention lifecycle (planned change envelope)
   - id: TR-013
     schema_version: 0.1.0
     change_id: WS-03
     claim_id: C-005
-    construct_id: packages/memory-engine/src/mongodb-sync.ts
-    validation_id: null
+    construct_id: packages/memory-engine/src/mongodb-manager-sync.ts
+    validation_id: V-048
     direction: forward
-    sweep_pass: false
-    checked_at: "2026-09-02T13:41:40.039Z"
+    sweep_pass: true
+    checked_at: "2026-09-03T14:59:18.000Z"
     notes: WS-03 Tenant erasure and retention lifecycle (planned change envelope)
   - id: TR-014
     schema_version: 0.1.0
     change_id: WS-03
     claim_id: C-005
     construct_id: packages/memory-engine/src/mongodb-schema.ts
-    validation_id: null
+    validation_id: V-049
     direction: forward
-    sweep_pass: false
-    checked_at: "2026-09-02T13:41:40.039Z"
+    sweep_pass: true
+    checked_at: "2026-09-03T14:59:18.000Z"
     notes: WS-03 Tenant erasure and retention lifecycle (planned change envelope)
   - id: TR-015
     schema_version: 0.1.0
     change_id: WS-03
     claim_id: C-006
     construct_id: packages/memory-engine/src/mongodb-events.ts
-    validation_id: null
+    validation_id: V-050
     direction: forward
-    sweep_pass: false
-    checked_at: "2026-09-02T13:41:40.040Z"
+    sweep_pass: true
+    checked_at: "2026-09-03T14:59:18.000Z"
     notes: WS-03 Tenant erasure and retention lifecycle (planned change envelope)
   - id: TR-016
     schema_version: 0.1.0
     change_id: WS-03
     claim_id: C-006
     construct_id: packages/memory-engine/src/mongodb-manager-write.ts
-    validation_id: null
+    validation_id: V-051
     direction: forward
-    sweep_pass: false
-    checked_at: "2026-09-02T13:41:40.041Z"
+    sweep_pass: true
+    checked_at: "2026-09-03T14:59:18.000Z"
     notes: WS-03 Tenant erasure and retention lifecycle (planned change envelope)
   - id: TR-017
     schema_version: 0.1.0

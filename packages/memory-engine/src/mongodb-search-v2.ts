@@ -1061,6 +1061,13 @@ async function searchV2WithBudget(
 								agentId,
 								scope,
 								scopeRef: agentScopeRef,
+								// C-005: hide expired session-evidence docs
+								// during the TTL sweep lag. $vectorSearch
+								// filters do not support $exists, so the
+								// "missing field" arm uses $eq null (null
+								// equality matches missing fields under
+								// $match semantics).
+								$or: [{ expiresAt: null }, { expiresAt: { $gt: new Date() } }],
 							}
 							searches.push(
 								timeLane("hybrid:session_chunks", () =>

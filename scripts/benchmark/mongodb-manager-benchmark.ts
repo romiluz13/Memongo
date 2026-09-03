@@ -80,6 +80,7 @@ import { resolveScopeRef } from "../../packages/memory-engine/src/mongodb-scope.
 import { isBenchmarkStrictMode } from "../../packages/memory-engine/src/mongodb-search-ranking.js"
 import {
 	resolveSessionEvidenceMode,
+	resolveSessionEvidenceExpiresAt,
 	writeSessionEvidenceOptionA,
 	writeSessionEvidenceOptionB,
 } from "../../packages/memory-engine/src/mongodb-session-evidence.js"
@@ -1004,6 +1005,17 @@ export class MongoDBManagerBenchmarkOps {
 								scope: "agent",
 								agentId: scenarioManager.agentId,
 							})
+							// C-005: session-evidence docs embed their source
+							// events, so they inherit the latest source-event
+							// expiry and expire with them (TTL index + read
+							// guard). Sessions with a never-expiring event stay
+							// permanent.
+							const sessionExpiresAt = await resolveSessionEvidenceExpiresAt({
+								db: this.host.db,
+								prefix: this.host.prefix,
+								agentId: scenarioManager.agentId,
+								sessionEventMap,
+							})
 
 							if (effectiveSessionEvidenceMode === "A") {
 								await writeSessionEvidenceOptionA({
@@ -1016,6 +1028,7 @@ export class MongoDBManagerBenchmarkOps {
 									scope: "agent",
 									scopeRef,
 									eventIds: sessionEventMap,
+									sessionExpiresAt,
 								})
 							} else if (effectiveSessionEvidenceMode === "B") {
 								sessionEvidenceDocsWritten = await writeSessionEvidenceOptionB({
@@ -1028,6 +1041,7 @@ export class MongoDBManagerBenchmarkOps {
 									scope: "agent",
 									scopeRef,
 									eventIds: sessionEventMap,
+									sessionExpiresAt,
 								})
 							}
 

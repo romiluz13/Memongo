@@ -1,0 +1,7 @@
+# WS-03 C-003/C-004/C-005/C-006 final-state type-check run: apps/web
+# Run: cd apps/web && bun run check-types
+# Date: 2026-09-03T12:35:07Z
+$ node ../../node_modules/next/dist/bin/next typegen && node ../../node_modules/typescript/bin/tsc --noEmit -p tsconfig.json
+Generating route types...
+✓ Route types generated successfully
+exit=0

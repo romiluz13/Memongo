@@ -51,7 +51,7 @@ entries:
     tier: T3
     status: known-and-supported
     constructs: [packages/memory-engine/src/mongodb-manager.ts, packages/memory-bridge/src/memongo-bridge.ts, apps/api/src/app.ts]
-    validations: []
+    validations: [V-042, V-043, V-044]
     exceptions: []
 
   - id: C-004
@@ -67,7 +67,7 @@ entries:
     tier: T3
     status: known-and-supported
     constructs: [packages/memory-engine/src/mongodb-schema.ts, packages/memory-engine/src/mongodb-manager-read.ts, apps/mcp/src/tool-registry.ts]
-    validations: []
+    validations: [V-045, V-046, V-047]
     exceptions: []
 
   - id: C-005
@@ -82,8 +82,8 @@ entries:
     impact: critical
     tier: T3
     status: known-and-supported
-    constructs: [packages/memory-engine/src/mongodb-sync.ts, packages/memory-engine/src/mongodb-schema.ts]
-    validations: []
+    constructs: [packages/memory-engine/src/mongodb-manager-sync.ts, packages/memory-engine/src/mongodb-schema.ts]
+    validations: [V-048, V-049]
     exceptions: []
 
   - id: C-006
@@ -99,7 +99,7 @@ entries:
     tier: T1
     status: known-and-supported
     constructs: [packages/memory-engine/src/mongodb-events.ts, packages/memory-engine/src/mongodb-manager-write.ts]
-    validations: []
+    validations: [V-050, V-051]
     exceptions: []
 
   - id: C-007

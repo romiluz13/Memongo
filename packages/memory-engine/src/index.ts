@@ -53,8 +53,12 @@ export type {
 } from "./types.js"
 export {
 	MongoDBMemoryManager,
+	type QuarantinedEntry,
+	type QuarantineReviewReceipt,
+	type QuarantineStatus,
 	type RerankWeights,
 	type RelevanceExplainResult,
+	type TenantErasureReceipt,
 	type V2Status,
 	type WriteConversationEventInput,
 	type WriteConversationEventReceipt,

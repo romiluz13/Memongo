@@ -131,6 +131,150 @@ export const adminPaths = {
 			},
 		},
 	},
+	"/v1/admin/erase": {
+		post: {
+			summary:
+				"Irreversibly erase every collection entry for one agent (tenant erasure)",
+			description:
+				"Deletes all tenant data across every collection that stores agent data and returns a per-collection receipt. Requires the literal confirmation string and the global admin token; scoped API keys are rejected.",
+			requestBody: {
+				required: true,
+				content: {
+					"application/json": {
+						schema: {
+							type: "object",
+							required: ["confirm"],
+							properties: {
+								confirm: {
+									type: "string",
+									enum: ["erase"],
+									description: "Typed confirmation; anything else is a 400",
+								},
+								agentId: {
+									type: "string",
+									description: AGENT_ID_FIELD_DESCRIPTION,
+								},
+							},
+						},
+					},
+				},
+			},
+			responses: {
+				"200": { description: "Per-collection tenant erasure receipt" },
+			},
+		},
+	},
+	"/v1/admin/quarantine": {
+		get: {
+			summary: "List quarantined memories awaiting review (oldest first)",
+			description:
+				"Returns the injection-classified memories held for review, oldest first, with the matched patterns and decision metadata. Admin-only: scoped and agent-scoped API keys are rejected, because quarantined payloads must not flow back to agent credentials.",
+			parameters: [
+				{ name: "agentId", in: "query", schema: { type: "string" } },
+				{
+					name: "status",
+					in: "query",
+					description:
+						"Filter by review state; omit to list every entry including the decided history",
+					schema: {
+						type: "string",
+						enum: ["pending-review", "promoted", "rejected"],
+					},
+				},
+				{
+					name: "limit",
+					in: "query",
+					schema: { type: "integer", minimum: 1, maximum: 100 },
+				},
+			],
+			responses: { "200": { description: "Quarantine review queue" } },
+		},
+	},
+	"/v1/admin/quarantine/promote": {
+		post: {
+			summary:
+				"Overrule the injection classifier and write a quarantined memory as structured memory",
+			description:
+				"Runs the standard pattern-match extraction on the quarantined content and writes the resulting structured memories with provenance back to the quarantine row. The decision (reviewer, notes, timestamp) is recorded on the row and in the mutation audit log. Admin-only: scoped and agent-scoped API keys are rejected.",
+			requestBody: {
+				required: true,
+				content: {
+					"application/json": {
+						schema: {
+							type: "object",
+							required: ["quarantineId"],
+							properties: {
+								quarantineId: {
+									type: "string",
+									minLength: 1,
+									description: "The quarantine entry to approve",
+								},
+								agentId: {
+									type: "string",
+									description: AGENT_ID_FIELD_DESCRIPTION,
+								},
+								reviewerId: {
+									type: "string",
+									description: "Who reviewed the entry",
+								},
+								reviewNotes: {
+									type: "string",
+									description: "Why the decision was made",
+								},
+							},
+						},
+					},
+				},
+			},
+			responses: {
+				"200": {
+					description:
+						"Review receipt with the written memory and mutation ids",
+				},
+			},
+		},
+	},
+	"/v1/admin/quarantine/reject": {
+		post: {
+			summary:
+				"Discard a quarantined memory (kept as audit trail; only unreviewed entries expire)",
+			description:
+				"Flips the entry to rejected and records the decision (reviewer, notes, timestamp) on the row and in the mutation audit log. The row itself is kept as durable audit trail; the retention TTL only removes entries still pending review. Admin-only: scoped and agent-scoped API keys are rejected.",
+			requestBody: {
+				required: true,
+				content: {
+					"application/json": {
+						schema: {
+							type: "object",
+							required: ["quarantineId"],
+							properties: {
+								quarantineId: {
+									type: "string",
+									minLength: 1,
+									description: "The quarantine entry to reject",
+								},
+								agentId: {
+									type: "string",
+									description: AGENT_ID_FIELD_DESCRIPTION,
+								},
+								reviewerId: {
+									type: "string",
+									description: "Who reviewed the entry",
+								},
+								reviewNotes: {
+									type: "string",
+									description: "Why the decision was made",
+								},
+							},
+						},
+					},
+				},
+			},
+			responses: {
+				"200": { description: "Review receipt with the mutation audit id" },
+			},
+		},
+	},
 	"/v1/admin/access-summaries": {
 		get: {
 			summary:

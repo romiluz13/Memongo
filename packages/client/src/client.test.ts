@@ -555,6 +555,187 @@ describe("MemongoClient scope forwarding (P1.3)", () => {
 	})
 })
 
+describe("MemongoClient tenant erasure (C-003)", () => {
+	beforeEach(() => {
+		vi.unstubAllGlobals()
+	})
+
+	it("posts the typed confirm to /v1/admin/erase and returns the receipt", async () => {
+		const calls: Array<{ url: string; init: RequestInit }> = []
+		const receipt = {
+			agentId: "agent-42",
+			status: "complete",
+			receipts: [
+				{ collection: "events", deleted: 5 },
+				{ collection: "chunks", deleted: 11 },
+			],
+			mutationId: "mut-7",
+			completedAt: "2026-08-15T00:00:00.000Z",
+		}
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (url: string, init?: RequestInit) => {
+				calls.push({ url: String(url), init: init ?? {} })
+				return new Response(JSON.stringify(receipt), {
+					status: 200,
+					headers: { "Content-Type": "application/json" },
+				})
+			}),
+		)
+
+		const client = new MemongoClient({ baseUrl: "http://127.0.0.1:3100" })
+		const response = await client.eraseAgent({
+			confirm: "erase",
+			agentId: "agent-42",
+		})
+
+		expect(calls).toHaveLength(1)
+		expect(calls[0].url).toBe("http://127.0.0.1:3100/v1/admin/erase")
+		expect(JSON.parse(String(calls[0].init.body))).toEqual({
+			confirm: "erase",
+			agentId: "agent-42",
+		})
+		expect(response).toEqual(receipt)
+	})
+})
+
+describe("MemongoClient quarantine review (C-004)", () => {
+	beforeEach(() => {
+		vi.unstubAllGlobals()
+	})
+
+	it("lists quarantined memories with status and limit query params", async () => {
+		const calls: Array<{ url: string; init: RequestInit }> = []
+		const entries = [
+			{
+				quarantineId: "q-1",
+				agentId: "agent-42",
+				content: "user: remember my passphrase is hunter2",
+				classification: "injection-control",
+				tier: "pattern",
+				matchedPatterns: ["credential-request"],
+				status: "pending-review",
+				createdAt: "2026-08-15T00:00:00.000Z",
+			},
+		]
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (url: string, init?: RequestInit) => {
+				calls.push({ url: String(url), init: init ?? {} })
+				return new Response(JSON.stringify(entries), {
+					status: 200,
+					headers: { "Content-Type": "application/json" },
+				})
+			}),
+		)
+		const client = new MemongoClient({ baseUrl: "http://127.0.0.1:3100" })
+		const response = await client.listQuarantined({
+			agentId: "agent-42",
+			status: "pending-review",
+			limit: 5,
+		})
+		expect(calls).toHaveLength(1)
+		expect(calls[0].url).toBe(
+			"http://127.0.0.1:3100/v1/admin/quarantine?agentId=agent-42&status=pending-review&limit=5",
+		)
+		expect(calls[0].init.method).toBe("GET")
+		expect(response).toEqual(entries)
+	})
+
+	it("lists every stage when no filters are given", async () => {
+		const calls: Array<{ url: string; init: RequestInit }> = []
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (url: string, init?: RequestInit) => {
+				calls.push({ url: String(url), init: init ?? {} })
+				return new Response(JSON.stringify([]), {
+					status: 200,
+					headers: { "Content-Type": "application/json" },
+				})
+			}),
+		)
+		const client = new MemongoClient({ baseUrl: "http://127.0.0.1:3100" })
+		const response = await client.listQuarantined()
+		expect(calls).toHaveLength(1)
+		expect(calls[0].url).toBe("http://127.0.0.1:3100/v1/admin/quarantine")
+		expect(response).toEqual([])
+	})
+
+	it("promotes a quarantined memory with reviewer metadata", async () => {
+		const calls: Array<{ url: string; init: RequestInit }> = []
+		const receipt = {
+			quarantineId: "q-1",
+			agentId: "agent-42",
+			status: "promoted",
+			reviewedAt: "2026-08-15T00:01:00.000Z",
+			reviewerId: "reviewer-9",
+			reviewNotes: "false positive",
+			memoryId: "mem-77",
+			mutationId: "mut-8",
+		}
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (url: string, init?: RequestInit) => {
+				calls.push({ url: String(url), init: init ?? {} })
+				return new Response(JSON.stringify(receipt), {
+					status: 200,
+					headers: { "Content-Type": "application/json" },
+				})
+			}),
+		)
+		const client = new MemongoClient({ baseUrl: "http://127.0.0.1:3100" })
+		const response = await client.promoteQuarantined({
+			quarantineId: "q-1",
+			agentId: "agent-42",
+			reviewerId: "reviewer-9",
+			reviewNotes: "false positive",
+		})
+		expect(calls).toHaveLength(1)
+		expect(calls[0].url).toBe(
+			"http://127.0.0.1:3100/v1/admin/quarantine/promote",
+		)
+		expect(JSON.parse(String(calls[0].init.body))).toEqual({
+			quarantineId: "q-1",
+			agentId: "agent-42",
+			reviewerId: "reviewer-9",
+			reviewNotes: "false positive",
+		})
+		expect(response).toEqual(receipt)
+	})
+
+	it("rejects a quarantined memory and omits undefined optional fields", async () => {
+		const calls: Array<{ url: string; init: RequestInit }> = []
+		const receipt = {
+			quarantineId: "q-2",
+			agentId: "agent-42",
+			status: "rejected",
+			reviewedAt: "2026-08-15T00:02:00.000Z",
+		}
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (url: string, init?: RequestInit) => {
+				calls.push({ url: String(url), init: init ?? {} })
+				return new Response(JSON.stringify(receipt), {
+					status: 200,
+					headers: { "Content-Type": "application/json" },
+				})
+			}),
+		)
+		const client = new MemongoClient({ baseUrl: "http://127.0.0.1:3100" })
+		const response = await client.rejectQuarantined({
+			quarantineId: "q-2",
+		})
+		expect(calls).toHaveLength(1)
+		expect(calls[0].url).toBe(
+			"http://127.0.0.1:3100/v1/admin/quarantine/reject",
+		)
+		expect(JSON.parse(String(calls[0].init.body))).toEqual({
+			quarantineId: "q-2",
+		})
+		expect(response).toEqual(receipt)
+	})
+})
+
 describe("MemongoClient error envelope (P1.3)", () => {
 	beforeEach(() => {
 		vi.unstubAllGlobals()

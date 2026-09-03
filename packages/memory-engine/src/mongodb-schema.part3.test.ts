@@ -1293,7 +1293,10 @@ describe("ensureStandardIndexes total count with query_cache and time series ind
 		// + 1 bi-temporal valid-time (#32) + 2 durable job claim/TTL indexes
 		// + 1 extraction outbox partial index + 1 unique relation identity
 		// P3.8: −3 retired redundant indexes + 3 ESR compounds + 1 relationId locator
-		// P4.4.1: +2 partial TTL indexes (events, structured_mem) = 95
-		expect(count).toBe(95)
+		// P4.4.1: +2 partial TTL indexes (events, structured_mem)
+		// C-005: +1 partial TTL index (chunks expiresAt) + 1 session_chunks TTL (idx_session_chunks_ttl_expires_at)
+		// C-004: +3 memory_quarantine (unique id, queue listing, pending TTL)
+		// = 100
+		expect(count).toBe(100)
 	})
 })

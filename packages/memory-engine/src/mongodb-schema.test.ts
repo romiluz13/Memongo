@@ -552,9 +552,20 @@ describe("ensureStandardIndexes", () => {
 		// idx_relations_agent_scope_scoperef), +1 chunk ESR, +1 episode ESR,
 		// +1 entity ESR, +1 relationId locator
 		// P4.4.1: +2 partial TTL indexes (events, structured_mem)
-		// Total = 95
-		expect(count).toBe(95)
-		expect(chunks.createIndex).toHaveBeenCalledTimes(4)
+		// C-005: +2 partial TTL indexes (chunks + session_chunks expiresAt)
+		// C-004: +3 memory_quarantine (unique id, queue listing, pending TTL)
+		// Total = 100
+		expect(count).toBe(100)
+		expect(chunks.createIndex).toHaveBeenCalledTimes(5)
+		// C-005: per-document chunk TTL, mirroring idx_events_ttl_expires_at.
+		expect(chunks.createIndex).toHaveBeenCalledWith(
+			{ expiresAt: 1 },
+			{
+				name: "idx_chunks_ttl_expires_at",
+				expireAfterSeconds: 0,
+				partialFilterExpression: { expiresAt: { $exists: true } },
+			},
+		)
 		expect(kb.createIndex).toHaveBeenCalledTimes(5)
 		expect(kbChunks.createIndex).toHaveBeenCalledTimes(4)
 		expect(structured.createIndex).toHaveBeenCalledTimes(11)
@@ -649,7 +660,17 @@ describe("ensureStandardIndexes", () => {
 		const sessionChunks = db.collection("test_session_chunks") as unknown as {
 			createIndex: ReturnType<typeof vi.fn>
 		}
-		expect(sessionChunks.createIndex).toHaveBeenCalledTimes(3)
+		expect(sessionChunks.createIndex).toHaveBeenCalledTimes(4)
+		// C-005: session-evidence docs inherit source-event expiry, so the
+		// collection gets the same partial TTL index as chunks.
+		expect(sessionChunks.createIndex).toHaveBeenCalledWith(
+			{ expiresAt: 1 },
+			{
+				name: "idx_session_chunks_ttl_expires_at",
+				expireAfterSeconds: 0,
+				partialFilterExpression: { expiresAt: { $exists: true } },
+			},
+		)
 		const memoryJobs = db.collection("test_memory_jobs") as unknown as {
 			createIndex: ReturnType<typeof vi.fn>
 		}
@@ -678,10 +699,11 @@ describe("ensureStandardIndexes", () => {
 			) as unknown as {
 				createIndex: ReturnType<typeof vi.fn>
 			}
-			// 95 base (incl. 2 consolidation_runs + events idempotency key
-			// and 2 P4.4.1 partial TTL indexes)
+			// 100 base (incl. 2 consolidation_runs + events idempotency key,
+			// 2 P4.4.1 partial TTL indexes, the 2 C-005 chunks/session_chunks
+			// TTL indexes, and the 3 C-004 memory_quarantine indexes)
 			// + 4 evidence mirror indexes
-			expect(count).toBe(99)
+			expect(count).toBe(104)
 			expect(memoryEvidence.createIndex).toHaveBeenCalledTimes(4)
 			expect(memoryEvidence.createIndex).toHaveBeenCalledWith(
 				{ canonicalId: 1 },
@@ -795,8 +817,10 @@ describe("ensureStandardIndexes", () => {
 		// + 1 extraction outbox partial index + 1 unique relation identity
 		// P3.8: −3 retired redundant indexes + 3 ESR compounds + 1 relationId locator
 		// P4.4.1: +2 partial TTL indexes (events, structured_mem)
-		// Total = 95
-		expect(count).toBe(95)
+		// C-005: +2 partial TTL indexes (chunks + session_chunks expiresAt)
+		// C-004: +3 memory_quarantine (unique id, queue listing, pending TTL)
+		// Total = 100
+		expect(count).toBe(100)
 	})
 
 	it("creates relevance TTL indexes when relevanceRetentionDays is set", async () => {
@@ -856,6 +880,71 @@ describe("ensureStandardIndexes", () => {
 		expect((ttlCall?.[1] as Record<string, unknown>).expireAfterSeconds).toBe(
 			30 * 24 * 60 * 60,
 		)
+	})
+
+	it("creates the memory_quarantine review-lifecycle indexes (C-004)", async () => {
+		const db = mockDb()
+		await ensureStandardIndexes(db, "test_")
+		const quarantine = db.collection("test_memory_quarantine") as unknown as {
+			createIndex: ReturnType<typeof vi.fn>
+		}
+		expect(quarantine.createIndex).toHaveBeenCalledTimes(3)
+		// Unique id for promote/reject point lookups.
+		expect(quarantine.createIndex).toHaveBeenCalledWith(
+			{ quarantineId: 1 },
+			{ name: "uq_memory_quarantine_quarantineid", unique: true },
+		)
+		// Review-queue listing: equality agentId+status, ascending createdAt.
+		expect(quarantine.createIndex).toHaveBeenCalledWith(
+			{ agentId: 1, status: 1, createdAt: 1 },
+			{ name: "idx_memory_quarantine_agent_status_created" },
+		)
+		// Retention cap on UNREVIEWED entries only, 30-day default. Partial on
+		// status so promote/reject decisions (the audit trail) never expire.
+		expect(quarantine.createIndex).toHaveBeenCalledWith(
+			{ createdAt: 1 },
+			{
+				name: "idx_memory_quarantine_ttl_pending",
+				expireAfterSeconds: 30 * 24 * 60 * 60,
+				partialFilterExpression: { status: "pending-review" },
+			},
+		)
+	})
+
+	it("honors quarantineRetentionDays override and explicit 0 disables the TTL (C-004)", async () => {
+		const withOverride = mockDb()
+		await ensureStandardIndexes(withOverride, "test_", {
+			quarantineRetentionDays: 7,
+		})
+		const overridden = withOverride.collection(
+			"test_memory_quarantine",
+		) as unknown as { createIndex: ReturnType<typeof vi.fn> }
+		const ttlCall = overridden.createIndex.mock.calls.find(
+			(c: unknown[]) =>
+				(c[1] as Record<string, unknown>)?.name ===
+				"idx_memory_quarantine_ttl_pending",
+		)
+		expect(ttlCall).toBeDefined()
+		expect((ttlCall?.[1] as Record<string, unknown>).expireAfterSeconds).toBe(
+			7 * 24 * 60 * 60,
+		)
+
+		const disabled = mockDb()
+		await ensureStandardIndexes(disabled, "test_", {
+			quarantineRetentionDays: 0,
+		})
+		const quarantineOff = disabled.collection(
+			"test_memory_quarantine",
+		) as unknown as { createIndex: ReturnType<typeof vi.fn> }
+		expect(
+			quarantineOff.createIndex.mock.calls.find(
+				(c: unknown[]) =>
+					(c[1] as Record<string, unknown>)?.name ===
+					"idx_memory_quarantine_ttl_pending",
+			),
+		).toBeUndefined()
+		// The non-TTL review indexes are still created.
+		expect(quarantineOff.createIndex).toHaveBeenCalledTimes(2)
 	})
 })
 

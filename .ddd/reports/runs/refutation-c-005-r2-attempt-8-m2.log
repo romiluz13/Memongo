@@ -1,0 +1,82 @@
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/packages/memory-engine[39m
+
+[90mstdout[2m | src/mongodb-manager-write-state.test.ts[2m > [22m[2mwriteConversationEvent — collection state[2m > [22m[2mpersists the canonical event, projects the chunk, stages+releases the extraction job, and aggregates lane coverage
+[22m[39m17:50:18.589 [memory:mongodb:events] info: event written: f663159b-3d54-4925-9791-5d7ab9af0559 role=user
+
+[90mstdout[2m | src/mongodb-manager-write-state.test.ts[2m > [22m[2mwriteConversationEvent — collection state[2m > [22m[2mreplays the original receipt for a duplicate idempotency key — the collection holds exactly ONE event
+[22m[39m17:50:18.601 [memory:mongodb:events] info: event written: 163902df-c10a-4497-808f-a5f00c764e52 role=user
+
+[90mstdout[2m | src/mongodb-manager-write-state.test.ts[2m > [22m[2mwriteConversationEvent — collection state[2m > [22m[2mrejects key reuse with a different payload (IdempotencyConflictError) and stores nothing new
+[22m[39m17:50:18.602 [memory:mongodb:events] info: event written: b17b1158-bb43-4d62-9fa0-e4e54dd4797e role=user
+
+[90mstdout[2m | src/mongodb-manager-write-state.test.ts[2m > [22m[2mwriteConversationEventsBatch — collection state[2m > [22m[2mpersists every event with per-item receipts and one aggregated lane-coverage update
+[22m[39m17:50:18.604 [memory:mongodb:events] info: event batch written: 3 event(s)
+
+[90mstdout[2m | src/mongodb-manager-write-state.test.ts[2m > [22m[2mwriteConversationEventsBatch — collection state[2m > [22m[2mreplays a pre-existing key inside the batch without duplicating the event
+[22m[39m17:50:18.605 [memory:mongodb:events] info: event written: 6455e442-f8e8-450e-be43-bb342f358c13 role=user
+
+[90mstdout[2m | src/mongodb-manager-write-state.test.ts[2m > [22m[2mwriteConversationEventsBatch — collection state[2m > [22m[2mreplays a pre-existing key inside the batch without duplicating the event
+[22m[39m17:50:18.606 [memory:mongodb:events] info: event batch written: 1 event(s)
+
+[90mstdout[2m | src/mongodb-manager-write-state.test.ts[2m > [22m[2mwriteConversationEventsBatch — collection state[2m > [22m[2mcollapses a duplicated key inside one batch via the unique index (E11000 → replay)
+[22m[39m17:50:18.606 [memory:mongodb:events] info: event batch written: 2 event(s)
+
+[90mstdout[2m | src/mongodb-manager-write-state.test.ts[2m > [22m[2mwriteConversationEventsBatch — collection state[2m > [22m[2mreports a per-item IDEMPOTENCY_CONFLICT for key reuse with a different payload
+[22m[39m17:50:18.607 [memory:mongodb:events] info: event written: 907fc753-ef6a-4ab3-b43b-a53dadbb03b3 role=user
+
+[90mstdout[2m | src/mongodb-manager-write-state.test.ts[2m > [22m[2mP0.1 regression — post-persist failure does not produce a client-visible duplicate[2m > [22m[2ma chunk-projection failure after the event insert surfaces, and the same-key retry replays instead of duplicating
+[22m[39m17:50:18.608 [memory:mongodb:events] info: event written: e7aad3aa-82bb-4ed1-bb7e-b80d8bb4b255 role=user
+
+[90mstdout[2m | src/mongodb-manager-write-state.test.ts[2m > [22m[2mwriteConversationEvent — TTL expiry propagation onto chunks (C-005)[2m > [22m[2mpersists the event AND its chunk with the SAME explicit expiresAt (single write handoff)
+[22m[39m17:50:18.609 [memory:mongodb:events] info: event written: 9660a5a0-8d4e-46c9-afb2-173ddc7208a9 role=user
+
+[90mstdout[2m | src/mongodb-manager-write-state.test.ts[2m > [22m[2mwriteConversationEvent — TTL expiry propagation onto chunks (C-005)[2m > [22m[2mleaves both event and chunk expiry-free when no retention applies
+[22m[39m17:50:18.610 [memory:mongodb:events] info: event written: f3a7df2e-c588-4eb0-9f20-f88d9d5ab1c8 role=user
+
+[90mstdout[2m | src/mongodb-manager-write-state.test.ts[2m > [22m[2mwriteConversationEvent — TTL expiry propagation onto chunks (C-005)[2m > [22m[2mpropagates a per-item expiry through the batch write handoff
+[22m[39m17:50:18.610 [memory:mongodb:events] info: event batch written: 2 event(s)
+
+ [31m❯[39m src/mongodb-manager-write-state.test.ts [2m([22m[2m14 tests[22m[2m | [22m[31m1 failed[39m[2m)[22m[32m 28[2mms[22m[39m
+     [32m✓[39m persists the canonical event, projects the chunk, stages+releases the extraction job, and aggregates lane coverage[32m 15[2mms[22m[39m
+     [32m✓[39m replays the original receipt for a duplicate idempotency key — the collection holds exactly ONE event[32m 1[2mms[22m[39m
+     [32m✓[39m rejects key reuse with a different payload (IdempotencyConflictError) and stores nothing new[32m 1[2mms[22m[39m
+     [32m✓[39m persists every event with per-item receipts and one aggregated lane-coverage update[32m 2[2mms[22m[39m
+     [32m✓[39m replays a pre-existing key inside the batch without duplicating the event[32m 1[2mms[22m[39m
+     [32m✓[39m collapses a duplicated key inside one batch via the unique index (E11000 → replay)[32m 1[2mms[22m[39m
+     [32m✓[39m reports a per-item IDEMPOTENCY_CONFLICT for key reuse with a different payload[32m 0[2mms[22m[39m
+     [32m✓[39m a chunk-projection failure after the event insert surfaces, and the same-key retry replays instead of duplicating[32m 1[2mms[22m[39m
+     [32m✓[39m enforces the partial unique (agentId, idempotencyKey) index with code 11000[32m 0[2mms[22m[39m
+     [32m✓[39m honors $setOnInsert on upsert (second write does not overwrite)[32m 0[2mms[22m[39m
+     [32m✓[39m applies aggregation-pipeline updates ($$NOW, $add, $unset stage)[32m 0[2mms[22m[39m
+     [32m✓[39m persists the event AND its chunk with the SAME explicit expiresAt (single write handoff)[32m 1[2mms[22m[39m
+     [32m✓[39m leaves both event and chunk expiry-free when no retention applies[32m 0[2mms[22m[39m
+[31m     [31m×[31m propagates a per-item expiry through the batch write handoff[39m[32m 3[2mms[22m[39m
+
+[31m⎯⎯⎯⎯⎯⎯⎯[39m[1m[41m Failed Tests 1 [49m[22m[31m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[41m[1m FAIL [22m[49m src/mongodb-manager-write-state.test.ts[2m > [22mwriteConversationEvent — TTL expiry propagation onto chunks (C-005)[2m > [22mpropagates a per-item expiry through the batch write handoff
+[31m[1mAssertionError[22m: expected undefined to deeply equal 2026-09-01T00:00:00.000Z[39m
+
+[32m- Expected:[39m
+2026-09-01T00:00:00.000Z
+
+[31m+ Received:[39m
+undefined
+
+[36m [2m❯[22m src/mongodb-manager-write-state.test.ts:[2m523:36[22m[39m
+    [90m521|[39m
+    [90m522|[39m   [34mexpect[39m(expiringEvent[33m?.[39mexpiresAt)[33m.[39m[34mtoEqual[39m(expiring)
+    [90m523|[39m   [34mexpect[39m(expiringChunk[33m?.[39mexpiresAt)[33m.[39m[34mtoEqual[39m(expiring)
+    [90m   |[39m                                    [31m^[39m
+    [90m524|[39m   [34mexpect[39m([32m"expiresAt"[39m [35min[39m (permanentEvent [33m??[39m {}))[33m.[39m[34mtoBe[39m([35mfalse[39m)
+    [90m525|[39m   [34mexpect[39m([32m"expiresAt"[39m [35min[39m (permanentChunk [33m??[39m {}))[33m.[39m[34mtoBe[39m([35mfalse[39m)
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯[22m[39m
+
+
+[2m Test Files [22m [1m[31m1 failed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[31m1 failed[39m[22m[2m | [22m[1m[32m13 passed[39m[22m[90m (14)[39m
+[2m   Start at [22m 17:50:17
+[2m   Duration [22m 1.22s[2m (transform 780ms, setup 0ms, import 1.06s, tests 28ms, environment 0ms)[22m
+

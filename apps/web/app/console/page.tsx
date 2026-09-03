@@ -7,7 +7,7 @@ import { useMemo, useState } from "react"
 const defaultApi =
 	process.env.NEXT_PUBLIC_MEMONGO_API_URL ?? "http://127.0.0.1:3847"
 
-type Tab = "overview" | "search" | "kb" | "profile" | "write"
+type Tab = "overview" | "search" | "kb" | "profile" | "write" | "quarantine"
 
 type OutputState = {
 	title: string
@@ -169,6 +169,13 @@ export default function Home() {
 	const [writeContent, setWriteContent] = useState(
 		"The user prefers concise release notes and Friday deploy windows.",
 	)
+	const [quarantineStatus, setQuarantineStatus] = useState<
+		"" | "pending-review" | "promoted" | "rejected"
+	>("pending-review")
+	const [quarantineLimit, setQuarantineLimit] = useState("20")
+	const [quarantineId, setQuarantineId] = useState("")
+	const [reviewerId, setReviewerId] = useState("")
+	const [reviewNotes, setReviewNotes] = useState("")
 	const [loading, setLoading] = useState(false)
 	const [output, setOutput] = useState<OutputState>({
 		title: "Console output",
@@ -280,12 +287,52 @@ export default function Home() {
 			})
 			return
 		}
+		if (tab === "quarantine") {
+			await listQuarantined()
+			return
+		}
 		await withOutput("Memory write", async () => {
 			return await client.add({
 				agentId,
 				content: writeContent,
 				sessionId: scopeValue,
 			})
+		})
+	}
+
+	async function listQuarantined() {
+		await withOutput("Quarantined memories", async () => {
+			return await client.listQuarantined({
+				agentId,
+				status: quarantineStatus || undefined,
+				limit: Number(quarantineLimit) || undefined,
+			})
+		})
+	}
+
+	async function decideQuarantined(
+		decision: "promote" | "reject",
+	): Promise<void> {
+		const trimmed = quarantineId.trim()
+		if (!trimmed) {
+			setOutput({
+				title: "Quarantine decision",
+				body: "Enter a quarantineId from the list before promoting or rejecting.",
+				state: "error",
+			})
+			return
+		}
+		const title = decision === "promote" ? "Promote receipt" : "Reject receipt"
+		await withOutput(title, async () => {
+			const input = {
+				quarantineId: trimmed,
+				agentId,
+				...(reviewerId.trim() ? { reviewerId: reviewerId.trim() } : {}),
+				...(reviewNotes.trim() ? { reviewNotes: reviewNotes.trim() } : {}),
+			}
+			return decision === "promote"
+				? await client.promoteQuarantined(input)
+				: await client.rejectQuarantined(input)
 		})
 	}
 
@@ -346,8 +393,8 @@ export default function Home() {
 							}}
 						>
 							Operate the supported Memongo API surface: inspect health, search
-							memory, query the knowledge base, synthesize profiles, and write a
-							test event.
+							memory, query the knowledge base, synthesize profiles, write a
+							test event, and review quarantined memories.
 						</p>
 					</div>
 					<div
@@ -483,6 +530,7 @@ export default function Home() {
 									["kb", "KB"],
 									["profile", "Profile"],
 									["write", "Write"],
+									["quarantine", "Quarantine"],
 								] as const
 							).map(([key, label]) => (
 								<button
@@ -520,6 +568,86 @@ export default function Home() {
 									}}
 								/>
 							</Field>
+						)}
+
+						{tab === "quarantine" && (
+							<div style={{ display: "grid", gap: 12, marginBottom: 14 }}>
+								<Field label="Status filter">
+									<select
+										value={quarantineStatus}
+										onChange={(e) =>
+											setQuarantineStatus(
+												e.target.value as
+													| ""
+													| "pending-review"
+													| "promoted"
+													| "rejected",
+											)
+										}
+										style={fieldStyle}
+									>
+										<option value="pending-review">pending-review</option>
+										<option value="promoted">promoted</option>
+										<option value="rejected">rejected</option>
+										<option value="">all statuses</option>
+									</select>
+								</Field>
+								<Field label="List limit (1-100)">
+									<input
+										value={quarantineLimit}
+										onChange={(e) => setQuarantineLimit(e.target.value)}
+										inputMode="numeric"
+										style={fieldStyle}
+									/>
+								</Field>
+								<Field label="Quarantine ID (for promote/reject)">
+									<input
+										value={quarantineId}
+										onChange={(e) => setQuarantineId(e.target.value)}
+										placeholder="q-... from the list output"
+										style={fieldStyle}
+									/>
+								</Field>
+								<Field label="Reviewer ID (optional)">
+									<input
+										value={reviewerId}
+										onChange={(e) => setReviewerId(e.target.value)}
+										style={fieldStyle}
+									/>
+								</Field>
+								<Field label="Review notes (optional)">
+									<textarea
+										value={reviewNotes}
+										onChange={(e) => setReviewNotes(e.target.value)}
+										rows={2}
+										style={{ ...fieldStyle, resize: "vertical" }}
+									/>
+								</Field>
+								<div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+									<button
+										type="button"
+										onClick={() => void decideQuarantined("promote")}
+										disabled={loading}
+										style={{
+											...buttonStyle(),
+											opacity: loading ? 0.65 : 1,
+										}}
+									>
+										Promote
+									</button>
+									<button
+										type="button"
+										onClick={() => void decideQuarantined("reject")}
+										disabled={loading}
+										style={{
+											...buttonStyle(),
+											opacity: loading ? 0.65 : 1,
+										}}
+									>
+										Reject
+									</button>
+								</div>
+							</div>
 						)}
 
 						<div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>

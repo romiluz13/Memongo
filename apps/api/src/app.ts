@@ -390,6 +390,17 @@ const AGENT_GLOBAL_V1_PATHS = new Set([
 const ADMIN_ONLY_V1_PATHS = new Set([
 	"/v1/read-file",
 	"/v1/import/conversations",
+	// C-003: tenant erasure is irreversible; no scoped key (even an
+	// agent-scoped one) may trigger it, only the global admin token.
+	"/v1/admin/erase",
+	// C-004: quarantine review. Listing exposes injection-classified payloads,
+	// and promote/reject overrule the classifier — no agent credential (even
+	// an agent-scoped key) may do either, or the quarantine it enforces is
+	// self-defeating. Human reviewers use the global admin token via the
+	// web console or MCP.
+	"/v1/admin/quarantine",
+	"/v1/admin/quarantine/promote",
+	"/v1/admin/quarantine/reject",
 ])
 
 function isAgentGlobalV1Path(path: string): boolean {
@@ -615,7 +626,9 @@ export function createApp(): Hono {
 					{
 						error: {
 							code: "FORBIDDEN",
-							message: "scoped API key cannot access a server-file route",
+							// Covers every ADMIN_ONLY entry (server-file routes, bulk
+							// import, tenant erasure) rather than just one of them.
+							message: "scoped API key cannot access an admin-only route",
 						},
 					},
 					403,

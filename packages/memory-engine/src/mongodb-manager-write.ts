@@ -17,6 +17,8 @@ import {
 	projectEventChunk,
 	projectEventChunksBatch,
 	IdempotencyConflictError,
+	pruneIdempotencyFingerprints,
+	IDEMPOTENCY_FINGERPRINT_PRUNE_INTERVAL_MS,
 } from "./mongodb-events.js"
 import { computeIdempotencyFingerprint } from "./mongodb-idempotency-fingerprint.js"
 import type { CanonicalEvent } from "./mongodb-events.js"
@@ -332,6 +334,54 @@ export async function writeEventAndProject(
 
 export class MongoDBManagerWriteOps {
 	constructor(private readonly host: MongoDBManagerHost) {}
+
+	/**
+	 * In-process gate for the C-006 prune sweep: at most one prune per hour
+	 * per manager instance, so the worker drain loop (which wakes on every
+	 * write) pays a Date.now() comparison and nothing else. 0 = never run.
+	 */
+	private lastFingerprintPruneAt = 0
+
+	/**
+	 * C-006: retention enforcement for idempotency fingerprint state. $Unsets
+	 * idempotencyKey/idempotencyFingerprint from completed writes older than
+	 * the retention window (default 90 days, MEMONGO_IDEMPOTENCY_RETENTION_DAYS
+	 * override). The memory-job worker sweep calls this on every drain; the
+	 * hourly gate keeps it off the write hot path. `force` bypasses the gate
+	 * for explicit operator/test invocation.
+	 */
+	async pruneIdempotencyFingerprints(params?: {
+		olderThanDays?: number
+		force?: boolean
+	}): Promise<{ pruned: number }> {
+		// The entire method is failure-safe: the worker drain sweep awaits it
+		// inline, so ANY error source (gate read, prune call) must degrade to
+		// a no-op instead of rejecting the drain.
+		try {
+			const now = Date.now()
+			if (
+				!params?.force &&
+				this.lastFingerprintPruneAt !== 0 &&
+				now - this.lastFingerprintPruneAt <
+					IDEMPOTENCY_FINGERPRINT_PRUNE_INTERVAL_MS
+			) {
+				return { pruned: 0 }
+			}
+			this.lastFingerprintPruneAt = now
+			return await pruneIdempotencyFingerprints({
+				db: this.host.db,
+				prefix: this.host.prefix,
+				agentId: this.host.agentId,
+				...(params?.olderThanDays !== undefined
+					? { olderThanDays: params.olderThanDays }
+					: {}),
+			})
+		} catch (err) {
+			// Prune failure must never block the worker drain that invoked it.
+			log.warn("pruneIdempotencyFingerprints failed", { error: err })
+			return { pruned: 0 }
+		}
+	}
 
 	scheduleQueryCacheInvalidation(params: {
 		agentId: string
@@ -663,6 +713,7 @@ export class MongoDBManagerWriteOps {
 					timestamp: written.timestamp,
 					validAt: event.validAt ?? written.timestamp,
 					...(event.invalidAt ? { invalidAt: event.invalidAt } : {}),
+					...(expiresAt ? { expiresAt } : {}),
 					...(event.sessionId ? { sessionId: event.sessionId } : {}),
 					...(event.metadata ? { metadata: event.metadata } : {}),
 				},
@@ -896,6 +947,9 @@ export class MongoDBManagerWriteOps {
 				input: WriteConversationEventInput
 				eventId: string
 				scope: MemoryScope
+				// P4.4.1/C-005: expiry computed once per item so the event
+				// document AND its chunk projection carry the same value.
+				expiresAt?: Date
 			}
 			const pending: PendingItem[] = []
 			// D1/B3: same unified-default identity rule as the single write.
@@ -910,7 +964,14 @@ export class MongoDBManagerWriteOps {
 					sessionId: input.sessionId,
 					defaultScope: writeDefaultScope,
 				})
-				pending.push({ index, input, eventId: randomUUID(), scope })
+				// P4.4.1: same TTL rule as the single write — explicit wins,
+				// session-scope default applies to session writes only.
+				const expiresAt = resolveWriteExpiresAt({
+					explicit: input.expiresAt,
+					sessionId: input.sessionId,
+					ttl: this.host.config.mongodb?.ttl,
+				})
+				pending.push({ index, input, eventId: randomUUID(), scope, expiresAt })
 			}
 
 			// 3. ONE insertMany for the whole batch (unordered: a per-item
@@ -919,41 +980,32 @@ export class MongoDBManagerWriteOps {
 			const writeResults = await writeEventsBatch({
 				db: this.host.db,
 				prefix: this.host.prefix,
-				events: pending.map(({ input, eventId, scope }) => {
-					// P4.4.1: same TTL rule as the single write — explicit wins,
-					// session-scope default applies to session writes only.
-					const expiresAt = resolveWriteExpiresAt({
-						explicit: input.expiresAt,
-						sessionId: input.sessionId,
-						ttl: this.host.config.mongodb?.ttl,
-					})
-					return {
-						eventId,
-						agentId: this.host.agentId,
-						sessionId: input.sessionId,
-						role: input.role,
-						body: input.body,
-						scope,
-						scopeRef: input.scopeRef,
-						timestamp: input.timestamp,
-						validAt: input.validAt,
-						invalidAt: input.invalidAt,
-						metadata: input.metadata,
-						idempotencyKey: input.idempotencyKey,
-						// B4: same per-item fingerprint rule as the single write.
-						...(input.idempotencyKey
-							? {
-									idempotencyFingerprint: computeIdempotencyFingerprint(
-										input,
-										this.host.agentId,
-										writeDefaultScope,
-									),
-								}
-							: {}),
-						extractionJobPendingAt,
-						...(expiresAt ? { expiresAt } : {}),
-					}
-				}),
+				events: pending.map(({ input, eventId, scope, expiresAt }) => ({
+					eventId,
+					agentId: this.host.agentId,
+					sessionId: input.sessionId,
+					role: input.role,
+					body: input.body,
+					scope,
+					scopeRef: input.scopeRef,
+					timestamp: input.timestamp,
+					validAt: input.validAt,
+					invalidAt: input.invalidAt,
+					metadata: input.metadata,
+					idempotencyKey: input.idempotencyKey,
+					// B4: same per-item fingerprint rule as the single write.
+					...(input.idempotencyKey
+						? {
+								idempotencyFingerprint: computeIdempotencyFingerprint(
+									input,
+									this.host.agentId,
+									writeDefaultScope,
+								),
+							}
+						: {}),
+					extractionJobPendingAt,
+					...(expiresAt ? { expiresAt } : {}),
+				})),
 			})
 			const written: Array<
 				PendingItem & { timestamp: Date; scopeRef: string }
@@ -1025,6 +1077,9 @@ export class MongoDBManagerWriteOps {
 						...(item.input.invalidAt
 							? { invalidAt: item.input.invalidAt }
 							: {}),
+						// C-005: expiry computed at pending time — identical to
+						// the value persisted on the event document.
+						...(item.expiresAt ? { expiresAt: item.expiresAt } : {}),
 						...(item.input.sessionId
 							? { sessionId: item.input.sessionId }
 							: {}),

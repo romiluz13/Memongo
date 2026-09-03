@@ -100,7 +100,8 @@ const EXPECTED_COLLECTION_SUFFIXES = [
 // P3.8: −3 retired redundant indexes (idx_chunks_path, idx_structured_agentid,
 // idx_relations_agent_scope_scoperef), +3 ESR compounds, +1 relationId locator.
 // P4.4.1 added two partial TTL indexes (events and structured_mem).
-const EXPECTED_STANDARD_INDEX_COUNT = 95
+// C-005 added the chunks expiry partial TTL index (idx_chunks_ttl_expires_at).
+const EXPECTED_STANDARD_INDEX_COUNT = 96
 
 let client: MongoClient
 let db: Db

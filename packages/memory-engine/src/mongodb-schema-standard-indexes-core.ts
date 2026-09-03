@@ -55,6 +55,20 @@ export async function ensureCoreStandardIndexes(
 	applied++
 	await chunks.createIndex({ updatedAt: -1 }, { name: "idx_chunks_updated" })
 	applied++
+	// C-005: optional per-document chunk TTL — mirrors idx_events_ttl_expires_at:
+	// expireAfterSeconds: 0 on an absolute expiresAt propagated from the source
+	// event at projection time; partial so non-expiring chunks stay out of the
+	// index. Read paths hide expired chunks immediately (buildUnexpiredClause in
+	// buildConversationChunkFilter) because the sweep lags ~60s.
+	await chunks.createIndex(
+		{ expiresAt: 1 },
+		{
+			name: "idx_chunks_ttl_expires_at",
+			expireAfterSeconds: 0,
+			partialFilterExpression: { expiresAt: { $exists: true } },
+		},
+	)
+	applied++
 	// Keep a BSON $text index as a defensive last-resort fallback if Search is unavailable.
 	// Only one $text index is allowed per collection.
 	if (textFallbackIndexes) {

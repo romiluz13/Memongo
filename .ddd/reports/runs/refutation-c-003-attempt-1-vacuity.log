@@ -1,0 +1,542 @@
+what: Vacuity mutations against the tenant-erasure defenses
+run: Four source mutations, each followed by focused failure and restored green control
+date: 2026-09-03T12:38:55Z
+baseline_sha256=aa667a2eabf28c6f8f348ab2f445aa2a40ec3e3e061aec324fab406a037fe8b5
+===== mutation=collections =====
+mutated_sha256=f3e92261c0234cbf0c5a4499b11d7d5506fa1dd195a231153bce80668c47b930
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/packages/memory-engine[39m
+
+[90mstdout[2m | src/mongodb-tenant-erasure.test.ts[2m > [22m[2mdeleteAllForAgent — full tenant sweep (C-003)[2m > [22m[2mdeletes the agent's documents from every tenant collection
+[22m[39m15:38:58.521 [memory:mongodb:erasure] info: tenant erasure complete {"agentId":"agent-1","collections":26}
+
+[90mstdout[2m | src/mongodb-tenant-erasure.test.ts[2m > [22m[2mdeleteAllForAgent — full tenant sweep (C-003)[2m > [22m[2mwrites a critical audit record that survives the memory_mutations erase
+[22m[39m15:38:58.536 [memory:mongodb:erasure] info: tenant erasure complete {"agentId":"agent-1","collections":26}
+
+[90mstderr[2m | src/mongodb-tenant-erasure.test.ts[2m > [22m[2mdeleteAllForAgent — full tenant sweep (C-003)[2m > [22m[2mreports per-collection failures instead of aborting the sweep
+[22m[39m15:38:58.537 [memory:mongodb:erasure] warn: tenant erasure completed with failures {"agentId":"agent-1","failed":["chunks"]}
+
+[90mstdout[2m | src/mongodb-tenant-erasure.test.ts[2m > [22m[2mdeleteAllForAgent — full tenant sweep (C-003)[2m > [22m[2merases an agent with no data without touching other tenants
+[22m[39m15:38:58.538 [memory:mongodb:erasure] info: tenant erasure complete {"agentId":"agent-1","collections":26}
+
+[90mstdout[2m | src/mongodb-tenant-erasure.test.ts[2m > [22m[2mMongoDBMemoryManager.deleteAllForAgent — facade wiring (C-003)[2m > [22m[2mdelegates through AdminOps to the seam against the stateful fake
+[22m[39m15:38:58.539 [memory:mongodb:erasure] info: tenant erasure complete {"agentId":"agent-1","collections":26}
+
+ [31m❯[39m src/mongodb-tenant-erasure.test.ts [2m([22m[2m5 tests[22m[2m | [22m[31m3 failed[39m[2m)[22m[32m 29[2mms[22m[39m
+[31m     [31m×[31m deletes the agent's documents from every tenant collection[39m[32m 24[2mms[22m[39m
+[31m     [31m×[31m writes a critical audit record that survives the memory_mutations erase[39m[32m 1[2mms[22m[39m
+     [32m✓[39m reports per-collection failures instead of aborting the sweep[32m 1[2mms[22m[39m
+     [32m✓[39m erases an agent with no data without touching other tenants[32m 1[2mms[22m[39m
+[31m     [31m×[31m delegates through AdminOps to the seam against the stateful fake[39m[32m 1[2mms[22m[39m
+
+[31m⎯⎯⎯⎯⎯⎯⎯[39m[1m[41m Failed Tests 3 [49m[22m[31m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[41m[1m FAIL [22m[49m src/mongodb-tenant-erasure.test.ts[2m > [22mdeleteAllForAgent — full tenant sweep (C-003)[2m > [22mdeletes the agent's documents from every tenant collection
+[31m[1mAssertionError[22m: expected [ 'chunks', …(25) ] to deeply equal ArrayContaining{…}[39m
+
+[32m- Expected[39m
+[31m+ Received[39m
+
+[32m- ArrayContaining [[39m
+[32m-   "events",[39m
+[31m+ [[39m
+[2m    "chunks",[22m
+[32m-   "structured_mem",[39m
+[32m-   "structured_mem_revisions",[39m
+[32m-   "procedures",[39m
+[32m-   "procedure_revisions",[39m
+[32m-   "knowledge_base",[39m
+[32m-   "kb_chunks",[39m
+[31m+   "consolidation_runs",[39m
+[2m    "entities",[22m
+[32m-   "relations",[39m
+[2m    "entity_links",[22m
+[2m    "episodes",[22m
+[32m-   "query_cache",[39m
+[32m-   "memory_quarantine",[39m
+[32m-   "memory_evidence",[39m
+[31m+   "events",[39m
+[2m    "files",[22m
+[32m-   "relevance_runs",[39m
+[32m-   "relevance_regressions",[39m
+[32m-   "memory_mutations",[39m
+[2m    "ingest_runs",[22m
+[31m+   "kb_chunks",[39m
+[31m+   "knowledge_base",[39m
+[31m+   "lane_coverage",[39m
+[31m+   "memory_evidence",[39m
+[31m+   "memory_jobs",[39m
+[31m+   "memory_quarantine",[39m
+[31m+   "memory_telemetry",[39m
+[31m+   "procedure_revisions",[39m
+[31m+   "procedures",[39m
+[2m    "projection_runs",[22m
+[31m+   "query_cache",[39m
+[2m    "recall_traces",[22m
+[32m-   "memory_jobs",[39m
+[32m-   "lane_coverage",[39m
+[32m-   "consolidation_runs",[39m
+[31m+   "relations",[39m
+[31m+   "relevance_regressions",[39m
+[31m+   "relevance_runs",[39m
+[2m    "session_chunks",[22m
+[32m-   "memory_telemetry",[39m
+[32m-   "access_events",[39m
+[32m-   "relevance_artifacts",[39m
+[31m+   "structured_mem",[39m
+[31m+   "structured_mem_revisions",[39m
+[2m  ][22m
+
+[36m [2m❯[22m src/mongodb-tenant-erasure.test.ts:[2m131:42[22m[39m
+    [90m129|[39m   [34mexpect[39m(receipt[33m.[39mstatus)[33m.[39m[34mtoBe[39m([32m"complete"[39m)
+    [90m130|[39m   [90m// 26 direct + 2 meta-keyed + relevance_artifacts (two-phase).[39m
+    [90m131|[39m   [34mexpect[39m([34merasedCollectionNames[39m(receipt))[33m.[39m[34mtoEqual[39m(
+    [90m   |[39m                                          [31m^[39m
+    [90m132|[39m    expect[33m.[39m[34marrayContaining[39m([
+    [90m133|[39m     [33m...[39m[33mAGENT_KEYED[39m[33m,[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/3]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/mongodb-tenant-erasure.test.ts[2m > [22mdeleteAllForAgent — full tenant sweep (C-003)[2m > [22mwrites a critical audit record that survives the memory_mutations erase
+[31m[1mAssertionError[22m: expected 3 to be 1 // Object.is equality[39m
+
+[32m- Expected[39m
+[31m+ Received[39m
+
+[32m- 1[39m
+[31m+ 3[39m
+
+[36m [2m❯[22m src/mongodb-tenant-erasure.test.ts:[2m200:28[22m[39m
+    [90m198|[39m   [35mconst[39m mutations [33m=[39m fake[33m.[39m[34mall[39m([32m"memory_mutations"[39m)
+    [90m199|[39m   // The agent's prior history is gone; exactly the erasure audit rema…
+    [90m200|[39m   [34mexpect[39m(mutations[33m.[39mlength)[33m.[39m[34mtoBe[39m([34m1[39m)
+    [90m   |[39m                            [31m^[39m
+    [90m201|[39m   [35mconst[39m audit [33m=[39m mutations[[34m0[39m]
+    [90m202|[39m   [34mexpect[39m(audit[33m.[39mmutationId)[33m.[39m[34mtoBe[39m(receipt[33m.[39mmutationId)
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/3]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/mongodb-tenant-erasure.test.ts[2m > [22mMongoDBMemoryManager.deleteAllForAgent — facade wiring (C-003)[2m > [22mdelegates through AdminOps to the seam against the stateful fake
+[31m[1mAssertionError[22m: expected { runId: 'run-agent-1', …(2) } to be null // Object.is equality[39m
+
+[32m- Expected:[39m
+null
+
+[31m+ Received:[39m
+{
+  "_id": "000000000000000000000001",
+  "kind": "raw-explain",
+  "runId": "run-agent-1",
+}
+
+[36m [2m❯[22m src/mongodb-tenant-erasure.test.ts:[2m283:73[22m[39m
+    [90m281|[39m   [34mexpect[39m(receipt[33m.[39magentId)[33m.[39m[34mtoBe[39m([33mAGENT[39m)
+    [90m282|[39m   [34mexpect[39m(fake[33m.[39m[34mfindDoc[39m([32m"events"[39m[33m,[39m { agentId[33m:[39m [33mAGENT[39m }))[33m.[39m[34mtoBe[39m([35mnull[39m)
+    [90m283|[39m   expect(fake.findDoc("relevance_artifacts", { runId: "run-agent-1" })…
+    [90m   |[39m                                                                         [31m^[39m
+    [90m284|[39m    [35mnull[39m[33m,[39m
+    [90m285|[39m   )
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/3]⎯[22m[39m
+
+
+[2m Test Files [22m [1m[31m1 failed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[31m3 failed[39m[22m[2m | [22m[1m[32m2 passed[39m[22m[90m (5)[39m
+[2m   Start at [22m 15:38:57
+[2m   Duration [22m 1.54s[2m (transform 1.10s, setup 0ms, import 1.40s, tests 29ms, environment 0ms)[22m
+
+mutation_test_exit=1 (expected nonzero due to real assertion failures)
+restored_sha256=aa667a2eabf28c6f8f348ab2f445aa2a40ec3e3e061aec324fab406a037fe8b5 cmp_exit=0
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/packages/memory-engine[39m
+
+[90mstdout[2m | src/mongodb-tenant-erasure.test.ts[2m > [22m[2mdeleteAllForAgent — full tenant sweep (C-003)[2m > [22m[2mdeletes the agent's documents from every tenant collection
+[22m[39m15:39:00.543 [memory:mongodb:erasure] info: tenant erasure complete {"agentId":"agent-1","collections":29}
+
+[90mstdout[2m | src/mongodb-tenant-erasure.test.ts[2m > [22m[2mdeleteAllForAgent — full tenant sweep (C-003)[2m > [22m[2mwrites a critical audit record that survives the memory_mutations erase
+[22m[39m15:39:00.549 [memory:mongodb:erasure] info: tenant erasure complete {"agentId":"agent-1","collections":29}
+
+[90mstderr[2m | src/mongodb-tenant-erasure.test.ts[2m > [22m[2mdeleteAllForAgent — full tenant sweep (C-003)[2m > [22m[2mreports per-collection failures instead of aborting the sweep
+[22m[39m15:39:00.551 [memory:mongodb:erasure] warn: tenant erasure completed with failures {"agentId":"agent-1","failed":["chunks"]}
+
+[90mstdout[2m | src/mongodb-tenant-erasure.test.ts[2m > [22m[2mdeleteAllForAgent — full tenant sweep (C-003)[2m > [22m[2merases an agent with no data without touching other tenants
+[22m[39m15:39:00.551 [memory:mongodb:erasure] info: tenant erasure complete {"agentId":"agent-1","collections":28}
+
+[90mstdout[2m | src/mongodb-tenant-erasure.test.ts[2m > [22m[2mMongoDBMemoryManager.deleteAllForAgent — facade wiring (C-003)[2m > [22m[2mdelegates through AdminOps to the seam against the stateful fake
+[22m[39m15:39:00.553 [memory:mongodb:erasure] info: tenant erasure complete {"agentId":"agent-1","collections":29}
+
+ [32m✓[39m src/mongodb-tenant-erasure.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 21[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m1 passed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[32m5 passed[39m[22m[90m (5)[39m
+[2m   Start at [22m 15:38:59
+[2m   Duration [22m 1.11s[2m (transform 728ms, setup 0ms, import 963ms, tests 21ms, environment 0ms)[22m
+
+control_test_exit=0 (expected 0)
+PROTOCOL_CAUGHT mutation=collections
+===== mutation=audit =====
+mutated_sha256=bc7872f49d98936aa0f99c86a86ad586c341d0ce6843a6d4245957ac167f5b15
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/packages/memory-engine[39m
+
+[90mstdout[2m | src/mongodb-tenant-erasure.test.ts[2m > [22m[2mdeleteAllForAgent — full tenant sweep (C-003)[2m > [22m[2mdeletes the agent's documents from every tenant collection
+[22m[39m15:39:02.534 [memory:mongodb:erasure] info: tenant erasure complete {"agentId":"agent-1","collections":29}
+
+[90mstdout[2m | src/mongodb-tenant-erasure.test.ts[2m > [22m[2mdeleteAllForAgent — full tenant sweep (C-003)[2m > [22m[2mwrites a critical audit record that survives the memory_mutations erase
+[22m[39m15:39:02.546 [memory:mongodb:erasure] info: tenant erasure complete {"agentId":"agent-1","collections":29}
+
+[90mstderr[2m | src/mongodb-tenant-erasure.test.ts[2m > [22m[2mdeleteAllForAgent — full tenant sweep (C-003)[2m > [22m[2mreports per-collection failures instead of aborting the sweep
+[22m[39m15:39:02.547 [memory:mongodb:erasure] warn: tenant erasure completed with failures {"agentId":"agent-1","failed":["chunks"]}
+
+[90mstdout[2m | src/mongodb-tenant-erasure.test.ts[2m > [22m[2mdeleteAllForAgent — full tenant sweep (C-003)[2m > [22m[2merases an agent with no data without touching other tenants
+[22m[39m15:39:02.552 [memory:mongodb:erasure] info: tenant erasure complete {"agentId":"agent-1","collections":28}
+
+[90mstdout[2m | src/mongodb-tenant-erasure.test.ts[2m > [22m[2mMongoDBMemoryManager.deleteAllForAgent — facade wiring (C-003)[2m > [22m[2mdelegates through AdminOps to the seam against the stateful fake
+[22m[39m15:39:02.555 [memory:mongodb:erasure] info: tenant erasure complete {"agentId":"agent-1","collections":29}
+
+ [31m❯[39m src/mongodb-tenant-erasure.test.ts [2m([22m[2m5 tests[22m[2m | [22m[31m3 failed[39m[2m)[22m[32m 37[2mms[22m[39m
+[31m     [31m×[31m deletes the agent's documents from every tenant collection[39m[32m 25[2mms[22m[39m
+[31m     [31m×[31m writes a critical audit record that survives the memory_mutations erase[39m[32m 1[2mms[22m[39m
+[31m     [31m×[31m reports per-collection failures instead of aborting the sweep[39m[32m 5[2mms[22m[39m
+     [32m✓[39m erases an agent with no data without touching other tenants[32m 2[2mms[22m[39m
+     [32m✓[39m delegates through AdminOps to the seam against the stateful fake[32m 2[2mms[22m[39m
+
+[31m⎯⎯⎯⎯⎯⎯⎯[39m[1m[41m Failed Tests 3 [49m[22m[31m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[41m[1m FAIL [22m[49m src/mongodb-tenant-erasure.test.ts[2m > [22mdeleteAllForAgent — full tenant sweep (C-003)[2m > [22mdeletes the agent's documents from every tenant collection
+[31m[1mAssertionError[22m: expected +0 to be 1 // Object.is equality[39m
+
+[32m- Expected[39m
+[31m+ Received[39m
+
+[32m- 1[39m
+[31m+ 0[39m
+
+[36m [2m❯[22m src/mongodb-tenant-erasure.test.ts:[2m156:28[22m[39m
+    [90m154|[39m   [90m// memory_mutations holds exactly the surviving erasure audit record.[39m
+    [90m155|[39m   [35mconst[39m mutations [33m=[39m fake[33m.[39m[34mall[39m([32m"memory_mutations"[39m)
+    [90m156|[39m   [34mexpect[39m(mutations[33m.[39mlength)[33m.[39m[34mtoBe[39m([34m1[39m)
+    [90m   |[39m                            [31m^[39m
+    [90m157|[39m   [34mexpect[39m(mutations[[34m0[39m][33m.[39magentId)[33m.[39m[34mtoBe[39m([33mAGENT[39m)
+    [90m158|[39m   [34mexpect[39m(mutations[[34m0[39m][33m.[39mseverity)[33m.[39m[34mtoBe[39m([32m"critical"[39m)
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/3]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/mongodb-tenant-erasure.test.ts[2m > [22mdeleteAllForAgent — full tenant sweep (C-003)[2m > [22mwrites a critical audit record that survives the memory_mutations erase
+[31m[1mAssertionError[22m: expected +0 to be 1 // Object.is equality[39m
+
+[32m- Expected[39m
+[31m+ Received[39m
+
+[32m- 1[39m
+[31m+ 0[39m
+
+[36m [2m❯[22m src/mongodb-tenant-erasure.test.ts:[2m200:28[22m[39m
+    [90m198|[39m   [35mconst[39m mutations [33m=[39m fake[33m.[39m[34mall[39m([32m"memory_mutations"[39m)
+    [90m199|[39m   // The agent's prior history is gone; exactly the erasure audit rema…
+    [90m200|[39m   [34mexpect[39m(mutations[33m.[39mlength)[33m.[39m[34mtoBe[39m([34m1[39m)
+    [90m   |[39m                            [31m^[39m
+    [90m201|[39m   [35mconst[39m audit [33m=[39m mutations[[34m0[39m]
+    [90m202|[39m   [34mexpect[39m(audit[33m.[39mmutationId)[33m.[39m[34mtoBe[39m(receipt[33m.[39mmutationId)
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/3]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/mongodb-tenant-erasure.test.ts[2m > [22mdeleteAllForAgent — full tenant sweep (C-003)[2m > [22mreports per-collection failures instead of aborting the sweep
+[31m[1mAssertionError[22m: expected undefined to match object { status: 'partial', …(1) }[39m
+
+[32m- Expected:[39m
+{
+  "failedCollections": [
+    "chunks",
+  ],
+  "status": "partial",
+}
+
+[31m+ Received:[39m
+undefined
+
+[36m [2m❯[22m src/mongodb-tenant-erasure.test.ts:[2m247:23[22m[39m
+    [90m245|[39m    [32m"meta.kind"[39m[33m:[39m [32m"tenant-erasure"[39m[33m,[39m
+    [90m246|[39m   })
+    [90m247|[39m   [34mexpect[39m(audit[33m?.[39mmeta)[33m.[39m[34mtoMatchObject[39m({
+    [90m   |[39m                       [31m^[39m
+    [90m248|[39m    status[33m:[39m [32m"partial"[39m[33m,[39m
+    [90m249|[39m    failedCollections[33m:[39m [[32m"chunks"[39m][33m,[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/3]⎯[22m[39m
+
+
+[2m Test Files [22m [1m[31m1 failed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[31m3 failed[39m[22m[2m | [22m[1m[32m2 passed[39m[22m[90m (5)[39m
+[2m   Start at [22m 15:39:00
+[2m   Duration [22m 1.63s[2m (transform 1.08s, setup 0ms, import 1.43s, tests 37ms, environment 0ms)[22m
+
+mutation_test_exit=1 (expected nonzero due to real assertion failures)
+restored_sha256=aa667a2eabf28c6f8f348ab2f445aa2a40ec3e3e061aec324fab406a037fe8b5 cmp_exit=0
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/packages/memory-engine[39m
+
+[90mstdout[2m | src/mongodb-tenant-erasure.test.ts[2m > [22m[2mdeleteAllForAgent — full tenant sweep (C-003)[2m > [22m[2mdeletes the agent's documents from every tenant collection
+[22m[39m15:39:05.356 [memory:mongodb:erasure] info: tenant erasure complete {"agentId":"agent-1","collections":29}
+
+[90mstdout[2m | src/mongodb-tenant-erasure.test.ts[2m > [22m[2mdeleteAllForAgent — full tenant sweep (C-003)[2m > [22m[2mwrites a critical audit record that survives the memory_mutations erase
+[22m[39m15:39:05.363 [memory:mongodb:erasure] info: tenant erasure complete {"agentId":"agent-1","collections":29}
+
+[90mstderr[2m | src/mongodb-tenant-erasure.test.ts[2m > [22m[2mdeleteAllForAgent — full tenant sweep (C-003)[2m > [22m[2mreports per-collection failures instead of aborting the sweep
+[22m[39m15:39:05.364 [memory:mongodb:erasure] warn: tenant erasure completed with failures {"agentId":"agent-1","failed":["chunks"]}
+
+[90mstdout[2m | src/mongodb-tenant-erasure.test.ts[2m > [22m[2mdeleteAllForAgent — full tenant sweep (C-003)[2m > [22m[2merases an agent with no data without touching other tenants
+[22m[39m15:39:05.364 [memory:mongodb:erasure] info: tenant erasure complete {"agentId":"agent-1","collections":28}
+
+[90mstdout[2m | src/mongodb-tenant-erasure.test.ts[2m > [22m[2mMongoDBMemoryManager.deleteAllForAgent — facade wiring (C-003)[2m > [22m[2mdelegates through AdminOps to the seam against the stateful fake
+[22m[39m15:39:05.367 [memory:mongodb:erasure] info: tenant erasure complete {"agentId":"agent-1","collections":29}
+
+ [32m✓[39m src/mongodb-tenant-erasure.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 27[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m1 passed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[32m5 passed[39m[22m[90m (5)[39m
+[2m   Start at [22m 15:39:02
+[2m   Duration [22m 2.50s[2m (transform 1.59s, setup 0ms, import 2.24s, tests 27ms, environment 0ms)[22m
+
+control_test_exit=0 (expected 0)
+PROTOCOL_CAUGHT mutation=audit
+===== mutation=receipts =====
+mutated_sha256=33cfcdf89a82d6915cab720d0d0f5c7cae4d5333f11bf76a7e8443f6d86977c5
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/packages/memory-engine[39m
+
+[90mstdout[2m | src/mongodb-tenant-erasure.test.ts[2m > [22m[2mdeleteAllForAgent — full tenant sweep (C-003)[2m > [22m[2mdeletes the agent's documents from every tenant collection
+[22m[39m15:39:07.133 [memory:mongodb:erasure] info: tenant erasure complete {"agentId":"agent-1","collections":29}
+
+[90mstdout[2m | src/mongodb-tenant-erasure.test.ts[2m > [22m[2mdeleteAllForAgent — full tenant sweep (C-003)[2m > [22m[2mwrites a critical audit record that survives the memory_mutations erase
+[22m[39m15:39:07.148 [memory:mongodb:erasure] info: tenant erasure complete {"agentId":"agent-1","collections":29}
+
+[90mstdout[2m | src/mongodb-tenant-erasure.test.ts[2m > [22m[2mdeleteAllForAgent — full tenant sweep (C-003)[2m > [22m[2mreports per-collection failures instead of aborting the sweep
+[22m[39m15:39:07.165 [memory:mongodb:erasure] info: tenant erasure complete {"agentId":"agent-1","collections":29}
+
+[90mstdout[2m | src/mongodb-tenant-erasure.test.ts[2m > [22m[2mdeleteAllForAgent — full tenant sweep (C-003)[2m > [22m[2merases an agent with no data without touching other tenants
+[22m[39m15:39:07.168 [memory:mongodb:erasure] info: tenant erasure complete {"agentId":"agent-1","collections":28}
+
+[90mstdout[2m | src/mongodb-tenant-erasure.test.ts[2m > [22m[2mMongoDBMemoryManager.deleteAllForAgent — facade wiring (C-003)[2m > [22m[2mdelegates through AdminOps to the seam against the stateful fake
+[22m[39m15:39:07.172 [memory:mongodb:erasure] info: tenant erasure complete {"agentId":"agent-1","collections":29}
+
+ [31m❯[39m src/mongodb-tenant-erasure.test.ts [2m([22m[2m5 tests[22m[2m | [22m[31m2 failed[39m[2m)[22m[32m 64[2mms[22m[39m
+     [32m✓[39m deletes the agent's documents from every tenant collection[32m 36[2mms[22m[39m
+[31m     [31m×[31m writes a critical audit record that survives the memory_mutations erase[39m[32m 16[2mms[22m[39m
+[31m     [31m×[31m reports per-collection failures instead of aborting the sweep[39m[32m 4[2mms[22m[39m
+     [32m✓[39m erases an agent with no data without touching other tenants[32m 2[2mms[22m[39m
+     [32m✓[39m delegates through AdminOps to the seam against the stateful fake[32m 3[2mms[22m[39m
+
+[31m⎯⎯⎯⎯⎯⎯⎯[39m[1m[41m Failed Tests 2 [49m[22m[31m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[41m[1m FAIL [22m[49m src/mongodb-tenant-erasure.test.ts[2m > [22mdeleteAllForAgent — full tenant sweep (C-003)[2m > [22mwrites a critical audit record that survives the memory_mutations erase
+[31m[1mAssertionError[22m: expected { kind: 'tenant-erasure', …(5) } to match object { kind: 'tenant-erasure', …(4) }
+(1 matching property omitted from actual)[39m
+
+[32m- Expected[39m
+[31m+ Received[39m
+
+[2m  {[22m
+[2m    "collections": 29,[22m
+[32m-   "deletedTotal": 30,[39m
+[31m+   "deletedTotal": 0,[39m
+[2m    "failedCollections": [],[22m
+[2m    "kind": "tenant-erasure",[22m
+[2m    "status": "complete",[22m
+[2m  }[22m
+
+[36m [2m❯[22m src/mongodb-tenant-erasure.test.ts:[2m207:22[22m[39m
+    [90m205|[39m   [34mexpect[39m(audit[33m.[39mdocumentId)[33m.[39m[34mtoBe[39m([33mAGENT[39m)
+    [90m206|[39m   [34mexpect[39m(audit[33m.[39magentId)[33m.[39m[34mtoBe[39m([33mAGENT[39m)
+    [90m207|[39m   [34mexpect[39m(audit[33m.[39mmeta)[33m.[39m[34mtoMatchObject[39m({
+    [90m   |[39m                      [31m^[39m
+    [90m208|[39m    kind[33m:[39m [32m"tenant-erasure"[39m[33m,[39m
+    [90m209|[39m    status[33m:[39m [32m"complete"[39m[33m,[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/2]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/mongodb-tenant-erasure.test.ts[2m > [22mdeleteAllForAgent — full tenant sweep (C-003)[2m > [22mreports per-collection failures instead of aborting the sweep
+[31m[1mAssertionError[22m: expected 'complete' to be 'partial' // Object.is equality[39m
+
+Expected: [32m"partial"[39m
+Received: [31m"complete"[39m
+
+[36m [2m❯[22m src/mongodb-tenant-erasure.test.ts:[2m232:26[22m[39m
+    [90m230|[39m   })
+    [90m231|[39m
+    [90m232|[39m   [34mexpect[39m(receipt[33m.[39mstatus)[33m.[39m[34mtoBe[39m([32m"partial"[39m)
+    [90m   |[39m                          [31m^[39m
+    [90m233|[39m   [35mconst[39m chunksReceipt [33m=[39m receipt[33m.[39mreceipts[33m.[39m[34mfind[39m(
+    [90m234|[39m    (entry) [33m=>[39m entry[33m.[39mcollection [33m===[39m [32m"chunks"[39m[33m,[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/2]⎯[22m[39m
+
+
+[2m Test Files [22m [1m[31m1 failed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[31m2 failed[39m[22m[2m | [22m[1m[32m3 passed[39m[22m[90m (5)[39m
+[2m   Start at [22m 15:39:05
+[2m   Duration [22m 1.44s[2m (transform 928ms, setup 0ms, import 1.21s, tests 64ms, environment 0ms)[22m
+
+mutation_test_exit=1 (expected nonzero due to real assertion failures)
+restored_sha256=aa667a2eabf28c6f8f348ab2f445aa2a40ec3e3e061aec324fab406a037fe8b5 cmp_exit=0
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/packages/memory-engine[39m
+
+[90mstdout[2m | src/mongodb-tenant-erasure.test.ts[2m > [22m[2mdeleteAllForAgent — full tenant sweep (C-003)[2m > [22m[2mdeletes the agent's documents from every tenant collection
+[22m[39m15:39:08.616 [memory:mongodb:erasure] info: tenant erasure complete {"agentId":"agent-1","collections":29}
+
+[90mstdout[2m | src/mongodb-tenant-erasure.test.ts[2m > [22m[2mdeleteAllForAgent — full tenant sweep (C-003)[2m > [22m[2mwrites a critical audit record that survives the memory_mutations erase
+[22m[39m15:39:08.620 [memory:mongodb:erasure] info: tenant erasure complete {"agentId":"agent-1","collections":29}
+
+[90mstderr[2m | src/mongodb-tenant-erasure.test.ts[2m > [22m[2mdeleteAllForAgent — full tenant sweep (C-003)[2m > [22m[2mreports per-collection failures instead of aborting the sweep
+[22m[39m15:39:08.621 [memory:mongodb:erasure] warn: tenant erasure completed with failures {"agentId":"agent-1","failed":["chunks"]}
+
+[90mstdout[2m | src/mongodb-tenant-erasure.test.ts[2m > [22m[2mdeleteAllForAgent — full tenant sweep (C-003)[2m > [22m[2merases an agent with no data without touching other tenants
+[22m[39m15:39:08.621 [memory:mongodb:erasure] info: tenant erasure complete {"agentId":"agent-1","collections":28}
+
+[90mstdout[2m | src/mongodb-tenant-erasure.test.ts[2m > [22m[2mMongoDBMemoryManager.deleteAllForAgent — facade wiring (C-003)[2m > [22m[2mdelegates through AdminOps to the seam against the stateful fake
+[22m[39m15:39:08.622 [memory:mongodb:erasure] info: tenant erasure complete {"agentId":"agent-1","collections":29}
+
+ [32m✓[39m src/mongodb-tenant-erasure.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 16[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m1 passed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[32m5 passed[39m[22m[90m (5)[39m
+[2m   Start at [22m 15:39:07
+[2m   Duration [22m 1.06s[2m (transform 709ms, setup 0ms, import 933ms, tests 16ms, environment 0ms)[22m
+
+control_test_exit=0 (expected 0)
+PROTOCOL_CAUGHT mutation=receipts
+===== mutation=join =====
+mutated_sha256=af81eace3ac11da2997699b53b8288058082031c4bfdf49d7b211a073a6331e1
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/packages/memory-engine[39m
+
+[90mstdout[2m | src/mongodb-tenant-erasure.test.ts[2m > [22m[2mdeleteAllForAgent — full tenant sweep (C-003)[2m > [22m[2mdeletes the agent's documents from every tenant collection
+[22m[39m15:39:10.150 [memory:mongodb:erasure] info: tenant erasure complete {"agentId":"agent-1","collections":29}
+
+[90mstdout[2m | src/mongodb-tenant-erasure.test.ts[2m > [22m[2mdeleteAllForAgent — full tenant sweep (C-003)[2m > [22m[2mwrites a critical audit record that survives the memory_mutations erase
+[22m[39m15:39:10.160 [memory:mongodb:erasure] info: tenant erasure complete {"agentId":"agent-1","collections":29}
+
+[90mstderr[2m | src/mongodb-tenant-erasure.test.ts[2m > [22m[2mdeleteAllForAgent — full tenant sweep (C-003)[2m > [22m[2mreports per-collection failures instead of aborting the sweep
+[22m[39m15:39:10.163 [memory:mongodb:erasure] warn: tenant erasure completed with failures {"agentId":"agent-1","failed":["chunks"]}
+
+[90mstdout[2m | src/mongodb-tenant-erasure.test.ts[2m > [22m[2mdeleteAllForAgent — full tenant sweep (C-003)[2m > [22m[2merases an agent with no data without touching other tenants
+[22m[39m15:39:10.164 [memory:mongodb:erasure] info: tenant erasure complete {"agentId":"agent-1","collections":28}
+
+[90mstdout[2m | src/mongodb-tenant-erasure.test.ts[2m > [22m[2mMongoDBMemoryManager.deleteAllForAgent — facade wiring (C-003)[2m > [22m[2mdelegates through AdminOps to the seam against the stateful fake
+[22m[39m15:39:10.164 [memory:mongodb:erasure] info: tenant erasure complete {"agentId":"agent-1","collections":29}
+
+ [31m❯[39m src/mongodb-tenant-erasure.test.ts [2m([22m[2m5 tests[22m[2m | [22m[31m3 failed[39m[2m)[22m[32m 25[2mms[22m[39m
+[31m     [31m×[31m deletes the agent's documents from every tenant collection[39m[32m 19[2mms[22m[39m
+[31m     [31m×[31m writes a critical audit record that survives the memory_mutations erase[39m[32m 2[2mms[22m[39m
+     [32m✓[39m reports per-collection failures instead of aborting the sweep[32m 1[2mms[22m[39m
+     [32m✓[39m erases an agent with no data without touching other tenants[32m 1[2mms[22m[39m
+[31m     [31m×[31m delegates through AdminOps to the seam against the stateful fake[39m[32m 1[2mms[22m[39m
+
+[31m⎯⎯⎯⎯⎯⎯⎯[39m[1m[41m Failed Tests 3 [49m[22m[31m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[41m[1m FAIL [22m[49m src/mongodb-tenant-erasure.test.ts[2m > [22mdeleteAllForAgent — full tenant sweep (C-003)[2m > [22mdeletes the agent's documents from every tenant collection
+[31m[1mAssertionError[22m: expected [ 'run-agent-1', 'run-agent-2' ] to deeply equal [ 'run-agent-2' ][39m
+
+[32m- Expected[39m
+[31m+ Received[39m
+
+[2m  [[22m
+[31m+   "run-agent-1",[39m
+[2m    "run-agent-2",[22m
+[2m  ][22m
+
+[36m [2m❯[22m src/mongodb-tenant-erasure.test.ts:[2m170:45[22m[39m
+    [90m168|[39m   [90m// Two-phase join: agent-1's artifact is gone, agent-2's survives.[39m
+    [90m169|[39m   [35mconst[39m artifacts [33m=[39m fake[33m.[39m[34mall[39m([32m"relevance_artifacts"[39m)
+    [90m170|[39m   [34mexpect[39m(artifacts[33m.[39m[34mmap[39m((doc) [33m=>[39m doc[33m.[39mrunId))[33m.[39m[34mtoEqual[39m([[32m"run-agent-2"[39m])
+    [90m   |[39m                                             [31m^[39m
+    [90m171|[39m   [90m// Other tenants survive everywhere they were seeded.[39m
+    [90m172|[39m   [34mexpect[39m(fake[33m.[39m[34mall[39m([32m"events"[39m)[33m.[39m[34mmap[39m((doc) [33m=>[39m doc[33m.[39magentId))[33m.[39m[34mtoEqual[39m([[33mOTHER[39m])
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/3]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/mongodb-tenant-erasure.test.ts[2m > [22mdeleteAllForAgent — full tenant sweep (C-003)[2m > [22mwrites a critical audit record that survives the memory_mutations erase
+[31m[1mAssertionError[22m: expected { kind: 'tenant-erasure', …(5) } to match object { kind: 'tenant-erasure', …(4) }
+(1 matching property omitted from actual)[39m
+
+[32m- Expected[39m
+[31m+ Received[39m
+
+[2m  {[22m
+[2m    "collections": 29,[22m
+[32m-   "deletedTotal": 30,[39m
+[31m+   "deletedTotal": 29,[39m
+[2m    "failedCollections": [],[22m
+[2m    "kind": "tenant-erasure",[22m
+[2m    "status": "complete",[22m
+[2m  }[22m
+
+[36m [2m❯[22m src/mongodb-tenant-erasure.test.ts:[2m207:22[22m[39m
+    [90m205|[39m   [34mexpect[39m(audit[33m.[39mdocumentId)[33m.[39m[34mtoBe[39m([33mAGENT[39m)
+    [90m206|[39m   [34mexpect[39m(audit[33m.[39magentId)[33m.[39m[34mtoBe[39m([33mAGENT[39m)
+    [90m207|[39m   [34mexpect[39m(audit[33m.[39mmeta)[33m.[39m[34mtoMatchObject[39m({
+    [90m   |[39m                      [31m^[39m
+    [90m208|[39m    kind[33m:[39m [32m"tenant-erasure"[39m[33m,[39m
+    [90m209|[39m    status[33m:[39m [32m"complete"[39m[33m,[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/3]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/mongodb-tenant-erasure.test.ts[2m > [22mMongoDBMemoryManager.deleteAllForAgent — facade wiring (C-003)[2m > [22mdelegates through AdminOps to the seam against the stateful fake
+[31m[1mAssertionError[22m: expected { runId: 'run-agent-1', …(2) } to be null // Object.is equality[39m
+
+[32m- Expected:[39m
+null
+
+[31m+ Received:[39m
+{
+  "_id": "000000000000000000000001",
+  "kind": "raw-explain",
+  "runId": "run-agent-1",
+}
+
+[36m [2m❯[22m src/mongodb-tenant-erasure.test.ts:[2m283:73[22m[39m
+    [90m281|[39m   [34mexpect[39m(receipt[33m.[39magentId)[33m.[39m[34mtoBe[39m([33mAGENT[39m)
+    [90m282|[39m   [34mexpect[39m(fake[33m.[39m[34mfindDoc[39m([32m"events"[39m[33m,[39m { agentId[33m:[39m [33mAGENT[39m }))[33m.[39m[34mtoBe[39m([35mnull[39m)
+    [90m283|[39m   expect(fake.findDoc("relevance_artifacts", { runId: "run-agent-1" })…
+    [90m   |[39m                                                                         [31m^[39m
+    [90m284|[39m    [35mnull[39m[33m,[39m
+    [90m285|[39m   )
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/3]⎯[22m[39m
+
+
+[2m Test Files [22m [1m[31m1 failed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[31m3 failed[39m[22m[2m | [22m[1m[32m2 passed[39m[22m[90m (5)[39m
+[2m   Start at [22m 15:39:08
+[2m   Duration [22m 1.25s[2m (transform 838ms, setup 0ms, import 1.11s, tests 25ms, environment 0ms)[22m
+
+mutation_test_exit=1 (expected nonzero due to real assertion failures)
+restored_sha256=aa667a2eabf28c6f8f348ab2f445aa2a40ec3e3e061aec324fab406a037fe8b5 cmp_exit=0
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/packages/memory-engine[39m
+
+[90mstdout[2m | src/mongodb-tenant-erasure.test.ts[2m > [22m[2mdeleteAllForAgent — full tenant sweep (C-003)[2m > [22m[2mdeletes the agent's documents from every tenant collection
+[22m[39m15:39:13.207 [memory:mongodb:erasure] info: tenant erasure complete {"agentId":"agent-1","collections":29}
+
+[90mstdout[2m | src/mongodb-tenant-erasure.test.ts[2m > [22m[2mdeleteAllForAgent — full tenant sweep (C-003)[2m > [22m[2mwrites a critical audit record that survives the memory_mutations erase
+[22m[39m15:39:13.220 [memory:mongodb:erasure] info: tenant erasure complete {"agentId":"agent-1","collections":29}
+
+[90mstderr[2m | src/mongodb-tenant-erasure.test.ts[2m > [22m[2mdeleteAllForAgent — full tenant sweep (C-003)[2m > [22m[2mreports per-collection failures instead of aborting the sweep
+[22m[39m15:39:13.221 [memory:mongodb:erasure] warn: tenant erasure completed with failures {"agentId":"agent-1","failed":["chunks"]}
+
+[90mstdout[2m | src/mongodb-tenant-erasure.test.ts[2m > [22m[2mdeleteAllForAgent — full tenant sweep (C-003)[2m > [22m[2merases an agent with no data without touching other tenants
+[22m[39m15:39:13.221 [memory:mongodb:erasure] info: tenant erasure complete {"agentId":"agent-1","collections":28}
+
+[90mstdout[2m | src/mongodb-tenant-erasure.test.ts[2m > [22m[2mMongoDBMemoryManager.deleteAllForAgent — facade wiring (C-003)[2m > [22m[2mdelegates through AdminOps to the seam against the stateful fake
+[22m[39m15:39:13.227 [memory:mongodb:erasure] info: tenant erasure complete {"agentId":"agent-1","collections":29}
+
+ [32m✓[39m src/mongodb-tenant-erasure.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 39[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m1 passed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[32m5 passed[39m[22m[90m (5)[39m
+[2m   Start at [22m 15:39:10
+[2m   Duration [22m 2.38s[2m (transform 1.68s, setup 0ms, import 2.17s, tests 39ms, environment 0ms)[22m
+
+control_test_exit=0 (expected 0)
+PROTOCOL_CAUGHT mutation=join

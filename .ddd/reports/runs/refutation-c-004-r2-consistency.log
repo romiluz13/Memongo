@@ -1,0 +1,48 @@
+what: Compare quarantine and tenant-erasure auditError conventions under real injected ledger failures
+run: focused erasure and quarantine tests plus inspected semantic comparison
+date: 2026-09-03T13:17:45Z
+inspection: TenantErasureReceipt and QuarantineReviewReceipt both expose optional auditError and omit mutationId when recordMutation fails.
+inspection: Both preserve the already-durable primary state change and surface the ledger error message; erasure additionally reports status=partial because its status denotes whole-operation completeness, while quarantine retains promoted/rejected because its status denotes the durable review decision.
+inspection: field naming and ledger-gap semantics are consistent; the domain-specific status distinction is explicit and non-blocking.
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/packages/memory-engine[39m
+
+[90mstdout[2m | src/mongodb-quarantine-review.test.ts[2m > [22m[2mpromoteQuarantined — classifier overrule (C-004)[2m > [22m[2mwrites structured memory via the consolidator's extraction and records the decision
+[22m[39m16:17:46.566 [memory:mongodb:structured] info: structured memory created: type=preference key=*** over spaces in TypeScript files revision=1
+
+[90mstdout[2m | src/mongodb-quarantine-review.test.ts[2m > [22m[2mpromoteQuarantined — classifier overrule (C-004)[2m > [22m[2msurfaces a failed audit write as auditError without undoing the promotion
+[22m[39m16:17:46.570 [memory:mongodb:structured] info: structured memory created: type=preference key=*** over spaces in TypeScript files revision=1
+
+[90mstderr[2m | src/mongodb-quarantine-review.test.ts[2m > [22m[2mpromoteQuarantined — classifier overrule (C-004)[2m > [22m[2msurfaces a failed audit write as auditError without undoing the promotion
+[22m[39m16:17:46.570 [memory:mongodb:mutations] warn: recordMutation failed {"mutationId":"3aef01b4-fcf6-48de-9ee2-a07b14476940","error":{}}
+
+[90mstderr[2m | src/mongodb-quarantine-review.test.ts[2m > [22m[2mpromoteQuarantined — classifier overrule (C-004)[2m > [22m[2msurfaces a failed audit write as auditError without undoing the promotion
+[22m[39m16:17:46.570 [memory:mongodb:mutations] warn: recordMutation failed {"mutationId":"e6c1e107-82ee-402a-ba33-ab3421371478","error":{}}
+
+[90mstderr[2m | src/mongodb-quarantine-review.test.ts[2m > [22m[2mpromoteQuarantined — classifier overrule (C-004)[2m > [22m[2msurfaces a failed audit write as auditError without undoing the promotion
+[22m[39m16:17:46.571 [memory:mongodb:quarantine] warn: promote audit record failed for quarantine=4d7afc1c-0c19-49b5-be71-fb2ba2ea2817: audit insert failed
+
+[90mstderr[2m | src/mongodb-quarantine-review.test.ts[2m > [22m[2mrejectQuarantined — discard with audit trail (C-004)[2m > [22m[2msurfaces a failed audit write as auditError without undoing the decision
+[22m[39m16:17:46.571 [memory:mongodb:mutations] warn: recordMutation failed {"mutationId":"ff10fbd0-1ceb-478c-93b1-6c025d21249b","error":{}}
+
+[90mstderr[2m | src/mongodb-quarantine-review.test.ts[2m > [22m[2mrejectQuarantined — discard with audit trail (C-004)[2m > [22m[2msurfaces a failed audit write as auditError without undoing the decision
+[22m[39m16:17:46.571 [memory:mongodb:quarantine] warn: reject audit record failed for quarantine=ad7098f4-7792-4c02-ba24-8fca067f8886: audit insert failed
+
+ [32m✓[39m src/mongodb-quarantine-review.test.ts [2m([22m[2m11 tests[22m[2m | [22m[33m6 skipped[39m[2m)[22m[32m 9[2mms[22m[39m
+[90mstdout[2m | src/mongodb-tenant-erasure.test.ts[2m > [22m[2mdeleteAllForAgent — full tenant sweep (C-003)[2m > [22m[2mwrites a critical audit record that survives the memory_mutations erase
+[22m[39m16:17:46.572 [memory:mongodb:erasure] info: tenant erasure complete {"agentId":"agent-1","collections":29}
+
+[90mstderr[2m | src/mongodb-tenant-erasure.test.ts[2m > [22m[2mdeleteAllForAgent — full tenant sweep (C-003)[2m > [22m[2msurfaces a failed proof-of-erasure audit write as partial with auditError
+[22m[39m16:17:46.575 [memory:mongodb:mutations] warn: recordMutation failed {"mutationId":"3b0e2ca0-df38-463c-b70a-9f3bebd1daa8","error":{}}
+
+[90mstderr[2m | src/mongodb-tenant-erasure.test.ts[2m > [22m[2mdeleteAllForAgent — full tenant sweep (C-003)[2m > [22m[2msurfaces a failed proof-of-erasure audit write as partial with auditError
+[22m[39m16:17:46.576 [memory:mongodb:erasure] warn: tenant erasure audit record failed {"agentId":"agent-1","error":{}}
+16:17:46.576 [memory:mongodb:erasure] warn: tenant erasure completed with failures {"agentId":"agent-1","failed":[]}
+
+ [32m✓[39m src/mongodb-tenant-erasure.test.ts [2m([22m[2m7 tests[22m[2m | [22m[33m5 skipped[39m[2m)[22m[32m 12[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m2 passed[39m[22m[90m (2)[39m
+[2m      Tests [22m [1m[32m7 passed[39m[22m[2m | [22m[33m11 skipped[39m[90m (18)[39m
+[2m   Start at [22m 16:17:45
+[2m   Duration [22m 815ms[2m (transform 987ms, setup 0ms, import 1.38s, tests 21ms, environment 0ms)[22m
+

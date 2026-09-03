@@ -8,6 +8,7 @@ const bridgeMocks = vi.hoisted(() => ({
 	memongoBridgeImportConversations: vi.fn(),
 	memongoBridgeBuildContextBundle: vi.fn(),
 	memongoBridgeBuildDiscoveryProjection: vi.fn(),
+	memongoBridgeDeleteAllForAgent: vi.fn(),
 	memongoBridgeDeleteLifecycleItem: vi.fn(),
 	memongoBridgeApplyMemoryFeedback: vi.fn(),
 	memongoBridgeGetState: vi.fn(),
@@ -80,6 +81,7 @@ describe("createApp", () => {
 		bridgeMocks.memongoBridgeImportConversations.mockReset()
 		bridgeMocks.memongoBridgeBuildContextBundle.mockReset()
 		bridgeMocks.memongoBridgeBuildDiscoveryProjection.mockReset()
+		bridgeMocks.memongoBridgeDeleteAllForAgent.mockReset()
 		bridgeMocks.memongoBridgeDeleteLifecycleItem.mockReset()
 		bridgeMocks.memongoBridgeApplyMemoryFeedback.mockReset()
 		bridgeMocks.memongoBridgeExtractEvent.mockReset()

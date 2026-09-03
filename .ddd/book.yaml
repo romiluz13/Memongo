@@ -3,7 +3,7 @@ schema_version: 0.1.0
 version: 0.5.0
 released_at: null
 profile: assurance
-manifest_digest: sha256:5973981a14e3abcbd7f3fce1f3545a28fd5ed4363e8956d6d95784933406b78c
+manifest_digest: sha256:6da56d5772fbf07e4ad2bd162a662fd4e6eeffbc3fa77c6c49925ff5776894f5
 
 requirements:
   - path: CONTEXT.md
@@ -35,6 +35,12 @@ requirements:
     independence: agent-proposed-human-approved
     digest: sha256:2cadbe2718ac3600c1263bbbf5e85bbf9940dc35bdb93f24b0bfe6a6cb563064
     description: "ADR 0004 - secret redaction at every diagnostic boundary (WS-02, C-002)"
+
+  - path: docs/adr/0005-tenant-erasure-and-retention-lifecycle.md
+    authority: product-approved
+    independence: agent-proposed-human-approved
+    digest: sha256:ed31b088a19bbfba343d89992b8c081d7a35d2cf79fe9a0fde15ff3086580c58
+    description: "ADR 0005 - tenant erasure and retention lifecycle (WS-03, C-003/C-004/C-005/C-006)"
 
 agent_context:
   - path: AGENTS.md

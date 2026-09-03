@@ -1,0 +1,157 @@
+what: Attack combined failures, audit status consistency, empty erasure, and passthrough surfaces
+run: focused refuter probes plus bridge/API/MCP/client surface spot-checks
+date: 2026-09-03T12:49:43Z
+
+== engine consistency probes ==
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/packages/memory-engine[39m
+
+[90mstderr[2m | src/mongodb-erasure-r2-refuter.test.ts[2m > [22m[2mr2-consistency[2m > [22m[2msurfaces combined phase-1, delete, and audit failures without throwing
+[22m[39m15:49:43.981 [memory:mongodb:erasure] warn: relevance run id collection failed; artifacts not swept {"agentId":"agent-r2","error":{}}
+
+[90mstderr[2m | src/mongodb-erasure-r2-refuter.test.ts[2m > [22m[2mr2-consistency[2m > [22m[2msurfaces combined phase-1, delete, and audit failures without throwing
+[22m[39m15:49:43.992 [memory:mongodb:mutations] warn: recordMutation failed {"mutationId":"0b8e7093-b2bb-4089-85cc-8263fcc22821","error":{}}
+
+[90mstderr[2m | src/mongodb-erasure-r2-refuter.test.ts[2m > [22m[2mr2-consistency[2m > [22m[2msurfaces combined phase-1, delete, and audit failures without throwing
+[22m[39m15:49:43.992 [memory:mongodb:erasure] warn: tenant erasure audit record failed {"agentId":"agent-r2","error":{}}
+15:49:43.992 [memory:mongodb:erasure] warn: tenant erasure completed with failures {"agentId":"agent-r2","failed":["chunks","relevance_artifacts"]}
+
+[90mstderr[2m | src/mongodb-erasure-r2-refuter.test.ts[2m > [22m[2mr2-consistency[2m > [22m[2mkeeps successful audit status equal to the returned partial status
+[22m[39m15:49:43.994 [memory:mongodb:erasure] warn: tenant erasure completed with failures {"agentId":"agent-r2","failed":["chunks"]}
+
+[90mstdout[2m | src/mongodb-erasure-r2-refuter.test.ts[2m > [22m[2mr2-consistency[2m > [22m[2mkeeps an empty-tenant erasure complete and audited
+[22m[39m15:49:43.994 [memory:mongodb:erasure] info: tenant erasure complete {"agentId":"agent-r2","collections":28}
+
+ [32m✓[39m src/mongodb-erasure-r2-refuter.test.ts [2m([22m[2m7 tests[22m[2m | [22m[33m4 skipped[39m[2m)[22m[32m 17[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m1 passed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[32m3 passed[39m[22m[2m | [22m[33m4 skipped[39m[90m (7)[39m
+[2m   Start at [22m 15:49:43
+[2m   Duration [22m 377ms[2m (transform 201ms, setup 0ms, import 252ms, tests 17ms, environment 0ms)[22m
+
+
+== passthrough source seams ==
+ * failed collection is reported on the receipt (status "partial") instead
+ * of aborting the sweep.
+ */
+export async function memongoBridgeDeleteAllForAgent(params: {
+	agentId?: string
+}): Promise<TenantErasureReceipt> {
+	const m = await memongoBridgeGetManager(params.agentId)
+	return m.deleteAllForAgent()
+}
+
+	v1.post("/admin/erase", async (c) => {
+		const body = (await readJsonBody(c)) as Record<string, unknown>
+		// C-003: tenant erasure is irreversible, so the route demands an explicit
+		// typed confirmation instead of a boolean that any client could flip by
+		// serializing a default.
+		if (body.confirm !== "erase") {
+			return jsonError(
+				c,
+				400,
+				"VALIDATION_ERROR",
+				'confirm must be the literal string "erase"',
+			)
+		}
+		try {
+			const receipt = await memongoBridgeDeleteAllForAgent({
+				agentId: await readAgentId(c),
+			})
+			return c.json(receipt)
+		} catch (err) {
+			return internalError(c, err, "ERASE_FAILED")
+		}
+	})
+
+	// C-004 quarantine review: injection-classified memories wait in a review
+		if (name === "memongo_erase_agent") {
+			// C-003: gate the destructive tool on the typed confirmation before
+			// it reaches the API, matching the route's 400 contract.
+			if (args.confirm !== "erase") {
+				throw new Error("confirm must be the literal string 'erase'")
+			}
+			const out = await memongo.eraseAgent({
+				confirm: "erase",
+				agentId: typeof args.agentId === "string" ? args.agentId : undefined,
+			})
+			return jsonResult(out)
+		}
+	 * C-003: irreversible tenant erasure. The literal `confirm: "erase"` is
+	 * required — the API rejects anything else with a 400.
+	 */
+	async eraseAgent(input: {
+		confirm: "erase"
+		agentId?: string
+	}): Promise<MemongoEraseAgentResponse> {
+		return apiPost(this._opts, "/v1/admin/erase", {
+			confirm: input.confirm,
+			agentId: input.agentId,
+		})
+	}
+
+	/**
+export type MemongoEraseAgentResponse = {
+	agentId: string
+	status: "complete" | "partial"
+	receipts: Array<{
+		collection: string
+		deleted: number
+		error?: string
+	}>
+	mutationId?: string
+	/** Set when the proof-of-erasure audit write failed (status is "partial"). */
+	auditError?: string
+	completedAt: string
+}
+
+== bridge surface test ==
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/packages/memory-bridge[39m
+
+ [32m✓[39m src/memongo-bridge-erasure.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m1 passed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[32m3 passed[39m[22m[90m (3)[39m
+[2m   Start at [22m 15:49:44
+[2m   Duration [22m 150ms[2m (transform 27ms, setup 0ms, import 37ms, tests 4ms, environment 0ms)[22m
+
+
+== API route spot-check ==
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/apps/api[39m
+
+[90mstderr[2m | src/app.segment3.test.ts[2m > [22m[2mcreateApp[2m > [22m[2merases a tenant via admin route and returns the per-collection receipt
+[22m[39mWARNING: MEMONGO_ALLOW_INSECURE_NO_AUTH is enabled; /v1 routes are unauthenticated. Use only for trusted local development.
+
+ [32m✓[39m src/app.segment3.test.ts [2m([22m[2m39 tests[22m[2m | [22m[33m38 skipped[39m[2m)[22m[32m 21[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m1 passed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[32m1 passed[39m[22m[2m | [22m[33m38 skipped[39m[90m (39)[39m
+[2m   Start at [22m 15:49:44
+[2m   Duration [22m 458ms[2m (transform 223ms, setup 0ms, import 307ms, tests 21ms, environment 0ms)[22m
+
+
+== MCP passthrough spot-check ==
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/apps/mcp[39m
+
+ [32m✓[39m src/server.test.ts [2m([22m[2m117 tests[22m[2m | [22m[33m116 skipped[39m[2m)[22m[32m 5[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m1 passed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[32m1 passed[39m[22m[2m | [22m[33m116 skipped[39m[90m (117)[39m
+[2m   Start at [22m 15:49:45
+[2m   Duration [22m 856ms[2m (transform 302ms, setup 0ms, import 653ms, tests 5ms, environment 0ms)[22m
+
+
+== client passthrough and typed response spot-check ==
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/packages/client[39m
+
+ [32m✓[39m src/client.test.ts [2m([22m[2m39 tests[22m[2m | [22m[33m38 skipped[39m[2m)[22m[32m 20[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m1 passed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[32m1 passed[39m[22m[2m | [22m[33m38 skipped[39m[90m (39)[39m
+[2m   Start at [22m 15:49:46
+[2m   Duration [22m 316ms[2m (transform 63ms, setup 0ms, import 81ms, tests 20ms, environment 0ms)[22m
+

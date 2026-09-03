@@ -4,8 +4,15 @@ import {
 } from "./mongodb-access-tracker.js"
 import { getMemoryStats } from "./mongodb-analytics.js"
 import type { MemoryStats } from "./mongodb-analytics.js"
+import { deleteAllForAgent as runTenantErasure } from "./mongodb-erasure.js"
+import type { TenantErasureReceipt } from "./mongodb-erasure.js"
 import { getLaneCoverage } from "./mongodb-lane-coverage.js"
 import type { MongoDBManagerHost } from "./mongodb-manager-host.js"
+import {
+	promoteQuarantined as runPromoteQuarantined,
+	rejectQuarantined as runRejectQuarantined,
+} from "./mongodb-quarantine-review.js"
+import type { QuarantineReviewReceipt } from "./mongodb-quarantine-review.js"
 import {
 	getLatestIngestRun,
 	getLatestProjectionRun,
@@ -631,6 +638,58 @@ export class MongoDBManagerAdminOps {
 
 	async getDetailedStatus(): Promise<V2Status> {
 		return getV2Status(this.host.db, this.host.prefix, this.host.agentId)
+	}
+
+	/**
+	 * C-003 tenant-level erasure: delete every document this agent owns
+	 * across every collection, with per-collection receipts and a
+	 * critical-severity audit record that survives the erase.
+	 */
+	async deleteAllForAgent(): Promise<TenantErasureReceipt> {
+		return runTenantErasure({
+			db: this.host.db,
+			prefix: this.host.prefix,
+			agentId: this.host.agentId,
+		})
+	}
+
+	/**
+	 * C-004 quarantine review: overrule the injection classifier and write
+	 * the quarantined candidate as structured memory, recording the decision.
+	 */
+	async promoteQuarantined(params: {
+		quarantineId: string
+		reviewerId?: string
+		reviewNotes?: string
+	}): Promise<QuarantineReviewReceipt> {
+		return runPromoteQuarantined({
+			db: this.host.db,
+			prefix: this.host.prefix,
+			agentId: this.host.agentId,
+			quarantineId: params.quarantineId,
+			embeddingMode: this.host.config.mongodb?.embeddingMode ?? "automated",
+			reviewerId: params.reviewerId,
+			reviewNotes: params.reviewNotes,
+		})
+	}
+
+	/**
+	 * C-004 quarantine review: discard the quarantined candidate, recording
+	 * the decision as durable audit trail.
+	 */
+	async rejectQuarantined(params: {
+		quarantineId: string
+		reviewerId?: string
+		reviewNotes?: string
+	}): Promise<QuarantineReviewReceipt> {
+		return runRejectQuarantined({
+			db: this.host.db,
+			prefix: this.host.prefix,
+			agentId: this.host.agentId,
+			quarantineId: params.quarantineId,
+			reviewerId: params.reviewerId,
+			reviewNotes: params.reviewNotes,
+		})
 	}
 
 	async stats(): Promise<MemoryStats> {

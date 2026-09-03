@@ -1,0 +1,259 @@
+WHAT: Declared-surface verification for C-005 through the real manager write path, index contract, read call sites, and public TTL documentation.
+RUN: Stateful-fake manager probes plus focused schema test and numbered source evidence.
+DATE: 2026-09-03T13:26:10Z
+
+REAL_WRITE_PATH_PROBES
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/packages/memory-engine[39m
+
+[90mstdout[2m | src/c005-refuter-probe.test.ts[2m > [22m[2mC-005 independent refuter probes[2m > [22m[2mdemonstrates actual single-write TTL is lost before chunk projection
+[22m[39m16:26:12.030 [memory:mongodb:events] info: event written: d9d7c5f9-eec5-4ada-a9a4-efd2203ec2ef role=user
+
+[90mstdout[2m | src/c005-refuter-probe.test.ts[2m > [22m[2mC-005 independent refuter probes[2m > [22m[2mdemonstrates explicit expiry is also lost on actual single-write projection
+[22m[39m16:26:12.033 [memory:mongodb:events] info: event written: 532644a5-5c92-4e83-965d-9b229ec79546 role=user
+
+[90mstdout[2m | src/c005-refuter-probe.test.ts[2m > [22m[2mC-005 independent refuter probes[2m > [22m[2mdemonstrates actual batch-write TTL is lost before chunk projection
+[22m[39m16:26:12.035 [memory:mongodb:events] info: event batch written: 2 event(s)
+
+ [32m✓[39m src/c005-refuter-probe.test.ts [2m([22m[2m7 tests[22m[2m | [22m[33m4 skipped[39m[2m)[22m[32m 8[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m1 passed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[32m3 passed[39m[22m[2m | [22m[33m4 skipped[39m[90m (7)[39m
+[2m   Start at [22m 16:26:11
+[2m   Duration [22m 809ms[2m (transform 496ms, setup 0ms, import 687ms, tests 8ms, environment 0ms)[22m
+
+WRITE_PROBE_EXIT=0
+
+INDEX_TEST
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/packages/memory-engine[39m
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mensureStandardIndexes[2m > [22m[2mcreates all standard indexes on chunks, KB, and structured_mem
+[22m[39m16:26:12.598 [memory:mongodb:schema] info: ensured 41 standard indexes
+
+ [32m✓[39m src/mongodb-schema.test.ts [2m([22m[2m57 tests[22m[2m | [22m[33m56 skipped[39m[2m)[22m[32m 9[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m1 passed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[32m1 passed[39m[22m[2m | [22m[33m56 skipped[39m[90m (57)[39m
+[2m   Start at [22m 16:26:12
+[2m   Duration [22m 344ms[2m (transform 173ms, setup 0ms, import 219ms, tests 9ms, environment 0ms)[22m
+
+INDEX_TEST_EXIT=0
+
+SOURCE_MANAGER_SINGLE_PROJECTION_OMITS_RESOLVED_EXPIRES_AT
+   584				// P4.4.1: explicit per-write expiresAt wins; otherwise the
+   585				// session-scope TTL default applies to session writes only. When
+   586				// neither applies the key is omitted entirely (byte-identical writes
+   587				// with TTL disabled).
+   588				const expiresAt = resolveWriteExpiresAt({
+   589					explicit: event.expiresAt,
+   590					sessionId: event.sessionId,
+   591					ttl: this.host.config.mongodb?.ttl,
+   592				})
+   593				// B4: persist the canonical fingerprint whenever the write carries a
+   594				// key. It fingerprints REQUEST-level inputs (explicit expiresAt
+   595				// only — the TTL-resolved value is time-dependent); keyless writes
+   596				// stay byte-identical. D1/B3: the fingerprint resolves scope with
+   597				// the same unified default the write used, so an unscoped write and
+   598				// the equivalent explicit-scope write fingerprint equal.
+   599				const idempotencyFingerprint = event.idempotencyKey
+   600					? computeIdempotencyFingerprint(
+   601							event,
+   602							this.host.agentId,
+   603							writeDefaultScope,
+   604						)
+   605					: undefined
+   606				const persistEvent = (session?: ClientSession) =>
+   607					writeEvent({
+   608						db: this.host.db,
+   609						prefix: this.host.prefix,
+   610						...(session ? { session } : {}),
+   611						event: {
+   612							eventId,
+   613							agentId: this.host.agentId,
+   614							sessionId: event.sessionId,
+   615							role: event.role,
+   616							body: event.body,
+   617							scope,
+   618							scopeRef: event.scopeRef,
+   619							timestamp: event.timestamp,
+   620							validAt: event.validAt,
+   621							invalidAt: event.invalidAt,
+   622							metadata: event.metadata,
+   623							idempotencyKey: event.idempotencyKey,
+   624							...(idempotencyFingerprint ? { idempotencyFingerprint } : {}),
+   625							extractionJobPendingAt,
+   626							...(expiresAt ? { expiresAt } : {}),
+   627						},
+   628					})
+   697						if (replay) {
+   698							return replay
+   699						}
+   700					}
+   701					throw err
+   702				}
+   703				const projected = await projectEventChunk({
+   704					db: this.host.db,
+   705					prefix: this.host.prefix,
+   706					event: {
+   707						eventId: written.eventId,
+   708						agentId: this.host.agentId,
+   709						role: event.role,
+   710						body: event.body,
+   711						scope,
+   712						scopeRef: written.scopeRef,
+   713						timestamp: written.timestamp,
+   714						validAt: event.validAt ?? written.timestamp,
+   715						...(event.invalidAt ? { invalidAt: event.invalidAt } : {}),
+   716						...(event.sessionId ? { sessionId: event.sessionId } : {}),
+   717						...(event.metadata ? { metadata: event.metadata } : {}),
+   718					},
+   719				})
+   720				if (projected.chunkCreated) {
+   721					this.host.chunkCount += 1
+
+SOURCE_MANAGER_BATCH_PROJECTION_OMITS_RESOLVED_EXPIRES_AT
+   970					db: this.host.db,
+   971					prefix: this.host.prefix,
+   972					events: pending.map(({ input, eventId, scope }) => {
+   973						// P4.4.1: same TTL rule as the single write — explicit wins,
+   974						// session-scope default applies to session writes only.
+   975						const expiresAt = resolveWriteExpiresAt({
+   976							explicit: input.expiresAt,
+   977							sessionId: input.sessionId,
+   978							ttl: this.host.config.mongodb?.ttl,
+   979						})
+   980						return {
+   981							eventId,
+   982							agentId: this.host.agentId,
+   983							sessionId: input.sessionId,
+   984							role: input.role,
+   985							body: input.body,
+   986							scope,
+   987							scopeRef: input.scopeRef,
+   988							timestamp: input.timestamp,
+   989							validAt: input.validAt,
+   990							invalidAt: input.invalidAt,
+   991							metadata: input.metadata,
+   992							idempotencyKey: input.idempotencyKey,
+   993							// B4: same per-item fingerprint rule as the single write.
+   994							...(input.idempotencyKey
+   995								? {
+   996										idempotencyFingerprint: computeIdempotencyFingerprint(
+   997											input,
+   998											this.host.agentId,
+   999											writeDefaultScope,
+  1000										),
+  1001									}
+  1002								: {}),
+  1003							extractionJobPendingAt,
+  1004							...(expiresAt ? { expiresAt } : {}),
+  1005						}
+  1006					}),
+  1007				})
+  1058				// 4. ONE bulkWrite for chunk projection + ONE updateMany marking the
+  1059				// events projected. A projection failure degrades to
+  1060				// chunkCreated:false without failing the (already durable) writes —
+  1061				// the projection repair pass recovers them.
+  1062				if (written.length > 0) {
+  1063					const chunkResults = await projectEventChunksBatch({
+  1064						db: this.host.db,
+  1065						prefix: this.host.prefix,
+  1066						events: written.map((item) => ({
+  1067							eventId: item.eventId,
+  1068							agentId: this.host.agentId,
+  1069							role: item.input.role,
+  1070							body: item.input.body,
+  1071							scope: item.scope,
+  1072							scopeRef: item.scopeRef,
+  1073							timestamp: item.timestamp,
+  1074							validAt: item.input.validAt ?? item.timestamp,
+  1075							...(item.input.invalidAt
+  1076								? { invalidAt: item.input.invalidAt }
+  1077								: {}),
+  1078							...(item.input.sessionId
+  1079								? { sessionId: item.input.sessionId }
+  1080								: {}),
+  1081							...(item.input.metadata ? { metadata: item.input.metadata } : {}),
+  1082						})),
+  1083					})
+  1084					for (const [position, item] of written.entries()) {
+  1085						const chunkCreated = chunkResults[position]?.chunkCreated ?? false
+  1086						if (chunkCreated) {
+  1087							this.host.chunkCount += 1
+  1088						}
+
+SOURCE_TTL_INDEX
+    57		applied++
+    58		// C-005: optional per-document chunk TTL — mirrors idx_events_ttl_expires_at:
+    59		// expireAfterSeconds: 0 on an absolute expiresAt propagated from the source
+    60		// event at projection time; partial so non-expiring chunks stay out of the
+    61		// index. Read paths hide expired chunks immediately (buildUnexpiredClause in
+    62		// buildConversationChunkFilter) because the sweep lags ~60s.
+    63		await chunks.createIndex(
+    64			{ expiresAt: 1 },
+    65			{
+    66				name: "idx_chunks_ttl_expires_at",
+    67				expireAfterSeconds: 0,
+    68				partialFilterExpression: { expiresAt: { $exists: true } },
+    69			},
+    70		)
+    71		applied++
+    72		// Keep a BSON $text index as a defensive last-resort fallback if Search is unavailable.
+    73		// Only one $text index is allowed per collection.
+
+SOURCE_READ_CALL_SITES
+src/mongodb-search-v2.ts:345:		const bridgeChunkFilter = context.searchOptions?.bridgeFilter
+src/mongodb-search-v2.ts:905:							? fuseChunkLaneFilters(conversationChunkFilter, bridgeChunkFilter)
+src/mongodb-search-v2.ts:1000:						if (!fusedChunkFilter && bridgeChunkFilter) {
+src/mongodb-search-v2.ts:1009:												filter: bridgeChunkFilter,
+src/mongodb-search-v2.ts:1024:													filter: bridgeChunkFilter,
+src/mongodb-manager-search.ts:116:	buildConversationChunkFilter(params: {
+src/mongodb-manager-search.ts:166:	buildBridgeChunkFilter(): Document {
+src/mongodb-manager-search.ts:182:	buildBridgeChunkFilterForIdentity(params: {
+src/mongodb-manager-search.ts:192:		return this.host.buildBridgeChunkFilter()
+src/mongodb-manager-search.ts:202:		return this.host.buildBridgeChunkFilterForIdentity(params)
+src/mongodb-manager-search.ts:322:		const bridgeFilter = this.host.buildBridgeChunkFilterForIdentity(identity)
+src/mongodb-manager-search.ts:340:							filter: this.host.buildConversationChunkFilter(identity),
+src/mongodb-manager-search.ts:366:							filter: bridgeFilter,
+src/mongodb-manager-search.ts:711:						conversationFilter: this.host.buildConversationChunkFilter({
+src/mongodb-manager-search.ts:1088:						conversationFilter: this.host.buildConversationChunkFilter({
+src/mongodb-manager-relevance.ts:106:		const bridgeFilter = this.host.buildBridgeChunkFilterForIdentity(identity)
+src/mongodb-manager-relevance.ts:123:							filter: this.host.buildConversationChunkFilter(identity),
+src/mongodb-manager-relevance.ts:147:									filter: bridgeFilter,
+src/mongodb-manager-relevance.ts:247:								filter: this.host.buildConversationChunkFilter(identity),
+src/mongodb-manager-relevance.ts:272:								filter: bridgeFilter,
+
+SOURCE_DOCUMENTATION
+    74		maxIdleTimeMs?: number
+    75		networkFamily?: 4 | 6
+    76		socketTimeoutMs?: number
+    77		serverSelectionTimeoutMs?: number
+    78		heartbeatFrequencyMs?: number
+    79		serverMonitoringMode?: "auto" | "stream" | "poll"
+    80		waitQueueTimeoutMs?: number
+    81		memoryTtlDays?: number
+    82		/**
+    83		 * P4.4.1: optional per-document TTL on `events` and `structured_mem`.
+    84		 * Off by default. When enabled, writes carrying a sessionId get an
+    85		 * absolute `expiresAt` of recordedAt + sessionDays unless the caller
+    86		 * passes an explicit per-write `expiresAt` (which always wins, even
+    87		 * when this group is disabled). Backed by partial TTL indexes
+    88		 * (`expireAfterSeconds: 0` keyed on `expiresAt`, partial on
+    89		 * `expiresAt: { $exists: true }`); read paths also exclude expired
+    90		 * documents because the TTL sweep lags ~60s. Event expiry propagates
+    91		 * to the event's chunk projection (C-005): the chunk carries the same
+    92		 * absolute `expiresAt`, is deleted by the partial chunks TTL index
+    93		 * (`idx_chunks_ttl_expires_at`), and is excluded from chunk reads
+    94		 * once expired — so retention on events cannot leave orphaned chunk
+    95		 * copies behind.
+    96		 */
+    97		ttl?: {
+    98			enabled?: boolean
+    99			/** Session-scope default retention in days (must be positive). */
+
+JUDGMENT
+REFUTED: the direct projector accepts expiresAt, but the actual single and batch manager paths omit the resolved expiresAt when reconstructing CanonicalEvent for projection. Both derived and explicit expiry survive on events yet are absent from chunks.
+The TTL index definition itself is correct and pinned: key expiresAt ascending, expireAfterSeconds 0, partial exists true.
+Conversation search filters are guarded, but bridge search filters are separate and unguarded; direct chunk locator reads are also not consumers of buildConversationChunkFilter.
+Documentation accurately states the intended shipped behavior, but the implementation counterexample makes that statement false. Under warning-now-moot interpretation no warning is needed only after propagation actually works; under must-still-warn interpretation there is no warning. Under either interpretation, current docs do not disclose the live retention gap.

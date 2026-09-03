@@ -2,13 +2,17 @@ import type { Hono } from "hono"
 import {
 	memongoBridgeAccessSummaries,
 	memongoBridgeAccessTrends,
+	memongoBridgeDeleteAllForAgent,
 	memongoBridgeGetMemoryJob,
 	memongoBridgeGetRecallTrace,
 	memongoBridgeListMemoryJobs,
+	memongoBridgeListQuarantined,
 	memongoBridgeListRecallTraces,
+	memongoBridgePromoteQuarantined,
 	memongoBridgeRelevanceExplain,
 	memongoBridgeRelevanceReport,
 	memongoBridgeRelevanceSampleRate,
+	memongoBridgeRejectQuarantined,
 } from "@memongo/memory-bridge"
 import { internalError, jsonError } from "../lib/errors.js"
 
@@ -169,6 +173,97 @@ export function registerAdminRoutes(v1: Hono<V1RouterEnv>): void {
 			return c.json(trace)
 		} catch (err) {
 			return internalError(c, err, "TRACE_GET_FAILED")
+		}
+	})
+
+	v1.post("/admin/erase", async (c) => {
+		const body = (await readJsonBody(c)) as Record<string, unknown>
+		// C-003: tenant erasure is irreversible, so the route demands an explicit
+		// typed confirmation instead of a boolean that any client could flip by
+		// serializing a default.
+		if (body.confirm !== "erase") {
+			return jsonError(
+				c,
+				400,
+				"VALIDATION_ERROR",
+				'confirm must be the literal string "erase"',
+			)
+		}
+		try {
+			const receipt = await memongoBridgeDeleteAllForAgent({
+				agentId: await readAgentId(c),
+			})
+			return c.json(receipt)
+		} catch (err) {
+			return internalError(c, err, "ERASE_FAILED")
+		}
+	})
+
+	// C-004 quarantine review: injection-classified memories wait in a review
+	// queue a human must be able to see and decide on. These routes are
+	// admin-only (app.ts) so no agent credential can read quarantined payloads
+	// or overrule the classifier on its own behalf.
+	v1.get("/admin/quarantine", async (c) => {
+		const status = c.req.query("status")
+		const limit = parseListLimit(c.req.query("limit"))
+		try {
+			const entries = await memongoBridgeListQuarantined({
+				agentId: c.req.query("agentId") || undefined,
+				status:
+					status === "pending-review" ||
+					status === "promoted" ||
+					status === "rejected"
+						? status
+						: undefined,
+				limit,
+			})
+			return c.json(entries)
+		} catch (err) {
+			return internalError(c, err, "QUARANTINE_LIST_FAILED")
+		}
+	})
+
+	v1.post("/admin/quarantine/promote", async (c) => {
+		const body = (await readJsonBody(c)) as Record<string, unknown>
+		const quarantineId =
+			typeof body.quarantineId === "string" ? body.quarantineId.trim() : ""
+		if (!quarantineId) {
+			return jsonError(c, 400, "VALIDATION_ERROR", "quarantineId is required")
+		}
+		try {
+			const receipt = await memongoBridgePromoteQuarantined({
+				agentId: await readAgentId(c),
+				quarantineId,
+				reviewerId:
+					typeof body.reviewerId === "string" ? body.reviewerId : undefined,
+				reviewNotes:
+					typeof body.reviewNotes === "string" ? body.reviewNotes : undefined,
+			})
+			return c.json(receipt)
+		} catch (err) {
+			return internalError(c, err, "QUARANTINE_PROMOTE_FAILED")
+		}
+	})
+
+	v1.post("/admin/quarantine/reject", async (c) => {
+		const body = (await readJsonBody(c)) as Record<string, unknown>
+		const quarantineId =
+			typeof body.quarantineId === "string" ? body.quarantineId.trim() : ""
+		if (!quarantineId) {
+			return jsonError(c, 400, "VALIDATION_ERROR", "quarantineId is required")
+		}
+		try {
+			const receipt = await memongoBridgeRejectQuarantined({
+				agentId: await readAgentId(c),
+				quarantineId,
+				reviewerId:
+					typeof body.reviewerId === "string" ? body.reviewerId : undefined,
+				reviewNotes:
+					typeof body.reviewNotes === "string" ? body.reviewNotes : undefined,
+			})
+			return c.json(receipt)
+		} catch (err) {
+			return internalError(c, err, "QUARANTINE_REJECT_FAILED")
 		}
 	})
 

@@ -1,0 +1,67 @@
+what: Missed-collection completeness and scope-signature attack
+run: Parse every schema collection accessor and ensureCollections target, compare with erasure targets, then inspect all direct production collection/createCollection calls
+date: 2026-09-03T12:42:23Z
+accessor_collections_count=30
+accessor_collections=access_events,chunks,consolidation_runs,entities,entity_links,episodes,events,files,ingest_runs,kb_chunks,knowledge_base,lane_coverage,memory_evidence,memory_jobs,memory_mutations,memory_quarantine,memory_telemetry,meta,procedure_revisions,procedures,projection_runs,query_cache,recall_traces,relations,relevance_artifacts,relevance_regressions,relevance_runs,session_chunks,structured_mem,structured_mem_revisions
+erasure_targets_count=29
+erasure_targets=access_events,chunks,consolidation_runs,entities,entity_links,episodes,events,files,ingest_runs,kb_chunks,knowledge_base,lane_coverage,memory_evidence,memory_jobs,memory_mutations,memory_quarantine,memory_telemetry,procedure_revisions,procedures,projection_runs,query_cache,recall_traces,relations,relevance_artifacts,relevance_regressions,relevance_runs,session_chunks,structured_mem,structured_mem_revisions
+ensured_collections_union_count=30
+ensured_collections_union=access_events,chunks,consolidation_runs,entities,entity_links,episodes,events,files,ingest_runs,kb_chunks,knowledge_base,lane_coverage,memory_evidence,memory_jobs,memory_mutations,memory_quarantine,memory_telemetry,meta,procedure_revisions,procedures,projection_runs,query_cache,recall_traces,relations,relevance_artifacts,relevance_regressions,relevance_runs,session_chunks,structured_mem,structured_mem_revisions
+accessors_minus_erasure=meta
+erasure_minus_accessors=
+ensured_minus_erasure=meta
+cross_check=PASS: all 29 tenant-bearing collections targeted; only global meta excluded
+--- production direct Db.collection/createCollection calls outside tests ---
+/Users/rom.iluz/Dev/memongo/packages/memory-engine/src/embedding-validation.ts:203:			const collection = db.collection(target.collectionName)
+/Users/rom.iluz/Dev/memongo/packages/memory-engine/src/mongodb-reasoning-chain.ts:87:	const col = db.collection(fullCollectionName)
+/Users/rom.iluz/Dev/memongo/packages/memory-engine/src/mongodb-reasoning-chain.ts:142:	const eventsCol = db.collection(`${prefix}events`)
+/Users/rom.iluz/Dev/memongo/packages/memory-engine/src/mongodb-schema-collections.ts:12:	return db.collection(`${prefix}${name}`)
+/Users/rom.iluz/Dev/memongo/packages/memory-engine/src/mongodb-schema-collections.ts:153:		await db.createCollection(name, {
+/Users/rom.iluz/Dev/memongo/packages/memory-engine/src/mongodb-schema-collections.ts:179:			await db.createCollection(name)
+/Users/rom.iluz/Dev/memongo/packages/memory-engine/src/mongodb-schema-collections.ts:190:		const collection = db.collection(name)
+/Users/rom.iluz/Dev/memongo/packages/memory-engine/src/mongodb-novelty.ts:118:	const eventsCol = db.collection(`${prefix}events`)
+/Users/rom.iluz/Dev/memongo/packages/memory-engine/src/mongodb-consolidator.ts:262:	const structuredCol = db.collection(`${prefix}structured_mem`)
+/Users/rom.iluz/Dev/memongo/packages/memory-engine/src/mongodb-consolidator.ts:733:	const structuredCol = db.collection(`${prefix}structured_mem`)
+/Users/rom.iluz/Dev/memongo/packages/memory-engine/src/mongodb-manager.ts:713:									db.collection(target.collectionName),
+/Users/rom.iluz/Dev/memongo/packages/memory-engine/src/mongodb-schema-capabilities.ts:171:				db.collection(probeCollectionName),
+/Users/rom.iluz/Dev/memongo/packages/memory-engine/src/mongodb-schema-search-readiness.ts:240:		await listSearchIndexes(db.collection(collectionName))
+/Users/rom.iluz/Dev/memongo/packages/memory-engine/src/mongodb-schema-validators.ts:145:				await db.createCollection(name, {
+/Users/rom.iluz/Dev/memongo/packages/memory-engine/src/mongodb-schema-validators.ts:151:				await db.createCollection(name)
+--- all explicit collection creation/accessor literals ---
+/Users/rom.iluz/Dev/memongo/packages/memory-engine/src/mongodb-schema-validators.ts:145:				await db.createCollection(name, {
+/Users/rom.iluz/Dev/memongo/packages/memory-engine/src/mongodb-schema-validators.ts:151:				await db.createCollection(name)
+/Users/rom.iluz/Dev/memongo/packages/memory-engine/src/mongodb-schema-collections.ts:16:	return col(db, prefix, "chunks")
+/Users/rom.iluz/Dev/memongo/packages/memory-engine/src/mongodb-schema-collections.ts:20:	return col(db, prefix, "files")
+/Users/rom.iluz/Dev/memongo/packages/memory-engine/src/mongodb-schema-collections.ts:24:	return col(db, prefix, "meta")
+/Users/rom.iluz/Dev/memongo/packages/memory-engine/src/mongodb-schema-collections.ts:28:	return col(db, prefix, "knowledge_base")
+/Users/rom.iluz/Dev/memongo/packages/memory-engine/src/mongodb-schema-collections.ts:32:	return col(db, prefix, "kb_chunks")
+/Users/rom.iluz/Dev/memongo/packages/memory-engine/src/mongodb-schema-collections.ts:36:	return col(db, prefix, "structured_mem")
+/Users/rom.iluz/Dev/memongo/packages/memory-engine/src/mongodb-schema-collections.ts:43:	return col(db, prefix, "structured_mem_revisions")
+/Users/rom.iluz/Dev/memongo/packages/memory-engine/src/mongodb-schema-collections.ts:47:	return col(db, prefix, "procedures")
+/Users/rom.iluz/Dev/memongo/packages/memory-engine/src/mongodb-schema-collections.ts:54:	return col(db, prefix, "procedure_revisions")
+/Users/rom.iluz/Dev/memongo/packages/memory-engine/src/mongodb-schema-collections.ts:58:	return col(db, prefix, "relevance_runs")
+/Users/rom.iluz/Dev/memongo/packages/memory-engine/src/mongodb-schema-collections.ts:65:	return col(db, prefix, "relevance_artifacts")
+/Users/rom.iluz/Dev/memongo/packages/memory-engine/src/mongodb-schema-collections.ts:72:	return col(db, prefix, "relevance_regressions")
+/Users/rom.iluz/Dev/memongo/packages/memory-engine/src/mongodb-schema-collections.ts:78:	return col(db, prefix, "events")
+/Users/rom.iluz/Dev/memongo/packages/memory-engine/src/mongodb-schema-collections.ts:82:	return col(db, prefix, "entities")
+/Users/rom.iluz/Dev/memongo/packages/memory-engine/src/mongodb-schema-collections.ts:86:	return col(db, prefix, "relations")
+/Users/rom.iluz/Dev/memongo/packages/memory-engine/src/mongodb-schema-collections.ts:90:	return col(db, prefix, "entity_links")
+/Users/rom.iluz/Dev/memongo/packages/memory-engine/src/mongodb-schema-collections.ts:94:	return col(db, prefix, "episodes")
+/Users/rom.iluz/Dev/memongo/packages/memory-engine/src/mongodb-schema-collections.ts:98:	return col(db, prefix, "ingest_runs")
+/Users/rom.iluz/Dev/memongo/packages/memory-engine/src/mongodb-schema-collections.ts:102:	return col(db, prefix, "projection_runs")
+/Users/rom.iluz/Dev/memongo/packages/memory-engine/src/mongodb-schema-collections.ts:106:	return col(db, prefix, "query_cache")
+/Users/rom.iluz/Dev/memongo/packages/memory-engine/src/mongodb-schema-collections.ts:153:		await db.createCollection(name, {
+/Users/rom.iluz/Dev/memongo/packages/memory-engine/src/mongodb-schema-collections.ts:179:			await db.createCollection(name)
+/Users/rom.iluz/Dev/memongo/packages/memory-engine/src/mongodb-schema-collections.ts:202:	return col(db, prefix, "memory_telemetry")
+/Users/rom.iluz/Dev/memongo/packages/memory-engine/src/mongodb-schema-collections.ts:206:	return col(db, prefix, "access_events")
+/Users/rom.iluz/Dev/memongo/packages/memory-engine/src/mongodb-schema-collections.ts:210:	return col(db, prefix, "memory_mutations")
+/Users/rom.iluz/Dev/memongo/packages/memory-engine/src/mongodb-schema-collections.ts:220:	return col(db, prefix, "memory_quarantine")
+/Users/rom.iluz/Dev/memongo/packages/memory-engine/src/mongodb-schema-collections.ts:224:	return col(db, prefix, "lane_coverage")
+/Users/rom.iluz/Dev/memongo/packages/memory-engine/src/mongodb-schema-collections.ts:231:	return col(db, prefix, "consolidation_runs")
+/Users/rom.iluz/Dev/memongo/packages/memory-engine/src/mongodb-schema-collections.ts:235:	return col(db, prefix, "recall_traces")
+/Users/rom.iluz/Dev/memongo/packages/memory-engine/src/mongodb-schema-collections.ts:239:	return col(db, prefix, "memory_jobs")
+/Users/rom.iluz/Dev/memongo/packages/memory-engine/src/mongodb-schema-collections.ts:243:	return col(db, prefix, "session_chunks")
+/Users/rom.iluz/Dev/memongo/packages/memory-engine/src/mongodb-schema-collections.ts:247:	return col(db, prefix, "memory_evidence")
+completeness_judgment=CAUGHT: no omitted tenant-bearing collection found. Direct dynamic collection reads resolve only validated known collections/search targets; no additional persistence surface was found. meta stores global schema/capability/change-stream/KB-refresh operational state and is deliberately non-tenant.
+scope_signature_judgment=NON-BLOCKING: deleteAllForAgent binds agentId on the manager and deliberately erases all scopes owned by that tenant. A separate scope argument would narrow deletion and conflict with tenant-level erase-everything semantics. No tenant data class requiring an additional scope selector was found; scoped collections are all filtered by agentId and swept wholesale.
+scratch_deleted=/tmp/refutation-c-003-completeness.py

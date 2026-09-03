@@ -142,6 +142,14 @@ export {
 	type MemoryJobBatchItemResult,
 } from "./mongodb-memory-jobs.js"
 export type { MemoryStats } from "./mongodb-analytics.js"
+export type { TenantErasureReceipt } from "./mongodb-erasure.js"
+// C-004: quarantine review lifecycle — the review queue the bridge surfaces
+// to the API/MCP/console review surfaces.
+export type {
+	QuarantinedEntry,
+	QuarantineReviewReceipt,
+	QuarantineStatus,
+} from "./mongodb-quarantine-review.js"
 export {
 	planRetrieval,
 	classifyRetrievalQuery,

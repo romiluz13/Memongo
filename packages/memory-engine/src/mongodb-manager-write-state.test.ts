@@ -441,3 +441,87 @@ describe("stateful fake self-checks (semantics the P0/P2 paths rely on)", () => 
 		expect((collision as { code?: number }).code).toBe(11000)
 	})
 })
+
+describe("writeConversationEvent — TTL expiry propagation onto chunks (C-005)", () => {
+	let fake: ReturnType<typeof createStatefulMongoFake>
+	let manager: MongoDBMemoryManager
+
+	beforeEach(() => {
+		fake = createStatefulMongoFake({ prefix: PREFIX })
+		manager = buildStatefulManager(fake)
+	})
+
+	it("persists the event AND its chunk with the SAME explicit expiresAt (single write handoff)", async () => {
+		const expiresAt = new Date("2026-09-01T00:00:00.000Z")
+		const receipt = await manager.writeConversationEvent({
+			role: "user",
+			body: "remember: expiring turn",
+			sessionId: "s-ttl",
+			expiresAt,
+		})
+
+		expect(receipt.ok ?? true).toBe(true)
+		const event = fake.findDoc("events", { eventId: receipt.eventId })
+		const chunk = fake.findDoc("chunks", {
+			path: `events/${receipt.eventId}`,
+		})
+		// The r1 refutation defect: the manager handoff reconstructed the
+		// projection payload WITHOUT expiresAt — event and chunk must carry
+		// the identical value.
+		expect(event?.expiresAt).toEqual(expiresAt)
+		expect(chunk?.expiresAt).toEqual(expiresAt)
+	})
+
+	it("leaves both event and chunk expiry-free when no retention applies", async () => {
+		const receipt = await manager.writeConversationEvent({
+			role: "user",
+			body: "permanent turn",
+			sessionId: "s-perm",
+		})
+
+		const event = fake.findDoc("events", { eventId: receipt.eventId })
+		const chunk = fake.findDoc("chunks", {
+			path: `events/${receipt.eventId}`,
+		})
+		expect("expiresAt" in (event ?? {})).toBe(false)
+		expect("expiresAt" in (chunk ?? {})).toBe(false)
+	})
+
+	it("propagates a per-item expiry through the batch write handoff", async () => {
+		const expiring = new Date("2026-09-01T00:00:00.000Z")
+		const receipts = await manager.writeConversationEventsBatch([
+			{
+				role: "user",
+				body: "batch expiring turn",
+				sessionId: "s-batch",
+				expiresAt: expiring,
+			},
+			{
+				role: "user",
+				body: "batch permanent turn",
+				sessionId: "s-batch",
+			},
+		])
+
+		expect(receipts).toHaveLength(2)
+		expect(receipts.every((r) => r.ok)).toBe(true)
+
+		const expiringEvent = fake.findDoc("events", {
+			body: "batch expiring turn",
+		})
+		const permanentEvent = fake.findDoc("events", {
+			body: "batch permanent turn",
+		})
+		const expiringChunk = fake.findDoc("chunks", {
+			path: `events/${expiringEvent?.eventId}`,
+		})
+		const permanentChunk = fake.findDoc("chunks", {
+			path: `events/${permanentEvent?.eventId}`,
+		})
+
+		expect(expiringEvent?.expiresAt).toEqual(expiring)
+		expect(expiringChunk?.expiresAt).toEqual(expiring)
+		expect("expiresAt" in (permanentEvent ?? {})).toBe(false)
+		expect("expiresAt" in (permanentChunk ?? {})).toBe(false)
+	})
+})

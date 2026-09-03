@@ -1,0 +1,147 @@
+WHAT: Propagation integrity attacks for absent/exact expiry, per-write override, idempotent reprojection, and tenant-scope fields.
+RUN: Stateful-fake projector and manager-path probes, plus focused upstream TTL tests.
+DATE: 2026-09-03T13:26:34Z
+
+DIRECT_PROJECTOR_AND_IDEMPOTENCE_PROBES
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/packages/memory-engine[39m
+
+ [32m✓[39m src/c005-refuter-probe.test.ts [2m([22m[2m7 tests[22m[2m | [22m[33m5 skipped[39m[2m)[22m[32m 4[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m1 passed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[32m2 passed[39m[22m[2m | [22m[33m5 skipped[39m[90m (7)[39m
+[2m   Start at [22m 16:26:34
+[2m   Duration [22m 725ms[2m (transform 461ms, setup 0ms, import 626ms, tests 4ms, environment 0ms)[22m
+
+PROJECTOR_PROBE_EXIT=0
+
+UPSTREAM_TTL_RESOLUTION_TESTS
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/packages/memory-engine[39m
+
+ [32m✓[39m src/mongodb-manager-write.test.ts [2m([22m[2m31 tests[22m[2m | [22m[33m26 skipped[39m[2m)[22m[32m 12[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m1 passed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[32m5 passed[39m[22m[2m | [22m[33m26 skipped[39m[90m (31)[39m
+[2m   Start at [22m 16:26:35
+[2m   Duration [22m 713ms[2m (transform 445ms, setup 0ms, import 604ms, tests 12ms, environment 0ms)[22m
+
+UPSTREAM_TEST_EXIT=0
+
+ACTUAL_MANAGER_PROPAGATION_COUNTEREXAMPLES
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/packages/memory-engine[39m
+
+[90mstdout[2m | src/c005-refuter-probe.test.ts[2m > [22m[2mC-005 independent refuter probes[2m > [22m[2mdemonstrates actual single-write TTL is lost before chunk projection
+[22m[39m16:26:37.425 [memory:mongodb:events] info: event written: 039233d9-533b-41b9-96fe-a3880380b969 role=user
+
+[90mstdout[2m | src/c005-refuter-probe.test.ts[2m > [22m[2mC-005 independent refuter probes[2m > [22m[2mdemonstrates explicit expiry is also lost on actual single-write projection
+[22m[39m16:26:37.429 [memory:mongodb:events] info: event written: 61c48b94-46c7-40d4-ae5e-cb3bd3cc6b7d role=user
+
+[90mstdout[2m | src/c005-refuter-probe.test.ts[2m > [22m[2mC-005 independent refuter probes[2m > [22m[2mdemonstrates actual batch-write TTL is lost before chunk projection
+[22m[39m16:26:37.430 [memory:mongodb:events] info: event batch written: 2 event(s)
+
+ [32m✓[39m src/c005-refuter-probe.test.ts [2m([22m[2m7 tests[22m[2m | [22m[33m4 skipped[39m[2m)[22m[32m 7[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m1 passed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[32m3 passed[39m[22m[2m | [22m[33m4 skipped[39m[90m (7)[39m
+[2m   Start at [22m 16:26:36
+[2m   Duration [22m 742ms[2m (transform 478ms, setup 0ms, import 641ms, tests 7ms, environment 0ms)[22m
+
+MANAGER_COUNTEREXAMPLE_EXIT=0
+
+PROJECTOR_INSERT_ONLY_SOURCE
+   817		recordRun?: boolean
+   818	}): Promise<Array<{ chunkCreated: boolean }>> {
+   819		const { db, prefix, events } = params
+   820		const startMs = Date.now()
+   821		if (events.length === 0) {
+   822			return []
+   823		}
+   824		const chunks = chunksCollection(db, prefix)
+   825		const ops = events.map((event) => {
+   826			const path = `events/${event.eventId}`
+   827			const text = renderEventChunkText(event)
+   828			const hash = createHash("sha256").update(text).digest("hex")
+   829			return {
+   830				updateOne: {
+   831					filter: { path },
+   832					update: {
+   833						$setOnInsert: {
+   834							path,
+   835							text,
+   836							hash,
+   837							source: "conversation",
+   838							agentId: event.agentId,
+   839							scope: event.scope,
+   840							scopeRef: event.scopeRef,
+   841							...(event.sessionId ? { sessionId: event.sessionId } : {}),
+   842							timestamp: event.timestamp,
+   843							updatedAt: new Date(),
+   844							// C-005: see projectEventChunk — expiry propagates from
+   845							// the event to its chunk.
+   846							...(event.expiresAt ? { expiresAt: event.expiresAt } : {}),
+   847						},
+   848					},
+   849					upsert: true,
+   850				},
+   925		const result = await retryTransientMongoWrite("chunks.updateOne", () =>
+   926			chunks.updateOne(
+   927				{ path },
+   928				{
+   929					$setOnInsert: {
+   930						path,
+   931						text,
+   932						hash,
+   933						source: "conversation",
+   934						agentId: event.agentId,
+   935						scope: event.scope,
+   936						scopeRef: event.scopeRef,
+   937						...(event.sessionId ? { sessionId: event.sessionId } : {}),
+   938						timestamp: event.timestamp,
+   939						updatedAt: new Date(),
+   940						// C-005: propagate the event's expiry onto the chunk. Same
+   941						// model as the events partial TTL index: absent means the
+   942						// chunk never expires; a partial chunks TTL index deletes
+   943						// expired chunks and the unexpired guard keeps reads from
+   944						// surfacing them between sweeps.
+   945						...(event.expiresAt ? { expiresAt: event.expiresAt } : {}),
+   946					},
+   947				},
+   948				{ upsert: true },
+   949			),
+   950		)
+
+REPAIR_CALL_SITE
+753-	}
+754-
+755-	let chunksCreated = 0
+756-
+757-	try {
+758-		for (const event of events) {
+759:			const { chunkCreated } = await projectEventChunk({
+760-				db,
+761-				prefix,
+762-				event,
+763-				recordRun: false,
+764-			})
+765-			if (chunkCreated) {
+--
+907-			},
+908-		}).catch(() => {})
+909-	}
+910-	return results
+911-}
+912-
+913:export async function projectEventChunk(params: {
+914-	db: Db
+915-	prefix: string
+916-	event: CanonicalEvent
+917-	recordRun?: boolean
+918-}): Promise<{ chunkCreated: boolean }> {
+919-	const { db, prefix, event } = params
+
+JUDGMENT
+Direct projectors preserve exact Date values, omit expiresAt for permanent events, retain agentId/scope/scopeRef, and upsert one insert-only record. A second projection does not duplicate or clobber text/expiry.
+REFUTED at the manager seam: resolveWriteExpiresAt correctly gives explicit override priority and derives sessionDays expiry, and stored events carry it, but both manager projection payloads omit it. Therefore the real write path creates immortal chunks.
+Because projection uses $setOnInsert only, a later repair projection cannot backfill expiresAt onto an already-created immortal chunk; remediation needs an update/backfill path, not only adding expiresAt to future manager payloads.

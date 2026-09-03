@@ -1,0 +1,119 @@
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/packages/memory-engine[39m
+
+[90mstdout[2m | src/mongodb-chunk-retention.test.ts[2m > [22m[2mprojectConversationWindows — expiry propagation (C-005 r1 defect 4)[2m > [22m[2mstamps a window with the LATEST expiry among its events
+[22m[39m17:52:36.010 [memory:mongodb:conversation-windows] info: projected 1 conversation windows for session=s-win agent=agent-1
+
+[90mstdout[2m | src/mongodb-chunk-retention.test.ts[2m > [22m[2mprojectConversationWindows — expiry propagation (C-005 r1 defect 4)[2m > [22m[2mkeeps a window permanent when any of its events never expires
+[22m[39m17:52:36.014 [memory:mongodb:conversation-windows] info: projected 1 conversation windows for session=s-win agent=agent-1
+
+[90mstdout[2m | src/mongodb-chunk-retention.test.ts[2m > [22m[2mprojectConversationWindows — expiry propagation (C-005 r1 defect 4)[2m > [22m[2mexcludes already-expired events from window text
+[22m[39m17:52:36.015 [memory:mongodb:conversation-windows] info: projected 1 conversation windows for session=s-win agent=agent-1
+
+ [31m❯[39m src/mongodb-chunk-retention.test.ts [2m([22m[2m20 tests[22m[2m | [22m[31m1 failed[39m[2m)[22m[32m 26[2mms[22m[39m
+     [32m✓[39m carries the event expiry onto the projected chunk[32m 2[2mms[22m[39m
+     [32m✓[39m omits expiresAt entirely when the event never expires[32m 0[2mms[22m[39m
+     [32m✓[39m propagates expiry per chunk in a mixed batch[32m 1[2mms[22m[39m
+     [32m✓[39m composes the unexpired clause with the tenant filter[32m 1[2mms[22m[39m
+     [32m✓[39m hides expired chunks on a real find while keeping live and no-expiry chunks[32m 2[2mms[22m[39m
+     [32m✓[39m accepts expiresAt as an optional date on the traditional chunk variant[32m 1[2mms[22m[39m
+     [32m✓[39m backfills expiresAt onto an existing chunk written without one[32m 0[2mms[22m[39m
+     [32m✓[39m batch re-projection backfills expiresAt the same way[32m 0[2mms[22m[39m
+     [32m✓[39m stamps a window with the LATEST expiry among its events[32m 4[2mms[22m[39m
+     [32m✓[39m keeps a window permanent when any of its events never expires[32m 1[2mms[22m[39m
+[31m     [31m×[31m excludes already-expired events from window text[39m[32m 8[2mms[22m[39m
+     [32m✓[39m composes the unexpired clause with the bridge filter[32m 0[2mms[22m[39m
+     [32m✓[39m hides expired bridge chunks on a real find[32m 1[2mms[22m[39m
+     [32m✓[39m readConversationChunk hides an expired conversation chunk[32m 0[2mms[22m[39m
+     [32m✓[39m readConversationChunk still applies the line-range clause with the guard[32m 1[2mms[22m[39m
+     [32m✓[39m readBridgeChunk hides an expired bridge chunk[32m 1[2mms[22m[39m
+     [32m✓[39m projects the chunk with the STORED event expiry[32m 1[2mms[22m[39m
+     [32m✓[39m resolveSessionEvidenceExpiresAt maps each session to its latest source-event expiry[32m 0[2mms[22m[39m
+     [32m✓[39m carries the resolved expiry onto the session-evidence documents[32m 0[2mms[22m[39m
+     [32m✓[39m omits expiresAt when no expiry map is provided (legacy callers)[32m 0[2mms[22m[39m
+[90mstdout[2m | src/c005-r2-refuter-probe.test.ts[2m > [22m[2mT1: config-derived sessionDays TTL reaches the chunk (single write)[2m > [22m[2mevent and chunk carry the same derived expiresAt
+[22m[39m17:52:36.081 [memory:mongodb:events] info: event written: a135ebf9-b59b-459a-a8e1-e7951b48661f role=user
+
+[90mstdout[2m | src/c005-r2-refuter-probe.test.ts[2m > [22m[2mT1: config-derived sessionDays TTL reaches the chunk (single write)[2m > [22m[2mexplicit per-write expiry still wins over the config default
+[22m[39m17:52:36.085 [memory:mongodb:events] info: event written: f446ec4a-0d4e-4019-bdde-93fc70546eb9 role=user
+
+[90mstdout[2m | src/c005-r2-refuter-probe.test.ts[2m > [22m[2mT2: window re-projection heals expiry in both directions[2m > [22m[2mre-projection $unsets a stale expiry when the window turns permanent
+[22m[39m17:52:36.086 [memory:mongodb:conversation-windows] info: projected 1 conversation windows for session=s-t2 agent=agent-1
+
+[90mstdout[2m | src/c005-r2-refuter-probe.test.ts[2m > [22m[2mT2: window re-projection heals expiry in both directions[2m > [22m[2mre-projection $unsets a stale expiry when the window turns permanent
+[22m[39m17:52:36.086 [memory:mongodb:conversation-windows] info: projected 1 conversation windows for session=s-t2 agent=agent-1
+
+[90mstdout[2m | src/c005-r2-refuter-probe.test.ts[2m > [22m[2mT2: window re-projection heals expiry in both directions[2m > [22m[2mre-projection $sets a later expiry instead of keeping the stale one
+[22m[39m17:52:36.086 [memory:mongodb:conversation-windows] info: projected 1 conversation windows for session=s-t2 agent=agent-1
+
+[90mstdout[2m | src/c005-r2-refuter-probe.test.ts[2m > [22m[2mT2: window re-projection heals expiry in both directions[2m > [22m[2mre-projection $sets a later expiry instead of keeping the stale one
+[22m[39m17:52:36.086 [memory:mongodb:conversation-windows] info: projected 1 conversation windows for session=s-t2 agent=agent-1
+
+[90mstdout[2m | src/c005-r2-refuter-probe.test.ts[2m > [22m[2mT5: bounded leak — expired event text lingers in a stale window chunk[2m > [22m[2mdocuments the residual semantics: window chunk outlives an expired event until its own max expiry
+[22m[39m17:52:36.088 [memory:mongodb:conversation-windows] info: projected 1 conversation windows for session=s-t5 agent=agent-1
+
+[90mstdout[2m | src/c005-r2-refuter-probe.test.ts[2m > [22m[2mT5: bounded leak — expired event text lingers in a stale window chunk[2m > [22m[2mdocuments the residual semantics: window chunk outlives an expired event until its own max expiry
+[22m[39m17:52:36.088 [memory:mongodb:conversation-windows] info: projected 1 conversation windows for session=s-t5 agent=agent-1
+
+ [31m❯[39m src/c005-r2-refuter-probe.test.ts [2m([22m[2m8 tests[22m[2m | [22m[31m1 failed[39m[2m)[22m[32m 12[2mms[22m[39m
+     [32m✓[39m event and chunk carry the same derived expiresAt[32m 6[2mms[22m[39m
+     [32m✓[39m explicit per-write expiry still wins over the config default[32m 1[2mms[22m[39m
+     [32m✓[39m re-projection $unsets a stale expiry when the window turns permanent[32m 1[2mms[22m[39m
+     [32m✓[39m re-projection $sets a later expiry instead of keeping the stale one[32m 0[2mms[22m[39m
+     [32m✓[39m fuseChunkLaneFilters returns undefined for $and-shaped filters[32m 0[2mms[22m[39m
+     [32m✓[39m FAKE DIVERGENCE: {expiresAt: null} does NOT match missing fields in the stateful fake[32m 0[2mms[22m[39m
+     [32m✓[39m the $exists-based guard used on every OTHER lane works in the fake[32m 0[2mms[22m[39m
+[31m     [31m×[31m documents the residual semantics: window chunk outlives an expired event until its own max expiry[39m[32m 3[2mms[22m[39m
+
+[31m⎯⎯⎯⎯⎯⎯⎯[39m[1m[41m Failed Tests 2 [49m[22m[31m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[41m[1m FAIL [22m[49m src/c005-r2-refuter-probe.test.ts[2m > [22mT5: bounded leak — expired event text lingers in a stale window chunk[2m > [22mdocuments the residual semantics: window chunk outlives an expired event until its own max expiry
+[31m[1mAssertionError[22m: expected 1 to be +0 // Object.is equality[39m
+
+[32m- Expected[39m
+[31m+ Received[39m
+
+[32m- 0[39m
+[31m+ 1[39m
+
+[36m [2m❯[22m src/c005-r2-refuter-probe.test.ts:[2m334:33[22m[39m
+    [90m332|[39m    scopeRef[33m:[39m [32m"session:s-t5"[39m[33m,[39m
+    [90m333|[39m   })
+    [90m334|[39m   [34mexpect[39m(second[33m.[39mwindowsCreated)[33m.[39m[34mtoBe[39m([34m0[39m)
+    [90m   |[39m                                 [31m^[39m
+    [90m335|[39m
+    [90m336|[39m   // The stale window chunk still contains the expired events' text an…
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/2]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/mongodb-chunk-retention.test.ts[2m > [22mprojectConversationWindows — expiry propagation (C-005 r1 defect 4)[2m > [22mexcludes already-expired events from window text
+[31m[1mAssertionError[22m: expected 'User: live body 1\nUser: live body 2\…' not to contain 'dead body'[39m
+
+[32m- Expected[39m
+[31m+ Received[39m
+
+[32m- dead body[39m
+[31m+ User: live body 1[39m
+[31m+ User: live body 2[39m
+[31m+ User: live body 3[39m
+[31m+ User: live body 4[39m
+[31m+ User: live body 5[39m
+[31m+ User: live body 6[39m
+[31m+ [7mUser: [27mdead body[39m
+
+[36m [2m❯[22m src/mongodb-chunk-retention.test.ts:[2m419:20[22m[39m
+    [90m417|[39m   [35mconst[39m text [33m=[39m [35mtypeof[39m window[33m?.[39mtext [33m===[39m [32m"string"[39m [33m?[39m window[33m.[39mtext [33m:[39m [32m""[39m
+    [90m418|[39m   [34mexpect[39m(text)[33m.[39m[34mtoContain[39m([32m"live body 1"[39m)
+    [90m419|[39m   [34mexpect[39m(text)[33m.[39mnot[33m.[39m[34mtoContain[39m([32m"dead body"[39m)
+    [90m   |[39m                    [31m^[39m
+    [90m420|[39m  })
+    [90m421|[39m })
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/2]⎯[22m[39m
+
+
+[2m Test Files [22m [1m[31m2 failed[39m[22m[90m (2)[39m
+[2m      Tests [22m [1m[31m2 failed[39m[22m[2m | [22m[1m[32m26 passed[39m[22m[90m (28)[39m
+[2m   Start at [22m 17:52:35
+[2m   Duration [22m 1.02s[2m (transform 1.14s, setup 0ms, import 1.69s, tests 39ms, environment 0ms)[22m
+

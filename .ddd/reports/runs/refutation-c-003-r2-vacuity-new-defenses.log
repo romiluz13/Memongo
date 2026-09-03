@@ -1,0 +1,261 @@
+what: Mutate each new C-003 defense, require focused assertion failures, and restore byte-identically
+run: three mongodb-erasure.ts mutations plus focused green control
+date: 2026-09-03T12:50:16Z
+source: packages/memory-engine/src/mongodb-erasure.ts
+sha256-before: 58f57046a497429c589b0e730e6120ac461d22d5f48d148289d5dcc294ec9bfe
+
+== mutation a: remove artifactPhaseError receipt push ==
+sha256-mutated-a: ae984a0c44c4f4e44a21e6355693b3b57d4fb91caeb90b09c599a009c4c3839d
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/packages/memory-engine[39m
+
+[90mstdout[2m | src/mongodb-tenant-erasure.test.ts[2m > [22m[2mdeleteAllForAgent — full tenant sweep (C-003)[2m > [22m[2mdeletes the agent's documents from every tenant collection
+[22m[39m15:50:18.517 [memory:mongodb:erasure] info: tenant erasure complete {"agentId":"agent-1","collections":29}
+
+[90mstdout[2m | src/mongodb-tenant-erasure.test.ts[2m > [22m[2mdeleteAllForAgent — full tenant sweep (C-003)[2m > [22m[2mwrites a critical audit record that survives the memory_mutations erase
+[22m[39m15:50:18.522 [memory:mongodb:erasure] info: tenant erasure complete {"agentId":"agent-1","collections":29}
+
+[90mstderr[2m | src/mongodb-tenant-erasure.test.ts[2m > [22m[2mdeleteAllForAgent — full tenant sweep (C-003)[2m > [22m[2mreports per-collection failures instead of aborting the sweep
+[22m[39m15:50:18.523 [memory:mongodb:erasure] warn: tenant erasure completed with failures {"agentId":"agent-1","failed":["chunks"]}
+
+[90mstderr[2m | src/mongodb-tenant-erasure.test.ts[2m > [22m[2mdeleteAllForAgent — full tenant sweep (C-003)[2m > [22m[2mreports a phase-1 relevance join failure as a partial receipt, not silent completeness
+[22m[39m15:50:18.523 [memory:mongodb:erasure] warn: relevance run id collection failed; artifacts not swept {"agentId":"agent-1","error":{}}
+
+[90mstdout[2m | src/mongodb-tenant-erasure.test.ts[2m > [22m[2mdeleteAllForAgent — full tenant sweep (C-003)[2m > [22m[2mreports a phase-1 relevance join failure as a partial receipt, not silent completeness
+[22m[39m15:50:18.523 [memory:mongodb:erasure] info: tenant erasure complete {"agentId":"agent-1","collections":28}
+
+[90mstderr[2m | src/mongodb-tenant-erasure.test.ts[2m > [22m[2mdeleteAllForAgent — full tenant sweep (C-003)[2m > [22m[2msurfaces a failed proof-of-erasure audit write as partial with auditError
+[22m[39m15:50:18.528 [memory:mongodb:mutations] warn: recordMutation failed {"mutationId":"b89b31e0-1404-40a1-8c4c-f2ae4e98ad9e","error":{}}
+
+[90mstderr[2m | src/mongodb-tenant-erasure.test.ts[2m > [22m[2mdeleteAllForAgent — full tenant sweep (C-003)[2m > [22m[2msurfaces a failed proof-of-erasure audit write as partial with auditError
+[22m[39m15:50:18.528 [memory:mongodb:erasure] warn: tenant erasure audit record failed {"agentId":"agent-1","error":{}}
+15:50:18.528 [memory:mongodb:erasure] warn: tenant erasure completed with failures {"agentId":"agent-1","failed":[]}
+
+[90mstdout[2m | src/mongodb-tenant-erasure.test.ts[2m > [22m[2mdeleteAllForAgent — full tenant sweep (C-003)[2m > [22m[2merases an agent with no data without touching other tenants
+[22m[39m15:50:18.528 [memory:mongodb:erasure] info: tenant erasure complete {"agentId":"agent-1","collections":28}
+
+[90mstdout[2m | src/mongodb-tenant-erasure.test.ts[2m > [22m[2mMongoDBMemoryManager.deleteAllForAgent — facade wiring (C-003)[2m > [22m[2mdelegates through AdminOps to the seam against the stateful fake
+[22m[39m15:50:18.529 [memory:mongodb:erasure] info: tenant erasure complete {"agentId":"agent-1","collections":29}
+
+ [31m❯[39m src/mongodb-tenant-erasure.test.ts [2m([22m[2m7 tests[22m[2m | [22m[31m1 failed[39m[2m)[22m[32m 23[2mms[22m[39m
+     [32m✓[39m deletes the agent's documents from every tenant collection[32m 15[2mms[22m[39m
+     [32m✓[39m writes a critical audit record that survives the memory_mutations erase[32m 1[2mms[22m[39m
+     [32m✓[39m reports per-collection failures instead of aborting the sweep[32m 1[2mms[22m[39m
+[31m     [31m×[31m reports a phase-1 relevance join failure as a partial receipt, not silent completeness[39m[32m 4[2mms[22m[39m
+     [32m✓[39m surfaces a failed proof-of-erasure audit write as partial with auditError[32m 1[2mms[22m[39m
+     [32m✓[39m erases an agent with no data without touching other tenants[32m 0[2mms[22m[39m
+     [32m✓[39m delegates through AdminOps to the seam against the stateful fake[32m 1[2mms[22m[39m
+
+[31m⎯⎯⎯⎯⎯⎯⎯[39m[1m[41m Failed Tests 1 [49m[22m[31m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[41m[1m FAIL [22m[49m src/mongodb-tenant-erasure.test.ts[2m > [22mdeleteAllForAgent — full tenant sweep (C-003)[2m > [22mreports a phase-1 relevance join failure as a partial receipt, not silent completeness
+[31m[1mAssertionError[22m: expected 'complete' to be 'partial' // Object.is equality[39m
+
+Expected: [32m"partial"[39m
+Received: [31m"complete"[39m
+
+[36m [2m❯[22m src/mongodb-tenant-erasure.test.ts:[2m271:26[22m[39m
+    [90m269|[39m   })
+    [90m270|[39m
+    [90m271|[39m   [34mexpect[39m(receipt[33m.[39mstatus)[33m.[39m[34mtoBe[39m([32m"partial"[39m)
+    [90m   |[39m                          [31m^[39m
+    [90m272|[39m   [35mconst[39m artifactsReceipt [33m=[39m receipt[33m.[39mreceipts[33m.[39m[34mfind[39m(
+    [90m273|[39m    (entry) [33m=>[39m entry[33m.[39mcollection [33m===[39m [32m"relevance_artifacts"[39m[33m,[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯[22m[39m
+
+
+[2m Test Files [22m [1m[31m1 failed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[31m1 failed[39m[22m[2m | [22m[1m[32m6 passed[39m[22m[90m (7)[39m
+[2m   Start at [22m 15:50:17
+[2m   Duration [22m 1.04s[2m (transform 670ms, setup 0ms, import 900ms, tests 23ms, environment 0ms)[22m
+
+mutation-a-exit: 1 (expected nonzero)
+restore-a-cmp-exit: 0
+sha256-after-a: 58f57046a497429c589b0e730e6120ac461d22d5f48d148289d5dcc294ec9bfe
+
+== mutation b: status ignores auditError ==
+sha256-mutated-b: e6c1abaff02443ffde97e99824070bb564b84f8b2e535ba64961522c69ff2d24
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/packages/memory-engine[39m
+
+[90mstdout[2m | src/mongodb-tenant-erasure.test.ts[2m > [22m[2mdeleteAllForAgent — full tenant sweep (C-003)[2m > [22m[2mdeletes the agent's documents from every tenant collection
+[22m[39m15:50:20.003 [memory:mongodb:erasure] info: tenant erasure complete {"agentId":"agent-1","collections":29}
+
+[90mstdout[2m | src/mongodb-tenant-erasure.test.ts[2m > [22m[2mdeleteAllForAgent — full tenant sweep (C-003)[2m > [22m[2mwrites a critical audit record that survives the memory_mutations erase
+[22m[39m15:50:20.008 [memory:mongodb:erasure] info: tenant erasure complete {"agentId":"agent-1","collections":29}
+
+[90mstderr[2m | src/mongodb-tenant-erasure.test.ts[2m > [22m[2mdeleteAllForAgent — full tenant sweep (C-003)[2m > [22m[2mreports per-collection failures instead of aborting the sweep
+[22m[39m15:50:20.009 [memory:mongodb:erasure] warn: tenant erasure completed with failures {"agentId":"agent-1","failed":["chunks"]}
+
+[90mstderr[2m | src/mongodb-tenant-erasure.test.ts[2m > [22m[2mdeleteAllForAgent — full tenant sweep (C-003)[2m > [22m[2mreports a phase-1 relevance join failure as a partial receipt, not silent completeness
+[22m[39m15:50:20.009 [memory:mongodb:erasure] warn: relevance run id collection failed; artifacts not swept {"agentId":"agent-1","error":{}}
+
+[90mstderr[2m | src/mongodb-tenant-erasure.test.ts[2m > [22m[2mdeleteAllForAgent — full tenant sweep (C-003)[2m > [22m[2mreports a phase-1 relevance join failure as a partial receipt, not silent completeness
+[22m[39m15:50:20.009 [memory:mongodb:erasure] warn: tenant erasure completed with failures {"agentId":"agent-1","failed":["relevance_artifacts"]}
+
+[90mstderr[2m | src/mongodb-tenant-erasure.test.ts[2m > [22m[2mdeleteAllForAgent — full tenant sweep (C-003)[2m > [22m[2msurfaces a failed proof-of-erasure audit write as partial with auditError
+[22m[39m15:50:20.010 [memory:mongodb:mutations] warn: recordMutation failed {"mutationId":"7d72a0ac-3b3a-47eb-91b2-2d85df3f8f98","error":{}}
+
+[90mstdout[2m | src/mongodb-tenant-erasure.test.ts[2m > [22m[2mdeleteAllForAgent — full tenant sweep (C-003)[2m > [22m[2msurfaces a failed proof-of-erasure audit write as partial with auditError
+[22m[39m15:50:20.010 [memory:mongodb:erasure] info: tenant erasure complete {"agentId":"agent-1","collections":29}
+
+[90mstderr[2m | src/mongodb-tenant-erasure.test.ts[2m > [22m[2mdeleteAllForAgent — full tenant sweep (C-003)[2m > [22m[2msurfaces a failed proof-of-erasure audit write as partial with auditError
+[22m[39m15:50:20.010 [memory:mongodb:erasure] warn: tenant erasure audit record failed {"agentId":"agent-1","error":{}}
+
+[90mstdout[2m | src/mongodb-tenant-erasure.test.ts[2m > [22m[2mdeleteAllForAgent — full tenant sweep (C-003)[2m > [22m[2merases an agent with no data without touching other tenants
+[22m[39m15:50:20.017 [memory:mongodb:erasure] info: tenant erasure complete {"agentId":"agent-1","collections":28}
+
+[90mstdout[2m | src/mongodb-tenant-erasure.test.ts[2m > [22m[2mMongoDBMemoryManager.deleteAllForAgent — facade wiring (C-003)[2m > [22m[2mdelegates through AdminOps to the seam against the stateful fake
+[22m[39m15:50:20.019 [memory:mongodb:erasure] info: tenant erasure complete {"agentId":"agent-1","collections":29}
+
+ [31m❯[39m src/mongodb-tenant-erasure.test.ts [2m([22m[2m7 tests[22m[2m | [22m[31m1 failed[39m[2m)[22m[32m 25[2mms[22m[39m
+     [32m✓[39m deletes the agent's documents from every tenant collection[32m 13[2mms[22m[39m
+     [32m✓[39m writes a critical audit record that survives the memory_mutations erase[32m 1[2mms[22m[39m
+     [32m✓[39m reports per-collection failures instead of aborting the sweep[32m 1[2mms[22m[39m
+     [32m✓[39m reports a phase-1 relevance join failure as a partial receipt, not silent completeness[32m 1[2mms[22m[39m
+[31m     [31m×[31m surfaces a failed proof-of-erasure audit write as partial with auditError[39m[32m 6[2mms[22m[39m
+     [32m✓[39m erases an agent with no data without touching other tenants[32m 2[2mms[22m[39m
+     [32m✓[39m delegates through AdminOps to the seam against the stateful fake[32m 1[2mms[22m[39m
+
+[31m⎯⎯⎯⎯⎯⎯⎯[39m[1m[41m Failed Tests 1 [49m[22m[31m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[41m[1m FAIL [22m[49m src/mongodb-tenant-erasure.test.ts[2m > [22mdeleteAllForAgent — full tenant sweep (C-003)[2m > [22msurfaces a failed proof-of-erasure audit write as partial with auditError
+[31m[1mAssertionError[22m: expected 'complete' to be 'partial' // Object.is equality[39m
+
+Expected: [32m"partial"[39m
+Received: [31m"complete"[39m
+
+[36m [2m❯[22m src/mongodb-tenant-erasure.test.ts:[2m317:26[22m[39m
+    [90m315|[39m   [90m// All deletes succeeded, but the receipt must not claim "complete"[39m
+    [90m316|[39m   [90m// without the durable proof-of-erasure audit record.[39m
+    [90m317|[39m   [34mexpect[39m(receipt[33m.[39mstatus)[33m.[39m[34mtoBe[39m([32m"partial"[39m)
+    [90m   |[39m                          [31m^[39m
+    [90m318|[39m   [34mexpect[39m(receipt[33m.[39mauditError)[33m.[39m[34mtoBe[39m([32m"audit write failed"[39m)
+    [90m319|[39m   [34mexpect[39m(receipt[33m.[39mmutationId)[33m.[39m[34mtoBeUndefined[39m()
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯[22m[39m
+
+
+[2m Test Files [22m [1m[31m1 failed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[31m1 failed[39m[22m[2m | [22m[1m[32m6 passed[39m[22m[90m (7)[39m
+[2m   Start at [22m 15:50:18
+[2m   Duration [22m 1.14s[2m (transform 724ms, setup 0ms, import 997ms, tests 25ms, environment 0ms)[22m
+
+mutation-b-exit: 1 (expected nonzero)
+restore-b-cmp-exit: 0
+sha256-after-b: 58f57046a497429c589b0e730e6120ac461d22d5f48d148289d5dcc294ec9bfe
+
+== mutation c: suppress auditError assignment ==
+sha256-mutated-c: 09c508164cf9c489420976f01ab87251406248d2c4fa30ac242984e9cd359a24
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/packages/memory-engine[39m
+
+[90mstdout[2m | src/mongodb-tenant-erasure.test.ts[2m > [22m[2mdeleteAllForAgent — full tenant sweep (C-003)[2m > [22m[2mdeletes the agent's documents from every tenant collection
+[22m[39m15:50:22.696 [memory:mongodb:erasure] info: tenant erasure complete {"agentId":"agent-1","collections":29}
+
+[90mstdout[2m | src/mongodb-tenant-erasure.test.ts[2m > [22m[2mdeleteAllForAgent — full tenant sweep (C-003)[2m > [22m[2mwrites a critical audit record that survives the memory_mutations erase
+[22m[39m15:50:22.702 [memory:mongodb:erasure] info: tenant erasure complete {"agentId":"agent-1","collections":29}
+
+[90mstderr[2m | src/mongodb-tenant-erasure.test.ts[2m > [22m[2mdeleteAllForAgent — full tenant sweep (C-003)[2m > [22m[2mreports per-collection failures instead of aborting the sweep
+[22m[39m15:50:22.703 [memory:mongodb:erasure] warn: tenant erasure completed with failures {"agentId":"agent-1","failed":["chunks"]}
+
+[90mstderr[2m | src/mongodb-tenant-erasure.test.ts[2m > [22m[2mdeleteAllForAgent — full tenant sweep (C-003)[2m > [22m[2mreports a phase-1 relevance join failure as a partial receipt, not silent completeness
+[22m[39m15:50:22.703 [memory:mongodb:erasure] warn: relevance run id collection failed; artifacts not swept {"agentId":"agent-1","error":{}}
+
+[90mstderr[2m | src/mongodb-tenant-erasure.test.ts[2m > [22m[2mdeleteAllForAgent — full tenant sweep (C-003)[2m > [22m[2mreports a phase-1 relevance join failure as a partial receipt, not silent completeness
+[22m[39m15:50:22.703 [memory:mongodb:erasure] warn: tenant erasure completed with failures {"agentId":"agent-1","failed":["relevance_artifacts"]}
+
+[90mstderr[2m | src/mongodb-tenant-erasure.test.ts[2m > [22m[2mdeleteAllForAgent — full tenant sweep (C-003)[2m > [22m[2msurfaces a failed proof-of-erasure audit write as partial with auditError
+[22m[39m15:50:22.704 [memory:mongodb:mutations] warn: recordMutation failed {"mutationId":"19eb50bf-24ed-429c-bdaa-59da97ff0615","error":{}}
+
+[90mstdout[2m | src/mongodb-tenant-erasure.test.ts[2m > [22m[2mdeleteAllForAgent — full tenant sweep (C-003)[2m > [22m[2msurfaces a failed proof-of-erasure audit write as partial with auditError
+[22m[39m15:50:22.704 [memory:mongodb:erasure] info: tenant erasure complete {"agentId":"agent-1","collections":29}
+
+[90mstderr[2m | src/mongodb-tenant-erasure.test.ts[2m > [22m[2mdeleteAllForAgent — full tenant sweep (C-003)[2m > [22m[2msurfaces a failed proof-of-erasure audit write as partial with auditError
+[22m[39m15:50:22.704 [memory:mongodb:erasure] warn: tenant erasure audit record failed {"agentId":"agent-1","error":{}}
+
+[90mstdout[2m | src/mongodb-tenant-erasure.test.ts[2m > [22m[2mdeleteAllForAgent — full tenant sweep (C-003)[2m > [22m[2merases an agent with no data without touching other tenants
+[22m[39m15:50:22.709 [memory:mongodb:erasure] info: tenant erasure complete {"agentId":"agent-1","collections":28}
+
+[90mstdout[2m | src/mongodb-tenant-erasure.test.ts[2m > [22m[2mMongoDBMemoryManager.deleteAllForAgent — facade wiring (C-003)[2m > [22m[2mdelegates through AdminOps to the seam against the stateful fake
+[22m[39m15:50:22.710 [memory:mongodb:erasure] info: tenant erasure complete {"agentId":"agent-1","collections":29}
+
+ [31m❯[39m src/mongodb-tenant-erasure.test.ts [2m([22m[2m7 tests[22m[2m | [22m[31m1 failed[39m[2m)[22m[32m 26[2mms[22m[39m
+     [32m✓[39m deletes the agent's documents from every tenant collection[32m 16[2mms[22m[39m
+     [32m✓[39m writes a critical audit record that survives the memory_mutations erase[32m 1[2mms[22m[39m
+     [32m✓[39m reports per-collection failures instead of aborting the sweep[32m 1[2mms[22m[39m
+     [32m✓[39m reports a phase-1 relevance join failure as a partial receipt, not silent completeness[32m 1[2mms[22m[39m
+[31m     [31m×[31m surfaces a failed proof-of-erasure audit write as partial with auditError[39m[32m 5[2mms[22m[39m
+     [32m✓[39m erases an agent with no data without touching other tenants[32m 1[2mms[22m[39m
+     [32m✓[39m delegates through AdminOps to the seam against the stateful fake[32m 1[2mms[22m[39m
+
+[31m⎯⎯⎯⎯⎯⎯⎯[39m[1m[41m Failed Tests 1 [49m[22m[31m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[41m[1m FAIL [22m[49m src/mongodb-tenant-erasure.test.ts[2m > [22mdeleteAllForAgent — full tenant sweep (C-003)[2m > [22msurfaces a failed proof-of-erasure audit write as partial with auditError
+[31m[1mAssertionError[22m: expected 'complete' to be 'partial' // Object.is equality[39m
+
+Expected: [32m"partial"[39m
+Received: [31m"complete"[39m
+
+[36m [2m❯[22m src/mongodb-tenant-erasure.test.ts:[2m317:26[22m[39m
+    [90m315|[39m   [90m// All deletes succeeded, but the receipt must not claim "complete"[39m
+    [90m316|[39m   [90m// without the durable proof-of-erasure audit record.[39m
+    [90m317|[39m   [34mexpect[39m(receipt[33m.[39mstatus)[33m.[39m[34mtoBe[39m([32m"partial"[39m)
+    [90m   |[39m                          [31m^[39m
+    [90m318|[39m   [34mexpect[39m(receipt[33m.[39mauditError)[33m.[39m[34mtoBe[39m([32m"audit write failed"[39m)
+    [90m319|[39m   [34mexpect[39m(receipt[33m.[39mmutationId)[33m.[39m[34mtoBeUndefined[39m()
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯[22m[39m
+
+
+[2m Test Files [22m [1m[31m1 failed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[31m1 failed[39m[22m[2m | [22m[1m[32m6 passed[39m[22m[90m (7)[39m
+[2m   Start at [22m 15:50:20
+[2m   Duration [22m 2.28s[2m (transform 1.27s, setup 0ms, import 2.13s, tests 26ms, environment 0ms)[22m
+
+mutation-c-exit: 1 (expected nonzero)
+restore-c-cmp-exit: 0
+sha256-after-c: 58f57046a497429c589b0e730e6120ac461d22d5f48d148289d5dcc294ec9bfe
+
+== restored-tree control ==
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/packages/memory-engine[39m
+
+[90mstdout[2m | src/mongodb-tenant-erasure.test.ts[2m > [22m[2mdeleteAllForAgent — full tenant sweep (C-003)[2m > [22m[2mdeletes the agent's documents from every tenant collection
+[22m[39m15:50:24.440 [memory:mongodb:erasure] info: tenant erasure complete {"agentId":"agent-1","collections":29}
+
+[90mstdout[2m | src/mongodb-tenant-erasure.test.ts[2m > [22m[2mdeleteAllForAgent — full tenant sweep (C-003)[2m > [22m[2mwrites a critical audit record that survives the memory_mutations erase
+[22m[39m15:50:24.445 [memory:mongodb:erasure] info: tenant erasure complete {"agentId":"agent-1","collections":29}
+
+[90mstderr[2m | src/mongodb-tenant-erasure.test.ts[2m > [22m[2mdeleteAllForAgent — full tenant sweep (C-003)[2m > [22m[2mreports per-collection failures instead of aborting the sweep
+[22m[39m15:50:24.445 [memory:mongodb:erasure] warn: tenant erasure completed with failures {"agentId":"agent-1","failed":["chunks"]}
+
+[90mstderr[2m | src/mongodb-tenant-erasure.test.ts[2m > [22m[2mdeleteAllForAgent — full tenant sweep (C-003)[2m > [22m[2mreports a phase-1 relevance join failure as a partial receipt, not silent completeness
+[22m[39m15:50:24.446 [memory:mongodb:erasure] warn: relevance run id collection failed; artifacts not swept {"agentId":"agent-1","error":{}}
+
+[90mstderr[2m | src/mongodb-tenant-erasure.test.ts[2m > [22m[2mdeleteAllForAgent — full tenant sweep (C-003)[2m > [22m[2mreports a phase-1 relevance join failure as a partial receipt, not silent completeness
+[22m[39m15:50:24.446 [memory:mongodb:erasure] warn: tenant erasure completed with failures {"agentId":"agent-1","failed":["relevance_artifacts"]}
+
+[90mstderr[2m | src/mongodb-tenant-erasure.test.ts[2m > [22m[2mdeleteAllForAgent — full tenant sweep (C-003)[2m > [22m[2msurfaces a failed proof-of-erasure audit write as partial with auditError
+[22m[39m15:50:24.446 [memory:mongodb:mutations] warn: recordMutation failed {"mutationId":"6e26f94b-f098-43d5-8c0c-766c9c1d39f7","error":{}}
+
+[90mstderr[2m | src/mongodb-tenant-erasure.test.ts[2m > [22m[2mdeleteAllForAgent — full tenant sweep (C-003)[2m > [22m[2msurfaces a failed proof-of-erasure audit write as partial with auditError
+[22m[39m15:50:24.446 [memory:mongodb:erasure] warn: tenant erasure audit record failed {"agentId":"agent-1","error":{}}
+15:50:24.446 [memory:mongodb:erasure] warn: tenant erasure completed with failures {"agentId":"agent-1","failed":[]}
+
+[90mstdout[2m | src/mongodb-tenant-erasure.test.ts[2m > [22m[2mdeleteAllForAgent — full tenant sweep (C-003)[2m > [22m[2merases an agent with no data without touching other tenants
+[22m[39m15:50:24.447 [memory:mongodb:erasure] info: tenant erasure complete {"agentId":"agent-1","collections":28}
+
+[90mstdout[2m | src/mongodb-tenant-erasure.test.ts[2m > [22m[2mMongoDBMemoryManager.deleteAllForAgent — facade wiring (C-003)[2m > [22m[2mdelegates through AdminOps to the seam against the stateful fake
+[22m[39m15:50:24.448 [memory:mongodb:erasure] info: tenant erasure complete {"agentId":"agent-1","collections":29}
+
+ [32m✓[39m src/mongodb-tenant-erasure.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 17[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m1 passed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[32m7 passed[39m[22m[90m (7)[39m
+[2m   Start at [22m 15:50:23
+[2m   Duration [22m 1.35s[2m (transform 899ms, setup 0ms, import 1.17s, tests 17ms, environment 0ms)[22m
+
+control-exit: 0
+scratch-removed-by-trap: /tmp/refutation-c-003-r2-mongodb-erasure.ts.81696

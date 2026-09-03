@@ -158,6 +158,10 @@ export class MongoDBManagerSyncOps {
 							timestamp: event.timestamp,
 							validAt: event.validAt ?? event.timestamp,
 							...(event.invalidAt ? { invalidAt: event.invalidAt } : {}),
+							// C-005: stored events carry the persisted expiry —
+							// the chunk must inherit it (and re-projection heals
+							// older chunks that were written without it).
+							...(event.expiresAt ? { expiresAt: event.expiresAt } : {}),
 							...(event.sessionId ? { sessionId: event.sessionId } : {}),
 							...(event.metadata ? { metadata: event.metadata } : {}),
 						},

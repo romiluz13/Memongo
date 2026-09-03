@@ -1,0 +1,34 @@
+what: Re-drive all three round-1 C-004 weaknesses against real quarantine code and stateful fake
+run: bunx vitest run src/refutation-c-004-r2.temp.test.ts -t FIX
+date: 2026-09-03T13:14:16Z
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/packages/memory-engine[39m
+
+[90mstdout[2m | src/refutation-c-004-r2.temp.test.ts[2m > [22m[2mC-004 round-2 independent probes[2m > [22m[2mFIX promote audit metadata matches the durable decision row
+[22m[39m16:14:17.745 [memory:mongodb:structured] info: structured memory created: type=preference key=*** over spaces in TypeScript files revision=1
+
+[90mstdout[2m | src/refutation-c-004-r2.temp.test.ts[2m > [22m[2mC-004 round-2 independent probes[2m > [22m[2mFIX promote ledger failure is surfaced while decision remains durable
+[22m[39m16:14:17.749 [memory:mongodb:structured] info: structured memory created: type=preference key=*** over spaces in TypeScript files revision=1
+
+[90mstderr[2m | src/refutation-c-004-r2.temp.test.ts[2m > [22m[2mC-004 round-2 independent probes[2m > [22m[2mFIX promote ledger failure is surfaced while decision remains durable
+[22m[39m16:14:17.749 [memory:mongodb:mutations] warn: recordMutation failed {"mutationId":"7bc57587-0cfe-4651-bf54-6fa64829f7bb","error":{}}
+
+[90mstderr[2m | src/refutation-c-004-r2.temp.test.ts[2m > [22m[2mC-004 round-2 independent probes[2m > [22m[2mFIX promote ledger failure is surfaced while decision remains durable
+[22m[39m16:14:17.749 [memory:mongodb:mutations] warn: recordMutation failed {"mutationId":"779ef3ec-e013-4bfc-9e79-0a8f3eb28acc","error":{}}
+
+[90mstderr[2m | src/refutation-c-004-r2.temp.test.ts[2m > [22m[2mC-004 round-2 independent probes[2m > [22m[2mFIX promote ledger failure is surfaced while decision remains durable
+[22m[39m16:14:17.749 [memory:mongodb:quarantine] warn: promote audit record failed for quarantine=515f5484-c39b-4e63-ac96-43349fdbd2aa: independent ledger outage
+
+[90mstderr[2m | src/refutation-c-004-r2.temp.test.ts[2m > [22m[2mC-004 round-2 independent probes[2m > [22m[2mFIX reject ledger failure is surfaced while decision remains durable
+[22m[39m16:14:17.749 [memory:mongodb:mutations] warn: recordMutation failed {"mutationId":"da69570e-6713-4e89-8f85-7fbc2a23a9af","error":{}}
+
+[90mstderr[2m | src/refutation-c-004-r2.temp.test.ts[2m > [22m[2mC-004 round-2 independent probes[2m > [22m[2mFIX reject ledger failure is surfaced while decision remains durable
+[22m[39m16:14:17.749 [memory:mongodb:quarantine] warn: reject audit record failed for quarantine=523c4e96-2a51-467c-b2bd-df2d5cd1f056: independent ledger outage
+
+ [32m✓[39m src/refutation-c-004-r2.temp.test.ts [2m([22m[2m7 tests[22m[2m | [22m[33m3 skipped[39m[2m)[22m[32m 8[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m1 passed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[32m4 passed[39m[22m[2m | [22m[33m3 skipped[39m[90m (7)[39m
+[2m   Start at [22m 16:14:17
+[2m   Duration [22m 522ms[2m (transform 292ms, setup 0ms, import 418ms, tests 8ms, environment 0ms)[22m
+

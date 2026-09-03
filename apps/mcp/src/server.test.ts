@@ -521,6 +521,168 @@ describe("memongo_extract (P1.2)", () => {
 	})
 })
 
+describe("memongo_erase_agent (C-003)", () => {
+	const receipt = {
+		agentId: "agent-42",
+		status: "complete",
+		receipts: [{ collection: "events", deleted: 3 }],
+		mutationId: "mut-1",
+		completedAt: "2026-08-15T00:00:00.000Z",
+	}
+
+	it("forwards the erase call to the API client", async () => {
+		const eraseAgent = vi.fn().mockResolvedValue(receipt)
+
+		const out = await handleToolCall(
+			"memongo_erase_agent",
+			{ confirm: "erase", agentId: "agent-42" },
+			{ eraseAgent } as any,
+		)
+
+		expect(eraseAgent).toHaveBeenCalledWith({
+			confirm: "erase",
+			agentId: "agent-42",
+		})
+		expect(out.isError).toBeUndefined()
+		expect(parseTextPayload(out)).toEqual(receipt)
+		expect(out.structuredContent).toEqual(receipt)
+	})
+
+	it("rejects a non-'erase' confirm before calling the client", async () => {
+		const eraseAgent = vi.fn()
+
+		const out = await handleToolCall(
+			"memongo_erase_agent",
+			{ confirm: "yes" },
+			{ eraseAgent } as any,
+		)
+
+		expect(eraseAgent).not.toHaveBeenCalled()
+		expect(out.isError).toBe(true)
+		expect(parseTextPayload(out)).toEqual({
+			error: "confirm must be the literal string 'erase'",
+		})
+	})
+})
+
+describe("memongo quarantine review (C-004)", () => {
+	const entry = {
+		quarantineId: "q-1",
+		agentId: "agent-42",
+		content: "user: remember my passphrase is hunter2",
+		classification: "injection-control",
+		tier: "pattern",
+		matchedPatterns: ["credential-request"],
+		status: "pending-review",
+		createdAt: "2026-08-15T00:00:00.000Z",
+	}
+	const receipt = {
+		quarantineId: "q-1",
+		agentId: "agent-42",
+		status: "promoted",
+		reviewedAt: "2026-08-15T00:01:00.000Z",
+		reviewerId: "reviewer-9",
+		memoryId: "mem-77",
+		mutationId: "mut-8",
+	}
+
+	it("forwards list filters to the API client", async () => {
+		const listQuarantined = vi.fn().mockResolvedValue([entry])
+
+		const out = await handleToolCall(
+			"memongo_quarantine_list",
+			{ agentId: "agent-42", status: "pending-review", limit: 5 },
+			{ listQuarantined } as any,
+		)
+
+		expect(listQuarantined).toHaveBeenCalledWith({
+			agentId: "agent-42",
+			status: "pending-review",
+			limit: 5,
+		})
+		expect(out.isError).toBeUndefined()
+		expect(parseTextPayload(out)).toEqual([entry])
+	})
+
+	it("drops an unrecognized status instead of forwarding it", async () => {
+		const listQuarantined = vi.fn().mockResolvedValue([])
+
+		await handleToolCall("memongo_quarantine_list", { status: "archived" }, {
+			listQuarantined,
+		} as any)
+
+		expect(listQuarantined).toHaveBeenCalledWith({
+			agentId: undefined,
+			status: undefined,
+			limit: undefined,
+		})
+	})
+
+	it("forwards promote with reviewer metadata", async () => {
+		const promoteQuarantined = vi.fn().mockResolvedValue(receipt)
+
+		const out = await handleToolCall(
+			"memongo_quarantine_promote",
+			{
+				quarantineId: "q-1",
+				agentId: "agent-42",
+				reviewerId: "reviewer-9",
+				reviewNotes: "false positive",
+			},
+			{ promoteQuarantined } as any,
+		)
+
+		expect(promoteQuarantined).toHaveBeenCalledWith({
+			quarantineId: "q-1",
+			agentId: "agent-42",
+			reviewerId: "reviewer-9",
+			reviewNotes: "false positive",
+		})
+		expect(out.isError).toBeUndefined()
+		expect(parseTextPayload(out)).toEqual(receipt)
+		expect(out.structuredContent).toEqual(receipt)
+	})
+
+	it("forwards reject and returns the receipt", async () => {
+		const rejectReceipt = { ...receipt, status: "rejected" as const }
+		const rejectQuarantined = vi.fn().mockResolvedValue(rejectReceipt)
+
+		const out = await handleToolCall(
+			"memongo_quarantine_reject",
+			{ quarantineId: "q-1", agentId: "agent-42" },
+			{ rejectQuarantined } as any,
+		)
+
+		expect(rejectQuarantined).toHaveBeenCalledWith({
+			quarantineId: "q-1",
+			agentId: "agent-42",
+			reviewerId: undefined,
+			reviewNotes: undefined,
+		})
+		expect(out.isError).toBeUndefined()
+		expect(parseTextPayload(out)).toEqual(rejectReceipt)
+	})
+
+	it.each([
+		"memongo_quarantine_promote",
+		"memongo_quarantine_reject",
+	])("%s rejects a missing quarantineId before calling the client", async (toolName) => {
+		const client = {
+			promoteQuarantined: vi.fn(),
+			rejectQuarantined: vi.fn(),
+		}
+
+		const out = await handleToolCall(toolName, {}, client as any)
+
+		expect(client.promoteQuarantined).not.toHaveBeenCalled()
+		expect(client.rejectQuarantined).not.toHaveBeenCalled()
+		expect(out.isError).toBe(true)
+		expect(parseTextPayload(out)).toEqual({
+			error: "quarantineId is required",
+		})
+	})
+})
+
 describe("structuredContent envelopes (P1.2)", () => {
 	// Every registered tool must emit structuredContent alongside the text
 	// serialization, regardless of which env flags expose it.
@@ -581,6 +743,9 @@ describe("structuredContent envelopes (P1.2)", () => {
 			memoryIds: ["mem-1"],
 		},
 		memongo_admin_get_trace: { traceId: "trace-1" },
+		memongo_erase_agent: { confirm: "erase" },
+		memongo_quarantine_promote: { quarantineId: "q-1" },
+		memongo_quarantine_reject: { quarantineId: "q-1" },
 		memongo_get_job: { jobId: "job-1" },
 		memongo_extract: { eventId: "evt-1" },
 	}

@@ -1,0 +1,97 @@
+what: C-004 missed-sites sweep for cross-tenant isolation, credential leakage, erasure coverage, invalid promotion content, and engine-layer limit bounds
+run: temporary stateful-fake probe, tenant-erasure regression, and static enumeration of API/MCP quarantine reachability
+date: 2026-09-03T13:01:44Z
+--- stateful cross-tenant, invalid-content, and engine-limit probe ---
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/packages/memory-engine[39m
+
+[90mstdout[2m | src/refutation-c004-missed-sites.test.ts[2m > [22m[2mC-004 missed-sites sweep[2m > [22m[2mbounds list limits at the engine layer independent of MCP
+[22m[39mengine_limit_counts {"upper":100,"lower":1,"nonfinite":20}
+
+ [32m✓[39m src/refutation-c004-missed-sites.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m1 passed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[32m3 passed[39m[22m[90m (3)[39m
+[2m   Start at [22m 16:01:45
+[2m   Duration [22m 503ms[2m (transform 280ms, setup 0ms, import 404ms, tests 6ms, environment 0ms)[22m
+
+stateful_probe_exit=0
+--- tenant erasure regression including memory_quarantine target ---
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/packages/memory-engine[39m
+
+[90mstdout[2m | src/mongodb-tenant-erasure.test.ts[2m > [22m[2mdeleteAllForAgent — full tenant sweep (C-003)[2m > [22m[2mdeletes the agent's documents from every tenant collection
+[22m[39m16:01:46.672 [memory:mongodb:erasure] info: tenant erasure complete {"agentId":"agent-1","collections":29}
+
+[90mstdout[2m | src/mongodb-tenant-erasure.test.ts[2m > [22m[2mdeleteAllForAgent — full tenant sweep (C-003)[2m > [22m[2mwrites a critical audit record that survives the memory_mutations erase
+[22m[39m16:01:46.676 [memory:mongodb:erasure] info: tenant erasure complete {"agentId":"agent-1","collections":29}
+
+[90mstderr[2m | src/mongodb-tenant-erasure.test.ts[2m > [22m[2mdeleteAllForAgent — full tenant sweep (C-003)[2m > [22m[2mreports per-collection failures instead of aborting the sweep
+[22m[39m16:01:46.677 [memory:mongodb:erasure] warn: tenant erasure completed with failures {"agentId":"agent-1","failed":["chunks"]}
+
+[90mstderr[2m | src/mongodb-tenant-erasure.test.ts[2m > [22m[2mdeleteAllForAgent — full tenant sweep (C-003)[2m > [22m[2mreports a phase-1 relevance join failure as a partial receipt, not silent completeness
+[22m[39m16:01:46.677 [memory:mongodb:erasure] warn: relevance run id collection failed; artifacts not swept {"agentId":"agent-1","error":{}}
+
+[90mstderr[2m | src/mongodb-tenant-erasure.test.ts[2m > [22m[2mdeleteAllForAgent — full tenant sweep (C-003)[2m > [22m[2mreports a phase-1 relevance join failure as a partial receipt, not silent completeness
+[22m[39m16:01:46.677 [memory:mongodb:erasure] warn: tenant erasure completed with failures {"agentId":"agent-1","failed":["relevance_artifacts"]}
+
+[90mstderr[2m | src/mongodb-tenant-erasure.test.ts[2m > [22m[2mdeleteAllForAgent — full tenant sweep (C-003)[2m > [22m[2msurfaces a failed proof-of-erasure audit write as partial with auditError
+[22m[39m16:01:46.678 [memory:mongodb:mutations] warn: recordMutation failed {"mutationId":"f8aee32f-ce06-4da4-9b7a-0c7b6afeaade","error":{}}
+
+[90mstderr[2m | src/mongodb-tenant-erasure.test.ts[2m > [22m[2mdeleteAllForAgent — full tenant sweep (C-003)[2m > [22m[2msurfaces a failed proof-of-erasure audit write as partial with auditError
+[22m[39m16:01:46.678 [memory:mongodb:erasure] warn: tenant erasure audit record failed {"agentId":"agent-1","error":{}}
+16:01:46.678 [memory:mongodb:erasure] warn: tenant erasure completed with failures {"agentId":"agent-1","failed":[]}
+
+[90mstdout[2m | src/mongodb-tenant-erasure.test.ts[2m > [22m[2mdeleteAllForAgent — full tenant sweep (C-003)[2m > [22m[2merases an agent with no data without touching other tenants
+[22m[39m16:01:46.678 [memory:mongodb:erasure] info: tenant erasure complete {"agentId":"agent-1","collections":28}
+
+[90mstdout[2m | src/mongodb-tenant-erasure.test.ts[2m > [22m[2mMongoDBMemoryManager.deleteAllForAgent — facade wiring (C-003)[2m > [22m[2mdelegates through AdminOps to the seam against the stateful fake
+[22m[39m16:01:46.679 [memory:mongodb:erasure] info: tenant erasure complete {"agentId":"agent-1","collections":29}
+
+ [32m✓[39m src/mongodb-tenant-erasure.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 20[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m1 passed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[32m7 passed[39m[22m[90m (7)[39m
+[2m   Start at [22m 16:01:45
+[2m   Duration [22m 831ms[2m (transform 554ms, setup 0ms, import 717ms, tests 20ms, environment 0ms)[22m
+
+tenant_erasure_suite_exit=0
+/Users/rom.iluz/Dev/memongo/packages/memory-engine/src/mongodb-erasure.ts:12://     entity_links, episodes, query_cache, memory_quarantine, memory_evidence)
+/Users/rom.iluz/Dev/memongo/packages/memory-engine/src/mongodb-erasure.ts:116:		{ collection: "memory_quarantine", filter: { agentId } },
+/Users/rom.iluz/Dev/memongo/packages/memory-engine/src/mongodb-erasure.ts:168:		case "memory_quarantine":
+/Users/rom.iluz/Dev/memongo/packages/memory-engine/src/mongodb-tenant-erasure.test.ts:41:	"memory_quarantine",
+erasure_static_check_exit=0
+--- quarantine API path inventory (must all remain under /v1/admin) ---
+/Users/rom.iluz/Dev/memongo/apps/api/src/__fixtures__/contract-fixtures.ts:35:		"/v1/admin/quarantine",
+/Users/rom.iluz/Dev/memongo/apps/api/src/__fixtures__/contract-fixtures.ts:36:		"/v1/admin/quarantine/promote",
+/Users/rom.iluz/Dev/memongo/apps/api/src/__fixtures__/contract-fixtures.ts:37:		"/v1/admin/quarantine/reject",
+/Users/rom.iluz/Dev/memongo/apps/api/src/app.ts:401:	"/v1/admin/quarantine",
+/Users/rom.iluz/Dev/memongo/apps/api/src/app.ts:402:	"/v1/admin/quarantine/promote",
+/Users/rom.iluz/Dev/memongo/apps/api/src/app.ts:403:	"/v1/admin/quarantine/reject",
+/Users/rom.iluz/Dev/memongo/apps/api/src/openapi-paths-admin.ts:167:	"/v1/admin/quarantine": {
+/Users/rom.iluz/Dev/memongo/apps/api/src/openapi-paths-admin.ts:193:	"/v1/admin/quarantine/promote": {
+/Users/rom.iluz/Dev/memongo/apps/api/src/openapi-paths-admin.ts:237:	"/v1/admin/quarantine/reject": {
+/Users/rom.iluz/Dev/memongo/apps/api/src/app.segment3.test.ts:1228:			"/v1/admin/quarantine?agentId=agent-42&status=pending-review&limit=25",
+/Users/rom.iluz/Dev/memongo/apps/api/src/app.segment3.test.ts:1246:		const res = await createApp().request("/v1/admin/quarantine?status=garbage")
+/Users/rom.iluz/Dev/memongo/apps/api/src/app.segment3.test.ts:1259:		const res = await createApp().request("/v1/admin/quarantine")
+/Users/rom.iluz/Dev/memongo/apps/api/src/app.segment3.test.ts:1274:		const res = await createApp().request("/v1/admin/quarantine/promote", {
+/Users/rom.iluz/Dev/memongo/apps/api/src/app.segment3.test.ts:1304:		const res = await createApp().request("/v1/admin/quarantine/reject", {
+/Users/rom.iluz/Dev/memongo/apps/api/src/app.segment3.test.ts:1328:			"/v1/admin/quarantine/promote",
+/Users/rom.iluz/Dev/memongo/apps/api/src/app.segment3.test.ts:1329:			"/v1/admin/quarantine/reject",
+/Users/rom.iluz/Dev/memongo/apps/api/src/app.segment3.test.ts:1355:			"/v1/admin/quarantine/promote",
+/Users/rom.iluz/Dev/memongo/apps/api/src/app.segment3.test.ts:1369:		const rejectRes = await createApp().request("/v1/admin/quarantine/reject", {
+/Users/rom.iluz/Dev/memongo/apps/api/src/app.segment3.test.ts:1395:				createApp().request("/v1/admin/quarantine?agentId=agent-42", {
+/Users/rom.iluz/Dev/memongo/apps/api/src/app.segment3.test.ts:1399:				createApp().request("/v1/admin/quarantine/promote", {
+/Users/rom.iluz/Dev/memongo/apps/api/src/app.segment3.test.ts:1411:				createApp().request("/v1/admin/quarantine/reject", {
+/Users/rom.iluz/Dev/memongo/apps/api/src/routes/v1-admin-routes.ts:206:	v1.get("/admin/quarantine", async (c) => {
+/Users/rom.iluz/Dev/memongo/apps/api/src/routes/v1-admin-routes.ts:226:	v1.post("/admin/quarantine/promote", async (c) => {
+/Users/rom.iluz/Dev/memongo/apps/api/src/routes/v1-admin-routes.ts:248:	v1.post("/admin/quarantine/reject", async (c) => {
+/Users/rom.iluz/Dev/memongo/packages/client/src/client.ts:1106:			`/v1/admin/quarantine${q(input?.agentId, {
+/Users/rom.iluz/Dev/memongo/packages/client/src/client.ts:1124:		return apiPost(this._opts, "/v1/admin/quarantine/promote", {
+/Users/rom.iluz/Dev/memongo/packages/client/src/client.ts:1142:		return apiPost(this._opts, "/v1/admin/quarantine/reject", {
+api_path_inventory_exit=0
+--- quarantine MCP category inventory and default/core exclusion ---
+{"quarantine":[{"name":"memongo_quarantine_list","category":"admin"},{"name":"memongo_quarantine_promote","category":"admin"},{"name":"memongo_quarantine_reject","category":"admin"}],"defaults":[]}
+mcp_leakage_inventory_exit=0
+scratch_deleted=/Users/rom.iluz/Dev/memongo/packages/memory-engine/src/refutation-c004-missed-sites.test.ts
+scratch_absent_exit=0

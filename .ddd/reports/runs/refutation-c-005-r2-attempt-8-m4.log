@@ -1,0 +1,60 @@
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/packages/memory-engine[39m
+
+[90mstdout[2m | src/mongodb-chunk-retention.test.ts[2m > [22m[2mprojectConversationWindows — expiry propagation (C-005 r1 defect 4)[2m > [22m[2mstamps a window with the LATEST expiry among its events
+[22m[39m17:52:14.392 [memory:mongodb:conversation-windows] info: projected 1 conversation windows for session=s-win agent=agent-1
+
+[90mstdout[2m | src/mongodb-chunk-retention.test.ts[2m > [22m[2mprojectConversationWindows — expiry propagation (C-005 r1 defect 4)[2m > [22m[2mkeeps a window permanent when any of its events never expires
+[22m[39m17:52:14.395 [memory:mongodb:conversation-windows] info: projected 1 conversation windows for session=s-win agent=agent-1
+
+[90mstdout[2m | src/mongodb-chunk-retention.test.ts[2m > [22m[2mprojectConversationWindows — expiry propagation (C-005 r1 defect 4)[2m > [22m[2mexcludes already-expired events from window text
+[22m[39m17:52:14.395 [memory:mongodb:conversation-windows] info: projected 1 conversation windows for session=s-win agent=agent-1
+
+ [31m❯[39m src/mongodb-chunk-retention.test.ts [2m([22m[2m20 tests[22m[2m | [22m[31m1 failed[39m[2m)[22m[32m 18[2mms[22m[39m
+     [32m✓[39m carries the event expiry onto the projected chunk[32m 2[2mms[22m[39m
+     [32m✓[39m omits expiresAt entirely when the event never expires[32m 0[2mms[22m[39m
+     [32m✓[39m propagates expiry per chunk in a mixed batch[32m 1[2mms[22m[39m
+     [32m✓[39m composes the unexpired clause with the tenant filter[32m 1[2mms[22m[39m
+     [32m✓[39m hides expired chunks on a real find while keeping live and no-expiry chunks[32m 0[2mms[22m[39m
+     [32m✓[39m accepts expiresAt as an optional date on the traditional chunk variant[32m 1[2mms[22m[39m
+     [32m✓[39m backfills expiresAt onto an existing chunk written without one[32m 1[2mms[22m[39m
+     [32m✓[39m batch re-projection backfills expiresAt the same way[32m 0[2mms[22m[39m
+     [32m✓[39m stamps a window with the LATEST expiry among its events[32m 3[2mms[22m[39m
+     [32m✓[39m keeps a window permanent when any of its events never expires[32m 1[2mms[22m[39m
+     [32m✓[39m excludes already-expired events from window text[32m 0[2mms[22m[39m
+     [32m✓[39m composes the unexpired clause with the bridge filter[32m 0[2mms[22m[39m
+     [32m✓[39m hides expired bridge chunks on a real find[32m 0[2mms[22m[39m
+     [32m✓[39m readConversationChunk hides an expired conversation chunk[32m 0[2mms[22m[39m
+     [32m✓[39m readConversationChunk still applies the line-range clause with the guard[32m 0[2mms[22m[39m
+[31m     [31m×[31m readBridgeChunk hides an expired bridge chunk[39m[32m 3[2mms[22m[39m
+     [32m✓[39m projects the chunk with the STORED event expiry[32m 1[2mms[22m[39m
+     [32m✓[39m resolveSessionEvidenceExpiresAt maps each session to its latest source-event expiry[32m 0[2mms[22m[39m
+     [32m✓[39m carries the resolved expiry onto the session-evidence documents[32m 0[2mms[22m[39m
+     [32m✓[39m omits expiresAt when no expiry map is provided (legacy callers)[32m 0[2mms[22m[39m
+
+[31m⎯⎯⎯⎯⎯⎯⎯[39m[1m[41m Failed Tests 1 [49m[22m[31m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[41m[1m FAIL [22m[49m src/mongodb-chunk-retention.test.ts[2m > [22mdirect chunk readers — unexpired guard (C-005 r1 defect 5)[2m > [22mreadBridgeChunk hides an expired bridge chunk
+[31m[1mAssertionError[22m: expected 'expired bridge text' to be '' // Object.is equality[39m
+
+[32m- Expected[39m
+[31m+ Received[39m
+
+[31m+ expired bridge text[39m
+
+[36m [2m❯[22m src/mongodb-chunk-retention.test.ts:[2m610:21[22m[39m
+    [90m608|[39m
+    [90m609|[39m   [34mexpect[39m(live[33m.[39mtext)[33m.[39m[34mtoContain[39m([32m"live bridge text"[39m)
+    [90m610|[39m   [34mexpect[39m(dead[33m.[39mtext)[33m.[39m[34mtoBe[39m([32m""[39m)
+    [90m   |[39m                     [31m^[39m
+    [90m611|[39m  })
+    [90m612|[39m })
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯[22m[39m
+
+
+[2m Test Files [22m [1m[31m1 failed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[31m1 failed[39m[22m[2m | [22m[1m[32m19 passed[39m[22m[90m (20)[39m
+[2m   Start at [22m 17:52:13
+[2m   Duration [22m 881ms[2m (transform 507ms, setup 0ms, import 725ms, tests 18ms, environment 0ms)[22m
+

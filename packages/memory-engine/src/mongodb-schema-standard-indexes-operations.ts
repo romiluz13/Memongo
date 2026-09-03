@@ -20,6 +20,7 @@ import {
 	mutationsCollection,
 	laneCoverageCollection,
 	consolidationRunsCollection,
+	memoryQuarantineCollection,
 	recallTracesCollection,
 	memoryJobsCollection,
 	sessionChunksCollection,
@@ -401,6 +402,47 @@ export async function ensureOperationalStandardIndexes(
 	)
 	applied++
 
+	// -----------------------------------------------------------------------
+	// Memory quarantine (C-004 review lifecycle)
+	// -----------------------------------------------------------------------
+	const memoryQuarantine = memoryQuarantineCollection(db, prefix)
+	try {
+		await memoryQuarantine.createIndex(
+			{ quarantineId: 1 },
+			{ name: "uq_memory_quarantine_quarantineid", unique: true },
+		)
+		applied++
+	} catch (err) {
+		handleUniqueIndexCreationError(err, "uq_memory_quarantine_quarantineid")
+		applied++
+	}
+	// Review-queue listing: equality on agentId + status, ascending createdAt
+	// sort (FIFO queue — oldest pending entry surfaces first).
+	await memoryQuarantine.createIndex(
+		{ agentId: 1, status: 1, createdAt: 1 },
+		{ name: "idx_memory_quarantine_agent_status_created" },
+	)
+	applied++
+	// C-004: TTL cap on unreviewed entries only. Partial on
+	// status "pending-review" so promote/reject decisions — the audit trail —
+	// never age out; an unreviewed backlog cannot accumulate forever. Same
+	// 30-day default as the dead-letter cap above; explicit 0 disables.
+	const quarantineRetentionDays =
+		ttlOpts?.quarantineRetentionDays !== undefined
+			? ttlOpts.quarantineRetentionDays
+			: 30
+	if (quarantineRetentionDays > 0) {
+		await memoryQuarantine.createIndex(
+			{ createdAt: 1 },
+			{
+				name: "idx_memory_quarantine_ttl_pending",
+				expireAfterSeconds: quarantineRetentionDays * 24 * 60 * 60,
+				partialFilterExpression: { status: "pending-review" },
+			},
+		)
+		applied++
+	}
+
 	// Session chunks (Option B session-evidence collection)
 	const sessionChunks = sessionChunksCollection(db, prefix)
 	try {
@@ -421,6 +463,19 @@ export async function ensureOperationalStandardIndexes(
 	await sessionChunks.createIndex(
 		{ agentId: 1, timestamp: -1 },
 		{ name: "idx_session_chunks_agent_time" },
+	)
+	applied++
+	// C-005: session-evidence docs inherit the latest source-event expiry
+	// (absent = the session has a never-expiring event and never expires),
+	// so this collection needs the same partial TTL + read-guard pair as the
+	// chunks collection.
+	await sessionChunks.createIndex(
+		{ expiresAt: 1 },
+		{
+			name: "idx_session_chunks_ttl_expires_at",
+			expireAfterSeconds: 0,
+			partialFilterExpression: { expiresAt: { $exists: true } },
+		},
 	)
 	applied++
 

@@ -493,6 +493,81 @@ export const adminTools: readonly McpToolDefinition[] = [
 		category: "admin",
 	},
 	{
+		name: "memongo_erase_agent",
+		description:
+			"Irreversibly erase every collection entry for one agent (tenant erasure); returns a per-collection receipt. Requires confirm='erase'",
+		inputSchema: {
+			type: "object",
+			properties: {
+				confirm: {
+					type: "string",
+					enum: ["erase"],
+					description: "Typed confirmation; the call is a no-op 400 without it",
+				},
+				agentId: { type: "string" },
+			},
+			required: ["confirm"],
+		},
+		category: "admin",
+	},
+	{
+		name: "memongo_quarantine_list",
+		description:
+			"List quarantined memories awaiting review (oldest first); unset status lists every stage including decided history",
+		inputSchema: {
+			type: "object",
+			properties: {
+				agentId: { type: "string" },
+				status: {
+					type: "string",
+					enum: ["pending-review", "promoted", "rejected"],
+				},
+				limit: { type: "integer", minimum: 1, maximum: 100 },
+			},
+		},
+		category: "admin",
+	},
+	{
+		name: "memongo_quarantine_promote",
+		description:
+			"Overrule the injection classifier and write a quarantined memory as structured memory; irreversible for the entry",
+		inputSchema: {
+			type: "object",
+			properties: {
+				quarantineId: {
+					type: "string",
+					minLength: 1,
+					description: "Id from memongo_quarantine_list",
+				},
+				agentId: { type: "string" },
+				reviewerId: { type: "string" },
+				reviewNotes: { type: "string" },
+			},
+			required: ["quarantineId"],
+		},
+		category: "admin",
+	},
+	{
+		name: "memongo_quarantine_reject",
+		description:
+			"Discard a quarantined memory (kept as audit trail; only unreviewed entries expire)",
+		inputSchema: {
+			type: "object",
+			properties: {
+				quarantineId: {
+					type: "string",
+					minLength: 1,
+					description: "Id from memongo_quarantine_list",
+				},
+				agentId: { type: "string" },
+				reviewerId: { type: "string" },
+				reviewNotes: { type: "string" },
+			},
+			required: ["quarantineId"],
+		},
+		category: "admin",
+	},
+	{
 		name: "memongo_probe_embedding",
 		description: "Probe embedding model availability",
 		inputSchema: {

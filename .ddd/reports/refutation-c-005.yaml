@@ -1,0 +1,323 @@
+# Independent refutation report for T3 claim C-005
+# ("Event retention MUST propagate to chunk projections: chunks MUST carry
+# expiresAt with a TTL index, or a sweeper MUST delete chunks whose source
+# event no longer exists, and until then the retention documentation MUST
+# carry an explicit warning.")
+claim_id: C-005
+verdict: sustained
+independence_verified: true
+refuter_id: "factory-droid worker subagent, independent C-005 refuter"
+implementer_id: "factory-droid primary agent, WS-03 implementer"
+refuted_rounds: 1
+sustained_rounds: 1
+attempt_log_dir: .ddd/reports/runs/
+
+attempts:
+  - id: attempt-1-vacuity
+    description: >
+      Remove each central defense independently: single and batch expiry
+      propagation, the conversation-read unexpired clause, the chunks TTL
+      index contract, and the validator's optional expiresAt field. Require a
+      focused assertion failure, byte-identical restoration, and green
+      controls.
+    outcome: caught
+    detail: >
+      All five mutations produced relevant assertion failures. The single and
+      batch mutations each lost the expected Date; removing the guard failed
+      both filter-shape and stateful visibility assertions; changing
+      expireAfterSeconds from 0 to 60 failed the schema assertion; and removing
+      expiresAt from CHUNKS_SCHEMA failed the validator assertion. Every source
+      file was restored with cmp exit 0 and its original SHA-256. The pre- and
+      post-mutation controls each passed 119/119.
+    evidence: refutation-c-005-attempt-1-vacuity.log
+
+  - id: attempt-2-declared-surfaces
+    description: >
+      Exercise the real manager event-recording paths with TTL enabled and an
+      explicit override, verify the index definition, enumerate search and
+      bridge filter call sites, and evaluate the public TTL documentation.
+    outcome: refuted
+    detail: >
+      A stateful-fake probe through MongoDBManagerWriteOps demonstrated the
+      surviving counterexample on both single and batch writes. The stored
+      events carry the sessionDays-derived or explicit absolute expiresAt, but
+      the corresponding event chunks have no expiresAt. mongodb-manager-write.ts
+      computes and persists expiresAt, then reconstructs CanonicalEvent objects
+      for projectEventChunk/projectEventChunksBatch without that field. The
+      index definition is correct and pinned, but it cannot expire documents
+      that lack the field. Conversation search lanes use the guarded filter;
+      bridge search lanes use a separate unguarded filter. The JSDoc says the
+      shipped behavior leaves no orphaned copies, so it is false rather than an
+      explicit warning. The warning is moot only after propagation actually
+      works; under an interpretation requiring a current warning, it is also
+      absent.
+    evidence: refutation-c-005-attempt-2-declared-surfaces.log
+
+  - id: attempt-3-propagation-integrity
+    description: >
+      Attack absent and exact expiry semantics, explicit-over-derived
+      precedence, single and batch propagation, idempotent re-projection, and
+      tenant/scope field preservation.
+    outcome: refuted
+    detail: >
+      Direct calls to both projector functions behaved correctly: permanent
+      events omitted expiresAt, expiring events retained the exact Date, and
+      agentId/scope/scopeRef were preserved. Re-projecting one path neither
+      duplicated nor clobbered its insert-only text and expiry. Existing
+      upstream TTL tests also passed and showed explicit expiry wins over the
+      derived default. However, real single and batch manager writes lost the
+      resolved expiry at the handoff to those otherwise-correct projectors.
+      Because the projection update is $setOnInsert-only, re-projecting an
+      already-created immortal chunk cannot backfill expiresAt; adding the
+      omitted field only for future manager calls would not repair existing
+      rows.
+    evidence: refutation-c-005-attempt-3-propagation-integrity.log
+
+  - id: attempt-4-sweep-race-integrity
+    description: >
+      Keep expired chunks physically present to model MongoDB TTL-monitor lag,
+      test immediate visibility through each read shape, and mutate the
+      conversation guard to an inverted past-only predicate.
+    outcome: refuted
+    detail: >
+      The guarded conversation-search filter correctly hid past-expiry chunks
+      while retaining future-expiry and expiresAt-absent chunks. Replacing it
+      with expiresAt < now failed both focused guard tests and restoration was
+      byte-identical. A separate stateful counterexample showed that
+      buildBridgeChunkFilter, readConversationChunk, and readBridgeChunk omit
+      the unexpired clause and all return an already-expired workspace
+      conversation chunk during the sweep-lag window. Thus the claimed
+      immediate exclusion does not cover every chunk-reading surface.
+    evidence: refutation-c-005-attempt-4-sweep-race-integrity.log
+
+  - id: attempt-5-missed-sites
+    description: >
+      Inventory other chunk writers and readers, verify tenant erasure, judge
+      session-evidence scope, inspect analytics, and assess stale
+      insert-only projection behavior.
+    outcome: refuted
+    detail: >
+      projectConversationWindows is explicitly event-derived, reads session
+      events without excluding expired rows, and writes source=conversation
+      chunks without expiresAt. A stateful probe created a permanent window
+      containing five expiring events. The outbox-repair call in
+      mongodb-manager-sync.ts also reconstructs its projectEventChunk payload
+      without expiresAt. Tenant erasure correctly deletes both chunks and
+      session_chunks. The separate Option B session_chunks collection stores
+      benchmark session evidence with sourceEventIds but has neither expiresAt
+      nor a TTL index; maxSessionChunks actually caps filesystem transcript
+      chunks written to the canonical chunks collection, not Option B. Option B
+      is therefore another gap if "chunk projections" is interpreted literally,
+      and otherwise needs a separately declared retention policy. No admin
+      route listing raw chunk bodies was found; analytics does count expired
+      rows during TTL lag. The canonical non-e2e engine suite remained green at
+      127 files and 2105 tests, demonstrating that current coverage misses the
+      real-path counterexamples.
+    evidence: refutation-c-005-attempt-5-missed-sites.log
+
+fix_applied_between_rounds: "none (round 1)"
+
+conclusion: >
+  Verdict: refuted in round 1. The decisive counterexample is the normal
+  MongoDBManagerWriteOps path: event retention is correctly resolved and
+  persisted on the event, but both single and batch projection payloads omit
+  expiresAt, so the chunks TTL index never sees those chunks and no sweeper
+  deletes them. Existing tests exercise the projector in isolation and do not
+  cover this handoff. Additional gaps exist in outbox repair, event-derived
+  conversation-window projection, and immediate read exclusion on bridge and
+  direct locator surfaces. The documentation currently asserts full
+  propagation without warning about these live gaps.
+
+tree_hygiene: >
+  No git-mutating command was run. The five vacuity mutations were each
+  restored from local /tmp backups; final cmp checks were 0 and SHA-256 values
+  matched the baselines: mongodb-events.ts
+  a0013fb613a054dd29722930127393ebcb8485904ee6260b621b0df2d1ec37d3,
+  mongodb-manager-search.ts
+  72225599eaac245ca69b587cf1aed697d12b145e3c007e8a224c84428d2a0df9,
+  mongodb-schema-standard-indexes-core.ts
+  8fecee4ac4bf8ec5aeb9b33188ae3f5e0412d4db59ec85980dd9a06fdbc605d2,
+  and mongodb-schema-validator-knowledge.ts
+  8040674ba15a1d7336d44e78dcf4a8e89b0fee7b0be1e19dedea6a4dcbf72b37.
+  The temporary c005-refuter-probe.test.ts was deleted and verified absent.
+  The only persistent files left by this task are this report and the five
+  refutation-c-005-attempt-*.log files under .ddd/reports/runs/.
+
+non_blocking_observations: >
+  The chunks TTL index and validator are correctly specified, all five central
+  unit defenses are non-vacuously pinned, and agentId/scope/scopeRef isolation
+  is retained by direct projectors. Tenant erasure is a valid independent
+  deletion mechanism but does not satisfy time-based event retention.
+  Analytics exposes stale aggregate counts rather than chunk text during TTL
+  lag. Insert-only semantics are reasonable for immutable event IDs, but a fix
+  must include a safe backfill or update strategy for chunks already created
+  without expiresAt.
+
+round_2:
+  verdict: sustained
+  refuter_id: "factory-droid worker subagent, independent C-005 round-2 refuter"
+  fix_applied_between_rounds: >
+    The implementer closed every round-1 gap. (1) mongodb-manager-write.ts
+    now passes the resolved expiresAt through both the single-write handoff
+    (projectEventChunk) and the batch handoff (projectEventChunksBatch), with
+    the batch path computing expiry once per pending item so the event row and
+    the chunk share the exact Date. (2) mongodb-events.ts projectEventChunk
+    carries expiresAt in $set rather than $setOnInsert, so re-projection
+    self-heals chunks written before the fix (events are immutable, so the
+    rewrite is idempotent). (3) mongodb-manager-sync.ts outbox repair spreads
+    the stored event expiry into its projection payload. (4)
+    mongodb-conversation-windows.ts fetches session events with
+    buildUnexpiredClause(), computes the window max expiry from its source
+    events, $sets the window chunk expiry, and $unsets a stale expiry when the
+    window turns permanent. (5) buildConversationChunkFilter and
+    buildBridgeChunkFilter in mongodb-manager-search.ts both compose
+    buildUnexpiredClause({field: "expiresAt"}). (6) readConversationChunk and
+    readBridgeChunk in mongodb-manager-read.ts both compose the same guard via
+    $and. (7) mongodb-session-evidence.ts adds
+    SessionEvidenceDocument.expiresAt plus resolveSessionEvidenceExpiresAt
+    (sessionId to latest source-event expiry) and writers accepting
+    sessionExpiresAt. (8) mongodb-schema-standard-indexes-operations.ts adds
+    idx_session_chunks_ttl_expires_at, a partial TTL index on session_chunks
+    with expireAfterSeconds 0. (9) mongodb-search-v2.ts guards the
+    session_chunks search lane with $or: [{expiresAt: null}, {expiresAt: {$gt:
+    now}}]. (10) types.memory.ts JSDoc updated to describe the propagation
+    coverage honestly.
+
+  attempts:
+    - id: attempt-6-pinning-tests
+      description: >
+        Re-run the implementer's focused pinning suites before probing:
+        mongodb-chunk-retention.test.ts (20), mongodb-manager-write-state.test.ts
+        (14), and the related schema/session-evidence/write-path pinning files
+        (6 files, 186 tests total).
+      outcome: all_passed
+      detail: >
+        186/186 passed. Confirms the pinning tests cover single and batch
+        handoff propagation, projector self-heal via $set, readBridgeChunk and
+        readConversationChunk guards, window exclusion and max-expiry stamping,
+        outbox repair expiry, session-evidence expiry, and both TTL index
+        contracts.
+      evidence: refutation-c-005-r2-attempt-6-pinning-tests.log
+
+    - id: attempt-7-independent-probe
+      description: >
+        Write an independent probe file (c005-r2-refuter-probe.test.ts, 8
+        tests) targeting gaps the implementer's pinning tests did not cover:
+        config-derived (sessionDays) TTL on the real manager path, explicit
+        expiry precedence, window re-projection healing in both directions
+        ($unset stale, $set later), lane fusion safety for the new $and-shaped
+        guards, session_chunks null-equality semantics, and the residual
+        bounded window leak.
+      outcome: all_passed_with_one_fake_fidelity_caveat
+      detail: >
+        T1 config-derived TTL: event and chunk carry the same sessionDays-
+        derived expiresAt through MongoDBManagerWriteOps. T2 window re-
+        projection heals in both directions. T3 fuseChunkLaneFilters returns
+        undefined for the new $and-shaped guarded filters, so both lanes run
+        separately with their guards intact (no guard-dropping fusion). T4
+        documented a stateful-fake fidelity divergence: the fake treats
+        {expiresAt: null} as strict equality and does not match missing
+        fields, whereas real $match semantics do; the guard is fail-CLOSED
+        (over-exclusion, a recall risk at worst) under any interpretation
+        because expired docs are excluded by both arms. T5 documented the
+        residual bounded leak: a window chunk projected before its events
+        expire retains the expired event text until the window's own stamped
+        max expiry is reached (TTL-bound, self-terminating). All 8 passed
+        after encoding the T4 fake divergence as an explicit assertion.
+      evidence: refutation-c-005-r2-attempt-7-probe.log
+
+    - id: attempt-8-vacuity
+      description: >
+        Seven targeted mutations against each new central defense, each
+        requiring a focused assertion failure, byte-identical restoration
+        (cmp exit 0), and a SHA-256 match against the pre-mutation baseline.
+      outcome: all_caught
+      detail: >
+        M1 removed the expiresAt spread from the single-write projection
+        handoff: "persists the event AND its chunk with the SAME explicit
+        expiresAt (single write handoff)" failed; restored, hash OK.
+        M2 removed the per-item expiresAt spread from the batch handoff:
+        "propagates a per-item expiry through the batch write handoff" failed;
+        restored, hash OK.
+        M3 moved projectEventChunk expiresAt from $set back into $setOnInsert:
+        "backfills expiresAt onto an existing chunk written without one"
+        failed; restored, hash OK.
+        M4 removed buildUnexpiredClause from readBridgeChunk's $and:
+        "readBridgeChunk hides an expired bridge chunk" failed; restored,
+        hash OK.
+        M5 removed buildUnexpiredClause from the window event fetch:
+        "excludes already-expired events from window text" failed, and the
+        independent T5 probe failed simultaneously (cross-validation);
+        restored, hash OK.
+        M6 changed idx_session_chunks_ttl_expires_at expireAfterSeconds from 0
+        to 60: "creates all standard indexes on chunks, KB, and
+        structured_mem" failed; restored, hash OK.
+        M7 removed the expiresAt spread from outbox repair: "projects the
+        chunk with the STORED event expiry" failed; restored, hash OK.
+      evidence: refutation-c-005-r2-attempt-8-m1.log through refutation-c-005-r2-attempt-8-m7.log
+
+    - id: attempt-9-full-suite
+      description: >
+        Delete the probe file and run the complete memory-engine unit suite
+        (excluding e2e) to confirm the resting tree is green.
+      outcome: all_passed
+      detail: >
+        127 test files, 2122 tests, 0 failures. The probe file was verified
+        absent afterwards.
+      evidence: refutation-c-005-r2-attempt-9-full-suite.log
+
+  conclusion: >
+    Verdict: sustained in round 2. Every round-1 counterexample was re-run
+    and now fails to reproduce: the single and batch write handoffs propagate
+    the exact persisted expiry to chunks; the projector $set clause heals
+    pre-fix chunks on re-projection; outbox repair carries the stored expiry;
+    window projection excludes expired events at projection time and stamps
+    the window max expiry (with $unset on permanent windows); bridge and
+    direct locator readers compose the unexpired guard; session evidence
+    carries source-derived expiry under its own partial TTL index; and the
+    search-v2 session_chunks lane is guarded. All seven vacuity mutations
+    against these defenses were caught by focused pinning assertions, so the
+    coverage is non-vacuous. Two residual items remain, both fail-closed for
+    retention and documented below; neither reopens the claim as stated.
+
+  tree_hygiene: >
+    No git-mutating command was run. All seven round-2 mutations were
+    restored from /tmp/c005-r2-backup with cmp exit 0; final SHA-256 values
+    match the pre-mutation baselines: mongodb-manager-write.ts
+    c954b4503a8ff9366f4d954fcf85fc8f3357485cdcfba6f4e799647b776dc611,
+    mongodb-events.ts
+    cf99714250922c9d9cce875dd251b35d0e491f19acb3264c8ba630d1e284f295,
+    mongodb-manager-read.ts
+    3292f816428bd0fed4ed035e141071dd2a7b56477853cdbd86859fc50c7a42a7,
+    mongodb-conversation-windows.ts
+    bb75adca01bd8196760e1efad8bfda005de4babe31743d3c7fb10bc465864222,
+    mongodb-schema-standard-indexes-operations.ts
+    7fee8d0659391a059964e638597efe43cffc8254ca10b10351cfd27d32abc422,
+    mongodb-manager-sync.ts
+    6e297a5ba0541e864ce55782fa413665a8bdbbc87d699194565b4a907310b7ad.
+    The temporary packages/memory-engine/src/c005-r2-refuter-probe.test.ts
+    was deleted and verified absent. The full suite is green at the resting
+    tree: 127 files, 2122 tests. The only persistent artifacts are this
+    report and the refutation-c-005-r2-attempt-*.log files under
+    .ddd/reports/runs/.
+
+  non_blocking_observations: >
+    (1) The session_chunks search-v2 lane guard uses $or: [{expiresAt: null},
+    {expiresAt: {$gt: now}}] because (per the in-code comment) $vectorSearch
+    pre-filters do not support $exists. Null equality matches missing fields
+    under documented $match semantics, so the text lane is correct; the
+    vector-only lane's behavior depends on mongot null-equality semantics,
+    which could not be validated without a live mongot and are not covered by
+    the stateful fake (strict equality). Any divergence is fail-CLOSED for
+    retention (over-exclusion of permanent sessions, a recall risk), never a
+    leak; recommend a live mongot validation test. (2) Residual bounded leak:
+    a conversation-window chunk projected before its events expire retains
+    expired event text until the window chunk's own stamped max expiry is
+    reached and the TTL monitor sweeps it; the window is never re-projected
+    after events expire because projection-time exclusion only affects
+    subsequent re-projections. The leak is TTL-bound and self-terminating.
+    (3) writeEventAndProject (a direct low-level writer) does not accept a TTL
+    override and thus projects chunks without expiresAt; it is currently dead
+    code outside tests, but if it becomes reachable for expiring events it
+    would reintroduce the round-1 gap. (4) Analytics may still count expired
+    rows during TTL-monitor lag (aggregate counts only, no chunk text).

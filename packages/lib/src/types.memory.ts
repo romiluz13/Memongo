@@ -88,6 +88,27 @@ export type MemoryMongoDBConfig = {
 	 * (`expireAfterSeconds: 0` keyed on `expiresAt`, partial on
 	 * `expiresAt: { $exists: true }`); read paths also exclude expired
 	 * documents because the TTL sweep lags ~60s.
+	 *
+	 * C-005: event expiry propagates to EVERY derived copy of the event
+	 * text, so retention on events cannot leave orphaned projections
+	 * behind:
+	 *   - event chunks (`events/{eventId}`) carry the same absolute
+	 *     `expiresAt` on every write path (single write, batch write, and
+	 *     extraction-outbox repair); a partial chunks TTL index
+	 *     (`idx_chunks_ttl_expires_at`) deletes them and chunk read
+	 *     surfaces exclude them once expired. Re-projection re-asserts the
+	 *     expiry, so chunks written by older code without one are healed.
+	 *   - conversation windows (`windows/{sessionId}/{index}`) embed their
+	 *     source events' text, so a window expires with its LATEST-expiring
+	 *     event (a window containing any never-expiring event is
+	 *     permanent); expired events are excluded from window text entirely.
+	 *   - session-evidence documents (benchmark ingestion lanes A and B)
+	 *     inherit the latest source-event expiry the same way, with a
+	 *     matching TTL index on `session_chunks`.
+	 *   - all chunk read surfaces (conversation search, bridge search, and
+	 *     direct chunk/event reads) compose the same unexpired guard, so an
+	 *     expired copy stops surfacing immediately instead of waiting for
+	 *     the ~60s TTL sweep lag.
 	 */
 	ttl?: {
 		enabled?: boolean

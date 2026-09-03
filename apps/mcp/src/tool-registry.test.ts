@@ -10,7 +10,9 @@ import {
 // (MEMONGO_MCP_ALIASES=1). These counts are regression anchors — update them
 // deliberately when tools are added, removed, or recategorized.
 const CORE_COUNT = 12
-const ADMIN_COUNT = 29
+// C-003 tenant erasure added memongo_erase_agent (admin category).
+// C-004 quarantine review added list/promote/reject (admin category).
+const ADMIN_COUNT = 33
 const ALIAS_COUNT = 6
 
 const CORE_TOOL_NAMES = [

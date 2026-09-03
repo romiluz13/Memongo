@@ -1,0 +1,54 @@
+what: Declared-surface end-to-end adversarial probe
+run: Real MCP dispatch, client request, API route, bridge function, and engine primitive with only the Mongo manager factory replaced by a stateful fake seam
+date: 2026-09-03T12:40:16Z
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/apps/mcp[39m
+
+ [31m❯[39m src/refutation-c-003-surfaces.test.ts [2m([22m[2m1 test[22m[2m | [22m[31m1 failed[39m[2m)[22m[32m 18[2mms[22m[39m
+[31m     [31m×[31m drives MCP dispatch -> real client -> real API -> real bridge -> real engine[39m[32m 17[2mms[22m[39m
+
+[31m⎯⎯⎯⎯⎯⎯⎯[39m[1m[41m Failed Tests 1 [49m[22m[31m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[41m[1m FAIL [22m[49m src/refutation-c-003-surfaces.test.ts[2m > [22mC-003 real declared-surface chain[2m > [22mdrives MCP dispatch -> real client -> real API -> real bridge -> real engine
+[31m[1mAssertionError[22m: expected 401 to be 400 // Object.is equality[39m
+
+[32m- Expected[39m
+[31m+ Received[39m
+
+[32m- 400[39m
+[31m+ 401[39m
+
+[36m [2m❯[22m src/refutation-c-003-surfaces.test.ts:[2m68:29[22m[39m
+    [90m 66|[39m    body[33m:[39m [33mJSON[39m[33m.[39m[34mstringify[39m({ confirm[33m:[39m [32m"yes"[39m[33m,[39m agentId[33m:[39m [32m"agent-1"[39m })[33m,[39m
+    [90m 67|[39m   })
+    [90m 68|[39m   [34mexpect[39m(invalidApi[33m.[39mstatus)[33m.[39m[34mtoBe[39m([34m400[39m)
+    [90m   |[39m                             [31m^[39m
+    [90m 69|[39m   [34mexpect[39m([35mawait[39m invalidApi[33m.[39m[34mjson[39m())[33m.[39m[34mtoMatchObject[39m({
+    [90m 70|[39m    error[33m:[39m { code[33m:[39m [32m"VALIDATION_ERROR"[39m }[33m,[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯[22m[39m
+
+
+[2m Test Files [22m [1m[31m1 failed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[31m1 failed[39m[22m[90m (1)[39m
+[2m   Start at [22m 15:40:17
+[2m   Duration [22m 1.44s[2m (transform 816ms, setup 0ms, import 1.31s, tests 18ms, environment 0ms)[22m
+
+scratch_deleted=/Users/rom.iluz/Dev/memongo/apps/mcp/src/refutation-c-003-surfaces.test.ts
+retry-what: Correct setup-only 401 by configuring the API auth required by createApp
+retry-run: Same full real-code chain with dummy-refutation-key supplied to both client and API
+retry-date: 2026-09-03T12:40:58Z
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/apps/mcp[39m
+
+[90mstdout[2m | src/refutation-c-003-surfaces.test.ts[2m > [22m[2mC-003 real declared-surface chain[2m > [22m[2mdrives MCP dispatch -> real client -> real API -> real bridge -> real engine
+[22m[39m15:41:00.303 [memory:mongodb:erasure] info: tenant erasure complete {"agentId":"agent-1","collections":28}
+
+ [32m✓[39m src/refutation-c-003-surfaces.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 135[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m1 passed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[32m1 passed[39m[22m[90m (1)[39m
+[2m   Start at [22m 15:40:58
+[2m   Duration [22m 1.40s[2m (transform 820ms, setup 0ms, import 1.17s, tests 135ms, environment 0ms)[22m
+
+scratch_deleted_after_retry=/Users/rom.iluz/Dev/memongo/apps/mcp/src/refutation-c-003-surfaces.test.ts

@@ -122,6 +122,13 @@ export function eventsModuleMock() {
 		projectChunksFromEvents: vi.fn(),
 		projectEventChunk: vi.fn(),
 		getEventsByTimeRange: vi.fn(),
+		// C-006: fingerprint retention surface. The prune defaults to a no-op
+		// so drain-path tests observe wiring, not retention behavior (covered
+		// by mongodb-idempotency-retention.test.ts against the stateful fake).
+		pruneIdempotencyFingerprints: vi.fn().mockResolvedValue({ pruned: 0 }),
+		resolveIdempotencyRetentionDays: vi.fn(() => 90),
+		IDEMPOTENCY_FINGERPRINT_RETENTION_DAYS: 90,
+		IDEMPOTENCY_FINGERPRINT_PRUNE_INTERVAL_MS: 60 * 60 * 1000,
 		IdempotencyConflictError: class extends Error {
 			readonly idempotencyKey: string
 			constructor(idempotencyKey: string) {

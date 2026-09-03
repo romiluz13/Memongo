@@ -324,6 +324,10 @@ export interface MongoDBManagerHost {
 			scopeRef?: string
 		}
 	}): Promise<{ eventId: string; chunkCreated: boolean } | null>
+	pruneIdempotencyFingerprints(params?: {
+		olderThanDays?: number
+		force?: boolean
+	}): Promise<{ pruned: number }>
 	writeConversationEvent(
 		event: WriteConversationEventInput,
 		operationRunContext?: OperationRunContext,

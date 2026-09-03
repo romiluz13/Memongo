@@ -624,6 +624,60 @@ export type MemongoConversationImportResponse = {
 	completedAt: string
 }
 
+export type MemongoEraseAgentResponse = {
+	agentId: string
+	status: "complete" | "partial"
+	receipts: Array<{
+		collection: string
+		deleted: number
+		error?: string
+	}>
+	mutationId?: string
+	/** Set when the proof-of-erasure audit write failed (status is "partial"). */
+	auditError?: string
+	completedAt: string
+}
+
+// ---------------------------------------------------------------------------
+// C-004 quarantine review (JSON wire format — dates as strings)
+// ---------------------------------------------------------------------------
+
+export type MemongoQuarantineStatus = "pending-review" | "promoted" | "rejected"
+
+/** One memory_quarantine row as surfaced to a reviewer. */
+export type MemongoQuarantinedMemory = {
+	quarantineId: string
+	agentId: string
+	scope?: string
+	scopeRef?: string
+	content: string
+	classification: string
+	tier?: "pattern" | "llm"
+	matchedPatterns: string[]
+	status: MemongoQuarantineStatus
+	createdAt: string
+	reviewedAt?: string
+	reviewerId?: string
+	reviewNotes?: string
+	sourceEventIds?: string[]
+}
+
+/** Receipt for a promote/reject decision. */
+export type MemongoQuarantineReviewReceipt = {
+	quarantineId: string
+	agentId: string
+	status: "promoted" | "rejected"
+	reviewedAt: string
+	reviewerId?: string
+	reviewNotes?: string
+	/** structured_mem document id; promote only. */
+	memoryId?: string
+	/** Audit record id in memory_mutations; absent when the audit write failed. */
+	mutationId?: string
+	/** Audit write failed; the decision is durable on the row but unaudited. */
+	auditError?: string
+}
+
 export type MemongoAccessTrendResponse = Array<{
 	collection: string
 	memoryId: string

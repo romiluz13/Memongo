@@ -15,8 +15,12 @@ import type {
 	MemongoContextBundleInput,
 	MemongoDetailedStatusResponse,
 	MemongoDiscoveryProjectionInput,
+	MemongoEraseAgentResponse,
 	MemongoExtractInput,
 	MemongoExtractResponse,
+	MemongoQuarantinedMemory,
+	MemongoQuarantineReviewReceipt,
+	MemongoQuarantineStatus,
 	MemongoLifecycleDeleteInput,
 	MemongoMemoryFeedbackInput,
 	MemongoLifecycleGetInput,
@@ -1070,6 +1074,76 @@ export class MemongoClient {
 			agentId: input?.agentId,
 			reason: input?.reason,
 			force: input?.force,
+		})
+	}
+
+	/**
+	 * C-003: irreversible tenant erasure. The literal `confirm: "erase"` is
+	 * required — the API rejects anything else with a 400.
+	 */
+	async eraseAgent(input: {
+		confirm: "erase"
+		agentId?: string
+	}): Promise<MemongoEraseAgentResponse> {
+		return apiPost(this._opts, "/v1/admin/erase", {
+			confirm: input.confirm,
+			agentId: input.agentId,
+		})
+	}
+
+	/**
+	 * C-004: list quarantined memories (oldest first). Unset `status` lists
+	 * every stage so a review surface can show decided history alongside the
+	 * pending queue.
+	 */
+	async listQuarantined(input?: {
+		agentId?: string
+		status?: MemongoQuarantineStatus
+		limit?: number
+	}): Promise<MemongoQuarantinedMemory[]> {
+		return apiGet(
+			this._opts,
+			`/v1/admin/quarantine${q(input?.agentId, {
+				status: input?.status,
+				limit: input?.limit,
+			})}`,
+		)
+	}
+
+	/**
+	 * C-004: overrule the injection classifier and write a quarantined memory
+	 * as structured memory. Irreversible for the entry (status flips to
+	 * `promoted` and it leaves the TTL expiry index).
+	 */
+	async promoteQuarantined(input: {
+		quarantineId: string
+		agentId?: string
+		reviewerId?: string
+		reviewNotes?: string
+	}): Promise<MemongoQuarantineReviewReceipt> {
+		return apiPost(this._opts, "/v1/admin/quarantine/promote", {
+			quarantineId: input.quarantineId,
+			agentId: input.agentId,
+			reviewerId: input.reviewerId,
+			reviewNotes: input.reviewNotes,
+		})
+	}
+
+	/**
+	 * C-004: discard a quarantined memory. The row is kept as audit trail;
+	 * only unreviewed entries expire via the TTL index.
+	 */
+	async rejectQuarantined(input: {
+		quarantineId: string
+		agentId?: string
+		reviewerId?: string
+		reviewNotes?: string
+	}): Promise<MemongoQuarantineReviewReceipt> {
+		return apiPost(this._opts, "/v1/admin/quarantine/reject", {
+			quarantineId: input.quarantineId,
+			agentId: input.agentId,
+			reviewerId: input.reviewerId,
+			reviewNotes: input.reviewNotes,
 		})
 	}
 

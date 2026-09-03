@@ -399,6 +399,14 @@ export const CHUNKS_SCHEMA: Document = {
 					embedding: { bsonType: "array" },
 					model: { bsonType: "string" },
 					updatedAt: { bsonType: "date" },
+					// C-005: optional expiry propagated from the source event at
+					// projection time; absent means the chunk never expires. A
+					// partial TTL index deletes expired chunks (expireAfterSeconds: 0).
+					expiresAt: {
+						bsonType: "date",
+						description:
+							"Optional expiry propagated from the source event (absent = never expires)",
+					},
 					status: {
 						enum: ["active", "archived", "deleted"],
 						description: "Lifecycle status (default: active)",

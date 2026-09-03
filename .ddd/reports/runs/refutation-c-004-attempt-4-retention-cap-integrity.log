@@ -1,0 +1,1097 @@
+what: C-004 retention-cap integrity attacks for default, override, disable, pending-only partial TTL, and preservation of non-TTL review indexes
+run: three independent schema mutations with focused Vitest failures, byte-identical restores, SHA-256 checks, and green control
+date: 2026-09-03T13:00:22Z
+baseline_sha256=cf63a968ecd0691e3d6e0f88d2fb86f75c19515326223834f96a6142b3a1e239
+--- mutation 1: partial TTL targets promoted rows instead of pending-review ---
+mutated_sha256=e79ab617287d35cc3c9fe1648e7c0d615e5e6b861157f48b828ab78992138611
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/packages/memory-engine[39m
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.060 [memory:mongodb:schema] info: created collection test_chunks
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.063 [memory:mongodb:schema] info: created collection test_files
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.063 [memory:mongodb:schema] info: created collection test_meta
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.063 [memory:mongodb:schema] info: created collection test_knowledge_base
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.063 [memory:mongodb:schema] info: created collection test_kb_chunks
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.063 [memory:mongodb:schema] info: created collection test_structured_mem
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.063 [memory:mongodb:schema] info: created collection test_structured_mem_revisions
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.063 [memory:mongodb:schema] info: created collection test_procedures
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.063 [memory:mongodb:schema] info: created collection test_procedure_revisions
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.064 [memory:mongodb:schema] info: created collection test_relevance_runs
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.064 [memory:mongodb:schema] info: created collection test_relevance_artifacts
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.064 [memory:mongodb:schema] info: created collection test_relevance_regressions
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.064 [memory:mongodb:schema] info: created collection test_events
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.064 [memory:mongodb:schema] info: created collection test_entities
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.064 [memory:mongodb:schema] info: created collection test_relations
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.064 [memory:mongodb:schema] info: created collection test_entity_links
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.064 [memory:mongodb:schema] info: created collection test_episodes
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.064 [memory:mongodb:schema] info: created collection test_ingest_runs
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.064 [memory:mongodb:schema] info: created collection test_projection_runs
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.064 [memory:mongodb:schema] info: created collection test_query_cache
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.064 [memory:mongodb:schema] info: created collection test_memory_mutations
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.064 [memory:mongodb:schema] info: created collection test_lane_coverage
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.064 [memory:mongodb:schema] info: created collection test_consolidation_runs
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.064 [memory:mongodb:schema] info: created collection test_recall_traces
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.064 [memory:mongodb:schema] info: created collection test_memory_jobs
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.064 [memory:mongodb:schema] info: created collection test_session_chunks
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.064 [memory:mongodb:schema] info: created collection test_memory_quarantine
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.065 [memory:mongodb:schema] info: created time series collection test_memory_telemetry
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.065 [memory:mongodb:schema] info: created telemetry collection test_memory_telemetry
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.065 [memory:mongodb:schema] info: created time series collection test_access_events
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.065 [memory:mongodb:schema] info: created access events collection test_access_events
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.065 [memory:mongodb:schema] info: applied schema validation to test_chunks
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.065 [memory:mongodb:schema] info: applied schema validation to test_knowledge_base
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.065 [memory:mongodb:schema] info: applied schema validation to test_kb_chunks
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.065 [memory:mongodb:schema] info: applied schema validation to test_structured_mem
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.065 [memory:mongodb:schema] info: applied schema validation to test_structured_mem_revisions
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.065 [memory:mongodb:schema] info: applied schema validation to test_procedures
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.065 [memory:mongodb:schema] info: applied schema validation to test_procedure_revisions
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.065 [memory:mongodb:schema] info: applied schema validation to test_relevance_runs
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.065 [memory:mongodb:schema] info: applied schema validation to test_relevance_artifacts
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.065 [memory:mongodb:schema] info: applied schema validation to test_relevance_regressions
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.065 [memory:mongodb:schema] info: applied schema validation to test_events
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.065 [memory:mongodb:schema] info: applied schema validation to test_entities
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.065 [memory:mongodb:schema] info: applied schema validation to test_relations
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.065 [memory:mongodb:schema] info: applied schema validation to test_entity_links
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.065 [memory:mongodb:schema] info: applied schema validation to test_episodes
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.065 [memory:mongodb:schema] info: applied schema validation to test_ingest_runs
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.065 [memory:mongodb:schema] info: applied schema validation to test_projection_runs
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.065 [memory:mongodb:schema] info: applied schema validation to test_query_cache
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.065 [memory:mongodb:schema] info: applied schema validation to test_memory_mutations
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.065 [memory:mongodb:schema] info: applied schema validation to test_recall_traces
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.065 [memory:mongodb:schema] info: applied schema validation to test_memory_jobs
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.065 [memory:mongodb:schema] info: applied schema validation to test_memory_quarantine
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.065 [memory:mongodb:schema] info: applied schema validation to test_files
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mensureStandardIndexes[2m > [22m[2mcreates the memory_quarantine review-lifecycle indexes (C-004)
+[22m[39m16:00:23.069 [memory:mongodb:schema] info: ensured 41 standard indexes
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mensureStandardIndexes[2m > [22m[2mhonors quarantineRetentionDays override and explicit 0 disables the TTL (C-004)
+[22m[39m16:00:23.076 [memory:mongodb:schema] info: ensured 41 standard indexes
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mensureStandardIndexes[2m > [22m[2mhonors quarantineRetentionDays override and explicit 0 disables the TTL (C-004)
+[22m[39m16:00:23.080 [memory:mongodb:schema] info: ensured 40 standard indexes
+
+ [31m❯[39m src/mongodb-schema.test.ts [2m([22m[2m57 tests[22m[2m | [22m[31m1 failed[39m[2m | [22m[33m54 skipped[39m[2m)[22m[32m 22[2mms[22m[39m
+     [2m[90m↓[39m[22m chunksCollection returns prefixed collection
+     [2m[90m↓[39m[22m filesCollection returns prefixed collection
+     [2m[90m↓[39m[22m metaCollection returns prefixed collection
+     [2m[90m↓[39m[22m kbCollection returns prefixed collection
+     [2m[90m↓[39m[22m kbChunksCollection returns prefixed collection
+     [2m[90m↓[39m[22m structuredMemCollection returns prefixed collection
+     [2m[90m↓[39m[22m relevanceRunsCollection returns prefixed collection
+     [2m[90m↓[39m[22m relevanceArtifactsCollection returns prefixed collection
+     [2m[90m↓[39m[22m relevanceRegressionsCollection returns prefixed collection
+     [2m[90m↓[39m[22m eventsCollection returns prefixed collection
+     [2m[90m↓[39m[22m entitiesCollection returns prefixed collection
+     [2m[90m↓[39m[22m relationsCollection returns prefixed collection
+     [2m[90m↓[39m[22m entityLinksCollection returns prefixed collection
+     [2m[90m↓[39m[22m episodesCollection returns prefixed collection
+     [2m[90m↓[39m[22m ingestRunsCollection returns prefixed collection
+     [2m[90m↓[39m[22m projectionRunsCollection returns prefixed collection
+     [2m[90m↓[39m[22m kb_chunks schema uses string docId, not objectId (F9)
+     [2m[90m↓[39m[22m kb_chunks schema includes source field (F14)
+     [2m[90m↓[39m[22m KB source.type enum uses 'manual' not 'text' (F16)
+     [2m[90m↓[39m[22m VALIDATED_COLLECTIONS includes all 7 new v2 collection schemas
+     [2m[90m↓[39m[22m events schema has required scope enum field
+     [32m✓[39m memory_quarantine collection is created with validator ()[32m 7[2mms[22m[39m
+     [2m[90m↓[39m[22m events schema includes bi-temporal validAt + invalidAt ()
+     [2m[90m↓[39m[22m chunks collection has polymorphic schema validation (F15)
+     [2m[90m↓[39m[22m creates all collections when none exist, including both time series collections
+     [2m[90m↓[39m[22m creates memory_evidence only when the evidence mirror is enabled
+     [2m[90m↓[39m[22m does not refresh memory_evidence validation when the evidence mirror is disabled
+     [2m[90m↓[39m[22m skips already-existing collections
+     [2m[90m↓[39m[22m does nothing when all collections exist
+     [2m[90m↓[39m[22m creates all standard indexes on chunks, KB, and structured_mem
+     [2m[90m↓[39m[22m creates memory_evidence indexes only when the evidence mirror is enabled
+     [2m[90m↓[39m[22m creates bi-temporal compound index on events ()
+     [2m[90m↓[39m[22m creates a defensive $text index on text field
+     [2m[90m↓[39m[22m creates TTL index on files collection when memoryTtlDays is set
+     [2m[90m↓[39m[22m skips files TTL index when memoryTtlDays is 0
+     [2m[90m↓[39m[22m index count includes relevance telemetry indexes and v2 collection indexes
+     [2m[90m↓[39m[22m creates relevance TTL indexes when relevanceRetentionDays is set
+     [2m[90m↓[39m[22m creates a structured-revisions TTL index only when revisionRetentionDays is set (#32)
+[31m     [31m×[31m creates the memory_quarantine review-lifecycle indexes (C-004)[39m[32m 8[2mms[22m[39m
+     [32m✓[39m honors quarantineRetentionDays override and explicit 0 disables the TTL (C-004)[32m 6[2mms[22m[39m
+     [2m[90m↓[39m[22m decides BSON text fallbacks from serving readiness, not management API availability
+     [2m[90m↓[39m[22m drops the three strict-prefix-redundant indexes and never recreates them
+     [2m[90m↓[39m[22m creates the chunk ESR compound {agentId, path, startLine}
+     [2m[90m↓[39m[22m creates the episode ESR compound {agentId, type, updatedAt desc}
+     [2m[90m↓[39m[22m creates the entity ESR compound {agentId, updatedAt desc}
+     [2m[90m↓[39m[22m creates the relationId locator index on relations
+     [2m[90m↓[39m[22m creates all six $text fallback indexes by default
+     [2m[90m↓[39m[22m skips all six $text fallback indexes when textFallbackIndexes is false
+     [2m[90m↓[39m[22m creates the episode_autocomplete search index alongside entity_autocomplete
+     [2m[90m↓[39m[22m plans the episode_autocomplete target in the default search index list
+     [2m[90m↓[39m[22m creates the partial TTL index on events with expireAfterSeconds 0
+     [2m[90m↓[39m[22m creates the partial TTL index on structured_mem with expireAfterSeconds 0
+     [2m[90m↓[39m[22m uses errorAndLog on MongoDB 8.1+ when creating collections
+     [2m[90m↓[39m[22m keeps error below MongoDB 8.1 when creating collections
+     [2m[90m↓[39m[22m keeps error when the server version is unknown
+     [2m[90m↓[39m[22m uses errorAndLog on MongoDB 8.1+ for collMod schema validation
+     [2m[90m↓[39m[22m keeps error below MongoDB 8.1 for collMod schema validation
+
+[31m⎯⎯⎯⎯⎯⎯⎯[39m[1m[41m Failed Tests 1 [49m[22m[31m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[41m[1m FAIL [22m[49m src/mongodb-schema.test.ts[2m > [22mensureStandardIndexes[2m > [22mcreates the memory_quarantine review-lifecycle indexes (C-004)
+[31m[1mAssertionError[22m: expected "vi.fn()" to be called with arguments: [ { createdAt: 1 }, { …(3) } ][90m
+
+Received:
+
+[1m  1st vi.fn() call:
+
+[22m[2m  [[22m
+[2m    {[22m
+[32m-     "createdAt": 1,[90m
+[31m+     "quarantineId": 1,[90m
+[2m    },[22m
+[2m    {[22m
+[32m-     "expireAfterSeconds": 2592000,[90m
+[32m-     "name": "idx_memory_quarantine_ttl_pending",[90m
+[32m-     "partialFilterExpression": {[90m
+[32m-       "status": "pending-review",[90m
+[32m-     },[90m
+[31m+     "name": "uq_memory_quarantine_quarantineid",[90m
+[31m+     "unique": true,[90m
+[2m    },[22m
+[2m  ][22m
+
+[1m  2nd vi.fn() call:
+
+[22m[2m  [[22m
+[2m    {[22m
+[31m+     "agentId": 1,[90m
+[2m      "createdAt": 1,[22m
+[31m+     "status": 1,[90m
+[2m    },[22m
+[2m    {[22m
+[32m-     "expireAfterSeconds": 2592000,[90m
+[32m-     "name": "idx_memory_quarantine_ttl_pending",[90m
+[32m-     "partialFilterExpression": {[90m
+[32m-       "status": "pending-review",[90m
+[32m-     },[90m
+[31m+     "name": "idx_memory_quarantine_agent_status_created",[90m
+[2m    },[22m
+[2m  ][22m
+
+[1m  3rd vi.fn() call:
+
+[22m[33m@@ -4,9 +4,9 @@[90m
+[2m    },[22m
+[2m    {[22m
+[2m      "expireAfterSeconds": 2592000,[22m
+[2m      "name": "idx_memory_quarantine_ttl_pending",[22m
+[2m      "partialFilterExpression": {[22m
+[32m-       "status": "pending-review",[90m
+[31m+       "status": "promoted",[90m
+[2m      },[22m
+[2m    },[22m
+[2m  ][22m
+[31m[90m
+
+Number of calls: [1m3[22m
+[31m[39m
+[36m [2m❯[22m src/mongodb-schema.test.ts:[2m894:34[22m[39m
+    [90m892|[39m   // Retention cap on UNREVIEWED entries only, 30-day default. Partial…
+    [90m893|[39m   [90m// status so promote/reject decisions (the audit trail) never expire.[39m
+    [90m894|[39m   [34mexpect[39m(quarantine[33m.[39mcreateIndex)[33m.[39m[34mtoHaveBeenCalledWith[39m(
+    [90m   |[39m                                  [31m^[39m
+    [90m895|[39m    { createdAt[33m:[39m [34m1[39m }[33m,[39m
+    [90m896|[39m    {
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯[22m[39m
+
+
+[2m Test Files [22m [1m[31m1 failed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[31m1 failed[39m[22m[2m | [22m[1m[32m2 passed[39m[22m[2m | [22m[33m54 skipped[39m[90m (57)[39m
+[2m   Start at [22m 16:00:22
+[2m   Duration [22m 370ms[2m (transform 172ms, setup 0ms, import 223ms, tests 22ms, environment 0ms)[22m
+
+partial_wrong_status_exit=1 expected_nonzero=true
+partial_restore_cmp_exit=0
+partial_restored_sha256=cf63a968ecd0691e3d6e0f88d2fb86f75c19515326223834f96a6142b3a1e239
+--- mutation 2: expireAfterSeconds computes days as hours ---
+mutated_sha256=edc819a7f0d7329fa342c1192c4bab80ee48ab95439ffb362821c4fe84d5ea48
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/packages/memory-engine[39m
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.727 [memory:mongodb:schema] info: created collection test_chunks
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.729 [memory:mongodb:schema] info: created collection test_files
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.729 [memory:mongodb:schema] info: created collection test_meta
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.729 [memory:mongodb:schema] info: created collection test_knowledge_base
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.729 [memory:mongodb:schema] info: created collection test_kb_chunks
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.729 [memory:mongodb:schema] info: created collection test_structured_mem
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.729 [memory:mongodb:schema] info: created collection test_structured_mem_revisions
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.729 [memory:mongodb:schema] info: created collection test_procedures
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.729 [memory:mongodb:schema] info: created collection test_procedure_revisions
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.730 [memory:mongodb:schema] info: created collection test_relevance_runs
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.730 [memory:mongodb:schema] info: created collection test_relevance_artifacts
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.730 [memory:mongodb:schema] info: created collection test_relevance_regressions
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.730 [memory:mongodb:schema] info: created collection test_events
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.730 [memory:mongodb:schema] info: created collection test_entities
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.730 [memory:mongodb:schema] info: created collection test_relations
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.730 [memory:mongodb:schema] info: created collection test_entity_links
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.730 [memory:mongodb:schema] info: created collection test_episodes
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.730 [memory:mongodb:schema] info: created collection test_ingest_runs
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.730 [memory:mongodb:schema] info: created collection test_projection_runs
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.730 [memory:mongodb:schema] info: created collection test_query_cache
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.730 [memory:mongodb:schema] info: created collection test_memory_mutations
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.730 [memory:mongodb:schema] info: created collection test_lane_coverage
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.730 [memory:mongodb:schema] info: created collection test_consolidation_runs
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.730 [memory:mongodb:schema] info: created collection test_recall_traces
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.731 [memory:mongodb:schema] info: created collection test_memory_jobs
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.731 [memory:mongodb:schema] info: created collection test_session_chunks
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.731 [memory:mongodb:schema] info: created collection test_memory_quarantine
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.731 [memory:mongodb:schema] info: created time series collection test_memory_telemetry
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.731 [memory:mongodb:schema] info: created telemetry collection test_memory_telemetry
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.731 [memory:mongodb:schema] info: created time series collection test_access_events
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.731 [memory:mongodb:schema] info: created access events collection test_access_events
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.731 [memory:mongodb:schema] info: applied schema validation to test_chunks
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.731 [memory:mongodb:schema] info: applied schema validation to test_knowledge_base
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.731 [memory:mongodb:schema] info: applied schema validation to test_kb_chunks
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.731 [memory:mongodb:schema] info: applied schema validation to test_structured_mem
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.731 [memory:mongodb:schema] info: applied schema validation to test_structured_mem_revisions
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.731 [memory:mongodb:schema] info: applied schema validation to test_procedures
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.731 [memory:mongodb:schema] info: applied schema validation to test_procedure_revisions
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.731 [memory:mongodb:schema] info: applied schema validation to test_relevance_runs
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.731 [memory:mongodb:schema] info: applied schema validation to test_relevance_artifacts
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.731 [memory:mongodb:schema] info: applied schema validation to test_relevance_regressions
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.731 [memory:mongodb:schema] info: applied schema validation to test_events
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.731 [memory:mongodb:schema] info: applied schema validation to test_entities
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.731 [memory:mongodb:schema] info: applied schema validation to test_relations
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.731 [memory:mongodb:schema] info: applied schema validation to test_entity_links
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.731 [memory:mongodb:schema] info: applied schema validation to test_episodes
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.731 [memory:mongodb:schema] info: applied schema validation to test_ingest_runs
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.731 [memory:mongodb:schema] info: applied schema validation to test_projection_runs
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.731 [memory:mongodb:schema] info: applied schema validation to test_query_cache
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.731 [memory:mongodb:schema] info: applied schema validation to test_memory_mutations
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.732 [memory:mongodb:schema] info: applied schema validation to test_recall_traces
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.732 [memory:mongodb:schema] info: applied schema validation to test_memory_jobs
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.732 [memory:mongodb:schema] info: applied schema validation to test_memory_quarantine
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:23.732 [memory:mongodb:schema] info: applied schema validation to test_files
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mensureStandardIndexes[2m > [22m[2mcreates the memory_quarantine review-lifecycle indexes (C-004)
+[22m[39m16:00:23.735 [memory:mongodb:schema] info: ensured 41 standard indexes
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mensureStandardIndexes[2m > [22m[2mhonors quarantineRetentionDays override and explicit 0 disables the TTL (C-004)
+[22m[39m16:00:23.742 [memory:mongodb:schema] info: ensured 41 standard indexes
+
+ [31m❯[39m src/mongodb-schema.test.ts [2m([22m[2m57 tests[22m[2m | [22m[31m2 failed[39m[2m | [22m[33m54 skipped[39m[2m)[22m[32m 18[2mms[22m[39m
+     [2m[90m↓[39m[22m chunksCollection returns prefixed collection
+     [2m[90m↓[39m[22m filesCollection returns prefixed collection
+     [2m[90m↓[39m[22m metaCollection returns prefixed collection
+     [2m[90m↓[39m[22m kbCollection returns prefixed collection
+     [2m[90m↓[39m[22m kbChunksCollection returns prefixed collection
+     [2m[90m↓[39m[22m structuredMemCollection returns prefixed collection
+     [2m[90m↓[39m[22m relevanceRunsCollection returns prefixed collection
+     [2m[90m↓[39m[22m relevanceArtifactsCollection returns prefixed collection
+     [2m[90m↓[39m[22m relevanceRegressionsCollection returns prefixed collection
+     [2m[90m↓[39m[22m eventsCollection returns prefixed collection
+     [2m[90m↓[39m[22m entitiesCollection returns prefixed collection
+     [2m[90m↓[39m[22m relationsCollection returns prefixed collection
+     [2m[90m↓[39m[22m entityLinksCollection returns prefixed collection
+     [2m[90m↓[39m[22m episodesCollection returns prefixed collection
+     [2m[90m↓[39m[22m ingestRunsCollection returns prefixed collection
+     [2m[90m↓[39m[22m projectionRunsCollection returns prefixed collection
+     [2m[90m↓[39m[22m kb_chunks schema uses string docId, not objectId (F9)
+     [2m[90m↓[39m[22m kb_chunks schema includes source field (F14)
+     [2m[90m↓[39m[22m KB source.type enum uses 'manual' not 'text' (F16)
+     [2m[90m↓[39m[22m VALIDATED_COLLECTIONS includes all 7 new v2 collection schemas
+     [2m[90m↓[39m[22m events schema has required scope enum field
+     [32m✓[39m memory_quarantine collection is created with validator ()[32m 7[2mms[22m[39m
+     [2m[90m↓[39m[22m events schema includes bi-temporal validAt + invalidAt ()
+     [2m[90m↓[39m[22m chunks collection has polymorphic schema validation (F15)
+     [2m[90m↓[39m[22m creates all collections when none exist, including both time series collections
+     [2m[90m↓[39m[22m creates memory_evidence only when the evidence mirror is enabled
+     [2m[90m↓[39m[22m does not refresh memory_evidence validation when the evidence mirror is disabled
+     [2m[90m↓[39m[22m skips already-existing collections
+     [2m[90m↓[39m[22m does nothing when all collections exist
+     [2m[90m↓[39m[22m creates all standard indexes on chunks, KB, and structured_mem
+     [2m[90m↓[39m[22m creates memory_evidence indexes only when the evidence mirror is enabled
+     [2m[90m↓[39m[22m creates bi-temporal compound index on events ()
+     [2m[90m↓[39m[22m creates a defensive $text index on text field
+     [2m[90m↓[39m[22m creates TTL index on files collection when memoryTtlDays is set
+     [2m[90m↓[39m[22m skips files TTL index when memoryTtlDays is 0
+     [2m[90m↓[39m[22m index count includes relevance telemetry indexes and v2 collection indexes
+     [2m[90m↓[39m[22m creates relevance TTL indexes when relevanceRetentionDays is set
+     [2m[90m↓[39m[22m creates a structured-revisions TTL index only when revisionRetentionDays is set (#32)
+[31m     [31m×[31m creates the memory_quarantine review-lifecycle indexes (C-004)[39m[32m 8[2mms[22m[39m
+[31m     [31m×[31m honors quarantineRetentionDays override and explicit 0 disables the TTL (C-004)[39m[32m 2[2mms[22m[39m
+     [2m[90m↓[39m[22m decides BSON text fallbacks from serving readiness, not management API availability
+     [2m[90m↓[39m[22m drops the three strict-prefix-redundant indexes and never recreates them
+     [2m[90m↓[39m[22m creates the chunk ESR compound {agentId, path, startLine}
+     [2m[90m↓[39m[22m creates the episode ESR compound {agentId, type, updatedAt desc}
+     [2m[90m↓[39m[22m creates the entity ESR compound {agentId, updatedAt desc}
+     [2m[90m↓[39m[22m creates the relationId locator index on relations
+     [2m[90m↓[39m[22m creates all six $text fallback indexes by default
+     [2m[90m↓[39m[22m skips all six $text fallback indexes when textFallbackIndexes is false
+     [2m[90m↓[39m[22m creates the episode_autocomplete search index alongside entity_autocomplete
+     [2m[90m↓[39m[22m plans the episode_autocomplete target in the default search index list
+     [2m[90m↓[39m[22m creates the partial TTL index on events with expireAfterSeconds 0
+     [2m[90m↓[39m[22m creates the partial TTL index on structured_mem with expireAfterSeconds 0
+     [2m[90m↓[39m[22m uses errorAndLog on MongoDB 8.1+ when creating collections
+     [2m[90m↓[39m[22m keeps error below MongoDB 8.1 when creating collections
+     [2m[90m↓[39m[22m keeps error when the server version is unknown
+     [2m[90m↓[39m[22m uses errorAndLog on MongoDB 8.1+ for collMod schema validation
+     [2m[90m↓[39m[22m keeps error below MongoDB 8.1 for collMod schema validation
+
+[31m⎯⎯⎯⎯⎯⎯⎯[39m[1m[41m Failed Tests 2 [49m[22m[31m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[41m[1m FAIL [22m[49m src/mongodb-schema.test.ts[2m > [22mensureStandardIndexes[2m > [22mcreates the memory_quarantine review-lifecycle indexes (C-004)
+[31m[1mAssertionError[22m: expected "vi.fn()" to be called with arguments: [ { createdAt: 1 }, { …(3) } ][90m
+
+Received:
+
+[1m  1st vi.fn() call:
+
+[22m[2m  [[22m
+[2m    {[22m
+[32m-     "createdAt": 1,[90m
+[31m+     "quarantineId": 1,[90m
+[2m    },[22m
+[2m    {[22m
+[32m-     "expireAfterSeconds": 2592000,[90m
+[32m-     "name": "idx_memory_quarantine_ttl_pending",[90m
+[32m-     "partialFilterExpression": {[90m
+[32m-       "status": "pending-review",[90m
+[32m-     },[90m
+[31m+     "name": "uq_memory_quarantine_quarantineid",[90m
+[31m+     "unique": true,[90m
+[2m    },[22m
+[2m  ][22m
+
+[1m  2nd vi.fn() call:
+
+[22m[2m  [[22m
+[2m    {[22m
+[31m+     "agentId": 1,[90m
+[2m      "createdAt": 1,[22m
+[31m+     "status": 1,[90m
+[2m    },[22m
+[2m    {[22m
+[32m-     "expireAfterSeconds": 2592000,[90m
+[32m-     "name": "idx_memory_quarantine_ttl_pending",[90m
+[32m-     "partialFilterExpression": {[90m
+[32m-       "status": "pending-review",[90m
+[32m-     },[90m
+[31m+     "name": "idx_memory_quarantine_agent_status_created",[90m
+[2m    },[22m
+[2m  ][22m
+
+[1m  3rd vi.fn() call:
+
+[22m[33m@@ -1,11 +1,11 @@[90m
+[2m  [[22m
+[2m    {[22m
+[2m      "createdAt": 1,[22m
+[2m    },[22m
+[2m    {[22m
+[32m-     "expireAfterSeconds": 2592000,[90m
+[31m+     "expireAfterSeconds": 108000,[90m
+[2m      "name": "idx_memory_quarantine_ttl_pending",[22m
+[2m      "partialFilterExpression": {[22m
+[2m        "status": "pending-review",[22m
+[2m      },[22m
+[2m    },[22m
+[31m[90m
+
+Number of calls: [1m3[22m
+[31m[39m
+[36m [2m❯[22m src/mongodb-schema.test.ts:[2m894:34[22m[39m
+    [90m892|[39m   // Retention cap on UNREVIEWED entries only, 30-day default. Partial…
+    [90m893|[39m   [90m// status so promote/reject decisions (the audit trail) never expire.[39m
+    [90m894|[39m   [34mexpect[39m(quarantine[33m.[39mcreateIndex)[33m.[39m[34mtoHaveBeenCalledWith[39m(
+    [90m   |[39m                                  [31m^[39m
+    [90m895|[39m    { createdAt[33m:[39m [34m1[39m }[33m,[39m
+    [90m896|[39m    {
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/2]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/mongodb-schema.test.ts[2m > [22mensureStandardIndexes[2m > [22mhonors quarantineRetentionDays override and explicit 0 disables the TTL (C-004)
+[31m[1mAssertionError[22m: expected 25200 to be 604800 // Object.is equality[39m
+
+[32m- Expected[39m
+[31m+ Received[39m
+
+[32m- 604800[39m
+[31m+ 25200[39m
+
+[36m [2m❯[22m src/mongodb-schema.test.ts:[2m918:72[22m[39m
+    [90m916|[39m   )
+    [90m917|[39m   [34mexpect[39m(ttlCall)[33m.[39m[34mtoBeDefined[39m()
+    [90m918|[39m   expect((ttlCall?.[1] as Record<string, unknown>).expireAfterSeconds)…
+    [90m   |[39m                                                                        [31m^[39m
+    [90m919|[39m    [34m7[39m [33m*[39m [34m24[39m [33m*[39m [34m60[39m [33m*[39m [34m60[39m[33m,[39m
+    [90m920|[39m   )
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/2]⎯[22m[39m
+
+
+[2m Test Files [22m [1m[31m1 failed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[31m2 failed[39m[22m[2m | [22m[1m[32m1 passed[39m[22m[2m | [22m[33m54 skipped[39m[90m (57)[39m
+[2m   Start at [22m 16:00:23
+[2m   Duration [22m 312ms[2m (transform 148ms, setup 0ms, import 193ms, tests 18ms, environment 0ms)[22m
+
+wrong_duration_exit=1 expected_nonzero=true
+duration_restore_cmp_exit=0
+duration_restored_sha256=cf63a968ecd0691e3d6e0f88d2fb86f75c19515326223834f96a6142b3a1e239
+--- mutation 3: ignore configured override and explicit disable ---
+mutated_sha256=6573223a69221518bce95fe3b4f7a6a913d7f3617d8e6250a4e4abca750a56fb
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/packages/memory-engine[39m
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:24.455 [memory:mongodb:schema] info: created collection test_chunks
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:24.457 [memory:mongodb:schema] info: created collection test_files
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:24.457 [memory:mongodb:schema] info: created collection test_meta
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:24.457 [memory:mongodb:schema] info: created collection test_knowledge_base
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:24.457 [memory:mongodb:schema] info: created collection test_kb_chunks
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:24.457 [memory:mongodb:schema] info: created collection test_structured_mem
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:24.457 [memory:mongodb:schema] info: created collection test_structured_mem_revisions
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:24.457 [memory:mongodb:schema] info: created collection test_procedures
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:24.458 [memory:mongodb:schema] info: created collection test_procedure_revisions
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:24.458 [memory:mongodb:schema] info: created collection test_relevance_runs
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:24.458 [memory:mongodb:schema] info: created collection test_relevance_artifacts
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:24.458 [memory:mongodb:schema] info: created collection test_relevance_regressions
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:24.458 [memory:mongodb:schema] info: created collection test_events
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:24.458 [memory:mongodb:schema] info: created collection test_entities
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:24.458 [memory:mongodb:schema] info: created collection test_relations
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:24.458 [memory:mongodb:schema] info: created collection test_entity_links
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:24.458 [memory:mongodb:schema] info: created collection test_episodes
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:24.458 [memory:mongodb:schema] info: created collection test_ingest_runs
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:24.458 [memory:mongodb:schema] info: created collection test_projection_runs
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:24.458 [memory:mongodb:schema] info: created collection test_query_cache
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:24.458 [memory:mongodb:schema] info: created collection test_memory_mutations
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:24.458 [memory:mongodb:schema] info: created collection test_lane_coverage
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:24.458 [memory:mongodb:schema] info: created collection test_consolidation_runs
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:24.458 [memory:mongodb:schema] info: created collection test_recall_traces
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:24.458 [memory:mongodb:schema] info: created collection test_memory_jobs
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:24.458 [memory:mongodb:schema] info: created collection test_session_chunks
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:24.459 [memory:mongodb:schema] info: created collection test_memory_quarantine
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:24.459 [memory:mongodb:schema] info: created time series collection test_memory_telemetry
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:24.459 [memory:mongodb:schema] info: created telemetry collection test_memory_telemetry
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:24.459 [memory:mongodb:schema] info: created time series collection test_access_events
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:24.459 [memory:mongodb:schema] info: created access events collection test_access_events
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:24.459 [memory:mongodb:schema] info: applied schema validation to test_chunks
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:24.459 [memory:mongodb:schema] info: applied schema validation to test_knowledge_base
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:24.459 [memory:mongodb:schema] info: applied schema validation to test_kb_chunks
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:24.459 [memory:mongodb:schema] info: applied schema validation to test_structured_mem
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:24.459 [memory:mongodb:schema] info: applied schema validation to test_structured_mem_revisions
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:24.459 [memory:mongodb:schema] info: applied schema validation to test_procedures
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:24.459 [memory:mongodb:schema] info: applied schema validation to test_procedure_revisions
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:24.459 [memory:mongodb:schema] info: applied schema validation to test_relevance_runs
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:24.459 [memory:mongodb:schema] info: applied schema validation to test_relevance_artifacts
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:24.459 [memory:mongodb:schema] info: applied schema validation to test_relevance_regressions
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:24.459 [memory:mongodb:schema] info: applied schema validation to test_events
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:24.459 [memory:mongodb:schema] info: applied schema validation to test_entities
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:24.459 [memory:mongodb:schema] info: applied schema validation to test_relations
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:24.459 [memory:mongodb:schema] info: applied schema validation to test_entity_links
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:24.459 [memory:mongodb:schema] info: applied schema validation to test_episodes
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:24.459 [memory:mongodb:schema] info: applied schema validation to test_ingest_runs
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:24.459 [memory:mongodb:schema] info: applied schema validation to test_projection_runs
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:24.459 [memory:mongodb:schema] info: applied schema validation to test_query_cache
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:24.459 [memory:mongodb:schema] info: applied schema validation to test_memory_mutations
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:24.459 [memory:mongodb:schema] info: applied schema validation to test_recall_traces
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:24.459 [memory:mongodb:schema] info: applied schema validation to test_memory_jobs
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:24.459 [memory:mongodb:schema] info: applied schema validation to test_memory_quarantine
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:24.459 [memory:mongodb:schema] info: applied schema validation to test_files
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mensureStandardIndexes[2m > [22m[2mcreates the memory_quarantine review-lifecycle indexes (C-004)
+[22m[39m16:00:24.463 [memory:mongodb:schema] info: ensured 41 standard indexes
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mensureStandardIndexes[2m > [22m[2mhonors quarantineRetentionDays override and explicit 0 disables the TTL (C-004)
+[22m[39m16:00:24.465 [memory:mongodb:schema] info: ensured 41 standard indexes
+
+ [31m❯[39m src/mongodb-schema.test.ts [2m([22m[2m57 tests[22m[2m | [22m[31m1 failed[39m[2m | [22m[33m54 skipped[39m[2m)[22m[32m 16[2mms[22m[39m
+     [2m[90m↓[39m[22m chunksCollection returns prefixed collection
+     [2m[90m↓[39m[22m filesCollection returns prefixed collection
+     [2m[90m↓[39m[22m metaCollection returns prefixed collection
+     [2m[90m↓[39m[22m kbCollection returns prefixed collection
+     [2m[90m↓[39m[22m kbChunksCollection returns prefixed collection
+     [2m[90m↓[39m[22m structuredMemCollection returns prefixed collection
+     [2m[90m↓[39m[22m relevanceRunsCollection returns prefixed collection
+     [2m[90m↓[39m[22m relevanceArtifactsCollection returns prefixed collection
+     [2m[90m↓[39m[22m relevanceRegressionsCollection returns prefixed collection
+     [2m[90m↓[39m[22m eventsCollection returns prefixed collection
+     [2m[90m↓[39m[22m entitiesCollection returns prefixed collection
+     [2m[90m↓[39m[22m relationsCollection returns prefixed collection
+     [2m[90m↓[39m[22m entityLinksCollection returns prefixed collection
+     [2m[90m↓[39m[22m episodesCollection returns prefixed collection
+     [2m[90m↓[39m[22m ingestRunsCollection returns prefixed collection
+     [2m[90m↓[39m[22m projectionRunsCollection returns prefixed collection
+     [2m[90m↓[39m[22m kb_chunks schema uses string docId, not objectId (F9)
+     [2m[90m↓[39m[22m kb_chunks schema includes source field (F14)
+     [2m[90m↓[39m[22m KB source.type enum uses 'manual' not 'text' (F16)
+     [2m[90m↓[39m[22m VALIDATED_COLLECTIONS includes all 7 new v2 collection schemas
+     [2m[90m↓[39m[22m events schema has required scope enum field
+     [32m✓[39m memory_quarantine collection is created with validator ()[32m 7[2mms[22m[39m
+     [2m[90m↓[39m[22m events schema includes bi-temporal validAt + invalidAt ()
+     [2m[90m↓[39m[22m chunks collection has polymorphic schema validation (F15)
+     [2m[90m↓[39m[22m creates all collections when none exist, including both time series collections
+     [2m[90m↓[39m[22m creates memory_evidence only when the evidence mirror is enabled
+     [2m[90m↓[39m[22m does not refresh memory_evidence validation when the evidence mirror is disabled
+     [2m[90m↓[39m[22m skips already-existing collections
+     [2m[90m↓[39m[22m does nothing when all collections exist
+     [2m[90m↓[39m[22m creates all standard indexes on chunks, KB, and structured_mem
+     [2m[90m↓[39m[22m creates memory_evidence indexes only when the evidence mirror is enabled
+     [2m[90m↓[39m[22m creates bi-temporal compound index on events ()
+     [2m[90m↓[39m[22m creates a defensive $text index on text field
+     [2m[90m↓[39m[22m creates TTL index on files collection when memoryTtlDays is set
+     [2m[90m↓[39m[22m skips files TTL index when memoryTtlDays is 0
+     [2m[90m↓[39m[22m index count includes relevance telemetry indexes and v2 collection indexes
+     [2m[90m↓[39m[22m creates relevance TTL indexes when relevanceRetentionDays is set
+     [2m[90m↓[39m[22m creates a structured-revisions TTL index only when revisionRetentionDays is set (#32)
+     [32m✓[39m creates the memory_quarantine review-lifecycle indexes (C-004)[32m 3[2mms[22m[39m
+[31m     [31m×[31m honors quarantineRetentionDays override and explicit 0 disables the TTL (C-004)[39m[32m 5[2mms[22m[39m
+     [2m[90m↓[39m[22m decides BSON text fallbacks from serving readiness, not management API availability
+     [2m[90m↓[39m[22m drops the three strict-prefix-redundant indexes and never recreates them
+     [2m[90m↓[39m[22m creates the chunk ESR compound {agentId, path, startLine}
+     [2m[90m↓[39m[22m creates the episode ESR compound {agentId, type, updatedAt desc}
+     [2m[90m↓[39m[22m creates the entity ESR compound {agentId, updatedAt desc}
+     [2m[90m↓[39m[22m creates the relationId locator index on relations
+     [2m[90m↓[39m[22m creates all six $text fallback indexes by default
+     [2m[90m↓[39m[22m skips all six $text fallback indexes when textFallbackIndexes is false
+     [2m[90m↓[39m[22m creates the episode_autocomplete search index alongside entity_autocomplete
+     [2m[90m↓[39m[22m plans the episode_autocomplete target in the default search index list
+     [2m[90m↓[39m[22m creates the partial TTL index on events with expireAfterSeconds 0
+     [2m[90m↓[39m[22m creates the partial TTL index on structured_mem with expireAfterSeconds 0
+     [2m[90m↓[39m[22m uses errorAndLog on MongoDB 8.1+ when creating collections
+     [2m[90m↓[39m[22m keeps error below MongoDB 8.1 when creating collections
+     [2m[90m↓[39m[22m keeps error when the server version is unknown
+     [2m[90m↓[39m[22m uses errorAndLog on MongoDB 8.1+ for collMod schema validation
+     [2m[90m↓[39m[22m keeps error below MongoDB 8.1 for collMod schema validation
+
+[31m⎯⎯⎯⎯⎯⎯⎯[39m[1m[41m Failed Tests 1 [49m[22m[31m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[41m[1m FAIL [22m[49m src/mongodb-schema.test.ts[2m > [22mensureStandardIndexes[2m > [22mhonors quarantineRetentionDays override and explicit 0 disables the TTL (C-004)
+[31m[1mAssertionError[22m: expected 2592000 to be 604800 // Object.is equality[39m
+
+[32m- Expected[39m
+[31m+ Received[39m
+
+[32m- 604800[39m
+[31m+ 2592000[39m
+
+[36m [2m❯[22m src/mongodb-schema.test.ts:[2m918:72[22m[39m
+    [90m916|[39m   )
+    [90m917|[39m   [34mexpect[39m(ttlCall)[33m.[39m[34mtoBeDefined[39m()
+    [90m918|[39m   expect((ttlCall?.[1] as Record<string, unknown>).expireAfterSeconds)…
+    [90m   |[39m                                                                        [31m^[39m
+    [90m919|[39m    [34m7[39m [33m*[39m [34m24[39m [33m*[39m [34m60[39m [33m*[39m [34m60[39m[33m,[39m
+    [90m920|[39m   )
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯[22m[39m
+
+
+[2m Test Files [22m [1m[31m1 failed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[31m1 failed[39m[22m[2m | [22m[1m[32m2 passed[39m[22m[2m | [22m[33m54 skipped[39m[90m (57)[39m
+[2m   Start at [22m 16:00:24
+[2m   Duration [22m 323ms[2m (transform 153ms, setup 0ms, import 195ms, tests 16ms, environment 0ms)[22m
+
+ignored_override_exit=1 expected_nonzero=true
+override_restore_cmp_exit=0
+override_restored_sha256=cf63a968ecd0691e3d6e0f88d2fb86f75c19515326223834f96a6142b3a1e239
+--- restored control: default=30 days, override=7 days, 0=no TTL, two non-TTL indexes remain ---
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/packages/memory-engine[39m
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:25.100 [memory:mongodb:schema] info: created collection test_chunks
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:25.102 [memory:mongodb:schema] info: created collection test_files
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:25.102 [memory:mongodb:schema] info: created collection test_meta
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:25.102 [memory:mongodb:schema] info: created collection test_knowledge_base
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:25.102 [memory:mongodb:schema] info: created collection test_kb_chunks
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:25.102 [memory:mongodb:schema] info: created collection test_structured_mem
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:25.102 [memory:mongodb:schema] info: created collection test_structured_mem_revisions
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:25.102 [memory:mongodb:schema] info: created collection test_procedures
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:25.103 [memory:mongodb:schema] info: created collection test_procedure_revisions
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:25.103 [memory:mongodb:schema] info: created collection test_relevance_runs
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:25.103 [memory:mongodb:schema] info: created collection test_relevance_artifacts
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:25.103 [memory:mongodb:schema] info: created collection test_relevance_regressions
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:25.103 [memory:mongodb:schema] info: created collection test_events
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:25.103 [memory:mongodb:schema] info: created collection test_entities
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:25.103 [memory:mongodb:schema] info: created collection test_relations
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:25.103 [memory:mongodb:schema] info: created collection test_entity_links
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:25.103 [memory:mongodb:schema] info: created collection test_episodes
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:25.103 [memory:mongodb:schema] info: created collection test_ingest_runs
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:25.103 [memory:mongodb:schema] info: created collection test_projection_runs
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:25.103 [memory:mongodb:schema] info: created collection test_query_cache
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:25.103 [memory:mongodb:schema] info: created collection test_memory_mutations
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:25.104 [memory:mongodb:schema] info: created collection test_lane_coverage
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:25.104 [memory:mongodb:schema] info: created collection test_consolidation_runs
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:25.104 [memory:mongodb:schema] info: created collection test_recall_traces
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:25.104 [memory:mongodb:schema] info: created collection test_memory_jobs
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:25.104 [memory:mongodb:schema] info: created collection test_session_chunks
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:25.104 [memory:mongodb:schema] info: created collection test_memory_quarantine
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:25.104 [memory:mongodb:schema] info: created time series collection test_memory_telemetry
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:25.104 [memory:mongodb:schema] info: created telemetry collection test_memory_telemetry
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:25.104 [memory:mongodb:schema] info: created time series collection test_access_events
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:25.104 [memory:mongodb:schema] info: created access events collection test_access_events
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:25.104 [memory:mongodb:schema] info: applied schema validation to test_chunks
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:25.104 [memory:mongodb:schema] info: applied schema validation to test_knowledge_base
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:25.104 [memory:mongodb:schema] info: applied schema validation to test_kb_chunks
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:25.104 [memory:mongodb:schema] info: applied schema validation to test_structured_mem
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:25.104 [memory:mongodb:schema] info: applied schema validation to test_structured_mem_revisions
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:25.104 [memory:mongodb:schema] info: applied schema validation to test_procedures
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:25.104 [memory:mongodb:schema] info: applied schema validation to test_procedure_revisions
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:25.104 [memory:mongodb:schema] info: applied schema validation to test_relevance_runs
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:25.104 [memory:mongodb:schema] info: applied schema validation to test_relevance_artifacts
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:25.104 [memory:mongodb:schema] info: applied schema validation to test_relevance_regressions
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:25.104 [memory:mongodb:schema] info: applied schema validation to test_events
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:25.104 [memory:mongodb:schema] info: applied schema validation to test_entities
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:25.104 [memory:mongodb:schema] info: applied schema validation to test_relations
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:25.105 [memory:mongodb:schema] info: applied schema validation to test_entity_links
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:25.105 [memory:mongodb:schema] info: applied schema validation to test_episodes
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:25.105 [memory:mongodb:schema] info: applied schema validation to test_ingest_runs
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:25.105 [memory:mongodb:schema] info: applied schema validation to test_projection_runs
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:25.105 [memory:mongodb:schema] info: applied schema validation to test_query_cache
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:25.105 [memory:mongodb:schema] info: applied schema validation to test_memory_mutations
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:25.105 [memory:mongodb:schema] info: applied schema validation to test_recall_traces
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:25.105 [memory:mongodb:schema] info: applied schema validation to test_memory_jobs
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:25.105 [memory:mongodb:schema] info: applied schema validation to test_memory_quarantine
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mschema constants[2m > [22m[2mmemory_quarantine collection is created with validator ()
+[22m[39m16:00:25.105 [memory:mongodb:schema] info: applied schema validation to test_files
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mensureStandardIndexes[2m > [22m[2mcreates the memory_quarantine review-lifecycle indexes (C-004)
+[22m[39m16:00:25.108 [memory:mongodb:schema] info: ensured 41 standard indexes
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mensureStandardIndexes[2m > [22m[2mhonors quarantineRetentionDays override and explicit 0 disables the TTL (C-004)
+[22m[39m16:00:25.110 [memory:mongodb:schema] info: ensured 41 standard indexes
+
+[90mstdout[2m | src/mongodb-schema.test.ts[2m > [22m[2mensureStandardIndexes[2m > [22m[2mhonors quarantineRetentionDays override and explicit 0 disables the TTL (C-004)
+[22m[39m16:00:25.116 [memory:mongodb:schema] info: ensured 40 standard indexes
+
+ [32m✓[39m src/mongodb-schema.test.ts [2m([22m[2m57 tests[22m[2m | [22m[33m54 skipped[39m[2m)[22m[32m 18[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m1 passed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[32m3 passed[39m[22m[2m | [22m[33m54 skipped[39m[90m (57)[39m
+[2m   Start at [22m 16:00:24
+[2m   Duration [22m 350ms[2m (transform 169ms, setup 0ms, import 221ms, tests 18ms, environment 0ms)[22m
+
+retention_control_exit=0 expected_zero=true
+final_sha256=cf63a968ecd0691e3d6e0f88d2fb86f75c19515326223834f96a6142b3a1e239 expected=cf63a968ecd0691e3d6e0f88d2fb86f75c19515326223834f96a6142b3a1e239
+final_cmp_exit=0

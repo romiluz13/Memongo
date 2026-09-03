@@ -51,6 +51,22 @@ describe("Phase 7-11 wiring: bridge functions", () => {
 	it("exports memongoBridgeApplyMemoryFeedback", async () => {
 		expect(typeof bridge.memongoBridgeApplyMemoryFeedback).toBe("function")
 	})
+
+	it("exports memongoBridgeDeleteAllForAgent (C-003 tenant erasure)", async () => {
+		expect(typeof bridge.memongoBridgeDeleteAllForAgent).toBe("function")
+	})
+
+	it("exports memongoBridgeListQuarantined (C-004 quarantine review)", async () => {
+		expect(typeof bridge.memongoBridgeListQuarantined).toBe("function")
+	})
+
+	it("exports memongoBridgePromoteQuarantined (C-004 quarantine review)", async () => {
+		expect(typeof bridge.memongoBridgePromoteQuarantined).toBe("function")
+	})
+
+	it("exports memongoBridgeRejectQuarantined (C-004 quarantine review)", async () => {
+		expect(typeof bridge.memongoBridgeRejectQuarantined).toBe("function")
+	})
 })
 
 describe("Phase 10 wiring: client methods", () => {
@@ -107,6 +123,11 @@ describe("Phase 10 wiring: client methods", () => {
 	it("MemongoClient has applyMemoryFeedback method", async () => {
 		const client = new MemongoClient({ baseUrl: "http://localhost:9999" })
 		expect(typeof client.applyMemoryFeedback).toBe("function")
+	})
+
+	it("MemongoClient has eraseAgent method (C-003)", async () => {
+		const client = new MemongoClient({ baseUrl: "http://localhost:9999" })
+		expect(typeof client.eraseAgent).toBe("function")
 	})
 })
 

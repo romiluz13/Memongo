@@ -1,0 +1,212 @@
+what: C-004 lifecycle-integrity attacks including one-way review, missing ids, concurrent promotion, provenance, audit metadata, and audit-write failure
+run: temporary stateful-fake Vitest probe; requirement assertions are expected to fail only for surviving counterexamples, followed by a green existing-suite control
+date: 2026-09-03T12:59:43Z
+--- adversarial lifecycle probe ---
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/packages/memory-engine[39m
+
+[90mstdout[2m | src/refutation-c004-lifecycle.test.ts[2m > [22m[2mC-004 lifecycle integrity adversarial probe[2m > [22m[2menforces one-way state transitions, nonexistent-id failure, and exactly-one concurrent winner
+[22m[39m15:59:44.378 [memory:mongodb:structured] info: structured memory created: type=preference key=*** over spaces in TypeScript files revision=1
+
+[90mstdout[2m | src/refutation-c004-lifecycle.test.ts[2m > [22m[2mC-004 lifecycle integrity adversarial probe[2m > [22m[2menforces one-way state transitions, nonexistent-id failure, and exactly-one concurrent winner
+[22m[39m15:59:44.381 [memory:mongodb:structured] info: structured memory created: type=preference key=*** in TypeScript files revision=1
+
+[90mstdout[2m | src/refutation-c004-lifecycle.test.ts[2m > [22m[2mC-004 lifecycle integrity adversarial probe[2m > [22m[2menforces one-way state transitions, nonexistent-id failure, and exactly-one concurrent winner
+[22m[39mconcurrent_result {"fulfilled":1,"rejected":1,"reason":"Error: quarantine entry 04911b23-d00b-4060-9a45-60a5fc054b39 concurrently reviewed; no changes applied"}
+
+[90mstdout[2m | src/refutation-c004-lifecycle.test.ts[2m > [22m[2mC-004 lifecycle integrity adversarial probe[2m > [22m[2mrecords row metadata and promoted-memory provenance for both decisions
+[22m[39m15:59:44.382 [memory:mongodb:structured] info: structured memory created: type=preference key=*** over spaces in TypeScript files revision=1
+
+[90mstdout[2m | src/refutation-c004-lifecycle.test.ts[2m > [22m[2mC-004 lifecycle integrity adversarial probe[2m > [22m[2mrecords row metadata and promoted-memory provenance for both decisions
+[22m[39mdecision_rows {"promotedRow":{"quarantineId":"dedb1042-1b0e-465a-b0a4-2794465e4f4b","agentId":"agent-A","scope":"user","scopeRef":"user-A","content":"I prefer tabs over spaces in TypeScript files","classification":"injection-likely","tier":"pattern","matchedPatterns":["instruction-override"],"status":"promoted","createdAt":"2026-09-03T12:59:44.382Z","sourceEventIds":["event-A"],"_id":"000000000000000000000001","reviewedAt":"2026-09-03T12:59:44.382Z","reviewerId":"reviewer-A","reviewNotes":"false positive"},"rejectedRow":{"quarantineId":"1cf1c311-aa71-435c-838d-46f4814049ef","agentId":"agent-A","scope":"user","scopeRef":"user-A","content":"I prefer tabs over spaces in TypeScript files","classification":"injection-likely","tier":"pattern","matchedPatterns":["instruction-override"],"status":"rejected","createdAt":"2026-09-03T12:59:44.383Z","sourceEventIds":["event-A"],"_id":"000000000000000000000002","reviewedAt":"2026-09-03T12:59:44.383Z","reviewerId":"reviewer-B","reviewNotes":"confirmed injection"}}
+promoted_memory {"agentId":"agent-A","scope":"user","scopeRef":"user-A","type":"preference","key":"tabs over spaces in TypeScript files","value":"I prefer tabs over spaces in TypeScript files","embeddingStatus":"pending","state":"active","salience":"high","temporalScope":"permanent","sourceReliability":0.75,"lastConfirmedAt":"2026-09-03T12:59:44.382Z","validFrom":"2026-09-03T12:59:44.382Z","updatedAt":"2026-09-03T12:59:44.382Z","confidence":0.7,"source":"agent","provenance":{"quarantineId":"dedb1042-1b0e-465a-b0a4-2794465e4f4b","originalClassification":"injection-likely","matchedPatterns":["instruction-override"],"promotedByReview":true},"sourceEventIds":["event-A"],"sourceAgent":{"id":"agent-A","name":"quarantine-review"},"revision":1,"reinforcementCount":1,"createdAt":"2026-09-03T12:59:44.382Z","openedCount":0,"_id":"000000000000000000000001"}
+
+[90mstdout[2m | src/refutation-c004-lifecycle.test.ts[2m > [22m[2mC-004 lifecycle integrity adversarial probe[2m > [22m[2mrequires the promote audit row itself to carry the reviewer decision metadata
+[22m[39m15:59:44.384 [memory:mongodb:structured] info: structured memory created: type=preference key=*** over spaces in TypeScript files revision=1
+
+[90mstdout[2m | src/refutation-c004-lifecycle.test.ts[2m > [22m[2mC-004 lifecycle integrity adversarial probe[2m > [22m[2mrequires the promote audit row itself to carry the reviewer decision metadata
+[22m[39mpromote_audit_actual {"mutationId":"74a4689d-40f1-4541-a9c3-7807987a619d","collectionName":"memory_quarantine","documentId":"06fa0bee-da52-47f4-b4c7-94a904279728","operation":"update","agentId":"agent-A","oldValue":null,"newValue":{"status":"promoted","memoryId":"000000000000000000000001","type":"preference","key":"tabs over spaces in TypeScript files"},"timestamp":"2026-09-03T12:59:44.385Z","severity":"warning","changedFields":["status","reviewedAt"],"meta":{"decision":"promoted","quarantineId":"06fa0bee-da52-47f4-b4c7-94a904279728","originalClassification":"injection-likely","matchedPatterns":["instruction-override"]},"_id":"000000000000000000000002"}
+
+[90mstdout[2m | src/refutation-c004-lifecycle.test.ts[2m > [22m[2mC-004 lifecycle integrity adversarial probe[2m > [22m[2mrequires the reject audit row itself to carry the reviewer decision metadata
+[22m[39mreject_audit_actual {"mutationId":"391f7948-9eb7-4550-8e6f-4abec66a0cbb","collectionName":"memory_quarantine","documentId":"e9ca2823-a349-44ee-8c6e-729542ea6ee4","operation":"update","agentId":"agent-A","oldValue":null,"newValue":{"status":"rejected"},"timestamp":"2026-09-03T12:59:44.388Z","severity":"warning","changedFields":["status","reviewedAt"],"meta":{"decision":"rejected","quarantineId":"e9ca2823-a349-44ee-8c6e-729542ea6ee4","originalClassification":"injection-likely"},"_id":"000000000000000000000001"}
+
+[90mstdout[2m | src/refutation-c004-lifecycle.test.ts[2m > [22m[2mC-004 lifecycle integrity adversarial probe[2m > [22m[2mdoes not return an apparently successful promote receipt when the mandatory audit insert fails
+[22m[39m15:59:44.389 [memory:mongodb:structured] info: structured memory created: type=preference key=*** over spaces in TypeScript files revision=1
+
+[90mstderr[2m | src/refutation-c004-lifecycle.test.ts[2m > [22m[2mC-004 lifecycle integrity adversarial probe[2m > [22m[2mdoes not return an apparently successful promote receipt when the mandatory audit insert fails
+[22m[39m15:59:44.390 [memory:mongodb:mutations] warn: recordMutation failed {"mutationId":"bdb52323-3639-4d2d-9bcb-32224852155a","error":{}}
+
+[90mstdout[2m | src/refutation-c004-lifecycle.test.ts[2m > [22m[2mC-004 lifecycle integrity adversarial probe[2m > [22m[2mdoes not return an apparently successful promote receipt when the mandatory audit insert fails
+[22m[39maudit_failure_counterexample {"decision":"promote","receipt":{"quarantineId":"bcf6eb84-feff-4004-8c59-436b219b60e7","agentId":"agent-A","status":"promoted","reviewedAt":"2026-09-03T12:59:44.389Z","reviewerId":"reviewer-A","reviewNotes":"false positive","memoryId":"000000000000000000000001","mutationId":"b0c913d4-ac2d-4296-9763-5f59a8184fd1"},"row":{"quarantineId":"bcf6eb84-feff-4004-8c59-436b219b60e7","agentId":"agent-A","scope":"user","scopeRef":"user-A","content":"I prefer tabs over spaces in TypeScript files","classification":"injection-likely","tier":"pattern","matchedPatterns":["instruction-override"],"status":"promoted","createdAt":"2026-09-03T12:59:44.389Z","sourceEventIds":["event-A"],"_id":"000000000000000000000001","reviewedAt":"2026-09-03T12:59:44.389Z","reviewerId":"reviewer-A","reviewNotes":"false positive"},"auditCount":1}
+
+[90mstderr[2m | src/refutation-c004-lifecycle.test.ts[2m > [22m[2mC-004 lifecycle integrity adversarial probe[2m > [22m[2mdoes not return an apparently successful reject receipt when the mandatory audit insert fails
+[22m[39m15:59:44.390 [memory:mongodb:mutations] warn: recordMutation failed {"mutationId":"c492a780-8fb9-48ba-ad01-61a4b3a12062","error":{}}
+
+[90mstderr[2m | src/refutation-c004-lifecycle.test.ts[2m > [22m[2mC-004 lifecycle integrity adversarial probe[2m > [22m[2mdoes not return an apparently successful reject receipt when the mandatory audit insert fails
+[22m[39m15:59:44.390 [memory:mongodb:quarantine] warn: reject audit record failed for quarantine=751efe2b-a889-43c2-8c7b-5cb021cf1af7: audit unavailable
+
+[90mstdout[2m | src/refutation-c004-lifecycle.test.ts[2m > [22m[2mC-004 lifecycle integrity adversarial probe[2m > [22m[2mdoes not return an apparently successful reject receipt when the mandatory audit insert fails
+[22m[39maudit_failure_counterexample {"decision":"reject","receipt":{"quarantineId":"751efe2b-a889-43c2-8c7b-5cb021cf1af7","agentId":"agent-A","status":"rejected","reviewedAt":"2026-09-03T12:59:44.390Z","reviewerId":"reviewer-B","reviewNotes":"confirmed injection"},"row":{"quarantineId":"751efe2b-a889-43c2-8c7b-5cb021cf1af7","agentId":"agent-A","scope":"user","scopeRef":"user-A","content":"I prefer tabs over spaces in TypeScript files","classification":"injection-likely","tier":"pattern","matchedPatterns":["instruction-override"],"status":"rejected","createdAt":"2026-09-03T12:59:44.390Z","sourceEventIds":["event-A"],"_id":"000000000000000000000001","reviewedAt":"2026-09-03T12:59:44.390Z","reviewerId":"reviewer-B","reviewNotes":"confirmed injection"},"auditCount":0}
+
+ [31m❯[39m src/refutation-c004-lifecycle.test.ts [2m([22m[2m6 tests[22m[2m | [22m[31m3 failed[39m[2m)[22m[32m 16[2mms[22m[39m
+     [32m✓[39m enforces one-way state transitions, nonexistent-id failure, and exactly-one concurrent winner[32m 6[2mms[22m[39m
+     [32m✓[39m records row metadata and promoted-memory provenance for both decisions[32m 2[2mms[22m[39m
+[31m     [31m×[31m requires the promote audit row itself to carry the reviewer decision metadata[39m[32m 4[2mms[22m[39m
+[31m     [31m×[31m requires the reject audit row itself to carry the reviewer decision metadata[39m[32m 1[2mms[22m[39m
+     [32m✓[39m does not return an apparently successful promote receipt when the mandatory audit insert fails[32m 1[2mms[22m[39m
+[31m     [31m×[31m does not return an apparently successful reject receipt when the mandatory audit insert fails[39m[32m 1[2mms[22m[39m
+
+[31m⎯⎯⎯⎯⎯⎯⎯[39m[1m[41m Failed Tests 3 [49m[22m[31m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[41m[1m FAIL [22m[49m src/refutation-c004-lifecycle.test.ts[2m > [22mC-004 lifecycle integrity adversarial probe[2m > [22mrequires the promote audit row itself to carry the reviewer decision metadata
+[31m[1mAssertionError[22m: expected { …(12) } to match object { Object (meta) }
+(17 matching properties omitted from actual)[39m
+
+[32m- Expected[39m
+[31m+ Received[39m
+
+[2m  {[22m
+[2m    "meta": {[22m
+[2m      "decision": "promoted",[22m
+[2m      "quarantineId": "06fa0bee-da52-47f4-b4c7-94a904279728",[22m
+[32m-     "reviewNotes": "false positive",[39m
+[32m-     "reviewedAt": Any<Date>,[39m
+[32m-     "reviewerId": "reviewer-A",[39m
+[2m    },[22m
+[2m  }[22m
+
+[36m [2m❯[22m src/refutation-c004-lifecycle.test.ts:[2m65:17[22m[39m
+    [90m 63|[39m   const audit = fake.findDoc("memory_mutations", { documentId: quarant…
+    [90m 64|[39m   console[33m.[39m[34mlog[39m([32m"promote_audit_actual"[39m[33m,[39m [33mJSON[39m[33m.[39m[34mstringify[39m(audit))
+    [90m 65|[39m   [34mexpect[39m(audit)[33m.[39m[34mtoMatchObject[39m({
+    [90m   |[39m                 [31m^[39m
+    [90m 66|[39m    meta: { decision: "promoted", quarantineId, reviewerId: "reviewer-A…
+    [90m 67|[39m   })
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/3]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/refutation-c004-lifecycle.test.ts[2m > [22mC-004 lifecycle integrity adversarial probe[2m > [22mrequires the reject audit row itself to carry the reviewer decision metadata
+[31m[1mAssertionError[22m: expected { …(12) } to match object { Object (meta) }
+(13 matching properties omitted from actual)[39m
+
+[32m- Expected[39m
+[31m+ Received[39m
+
+[2m  {[22m
+[2m    "meta": {[22m
+[2m      "decision": "rejected",[22m
+[2m      "quarantineId": "e9ca2823-a349-44ee-8c6e-729542ea6ee4",[22m
+[32m-     "reviewNotes": "confirmed injection",[39m
+[32m-     "reviewedAt": Any<Date>,[39m
+[32m-     "reviewerId": "reviewer-B",[39m
+[2m    },[22m
+[2m  }[22m
+
+[36m [2m❯[22m src/refutation-c004-lifecycle.test.ts:[2m76:17[22m[39m
+    [90m 74|[39m   const audit = fake.findDoc("memory_mutations", { documentId: quarant…
+    [90m 75|[39m   console[33m.[39m[34mlog[39m([32m"reject_audit_actual"[39m[33m,[39m [33mJSON[39m[33m.[39m[34mstringify[39m(audit))
+    [90m 76|[39m   [34mexpect[39m(audit)[33m.[39m[34mtoMatchObject[39m({
+    [90m   |[39m                 [31m^[39m
+    [90m 77|[39m    meta: { decision: "rejected", quarantineId, reviewerId: "reviewer-B…
+    [90m 78|[39m   })
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/3]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/refutation-c004-lifecycle.test.ts[2m > [22mC-004 lifecycle integrity adversarial probe[2m > [22mdoes not return an apparently successful reject receipt when the mandatory audit insert fails
+[31m[1mAssertionError[22m: expected [] to have a length of 1 but got +0[39m
+
+[32m- Expected[39m
+[31m+ Received[39m
+
+[32m- 1[39m
+[31m+ 0[39m
+
+[36m [2m❯[22m src/refutation-c004-lifecycle.test.ts:[2m91:18[22m[39m
+    [90m 89|[39m   [35mconst[39m audits [33m=[39m fake[33m.[39m[34mall[39m([32m"memory_mutations"[39m)
+    [90m 90|[39m   console.log("audit_failure_counterexample", JSON.stringify({ decisio…
+    [90m 91|[39m   [34mexpect[39m(audits)[33m.[39m[34mtoHaveLength[39m([34m1[39m)
+    [90m   |[39m                  [31m^[39m
+    [90m 92|[39m   [34mexpect[39m(receipt[33m.[39mmutationId)[33m.[39m[34mtoBeTruthy[39m()
+    [90m 93|[39m  })
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/3]⎯[22m[39m
+
+
+[2m Test Files [22m [1m[31m1 failed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[31m3 failed[39m[22m[2m | [22m[1m[32m3 passed[39m[22m[90m (6)[39m
+[2m   Start at [22m 15:59:43
+[2m   Duration [22m 667ms[2m (transform 369ms, setup 0ms, import 531ms, tests 16ms, environment 0ms)[22m
+
+adversarial_probe_exit=1 (nonzero means at least one requirement counterexample survived)
+scratch_deleted=/Users/rom.iluz/Dev/memongo/packages/memory-engine/src/refutation-c004-lifecycle.test.ts
+scratch_absent_exit=0
+--- unchanged implementation control ---
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/packages/memory-engine[39m
+
+[90mstdout[2m | src/mongodb-quarantine-review.test.ts[2m > [22m[2mpromoteQuarantined — classifier overrule (C-004)[2m > [22m[2mwrites structured memory via the consolidator's extraction and records the decision
+[22m[39m15:59:45.952 [memory:mongodb:structured] info: structured memory created: type=preference key=*** over spaces in TypeScript files revision=1
+
+[90mstdout[2m | src/mongodb-quarantine-review.test.ts[2m > [22m[2mMongoDBMemoryManager — facade wiring (C-004)[2m > [22m[2mdelegates list/promote/reject through the ops collaborators
+[22m[39m15:59:45.961 [memory:mongodb:structured] info: structured memory created: type=preference key=*** over spaces in TypeScript files revision=1
+
+ [32m✓[39m src/mongodb-quarantine-review.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 15[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m1 passed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[32m9 passed[39m[22m[90m (9)[39m
+[2m   Start at [22m 15:59:44
+[2m   Duration [22m 1.26s[2m (transform 824ms, setup 0ms, import 1.13s, tests 15ms, environment 0ms)[22m
+
+existing_control_exit=0
+--- corrected promote quarantine-audit failure probe (two failures: structured-memory audit then quarantine audit) ---
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/packages/memory-engine[39m
+
+[90mstdout[2m | src/refutation-c004-promote-audit.test.ts[2m > [22m[2mC-004 promote does not report success when its quarantine audit insert fails
+[22m[39m16:00:03.833 [memory:mongodb:structured] info: structured memory created: type=preference key=*** over spaces in TypeScript files revision=1
+
+[90mstderr[2m | src/refutation-c004-promote-audit.test.ts[2m > [22m[2mC-004 promote does not report success when its quarantine audit insert fails
+[22m[39m16:00:03.835 [memory:mongodb:mutations] warn: recordMutation failed {"mutationId":"dea58b62-6e0f-4e5c-bfe2-896291aa9af3","error":{}}
+
+[90mstderr[2m | src/refutation-c004-promote-audit.test.ts[2m > [22m[2mC-004 promote does not report success when its quarantine audit insert fails
+[22m[39m16:00:03.836 [memory:mongodb:mutations] warn: recordMutation failed {"mutationId":"4b910924-4ef0-4262-b8e3-a5d5805b3dfb","error":{}}
+
+[90mstderr[2m | src/refutation-c004-promote-audit.test.ts[2m > [22m[2mC-004 promote does not report success when its quarantine audit insert fails
+[22m[39m16:00:03.836 [memory:mongodb:quarantine] warn: promote audit record failed for quarantine=2b9dcbd9-ad76-4acf-92ec-637be4b71ccb: audit unavailable
+
+[90mstdout[2m | src/refutation-c004-promote-audit.test.ts[2m > [22m[2mC-004 promote does not report success when its quarantine audit insert fails
+[22m[39mpromote_quarantine_audit_failure_counterexample {"receipt":{"quarantineId":"2b9dcbd9-ad76-4acf-92ec-637be4b71ccb","agentId":"agent-A","status":"promoted","reviewedAt":"2026-09-03T13:00:03.833Z","reviewerId":"reviewer-A","reviewNotes":"false positive","memoryId":"000000000000000000000001"},"row":{"quarantineId":"2b9dcbd9-ad76-4acf-92ec-637be4b71ccb","agentId":"agent-A","content":"I prefer tabs over spaces in TypeScript files","classification":"injection-likely","tier":"pattern","matchedPatterns":["instruction-override"],"status":"promoted","createdAt":"2026-09-03T13:00:03.832Z","_id":"000000000000000000000001","reviewedAt":"2026-09-03T13:00:03.833Z","reviewerId":"reviewer-A","reviewNotes":"false positive"},"quarantineAuditCount":0}
+
+ [31m❯[39m src/refutation-c004-promote-audit.test.ts [2m([22m[2m1 test[22m[2m | [22m[31m1 failed[39m[2m)[22m[32m 8[2mms[22m[39m
+[31m   [31m×[31m C-004 promote does not report success when its quarantine audit insert fails[39m[32m 8[2mms[22m[39m
+
+[31m⎯⎯⎯⎯⎯⎯⎯[39m[1m[41m Failed Tests 1 [49m[22m[31m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[41m[1m FAIL [22m[49m src/refutation-c004-promote-audit.test.ts[2m > [22mC-004 promote does not report success when its quarantine audit insert fails
+[31m[1mAssertionError[22m: expected [] to have a length of 1 but got +0[39m
+
+[32m- Expected[39m
+[31m+ Received[39m
+
+[32m- 1[39m
+[31m+ 0[39m
+
+[36m [2m❯[22m src/refutation-c004-promote-audit.test.ts:[2m13:27[22m[39m
+    [90m 11|[39m  const quarantineAudits = fake.all("memory_mutations").filter((doc) =>…
+    [90m 12|[39m  console.log("promote_quarantine_audit_failure_counterexample", JSON.s…
+    [90m 13|[39m  [34mexpect[39m(quarantineAudits)[33m.[39m[34mtoHaveLength[39m([34m1[39m)
+    [90m   |[39m                           [31m^[39m
+    [90m 14|[39m  [34mexpect[39m(receipt[33m.[39mmutationId)[33m.[39m[34mtoBeTruthy[39m()
+    [90m 15|[39m })
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯[22m[39m
+
+
+[2m Test Files [22m [1m[31m1 failed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[31m1 failed[39m[22m[90m (1)[39m
+[2m   Start at [22m 16:00:03
+[2m   Duration [22m 626ms[2m (transform 316ms, setup 0ms, import 465ms, tests 8ms, environment 0ms)[22m
+
+corrected_promote_audit_probe_exit=1 expected_nonzero_for_surviving_counterexample
+scratch_deleted=/Users/rom.iluz/Dev/memongo/packages/memory-engine/src/refutation-c004-promote-audit.test.ts
+scratch_absent_exit=0

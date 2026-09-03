@@ -1,0 +1,183 @@
+what: C-004 declared-surface attacks across MCP schemas/dispatch, API authorization/routes, client wire shapes, bridge wiring, and web console
+run: focused runtime suites plus a temporary global-admin bearer probe, MCP edge probe, web static inspection, and web typecheck
+date: 2026-09-03T12:58:31Z
+--- MCP schema and dispatcher focused suites ---
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/apps/mcp[39m
+
+ [32m✓[39m src/tool-registry.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 14[2mms[22m[39m
+[90mstderr[2m | src/http-transport.test.ts[2m > [22m[2mstreamable HTTP transport[2m > [22m[2manswers the MCP initialize handshake over HTTP
+[22m[39mmemongo-mcp: no MEMONGO_MCP_AUTH_TOKEN set — local trust mode; keep the bind on loopback
+
+[90mstderr[2m | src/http-transport.test.ts[2m > [22m[2mstreamable HTTP transport[2m > [22m[2manswers the MCP initialize handshake over HTTP
+[22m[39mmemongo-mcp: streamable HTTP transport listening on http://127.0.0.1:65375/mcp (local trust, no authentication)
+
+ [32m✓[39m src/server.test.ts [2m([22m[2m117 tests[22m[2m)[22m[32m 59[2mms[22m[39m
+[90mstderr[2m | src/http-transport.test.ts[2m > [22m[2mstreamable HTTP transport[2m > [22m[2mserves tools/list over HTTP after initialize
+[22m[39mmemongo-mcp: no MEMONGO_MCP_AUTH_TOKEN set — local trust mode; keep the bind on loopback
+
+[90mstderr[2m | src/http-transport.test.ts[2m > [22m[2mstreamable HTTP transport[2m > [22m[2mserves tools/list over HTTP after initialize
+[22m[39mmemongo-mcp: streamable HTTP transport listening on http://127.0.0.1:65377/mcp (local trust, no authentication)
+
+[90mstderr[2m | src/http-transport.test.ts[2m > [22m[2mstreamable HTTP transport[2m > [22m[2mgates admin and alias tools behind env flags (P1.2)
+[22m[39mmemongo-mcp: no MEMONGO_MCP_AUTH_TOKEN set — local trust mode; keep the bind on loopback
+
+[90mstderr[2m | src/http-transport.test.ts[2m > [22m[2mstreamable HTTP transport[2m > [22m[2mgates admin and alias tools behind env flags (P1.2)
+[22m[39mmemongo-mcp: streamable HTTP transport listening on http://127.0.0.1:65380/mcp (local trust, no authentication)
+
+[90mstderr[2m | src/http-transport.test.ts[2m > [22m[2mstreamable HTTP transport[2m > [22m[2mexposes admin tools when MEMONGO_MCP_ADMIN=1 (P1.2)
+[22m[39mmemongo-mcp: no MEMONGO_MCP_AUTH_TOKEN set — local trust mode; keep the bind on loopback
+
+[90mstderr[2m | src/http-transport.test.ts[2m > [22m[2mstreamable HTTP transport[2m > [22m[2mexposes admin tools when MEMONGO_MCP_ADMIN=1 (P1.2)
+[22m[39mmemongo-mcp: streamable HTTP transport listening on http://127.0.0.1:65383/mcp (local trust, no authentication)
+
+[90mstderr[2m | src/http-transport.test.ts[2m > [22m[2mstreamable HTTP transport[2m > [22m[2mreturns 404 for non-MCP paths
+[22m[39mmemongo-mcp: no MEMONGO_MCP_AUTH_TOKEN set — local trust mode; keep the bind on loopback
+
+[90mstderr[2m | src/http-transport.test.ts[2m > [22m[2mstreamable HTTP transport[2m > [22m[2mreturns 404 for non-MCP paths
+[22m[39mmemongo-mcp: streamable HTTP transport listening on http://127.0.0.1:65386/mcp (local trust, no authentication)
+
+[90mstderr[2m | src/http-transport.test.ts[2m > [22m[2mHTTP transport authentication (WS-01)[2m > [22m[2mrejects unauthenticated requests with 401 + WWW-Authenticate: Bearer
+[22m[39mmemongo-mcp: streamable HTTP transport listening on http://127.0.0.1:65388/mcp (bearer authentication required)
+
+[90mstderr[2m | src/http-transport.test.ts[2m > [22m[2mHTTP transport authentication (WS-01)[2m > [22m[2mrejects an invalid token with 401 + invalid_token challenge
+[22m[39mmemongo-mcp: streamable HTTP transport listening on http://127.0.0.1:65390/mcp (bearer authentication required)
+
+[90mstderr[2m | src/http-transport.test.ts[2m > [22m[2mHTTP transport authentication (WS-01)[2m > [22m[2mserves the handshake to a valid standard token
+[22m[39mmemongo-mcp: streamable HTTP transport listening on http://127.0.0.1:65392/mcp (bearer authentication required)
+
+[90mstderr[2m | src/http-transport.test.ts[2m > [22m[2mHTTP transport authentication (WS-01)[2m > [22m[2mhides admin tools from the standard scope even when MEMONGO_MCP_ADMIN=1
+[22m[39mmemongo-mcp: streamable HTTP transport listening on http://127.0.0.1:65394/mcp (bearer authentication required)
+
+[90mstderr[2m | src/http-transport.test.ts[2m > [22m[2mHTTP transport authentication (WS-01)[2m > [22m[2mexposes admin tools to the admin credential scope
+[22m[39mmemongo-mcp: streamable HTTP transport listening on http://127.0.0.1:65397/mcp (bearer authentication required)
+
+[90mstderr[2m | src/http-transport.test.ts[2m > [22m[2mHTTP transport authentication (WS-01)[2m > [22m[2mleaves admin tools unreachable when MEMONGO_MCP_ADMIN=1 but no admin token is set (fail closed)
+[22m[39mWARNING: MEMONGO_MCP_ADMIN=1 without MEMONGO_MCP_ADMIN_TOKEN — admin tools are unreachable over HTTP (fail closed). Set MEMONGO_MCP_ADMIN_TOKEN to expose them to an admin credential.
+
+[90mstderr[2m | src/http-transport.test.ts[2m > [22m[2mHTTP transport authentication (WS-01)[2m > [22m[2mleaves admin tools unreachable when MEMONGO_MCP_ADMIN=1 but no admin token is set (fail closed)
+[22m[39mmemongo-mcp: streamable HTTP transport listening on http://127.0.0.1:65400/mcp (bearer authentication required)
+
+[90mstderr[2m | src/http-transport.test.ts[2m > [22m[2mHTTP transport authentication (WS-01)[2m > [22m[2mreturns 403 for a disallowed Host header
+[22m[39mmemongo-mcp: streamable HTTP transport listening on http://127.0.0.1:65403/mcp (bearer authentication required)
+
+[90mstderr[2m | src/http-transport.test.ts[2m > [22m[2mHTTP transport authentication (WS-01)[2m > [22m[2mreturns 403 for a foreign Origin header
+[22m[39mmemongo-mcp: streamable HTTP transport listening on http://127.0.0.1:65405/mcp (bearer authentication required)
+
+[90mstderr[2m | src/http-transport.test.ts[2m > [22m[2mHTTP transport authentication (WS-01)[2m > [22m[2mreturns 403 (not a crash) for an empty Host header
+[22m[39mmemongo-mcp: streamable HTTP transport listening on http://127.0.0.1:65407/mcp (bearer authentication required)
+
+[90mstderr[2m | src/http-transport.test.ts[2m > [22m[2mHTTP transport authentication (WS-01)[2m > [22m[2mrequires authentication on a non-loopback bind once a token is configured
+[22m[39mmemongo-mcp: streamable HTTP transport listening on http://0.0.0.0:65411/mcp (bearer authentication required)
+
+ [32m✓[39m src/http-transport.test.ts [2m([22m[2m18 tests[22m[2m)[22m[32m 193[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m3 passed[39m[22m[90m (3)[39m
+[2m      Tests [22m [1m[32m145 passed[39m[22m[90m (145)[39m
+[2m   Start at [22m 15:58:31
+[2m   Duration [22m 677ms[2m (transform 363ms, setup 0ms, import 932ms, tests 265ms, environment 0ms)[22m
+
+mcp_suite_exit=0
+--- MCP edge dispatch probe: invalid status dropped, limit clamped, missing ids rejected ---
+{"seen":[{"limit":100}],"listedError":false,"promote":{"error":"quarantineId is required"},"reject":{"error":"quarantineId is required"}}
+mcp_edge_probe_exit=0
+--- API route suite (includes all three scoped/agent-key rejection checks) ---
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/apps/api[39m
+
+[90mstderr[2m | src/app.segment3.test.ts[2m > [22m[2mcreateApp[2m > [22m[2m/v1/write-events (P3.9 bulk write)[2m > [22m[2mwrites a batch in ONE bridge call and returns per-item receipts
+[22m[39mWARNING: MEMONGO_ALLOW_INSECURE_NO_AUTH is enabled; /v1 routes are unauthenticated. Use only for trusted local development.
+
+[90mstderr[2m | src/app.segment3.test.ts[2m > [22m[2mcreateApp[2m > [22m[2m/v1/write-events (P3.9 bulk write)[2m > [22m[2mmaps a bridge failure to 500
+[22m[39m{"level":"error","msg":"request failed","requestId":"cbf848a6-6748-4e59-99c8-c716a941f18d","code":"WRITE_EVENTS_FAILED","method":"POST","path":"/v1/write-events","error":{"name":"Error","message":"engine exploded","stack":"Error: engine exploded\n    at /Users/rom.iluz/Dev/memongo/apps/api/src/app.segment3.test.ts:615:5\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:302:11\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:26\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2326:20\n    at new Promise (<anonymous>)\n    at runWithCancel (file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2323:10)\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2305:20\n    at new Promise (<anonymous>)\n    at runWithTimeout (file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2272:10)\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2955:64"}}
+
+[90mstderr[2m | src/app.segment3.test.ts[2m > [22m[2mcreateApp[2m > [22m[2mreturns ERASE_FAILED when the bridge throws
+[22m[39m{"level":"error","msg":"request failed","requestId":"ccf73cd6-bdb9-4292-8ee7-bda684ead041","code":"ERASE_FAILED","method":"POST","path":"/v1/admin/erase","error":{"name":"Error","message":"wipe failed","stack":"Error: wipe failed\n    at /Users/rom.iluz/Dev/memongo/apps/api/src/app.segment3.test.ts:1170:4\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:302:11\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:26\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2326:20\n    at new Promise (<anonymous>)\n    at runWithCancel (file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2323:10)\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2305:20\n    at new Promise (<anonymous>)\n    at runWithTimeout (file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2272:10)\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2955:64"}}
+
+[90mstderr[2m | src/app.segment3.test.ts[2m > [22m[2mcreateApp[2m > [22m[2mreturns QUARANTINE_LIST_FAILED when the bridge throws
+[22m[39m{"level":"error","msg":"request failed","requestId":"5e723800-ee5a-4557-a727-ea59c851d978","code":"QUARANTINE_LIST_FAILED","method":"GET","path":"/v1/admin/quarantine","error":{"name":"Error","message":"queue read failed","stack":"Error: queue read failed\n    at /Users/rom.iluz/Dev/memongo/apps/api/src/app.segment3.test.ts:1257:4\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:302:11\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:26\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2326:20\n    at new Promise (<anonymous>)\n    at runWithCancel (file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2323:10)\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2305:20\n    at new Promise (<anonymous>)\n    at runWithTimeout (file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2272:10)\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2955:64"}}
+
+[90mstderr[2m | src/app.segment3.test.ts[2m > [22m[2mcreateApp[2m > [22m[2mmaps promote and reject bridge failures to distinct error codes
+[22m[39m{"level":"error","msg":"request failed","requestId":"022470b3-f664-475c-b2f5-e84a17345054","code":"QUARANTINE_PROMOTE_FAILED","method":"POST","path":"/v1/admin/quarantine/promote","error":{"name":"Error","message":"already reviewed (status=promoted)","stack":"Error: already reviewed (status=promoted)\n    at /Users/rom.iluz/Dev/memongo/apps/api/src/app.segment3.test.ts:1348:4\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:302:11\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:26\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2326:20\n    at new Promise (<anonymous>)\n    at runWithCancel (file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2323:10)\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2305:20\n    at new Promise (<anonymous>)\n    at runWithTimeout (file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2272:10)\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2955:64"}}
+
+[90mstderr[2m | src/app.segment3.test.ts[2m > [22m[2mcreateApp[2m > [22m[2mmaps promote and reject bridge failures to distinct error codes
+[22m[39m{"level":"error","msg":"request failed","requestId":"13508d4a-3eb6-4ceb-b3dc-8cde32ed6677","code":"QUARANTINE_REJECT_FAILED","method":"POST","path":"/v1/admin/quarantine/reject","error":{"name":"Error","message":"quarantine entry not found","stack":"Error: quarantine entry not found\n    at /Users/rom.iluz/Dev/memongo/apps/api/src/app.segment3.test.ts:1351:4\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:302:11\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:26\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2326:20\n    at new Promise (<anonymous>)\n    at runWithCancel (file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2323:10)\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2305:20\n    at new Promise (<anonymous>)\n    at runWithTimeout (file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2272:10)\n    at file:///Users/rom.iluz/Dev/memongo/node_modules/@vitest/runner/dist/chunk-artifact.js:2955:64"}}
+
+ [32m✓[39m src/app.segment3.test.ts [2m([22m[2m39 tests[22m[2m)[22m[32m 142[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m1 passed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[32m39 passed[39m[22m[90m (39)[39m
+[2m   Start at [22m 15:58:32
+[2m   Duration [22m 544ms[2m (transform 221ms, setup 0ms, import 297ms, tests 142ms, environment 0ms)[22m
+
+api_route_suite_exit=0
+--- API configured global-admin bearer probe ---
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/apps/api[39m
+
+ [32m✓[39m src/refutation-c004-admin-auth.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 16[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m1 passed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[32m1 passed[39m[22m[90m (1)[39m
+[2m   Start at [22m 15:58:33
+[2m   Duration [22m 1.40s[2m (transform 888ms, setup 0ms, import 1.27s, tests 16ms, environment 0ms)[22m
+
+api_admin_probe_exit=0
+--- bridge quarantine wiring suite ---
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/packages/memory-bridge[39m
+
+ [32m✓[39m src/memongo-bridge-quarantine.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/memongo-bridge-wiring.test.ts [2m([22m[2m40 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m2 passed[39m[22m[90m (2)[39m
+[2m      Tests [22m [1m[32m45 passed[39m[22m[90m (45)[39m
+[2m   Start at [22m 15:58:35
+[2m   Duration [22m 1.26s[2m (transform 800ms, setup 0ms, import 1.18s, tests 11ms, environment 0ms)[22m
+
+bridge_suite_exit=0
+--- client quarantine request-shape suite ---
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/packages/client[39m
+
+ [32m✓[39m src/client.test.ts [2m([22m[2m39 tests[22m[2m)[22m[33m 1059[2mms[22m[39m
+     [33m[2m✓[22m[39m generates one UUIDv4 key per logical write and reuses it across every retry [33m 603[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m1 passed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[32m39 passed[39m[22m[90m (39)[39m
+[2m   Start at [22m 15:58:36
+[2m   Duration [22m 1.22s[2m (transform 46ms, setup 0ms, import 57ms, tests 1.06s, environment 0ms)[22m
+
+client_suite_exit=0
+--- web console static call-site inspection ---
+10:type Tab = "overview" | "search" | "kb" | "profile" | "write" | "quarantine"
+172:	const [quarantineStatus, setQuarantineStatus] = useState<
+175:	const [quarantineLimit, setQuarantineLimit] = useState("20")
+177:	const [reviewerId, setReviewerId] = useState("")
+178:	const [reviewNotes, setReviewNotes] = useState("")
+290:		if (tab === "quarantine") {
+291:			await listQuarantined()
+303:	async function listQuarantined() {
+305:			return await client.listQuarantined({
+307:				status: quarantineStatus || undefined,
+308:				limit: Number(quarantineLimit) || undefined,
+330:				...(reviewerId.trim() ? { reviewerId: reviewerId.trim() } : {}),
+331:				...(reviewNotes.trim() ? { reviewNotes: reviewNotes.trim() } : {}),
+334:				? await client.promoteQuarantined(input)
+335:				: await client.rejectQuarantined(input)
+533:									["quarantine", "Quarantine"],
+573:						{tab === "quarantine" && (
+577:										value={quarantineStatus}
+597:										value={quarantineLimit}
+613:										value={reviewerId}
+620:										value={reviewNotes}
+web_static_inspection_exit=0
+--- web console typecheck (no runtime test suite exists) ---
+$ node ../../node_modules/next/dist/bin/next typegen && node ../../node_modules/typescript/bin/tsc --noEmit -p tsconfig.json
+Generating route types...
+✓ Route types generated successfully
+web_typecheck_exit=0
+scratch_deleted=/Users/rom.iluz/Dev/memongo/apps/api/src/refutation-c004-admin-auth.test.ts
+scratch_absent_exit=0
+web_verification_mode=static_code_inspection_plus_typecheck_not_browser_runtime
+web_judgment=adequate_to_show_the_tab_and_all_three_client_calls_are_wired_and_type_safe_but_not_to_prove_browser_interaction_behavior

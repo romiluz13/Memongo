@@ -501,6 +501,10 @@ export class MongoDBManagerJobsOps {
 				`extraction outbox repair left ${repaired.eventsFailed} event(s) pending retry`,
 			)
 		}
+		// C-006: fingerprint retention enforcement rides the worker sweep —
+		// the prune is hourly-gated inside the write ops, so an idle queue
+		// pays one Date.now() comparison per drain and nothing else.
+		await this.host.pruneIdempotencyFingerprints()
 		// P3.9: claim up to K jobs per round and process them concurrently.
 		// Claims stay sequential findOneAndUpdate CAS operations, so two
 		// rounds/workers can never claim the same job; lease fencing inside

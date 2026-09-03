@@ -1,0 +1,33 @@
+# WS-03 final-state suite run: apps/mcp
+# Run: cd apps/mcp && bunx vitest run
+# Date: 2026-09-03T14:12:39Z
+[22m[39mmemongo-mcp: streamable HTTP transport listening on http://127.0.0.1:54580/mcp (bearer authentication required)
+
+[90mstderr[2m | src/http-transport.test.ts[2m > [22m[2mHTTP transport authentication (WS-01)[2m > [22m[2mexposes admin tools to the admin credential scope
+[22m[39mmemongo-mcp: streamable HTTP transport listening on http://127.0.0.1:54583/mcp (bearer authentication required)
+
+[90mstderr[2m | src/http-transport.test.ts[2m > [22m[2mHTTP transport authentication (WS-01)[2m > [22m[2mleaves admin tools unreachable when MEMONGO_MCP_ADMIN=1 but no admin token is set (fail closed)
+[22m[39mWARNING: MEMONGO_MCP_ADMIN=1 without MEMONGO_MCP_ADMIN_TOKEN — admin tools are unreachable over HTTP (fail closed). Set MEMONGO_MCP_ADMIN_TOKEN to expose them to an admin credential.
+
+[90mstderr[2m | src/http-transport.test.ts[2m > [22m[2mHTTP transport authentication (WS-01)[2m > [22m[2mleaves admin tools unreachable when MEMONGO_MCP_ADMIN=1 but no admin token is set (fail closed)
+[22m[39mmemongo-mcp: streamable HTTP transport listening on http://127.0.0.1:54586/mcp (bearer authentication required)
+
+[90mstderr[2m | src/http-transport.test.ts[2m > [22m[2mHTTP transport authentication (WS-01)[2m > [22m[2mreturns 403 for a disallowed Host header
+[22m[39mmemongo-mcp: streamable HTTP transport listening on http://127.0.0.1:54589/mcp (bearer authentication required)
+
+[90mstderr[2m | src/http-transport.test.ts[2m > [22m[2mHTTP transport authentication (WS-01)[2m > [22m[2mreturns 403 for a foreign Origin header
+[22m[39mmemongo-mcp: streamable HTTP transport listening on http://127.0.0.1:54591/mcp (bearer authentication required)
+
+[90mstderr[2m | src/http-transport.test.ts[2m > [22m[2mHTTP transport authentication (WS-01)[2m > [22m[2mreturns 403 (not a crash) for an empty Host header
+[22m[39mmemongo-mcp: streamable HTTP transport listening on http://127.0.0.1:54593/mcp (bearer authentication required)
+
+[90mstderr[2m | src/http-transport.test.ts[2m > [22m[2mHTTP transport authentication (WS-01)[2m > [22m[2mrequires authentication on a non-loopback bind once a token is configured
+[22m[39mmemongo-mcp: streamable HTTP transport listening on http://0.0.0.0:54597/mcp (bearer authentication required)
+
+ [32m✓[39m src/http-transport.test.ts [2m([22m[2m18 tests[22m[2m)[22m[32m 79[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m5 passed[39m[22m[90m (5)[39m
+[2m      Tests [22m [1m[32m175 passed[39m[22m[90m (175)[39m
+[2m   Start at [22m 17:12:39
+[2m   Duration [22m 503ms[2m (transform 476ms, setup 0ms, import 1.03s, tests 115ms, environment 1ms)[22m
+

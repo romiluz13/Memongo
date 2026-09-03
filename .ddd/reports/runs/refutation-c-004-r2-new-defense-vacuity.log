@@ -1,0 +1,303 @@
+what: Mutate each new C-004 defense and require focused tests to fail, then restore byte-identically
+run: four targeted source mutations with focused vitest controls, shasum and cmp
+date: 2026-09-03T13:15:11Z
+baseline:
+f1a33450b141ac14218e589992bec6cb3d5ed52ad8df214c334764513aea493c  packages/memory-engine/src/mongodb-quarantine-review.ts
+=== a promote audit metadata removed ===
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/packages/memory-engine[39m
+
+[90mstdout[2m | src/mongodb-quarantine-review.test.ts[2m > [22m[2mpromoteQuarantined — classifier overrule (C-004)[2m > [22m[2mwrites structured memory via the consolidator's extraction and records the decision
+[22m[39m16:15:13.088 [memory:mongodb:structured] info: structured memory created: type=preference key=*** over spaces in TypeScript files revision=1
+
+ [31m❯[39m src/mongodb-quarantine-review.test.ts [2m([22m[2m11 tests[22m[2m | [22m[31m1 failed[39m[2m | [22m[33m10 skipped[39m[2m)[22m[32m 10[2mms[22m[39m
+     [2m[90m↓[39m[22m lists an agent's entries oldest-first and isolates other tenants
+     [2m[90m↓[39m[22m filters by status and clamps the limit
+[31m     [31m×[31m writes structured memory via the consolidator's extraction and records the decision[39m[32m 9[2mms[22m[39m
+     [2m[90m↓[39m[22m fails loudly when the content matches no memory pattern
+     [2m[90m↓[39m[22m rejects unknown ids and already-reviewed rows without side effects
+     [2m[90m↓[39m[22m reverts the status claim when the structured write fails
+     [2m[90m↓[39m[22m surfaces a failed audit write as auditError without undoing the promotion
+     [2m[90m↓[39m[22m marks the row rejected with decision metadata and an audit record
+     [2m[90m↓[39m[22m surfaces a failed audit write as auditError without undoing the decision
+     [2m[90m↓[39m[22m rejects unknown ids, cross-tenant ids, and already-reviewed rows
+     [2m[90m↓[39m[22m delegates list/promote/reject through the ops collaborators
+
+[31m⎯⎯⎯⎯⎯⎯⎯[39m[1m[41m Failed Tests 1 [49m[22m[31m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[41m[1m FAIL [22m[49m src/mongodb-quarantine-review.test.ts[2m > [22mpromoteQuarantined — classifier overrule (C-004)[2m > [22mwrites structured memory via the consolidator's extraction and records the decision
+[31m[1mAssertionError[22m: expected { …(12) } to match object { severity: 'warning', …(2) }
+(15 matching properties omitted from actual)[39m
+
+[32m- Expected[39m
+[31m+ Received[39m
+
+[2m  {[22m
+[2m    "meta": {[22m
+[2m      "decision": "promoted",[22m
+[2m      "quarantineId": "f287f4c8-7cd8-4faf-87ab-f073e02fb894",[22m
+[32m-     "reviewNotes": "false positive: legitimate preference",[39m
+[32m-     "reviewerId": "reviewer-7",[39m
+[2m    },[22m
+[2m    "operation": "update",[22m
+[2m    "severity": "warning",[22m
+[2m  }[22m
+
+[36m [2m❯[22m src/mongodb-quarantine-review.test.ts:[2m191:17[22m[39m
+    [90m189|[39m    documentId[33m:[39m quarantineId[33m,[39m
+    [90m190|[39m   })
+    [90m191|[39m   [34mexpect[39m(audit)[33m.[39m[34mtoMatchObject[39m({
+    [90m   |[39m                 [31m^[39m
+    [90m192|[39m    severity[33m:[39m [32m"warning"[39m[33m,[39m
+    [90m193|[39m    operation[33m:[39m [32m"update"[39m[33m,[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯[22m[39m
+
+
+[2m Test Files [22m [1m[31m1 failed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[31m1 failed[39m[22m[2m | [22m[33m10 skipped[39m[90m (11)[39m
+[2m   Start at [22m 16:15:12
+[2m   Duration [22m 1.02s[2m (transform 623ms, setup 0ms, import 827ms, tests 10ms, environment 0ms)[22m
+
+focused_test_exit=1 (expected nonzero)
+restore_cmp_exit=0
+f1a33450b141ac14218e589992bec6cb3d5ed52ad8df214c334764513aea493c  packages/memory-engine/src/mongodb-quarantine-review.ts
+=== b reject audit metadata removed ===
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/packages/memory-engine[39m
+
+ [31m❯[39m src/mongodb-quarantine-review.test.ts [2m([22m[2m11 tests[22m[2m | [22m[31m1 failed[39m[2m | [22m[33m10 skipped[39m[2m)[22m[32m 6[2mms[22m[39m
+     [2m[90m↓[39m[22m lists an agent's entries oldest-first and isolates other tenants
+     [2m[90m↓[39m[22m filters by status and clamps the limit
+     [2m[90m↓[39m[22m writes structured memory via the consolidator's extraction and records the decision
+     [2m[90m↓[39m[22m fails loudly when the content matches no memory pattern
+     [2m[90m↓[39m[22m rejects unknown ids and already-reviewed rows without side effects
+     [2m[90m↓[39m[22m reverts the status claim when the structured write fails
+     [2m[90m↓[39m[22m surfaces a failed audit write as auditError without undoing the promotion
+[31m     [31m×[31m marks the row rejected with decision metadata and an audit record[39m[32m 6[2mms[22m[39m
+     [2m[90m↓[39m[22m surfaces a failed audit write as auditError without undoing the decision
+     [2m[90m↓[39m[22m rejects unknown ids, cross-tenant ids, and already-reviewed rows
+     [2m[90m↓[39m[22m delegates list/promote/reject through the ops collaborators
+
+[31m⎯⎯⎯⎯⎯⎯⎯[39m[1m[41m Failed Tests 1 [49m[22m[31m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[41m[1m FAIL [22m[49m src/mongodb-quarantine-review.test.ts[2m > [22mrejectQuarantined — discard with audit trail (C-004)[2m > [22mmarks the row rejected with decision metadata and an audit record
+[31m[1mAssertionError[22m: expected { …(12) } to match object { severity: 'warning', meta: { …(4) } }
+(12 matching properties omitted from actual)[39m
+
+[32m- Expected[39m
+[31m+ Received[39m
+
+[2m  {[22m
+[2m    "meta": {[22m
+[2m      "decision": "rejected",[22m
+[2m      "quarantineId": "d639b6a3-ea07-4a73-a0b6-8255ae787395",[22m
+[32m-     "reviewNotes": "confirmed injection attempt",[39m
+[32m-     "reviewerId": "reviewer-7",[39m
+[2m    },[22m
+[2m    "severity": "warning",[22m
+[2m  }[22m
+
+[36m [2m❯[22m src/mongodb-quarantine-review.test.ts:[2m371:17[22m[39m
+    [90m369|[39m    documentId[33m:[39m quarantineId[33m,[39m
+    [90m370|[39m   })
+    [90m371|[39m   [34mexpect[39m(audit)[33m.[39m[34mtoMatchObject[39m({
+    [90m   |[39m                 [31m^[39m
+    [90m372|[39m    severity[33m:[39m [32m"warning"[39m[33m,[39m
+    [90m373|[39m    meta[33m:[39m {
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯[22m[39m
+
+
+[2m Test Files [22m [1m[31m1 failed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[31m1 failed[39m[22m[2m | [22m[33m10 skipped[39m[90m (11)[39m
+[2m   Start at [22m 16:15:13
+[2m   Duration [22m 1.00s[2m (transform 672ms, setup 0ms, import 892ms, tests 6ms, environment 0ms)[22m
+
+focused_test_exit=1 (expected nonzero)
+restore_cmp_exit=0
+f1a33450b141ac14218e589992bec6cb3d5ed52ad8df214c334764513aea493c  packages/memory-engine/src/mongodb-quarantine-review.ts
+=== c promote auditError assignment removed ===
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/packages/memory-engine[39m
+
+[90mstdout[2m | src/mongodb-quarantine-review.test.ts[2m > [22m[2mpromoteQuarantined — classifier overrule (C-004)[2m > [22m[2msurfaces a failed audit write as auditError without undoing the promotion
+[22m[39m16:15:15.561 [memory:mongodb:structured] info: structured memory created: type=preference key=*** over spaces in TypeScript files revision=1
+
+[90mstderr[2m | src/mongodb-quarantine-review.test.ts[2m > [22m[2mpromoteQuarantined — classifier overrule (C-004)[2m > [22m[2msurfaces a failed audit write as auditError without undoing the promotion
+[22m[39m16:15:15.564 [memory:mongodb:mutations] warn: recordMutation failed {"mutationId":"38c6752e-ab96-44a1-b3d5-56ae031c3790","error":{}}
+
+[90mstderr[2m | src/mongodb-quarantine-review.test.ts[2m > [22m[2mpromoteQuarantined — classifier overrule (C-004)[2m > [22m[2msurfaces a failed audit write as auditError without undoing the promotion
+[22m[39m16:15:15.564 [memory:mongodb:mutations] warn: recordMutation failed {"mutationId":"ec1157f8-0a10-457c-919f-90437c693d00","error":{}}
+
+[90mstderr[2m | src/mongodb-quarantine-review.test.ts[2m > [22m[2mpromoteQuarantined — classifier overrule (C-004)[2m > [22m[2msurfaces a failed audit write as auditError without undoing the promotion
+[22m[39m16:15:15.564 [memory:mongodb:quarantine] warn: promote audit record failed for quarantine=c969ae52-1b79-4877-9ffa-9c34fb932104: audit insert failed
+
+ [31m❯[39m src/mongodb-quarantine-review.test.ts [2m([22m[2m11 tests[22m[2m | [22m[31m1 failed[39m[2m | [22m[33m10 skipped[39m[2m)[22m[32m 9[2mms[22m[39m
+     [2m[90m↓[39m[22m lists an agent's entries oldest-first and isolates other tenants
+     [2m[90m↓[39m[22m filters by status and clamps the limit
+     [2m[90m↓[39m[22m writes structured memory via the consolidator's extraction and records the decision
+     [2m[90m↓[39m[22m fails loudly when the content matches no memory pattern
+     [2m[90m↓[39m[22m rejects unknown ids and already-reviewed rows without side effects
+     [2m[90m↓[39m[22m reverts the status claim when the structured write fails
+[31m     [31m×[31m surfaces a failed audit write as auditError without undoing the promotion[39m[32m 8[2mms[22m[39m
+     [2m[90m↓[39m[22m marks the row rejected with decision metadata and an audit record
+     [2m[90m↓[39m[22m surfaces a failed audit write as auditError without undoing the decision
+     [2m[90m↓[39m[22m rejects unknown ids, cross-tenant ids, and already-reviewed rows
+     [2m[90m↓[39m[22m delegates list/promote/reject through the ops collaborators
+
+[31m⎯⎯⎯⎯⎯⎯⎯[39m[1m[41m Failed Tests 1 [49m[22m[31m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[41m[1m FAIL [22m[49m src/mongodb-quarantine-review.test.ts[2m > [22mpromoteQuarantined — classifier overrule (C-004)[2m > [22msurfaces a failed audit write as auditError without undoing the promotion
+[31m[1mAssertionError[22m: expected undefined to be 'audit insert failed' // Object.is equality[39m
+
+[32m- Expected:[39m
+"audit insert failed"
+
+[31m+ Received:[39m
+undefined
+
+[36m [2m❯[22m src/mongodb-quarantine-review.test.ts:[2m323:30[22m[39m
+    [90m321|[39m   [34mexpect[39m(receipt[33m.[39mstatus)[33m.[39m[34mtoBe[39m([32m"promoted"[39m)
+    [90m322|[39m   [34mexpect[39m(receipt[33m.[39mmemoryId)[33m.[39m[34mtoBeTruthy[39m()
+    [90m323|[39m   [34mexpect[39m(receipt[33m.[39mauditError)[33m.[39m[34mtoBe[39m([32m"audit insert failed"[39m)
+    [90m   |[39m                              [31m^[39m
+    [90m324|[39m   [34mexpect[39m(receipt[33m.[39mmutationId)[33m.[39m[34mtoBeUndefined[39m()
+    [90m325|[39m   [35mconst[39m row [33m=[39m fake[33m.[39m[34mfindDoc[39m([32m"memory_quarantine"[39m[33m,[39m { quarantineId })
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯[22m[39m
+
+
+[2m Test Files [22m [1m[31m1 failed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[31m1 failed[39m[22m[2m | [22m[33m10 skipped[39m[90m (11)[39m
+[2m   Start at [22m 16:15:14
+[2m   Duration [22m 843ms[2m (transform 566ms, setup 0ms, import 745ms, tests 9ms, environment 0ms)[22m
+
+focused_test_exit=1 (expected nonzero)
+restore_cmp_exit=0
+f1a33450b141ac14218e589992bec6cb3d5ed52ad8df214c334764513aea493c  packages/memory-engine/src/mongodb-quarantine-review.ts
+=== d reject auditError assignment removed ===
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/packages/memory-engine[39m
+
+[90mstderr[2m | src/mongodb-quarantine-review.test.ts[2m > [22m[2mrejectQuarantined — discard with audit trail (C-004)[2m > [22m[2msurfaces a failed audit write as auditError without undoing the decision
+[22m[39m16:15:16.706 [memory:mongodb:mutations] warn: recordMutation failed {"mutationId":"b057393a-3230-4b65-94c7-5f5aa867a281","error":{}}
+
+[90mstderr[2m | src/mongodb-quarantine-review.test.ts[2m > [22m[2mrejectQuarantined — discard with audit trail (C-004)[2m > [22m[2msurfaces a failed audit write as auditError without undoing the decision
+[22m[39m16:15:16.708 [memory:mongodb:quarantine] warn: reject audit record failed for quarantine=6d4294f2-70cc-494a-964c-ab727c40caa8: audit insert failed
+
+ [31m❯[39m src/mongodb-quarantine-review.test.ts [2m([22m[2m11 tests[22m[2m | [22m[31m1 failed[39m[2m | [22m[33m10 skipped[39m[2m)[22m[32m 7[2mms[22m[39m
+     [2m[90m↓[39m[22m lists an agent's entries oldest-first and isolates other tenants
+     [2m[90m↓[39m[22m filters by status and clamps the limit
+     [2m[90m↓[39m[22m writes structured memory via the consolidator's extraction and records the decision
+     [2m[90m↓[39m[22m fails loudly when the content matches no memory pattern
+     [2m[90m↓[39m[22m rejects unknown ids and already-reviewed rows without side effects
+     [2m[90m↓[39m[22m reverts the status claim when the structured write fails
+     [2m[90m↓[39m[22m surfaces a failed audit write as auditError without undoing the promotion
+     [2m[90m↓[39m[22m marks the row rejected with decision metadata and an audit record
+[31m     [31m×[31m surfaces a failed audit write as auditError without undoing the decision[39m[32m 6[2mms[22m[39m
+     [2m[90m↓[39m[22m rejects unknown ids, cross-tenant ids, and already-reviewed rows
+     [2m[90m↓[39m[22m delegates list/promote/reject through the ops collaborators
+
+[31m⎯⎯⎯⎯⎯⎯⎯[39m[1m[41m Failed Tests 1 [49m[22m[31m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[41m[1m FAIL [22m[49m src/mongodb-quarantine-review.test.ts[2m > [22mrejectQuarantined — discard with audit trail (C-004)[2m > [22msurfaces a failed audit write as auditError without undoing the decision
+[31m[1mAssertionError[22m: expected undefined to be 'audit insert failed' // Object.is equality[39m
+
+[32m- Expected:[39m
+"audit insert failed"
+
+[31m+ Received:[39m
+undefined
+
+[36m [2m❯[22m src/mongodb-quarantine-review.test.ts:[2m405:30[22m[39m
+    [90m403|[39m   [90m// receipt says so instead of swallowing the gap.[39m
+    [90m404|[39m   [34mexpect[39m(receipt[33m.[39mstatus)[33m.[39m[34mtoBe[39m([32m"rejected"[39m)
+    [90m405|[39m   [34mexpect[39m(receipt[33m.[39mauditError)[33m.[39m[34mtoBe[39m([32m"audit insert failed"[39m)
+    [90m   |[39m                              [31m^[39m
+    [90m406|[39m   [34mexpect[39m(receipt[33m.[39mmutationId)[33m.[39m[34mtoBeUndefined[39m()
+    [90m407|[39m   [35mconst[39m row [33m=[39m fake[33m.[39m[34mfindDoc[39m([32m"memory_quarantine"[39m[33m,[39m { quarantineId })
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯[22m[39m
+
+
+[2m Test Files [22m [1m[31m1 failed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[31m1 failed[39m[22m[2m | [22m[33m10 skipped[39m[90m (11)[39m
+[2m   Start at [22m 16:15:15
+[2m   Duration [22m 832ms[2m (transform 547ms, setup 0ms, import 720ms, tests 7ms, environment 0ms)[22m
+
+focused_test_exit=1 (expected nonzero)
+restore_cmp_exit=0
+f1a33450b141ac14218e589992bec6cb3d5ed52ad8df214c334764513aea493c  packages/memory-engine/src/mongodb-quarantine-review.ts
+=== restored green control and receipt-shape defense ===
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/packages/memory-engine[39m
+
+[90mstdout[2m | src/refutation-c-004-r2.temp.test.ts[2m > [22m[2mC-004 round-2 independent probes[2m > [22m[2mFIX promote audit metadata matches the durable decision row
+[22m[39m16:15:17.460 [memory:mongodb:structured] info: structured memory created: type=preference key=*** over spaces in TypeScript files revision=1
+
+[90mstdout[2m | src/refutation-c-004-r2.temp.test.ts[2m > [22m[2mC-004 round-2 independent probes[2m > [22m[2mFIX promote ledger failure is surfaced while decision remains durable
+[22m[39m16:15:17.464 [memory:mongodb:structured] info: structured memory created: type=preference key=*** over spaces in TypeScript files revision=1
+
+[90mstderr[2m | src/refutation-c-004-r2.temp.test.ts[2m > [22m[2mC-004 round-2 independent probes[2m > [22m[2mFIX promote ledger failure is surfaced while decision remains durable
+[22m[39m16:15:17.464 [memory:mongodb:mutations] warn: recordMutation failed {"mutationId":"741c1c9b-7713-45a6-943c-46598847fb8a","error":{}}
+
+[90mstderr[2m | src/refutation-c-004-r2.temp.test.ts[2m > [22m[2mC-004 round-2 independent probes[2m > [22m[2mFIX promote ledger failure is surfaced while decision remains durable
+[22m[39m16:15:17.464 [memory:mongodb:mutations] warn: recordMutation failed {"mutationId":"a3b11f5c-1450-4fd1-b1f6-321d1f89dcaf","error":{}}
+
+[90mstderr[2m | src/refutation-c-004-r2.temp.test.ts[2m > [22m[2mC-004 round-2 independent probes[2m > [22m[2mFIX promote ledger failure is surfaced while decision remains durable
+[22m[39m16:15:17.464 [memory:mongodb:quarantine] warn: promote audit record failed for quarantine=33df8570-499f-46fb-8d59-7f61bd32cc78: independent ledger outage
+
+[90mstderr[2m | src/refutation-c-004-r2.temp.test.ts[2m > [22m[2mC-004 round-2 independent probes[2m > [22m[2mFIX reject ledger failure is surfaced while decision remains durable
+[22m[39m16:15:17.464 [memory:mongodb:mutations] warn: recordMutation failed {"mutationId":"abb7a319-cf09-4f60-9504-05da31cefc79","error":{}}
+
+[90mstderr[2m | src/refutation-c-004-r2.temp.test.ts[2m > [22m[2mC-004 round-2 independent probes[2m > [22m[2mFIX reject ledger failure is surfaced while decision remains durable
+[22m[39m16:15:17.464 [memory:mongodb:quarantine] warn: reject audit record failed for quarantine=a0af3ba0-7524-4635-9b49-14536773afac: independent ledger outage
+
+[90mstdout[2m | src/refutation-c-004-r2.temp.test.ts[2m > [22m[2mC-004 round-2 independent probes[2m > [22m[2mCOMBINED ledger outage plus concurrent promotion has one winner
+[22m[39m16:15:17.465 [memory:mongodb:structured] info: structured memory created: type=preference key=*** over spaces in TypeScript files revision=1
+
+[90mstderr[2m | src/refutation-c-004-r2.temp.test.ts[2m > [22m[2mC-004 round-2 independent probes[2m > [22m[2mCOMBINED ledger outage plus concurrent promotion has one winner
+[22m[39m16:15:17.466 [memory:mongodb:mutations] warn: recordMutation failed {"mutationId":"ed73a8e5-b949-4aa0-819d-da01b5736210","error":{}}
+
+[90mstderr[2m | src/refutation-c-004-r2.temp.test.ts[2m > [22m[2mC-004 round-2 independent probes[2m > [22m[2mCOMBINED ledger outage plus concurrent promotion has one winner
+[22m[39m16:15:17.466 [memory:mongodb:mutations] warn: recordMutation failed {"mutationId":"18692260-5a61-49ad-87bb-ae0fc2dd7213","error":{}}
+
+[90mstderr[2m | src/refutation-c-004-r2.temp.test.ts[2m > [22m[2mC-004 round-2 independent probes[2m > [22m[2mCOMBINED ledger outage plus concurrent promotion has one winner
+[22m[39m16:15:17.466 [memory:mongodb:quarantine] warn: promote audit record failed for quarantine=801db871-327b-4198-8a74-11a4e1ffa8d0: ledger unavailable
+
+ [32m✓[39m src/refutation-c-004-r2.temp.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+[90mstdout[2m | src/mongodb-quarantine-review.test.ts[2m > [22m[2mpromoteQuarantined — classifier overrule (C-004)[2m > [22m[2mwrites structured memory via the consolidator's extraction and records the decision
+[22m[39m16:15:17.763 [memory:mongodb:structured] info: structured memory created: type=preference key=*** over spaces in TypeScript files revision=1
+
+[90mstdout[2m | src/mongodb-quarantine-review.test.ts[2m > [22m[2mpromoteQuarantined — classifier overrule (C-004)[2m > [22m[2msurfaces a failed audit write as auditError without undoing the promotion
+[22m[39m16:15:17.767 [memory:mongodb:structured] info: structured memory created: type=preference key=*** over spaces in TypeScript files revision=1
+
+[90mstderr[2m | src/mongodb-quarantine-review.test.ts[2m > [22m[2mpromoteQuarantined — classifier overrule (C-004)[2m > [22m[2msurfaces a failed audit write as auditError without undoing the promotion
+[22m[39m16:15:17.768 [memory:mongodb:mutations] warn: recordMutation failed {"mutationId":"790a15b3-3521-4aaa-ab35-0cbab9e0c8e7","error":{}}
+
+[90mstderr[2m | src/mongodb-quarantine-review.test.ts[2m > [22m[2mpromoteQuarantined — classifier overrule (C-004)[2m > [22m[2msurfaces a failed audit write as auditError without undoing the promotion
+[22m[39m16:15:17.768 [memory:mongodb:mutations] warn: recordMutation failed {"mutationId":"f57f2339-ee1c-4fdc-9485-60da9e37386d","error":{}}
+
+[90mstderr[2m | src/mongodb-quarantine-review.test.ts[2m > [22m[2mpromoteQuarantined — classifier overrule (C-004)[2m > [22m[2msurfaces a failed audit write as auditError without undoing the promotion
+[22m[39m16:15:17.768 [memory:mongodb:quarantine] warn: promote audit record failed for quarantine=d64a824d-c5c3-45f1-aa77-602ef2dbde16: audit insert failed
+
+[90mstderr[2m | src/mongodb-quarantine-review.test.ts[2m > [22m[2mrejectQuarantined — discard with audit trail (C-004)[2m > [22m[2msurfaces a failed audit write as auditError without undoing the decision
+[22m[39m16:15:17.768 [memory:mongodb:mutations] warn: recordMutation failed {"mutationId":"8e621c5c-da28-4cbb-8f19-00c898c53a36","error":{}}
+
+[90mstderr[2m | src/mongodb-quarantine-review.test.ts[2m > [22m[2mrejectQuarantined — discard with audit trail (C-004)[2m > [22m[2msurfaces a failed audit write as auditError without undoing the decision
+[22m[39m16:15:17.768 [memory:mongodb:quarantine] warn: reject audit record failed for quarantine=a5cdc1f7-0764-4827-a933-0c3be89c4c9a: audit insert failed
+
+[90mstdout[2m | src/mongodb-quarantine-review.test.ts[2m > [22m[2mMongoDBMemoryManager — facade wiring (C-004)[2m > [22m[2mdelegates list/promote/reject through the ops collaborators
+[22m[39m16:15:17.769 [memory:mongodb:structured] info: structured memory created: type=preference key=*** over spaces in TypeScript files revision=1
+
+ [32m✓[39m src/mongodb-quarantine-review.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 10[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m2 passed[39m[22m[90m (2)[39m
+[2m      Tests [22m [1m[32m18 passed[39m[22m[90m (18)[39m
+[2m   Start at [22m 16:15:16
+[2m   Duration [22m 779ms[2m (transform 769ms, setup 0ms, import 1.04s, tests 19ms, environment 0ms)[22m
+
+final_cmp_exit=0
+final:
+f1a33450b141ac14218e589992bec6cb3d5ed52ad8df214c334764513aea493c  packages/memory-engine/src/mongodb-quarantine-review.ts

@@ -160,3 +160,103 @@ entries:
     run_at: "2026-09-03T07:42:33.000Z"
     evidence_hash: sha256:7861f89f02132b364cde54839f445f7e481f628e299a0e7d42b0a5e510b884cc
     notes: "Pattern-table integrity evidence from the redact.test.ts battery (40 tests) in the final-state lib suite (this log): branch dispatch is bound by pattern identity (indexOf over the const regexes) after the round-3 repair — the original source-string prefix probe silently dropped both userinfo branches when the escaped-slash prefix probe failed to match, sending username-only userinfo into an unmasked fallback — and the assignment value alternatives tolerate the optional backslash before opening/closing quotes, closing the escaped-quote serialized-meta gap (JSON.stringify doubles inner quotes). Real-code confirmation: the post-fix re-probe (refutation-c-002-r3-post-fix-probes.log, sha256:c8a19ced75a7011e1410d48efc7cfe42a2e74c833dbfe71c02d8b99a70eeaadb) drives all 24 round-2/3 vectors through the actual logger, registry, API, client, tools, and pi-extension boundaries with every console method patched and non-empty capture asserted — all vectors clean, exit 0."
+
+  - id: V-042
+    claim_id: C-003
+    construct: packages/memory-engine/src/mongodb-manager.ts
+    method: test
+    target: .ddd/reports/runs/ws03-memory-engine-suite.log
+    result: pass
+    run_at: "2026-09-03T14:10:10.000Z"
+    evidence_hash: sha256:41501eb9b87c2248ff48b3e82fbdac92e02a1064fda1f88e45a0950e0af544dd
+    notes: "Tenant-erasure primitive evidence from the mongodb-tenant-erasure.test.ts battery (7 tests, two describes) in the final-state engine suite (this log): MongoDBMemoryManager.deleteAllForAgent (facade in mongodb-manager-admin.ts, engine in mongodb-erasure.ts) sweeps every tenant-data collection in one primitive, returns per-collection deleted-count receipts with an overall status, and writes a critical-severity proof-of-erasure audit record AFTER the deletes so it survives the erase — a failed audit write surfaces on the receipt (auditError) and forces status partial rather than silently claiming success. The battery pins full-sweep completeness against the stateful fake, receipt fidelity, audit persistence, and the facade wiring. Independent refutation sustained across two rounds (refutation-c-003.yaml: round-1 vacuity mutations — dropped collections, neutralized audit, fabricated receipts — all caught by focused assertions; round-2 re-verified the repaired defenses)."
+
+  - id: V-043
+    claim_id: C-003
+    construct: packages/memory-bridge/src/memongo-bridge.ts
+    method: test
+    target: .ddd/reports/runs/ws03-memory-bridge-suite.log
+    result: pass
+    run_at: "2026-09-03T14:12:31.000Z"
+    evidence_hash: sha256:2c0415cd6c5e0de1cf0c25a0edfffbc542748ff59489fcbd17326ef06258c57d
+    notes: "Bridge exposure evidence from the memongo-bridge-erasure.test.ts battery (3 tests) in the final-state bridge suite (this log, 82 passed, exit 0): the stable facade delegates eraseTenant to the manager's deleteAllForAgent exactly once per call, maps the per-collection receipts into the bridge response shape, and translates a manager failure into the bridge error path rather than swallowing it — the erasure primitive is reachable through the published surface, not engine-only."
+
+  - id: V-044
+    claim_id: C-003
+    construct: apps/api/src/app.ts
+    method: test
+    target: .ddd/reports/runs/ws03-api-suite.log
+    result: pass
+    run_at: "2026-09-03T14:12:36.000Z"
+    evidence_hash: sha256:20cf61af35984e79a7a65afc676f8cc6b7da482ffda5bd1c2b009e4463ebe346
+    notes: "API route exposure evidence from the admin-route battery in app.segment3.test.ts (this log, 480 passed, exit 0): POST /v1/admin/erase demands an explicit confirmation token (irreversible operation), returns the per-collection receipt envelope, maps bridge failure to ERASE_FAILED, and rejects scoped and agent-scoped API keys — the route is admin-only in app.ts so no agent credential can trigger erasure; /v1/admin/erase plus the quarantine review paths are documented in openapi-paths-admin.ts. MCP-tool exposure of the same primitive is pinned by the mcp suite (server.test.ts + tool-registry.test.ts, 175 passed; V-047 battery) via the admin tool catalog."
+
+  - id: V-045
+    claim_id: C-004
+    construct: packages/memory-engine/src/mongodb-schema.ts
+    method: test
+    target: .ddd/reports/runs/ws03-memory-engine-suite.log
+    result: pass
+    run_at: "2026-09-03T14:10:10.000Z"
+    evidence_hash: sha256:41501eb9b87c2248ff48b3e82fbdac92e02a1064fda1f88e45a0950e0af544dd
+    notes: "Quarantine retention evidence from the schema batteries in the final-state engine suite (this log): the memory_quarantine collection carries the C-004 index set — uq_memory_quarantine_quarantineid (unique id), idx_memory_quarantine_agent_status_created (queue listing), and a partial TTL index on unreviewed entries whose expireAfterSeconds resolves from quarantineRetentionDays (configurable with a documented default) — so unreviewed poison-classified memories cannot accumulate forever. Index contracts are pinned by count and shape in mongodb-schema.test.ts (total standard index count 100) and mongodb-schema.part3.test.ts, and the count moved 99 to 100 with the C-005 session_chunks TTL index, keeping every quarantine index asserted. Refutation round-4 attempt (retention-cap integrity, refutation-c-004.yaml) mutated the TTL contract and was caught by focused assertions."
+
+  - id: V-046
+    claim_id: C-004
+    construct: packages/memory-engine/src/mongodb-manager-read.ts
+    method: test
+    target: .ddd/reports/runs/ws03-memory-engine-suite.log
+    result: pass
+    run_at: "2026-09-03T14:10:10.000Z"
+    evidence_hash: sha256:41501eb9b87c2248ff48b3e82fbdac92e02a1064fda1f88e45a0950e0af544dd
+    notes: "Quarantine review-lifecycle evidence from the mongodb-quarantine-review.test.ts battery (11 tests, four describes) in the final-state engine suite (this log): listQuarantined returns an agent's review queue oldest-first with status and limit filters and tenant isolation; promoteQuarantined overrules the classifier by writing the structured memory through the consolidator's extraction path and records the decision (reviewer, reason, decidedAt); rejectQuarantined discards with an audit trail; the MongoDBMemoryManager facade wires all three. Decision metadata is asserted on the documents, so a promotion or rejection is attributable after the fact. Independent refutation sustained across two rounds (refutation-c-004.yaml), including a lifecycle-integrity attempt driving promote/reject against the stateful fake."
+
+  - id: V-047
+    claim_id: C-004
+    construct: apps/mcp/src/tool-registry.ts
+    method: test
+    target: .ddd/reports/runs/ws03-mcp-suite.log
+    result: pass
+    run_at: "2026-09-03T14:12:39.000Z"
+    evidence_hash: sha256:f3c45a1d375af5fdd66cb42bb8669e5698f7ed7b832c03b03e6b134b76ba2bed
+    notes: "MCP tool surfacing evidence from the tool-registry.test.ts battery (10 tests) and server.test.ts in the final-state mcp suite (this log, 175 passed, exit 0): MEMONGO_MCP_ADMIN=1 gates the admin tool catalog (default is the core tool set only; flags compose explicitly), and the admin tools include the quarantine review operations with full input schemas — list with status/limit, promote and reject with quarantineId plus reviewer metadata — and the tenant-erasure tool, so the C-004 review lifecycle and the C-003 erasure primitive are operable through MCP, not just HTTP. Web-console surfacing (the claim's third surface) is apps/web/app/console/page.tsx (quarantine tab driving the admin routes); the web typecheck is green (ws03-web-typecheck.log)."
+
+  - id: V-048
+    claim_id: C-005
+    construct: packages/memory-engine/src/mongodb-manager-sync.ts
+    method: test
+    target: .ddd/reports/runs/ws03-memory-engine-suite.log
+    result: pass
+    run_at: "2026-09-03T14:10:10.000Z"
+    evidence_hash: sha256:41501eb9b87c2248ff48b3e82fbdac92e02a1064fda1f88e45a0950e0af544dd
+    notes: "Expiry-propagation evidence from the mongodb-chunk-retention.test.ts battery (20 tests, ten describes) and the TTL describe in mongodb-manager-write-state.test.ts (3 tests) in the final-state engine suite (this log): the resolved event expiry now reaches every chunk-writing path — single and batch manager writes carry the resolved expiresAt into the projection payload; projectEventChunk/projectEventChunksBatch stamp it via $set so re-projection self-heals chunks created expiry-less (round-1 defect: $setOnInsert could never backfill); repairExtractionOutbox spreads the stored event's expiresAt; projectConversationWindows fetches only unexpired events, stamps each window with the max expiry of its events, and unsets stale expiry when events are permanent; session evidence documents carry the per-session max expiry via resolveSessionEvidenceExpiresAt; and every chunk-reading surface (conversation search filter, bridge chunk filter, readConversationChunk, readBridgeChunk, session_chunks vector lane) composes the unexpired clause so expired chunks are hidden during TTL-monitor lag. Round-2 refutation sustained (refutation-c-005.yaml, attempts 6-9): 186 pinning tests, 8 independent stateful-fake probes on the real manager path (config-derived sessionDays TTL reaches chunks; window re-projection heals in both $set and $unset directions), 7 vacuity mutations all caught by focused assertions, full suite 127 files / 2122 tests."
+
+  - id: V-049
+    claim_id: C-005
+    construct: packages/memory-engine/src/mongodb-schema.ts
+    method: test
+    target: .ddd/reports/runs/ws03-memory-engine-suite.log
+    result: pass
+    run_at: "2026-09-03T14:10:10.000Z"
+    evidence_hash: sha256:41501eb9b87c2248ff48b3e82fbdac92e02a1064fda1f88e45a0950e0af544dd
+    notes: "Chunk TTL index contract evidence from the schema batteries in the final-state engine suite (this log): the chunks collection carries the partial TTL index idx_chunks_ttl_expires_at (expireAfterSeconds 0, partial on expiresAt existing) and the session_chunks collection carries idx_session_chunks_ttl_expires_at, so a chunk stamped with its source event's expiry is physically deleted by MongoDB's TTL monitor after that instant — the claim's TTL-index arm. Both are pinned by name, partial-filter shape, and expireAfterSeconds in mongodb-schema.test.ts (total standard index count 100, session_chunks 4 indexes) and the evidence-mirror count; the round-2 vacuity mutation M6 (expireAfterSeconds 0 to 60) was caught by the focused schema assertion."
+
+  - id: V-050
+    claim_id: C-006
+    construct: packages/memory-engine/src/mongodb-events.ts
+    method: test
+    target: .ddd/reports/runs/ws03-memory-engine-suite.log
+    result: pass
+    run_at: "2026-09-03T14:10:10.000Z"
+    evidence_hash: sha256:41501eb9b87c2248ff48b3e82fbdac92e02a1064fda1f88e45a0950e0af544dd
+    notes: "Fingerprint-retention seam evidence from the mongodb-idempotency-retention.test.ts battery (9 tests) in the final-state engine suite (this log): fingerprints ride on canonical event documents rather than a separate collection, so retention is a field-level prune — pruneIdempotencyFingerprints $unsets idempotencyKey/idempotencyFingerprint from events whose fingerprints predate the retention window while leaving recent fingerprinted events (still deduplicable), keyless events, and other tenants' documents untouched, and resolveIdempotencyRetentionDays pins the env contract (documented default, valid override, zero disables, invalid falls back). Completed-write fingerprint state therefore no longer accumulates forever behind its unique index."
+
+  - id: V-051
+    claim_id: C-006
+    construct: packages/memory-engine/src/mongodb-manager-write.ts
+    method: test
+    target: .ddd/reports/runs/ws03-memory-engine-suite.log
+    result: pass
+    run_at: "2026-09-03T14:10:10.000Z"
+    evidence_hash: sha256:41501eb9b87c2248ff48b3e82fbdac92e02a1064fda1f88e45a0950e0af544dd
+    notes: "Retention enforcement wiring evidence from the manager-facade and worker-drain describes of the mongodb-idempotency-retention.test.ts battery in the final-state engine suite (this log): the write-ops facade runs the prune on the real write path against the stateful fake behind an hourly gate (no re-prune within the window, immediate run when the gate is due or forced), a prune failure is swallowed after logging so a retention hiccup cannot fail tenant writes, and drainMemoryJobQueue awaits the prune after outbox repair so the background worker exercises the same retention policy — the deduplication support is bounded in every path that writes fingerprinted events."

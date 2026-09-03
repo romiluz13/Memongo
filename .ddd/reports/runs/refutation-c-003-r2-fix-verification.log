@@ -1,0 +1,26 @@
+what: Re-demonstrate both round-1 C-003 counterexamples against fixed real code
+run: bunx vitest run src/mongodb-erasure-r2-refuter.test.ts -t r2-fix-verification
+date: 2026-09-03T12:49:17Z
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/packages/memory-engine[39m
+
+[90mstderr[2m | src/mongodb-erasure-r2-refuter.test.ts[2m > [22m[2mr2-fix-verification[2m > [22m[2msurfaces the phase-1 relevance join failure without silent completeness
+[22m[39m15:49:18.529 [memory:mongodb:erasure] warn: relevance run id collection failed; artifacts not swept {"agentId":"agent-r2","error":{}}
+
+[90mstderr[2m | src/mongodb-erasure-r2-refuter.test.ts[2m > [22m[2mr2-fix-verification[2m > [22m[2msurfaces the phase-1 relevance join failure without silent completeness
+[22m[39m15:49:18.538 [memory:mongodb:erasure] warn: tenant erasure completed with failures {"agentId":"agent-r2","failed":["relevance_artifacts"]}
+
+[90mstderr[2m | src/mongodb-erasure-r2-refuter.test.ts[2m > [22m[2mr2-fix-verification[2m > [22m[2msurfaces an audit-write failure without silent completeness
+[22m[39m15:49:18.540 [memory:mongodb:mutations] warn: recordMutation failed {"mutationId":"d4b28742-e0dd-4911-b067-55cba27da90e","error":{}}
+
+[90mstderr[2m | src/mongodb-erasure-r2-refuter.test.ts[2m > [22m[2mr2-fix-verification[2m > [22m[2msurfaces an audit-write failure without silent completeness
+[22m[39m15:49:18.540 [memory:mongodb:erasure] warn: tenant erasure audit record failed {"agentId":"agent-r2","error":{}}
+15:49:18.540 [memory:mongodb:erasure] warn: tenant erasure completed with failures {"agentId":"agent-r2","failed":[]}
+
+ [32m✓[39m src/mongodb-erasure-r2-refuter.test.ts [2m([22m[2m7 tests[22m[2m | [22m[33m5 skipped[39m[2m)[22m[32m 13[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m1 passed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[32m2 passed[39m[22m[2m | [22m[33m5 skipped[39m[90m (7)[39m
+[2m   Start at [22m 15:49:18
+[2m   Duration [22m 344ms[2m (transform 173ms, setup 0ms, import 215ms, tests 13ms, environment 0ms)[22m
+

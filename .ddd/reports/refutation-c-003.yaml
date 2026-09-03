@@ -1,0 +1,238 @@
+# Independent refutation report for T3 claim C-003
+# ("A tenant-level erasure primitive deleteAllForAgent(agentId, scope) MUST
+# exist and delete from every collection that stores tenant data, including
+# events, chunks, structured memories and revisions, entities, relations,
+# episodes, jobs, ledgers, caches, and telemetry, returning per-collection
+# receipts and writing an audit record; it MUST be exposed through the bridge,
+# an API route, and an MCP tool.")
+claim_id: C-003
+verdict: sustained
+independence_verified: true
+refuter_id: "factory-droid worker subagents, independent C-003 refuters (fresh refuter in each round; neither authored the implementation or fixes)"
+implementer_id: "factory-droid primary agent, WS-03 implementer"
+refuted_rounds: 1
+sustained_rounds: 1
+attempt_log_dir: .ddd/reports/runs/
+
+attempts:
+  - id: attempt-1-vacuity
+    description: >
+      Remove central erasure targets, neutralize the audit write, fabricate
+      receipt counts and complete status, and break the relevance run-to-
+      artifact join. For every mutation, require a real focused assertion
+      failure, restore byte-identically, and require a green control.
+    round_1_outcome: caught
+    round_1_detail: >
+      All four mutations failed the focused engine battery with assertion
+      failures rather than collection/setup errors. Removing
+      memory_mutations, access_events, and relevance_artifacts produced 3
+      failures; neutralizing audit persistence produced 3 failures;
+      fabricating deleted counts and complete status produced 3 failures;
+      and targeting a wrong relevance run id produced 3 failures. Every
+      mutation was restored with cmp exit 0 and SHA-256
+      aa667a2eabf28c6f8f348ab2f445aa2a40ec3e3e061aec324fab406a037fe8b5,
+      followed by a 5/5 green control.
+    round_2_outcome: caught
+    round_2_detail: >
+      Each newly added defense was independently removed: suppressing the
+      artifactPhaseError receipt, reverting final status to deletesOk-only,
+      and suppressing auditError assignment. Each mutation produced a real
+      assertion failure in mongodb-tenant-erasure.test.ts (exit 1), and the
+      restored control passed 7/7. mongodb-erasure.ts was restored after each
+      mutation with cmp exit 0 and identical SHA-256
+      58f57046a497429c589b0e730e6120ac461d22d5f48d148289d5dcc294ec9bfe.
+    evidence: >
+      round 1: refutation-c-003-attempt-1-vacuity.log;
+      round 2: refutation-c-003-r2-vacuity-new-defenses.log
+
+  - id: attempt-2-declared-surfaces
+    description: >
+      Drive the MCP schema and dispatcher through the real client request,
+      real API route, real bridge function, and real engine primitive, with
+      only the MongoDB manager factory replaced by a stateful in-memory
+      database seam; also attack API and MCP confirmation validation.
+    round_1_outcome: caught_with_observations
+    round_1_detail: >
+      The first probe received the API's expected fail-closed
+      AUTH_NOT_CONFIGURED 401 because its harness omitted API
+      authentication. The corrected probe supplied a dummy-prefixed
+      credential and passed end-to-end: the tool schema requires confirm
+      with enum ["erase"]; invalid API confirmation returned 400
+      VALIDATION_ERROR without an engine call; invalid MCP confirmation was
+      rejected before the client; and a valid MCP call produced exactly one
+      POST /v1/admin/erase with the expected JSON, traversed the bridge, ran
+      the real engine deletion against seeded state, returned real
+      per-collection counts, deleted the event, and persisted the audit.
+      Thus no declared surface was missing, canned, or unreachable.
+    round_2_outcome: caught
+    round_2_detail: >
+      The bridge returns the engine receipt directly, the API route serializes
+      that receipt directly, the MCP dispatcher wraps the client's result
+      without selecting fields, and the client returns apiPost unchanged.
+      Focused bridge, API, MCP, and client tests all passed. The client wire
+      type now declares optional auditError, so the new degradation signal is
+      retained through the typed surface.
+    evidence: >
+      round 1: refutation-c-003-attempt-2-declared-surfaces.log;
+      round 2: refutation-c-003-r2-consistency.log
+
+  - id: attempt-3-tenant-isolation
+    description: >
+      Seed every tenant collection for agent-1 and agent-2 plus global meta
+      state, erase agent-1, and separately erase an absent tenant.
+    round_1_outcome: caught
+    round_1_detail: >
+      The full two-tenant probe returned 29 receipts, each counting exactly
+      one agent-1 deletion. Every agent-2 fixture and global meta document
+      survived, while all agent-1 data except the intentionally post-erase
+      critical audit was removed. Erasing an absent tenant returned complete
+      with 28 zero-count receipts, preserved other/global data, and still
+      wrote a critical audit record.
+    round_2_outcome: caught
+    round_2_detail: >
+      A fresh full-coverage stateful-fake probe again seeded all 26
+      top-level agent-keyed collections, both meta.agentId time-series
+      collections, both tenants' indirectly keyed relevance artifacts, and
+      global meta. The target tenant was erased, every other-tenant row and
+      global meta survived, and only the new proof-of-erasure audit remained
+      for the target in memory_mutations. The empty-tenant consistency probe
+      also returned complete with 28 zero-delete receipts and a durable audit.
+    evidence: >
+      round 1: refutation-c-003-attempt-3-tenant-isolation.log;
+      round 2: refutation-c-003-r2-regression.log,
+      refutation-c-003-r2-consistency.log
+
+  - id: attempt-4-partial-failure-semantics
+    description: >
+      Inject multiple deleteMany failures, a phase-1 relevance_runs.find
+      failure, and an audit-record insert failure; inspect continuation,
+      receipts, status, survivors, and audit state.
+    round_1_outcome: refuted
+    round_1_detail: >
+      Ordinary deleteMany failures behaved correctly: the sweep continued,
+      chunks and entities received zero-count error receipts, status became
+      partial, successful targets were deleted, and the critical audit named
+      both failures. Two surviving counterexamples refute the claim. First,
+      when phase-1 relevance_runs.find throws, relevance_artifacts retains
+      tenant payload, no relevance_artifacts receipt is returned, and both
+      the result and audit claim status complete with no failed collection.
+      Second, when the post-delete memory_mutations.insertOne throws, the
+      result still claims complete while mutationId is absent and no audit
+      record exists. Logging either degradation does not satisfy the
+      claim's MUST-delete, per-collection-receipt, and MUST-audit guarantees.
+    round_2_outcome: caught
+    round_2_detail: >
+      Both former counterexamples are closed through the real primitive and
+      stateful failure injection. A relevance_runs.find failure returns
+      partial, includes a zero-delete relevance_artifacts receipt naming the
+      unavailable run ids, continues every ordinary sweep, retains the
+      unreachable artifact honestly, and writes an audit whose sole failed
+      collection is relevance_artifacts. A memory_mutations.insertOne
+      failure returns partial with auditError, omits mutationId, leaves no
+      audit record, and still completes all collection deletes.
+    evidence: >
+      round 1:
+      refutation-c-003-attempt-4-partial-failure-semantics.log;
+      round 2: refutation-c-003-r2-fix-verification.log,
+      refutation-c-003-r2-consistency.log
+
+  - id: attempt-5-missed-collections
+    description: >
+      Enumerate schema accessors, ensureCollections targets, time-series
+      creators, and direct production Db collection calls, then compare them
+      with the erasure plan and evaluate the literal scope parameter.
+    round_1_outcome: caught_with_observations
+    round_1_detail: >
+      The static cross-check found 30 engine collections and 29 erasure
+      targets. The only exclusion is meta, which stores global operational
+      schema/capability/change-stream/KB-refresh state rather than tenant
+      data. All 26 top-level agentId collections, both meta.agentId
+      time-series collections, and relevance_artifacts are represented. No
+      additional tenant persistence surface was found. The missing explicit
+      scope argument is not independently refuting: the manager binds
+      agentId and the primitive intentionally erases every scope for that
+      tenant; narrowing by scope would contradict tenant-level erase-all
+      semantics, and no data class requiring a separate scope selector was
+      identified.
+    round_2_outcome: caught_with_observations
+    round_2_detail: >
+      The round-2 full-coverage isolation probe exercised the unchanged
+      29-target plan after the fixes and found no omitted tenant collection.
+      It reconfirmed the intentional global meta exclusion and the indirect
+      relevance_artifacts join. The round-1 scope observation remains
+      non-blocking: manager binding identifies the tenant and erase-all
+      intentionally crosses every narrower scope for that tenant.
+    evidence: >
+      round 1: refutation-c-003-attempt-5-missed-collections.log;
+      round 2: refutation-c-003-r2-regression.log
+
+  - id: attempt-6-round-2-consistency
+    description: >
+      Combine all fixed failure modes, compare successful audit metadata with
+      the returned status after a delete failure, verify empty-tenant
+      behavior, and inspect the bridge/API/MCP/client passthrough seams.
+    round_1_outcome: not_run
+    round_1_detail: >
+      These combinations target defenses introduced after round 1.
+    round_2_outcome: caught
+    round_2_detail: >
+      A relevance join failure, chunks delete failure, and audit insert
+      failure injected together returned normally with partial status, both
+      collection errors, auditError, no mutationId, and continued deletion
+      of unaffected collections. With only the chunks delete failing and the
+      audit succeeding, audit meta.status exactly equaled the returned
+      partial status and named chunks. Empty erasure remained complete and
+      audited. All four passthrough seams retained the receipt shape.
+    evidence: >
+      round 2: refutation-c-003-r2-consistency.log
+
+fix_applied_between_rounds: >
+  The implementer added artifactPhaseError capture around the phase-1
+  relevance_runs lookup and appends a zero-delete relevance_artifacts error
+  receipt when run ids are unavailable, forcing partial status and inclusion
+  in audit meta.failedCollections. Audit-write failures now populate optional
+  TenantErasureReceipt.auditError, and final complete status requires both
+  deletesOk and no auditError. Audit meta.status records the delete-level
+  status, which equals the final status whenever the audit write succeeds.
+  Two focused tests pin the former counterexamples, bringing that battery to
+  seven tests. MemongoEraseAgentResponse gained optional auditError for wire
+  parity.
+
+conclusion: >
+  Verdict: sustained after fixes. Round 1 refuted C-003 because a failed
+  relevance run-id lookup could leave artifacts behind under a complete
+  receipt and a failed audit insert could likewise return complete without
+  proof of erasure. Round 2 re-demonstrated both scenarios and found them
+  honestly represented as partial; the new defenses are non-vacuously pinned
+  by mutation tests. Combined failures, ordinary delete continuation, audit
+  status consistency, empty erasure, full tenant isolation, all 29 erasure
+  targets, and bridge/API/MCP/client passthrough held under attack. The
+  canonical non-e2e engine suite and full bridge, API, MCP, and client suites
+  also passed. No round-2 counterexample survives.
+
+tree_hygiene: >
+  Round 1: no git-mutating command was run; mongodb-erasure.ts was restored
+  byte-identically after every vacuity mutation (cmp exit 0; SHA-256
+  aa667a2eabf28c6f8f348ab2f445aa2a40ec3e3e061aec324fab406a037fe8b5),
+  and all scratch probes were deleted. Round 2: no git-mutating command was
+  run. All three mongodb-erasure.ts mutations were restored independently
+  with cmp exit 0 and SHA-256
+  58f57046a497429c589b0e730e6120ac461d22d5f48d148289d5dcc294ec9bfe
+  before and after. The temporary refuter test and /tmp backup were deleted
+  and verified absent. The only persistent round-2 files are this updated
+  report and refutation-c-003-r2-{fix-verification,
+  vacuity-new-defenses,consistency,regression}.log under
+  .ddd/reports/runs/.
+
+non_blocking_observations: >
+  Empty erasures omit relevance_artifacts from receipts because no run ids
+  are discovered, so receipt cardinality is 28 rather than 29. That is
+  defensible when phase 1 succeeds and proves there are no tenant run ids,
+  and the round-2 empty-tenant probe confirms it remains complete and
+  audited; the unsafe phase-1-failure case is now explicit. The client and
+  route body retain an optional agentId while manager binding supplies the
+  tenant identity; no cross-tenant or body-smuggling behavior was observed.
+  Existing bridge/API/MCP/client behavior tests use complete receipts rather
+  than an auditError fixture, but the round-2 source inspection confirms each
+  runtime seam is a direct whole-object passthrough and the client wire type
+  explicitly declares auditError.

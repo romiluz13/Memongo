@@ -15,9 +15,10 @@
  *   - "none" (default): no session-level evidence is created
  */
 
-import type { Collection } from "mongodb"
+import type { Collection, Db } from "mongodb"
 import type { MemoryScope } from "@memongo/lib"
 import type { MemoryBenchmarkConversation } from "./types.js"
+import { eventsCollection } from "./mongodb-schema.js"
 
 // ---------------------------------------------------------------------------
 // Types
@@ -37,6 +38,14 @@ export type SessionEvidenceDocument = {
 	status: "active"
 	timestamp: Date
 	updatedAt: Date
+	/**
+	 * C-005: session expiry = the LATEST expiry among the session's source
+	 * events. Absent when any source event never expires (max semantics, same
+	 * rule as conversation windows): the session doc stays readable as long
+	 * as any of its content is, and the chunks / session_chunks TTL indexes
+	 * delete it once the last source event has expired.
+	 */
+	expiresAt?: Date
 	metadata: {
 		sourceEventIds: string[]
 		turnCount: number
@@ -105,6 +114,12 @@ export function buildSessionEvidenceDocuments(params: {
 	scope: MemoryScope
 	scopeRef: string
 	eventIds: Map<string, string[]> // sessionId → array of event IDs
+	/**
+	 * C-005: sessionId → latest source-event expiry, resolved by
+	 * resolveSessionEvidenceExpiresAt. A session absent from the map (or a
+	 * missing param) never expires.
+	 */
+	sessionExpiresAt?: Map<string, Date>
 }): SessionEvidenceDocument[] {
 	const { conversations, agentId, scope, scopeRef, eventIds } = params
 	const documents: SessionEvidenceDocument[] = []
@@ -144,6 +159,7 @@ export function buildSessionEvidenceDocuments(params: {
 		const validTimestamp = !Number.isNaN(sessionTimestamp.getTime())
 			? sessionTimestamp
 			: new Date()
+		const expiresAt = params.sessionExpiresAt?.get(sessionId)
 
 		documents.push({
 			source: "session-evidence",
@@ -157,6 +173,7 @@ export function buildSessionEvidenceDocuments(params: {
 			status: "active",
 			timestamp: validTimestamp,
 			updatedAt: validTimestamp,
+			...(expiresAt ? { expiresAt } : {}),
 			metadata: {
 				sourceEventIds,
 				turnCount: userTurns.length,
@@ -189,6 +206,67 @@ export function extractSessionIdFromCanonicalId(
 }
 
 // ---------------------------------------------------------------------------
+// Source-event expiry resolution (C-005)
+// ---------------------------------------------------------------------------
+
+/**
+ * C-005: resolve the expiry each session-evidence document must carry. A
+ * session doc embeds the concatenated user turns of its source events, so it
+ * inherits the LATEST expiry among those events — the doc stays readable as
+ * long as any of its content is. A session with at least one never-expiring
+ * source event gets no entry (permanent), mirroring conversation windows.
+ */
+export async function resolveSessionEvidenceExpiresAt(params: {
+	db: Db
+	prefix: string
+	agentId: string
+	sessionEventMap: Map<string, string[]> // sessionId → event IDs
+}): Promise<Map<string, Date>> {
+	const { db, prefix, agentId, sessionEventMap } = params
+	const allEventIds = [...new Set([...sessionEventMap.values()].flat())]
+	const result = new Map<string, Date>()
+	if (allEventIds.length === 0) {
+		return result
+	}
+	const docs = (await eventsCollection(db, prefix)
+		.find(
+			{ agentId, eventId: { $in: allEventIds } },
+			{ projection: { eventId: 1, expiresAt: 1 } },
+		)
+		.toArray()) as Array<{ eventId?: unknown; expiresAt?: unknown }>
+
+	// eventId → expiry (absent expiry = never expires)
+	const eventExpiry = new Map<string, Date | null>()
+	for (const doc of docs) {
+		if (typeof doc.eventId !== "string") continue
+		eventExpiry.set(
+			doc.eventId,
+			doc.expiresAt instanceof Date ? doc.expiresAt : null,
+		)
+	}
+
+	for (const [sessionId, eventIds] of sessionEventMap) {
+		let expiresAt: Date | undefined
+		for (const eventId of eventIds) {
+			const eventDate = eventExpiry.get(eventId)
+			// Unknown events are treated as permanent — retention must never
+			// expire content whose policy is unknown.
+			if (!eventDate) {
+				expiresAt = undefined
+				break
+			}
+			if (!expiresAt || eventDate > expiresAt) {
+				expiresAt = eventDate
+			}
+		}
+		if (expiresAt) {
+			result.set(sessionId, expiresAt)
+		}
+	}
+	return result
+}
+
+// ---------------------------------------------------------------------------
 // Option A: write session evidence into the canonical chunks collection
 // ---------------------------------------------------------------------------
 
@@ -199,6 +277,7 @@ export async function writeSessionEvidenceOptionA(params: {
 	scope: MemoryScope
 	scopeRef: string
 	eventIds: Map<string, string[]>
+	sessionExpiresAt?: Map<string, Date>
 }): Promise<number> {
 	const docs = buildSessionEvidenceDocuments({
 		conversations: params.conversations,
@@ -206,6 +285,7 @@ export async function writeSessionEvidenceOptionA(params: {
 		scope: params.scope,
 		scopeRef: params.scopeRef,
 		eventIds: params.eventIds,
+		sessionExpiresAt: params.sessionExpiresAt,
 	})
 	if (docs.length === 0) return 0
 	await params.chunksCollection.insertMany(docs)
@@ -223,6 +303,7 @@ export async function writeSessionEvidenceOptionB(params: {
 	scope: MemoryScope
 	scopeRef: string
 	eventIds: Map<string, string[]>
+	sessionExpiresAt?: Map<string, Date>
 }): Promise<number> {
 	const docs = buildSessionEvidenceDocuments({
 		conversations: params.conversations,
@@ -230,6 +311,7 @@ export async function writeSessionEvidenceOptionB(params: {
 		scope: params.scope,
 		scopeRef: params.scopeRef,
 		eventIds: params.eventIds,
+		sessionExpiresAt: params.sessionExpiresAt,
 	})
 	if (docs.length === 0) return 0
 	await params.sessionChunksCollection.insertMany(docs)

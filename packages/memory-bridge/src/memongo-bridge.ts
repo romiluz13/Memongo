@@ -44,6 +44,10 @@ import type {
 	RelevanceSourceScope,
 	StructuredMemoryLifecyclePatch,
 	StructuredMemoryEntry,
+	TenantErasureReceipt,
+	QuarantinedEntry,
+	QuarantineReviewReceipt,
+	QuarantineStatus,
 } from "@memongo/memory-engine/internal"
 import {
 	closeAllMemorySearchManagers,
@@ -641,6 +645,76 @@ export async function memongoBridgeStats(params: {
 }): Promise<MemoryStats> {
 	const m = await memongoBridgeGetManager(params.agentId)
 	return m.stats()
+}
+
+/**
+ * C-003 tenant-level erasure: deletes every document the agent owns across
+ * every collection (events, chunks, structured memories and revisions,
+ * entities, relations, episodes, jobs, ledgers, caches, telemetry — and
+ * relevance_artifacts via its parent runs). IRREVERSIBLE. Returns
+ * per-collection receipts plus the proof-of-erasure audit record id; a
+ * failed collection is reported on the receipt (status "partial") instead
+ * of aborting the sweep.
+ */
+export async function memongoBridgeDeleteAllForAgent(params: {
+	agentId?: string
+}): Promise<TenantErasureReceipt> {
+	const m = await memongoBridgeGetManager(params.agentId)
+	return m.deleteAllForAgent()
+}
+
+/**
+ * C-004 quarantine review: list the agent's quarantine review queue (and
+ * decided history), oldest first. Injection-classified candidates wait here
+ * for a human decision; before C-004 there was no way to even see them.
+ */
+export async function memongoBridgeListQuarantined(params: {
+	agentId?: string
+	status?: QuarantineStatus
+	limit?: number
+}): Promise<QuarantinedEntry[]> {
+	const m = await memongoBridgeGetManager(params.agentId)
+	return m.listQuarantined({
+		status: params.status,
+		limit: params.limit,
+	})
+}
+
+/**
+ * C-004 quarantine review: overrule the injection classifier and write the
+ * quarantined candidate as structured memory, recording the decision
+ * (reviewer, notes, timestamp) on the quarantine row and in memory_mutations.
+ */
+export async function memongoBridgePromoteQuarantined(params: {
+	agentId?: string
+	quarantineId: string
+	reviewerId?: string
+	reviewNotes?: string
+}): Promise<QuarantineReviewReceipt> {
+	const m = await memongoBridgeGetManager(params.agentId)
+	return m.promoteQuarantined({
+		quarantineId: params.quarantineId,
+		reviewerId: params.reviewerId,
+		reviewNotes: params.reviewNotes,
+	})
+}
+
+/**
+ * C-004 quarantine review: discard the quarantined candidate. The row is
+ * kept as durable audit trail; only unreviewed entries age out (TTL).
+ */
+export async function memongoBridgeRejectQuarantined(params: {
+	agentId?: string
+	quarantineId: string
+	reviewerId?: string
+	reviewNotes?: string
+}): Promise<QuarantineReviewReceipt> {
+	const m = await memongoBridgeGetManager(params.agentId)
+	return m.rejectQuarantined({
+		quarantineId: params.quarantineId,
+		reviewerId: params.reviewerId,
+		reviewNotes: params.reviewNotes,
+	})
 }
 
 export async function memongoBridgeSync(params: {

@@ -23,6 +23,7 @@ import {
 	structuredMemCollection,
 } from "./mongodb-schema.js"
 import { resolveScopeIdentity } from "./mongodb-scope.js"
+import { buildUnexpiredClause, mergeQueryClauses } from "./mongodb-temporal.js"
 import { mongoSearch, vectorSearch } from "./mongodb-search.js"
 import type {
 	SearchExplainOptions,
@@ -143,23 +144,39 @@ export class MongoDBManagerSearchOps {
 				sources.push("userfact-evidence")
 			}
 		}
-		return {
-			source: { $in: sources },
-			agentId: this.host.agentId,
-			scope: params.scope,
-			scopeRef: params.scopeRef,
-			status: { $ne: "deleted" },
-		}
+		// C-005: hide expired chunks immediately. The chunks TTL index
+		// (idx_chunks_ttl_expires_at) only sweeps about every 60s, so an
+		// expired chunk can still surface in reads until the sweep deletes
+		// it — every surface fed by this filter composes the unexpired
+		// clause, mirroring the events read guard (buildUnexpiredClause on
+		// expiresAt). The $exists:false branch keeps the clause
+		// semantics-neutral for chunks written without an expiry.
+		return mergeQueryClauses(
+			{
+				source: { $in: sources },
+				agentId: this.host.agentId,
+				scope: params.scope,
+				scopeRef: params.scopeRef,
+				status: { $ne: "deleted" },
+			},
+			buildUnexpiredClause({ field: "expiresAt" }),
+		)
 	}
 
 	buildBridgeChunkFilter(): Document {
-		return {
-			source: { $in: ["conversation", "memory"] },
-			agentId: this.host.agentId,
-			scope: "workspace",
-			scopeRef: this.host.workspaceScopeRef,
-			status: { $ne: "deleted" },
-		}
+		// C-005: same unexpired guard as buildConversationChunkFilter — the
+		// bridge lane reads the same chunks collection, so an expired chunk
+		// (TTL sweep lagging up to ~60s) must not surface there either.
+		return mergeQueryClauses(
+			{
+				source: { $in: ["conversation", "memory"] },
+				agentId: this.host.agentId,
+				scope: "workspace",
+				scopeRef: this.host.workspaceScopeRef,
+				status: { $ne: "deleted" },
+			},
+			buildUnexpiredClause({ field: "expiresAt" }),
+		)
 	}
 
 	/**

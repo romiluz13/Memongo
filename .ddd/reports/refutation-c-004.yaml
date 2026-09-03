@@ -1,0 +1,237 @@
+# Independent refutation report for T3 claim C-004
+# ("Quarantined memories MUST have a review lifecycle: list, promote, and
+# reject operations surfaced through MCP tools and the web console, decision
+# metadata recorded, and a retention cap or TTL on unreviewed entries.")
+claim_id: C-004
+verdict: sustained
+independence_verified: true
+refuter_id: "factory-droid worker subagents, independent C-004 refuters (fresh refuter in each round; neither authored the implementation or fixes)"
+implementer_id: "factory-droid primary agent, WS-03 implementer"
+refuted_rounds: 1
+sustained_rounds: 1
+attempt_log_dir: .ddd/reports/runs/
+
+attempts:
+  - id: attempt-1-vacuity
+    description: >
+      Independently remove the pending-only TTL predicate, reverse list
+      ordering, replace promotion's structured-memory write with a bare
+      status flip, remove reviewer metadata, suppress audit writes, remove
+      the already-reviewed guard, and remove the atomic pending-review claim.
+      Require each mutation to fail focused tests, then restore
+      byte-identically and run a green control.
+    round_1_outcome: caught
+    round_1_detail: >
+      All six independent mutations produced real focused assertion failures
+      (exit 1): the TTL predicate, deterministic newest-first order,
+      structured-memory promotion, reviewer metadata, mutation audit, and
+      one-way/atomic transition defenses are all non-vacuously pinned.
+      mongodb-quarantine-review.ts and
+      mongodb-schema-standard-indexes-operations.ts were restored after each
+      mutation with cmp exit 0. The restored quarantine-review and schema
+      control battery passed.
+    round_2_outcome: caught
+    round_2_detail: >
+      Each new defense was independently removed. Removing reviewerId,
+      reviewNotes, and reviewedAt from either the promote or reject audit
+      metadata, and removing auditError assignment from either audit catch,
+      produced a real focused assertion failure (exit 1). The restored
+      11-test implementation suite plus the 7-test independent probe passed.
+      Successful decisions always returned mutationId without auditError;
+      injected ledger failures always returned auditError without mutationId,
+      so no success path with both fields set or both absent was found.
+      mongodb-quarantine-review.ts was restored after every mutation with cmp
+      exit 0 and SHA-256
+      f1a33450b141ac14218e589992bec6cb3d5ed52ad8df214c334764513aea493c.
+    evidence: >
+      round 1: refutation-c-004-attempt-1-vacuity.log;
+      round 2: refutation-c-004-r2-new-defense-vacuity.log
+
+  - id: attempt-2-declared-surfaces
+    description: >
+      Exercise all declared MCP, API, bridge, and client runtime surfaces;
+      probe malformed MCP arguments and the global-admin bearer path; and
+      verify that the web console invokes all three client methods.
+    round_1_outcome: caught
+    round_1_detail: >
+      MCP schema, dispatcher, and HTTP transport suites passed, while the
+      edge probe rejected invalid status and missing ids and clamped limits.
+      The API route suite and a temporary real-auth-middleware probe showed
+      that a global admin bearer reaches list, promote, and reject. Bridge
+      and client suites passed. Static web inspection found live
+      listQuarantined, promoteQuarantined, and rejectQuarantined call sites
+      in the quarantine tab, and the web typecheck passed. No canned,
+      unreachable, or missing declared surface was found.
+    round_2_outcome: caught
+    round_2_detail: >
+      Temporary degradation fixtures containing auditError and no mutationId
+      passed focused runtime tests at every wire seam: the bridge returned
+      the whole engine receipt, both API routes serialized it unchanged, both
+      MCP text and structured results retained it, and the client returned
+      the response body unchanged. MemongoQuarantineReviewReceipt declares
+      optional auditError. The full bridge, API, MCP, and client suites and
+      web typecheck passed, so no new defense was dropped at a declared
+      surface.
+    evidence: >
+      round 1: refutation-c-004-attempt-2-declared-surfaces.log;
+      round 2: refutation-c-004-r2-regression.log
+
+  - id: attempt-3-lifecycle-integrity
+    description: >
+      Attack one-way transitions, nonexistent ids, concurrent review,
+      reviewer metadata, promoted-memory provenance, per-decision audit
+      metadata, and audit-write failure semantics through the real quarantine
+      primitives over the stateful MongoDB seam.
+    round_1_outcome: refuted
+    round_1_detail: >
+      One-way transitions held, nonexistent ids failed, concurrent promotion
+      had exactly one winner, and both decision rows plus promoted-memory
+      provenance were correct. Three independent weaknesses survive. First,
+      both promote and reject mutation-audit rows omit reviewerId,
+      reviewNotes, and reviewedAt; the audit event is therefore not a
+      self-contained record of the decision metadata. Second, an injected
+      quarantine-audit insert failure during reject is logged and swallowed:
+      the row remains rejected, the returned receipt reports rejected with no
+      failure field, mutationId is absent, and no quarantine audit exists.
+      Third, a corrected two-failure promote probe reaches the same state:
+      the row and structured memory remain promoted, the receipt reports
+      promoted with no failure field, mutationId is absent, and no
+      quarantine audit exists. These counterexamples violate the required
+      audited review lifecycle even though the existing 9-test control
+      remains green.
+    round_2_outcome: caught
+    round_2_detail: >
+      Fresh stateful-fake probes closed all three former counterexamples.
+      Promote and reject audit rows carried reviewerId, reviewNotes, and
+      reviewedAt equal to the durable row and receipt. With a ledger-wide
+      insert failure (times: 99), both decisions remained durable but returned
+      auditError and no mutationId, with no quarantine audit row. Combined
+      failures also held: a structured-memory write failure plus ledger
+      outage threw the memory error and reverted the row to pending-review;
+      ledger outage plus concurrent promotion produced exactly one promoted
+      winner and one concurrent-review error; reject of a nonexistent id
+      under ledger outage remained not-found with no state change.
+    evidence: >
+      round 1: refutation-c-004-attempt-3-lifecycle-integrity.log;
+      round 2: refutation-c-004-r2-fix-verification.log,
+      refutation-c-004-r2-combined-failures.log
+
+  - id: attempt-4-retention-cap-integrity
+    description: >
+      Change the quarantine TTL partial filter to target reviewed rows,
+      compute retention days as hours, and ignore both the configured
+      override and explicit zero-disable; require focused schema failures and
+      a byte-identical green restore.
+    round_1_outcome: caught
+    round_1_detail: >
+      Every retention mutation failed the focused schema battery (exit 1).
+      The restored control passed all three focused tests, proving a
+      30-day default, a 7-day override, explicit zero-disable, a
+      pending-review-only partial TTL on createdAt, and preservation of both
+      non-TTL review indexes. Each restore and the final source comparison
+      returned cmp exit 0 with SHA-256
+      cf63a968ecd0691e3d6e0f88d2fb86f75c19515326223834f96a6142b3a1e239.
+    round_2_outcome: caught
+    round_2_detail: >
+      The fix did not alter the quarantine TTL implementation. The complete
+      127-file engine regression re-ran the schema tests that pin the 30-day
+      default, configured override, zero-disable behavior, pending-review-only
+      partial filter, and preservation of review indexes; all passed. The
+      round-1 mutation evidence therefore remains valid on the fixed tree.
+    evidence: >
+      round 1: refutation-c-004-attempt-4-retention-cap-integrity.log;
+      round 2: refutation-c-004-r2-regression.log
+
+  - id: attempt-5-missed-sites
+    description: >
+      Probe cross-tenant list/promote/reject behavior, promotion of content
+      with no derivable memory shape, direct engine limits, tenant erasure,
+      all quarantine API paths, and MCP standard-credential exposure.
+    round_1_outcome: caught
+    round_1_detail: >
+      Agent A could neither list nor review agent B's pending row; invalid
+      content remained pending and wrote no structured memory. Direct engine
+      limits bounded 999 to 100, 0 to 1, and NaN to the default 20. The
+      7-test tenant-erasure suite passed and memory_quarantine is explicitly
+      included in the 29-target plan. Every discovered quarantine HTTP path
+      is under /v1/admin. All three quarantine MCP tools are admin-category,
+      and the default/standard tool selection exposes none.
+    round_2_outcome: caught
+    round_2_detail: >
+      The complete fixed-tree regressions re-exercised tenant isolation,
+      unknown and cross-tenant ids, invalid-content promotion, bounded queue
+      limits, tenant-erasure coverage, admin API authorization, and MCP tool
+      selection. All 127 engine files, 18 API files, and 5 MCP files passed.
+      The new combined nonexistent-id probe additionally showed that a ledger
+      outage cannot turn reject of an absent row into a decision or audit
+      write.
+    evidence: >
+      round 1: refutation-c-004-attempt-5-missed-sites.log;
+      round 2: refutation-c-004-r2-combined-failures.log,
+      refutation-c-004-r2-regression.log
+
+  - id: attempt-6-round-2-consistency
+    description: >
+      Compare quarantine audit-failure naming and semantics with the
+      established C-003 tenant-erasure convention.
+    round_1_outcome: not_run
+    round_1_detail: >
+      This comparison targets the auditError defense introduced after round
+      1.
+    round_2_outcome: caught_with_observations
+    round_2_detail: >
+      TenantErasureReceipt and QuarantineReviewReceipt both use optional
+      auditError for a surfaced ledger gap after the primary state change is
+      durable, and both omit mutationId when that write fails. Erasure changes
+      its aggregate completion status to partial, while quarantine keeps
+      promoted or rejected because that field identifies the durable review
+      decision; this domain-specific status distinction is explicit and not
+      an inconsistency. Seven focused audit-related tests passed.
+    evidence: >
+      round 2: refutation-c-004-r2-consistency.log
+
+fix_applied_between_rounds: >
+  The implementer added reviewerId, conditional reviewNotes, and reviewedAt
+  to both promote and reject memory_mutations metadata, making each audit row
+  a self-contained decision record. Both post-decision audit catch blocks now
+  set optional QuarantineReviewReceipt.auditError while leaving the durable
+  quarantine decision intact and mutationId absent. The client wire receipt
+  gained the same optional auditError field. Two focused audit-failure tests
+  were added, and both happy-path audit tests now pin all decision metadata,
+  bringing the quarantine-review battery from 9 to 11 tests.
+
+conclusion: >
+  Verdict: sustained after fixes. Round 1 refuted C-004 because promote and
+  reject audit rows omitted reviewer decision metadata and post-decision
+  audit-write failures were swallowed. Round 2 re-drove all three failures
+  and found them closed: audit rows are self-contained, and a missing ledger
+  record is unambiguously surfaced as auditError without falsely supplying a
+  mutationId. The new defenses failed all four mutation attacks; combined
+  persistence failures, concurrency, nonexistent ids, direct and wire receipt
+  shapes, retention, declared surfaces, tenant isolation, and erasure
+  coverage held. Canonical regressions passed: 127 engine files/2105 tests,
+  6 bridge files/82 tests, 18 API files/480 tests, 5 MCP files/175 tests, the
+  39-test client suite, and web typecheck. No round-2 counterexample survives.
+
+tree_hygiene: >
+  Round 1: no git-mutating command was run; all six vacuity mutations were
+  restored independently with cmp exit 0, and all scratch probes and backups
+  were deleted. Round 2: no git-mutating command was run. All four
+  mongodb-quarantine-review.ts mutations were restored independently with cmp
+  exit 0 and SHA-256
+  f1a33450b141ac14218e589992bec6cb3d5ed52ad8df214c334764513aea493c
+  before and after. Temporary API, bridge, MCP, and client wire-test fixtures
+  were restored with cmp exit 0 and matching SHA-256 values. The temporary
+  stateful-fake probe and all /tmp backups were deleted and verified absent.
+  The only persistent round-2 files are this updated report and
+  refutation-c-004-r2-{fix-verification,new-defense-vacuity,
+  combined-failures,regression,consistency}.log under .ddd/reports/runs/.
+
+non_blocking_observations: >
+  Quarantine status denotes the durable review decision, so it remains
+  promoted or rejected when only the ledger copy fails; tenant erasure status
+  instead denotes whole-operation completeness and becomes partial for the
+  same ledger gap. Both use auditError and omit mutationId consistently.
+  Round-2 web verification remained TypeScript compilation plus the existing
+  code-level and API/client wiring coverage rather than a rendered browser
+  interaction test.

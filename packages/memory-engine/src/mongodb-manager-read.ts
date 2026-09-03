@@ -1,4 +1,5 @@
 import { findRelationByLocatorId } from "./mongodb-graph.js"
+import { listQuarantined } from "./mongodb-quarantine-review.js"
 import type { MongoDBManagerHost } from "./mongodb-manager-host.js"
 import {
 	chunksCollection,
@@ -451,15 +452,23 @@ export class MongoDBManagerReadOps {
 				path: normalizedPath,
 				source: { $in: ["sessions", "conversation"] },
 				agentId: this.host.agentId,
-				...(from || lines
-					? {
-							$or: [
-								{ startLine: { $gte: start, $lte: end } },
-								{ endLine: { $gte: start, $lte: end } },
-								{ startLine: { $lte: start }, endLine: { $gte: end } },
-							],
-						}
-					: {}),
+				// C-005: expired chunks (sweep lagging up to ~60s) are hidden
+				// here; the events/ miss falls through to readCanonicalEvent,
+				// which applies the same guard to the event document.
+				$and: [
+					...(from || lines
+						? [
+								{
+									$or: [
+										{ startLine: { $gte: start, $lte: end } },
+										{ endLine: { $gte: start, $lte: end } },
+										{ startLine: { $lte: start }, endLine: { $gte: end } },
+									],
+								},
+							]
+						: []),
+					buildUnexpiredClause({ field: "expiresAt" }),
+				],
 			})
 			// oxlint-disable-next-line unicorn/no-array-sort -- MongoDB cursor .sort(), not Array
 			.sort({ startLine: 1 })
@@ -547,15 +556,22 @@ export class MongoDBManagerReadOps {
 				agentId: this.host.agentId,
 				scope: "workspace",
 				scopeRef: this.host.workspaceScopeRef,
-				...(from || lines
-					? {
-							$or: [
-								{ startLine: { $gte: start, $lte: end } },
-								{ endLine: { $gte: start, $lte: end } },
-								{ startLine: { $lte: start }, endLine: { $gte: end } },
-							],
-						}
-					: {}),
+				// C-005: same unexpired guard as the conversation reader — the
+				// bridge lane reads the same chunks collection.
+				$and: [
+					...(from || lines
+						? [
+								{
+									$or: [
+										{ startLine: { $gte: start, $lte: end } },
+										{ endLine: { $gte: start, $lte: end } },
+										{ startLine: { $lte: start }, endLine: { $gte: end } },
+									],
+								},
+							]
+						: []),
+					buildUnexpiredClause({ field: "expiresAt" }),
+				],
 			})
 			// oxlint-disable-next-line unicorn/no-array-sort -- MongoDB cursor .sort(), not Array
 			.sort({ startLine: 1 })
@@ -681,5 +697,22 @@ export class MongoDBManagerReadOps {
 			type: "episode",
 			key: episodeId,
 		}
+	}
+
+	/**
+	 * C-004 quarantine review: list this agent's review queue (and decided
+	 * history), oldest first.
+	 */
+	async listQuarantined(params?: {
+		status?: import("./mongodb-quarantine-review.js").QuarantineStatus
+		limit?: number
+	}) {
+		return listQuarantined({
+			db: this.host.db,
+			prefix: this.host.prefix,
+			agentId: this.host.agentId,
+			status: params?.status,
+			limit: params?.limit,
+		})
 	}
 }
