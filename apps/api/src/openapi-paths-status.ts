@@ -1,4 +1,7 @@
-import { memoryScopeEnum } from "./openapi-schemas.js"
+import {
+	CLIENT_VERSION_HEADER_PARAMETER,
+	memoryScopeEnum,
+} from "./openapi-schemas.js"
 
 export const statusPaths = {
 	"/v1/profile": {
@@ -42,6 +45,7 @@ export const statusPaths = {
 	"/v1/status": {
 		get: {
 			summary: "Memory provider status",
+			parameters: [CLIENT_VERSION_HEADER_PARAMETER],
 			responses: {
 				"200": {
 					description:

@@ -300,111 +300,111 @@ traces:
     change_id: WS-08
     claim_id: C-011
     construct_id: "packages/client/src/client.ts#apiFetch"
-    validation_id: null
+    validation_id: V-065
     direction: forward
-    sweep_pass: false
-    checked_at: "2026-09-02T13:41:40.051Z"
-    notes: WS-08 API contract hardening (planned change envelope)
+    sweep_pass: true
+    checked_at: "2026-09-04T10:17:00.000Z"
+    notes: "WS-08 API contract hardening (apiFetch retries restricted to keyed requests; landed)"
   - id: TR-031
     schema_version: 0.1.0
     change_id: WS-08
     claim_id: C-012
     construct_id: apps/api/src/routes/v1-search-routes.ts
-    validation_id: null
+    validation_id: V-066
     direction: forward
-    sweep_pass: false
-    checked_at: "2026-09-02T13:41:40.053Z"
-    notes: WS-08 API contract hardening (planned change envelope)
+    sweep_pass: true
+    checked_at: "2026-09-04T10:17:00.000Z"
+    notes: "WS-08 API contract hardening (search-detailed strict zod schemas replace the type casts; landed)"
   - id: TR-032
     schema_version: 0.1.0
     change_id: WS-08
     claim_id: C-012
     construct_id: "apps/api/src/lib/validation.ts#kbFilterSchema"
-    validation_id: null
+    validation_id: V-067
     direction: forward
-    sweep_pass: false
-    checked_at: "2026-09-02T13:41:40.054Z"
-    notes: WS-08 API contract hardening (planned change envelope)
+    sweep_pass: true
+    checked_at: "2026-09-04T10:17:00.000Z"
+    notes: "WS-08 API contract hardening (schema strictness parity with kbFilterSchema; landed)"
   - id: TR-033
     schema_version: 0.1.0
     change_id: WS-08
     claim_id: C-012
     construct_id: apps/api/src/routes/v1-context-routes.ts
-    validation_id: null
+    validation_id: V-068
     direction: forward
-    sweep_pass: false
-    checked_at: "2026-09-02T13:41:40.055Z"
-    notes: WS-08 API contract hardening (planned change envelope)
+    sweep_pass: true
+    checked_at: "2026-09-04T10:17:00.000Z"
+    notes: "WS-08 API contract hardening (context-route timeRange casts closed with 400s; landed)"
   - id: TR-034
     schema_version: 0.1.0
     change_id: WS-08
     claim_id: C-013
-    construct_id: apps/api/src/routes/v1-search-routes.ts
-    validation_id: null
+    construct_id: apps/api/src/routes/v1-context-routes.ts
+    validation_id: V-069
     direction: forward
-    sweep_pass: false
-    checked_at: "2026-09-02T13:41:40.055Z"
-    notes: WS-08 API contract hardening (planned change envelope)
+    sweep_pass: true
+    checked_at: "2026-09-04T10:17:00.000Z"
+    notes: "WS-08 API contract hardening (context-bundle mode enum gate from the lib contract; construct corrected at landing to the context-bundle route EL-006 names, v1-context-routes.ts:139; landed)"
   - id: TR-035
     schema_version: 0.1.0
     change_id: WS-08
     claim_id: C-013
     construct_id: packages/client/src/client.ts
-    validation_id: null
+    validation_id: V-070
     direction: forward
-    sweep_pass: false
-    checked_at: "2026-09-02T13:41:40.056Z"
-    notes: WS-08 API contract hardening (planned change envelope)
+    sweep_pass: true
+    checked_at: "2026-09-04T10:18:30.000Z"
+    notes: "WS-08 API contract hardening (client mode type single-sourced from lib; landed)"
   - id: TR-036
     schema_version: 0.1.0
     change_id: WS-08
     claim_id: C-013
     construct_id: apps/mcp/src/server.ts
-    validation_id: null
+    validation_id: V-071
     direction: forward
-    sweep_pass: false
-    checked_at: "2026-09-02T13:41:40.057Z"
-    notes: WS-08 API contract hardening (planned change envelope)
+    sweep_pass: true
+    checked_at: "2026-09-04T10:17:00.000Z"
+    notes: "WS-08 API contract hardening (MCP mode schema mirrors the lib contract set; landed)"
   - id: TR-037
     schema_version: 0.1.0
     change_id: WS-08
     claim_id: C-014
     construct_id: packages/client/src/client.ts
-    validation_id: null
+    validation_id: V-072
     direction: forward
-    sweep_pass: false
-    checked_at: "2026-09-02T13:41:40.058Z"
-    notes: WS-08 API contract hardening (planned change envelope)
+    sweep_pass: true
+    checked_at: "2026-09-04T10:17:00.000Z"
+    notes: "WS-08 API contract hardening (client sends x-memongo-client-version on every request; landed)"
   - id: TR-038
     schema_version: 0.1.0
     change_id: WS-08
     claim_id: C-014
     construct_id: apps/api/src/app.ts
-    validation_id: null
+    validation_id: V-073
     direction: forward
-    sweep_pass: false
-    checked_at: "2026-09-02T13:41:40.060Z"
-    notes: WS-08 API contract hardening (planned change envelope)
+    sweep_pass: true
+    checked_at: "2026-09-04T10:17:00.000Z"
+    notes: "WS-08 API contract hardening (server reads and warns on client version skew, deduped per pair; landed)"
   - id: TR-039
     schema_version: 0.1.0
     change_id: WS-08
     claim_id: C-015
     construct_id: apps/api/src/routes/v1-maintenance-routes.ts
-    validation_id: null
+    validation_id: V-074
     direction: forward
-    sweep_pass: false
-    checked_at: "2026-09-02T13:41:40.061Z"
-    notes: WS-08 API contract hardening (planned change envelope)
+    sweep_pass: true
+    checked_at: "2026-09-04T10:17:00.000Z"
+    notes: "WS-08 API contract hardening (chain-trace collection 400 outside the engine allowlist; landed)"
   - id: TR-040
     schema_version: 0.1.0
     change_id: WS-08
     claim_id: C-015
     construct_id: packages/tools/src/index.ts
-    validation_id: null
+    validation_id: V-075
     direction: forward
-    sweep_pass: false
-    checked_at: "2026-09-02T13:41:40.062Z"
-    notes: WS-08 API contract hardening (planned change envelope)
+    sweep_pass: true
+    checked_at: "2026-09-04T10:17:00.000Z"
+    notes: "WS-08 API contract hardening (tools collection enum mirrors the lib allowlist; landed)"
   - id: TR-041
     schema_version: 0.1.0
     change_id: WS-09

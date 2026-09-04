@@ -1,4 +1,8 @@
-import type { MemoryMongoDBFusionMethod, MemoryScope } from "@memongo/lib"
+import type {
+	ContextBundleModeValue,
+	MemoryMongoDBFusionMethod,
+	MemoryScope,
+} from "@memongo/lib"
 import type { ProcedureLifecyclePatch } from "./mongodb-procedures.js"
 import type { StructuredMemoryLifecyclePatch } from "./mongodb-structured-memory.js"
 
@@ -628,7 +632,12 @@ export type MemoryContextBundle = {
 	builtAt: Date
 }
 
-export type MemoryContextBundleMode = "full" | "wake-up"
+/**
+ * Context-bundle mode. Derived from the canonical contract enum
+ * (CONTEXT_BUNDLE_MODE_VALUES in @memongo/lib, WS-08 / C-013) so the
+ * engine cannot drift from the API/client/MCP/tools mode sets.
+ */
+export type MemoryContextBundleMode = ContextBundleModeValue
 
 export type MemoryContextBundleRequest = {
 	query?: string

@@ -204,7 +204,7 @@ entries:
     tier: T2
     status: known-and-supported
     constructs: ["packages/client/src/client.ts#apiFetch"]
-    validations: []
+    validations: [V-065]
     exceptions: []
 
   - id: C-012
@@ -220,7 +220,7 @@ entries:
     tier: T2
     status: known-and-supported
     constructs: [apps/api/src/routes/v1-search-routes.ts, "apps/api/src/lib/validation.ts#kbFilterSchema", apps/api/src/routes/v1-context-routes.ts]
-    validations: []
+    validations: [V-066, V-067, V-068]
     exceptions: []
 
   - id: C-013
@@ -235,8 +235,8 @@ entries:
     impact: medium
     tier: T1
     status: known-and-supported
-    constructs: [apps/api/src/routes/v1-search-routes.ts, packages/client/src/client.ts, apps/mcp/src/server.ts]
-    validations: []
+    constructs: [apps/api/src/routes/v1-context-routes.ts, packages/client/src/client.ts, apps/mcp/src/server.ts]
+    validations: [V-069, V-070, V-071]
     exceptions: []
 
   - id: C-014
@@ -252,7 +252,7 @@ entries:
     tier: T1
     status: known-and-supported
     constructs: [packages/client/src/client.ts, apps/api/src/app.ts]
-    validations: []
+    validations: [V-072, V-073]
     exceptions: []
 
   - id: C-015
@@ -268,7 +268,7 @@ entries:
     tier: T1
     status: known-and-supported
     constructs: [apps/api/src/routes/v1-maintenance-routes.ts, packages/tools/src/index.ts]
-    validations: []
+    validations: [V-074, V-075]
     exceptions: []
 
   - id: C-016

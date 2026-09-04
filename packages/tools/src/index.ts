@@ -3,7 +3,11 @@ import type { MemongoClient } from "@memongo/client"
  * Vercel AI SDK–compatible tool definitions that call the Memongo HTTP API
  * (same integration role as @supermemory/tools).
  */
-import { MEMORY_SCOPE_VALUES_TUPLE } from "@memongo/lib"
+import {
+	CHAIN_TRACE_COLLECTION_VALUES_TUPLE,
+	CONTEXT_BUNDLE_MODE_VALUES_TUPLE,
+	MEMORY_SCOPE_VALUES_TUPLE,
+} from "@memongo/lib"
 import { tool, type Tool } from "ai"
 import { z } from "zod"
 
@@ -12,6 +16,18 @@ import { z } from "zod"
  * Previously re-typed at six sites in this file.
  */
 const memoryScopeSchema = z.enum(MEMORY_SCOPE_VALUES_TUPLE)
+/**
+ * WS-08 / C-013: canonical context-bundle modes from the same single source
+ * the engine, API, and MCP server validate against.
+ */
+const contextBundleModeSchema = z.enum(CONTEXT_BUNDLE_MODE_VALUES_TUPLE)
+/**
+ * WS-08 / C-015: canonical chain-trace collections (the set the engine can
+ * actually traverse). Previously `z.string()`, which let any plausible
+ * collection name through to the API instead of failing at the tool
+ * boundary with the valid set in the error.
+ */
+const chainTraceCollectionSchema = z.enum(CHAIN_TRACE_COLLECTION_VALUES_TUPLE)
 
 /* ------------------------------------------------------------------ */
 /*  SDK middleware re-exports                                          */
@@ -97,7 +113,7 @@ const contextBundleSchema = z.object({
 			end: z.string().optional(),
 		})
 		.optional(),
-	mode: z.enum(["full", "wake-up"]).optional(),
+	mode: contextBundleModeSchema.optional(),
 })
 
 const recallConversationSchema = z.object({
@@ -408,7 +424,7 @@ export function createMemongoTools(client: MemongoClient): MemongoToolSet {
 				"Trace the provenance chain of a derived fact back to source events.",
 			inputSchema: z.object({
 				factId: z.string(),
-				collection: z.string(),
+				collection: chainTraceCollectionSchema,
 				agentId: z.string().optional(),
 				maxDepth: z.number().optional(),
 			}),

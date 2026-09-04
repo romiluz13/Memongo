@@ -72,6 +72,7 @@
       "name": "@memongo/client",
       "version": "2.0.1",
       "devDependencies": {
+        "@memongo/lib": "^2.0.1",
         "typescript": "^5.8.0",
       },
     },

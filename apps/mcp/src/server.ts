@@ -13,7 +13,16 @@ import type {
 	MemongoStructuredLifecyclePatch,
 	MemongoStructuredStableHandle,
 } from "@memongo/client"
-import { isMemoryScopeValue, type MemoryScopeValue } from "@memongo/lib"
+import {
+	CONTEXT_BUNDLE_MODE_VALUES,
+	CHAIN_TRACE_COLLECTION_VALUES,
+	isChainTraceCollectionValue,
+	isContextBundleModeValue,
+	isMemoryScopeValue,
+	type ChainTraceCollectionValue,
+	type ContextBundleModeValue,
+	type MemoryScopeValue,
+} from "@memongo/lib"
 import { pathToFileURL } from "node:url"
 import type { McpAuthScope } from "./auth.js"
 import { startHttpTransport } from "./http-transport.js"
@@ -87,6 +96,47 @@ function readScopeArg(
 		return scope
 	}
 	throw new Error("scope must be session|user|agent|workspace|tenant|global")
+}
+
+/**
+ * WS-08 / C-013: validate a raw `mode` argument against the canonical
+ * context-bundle modes (single contract source, @memongo/lib) BEFORE it
+ * reaches the client call. The previous ternary (`args.mode === "wake-up" ?
+ * "wake-up" : undefined`) silently coerced any other string — including a
+ * typo of "full" — to a full bundle instead of failing with a tool error.
+ */
+function readModeArg(
+	args: Record<string, unknown>,
+): ContextBundleModeValue | undefined {
+	const mode = args.mode
+	if (mode === undefined) {
+		return undefined
+	}
+	if (typeof mode === "string" && isContextBundleModeValue(mode)) {
+		return mode
+	}
+	throw new Error(`mode must be one of ${CONTEXT_BUNDLE_MODE_VALUES.join("|")}`)
+}
+
+/**
+ * WS-08 / C-015: validate a chain-trace `collection` argument against the
+ * collections the engine can actually traverse. An unknown name previously
+ * flowed straight to the API, whose 400 (C-015) would surface as an opaque
+ * HTTP error instead of a tool error naming the valid set.
+ */
+function readChainCollectionArg(
+	args: Record<string, unknown>,
+): ChainTraceCollectionValue {
+	const collection = args.collection
+	if (
+		typeof collection === "string" &&
+		isChainTraceCollectionValue(collection)
+	) {
+		return collection
+	}
+	throw new Error(
+		`collection must be one of ${CHAIN_TRACE_COLLECTION_VALUES.join("|")}`,
+	)
 }
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
@@ -548,10 +598,7 @@ export async function handleToolCall(
 								typeof timeRange.end === "string" ? timeRange.end : undefined,
 						}
 					: undefined,
-				mode:
-					args.mode === "wake-up" || args.mode === "full"
-						? args.mode
-						: undefined,
+				mode: readModeArg(args),
 			})
 			return jsonResult(out)
 		}
@@ -752,9 +799,12 @@ export async function handleToolCall(
 			return jsonResult(out)
 		}
 		if (name === "memongo_chain_trace") {
+			if (typeof args.factId !== "string" || !args.factId.trim()) {
+				throw new Error("factId is required")
+			}
 			const out = await memongo.traceChain({
-				factId: typeof args.factId === "string" ? args.factId : "",
-				collection: typeof args.collection === "string" ? args.collection : "",
+				factId: args.factId,
+				collection: readChainCollectionArg(args),
 				agentId: typeof args.agentId === "string" ? args.agentId : undefined,
 				maxDepth: typeof args.maxDepth === "number" ? args.maxDepth : undefined,
 			})

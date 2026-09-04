@@ -1,0 +1,12 @@
+$ vitest run
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/packages/client[39m
+
+ [32m✓[39m src/client.test.ts [2m([22m[2m47 tests[22m[2m)[22m[33m 1675[2mms[22m[39m
+     [33m[2m✓[22m[39m generates one UUIDv4 key per logical write and reuses it across every retry [33m 604[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m1 passed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[32m47 passed[39m[22m[90m (47)[39m
+[2m   Start at [22m 13:17:12
+[2m   Duration [22m 1.95s[2m (transform 102ms, setup 0ms, import 132ms, tests 1.67s, environment 0ms)[22m
+

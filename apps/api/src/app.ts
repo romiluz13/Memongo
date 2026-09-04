@@ -15,6 +15,7 @@ import {
 	resolveScopeField,
 	resolveScopeInput,
 } from "./scope-identity.js"
+import { MEMONGO_API_VERSION } from "./version.js"
 
 // Baseline network hardening (#28). Defaults are generous so normal use is
 // unaffected; operators tighten via env. Body size is capped BEFORE JSON
@@ -194,6 +195,40 @@ let unauthenticatedApiWarningEmitted = false
 
 export function resetUnauthenticatedApiWarningForTests(): void {
 	unauthenticatedApiWarningEmitted = false
+}
+
+// WS-08 / C-014: the TypeScript client (packages/client) sends
+// `x-memongo-client-version` on every request; the server used to ignore the
+// header entirely, so a stale client calling a newer API was invisible to
+// operators. The middleware below reads it and warns once per (client,
+// server) version pair on mismatch. Telemetry only — requests are never
+// rejected for skew. Bounded so spoofed headers cannot spam the log: the
+// dedup set is capped and absurdly long values are ignored.
+const CLIENT_VERSION_HEADER = "x-memongo-client-version"
+const MAX_SKEW_WARNED_PAIRS = 256
+const MAX_CLIENT_VERSION_LENGTH = 64
+
+export function createClientVersionSkewLogger(
+	serverVersion: string,
+): MiddlewareHandler {
+	const warnedPairs = new Set<string>()
+	return async (c, next) => {
+		const clientVersion = c.req.header(CLIENT_VERSION_HEADER)?.trim()
+		if (
+			clientVersion &&
+			clientVersion !== serverVersion &&
+			clientVersion.length <= MAX_CLIENT_VERSION_LENGTH
+		) {
+			const pair = `${clientVersion} -> ${serverVersion}`
+			if (!warnedPairs.has(pair) && warnedPairs.size < MAX_SKEW_WARNED_PAIRS) {
+				warnedPairs.add(pair)
+				console.warn(
+					`memongo: client version skew — client ${clientVersion} calling server ${serverVersion} (header ${CLIENT_VERSION_HEADER})`,
+				)
+			}
+		}
+		await next()
+	}
 }
 
 function asStringList(
@@ -675,6 +710,11 @@ export function createApp(): Hono {
 			),
 		)
 	}
+
+	// WS-08 / C-014: after auth so only real (authenticated, or explicitly
+	// insecure dev) client traffic contributes skew telemetry — spoofed
+	// unauthenticated headers never reach it in a token-configured deployment.
+	app.use("/v1/*", createClientVersionSkewLogger(MEMONGO_API_VERSION))
 
 	app.get("/health", (c) => c.json({ ok: true, service: "memongo-api" }))
 	// P1.7: readiness (deep) beside liveness (cheap). Unauthenticated like

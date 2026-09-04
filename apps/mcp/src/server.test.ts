@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest"
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js"
+import type { MemongoClient } from "@memongo/client"
 import { createMemongoServer, handleToolCall, toolList } from "./server.js"
 import { toolCatalog } from "./tool-registry.js"
 
@@ -743,6 +744,7 @@ describe("structuredContent envelopes (P1.2)", () => {
 			memoryIds: ["mem-1"],
 		},
 		memongo_admin_get_trace: { traceId: "trace-1" },
+		memongo_chain_trace: { factId: "fact-1", collection: "structured_mem" },
 		memongo_erase_agent: { confirm: "erase" },
 		memongo_quarantine_promote: { quarantineId: "q-1" },
 		memongo_quarantine_reject: { quarantineId: "q-1" },
@@ -1287,5 +1289,99 @@ describe("handleToolCall B2a typed lifecycle handles", () => {
 		expect(getLifecycleItem).toHaveBeenCalledWith({
 			handle: validProcedureHandle,
 		})
+	})
+})
+
+describe("context-bundle mode validation (WS-08 / C-013)", () => {
+	it("forwards both canonical modes to the client", async () => {
+		const buildContextBundle = vi.fn().mockResolvedValue({ bundle: {} })
+		for (const mode of ["full", "wake-up"] as const) {
+			const out = await handleToolCall(
+				"memongo_build_context_bundle",
+				{ mode },
+				{ buildContextBundle } as unknown as MemongoClient,
+			)
+			expect(out.isError).toBeUndefined()
+			expect(buildContextBundle).toHaveBeenCalledWith(
+				expect.objectContaining({ mode }),
+			)
+		}
+	})
+
+	it("rejects an invalid mode with a tool error naming the valid set", async () => {
+		const buildContextBundle = vi.fn()
+		const out = await handleToolCall(
+			"memongo_build_context_bundle",
+			{ mode: "compact" },
+			{ buildContextBundle } as unknown as MemongoClient,
+		)
+		expect(buildContextBundle).not.toHaveBeenCalled()
+		expect(out.isError).toBe(true)
+		expect(parseTextPayload(out)).toEqual({
+			error: "mode must be one of full|wake-up",
+		})
+	})
+
+	it("omits mode cleanly when not provided", async () => {
+		const buildContextBundle = vi.fn().mockResolvedValue({ bundle: {} })
+		const out = await handleToolCall(
+			"memongo_build_context_bundle",
+			{ query: "session start" },
+			{ buildContextBundle } as unknown as MemongoClient,
+		)
+		expect(out.isError).toBeUndefined()
+		expect(buildContextBundle).toHaveBeenCalledWith(
+			expect.objectContaining({ query: "session start", mode: undefined }),
+		)
+	})
+})
+
+describe("chain-trace collection validation (WS-08 / C-015)", () => {
+	it("forwards every traversable collection to the client", async () => {
+		const traceChain = vi.fn().mockResolvedValue({ chain: [] })
+		for (const collection of [
+			"structured_mem",
+			"entities",
+			"relations",
+			"procedures",
+			"entity_links",
+		] as const) {
+			const out = await handleToolCall(
+				"memongo_chain_trace",
+				{ factId: "fact-1", collection },
+				{ traceChain } as unknown as MemongoClient,
+			)
+			expect(out.isError).toBeUndefined()
+			expect(traceChain).toHaveBeenCalledWith(
+				expect.objectContaining({ factId: "fact-1", collection }),
+			)
+		}
+	})
+
+	it("rejects a plausible-but-wrong collection with a tool error naming the set", async () => {
+		const traceChain = vi.fn()
+		const out = await handleToolCall(
+			"memongo_chain_trace",
+			{ factId: "fact-1", collection: "events" },
+			{ traceChain } as unknown as MemongoClient,
+		)
+		expect(traceChain).not.toHaveBeenCalled()
+		expect(out.isError).toBe(true)
+		expect(parseTextPayload(out)).toEqual({
+			error:
+				"collection must be one of structured_mem|entities|relations|procedures|entity_links",
+		})
+	})
+
+	it("rejects a missing factId before calling the client", async () => {
+		const traceChain = vi.fn()
+		const out = await handleToolCall(
+			"memongo_chain_trace",
+			{ collection: "structured_mem" },
+			{ traceChain } as unknown as MemongoClient,
+		)
+		expect(traceChain).not.toHaveBeenCalled()
+		expect(out.isError).toBe(true)
+		expect(parseTextPayload(out)).toEqual({ error: "factId is required" })
 	})
 })

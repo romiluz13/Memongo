@@ -3,7 +3,7 @@ schema_version: 0.1.0
 version: 0.5.0
 released_at: null
 profile: assurance
-manifest_digest: sha256:c23f49dff9004dd0c2201c59f9bd86abcd11e122109f7ad361456d8cfc758b98
+manifest_digest: sha256:16c42ab979fea47e3a339a1f584348b40e8c9aa641c66a998cbb117124e9c6fd
 
 requirements:
   - path: CONTEXT.md
@@ -59,6 +59,12 @@ requirements:
     independence: agent-proposed-human-approved
     digest: sha256:e90c53b993487083a97f94ebca0bc55befaa3c20354460743395a92ccd2378ce
     description: "ADR 0008 - deployment-safe defaults: shared-client runtime default-on, unconditionally bounded manager cache, 30s sweep (WS-06, C-009)"
+
+  - path: docs/adr/0009-api-contract-hardening-strict-validation-and-single-sourced-enums.md
+    authority: product-approved
+    independence: agent-proposed-human-approved
+    digest: sha256:2d3c4880501b45e2311fffda5d4d74aeec84411fb904fd2a0aa76f293ddb8375
+    description: "ADR 0009 - API contract hardening: strict nested validation, lib-sourced enums, keyed retries, version-skew observability (WS-08, C-011/C-012/C-013/C-014/C-015)"
 
 agent_context:
   - path: AGENTS.md

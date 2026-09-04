@@ -1,4 +1,5 @@
 import type { Hono } from "hono"
+import type { z } from "zod"
 import {
 	memongoBridgeImportConversations,
 	memongoBridgeRecallConversation,
@@ -7,7 +8,18 @@ import {
 	memongoBridgeSearchKB,
 } from "@memongo/memory-bridge"
 import { internalError, jsonError } from "../lib/errors.js"
-import { kbFilterSchema, validateWithSchema } from "../lib/validation.js"
+import {
+	conversationScopeSchema,
+	kbFilterSchema,
+	proceduralScopeSchema,
+	referenceScopeSchema,
+	searchConfigSchema,
+	searchModeSchema,
+	sourcePreferenceSchema,
+	structuredScopeSchema,
+	timeRangeSchema,
+	validateWithSchema,
+} from "../lib/validation.js"
 
 import {
 	readAgentId,
@@ -184,46 +196,80 @@ export function registerSearchRoutes(v1: Hono<V1RouterEnv>): void {
 			return jsonError(c, 400, "VALIDATION_ERROR", "query is required")
 		}
 		try {
-			const searchMode =
-				body.searchMode === "auto" ||
-				body.searchMode === "direct" ||
-				body.searchMode === "agentic"
-					? body.searchMode
-					: undefined
-			const sourcePreference = Array.isArray(body.sourcePreference)
-				? (body.sourcePreference as string[])
-				: undefined
-			const timeRange =
-				typeof body.timeRange === "object" &&
-				body.timeRange !== null &&
-				!Array.isArray(body.timeRange)
-					? (body.timeRange as Record<string, unknown>)
-					: undefined
-			const conversationScope =
-				typeof body.conversationScope === "object" &&
-				body.conversationScope !== null
-					? (body.conversationScope as { sessionKey?: string })
-					: undefined
-			const structuredScope =
-				typeof body.structuredScope === "object" &&
-				body.structuredScope !== null
-					? (body.structuredScope as Record<string, unknown>)
-					: undefined
-			const referenceScope =
-				typeof body.referenceScope === "object" && body.referenceScope !== null
-					? (body.referenceScope as Record<string, unknown>)
-					: undefined
-			const proceduralScope =
-				typeof body.proceduralScope === "object" &&
-				body.proceduralScope !== null
-					? (body.proceduralScope as Record<string, unknown>)
-					: undefined
-			const searchConfig =
-				typeof body.searchConfig === "object" &&
-				body.searchConfig !== null &&
-				!Array.isArray(body.searchConfig)
-					? (body.searchConfig as Record<string, unknown>)
-					: undefined
+			// WS-08 / C-012: every nested object of /search-detailed used to be
+			// type-cast straight through (a typo'd timeRange preset silently
+			// degraded to no time constraint, operator-shaped keys flowed into
+			// the engine's config merge). Each optional input is now parsed
+			// against a strict zod schema; a rejection returns 400 naming the
+			// offending field instead of casting the raw object through.
+			const optional = <S extends z.ZodTypeAny>(
+				schema: S,
+				raw: unknown,
+				field: string,
+			) =>
+				raw === undefined
+					? ({ ok: true as const, value: undefined } as const)
+					: validateWithSchema(schema, raw, field)
+			const searchMode = optional(
+				searchModeSchema,
+				body.searchMode,
+				"searchMode",
+			)
+			if (!searchMode.ok) {
+				return jsonError(c, 400, "VALIDATION_ERROR", searchMode.message)
+			}
+			const sourcePreference = optional(
+				sourcePreferenceSchema,
+				body.sourcePreference,
+				"sourcePreference",
+			)
+			if (!sourcePreference.ok) {
+				return jsonError(c, 400, "VALIDATION_ERROR", sourcePreference.message)
+			}
+			const timeRange = optional(timeRangeSchema, body.timeRange, "timeRange")
+			if (!timeRange.ok) {
+				return jsonError(c, 400, "VALIDATION_ERROR", timeRange.message)
+			}
+			const conversationScope = optional(
+				conversationScopeSchema,
+				body.conversationScope,
+				"conversationScope",
+			)
+			if (!conversationScope.ok) {
+				return jsonError(c, 400, "VALIDATION_ERROR", conversationScope.message)
+			}
+			const structuredScope = optional(
+				structuredScopeSchema,
+				body.structuredScope,
+				"structuredScope",
+			)
+			if (!structuredScope.ok) {
+				return jsonError(c, 400, "VALIDATION_ERROR", structuredScope.message)
+			}
+			const referenceScope = optional(
+				referenceScopeSchema,
+				body.referenceScope,
+				"referenceScope",
+			)
+			if (!referenceScope.ok) {
+				return jsonError(c, 400, "VALIDATION_ERROR", referenceScope.message)
+			}
+			const proceduralScope = optional(
+				proceduralScopeSchema,
+				body.proceduralScope,
+				"proceduralScope",
+			)
+			if (!proceduralScope.ok) {
+				return jsonError(c, 400, "VALIDATION_ERROR", proceduralScope.message)
+			}
+			const searchConfig = optional(
+				searchConfigSchema,
+				body.searchConfig,
+				"searchConfig",
+			)
+			if (!searchConfig.ok) {
+				return jsonError(c, 400, "VALIDATION_ERROR", searchConfig.message)
+			}
 			const result = await memongoBridgeSearchDetailed({
 				query,
 				agentId: await readAgentId(c),
@@ -231,11 +277,9 @@ export function registerSearchRoutes(v1: Hono<V1RouterEnv>): void {
 				scopeRef: await readScopeRef(c),
 				maxResults: readLimit(body),
 				minScore: typeof body.minScore === "number" ? body.minScore : undefined,
-				searchMode,
-				sourcePreference,
-				timeRange: timeRange as
-					| { preset?: string; start?: string; end?: string }
-					| undefined,
+				searchMode: searchMode.value,
+				sourcePreference: sourcePreference.value,
+				timeRange: timeRange.value,
 				needExactEvidence:
 					typeof body.needExactEvidence === "boolean"
 						? body.needExactEvidence
@@ -244,46 +288,11 @@ export function registerSearchRoutes(v1: Hono<V1RouterEnv>): void {
 					typeof body.maxPasses === "number" ? body.maxPasses : undefined,
 				returnPlan:
 					typeof body.returnPlan === "boolean" ? body.returnPlan : undefined,
-				conversationScope,
-				structuredScope: structuredScope as
-					| {
-							type?: string
-							state?: string | string[]
-							salience?: string[]
-					  }
-					| undefined,
-				referenceScope: referenceScope as
-					| {
-							source?: string
-							category?: string
-							tags?: string[]
-					  }
-					| undefined,
-				proceduralScope: proceduralScope as
-					| { state?: string; intentTags?: string[] }
-					| undefined,
-				searchConfig: searchConfig as
-					| {
-							recipe?:
-								| "fast"
-								| "hybrid"
-								| "deep"
-								| "temporal"
-								| "chain-of-thought"
-							recallProfile?: "latency" | "balanced" | "proof"
-							maxResults?: number
-							searchMode?: "auto" | "direct" | "agentic"
-							maxPasses?: number
-							sourcePreference?: string[]
-							timeRange?: { preset?: string; start?: string; end?: string }
-							needExactEvidence?: boolean
-							numCandidates?: number
-							fusionMethod?: "scoreFusion" | "rankFusion" | "js-merge"
-							hybridMode?: "hybrid" | "vector-only"
-							allowHybridBackstop?: boolean
-							lexicalPrefilter?: "disabled" | "experimental"
-					  }
-					| undefined,
+				conversationScope: conversationScope.value,
+				structuredScope: structuredScope.value,
+				referenceScope: referenceScope.value,
+				proceduralScope: proceduralScope.value,
+				searchConfig: searchConfig.value,
 			})
 			return c.json(result)
 		} catch (err) {

@@ -14,6 +14,8 @@
  */
 
 import type { Db, Document } from "mongodb"
+import type { ChainTraceCollectionValue } from "@memongo/lib"
+import { isChainTraceCollectionValue } from "@memongo/lib"
 import { buildUnexpiredClause } from "./mongodb-temporal.js"
 import type {
 	ReasoningChain,
@@ -30,8 +32,15 @@ export type { ReasoningChain, ReasoningChainNode, ReasoningChainOptions }
 /**
  * Known source collections that carry `sourceEventIds`.
  * Maps collection short name to its primary id field.
+ *
+ * Keyed by the canonical contract type (CHAIN_TRACE_COLLECTION_VALUES in
+ * @memongo/lib, WS-08 / C-015) so the engine traversal allowlist and the
+ * API/tools route validation can never drift apart: the compiler fails if
+ * a collection is added to one without the other. The route layer rejects
+ * names outside this set with 400 instead of letting the engine fabricate
+ * an empty chainComplete result.
  */
-const COLLECTION_ID_FIELDS: Record<string, string> = {
+const COLLECTION_ID_FIELDS: Record<ChainTraceCollectionValue, string> = {
 	structured_mem: "key",
 	entities: "entityId",
 	relations: "fromEntityId",
@@ -77,11 +86,14 @@ export async function traceReasoningChain(params: {
 		agentId,
 	}
 
-	// Validate collection name
-	const idField = COLLECTION_ID_FIELDS[collection]
-	if (!idField) {
+	// Validate collection name against the canonical traversal allowlist.
+	// The API route layer rejects names outside the allowlist with 400
+	// (WS-08 / C-015); this guard keeps the engine defensive for direct
+	// callers, returning an empty chain rather than fabricating one.
+	if (!isChainTraceCollectionValue(collection)) {
 		return emptyResult
 	}
+	const idField = COLLECTION_ID_FIELDS[collection]
 
 	const fullCollectionName = `${prefix}${collection}`
 	const col = db.collection(fullCollectionName)

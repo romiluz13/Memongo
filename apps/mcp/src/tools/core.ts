@@ -1,8 +1,11 @@
-import { MEMORY_SCOPE_VALUES } from "@memongo/lib"
+import { CONTEXT_BUNDLE_MODE_VALUES, MEMORY_SCOPE_VALUES } from "@memongo/lib"
 import type { McpToolDefinition } from "../tool-registry.js"
 
 // Canonical scope enum from the single contract source (@memongo/lib, P2.2).
 const memoryScopeEnum = [...MEMORY_SCOPE_VALUES]
+// C-013: canonical context-bundle modes from the same single source the
+// engine and API validate against, instead of a parallel inline list.
+const contextBundleModeEnum = [...CONTEXT_BUNDLE_MODE_VALUES]
 
 // Core tools: the default MCP surface (P1.2). These cover the write -> extract
 // -> recall loop plus profile/state/self-edit/feedback and are always
@@ -223,24 +226,13 @@ export const coreTools: readonly McpToolDefinition[] = [
 					description: "Structured memory entry to write.",
 					properties: {
 						type: {
+							// B6: open string, matching the API's own
+							// validation (structuredEntrySchema). Hardcoding
+							// the 14-value list here silently blocks every
+							// future entry type the API already accepts.
 							type: "string",
-							enum: [
-								"decision",
-								"preference",
-								"person",
-								"todo",
-								"fact",
-								"project",
-								"architecture",
-								"contact",
-								"milestone",
-								"problem",
-								"emotional",
-								"identity",
-								"instruction",
-								"custom",
-							],
-							description: "Category of the memory.",
+							description:
+								"Category of the memory (for example decision, preference, fact, todo, ...). The server validates the full set of supported types.",
 						},
 						key: {
 							type: "string",
@@ -413,7 +405,7 @@ export const coreTools: readonly McpToolDefinition[] = [
 				includeProfile: { type: "boolean" },
 				mode: {
 					type: "string",
-					enum: ["full", "wake-up"],
+					enum: contextBundleModeEnum,
 					description:
 						"wake-up returns a compact 250-token projection for session start",
 				},

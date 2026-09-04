@@ -1,4 +1,12 @@
 import type { MemongoClient } from "@memongo/client"
+import {
+	CHAIN_TRACE_COLLECTION_VALUES,
+	CONTEXT_BUNDLE_MODE_VALUES,
+	isChainTraceCollectionValue,
+	isContextBundleModeValue,
+	type ChainTraceCollectionValue,
+	type ContextBundleModeValue,
+} from "@memongo/lib"
 import type { z } from "zod"
 import { describe, expect, it, vi } from "vitest"
 import { createMemongoTools } from "./index.js"
@@ -122,5 +130,83 @@ describe("createMemongoTools", () => {
 		await sdkTool.execute(parsed, {})
 
 		expect(clientCall).toHaveBeenCalledWith(input)
+	})
+
+	it("single-sources context-bundle modes from @memongo/lib (C-013)", async () => {
+		const buildContextBundle = vi.fn(async () => ({}))
+		const tools = createMemongoTools({
+			buildContextBundle,
+		} as unknown as MemongoClient)
+		const bundleTool = tools.memongo_build_context_bundle as ExecutableTool
+
+		// Every canonical lib mode parses and forwards.
+		for (const mode of CONTEXT_BUNDLE_MODE_VALUES) {
+			const input = { mode }
+			expect(bundleTool.inputSchema.parse(input)).toEqual(input)
+			await bundleTool.execute(input, {})
+			expect(buildContextBundle).toHaveBeenCalledWith(input)
+		}
+
+		// A mode outside the lib set fails at the tool boundary.
+		expect(() => bundleTool.inputSchema.parse({ mode: "compact" })).toThrow()
+
+		// Type-level (C-013): the guard narrows the parsed value to the lib
+		// union, so the tool schema and the contract cannot drift apart.
+		const rawMode: unknown = (
+			bundleTool.inputSchema.parse({ mode: "full" }) as { mode: unknown }
+		).mode
+		if (typeof rawMode === "string" && isContextBundleModeValue(rawMode)) {
+			const mode: ContextBundleModeValue = rawMode
+			expect(CONTEXT_BUNDLE_MODE_VALUES).toContain(mode)
+		} else {
+			throw new Error("parsed mode did not match the lib union")
+		}
+	})
+
+	it("single-sources chain-trace collections from @memongo/lib (C-015)", async () => {
+		const traceChain = vi.fn(async () => ({}))
+		const tools = createMemongoTools({ traceChain } as unknown as MemongoClient)
+		const chainTool = tools.memongo_chain_trace as ExecutableTool
+
+		// Every collection the engine can actually traverse parses and forwards.
+		for (const collection of CHAIN_TRACE_COLLECTION_VALUES) {
+			const input = { factId: "fact-1", collection }
+			expect(chainTool.inputSchema.parse(input)).toEqual(input)
+			await chainTool.execute(input, {})
+			expect(traceChain).toHaveBeenCalledWith(input)
+		}
+
+		// Plausible-but-wrong collection names fail at the tool boundary
+		// instead of surfacing as an opaque API 400 (or, pre-C-015, a
+		// fabricated empty chain).
+		expect(() =>
+			chainTool.inputSchema.parse({ factId: "fact-1", collection: "events" }),
+		).toThrow()
+		expect(() =>
+			chainTool.inputSchema.parse({ factId: "fact-1", collection: "episodes" }),
+		).toThrow()
+
+		// Type-level (C-015): the guard narrows the parsed value to the lib
+		// union, so the tool schema and the contract cannot drift apart.
+		const rawCollection: unknown = chainTool.inputSchema.parse({
+			factId: "fact-1",
+			collection: "structured_mem",
+		})
+		if (
+			typeof rawCollection === "object" &&
+			rawCollection !== null &&
+			typeof (rawCollection as { collection?: unknown }).collection ===
+				"string" &&
+			isChainTraceCollectionValue(
+				(rawCollection as { collection: string }).collection,
+			)
+		) {
+			const collection: ChainTraceCollectionValue = (
+				rawCollection as { collection: ChainTraceCollectionValue }
+			).collection
+			expect(CHAIN_TRACE_COLLECTION_VALUES).toContain(collection)
+		} else {
+			throw new Error("parsed collection did not match the lib union")
+		}
 	})
 })

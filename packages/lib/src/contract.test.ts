@@ -6,10 +6,18 @@ import {
 	apiErrorOpenApiResponse,
 	BEARER_SECURITY_SCHEME,
 	BEARER_SECURITY_SCHEME_NAME,
+	CHAIN_TRACE_COLLECTION_VALUES,
+	CHAIN_TRACE_COLLECTION_VALUES_TUPLE,
+	CONTEXT_BUNDLE_MODE_VALUES,
+	CONTEXT_BUNDLE_MODE_VALUES_TUPLE,
 	MEMONGO_API_ROUTES,
 	MEMORY_SCOPE_VALUES,
 	MEMORY_SCOPE_VALUES_TUPLE,
+	isChainTraceCollectionValue,
+	isContextBundleModeValue,
 	isMemoryScopeValue,
+	type ChainTraceCollectionValue,
+	type ContextBundleModeValue,
 	type MemoryScopeValue,
 } from "./contract.js"
 import { MEMONGO_MCP_TOOL_FIELDS } from "./contract-mcp.js"
@@ -45,6 +53,75 @@ describe("contract: canonical scope enum", () => {
 		const scope: MemoryScope = value
 		const roundTrip: MemoryScopeValue = scope
 		expect(roundTrip).toBe("workspace")
+	})
+})
+
+describe("contract: canonical context-bundle mode enum (C-013)", () => {
+	it("defines exactly the two canonical mode values in order", () => {
+		expect(CONTEXT_BUNDLE_MODE_VALUES).toEqual(["full", "wake-up"])
+	})
+
+	it("keeps the mutable tuple derived from the canonical array", () => {
+		expect(CONTEXT_BUNDLE_MODE_VALUES_TUPLE).toEqual([
+			...CONTEXT_BUNDLE_MODE_VALUES,
+		])
+	})
+
+	it("classifies mode strings", () => {
+		for (const mode of CONTEXT_BUNDLE_MODE_VALUES) {
+			expect(isContextBundleModeValue(mode)).toBe(true)
+		}
+		// The typo class the API used to swallow into the default bundle.
+		expect(isContextBundleModeValue("wakeup")).toBe(false)
+		expect(isContextBundleModeValue("FULL")).toBe(false)
+		expect(isContextBundleModeValue("")).toBe(false)
+	})
+
+	it("keeps ContextBundleModeValue usable as a concrete string union (type level)", () => {
+		// Compile-time assertion: guard-narrowed strings flow into the union.
+		const candidate = "wake-up" as string
+		if (isContextBundleModeValue(candidate)) {
+			const mode: ContextBundleModeValue = candidate
+			expect(mode).toBe("wake-up")
+		}
+	})
+})
+
+describe("contract: canonical chain-trace collection enum (C-015)", () => {
+	it("defines exactly the engine-traversable collections in order", () => {
+		expect(CHAIN_TRACE_COLLECTION_VALUES).toEqual([
+			"structured_mem",
+			"entities",
+			"relations",
+			"procedures",
+			"entity_links",
+		])
+	})
+
+	it("keeps the mutable tuple derived from the canonical array", () => {
+		expect(CHAIN_TRACE_COLLECTION_VALUES_TUPLE).toEqual([
+			...CHAIN_TRACE_COLLECTION_VALUES,
+		])
+	})
+
+	it("classifies collection strings", () => {
+		for (const collection of CHAIN_TRACE_COLLECTION_VALUES) {
+			expect(isChainTraceCollectionValue(collection)).toBe(true)
+		}
+		// The plausible-but-wrong name the engine used to answer with a
+		// fabricated chainComplete:true empty chain.
+		expect(isChainTraceCollectionValue("structured_memories")).toBe(false)
+		expect(isChainTraceCollectionValue("events")).toBe(false)
+		expect(isChainTraceCollectionValue("")).toBe(false)
+	})
+
+	it("keeps ChainTraceCollectionValue usable as a concrete string union (type level)", () => {
+		// Compile-time assertion: guard-narrowed strings flow into the union.
+		const candidate = "entities" as string
+		if (isChainTraceCollectionValue(candidate)) {
+			const collection: ChainTraceCollectionValue = candidate
+			expect(collection).toBe("entities")
+		}
 	})
 })
 

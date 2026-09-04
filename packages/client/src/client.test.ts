@@ -1,7 +1,11 @@
 import { beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest"
+import type { ContextBundleModeValue } from "@memongo/lib"
+import { CONTEXT_BUNDLE_MODE_VALUES } from "@memongo/lib"
 import { MemongoClient, MemongoClientError } from "./client.js"
+import { MEMONGO_CLIENT_VERSION } from "./version.js"
 import type {
 	MemongoConsolidateInput,
+	MemongoContextBundleInput,
 	MemongoScanNoveltyInput,
 	MemongoScope,
 } from "./index.js"
@@ -848,7 +852,9 @@ describe("MemongoClient resilience (P1.3)", () => {
 				baseUrl: "http://127.0.0.1:3100",
 				maxRetries: 1,
 			})
-			const promise = client.search({ query: "q" })
+			// C-011: retry timing is exercised through a GET, which is
+			// retry-safe by method; unkeyed POSTs no longer retry at all.
+			const promise = client.status()
 			// Before the server-mandated 2s elapse, no retry may fire.
 			await vi.advanceTimersByTimeAsync(1999)
 			expect(calls).toHaveLength(1)
@@ -885,7 +891,9 @@ describe("MemongoClient resilience (P1.3)", () => {
 				baseUrl: "http://127.0.0.1:3100",
 				maxRetries: 1,
 			})
-			const promise = client.search({ query: "q" })
+			// C-011: GET is retry-safe by method, so the Retry-After cap still
+			// applies to it; unkeyed POSTs no longer retry at all.
+			const promise = client.status()
 			// The cap is 10s: advancing 10s must complete the retry even though
 			// the server asked for an hour.
 			await vi.advanceTimersByTimeAsync(10_000)
@@ -1042,5 +1050,173 @@ describe("MemongoClient silent option (P1.5)", () => {
 		await expect(client.search({ query: "anything" })).rejects.toBeInstanceOf(
 			MemongoClientError,
 		)
+	})
+})
+
+/**
+ * WS-08 / C-011: 429/503 retries are restricted to requests that are
+ * idempotent by construction — GET/HEAD, a POST carrying an
+ * Idempotency-Key, and the per-item-keyed bulk write. Every other POST
+ * fails fast so a retry can never double-write memory.
+ */
+describe("MemongoClient retry safety (C-011)", () => {
+	beforeEach(() => {
+		vi.unstubAllGlobals()
+	})
+
+	function stubStatusSequence(
+		statuses: number[],
+		calls: Array<{ url: string; init: RequestInit }>,
+		okBody = JSON.stringify({ ok: true }),
+	) {
+		let i = 0
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (url: string, init?: RequestInit) => {
+				calls.push({ url: String(url), init: init ?? {} })
+				const status = statuses[Math.min(i, statuses.length - 1)]
+				i += 1
+				if (status === 200) {
+					return new Response(okBody, {
+						status: 200,
+						headers: { "Content-Type": "application/json" },
+					})
+				}
+				return new Response("upstream busy", { status })
+			}),
+		)
+	}
+
+	it("retries a GET on 503 and succeeds", async () => {
+		const calls: Array<{ url: string; init: RequestInit }> = []
+		stubStatusSequence([503, 200], calls, JSON.stringify({ ok: true }))
+		const client = new MemongoClient({
+			baseUrl: "http://127.0.0.1:3100",
+			maxRetries: 1,
+		})
+		await client.status()
+		expect(calls).toHaveLength(2)
+		expect(calls[0].url).toContain("/v1/status")
+		expect(calls[0].init.method ?? "GET").toBe("GET")
+	})
+
+	it("fails fast on 503 for a POST query without an Idempotency-Key", async () => {
+		const calls: Array<{ url: string; init: RequestInit }> = []
+		stubStatusSequence([503, 503, 503], calls, JSON.stringify({ results: [] }))
+		const client = new MemongoClient({
+			baseUrl: "http://127.0.0.1:3100",
+			maxRetries: 2,
+		})
+		// Search is a POST the client cannot prove idempotent, so it fails
+		// fast instead of retrying (C-011).
+		await expect(client.search({ query: "hello" })).rejects.toMatchObject({
+			status: 503,
+		})
+		expect(calls).toHaveLength(1)
+		expect(calls[0].url).toContain("/v1/search")
+	})
+
+	it("retries a POST that carries an Idempotency-Key on 503", async () => {
+		const calls: Array<{ url: string; init: RequestInit }> = []
+		stubStatusSequence(
+			[503, 200],
+			calls,
+			JSON.stringify({ ok: true, eventId: "evt-1", chunkCreated: true }),
+		)
+		const client = new MemongoClient({
+			baseUrl: "http://127.0.0.1:3100",
+			maxRetries: 1,
+		})
+		await client.add({ content: "hello", customId: "cid-1" })
+		expect(calls).toHaveLength(2)
+	})
+
+	it("retries the per-item-keyed bulk write on 503", async () => {
+		const calls: Array<{ url: string; init: RequestInit }> = []
+		stubStatusSequence(
+			[503, 200],
+			calls,
+			JSON.stringify({ ok: true, receipts: [] }),
+		)
+		const client = new MemongoClient({
+			baseUrl: "http://127.0.0.1:3100",
+			maxRetries: 1,
+		})
+		await client.writeEvents({ events: [{ role: "user", body: "hello" }] })
+		expect(calls).toHaveLength(2)
+		expect(calls[0].url).toContain("/v1/write-events")
+	})
+
+	it("fails fast on 503 for a POST without an Idempotency-Key", async () => {
+		const calls: Array<{ url: string; init: RequestInit }> = []
+		stubStatusSequence([503, 503, 503], calls)
+		const client = new MemongoClient({
+			baseUrl: "http://127.0.0.1:3100",
+			maxRetries: 2,
+		})
+		await expect(
+			client.writeStructured({ entry: { type: "fact", key: "k", value: "v" } }),
+		).rejects.toMatchObject({ status: 503 })
+		expect(calls).toHaveLength(1)
+		expect(calls[0].url).toContain("/v1/write-structured")
+		expect(
+			(calls[0].init.headers as Record<string, string>)["Idempotency-Key"],
+		).toBeUndefined()
+	})
+
+	it("fails fast on 429 for a POST without an Idempotency-Key", async () => {
+		const calls: Array<{ url: string; init: RequestInit }> = []
+		stubStatusSequence([429, 429, 429], calls)
+		const client = new MemongoClient({
+			baseUrl: "http://127.0.0.1:3100",
+			maxRetries: 2,
+		})
+		await expect(
+			client.selfEdit({
+				inputs: [{ role: "user", content: "remember this" }],
+			}),
+		).rejects.toMatchObject({ status: 429 })
+		expect(calls).toHaveLength(1)
+	})
+})
+
+describe("Client contract single-sourcing (WS-08 / C-013)", () => {
+	it("declares exactly the lib context-bundle mode set on MemongoContextBundleInput", () => {
+		// Compile-time: the client's inline mode union must equal the lib
+		// contract union the API validates (contextBundleModeSchema), so no
+		// caller can pass a typed value the server would 400.
+		expectTypeOf<MemongoContextBundleInput["mode"]>().toEqualTypeOf<
+			ContextBundleModeValue | undefined
+		>()
+		// Runtime mirror of the same contract: the lib set is exactly the
+		// two modes the API accepts.
+		expect([...CONTEXT_BUNDLE_MODE_VALUES]).toEqual(["full", "wake-up"])
+	})
+})
+
+describe("Client version telemetry header (WS-08 / C-014)", () => {
+	beforeEach(() => {
+		vi.unstubAllGlobals()
+	})
+
+	it("sends x-memongo-client-version on every request", async () => {
+		const seenHeaders: HeadersInit[] = []
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (_url: string, init?: RequestInit) => {
+				seenHeaders.push(init?.headers ?? {})
+				return new Response(JSON.stringify({ ok: true }), {
+					status: 200,
+					headers: { "Content-Type": "application/json" },
+				})
+			}),
+		)
+		const client = new MemongoClient({ baseUrl: "http://127.0.0.1:3100" })
+		await client.status()
+		expect(seenHeaders).toHaveLength(1)
+		const headers = new Headers(seenHeaders[0])
+		// The server's version-skew logger (createClientVersionSkewLogger)
+		// keys off this exact header name.
+		expect(headers.get("x-memongo-client-version")).toBe(MEMONGO_CLIENT_VERSION)
 	})
 })

@@ -53,6 +53,7 @@ const bridgeMocks = vi.hoisted(() => ({
 vi.mock("@memongo/memory-bridge", () => bridgeMocks)
 
 import { createApp, parseScopedApiKeyPolicies } from "./app.js"
+import { MEMONGO_API_VERSION } from "./version.js"
 import {
 	deriveSearchLanes,
 	enforceRequiredVector,
@@ -1512,5 +1513,70 @@ describe("C-008 quarantine dispositions on write routes", () => {
 			quarantineId: "q-4",
 			matchedPatterns: ["system-prompt-declaration"],
 		})
+	})
+})
+
+describe("client version skew logging (WS-08 / C-014)", () => {
+	const prevEnv = { ...process.env }
+	let warn: ReturnType<typeof vi.spyOn>
+
+	beforeEach(() => {
+		process.env = { ...prevEnv }
+		delete process.env.MEMONGO_API_KEY
+		delete process.env.MEMONGO_API_SCOPED_KEYS
+		process.env.MEMONGO_ALLOW_INSECURE_NO_AUTH = "true"
+		process.env.MEMONGO_API_RATE_LIMIT = ""
+		bridgeMocks.memongoBridgeStatus.mockReset()
+		bridgeMocks.memongoBridgeStatus.mockResolvedValue({ ok: true })
+		warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+	})
+
+	afterEach(() => {
+		warn.mockRestore()
+		process.env = prevEnv
+	})
+
+	it("warns once per client/server version pair on skew", async () => {
+		const app = createApp()
+		for (let i = 0; i < 3; i++) {
+			const res = await app.request("/v1/status", {
+				headers: { "x-memongo-client-version": "0.0.1-stale" },
+			})
+			expect(res.status).toBe(200)
+		}
+		expect(warn).toHaveBeenCalledTimes(1)
+		expect(warn).toHaveBeenCalledWith(expect.stringContaining("0.0.1-stale"))
+		expect(warn).toHaveBeenCalledWith(
+			expect.stringContaining(MEMONGO_API_VERSION),
+		)
+	})
+
+	it("never warns when the client version matches the server", async () => {
+		const app = createApp()
+		const res = await app.request("/v1/status", {
+			headers: { "x-memongo-client-version": MEMONGO_API_VERSION },
+		})
+		expect(res.status).toBe(200)
+		expect(warn).not.toHaveBeenCalled()
+	})
+
+	it("warns again for a different stale version", async () => {
+		const app = createApp()
+		await app.request("/v1/status", {
+			headers: { "x-memongo-client-version": "0.0.1-stale" },
+		})
+		await app.request("/v1/status", {
+			headers: { "x-memongo-client-version": "0.0.2-stale" },
+		})
+		expect(warn).toHaveBeenCalledTimes(2)
+	})
+
+	it("ignores an absurdly long header value (log-spam bound)", async () => {
+		const app = createApp()
+		const res = await app.request("/v1/status", {
+			headers: { "x-memongo-client-version": "x".repeat(200) },
+		})
+		expect(res.status).toBe(200)
+		expect(warn).not.toHaveBeenCalled()
 	})
 })

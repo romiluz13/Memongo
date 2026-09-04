@@ -178,6 +178,49 @@ function sleep(ms: number): Promise<void> {
 	return new Promise((r) => setTimeout(r, ms))
 }
 
+/** Normalize a HeadersInit into a plain record for header inspection. */
+function headersToRecord(
+	headers: RequestInit["headers"],
+): Record<string, string> {
+	if (!headers) {
+		return {}
+	}
+	if (headers instanceof Headers) {
+		const out: Record<string, string> = {}
+		headers.forEach((value, key) => {
+			out[key] = value
+		})
+		return out
+	}
+	if (Array.isArray(headers)) {
+		return Object.fromEntries(headers)
+	}
+	// The ambient HeadersInit record type allows string[] values; join them
+	// the same way Headers would when flattening to a single value.
+	const out: Record<string, string> = {}
+	for (const [key, value] of Object.entries(headers)) {
+		out[key] = typeof value === "string" ? value : [...value].join(", ")
+	}
+	return out
+}
+
+/**
+ * WS-08 / C-011: a 429/503 retry is only safe when the request is
+ * idempotent by construction — GET/HEAD (no side effects), or a POST that
+ * carries an Idempotency-Key (the server replays return the original
+ * receipt instead of writing twice). Retrying any other POST could
+ * double-write memory, so those now fail fast with the server's error.
+ */
+function isRetrySafeRequest(
+	method: string,
+	headers: Record<string, string>,
+): boolean {
+	if (method === "GET" || method === "HEAD") {
+		return true
+	}
+	return headers["Idempotency-Key"] !== undefined
+}
+
 function buildHeaders(
 	opts: MemongoClientOptions,
 	method: string,
@@ -200,11 +243,21 @@ async function apiFetch<T>(
 	opts: MemongoClientOptions,
 	path: string,
 	init: RequestInit,
+	/** WS-08 / C-011: override for POSTs idempotent by construction. */
+	retrySafeOverride?: boolean,
 ): Promise<T> {
 	const url = `${resolveBaseUrl(opts)}${path}`
 	const method = (init.method ?? "GET").toUpperCase()
 	const maxRetries = opts.maxRetries ?? 2
 	const timeoutMs = opts.timeoutMs ?? 30_000
+	// Merge caller headers once so the retry-safety predicate and every
+	// attempt see the exact same header set.
+	const mergedHeaders = {
+		...buildHeaders(opts, method),
+		...headersToRecord(init.headers),
+	}
+	const retrySafe =
+		retrySafeOverride ?? isRetrySafeRequest(method, mergedHeaders)
 	let attempt = 0
 	for (;;) {
 		const timeoutSignal = AbortSignal.timeout(timeoutMs)
@@ -214,13 +267,15 @@ async function apiFetch<T>(
 		const res = await fetch(url, {
 			...init,
 			signal,
-			headers: { ...buildHeaders(opts, method), ...init.headers },
+			headers: mergedHeaders,
 		})
 		if (res.ok) {
 			return (await res.json()) as T
 		}
 		const text = await res.text()
-		if (shouldRetryStatus(res.status) && attempt < maxRetries) {
+		// WS-08 / C-011: only retry idempotent-by-construction requests; a
+		// non-idempotent POST fails fast so it can never double-write.
+		if (retrySafe && shouldRetryStatus(res.status) && attempt < maxRetries) {
 			attempt += 1
 			// The server's Retry-After (set on 429) wins over local backoff, capped.
 			await sleep(retryAfterDelayMs(res) ?? 200 * attempt)
@@ -235,12 +290,18 @@ async function apiPost<T>(
 	path: string,
 	body: Record<string, unknown>,
 	headers?: Record<string, string>,
+	retrySafeOverride?: boolean,
 ): Promise<T> {
-	return apiFetch<T>(opts, path, {
-		method: "POST",
-		body: JSON.stringify(body),
-		...(headers ? { headers } : {}),
-	})
+	return apiFetch<T>(
+		opts,
+		path,
+		{
+			method: "POST",
+			body: JSON.stringify(body),
+			...(headers ? { headers } : {}),
+		},
+		retrySafeOverride,
+	)
 }
 
 /**
@@ -921,22 +982,32 @@ export class MemongoClient {
 		}>
 		agentId?: string
 	}): Promise<MemongoWriteEventsResponse> {
-		return apiPost(this._opts, "/v1/write-events", {
-			events: input.events.map((event) => ({
-				role: event.role,
-				body: event.body,
-				sessionId: event.sessionId,
-				timestamp: event.timestamp,
-				validAt: event.validAt,
-				invalidAt: event.invalidAt,
-				metadata: event.metadata,
-				scope: event.scope,
-				scopeRef: event.scopeRef,
-				customId: event.customId ?? generateIdempotencyKey(),
-				expiresAt: event.expiresAt,
-			})),
-			agentId: input.agentId,
-		})
+		return apiPost(
+			this._opts,
+			"/v1/write-events",
+			{
+				events: input.events.map((event) => ({
+					role: event.role,
+					body: event.body,
+					sessionId: event.sessionId,
+					timestamp: event.timestamp,
+					validAt: event.validAt,
+					invalidAt: event.invalidAt,
+					metadata: event.metadata,
+					scope: event.scope,
+					scopeRef: event.scopeRef,
+					customId: event.customId ?? generateIdempotencyKey(),
+					expiresAt: event.expiresAt,
+				})),
+				agentId: input.agentId,
+			},
+			undefined,
+			// WS-08 / C-011: the batch carries no Idempotency-Key header, but
+			// every item carries its own key, and the server turns per-item
+			// replays into receipt entries — a retried batch can never
+			// double-write, so it stays retry-safe.
+			true,
+		)
 	}
 
 	async writeStructured(input: {

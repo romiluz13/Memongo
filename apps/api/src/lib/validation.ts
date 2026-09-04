@@ -1,3 +1,7 @@
+import {
+	CHAIN_TRACE_COLLECTION_VALUES_TUPLE,
+	CONTEXT_BUNDLE_MODE_VALUES_TUPLE,
+} from "@memongo/lib"
 import { z } from "zod"
 
 /**
@@ -125,6 +129,154 @@ export const kbFilterSchema = z
 		source: z.string().optional(),
 	})
 	.strict()
+
+/* ------------------------------------------------------------------------ */
+/*  search family — /search-detailed nested objects (WS-08 / C-012)        */
+/* ------------------------------------------------------------------------ */
+
+/**
+ * Temporal window filter shared by /search-detailed, /context-bundle, and
+ * /discovery-projection. Every nested object of these routes used to be
+ * type-cast straight through, so a typo'd preset (e.g. "last-7-days")
+ * skipped the planner's exhaustive preset switch and silently degraded to
+ * NO time constraint, and a non-date `start`/`end` became an Invalid Date
+ * inside the engine's comparisons. Strict: unknown keys are rejected and
+ * the preset must be one of the eight the planner actually resolves.
+ */
+export const timeRangeSchema = z
+	.object({
+		preset: z
+			.enum([
+				"today",
+				"yesterday",
+				"last-24h",
+				"last-7d",
+				"this-week",
+				"last-30d",
+				"this-month",
+			])
+			.optional(),
+		start: z.string().datetime({ offset: true }).optional(),
+		end: z.string().datetime({ offset: true }).optional(),
+	})
+	.strict()
+	.refine(
+		(value) =>
+			value.preset !== undefined ||
+			value.start !== undefined ||
+			value.end !== undefined,
+		{ message: "timeRange must set at least one of preset, start, end" },
+	)
+
+/** Conversation lane filter (sessionKey narrows the events lane). Strict. */
+export const conversationScopeSchema = z
+	.object({
+		sessionKey: z.string().min(1).optional(),
+	})
+	.strict()
+
+/**
+ * Structured memory lane filter. `state` accepts a single value or a list
+ * (the planner reads both shapes); `type`/`salience` stay open strings
+ * because the engine treats them as open-ended. Strict: unknown keys are
+ * rejected.
+ */
+export const structuredScopeSchema = z
+	.object({
+		type: z.string().min(1).optional(),
+		state: z.union([z.string().min(1), z.array(z.string().min(1))]).optional(),
+		salience: z.array(z.string().min(1)).optional(),
+	})
+	.strict()
+
+/** Reference (KB) lane filter. Strict. */
+export const referenceScopeSchema = z
+	.object({
+		source: z.string().min(1).optional(),
+		category: z.string().min(1).optional(),
+		tags: z.array(z.string().min(1)).optional(),
+	})
+	.strict()
+
+/** Procedural lane filter. Strict. */
+export const proceduralScopeSchema = z
+	.object({
+		state: z.string().min(1).optional(),
+		intentTags: z.array(z.string().min(1)).optional(),
+	})
+	.strict()
+
+/**
+ * Top-level search controls of /search-detailed that were silently
+ * defaulted on invalid values (searchMode) or cast through unchecked
+ * (sourcePreference).
+ */
+export const SEARCH_MODE_VALUES = ["auto", "direct", "agentic"] as const
+export const searchModeSchema = z.enum(SEARCH_MODE_VALUES)
+export const SOURCE_PREFERENCE_VALUES = [
+	"reference",
+	"conversation",
+	"structured",
+	"procedural",
+	"episodic",
+	"graph",
+] as const
+export const sourcePreferenceSchema = z.array(z.enum(SOURCE_PREFERENCE_VALUES))
+
+/**
+ * Search recipe configuration. Mirrors SearchConfig in
+ * packages/memory-engine/src/types.ts field-for-field; strict so unknown
+ * keys (or operator-shaped ones) are rejected instead of flowing into the
+ * engine's config merge.
+ */
+export const searchConfigSchema = z
+	.object({
+		recipe: z
+			.enum(["fast", "hybrid", "deep", "temporal", "chain-of-thought"])
+			.optional(),
+		recallProfile: z.enum(["latency", "balanced", "proof"]).optional(),
+		maxResults: z.number().int().positive().optional(),
+		searchMode: searchModeSchema.optional(),
+		maxPasses: z.number().int().positive().optional(),
+		sourcePreference: sourcePreferenceSchema.optional(),
+		timeRange: timeRangeSchema.optional(),
+		needExactEvidence: z.boolean().optional(),
+		numCandidates: z.number().int().positive().optional(),
+		fusionMethod: z.enum(["scoreFusion", "rankFusion", "js-merge"]).optional(),
+		hybridMode: z.enum(["hybrid", "vector-only"]).optional(),
+		allowHybridBackstop: z.boolean().optional(),
+		lexicalPrefilter: z.enum(["disabled", "experimental"]).optional(),
+	})
+	.strict()
+
+/* ------------------------------------------------------------------------ */
+/*  context family — bundle mode (WS-08 / C-013)                            */
+/* ------------------------------------------------------------------------ */
+
+/**
+ * Context-bundle mode, validated against the canonical contract enum
+ * (CONTEXT_BUNDLE_MODE_VALUES in @memongo/lib). The route used to swallow
+ * every value outside "wake-up" into the default "full" bundle with a 200
+ * — callers could request "wakeup" or "FULL" and never learn the mode was
+ * dropped. Invalid values now return 400 naming the allowed set.
+ */
+export const contextBundleModeSchema = z.enum(CONTEXT_BUNDLE_MODE_VALUES_TUPLE)
+
+/* ------------------------------------------------------------------------ */
+/*  maintenance family — chain-trace collection (WS-08 / C-015)            */
+/* ------------------------------------------------------------------------ */
+
+/**
+ * Reasoning-chain collection, validated against the canonical contract
+ * enum (CHAIN_TRACE_COLLECTION_VALUES in @memongo/lib, the same allowlist
+ * that keys COLLECTION_ID_FIELDS in the engine). The engine used to answer
+ * a plausible-but-wrong collection name with a fabricated empty
+ * `chainComplete: true` chain — indistinguishable from "no premises
+ * exist". Invalid values now return 400 naming the traversable set.
+ */
+export const chainTraceCollectionSchema = z.enum(
+	CHAIN_TRACE_COLLECTION_VALUES_TUPLE,
+)
 
 /* ------------------------------------------------------------------------ */
 /*  free-form metadata — operator key rejection                             */

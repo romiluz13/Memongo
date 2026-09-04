@@ -1,4 +1,5 @@
 import type { Hono } from "hono"
+import type { z } from "zod"
 import {
 	memongoBridgeBuildContextBundle,
 	memongoBridgeBuildDiscoveryProjection,
@@ -6,6 +7,11 @@ import {
 	memongoBridgeReadFile,
 } from "@memongo/memory-bridge"
 import { internalError, jsonError } from "../lib/errors.js"
+import {
+	contextBundleModeSchema,
+	timeRangeSchema,
+	validateWithSchema,
+} from "../lib/validation.js"
 
 import {
 	readAgentId,
@@ -18,6 +24,19 @@ import {
 	readDiscoveryProjectionKind,
 	type V1RouterEnv,
 } from "./v1-helpers.js"
+
+/**
+ * Parse an optional strict-schema field from a route body; `undefined`
+ * passes through untouched so omitted fields stay omitted (WS-08).
+ */
+const optional = <S extends z.ZodTypeAny>(
+	schema: S,
+	raw: unknown,
+	field: string,
+) =>
+	raw === undefined
+		? ({ ok: true as const, value: undefined } as const)
+		: validateWithSchema(schema, raw, field)
 
 export function registerContextRoutes(v1: Hono<V1RouterEnv>): void {
 	v1.post("/hydrate-active-slate", async (c) => {
@@ -56,12 +75,12 @@ export function registerContextRoutes(v1: Hono<V1RouterEnv>): void {
 			return jsonError(c, 400, "VALIDATION_ERROR", scopeError)
 		}
 		try {
-			const timeRange =
-				typeof body.timeRange === "object" &&
-				body.timeRange !== null &&
-				!Array.isArray(body.timeRange)
-					? (body.timeRange as Record<string, unknown>)
-					: undefined
+			// WS-08 / C-012: timeRange used to be type-cast through, so a typo'd
+			// preset silently dropped the temporal window.
+			const timeRange = optional(timeRangeSchema, body.timeRange, "timeRange")
+			if (!timeRange.ok) {
+				return jsonError(c, 400, "VALIDATION_ERROR", timeRange.message)
+			}
 			const projection = await memongoBridgeBuildDiscoveryProjection({
 				agentId: await readAgentId(c),
 				kind,
@@ -69,9 +88,7 @@ export function registerContextRoutes(v1: Hono<V1RouterEnv>): void {
 				scope: await readScope(c),
 				scopeRef: await readScopeRef(c),
 				maxItems: typeof body.maxItems === "number" ? body.maxItems : undefined,
-				timeRange: timeRange as
-					| { preset?: string; start?: string; end?: string }
-					| undefined,
+				timeRange: timeRange.value,
 			})
 			return c.json(projection)
 		} catch (err) {
@@ -98,12 +115,25 @@ export function registerContextRoutes(v1: Hono<V1RouterEnv>): void {
 			return jsonError(c, 400, "VALIDATION_ERROR", scopeError)
 		}
 		try {
-			const timeRange =
-				typeof body.timeRange === "object" &&
-				body.timeRange !== null &&
-				!Array.isArray(body.timeRange)
-					? (body.timeRange as Record<string, unknown>)
-					: undefined
+			// WS-08 / C-012: timeRange used to be type-cast through, so a typo'd
+			// preset silently dropped the temporal window.
+			const timeRange = optional(timeRangeSchema, body.timeRange, "timeRange")
+			if (!timeRange.ok) {
+				return jsonError(c, 400, "VALIDATION_ERROR", timeRange.message)
+			}
+			// WS-08 / C-013: mode used to silently swallow every value outside
+			// "wake-up" into the default "full" bundle — a caller requesting
+			// "wakeup" or "FULL" never learned the mode was dropped. Invalid
+			// values now return 400 naming the allowed set.
+			const mode = optional(contextBundleModeSchema, body.mode, "mode")
+			if (!mode.ok) {
+				return jsonError(
+					c,
+					400,
+					"VALIDATION_ERROR",
+					"mode must be full|wake-up",
+				)
+			}
 			const bundle = await memongoBridgeBuildContextBundle({
 				agentId: await readAgentId(c),
 				query: readQuery(body) || undefined,
@@ -133,10 +163,8 @@ export function registerContextRoutes(v1: Hono<V1RouterEnv>): void {
 					typeof body.includeProfile === "boolean"
 						? body.includeProfile
 						: undefined,
-				timeRange: timeRange as
-					| { preset?: string; start?: string; end?: string }
-					| undefined,
-				mode: body.mode === "wake-up" ? "wake-up" : undefined,
+				timeRange: timeRange.value,
+				mode: mode.value,
 			})
 			return c.json(bundle)
 		} catch (err) {

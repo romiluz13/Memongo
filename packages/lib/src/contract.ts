@@ -58,6 +58,82 @@ export const MEMORY_SCOPE_VALUES_TUPLE: [
 ] = [...MEMORY_SCOPE_VALUES]
 
 /* ------------------------------------------------------------------------ */
+/*  Context-bundle mode enum — THE canonical mode set (C-013)               */
+/* ------------------------------------------------------------------------ */
+
+/**
+ * Canonical context-bundle mode values (WS-08 / C-013). Before this constant
+ * the set was re-declared at four surfaces (API ternary, client types, MCP
+ * JSON schema, tools zod schema) and the API silently swallowed every value
+ * outside "wake-up" — callers could request a mode and receive the default
+ * with a 200. The API now validates against this set and returns 400 on
+ * invalid values; client/MCP/tools schemas derive from it (the zero-dep
+ * client mirrors it locally, pinned by a cross-package type test in
+ * packages/tools).
+ */
+export const CONTEXT_BUNDLE_MODE_VALUES = ["full", "wake-up"] as const
+
+export type ContextBundleModeValue = (typeof CONTEXT_BUNDLE_MODE_VALUES)[number]
+
+export function isContextBundleModeValue(
+	value: string,
+): value is ContextBundleModeValue {
+	return (CONTEXT_BUNDLE_MODE_VALUES as readonly string[]).includes(value)
+}
+
+/**
+ * Mutable tuple copy of CONTEXT_BUNDLE_MODE_VALUES for `z.enum` consumers.
+ * Derived by spread so it can never drift from the canonical array.
+ */
+export const CONTEXT_BUNDLE_MODE_VALUES_TUPLE: [
+	ContextBundleModeValue,
+	...ContextBundleModeValue[],
+] = [...CONTEXT_BUNDLE_MODE_VALUES]
+
+/* ------------------------------------------------------------------------ */
+/*  Chain-trace collection enum — the engine traversal allowlist (C-015)    */
+/* ------------------------------------------------------------------------ */
+
+/**
+ * Collections the reasoning-chain tracer can traverse (those carrying
+ * `sourceEventIds` with a known primary id field — see
+ * COLLECTION_ID_FIELDS in
+ * packages/memory-engine/src/mongodb-reasoning-chain.ts, which is keyed by
+ * this type so the two can never drift). WS-08 / C-015: the chain-trace
+ * route validates `collection` against this set and returns 400 for
+ * anything else — the engine's previous fallback fabricated an empty
+ * `chainComplete: true` response for unknown collection names, hiding
+ * caller mistakes (a plausible-but-wrong name was indistinguishable from
+ * "no premises exist").
+ */
+export const CHAIN_TRACE_COLLECTION_VALUES = [
+	"structured_mem",
+	"entities",
+	"relations",
+	"procedures",
+	"entity_links",
+] as const
+
+export type ChainTraceCollectionValue =
+	(typeof CHAIN_TRACE_COLLECTION_VALUES)[number]
+
+export function isChainTraceCollectionValue(
+	value: string,
+): value is ChainTraceCollectionValue {
+	return (CHAIN_TRACE_COLLECTION_VALUES as readonly string[]).includes(value)
+}
+
+/**
+ * Mutable tuple copy of CHAIN_TRACE_COLLECTION_VALUES for `z.enum`
+ * consumers. Derived by spread so it can never drift from the canonical
+ * array.
+ */
+export const CHAIN_TRACE_COLLECTION_VALUES_TUPLE: [
+	ChainTraceCollectionValue,
+	...ChainTraceCollectionValue[],
+] = [...CHAIN_TRACE_COLLECTION_VALUES]
+
+/* ------------------------------------------------------------------------ */
 /*  Shared field descriptions                                               */
 /* ------------------------------------------------------------------------ */
 

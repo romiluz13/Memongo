@@ -1,5 +1,14 @@
-import { MEMORY_SCOPE_VALUES } from "@memongo/lib"
+import {
+	CHAIN_TRACE_COLLECTION_VALUES,
+	MEMORY_SCOPE_VALUES,
+} from "@memongo/lib"
 import type { McpToolDefinition } from "../tool-registry.js"
+
+// Canonical scope enum from the single contract source (@memongo/lib, P2.2).
+const memoryScopeEnum = [...MEMORY_SCOPE_VALUES]
+// C-015: canonical chain-trace collections from the same single source the
+// engine traverses and the API validates against.
+const chainTraceCollectionEnum = [...CHAIN_TRACE_COLLECTION_VALUES]
 
 // Admin tools (P1.2): operator diagnostics, lifecycle handle management,
 // jobs/traces, sync, and probes. Registered only when MEMONGO_MCP_ADMIN=1.
@@ -15,7 +24,7 @@ export const adminTools: readonly McpToolDefinition[] = [
 				limit: { type: "number" },
 				scope: {
 					type: "string",
-					enum: [...MEMORY_SCOPE_VALUES],
+					enum: memoryScopeEnum,
 					description: "Restrict results to this memory isolation scope.",
 				},
 				scopeRef: {
@@ -201,13 +210,7 @@ export const adminTools: readonly McpToolDefinition[] = [
 				factId: { type: "string" },
 				collection: {
 					type: "string",
-					enum: [
-						"structured_mem",
-						"entities",
-						"relations",
-						"procedures",
-						"entity_links",
-					],
+					enum: chainTraceCollectionEnum,
 				},
 				agentId: { type: "string" },
 				maxDepth: { type: "number" },
@@ -227,7 +230,7 @@ export const adminTools: readonly McpToolDefinition[] = [
 				limit: { type: "number" },
 				scope: {
 					type: "string",
-					enum: [...MEMORY_SCOPE_VALUES],
+					enum: memoryScopeEnum,
 				},
 				scopeRef: { type: "string" },
 			},
@@ -248,7 +251,7 @@ export const adminTools: readonly McpToolDefinition[] = [
 				llmDedup: { type: "boolean" },
 				scope: {
 					type: "string",
-					enum: [...MEMORY_SCOPE_VALUES],
+					enum: memoryScopeEnum,
 				},
 				scopeRef: { type: "string" },
 			},
@@ -267,7 +270,7 @@ export const adminTools: readonly McpToolDefinition[] = [
 				scope: {
 					type: "string",
 					// Canonical scope enum from the single contract source (P2.2).
-					enum: [...MEMORY_SCOPE_VALUES],
+					enum: memoryScopeEnum,
 				},
 				scopeRef: { type: "string" },
 				limitConversations: { type: "integer", minimum: 1 },
@@ -409,7 +412,7 @@ export const adminTools: readonly McpToolDefinition[] = [
 				agentId: { type: "string" },
 				scope: {
 					type: "string",
-					enum: [...MEMORY_SCOPE_VALUES],
+					enum: memoryScopeEnum,
 				},
 				scopeRef: { type: "string" },
 				maxItems: { type: "number" },
@@ -437,7 +440,7 @@ export const adminTools: readonly McpToolDefinition[] = [
 				agentId: { type: "string" },
 				scope: {
 					type: "string",
-					enum: [...MEMORY_SCOPE_VALUES],
+					enum: memoryScopeEnum,
 				},
 				scopeRef: { type: "string" },
 				maxItems: { type: "number" },

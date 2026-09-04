@@ -20,6 +20,21 @@ export const IDEMPOTENCY_KEY_HEADER_PARAMETER = {
 } as const
 
 /**
+ * Client version telemetry header (WS-08 / C-014). The TypeScript SDK
+ * (@memongo/client) sends it on every request. The server never rejects on
+ * skew; it logs a warning once per (client, server) version pair when the
+ * values differ, so operators can spot stale clients calling a newer API.
+ */
+export const CLIENT_VERSION_HEADER_PARAMETER = {
+	name: "x-memongo-client-version",
+	in: "header",
+	required: false,
+	schema: { type: "string" },
+	description:
+		"Version of the calling client SDK. Accepted on every /v1 route (documented here on /v1/status, the version-reporting route); the server warns once per client/server version pair on mismatch and never rejects for skew.",
+} as const
+
+/**
  * Shared TTL wording (B1). expiresAt is an absolute retention instant —
  * after it the document is invisible to reads and a MongoDB TTL index
  * removes it (sweep lag ~60s). It is about retention, not event validity;

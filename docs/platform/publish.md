@@ -35,7 +35,12 @@ This monorepo uses the `@memongo` npm scope. Publishing is maintainer-operated; 
    - Per-package semver in each published `package.json`; for
      `@memongo/client`, `packages/client/src/version.ts`
      (`MEMONGO_CLIENT_VERSION`) must equal the client package version — it is
-     sent as the `x-memongo-client-version` request header.
+     sent as the `x-memongo-client-version` request header. The API server
+     reads that header on every `/v1` request and logs a version-skew warning
+     (once per client/server version pair) when it differs from
+     `MEMONGO_API_VERSION`, so stale clients surface in server logs instead
+     of failing silently; check the logs after a release to see how much
+     stale-client traffic remains.
 2. **Build.** `bun run build`. Every publishable package runs its package-local
    `clean` script before building, and `prepublishOnly: bun run build` ensures a
    manual `npm publish` never ships stale `dist/`. `@memongo/pi-extension`

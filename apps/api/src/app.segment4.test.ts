@@ -882,7 +882,7 @@ describe("createApp", () => {
 		const res = await createApp().request("/v1/chain-trace", {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ collection: "structured" }),
+			body: JSON.stringify({ collection: "structured_mem" }),
 		})
 
 		expect(res.status).toBe(400)
@@ -1210,6 +1210,62 @@ describe("createApp", () => {
 				numCandidates: 60,
 				fusionMethod: "rankFusion",
 			},
+		})
+	})
+})
+
+describe("WS-08 chain-trace collection validation (C-015)", () => {
+	const prevEnv = { ...process.env }
+
+	beforeEach(() => {
+		process.env = { ...prevEnv }
+		delete process.env.MEMONGO_API_KEY
+		delete process.env.MEMONGO_API_SCOPED_KEYS
+		process.env.MEMONGO_ALLOW_INSECURE_NO_AUTH = "true"
+		bridgeMocks.memongoBridgeTraceChain.mockReset()
+	})
+
+	afterEach(() => {
+		process.env = prevEnv
+	})
+
+	it("rejects a plausible-but-wrong collection with 400 naming the valid set", async () => {
+		const res = await createApp().request("/v1/chain-trace", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ factId: "fact-1", collection: "events" }),
+		})
+		expect(res.status).toBe(400)
+		const body = (await res.json()) as {
+			error: { code: string; message: string }
+		}
+		expect(body.error.code).toBe("VALIDATION_ERROR")
+		expect(body.error.message).toContain("collection")
+		expect(bridgeMocks.memongoBridgeTraceChain).not.toHaveBeenCalled()
+	})
+
+	it.each([
+		"structured_mem",
+		"entities",
+		"relations",
+		"procedures",
+		"entity_links",
+	] as const)("accepts the traversable collection %s", async (collection) => {
+		bridgeMocks.memongoBridgeTraceChain.mockResolvedValue({
+			chain: [],
+			chainComplete: true,
+		})
+		const res = await createApp().request("/v1/chain-trace", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ factId: "fact-1", collection }),
+		})
+		expect(res.status).toBe(200)
+		expect(bridgeMocks.memongoBridgeTraceChain).toHaveBeenCalledWith({
+			factId: "fact-1",
+			collection,
+			agentId: undefined,
+			maxDepth: undefined,
 		})
 	})
 })

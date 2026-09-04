@@ -390,3 +390,114 @@ entries:
     run_at: "2026-09-04T08:03:23.000Z"
     evidence_hash: sha256:4e6439c6d26a82a212c74a17762787b98290f39834ae76bc548acc33eeef1bc6
     notes: "Pool-budget evidence from the backend-config battery in the same final-state WS-06 engine suite: resolveMemoryBackendConfig resolves maxPoolSize 10 / minPoolSize 2 defaults, the budget that caps TOTAL driver connections in the default shared runtime (one pool per URI regardless of agent count — the arithmetic annotated at the C-009 comment in backend-config.ts; legacy per-agent mode multiplied pools by N and exhausted an M10 node's 1,500-connection budget around ~150 agents). Per the round-1 F-003 fix the test honestly pins only this budget half; the default-flip half is pinned by V-063's registry battery and V-062's default-mode share test. Workspace-wide compilation of the changed engine surface is pinned by the fresh uncached check-types (ws06-check-types.log, turbo check-types --force, 15/15 tasks successful, 0 cached, sha256:19be8fa571a8f5b3c7cbeec6953f46ea968623daf16d1a57979cde182d429450)."
+
+  - id: V-065
+    claim_id: C-011
+    construct: "packages/client/src/client.ts#apiFetch"
+    method: test
+    target: .ddd/reports/runs/ws08-client-suite.log
+    result: pass
+    run_at: "2026-09-04T10:17:00.000Z"
+    evidence_hash: sha256:acfac278e7418a07877f5ad4c1ee31ac0e482f629564e5d3173a146b2c0351e2
+    notes: "Retry-safety evidence from the final-state WS-08 client suite (this log, 47 tests, exit 0): the 'MemongoClient retry safety (C-011)' battery pins the idempotency gate in both directions — a GET on 503 is retried and succeeds (2 stubbed fetch calls), while a POST /search without an Idempotency-Key fails fast on 503 (exactly 1 call, no second attempt), a POST carrying an Idempotency-Key on 503 IS retried, the per-item-keyed bulk write (each item generates its own UUIDv4 key, pinned by the pre-existing P1.3 key-generator test in the same log) retries on 503, and an unkeyed selfEdit POST fails fast on 429 as well as 503. Workspace-wide compilation of the changed apiFetch surface is pinned by the fresh uncached check-types (ws08-check-types.log, turbo check-types --force, 15/15 tasks successful, 0 cached, sha256:471b68f637de70634daf5f9f0af725f2da1c2b920da514123236a836e9a67468)."
+
+  - id: V-066
+    claim_id: C-012
+    construct: apps/api/src/routes/v1-search-routes.ts
+    method: test
+    target: .ddd/reports/runs/ws08-api-suite.log
+    result: pass
+    run_at: "2026-09-04T10:17:00.000Z"
+    evidence_hash: sha256:55f90962db3d3a412c21ff54ad965461c3462a5ef7efd81999aa82c12e45773c
+    notes: "Search-detailed strict-validation evidence from the final-state WS-08 api suite (this log, 264 tests, exit 0): inside the 'WS-08 request validation 400s (C-012/C-013)' battery, /v1/search-detailed now 400s on an invalid searchMode ('fast'), an unknown searchConfig field, and a typo'd timeRange — each rejection names the offending field and the bridge mock is never called, proving validation happens before engine invocation instead of type-casting the raw objects through. The pre-existing /v1/search-kb kbFilterSchema gate and the /v1/search-detailed scope-object 400 (both in the same log) pin the surrounding boundary the claim says must be uniformly strict."
+
+  - id: V-067
+    claim_id: C-012
+    construct: "apps/api/src/lib/validation.ts#kbFilterSchema"
+    method: test
+    target: .ddd/reports/runs/ws08-api-suite.log
+    result: pass
+    run_at: "2026-09-04T10:17:00.000Z"
+    evidence_hash: sha256:55f90962db3d3a412c21ff54ad965461c3462a5ef7efd81999aa82c12e45773c
+    notes: "Schema-strictness parity evidence from the same final-state WS-08 api suite: the schemas exported alongside kbFilterSchema are exercised end-to-end by the 400 batteries — searchConfigSchema is .strict() and mirrors the engine's SearchConfig field-for-field (unknown or operator-shaped keys are rejected rather than flowing into the config merge), searchModeSchema/sourcePreferenceSchema/timeRangeSchema reject out-of-enum values on /v1/search-detailed, and the scope schemas (conversationScopeSchema, structuredScopeSchema, referenceScopeSchema, proceduralScopeSchema) parse the nested scope inputs the route used to cast. Every rejection surfaces as a 400 VALIDATION_ERROR naming the field, the same contract kbFilterSchema has enforced on /v1/search-kb since P2.8."
+
+  - id: V-068
+    claim_id: C-012
+    construct: apps/api/src/routes/v1-context-routes.ts
+    method: test
+    target: .ddd/reports/runs/ws08-api-suite.log
+    result: pass
+    run_at: "2026-09-04T10:17:00.000Z"
+    evidence_hash: sha256:55f90962db3d3a412c21ff54ad965461c3462a5ef7efd81999aa82c12e45773c
+    notes: "Context-route timeRange-cast closure from the same final-state WS-08 api suite: /v1/context-bundle 400s on a timeRange with an unknown preset ('last-year') and on a timeRange with neither preset nor start/end, forwards a valid preset ('last-7d') through to the bridge mock (proving the gate is not over-tight), and /v1/discovery-projection 400s on an unknown timeRange preset — the bridge mock is not called on any rejection. These were the last timeRange objects cast straight through on an otherwise validated route family."
+
+  - id: V-069
+    claim_id: C-013
+    construct: apps/api/src/routes/v1-context-routes.ts
+    method: test
+    target: .ddd/reports/runs/ws08-api-suite.log
+    result: pass
+    run_at: "2026-09-04T10:17:00.000Z"
+    evidence_hash: sha256:55f90962db3d3a412c21ff54ad965461c3462a5ef7efd81999aa82c12e45773c
+    notes: "Mode-enum gate evidence from the same final-state WS-08 api suite: POST /v1/context-bundle with mode 'wakeup' returns 400 VALIDATION_ERROR naming mode and the allowed set, and the bridge mock is not called — previously every value outside 'wake-up' was silently swallowed into the default 'full' bundle with a 200. The gate is contextBundleModeSchema = z.enum(CONTEXT_BUNDLE_MODE_VALUES_TUPLE), single-sourced from @memongo/lib; the canonical enum itself (exactly ['full','wake-up'], in order, with the derived mutable tuple and string-classifier) is pinned by the WS-08 lib contract battery (ws08-lib-suite.log, 166 tests, sha256:af380ceb36442ec33ea4e1b64ad053e7f57b7d195ddd3cd8af14c0297c910faf)."
+
+  - id: V-070
+    claim_id: C-013
+    construct: packages/client/src/client.ts
+    method: test
+    target: .ddd/reports/runs/ws08-client-suite.log
+    result: pass
+    run_at: "2026-09-04T10:18:30.000Z"
+    evidence_hash: sha256:acfac278e7418a07877f5ad4c1ee31ac0e482f629564e5d3173a146b2c0351e2
+    notes: "Client single-sourcing evidence from the final-state WS-08 client suite (this log, 47 tests, exit 0): the 'Client contract single-sourcing (WS-08 / C-013)' test asserts MemongoContextBundleInput['mode'] is typed ContextBundleModeValue | undefined via expectTypeOf — the compile-time half is enforced by the fresh uncached full-workspace type-check (ws08-check-types.log, turbo check-types --force, 15/15 tasks successful, 0 cached, sha256:471b68f637de70634daf5f9f0af725f2da1c2b920da514123236a836e9a67468), so a drifted client union fails CI at the type level — while the runtime half asserts the client's declared mode set equals CONTEXT_BUNDLE_MODE_VALUES imported from @memongo/lib (devDependency added for exactly this mirror). The canonical enum battery it mirrors against is green in ws08-lib-suite.log (sha256:af380ceb36442ec33ea4e1b64ad053e7f57b7d195ddd3cd8af14c0297c910faf)."
+
+  - id: V-071
+    claim_id: C-013
+    construct: apps/mcp/src/server.ts
+    method: test
+    target: .ddd/reports/runs/ws08-mcp-suite.log
+    result: pass
+    run_at: "2026-09-04T10:17:00.000Z"
+    evidence_hash: sha256:3160940905db704cafda7ac9fc36a142a6ad7ace812ca74c6165aaa20f41dcb0
+    notes: "MCP single-sourcing evidence from the final-state WS-08 mcp suite (this log, 185 tests, exit 0): the 'context-bundle mode validation (WS-08 / C-013)' battery forwards both canonical modes ('full', 'wake-up') to the client, rejects an invalid mode with a tool error naming the valid set (previously the MCP schema allowed values the API silently ignored), and omits mode cleanly when not provided. The schema half is pinned by 'build_context_bundle mode enum equals the lib contract set (C-013)' in mcp-contract-conformance.test.ts, which reads the tool's zod enum out of the registered JSON schema and asserts set equality with CONTEXT_BUNDLE_MODE_VALUES from @memongo/lib."
+
+  - id: V-072
+    claim_id: C-014
+    construct: packages/client/src/client.ts
+    method: test
+    target: .ddd/reports/runs/ws08-client-suite.log
+    result: pass
+    run_at: "2026-09-04T10:17:00.000Z"
+    evidence_hash: sha256:acfac278e7418a07877f5ad4c1ee31ac0e482f629564e5d3173a146b2c0351e2
+    notes: "Client telemetry-header evidence from the same final-state WS-08 client suite: the 'Client version telemetry header (WS-08 / C-014)' test stubs fetch and asserts every request carries x-memongo-client-version with the exact MEMONGO_CLIENT_VERSION constant the package exports, keeping the header's presence honest now that the server actually reads it (the server half is V-073)."
+
+  - id: V-073
+    claim_id: C-014
+    construct: apps/api/src/app.ts
+    method: test
+    target: .ddd/reports/runs/ws08-api-suite.log
+    result: pass
+    run_at: "2026-09-04T10:17:00.000Z"
+    evidence_hash: sha256:55f90962db3d3a412c21ff54ad965461c3462a5ef7efd81999aa82c12e45773c
+    notes: "Server version-skew evidence from the same final-state WS-08 api suite: the 'client version skew logging (WS-08 / C-014)' battery proves the app reads x-memongo-client-version — three requests with a stale client version produce exactly one warn naming both the client and server versions (per-pair dedupe), a matching version never warns, a different stale version warns once more, and an absurdly long header value is ignored entirely (log-spam bound). The decorative-telemetry half of the claim is closed: the header is now read, compared, and logged on mismatch."
+
+  - id: V-074
+    claim_id: C-015
+    construct: apps/api/src/routes/v1-maintenance-routes.ts
+    method: test
+    target: .ddd/reports/runs/ws08-api-suite.log
+    result: pass
+    run_at: "2026-09-04T10:17:00.000Z"
+    evidence_hash: sha256:55f90962db3d3a412c21ff54ad965461c3462a5ef7efd81999aa82c12e45773c
+    notes: "Chain-trace 400 evidence from the same final-state WS-08 api suite: the 'WS-08 chain-trace collection validation (C-015)' battery rejects the plausible-but-wrong collection 'events' with 400 VALIDATION_ERROR naming the valid set (bridge mock not called — previously the engine fabricated an empty chainComplete:true chain indistinguishable from 'no premises exist') and accepts all five traversable collections (structured_mem, entities, relations, procedures, entity_links) via it.each, forwarding each to the bridge. The gate is chainTraceCollectionSchema = z.enum(CHAIN_TRACE_COLLECTION_VALUES_TUPLE), the same allowlist that keys COLLECTION_ID_FIELDS in the engine — the engine's derivation of that map from the lib enum is covered by the final-state engine suite (ws08-memory-engine-suite.log, 2078 tests, sha256:05d88b4e78e4be67385e11646a55b9514b56a97c7b05efc6f36a6f5ab044cc5b)."
+
+  - id: V-075
+    claim_id: C-015
+    construct: packages/tools/src/index.ts
+    method: test
+    target: .ddd/reports/runs/ws08-tools-suite.log
+    result: pass
+    run_at: "2026-09-04T10:17:00.000Z"
+    evidence_hash: sha256:10bde0d083809cd38abb67f2b637b4ee5e14032097b02af3074785cc20f84d03
+    notes: "Tools enum-mirror evidence from the final-state WS-08 tools suite (this log, 50 tests, exit 0): the 'single-sources chain-trace collections from @memongo/lib (C-015)' test asserts the tool's collection enum equals CHAIN_TRACE_COLLECTION_VALUES from @memongo/lib rather than a hand-maintained copy. The canonical set is pinned by the lib contract battery (ws08-lib-suite.log, sha256:af380ceb36442ec33ea4e1b64ad053e7f57b7d195ddd3cd8af14c0297c910faf) and the MCP half of the mirror by the chain-trace collection battery in ws08-mcp-suite.log (rejects plausible-but-wrong collections with a tool error naming the set, forwards every traversable collection, sha256:3160940905db704cafda7ac9fc36a142a6ad7ace812ca74c6165aaa20f41dcb0)."
+

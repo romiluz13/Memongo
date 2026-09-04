@@ -142,13 +142,22 @@ describe("input schema guidance (P1.2)", () => {
 			?.entry as {
 			description?: string
 			required?: string[]
-			properties?: Record<string, { description?: string; enum?: string[] }>
+			properties?: Record<
+				string,
+				{
+					description?: string
+					enum?: string[]
+					type?: string
+				}
+			>
 		}
 		expect(typeof entry.description).toBe("string")
 		expect(entry.required).toEqual(["type", "key", "value"])
-		expect(entry.properties?.type?.enum).toEqual(
-			expect.arrayContaining(["decision", "preference", "fact", "todo"]),
-		)
+		// B6 (WS-08): entry.type is an open string matching the API's own
+		// structuredEntrySchema — the server validates the supported set, so
+		// a closed MCP-side enum would block future entry types.
+		expect(entry.properties?.type?.enum).toBeUndefined()
+		expect(entry.properties?.type?.type).toBe("string")
 		for (const field of ["type", "key", "value"]) {
 			expect(typeof entry.properties?.[field]?.description).toBe("string")
 		}

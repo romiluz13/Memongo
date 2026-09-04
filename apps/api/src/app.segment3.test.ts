@@ -1032,7 +1032,7 @@ describe("createApp", () => {
 	it("traces reasoning chain for a fact via chain-trace", async () => {
 		bridgeMocks.memongoBridgeTraceChain.mockResolvedValue({
 			factId: "fact-1",
-			collection: "structured",
+			collection: "structured_mem",
 			chain: [
 				{ id: "fact-1", content: "root fact", depth: 0, sourceIds: ["fact-0"] },
 			],
@@ -1044,7 +1044,7 @@ describe("createApp", () => {
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify({
 				factId: "fact-1",
-				collection: "structured",
+				collection: "structured_mem",
 				agentId: "agent-42",
 				maxDepth: 3,
 			}),
@@ -1055,13 +1055,13 @@ describe("createApp", () => {
 		expect(json).toEqual(
 			expect.objectContaining({
 				factId: "fact-1",
-				collection: "structured",
+				collection: "structured_mem",
 			}),
 		)
 		expect(bridgeMocks.memongoBridgeTraceChain).toHaveBeenCalledWith({
 			agentId: "agent-42",
 			factId: "fact-1",
-			collection: "structured",
+			collection: "structured_mem",
 			maxDepth: 3,
 		})
 	})
@@ -1560,5 +1560,142 @@ describe("createApp", () => {
 					"datasetPath must resolve inside the workspace or configured benchmark dataset directory",
 			},
 		})
+	})
+})
+
+describe("WS-08 request validation 400s (C-012/C-013)", () => {
+	const prevEnv = { ...process.env }
+
+	beforeEach(() => {
+		process.env = { ...prevEnv }
+		delete process.env.MEMONGO_API_KEY
+		delete process.env.MEMONGO_API_SCOPED_KEYS
+		process.env.MEMONGO_ALLOW_INSECURE_NO_AUTH = "true"
+		bridgeMocks.memongoBridgeBuildContextBundle.mockReset()
+		bridgeMocks.memongoBridgeBuildDiscoveryProjection.mockReset()
+		bridgeMocks.memongoBridgeSearchDetailed.mockReset()
+	})
+
+	afterEach(() => {
+		process.env = prevEnv
+	})
+
+	it("rejects an invalid context-bundle mode with 400 instead of silently defaulting", async () => {
+		const res = await createApp().request("/v1/context-bundle", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ mode: "wakeup" }),
+		})
+		expect(res.status).toBe(400)
+		const body = (await res.json()) as {
+			error: { code: string; message: string }
+		}
+		expect(body.error.code).toBe("VALIDATION_ERROR")
+		expect(body.error.message).toContain("mode")
+		expect(bridgeMocks.memongoBridgeBuildContextBundle).not.toHaveBeenCalled()
+	})
+
+	it("rejects a context-bundle timeRange with an unknown preset", async () => {
+		const res = await createApp().request("/v1/context-bundle", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ timeRange: { preset: "last-year" } }),
+		})
+		expect(res.status).toBe(400)
+		const body = (await res.json()) as {
+			error: { code: string; message: string }
+		}
+		expect(body.error.code).toBe("VALIDATION_ERROR")
+		expect(body.error.message).toContain("timeRange")
+		expect(bridgeMocks.memongoBridgeBuildContextBundle).not.toHaveBeenCalled()
+	})
+
+	it("rejects a context-bundle timeRange with neither preset nor start/end", async () => {
+		const res = await createApp().request("/v1/context-bundle", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ timeRange: {} }),
+		})
+		expect(res.status).toBe(400)
+		expect(bridgeMocks.memongoBridgeBuildContextBundle).not.toHaveBeenCalled()
+	})
+
+	it("forwards a valid context-bundle timeRange preset", async () => {
+		bridgeMocks.memongoBridgeBuildContextBundle.mockResolvedValue({
+			rendered: "bundle",
+			sections: [],
+			metadata: { partial: false },
+			builtAt: "2026-04-05T12:00:00.000Z",
+		})
+		const res = await createApp().request("/v1/context-bundle", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ timeRange: { preset: "last-7d" } }),
+		})
+		expect(res.status).toBe(200)
+		expect(bridgeMocks.memongoBridgeBuildContextBundle).toHaveBeenCalledWith(
+			expect.objectContaining({ timeRange: { preset: "last-7d" } }),
+		)
+	})
+
+	it("rejects a discovery-projection timeRange with an unknown preset", async () => {
+		const res = await createApp().request("/v1/discovery-projection", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				kind: "what-changed",
+				timeRange: { preset: "all-time" },
+			}),
+		})
+		expect(res.status).toBe(400)
+		expect(
+			bridgeMocks.memongoBridgeBuildDiscoveryProjection,
+		).not.toHaveBeenCalled()
+	})
+
+	it("rejects an invalid search-detailed searchMode with 400", async () => {
+		const res = await createApp().request("/v1/search-detailed", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ query: "q", searchMode: "fast" }),
+		})
+		expect(res.status).toBe(400)
+		const body = (await res.json()) as {
+			error: { code: string; message: string }
+		}
+		expect(body.error.code).toBe("VALIDATION_ERROR")
+		expect(body.error.message).toContain("searchMode")
+		expect(bridgeMocks.memongoBridgeSearchDetailed).not.toHaveBeenCalled()
+	})
+
+	it("rejects an invalid search-detailed searchConfig field with 400", async () => {
+		const res = await createApp().request("/v1/search-detailed", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				query: "q",
+				searchConfig: { maxPasses: -1 },
+			}),
+		})
+		expect(res.status).toBe(400)
+		const body = (await res.json()) as {
+			error: { code: string; message: string }
+		}
+		expect(body.error.code).toBe("VALIDATION_ERROR")
+		expect(body.error.message).toContain("searchConfig")
+		expect(bridgeMocks.memongoBridgeSearchDetailed).not.toHaveBeenCalled()
+	})
+
+	it("rejects an invalid search-detailed timeRange with 400", async () => {
+		const res = await createApp().request("/v1/search-detailed", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				query: "q",
+				timeRange: { preset: "sometime" },
+			}),
+		})
+		expect(res.status).toBe(400)
+		expect(bridgeMocks.memongoBridgeSearchDetailed).not.toHaveBeenCalled()
 	})
 })

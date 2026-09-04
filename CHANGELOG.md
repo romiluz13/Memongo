@@ -4,6 +4,32 @@ All notable changes to Memongo will be documented in this file.
 
 ## Unreleased
 
+### API contract hardening (upgrade note)
+
+- Previously silently-ignored request input now returns 400 `VALIDATION_ERROR`
+  naming the offending field (**breaking** for callers that relied on lenient
+  acceptance): `/v1/context-bundle` `mode` must be `full` or `wake-up` (any
+  other value previously produced the default `full` bundle with a 200);
+  `/v1/chain-trace` `collection` must be one of the five traversable
+  collections (`structured_mem`, `entities`, `relations`, `procedures`,
+  `entity_links` — other names previously returned a fabricated
+  `chainComplete: true` empty chain); `/v1/search-detailed` nested objects
+  (`searchMode`, `sourcePreference`, `timeRange`, `searchConfig`, scope
+  objects) and the context-route `timeRange` presets are schema-validated,
+  so unknown keys, operator-shaped keys, and typo'd presets are rejected
+  instead of cast through to the engine.
+- The accepted `mode` and chain-trace `collection` value sets are
+  single-sourced from `@memongo/lib` and enforced to match across the API,
+  the TypeScript client (compile-time via the workspace type-check), the MCP
+  tool schemas, and the AI SDK tools package.
+- The client's automatic retry loop now retries only inherently idempotent
+  GETs, requests carrying an `Idempotency-Key`, and the per-item-keyed bulk
+  write; unkeyed mutations fail fast on the first 5xx or 429 instead of
+  risking a double apply.
+- The server now reads `x-memongo-client-version` and logs one deduped
+  warning per client/server version pair on mismatch (the header was
+  previously sent by the client and never read).
+
 ### Deployment defaults (upgrade note)
 
 - The shared-client runtime is now the default: all memory managers for the

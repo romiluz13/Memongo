@@ -6,6 +6,10 @@ import {
 	memongoBridgeSelfEdit,
 } from "@memongo/memory-bridge"
 import { internalError, jsonError } from "../lib/errors.js"
+import {
+	chainTraceCollectionSchema,
+	validateWithSchema,
+} from "../lib/validation.js"
 
 import {
 	readAgentId,
@@ -27,11 +31,29 @@ export function registerMaintenanceRoutes(v1: Hono<V1RouterEnv>): void {
 		if (!collection.trim()) {
 			return jsonError(c, 400, "VALIDATION_ERROR", "collection is required")
 		}
+		// WS-08 / C-015: `collection` used to be any non-empty string, and the
+		// engine answered a plausible-but-wrong name with a fabricated empty
+		// `chainComplete: true` chain — indistinguishable from "no premises
+		// exist". Validate against the canonical traversal allowlist and name
+		// the traversable collections on rejection.
+		const parsedCollection = validateWithSchema(
+			chainTraceCollectionSchema,
+			collection,
+			"collection",
+		)
+		if (!parsedCollection.ok) {
+			return jsonError(
+				c,
+				400,
+				"VALIDATION_ERROR",
+				"collection must be structured_mem|entities|relations|procedures|entity_links",
+			)
+		}
 		try {
 			const chain = await memongoBridgeTraceChain({
 				agentId: await readAgentId(c),
 				factId,
-				collection,
+				collection: parsedCollection.value,
 				maxDepth: typeof body.maxDepth === "number" ? body.maxDepth : undefined,
 			})
 			return c.json(chain)

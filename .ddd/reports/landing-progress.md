@@ -46,7 +46,7 @@ This file is the compaction anchor: any future instance resumes from here.
 | WS-05 | C-008 | T3 | Prompt-injection coverage | LANDED (see session log) |
 | WS-06 | C-009 | T3 | Deployment defaults (shared client, cache bound, sweep) | LANDED (see session log) |
 | WS-07 | C-010 | T3 | CI executes suites | LANDED 5115d889c7 |
-| WS-08 | C-011..015 | T2,T2,T1,T1,T1 | API contracts batch | pending |
+| WS-08 | C-011..015 | T2,T2,T1,T1,T1 | API contracts batch | LANDED (see session log) |
 | WS-09 | C-016 | T2 | Runtime capability re-verification | pending |
 | WS-10 | C-017 | T2 | Cost observability | pending |
 | WS-11 | C-018 | T3 | Admission control | pending |
@@ -59,7 +59,7 @@ This file is the compaction anchor: any future instance resumes from here.
 | WS-18 | C-037,038,039 | T1,T2,T2 | dockerignore; publish gates; nightly eval | pending |
 
 T3 needing refutation: C-002, C-003, C-004, C-005, C-007, C-008, C-009, C-018.
-Validation IDs used so far: V-001..V-064 (next free: V-065).
+Validation IDs used so far: V-001..V-075 (next free: V-076).
 Sweep violations at WS-01 landing: 92 (was 96 pre-WS-01).
 Sweep violations at WS-02 landing: 86 (was 92; zero for C-002).
 Sweep violations at WS-04 landing: 67 (was 72 at WS-03; zero for C-007).
@@ -68,6 +68,12 @@ pending for the newly filed open claim C-040).
 Sweep violations at WS-06 landing: 61 (was 66; zero for C-009; the 5
 C-009 violations cleared: claim-without-validation, 3x
 trace-without-validation TR-023/024/025, t3-without-refutation).
+Sweep violations at WS-08 landing: 55 (was 61; zero for C-011..C-015;
+the 6 WS-08 violations cleared: C-011 claim-without-validation +
+TR-030 trace-without-validation, C-012 claim-without-validation +
+TR-031/032/033 trace-without-validation; T1 claims C-013/014/015 carry
+validations+trace links by hygiene though the sweep does not require
+them; remaining 55 are all pending-workstream claims C-016..C-040).
 
 ## Session log
 
@@ -313,3 +319,58 @@ trace-without-validation TR-023/024/025, t3-without-refutation).
   absence of arbitrary substrings like "20" — the C-002 URI-alias hash can
   contain any hex pair; assert value-bearing patterns ("maxPoolSize=20",
   "maxPoolSize: 20") instead.
+
+- WS-08 landing (API contracts batch, C-011..C-015): five findings, one
+  pattern — the API returned success for input it never honored. (1)
+  C-011 retry safety: apiFetch retries only GETs, Idempotency-Key
+  carriers, and the per-item-keyed bulk write; unkeyed mutations fail
+  fast on 5xx/429 ("MemongoClient retry safety (C-011)" battery pins
+  both directions). Chose client-side keyed-retry restriction over
+  server-side natural idempotency per route (out of scope; the P1.3
+  per-item UUIDv4 generator already provides the mechanism). (2) C-012
+  strict validation: search-detailed's nested objects (searchMode,
+  sourcePreference, timeRange, four scope schemas, .strict()
+  searchConfigSchema mirroring the engine's SearchConfig field-for-field)
+  now 400 naming the field before any bridge call; context-route
+  timeRange casts closed (unknown preset, preset-less {}); strictness
+  parity with kbFilterSchema (the P2.8 gate) across the family. (3)
+  C-013 mode single-sourcing: CONTEXT_BUNDLE_MODE_VALUES in @memongo/lib
+  (exactly full/wake-up) is canonical; API zod enum gate 400s out-of-
+  enum modes (previously silently swallowed into the default full
+  bundle), client types mode as ContextBundleModeValue | undefined with
+  expectTypeOf compile-time equality enforced by the workspace
+  check-types, MCP schema enum reads the lib set (conformance test
+  asserts set equality against the registered JSON schema). (4) C-014
+  version skew: server reads x-memongo-client-version, warns once per
+  client/server pair (deduped), never on match, ignores absurdly long
+  values (log-spam bound); client header assertion test pins
+  MEMONGO_CLIENT_VERSION on every request. Chose read-and-warn over
+  removing the header. (5) C-015 chain-trace collection:
+  CHAIN_TRACE_COLLECTION_VALUES (the five traversable collections that
+  key COLLECTION_ID_FIELDS in the engine) is canonical in lib; the API
+  400s plausible-but-wrong collections (previously fabricated
+  chainComplete:true), the tools enum mirrors lib (not a hand copy),
+  MCP rejects with a tool error naming the set. Suite state: lib 166
+  (was 158; +8 contract enum battery), client 47 (was 45), tools 50
+  (was 48), api 264 (was 246; +8 validation 400s, +6 chain-trace, +4
+  version-skew), mcp 185 (was 175; +3 mode battery, +7 chain battery),
+  engine 2078 (unchanged count; reasoning-chain map now derives from
+  the lib enum), fresh uncached check-types 15/15, workspace lint at
+  the pre-existing HEAD baseline (no new violations; noExplicitAny
+  cleared via typed ToolSchema/SchemaProperty aliases and
+  as-unknown-as-MemongoClient casts). Artifacts: V-065..V-075 (one per
+  trace construct, triple linkage), C-011..C-015 validations filled,
+  TR-030..TR-040 patched, ADR-0009 + book.yaml entry + manifest_digest
+  recomputed (16c42ab9...), sweep-ws08.json 55 violations, zero for
+  C-011..C-015. Landing corrections: C-013 construct filing error
+  caught at landing — the claim listed v1-search-routes.ts but EL-006
+  names the context-bundle mode gate at v1-context-routes.ts:139; fixed
+  in claims.yaml + trace-matrix.yaml TR-034. Methodology lessons:
+  (1) Array.isArray does not narrow readonly string[] (HeadersInit
+  values), so header-serialization used typeof === "string" + spread-
+  join instead; (2) the sweep only enforces validations/trace links for
+  T2/T3 — T1 claims (C-013/014/015) got full triple linkage anyway
+  because the construct-trace-validation pattern is the honest record
+  regardless of enforcement tier; (3) python3 heredoc line-patching of
+  trace-matrix.yaml verified by per-entry field counts (4 fields x 11
+  entries) beats 11 sequential Edits.
