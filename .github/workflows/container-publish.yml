@@ -1,0 +1,76 @@
+name: Publish Container
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  publish:
+    name: Build & publish image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.2.5
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck (monorepo)
+        run: bun run check-types
+
+      # Same gate discipline as package publishing: the image never ships
+      # from a run that did not execute the full suite.
+      - name: Test
+        run: bun run test
+
+      - name: Verify tests ran (skip-green guard)
+        run: >
+          bun scripts/ci/verify-tests-ran.mjs
+          --expect apps/api/test-results/junit.xml
+          --expect apps/mcp/test-results/junit.xml
+          --expect packages/client/test-results/junit.xml
+          --expect packages/lib/test-results/junit.xml
+          --expect packages/memory-bridge/test-results/junit.xml
+          --expect packages/memory-engine/test-results/junit.xml
+          --expect packages/pi-extension/test-results/junit.xml
+          --expect packages/tools/test-results/junit.xml
+          --expect scripts/test-results/junit.xml
+          --require-suite src/contract-conformance.test.ts
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/romiluz13/memongo
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=ref,event=branch
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

@@ -1,0 +1,24 @@
+# Container build context: only what the API image needs.
+node_modules
+**/node_modules
+**/dist
+**/coverage
+**/test-results
+.git
+.ddd
+.factory
+.github
+docs
+droid-wiki
+benchmarks
+tmp
+docker
+# Web console is not part of the API image (manifest stays for the lockfile).
+apps/web/app
+apps/web/public
+apps/web/e2e
+apps/web/out
+apps/web/.next
+# Tests are inert at runtime.
+**/*.test.ts
+**/*.test.tsx
