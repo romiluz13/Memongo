@@ -1,0 +1,49 @@
+$ turbo run check-types
+• turbo 2.10.10
+
+   • Packages in scope: @memongo/api, @memongo/client, @memongo/docs, @memongo/lib, @memongo/mcp, @memongo/memory, @memongo/memory-bridge, @memongo/memory-engine, @memongo/pi-extension, @memongo/scripts, @memongo/tools, @memongo/web
+   • Running check-types in 12 packages
+   • Remote caching disabled
+
+@memongo/client:build: cache hit, replaying logs e90b6f515fed839c
+@memongo/client:check-types: cache hit, replaying logs ba10194106e5a523
+@memongo/lib:check-types: cache hit, replaying logs ed26342593d68ef3
+@memongo/lib:build: cache hit, replaying logs 66257a4c9e6c5438
+@memongo/client:build: $ bun run clean && node ../../node_modules/typescript/bin/tsc -p tsconfig.json
+@memongo/client:build: $ node -e "require('node:fs').rmSync('dist', { recursive: true, force: true })"
+@memongo/client:check-types: $ node ../../node_modules/typescript/bin/tsc --noEmit -p tsconfig.json
+@memongo/lib:build: $ bun run clean && node ../../node_modules/typescript/bin/tsc -p tsconfig.json
+@memongo/lib:build: $ node -e "require('node:fs').rmSync('dist', { recursive: true, force: true })"
+@memongo/lib:check-types: $ node ../../node_modules/typescript/bin/tsc --noEmit -p tsconfig.json
+@memongo/web:check-types: cache miss, executing 43ce18fb98af599c
+@memongo/memory-engine:build: cache miss, executing 47d27b48a1cb0d24
+@memongo/memory-engine:check-types: cache miss, executing b2f94d1602d607fe
+@memongo/mcp:check-types: cache hit, replaying logs 4b92f013d4a3847b
+@memongo/mcp:check-types: $ node ../../node_modules/typescript/bin/tsc --noEmit -p tsconfig.json
+@memongo/tools:build: cache hit, replaying logs eb930bc100d4e0f0
+@memongo/tools:check-types: cache hit, replaying logs 7311ad71f0b06344
+@memongo/tools:build: $ bun run clean && node ../../node_modules/typescript/bin/tsc -p tsconfig.json
+@memongo/tools:build: $ node -e "require('node:fs').rmSync('dist', { recursive: true, force: true })"
+@memongo/tools:check-types: $ node ../../node_modules/typescript/bin/tsc --noEmit -p tsconfig.json
+@memongo/pi-extension:check-types: cache miss, executing 565b7d3facaa35d9
+@memongo/web:check-types: $ node ../../node_modules/next/dist/bin/next typegen && node ../../node_modules/typescript/bin/tsc --noEmit -p tsconfig.json
+@memongo/memory-engine:build: $ bun run clean && node ../../node_modules/typescript/bin/tsc -p tsconfig.json
+@memongo/memory-engine:check-types: $ node ../../node_modules/typescript/bin/tsc --noEmit -p tsconfig.json
+@memongo/pi-extension:check-types: $ node ../../node_modules/typescript/bin/tsc --noEmit -p tsconfig.json
+@memongo/memory-engine:build: $ node -e "require('node:fs').rmSync('dist', { recursive: true, force: true })"
+@memongo/web:check-types: Generating route types...
+@memongo/web:check-types: ✓ Route types generated successfully
+@memongo/memory-bridge:build: cache miss, executing 1274f49e783df51f
+@memongo/memory-bridge:check-types: cache miss, executing 73d829ce87fdb6f7
+@memongo/memory-bridge:build: $ bun run clean && node ../../node_modules/typescript/bin/tsc -p tsconfig.json
+@memongo/memory-bridge:check-types: $ node ../../node_modules/typescript/bin/tsc --noEmit -p tsconfig.json
+@memongo/memory-bridge:build: $ node -e "require('node:fs').rmSync('dist', { recursive: true, force: true })"
+@memongo/api:check-types: cache miss, executing 3107fcc802621816
+@memongo/memory:check-types: cache miss, executing b6222804ae85277c
+@memongo/api:check-types: $ node ../../node_modules/typescript/bin/tsc --noEmit -p tsconfig.json
+@memongo/memory:check-types: $ node ../../node_modules/typescript/bin/tsc --noEmit -p tsconfig.json
+
+ Tasks:    15 successful, 15 total
+Cached:    7 cached, 15 total
+  Time:    7.819s 
+

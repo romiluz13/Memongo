@@ -200,30 +200,30 @@ traces:
     change_id: WS-05
     claim_id: C-008
     construct_id: "packages/pi-extension/extensions/lifecycle.ts#renderSessionContext"
-    validation_id: null
+    validation_id: V-055
     direction: forward
-    sweep_pass: false
-    checked_at: "2026-09-02T13:41:40.044Z"
+    sweep_pass: true
+    checked_at: "2026-09-04T07:10:00.000Z"
     notes: WS-05 Prompt-injection defense unification (planned change envelope)
   - id: TR-021
     schema_version: 0.1.0
     change_id: WS-05
     claim_id: C-008
     construct_id: "packages/tools/src/memory-context.ts#renderMemoryContextBlock"
-    validation_id: null
+    validation_id: V-056
     direction: forward
-    sweep_pass: false
-    checked_at: "2026-09-02T13:41:40.045Z"
+    sweep_pass: true
+    checked_at: "2026-09-04T07:10:00.000Z"
     notes: WS-05 Prompt-injection defense unification (planned change envelope)
   - id: TR-022
     schema_version: 0.1.0
     change_id: WS-05
     claim_id: C-008
     construct_id: apps/api/src/routes/v1-write-routes.ts
-    validation_id: null
+    validation_id: V-057
     direction: forward
-    sweep_pass: false
-    checked_at: "2026-09-02T13:41:40.045Z"
+    sweep_pass: true
+    checked_at: "2026-09-04T07:10:00.000Z"
     notes: WS-05 Prompt-injection defense unification (planned change envelope)
   - id: TR-023
     schema_version: 0.1.0
@@ -905,3 +905,43 @@ traces:
     sweep_pass: true
     checked_at: "2026-09-03T00:15:00.000Z"
     notes: WS-02 pattern-table integrity — identity-based branch dispatch (indexOf on const patterns, repaired after the round-3 escaped-slash prefix probe silently dropped both userinfo branches) and escaped-quote tolerance for assignments riding inside serialized meta; post-fix re-probe evidence over all 24 round-2/3 vectors
+  - id: TR-091
+    schema_version: 0.1.0
+    change_id: WS-05
+    claim_id: C-008
+    construct_id: packages/memory-engine/src/mongodb-structured-memory.ts
+    validation_id: V-058
+    direction: forward
+    sweep_pass: true
+    checked_at: "2026-09-04T07:20:00.000Z"
+    notes: WS-05 classifier gate — classifyInjection on joined key/value/context free text at the single engine seam, injection-likely entries routed to memory_quarantine, scope-keyed pending-row dedup ($exists:false absence semantics); 13-test injection battery
+  - id: TR-092
+    schema_version: 0.1.0
+    change_id: WS-05
+    claim_id: C-008
+    construct_id: packages/memory-engine/src/mongodb-self-edit.ts
+    validation_id: V-059
+    direction: forward
+    sweep_pass: true
+    checked_at: "2026-09-04T07:20:00.000Z"
+    notes: WS-05 self-edit disposition — transactional branch (round-1 F-002 fix) and non-transactional branch both surface the quarantine disposition; benign self-edit control
+  - id: TR-093
+    schema_version: 0.1.0
+    change_id: WS-05
+    claim_id: C-008
+    construct_id: apps/api/src/routes/v1-lifecycle-routes.ts
+    validation_id: V-060
+    direction: forward
+    sweep_pass: true
+    checked_at: "2026-09-04T07:20:00.000Z"
+    notes: WS-05 lifecycle/feedback 202 dispositions — MemoryQuarantinedWriteError translated to the hold disposition on /v1/lifecycle/update and /v1/memory/feedback (round-1 F-003 fix for the feedback 500); OpenAPI drift guard keeps the 202 documented
+  - id: TR-094
+    schema_version: 0.1.0
+    change_id: WS-05
+    claim_id: C-008
+    construct_id: packages/client/src/client.ts
+    validation_id: V-061
+    direction: forward
+    sweep_pass: true
+    checked_at: "2026-09-04T07:20:00.000Z"
+    notes: WS-05 client contract — updateLifecycleItem/applyMemoryFeedback widened with the MemongoQuarantineDisposition intersection (compile-time contract, fresh uncached check-types 15/15)

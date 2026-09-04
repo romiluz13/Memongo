@@ -442,6 +442,13 @@ export function registerWriteRoutes(v1: Hono<V1RouterEnv>): void {
 					...(entryExpiresAt ? { expiresAt: entryExpiresAt } : {}),
 				} as StructuredMemoryEntry,
 			})
+			// C-008: an injection-likely verdict is not an error — the write
+			// was accepted but routed to memory_quarantine pending human
+			// review. 202 Accepted distinguishes "held for review" from a
+			// canonical 200 write; the disposition travels in the body.
+			if (out.quarantined) {
+				return c.json(out, 202)
+			}
 			return c.json(out)
 		} catch (err) {
 			return internalError(c, err, "WRITE_STRUCTURED_FAILED")

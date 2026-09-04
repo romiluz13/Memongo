@@ -382,9 +382,14 @@ export interface MongoDBManagerHost {
 		episodeId: string
 		expandEvents: boolean
 	}): Promise<ManagerReadResult>
-	writeStructuredMemory(
-		entry: StructuredMemoryEntry,
-	): Promise<{ upserted: boolean; id: string }>
+	writeStructuredMemory(entry: StructuredMemoryEntry): Promise<{
+		upserted: boolean
+		id: string
+		/** C-008: true when the entry was quarantined instead of written. */
+		quarantined?: boolean
+		/** C-008: matched INJECTION_PATTERNS ids, present iff quarantined. */
+		matchedPatterns?: string[]
+	}>
 	writeProcedure(
 		entry: ProcedureEntry,
 	): Promise<{ upserted: boolean; id: string }>
@@ -421,7 +426,13 @@ export interface MongoDBManagerHost {
 		block: MemorySelfEditBlock
 		action: MemorySelfEditAction
 		content: string
-	}): Promise<{ upserted: boolean; id: string }>
+	}): Promise<{
+		upserted: boolean
+		id: string
+		/** C-008: true when the merged content was routed to memory_quarantine. */
+		quarantined?: boolean
+		matchedPatterns?: string[]
+	}>
 	synthesizeProfile(params?: {
 		scope?: MemoryScope
 		scopeRef?: string

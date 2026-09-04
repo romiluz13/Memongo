@@ -152,6 +152,10 @@ export const maintenancePaths = {
 			},
 			responses: {
 				"200": { description: "Self-edit result" },
+				"202": {
+					description:
+						"Accepted but quarantined (C-008): a user-block edit whose merged content tripped the injection classifier is held in memory_quarantine pending review; body carries quarantined=true, id (quarantine id) and matchedPatterns",
+				},
 				"422": {
 					description:
 						"Self-edit rejected by the injection screen (SELF_EDIT_REJECTED)",

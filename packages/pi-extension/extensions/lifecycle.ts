@@ -19,7 +19,10 @@
  * Config (env):
  *   MEMONGO_PI_AUTO_CAPTURE=0      — disable turn-end capture (default ON)
  *   MEMONGO_PI_SESSION_INJECTION=0 — disable session-start injection (default ON)
- *   MEMONGO_PI_MEMORY_SCOPE        — Memongo scope for both (default "global")
+ *   MEMONGO_PI_MEMORY_SCOPE        — Memongo scope for both (default "agent";
+ *                                   "global" is available but no longer the
+ *                                   default — a global default let one project
+ *                                   poison every project's recall, C-008)
  */
 
 import type {
@@ -33,6 +36,7 @@ import type {
 	MemongoScope,
 	MemongoSearchDetailedResponse,
 } from "@memongo/client"
+import { renderMemoryContextBlock } from "@memongo/tools/memory-context"
 import { sanitizeDiagnostic } from "./diagnostics.js"
 
 const SCOPES: readonly MemongoScope[] = [
@@ -84,12 +88,17 @@ export function resolveLifecycleConfig(
 	env: NodeJS.ProcessEnv = process.env,
 ): MemongoLifecycleConfig {
 	const rawScope = env.MEMONGO_PI_MEMORY_SCOPE
+	// C-008: the default scope is "agent", not "global" — a global default
+	// let one project's writes surface in every project's recall. Agent scope
+	// still spans projects for the same agent (the extension's cross-project
+	// value prop) while isolating other agents/surfaces; "global" remains an
+	// explicit opt-in.
 	return {
 		captureEnabled: parseBoolEnv(env.MEMONGO_PI_AUTO_CAPTURE, true),
 		injectionEnabled: parseBoolEnv(env.MEMONGO_PI_SESSION_INJECTION, true),
 		scope: (SCOPES as readonly string[]).includes(rawScope ?? "")
 			? (rawScope as MemongoScope)
-			: "global",
+			: "agent",
 	}
 }
 
@@ -152,6 +161,9 @@ type SearchResults = MemongoSearchDetailedResponse["results"]
 /**
  * Render the injected session context. Returns null when there is nothing
  * worth injecting (empty profile AND no memories) so we never inject noise.
+ * C-008: the rendered content is wrapped in the #29 quarantine envelope
+ * (untrusted-data preamble + forgery-proof delimiters) before it reaches
+ * the session context.
  */
 export function renderSessionContext(
 	profile: MemongoProfileResponse | null,
@@ -188,11 +200,16 @@ export function renderSessionContext(
 		sections.push(`Recent memories:\n${lines.join("\n")}`)
 	}
 	if (sections.length === 0) return null
-	return [
+	const rendered = [
 		"## Memongo long-term memory (auto-injected at session start)",
 		"",
 		...sections,
 	].join("\n")
+	// C-008: profile entries and stored memories are content other processes
+	// wrote — UNTRUSTED input. Wrap the whole block in the same quarantine
+	// envelope the Vercel/OpenAI SDK tools use (#29), so stored text that
+	// looks like instructions is read as reference data, not obeyed.
+	return renderMemoryContextBlock(rendered)
 }
 
 interface BufferedCapture {

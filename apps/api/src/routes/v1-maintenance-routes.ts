@@ -124,6 +124,12 @@ export function registerMaintenanceRoutes(v1: Hono<V1RouterEnv>): void {
 				action: action as "append" | "replace" | "prepend",
 				content,
 			})
+			// C-008: a `user`-block edit whose merged content tripped the
+			// injection classifier is held in memory_quarantine for review —
+			// 202 Accepted (held), not a clean 200 self-edit.
+			if (result.quarantined) {
+				return c.json(result, 202)
+			}
 			return c.json(result)
 		} catch (err) {
 			const message = err instanceof Error ? err.message : String(err)

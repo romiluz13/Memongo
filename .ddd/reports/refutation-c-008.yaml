@@ -1,0 +1,239 @@
+# Independent refutation report for T3 claim C-008 (WS-05) — ROUNDS 1-3
+# ("The prompt-injection defense MUST close the identified injection-surface
+# gaps: the untrusted-memory quarantine envelope MUST be applied to
+# pi-extension session context and search injection points, classifyInjection
+# MUST run on write-structured entries, and the pi default memory scope MUST
+# stop being global." — narrowed in round 2 from "every injection surface";
+# see fix_applied_between_rounds[2].)
+schema_version: 0.1.0
+claim_id: C-008
+round: 3
+verdict: sustained
+outcome: sustained
+independence_verified: true
+refuter_id: "factory-droid worker subagents, three independent C-008 refuters (none authored the implementation or the between-round fixes)"
+implementer_id: "factory-droid primary agent, WS-05 implementer"
+refuted_rounds: 2
+sustained_rounds: 1
+attempt_log_dir: .ddd/reports/runs/
+
+provenance_note: >
+  The round-1 worker output predates a context compaction; its four findings
+  and the applied fixes are recorded here from the preserved session record.
+  Every round-1 fix was independently re-verified with file:line anchors by
+  the fresh round-2 refuter (see round_2.round1_resolution below), so no
+  finding or resolution rests solely on the compacted text. Rounds 2 and 3
+  reports are reproduced verbatim in substance.
+
+round_1:
+  outcome: partially_refuted
+  refuter_context: "worker-subagent-independent-round1"
+  findings:
+    - id: F-001
+      type: citation-entailment-gap
+      severity: high
+      description: >
+        C-008's sources cited only EL-010#recommendations, which entails the
+        session-envelope obligation but not the search-injection,
+        write-structured classifier, or non-global-scope obligations; the
+        claim as sourced was unevidenced for three of its four clauses.
+      resolution: >
+        Sources repaired to cite EL-005#S-3 (envelope on both pi surfaces +
+        non-global default scope), EL-005#S-4 (classifier on write-structured),
+        and EL-010#recommendations (corroborating). Verified resolved by the
+        round-2 refuter (.ddd/claims.yaml C-008 sources).
+    - id: F-002
+      type: error-path-disposition-loss
+      severity: medium
+      description: >
+        The transactional branch of selfEditBlock
+        (packages/memory-engine/src/mongodb-self-edit.ts) discarded the
+        quarantine disposition and returned a plain success shape, so a
+        quarantined self-edit inside a transaction surfaced as if applied.
+      resolution: >
+        Transactional branch now returns the same disposition
+        (id=quarantine id, quarantined, matchedPatterns) as the
+        non-transactional branch; regression pair added (transactional
+        quarantined + transactional benign) in
+        mongodb-structured-memory-injection.test.ts.
+    - id: F-003
+      type: error-path-500-on-held-write
+      severity: medium
+      description: >
+        /v1/memory/feedback returned 500 (MEMORY_FEEDBACK_FAILED) when a
+        signal="correct" patch tripped the classifier, instead of the 202
+        hold disposition used by the sibling write routes.
+      resolution: >
+        MemoryQuarantinedWriteError catch added in
+        apps/api/src/routes/v1-lifecycle-routes.ts returning 202
+        {quarantined, quarantineId, matchedPatterns}; 202 documented in
+        openapi-paths-lifecycle.ts; route test added in apps/api/src/app.test.ts.
+    - id: F-004
+      type: response-contract-gap
+      severity: low
+      description: >
+        MemongoSelfEditResponse (client) and the selfEditBlock interfaces
+        (engine types.ts, mongodb-manager-host.ts, bridge) promised only the
+        non-quarantined shape, so typed callers could not see the 202
+        disposition the API now emits.
+      resolution: >
+        All four surfaces widened with optional quarantined/matchedPatterns;
+        a local `let result` union in the transactional self-edit branch
+        widened to match.
+
+round_2:
+  outcome: partially_refuted
+  refuter_context: "worker-subagent-independent-round2"
+  round1_resolution:
+    F-001: resolved
+    F-002: resolved
+    F-003: resolved
+    F-004: resolved
+  findings:
+    - id: uncovered-injection-surfaces
+      severity: high
+      description: >
+        The claim preamble said "every injection surface," but the AI-SDK
+        tools return raw stored search/KB/profile/context-bundle payloads
+        (packages/tools/src/index.ts createMemongoTools) and the MCP server
+        serializes raw tool results (apps/mcp/src/server.ts), while the
+        enumerated obligations only cover the pi surfaces. The envelope
+        obligation was PARTIALLY satisfied relative to the preamble wording;
+        the classifier and default-scope obligations were satisfied.
+      resolution: >
+        Adjudicated as a claim-scope defect, not an implementation defect:
+        EL-005#S-3 obligates exactly the pi surfaces (it cites the tools
+        renderer as the porting SOURCE, the defender), so the preamble
+        overstated the evidence. C-008's statement narrowed to "the
+        identified injection-surface gaps" with a scope note in the
+        rationale; the tools/MCP retrieval-envelope gap is tracked as the
+        new claim C-040 (behavioral, high, T2 per deriveTier) rather than
+        silently dropped.
+    - id: quarantine-dedup-scope-conflation
+      severity: medium
+      description: >
+        The pending-row dedup in writeStructuredMemory keyed only on
+        {agentId, content, status}, so two authorized scopes under one agent
+        could reuse one scope's quarantine id and row metadata (provenance
+        conflation, not a classification bypass — the status predicate
+        already prevented reuse of reviewed rows).
+      resolution: >
+        Dedup filter now keys per (agentId, content, status, scope, scopeRef):
+        exact match when the entry carries scope/scopeRef, $exists:false when
+        it does not (consistent with the insert, which persists scope fields
+        only when present; $exists:false is exact in both production MongoDB
+        and the stateful fake's strict-comparison filter). Regression test
+        "does not conflate scopes in quarantine dedup" added with
+        scoped/other-scopeRef/same-scope/scope-less combinations.
+    - id: client-response-contract
+      severity: medium
+      description: >
+        Client updateLifecycleItem and applyMemoryFeedback promised only
+        MemongoLifecycleItem while the API can now answer 202 with a
+        quarantine disposition; apiFetch accepts every 2xx, so typed callers
+        received an undeclared shape and could treat a held patch as an
+        updated item.
+      resolution: >
+        MemongoQuarantineDisposition (optional quarantined/quarantineId/
+        matchedPatterns) added to packages/client/src/types.ts and
+        intersected into both method return types; server 202 bodies and
+        apiFetch pass-through verified to match.
+    - id: assurance-validation-gap
+      severity: medium
+      description: >
+        C-008 still declared validations: [] with an incomplete construct
+        list while all requested tests passed honestly.
+      resolution: >
+        Constructs expanded to the principal changed set; V-055..V-058
+        recorded in .ddd/reports/validations.yaml anchored to the final-state
+        suite logs (engine 122/2073, tools 6/48, client 1/39, bridge 6/82,
+        pi 3/62, api 9/246 — all green, sha256-hashed).
+
+round_3:
+  outcome: sustained
+  refuter_context: "worker-subagent-independent-round3-focused"
+  round2_resolution:
+    uncovered-injection-surfaces: resolved
+    quarantine-dedup-scope-conflation: resolved
+    client-response-contract: resolved
+  findings: []
+  detail: >
+    All three round-2 fixes verified in code and by execution. The narrowed
+    statement is faithful to EL-005#S-3/S-4 (the enumerated obligations map
+    one-to-one to the evidence). Dedup filter semantics verified against
+    both production MongoDB and the stateful fake (strict deepEqual for
+    plain equality, $exists via hasPath): no scoped/unscoped combination can
+    cross-reuse a row. Client widening matches the actual 202 bodies and
+    apiFetch passes 202 through. Caller audit: no caller of
+    updateStructuredMemoryByHandle or writeStructuredMemory swallows
+    MemoryQuarantinedWriteError into a false success — manager facade and
+    bridge propagate, API routes convert to 202 dispositions, self-edit
+    surfaces the disposition in both branches, promoteQuarantined re-enters
+    with skip and rethrows with a compensating revert on failure, and the
+    one catch-all (background structured-promotion loop) only marks
+    structuredFailed. Suites run this round: engine injection 13/13,
+    pi-extension 62/62, api 246/246, client 39/39; repo check-types 15/15.
+    C-040 spot-checked accurate: packages/tools/src/index.ts:308-358 returns
+    raw payloads; apps/mcp/src/server.ts:321-323 serializes raw JSON.
+
+fix_applied_between_rounds:
+  - after_round: 1
+    fixes: [F-001 sources, F-002 transactional disposition, F-003 feedback 202, F-004 type widening]
+  - after_round: 2
+    fixes: >
+      Claim narrowing (statement + rationale scope note) with C-040 filed for
+      the tools/MCP retrieval-envelope gap; scope-keyed quarantine dedup with
+      $exists:false absence semantics plus regression test;
+      MemongoQuarantineDisposition client contract widening; construct list
+      expansion and V-055..V-058 validation records (landed after round 3
+      per the deferred-assurance adjudication the round-3 refuter confirmed).
+
+conclusion: >
+  Verdict: sustained (round 3, focused). Three adversarial rounds: round 1
+  partially refuted (citation entailment gap, transactional disposition
+  loss, feedback 500, response-contract gap — all fixed), round 2 partially
+  refuted (claim-scope overstatement, dedup scope conflation, client
+  response contract, validation gap — all fixed or adjudicated with the
+  gap routed to C-040), round 3 sustained with zero findings. The claim as
+  narrowed states exactly what EL-005#S-3/S-4 entail, every enumerated
+  obligation is implemented and pinned by tests that exercise the real
+  renderer, writer, manager, self-edit, and route paths, and no caller can
+  turn a held write into a false success. The known uncovered surfaces
+  (AI-SDK tools and MCP retrieval payloads) are explicitly outside this
+  claim and tracked as C-040.
+
+tree_hygiene: >
+  Refuters ran read-only (one round-1 vacuity-style spot-check used the
+  stateful fake in place, no source mutations persisted; rounds 2 and 3 ran
+  no mutations at all). No git-mutating command was run during any round.
+  All changes between rounds were made by the implementer only. Final-state
+  suite logs captured under .ddd/reports/runs/ws05-*-suite.log and hashed;
+  the only new artifacts are this report, the validation records, and the
+  landing artifacts (ADR-0007, book.yaml entry, trace-matrix patches,
+  sweep-ws05.json, landing-progress update).
+
+non_blocking_observations:
+  - id: obs-1-c-040-open
+    text: >
+      C-040 (AI-SDK tools / MCP raw retrieval payloads: memongo_search,
+      search_kb, profile, build_context_bundle, recall_conversation, and
+      MCP's raw JSON.stringify serialization) is open in the claim ledger
+      with validations: [] — it adds one pending-claim violation to the
+      sweep until its workstream lands, which is the honest state: the
+      surfaces are real model-visible injection surfaces outside C-008's
+      evidenced scope.
+  - id: obs-2-pre-existing-lint-debt
+    text: >
+      packages/memory-engine/src/mongodb-manager-host.ts carries 11
+      pre-existing noUnusedImports warnings (value imports in an
+      interface-only module, present verbatim at HEAD before this
+      workstream; verified by checking out the HEAD copy). Out of scope;
+      root `bun run lint` was already red on these at HEAD.
+  - id: obs-3-quarantine-row-provenance
+    text: >
+      The scope-keyed dedup means identical poisoned content written under
+      scope A and scope B creates two pending rows with the same content but
+      different scope metadata — deliberate (a review decision on one scope
+      must not silently cover another), at the cost of duplicate review-queue
+      entries for cross-scope repeated poison. Acceptable: reviewers see
+      provenance per scope.

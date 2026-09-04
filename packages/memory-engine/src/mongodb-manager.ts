@@ -1370,7 +1370,14 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 
 	async writeStructuredMemory(
 		entry: StructuredMemoryEntry,
-	): Promise<{ upserted: boolean; id: string }> {
+	): Promise<{
+		upserted: boolean
+		id: string
+		/** C-008: true when the entry was quarantined instead of written. */
+		quarantined?: boolean
+		/** C-008: matched INJECTION_PATTERNS ids, present iff quarantined. */
+		matchedPatterns?: string[]
+	}> {
 		return lifecycleOpsOf(this).writeStructuredMemory(entry)
 	}
 
@@ -1435,7 +1442,13 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		block: MemorySelfEditBlock
 		action: MemorySelfEditAction
 		content: string
-	}): Promise<{ upserted: boolean; id: string }> {
+	}): Promise<{
+		upserted: boolean
+		id: string
+		/** C-008: true when the merged content was quarantined (user block). */
+		quarantined?: boolean
+		matchedPatterns?: string[]
+	}> {
 		return lifecycleOpsOf(this).selfEditBlock(params)
 	}
 

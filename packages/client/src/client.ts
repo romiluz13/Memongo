@@ -50,6 +50,7 @@ import type {
 	MemongoTraceChainResponse,
 	MemongoSelfEditInput,
 	MemongoSelfEditResponse,
+	MemongoQuarantineDisposition,
 	MemongoWriteEventsResponse,
 } from "./types.js"
 import { MEMONGO_CLIENT_VERSION } from "./version.js"
@@ -787,7 +788,7 @@ export class MemongoClient {
 
 	async updateLifecycleItem(
 		input: MemongoLifecycleUpdateInput,
-	): Promise<MemongoLifecycleItem> {
+	): Promise<MemongoLifecycleItem & MemongoQuarantineDisposition> {
 		return apiPost(this._opts, "/v1/lifecycle/update", {
 			handle: input.handle,
 			patch: input.patch,
@@ -825,7 +826,7 @@ export class MemongoClient {
 
 	async applyMemoryFeedback(
 		input: MemongoMemoryFeedbackInput,
-	): Promise<MemongoLifecycleItem> {
+	): Promise<MemongoLifecycleItem & MemongoQuarantineDisposition> {
 		return apiPost(this._opts, "/v1/memory/feedback", {
 			handle: input.handle,
 			signal: input.signal,
@@ -941,7 +942,14 @@ export class MemongoClient {
 	async writeStructured(input: {
 		entry: Record<string, unknown>
 		agentId?: string
-	}): Promise<{ upserted: boolean; id: string }> {
+	}): Promise<{
+		upserted: boolean
+		id: string
+		/** C-008: true when the write was quarantined pending human review. */
+		quarantined?: boolean
+		/** C-008: matched injection-pattern ids, present iff quarantined. */
+		matchedPatterns?: string[]
+	}> {
 		return apiPost(this._opts, "/v1/write-structured", {
 			entry: input.entry,
 			agentId: input.agentId,

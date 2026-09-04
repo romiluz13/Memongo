@@ -290,3 +290,73 @@ entries:
     run_at: "2026-09-03T17:00:35.000Z"
     evidence_hash: sha256:bc9ea475ab4de8c4f8733d4bed56b693cf7c79cb2727dd9411052262c4c4f446
     notes: "Sync-pathway and dead-stack-removal evidence (F9) from the final-state engine suite (this log, 121 files / 2060 tests) and the round-1/round-2 refutation batteries: the sync pipeline's model default derives from INDEX_AUTOEMBED_MODEL (mongodb-sync.ts:449, the former bare ?? fallback removed) and every embedding consumer the sync path relies on survived the provider-stack deletion — embedding-inputs/embedding-input-limits (byte estimation via internal.ts), embedding-validation, and mongodb-embedding-retry are intact with live importers while the 19-file dead family (embeddings, embeddings-{voyage,gemini,ollama,openai,mistral,remote-client,remote-fetch,remote-provider}, embedding-vectors, embeddings-model-normalize, embeddings-debug plus their 7 test files, 3192 lines: 1312 production + 1880 test) is gone with zero residual references anywhere in the repo (code, tsconfig, vitest, package.json, biome, turbo, apps) — repo check-types 15/15 and build 11/11 green, and the full package matrix green (memory-bridge 82, client 39, tools 48, lib 158, pi-extension 55, api 240, mcp 175, web typecheck). Round-2 vacuity mutation (c) (re-planting the bare ?? fallback in mongodb-sync.ts) is caught by the pin test naming the file, proving the derivation is enforced, not incidental."
+
+  - id: V-055
+    claim_id: C-008
+    construct: "packages/pi-extension/extensions/lifecycle.ts#renderSessionContext"
+    method: test
+    target: .ddd/reports/runs/ws05-pi-extension-suite.log
+    result: pass
+    run_at: "2026-09-04T07:10:00.000Z"
+    evidence_hash: sha256:59cbfff1a5a2257f3696e73b61fd4d6e3771ada0a4d4a7aebf1d773438855c4f
+    notes: "Pi-surface envelope evidence from the final-state WS-05 pi-extension suite (this log, 3 files / 62 tests, exit 0): lifecycle.test.ts pins renderSessionContext wrapping the rendered profile+memory block in renderMemoryContextBlock (the #29 forgery-proof quarantine envelope, imported from the new @memongo/tools ./memory-context subpath export) so pi session context is never presented as trusted system text, and pins the default memory scope resolving to agent (not global) with lifecycle injection, capture, search, and save all consuming that default; index.test.ts pins memongo_search results enveloped the same way and memongo_save surfacing the quarantined disposition (id is the quarantine row, quarantined true, matchedPatterns present) instead of a bare success. Companion suites re-verify the shared renderer and its wiring: tools (ws05-tools-suite.log, sha256:c7436e7970a4e7d2a7edaa49dc9a83e016218eb1b83e427335259c9aba9de331, memory-context.test.ts #29 battery) and the engine gate (ws05-memory-engine-suite.log, sha256:d3d2f49e5010933b5f9b0c648c256940236247a039b933e76c020083b2169c6b). The PR CI run supersedes this local evidence once landed."
+
+  - id: V-056
+    claim_id: C-008
+    construct: "packages/tools/src/memory-context.ts#renderMemoryContextBlock"
+    method: test
+    target: .ddd/reports/runs/ws05-tools-suite.log
+    result: pass
+    run_at: "2026-09-04T07:10:00.000Z"
+    evidence_hash: sha256:c7436e7970a4e7d2a7edaa49dc9a83e016218eb1b83e427335259c9aba9de331
+    notes: "Shared-envelope evidence from the final-state WS-05 tools suite (this log, 6 files / 48 tests, exit 0): memory-context.test.ts (the #29 retrieval injection defense battery) pins renderMemoryContextBlock's provenance labeling on plain text, structured objects, and nested payloads — the single renderer now backing all three consumers (vercel adapter, openai adapter, and the pi extension via the packages/tools/package.json ./memory-context subpath export added this workstream). The vercel/openai adapters wrap their session-context render in the same block (unchanged, pre-existing), and the pi extension's envelope wiring through the subpath is pinned by the pi suite (ws05-pi-extension-suite.log, sha256:59cbfff1a5a2257f3696e73b61fd4d6e3771ada0a4d4a7aebf1d773438855c4f)."
+
+  - id: V-057
+    claim_id: C-008
+    construct: apps/api/src/routes/v1-write-routes.ts
+    method: test
+    target: .ddd/reports/runs/ws05-api-suite.log
+    result: pass
+    run_at: "2026-09-04T07:10:00.000Z"
+    evidence_hash: sha256:08d6e36dc2d63c8cca5e702aae8ad766049483d5f08038e7a6468efa0281ab8a
+    notes: "API disposition evidence from the 'C-008 quarantine dispositions on write routes' describe in the final-state WS-05 api suite (this log, 9 files / 246 tests, exit 0): /v1/write-structured returns 202 {quarantined, id=quarantineId, matchedPatterns} when the classifier trips and 200 with the item when it does not; /v1/memory/self-edit returns the 202 disposition (and 422 for an invalid block); /v1/lifecycle/update and /v1/memory/feedback translate MemoryQuarantinedWriteError into the same 202 disposition — the round-1 F-003 fix — never a 500 and never a 200-without-item false success. Each 202 is documented in the OpenAPI path files (openapi-paths-write.ts, openapi-paths-maintenance.ts, openapi-paths-lifecycle.ts) and the drift guard in the suite keeps spec and routes aligned. Client-side contract parity is pinned by the client suite (ws05-client-suite.log, sha256:0ff954e20e29e33a50a628b3e53fdb9454161f1bcd2b1ca6ecb8657fe9926d16): MemongoSelfEditResponse and the new MemongoQuarantineDisposition intersection on updateLifecycleItem/applyMemoryFeedback carry the disposition fields, and apiFetch passes 202 bodies through (any res.ok)."
+
+  - id: V-058
+    claim_id: C-008
+    construct: packages/memory-engine/src/mongodb-structured-memory.ts
+    method: test
+    target: .ddd/reports/runs/ws05-memory-engine-suite.log
+    result: pass
+    run_at: "2026-09-04T07:10:00.000Z"
+    evidence_hash: sha256:d3d2f49e5010933b5f9b0c648c256940236247a039b933e76c020083b2169c6b
+    notes: "Classifier-gate evidence from the mongodb-structured-memory-injection.test.ts battery (13 tests) in the final-state WS-05 engine suite (this log, 122 files / 2073 tests, exit 0): writeStructuredMemory runs the frozen tier-1 classifyInjection on the joined key/value/context free text (injection-shaped values, keys, and contexts each gated) and routes injection-likely entries to memory_quarantine (pending-review) with canonical structured_mem untouched; safe entries and empty-content entries still write canonically (no false-positive gating); the pending-row dedup is keyed per (agentId, content, scope, scopeRef) — exact scope/scopeRef match when present, $exists:false when absent, so two authorized scopes under one agent never share a quarantine row (round-2 fix, regression-tested with scoped/other-scopeRef/same-scope/scope-less combinations) while identical flagged content within one scope still reuses the row; promoteQuarantined re-enters with injectionClassification 'skip' (a completed review is the only overrule, and it does not loop back into quarantine); updateStructuredMemoryByHandle throws MemoryQuarantinedWriteError on quarantined content; selfEditBlock surfaces the quarantine disposition in both the transactional and non-transactional branches (the round-1 F-002 regression pair). The MongoDBMemoryManager facade wiring is pinned by the manager facade test in the same battery. Independent refutation sustained across three rounds (refutation-c-008.yaml)."
+
+  - id: V-059
+    claim_id: C-008
+    construct: packages/memory-engine/src/mongodb-self-edit.ts
+    method: test
+    target: .ddd/reports/runs/ws05-memory-engine-suite.log
+    result: pass
+    run_at: "2026-09-04T07:10:00.000Z"
+    evidence_hash: sha256:d3d2f49e5010933b5f9b0c648c256940236247a039b933e76c020083b2169c6b
+    notes: "Self-edit disposition evidence from the same final-state WS-05 engine suite as V-058 (this log, 122 files / 2073 tests, exit 0): selfEditBlock surfaces the quarantine disposition (id = quarantine row, quarantined, matchedPatterns) in BOTH branches — the round-1 F-002 regression pair covers the transactional branch (previously discarded the disposition and returned a plain success shape) and the non-transactional branch, plus a benign self-edit control that still applies normally. The tests exercise the real write path against the stateful fake, including the engine-internal updateStructuredMemoryByHandle throw on quarantined content that self-edit consumes."
+
+  - id: V-060
+    claim_id: C-008
+    construct: apps/api/src/routes/v1-lifecycle-routes.ts
+    method: test
+    target: .ddd/reports/runs/ws05-api-suite.log
+    result: pass
+    run_at: "2026-09-04T07:10:00.000Z"
+    evidence_hash: sha256:08d6e36dc2d63c8cca5e702aae8ad766049483d5f08038e7a6468efa0281ab8a
+    notes: "Lifecycle-route disposition evidence from the same final-state WS-05 api suite as V-057 (this log, 9 files / 246 tests, exit 0): /v1/lifecycle/update and /v1/memory/feedback translate MemoryQuarantinedWriteError into the 202 hold disposition {quarantined, quarantineId, matchedPatterns} — the round-1 F-003 fix for the feedback route's former 500 on a legitimately held correct-patch — and the OpenAPI drift guard in apps/api/src/app.test.ts keeps the 202 documented in openapi-paths-lifecycle.ts aligned with the route behavior. Both routes are also covered by benign-path tests proving non-quarantined writes still return the item normally."
+
+  - id: V-061
+    claim_id: C-008
+    construct: packages/client/src/client.ts
+    method: type-check
+    target: .ddd/reports/runs/ws05-check-types.log
+    result: pass
+    run_at: "2026-09-04T07:16:00.000Z"
+    evidence_hash: sha256:4e72a856c6ddb56b0bcaeb6489c38d7f3069ca9e7307b6d294440179c15b975b
+    notes: "Client contract evidence from a fresh, uncached full-workspace type-check (this log, turbo check-types --force, 15/15 tasks successful, 0 cached, exit 0): the widened updateLifecycleItem and applyMemoryFeedback signatures (Promise<MemongoLifecycleItem & MemongoQuarantineDisposition>) and the MemongoSelfEditResponse quarantined/matchedPatterns fields in packages/client/src/types.ts compile against every consumer in the workspace — the disposition is a compile-time contract (fields optional, so normal 200 payloads type-check unchanged), which is why the method is type-check rather than a runtime test. The runtime half of the client surface (apiFetch passing 202 bodies through on any res.ok) is pinned by the api suite routes in V-057/V-060, and the client suite's runtime battery for the sibling C-004 quarantine review methods (list/promote/reject) is green in ws05-client-suite.log (sha256:0ff954e20e29e33a50a628b3e53fdb9454161f1bcd2b1ca6ecb8657fe9926d16, 39 tests)."

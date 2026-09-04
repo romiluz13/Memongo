@@ -342,6 +342,25 @@ export type MemongoSelfEditInput = {
 export type MemongoSelfEditResponse = {
 	upserted: boolean
 	id: string
+	/** C-008: true when the merged content was routed to memory_quarantine (202). */
+	quarantined?: boolean
+	matchedPatterns?: string[]
+}
+
+/**
+ * C-008: quarantine disposition carried on 202 responses. Lifecycle update
+ * and memory feedback hold a write for injection review instead of applying
+ * it; the server answers 202 with these fields instead of the updated item.
+ * All fields are optional so non-quarantined 200 payloads (the normal
+ * `MemongoLifecycleItem`) type-check unchanged.
+ */
+export type MemongoQuarantineDisposition = {
+	/** True when the write was held in memory_quarantine for review. */
+	quarantined?: boolean
+	/** Quarantine row id, present when quarantined. */
+	quarantineId?: string
+	/** INJECTION_PATTERNS ids that matched, present when quarantined. */
+	matchedPatterns?: string[]
 }
 
 export type MemongoExtractInput = {

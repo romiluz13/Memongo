@@ -280,7 +280,13 @@ export const writePaths = {
 					},
 				},
 			},
-			responses: { "200": { description: "Upsert result" } },
+			responses: {
+				"200": { description: "Upsert result" },
+				"202": {
+					description:
+						"Accepted but quarantined (C-008): injection-likely entry is held in memory_quarantine pending human review; body carries quarantined=true, id (quarantine id) and matchedPatterns",
+				},
+			},
 		},
 	},
 	"/v1/write-procedure": {

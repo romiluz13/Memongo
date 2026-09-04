@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto"
 import type {
 	ClientSession,
 	Collection,
@@ -14,11 +15,13 @@ import {
 } from "@memongo/lib"
 import { isDuplicateKeyError } from "./internal.js"
 import type { EmbeddingStatus } from "./mongodb-embedding-retry.js"
+import { classifyInjection } from "./mongodb-injection-classifier.js"
 import { recordMutation, type MutationMeta } from "./mongodb-mutations.js"
 import { invalidateQueryCache } from "./mongodb-query-cache.js"
 import { summarizeExplain } from "./mongodb-relevance.js"
 import type { DetectedCapabilities } from "./mongodb-schema.js"
 import {
+	memoryQuarantineCollection,
 	structuredMemCollection,
 	structuredMemRevisionsCollection,
 } from "./mongodb-schema.js"
@@ -107,6 +110,26 @@ export class MemoryLifecycleConflictError extends Error {
 		if (params.actualRevision !== undefined) {
 			this.actualRevision = params.actualRevision
 		}
+	}
+}
+
+/**
+ * C-008: a lifecycle patch's merged entry tripped the tier-1 injection
+ * classifier. The patch content was routed to memory_quarantine for review
+ * instead of being applied — callers must treat the patch as NOT applied
+ * (the canonical document is unchanged).
+ */
+export class MemoryQuarantinedWriteError extends Error {
+	readonly quarantineId: string
+	readonly matchedPatterns: string[]
+
+	constructor(quarantineId: string, matchedPatterns: string[]) {
+		super(
+			`write quarantined pending review: content matched injection patterns [${matchedPatterns.join(", ")}]`,
+		)
+		this.name = "MemoryQuarantinedWriteError"
+		this.quarantineId = quarantineId
+		this.matchedPatterns = matchedPatterns
 	}
 }
 
@@ -825,6 +848,18 @@ function structuredEntryFromDoc(
 // Write (upsert)
 // ---------------------------------------------------------------------------
 
+/**
+ * C-008: the entry free text the tier-1 injection classifier inspects —
+ * key, value, and context joined. The key is included because structured
+ * search results render the key back to the model, so an injection-shaped
+ * key must trip the same gate the value does.
+ */
+function structuredEntryInjectionText(entry: StructuredMemoryEntry): string {
+	return [entry.key, entry.value, entry.context]
+		.filter((part) => typeof part === "string" && part.trim() !== "")
+		.join("\n\n")
+}
+
 export async function writeStructuredMemory(params: {
 	db: Db
 	prefix: string
@@ -851,9 +886,28 @@ export async function writeStructuredMemory(params: {
 	 * expiresAt (which always wins).
 	 */
 	ttl?: MemoryTtlSettings
+	/**
+	 * C-008 injection classification mode. "enforce" (default) runs the
+	 * tier-1 classifier on the entry free text and routes injection-likely
+	 * entries to memory_quarantine instead of canonical memory. "skip" is
+	 * the quarantine-review overrule: promoteQuarantined re-enters here
+	 * AFTER a human reviewed the flagged content, so the classifier verdict
+	 * is intentionally superseded.
+	 */
+	injectionClassification?: "enforce" | "skip"
 }): Promise<{
 	upserted: boolean
 	id: string
+	/**
+	 * C-008: true when the entry was routed to memory_quarantine instead of
+	 * canonical memory (injection-likely verdict). `id` is then the
+	 * quarantine id, not a structured-mem document id.
+	 */
+	quarantined?: boolean
+	/**
+	 * C-008: INJECTION_PATTERNS ids that matched, present iff quarantined.
+	 */
+	matchedPatterns?: string[]
 	/**
 	 * When a `session` is provided, side effects (query-cache invalidation,
 	 * mutation audit) are deferred and returned here so the caller can run
@@ -863,6 +917,76 @@ export async function writeStructuredMemory(params: {
 	pendingSideEffects?: () => Promise<void>
 }> {
 	const { db, prefix, entry } = params
+
+	// C-008 injection-safety: write-structured is a direct write surface (API,
+	// bridge, SDK tools, pi save) — unlike consolidation candidates, these
+	// entries would otherwise reach the canonical collection with no review.
+	// The same tier-1 classifier the consolidator applies to candidate bodies
+	// runs here; injection-shaped content is routed to memory_quarantine
+	// (status "pending-review") so it never surfaces in search results until
+	// a human promotes it. A promoteQuarantined re-entry passes
+	// injectionClassification "skip" — a completed review is the only
+	// overrule.
+	if (params.injectionClassification !== "skip") {
+		const verdict = classifyInjection({
+			content: structuredEntryInjectionText(entry),
+		})
+		if (verdict.classification === "injection-likely") {
+			const content = structuredEntryInjectionText(entry)
+			// Dedup: a projection re-running on the same poisoned source (its
+			// write receipt is only recorded on success) would otherwise add a
+			// new quarantine row per run. Reuse the pending row for identical
+			// flagged content. Scope and scopeRef are part of the identity so
+			// two authorized scopes under one agent never share a quarantine
+			// row: rows persist scope fields only when the entry had them, so
+			// absence matches via $exists (not null equality, which the
+			// MongoDB driver would treat as "null OR missing" and conflate
+			// differently across the stateful fake's strict comparison).
+			const existing = await memoryQuarantineCollection(db, prefix).findOne(
+				{
+					agentId: entry.agentId,
+					content,
+					status: "pending-review",
+					...(entry.scope ? { scope: entry.scope } : { scope: { $exists: false } }),
+					...(entry.scopeRef
+						? { scopeRef: entry.scopeRef }
+						: { scopeRef: { $exists: false } }),
+				},
+				{ projection: { quarantineId: 1 } },
+			)
+			const quarantineId =
+				existing && typeof existing.quarantineId === "string"
+					? existing.quarantineId
+					: randomUUID()
+			if (!existing) {
+				await memoryQuarantineCollection(db, prefix).insertOne({
+					quarantineId,
+					agentId: entry.agentId,
+					...(entry.scope ? { scope: entry.scope } : {}),
+					...(entry.scopeRef ? { scopeRef: entry.scopeRef } : {}),
+					content,
+					classification: "injection-likely",
+					tier: verdict.tier,
+					matchedPatterns: verdict.matchedPatterns,
+					status: "pending-review",
+					createdAt: new Date(),
+					...(entry.sourceEventIds
+						? { sourceEventIds: entry.sourceEventIds }
+						: {}),
+				})
+			}
+			log.warn(
+				`quarantined structured write type=${entry.type} key=${entry.key}: injection patterns=${verdict.matchedPatterns.join(",")}`,
+			)
+			return {
+				upserted: false,
+				id: quarantineId,
+				quarantined: true,
+				matchedPatterns: verdict.matchedPatterns,
+			}
+		}
+	}
+
 	const collection = structuredMemCollection(db, prefix)
 	const revisions = structuredMemRevisionsCollection(db, prefix)
 
@@ -1345,7 +1469,7 @@ export async function updateStructuredMemoryByHandle(params: {
 		existing,
 		rejectInvalidated: true,
 	})
-	await writeStructuredMemory({
+	const write = await writeStructuredMemory({
 		db: params.db,
 		prefix: params.prefix,
 		entry: structuredEntryFromDoc(existing, params.patch),
@@ -1355,6 +1479,13 @@ export async function updateStructuredMemoryByHandle(params: {
 		mutationMeta: params.mutationMeta,
 		expectedRevision: currentRevision,
 	})
+	if (write.quarantined) {
+		// C-008: the merged entry tripped the tier-1 classifier and the patch
+		// content is held in memory_quarantine for review. Throwing keeps the
+		// patch honest — without it the caller would read back the unpatched
+		// document and mistake a held patch for an applied one.
+		throw new MemoryQuarantinedWriteError(write.id, write.matchedPatterns ?? [])
+	}
 	return getStructuredMemoryByHandle(params)
 }
 

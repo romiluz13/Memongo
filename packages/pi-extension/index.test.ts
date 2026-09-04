@@ -87,7 +87,8 @@ describe("resolveApiKey", () => {
 // ---------------------------------------------------------------------------
 // P2.3 scope identity unification: the extension's save path and search path
 // must resolve the SAME scope by default, so memongo can always find its own
-// default-scope saves. One knob: MEMONGO_PI_MEMORY_SCOPE (default "global").
+// default-scope saves. One knob: MEMONGO_PI_MEMORY_SCOPE (default "agent",
+// moved from "global" by C-008).
 // ---------------------------------------------------------------------------
 
 type ToolExecute = (
@@ -159,10 +160,12 @@ describe("P2.3 save/search scope self-consistency", () => {
 		vi.restoreAllMocks()
 	})
 
-	it("save and search hit the same scope by default (global)", async () => {
+	it("save and search hit the same scope by default (agent)", async () => {
 		const { saveScope, searchScope } = await saveAndSearchScopes({})
-		expect(saveScope).toBe("global")
-		expect(searchScope).toBe("global")
+		// C-008: agent (not global) is the default — one project's writes
+		// must not surface in every project's recall.
+		expect(saveScope).toBe("agent")
+		expect(searchScope).toBe("agent")
 	})
 
 	it("MEMONGO_PI_MEMORY_SCOPE drives BOTH directions", async () => {
@@ -247,5 +250,121 @@ describe("C-002 tool-path client body redaction", () => {
 		expect(text).toContain("not available")
 		expect(text).not.toContain("dummy-cred-00000")
 		expect(text).toMatch(/\*\*\*/)
+	})
+})
+
+// ---------------------------------------------------------------------------
+// C-008: memongo_search results and memongo_save dispositions.
+// Search results are stored content (untrusted) — they must ride inside the
+// #29 quarantine envelope. A quarantined save must surface its disposition,
+// not report a clean save.
+// ---------------------------------------------------------------------------
+
+describe("C-008 search envelope + save disposition", () => {
+	afterEach(() => {
+		vi.restoreAllMocks()
+	})
+
+	it("memongo_search wraps results in the quarantine envelope", async () => {
+		hoisted.clients.length = 0
+		const { pi, tools } = createFakePi()
+		await memongoExtension(pi)
+		const client = hoisted.clients[0] as {
+			searchDetailed: ReturnType<typeof vi.fn>
+		}
+		client.searchDetailed.mockResolvedValue({
+			results: [
+				{
+					path: "memory://fact/1",
+					startLine: 0,
+					endLine: 0,
+					score: 0.9,
+					snippet: "memongo api runs on port 3847",
+					source: "memory",
+					scope: "agent",
+					scopeRef: "",
+				},
+			],
+		})
+
+		const response = (await tools
+			.get("memongo_search")
+			?.execute("1", { query: "api" } as never, undefined, undefined, {
+				cwd: "/tmp",
+			})) as { content: Array<{ type: string; text: string }> }
+
+		const text = response?.content?.[0]?.text ?? ""
+		expect(text.startsWith("[Memory Context]")).toBe(true)
+		expect(text).toContain("<<<BEGIN_UNTRUSTED_MEMORY_CONTEXT>>>")
+		expect(text).toContain("<<<END_UNTRUSTED_MEMORY_CONTEXT>>>")
+		expect(text).toContain("memongo api runs on port 3847")
+		// The stored snippet is inside the envelope, never before the preamble.
+		expect(text.indexOf("memongo api runs on port 3847")).toBeGreaterThan(
+			text.indexOf("<<<BEGIN_UNTRUSTED_MEMORY_CONTEXT>>>"),
+		)
+	})
+
+	it("memongo_save surfaces a quarantined disposition instead of a clean save", async () => {
+		hoisted.clients.length = 0
+		const { pi, tools } = createFakePi()
+		await memongoExtension(pi)
+		const client = hoisted.clients[0] as {
+			writeStructured: ReturnType<typeof vi.fn>
+		}
+		client.writeStructured.mockResolvedValue({
+			upserted: false,
+			id: "q-1",
+			quarantined: true,
+			matchedPatterns: ["ignore-previous-instructions"],
+		})
+
+		const response = (await tools
+			.get("memongo_save")
+			?.execute(
+				"1",
+				{ type: "fact", key: "k", value: "v" } as never,
+				undefined,
+				undefined,
+				{ cwd: "/tmp" },
+			)) as {
+			content: Array<{ type: string; text: string }>
+			details: Record<string, unknown>
+		}
+
+		const text = response?.content?.[0]?.text ?? ""
+		expect(text).toContain("QUARANTINED")
+		expect(text).toContain("NOT active memory")
+		expect(text).toContain("fact/k")
+		expect(response.details).toMatchObject({
+			quarantined: true,
+			upserted: false,
+			id: "q-1",
+			matchedPatterns: ["ignore-previous-instructions"],
+		})
+	})
+
+	it("memongo_save reports a clean save when not quarantined", async () => {
+		hoisted.clients.length = 0
+		const { pi, tools } = createFakePi()
+		await memongoExtension(pi)
+		// default writeStructured mock: { id: "m-1", upserted: true }
+
+		const response = (await tools
+			.get("memongo_save")
+			?.execute(
+				"1",
+				{ type: "fact", key: "k", value: "v" } as never,
+				undefined,
+				undefined,
+				{ cwd: "/tmp" },
+			)) as {
+			content: Array<{ type: string; text: string }>
+			details: Record<string, unknown>
+		}
+
+		const text = response?.content?.[0]?.text ?? ""
+		expect(text).toContain("Saved to Memongo: fact/k")
+		expect(text).not.toContain("QUARANTINED")
+		expect(response.details).not.toHaveProperty("quarantined")
 	})
 })

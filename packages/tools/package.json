@@ -31,6 +31,10 @@
 			"types": "./dist/index.d.ts",
 			"default": "./dist/index.js"
 		},
+		"./memory-context": {
+			"types": "./dist/memory-context.d.ts",
+			"default": "./dist/memory-context.js"
+		},
 		"./vercel": {
 			"types": "./dist/vercel/index.d.ts",
 			"default": "./dist/vercel/index.js"

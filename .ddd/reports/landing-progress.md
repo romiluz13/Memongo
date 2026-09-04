@@ -43,7 +43,7 @@ This file is the compaction anchor: any future instance resumes from here.
 | WS-02 | C-002 | T3 | Secret redaction at logging boundaries | LANDED 3546e7d6bd |
 | WS-03 | C-003,004,005,006 | T3,T3,T3,T1 | Tenant erasure + retention lifecycle | LANDED (see session log) |
 | WS-04 | C-007 | T3 | autoEmbed Preview de-risk | LANDED (see session log) |
-| WS-05 | C-008 | T3 | Prompt-injection coverage | pending |
+| WS-05 | C-008 | T3 | Prompt-injection coverage | LANDED (see session log) |
 | WS-06 | C-009 | T3 | Deployment defaults (shared client, cache bound, sweep) | pending |
 | WS-07 | C-010 | T3 | CI executes suites | LANDED 5115d889c7 |
 | WS-08 | C-011..015 | T2,T2,T1,T1,T1 | API contracts batch | pending |
@@ -59,10 +59,12 @@ This file is the compaction anchor: any future instance resumes from here.
 | WS-18 | C-037,038,039 | T1,T2,T2 | dockerignore; publish gates; nightly eval | pending |
 
 T3 needing refutation: C-002, C-003, C-004, C-005, C-007, C-008, C-009, C-018.
-Validation IDs used so far: V-001..V-054 (next free: V-055).
+Validation IDs used so far: V-001..V-061 (next free: V-062).
 Sweep violations at WS-01 landing: 92 (was 96 pre-WS-01).
 Sweep violations at WS-02 landing: 86 (was 92; zero for C-002).
 Sweep violations at WS-04 landing: 67 (was 72 at WS-03; zero for C-007).
+Sweep violations at WS-05 landing: 66 (was 67; zero for C-008; +4 honest
+pending for the newly filed open claim C-040).
 
 ## Session log
 
@@ -204,3 +206,58 @@ Sweep violations at WS-04 landing: 67 (was 72 at WS-03; zero for C-007).
   (deliberately outside the scan boundary), stale droid-wiki generated
   docs, contract assertion structurally unreachable from raw input
   (validators reject first — it is the declaration-resolver drift lock).
+- WS-05 landing (prompt-injection coverage, C-008): three obligations
+  landed. (1) Envelope: the #29 renderMemoryContextBlock renderer shared
+  from @memongo/tools via a new ./memory-context subpath export (the
+  published pi package cannot import @memongo/lib); pi renderSessionContext
+  wraps the rendered profile+memory block and memongo_search wraps results;
+  pi default memory scope flipped global -> agent, consumed by lifecycle
+  injection, capture, search, and save. (2) Write gate: classifyInjection
+  runs on the joined key/value/context free text inside
+  writeStructuredMemory — the single engine seam every writer funnels
+  through (routes, bridge, SDK tools, MCP, pi save, self-edit, feedback) —
+  routing injection-likely entries to memory_quarantine with canonical
+  structured_mem untouched; the only overrule is
+  injectionClassification "skip", passed solely by promoteQuarantined
+  after completed human review; pending-row dedup keyed per (agentId,
+  content, scope, scopeRef) with $exists:false absence semantics (works in
+  production MongoDB and the stateful fake's strict deepEqual). (3)
+  Dispositions: held writes answer 202 {quarantined, id|quarantineId,
+  matchedPatterns} on write-structured, self-edit (transactional +
+  non-transactional), lifecycle update, and memory feedback; OpenAPI path
+  files updated; client contract widened (MemongoSelfEditResponse +
+  MemongoQuarantineDisposition intersection on updateLifecycleItem /
+  applyMemoryFeedback). Refutation: 3 rounds, 8 findings total. Round 1
+  partially_refuted (citation under-cite repaired to EL-005 findings +
+  prioritized-recommendations sections; transactional self-edit discarded
+  disposition; feedback 500 on held patch; response-contract gaps). Round 2
+  partially_refuted (claim-scope overstatement "every injection surface"
+  adjudicated: statement narrowed to enumerated obligations, tools/MCP
+  retrieval-envelope gap filed as C-040 T2 rather than absorbed; dedup
+  scope conflation fixed with regression test; client response contract
+  widened; validations gap closed). Round 3 sustained, zero findings —
+  narrowed claim faithful to EL-005 S-3/S-4, no caller can turn a held
+  write into a false success. Reports: .ddd/reports/refutation-c-008.yaml
+  (3-round consolidated). Suite state: engine 122 files/2073 tests, tools
+  48, client 39, bridge 82, pi 62, api 246, fresh uncached check-types
+  15/15. Artifacts: V-055..V-061, C-008 validations filled + citations
+  repaired to lock-recorded sections, TR-020/021/022 patched + TR-091..094
+  added (construct-trace-validation triple linkage), ADR-0007 + book.yaml
+  entry + manifest_digest recomputed (bbb22abb...), sweep-ws05.json 66
+  violations, zero for C-008, +4 honest pending for C-040 (missing locked
+  evidence REF-WS05-R2, 2 untraced constructs, validations empty).
+  Methodology lessons: (1) claim citations must name sections as recorded
+  in evidence.lock — S-3/S-4 are finding labels INSIDE the "findings
+  (severity-ranked)" section, and the sweep's citation-section-missing
+  check compares against the lock's sections array, not the document body;
+  (2) the sweep enforces construct-trace-validation triple linkage — every
+  construct on a claim needs its own trace entry whose validation_id names
+  a validation whose construct equals the trace construct exactly (one
+  validation cannot cover two constructs), so construct-list expansion
+  must land traces+validations in the same step; (3) bun -e argv trap —
+  process.argv[2] is not the first user argument under `bun -e`, so a
+  passed digest landed as the literal string "undefined" (caught by the
+  self-check of recomputing the OLD manifest digest before trusting the
+  NEW one — always self-check against the previous known-good value);
+  (4) type-check-method validations should anchor a fresh `--force` run,
+  not a cached log.

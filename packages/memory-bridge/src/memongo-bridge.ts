@@ -938,7 +938,13 @@ export async function memongoBridgeSelfEdit(params: {
 	block: "user" | "persona" | "instructions"
 	action: "append" | "replace" | "prepend"
 	content: string
-}): Promise<{ upserted: boolean; id: string }> {
+}): Promise<{
+	upserted: boolean
+	id: string
+	/** C-008: true when the merged content was routed to memory_quarantine. */
+	quarantined?: boolean
+	matchedPatterns?: string[]
+}> {
 	const m = await memongoBridgeGetManager(params.agentId)
 	return m.selfEditBlock({
 		block: params.block,

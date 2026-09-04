@@ -769,7 +769,13 @@ export interface MemorySearchManager {
 		block: MemorySelfEditBlock
 		action: MemorySelfEditAction
 		content: string
-	}): Promise<{ upserted: boolean; id: string }>
+	}): Promise<{
+		upserted: boolean
+		id: string
+		/** C-008: true when the merged content was routed to memory_quarantine. */
+		quarantined?: boolean
+		matchedPatterns?: string[]
+	}>
 	traceChain(params: {
 		factId: string
 		collection: string

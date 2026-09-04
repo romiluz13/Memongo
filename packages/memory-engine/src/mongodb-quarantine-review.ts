@@ -213,6 +213,13 @@ export async function promoteQuarantined(params: {
 			prefix,
 			entry: memoryEntry,
 			embeddingMode,
+			// C-008: the review IS the overrule. This write re-enters the
+			// write-structured path AFTER a human reviewed the flagged
+			// content (the row only reaches "promoted" through
+			// decideQuarantine), so the tier-1 classifier verdict is
+			// intentionally superseded — without this, every promotion
+			// would loop straight back into quarantine.
+			injectionClassification: "skip",
 		})
 	} catch (err) {
 		// Compensating revert: the claim already flipped the row to promoted,

@@ -80,7 +80,18 @@ export async function selfEditBlock(params: {
 	block: MemorySelfEditBlock
 	action: MemorySelfEditAction
 	content: string
-}): Promise<{ upserted: boolean; id: string }> {
+}): Promise<{
+	upserted: boolean
+	id: string
+	/**
+	 * C-008: true when the merged content tripped the tier-1 classifier on
+	 * write and was routed to memory_quarantine (possible for the `user`
+	 * block; protected blocks are hard-rejected above). The canonical block
+	 * is unchanged.
+	 */
+	quarantined?: boolean
+	matchedPatterns?: string[]
+}> {
 	const { db, prefix, agentId, embeddingMode, client, block, action, content } =
 		params
 	const { type, key } = BLOCK_MAP[block]
@@ -92,6 +103,9 @@ export async function selfEditBlock(params: {
 				| {
 						upserted: boolean
 						id: string
+						/** C-008: set when the write gate routed the entry to quarantine. */
+						quarantined?: boolean
+						matchedPatterns?: string[]
 						pendingSideEffects?: () => Promise<void>
 				  }
 				| undefined
@@ -133,7 +147,21 @@ export async function selfEditBlock(params: {
 			// never commit.
 			await result?.pendingSideEffects?.()
 
-			return { upserted: result?.upserted ?? false, id: `core:${block}` }
+			// C-008: mirror the non-transactional return — the write gate may
+			// have routed the merged value to memory_quarantine from inside the
+			// transaction (the quarantine insert commits with it). Surface the
+			// disposition instead of reporting a clean self-edit on an
+			// unchanged block.
+			return {
+				upserted: result?.upserted ?? false,
+				...(result?.quarantined
+					? {
+							id: result.id,
+							quarantined: true,
+							matchedPatterns: result.matchedPatterns,
+						}
+					: { id: `core:${block}` }),
+			}
 		} finally {
 			await session.endSession()
 		}
@@ -180,5 +208,18 @@ export async function selfEditBlock(params: {
 		client,
 	})
 
-	return { upserted: result.upserted, id: `core:${block}` }
+	// C-008: the `user` block is not hard-rejected above (ordinary user
+	// data), so the write gate may have routed the merged value to
+	// quarantine — surface the disposition instead of reporting a clean
+	// self-edit on an unchanged block.
+	return {
+		upserted: result.upserted,
+		id: result.quarantined ? result.id : `core:${block}`,
+		...(result.quarantined
+			? {
+					quarantined: true,
+					matchedPatterns: result.matchedPatterns,
+				}
+			: {}),
+	}
 }

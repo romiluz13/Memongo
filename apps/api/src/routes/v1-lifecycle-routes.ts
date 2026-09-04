@@ -82,6 +82,25 @@ export function registerLifecycleRoutes(v1: Hono<V1RouterEnv>): void {
 			}
 			return c.json(item)
 		} catch (err) {
+			// C-008: a patch whose merged entry tripped the injection classifier
+			// is held in memory_quarantine for review; the canonical document is
+			// unchanged. 202 Accepted (held), not an error — the disposition
+			// travels in the body.
+			const quarantined = err as {
+				name?: string
+				quarantineId?: string
+				matchedPatterns?: string[]
+			}
+			if (err instanceof Error && err.name === "MemoryQuarantinedWriteError") {
+				return c.json(
+					{
+						quarantined: true,
+						quarantineId: quarantined.quarantineId,
+						matchedPatterns: quarantined.matchedPatterns ?? [],
+					},
+					202,
+				)
+			}
 			return internalError(c, err, "LIFECYCLE_UPDATE_FAILED")
 		}
 	})
@@ -287,6 +306,23 @@ export function registerLifecycleRoutes(v1: Hono<V1RouterEnv>): void {
 			}
 			return c.json(item)
 		} catch (err) {
+			// C-008: a signal="correct" patch whose merged entry tripped the
+			// injection classifier flows through updateStructuredMemoryByHandle
+			// and is held for review — same disposition as /v1/lifecycle/update.
+			const quarantined = err as {
+				quarantineId?: string
+				matchedPatterns?: string[]
+			}
+			if (err instanceof Error && err.name === "MemoryQuarantinedWriteError") {
+				return c.json(
+					{
+						quarantined: true,
+						quarantineId: quarantined.quarantineId,
+						matchedPatterns: quarantined.matchedPatterns ?? [],
+					},
+					202,
+				)
+			}
 			return internalError(c, err, "MEMORY_FEEDBACK_FAILED")
 		}
 	})

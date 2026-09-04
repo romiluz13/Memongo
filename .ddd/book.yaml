@@ -3,7 +3,7 @@ schema_version: 0.1.0
 version: 0.5.0
 released_at: null
 profile: assurance
-manifest_digest: sha256:a05c9a052a21ca892f7873c6d589b404cabb76801be977475b3ba930fc67cd30
+manifest_digest: sha256:bbb22abb781a7569d64926fb5981e274eb285c091ad3ab74b51a5af877bad949
 
 requirements:
   - path: CONTEXT.md
@@ -47,6 +47,12 @@ requirements:
     independence: agent-proposed-human-approved
     digest: sha256:4ccb593b66cbcd05d4256a693a0135d180770cb900fb1d079f3766bea1d83643
     description: "ADR 0006 - autoEmbed Preview supported-target contract, single model source, dead provider stack removal (WS-04, C-007)"
+
+  - path: docs/adr/0007-prompt-injection-quarantine-envelope-scope-and-dispositions.md
+    authority: product-approved
+    independence: agent-proposed-human-approved
+    digest: sha256:5701cc384805a445e6979a8f5e560adb448bf4fc659d10581531b052ea3b8419
+    description: "ADR 0007 - prompt-injection quarantine envelope scope, write-gate placement, and 202 hold dispositions (WS-05, C-008)"
 
 agent_context:
   - path: AGENTS.md

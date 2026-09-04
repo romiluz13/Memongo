@@ -129,6 +129,7 @@
       "version": "2.1.2",
       "dependencies": {
         "@memongo/client": "^2.0.1",
+        "@memongo/tools": "^2.0.1",
       },
       "devDependencies": {
         "@earendil-works/pi-ai": "0.83.0",

@@ -120,9 +120,27 @@ entries:
 
   - id: C-008
     schema_version: 0.1.0
-    statement: "The prompt-injection defense MUST cover every injection surface: the untrusted-memory quarantine envelope MUST be applied to pi-extension session context and search injection points, classifyInjection MUST run on write-structured entries, and the pi default memory scope MUST stop being global."
-    rationale: "The codebase already implements a forgery-proof quarantine envelope for the AI-SDK tools surface, while the sibling pi surface renders raw profile and memory text as trusted session context, and write-structured bypasses the classifier entirely; the default global scope lets one project poison every project."
+    statement: "The prompt-injection defense MUST close the identified injection-surface gaps: the untrusted-memory quarantine envelope MUST be applied to pi-extension session context and search injection points, classifyInjection MUST run on write-structured entries, and the pi default memory scope MUST stop being global."
+    rationale: "The codebase already implements a forgery-proof quarantine envelope for the AI-SDK tools surface, while the sibling pi surface renders raw profile and memory text as trusted session context, and write-structured bypasses the classifier entirely; the default global scope lets one project poison every project. Scope note (round-2 refutation, REF-WS05-R2): the envelope obligation's enumerated scope is the pi surfaces named by EL-005's S-3 finding (in findings (severity-ranked)); the AI-SDK tools' and MCP's retrieval-payload rendering (search, KB, profile, context bundle) is tracked as C-040, not as part of this claim."
     sources:
+      # Findings (severity-ranked) — S-3: port the #29 envelope into
+      # renderSessionContext AND the search-injection path; the aggravating
+      # global default scope is in the same finding (agent X's memory
+      # auto-injected unlabeled at agent Y's session start). S-4:
+      # /v1/write-structured bypasses classifyInjection; fix is to run it and
+      # route injection-likely entries to memory_quarantine.
+      - ref: "EL-005#findings (severity-ranked)"
+        authority_domain: security
+        entailment: explicit
+      # Prioritized recommendations — recs 3-4: apply the existing envelope
+      # to the pi-extension session injection (and flip the Pi default scope
+      # from global to agent), run classifyInjection on write-structured
+      # entries.
+      - ref: "EL-005#prioritized recommendations"
+        authority_domain: security
+        entailment: explicit
+      # Corroborating P1 recommendation: apply the existing envelope to the
+      # pi-extension session injection.
       - ref: "EL-010#recommendations"
         authority_domain: security
         entailment: paraphrase
@@ -130,8 +148,15 @@ entries:
     impact: critical
     tier: T3
     status: known-and-supported
-    constructs: ["packages/pi-extension/extensions/lifecycle.ts#renderSessionContext", "packages/tools/src/memory-context.ts#renderMemoryContextBlock", apps/api/src/routes/v1-write-routes.ts]
-    validations: []
+    constructs:
+      - "packages/pi-extension/extensions/lifecycle.ts#renderSessionContext"
+      - "packages/tools/src/memory-context.ts#renderMemoryContextBlock"
+      - packages/memory-engine/src/mongodb-structured-memory.ts
+      - packages/memory-engine/src/mongodb-self-edit.ts
+      - apps/api/src/routes/v1-write-routes.ts
+      - apps/api/src/routes/v1-lifecycle-routes.ts
+      - packages/client/src/client.ts
+    validations: [V-055, V-056, V-057, V-058, V-059, V-060, V-061]
     exceptions: []
 
   - id: C-009
@@ -627,5 +652,21 @@ entries:
     tier: T2
     status: known-and-supported
     constructs: [.github/workflows/e2e-nightly.yml, packages/memory-engine/src/types.ts]
+    validations: []
+    exceptions: []
+
+  - id: C-040
+    schema_version: 0.1.0
+    statement: "Model-visible retrieval payloads from the AI-SDK tools and the MCP server MUST carry the untrusted-memory quarantine envelope (or an equivalent provenance label) so stored memory rendered into a model context is never presented as trusted system text: memongo_search, search_kb, profile, build_context_bundle, recall_conversation, and the MCP tool results that serialize the same payloads."
+    rationale: "Filed from the WS-05 round-2 refutation (REF-WS05-R2, finding uncovered-injection-surfaces): the C-008 envelope landed on the pi surfaces named by EL-005's S-3 finding (in findings (severity-ranked)), but the AI-SDK tools (packages/tools/src/index.ts createMemongoTools) return raw stored search/KB/profile/context-bundle payloads and the MCP server serializes them raw as well. Stored conversation events, KB chunks, and profile text are not gated by the write-structured classifier, so these are real injection surfaces; they were outside C-008's evidenced scope and are tracked here instead."
+    sources:
+      - ref: "REF-WS05-R2#findings/uncovered-injection-surfaces"
+        authority_domain: security
+        entailment: explicit
+    claim_kind: behavioral
+    impact: high
+    tier: T2
+    status: known-and-supported
+    constructs: [packages/tools/src/index.ts, apps/mcp/src/server.ts]
     validations: []
     exceptions: []

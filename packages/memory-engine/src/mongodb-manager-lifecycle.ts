@@ -73,7 +73,14 @@ export class MongoDBManagerLifecycleOps {
 
 	async writeStructuredMemory(
 		entry: StructuredMemoryEntry,
-	): Promise<{ upserted: boolean; id: string }> {
+	): Promise<{
+		upserted: boolean
+		id: string
+		/** C-008: true when the entry was quarantined instead of written. */
+		quarantined?: boolean
+		/** C-008: matched INJECTION_PATTERNS ids, present iff quarantined. */
+		matchedPatterns?: string[]
+	}> {
 		const mongoCfg = this.host.config.mongodb!
 		const { writeStructuredMemory: writeFn } = await import(
 			"./mongodb-structured-memory.js"
@@ -94,6 +101,10 @@ export class MongoDBManagerLifecycleOps {
 			client: this.host.client,
 			// P4.4.1: session-scope TTL default (off unless explicitly enabled).
 			ttl: mongoCfg.ttl,
+			// C-008: the facade path always enforces injection classification —
+			// the "skip" overrule is reserved for the internal
+			// promoteQuarantined flow (human review), which calls the
+			// standalone writer directly.
 		})
 	}
 
@@ -292,7 +303,13 @@ export class MongoDBManagerLifecycleOps {
 		block: MemorySelfEditBlock
 		action: MemorySelfEditAction
 		content: string
-	}): Promise<{ upserted: boolean; id: string }> {
+	}): Promise<{
+		upserted: boolean
+		id: string
+		/** C-008: true when the merged content was quarantined (user block). */
+		quarantined?: boolean
+		matchedPatterns?: string[]
+	}> {
 		const mongoCfg = this.host.config.mongodb!
 		const { selfEditBlock: editFn } = await import("./mongodb-self-edit.js")
 		return editFn({

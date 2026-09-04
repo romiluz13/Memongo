@@ -78,6 +78,10 @@ export const lifecyclePaths = {
 						},
 					},
 				},
+				"202": {
+					description:
+						"Accepted but quarantined (C-008): patch content tripped the injection classifier and is held in memory_quarantine pending review; the canonical document is unchanged; body carries quarantined=true, quarantineId and matchedPatterns",
+				},
 				"400": { description: "Validation error" },
 				"404": { description: "Not found" },
 				"500": { description: "Lifecycle update failed" },
@@ -257,6 +261,10 @@ export const lifecyclePaths = {
 							schema: lifecycleStructuredItemSchema,
 						},
 					},
+				},
+				"202": {
+					description:
+						"Accepted: a signal=correct patch tripped the injection classifier and was routed to memory_quarantine for review (body: { quarantined, quarantineId, matchedPatterns }); the canonical memory is unchanged",
 				},
 				"400": { description: "Validation error" },
 				"404": { description: "Not found" },
