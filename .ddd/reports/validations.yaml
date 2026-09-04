@@ -541,3 +541,33 @@ entries:
     evidence_hash: sha256:54f5c881e28f74e9545e509b008294863b68ca3437fed033d712641242620d60
     notes: "Admin-probe evidence from the final-state WS-09 engine suite (same log as V-077, 2093 tests, exit 0): the 'MongoDBManagerAdminOps — live probes and status surface (C-016)' battery (7 tests) proves probeVectorAvailability answers from the live index-status round trip (probeSearchLaneReadiness on the chunks collection) even when the boot snapshot says vectorSearch true, skips the probe when the embedding mode cannot serve vector, and that probeEmbeddingAvailability in automated mode reports the live vector-index readiness; that noteSearchLaneFailure re-polls readiness throttled (one in-flight re-poll — the second note only records) and surfaces the latest failure path and error in getDetailedStatus().searchLanes with a probedAt timestamp; that getDetailedStatus surfaces the change-stream watcher's liveness (fed by V-077's supervision); and that before any probe has run the status falls back to the boot snapshot. The searchV2 onPathFailure hook that feeds noteSearchLaneFailure from real search-lane errors is wired through both searchV2 call sites (mongodb-manager-search.ts) and the host facade."
 
+  - id: V-080
+    schema_version: 0.1.0
+    claim: C-035
+    construct: "packages/memory-engine/src/mongodb-manager-read.ts#readFile"
+    method: test
+    target: .ddd/reports/runs/ws17-memory-engine-suite.log
+    result: pass
+    run_at: "2026-09-04T12:09:13.109Z"
+    evidence_hash: "sha256:4166eac46986346f1cea06c2bfb2465148306e5e85e2aa22f4ed171c707a103c"
+    notes: "Locator-scoping evidence from the final-state WS-17 engine suite (this log, 122 files / 2099 tests, exit 0): the 'MongoDBManagerReadOps kb locator tenant scoping (C-035)' battery (6 tests) proves the readFile kb/reference locator now filters on the caller's full resolved identity {agentId, scope, scopeRef} alongside the path $or — the exact filter shape is pinned by toHaveBeenCalledWith — that a same-path/title collision between two tenants in one shared collection resolves to the caller's own document, that a path only another tenant ingested returns empty text (the pre-fix filter, the $or alone, would have returned it), that the reference: alias carries the same identity filter, that an explicit ?scope=global on the path round-trips a global-corpus document only for the ingesting agent (agentId still fences full-content reads), and that unknown ?scope= values fail closed (resolveScopeIdentity resolves the bogus scope to an undefined scopeRef no document carries)."
+  - id: V-081
+    schema_version: 0.1.0
+    claim: C-035
+    construct: "packages/memory-engine/src/mongodb-manager-read.ts#readFile"
+    method: test
+    target: .ddd/reports/runs/ws17-kb-isolation-e2e.log
+    result: pass
+    run_at: "2026-09-04T12:09:13.189Z"
+    evidence_hash: "sha256:d6dd9d3ac81cbd35484cd34bde8a4d675d2a6484bc43bf1011f36860cee42636"
+    notes: "Real-MongoDB regression evidence from the WS-17 run of the existing KB tenant-isolation e2e (this log, 5 tests, exit 0, against the repo's atlas-local stack): ingest/list/remove/stat/search isolation between tenants sharing one physical collection still holds after the readFile locator change — the ingest path stamps the same {agentId, scope, scopeRef} tags the locator now filters on, so the scoped read and the scopeRef-partitioned KB paths agree on one tagging model. The readFile-specific cross-tenant cases are unit-pinned in V-080; this run guards the integration seam."
+  - id: V-082
+    schema_version: 0.1.0
+    claim: C-036
+    construct: packages/pi-extension/extensions/lifecycle.ts
+    method: test
+    target: .ddd/reports/runs/ws17-pi-extension-suite.log
+    result: pass
+    run_at: "2026-09-04T12:09:19.490Z"
+    evidence_hash: "sha256:e2b83633f664b5d56d21cfd7fa4ea6f1165fce45a1ae31c912c73712d3b1873b"
+    notes: "Opt-in-capture evidence from the final-state WS-17 pi-extension suite (this log, 3 files / 67 tests, exit 0): resolveLifecycleConfig now defaults captureEnabled false (MEMONGO_PI_AUTO_CAPTURE unset => off; '1'/'true' opt in; the old default-on is gone), and the 'auto-capture consent notice (C-036)' battery proves registerMemongoLifecycle warns exactly once at registration with the data boundary: off-notice names MEMONGO_PI_AUTO_CAPTURE=1 and states opting in sends the raw text of user and assistant turns with no redaction under the resolved scope; on-notice names the same boundary plus the disable switch. The suite's registration stderr shows the off-notice firing through the real extension init path. All capture-flow tests now opt in explicitly via the test helper, and 'skips capture entirely when MEMONGO_PI_AUTO_CAPTURE=0' still pins the off switch."

@@ -34,6 +34,21 @@ const log = createSubsystemLogger("memory:mongodb:kb")
 // filters on, so tenants sharing one physical collection cannot observe or
 // mutate each other's KB. Callers wanting a shared corpus use scope "global"
 // or "tenant".
+//
+// Two read semantics coexist by design (C-035/S-6):
+// - scopeRef-partitioned reads — listKBDocuments, getKBStats,
+//   removeKBDocument, and searchKB filter on scopeRef only. `agentId` is
+//   tagged but intentionally NOT filtered here: under scope "global" or
+//   "tenant" the corpus is shared, so any agent resolving that scopeRef may
+//   list, search, stat, or (for admins) remove documents in it. This is the
+//   documented shared-global KB semantic.
+// - identity-strict reads — the readFile kb locator returns FULL document
+//   content, so it filters on all three tags {agentId, scope, scopeRef} of
+//   the caller's resolved identity (mongodb-manager-read.ts, C-035). A
+//   global-scope document is readable there only by the agent that ingested
+//   it, via an explicit `?scope=global` on the path; cross-agent shared
+//   corpus reads go through the scopeRef-partitioned search/list paths
+//   above, which return snippets and metadata, not full content.
 // ---------------------------------------------------------------------------
 
 export type KBScope = {

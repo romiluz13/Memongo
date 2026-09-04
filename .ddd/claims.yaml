@@ -588,7 +588,7 @@ entries:
     tier: T2
     status: known-and-supported
     constructs: ["packages/memory-engine/src/mongodb-manager-read.ts#readFile"]
-    validations: []
+    validations: [V-080, V-081]
     exceptions: []
 
   - id: C-036
@@ -604,7 +604,7 @@ entries:
     tier: T2
     status: known-and-supported
     constructs: [packages/pi-extension/extensions/lifecycle.ts]
-    validations: []
+    validations: [V-082]
     exceptions: []
 
   - id: C-037

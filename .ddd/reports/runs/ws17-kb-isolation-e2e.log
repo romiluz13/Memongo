@@ -1,0 +1,188 @@
+$ MONGODB_TEST_URI=mongodb://127.0.0.1:28018/?directConnection=true vitest run --no-file-parallelism src/mongodb-kb-isolation.e2e.test.ts
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/packages/memory-engine[39m
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m15:08:54.963 [memory:mongodb:schema] info: created collection shared_chunks
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m15:08:54.985 [memory:mongodb:schema] info: created collection shared_files
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m15:08:54.999 [memory:mongodb:schema] info: created collection shared_meta
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m15:08:55.052 [memory:mongodb:schema] info: created collection shared_knowledge_base
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m15:08:55.115 [memory:mongodb:schema] info: created collection shared_kb_chunks
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m15:08:55.170 [memory:mongodb:schema] info: created collection shared_structured_mem
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m15:08:55.241 [memory:mongodb:schema] info: created collection shared_structured_mem_revisions
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m15:08:55.282 [memory:mongodb:schema] info: created collection shared_procedures
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m15:08:55.310 [memory:mongodb:schema] info: created collection shared_procedure_revisions
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m15:08:55.372 [memory:mongodb:schema] info: created collection shared_relevance_runs
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m15:08:55.390 [memory:mongodb:schema] info: created collection shared_relevance_artifacts
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m15:08:55.423 [memory:mongodb:schema] info: created collection shared_relevance_regressions
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m15:08:55.435 [memory:mongodb:schema] info: created collection shared_events
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m15:08:55.456 [memory:mongodb:schema] info: created collection shared_entities
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m15:08:55.476 [memory:mongodb:schema] info: created collection shared_relations
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m15:08:55.492 [memory:mongodb:schema] info: created collection shared_entity_links
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m15:08:55.511 [memory:mongodb:schema] info: created collection shared_episodes
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m15:08:55.532 [memory:mongodb:schema] info: created collection shared_ingest_runs
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m15:08:55.556 [memory:mongodb:schema] info: created collection shared_projection_runs
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m15:08:55.581 [memory:mongodb:schema] info: created collection shared_query_cache
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m15:08:55.603 [memory:mongodb:schema] info: created collection shared_memory_mutations
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m15:08:55.631 [memory:mongodb:schema] info: created collection shared_lane_coverage
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m15:08:55.647 [memory:mongodb:schema] info: created collection shared_consolidation_runs
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m15:08:55.668 [memory:mongodb:schema] info: created collection shared_recall_traces
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m15:08:55.688 [memory:mongodb:schema] info: created collection shared_memory_jobs
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m15:08:55.704 [memory:mongodb:schema] info: created collection shared_session_chunks
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m15:08:55.718 [memory:mongodb:schema] info: created collection shared_memory_quarantine
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m15:08:55.771 [memory:mongodb:schema] info: created time series collection shared_memory_telemetry
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m15:08:55.771 [memory:mongodb:schema] info: created telemetry collection shared_memory_telemetry
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m15:08:55.813 [memory:mongodb:schema] info: created time series collection shared_access_events
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m15:08:55.813 [memory:mongodb:schema] info: created access events collection shared_access_events
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m15:08:55.840 [memory:mongodb:schema] info: applied schema validation to shared_chunks
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m15:08:55.846 [memory:mongodb:schema] info: applied schema validation to shared_knowledge_base
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m15:08:55.853 [memory:mongodb:schema] info: applied schema validation to shared_kb_chunks
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m15:08:55.860 [memory:mongodb:schema] info: applied schema validation to shared_structured_mem
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m15:08:55.867 [memory:mongodb:schema] info: applied schema validation to shared_structured_mem_revisions
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m15:08:55.873 [memory:mongodb:schema] info: applied schema validation to shared_procedures
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m15:08:55.882 [memory:mongodb:schema] info: applied schema validation to shared_procedure_revisions
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m15:08:55.886 [memory:mongodb:schema] info: applied schema validation to shared_relevance_runs
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m15:08:55.891 [memory:mongodb:schema] info: applied schema validation to shared_relevance_artifacts
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m15:08:55.893 [memory:mongodb:schema] info: applied schema validation to shared_relevance_regressions
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m15:08:55.896 [memory:mongodb:schema] info: applied schema validation to shared_events
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m15:08:55.900 [memory:mongodb:schema] info: applied schema validation to shared_entities
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m15:08:55.904 [memory:mongodb:schema] info: applied schema validation to shared_relations
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m15:08:55.907 [memory:mongodb:schema] info: applied schema validation to shared_entity_links
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m15:08:55.909 [memory:mongodb:schema] info: applied schema validation to shared_episodes
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m15:08:55.910 [memory:mongodb:schema] info: applied schema validation to shared_ingest_runs
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m15:08:55.912 [memory:mongodb:schema] info: applied schema validation to shared_projection_runs
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m15:08:55.917 [memory:mongodb:schema] info: applied schema validation to shared_query_cache
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m15:08:55.920 [memory:mongodb:schema] info: applied schema validation to shared_memory_mutations
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m15:08:55.923 [memory:mongodb:schema] info: applied schema validation to shared_recall_traces
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m15:08:55.932 [memory:mongodb:schema] info: applied schema validation to shared_memory_jobs
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m15:08:55.938 [memory:mongodb:schema] info: applied schema validation to shared_memory_quarantine
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m15:08:55.941 [memory:mongodb:schema] info: applied schema validation to shared_files
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m15:08:57.612 [memory:mongodb:schema] info: ensured 42 standard indexes
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m15:08:57.654 [memory:mongodb:kb] info: KB ingest: processed=1 chunks=1 skipped=0 errors=0
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m15:08:57.672 [memory:mongodb:kb] info: KB ingest: processed=1 chunks=1 skipped=0 errors=0
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts[2m > [22m[2mKB tenant isolation (shared collection)[2m > [22m[2mlets two tenants ingest identical content without colliding
+[22m[39m15:08:57.737 [memory:mongodb:kb] info: KB ingest: processed=1 chunks=1 skipped=0 errors=0
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts[2m > [22m[2mKB tenant isolation (shared collection)[2m > [22m[2mlets two tenants ingest identical content without colliding
+[22m[39m15:08:57.763 [memory:mongodb:kb] info: KB ingest: processed=1 chunks=1 skipped=0 errors=0
+
+ [32m✓[39m src/mongodb-kb-isolation.e2e.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 2998[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m1 passed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[32m5 passed[39m[22m[90m (5)[39m
+[2m   Start at [22m 15:08:53
+[2m   Duration [22m 3.98s[2m (transform 491ms, setup 0ms, import 767ms, tests 3.00s, environment 0ms)[22m
+

@@ -83,6 +83,22 @@ All changes are validated against real MongoDB Atlas clusters (8.3+) in CI.
   `scope`/`scopeRef` are now server-authoritative, closing a tenant-write
   identity bypass. Unauthorized cross-tenant requests now return 403
   (**breaking** for callers that relied on the previous permissive behavior).
+- Closed the last unfiltered engine read: the `readFile` `kb:`/`reference:`
+  locator now filters on the caller's full resolved identity
+  (`agentId` + `scope` + `scopeRef`), so a knowledge-base path or title match
+  can no longer return another tenant's document content from a shared
+  collection. An explicit `?scope=`/`?scopeRef=` on the path (the
+  structured-path convention) reaches a shared-corpus document the caller
+  ingested; unknown values fail closed. The two coexisting KB read semantics
+  (scopeRef-partitioned list/stat/remove/search vs identity-strict
+  full-content reads) are now documented at the source.
+- Pi extension auto-capture is now **off by default** (**breaking** for Pi
+  users who relied on silent capture): `MEMONGO_PI_AUTO_CAPTURE=1` opts back
+  in. At registration the extension prints one notice stating exactly what
+  capture sends (the raw text of user and assistant turns, no redaction,
+  plus session id and resolved scope), and the README documents the data
+  boundary and the per-surface agentId defaults (`pi` here, `main` for the
+  bridge and console).
 - Unified agent identity resolution so route authorization and memory-manager
   selection can never disagree.
 - Secured API defaults and stricter search-index readiness gating.

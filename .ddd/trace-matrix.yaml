@@ -780,21 +780,21 @@ traces:
     change_id: WS-17
     claim_id: C-035
     construct_id: "packages/memory-engine/src/mongodb-manager-read.ts#readFile"
-    validation_id: null
+    validation_id: V-080
     direction: forward
-    sweep_pass: false
-    checked_at: "2026-09-02T13:41:40.099Z"
-    notes: WS-17 Privacy and tenancy boundaries (planned change envelope)
+    sweep_pass: true
+    checked_at: "2026-09-04T12:15:00.000Z"
+    notes: 'WS-17 readFile kb/reference locator now resolves the caller identity (host.resolveSearchIdentity, honoring the structured-path ?scope=/?scopeRef= convention) and filters findOne on {agentId, scope, scopeRef} + the path $or — was the only unfiltered MongoDB query in the engine. Same-path collisions resolve to the caller''s own doc; other-tenant-only paths return empty; ?scope=global round-trips only for the ingesting agent; unknown scope values fail closed. Companion doc change: mongodb-kb.ts tenant-scoping header now records the two coexisting read semantics (scopeRef-partitioned list/stat/remove/search vs identity-strict readFile full-content reads) so the shared-global corpus semantic is stated, not implicit. Unit battery V-080, e2e regression V-081.'
   - id: TR-079
     schema_version: 0.1.0
     change_id: WS-17
     claim_id: C-036
     construct_id: packages/pi-extension/extensions/lifecycle.ts
-    validation_id: null
+    validation_id: V-082
     direction: forward
-    sweep_pass: false
-    checked_at: "2026-09-02T13:41:40.100Z"
-    notes: WS-17 Privacy and tenancy boundaries (planned change envelope)
+    sweep_pass: true
+    checked_at: "2026-09-04T12:15:00.000Z"
+    notes: "WS-17 auto-capture is now explicit opt-in: resolveLifecycleConfig defaults MEMONGO_PI_AUTO_CAPTURE to false, and registerMemongoLifecycle warns once at registration stating the data boundary (raw user+assistant turn text, no redaction, session id, resolved scope) with the opt-in/disable switches. README documents the boundary and the capture off default; extensions/index.ts header comment now states the real agentId default (pi, bridge/console default main — distinct defaults keep Pi a separate tenant). Redaction-before-embed decision recorded: no redaction before embed by design (redaction would corrupt recall and give false privacy assurance while raw text is intentionally retained for provenance); the honest controls are consent (this change), tenant isolation (C-035/#27), and retention/erasure. V-082."
   - id: TR-080
     schema_version: 0.1.0
     change_id: WS-18

@@ -94,7 +94,12 @@ export function resolveLifecycleConfig(
 	// value prop) while isolating other agents/surfaces; "global" remains an
 	// explicit opt-in.
 	return {
-		captureEnabled: parseBoolEnv(env.MEMONGO_PI_AUTO_CAPTURE, true),
+		// C-036: auto-capture sends the raw text of user and assistant turns
+		// to the configured Memongo API — it must be explicit opt-in, not a
+		// silent default-on. The consent notice in registerMemongoLifecycle
+		// states this data boundary at registration, before anything is
+		// buffered.
+		captureEnabled: parseBoolEnv(env.MEMONGO_PI_AUTO_CAPTURE, false),
 		injectionEnabled: parseBoolEnv(env.MEMONGO_PI_SESSION_INJECTION, true),
 		scope: (SCOPES as readonly string[]).includes(rawScope ?? "")
 			? (rawScope as MemongoScope)
@@ -279,6 +284,16 @@ export function registerMemongoLifecycle(
 			: MAX_SEEN_KEYS
 	const injectionTimeoutMs =
 		deps.injectionTimeoutMs ?? DEFAULT_INJECTION_TIMEOUT_MS
+
+	// C-036: state the capture data boundary once at registration, before
+	// any turn is buffered. Auto-capture is opt-in; this notice is the only
+	// place the user is told exactly what enabling it transmits.
+	const captureBoundary = config.captureEnabled
+		? "auto-capture is ON: the raw text of your user and assistant turns (no redaction), plus session id, is sent to your Memongo API"
+		: "auto-capture is off (default). Opt in with MEMONGO_PI_AUTO_CAPTURE=1 — opting in sends the raw text of your user and assistant turns (no redaction), plus session id, to your Memongo API"
+	warn(
+		`[memongo] ${captureBoundary} under scope "${config.scope}". Disable with MEMONGO_PI_AUTO_CAPTURE=0.`,
+	)
 
 	// ─── Session-start injection state ─────────────────────────────────
 	let injectionPromise: Promise<string | null> | null = null

@@ -389,12 +389,32 @@ export class MongoDBManagerReadOps {
 		}
 
 		if (rawPath.startsWith("kb:") || rawPath.startsWith("reference:")) {
-			const kbPath = rawPath.replace(/^kb:|^reference:/, "").trim()
+			const [basePath, queryString] = rawPath.split("?", 2)
+			const kbPath = basePath.replace(/^kb:|^reference:/, "").trim()
 			if (!kbPath) {
 				throw new Error("path required")
 			}
+			// C-035: the kb locator is scoped to the caller's identity — the
+			// same {agentId, scope, scopeRef} tags ingestToKB stamps on every
+			// KB document. This was the only KB read (and the only MongoDB
+			// query in the engine) with no tenant filter, so a path or title
+			// match returned any tenant's document content. An explicit
+			// `?scope=`/`?scopeRef=` on the path — the structured-path
+			// convention — is the only way to read outside the default
+			// identity (e.g. a global-corpus document the caller ingested);
+			// unknown values fail closed (no document carries them).
+			const query = new URLSearchParams(queryString ?? "")
+			const { scope, scopeRef } = this.host.resolveSearchIdentity({
+				scope: (query.get("scope")?.trim() || undefined) as
+					| MemoryScope
+					| undefined,
+				scopeRef: query.get("scopeRef")?.trim() || undefined,
+			})
 			const record = await kbCollection(this.host.db, this.host.prefix).findOne(
 				{
+					agentId: this.host.agentId,
+					scope,
+					scopeRef,
 					$or: [{ "source.path": kbPath }, { title: kbPath }],
 				},
 				{ sort: { updatedAt: -1, _id: 1 } },

@@ -135,7 +135,13 @@ function register(
 		client,
 		agentId: "pi",
 		isAvailable: () => true,
-		config: resolveLifecycleConfig(env),
+		// C-036: production capture is opt-in (default off). These flow tests
+		// exercise the capture machinery, so they opt in by default here;
+		// individual tests override with MEMONGO_PI_AUTO_CAPTURE=0.
+		config: resolveLifecycleConfig({
+			MEMONGO_PI_AUTO_CAPTURE: "1",
+			...env,
+		}),
 		warn,
 		// Keep the debounce timer out of the way unless a test opts into it.
 		flushMs: 60_000,
@@ -170,11 +176,13 @@ describe("parseBoolEnv", () => {
 })
 
 describe("resolveLifecycleConfig", () => {
-	it("defaults to capture on, injection on, agent scope", () => {
+	it("defaults to capture OFF (opt-in), injection on, agent scope", () => {
 		// C-008: agent (not global) is the default — a global default let one
 		// project's writes surface in every project's recall.
+		// C-036: auto-capture transmits raw turn text, so it is opt-in — the
+		// default is off and the registration notice states the boundary.
 		expect(resolveLifecycleConfig({})).toEqual({
-			captureEnabled: true,
+			captureEnabled: false,
 			injectionEnabled: true,
 			scope: "agent",
 		})
@@ -186,6 +194,15 @@ describe("resolveLifecycleConfig", () => {
 		})
 		expect(config.captureEnabled).toBe(false)
 		expect(config.injectionEnabled).toBe(false)
+	})
+	it("opts into capture only with an explicit MEMONGO_PI_AUTO_CAPTURE value (C-036)", () => {
+		expect(
+			resolveLifecycleConfig({ MEMONGO_PI_AUTO_CAPTURE: "1" }).captureEnabled,
+		).toBe(true)
+		expect(
+			resolveLifecycleConfig({ MEMONGO_PI_AUTO_CAPTURE: "true" })
+				.captureEnabled,
+		).toBe(true)
 	})
 	it("parses MEMONGO_PI_MEMORY_SCOPE and rejects invalid scopes", () => {
 		expect(
@@ -232,6 +249,51 @@ describe("resolveLifecycleConfig", () => {
 		expect(writeEvent).toHaveBeenCalledWith(
 			expect.objectContaining({ scope: "agent" }),
 		)
+	})
+})
+
+describe("auto-capture consent notice (C-036)", () => {
+	it("states the data boundary at registration when capture is off by default", () => {
+		const { client } = createMockClient()
+		const { pi } = createFakePi()
+		const warn = vi.fn()
+		registerMemongoLifecycle(pi, {
+			client,
+			agentId: "pi",
+			isAvailable: () => true,
+			config: resolveLifecycleConfig({}),
+			warn,
+			flushMs: 60_000,
+		})
+
+		expect(warn).toHaveBeenCalledTimes(1)
+		const notice = warn.mock.calls[0]?.[0] ?? ""
+		expect(notice).toContain("auto-capture is off (default)")
+		expect(notice).toContain("MEMONGO_PI_AUTO_CAPTURE=1")
+		// The boundary statement must say what opting in sends, unredacted.
+		expect(notice).toContain("raw text of your user and assistant turns")
+		expect(notice).toContain("no redaction")
+		expect(notice).toContain('scope "agent"')
+	})
+
+	it("states the data boundary at registration when capture is opted in", () => {
+		const { client } = createMockClient()
+		const { pi } = createFakePi()
+		const warn = vi.fn()
+		registerMemongoLifecycle(pi, {
+			client,
+			agentId: "pi",
+			isAvailable: () => true,
+			config: resolveLifecycleConfig({ MEMONGO_PI_AUTO_CAPTURE: "1" }),
+			warn,
+			flushMs: 60_000,
+		})
+
+		expect(warn).toHaveBeenCalledTimes(1)
+		const notice = warn.mock.calls[0]?.[0] ?? ""
+		expect(notice).toContain("auto-capture is ON")
+		expect(notice).toContain("no redaction")
+		expect(notice).toContain("Disable with MEMONGO_PI_AUTO_CAPTURE=0")
 	})
 })
 
@@ -395,7 +457,8 @@ describe("session-start injection", () => {
 			fakeCtx,
 		)
 		expect(result).toBeUndefined()
-		expect(warn).toHaveBeenCalledTimes(1)
+		// 2 warns: the C-036 registration notice + the single degradation warn
+		expect(warn).toHaveBeenCalledTimes(2)
 	})
 
 	it("never warns raw credentials when client errors echo them (C-002)", async () => {
@@ -426,7 +489,8 @@ describe("session-start injection", () => {
 		await handlers.get("session_start")?.(sessionStartEvent, fakeCtx)
 		await handlers.get("before_agent_start")?.(beforeAgentStartEvent, fakeCtx)
 
-		expect(warn).toHaveBeenCalledTimes(1)
+		// 2 warns: the C-036 registration notice + the single degradation warn
+		expect(warn).toHaveBeenCalledTimes(2)
 		const warned = warn.mock.calls.map((args) => args.join(" ")).join("\n")
 		expect(warned).not.toContain("dummy-cred-00000")
 		expect(warned).not.toContain("dummy-token-00000000")

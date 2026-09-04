@@ -419,3 +419,60 @@ missing-evidence/untraced-construct quartet from WS-05).
   <touched files>` pass caught 5 format errors the root run never
   listed, so per-file scoped checks on every touched file are part of
   the landing gate now.
+- WS-17/C-035 + C-036 landing (privacy and tenancy boundaries): (1) C-035 —
+  the readFile kb:/reference: locator was the only MongoDB query in the
+  engine with no tenant filter; it now splits the structured-path query
+  string, resolves the caller identity via host.resolveSearchIdentity
+  (honoring ?scope=/?scopeRef=, defaulting to the read-side scope rule), and
+  filters findOne on {agentId, scope, scopeRef} + the path $or. Same-path
+  collisions between tenants resolve to the caller's own document,
+  other-tenant-only paths return empty, ?scope=global round-trips a
+  shared-corpus document only for the ingesting agent (agentId still fences
+  full-content reads), unknown scope values fail closed (bogus scope ->
+  undefined scopeRef no document carries). Companion doc change (S-6):
+  mongodb-kb.ts tenant-scoping header now records the two coexisting read
+  semantics — scopeRef-partitioned reads (list/stat/remove/search, shared
+  corpus under global/tenant scopes, agentId tagged but intentionally not
+  filtered) vs identity-strict reads (readFile full content, all three
+  tags). (2) C-036 — pi auto-capture is explicit opt-in:
+  resolveLifecycleConfig defaults MEMONGO_PI_AUTO_CAPTURE to false, and
+  registerMemongoLifecycle warns once at registration stating the data
+  boundary (raw user+assistant turn text, no redaction, session id,
+  resolved scope) with the opt-in and disable switches; README gained a
+  Data boundary section, the full lifecycle env table (capture off,
+  injection on, agent scope), and the corrected agentId default (pi —
+  index.ts header comment claimed "pi-agent"; kept the code value "pi"
+  because changing the default would orphan existing captured data, fixed
+  the docs instead; bridge/console default "main" documented as the
+  deliberate distinct-defaults tenant separation, console agent field
+  already gives the cross-agent view). Redaction-before-embed decision
+  recorded (TR-079 notes + README): no redaction before embed by design —
+  redaction would corrupt recall fidelity and give false privacy assurance
+  while raw text is intentionally retained for provenance/re-extraction;
+  the honest controls are consent (this change), tenant isolation
+  (C-035/#27), and retention/erasure. Suite state: engine 2099 (was 2093;
+  +6 "kb locator tenant scoping (C-035)" battery: filter-shape pin,
+  same-path collision, other-tenant-only miss, reference: alias, global
+  round-trip, fail-closed), pi 67 (was 64; +2 consent-notice battery, +1
+  opt-in parse test; register helper now opts capture-flow tests in
+  explicitly), kb-isolation e2e 5/5 re-run against the repo atlas-local
+  stack (readFile integration seam — ingest tags and locator filter agree
+  on one tagging model), fresh check-types both packages clean,
+  touched-files Biome clean. Artifacts: V-080 (engine battery),
+  V-081 (e2e log), V-082 (pi suite), C-035/C-036 validations filled,
+  TR-078/TR-079 completed in place (plan-stage placeholders keep their
+  ids; validation_id null -> V-080/V-082, sweep_pass true), sweep-ws17.json
+  46 violations (was 50 — exactly the four WS-17 plan-stage violations
+  cleared, zero new). Methodology lessons: (1) compose project-name
+  collision — memongo's and mdbrain's stacks both default to compose
+  project "docker" with service "mongodb", so `docker compose up` in
+  memongo recreated mdbrain-preview as memongo-preview; recovered by
+  restoring mdbrain-preview from its own compose (volumes intact, no data
+  loss) and re-running memongo's stack with `-p memongo` on MONGODB_PORT
+  28018; e2e must pin MONGODB_TEST_URI explicitly because preview-env
+  auto-discovery picks any running atlas-local container by name. (2) The
+  validation writer pins --construct verbatim to the claim's constructs[]
+  (C-036 declares the file symbol, not #resolveLifecycleConfig). (3)
+  The validation writer accepts --notes at write time; recording without
+  it leaves notes null, and re-recording would append duplicate V ids (no
+  dedupe) — pass --notes up front.

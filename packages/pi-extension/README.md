@@ -50,7 +50,7 @@ Set env vars (in shell or `.envrc`):
 ```bash
 export MEMONGO_API_URL="http://127.0.0.1:3847"
 export MEMONGO_API_KEY="local-dev-secret"
-export MEMONGO_AGENT_ID="pi-agent"
+# optional: MEMONGO_AGENT_ID defaults to "pi" in this extension
 ```
 
 ### 3. Reload and verify
@@ -81,8 +81,33 @@ Pi Agent
 |---------|---------|---------|
 | `MEMONGO_API_URL` | `http://127.0.0.1:3847` | Memongo HTTP API base URL |
 | `MEMONGO_API_KEY` | _(none)_ | Bearer token (optional for local dev) |
-| `MEMONGO_AGENT_ID` | `pi-agent` | Agent identity for scoping |
+| `MEMONGO_AGENT_ID` | `pi` | Agent identity for scoping |
+| `MEMONGO_PI_AUTO_CAPTURE` | `0` (off) | Opt in to automatic capture of your turns (see below) |
+| `MEMONGO_PI_SESSION_INJECTION` | `1` (on) | Inject recalled memory at session start |
+| `MEMONGO_PI_MEMORY_SCOPE` | `agent` | Memory scope for capture and recall |
 | `VOYAGE_API_KEY` | _(none)_ | Required for vector/semantic search (Atlas Model API key) |
+
+Each surface has its own agentId default — `pi` here, `main` for the API
+bridge and web console — so Pi's memory stays a separate tenant from other
+surfaces by default. Set `MEMONGO_AGENT_ID` to share identity across
+surfaces; the web console's agent field views any agent regardless.
+
+## Data boundary (auto-capture)
+
+Auto-capture (turn text sent to Memongo without an explicit tool call) is
+**off by default**. At registration the extension prints one notice stating
+this boundary. Opting in with `MEMONGO_PI_AUTO_CAPTURE=1` sends, per turn:
+
+- the **raw text** of your user prompts and the agent's assistant replies —
+  no redaction, no filtering
+- the session id, agent id, and resolved memory scope
+
+Tool calls, tool results, images, and thinking blocks are not captured.
+Captured text is stored as canonical events and embedded for semantic
+recall; secrets redaction applies to logs and diagnostics, not stored
+content — treat anything captured as retained data subject to your
+retention/erasure settings. Explicit saves via `memongo_save` are unaffected
+by this switch.
 
 ## Graceful degradation
 

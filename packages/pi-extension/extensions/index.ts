@@ -13,7 +13,8 @@
  * Config (env):
  *   MEMONGO_API_URL   — HTTP API base (default http://127.0.0.1:3847)
  *   MEMONGO_API_KEY   — bearer token (optional for local dev)
- *   MEMONGO_AGENT_ID  — agent identity (default "pi-agent")
+ *   MEMONGO_AGENT_ID  — agent identity (default "pi"; the bridge and web console default to "main" — distinct defaults keep Pi a separate tenant)
+ *   MEMONGO_PI_AUTO_CAPTURE — turn auto-capture opt-in (default off, notice at registration; see lifecycle.ts)
  *   MEMONGO_PI_*      — lifecycle knobs (injection/capture/scope), see lifecycle.ts
  *
  * Availability (C-016): one startup probe, then — if it failed — a
