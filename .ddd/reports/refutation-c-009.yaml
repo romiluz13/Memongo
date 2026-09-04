@@ -1,0 +1,259 @@
+# Independent refutation report for T3 claim C-009 (WS-06) — ROUNDS 1-3
+# ("Deployment defaults MUST be safe at moderate scale: shared-client mode
+# with its bounded pool MUST be the default, the manager cache MUST be
+# bounded unconditionally with LRU idle eviction, and the non-shared poll
+# interval MUST become a sweep rather than 1 Hz polling.")
+schema_version: 0.1.0
+claim_id: C-009
+round: 3
+verdict: sustained
+outcome: sustained
+independence_verified: true
+refuter_id: "factory-droid worker subagents, three independent C-009 refuters (none authored the implementation or the between-round fixes)"
+implementer_id: "factory-droid primary agent, WS-06 implementer"
+refuted_rounds: 1
+sustained_rounds: 2
+attempt_log_dir: .ddd/reports/runs/
+
+provenance_note: >
+  The round-1 worker output predates a context compaction; its six findings
+  and the applied fixes are recorded here from the preserved session record.
+  Every round-1 fix was independently re-verified with file:line anchors by
+  the fresh round-2 refuter (see round_2.round1_resolution below), so no
+  finding or resolution rests solely on the compacted text. Rounds 2 and 3
+  reports are reproduced verbatim in substance.
+
+round_1:
+  outcome: partially_refuted
+  refuter_context: "worker-subagent-independent-round1"
+  findings:
+    - id: F-001
+      type: migration-hazard
+      severity: medium
+      description: >
+        The default flip (shared client now on unless MEMONGO_SHARED_CLIENT
+        is explicitly 0/false/no/off) plus its escape hatch were documented
+        nowhere a deployer would look: no README env-table row, nothing in
+        docs/platform/self-host.md, no CHANGELOG upgrade note — while the
+        remediation plan's migration-promise required one.
+      resolution: >
+        README.md env table gained four rows (MEMONGO_SHARED_CLIENT,
+        MEMONGO_MANAGER_CACHE_MAX, MEMONGO_MANAGER_CACHE_IDLE_TTL_MS,
+        MEMONGO_JOB_SWEEP_MS) plus a "Deployment-safe defaults" paragraph;
+        docs/platform/self-host.md gained a connection-budget paragraph with
+        the opt-out and first-resolved-options note; CHANGELOG.md gained an
+        Unreleased "Deployment defaults (upgrade note)" section with
+        migration notes. Verified by the round-2 refuter (flag semantics
+        match isSharedMongoClientEnabled exactly).
+    - id: F-002
+      type: migration-hazard
+      severity: medium
+      description: >
+        The shared registry is keyed by URI only, so the first acquirer's
+        MongoClientOptions fix the pool for every later agent on that URI;
+        per-agent pool tuning was silently discarded.
+      resolution: >
+        acquireSharedMongoClient now snapshots the first-resolved options on
+        the RegistryEntry and warns on later diverging acquires, listing
+        diverging option KEY NAMES only (never values; URI logged as the
+        C-002 sha256 alias). Test added in mongodb-client-registry.test.ts
+        asserting key names appear, values never leak, and no warn for
+        same-options re-acquire. Verified by the round-2 refuter
+        (divergingOptionKeys: absent ≡ explicit undefined, functions via
+        String(), deterministic insertion-ordered key set).
+    - id: F-003
+      type: test-gap
+      severity: medium
+      description: >
+        The new backend-config test ("C-009: bounded pool defaults cap the
+        shared-runtime connection budget") was decorative: it pinned
+        unchanged defaults and would pass verbatim under a revert of the
+        whole workstream.
+      resolution: >
+        Test renamed to "resolves the bounded pool defaults that cap the
+        shared-runtime connection budget" with an honest comment stating it
+        pins the budget half of the claim and pointing at where the flip
+        half is pinned (registry default-on test; search-manager default
+        share test with no env stub). Verified sufficient by the round-2
+        refuter: the flip IS pinned elsewhere.
+    - id: F-004
+      type: implementation-gap
+      severity: low
+      description: >
+        mongodb-manager.ts still carried the stale worker-interval comment
+        ("Flag-off behavior is unchanged") contradicting the new
+        every-mode-30s behavior, plus a now-dead isSharedMongoClientEnabled
+        import; droid-wiki pages were also stale.
+      resolution: >
+        Comment rewritten to "30s sweep in EVERY runtime mode"; dead import
+        removed (grep-verified zero references in mongodb-manager.ts /
+        mongodb-manager-jobs.ts; resolveMemoryJobSweepMs re-export intact).
+        droid-wiki staleness accepted: pages are CI-regenerated on push
+        (.github/workflows/droid-wiki-refresh.yml exists).
+    - id: F-005
+      type: migration-hazard
+      severity: low
+      description: >
+        The opt-out mode's new idle-eviction re-bootstrap cost (idle agent
+        re-creates its manager and reconnects after the 10-minute TTL) was
+        undocumented.
+      resolution: >
+        Folded into all three docs (README deployment-defaults paragraph,
+        self-host connection-budget paragraph, CHANGELOG migration notes).
+        Verified accurate against the eviction behavior.
+    - id: F-006
+      type: reasoning-flaw
+      severity: low
+      description: >
+        C-009 still declared validations: [] pre-landing, with TR-023/024/025
+        carrying validation_id: null.
+      resolution: >
+        Procedural status: validations attach in the landing step, same as
+        the C-008 procedure the round-1 refuter accepted there. V-062..V-064
+        recorded after round 3 in .ddd/reports/validations.yaml, anchored to
+        final-state suite logs.
+
+round_2:
+  outcome: sustained
+  refuter_context: "worker-subagent-independent-round2"
+  round1_resolution:
+    F-001: resolved
+    F-002: resolved
+    F-003: resolved
+    F-004: resolved
+    F-005: resolved
+    F-006: accepted-procedural (attaches at landing, per C-008 precedent)
+  findings:
+    - id: C009-R2-F1
+      type: reasoning-flaw
+      severity: low
+      description: >
+        All three docs stated "Agent count no longer multiplies connections
+        or poll traffic." The connections half is true (one pool per URI);
+        the poll-traffic half is overstated: each live cached manager still
+        runs its own 30s worker timer, so standing claim traffic scales
+        linearly with live manager count — 30x lower per agent and hard
+        capped by the LRU-50 cache (<=50 sweeps/30s ~= 1.7 qps ceiling), but
+        between 2 and 50 agents it still multiplies with agent count.
+      resolution: >
+        All three docs reworded to "connections are fixed per URI, and
+        standing poll traffic is capped by the bounded manager cache (<=50
+        sweeps per 30 s)." Verified accurate by the round-3 refuter against
+        mongodb-manager-jobs.ts:752-754 (one timer per live cached manager)
+        and search-manager.ts (unconditional LRU cap 50).
+    - id: C009-R2-F2
+      type: implementation-gap
+      severity: low
+      description: >
+        The divergence warning fired on EVERY divergent acquire — a
+        legitimately divergent per-agent config would re-warn on every
+        post-eviction re-init (~every 10 minutes per agent) and on
+        failed-connect retries: recurring log noise in exactly the scenario
+        the warning targets.
+      resolution: >
+        RegistryEntry gains warnedSignatures: Set<string>; the warn fires
+        once per diverging-key signature per registered client. Test
+        extended: same divergent options re-acquire stays at one warn,
+        first-options re-acquire adds none, a different diverging signature
+        warns once more. Verified by the round-3 refuter (set lives and dies
+        with the entry; non-divergent acquires unchanged; growth bounded by
+        distinct caller configs).
+  claim_musts_reverified: >
+    Shared default-on (registry returns true unless explicit
+    0/false/no/off; "" and unrecognized values keep the safe default) ✓.
+    Unconditional LRU + idle bounding (cacheManager and the
+    getMemorySearchManager recency refresh carry no mode gates; legacy
+    opt-out tests prove 60 agents → 10 evicted, recency refresh, and
+    idle-TTL eviction) ✓. 30s sweep in every mode (resolveMemoryJobSweepMs
+    has no mode branch; MEMORY_JOB_POLL_MS deleted; worker timer is its
+    only caller; remaining intervals are the 60s idle-eviction sweep, the
+    60s access-tracker flush that early-returns when the buffer is empty,
+    and a 20s lease heartbeat only while a job is actively claimed — no 1
+    Hz standing poll anywhere in the worker path) ✓.
+
+round_3:
+  outcome: sustained
+  refuter_context: "worker-subagent-independent-round3-final"
+  round2_resolution:
+    C009-R2-F1: resolved
+    C009-R2-F2: resolved
+  findings: []
+  detail: >
+    Both round-2 fixes verified in code and tests: the doc wording is
+    precisely true against the code (one 30s sweep timer per live cached
+    manager, unconditional LRU cap 50 → <=50 sweeps per 30 s), and the
+    divergence warning is deduped per diverging-key signature on the
+    registry entry with test coverage for re-acquire, first-options, and
+    new-signature cases. Final pass confirms all three claim MUSTs hold in
+    the current tree, the diff touches nothing outside the claimed
+    constructs plus their colocated tests and the three docs, the
+    warnedSignatures set introduces no unbounded growth or lifecycle leak
+    (appended only on distinct divergence signatures, garbage-collected
+    with its registry entry), and the engine suite log corroborates 122
+    files / 2078 tests green. Observations too minor to classify as flaws:
+    the signature is key-names-only, so two different values diverging on
+    the same key set share one warn (documented design, matches the test),
+    and divergingOptionKeys uses JSON.stringify, which would throw on
+    circular option objects — not a realistic shape for MongoClientOptions
+    and not a hazard to the claim.
+
+fix_applied_between_rounds:
+  - after_round: 1
+    fixes: >
+      README env-table rows + deployment-defaults paragraph; self-host
+      connection-budget paragraph; CHANGELOG upgrade note; first-resolved
+      options snapshot with key-names-only divergence warning + test;
+      decorative backend-config test renamed with honest scope comment;
+      stale mongodb-manager.ts comment rewritten and dead import removed;
+      re-bootstrap cost documented in all three docs.
+  - after_round: 2
+    fixes: >
+      Poll-traffic wording corrected in README.md, CHANGELOG.md, and
+      docs/platform/self-host.md; warnedSignatures dedupe added to the
+      registry divergence warning with extended test coverage.
+
+conclusion: >
+  Verdict: sustained (round 3, final). Three adversarial rounds: round 1
+  partially refuted (undocumented migration, silent first-wins options,
+  decorative test, stale comment/import, undocumented re-bootstrap cost,
+  pre-landing validations — all fixed or accepted as procedural), round 2
+  sustained with two low findings (doc overstatement, warning spam — both
+  fixed), round 3 sustained with zero findings. The three MUSTs hold
+  unconditionally in the landed tree: the shared-client runtime is on by
+  default with an explicit opt-out only, the manager cache is bounded
+  (LRU-50, 10-minute idle TTL, 60s sweep) in every mode, and the standing
+  memory-job interval is a 30s sweep in every mode with no surviving 1 Hz
+  poll. Deployment-safety docs (README, self-host, CHANGELOG) state exactly
+  what the code does, including the migration costs of the default flip.
+
+tree_hygiene: >
+  Refuters ran read-only (no source mutations, no git-mutating commands in
+  any round). All changes between rounds were made by the implementer only.
+  Final-state suite logs captured under .ddd/reports/runs/ws06-*-suite.log
+  and hashed; the only new artifacts are this report, the validation
+  records, and the landing artifacts (ADR-0008, book.yaml entry,
+  trace-matrix patches, sweep-ws06.json, landing-progress update).
+
+non_blocking_observations:
+  - id: obs-1-pool-options-first-wins
+    text: >
+      In default shared mode, per-agent pool tuning is deliberately not
+      honored beyond the first acquirer per URI (one pool per URI is the
+      point of the default); the divergence warning makes the divergence
+      visible once per signature instead of silently ignoring it. The
+      remediation plan's driver-options pinning (retryWrites, appName) was
+      folded into buildMongoClientOptions in the shared runtime before this
+      workstream and is outside C-009's claim scope.
+  - id: obs-2-droid-wiki-staleness
+    text: >
+      droid-wiki pages still describe the pre-flip flag semantics until the
+      next CI wiki refresh on push (.github/workflows/droid-wiki-refresh.yml
+      regenerates them automatically); accepted by round 1 and verified
+      grounded by round 2.
+  - id: obs-3-pre-existing-lint-debt
+    text: >
+      packages/memory-engine/src/mongodb-manager.ts carries pre-existing
+      biome format drift around writeStructuredMemory (line ~1369, present
+      before this workstream; this workstream only touched a comment and an
+      import above it). Root lint debt was already present at HEAD; out of
+      scope.

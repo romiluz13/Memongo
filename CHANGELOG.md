@@ -2,6 +2,25 @@
 
 All notable changes to Memongo will be documented in this file.
 
+## Unreleased
+
+### Deployment defaults (upgrade note)
+
+- The shared-client runtime is now the default: all memory managers for the
+  same MongoDB URI share one client and one bounded connection pool
+  (`maxPoolSize` 10), the manager cache is LRU-capped with idle eviction in
+  every mode, and the standing memory-job sweep is 30 s (writes still drain
+  immediately). Connections are fixed per URI, and standing poll traffic is
+  capped by the bounded manager cache (<=50 sweeps per 30 s); ~150 agents on
+  an M10 node previously exhausted its 1,500-connection budget. Deployments
+  that relied on per-manager client isolation must set
+  `MEMONGO_SHARED_CLIENT=0` (or `false`/`no`/`off`).
+  Migration notes: in opt-out mode an idle agent re-bootstraps its manager
+  and reconnects after the idle TTL (10 min default), and in the default
+  shared mode pool options resolve per URI — the first agent to connect
+  fixes the pool options for that URI, and differing per-agent pool
+  settings are ignored (a warning is logged).
+
 ## 2.0.0 - 2026-07-31
 
 Major release: security hardening, tenant isolation, and engine robustness.

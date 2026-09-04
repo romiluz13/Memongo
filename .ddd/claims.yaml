@@ -172,7 +172,7 @@ entries:
     tier: T3
     status: known-and-supported
     constructs: [packages/memory-engine/src/search-manager.ts, packages/memory-engine/src/mongodb-client-registry.ts, packages/memory-engine/src/backend-config.ts]
-    validations: []
+    validations: [V-062, V-063, V-064]
     exceptions: []
 
   - id: C-010

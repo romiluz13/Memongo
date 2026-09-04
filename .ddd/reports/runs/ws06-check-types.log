@@ -1,0 +1,49 @@
+$ turbo run check-types --force
+• turbo 2.10.10
+
+   • Packages in scope: @memongo/api, @memongo/client, @memongo/docs, @memongo/lib, @memongo/mcp, @memongo/memory, @memongo/memory-bridge, @memongo/memory-engine, @memongo/pi-extension, @memongo/scripts, @memongo/tools, @memongo/web
+   • Running check-types in 12 packages
+   • Remote caching disabled
+
+@memongo/lib:check-types: cache bypass, force executing ed26342593d68ef3
+@memongo/client:build: cache bypass, force executing afca5b8a8679217c
+@memongo/client:check-types: cache bypass, force executing 087a70564007fc5c
+@memongo/lib:build: cache bypass, force executing 66257a4c9e6c5438
+@memongo/client:check-types: $ node ../../node_modules/typescript/bin/tsc --noEmit -p tsconfig.json
+@memongo/client:build: $ bun run clean && node ../../node_modules/typescript/bin/tsc -p tsconfig.json
+@memongo/lib:build: $ bun run clean && node ../../node_modules/typescript/bin/tsc -p tsconfig.json
+@memongo/lib:check-types: $ node ../../node_modules/typescript/bin/tsc --noEmit -p tsconfig.json
+@memongo/client:build: $ node -e "require('node:fs').rmSync('dist', { recursive: true, force: true })"
+@memongo/lib:build: $ node -e "require('node:fs').rmSync('dist', { recursive: true, force: true })"
+@memongo/web:check-types: cache bypass, force executing 1875f467c64929b9
+@memongo/web:check-types: $ node ../../node_modules/next/dist/bin/next typegen && node ../../node_modules/typescript/bin/tsc --noEmit -p tsconfig.json
+@memongo/tools:check-types: cache bypass, force executing 2715cbe9090cb527
+@memongo/tools:build: cache bypass, force executing d875ef33f61be695
+@memongo/memory-engine:check-types: cache bypass, force executing 55d60b29ce5db761
+@memongo/memory-engine:build: cache bypass, force executing 15d1ab8364ea77a7
+@memongo/mcp:check-types: cache bypass, force executing 16ea1cd59a92b459
+@memongo/tools:check-types: $ node ../../node_modules/typescript/bin/tsc --noEmit -p tsconfig.json
+@memongo/mcp:check-types: $ node ../../node_modules/typescript/bin/tsc --noEmit -p tsconfig.json
+@memongo/memory-engine:build: $ bun run clean && node ../../node_modules/typescript/bin/tsc -p tsconfig.json
+@memongo/tools:build: $ bun run clean && node ../../node_modules/typescript/bin/tsc -p tsconfig.json
+@memongo/memory-engine:check-types: $ node ../../node_modules/typescript/bin/tsc --noEmit -p tsconfig.json
+@memongo/memory-engine:build: $ node -e "require('node:fs').rmSync('dist', { recursive: true, force: true })"
+@memongo/tools:build: $ node -e "require('node:fs').rmSync('dist', { recursive: true, force: true })"
+@memongo/web:check-types: Generating route types...
+@memongo/web:check-types: ✓ Route types generated successfully
+@memongo/pi-extension:check-types: cache bypass, force executing 8b4bf21cbb0c3ada
+@memongo/pi-extension:check-types: $ node ../../node_modules/typescript/bin/tsc --noEmit -p tsconfig.json
+@memongo/memory-bridge:check-types: cache bypass, force executing 4feb49adecb18553
+@memongo/memory-bridge:build: cache bypass, force executing 37c4f642af8ae33b
+@memongo/memory-bridge:check-types: $ node ../../node_modules/typescript/bin/tsc --noEmit -p tsconfig.json
+@memongo/memory-bridge:build: $ bun run clean && node ../../node_modules/typescript/bin/tsc -p tsconfig.json
+@memongo/memory-bridge:build: $ node -e "require('node:fs').rmSync('dist', { recursive: true, force: true })"
+@memongo/memory:check-types: cache bypass, force executing 153f2e879e98d706
+@memongo/api:check-types: cache bypass, force executing 4b14fe5c373ca51a
+@memongo/memory:check-types: $ node ../../node_modules/typescript/bin/tsc --noEmit -p tsconfig.json
+@memongo/api:check-types: $ node ../../node_modules/typescript/bin/tsc --noEmit -p tsconfig.json
+
+ Tasks:    15 successful, 15 total
+Cached:    0 cached, 15 total
+  Time:    7.258s 
+

@@ -284,36 +284,8 @@ describe("getMemorySearchManager runtime (P2.1)", () => {
 		vi.unstubAllEnvs()
 	})
 
-	it("flag off: no shared client is passed and the cache stays unbounded", async () => {
-		for (let i = 0; i < 60; i++) {
-			const result = await getMemorySearchManager({
-				cfg,
-				agentId: `agent-${i}`,
-			})
-			expect(result.manager).not.toBeNull()
-		}
-
-		expect(managerMocks.create).toHaveBeenCalledTimes(60)
-		expect(sharedConnect).not.toHaveBeenCalled()
-		for (const call of managerMocks.create.mock.calls) {
-			expect(call[0]).not.toHaveProperty("client")
-			expect(call[0]).not.toHaveProperty("onClosed")
-		}
-		// Unbounded: nothing was evicted/closed along the way.
-		for (const manager of createdManagers) {
-			expect(manager.close).not.toHaveBeenCalled()
-		}
-
-		await closeAllMemorySearchManagers()
-		for (const manager of createdManagers) {
-			expect(manager.close).toHaveBeenCalledTimes(1)
-		}
-		expect(sharedClientClose).not.toHaveBeenCalled()
-	})
-
-	it("flag on: 50 agents share exactly one MongoClient pool", async () => {
-		vi.stubEnv("MEMONGO_SHARED_CLIENT", "1")
-
+	it("default (C-009): 50 agents share exactly one MongoClient pool", async () => {
+		// No MEMONGO_SHARED_CLIENT stub: the shared runtime is the default.
 		for (let i = 0; i < 50; i++) {
 			const result = await getMemorySearchManager({
 				cfg,
@@ -342,8 +314,43 @@ describe("getMemorySearchManager runtime (P2.1)", () => {
 		})
 	})
 
-	it("flag on: LRU eviction closes the evicted manager but not the shared client", async () => {
-		vi.stubEnv("MEMONGO_SHARED_CLIENT", "1")
+	it("legacy opt-out (C-009): no shared client is passed and the cache is STILL bounded", async () => {
+		vi.stubEnv("MEMONGO_SHARED_CLIENT", "0")
+
+		// 60 agents against the default LRU cap of 50: the cache must stay
+		// bounded even in legacy per-manager-client mode.
+		for (let i = 0; i < 60; i++) {
+			const result = await getMemorySearchManager({
+				cfg,
+				agentId: `agent-${i}`,
+			})
+			expect(result.manager).not.toBeNull()
+		}
+
+		expect(managerMocks.create).toHaveBeenCalledTimes(60)
+		expect(sharedConnect).not.toHaveBeenCalled()
+		for (const call of managerMocks.create.mock.calls) {
+			expect(call[0]).not.toHaveProperty("client")
+			expect(call[0]).not.toHaveProperty("onClosed")
+		}
+		// Bounded: the 10 least-recently-used managers were evicted (closed)
+		// along the way; the 50 most recent are alive.
+		let closed = 0
+		for (const manager of createdManagers) {
+			if (manager.close.mock.calls.length > 0) {
+				closed += 1
+			}
+		}
+		expect(closed).toBe(10)
+
+		await closeAllMemorySearchManagers()
+		for (const manager of createdManagers) {
+			expect(manager.close).toHaveBeenCalledTimes(1)
+		}
+		expect(sharedClientClose).not.toHaveBeenCalled()
+	})
+
+	it("default: LRU eviction closes the evicted manager but not the shared client", async () => {
 		vi.stubEnv("MEMONGO_MANAGER_CACHE_MAX", "2")
 
 		await getMemorySearchManager({ cfg, agentId: "agent-a" })
@@ -366,8 +373,7 @@ describe("getMemorySearchManager runtime (P2.1)", () => {
 		expect(sharedClientClose).not.toHaveBeenCalled()
 	})
 
-	it("flag on: cache hits refresh recency so hot agents are not evicted", async () => {
-		vi.stubEnv("MEMONGO_SHARED_CLIENT", "1")
+	it("default: cache hits refresh recency so hot agents are not evicted", async () => {
 		vi.stubEnv("MEMONGO_MANAGER_CACHE_MAX", "2")
 
 		await getMemorySearchManager({ cfg, agentId: "agent-a" })
@@ -381,8 +387,49 @@ describe("getMemorySearchManager runtime (P2.1)", () => {
 		expect(createdManagers[1]!.close).toHaveBeenCalledTimes(1)
 	})
 
-	it("flag on: idle TTL eviction closes managers idle beyond the TTL", async () => {
-		vi.stubEnv("MEMONGO_SHARED_CLIENT", "1")
+	it("default: idle TTL eviction closes managers idle beyond the TTL", async () => {
+		vi.stubEnv("MEMONGO_MANAGER_CACHE_IDLE_TTL_MS", "1000")
+		vi.useFakeTimers()
+		try {
+			await getMemorySearchManager({ cfg, agentId: "agent-a" })
+			await getMemorySearchManager({ cfg, agentId: "agent-b" })
+
+			vi.advanceTimersByTime(2_000)
+			await evictIdleMemorySearchManagers()
+
+			expect(createdManagers[0]!.close).toHaveBeenCalledTimes(1)
+			expect(createdManagers[1]!.close).toHaveBeenCalledTimes(1)
+			expect(sharedClientClose).not.toHaveBeenCalled()
+
+			// Evicted entries re-initialize on next access.
+			vi.advanceTimersByTime(10)
+			await getMemorySearchManager({ cfg, agentId: "agent-a" })
+			expect(managerMocks.create).toHaveBeenCalledTimes(3)
+		} finally {
+			vi.useRealTimers()
+		}
+	})
+
+	it("legacy opt-out (C-009): cache hits refresh recency so LRU works without the shared client", async () => {
+		vi.stubEnv("MEMONGO_SHARED_CLIENT", "0")
+		vi.stubEnv("MEMONGO_MANAGER_CACHE_MAX", "2")
+
+		await getMemorySearchManager({ cfg, agentId: "agent-a" })
+		await getMemorySearchManager({ cfg, agentId: "agent-b" })
+		// Touch agent-a so agent-b becomes the LRU entry.
+		await getMemorySearchManager({ cfg, agentId: "agent-a" })
+		await getMemorySearchManager({ cfg, agentId: "agent-c" })
+
+		expect(managerMocks.create).toHaveBeenCalledTimes(3)
+		expect(sharedConnect).not.toHaveBeenCalled()
+		// agent-b was least recently used: evicted and closed.
+		expect(createdManagers[0]!.close).not.toHaveBeenCalled()
+		expect(createdManagers[1]!.close).toHaveBeenCalledTimes(1)
+		expect(createdManagers[2]!.close).not.toHaveBeenCalled()
+	})
+
+	it("legacy opt-out (C-009): idle TTL eviction closes idle managers without the shared client", async () => {
+		vi.stubEnv("MEMONGO_SHARED_CLIENT", "0")
 		vi.stubEnv("MEMONGO_MANAGER_CACHE_IDLE_TTL_MS", "1000")
 		vi.useFakeTimers()
 		try {

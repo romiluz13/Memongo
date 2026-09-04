@@ -16,6 +16,21 @@ Memongo is data-plane memory you run next to your agents. This runbook describes
 - `MEMONGO_API_PORT` / `MEMONGO_API_HOST` - bind address for `apps/api`.
 - `VOYAGE_API_KEY` - required for auto-embed and hybrid retrieval quality. Use an Atlas Model key with the `al-...` prefix.
 
+Connection budget defaults: all managers for the same MongoDB URI share one
+client and therefore one bounded pool (`MEMONGO_MONGODB_MAX_POOL_SIZE`,
+default 10), the manager cache is LRU-capped (`MEMONGO_MANAGER_CACHE_MAX`,
+default 50) with idle eviction (`MEMONGO_MANAGER_CACHE_IDLE_TTL_MS`, default
+10 minutes) in every mode, and the standing memory-job sweep runs every
+`MEMONGO_JOB_SWEEP_MS` (default 30 s) — writes still drain immediately.
+Agent count no longer multiplies connections: connections are fixed per URI,
+and standing poll traffic is capped by the bounded manager cache (<=50
+sweeps per 30 s). Deployments
+that relied on per-manager client isolation must set
+`MEMONGO_SHARED_CLIENT=0` to opt out; in that mode an idle agent
+re-bootstraps its manager (and reconnects) after the idle TTL, and pool
+options are honored per manager instead of per URI (first-resolved options
+win for a shared URI).
+
 Optional file config: `~/.memongo/memongo.json` or `MEMONGO_CONFIG_PATH`. See `apps/docs/guides/memory-config.mdx`.
 
 > [!WARNING]

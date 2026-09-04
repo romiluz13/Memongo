@@ -230,31 +230,31 @@ traces:
     change_id: WS-06
     claim_id: C-009
     construct_id: packages/memory-engine/src/search-manager.ts
-    validation_id: null
+    validation_id: V-062
     direction: forward
-    sweep_pass: false
-    checked_at: "2026-09-02T13:41:40.046Z"
-    notes: WS-06 Deployment-safe defaults (planned change envelope)
+    sweep_pass: true
+    checked_at: "2026-09-04T08:03:23.000Z"
+    notes: WS-06 Deployment-safe defaults (unconditional LRU + idle-eviction manager cache; landed)
   - id: TR-024
     schema_version: 0.1.0
     change_id: WS-06
     claim_id: C-009
     construct_id: packages/memory-engine/src/mongodb-client-registry.ts
-    validation_id: null
+    validation_id: V-063
     direction: forward
-    sweep_pass: false
-    checked_at: "2026-09-02T13:41:40.047Z"
-    notes: WS-06 Deployment-safe defaults (planned change envelope)
+    sweep_pass: true
+    checked_at: "2026-09-04T08:03:23.000Z"
+    notes: WS-06 Deployment-safe defaults (shared-client runtime default-on with explicit opt-out and first-resolved-options warning; landed)
   - id: TR-025
     schema_version: 0.1.0
     change_id: WS-06
     claim_id: C-009
     construct_id: packages/memory-engine/src/backend-config.ts
-    validation_id: null
+    validation_id: V-064
     direction: forward
-    sweep_pass: false
-    checked_at: "2026-09-02T13:41:40.048Z"
-    notes: WS-06 Deployment-safe defaults (planned change envelope)
+    sweep_pass: true
+    checked_at: "2026-09-04T08:03:23.000Z"
+    notes: WS-06 Deployment-safe defaults (per-URI pool budget defaults maxPoolSize 10 / minPoolSize 2; landed)
   - id: TR-026
     schema_version: 0.1.0
     change_id: WS-07

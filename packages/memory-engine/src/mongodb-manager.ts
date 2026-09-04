@@ -29,7 +29,6 @@ import type {
 } from "./backend-config.js"
 import { resolveSearchDefaultScope } from "./backend-config.js"
 import { isDuplicateKeyError, normalizeExtraMemoryPaths } from "./internal.js"
-import { isSharedMongoClientEnabled } from "./mongodb-client-registry.js"
 import { getMemoryStats, type MemoryStats } from "./mongodb-analytics.js"
 import { MongoDBChangeStreamWatcher } from "./mongodb-change-stream.js"
 import {
@@ -478,10 +477,9 @@ export function buildMongoClientOptions(
 
 /**
  * Memory-job worker backstop sweep interval. Writes wake the worker
- * immediately (wake-on-write); the interval only catches missed wakes.
- * With the shared-client runtime on (P2.1) the default drops from a 1s poll
- * to a 30s backstop so idle managers issue ~0 claim polls. Flag-off behavior
- * is unchanged. MEMONGO_JOB_SWEEP_MS overrides both.
+ * immediately (wake-on-write); the interval only catches missed wakes and
+ * expired leases. C-009: the default is a 30s sweep in EVERY runtime mode —
+ * the legacy 1s per-manager poll is gone. MEMONGO_JOB_SWEEP_MS overrides.
  */
 export class MongoDBMemoryManager implements MemorySearchManager {
 	private readonly client: MongoClient

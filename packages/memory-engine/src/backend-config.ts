@@ -387,6 +387,12 @@ export function resolveMemoryBackendConfig(params: {
 					mongoCfg.numDimensions > 0
 						? Math.floor(mongoCfg.numDimensions)
 						: 1024,
+				// C-009 (EL-009 R1/B1): these pool bounds are the process-wide
+				// connection budget in the default shared-client runtime — one
+				// pool per URI, so maxPoolSize 10 caps total driver connections
+				// regardless of agent count (legacy per-agent mode multiplied
+				// this by N: ~150 agents x 10 connections exhausted an M10
+				// node's 1,500-connection budget before any query ran).
 				maxPoolSize: resolvePositiveIntegerSetting(
 					mongoCfg?.maxPoolSize,
 					"MEMONGO_MONGODB_MAX_POOL_SIZE",

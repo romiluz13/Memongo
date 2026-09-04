@@ -111,12 +111,13 @@ describe("P2.1 memory-job worker sweep", () => {
 		).memoryJobWorkerPromise
 	}
 
-	it("resolveMemoryJobSweepMs: 30s default with shared runtime, 1s legacy, env override", async () => {
+	it("resolveMemoryJobSweepMs: 30s sweep default in EVERY mode (C-009), env override", async () => {
 		const { resolveMemoryJobSweepMs } = await import("./mongodb-manager.js")
 		vi.stubEnv("MEMONGO_JOB_SWEEP_MS", "")
 		vi.stubEnv("MEMONGO_SHARED_CLIENT", "")
-		expect(resolveMemoryJobSweepMs()).toBe(1_000)
-		vi.stubEnv("MEMONGO_SHARED_CLIENT", "1")
+		expect(resolveMemoryJobSweepMs()).toBe(30_000)
+		vi.stubEnv("MEMONGO_SHARED_CLIENT", "0")
+		// The legacy 1 Hz poll is gone in opt-out mode too: sweep everywhere.
 		expect(resolveMemoryJobSweepMs()).toBe(30_000)
 		vi.stubEnv("MEMONGO_JOB_SWEEP_MS", "5000")
 		expect(resolveMemoryJobSweepMs()).toBe(5_000)
@@ -125,11 +126,10 @@ describe("P2.1 memory-job worker sweep", () => {
 		vi.unstubAllEnvs()
 	})
 
-	it("shared runtime: no claim polls while idle; backstop fires at 30s", async () => {
+	it("default (C-009): no claim polls while idle; backstop fires at 30s", async () => {
 		const { claimMemoryJob } = await import("./mongodb-memory-jobs.js")
 		mocked(claimMemoryJob).mockReset()
 		mocked(claimMemoryJob).mockResolvedValue(null)
-		vi.stubEnv("MEMONGO_SHARED_CLIENT", "1")
 		vi.stubEnv("MEMONGO_JOB_SWEEP_MS", "")
 		vi.useFakeTimers()
 		try {
@@ -155,11 +155,11 @@ describe("P2.1 memory-job worker sweep", () => {
 		}
 	})
 
-	it("legacy runtime: backstop stays at the 1s poll (flag-off behavior unchanged)", async () => {
+	it("legacy opt-out (C-009): no 1 Hz polling either — backstop sweeps at 30s", async () => {
 		const { claimMemoryJob } = await import("./mongodb-memory-jobs.js")
 		mocked(claimMemoryJob).mockReset()
 		mocked(claimMemoryJob).mockResolvedValue(null)
-		vi.stubEnv("MEMONGO_SHARED_CLIENT", "")
+		vi.stubEnv("MEMONGO_SHARED_CLIENT", "0")
 		vi.stubEnv("MEMONGO_JOB_SWEEP_MS", "")
 		vi.useFakeTimers()
 		try {
@@ -168,7 +168,8 @@ describe("P2.1 memory-job worker sweep", () => {
 			await flushWorker(manager)
 			expect(mocked(claimMemoryJob).mock.calls.length).toBe(1)
 
-			await vi.advanceTimersByTimeAsync(999)
+			// The per-manager 1 Hz poll is gone in legacy mode too.
+			await vi.advanceTimersByTimeAsync(29_999)
 			expect(mocked(claimMemoryJob).mock.calls.length).toBe(1)
 			await vi.advanceTimersByTimeAsync(1)
 			await vi.advanceTimersByTimeAsync(0)

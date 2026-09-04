@@ -155,6 +155,10 @@ Common variables:
 | `MEMONGO_API_PORT` | API port, default `3847` |
 | `MEMONGO_API_KEY` | Recommended bearer token for API requests |
 | `MEMONGO_AGENT_ID` | Default memory isolation key |
+| `MEMONGO_SHARED_CLIENT` | Set `0` (or `false`/`no`/`off`) to opt out of the default shared-client runtime and restore per-agent clients; default on |
+| `MEMONGO_MANAGER_CACHE_MAX` | Manager cache LRU cap, default `50` |
+| `MEMONGO_MANAGER_CACHE_IDLE_TTL_MS` | Idle managers evicted after this long, default `600000` (10 min) |
+| `MEMONGO_JOB_SWEEP_MS` | Standing memory-job sweep interval, default `30000` (writes still drain immediately) |
 | `MEMONGO_MONGODB_RECALL_PROFILE` | `latency`, `balanced`, or `proof`; default `balanced` |
 | `MEMONGO_MONGODB_FUSION_METHOD` | `scoreFusion`, `rankFusion`, or `js-merge`; default `scoreFusion` with capability fallback |
 | `MEMONGO_QUERY_EMBEDDING_MODEL` | Compatible Voyage 4 query model; default `voyage-4-large` |
@@ -162,6 +166,16 @@ Common variables:
 | `MEMONGO_ENRICHMENT_BASE_URL` | Optional OpenAI-compatible or Anthropic endpoint for LLM enrichment |
 | `MEMONGO_ENRICHMENT_API_KEY` | API key for the enrichment endpoint |
 | `MEMONGO_ENRICHMENT_MODEL` | Model used by enrichment when enabled |
+
+Deployment-safe defaults: all memory managers for the same MongoDB URI share
+one client (and therefore one bounded connection pool, `maxPoolSize` 10) and
+the manager cache is LRU-capped with idle eviction in every mode, so agent
+count no longer multiplies connections — connections are fixed per URI, and
+standing poll traffic is capped by the bounded manager cache (<=50 sweeps
+per 30 s). Per-agent clients
+return with `MEMONGO_SHARED_CLIENT=0`; note that in that mode an idle agent
+re-bootstraps its manager (and reconnects) after the idle TTL, and per-agent
+pool settings apply per manager again.
 
 OpenAI-compatible enrichment defaults to `Authorization: Bearer`. Gateways that
 require provider-specific headers can set

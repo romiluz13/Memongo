@@ -21,22 +21,27 @@ afterEach(async () => {
 })
 
 describe("isSharedMongoClientEnabled", () => {
-	it("is disabled by default", () => {
-		expect(isSharedMongoClientEnabled()).toBe(false)
+	it("is enabled by default (C-009: shared runtime is the deployment default)", () => {
+		expect(isSharedMongoClientEnabled()).toBe(true)
 	})
 
 	it("is enabled for truthy env values", () => {
-		for (const value of ["1", "true", "yes", "on"]) {
+		for (const value of ["1", "true", "yes", "on", ""]) {
 			vi.stubEnv("MEMONGO_SHARED_CLIENT", value)
 			expect(isSharedMongoClientEnabled()).toBe(true)
 		}
 	})
 
-	it("stays disabled for other values", () => {
-		vi.stubEnv("MEMONGO_SHARED_CLIENT", "0")
-		expect(isSharedMongoClientEnabled()).toBe(false)
-		vi.stubEnv("MEMONGO_SHARED_CLIENT", "false")
-		expect(isSharedMongoClientEnabled()).toBe(false)
+	it("is disabled only by explicit opt-out values (C-009 legacy escape)", () => {
+		for (const value of ["0", "false", "no", "off"]) {
+			vi.stubEnv("MEMONGO_SHARED_CLIENT", value)
+			expect(isSharedMongoClientEnabled()).toBe(false)
+		}
+	})
+
+	it("keeps the safe default for unrecognized values", () => {
+		vi.stubEnv("MEMONGO_SHARED_CLIENT", "banana")
+		expect(isSharedMongoClientEnabled()).toBe(true)
 	})
 })
 
@@ -64,6 +69,61 @@ describe("acquireSharedMongoClient", () => {
 
 		expect(connect).toHaveBeenCalledTimes(2)
 		expect(a).not.toBe(b)
+	})
+
+	it("C-009: warns (option key names only) when a later acquire diverges from the first-resolved options", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+		try {
+			setSharedMongoClientConnectForTests(async () => fakeClient())
+			const uri = "mongodb://localhost:27017"
+			await acquireSharedMongoClient({
+				uri,
+				options: { maxPoolSize: 10, minPoolSize: 2 },
+			})
+			await acquireSharedMongoClient({
+				uri,
+				options: {
+					maxPoolSize: 20,
+					minPoolSize: 2,
+					serverSelectionTimeoutMS: 5_000,
+				},
+			})
+
+			expect(warn).toHaveBeenCalledTimes(1)
+			const out = warn.mock.calls.map((args) => args.join(" ")).join("\n")
+			// Diverging key names are listed; option values never leak.
+			expect(out).toContain("first-resolved options win")
+			expect(out).toContain("ignoring: maxPoolSize, serverSelectionTimeoutMS")
+			expect(out).not.toContain("maxPoolSize=20")
+			expect(out).not.toContain("maxPoolSize: 20")
+			expect(out).not.toContain("serverSelectionTimeoutMS: 5000")
+			// Same divergent options again (post-eviction re-init shape):
+			// deduped — one warn per diverging signature.
+			await acquireSharedMongoClient({
+				uri,
+				options: {
+					maxPoolSize: 20,
+					minPoolSize: 2,
+					serverSelectionTimeoutMS: 5_000,
+				},
+			})
+			expect(warn).toHaveBeenCalledTimes(1)
+			// Same options as the first acquirer: no warn at all.
+			await acquireSharedMongoClient({
+				uri,
+				options: { minPoolSize: 2, maxPoolSize: 10 },
+			})
+			expect(warn).toHaveBeenCalledTimes(1)
+			// A DIFFERENT diverging signature warns once more.
+			await acquireSharedMongoClient({
+				uri,
+				options: { maxPoolSize: 30, minPoolSize: 2 },
+			})
+			expect(warn).toHaveBeenCalledTimes(2)
+			expect(warn.mock.calls[1]?.join(" ")).toContain("ignoring: maxPoolSize")
+		} finally {
+			vi.restoreAllMocks()
+		}
 	})
 
 	it("evicts a failed connect so the next acquire retries", async () => {

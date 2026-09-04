@@ -4,7 +4,6 @@ import {
 	type OperationRunContext,
 } from "./mongodb-operation-accounting.js"
 import { isDuplicateKeyError } from "./internal.js"
-import { isSharedMongoClientEnabled } from "./mongodb-client-registry.js"
 import {
 	heuristicEpisodeSummarizer,
 	promoteDerivedMemoryFromEvent,
@@ -71,10 +70,16 @@ function bodySupportsFact(body: string, fact: string): boolean {
 
 export const MEMORY_JOB_LEASE_MS = 60_000
 export const MEMORY_JOB_HEARTBEAT_MS = 20_000
-const MEMORY_JOB_POLL_MS = 1_000
 
 const MEMORY_JOB_SWEEP_DEFAULT_MS = 30_000
 
+/**
+ * C-009 (EL-009 R1): the standing worker interval is a 30s sweep in EVERY
+ * runtime mode — the legacy 1 Hz poll exhausted connection budgets at
+ * moderate scale (one poll round-trip per manager per second). Latency is
+ * unaffected: every write still wakes the worker immediately, so the sweep
+ * only bounds crash-recovery and lease-reclaim latency.
+ */
 export function resolveMemoryJobSweepMs(): number {
 	const raw = process.env.MEMONGO_JOB_SWEEP_MS?.trim()
 	if (raw) {
@@ -83,9 +88,7 @@ export function resolveMemoryJobSweepMs(): number {
 			return Math.floor(parsed)
 		}
 	}
-	return isSharedMongoClientEnabled()
-		? MEMORY_JOB_SWEEP_DEFAULT_MS
-		: MEMORY_JOB_POLL_MS
+	return MEMORY_JOB_SWEEP_DEFAULT_MS
 }
 
 /**

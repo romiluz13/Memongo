@@ -360,3 +360,33 @@ entries:
     run_at: "2026-09-04T07:16:00.000Z"
     evidence_hash: sha256:4e72a856c6ddb56b0bcaeb6489c38d7f3069ca9e7307b6d294440179c15b975b
     notes: "Client contract evidence from a fresh, uncached full-workspace type-check (this log, turbo check-types --force, 15/15 tasks successful, 0 cached, exit 0): the widened updateLifecycleItem and applyMemoryFeedback signatures (Promise<MemongoLifecycleItem & MemongoQuarantineDisposition>) and the MemongoSelfEditResponse quarantined/matchedPatterns fields in packages/client/src/types.ts compile against every consumer in the workspace — the disposition is a compile-time contract (fields optional, so normal 200 payloads type-check unchanged), which is why the method is type-check rather than a runtime test. The runtime half of the client surface (apiFetch passing 202 bodies through on any res.ok) is pinned by the api suite routes in V-057/V-060, and the client suite's runtime battery for the sibling C-004 quarantine review methods (list/promote/reject) is green in ws05-client-suite.log (sha256:0ff954e20e29e33a50a628b3e53fdb9454161f1bcd2b1ca6ecb8657fe9926d16, 39 tests)."
+
+  - id: V-062
+    claim_id: C-009
+    construct: "packages/memory-engine/src/search-manager.ts"
+    method: test
+    target: .ddd/reports/runs/ws06-memory-engine-suite.log
+    result: pass
+    run_at: "2026-09-04T08:03:23.000Z"
+    evidence_hash: sha256:4e6439c6d26a82a212c74a17762787b98290f39834ae76bc548acc33eeef1bc6
+    notes: "Unconditional cache-bounding evidence from the final-state WS-06 engine suite (this log, 122 files / 2078 tests, exit 0): cacheManager and the getMemorySearchManager recency refresh carry NO isSharedMongoClientEnabled gate — the LRU cap (default 50), the 10-minute idle TTL eviction, and the 60s idle-sweep timer run in every mode. Pinned in both directions: the default-mode test proves 50 agents share exactly one MongoClient pool (no env stub), and the legacy opt-out tests (MEMONGO_SHARED_CLIENT=0) prove the cache still bounds — 60 agents create 50 managers and evict 10 LRU-oldest, recency refresh reorders touch, and idle managers are evicted after the TTL. The 30s-sweep MUST for this construct's sibling (mongodb-manager-jobs.ts) is pinned in the same log by the jobs part-3 battery (30s sweep in default AND opt-out mode, env override honored, no 1 Hz claim polling in opt-out mode). Independent refutation sustained across three rounds (refutation-c-009.yaml)."
+
+  - id: V-063
+    claim_id: C-009
+    construct: "packages/memory-engine/src/mongodb-client-registry.ts"
+    method: test
+    target: .ddd/reports/runs/ws06-memory-engine-suite.log
+    result: pass
+    run_at: "2026-09-04T08:03:23.000Z"
+    evidence_hash: sha256:4e6439c6d26a82a212c74a17762787b98290f39834ae76bc548acc33eeef1bc6
+    notes: "Default-on evidence from the registry battery in the same final-state WS-06 engine suite: isSharedMongoClientEnabled is enabled by default, is disabled only by the explicit opt-out values (0/false/no/off), and unrecognized values (e.g. banana) keep the safe default. The first-resolved-options hazard surfaced in round 1 is addressed and pinned: acquireSharedMongoClient snapshots the first options on the RegistryEntry and warns on later divergent acquires with diverging option KEY NAMES only (test asserts maxPoolSize/serverSelectionTimeoutMS appear and values never leak, the URI logs as the C-002 sha256 alias), deduped once per diverging-key signature (warnedSignatures — same divergent re-acquire stays at one warn, a different signature warns once more). Cross-package fallout of the flip is green on the final tree: memory-bridge 6 files/82 tests (ws06-memory-bridge-suite.log, sha256:5e74628ad123afb3ae2c34452897e6e6d2dde984c7280040b90ee2a156014bbe), tools 6/48 (sha256:f6f014b686cf1b842be18733bcecad07461b599ee9430bdcc70b9562b4d2f421), client 1/39 (sha256:406be496c575eb39db2d8471e6c2d4c649120739e04637c6d1cc145747735658), pi-extension 3/62 (sha256:ae38754d1080e0ca5ebe968ff9f8b519acf4ae7c173dc791ab148b098001b0f6), api 9/246 (sha256:4fc4ada301b0a197a6d58d6df74972009ed90a2aeaca5a52d67508ea0af52189)."
+
+  - id: V-064
+    claim_id: C-009
+    construct: "packages/memory-engine/src/backend-config.ts"
+    method: test
+    target: .ddd/reports/runs/ws06-memory-engine-suite.log
+    result: pass
+    run_at: "2026-09-04T08:03:23.000Z"
+    evidence_hash: sha256:4e6439c6d26a82a212c74a17762787b98290f39834ae76bc548acc33eeef1bc6
+    notes: "Pool-budget evidence from the backend-config battery in the same final-state WS-06 engine suite: resolveMemoryBackendConfig resolves maxPoolSize 10 / minPoolSize 2 defaults, the budget that caps TOTAL driver connections in the default shared runtime (one pool per URI regardless of agent count — the arithmetic annotated at the C-009 comment in backend-config.ts; legacy per-agent mode multiplied pools by N and exhausted an M10 node's 1,500-connection budget around ~150 agents). Per the round-1 F-003 fix the test honestly pins only this budget half; the default-flip half is pinned by V-063's registry battery and V-062's default-mode share test. Workspace-wide compilation of the changed engine surface is pinned by the fresh uncached check-types (ws06-check-types.log, turbo check-types --force, 15/15 tasks successful, 0 cached, sha256:19be8fa571a8f5b3c7cbeec6953f46ea968623daf16d1a57979cde182d429450)."

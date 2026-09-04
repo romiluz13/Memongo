@@ -622,6 +622,25 @@ describe("resolveMemoryBackendConfig", () => {
 		expect(resolved.mongodb?.maxPoolSize).toBe(10)
 	})
 
+	it("resolves the bounded pool defaults that cap the shared-runtime connection budget", () => {
+		// C-009: in the default shared-client runtime the pool is per-URI, so
+		// these defaults bound TOTAL driver connections regardless of agent
+		// count (legacy per-agent mode multiplied them by N and exhausted an
+		// M10 node's 1,500-connection budget around ~150 agents). This pins
+		// the budget half of the claim; the default-flip half is pinned in
+		// mongodb-client-registry.test.ts and search-manager.test.ts.
+		const cfg = {
+			agents: { defaults: { workspace: "/tmp/memory-test" } },
+			memory: {
+				backend: "mongodb",
+				mongodb: { uri: "mongodb://localhost:27017" },
+			},
+		} as unknown as MemongoConfig
+		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
+		expect(resolved.mongodb?.maxPoolSize).toBe(10)
+		expect(resolved.mongodb?.minPoolSize).toBe(2)
+	})
+
 	it("resolves custom maxPoolSize", () => {
 		const cfg = {
 			agents: { defaults: { workspace: "/tmp/memory-test" } },

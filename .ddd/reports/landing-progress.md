@@ -44,7 +44,7 @@ This file is the compaction anchor: any future instance resumes from here.
 | WS-03 | C-003,004,005,006 | T3,T3,T3,T1 | Tenant erasure + retention lifecycle | LANDED (see session log) |
 | WS-04 | C-007 | T3 | autoEmbed Preview de-risk | LANDED (see session log) |
 | WS-05 | C-008 | T3 | Prompt-injection coverage | LANDED (see session log) |
-| WS-06 | C-009 | T3 | Deployment defaults (shared client, cache bound, sweep) | pending |
+| WS-06 | C-009 | T3 | Deployment defaults (shared client, cache bound, sweep) | LANDED (see session log) |
 | WS-07 | C-010 | T3 | CI executes suites | LANDED 5115d889c7 |
 | WS-08 | C-011..015 | T2,T2,T1,T1,T1 | API contracts batch | pending |
 | WS-09 | C-016 | T2 | Runtime capability re-verification | pending |
@@ -59,12 +59,15 @@ This file is the compaction anchor: any future instance resumes from here.
 | WS-18 | C-037,038,039 | T1,T2,T2 | dockerignore; publish gates; nightly eval | pending |
 
 T3 needing refutation: C-002, C-003, C-004, C-005, C-007, C-008, C-009, C-018.
-Validation IDs used so far: V-001..V-061 (next free: V-062).
+Validation IDs used so far: V-001..V-064 (next free: V-065).
 Sweep violations at WS-01 landing: 92 (was 96 pre-WS-01).
 Sweep violations at WS-02 landing: 86 (was 92; zero for C-002).
 Sweep violations at WS-04 landing: 67 (was 72 at WS-03; zero for C-007).
 Sweep violations at WS-05 landing: 66 (was 67; zero for C-008; +4 honest
 pending for the newly filed open claim C-040).
+Sweep violations at WS-06 landing: 61 (was 66; zero for C-009; the 5
+C-009 violations cleared: claim-without-validation, 3x
+trace-without-validation TR-023/024/025, t3-without-refutation).
 
 ## Session log
 
@@ -262,3 +265,51 @@ pending for the newly filed open claim C-040).
   NEW one — always self-check against the previous known-good value);
   (4) type-check-method validations should anchor a fresh `--force` run,
   not a cached log.
+
+- WS-06/C-009 landing (deployment-safe defaults): three MUSTs landed as a
+  defaults flip — the bounded-pool/quiescence machinery predated the
+  workstream and only the default was wrong. (1) Shared client default-on:
+  isSharedMongoClientEnabled returns true unless MEMONGO_SHARED_CLIENT is
+  explicitly 0/false/no/off (empty and unrecognized values keep the safe
+  default); acquireSharedMongoClient snapshots the first-resolved options
+  per URI and warns on later divergent acquires with diverging option KEY
+  NAMES only (values never logged, URI as the C-002 sha256 alias), deduped
+  once per diverging-key signature per registered client (warnedSignatures)
+  so post-eviction re-inits stay quiet. (2) Cache bounded unconditionally:
+  cacheManager LRU cap (50 default), recency refresh, 10-min idle
+  eviction, and the 60s sweep timer lost their mode gates — legacy opt-out
+  now also bounds (60 agents -> 10 evicted, tested). (3) Sweep not poll:
+  resolveMemoryJobSweepMs returns 30s in EVERY mode (MEMORY_JOB_POLL_MS
+  deleted), MEMONGO_JOB_SWEEP_MS still overrides, writes still wake the
+  worker immediately; no 1 Hz poll survives anywhere in the worker path.
+  Refutation: 3 rounds. Round 1 partially_refuted (6 findings:
+  undocumented default flip + escape hatch in README/self-host/CHANGELOG;
+  silent first-wins options; decorative backend-config test that would
+  pass under revert; stale mongodb-manager.ts comment + dead import;
+  undocumented opt-out re-bootstrap cost; pre-landing validations). Round
+  2 sustained with 2 low findings (docs overstatement "agent count no
+  longer multiplies connections or poll traffic" — poll still scales
+  linearly to the LRU-50 cap, reworded in all three docs; divergence warn
+  re-firing on every re-init — deduped). Round 3 sustained, zero findings.
+  Reports: .ddd/reports/refutation-c-009.yaml (3-round consolidated).
+  Suite state: engine 122 files/2078 tests, bridge 82, tools 48, client
+  39, pi 62, api 246, fresh uncached check-types 15/15. Artifacts:
+  V-062..V-063 anchored to the final-state engine suite log (re-run after
+  the round-2 fixes so the hash covers the warnedSignatures change),
+  V-064 pool-budget + check-types, C-009 validations filled, TR-023/024/
+  025 patched, ADR-0008 + book.yaml entry + manifest_digest recomputed
+  (c23f49df...), sweep-ws06.json 61 violations, zero for C-009.
+  Methodology lessons: (1) the dependent-package suite logs must be
+  re-run AFTER between-round fixes that touch a shared construct — the
+  registry warning changed runtime behavior every package imports, so the
+  pre-fix logs would have been dishonest evidence hashes; (2) the
+  manifest_digest formula lives in the DDD CLI source
+  (/Users/rom.iluz/Dev/DDD/cli/src/sweep.ts validateBookManifest): fixed
+  order [SPEC.md, CONTEXT.md, AGENTS.md, SKILLS.md] then remaining paths
+  sorted, bare hex digests joined by newlines + trailing newline, sha256
+  of that string — verified by reproducing bbb22abb before patching;
+  (3) biome skips .md files, so doc edits need no lint pass but the
+  changed .ts test files do; (4) a divergence-warning test must not assert
+  absence of arbitrary substrings like "20" — the C-002 URI-alias hash can
+  contain any hex pair; assert value-bearing patterns ("maxPoolSize=20",
+  "maxPoolSize: 20") instead.

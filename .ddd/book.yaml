@@ -3,7 +3,7 @@ schema_version: 0.1.0
 version: 0.5.0
 released_at: null
 profile: assurance
-manifest_digest: sha256:bbb22abb781a7569d64926fb5981e274eb285c091ad3ab74b51a5af877bad949
+manifest_digest: sha256:c23f49dff9004dd0c2201c59f9bd86abcd11e122109f7ad361456d8cfc758b98
 
 requirements:
   - path: CONTEXT.md
@@ -53,6 +53,12 @@ requirements:
     independence: agent-proposed-human-approved
     digest: sha256:5701cc384805a445e6979a8f5e560adb448bf4fc659d10581531b052ea3b8419
     description: "ADR 0007 - prompt-injection quarantine envelope scope, write-gate placement, and 202 hold dispositions (WS-05, C-008)"
+
+  - path: docs/adr/0008-deployment-safe-defaults-shared-client-bounded-cache-30s-sweep.md
+    authority: product-approved
+    independence: agent-proposed-human-approved
+    digest: sha256:e90c53b993487083a97f94ebca0bc55befaa3c20354460743395a92ccd2378ce
+    description: "ADR 0008 - deployment-safe defaults: shared-client runtime default-on, unconditionally bounded manager cache, 30s sweep (WS-06, C-009)"
 
 agent_context:
   - path: AGENTS.md

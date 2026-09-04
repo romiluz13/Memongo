@@ -33,12 +33,12 @@ type ManagerCacheEntry = {
 }
 
 /**
- * Manager cache. When MEMONGO_SHARED_CLIENT is off the cache is unbounded and
- * entries live forever, exactly as before P2.1. When the shared-client runtime
- * is on, the cache is LRU-bounded (MEMONGO_MANAGER_CACHE_MAX, default 50) and
- * idle entries are evicted after MEMONGO_MANAGER_CACHE_IDLE_TTL_MS (default
- * 10 minutes); eviction closes the manager's workers/timers but never the
- * shared MongoClient.
+ * Manager cache. C-009 (EL-009 R1): the cache is bounded UNCONDITIONALLY —
+ * LRU-capped (MEMONGO_MANAGER_CACHE_MAX, default 50) with idle entries
+ * evicted after MEMONGO_MANAGER_CACHE_IDLE_TTL_MS (default 10 minutes), in
+ * every runtime mode. Eviction closes the manager's workers/timers; the
+ * shared MongoClient survives (the registry owns it), while a legacy
+ * per-manager client is closed with its manager.
  */
 const MONGODB_MANAGER_CACHE = new Map<string, ManagerCacheEntry>()
 
@@ -230,7 +230,7 @@ function stopIdleSweepTimer(): void {
 	}
 }
 
-/** Evict managers idle beyond the TTL. Shared-client runtime only. */
+/** Evict managers idle beyond the TTL. Runs in every runtime mode (C-009). */
 export async function evictIdleMemorySearchManagers(): Promise<void> {
 	const ttl = resolveManagerCacheIdleTtlMs()
 	const now = Date.now()
@@ -260,9 +260,8 @@ async function cacheManager(
 		closeInitiated: false,
 	}
 	MONGODB_MANAGER_CACHE.set(cacheKey, inserted)
-	if (!isSharedMongoClientEnabled()) {
-		return inserted
-	}
+	// C-009: bounding runs unconditionally — LRU cap and idle sweep are not
+	// shared-runtime-only behavior anymore.
 	ensureIdleSweepTimer()
 	const max = resolveManagerCacheMax()
 	while (MONGODB_MANAGER_CACHE.size > max) {
@@ -316,11 +315,10 @@ export async function getMemorySearchManager(params: {
 	const cached = MONGODB_MANAGER_CACHE.get(cacheKey)
 	if (cached) {
 		cached.lastUsedAt = Date.now()
-		if (isSharedMongoClientEnabled()) {
-			// Refresh recency order so LRU eviction picks the true oldest entry.
-			MONGODB_MANAGER_CACHE.delete(cacheKey)
-			MONGODB_MANAGER_CACHE.set(cacheKey, cached)
-		}
+		// C-009: recency refresh runs in every mode so LRU eviction always
+		// picks the true oldest entry.
+		MONGODB_MANAGER_CACHE.delete(cacheKey)
+		MONGODB_MANAGER_CACHE.set(cacheKey, cached)
 		return { manager: trackManagerBorrows(cached.manager, cached) }
 	}
 
