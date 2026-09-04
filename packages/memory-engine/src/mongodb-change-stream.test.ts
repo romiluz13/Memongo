@@ -418,3 +418,268 @@ describe("MongoDBChangeStreamWatcher — resume token resilience", () => {
 		await watcher.close()
 	})
 })
+
+// ---------------------------------------------------------------------------
+// C-016: supervision — exponential-backoff re-open (uncapped attempts,
+// ceiling-bounded delay) + liveness surface
+// ---------------------------------------------------------------------------
+
+describe("MongoDBChangeStreamWatcher — supervision (backoff + liveness)", () => {
+	let callback: ChangeStreamCallback
+	let callbackArgs: Array<{
+		operationType: string
+		paths: string[]
+		timestamp: Date
+		resumeToken?: unknown
+		gapDetected?: { reason: string; from: "startup" | "midstream" }
+	}>
+
+	/** Collection whose watch() returns a FRESH mock stream per call. */
+	function createPerCallStreams() {
+		const streams: ReturnType<typeof createMockStream>[] = []
+		const col = {
+			watch: vi.fn(() => {
+				const stream = createMockStream()
+				streams.push(stream)
+				return stream
+			}),
+		} as unknown as Collection
+		return { col, streams }
+	}
+
+	function historyLost(): Error {
+		return Object.assign(
+			new Error(
+				"Resume of change stream was not possible, as the resume point may no longer be in the oplog",
+			),
+			{ code: 286, codeName: "ChangeStreamHistoryLost" },
+		)
+	}
+
+	beforeEach(() => {
+		vi.useFakeTimers()
+		callbackArgs = []
+		callback = (event) => callbackArgs.push(event)
+	})
+
+	afterEach(() => {
+		vi.useRealTimers()
+	})
+
+	it("re-opens immediately once, then backs off exponentially with a ceiling", async () => {
+		const { col, streams } = createPerCallStreams()
+		const watcher = new MongoDBChangeStreamWatcher(col, callback, 100, {
+			baseDelayMs: 100,
+			maxDelayMs: 400,
+		})
+		await watcher.start()
+
+		// Kill #1 → attempt 1 re-opens IMMEDIATELY (delay 0)
+		streams[0].emit("error", historyLost())
+		expect(col.watch).toHaveBeenCalledTimes(2)
+
+		// Kill #2 → attempt 2 waits baseDelayMs (100)
+		streams[1].emit("error", historyLost())
+		expect(col.watch).toHaveBeenCalledTimes(2)
+		const recovering = watcher.liveness
+		expect(recovering.active).toBe(false)
+		expect(recovering.state).toBe("recovering")
+		expect(recovering.reopenAttempts).toBe(2)
+		expect(recovering.nextReopenDelayMs).toBe(100)
+		vi.advanceTimersByTime(100)
+		expect(col.watch).toHaveBeenCalledTimes(3)
+
+		// Kill #3 → attempt 3 waits 2*base (200)
+		streams[2].emit("error", historyLost())
+		vi.advanceTimersByTime(199)
+		expect(col.watch).toHaveBeenCalledTimes(3)
+		vi.advanceTimersByTime(1)
+		expect(col.watch).toHaveBeenCalledTimes(4)
+
+		// Kill #4 → attempt 4 waits 4*base (400) = ceiling
+		streams[3].emit("error", historyLost())
+		vi.advanceTimersByTime(399)
+		expect(col.watch).toHaveBeenCalledTimes(4)
+		vi.advanceTimersByTime(1)
+		expect(col.watch).toHaveBeenCalledTimes(5)
+
+		// Kill #5 → attempt 5 stays at the ceiling (400, not 800)
+		streams[4].emit("error", historyLost())
+		vi.advanceTimersByTime(400)
+		expect(col.watch).toHaveBeenCalledTimes(6)
+
+		await watcher.close()
+	})
+
+	it("keeps re-opening under sustained failure — no permanent stop after 3 attempts (C-016)", async () => {
+		const { col, streams } = createPerCallStreams()
+		const watcher = new MongoDBChangeStreamWatcher(col, callback, 100, {
+			baseDelayMs: 10,
+			maxDelayMs: 20,
+		})
+		await watcher.start()
+
+		// Pre-C-016 the watcher closed itself after 3 re-opens and went dark.
+		for (let kill = 0; kill < 8; kill++) {
+			streams[kill].emit("error", historyLost())
+			vi.advanceTimersByTime(20)
+		}
+		expect(col.watch).toHaveBeenCalledTimes(9) // initial + 8 re-opens
+		const liveness = watcher.liveness
+		expect(liveness.state).not.toBe("stopped")
+		expect(liveness.reopenAttempts).toBe(8)
+
+		await watcher.close()
+	})
+
+	it("resets the backoff budget after a real change event proves the stream alive", async () => {
+		const { col, streams } = createPerCallStreams()
+		const watcher = new MongoDBChangeStreamWatcher(col, callback, 100, {
+			baseDelayMs: 100,
+			maxDelayMs: 400,
+		})
+		await watcher.start()
+
+		// Kill #1 → immediate re-open
+		streams[0].emit("error", historyLost())
+		expect(col.watch).toHaveBeenCalledTimes(2)
+		expect(watcher.liveness.reopenAttempts).toBe(1)
+
+		// A real change event on the re-opened stream proves it alive
+		streams[1].emit("change", {
+			operationType: "insert",
+			fullDocument: { path: "memory/x.md" },
+			documentKey: { _id: "memory/x.md:1:1" },
+		})
+		vi.advanceTimersByTime(150) // debounce flush
+		expect(watcher.liveness.reopenAttempts).toBe(0)
+
+		// Kill again → immediate re-open, budget reset (not 200ms backoff)
+		streams[1].emit("error", historyLost())
+		expect(col.watch).toHaveBeenCalledTimes(3)
+		expect(watcher.liveness).toEqual({
+			active: true,
+			state: "active",
+			reopenAttempts: 1,
+			nextReopenDelayMs: null,
+		})
+
+		await watcher.close()
+	})
+
+	it("signals the gap immediately even when the re-open is delayed by backoff", async () => {
+		const { col, streams } = createPerCallStreams()
+		const watcher = new MongoDBChangeStreamWatcher(col, callback, 100, {
+			baseDelayMs: 5000,
+			maxDelayMs: 30_000,
+		})
+		await watcher.start()
+
+		streams[0].emit("error", historyLost()) // immediate re-open
+		streams[1].emit("error", historyLost()) // delayed re-open (5s)
+
+		// Both gaps fired synchronously; the re-scan must not wait for backoff
+		expect(
+			callbackArgs.filter((event) => event.gapDetected?.from === "midstream"),
+		).toHaveLength(2)
+		expect(col.watch).toHaveBeenCalledTimes(2) // second re-open still pending
+
+		await watcher.close()
+	})
+
+	it("close() cancels a scheduled re-open — no resurrection", async () => {
+		const { col, streams } = createPerCallStreams()
+		const watcher = new MongoDBChangeStreamWatcher(col, callback, 100, {
+			baseDelayMs: 100,
+			maxDelayMs: 400,
+		})
+		await watcher.start()
+
+		streams[0].emit("error", historyLost()) // immediate re-open
+		streams[1].emit("error", historyLost()) // re-open scheduled at +100ms
+		expect(watcher.liveness.state).toBe("recovering")
+
+		await watcher.close()
+		vi.advanceTimersByTime(1000)
+		expect(col.watch).toHaveBeenCalledTimes(2) // scheduled re-open never fired
+		expect(watcher.liveness).toEqual({
+			active: false,
+			state: "stopped",
+			reopenAttempts: 2,
+			nextReopenDelayMs: null,
+		})
+	})
+
+	it("reports liveness active while streaming and stopped after close", async () => {
+		const { col } = createPerCallStreams()
+		const watcher = new MongoDBChangeStreamWatcher(col, callback, 100)
+		await watcher.start()
+
+		expect(watcher.liveness).toEqual({
+			active: true,
+			state: "active",
+			reopenAttempts: 0,
+			nextReopenDelayMs: null,
+		})
+
+		await watcher.close()
+		expect(watcher.liveness).toEqual({
+			active: false,
+			state: "stopped",
+			reopenAttempts: 0,
+			nextReopenDelayMs: null,
+		})
+	})
+
+	it("closes for good on a standalone-topology error mid-stream", async () => {
+		const { col, streams } = createPerCallStreams()
+		const watcher = new MongoDBChangeStreamWatcher(col, callback, 100, {
+			baseDelayMs: 100,
+			maxDelayMs: 400,
+		})
+		await watcher.start()
+
+		streams[0].emit(
+			"error",
+			new Error("The $changeStream stage is only supported on replica sets"),
+		)
+
+		expect(watcher.liveness.state).toBe("stopped")
+		vi.advanceTimersByTime(10_000)
+		expect(col.watch).toHaveBeenCalledTimes(1) // never retried
+	})
+
+	it("retries under backoff when re-opening throws synchronously (gap not re-emitted)", async () => {
+		let watchCallCount = 0
+		const stream1 = createMockStream()
+		const col = {
+			watch: vi.fn(() => {
+				watchCallCount++
+				if (watchCallCount === 2) {
+					throw new Error("connection lost")
+				}
+				return stream1
+			}),
+		} as unknown as Collection
+
+		const watcher = new MongoDBChangeStreamWatcher(col, callback, 100, {
+			baseDelayMs: 100,
+			maxDelayMs: 400,
+		})
+		await watcher.start()
+
+		// Kill #1 → attempt 1 opens immediately but watch() throws
+		stream1.emit("error", historyLost())
+		expect(col.watch).toHaveBeenCalledTimes(2) // the failed attempt
+		expect(watcher.liveness.state).toBe("recovering") // retry scheduled
+
+		// The internal retry must NOT re-emit the gap (re-scan already running)
+		expect(callbackArgs.filter((e) => e.gapDetected)).toHaveLength(1)
+
+		vi.advanceTimersByTime(100)
+		expect(col.watch).toHaveBeenCalledTimes(3) // attempt 2 succeeded
+		expect(watcher.liveness.state).toBe("active")
+
+		await watcher.close()
+	})
+})

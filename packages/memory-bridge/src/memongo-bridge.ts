@@ -767,13 +767,13 @@ export async function memongoBridgeCapabilities(params: {
 }
 
 /**
- * Readiness probe for the Mongo lane (P1.7). `probeVectorAvailability` and
- * `probeEmbeddingAvailability` are capability checks computed at manager
- * creation — they cannot detect a MongoDB that died after boot, and
- * `getDetailedStatus` intentionally swallows per-query failures. This probe
- * forces a live, bounded round-trip (a limit-1 jobs read) through the cached
- * manager and reports failure instead of throwing, so a `/ready` endpoint can
- * answer 503 while Mongo is unreachable.
+ * Readiness probe for the Mongo lane (P1.7). This probe forces a live,
+ * bounded round-trip (a limit-1 jobs read) through the cached manager and
+ * reports failure instead of throwing, so a `/ready` endpoint can answer
+ * 503 while Mongo is unreachable. (C-016: `probeVectorAvailability` and
+ * `probeEmbeddingAvailability` are ALSO live now — an index-status round
+ * trip per call — but they answer vector/search-lane health, not Mongo
+ * connectivity, so this lane stays.)
  */
 export async function memongoBridgePingMongo(params: {
 	agentId?: string

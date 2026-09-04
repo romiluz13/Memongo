@@ -501,3 +501,43 @@ entries:
     evidence_hash: sha256:10bde0d083809cd38abb67f2b637b4ee5e14032097b02af3074785cc20f84d03
     notes: "Tools enum-mirror evidence from the final-state WS-08 tools suite (this log, 50 tests, exit 0): the 'single-sources chain-trace collections from @memongo/lib (C-015)' test asserts the tool's collection enum equals CHAIN_TRACE_COLLECTION_VALUES from @memongo/lib rather than a hand-maintained copy. The canonical set is pinned by the lib contract battery (ws08-lib-suite.log, sha256:af380ceb36442ec33ea4e1b64ad053e7f57b7d195ddd3cd8af14c0297c910faf) and the MCP half of the mirror by the chain-trace collection battery in ws08-mcp-suite.log (rejects plausible-but-wrong collections with a tool error naming the set, forwards every traversable collection, sha256:3160940905db704cafda7ac9fc36a142a6ad7ace812ca74c6165aaa20f41dcb0)."
 
+  - id: V-076
+    claim_id: C-016
+    construct: apps/api/src/lib/readiness.ts
+    method: test
+    target: .ddd/reports/runs/ws09-api-suite.log
+    result: pass
+    run_at: "2026-09-04T11:05:40.000Z"
+    evidence_hash: sha256:a1dca17405c24885b0cf484ec2a6b54d415e7e5103a24ad2719c55a4a0078581
+    notes: "Ready-lane evidence from the final-state WS-09 api suite (this log, 264 tests, exit 0): the GET /ready battery exercises the route through checkReadiness to the manager's live probe surface — 200 with per-lane detail when the vector probe is healthy, 503 with lane detail (vector.ok false plus a message) when the probe fails, so the ready vector lane answers from the round trip, not the boot snapshot. The vector-lane failure message now names the live index-status probe ('vector search index is not queryable'). The probe half that feeds the route — probeVectorAvailability returning false while the boot snapshot says vectorSearch true — is proven in the engine suite (V-079, ws09-memory-engine-suite.log, sha256:54f5c881e28f74e9545e509b008294863b68ca3437fed033d712641242620d60). Compile-time conformance of the whole workspace is pinned by ws09-check-types.log (turbo check-types --force, 15/15 tasks, 0 cached, sha256:b9b42cab0ca60618052e28f7e4f40dcb67846ef6a317e56076880f6929dc09e1)."
+
+  - id: V-077
+    claim_id: C-016
+    construct: packages/memory-engine/src/mongodb-change-stream.ts
+    method: test
+    target: .ddd/reports/runs/ws09-memory-engine-suite.log
+    result: pass
+    run_at: "2026-09-04T11:05:40.000Z"
+    evidence_hash: sha256:54f5c881e28f74e9545e509b008294863b68ca3437fed033d712641242620d60
+    notes: "Watcher-supervision evidence from the final-state WS-09 engine suite (this log, 122 files / 2093 tests, exit 0): the 'MongoDBChangeStreamWatcher — supervision (backoff + liveness)' battery (8 tests) proves re-open fires immediately once then backs off exponentially to the ceiling (attempt 1 delay 0, then base, 2x, 4x..., capped), that sustained failure never permanently stops the watcher (the old 3-attempt MAX_REOPEN_ATTEMPTS stop is gone), that a real change event resets the backoff budget, that the gap signal is emitted immediately even while a re-open is delayed, that close() cancels a scheduled re-open (no resurrection), that the liveness getter reports active while streaming / recovering with attempts and next delay / stopped after close, that standalone-topology errors still close for good, and that a synchronous re-open throw retries under backoff without re-emitting the gap. The liveness surface this getter feeds into getDetailedStatus is covered by V-079 in the same log."
+
+  - id: V-078
+    claim_id: C-016
+    construct: packages/pi-extension/extensions/index.ts#probeClient
+    method: test
+    target: .ddd/reports/runs/ws09-pi-extension-suite.log
+    result: pass
+    run_at: "2026-09-04T11:05:40.000Z"
+    evidence_hash: sha256:b2d4a45da1dc761be268cc05b7fa5f76b49adbb5a8aab8c4e4b5780da0714771
+    notes: "Extension-retry evidence from the final-state WS-09 pi-extension suite (this log, 64 tests, exit 0): the 'C-016 probeClient background retry heals the session' battery proves the startup failure is not a life sentence — with the API down at init, memongo_search short-circuits with details.available false and a message naming the background retry; after the API answers the first background retry (base delay), the same session's search issues a real API call and returns normally, i.e. state.available flipped without a restart. The second test soaks a sustained outage with fake timers: probes fire at base, 2x, 4x (exponential), and once the ceiling engages the rate is one probe per PROBE_RETRY_MAX_DELAY_MS period — never faster — so a down API costs at most one status call per minute. The retry sleeps use unref'd timers (sleepUnrefed) so a pending retry never holds the host process open."
+
+  - id: V-079
+    claim_id: C-016
+    construct: packages/memory-engine/src/mongodb-manager-admin.ts
+    method: test
+    target: .ddd/reports/runs/ws09-memory-engine-suite.log
+    result: pass
+    run_at: "2026-09-04T11:05:40.000Z"
+    evidence_hash: sha256:54f5c881e28f74e9545e509b008294863b68ca3437fed033d712641242620d60
+    notes: "Admin-probe evidence from the final-state WS-09 engine suite (same log as V-077, 2093 tests, exit 0): the 'MongoDBManagerAdminOps — live probes and status surface (C-016)' battery (7 tests) proves probeVectorAvailability answers from the live index-status round trip (probeSearchLaneReadiness on the chunks collection) even when the boot snapshot says vectorSearch true, skips the probe when the embedding mode cannot serve vector, and that probeEmbeddingAvailability in automated mode reports the live vector-index readiness; that noteSearchLaneFailure re-polls readiness throttled (one in-flight re-poll — the second note only records) and surfaces the latest failure path and error in getDetailedStatus().searchLanes with a probedAt timestamp; that getDetailedStatus surfaces the change-stream watcher's liveness (fed by V-077's supervision); and that before any probe has run the status falls back to the boot snapshot. The searchV2 onPathFailure hook that feeds noteSearchLaneFailure from real search-lane errors is wired through both searchV2 call sites (mongodb-manager-search.ts) and the host facade."
+

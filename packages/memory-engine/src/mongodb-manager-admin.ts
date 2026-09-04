@@ -4,6 +4,7 @@ import {
 } from "./mongodb-access-tracker.js"
 import { getMemoryStats } from "./mongodb-analytics.js"
 import type { MemoryStats } from "./mongodb-analytics.js"
+import type { ChangeStreamLiveness } from "./mongodb-change-stream.js"
 import { deleteAllForAgent as runTenantErasure } from "./mongodb-erasure.js"
 import type { TenantErasureReceipt } from "./mongodb-erasure.js"
 import { getLaneCoverage } from "./mongodb-lane-coverage.js"
@@ -26,7 +27,9 @@ import {
 	episodesCollection,
 	proceduresCollection,
 	relevanceRunsCollection,
+	chunksCollection,
 } from "./mongodb-schema.js"
+import { probeSearchLaneReadiness } from "./mongodb-schema-capabilities.js"
 import { getActiveSourcesForStatus } from "./mongodb-search-ranking.js"
 import { vectorSearch } from "./mongodb-search.js"
 import type {
@@ -121,6 +124,24 @@ export type V2Status = {
 		diagnostics: string[]
 	}
 	retrievalPaths: string[]
+	/**
+	 * C-016: change-stream watcher liveness (null when change streams are
+	 * disabled or unavailable on this deployment). A recovering/stopped
+	 * watcher means cross-instance sync is not currently flowing.
+	 */
+	changeStream?: ChangeStreamLiveness | null
+	/**
+	 * C-016: runtime search-lane health. The booleans come from the most
+	 * recent live index-status probe (boot snapshot only until the first
+	 * probe runs — `probedAt` absent means boot snapshot); `lastFailure`
+	 * records the search-path failure that triggered the latest re-poll.
+	 */
+	searchLanes?: {
+		vectorSearch: boolean
+		textSearch: boolean
+		probedAt?: Date
+		lastFailure: { path: string; error: string; at: Date } | null
+	}
 }
 
 const PROJECTION_BEHIND_SECONDS = 5 * 60
@@ -481,6 +502,21 @@ export async function getV2Status(
  * Admin/status collaborator (P4.3). Methods land in a later seam step.
  */
 export class MongoDBManagerAdminOps {
+	/** C-016: most recent live search-lane probe outcome (null = boot snapshot). */
+	private searchLaneHealth: {
+		vectorSearch: boolean
+		textSearch: boolean
+		probedAt: Date
+	} | null = null
+	/** C-016: latest search-path failure that triggered a readiness re-poll. */
+	private lastSearchLaneFailure: {
+		path: string
+		error: string
+		at: Date
+	} | null = null
+	/** C-016: guards against a re-poll storm from rapid search-path failures. */
+	private searchLaneRePollInFlight = false
+
 	constructor(private readonly host: MongoDBManagerHost) {}
 
 	async accessTrends(params?: {
@@ -609,11 +645,16 @@ export class MongoDBManagerAdminOps {
 					error: `embeddingMode "automated" is only supported on atlas-local-preview or atlas-managed in Memongo`,
 				}
 			}
-			return this.host.capabilities.vectorSearch
+			// C-016: live index-status round trip instead of the boot-time
+			// capability snapshot — catches a mongot that died after boot or an
+			// index an operator dropped mid-process. A transport failure
+			// propagates to the caller as a probe failure.
+			const readiness = await this.probeSearchLanes()
+			return readiness.vectorSearch
 				? { ok: true }
 				: {
 						ok: false,
-						error: "vector search not available on this MongoDB deployment",
+						error: "vector search index is not queryable (live probe)",
 					}
 		}
 
@@ -621,10 +662,74 @@ export class MongoDBManagerAdminOps {
 	}
 
 	async probeVectorAvailability(): Promise<boolean> {
-		return (
-			this.host.capabilities.vectorSearch &&
-			this.host.probeEmbeddingModeSupportsVector()
+		if (!this.probeEmbeddingModeSupportsVector()) {
+			return false
+		}
+		// C-016: live index-status round trip instead of the boot-time
+		// capability snapshot. The embedding-mode/deployment gate above is
+		// configuration (not runtime state), so it stays; the boot snapshot
+		// does not — a live probe that can answer must be the answer.
+		const readiness = await this.probeSearchLanes()
+		return readiness.vectorSearch
+	}
+
+	/**
+	 * C-016: live search-lane readiness (listSearchIndexes on the chunks
+	 * collection + queryable/type checks). Records the outcome for
+	 * getDetailedStatus(). Transport errors propagate.
+	 */
+	private async probeSearchLanes(): Promise<{
+		vectorSearch: boolean
+		textSearch: boolean
+	}> {
+		const probeCollectionName = chunksCollection(
+			this.host.db,
+			this.host.prefix,
+		).collectionName
+		const readiness = await probeSearchLaneReadiness(
+			this.host.db,
+			probeCollectionName,
 		)
+		this.searchLaneHealth = { ...readiness, probedAt: new Date() }
+		return readiness
+	}
+
+	/**
+	 * C-016: a v2 search path failed at query time (e.g. mongot died after
+	 * boot). Records the failure and triggers a throttled live re-poll of
+	 * index readiness so status reflects the outage instead of the boot-time
+	 * snapshot. The re-poll result lands in getDetailedStatus() via
+	 * `searchLanes` (and the next /ready probe answers from live state).
+	 */
+	noteSearchLaneFailure(path: string, error: unknown): void {
+		this.lastSearchLaneFailure = {
+			path,
+			error: error instanceof Error ? error.message : String(error),
+			at: new Date(),
+		}
+		if (this.searchLaneRePollInFlight) {
+			return
+		}
+		this.searchLaneRePollInFlight = true
+		this.probeSearchLanes()
+			.then((readiness) => {
+				if (!readiness.vectorSearch || !readiness.textSearch) {
+					log.warn("search lane re-poll after path failure: lanes not ready", {
+						path,
+						vectorSearch: readiness.vectorSearch,
+						textSearch: readiness.textSearch,
+					})
+				}
+			})
+			.catch((err) => {
+				log.warn("search lane re-poll after path failure failed", {
+					path,
+					error: err instanceof Error ? err.message : String(err),
+				})
+			})
+			.finally(() => {
+				this.searchLaneRePollInFlight = false
+			})
 	}
 
 	probeEmbeddingModeSupportsVector(): boolean {
@@ -637,7 +742,31 @@ export class MongoDBManagerAdminOps {
 	}
 
 	async getDetailedStatus(): Promise<V2Status> {
-		return getV2Status(this.host.db, this.host.prefix, this.host.agentId)
+		const status = await getV2Status(
+			this.host.db,
+			this.host.prefix,
+			this.host.agentId,
+		)
+		// C-016: runtime capability re-verification surfaces — change-stream
+		// liveness (null when the watcher never started) and the live
+		// search-lane probe state (boot snapshot until the first probe).
+		const watcher = this.host.changeStreamWatcher
+		return {
+			...status,
+			changeStream: watcher ? watcher.liveness : null,
+			searchLanes: {
+				vectorSearch:
+					this.searchLaneHealth?.vectorSearch ??
+					this.host.capabilities.vectorSearch,
+				textSearch:
+					this.searchLaneHealth?.textSearch ??
+					this.host.capabilities.textSearch,
+				...(this.searchLaneHealth
+					? { probedAt: this.searchLaneHealth.probedAt }
+					: {}),
+				lastFailure: this.lastSearchLaneFailure,
+			},
+		}
 	}
 
 	/**

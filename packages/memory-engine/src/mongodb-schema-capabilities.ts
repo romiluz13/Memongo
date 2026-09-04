@@ -232,6 +232,42 @@ export async function detectCapabilities(
 	return result
 }
 
+/**
+ * C-016: live search-lane readiness probe. One bounded index-status round
+ * trip (listSearchIndexes on the probe collection) that answers whether the
+ * concrete serving indexes are queryable RIGHT NOW — the same checks
+ * `detectCapabilities` applies at boot, but without the buildInfo/fusion
+ * probes, so it is cheap enough for a readiness endpoint. Unlike the boot
+ * snapshot, this catches a mongot that died after boot or an index an
+ * operator dropped/rebuilt mid-process.
+ *
+ * Transport errors (search index management unreachable, mongot down)
+ * propagate to the caller — a probe that cannot answer is a failure signal,
+ * not a silent false.
+ */
+export async function probeSearchLaneReadiness(
+	db: Db,
+	probeCollectionName: string,
+): Promise<{ vectorSearch: boolean; textSearch: boolean }> {
+	const indexes = await listSearchIndexes(db.collection(probeCollectionName))
+	const textIndex = indexes.find(
+		(index) => index.name === `${probeCollectionName}_text`,
+	)
+	const vectorIndex = indexes.find(
+		(index) => index.name === `${probeCollectionName}_vector`,
+	)
+	return {
+		textSearch:
+			textIndex !== undefined &&
+			isSearchIndexTypeCompatible(textIndex.type, "search") &&
+			isSearchIndexQueryable(textIndex),
+		vectorSearch:
+			vectorIndex !== undefined &&
+			isSearchIndexTypeCompatible(vectorIndex.type, "vectorSearch") &&
+			isSearchIndexQueryable(vectorIndex),
+	}
+}
+
 export async function waitForSearchCapabilities(
 	db: Db,
 	probeCollectionName: string | undefined,

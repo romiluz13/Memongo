@@ -47,7 +47,7 @@ This file is the compaction anchor: any future instance resumes from here.
 | WS-06 | C-009 | T3 | Deployment defaults (shared client, cache bound, sweep) | LANDED (see session log) |
 | WS-07 | C-010 | T3 | CI executes suites | LANDED 5115d889c7 |
 | WS-08 | C-011..015 | T2,T2,T1,T1,T1 | API contracts batch | LANDED (see session log) |
-| WS-09 | C-016 | T2 | Runtime capability re-verification | pending |
+| WS-09 | C-016 | T2 | Runtime capability re-verification | LANDED (see session log) |
 | WS-10 | C-017 | T2 | Cost observability | pending |
 | WS-11 | C-018 | T3 | Admission control | pending |
 | WS-12 | C-019 | T2 | Degradation vs healthy emptiness | pending |
@@ -59,7 +59,7 @@ This file is the compaction anchor: any future instance resumes from here.
 | WS-18 | C-037,038,039 | T1,T2,T2 | dockerignore; publish gates; nightly eval | pending |
 
 T3 needing refutation: C-002, C-003, C-004, C-005, C-007, C-008, C-009, C-018.
-Validation IDs used so far: V-001..V-075 (next free: V-076).
+Validation IDs used so far: V-001..V-079 (next free: V-080).
 Sweep violations at WS-01 landing: 92 (was 96 pre-WS-01).
 Sweep violations at WS-02 landing: 86 (was 92; zero for C-002).
 Sweep violations at WS-04 landing: 67 (was 72 at WS-03; zero for C-007).
@@ -74,6 +74,11 @@ TR-030 trace-without-validation, C-012 claim-without-validation +
 TR-031/032/033 trace-without-validation; T1 claims C-013/014/015 carry
 validations+trace links by hygiene though the sweep does not require
 them; remaining 55 are all pending-workstream claims C-016..C-040).
+Sweep violations at WS-09 landing: 50 (was 55; zero for C-016; the 5
+WS-09 violations cleared: claim-without-validation + 4x
+trace-without-validation TR-041..TR-044; remaining 50 are all
+pending-workstream claims C-017..C-040, incl. the pre-existing C-040
+missing-evidence/untraced-construct quartet from WS-05).
 
 ## Session log
 
@@ -374,3 +379,43 @@ them; remaining 55 are all pending-workstream claims C-016..C-040).
   regardless of enforcement tier; (3) python3 heredoc line-patching of
   trace-matrix.yaml verified by per-entry field counts (4 fields x 11
   entries) beats 11 sequential Edits.
+- WS-09/C-016 landing (runtime capability re-verification, all four
+  obligations from the plan): (1) change-stream supervision — the
+  watcher's re-open is now decomposed into reopenFromNow (immediate gap
+  signal + schedule), scheduleReopen, attemptReopen, and
+  delayForReopenAttempt (attempt 1 = 0ms, then base 1s doubling to the
+  30s ceiling, unbounded attempts — the old stop-after-3 is gone), close()
+  cancels the pending re-open, and a ChangeStreamLiveness getter
+  (active/state/reopenAttempts/nextReopenDelayMs) feeds status; (2) ready
+  vector lane — probeVectorAvailability and probeEmbeddingAvailability
+  (automated mode) now answer from a live index-status round trip
+  (probeSearchLaneReadiness: listSearchIndexes + queryable/type checks on
+  the chunks collection) instead of the host.capabilities boot snapshot,
+  with the embedding-mode config gate preserved; (3) pi probeClient —
+  startup failure arms a background retryProbeUntilAvailable loop (capped
+  exponential backoff 2s..60s, unref'd sleeps, heals state.available on
+  first success; tool messages name the background retry); (4) search-
+  lane failure re-poll — SearchV2 gains onPathFailure, wired through both
+  searchV2 call sites in mongodb-manager-search.ts and the host facade
+  into noteSearchLaneFailure (throttled single in-flight re-poll,
+  fire-and-forget), and getDetailedStatus() now surfaces changeStream
+  liveness + searchLanes {vectorSearch, textSearch, probedAt,
+  lastFailure} with boot-snapshot fallback before the first probe.
+  Suite state: engine 2093 (was 2078; +8 supervision battery, +7 admin
+  live-probe battery), pi 64 (was 62; +2 retry battery: heals session
+  after the API answers; soak proves capped one-probe-per-minute), api
+  264 (unchanged count; /ready battery pre-existing, vector-lane failure
+  message now names the live probe), fresh uncached check-types 15/15,
+  touched-files Biome clean at error level (root-run pre-existing
+  baseline unchanged: apps/mcp server.test.ts noExplicitAny, apps/web
+  globals.css !important, .ddd/reports JSON formatting). Artifacts:
+  V-076..V-079 (one per trace construct), C-016 validations filled,
+  TR-041..TR-044 patched, sweep-ws09.json 50 violations, zero for
+  C-016. Methodology lessons: (1) re-learned WS-02's canonical engine
+  invocation the hard way — `bun run test` (vitest run --exclude
+  src/**/*.e2e.test.ts) completes in ~1min; bare `bunx vitest run`
+  drags in live-MongoDB e2e files and stalls past a 900s timeout; (2)
+  biome `check .` truncates diagnostics — a scoped `biome check
+  <touched files>` pass caught 5 format errors the root run never
+  listed, so per-file scoped checks on every touched file are part of
+  the landing gate now.

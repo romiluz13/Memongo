@@ -15,6 +15,10 @@
  *   MEMONGO_API_KEY   — bearer token (optional for local dev)
  *   MEMONGO_AGENT_ID  — agent identity (default "pi-agent")
  *   MEMONGO_PI_*      — lifecycle knobs (injection/capture/scope), see lifecycle.ts
+ *
+ * Availability (C-016): one startup probe, then — if it failed — a
+ * background retry loop with capped exponential backoff heals the session
+ * when the API comes up (e.g. Pi started before `memongo serve`).
  */
 
 import * as fs from "node:fs"
@@ -111,6 +115,68 @@ interface MemongoState {
 	lastError?: string
 }
 
+/**
+ * C-016 (EL-010 B2): background retry policy for the availability probe.
+ * 2s doubling to a 60s ceiling — the common failure is an ordering
+ * dependency (Pi session starts before `memongo serve`), which heals within
+ * a few seconds; the ceiling keeps a never-started API at one status call
+ * per minute.
+ */
+export const PROBE_RETRY_BASE_DELAY_MS = 2_000
+export const PROBE_RETRY_MAX_DELAY_MS = 60_000
+
+async function probeClient(client: MemongoClient): Promise<MemongoState> {
+	try {
+		await client.status(AGENT_ID)
+		return { client, available: true }
+	} catch (err) {
+		return { client, available: false, lastError: errMsg(err) }
+	}
+}
+
+function sleepUnrefed(ms: number): Promise<void> {
+	return new Promise((resolve) => {
+		const timer = setTimeout(resolve, ms)
+		// Never hold the process (or a test runner) open for a retry timer.
+		timer.unref?.()
+	})
+}
+
+/**
+ * C-016 (EL-010 B2): the one-shot startup probe cached its failure for the
+ * whole session — start Pi before the API and semantic memory stayed
+ * silently dead unless the agent happened to run memongo_status. This loop
+ * re-probes in the background with capped exponential backoff until the API
+ * answers; the first success flips state.available so tools and lifecycle
+ * hooks heal on their own. Stops after healing (tool-call errors still
+ * report per-call failures; memongo_status re-arms nothing by itself).
+ */
+async function retryProbeUntilAvailable(
+	state: MemongoState,
+	{
+		baseDelayMs = PROBE_RETRY_BASE_DELAY_MS,
+		maxDelayMs = PROBE_RETRY_MAX_DELAY_MS,
+		onHealed,
+	}: {
+		baseDelayMs?: number
+		maxDelayMs?: number
+		onHealed?: () => void
+	} = {},
+): Promise<void> {
+	for (let attempt = 1; ; attempt++) {
+		const delay = Math.min(baseDelayMs * 2 ** (attempt - 1), maxDelayMs)
+		await sleepUnrefed(delay)
+		const probed = await probeClient(state.client)
+		if (probed.available) {
+			state.available = true
+			state.lastError = undefined
+			onHealed?.()
+			return
+		}
+		state.lastError = probed.lastError
+	}
+}
+
 function truncate(text: string, max: number): string {
 	if (text.length <= max) return text
 	return `${text.slice(0, max)}…`
@@ -150,21 +216,18 @@ function formatResult(r: {
 	return `[${r.source}] ${r.path}\n  ${meta}\n  ${truncate(r.snippet, SNIPPET_MAX)}`
 }
 
-async function probeClient(client: MemongoClient): Promise<MemongoState> {
-	try {
-		await client.status(AGENT_ID)
-		return { client, available: true }
-	} catch (err) {
-		return { client, available: false, lastError: errMsg(err) }
-	}
-}
-
 export default async function memongoExtension(
 	pi: ExtensionAPI,
 ): Promise<void> {
 	const state = await probeClient(
 		new MemongoClient({ baseUrl: API_URL, apiKey: API_KEY }),
 	)
+	if (!state.available) {
+		// C-016 (EL-010 B2): retry in the background instead of caching the
+		// startup failure for the session — the usual cause is the ordering
+		// dependency of starting Pi before `memongo serve`.
+		void retryProbeUntilAvailable(state)
+	}
 
 	// P2.3: ONE scope knob (MEMONGO_PI_MEMORY_SCOPE, default "agent") drives
 	// every direction — lifecycle injection AND capture, memongo_save AND
@@ -236,7 +299,7 @@ export default async function memongoExtension(
 					content: [
 						{
 							type: "text" as const,
-							text: `Memongo is not available: ${state.lastError ?? "unknown error"}. Use memory_search (local FTS5) instead.`,
+							text: `Memongo is not available yet: ${state.lastError ?? "unknown error"}. Retrying in the background — run memongo_status to check. Use memory_search (local FTS5) instead.`,
 						},
 					],
 					details: { error: true, available: false },
@@ -379,7 +442,7 @@ export default async function memongoExtension(
 					content: [
 						{
 							type: "text" as const,
-							text: `Memongo is not available: ${state.lastError ?? "unknown error"}. Memory not saved — use the local memory tool instead.`,
+							text: `Memongo is not available yet: ${state.lastError ?? "unknown error"}. Retrying in the background — run memongo_status to check. Memory not saved — use the local memory tool instead.`,
 						},
 					],
 					details: { error: true, available: false },

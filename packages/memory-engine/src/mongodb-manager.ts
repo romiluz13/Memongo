@@ -1358,6 +1358,14 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		return adminOpsOf(this).probeVectorAvailability()
 	}
 
+	// ---------------------------------------------------------------------------
+	// C-016: search-lane failure hook (runtime capability re-verification)
+	// ---------------------------------------------------------------------------
+
+	noteSearchLaneFailure(path: string, error: unknown): void {
+		adminOpsOf(this).noteSearchLaneFailure(path, error)
+	}
+
 	private probeEmbeddingModeSupportsVector(): boolean {
 		return adminOpsOf(this).probeEmbeddingModeSupportsVector()
 	}
@@ -1366,9 +1374,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 	// Structured memory write (exposed for memory_write tool to avoid per-call MongoClient)
 	// ---------------------------------------------------------------------------
 
-	async writeStructuredMemory(
-		entry: StructuredMemoryEntry,
-	): Promise<{
+	async writeStructuredMemory(entry: StructuredMemoryEntry): Promise<{
 		upserted: boolean
 		id: string
 		/** C-008: true when the entry was quarantined instead of written. */

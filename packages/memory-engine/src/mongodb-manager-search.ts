@@ -704,6 +704,10 @@ export class MongoDBManagerSearchOps {
 					hasEpisodes: mongoCfg.episodes.enabled,
 					hasGraphData: mongoCfg.graph.enabled,
 					maxResults,
+					// C-016: re-poll index readiness when a lane fails at query
+					// time so status reflects the outage.
+					onPathFailure: (path, error) =>
+						this.host.noteSearchLaneFailure(path, error),
 					searchOptions: {
 						minScore,
 						sessionKey: opts?.sessionKey,
@@ -1081,6 +1085,10 @@ export class MongoDBManagerSearchOps {
 					hasEpisodes: mongoCfg.episodes.enabled,
 					hasGraphData: mongoCfg.graph.enabled,
 					maxResults: resolvedSearchConfig.maxResults,
+					// C-016: re-poll index readiness when a lane fails at query
+					// time so status reflects the outage.
+					onPathFailure: (path, error) =>
+						this.host.noteSearchLaneFailure(path, error),
 					searchOptions: {
 						minScore: normalized.minScore ?? 0.1,
 						sessionKey: normalized.conversationScope?.sessionKey,

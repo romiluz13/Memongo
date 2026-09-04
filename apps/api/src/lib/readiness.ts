@@ -7,14 +7,16 @@ import {
 /**
  * P1.7 readiness check backing GET /ready. Three lanes, all required:
  *   - mongo:     live round-trip through the bridge (detects a MongoDB that
- *                died after boot; the vector/embedding probes below are
- *                capability checks computed at manager creation and cannot)
- *   - vector:    vector-search availability on this deployment
- *   - embedding: embedding-provider availability on this deployment
- *
- * Search-index readiness has no bridge-level live signal today (the engine's
- * readSearchIndexStatus is not exported through the bridge), so the vector
- * probe doubles as the vector-lane signal per the P1.7 plan fallback.
+ *                died after boot)
+ *   - vector:    live search-lane probe (C-016): the engine re-issues an
+ *                index-status round trip (listSearchIndexes on the chunks
+ *                collection + queryable checks) instead of answering from
+ *                the boot-time capability snapshot — catches a mongot that
+ *                died after boot or an index dropped mid-process. A probe
+ *                transport failure surfaces as a lane failure with the
+ *                error message.
+ *   - embedding: live vector-index readiness in automated mode (C-016),
+ *                same round trip as the vector lane.
  *
  * /ready is infra-facing and unauthenticated, so lane messages are sanitized:
  * URI credentials are redacted and messages are length-capped.
@@ -75,7 +77,7 @@ export async function checkReadiness(): Promise<ReadinessReport> {
 				: {
 						ok: false,
 						message:
-							"vector search is not available on this MongoDB deployment",
+							"vector search index is not queryable (live index-status probe)",
 					}
 		}),
 		runLane(async () => {

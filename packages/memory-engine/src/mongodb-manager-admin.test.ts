@@ -7,7 +7,13 @@ import {
 	computeOverallV2Health,
 	getV2Status,
 } from "./mongodb-manager.js"
+import { MongoDBManagerAdminOps } from "./mongodb-manager-admin.js"
+import type { MongoDBManagerHost } from "./mongodb-manager-host.js"
 import { mocked, fakeDb, fakePrefix } from "./test-helpers/manager-test-kit.js"
+
+vi.mock("./mongodb-schema-capabilities.js", () => ({
+	probeSearchLaneReadiness: vi.fn(),
+}))
 
 vi.mock("./mongodb-events.js", async () =>
 	(await import("./test-helpers/manager-test-kit.js")).eventsModuleMock(),
@@ -86,7 +92,12 @@ const {
 	episodesCollection,
 	proceduresCollection,
 	relevanceRunsCollection,
+	chunksCollection,
 } = await import("./mongodb-schema.js")
+const { probeSearchLaneReadiness } = await import(
+	"./mongodb-schema-capabilities.js"
+)
+const { getLaneCoverage } = await import("./mongodb-lane-coverage.js")
 
 // ---------------------------------------------------------------------------
 // 8.3: getV2Status
@@ -326,5 +337,184 @@ describe("getV2Status", () => {
 				"episodes.latestTimestamp",
 			]),
 		)
+	})
+})
+
+// ---------------------------------------------------------------------------
+// C-016: runtime capability re-verification — live probes + status surface
+// ---------------------------------------------------------------------------
+
+describe("MongoDBManagerAdminOps — live probes and status surface (C-016)", () => {
+	type FakeHostOverrides = {
+		capabilities?: { vectorSearch: boolean; textSearch: boolean }
+		embeddingMode?: string
+		deploymentProfile?: string
+		changeStreamWatcher?: { liveness: unknown } | null
+	}
+
+	function buildHost(overrides: FakeHostOverrides = {}): MongoDBManagerHost {
+		return {
+			db: fakeDb,
+			prefix: fakePrefix,
+			agentId: "agent-1",
+			capabilities: overrides.capabilities ?? {
+				vectorSearch: true,
+				textSearch: true,
+			},
+			config: {
+				mongodb: {
+					embeddingMode: overrides.embeddingMode ?? "automated",
+					deploymentProfile:
+						overrides.deploymentProfile ?? "atlas-local-preview",
+				},
+			},
+			changeStreamWatcher: overrides.changeStreamWatcher ?? null,
+		} as unknown as MongoDBManagerHost
+	}
+
+	beforeEach(() => {
+		vi.clearAllMocks()
+
+		// Minimal working surface for getV2Status() inside getDetailedStatus().
+		const zeroCol = {
+			countDocuments: vi.fn().mockResolvedValue(0),
+			findOne: vi.fn().mockResolvedValue(null),
+		} as unknown as import("mongodb").Collection<import("mongodb").Document>
+		mocked(eventsCollection).mockReturnValue(zeroCol)
+		mocked(entitiesCollection).mockReturnValue(zeroCol)
+		mocked(relationsCollection).mockReturnValue(zeroCol)
+		mocked(episodesCollection).mockReturnValue(zeroCol)
+		mocked(proceduresCollection).mockReturnValue(zeroCol)
+		mocked(relevanceRunsCollection).mockReturnValue(zeroCol)
+		mocked(getProjectionLag).mockResolvedValue(null)
+		mocked(getLatestIngestRun).mockResolvedValue(null)
+		mocked(getLatestProjectionRun).mockResolvedValue(null)
+		mocked(getLaneCoverage).mockResolvedValue(null)
+		mocked(chunksCollection).mockReturnValue({
+			collectionName: "test_chunks",
+		} as unknown as import("mongodb").Collection<import("mongodb").Document>)
+		// Default live-probe outcome: both lanes healthy.
+		mocked(probeSearchLaneReadiness).mockResolvedValue({
+			vectorSearch: true,
+			textSearch: true,
+		})
+	})
+
+	it("probeVectorAvailability answers from a live index-status round trip, not the boot snapshot", async () => {
+		// Boot snapshot says vector is up; the live probe says mongot died.
+		mocked(probeSearchLaneReadiness).mockResolvedValue({
+			vectorSearch: false,
+			textSearch: true,
+		})
+		const ops = new MongoDBManagerAdminOps(
+			buildHost({ capabilities: { vectorSearch: true, textSearch: true } }),
+		)
+
+		await expect(ops.probeVectorAvailability()).resolves.toBe(false)
+		expect(probeSearchLaneReadiness).toHaveBeenCalledWith(fakeDb, "test_chunks")
+	})
+
+	it("probeVectorAvailability returns true when the live probe finds the index queryable", async () => {
+		const ops = new MongoDBManagerAdminOps(buildHost())
+		await expect(ops.probeVectorAvailability()).resolves.toBe(true)
+		expect(probeSearchLaneReadiness).toHaveBeenCalledTimes(1)
+	})
+
+	it("probeVectorAvailability skips the live probe when the embedding mode cannot serve vector", async () => {
+		const ops = new MongoDBManagerAdminOps(
+			buildHost({ embeddingMode: "manual" }),
+		)
+
+		await expect(ops.probeVectorAvailability()).resolves.toBe(false)
+		expect(probeSearchLaneReadiness).not.toHaveBeenCalled()
+	})
+
+	it("probeEmbeddingAvailability reports live vector-index readiness in automated mode", async () => {
+		mocked(probeSearchLaneReadiness).mockResolvedValue({
+			vectorSearch: false,
+			textSearch: true,
+		})
+		const ops = new MongoDBManagerAdminOps(buildHost())
+
+		await expect(ops.probeEmbeddingAvailability()).resolves.toEqual({
+			ok: false,
+			error: "vector search index is not queryable (live probe)",
+		})
+
+		mocked(probeSearchLaneReadiness).mockResolvedValue({
+			vectorSearch: true,
+			textSearch: true,
+		})
+		await expect(ops.probeEmbeddingAvailability()).resolves.toEqual({
+			ok: true,
+		})
+	})
+
+	it("noteSearchLaneFailure re-polls readiness (throttled) and surfaces the failure in getDetailedStatus", async () => {
+		let resolveProbe!: (value: {
+			vectorSearch: boolean
+			textSearch: boolean
+		}) => void
+		mocked(probeSearchLaneReadiness).mockImplementationOnce(
+			() =>
+				new Promise((resolve) => {
+					resolveProbe = resolve
+				}),
+		)
+		const ops = new MongoDBManagerAdminOps(buildHost())
+
+		ops.noteSearchLaneFailure("hybrid", new Error("mongot down"))
+		ops.noteSearchLaneFailure("vector", new Error("mongot still down"))
+
+		// Throttled: one re-poll in flight, the second note only records.
+		expect(probeSearchLaneReadiness).toHaveBeenCalledTimes(1)
+
+		resolveProbe({ vectorSearch: false, textSearch: true })
+		await new Promise((resolve) => setImmediate(resolve))
+
+		const status = await ops.getDetailedStatus()
+		expect(status.searchLanes).toMatchObject({
+			vectorSearch: false,
+			textSearch: true,
+			lastFailure: {
+				path: "vector",
+				error: "mongot still down",
+			},
+		})
+		expect(status.searchLanes?.probedAt).toBeInstanceOf(Date)
+		expect(status.changeStream).toBeNull()
+	})
+
+	it("getDetailedStatus surfaces change-stream watcher liveness", async () => {
+		const liveness = {
+			active: false,
+			state: "recovering",
+			reopenAttempts: 3,
+			nextReopenDelayMs: 8000,
+		}
+		const ops = new MongoDBManagerAdminOps(
+			buildHost({ changeStreamWatcher: { liveness } }),
+		)
+
+		const status = await ops.getDetailedStatus()
+		expect(status.changeStream).toEqual(liveness)
+	})
+
+	it("getDetailedStatus falls back to the boot snapshot before any probe has run", async () => {
+		mocked(probeSearchLaneReadiness).mockResolvedValue({
+			vectorSearch: false,
+			textSearch: false,
+		})
+		const ops = new MongoDBManagerAdminOps(
+			buildHost({ capabilities: { vectorSearch: true, textSearch: false } }),
+		)
+
+		const status = await ops.getDetailedStatus()
+		expect(status.searchLanes).toEqual({
+			vectorSearch: true, // boot snapshot — no probe ran yet
+			textSearch: false,
+			lastFailure: null,
+		})
+		expect(status.searchLanes?.probedAt).toBeUndefined()
 	})
 })

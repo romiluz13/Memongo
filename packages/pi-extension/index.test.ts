@@ -39,6 +39,8 @@ vi.mock("@memongo/client", () => {
 import memongoExtension, {
 	isLoopbackApiUrl,
 	resolveApiKey,
+	PROBE_RETRY_BASE_DELAY_MS,
+	PROBE_RETRY_MAX_DELAY_MS,
 } from "./extensions/index.js"
 
 describe("isLoopbackApiUrl", () => {
@@ -366,5 +368,86 @@ describe("C-008 search envelope + save disposition", () => {
 		expect(text).toContain("Saved to Memongo: fact/k")
 		expect(text).not.toContain("QUARANTINED")
 		expect(response.details).not.toHaveProperty("quarantined")
+	})
+})
+
+// ---------------------------------------------------------------------------
+// C-016 (EL-010 B2): a startup probe failure is not a life sentence. The
+// extension re-probes in the background (capped exponential backoff) and
+// heals state.available on the first success — the session no longer needs
+// a restart to get memory back after `memongo serve` comes up late.
+// ---------------------------------------------------------------------------
+
+describe("C-016 probeClient background retry heals the session", () => {
+	afterEach(() => {
+		hoisted.statusImpl = null
+		vi.useRealTimers()
+		vi.restoreAllMocks()
+	})
+
+	it("flips state.available after the API answers a background retry", async () => {
+		vi.useFakeTimers()
+		// Startup: API down (typical cause — Pi started before `memongo serve`).
+		hoisted.statusImpl = () => Promise.reject(new Error("ECONNREFUSED"))
+		hoisted.clients.length = 0
+		const { pi, tools } = createFakePi()
+		await memongoExtension(pi)
+		const client = hoisted.clients[0] as {
+			searchDetailed: ReturnType<typeof vi.fn>
+		}
+
+		// Unavailable: search short-circuits, no API call attempted.
+		const down = (await tools
+			.get("memongo_search")
+			?.execute("1", { query: "x" } as never, undefined, undefined, {
+				cwd: "/tmp",
+			})) as {
+			content: Array<{ type: string; text: string }>
+			details: Record<string, unknown>
+		}
+		expect(down.details).toMatchObject({ available: false })
+		expect(down.content[0]?.text).toContain("Retrying in the background")
+		expect(client.searchDetailed).not.toHaveBeenCalled()
+
+		// API comes up; advance past the first backoff step (base delay).
+		hoisted.statusImpl = null
+		await vi.advanceTimersByTimeAsync(PROBE_RETRY_BASE_DELAY_MS)
+
+		const healed = (await tools
+			.get("memongo_search")
+			?.execute("2", { query: "x" } as never, undefined, undefined, {
+				cwd: "/tmp",
+			})) as {
+			content: Array<{ type: string; text: string }>
+			details: Record<string, unknown>
+		}
+		expect(client.searchDetailed).toHaveBeenCalledTimes(1)
+		expect(healed.details).toMatchObject({ count: 0 })
+		expect(healed.content[0]?.text).toContain("No Memongo results")
+	})
+
+	it("backs off exponentially and never exceeds the ceiling while the API stays down", async () => {
+		vi.useFakeTimers()
+		hoisted.statusImpl = () => Promise.reject(new Error("ECONNREFUSED"))
+		hoisted.clients.length = 0
+		const { pi } = createFakePi()
+		await memongoExtension(pi)
+		const client = hoisted.clients[0] as {
+			status: ReturnType<typeof vi.fn>
+		}
+
+		// Startup probe (1 call) + retries at base, 2x, 4x (exponential).
+		await vi.advanceTimersByTimeAsync(PROBE_RETRY_BASE_DELAY_MS)
+		await vi.advanceTimersByTimeAsync(PROBE_RETRY_BASE_DELAY_MS * 2)
+		await vi.advanceTimersByTimeAsync(PROBE_RETRY_BASE_DELAY_MS * 4)
+		expect(client.status).toHaveBeenCalledTimes(4)
+
+		// Long soak: once the cap engages, retries fire at one-per-max-delay
+		// — never faster, so a down API costs at most a probe per minute.
+		await vi.advanceTimersByTimeAsync(PROBE_RETRY_MAX_DELAY_MS * 8)
+		const atSoak = client.status.mock.calls.length
+		expect(atSoak).toBeGreaterThan(6)
+		await vi.advanceTimersByTimeAsync(PROBE_RETRY_MAX_DELAY_MS * 8)
+		expect(client.status.mock.calls.length).toBeLessThanOrEqual(atSoak + 9)
 	})
 })

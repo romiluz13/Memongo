@@ -22,11 +22,43 @@ export type ChangeStreamCallback = (event: {
 }) => void
 
 /**
+ * C-016: change-stream watcher liveness, surfaced through
+ * `MongoDBManagerAdminOps.getDetailedStatus()` so a dead/recovering watcher
+ * is visible in status instead of silently stopping cross-instance sync.
+ */
+export type ChangeStreamLiveness = {
+	/** A stream is currently open and the watcher is not closed. */
+	active: boolean
+	state: "active" | "recovering" | "stopped"
+	/** Re-opens since the last change event proved the stream alive. */
+	reopenAttempts: number
+	/** Ms until the next scheduled re-open (null when none is scheduled). */
+	nextReopenDelayMs: number | null
+}
+
+/** C-016: re-open backoff policy — exponential delay with a ceiling. */
+export type ChangeStreamReopenPolicy = {
+	/** Delay before the SECOND re-open; doubles from there. Default 1000. */
+	baseDelayMs?: number
+	/** Upper bound on the re-open delay. Default 30_000. */
+	maxDelayMs?: number
+}
+
+const DEFAULT_REOPEN_BASE_DELAY_MS = 1_000
+const DEFAULT_REOPEN_MAX_DELAY_MS = 30_000
+
+/**
  * MongoDBChangeStreamWatcher watches for changes to the chunks collection
  * and invokes a callback when relevant inserts/updates/deletes are detected.
  *
  * Requires a replica set (same as transactions). Degrades gracefully on
  * standalone topologies by simply not opening a stream.
+ *
+ * C-016 supervision: re-opens are unlimited but rate-limited by exponential
+ * backoff with a ceiling — the first re-open is immediate (a stale token at
+ * startup is routine), each subsequent re-open without a delivered event
+ * waits baseDelayMs * 2^(n-2) capped at maxDelayMs. The watcher never stops
+ * permanently on its own; liveness is observable via the `liveness` getter.
  */
 export class MongoDBChangeStreamWatcher {
 	private stream: ChangeStream<Document, ChangeStreamDocument> | null = null
@@ -35,7 +67,10 @@ export class MongoDBChangeStreamWatcher {
 	private pendingOpType: string = "unknown"
 	private closed = false
 	private _reopenAttempts = 0
-	private static readonly MAX_REOPEN_ATTEMPTS = 3
+	private reopenTimer: NodeJS.Timeout | null = null
+	private reopenFireAtMs = 0
+	private readonly reopenBaseDelayMs: number
+	private readonly reopenMaxDelayMs: number
 	/**
 	 * F21: Last resume token for reconnection after restart.
 	 * The manager can persist this token externally across restarts.
@@ -46,7 +81,13 @@ export class MongoDBChangeStreamWatcher {
 		private readonly collection: Collection,
 		private readonly callback: ChangeStreamCallback,
 		private readonly debounceMs: number = 1000,
-	) {}
+		reopenPolicy: ChangeStreamReopenPolicy = {},
+	) {
+		this.reopenBaseDelayMs =
+			reopenPolicy.baseDelayMs ?? DEFAULT_REOPEN_BASE_DELAY_MS
+		this.reopenMaxDelayMs =
+			reopenPolicy.maxDelayMs ?? DEFAULT_REOPEN_MAX_DELAY_MS
+	}
 
 	/** F21: Get the last resume token for external persistence across restarts */
 	get lastResumeToken(): unknown {
@@ -160,42 +201,38 @@ export class MongoDBChangeStreamWatcher {
 	}
 
 	/**
-	 * Re-open the stream from the current time after a stale/invalid resume token.
-	 * Emits a gapDetected signal so the manager can trigger a full re-scan of
-	 * affected paths. Caps re-open attempts to MAX_REOPEN_ATTEMPTS to avoid a
-	 * tight crash loop; after the cap, closes gracefully.
+	 * Re-open the stream from the current time after a stale/invalid resume
+	 * token or mid-stream loss. Emits a gapDetected signal immediately (before
+	 * any backoff delay) so the manager can re-scan the missed window right
+	 * away, then schedules the re-open under exponential backoff: the first
+	 * re-open is immediate, each subsequent one without a delivered change
+	 * event waits baseDelayMs * 2^(n-2) capped at maxDelayMs. Re-opens are
+	 * unlimited (supervised) — the backoff, not a cap, bounds the rate. A
+	 * standalone topology still closes the watcher for good from the error
+	 * handler (change streams can never work there).
 	 */
 	private reopenFromNow(from: "startup" | "midstream"): boolean {
 		if (this.closed) {
 			return false
 		}
-		if (
-			this._reopenAttempts >= MongoDBChangeStreamWatcher.MAX_REOPEN_ATTEMPTS
-		) {
-			log.warn("change stream re-open cap reached, closing watcher")
-			void this.close()
-			return false
-		}
-		this._reopenAttempts++
 
-		// Close the old stream in the background (don't block the re-open).
+		// Detach from the old stream immediately so none of its late events
+		// reach us. Close it in the background (don't block the re-open).
 		if (this.stream) {
 			void this.stream.close().catch(() => {
 				// Ignore close errors on the old stream.
 			})
 			this.stream = null
 		}
-
-		try {
-			this.stream = this.openStream({})
-			this.attachStreamHandlers()
-		} catch (err) {
-			const msg = err instanceof Error ? err.message : String(err)
-			log.warn(`failed to re-open change stream from now: ${msg}`)
-			return false
+		if (this.reopenTimer) {
+			clearTimeout(this.reopenTimer)
+			this.reopenTimer = null
+			this.reopenFireAtMs = 0
 		}
 
-		// Signal the gap so the manager can trigger a full re-scan.
+		// Signal the gap so the manager can trigger a full re-scan. Emitted
+		// before the open (and before any backoff delay): the missed window
+		// exists regardless of when the re-open succeeds.
 		try {
 			this.callback({
 				operationType: "gap_detected",
@@ -209,15 +246,109 @@ export class MongoDBChangeStreamWatcher {
 			log.warn(`gap signal callback error: ${msg}`)
 		}
 
-		// Do NOT reset _reopenAttempts here. openStream() returns synchronously
-		// without a server round-trip, so a successful return doesn't prove the
-		// stream is alive. The counter is reset in handleChange() on the first
-		// real change event, which proves the new stream is working. This
-		// prevents a re-stream storm: if the server keeps emitting stale-token
-		// errors on each freshly opened stream, the cap actually bounds the
-		// rate instead of resetting every iteration.
-		log.info(`change stream re-opened from now (${from})`)
+		this.scheduleReopen()
 		return true
+	}
+
+	/**
+	 * Delay before re-open attempt N (1-indexed): 0 for the first (a stale
+	 * token at startup is routine), then baseDelayMs * 2^(n-2) capped at
+	 * maxDelayMs.
+	 */
+	private delayForReopenAttempt(attempt: number): number {
+		if (attempt <= 1) {
+			return 0
+		}
+		const exponential = this.reopenBaseDelayMs * 2 ** (attempt - 2)
+		return Math.min(exponential, this.reopenMaxDelayMs)
+	}
+
+	/**
+	 * Count the next re-open attempt and fire it (immediately or after the
+	 * backoff delay). Internal retries after a failed open re-enter here
+	 * directly — the gap was already signaled, so we must not signal again.
+	 */
+	private scheduleReopen(): void {
+		this._reopenAttempts++
+		const delay = this.delayForReopenAttempt(this._reopenAttempts)
+		if (delay <= 0) {
+			void this.attemptReopen()
+			return
+		}
+		this.reopenFireAtMs = Date.now() + delay
+		this.reopenTimer = setTimeout(() => {
+			this.reopenTimer = null
+			this.reopenFireAtMs = 0
+			void this.attemptReopen()
+		}, delay)
+	}
+
+	private async attemptReopen(): Promise<void> {
+		if (this.closed) {
+			return
+		}
+		try {
+			this.stream = this.openStream({})
+			this.attachStreamHandlers()
+			log.info(
+				`change stream re-opened from now (attempt ${this._reopenAttempts})`,
+			)
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err)
+			log.warn(`failed to re-open change stream from now: ${msg}`)
+			if (isChangeStreamNotSupported(msg)) {
+				// Standalone topology can never serve change streams — stop
+				// instead of backing off forever.
+				log.info("change streams not supported, closing watcher")
+				void this.close()
+				return
+			}
+			this.scheduleReopen()
+		}
+	}
+
+	/**
+	 * C-016: liveness snapshot for getDetailedStatus(). `stopped` covers
+	 * deliberate close, never-started, and unsupported-standalone topology;
+	 * `recovering` means a re-open is scheduled under backoff. Do NOT reset
+	 * _reopenAttempts here or in attemptReopen: openStream() returns
+	 * synchronously without a server round-trip, so a successful open
+	 * doesn't prove the stream is alive. The counter resets in handleChange()
+	 * on the first real change event. This prevents a re-stream storm: if the
+	 * server keeps killing each freshly opened stream, the backoff bounds the
+	 * rate instead of resetting every iteration.
+	 */
+	get liveness(): ChangeStreamLiveness {
+		if (this.closed) {
+			return {
+				active: false,
+				state: "stopped",
+				reopenAttempts: this._reopenAttempts,
+				nextReopenDelayMs: null,
+			}
+		}
+		if (this.stream !== null) {
+			return {
+				active: true,
+				state: "active",
+				reopenAttempts: this._reopenAttempts,
+				nextReopenDelayMs: null,
+			}
+		}
+		if (this.reopenTimer !== null) {
+			return {
+				active: false,
+				state: "recovering",
+				reopenAttempts: this._reopenAttempts,
+				nextReopenDelayMs: Math.max(0, this.reopenFireAtMs - Date.now()),
+			}
+		}
+		return {
+			active: false,
+			state: "stopped",
+			reopenAttempts: this._reopenAttempts,
+			nextReopenDelayMs: null,
+		}
 	}
 
 	private handleChange(change: ChangeStreamDocument): void {
@@ -296,6 +427,14 @@ export class MongoDBChangeStreamWatcher {
 		if (this.debounceTimer) {
 			clearTimeout(this.debounceTimer)
 			this.debounceTimer = null
+		}
+
+		// Cancel any re-open scheduled under backoff: a deliberate close must
+		// not be resurrected by the supervision loop.
+		if (this.reopenTimer) {
+			clearTimeout(this.reopenTimer)
+			this.reopenTimer = null
+			this.reopenFireAtMs = 0
 		}
 
 		if (this.stream) {

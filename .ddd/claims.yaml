@@ -284,7 +284,7 @@ entries:
     tier: T2
     status: known-and-supported
     constructs: [apps/api/src/lib/readiness.ts, packages/memory-engine/src/mongodb-change-stream.ts, "packages/pi-extension/extensions/index.ts#probeClient", packages/memory-engine/src/mongodb-manager-admin.ts]
-    validations: []
+    validations: [V-076, V-077, V-078, V-079]
     exceptions: []
 
   - id: C-017

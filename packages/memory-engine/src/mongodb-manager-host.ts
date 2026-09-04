@@ -356,6 +356,8 @@ export interface MongoDBManagerHost {
 	probeEmbeddingAvailability(): Promise<MemoryEmbeddingProbeResult>
 	probeVectorAvailability(): Promise<boolean>
 	probeEmbeddingModeSupportsVector(): boolean
+	/** C-016: record a query-time search-path failure and re-poll readiness. */
+	noteSearchLaneFailure(path: string, error: unknown): void
 	getDetailedStatus(): Promise<V2Status>
 	stats(): Promise<MemoryStats>
 	readFile(params: {

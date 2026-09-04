@@ -248,6 +248,13 @@ export type SearchV2Context = {
 	hasEpisodes?: boolean
 	hasGraphData?: boolean
 	maxResults?: number
+	/**
+	 * C-016: invoked when an individual retrieval path fails at query time
+	 * (non-strict mode). The manager wires this to
+	 * noteSearchLaneFailure() so index readiness is re-polled and the
+	 * outage is reflected in status instead of the boot-time snapshot.
+	 */
+	onPathFailure?: (path: RetrievalPath, error: unknown) => void
 	searchOptions?: {
 		minScore?: number
 		sessionKey?: string
@@ -1231,6 +1238,15 @@ async function searchV2WithBudget(
 					throw pathErr
 				}
 				log.error(`searchV2 path ${path} failed`, { error: pathErr })
+				// C-016: surface the failure so the manager can re-poll index
+				// readiness. Never let the hook break the remaining paths.
+				try {
+					context.onPathFailure?.(path, pathErr)
+				} catch (hookErr) {
+					log.warn(`searchV2 onPathFailure hook failed`, {
+						error: hookErr,
+					})
+				}
 				// Continue with other paths
 				return []
 			}

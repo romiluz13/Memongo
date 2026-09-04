@@ -410,41 +410,41 @@ traces:
     change_id: WS-09
     claim_id: C-016
     construct_id: apps/api/src/lib/readiness.ts
-    validation_id: null
+    validation_id: V-076
     direction: forward
-    sweep_pass: false
-    checked_at: "2026-09-02T13:41:40.063Z"
-    notes: WS-09 Runtime capability re-verification (planned change envelope)
+    sweep_pass: true
+    checked_at: "2026-09-04T11:05:40.000Z"
+    notes: "WS-09 ready vector lane answers from the live probe; /ready battery in api suite (landed)"
   - id: TR-042
     schema_version: 0.1.0
     change_id: WS-09
     claim_id: C-016
     construct_id: packages/memory-engine/src/mongodb-change-stream.ts
-    validation_id: null
+    validation_id: V-077
     direction: forward
-    sweep_pass: false
-    checked_at: "2026-09-02T13:41:40.064Z"
-    notes: WS-09 Runtime capability re-verification (planned change envelope)
+    sweep_pass: true
+    checked_at: "2026-09-04T11:05:40.000Z"
+    notes: "WS-09 change-stream supervision: exponential-backoff re-open with ceiling plus liveness flag (landed)"
   - id: TR-043
     schema_version: 0.1.0
     change_id: WS-09
     claim_id: C-016
     construct_id: "packages/pi-extension/extensions/index.ts#probeClient"
-    validation_id: null
+    validation_id: V-078
     direction: forward
-    sweep_pass: false
-    checked_at: "2026-09-02T13:41:40.065Z"
-    notes: WS-09 Runtime capability re-verification (planned change envelope)
+    sweep_pass: true
+    checked_at: "2026-09-04T11:05:40.000Z"
+    notes: "WS-09 pi-extension probeClient: background retry with capped exponential backoff heals state.available (landed)"
   - id: TR-044
     schema_version: 0.1.0
     change_id: WS-09
     claim_id: C-016
     construct_id: packages/memory-engine/src/mongodb-manager-admin.ts
-    validation_id: null
+    validation_id: V-079
     direction: forward
-    sweep_pass: false
-    checked_at: "2026-09-02T13:41:40.066Z"
-    notes: WS-09 Runtime capability re-verification (planned change envelope)
+    sweep_pass: true
+    checked_at: "2026-09-04T11:05:40.000Z"
+    notes: "WS-09 admin ops: live lane probes, throttled re-poll on search-lane failure, liveness + searchLanes in status (landed)"
   - id: TR-045
     schema_version: 0.1.0
     change_id: WS-10

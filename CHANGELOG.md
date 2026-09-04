@@ -47,6 +47,31 @@ All notable changes to Memongo will be documented in this file.
   fixes the pool options for that URI, and differing per-agent pool
   settings are ignored (a warning is logged).
 
+### Runtime capability re-verification
+
+- Capability checks are no longer boot-cached: `/ready` vector-lane and
+  embedding-availability probes now answer from a live index-status round
+  trip (`listSearchIndexes` + queryable/type checks) instead of the boot
+  snapshot, so an index that becomes unqueryable mid-flight flips the
+  ready report instead of staying green.
+- The change-stream watcher is supervised: a dead stream re-opens
+  immediately once, then with exponential backoff (1 s doubling to a 30 s
+  ceiling, unbounded attempts), the gap signal fires immediately, a real
+  change event resets the backoff budget, and a `liveness` surface
+  (`active`, `state`, `reopenAttempts`, `nextReopenDelayMs`) is exposed on
+  `getDetailedStatus()` and `/v2/status` (previously the watcher gave up
+  permanently after three attempts).
+- When a search lane fails, index readiness is re-polled (throttled to one
+  in-flight probe) and the outcome surfaces in status as
+  `searchLanes.vectorSearch` / `searchLanes.textSearch` with the failing
+  path, error, and probe timestamp.
+- The Pi coding-agent extension no longer caches a startup probe failure
+  for the whole session: a background retry with capped exponential
+  backoff (2 s doubling to 60 s, at most one probe per minute) heals
+  availability as soon as the API answers, so starting Pi before
+  `memongo serve` no longer leaves semantic memory silently dead until
+  restart.
+
 ## 2.0.0 - 2026-07-31
 
 Major release: security hardening, tenant isolation, and engine robustness.
