@@ -206,7 +206,8 @@ pending for the newly filed open claim C-040).
   (deliberately outside the scan boundary), stale droid-wiki generated
   docs, contract assertion structurally unreachable from raw input
   (validators reject first — it is the declaration-resolver drift lock).
-- WS-05 landing (prompt-injection coverage, C-008): three obligations
+- WS-05 landing (prompt-injection coverage, C-008): commit 3c2dee0fdd,
+  three obligations
   landed. (1) Envelope: the #29 renderMemoryContextBlock renderer shared
   from @memongo/tools via a new ./memory-context subpath export (the
   published pi package cannot import @memongo/lib); pi renderSessionContext
