@@ -1580,3 +1580,60 @@ describe("client version skew logging (WS-08 / C-014)", () => {
 		expect(warn).not.toHaveBeenCalled()
 	})
 })
+
+describe("C-021 dead-letter surfacing on the status endpoint", () => {
+	const prevEnv = { ...process.env }
+
+	beforeEach(() => {
+		process.env = { ...prevEnv }
+		delete process.env.MEMONGO_API_KEY
+		delete process.env.MEMONGO_API_SCOPED_KEYS
+		process.env.MEMONGO_ALLOW_INSECURE_NO_AUTH = "true"
+		process.env.MEMONGO_API_RATE_LIMIT = ""
+		bridgeMocks.memongoBridgeGetDetailedStatus.mockReset()
+	})
+
+	afterEach(() => {
+		process.env = prevEnv
+	})
+
+	it("serves memory-job queue depth including dead letters verbatim", async () => {
+		// The engine's getV2Status (WS-13) assembles this shape; the route is
+		// the pass-through surface. This pins the contract: a lost extraction
+		// is countable at the HTTP boundary, not just in the engine.
+		bridgeMocks.memongoBridgeGetDetailedStatus.mockResolvedValue({
+			health: { overall: "ok" },
+			memoryJobs: { pending: 3, running: 1, failed: 2, deadLettered: 1 },
+		})
+
+		const res = await createApp().request(
+			"/v1/status/detailed?agentId=agent-dead-letter",
+		)
+		expect(res.status).toBe(200)
+		const body = (await res.json()) as {
+			memoryJobs?: { pending: number; deadLettered: number }
+		}
+		expect(body.memoryJobs).toEqual({
+			pending: 3,
+			running: 1,
+			failed: 2,
+			deadLettered: 1,
+		})
+		expect(bridgeMocks.memongoBridgeGetDetailedStatus).toHaveBeenCalledWith({
+			agentId: "agent-dead-letter",
+		})
+	})
+
+	it("stays 200 when the deployment has no jobs collection to count", async () => {
+		// The engine omits memoryJobs (Promise.allSettled fallback) when the
+		// jobs collection is missing; the route must not invent or break on it.
+		bridgeMocks.memongoBridgeGetDetailedStatus.mockResolvedValue({
+			health: { overall: "health-uncertain" },
+		})
+
+		const res = await createApp().request("/v1/status/detailed")
+		expect(res.status).toBe(200)
+		const body = (await res.json()) as { memoryJobs?: unknown }
+		expect(body.memoryJobs).toBeUndefined()
+	})
+})

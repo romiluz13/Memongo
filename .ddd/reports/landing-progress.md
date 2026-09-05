@@ -51,15 +51,15 @@ This file is the compaction anchor: any future instance resumes from here.
 | WS-10 | C-017 | T2 | Cost observability | pending |
 | WS-11 | C-018 | T3 | Admission control | pending |
 | WS-12 | C-019 | T2 | Degradation vs healthy emptiness | pending |
-| WS-13 | C-020..023 | T2,T2,T2,T2 | Lifecycle scheduling/dead letters | pending |
+| WS-13 | C-020..023 | T2,T2,T2,T2 | Lifecycle scheduling/dead letters | LANDED b175de6955 + artifacts (see session log) |
 | WS-14 | C-024 | T2 | Orphan detection all relation types | pending |
 | WS-15 | C-025..028 | T1,T2,T1,T1 | Data-model mechanics | pending |
 | WS-16 | C-029..034 | T2,T1,T2,T0,T2,T1 | Retrieval quality/perf | pending |
-| WS-17 | C-035,036 | T2,T2 | kb cross-tenant read; pi opt-in | pending |
+| WS-17 | C-035,036 | T2,T2 | kb cross-tenant read; pi opt-in | LANDED 96c8db28bb (see session log) |
 | WS-18 | C-037,038,039 | T1,T2,T2 | dockerignore; publish gates; nightly eval | pending |
 
 T3 needing refutation: C-002, C-003, C-004, C-005, C-007, C-008, C-009, C-018.
-Validation IDs used so far: V-001..V-079 (next free: V-080).
+Validation IDs used so far: V-001..V-089 (next free: V-090).
 Sweep violations at WS-01 landing: 92 (was 96 pre-WS-01).
 Sweep violations at WS-02 landing: 86 (was 92; zero for C-002).
 Sweep violations at WS-04 landing: 67 (was 72 at WS-03; zero for C-007).
@@ -79,6 +79,11 @@ WS-09 violations cleared: claim-without-validation + 4x
 trace-without-validation TR-041..TR-044; remaining 50 are all
 pending-workstream claims C-017..C-040, incl. the pre-existing C-040
 missing-evidence/untraced-construct quartet from WS-05).
+Sweep violations at WS-13 landing: 35 (was 46 at WS-17; zero for
+C-020..C-023; the 11 WS-13 violations cleared: 4x claim-without-
+validation + 7x trace-without-validation TR-054..TR-060; remaining 35
+are the pending workstreams WS-10/11/12/14/15/16/18 plus the C-040
+quartet).
 
 ## Session log
 
@@ -476,3 +481,64 @@ missing-evidence/untraced-construct quartet from WS-05).
   The validation writer accepts --notes at write time; recording without
   it leaves notes null, and re-recording would append duplicate V ids (no
   dedupe) — pass --notes up front.
+
+- WS-13/C-020..C-023 landing (lifecycle scheduling, dead letters, episodes
+  lifecycle, batch backstop): split landing — the implementation was
+  committed mid-verification by a parallel session as b175de6955 (29 files,
+  +1714/-466, absorbing this session's design fix below); this session ran
+  the verification gates and completed all landing artifacts per the
+  standard loop (user-directed takeover). (1) C-020: drainMemoryJobQueue
+  claims consolidation job types alongside extraction and stages one
+  auto-consolidation job per cadence window (MEMONGO_AUTO_CONSOLIDATION_MS,
+  default 6h, 0 disables); runClaimedConsolidationJob reuses the existing
+  lease/heartbeat fencing, runs consolidateMemory + invalidateQueryCache,
+  completes with factsPruned/conflictsResolved metadata. Design bug found
+  and fixed during verification: the window jobId was NOT agent-scoped
+  (consolidation-auto-<windowIndex>), so two agents sharing a collection
+  prefix collided on the unique index and the second agent's auto-
+  consolidation was silently swallowed — fixed to consolidation-auto-
+  <agentId>-<windowIndex> and the e2e extended with a cross-agent peer
+  drain proving both agents stage their own window jobs. (2) C-021:
+  deadLetterAt + completedAt $unset at attempt-budget exhaustion puts dead
+  letters structurally outside idx_memory_jobs_completed_ttl (keys on
+  completedAt); memory-job-dead-letter telemetry; retryFailedMemoryJob
+  $unsets deadLetterAt (re-arms the TTL interaction); getV2Status surfaces
+  memoryJobs {pending, running, failed, deadLettered} via allSettled.
+  (3) C-022: enforceEpisodesScopeCap after upsert (MEMONGO_EPISODES_MAX_
+  PER_SCOPE default 200, 0 disables, oldest-beyond-cap pruned, idempotent
+  on replays) + episodesRetentionDays TTL on updatedAt (default 0 =
+  disabled with ghost-index drop); latent EPISODES_SCHEMA phantom-eventIds
+  validator bug fixed (would have failed every episode insert once
+  validators are enforced). (4) C-023: batch staging verified inside the
+  transaction; backstop repair re-stages when the job insert fails after
+  events commit; receipts parity single-vs-batch pinned; production-dead
+  writeEventAndProject moved to test-helpers/legacy-write-event.ts.
+  Companion commits in the landing window: eec3eadc76 (C-005 expiresAt
+  filter path on chunks_vector/session_chunks_vector — mongot was
+  rejecting vector-lane queries carrying the TTL field), 309c8b7427
+  (contract version 2.1.0), a95c998168 (test fix: EXPECTED_STANDARD_INDEX_
+  COUNT 96 -> 100; WS-03 landed four TTL indexes without bumping it, so
+  mongodb-e2e had been red at HEAD for two workstreams — proven
+  pre-existing via stash-and-run). Suite state: engine 122 files/2107
+  tests, lib 166, api 266 (+2 C-021 route battery added at landing), jobs
+  e2e 18/18, production-readiness 96/96, mongodb-e2e 43/43, real-e2e-v2
+  81/81, check-types clean. Artifacts: V-083 (e2e log, manager-jobs
+  construct) .. V-089, C-020..C-023 validations filled, TR-054..TR-060
+  patched, sweep-ws13.json 35 violations (zero for C-020..C-023).
+  Methodology lessons: (1) the ground-decisions narrative doc referenced
+  WS-13 traces as TR-093..TR-099 — those are WS-05's second-wave traces;
+  the actual WS-13 set is TR-054..TR-060. trace-matrix.yaml is the source
+  of record for trace identity; narrative docs are not. (2) When a claim
+  construct did not need modification (C-021's v1-status-routes.ts — the
+  route already proxied bridge getDetailedStatus), the validation still
+  needs construct-honest evidence: a boundary contract test was added at
+  landing pinning /v1/status/detailed serving the memoryJobs depth
+  verbatim and staying 200 when the field is absent, rather than citing
+  an engine suite log against an API construct. (3) Any landing that adds
+  a standard index must bump EXPECTED_STANDARD_INDEX_COUNT in the same
+  commit (WS-03 missed this and the e2e went silently red at HEAD). (4)
+  e2e against a shared docker network needs the URI pinned explicitly
+  (MONGODB_TEST_URI) and a container with the embedding key for vector
+  lanes — a fresh atlas-local container without VOYAGE_API_KEY fails
+  $vectorSearch with CanonicalModel not registered, which reads like a
+  code defect but is purely environmental.

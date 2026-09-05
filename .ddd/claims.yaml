@@ -348,7 +348,7 @@ entries:
     tier: T2
     status: known-and-supported
     constructs: [packages/memory-engine/src/mongodb-manager-jobs.ts, packages/memory-engine/src/mongodb-consolidator.ts]
-    validations: []
+    validations: [V-083, V-084]
     exceptions: []
 
   - id: C-021
@@ -364,7 +364,7 @@ entries:
     tier: T2
     status: known-and-supported
     constructs: [packages/memory-engine/src/mongodb-memory-jobs.ts, apps/api/src/routes/v1-status-routes.ts, packages/memory-engine/src/mongodb-schema.ts]
-    validations: []
+    validations: [V-085, V-086, V-087]
     exceptions: []
 
   - id: C-022
@@ -380,7 +380,7 @@ entries:
     tier: T2
     status: known-and-supported
     constructs: [packages/memory-engine/src/mongodb-episodes.ts]
-    validations: []
+    validations: [V-088]
     exceptions: []
 
   - id: C-023
@@ -396,7 +396,7 @@ entries:
     tier: T2
     status: known-and-supported
     constructs: [packages/memory-engine/src/mongodb-manager-write.ts]
-    validations: []
+    validations: [V-089]
     exceptions: []
 
   - id: C-024

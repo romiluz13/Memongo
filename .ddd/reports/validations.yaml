@@ -571,3 +571,73 @@ entries:
     run_at: "2026-09-04T12:09:19.490Z"
     evidence_hash: "sha256:e2b83633f664b5d56d21cfd7fa4ea6f1165fce45a1ae31c912c73712d3b1873b"
     notes: "Opt-in-capture evidence from the final-state WS-17 pi-extension suite (this log, 3 files / 67 tests, exit 0): resolveLifecycleConfig now defaults captureEnabled false (MEMONGO_PI_AUTO_CAPTURE unset => off; '1'/'true' opt in; the old default-on is gone), and the 'auto-capture consent notice (C-036)' battery proves registerMemongoLifecycle warns exactly once at registration with the data boundary: off-notice names MEMONGO_PI_AUTO_CAPTURE=1 and states opting in sends the raw text of user and assistant turns with no redaction under the resolved scope; on-notice names the same boundary plus the disable switch. The suite's registration stderr shows the off-notice firing through the real extension init path. All capture-flow tests now opt in explicitly via the test helper, and 'skips capture entirely when MEMONGO_PI_AUTO_CAPTURE=0' still pins the off switch."
+  - id: V-083
+    schema_version: 0.1.0
+    claim: C-020
+    construct: packages/memory-engine/src/mongodb-manager-jobs.ts
+    method: test
+    target: .ddd/reports/runs/ws13-memory-jobs-e2e.log
+    result: pass
+    run_at: "2026-09-05T11:20:52.780Z"
+    evidence_hash: "sha256:765ecdae21576a0ba34803aed8ecd4180669ea0bf912eac5aaa789735b796bda"
+    notes: "Real-DB scheduling evidence from the final-state WS-13 jobs e2e (this log, 18 tests, exit 0, against the repo atlas-local stack): drainMemoryJobQueue now claims consolidation job types alongside extraction and stages one auto-consolidation job per cadence window (MEMONGO_AUTO_CONSOLIDATION_MS, default 6h). The battery pins the agent-scoped deterministic jobId consolidation-auto-<agentId>-<windowIndex> with E11000-tolerant staging, completion through the same lease/heartbeat fencing extraction uses, completion metadata, and the cross-agent case: a second agent sharing the collection prefix stages its own window job instead of being starved by the first agent's unique index — the drain loop break-not-return fix is exercised by the same drain claiming after finding no extraction work."
+  - id: V-084
+    schema_version: 0.1.0
+    claim: C-020
+    construct: packages/memory-engine/src/mongodb-consolidator.ts
+    method: test
+    target: .ddd/reports/runs/ws13-engine-suite.log
+    result: pass
+    run_at: "2026-09-05T11:20:56.823Z"
+    evidence_hash: "sha256:6f9d75a1226f0b39f9bf1575282fe7742cf28ba891a18fa441c8c73ef213961e"
+    notes: "Claimed-job execution evidence from the final-state WS-13 engine suite (this log, 122 files / 2107 tests, exit 0): the mongodb-manager-jobs batteries pin runClaimedConsolidationJob reusing the existing lease/heartbeat fencing (no second fencing mechanism), calling consolidateMemory() then invalidateQueryCache() so stale consolidated state is not served from cache, and completing with factsPruned/conflictsResolved metadata. The real-DB end-to-end pass through consolidateMemory itself is covered by the companion e2e validation V-083, where the staged window job is claimed and reaches status completed on a live stack."
+  - id: V-085
+    schema_version: 0.1.0
+    claim: C-021
+    construct: packages/memory-engine/src/mongodb-memory-jobs.ts
+    method: test
+    target: .ddd/reports/runs/ws13-engine-suite.log
+    result: pass
+    run_at: "2026-09-05T11:21:01.589Z"
+    evidence_hash: "sha256:6f9d75a1226f0b39f9bf1575282fe7742cf28ba891a18fa441c8c73ef213961e"
+    notes: "Dead-letter mechanics evidence from the final-state WS-13 engine suite (this log, 122 files / 2107 tests, exit 0): the memory-jobs battery pins the terminal transition — a failure that exhausted its attempt budget (MEMORY_JOB_MAX_ATTEMPTS 3) is marked a dead letter with deadLetterAt set and completedAt unset, so the record sits outside the terminal-job TTL (idx_memory_jobs_completed_ttl keys on completedAt); requeueing a dead letter clears the marker so the TTL interaction re-arms correctly; failures with budget left space their retries instead. The memory-job-dead-letter telemetry operation fires at the transition, and the real-DB attempt-exhaustion path is exercised in the companion e2e log of V-083 (retries a failed job until it exhausts its attempt budget)."
+  - id: V-086
+    schema_version: 0.1.0
+    claim: C-021
+    construct: apps/api/src/routes/v1-status-routes.ts
+    method: test
+    target: .ddd/reports/runs/ws13-api-suite.log
+    result: pass
+    run_at: "2026-09-05T11:21:06.687Z"
+    evidence_hash: "sha256:1e39ba7940f0e013d6602ff9afeeda4fa2a485ab7fa8191e8f5e0b2584d2757a"
+    notes: "HTTP-surface evidence from the final-state WS-13 api suite (this log, 9 files / 266 tests, exit 0): the C-021 battery added at landing pins /v1/status/detailed serving the engine's V2 status memoryJobs queue depth verbatim — pending, running, failed, deadLettered — with the caller's agentId flowing through to the bridge, and staying 200 with the field absent when a deployment has no jobs collection to count (the engine's allSettled fallback). The route itself needed no modification in WS-13: it already proxied bridge getDetailedStatus; the counts are assembled engine-side (see V-085's engine log, 'surfaces job counts including dead letters (WS-13)'), and this validation pins the pass-through contract at the API boundary."
+  - id: V-087
+    schema_version: 0.1.0
+    claim: C-021
+    construct: packages/memory-engine/src/mongodb-schema.ts
+    method: test
+    target: .ddd/reports/runs/ws13-engine-suite.log
+    result: pass
+    run_at: "2026-09-05T11:21:11.605Z"
+    evidence_hash: "sha256:6f9d75a1226f0b39f9bf1575282fe7742cf28ba891a18fa441c8c73ef213961e"
+    notes: "TTL-exemption evidence from the final-state WS-13 engine suite (this log, 122 files / 2107 tests, exit 0): the standard-index schema battery pins idx_memory_jobs_completed_ttl keyed on completedAt with the 30-day expiry (only terminal jobs carry the field, so pending/running never expire), and the dead-letter exemption is structural and pinned from both sides — the memory-jobs battery proves a dead letter is written with deadLetterAt and never completedAt, so it is outside the TTL index and the record of a lost extraction does not evaporate; the exemption rationale is documented at the index creation site in mongodb-schema-standard-indexes-operations.ts. The schema barrel also carries the WS-13 episodes retention option surface validated under C-022 (V-088)."
+  - id: V-088
+    schema_version: 0.1.0
+    claim: C-022
+    construct: packages/memory-engine/src/mongodb-episodes.ts
+    method: test
+    target: .ddd/reports/runs/ws13-engine-suite.log
+    result: pass
+    run_at: "2026-09-05T11:21:16.917Z"
+    evidence_hash: "sha256:6f9d75a1226f0b39f9bf1575282fe7742cf28ba891a18fa441c8c73ef213961e"
+    notes: "Episodes lifecycle evidence from the final-state WS-13 engine suite (this log, 122 files / 2107 tests, exit 0): the episodes battery pins enforceEpisodesScopeCap — after an upsert (only on upsertedCount 1, so replays are idempotent) the oldest episodes beyond MEMONGO_EPISODES_MAX_PER_SCOPE (default 200) are pruned per scope identity, the scope is left alone within the cap, and cap 0 disables enforcement entirely. The retention TTL half is pinned in the schema battery of the same suite: idx_episodes_ttl_updated keyed on updatedAt is created when episodesRetentionDays is configured and any ghost index is dropped when it is disabled (default off — episodes are the provenance substrate for consolidation, retention is a deployment decision). The latent EPISODES_SCHEMA validator bug (phantom eventIds field) that would have failed every episode insert once validators are enforced is covered by the schema-validator battery in the same log."
+  - id: V-089
+    schema_version: 0.1.0
+    claim: C-023
+    construct: packages/memory-engine/src/mongodb-manager-write.ts
+    method: test
+    target: .ddd/reports/runs/ws13-engine-suite.log
+    result: pass
+    run_at: "2026-09-05T11:21:22.729Z"
+    evidence_hash: "sha256:6f9d75a1226f0b39f9bf1575282fe7742cf28ba891a18fa441c8c73ef213961e"
+    notes: "Batch-backstop evidence from the final-state WS-13 engine suite (this log, 122 files / 2107 tests, exit 0): the write battery pins the batch path staging extraction jobs inside the same transaction the single-write path uses — amortized one-pass bulk writes with per-item receipts, and when the staged job insert fails after the events commit, the outbox marker stays armed so the backstop repair re-stages the job (C-023 unit test). The receipts-parity battery pins the batch receipt carrying every field the single receipt carries, with idempotent replay, conflict, and failure mapping identical across paths. The real-DB half is in the companion e2e log of V-083: backstops batch-durable events that committed without extraction jobs. The production-dead legacy writeEventAndProject was removed from this module to test-helpers/legacy-write-event.ts, keeping the e2e primitive without the dead surface."

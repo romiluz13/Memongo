@@ -540,70 +540,70 @@ traces:
     change_id: WS-13
     claim_id: C-020
     construct_id: packages/memory-engine/src/mongodb-manager-jobs.ts
-    validation_id: null
+    validation_id: V-083
     direction: forward
-    sweep_pass: false
-    checked_at: "2026-09-02T13:41:40.075Z"
+    sweep_pass: true
+    checked_at: "2026-09-05T11:21:48.000Z"
     notes: WS-13 Lifecycle scheduling and durability (planned change envelope)
   - id: TR-055
     schema_version: 0.1.0
     change_id: WS-13
     claim_id: C-020
     construct_id: packages/memory-engine/src/mongodb-consolidator.ts
-    validation_id: null
+    validation_id: V-084
     direction: forward
-    sweep_pass: false
-    checked_at: "2026-09-02T13:41:40.075Z"
+    sweep_pass: true
+    checked_at: "2026-09-05T11:21:48.000Z"
     notes: WS-13 Lifecycle scheduling and durability (planned change envelope)
   - id: TR-056
     schema_version: 0.1.0
     change_id: WS-13
     claim_id: C-021
     construct_id: packages/memory-engine/src/mongodb-memory-jobs.ts
-    validation_id: null
+    validation_id: V-085
     direction: forward
-    sweep_pass: false
-    checked_at: "2026-09-02T13:41:40.076Z"
+    sweep_pass: true
+    checked_at: "2026-09-05T11:21:48.000Z"
     notes: WS-13 Lifecycle scheduling and durability (planned change envelope)
   - id: TR-057
     schema_version: 0.1.0
     change_id: WS-13
     claim_id: C-021
     construct_id: apps/api/src/routes/v1-status-routes.ts
-    validation_id: null
+    validation_id: V-086
     direction: forward
-    sweep_pass: false
-    checked_at: "2026-09-02T13:41:40.077Z"
+    sweep_pass: true
+    checked_at: "2026-09-05T11:21:48.000Z"
     notes: WS-13 Lifecycle scheduling and durability (planned change envelope)
   - id: TR-058
     schema_version: 0.1.0
     change_id: WS-13
     claim_id: C-021
     construct_id: packages/memory-engine/src/mongodb-schema.ts
-    validation_id: null
+    validation_id: V-087
     direction: forward
-    sweep_pass: false
-    checked_at: "2026-09-02T13:41:40.078Z"
+    sweep_pass: true
+    checked_at: "2026-09-05T11:21:48.000Z"
     notes: WS-13 Lifecycle scheduling and durability (planned change envelope)
   - id: TR-059
     schema_version: 0.1.0
     change_id: WS-13
     claim_id: C-022
     construct_id: packages/memory-engine/src/mongodb-episodes.ts
-    validation_id: null
+    validation_id: V-088
     direction: forward
-    sweep_pass: false
-    checked_at: "2026-09-02T13:41:40.079Z"
+    sweep_pass: true
+    checked_at: "2026-09-05T11:21:48.000Z"
     notes: WS-13 Lifecycle scheduling and durability (planned change envelope)
   - id: TR-060
     schema_version: 0.1.0
     change_id: WS-13
     claim_id: C-023
     construct_id: packages/memory-engine/src/mongodb-manager-write.ts
-    validation_id: null
+    validation_id: V-089
     direction: forward
-    sweep_pass: false
-    checked_at: "2026-09-02T13:41:40.081Z"
+    sweep_pass: true
+    checked_at: "2026-09-05T11:21:48.000Z"
     notes: WS-13 Lifecycle scheduling and durability (planned change envelope)
   - id: TR-061
     schema_version: 0.1.0

@@ -1,0 +1,252 @@
+{
+  "schema_version": "0.1.0",
+  "direction": "both",
+  "checked_at": "2026-09-05T11:21:51.798Z",
+  "claims_checked": 40,
+  "traces_checked": 94,
+  "violations": [
+    {
+      "type": "claim-without-validation",
+      "claim_id": "C-017",
+      "message": "Claim C-017 is T2 and requires validation. Rule: T2/T3 claims must link at least one passing validation record (field: validations, expected: [V-NNN, ...]).",
+      "resolution": "Run the check, then: ddd validation --claim C-017 --construct <symbol> --method <test|lint|type-check|formal|manual|runtime-assertion> --target <file>"
+    },
+    {
+      "type": "trace-without-validation",
+      "claim_id": "C-017",
+      "trace_id": "TR-045",
+      "message": "Trace TR-045 implements T2 claim C-017 without validation. Rule: T2/T3 traces must reference a validation id.",
+      "resolution": "Record it (ddd validation --claim C-017 --construct packages/memory-engine/src/mongodb-llm-enrichment.ts --method <m> --target <file>), then re-trace with --validation <V-NNN>"
+    },
+    {
+      "type": "trace-without-validation",
+      "claim_id": "C-017",
+      "trace_id": "TR-046",
+      "message": "Trace TR-046 implements T2 claim C-017 without validation. Rule: T2/T3 traces must reference a validation id.",
+      "resolution": "Record it (ddd validation --claim C-017 --construct packages/memory-engine/src/mongodb-operation-accounting.ts --method <m> --target <file>), then re-trace with --validation <V-NNN>"
+    },
+    {
+      "type": "trace-without-validation",
+      "claim_id": "C-017",
+      "trace_id": "TR-047",
+      "message": "Trace TR-047 implements T2 claim C-017 without validation. Rule: T2/T3 traces must reference a validation id.",
+      "resolution": "Record it (ddd validation --claim C-017 --construct packages/memory-engine/src/mongodb-telemetry.ts --method <m> --target <file>), then re-trace with --validation <V-NNN>"
+    },
+    {
+      "type": "claim-without-validation",
+      "claim_id": "C-018",
+      "message": "Claim C-018 is T3 and requires validation. Rule: T2/T3 claims must link at least one passing validation record (field: validations, expected: [V-NNN, ...]).",
+      "resolution": "Run the check, then: ddd validation --claim C-018 --construct <symbol> --method <test|lint|type-check|formal|manual|runtime-assertion> --target <file>"
+    },
+    {
+      "type": "trace-without-validation",
+      "claim_id": "C-018",
+      "trace_id": "TR-048",
+      "message": "Trace TR-048 implements T3 claim C-018 without validation. Rule: T2/T3 traces must reference a validation id.",
+      "resolution": "Record it (ddd validation --claim C-018 --construct packages/memory-engine/src/mongodb-manager-jobs.ts --method <m> --target <file>), then re-trace with --validation <V-NNN>"
+    },
+    {
+      "type": "trace-without-validation",
+      "claim_id": "C-018",
+      "trace_id": "TR-049",
+      "message": "Trace TR-049 implements T3 claim C-018 without validation. Rule: T2/T3 traces must reference a validation id.",
+      "resolution": "Record it (ddd validation --claim C-018 --construct packages/memory-engine/src/mongodb-manager-write.ts --method <m> --target <file>), then re-trace with --validation <V-NNN>"
+    },
+    {
+      "type": "trace-without-validation",
+      "claim_id": "C-018",
+      "trace_id": "TR-050",
+      "message": "Trace TR-050 implements T3 claim C-018 without validation. Rule: T2/T3 traces must reference a validation id.",
+      "resolution": "Record it (ddd validation --claim C-018 --construct packages/memory-engine/src/mongodb-search-v2.ts --method <m> --target <file>), then re-trace with --validation <V-NNN>"
+    },
+    {
+      "type": "t3-without-refutation",
+      "claim_id": "C-018",
+      "message": "T3 claim C-018 has no sustained independent refutation report."
+    },
+    {
+      "type": "claim-without-validation",
+      "claim_id": "C-019",
+      "message": "Claim C-019 is T2 and requires validation. Rule: T2/T3 claims must link at least one passing validation record (field: validations, expected: [V-NNN, ...]).",
+      "resolution": "Run the check, then: ddd validation --claim C-019 --construct <symbol> --method <test|lint|type-check|formal|manual|runtime-assertion> --target <file>"
+    },
+    {
+      "type": "trace-without-validation",
+      "claim_id": "C-019",
+      "trace_id": "TR-051",
+      "message": "Trace TR-051 implements T2 claim C-019 without validation. Rule: T2/T3 traces must reference a validation id.",
+      "resolution": "Record it (ddd validation --claim C-019 --construct packages/client/src/client.ts --method <m> --target <file>), then re-trace with --validation <V-NNN>"
+    },
+    {
+      "type": "trace-without-validation",
+      "claim_id": "C-019",
+      "trace_id": "TR-052",
+      "message": "Trace TR-052 implements T2 claim C-019 without validation. Rule: T2/T3 traces must reference a validation id.",
+      "resolution": "Record it (ddd validation --claim C-019 --construct packages/memory-engine/src/mongodb-reranker.ts --method <m> --target <file>), then re-trace with --validation <V-NNN>"
+    },
+    {
+      "type": "trace-without-validation",
+      "claim_id": "C-019",
+      "trace_id": "TR-053",
+      "message": "Trace TR-053 implements T2 claim C-019 without validation. Rule: T2/T3 traces must reference a validation id.",
+      "resolution": "Record it (ddd validation --claim C-019 --construct packages/memory-engine/src/mongodb-search-v2.ts --method <m> --target <file>), then re-trace with --validation <V-NNN>"
+    },
+    {
+      "type": "claim-without-validation",
+      "claim_id": "C-024",
+      "message": "Claim C-024 is T2 and requires validation. Rule: T2/T3 claims must link at least one passing validation record (field: validations, expected: [V-NNN, ...]).",
+      "resolution": "Run the check, then: ddd validation --claim C-024 --construct <symbol> --method <test|lint|type-check|formal|manual|runtime-assertion> --target <file>"
+    },
+    {
+      "type": "trace-without-validation",
+      "claim_id": "C-024",
+      "trace_id": "TR-061",
+      "message": "Trace TR-061 implements T2 claim C-024 without validation. Rule: T2/T3 traces must reference a validation id.",
+      "resolution": "Record it (ddd validation --claim C-024 --construct packages/memory-engine/src/mongodb-schema-integrity.ts --method <m> --target <file>), then re-trace with --validation <V-NNN>"
+    },
+    {
+      "type": "trace-without-validation",
+      "claim_id": "C-024",
+      "trace_id": "TR-062",
+      "message": "Trace TR-062 implements T2 claim C-024 without validation. Rule: T2/T3 traces must reference a validation id.",
+      "resolution": "Record it (ddd validation --claim C-024 --construct packages/memory-engine/src/mongodb-manager-admin.ts --method <m> --target <file>), then re-trace with --validation <V-NNN>"
+    },
+    {
+      "type": "claim-without-validation",
+      "claim_id": "C-026",
+      "message": "Claim C-026 is T2 and requires validation. Rule: T2/T3 claims must link at least one passing validation record (field: validations, expected: [V-NNN, ...]).",
+      "resolution": "Run the check, then: ddd validation --claim C-026 --construct <symbol> --method <test|lint|type-check|formal|manual|runtime-assertion> --target <file>"
+    },
+    {
+      "type": "trace-without-validation",
+      "claim_id": "C-026",
+      "trace_id": "TR-065",
+      "message": "Trace TR-065 implements T2 claim C-026 without validation. Rule: T2/T3 traces must reference a validation id.",
+      "resolution": "Record it (ddd validation --claim C-026 --construct packages/memory-engine/src/mongodb-sync.ts --method <m> --target <file>), then re-trace with --validation <V-NNN>"
+    },
+    {
+      "type": "trace-without-validation",
+      "claim_id": "C-026",
+      "trace_id": "TR-066",
+      "message": "Trace TR-066 implements T2 claim C-026 without validation. Rule: T2/T3 traces must reference a validation id.",
+      "resolution": "Record it (ddd validation --claim C-026 --construct packages/memory-engine/src/mongodb-search-v2.ts --method <m> --target <file>), then re-trace with --validation <V-NNN>"
+    },
+    {
+      "type": "claim-without-validation",
+      "claim_id": "C-029",
+      "message": "Claim C-029 is T2 and requires validation. Rule: T2/T3 claims must link at least one passing validation record (field: validations, expected: [V-NNN, ...]).",
+      "resolution": "Run the check, then: ddd validation --claim C-029 --construct <symbol> --method <test|lint|type-check|formal|manual|runtime-assertion> --target <file>"
+    },
+    {
+      "type": "trace-without-validation",
+      "claim_id": "C-029",
+      "trace_id": "TR-070",
+      "message": "Trace TR-070 implements T2 claim C-029 without validation. Rule: T2/T3 traces must reference a validation id.",
+      "resolution": "Record it (ddd validation --claim C-029 --construct packages/memory-engine/src/mongodb-schema-search-indexes.ts --method <m> --target <file>), then re-trace with --validation <V-NNN>"
+    },
+    {
+      "type": "trace-without-validation",
+      "claim_id": "C-029",
+      "trace_id": "TR-071",
+      "message": "Trace TR-071 implements T2 claim C-029 without validation. Rule: T2/T3 traces must reference a validation id.",
+      "resolution": "Record it (ddd validation --claim C-029 --construct packages/memory-engine/src/mongodb-search-ranking.ts --method <m> --target <file>), then re-trace with --validation <V-NNN>"
+    },
+    {
+      "type": "claim-without-validation",
+      "claim_id": "C-031",
+      "message": "Claim C-031 is T2 and requires validation. Rule: T2/T3 claims must link at least one passing validation record (field: validations, expected: [V-NNN, ...]).",
+      "resolution": "Run the check, then: ddd validation --claim C-031 --construct <symbol> --method <test|lint|type-check|formal|manual|runtime-assertion> --target <file>"
+    },
+    {
+      "type": "trace-without-validation",
+      "claim_id": "C-031",
+      "trace_id": "TR-073",
+      "message": "Trace TR-073 implements T2 claim C-031 without validation. Rule: T2/T3 traces must reference a validation id.",
+      "resolution": "Record it (ddd validation --claim C-031 --construct packages/memory-engine/src/mongodb-reranker.ts --method <m> --target <file>), then re-trace with --validation <V-NNN>"
+    },
+    {
+      "type": "claim-without-validation",
+      "claim_id": "C-033",
+      "message": "Claim C-033 is T2 and requires validation. Rule: T2/T3 claims must link at least one passing validation record (field: validations, expected: [V-NNN, ...]).",
+      "resolution": "Run the check, then: ddd validation --claim C-033 --construct <symbol> --method <test|lint|type-check|formal|manual|runtime-assertion> --target <file>"
+    },
+    {
+      "type": "trace-without-validation",
+      "claim_id": "C-033",
+      "trace_id": "TR-075",
+      "message": "Trace TR-075 implements T2 claim C-033 without validation. Rule: T2/T3 traces must reference a validation id.",
+      "resolution": "Record it (ddd validation --claim C-033 --construct packages/memory-engine/src/mongodb-context-expansion.ts --method <m> --target <file>), then re-trace with --validation <V-NNN>"
+    },
+    {
+      "type": "claim-without-validation",
+      "claim_id": "C-038",
+      "message": "Claim C-038 is T2 and requires validation. Rule: T2/T3 claims must link at least one passing validation record (field: validations, expected: [V-NNN, ...]).",
+      "resolution": "Run the check, then: ddd validation --claim C-038 --construct <symbol> --method <test|lint|type-check|formal|manual|runtime-assertion> --target <file>"
+    },
+    {
+      "type": "trace-without-validation",
+      "claim_id": "C-038",
+      "trace_id": "TR-082",
+      "message": "Trace TR-082 implements T2 claim C-038 without validation. Rule: T2/T3 traces must reference a validation id.",
+      "resolution": "Record it (ddd validation --claim C-038 --construct .github/workflows/publish.yml --method <m> --target <file>), then re-trace with --validation <V-NNN>"
+    },
+    {
+      "type": "claim-without-validation",
+      "claim_id": "C-039",
+      "message": "Claim C-039 is T2 and requires validation. Rule: T2/T3 claims must link at least one passing validation record (field: validations, expected: [V-NNN, ...]).",
+      "resolution": "Run the check, then: ddd validation --claim C-039 --construct <symbol> --method <test|lint|type-check|formal|manual|runtime-assertion> --target <file>"
+    },
+    {
+      "type": "trace-without-validation",
+      "claim_id": "C-039",
+      "trace_id": "TR-083",
+      "message": "Trace TR-083 implements T2 claim C-039 without validation. Rule: T2/T3 traces must reference a validation id.",
+      "resolution": "Record it (ddd validation --claim C-039 --construct .github/workflows/e2e-nightly.yml --method <m> --target <file>), then re-trace with --validation <V-NNN>"
+    },
+    {
+      "type": "trace-without-validation",
+      "claim_id": "C-039",
+      "trace_id": "TR-084",
+      "message": "Trace TR-084 implements T2 claim C-039 without validation. Rule: T2/T3 traces must reference a validation id.",
+      "resolution": "Record it (ddd validation --claim C-039 --construct packages/memory-engine/src/types.ts --method <m> --target <file>), then re-trace with --validation <V-NNN>"
+    },
+    {
+      "type": "claim-with-missing-evidence",
+      "claim_id": "C-040",
+      "message": "Claim C-040 references missing evidence REF-WS05-R2. Rule: sources[].ref must name an entry that exists in .ddd/evidence.lock.",
+      "resolution": "Lock the source first: ddd lock <url> --version <v> --source-class <class> ..."
+    },
+    {
+      "type": "untraced-construct",
+      "claim_id": "C-040",
+      "construct": "packages/tools/src/index.ts",
+      "message": "Construct \"packages/tools/src/index.ts\" on claim C-040 has no trace entry. Rule: every declared construct must have a matching trace (claim_id + construct_id) in .ddd/trace-matrix.yaml.",
+      "resolution": "ddd trace C-040 packages/tools/src/index.ts"
+    },
+    {
+      "type": "untraced-construct",
+      "claim_id": "C-040",
+      "construct": "apps/mcp/src/server.ts",
+      "message": "Construct \"apps/mcp/src/server.ts\" on claim C-040 has no trace entry. Rule: every declared construct must have a matching trace (claim_id + construct_id) in .ddd/trace-matrix.yaml.",
+      "resolution": "ddd trace C-040 apps/mcp/src/server.ts"
+    },
+    {
+      "type": "claim-without-validation",
+      "claim_id": "C-040",
+      "message": "Claim C-040 is T2 and requires validation. Rule: T2/T3 claims must link at least one passing validation record (field: validations, expected: [V-NNN, ...]).",
+      "resolution": "Run the check, then: ddd validation --claim C-040 --construct <symbol> --method <test|lint|type-check|formal|manual|runtime-assertion> --target <file>"
+    }
+  ],
+  "verdict": "NONCONFORMANT",
+  "scope": "declared-constructs",
+  "capabilities": {
+    "evidence_integrity": "tool-enforced",
+    "trace_graph": "tool-enforced",
+    "tier_requirements": "tool-enforced",
+    "entailment": "recorded-attestation",
+    "reverse_sweep": "declared-constructs-only",
+    "validation_records": "tool-enforced",
+    "refutation_independence": "recorded-metadata"
+  },
+  "pass": false
+}
