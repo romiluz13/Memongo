@@ -546,16 +546,33 @@ function buildAnswerQualityGate(
 	params: BenchmarkReportInput,
 ): MemoryBenchmarkRunReport["releaseGates"][number] | null {
 	const thresholds = params.qualityThresholds
-	if (!thresholds || thresholds.datasetKind !== "locomo") {
+	if (!thresholds) {
 		return null
 	}
-	const minimum = thresholds.minAnswerAccuracy
+	// C-039: the answer-quality gate activates when the declared contract
+	// carries answer-accuracy clauses. LoCoMo declares them by type; the
+	// LongMemEval V1 contract is retrieval-only (gate stays off), while V2
+	// declares the same answer bar so both dataset kinds publish under one
+	// answer-quality standard.
+	const declared =
+		thresholds.datasetKind === "locomo" ||
+		thresholds.datasetKind === "longmemeval"
+			? {
+					minAnswerAccuracy: thresholds.minAnswerAccuracy,
+					maxJudgeFalsePositiveRate: thresholds.maxJudgeFalsePositiveRate,
+					minAnswerCoverage: thresholds.minAnswerCoverage,
+				}
+			: null
+	if (!declared || declared.minAnswerAccuracy === undefined) {
+		return null
+	}
+	const minimum = declared.minAnswerAccuracy
 	const accuracy = params.e2eQa?.accuracy
 	if (accuracy == null) {
 		return {
 			gate: "e2e-answer-quality",
 			status: "failed",
-			evidence: `answer accuracy is unavailable; required minimum=${minimum}`,
+			evidence: `answer accuracy is unavailable${params.e2eQa?.unavailableReason ? ` (${params.e2eQa.unavailableReason})` : ""}; required minimum=${minimum}`,
 		}
 	}
 	const coverage =
@@ -573,23 +590,30 @@ function buildAnswerQualityGate(
 			threshold: minimum,
 			passed: accuracy >= minimum,
 		},
-		{
+	]
+	// Only clauses the contract actually declared become checks, so a
+	// longmemeval V2-style contract cannot be silently graded against a bar it
+	// never stated.
+	if (declared.minAnswerCoverage !== undefined) {
+		checks.push({
 			metric: "e2eQa.coverage",
 			actual: coverage,
 			operator: ">=",
-			threshold: thresholds.minAnswerCoverage,
-			passed: coverage != null && coverage >= thresholds.minAnswerCoverage,
-		},
-		{
+			threshold: declared.minAnswerCoverage,
+			passed: coverage != null && coverage >= declared.minAnswerCoverage,
+		})
+	}
+	if (declared.maxJudgeFalsePositiveRate !== undefined) {
+		checks.push({
 			metric: "e2eQa.judgeFalsePositiveRate",
 			actual: falsePositiveRate,
 			operator: "<=",
-			threshold: thresholds.maxJudgeFalsePositiveRate,
+			threshold: declared.maxJudgeFalsePositiveRate,
 			passed:
 				falsePositiveRate != null &&
-				falsePositiveRate <= thresholds.maxJudgeFalsePositiveRate,
-		},
-	]
+				falsePositiveRate <= declared.maxJudgeFalsePositiveRate,
+		})
+	}
 	return checks.every((check) => check.passed)
 		? {
 				gate: "e2e-answer-quality",

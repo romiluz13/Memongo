@@ -47,6 +47,11 @@ import {
 } from "./mongodb-benchmark-runner.js"
 import type { BenchmarkCaseExecution } from "./mongodb-benchmark-runner.js"
 import {
+	mergeLongMemEvalAnswerQuality,
+	runBenchmarkJudgedAnswers,
+	type BenchmarkJudgedAnswerMaterial,
+} from "./benchmark-answer-quality.js"
+import {
 	resolveEnrichmentMode,
 	resolveEnrichmentStrictMode,
 	resolveEnrichmentProvider,
@@ -231,11 +236,22 @@ export function attachBenchmarkOperationsReport(
 	},
 ): RelevanceBenchmarkResult {
 	const queryGovernance = buildQueryGovernanceReport(result)
+	// C-039: project the QA envelope into the official LongMemEval metrics so
+	// the published envelope carries judged answer accuracy. No-op for runs
+	// without an envelope (legacy) or without longMemEval metrics (loCoMo).
+	const officialMetrics = mergeLongMemEvalAnswerQuality({
+		officialMetrics: result.officialMetrics,
+		e2eQa,
+	})
 	return {
 		...result,
+		...(officialMetrics !== result.officialMetrics ? { officialMetrics } : {}),
 		queryGovernance,
 		benchmarkReport: buildBenchmarkRunReport({
 			...result,
+			...(officialMetrics !== result.officialMetrics
+				? { officialMetrics }
+				: {}),
 			queryGovernance,
 			...(qualityThresholds ? { qualityThresholds } : {}),
 			...(e2eQa ? { e2eQa } : {}),
@@ -777,6 +793,14 @@ export class MongoDBManagerBenchmarkOps {
 		const storageFailures: string[] = []
 		const runToken = randomUUID().slice(0, 8)
 		const rawSessionLane = params.retrievalLane === "raw-session"
+		// C-039: QA material for LLM-judged answer accuracy, captured from the
+		// pass-0 (gate) retrieval loop — the same results the published
+		// retrieval metrics are computed from, so the answer half and the
+		// retrieval half of the envelope describe one run.
+		const e2eQaMaterialByCaseId = new Map<
+			string,
+			BenchmarkJudgedAnswerMaterial
+		>()
 		const ingest = {
 			conversationsIngested: 0,
 			turnsIngested: 0,
@@ -1477,6 +1501,21 @@ export class MongoDBManagerBenchmarkOps {
 									traceOptions: { maxCandidates: 50 },
 								}),
 							)
+							if (pass === 0) {
+								e2eQaMaterialByCaseId.set(evaluation.caseId, {
+									caseId: evaluation.caseId,
+									question: evaluation.query,
+									goldAnswer: evaluation.answer ?? "",
+									abstention: evaluation.abstention === true,
+									contextPassages: results
+										.map((result) => result.snippet)
+										.filter(
+											(snippet) =>
+												typeof snippet === "string" &&
+												snippet.trim().length > 0,
+										),
+								})
+							}
 							// Track expected IDs for miss ledger
 							expectedSessionMap.set(
 								evaluation.caseId,
@@ -1522,6 +1561,16 @@ export class MongoDBManagerBenchmarkOps {
 									executionError: message,
 								}),
 							)
+							if (pass === 0) {
+								e2eQaMaterialByCaseId.set(evaluation.caseId, {
+									caseId: evaluation.caseId,
+									question: evaluation.query,
+									goldAnswer: evaluation.answer ?? "",
+									abstention: evaluation.abstention === true,
+									contextPassages: [],
+									upstreamFailure: message,
+								})
+							}
 							expectedSessionMap.set(
 								evaluation.caseId,
 								evaluation.expectedSessionIds,
@@ -1666,6 +1715,17 @@ export class MongoDBManagerBenchmarkOps {
 						),
 						collections: storageCollectionRows,
 					}
+		// C-039: LLM-judged answer accuracy over the pass-0 (gate) retrieval
+		// results. Returns undefined for non-LongMemEval datasets; an
+		// all-null envelope with a reason when accuracy cannot be measured.
+		// The merge into officialMetrics happens in
+		// attachBenchmarkOperationsReport.
+		const e2eQa = await runBenchmarkJudgedAnswers({
+			datasetKind: params.dataset.datasetKind,
+			materialByCaseId: e2eQaMaterialByCaseId,
+			resumedFromCheckpoint: completedCheckpointScenarios.length > 0,
+			accounting: params.runContext?.accounting,
+		})
 		// Explicitly pick only the fields defined in RelevanceBenchmarkResult
 		// to prevent any runtime-leaked properties from inflating the response
 		// beyond V8's JSON.stringify limit (~512 MB).
@@ -1711,6 +1771,7 @@ export class MongoDBManagerBenchmarkOps {
 				}),
 			},
 			latencySamples: executions.map((e) => e.latencyMs),
+			...(e2eQa ? { e2eQa } : {}),
 			storage,
 		}
 	}

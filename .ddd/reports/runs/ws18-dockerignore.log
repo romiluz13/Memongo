@@ -1,0 +1,26 @@
+# WS-18 C-037 dockerignore inspection (2026-09-05T19:32:38Z)
+# compose build context (docker/compose.yaml):
+17:      context: ..
+18:      dockerfile: apps/api/Dockerfile
+
+# root .dockerignore now excludes secrets and junk:
+13:benchmarks
+19:.env*
+20:**/.env*
+22:.turbo
+23:**/.turbo
+24:.DS_Store
+25:**/.DS_Store
+26:.claude
+27:.cursor
+28:.cc10x
+29:.pi
+2:node_modules
+30:.pi-subagents
+31:.tmp-review
+32:**/*.log
+7:.git
+
+# dead nested ignore removed (expect ENOENT):
+ls: /Users/rom.iluz/Dev/memongo/apps/api/.dockerignore: No such file or directory
+apps/api/.dockerignore deleted: OK

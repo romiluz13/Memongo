@@ -1,0 +1,49 @@
+$ turbo run check-types
+• turbo 2.10.10
+
+   • Packages in scope: @memongo/api, @memongo/client, @memongo/docs, @memongo/lib, @memongo/mcp, @memongo/memory, @memongo/memory-bridge, @memongo/memory-engine, @memongo/pi-extension, @memongo/scripts, @memongo/tools, @memongo/web
+   • Running check-types in 12 packages
+   • Remote caching disabled
+
+@memongo/lib:check-types: cache hit, replaying logs 935d51885892ac7e
+@memongo/lib:build: cache hit, replaying logs 300a837de16cbf32
+@memongo/lib:check-types: $ node ../../node_modules/typescript/bin/tsc --noEmit -p tsconfig.json
+@memongo/lib:build: $ bun run clean && node ../../node_modules/typescript/bin/tsc -p tsconfig.json
+@memongo/lib:build: $ node -e "require('node:fs').rmSync('dist', { recursive: true, force: true })"
+@memongo/memory-engine:check-types: cache hit, replaying logs b3993518b19304ca
+@memongo/client:check-types: cache hit, replaying logs 3881ced5cc5c65e1
+@memongo/memory-engine:check-types: $ node ../../node_modules/typescript/bin/tsc --noEmit -p tsconfig.json
+@memongo/client:check-types: $ node ../../node_modules/typescript/bin/tsc --noEmit -p tsconfig.json
+@memongo/client:build: cache hit, replaying logs c327cfff8bd0bf3c
+@memongo/client:build: $ bun run clean && node ../../node_modules/typescript/bin/tsc -p tsconfig.json
+@memongo/client:build: $ node -e "require('node:fs').rmSync('dist', { recursive: true, force: true })"
+@memongo/memory-engine:build: cache hit, replaying logs a3b903aca5e39d8e
+@memongo/memory-engine:build: $ bun run clean && node ../../node_modules/typescript/bin/tsc -p tsconfig.json
+@memongo/memory-engine:build: $ node -e "require('node:fs').rmSync('dist', { recursive: true, force: true })"
+@memongo/mcp:check-types: cache hit, replaying logs 0346a9e9d5b439e2
+@memongo/tools:check-types: cache hit, replaying logs 2c65996ee3961f3a
+@memongo/tools:build: cache hit, replaying logs 26bdd35b9dbd6be7
+@memongo/tools:check-types: $ node ../../node_modules/typescript/bin/tsc --noEmit -p tsconfig.json
+@memongo/tools:build: $ bun run clean && node ../../node_modules/typescript/bin/tsc -p tsconfig.json
+@memongo/web:check-types: cache hit, replaying logs 467a644669926c62
+@memongo/tools:build: $ node -e "require('node:fs').rmSync('dist', { recursive: true, force: true })"
+@memongo/mcp:check-types: $ node ../../node_modules/typescript/bin/tsc --noEmit -p tsconfig.json
+@memongo/web:check-types: $ node ../../node_modules/next/dist/bin/next typegen && node ../../node_modules/typescript/bin/tsc --noEmit -p tsconfig.json
+@memongo/web:check-types: Generating route types...
+@memongo/web:check-types: ✓ Route types generated successfully
+@memongo/memory-bridge:check-types: cache hit, replaying logs 68c6b49197772f67
+@memongo/memory-bridge:check-types: $ node ../../node_modules/typescript/bin/tsc --noEmit -p tsconfig.json
+@memongo/pi-extension:check-types: cache hit, replaying logs 477b8f96c0d64729
+@memongo/memory-bridge:build: cache hit, replaying logs 8a6e93d75cd3fa06
+@memongo/pi-extension:check-types: $ node ../../node_modules/typescript/bin/tsc --noEmit -p tsconfig.json
+@memongo/memory-bridge:build: $ bun run clean && node ../../node_modules/typescript/bin/tsc -p tsconfig.json
+@memongo/memory-bridge:build: $ node -e "require('node:fs').rmSync('dist', { recursive: true, force: true })"
+@memongo/memory:check-types: cache hit, replaying logs 118e4f9b7dadc059
+@memongo/api:check-types: cache hit, replaying logs 7fa485b6fa5739ea
+@memongo/memory:check-types: $ node ../../node_modules/typescript/bin/tsc --noEmit -p tsconfig.json
+@memongo/api:check-types: $ node ../../node_modules/typescript/bin/tsc --noEmit -p tsconfig.json
+
+ Tasks:    15 successful, 15 total
+Cached:    15 cached, 15 total
+  Time:    35ms >>> FULL TURBO
+

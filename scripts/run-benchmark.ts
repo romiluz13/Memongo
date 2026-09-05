@@ -32,7 +32,8 @@ import {
 	memongoBridgeGetManager,
 	memongoBridgeShutdown,
 } from "@memongo/memory-bridge"
-import { LONGMEMEVAL_RELEASE_V1 } from "./benchmark/benchmark-quality-contracts.js"
+import { LONGMEMEVAL_RELEASE_V2 } from "./benchmark/benchmark-quality-contracts.js"
+import { resolveEnrichmentProvider } from "../packages/memory-engine/src/mongodb-llm-enrichment.js"
 import { MongoDBManagerBenchmarkOps } from "./benchmark/mongodb-manager-benchmark.js"
 
 const REPO_ROOT = path.resolve(
@@ -175,10 +176,10 @@ async function main(): Promise<void> {
 	let datasetPath = DATASET
 	try {
 		const digest = await sha256OfFile(DATASET)
-		if (digest !== LONGMEMEVAL_RELEASE_V1.datasetSha256) {
+		if (digest !== LONGMEMEVAL_RELEASE_V2.datasetSha256) {
 			fail(
 				`dataset digest does not match the release contract\n` +
-					`    expected ${LONGMEMEVAL_RELEASE_V1.datasetSha256}\n` +
+					`    expected ${LONGMEMEVAL_RELEASE_V2.datasetSha256}\n` +
 					`    received ${digest}\n` +
 					"  Re-fetch with: bun run benchmark:fetch",
 			)
@@ -195,6 +196,30 @@ async function main(): Promise<void> {
 		datasetPath = await writeSample(sample)
 	}
 
+	// The V2 contract gates on LLM-judged answer accuracy, so a publishable
+	// run needs the answer/judge provider armed up front; failing here saves
+	// a multi-hour ingest+eval run that would end unpublishable. Sample runs
+	// stay provider-optional (accuracy reports unavailable instead).
+	if (publishable) {
+		let providerError: string | null = null
+		try {
+			const provider = resolveEnrichmentProvider(process.env)
+			if (!provider) {
+				providerError =
+					"no enrichment provider configured (set MEMONGO_ENRICHMENT_API_KEY, MEMONGO_ENRICHMENT_BASE_URL, MEMONGO_ENRICHMENT_MODEL)"
+			}
+		} catch (error) {
+			providerError = `enrichment provider misconfigured: ${error instanceof Error ? error.message : String(error)}`
+		}
+		if (providerError) {
+			fail(
+				`${providerError}\n` +
+					"  The contract gates on LLM-judged answer accuracy and cannot be\n" +
+					"  satisfied without the answer/judge provider.",
+			)
+		}
+	}
+
 	console.log("")
 	console.log(`profile     : shipped`)
 	console.log(`dataset     : ${path.relative(REPO_ROOT, datasetPath)}`)
@@ -202,7 +227,7 @@ async function main(): Promise<void> {
 		`scope       : ${publishable ? "full (500 questions)" : `sample of ${sample}`}`,
 	)
 	console.log(
-		`contract    : ${publishable ? `${LONGMEMEVAL_RELEASE_V1.thresholds.contractId}@${LONGMEMEVAL_RELEASE_V1.thresholds.version}` : "none — SAMPLE RUNS ARE NOT PUBLISHABLE"}`,
+		`contract    : ${publishable ? `${LONGMEMEVAL_RELEASE_V2.thresholds.contractId}@${LONGMEMEVAL_RELEASE_V2.thresholds.version}` : "none — SAMPLE RUNS ARE NOT PUBLISHABLE"}`,
 	)
 	console.log(
 		`checkpoint  : ${checkpointPath ? path.relative(REPO_ROOT, checkpointPath) : "disabled"}`,
@@ -229,7 +254,7 @@ async function main(): Promise<void> {
 		// The contract binds thresholds to the dataset digest, so it can only be
 		// applied to the full artifact it pins.
 		...(publishable
-			? { qualityThresholds: LONGMEMEVAL_RELEASE_V1.thresholds }
+			? { qualityThresholds: LONGMEMEVAL_RELEASE_V2.thresholds }
 			: {}),
 		...(checkpointPath ? { checkpointPath } : {}),
 		resume,
@@ -238,8 +263,10 @@ async function main(): Promise<void> {
 	const elapsedSec = ((Date.now() - started) / 1000).toFixed(1)
 
 	if (json) {
+		// Stdout carries only the machine-readable envelope (CI tee's stdout
+		// into a file and parses it with jq); human diagnostics go to stderr.
 		console.log(JSON.stringify(result, null, 2))
-		console.log(`\nelapsed: ${elapsedSec}s`)
+		console.error(`\nelapsed: ${elapsedSec}s`)
 		if (!publishable) {
 			return
 		}
@@ -270,6 +297,20 @@ async function main(): Promise<void> {
 	}
 	if (result.officialMetrics) {
 		console.log(`  official       : ${JSON.stringify(result.officialMetrics)}`)
+	}
+	// C-039: the answer half of the official protocol, next to the retrieval
+	// half above. Unavailable is stated, never zeroed.
+	const answerQuality = result.officialMetrics?.longMemEval?.answerQuality
+	if (answerQuality) {
+		console.log(
+			`  answer acc     : ${answerQuality.accuracy != null ? answerQuality.accuracy.toFixed(4) : "unavailable"}`,
+		)
+		console.log(
+			`  answer model   : ${answerQuality.answerModel ?? "unavailable"}  judge ${answerQuality.judge ?? "n/a"}@${answerQuality.judgeVersion ?? "n/a"}`,
+		)
+		if (answerQuality.unavailableReason) {
+			console.log(`    ⚠ ${answerQuality.unavailableReason}`)
+		}
 	}
 	const passes = result.measurementPasses
 	if (passes) {

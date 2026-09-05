@@ -390,6 +390,155 @@ describe("mongodb benchmark runner", () => {
 		)
 	})
 
+	it("C-039: activates the answer-quality gate for a longmemeval contract that declares answer clauses", () => {
+		const report = buildBenchmarkRunReport({
+			datasetVersion: "longmem-v2",
+			datasetKind: "longmemeval",
+			cases: 4,
+			scoredCases: 4,
+			hitRate: 1,
+			emptyRate: 0,
+			avgTopScore: 0.9,
+			p95LatencyMs: 10,
+			rAt5: 1,
+			ndcgAt10: 1,
+			qualityThresholds: {
+				contractId: "longmemeval-release",
+				version: "2",
+				datasetKind: "longmemeval",
+				minHitRate: 0.8,
+				maxEmptyRate: 0.2,
+				minRAt5: 0.8,
+				minNdcgAt10: 0.8,
+				maxP95LatencyMs: 1000,
+				minSessionRecallAnyAt10: 0.8,
+				minSessionNdcgAnyAt10: 0.8,
+				minAnswerAccuracy: 0.8,
+				maxJudgeFalsePositiveRate: 0.05,
+				minAnswerCoverage: 1,
+			},
+			e2eQa: {
+				answerModel: "answer-model",
+				judge: "judge-model",
+				judgeVersion: "1",
+				accuracy: 0.9,
+				latencyMs: 20,
+				judgeFalsePositiveRate: 0,
+				cases: { eligible: 4, attempted: 4, completed: 4, failed: 0 },
+				attempts: { answerGeneration: 4, answerJudge: 4, decoyJudge: 4 },
+				caseResults: [],
+			},
+		})
+
+		const gate = report.releaseGates?.find(
+			(candidate) => candidate.gate === "e2e-answer-quality",
+		)
+		expect(gate).toBeDefined()
+		expect(gate?.status).toBe("passed")
+		expect(gate?.checks?.map((check) => check.metric)).toEqual([
+			"e2eQa.accuracy",
+			"e2eQa.coverage",
+			"e2eQa.judgeFalsePositiveRate",
+		])
+	})
+
+	it("C-039: keeps the answer-quality gate off for the retrieval-only longmemeval V1 contract", () => {
+		const report = buildBenchmarkRunReport({
+			datasetVersion: "longmem-v1",
+			datasetKind: "longmemeval",
+			cases: 4,
+			scoredCases: 4,
+			hitRate: 1,
+			emptyRate: 0,
+			avgTopScore: 0.9,
+			p95LatencyMs: 10,
+			rAt5: 1,
+			ndcgAt10: 1,
+			qualityThresholds: {
+				contractId: "longmemeval-release",
+				version: "1",
+				datasetKind: "longmemeval",
+				minHitRate: 0.8,
+				maxEmptyRate: 0.2,
+				minRAt5: 0.8,
+				minNdcgAt10: 0.8,
+				maxP95LatencyMs: 1000,
+				minSessionRecallAnyAt10: 0.8,
+				minSessionNdcgAnyAt10: 0.8,
+			},
+			e2eQa: {
+				answerModel: "answer-model",
+				judge: "judge-model",
+				judgeVersion: "1",
+				accuracy: 0.9,
+				latencyMs: 20,
+				judgeFalsePositiveRate: 0,
+				cases: { eligible: 4, attempted: 4, completed: 4, failed: 0 },
+				attempts: { answerGeneration: 4, answerJudge: 4, decoyJudge: 4 },
+				caseResults: [],
+			},
+		})
+
+		expect(
+			report.releaseGates?.some(
+				(candidate) => candidate.gate === "e2e-answer-quality",
+			),
+		).toBe(false)
+	})
+
+	it("C-039: fails the longmemeval answer gate when accuracy is unavailable, stating the reason", () => {
+		const report = buildBenchmarkRunReport({
+			datasetVersion: "longmem-v2",
+			datasetKind: "longmemeval",
+			cases: 4,
+			scoredCases: 4,
+			hitRate: 1,
+			emptyRate: 0,
+			avgTopScore: 0.9,
+			p95LatencyMs: 10,
+			rAt5: 1,
+			ndcgAt10: 1,
+			qualityThresholds: {
+				contractId: "longmemeval-release",
+				version: "2",
+				datasetKind: "longmemeval",
+				minHitRate: 0.8,
+				maxEmptyRate: 0.2,
+				minRAt5: 0.8,
+				minNdcgAt10: 0.8,
+				maxP95LatencyMs: 1000,
+				minSessionRecallAnyAt10: 0.8,
+				minSessionNdcgAnyAt10: 0.8,
+				minAnswerAccuracy: 0.8,
+				maxJudgeFalsePositiveRate: 0.05,
+				minAnswerCoverage: 1,
+			},
+			e2eQa: {
+				answerModel: null,
+				judge: null,
+				judgeVersion: null,
+				accuracy: null,
+				latencyMs: null,
+				judgeFalsePositiveRate: null,
+				cases: { eligible: 4, attempted: 0, completed: 0, failed: 0 },
+				attempts: { answerGeneration: 0, answerJudge: 0, decoyJudge: 0 },
+				caseResults: [],
+				unavailableReason: "no enrichment provider configured",
+			},
+		})
+
+		const gate = report.releaseGates?.find(
+			(candidate) => candidate.gate === "e2e-answer-quality",
+		)
+		expect(gate).toBeDefined()
+		expect(gate?.status).toBe("failed")
+		expect(gate?.evidence).toContain("no enrichment provider configured")
+		expect(report.publicationDecision?.publishable).toBe(false)
+		expect(report.publicationDecision?.failedGates).toContain(
+			"e2e-answer-quality",
+		)
+	})
+
 	it("computes recall and ndcg over ranked session hits", () => {
 		const evaluation = evaluateRankingCase({
 			results: [

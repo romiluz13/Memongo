@@ -13,6 +13,23 @@ droid-wiki
 benchmarks
 tmp
 docker
+# Secrets never enter the build context or the local build cache — including
+# the `COPY . .` prune stage of apps/api/Dockerfile, whose layer cache would
+# otherwise persist root .env files on the build machine.
+.env*
+**/.env*
+# Local tool state and machine junk.
+.turbo
+**/.turbo
+.DS_Store
+**/.DS_Store
+.claude
+.cursor
+.cc10x
+.pi
+.pi-subagents
+.tmp-review
+**/*.log
 # Web console is not part of the API image (manifest stays for the lockfile).
 apps/web/app
 apps/web/public

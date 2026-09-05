@@ -56,7 +56,7 @@ This file is the compaction anchor: any future instance resumes from here.
 | WS-15 | C-025..028 | T1,T2,T1,T1 | Data-model mechanics | LANDED a8cdf60d96 (hash pinned by follow-up ledger commit) |
 | WS-16 | C-029..034 | T2,T1,T2,T0,T2,T1 | Retrieval quality/perf | LANDED fd313cf825 (hash pinned by follow-up ledger commit) |
 | WS-17 | C-035,036 | T2,T2 | kb cross-tenant read; pi opt-in | LANDED 96c8db28bb (see session log) |
-| WS-18 | C-037,038,039 | T1,T2,T2 | dockerignore; publish gates; nightly eval | pending |
+| WS-18 | C-037,038,039 | T1,T2,T2 | dockerignore; publish gates; nightly eval | LANDED (hash pinned by follow-up ledger commit) |
 
 T3 needing refutation: C-002, C-003, C-004, C-005, C-007, C-008, C-009, C-018.
 Validation IDs used so far: V-001..V-127 (next free: V-128).
@@ -1049,3 +1049,109 @@ quoting all 80 unquoted notes scalars (content unchanged) so future
 colons cannot break the ledger; (4) sweep scripts adapted per
 workstream live in .ddd/reports/sweep-ws*-compute.py and read the
 ledger directly — run one after every landing.
+
+### 2026-09-05 — WS-18 (C-037..C-039) landed: release engineering
+
+Docker build-context hygiene, publish gates, and nightly eval with
+LLM-judged LongMemEval answer accuracy.
+
+- C-037 (dockerignore): the compose build uses the repo root as context
+  (docker/compose.yaml `context: ..`), so the root .dockerignore is the
+  only ignore file Docker applies; it now excludes .env*/**/.env*,
+  node_modules, .git, benchmarks, .turbo, .DS_Store, agent-tool
+  dotfiles (.claude/.cursor/.cc10x/.pi/.pi-subagents/.tmp-review), and
+  **/*.log. The dead nested apps/api/.dockerignore is deleted (never
+  applied from a repo-root context; could only mislead). Construct
+  re-pointed: planned docker/compose.yaml + apps/api/Dockerfile are
+  untouched; the obligation lands in .dockerignore (TR-080) and the
+  deletion (TR-081, construct apps/api/.dockerignore recorded as
+  deleted).
+- C-038 (publish gates): publish.yml gains a secret-free e2e-tier-a
+  job (atlas-local service, `test:e2e:tier-a`, 8-file skip-green guard
+  identical to ci.yml) wired via `needs: e2e-tier-a`, plus a
+  post-publish smoke step: npm install from the public registry into a
+  temp dir pinning all 8 published packages to the exact published
+  versions (10-attempt/30s propagation retry), then runtime-import
+  assertions (lib MEMORY_SCOPE_VALUES, engine MongoDBMemoryManager,
+  bridge memongoBridgeSearch, memongo-memory re-exports, client
+  MemongoClient, tools createMemongoTools/withMemongo/createOpenAIMiddleware),
+  the @memongo/mcp bin link (memongo-mcp -> dist/server.js), and the
+  pi-extension extensions/index.ts entry. Every assertion was
+  cross-checked against the actual package export surfaces during
+  landing.
+- C-039 (nightly eval + judged accuracy): (a) types.ts — LongMemEval
+  official metrics gain answerQuality (accuracy, judge false-positive
+  rate, judge identity, eligible/completed counts, unavailableReason);
+  the longmemeval threshold variant gains optional answer clauses;
+  MemoryBenchmarkRunReport carries the envelope. (b)
+  benchmark-quality-contracts.ts — LONGMEMEVAL_RELEASE_V2 adds
+  minAnswerAccuracy 0.8 / maxJudgeFalsePositiveRate 0.05 /
+  minAnswerCoverage 1.0 on the same digest-pinned dataset as V1;
+  weakened clauses rejected; V1/V2 identities distinct. (c)
+  mongodb-benchmark-runner.ts — buildAnswerQualityGate unified:
+  activates for ANY thresholds declaring minAnswerAccuracy (locomo and
+  longmemeval V2 alike), V1 stays off, per-clause gating only when
+  declared, unavailable accuracy fails with unavailableReason in the
+  evidence string. (d) benchmark-answer-quality.ts (new module) —
+  honest-unavailable envelope builder, gold-answer case builder
+  (preserving abstention + upstream-failure cases), officialMetrics
+  projection, and runBenchmarkJudgedAnswers with scope/provider/
+  resume/material decision paths and run-context accounting. (e)
+  mongodb-manager-benchmark.ts — pass-0 eval captures judged-answer
+  material per caseId (success + upstream-failure branches); producer
+  runs after all scenarios; merge into
+  officialMetrics.longMemEval.answerQuality in
+  attachBenchmarkOperationsReport; envelope returned as e2eQa. (f)
+  run-benchmark.ts — V2 digest verification, publishable fail-fast on
+  missing/misconfigured enrichment provider, V2 thresholds, pure-JSON
+  stdout (elapsed -> stderr), judged-accuracy line in human mode. (g)
+  e2e-nightly.yml — new benchmark-sample job (5 questions, judged
+  answers armed via assert-e2e-env.sh, digest-pinned dataset under
+  actions/cache, JSON artifact upload) while the mongodb e2e QA suite
+  stays a require-suite of the existing nightly job.
+
+Construct envelope widened during landing: the planned two C-039
+constructs grew to seven (TR-107..TR-111 added for the scripts
+pipeline) because the judged-answer obligation lives in the benchmark
+scripts, not only the type declaration.
+
+Ledger closure: V-128..V-136 recorded (V-128 manual dockerignore
+inspection log; V-129/V-130 manual workflow inspections over
+ws18-workflow-yaml.log; V-131..V-135 test over ws18-scripts-suite.log
+(21 files / 225 tests); V-136 type-check over ws18-check-types.log);
+TR-080..TR-084 patched in place (validation ids, sweep_pass true,
+landed notes, construct re-points). Sweep computed by
+.ddd/reports/sweep-ws18-compute.py -> sweep-ws18.json: 40 claims /
+111 traces, 9 -> 4 violations, zero for C-037..C-039; the remaining 4
+are all C-040 (quarantine envelope for AI-SDK tools + MCP payloads:
+claim-without-validation, claim-with-missing-evidence REF-WS05-R2 not
+yet locked, two untraced constructs) — the next workstream.
+
+Gates at landing: scripts suite 21 files / 225 tests 0 failures
+(includes the 17 new WS-18 tests: 11 answer-quality, 3 contracts, 3
+runner gates); full monorepo 14/14 tasks (engine 129 files / 2272
+tests); root check-types 15/15 tasks green (@memongo/scripts in
+scope); Biome error-level clean on the 9 touched TS files; all three
+workflow YAMLs parse. A direct tsc over the scripts tree additionally
+showed only the 5 pre-existing errors outside the WS-18 hunks (zero
+new).
+
+Fixes during landing verification: (1) the nightly step-summary jq
+paths read a top-level .e2eQa that does not exist on
+RelevanceBenchmarkResult (the envelope lives on
+benchmarkReport.e2eQa / the merged
+officialMetrics.longMemEval.answerQuality) — corrected to the
+officialMetrics path and extended with answer-model + measured-vs-
+unavailableReason lines; (2) params.runContext.accounting optional-
+chained after a scenario test fixture without a run context crashed
+at the accounting observer; (3) 5 Biome format diffs inside new hunks
+auto-formatted.
+
+Methodology lessons: (1) jq/YAML references must be validated against
+the actual result type, not assumed from the field name — a summary
+line that silently prints "unavailable" forever is worse than a
+missing line; (2) evidence logs must be regenerated after any
+post-verification edit (the jq fix postdated the first log cut);
+(3) bash brace groups do not create a subshell — a `{ cd ...; }`
+block changes the shell cwd for the rest of the chain, so evidence
+commands need absolute redirect paths.

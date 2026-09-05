@@ -619,8 +619,8 @@ entries:
     impact: medium
     tier: T1
     status: known-and-supported
-    constructs: [docker/compose.yaml, apps/api/Dockerfile]
-    validations: []
+    constructs: [.dockerignore]
+    validations: [V-128]
     exceptions: []
 
   - id: C-038
@@ -636,7 +636,7 @@ entries:
     tier: T2
     status: known-and-supported
     constructs: [.github/workflows/publish.yml]
-    validations: []
+    validations: [V-129]
     exceptions: []
 
   - id: C-039
@@ -651,8 +651,11 @@ entries:
     impact: medium
     tier: T2
     status: known-and-supported
-    constructs: [.github/workflows/e2e-nightly.yml, packages/memory-engine/src/types.ts]
-    validations: []
+    constructs:
+      [.github/workflows/e2e-nightly.yml, packages/memory-engine/src/types.ts, scripts/benchmark/benchmark-answer-quality.ts,
+      scripts/benchmark/benchmark-quality-contracts.ts, scripts/benchmark/mongodb-benchmark-runner.ts, scripts/benchmark/mongodb-manager-benchmark.ts,
+      scripts/run-benchmark.ts]
+    validations: [V-130, V-131, V-132, V-133, V-134, V-135, V-136]
     exceptions: []
 
   - id: C-040

@@ -1043,3 +1043,102 @@ entries:
     run_at: "2026-09-05T18:55:20.000Z"
     evidence_hash: sha256:883df0223db259014c408f161e5fb5574917e81d316dace7ce3c5e6a072a1f09
     notes: "Trigger-decision anchor for the same memo: checkAutoEpisodeTriggers consults the fresh-negative memo before running the event-count scan and records a negative verdict into the memo (memoized_negative outcome), so the write hot path skips the scan for the ~60s TTL window. Construct re-pointed from the planned mongodb-manager-write.ts, which is untouched by WS-16: the memo and the trigger decision both live in mongodb-episodes.ts."
+
+  - id: V-128
+    schema_version: 0.1.0
+    claim_id: C-037
+    construct: .dockerignore
+    method: manual
+    target: .ddd/reports/runs/ws18-dockerignore.log
+    result: pass
+    run_at: "2026-09-05T19:35:00.000Z"
+    evidence_hash: sha256:fa2455cac5f8f7f8a1f597c67a13c6c382e1d4e8e03da89e6f19cffafdf42562
+    notes: "Build-context inspection: docker/compose.yaml builds the API image with context: .. (the repo root, dockerfile: apps/api/Dockerfile), so the root .dockerignore is the ignore file Docker actually applies; the planned constructs docker/compose.yaml and apps/api/Dockerfile are untouched and the construct is re-pointed to .dockerignore where the obligation lands. The root file now excludes .env*/**/.env* (secrets can no longer enter the context or the COPY-prune layer cache), node_modules, .git, benchmarks, .turbo, .DS_Store, .claude, .cursor, .cc10x, .pi, .pi-subagents, .tmp-review, and **/*.log. The dead nested apps/api/.dockerignore is deleted (never applied, since Docker resolves ignore files from the context root) so it cannot shadow or mislead. Full pattern list in the target log."
+
+  - id: V-129
+    schema_version: 0.1.0
+    claim_id: C-038
+    construct: .github/workflows/publish.yml
+    method: manual
+    target: .ddd/reports/runs/ws18-workflow-yaml.log
+    result: pass
+    run_at: "2026-09-05T19:36:00.000Z"
+    evidence_hash: sha256:84b2f01ceb4ec06a2d27f9e6a95a2f37f6b8f1308deb74c8e6531582affb1444
+    notes: "Publish workflow inspection (YAML parses; all three workflow files validated in the target log): a new e2e-tier-a job runs the secret-free tier-A MongoDB e2e suite (mongodb/mongodb-atlas-local:preview service, bun run --filter @memongo/memory-engine test:e2e:tier-a) with the same 8-file skip-green guard (verify-tests-ran.mjs --require-suite per gated file) used by ci.yml PRs; the publish job now declares needs: e2e-tier-a so no package reaches the registry from a run that never exercised the MongoDB-backed paths. Post-publish smoke: npm install from the public registry into a temp dir pinning each of the 8 published packages to the exact version this run published, with a 10-attempt/30s retry loop for registry propagation; smoke.mjs asserts runtime imports (lib MEMORY_SCOPE_VALUES, engine MongoDBMemoryManager, bridge memongoBridgeSearch, memongo-memory re-exports, client MemongoClient, tools createMemongoTools/withMemongo/createOpenAIMiddleware) plus the @memongo/mcp bin link (memongo-mcp) and dist/server.js presence and the pi-extension extensions/index.ts entry - each assertion cross-checked against the actual package export surfaces. The tag-triggered publish run supersedes this local evidence once it fires."
+
+  - id: V-130
+    schema_version: 0.1.0
+    claim_id: C-039
+    construct: .github/workflows/e2e-nightly.yml
+    method: manual
+    target: .ddd/reports/runs/ws18-workflow-yaml.log
+    result: pass
+    run_at: "2026-09-05T19:37:00.000Z"
+    evidence_hash: sha256:84b2f01ceb4ec06a2d27f9e6a95a2f37f6b8f1308deb74c8e6531582affb1444
+    notes: "Nightly workflow inspection (YAML parses; target log): the mongodb e2e QA suite remains a require-suite of the existing nightly e2e job, and a new benchmark-sample job runs a sample-mode LongMemEval benchmark (5 questions, --no-checkpoint --json) against an atlas-local service with mongot auto-embeddings (VOYAGE_API_KEY on the container). assert-e2e-env.sh fails the job loudly when the enrichment provider env (MEMONGO_ENRICHMENT_API_KEY/BASE_URL/MODEL) or the Atlas Model key is missing, so judged answers cannot silently skip; the dataset is digest-pinned via the contracts cache key and re-verified after cache restore. The step summary surfaces hitRate, nDCG@10, p95 latency, judged answer accuracy, judge false-positive rate, answer model, and the unavailableReason-vs-measured note, reading from .officialMetrics.longMemEval.answerQuality (the merged projection on the benchmark result; the top-level .e2eQa path never existed on RelevanceBenchmarkResult and was corrected during landing). The JSON artifact is uploaded; --json stdout is pure JSON (elapsed moved to stderr) so the tee'd file parses. The landed nightly run supersedes this local evidence."
+
+  - id: V-131
+    schema_version: 0.1.0
+    claim_id: C-039
+    construct: packages/memory-engine/src/types.ts
+    method: test
+    target: .ddd/reports/runs/ws18-scripts-suite.log
+    result: pass
+    run_at: "2026-09-05T19:38:00.000Z"
+    evidence_hash: sha256:88f76a61c7a7b521752076132c966e195fe4807ae8f81067874b1f780331f97e
+    notes: "Type-surface extension validated by the scripts suite (21 files / 225 tests green, target log; the full monorepo run adds 2272 engine tests green over the widened types - ws18-monorepo-test.log, sha256:a1783995d857805c01b27787c7888c448410e334c63e48fabdd9d2291b651696): MemoryBenchmarkLongMemEvalMetrics gains answerQuality (answerModel, judge, judgeVersion, accuracy, judgeFalsePositiveRate, eligibleCases, completedCases, unavailableReason); the longmemeval BenchmarkQualityThresholds variant gains optional minAnswerAccuracy / maxJudgeFalsePositiveRate / minAnswerCoverage clauses; BenchmarkE2eQaEnvelope is carried on MemoryBenchmarkRunReport. The V2 contract tests (V-133) and the answer-gate tests (V-134) pin these clause shapes, and benchmark-answer-quality tests pin the officialMetrics.longMemEval.answerQuality projection this type declares."
+
+  - id: V-132
+    schema_version: 0.1.0
+    claim_id: C-039
+    construct: scripts/benchmark/benchmark-answer-quality.ts
+    method: test
+    target: .ddd/reports/runs/ws18-scripts-suite.log
+    result: pass
+    run_at: "2026-09-05T19:39:00.000Z"
+    evidence_hash: sha256:88f76a61c7a7b521752076132c966e195fe4807ae8f81067874b1f780331f97e
+    notes: "New judged-answer module, 11-test battery in benchmark-answer-quality.test.ts (scripts suite green, target log): buildUnavailableE2eQaEnvelope pins the honest-unavailable shape (null metrics, reason, eligible count, judge identity); buildJudgedAnswerCases filters non-abstention cases missing a gold answer while preserving abstention and upstreamFailure cases; mergeLongMemEvalAnswerQuality is a no-op for non-longmemeval datasets and missing envelopes and projects the envelope into officialMetrics.longMemEval.answerQuality when present; runBenchmarkJudgedAnswers returns undefined for out-of-scope datasets, an unavailable envelope on checkpoint resume (resume never re-judges), an unavailable envelope when no material was captured, and an unavailable envelope with a misconfiguration reason when the enrichment provider cannot be built, while a configured provider path records accounting via the runContext observer."
+
+  - id: V-133
+    schema_version: 0.1.0
+    claim_id: C-039
+    construct: scripts/benchmark/benchmark-quality-contracts.ts
+    method: test
+    target: .ddd/reports/runs/ws18-scripts-suite.log
+    result: pass
+    run_at: "2026-09-05T19:40:00.000Z"
+    evidence_hash: sha256:88f76a61c7a7b521752076132c966e195fe4807ae8f81067874b1f780331f97e
+    notes: "LONGMEMEVAL_RELEASE_V2 added to the release-contract registry, 3 new tests in benchmark-quality-contracts.test.ts (scripts suite green, target log): V2 resolves with the answer-accuracy clauses (minAnswerAccuracy 0.8, maxJudgeFalsePositiveRate 0.05, minAnswerCoverage 1.0) on top of the V1 retrieval clauses and the same digest-pinned dataset sha256; a weakened-clause mutation (accuracy 0.79) is rejected by the contract verifier, so the published numbers cannot be claimed under a silently loosened gate; V1 and V2 resolve to distinct contract identities, keeping the retrieval-only history comparable while the V2 protocol adds the judged-answer obligation."
+
+  - id: V-134
+    schema_version: 0.1.0
+    claim_id: C-039
+    construct: scripts/benchmark/mongodb-benchmark-runner.ts
+    method: test
+    target: .ddd/reports/runs/ws18-scripts-suite.log
+    result: pass
+    run_at: "2026-09-05T19:41:00.000Z"
+    evidence_hash: sha256:88f76a61c7a7b521752076132c966e195fe4807ae8f81067874b1f780331f97e
+    notes: "Unified answer-quality gate, 3 new longmemeval tests in mongodb-benchmark-runner.test.ts (scripts suite green, target log): buildAnswerQualityGate activates for any threshold set declaring minAnswerAccuracy (locomo V2 and longmemeval V2 alike) instead of dataset-kind special-casing; longmemeval V1 thresholds keep the gate off (retrieval-only history unchanged); an unavailable judged-accuracy envelope fails the gate with the unavailableReason carried in the evidence string, so a run cannot publish numbers the judge never produced. Individual clauses (accuracy / false-positive rate / coverage) gate only when declared."
+
+  - id: V-135
+    schema_version: 0.1.0
+    claim_id: C-039
+    construct: scripts/benchmark/mongodb-manager-benchmark.ts
+    method: test
+    target: .ddd/reports/runs/ws18-scripts-suite.log
+    result: pass
+    run_at: "2026-09-05T19:42:00.000Z"
+    evidence_hash: sha256:88f76a61c7a7b521752076132c966e195fe4807ae8f81067874b1f780331f97e
+    notes: "Producer wiring inside the benchmark pipeline, covered by the mongodb-manager-benchmark scenario/unit tests in the scripts suite (21 files / 225 tests green, target log; the wiring runs on every scenario pass so the suite exercises the new paths): pass-0 eval captures judged-answer material per caseId - question, gold answer, abstention flag, retrieved context passages - on the success branch and records an upstreamFailure envelope with empty passages on the error branch; after all scenarios, runBenchmarkJudgedAnswers runs the LLM-judged e2e QA over the captured material with the enrichment provider and run-context accounting (optional-chained so scenario fixtures without a run context still pass); attachBenchmarkOperationsReport merges the envelope into officialMetrics.longMemEval.answerQuality via mergeLongMemEvalAnswerQuality and returns the envelope as e2eQa on the result."
+
+  - id: V-136
+    schema_version: 0.1.0
+    claim_id: C-039
+    construct: scripts/run-benchmark.ts
+    method: type-check
+    target: .ddd/reports/runs/ws18-check-types.log
+    result: pass
+    run_at: "2026-09-05T19:43:00.000Z"
+    evidence_hash: sha256:e9a2821846c34f990b6fdf6310860b03a71ce626b94deb3f79d1264561b8c862
+    notes: "CLI entry re-pointed to the V2 contract and verified by the monorepo type check (@memongo/scripts in scope, 15/15 tasks green, target log) plus inspection of the landed main path: the dataset digest is verified against LONGMEMEVAL_RELEASE_V2 before any run; publishable runs fail fast when the enrichment provider is missing or misconfigured instead of silently producing unavailable judged answers, and quality thresholds come from the V2 contract; --json stdout is pure JSON (the elapsed line moved to stderr) so CI tee/jq consumers parse it; human mode prints the judged-answer accuracy line. The CLI main path is not unit-testable in-process; the first landed nightly benchmark-sample run supersedes this local evidence."

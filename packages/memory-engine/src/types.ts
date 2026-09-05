@@ -1126,6 +1126,22 @@ export type MemoryBenchmarkOfficialMetrics = {
 		executionFailureCases: number
 		session?: MemoryBenchmarkOfficialRetrievalMetrics
 		turn?: MemoryBenchmarkOfficialRetrievalMetrics
+		/**
+		 * C-039: LLM-judged answer accuracy over pass-0 retrieval results, so
+		 * published LongMemEval numbers carry the answer half of the official
+		 * protocol (J score) next to the retrieval half. Null fields mean
+		 * "not measured"; `unavailableReason` says why.
+		 */
+		answerQuality?: {
+			answerModel: string | null
+			judge: string | null
+			judgeVersion: string | null
+			accuracy: number | null
+			judgeFalsePositiveRate: number | null
+			eligibleCases: number
+			completedCases: number
+			unavailableReason?: string
+		}
 	}
 	loCoMo?: {
 		retrievalCases: number
@@ -1275,6 +1291,14 @@ export type BenchmarkQualityThresholds =
 			datasetKind: "longmemeval"
 			minSessionRecallAnyAt10: number
 			minSessionNdcgAnyAt10: number
+			/**
+			 * C-039: answer-quality clauses are optional so the retrieval-only V1
+			 * contract stays valid. When declared (V2 and later), the
+			 * e2e-answer-quality release gate activates for LongMemEval runs.
+			 */
+			minAnswerAccuracy?: number
+			maxJudgeFalsePositiveRate?: number
+			minAnswerCoverage?: number
 	  })
 	| (BenchmarkCommonQualityThresholds & {
 			datasetKind: "locomo"

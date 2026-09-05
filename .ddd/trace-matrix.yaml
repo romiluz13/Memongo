@@ -799,52 +799,52 @@ traces:
     schema_version: 0.1.0
     change_id: WS-18
     claim_id: C-037
-    construct_id: docker/compose.yaml
-    validation_id: null
+    construct_id: .dockerignore
+    validation_id: V-128
     direction: forward
-    sweep_pass: false
-    checked_at: "2026-09-02T13:41:40.101Z"
-    notes: "WS-18 Release engineering (planned change envelope)"
+    sweep_pass: true
+    checked_at: "2026-09-05T19:44:00.000Z"
+    notes: "WS-18 landed: the root .dockerignore (the ignore file Docker actually applies, since docker/compose.yaml builds with context: .. from the repo root) now excludes .env*/**/.env*, node_modules, .git, benchmarks, .turbo, .DS_Store, agent-tool dotfiles, and **/*.log, so secrets and junk no longer enter the build context or the COPY-prune layer cache. Construct re-pointed from the planned docker/compose.yaml, which is untouched: the obligation lands in the ignore file, not the compose definition. Validated in V-128."
   - id: TR-081
     schema_version: 0.1.0
     change_id: WS-18
     claim_id: C-037
-    construct_id: apps/api/Dockerfile
-    validation_id: null
+    construct_id: apps/api/.dockerignore
+    validation_id: V-128
     direction: forward
-    sweep_pass: false
-    checked_at: "2026-09-02T13:41:40.102Z"
-    notes: "WS-18 Release engineering (planned change envelope)"
+    sweep_pass: true
+    checked_at: "2026-09-05T19:44:00.000Z"
+    notes: "WS-18 landed: the nested apps/api/.dockerignore is deleted. It was dead config - Docker resolves ignore files from the context root, which is the repo root for the compose build, so the file was never applied and could only mislead (a reader changing it would see no effect). Construct re-pointed from the planned apps/api/Dockerfile, which is untouched by WS-18. Validated in V-128."
   - id: TR-082
     schema_version: 0.1.0
     change_id: WS-18
     claim_id: C-038
     construct_id: .github/workflows/publish.yml
-    validation_id: null
+    validation_id: V-129
     direction: forward
-    sweep_pass: false
-    checked_at: "2026-09-02T13:41:40.103Z"
-    notes: "WS-18 Release engineering (planned change envelope)"
+    sweep_pass: true
+    checked_at: "2026-09-05T19:44:00.000Z"
+    notes: "WS-18 landed: publish gates on a new secret-free e2e-tier-a job (atlas-local service, test:e2e:tier-a, 8-file skip-green guard identical to ci.yml) via needs: e2e-tier-a, and a post-publish smoke step npm-installs all 8 published packages from the registry pinned to the published versions (10-attempt propagation retry) and asserts runtime imports, the @memongo/mcp bin link, and the pi-extension entry file. Validated in V-129."
   - id: TR-083
     schema_version: 0.1.0
     change_id: WS-18
     claim_id: C-039
     construct_id: .github/workflows/e2e-nightly.yml
-    validation_id: null
+    validation_id: V-130
     direction: forward
-    sweep_pass: false
-    checked_at: "2026-09-02T13:41:40.104Z"
-    notes: "WS-18 Release engineering (planned change envelope)"
+    sweep_pass: true
+    checked_at: "2026-09-05T19:44:00.000Z"
+    notes: "WS-18 landed: the nightly now runs a sample-mode LongMemEval benchmark job (5 questions, judged answers armed via assert-e2e-env.sh so a missing enrichment provider fails loudly instead of silently skipping; digest-pinned dataset under an actions/cache key; step summary reads judged accuracy and judge false-positive rate from .officialMetrics.longMemEval.answerQuality and uploads the JSON artifact) while keeping the mongodb e2e QA suite as a require-suite of the existing e2e job. Validated in V-130."
   - id: TR-084
     schema_version: 0.1.0
     change_id: WS-18
     claim_id: C-039
     construct_id: packages/memory-engine/src/types.ts
-    validation_id: null
+    validation_id: V-131
     direction: forward
-    sweep_pass: false
-    checked_at: "2026-09-02T13:41:40.106Z"
-    notes: "WS-18 Release engineering (planned change envelope)"
+    sweep_pass: true
+    checked_at: "2026-09-05T19:44:00.000Z"
+    notes: "WS-18 landed: the LongMemEval official-metrics type gains answerQuality (accuracy, judge false-positive rate, judge identity, eligible/completed counts, unavailableReason), the longmemeval threshold variant gains optional answer clauses (minAnswerAccuracy / maxJudgeFalsePositiveRate / minAnswerCoverage), and MemoryBenchmarkRunReport carries the BenchmarkE2eQaEnvelope - the contract surface that makes LLM-judged answer accuracy a first-class comparable metric. Validated in V-131; the scripts-sweep constructs below (TR-107..TR-111) were added during the WS-18 landing because the judged-answer pipeline lives there, widening the planned envelope."
   - id: TR-085
     schema_version: 0.1.0
     change_id: WS-02
@@ -1065,3 +1065,53 @@ traces:
     sweep_pass: true
     checked_at: "2026-09-05T16:38:14.189Z"
     notes: "WS-14 Referential integrity beyond KB (landed) — deleteEntity cascades to entity_links (same $or from/to + agentId filter as the relation cascade, deletedEntityLinks in the result; deleteEntityConservative passes the count through); construct added during the WS-14 landing because the cascade lives in mongodb-graph.ts, widening the planned envelope"
+  - id: TR-107
+    schema_version: 0.1.0
+    change_id: WS-18
+    claim_id: C-039
+    construct_id: scripts/benchmark/benchmark-answer-quality.ts
+    validation_id: V-132
+    direction: forward
+    sweep_pass: true
+    checked_at: "2026-09-05T19:45:00.000Z"
+    notes: "WS-18 landed: new judged-answer module - buildUnavailableE2eQaEnvelope (honest-unavailable shape with reason), buildJudgedAnswerCases (gold-answer filter preserving abstention and upstream-failure cases), mergeLongMemEvalAnswerQuality (projection into officialMetrics.longMemEval.answerQuality), and runBenchmarkJudgedAnswers (scope/provider/resume/material decision paths with run-context accounting). Construct added during the WS-18 landing because the producer lives here, widening the planned envelope. Validated in V-132."
+  - id: TR-108
+    schema_version: 0.1.0
+    change_id: WS-18
+    claim_id: C-039
+    construct_id: scripts/benchmark/benchmark-quality-contracts.ts
+    validation_id: V-133
+    direction: forward
+    sweep_pass: true
+    checked_at: "2026-09-05T19:45:00.000Z"
+    notes: "WS-18 landed: LONGMEMEVAL_RELEASE_V2 adds the judged-answer clauses (minAnswerAccuracy 0.8, maxJudgeFalsePositiveRate 0.05, minAnswerCoverage 1.0) on the same digest-pinned dataset as V1, with weakened-clause rejection and distinct V1/V2 identities pinned by tests. Construct added during the WS-18 landing, widening the planned envelope. Validated in V-133."
+  - id: TR-109
+    schema_version: 0.1.0
+    change_id: WS-18
+    claim_id: C-039
+    construct_id: scripts/benchmark/mongodb-benchmark-runner.ts
+    validation_id: V-134
+    direction: forward
+    sweep_pass: true
+    checked_at: "2026-09-05T19:45:00.000Z"
+    notes: "WS-18 landed: buildAnswerQualityGate is unified - it activates for any thresholds declaring minAnswerAccuracy (locomo and longmemeval V2 alike), leaves longmemeval V1 off, gates each clause only when declared, and fails on unavailable accuracy with the unavailableReason in the evidence string. Construct added during the WS-18 landing, widening the planned envelope. Validated in V-134."
+  - id: TR-110
+    schema_version: 0.1.0
+    change_id: WS-18
+    claim_id: C-039
+    construct_id: scripts/benchmark/mongodb-manager-benchmark.ts
+    validation_id: V-135
+    direction: forward
+    sweep_pass: true
+    checked_at: "2026-09-05T19:45:00.000Z"
+    notes: "WS-18 landed: the benchmark pipeline captures judged-answer material during the pass-0 eval loop (success and upstream-failure branches), runs runBenchmarkJudgedAnswers after all scenarios with the enrichment provider and accounting, merges the envelope into officialMetrics via mergeLongMemEvalAnswerQuality in attachBenchmarkOperationsReport, and returns it as e2eQa. Construct added during the WS-18 landing, widening the planned envelope. Validated in V-135."
+  - id: TR-111
+    schema_version: 0.1.0
+    change_id: WS-18
+    claim_id: C-039
+    construct_id: scripts/run-benchmark.ts
+    validation_id: V-136
+    direction: forward
+    sweep_pass: true
+    checked_at: "2026-09-05T19:45:00.000Z"
+    notes: "WS-18 landed: the CLI verifies the dataset digest against LONGMEMEVAL_RELEASE_V2, fail-fasts publishable runs when the enrichment provider is missing or misconfigured, takes thresholds from V2, keeps --json stdout pure (elapsed on stderr), and prints the judged-answer accuracy line in human mode. Construct added during the WS-18 landing, widening the planned envelope. Validated in V-136."

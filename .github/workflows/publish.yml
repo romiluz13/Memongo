@@ -7,8 +7,67 @@ on:
       - "v*"
 
 jobs:
+  # C-038: the secret-free tier-A e2e suite (same job as every PR in ci.yml)
+  # gates publishing. Packages must not reach the registry from a run that
+  # never exercised the MongoDB-backed paths.
+  e2e-tier-a:
+    name: E2E against real MongoDB (tier A)
+    runs-on: ubuntu-latest
+    services:
+      mongodb:
+        image: mongodb/mongodb-atlas-local:preview
+        ports:
+          - 27017:27017
+        env:
+          MONGODB_ATLAS_TELEMETRY_ENABLE: "false"
+        options: >-
+          --health-cmd "/usr/local/bin/runner healthcheck"
+          --health-interval 10s
+          --health-timeout 10s
+          --health-retries 20
+          --health-start-period 40s
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.2.5
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build
+        run: bun run build
+
+      # Tier A covers the paths that need only MongoDB: transactions, indexes,
+      # tenant isolation, and background jobs. It needs no secrets, so it can
+      # gate publishing exactly as it gates every PR.
+      - name: E2E (tier A)
+        env:
+          MONGODB_TEST_URI: mongodb://127.0.0.1:27017/?directConnection=true
+        run: bun run --filter @memongo/memory-engine test:e2e:tier-a
+
+      # Skip-green guard for tier A: every gated file must have executed at
+      # least one test, so a renamed file or a newly added skip cannot shrink
+      # the tier silently.
+      - name: Verify tier A suites ran (skip-green guard)
+        run: >
+          bun scripts/ci/verify-tests-ran.mjs
+          --expect packages/memory-engine/test-results/junit.xml
+          --require-suite mongodb-kb-reingest.e2e.test.ts
+          --require-suite mongodb-kb-isolation.e2e.test.ts
+          --require-suite mongodb-legacy-search-isolation.e2e.test.ts
+          --require-suite mongodb-vector-index-shape.e2e.test.ts
+          --require-suite mongodb-rankfusion-score.e2e.test.ts
+          --require-suite mongodb-projection-repair.e2e.test.ts
+          --require-suite mongodb-temporal-validity.e2e.test.ts
+          --require-suite mongodb-memory-jobs.e2e.test.ts
+
   publish:
     name: Build & Publish
+    needs: e2e-tier-a
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -80,3 +139,72 @@ jobs:
           done
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      # C-038: prove the published artifacts install and load from the public
+      # registry before the release is called good. A broken exports map, a
+      # missing dist file, or a dead bin link fails here — at release time —
+      # instead of at the first downstream consumer.
+      - name: Smoke test published packages (npm install from registry)
+        run: |
+          set -euo pipefail
+          SMOKE_DIR=$(mktemp -d)
+          cd "$SMOKE_DIR"
+          npm init -y >/dev/null
+
+          # Pin every smoke install to the exact version this run published.
+          pin() {
+            node -p "require('$GITHUB_WORKSPACE/$1/package.json').name + '@' + require('$GITHUB_WORKSPACE/$1/package.json').version"
+          }
+          PACKAGES="$(pin packages/lib) $(pin packages/memory-engine) $(pin packages/memory-bridge) $(pin packages/memongo-memory) $(pin packages/client) $(pin packages/tools) $(pin packages/pi-extension) $(pin apps/mcp)"
+          echo "Smoke installing: $PACKAGES"
+
+          # The registry can take a minute to serve a freshly published
+          # version; retry the install instead of failing the release on
+          # propagation lag.
+          for attempt in 1 2 3 4 5 6 7 8 9 10; do
+            if npm install --no-audit --no-fund $PACKAGES; then
+              break
+            fi
+            if [ "$attempt" -eq 10 ]; then
+              echo "::error::npm install of freshly published packages did not succeed after 10 attempts"
+              exit 1
+            fi
+            echo "attempt $attempt failed (registry propagation?); retrying in 30s..."
+            sleep 30
+          done
+
+          cat > smoke.mjs <<'EOF'
+          const must = (pkg, name, kind) => {
+            const value = pkg[name]
+            const actual = typeof value
+            if (actual !== kind) {
+              throw new Error(`@memongo smoke: expected ${name} to be a ${kind}, got ${actual}`)
+            }
+          }
+          const lib = await import("@memongo/lib")
+          if (!Array.isArray(lib.MEMORY_SCOPE_VALUES)) throw new Error("@memongo/lib: MEMORY_SCOPE_VALUES missing")
+          const engine = await import("@memongo/memory-engine")
+          must(engine, "MongoDBMemoryManager", "function")
+          const bridge = await import("@memongo/memory-bridge")
+          must(bridge, "memongoBridgeSearch", "function")
+          const memory = await import("@memongo/memory")
+          must(memory, "MongoDBMemoryManager", "function")
+          must(memory, "memongoBridgeSearch", "function")
+          const client = await import("@memongo/client")
+          must(client, "MemongoClient", "function")
+          const tools = await import("@memongo/tools")
+          must(tools, "createMemongoTools", "function")
+          must(tools, "withMemongo", "function")
+          must(tools, "createOpenAIMiddleware", "function")
+          console.log("@memongo smoke: all published entry points import cleanly")
+          EOF
+          node smoke.mjs
+
+          # @memongo/mcp ships a stdio server: prove the bin link and main
+          # file landed instead of starting a blocking server.
+          test -x node_modules/.bin/memongo-mcp
+          test -f node_modules/@memongo/mcp/dist/server.js
+          # @memongo/pi-extension is source-shipped (no dist): prove the
+          # extension entry landed.
+          test -f node_modules/@memongo/pi-extension/extensions/index.ts
+          echo "npm install smoke passed for all 8 published packages"

@@ -98,3 +98,96 @@ jobs:
           bun scripts/ci/verify-tests-ran.mjs
           --expect scripts/test-results/junit.xml
           --require-suite mongodb-e2e-qa.e2e.test.ts
+
+  # C-039: run at least a sample-mode benchmark on the nightly schedule so
+  # quality regressions surface in a day instead of at the next release run.
+  # The sample run ingests a handful of LongMemEval conversations through the
+  # shipped pipeline and — since the contract now carries LLM-judged answer
+  # accuracy — also exercises the answer+judge path against the enrichment
+  # provider every night. Sample numbers are NOT publishable (no contract is
+  # applied); the job fails only when the benchmark itself errors.
+  benchmark-sample:
+    name: Sample-mode benchmark (LongMemEval, judged answers)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    services:
+      mongodb:
+        image: mongodb/mongodb-atlas-local:preview
+        ports:
+          - 27017:27017
+        env:
+          # Auto-embeddings for benchmark ingest are served by mongot inside
+          # the container, so the Atlas Model key must be on the container.
+          VOYAGE_API_KEY: ${{ secrets.VOYAGE_API_KEY }}
+          MONGODB_ATLAS_TELEMETRY_ENABLE: "false"
+        options: >-
+          --health-cmd "/usr/local/bin/runner healthcheck"
+          --health-interval 10s
+          --health-timeout 10s
+          --health-retries 20
+          --health-start-period 40s
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.2.5
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      # Fail loudly when a gate env var is missing instead of letting the
+      # benchmark silently skip judged answers (no provider) or fail every
+      # ingest on missing embeddings. Same contract as the e2e suites above.
+      - name: Assert benchmark gates are armed (no silent skips)
+        env:
+          VOYAGE_API_KEY: ${{ secrets.VOYAGE_API_KEY }}
+          MEMONGO_ENRICHMENT_API_KEY: ${{ secrets.MEMONGO_ENRICHMENT_API_KEY }}
+          MEMONGO_ENRICHMENT_BASE_URL: ${{ vars.MEMONGO_ENRICHMENT_BASE_URL }}
+          MEMONGO_ENRICHMENT_MODEL: ${{ vars.MEMONGO_ENRICHMENT_MODEL }}
+        run: bash scripts/ci/assert-e2e-env.sh
+
+      # The 277MB dataset is digest-pinned in benchmark-quality-contracts.ts;
+      # cache it keyed on that pin so nightlies do not re-download from
+      # HuggingFace unless the pin moved. The fetch step verifies the digest
+      # even on a cache hit, so a corrupted cache cannot go unnoticed.
+      - name: Restore benchmark dataset
+        uses: actions/cache@v4
+        with:
+          path: benchmarks/data
+          key: longmemeval-dataset-${{ hashFiles('scripts/benchmark/benchmark-quality-contracts.ts') }}
+
+      - name: Fetch benchmark dataset
+        run: bun run benchmark:fetch
+
+      - name: Sample-mode benchmark (5 questions, judged answers on)
+        env:
+          MEMONGO_MONGODB_URI: mongodb://127.0.0.1:27017/?directConnection=true
+          MEMONGO_ENRICHMENT_API_KEY: ${{ secrets.MEMONGO_ENRICHMENT_API_KEY }}
+          MEMONGO_ENRICHMENT_BASE_URL: ${{ vars.MEMONGO_ENRICHMENT_BASE_URL }}
+          MEMONGO_ENRICHMENT_MODEL: ${{ vars.MEMONGO_ENRICHMENT_MODEL }}
+        run: |
+          set -o pipefail
+          bun run benchmark -- --sample 5 --no-checkpoint --json | tee "$RUNNER_TEMP/benchmark-sample.json"
+
+      - name: Surface judged accuracy in the job summary
+        run: |
+          {
+            echo "### Nightly sample-mode benchmark"
+            echo ""
+            echo "- hitRate: $(jq -r '.hitRate' "$RUNNER_TEMP/benchmark-sample.json")"
+            echo "- nDCG@10: $(jq -r '.ndcgAt10 // "n/a"' "$RUNNER_TEMP/benchmark-sample.json")"
+            echo "- p95 latency ms: $(jq -r '.p95LatencyMs' "$RUNNER_TEMP/benchmark-sample.json")"
+            echo "- judged answer accuracy: $(jq -r '.officialMetrics.longMemEval.answerQuality.accuracy // "unavailable"' "$RUNNER_TEMP/benchmark-sample.json")"
+            echo "- judge false-positive rate: $(jq -r '.officialMetrics.longMemEval.answerQuality.judgeFalsePositiveRate // "unavailable"' "$RUNNER_TEMP/benchmark-sample.json")"
+            echo "- answer model: $(jq -r '.officialMetrics.longMemEval.answerQuality.answerModel // "unavailable"' "$RUNNER_TEMP/benchmark-sample.json")"
+            echo "- accuracy note: $(jq -r '.officialMetrics.longMemEval.answerQuality.unavailableReason // "measured"' "$RUNNER_TEMP/benchmark-sample.json")"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload benchmark sample report
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-sample-report
+          path: ${{ runner.temp }}/benchmark-sample.json

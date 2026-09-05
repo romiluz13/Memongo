@@ -20,6 +20,36 @@ export const LONGMEMEVAL_RELEASE_V1 = {
 	thresholds: BenchmarkQualityThresholds
 }
 
+/**
+ * C-039: V2 adds LLM-judged answer accuracy to the LongMemEval contract so
+ * published numbers are comparable to the official protocol (retrieval score
+ * + J-scored answer accuracy, with abstention graded by refusal and the
+ * judge calibrated by decoy false-positive probes). The answer bar mirrors
+ * LOCOMO_RELEASE_V1 so both dataset kinds publish under one answer-quality
+ * standard. Same dataset bytes as V1; only the quality bar moved.
+ */
+export const LONGMEMEVAL_RELEASE_V2 = {
+	datasetSha256: LONGMEMEVAL_RELEASE_V1.datasetSha256,
+	thresholds: {
+		contractId: "longmemeval-release",
+		version: "2",
+		datasetKind: "longmemeval",
+		minHitRate: 0.8,
+		maxEmptyRate: 0.2,
+		minRAt5: 0.8,
+		minNdcgAt10: 0.8,
+		maxP95LatencyMs: 1_000,
+		minSessionRecallAnyAt10: 0.8,
+		minSessionNdcgAnyAt10: 0.8,
+		minAnswerAccuracy: 0.8,
+		maxJudgeFalsePositiveRate: 0.05,
+		minAnswerCoverage: 1,
+	},
+} as const satisfies {
+	datasetSha256: string
+	thresholds: BenchmarkQualityThresholds
+}
+
 export const LOCOMO_RELEASE_V1 = {
 	datasetSha256:
 		"79fa87e90f04081343b8c8debecb80a9a6842b76a7aa537dc9fdf651ea698ff4",
@@ -46,7 +76,11 @@ export function resolveRegisteredBenchmarkQualityContract(params: {
 	declared: BenchmarkQualityThresholds
 	datasetSha256: string
 }): BenchmarkQualityThresholds {
-	const registered = [LONGMEMEVAL_RELEASE_V1, LOCOMO_RELEASE_V1].find(
+	const registered = [
+		LONGMEMEVAL_RELEASE_V1,
+		LONGMEMEVAL_RELEASE_V2,
+		LOCOMO_RELEASE_V1,
+	].find(
 		(contract) =>
 			contract.thresholds.contractId === params.declared.contractId &&
 			contract.thresholds.version === params.declared.version,
