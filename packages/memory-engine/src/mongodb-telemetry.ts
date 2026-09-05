@@ -62,6 +62,15 @@ export type TelemetryDocument = {
 	 */
 	retryAfterMs?: number
 	/**
+	 * WS-12 (C-019): rerank skip marker. Set when the rerank stage
+	 * legitimately did not run — "disabled" (config off), "no-results"
+	 * (nothing to rank), "no-api-key", "too-few-candidates",
+	 * "too-few-valid-candidates" — with ok:true, so a skip is
+	 * distinguishable from a rerank that ran (no marker) and from a rerank
+	 * failure (ok:false, e.g. "api-error"/"bad-response-shape").
+	 */
+	rerankSkipped?: string
+	/**
 	 * WS-11: queue/gauge context on backlog and saturation docs (depth at
 	 * observation time, threshold the gauge tripped at).
 	 */

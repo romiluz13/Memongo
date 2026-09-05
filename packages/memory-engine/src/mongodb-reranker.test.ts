@@ -673,3 +673,156 @@ describe("crossEncoderRerank", () => {
 		expect(out.results).toBe(results)
 	})
 })
+
+// --- WS-12 (C-019): skip paths are telemetry-visible, not silent ---
+
+describe("crossEncoderRerank skip telemetry (WS-12, C-019)", () => {
+	beforeEach(() => {
+		vi.clearAllMocks()
+	})
+
+	it("emits ok:true with rerankSkipped:'disabled' when the reranker is off", async () => {
+		const out = await crossEncoderRerank({
+			db: DB,
+			prefix: PREFIX,
+			agentId: AGENT_ID,
+			query: QUERY,
+			results: makeResults(3),
+			config: makeConfig({ enabled: false }),
+		})
+
+		expect(out.reranked).toBe(false)
+		expect(emitTelemetry).toHaveBeenCalledOnce()
+		expect(emitTelemetry).toHaveBeenCalledWith(
+			DB,
+			PREFIX,
+			expect.objectContaining({
+				ok: true,
+				rerankSkipped: "disabled",
+			}),
+		)
+	})
+
+	it("emits ok:true with rerankSkipped:'no-results' when there is nothing to rank", async () => {
+		await crossEncoderRerank({
+			db: DB,
+			prefix: PREFIX,
+			agentId: AGENT_ID,
+			query: QUERY,
+			results: [],
+			config: makeConfig(),
+		})
+
+		expect(emitTelemetry).toHaveBeenCalledWith(
+			DB,
+			PREFIX,
+			expect.objectContaining({ ok: true, rerankSkipped: "no-results" }),
+		)
+	})
+
+	it("emits ok:true with rerankSkipped:'no-api-key' when the key is missing", async () => {
+		await crossEncoderRerank({
+			db: DB,
+			prefix: PREFIX,
+			agentId: AGENT_ID,
+			query: QUERY,
+			results: makeResults(3),
+			config: makeConfig({ voyageApiKey: "" }),
+		})
+
+		expect(emitTelemetry).toHaveBeenCalledWith(
+			DB,
+			PREFIX,
+			expect.objectContaining({ ok: true, rerankSkipped: "no-api-key" }),
+		)
+	})
+
+	it("emits ok:true with rerankSkipped:'too-few-candidates' for a single candidate", async () => {
+		await crossEncoderRerank({
+			db: DB,
+			prefix: PREFIX,
+			agentId: AGENT_ID,
+			query: QUERY,
+			results: [makeResult({ snippet: "only one", score: 0.8 })],
+			config: makeConfig(),
+		})
+
+		expect(emitTelemetry).toHaveBeenCalledWith(
+			DB,
+			PREFIX,
+			expect.objectContaining({
+				ok: true,
+				rerankSkipped: "too-few-candidates",
+			}),
+		)
+	})
+
+	it("emits ok:false with rerankSkipped:'api-error' on a non-OK provider response", async () => {
+		const fetchFn = vi.fn().mockResolvedValue({ ok: false, status: 429 })
+
+		const out = await crossEncoderRerank({
+			db: DB,
+			prefix: PREFIX,
+			agentId: AGENT_ID,
+			query: QUERY,
+			results: makeResults(3),
+			config: makeConfig(),
+			fetchFn,
+		})
+
+		expect(out.reranked).toBe(false)
+		expect(emitTelemetry).toHaveBeenCalledWith(
+			DB,
+			PREFIX,
+			expect.objectContaining({ ok: false, rerankSkipped: "api-error" }),
+		)
+	})
+
+	it("emits ok:false with rerankSkipped:'bad-response-shape' on a malformed provider body", async () => {
+		const fetchFn = vi.fn().mockResolvedValue({
+			ok: true,
+			json: () => Promise.resolve({ results: [] }),
+		})
+
+		const out = await crossEncoderRerank({
+			db: DB,
+			prefix: PREFIX,
+			agentId: AGENT_ID,
+			query: QUERY,
+			results: makeResults(3),
+			config: makeConfig(),
+			fetchFn,
+		})
+
+		expect(out.reranked).toBe(false)
+		expect(emitTelemetry).toHaveBeenCalledWith(
+			DB,
+			PREFIX,
+			expect.objectContaining({
+				ok: false,
+				rerankSkipped: "bad-response-shape",
+			}),
+		)
+	})
+
+	it("emits no rerankSkipped marker when the rerank actually ran (skip vs ran distinguishable)", async () => {
+		const fetchFn = mockFetchSuccess([
+			{ index: 0, relevance_score: 0.9 },
+			{ index: 1, relevance_score: 0.8 },
+			{ index: 2, relevance_score: 0.7 },
+		])
+
+		await crossEncoderRerank({
+			db: DB,
+			prefix: PREFIX,
+			agentId: AGENT_ID,
+			query: QUERY,
+			results: makeResults(3),
+			config: makeConfig(),
+			fetchFn,
+		})
+
+		const doc = vi.mocked(emitTelemetry).mock.calls[0]?.[2] ?? {}
+		expect("rerankSkipped" in doc).toBe(false)
+	})
+})

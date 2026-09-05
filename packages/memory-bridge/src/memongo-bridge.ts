@@ -9,6 +9,8 @@ import type {
 import type {
 	MemoryContextBundle,
 	MemoryProviderStatus,
+	MemorySearchDegradation,
+	MemorySearchResult,
 	MemorySearchTimeRange,
 	MemoryFeedbackSignal,
 	MemoryActorRole,
@@ -113,6 +115,40 @@ export async function memongoBridgeSearch(params: {
 	})
 }
 
+/**
+ * WS-12 (C-019): search carrying the degradation marker out of the engine.
+ * Same pipeline as memongoBridgeSearch; the response's `degradation` is set
+ * exactly when admission control degraded the answer (denied query, denied
+ * legacy re-run), so the API boundary can serve "throttled" as throttling
+ * instead of "no memories found". Absent means the answer is authoritative.
+ */
+export async function memongoBridgeSearchWithDegradation(params: {
+	query: string
+	agentId?: string
+	maxResults?: number
+	minScore?: number
+	sessionKey?: string
+	scope?: MemoryScope
+	scopeRef?: string
+}): Promise<{
+	results: MemorySearchResult[]
+	degradation?: MemorySearchDegradation
+}> {
+	const m = await memongoBridgeGetManager(params.agentId)
+	let degradation: MemorySearchDegradation | undefined
+	const results = await m.search(params.query, {
+		maxResults: params.maxResults,
+		minScore: params.minScore,
+		sessionKey: params.sessionKey,
+		scope: params.scope,
+		scopeRef: params.scopeRef,
+		onDegradation: (d) => {
+			degradation = d
+		},
+	})
+	return degradation ? { results, degradation } : { results }
+}
+
 export async function memongoBridgeSearchKB(params: {
 	query: string
 	agentId?: string
@@ -132,6 +168,41 @@ export async function memongoBridgeSearchKB(params: {
 		filter: params.filter,
 		fusionMethod: params.fusionMethod,
 	})
+}
+
+/**
+ * WS-12 (C-019): KB search carrying the degradation marker out of the engine.
+ * `degradation` is set when admission control dropped the vector lane — the
+ * text-lane results stand (real hits, degraded ranking), and the marker says
+ * why, so degraded ranking never reads as authoritative ranking.
+ */
+export async function memongoBridgeSearchKBWithDegradation(params: {
+	query: string
+	agentId?: string
+	scopeRef?: string
+	maxResults?: number
+	minScore?: number
+	filter?: { tags?: string[]; category?: string; source?: string }
+	fusionMethod?: MemoryMongoDBFusionMethod
+}): Promise<{
+	results: MemorySearchResult[]
+	degradation?: MemorySearchDegradation
+}> {
+	const m = await memongoBridgeGetManager(params.agentId)
+	let degradation: MemorySearchDegradation | undefined
+	const results = await m.searchKB(params.query, {
+		maxResults: params.maxResults,
+		minScore: params.minScore,
+		// Tenant isolation: search the caller's authorized KB scopeRef, not the
+		// manager's default. Undefined falls back to the agent default in searchKB.
+		scopeRef: params.scopeRef,
+		filter: params.filter,
+		fusionMethod: params.fusionMethod,
+		onDegradation: (d) => {
+			degradation = d
+		},
+	})
+	return degradation ? { results, degradation } : { results }
 }
 
 export async function memongoBridgeReadFile(params: {

@@ -327,22 +327,24 @@ export function createMemongoTools(client: MemongoClient): MemongoToolSet {
 			description: "Search Memongo memory (MongoDB-backed hybrid retrieval).",
 			inputSchema: searchSchema,
 			execute: async (input) => {
-				const { results } = await client.search(input)
-				return { results }
+				const { results, degradation } = await client.search(input)
+				// C-019: pass the degradation marker through so the model can
+				// tell "throttled/auth failure" apart from "no memories found".
+				return degradation ? { results, degradation } : { results }
 			},
 		}),
 		memongo_search_kb: tool({
 			description: "Search Memongo knowledge base chunks only.",
 			inputSchema: searchKbSchema,
 			execute: async (input) => {
-				const { results } = await client.searchKB({
+				const { results, degradation } = await client.searchKB({
 					query: input.query,
 					agentId: input.agentId,
 					limit: input.limit,
 					scope: input.scope,
 					scopeRef: input.scopeRef,
 				})
-				return { results }
+				return degradation ? { results, degradation } : { results }
 			},
 		}),
 		memongo_read_file: tool({

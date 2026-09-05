@@ -45,7 +45,7 @@ const contractFixtures = {
 		{
 			name: "search alias payload",
 			path: "/v1/search",
-			bridgeMock: "memongoBridgeSearch",
+			bridgeMock: "memongoBridgeSearchWithDegradation",
 			body: {
 				q: "remember this",
 				containerTag: "user-123",
@@ -60,7 +60,7 @@ const contractFixtures = {
 		{
 			name: "search explicit sessionKey alias",
 			path: "/v1/search",
-			bridgeMock: "memongoBridgeSearch",
+			bridgeMock: "memongoBridgeSearchWithDegradation",
 			body: {
 				query: "explicit scope",
 				sessionKey: "session-7",

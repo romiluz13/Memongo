@@ -510,31 +510,31 @@ traces:
     change_id: WS-12
     claim_id: C-019
     construct_id: packages/client/src/client.ts
-    validation_id: null
+    validation_id: V-096
     direction: forward
-    sweep_pass: false
-    checked_at: "2026-09-02T13:41:40.072Z"
-    notes: WS-12 Distinguishable degradation (planned change envelope)
+    sweep_pass: true
+    checked_at: "2026-09-05T16:10:38.000Z"
+    notes: WS-12 Distinguishable degradation (landed) — classifySilentFailure in the _silently wrapper: swallowed 401/403 read as auth, 429 as throttled, 500/network as unavailable, each merged into the returned empty so silent mode never reports degraded as healthy-empty; strictly opt-in (silent unset still throws)
   - id: TR-052
     schema_version: 0.1.0
     change_id: WS-12
     claim_id: C-019
     construct_id: packages/memory-engine/src/mongodb-reranker.ts
-    validation_id: null
+    validation_id: V-097
     direction: forward
-    sweep_pass: false
-    checked_at: "2026-09-02T13:41:40.073Z"
-    notes: WS-12 Distinguishable degradation (planned change envelope)
+    sweep_pass: true
+    checked_at: "2026-09-05T16:10:38.000Z"
+    notes: WS-12 Distinguishable degradation (landed) — crossEncoderRerank emits the rerankSkipped telemetry marker on every no-run path (ok:true for intentional skips with reason, ok:false for failure skips) so rerank-off is distinguishable from rerank-broken; success emits nothing
   - id: TR-053
     schema_version: 0.1.0
     change_id: WS-12
     claim_id: C-019
     construct_id: packages/memory-engine/src/mongodb-search-v2.ts
-    validation_id: null
+    validation_id: V-098
     direction: forward
-    sweep_pass: false
-    checked_at: "2026-09-02T13:41:40.074Z"
-    notes: WS-12 Distinguishable degradation (planned change envelope)
+    sweep_pass: true
+    checked_at: "2026-09-05T16:10:38.000Z"
+    notes: WS-12 Distinguishable degradation (landed) — the distinct throttling outcome from WS-11 (empty results + throttled marker + retry hint, zero DB touches on denial) is the source the WS-12 boundary chain surfaces: manager sink (TR-101), bridge envelope (TR-102), API routes (TR-103), client classification (TR-051), tools passthrough (TR-104)
   - id: TR-054
     schema_version: 0.1.0
     change_id: WS-13
@@ -950,48 +950,108 @@ traces:
     change_id: WS-11
     claim_id: C-018
     construct_id: packages/memory-engine/src/mongodb-search-admission.ts
-    validation_id: V-093
+    validation_id: V-105
     direction: forward
     sweep_pass: true
     checked_at: "2026-09-05T18:39:52.000Z"
-    notes: WS-11 Admission control and backlog visibility (landed) — the process-level token bucket module itself (env-sized RPM/burst, lazy refill, retry hint, snapshot, test reset seam)
+    notes: WS-11 Admission control and backlog visibility (landed) — the process-level token bucket module itself (env-sized RPM/burst, lazy refill, retry hint, snapshot, test reset seam); per-construct validation record repaired during the WS-12 landing (was V-093)
   - id: TR-096
     schema_version: 0.1.0
     change_id: WS-11
     claim_id: C-018
     construct_id: packages/memory-engine/src/mongodb-search-executor.ts
-    validation_id: V-093
+    validation_id: V-106
     direction: forward
     sweep_pass: true
     checked_at: "2026-09-05T18:39:52.000Z"
-    notes: WS-11 Admission control and backlog visibility (landed) — executor throttle-marker propagation into merged pass metadata plus pass-loop break (bypass-audit fix A)
+    notes: WS-11 Admission control and backlog visibility (landed) — executor throttle-marker propagation into merged pass metadata plus pass-loop break (bypass-audit fix A); per-construct validation record repaired during the WS-12 landing (was V-093)
   - id: TR-097
     schema_version: 0.1.0
     change_id: WS-11
     claim_id: C-018
     construct_id: packages/memory-engine/src/mongodb-manager-search.ts
-    validation_id: V-093
+    validation_id: V-107
     direction: forward
     sweep_pass: true
     checked_at: "2026-09-05T18:39:52.000Z"
-    notes: WS-11 Admission control and backlog visibility (landed) — manager-boundary throttle short-circuits for search()/searchDetailed() and per-token legacy re-run gates plus the searchKB() admission envelope with skipVectorLane (bypass-audit fixes B, D, E)
+    notes: WS-11 Admission control and backlog visibility (landed) — manager-boundary throttle short-circuits for search()/searchDetailed() and per-token legacy re-run gates plus the searchKB() admission envelope with skipVectorLane (bypass-audit fixes B, D, E); per-construct validation record repaired during the WS-12 landing (was V-093)
   - id: TR-098
     schema_version: 0.1.0
     change_id: WS-11
     claim_id: C-018
     construct_id: packages/memory-engine/src/mongodb-conversation-recall.ts
-    validation_id: V-093
+    validation_id: V-108
     direction: forward
     sweep_pass: true
     checked_at: "2026-09-05T18:39:52.000Z"
-    notes: WS-11 Admission control and backlog visibility (landed) — recallConversation one-token-per-querying-recall gate with text-lane degradation and marker (bypass-audit fix C)
+    notes: WS-11 Admission control and backlog visibility (landed) — recallConversation one-token-per-querying-recall gate with text-lane degradation and marker (bypass-audit fix C); per-construct validation record repaired during the WS-12 landing (was V-093)
   - id: TR-099
     schema_version: 0.1.0
     change_id: WS-11
     claim_id: C-018
     construct_id: packages/memory-engine/src/mongodb-kb-search.ts
-    validation_id: V-093
+    validation_id: V-109
     direction: forward
     sweep_pass: true
     checked_at: "2026-09-05T18:39:52.000Z"
-    notes: WS-11 Admission control and backlog visibility (landed) — module-level skipVectorLane degradation honored inside canVector so a denied KB search cannot spend the vector lane (bypass-audit fix D, module half)
+    notes: WS-11 Admission control and backlog visibility (landed) — module-level skipVectorLane degradation honored inside canVector so a denied KB search cannot spend the vector lane (bypass-audit fix D, module half); per-construct validation record repaired during the WS-12 landing (was V-093)
+  - id: TR-100
+    schema_version: 0.1.0
+    change_id: WS-12
+    claim_id: C-019
+    construct_id: packages/client/src/types.ts
+    validation_id: V-099
+    direction: forward
+    sweep_pass: true
+    checked_at: "2026-09-05T16:10:38.000Z"
+    notes: WS-12 Distinguishable degradation (landed) — the MemongoDegradation contract type (kind auth/throttled/unavailable, optional status/scope/retryAfterMs) plus degradation? on the six silent-capable response types and throttled? on search-detailed/recall metadata; optional fields so healthy payloads compile unchanged
+  - id: TR-101
+    schema_version: 0.1.0
+    change_id: WS-12
+    claim_id: C-019
+    construct_id: packages/memory-engine/src/mongodb-manager-search.ts
+    validation_id: V-100
+    direction: forward
+    sweep_pass: true
+    checked_at: "2026-09-05T16:10:38.000Z"
+    notes: WS-12 Distinguishable degradation (landed) — manager search()/searchKB() accept the onDegradation sink (per-call option, not instance state) and deliver the denial, legacy-fallback-skipped, and vector-lane-skipped markers; a healthy empty answer delivers nothing so absence stays authoritative
+  - id: TR-102
+    schema_version: 0.1.0
+    change_id: WS-12
+    claim_id: C-019
+    construct_id: packages/memory-bridge/src/memongo-bridge.ts
+    validation_id: V-101
+    direction: forward
+    sweep_pass: true
+    checked_at: "2026-09-05T16:10:38.000Z"
+    notes: WS-12 Distinguishable degradation (landed) — memongoBridgeSearchWithDegradation/memongoBridgeSearchKBWithDegradation forward the onDegradation sink into the engine and merge the marker into the {results, degradation} envelope; bare {results} when nothing degraded, plain accessors preserved for the legacy shape
+  - id: TR-103
+    schema_version: 0.1.0
+    change_id: WS-12
+    claim_id: C-019
+    construct_id: apps/api/src/routes/v1-search-routes.ts
+    validation_id: V-102
+    direction: forward
+    sweep_pass: true
+    checked_at: "2026-09-05T16:10:38.000Z"
+    notes: WS-12 Distinguishable degradation (landed) — /v1/search and /v1/search-kb serve the degradation object on the 200 (degraded answers still carry real results) and omit the key entirely when authoritative; the non-detailed boundaries report throttling as throttling
+  - id: TR-104
+    schema_version: 0.1.0
+    change_id: WS-12
+    claim_id: C-019
+    construct_id: packages/tools/src/index.ts
+    validation_id: V-103
+    direction: forward
+    sweep_pass: true
+    checked_at: "2026-09-05T16:10:38.000Z"
+    notes: WS-12 Distinguishable degradation (landed) — memongo_search/memongo_search_kb pass the client's degradation marker through to the model verbatim ({results, degradation} vs bare {results}) so no tool boundary re-classifies degraded as empty
+  - id: TR-105
+    schema_version: 0.1.0
+    change_id: WS-12
+    claim_id: C-019
+    construct_id: apps/api/src/openapi-paths-search.ts
+    validation_id: V-104
+    direction: forward
+    sweep_pass: true
+    checked_at: "2026-09-05T16:10:38.000Z"
+    notes: WS-12 Distinguishable degradation (landed) — the served OpenAPI contract documents the degradation object on /v1/search-kb 200 and the throttled object (required retryAfterMs) on search-detailed and recall metadata, so the marker is a published contract field rather than an implementation detail

@@ -406,6 +406,8 @@ export type MemongoReadFileResponse = {
 	type?: string
 	error?: string
 	disabled?: boolean
+	/** Present in silent mode when the call was swallowed (auth/throttle/unavailable). */
+	degradation?: MemongoDegradation
 }
 
 export type MemongoStatusResponse = {
@@ -466,7 +468,11 @@ export type MemongoConversationRecallResponse = {
 		filtersApplied: string[]
 		searchMethod: "standard" | "semantic" | "hybrid"
 		durationMs: number
+		/** Set when admission control denied the semantic pass — empties are throttling, not a verdict. */
+		throttled?: { retryAfterMs: number }
 	}
+	/** Present in silent mode when the call was swallowed (auth/throttle/unavailable). */
+	degradation?: MemongoDegradation
 }
 
 export type MemongoDetailedStatusResponse = {
@@ -814,6 +820,26 @@ export type MemongoMemoryJob = {
 	metadata?: Record<string, unknown>
 }
 
+/**
+ * Why a response degraded instead of carrying real results (C-019).
+ *
+ * Two sources:
+ * - server-sent markers on 200 responses (`kind: "throttled"` with the
+ *   engine's `scope` and `retryAfterMs`) — budget exhaustion surfaced as a
+ *   distinguishable outcome instead of empty results;
+ * - client-classified markers in silent mode (`status` set) — a swallowed
+ *   401/403/429/network failure is now distinguishable from "no memories".
+ */
+export type MemongoDegradation = {
+	kind: "auth" | "throttled" | "unavailable"
+	/** HTTP status when the client classified a failed call; absent on server-sent markers. */
+	status?: number
+	/** Engine lane or pass that was skipped, for server-sent throttling markers. */
+	scope?: string
+	/** Milliseconds to wait before retrying, for server-sent throttling markers. */
+	retryAfterMs?: number
+}
+
 export type MemongoSearchKBResponse = {
 	results: Array<{
 		path: string
@@ -827,6 +853,8 @@ export type MemongoSearchKBResponse = {
 		scope?: string
 		scopeRef?: string
 	}>
+	/** Present when the vector lane was skipped (throttling), not when results are genuinely empty. */
+	degradation?: MemongoDegradation
 }
 
 export type MemongoSearchResponse = {
@@ -843,6 +871,12 @@ export type MemongoSearchResponse = {
 		scope?: string
 		scopeRef?: string
 	}>
+	/**
+	 * Present when the call degraded: server-sent throttling marker, or
+	 * (silent mode) a swallowed auth/throttle/unavailable failure. Absent on
+	 * genuine empty results.
+	 */
+	degradation?: MemongoDegradation
 }
 
 export type MemongoContextBundleInput = {

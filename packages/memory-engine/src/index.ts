@@ -31,6 +31,7 @@ export type {
 	MemoryReadResult,
 	MemoryReferenceScope,
 	MemorySearchClassification,
+	MemorySearchDegradation,
 	MemorySearchMetadata,
 	MemorySearchMode,
 	MemorySearchPass,

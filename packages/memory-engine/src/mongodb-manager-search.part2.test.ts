@@ -1803,3 +1803,169 @@ describe("search admission envelope at the manager boundary (WS-11)", () => {
 		expect(opts?.skipVectorLane).toBeUndefined()
 	})
 })
+
+describe("search degradation sink at the manager boundary (WS-12, C-019)", () => {
+	const originalRpm = process.env.MEMONGO_SEARCH_ADMISSION_RPM
+
+	beforeEach(() => {
+		vi.clearAllMocks()
+		process.env.MEMONGO_SEARCH_ADMISSION_RPM = "1"
+		resetSearchAdmissionForTests(Date.now())
+	})
+
+	afterEach(() => {
+		if (originalRpm === undefined) {
+			delete process.env.MEMONGO_SEARCH_ADMISSION_RPM
+		} else {
+			process.env.MEMONGO_SEARCH_ADMISSION_RPM = originalRpm
+		}
+		resetSearchAdmissionForTests(Date.now())
+	})
+
+	function exhaustBucket(): void {
+		for (let i = 0; i < DEFAULT_SEARCH_ADMISSION_BURST; i++) {
+			tryConsumeSearchAdmission(Date.now())
+		}
+	}
+
+	function primeEmptySearch(): ReturnType<typeof vi.fn> {
+		mocked(checkCache).mockResolvedValue({
+			hit: false,
+			tier: "miss",
+			results: [],
+		})
+		mocked(planRetrieval).mockReturnValue({
+			paths: [],
+			confidence: "low",
+			reasoning: "empty plan",
+		})
+		const aggregate = vi.fn().mockReturnValue({
+			toArray: vi.fn().mockResolvedValue([]),
+		})
+		mocked(chunksCollection).mockReturnValue({ aggregate } as never)
+		return aggregate
+	}
+
+	it("search() fires the sink with the denial marker on admission denial", async () => {
+		exhaustBucket()
+		const aggregate = primeEmptySearch()
+		const manager = buildMockManager()
+		const degradations: Array<Record<string, unknown>> = []
+
+		const results = await manager.search("qzx sink denial", {
+			onDegradation: (degradation) => degradations.push(degradation),
+		})
+
+		expect(results).toEqual([])
+		expect(aggregate).not.toHaveBeenCalled()
+		// One marker, throttled, with a usable retry hint.
+		expect(degradations).toHaveLength(1)
+		expect(degradations[0]).toMatchObject({
+			kind: "throttled",
+			scope: "denied",
+		})
+		expect(
+			(degradations[0]?.retryAfterMs as number | undefined) ?? 0,
+		).toBeGreaterThan(0)
+	})
+
+	it("search() leaves the sink silent on a healthy empty answer", async () => {
+		const aggregate = primeEmptySearch()
+		const manager = buildMockManager()
+		const degradations: Array<Record<string, unknown>> = []
+
+		const results = await manager.search("qzx sink healthy empty", {
+			onDegradation: (degradation) => degradations.push(degradation),
+		})
+
+		expect(results).toEqual([])
+		expect(aggregate).not.toHaveBeenCalled()
+		expect(degradations).toHaveLength(0)
+	})
+
+	it("search() fires the sink with legacy-fallback-skipped when the double-check is denied", async () => {
+		const originalBurst = process.env.MEMONGO_SEARCH_ADMISSION_BURST
+		process.env.MEMONGO_SEARCH_ADMISSION_BURST = "2"
+		try {
+			resetSearchAdmissionForTests(Date.now())
+			tryConsumeSearchAdmission(Date.now())
+			const aggregate = primeEmptySearch()
+			const base = buildMockManager()
+			const baseCfg = (
+				base as unknown as { config: { mongodb: Record<string, unknown> } }
+			).config.mongodb
+			const manager = buildMockManager({
+				config: {
+					mongodb: { ...baseCfg, legacySearchFallback: true },
+				},
+			})
+			const degradations: Array<Record<string, unknown>> = []
+
+			const results = await manager.search("qzx sink legacy skipped", {
+				onDegradation: (degradation) => degradations.push(degradation),
+			})
+
+			expect(results).toEqual([])
+			expect(aggregate).not.toHaveBeenCalled()
+			expect(degradations).toHaveLength(1)
+			expect(degradations[0]).toMatchObject({
+				kind: "throttled",
+				scope: "legacy-fallback-skipped",
+			})
+		} finally {
+			if (originalBurst === undefined) {
+				delete process.env.MEMONGO_SEARCH_ADMISSION_BURST
+			} else {
+				process.env.MEMONGO_SEARCH_ADMISSION_BURST = originalBurst
+			}
+		}
+	})
+
+	it("searchKB() fires the sink with vector-lane-skipped on vector-lane denial", async () => {
+		exhaustBucket()
+		mocked(searchKB).mockResolvedValue([])
+		const manager = buildMockManager({
+			capabilities: {
+				vectorSearch: true,
+				textSearch: true,
+				rankFusion: false,
+				storedSource: false,
+				vectorIndexMethod: false,
+				scoreFusion: false,
+			},
+		})
+		const degradations: Array<Record<string, unknown>> = []
+
+		const results = await manager.searchKB("qzx sink kb lane", {
+			onDegradation: (degradation) => degradations.push(degradation),
+		} as Parameters<typeof manager.searchKB>[1])
+
+		expect(results).toEqual([])
+		expect(degradations).toHaveLength(1)
+		expect(degradations[0]).toMatchObject({
+			kind: "throttled",
+			scope: "vector-lane-skipped",
+		})
+	})
+
+	it("searchKB() leaves the sink silent when admission grants the vector lane", async () => {
+		mocked(searchKB).mockResolvedValue([])
+		const manager = buildMockManager({
+			capabilities: {
+				vectorSearch: true,
+				textSearch: true,
+				rankFusion: false,
+				storedSource: false,
+				vectorIndexMethod: false,
+				scoreFusion: false,
+			},
+		})
+		const degradations: Array<Record<string, unknown>> = []
+
+		await manager.searchKB("qzx sink kb admitted", {
+			onDegradation: (degradation) => degradations.push(degradation),
+		} as Parameters<typeof manager.searchKB>[1])
+
+		expect(degradations).toHaveLength(0)
+	})
+})

@@ -105,8 +105,24 @@ export async function crossEncoderRerank(params: {
 		}
 	}
 
-	// Early returns — no API call needed
+	// Early returns — no API call needed. WS-12 (C-019): every skip emits a
+	// telemetry doc (ok:true, rerankSkipped reason) so "off" is
+	// distinguishable from "failed" (ok:false) and from "ran" (no marker) in
+	// the telemetry time series — the pre-fix silence made a disabled
+	// reranker indistinguishable from a healthy skipped one.
 	if (!config.enabled || results.length === 0 || !config.voyageApiKey) {
+		const skipReason = !config.enabled
+			? "disabled"
+			: results.length === 0
+				? "no-results"
+				: "no-api-key"
+		emitTelemetry(db, prefix, {
+			meta: { agentId, operation: "rerank" },
+			durationMs: 0,
+			ok: true,
+			rerankModel: config.model,
+			rerankSkipped: skipReason,
+		})
 		return { results, reranked: false, latencyMs: 0 }
 	}
 
@@ -118,6 +134,13 @@ export async function crossEncoderRerank(params: {
 
 	// Need at least 2 candidates for reranking to have any benefit
 	if (candidates.length <= 1) {
+		emitTelemetry(db, prefix, {
+			meta: { agentId, operation: "rerank" },
+			durationMs: 0,
+			ok: true,
+			rerankModel: config.model,
+			rerankSkipped: "too-few-candidates",
+		})
 		return { results, reranked: false, latencyMs: 0 }
 	}
 
@@ -132,6 +155,13 @@ export async function crossEncoderRerank(params: {
 
 		// Need at least 2 valid candidates for reranking to have any benefit
 		if (validCandidates.length <= 1) {
+			emitTelemetry(db, prefix, {
+				meta: { agentId, operation: "rerank" },
+				durationMs: Date.now() - rerankStart,
+				ok: true,
+				rerankModel: config.model,
+				rerankSkipped: "too-few-valid-candidates",
+			})
 			return { results, reranked: false, latencyMs: 0 }
 		}
 
@@ -170,6 +200,17 @@ export async function crossEncoderRerank(params: {
 				status: response.status,
 				url: rerankUrl,
 			})
+			// WS-12 (C-019): a provider failure that degraded to input order
+			// is a FAILED rerank, not a skip — the marker distinguishes it
+			// from config-off (ok:true) in the telemetry time series.
+			emitTelemetry(db, prefix, {
+				meta: { agentId, operation: "rerank" },
+				durationMs: Date.now() - rerankStart,
+				ok: false,
+				rerankModel: config.model,
+				rerankLatencyMs: Date.now() - rerankStart,
+				rerankSkipped: "api-error",
+			})
 			return { results, reranked: false, latencyMs: Date.now() - rerankStart }
 		}
 
@@ -183,6 +224,14 @@ export async function crossEncoderRerank(params: {
 				throw new Error("rerank API returned unexpected response shape")
 			}
 			log.warn("rerank API returned unexpected response shape")
+			emitTelemetry(db, prefix, {
+				meta: { agentId, operation: "rerank" },
+				durationMs: Date.now() - rerankStart,
+				ok: false,
+				rerankModel: config.model,
+				rerankLatencyMs: Date.now() - rerankStart,
+				rerankSkipped: "bad-response-shape",
+			})
 			return { results, reranked: false, latencyMs: Date.now() - rerankStart }
 		}
 

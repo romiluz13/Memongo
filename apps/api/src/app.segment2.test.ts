@@ -29,9 +29,9 @@ const bridgeMocks = vi.hoisted(() => ({
 	memongoBridgeRelevanceExplain: vi.fn(),
 	memongoBridgeRelevanceReport: vi.fn(),
 	memongoBridgeRelevanceSampleRate: vi.fn(),
-	memongoBridgeSearch: vi.fn(),
+	memongoBridgeSearchWithDegradation: vi.fn(),
 	memongoBridgeSearchDetailed: vi.fn(),
-	memongoBridgeSearchKB: vi.fn(),
+	memongoBridgeSearchKBWithDegradation: vi.fn(),
 	memongoBridgeStats: vi.fn(),
 	memongoBridgeStatus: vi.fn(),
 	memongoBridgeSync: vi.fn(),
@@ -64,7 +64,7 @@ describe("createApp", () => {
 		delete process.env.MEMONGO_API_KEY
 		delete process.env.MEMONGO_API_SCOPED_KEYS
 		process.env.MEMONGO_ALLOW_INSECURE_NO_AUTH = "true"
-		bridgeMocks.memongoBridgeSearch.mockReset()
+		bridgeMocks.memongoBridgeSearchWithDegradation.mockReset()
 		bridgeMocks.memongoBridgeSearchDetailed.mockReset()
 		bridgeMocks.memongoBridgeAdd.mockReset()
 		bridgeMocks.memongoBridgeAccessSummaries.mockReset()
@@ -96,7 +96,9 @@ describe("createApp", () => {
 		bridgeMocks.memongoBridgeReportProcedureOutcome.mockReset()
 		bridgeMocks.memongoBridgeWriteConversationEvent.mockReset()
 		bridgeMocks.memongoBridgeWriteConversationEventsBatch.mockReset()
-		bridgeMocks.memongoBridgeSearch.mockResolvedValue([])
+		bridgeMocks.memongoBridgeSearchWithDegradation.mockResolvedValue({
+			results: [],
+		})
 		bridgeMocks.memongoBridgeSearchDetailed.mockResolvedValue({
 			results: [],
 			metadata: {
@@ -486,7 +488,9 @@ describe("createApp", () => {
 		})
 
 		expect(res.status).toBe(200)
-		expect(bridgeMocks.memongoBridgeSearch).toHaveBeenCalledOnce()
+		expect(
+			bridgeMocks.memongoBridgeSearchWithDegradation,
+		).toHaveBeenCalledOnce()
 	})
 
 	it("#28: caps request body size and returns 413 before the handler parses it", async () => {
@@ -506,7 +510,9 @@ describe("createApp", () => {
 		})
 
 		expect(res.status).toBe(413)
-		expect(bridgeMocks.memongoBridgeSearch).not.toHaveBeenCalled()
+		expect(
+			bridgeMocks.memongoBridgeSearchWithDegradation,
+		).not.toHaveBeenCalled()
 	})
 
 	it("#28: caps streamed request bodies without a Content-Length header", async () => {
@@ -540,7 +546,9 @@ describe("createApp", () => {
 				message: "request body exceeds the configured size limit",
 			},
 		})
-		expect(bridgeMocks.memongoBridgeSearch).not.toHaveBeenCalled()
+		expect(
+			bridgeMocks.memongoBridgeSearchWithDegradation,
+		).not.toHaveBeenCalled()
 	})
 
 	it("denies v1 by default when no API credentials are configured", async () => {
@@ -561,7 +569,9 @@ describe("createApp", () => {
 				message: "API authentication is required",
 			},
 		})
-		expect(bridgeMocks.memongoBridgeSearch).not.toHaveBeenCalled()
+		expect(
+			bridgeMocks.memongoBridgeSearchWithDegradation,
+		).not.toHaveBeenCalled()
 	})
 
 	it("allows explicit unauthenticated local development and warns once", async () => {
@@ -782,7 +792,7 @@ describe("createApp", () => {
 		})
 
 		expect(res.status).toBe(200)
-		expect(bridgeMocks.memongoBridgeSearch).toHaveBeenCalledWith(
+		expect(bridgeMocks.memongoBridgeSearchWithDegradation).toHaveBeenCalledWith(
 			expect.objectContaining({
 				agentId: "codex",
 				scope: "workspace",
@@ -822,7 +832,9 @@ describe("createApp", () => {
 				message: "scopeRef is not allowed for this API key",
 			},
 		})
-		expect(bridgeMocks.memongoBridgeSearch).not.toHaveBeenCalled()
+		expect(
+			bridgeMocks.memongoBridgeSearchWithDegradation,
+		).not.toHaveBeenCalled()
 	})
 
 	it("requires explicit scoped fields for scoped API keys", async () => {
@@ -854,7 +866,9 @@ describe("createApp", () => {
 				message: "scope is required for this API key",
 			},
 		})
-		expect(bridgeMocks.memongoBridgeSearch).not.toHaveBeenCalled()
+		expect(
+			bridgeMocks.memongoBridgeSearchWithDegradation,
+		).not.toHaveBeenCalled()
 	})
 
 	it("keeps MEMONGO_API_KEY as the admin key when scoped keys are configured", async () => {
@@ -883,7 +897,7 @@ describe("createApp", () => {
 		})
 
 		expect(res.status).toBe(200)
-		expect(bridgeMocks.memongoBridgeSearch).toHaveBeenCalledWith(
+		expect(bridgeMocks.memongoBridgeSearchWithDegradation).toHaveBeenCalledWith(
 			expect.objectContaining({
 				agentId: "other-agent",
 				scope: "global",

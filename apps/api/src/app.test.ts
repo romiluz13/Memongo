@@ -30,9 +30,9 @@ const bridgeMocks = vi.hoisted(() => ({
 	memongoBridgeRelevanceExplain: vi.fn(),
 	memongoBridgeRelevanceReport: vi.fn(),
 	memongoBridgeRelevanceSampleRate: vi.fn(),
-	memongoBridgeSearch: vi.fn(),
+	memongoBridgeSearchWithDegradation: vi.fn(),
 	memongoBridgeSearchDetailed: vi.fn(),
-	memongoBridgeSearchKB: vi.fn(),
+	memongoBridgeSearchKBWithDegradation: vi.fn(),
 	memongoBridgeStats: vi.fn(),
 	memongoBridgeStatus: vi.fn(),
 	memongoBridgeSync: vi.fn(),
@@ -74,7 +74,7 @@ describe("createApp", () => {
 		delete process.env.MEMONGO_API_KEY
 		delete process.env.MEMONGO_API_SCOPED_KEYS
 		process.env.MEMONGO_ALLOW_INSECURE_NO_AUTH = "true"
-		bridgeMocks.memongoBridgeSearch.mockReset()
+		bridgeMocks.memongoBridgeSearchWithDegradation.mockReset()
 		bridgeMocks.memongoBridgeSearchDetailed.mockReset()
 		bridgeMocks.memongoBridgeAdd.mockReset()
 		bridgeMocks.memongoBridgeAccessSummaries.mockReset()
@@ -106,7 +106,9 @@ describe("createApp", () => {
 		bridgeMocks.memongoBridgeReportProcedureOutcome.mockReset()
 		bridgeMocks.memongoBridgeWriteConversationEvent.mockReset()
 		bridgeMocks.memongoBridgeWriteConversationEventsBatch.mockReset()
-		bridgeMocks.memongoBridgeSearch.mockResolvedValue([])
+		bridgeMocks.memongoBridgeSearchWithDegradation.mockResolvedValue({
+			results: [],
+		})
 		bridgeMocks.memongoBridgeSearchDetailed.mockResolvedValue({
 			results: [],
 			metadata: {
@@ -669,15 +671,17 @@ describe("createApp", () => {
 		})
 
 		expect(res.status).toBe(200)
-		expect(bridgeMocks.memongoBridgeSearch).toHaveBeenCalledWith({
-			query: "workspace checkpoint",
-			agentId: "codex",
-			maxResults: 3,
-			minScore: undefined,
-			sessionKey: undefined,
-			scope: "workspace",
-			scopeRef: "/workspace/memongo",
-		})
+		expect(bridgeMocks.memongoBridgeSearchWithDegradation).toHaveBeenCalledWith(
+			{
+				query: "workspace checkpoint",
+				agentId: "codex",
+				maxResults: 3,
+				minScore: undefined,
+				sessionKey: undefined,
+				scope: "workspace",
+				scopeRef: "/workspace/memongo",
+			},
+		)
 	})
 
 	it("marks deprecated request properties in the OpenAPI document", async () => {
@@ -877,8 +881,10 @@ describe("createApp", () => {
 		process.env.MEMONGO_API_SCOPED_KEYS = JSON.stringify([
 			{ token: "scoped-A", scopeRefs: ["/workspace/memongo"] },
 		])
-		bridgeMocks.memongoBridgeSearch.mockReset()
-		bridgeMocks.memongoBridgeSearch.mockResolvedValue([])
+		bridgeMocks.memongoBridgeSearchWithDegradation.mockReset()
+		bridgeMocks.memongoBridgeSearchWithDegradation.mockResolvedValue({
+			results: [],
+		})
 
 		// scopeRef is present ONLY as a query param. Auth merges query params and
 		// allows the request; the search MUST run under the SAME scopeRef, never
@@ -896,10 +902,13 @@ describe("createApp", () => {
 		)
 
 		expect(res.status).toBe(200)
-		expect(bridgeMocks.memongoBridgeSearch).toHaveBeenCalledOnce()
-		expect(bridgeMocks.memongoBridgeSearch.mock.calls[0]?.[0]?.scopeRef).toBe(
-			"/workspace/memongo",
-		)
+		expect(
+			bridgeMocks.memongoBridgeSearchWithDegradation,
+		).toHaveBeenCalledOnce()
+		expect(
+			bridgeMocks.memongoBridgeSearchWithDegradation.mock.calls[0]?.[0]
+				?.scopeRef,
+		).toBe("/workspace/memongo")
 	})
 
 	it("issue #57: scope/scopeRef nested in params resolve to the SAME values auth validated", async () => {
@@ -911,8 +920,10 @@ describe("createApp", () => {
 				scopeRefs: ["/workspace/memongo"],
 			},
 		])
-		bridgeMocks.memongoBridgeSearch.mockReset()
-		bridgeMocks.memongoBridgeSearch.mockResolvedValue([])
+		bridgeMocks.memongoBridgeSearchWithDegradation.mockReset()
+		bridgeMocks.memongoBridgeSearchWithDegradation.mockResolvedValue({
+			results: [],
+		})
 
 		// scope + scopeRef live ONLY in a nested container. Auth's multi-container
 		// resolver finds and allows them; the search path must resolve identically.
@@ -929,8 +940,11 @@ describe("createApp", () => {
 		})
 
 		expect(res.status).toBe(200)
-		expect(bridgeMocks.memongoBridgeSearch).toHaveBeenCalledOnce()
-		const call = bridgeMocks.memongoBridgeSearch.mock.calls[0]?.[0]
+		expect(
+			bridgeMocks.memongoBridgeSearchWithDegradation,
+		).toHaveBeenCalledOnce()
+		const call =
+			bridgeMocks.memongoBridgeSearchWithDegradation.mock.calls[0]?.[0]
 		expect(call?.scope).toBe("tenant")
 		expect(call?.scopeRef).toBe("/workspace/memongo")
 	})
@@ -1202,8 +1216,10 @@ describe("createApp", () => {
 		process.env.MEMONGO_API_SCOPED_KEYS = JSON.stringify([
 			{ token: "scoped-A", scopes: ["agent"] },
 		])
-		bridgeMocks.memongoBridgeSearch.mockReset()
-		bridgeMocks.memongoBridgeSearch.mockResolvedValue([])
+		bridgeMocks.memongoBridgeSearchWithDegradation.mockReset()
+		bridgeMocks.memongoBridgeSearchWithDegradation.mockResolvedValue({
+			results: [],
+		})
 
 		const res = await createApp().request("/v1/search?scope=agent", {
 			method: "POST",
@@ -1215,7 +1231,9 @@ describe("createApp", () => {
 		})
 
 		expect(res.status).toBe(200)
-		expect(bridgeMocks.memongoBridgeSearch).toHaveBeenCalledOnce()
+		expect(
+			bridgeMocks.memongoBridgeSearchWithDegradation,
+		).toHaveBeenCalledOnce()
 	})
 
 	it("scope isolation: rejects a scoped policy whose scope value is non-canonical (fail closed)", () => {

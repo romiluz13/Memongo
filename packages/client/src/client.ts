@@ -40,6 +40,7 @@ import type {
 	MemongoRecallTrace,
 	MemongoScanNoveltyInput,
 	MemongoScope,
+	MemongoDegradation,
 	MemongoSearchInput,
 	MemongoSearchKBResponse,
 	MemongoSearchResponse,
@@ -434,6 +435,8 @@ export type MemongoSearchDetailedMetadata = {
 	constraintRelaxations?: Array<{ constraint: string; action: string }>
 	mmrApplied?: boolean
 	mmrLambda?: number
+	/** Set when admission control denied a pass — empty results are throttling, not a retrieval verdict. */
+	throttled?: { retryAfterMs: number }
 	trustSummary?: {
 		topScore: number | null
 		topConfidence: "high" | "medium" | "low" | null
@@ -451,6 +454,8 @@ export type MemongoSearchDetailedMetadata = {
 export type MemongoSearchDetailedResponse = {
 	results: MemongoSearchDetailedResult[]
 	metadata: MemongoSearchDetailedMetadata
+	/** Present in silent mode when the call was swallowed (auth/throttle/unavailable). */
+	degradation?: MemongoDegradation
 }
 
 export type MemongoActiveSlateItem = {
@@ -613,6 +618,8 @@ export type MemongoContextBundleResponse = {
 		>
 	}
 	builtAt: string
+	/** Present in silent mode when the call was swallowed (auth/throttle/unavailable). */
+	degradation?: MemongoDegradation
 }
 
 export type MemongoStateResponse = {
@@ -662,6 +669,25 @@ function emptyContextBundle(
 	}
 }
 
+/**
+ * Classify a swallowed silent-mode failure into a distinguishable marker
+ * (C-019): auth rejection vs throttling vs unavailability, so "the API
+ * refused/failed" is never confused with "no memories found".
+ */
+function classifySilentFailure(err: unknown): MemongoDegradation {
+	if (err instanceof MemongoClientError) {
+		if (err.status === 401 || err.status === 403) {
+			return { kind: "auth", status: err.status }
+		}
+		if (err.status === 429) {
+			return { kind: "throttled", status: 429 }
+		}
+		return { kind: "unavailable", status: err.status }
+	}
+	// Network/timeout/abort: no HTTP status to report.
+	return { kind: "unavailable" }
+}
+
 /** HTTP client for the supported Memongo API surface. */
 export class MemongoClient {
 	constructor(private readonly _opts: MemongoClientOptions = {}) {}
@@ -670,15 +696,22 @@ export class MemongoClient {
 	 * silent-mode wrapper: search/read calls degrade to `empty` on any failure
 	 * (HTTP error, timeout, network). Writes never use this — a swallowed write
 	 * would look like data loss that never happened.
+	 *
+	 * C-019: the swallowed failure is not silent — the returned empty carries a
+	 * `degradation` marker (auth/throttled/unavailable) so callers and
+	 * telemetry can tell "degraded" apart from "genuinely empty".
 	 */
-	private async _silently<T>(empty: T, call: () => Promise<T>): Promise<T> {
+	private async _silently<T extends { degradation?: MemongoDegradation }>(
+		empty: T,
+		call: () => Promise<T>,
+	): Promise<T> {
 		if (!this._opts.silent) {
 			return call()
 		}
 		try {
 			return await call()
-		} catch {
-			return empty
+		} catch (err) {
+			return { ...empty, degradation: classifySilentFailure(err) }
 		}
 	}
 

@@ -3,9 +3,9 @@ import type { z } from "zod"
 import {
 	memongoBridgeImportConversations,
 	memongoBridgeRecallConversation,
-	memongoBridgeSearch,
 	memongoBridgeSearchDetailed,
-	memongoBridgeSearchKB,
+	memongoBridgeSearchKBWithDegradation,
+	memongoBridgeSearchWithDegradation,
 } from "@memongo/memory-bridge"
 import { internalError, jsonError } from "../lib/errors.js"
 import {
@@ -49,16 +49,22 @@ export function registerSearchRoutes(v1: Hono<V1RouterEnv>): void {
 			return jsonError(c, 400, "VALIDATION_ERROR", scopeError)
 		}
 		try {
-			const results = await memongoBridgeSearch({
-				query,
-				agentId: await readAgentId(c),
-				maxResults: readLimit(body),
-				minScore: typeof body.minScore === "number" ? body.minScore : undefined,
-				sessionKey: await readSessionKey(c),
-				scope: await readScope(c),
-				scopeRef: await readScopeRef(c),
-			})
-			return c.json({ results })
+			const { results, degradation } = await memongoBridgeSearchWithDegradation(
+				{
+					query,
+					agentId: await readAgentId(c),
+					maxResults: readLimit(body),
+					minScore:
+						typeof body.minScore === "number" ? body.minScore : undefined,
+					sessionKey: await readSessionKey(c),
+					scope: await readScope(c),
+					scopeRef: await readScopeRef(c),
+				},
+			)
+			// WS-12 (C-019): throttling is served as throttling — the
+			// degradation marker rides the 200 so a degraded answer never
+			// reads as "no memories found" at the agent boundary.
+			return c.json(degradation ? { results, degradation } : { results })
 		} catch (err) {
 			return internalError(c, err, "SEARCH_FAILED")
 		}
@@ -87,21 +93,26 @@ export function registerSearchRoutes(v1: Hono<V1RouterEnv>): void {
 			filter = parsedFilter.value
 		}
 		try {
-			const results = await memongoBridgeSearchKB({
-				query,
-				agentId: await readAgentId(c),
-				scopeRef: await readScopeRef(c),
-				maxResults: readLimit(body),
-				minScore: typeof body.minScore === "number" ? body.minScore : undefined,
-				filter,
-				fusionMethod:
-					body.fusionMethod === "scoreFusion" ||
-					body.fusionMethod === "rankFusion" ||
-					body.fusionMethod === "js-merge"
-						? body.fusionMethod
-						: undefined,
-			})
-			return c.json({ results })
+			const { results, degradation } =
+				await memongoBridgeSearchKBWithDegradation({
+					query,
+					agentId: await readAgentId(c),
+					scopeRef: await readScopeRef(c),
+					maxResults: readLimit(body),
+					minScore:
+						typeof body.minScore === "number" ? body.minScore : undefined,
+					filter,
+					fusionMethod:
+						body.fusionMethod === "scoreFusion" ||
+						body.fusionMethod === "rankFusion" ||
+						body.fusionMethod === "js-merge"
+							? body.fusionMethod
+							: undefined,
+				})
+			// WS-12 (C-019): a dropped vector lane means the text-lane results
+			// stand with degraded ranking — the marker says which, so degraded
+			// ranking never reads as authoritative.
+			return c.json(degradation ? { results, degradation } : { results })
 		} catch (err) {
 			return internalError(c, err, "SEARCH_KB_FAILED")
 		}

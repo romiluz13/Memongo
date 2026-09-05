@@ -446,6 +446,26 @@ export type MemorySearchMetadata = {
 	throttled?: { retryAfterMs: number }
 }
 
+/**
+ * WS-12 (C-019): why a search response is degraded rather than authoritative.
+ * Carried out of the array-returning search()/searchKB() surfaces via the
+ * `onDegradation` sink (the onLaneLatency pattern) so the API boundary can
+ * serve "throttled" as throttling instead of "no memories found".
+ *
+ * - "denied": admission control denied the whole query before any lane ran —
+ *   the empty results are NOT a retrieval verdict.
+ * - "legacy-fallback-skipped": the v2 empty verdict stands (it did search);
+ *   only the opt-in legacy re-run was denied, so the answer is authoritative
+ *   but the configured double-check did not happen.
+ * - "vector-lane-skipped": the KB vector lane was dropped by denial; the
+ *   text-lane results stand but ranking quality is degraded.
+ */
+export type MemorySearchDegradation = {
+	kind: "throttled"
+	scope: "denied" | "legacy-fallback-skipped" | "vector-lane-skipped"
+	retryAfterMs: number
+}
+
 export type MemorySearchResponse = {
 	results: MemorySearchResult[]
 	metadata: MemorySearchMetadata

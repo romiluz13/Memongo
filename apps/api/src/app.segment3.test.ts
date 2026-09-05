@@ -32,9 +32,9 @@ const bridgeMocks = vi.hoisted(() => ({
 	memongoBridgeRelevanceReport: vi.fn(),
 	memongoBridgeRelevanceSampleRate: vi.fn(),
 	memongoBridgeRejectQuarantined: vi.fn(),
-	memongoBridgeSearch: vi.fn(),
+	memongoBridgeSearchWithDegradation: vi.fn(),
 	memongoBridgeSearchDetailed: vi.fn(),
-	memongoBridgeSearchKB: vi.fn(),
+	memongoBridgeSearchKBWithDegradation: vi.fn(),
 	memongoBridgeStats: vi.fn(),
 	memongoBridgeStatus: vi.fn(),
 	memongoBridgeSync: vi.fn(),
@@ -67,7 +67,7 @@ describe("createApp", () => {
 		delete process.env.MEMONGO_API_KEY
 		delete process.env.MEMONGO_API_SCOPED_KEYS
 		process.env.MEMONGO_ALLOW_INSECURE_NO_AUTH = "true"
-		bridgeMocks.memongoBridgeSearch.mockReset()
+		bridgeMocks.memongoBridgeSearchWithDegradation.mockReset()
 		bridgeMocks.memongoBridgeSearchDetailed.mockReset()
 		bridgeMocks.memongoBridgeAdd.mockReset()
 		bridgeMocks.memongoBridgeAccessSummaries.mockReset()
@@ -102,7 +102,9 @@ describe("createApp", () => {
 		bridgeMocks.memongoBridgeReportProcedureOutcome.mockReset()
 		bridgeMocks.memongoBridgeWriteConversationEvent.mockReset()
 		bridgeMocks.memongoBridgeWriteConversationEventsBatch.mockReset()
-		bridgeMocks.memongoBridgeSearch.mockResolvedValue([])
+		bridgeMocks.memongoBridgeSearchWithDegradation.mockResolvedValue({
+			results: [],
+		})
 		bridgeMocks.memongoBridgeSearchDetailed.mockResolvedValue({
 			results: [],
 			metadata: {
@@ -642,7 +644,9 @@ describe("createApp", () => {
 				message: "scope must be session|user|agent|workspace|tenant|global",
 			},
 		})
-		expect(bridgeMocks.memongoBridgeSearch).not.toHaveBeenCalled()
+		expect(
+			bridgeMocks.memongoBridgeSearchWithDegradation,
+		).not.toHaveBeenCalled()
 	})
 
 	it("rejects invalid search-detailed scope values before calling the bridge", async () => {
@@ -1697,5 +1701,148 @@ describe("WS-08 request validation 400s (C-012/C-013)", () => {
 		})
 		expect(res.status).toBe(400)
 		expect(bridgeMocks.memongoBridgeSearchDetailed).not.toHaveBeenCalled()
+	})
+})
+
+describe("WS-12 degradation markers at search boundaries (C-019)", () => {
+	const prevEnv = { ...process.env }
+
+	beforeEach(() => {
+		process.env = { ...prevEnv }
+		delete process.env.MEMONGO_API_KEY
+		delete process.env.MEMONGO_API_SCOPED_KEYS
+		process.env.MEMONGO_ALLOW_INSECURE_NO_AUTH = "true"
+
+		bridgeMocks.memongoBridgeSearchWithDegradation.mockReset()
+		bridgeMocks.memongoBridgeSearchWithDegradation.mockResolvedValue({
+			results: [],
+		})
+		bridgeMocks.memongoBridgeSearchKBWithDegradation.mockReset()
+		bridgeMocks.memongoBridgeSearchKBWithDegradation.mockResolvedValue({
+			results: [],
+		})
+	})
+
+	afterEach(() => {
+		process.env = { ...prevEnv }
+	})
+
+	it("serves the degradation marker on /v1/search when the engine throttles (C-019)", async () => {
+		bridgeMocks.memongoBridgeSearchWithDegradation.mockResolvedValue({
+			results: [],
+			degradation: {
+				kind: "throttled",
+				scope: "denied",
+				retryAfterMs: 4000,
+			},
+		})
+
+		const res = await createApp().request("/v1/search", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ query: "anything" }),
+		})
+
+		expect(res.status).toBe(200)
+		const body = (await res.json()) as {
+			results: unknown[]
+			degradation?: {
+				kind: string
+				scope: string
+				retryAfterMs?: number
+			}
+		}
+		expect(body.results).toEqual([])
+		expect(body.degradation).toEqual({
+			kind: "throttled",
+			scope: "denied",
+			retryAfterMs: 4000,
+		})
+	})
+
+	it("omits the degradation field on /v1/search when nothing degraded", async () => {
+		const res = await createApp().request("/v1/search", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ query: "anything" }),
+		})
+
+		expect(res.status).toBe(200)
+		const body = (await res.json()) as {
+			results: unknown[]
+			degradation?: unknown
+		}
+		expect(body.results).toEqual([])
+		expect(body.degradation).toBeUndefined()
+	})
+
+	it("serves the degradation marker on /v1/search-kb when the vector lane is skipped (C-019)", async () => {
+		bridgeMocks.memongoBridgeSearchKBWithDegradation.mockResolvedValue({
+			results: [],
+			degradation: { kind: "throttled", scope: "vector-lane-skipped" },
+		})
+
+		const res = await createApp().request("/v1/search-kb", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ query: "lucene index" }),
+		})
+
+		expect(res.status).toBe(200)
+		const body = (await res.json()) as {
+			results: unknown[]
+			degradation?: { kind: string; scope: string }
+		}
+		expect(body.results).toEqual([])
+		expect(body.degradation).toEqual({
+			kind: "throttled",
+			scope: "vector-lane-skipped",
+		})
+	})
+
+	it("omits the degradation field on /v1/search-kb when nothing degraded", async () => {
+		const res = await createApp().request("/v1/search-kb", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ query: "lucene index" }),
+		})
+
+		expect(res.status).toBe(200)
+		const body = (await res.json()) as {
+			results: unknown[]
+			degradation?: unknown
+		}
+		expect(body.results).toEqual([])
+		expect(body.degradation).toBeUndefined()
+	})
+
+	it("documents degradation in the OpenAPI search schemas (C-019)", async () => {
+		const res = await createApp().request("/openapi.json")
+		const json = (await res.json()) as {
+			components?: unknown
+			paths: Record<
+				string,
+				{
+					post?: {
+						responses?: Record<
+							string,
+							{ content?: { "application/json"?: { schema?: object } } }
+						>
+					}
+				}
+			>
+		}
+		const schema = json.paths["/v1/search"]?.post?.responses?.["200"]
+			?.content?.["application/json"]?.schema as
+			| { properties?: Record<string, unknown> }
+			| undefined
+		expect(schema?.properties).toHaveProperty("degradation")
+		const kbSchema = json.paths["/v1/search-kb"]?.post?.responses?.["200"]
+			?.content?.["application/json"]?.schema as
+			| {
+					properties?: Record<string, unknown>
+			  }
+			| undefined
+		expect(kbSchema?.properties).toHaveProperty("degradation")
 	})
 })

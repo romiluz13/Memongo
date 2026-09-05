@@ -316,7 +316,7 @@ entries:
     tier: T3
     status: known-and-supported
     constructs: [packages/memory-engine/src/mongodb-manager-jobs.ts, packages/memory-engine/src/mongodb-manager-write.ts, packages/memory-engine/src/mongodb-search-v2.ts, packages/memory-engine/src/mongodb-search-admission.ts, packages/memory-engine/src/mongodb-search-executor.ts, packages/memory-engine/src/mongodb-manager-search.ts, packages/memory-engine/src/mongodb-conversation-recall.ts, packages/memory-engine/src/mongodb-kb-search.ts]
-    validations: [V-093, V-094, V-095]
+    validations: [V-093, V-094, V-095, V-105, V-106, V-107, V-108, V-109]
     exceptions: []
 
   - id: C-019
@@ -331,8 +331,8 @@ entries:
     impact: high
     tier: T2
     status: known-and-supported
-    constructs: [packages/client/src/client.ts, packages/memory-engine/src/mongodb-reranker.ts, packages/memory-engine/src/mongodb-search-v2.ts]
-    validations: []
+    constructs: [packages/client/src/client.ts, packages/client/src/types.ts, packages/memory-engine/src/mongodb-reranker.ts, packages/memory-engine/src/mongodb-search-v2.ts, packages/memory-engine/src/mongodb-manager-search.ts, packages/memory-bridge/src/memongo-bridge.ts, apps/api/src/routes/v1-search-routes.ts, apps/api/src/openapi-paths-search.ts, packages/tools/src/index.ts]
+    validations: [V-096, V-097, V-098, V-099, V-100, V-101, V-102, V-103, V-104]
     exceptions: []
 
   - id: C-020

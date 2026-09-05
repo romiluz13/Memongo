@@ -50,6 +50,7 @@ import type {
 	AccessEventCollection,
 	MemorySearchRequest,
 	MemorySearchResponse,
+	MemorySearchDegradation,
 	MemorySearchResult,
 } from "./types.js"
 import {
@@ -534,6 +535,15 @@ export class MongoDBManagerSearchOps {
 			 * runner) cannot cross-attribute each other's lane timings.
 			 */
 			onLaneLatency?: (latencyByLane: Record<string, number>) => void
+			/**
+			 * WS-12 (C-019): receives the degradation marker when admission
+			 * control degraded this answer (denied query, denied legacy
+			 * re-run, or skipped KB vector lane). Same sink-not-state pattern
+			 * as onLaneLatency so concurrent searches cannot cross-attribute;
+			 * fires at most once, before the results return. A healthy search
+			 * never fires it — absence means the answer is authoritative.
+			 */
+			onDegradation?: (degradation: MemorySearchDegradation) => void
 		},
 		operationRunContext?: OperationRunContext,
 	): Promise<MemorySearchResult[]> {
@@ -855,6 +865,14 @@ export class MongoDBManagerSearchOps {
 					...v2Details,
 					throttled: v2.metadata.throttled,
 				})
+				// WS-12 (C-019): the array return cannot carry the marker, so
+				// the sink does — "throttled" rides to the caller, the API
+				// boundary, and the agent instead of dying as {results: []}.
+				opts?.onDegradation?.({
+					kind: "throttled",
+					scope: "denied",
+					retryAfterMs: v2.metadata.throttled.retryAfterMs,
+				})
 				return []
 			}
 
@@ -897,6 +915,15 @@ export class MongoDBManagerSearchOps {
 			if (!legacyAdmission.ok) {
 				this.host.setLastSearchMode("v2:empty->legacy-throttled", {
 					...v2Details,
+					retryAfterMs: legacyAdmission.retryAfterMs,
+				})
+				// WS-12 (C-019): the v2 empty verdict IS authoritative (it did
+				// search), but the configured double-check did not happen —
+				// the sink says which, so "unverified empty" never masquerades
+				// as fully-verified emptiness.
+				opts?.onDegradation?.({
+					kind: "throttled",
+					scope: "legacy-fallback-skipped",
 					retryAfterMs: legacyAdmission.retryAfterMs,
 				})
 				return []
@@ -1327,6 +1354,13 @@ export class MongoDBManagerSearchOps {
 			filter?: { tags?: string[]; category?: string; source?: string }
 			/** Per-call override; defaults to the resolved config fusionMethod. */
 			fusionMethod?: MemoryMongoDBFusionMethod
+			/**
+			 * WS-12 (C-019): receives the degradation marker when admission
+			 * control dropped the KB vector lane. Sink-not-state (see the
+			 * search() onLaneLatency/onDegradation pattern); absence means the
+			 * ranking is authoritative.
+			 */
+			onDegradation?: (degradation: MemorySearchDegradation) => void
 		},
 	): Promise<MemorySearchResult[]> {
 		const cleaned = query.trim()
@@ -1360,6 +1394,14 @@ export class MongoDBManagerSearchOps {
 				resultCount: 0,
 			})
 			this.host.setLastSearchMode("kb:throttled", {
+				retryAfterMs: kbAdmission.retryAfterMs,
+			})
+			// WS-12 (C-019): the text lane still answers, so this is degraded
+			// ranking, not an empty verdict — the sink carries that
+			// distinction out with the results.
+			opts?.onDegradation?.({
+				kind: "throttled",
+				scope: "vector-lane-skipped",
 				retryAfterMs: kbAdmission.retryAfterMs,
 			})
 		}

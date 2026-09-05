@@ -29,9 +29,9 @@ const bridgeMocks = vi.hoisted(() => ({
 	memongoBridgeRelevanceExplain: vi.fn(),
 	memongoBridgeRelevanceReport: vi.fn(),
 	memongoBridgeRelevanceSampleRate: vi.fn(),
-	memongoBridgeSearch: vi.fn(),
+	memongoBridgeSearchWithDegradation: vi.fn(),
 	memongoBridgeSearchDetailed: vi.fn(),
-	memongoBridgeSearchKB: vi.fn(),
+	memongoBridgeSearchKBWithDegradation: vi.fn(),
 	memongoBridgeStats: vi.fn(),
 	memongoBridgeStatus: vi.fn(),
 	memongoBridgeSync: vi.fn(),
@@ -64,7 +64,7 @@ describe("createApp", () => {
 		delete process.env.MEMONGO_API_KEY
 		delete process.env.MEMONGO_API_SCOPED_KEYS
 		process.env.MEMONGO_ALLOW_INSECURE_NO_AUTH = "true"
-		bridgeMocks.memongoBridgeSearch.mockReset()
+		bridgeMocks.memongoBridgeSearchWithDegradation.mockReset()
 		bridgeMocks.memongoBridgeSearchDetailed.mockReset()
 		bridgeMocks.memongoBridgeAdd.mockReset()
 		bridgeMocks.memongoBridgeAccessSummaries.mockReset()
@@ -96,7 +96,12 @@ describe("createApp", () => {
 		bridgeMocks.memongoBridgeReportProcedureOutcome.mockReset()
 		bridgeMocks.memongoBridgeWriteConversationEvent.mockReset()
 		bridgeMocks.memongoBridgeWriteConversationEventsBatch.mockReset()
-		bridgeMocks.memongoBridgeSearch.mockResolvedValue([])
+		bridgeMocks.memongoBridgeSearchWithDegradation.mockResolvedValue({
+			results: [],
+		})
+		bridgeMocks.memongoBridgeSearchKBWithDegradation.mockResolvedValue({
+			results: [],
+		})
 		bridgeMocks.memongoBridgeSearchDetailed.mockResolvedValue({
 			results: [],
 			metadata: {
@@ -899,8 +904,10 @@ describe("createApp", () => {
 		process.env.MEMONGO_API_SCOPED_KEYS = JSON.stringify([
 			{ token: "scoped-A", scopeRefs: ["ref-A"] },
 		])
-		bridgeMocks.memongoBridgeSearchKB.mockReset()
-		bridgeMocks.memongoBridgeSearchKB.mockResolvedValue([])
+		bridgeMocks.memongoBridgeSearchKBWithDegradation.mockReset()
+		bridgeMocks.memongoBridgeSearchKBWithDegradation.mockResolvedValue({
+			results: [],
+		})
 
 		const res = await createApp().request("/v1/search-kb?scopeRef=ref-A", {
 			method: "POST",
@@ -912,7 +919,8 @@ describe("createApp", () => {
 		})
 
 		expect(res.status).toBe(200)
-		const call = bridgeMocks.memongoBridgeSearchKB.mock.calls[0]?.[0]
+		const call =
+			bridgeMocks.memongoBridgeSearchKBWithDegradation.mock.calls[0]?.[0]
 		expect(call?.scopeRef).toBe("ref-A")
 	})
 
@@ -921,8 +929,10 @@ describe("createApp", () => {
 		process.env.MEMONGO_API_SCOPED_KEYS = JSON.stringify([
 			{ token: "scoped-A", agentIds: ["agent-A"], scopes: ["agent"] },
 		])
-		bridgeMocks.memongoBridgeSearchKB.mockReset()
-		bridgeMocks.memongoBridgeSearchKB.mockResolvedValue([])
+		bridgeMocks.memongoBridgeSearchKBWithDegradation.mockReset()
+		bridgeMocks.memongoBridgeSearchKBWithDegradation.mockResolvedValue({
+			results: [],
+		})
 
 		const res = await createApp().request(
 			"/v1/search-kb?agentId=agent-A&scope=agent&scopeRef=global",
@@ -937,7 +947,9 @@ describe("createApp", () => {
 		)
 
 		expect(res.status).toBe(403)
-		expect(bridgeMocks.memongoBridgeSearchKB).not.toHaveBeenCalled()
+		expect(
+			bridgeMocks.memongoBridgeSearchKBWithDegradation,
+		).not.toHaveBeenCalled()
 	})
 
 	it("scope isolation: recall-conversation forwards the authorized scope/scopeRef to the bridge", async () => {
@@ -993,8 +1005,8 @@ describe("createApp", () => {
 	it("P1.3: maps Mongo driver network errors to 503 SERVICE_UNAVAILABLE so client retry means something", async () => {
 		const mongoDown = new Error("connection refused")
 		mongoDown.name = "MongoServerSelectionError"
-		bridgeMocks.memongoBridgeSearch.mockReset()
-		bridgeMocks.memongoBridgeSearch.mockRejectedValue(mongoDown)
+		bridgeMocks.memongoBridgeSearchWithDegradation.mockReset()
+		bridgeMocks.memongoBridgeSearchWithDegradation.mockRejectedValue(mongoDown)
 
 		const res = await createApp().request("/v1/search", {
 			method: "POST",
@@ -1019,8 +1031,8 @@ describe("createApp", () => {
 	])("P1.3: %s maps to 503", async (name) => {
 		const err = new Error("driver down")
 		err.name = name
-		bridgeMocks.memongoBridgeSearch.mockReset()
-		bridgeMocks.memongoBridgeSearch.mockRejectedValue(err)
+		bridgeMocks.memongoBridgeSearchWithDegradation.mockReset()
+		bridgeMocks.memongoBridgeSearchWithDegradation.mockRejectedValue(err)
 
 		const res = await createApp().request("/v1/search", {
 			method: "POST",
@@ -1035,8 +1047,8 @@ describe("createApp", () => {
 		const cause = new Error("socket hang up")
 		cause.name = "MongoNetworkError"
 		const err = new Error("bridge call failed", { cause })
-		bridgeMocks.memongoBridgeSearch.mockReset()
-		bridgeMocks.memongoBridgeSearch.mockRejectedValue(err)
+		bridgeMocks.memongoBridgeSearchWithDegradation.mockReset()
+		bridgeMocks.memongoBridgeSearchWithDegradation.mockRejectedValue(err)
 
 		const res = await createApp().request("/v1/search", {
 			method: "POST",
@@ -1048,8 +1060,8 @@ describe("createApp", () => {
 	})
 
 	it("P1.3: a generic 500 must NOT become retriable noise — non-network errors stay 500 with the route code", async () => {
-		bridgeMocks.memongoBridgeSearch.mockReset()
-		bridgeMocks.memongoBridgeSearch.mockRejectedValue(
+		bridgeMocks.memongoBridgeSearchWithDegradation.mockReset()
+		bridgeMocks.memongoBridgeSearchWithDegradation.mockRejectedValue(
 			new Error("unexpected invariant violation"),
 		)
 
@@ -1068,8 +1080,8 @@ describe("createApp", () => {
 	})
 
 	it("P1.3: a message that merely mentions a network error name stays 500 (name-only classification)", async () => {
-		bridgeMocks.memongoBridgeSearch.mockReset()
-		bridgeMocks.memongoBridgeSearch.mockRejectedValue(
+		bridgeMocks.memongoBridgeSearchWithDegradation.mockReset()
+		bridgeMocks.memongoBridgeSearchWithDegradation.mockRejectedValue(
 			new Error("failed while handling MongoServerSelectionError fallback"),
 		)
 
@@ -1091,10 +1103,14 @@ describe("P2.8 boundary input validation", () => {
 		delete process.env.MEMONGO_API_KEY
 		delete process.env.MEMONGO_API_SCOPED_KEYS
 		process.env.MEMONGO_ALLOW_INSECURE_NO_AUTH = "true"
-		bridgeMocks.memongoBridgeSearch.mockReset()
-		bridgeMocks.memongoBridgeSearch.mockResolvedValue([])
-		bridgeMocks.memongoBridgeSearchKB.mockReset()
-		bridgeMocks.memongoBridgeSearchKB.mockResolvedValue([])
+		bridgeMocks.memongoBridgeSearchWithDegradation.mockReset()
+		bridgeMocks.memongoBridgeSearchWithDegradation.mockResolvedValue({
+			results: [],
+		})
+		bridgeMocks.memongoBridgeSearchKBWithDegradation.mockReset()
+		bridgeMocks.memongoBridgeSearchKBWithDegradation.mockResolvedValue({
+			results: [],
+		})
 		bridgeMocks.memongoBridgeWriteStructuredMemory.mockReset()
 		bridgeMocks.memongoBridgeWriteStructuredMemory.mockResolvedValue({
 			id: "s1",
@@ -1144,7 +1160,9 @@ describe("P2.8 boundary input validation", () => {
 			error: { code: string; message: string }
 		}
 		expect(json.error.code).toBe("INVALID_JSON")
-		expect(bridgeMocks.memongoBridgeSearch).not.toHaveBeenCalled()
+		expect(
+			bridgeMocks.memongoBridgeSearchWithDegradation,
+		).not.toHaveBeenCalled()
 	})
 
 	it("a genuinely empty body still works where it does today (/v1/sync)", async () => {
@@ -1254,7 +1272,7 @@ describe("P2.8 boundary input validation", () => {
 		const res = await postJson("/v1/search", { query: "hello", limit: 9999 })
 
 		expect(res.status).toBe(200)
-		expect(bridgeMocks.memongoBridgeSearch).toHaveBeenCalledWith(
+		expect(bridgeMocks.memongoBridgeSearchWithDegradation).toHaveBeenCalledWith(
 			expect.objectContaining({ maxResults: 100 }),
 		)
 	})
@@ -1266,7 +1284,8 @@ describe("P2.8 boundary input validation", () => {
 		})
 		expect(clamped.status).toBe(200)
 		expect(
-			bridgeMocks.memongoBridgeSearch.mock.calls.at(-1)?.[0]?.maxResults,
+			bridgeMocks.memongoBridgeSearchWithDegradation.mock.calls.at(-1)?.[0]
+				?.maxResults,
 		).toBe(100)
 
 		const passthrough = await postJson("/v1/search", {
@@ -1275,7 +1294,8 @@ describe("P2.8 boundary input validation", () => {
 		})
 		expect(passthrough.status).toBe(200)
 		expect(
-			bridgeMocks.memongoBridgeSearch.mock.calls.at(-1)?.[0]?.maxResults,
+			bridgeMocks.memongoBridgeSearchWithDegradation.mock.calls.at(-1)?.[0]
+				?.maxResults,
 		).toBe(25)
 	})
 
@@ -1293,7 +1313,9 @@ describe("P2.8 boundary input validation", () => {
 			expect(json.error.code).toBe("VALIDATION_ERROR")
 			expect(json.error.message).toContain("filter")
 		}
-		expect(bridgeMocks.memongoBridgeSearchKB).not.toHaveBeenCalled()
+		expect(
+			bridgeMocks.memongoBridgeSearchKBWithDegradation,
+		).not.toHaveBeenCalled()
 	})
 
 	it("/v1/search-kb accepts a typed filter and forwards it", async () => {
@@ -1303,7 +1325,9 @@ describe("P2.8 boundary input validation", () => {
 		})
 
 		expect(res.status).toBe(200)
-		expect(bridgeMocks.memongoBridgeSearchKB).toHaveBeenCalledWith(
+		expect(
+			bridgeMocks.memongoBridgeSearchKBWithDegradation,
+		).toHaveBeenCalledWith(
 			expect.objectContaining({
 				filter: { tags: ["db"], category: "runbook" },
 			}),

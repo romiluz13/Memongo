@@ -701,3 +701,157 @@ entries:
     run_at: "2026-09-05T18:39:52.000Z"
     evidence_hash: "sha256:538f37d5943e1de5fb172c575a9b852ad0f350a0ca1e27fab138cfdbc6dbcabc"
     notes: "Bounded write-queue evidence from the final-state WS-11 engine suite (same log): the write-queue battery (7 tests, mongodb-manager-write-queue.test.ts) pins the per-agent writeQueue bound — resolveWriteQueueMaxDepth defaulting to 256 pending writes with the override/validation rules, enqueueBoundedWrite admitting up to the cap and fast-failing the next write with the typed WriteQueueFullError (so a burst surfaces to the caller instead of queuing without bound), a write-queue-saturation telemetry emit on every fast-fail, depth draining back to zero as writes settle and re-admitting new writes, a rejected write still draining its depth slot, strict serial ordering preserved under the cap, and the failed-write chain not poisoning the next write (execute runs on both settle paths). The batch path uses the same bounded enqueue (manager-write battery: the whole batch queues behind a previously queued write; a batch is refused after close). Together with V-093/V-094 this closes the C-018 concurrency envelope: search/autoEmbed spend is admitted at the source, the job backlog is observable with an alert verdict, and the write path cannot queue without bound."
+
+  - id: V-096
+    schema_version: 0.1.0
+    claim_id: C-019
+    construct: packages/client/src/client.ts
+    method: test
+    target: .ddd/reports/runs/ws12-client-suite.log
+    result: pass
+    run_at: "2026-09-05T16:10:38.000Z"
+    evidence_hash: "sha256:89036b63749cadbc773fb5d5296375fd31bb6c59a61e276f410879c1fed63233"
+    notes: "Silent-mode classification evidence from the final-state WS-12 client suite (this log, 3 files / 49 tests passed, exit 0): the 'MemongoClient silent option (P1.5)' battery (6 tests, client.test.ts) pins classifySilentFailure through the _silently wrapper — a swallowed 401 resolves to {results: [], degradation: {kind: auth, status: 401}} so auth failure never reads as empty memory, a swallowed 429 resolves to {kind: throttled, status: 429}, an HTTP 500 resolves to {kind: unavailable, status: 500} on search, an HTTP 500 on buildContextBundle injects nothing into the rendered bundle while still carrying the marker, a network failure (fetch rejects, no status) resolves to {kind: unavailable}, and silent mode stays strictly opt-in (a 500 still throws MemongoClientError when silent is unset). The type-level contract (MemongoDegradation on the response types) is pinned separately by V-099; the HTTP boundary serving the same marker is pinned by V-102."
+
+  - id: V-097
+    schema_version: 0.1.0
+    claim_id: C-019
+    construct: packages/memory-engine/src/mongodb-reranker.ts
+    method: test
+    target: .ddd/reports/runs/ws12-engine-suite.log
+    result: pass
+    run_at: "2026-09-05T16:23:09.000Z"
+    evidence_hash: "sha256:b3eb5a96e485cfca870c8446ca704059d3ea35e681ccde16ffb30df9795b144c"
+    notes: "Rerank-skip telemetry evidence from the final-state WS-12 engine suite (this log, 128 files / 2207 tests passed, exit 0): the 'crossEncoderRerank skip telemetry (WS-12, C-019)' battery (7 tests, mongodb-reranker.test.ts) pins rerankSkipped emission on every path where the cross-encoder does not run — the intentional skips (disabled, no-results, no-api-key, too-few-candidates) emit ok:true with the machine-readable reason string, the failure skips (api-error, bad-response-shape) emit ok:false so an operator can tell them apart, and a successful rerank emits no skip marker. Without the marker, 'rerank off' and 'rerank broken' were indistinguishable in the metrics."
+
+  - id: V-098
+    schema_version: 0.1.0
+    claim_id: C-019
+    construct: packages/memory-engine/src/mongodb-search-v2.ts
+    method: test
+    target: .ddd/reports/runs/ws12-engine-suite.log
+    result: pass
+    run_at: "2026-09-05T16:23:09.000Z"
+    evidence_hash: "sha256:b3eb5a96e485cfca870c8446ca704059d3ea35e681ccde16ffb30df9795b144c"
+    notes: "Throttled-outcome source evidence from the final-state WS-12 engine suite (same log): the searchV2 admission battery (3 tests, mongodb-search-v2-admission.test.ts, landed WS-11) pins the distinct throttling outcome that WS-12 surfaces at every boundary — empty results plus the throttled marker and retry hint on denial, zero database touches (no lanes, no coverage read), and an admitted search never throttled. WS-12 adds the propagation half on top of this outcome: the manager sink battery (V-100) pins onDegradation delivery, the bridge battery (V-101) pins the marker leaving the engine, and the API/client/tool batteries (V-096/V-102/V-103) pin it reaching callers, so 'throttled' is reported as throttling end to end rather than as no memories found."
+
+  - id: V-099
+    schema_version: 0.1.0
+    claim_id: C-019
+    construct: packages/client/src/types.ts
+    method: type-check
+    target: .ddd/reports/runs/ws12-check-types.log
+    result: pass
+    run_at: "2026-09-05T16:23:09.000Z"
+    evidence_hash: "sha256:8e01b3b4e9cc873afd9613149623941e96d6a40ea1ebd9b8183e4316555082b2"
+    notes: "Client contract evidence from a fresh, uncached full-workspace type-check (this log, turbo check-types --force, 15/15 tasks successful, 0 cached, exit 0): the MemongoDegradation type (kind: auth | throttled | unavailable, optional status/scope/retryAfterMs), the degradation? field on the six silent-capable response types (search, searchKB, searchDetailed, readFile, recallConversation, contextBundle), and the throttled? metadata object on search-detailed and recall metadata compile against every consumer in the workspace. The fields are optional, so healthy 200 payloads type-check unchanged — a compile-time contract, which is why the method is type-check. The runtime classification behavior behind the type is pinned by V-096; the tool-side consumption of the same shape by V-103."
+
+  - id: V-100
+    schema_version: 0.1.0
+    claim_id: C-019
+    construct: packages/memory-engine/src/mongodb-manager-search.ts
+    method: test
+    target: .ddd/reports/runs/ws12-engine-suite.log
+    result: pass
+    run_at: "2026-09-05T16:23:09.000Z"
+    evidence_hash: "sha256:b3eb5a96e485cfca870c8446ca704059d3ea35e681ccde16ffb30df9795b144c"
+    notes: "Manager-boundary sink evidence from the final-state WS-12 engine suite (same log): the 'search degradation sink at the manager boundary (WS-12, C-019)' battery (5 tests, mongodb-manager-search.part2.test.ts) pins onDegradation delivery at the manager API — an admission-denied search delivers the throttled/denied marker to the caller's sink, a healthy empty search delivers nothing (absence stays meaningful), a denied legacy re-run delivers the legacy-fallback-skipped marker, a KB search with the vector lane dropped delivers the vector-lane-skipped marker while text-lane results stand, and a granted lane delivers nothing. The sink-not-state shape (per-call option, like onLaneLatency) keeps concurrent searches from cross-attributing each other's degradation."
+
+  - id: V-101
+    schema_version: 0.1.0
+    claim_id: C-019
+    construct: packages/memory-bridge/src/memongo-bridge.ts
+    method: test
+    target: .ddd/reports/runs/ws12-bridge-suite.log
+    result: pass
+    run_at: "2026-09-05T16:10:38.000Z"
+    evidence_hash: "sha256:63f8b41b8d5275077b00460f19b48d4192be66195885d4fae24156e930dc0583"
+    notes: "Bridge passthrough evidence from the final-state WS-12 bridge suite (this log, 7 files / 87 tests passed, exit 0): the 'bridge search degradation passthrough (WS-12, C-019)' battery (5 tests, memongo-bridge-search-degradation.test.ts) pins the WithDegradation accessors — memongoBridgeSearchWithDegradation merges the engine's denied marker into the {results, degradation} envelope, forwards the onDegradation sink plus the search options to the authorized agent's manager, and keeps the envelope bare (no degradation key) on a healthy empty answer; memongoBridgeSearchKBWithDegradation merges the vector-lane-skip marker and likewise stays bare when healthy. The plain accessors remain for callers that want the legacy shape."
+
+  - id: V-102
+    schema_version: 0.1.0
+    claim_id: C-019
+    construct: apps/api/src/routes/v1-search-routes.ts
+    method: test
+    target: .ddd/reports/runs/ws12-api-suite.log
+    result: pass
+    run_at: "2026-09-05T16:23:09.000Z"
+    evidence_hash: "sha256:d10b5f108831b1595a4154cd54fb55db6cf02419d1222d9ce39834e53fb07f8c"
+    notes: "API boundary evidence from the final-state WS-12 api suite (this log, 9 files / 273 tests passed, exit 0): the 'WS-12 degradation markers at search boundaries (C-019)' battery (5 tests, app.segment3.test.ts) pins the non-detailed search routes — /v1/search serves the degradation object on the 200 when the engine throttles and omits the key entirely when nothing degraded, /v1/search-kb does the same when the vector lane is skipped, and the served OpenAPI document carries the degradation schema (pinned in full by V-104). The marker rides the 200 rather than an error code because degraded answers still carry real results; absence of the key is what vouches for authority."
+
+  - id: V-103
+    schema_version: 0.1.0
+    claim_id: C-019
+    construct: packages/tools/src/index.ts
+    method: test
+    target: .ddd/reports/runs/ws12-tools-suite.log
+    result: pass
+    run_at: "2026-09-05T16:10:38.000Z"
+    evidence_hash: "sha256:fed8c157bf57e71f6b7894b50b61824ac390c17acea0514d7a3109ffa2e48ce6"
+    notes: "Tool passthrough evidence from the final-state WS-12 tools suite (this log, 6 files / 54 tests passed, exit 0): the 'WS-12 search degradation passthrough (C-019)' battery (4 tests, index.test.ts) pins the AI SDK tool boundary — memongo_search returns {results, degradation} when the client reports auth failure (so the model reads 'memory system unauthorized', not 'no memories found') and bare {results} when the client is healthy; memongo_search_kb returns the throttled marker with its retryAfterMs and likewise stays bare when healthy. The model-visible shape is exactly the client response, so no boundary re-classifies degradation as emptiness."
+
+  - id: V-104
+    schema_version: 0.1.0
+    claim_id: C-019
+    construct: apps/api/src/openapi-paths-search.ts
+    method: test
+    target: .ddd/reports/runs/ws12-api-suite.log
+    result: pass
+    run_at: "2026-09-05T16:23:09.000Z"
+    evidence_hash: "sha256:d10b5f108831b1595a4154cd54fb55db6cf02419d1222d9ce39834e53fb07f8c"
+    notes: "OpenAPI contract evidence from the final-state WS-12 api suite (same log as V-102): the 'documents degradation in the OpenAPI search schemas (C-019)' test pins the served OpenAPI document — the /v1/search-kb 200 response carries the degradation object (kind enum with auth/throttled/unavailable, optional status/scope/retryAfterMs), and the search-detailed and recall metadata carry the throttled object with required retryAfterMs (the WS-11 admission outcome surfaced in the contract). The test reads the document the app actually serves, so removing or renaming the schema fields fails the battery — the documented contract cannot drift from the implementation."
+
+  - id: V-105
+    schema_version: 0.1.0
+    claim_id: C-018
+    construct: packages/memory-engine/src/mongodb-search-admission.ts
+    method: test
+    target: .ddd/reports/runs/ws11-engine-suite.log
+    result: pass
+    run_at: "2026-09-05T16:10:38.000Z"
+    evidence_hash: "sha256:538f37d5943e1de5fb172c575a9b852ad0f350a0ca1e27fab138cfdbc6dbcabc"
+    notes: "Per-construct validation-record repair recorded during the WS-12 landing: the current sweep CLI enforces one validation record per traced construct (validation.construct must equal trace.construct_id), and the WS-11 landing had recorded a single V-093 spanning five constructs. The evidence is unchanged — this is the same final-state WS-11 engine suite log V-093 cites (sha-identical). The token-bucket battery (11 tests, mongodb-search-admission.test.ts) pins this construct directly: process-level bucket sized to deployment rate limits (defaults 20 RPM-sustained with 240 burst, MEMONGO_SEARCH_ADMISSION_RPM/BURST overrides honored, RPM=0 dedicated-tier escape, invalid values falling back to safe defaults), instantaneous burst admit then deny, denial carrying a positive retryAfterMs derived from the refill rate, lazy time-based refill with no timers, refill capped at burst, unconditional admit when disabled, a monotone throttled counter, and the limits/depth/denial-count snapshot. Mutation m1 (gate forced off) REDs the battery per refutation-c-018.yaml."
+
+  - id: V-106
+    schema_version: 0.1.0
+    claim_id: C-018
+    construct: packages/memory-engine/src/mongodb-search-executor.ts
+    method: test
+    target: .ddd/reports/runs/ws11-engine-suite.log
+    result: pass
+    run_at: "2026-09-05T16:10:38.000Z"
+    evidence_hash: "sha256:538f37d5943e1de5fb172c575a9b852ad0f350a0ca1e27fab138cfdbc6dbcabc"
+    notes: "Per-construct validation-record repair recorded during the WS-12 landing (same ws11-engine-suite.log as V-093, sha-identical; see V-105 for why this record exists). The executor battery (3 tests, mongodb-search-executor.test.ts) pins this construct directly: the throttle marker propagating into merged pass metadata (mergePassMetadata), the pass loop breaking on a throttled first pass with no follow-up attempts, and the healthy-empty control staying green so the tests pin the marker rather than emptiness. Mutation m2 (marker propagation dropped) REDs 2/58 per refutation-c-018.yaml — this was bypass-audit fix A, originally refuted then caught after the fix."
+
+  - id: V-107
+    schema_version: 0.1.0
+    claim_id: C-018
+    construct: packages/memory-engine/src/mongodb-manager-search.ts
+    method: test
+    target: .ddd/reports/runs/ws11-engine-suite.log
+    result: pass
+    run_at: "2026-09-05T16:10:38.000Z"
+    evidence_hash: "sha256:538f37d5943e1de5fb172c575a9b852ad0f350a0ca1e27fab138cfdbc6dbcabc"
+    notes: "Per-construct validation-record repair recorded during the WS-12 landing (same ws11-engine-suite.log as V-093, sha-identical; see V-105 for why this record exists). The manager-boundary battery (7 tests, mongodb-manager-search.part2.test.ts) pins this construct directly: search() marking v2:throttled and skipping the opted-in legacy re-run on denial, searchDetailed() short-circuiting a throttled response before cache or legacy (bypass-audit fix B), searchKB() admission envelope with the vector-lane drop, and both legacy re-run sites paying their own admission token or not running (bypass-audit fixes D and E). Mutations m3, m4, and m6 RED the battery per refutation-c-018.yaml. WS-12 extended the same file with the onDegradation sink (V-100) without disturbing this battery."
+
+  - id: V-108
+    schema_version: 0.1.0
+    claim_id: C-018
+    construct: packages/memory-engine/src/mongodb-conversation-recall.ts
+    method: test
+    target: .ddd/reports/runs/ws11-engine-suite.log
+    result: pass
+    run_at: "2026-09-05T16:10:38.000Z"
+    evidence_hash: "sha256:538f37d5943e1de5fb172c575a9b852ad0f350a0ca1e27fab138cfdbc6dbcabc"
+    notes: "Per-construct validation-record repair recorded during the WS-12 landing (same ws11-engine-suite.log as V-093, sha-identical; see V-105 for why this record exists). The recall battery (2 tests, mongodb-conversation-recall.test.ts) pins this construct directly: recallConversation drawing one admission token per querying recall (bypass-audit fix C — as first implemented it was entirely ungated and could burn two query embeddings against the same account-wide Atlas tier) and denial degrading to the text-only standard lane with the throttled marker rather than an unmarked empty. Mutation m5 REDs the battery (the aggregate mock fires twice with $rankFusion-hybrid and $vectorSearch fallback pipelines — exactly the ungated burn) per refutation-c-018.yaml."
+
+  - id: V-109
+    schema_version: 0.1.0
+    claim_id: C-018
+    construct: packages/memory-engine/src/mongodb-kb-search.ts
+    method: test
+    target: .ddd/reports/runs/ws11-engine-suite.log
+    result: pass
+    run_at: "2026-09-05T16:10:38.000Z"
+    evidence_hash: "sha256:538f37d5943e1de5fb172c575a9b852ad0f350a0ca1e27fab138cfdbc6dbcabc"
+    notes: "Per-construct validation-record repair recorded during the WS-12 landing (same ws11-engine-suite.log as V-093, sha-identical; see V-105 for why this record exists). The KB-search battery (2 tests, mongodb-kb-search.test.ts) pins this construct directly: the module-level skipVectorLane degradation honored inside canVector so a denied KB search runs the text lane without any $vectorSearch stage (bypass-audit fix D, module half — as first implemented the flag did not exist and every KB search always spent the vector lane, so the manager-level kb:throttled marker could never actually remove the embed burn). Mutation m7 (the canVector guard dropped) REDs 1/17 with a $vectorSearch stage appearing in the captured pipeline per refutation-c-018.yaml."

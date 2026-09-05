@@ -89,6 +89,7 @@ import type {
 	MemoryProviderStatus,
 	MemorySearchRequest,
 	MemorySearchResponse,
+	MemorySearchDegradation,
 	MemorySearchResult,
 	MemorySelfEditBlock,
 	MemorySelfEditAction,
@@ -196,6 +197,11 @@ export interface MongoDBManagerHost {
 			 * runner) cannot cross-attribute each other's lane timings.
 			 */
 			onLaneLatency?: (latencyByLane: Record<string, number>) => void
+			/**
+			 * WS-12 (C-019): receives the degradation marker when admission
+			 * control degraded this answer. Sink-not-state (see onLaneLatency).
+			 */
+			onDegradation?: (degradation: MemorySearchDegradation) => void
 		},
 		operationRunContext?: OperationRunContext,
 	): Promise<MemorySearchResult[]>
@@ -221,6 +227,11 @@ export interface MongoDBManagerHost {
 			filter?: { tags?: string[]; category?: string; source?: string }
 			/** Per-call override; defaults to the resolved config fusionMethod. */
 			fusionMethod?: MemoryMongoDBFusionMethod
+			/**
+			 * WS-12 (C-019): receives the degradation marker when admission
+			 * control dropped the KB vector lane. Sink-not-state.
+			 */
+			onDegradation?: (degradation: MemorySearchDegradation) => void
 		},
 	): Promise<MemorySearchResult[]>
 	detectSearchMethod(mongoCfg: ResolvedMongoDBConfig): SearchMethod

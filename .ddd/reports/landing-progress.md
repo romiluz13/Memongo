@@ -49,8 +49,8 @@ This file is the compaction anchor: any future instance resumes from here.
 | WS-08 | C-011..015 | T2,T2,T1,T1,T1 | API contracts batch | LANDED (see session log) |
 | WS-09 | C-016 | T2 | Runtime capability re-verification | LANDED (see session log) |
 | WS-10 | C-017 | T2 | Cost observability | LANDED (see session log) |
-| WS-11 | C-018 | T3 | Admission control | pending |
-| WS-12 | C-019 | T2 | Degradation vs healthy emptiness | pending |
+| WS-11 | C-018 | T3 | Admission control | LANDED fa0f19db62 (per-construct linkage repaired at WS-12; refutation independence OPEN) |
+| WS-12 | C-019 | T2 | Degradation vs healthy emptiness | LANDED (this commit; see session log) |
 | WS-13 | C-020..023 | T2,T2,T2,T2 | Lifecycle scheduling/dead letters | LANDED b175de6955 + artifacts (see session log) |
 | WS-14 | C-024 | T2 | Orphan detection all relation types | pending |
 | WS-15 | C-025..028 | T1,T2,T1,T1 | Data-model mechanics | pending |
@@ -59,7 +59,7 @@ This file is the compaction anchor: any future instance resumes from here.
 | WS-18 | C-037,038,039 | T1,T2,T2 | dockerignore; publish gates; nightly eval | pending |
 
 T3 needing refutation: C-002, C-003, C-004, C-005, C-007, C-008, C-009, C-018.
-Validation IDs used so far: V-001..V-092 (next free: V-093).
+Validation IDs used so far: V-001..V-109 (next free: V-110).
 Sweep violations at WS-01 landing: 92 (was 96 pre-WS-01).
 Sweep violations at WS-02 landing: 86 (was 92; zero for C-002).
 Sweep violations at WS-04 landing: 67 (was 72 at WS-03; zero for C-007).
@@ -88,6 +88,20 @@ Sweep violations at WS-10 landing: 31 (was 35; zero for C-017; the 4
 WS-10 violations cleared: claim-without-validation + 3x
 trace-without-validation TR-045/046/047; remaining 31 are the pending
 workstreams WS-11/12/14/15/16/18 plus the C-040 quartet).
+Sweep violations at WS-11 landing: 26 (was 31; zero for C-018; the 5
+C-018 violations cleared: claim-without-validation, 3x
+trace-without-validation TR-048/049/050, t3-without-refutation).
+CAVEAT: recorded by the sweep-ws11-compute.py recompute because the ddd
+CLI was unavailable that session — the real CLI re-audit at WS-12
+surfaced 6 pre-existing C-018 violations the recompute missed.
+Sweep violations at WS-12 landing: 23 (was 26 recorded at WS-11, 28 on
+the first real-CLI run before repair; zero for C-019; the 4 C-019
+violations cleared: claim-without-validation + 3x
+trace-without-validation TR-051/052/053; C-018 per-construct linkage
+repaired in the same landing — 5 validation-link-mismatch violations on
+TR-095..099 resolved via V-105..V-109, 1 t3-without-refutation honestly
+open pending an independent round-2 refuter; remaining 22 are pending
+WS-14/15/16/18 claims plus the C-040 quartet).
 
 ## Session log
 
@@ -716,3 +730,101 @@ workstreams WS-11/12/14/15/16/18 plus the C-040 quartet).
   HEAD-worktree baseline needed the repo-pinned binary via a
   node_modules symlink to make "no new findings" a diff, not an
   assertion.
+
+- WS-12/C-019 landing (distinguishable degradation): degradation is now
+  a first-class end-to-end signal — auth failure, throttling, and
+  unavailability are distinguishable from a healthy empty answer at
+  every boundary from engine to model. (1) Client silent mode:
+  packages/client/src/types.ts gains MemongoDegradation (kind:
+  auth | throttled | unavailable, optional status/scope/retryAfterMs),
+  degradation? on the six silent-capable response types, and throttled?
+  metadata on search-detailed/recall; client.ts classifies inside the
+  _silently catch via MemongoClientError.status — swallowed 401/403 ->
+  auth, 429 -> throttled, 500/network -> unavailable — and merges the
+  marker into the returned empty, with silent mode still strictly
+  opt-in (6-test battery: 5 marker tests + the unset-silent throw
+  guard). (2) Engine sink: manager search()/searchKB() accept
+  onDegradation (per-call sink-not-state, like onLaneLatency) and
+  deliver denied / legacy-fallback-skipped / vector-lane-skipped
+  markers; a healthy empty search delivers nothing, so absence stays
+  meaningful (5-test battery, mongodb-manager-search.part2.test.ts).
+  (3) Rerank telemetry: crossEncoderRerank emits rerankSkipped on every
+  no-run path — ok:true with a machine-readable reason for intentional
+  skips (disabled, no-results, no-api-key, too-few-candidates),
+  ok:false for failure skips (api-error, bad-response-shape), nothing
+  on success — so "rerank off" and "rerank broken" are distinct in
+  metrics (7-test battery, mongodb-reranker.test.ts). (4) Bridge:
+  memongoBridgeSearchWithDegradation / memongoBridgeSearchKBWithDegradation
+  forward the sink plus options and merge the marker into
+  {results, degradation}, bare {results} when authoritative; plain
+  accessors preserved (5-test battery, new file
+  memongo-bridge-search-degradation.test.ts — construct-honest evidence
+  for the bridge accessors, which had no runtime pin before). (5) API:
+  /v1/search and /v1/search-kb serve the degradation object on the 200
+  (degraded answers still carry real results) and omit the key entirely
+  when nothing degraded (5-test battery incl. the served-document
+  OpenAPI check, app.segment3.test.ts); openapi-paths-search.ts
+  documents the degradation object on search-kb 200 and the throttled
+  object with required retryAfterMs on search-detailed/recall metadata.
+  (6) Tools: memongo_search / memongo_search_kb pass the client marker
+  through verbatim so the model reads "memory system unauthorized /
+  throttled" instead of "no memories found" (4-test battery,
+  packages/tools/src/index.test.ts). Refutation: T2, not required by
+  the sweep; in place of the bypass audit, every layer's battery pins
+  its own layer's marker handling by direct value assertion (toEqual on
+  the full envelope), so mutating any marker emission off REDs that
+  layer's own tests 1:1 — the WS-11 lesson (wrapper layers could skip a
+  gate the suite did not assert) has no analog here because no layer
+  delegates marker handling to another. Suite state: engine 128 files /
+  2207 tests, api 9 files / 273, client 49, tools 54 (was 50), bridge
+  87 (was 82), mcp 185, fresh uncached check-types 15/15 (turbo
+  --force, 0 cached), touched-files Biome clean. Artifacts: V-096
+  (client.ts) / V-097 (reranker) / V-098 (search-v2) / V-099 (types.ts,
+  method type-check) / V-100 (manager-search) / V-101 (bridge) / V-102
+  (api routes) / V-103 (tools) / V-104 (openapi) — one per construct,
+  companion logs ws12-engine-suite.log (b3eb5a96...), ws12-api-suite.log
+  (d10b5f10...), ws12-client-suite.log (89036b63...), ws12-tools-suite.log
+  (fed8c157...), ws12-bridge-suite.log (63f8b41b...), ws12-mcp-suite.log
+  (4f282959...), ws12-check-types.log (8e01b3b4...) — the engine, api,
+  and check-types logs are post-format re-runs: a final Biome pass on
+  the WS-12-touched files reflowed eight of them (all eight were
+  format-clean at HEAD, proven by materialized-HEAD baseline lint, so
+  the drift was WS-12's own added code; mongodb-manager-search.ts's
+  one remaining format error and all its lint warnings equally
+  pre-exist at HEAD and were left untouched), and the three affected
+  suites were re-run green with identical counts (engine 128/2207,
+  api 9/273, check-types 15/15 uncached) with digests refreshed in
+  V-097/V-098/V-099/V-100/V-102/V-104; C-019 constructs
+  widened 3 -> 9 and validations filled V-096..V-104; TR-051/052/053
+  patched and TR-100..105 added; sweep-ws12.json 23 violations, zero
+  for C-019. C-018 ledger repair at the same landing: the real ddd CLI
+  (available this session, unlike WS-11) enforces one validation record
+  per traced construct — validation.construct must exactly equal
+  trace.construct_id — which the WS-11 python recompute did not; its
+  first run surfaced 6 pre-existing C-018 violations (5
+  validation-link-mismatch on TR-095..099 sharing V-093, plus
+  t3-without-refutation). Repaired honestly with V-105..V-109: one
+  per-construct record citing the same sha-identical ws11-engine-suite
+  log V-093 cites, notes describing each construct's own battery and
+  its refutation mutation; TR-095..099 re-pointed; C-018 validations
+  extended to [V-093, V-094, V-095, V-105..V-109]. The
+  t3-without-refutation violation remains OPEN by design:
+  refutation-c-018.yaml records independence_verified: false (the
+  refutation battery was run by the implementing instance), so the
+  sustain needs an independent round-2 refuter in a fresh session
+  before C-018 is final — an honest obligation that cannot be closed
+  in-session by the party it audits. Net sweep: 26 (WS-11 recompute)
+  -> 28 (first real-CLI run, debt surfaced) -> 23 (linkage repaired);
+  remaining 23 = 22 pending-workstream violations (WS-14/15/16/18 +
+  the C-040 quartet) + the 1 open C-018 refutation obligation.
+  Methodology lessons: (1) a python recompute of the sweep is an
+  approximation, not a substitute — the WS-11 numbers were optimistic
+  by 6 violations that only real enforcement surfaced; when the CLI is
+  unavailable, record the sweep as CLI-unverified; (2) the ws11 runs/
+  logs are summary stubs that embed the original full-log digest in
+  their text (the stub file itself hashes differently), while ws12
+  logs are full runs whose digests match the files — a digest audit
+  must read the stub's embedded line, not hash the stub; (3) re-read
+  every appended ledger record before the sweep — the first V-109
+  draft carried a mangled evidence_hash and placeholder notes, caught
+  only by the read-back.

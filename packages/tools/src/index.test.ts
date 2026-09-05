@@ -210,3 +210,74 @@ describe("createMemongoTools", () => {
 		}
 	})
 })
+
+describe("WS-12 search degradation passthrough (C-019)", () => {
+	it("memongo_search returns the degradation marker alongside empty results", async () => {
+		const search = vi.fn(async () => ({
+			results: [],
+			degradation: { kind: "auth" as const, status: 401 },
+		}))
+		const tools = createMemongoTools({ search } as unknown as MemongoClient)
+		const searchTool = tools.memongo_search as ExecutableTool
+		const input = { query: "deployment runbook" }
+
+		expect(searchTool.inputSchema.parse(input)).toEqual(input)
+		const out = await searchTool.execute(input, {})
+
+		expect(search).toHaveBeenCalledWith(input)
+		// Auth failure reads as auth failure, never as "no memories found".
+		expect(out).toEqual({
+			results: [],
+			degradation: { kind: "auth", status: 401 },
+		})
+	})
+
+	it("memongo_search returns bare results when the client is healthy", async () => {
+		const search = vi.fn(async () => ({ results: [] }))
+		const tools = createMemongoTools({ search } as unknown as MemongoClient)
+		const searchTool = tools.memongo_search as ExecutableTool
+
+		const out = await searchTool.execute({ query: "nothing matches" }, {})
+
+		expect(out).toEqual({ results: [] })
+		expect("degradation" in (out as object)).toBe(false)
+	})
+
+	it("memongo_search_kb returns the degradation marker alongside empty results", async () => {
+		const searchKB = vi.fn(async () => ({
+			results: [],
+			degradation: { kind: "throttled" as const, retryAfterMs: 2500 },
+		}))
+		const tools = createMemongoTools({ searchKB } as unknown as MemongoClient)
+		const kbTool = tools.memongo_search_kb as ExecutableTool
+		const input = { query: "onboarding guide", scopeRef: "acme/platform" }
+
+		const parsed = kbTool.inputSchema.parse(input)
+		const out = await kbTool.execute(parsed, {})
+
+		expect(searchKB).toHaveBeenCalledWith({
+			query: "onboarding guide",
+			agentId: undefined,
+			limit: undefined,
+			scope: undefined,
+			scopeRef: "acme/platform",
+		})
+		// Throttled KB search reads as throttled, never as an authoritative
+		// empty answer.
+		expect(out).toEqual({
+			results: [],
+			degradation: { kind: "throttled", retryAfterMs: 2500 },
+		})
+	})
+
+	it("memongo_search_kb returns bare results when the client is healthy", async () => {
+		const searchKB = vi.fn(async () => ({ results: [] }))
+		const tools = createMemongoTools({ searchKB } as unknown as MemongoClient)
+		const kbTool = tools.memongo_search_kb as ExecutableTool
+
+		const out = await kbTool.execute({ query: "nothing matches" }, {})
+
+		expect(out).toEqual({ results: [] })
+		expect("degradation" in (out as object)).toBe(false)
+	})
+})

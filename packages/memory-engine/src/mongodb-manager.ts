@@ -287,6 +287,7 @@ import type {
 	MemorySearchResponse,
 	MemorySearchResult,
 	MemorySearchMetadata,
+	MemorySearchDegradation,
 	MemorySearchMode,
 	MemorySource,
 	MemorySelfEditBlock,
@@ -1059,6 +1060,12 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 			 * runner) cannot cross-attribute each other's lane timings.
 			 */
 			onLaneLatency?: (latencyByLane: Record<string, number>) => void
+			/**
+			 * WS-12 (C-019): receives the degradation marker when admission
+			 * control degraded this answer. Sink-not-state (see onLaneLatency);
+			 * absence means the answer is authoritative.
+			 */
+			onDegradation?: (degradation: MemorySearchDegradation) => void
 		},
 		operationRunContext?: OperationRunContext,
 	): Promise<MemorySearchResult[]> {
@@ -1195,6 +1202,11 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 			filter?: { tags?: string[]; category?: string; source?: string }
 			/** Per-call override; defaults to the resolved config fusionMethod. */
 			fusionMethod?: MemoryMongoDBFusionMethod
+			/**
+			 * WS-12 (C-019): receives the degradation marker when admission
+			 * control dropped the KB vector lane. Sink-not-state.
+			 */
+			onDegradation?: (degradation: MemorySearchDegradation) => void
 		},
 	): Promise<MemorySearchResult[]> {
 		return searchOpsOf(this).searchKB(query, opts)

@@ -997,7 +997,7 @@ describe("MemongoClient silent option (P1.5)", () => {
 		vi.unstubAllGlobals()
 	})
 
-	it("returns {results: []} on HTTP 500 instead of throwing", async () => {
+	it("returns {results: []} with an unavailable degradation marker on HTTP 500 instead of throwing (C-019)", async () => {
 		vi.stubGlobal(
 			"fetch",
 			vi.fn(async () => new Response("boom", { status: 500 })),
@@ -1008,10 +1008,49 @@ describe("MemongoClient silent option (P1.5)", () => {
 		})
 		await expect(client.search({ query: "anything" })).resolves.toEqual({
 			results: [],
+			degradation: { kind: "unavailable", status: 500 },
 		})
 	})
 
-	it("returns an empty context bundle on HTTP 500 (middleware injects nothing)", async () => {
+	it("classifies a swallowed 401 as auth degradation, not empty results (C-019)", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(
+				async () =>
+					new Response(
+						JSON.stringify({
+							error: { code: "AUTH_NOT_CONFIGURED", message: "no" },
+						}),
+						{ status: 401 },
+					),
+			),
+		)
+		const client = new MemongoClient({
+			baseUrl: "http://127.0.0.1:3100",
+			silent: true,
+		})
+		await expect(client.search({ query: "anything" })).resolves.toEqual({
+			results: [],
+			degradation: { kind: "auth", status: 401 },
+		})
+	})
+
+	it("classifies a swallowed 429 as throttled degradation (C-019)", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => new Response("slow down", { status: 429 })),
+		)
+		const client = new MemongoClient({
+			baseUrl: "http://127.0.0.1:3100",
+			silent: true,
+		})
+		await expect(client.searchKB({ query: "anything" })).resolves.toEqual({
+			results: [],
+			degradation: { kind: "throttled", status: 429 },
+		})
+	})
+
+	it("returns an empty context bundle with an unavailable degradation marker on HTTP 500 (middleware injects nothing)", async () => {
 		vi.stubGlobal(
 			"fetch",
 			vi.fn(async () => new Response("boom", { status: 500 })),
@@ -1023,9 +1062,10 @@ describe("MemongoClient silent option (P1.5)", () => {
 		const bundle = await client.buildContextBundle({ agentId: "a" })
 		expect(bundle.rendered).toBe("")
 		expect(bundle.sections).toEqual([])
+		expect(bundle.degradation).toEqual({ kind: "unavailable", status: 500 })
 	})
 
-	it("returns empty results on network failure (fetch rejects)", async () => {
+	it("returns empty results with an unavailable (no status) degradation marker on network failure (fetch rejects)", async () => {
 		vi.stubGlobal(
 			"fetch",
 			vi.fn(async () => {
@@ -1038,6 +1078,7 @@ describe("MemongoClient silent option (P1.5)", () => {
 		})
 		await expect(client.searchDetailed({ query: "x" })).resolves.toMatchObject({
 			results: [],
+			degradation: { kind: "unavailable" },
 		})
 	})
 

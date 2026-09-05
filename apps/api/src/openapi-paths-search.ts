@@ -12,6 +12,36 @@
 import { AGENT_ID_FIELD_DESCRIPTION } from "@memongo/lib"
 import { memoryScopeEnum } from "./openapi-schemas.js"
 
+/**
+ * WS-12 (C-019): degradation marker on search responses. Present exactly
+ * when the answer is degraded rather than authoritative, so a throttled
+ * search never reads as "no memories found" and a skipped KB vector lane
+ * never reads as authoritative ranking.
+ */
+const searchDegradationSchema = {
+	type: "object",
+	required: ["kind", "scope", "retryAfterMs"],
+	properties: {
+		kind: {
+			type: "string",
+			enum: ["throttled"],
+			description: "The answer is degraded by admission control.",
+		},
+		scope: {
+			type: "string",
+			enum: ["denied", "legacy-fallback-skipped", "vector-lane-skipped"],
+			description:
+				"Which surface was degraded: the whole query was denied before any lane ran, the optional legacy re-run of an empty v2 verdict was denied, or the KB vector lane was skipped (text-lane results stand with degraded ranking).",
+		},
+		retryAfterMs: {
+			type: "number",
+			description: "Hint for when to retry (milliseconds).",
+		},
+	},
+	description:
+		"WS-12: set only when admission control degraded this answer; absent means the results are an authoritative retrieval verdict.",
+}
+
 export const searchPaths = {
 	"/health": {
 		get: {
@@ -74,7 +104,26 @@ export const searchPaths = {
 					},
 				},
 			},
-			responses: { "200": { description: "Search results" } },
+			responses: {
+				"200": {
+					description:
+						"Search results (with degradation marker when throttled)",
+					content: {
+						"application/json": {
+							schema: {
+								type: "object",
+								properties: {
+									results: {
+										type: "array",
+										items: { type: "object" },
+									},
+									degradation: searchDegradationSchema,
+								},
+							},
+						},
+					},
+				},
+			},
 		},
 	},
 	"/v1/search-detailed": {
@@ -430,6 +479,15 @@ export const searchPaths = {
 											},
 											mmrApplied: { type: "boolean" },
 											mmrLambda: { type: "number" },
+											throttled: {
+												type: "object",
+												required: ["retryAfterMs"],
+												properties: {
+													retryAfterMs: { type: "number" },
+												},
+												description:
+													"WS-11: set when admission control denied a pass — the empty results are throttling, not a retrieval verdict.",
+											},
 											trustSummary: {
 												type: "object",
 												properties: {
@@ -592,6 +650,15 @@ export const searchPaths = {
 												enum: ["standard", "semantic", "hybrid"],
 											},
 											durationMs: { type: "number" },
+											throttled: {
+												type: "object",
+												required: ["retryAfterMs"],
+												properties: {
+													retryAfterMs: { type: "number" },
+												},
+												description:
+													"WS-11: set when admission control denied the semantic recall pass — the empty results are throttling, not a retrieval verdict.",
+											},
 										},
 									},
 								},
@@ -714,7 +781,26 @@ export const searchPaths = {
 					},
 				},
 			},
-			responses: { "200": { description: "KB results" } },
+			responses: {
+				"200": {
+					description:
+						"KB results (with degradation marker when the vector lane was skipped)",
+					content: {
+						"application/json": {
+							schema: {
+								type: "object",
+								properties: {
+									results: {
+										type: "array",
+										items: { type: "object" },
+									},
+									degradation: searchDegradationSchema,
+								},
+							},
+						},
+					},
+				},
+			},
 		},
 	},
 } as const

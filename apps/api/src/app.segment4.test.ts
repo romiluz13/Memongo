@@ -29,9 +29,9 @@ const bridgeMocks = vi.hoisted(() => ({
 	memongoBridgeRelevanceExplain: vi.fn(),
 	memongoBridgeRelevanceReport: vi.fn(),
 	memongoBridgeRelevanceSampleRate: vi.fn(),
-	memongoBridgeSearch: vi.fn(),
+	memongoBridgeSearchWithDegradation: vi.fn(),
 	memongoBridgeSearchDetailed: vi.fn(),
-	memongoBridgeSearchKB: vi.fn(),
+	memongoBridgeSearchKBWithDegradation: vi.fn(),
 	memongoBridgeStats: vi.fn(),
 	memongoBridgeStatus: vi.fn(),
 	memongoBridgeSync: vi.fn(),
@@ -64,7 +64,7 @@ describe("createApp", () => {
 		delete process.env.MEMONGO_API_KEY
 		delete process.env.MEMONGO_API_SCOPED_KEYS
 		process.env.MEMONGO_ALLOW_INSECURE_NO_AUTH = "true"
-		bridgeMocks.memongoBridgeSearch.mockReset()
+		bridgeMocks.memongoBridgeSearchWithDegradation.mockReset()
 		bridgeMocks.memongoBridgeSearchDetailed.mockReset()
 		bridgeMocks.memongoBridgeAdd.mockReset()
 		bridgeMocks.memongoBridgeAccessSummaries.mockReset()
@@ -96,7 +96,12 @@ describe("createApp", () => {
 		bridgeMocks.memongoBridgeReportProcedureOutcome.mockReset()
 		bridgeMocks.memongoBridgeWriteConversationEvent.mockReset()
 		bridgeMocks.memongoBridgeWriteConversationEventsBatch.mockReset()
-		bridgeMocks.memongoBridgeSearch.mockResolvedValue([])
+		bridgeMocks.memongoBridgeSearchWithDegradation.mockResolvedValue({
+			results: [],
+		})
+		bridgeMocks.memongoBridgeSearchKBWithDegradation.mockResolvedValue({
+			results: [],
+		})
 		bridgeMocks.memongoBridgeSearchDetailed.mockResolvedValue({
 			results: [],
 			metadata: {
@@ -674,7 +679,7 @@ describe("createApp", () => {
 	})
 
 	it("returns a safe 500 envelope without leaking driver internals (P0.8)", async () => {
-		bridgeMocks.memongoBridgeSearch.mockRejectedValue(
+		bridgeMocks.memongoBridgeSearchWithDegradation.mockRejectedValue(
 			Object.assign(
 				new Error(
 					"MongoServerError: connection to 10.0.0.5:27017 timed out at /data/db",
@@ -760,7 +765,9 @@ describe("createApp", () => {
 		})
 
 		expect(res.status).toBe(200)
-		expect(bridgeMocks.memongoBridgeSearchKB).toHaveBeenCalledWith(
+		expect(
+			bridgeMocks.memongoBridgeSearchKBWithDegradation,
+		).toHaveBeenCalledWith(
 			expect.objectContaining({ fusionMethod: "scoreFusion" }),
 		)
 	})
@@ -777,7 +784,9 @@ describe("createApp", () => {
 		})
 
 		expect(res.status).toBe(200)
-		const call = bridgeMocks.memongoBridgeSearchKB.mock.calls.at(-1)?.[0] as {
+		const call = bridgeMocks.memongoBridgeSearchKBWithDegradation.mock.calls.at(
+			-1,
+		)?.[0] as {
 			fusionMethod?: string
 		}
 		expect(call.fusionMethod).toBeUndefined()
