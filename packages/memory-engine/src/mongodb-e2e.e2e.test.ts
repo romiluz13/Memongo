@@ -101,7 +101,10 @@ const EXPECTED_COLLECTION_SUFFIXES = [
 // idx_relations_agent_scope_scoperef), +3 ESR compounds, +1 relationId locator.
 // P4.4.1 added two partial TTL indexes (events and structured_mem).
 // C-005 added the chunks expiry partial TTL index (idx_chunks_ttl_expires_at).
-const EXPECTED_STANDARD_INDEX_COUNT = 96
+// WS-03 added the session_chunks expiry partial TTL index
+// (idx_session_chunks_ttl_expires_at) but never bumped this count: the e2e
+// has been red at HEAD since. 96 + 4 TTL indexes = 100.
+const EXPECTED_STANDARD_INDEX_COUNT = 100
 
 let client: MongoClient
 let db: Db
