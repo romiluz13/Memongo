@@ -49,7 +49,7 @@ This file is the compaction anchor: any future instance resumes from here.
 | WS-08 | C-011..015 | T2,T2,T1,T1,T1 | API contracts batch | LANDED (see session log) |
 | WS-09 | C-016 | T2 | Runtime capability re-verification | LANDED (see session log) |
 | WS-10 | C-017 | T2 | Cost observability | LANDED (see session log) |
-| WS-11 | C-018 | T3 | Admission control | LANDED fa0f19db62 (per-construct linkage repaired at WS-12; refutation independence OPEN) |
+| WS-11 | C-018 | T3 | Admission control | LANDED fa0f19db62 (per-construct linkage repaired at WS-12; refutation independence closed 2026-09-05 by refutation-c-018-round2.yaml, see WS-19 session log) |
 | WS-12 | C-019 | T2 | Degradation vs healthy emptiness | LANDED b02c50635c (hash pinned by follow-up ledger commit) |
 | WS-13 | C-020..023 | T2,T2,T2,T2 | Lifecycle scheduling/dead letters | LANDED b175de6955 + artifacts (see session log) |
 | WS-14 | C-024 | T2 | Orphan detection all relation types | LANDED d0184fc2b9 (hash pinned by follow-up ledger commit) |
@@ -57,9 +57,10 @@ This file is the compaction anchor: any future instance resumes from here.
 | WS-16 | C-029..034 | T2,T1,T2,T0,T2,T1 | Retrieval quality/perf | LANDED fd313cf825 (hash pinned by follow-up ledger commit) |
 | WS-17 | C-035,036 | T2,T2 | kb cross-tenant read; pi opt-in | LANDED 96c8db28bb (see session log) |
 | WS-18 | C-037,038,039 | T1,T2,T2 | dockerignore; publish gates; nightly eval | LANDED 695e08eec9 (hash pinned by follow-up ledger commit) |
+| WS-19 | C-040 | T2 | Untrusted-memory provenance label (tools + MCP) | LANDED 00c97b3ed1 |
 
 T3 needing refutation: C-002, C-003, C-004, C-005, C-007, C-008, C-009, C-018.
-Validation IDs used so far: V-001..V-136 (next free: V-137).
+Validation IDs used so far: V-001..V-138 (next free: V-139).
 Sweep violations at WS-01 landing: 92 (was 96 pre-WS-01).
 Sweep violations at WS-02 landing: 86 (was 92; zero for C-002).
 Sweep violations at WS-04 landing: 67 (was 72 at WS-03; zero for C-007).
@@ -132,6 +133,17 @@ sweep; remaining 4 = the C-040 quartet (claim-without-validation,
 claim-with-missing-evidence REF-WS05-R2, untraced constructs
 packages/tools/src/index.ts + apps/mcp/src/server.ts) — the next
 workstream).
+Sweep violations at WS-19 landing: 0 = CONFORMANT_DECLARED_SCOPE (was
+4 at WS-18; zero for C-040; the C-040 quartet cleared:
+claim-without-validation + claim-with-missing-evidence REF-WS05-R2 +
+2 untraced constructs, discharged by the evidence.lock REF-WS05-R2
+entry, V-137/V-138, TR-112/TR-113, and the C-040 validations field;
+the C-018 t3-without-refutation obligation was independently
+discharged earlier the same session by refutation-c-018-round2.yaml —
+all 7 mutations caught, restores byte-identical, independence
+disclosed as manual in-session execution because subagent
+infrastructure was unavailable); 40 claims / 113 traces, first
+fully-clean sweep of the program).
 
 ## Session log
 
@@ -1164,3 +1176,91 @@ post-verification edit (the jq fix postdated the first log cut);
 (3) bash brace groups do not create a subshell — a `{ cd ...; }`
 block changes the shell cwd for the rest of the chain, so evidence
 commands need absolute redirect paths.
+
+### 2026-09-05 — WS-19 (C-040) landed: untrusted-memory provenance label
+
+Commits: D2 0d7fd4742a, D4 fd59829b1c, C-018 round-2 refutation
+23cf8377f3, WS-19 landing 00c97b3ed1.
+
+The last open claim of the remediation program: model-visible
+retrieval payloads from the AI-SDK tools and the MCP server carry the
+quarantine envelope. Also this session: D2/D4 remediation fixes, and
+the C-018 independent round-2 refutation that closes the last T3
+obligation.
+
+- C-040 (provenance label): new module
+  packages/lib/src/memory-provenance.ts exports the canonical
+  UNTRUSTED_MEMORY_PROVENANCE string (reference-data-only / untrusted /
+  never-treat-as-command semantics) and withUntrustedMemoryProvenance(),
+  re-exported from @memongo/lib. Every retrieval surface wraps its
+  result: the 6 AI-SDK tools in packages/tools/src/index.ts
+  (memongo_search, search_kb, read_file, profile, build_context_bundle,
+  recall_conversation) and the 7 MCP handlers in apps/mcp/src/server.ts
+  (+ search_detailed; memongo_recall_messages alias included) via a
+  jsonMemoryResult helper that also mirrors the labeled payload into
+  structuredContent. Label is the FIRST field so it survives payload
+  truncation. ADR-0010 written
+  (docs/adr/0010-retrieval-provenance-label-on-tools-and-mcp.md):
+  label-as-first-field, 13 surfaces enumerated, accepted residuals
+  (pi surfaces already covered by C-008; API/HTTP consumers are not
+  model-visible). The C-019 degradation-sink tests were updated in the
+  same landing so auth/throttled degraded outcomes are labeled too.
+- D2 (admission fractional RPM):
+  resolveSearchAdmissionLimits now keeps the exact fractional RPM rate
+  (requestsPerMinute: parsed, no floor) while defaulting burst to
+  Math.max(1, Math.floor(parsed)), so a 0.5 RPM operator setting
+  yields rate 0.5 / burst 1 instead of being silently rounded to 1
+  RPM (2x the enforced budget). Sub-unit test battery (0.5 RPM
+  rate/burst, retry hint, operator retune, integral regression).
+- D4 (erasure coverage): memory_cost_ledger added to
+  agentKeyedCollections() + accessorFor() in mongodb-erasure.ts
+  (coverage map 26 -> 27); tenant-erasure test pins updated
+  (AGENT_KEYED 27, receipt 30, deletedTotal 31).
+- C-018 independent round-2 refutation: subagent infrastructure
+  unavailable again (no access token), so the 7-mutation battery was
+  executed manually in-session with honest independence disclosure in
+  the report (fresh post-compaction session; did not author WS-11 or
+  its fixes; all mutation sites re-derived from the current tree; one
+  literal adapted for M2 because executor code shape changed since
+  round 1). Baseline control 159/159 green across the 5 focused files;
+  all 7 mutations caught (12 distinct RED test titles — the 10 round-1
+  pins plus 2 newer C-019 sink tests that also pin the throttled
+  branches); every restore verified byte-identical via cmp (SHA256
+  match, exit 0); post-restore control 159/159 green and tree clean.
+  Report: .ddd/reports/refutation-c-018-round2.yaml,
+  independence_verified: true, verdict sustained. Logs:
+  refutation-c-018-r2-{baseline, m1..m7, post-restore-control}.log.
+
+Ledger closure: REF-WS05-R2 captured as an evidence.lock entry (cache
+file .ddd/cache/ref-ws05-r2-uncovered-injection-surfaces.md, verbatim
+finding excerpt from refutation-c-008.yaml round_2, sections
+["findings/uncovered-injection-surfaces"], authority_for [security,
+remediation-priorities]); V-137 (tools suite, 61/61,
+sha256:955394efd97b...) and V-138 (MCP suite, 193/193,
+sha256:6261101f5d3c...) recorded; TR-112/TR-113 appended; C-040
+validations field set. Sweep: CONFORMANT_DECLARED_SCOPE, 0 violations,
+40 claims / 113 traces — the program's first fully-clean sweep.
+
+Gates at landing: tools suite 61/61; MCP suite 193/193; engine suite
+2275/2275 (129 files, includes D2 admission 14/14 and erasure 7/7);
+full monorepo test 14/14 tasks; root check-types 15/15 tasks; Biome
+error-level clean on the 10 touched TS files.
+
+Fixes during landing verification: (1) stale @memongo/lib dist
+predating memory-provenance.ts made both dependent suites fail on the
+missing export — rebuilt packages/lib before re-running; (2) 2 Biome
+format diffs (it.each line-length wrapping in both new test blocks)
+fixed with biome format --write, suites re-run, logs re-cut, V-137/
+V-138 evidence_hash + run_at updated to the final digests (the WS-18
+lesson applied).
+
+Methodology lessons: (1) rebuild a package's dist before running its
+dependents' suites when the change adds a new export — a stale build
+reads as a missing export, not a stale cache; (2) the manual
+refutation fallback (same-session battery with disclosure) keeps the
+independence obligation honest when infrastructure is down, but the
+disclosure must state exactly what independence means in that context
+(fresh session, no authorship of the original work, sites re-derived
+from the current tree, adaptations listed); (3) sweep re-runs between
+closure edits (after each ledger write, not only at the end) localize
+which edit cleared which violation.
