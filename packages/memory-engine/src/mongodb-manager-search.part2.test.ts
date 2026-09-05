@@ -205,6 +205,15 @@ describe("searchV2 cost controls (P3.1/P3.2)", () => {
 			"sessions",
 			"memory",
 		])
+		// C-026: the fused chunk lane carries the bitemporal guard — chunks
+		// not yet valid (validAt after the reference clock) or already
+		// invalidated (invalidAt at or before it) are excluded at the
+		// index-adjacent filter; the null arms match legacy chunks that
+		// predate the validAt/invalidAt fields.
+		expect(vsStage.filter.$and).toEqual([
+			{ $or: [{ validAt: null }, { validAt: { $lte: expect.any(Date) } }] },
+			{ $or: [{ invalidAt: null }, { invalidAt: { $gt: expect.any(Date) } }] },
+		])
 		expect(result.metadata.budget?.embeds).toBe(1)
 		expect(result.metadata.budget?.aggregations).toBe(1)
 		expect(result.results.length).toBeGreaterThan(0)

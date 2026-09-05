@@ -475,3 +475,67 @@ describe("MongoDBManagerReadOps kb locator tenant scoping (C-035)", () => {
 		expect(result.text).toBe("")
 	})
 })
+
+describe("MongoDBManagerReadOps relation locator (C-025)", () => {
+	it("passes a typed locator through to findRelationByLocatorId without extra parameters", async () => {
+		const { MongoDBManagerReadOps } = await import("./mongodb-manager-read.js")
+		const { findRelationByLocatorId } = await import("./mongodb-graph.js")
+		mocked(findRelationByLocatorId).mockResolvedValue({
+			fromEntityId: "ent-1",
+			toEntityId: "ent-2",
+			type: "works_on",
+			state: "active",
+			agentId: "agent-1",
+			scope: "agent",
+			scopeRef: "agent:agent-1",
+			updatedAt: new Date(),
+		})
+
+		const ops = new MongoDBManagerReadOps({
+			db: {} as import("mongodb").Db,
+			prefix: "test_",
+			agentId: "agent-1",
+			agentScopeRef: "agent:agent-1",
+		} as unknown as import("./mongodb-manager-host.js").MongoDBManagerHost)
+
+		const result = await ops.readFile({
+			relPath: "relation:ent-1-ent-2-works_on",
+		})
+
+		expect(findRelationByLocatorId).toHaveBeenCalledWith(
+			expect.objectContaining({
+				relationId: "ent-1-ent-2-works_on",
+				type: undefined,
+			}),
+		)
+		expect(result.text).toContain("type: works_on")
+		expect(result.source).toBe("conversation")
+	})
+
+	it("forwards ?type= so a bare pair disambiguates same-pair relations", async () => {
+		const { MongoDBManagerReadOps } = await import("./mongodb-manager-read.js")
+		const { findRelationByLocatorId } = await import("./mongodb-graph.js")
+		mocked(findRelationByLocatorId).mockResolvedValue(null)
+
+		const ops = new MongoDBManagerReadOps({
+			db: {} as import("mongodb").Db,
+			prefix: "test_",
+			agentId: "agent-1",
+			agentScopeRef: "agent:agent-1",
+		} as unknown as import("./mongodb-manager-host.js").MongoDBManagerHost)
+
+		const result = await ops.readFile({
+			relPath: "relation:ent-1-ent-2?type=works_on&scope=agent",
+		})
+
+		expect(findRelationByLocatorId).toHaveBeenCalledWith(
+			expect.objectContaining({
+				relationId: "ent-1-ent-2",
+				type: "works_on",
+				scope: "agent",
+			}),
+		)
+		// Miss renders as an empty conversation read, not an error.
+		expect(result.text).toBe("")
+	})
+})

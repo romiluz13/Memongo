@@ -18,6 +18,7 @@ import {
 	writeEvent,
 	writeEventsBatch,
 	projectEventChunksBatch,
+	projectEventChunk,
 	clearEventExtractionJobPendingBatch,
 	getPendingExtractionEvents,
 	clearEventExtractionJobPending,
@@ -306,6 +307,114 @@ describe("projectEventChunksBatch", () => {
 		expect(results).toEqual([{ chunkCreated: false }, { chunkCreated: false }])
 		// Events stay unprojected so the repair pass can project them later.
 		expect(eventsCol.updateMany).not.toHaveBeenCalled()
+	})
+
+	it("carries the event-valid interval on every batched chunk (C-026)", async () => {
+		const bulkWrite = vi.fn(async () => ({
+			upsertedCount: 2,
+			upsertedIds: { 0: "chunk-id-1", 1: "chunk-id-2" },
+			matchedCount: 0,
+		}))
+		const chunksCol = { bulkWrite } as unknown as Collection
+		vi.mocked(chunksCollection).mockReturnValue(chunksCol)
+		const eventsCol = {
+			updateMany: vi.fn(async () => ({ modifiedCount: 2 })),
+		} as unknown as Collection
+		vi.mocked(eventsCollection).mockReturnValue(eventsCol)
+
+		const validAt = new Date("2026-08-01T12:00:00.000Z")
+		const invalidAt = new Date("2026-08-05T12:00:00.000Z")
+		const events = [
+			makeEvent("evt-c1"),
+			{ ...makeEvent("evt-c2"), validAt, invalidAt },
+		]
+		await projectEventChunksBatch({
+			db: mockDb(),
+			prefix: "test_",
+			events,
+		})
+
+		const ops = bulkWrite.mock.calls[0][0]
+		// evt-c1 has no explicit interval: validAt defaults to the event
+		// timestamp, invalidAt to null (still valid). evt-c2 carries its
+		// explicit interval. Both ride $set so re-projection heals legacy
+		// chunks written without them.
+		expect(ops[0].updateOne.update.$set.validAt).toBe(events[0].timestamp)
+		expect(ops[0].updateOne.update.$set.invalidAt).toBeNull()
+		expect(ops[1].updateOne.update.$set.validAt).toBe(validAt)
+		expect(ops[1].updateOne.update.$set.invalidAt).toBe(invalidAt)
+	})
+})
+
+// ---------------------------------------------------------------------------
+// Tests: projectEventChunk bitemporal carry (C-026)
+// ---------------------------------------------------------------------------
+
+describe("projectEventChunk bitemporal carry (C-026)", () => {
+	beforeEach(() => {
+		vi.clearAllMocks()
+	})
+
+	function makeBitemporalEvent(eventId: string): CanonicalEvent {
+		return {
+			eventId,
+			agentId: "agent-1",
+			role: "user",
+			body: `body of ${eventId}`,
+			scope: "agent",
+			scopeRef: "agent:agent-1",
+			timestamp: new Date("2026-04-09T12:00:00.000Z"),
+		}
+	}
+
+	function makeChunkCol() {
+		const updateOne = vi.fn(async () => ({
+			upsertedCount: 1,
+			matchedCount: 0,
+			modifiedCount: 0,
+		}))
+		const chunksCol = { updateOne } as unknown as Collection
+		vi.mocked(chunksCollection).mockReturnValue(chunksCol)
+		const eventsCol = {
+			updateMany: vi.fn(async () => ({ modifiedCount: 1 })),
+		} as unknown as Collection
+		vi.mocked(eventsCollection).mockReturnValue(eventsCol)
+		return { updateOne }
+	}
+
+	it("carries the event-valid interval in $set so re-projection heals legacy chunks", async () => {
+		const { updateOne } = makeChunkCol()
+		const validAt = new Date("2026-08-01T12:00:00.000Z")
+		const invalidAt = new Date("2026-08-05T12:00:00.000Z")
+
+		await projectEventChunk({
+			db: mockDb(),
+			prefix: "test_",
+			event: { ...makeBitemporalEvent("evt-bt"), validAt, invalidAt },
+		})
+
+		const [, update] = updateOne.mock.calls[0]
+		expect(update.$set.validAt).toBe(validAt)
+		expect(update.$set.invalidAt).toBe(invalidAt)
+		// $set, not $setOnInsert — re-projecting an old chunk that an earlier
+		// projection path wrote without the interval rewrites it (heal).
+		expect(update.$setOnInsert.validAt).toBeUndefined()
+		expect(update.$setOnInsert.invalidAt).toBeUndefined()
+	})
+
+	it("defaults validAt to the event timestamp and invalidAt to null", async () => {
+		const { updateOne } = makeChunkCol()
+		const event = makeBitemporalEvent("evt-bt-default")
+
+		await projectEventChunk({
+			db: mockDb(),
+			prefix: "test_",
+			event,
+		})
+
+		const [, update] = updateOne.mock.calls[0]
+		expect(update.$set.validAt).toBe(event.timestamp)
+		expect(update.$set.invalidAt).toBeNull()
 	})
 })
 

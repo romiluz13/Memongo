@@ -69,7 +69,9 @@ function buildProcedurePath(doc: Document): string {
 }
 
 function buildRelationPath(doc: Document): string {
-	return `relation:${String(doc.fromEntityId ?? "")}-${String(doc.toEntityId ?? "")}${buildScopeSuffix(
+	// C-025: typed locator ("from-to-type") so a path round-trips to one
+	// relation even when several relations share the same entity pair.
+	return `relation:${String(doc.fromEntityId ?? "")}-${String(doc.toEntityId ?? "")}-${String(doc.type ?? "")}${buildScopeSuffix(
 		doc.scope as MemoryScope,
 		String(doc.scopeRef ?? ""),
 	)}`

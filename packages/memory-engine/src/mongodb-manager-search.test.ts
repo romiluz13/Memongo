@@ -858,6 +858,14 @@ describe("searchV2", () => {
 		expect(expandGraph).toHaveBeenCalledOnce()
 		expect(result.metadata.pathsExecuted).toContain("graph")
 		expect(result.results.length).toBeGreaterThan(0)
+		// C-025: graph-lane relation paths carry the typed locator
+		// ("from-to-type") so readFile resolves one relation even when a
+		// pair carries relations of several types.
+		const relationResult = result.results.find((r) =>
+			r.path.startsWith("relation:"),
+		)
+		expect(relationResult?.path).toBe("relation:ent-1-ent-2-works_on")
+		expect(relationResult?.filePath).toBe("relation:ent-1-ent-2-works_on")
 	})
 
 	it("passes the configured graph depth into graph expansion", async () => {

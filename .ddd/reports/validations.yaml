@@ -885,3 +885,73 @@ entries:
     run_at: "2026-09-05T16:38:01.114Z"
     evidence_hash: "sha256:4e91947a362d50228efc551e362c3b5c9ae8b72712fd032d221276c9e978af7b"
     notes: "Cascade evidence from the same final-state WS-14 engine suite: the deleteEntity battery extension (mongodb-graph.test.ts) pins the entity_links cascade — deleteEntity issues a second deleteMany with the same $or [{fromEntityId}, {toEntityId}] + agentId filter as the relation cascade and reports the deletedEntityLinks count. deleteEntityConservative (mongodb-graph.segment2.test.ts, force path) passes the count through, so the audited delete surface reports links removed alongside relations. This construct was added to the C-024 envelope during the WS-14 landing because the deleteEntity cascade lives in mongodb-graph.ts, not in the two constructs the planned envelope declared."
+  - id: V-113
+    schema_version: 0.1.0
+    claim: C-025
+    construct: "packages/memory-engine/src/mongodb-graph.ts#findRelationByLocatorId"
+    method: test
+    target: .ddd/reports/runs/ws15-engine-suite.log
+    result: pass
+    run_at: "2026-09-05T17:11:21.922Z"
+    evidence_hash: "sha256:4951ac422de511410f61f5d360c9211d5afb15e368d21df62e509597f9c3dd9d"
+    notes: "Typed-locator battery from the final-state WS-15 engine suite (129 files / 2246 tests, exit 0): mongodb-graph.segment2.test.ts pins findRelationByLocatorId typed lookup (from-to-type hits one relation when several share the pair), bare-pair input falling back to the typed match, and the legacy untyped relationId scan filtered by type; upsertRelation now writes the typed relationId (mongodb-graph.test.ts). migrateRelationLocatorIds rewrites legacy docs in one bulkWrite batch and is idempotent on a second pass (4 tests). Live-path companion evidence: readFile relation: resolution exercised end-to-end against the docker stack in ws15-mongodb-e2e.log (43/43) and ws15-real-e2e-v2.log (81/81)."
+  - id: V-114
+    schema_version: 0.1.0
+    claim: C-025
+    construct: packages/memory-engine/src/mongodb-manager-read.ts
+    method: test
+    target: .ddd/reports/runs/ws15-engine-suite.log
+    result: pass
+    run_at: "2026-09-05T17:11:25.939Z"
+    evidence_hash: "sha256:4951ac422de511410f61f5d360c9211d5afb15e368d21df62e509597f9c3dd9d"
+    notes: "Manager surface from the same final-state WS-15 engine suite: the new 'MongoDBManagerReadOps relation locator (C-025)' battery (mongodb-manager-read.test.ts) pins readFile's relation: branch passing the typed locator through to findRelationByLocatorId and forwarding a ?type= query parameter, so a path with no explicit type still resolves through the optional-type fallback. Cross-package greps confirmed no other readFile caller hard-codes bare relation: paths (apps/, non-engine packages clean), so the typed locator is the single resolution surface."
+  - id: V-115
+    schema_version: 0.1.0
+    claim: C-026
+    construct: packages/memory-engine/src/mongodb-events.ts
+    method: test
+    target: .ddd/reports/runs/ws15-engine-suite.log
+    result: pass
+    run_at: "2026-09-05T17:11:30.421Z"
+    evidence_hash: "sha256:4951ac422de511410f61f5d360c9211d5afb15e368d21df62e509597f9c3dd9d"
+    notes: "Projection-side bitemporal carry from the same final-state WS-15 engine suite: mongodb-events.test.ts pins projectEventChunk and projectEventChunksBatch writing validAt = event.validAt ?? event.timestamp and invalidAt = event.invalidAt ?? null into every chunks document (heal pattern — existing chunk docs are repaired on rewrite), in both the single insert and the  batch pipeline. Chunk-lane queries therefore always have the fields the C-026 filter arms compare, including pre-C-026 documents after one re-projection."
+  - id: V-116
+    schema_version: 0.1.0
+    claim: C-026
+    construct: packages/memory-engine/src/mongodb-search-v2.ts
+    method: test
+    target: .ddd/reports/runs/ws15-real-e2e-v2.log
+    result: pass
+    run_at: "2026-09-05T17:11:35.038Z"
+    evidence_hash: "sha256:0e60ace0afeb8015dff82472c70f1a1fb64651a91741be7ba4198c4aac806d33"
+    notes: "Search-lane bitemporal filter, live-stack evidence: real-e2e-v2 (81/81 against the docker atlas-local + mongot stack) exercises the conversation and bridge chunk lanes end-to-end with the $and[{validAt null/<=ref},{invalidAt null/>ref}] filter arms against a freshly created chunks_vector whose filter paths declare validAt and invalidAt (mongodb-schema-search-indexes.ts, mirroring events_vector). Unit pins in the WS-15 engine suite: mongodb-manager-search.part2.test.ts asserts the fused-lane vsStage.filter carries both arms, and mongodb-schema.part4.test.ts pins the chunks_vector filter-path declaration so mongot cannot reject the filter with 'Path needs to be indexed as filter' (the eec3eadc76 failure mode, caught pre-merge this landing). Existing deployments heal via ensureNamedSearchIndex drift detection calling updateSearchIndex."
+  - id: V-117
+    schema_version: 0.1.0
+    claim: C-027
+    construct: packages/memory-engine/src/mongodb-graph.ts
+    method: test
+    target: .ddd/reports/runs/ws15-engine-suite.log
+    result: pass
+    run_at: "2026-09-05T17:11:39.196Z"
+    evidence_hash: "sha256:4951ac422de511410f61f5d360c9211d5afb15e368d21df62e509597f9c3dd9d"
+    notes: "Exclusive-relation invalidation fix from the same final-state WS-15 engine suite: mongodb-graph.test.ts pins upsertRelation's exclusive-relation branch setting validTo = superseding relation validFrom with a now fallback (both arms: superseding event carrying its own validFrom, and absent -> Date.now), and invalidatedBy.at stored as a BSON Date rather than an ISO string. The invalidation window therefore opens at the superseding relation's own validFrom, not at the moment the upsert happened to run."
+  - id: V-118
+    schema_version: 0.1.0
+    claim: C-028
+    construct: "packages/memory-engine/src/mongodb-structured-memory.ts#mergeSourceEventIds"
+    method: test
+    target: .ddd/reports/runs/ws15-engine-suite.log
+    result: pass
+    run_at: "2026-09-05T17:11:42.613Z"
+    evidence_hash: "sha256:4951ac422de511410f61f5d360c9211d5afb15e368d21df62e509597f9c3dd9d"
+    notes: "Structured-memory provenance bound from the same final-state WS-15 engine suite: the new C-028 battery in mongodb-structured-memory.test.ts pins mergeSourceEventIds capping sourceEventIds at 200 with recency eviction — pushing a new event id past the cap evicts the oldest ids and keeps the 200 most recent, and the structured-memory upsert path stores the bounded array. MAX_SOURCE_EVENT_IDS is the single shared constant, so entities, relations, and structured memories cap identically."
+  - id: V-119
+    schema_version: 0.1.0
+    claim: C-028
+    construct: packages/memory-engine/src/mongodb-graph.ts
+    method: test
+    target: .ddd/reports/runs/ws15-engine-suite.log
+    result: pass
+    run_at: "2026-09-05T17:11:46.355Z"
+    evidence_hash: "sha256:4951ac422de511410f61f5d360c9211d5afb15e368d21df62e509597f9c3dd9d"
+    notes: "Entity and relation provenance bounds from the same final-state WS-15 engine suite: mongodb-graph.test.ts pins upsertEntity's read-merge-write capping merged sourceEventIds at 200 keeping the most recent, and upsertRelation applying the same cap; mongodb-graph.segment2.test.ts pins the batch pipeline's $reduce + concatArrays + $slice -200 expression so the batch path cannot grow unbounded arrays between reads. The dead addToSet sourceEventIds accumulation was removed from the upsert path, so every write surface funnels through the capped merge."

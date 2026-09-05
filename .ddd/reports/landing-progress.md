@@ -53,13 +53,13 @@ This file is the compaction anchor: any future instance resumes from here.
 | WS-12 | C-019 | T2 | Degradation vs healthy emptiness | LANDED b02c50635c (hash pinned by follow-up ledger commit) |
 | WS-13 | C-020..023 | T2,T2,T2,T2 | Lifecycle scheduling/dead letters | LANDED b175de6955 + artifacts (see session log) |
 | WS-14 | C-024 | T2 | Orphan detection all relation types | LANDED d0184fc2b9 (hash pinned by follow-up ledger commit) |
-| WS-15 | C-025..028 | T1,T2,T1,T1 | Data-model mechanics | pending |
+| WS-15 | C-025..028 | T1,T2,T1,T1 | Data-model mechanics | LANDED (see session log) |
 | WS-16 | C-029..034 | T2,T1,T2,T0,T2,T1 | Retrieval quality/perf | pending |
 | WS-17 | C-035,036 | T2,T2 | kb cross-tenant read; pi opt-in | LANDED 96c8db28bb (see session log) |
 | WS-18 | C-037,038,039 | T1,T2,T2 | dockerignore; publish gates; nightly eval | pending |
 
 T3 needing refutation: C-002, C-003, C-004, C-005, C-007, C-008, C-009, C-018.
-Validation IDs used so far: V-001..V-112 (next free: V-113).
+Validation IDs used so far: V-001..V-119 (next free: V-120).
 Sweep violations at WS-01 landing: 92 (was 96 pre-WS-01).
 Sweep violations at WS-02 landing: 86 (was 92; zero for C-002).
 Sweep violations at WS-04 landing: 67 (was 72 at WS-03; zero for C-007).
@@ -108,6 +108,13 @@ trace-without-validation TR-061/062, and TR-106 appended for the
 widened mongodb-graph.ts construct passed clean on first sweep;
 remaining 20 = 1 open C-018 refutation obligation + 19 pending-
 workstream violations: 3 C-026 + 3 C-029 + 2 C-031 + 2 C-033 +
+2 C-038 + 3 C-039 + 4 C-040).
+Sweep violations at WS-15 landing: 17 (was 20 at WS-14; zero for
+C-025..C-028; the 3 C-026 violations cleared: claim-without-validation
+plus trace-without-validation TR-065/066; the T1 claims C-025/027/028
+carry validations and trace links by hygiene though the sweep does not
+require them; remaining 17 = 1 open C-018 refutation obligation +
+16 pending-workstream violations: 3 C-029 + 2 C-031 + 2 C-033 +
 2 C-038 + 3 C-039 + 4 C-040).
 
 ## Session log
@@ -882,3 +889,68 @@ workstream violations: 3 C-026 + 3 C-029 + 2 C-031 + 2 C-033 +
   engine-internal only, so the return-type widening is safe, and
   createMockDb auto-vivifies unknown collections, so the existing
   deleteEntity tests survived the new entity_links cascade untouched.
+- WS-15/C-025..028 landed: typed relation locator, chunk bitemporal
+  filter, exclusive-relation invalidation fix, bounded sourceEventIds
+  provenance. Ledger: V-113 (findRelationByLocatorId, typed-locator +
+  migration battery), V-114 (manager-read readFile ?type= forwarding),
+  V-115 (projectEventChunk/Batch bitemporal carry), V-116 (search-v2
+  bitemporal arms, LIVE-STACK citation ws15-real-e2e-v2.log sha
+  0e60ace0...), V-117 (exclusive-relation validTo/invalidatedBy.at),
+  V-118 (structured-memory cap), V-119 (entity/relation caps + batch
+  $reduce/$slice) — one validation per traced construct, the rest
+  citing ws15-engine-suite.log (sha 4951ac42...); TR-063..TR-069
+  patched (validation ids, sweep_pass true); C-026 construct repaired
+  pre-landing (sync.ts -> events.ts, TR-065 notes carry the repair).
+  Sweep 20 -> 17, zero C-025..C-028 violations. Implementation:
+  upsertRelation writes the typed from-to-type relationId;
+  findRelationByLocatorId takes an optional type (typed $or lookup,
+  bare-pair -> typed fallback, legacy scan filtered by type);
+  migrateRelationLocatorIds rewrites legacy docs in one bulkWrite,
+  idempotent on re-run; readFile forwards ?type=; search-v2 graph-lane
+  emitters and discovery-projections buildRelationPath emit typed
+  paths. projectEventChunk + projectEventChunksBatch $set
+  validAt = validAt ?? timestamp / invalidAt = invalidAt ?? null (heal
+  pattern, repairs legacy chunk docs on rewrite); search-v2 wraps
+  conversation + bridge chunk filters with $and[{validAt null/<=ref},
+  {invalidAt null/>ref}] at construction. Exclusive-relation
+  invalidation sets validTo = superseding validFrom ?? now and
+  invalidatedBy.at as a BSON Date. MAX_SOURCE_EVENT_IDS=200 shared
+  constant: mergeSourceEventIds tail eviction, upsertEntity
+  read-merge-write capped, upsertRelation capped, batch pipeline
+  $reduce+$concatArrays+$slice -200, dead addToSet accumulation
+  removed. Critical catch during landing verification (would have been
+  a live-stack regression): chunksFilterPaths in
+  mongodb-schema-search-indexes.ts declared expiresAt but NOT
+  validAt/invalidAt — mongot rejects a $vectorSearch filter on an
+  undeclared path ("Path ... needs to be indexed as filter", the
+  eec3eadc76 failure mode; events_vector declares both, chunks_vector
+  did not — the asymmetry was invisible until the live gate). Fixed by
+  declaring both paths (mirroring events_vector), pinned by the new
+  "chunks_vector bitemporal filter fields (C-026)" battery in
+  mongodb-schema.part4.test.ts; existing deployments heal via
+  ensureNamedSearchIndex drift detection calling updateSearchIndex
+  (verified in source: signature mismatch -> updateSearchIndex).
+  Evidence: engine suite 129 files / 2246 tests (was 129/2226 at
+  WS-14, +20 tests, same file count), bridge 87, api 273, mcp 185,
+  tools 54, root check-types 15/15, live gates real-e2e-v2 81/81 and
+  mongodb-e2e 43/43 against the docker atlas-local + mongot stack
+  (chunk-lane bitemporal filter exercised end-to-end on a freshly
+  created chunks_vector with the declared filter paths). Biome: 3
+  files auto-formatted; 25 warnings across the 16 touched files proven
+  pre-existing at HEAD via per-file count comparison against a HEAD
+  worktree. Methodology lessons: (1) any new $vectorSearch filter
+  field needs BOTH the query arm and the index filter-paths
+  declaration — audit sibling indexes when adding filter arms; (2)
+  bulk biome runs truncate diagnostics, so lint baselines must compare
+  per-file single-run counts, not merged lists (a merged diff showed a
+  phantom new warning that per-file comparison disproved); (3) biome
+  writes diagnostics to stderr — `2>/dev/null` swallows them entirely;
+  (4) the production-readiness e2e failure ("$vectorSearch operator >
+  returns results with autoEmbed vectors", expected 0 to be greater
+  than 0) fails identically at HEAD (worktree run) — it is outside the
+  package test scope (--exclude e2e) and NOT a WS-15 regression;
+  (5) the canonical engine-suite scope is the package script
+  (129 files) — a bare `vitest run` includes 148 files with live e2e
+  and the pre-existing failure above; (6) cross-package grep for
+  hard-coded relation: path callers confirmed the typed locator needs
+  no external coordination (apps/ and non-engine packages clean).

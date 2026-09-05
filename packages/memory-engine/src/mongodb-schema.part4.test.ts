@@ -345,6 +345,40 @@ describe("query_cache_vector expiresAt filter", () => {
 })
 
 // ---------------------------------------------------------------------------
+// C-026: chunks_vector declares the bitemporal filter paths
+// ---------------------------------------------------------------------------
+
+describe("chunks_vector bitemporal filter fields (C-026)", () => {
+	it("includes validAt and invalidAt as filter fields alongside expiresAt", async () => {
+		const db = mockDb()
+		await ensureSearchIndexes(db, "test_", "atlas-local-preview", "automated")
+
+		const chunks = db.collection("test_chunks") as unknown as {
+			createSearchIndex: ReturnType<typeof vi.fn>
+		}
+		const vectorCall = chunks.createSearchIndex.mock.calls.find(
+			(c: unknown[]) => (c[0] as Document).type === "vectorSearch",
+		)
+		expect(vectorCall).toBeDefined()
+		const fields = (vectorCall?.[0] as Document).definition.fields
+		const filterPaths = fields
+			.filter((f: Document) => f.type === "filter")
+			.map((f: Document) => f.path)
+		// The chunk lanes compose the unexpired clause (C-005) and the
+		// bitemporal guard (C-026) into the $vectorSearch filter; every
+		// filtered path must be declared here or mongot rejects the query
+		// ("Path 'validAt' needs to be indexed as filter") — the same
+		// failure mode eec3eadc76 fixed for expiresAt.
+		expect(filterPaths).toContain("expiresAt")
+		expect(filterPaths).toContain("validAt")
+		expect(filterPaths).toContain("invalidAt")
+		expect(filterPaths).toContain("source")
+		expect(filterPaths).toContain("agentId")
+		expect(filterPaths).toContain("scopeRef")
+	})
+})
+
+// ---------------------------------------------------------------------------
 // Fix 5: unique index creation wrapped in try/catch
 // ---------------------------------------------------------------------------
 

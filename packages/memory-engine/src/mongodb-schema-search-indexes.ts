@@ -241,6 +241,10 @@ export async function ensureSearchIndexes(
 		// so expiresAt must be declared as a filter field here or mongot
 		// rejects the query ("Path 'expiresAt' needs to be indexed as
 		// filter") — mirroring query_cache_vector.
+		// C-026: the chunk lanes now compose the bitemporal guard (validAt /
+		// invalidAt null-or-range arms) into the same $vectorSearch filter,
+		// so both fields join the declared filter paths — mirroring
+		// events_vector, which declares them for the events lane.
 		const chunksFilterPaths = [
 			"source",
 			"path",
@@ -250,6 +254,8 @@ export async function ensureSearchIndexes(
 			"sessionId",
 			"status",
 			"expiresAt",
+			"validAt",
+			"invalidAt",
 		]
 		const vectorDef: Document = withVectorStoredSource(
 			buildAutoEmbedVectorDefinition(

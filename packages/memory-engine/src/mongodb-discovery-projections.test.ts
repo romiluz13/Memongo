@@ -136,7 +136,7 @@ describe("mongodb-discovery-projections", () => {
 			`entity:ent-phoenix?scope=${SCOPE}&scopeRef=${encodeURIComponent(SCOPE_REF)}`,
 		)
 		expect(projection.sections[1]?.evidence[0]?.path).toBe(
-			`relation:ent-phoenix-ent-alice?scope=${SCOPE}&scopeRef=${encodeURIComponent(SCOPE_REF)}`,
+			`relation:ent-phoenix-ent-alice-owns?scope=${SCOPE}&scopeRef=${encodeURIComponent(SCOPE_REF)}`,
 		)
 		expect(projection.sections[2]?.evidence[0]?.path).toBe(
 			`structured:decision:phoenix-rollout?scope=${SCOPE}&scopeRef=${encodeURIComponent(SCOPE_REF)}`,
@@ -426,7 +426,7 @@ describe("mongodb-discovery-projections", () => {
 			`procedure:legacy-rollback?scope=${SCOPE}&scopeRef=${encodeURIComponent(SCOPE_REF)}`,
 		)
 		expect(projection.sections[2]?.evidence[0]?.path).toBe(
-			`relation:ent-service-ent-bob?scope=${SCOPE}&scopeRef=${encodeURIComponent(SCOPE_REF)}`,
+			`relation:ent-service-ent-bob-owns?scope=${SCOPE}&scopeRef=${encodeURIComponent(SCOPE_REF)}`,
 		)
 	})
 })

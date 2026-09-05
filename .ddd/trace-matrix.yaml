@@ -630,70 +630,70 @@ traces:
     change_id: WS-15
     claim_id: C-025
     construct_id: "packages/memory-engine/src/mongodb-graph.ts#findRelationByLocatorId"
-    validation_id: null
+    validation_id: V-113
     direction: forward
-    sweep_pass: false
-    checked_at: "2026-09-02T13:41:40.084Z"
+    sweep_pass: true
+    checked_at: "2026-09-05T17:11:49.000Z"
     notes: WS-15 Data-model temporal correctness (planned change envelope)
   - id: TR-064
     schema_version: 0.1.0
     change_id: WS-15
     claim_id: C-025
     construct_id: packages/memory-engine/src/mongodb-manager-read.ts
-    validation_id: null
+    validation_id: V-114
     direction: forward
-    sweep_pass: false
-    checked_at: "2026-09-02T13:41:40.085Z"
+    sweep_pass: true
+    checked_at: "2026-09-05T17:11:49.000Z"
     notes: WS-15 Data-model temporal correctness (planned change envelope)
   - id: TR-065
     schema_version: 0.1.0
     change_id: WS-15
     claim_id: C-026
-    construct_id: packages/memory-engine/src/mongodb-sync.ts
-    validation_id: null
+    construct_id: packages/memory-engine/src/mongodb-events.ts
+    validation_id: V-115
     direction: forward
-    sweep_pass: false
-    checked_at: "2026-09-02T13:41:40.086Z"
-    notes: WS-15 Data-model temporal correctness (planned change envelope)
+    sweep_pass: true
+    checked_at: "2026-09-05T17:11:49.000Z"
+    notes: "WS-15 Data-model temporal correctness (planned change envelope); construct repaired pre-landing: chunks are projected in mongodb-events.ts (projectEventChunk + projectEventChunksBatch), not mongodb-sync.ts — sync only funnels events into projection (see WS-15 session log)."
   - id: TR-066
     schema_version: 0.1.0
     change_id: WS-15
     claim_id: C-026
     construct_id: packages/memory-engine/src/mongodb-search-v2.ts
-    validation_id: null
+    validation_id: V-116
     direction: forward
-    sweep_pass: false
-    checked_at: "2026-09-02T13:41:40.087Z"
+    sweep_pass: true
+    checked_at: "2026-09-05T17:11:49.000Z"
     notes: WS-15 Data-model temporal correctness (planned change envelope)
   - id: TR-067
     schema_version: 0.1.0
     change_id: WS-15
     claim_id: C-027
     construct_id: packages/memory-engine/src/mongodb-graph.ts
-    validation_id: null
+    validation_id: V-117
     direction: forward
-    sweep_pass: false
-    checked_at: "2026-09-02T13:41:40.088Z"
+    sweep_pass: true
+    checked_at: "2026-09-05T17:11:49.000Z"
     notes: WS-15 Data-model temporal correctness (planned change envelope)
   - id: TR-068
     schema_version: 0.1.0
     change_id: WS-15
     claim_id: C-028
     construct_id: "packages/memory-engine/src/mongodb-structured-memory.ts#mergeSourceEventIds"
-    validation_id: null
+    validation_id: V-118
     direction: forward
-    sweep_pass: false
-    checked_at: "2026-09-02T13:41:40.089Z"
+    sweep_pass: true
+    checked_at: "2026-09-05T17:11:49.000Z"
     notes: WS-15 Data-model temporal correctness (planned change envelope)
   - id: TR-069
     schema_version: 0.1.0
     change_id: WS-15
     claim_id: C-028
     construct_id: packages/memory-engine/src/mongodb-graph.ts
-    validation_id: null
+    validation_id: V-119
     direction: forward
-    sweep_pass: false
-    checked_at: "2026-09-02T13:41:40.090Z"
+    sweep_pass: true
+    checked_at: "2026-09-05T17:11:49.000Z"
     notes: WS-15 Data-model temporal correctness (planned change envelope)
   - id: TR-070
     schema_version: 0.1.0

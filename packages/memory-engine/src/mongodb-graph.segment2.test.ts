@@ -13,6 +13,7 @@ import {
 	extractAndUpsertTypedRelations,
 	searchEntitiesAutocomplete,
 	findRelationByLocatorId,
+	migrateRelationLocatorIds,
 	type Entity,
 	type Relation,
 } from "./mongodb-graph.js"
@@ -421,6 +422,50 @@ describe("mongodb-graph", () => {
 				expect(op).toHaveProperty("updateOne")
 				expect(op.updateOne.upsert).toBe(true)
 			}
+		})
+
+		// C-028: the batch entity pipeline bounds provenance server-side.
+		// $setUnion grew unbounded AND returns elements in unspecified order,
+		// so slicing its result would not be a recency eviction — the $reduce
+		// over $concatArrays preserves insertion order and $slice keeps the
+		// most recent MAX_SOURCE_EVENT_IDS (200) in the tail.
+		it("bounds the batch entity pipeline's sourceEventIds at 200 (C-028)", async () => {
+			const entitiesCol = createMockCollection()
+			const relationsCol = createMockCollection()
+			const entityLinksCol = createMockCollection()
+			const db = createMockDb({
+				[`${PREFIX}entities`]: entitiesCol,
+				[`${PREFIX}relations`]: relationsCol,
+				[`${PREFIX}entity_links`]: entityLinksCol,
+			})
+
+			await extractAndUpsertEntities({
+				db,
+				prefix: PREFIX,
+				agentId: "agent-1",
+				eventContent: "@alice mentioned @bob working on #projectX",
+				scope: "agent",
+				sourceEventId: "ev1",
+			})
+
+			const ops = (entitiesCol.bulkWrite as ReturnType<typeof vi.fn>).mock
+				.calls[0][0]
+			const pipelineOp = ops.find((op) => Array.isArray(op.updateOne.update))
+			expect(pipelineOp).toBeDefined()
+			const setStage = pipelineOp.updateOne.update[0].$set
+			const sourceExpr = setStage.sourceEventIds
+			expect(sourceExpr.$slice[1]).toBe(-200)
+			const reduce = sourceExpr.$slice[0]
+			expect(reduce.$reduce.input.$concatArrays).toEqual([
+				{ $ifNull: ["$sourceEventIds", []] },
+				{ $literal: ["ev1"] },
+			])
+			expect(reduce.$reduce.in.$cond[0]).toEqual({
+				$in: ["$$this", "$$value"],
+			})
+			expect(reduce.$reduce.in.$cond[2]).toEqual({
+				$concatArrays: ["$$value", ["$$this"]],
+			})
 		})
 
 		// H6 audit fix: verify entity-extraction telemetry is emitted
@@ -1145,6 +1190,295 @@ describe("mongodb-graph", () => {
 				})
 
 				expect(result).toBeNull()
+			})
+		})
+
+		describe("findRelationByLocatorId typed locator (C-025)", () => {
+			it("resolves a typed locator with one findOne — from-to-type", async () => {
+				const relationDoc = {
+					fromEntityId: "ent-1",
+					toEntityId: "ent-2",
+					type: "works_on",
+					relationId: "ent-1-ent-2-works_on",
+					agentId: "agent-1",
+					scope: "agent",
+					scopeRef: "agent:agent-1",
+					updatedAt: new Date(),
+				}
+				const relationsCol = createMockCollection({
+					findOne: vi.fn().mockResolvedValue(relationDoc),
+				})
+				const db = createMockDb({
+					[`${PREFIX}relations`]: relationsCol,
+				})
+
+				const result = await findRelationByLocatorId({
+					db,
+					prefix: PREFIX,
+					agentId: "agent-1",
+					scope: "agent",
+					scopeRef: "agent:agent-1",
+					relationId: "ent-1-ent-2",
+					type: "works_on",
+				})
+
+				expect(result).toEqual(relationDoc)
+				expect(relationsCol.findOne).toHaveBeenCalledWith(
+					{
+						agentId: "agent-1",
+						scope: "agent",
+						scopeRef: "agent:agent-1",
+						$or: [
+							{ relationId: "ent-1-ent-2-works_on" },
+							{ relationId: "ent-1-ent-2", type: "works_on" },
+						],
+					},
+					{ sort: { updatedAt: -1, _id: 1 } },
+				)
+				expect(relationsCol.find).not.toHaveBeenCalled()
+			})
+
+			it("resolves a full typed locator passed alongside a redundant type parameter", async () => {
+				// readFile of a typed path `relation:from-to-type` parses the
+				// whole suffix as relationId; a caller adding ?type= must not
+				// break resolution.
+				const relationDoc = {
+					fromEntityId: "ent-1",
+					toEntityId: "ent-2",
+					type: "works_on",
+					relationId: "ent-1-ent-2-works_on",
+					agentId: "agent-1",
+					scope: "agent",
+					scopeRef: "agent:agent-1",
+					updatedAt: new Date(),
+				}
+				const relationsCol = createMockCollection({
+					findOne: vi.fn().mockResolvedValue(relationDoc),
+				})
+				const db = createMockDb({
+					[`${PREFIX}relations`]: relationsCol,
+				})
+
+				const result = await findRelationByLocatorId({
+					db,
+					prefix: PREFIX,
+					agentId: "agent-1",
+					scope: "agent",
+					scopeRef: "agent:agent-1",
+					relationId: "ent-1-ent-2-works_on",
+					type: "works_on",
+				})
+
+				expect(result).toEqual(relationDoc)
+				expect(relationsCol.find).not.toHaveBeenCalled()
+			})
+
+			it("resolves a typed document from a bare pair through the legacy scan", async () => {
+				// A caller that only knows "from-to" (pre-C-025 path) still
+				// reaches a typed document written after the change.
+				const typedDoc = {
+					fromEntityId: "ent-1",
+					toEntityId: "ent-2",
+					type: "works_on",
+					relationId: "ent-1-ent-2-works_on",
+					agentId: "agent-1",
+					scope: "agent",
+					scopeRef: "agent:agent-1",
+					updatedAt: new Date(),
+				}
+				const relationsCol = createMockCollection({
+					findOne: vi.fn().mockResolvedValue(null),
+					find: vi.fn().mockReturnValue({
+						toArray: vi.fn().mockResolvedValue([typedDoc]),
+					}),
+				})
+				const db = createMockDb({
+					[`${PREFIX}relations`]: relationsCol,
+				})
+
+				const result = await findRelationByLocatorId({
+					db,
+					prefix: PREFIX,
+					agentId: "agent-1",
+					scope: "agent",
+					scopeRef: "agent:agent-1",
+					relationId: "ent-1-ent-2",
+				})
+
+				expect(result).toEqual(typedDoc)
+			})
+
+			it("restricts the legacy scan to the requested type", async () => {
+				const ownsDoc = {
+					fromEntityId: "ent-1",
+					toEntityId: "ent-2",
+					type: "owns",
+					agentId: "agent-1",
+					scope: "agent",
+					scopeRef: "agent:agent-1",
+					updatedAt: new Date(),
+				}
+				const worksOnDoc = {
+					fromEntityId: "ent-1",
+					toEntityId: "ent-2",
+					type: "works_on",
+					agentId: "agent-1",
+					scope: "agent",
+					scopeRef: "agent:agent-1",
+					updatedAt: new Date("2027-01-01"), // newer — must not win
+				}
+				const relationsCol = createMockCollection({
+					findOne: vi.fn().mockResolvedValue(null),
+					find: vi.fn().mockReturnValue({
+						toArray: vi.fn().mockResolvedValue([worksOnDoc, ownsDoc]),
+					}),
+				})
+				const db = createMockDb({
+					[`${PREFIX}relations`]: relationsCol,
+				})
+
+				const result = await findRelationByLocatorId({
+					db,
+					prefix: PREFIX,
+					agentId: "agent-1",
+					scope: "agent",
+					scopeRef: "agent:agent-1",
+					relationId: "ent-1-ent-2",
+					type: "owns",
+				})
+
+				expect(result).toEqual(ownsDoc)
+			})
+		})
+
+		describe("migrateRelationLocatorIds (C-025)", () => {
+			function makeLegacyDoc(overrides: Partial<Document> = {}): Document {
+				return {
+					_id: "rel-1",
+					fromEntityId: "ent-1",
+					toEntityId: "ent-2",
+					type: "works_on",
+					relationId: "ent-1-ent-2",
+					agentId: "agent-1",
+					...overrides,
+				}
+			}
+
+			it("rewrites untyped locators to the typed form in batches", async () => {
+				const docs = [
+					makeLegacyDoc({ _id: "rel-1" }),
+					makeLegacyDoc({ _id: "rel-2", relationId: "ent-1-ent-2" }),
+					makeLegacyDoc({
+						_id: "rel-3",
+						relationId: "ent-1-ent-2-works_on",
+					}), // already typed — skipped
+				]
+				const relationsCol = createMockCollection({
+					find: vi.fn().mockReturnValue({
+						toArray: vi.fn().mockResolvedValue(docs),
+					}),
+				})
+				const db = createMockDb({
+					[`${PREFIX}relations`]: relationsCol,
+				})
+
+				const result = await migrateRelationLocatorIds({
+					db,
+					prefix: PREFIX,
+					batch: 2,
+				})
+
+				expect(result).toEqual({ scanned: 3, migrated: 2, batches: 1 })
+				expect(relationsCol.bulkWrite).toHaveBeenCalledOnce()
+				const ops = (relationsCol.bulkWrite as ReturnType<typeof vi.fn>).mock
+					.calls[0][0]
+				expect(ops).toEqual([
+					{
+						updateOne: {
+							filter: { _id: "rel-1" },
+							update: { $set: { relationId: "ent-1-ent-2-works_on" } },
+						},
+					},
+					{
+						updateOne: {
+							filter: { _id: "rel-2" },
+							update: { $set: { relationId: "ent-1-ent-2-works_on" } },
+						},
+					},
+				])
+			})
+
+			it("rewrites documents written before relationId existed", async () => {
+				const docs = [
+					makeLegacyDoc({ _id: "rel-legacy", relationId: undefined }),
+				]
+				const relationsCol = createMockCollection({
+					find: vi.fn().mockReturnValue({
+						toArray: vi.fn().mockResolvedValue(docs),
+					}),
+				})
+				const db = createMockDb({
+					[`${PREFIX}relations`]: relationsCol,
+				})
+
+				const result = await migrateRelationLocatorIds({
+					db,
+					prefix: PREFIX,
+				})
+
+				expect(result).toEqual({ scanned: 1, migrated: 1, batches: 1 })
+				const ops = (relationsCol.bulkWrite as ReturnType<typeof vi.fn>).mock
+					.calls[0][0]
+				expect(ops[0].updateOne.update.$set.relationId).toBe(
+					"ent-1-ent-2-works_on",
+				)
+			})
+
+			it("is idempotent — a second pass migrates nothing", async () => {
+				const docs = [makeLegacyDoc({ relationId: "ent-1-ent-2-works_on" })]
+				const relationsCol = createMockCollection({
+					find: vi.fn().mockReturnValue({
+						toArray: vi.fn().mockResolvedValue(docs),
+					}),
+				})
+				const db = createMockDb({
+					[`${PREFIX}relations`]: relationsCol,
+				})
+
+				const result = await migrateRelationLocatorIds({
+					db,
+					prefix: PREFIX,
+				})
+
+				expect(result).toEqual({ scanned: 1, migrated: 0, batches: 0 })
+				expect(relationsCol.bulkWrite).not.toHaveBeenCalled()
+			})
+
+			it("splits large migrations into batch-sized bulkWrites", async () => {
+				const docs = Array.from({ length: 5 }, (_, i) =>
+					makeLegacyDoc({ _id: `rel-${i}` }),
+				)
+				const relationsCol = createMockCollection({
+					find: vi.fn().mockReturnValue({
+						toArray: vi.fn().mockResolvedValue(docs),
+					}),
+				})
+				const db = createMockDb({
+					[`${PREFIX}relations`]: relationsCol,
+				})
+
+				const result = await migrateRelationLocatorIds({
+					db,
+					prefix: PREFIX,
+					batch: 2,
+				})
+
+				expect(result).toEqual({ scanned: 5, migrated: 5, batches: 3 })
+				expect(relationsCol.bulkWrite).toHaveBeenCalledTimes(3)
+				const batches = (
+					relationsCol.bulkWrite as ReturnType<typeof vi.fn>
+				).mock.calls.map((call) => call[0].length)
+				expect(batches).toEqual([2, 2, 1])
 			})
 		})
 

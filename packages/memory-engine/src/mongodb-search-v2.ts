@@ -393,13 +393,13 @@ async function searchV2WithBudget(
 				chunkSources.push("userfact-evidence")
 			}
 		}
-		const conversationChunkFilter: Document = context.searchOptions
+		const baseConversationChunkFilter: Document = context.searchOptions
 			?.conversationFilter ?? {
 			source: { $in: chunkSources },
 			agentId,
 			status: { $ne: "deleted" },
 		}
-		const bridgeChunkFilter = context.searchOptions?.bridgeFilter
+		const baseBridgeChunkFilter = context.searchOptions?.bridgeFilter
 		const maxResults = context.maxResults ?? 20
 		const minScore = context.searchOptions?.minScore ?? 0.01
 		const numCandidates = context.searchOptions?.numCandidates ?? 500
@@ -434,6 +434,35 @@ async function searchV2WithBudget(
 		// bounds, temporal-window extraction) uses this clock instead of
 		// reading Date.now() independently.
 		const referenceDate = context.searchOptions?.questionDate ?? new Date()
+
+		// C-026: conversation chunks are bitemporal — each carries the
+		// event-valid interval [validAt, invalidAt) carved from its event by
+		// projectEventChunk. A chunk not yet valid (validAt after the request's
+		// reference clock) or already invalidated (invalidAt at or before it)
+		// is stale evidence and must not surface. Fused into the lane filter at
+		// construction instead of post-filtering so the constraint rides the
+		// index-adjacent filter: $and/$or compounds are supported
+		// $vectorSearch filter expressions, and null-equality matches the
+		// missing field on pre-C-026 chunks ($exists is NOT supported inside
+		// $vectorSearch filters). Both wrapped filters carry identical arms,
+		// so lane fusion's conversation-filter spread drops only a duplicate.
+		const bitemporalChunkArms: Document[] = [
+			{ $or: [{ validAt: null }, { validAt: { $lte: referenceDate } }] },
+			{ $or: [{ invalidAt: null }, { invalidAt: { $gt: referenceDate } }] },
+		]
+		const withBitemporalChunkFilter = (base: Document): Document => ({
+			...base,
+			$and: [
+				...(Array.isArray(base.$and) ? base.$and : []),
+				...bitemporalChunkArms,
+			],
+		})
+		const conversationChunkFilter = withBitemporalChunkFilter(
+			baseConversationChunkFilter,
+		)
+		const bridgeChunkFilter = baseBridgeChunkFilter
+			? withBitemporalChunkFilter(baseBridgeChunkFilter)
+			: undefined
 
 		// #66: measurement only — records elapsed ms per lane and per non-lane
 		// phase without changing what runs. `finally` so a span that throws still
@@ -846,8 +875,10 @@ async function searchV2WithBudget(
 								})
 								if (graph) {
 									pathResults = graph.connections.map((c, i) => ({
-										path: `relation:${c.relation.fromEntityId}-${c.relation.toEntityId}`,
-										filePath: `relation:${c.relation.fromEntityId}-${c.relation.toEntityId}`,
+										// C-025: typed locator ("from-to-type") so readFile
+										// resolves same-pair relations of different types.
+										path: `relation:${c.relation.fromEntityId}-${c.relation.toEntityId}-${c.relation.type}`,
+										filePath: `relation:${c.relation.fromEntityId}-${c.relation.toEntityId}-${c.relation.type}`,
 										startLine: 0,
 										endLine: 0,
 										snippet: `${graph.rootEntity.name} ${c.relation.type} ${c.entity.name}`,

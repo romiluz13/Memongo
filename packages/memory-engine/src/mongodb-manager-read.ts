@@ -312,8 +312,11 @@ export class MongoDBManagerReadOps {
 			const query = new URLSearchParams(queryString ?? "")
 			const scope = (query.get("scope") ?? "agent") as MemoryScope
 			const scopeRef = query.get("scopeRef") ?? this.host.agentScopeRef
-			// P3.8: one findOne on the relationId index — the old path fetched up
-			// to 50 relations per read and JS-matched the pair.
+			// C-025: the locator is typed ("from-to-type"). A path carrying the
+			// typed locator resolves without extra parameters; ?type= lets a
+			// caller that holds only the bare pair disambiguate same-pair
+			// relations of different types.
+			const type = query.get("type")?.trim() || undefined
 			const relation = await findRelationByLocatorId({
 				db: this.host.db,
 				prefix: this.host.prefix,
@@ -321,6 +324,7 @@ export class MongoDBManagerReadOps {
 				scope,
 				scopeRef,
 				relationId,
+				type,
 			})
 			if (!relation) {
 				return {

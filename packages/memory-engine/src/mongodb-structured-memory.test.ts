@@ -334,6 +334,51 @@ describe("writeStructuredMemory", () => {
 		expect(update?.$set.sourceEventIds).toEqual(["evt-first", "evt-second"])
 	})
 
+	it("bounds structured-memory sourceEventIds at 200 keeping the most recent (P2-3, C-028)", async () => {
+		const col = createMockStructuredCol()
+		const revisionsCol = createMockStructuredCol()
+		const existingIds = Array.from(
+			{ length: 200 },
+			(_, i) => `evt-${String(i).padStart(3, "0")}`,
+		)
+		vi.mocked(col.findOne).mockResolvedValueOnce({
+			type: "fact",
+			key: "evidence-ledger",
+			value: "Events remain traceable",
+			agentId: "main",
+			scope: "agent",
+			scopeRef: "agent:main",
+			revision: 1,
+			sourceEventIds: existingIds,
+			createdAt: new Date("2026-03-01T00:00:00.000Z"),
+			updatedAt: new Date("2026-03-01T00:00:00.000Z"),
+		})
+
+		await writeStructuredMemory({
+			db: mockDb({
+				test_structured_mem: col,
+				test_structured_mem_revisions: revisionsCol,
+			}),
+			prefix: "test_",
+			entry: {
+				type: "fact",
+				key: "evidence-ledger",
+				value: "Events remain traceable",
+				agentId: "main",
+				sourceEventIds: ["evt-200"],
+			},
+			embeddingMode: "automated",
+		})
+
+		const update = vi.mocked(col.updateOne).mock.calls[0]?.[1]
+		// 201 merged ids -> the oldest (evt-000) is evicted; MAX_SOURCE_EVENT_IDS
+		// = 200 with recency eviction (fleet audit P2-3, cross-checked for
+		// C-028 — the graph surface now shares the same bound).
+		expect(update?.$set.sourceEventIds).toHaveLength(200)
+		expect(update?.$set.sourceEventIds[0]).toBe("evt-001")
+		expect(update?.$set.sourceEventIds[199]).toBe("evt-200")
+	})
+
 	it("stores pending embedding status for combined value + context text", async () => {
 		const col = createMockStructuredCol()
 		const revisionsCol = createMockStructuredCol()

@@ -225,9 +225,9 @@ export async function ensureGraphStandardIndexes(
 	} catch {
 		// Index may not exist — safe to ignore
 	}
-	// P3.8: relation locator index. readFile("relation:from-to") used to fetch
-	// up to 50 relations and JS-match the pair; the denormalized relationId
-	// field makes it a single findOne.
+	// P3.8 + C-025: relation locator index. readFile("relation:from-to-type")
+	// used to fetch up to 50 relations and JS-match the pair; the denormalized
+	// relationId field (typed locator since C-025) makes it a single findOne.
 	await relations.createIndex(
 		{ agentId: 1, scope: 1, scopeRef: 1, relationId: 1 },
 		{ name: "idx_relations_agent_scope_scoperef_relationid" },

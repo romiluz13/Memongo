@@ -189,11 +189,17 @@ function hasProcessedSourceEvents(
 	return sourceEventIds.every((eventId) => existingIds.has(eventId))
 }
 
+// C-028: provenance unions grow by every re-mention forever on entities and
+// relations. Keep the most recent N — mirrors MAX_SOURCE_EVENT_IDS in
+// mongodb-structured-memory.ts (fleet audit P2-3) so every surface that
+// accumulates sourceEventIds shares one bound and one eviction rule.
+const MAX_SOURCE_EVENT_IDS = 200
+
 function mergeSourceEventIds(
 	existing: Document | null,
 	sourceEventIds: string[],
 ): string[] {
-	return Array.from(
+	const merged = Array.from(
 		new Set([
 			...(existing && Array.isArray(existing.sourceEventIds)
 				? existing.sourceEventIds.map((value) => String(value))
@@ -201,6 +207,9 @@ function mergeSourceEventIds(
 			...sourceEventIds,
 		]),
 	)
+	return merged.length > MAX_SOURCE_EVENT_IDS
+		? merged.slice(merged.length - MAX_SOURCE_EVENT_IDS)
+		: merged
 }
 
 function hasRelationChanged(existing: Document, relation: Relation): boolean {
@@ -367,24 +376,45 @@ export async function upsertEntity(params: {
 			setDoc.wikiUrl = entity.wikiUrl
 		}
 
+		const filter = {
+			entityId: entity.entityId,
+			agentId: entity.agentId,
+			scope: entity.scope,
+			scopeRef,
+		}
+
+		// C-028: provenance is bounded on the entity surface too. $addToSet
+		// alone would grow the union by every re-mention forever; merge in JS
+		// with the same tail eviction as relations and structured memories and
+		// $set the capped array (one extra findOne, only when the write
+		// carries provenance).
+		let existingForProvenance: Document | null = null
+		if (entity.sourceEventIds !== undefined) {
+			existingForProvenance = await collection.findOne(filter, {
+				projection: { sourceEventIds: 1 },
+			})
+		}
+
 		// Build accumulator operators for array/counter fields
 		const addToSet: Document = {}
-		if (entity.sourceEventIds !== undefined) {
-			addToSet.sourceEventIds = { $each: entity.sourceEventIds }
-		}
 		if (entity.ambiguousFlags !== undefined) {
 			addToSet.ambiguousFlags = { $each: entity.ambiguousFlags }
 		}
 
 		const result = await collection.updateOne(
+			filter,
 			{
-				entityId: entity.entityId,
-				agentId: entity.agentId,
-				scope: entity.scope,
-				scopeRef,
-			},
-			{
-				$set: setDoc,
+				$set: {
+					...setDoc,
+					...(entity.sourceEventIds !== undefined
+						? {
+								sourceEventIds: mergeSourceEventIds(
+									existingForProvenance,
+									entity.sourceEventIds,
+								),
+							}
+						: {}),
+				},
 				$inc: { mentionCount: 1 },
 				$setOnInsert: {
 					createdAt: now,
@@ -489,10 +519,15 @@ export async function upsertRelation(params: {
 			const setDoc: Document = {
 				fromEntityId: relation.fromEntityId,
 				toEntityId: relation.toEntityId,
-				// P3.8: denormalized locator id ("from-to") so readFile's relation
-				// locator resolves with one findOne instead of scanning up to 50
+				// P3.8: denormalized locator id so readFile's relation locator
+				// resolves with one findOne instead of scanning up to 50
 				// relations and JS-matching the pair.
-				relationId: `${relation.fromEntityId}-${relation.toEntityId}`,
+				// C-025: the locator incorporates the relation type
+				// ("from-to-type"). The untyped "from-to" form collided when two
+				// relations between the same entities carried different types;
+				// findRelationByLocatorId keeps resolving legacy documents until
+				// migrateRelationLocatorIds rewrites them.
+				relationId: `${relation.fromEntityId}-${relation.toEntityId}-${relation.type}`,
 				type: relation.type,
 				agentId: relation.agentId,
 				scope: relation.scope,
@@ -529,16 +564,22 @@ export async function upsertRelation(params: {
 					fromEntityId: { $ne: relation.fromEntityId },
 					state: { $ne: "invalidated" },
 				}
+				// C-027: the invalidated relation's validity ends where the
+				// superseding relation's validity begins — its validFrom, with a
+				// now fallback — not at the moment the write happened to run.
+				// invalidatedBy.at is stored as a Date (BSON date) like every
+				// other timestamp in the document, not an ISO string.
+				const supersedingValidFrom = relation.validFrom ?? now
 				const update = {
 					$set: {
 						state: "invalidated",
-						validTo: now,
+						validTo: supersedingValidFrom,
 						updatedAt: now,
 						invalidatedBy: {
 							fromEntityId: relation.fromEntityId,
 							toEntityId: relation.toEntityId,
 							type: relation.type,
-							at: now.toISOString(),
+							at: now,
 							reason: "exclusive-relation-replaced",
 						},
 					},
@@ -1616,11 +1657,11 @@ export async function extractAndUpsertEntities(params: {
 				...(validSourceRole ? { sourceRole: validSourceRole } : {}),
 			}
 
-			// Build $addToSet for array fields that accumulate over time
+			// Build $addToSet for array fields that accumulate over time.
+			// sourceEventIds never lands here: with a sourceEventId the
+			// pipeline update below accumulates provenance in $set (C-028);
+			// without one there is nothing to accumulate.
 			const addToSet: Record<string, unknown> = {}
-			if (sourceEventId) {
-				addToSet.sourceEventIds = sourceEventId
-			}
 			if (isAmbiguous) {
 				addToSet.ambiguousFlags = entity.name.toLowerCase()
 			}
@@ -1649,10 +1690,37 @@ export async function extractAndUpsertEntities(params: {
 										},
 									],
 								},
+								// C-028: append the new event id, dedupe
+								// preserving first-seen order, then keep the
+								// most recent MAX_SOURCE_EVENT_IDS. $setUnion
+								// alone grew unbounded AND returns elements in
+								// an unspecified order, so trimming its result
+								// would not be a recency eviction — $reduce
+								// over $concatArrays keeps insertion order so
+								// the tail really is the most recent.
 								sourceEventIds: {
-									$setUnion: [
-										{ $ifNull: ["$sourceEventIds", []] },
-										{ $literal: [sourceEventId] },
+									$slice: [
+										{
+											$reduce: {
+												input: {
+													$concatArrays: [
+														{ $ifNull: ["$sourceEventIds", []] },
+														{ $literal: [sourceEventId] },
+													],
+												},
+												initialValue: [],
+												in: {
+													$cond: [
+														{ $in: ["$$this", "$$value"] },
+														"$$value",
+														{
+															$concatArrays: ["$$value", ["$$this"]],
+														},
+													],
+												},
+											},
+										},
+										-MAX_SOURCE_EVENT_IDS,
 									],
 								},
 								...(isAmbiguous
@@ -2090,13 +2158,20 @@ export async function searchEntitiesAutocomplete(params: {
 // ---------------------------------------------------------------------------
 
 /**
- * Resolve a relation by its locator id ("fromEntityId-toEntityId", the id
- * embedded in `relation:` chunk paths) with a single findOne on the
+ * Resolve a relation by its locator id with a single findOne on the
  * idx_relations_agent_scope_scoperef_relationid index.
+ *
+ * C-025: the locator is typed — "fromEntityId-toEntityId-type". Pass `type`
+ * (from a `relation:from-to-type` path or a readFile `?type=` parameter) and
+ * the lookup stays one indexed findOne on the full locator. An untyped
+ * "from-to" locator still resolves legacy documents written before the type
+ * was folded into the locator, and a bare pair also resolves a typed locator
+ * on the same pair, so pre-migration callers keep working.
  *
  * Relations written before the relationId field existed fall back to the
  * legacy bounded scan (up to 50 most-recent relations, JS-matched) so old
- * deployments keep resolving until those edges are re-upserted.
+ * deployments keep resolving until migrateRelationLocatorIds or a re-upsert
+ * rewrites them.
  */
 export async function findRelationByLocatorId(params: {
 	db: Db
@@ -2105,30 +2180,128 @@ export async function findRelationByLocatorId(params: {
 	scope: MemoryScope
 	scopeRef: string
 	relationId: string
+	/** C-025: relation type, when the caller knows it. */
+	type?: string
 }): Promise<Document | null> {
-	const { db, prefix, agentId, scope, scopeRef, relationId } = params
+	const { db, prefix, agentId, scope, scopeRef, relationId, type } = params
 	const collection = relationsCollection(db, prefix)
-	const direct = await collection.findOne(
-		{ agentId, scope, scopeRef, relationId },
-		{ sort: { updatedAt: -1, _id: 1 } },
-	)
-	if (direct) {
-		return direct
+	const scoped: Document = { agentId, scope, scopeRef }
+	if (type) {
+		// Typed locator: one indexed lookup. The $or covers both caller
+		// shapes — a bare pair plus ?type= ("from-to" + type) and a full
+		// typed locator with a redundant ?type= ("from-to-type" + type).
+		const typed = await collection.findOne(
+			{
+				...scoped,
+				$or: [{ relationId: `${relationId}-${type}` }, { relationId, type }],
+			},
+			{ sort: { updatedAt: -1, _id: 1 } },
+		)
+		if (typed) {
+			return typed
+		}
+	} else {
+		const direct = await collection.findOne(
+			{ ...scoped, relationId },
+			{ sort: { updatedAt: -1, _id: 1 } },
+		)
+		if (direct) {
+			return direct
+		}
 	}
 	const candidates = await collection
-		.find(
-			{ agentId, scope, scopeRef },
-			{
-				sort: { updatedAt: -1, _id: 1 },
-				limit: 50,
-			},
-		)
+		.find(scoped, {
+			sort: { updatedAt: -1, _id: 1 },
+			limit: 50,
+		})
 		.toArray()
 	return (
 		candidates.find((candidate) => {
 			const fromEntityId = String(candidate.fromEntityId ?? "")
 			const toEntityId = String(candidate.toEntityId ?? "")
-			return `${fromEntityId}-${toEntityId}` === relationId
+			const pair = `${fromEntityId}-${toEntityId}`
+			if (type) {
+				// Legacy scan restricted to the requested type.
+				return (
+					String(candidate.type ?? "") === type &&
+					(candidate.relationId === undefined ||
+						candidate.relationId === relationId ||
+						candidate.relationId === `${relationId}-${type}`)
+				)
+			}
+			// Untyped: resolve a stored untyped locator or a pre-relationId
+			// document by its pair, and also a typed locator whose pair is
+			// this locator (callers that only know "from-to").
+			const legacyMatch =
+				String(candidate.relationId ?? "") === relationId || pair === relationId
+			const typedMatch =
+				typeof candidate.relationId === "string" &&
+				candidate.relationId.startsWith(`${relationId}-`)
+			return legacyMatch || typedMatch
 		}) ?? null
 	)
+}
+
+// ---------------------------------------------------------------------------
+// C-025: legacy relation locator migration
+// ---------------------------------------------------------------------------
+
+/**
+ * Rewrite relation documents whose denormalized relationId locator predates
+ * the typed locator ("from-to-type") so every locator lookup stays a single
+ * indexed findOne.
+ *
+ * Scans with a small projection, filters in JS (documents whose stored
+ * relationId already equals the typed locator are skipped), and rewrites the
+ * remainder in `batch`-sized bulkWrite passes (default 500) so the migration
+ * works against production-sized collections. $set on the document _id only
+ * — no upserts, so no duplicate-key retry is needed.
+ *
+ * Returns { scanned, migrated, batches } for the operator's audit log.
+ */
+export async function migrateRelationLocatorIds(params: {
+	db: Db
+	prefix: string
+	/** Restrict the migration to one agent's relations. */
+	agentId?: string
+	/** Rewrite batch size (default 500). */
+	batch?: number
+}): Promise<{ scanned: number; migrated: number; batches: number }> {
+	const { db, prefix, agentId, batch = 500 } = params
+	const collection = relationsCollection(db, prefix)
+	const filter: Document = agentId ? { agentId } : {}
+	const docs = await collection
+		.find(filter, {
+			projection: {
+				_id: 1,
+				relationId: 1,
+				fromEntityId: 1,
+				toEntityId: 1,
+				type: 1,
+			},
+		})
+		.toArray()
+	const expectedOf = (doc: Document) =>
+		`${String(doc.fromEntityId ?? "")}-${String(doc.toEntityId ?? "")}-${String(doc.type ?? "")}`
+	const pending = docs.filter((doc) => {
+		const current = typeof doc.relationId === "string" ? doc.relationId : null
+		return current !== expectedOf(doc)
+	})
+	let migrated = 0
+	let batches = 0
+	for (let offset = 0; offset < pending.length; offset += batch) {
+		const slice = pending.slice(offset, offset + batch)
+		await collection.bulkWrite(
+			slice.map((doc) => ({
+				updateOne: {
+					filter: { _id: doc._id },
+					update: { $set: { relationId: expectedOf(doc) } },
+				},
+			})),
+			{ ordered: false },
+		)
+		migrated += slice.length
+		batches += 1
+	}
+	return { scanned: docs.length, migrated, batches }
 }

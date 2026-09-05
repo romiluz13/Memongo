@@ -842,10 +842,16 @@ export async function projectEventChunksBatch(params: {
 						timestamp: event.timestamp,
 						updatedAt: new Date(),
 					},
-					// C-005: see projectEventChunk — expiry propagates from the
-					// event to its chunk, in $set so re-projection also heals
-					// chunks an older path wrote without an expiry.
-					...(event.expiresAt ? { $set: { expiresAt: event.expiresAt } } : {}),
+					// C-005 + C-026: see projectEventChunk — expiry propagates
+					// from the event to its chunk, in $set so re-projection
+					// also heals chunks an older path wrote without it; the
+					// event-valid interval rides along for searchV2's
+					// bitemporal lane filter.
+					$set: {
+						...(event.expiresAt ? { expiresAt: event.expiresAt } : {}),
+						validAt: event.validAt ?? event.timestamp,
+						invalidAt: event.invalidAt ?? null,
+					},
 				},
 				upsert: true,
 			},
@@ -939,15 +945,23 @@ export async function projectEventChunk(params: {
 					timestamp: event.timestamp,
 					updatedAt: new Date(),
 				},
-				// C-005: propagate the event's expiry onto the chunk. Same
-				// model as the events partial TTL index: absent means the
-				// chunk never expires; a partial chunks TTL index deletes
-				// expired chunks and the unexpired guard keeps reads from
-				// surfacing them between sweeps. Carried in $set (not
-				// $setOnInsert) so re-projection also HEALS a chunk that an
-				// older projection path wrote without an expiry — events are
-				// immutable, so re-setting the value is idempotent.
-				...(event.expiresAt ? { $set: { expiresAt: event.expiresAt } } : {}),
+				// C-005 + C-026: propagate the event's expiry AND event-valid
+				// interval onto the chunk. Same model as the events partial TTL
+				// index: absent expiresAt means the chunk never expires; a
+				// partial chunks TTL index deletes expired chunks and the
+				// unexpired guard keeps reads from surfacing them between
+				// sweeps. validAt/invalidAt are the bitemporal bounds that
+				// searchV2's chunk lane filter enforces. All carried in $set
+				// (not $setOnInsert) so re-projection also HEALS a chunk that
+				// an older projection path wrote without them — events are
+				// immutable, so re-setting the values is idempotent. Legacy
+				// chunks keep missing fields and match the filter's null arms
+				// until this heal rewrites them.
+				$set: {
+					...(event.expiresAt ? { expiresAt: event.expiresAt } : {}),
+					validAt: event.validAt ?? event.timestamp,
+					invalidAt: event.invalidAt ?? null,
+				},
 			},
 			{ upsert: true },
 		),

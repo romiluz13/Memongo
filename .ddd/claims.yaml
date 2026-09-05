@@ -428,7 +428,7 @@ entries:
     tier: T1
     status: known-and-supported
     constructs: ["packages/memory-engine/src/mongodb-graph.ts#findRelationByLocatorId", packages/memory-engine/src/mongodb-manager-read.ts]
-    validations: []
+    validations: [V-113, V-114]
     exceptions: []
 
   - id: C-026
@@ -443,8 +443,8 @@ entries:
     impact: high
     tier: T2
     status: known-and-supported
-    constructs: [packages/memory-engine/src/mongodb-sync.ts, packages/memory-engine/src/mongodb-search-v2.ts]
-    validations: []
+    constructs: [packages/memory-engine/src/mongodb-events.ts, packages/memory-engine/src/mongodb-search-v2.ts]
+    validations: [V-115, V-116]
     exceptions: []
 
   - id: C-027
@@ -460,7 +460,7 @@ entries:
     tier: T1
     status: known-and-supported
     constructs: [packages/memory-engine/src/mongodb-graph.ts]
-    validations: []
+    validations: [V-117]
     exceptions: []
 
   - id: C-028
@@ -476,7 +476,7 @@ entries:
     tier: T1
     status: known-and-supported
     constructs: ["packages/memory-engine/src/mongodb-structured-memory.ts#mergeSourceEventIds", packages/memory-engine/src/mongodb-graph.ts]
-    validations: []
+    validations: [V-118, V-119]
     exceptions: []
 
   - id: C-029

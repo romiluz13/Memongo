@@ -147,6 +147,67 @@ describe("mongodb-graph", () => {
 				.mock.calls[0]
 			expect(update.$set.name).toBe("Alice Updated")
 		})
+
+		it("merges entity sourceEventIds in order and sets them with $set (C-028)", async () => {
+			const entitiesCol = createMockCollection({
+				findOne: vi.fn().mockResolvedValue({
+					entityId: "ent-1",
+					sourceEventIds: ["evt-first"],
+				}),
+			})
+			const db = createMockDb({ [`${PREFIX}entities`]: entitiesCol })
+
+			await upsertEntity({
+				db,
+				prefix: PREFIX,
+				entity: makeEntity({ sourceEventIds: ["evt-second"] }),
+			})
+
+			// The merge reads the existing provenance first (bounded document
+			// growth needs the current array; $addToSet alone cannot cap).
+			expect(entitiesCol.findOne).toHaveBeenCalledWith(
+				{
+					entityId: "ent-1",
+					agentId: "agent-1",
+					scope: "agent",
+					scopeRef: "agent:agent-1",
+				},
+				{ projection: { sourceEventIds: 1 } },
+			)
+			const [, update] = (entitiesCol.updateOne as ReturnType<typeof vi.fn>)
+				.mock.calls[0]
+			expect(update.$set.sourceEventIds).toEqual(["evt-first", "evt-second"])
+			expect(update.$addToSet).toBeUndefined()
+		})
+
+		it("bounds entity sourceEventIds at 200 keeping the most recent (C-028)", async () => {
+			const existingIds = Array.from(
+				{ length: 200 },
+				(_, i) => `evt-${String(i).padStart(3, "0")}`,
+			)
+			const entitiesCol = createMockCollection({
+				findOne: vi.fn().mockResolvedValue({
+					entityId: "ent-1",
+					sourceEventIds: existingIds,
+				}),
+			})
+			const db = createMockDb({ [`${PREFIX}entities`]: entitiesCol })
+
+			await upsertEntity({
+				db,
+				prefix: PREFIX,
+				entity: makeEntity({ sourceEventIds: ["evt-200"] }),
+			})
+
+			const [, update] = (entitiesCol.updateOne as ReturnType<typeof vi.fn>)
+				.mock.calls[0]
+			// 201 merged ids -> the oldest (evt-000) is evicted, keeping the
+			// 200 most recent. MAX_SOURCE_EVENT_IDS mirrors the bound in
+			// mongodb-structured-memory.ts (fleet audit P2-3).
+			expect(update.$set.sourceEventIds).toHaveLength(200)
+			expect(update.$set.sourceEventIds[0]).toBe("evt-001")
+			expect(update.$set.sourceEventIds[199]).toBe("evt-200")
+		})
 	})
 
 	describe("upsertRelation", () => {
@@ -203,7 +264,7 @@ describe("mongodb-graph", () => {
 			expect(opts).toEqual({ upsert: true })
 		})
 
-		it("persists a relationId locator field as fromEntityId-toEntityId (P3.8)", async () => {
+		it("persists a typed relationId locator field as fromEntityId-toEntityId-type (P3.8, C-025)", async () => {
 			const relationsCol = createMockCollection()
 			const db = createMockDb({ [`${PREFIX}relations`]: relationsCol })
 
@@ -215,7 +276,7 @@ describe("mongodb-graph", () => {
 
 			const [, update] = (relationsCol.updateOne as ReturnType<typeof vi.fn>)
 				.mock.calls[0]
-			expect(update.$set.relationId).toBe("ent-1-ent-2")
+			expect(update.$set.relationId).toBe("ent-1-ent-2-works_on")
 		})
 
 		it("tracks lifecycle metadata on a new relation", async () => {
@@ -347,6 +408,39 @@ describe("mongodb-graph", () => {
 			expect(update?.$set.sourceEventIds).toEqual(["evt-first", "evt-second"])
 		})
 
+		it("bounds relation sourceEventIds at 200 keeping the most recent (C-028)", async () => {
+			const existingIds = Array.from(
+				{ length: 200 },
+				(_, i) => `evt-${String(i).padStart(3, "0")}`,
+			)
+			const relationsCol = createMockCollection({
+				findOne: vi.fn().mockResolvedValue({
+					fromEntityId: "ent-1",
+					toEntityId: "ent-2",
+					type: "works_on",
+					agentId: "agent-1",
+					scope: "agent",
+					scopeRef: "agent:agent-1",
+					state: "active",
+					sourceEventIds: existingIds,
+				}),
+			})
+			const db = createMockDb({ [`${PREFIX}relations`]: relationsCol })
+
+			await upsertRelation({
+				db,
+				prefix: PREFIX,
+				relation: makeRelation({ sourceEventIds: ["evt-200"] }),
+			})
+
+			const update = vi.mocked(relationsCol.updateOne).mock.calls[0]?.[1]
+			// 201 merged ids -> the oldest (evt-000) is evicted. Same bound
+			// as entities and structured memories (MAX_SOURCE_EVENT_IDS).
+			expect(update?.$set.sourceEventIds).toHaveLength(200)
+			expect(update?.$set.sourceEventIds[0]).toBe("evt-001")
+			expect(update?.$set.sourceEventIds[199]).toBe("evt-200")
+		})
+
 		it("invalidates stale active owns relations when ownership changes", async () => {
 			const relationsCol = createMockCollection({
 				updateMany: vi.fn().mockResolvedValue({
@@ -380,6 +474,14 @@ describe("mongodb-graph", () => {
 				state: { $ne: "invalidated" },
 			})
 			expect(update.$set.state).toBe("invalidated")
+			// C-027: the invalidated relation's validity ends where the
+			// superseding relation's validity begins — its validFrom (now
+			// fallback) — not at the wall-clock moment the write ran.
+			expect(update.$set.validTo).toBeInstanceOf(Date)
+			expect(update.$set.invalidatedBy.at).toBeInstanceOf(Date)
+			expect(update.$set.invalidatedBy.reason).toBe(
+				"exclusive-relation-replaced",
+			)
 
 			const [, createUpdate] = (
 				relationsCol.updateOne as ReturnType<typeof vi.fn>
@@ -389,6 +491,37 @@ describe("mongodb-graph", () => {
 				toEntityId: "ent-phoenix",
 				invalidatedRelationCount: 1,
 			})
+		})
+
+		it("ends the invalidated owns relation at the superseding relation's validFrom, not the write time (C-027)", async () => {
+			const relationsCol = createMockCollection({
+				updateMany: vi.fn().mockResolvedValue({
+					matchedCount: 1,
+					modifiedCount: 1,
+				}),
+			})
+			const db = createMockDb({ [`${PREFIX}relations`]: relationsCol })
+			const supersedingValidFrom = new Date("2026-08-01T00:00:00.000Z")
+
+			await upsertRelation({
+				db,
+				prefix: PREFIX,
+				relation: makeRelation({
+					fromEntityId: "ent-bob",
+					toEntityId: "ent-phoenix",
+					type: "owns",
+					validFrom: supersedingValidFrom,
+				}),
+			})
+
+			expect(relationsCol.updateMany).toHaveBeenCalledOnce()
+			const [, update] = (relationsCol.updateMany as ReturnType<typeof vi.fn>)
+				.mock.calls[0]
+			// validTo is the superseding relation's validFrom — the intervals
+			// tile without overlap or gap — and invalidatedBy.at is a BSON
+			// Date, not an ISO string.
+			expect(update.$set.validTo).toBe(supersedingValidFrom)
+			expect(update.$set.invalidatedBy.at).toBeInstanceOf(Date)
 		})
 	})
 
