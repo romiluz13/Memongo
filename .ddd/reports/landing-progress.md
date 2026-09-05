@@ -50,7 +50,7 @@ This file is the compaction anchor: any future instance resumes from here.
 | WS-09 | C-016 | T2 | Runtime capability re-verification | LANDED (see session log) |
 | WS-10 | C-017 | T2 | Cost observability | LANDED (see session log) |
 | WS-11 | C-018 | T3 | Admission control | LANDED fa0f19db62 (per-construct linkage repaired at WS-12; refutation independence OPEN) |
-| WS-12 | C-019 | T2 | Degradation vs healthy emptiness | LANDED (this commit; see session log) |
+| WS-12 | C-019 | T2 | Degradation vs healthy emptiness | LANDED b02c50635c (hash pinned by follow-up ledger commit) |
 | WS-13 | C-020..023 | T2,T2,T2,T2 | Lifecycle scheduling/dead letters | LANDED b175de6955 + artifacts (see session log) |
 | WS-14 | C-024 | T2 | Orphan detection all relation types | pending |
 | WS-15 | C-025..028 | T1,T2,T1,T1 | Data-model mechanics | pending |
