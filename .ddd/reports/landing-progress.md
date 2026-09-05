@@ -56,10 +56,10 @@ This file is the compaction anchor: any future instance resumes from here.
 | WS-15 | C-025..028 | T1,T2,T1,T1 | Data-model mechanics | LANDED a8cdf60d96 (hash pinned by follow-up ledger commit) |
 | WS-16 | C-029..034 | T2,T1,T2,T0,T2,T1 | Retrieval quality/perf | LANDED fd313cf825 (hash pinned by follow-up ledger commit) |
 | WS-17 | C-035,036 | T2,T2 | kb cross-tenant read; pi opt-in | LANDED 96c8db28bb (see session log) |
-| WS-18 | C-037,038,039 | T1,T2,T2 | dockerignore; publish gates; nightly eval | LANDED (hash pinned by follow-up ledger commit) |
+| WS-18 | C-037,038,039 | T1,T2,T2 | dockerignore; publish gates; nightly eval | LANDED 695e08eec9 (hash pinned by follow-up ledger commit) |
 
 T3 needing refutation: C-002, C-003, C-004, C-005, C-007, C-008, C-009, C-018.
-Validation IDs used so far: V-001..V-127 (next free: V-128).
+Validation IDs used so far: V-001..V-136 (next free: V-137).
 Sweep violations at WS-01 landing: 92 (was 96 pre-WS-01).
 Sweep violations at WS-02 landing: 86 (was 92; zero for C-002).
 Sweep violations at WS-04 landing: 67 (was 72 at WS-03; zero for C-007).
@@ -123,6 +123,15 @@ obligation satisfied by refutation-c-018.yaml (round-1 sustained;
 independent round-2 refutation still owed before C-018 is final);
 remaining 9 = 2 C-038 + 3 C-039 + 4 C-040, all pending workstreams
 (WS-18 publish gates / nightly eval, C-040 quartet closure)).
+Sweep violations at WS-18 landing: 4 (was 9 at WS-16; zero for
+C-037..C-039; the 5 WS-18 plan-stage violations cleared (C-038
+claim-without-validation + TR-082 trace-without-validation, C-039
+claim-without-validation + TR-083/084 trace-without-validation) and
+the 5 widened-envelope traces TR-107..TR-111 passed clean on first
+sweep; remaining 4 = the C-040 quartet (claim-without-validation,
+claim-with-missing-evidence REF-WS05-R2, untraced constructs
+packages/tools/src/index.ts + apps/mcp/src/server.ts) — the next
+workstream).
 
 ## Session log
 
