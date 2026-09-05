@@ -54,12 +54,12 @@ This file is the compaction anchor: any future instance resumes from here.
 | WS-13 | C-020..023 | T2,T2,T2,T2 | Lifecycle scheduling/dead letters | LANDED b175de6955 + artifacts (see session log) |
 | WS-14 | C-024 | T2 | Orphan detection all relation types | LANDED d0184fc2b9 (hash pinned by follow-up ledger commit) |
 | WS-15 | C-025..028 | T1,T2,T1,T1 | Data-model mechanics | LANDED a8cdf60d96 (hash pinned by follow-up ledger commit) |
-| WS-16 | C-029..034 | T2,T1,T2,T0,T2,T1 | Retrieval quality/perf | LANDED (see session log) |
+| WS-16 | C-029..034 | T2,T1,T2,T0,T2,T1 | Retrieval quality/perf | LANDED fd313cf825 (hash pinned by follow-up ledger commit) |
 | WS-17 | C-035,036 | T2,T2 | kb cross-tenant read; pi opt-in | LANDED 96c8db28bb (see session log) |
 | WS-18 | C-037,038,039 | T1,T2,T2 | dockerignore; publish gates; nightly eval | pending |
 
 T3 needing refutation: C-002, C-003, C-004, C-005, C-007, C-008, C-009, C-018.
-Validation IDs used so far: V-001..V-119 (next free: V-120).
+Validation IDs used so far: V-001..V-127 (next free: V-128).
 Sweep violations at WS-01 landing: 92 (was 96 pre-WS-01).
 Sweep violations at WS-02 landing: 86 (was 92; zero for C-002).
 Sweep violations at WS-04 landing: 67 (was 72 at WS-03; zero for C-007).
