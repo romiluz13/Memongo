@@ -307,6 +307,13 @@ export function schemaModuleMock() {
 		memoryJobsCollection: vi.fn(() => ({
 			countDocuments: vi.fn(async () => 0),
 		})),
+		// WS-14: getV2Status passes entityLinksCollection(db, prefix) into
+		// checkEntityLinkOrphans. The checkers themselves are mocked at the
+		// mongodb-schema-integrity.js seam; this only needs to yield an
+		// object, but an empty collection keeps unmocked call sites honest.
+		entityLinksCollection: vi.fn(() => ({
+			countDocuments: vi.fn(async () => 0),
+		})),
 	}
 }
 

@@ -31,8 +31,15 @@ import {
 	relevanceRunsCollection,
 	chunksCollection,
 	memoryJobsCollection,
+	entityLinksCollection,
 } from "./mongodb-schema.js"
 import { probeSearchLaneReadiness } from "./mongodb-schema-capabilities.js"
+import {
+	checkChunkEventOrphans,
+	checkEntityLinkOrphans,
+	checkEpisodeEventOrphans,
+	checkRelationEntityOrphans,
+} from "./mongodb-schema-integrity.js"
 import { getActiveSourcesForStatus } from "./mongodb-search-ranking.js"
 import { vectorSearch } from "./mongodb-search.js"
 import type {
@@ -182,6 +189,19 @@ export type V2Status = {
 		windowDays: number
 		daily: DailyCostSum[]
 	}
+	/**
+	 * WS-14 (C-024): referential-integrity orphan counts for every relation
+	 * type — relations→entities, entity_links→entities, conversation
+	 * chunks→events, episodes→events. Detection is read-only; cleanup stays
+	 * an operator decision. A failed sub-check falls back to zero counts and
+	 * its `referentialIntegrity.*` label lands in `health.failedChecks`.
+	 */
+	referentialIntegrity?: {
+		relations: { orphanedRelationCount: number; orphanedEntityIds: string[] }
+		entityLinks: { orphanedLinkCount: number; orphanedEntityIds: string[] }
+		chunks: { orphanedChunkCount: number; orphanedEventIds: string[] }
+		episodes: { orphanedEpisodeCount: number; orphanedEventIds: string[] }
+	}
 }
 
 const PROJECTION_BEHIND_SECONDS = 5 * 60
@@ -214,6 +234,10 @@ const V2_STATUS_CHECK_LABELS = [
 	"memoryJobs.failed",
 	"memoryJobs.deadLettered",
 	"costLedger.dailySums",
+	"referentialIntegrity.relations",
+	"referentialIntegrity.entityLinks",
+	"referentialIntegrity.chunks",
+	"referentialIntegrity.episodes",
 ] as const
 
 export function classifyCanonicalIngestHealth(
@@ -396,6 +420,28 @@ export async function getV2Status(
 			}),
 			// C-017: trailing per-day cost ledger sums (tokens + embed units).
 			getDailyCostSums(db, prefix, agentId, 30),
+			// WS-14 (C-024): referential-integrity orphan checks — one per
+			// relation type, agent-scoped to match the rest of this status.
+			checkRelationEntityOrphans(
+				relationsCollection(db, prefix),
+				entitiesCollection(db, prefix),
+				agentId,
+			),
+			checkEntityLinkOrphans(
+				entityLinksCollection(db, prefix),
+				entitiesCollection(db, prefix),
+				agentId,
+			),
+			checkChunkEventOrphans(
+				chunksCollection(db, prefix),
+				eventsCollection(db, prefix),
+				agentId,
+			),
+			checkEpisodeEventOrphans(
+				episodesCollection(db, prefix),
+				eventsCollection(db, prefix),
+				agentId,
+			),
 		])
 
 		// Extract fulfilled values, default to safe fallbacks on rejection
@@ -440,6 +486,25 @@ export async function getV2Status(
 		const memoryJobsFailed = val(settled[25], 0)
 		const memoryJobsDeadLettered = val(settled[26], 0)
 		const costDailySums = val(settled[27], [] as DailyCostSum[])
+		// WS-14 (C-024): orphan-check results. Rejected checks fall back to
+		// zero counts; the failedChecks list carries the label so a zero is
+		// never mistaken for "verified clean".
+		const relationOrphans = val(settled[28], {
+			orphanedRelationCount: 0,
+			orphanedEntityIds: [] as string[],
+		})
+		const entityLinkOrphans = val(settled[29], {
+			orphanedLinkCount: 0,
+			orphanedEntityIds: [] as string[],
+		})
+		const chunkOrphans = val(settled[30], {
+			orphanedChunkCount: 0,
+			orphanedEventIds: [] as string[],
+		})
+		const episodeOrphans = val(settled[31], {
+			orphanedEpisodeCount: 0,
+			orphanedEventIds: [] as string[],
+		})
 		// WS-11 change 3: backlog-depth gauge inputs (pending + running is
 		// admitted-but-unfinished work; the threshold is the alert verdict).
 		const memoryJobsBacklogDepth = memoryJobsPending + memoryJobsRunning
@@ -580,6 +645,15 @@ export async function getV2Status(
 			costLedger: {
 				windowDays: 30,
 				daily: costDailySums,
+			},
+			// WS-14 (C-024): the pull surface for orphan detection — every
+			// relation type gets its own counts, so "is anything referencing
+			// something deleted?" is answerable from status alone.
+			referentialIntegrity: {
+				relations: relationOrphans,
+				entityLinks: entityLinkOrphans,
+				chunks: chunkOrphans,
+				episodes: episodeOrphans,
 			},
 		}
 	} catch (err) {

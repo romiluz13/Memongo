@@ -855,3 +855,33 @@ entries:
     run_at: "2026-09-05T16:10:38.000Z"
     evidence_hash: "sha256:538f37d5943e1de5fb172c575a9b852ad0f350a0ca1e27fab138cfdbc6dbcabc"
     notes: "Per-construct validation-record repair recorded during the WS-12 landing (same ws11-engine-suite.log as V-093, sha-identical; see V-105 for why this record exists). The KB-search battery (2 tests, mongodb-kb-search.test.ts) pins this construct directly: the module-level skipVectorLane degradation honored inside canVector so a denied KB search runs the text lane without any $vectorSearch stage (bypass-audit fix D, module half — as first implemented the flag did not exist and every KB search always spent the vector lane, so the manager-level kb:throttled marker could never actually remove the embed burn). Mutation m7 (the canVector guard dropped) REDs 1/17 with a $vectorSearch stage appearing in the captured pipeline per refutation-c-018.yaml."
+  - id: V-110
+    schema_version: 0.1.0
+    claim: C-024
+    construct: packages/memory-engine/src/mongodb-schema-integrity.ts
+    method: test
+    target: .ddd/reports/runs/ws14-engine-suite.log
+    result: pass
+    run_at: "2026-09-05T16:37:51.035Z"
+    evidence_hash: "sha256:4e91947a362d50228efc551e362c3b5c9ae8b72712fd032d221276c9e978af7b"
+    notes: "Orphan-detection evidence from the final-state WS-14 engine suite (129 files / 2226 tests, exit 0): the C-024 checker battery (16 tests, mongodb-schema-integrity.test.ts) pins all four relation types. checkRelationEntityOrphans: missing from/to endpoints detected, exact relation-level count via the $or re-query so a both-endpoints-missing relation counts once, clean and empty-collection cases, agentId scoping of aggregate/find/countDocuments. checkEntityLinkOrphans: same shape for the canonicalized entity_links pair collection. checkChunkEventOrphans: events/{eventId} path-suffix reference (chunks carry no direct eventId field), per-chunk orphan count with distinct missing event ids, dedupe before the $in existence query, bare events/ guard, agentId scoping. checkEpisodeEventOrphans: sourceEventIds-array references, per-episode missing count, legacy docs without the array skipped, agentId scoping. All four checkers are read-only (warn-on-orphan, no delete path)."
+  - id: V-111
+    schema_version: 0.1.0
+    claim: C-024
+    construct: packages/memory-engine/src/mongodb-manager-admin.ts
+    method: test
+    target: .ddd/reports/runs/ws14-engine-suite.log
+    result: pass
+    run_at: "2026-09-05T16:37:56.785Z"
+    evidence_hash: "sha256:4e91947a362d50228efc551e362c3b5c9ae8b72712fd032d221276c9e978af7b"
+    notes: "Status-surface evidence from the same final-state WS-14 engine suite: the getV2Status wiring battery (2 new tests in mongodb-manager-admin.test.ts) pins the referentialIntegrity section — all four checker results surfaced per relation type, each checker invoked agent-scoped against the collections it owns (relations+entities, entity_links+entities, chunks+events, episodes+events), and a rejected checker falling back to zero counts while its referentialIntegrity.* label lands in health.failedChecks with dataCompleteness partial, so a zero is never mistaken for verified-clean. The V2Status type extends with the optional section (V2_STATUS_CHECK_LABELS entries appended, allSettled indexes stable); getDetailedStatus spreads getV2Status so the bridge and /v1/status/detailed serve it verbatim. Post-change: api suite 9/273 green (ws14-api-suite.log), root check-types 15/15 green (ws14-check-types.log)."
+  - id: V-112
+    schema_version: 0.1.0
+    claim: C-024
+    construct: packages/memory-engine/src/mongodb-graph.ts
+    method: test
+    target: .ddd/reports/runs/ws14-engine-suite.log
+    result: pass
+    run_at: "2026-09-05T16:38:01.114Z"
+    evidence_hash: "sha256:4e91947a362d50228efc551e362c3b5c9ae8b72712fd032d221276c9e978af7b"
+    notes: "Cascade evidence from the same final-state WS-14 engine suite: the deleteEntity battery extension (mongodb-graph.test.ts) pins the entity_links cascade — deleteEntity issues a second deleteMany with the same $or [{fromEntityId}, {toEntityId}] + agentId filter as the relation cascade and reports the deletedEntityLinks count. deleteEntityConservative (mongodb-graph.segment2.test.ts, force path) passes the count through, so the audited delete surface reports links removed alongside relations. This construct was added to the C-024 envelope during the WS-14 landing because the deleteEntity cascade lives in mongodb-graph.ts, not in the two constructs the planned envelope declared."

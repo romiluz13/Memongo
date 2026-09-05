@@ -76,6 +76,13 @@ export type {
 } from "./mongodb-schema-search-indexes.js"
 export { assertIndexBudget } from "./mongodb-schema-budget.js"
 export { checkKBOrphans } from "./mongodb-schema-integrity.js"
+// C-024 (WS-14): referential-integrity orphan checks beyond KB.
+export {
+	checkChunkEventOrphans,
+	checkEntityLinkOrphans,
+	checkEpisodeEventOrphans,
+	checkRelationEntityOrphans,
+} from "./mongodb-schema-integrity.js"
 export {
 	detectCapabilities,
 	waitForSearchCapabilities,

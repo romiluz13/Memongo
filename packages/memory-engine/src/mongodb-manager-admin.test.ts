@@ -48,6 +48,28 @@ vi.mock("./mongodb-schema.js", async () =>
 	(await import("./test-helpers/manager-test-kit.js")).schemaModuleMock(),
 )
 
+vi.mock("./mongodb-schema-integrity.js", () => ({
+	// WS-14 (C-024): the orphan checkers run at their own seam (their logic
+	// is covered by mongodb-schema-integrity.test.ts). Defaults report zero
+	// orphans so unconfigured tests stay complete; wiring tests override.
+	checkRelationEntityOrphans: vi.fn(async () => ({
+		orphanedRelationCount: 0,
+		orphanedEntityIds: [],
+	})),
+	checkEntityLinkOrphans: vi.fn(async () => ({
+		orphanedLinkCount: 0,
+		orphanedEntityIds: [],
+	})),
+	checkChunkEventOrphans: vi.fn(async () => ({
+		orphanedChunkCount: 0,
+		orphanedEventIds: [],
+	})),
+	checkEpisodeEventOrphans: vi.fn(async () => ({
+		orphanedEpisodeCount: 0,
+		orphanedEventIds: [],
+	})),
+}))
+
 vi.mock("./mongodb-query-cache.js", async () =>
 	(await import("./test-helpers/manager-test-kit.js")).queryCacheModuleMock(),
 )
@@ -95,7 +117,14 @@ const {
 	relevanceRunsCollection,
 	chunksCollection,
 	memoryJobsCollection,
+	entityLinksCollection,
 } = await import("./mongodb-schema.js")
+const {
+	checkRelationEntityOrphans,
+	checkEntityLinkOrphans,
+	checkChunkEventOrphans,
+	checkEpisodeEventOrphans,
+} = await import("./mongodb-schema-integrity.js")
 const { probeSearchLaneReadiness } = await import(
 	"./mongodb-schema-capabilities.js"
 )
@@ -408,6 +437,137 @@ describe("getV2Status", () => {
 				"episodes.latestTimestamp",
 			]),
 		)
+	})
+
+	it("surfaces referential-integrity orphan counts per relation type (WS-14)", async () => {
+		const latestDate = new Date("2026-03-15T12:00:00Z")
+		const workingCountCol = {
+			countDocuments: vi.fn().mockResolvedValue(7),
+			findOne: vi.fn().mockResolvedValue({ timestamp: latestDate }),
+		} as unknown as import("mongodb").Collection<import("mongodb").Document>
+		const relevanceCol = {
+			findOne: vi
+				.fn()
+				.mockResolvedValue({ status: "ok", hitSources: ["graph"] }),
+		} as unknown as import("mongodb").Collection<import("mongodb").Document>
+		// Checker-facing collections double as working count surfaces where
+		// the status also queries them (relations, episodes); entity_links
+		// and chunks only feed the checkers, so bare markers suffice.
+		const relCol = {
+			countDocuments: vi.fn().mockResolvedValue(7),
+		} as unknown as import("mongodb").Collection
+		const linkCol = {} as unknown as import("mongodb").Collection
+		const chunkCol = {} as unknown as import("mongodb").Collection
+		const episodeCol = {
+			countDocuments: vi.fn().mockResolvedValue(7),
+			findOne: vi.fn().mockResolvedValue({ updatedAt: latestDate }),
+		} as unknown as import("mongodb").Collection
+
+		mocked(eventsCollection).mockReturnValue(workingCountCol)
+		mocked(entitiesCollection).mockReturnValue(workingCountCol)
+		mocked(proceduresCollection).mockReturnValue(workingCountCol)
+		mocked(relevanceRunsCollection).mockReturnValue(relevanceCol)
+		mocked(relationsCollection).mockReturnValue(relCol)
+		mocked(episodesCollection).mockReturnValue(episodeCol)
+		mocked(chunksCollection).mockReturnValue(chunkCol)
+		mocked(entityLinksCollection).mockReturnValue(linkCol)
+		mocked(getProjectionLag).mockResolvedValue(10)
+
+		mocked(checkRelationEntityOrphans).mockResolvedValueOnce({
+			orphanedRelationCount: 3,
+			orphanedEntityIds: ["ent-gone"],
+		})
+		mocked(checkEntityLinkOrphans).mockResolvedValueOnce({
+			orphanedLinkCount: 2,
+			orphanedEntityIds: ["ent-gone"],
+		})
+		mocked(checkChunkEventOrphans).mockResolvedValueOnce({
+			orphanedChunkCount: 5,
+			orphanedEventIds: ["ev-gone"],
+		})
+		mocked(checkEpisodeEventOrphans).mockResolvedValueOnce({
+			orphanedEpisodeCount: 1,
+			orphanedEventIds: ["ev-gone"],
+		})
+
+		const status = await getV2Status(fakeDb, fakePrefix, "agent-1")
+
+		expect(status.referentialIntegrity).toEqual({
+			relations: {
+				orphanedRelationCount: 3,
+				orphanedEntityIds: ["ent-gone"],
+			},
+			entityLinks: {
+				orphanedLinkCount: 2,
+				orphanedEntityIds: ["ent-gone"],
+			},
+			chunks: { orphanedChunkCount: 5, orphanedEventIds: ["ev-gone"] },
+			episodes: { orphanedEpisodeCount: 1, orphanedEventIds: ["ev-gone"] },
+		})
+		// Each checker runs agent-scoped against the collections it owns.
+		expect(checkRelationEntityOrphans).toHaveBeenCalledWith(
+			relCol,
+			workingCountCol,
+			"agent-1",
+		)
+		expect(checkEntityLinkOrphans).toHaveBeenCalledWith(
+			linkCol,
+			workingCountCol,
+			"agent-1",
+		)
+		expect(checkChunkEventOrphans).toHaveBeenCalledWith(
+			chunkCol,
+			workingCountCol,
+			"agent-1",
+		)
+		expect(checkEpisodeEventOrphans).toHaveBeenCalledWith(
+			episodeCol,
+			workingCountCol,
+			"agent-1",
+		)
+		// Everything answered: the status stays complete.
+		expect(status.health.dataCompleteness).toBe("complete")
+	})
+
+	it("falls back to zero orphans and flags the failed check when an integrity query rejects (WS-14)", async () => {
+		const latestDate = new Date("2026-03-15T12:00:00Z")
+		const workingCountCol = {
+			countDocuments: vi.fn().mockResolvedValue(3),
+			findOne: vi.fn().mockResolvedValue({ timestamp: latestDate }),
+		} as unknown as import("mongodb").Collection<import("mongodb").Document>
+		const relevanceCol = {
+			findOne: vi.fn().mockResolvedValue({ status: "ok", hitSources: [] }),
+		} as unknown as import("mongodb").Collection<import("mongodb").Document>
+
+		mocked(eventsCollection).mockReturnValue(workingCountCol)
+		mocked(entitiesCollection).mockReturnValue(workingCountCol)
+		mocked(relationsCollection).mockReturnValue(workingCountCol)
+		mocked(episodesCollection).mockReturnValue(workingCountCol)
+		mocked(proceduresCollection).mockReturnValue(workingCountCol)
+		mocked(relevanceRunsCollection).mockReturnValue(relevanceCol)
+		mocked(getProjectionLag).mockResolvedValue(10)
+
+		mocked(checkRelationEntityOrphans).mockRejectedValueOnce(
+			new Error("cursor timeout"),
+		)
+
+		const status = await getV2Status(fakeDb, fakePrefix, "agent-1")
+
+		// The rejected check falls back to zero counts — never mistaken for
+		// "verified clean", because its label lands in failedChecks.
+		expect(status.referentialIntegrity?.relations).toEqual({
+			orphanedRelationCount: 0,
+			orphanedEntityIds: [],
+		})
+		expect(status.health.failedChecks).toContain(
+			"referentialIntegrity.relations",
+		)
+		expect(status.health.dataCompleteness).toBe("partial")
+		// The other three checkers still report through the defaults.
+		expect(status.referentialIntegrity?.entityLinks).toEqual({
+			orphanedLinkCount: 0,
+			orphanedEntityIds: [],
+		})
 	})
 })
 

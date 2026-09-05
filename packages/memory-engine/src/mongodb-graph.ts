@@ -1237,11 +1237,17 @@ export async function deleteEntity(params: {
 	prefix: string
 	entityId: string
 	agentId: string
-}): Promise<{ deletedEntity: boolean; deletedRelations: number }> {
+}): Promise<{
+	deletedEntity: boolean
+	deletedRelations: number
+	/** C-024: entity_links removed alongside the entity (from/to either side). */
+	deletedEntityLinks: number
+}> {
 	const { db, prefix, entityId, agentId } = params
 	try {
 		const entCol = entitiesCollection(db, prefix)
 		const relCol = relationsCollection(db, prefix)
+		const linkCol = entityLinksCollection(db, prefix)
 
 		// Delete entity scoped by agentId
 		const entityResult = await entCol.deleteOne({ entityId, agentId })
@@ -1252,13 +1258,23 @@ export async function deleteEntity(params: {
 			agentId,
 		})
 
+		// C-024: cascade delete all entity_links involving this entity too —
+		// without this, deleting an entity leaves links whose from/to entity
+		// no longer exists, the exact orphan class checkEntityLinkOrphans
+		// detects. Same $or + agentId scoping as the relation cascade.
+		const linkResult = await linkCol.deleteMany({
+			$or: [{ fromEntityId: entityId }, { toEntityId: entityId }],
+			agentId,
+		})
+
 		log.info(
-			`deleted entity=${entityId} (found=${entityResult.deletedCount > 0}, relations=${relResult.deletedCount})`,
+			`deleted entity=${entityId} (found=${entityResult.deletedCount > 0}, relations=${relResult.deletedCount}, links=${linkResult.deletedCount})`,
 		)
 
 		return {
 			deletedEntity: entityResult.deletedCount > 0,
 			deletedRelations: relResult.deletedCount,
+			deletedEntityLinks: linkResult.deletedCount,
 		}
 	} catch (err) {
 		log.error(
@@ -1293,6 +1309,8 @@ export async function deleteEntityConservative(params: {
 }): Promise<{
 	deletedEntity: boolean
 	deletedRelations: number
+	/** C-024: entity_links cascade count, passed through from deleteEntity. */
+	deletedEntityLinks: number
 	conflictDetected: boolean
 	conflictingRelationCount?: number
 	auditRecorded: boolean
@@ -1316,6 +1334,7 @@ export async function deleteEntityConservative(params: {
 			return {
 				deletedEntity: false,
 				deletedRelations: 0,
+				deletedEntityLinks: 0,
 				conflictDetected: true,
 				conflictingRelationCount: relationCount,
 				auditRecorded: false,
@@ -1331,6 +1350,7 @@ export async function deleteEntityConservative(params: {
 			return {
 				deletedEntity: false,
 				deletedRelations: 0,
+				deletedEntityLinks: 0,
 				conflictDetected: false,
 				auditRecorded: false,
 			}
@@ -1366,12 +1386,13 @@ export async function deleteEntityConservative(params: {
 		}
 
 		log.info(
-			`deleteEntityConservative: deleted entity=${entityId}, relations=${deleteResult.deletedRelations}, audit=${auditRecorded}`,
+			`deleteEntityConservative: deleted entity=${entityId}, relations=${deleteResult.deletedRelations}, links=${deleteResult.deletedEntityLinks}, audit=${auditRecorded}`,
 		)
 
 		return {
 			deletedEntity: deleteResult.deletedEntity,
 			deletedRelations: deleteResult.deletedRelations,
+			deletedEntityLinks: deleteResult.deletedEntityLinks,
 			conflictDetected: false,
 			auditRecorded,
 		}

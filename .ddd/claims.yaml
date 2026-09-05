@@ -411,8 +411,8 @@ entries:
     impact: medium
     tier: T2
     status: known-and-supported
-    constructs: [packages/memory-engine/src/mongodb-schema-integrity.ts, packages/memory-engine/src/mongodb-manager-admin.ts]
-    validations: []
+    constructs: [packages/memory-engine/src/mongodb-schema-integrity.ts, packages/memory-engine/src/mongodb-manager-admin.ts, packages/memory-engine/src/mongodb-graph.ts]
+    validations: [V-110, V-111, V-112]
     exceptions: []
 
   - id: C-025

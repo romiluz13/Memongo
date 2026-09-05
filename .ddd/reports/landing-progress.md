@@ -52,14 +52,14 @@ This file is the compaction anchor: any future instance resumes from here.
 | WS-11 | C-018 | T3 | Admission control | LANDED fa0f19db62 (per-construct linkage repaired at WS-12; refutation independence OPEN) |
 | WS-12 | C-019 | T2 | Degradation vs healthy emptiness | LANDED b02c50635c (hash pinned by follow-up ledger commit) |
 | WS-13 | C-020..023 | T2,T2,T2,T2 | Lifecycle scheduling/dead letters | LANDED b175de6955 + artifacts (see session log) |
-| WS-14 | C-024 | T2 | Orphan detection all relation types | pending |
+| WS-14 | C-024 | T2 | Orphan detection all relation types | LANDED (see session log) |
 | WS-15 | C-025..028 | T1,T2,T1,T1 | Data-model mechanics | pending |
 | WS-16 | C-029..034 | T2,T1,T2,T0,T2,T1 | Retrieval quality/perf | pending |
 | WS-17 | C-035,036 | T2,T2 | kb cross-tenant read; pi opt-in | LANDED 96c8db28bb (see session log) |
 | WS-18 | C-037,038,039 | T1,T2,T2 | dockerignore; publish gates; nightly eval | pending |
 
 T3 needing refutation: C-002, C-003, C-004, C-005, C-007, C-008, C-009, C-018.
-Validation IDs used so far: V-001..V-109 (next free: V-110).
+Validation IDs used so far: V-001..V-112 (next free: V-113).
 Sweep violations at WS-01 landing: 92 (was 96 pre-WS-01).
 Sweep violations at WS-02 landing: 86 (was 92; zero for C-002).
 Sweep violations at WS-04 landing: 67 (was 72 at WS-03; zero for C-007).
@@ -102,6 +102,13 @@ repaired in the same landing — 5 validation-link-mismatch violations on
 TR-095..099 resolved via V-105..V-109, 1 t3-without-refutation honestly
 open pending an independent round-2 refuter; remaining 22 are pending
 WS-14/15/16/18 claims plus the C-040 quartet).
+Sweep violations at WS-14 landing: 20 (was 23 at WS-12; zero for
+C-024; the 3 C-024 violations cleared: claim-without-validation plus
+trace-without-validation TR-061/062, and TR-106 appended for the
+widened mongodb-graph.ts construct passed clean on first sweep;
+remaining 20 = 1 open C-018 refutation obligation + 19 pending-
+workstream violations: 3 C-026 + 3 C-029 + 2 C-031 + 2 C-033 +
+2 C-038 + 3 C-039 + 4 C-040).
 
 ## Session log
 
@@ -828,3 +835,50 @@ WS-14/15/16/18 claims plus the C-040 quartet).
   every appended ledger record before the sweep — the first V-109
   draft carried a mangled evidence_hash and placeholder notes, caught
   only by the read-back.
+- WS-14/C-024 landed: orphan detection for every relation type plus the
+  deleteEntity entity_links cascade. Ledger: V-110 (schema-integrity,
+  16-test checker battery), V-111 (manager-admin, getV2Status wiring),
+  V-112 (mongodb-graph.ts, cascade battery) — one validation per traced
+  construct, all citing ws14-engine-suite.log (sha 4e91947a...); TR-061
+  and TR-062 patched (validation ids, sweep_pass true), TR-106 appended
+  for the widened construct. Sweep 23 -> 20, zero C-024 violations.
+  Implementation: four read-only checkers in mongodb-schema-integrity.ts
+  (checkRelationEntityOrphans, checkEntityLinkOrphans,
+  checkChunkEventOrphans, checkEpisodeEventOrphans), all agent-scoped,
+  warn-on-orphan, re-exported from mongodb-schema.js; the getV2Status
+  referentialIntegrity section (V2Status type extension, 4 labels and
+  allSettled entries APPENDED after costLedger at indexes 28..31 so
+  every existing val(settled[N]) extraction is untouched, zero fallback
+  plus failedChecks label + partial dataCompleteness on rejection, so a
+  zero is never mistaken for verified-clean); deleteEntity's second
+  deleteMany with the same $or from/to + agentId filter as the relation
+  cascade reporting deletedEntityLinks, with deleteEntityConservative
+  passing the count through; entityLinksCollection added to the
+  manager-test-kit schemaModuleMock (WS-13 memoryJobsCollection
+  precedent). Evidence: engine suite 129 files / 2226 tests (was
+  128/2207 — +1 file, +19 tests: 16 checker + 2 admin wiring + 1
+  cascade), api suite 9/273 green unchanged, root check-types 15/15;
+  Biome clean on touched files (2 format nits auto-fixed) with 4
+  remaining warnings in manager-admin.ts proven pre-existing at HEAD
+  via git-stash comparison. Methodology lessons: (1) the claim's data
+  model does not match the chunk collection — chunks reference events
+  via path: "events/{eventId}" with NO direct eventId field, so the
+  chunk checker parses the path suffix and only events/-prefixed paths
+  participate (procedure:, episode:, conversation:, relation:,
+  temporal-coverage/ chunks excluded); counting is per-chunk, since a
+  re-projected chunk sharing an orphaned event is itself orphaned; (2)
+  the planned 2-construct envelope did not cover the deleteEntity
+  cascade — it lives in mongodb-graph.ts, so the envelope widened with
+  TR-106 and V-112 rather than leaving the cascade untraced; (3)
+  V2_STATUS_CHECK_LABELS and the allSettled array are index-coupled —
+  new checks must append, never insert, or every downstream
+  val(settled[N]) shifts; (4) getDetailedStatus spreads getV2Status
+  verbatim, so /v1/status/detailed and the bridge serve the new section
+  with zero bridge/API/OpenAPI changes (the detailed-status schema is
+  deliberately loose); (5) the targeted pre-suite run caught the chunk
+  checker passing duplicate eventIds in $in — dedupe with
+  [...new Set] before the existence query, caught by exact-match call
+  assertions before any full-suite run; (6) deleteEntity callers are
+  engine-internal only, so the return-type widening is safe, and
+  createMockDb auto-vivifies unknown collections, so the existing
+  deleteEntity tests survived the new entity_links cascade untouched.

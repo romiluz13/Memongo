@@ -576,12 +576,18 @@ describe("mongodb-graph", () => {
 				countDocuments: vi.fn().mockResolvedValue(5),
 				deleteMany: vi.fn().mockResolvedValue({ deletedCount: 5 }),
 			})
+			// C-024: deleteEntity now cascades to entity_links; the
+			// conservative wrapper passes the count through.
+			const linksCol = createMockCollection({
+				deleteMany: vi.fn().mockResolvedValue({ deletedCount: 2 }),
+			})
 			const mutationsCol = createMockCollection({
 				insertOne: vi.fn().mockResolvedValue({ insertedId: "mut-1" }),
 			})
 			const db = createMockDb({
 				[`${PREFIX}entities`]: entitiesCol,
 				[`${PREFIX}relations`]: relationsCol,
+				[`${PREFIX}entity_links`]: linksCol,
 				[`${PREFIX}memory_mutations`]: mutationsCol,
 			})
 
@@ -596,6 +602,7 @@ describe("mongodb-graph", () => {
 			expect(result.deletedEntity).toBe(true)
 			expect(result.conflictDetected).toBe(false)
 			expect(result.deletedRelations).toBe(5)
+			expect(result.deletedEntityLinks).toBe(2)
 			expect(result.auditRecorded).toBe(true)
 		})
 

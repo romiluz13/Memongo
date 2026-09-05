@@ -610,21 +610,21 @@ traces:
     change_id: WS-14
     claim_id: C-024
     construct_id: packages/memory-engine/src/mongodb-schema-integrity.ts
-    validation_id: null
+    validation_id: V-110
     direction: forward
-    sweep_pass: false
-    checked_at: "2026-09-02T13:41:40.082Z"
-    notes: WS-14 Referential integrity beyond KB (planned change envelope)
+    sweep_pass: true
+    checked_at: "2026-09-05T16:38:04.000Z"
+    notes: WS-14 Referential integrity beyond KB (landed) — four read-only orphan checkers (relations to entities, entity_links to entities, chunks to events via the events/{eventId} path, episodes to events via sourceEventIds), agent-scoped, warn-on-orphan, re-exported from mongodb-schema.js alongside checkKBOrphans
   - id: TR-062
     schema_version: 0.1.0
     change_id: WS-14
     claim_id: C-024
     construct_id: packages/memory-engine/src/mongodb-manager-admin.ts
-    validation_id: null
+    validation_id: V-111
     direction: forward
-    sweep_pass: false
-    checked_at: "2026-09-02T13:41:40.083Z"
-    notes: WS-14 Referential integrity beyond KB (planned change envelope)
+    sweep_pass: true
+    checked_at: "2026-09-05T16:38:04.000Z"
+    notes: WS-14 Referential integrity beyond KB (landed) — getV2Status referentialIntegrity section (allSettled, per-relation-type counts, zero fallback plus failed-check labels on rejection), V2Status type extension; served verbatim at /v1/status/detailed through getDetailedStatus and the bridge
   - id: TR-063
     schema_version: 0.1.0
     change_id: WS-15
@@ -1055,3 +1055,13 @@ traces:
     sweep_pass: true
     checked_at: "2026-09-05T16:10:38.000Z"
     notes: WS-12 Distinguishable degradation (landed) — the served OpenAPI contract documents the degradation object on /v1/search-kb 200 and the throttled object (required retryAfterMs) on search-detailed and recall metadata, so the marker is a published contract field rather than an implementation detail
+  - id: TR-106
+    schema_version: 0.1.0
+    change_id: WS-14
+    claim_id: C-024
+    construct_id: packages/memory-engine/src/mongodb-graph.ts
+    validation_id: V-112
+    direction: forward
+    sweep_pass: true
+    checked_at: "2026-09-05T16:38:14.189Z"
+    notes: "WS-14 Referential integrity beyond KB (landed) — deleteEntity cascades to entity_links (same $or from/to + agentId filter as the relation cascade, deletedEntityLinks in the result; deleteEntityConservative passes the count through); construct added during the WS-14 landing because the cascade lives in mongodb-graph.ts, widening the planned envelope"

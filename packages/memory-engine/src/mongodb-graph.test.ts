@@ -819,6 +819,41 @@ describe("mongodb-graph", () => {
 			])
 			expect(relFilter.agentId).toBe("agent-1")
 		})
+
+		it("cascades entity_links deletion and reports the count (C-024)", async () => {
+			const entitiesCol = createMockCollection({
+				deleteOne: vi.fn().mockResolvedValue({ deletedCount: 1 }),
+			})
+			const relationsCol = createMockCollection({
+				deleteMany: vi.fn().mockResolvedValue({ deletedCount: 3 }),
+			})
+			const linksCol = createMockCollection({
+				deleteMany: vi.fn().mockResolvedValue({ deletedCount: 2 }),
+			})
+			const db = createMockDb({
+				[`${PREFIX}entities`]: entitiesCol,
+				[`${PREFIX}relations`]: relationsCol,
+				[`${PREFIX}entity_links`]: linksCol,
+			})
+
+			const result = await deleteEntity({
+				db,
+				prefix: PREFIX,
+				entityId: "ent-1",
+				agentId: "agent-1",
+			})
+
+			expect(result.deletedEntityLinks).toBe(2)
+			// Same $or + agentId scoping as the relation cascade, so a
+			// deleteEntity cannot leave links pointing at the removed entity.
+			const [linkFilter] = (linksCol.deleteMany as ReturnType<typeof vi.fn>)
+				.mock.calls[0]
+			expect(linkFilter.$or).toEqual([
+				{ fromEntityId: "ent-1" },
+				{ toEntityId: "ent-1" },
+			])
+			expect(linkFilter.agentId).toBe("agent-1")
+		})
 	})
 
 	describe("expandGraph bidirectional", () => {
