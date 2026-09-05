@@ -929,6 +929,14 @@ export type MemoryJob = {
 	attempts?: number
 	/** Earliest time a failed job may be claimed again. */
 	retryAt?: Date
+	/**
+	 * Set when a job exhausts its attempt budget. A dead letter is terminal:
+	 * the claim filter requires `attempts < MEMORY_JOB_MAX_ATTEMPTS`, so it is
+	 * never reclaimed, and it deliberately carries no `completedAt` — the
+	 * completed-TTL index must not erase it before an operator has seen it.
+	 * Requeueing (`retryFailedMemoryJob`) clears the marker.
+	 */
+	deadLetterAt?: Date
 	stagedAt?: Date
 	leaseOwner?: string
 	leaseToken?: string

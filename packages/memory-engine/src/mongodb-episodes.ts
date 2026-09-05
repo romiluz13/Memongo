@@ -180,6 +180,81 @@ export function hashSourceEventIds(sourceEventIds: string[]): string {
 }
 
 // ---------------------------------------------------------------------------
+// Per-scope episode cap
+// ---------------------------------------------------------------------------
+
+const EPISODES_MAX_PER_SCOPE_DEFAULT = 200
+
+/**
+ * Upper bound on episodes kept per (agentId, scope, scopeRef)
+ * (MEMONGO_EPISODES_MAX_PER_SCOPE, default 200; an explicit 0 or negative
+ * value disables the cap). Episodes are derived summaries — the events they
+ * compress stay retained and marked consolidatedAt — so pruning the oldest
+ * beyond the cap bounds storage without losing source data.
+ */
+export function resolveEpisodesMaxPerScope(): number {
+	const raw = process.env.MEMONGO_EPISODES_MAX_PER_SCOPE?.trim()
+	if (raw) {
+		const parsed = Number(raw)
+		if (Number.isFinite(parsed)) {
+			return parsed <= 0 ? 0 : Math.floor(parsed)
+		}
+	}
+	return EPISODES_MAX_PER_SCOPE_DEFAULT
+}
+
+/**
+ * Enforce the per-scope cap by deleting the OLDEST episodes beyond it.
+ * Sorting on createdAt asc means episodes written before the field existed
+ * (BSON null sorts first) are treated as the oldest — they are. A failure
+ * here never fails materialization: an over-cap scope is a storage concern,
+ * not a correctness one, and the next inserted episode retries the prune.
+ */
+async function enforceEpisodesScopeCap(params: {
+	db: Db
+	prefix: string
+	agentId: string
+	scope: MemoryScope
+	scopeRef: string
+}): Promise<void> {
+	const cap = resolveEpisodesMaxPerScope()
+	if (cap <= 0) {
+		return
+	}
+	const col = episodesCollection(params.db, params.prefix)
+	const filter = {
+		agentId: params.agentId,
+		scope: params.scope,
+		scopeRef: params.scopeRef,
+	}
+	const count = await col.countDocuments(filter)
+	if (count <= cap) {
+		return
+	}
+	const overflowIds = (
+		await col
+			.find(filter, {
+				sort: { createdAt: 1 },
+				limit: count - cap,
+				projection: { episodeId: 1 },
+			})
+			.toArray()
+	)
+		.map((doc) => doc.episodeId)
+		.filter((id): id is string => typeof id === "string")
+	if (overflowIds.length === 0) {
+		return
+	}
+	await col.deleteMany({
+		agentId: params.agentId,
+		episodeId: { $in: overflowIds },
+	})
+	log.info(
+		`pruned ${overflowIds.length} oldest episode(s) to enforce cap=${cap} scope=${params.scope} scopeRef=${params.scopeRef}`,
+	)
+}
+
+// ---------------------------------------------------------------------------
 // Materialize episode from raw events
 // ---------------------------------------------------------------------------
 
@@ -385,6 +460,24 @@ export async function materializeEpisode(params: {
 				existing.episodeId.trim()
 			) {
 				persistedEpisodeId = existing.episodeId
+			}
+		}
+
+		// The cap only needs attention when this call INSERTED an episode — a
+		// re-materialization of an existing window leaves the count unchanged.
+		if (updateResult.upsertedCount === 1) {
+			try {
+				await enforceEpisodesScopeCap({
+					db,
+					prefix,
+					agentId,
+					scope: resolvedScope,
+					scopeRef,
+				})
+			} catch (err) {
+				log.warn(
+					`episodes cap enforcement failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
+				)
 			}
 		}
 

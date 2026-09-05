@@ -32,9 +32,11 @@ import { extractAndUpsertEntities } from "./mongodb-graph.js"
 // v2 event functions
 import {
 	MongoDBMemoryManager,
-	writeEventAndProject,
 	searchV2,
 } from "./mongodb-manager.js"
+// Legacy inline write+project primitive (e2e-only, WS-13 moved it off the
+// production surface)
+import { writeEventAndProject } from "./test-helpers/legacy-write-event.js"
 // Mutation audit trail
 import { recordMutation, getMutationHistory } from "./mongodb-mutations.js"
 // Procedure evolution

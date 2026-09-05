@@ -9,6 +9,7 @@ import {
 	promoteDerivedMemoryFromEvent,
 } from "./mongodb-derived-memory.js"
 import { checkAutoEpisodeTriggers } from "./mongodb-episodes.js"
+import { consolidateMemory } from "./mongodb-consolidator.js"
 import {
 	extractAndUpsertEntities,
 	extractAndUpsertTypedRelations,
@@ -34,6 +35,8 @@ import {
 	retryFailedMemoryJob,
 } from "./mongodb-memory-jobs.js"
 import { recordProjectionRun } from "./mongodb-ops.js"
+import { invalidateQueryCache } from "./mongodb-query-cache.js"
+import { resolveScopeRef } from "./mongodb-scope.js"
 import { eventsCollection, entitiesCollection } from "./mongodb-schema.js"
 import type { ClaimedMemoryJob } from "./types.js"
 import { createSubsystemLogger } from "@memongo/lib"
@@ -109,6 +112,35 @@ export function resolveMemoryJobWorkerConcurrency(): number {
 		}
 	}
 	return MEMORY_JOB_WORKER_CONCURRENCY_DEFAULT
+}
+
+const AUTO_CONSOLIDATION_DEFAULT_MS = 6 * 60 * 60 * 1000
+
+/**
+ * Cadence at which the worker sweep stages a consolidation job
+ * (MEMONGO_AUTO_CONSOLIDATION_MS, default 6h; an explicit 0 or negative value
+ * disables automatic consolidation entirely).
+ *
+ * This is a CADENCE, not a rate limit. The gate inside consolidateMemory
+ * stays the actual limiter (default: one successful run per scope per hour)
+ * and lease-fences concurrent runs, so a shorter staging interval can never
+ * make consolidation run more often than the gate allows. Staging is
+ * once-per-window by construction: the jobId encodes the window index and
+ * the unique index on memory_jobs.jobId makes duplicate staging a no-op
+ * across every drain round and every manager instance.
+ */
+export function resolveAutoConsolidationMs(): number {
+	const raw = process.env.MEMONGO_AUTO_CONSOLIDATION_MS?.trim()
+	if (raw) {
+		const parsed = Number(raw)
+		if (Number.isFinite(parsed)) {
+			if (parsed <= 0) {
+				return 0
+			}
+			return Math.floor(parsed)
+		}
+	}
+	return AUTO_CONSOLIDATION_DEFAULT_MS
 }
 
 /** Input shape shared by writeConversationEvent and its batch variant. */
@@ -508,6 +540,7 @@ export class MongoDBManagerJobsOps {
 		// the prune is hourly-gated inside the write ops, so an idle queue
 		// pays one Date.now() comparison per drain and nothing else.
 		await this.host.pruneIdempotencyFingerprints()
+		await this.stageAutoConsolidationJob()
 		// P3.9: claim up to K jobs per round and process them concurrently.
 		// Claims stay sequential findOneAndUpdate CAS operations, so two
 		// rounds/workers can never claim the same job; lease fencing inside
@@ -532,7 +565,7 @@ export class MongoDBManagerJobsOps {
 				jobs.push(job)
 			}
 			if (jobs.length === 0) {
-				return
+				break
 			}
 			const sessionFacts = await this.host.prefetchExtractionSessionFacts(jobs)
 			const stillOwned = await Promise.all(
@@ -577,6 +610,173 @@ export class MongoDBManagerJobsOps {
 					)
 				}),
 			)
+		}
+		// One consolidation job per drain round. Staging (above) is
+		// cadence-gated; the gate inside consolidateMemory rate-limits and
+		// lease-fences the actual run; claimMemoryJob's CAS guarantees exactly
+		// one winner across managers. A stale never-claimed window job simply
+		// runs here, completes (or is skipped by the gate's rate limiter), and
+		// the next drain picks up the next one.
+		if (!this.host.memoryJobWorkerStopped) {
+			const consolidationJob = await claimMemoryJob({
+				db: this.host.db,
+				prefix: this.host.prefix,
+				agentId: this.host.agentId,
+				jobType: "consolidation",
+				workerId: this.host.memoryJobWorkerId,
+				leaseMs: MEMORY_JOB_LEASE_MS,
+			})
+			if (consolidationJob) {
+				await this.runClaimedConsolidationJob(consolidationJob)
+			}
+		}
+	}
+
+	/** Window index whose consolidation job this instance already staged. */
+	private lastAutoConsolidationWindow: number | null = null
+
+	/**
+	 * Stage one pending consolidation job per cadence window. The jobId
+	 * encodes the agent AND the window index: claims are agent-scoped (a job
+	 * staged for agent A can only ever be claimed by agent A's worker), so a
+	 * window-only jobId would let the first agent's uq_memory_jobs_jobid
+	 * insert silently swallow every other agent's staging for that window —
+	 * one agent per prefix would hoard all auto-consolidation. With the agent
+	 * in the key, uq_memory_jobs_jobid makes staging idempotent across drain
+	 * rounds and manager instances OF THE SAME AGENT (E11000 = a peer got
+	 * there first, which is exactly the once-per-window-per-agent invariant).
+	 * The in-memory window memo keeps the common case at zero extra round
+	 * trips. Staged jobs carry no stagedAt, so they are claimable immediately
+	 * — unlike extraction jobs, which a transaction stages until commit.
+	 */
+	private async stageAutoConsolidationJob(): Promise<void> {
+		const intervalMs = resolveAutoConsolidationMs()
+		if (intervalMs <= 0) {
+			return
+		}
+		const windowIndex = Math.floor(Date.now() / intervalMs)
+		if (windowIndex === this.lastAutoConsolidationWindow) {
+			return
+		}
+		const jobId = `consolidation-auto-${this.host.agentId}-${windowIndex}`
+		try {
+			await createMemoryJob({
+				db: this.host.db,
+				prefix: this.host.prefix,
+				job: {
+					jobId,
+					jobType: "consolidation",
+					agentId: this.host.agentId,
+					status: "pending",
+					metadata: { auto: true, window: windowIndex },
+				},
+			})
+		} catch (err) {
+			if (this.host.isDuplicateKeyError(err)) {
+				// Another drain round or manager already staged this window.
+			} else {
+				log.warn(
+					`auto-consolidation staging failed for window ${windowIndex}: ${err instanceof Error ? err.message : String(err)}`,
+				)
+				return
+			}
+		}
+		this.lastAutoConsolidationWindow = windowIndex
+	}
+
+	/**
+	 * Run a claimed consolidation job with the same lease/heartbeat fencing
+	 * the extraction runner uses. Runs with default options — scope "agent",
+	 * the zero-config surface consolidateMemory itself defaults to — so the
+	 * gate's rate limiter covers the whole agent, and the per-scope query
+	 * cache is invalidated exactly like the explicit consolidate() path.
+	 */
+	private async runClaimedConsolidationJob(job: ClaimedMemoryJob): Promise<void> {
+		const startedAt = new Date()
+		const heartbeatTimer = setInterval(() => {
+			renewMemoryJobLease({
+				db: this.host.db,
+				prefix: this.host.prefix,
+				jobId: job.jobId,
+				agentId: this.host.agentId,
+				leaseOwner: job.leaseOwner,
+				leaseToken: job.leaseToken,
+				leaseMs: MEMORY_JOB_LEASE_MS,
+			}).catch((err) => {
+				log.warn(
+					`consolidation job heartbeat failed: ${job.jobId}: ${err instanceof Error ? err.message : String(err)}`,
+				)
+			})
+		}, MEMORY_JOB_HEARTBEAT_MS)
+		heartbeatTimer.unref?.()
+		try {
+			const result = await consolidateMemory({
+				db: this.host.db,
+				prefix: this.host.prefix,
+				agentId: this.host.agentId,
+			})
+			await invalidateQueryCache({
+				db: this.host.db,
+				prefix: this.host.prefix,
+				agentId: this.host.agentId,
+				scope: "agent",
+				scopeRef: resolveScopeRef({
+					scope: "agent",
+					agentId: this.host.agentId,
+					workspaceDir: this.host.workspaceDir,
+				}),
+			}).catch((err) => {
+				log.warn(
+					`query cache invalidation after consolidation failed: ${err instanceof Error ? err.message : String(err)}`,
+				)
+			})
+			const completed = await completeClaimedMemoryJob({
+				db: this.host.db,
+				prefix: this.host.prefix,
+				jobId: job.jobId,
+				agentId: this.host.agentId,
+				leaseOwner: job.leaseOwner,
+				leaseToken: job.leaseToken,
+				completedAt: new Date(),
+				durationMs: result.durationMs,
+				inputCount: result.eventsProcessed,
+				outputCount: result.factsPromoted,
+				jobType: job.jobType,
+				metadata: {
+					auto: true,
+					runId: result.runId,
+					factsPruned: result.factsPruned,
+					conflictsResolved: result.conflictsResolved,
+				},
+			})
+			if (!completed) {
+				log.warn(
+					`consolidation job lease lost before completion: ${job.jobId}`,
+				)
+			}
+		} catch (err) {
+			try {
+				await failClaimedMemoryJob({
+					db: this.host.db,
+					prefix: this.host.prefix,
+					jobId: job.jobId,
+					agentId: this.host.agentId,
+					leaseOwner: job.leaseOwner,
+					leaseToken: job.leaseToken,
+					completedAt: new Date(),
+					durationMs: elapsedMsSince(startedAt),
+					error: err instanceof Error ? err.message : String(err),
+					jobType: job.jobType,
+					attempts: job.attempts,
+					metadata: { auto: true },
+				})
+			} catch (updateErr) {
+				log.warn(
+					`failClaimedMemoryJob failed for ${job.jobId}: ${updateErr instanceof Error ? updateErr.message : String(updateErr)}`,
+				)
+			}
+		} finally {
+			clearInterval(heartbeatTimer)
 		}
 	}
 

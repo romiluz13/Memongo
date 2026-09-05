@@ -16,7 +16,7 @@ import {
 	retryFailedMemoryJob,
 } from "./mongodb-memory-jobs.js"
 import { extractAndUpsertEntities, upsertRelation } from "./mongodb-graph.js"
-import { writeEvent } from "./mongodb-events.js"
+import { writeEvent, writeEventsBatch } from "./mongodb-events.js"
 import { MongoDBMemoryManager } from "./mongodb-manager.js"
 import { writeProcedure } from "./mongodb-procedures.js"
 import {
@@ -555,6 +555,66 @@ describe("durable memory job leases (live MongoDB)", () => {
 		})
 	})
 
+	it("backstops batch-durable events that committed without extraction jobs (C-023)", async () => {
+		const db = client.db(TEST_DB)
+		const agentId = `${AGENT}-batch-backstop`
+		const eventIds = [
+			`event-batch-backstop-1-${randomUUID()}`,
+			`event-batch-backstop-2-${randomUUID()}`,
+		]
+		// The batch path commits events first and stages extraction jobs in a
+		// separate insert; when that insert fails, the outbox markers stay set
+		// on durable events. Pin the exact durable-but-unstaged state that
+		// failure branch leaves (C-023) and prove the backstop sweep repairs it.
+		await writeEventsBatch({
+			db,
+			prefix: PREFIX,
+			events: eventIds.map((eventId) => ({
+				eventId,
+				agentId,
+				role: "user",
+				body: "@alice restores #durable-memory after a batch staging failure.",
+				scope: "agent",
+				extractionJobPendingAt: new Date(),
+			})),
+		})
+		const manager = Object.assign(
+			Object.create(MongoDBMemoryManager.prototype),
+			{ db, prefix: PREFIX, agentId, chunkCount: 0 },
+		) as MongoDBMemoryManager
+
+		await expect(manager.repairExtractionOutbox()).resolves.toEqual({
+			eventsProcessed: 2,
+			jobsCreated: 2,
+			jobsReleased: 2,
+			eventsFailed: 0,
+		})
+		for (const eventId of eventIds) {
+			const storedEvent = await eventsCollection(db, PREFIX).findOne({
+				eventId,
+			})
+			expect(storedEvent).not.toHaveProperty("extractionJobPendingAt")
+			expect(storedEvent?.projectedAt).toBeInstanceOf(Date)
+		}
+		// Both re-staged jobs are claimable: two claims drain both events.
+		const claimedJobIds = new Set<string>()
+		for (let index = 0; index < eventIds.length; index += 1) {
+			const claimed = await claimMemoryJob({
+				db,
+				prefix: PREFIX,
+				agentId,
+				jobType: "extraction",
+				workerId: `worker-after-batch-backstop-${index}`,
+				leaseMs: 60_000,
+			})
+			expect(claimed).not.toBeNull()
+			claimedJobIds.add(claimed?.jobId as string)
+		}
+		expect(claimedJobIds).toEqual(
+			new Set(eventIds.map((eventId) => `extraction-${eventId}`)),
+		)
+	})
+
 	it("recovers and executes staged outbox work through the public manager factory", async () => {
 		const workspace = await mkdtemp(
 			path.join(os.tmpdir(), "memongo-manager-startup-"),
@@ -976,6 +1036,12 @@ describe("durable memory job leases (live MongoDB)", () => {
 		const doc = await memoryJobsCollection(db, PREFIX).findOne({ jobId })
 		expect(doc?.status).toBe("failed")
 		expect(doc?.attempts).toBe(MEMORY_JOB_MAX_ATTEMPTS)
+		// WS-13: the exhausted job is an explicit dead letter — marked for
+		// operator visibility and deliberately kept out of the completed-TTL
+		// index's reach so it survives until requeued or dropped.
+		expect(doc?.deadLetterAt).toBeInstanceOf(Date)
+		expect(doc).not.toHaveProperty("completedAt")
+		expect(doc).not.toHaveProperty("retryAt")
 	})
 
 	it("holds a failed job until its retry backoff elapses", async () => {
@@ -1041,5 +1107,93 @@ describe("durable memory job leases (live MongoDB)", () => {
 		})
 		expect(afterBackoff).not.toBeNull()
 		expect(afterBackoff!.attempts).toBe(2)
+	})
+
+	it("auto-stages one consolidation job per cadence window and the drain claims and completes it (WS-13)", async () => {
+		const db = client.db(TEST_DB)
+		const agentId = `${AGENT}-auto-consolidation`
+		const manager = Object.assign(
+			Object.create(MongoDBMemoryManager.prototype),
+			{
+				db,
+				prefix: PREFIX,
+				agentId,
+				chunkCount: 0,
+				memoryJobWorkerId: "worker-auto-consolidation",
+				memoryJobWorkerStopped: false,
+				memoryJobWorkerActive: false,
+				memoryJobWakeRequested: false,
+				memoryJobWorkerPromise: Promise.resolve(),
+				memoryJobWorkerTimer: null,
+				memoryJobOperationContexts: new Map(),
+			},
+		) as MongoDBMemoryManager
+		const lifecycle = MongoDBMemoryManager.prototype as unknown as {
+			drainMemoryJobQueue: (this: MongoDBMemoryManager) => Promise<void>
+		}
+
+		// Drain #1: stages the current cadence window's consolidation job,
+		// finds no extraction work, then claims and completes the staged job
+		// through the same lease/heartbeat fencing extraction uses.
+		await lifecycle.drainMemoryJobQueue.call(manager)
+
+		const windowIndex = Math.floor(Date.now() / (6 * 60 * 60 * 1000))
+		const jobId = `consolidation-auto-${agentId}-${windowIndex}`
+		const staged = await memoryJobsCollection(db, PREFIX).findOne({
+			jobId,
+			agentId,
+		})
+		expect(staged).not.toBeNull()
+		expect(staged).toMatchObject({
+			jobType: "consolidation",
+			status: "completed",
+		})
+		expect(staged?.completedAt).toBeInstanceOf(Date)
+		expect(staged?.metadata).toMatchObject({ auto: true })
+		// The lease fields the claim set are released on completion.
+		expect(staged).not.toHaveProperty("leaseOwner")
+		expect(staged).not.toHaveProperty("leaseToken")
+
+		// A second agent sharing the prefix stages ITS OWN window job: the
+		// jobId is agent-scoped, so the first agent's unique index can never
+		// swallow a peer agent's staging (one job per window per agent).
+		const peerAgentId = `${AGENT}-auto-consolidation-peer`
+		const peer = Object.assign(
+			Object.create(MongoDBMemoryManager.prototype),
+			{
+				db,
+				prefix: PREFIX,
+				agentId: peerAgentId,
+				chunkCount: 0,
+				memoryJobWorkerId: "worker-auto-consolidation-peer",
+				memoryJobWorkerStopped: false,
+				memoryJobWorkerActive: false,
+				memoryJobWakeRequested: false,
+				memoryJobWorkerPromise: Promise.resolve(),
+				memoryJobWorkerTimer: null,
+				memoryJobOperationContexts: new Map(),
+			},
+		) as MongoDBMemoryManager
+		await lifecycle.drainMemoryJobQueue.call(peer)
+
+		const peerJobId = `consolidation-auto-${peerAgentId}-${windowIndex}`
+		await expect(
+			memoryJobsCollection(db, PREFIX).findOne({ jobId: peerJobId }),
+		).resolves.toMatchObject({
+			jobType: "consolidation",
+			status: "completed",
+		})
+
+		// Drain #2 in the same window: the in-memory window memo skips
+		// re-staging, so exactly one job document exists per agent for this
+		// window.
+		await lifecycle.drainMemoryJobQueue.call(manager)
+		await expect(
+			memoryJobsCollection(db, PREFIX).countDocuments({
+				agentId,
+				jobType: "consolidation",
+				jobId: new RegExp(`^consolidation-auto-${agentId}-${windowIndex}$`),
+			}),
+		).resolves.toBe(1)
 	})
 })

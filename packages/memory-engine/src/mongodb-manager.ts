@@ -376,7 +376,6 @@ export {
 	resolveMemoryJobSweepMs,
 	resolveMemoryJobWorkerConcurrency,
 } from "./mongodb-manager-jobs.js"
-export { writeEventAndProject } from "./mongodb-manager-write.js"
 export type {
 	WriteConversationEventInput,
 	WriteConversationEventReceipt,
@@ -785,6 +784,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		}
 		await ensureStandardIndexes(db, prefix, {
 			memoryTtlDays: mongoCfg.memoryTtlDays,
+			episodesRetentionDays: mongoCfg.episodesRetentionDays,
 			relevanceRetentionDays: mongoCfg.relevance.retention.days,
 			// BSON $text indexes are retained whenever named serving text indexes
 			// are not queryable. Management API availability alone does not prove

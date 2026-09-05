@@ -80,6 +80,15 @@ export type MemoryMongoDBConfig = {
 	waitQueueTimeoutMs?: number
 	memoryTtlDays?: number
 	/**
+	 * Optional retention window for episodes, in days. Episodes are derived
+	 * summaries of retained events, so expiring them bounds storage without
+	 * losing source data. The TTL keys on `updatedAt` (staleness by last
+	 * touch). `0` or unset disables retention — the default, because episodes
+	 * are user-visible history and deletion should be an explicit opt-in.
+	 * Env override: `MEMONGO_EPISODES_RETENTION_DAYS`.
+	 */
+	episodesRetentionDays?: number
+	/**
 	 * P4.4.1: optional per-document TTL on `events` and `structured_mem`.
 	 * Off by default. When enabled, writes carrying a sessionId get an
 	 * absolute `expiresAt` of recordedAt + sessionDays unless the caller

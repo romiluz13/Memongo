@@ -290,6 +290,138 @@ describe("mongodb-memory-jobs", () => {
 		)
 	})
 
+	describe("dead letters (WS-13)", () => {
+		it("marks a failed job that exhausted its attempt budget as a dead letter", async () => {
+			const { failClaimedMemoryJob, MEMORY_JOB_MAX_ATTEMPTS } = await import(
+				"./mongodb-memory-jobs.js"
+			)
+			const now = new Date("2026-08-14T00:00:00.000Z")
+			const updateOne = vi.fn(async () => ({ matchedCount: 1 }) as UpdateResult)
+			const telemetryInsert = vi.fn(async () => ({ insertedId: "t-1" }))
+			const db = mockDb({
+				test_memory_jobs: mockCollection({ updateOne }),
+				test_memory_telemetry: mockCollection({ insertOne: telemetryInsert }),
+			})
+
+			await expect(
+				failClaimedMemoryJob({
+					db,
+					prefix: "test_",
+					jobId: "job-1",
+					agentId: "agent-1",
+					jobType: "extraction",
+					leaseOwner: "worker-a",
+					leaseToken: "token-a",
+					durationMs: 12,
+					error: "provider 503 x3",
+					attempts: MEMORY_JOB_MAX_ATTEMPTS,
+					now,
+					completedAt: now,
+				}),
+			).resolves.toBe(true)
+
+			expect(updateOne).toHaveBeenCalledTimes(1)
+			const [filter, update] = updateOne.mock.calls[0]
+			expect(filter).toEqual({
+				jobId: "job-1",
+				agentId: "agent-1",
+				status: "running",
+				leaseOwner: "worker-a",
+				leaseToken: "token-a",
+				leaseExpiresAt: { $gt: now },
+			})
+			expect(update.$set).toMatchObject({
+				status: "failed",
+				deadLetterAt: now,
+			})
+			// The completed-TTL index must not erase an operator-visible dead
+			// letter, and the claim filter (attempts < MAX) means a retryAt
+			// would be a promise the queue can never keep.
+			expect(update.$set).not.toHaveProperty("completedAt")
+			expect(update.$set).not.toHaveProperty("retryAt")
+			expect(update.$unset).toEqual({
+				leaseOwner: "",
+				leaseToken: "",
+				leaseExpiresAt: "",
+				heartbeatAt: "",
+			})
+			// The transition is surfaced in telemetry for status dashboards.
+			expect(telemetryInsert).toHaveBeenCalledWith(
+				expect.objectContaining({
+					ok: false,
+					itemCount: MEMORY_JOB_MAX_ATTEMPTS,
+					eventType: "extraction",
+					meta: { agentId: "agent-1", operation: "memory-job-dead-letter" },
+				}),
+			)
+		})
+
+		it("spaces retries for a failure that still has attempt budget", async () => {
+			const { failClaimedMemoryJob } = await import("./mongodb-memory-jobs.js")
+			const now = new Date("2026-08-14T00:00:00.000Z")
+			const updateOne = vi.fn(async () => ({ matchedCount: 1 }) as UpdateResult)
+			const telemetryInsert = vi.fn(async () => ({ insertedId: "t-1" }))
+			const db = mockDb({
+				test_memory_jobs: mockCollection({ updateOne }),
+				test_memory_telemetry: mockCollection({ insertOne: telemetryInsert }),
+			})
+
+			await expect(
+				failClaimedMemoryJob({
+					db,
+					prefix: "test_",
+					jobId: "job-2",
+					agentId: "agent-1",
+					jobType: "extraction",
+					leaseOwner: "worker-a",
+					leaseToken: "token-a",
+					durationMs: 8,
+					error: "provider timeout",
+					attempts: 1,
+					now,
+					completedAt: now,
+				}),
+			).resolves.toBe(true)
+
+			const [, update] = updateOne.mock.calls[0]
+			expect(update.$set).toMatchObject({
+				status: "failed",
+				completedAt: now,
+				// memoryJobRetryDelayMs(1) = 60s backoff.
+				retryAt: new Date(now.getTime() + 60_000),
+			})
+			expect(update.$set).not.toHaveProperty("deadLetterAt")
+			// Budget-left failures are ordinary, not dead-letter telemetry.
+			expect(telemetryInsert).not.toHaveBeenCalled()
+		})
+
+		it("clears the dead-letter marker when a dead letter is requeued", async () => {
+			const { retryFailedMemoryJob } = await import("./mongodb-memory-jobs.js")
+			const updateOne = vi.fn(async () => ({ matchedCount: 1 }) as UpdateResult)
+			const db = mockDb({
+				test_memory_jobs: mockCollection({ updateOne }),
+			})
+
+			await expect(
+				retryFailedMemoryJob({
+					db,
+					prefix: "test_",
+					jobId: "job-dead",
+					agentId: "agent-1",
+					payload: {
+						eventId: "event-1",
+						scope: "agent",
+						scopeRef: "agent:agent-1",
+					},
+				}),
+			).resolves.toBe(true)
+
+			const [, update] = updateOne.mock.calls[0]
+			expect(update.$unset).toMatchObject({ deadLetterAt: "" })
+			expect(update.$unset).not.toHaveProperty("attempts")
+		})
+	})
+
 	it("uses the transaction session instead of per-operation write concern", async () => {
 		const { createMemoryJob } = await import("./mongodb-memory-jobs.js")
 		const insertOne = vi.fn(async () => ({ insertedId: "job-1" }))

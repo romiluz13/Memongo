@@ -93,6 +93,7 @@ const {
 	proceduresCollection,
 	relevanceRunsCollection,
 	chunksCollection,
+	memoryJobsCollection,
 } = await import("./mongodb-schema.js")
 const { probeSearchLaneReadiness } = await import(
 	"./mongodb-schema-capabilities.js"
@@ -239,6 +240,69 @@ describe("getV2Status", () => {
 				"episodic",
 			]),
 		)
+	})
+
+	it("surfaces job counts including dead letters (WS-13)", async () => {
+		const latestDate = new Date("2026-03-15T12:00:00Z")
+		const eventCol = {
+			countDocuments: vi.fn().mockResolvedValue(1),
+			findOne: vi.fn().mockResolvedValue({ timestamp: latestDate }),
+		} as unknown as import("mongodb").Collection<import("mongodb").Document>
+		const derivedCol = {
+			countDocuments: vi.fn().mockResolvedValue(1),
+			findOne: vi.fn().mockResolvedValue({ updatedAt: latestDate }),
+		} as unknown as import("mongodb").Collection<import("mongodb").Document>
+		const relevanceCol = {
+			findOne: vi.fn().mockResolvedValue({ status: "ok", hitSources: ["kb"] }),
+		} as unknown as import("mongodb").Collection<import("mongodb").Document>
+		// Dispatch counts by filter: pending 2, running 1, budget-left failed 4,
+		// dead-lettered 3.
+		const jobsCol = {
+			countDocuments: vi.fn(async (filter: Record<string, unknown>) => {
+				switch (filter.status) {
+					case "pending":
+						return 2
+					case "running":
+						return 1
+					case "failed":
+						return 4
+					default:
+						// Dead-letter query: no status, deadLetterAt $exists true.
+						return 3
+				}
+			}),
+		} as unknown as import("mongodb").Collection<import("mongodb").Document>
+
+		mocked(eventsCollection).mockReturnValue(eventCol)
+		mocked(entitiesCollection).mockReturnValue(derivedCol)
+		mocked(relationsCollection).mockReturnValue(derivedCol)
+		mocked(episodesCollection).mockReturnValue(derivedCol)
+		mocked(proceduresCollection).mockReturnValue(derivedCol)
+		mocked(relevanceRunsCollection).mockReturnValue(relevanceCol)
+		mocked(memoryJobsCollection).mockReturnValue(jobsCol)
+		mocked(getProjectionLag).mockResolvedValue(10)
+
+		const status = await getV2Status(fakeDb, fakePrefix, "agent-1")
+
+		// Dead letters are counted separately from failures that still have
+		// attempt budget, so an operator can see them and requeue or drop
+		// them deliberately.
+		expect(status.memoryJobs).toEqual({
+			pending: 2,
+			running: 1,
+			failed: 4,
+			deadLettered: 3,
+		})
+		// The dead-letter count is its own filter, not a status match.
+		expect(jobsCol.countDocuments).toHaveBeenCalledWith({
+			agentId: "agent-1",
+			deadLetterAt: { $exists: true },
+		})
+		expect(jobsCol.countDocuments).toHaveBeenCalledWith({
+			agentId: "agent-1",
+			status: "failed",
+			deadLetterAt: { $exists: false },
+		})
 	})
 
 	it.each([

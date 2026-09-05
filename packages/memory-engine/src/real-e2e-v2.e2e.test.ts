@@ -45,10 +45,12 @@ import {
 } from "./mongodb-graph.js"
 // v2 manager functions
 import {
-	writeEventAndProject,
 	searchV2,
 	getV2Status,
 } from "./mongodb-manager.js"
+// Legacy inline write+project primitive (e2e-only, WS-13 moved it off the
+// production surface)
+import { writeEventAndProject } from "./test-helpers/legacy-write-event.js"
 // v2 ops
 import { getRecentIngestRuns } from "./mongodb-ops.js"
 import { synthesizeProfile } from "./mongodb-profile.js"

@@ -77,6 +77,12 @@ export type ResolvedMongoDBConfig = {
 	waitQueueTimeoutMs?: number
 	memoryTtlDays: number
 	/**
+	 * Episodes retention in days (memory.mongodb.episodesRetentionDays or
+	 * MEMONGO_EPISODES_RETENTION_DAYS). Always populated; 0 (the default)
+	 * disables the episodes TTL index.
+	 */
+	episodesRetentionDays: number
+	/**
 	 * P4.4.1: optional per-document TTL (memory.mongodb.ttl). Always
 	 * populated; `enabled` is the explicit opt-in (off by default).
 	 */
@@ -446,6 +452,9 @@ export function resolveMemoryBackendConfig(params: {
 					mongoCfg.memoryTtlDays >= 0
 						? Math.floor(mongoCfg.memoryTtlDays)
 						: 0,
+				episodesRetentionDays: resolveEpisodesRetentionDays(
+					mongoCfg?.episodesRetentionDays,
+				),
 				ttl: resolveTtlSettings(mongoCfg?.ttl),
 				enableChangeStreams: mongoCfg?.enableChangeStreams === true,
 				changeStreamDebounceMs:
@@ -729,6 +738,30 @@ function resolveEnvInt(envKey: string, fallback: number): number {
 	if (raw === undefined || raw === "") return fallback
 	const parsed = Number.parseInt(raw, 10)
 	return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback
+}
+
+/**
+ * Episodes retention in days: config value wins, then
+ * MEMONGO_EPISODES_RETENTION_DAYS, then 0 (disabled). Accepts an explicit 0
+ * from either source so disabling is as expressible as enabling — unlike
+ * resolveEnvInt, which treats 0 as "unset".
+ */
+function resolveEpisodesRetentionDays(configValue: unknown): number {
+	if (
+		typeof configValue === "number" &&
+		Number.isFinite(configValue) &&
+		configValue >= 0
+	) {
+		return Math.floor(configValue)
+	}
+	const raw = process.env.MEMONGO_EPISODES_RETENTION_DAYS?.trim()
+	if (raw) {
+		const parsed = Number(raw)
+		if (Number.isFinite(parsed) && parsed >= 0) {
+			return Math.floor(parsed)
+		}
+	}
+	return 0
 }
 
 function resolvePositiveIntegerSetting(

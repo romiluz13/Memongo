@@ -329,6 +329,28 @@ export async function ensureGraphStandardIndexes(
 		{ name: "idx_episodes_agent_type_updated" },
 	)
 	applied++
+	// Optional episodes retention (episodesRetentionDays, 0 = disabled and the
+	// default). Keyed on updatedAt, so the clock is "untouched for N days",
+	// not "created more than N days ago" — a re-materialized episode is live
+	// history, a stale one ages out. Mirrors the files-TTL pattern: drop any
+	// ghost index from a previous configuration when disabled.
+	if (ttlOpts?.episodesRetentionDays && ttlOpts.episodesRetentionDays > 0) {
+		const seconds = ttlOpts.episodesRetentionDays * 24 * 60 * 60
+		await episodes.createIndex(
+			{ updatedAt: 1 },
+			{ name: "idx_episodes_ttl_updated", expireAfterSeconds: seconds },
+		)
+		applied++
+		log.warn(
+			`created TTL index on episodes: ${ttlOpts.episodesRetentionDays} days — old episodes will be auto-deleted`,
+		)
+	} else {
+		try {
+			await episodes.dropIndex("idx_episodes_ttl_updated")
+		} catch {
+			// Index may not exist — safe to ignore
+		}
+	}
 	// Ingest runs indexes
 	return applied
 }

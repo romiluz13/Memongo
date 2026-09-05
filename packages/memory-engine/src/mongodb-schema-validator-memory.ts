@@ -269,7 +269,18 @@ export const EPISODES_SCHEMA: Document = {
 			},
 			sourceEventCount: { bsonType: "number" },
 			updatedAt: { bsonType: "date" },
-			eventIds: { bsonType: "array", items: { bsonType: "string" } },
+			createdAt: { bsonType: "date" },
+			// The fields `materializeEpisode` actually writes. The schema
+			// previously declared a phantom `eventIds` that no writer ever set,
+			// while the real identity (`sourceEventsHash`) and the layered
+			// summaries were undeclared — a reader of the validator could not
+			// tell what an episode document even was.
+			sourceEventIds: { bsonType: "array", items: { bsonType: "string" } },
+			sourceEventsHash: { bsonType: "string" },
+			shortTermSummary: { bsonType: "string" },
+			mediumTermSummary: { bsonType: "string" },
+			longTermSummary: { bsonType: "string" },
+			topics: { bsonType: "array", items: { bsonType: "string" } },
 			tags: { bsonType: "array", items: { bsonType: "string" } },
 			status: {
 				enum: ["active", "archived", "deleted"],

@@ -414,6 +414,52 @@ describe("unique index creation strictness", () => {
 })
 
 // ---------------------------------------------------------------------------
+// Episodes retention TTL index (WS-13)
+// ---------------------------------------------------------------------------
+
+describe("episodes retention TTL index (WS-13)", () => {
+	it("creates the updatedAt TTL index when retention is configured", async () => {
+		const db = mockDb()
+		const episodes = db.collection("test_episodes") as unknown as {
+			createIndex: ReturnType<typeof vi.fn>
+			dropIndex: ReturnType<typeof vi.fn>
+		}
+
+		await ensureStandardIndexes(db, "test_", { episodesRetentionDays: 7 })
+
+		// Keyed on updatedAt: the clock is "untouched for N days", so a
+		// re-materialized episode stays live history.
+		expect(episodes.createIndex).toHaveBeenCalledWith(
+			{ updatedAt: 1 },
+			{
+				name: "idx_episodes_ttl_updated",
+				expireAfterSeconds: 7 * 24 * 60 * 60,
+			},
+		)
+		expect(episodes.dropIndex).not.toHaveBeenCalledWith(
+			"idx_episodes_ttl_updated",
+		)
+	})
+
+	it("drops any ghost TTL index when retention is disabled", async () => {
+		const db = mockDb()
+		const episodes = db.collection("test_episodes") as unknown as {
+			createIndex: ReturnType<typeof vi.fn>
+			dropIndex: ReturnType<typeof vi.fn>
+		}
+
+		// episodesRetentionDays omitted (0 default = disabled).
+		await ensureStandardIndexes(db, "test_")
+
+		expect(episodes.createIndex).not.toHaveBeenCalledWith(
+			{ updatedAt: 1 },
+			expect.objectContaining({ name: "idx_episodes_ttl_updated" }),
+		)
+		expect(episodes.dropIndex).toHaveBeenCalledWith("idx_episodes_ttl_updated")
+	})
+})
+
+// ---------------------------------------------------------------------------
 // Time series fallback (ensureTimeseriesOrPlain)
 // ---------------------------------------------------------------------------
 

@@ -28,6 +28,7 @@ import {
 	proceduresCollection,
 	relevanceRunsCollection,
 	chunksCollection,
+	memoryJobsCollection,
 } from "./mongodb-schema.js"
 import { probeSearchLaneReadiness } from "./mongodb-schema-capabilities.js"
 import { getActiveSourcesForStatus } from "./mongodb-search-ranking.js"
@@ -142,6 +143,19 @@ export type V2Status = {
 		probedAt?: Date
 		lastFailure: { path: string; error: string; at: Date } | null
 	}
+	/**
+	 * Memory-job queue depth by state. `deadLettered` counts jobs that
+	 * exhausted their attempt budget (deadLetterAt set): those are never
+	 * reclaimed and stay until an operator requeues or deletes them, which is
+	 * exactly why they are surfaced here instead of aging out invisibly.
+	 * `failed` counts only jobs that still have attempt budget left.
+	 */
+	memoryJobs?: {
+		pending: number
+		running: number
+		failed: number
+		deadLettered: number
+	}
 }
 
 const PROJECTION_BEHIND_SECONDS = 5 * 60
@@ -169,6 +183,10 @@ const V2_STATUS_CHECK_LABELS = [
 	"events.latestTimestamp",
 	"episodes.latestTimestamp",
 	"procedures.latestTimestamp",
+	"memoryJobs.pending",
+	"memoryJobs.running",
+	"memoryJobs.failed",
+	"memoryJobs.deadLettered",
 ] as const
 
 export function classifyCanonicalIngestHealth(
@@ -332,6 +350,23 @@ export async function getV2Status(
 				{ agentId },
 				{ sort: { updatedAt: -1 }, projection: { updatedAt: 1 } },
 			),
+			memoryJobsCollection(db, prefix).countDocuments({
+				agentId,
+				status: "pending",
+			}),
+			memoryJobsCollection(db, prefix).countDocuments({
+				agentId,
+				status: "running",
+			}),
+			memoryJobsCollection(db, prefix).countDocuments({
+				agentId,
+				status: "failed",
+				deadLetterAt: { $exists: false },
+			}),
+			memoryJobsCollection(db, prefix).countDocuments({
+				agentId,
+				deadLetterAt: { $exists: true },
+			}),
 		])
 
 		// Extract fulfilled values, default to safe fallbacks on rejection
@@ -371,6 +406,10 @@ export async function getV2Status(
 		const latestProcedure = val(settled[22], null) as {
 			updatedAt?: Date
 		} | null
+		const memoryJobsPending = val(settled[23], 0)
+		const memoryJobsRunning = val(settled[24], 0)
+		const memoryJobsFailed = val(settled[25], 0)
+		const memoryJobsDeadLettered = val(settled[26], 0)
 		const failedChecks = settled.flatMap((result, index) =>
 			result.status === "rejected" ? [V2_STATUS_CHECK_LABELS[index]] : [],
 		)
@@ -491,6 +530,12 @@ export async function getV2Status(
 				"episodic",
 				"procedural",
 			],
+			memoryJobs: {
+				pending: memoryJobsPending,
+				running: memoryJobsRunning,
+				failed: memoryJobsFailed,
+				deadLettered: memoryJobsDeadLettered,
+			},
 		}
 	} catch (err) {
 		log.error("getV2Status failed", { error: err })

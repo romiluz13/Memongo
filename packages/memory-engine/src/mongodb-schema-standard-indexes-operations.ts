@@ -396,6 +396,12 @@ export async function ensureOperationalStandardIndexes(
 	// the field, so pending/running jobs never expire. 30 days keeps failed
 	// jobs inspectable as a dead-letter record before pruning — without this,
 	// terminal jobs accumulated forever (fleet audit).
+	//
+	// Dead letters (attempts exhausted, deadLetterAt set) are deliberately
+	// EXEMPT from this TTL: they never carry completedAt, so they are not in
+	// the index and never age out. A dead letter is a signal an operator must
+	// see — the status counts surface it, and requeueing/deleting it is a
+	// deliberate act — not just another finished job to sweep.
 	await memoryJobs.createIndex(
 		{ completedAt: 1 },
 		{ name: "idx_memory_jobs_completed_ttl", expireAfterSeconds: 30 * 86_400 },

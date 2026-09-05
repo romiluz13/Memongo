@@ -1,5 +1,16 @@
 export type StandardIndexOptions = {
 	memoryTtlDays?: number
+	/**
+	 * Optional episodes retention, in days. Episodes are derived summaries
+	 * (the events they compress remain retained and marked consolidatedAt),
+	 * so expiring them bounds storage without losing source data. The TTL
+	 * keys on updatedAt — staleness by last touch: an episode re-materialized
+	 * from its source window keeps living while untouched windows age out.
+	 * Undefined/0 (the default) disables the index: episodes are user-visible
+	 * history, so deletion must be an explicit opt-in, never an upgrade
+	 * surprise.
+	 */
+	episodesRetentionDays?: number
 	relevanceRetentionDays?: number
 	revisionRetentionDays?: number
 	/**

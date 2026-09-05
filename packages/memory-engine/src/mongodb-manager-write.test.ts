@@ -1,12 +1,8 @@
 /* eslint-disable @typescript-eslint/unbound-method -- Vitest mock method assertions */
 import { describe, it, expect, vi, beforeEach } from "vitest"
-import {
-	MongoDBMemoryManager,
-	writeEventAndProject,
-} from "./mongodb-manager.js"
+import { MongoDBMemoryManager } from "./mongodb-manager.js"
 import { computeIdempotencyFingerprint } from "./mongodb-idempotency-fingerprint.js"
-import { emitTelemetry } from "./mongodb-telemetry.js"
-import { mocked, fakeDb, fakePrefix } from "./test-helpers/manager-test-kit.js"
+import { mocked } from "./test-helpers/manager-test-kit.js"
 
 vi.mock("./mongodb-events.js", async () =>
 	(await import("./test-helpers/manager-test-kit.js")).eventsModuleMock(),
@@ -77,170 +73,6 @@ vi.mock("./mongodb-telemetry.js", async () =>
 	(await import("./test-helpers/manager-test-kit.js")).telemetryModuleMock(),
 )
 
-const { writeEvent, projectEventChunk } = await import("./mongodb-events.js")
-const { recordIngestRun } = await import("./mongodb-ops.js")
-
-// ---------------------------------------------------------------------------
-// 8.1: writeEventAndProject
-// ---------------------------------------------------------------------------
-
-// Covered by real-e2e-v2 E2E tests. This unit seam still depends
-// on a stale module-mock architecture and should be rewritten around a fake Db.
-describe("writeEventAndProject", () => {
-	beforeEach(() => {
-		vi.clearAllMocks()
-	})
-
-	it("calls writeEvent + projectEventChunk + recordIngestRun and returns result", async () => {
-		mocked(writeEvent).mockResolvedValue({
-			eventId: "evt-1",
-			timestamp: new Date("2026-03-16T00:00:00.000Z"),
-			scopeRef: "agent:agent-1",
-		})
-		mocked(projectEventChunk).mockResolvedValue({ chunkCreated: true })
-		mocked(recordIngestRun).mockResolvedValue("run-1")
-
-		const result = await writeEventAndProject(fakeDb, fakePrefix, {
-			agentId: "agent-1",
-			role: "user",
-			body: "Hello world",
-			scope: "agent",
-		})
-
-		expect(result.eventId).toBe("evt-1")
-		expect(result.chunksCreated).toBe(1)
-
-		expect(writeEvent).toHaveBeenCalledOnce()
-		expect(projectEventChunk).toHaveBeenCalledOnce()
-		expect(recordIngestRun).toHaveBeenCalledWith(
-			expect.objectContaining({
-				db: fakeDb,
-				prefix: fakePrefix,
-				run: expect.objectContaining({
-					agentId: "agent-1",
-					source: "event-write",
-					status: "ok",
-					itemsProcessed: 1,
-					itemsFailed: 0,
-				}),
-			}),
-		)
-	})
-
-	it("records failed ingest on error and re-throws", async () => {
-		const error = new Error("write failed")
-		mocked(writeEvent).mockRejectedValue(error)
-		mocked(recordIngestRun).mockResolvedValue("run-fail")
-
-		await expect(
-			writeEventAndProject(fakeDb, fakePrefix, {
-				agentId: "agent-1",
-				role: "user",
-				body: "Hello world",
-				scope: "agent",
-			}),
-		).rejects.toThrow("write failed")
-
-		// Should record a failed ingest run
-		expect(recordIngestRun).toHaveBeenCalledWith(
-			expect.objectContaining({
-				run: expect.objectContaining({
-					status: "failed",
-					itemsProcessed: 0,
-					itemsFailed: 1,
-				}),
-			}),
-		)
-	})
-
-	it("swallows recordIngestRun failure in catch path to not mask real error", async () => {
-		const realError = new Error("write failed")
-		mocked(writeEvent).mockRejectedValue(realError)
-		mocked(recordIngestRun).mockRejectedValue(
-			new Error("ingest record also failed"),
-		)
-
-		await expect(
-			writeEventAndProject(fakeDb, fakePrefix, {
-				agentId: "agent-1",
-				role: "user",
-				body: "Hello world",
-				scope: "agent",
-			}),
-		).rejects.toThrow("write failed")
-	})
-
-	it("rejects invalid scope values", async () => {
-		await expect(
-			writeEventAndProject(fakeDb, fakePrefix, {
-				agentId: "agent-1",
-				role: "user",
-				body: "Hello world",
-				scope: "invalid-scope",
-			}),
-		).rejects.toThrow("Invalid scope: invalid-scope")
-	})
-
-	it("rejects invalid role values", async () => {
-		await expect(
-			writeEventAndProject(fakeDb, fakePrefix, {
-				agentId: "agent-1",
-				role: "invalid-role",
-				body: "Hello world",
-				scope: "agent",
-			}),
-		).rejects.toThrow("Invalid role: invalid-role")
-	})
-})
-
-// ---------------------------------------------------------------------------
-// Telemetry emission from writeEventAndProject
-// ---------------------------------------------------------------------------
-
-describe("writeEventAndProject telemetry emission", () => {
-	beforeEach(() => {
-		vi.clearAllMocks()
-	})
-
-	it("emits event-write telemetry after successful write", async () => {
-		const { writeEvent } = await import("./mongodb-events.js")
-		const { projectEventChunk } = await import("./mongodb-events.js")
-		const { recordIngestRun } = await import("./mongodb-ops.js")
-		const { extractAndUpsertEntities } = await import("./mongodb-graph.js")
-
-		mocked(writeEvent).mockResolvedValue({
-			eventId: "evt-1",
-			timestamp: new Date("2026-03-16T00:00:00.000Z"),
-			scopeRef: "agent:agent-1",
-		})
-		mocked(projectEventChunk).mockResolvedValue({ chunkCreated: true })
-		mocked(recordIngestRun).mockResolvedValue("run-1")
-		mocked(extractAndUpsertEntities).mockResolvedValue({
-			entities: [],
-			relationsCreated: 0,
-		})
-
-		const fakeDb = { collection: vi.fn() } as unknown as import("mongodb").Db
-		await writeEventAndProject(fakeDb, "test_", {
-			agentId: "agent-1",
-			role: "user",
-			body: "Hello world",
-			scope: "agent",
-		})
-
-		expect(emitTelemetry).toHaveBeenCalledWith(
-			fakeDb,
-			"test_",
-			expect.objectContaining({
-				meta: { agentId: "agent-1", operation: "event-write" },
-				ok: true,
-				eventType: "user",
-				projectionTriggered: true,
-				durationMs: expect.any(Number),
-			}),
-		)
-	})
-})
 
 describe("MongoDBMemoryManager write idempotency (P0.1)", () => {
 	beforeEach(() => {
@@ -956,6 +788,41 @@ describe("MongoDBMemoryManager writeConversationEventsBatch (P3.9)", () => {
 		expect(receipts[1]).toMatchObject({ ok: false, code: "WRITE_ERROR" })
 	})
 
+	it("leaves the outbox marker armed when the batch job insert fails — the backstop repair re-stages (C-023)", async () => {
+		const { createMemoryJobsBatch, clearEventExtractionJobPendingBatch } =
+			await mockBatchPath()
+		const { eventsCollection } = await import("./mongodb-schema.js")
+		mocked(eventsCollection).mockReturnValue({
+			find: vi.fn(() => ({ toArray: vi.fn(async () => []) })),
+		} as never)
+		// The batch path has no transaction to stage through: a failed job
+		// insert must leave the durable events' outbox markers set so
+		// repairExtractionOutbox re-stages them (C-023 backstop contract).
+		mocked(createMemoryJobsBatch).mockImplementation(
+			async ({ jobs }: { jobs: Array<{ jobId: string }> }) =>
+				jobs.map((job) => ({
+					ok: false as const,
+					jobId: job.jobId,
+					duplicate: false,
+					message: "forced batch job insert failure",
+				})),
+		)
+
+		const manager = makeManager()
+		const receipts = await manager.writeConversationEventsBatch([
+			{ role: "user", body: "durable event one", scope: "agent" },
+			{ role: "user", body: "durable event two", scope: "agent" },
+		])
+		await manager.memoryJobWorkerPromise
+
+		// The events are durable: the receipts are acknowledged, not failed —
+		// extraction catch-up is the backstop's job, not the caller's error.
+		expect(receipts[0]).toMatchObject({ ok: true })
+		expect(receipts[1]).toMatchObject({ ok: true })
+		// Markers stay armed: no outbox cleanup ran for the failed inserts.
+		expect(clearEventExtractionJobPendingBatch).not.toHaveBeenCalled()
+	})
+
 	it("queues the whole batch behind a previously queued write", async () => {
 		const { writeEventsBatch } = await mockBatchPath()
 		const { eventsCollection } = await import("./mongodb-schema.js")
@@ -996,6 +863,253 @@ describe("MongoDBMemoryManager writeConversationEventsBatch (P3.9)", () => {
 				{ role: "user", body: "too late", scope: "agent" },
 			]),
 		).rejects.toThrow(/closed/)
+	})
+})
+
+// ---------------------------------------------------------------------------
+// UU-3 fold (WS-13 change 6): batch and single write receipts must stay
+// comparable in shape and coverage. Every outcome class the single path can
+// produce has a batch counterpart carrying the same facts.
+// ---------------------------------------------------------------------------
+
+describe("Receipts parity: batch vs single write (UU-3)", () => {
+	beforeEach(() => {
+		vi.clearAllMocks()
+	})
+
+	function makeManager() {
+		return Object.assign(Object.create(MongoDBMemoryManager.prototype), {
+			db: {} as import("mongodb").Db,
+			prefix: "test_",
+			agentId: "agent-1",
+			client: undefined,
+			closed: false,
+			config: {
+				mongodb: {
+					embeddingMode: "automated",
+					episodes: { enabled: false, minEventsForEpisode: 6 },
+				},
+			},
+			workspaceDir: "/tmp/memongo",
+			writeQueue: Promise.resolve(),
+			derivationQueue: Promise.resolve(),
+			derivationSchedulingQueue: Promise.resolve(),
+			memoryJobWorkerId: "worker-1",
+			memoryJobWorkerStopped: false,
+			memoryJobWorkerActive: false,
+			memoryJobWorkerPromise: Promise.resolve(),
+			memoryJobOperationContexts: new Map(),
+			chunkCount: 0,
+			dirty: true,
+		}) as MongoDBMemoryManager & { memoryJobWorkerPromise: Promise<void> }
+	}
+
+	/** Mock BOTH write paths against one shared collection state. */
+	async function mockBothPaths() {
+		const {
+			writeEvent,
+			writeEventsBatch,
+			projectEventChunk,
+			projectEventChunksBatch,
+		} = await import("./mongodb-events.js")
+		const { extractAndUpsertEntities } = await import("./mongodb-graph.js")
+		const {
+			claimMemoryJob,
+			createMemoryJob,
+			createMemoryJobsBatch,
+			releaseStagedMemoryJob,
+		} = await import("./mongodb-memory-jobs.js")
+		const { promoteDerivedMemoryFromEvent } = await import(
+			"./mongodb-derived-memory.js"
+		)
+		const { eventsCollection } = await import("./mongodb-schema.js")
+
+		mocked(writeEvent).mockResolvedValue({
+			eventId: "evt-single",
+			timestamp: new Date("2026-09-05T12:00:00.000Z"),
+			scopeRef: "agent:agent-1",
+		})
+		mocked(projectEventChunk).mockResolvedValue({ chunkCreated: true })
+		mocked(writeEventsBatch).mockImplementation(
+			async ({ events }: { events: Array<{ eventId?: string }> }) =>
+				events.map((event) => ({
+					ok: true as const,
+					eventId: event.eventId ?? "evt-batch",
+					timestamp: new Date("2026-09-05T12:00:00.000Z"),
+					scopeRef: "agent:agent-1",
+				})),
+		)
+		mocked(projectEventChunksBatch).mockImplementation(
+			async ({ events }: { events: Array<{ eventId: string }> }) =>
+				events.map(() => ({ chunkCreated: true })),
+		)
+		mocked(createMemoryJob).mockResolvedValue("extraction-staged")
+		mocked(createMemoryJobsBatch).mockImplementation(
+			async ({ jobs }: { jobs: Array<{ jobId: string }> }) =>
+				jobs.map((job) => ({ ok: true as const, jobId: job.jobId })),
+		)
+		mocked(releaseStagedMemoryJob).mockResolvedValue(true)
+		mocked(claimMemoryJob).mockResolvedValue(null)
+		mocked(extractAndUpsertEntities).mockResolvedValue({
+			entities: [],
+			relationsCreated: 0,
+		})
+		mocked(promoteDerivedMemoryFromEvent).mockResolvedValue({
+			structuredCreated: 0,
+			proceduresCreated: 0,
+			skipped: true,
+			skipReason: "already-promoted",
+		})
+		return { writeEvent, writeEventsBatch, eventsCollection }
+	}
+
+	it("success: the batch receipt carries every field the single receipt carries", async () => {
+		const { writeEvent, writeEventsBatch, eventsCollection } =
+			await mockBothPaths()
+		const find = vi.fn(() => ({ toArray: vi.fn(async () => []) }))
+		mocked(eventsCollection).mockReturnValue({
+			findOne: vi.fn(async () => null),
+			find,
+		} as never)
+
+		const payload = {
+			role: "user" as const,
+			body: "parity hello",
+			scope: "agent" as const,
+		}
+		const manager = makeManager()
+		const single = await manager.writeConversationEvent(payload)
+		const batch = await manager.writeConversationEventsBatch([payload])
+		await manager.memoryJobWorkerPromise
+
+		expect(single).toEqual({ eventId: "evt-single", chunkCreated: true })
+		expect(batch).toHaveLength(1)
+		// Shape parity: every field the single receipt reports, the batch
+		// receipt reports too, plus the per-item ok envelope.
+		expect(batch[0]).toMatchObject({
+			ok: true,
+			eventId: expect.any(String),
+			chunkCreated: single.chunkCreated,
+		})
+		// Same durability contract: each path made exactly one durable write.
+		expect(mocked(writeEvent)).toHaveBeenCalledTimes(1)
+		expect(
+			mocked(writeEventsBatch).mock.calls[0]?.[0].events ?? [],
+		).toHaveLength(1)
+	})
+
+	it("idempotent replay: both paths return the SAME original eventId with chunkCreated:false", async () => {
+		const { writeEvent, writeEventsBatch, eventsCollection } =
+			await mockBothPaths()
+		const existing = {
+			eventId: "evt-original",
+			agentId: "agent-1",
+			role: "user",
+			body: "idempotent hello",
+			scope: "agent",
+			scopeRef: "agent:agent-1",
+			idempotencyKey: "key-parity",
+			timestamp: new Date("2026-09-05T12:00:00.000Z"),
+		}
+		const findOne = vi.fn(async () => existing)
+		const find = vi.fn(() => ({ toArray: vi.fn(async () => [existing]) }))
+		mocked(eventsCollection).mockReturnValue({ findOne, find } as never)
+
+		const payload = {
+			role: "user" as const,
+			body: "idempotent hello",
+			scope: "agent" as const,
+			idempotencyKey: "key-parity",
+		}
+		const manager = makeManager()
+		const single = await manager.writeConversationEvent(payload)
+		const batch = await manager.writeConversationEventsBatch([payload])
+
+		expect(single).toEqual({ eventId: "evt-original", chunkCreated: false })
+		// The batch receipt is a strict superset: same facts, plus the
+		// explicit replayed marker the single shape leaves implicit.
+		expect(batch[0]).toMatchObject({
+			ok: true,
+			eventId: "evt-original",
+			chunkCreated: false,
+			replayed: true,
+		})
+		// Coverage parity: neither path re-wrote the durable event.
+		expect(mocked(writeEvent)).not.toHaveBeenCalled()
+		expect(
+			mocked(writeEventsBatch).mock.calls[0]?.[0].events ?? [],
+		).toHaveLength(0)
+	})
+
+	it("idempotency conflict: the single path's IdempotencyConflictError maps to a per-item IDEMPOTENCY_CONFLICT receipt", async () => {
+		const { writeEvent, writeEventsBatch, eventsCollection } =
+			await mockBothPaths()
+		const existing = {
+			eventId: "evt-original",
+			agentId: "agent-1",
+			role: "user",
+			body: "the ORIGINAL payload",
+			scope: "agent",
+			scopeRef: "agent:agent-1",
+			idempotencyKey: "key-conflict",
+			timestamp: new Date("2026-09-05T12:00:00.000Z"),
+		}
+		const findOne = vi.fn(async () => existing)
+		const find = vi.fn(() => ({ toArray: vi.fn(async () => [existing]) }))
+		mocked(eventsCollection).mockReturnValue({ findOne, find } as never)
+
+		const payload = {
+			role: "user" as const,
+			body: "a DIFFERENT payload",
+			scope: "agent" as const,
+			idempotencyKey: "key-conflict",
+		}
+		const manager = makeManager()
+		await expect(manager.writeConversationEvent(payload)).rejects.toMatchObject(
+			{ name: "IdempotencyConflictError" },
+		)
+		const batch = await manager.writeConversationEventsBatch([payload])
+
+		expect(batch).toHaveLength(1)
+		expect(batch[0]).toMatchObject({
+			ok: false,
+			code: "IDEMPOTENCY_CONFLICT",
+			message: expect.any(String),
+		})
+		// Coverage parity: neither path wrote the conflicting payload.
+		expect(mocked(writeEvent)).not.toHaveBeenCalled()
+		expect(
+			mocked(writeEventsBatch).mock.calls[0]?.[0].events ?? [],
+		).toHaveLength(0)
+	})
+
+	it("write failure: the single path's thrown error maps to a per-item WRITE_ERROR receipt", async () => {
+		const { writeEvent } = await mockBothPaths()
+		const { writeEventsBatch } = await import("./mongodb-events.js")
+		mocked(writeEvent).mockRejectedValue(new Error("disk full"))
+		mocked(writeEventsBatch).mockResolvedValue([
+			{ ok: false as const, message: "disk full" },
+		])
+
+		const payload = {
+			role: "user" as const,
+			body: "doomed write",
+			scope: "agent" as const,
+		}
+		const manager = makeManager()
+		await expect(manager.writeConversationEvent(payload)).rejects.toThrow(
+			"disk full",
+		)
+		const batch = await manager.writeConversationEventsBatch([payload])
+
+		expect(batch).toHaveLength(1)
+		expect(batch[0]).toMatchObject({
+			ok: false,
+			code: "WRITE_ERROR",
+			message: "disk full",
+		})
+		// The failed single attempt left nothing durable to contradict.
+		expect(mocked(writeEvent)).toHaveBeenCalledTimes(1)
 	})
 })
 

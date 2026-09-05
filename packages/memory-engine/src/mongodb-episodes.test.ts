@@ -282,6 +282,124 @@ describe("mongodb-episodes", () => {
 			expect(episodesCol.updateOne).toHaveBeenCalledOnce()
 		})
 
+		it("enforces the per-scope cap by deleting the oldest episodes beyond it (WS-13)", async () => {
+			vi.stubEnv("MEMONGO_EPISODES_MAX_PER_SCOPE", "3")
+			try {
+				const start = new Date("2026-03-15T09:00:00Z")
+				vi.mocked(getEventsByTimeRangeMock).mockResolvedValue(
+					makeEventDocs(2, start) as never,
+				)
+				const countDocuments = vi.fn(async () => 5)
+				const findOverflow = vi
+					.fn()
+					.mockReturnValue({ toArray: vi.fn(async () => [
+						{ episodeId: "ep-old-1" },
+						{ episodeId: "ep-old-2" },
+					]) })
+				const deleteMany = vi.fn(async () => ({ deletedCount: 2 }))
+				const episodesCol = createMockCollection({
+					countDocuments,
+					find: findOverflow,
+					deleteMany,
+				})
+				const db = createMockDb({
+					[`${PREFIX}episodes`]: episodesCol,
+				})
+
+				await materializeEpisode({
+					db,
+					prefix: PREFIX,
+					agentId: AGENT_ID,
+					type: "daily",
+					timeRange: { start, end: new Date("2026-03-15T10:00:00Z") },
+					summarizer: mockSummarizer,
+				})
+
+				const scopeFilter = {
+					agentId: AGENT_ID,
+					scope: "agent",
+					scopeRef: "agent:agent-1",
+				}
+				// 5 stored, cap 3 → the 2 oldest (createdAt asc) go.
+				expect(countDocuments).toHaveBeenCalledWith(scopeFilter)
+				expect(findOverflow).toHaveBeenCalledWith(scopeFilter, {
+					sort: { createdAt: 1 },
+					limit: 2,
+					projection: { episodeId: 1 },
+				})
+				expect(deleteMany).toHaveBeenCalledWith({
+					agentId: AGENT_ID,
+					episodeId: { $in: ["ep-old-1", "ep-old-2"] },
+				})
+			} finally {
+				vi.unstubAllEnvs()
+			}
+		})
+
+		it("leaves the scope alone when the count is within the cap (WS-13)", async () => {
+			vi.stubEnv("MEMONGO_EPISODES_MAX_PER_SCOPE", "3")
+			try {
+				const start = new Date("2026-03-15T09:00:00Z")
+				vi.mocked(getEventsByTimeRangeMock).mockResolvedValue(
+					makeEventDocs(2, start) as never,
+				)
+				const countDocuments = vi.fn(async () => 3)
+				const findOverflow = vi.fn()
+				const deleteMany = vi.fn()
+				const episodesCol = createMockCollection({
+					countDocuments,
+					find: findOverflow,
+					deleteMany,
+				})
+				const db = createMockDb({
+					[`${PREFIX}episodes`]: episodesCol,
+				})
+
+				await materializeEpisode({
+					db,
+					prefix: PREFIX,
+					agentId: AGENT_ID,
+					type: "daily",
+					timeRange: { start, end: new Date("2026-03-15T10:00:00Z") },
+					summarizer: mockSummarizer,
+				})
+
+				expect(countDocuments).toHaveBeenCalledOnce()
+				expect(findOverflow).not.toHaveBeenCalled()
+				expect(deleteMany).not.toHaveBeenCalled()
+			} finally {
+				vi.unstubAllEnvs()
+			}
+		})
+
+		it("skips cap enforcement entirely when the cap is disabled (WS-13)", async () => {
+			vi.stubEnv("MEMONGO_EPISODES_MAX_PER_SCOPE", "0")
+			try {
+				const start = new Date("2026-03-15T09:00:00Z")
+				vi.mocked(getEventsByTimeRangeMock).mockResolvedValue(
+					makeEventDocs(2, start) as never,
+				)
+				const countDocuments = vi.fn()
+				const episodesCol = createMockCollection({ countDocuments })
+				const db = createMockDb({
+					[`${PREFIX}episodes`]: episodesCol,
+				})
+
+				await materializeEpisode({
+					db,
+					prefix: PREFIX,
+					agentId: AGENT_ID,
+					type: "daily",
+					timeRange: { start, end: new Date("2026-03-15T10:00:00Z") },
+					summarizer: mockSummarizer,
+				})
+
+				expect(countDocuments).not.toHaveBeenCalled()
+			} finally {
+				vi.unstubAllEnvs()
+			}
+		})
+
 		it("passes the episode type to the summarizer so lenses differ", async () => {
 			// Without this, a daily, a topic and a decision episode over one window
 			// are byte-identical clones — the summarizer had no way to tell them

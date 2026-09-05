@@ -20,6 +20,7 @@ export type TelemetryOperation =
 	| "rerank"
 	| "query-rewrite"
 	| "entity-extraction"
+	| "memory-job-dead-letter"
 
 export type TelemetryMeta = {
 	agentId: string

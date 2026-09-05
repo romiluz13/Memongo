@@ -250,6 +250,10 @@ export const MEMORY_JOBS_SCHEMA: Document = {
 			},
 			attempts: { bsonType: "number", minimum: 0 },
 			retryAt: { bsonType: "date" },
+			// Terminal marker set when attempts reaches the budget. Deliberately
+			// paired with NO completedAt on the same document: the completed-TTL
+			// index must not expire a dead letter out from under the operator.
+			deadLetterAt: { bsonType: "date" },
 			stagedAt: { bsonType: "date" },
 			leaseOwner: { bsonType: "string" },
 			leaseToken: { bsonType: "string" },

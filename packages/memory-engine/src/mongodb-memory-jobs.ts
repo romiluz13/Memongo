@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto"
 import { createSubsystemLogger } from "@memongo/lib"
 import type { ClientSession, Db } from "mongodb"
 import { memoryJobsCollection } from "./mongodb-schema.js"
+import { emitTelemetry } from "./mongodb-telemetry.js"
 import type {
 	ClaimedMemoryJob,
 	MemoryJob,
@@ -241,6 +242,8 @@ type ClaimedJobTerminalParams = {
 	durationMs?: number
 	inputCount?: number
 	outputCount?: number
+	/** Job type, recorded on dead-letter telemetry and logs. */
+	jobType?: MemoryJobType
 	metadata?: Record<string, unknown>
 }
 
@@ -254,16 +257,34 @@ async function finishClaimedMemoryJob(
 ): Promise<boolean> {
 	const now = params.now ?? new Date()
 	const completedAt = params.completedAt ?? new Date()
+	// A job that exhausted its attempt budget becomes a dead letter instead of
+	// a retryable failure. Three properties follow from that, and all three
+	// are load-bearing:
+	//   - no retryAt: the claim filter requires attempts < MAX, so a retry
+	//     time would be a promise the queue can never keep;
+	//   - no completedAt: the completed-TTL index would silently erase the job
+	//     like any other finished one — a dead letter is kept precisely so an
+	//     operator can see it (status counts surface it) and requeue or drop
+	//     it deliberately;
+	//   - deadLetterAt marks the transition so counts and queries can tell a
+	//     dead letter from a failure that still has budget left.
+	const deadLettered =
+		params.status === "failed" &&
+		(params.attempts ?? 1) >= MEMORY_JOB_MAX_ATTEMPTS
 	const update: Record<string, unknown> = {
 		status: params.status,
 		completedAt,
 	}
-	if (params.status === "failed") {
+	if (params.status === "failed" && !deadLettered) {
 		// Claiming is what enforces the budget; this only spaces the retries out
 		// so a job that fails for a persistent reason does not spin.
 		update.retryAt = new Date(
 			now.getTime() + memoryJobRetryDelayMs(params.attempts ?? 1),
 		)
+	}
+	if (deadLettered) {
+		update.deadLetterAt = completedAt
+		delete update.completedAt
 	}
 	if (params.durationMs !== undefined) update.durationMs = params.durationMs
 	if (params.inputCount !== undefined) update.inputCount = params.inputCount
@@ -290,6 +311,21 @@ async function finishClaimedMemoryJob(
 		},
 		{ writeConcern: DURABLE_JOB_WRITE_CONCERN },
 	)
+	if (result.matchedCount === 1 && deadLettered) {
+		log.error(
+			`memory job dead-lettered after ${params.attempts ?? 1} attempts: jobId=${params.jobId} jobType=${params.jobType ?? "unknown"} error=${params.error ?? ""}`,
+		)
+		emitTelemetry(params.db, params.prefix, {
+			meta: {
+				agentId: params.agentId,
+				operation: "memory-job-dead-letter",
+			},
+			durationMs: params.durationMs ?? 0,
+			ok: false,
+			itemCount: params.attempts ?? 1,
+			eventType: params.jobType ?? "unknown",
+		})
+	}
 	return result.matchedCount === 1
 }
 
@@ -328,6 +364,7 @@ export async function retryFailedMemoryJob(params: {
 			$unset: {
 				startedAt: "",
 				completedAt: "",
+				deadLetterAt: "",
 				error: "",
 				inputCount: "",
 				outputCount: "",

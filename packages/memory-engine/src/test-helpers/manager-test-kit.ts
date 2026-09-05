@@ -300,6 +300,13 @@ export function schemaModuleMock() {
 		getExpectedSearchIndexTargets: vi.fn(() => []),
 		sessionChunksCollection: vi.fn(),
 		memoryEvidenceCollection: vi.fn(),
+		// WS-13: getV2Status counts jobs via memoryJobsCollection(db, prefix)
+		// (re-exported from mongodb-schema.js). Default to an empty collection
+		// so unconfigured tests read 0 counts instead of throwing synchronously
+		// while building the allSettled array.
+		memoryJobsCollection: vi.fn(() => ({
+			countDocuments: vi.fn(async () => 0),
+		})),
 	}
 }
 

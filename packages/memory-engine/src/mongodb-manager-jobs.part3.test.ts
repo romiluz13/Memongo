@@ -136,17 +136,18 @@ describe("P2.1 memory-job worker sweep", () => {
 			const manager = buildWorkerManager()
 			lifecycle.startMemoryJobWorker.call(manager)
 			await flushWorker(manager)
-			// Immediate drain on start: exactly one claim attempt.
-			expect(mocked(claimMemoryJob).mock.calls.length).toBe(1)
+			// Immediate drain on start: one extraction poll + one consolidation
+			// claim (WS-13: the worker claims the staged window job per round).
+			expect(mocked(claimMemoryJob).mock.calls.length).toBe(2)
 
 			// No 1s polling anymore: nothing fires for the next ~30s.
 			await vi.advanceTimersByTimeAsync(29_999)
-			expect(mocked(claimMemoryJob).mock.calls.length).toBe(1)
+			expect(mocked(claimMemoryJob).mock.calls.length).toBe(2)
 
 			// Backstop sweep fires at 30s.
 			await vi.advanceTimersByTimeAsync(1)
 			await vi.advanceTimersByTimeAsync(0)
-			expect(mocked(claimMemoryJob).mock.calls.length).toBe(2)
+			expect(mocked(claimMemoryJob).mock.calls.length).toBe(4)
 
 			await lifecycle.stopMemoryJobWorker.call(manager)
 		} finally {
@@ -166,14 +167,15 @@ describe("P2.1 memory-job worker sweep", () => {
 			const manager = buildWorkerManager()
 			lifecycle.startMemoryJobWorker.call(manager)
 			await flushWorker(manager)
-			expect(mocked(claimMemoryJob).mock.calls.length).toBe(1)
+			// One extraction poll + one consolidation claim per drain round.
+			expect(mocked(claimMemoryJob).mock.calls.length).toBe(2)
 
 			// The per-manager 1 Hz poll is gone in legacy mode too.
 			await vi.advanceTimersByTimeAsync(29_999)
-			expect(mocked(claimMemoryJob).mock.calls.length).toBe(1)
+			expect(mocked(claimMemoryJob).mock.calls.length).toBe(2)
 			await vi.advanceTimersByTimeAsync(1)
 			await vi.advanceTimersByTimeAsync(0)
-			expect(mocked(claimMemoryJob).mock.calls.length).toBe(2)
+			expect(mocked(claimMemoryJob).mock.calls.length).toBe(4)
 
 			await lifecycle.stopMemoryJobWorker.call(manager)
 		} finally {
@@ -193,12 +195,12 @@ describe("P2.1 memory-job worker sweep", () => {
 			const manager = buildWorkerManager()
 			lifecycle.startMemoryJobWorker.call(manager)
 			await flushWorker(manager)
-			expect(mocked(claimMemoryJob).mock.calls.length).toBe(1)
+			expect(mocked(claimMemoryJob).mock.calls.length).toBe(2)
 
 			// Wake-on-write: drain happens immediately, no timer advance needed.
 			lifecycle.wakeMemoryJobWorker.call(manager)
 			await flushWorker(manager)
-			expect(mocked(claimMemoryJob).mock.calls.length).toBe(2)
+			expect(mocked(claimMemoryJob).mock.calls.length).toBe(4)
 
 			await lifecycle.stopMemoryJobWorker.call(manager)
 		} finally {
@@ -353,7 +355,7 @@ describe("P3.9 extraction worker concurrency + session-batched LLM", () => {
 		releaseGate?.()
 		await drain
 
-		expect(claimMemoryJob).toHaveBeenCalledTimes(4) // 3 claims + empty poll
+		expect(claimMemoryJob).toHaveBeenCalledTimes(5) // 3 claims + empty poll + consolidation claim
 		expect(completeClaimedMemoryJob).toHaveBeenCalledTimes(3)
 	})
 

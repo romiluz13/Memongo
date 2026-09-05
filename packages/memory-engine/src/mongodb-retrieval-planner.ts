@@ -1008,7 +1008,7 @@ export function planRetrieval(
 
 		// Coverage-aware lane filtering:
 		// hybrid/raw-window are backstop lanes (always have data after any event write).
-		// kb is populated by a separate ingestion path, not writeEventAndProject,
+		// kb is populated by a separate ingestion path, not the event write path,
 		// so lane coverage has no signal for it.
 		const NEVER_SKIP_LANES = new Set<RetrievalPath>([
 			"hybrid",

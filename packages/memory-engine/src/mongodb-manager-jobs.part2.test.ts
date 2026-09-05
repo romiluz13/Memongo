@@ -1175,30 +1175,45 @@ describe("MongoDBMemoryManager background extraction", () => {
 			"./mongodb-derived-memory.js"
 		)
 
+		// WS-13: every drain round ends with one consolidation claim after the
+		// extraction polls, so positional once-chains would land the queued job
+		// in the consolidation slot. Key the mock on jobType instead: the first
+		// extraction claim is the gated empty claim; the next returns the job.
 		let finishEmptyClaim: ((value: null) => void) | undefined
-		mocked(claimMemoryJob)
-			.mockImplementationOnce(
-				() =>
-					new Promise((resolve) => {
+		let firstExtractionClaim = true
+		let extractionClaims = 0
+		mocked(claimMemoryJob).mockImplementation(
+			(async (params: { jobType: string }) => {
+				if (params.jobType === "consolidation") {
+					return null
+				}
+				if (firstExtractionClaim) {
+					firstExtractionClaim = false
+					return new Promise((resolve) => {
 						finishEmptyClaim = resolve
-					}),
-			)
-			.mockResolvedValueOnce({
-				jobId: "extraction-evt-late-wake",
-				jobType: "extraction",
-				agentId: "agent-1",
-				status: "running",
-				createdAt: new Date("2026-04-09T12:00:00.000Z"),
-				payload: { eventId: "evt-late-wake" },
-				attempts: 1,
-				leaseOwner: "worker-late-wake",
-				leaseToken: "lease-late-wake",
-				heartbeatAt: new Date("2026-04-09T12:00:01.000Z"),
-				leaseExpiresAt: new Date("2026-04-09T12:01:01.000Z"),
-			})
-			// P3.9: the worker claims up to K jobs per round, so further polls
-			// return null until the queue idles.
-			.mockResolvedValue(null)
+					})
+				}
+				extractionClaims += 1
+				if (extractionClaims === 1) {
+					return {
+						jobId: "extraction-evt-late-wake",
+						jobType: "extraction",
+						agentId: "agent-1",
+						status: "running",
+						createdAt: new Date("2026-04-09T12:00:00.000Z"),
+						payload: { eventId: "evt-late-wake" },
+						attempts: 1,
+						leaseOwner: "worker-late-wake",
+						leaseToken: "lease-late-wake",
+						heartbeatAt: new Date("2026-04-09T12:00:01.000Z"),
+						leaseExpiresAt: new Date("2026-04-09T12:01:01.000Z"),
+					}
+				}
+				// P3.9: the worker claims up to K jobs per round, so further
+				// polls return null until the queue idles.
+				return null
+			}) as never,
+		)
 		mocked(createMemoryJob).mockResolvedValue("extraction-evt-late-wake")
 		mocked(completeClaimedMemoryJob).mockResolvedValue(true)
 		mocked(eventsCollection).mockReturnValue({
@@ -1246,12 +1261,13 @@ describe("MongoDBMemoryManager background extraction", () => {
 		await manager.extractEvent({ eventId: "evt-late-wake" })
 		finishEmptyClaim?.(null)
 
-		// 4 claims: the in-flight empty claim, the wake-preserved round's
-		// job claim + in-round empty poll, and one final empty poll (P3.9
-		// claims up to K per round).
+		// 6 claims: drain round 1 = the in-flight empty claim + one
+		// consolidation claim; drain round 2 (wake-preserved) = the job claim
+		// + in-round empty poll (P3.9 claims up to K per round) + one final
+		// empty poll after processing + one consolidation claim (WS-13).
 		await vi.waitFor(
 			() => {
-				expect(claimMemoryJob).toHaveBeenCalledTimes(4)
+				expect(claimMemoryJob).toHaveBeenCalledTimes(6)
 			},
 			{ timeout: 200 },
 		)
