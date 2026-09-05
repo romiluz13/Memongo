@@ -162,6 +162,9 @@ export async function ensureSearchIndexes(
 						{ type: "filter", path: "scope" },
 						{ type: "filter", path: "scopeRef" },
 						{ type: "filter", path: "sessionId" },
+						// C-005: the Option B lane filters unexpired docs in
+						// its $vectorSearch filter (search-v2 sessionFilter).
+						{ type: "filter", path: "expiresAt" },
 					],
 				},
 				"session_chunks",
@@ -233,18 +236,25 @@ export async function ensureSearchIndexes(
 
 	// Vector Search index
 	try {
+		// C-005: every chunks read composes the unexpired clause
+		// (buildUnexpiredClause on expiresAt) into its $vectorSearch filter,
+		// so expiresAt must be declared as a filter field here or mongot
+		// rejects the query ("Path 'expiresAt' needs to be indexed as
+		// filter") — mirroring query_cache_vector.
+		const chunksFilterPaths = [
+			"source",
+			"path",
+			"agentId",
+			"scope",
+			"scopeRef",
+			"sessionId",
+			"status",
+			"expiresAt",
+		]
 		const vectorDef: Document = withVectorStoredSource(
 			buildAutoEmbedVectorDefinition(
 				"text",
-				[
-					"source",
-					"path",
-					"agentId",
-					"scope",
-					"scopeRef",
-					"sessionId",
-					"status",
-				],
+				chunksFilterPaths,
 				activeQuantization,
 			),
 			"chunks",
@@ -651,6 +661,9 @@ export async function ensureSearchIndexes(
 				{ type: "filter", path: "scope" },
 				{ type: "filter", path: "scopeRef" },
 				{ type: "filter", path: "sessionId" },
+				// C-005: the Option B lane filters unexpired docs in its
+				// $vectorSearch filter (search-v2 sessionFilter).
+				{ type: "filter", path: "expiresAt" },
 			]
 			const sessionVectorDef: Document = withVectorStoredSource(
 				{
