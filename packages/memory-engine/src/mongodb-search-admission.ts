@@ -33,9 +33,14 @@ const log = createSubsystemLogger("memory:mongodb:search-admission")
 // a metered tier set MEMONGO_SEARCH_ADMISSION_RPM to their provider's
 // request-per-minute budget (each admitted search may still spend up to
 // maxEmbeds server-side embeddings — size the RPM so burst x expected embeds
-// stays under the embedding tier). MEMONGO_SEARCH_ADMISSION_RPM=0 disables
-// admission entirely (documented escape for dedicated/unmetered tiers where
-// the provider bound is enforced elsewhere).
+// stays under the embedding tier). A FRACTIONAL positive RPM is honored
+// literally: 0.5 admits one search every two minutes (the refill math is
+// linear, so fractional rates refill fractionally; only the default burst
+// is floored, to at least one token, because a zero-capacity bucket could
+// never admit and a fractional capacity is meaningless).
+// MEMONGO_SEARCH_ADMISSION_RPM=0 disables admission entirely (documented
+// escape for dedicated/unmetered tiers where the provider bound is enforced
+// elsewhere).
 //
 // Write-side automated embedding (chunk ingestion) is NOT gated here: it is
 // bounded by the per-agent writeQueue depth cap (WS-11 change 4) and Atlas
@@ -62,7 +67,11 @@ export const DEFAULT_SEARCH_ADMISSION_BURST = 240
 /**
  * Resolve admission limits from the environment (per call, like telemetry
  * sampling, so operators can retune without a restart). Invalid values fall
- * back to the defaults; an explicit RPM of 0 disables admission.
+ * back to the defaults; an explicit RPM of 0 disables admission; a
+ * fractional positive RPM is honored as a fractional rate (D2: flooring it
+ * would create an enabled zero-rate bucket whose retry hint divides by
+ * zero — 0.5 RPM floored to 0 throttles everything forever with
+ * retryAfterMs: Infinity).
  */
 export function resolveSearchAdmissionLimits(
 	env: {
@@ -78,8 +87,16 @@ export function resolveSearchAdmissionLimits(
 				return { requestsPerMinute: 0, burst: 0, enabled: false }
 			}
 			return {
-				requestsPerMinute: Math.floor(parsed),
-				burst: resolveBurst(env, Math.floor(parsed)),
+				// Exact rate, no floor: the bucket refills linearly, so a
+				// fractional RPM is a real sustained rate (0.5/min = one
+				// admission per two minutes), and any positive rate keeps
+				// refillPerMs > 0 so denial retry hints stay finite.
+				requestsPerMinute: parsed,
+				// Integral capacity, floored to at least one token: the
+				// default burst mirrors the RPM, but a fractional RPM must
+				// still be able to admit (floor(0.5) = 0 would permanently
+				// deny even the first request).
+				burst: resolveBurst(env, Math.max(1, Math.floor(parsed))),
 				enabled: true,
 			}
 		}
