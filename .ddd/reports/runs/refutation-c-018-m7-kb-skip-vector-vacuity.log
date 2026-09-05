@@ -1,0 +1,56 @@
+COMMAND: make kb-search ignore skipVectorLane (drop the opts.skipVectorLane !== true clause from canVector); cd packages/memory-engine && bun vitest run src/mongodb-kb-search.test.ts; restore with cp and verify cmp
+BEFORE_SHA256: f0f13b1a819b1f46e2484e2b76e8e4f0cbb7a64bb4d9687a4fb217bfc7154150  src/mongodb-kb-search.ts
+MUTATED_SHA256: c611c265cc7db7a8e7f195bcd644e056dbfa2862c9cf1a6876fe06e73f36510d  src/mongodb-kb-search.ts
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/packages/memory-engine[39m
+
+[90mstderr[2m | src/mongodb-kb-search.test.ts[2m > [22m[2msearchKB[2m > [22m[2mfalls back from $scoreFusion to $rankFusion when the server rejects it (P0.10)
+[22m[39m17:30:33.948 [memory:mongodb:kb-search] warn: KB hybrid search ($scoreFusion) failed, falling back to $rankFusion: $scoreFusion is not supported on this server
+
+ [31m❯[39m src/mongodb-kb-search.test.ts [2m([22m[2m17 tests[22m[2m | [22m[31m1 failed[39m[2m)[22m[32m 12[2mms[22m[39m
+     [32m✓[39m returns results from vector search[32m 2[2mms[22m[39m
+     [32m✓[39m returns empty results when no matches[32m 0[2mms[22m[39m
+     [32m✓[39m filters results below minScore threshold[32m 0[2mms[22m[39m
+     [32m✓[39m falls back to $text search when no vector capabilities[32m 0[2mms[22m[39m
+     [32m✓[39m caps numCandidates at 10000 in KB search (F1)[32m 0[2mms[22m[39m
+     [32m✓[39m includes $limit after $vectorSearch in KB search (F7)[32m 0[2mms[22m[39m
+     [32m✓[39m tries hybrid search ($rankFusion) before vector-only when rankFusion available (F12)[32m 0[2mms[22m[39m
+     [32m✓[39m uses automated embedding mode query[32m 0[2mms[22m[39m
+     [32m✓[39m short-circuits when KB metadata filter resolves to no matching documents[32m 0[2mms[22m[39m
+     [32m✓[39m applies KB metadata filter to vector search stage[32m 0[2mms[22m[39m
+     [32m✓[39m normalizes raw $rankFusion scores into [0,1] before applying minScore (P0.10)[32m 0[2mms[22m[39m
+     [32m✓[39m uses $scoreFusion with minMaxScaler when fusionMethod=scoreFusion and capable (P0.10)[32m 0[2mms[22m[39m
+     [32m✓[39m falls back from $scoreFusion to $rankFusion when the server rejects it (P0.10)[32m 3[2mms[22m[39m
+     [32m✓[39m skips server-side fusion when fusionMethod=js-merge (P0.10)[32m 0[2mms[22m[39m
+     [32m✓[39m pushes KB docId filters into the text-side compound.filter[32m 0[2mms[22m[39m
+[31m     [31m×[31m skipVectorLane runs the text lane without any $vectorSearch stage[39m[32m 3[2mms[22m[39m
+     [32m✓[39m without skipVectorLane the automated-mode vector lane still runs $vectorSearch[32m 0[2mms[22m[39m
+
+[31m⎯⎯⎯⎯⎯⎯⎯[39m[1m[41m Failed Tests 1 [49m[22m[31m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[41m[1m FAIL [22m[49m src/mongodb-kb-search.test.ts[2m > [22msearchKB[2m > [22mskipVectorLane runs the text lane without any $vectorSearch stage
+[31m[1mAssertionError[22m: expected '[[{"$vectorSearch":{"index":"test_kb_…' not to contain '$vectorSearch'[39m
+
+Expected: [32m"$vectorSearch"[39m
+Received: [31m"[7m[[{"[27m$vectorSearch[7m":{"index":"test_kb_chunks_vector","limit":5,"numCandidates":100,"filter":{"scopeRef":"agent:test"},"query":{"text":"keyword"},"model":"voyage-4-large","path":"text"}},{"$limit":5},{"$project":{"_id":0,"path":1,"startLine":1,"endLine":1,"text":1,"docId":1,"updatedAt":1,"score":{"$meta":"vectorSearchScore"}}}],{"maxTimeMS":10000}][27m"[39m
+
+[36m [2m❯[22m src/mongodb-kb-search.test.ts:[2m547:41[22m[39m
+    [90m545|[39m   [34mexpect[39m(calls[33m.[39mlength)[33m.[39m[34mtoBeGreaterThan[39m([34m0[39m)
+    [90m546|[39m   [35mfor[39m ([35mconst[39m pipeline [35mof[39m calls) {
+    [90m547|[39m    [34mexpect[39m([33mJSON[39m[33m.[39m[34mstringify[39m(pipeline))[33m.[39mnot[33m.[39m[34mtoContain[39m([32m"$vectorSearch"[39m)
+    [90m   |[39m                                         [31m^[39m
+    [90m548|[39m    [34mexpect[39m([33mJSON[39m[33m.[39m[34mstringify[39m(pipeline))[33m.[39m[34mtoContain[39m([32m"$search"[39m)
+    [90m549|[39m   }
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯[22m[39m
+
+
+[2m Test Files [22m [1m[31m1 failed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[31m1 failed[39m[22m[2m | [22m[1m[32m16 passed[39m[22m[90m (17)[39m
+[2m   Start at [22m 17:30:33
+[2m   Duration [22m 293ms[2m (transform 147ms, setup 0ms, import 184ms, tests 12ms, environment 0ms)[22m
+
+error: "vitest" exited with code 1
+TEST_EXIT: 1
+AFTER_SHA256: f0f13b1a819b1f46e2484e2b76e8e4f0cbb7a64bb4d9687a4fb217bfc7154150  src/mongodb-kb-search.ts
+CMP_EXIT: 0

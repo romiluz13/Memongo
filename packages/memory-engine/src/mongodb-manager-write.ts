@@ -29,6 +29,7 @@ import {
 } from "./mongodb-memory-jobs.js"
 import { QueryCacheInvalidationCoalescer } from "./mongodb-query-cache-invalidation.js"
 import { invalidateQueryCache } from "./mongodb-query-cache.js"
+import { emitTelemetry } from "./mongodb-telemetry.js"
 import { eventsCollection } from "./mongodb-schema.js"
 import { resolveScopeIdentity } from "./mongodb-scope.js"
 import { resolveWriteExpiresAt } from "./mongodb-temporal.js"
@@ -42,6 +43,92 @@ import type { ClientSession, Db } from "mongodb"
 import { createSubsystemLogger } from "@memongo/lib"
 
 const log = createSubsystemLogger("memory:mongodb")
+
+// ---------------------------------------------------------------------------
+// WS-11 change 4 (09-report R7/B5): bounded per-agent writeQueue.
+//
+// The queue used to be an unbounded promise chain: a burst of 10k writes
+// created 10k pending closures in RAM with no depth cap, no rejection
+// signal, and silently growing client latency — nothing could tell "slow"
+// from "stuck". It is now depth-capped with a FAST-FAIL policy: a write
+// arriving at a saturated queue throws WriteQueueFullError immediately (the
+// caller can back off, buffer, or surface it) and a write-queue-saturation
+// telemetry doc records the depth at denial. Fast-fail was chosen over
+// oldest-drop because dropping accepted work silently discards data the
+// caller believes is durable; a typed, immediate rejection keeps the
+// failure observable and the decision with the caller.
+// ---------------------------------------------------------------------------
+
+/** Saturation cap for the per-agent write queue (MEMONGO_WRITE_QUEUE_MAX_DEPTH). */
+const WRITE_QUEUE_MAX_DEPTH_DEFAULT = 256
+
+export function resolveWriteQueueMaxDepth(
+	env: { MEMONGO_WRITE_QUEUE_MAX_DEPTH?: string } = process.env,
+): number {
+	const raw = env.MEMONGO_WRITE_QUEUE_MAX_DEPTH?.trim()
+	if (raw !== undefined && raw !== "") {
+		const parsed = Number(raw)
+		if (Number.isFinite(parsed) && parsed >= 1) {
+			return Math.floor(parsed)
+		}
+	}
+	return WRITE_QUEUE_MAX_DEPTH_DEFAULT
+}
+
+/** Typed fast-fail thrown when the per-agent write queue is saturated. */
+export class WriteQueueFullError extends Error {
+	readonly code = "WRITE_QUEUE_FULL"
+	readonly queueDepth: number
+	readonly maxDepth: number
+	constructor(queueDepth: number, maxDepth: number) {
+		super(
+			`per-agent write queue saturated (depth ${queueDepth} >= cap ${maxDepth}); fast-failing this write instead of queuing without bound`,
+		)
+		this.name = "WriteQueueFullError"
+		this.queueDepth = queueDepth
+		this.maxDepth = maxDepth
+	}
+}
+
+/**
+ * Enqueue one write slot on the per-agent write queue with a depth cap.
+ * Depth counts enqueued-but-unfinished writes (the strict serial chain means
+ * at most one is executing; the rest wait). The counter increments before
+ * chaining and decrements when THIS write settles, so the cap bounds both
+ * RAM (pending closures) and tail latency (queue depth x per-write RTT).
+ * Exported so the bound itself is unit-testable without a MongoDB manager.
+ */
+export function enqueueBoundedWrite<T>(
+	host: Pick<
+		MongoDBManagerHost,
+		"db" | "prefix" | "agentId" | "writeQueue" | "writeQueueDepth"
+	>,
+	execute: () => Promise<T>,
+): Promise<T> {
+	const maxDepth = resolveWriteQueueMaxDepth()
+	if (host.writeQueueDepth >= maxDepth) {
+		emitTelemetry(host.db, host.prefix, {
+			meta: { agentId: host.agentId, operation: "write-queue-saturation" },
+			durationMs: 0,
+			ok: false,
+			itemCount: host.writeQueueDepth,
+			depth: host.writeQueueDepth,
+			threshold: maxDepth,
+		})
+		throw new WriteQueueFullError(host.writeQueueDepth, maxDepth)
+	}
+	host.writeQueueDepth += 1
+	const next = host.writeQueue.then(execute, execute)
+	host.writeQueue = next.then(
+		() => undefined,
+		() => undefined,
+	)
+	const releaseDepth = () => {
+		host.writeQueueDepth -= 1
+	}
+	next.then(releaseDepth, releaseDepth)
+	return next
+}
 
 /** Input shape shared by writeConversationEvent and its batch variant. */
 export type WriteConversationEventInput = {
@@ -626,12 +713,9 @@ export class MongoDBManagerWriteOps {
 			return { eventId: written.eventId, chunkCreated: projected.chunkCreated }
 		}
 
-		const next = this.host.writeQueue.then(execute, execute)
-		this.host.writeQueue = next.then(
-			() => undefined,
-			() => undefined,
-		)
-		return next
+		// WS-11 change 4: bounded enqueue (fast-fail at cap + saturation
+		// telemetry) replaces the unbounded promise chain.
+		return enqueueBoundedWrite(this.host, execute)
 	}
 
 	/**
@@ -1037,12 +1121,9 @@ export class MongoDBManagerWriteOps {
 			)
 		}
 
-		const next = this.host.writeQueue.then(execute, execute)
-		this.host.writeQueue = next.then(
-			() => undefined,
-			() => undefined,
-		)
-		return next
+		// WS-11 change 4: same bounded enqueue as the single-write path — the
+		// batch is ONE queue slot, so its depth accounting matches.
+		return enqueueBoundedWrite(this.host, execute)
 	}
 
 	async extractEvent(params: {

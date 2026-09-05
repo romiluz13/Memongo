@@ -1,0 +1,12 @@
+COMMAND: cd packages/memory-engine && bun vitest run src/mongodb-e2e.e2e.test.ts (final-state WS-11 e2e companion; verify container recreated with DO_NOT_TRACK=true)
+     [33m[2m✓[22m[39m ensures search indexes according to the live deployment [33m 1114[2mms[22m[39m
+     [33m[2m✓[22m[39m detects insert events via change stream [33m 425[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m1 passed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[32m43 passed[39m[22m[90m (43)[39m
+[2m   Start at [22m 18:41:13
+[2m   Duration [22m 8.30s[2m (transform 595ms, setup 0ms, import 1.05s, tests 7.14s, environment 0ms)[22m
+
+SUITE_EXIT: 0
+DONE_EXIT=0
+00a33fe00111102e52a83489dd9048609f8d6ea9e0eb584fa694e7eca3897a8f  /Users/rom.iluz/Dev/memongo/.ddd/reports/runs/ws11-mongodb-e2e.log

@@ -1,0 +1,12 @@
+COMMAND: cd packages/memory-engine && bun vitest run (final-state WS-11 engine suite; container memongo-ws13-verify recreated with DO_NOT_TRACK=true after the atlas-local telemetry-goroutine panic repeatedly killed it under full-suite parallel load; post-log cosmetic fix: unused WORKER_CONCURRENCY_ENV constant removed from mongodb-manager-jobs-backlog.test.ts, zero behavior change)
+       [33m[2m✓[22m[39m should emit telemetry documents to the time series collection [33m 2006[2mms[22m[39m
+       [33m[2m✓[22m[39m should rerank search results via Voyage rerank-2.5 with instruction-following [33m 395[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m143 passed[39m[22m[2m | [22m[33m4 skipped[39m[90m (147)[39m
+[2m      Tests [22m [1m[32m2492 passed[39m[22m[2m | [22m[33m10 skipped[39m[90m (2502)[39m
+[2m   Start at [22m 18:38:02
+[2m   Duration [22m 100.45s[2m (transform 11.10s, setup 0ms, import 47.86s, tests 384.62s, environment 16ms)[22m
+
+SUITE_EXIT: 0
+DONE_EXIT=0
+538f37d5943e1de5fb172c575a9b852ad0f350a0ca1e27fab138cfdbc6dbcabc  /Users/rom.iluz/Dev/memongo/.ddd/reports/runs/ws11-engine-suite.log

@@ -64,6 +64,8 @@ import {
 	type SearchBudgetSnapshot,
 	tryReserveSearchBudget,
 } from "./mongodb-search-budget.js"
+import { tryConsumeSearchAdmission } from "./mongodb-search-admission.js"
+import { emitTelemetry } from "./mongodb-telemetry.js"
 import type {
 	StructuredMemorySalience,
 	StructuredMemoryState,
@@ -137,6 +139,14 @@ export type V2SearchMetadata = {
 	 * mongodb-search-budget.ts.
 	 */
 	budget?: SearchBudgetSnapshot
+	/**
+	 * WS-11 change 2 (09-report R5/U1): set when process-level admission
+	 * control DENIED this request before any lane ran. A throttled response
+	 * is a distinct outcome — never an empty-success: results are empty AND
+	 * this marker says why, with the earliest retry hint. Consumers (WS-12)
+	 * must report throttling as throttling, not as "no memories".
+	 */
+	throttled?: { retryAfterMs: number }
 }
 
 /**
@@ -232,6 +242,45 @@ export async function searchV2(
 				...(getSearchBudgetSnapshot()
 					? { budget: getSearchBudgetSnapshot() }
 					: {}),
+			},
+		}
+	}
+	// WS-11 change 1+2 (09-report R5/U1): process-level admission control.
+	// Top-level entries only — the recursive backstop above shares the
+	// parent's budget AND its admission, so a re-entry never double-charges.
+	// Denial produces a DISTINCT throttled outcome (empty results + marker +
+	// retry hint), never an empty-success: callers can tell "overloaded"
+	// apart from "no memories", which is what WS-12 reports upstream.
+	const admission = tryConsumeSearchAdmission()
+	if (!admission.ok) {
+		emitTelemetry(db, prefix, {
+			meta: { agentId, operation: "search" },
+			durationMs: 0,
+			ok: false,
+			throttled: true,
+			resultCount: 0,
+		})
+		const plan = planRetrieval(query, {
+			availablePaths: context.availablePaths,
+			hasEpisodes: context.hasEpisodes,
+			hasGraphData: context.hasGraphData,
+			intent: {
+				needExactEvidence: context.searchOptions?.needExactEvidence,
+				sourcePreference: context.searchOptions?.sourcePreference,
+				timeRange: context.searchOptions?.timeRange,
+				conversationScope: context.searchOptions?.conversationScope,
+				structuredScope: context.searchOptions?.structuredScope,
+				referenceScope: context.searchOptions?.referenceScope,
+				proceduralScope: context.searchOptions?.proceduralScope,
+			},
+		})
+		return {
+			results: [],
+			metadata: {
+				plan,
+				pathsExecuted: [],
+				resultsByPath: {},
+				throttled: { retryAfterMs: admission.retryAfterMs },
 			},
 		}
 	}

@@ -21,7 +21,11 @@ const log = createSubsystemLogger("memory:mongodb:query-cache")
 
 // The tier-2 probe embeds the query server-side, so its floor is one provider
 // round-trip; the cap only cuts off pathological cases, not the happy path.
-const SEMANTIC_PROBE_MAX_TIME_MS = 1_500
+//
+// WS-11 change 5 (09-report U2): this 1.5s probe + 10s maxTimeMS aggregate +
+// 2s rerank timeout = the documented 13.5s tail. Exported so
+// mongodb-search-latency-composition.test.ts pins the arithmetic.
+export const SEMANTIC_PROBE_MAX_TIME_MS = 1_500
 
 // P2.4: invalidation (immediate delete + the burst coalescer used by the
 // manager's hot write path) lives in a sibling module; re-exported here so

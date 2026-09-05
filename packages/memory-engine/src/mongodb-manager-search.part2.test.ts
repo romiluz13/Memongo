@@ -1,10 +1,15 @@
 /* eslint-disable @typescript-eslint/unbound-method -- Vitest mock method assertions */
-import { describe, it, expect, vi, beforeEach } from "vitest"
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest"
 import {
 	MongoDBMemoryManager,
 	searchV2,
 	rerankResults,
 } from "./mongodb-manager.js"
+import {
+	DEFAULT_SEARCH_ADMISSION_BURST,
+	resetSearchAdmissionForTests,
+	tryConsumeSearchAdmission,
+} from "./mongodb-search-admission.js"
 import { checkCache, writeCache } from "./mongodb-query-cache.js"
 import { crossEncoderRerank } from "./mongodb-reranker.js"
 import type { MemorySearchResult } from "./types.js"
@@ -1544,5 +1549,257 @@ describe("searchV2 lane latency instrumentation", () => {
 
 		expect(seen).toHaveLength(1)
 		expect(seen[0].episodic).toBeGreaterThanOrEqual(0)
+	})
+})
+
+// ---------------------------------------------------------------------------
+// Tests: WS-11 admission envelope at the manager boundary
+// searchV2 is real here (only its collaborators are module-mocked), so the
+// process-level admission bucket gates these calls exactly as in production.
+// ---------------------------------------------------------------------------
+
+describe("search admission envelope at the manager boundary (WS-11)", () => {
+	const originalRpm = process.env.MEMONGO_SEARCH_ADMISSION_RPM
+
+	beforeEach(() => {
+		vi.clearAllMocks()
+		// RPM=1 makes the refill rate ~0 for the test duration, so a denial
+		// verdict cannot race the clock between the drain loop below and the
+		// search's internal Date.now() read. emitTelemetry is module-mocked
+		// above, so no telemetry env toggle is needed.
+		process.env.MEMONGO_SEARCH_ADMISSION_RPM = "1"
+		resetSearchAdmissionForTests(Date.now())
+	})
+
+	afterEach(() => {
+		if (originalRpm === undefined) {
+			delete process.env.MEMONGO_SEARCH_ADMISSION_RPM
+		} else {
+			process.env.MEMONGO_SEARCH_ADMISSION_RPM = originalRpm
+		}
+		// Re-fill the bucket for whatever describe runs next in this worker.
+		resetSearchAdmissionForTests(Date.now())
+	})
+
+	function exhaustBucket(): void {
+		for (let i = 0; i < DEFAULT_SEARCH_ADMISSION_BURST; i++) {
+			tryConsumeSearchAdmission(Date.now())
+		}
+	}
+
+	function lastSearchModeOf(manager: MongoDBMemoryManager): string {
+		return (manager as unknown as { lastSearchMode: string }).lastSearchMode
+	}
+
+	/** Cache miss + empty v2 plan + chunks aggregate that records any lane. */
+	function primeEmptySearch(): ReturnType<typeof vi.fn> {
+		mocked(checkCache).mockResolvedValue({
+			hit: false,
+			tier: "miss",
+			results: [],
+		})
+		mocked(planRetrieval).mockReturnValue({
+			paths: [],
+			confidence: "low",
+			reasoning: "empty plan",
+		})
+		const aggregate = vi.fn().mockReturnValue({
+			toArray: vi.fn().mockResolvedValue([]),
+		})
+		mocked(chunksCollection).mockReturnValue({ aggregate } as never)
+		return aggregate
+	}
+
+	it("search() marks v2:throttled and skips the opted-in legacy re-run on denial", async () => {
+		exhaustBucket()
+		const aggregate = primeEmptySearch()
+		const base = buildMockManager()
+		const baseCfg = (
+			base as unknown as { config: { mongodb: Record<string, unknown> } }
+		).config.mongodb
+		const manager = buildMockManager({
+			config: {
+				mongodb: { ...baseCfg, legacySearchFallback: true },
+			},
+		})
+
+		const results = await manager.search("qzx throttle envelope")
+
+		// The throttle verdict is final: no v2 lanes ran, and the opted-in
+		// legacy re-run (which would pay a second token) never fires.
+		expect(results).toEqual([])
+		expect(aggregate).not.toHaveBeenCalled()
+		expect(lastSearchModeOf(manager)).toBe("v2:throttled")
+	})
+
+	it("search() makes the opted-in legacy re-run pay its own admission token", async () => {
+		// Pin the burst at 2 (the burst fallback scales with RPM, so RPM=1
+		// alone would leave exactly 1 token): reset gives 2 tokens, the
+		// drain below removes one, the admitted v2 search takes the last,
+		// and the opted-in legacy re-run hits a dry bucket.
+		const originalBurst = process.env.MEMONGO_SEARCH_ADMISSION_BURST
+		process.env.MEMONGO_SEARCH_ADMISSION_BURST = "2"
+		try {
+			resetSearchAdmissionForTests(Date.now())
+			tryConsumeSearchAdmission(Date.now())
+			const aggregate = primeEmptySearch()
+			const base = buildMockManager()
+			const baseCfg = (
+				base as unknown as { config: { mongodb: Record<string, unknown> } }
+			).config.mongodb
+			const manager = buildMockManager({
+				config: {
+					mongodb: { ...baseCfg, legacySearchFallback: true },
+				},
+			})
+
+			const results = await manager.search("qzx legacy token envelope")
+
+			// v2 was admitted and returned its (healthy) empty answer; the
+			// legacy re-run was denied and left that answer standing with
+			// the marker.
+			expect(results).toEqual([])
+			expect(aggregate).not.toHaveBeenCalled()
+			expect(lastSearchModeOf(manager)).toBe("v2:empty->legacy-throttled")
+		} finally {
+			if (originalBurst === undefined) {
+				delete process.env.MEMONGO_SEARCH_ADMISSION_BURST
+			} else {
+				process.env.MEMONGO_SEARCH_ADMISSION_BURST = originalBurst
+			}
+		}
+	})
+
+	it("searchDetailed() short-circuits a throttled response before cache or legacy", async () => {
+		exhaustBucket()
+		const aggregate = primeEmptySearch()
+		const base = buildMockManager()
+		const baseCfg = (
+			base as unknown as { config: { mongodb: Record<string, unknown> } }
+		).config.mongodb
+		// Cache is enabled in the kit config and the fallback opted in —
+		// both must be skipped on the throttle branch.
+		const manager = buildMockManager({
+			config: {
+				mongodb: { ...baseCfg, legacySearchFallback: true },
+			},
+		})
+
+		const response = await manager.searchDetailed({
+			query: "qzx detailed throttle",
+			maxResults: 10,
+		})
+
+		expect(response.results).toEqual([])
+		expect(response.metadata.throttled).toBeDefined()
+		expect(response.metadata.throttled?.retryAfterMs).toBeGreaterThan(0)
+		// No cache write (a cached throttle would masquerade as an empty
+		// verdict) and no legacy re-run.
+		expect(mocked(writeCache)).not.toHaveBeenCalled()
+		expect(aggregate).not.toHaveBeenCalled()
+		expect(lastSearchModeOf(manager)).toBe("v2:throttled")
+	})
+
+	it("searchDetailed() makes the opted-in legacy re-run pay its own admission token", async () => {
+		// Pin the burst at 2 (the burst fallback scales with RPM): reset
+		// gives 2 tokens, the drain below removes one, the admitted v2
+		// search takes the last, and the opted-in legacy re-run hits a dry
+		// bucket — mirroring the search() legacy-token test at this seam.
+		const originalBurst = process.env.MEMONGO_SEARCH_ADMISSION_BURST
+		process.env.MEMONGO_SEARCH_ADMISSION_BURST = "2"
+		try {
+			resetSearchAdmissionForTests(Date.now())
+			tryConsumeSearchAdmission(Date.now())
+			const aggregate = primeEmptySearch()
+			const base = buildMockManager()
+			const baseCfg = (
+				base as unknown as { config: { mongodb: Record<string, unknown> } }
+			).config.mongodb
+			const manager = buildMockManager({
+				config: {
+					mongodb: { ...baseCfg, legacySearchFallback: true },
+				},
+			})
+
+			const response = await manager.searchDetailed({
+				query: "qzx detailed legacy token",
+				maxResults: 10,
+			})
+
+			expect(response.results).toEqual([])
+			expect(response.metadata.throttled).toBeUndefined()
+			expect(aggregate).not.toHaveBeenCalled()
+			expect(lastSearchModeOf(manager)).toBe("v2:empty->legacy-throttled")
+		} finally {
+			if (originalBurst === undefined) {
+				delete process.env.MEMONGO_SEARCH_ADMISSION_BURST
+			} else {
+				process.env.MEMONGO_SEARCH_ADMISSION_BURST = originalBurst
+			}
+		}
+	})
+
+	it("searchDetailed() keeps a healthy empty answer free of the throttle marker", async () => {
+		const aggregate = primeEmptySearch()
+		const manager = buildMockManager()
+
+		const response = await manager.searchDetailed({
+			query: "qzx healthy empty",
+			maxResults: 10,
+		})
+
+		// Empty corpus/plan is a verdict; throttling is an outcome — the
+		// manager keeps them distinguishable at the detailed seam too.
+		expect(response.results).toEqual([])
+		expect(response.metadata.throttled).toBeUndefined()
+		expect(aggregate).not.toHaveBeenCalled()
+		expect(lastSearchModeOf(manager)).toBe("v2:empty")
+	})
+
+	it("searchKB() drops the vector lane on denial and marks kb:throttled", async () => {
+		exhaustBucket()
+		mocked(searchKB).mockResolvedValue([])
+		const manager = buildMockManager({
+			capabilities: {
+				vectorSearch: true,
+				textSearch: true,
+				rankFusion: false,
+				storedSource: false,
+				vectorIndexMethod: false,
+				scoreFusion: false,
+			},
+		})
+
+		await manager.searchKB("qzx kb throttle")
+
+		// Denial degrades ranking (text lane), not completeness: searchKB
+		// still runs, with the vector lane explicitly dropped.
+		expect(lastSearchModeOf(manager)).toBe("kb:throttled")
+		const opts = mocked(searchKB).mock.calls[0]?.[3] as
+			| { skipVectorLane?: boolean }
+			| undefined
+		expect(opts?.skipVectorLane).toBe(true)
+	})
+
+	it("searchKB() keeps the vector lane when admission grants a token", async () => {
+		mocked(searchKB).mockResolvedValue([])
+		const manager = buildMockManager({
+			capabilities: {
+				vectorSearch: true,
+				textSearch: true,
+				rankFusion: false,
+				storedSource: false,
+				vectorIndexMethod: false,
+				scoreFusion: false,
+			},
+		})
+
+		await manager.searchKB("qzx kb admitted")
+
+		expect(lastSearchModeOf(manager)).not.toBe("kb:throttled")
+		const opts = mocked(searchKB).mock.calls[0]?.[3] as
+			| { skipVectorLane?: boolean }
+			| undefined
+		expect(opts?.skipVectorLane).toBeUndefined()
 	})
 })

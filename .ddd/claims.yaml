@@ -315,8 +315,8 @@ entries:
     impact: high
     tier: T3
     status: known-and-supported
-    constructs: [packages/memory-engine/src/mongodb-manager-jobs.ts, packages/memory-engine/src/mongodb-manager-write.ts, packages/memory-engine/src/mongodb-search-v2.ts]
-    validations: []
+    constructs: [packages/memory-engine/src/mongodb-manager-jobs.ts, packages/memory-engine/src/mongodb-manager-write.ts, packages/memory-engine/src/mongodb-search-v2.ts, packages/memory-engine/src/mongodb-search-admission.ts, packages/memory-engine/src/mongodb-search-executor.ts, packages/memory-engine/src/mongodb-manager-search.ts, packages/memory-engine/src/mongodb-conversation-recall.ts, packages/memory-engine/src/mongodb-kb-search.ts]
+    validations: [V-093, V-094, V-095]
     exceptions: []
 
   - id: C-019

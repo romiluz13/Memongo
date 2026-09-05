@@ -32,6 +32,15 @@ export type RerankResult = {
 	latencyMs: number
 }
 
+/**
+ * WS-11 change 5 (09-report U2): the rerank stage's individual bound. Part
+ * of the tail-latency composition asserted by
+ * mongodb-search-latency-composition.test.ts — 1.5s semantic probe +
+ * 10s maxTimeMS aggregate + this 2s rerank timeout = the documented 13.5s
+ * worst case. Named (not inline) so the composition test pins it.
+ */
+export const RERANK_TIMEOUT_MS = 2_000
+
 // ---------------------------------------------------------------------------
 // Cross-encoder re-ranking via Voyage rerank-2.5 API
 // ---------------------------------------------------------------------------
@@ -146,7 +155,7 @@ export async function crossEncoderRerank(params: {
 					documents,
 					top_k: validCandidates.length,
 				}),
-				signal: AbortSignal.timeout(2_000),
+				signal: AbortSignal.timeout(RERANK_TIMEOUT_MS),
 			},
 			onResponse: async (value) => value,
 		})

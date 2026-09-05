@@ -134,12 +134,20 @@ export async function searchKB(
 		 * goes straight to $rankFusion, "js-merge" skips server fusion.
 		 */
 		fusionMethod?: MemoryMongoDBFusionMethod
+		/**
+		 * WS-11 admission control: drop the vector lane entirely (text-only
+		 * degradation) when the caller's admission check denied the autoEmbed
+		 * spend. Every $vectorSearch stage in this module is behind canVector,
+		 * so one flag removes the whole embed burn.
+		 */
+		skipVectorLane?: boolean
 	},
 ): Promise<MemorySearchResult[]> {
 	const canVector =
-		opts.embeddingMode === "automated"
+		opts.skipVectorLane !== true &&
+		(opts.embeddingMode === "automated"
 			? opts.capabilities.vectorSearch
-			: queryVector != null && opts.capabilities.vectorSearch
+			: queryVector != null && opts.capabilities.vectorSearch)
 
 	const canText = opts.capabilities.textSearch
 	const chunkFilter = await resolveKBChunkFilter({

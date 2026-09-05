@@ -1,0 +1,120 @@
+COMMAND: drop the executor throttle-marker propagation (throttled := undefined in mergePassMetadata); cd packages/memory-engine && bun vitest run src/mongodb-search-executor.test.ts; restore with cp and verify cmp
+BEFORE_SHA256: 752dee54a64e656b6b1a9f3c1e00301a490e461f8febb44034517514d43da96a  src/mongodb-search-executor.ts
+MUTATED_SHA256: 4cbaa9366731b31844459c038ab53287457f0d14c750eb6af162aa04b7c768af  src/mongodb-search-executor.ts
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/packages/memory-engine[39m
+
+ [31m❯[39m src/mongodb-search-executor.test.ts [2m([22m[2m58 tests[22m[2m | [22m[31m2 failed[39m[2m)[22m[32m 21[2mms[22m[39m
+     [32m✓[39m applies bounded defaults for mode, passes, and source order[32m 1[2mms[22m[39m
+     [32m✓[39m clamps maxPasses to the supported range[32m 0[2mms[22m[39m
+     [32m✓[39m applies recipe defaults before executor normalization[32m 0[2mms[22m[39m
+     [32m✓[39m resolves the fast recipe to vector-first bounded execution[32m 0[2mms[22m[39m
+     [32m✓[39m enforces MongoDB high-recall numCandidates in proof profile[32m 0[2mms[22m[39m
+     [32m✓[39m lets proof profile keep explicit candidates above the MongoDB floor[32m 0[2mms[22m[39m
+     [32m✓[39m does not inject balanced recall profile into normalized requests[32m 0[2mms[22m[39m
+     [32m✓[39m keeps explicit proof recall profile in normalized requests[32m 0[2mms[22m[39m
+     [32m✓[39m lets explicit top-level fields override recipe defaults[32m 0[2mms[22m[39m
+     [32m✓[39m detects family-style queries[32m 0[2mms[22m[39m
+     [32m✓[39m detects scoped searches when explicit scopes are present[32m 0[2mms[22m[39m
+     [32m✓[39m keeps direct auto queries single-pass[32m 0[2mms[22m[39m
+     [32m✓[39m expands family queries in agentic mode[32m 0[2mms[22m[39m
+     [32m✓[39m rejects results outside the requested time range[32m 0[2mms[22m[39m
+     [32m✓[39m rejects results without exact evidence when required[32m 0[2mms[22m[39m
+     [32m✓[39m rejects results outside the requested conversation scope[32m 0[2mms[22m[39m
+     [32m✓[39m rejects exact-evidence hits that miss the requested anchor[32m 0[2mms[22m[39m
+     [32m✓[39m keeps exact-evidence hits that mention the requested anchor[32m 0[2mms[22m[39m
+     [32m✓[39m treats conversation scope as a hard constraint[32m 0[2mms[22m[39m
+     [32m✓[39m treats explicit scoped filters as hard constraints[32m 0[2mms[22m[39m
+     [32m✓[39m infers graph and session-evidence lanes from path/provenance[32m 0[2mms[22m[39m
+     [32m✓[39m boosts session evidence and caps graph/procedure dominance for personal recall[32m 1[2mms[22m[39m
+     [32m✓[39m boosts newer session evidence for current personal setup queries[32m 0[2mms[22m[39m
+     [32m✓[39m limits duplicate sessions from flooding personal-memory top results[32m 0[2mms[22m[39m
+     [32m✓[39m exhausts distinct session coverage before repeated turns for temporal queries[32m 0[2mms[22m[39m
+     [32m✓[39m boosts preference evidence above generic turn hits for advice queries[32m 0[2mms[22m[39m
+     [32m✓[39m leaves explicit graph queries free to return graph-heavy top results[32m 0[2mms[22m[39m
+     [32m✓[39m is stable across object key ordering[32m 6[2mms[22m[39m
+     [32m✓[39m executes a single pass for a direct query[32m 1[2mms[22m[39m
+     [32m✓[39m accumulates results across multiple passes for family queries[32m 0[2mms[22m[39m
+     [32m✓[39m opens a breadth follow-up only after the first family pass under-covers results[32m 0[2mms[22m[39m
+     [32m✓[39m opens a current-state recovery follow-up when first-pass results are stale or invalidated[32m 0[2mms[22m[39m
+     [32m✓[39m terminates early when family query accumulates enough results[32m 0[2mms[22m[39m
+     [32m✓[39m deduplicates results with the same canonicalId across passes[32m 0[2mms[22m[39m
+     [32m✓[39m propagates hard constraint rejections into metadata[32m 0[2mms[22m[39m
+     [32m✓[39m returns noDirectEvidenceReason when needExactEvidence filters all results[32m 0[2mms[22m[39m
+     [32m✓[39m merges pathsExecuted and resultsByPath across passes[32m 0[2mms[22m[39m
+     [32m✓[39m adds trust metadata and trust-aware ordering to final results[32m 0[2mms[22m[39m
+     [32m✓[39m abstains when all surviving direct-query results remain low trust[32m 0[2mms[22m[39m
+     [32m✓[39m triggers CRAG corrective pass when evidence coverage is none[32m 0[2mms[22m[39m
+     [32m✓[39m triggers constraint relaxation when all results are rejected[32m 0[2mms[22m[39m
+     [32m✓[39m returns needed:false when coverage is direct[32m 0[2mms[22m[39m
+     [32m✓[39m identifies time-range correction when dominant rejection is temporal[32m 0[2mms[22m[39m
+     [32m✓[39m identifies evidence relaxation when dominant rejection is locator[32m 0[2mms[22m[39m
+     [32m✓[39m returns needed:false when all passes exhausted[32m 0[2mms[22m[39m
+     [32m✓[39m returns null for empty rejections[32m 0[2mms[22m[39m
+     [32m✓[39m identifies time range as relaxable constraint[32m 0[2mms[22m[39m
+     [32m✓[39m identifies exact evidence as relaxable constraint[32m 0[2mms[22m[39m
+     [32m✓[39m disables the session-evidence lane boost when ablated[32m 0[2mms[22m[39m
+     [32m✓[39m flattens classification-keyed MMR lambdas when ablated[32m 0[2mms[22m[39m
+     [32m✓[39m keeps shipped behavior when the ablation list names something else[32m 0[2mms[22m[39m
+     [32m✓[39m returns unchanged results for fewer than 3 items[32m 0[2mms[22m[39m
+     [32m✓[39m applies MMR reranking for family queries with 3+ results[32m 0[2mms[22m[39m
+     [32m✓[39m uses higher lambda for direct classification (relevance-dominant)[32m 0[2mms[22m[39m
+     [32m✓[39m preserves all results without losing any[32m 0[2mms[22m[39m
+[31m     [31m×[31m surfaces the throttle marker and retry hint in the merged response metadata[39m[32m 3[2mms[22m[39m
+[31m     [31m×[31m ends the pass loop on a throttled first pass — no follow-up attempts[39m[32m 0[2mms[22m[39m
+     [32m✓[39m never marks a healthy empty search as throttled[32m 0[2mms[22m[39m
+
+[31m⎯⎯⎯⎯⎯⎯⎯[39m[1m[41m Failed Tests 2 [49m[22m[31m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[41m[1m FAIL [22m[49m src/mongodb-search-executor.test.ts[2m > [22mexecuteMongoSearchPlan throttled-pass propagation (WS-11)[2m > [22msurfaces the throttle marker and retry hint in the merged response metadata
+[31m[1mAssertionError[22m: expected undefined to deeply equal { retryAfterMs: 3000 }[39m
+
+[32m- Expected:[39m
+{
+  "retryAfterMs": 3000,
+}
+
+[31m+ Received:[39m
+undefined
+
+[36m [2m❯[22m src/mongodb-search-executor.test.ts:[2m1519:39[22m[39m
+    [90m1517|[39m   [90m// searchDetailed boundary.[39m
+    [90m1518|[39m   [34mexpect[39m(response[33m.[39mresults)[33m.[39m[34mtoEqual[39m([])
+    [90m1519|[39m   [34mexpect[39m(response[33m.[39mmetadata[33m.[39mthrottled)[33m.[39m[34mtoEqual[39m({ retryAfterMs[33m:[39m [34m3000[39m })
+    [90m   |[39m                                       [31m^[39m
+    [90m1520|[39m   [34mexpect[39m(response[33m.[39mmetadata[33m.[39mpathsExecuted)[33m.[39m[34mtoEqual[39m([])
+    [90m1521|[39m  })
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/2]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/mongodb-search-executor.test.ts[2m > [22mexecuteMongoSearchPlan throttled-pass propagation (WS-11)[2m > [22mends the pass loop on a throttled first pass — no follow-up attempts
+[31m[1mAssertionError[22m: expected undefined to deeply equal { retryAfterMs: 3000 }[39m
+
+[32m- Expected:[39m
+{
+  "retryAfterMs": 3000,
+}
+
+[31m+ Received:[39m
+undefined
+
+[36m [2m❯[22m src/mongodb-search-executor.test.ts:[2m1556:39[22m[39m
+    [90m1554|[39m   [90m// would only stack more denied attempts on the same dry bucket.[39m
+    [90m1555|[39m   [34mexpect[39m(executePass)[33m.[39m[34mtoHaveBeenCalledTimes[39m([34m1[39m)
+    [90m1556|[39m   [34mexpect[39m(response[33m.[39mmetadata[33m.[39mthrottled)[33m.[39m[34mtoEqual[39m({ retryAfterMs[33m:[39m [34m3000[39m })
+    [90m   |[39m                                       [31m^[39m
+    [90m1557|[39m   [34mexpect[39m(response[33m.[39mresults)[33m.[39m[34mtoEqual[39m([])
+    [90m1558|[39m  })
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/2]⎯[22m[39m
+
+
+[2m Test Files [22m [1m[31m1 failed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[31m2 failed[39m[22m[2m | [22m[1m[32m56 passed[39m[22m[90m (58)[39m
+[2m   Start at [22m 17:29:57
+[2m   Duration [22m 262ms[2m (transform 102ms, setup 0ms, import 130ms, tests 21ms, environment 0ms)[22m
+
+error: "vitest" exited with code 1
+TEST_EXIT: 1
+AFTER_SHA256: 752dee54a64e656b6b1a9f3c1e00301a490e461f8febb44034517514d43da96a  src/mongodb-search-executor.ts
+CMP_EXIT: 0

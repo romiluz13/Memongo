@@ -480,31 +480,31 @@ traces:
     change_id: WS-11
     claim_id: C-018
     construct_id: packages/memory-engine/src/mongodb-manager-jobs.ts
-    validation_id: null
+    validation_id: V-094
     direction: forward
-    sweep_pass: false
-    checked_at: "2026-09-02T13:41:40.069Z"
-    notes: WS-11 Admission control and backlog visibility (planned change envelope)
+    sweep_pass: true
+    checked_at: "2026-09-05T18:39:52.000Z"
+    notes: WS-11 Admission control and backlog visibility (landed) — backlog gauge + alert threshold + backlog-aware drain scaling
   - id: TR-049
     schema_version: 0.1.0
     change_id: WS-11
     claim_id: C-018
     construct_id: packages/memory-engine/src/mongodb-manager-write.ts
-    validation_id: null
+    validation_id: V-095
     direction: forward
-    sweep_pass: false
-    checked_at: "2026-09-02T13:41:40.070Z"
-    notes: WS-11 Admission control and backlog visibility (planned change envelope)
+    sweep_pass: true
+    checked_at: "2026-09-05T18:39:52.000Z"
+    notes: WS-11 Admission control and backlog visibility (landed) — bounded per-agent writeQueue with typed fast-fail and saturation telemetry
   - id: TR-050
     schema_version: 0.1.0
     change_id: WS-11
     claim_id: C-018
     construct_id: packages/memory-engine/src/mongodb-search-v2.ts
-    validation_id: null
+    validation_id: V-093
     direction: forward
-    sweep_pass: false
-    checked_at: "2026-09-02T13:41:40.071Z"
-    notes: WS-11 Admission control and backlog visibility (planned change envelope)
+    sweep_pass: true
+    checked_at: "2026-09-05T18:39:52.000Z"
+    notes: WS-11 Admission control and backlog visibility (landed) — process-level token bucket at the searchV2 boundary with the distinct throttled outcome surviving executor/manager/recall/KB layers
   - id: TR-051
     schema_version: 0.1.0
     change_id: WS-12
@@ -945,3 +945,53 @@ traces:
     sweep_pass: true
     checked_at: "2026-09-04T07:20:00.000Z"
     notes: WS-05 client contract — updateLifecycleItem/applyMemoryFeedback widened with the MemongoQuarantineDisposition intersection (compile-time contract, fresh uncached check-types 15/15)
+  - id: TR-095
+    schema_version: 0.1.0
+    change_id: WS-11
+    claim_id: C-018
+    construct_id: packages/memory-engine/src/mongodb-search-admission.ts
+    validation_id: V-093
+    direction: forward
+    sweep_pass: true
+    checked_at: "2026-09-05T18:39:52.000Z"
+    notes: WS-11 Admission control and backlog visibility (landed) — the process-level token bucket module itself (env-sized RPM/burst, lazy refill, retry hint, snapshot, test reset seam)
+  - id: TR-096
+    schema_version: 0.1.0
+    change_id: WS-11
+    claim_id: C-018
+    construct_id: packages/memory-engine/src/mongodb-search-executor.ts
+    validation_id: V-093
+    direction: forward
+    sweep_pass: true
+    checked_at: "2026-09-05T18:39:52.000Z"
+    notes: WS-11 Admission control and backlog visibility (landed) — executor throttle-marker propagation into merged pass metadata plus pass-loop break (bypass-audit fix A)
+  - id: TR-097
+    schema_version: 0.1.0
+    change_id: WS-11
+    claim_id: C-018
+    construct_id: packages/memory-engine/src/mongodb-manager-search.ts
+    validation_id: V-093
+    direction: forward
+    sweep_pass: true
+    checked_at: "2026-09-05T18:39:52.000Z"
+    notes: WS-11 Admission control and backlog visibility (landed) — manager-boundary throttle short-circuits for search()/searchDetailed() and per-token legacy re-run gates plus the searchKB() admission envelope with skipVectorLane (bypass-audit fixes B, D, E)
+  - id: TR-098
+    schema_version: 0.1.0
+    change_id: WS-11
+    claim_id: C-018
+    construct_id: packages/memory-engine/src/mongodb-conversation-recall.ts
+    validation_id: V-093
+    direction: forward
+    sweep_pass: true
+    checked_at: "2026-09-05T18:39:52.000Z"
+    notes: WS-11 Admission control and backlog visibility (landed) — recallConversation one-token-per-querying-recall gate with text-lane degradation and marker (bypass-audit fix C)
+  - id: TR-099
+    schema_version: 0.1.0
+    change_id: WS-11
+    claim_id: C-018
+    construct_id: packages/memory-engine/src/mongodb-kb-search.ts
+    validation_id: V-093
+    direction: forward
+    sweep_pass: true
+    checked_at: "2026-09-05T18:39:52.000Z"
+    notes: WS-11 Admission control and backlog visibility (landed) — module-level skipVectorLane degradation honored inside canVector so a denied KB search cannot spend the vector lane (bypass-audit fix D, module half)

@@ -13,6 +13,8 @@ import {
 	runSearchAggregateWithRetry,
 	splitAtlasSearchFilter,
 } from "./mongodb-search.js"
+import { tryConsumeSearchAdmission } from "./mongodb-search-admission.js"
+import { emitTelemetry } from "./mongodb-telemetry.js"
 import {
 	extractTemporalWindow,
 	resolveNumCandidates,
@@ -825,6 +827,31 @@ export async function recallConversation(params: {
 		vectorIndexMethod: false,
 	}
 
+	// WS-11 (09-report R5/U1): the hybrid and semantic stages below burn
+	// server-side autoEmbed inputs from the same account-wide Atlas tier
+	// searchV2 draws from, so a querying recall draws from the same
+	// process-level admission bucket. One token per call covers the hybrid
+	// attempt plus the semantic fallback (at most two query embeddings).
+	// Denial degrades to the text-only standard lane and marks the response
+	// — never an unexplained empty.
+	const admission =
+		queryText && capabilities.vectorSearch
+			? tryConsumeSearchAdmission()
+			: null
+	const admissionDenied = admission != null && !admission.ok
+	if (admissionDenied && admission) {
+		emitTelemetry(params.db, params.prefix, {
+			meta: { agentId: params.request.agentId, operation: "search" },
+			durationMs: 0,
+			ok: false,
+			throttled: true,
+			resultCount: 0,
+		})
+		log.warn(
+			`conversation recall degraded to text-only: search admission denied (retry after ${admission.retryAfterMs}ms)`,
+		)
+	}
+
 	let results: ConversationRecallResult[] = []
 	let searchMethod: ConversationRecallResponse["metadata"]["searchMethod"] =
 		"standard"
@@ -856,6 +883,7 @@ export async function recallConversation(params: {
 			scoreDetailsWarnings,
 		})
 	} else if (
+		!admissionDenied &&
 		capabilities.vectorSearch &&
 		capabilities.textSearch &&
 		capabilities.rankFusion
@@ -885,7 +913,7 @@ export async function recallConversation(params: {
 		}
 	}
 
-	if (queryText && results.length === 0 && capabilities.vectorSearch) {
+	if (queryText && !admissionDenied && results.length === 0 && capabilities.vectorSearch) {
 		try {
 			results = await semanticRecall({
 				collection,
@@ -937,6 +965,9 @@ export async function recallConversation(params: {
 			filtersApplied,
 			searchMethod,
 			durationMs: Date.now() - startedAt,
+			...(admissionDenied && admission
+				? { throttled: { retryAfterMs: admission.retryAfterMs } }
+				: {}),
 		},
 	}
 }

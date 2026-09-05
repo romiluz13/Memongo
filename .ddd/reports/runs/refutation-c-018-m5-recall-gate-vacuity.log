@@ -1,0 +1,289 @@
+COMMAND: force the recallConversation admission gate off (admissionDenied := false); cd packages/memory-engine && bun vitest run src/mongodb-conversation-recall.test.ts; restore with cp and verify cmp
+BEFORE_SHA256: 54cbd76ecbf3d6fe7295161ccef83cdcc702205c97f24108966e69b7ec8ed044  src/mongodb-conversation-recall.ts
+MUTATED_SHA256: ee2b67ac382ecd0b48d1e17158595fc3b0203d367929deaf0292dce1c1799c56  src/mongodb-conversation-recall.ts
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/packages/memory-engine[39m
+
+ [31m❯[39m src/mongodb-conversation-recall.test.ts [2m([22m[2m31 tests[22m[2m | [22m[31m1 failed[39m[2m)[22m[32m 28[2mms[22m[39m
+     [32m✓[39m runs standard recall with tool exclusion and asOf-capped time range[32m 14[2mms[22m[39m
+     [32m✓[39m scope isolation: filters standard recall by the request scope and scopeRef[32m 1[2mms[22m[39m
+     [32m✓[39m lets explicit roles override the default tool-message exclusion[32m 0[2mms[22m[39m
+     [32m✓[39m resolves date-only boundaries in the requested timezone[32m 1[2mms[22m[39m
+     [32m✓[39m uses semantic recall when vector search is available[32m 1[2mms[22m[39m
+     [32m✓[39m uses rankFusion for hybrid recall when text and vector search are available[32m 1[2mms[22m[39m
+     [32m✓[39m projects $rankFusion scoreDetails via $addFields before the final $project (Task 2.R1)[32m 1[2mms[22m[39m
+     [32m✓[39m falls back to escaped regex filtering when semantic search is unavailable[32m 0[2mms[22m[39m
+     [32m✓[39m returns empty results with clean metadata when no events match[32m 0[2mms[22m[39m
+     [32m✓[39m enforces the requested limit on standard recall results[32m 0[2mms[22m[39m
+     [32m✓[39m prefers explicit role filters over includeToolMessages[32m 0[2mms[22m[39m
+     [32m✓[39m falls back to UTC boundaries when the timezone is invalid[32m 0[2mms[22m[39m
+     [32m✓[39m returns empty results without touching the database when startTime is after endTime[32m 0[2mms[22m[39m
+     [32m✓[39m truncates citation previews to 500 characters[32m 0[2mms[22m[39m
+     [32m✓[39m malformed scoreDetails: emits a single log.warn when scoreDetails is malformed[32m 0[2mms[22m[39m
+     [32m✓[39m malformed scoreDetails: stays silent when scoreDetails is absent (undefined)[32m 0[2mms[22m[39m
+     [32m✓[39m bi-temporal safety: semanticRecall pipeline includes $match(bitemporal) after $vectorSearch[32m 0[2mms[22m[39m
+     [32m✓[39m recall overfetch (issue #41): semanticRecall $vectorSearch fetches MORE than the final limit so the bitemporal $match cannot starve results[32m 0[2mms[22m[39m
+     [32m✓[39m uses native bitemporal prefiltering only when the serving events index is verified[32m 0[2mms[22m[39m
+     [32m✓[39m recall overfetch (issue #41): hybridRecall $rankFusion vector inner lane over-fetches beyond the final limit[32m 0[2mms[22m[39m
+     [32m✓[39m uses native validity only in the verified hybrid vector lane and retains text-lane validity[32m 0[2mms[22m[39m
+     [32m✓[39m bi-temporal safety: hybridRecall $rankFusion injects bi-temporal $match into BOTH vector and text inner pipelines[32m 0[2mms[22m[39m
+     [32m✓[39m Task 35: hybrid text lane injects near-on-timestamp when temporal token is present (in March)[32m 0[2mms[22m[39m
+     [32m✓[39m Task 35: hybrid text lane has NO near-on-timestamp when no temporal token is present[32m 0[2mms[22m[39m
+     [32m✓[39m Task 35: near pivot milliseconds = scaleDays * 86_400_000 for relative-week (3 days)[32m 0[2mms[22m[39m
+     [32m✓[39m bi-temporal safety: standardRecall find() excludes memories invalidAt <= asOf[32m 0[2mms[22m[39m
+     [32m✓[39m standard recall filter carries the unexpired $or clause[32m 0[2mms[22m[39m
+     [32m✓[39m semantic recall adds a post-$vectorSearch unexpired $match and keeps expiresAt out of the vector prefilter[32m 0[2mms[22m[39m
+     [32m✓[39m hybrid recall excludes expired docs after $rankFusion[32m 0[2mms[22m[39m
+[31m     [31m×[31m denial never runs a vector stage and degrades to the text lane with the throttled marker[39m[32m 4[2mms[22m[39m
+     [32m✓[39m an admitted querying recall runs the hybrid lane and carries no throttle marker[32m 0[2mms[22m[39m
+
+[31m⎯⎯⎯⎯⎯⎯⎯[39m[1m[41m Failed Tests 1 [49m[22m[31m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[41m[1m FAIL [22m[49m src/mongodb-conversation-recall.test.ts[2m > [22mrecallConversation search admission (WS-11)[2m > [22mdenial never runs a vector stage and degrades to the text lane with the throttled marker
+[31m[1mAssertionError[22m[39m: expected "vi.fn()" to not be called at all, but actually been called 2 times[90m
+
+Received:
+
+[1m  1st vi.fn() call:
+
+[22m    Array [
+      Array [
+        Object {
+          "$rankFusion": Object {
+            "input": Object {
+              "pipelines": Object {
+                "text": Array [
+                  Object {
+                    "$search": Object {
+                      "compound": Object {
+                        "filter": [Array],
+                        "must": [Array],
+                      },
+                      "index": "mem_events_text",
+                    },
+                  },
+                  Object {
+                    "$match": Object {
+                      "$and": Array [
+                        [Object],
+                        [Object],
+                      ],
+                    },
+                  },
+                  Object {
+                    "$match": Object {
+                      "$and": Array [
+                        [Object],
+                        [Object],
+                      ],
+                    },
+                  },
+                  Object {
+                    "$limit": 40,
+                  },
+                ],
+                "vector": Array [
+                  Object {
+                    "$vectorSearch": Object {
+                      "filter": Object {
+                        "agentId": [Object],
+                        "role": [Object],
+                        "timestamp": [Object],
+                      },
+                      "index": "mem_events_vector",
+                      "limit": 40,
+                      "model": "voyage-4-large",
+                      "numCandidates": 800,
+                      "path": "body",
+                      "query": Object {
+                        "text": "deploy runbook",
+                      },
+                    },
+                  },
+                  Object {
+                    "$match": Object {
+                      "$and": Array [
+                        [Object],
+                        [Object],
+                      ],
+                    },
+                  },
+                ],
+              },
+            },
+            "scoreDetails": true,
+          },
+        },
+        Object {
+          "$match": Object {
+            "$or": Array [
+              Object {
+                "expiresAt": Object {
+                  "$exists": false,
+                },
+              },
+              Object {
+                "expiresAt": Object {
+                  "$gt": 2026-09-05T14:30:17.957Z,
+                },
+              },
+            ],
+          },
+        },
+        Object {
+          "$limit": 10,
+        },
+        Object {
+          "$addFields": Object {
+            "scoreDetails": Object {
+              "$meta": "scoreDetails",
+            },
+          },
+        },
+        Object {
+          "$project": Object {
+            "_id": 0,
+            "body": 1,
+            "eventId": 1,
+            "role": 1,
+            "score": Object {
+              "$meta": "score",
+            },
+            "scoreDetails": 1,
+            "sessionId": 1,
+            "sourceRef": 1,
+            "timestamp": 1,
+          },
+        },
+      ],
+      Object {
+        "maxTimeMS": 10000,
+      },
+    ]
+
+[1m  2nd vi.fn() call:
+
+[22m    Array [
+      Array [
+        Object {
+          "$vectorSearch": Object {
+            "filter": Object {
+              "agentId": Object {
+                "$eq": "agent-1",
+              },
+              "role": Object {
+                "$ne": "tool",
+              },
+              "timestamp": Object {
+                "$lte": 2026-09-05T14:30:17.957Z,
+              },
+            },
+            "index": "mem_events_vector",
+            "limit": 40,
+            "model": "voyage-4-large",
+            "numCandidates": 800,
+            "path": "body",
+            "query": Object {
+              "text": "deploy runbook",
+            },
+          },
+        },
+        Object {
+          "$match": Object {
+            "$and": Array [
+              Object {
+                "$or": Array [
+                  Object {
+                    "validAt": Object {
+                      "$exists": false,
+                    },
+                  },
+                  Object {
+                    "validAt": Object {
+                      "$lte": 2026-09-05T14:30:17.957Z,
+                    },
+                  },
+                ],
+              },
+              Object {
+                "$or": Array [
+                  Object {
+                    "invalidAt": Object {
+                      "$exists": false,
+                    },
+                  },
+                  Object {
+                    "invalidAt": null,
+                  },
+                  Object {
+                    "invalidAt": Object {
+                      "$gt": 2026-09-05T14:30:17.957Z,
+                    },
+                  },
+                ],
+              },
+            ],
+          },
+        },
+        Object {
+          "$match": Object {
+            "$or": Array [
+              Object {
+                "expiresAt": Object {
+                  "$exists": false,
+                },
+              },
+              Object {
+                "expiresAt": Object {
+                  "$gt": 2026-09-05T14:30:17.957Z,
+                },
+              },
+            ],
+          },
+        },
+        Object {
+          "$limit": 10,
+        },
+        Object {
+          "$project": Object {
+            "_id": 0,
+            "body": 1,
+            "eventId": 1,
+            "role": 1,
+            "score": Object {
+              "$meta": "vectorSearchScore",
+            },
+            "sessionId": 1,
+            "sourceRef": 1,
+            "timestamp": 1,
+          },
+        },
+      ],
+      Object {
+        "maxTimeMS": 10000,
+      },
+    ]
+[39m[90m
+
+Number of calls: [1m2[22m
+[39m
+[36m [2m❯[22m src/mongodb-conversation-recall.test.ts:[2m1485:29[22m[39m
+    [90m1483|[39m   [90m// The vector stages (hybrid AND semantic fallback) never fired: no[39m
+    [90m1484|[39m   [90m// aggregate pipeline ran at all — only the standard find lane.[39m
+    [90m1485|[39m   [34mexpect[39m(col[33m.[39maggregate)[33m.[39mnot[33m.[39m[34mtoHaveBeenCalled[39m()
+    [90m   |[39m                             [31m^[39m
+    [90m1486|[39m   [90m// The text lane still answers, so a throttle degrades ranking, not[39m
+    [90m1487|[39m   [90m// completeness.[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯[22m[39m
+
+
+[2m Test Files [22m [1m[31m1 failed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[31m1 failed[39m[22m[2m | [22m[1m[32m30 passed[39m[22m[90m (31)[39m
+[2m   Start at [22m 17:30:17
+[2m   Duration [22m 310ms[2m (transform 142ms, setup 0ms, import 174ms, tests 28ms, environment 0ms)[22m
+
+error: "vitest" exited with code 1
+TEST_EXIT: 1
+AFTER_SHA256: 54cbd76ecbf3d6fe7295161ccef83cdcc702205c97f24108966e69b7ec8ed044  src/mongodb-conversation-recall.ts
+CMP_EXIT: 0

@@ -511,4 +511,73 @@ describe("searchKB", () => {
 		])
 		expect(textPipeline[1]?.$match).toBeUndefined()
 	})
+
+	// WS-11: the manager passes skipVectorLane when the search-admission
+	// bucket denies a KB search — the query embed burn must stop, but the
+	// text lane still answers. This pins the degradation contract.
+	it("skipVectorLane runs the text lane without any $vectorSearch stage", async () => {
+		const col = mockKBChunksCol([
+			{
+				path: "text-lane.md",
+				startLine: 1,
+				endLine: 5,
+				text: "keyword hit without embeddings",
+				docId: "doc-1",
+				score: 0.8,
+			},
+		])
+
+		const results = await searchKB(col, "keyword", null, {
+			maxResults: 5,
+			minScore: 0.1,
+			scopeRef: "agent:test",
+			skipVectorLane: true,
+			vectorIndexName: "test_kb_chunks_vector",
+			textIndexName: "test_kb_chunks_text",
+			capabilities: baseCapabilities,
+			embeddingMode: "automated",
+		})
+
+		// The text lane answered: degraded ranking, not degraded completeness.
+		expect(results).toHaveLength(1)
+		expect(results[0].snippet).toContain("keyword hit without embeddings")
+		const calls = (col.aggregate as ReturnType<typeof vi.fn>).mock.calls
+		expect(calls.length).toBeGreaterThan(0)
+		for (const pipeline of calls) {
+			expect(JSON.stringify(pipeline)).not.toContain("$vectorSearch")
+			expect(JSON.stringify(pipeline)).toContain("$search")
+		}
+	})
+
+	it("without skipVectorLane the automated-mode vector lane still runs $vectorSearch", async () => {
+		const col = mockKBChunksCol([
+			{
+				path: "vector.md",
+				startLine: 1,
+				endLine: 5,
+				text: "vector hit",
+				docId: "doc-1",
+				score: 0.9,
+			},
+		])
+
+		const results = await searchKB(col, "vector", null, {
+			maxResults: 5,
+			minScore: 0.1,
+			scopeRef: "agent:test",
+			vectorIndexName: "test_kb_chunks_vector",
+			textIndexName: "test_kb_chunks_text",
+			capabilities: baseCapabilities,
+			embeddingMode: "automated",
+		})
+
+		expect(results).toHaveLength(1)
+		const calls = (col.aggregate as ReturnType<typeof vi.fn>).mock.calls
+		const sawVectorStage = calls.some((pipeline) =>
+			JSON.stringify(pipeline).includes("$vectorSearch"),
+		)
+		// Contrast with the skipVectorLane test: without the flag the
+		// automated-mode lane issues a server-side query embed.
+		expect(sawVectorStage).toBe(true)
+	})
 })

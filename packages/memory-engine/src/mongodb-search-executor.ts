@@ -889,6 +889,7 @@ export function mergeMetadata(params: {
 				| "queryRewritten"
 				| "reranked"
 				| "plan"
+				| "throttled"
 			>
 		}
 	>
@@ -912,6 +913,12 @@ export function mergeMetadata(params: {
 		},
 		{},
 	)
+	// WS-11: carry the first throttled pass's retry hint into the merged
+	// metadata so the executor layer cannot silently drop the admission
+	// outcome — a denied pass must remain distinguishable from an empty one.
+	const throttled = params.passes.find(
+		(pass) => pass.metadata.throttled != null,
+	)?.metadata.throttled
 	return {
 		mode: params.request.searchMode,
 		classification: params.classification,
@@ -943,6 +950,7 @@ export function mergeMetadata(params: {
 		...(params.request.returnPlan && params.passes[0]?.metadata.plan
 			? { plan: params.passes[0].metadata.plan }
 			: {}),
+		...(throttled ? { throttled } : {}),
 	}
 }
 
@@ -958,6 +966,7 @@ export function buildNoDirectEvidenceResponse(params: {
 				| "queryRewritten"
 				| "reranked"
 				| "plan"
+				| "throttled"
 			>
 		}
 	>
@@ -1622,6 +1631,8 @@ export async function executeMongoSearchPlan(params: {
 			resultsByPath: Record<string, number>
 			reranked?: boolean
 			queryRewritten?: boolean
+			/** WS-11: present when admission control denied this pass. */
+			throttled?: { retryAfterMs: number }
 		}
 	}>
 	trustContext?: {
@@ -1643,6 +1654,7 @@ export async function executeMongoSearchPlan(params: {
 				| "queryRewritten"
 				| "reranked"
 				| "plan"
+				| "throttled"
 			>
 		}
 	> = []
@@ -1697,8 +1709,19 @@ export async function executeMongoSearchPlan(params: {
 						? { constraints: executed.metadata.plan.constraints }
 						: {}),
 				},
+				...(executed.metadata.throttled
+					? { throttled: executed.metadata.throttled }
+					: {}),
 			},
 		})
+
+		// WS-11: admission denial ends the pass loop. A throttled pass
+		// retrieved nothing by design — follow-up passes would only stack
+		// more denied attempts on the same dry bucket and blur the outcome
+		// with extra throttled telemetry.
+		if (executed.metadata.throttled) {
+			break
+		}
 
 		const acceptedResults = Array.from(acceptedById.values())
 		const trustedPassResults = annotateResultsWithTrust(acceptedResults, {
@@ -1815,6 +1838,9 @@ export async function executeMongoSearchPlan(params: {
 				queryRewritten: corrExec.metadata.queryRewritten === true,
 				reranked: corrExec.metadata.reranked === true,
 				plan: corrExec.metadata.plan,
+				...(corrExec.metadata.throttled
+					? { throttled: corrExec.metadata.throttled }
+					: {}),
 			},
 		})
 		acceptedResults = Array.from(acceptedById.values())
@@ -1874,6 +1900,9 @@ export async function executeMongoSearchPlan(params: {
 					queryRewritten: relaxExec.metadata.queryRewritten === true,
 					reranked: relaxExec.metadata.reranked === true,
 					plan: relaxExec.metadata.plan,
+					...(relaxExec.metadata.throttled
+						? { throttled: relaxExec.metadata.throttled }
+						: {}),
 				},
 			})
 			constraintRelaxations = [relaxation]

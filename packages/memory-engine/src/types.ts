@@ -437,6 +437,13 @@ export type MemorySearchMetadata = {
 		confidence: "high" | "medium" | "low"
 		reasoning: string
 	}
+	/**
+	 * WS-11 admission control: set when at least one pass was denied by the
+	 * process-level search admission token bucket. A healthy empty search
+	 * never carries it, so "overloaded" stays distinguishable from "no
+	 * memories" at the detailed-search boundary, not only inside searchV2.
+	 */
+	throttled?: { retryAfterMs: number }
 }
 
 export type MemorySearchResponse = {
@@ -1513,6 +1520,13 @@ export type ConversationRecallResponse = {
 		filtersApplied: string[]
 		searchMethod: "standard" | "semantic" | "hybrid"
 		durationMs: number
+		/**
+		 * WS-11 admission control: present when the process-level search
+		 * admission bucket denied this call and the recall degraded to the
+		 * text-only standard lane. Distinguishes "overloaded" from "no
+		 * matching conversation events".
+		 */
+		throttled?: { retryAfterMs: number }
 	}
 }
 

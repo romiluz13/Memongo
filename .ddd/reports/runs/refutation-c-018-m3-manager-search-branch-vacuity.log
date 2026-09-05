@@ -1,0 +1,127 @@
+COMMAND: force the manager search() throttle branch off (if (v2.metadata.throttled) -> if (false && ...)); cd packages/memory-engine && bun vitest run src/mongodb-manager-search.part2.test.ts; restore with cp and verify cmp
+BEFORE_SHA256: 63640854eff782a6195ef4e1d0ee0467ee34c693ccf0fc424016cb25dc0f1306  src/mongodb-manager-search.ts
+MUTATED_SHA256: f6d3b30c03fa8d3ebb9545d4051638581e68fa84e127e1f7f481c56a9e490378  src/mongodb-manager-search.ts
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/packages/memory-engine[39m
+
+[90mstderr[2m | src/mongodb-manager-search.part2.test.ts[2m > [22m[2mlegacySearch fallback opt-in (P3.2)[2m > [22m[2mreturns empty without re-running legacySearch when the fallback is not opted in
+[22m[39m17:30:04.388 [memory:mongodb] warn: empty search recall trace write failed: TypeError: Cannot read properties of undefined (reading 'insertOne')
+
+[90mstderr[2m | src/mongodb-manager-search.part2.test.ts[2m > [22m[2mlegacySearch fallback opt-in (P3.2)[2m > [22m[2mruns legacySearch when legacySearchFallback is opted in
+[22m[39m17:30:04.391 [memory:mongodb] warn: empty search recall trace write failed: TypeError: Cannot read properties of undefined (reading 'insertOne')
+
+[90mstderr[2m | src/mongodb-manager-search.part2.test.ts[2m > [22m[2mlegacySearch fallback opt-in (P3.2)[2m > [22m[2mruns legacySearch when legacySearchFallback is opted in
+[22m[39m17:30:04.391 [memory:mongodb] warn: search fallback recall trace write failed: TypeError: Cannot read properties of undefined (reading 'insertOne')
+
+[90mstderr[2m | src/mongodb-manager-search.part2.test.ts[2m > [22m[2mscope-safe cache writes[2m > [22m[2mscales default searchDetailed numCandidates with requested top-k
+[22m[39m17:30:04.395 [memory:mongodb] warn: searchDetailed recall trace write failed: TypeError: Cannot read properties of undefined (reading 'insertOne')
+
+[90mstderr[2m | src/mongodb-manager-search.part2.test.ts[2m > [22m[2mscope-safe cache writes[2m > [22m[2mscales default searchDetailed numCandidates with requested top-k
+[22m[39m17:30:04.395 [memory:mongodb] warn: searchDetailed recall trace write failed: TypeError: Cannot read properties of undefined (reading 'insertOne')
+
+[90mstderr[2m | src/mongodb-manager-search.part2.test.ts[2m > [22m[2mscope-safe cache writes[2m > [22m[2muses backend proof recall profile when request does not override it
+[22m[39m17:30:04.395 [memory:mongodb] warn: searchDetailed recall trace write failed: TypeError: Cannot read properties of undefined (reading 'insertOne')
+
+[90mstderr[2m | src/mongodb-manager-search.part2.test.ts[2m > [22m[2mscope-safe cache writes[2m > [22m[2mkeeps explicit searchDetailed numCandidates overrides
+[22m[39m17:30:04.396 [memory:mongodb] warn: searchDetailed recall trace write failed: TypeError: Cannot read properties of undefined (reading 'insertOne')
+
+[90mstderr[2m | src/mongodb-manager-search.part2.test.ts[2m > [22m[2mscope-safe cache writes[2m > [22m[2msearch() writes cache with session scope when sessionKey is provided
+[22m[39m17:30:04.396 [memory:mongodb] warn: search recall trace write failed: TypeError: Cannot read properties of undefined (reading 'insertOne')
+
+[90mstderr[2m | src/mongodb-manager-search.part2.test.ts[2m > [22m[2mscope-safe cache writes[2m > [22m[2msearch() reads cache with session scope when sessionKey is provided
+[22m[39m17:30:04.397 [memory:mongodb] warn: empty search recall trace write failed: TypeError: Cannot read properties of undefined (reading 'insertOne')
+
+[90mstderr[2m | src/mongodb-manager-search.part2.test.ts[2m > [22m[2mscope-safe cache writes[2m > [22m[2mkeeps default agent searches out of workspace bridge chunks
+[22m[39m17:30:04.397 [memory:mongodb] warn: search recall trace write failed: TypeError: Cannot read properties of undefined (reading 'insertOne')
+
+[90mstderr[2m | src/mongodb-manager-search.part2.test.ts[2m > [22m[2msearchV2 lane latency instrumentation[2m > [22m[2mrecords a latency sample for every executed lane, including one that fails
+[22m[39m17:30:04.398 [memory:mongodb] error: searchV2 path episodic failed {"error":{}}
+
+[90mstderr[2m | src/mongodb-manager-search.part2.test.ts[2m > [22m[2msearchV2 lane latency instrumentation[2m > [22m[2msearch() hands the lane breakdown to the caller's onLaneLatency sink
+[22m[39m17:30:04.399 [memory:mongodb] warn: empty search recall trace write failed: TypeError: Cannot read properties of undefined (reading 'insertOne')
+
+[90mstderr[2m | src/mongodb-manager-search.part2.test.ts[2m > [22m[2msearch admission envelope at the manager boundary (WS-11)[2m > [22m[2msearch() marks v2:throttled and skips the opted-in legacy re-run on denial
+[22m[39m17:30:04.399 [memory:mongodb] warn: empty search recall trace write failed: TypeError: Cannot read properties of undefined (reading 'insertOne')
+
+[90mstderr[2m | src/mongodb-manager-search.part2.test.ts[2m > [22m[2msearch admission envelope at the manager boundary (WS-11)[2m > [22m[2msearch() makes the opted-in legacy re-run pay its own admission token
+[22m[39m17:30:04.403 [memory:mongodb] warn: empty search recall trace write failed: TypeError: Cannot read properties of undefined (reading 'insertOne')
+
+[90mstderr[2m | src/mongodb-manager-search.part2.test.ts[2m > [22m[2msearch admission envelope at the manager boundary (WS-11)[2m > [22m[2msearchDetailed() makes the opted-in legacy re-run pay its own admission token
+[22m[39m17:30:04.405 [memory:mongodb] warn: searchDetailed recall trace write failed: TypeError: Cannot read properties of undefined (reading 'insertOne')
+
+[90mstderr[2m | src/mongodb-manager-search.part2.test.ts[2m > [22m[2msearch admission envelope at the manager boundary (WS-11)[2m > [22m[2msearchDetailed() keeps a healthy empty answer free of the throttle marker
+[22m[39m17:30:04.405 [memory:mongodb] warn: searchDetailed recall trace write failed: TypeError: Cannot read properties of undefined (reading 'insertOne')
+
+ [31m❯[39m src/mongodb-manager-search.part2.test.ts [2m([22m[2m43 tests[22m[2m | [22m[31m1 failed[39m[2m)[22m[32m 83[2mms[22m[39m
+     [32m✓[39m fuses conversation and bridge chunk lanes into one embedded search per request (P3.1)[32m 6[2mms[22m[39m
+     [32m✓[39m starts conversation evidence while the primary retrieval lane is still pending[32m 53[2mms[22m[39m
+     [32m✓[39m forwards the resolved fusion method to the KB lane[32m 1[2mms[22m[39m
+     [32m✓[39m does not run conversation evidence when conversation retrieval is unavailable[32m 0[2mms[22m[39m
+     [32m✓[39m keeps split hybrid sub-lanes when the filters are structurally incompatible[32m 1[2mms[22m[39m
+     [32m✓[39m does not fire the recursive hybrid backstop when lane coverage says no data (P3.2)[32m 1[2mms[22m[39m
+     [32m✓[39m does not fire the recursive hybrid backstop when no coverage document exists[32m 0[2mms[22m[39m
+     [32m✓[39m fires the recursive hybrid backstop when lane coverage says data exists[32m 0[2mms[22m[39m
+     [32m✓[39m keeps an empty-corpus sparse query within the aggregation budget (P3.2)[32m 1[2mms[22m[39m
+     [32m✓[39m surfaces accessCount from the raw-window lane so the post-CE boost activates[32m 1[2mms[22m[39m
+     [32m✓[39m projects accessCount in the turn-precision events lane[32m 1[2mms[22m[39m
+     [32m✓[39m returns empty without re-running legacySearch when the fallback is not opted in[32m 3[2mms[22m[39m
+     [32m✓[39m runs legacySearch when legacySearchFallback is opted in[32m 1[2mms[22m[39m
+     [32m✓[39m returns empty array for empty input[32m 0[2mms[22m[39m
+     [32m✓[39m applies source diversity penalty (no >2 from same source at top)[32m 0[2mms[22m[39m
+     [32m✓[39m boosts episode results[32m 0[2mms[22m[39m
+     [32m✓[39m respects custom weights[32m 0[2mms[22m[39m
+     [32m✓[39m does not mutate original array[32m 0[2mms[22m[39m
+     [32m✓[39m counts structured candidates without touching the database[32m 2[2mms[22m[39m
+     [32m✓[39m scales default searchDetailed numCandidates with requested top-k[32m 2[2mms[22m[39m
+     [32m✓[39m uses backend proof recall profile when request does not override it[32m 0[2mms[22m[39m
+     [32m✓[39m keeps explicit searchDetailed numCandidates overrides[32m 0[2mms[22m[39m
+     [32m✓[39m search() writes cache with session scope when sessionKey is provided[32m 1[2mms[22m[39m
+     [32m✓[39m search() reads cache with session scope when sessionKey is provided[32m 0[2mms[22m[39m
+     [32m✓[39m keeps default agent searches out of workspace bridge chunks[32m 0[2mms[22m[39m
+     [32m✓[39m never queries session_chunks unless the lane is explicitly enabled[32m 0[2mms[22m[39m
+     [32m✓[39m filters session_chunks by scope and scopeRef even for agent scope[32m 0[2mms[22m[39m
+     [32m✓[39m reports text when the search degraded to keyword, despite hybrid capabilities[32m 0[2mms[22m[39m
+     [32m✓[39m reports text for the last-resort $text path[32m 0[2mms[22m[39m
+     [32m✓[39m reports vector when only the vector fallback succeeded[32m 0[2mms[22m[39m
+     [32m✓[39m reports hybrid for each server-side fusion path and the JS merge[32m 0[2mms[22m[39m
+     [32m✓[39m uses the latest successful trace when several succeeded[32m 0[2mms[22m[39m
+     [32m✓[39m falls back to the capability guess when nothing succeeded[32m 0[2mms[22m[39m
+     [32m✓[39m records a latency sample for every executed lane, including one that fails[32m 0[2mms[22m[39m
+     [32m✓[39m records a latency sample for each enabled hybrid sub-lane[32m 0[2mms[22m[39m
+     [32m✓[39m search() hands the lane breakdown to the caller's onLaneLatency sink[32m 0[2mms[22m[39m
+[31m     [31m×[31m search() marks v2:throttled and skips the opted-in legacy re-run on denial[39m[32m 3[2mms[22m[39m
+     [32m✓[39m search() makes the opted-in legacy re-run pay its own admission token[32m 0[2mms[22m[39m
+     [32m✓[39m searchDetailed() short-circuits a throttled response before cache or legacy[32m 2[2mms[22m[39m
+     [32m✓[39m searchDetailed() makes the opted-in legacy re-run pay its own admission token[32m 1[2mms[22m[39m
+     [32m✓[39m searchDetailed() keeps a healthy empty answer free of the throttle marker[32m 0[2mms[22m[39m
+     [32m✓[39m searchKB() drops the vector lane on denial and marks kb:throttled[32m 0[2mms[22m[39m
+     [32m✓[39m searchKB() keeps the vector lane when admission grants a token[32m 0[2mms[22m[39m
+
+[31m⎯⎯⎯⎯⎯⎯⎯[39m[1m[41m Failed Tests 1 [49m[22m[31m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[41m[1m FAIL [22m[49m src/mongodb-manager-search.part2.test.ts[2m > [22msearch admission envelope at the manager boundary (WS-11)[2m > [22msearch() marks v2:throttled and skips the opted-in legacy re-run on denial
+[31m[1mAssertionError[22m: expected 'v2:empty->legacy-throttled' to be 'v2:throttled' // Object.is equality[39m
+
+Expected: [32m"v2:throttled"[39m
+Received: [31m"v2:[7mempty->legacy-[27mthrottled"[39m
+
+[36m [2m❯[22m src/mongodb-manager-search.part2.test.ts:[2m1632:37[22m[39m
+    [90m1630|[39m   [34mexpect[39m(results)[33m.[39m[34mtoEqual[39m([])
+    [90m1631|[39m   [34mexpect[39m(aggregate)[33m.[39mnot[33m.[39m[34mtoHaveBeenCalled[39m()
+    [90m1632|[39m   [34mexpect[39m([34mlastSearchModeOf[39m(manager))[33m.[39m[34mtoBe[39m([32m"v2:throttled"[39m)
+    [90m   |[39m                                     [31m^[39m
+    [90m1633|[39m  })
+    [90m1634|[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯[22m[39m
+
+
+[2m Test Files [22m [1m[31m1 failed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[31m1 failed[39m[22m[2m | [22m[1m[32m42 passed[39m[22m[90m (43)[39m
+[2m   Start at [22m 17:30:03
+[2m   Duration [22m 859ms[2m (transform 503ms, setup 0ms, import 662ms, tests 83ms, environment 0ms)[22m
+
+error: "vitest" exited with code 1
+TEST_EXIT: 1
+AFTER_SHA256: 63640854eff782a6195ef4e1d0ee0467ee34c693ccf0fc424016cb25dc0f1306  src/mongodb-manager-search.ts
+CMP_EXIT: 0

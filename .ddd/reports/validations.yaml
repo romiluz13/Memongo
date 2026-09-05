@@ -671,3 +671,33 @@ entries:
     run_at: "2026-09-05T12:05:15.895Z"
     evidence_hash: "sha256:0ad019225d97c32943899b337f0642afb0f3b47d1ae45295a18777772fd5aa6f"
     notes: "Sampling and kill-switch evidence from the final-state WS-10 engine suite (this log, 123 files / 2148 tests, exit 0): the 'sampling controls (08-report fleet audit)' battery (7 tests) pins MEMONGO_TELEMETRY_ENABLED=false never touching the driver (kill switch accepting the 0/off/no aliases), sample rate 0 dropping every emit without a driver call, the unset default emitting every document, rate 1 emitting every document, rate 0.5 emitting a statistically-bounded subset, and an invalid rate failing open to full emission rather than silently dropping; the resolveTelemetrySampling unit test pins the env parsing and defaults the battery relies on."
+  - id: V-093
+    schema_version: 0.1.0
+    claim: C-018
+    construct: packages/memory-engine/src/mongodb-search-v2.ts
+    method: test
+    target: .ddd/reports/runs/ws11-engine-suite.log
+    result: pass
+    run_at: "2026-09-05T18:39:52.000Z"
+    evidence_hash: "sha256:538f37d5943e1de5fb172c575a9b852ad0f350a0ca1e27fab138cfdbc6dbcabc"
+    notes: "Admission-control evidence from the final-state WS-11 engine suite (this log, 143 files passed / 2492 tests passed / 10 skipped, exit 0, local atlas-local verify container recreated with DO_NOT_TRACK=true after the atlas-local telemetry-goroutine panic repeatedly killed it under full-suite parallel load): the token-bucket battery (11 tests, mongodb-search-admission.test.ts) pins the process-level bucket sized to deployment rate limits — defaults 20 RPM-sustained with 240 burst, MEMONGO_SEARCH_ADMISSION_RPM/BURST overrides honored, RPM=0 as the documented dedicated-tier escape, invalid values falling back to safe defaults, instantaneous burst admit then deny, denial carrying a positive retryAfterMs derived from the refill rate, lazy time-based refill with no timers, refill capped at burst, unconditional admit when disabled, a monotone throttled counter, and the limits/depth/denial-count snapshot. The searchV2 gate battery (3 tests, mongodb-search-v2-admission.test.ts) pins top-level entries only (the recursive hybrid backstop shares the parent budget AND admission, so re-entry never double-charges) and the distinct throttling outcome: empty results plus the throttled marker and retry hint, zero database touches on denial (no lanes, no coverage read), and an admitted search never throttled. The outcome's survivability across layers is pinned by the boundary batteries in the same log: executor mergeMetadata marker propagation and pass-loop break (3 tests), manager search()/searchDetailed()/searchKB() short-circuit + legacy re-run token gates (7 tests), recallConversation degradation to the text lane (2 tests), and the kb-search skipVectorLane lane drop (2 tests). Vacuity: all seven admission-surface mutations RED under the battery (refutation-c-018-m[1-7]-*-vacuity.log, post-restore control 152/152). Final-state companion suites: ws11-api-suite.log 508/508 (sha256:c21972f941cf14fd7d401fd50fcb8fa8c6946fdbefcd03c88b6eeaf269de7c0d), ws11-mongodb-e2e.log 43/43 (sha256:00a33fe00111102e52a83489dd9048609f8d6ea9e0eb584fa694e7eca3897a8f), ws11-real-e2e-v2.log 81/81 (sha256:537e254edbcd9c26734dc12700fbeb5f8d3454c2b093620b88ee4060be784830)."
+  - id: V-094
+    schema_version: 0.1.0
+    claim: C-018
+    construct: packages/memory-engine/src/mongodb-manager-jobs.ts
+    method: test
+    target: .ddd/reports/runs/ws11-engine-suite.log
+    result: pass
+    run_at: "2026-09-05T18:39:52.000Z"
+    evidence_hash: "sha256:538f37d5943e1de5fb172c575a9b852ad0f350a0ca1e27fab138cfdbc6dbcabc"
+    notes: "Backlog-gauge evidence from the final-state WS-11 engine suite (same log): the backlog battery (9 tests, mongodb-manager-jobs-backlog.test.ts) pins the alert threshold resolution (default 500 pending jobs, positive MEMONGO_JOBS_BACKLOG_ALERT_THRESHOLD override honored, invalid values rejected to the default), the gauge read countPendingMemoryJobs (per-agent with the jobType filter applied, degrading to 0 when the count fails so the gauge cannot break the drain), and backlog-aware drain concurrency — K stays at the configured base at or below the threshold, scales with the overflow ratio above it, clamps at the 16-worker hard cap, never scales below the base, and a zero threshold (misconfiguration) falls back to the base rather than a division blowup. The operator surface is pinned in the admin battery (mongodb-manager-admin.test.ts): status.memoryJobs.backlogAlert carries depth (pending + running), threshold, and the triggered verdict. One depth read per drain call, so the gauge adds no per-job overhead."
+  - id: V-095
+    schema_version: 0.1.0
+    claim: C-018
+    construct: packages/memory-engine/src/mongodb-manager-write.ts
+    method: test
+    target: .ddd/reports/runs/ws11-engine-suite.log
+    result: pass
+    run_at: "2026-09-05T18:39:52.000Z"
+    evidence_hash: "sha256:538f37d5943e1de5fb172c575a9b852ad0f350a0ca1e27fab138cfdbc6dbcabc"
+    notes: "Bounded write-queue evidence from the final-state WS-11 engine suite (same log): the write-queue battery (7 tests, mongodb-manager-write-queue.test.ts) pins the per-agent writeQueue bound — resolveWriteQueueMaxDepth defaulting to 256 pending writes with the override/validation rules, enqueueBoundedWrite admitting up to the cap and fast-failing the next write with the typed WriteQueueFullError (so a burst surfaces to the caller instead of queuing without bound), a write-queue-saturation telemetry emit on every fast-fail, depth draining back to zero as writes settle and re-admitting new writes, a rejected write still draining its depth slot, strict serial ordering preserved under the cap, and the failed-write chain not poisoning the next write (execute runs on both settle paths). The batch path uses the same bounded enqueue (manager-write battery: the whole batch queues behind a previously queued write; a batch is refused after close). Together with V-093/V-094 this closes the C-018 concurrency envelope: search/autoEmbed spend is admitted at the source, the job backlog is observable with an alert verdict, and the write path cannot queue without bound."

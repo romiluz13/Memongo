@@ -1,0 +1,12 @@
+COMMAND: cd packages/memory-engine && bun vitest run src/real-e2e-v2.e2e.test.ts (final-state WS-11 e2e companion; verify container recreated with DO_NOT_TRACK=true)
+       [33m[2m✓[22m[39m should emit telemetry documents to the time series collection [33m 2015[2mms[22m[39m
+       [33m[2m✓[22m[39m should rerank search results via Voyage rerank-2.5 with instruction-following [33m 377[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m1 passed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[32m81 passed[39m[22m[90m (81)[39m
+[2m   Start at [22m 18:41:22
+[2m   Duration [22m 74.89s[2m (transform 812ms, setup 0ms, import 1.33s, tests 73.39s, environment 0ms)[22m
+
+SUITE_EXIT: 0
+DONE_EXIT=0
+537e254edbcd9c26734dc12700fbeb5f8d3454c2b093620b88ee4060be784830  /Users/rom.iluz/Dev/memongo/.ddd/reports/runs/ws11-real-e2e-v2.log

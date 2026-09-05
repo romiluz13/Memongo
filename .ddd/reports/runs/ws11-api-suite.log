@@ -1,0 +1,12 @@
+COMMAND: cd apps/api && bun vitest run (final-state WS-11 API companion)
+ [32m✓[39m src/contract-conformance.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m dist/contract-conformance.test.js [2m([22m[2m9 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m18 passed[39m[22m[90m (18)[39m
+[2m      Tests [22m [1m[32m508 passed[39m[22m[90m (508)[39m
+[2m   Start at [22m 18:42:40
+[2m   Duration [22m 3.40s[2m (transform 7.03s, setup 0ms, import 10.53s, tests 7.81s, environment 2ms)[22m
+
+SUITE_EXIT: 0
+DONE_EXIT=0
+c21972f941cf14fd7d401fd50fcb8fa8c6946fdbefcd03c88b6eeaf269de7c0d  /Users/rom.iluz/Dev/memongo/.ddd/reports/runs/ws11-api-suite.log

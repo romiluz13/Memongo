@@ -9,6 +9,7 @@ import { deleteAllForAgent as runTenantErasure } from "./mongodb-erasure.js"
 import type { TenantErasureReceipt } from "./mongodb-erasure.js"
 import { getLaneCoverage } from "./mongodb-lane-coverage.js"
 import { getDailyCostSums, type DailyCostSum } from "./mongodb-cost-ledger.js"
+import { resolveMemoryJobBacklogAlertThreshold } from "./mongodb-manager-jobs.js"
 import type { MongoDBManagerHost } from "./mongodb-manager-host.js"
 import {
 	promoteQuarantined as runPromoteQuarantined,
@@ -156,6 +157,18 @@ export type V2Status = {
 		running: number
 		failed: number
 		deadLettered: number
+		/**
+		 * WS-11 change 3 (09-report R6): backlog alert verdict. `depth` is
+		 * pending + running (work admitted but not finished); `triggered` is
+		 * depth above the configured threshold, so "how far behind are we"
+		 * is answerable from status alone without reading the drain's
+		 * memory-job-backlog telemetry.
+		 */
+		backlogAlert: {
+			depth: number
+			threshold: number
+			triggered: boolean
+		}
 	}
 	/**
 	 * C-017: per-tenant spend ledger sums over the trailing window. `daily`
@@ -427,6 +440,10 @@ export async function getV2Status(
 		const memoryJobsFailed = val(settled[25], 0)
 		const memoryJobsDeadLettered = val(settled[26], 0)
 		const costDailySums = val(settled[27], [] as DailyCostSum[])
+		// WS-11 change 3: backlog-depth gauge inputs (pending + running is
+		// admitted-but-unfinished work; the threshold is the alert verdict).
+		const memoryJobsBacklogDepth = memoryJobsPending + memoryJobsRunning
+		const memoryJobsBacklogThreshold = resolveMemoryJobBacklogAlertThreshold()
 		const failedChecks = settled.flatMap((result, index) =>
 			result.status === "rejected" ? [V2_STATUS_CHECK_LABELS[index]] : [],
 		)
@@ -552,6 +569,13 @@ export async function getV2Status(
 				running: memoryJobsRunning,
 				failed: memoryJobsFailed,
 				deadLettered: memoryJobsDeadLettered,
+				// WS-11 change 3: the backlog gauge's pull surface — verdict is
+				// computable from the counts already fetched, no extra round trip.
+				backlogAlert: {
+					depth: memoryJobsBacklogDepth,
+					threshold: memoryJobsBacklogThreshold,
+					triggered: memoryJobsBacklogDepth > memoryJobsBacklogThreshold,
+				},
 			},
 			costLedger: {
 				windowDays: 30,

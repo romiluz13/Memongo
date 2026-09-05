@@ -8,6 +8,7 @@ import type { OperationRunContext } from "./mongodb-operation-accounting.js"
 import { normalizeSearchResults } from "./mongodb-hybrid.js"
 import type { SearchMethod } from "./mongodb-hybrid.js"
 import { searchKB } from "./mongodb-kb-search.js"
+import { tryConsumeSearchAdmission } from "./mongodb-search-admission.js"
 import { recordRecallTrace } from "./mongodb-recall-traces.js"
 import { checkCache, writeCache } from "./mongodb-query-cache.js"
 import { runSingleFlight } from "./mongodb-single-flight.js"
@@ -742,16 +743,22 @@ export class MongoDBManagerSearchOps {
 				},
 			)
 
-			// Emit search telemetry (fire-and-forget)
-			emitTelemetry(this.host.db, this.host.prefix, {
-				meta: { agentId: this.host.agentId, operation: "search" },
-				durationMs: Date.now() - searchStart,
-				ok: v2.results.length > 0,
-				pathUsed: v2.metadata.pathsExecuted.join(","),
-				resultCount: v2.results.length,
-				topScore: v2.results[0]?.score ?? 0,
-				fusionMethod: mongoCfg.fusionMethod,
-			})
+			// Emit search telemetry (fire-and-forget). WS-11: a throttled
+			// request already emitted its distinct throttled:true doc inside
+			// searchV2 — a second ok:false "search" doc here would blur
+			// "overloaded" back into "ran and found nothing", the exact
+			// confusion the throttle marker exists to prevent.
+			if (!v2.metadata.throttled) {
+				emitTelemetry(this.host.db, this.host.prefix, {
+					meta: { agentId: this.host.agentId, operation: "search" },
+					durationMs: Date.now() - searchStart,
+					ok: v2.results.length > 0,
+					pathUsed: v2.metadata.pathsExecuted.join(","),
+					resultCount: v2.results.length,
+					topScore: v2.results[0]?.score ?? 0,
+					fusionMethod: mongoCfg.fusionMethod,
+				})
+			}
 			// C-017: bill query-time server-side embeds from the search budget
 			// snapshot — one fire-and-forget ledger increment per request
 			// (zero when the budget was untouched).
@@ -837,6 +844,20 @@ export class MongoDBManagerSearchOps {
 				return v2.results
 			}
 
+			// WS-11 change 2: a throttled response is NOT a retrieval verdict.
+			// No recall trace (nothing was retrieved), no benchmark-strict throw
+			// (the corpus is not at fault), no legacy re-run (it would pay for
+			// a second admission token and blur the throttle outcome). The
+			// empty results carry the throttle marker in metadata; WS-12
+			// reports it upstream as throttling, never as "no memories".
+			if (v2.metadata.throttled) {
+				this.host.setLastSearchMode("v2:throttled", {
+					...v2Details,
+					throttled: v2.metadata.throttled,
+				})
+				return []
+			}
+
 			void recordRecallTrace({
 				db: this.host.db,
 				prefix: this.host.prefix,
@@ -866,6 +887,18 @@ export class MongoDBManagerSearchOps {
 			// retrieval via memory.mongodb.legacySearchFallback).
 			if (!mongoCfg.legacySearchFallback) {
 				this.host.setLastSearchMode("v2:empty", v2Details)
+				return []
+			}
+			// WS-11: the legacy re-run burns another server-side autoEmbed
+			// input outside the v2 lanes, so it pays its own admission token.
+			// A dry bucket leaves the v2 empty answer standing — re-running
+			// into the same denial would blur the throttle outcome.
+			const legacyAdmission = tryConsumeSearchAdmission()
+			if (!legacyAdmission.ok) {
+				this.host.setLastSearchMode("v2:empty->legacy-throttled", {
+					...v2Details,
+					retryAfterMs: legacyAdmission.retryAfterMs,
+				})
 				return []
 			}
 			const fallbackResults = await this.host.legacySearch(cleaned, opts)
@@ -1147,6 +1180,25 @@ export class MongoDBManagerSearchOps {
 		})
 		response.metadata.resolvedSearchConfig = resolvedSearchConfig
 
+		// WS-11: a throttled detailed search is not a retrieval verdict. The
+		// denied pass already emitted its own throttle telemetry, the recall
+		// trace has nothing to record (no lanes ran), and a cache write or
+		// legacy re-run would pay a second admission token and blur the
+		// outcome — same policy as the search() throttle branch below.
+		if (response.metadata.throttled) {
+			this.host.setLastSearchMode("v2:throttled", {
+				classification: response.metadata.classification,
+				sourceOrder: response.metadata.sourceOrder,
+				resolvedSearchConfig: response.metadata.resolvedSearchConfig,
+				constraintsApplied: response.metadata.constraintsApplied,
+				pathsExecuted: response.metadata.pathsExecuted,
+				resultsByPath: response.metadata.resultsByPath,
+				evidenceCoverage: response.metadata.evidenceCoverage,
+				throttled: response.metadata.throttled,
+			})
+			return response
+		}
+
 		emitTelemetry(this.host.db, this.host.prefix, {
 			meta: { agentId: this.host.agentId, operation: "search" },
 			durationMs: Date.now() - searchStart,
@@ -1234,6 +1286,16 @@ export class MongoDBManagerSearchOps {
 			this.host.setLastSearchMode("v2:empty", v2Details)
 			return response
 		}
+		// WS-11: same admission policy as the search() legacy site — the
+		// re-run pays its own token or it does not run.
+		const legacyAdmission = tryConsumeSearchAdmission()
+		if (!legacyAdmission.ok) {
+			this.host.setLastSearchMode("v2:empty->legacy-throttled", {
+				...v2Details,
+				retryAfterMs: legacyAdmission.retryAfterMs,
+			})
+			return response
+		}
 		const fallbackResults = await this.host.legacySearch(normalized.query, {
 			maxResults: normalized.maxResults,
 			minScore: normalized.minScore,
@@ -1279,6 +1341,29 @@ export class MongoDBManagerSearchOps {
 		// Direct KB search uses MongoDB query-time automatic embeddings.
 		const queryVector: number[] | null = null
 
+		// WS-11 (09-report R5/U1): the KB vector lane burns a server-side
+		// autoEmbed query input on the same Atlas tier searchV2 draws from,
+		// so direct KB search draws from the same process-level admission
+		// bucket. Denial drops the vector lane — the text lane still answers,
+		// so a throttle degrades ranking quality instead of emptying the
+		// result set, and the marker records why.
+		const kbVectorLane =
+			mongoCfg.embeddingMode === "automated" &&
+			this.host.capabilities.vectorSearch
+		const kbAdmission = kbVectorLane ? tryConsumeSearchAdmission() : null
+		if (kbAdmission && !kbAdmission.ok) {
+			emitTelemetry(this.host.db, this.host.prefix, {
+				meta: { agentId: this.host.agentId, operation: "search" },
+				durationMs: 0,
+				ok: false,
+				throttled: true,
+				resultCount: 0,
+			})
+			this.host.setLastSearchMode("kb:throttled", {
+				retryAfterMs: kbAdmission.retryAfterMs,
+			})
+		}
+
 		return searchKB(
 			kbChunksCollection(this.host.db, this.host.prefix),
 			cleaned,
@@ -1300,6 +1385,9 @@ export class MongoDBManagerSearchOps {
 				// else the resolved config value (env/config, default rankFusion).
 				fusionMethod: opts?.fusionMethod ?? mongoCfg.fusionMethod,
 				kbDocs: kbCollection(this.host.db, this.host.prefix),
+				...(kbAdmission && !kbAdmission.ok
+					? { skipVectorLane: true }
+					: {}),
 			},
 		)
 	}

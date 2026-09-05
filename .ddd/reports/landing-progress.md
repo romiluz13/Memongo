@@ -612,3 +612,107 @@ workstreams WS-11/12/14/15/16/18 plus the C-040 quartet).
   Collections (no db/prefix handle), so they are intentionally outside
   the production ledger surface — counting them would require a
   production code path they do not have.
+
+- WS-11/C-018 landing (admission control and backlog visibility): all
+  changes landed as one evidence chain from spend source to operator
+  surface, with a bypass audit closing the wrapper-layer gaps the green
+  suite hid. (1) Token bucket: new mongodb-search-admission.ts module —
+  a process-level bucket sized to deployment rate limits
+  (MEMONGO_SEARCH_ADMISSION_RPM default 20 sustained /
+  MEMONGO_SEARCH_ADMISSION_BURST default 240; RPM=0 as the documented
+  dedicated-tier escape; invalid values fall back to safe defaults;
+  lazy elapsed-time refill with no timers, refill capped at burst;
+  denial carries a positive retryAfterMs derived from the refill rate;
+  monotone throttled counter; limits/depth/denial-count snapshot;
+  11-test battery mongodb-search-admission.test.ts). The searchV2 gate
+  charges top-level entries only — the recursive hybrid backstop shares
+  the parent admission AND budget, so re-entry never double-charges —
+  and returns a distinct throttled outcome: empty results plus the
+  throttled marker and retry hint, zero database touches on denial (no
+  lanes, no coverage read), admitted searches never throttled (3-test
+  battery mongodb-search-v2-admission.test.ts). (2) Backlog gauge:
+  resolveMemoryJobBacklogAlertThreshold (default 500, override honored,
+  invalid rejected to default), countPendingMemoryJobs (agent +
+  jobType filter, degrades to 0 so the gauge cannot break the drain),
+  and resolveDrainConcurrency — base concurrency at or below the
+  threshold, overflow-ratio scaling above it, 16-worker hard cap,
+  never below base, zero-threshold misconfiguration falls back to base
+  (9-test battery mongodb-manager-jobs-backlog.test.ts); operator
+  surface getV2Status memoryJobs.backlogAlert {depth: pending +
+  running, threshold, triggered} (admin battery extended in place).
+  (3) Bounded writeQueue: resolveWriteQueueMaxDepth (default 256,
+  override/validation), enqueueBoundedWrite fast-fails at the cap with
+  the typed WriteQueueFullError and a write-queue-saturation telemetry
+  emit, depth drains back to zero and re-admits, a rejected write still
+  frees its depth slot, strict serial ordering is preserved under the
+  cap, and a failed write chain does not poison the next write (7-test
+  battery mongodb-manager-write-queue.test.ts); the batch path uses
+  the same bounded enqueue. (4) Bypass-audit fixes A-E (the audit
+  mutated each new gate off and re-ran its battery; 4 gaps where the
+  wrapper layers could still spend or erase a denial): executor
+  throttle marker + retry hint propagate into the merged pass metadata,
+  the pass loop ends on a throttled first pass, and a healthy empty
+  search is never marked throttled (3 tests); manager search()/
+  searchDetailed() short-circuit before cache or legacy, opted-in
+  legacy re-runs pay their own admission token, and searchKB() drops
+  the vector lane on denial with a kb:throttled marker while keeping it
+  when granted (7 tests); recallConversation takes one token per
+  querying recall, degrades to the text lane with the marker, and an
+  admitted recall runs the hybrid lane marker-free (2 tests); the
+  kb-search module honors skipVectorLane inside canVector so a denied
+  KB search cannot spend the vector lane (2 tests). (5) Latency
+  composition pin (09-report U2): the static worst-case arithmetic —
+  1.5s semantic probe + 10s maxTimeMS aggregate + 2s rerank timeout =
+  13.5s — is asserted in mongodb-search-latency-composition.test.ts (3
+  tests) so any stage-bound growth without re-deriving the worst-case
+  budget goes red; shared artifact with WS-16, which lands the live
+  tail-composition path and derives the rerank timeout from the
+  remaining budget. Refutation: refutation-c-018.yaml — 7 vacuity
+  mutations, each RED against its battery (searchV2 gate off RED 2/3,
+  executor marker dropped RED 2/58, manager search branch RED 1/43,
+  searchDetailed branch RED 1/43, recall gate RED 1/31, both legacy
+  gates RED 2/43, kb canVector ignoring skipVectorLane RED 1/17), each
+  restored byte-identical (cmp exit 0), post-restore control 152/152
+  green across the five admission-surface files with zero mutation
+  residue; independence is recorded metadata (agent-applied exact
+  replacements), not an independent tool. Suite state: engine 143
+  files / 2492 passed / 10 skipped / 0 failed (2502 total), check-types
+  clean, touched-file Biome clean after removing one unused
+  WORKER_CONCURRENCY_ENV constant (all 20 remaining src findings
+  pre-exist at HEAD, proven via a detached-HEAD worktree lint baseline
+  run with the repo-pinned Biome). Artifacts: V-093 (searchV2 gate +
+  boundary batteries) / V-094 (backlog gauge) / V-095 (bounded
+  writeQueue) anchored to ws11-engine-suite.log (sha256:538f37d5943e
+  1de5fb172c575a9b852ad0f350a0ca1e27fab138cfdbc6dbcabc); C-018
+  validations filled and constructs widened 3 -> 8 (mongodb-search-
+  admission.ts, mongodb-search-executor.ts, mongodb-manager-search.ts,
+  mongodb-conversation-recall.ts, mongodb-kb-search.ts added so the
+  declared scope covers every surface the bypass audit found ungated);
+  TR-048/049/050 patched and TR-095..099 added; sweep-ws11.json 26
+  violations (was 31; the 5 C-018 violations cleared —
+  claim-without-validation, 3x trace-without-validation,
+  t3-without-refutation; zero new). Companion logs at final state:
+  ws11-api-suite.log 508/508 (sha256:c21972f941cf14fd7d401fd50fcb8fa8c
+  6946fdbefcd03c88b6eeaf269de7c0d), ws11-mongodb-e2e.log 43/43
+  (sha256:00a33fe00111102e52a83489dd9048609f8d6ea9e0eb584fa694e7eca38
+  97a8f), ws11-real-e2e-v2.log 81/81 (sha256:537e254edbcd9c26734dc127
+  00fbeb5f8d3454c2b093620b88ee4060be784830). Methodology lessons: (1) green is
+  not gated — the bypass audit (mutate each new gate off, re-run its
+  battery) found 4 wrapper-layer gaps the green suite hid, and is now
+  the standard landing gate for control-flow MUSTs; (2) the verify
+  container's atlas-local runner has a telemetry-goroutine panic that
+  kills it under full-suite parallel load — DO_NOT_TRACK=true at
+  container creation eliminates it, and two red suite runs were
+  environmental, not code (also: never overwrite the only green
+  evidence log before its replacement is green — capture to a temp
+  path first); (3) the ddd sweep CLI is not installed in this
+  environment, so the sweep was recomputed by sweep-ws11-compute.py
+  applying the ws10 rules verbatim — sweep-ws11.json differs from
+  sweep-ws10.json by exactly the five C-018 resolutions and nothing
+  else; (4) validation notes must count the actual battery — the first
+  draft said 10/12/8 tests where the files hold 11/9/7; (5) an
+  unscoped lint claim is unproven until baselined — bunx in a fresh
+  worktree silently downloads a different Biome version, so the
+  HEAD-worktree baseline needed the repo-pinned binary via a
+  node_modules symlink to make "no new findings" a diff, not an
+  assertion.

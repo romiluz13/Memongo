@@ -1467,3 +1467,107 @@ describe("applyMMRReranking", () => {
 		expect(ids.size).toBe(4)
 	})
 })
+
+// ---------------------------------------------------------------------------
+// WS-11: admission-throttled passes through the executor
+// ---------------------------------------------------------------------------
+
+describe("executeMongoSearchPlan throttled-pass propagation (WS-11)", () => {
+	const allPaths = new Set([
+		"active-critical",
+		"structured",
+		"raw-window",
+		"graph",
+		"hybrid",
+		"kb",
+		"episodic",
+		"procedural",
+	] as const)
+
+	function makeThrottledPass() {
+		return {
+			results: [] as MemorySearchResult[],
+			metadata: {
+				plan: {
+					paths: ["hybrid"],
+					confidence: "low" as const,
+					reasoning: "throttled before lanes ran",
+				},
+				pathsExecuted: [] as string[],
+				resultsByPath: {} as Record<string, number>,
+				reranked: false,
+				queryRewritten: false,
+				throttled: { retryAfterMs: 3000 },
+			},
+		}
+	}
+
+	it("surfaces the throttle marker and retry hint in the merged response metadata", async () => {
+		const response = await executeMongoSearchPlan({
+			request: {
+				query: "what is Bloom",
+				searchMode: "direct",
+			},
+			availablePaths: allPaths,
+			executePass: vi.fn().mockResolvedValue(makeThrottledPass()),
+		})
+
+		// The executor layer must not drop the admission outcome: a denied
+		// pass stays distinguishable from a healthy empty one at the
+		// searchDetailed boundary.
+		expect(response.results).toEqual([])
+		expect(response.metadata.throttled).toEqual({ retryAfterMs: 3000 })
+		expect(response.metadata.pathsExecuted).toEqual([])
+	})
+
+	it("ends the pass loop on a throttled first pass — no follow-up attempts", async () => {
+		const secondPass = {
+			results: [makeResult({ canonicalId: "late" })],
+			metadata: {
+				plan: {
+					paths: ["kb"],
+					confidence: "medium" as const,
+					reasoning: "follow-up that must never run",
+				},
+				pathsExecuted: ["kb"],
+				resultsByPath: { kb: 1 },
+				reranked: false,
+				queryRewritten: false,
+			},
+		}
+		const executePass = vi
+			.fn()
+			.mockResolvedValueOnce(makeThrottledPass())
+			.mockResolvedValueOnce(secondPass)
+
+		const response = await executeMongoSearchPlan({
+			request: {
+				query: "eval tools family",
+				searchMode: "agentic",
+				maxPasses: 3,
+			},
+			availablePaths: allPaths,
+			executePass,
+		})
+
+		// A throttled pass retrieved nothing by design; follow-up passes
+		// would only stack more denied attempts on the same dry bucket.
+		expect(executePass).toHaveBeenCalledTimes(1)
+		expect(response.metadata.throttled).toEqual({ retryAfterMs: 3000 })
+		expect(response.results).toEqual([])
+	})
+
+	it("never marks a healthy empty search as throttled", async () => {
+		const response = await executeMongoSearchPlan({
+			request: {
+				query: "what is Bloom",
+				searchMode: "direct",
+			},
+			availablePaths: allPaths,
+			executePass: makeMockExecutePass([[]]),
+		})
+
+		expect(response.results).toEqual([])
+		expect(response.metadata.throttled).toBeUndefined()
+	})
+})

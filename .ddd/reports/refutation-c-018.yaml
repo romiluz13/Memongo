@@ -1,0 +1,192 @@
+# Refutation report for T3 claim C-018
+# ("Search and autoEmbed concurrency MUST have admission control with a token
+# bucket sized to the deployment rate limits, budget exhaustion surfaced as a
+# distinct throttling outcome, and a backlog-depth gauge on the job queue with
+# an alert threshold.")
+claim_id: C-018
+verdict: sustained
+independence_verified: false
+refuter_id: "factory-droid primary agent, WS-11 implementer (bypass audit, fixes, and battery all in-session; NOT an independent instance — treat this as a self-refutation battery pending independent round-2 verification)"
+implementer_id: "factory-droid primary agent, WS-11 implementer"
+refuted_rounds: 1
+sustained_rounds: 2
+attempt_log_dir: .ddd/reports/runs/
+
+attempts:
+  - id: attempt-1-search-v2-gate
+    description: >
+      Force the searchV2 top-level admission gate off (mutation:
+      `if (!admission.ok)` -> `if (false && !admission.ok)`), then run
+      src/mongodb-search-v2-admission.test.ts.
+    round_1_outcome: caught
+    round_1_detail: >
+      2/3 tests fail: "denial returns empty results with the throttled marker
+      and retry hint" and "denial never touches the database (no lanes, no
+      coverage read)" — the denial path ran lanes and lost the marker.
+      This gate existed from the first WS-11 implementation.
+    round_2_outcome: caught
+    round_2_detail: >
+      Same mutation after the A-E fixes: identical RED (2/3), restored
+      byte-identically (CMP_EXIT 0). The distinct-outcome contract holds only
+      while the gate is live.
+    evidence: refutation-c-018-m1-search-v2-gate-vacuity.log
+
+  - id: attempt-2-executor-marker
+    description: >
+      Drop the executor's throttle-marker propagation in
+      mergePassMetadata (mutation: `const throttled = ...find(...)` ->
+      `const throttled = undefined`), then run
+      src/mongodb-search-executor.test.ts.
+    round_1_outcome: refuted
+    round_1_detail: >
+      Bypass audit finding: as first implemented, the executor stripped the
+      per-pass `throttled` metadata when merging passes, so a denied v2 pass
+      reached the manager as a plain empty result — admission worked but the
+      distinct outcome vanished one layer up.
+    round_2_outcome: caught
+    round_2_detail: >
+      After fix A (marker propagation + pass-loop break), the same mutation
+      REDs 2/58 ("surfaces the throttle marker and retry hint in the merged
+      response metadata", "ends the pass loop on a throttled first pass — no
+      follow-up attempts"); the healthy-empty control test stays green,
+      proving the tests pin the marker, not emptiness. CMP_EXIT 0 on restore.
+    evidence: refutation-c-018-m2-executor-marker-vacuity.log
+
+  - id: attempt-3-manager-search-branch
+    description: >
+      Force the manager search() throttle branch off (mutation:
+      `if (v2.metadata.throttled)` -> `if (false && v2.metadata.throttled)`),
+      then run src/mongodb-manager-search.part2.test.ts.
+    round_1_outcome: caught
+    round_1_detail: >
+      1/43 fails: "search() marks v2:throttled and skips the opted-in legacy
+      re-run on denial" — lastSearchMode degrades to
+      "v2:empty->legacy-throttled" and the branch stops short-circuiting.
+      This branch existed from the first WS-11 implementation.
+    round_2_outcome: caught
+    round_2_detail: >
+      Same RED (1/43) post-fix; restored byte-identically (CMP_EXIT 0).
+    evidence: refutation-c-018-m3-manager-search-branch-vacuity.log
+
+  - id: attempt-4-manager-searchdetailed-branch
+    description: >
+      Force the manager searchDetailed() throttle branch off (mutation:
+      `if (response.metadata.throttled)` ->
+      `if (false && response.metadata.throttled)`), then run
+      src/mongodb-manager-search.part2.test.ts.
+    round_1_outcome: refuted
+    round_1_detail: >
+      Bypass audit finding: as first implemented, searchDetailed() had no
+      throttle short-circuit — a denied v2 pass fell through to telemetry, a
+      recall-trace write, a cache write, and the legacy re-run, paying a
+      second admission token and blurring the throttle outcome.
+    round_2_outcome: caught
+    round_2_detail: >
+      After fix B (short-circuit before cache/trace/legacy), the same
+      mutation REDs 1/43 ("searchDetailed() short-circuits a throttled
+      response before cache or legacy": mode becomes
+      "v2:empty->legacy-throttled" instead of "v2:throttled"). CMP_EXIT 0 on
+      restore.
+    evidence: refutation-c-018-m4-manager-searchdetailed-branch-vacuity.log
+
+  - id: attempt-5-recall-gate
+    description: >
+      Force the recallConversation admission gate off (mutation:
+      `admissionDenied = admission != null && !admission.ok` ->
+      `admissionDenied = false`), then run
+      src/mongodb-conversation-recall.test.ts.
+    round_1_outcome: refuted
+    round_1_detail: >
+      Bypass audit finding: as first implemented, recallConversation drew no
+      admission token at all — a querying recall burned up to two query
+      embeddings (hybrid + semantic fallback) from the same account-wide
+      Atlas tier the gate was built to protect, with no marker.
+    round_2_outcome: caught
+    round_2_detail: >
+      After fix C (one token per querying recall, denial degrades to the
+      text-only standard lane with marker), the same mutation REDs 1/31
+      ("denial never runs a vector stage and degrades to the text lane with
+      the throttled marker"): the aggregate mock fires twice with
+      $rankFusion-hybrid and $vectorSearch fallback pipelines — exactly the
+      ungated burn. CMP_EXIT 0 on restore.
+    evidence: refutation-c-018-m5-recall-gate-vacuity.log
+
+  - id: attempt-6-legacy-gates
+    description: >
+      Force BOTH legacy re-run admission gates off (mutation:
+      `if (!legacyAdmission.ok)` -> `if (false)` at the search() and
+      searchDetailed() sites), then run
+      src/mongodb-manager-search.part2.test.ts.
+    round_1_outcome: refuted
+    round_1_detail: >
+      Bypass audit finding: as first implemented, the opted-in
+      legacySearchFallback re-run drew no admission token — under throttle it
+      re-ran legacy search (its own $text/embed spend) against the same dry
+      bucket and surfaced as a plain "v2->legacy-empty" answer.
+    round_2_outcome: caught
+    round_2_detail: >
+      After fix E (both legacy sites pay their own token or do not run), the
+      same mutation REDs 2/43 ("search() makes the opted-in legacy re-run pay
+      its own admission token", "searchDetailed() makes the opted-in legacy
+      re-run pay its own admission token"): the aggregate mock fires and both
+      modes degrade to "v2->legacy-empty". CMP_EXIT 0 on restore.
+    evidence: refutation-c-018-m6-legacy-gates-vacuity.log
+
+  - id: attempt-7-kb-skip-vector
+    description: >
+      Unclaimed construct (packages/memory-engine/src/mongodb-kb-search.ts):
+      make the KB search ignore its skipVectorLane degradation flag
+      (mutation: drop `opts.skipVectorLane !== true &&` from canVector), then
+      run src/mongodb-kb-search.test.ts.
+    round_1_outcome: refuted
+    round_1_detail: >
+      Bypass audit finding: the module-level half of fix D had no
+      degradation flag — every KB search always spent the vector lane, so
+      the manager-level kb:throttled marker could never actually remove the
+      embed burn.
+    round_2_outcome: caught
+    round_2_detail: >
+      After fix D (manager searchKB() gate + skipVectorLane plumbed into
+      canVector), the same mutation REDs 1/17 ("skipVectorLane runs the text
+      lane without any $vectorSearch stage": a $vectorSearch stage appears in
+      the captured pipeline). CMP_EXIT 0 on restore.
+    evidence: refutation-c-018-m7-kb-skip-vector-vacuity.log
+
+fix_applied_between_rounds: >
+  Round 1 (bypass audit) refuted the as-first-implemented defense on four
+  surfaces: the executor dropped the per-pass throttle marker (fix A:
+  marker propagation into merged metadata + pass-loop break on a throttled
+  pass), searchDetailed() lacked the throttle short-circuit (fix B: return
+  before telemetry, recall trace, cache write, and legacy re-run),
+  recallConversation was entirely ungated (fix C: one token per querying
+  recall, denial degrades to the text-only standard lane with the throttled
+  marker), and both legacySearchFallback re-runs plus the KB vector lane
+  were ungated (fixes D and E: searchKB() admission gate with a
+  skipVectorLane degradation honored inside mongodb-kb-search.ts canVector,
+  and both legacy sites pay their own admission token or do not run). Four
+  symmetric manager-boundary tests plus recall/executor/KB tests landed with
+  the fixes. Round 2 re-ran all seven mutations against the fixed tree:
+  every previously refuted surface now REDs under mutation and GREENs on
+  byte-identical restore.
+
+conclusion: >
+  Round 1 refuted four of seven surfaces (executor marker, searchDetailed
+  short-circuit, recall gate, legacy/KB gates): the claim's defense held at
+  the searchV2 boundary but was bypassable one layer up at every wrapper and
+  sibling consumer. After fixes A-E and their tests, round 2 re-ran the same
+  seven mutations and all were caught with the exact expected violations
+  (10 distinct RED assertions across 7 mutations; post-restore control:
+  152/152 green on the five admission-surface files, full engine suite
+  2492 passed / 10 skipped / 0 failed, zero VACUITY-MUTATION residue).
+  No remaining path was found to an unmarked empty answer, a double-spent
+  token, or an ungated vector lane. Verdict: sustained. Caveat: this battery
+  was executed by the implementing instance (independence_verified: false);
+  an independent round-2 refuter should re-run the seven mutations from the
+  logs before treating the sustain as final.
+
+tree_hygiene: >
+  All seven mutations were restored via cp from pre-mutation backups and
+  verified byte-identical (cmp exit 0 for every file; BEFORE_SHA256 ==
+  AFTER_SHA256 in each log). Post-restore control log:
+  refutation-c-018-post-restore-control.log (152/152 green, rg residue
+  scan empty). No git-mutating commands were run.

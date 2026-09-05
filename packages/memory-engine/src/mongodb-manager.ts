@@ -517,6 +517,8 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 	private fileCount = 0
 	private chunkCount = 0
 	private writeQueue: Promise<void> = Promise.resolve()
+	/** WS-11: depth of {@link writeQueue} — backs the writeQueue depth cap. */
+	private writeQueueDepth = 0
 	private derivationSchedulingQueue: Promise<void> = Promise.resolve()
 	private derivationQueue: Promise<void> = Promise.resolve()
 	private readonly memoryJobWorkerId = `${process.pid}:${randomUUID()}`

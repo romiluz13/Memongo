@@ -21,6 +21,8 @@ export type TelemetryOperation =
 	| "query-rewrite"
 	| "entity-extraction"
 	| "memory-job-dead-letter"
+	| "memory-job-backlog"
+	| "write-queue-saturation"
 
 export type TelemetryMeta = {
 	agentId: string
@@ -47,6 +49,24 @@ export type TelemetryDocument = {
 	rewriteMethod?: string
 	extractionMethod?: string
 	entitiesExtracted?: number
+	/**
+	 * WS-11: true when the search was DENIED by process-level admission
+	 * control before any lane ran (see mongodb-search-admission.ts). A
+	 * throttled doc is ok:false with this marker set, so window aggregates
+	 * can separate "overloaded" from "ran and found nothing".
+	 */
+	throttled?: boolean
+	/**
+	 * WS-11: retry hint (ms) carried on throttle and saturation docs where
+	 * one is computable.
+	 */
+	retryAfterMs?: number
+	/**
+	 * WS-11: queue/gauge context on backlog and saturation docs (depth at
+	 * observation time, threshold the gauge tripped at).
+	 */
+	depth?: number
+	threshold?: number
 }
 
 // ---------------------------------------------------------------------------

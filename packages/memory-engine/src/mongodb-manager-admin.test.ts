@@ -8,6 +8,7 @@ import {
 	getV2Status,
 } from "./mongodb-manager.js"
 import { MongoDBManagerAdminOps } from "./mongodb-manager-admin.js"
+import { resolveMemoryJobBacklogAlertThreshold } from "./mongodb-manager-jobs.js"
 import type { MongoDBManagerHost } from "./mongodb-manager-host.js"
 import { mocked, fakeDb, fakePrefix } from "./test-helpers/manager-test-kit.js"
 
@@ -286,12 +287,18 @@ describe("getV2Status", () => {
 
 		// Dead letters are counted separately from failures that still have
 		// attempt budget, so an operator can see them and requeue or drop
-		// them deliberately.
+		// them deliberately. WS-11: backlogAlert derives from these counts —
+		// depth = pending + running (3 here) vs the configured threshold.
 		expect(status.memoryJobs).toEqual({
 			pending: 2,
 			running: 1,
 			failed: 4,
 			deadLettered: 3,
+			backlogAlert: {
+				depth: 3,
+				threshold: resolveMemoryJobBacklogAlertThreshold(),
+				triggered: false,
+			},
 		})
 		// The dead-letter count is its own filter, not a status match.
 		expect(jobsCol.countDocuments).toHaveBeenCalledWith({

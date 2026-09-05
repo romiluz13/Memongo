@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/unbound-method -- Vitest mock method assertions */
 import type { Collection, Db, Document } from "mongodb"
-import { beforeEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 // Malformed scoreDetails handling — capture log.warn for malformed scoreDetails.
 // `vi.mock` is hoisted above `const` declarations at module scope, so we
@@ -20,6 +20,11 @@ vi.mock("./mongodb-schema.js", () => ({
 }))
 
 import { recallConversation } from "./mongodb-conversation-recall.js"
+import {
+	DEFAULT_SEARCH_ADMISSION_BURST,
+	resetSearchAdmissionForTests,
+	tryConsumeSearchAdmission,
+} from "./mongodb-search-admission.js"
 import { eventsCollection } from "./mongodb-schema.js"
 
 function mockDb(): Db {
@@ -1404,5 +1409,121 @@ describe("recallConversation TTL expiration (P4.4.1)", () => {
 					JSON.stringify(stage.$match).includes("expiresAt"),
 			),
 		).toBe(true)
+	})
+})
+
+// ---------------------------------------------------------------------------
+// WS-11: recallConversation draws from the process-level search admission
+// bucket — its hybrid and semantic stages burn the same server-side
+// autoEmbed tier as searchV2, so an unbounded recall loop is the same
+// aggregate-burn failure (09-report U1). Denial degrades to the text-only
+// standard lane and MARKS the response, never an unexplained empty.
+// ---------------------------------------------------------------------------
+
+describe("recallConversation search admission (WS-11)", () => {
+	const originalTelemetry = process.env.MEMONGO_TELEMETRY_ENABLED
+	const originalRpm = process.env.MEMONGO_SEARCH_ADMISSION_RPM
+
+	beforeEach(() => {
+		vi.clearAllMocks()
+		// The throttle branch emits telemetry; the fake db cannot serve it.
+		// RPM=1 makes the refill rate ~0 for the test's duration so the
+		// denial verdict cannot race the clock.
+		process.env.MEMONGO_TELEMETRY_ENABLED = "false"
+		process.env.MEMONGO_SEARCH_ADMISSION_RPM = "1"
+		resetSearchAdmissionForTests(Date.now())
+	})
+
+	afterEach(() => {
+		if (originalTelemetry === undefined) {
+			delete process.env.MEMONGO_TELEMETRY_ENABLED
+		} else {
+			process.env.MEMONGO_TELEMETRY_ENABLED = originalTelemetry
+		}
+		if (originalRpm === undefined) {
+			delete process.env.MEMONGO_SEARCH_ADMISSION_RPM
+		} else {
+			process.env.MEMONGO_SEARCH_ADMISSION_RPM = originalRpm
+		}
+		resetSearchAdmissionForTests(Date.now())
+	})
+
+	function exhaustBucket(): void {
+		for (let i = 0; i < DEFAULT_SEARCH_ADMISSION_BURST; i++) {
+			tryConsumeSearchAdmission(Date.now())
+		}
+	}
+
+	it("denial never runs a vector stage and degrades to the text lane with the throttled marker", async () => {
+		exhaustBucket()
+		const textDoc = {
+			eventId: "evt-1",
+			sessionId: "sess-1",
+			role: "user",
+			body: "deploy runbook lives in ops wiki",
+			timestamp: new Date("2026-08-01T00:00:00.000Z"),
+		}
+		const col = makeFindCollection({ results: [textDoc] })
+		vi.mocked(eventsCollection).mockReturnValue(col)
+
+		const response = await recallConversation({
+			db: mockDb(),
+			prefix: "mem_",
+			request: { agentId: "agent-1", query: "deploy runbook", limit: 10 },
+			capabilities: {
+				vectorSearch: true,
+				textSearch: true,
+				rankFusion: true,
+				storedSource: false,
+				vectorIndexMethod: false,
+				scoreFusion: false,
+			},
+		})
+
+		// The vector stages (hybrid AND semantic fallback) never fired: no
+		// aggregate pipeline ran at all — only the standard find lane.
+		expect(col.aggregate).not.toHaveBeenCalled()
+		// The text lane still answers, so a throttle degrades ranking, not
+		// completeness.
+		expect(response.results.length).toBeGreaterThan(0)
+		expect(response.metadata.searchMethod).toBe("standard")
+		// The distinct outcome: throttled marker + retry hint, which a
+		// healthy empty recall never carries.
+		expect(response.metadata.throttled).toBeDefined()
+		expect(response.metadata.throttled?.retryAfterMs).toBeGreaterThan(0)
+	})
+
+	it("an admitted querying recall runs the hybrid lane and carries no throttle marker", async () => {
+		resetSearchAdmissionForTests(Date.now())
+		const col = makeAggregateCollection({
+			results: [
+				{
+					eventId: "evt-2",
+					sessionId: "sess-1",
+					role: "user",
+					body: "hybrid hit",
+					timestamp: new Date("2026-08-01T00:00:00.000Z"),
+				},
+			],
+		})
+		vi.mocked(eventsCollection).mockReturnValue(col)
+
+		const response = await recallConversation({
+			db: mockDb(),
+			prefix: "mem_",
+			request: { agentId: "agent-1", query: "deploy runbook", limit: 10 },
+			capabilities: {
+				vectorSearch: true,
+				textSearch: true,
+				rankFusion: true,
+				storedSource: false,
+				vectorIndexMethod: false,
+				scoreFusion: false,
+			},
+		})
+
+		expect(col.aggregate).toHaveBeenCalled()
+		expect(response.metadata.searchMethod).toBe("hybrid")
+		expect(response.metadata.throttled).toBeUndefined()
 	})
 })

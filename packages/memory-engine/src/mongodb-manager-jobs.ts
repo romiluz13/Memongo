@@ -1,4 +1,5 @@
 import path from "node:path"
+import type { Db } from "mongodb"
 import { instrumentProviderCostSpend } from "./mongodb-cost-ledger.js"
 import {
 	instrumentOperationProvider,
@@ -38,7 +39,12 @@ import {
 import { recordProjectionRun } from "./mongodb-ops.js"
 import { invalidateQueryCache } from "./mongodb-query-cache.js"
 import { resolveScopeRef } from "./mongodb-scope.js"
-import { eventsCollection, entitiesCollection } from "./mongodb-schema.js"
+import { emitTelemetry } from "./mongodb-telemetry.js"
+import {
+	eventsCollection,
+	entitiesCollection,
+	memoryJobsCollection,
+} from "./mongodb-schema.js"
 import type { ClaimedMemoryJob } from "./types.js"
 import { createSubsystemLogger } from "@memongo/lib"
 import type { MemoryScope } from "@memongo/lib"
@@ -113,6 +119,89 @@ export function resolveMemoryJobWorkerConcurrency(): number {
 		}
 	}
 	return MEMORY_JOB_WORKER_CONCURRENCY_DEFAULT
+}
+
+// ---------------------------------------------------------------------------
+// WS-11 change 3 (09-report R6/U3): backlog gauge + alert threshold + drain
+// that scales with depth.
+//
+// "How far behind are we" used to be unanswerable from the system itself:
+// jobs were countable (getV2Status) but nothing alarmed on depth, and the
+// drain ran at fixed concurrency no matter how deep the queue was. Now each
+// drain round reads the pending depth once (one countDocuments), emits a
+// memory-job-backlog telemetry doc when depth crosses the alert threshold,
+// and widens the round's claim concurrency within the 16 cap so a burst is
+// drained faster instead of growing silently.
+// ---------------------------------------------------------------------------
+
+/** Alert threshold for pending extraction-job depth (default 500). */
+const MEMORY_JOB_BACKLOG_ALERT_DEFAULT = 500
+
+export function resolveMemoryJobBacklogAlertThreshold(): number {
+	const raw = process.env.MEMONGO_JOB_BACKLOG_ALERT?.trim()
+	if (raw) {
+		const parsed = Number(raw)
+		if (Number.isFinite(parsed) && parsed >= 1) {
+			return Math.floor(parsed)
+		}
+	}
+	return MEMORY_JOB_BACKLOG_ALERT_DEFAULT
+}
+
+/**
+ * Effective per-round claim concurrency. At or below the alert threshold the
+ * configured base applies unchanged; above it, concurrency scales with the
+ * overflow ratio (depth 2x threshold -> 2x base, 3x -> 3x base, ...) and
+ * clamps at the 16-worker hard cap. Pure so the scaling rule is unit-pinned.
+ */
+export function resolveDrainConcurrency(params: {
+	depth: number
+	base: number
+	threshold: number
+	cap?: number
+}): number {
+	const {
+		depth,
+		base,
+		threshold,
+		cap = MEMORY_JOB_WORKER_CONCURRENCY_MAX,
+	} = params
+	if (depth <= threshold || threshold <= 0) {
+		return base
+	}
+	const overflowRatio = depth / threshold
+	const scale = Math.max(1, Math.ceil(overflowRatio))
+	return Math.min(cap, base * scale)
+}
+
+/**
+ * Pending (claimable) job depth for one agent's queue — the gauge's read.
+ * One countDocuments per drain round; an error degrades to 0 so the gauge
+ * can never break the drain itself (observability fails open here).
+ */
+export async function countPendingMemoryJobs(params: {
+	db: Db
+	prefix: string
+	agentId: string
+	jobType?: "extraction" | "consolidation"
+}): Promise<number> {
+	try {
+		const filter: Record<string, unknown> = {
+			agentId: params.agentId,
+			status: "pending",
+		}
+		if (params.jobType) {
+			filter.jobType = params.jobType
+		}
+		return await memoryJobsCollection(params.db, params.prefix).countDocuments(
+			filter,
+		)
+	} catch (err) {
+		log.warn("memory-job backlog count failed", {
+			error: err instanceof Error ? err.message : String(err),
+		})
+		return 0
+	}
 }
 
 const AUTO_CONSOLIDATION_DEFAULT_MS = 6 * 60 * 60 * 1000
@@ -558,7 +647,33 @@ export class MongoDBManagerJobsOps {
 		// the job runner is per-job and unchanged (P2.5). Within a round, LLM
 		// fact extraction is batched per session (one provider call for every
 		// claimed event sharing a session, mirroring enrichSessionsWithLLM).
-		const concurrency = resolveMemoryJobWorkerConcurrency()
+		//
+		// WS-11 change 3: K is backlog-aware. One depth read per drain call
+		// feeds the alert gauge (telemetry when depth crosses the threshold)
+		// and widens the round's concurrency within the 16 cap so a burst
+		// drains faster instead of compounding silently (09-report R6/U3).
+		const backlogThreshold = resolveMemoryJobBacklogAlertThreshold()
+		const backlogDepth = await countPendingMemoryJobs({
+			db: this.host.db,
+			prefix: this.host.prefix,
+			agentId: this.host.agentId,
+			jobType: "extraction",
+		})
+		if (backlogDepth > backlogThreshold) {
+			emitTelemetry(this.host.db, this.host.prefix, {
+				meta: { agentId: this.host.agentId, operation: "memory-job-backlog" },
+				durationMs: 0,
+				ok: false,
+				itemCount: backlogDepth,
+				depth: backlogDepth,
+				threshold: backlogThreshold,
+			})
+		}
+		const concurrency = resolveDrainConcurrency({
+			depth: backlogDepth,
+			base: resolveMemoryJobWorkerConcurrency(),
+			threshold: backlogThreshold,
+		})
 		while (!this.host.memoryJobWorkerStopped) {
 			const jobs: ClaimedMemoryJob[] = []
 			for (let claimed = 0; claimed < concurrency; claimed++) {

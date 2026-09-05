@@ -128,6 +128,12 @@ export interface MongoDBManagerHost {
 	fileCount: number
 	chunkCount: number
 	writeQueue: Promise<void>
+	/**
+	 * WS-11 change 4 (09-report R7/B5): depth of the per-agent write queue —
+	 * enqueued-but-unfinished writes. The counter backs the depth cap and
+	 * fast-fail in mongodb-manager-write.ts (enqueueBoundedWrite).
+	 */
+	writeQueueDepth: number
 	derivationSchedulingQueue: Promise<void>
 	derivationQueue: Promise<void>
 	readonly memoryJobWorkerId: string
