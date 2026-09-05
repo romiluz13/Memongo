@@ -6,13 +6,14 @@
 // right-to-erasure compliance liability.
 //
 // Coverage map (verified against every collection accessor):
-//   - 26 collections keyed by top-level agentId: the 15 scope-bearing
+//   - 27 collections keyed by top-level agentId: the 15 scope-bearing
 //     (chunks, events, structured_mem, structured_mem_revisions, procedures,
 //     procedure_revisions, knowledge_base, kb_chunks, entities, relations,
 //     entity_links, episodes, query_cache, memory_quarantine, memory_evidence)
-//     and the 11 scopeless (files, relevance_runs, relevance_regressions,
+//     and the 12 scopeless (files, relevance_runs, relevance_regressions,
 //     memory_mutations, ingest_runs, projection_runs, recall_traces,
-//     memory_jobs, lane_coverage, consolidation_runs, session_chunks)
+//     memory_jobs, lane_coverage, consolidation_runs, session_chunks,
+//     memory_cost_ledger)
 //   - 2 time-series collections keyed by meta.agentId (memory_telemetry,
 //     access_events) — the time-series metaField is `meta`, so the tenant
 //     identity lives at meta.agentId, not at the top level
@@ -34,6 +35,7 @@ import {
 	accessEventsCollection,
 	chunksCollection,
 	consolidationRunsCollection,
+	costLedgerCollection,
 	entitiesCollection,
 	entityLinksCollection,
 	episodesCollection,
@@ -126,6 +128,7 @@ function agentKeyedCollections(
 		{ collection: "lane_coverage", filter: { agentId } },
 		{ collection: "consolidation_runs", filter: { agentId } },
 		{ collection: "session_chunks", filter: { agentId } },
+		{ collection: "memory_cost_ledger", filter: { agentId } },
 		// Time-series collections: the tenant identity is the metaField value.
 		{ collection: "memory_telemetry", filter: { "meta.agentId": agentId } },
 		{ collection: "access_events", filter: { "meta.agentId": agentId } },
@@ -193,6 +196,8 @@ function accessorFor(
 			return consolidationRunsCollection(db, prefix)
 		case "session_chunks":
 			return sessionChunksCollection(db, prefix)
+		case "memory_cost_ledger":
+			return costLedgerCollection(db, prefix)
 		case "memory_telemetry":
 			return telemetryCollection(db, prefix)
 		case "access_events":

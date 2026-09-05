@@ -1,10 +1,11 @@
 // C-003: tenant-level erasure. deleteAllForAgent deletes every document one
-// agent owns across every collection — 26 top-level agentId-keyed, 2
-// time-series keyed by meta.agentId, and relevance_artifacts (no agentId)
-// via the two-phase relevance_runs runId join — while leaving global `meta`
-// state and OTHER tenants' documents untouched. Failures become per-
-// collection receipts instead of aborting the sweep, and a critical-severity
-// audit record written AFTER the deletes survives as proof-of-erasure.
+// agent owns across every collection — 27 top-level agentId-keyed (including
+// the C-017 spend ledger), 2 time-series keyed by meta.agentId, and
+// relevance_artifacts (no agentId) via the two-phase relevance_runs runId
+// join — while leaving global `meta` state and OTHER tenants' documents
+// untouched. Failures become per-collection receipts instead of aborting the
+// sweep, and a critical-severity audit record written AFTER the deletes
+// survives as proof-of-erasure.
 // The stateful fake IS the database; the facade test wires the real
 // prototype without any module mocks.
 import { describe, expect, it } from "vitest"
@@ -23,7 +24,7 @@ const PREFIX = "test_"
 const AGENT = "agent-1"
 const OTHER = "agent-2"
 
-/** The 26 top-level agentId-keyed collections the sweep must cover. */
+/** The 27 top-level agentId-keyed collections the sweep must cover. */
 const AGENT_KEYED = [
 	"events",
 	"chunks",
@@ -51,6 +52,7 @@ const AGENT_KEYED = [
 	"lane_coverage",
 	"consolidation_runs",
 	"session_chunks",
+	"memory_cost_ledger",
 ] as const
 
 /** Time-series collections where the tenant identity is meta.agentId. */
@@ -127,7 +129,7 @@ describe("deleteAllForAgent — full tenant sweep (C-003)", () => {
 		})
 
 		expect(receipt.status).toBe("complete")
-		// 26 direct + 2 meta-keyed + relevance_artifacts (two-phase).
+		// 27 direct + 2 meta-keyed + relevance_artifacts (two-phase).
 		expect(erasedCollectionNames(receipt)).toEqual(
 			expect.arrayContaining([
 				...AGENT_KEYED,
@@ -135,7 +137,7 @@ describe("deleteAllForAgent — full tenant sweep (C-003)", () => {
 				"relevance_artifacts",
 			]),
 		)
-		expect(receipt.receipts.length).toBe(29)
+		expect(receipt.receipts.length).toBe(30)
 		expect(receipt.receipts.every((entry) => entry.error === undefined)).toBe(
 			true,
 		)
@@ -207,9 +209,9 @@ describe("deleteAllForAgent — full tenant sweep (C-003)", () => {
 		expect(audit.meta).toMatchObject({
 			kind: "tenant-erasure",
 			status: "complete",
-			collections: 29,
-			// 29 swept documents + the agent's pre-existing audit history.
-			deletedTotal: 30,
+			collections: 30,
+			// 30 swept documents + the agent's pre-existing audit history.
+			deletedTotal: 31,
 			failedCollections: [],
 		})
 	})
