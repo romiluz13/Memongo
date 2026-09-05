@@ -308,7 +308,7 @@ mutation_ledger:
   - file: packages/memory-engine/src/backend-config.ts
     sha256_before_mutation: f2a038b943cae4ebf8c4ae0da87ea8e42250136a75385860892a9f48c8f227a4
     sha256_after_restore: f2a038b943cae4ebf8c4ae0da87ea8e42250136a75385860892a9f48c8f227a4
-    outcome: restored_byte_identical (three mutations: b, d, e4, e5 — restored and hash-verified after each)
+    outcome: "restored_byte_identical (three mutations: b, d, e4, e5 — restored and hash-verified after each)"
   - file: packages/memory-engine/src/mongodb-sync.ts
     sha256_before_mutation: b1fe2cf2f14634f3bcba4a6333a326fd21133606ccb603a95dd06d1a9ed1dadd
     sha256_after_restore: b1fe2cf2f14634f3bcba4a6333a326fd21133606ccb603a95dd06d1a9ed1dadd

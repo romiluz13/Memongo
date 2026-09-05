@@ -1,0 +1,61 @@
+MUTATION M2: executor throttle-marker propagation dropped in mergePassMetadata
+old: `(pass) => pass.metadata.throttled != null,`  new: `(pass) => false,` (src/mongodb-search-executor.ts, 1 occurrence — the find can never select a throttled pass, so the merged `throttled` marker is always undefined; equivalent to the round-1/2 mutation `const throttled = undefined`)
+BEFORE_SHA256: 752dee54a64e656b6b1a9f3c1e00301a490e461f8febb44034517514d43da96a
+VITEST_EXIT: 1 (non-zero expected: mutation must be caught)
+--- vitest output (tail 50) ---
+[31m⎯⎯⎯⎯⎯⎯⎯[39m[1m[41m Failed Tests 2 [49m[22m[31m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[41m[1m FAIL [22m[49m src/mongodb-search-executor.test.ts[2m > [22mexecuteMongoSearchPlan throttled-pass propagation (WS-11)[2m > [22msurfaces the throttle marker and retry hint in the merged response metadata
+[31m[1mAssertionError[22m: expected undefined to deeply equal { retryAfterMs: 3000 }[39m
+
+[32m- Expected:[39m
+{
+  "retryAfterMs": 3000,
+}
+
+[31m+ Received:[39m
+undefined
+
+[36m [2m❯[22m src/mongodb-search-executor.test.ts:[2m1519:39[22m[39m
+    [90m1517|[39m   [90m// searchDetailed boundary.[39m
+    [90m1518|[39m   [34mexpect[39m(response[33m.[39mresults)[33m.[39m[34mtoEqual[39m([])
+    [90m1519|[39m   [34mexpect[39m(response[33m.[39mmetadata[33m.[39mthrottled)[33m.[39m[34mtoEqual[39m({ retryAfterMs[33m:[39m [34m3000[39m })
+    [90m   |[39m                                       [31m^[39m
+    [90m1520|[39m   [34mexpect[39m(response[33m.[39mmetadata[33m.[39mpathsExecuted)[33m.[39m[34mtoEqual[39m([])
+    [90m1521|[39m  })
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/2]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/mongodb-search-executor.test.ts[2m > [22mexecuteMongoSearchPlan throttled-pass propagation (WS-11)[2m > [22mends the pass loop on a throttled first pass — no follow-up attempts
+[31m[1mAssertionError[22m: expected undefined to deeply equal { retryAfterMs: 3000 }[39m
+
+[32m- Expected:[39m
+{
+  "retryAfterMs": 3000,
+}
+
+[31m+ Received:[39m
+undefined
+
+[36m [2m❯[22m src/mongodb-search-executor.test.ts:[2m1556:39[22m[39m
+    [90m1554|[39m   [90m// would only stack more denied attempts on the same dry bucket.[39m
+    [90m1555|[39m   [34mexpect[39m(executePass)[33m.[39m[34mtoHaveBeenCalledTimes[39m([34m1[39m)
+    [90m1556|[39m   [34mexpect[39m(response[33m.[39mmetadata[33m.[39mthrottled)[33m.[39m[34mtoEqual[39m({ retryAfterMs[33m:[39m [34m3000[39m })
+    [90m   |[39m                                       [31m^[39m
+    [90m1557|[39m   [34mexpect[39m(response[33m.[39mresults)[33m.[39m[34mtoEqual[39m([])
+    [90m1558|[39m  })
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/2]⎯[22m[39m
+
+
+[2m Test Files [22m [1m[31m1 failed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[31m2 failed[39m[22m[2m | [22m[1m[32m56 passed[39m[22m[90m (58)[39m
+[2m   Start at [22m 00:31:13
+[2m   Duration [22m 273ms[2m (transform 108ms, setup 0ms, import 137ms, tests 22ms, environment 0ms)[22m
+
+--- RED_TESTS ---
+[41m[1m FAIL [22m[49m src/mongodb-search-executor.test.ts[2m > [22mexecuteMongoSearchPlan throttled-pass propagation (WS-11)[2m > [22msurfaces the throttle marker and retry hint in the merged response metadata
+[41m[1m FAIL [22m[49m src/mongodb-search-executor.test.ts[2m > [22mexecuteMongoSearchPlan throttled-pass propagation (WS-11)[2m > [22mends the pass loop on a throttled first pass — no follow-up attempts
+--- restore ---
+CMP_EXIT: 0 (0 = byte-identical)
+AFTER_SHA256: 752dee54a64e656b6b1a9f3c1e00301a490e461f8febb44034517514d43da96a

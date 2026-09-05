@@ -1,0 +1,55 @@
+MUTATION M4: manager searchDetailed() throttle short-circuit forced off
+old: `if (response.metadata.throttled) {`  new: `if (false && response.metadata.throttled) {` (src/mongodb-manager-search.ts, 1 occurrence)
+BEFORE_SHA256: 57802f128f28ddd31e893bbc20b891d56e453401c5351355dc2b4644404e732c
+VITEST_EXIT: 1 (non-zero expected: mutation must be caught)
+--- vitest output (tail 45) ---
+     [32m✓[39m reports hybrid for each server-side fusion path and the JS merge[32m 0[2mms[22m[39m
+     [32m✓[39m uses the latest successful trace when several succeeded[32m 0[2mms[22m[39m
+     [32m✓[39m falls back to the capability guess when nothing succeeded[32m 0[2mms[22m[39m
+     [32m✓[39m records a latency sample for every executed lane, including one that fails[32m 0[2mms[22m[39m
+     [32m✓[39m records a latency sample for each enabled hybrid sub-lane[32m 1[2mms[22m[39m
+     [32m✓[39m search() hands the lane breakdown to the caller's onLaneLatency sink[32m 0[2mms[22m[39m
+     [32m✓[39m search() marks v2:throttled and skips the opted-in legacy re-run on denial[32m 1[2mms[22m[39m
+     [32m✓[39m search() makes the opted-in legacy re-run pay its own admission token[32m 0[2mms[22m[39m
+[31m     [31m×[31m searchDetailed() short-circuits a throttled response before cache or legacy[39m[32m 9[2mms[22m[39m
+     [32m✓[39m searchDetailed() makes the opted-in legacy re-run pay its own admission token[32m 4[2mms[22m[39m
+     [32m✓[39m searchDetailed() keeps a healthy empty answer free of the throttle marker[32m 2[2mms[22m[39m
+     [32m✓[39m searchKB() drops the vector lane on denial and marks kb:throttled[32m 0[2mms[22m[39m
+     [32m✓[39m searchKB() keeps the vector lane when admission grants a token[32m 0[2mms[22m[39m
+     [32m✓[39m search() fires the sink with the denial marker on admission denial[32m 2[2mms[22m[39m
+     [32m✓[39m search() leaves the sink silent on a healthy empty answer[32m 2[2mms[22m[39m
+     [32m✓[39m search() fires the sink with legacy-fallback-skipped when the double-check is denied[32m 1[2mms[22m[39m
+     [32m✓[39m searchKB() fires the sink with vector-lane-skipped on vector-lane denial[32m 1[2mms[22m[39m
+     [32m✓[39m searchKB() leaves the sink silent when admission grants the vector lane[32m 0[2mms[22m[39m
+     [32m✓[39m clamps before the cache probe and emits search-query-clamped telemetry[32m 1[2mms[22m[39m
+     [32m✓[39m leaves telemetry silent for in-range queries[32m 0[2mms[22m[39m
+
+[31m⎯⎯⎯⎯⎯⎯⎯[39m[1m[41m Failed Tests 1 [49m[22m[31m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[41m[1m FAIL [22m[49m src/mongodb-manager-search.part2.test.ts[2m > [22msearch admission envelope at the manager boundary (WS-11)[2m > [22msearchDetailed() short-circuits a throttled response before cache or legacy
+[31m[1mAssertionError[22m: expected 'v2:empty->legacy-throttled' to be 'v2:throttled' // Object.is equality[39m
+
+Expected: [32m"v2:throttled"[39m
+Received: [31m"v2:[7mempty->legacy-[27mthrottled"[39m
+
+[36m [2m❯[22m src/mongodb-manager-search.part2.test.ts:[2m1710:37[22m[39m
+    [90m1708|[39m   [34mexpect[39m([34mmocked[39m(writeCache))[33m.[39mnot[33m.[39m[34mtoHaveBeenCalled[39m()
+    [90m1709|[39m   [34mexpect[39m(aggregate)[33m.[39mnot[33m.[39m[34mtoHaveBeenCalled[39m()
+    [90m1710|[39m   [34mexpect[39m([34mlastSearchModeOf[39m(manager))[33m.[39m[34mtoBe[39m([32m"v2:throttled"[39m)
+    [90m   |[39m                                     [31m^[39m
+    [90m1711|[39m  })
+    [90m1712|[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯[22m[39m
+
+
+[2m Test Files [22m [1m[31m1 failed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[31m1 failed[39m[22m[2m | [22m[1m[32m49 passed[39m[22m[90m (50)[39m
+[2m   Start at [22m 00:31:39
+[2m   Duration [22m 1.36s[2m (transform 772ms, setup 0ms, import 1.07s, tests 105ms, environment 0ms)[22m
+
+--- RED_TESTS ---
+[41m[1m FAIL [22m[49m src/mongodb-manager-search.part2.test.ts[2m > [22msearch admission envelope at the manager boundary (WS-11)[2m > [22msearchDetailed() short-circuits a throttled response before cache or legacy
+--- restore ---
+CMP_EXIT: 0 (0 = byte-identical)
+AFTER_SHA256: 57802f128f28ddd31e893bbc20b891d56e453401c5351355dc2b4644404e732c

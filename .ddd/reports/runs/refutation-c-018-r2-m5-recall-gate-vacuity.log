@@ -1,0 +1,55 @@
+MUTATION M5: recallConversation admission gate forced off
+old: `const admissionDenied = admission != null && !admission.ok`  new: `const admissionDenied = false` (src/mongodb-conversation-recall.ts, 1 occurrence — a querying recall no longer degrades on denial)
+BEFORE_SHA256: 54cbd76ecbf3d6fe7295161ccef83cdcc702205c97f24108966e69b7ec8ed044
+VITEST_EXIT: 1 (non-zero expected: mutation must be caught)
+--- vitest output (tail 45) ---
+            ],
+          },
+        },
+        Object {
+          "$limit": 10,
+        },
+        Object {
+          "$project": Object {
+            "_id": 0,
+            "body": 1,
+            "eventId": 1,
+            "role": 1,
+            "score": Object {
+              "$meta": "vectorSearchScore",
+            },
+            "sessionId": 1,
+            "sourceRef": 1,
+            "timestamp": 1,
+          },
+        },
+      ],
+      Object {
+        "maxTimeMS": 10000,
+      },
+    ]
+[39m[90m
+
+Number of calls: [1m2[22m
+[39m
+[36m [2m❯[22m src/mongodb-conversation-recall.test.ts:[2m1485:29[22m[39m
+    [90m1483|[39m   [90m// The vector stages (hybrid AND semantic fallback) never fired: no[39m
+    [90m1484|[39m   [90m// aggregate pipeline ran at all — only the standard find lane.[39m
+    [90m1485|[39m   [34mexpect[39m(col[33m.[39maggregate)[33m.[39mnot[33m.[39m[34mtoHaveBeenCalled[39m()
+    [90m   |[39m                             [31m^[39m
+    [90m1486|[39m   [90m// The text lane still answers, so a throttle degrades ranking, not[39m
+    [90m1487|[39m   [90m// completeness.[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯[22m[39m
+
+
+[2m Test Files [22m [1m[31m1 failed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[31m1 failed[39m[22m[2m | [22m[1m[32m30 passed[39m[22m[90m (31)[39m
+[2m   Start at [22m 00:31:49
+[2m   Duration [22m 299ms[2m (transform 149ms, setup 0ms, import 179ms, tests 29ms, environment 0ms)[22m
+
+--- RED_TESTS ---
+[41m[1m FAIL [22m[49m src/mongodb-conversation-recall.test.ts[2m > [22mrecallConversation search admission (WS-11)[2m > [22mdenial never runs a vector stage and degrades to the text lane with the throttled marker
+--- restore ---
+CMP_EXIT: 0 (0 = byte-identical)
+AFTER_SHA256: 54cbd76ecbf3d6fe7295161ccef83cdcc702205c97f24108966e69b7ec8ed044

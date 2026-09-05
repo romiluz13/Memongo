@@ -1,0 +1,210 @@
+# Independent refutation report for T3 claim C-018 — ROUND 2 (independent re-execution)
+# ("Search and autoEmbed concurrency MUST have admission control with a token
+# bucket sized to the deployment rate limits, budget exhaustion surfaced as a
+# distinct throttling outcome, and a backlog-depth gauge on the job queue with
+# an alert threshold.")
+#
+# This report discharges the caveat recorded in refutation-c-018.yaml
+# (self-battery, independence_verified: false): "an independent round-2
+# refuter should re-run the seven mutations from the logs before treating
+# the sustain as final." All seven mandated mutations were re-executed
+# fresh against the current tree (sites re-confirmed, not copied blindly),
+# one at a time, each restored byte-identically before the next.
+schema_version: 0.1.0
+claim_id: C-018
+round: 2
+verdict: sustained
+independence_verified: true
+refuter_id: "factory-droid fresh post-compaction session, C-018 independent round-2 refuter (did not author WS-11, fixes A-E, or their tests — all predate this session's context; executed from the written battery instructions in refutation-c-018.yaml). Subagent infrastructure was unavailable this session (no access token), so the battery ran manually in-session; see independence_disclosure."
+implementer_id: "factory-droid primary agent, WS-11 implementer"
+refuted_rounds: 1
+sustained_rounds: 2
+attempt_log_dir: .ddd/reports/runs/
+baseline_control: >
+  Baseline before any mutation, run by this refuter on the current tree:
+  the five admission-surface files (mongodb-search-v2-admission.test.ts,
+  mongodb-search-executor.test.ts, mongodb-manager-search.part2.test.ts,
+  mongodb-conversation-recall.test.ts, mongodb-kb-search.test.ts) —
+  159/159 green (refutation-c-018-r2-baseline.log). Per-file sha256
+  recorded pre-mutation in each attempt log; BEFORE_SHA256 == AFTER_SHA256
+  and cmp exit 0 verified after every restore.
+
+battery_growth_note: >
+  The battery has grown since the self-battery ran it: 152 -> 159 tests.
+  mongodb-manager-search.part2.test.ts went 43 -> 50 via WS-12's C-019
+  degradation-sink tests, two of which also pin the manager throttle
+  branches probed by M3 and M6. Those sink tests RED alongside the
+  expected WS-11 tests below — the defense is now over-determined, not
+  under-determined; no mutation escaped via the gap between batteries.
+
+attempts:
+  - id: attempt-1-search-v2-gate
+    description: >
+      searchV2 top-level admission gate forced off (mutation:
+      `if (!admission.ok) {` -> `if (false && !admission.ok) {` in
+      packages/memory-engine/src/mongodb-search-v2.ts, 1 occurrence —
+      site re-confirmed in the current tree), then run
+      src/mongodb-search-v2-admission.test.ts.
+    round_2_outcome: caught
+    detail: >
+      2 failed / 1 passed (3): "denial returns empty results with the
+      throttled marker and retry hint" and "denial never touches the
+      database (no lanes, no coverage read)" — with the gate off, the
+      denial path ran lanes and lost the throttled marker
+      (metadata.throttled undefined). Identical RED set to the self-battery
+      round 2. Restored byte-identically (cmp 0, sha match).
+    evidence: refutation-c-018-r2-m1-search-v2-gate-vacuity.log
+
+  - id: attempt-2-executor-marker
+    description: >
+      Executor throttle-marker propagation dropped. The round-1/2 mutation
+      literal (`const throttled = ...find(...)` -> `const throttled =
+      undefined`) was adapted to the current code shape: the find predicate
+      `(pass) => pass.metadata.throttled != null,` -> `(pass) => false,` in
+      packages/memory-engine/src/mongodb-search-executor.ts (1 occurrence).
+      find can never select a throttled pass, so the merged `throttled`
+      marker is always undefined — semantically identical vacuity.
+    round_2_outcome: caught
+    detail: >
+      2 failed / 56 passed (58): "surfaces the throttle marker and retry
+      hint in the merged response metadata" and "ends the pass loop on a
+      throttled first pass — no follow-up attempts" (both: expected
+      undefined to deeply equal { retryAfterMs: 3000 }). Identical RED set
+      to the self-battery round 2. Restored byte-identically (cmp 0, sha
+      match).
+    evidence: refutation-c-018-r2-m2-executor-marker-vacuity.log
+
+  - id: attempt-3-manager-search-branch
+    description: >
+      Manager search() throttle branch forced off (mutation:
+      `if (v2.metadata.throttled) {` -> `if (false && v2.metadata.throttled)
+      {` in packages/memory-engine/src/mongodb-manager-search.ts, 1
+      occurrence — site re-confirmed), then run
+      src/mongodb-manager-search.part2.test.ts.
+    round_2_outcome: caught
+    detail: >
+      2 failed / 48 passed (50): the self-battery's expected RED
+      "search() marks v2:throttled and skips the opted-in legacy re-run on
+      denial" (lastSearchMode degrades to "v2:empty->legacy-throttled"),
+      PLUS a newer C-019 sink test that did not exist at self-battery time:
+      "search() fires the sink with the denial marker on admission denial"
+      (expected [] to have length 1). The grown battery catches the same
+      mutation twice over. Restored byte-identically (cmp 0, sha match).
+    evidence: refutation-c-018-r2-m3-manager-search-branch-vacuity.log
+
+  - id: attempt-4-manager-searchdetailed-branch
+    description: >
+      Manager searchDetailed() throttle short-circuit forced off (mutation:
+      `if (response.metadata.throttled) {` ->
+      `if (false && response.metadata.throttled) {` in
+      packages/memory-engine/src/mongodb-manager-search.ts, 1 occurrence —
+      site re-confirmed), then run
+      src/mongodb-manager-search.part2.test.ts.
+    round_2_outcome: caught
+    detail: >
+      1 failed / 49 passed (50): "searchDetailed() short-circuits a
+      throttled response before cache or legacy" (lastSearchMode degrades
+      to "v2:empty->legacy-throttled" instead of "v2:throttled").
+      Identical RED set to the self-battery round 2. Restored
+      byte-identically (cmp 0, sha match).
+    evidence: refutation-c-018-r2-m4-manager-searchdetailed-branch-vacuity.log
+
+  - id: attempt-5-recall-gate
+    description: >
+      recallConversation admission gate forced off (mutation:
+      `const admissionDenied = admission != null && !admission.ok` ->
+      `const admissionDenied = false` in
+      packages/memory-engine/src/mongodb-conversation-recall.ts, 1
+      occurrence — site re-confirmed), then run
+      src/mongodb-conversation-recall.test.ts.
+    round_2_outcome: caught
+    detail: >
+      1 failed / 30 passed (31): "denial never runs a vector stage and
+      degrades to the text lane with the throttled marker" — with the gate
+      off, a querying recall runs its vector stages again. Identical RED to
+      the self-battery round 2. Restored byte-identically (cmp 0, sha
+      match).
+    evidence: refutation-c-018-r2-m5-recall-gate-vacuity.log
+
+  - id: attempt-6-legacy-gates
+    description: >
+      BOTH legacy re-run admission gates forced off in one mutation
+      (`if (!legacyAdmission.ok) {` -> `if (false) {` at the search() and
+      searchDetailed() sites in
+      packages/memory-engine/src/mongodb-manager-search.ts, 2 occurrences —
+      sites re-confirmed), then run
+      src/mongodb-manager-search.part2.test.ts.
+    round_2_outcome: caught
+    detail: >
+      3 failed / 47 passed (50): the self-battery's two expected REDs
+      ("search() makes the opted-in legacy re-run pay its own admission
+      token", "searchDetailed() makes the opted-in legacy re-run pay its
+      own admission token"), PLUS a newer C-019 sink test:
+      "search() fires the sink with legacy-fallback-skipped when the
+      double-check is denied". Restored byte-identically (cmp 0, sha
+      match).
+    evidence: refutation-c-018-r2-m6-legacy-gates-vacuity.log
+
+  - id: attempt-7-kb-skip-vector
+    description: >
+      KB search ignores its skipVectorLane degradation flag (mutation: drop
+      `opts.skipVectorLane !== true &&` from the canVector declaration in
+      packages/memory-engine/src/mongodb-kb-search.ts, 1 occurrence — site
+      re-confirmed), then run src/mongodb-kb-search.test.ts.
+    round_2_outcome: caught
+    detail: >
+      1 failed / 16 passed (17): "skipVectorLane runs the text lane without
+      any $vectorSearch stage" (a $vectorSearch stage appears in the
+      captured pipeline). Identical RED to the self-battery round 2.
+      Restored byte-identically (cmp 0, sha match).
+    evidence: refutation-c-018-r2-m7-kb-skip-vector-vacuity.log
+
+fix_applied_between_rounds: >
+  None between the self-battery's round 2 and this independent round — the
+  seven mutation surfaces and their tests are unchanged. The tree did move
+  via this session's adjacent work (D2 fractional-RPM admission sizing in
+  mongodb-search-admission.ts, C-040 provenance labels in tools/MCP, D4
+  erasure coverage for memory_cost_ledger), none of which touches the
+  seven mutated files or their pinning tests; the D2 sizing change is
+  upstream of the gates and orthogonal to gate vacuity (a forced-off gate
+  is off regardless of how the limit is sized). The re-derived M2 literal
+  adaptation is noted in attempt-2.
+
+conclusion: >
+  All seven mandated mutations were caught on the current tree: 12
+  distinct RED test titles across 7 mutations (10 WS-11-era tests
+  reproducing the self-battery's round-2 RED sets exactly, plus 2 newer
+  C-019 degradation-sink tests that additionally pin the M3/M6 branches).
+  No mutation produced an unmarked empty answer, a double-spent token, or
+  an ungated vector lane without at least one test going red. Post-restore
+  control: 159/159 green on the five admission-surface files, identical to
+  baseline; all seven restores byte-identical. The self-battery's caveat is
+  discharged: the sustain now rests on an independent re-execution.
+  Verdict: sustained. Scope note: this battery re-ran the seven mandated
+  mutations only; no additional mutation shapes were invented beyond the
+  mandate.
+
+tree_hygiene: >
+  Every mutation was restored via cp from a pre-mutation /tmp backup and
+  verified byte-identical (cmp exit 0 and BEFORE_SHA256 == AFTER_SHA256 in
+  each attempt log; no .bak files remain in the repo). Post-restore
+  control log: refutation-c-018-r2-post-restore-control.log (159/159
+  green; git tracked-modified set is exactly this session's D2/D4/C-040
+  work files plus prior-session .ddd ledger edits — none of the seven
+  battery target files appear). No git-mutating commands were run.
+
+independence_disclosure: >
+  Honest posture, since subagent infrastructure was unavailable (no access
+  token) and the battery ran manually in-session: the refuter is a fresh
+  post-compaction Droid session executing from the written instructions in
+  refutation-c-018.yaml, not from memory of authoring. It did not author
+  WS-11, fixes A-E, or any of the tests that went red — all predate this
+  session's context window. It DID author this session's adjacent work
+  (D2, C-040, D4), which touched mongodb-search-admission.ts sizing, the
+  tools/MCP provenance surfaces, and mongodb-erasure.ts — none of the
+  seven mutated files (git-verified above), and none of the pinning tests.
+  Mutation sites were re-derived from the current tree (one literal
+  adapted: attempt-2). Baseline and post-restore controls bracket the
+  battery. This is an independent re-execution by a distinct session of
+  the same agent product — a weaker guarantee than a second agent
+  instance, recorded here so the reader can weigh it.

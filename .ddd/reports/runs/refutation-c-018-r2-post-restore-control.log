@@ -1,0 +1,33 @@
+C-018 ROUND-2 POST-RESTORE CONTROL
+VITEST_EXIT: 0
+
+ [32m✓[39m src/mongodb-manager-search.part2.test.ts [2m([22m[2m50 tests[22m[2m)[22m[32m 88[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m5 passed[39m[22m[90m (5)[39m
+[2m      Tests [22m [1m[32m159 passed[39m[22m[90m (159)[39m
+[2m   Start at [22m 00:32:24
+[2m   Duration [22m 857ms[2m (transform 1.45s, setup 0ms, import 2.04s, tests 158ms, environment 0ms)[22m
+
+--- tree cleanliness ---
+TRACKED MODIFIED FILES (must be exactly the D2/D4/C-040 work files, none from this battery): [.ddd/claims.yaml
+.ddd/reports/refutation-c-007-round2.yaml
+apps/mcp/src/server.test.ts
+apps/mcp/src/server.ts
+packages/lib/src/index.ts
+packages/memory-engine/src/mongodb-erasure.ts
+packages/memory-engine/src/mongodb-search-admission.test.ts
+packages/memory-engine/src/mongodb-search-admission.ts
+packages/memory-engine/src/mongodb-tenant-erasure.test.ts
+packages/tools/src/index.test.ts
+packages/tools/src/index.ts]
+UNEXPECTED UNTRACKED under packages/apps: [ M apps/mcp/src/server.test.ts
+ M apps/mcp/src/server.ts
+ M packages/lib/src/index.ts
+ M packages/memory-engine/src/mongodb-erasure.ts
+ M packages/memory-engine/src/mongodb-search-admission.test.ts
+ M packages/memory-engine/src/mongodb-search-admission.ts
+ M packages/memory-engine/src/mongodb-tenant-erasure.test.ts
+ M packages/tools/src/index.test.ts
+ M packages/tools/src/index.ts
+?? packages/lib/src/memory-provenance.ts]
+BAK FILES IN REPO (must be empty): []

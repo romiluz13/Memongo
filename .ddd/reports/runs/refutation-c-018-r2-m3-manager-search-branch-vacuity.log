@@ -1,0 +1,56 @@
+MUTATION M3: manager search() throttle branch forced off
+old: `if (v2.metadata.throttled) {`  new: `if (false && v2.metadata.throttled) {` (src/mongodb-manager-search.ts, 1 occurrence)
+BEFORE_SHA256: 57802f128f28ddd31e893bbc20b891d56e453401c5351355dc2b4644404e732c
+VITEST_EXIT: 1 (non-zero expected: mutation must be caught)
+--- vitest output (tail 45) ---
+     [32m✓[39m leaves telemetry silent for in-range queries[32m 0[2mms[22m[39m
+
+[31m⎯⎯⎯⎯⎯⎯⎯[39m[1m[41m Failed Tests 2 [49m[22m[31m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[41m[1m FAIL [22m[49m src/mongodb-manager-search.part2.test.ts[2m > [22msearch admission envelope at the manager boundary (WS-11)[2m > [22msearch() marks v2:throttled and skips the opted-in legacy re-run on denial
+[31m[1mAssertionError[22m: expected 'v2:empty->legacy-throttled' to be 'v2:throttled' // Object.is equality[39m
+
+Expected: [32m"v2:throttled"[39m
+Received: [31m"v2:[7mempty->legacy-[27mthrottled"[39m
+
+[36m [2m❯[22m src/mongodb-manager-search.part2.test.ts:[2m1642:37[22m[39m
+    [90m1640|[39m   [34mexpect[39m(results)[33m.[39m[34mtoEqual[39m([])
+    [90m1641|[39m   [34mexpect[39m(aggregate)[33m.[39mnot[33m.[39m[34mtoHaveBeenCalled[39m()
+    [90m1642|[39m   [34mexpect[39m([34mlastSearchModeOf[39m(manager))[33m.[39m[34mtoBe[39m([32m"v2:throttled"[39m)
+    [90m   |[39m                                     [31m^[39m
+    [90m1643|[39m  })
+    [90m1644|[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/2]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/mongodb-manager-search.part2.test.ts[2m > [22msearch degradation sink at the manager boundary (WS-12, C-019)[2m > [22msearch() fires the sink with the denial marker on admission denial
+[31m[1mAssertionError[22m: expected [] to have a length of 1 but got +0[39m
+
+[32m- Expected[39m
+[31m+ Received[39m
+
+[32m- 1[39m
+[31m+ 0[39m
+
+[36m [2m❯[22m src/mongodb-manager-search.part2.test.ts:[2m1872:24[22m[39m
+    [90m1870|[39m   [34mexpect[39m(aggregate)[33m.[39mnot[33m.[39m[34mtoHaveBeenCalled[39m()
+    [90m1871|[39m   [90m// One marker, throttled, with a usable retry hint.[39m
+    [90m1872|[39m   [34mexpect[39m(degradations)[33m.[39m[34mtoHaveLength[39m([34m1[39m)
+    [90m   |[39m                        [31m^[39m
+    [90m1873|[39m   [34mexpect[39m(degradations[[34m0[39m])[33m.[39m[34mtoMatchObject[39m({
+    [90m1874|[39m    kind[33m:[39m [32m"throttled"[39m[33m,[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/2]⎯[22m[39m
+
+
+[2m Test Files [22m [1m[31m1 failed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[31m2 failed[39m[22m[2m | [22m[1m[32m48 passed[39m[22m[90m (50)[39m
+[2m   Start at [22m 00:31:25
+[2m   Duration [22m 1.02s[2m (transform 606ms, setup 0ms, import 808ms, tests 94ms, environment 0ms)[22m
+
+--- RED_TESTS ---
+[41m[1m FAIL [22m[49m src/mongodb-manager-search.part2.test.ts[2m > [22msearch admission envelope at the manager boundary (WS-11)[2m > [22msearch() marks v2:throttled and skips the opted-in legacy re-run on denial
+[41m[1m FAIL [22m[49m src/mongodb-manager-search.part2.test.ts[2m > [22msearch degradation sink at the manager boundary (WS-12, C-019)[2m > [22msearch() fires the sink with the denial marker on admission denial
+--- restore ---
+CMP_EXIT: 0 (0 = byte-identical)
+AFTER_SHA256: 57802f128f28ddd31e893bbc20b891d56e453401c5351355dc2b4644404e732c

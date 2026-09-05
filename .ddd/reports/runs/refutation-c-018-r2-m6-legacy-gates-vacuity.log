@@ -1,0 +1,57 @@
+MUTATION M6: BOTH legacy re-run admission gates forced off in one mutation
+old: `if (!legacyAdmission.ok) {`  new: `if (false) {` (src/mongodb-manager-search.ts, 2 occurrences: the search() and searchDetailed() legacy sites)
+BEFORE_SHA256: 57802f128f28ddd31e893bbc20b891d56e453401c5351355dc2b4644404e732c
+VITEST_EXIT: 1 (non-zero expected: mutation must be caught)
+--- vitest output (tail 45) ---
+            "endLine": 1,
+            "path": 1,
+            "score": Object {
+              "$meta": "textScore",
+            },
+            "source": 1,
+            "startLine": 1,
+            "text": 1,
+          },
+        },
+        Object {
+          "$sort": Object {
+            "score": Object {
+              "$meta": "textScore",
+            },
+          },
+        },
+        Object {
+          "$limit": 10,
+        },
+      ],
+      Object {
+        "maxTimeMS": 10000,
+      },
+    ]
+[31m[90m
+
+Number of calls: [1m1[22m
+[31m[39m
+[36m [2m❯[22m src/mongodb-manager-search.part2.test.ts:[2m1919:26[22m[39m
+    [90m1917|[39m
+    [90m1918|[39m    [34mexpect[39m(results)[33m.[39m[34mtoEqual[39m([])
+    [90m1919|[39m    [34mexpect[39m(aggregate)[33m.[39mnot[33m.[39m[34mtoHaveBeenCalled[39m()
+    [90m   |[39m                          [31m^[39m
+    [90m1920|[39m    [34mexpect[39m(degradations)[33m.[39m[34mtoHaveLength[39m([34m1[39m)
+    [90m1921|[39m    [34mexpect[39m(degradations[[34m0[39m])[33m.[39m[34mtoMatchObject[39m({
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/3]⎯[22m[39m
+
+
+[2m Test Files [22m [1m[31m1 failed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[31m3 failed[39m[22m[2m | [22m[1m[32m47 passed[39m[22m[90m (50)[39m
+[2m   Start at [22m 00:32:00
+[2m   Duration [22m 839ms[2m (transform 490ms, setup 0ms, import 638ms, tests 91ms, environment 0ms)[22m
+
+--- RED_TESTS ---
+[41m[1m FAIL [22m[49m src/mongodb-manager-search.part2.test.ts[2m > [22msearch admission envelope at the manager boundary (WS-11)[2m > [22msearch() makes the opted-in legacy re-run pay its own admission token
+[41m[1m FAIL [22m[49m src/mongodb-manager-search.part2.test.ts[2m > [22msearch admission envelope at the manager boundary (WS-11)[2m > [22msearchDetailed() makes the opted-in legacy re-run pay its own admission token
+[41m[1m FAIL [22m[49m src/mongodb-manager-search.part2.test.ts[2m > [22msearch degradation sink at the manager boundary (WS-12, C-019)[2m > [22msearch() fires the sink with legacy-fallback-skipped when the double-check is denied
+--- restore ---
+CMP_EXIT: 0 (0 = byte-identical)
+AFTER_SHA256: 57802f128f28ddd31e893bbc20b891d56e453401c5351355dc2b4644404e732c

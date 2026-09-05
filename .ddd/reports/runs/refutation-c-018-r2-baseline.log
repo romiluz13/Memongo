@@ -1,0 +1,15 @@
+C-018 ROUND-2 BASELINE (pre-mutation control)
+COMMAND: bunx vitest run (five admission-surface files)
+VITEST_EXIT: 0
+[22m[39m00:30:42.300 [memory:mongodb] warn: empty search recall trace write failed: TypeError: Cannot read properties of undefined (reading 'insertOne')
+
+[90mstderr[2m | src/mongodb-manager-search.part2.test.ts[2m > [22m[2msearch query clamp (C-030)[2m > [22m[2mleaves telemetry silent for in-range queries
+[22m[39m00:30:42.301 [memory:mongodb] warn: empty search recall trace write failed: TypeError: Cannot read properties of undefined (reading 'insertOne')
+
+ [32m✓[39m src/mongodb-manager-search.part2.test.ts [2m([22m[2m50 tests[22m[2m)[22m[32m 87[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m5 passed[39m[22m[90m (5)[39m
+[2m      Tests [22m [1m[32m159 passed[39m[22m[90m (159)[39m
+[2m   Start at [22m 00:30:41
+[2m   Duration [22m 1.04s[2m (transform 1.82s, setup 0ms, import 2.60s, tests 183ms, environment 0ms)[22m
+
