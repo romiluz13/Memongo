@@ -16,9 +16,11 @@ import type {
 import {
 	CONTEXT_BUNDLE_MODE_VALUES,
 	CHAIN_TRACE_COLLECTION_VALUES,
+	UNTRUSTED_MEMORY_PROVENANCE,
 	isChainTraceCollectionValue,
 	isContextBundleModeValue,
 	isMemoryScopeValue,
+	withUntrustedMemoryProvenance,
 	type ChainTraceCollectionValue,
 	type ContextBundleModeValue,
 	type MemoryScopeValue,
@@ -375,6 +377,23 @@ function jsonResult(payload: unknown, isError = false) {
 	}
 }
 
+/**
+ * C-040: retrieval tool results serialize the same untrusted stored-memory
+ * payloads as the AI-SDK tools (search, KB search, detailed search,
+ * read_file, profile, context bundle, conversation recall), so they carry
+ * the same provenance label as the first field of the JSON payload — which
+ * jsonResult then mirrors into structuredContent. The label is the
+ * JSON-payload equivalent of ADR 0007's quarantine envelope preamble.
+ */
+function jsonMemoryResult(payload: unknown, isError = false) {
+	return jsonResult(
+		payload !== null && typeof payload === "object" && !Array.isArray(payload)
+			? withUntrustedMemoryProvenance(payload as Record<string, unknown>)
+			: { provenance: UNTRUSTED_MEMORY_PROVENANCE, value: payload },
+		isError,
+	)
+}
+
 export function createMemongoServer(scope: McpAuthScope = "local"): Server {
 	// P1.2 surface diet: default = core tools only; MEMONGO_MCP_ADMIN=1 adds
 	// admin tools; MEMONGO_MCP_ALIASES=1 adds semantic aliases.
@@ -439,7 +458,7 @@ export async function handleToolCall(
 				scope: readScopeArg(args),
 				scopeRef: typeof args.scopeRef === "string" ? args.scopeRef : undefined,
 			})
-			return jsonResult(out)
+			return jsonMemoryResult(out)
 		}
 		if (name === "memongo_search_kb") {
 			const out = await memongo.searchKB({
@@ -452,7 +471,7 @@ export async function handleToolCall(
 				filter: readKbFilterArg(args),
 				fusionMethod: readFusionMethodArg(args),
 			})
-			return jsonResult(out)
+			return jsonMemoryResult(out)
 		}
 		if (name === "memongo_read_file") {
 			const out = await memongo.readFile({
@@ -461,7 +480,7 @@ export async function handleToolCall(
 				from: typeof args.from === "number" ? args.from : undefined,
 				lines: typeof args.lines === "number" ? args.lines : undefined,
 			})
-			return jsonResult(out)
+			return jsonMemoryResult(out)
 		}
 		if (name === "memongo_add") {
 			const out = await memongo.add({
@@ -527,7 +546,7 @@ export async function handleToolCall(
 				scope: readScopeArg(args),
 				scopeRef: typeof args.scopeRef === "string" ? args.scopeRef : undefined,
 			})
-			return jsonResult(out)
+			return jsonMemoryResult(out)
 		}
 		if (name === "memongo_build_context_bundle") {
 			const scope = readScopeArg(args)
@@ -600,7 +619,7 @@ export async function handleToolCall(
 					: undefined,
 				mode: readModeArg(args),
 			})
-			return jsonResult(out)
+			return jsonMemoryResult(out)
 		}
 		if (name === "memongo_status") {
 			const out = await memongo.status(
@@ -665,7 +684,7 @@ export async function handleToolCall(
 						? Math.max(1, Math.min(200, Math.floor(args.limit)))
 						: undefined,
 			})
-			return jsonResult(out)
+			return jsonMemoryResult(out)
 		}
 		if (LIFECYCLE_GET_TOOL_NAMES.has(name)) {
 			const out = await memongo.getLifecycleItem({
@@ -1000,7 +1019,7 @@ export async function handleToolCall(
 						}
 					: undefined,
 			})
-			return jsonResult(out)
+			return jsonMemoryResult(out)
 		}
 		if (name === "memongo_hydrate_active_slate") {
 			const out = await memongo.hydrateActiveSlate({

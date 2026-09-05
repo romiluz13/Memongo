@@ -1115,3 +1115,23 @@ traces:
     sweep_pass: true
     checked_at: "2026-09-05T19:45:00.000Z"
     notes: "WS-18 landed: the CLI verifies the dataset digest against LONGMEMEVAL_RELEASE_V2, fail-fasts publishable runs when the enrichment provider is missing or misconfigured, takes thresholds from V2, keeps --json stdout pure (elapsed on stderr), and prints the judged-answer accuracy line in human mode. Construct added during the WS-18 landing, widening the planned envelope. Validated in V-136."
+  - id: TR-112
+    schema_version: 0.1.0
+    change_id: WS-19
+    claim_id: C-040
+    construct_id: packages/tools/src/index.ts
+    validation_id: V-137
+    direction: forward
+    sweep_pass: true
+    checked_at: "2026-09-05T21:39:00.000Z"
+    notes: "WS-19 (claim filed from REF-WS05-R2, the WS-05 round-2 refutation finding uncovered-injection-surfaces) landed: every retrieval tool in createMemongoTools wraps its result with withUntrustedMemoryProvenance, labeling the payload as untrusted reference data before any retrieved tenant content (first field). Validated in V-137 (tools suite 61/61, target log)."
+  - id: TR-113
+    schema_version: 0.1.0
+    change_id: WS-19
+    claim_id: C-040
+    construct_id: apps/mcp/src/server.ts
+    validation_id: V-138
+    direction: forward
+    sweep_pass: true
+    checked_at: "2026-09-05T21:39:00.000Z"
+    notes: "WS-19 landed: the 7 MCP handlers that serialize stored tenant memory build results through jsonMemoryResult, which places the canonical untrusted-memory provenance label first in the serialized JSON and mirrors the labeled payload into structuredContent; the memongo_recall_messages alias is labeled identically. Validated in V-138 (MCP suite 193/193, target log)."

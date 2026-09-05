@@ -7,6 +7,7 @@ import {
 	CHAIN_TRACE_COLLECTION_VALUES_TUPLE,
 	CONTEXT_BUNDLE_MODE_VALUES_TUPLE,
 	MEMORY_SCOPE_VALUES_TUPLE,
+	withUntrustedMemoryProvenance,
 } from "@memongo/lib"
 import { tool, type Tool } from "ai"
 import { z } from "zod"
@@ -330,7 +331,10 @@ export function createMemongoTools(client: MemongoClient): MemongoToolSet {
 				const { results, degradation } = await client.search(input)
 				// C-019: pass the degradation marker through so the model can
 				// tell "throttled/auth failure" apart from "no memories found".
-				return degradation ? { results, degradation } : { results }
+				// C-040: label the payload as untrusted memory (first field).
+				return withUntrustedMemoryProvenance(
+					degradation ? { results, degradation } : { results },
+				)
 			},
 		}),
 		memongo_search_kb: tool({
@@ -344,14 +348,18 @@ export function createMemongoTools(client: MemongoClient): MemongoToolSet {
 					scope: input.scope,
 					scopeRef: input.scopeRef,
 				})
-				return degradation ? { results, degradation } : { results }
+				// C-019 degradation passthrough + C-040 untrusted-memory label.
+				return withUntrustedMemoryProvenance(
+					degradation ? { results, degradation } : { results },
+				)
 			},
 		}),
 		memongo_read_file: tool({
 			description:
 				"Read a memory file path or structured: URI (memory_get parity).",
 			inputSchema: readFileSchema,
-			execute: async (input) => client.readFile(input),
+			execute: async (input) =>
+				withUntrustedMemoryProvenance(await client.readFile(input)),
 		}),
 		memongo_add: tool({
 			description: "Append a user message to conversational memory.",
@@ -366,19 +374,22 @@ export function createMemongoTools(client: MemongoClient): MemongoToolSet {
 		memongo_profile: tool({
 			description: "Synthesize a profile from Memongo memory.",
 			inputSchema: profileSchema,
-			execute: async (input) => client.profile(input),
+			execute: async (input) =>
+				withUntrustedMemoryProvenance(await client.profile(input)),
 		}),
 		memongo_build_context_bundle: tool({
 			description:
 				"Build a prompt-ready Memongo context bundle from durable memory and recent events.",
 			inputSchema: contextBundleSchema,
-			execute: async (input) => client.buildContextBundle(input),
+			execute: async (input) =>
+				withUntrustedMemoryProvenance(await client.buildContextBundle(input)),
 		}),
 		memongo_recall_conversation: tool({
 			description:
 				"Search past conversation messages by content, session, role, and exact time range. Use ISO 8601 timestamps; date-only values should include timezone when local day boundaries matter.",
 			inputSchema: recallConversationSchema,
-			execute: async (input) => client.recallConversation(input),
+			execute: async (input) =>
+				withUntrustedMemoryProvenance(await client.recallConversation(input)),
 		}),
 		memongo_lifecycle_get: tool({
 			description:

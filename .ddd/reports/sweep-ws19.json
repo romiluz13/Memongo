@@ -1,0 +1,20 @@
+{
+  "schema_version": "0.1.0",
+  "direction": "both",
+  "checked_at": "2026-09-05T21:43:49.874Z",
+  "claims_checked": 40,
+  "traces_checked": 113,
+  "violations": [],
+  "verdict": "CONFORMANT_DECLARED_SCOPE",
+  "scope": "declared-constructs",
+  "capabilities": {
+    "evidence_integrity": "tool-enforced",
+    "trace_graph": "tool-enforced",
+    "tier_requirements": "tool-enforced",
+    "entailment": "recorded-attestation",
+    "reverse_sweep": "declared-constructs-only",
+    "validation_records": "tool-enforced",
+    "refutation_independence": "recorded-metadata"
+  },
+  "pass": true
+}

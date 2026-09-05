@@ -81,6 +81,10 @@ export {
 } from "./ssrf.js"
 export { runTasksWithConcurrency } from "./concurrency.js"
 export {
+	UNTRUSTED_MEMORY_PROVENANCE,
+	withUntrustedMemoryProvenance,
+} from "./memory-provenance.js"
+export {
 	resolveApiKeyForProvider,
 	requireApiKey,
 	resolveEnvApiKey,

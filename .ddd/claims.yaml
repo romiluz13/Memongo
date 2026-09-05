@@ -651,10 +651,7 @@ entries:
     impact: medium
     tier: T2
     status: known-and-supported
-    constructs:
-      [.github/workflows/e2e-nightly.yml, packages/memory-engine/src/types.ts, scripts/benchmark/benchmark-answer-quality.ts,
-      scripts/benchmark/benchmark-quality-contracts.ts, scripts/benchmark/mongodb-benchmark-runner.ts, scripts/benchmark/mongodb-manager-benchmark.ts,
-      scripts/run-benchmark.ts]
+    constructs: [.github/workflows/e2e-nightly.yml, packages/memory-engine/src/types.ts, scripts/benchmark/benchmark-answer-quality.ts, scripts/benchmark/benchmark-quality-contracts.ts, scripts/benchmark/mongodb-benchmark-runner.ts, scripts/benchmark/mongodb-manager-benchmark.ts, scripts/run-benchmark.ts]
     validations: [V-130, V-131, V-132, V-133, V-134, V-135, V-136]
     exceptions: []
 
@@ -671,5 +668,5 @@ entries:
     tier: T2
     status: known-and-supported
     constructs: [packages/tools/src/index.ts, apps/mcp/src/server.ts]
-    validations: []
+    validations: [V-137, V-138]
     exceptions: []

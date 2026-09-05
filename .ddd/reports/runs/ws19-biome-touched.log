@@ -1,0 +1,329 @@
+apps/mcp/src/server.test.ts:186:9 lint/suspicious/noExplicitAny ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ! Unexpected any. Specify a different type.
+  
+    184 │ 			{
+    185 │ 				recallConversation,
+  > 186 │ 			} as any,
+        │ 			     ^^^
+    187 │ 		)
+    188 │ 
+  
+  i any disables many type checking rules. Its use should be avoided.
+  
+
+apps/mcp/src/server.test.ts:222:22 lint/suspicious/noExplicitAny ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ! Unexpected any. Specify a different type.
+  
+    220 │ 				invalidAt: "2026-04-09T12:00:00.000Z",
+    221 │ 			},
+  > 222 │ 			{ writeEvent } as any,
+        │ 			                  ^^^
+    223 │ 		)
+    224 │ 
+  
+  i any disables many type checking rules. Its use should be avoided.
+  
+
+apps/mcp/src/server.test.ts:243:23 lint/suspicious/noExplicitAny ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ! Unexpected any. Specify a different type.
+  
+    241 │ 				llmDedup: true,
+    242 │ 			},
+  > 243 │ 			{ consolidate } as any,
+        │ 			                   ^^^
+    244 │ 		)
+    245 │ 
+  
+  i any disables many type checking rules. Its use should be avoided.
+  
+
+apps/mcp/src/server.test.ts:264:23 lint/suspicious/noExplicitAny ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ! Unexpected any. Specify a different type.
+  
+    262 │ 			"memongo_consolidate",
+    263 │ 			{ [field]: value },
+  > 264 │ 			{ consolidate } as any,
+        │ 			                   ^^^
+    265 │ 		)
+    266 │ 
+  
+  i any disables many type checking rules. Its use should be avoided.
+  
+
+apps/mcp/src/server.test.ts:284:9 lint/suspicious/noExplicitAny ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ! Unexpected any. Specify a different type.
+  
+    282 │ 			{
+    283 │ 				recallConversation,
+  > 284 │ 			} as any,
+        │ 			     ^^^
+    285 │ 		)
+    286 │ 
+  
+  i any disables many type checking rules. Its use should be avoided.
+  
+
+apps/mcp/src/server.test.ts:316:8 lint/suspicious/noExplicitAny ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ! Unexpected any. Specify a different type.
+  
+    314 │ 		await handleToolCall("memongo_memory_get", { handle }, {
+    315 │ 			getLifecycleItem,
+  > 316 │ 		} as any)
+        │ 		     ^^^
+    317 │ 		await handleToolCall(
+    318 │ 			"memongo_memory_update",
+  
+  i any disables many type checking rules. Its use should be avoided.
+  
+
+apps/mcp/src/server.test.ts:322:9 lint/suspicious/noExplicitAny ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ! Unexpected any. Specify a different type.
+  
+    320 │ 			{
+    321 │ 				updateLifecycleItem,
+  > 322 │ 			} as any,
+        │ 			     ^^^
+    323 │ 		)
+    324 │ 		await handleToolCall(
+  
+  i any disables many type checking rules. Its use should be avoided.
+  
+
+apps/mcp/src/server.test.ts:329:9 lint/suspicious/noExplicitAny ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ! Unexpected any. Specify a different type.
+  
+    327 │ 			{
+    328 │ 				deleteLifecycleItem,
+  > 329 │ 			} as any,
+        │ 			     ^^^
+    330 │ 		)
+    331 │ 		await handleToolCall("memongo_memory_history", { handle, limit: 999 }, {
+  
+  i any disables many type checking rules. Its use should be avoided.
+  
+
+apps/mcp/src/server.test.ts:333:8 lint/suspicious/noExplicitAny ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ! Unexpected any. Specify a different type.
+  
+    331 │ 		await handleToolCall("memongo_memory_history", { handle, limit: 999 }, {
+    332 │ 			getLifecycleHistory,
+  > 333 │ 		} as any)
+        │ 		     ^^^
+    334 │ 
+    335 │ 		expect(getLifecycleItem).toHaveBeenCalledWith({ handle })
+  
+  i any disables many type checking rules. Its use should be avoided.
+  
+
+apps/mcp/src/server.test.ts:365:9 lint/suspicious/noExplicitAny ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ! Unexpected any. Specify a different type.
+  
+    363 │ 			{
+    364 │ 				getLifecycleHistory,
+  > 365 │ 			} as any,
+        │ 			     ^^^
+    366 │ 		)
+    367 │ 
+  
+  i any disables many type checking rules. Its use should be avoided.
+  
+
+apps/mcp/src/server.test.ts:387:9 lint/suspicious/noExplicitAny ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ! Unexpected any. Specify a different type.
+  
+    385 │ 			{
+    386 │ 				importConversations,
+  > 387 │ 			} as any,
+        │ 			     ^^^
+    388 │ 		)
+    389 │ 
+  
+  i any disables many type checking rules. Its use should be avoided.
+  
+
+apps/mcp/src/server.test.ts:428:9 lint/suspicious/noExplicitAny ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ! Unexpected any. Specify a different type.
+  
+    426 │ 			{
+    427 │ 				reportProcedureOutcome,
+  > 428 │ 			} as any,
+        │ 			     ^^^
+    429 │ 		)
+    430 │ 
+  
+  i any disables many type checking rules. Its use should be avoided.
+  
+
+apps/mcp/src/server.test.ts:469:9 lint/suspicious/noExplicitAny ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ! Unexpected any. Specify a different type.
+  
+    467 │ 			{
+    468 │ 				applyMemoryFeedback,
+  > 469 │ 			} as any,
+        │ 			     ^^^
+    470 │ 		)
+    471 │ 
+  
+  i any disables many type checking rules. Its use should be avoided.
+  
+
+apps/mcp/src/server.test.ts:494:19 lint/suspicious/noExplicitAny ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ! Unexpected any. Specify a different type.
+  
+    492 │ 			"memongo_extract",
+    493 │ 			{ eventId: "evt-1", scope: "user", scopeRef: "user-1" },
+  > 494 │ 			{ extract } as any,
+        │ 			               ^^^
+    495 │ 		)
+    496 │ 
+  
+  i any disables many type checking rules. Its use should be avoided.
+  
+
+apps/mcp/src/server.test.ts:519:74 lint/suspicious/noExplicitAny ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ! Unexpected any. Specify a different type.
+  
+    517 │ 		const extract = vi.fn()
+    518 │ 
+  > 519 │ 		const out = await handleToolCall("memongo_extract", {}, { extract } as any)
+        │ 		                                                                       ^^^
+    520 │ 
+    521 │ 		expect(extract).not.toHaveBeenCalled()
+  
+  i any disables many type checking rules. Its use should be avoided.
+  
+
+apps/mcp/src/server.test.ts:542:22 lint/suspicious/noExplicitAny ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ! Unexpected any. Specify a different type.
+  
+    540 │ 			"memongo_erase_agent",
+    541 │ 			{ confirm: "erase", agentId: "agent-42" },
+  > 542 │ 			{ eraseAgent } as any,
+        │ 			                  ^^^
+    543 │ 		)
+    544 │ 
+  
+  i any disables many type checking rules. Its use should be avoided.
+  
+
+apps/mcp/src/server.test.ts:560:22 lint/suspicious/noExplicitAny ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ! Unexpected any. Specify a different type.
+  
+    558 │ 			"memongo_erase_agent",
+    559 │ 			{ confirm: "yes" },
+  > 560 │ 			{ eraseAgent } as any,
+        │ 			                  ^^^
+    561 │ 		)
+    562 │ 
+  
+  i any disables many type checking rules. Its use should be avoided.
+  
+
+apps/mcp/src/server.test.ts:598:27 lint/suspicious/noExplicitAny ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ! Unexpected any. Specify a different type.
+  
+    596 │ 			"memongo_quarantine_list",
+    597 │ 			{ agentId: "agent-42", status: "pending-review", limit: 5 },
+  > 598 │ 			{ listQuarantined } as any,
+        │ 			                       ^^^
+    599 │ 		)
+    600 │ 
+  
+  i any disables many type checking rules. Its use should be avoided.
+  
+
+apps/mcp/src/server.test.ts:615:8 lint/suspicious/noExplicitAny ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ! Unexpected any. Specify a different type.
+  
+    613 │ 		await handleToolCall("memongo_quarantine_list", { status: "archived" }, {
+    614 │ 			listQuarantined,
+  > 615 │ 		} as any)
+        │ 		     ^^^
+    616 │ 
+    617 │ 		expect(listQuarantined).toHaveBeenCalledWith({
+  
+  i any disables many type checking rules. Its use should be avoided.
+  
+
+packages/tools/src/index.test.ts format ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  × Formatter would have printed the following content:
+  
+    331 331 │     ] as const
+    332 332 │   
+    333     │ - → it.each(LABELLED_SURFACES)(
+    334     │ - → → "$tool·labels·its·payload·as·untrusted·memory,·label·first",
+    335     │ - → → async·({·tool,·method,·payload·})·=>·{
+    336     │ - → → → const·client·=·{·[method]:·vi.fn(async·()·=>·payload)·}
+    337     │ - → → → const·tools·=·createMemongoTools(client·as·unknown·as·MemongoClient)
+    338     │ - → → → const·retrievalTool·=·tools[tool]·as·ExecutableTool
+    339     │ - → → → const·input·=·{·query:·"anything",·relPath:·"memory/x.md"·}
+        333 │ + → it.each(
+        334 │ + → → LABELLED_SURFACES,
+        335 │ + → )("$tool·labels·its·payload·as·untrusted·memory,·label·first",·async·({
+        336 │ + → → tool,
+        337 │ + → → method,
+        338 │ + → → payload,
+        339 │ + → })·=>·{
+        340 │ + → → const·client·=·{·[method]:·vi.fn(async·()·=>·payload)·}
+        341 │ + → → const·tools·=·createMemongoTools(client·as·unknown·as·MemongoClient)
+        342 │ + → → const·retrievalTool·=·tools[tool]·as·ExecutableTool
+        343 │ + → → const·input·=·{·query:·"anything",·relPath:·"memory/x.md"·}
+    340 344 │   
+    341     │ - → → → const·out·=·(await·retrievalTool.execute(input,·{}))·as·Record<
+    342     │ - → → → → string,
+    343     │ - → → → → unknown
+    344     │ - → → → >
+        345 │ + → → const·out·=·(await·retrievalTool.execute(input,·{}))·as·Record<
+        346 │ + → → → string,
+        347 │ + → → → unknown
+        348 │ + → → >
+    345 349 │   
+    346     │ - → → → expect(out.provenance).toBe(UNTRUSTED_MEMORY_PROVENANCE)
+    347     │ - → → → //·First·field:·the·label·precedes·every·retrieved-content·field.
+    348     │ - → → → expect(Object.keys(out)[0]).toBe("provenance")
+    349     │ - → → → for·(const·[key,·value]·of·Object.entries(payload))·{
+    350     │ - → → → → expect(out[key]).toEqual(value)
+    351     │ - → → → }
+    352     │ - → → },
+    353     │ - → )
+        350 │ + → → expect(out.provenance).toBe(UNTRUSTED_MEMORY_PROVENANCE)
+        351 │ + → → //·First·field:·the·label·precedes·every·retrieved-content·field.
+        352 │ + → → expect(Object.keys(out)[0]).toBe("provenance")
+        353 │ + → → for·(const·[key,·value]·of·Object.entries(payload))·{
+        354 │ + → → → expect(out[key]).toEqual(value)
+        355 │ + → → }
+        356 │ + → })
+    354 357 │   
+    355 358 │     it("the label is the canonical quarantine-envelope semantics, not a stub", () => {
+  
+
+The number of diagnostics exceeds the limit allowed. Use --max-diagnostics to increase it.
+Diagnostics not shown: 32.
+Checked 10 files in 45ms. No fixes applied.
+Found 2 errors.
+Found 50 warnings.
+check ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  × Some errors were emitted while running checks.
+  
+

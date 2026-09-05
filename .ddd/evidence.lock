@@ -5,6 +5,10 @@
 # EL-007/EL-008 content_digest re-locked 2026-09-02: example credentials in the
 # cache notes were sanitized to placeholders before first commit; digests updated
 # to match. No other entry modified.
+# REF-WS05-R2 appended 2026-09-05 (WS-19 / C-040 landing): the WS-05 round-2
+# refutation finding that filed C-040, captured verbatim from
+# .ddd/reports/refutation-c-008.yaml round_2 into the cache. No prior entry
+# modified.
 # Schema: SPEC.md 7.3
 
 # Entries are appended, never modified. Supersession creates a new entry.
@@ -264,3 +268,26 @@ entries:
     superseded_by: null
     content_type: "text/markdown"
     notes: "GLM-5.3 full-framework review, EL-011 (99-SYNTHESIS.md). Reviewed tree at commit 1d98eb36f1. Commissioned by the maintainer and approved as remediation-plan input on 2026-09-02; per-finding approval is recorded when the owning workstream lands. Captured from /tmp/memongo-glm53-review/findings/99-SYNTHESIS.md."
+
+  - id: REF-WS05-R2
+    subject: "WS-05 (C-008) round-2 refutation finding: uncovered-injection-surfaces (memongo at 3c2dee0fdd)"
+    schema_version: 0.1.0
+    source_class: code-derived
+    source_url: "file://.ddd/reports/refutation-c-008.yaml#round_2"
+    publisher: "factory-droid worker subagent, WS-05 round-2 refuter (independent of the WS-05 implementer)"
+    product: "memongo WS-05 round-2 refutation (worker-subagent-independent-round2)"
+    version: "3c2dee0fdd"
+    retrieved_at: "2026-09-05T21:36:00.000Z"
+    content_digest: "sha256:e90b78a59307390bd4e392d716c7777c7fabd15740a6c5baafed7259613b6179"
+    doc_version: "3c2dee0fdd"
+    cache_path: cache/ref-ws05-r2-uncovered-injection-surfaces.md
+    sections: ["findings/uncovered-injection-surfaces"]
+    status: informative
+    authority_for: [security, remediation-priorities]
+    freshness: "365d"
+    adapter: agent-review
+    license: project-internal
+    independence: agent-proposed-human-approved
+    superseded_by: null
+    content_type: "text/markdown"
+    notes: "REF-WS05-R2 is the WS-05 (C-008) round-2 refutation finding uncovered-injection-surfaces, executed by an independent worker subagent against the WS-05 landed tree (commit 3c2dee0fdd, 2026-09-04): the AI-SDK tools and the MCP server returned raw stored retrieval payloads outside the C-008 envelope's evidenced pi-surface scope. The finding was adjudicated as a claim-scope defect and routed to the new claim C-040; that adjudication and claim filing constitute the approval recorded here (agent-proposed, accepted into the remediation ledger). Round 3 of the same report spot-checked the finding accurate before it was filed. The finding is captured verbatim into the cache from .ddd/reports/refutation-c-008.yaml round_2; the obligation C-040 derives from it is quoted in the capture."
