@@ -450,31 +450,31 @@ traces:
     change_id: WS-10
     claim_id: C-017
     construct_id: packages/memory-engine/src/mongodb-llm-enrichment.ts
-    validation_id: null
+    validation_id: V-090
     direction: forward
-    sweep_pass: false
-    checked_at: "2026-09-02T13:41:40.067Z"
-    notes: WS-10 Cost observability (planned change envelope)
+    sweep_pass: true
+    checked_at: "2026-09-05T12:05:20.000Z"
+    notes: WS-10 Cost observability (landed)
   - id: TR-046
     schema_version: 0.1.0
     change_id: WS-10
     claim_id: C-017
     construct_id: packages/memory-engine/src/mongodb-operation-accounting.ts
-    validation_id: null
+    validation_id: V-091
     direction: forward
-    sweep_pass: false
-    checked_at: "2026-09-02T13:41:40.068Z"
-    notes: WS-10 Cost observability (planned change envelope)
+    sweep_pass: true
+    checked_at: "2026-09-05T12:05:20.000Z"
+    notes: WS-10 Cost observability (landed)
   - id: TR-047
     schema_version: 0.1.0
     change_id: WS-10
     claim_id: C-017
     construct_id: packages/memory-engine/src/mongodb-telemetry.ts
-    validation_id: null
+    validation_id: V-092
     direction: forward
-    sweep_pass: false
-    checked_at: "2026-09-02T13:41:40.069Z"
-    notes: WS-10 Cost observability (planned change envelope)
+    sweep_pass: true
+    checked_at: "2026-09-05T12:05:20.000Z"
+    notes: WS-10 Cost observability (landed)
   - id: TR-048
     schema_version: 0.1.0
     change_id: WS-11

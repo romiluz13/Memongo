@@ -43,6 +43,7 @@ export {
 	memoryJobsCollection,
 	sessionChunksCollection,
 	memoryEvidenceCollection,
+	costLedgerCollection,
 } from "./mongodb-schema-collections.js"
 export {
 	ensureCollections,

@@ -48,7 +48,7 @@ This file is the compaction anchor: any future instance resumes from here.
 | WS-07 | C-010 | T3 | CI executes suites | LANDED 5115d889c7 |
 | WS-08 | C-011..015 | T2,T2,T1,T1,T1 | API contracts batch | LANDED (see session log) |
 | WS-09 | C-016 | T2 | Runtime capability re-verification | LANDED (see session log) |
-| WS-10 | C-017 | T2 | Cost observability | pending |
+| WS-10 | C-017 | T2 | Cost observability | LANDED (see session log) |
 | WS-11 | C-018 | T3 | Admission control | pending |
 | WS-12 | C-019 | T2 | Degradation vs healthy emptiness | pending |
 | WS-13 | C-020..023 | T2,T2,T2,T2 | Lifecycle scheduling/dead letters | LANDED b175de6955 + artifacts (see session log) |
@@ -59,7 +59,7 @@ This file is the compaction anchor: any future instance resumes from here.
 | WS-18 | C-037,038,039 | T1,T2,T2 | dockerignore; publish gates; nightly eval | pending |
 
 T3 needing refutation: C-002, C-003, C-004, C-005, C-007, C-008, C-009, C-018.
-Validation IDs used so far: V-001..V-089 (next free: V-090).
+Validation IDs used so far: V-001..V-092 (next free: V-093).
 Sweep violations at WS-01 landing: 92 (was 96 pre-WS-01).
 Sweep violations at WS-02 landing: 86 (was 92; zero for C-002).
 Sweep violations at WS-04 landing: 67 (was 72 at WS-03; zero for C-007).
@@ -84,6 +84,10 @@ C-020..C-023; the 11 WS-13 violations cleared: 4x claim-without-
 validation + 7x trace-without-validation TR-054..TR-060; remaining 35
 are the pending workstreams WS-10/11/12/14/15/16/18 plus the C-040
 quartet).
+Sweep violations at WS-10 landing: 31 (was 35; zero for C-017; the 4
+WS-10 violations cleared: claim-without-validation + 3x
+trace-without-validation TR-045/046/047; remaining 31 are the pending
+workstreams WS-11/12/14/15/16/18 plus the C-040 quartet).
 
 ## Session log
 
@@ -542,3 +546,69 @@ quartet).
   lanes — a fresh atlas-local container without VOYAGE_API_KEY fails
   $vectorSearch with CanonicalModel not registered, which reads like a
   code defect but is purely environmental.
+
+- WS-10/C-017 landing (cost observability): all four MUSTs landed as one
+  evidence chain from transport to operator. (1) Transport usage:
+  chatCompletion now returns usage?: EnrichmentChatUsage — the http
+  provider maps prompt_tokens/completion_tokens, the Anthropic provider
+  maps input_tokens/output_tokens, and both omit the field on a missing
+  block or non-finite counts so downstream accounting can never see NaN
+  (6-test C-017 battery under createHttpProvider/createAnthropicProvider).
+  (2) Spend ledger: new mongodb-cost-ledger.ts module — costLedgerDay
+  (UTC yyyy-mm-dd), incrementLedger (fire-and-forget upsert $inc wrapped
+  in try/catch so a ledger failure degrades to a log and never poisons
+  the host operation), recordLLMSpend, recordEmbeddingSpend (integer
+  units, fractional counts floor, non-positive/NaN/Infinity no-ops),
+  getDailyCostSums (aggregation over a clamped day window, best-effort
+  [] on failure), instrumentProviderCostSpend (provider wrapper passing
+  usage through to the ledger). Schema: 30th collection memory_cost_ledger
+  + 2 standard indexes (uq_cost_ledger_agent_day_kind unique on
+  agentId/day/kind so concurrent spend increments merge one document per
+  key; idx_cost_ledger_ttl 400-day expiry) — EXPECTED_STANDARD_INDEX_
+  COUNT 100 -> 102. (3) Production wiring: token threading through
+  operation accounting (OperationMutation inputTokens/outputTokens,
+  recordSuccess accumulates per entry, tokensMeasured flips the snapshot
+  note to "provider token usage is measured; prices are not configured",
+  instrumentOperationProvider threads transport usage); extraction +
+  prefetch + consolidator LLM providers wrapped with
+  instrumentProviderCostSpend; embedding spend recorded at every
+  production embedding site (search-time, query-cache probe, 3
+  consolidator vector-search stages, structured-memory persist indexing,
+  conversation chunk single + batch paths — batch bills once on the
+  accumulated createdChunkCount, KB persistChunksAndComplete bills the
+  applied count per document, procedures bill per changed persist);
+  writeStructuredMemory's unchanged early return now reports changed:
+  false so callers know nothing was billed. (4) Surface + controls:
+  getV2Status gains costLedger { windowDays, daily[] } as the 29th
+  allSettled check (empty ledger stays 200); /v1/status/detailed serves
+  it verbatim (2-test C-017 api boundary battery); telemetry gains
+  resolveTelemetrySampling — MEMONGO_TELEMETRY_ENABLED kill switch
+  (0/off/no aliases, never touches the driver) + MEMONGO_TELEMETRY_
+  SAMPLE_RATE (0 drops all, 1/default emits all, invalid fails open to
+  full emission; 7-test battery). Docs: docs/platform/cost-model.md
+  (counter semantics, token/embed-unit conversion table, regeneration
+  procedure) + self-host.md cost-observability section. Suite state:
+  engine 123 files/2148 tests, api 268, lib 166, bridge 82, mongodb-e2e
+  43/43 (real stack, 102 indexes verified), real-e2e-v2 81/81 (getV2Status
+  live), check-types 15/15, touched-files Biome clean (scoped per-file
+  checks caught 4 errors incl. a 1e999 precision-loss literal ->
+  Number.POSITIVE_INFINITY). Artifacts: V-090 (llm-enrichment) /
+  V-091 (operation-accounting) / V-092 (telemetry) anchored to
+  ws10-engine-suite.log, companion logs ws10-api-suite.log /
+  ws10-mongodb-e2e.log / ws10-real-e2e-v2.log hashed in the notes,
+  C-017 validations filled, TR-045/046/047 patched, sweep-ws10.json 31
+  violations, zero for C-017. Methodology lessons: (1) construct honesty
+  (WS-13 lesson re-applied) — mongodb-operation-accounting.ts had no
+  direct battery for the new token behavior at verification time (only
+  the pre-existing resume test), so a 6-test C-017 battery was added at
+  landing rather than citing an engine log against an untested construct;
+  recordSuccess does not bump attempted (only recordAttempt does) — the
+  first draft of the battery asserted attempted: 2 and went red, which is
+  the battery doing its job. (2) A new collection needs BOTH the
+  EXPECTED_COLLECTION_SUFFIXES entry and any index-count bump — the
+  idempotent e2e count check keys on the suffix list (30 vs 29), a
+  second red-at-landing gate the WS-13 index-count lesson did not cover.
+  (3) The benchmark-only session-evidence/userfact writers take injected
+  Collections (no db/prefix handle), so they are intentionally outside
+  the production ledger surface — counting them would require a
+  production code path they do not have.

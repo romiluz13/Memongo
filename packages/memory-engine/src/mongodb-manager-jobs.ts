@@ -1,4 +1,5 @@
 import path from "node:path"
+import { instrumentProviderCostSpend } from "./mongodb-cost-ledger.js"
 import {
 	instrumentOperationProvider,
 	type OperationRunContext,
@@ -327,7 +328,17 @@ export class MongoDBManagerJobsOps {
 			// provider is unconfigured or misconfigured.
 			let enrichmentProvider: EnrichmentProvider | null = null
 			try {
-				enrichmentProvider = resolveEnrichmentProvider(process.env)
+				const resolved = resolveEnrichmentProvider(process.env)
+				// C-017: every production extraction call lands in the per-tenant
+				// per-day cost ledger (tokens from the transport usage block).
+				enrichmentProvider = resolved
+					? instrumentProviderCostSpend({
+							db: this.host.db,
+							prefix: this.host.prefix,
+							agentId: this.host.agentId,
+							provider: resolved,
+						})
+					: null
 			} catch (err) {
 				log.warn("enrichment provider resolution failed; using regex-only", {
 					error: err instanceof Error ? err.message : String(err),
@@ -798,7 +809,17 @@ export class MongoDBManagerJobsOps {
 		}
 		let provider: EnrichmentProvider | null = null
 		try {
-			provider = resolveEnrichmentProvider(process.env)
+			const resolved = resolveEnrichmentProvider(process.env)
+			// C-017: session-batched prefetch calls bill the same per-tenant
+			// ledger as per-event extraction.
+			provider = resolved
+				? instrumentProviderCostSpend({
+						db: this.host.db,
+						prefix: this.host.prefix,
+						agentId: this.host.agentId,
+						provider: resolved,
+					})
+				: null
 		} catch (err) {
 			log.warn(
 				`session-batched extraction prefetch skipped; provider resolution failed: ${err instanceof Error ? err.message : String(err)}`,

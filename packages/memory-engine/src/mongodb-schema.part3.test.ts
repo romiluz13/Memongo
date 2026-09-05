@@ -1276,8 +1276,9 @@ describe("ensureCollections total count with query_cache and time series", () =>
 	it("creates all regular collections plus telemetry and access-events time series collections", async () => {
 		const db = mockDb([])
 		await ensureCollections(db, "test_")
-		// 29 = 28 baseline + 1 memory_quarantine (embedding_cache removed, #13)
-		expect(db.createCollection).toHaveBeenCalledTimes(29)
+		// 30 = 28 baseline + 1 memory_quarantine (embedding_cache removed, #13)
+		// + 1 memory_cost_ledger (C-017)
+		expect(db.createCollection).toHaveBeenCalledTimes(30)
 	})
 })
 
@@ -1296,7 +1297,8 @@ describe("ensureStandardIndexes total count with query_cache and time series ind
 		// P4.4.1: +2 partial TTL indexes (events, structured_mem)
 		// C-005: +1 partial TTL index (chunks expiresAt) + 1 session_chunks TTL (idx_session_chunks_ttl_expires_at)
 		// C-004: +3 memory_quarantine (unique id, queue listing, pending TTL)
-		// = 100
-		expect(count).toBe(100)
+		// C-017 (WS-10): +2 cost ledger (unique agent/day/kind + TTL)
+		// = 102
+		expect(count).toBe(102)
 	})
 })

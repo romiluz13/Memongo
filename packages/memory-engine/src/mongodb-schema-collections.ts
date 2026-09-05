@@ -246,3 +246,14 @@ export function sessionChunksCollection(db: Db, prefix: string): Collection {
 export function memoryEvidenceCollection(db: Db, prefix: string): Collection {
 	return col(db, prefix, "memory_evidence")
 }
+
+/**
+ * C-017: per-tenant per-day spend ledger. One document per
+ * (agentId, UTC day, kind) with $inc counters — LLM input/output tokens and
+ * embedding units. Unlike memory_telemetry (sampled, 7-day TTL), the ledger
+ * is written on every counted spend event and kept for 90 days so daily cost
+ * sums survive a weekly reporting cycle.
+ */
+export function costLedgerCollection(db: Db, prefix: string): Collection {
+	return col(db, prefix, "memory_cost_ledger")
+}

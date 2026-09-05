@@ -641,3 +641,33 @@ entries:
     run_at: "2026-09-05T11:21:22.729Z"
     evidence_hash: "sha256:6f9d75a1226f0b39f9bf1575282fe7742cf28ba891a18fa441c8c73ef213961e"
     notes: "Batch-backstop evidence from the final-state WS-13 engine suite (this log, 122 files / 2107 tests, exit 0): the write battery pins the batch path staging extraction jobs inside the same transaction the single-write path uses — amortized one-pass bulk writes with per-item receipts, and when the staged job insert fails after the events commit, the outbox marker stays armed so the backstop repair re-stages the job (C-023 unit test). The receipts-parity battery pins the batch receipt carrying every field the single receipt carries, with idempotent replay, conflict, and failure mapping identical across paths. The real-DB half is in the companion e2e log of V-083: backstops batch-durable events that committed without extraction jobs. The production-dead legacy writeEventAndProject was removed from this module to test-helpers/legacy-write-event.ts, keeping the e2e primitive without the dead surface."
+  - id: V-090
+    schema_version: 0.1.0
+    claim: C-017
+    construct: packages/memory-engine/src/mongodb-llm-enrichment.ts
+    method: test
+    target: .ddd/reports/runs/ws10-engine-suite.log
+    result: pass
+    run_at: "2026-09-05T12:05:05.493Z"
+    evidence_hash: "sha256:0ad019225d97c32943899b337f0642afb0f3b47d1ae45295a18777772fd5aa6f"
+    notes: "Transport-usage evidence from the final-state WS-10 engine suite (this log, 123 files / 2148 tests, exit 0): the C-017 batteries under createHttpProvider and createAnthropicProvider pin chatCompletion returning the transport usage block as EnrichmentChatUsage — prompt_tokens/completion_tokens and input_tokens/output_tokens mapped to inputTokens/outputTokens — omitting usage when the gateway reports no block, and omitting it on non-finite counts so spend accounting can never see NaN or Infinity. The spend-side companion (the same usage threading through instrumentProviderCostSpend into the per-day ledger) is pinned in the cost-ledger battery of the same log and validated under V-091's construct."
+  - id: V-091
+    schema_version: 0.1.0
+    claim: C-017
+    construct: packages/memory-engine/src/mongodb-operation-accounting.ts
+    method: test
+    target: .ddd/reports/runs/ws10-engine-suite.log
+    result: pass
+    run_at: "2026-09-05T12:05:12.200Z"
+    evidence_hash: "sha256:0ad019225d97c32943899b337f0642afb0f3b47d1ae45295a18777772fd5aa6f"
+    notes: "Run-accounting evidence from the final-state WS-10 engine suite (this log, 123 files / 2148 tests, exit 0): the operation-run-accounting battery (6 C-017 tests) pins recordSuccess accumulating transport-reported inputTokens/outputTokens per operation entry (summed across calls), absent-not-zero semantics when the transport reports no usage, non-finite counts ignored, the snapshot unavailableReason downgrade to 'provider token usage is measured; prices are not configured' once any tokens are recorded, and instrumentOperationProvider threading attempt/success/usage plus the failure path recording a failure with no token fields. The spend surfaces built on this accounting are pinned in the same log's cost-ledger battery (recordLLMSpend upsert shape, recordEmbeddingSpend units with flooring and no-op guards, getDailyCostSums window aggregation, instrumentProviderCostSpend passthrough), and the deployment surface is pinned live: ws10-mongodb-e2e.log (sha256:0161c2ff3f443ebe20437d34b70ba86b661607e7b0e0284f172f0c88d13c6db5, 43 tests, memory_cost_ledger created with 102 standard indexes including uq_cost_ledger_agent_day_kind + idx_cost_ledger_ttl) and ws10-api-suite.log (sha256:03688653531cf7dbf6827e4fffb6ddc789b928db3fde8bd47c6c6b4bfb43dfe8, 268 tests, the C-017 battery pinning the status surface serving costLedger verbatim and staying 200 when the ledger is empty)."
+  - id: V-092
+    schema_version: 0.1.0
+    claim: C-017
+    construct: packages/memory-engine/src/mongodb-telemetry.ts
+    method: test
+    target: .ddd/reports/runs/ws10-engine-suite.log
+    result: pass
+    run_at: "2026-09-05T12:05:15.895Z"
+    evidence_hash: "sha256:0ad019225d97c32943899b337f0642afb0f3b47d1ae45295a18777772fd5aa6f"
+    notes: "Sampling and kill-switch evidence from the final-state WS-10 engine suite (this log, 123 files / 2148 tests, exit 0): the 'sampling controls (08-report fleet audit)' battery (7 tests) pins MEMONGO_TELEMETRY_ENABLED=false never touching the driver (kill switch accepting the 0/off/no aliases), sample rate 0 dropping every emit without a driver call, the unset default emitting every document, rate 1 emitting every document, rate 0.5 emitting a statistically-bounded subset, and an invalid rate failing open to full emission rather than silently dropping; the resolveTelemetrySampling unit test pins the env parsing and defaults the battery relies on."

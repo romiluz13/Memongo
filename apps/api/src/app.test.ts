@@ -1637,3 +1637,99 @@ describe("C-021 dead-letter surfacing on the status endpoint", () => {
 		expect(body.memoryJobs).toBeUndefined()
 	})
 })
+
+describe("C-017 cost ledger surfacing on the status endpoint", () => {
+	const prevEnv = { ...process.env }
+
+	beforeEach(() => {
+		process.env = { ...prevEnv }
+		delete process.env.MEMONGO_API_KEY
+		delete process.env.MEMONGO_API_SCOPED_KEYS
+		process.env.MEMONGO_ALLOW_INSECURE_NO_AUTH = "true"
+		process.env.MEMONGO_API_RATE_LIMIT = ""
+		bridgeMocks.memongoBridgeGetDetailedStatus.mockReset()
+	})
+
+	afterEach(() => {
+		process.env = prevEnv
+	})
+
+	it("serves per-day cost ledger sums verbatim", async () => {
+		// The engine's getV2Status (C-017) aggregates memory_cost_ledger into
+		// trailing 30-day per-day sums; the route is the pass-through surface.
+		// This pins the contract: per-tenant spend is countable at the HTTP
+		// boundary, not just in the engine.
+		bridgeMocks.memongoBridgeGetDetailedStatus.mockResolvedValue({
+			health: { overall: "ok" },
+			costLedger: {
+				windowDays: 30,
+				daily: [
+					{
+						day: "2026-08-13",
+						inputTokens: 1200,
+						outputTokens: 300,
+						embedUnits: 9,
+					},
+					{
+						day: "2026-08-14",
+						inputTokens: 800,
+						outputTokens: 210,
+						embedUnits: 6,
+					},
+				],
+			},
+		})
+
+		const res = await createApp().request(
+			"/v1/status/detailed?agentId=agent-cost",
+		)
+		expect(res.status).toBe(200)
+		const body = (await res.json()) as {
+			costLedger?: {
+				windowDays: number
+				daily: Array<{
+					day: string
+					inputTokens: number
+					outputTokens: number
+					embedUnits: number
+				}>
+			}
+		}
+		expect(body.costLedger).toEqual({
+			windowDays: 30,
+			daily: [
+				{
+					day: "2026-08-13",
+					inputTokens: 1200,
+					outputTokens: 300,
+					embedUnits: 9,
+				},
+				{
+					day: "2026-08-14",
+					inputTokens: 800,
+					outputTokens: 210,
+					embedUnits: 6,
+				},
+			],
+		})
+		expect(bridgeMocks.memongoBridgeGetDetailedStatus).toHaveBeenCalledWith({
+			agentId: "agent-cost",
+		})
+	})
+
+	it("stays 200 with an empty ledger when nothing has been spent", async () => {
+		// A deployment with no ledger documents aggregates to daily: [] — the
+		// route must serve the empty window, not invent or break on it.
+		bridgeMocks.memongoBridgeGetDetailedStatus.mockResolvedValue({
+			health: { overall: "ok" },
+			costLedger: { windowDays: 30, daily: [] },
+		})
+
+		const res = await createApp().request("/v1/status/detailed")
+		expect(res.status).toBe(200)
+		const body = (await res.json()) as {
+			costLedger?: { windowDays: number; daily: unknown[] }
+		}
+		expect(body.costLedger).toEqual({ windowDays: 30, daily: [] })
+	})
+})

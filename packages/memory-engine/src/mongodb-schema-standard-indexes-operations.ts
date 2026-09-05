@@ -25,6 +25,7 @@ import {
 	memoryJobsCollection,
 	sessionChunksCollection,
 	memoryEvidenceCollection,
+	costLedgerCollection,
 } from "./mongodb-schema-collections.js"
 
 // ---------------------------------------------------------------------------
@@ -482,6 +483,33 @@ export async function ensureOperationalStandardIndexes(
 			expireAfterSeconds: 0,
 			partialFilterExpression: { expiresAt: { $exists: true } },
 		},
+	)
+	applied++
+
+	// -----------------------------------------------------------------------
+	// Cost ledger (C-017 per-tenant per-day spend accounting)
+	// -----------------------------------------------------------------------
+	// One doc per (agentId, day, kind) — the unique compound both prevents
+	// concurrent upserts from forking a second counter doc and serves the
+	// per-agent day-range aggregation behind getV2Status's costLedger section.
+	const costLedger = costLedgerCollection(db, prefix)
+	try {
+		await costLedger.createIndex(
+			{ agentId: 1, day: 1, kind: 1 },
+			{ name: "uq_cost_ledger_agent_day_kind", unique: true },
+		)
+		applied++
+	} catch (err) {
+		handleUniqueIndexCreationError(err, "uq_cost_ledger_agent_day_kind")
+		applied++
+	}
+	// Rolling 90-day retention: a ledger doc expires 90 days after its last
+	// update, so an active tenant's counters never age out while an idle
+	// tenant's rows eventually prune. Long enough to survive a weekly and a
+	// monthly reporting cycle on the same data.
+	await costLedger.createIndex(
+		{ updatedAt: 1 },
+		{ name: "idx_cost_ledger_ttl", expireAfterSeconds: 90 * 86_400 },
 	)
 	applied++
 

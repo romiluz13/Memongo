@@ -15,6 +15,7 @@ import type { RelevanceArtifact } from "./mongodb-relevance.js"
 import { resolveSessionEvidenceMode } from "./mongodb-session-evidence.js"
 import { resolveUserfactEvidenceMode } from "./mongodb-userfact-evidence.js"
 import { resolveEnrichmentMode } from "./mongodb-llm-enrichment.js"
+import { recordEmbeddingSpend } from "./mongodb-cost-ledger.js"
 import type { RetrievalPath } from "./mongodb-retrieval-planner.js"
 import {
 	kbCollection,
@@ -751,6 +752,16 @@ export class MongoDBManagerSearchOps {
 				topScore: v2.results[0]?.score ?? 0,
 				fusionMethod: mongoCfg.fusionMethod,
 			})
+			// C-017: bill query-time server-side embeds from the search budget
+			// snapshot — one fire-and-forget ledger increment per request
+			// (zero when the budget was untouched).
+			recordEmbeddingSpend(
+				this.host.db,
+				this.host.prefix,
+				this.host.agentId,
+				"search",
+				v2.metadata.budget?.embeds ?? 0,
+			)
 			const latencyMs = Date.now() - searchStart
 			const latencyByLane = v2.metadata.latencyByPath ?? {}
 			laneLatency = latencyByLane

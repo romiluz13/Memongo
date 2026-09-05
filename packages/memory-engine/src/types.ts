@@ -1352,6 +1352,14 @@ export type BenchmarkOperationAccounting = {
 	provider?: string
 	model?: string
 	unavailableReason?: string
+	/**
+	 * C-017: provider token usage accumulated across recorded successes,
+	 * present once at least one transport response carried a usage block.
+	 * Null when the provider does not report usage (the accounting then
+	 * degrades to call counts).
+	 */
+	inputTokens?: number | null
+	outputTokens?: number | null
 }
 
 export type BenchmarkCostAccounting = {

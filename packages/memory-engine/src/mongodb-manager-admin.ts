@@ -8,6 +8,7 @@ import type { ChangeStreamLiveness } from "./mongodb-change-stream.js"
 import { deleteAllForAgent as runTenantErasure } from "./mongodb-erasure.js"
 import type { TenantErasureReceipt } from "./mongodb-erasure.js"
 import { getLaneCoverage } from "./mongodb-lane-coverage.js"
+import { getDailyCostSums, type DailyCostSum } from "./mongodb-cost-ledger.js"
 import type { MongoDBManagerHost } from "./mongodb-manager-host.js"
 import {
 	promoteQuarantined as runPromoteQuarantined,
@@ -156,6 +157,18 @@ export type V2Status = {
 		failed: number
 		deadLettered: number
 	}
+	/**
+	 * C-017: per-tenant spend ledger sums over the trailing window. `daily`
+	 * lists the UTC days that have at least one ledger document (absent days
+	 * spent nothing). The aggregation itself swallows failures and degrades
+	 * to [] (cost data is best-effort); the allSettled guard and
+	 * `costLedger.dailySums` failed-check label are defense-in-depth for a
+	 * synchronous throw outside the aggregation's own catch.
+	 */
+	costLedger?: {
+		windowDays: number
+		daily: DailyCostSum[]
+	}
 }
 
 const PROJECTION_BEHIND_SECONDS = 5 * 60
@@ -187,6 +200,7 @@ const V2_STATUS_CHECK_LABELS = [
 	"memoryJobs.running",
 	"memoryJobs.failed",
 	"memoryJobs.deadLettered",
+	"costLedger.dailySums",
 ] as const
 
 export function classifyCanonicalIngestHealth(
@@ -367,6 +381,8 @@ export async function getV2Status(
 				agentId,
 				deadLetterAt: { $exists: true },
 			}),
+			// C-017: trailing per-day cost ledger sums (tokens + embed units).
+			getDailyCostSums(db, prefix, agentId, 30),
 		])
 
 		// Extract fulfilled values, default to safe fallbacks on rejection
@@ -410,6 +426,7 @@ export async function getV2Status(
 		const memoryJobsRunning = val(settled[24], 0)
 		const memoryJobsFailed = val(settled[25], 0)
 		const memoryJobsDeadLettered = val(settled[26], 0)
+		const costDailySums = val(settled[27], [] as DailyCostSum[])
 		const failedChecks = settled.flatMap((result, index) =>
 			result.status === "rejected" ? [V2_STATUS_CHECK_LABELS[index]] : [],
 		)
@@ -535,6 +552,10 @@ export async function getV2Status(
 				running: memoryJobsRunning,
 				failed: memoryJobsFailed,
 				deadLettered: memoryJobsDeadLettered,
+			},
+			costLedger: {
+				windowDays: 30,
+				daily: costDailySums,
 			},
 		}
 	} catch (err) {

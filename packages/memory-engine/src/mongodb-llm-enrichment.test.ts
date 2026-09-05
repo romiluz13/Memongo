@@ -278,6 +278,86 @@ describe("createHttpProvider", () => {
 		expect(options.headers.Authorization).toBeUndefined()
 	})
 
+	it("returns the transport usage block as EnrichmentChatUsage (C-017)", async () => {
+		const mockFetch = vi.fn().mockResolvedValue({
+			ok: true,
+			json: async () => ({
+				choices: [{ message: { content: "{}" } }],
+				usage: { prompt_tokens: 17, completion_tokens: 4 },
+			}),
+		})
+
+		const provider = createHttpProvider(
+			{
+				baseUrl: "https://example.com/v1",
+				apiKey: "test-key",
+				model: "gpt-4o-mini",
+			},
+			mockFetch as unknown as typeof globalThis.fetch,
+			TEST_TRANSPORT,
+		)
+
+		const result = await provider.chatCompletion({
+			model: "gpt-4o-mini",
+			messages: [{ role: "user", content: "test" }],
+		})
+
+		expect(result.usage).toEqual({ inputTokens: 17, outputTokens: 4 })
+	})
+
+	it("omits usage when the gateway reports no usage block (C-017)", async () => {
+		const mockFetch = vi.fn().mockResolvedValue({
+			ok: true,
+			json: async () => ({
+				choices: [{ message: { content: "{}" } }],
+			}),
+		})
+
+		const provider = createHttpProvider(
+			{
+				baseUrl: "https://example.com/v1",
+				apiKey: "test-key",
+				model: "gpt-4o-mini",
+			},
+			mockFetch as unknown as typeof globalThis.fetch,
+			TEST_TRANSPORT,
+		)
+
+		const result = await provider.chatCompletion({
+			model: "gpt-4o-mini",
+			messages: [{ role: "user", content: "test" }],
+		})
+
+		expect(result.usage).toBeUndefined()
+	})
+
+	it("omits usage when the gateway reports invalid counts (C-017)", async () => {
+		const mockFetch = vi.fn().mockResolvedValue({
+			ok: true,
+			json: async () => ({
+				choices: [{ message: { content: "{}" } }],
+				usage: { prompt_tokens: "many", completion_tokens: 4 },
+			}),
+		})
+
+		const provider = createHttpProvider(
+			{
+				baseUrl: "https://example.com/v1",
+				apiKey: "test-key",
+				model: "gpt-4o-mini",
+			},
+			mockFetch as unknown as typeof globalThis.fetch,
+			TEST_TRANSPORT,
+		)
+
+		const result = await provider.chatCompletion({
+			model: "gpt-4o-mini",
+			messages: [{ role: "user", content: "test" }],
+		})
+
+		expect(result.usage).toBeUndefined()
+	})
+
 	it("throws on non-ok response", async () => {
 		const mockFetch = vi.fn().mockResolvedValue({
 			ok: false,
@@ -350,6 +430,86 @@ describe("createAnthropicProvider", () => {
 		expect(body.max_tokens).toBe(2048)
 		expect(body.system).toBe("system prompt")
 		expect(body.messages).toEqual([{ role: "user", content: "test" }])
+	})
+
+	it("returns the Anthropic usage block as EnrichmentChatUsage (C-017)", async () => {
+		const mockFetch = vi.fn().mockResolvedValue({
+			ok: true,
+			json: async () => ({
+				content: [{ type: "text", text: "{}" }],
+				usage: { input_tokens: 21, output_tokens: 6 },
+			}),
+		})
+
+		const provider = createAnthropicProvider(
+			{
+				baseUrl: "https://example.com/anthropic/v1/messages",
+				apiKey: "test-key",
+				model: "claude-sonnet-4-6",
+			},
+			mockFetch as unknown as typeof globalThis.fetch,
+			TEST_TRANSPORT,
+		)
+
+		const result = await provider.chatCompletion({
+			model: "claude-sonnet-4-6",
+			messages: [{ role: "user", content: "test" }],
+		})
+
+		expect(result.usage).toEqual({ inputTokens: 21, outputTokens: 6 })
+	})
+
+	it("omits usage when the Anthropic response reports no usage block (C-017)", async () => {
+		const mockFetch = vi.fn().mockResolvedValue({
+			ok: true,
+			json: async () => ({
+				content: [{ type: "text", text: "{}" }],
+			}),
+		})
+
+		const provider = createAnthropicProvider(
+			{
+				baseUrl: "https://example.com/anthropic/v1/messages",
+				apiKey: "test-key",
+				model: "claude-sonnet-4-6",
+			},
+			mockFetch as unknown as typeof globalThis.fetch,
+			TEST_TRANSPORT,
+		)
+
+		const result = await provider.chatCompletion({
+			model: "claude-sonnet-4-6",
+			messages: [{ role: "user", content: "test" }],
+		})
+
+		expect(result.usage).toBeUndefined()
+	})
+
+	it("omits usage when the Anthropic response reports non-finite counts (C-017)", async () => {
+		const mockFetch = vi.fn().mockResolvedValue({
+			ok: true,
+			json: async () => ({
+				content: [{ type: "text", text: "{}" }],
+				usage: { input_tokens: Number.NaN, output_tokens: 6 },
+			}),
+		})
+
+		const provider = createAnthropicProvider(
+			{
+				baseUrl: "https://example.com/anthropic/v1/messages",
+				apiKey: "test-key",
+				model: "claude-sonnet-4-6",
+			},
+			mockFetch as unknown as typeof globalThis.fetch,
+			TEST_TRANSPORT,
+		)
+
+		const result = await provider.chatCompletion({
+			model: "claude-sonnet-4-6",
+			messages: [{ role: "user", content: "test" }],
+		})
+
+		expect(result.usage).toBeUndefined()
 	})
 })
 

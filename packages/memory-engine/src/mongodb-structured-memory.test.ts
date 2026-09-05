@@ -288,7 +288,11 @@ describe("writeStructuredMemory", () => {
 			eventReceiptIds: ["evt-replayed"],
 		})
 
-		expect(result).toEqual({ upserted: false, id: "event-receipt" })
+		expect(result).toEqual({
+			upserted: false,
+			id: "event-receipt",
+			changed: false,
+		})
 		expect(col.updateOne).not.toHaveBeenCalled()
 		expect(revisionsCol.insertOne).not.toHaveBeenCalled()
 		expect(queryCache.deleteMany).not.toHaveBeenCalled()

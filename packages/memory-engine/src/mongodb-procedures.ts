@@ -12,6 +12,7 @@ import {
 	createSubsystemLogger,
 } from "@memongo/lib"
 import { isDuplicateKeyError } from "./internal.js"
+import { recordEmbeddingSpend } from "./mongodb-cost-ledger.js"
 import { recordMutation, type MutationMeta } from "./mongodb-mutations.js"
 import { invalidateQueryCache } from "./mongodb-query-cache.js"
 import { summarizeExplain } from "./mongodb-relevance.js"
@@ -630,7 +631,6 @@ export async function writeProcedure(params: {
 	expectedRevision?: number
 }): Promise<{ upserted: boolean; id: string }> {
 	const { db, prefix, entry } = params
-	void params.embeddingMode
 	const collection = proceduresCollection(db, prefix)
 	const revisions = procedureRevisionsCollection(db, prefix)
 	const scope = entry.scope ?? "agent"
@@ -846,6 +846,12 @@ export async function writeProcedure(params: {
 	log.info(
 		`procedure ${outcome.upserted ? "created" : "updated"}: id=${entry.procedureId} revision=${outcome.revision}`,
 	)
+	// C-017: a changed persist rewrites searchText, which the procedures
+	// vector index embeds server-side (autoEmbed) in automated mode — one
+	// indexing unit per changed write.
+	if (params.embeddingMode === "automated") {
+		recordEmbeddingSpend(db, prefix, entry.agentId, "indexing", 1)
+	}
 	await invalidateQueryCache({
 		db,
 		prefix,

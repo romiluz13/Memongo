@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto"
 import type { OperationRunContext } from "./mongodb-operation-accounting.js"
 import { isDuplicateKeyError } from "./internal.js"
+import { recordEmbeddingSpend } from "./mongodb-cost-ledger.js"
 import {
 	extractStructuredCandidatesFromEvent,
 	extractProcedureCandidatesFromEvent,
@@ -468,6 +469,18 @@ export class MongoDBManagerWriteOps {
 			})
 			if (projected.chunkCreated) {
 				this.host.chunkCount += 1
+				// C-017: a newly projected chunk is embedded server-side
+				// (autoEmbed) in automated mode — bill one indexing unit per
+				// created chunk; replays create none.
+				if (this.host.config.mongodb?.embeddingMode === "automated") {
+					recordEmbeddingSpend(
+						this.host.db,
+						this.host.prefix,
+						this.host.agentId,
+						"indexing",
+						1,
+					)
+				}
 			}
 			if (postWriteDerivedWorkEnabled) {
 				const jobId = `extraction-${written.eventId}`
@@ -834,16 +847,33 @@ export class MongoDBManagerWriteOps {
 						...(item.input.metadata ? { metadata: item.input.metadata } : {}),
 					})),
 				})
+				let createdChunkCount = 0
 				for (const [position, item] of written.entries()) {
 					const chunkCreated = chunkResults[position]?.chunkCreated ?? false
 					if (chunkCreated) {
 						this.host.chunkCount += 1
+						createdChunkCount += 1
 					}
 					receipts[item.index] = {
 						ok: true,
 						eventId: item.eventId,
 						chunkCreated,
 					}
+				}
+				// C-017: each newly projected chunk is embedded server-side
+				// (autoEmbed) in automated mode — one indexing unit per created
+				// chunk, billed as one ledger increment for the batch.
+				if (
+					createdChunkCount > 0 &&
+					this.host.config.mongodb?.embeddingMode === "automated"
+				) {
+					recordEmbeddingSpend(
+						this.host.db,
+						this.host.prefix,
+						this.host.agentId,
+						"indexing",
+						createdChunkCount,
+					)
 				}
 			}
 

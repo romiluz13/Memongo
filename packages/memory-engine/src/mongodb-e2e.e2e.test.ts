@@ -96,6 +96,8 @@ const EXPECTED_COLLECTION_SUFFIXES = [
 	"memory_quarantine",
 	"recall_traces",
 	"session_chunks",
+	// WS-10 (C-017): per-tenant per-day spend ledger.
+	"memory_cost_ledger",
 ] as const
 // P3.8: −3 retired redundant indexes (idx_chunks_path, idx_structured_agentid,
 // idx_relations_agent_scope_scoperef), +3 ESR compounds, +1 relationId locator.
@@ -104,7 +106,9 @@ const EXPECTED_COLLECTION_SUFFIXES = [
 // WS-03 added the session_chunks expiry partial TTL index
 // (idx_session_chunks_ttl_expires_at) but never bumped this count: the e2e
 // has been red at HEAD since. 96 + 4 TTL indexes = 100.
-const EXPECTED_STANDARD_INDEX_COUNT = 100
+// WS-10 (C-017) added the cost-ledger pair (uq_cost_ledger_agent_day_kind +
+// idx_cost_ledger_ttl): 100 + 2 = 102.
+const EXPECTED_STANDARD_INDEX_COUNT = 102
 
 let client: MongoClient
 let db: Db

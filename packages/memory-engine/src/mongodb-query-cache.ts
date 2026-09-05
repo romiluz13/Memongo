@@ -7,6 +7,7 @@ import {
 	createSubsystemLogger,
 } from "@memongo/lib"
 import type { ConversationEvidenceMode } from "./mongodb-conversation-evidence-mode.js"
+import { recordEmbeddingSpend } from "./mongodb-cost-ledger.js"
 import type { RerankConfig } from "./mongodb-reranker.js"
 import { queryCacheCollection } from "./mongodb-schema.js"
 import {
@@ -406,6 +407,9 @@ export async function checkCache(params: {
 			aggregateOptions: { maxTimeMS: SEMANTIC_PROBE_MAX_TIME_MS },
 		})
 		semanticMs = Date.now() - semanticStart
+		// C-017: the executed $vectorSearch embedded queryNorm server-side
+		// (autoEmbed) — bill one cache-probe embedding unit, hit or miss.
+		recordEmbeddingSpend(db, prefix, agentId, "cache-probe", 1)
 		if (
 			candidates.length > 0 &&
 			candidates[0].score >= config.similarityThreshold &&

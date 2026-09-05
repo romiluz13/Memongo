@@ -351,8 +351,9 @@ describe("ensureCollections", () => {
 	it("creates all collections when none exist, including both time series collections", async () => {
 		const db = mockDb([])
 		await ensureCollections(db, "test_")
-		// 29 = 28 baseline + 1 memory_quarantine (embedding_cache removed, #13)
-		expect(db.createCollection).toHaveBeenCalledTimes(29)
+		// 30 = 28 baseline + 1 memory_quarantine (embedding_cache removed, #13)
+		// + 1 memory_cost_ledger (C-017)
+		expect(db.createCollection).toHaveBeenCalledTimes(30)
 		// Non-validated collections: called with name only
 		expect(db.createCollection).toHaveBeenCalledWith(
 			"test_files",
@@ -431,8 +432,8 @@ describe("ensureCollections", () => {
 	it("skips already-existing collections", async () => {
 		const db = mockDb(["test_chunks", "test_files"])
 		await ensureCollections(db, "test_")
-		// 27 = 29 new total - 2 skipped (embedding_cache removed, #13).
-		expect(db.createCollection).toHaveBeenCalledTimes(27)
+		// 28 = 30 new total - 2 skipped (embedding_cache removed, #13).
+		expect(db.createCollection).toHaveBeenCalledTimes(28)
 		expect(db.createCollection).toHaveBeenCalledWith("test_meta")
 		expect(db.createCollection).toHaveBeenCalledWith(
 			"test_knowledge_base",
@@ -488,6 +489,7 @@ describe("ensureCollections", () => {
 			"oc_memory_jobs",
 			"oc_session_chunks",
 			"oc_memory_quarantine",
+			"oc_memory_cost_ledger",
 		])
 		await ensureCollections(db, "oc_")
 		expect(db.createCollection).not.toHaveBeenCalled()
@@ -554,8 +556,9 @@ describe("ensureStandardIndexes", () => {
 		// P4.4.1: +2 partial TTL indexes (events, structured_mem)
 		// C-005: +2 partial TTL indexes (chunks + session_chunks expiresAt)
 		// C-004: +3 memory_quarantine (unique id, queue listing, pending TTL)
-		// Total = 100
-		expect(count).toBe(100)
+		// C-017 (WS-10): +2 cost ledger (unique agent/day/kind + TTL)
+		// Total = 102
+		expect(count).toBe(102)
 		expect(chunks.createIndex).toHaveBeenCalledTimes(5)
 		// C-005: per-document chunk TTL, mirroring idx_events_ttl_expires_at.
 		expect(chunks.createIndex).toHaveBeenCalledWith(
@@ -699,11 +702,12 @@ describe("ensureStandardIndexes", () => {
 			) as unknown as {
 				createIndex: ReturnType<typeof vi.fn>
 			}
-			// 100 base (incl. 2 consolidation_runs + events idempotency key,
+			// 102 base (incl. 2 consolidation_runs + events idempotency key,
 			// 2 P4.4.1 partial TTL indexes, the 2 C-005 chunks/session_chunks
-			// TTL indexes, and the 3 C-004 memory_quarantine indexes)
+			// TTL indexes, the 3 C-004 memory_quarantine indexes, and the
+			// 2 C-017 cost-ledger indexes)
 			// + 4 evidence mirror indexes
-			expect(count).toBe(104)
+			expect(count).toBe(106)
 			expect(memoryEvidence.createIndex).toHaveBeenCalledTimes(4)
 			expect(memoryEvidence.createIndex).toHaveBeenCalledWith(
 				{ canonicalId: 1 },
@@ -819,8 +823,9 @@ describe("ensureStandardIndexes", () => {
 		// P4.4.1: +2 partial TTL indexes (events, structured_mem)
 		// C-005: +2 partial TTL indexes (chunks + session_chunks expiresAt)
 		// C-004: +3 memory_quarantine (unique id, queue listing, pending TTL)
-		// Total = 100
-		expect(count).toBe(100)
+		// C-017 (WS-10): +2 cost ledger (unique agent/day/kind + TTL)
+		// Total = 102
+		expect(count).toBe(102)
 	})
 
 	it("creates relevance TTL indexes when relevanceRetentionDays is set", async () => {

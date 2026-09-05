@@ -49,6 +49,18 @@ type EnrichmentTransportOptions = {
 	verifyPublicHostname?: (hostname: string) => Promise<void>
 }
 
+/**
+ * C-017: token usage reported by the provider transport. Present when the
+ * provider response carries a usage block (OpenAI-compatible
+ * prompt_tokens/completion_tokens, Anthropic input_tokens/output_tokens);
+ * absent when the transport does not report usage — spend accounting then
+ * degrades to call counts instead of tokens.
+ */
+export type EnrichmentChatUsage = {
+	inputTokens: number
+	outputTokens: number
+}
+
 export type EnrichmentProvider = {
 	name: string
 	chatCompletion(params: {
@@ -56,7 +68,7 @@ export type EnrichmentProvider = {
 		messages: Array<{ role: string; content: string }>
 		responseFormat?: { type: "json_object" }
 		maxTokens?: number
-	}): Promise<{ content: string }>
+	}): Promise<{ content: string; usage?: EnrichmentChatUsage }>
 }
 
 export type EnrichmentResult = {
@@ -362,9 +374,22 @@ export function createHttpProvider(
 					choices?: Array<{
 						message?: { content?: string }
 					}>
+					usage?: { prompt_tokens?: number; completion_tokens?: number }
 				}
 				const content = json.choices?.[0]?.message?.content ?? ""
-				return { content }
+				// C-017: keep the transport's usage block so spend accounting can
+				// record tokens per call. Numbers are validated — a gateway that
+				// reports non-finite counts must not poison the ledger.
+				const usageInput = json.usage?.prompt_tokens
+				const usageOutput = json.usage?.completion_tokens
+				const usage: EnrichmentChatUsage | undefined =
+					typeof usageInput === "number" &&
+					Number.isFinite(usageInput) &&
+					typeof usageOutput === "number" &&
+					Number.isFinite(usageOutput)
+						? { inputTokens: usageInput, outputTokens: usageOutput }
+						: undefined
+				return usage ? { content, usage } : { content }
 			} catch (err) {
 				// Wrap AbortError (timeout) as retryable 408
 				if (isAbortError(err)) {
@@ -457,13 +482,25 @@ export function createAnthropicProvider(
 
 				const json = (await response.json()) as {
 					content?: Array<{ type?: string; text?: string }>
+					usage?: { input_tokens?: number; output_tokens?: number }
 				}
 				const content =
 					json.content
 						?.map((item) => item.text ?? "")
 						.filter(Boolean)
 						.join("\n") ?? ""
-				return { content }
+				// C-017: Anthropic reports input_tokens/output_tokens; the same
+				// validation rule as the OpenAI-compatible transport applies.
+				const usageInput = json.usage?.input_tokens
+				const usageOutput = json.usage?.output_tokens
+				const usage: EnrichmentChatUsage | undefined =
+					typeof usageInput === "number" &&
+					Number.isFinite(usageInput) &&
+					typeof usageOutput === "number" &&
+					Number.isFinite(usageOutput)
+						? { inputTokens: usageInput, outputTokens: usageOutput }
+						: undefined
+				return usage ? { content, usage } : { content }
 			} catch (err) {
 				if (isAbortError(err)) {
 					throw new EnrichmentHttpError(

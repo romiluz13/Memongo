@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/unbound-method -- Vitest mock method assertions */
 import type { Db, Collection } from "mongodb"
-import { describe, it, expect, vi, beforeEach } from "vitest"
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest"
 
 // ---------------------------------------------------------------------------
 // Mock mongodb-schema before importing module under test
@@ -16,6 +16,7 @@ import {
 	getLatencyStats,
 	getCacheHitRate,
 	getOperationDistribution,
+	resolveTelemetrySampling,
 } from "./mongodb-telemetry.js"
 
 // ---------------------------------------------------------------------------
@@ -144,6 +145,115 @@ describe("emitTelemetry", () => {
 		})
 
 		expect(telemetryCollection).toHaveBeenCalledWith({}, "prod_")
+	})
+
+	describe("sampling controls (08-report fleet audit)", () => {
+		const previousEnabled = process.env.MEMONGO_TELEMETRY_ENABLED
+		const previousRate = process.env.MEMONGO_TELEMETRY_SAMPLE_RATE
+
+		const emitOnce = () =>
+			emitTelemetry({} as Db, PREFIX, {
+				meta: { agentId: AGENT_ID, operation: "search" },
+				durationMs: 10,
+				ok: true,
+			})
+
+		afterEach(() => {
+			if (previousEnabled === undefined) {
+				delete process.env.MEMONGO_TELEMETRY_ENABLED
+			} else {
+				process.env.MEMONGO_TELEMETRY_ENABLED = previousEnabled
+			}
+			if (previousRate === undefined) {
+				delete process.env.MEMONGO_TELEMETRY_SAMPLE_RATE
+			} else {
+				process.env.MEMONGO_TELEMETRY_SAMPLE_RATE = previousRate
+			}
+		})
+
+		it("kill switch: ENABLED=false never touches the driver", () => {
+			process.env.MEMONGO_TELEMETRY_ENABLED = "false"
+			emitOnce()
+			expect(telemetryCollection).not.toHaveBeenCalled()
+			expect(mockCol.insertOne).not.toHaveBeenCalled()
+		})
+
+		it("kill switch accepts 0/off/no aliases", () => {
+			for (const disabled of ["0", "off", "no"]) {
+				vi.clearAllMocks()
+				process.env.MEMONGO_TELEMETRY_ENABLED = disabled
+				emitOnce()
+				expect(mockCol.insertOne).not.toHaveBeenCalled()
+			}
+		})
+
+		it("sample rate 0 drops every emit without touching the driver", () => {
+			process.env.MEMONGO_TELEMETRY_SAMPLE_RATE = "0"
+			emitOnce()
+			expect(telemetryCollection).not.toHaveBeenCalled()
+			expect(mockCol.insertOne).not.toHaveBeenCalled()
+		})
+
+		it("default (unset) emits every document", () => {
+			delete process.env.MEMONGO_TELEMETRY_ENABLED
+			delete process.env.MEMONGO_TELEMETRY_SAMPLE_RATE
+			for (let i = 0; i < 10; i++) {
+				emitOnce()
+			}
+			expect(mockCol.insertOne).toHaveBeenCalledTimes(10)
+		})
+
+		it("sample rate 1 emits every document", () => {
+			process.env.MEMONGO_TELEMETRY_SAMPLE_RATE = "1"
+			for (let i = 0; i < 10; i++) {
+				emitOnce()
+			}
+			expect(mockCol.insertOne).toHaveBeenCalledTimes(10)
+		})
+
+		it("sample rate 0.5 emits a subset within statistical bounds", () => {
+			process.env.MEMONGO_TELEMETRY_SAMPLE_RATE = "0.5"
+			for (let i = 0; i < 500; i++) {
+				emitOnce()
+			}
+			const emitted = vi.mocked(mockCol.insertOne).mock.calls.length
+			// 500 Bernoulli(0.5) trials: P(outside 40..60%) < 1e-5
+			expect(emitted).toBeGreaterThan(150)
+			expect(emitted).toBeLessThan(350)
+		})
+
+		it("invalid rate falls back to full emission (telemetry fails open)", () => {
+			process.env.MEMONGO_TELEMETRY_SAMPLE_RATE = "banana"
+			for (let i = 0; i < 10; i++) {
+				emitOnce()
+			}
+			expect(mockCol.insertOne).toHaveBeenCalledTimes(10)
+		})
+
+		it("resolveTelemetrySampling parses env values and defaults", () => {
+			expect(resolveTelemetrySampling({})).toEqual({
+				enabled: true,
+				sampleRate: 1,
+			})
+			expect(
+				resolveTelemetrySampling({ MEMONGO_TELEMETRY_ENABLED: "FALSE " }),
+			).toEqual({ enabled: false, sampleRate: 1 })
+			expect(
+				resolveTelemetrySampling({
+					MEMONGO_TELEMETRY_ENABLED: "true",
+					MEMONGO_TELEMETRY_SAMPLE_RATE: " 0.25 ",
+				}),
+			).toEqual({ enabled: true, sampleRate: 0.25 })
+			expect(
+				resolveTelemetrySampling({ MEMONGO_TELEMETRY_SAMPLE_RATE: "1.5" }),
+			).toEqual({ enabled: true, sampleRate: 1 })
+			expect(
+				resolveTelemetrySampling({ MEMONGO_TELEMETRY_SAMPLE_RATE: "-0.1" }),
+			).toEqual({ enabled: true, sampleRate: 1 })
+			expect(
+				resolveTelemetrySampling({ MEMONGO_TELEMETRY_SAMPLE_RATE: "" }),
+			).toEqual({ enabled: true, sampleRate: 1 })
+		})
 	})
 })
 

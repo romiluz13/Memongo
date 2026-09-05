@@ -124,6 +124,9 @@ export async function ensureCollections(db: Db, prefix: string): Promise<void> {
 		"memory_jobs",
 		"session_chunks",
 		"memory_quarantine",
+		// C-017: per-tenant per-day spend ledger (LLM tokens + embedding
+		// units). Plain collection — see mongodb-cost-ledger.ts.
+		"memory_cost_ledger",
 		...(isEvidenceMirrorEnabled() ? ["memory_evidence"] : []),
 	].map((n) => `${prefix}${n}`)
 	// errorAndLog is GA since MongoDB 8.1 (P3.5): rejections are additionally

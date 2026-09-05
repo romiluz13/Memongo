@@ -33,6 +33,29 @@ win for a shared URI).
 
 Optional file config: `~/.memongo/memongo.json` or `MEMONGO_CONFIG_PATH`. See `apps/docs/guides/memory-config.mdx`.
 
+## Cost observability and telemetry controls
+
+Per-tenant provider spend is recorded in the `memory_cost_ledger` collection
+(one document per agent, UTC day, and channel) and surfaced as trailing
+30-day sums on `GET /v1/status/detailed` under `costLedger`. Ledger writes
+are fire-and-forget — a failed ledger write can never fail a memory
+operation — and rows expire 90 days after their last update. Convert the
+counters (LLM tokens, embedding operations) to dollars with the table in
+`docs/platform/cost-model.md`.
+
+Operation telemetry (`memory_telemetry`) is a separate, higher-volume
+channel and has two operator controls, both resolved per emit so they can be
+flipped without a restart:
+
+- `MEMONGO_TELEMETRY_ENABLED` - set to `false`, `0`, `off`, or `no` to
+  hard-disable every telemetry write (kill switch for incidents where the
+  telemetry path itself is implicated). Any other value, including unset,
+  keeps telemetry on.
+- `MEMONGO_TELEMETRY_SAMPLE_RATE` - fraction of telemetry documents to emit,
+  `0` to `1` (default `1`). Window aggregates read as counts ×
+  `1 / rate`. Invalid values fall back to full emission; the cost ledger is
+  never sampled regardless of this setting.
+
 > [!WARNING]
 > MongoDB Automated Embedding is an upstream Preview feature that MongoDB says
 > not to use in production. The current automated semantic-search path is for

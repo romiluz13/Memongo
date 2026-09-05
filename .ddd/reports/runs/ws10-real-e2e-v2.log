@@ -1,0 +1,579 @@
+$ MONGODB_TEST_URI=mongodb://127.0.0.1:28020/?directConnection=true vitest run src/real-e2e-v2.e2e.test.ts
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/packages/memory-engine[39m
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m15:03:05.757 [memory:mongodb:schema] info: created collection memtest_chunks
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m15:03:05.774 [memory:mongodb:schema] info: created collection memtest_files
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m15:03:05.785 [memory:mongodb:schema] info: created collection memtest_meta
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m15:03:05.798 [memory:mongodb:schema] info: created collection memtest_knowledge_base
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m15:03:05.807 [memory:mongodb:schema] info: created collection memtest_kb_chunks
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m15:03:05.816 [memory:mongodb:schema] info: created collection memtest_structured_mem
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m15:03:05.829 [memory:mongodb:schema] info: created collection memtest_structured_mem_revisions
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m15:03:05.843 [memory:mongodb:schema] info: created collection memtest_procedures
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m15:03:05.855 [memory:mongodb:schema] info: created collection memtest_procedure_revisions
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m15:03:05.863 [memory:mongodb:schema] info: created collection memtest_relevance_runs
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m15:03:05.872 [memory:mongodb:schema] info: created collection memtest_relevance_artifacts
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m15:03:05.879 [memory:mongodb:schema] info: created collection memtest_relevance_regressions
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m15:03:05.891 [memory:mongodb:schema] info: created collection memtest_events
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m15:03:05.900 [memory:mongodb:schema] info: created collection memtest_entities
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m15:03:05.910 [memory:mongodb:schema] info: created collection memtest_relations
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m15:03:05.925 [memory:mongodb:schema] info: created collection memtest_entity_links
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m15:03:05.933 [memory:mongodb:schema] info: created collection memtest_episodes
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m15:03:05.940 [memory:mongodb:schema] info: created collection memtest_ingest_runs
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m15:03:05.948 [memory:mongodb:schema] info: created collection memtest_projection_runs
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m15:03:05.955 [memory:mongodb:schema] info: created collection memtest_query_cache
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m15:03:05.962 [memory:mongodb:schema] info: created collection memtest_memory_mutations
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m15:03:05.969 [memory:mongodb:schema] info: created collection memtest_lane_coverage
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m15:03:05.978 [memory:mongodb:schema] info: created collection memtest_consolidation_runs
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m15:03:05.987 [memory:mongodb:schema] info: created collection memtest_recall_traces
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m15:03:05.995 [memory:mongodb:schema] info: created collection memtest_memory_jobs
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m15:03:06.001 [memory:mongodb:schema] info: created collection memtest_session_chunks
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m15:03:06.017 [memory:mongodb:schema] info: created collection memtest_memory_quarantine
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m15:03:06.028 [memory:mongodb:schema] info: created collection memtest_memory_cost_ledger
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m15:03:06.045 [memory:mongodb:schema] info: created time series collection memtest_memory_telemetry
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m15:03:06.045 [memory:mongodb:schema] info: created telemetry collection memtest_memory_telemetry
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m15:03:06.052 [memory:mongodb:schema] info: created time series collection memtest_access_events
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m15:03:06.052 [memory:mongodb:schema] info: created access events collection memtest_access_events
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m15:03:06.056 [memory:mongodb:schema] info: applied schema validation to memtest_chunks
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m15:03:06.058 [memory:mongodb:schema] info: applied schema validation to memtest_knowledge_base
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m15:03:06.060 [memory:mongodb:schema] info: applied schema validation to memtest_kb_chunks
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m15:03:06.064 [memory:mongodb:schema] info: applied schema validation to memtest_structured_mem
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m15:03:06.066 [memory:mongodb:schema] info: applied schema validation to memtest_structured_mem_revisions
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m15:03:06.070 [memory:mongodb:schema] info: applied schema validation to memtest_procedures
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m15:03:06.071 [memory:mongodb:schema] info: applied schema validation to memtest_procedure_revisions
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m15:03:06.073 [memory:mongodb:schema] info: applied schema validation to memtest_relevance_runs
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m15:03:06.076 [memory:mongodb:schema] info: applied schema validation to memtest_relevance_artifacts
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m15:03:06.078 [memory:mongodb:schema] info: applied schema validation to memtest_relevance_regressions
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m15:03:06.080 [memory:mongodb:schema] info: applied schema validation to memtest_events
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m15:03:06.082 [memory:mongodb:schema] info: applied schema validation to memtest_entities
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m15:03:06.084 [memory:mongodb:schema] info: applied schema validation to memtest_relations
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m15:03:06.085 [memory:mongodb:schema] info: applied schema validation to memtest_entity_links
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m15:03:06.087 [memory:mongodb:schema] info: applied schema validation to memtest_episodes
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m15:03:06.089 [memory:mongodb:schema] info: applied schema validation to memtest_ingest_runs
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m15:03:06.090 [memory:mongodb:schema] info: applied schema validation to memtest_projection_runs
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m15:03:06.092 [memory:mongodb:schema] info: applied schema validation to memtest_query_cache
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m15:03:06.094 [memory:mongodb:schema] info: applied schema validation to memtest_memory_mutations
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m15:03:06.097 [memory:mongodb:schema] info: applied schema validation to memtest_recall_traces
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m15:03:06.098 [memory:mongodb:schema] info: applied schema validation to memtest_memory_jobs
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m15:03:06.100 [memory:mongodb:schema] info: applied schema validation to memtest_memory_quarantine
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m15:03:06.102 [memory:mongodb:schema] info: applied schema validation to memtest_files
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m15:03:06.588 [memory:mongodb:schema] info: ensured 44 standard indexes
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 1: Canonical Events & Chunk Projection[2m > [22m[2mshould write Day 1 Session 1 events (project kickoff)
+[22m[39m15:03:06.661 [memory:mongodb:events] info: event written: 0e951e73-0121-4fc1-b681-c5d9cb32d2ef role=user
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 1: Canonical Events & Chunk Projection[2m > [22m[2mshould write Day 1 Session 1 events (project kickoff)
+[22m[39m15:03:06.688 [memory:mongodb:graph] info: extracted 2 entities and 1 relations from event content for agent=agent-e2e-af0b86a0
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 1: Canonical Events & Chunk Projection[2m > [22m[2mshould write Day 1 Session 1 events (project kickoff)
+[22m[39m15:03:06.726 [memory:mongodb:events] info: event written: 284d6d3c-468e-4353-8073-8d2fc489698f role=assistant
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 1: Canonical Events & Chunk Projection[2m > [22m[2mshould write Day 1 Session 1 events (project kickoff)
+[22m[39m15:03:06.748 [memory:mongodb:procedures] info: procedure created: id=procedure-f2e31ade0d7f revision=1
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 1: Canonical Events & Chunk Projection[2m > [22m[2mshould write Day 1 Session 1 events (project kickoff)
+[22m[39m15:03:06.767 [memory:mongodb:events] info: event written: 689ffd79-ecb1-4726-84f7-bda72708427d role=user
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 1: Canonical Events & Chunk Projection[2m > [22m[2mshould write Day 1 Session 1 events (project kickoff)
+[22m[39m15:03:06.778 [memory:mongodb:graph] info: extracted 1 entities and 0 relations from event content for agent=agent-e2e-af0b86a0
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 1: Canonical Events & Chunk Projection[2m > [22m[2mshould write Day 1 Session 1 events (project kickoff)
+[22m[39m15:03:06.803 [memory:mongodb:events] info: event written: a5ca444d-e8e6-4b7b-b6c4-46b5df055283 role=assistant
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 1: Canonical Events & Chunk Projection[2m > [22m[2mshould write Day 1 Session 1 events (project kickoff)
+[22m[39m15:03:06.829 [memory:mongodb:procedures] info: procedure created: id=procedure-2dece8c4f0ef revision=1
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 1: Canonical Events & Chunk Projection[2m > [22m[2mshould write Day 1 Session 1 events (project kickoff)
+[22m[39m15:03:06.853 [memory:mongodb:events] info: event written: 608b82ee-0d8f-46f3-bbc5-358bc39f7ccc role=user
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 1: Canonical Events & Chunk Projection[2m > [22m[2mshould write Day 1 Session 1 events (project kickoff)
+[22m[39m15:03:06.875 [memory:mongodb:graph] info: extracted 3 entities and 3 relations from event content for agent=agent-e2e-af0b86a0
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 1: Canonical Events & Chunk Projection[2m > [22m[2mshould write Day 1 Session 1 events (project kickoff)
+[22m[39m15:03:06.888 [memory:mongodb:events] info: event written: 22f26ae9-2dd2-461a-8e11-11420afe1030 role=assistant
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 1: Canonical Events & Chunk Projection[2m > [22m[2mshould write Day 1 Session 1 events (project kickoff)
+[22m[39m15:03:06.895 [memory:mongodb:graph] info: extracted 1 entities and 0 relations from event content for agent=agent-e2e-af0b86a0
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 1: Canonical Events & Chunk Projection[2m > [22m[2mshould write Day 1 Session 1 events (project kickoff)
+[22m[39m15:03:06.907 [memory:mongodb:structured] info: structured memory created: type=fact key=*** revision=1
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 1: Canonical Events & Chunk Projection[2m > [22m[2mshould write Day 1 Session 2 events (data model deep dive)
+[22m[39m15:03:06.922 [memory:mongodb:events] info: event written: b22e88e9-6f1a-4c91-bccf-03dee1f47cd8 role=user
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 1: Canonical Events & Chunk Projection[2m > [22m[2mshould write Day 1 Session 2 events (data model deep dive)
+[22m[39m15:03:06.939 [memory:mongodb:events] info: event written: e555edab-5579-411e-914e-e0bc3df58ab5 role=assistant
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 1: Canonical Events & Chunk Projection[2m > [22m[2mshould write Day 1 Session 2 events (data model deep dive)
+[22m[39m15:03:06.953 [memory:mongodb:procedures] info: procedure created: id=procedure-0e71bcdd109c revision=1
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 1: Canonical Events & Chunk Projection[2m > [22m[2mshould write Day 1 Session 2 events (data model deep dive)
+[22m[39m15:03:06.964 [memory:mongodb:events] info: event written: 39696f5e-0012-4f75-91af-566406f72313 role=user
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 1: Canonical Events & Chunk Projection[2m > [22m[2mshould write Day 1 Session 2 events (data model deep dive)
+[22m[39m15:03:06.971 [memory:mongodb:graph] info: extracted 1 entities and 0 relations from event content for agent=agent-e2e-af0b86a0
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 1: Canonical Events & Chunk Projection[2m > [22m[2mshould write Day 1 Session 2 events (data model deep dive)
+[22m[39m15:03:06.981 [memory:mongodb:events] info: event written: e9c1385c-724a-4bd3-a769-a4a012e5236f role=assistant
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 1: Canonical Events & Chunk Projection[2m > [22m[2mshould write Day 1 Session 2 events (data model deep dive)
+[22m[39m15:03:06.989 [memory:mongodb:graph] info: extracted 1 entities and 0 relations from event content for agent=agent-e2e-af0b86a0
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 1: Canonical Events & Chunk Projection[2m > [22m[2mshould write Day 1 Session 2 events (data model deep dive)
+[22m[39m15:03:06.998 [memory:mongodb:procedures] info: procedure created: id=procedure-c0e3544a4544 revision=1
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 1: Canonical Events & Chunk Projection[2m > [22m[2mshould write Day 2 events (deployment & bug fix)
+[22m[39m15:03:07.033 [memory:mongodb:events] info: event written: e2b4cd83-fd96-44c9-937b-19541acf70e7 role=user
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 1: Canonical Events & Chunk Projection[2m > [22m[2mshould write Day 2 events (deployment & bug fix)
+[22m[39m15:03:07.088 [memory:mongodb:events] info: event written: a516fdab-152b-4162-92b8-84d755dbd38a role=assistant
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 1: Canonical Events & Chunk Projection[2m > [22m[2mshould write Day 2 events (deployment & bug fix)
+[22m[39m15:03:07.107 [memory:mongodb:graph] info: extracted 1 entities and 0 relations from event content for agent=agent-e2e-af0b86a0
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 1: Canonical Events & Chunk Projection[2m > [22m[2mshould write Day 2 events (deployment & bug fix)
+[22m[39m15:03:07.122 [memory:mongodb:events] info: event written: a349612d-3b7f-4ccd-be41-a2858afc0c94 role=user
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 1: Canonical Events & Chunk Projection[2m > [22m[2mshould write Day 2 events (deployment & bug fix)
+[22m[39m15:03:07.134 [memory:mongodb:events] info: event written: e8f3cb2b-74d1-4ed6-8146-6d7f241df313 role=assistant
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 1: Canonical Events & Chunk Projection[2m > [22m[2mshould write Day 2 events (deployment & bug fix)
+[22m[39m15:03:07.145 [memory:mongodb:graph] info: extracted 1 entities and 0 relations from event content for agent=agent-e2e-af0b86a0
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 1: Canonical Events & Chunk Projection[2m > [22m[2mshould write Day 2 events (deployment & bug fix)
+[22m[39m15:03:07.163 [memory:mongodb:structured] info: structured memory created: type=fact key=*** revision=1
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 1: Canonical Events & Chunk Projection[2m > [22m[2mshould write Day 2 events (deployment & bug fix)
+[22m[39m15:03:07.173 [memory:mongodb:procedures] info: procedure created: id=procedure-4bbf3830c63e revision=1
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 1: Canonical Events & Chunk Projection[2m > [22m[2mshould write Day 3 events (performance & real-time)
+[22m[39m15:03:07.230 [memory:mongodb:events] info: event written: 1fd461cf-10c8-4d60-a9a4-526365ad9330 role=user
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 1: Canonical Events & Chunk Projection[2m > [22m[2mshould write Day 3 events (performance & real-time)
+[22m[39m15:03:07.293 [memory:mongodb:events] info: event written: 481f1e68-13b1-4cdf-9a40-fd6ba3505429 role=assistant
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 1: Canonical Events & Chunk Projection[2m > [22m[2mshould write Day 3 events (performance & real-time)
+[22m[39m15:03:07.303 [memory:mongodb:procedures] info: procedure created: id=procedure-d9dec9d57a4a revision=1
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 1: Canonical Events & Chunk Projection[2m > [22m[2mshould write Day 3 events (performance & real-time)
+[22m[39m15:03:07.313 [memory:mongodb:events] info: event written: ee0a5744-8066-4294-9cfb-2e39cf40638f role=user
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 1: Canonical Events & Chunk Projection[2m > [22m[2mshould write Day 3 events (performance & real-time)
+[22m[39m15:03:07.320 [memory:mongodb:graph] info: extracted 1 entities and 0 relations from event content for agent=agent-e2e-af0b86a0
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 1: Canonical Events & Chunk Projection[2m > [22m[2mshould write Day 3 events (performance & real-time)
+[22m[39m15:03:07.328 [memory:mongodb:events] info: event written: f3cf57d9-6224-499c-8b41-adce7fe02aaf role=assistant
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 1: Canonical Events & Chunk Projection[2m > [22m[2mshould write Day 3 events (performance & real-time)
+[22m[39m15:03:07.340 [memory:mongodb:procedures] info: procedure created: id=procedure-42b8a3f3cb04 revision=1
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 2: Rule-Based Entity Extraction[2m > [22m[2mshould extract entities from all conversation events
+[22m[39m15:03:07.363 [memory:mongodb:graph] info: extracted 2 entities and 1 relations from event content for agent=agent-e2e-af0b86a0
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 2: Rule-Based Entity Extraction[2m > [22m[2mshould extract entities from all conversation events
+[22m[39m15:03:07.369 [memory:mongodb:graph] info: extracted 1 entities and 0 relations from event content for agent=agent-e2e-af0b86a0
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 2: Rule-Based Entity Extraction[2m > [22m[2mshould extract entities from all conversation events
+[22m[39m15:03:07.383 [memory:mongodb:graph] info: extracted 3 entities and 3 relations from event content for agent=agent-e2e-af0b86a0
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 2: Rule-Based Entity Extraction[2m > [22m[2mshould extract entities from all conversation events
+[22m[39m15:03:07.386 [memory:mongodb:graph] info: extracted 1 entities and 0 relations from event content for agent=agent-e2e-af0b86a0
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 2: Rule-Based Entity Extraction[2m > [22m[2mshould extract entities from all conversation events
+[22m[39m15:03:07.403 [memory:mongodb:graph] info: extracted 1 entities and 0 relations from event content for agent=agent-e2e-af0b86a0
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 2: Rule-Based Entity Extraction[2m > [22m[2mshould extract entities from all conversation events
+[22m[39m15:03:07.409 [memory:mongodb:graph] info: extracted 1 entities and 0 relations from event content for agent=agent-e2e-af0b86a0
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 2: Rule-Based Entity Extraction[2m > [22m[2mshould extract entities from all conversation events
+[22m[39m15:03:07.417 [memory:mongodb:graph] info: extracted 1 entities and 0 relations from event content for agent=agent-e2e-af0b86a0
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 2: Rule-Based Entity Extraction[2m > [22m[2mshould extract entities from all conversation events
+[22m[39m15:03:07.424 [memory:mongodb:graph] info: extracted 1 entities and 0 relations from event content for agent=agent-e2e-af0b86a0
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 2: Rule-Based Entity Extraction[2m > [22m[2mshould extract entities from all conversation events
+[22m[39m15:03:07.432 [memory:mongodb:graph] info: extracted 1 entities and 0 relations from event content for agent=agent-e2e-af0b86a0
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 2: Rule-Based Entity Extraction[2m > [22m[2mshould extract entities from all conversation events
+[22m[39m  Extracted 12 entity mentions, 4 relations
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 2: Rule-Based Entity Extraction[2m > [22m[2mshould have person entities across conversations
+[22m[39m  Found 5 person entities: [ [32m'sarah'[39m, [32m'recent'[39m, [32m'mike'[39m, [32m'Sarah Chen'[39m, [32m'romiluz'[39m ]
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 2: Rule-Based Entity Extraction[2m > [22m[2mshould have topic entities
+[22m[39m  Found 3 topic entities: [ [32m'deployment'[39m, [32m'Stripe'[39m, [32m'data'[39m ]
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 2: Rule-Based Entity Extraction[2m > [22m[2mshould have document entities (URLs + file paths)
+[22m[39m  Found 1 document entities: [ [32m'https://github.com/romiluz/datavault'[39m ]
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 3: Knowledge Graph Operations[2m > [22m[2mshould upsert project entity manually
+[22m[39m15:03:07.451 [memory:mongodb:graph] info: entity created: entity-datavault-ed242f6c name=DataVault
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 3: Knowledge Graph Operations[2m > [22m[2mshould upsert team entity
+[22m[39m15:03:07.458 [memory:mongodb:graph] info: entity created: entity-team-5ea9c485 name=DataVault Team
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 3: Knowledge Graph Operations[2m > [22m[2mshould create relations between entities
+[22m[39m15:03:07.471 [memory:mongodb:graph] info: relation created: e2bc8389bb526271 -[works_on]-> entity-datavault-ed242f6c
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 3: Knowledge Graph Operations[2m > [22m[2mshould create relations between entities
+[22m[39m15:03:07.475 [memory:mongodb:graph] info: relation created: e2bc8389bb526271 -[works_on]-> entity-team-5ea9c485
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 3: Knowledge Graph Operations[2m > [22m[2mshould create relations between entities
+[22m[39m15:03:07.478 [memory:mongodb:graph] info: relation created: 60fd43901924a2e9 -[works_on]-> entity-datavault-ed242f6c
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 3: Knowledge Graph Operations[2m > [22m[2mshould expand graph from person entity (unidirectional)
+[22m[39m  Graph expansion: 2 connections from romiluz
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 3: Knowledge Graph Operations[2m > [22m[2mshould expand graph bidirectionally
+[22m[39m  Bidirectional expansion from romiluz: 2 connections
+  Connected entities: [ [32m'DataVault'[39m, [32m'DataVault Team'[39m ]
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 3: Knowledge Graph Operations[2m > [22m[2mshould delete entity and cascade relations
+[22m[39m15:03:07.495 [memory:mongodb:graph] info: entity created: entity-temp-a3a43824 name=Temporary Entity
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 3: Knowledge Graph Operations[2m > [22m[2mshould delete entity and cascade relations
+[22m[39m15:03:07.498 [memory:mongodb:graph] info: relation created: entity-temp-a3a43824 -[related_to]-> entity-datavault-ed242f6c
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 3: Knowledge Graph Operations[2m > [22m[2mshould delete entity and cascade relations
+[22m[39m15:03:07.508 [memory:mongodb:graph] info: deleted entity=entity-temp-a3a43824 (found=true, relations=1)
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 4: Episode Materialization[2m > [22m[2mshould materialize a daily episode for Day 1
+[22m[39m15:03:07.521 [memory:mongodb:episodes] info: episode materialized: 4a3a0cea-ca92-4eab-8239-dd9242d7a7dc type=daily events=18 agent=agent-e2e-af0b86a0
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 4: Episode Materialization[2m > [22m[2mshould materialize a daily episode for Day 1
+[22m[39m  Episode: "DataVault daily: pipeline, database, architecture (9 user turns)"
+  Summary: daily view. Discussion covering pipeline, database, architecture, frontend, billing, bug-fix, deployment, performance. 1...
+  Tags: pipeline, database, architecture, frontend, billing, bug-fix, deployment, performance
+  Source events: 18
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 4: Episode Materialization[2m > [22m[2mshould materialize a topic episode for 'architecture'
+[22m[39m15:03:07.534 [memory:mongodb:episodes] info: episode materialized: b56ceb76-80c8-4030-9ece-a19034bc822c type=topic events=18 agent=agent-e2e-af0b86a0
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 4: Episode Materialization[2m > [22m[2mshould materialize a decision episode
+[22m[39m15:03:07.543 [memory:mongodb:episodes] info: episode materialized: cd024b07-4e95-4959-8336-b2081302b087 type=decision events=18 agent=agent-e2e-af0b86a0
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 4: Episode Materialization[2m > [22m[2mshould keep the same episodeId when re-materializing the same scoped episode
+[22m[39m15:03:07.546 [memory:mongodb:events] info: event written: 22c790c2-268f-4c77-9fc2-1fc83f88ef4b role=user
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 4: Episode Materialization[2m > [22m[2mshould keep the same episodeId when re-materializing the same scoped episode
+[22m[39m15:03:07.568 [memory:mongodb:events] info: event written: f329b5fd-b3f6-4bed-8bb6-9d7228fef8d3 role=assistant
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 4: Episode Materialization[2m > [22m[2mshould keep the same episodeId when re-materializing the same scoped episode
+[22m[39m15:03:07.587 [memory:mongodb:structured] info: structured memory created: type=decision key=decisi***0950 revision=1
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 4: Episode Materialization[2m > [22m[2mshould keep the same episodeId when re-materializing the same scoped episode
+[22m[39m15:03:07.605 [memory:mongodb:episodes] info: episode materialized: 624f9be8-7c2d-49ad-8bdd-665022a2897a type=thread events=2 agent=agent-e2e-af0b86a0
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 4: Episode Materialization[2m > [22m[2mshould keep the same episodeId when re-materializing the same scoped episode
+[22m[39m15:03:07.609 [memory:mongodb:episodes] info: episode materialized: 259033bf-ab4d-426e-969a-a7d5344df688 type=thread events=2 agent=agent-e2e-af0b86a0
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 4: Episode Materialization[2m > [22m[2mshould retrieve episodes by time range
+[22m[39m  Found 4 episodes in the active test window
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 5: Consolidation Lifecycle[2m > [22m[2mshould have unconsolidated events
+[22m[39m  20 unconsolidated events
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 5: Consolidation Lifecycle[2m > [22m[2mshould mark events as consolidated
+[22m[39m15:03:07.624 [memory:mongodb:events] info: marked 5 events consolidated into episode=ep-test-2ed0c196
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 6: Auto Episode Triggers[2m > [22m[2mshould detect trigger conditions on unconsolidated events
+[22m[39m  Trigger result: triggered=false, reason=rate_limited
+  Episode created: none
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 6: Auto Episode Triggers[2m > [22m[2mshould respect rate limiting
+[22m[39m  Rate limit test: triggered=false, reason=rate_limited
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 6: Auto Episode Triggers[2m > [22m[2mshould keep auto episode consolidation scoped to the requested session scopeRef
+[22m[39m15:03:07.632 [memory:mongodb:events] info: event written: 2dfa75d5-16fc-4ffa-8d36-3135d449058c role=user
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 6: Auto Episode Triggers[2m > [22m[2mshould keep auto episode consolidation scoped to the requested session scopeRef
+[22m[39m15:03:07.647 [memory:mongodb:events] info: event written: 10a8a35b-6ec9-4b45-8f8e-5f1276b3daf5 role=assistant
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 6: Auto Episode Triggers[2m > [22m[2mshould keep auto episode consolidation scoped to the requested session scopeRef
+[22m[39m15:03:07.658 [memory:mongodb:events] info: event written: 29bab48f-9d07-4ee5-b0a8-f1a22a828eb3 role=user
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 6: Auto Episode Triggers[2m > [22m[2mshould keep auto episode consolidation scoped to the requested session scopeRef
+[22m[39m15:03:07.669 [memory:mongodb:events] info: event written: 1764e96a-6ea2-49f0-b719-65a24fc1dcf2 role=assistant
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 6: Auto Episode Triggers[2m > [22m[2mshould keep auto episode consolidation scoped to the requested session scopeRef
+[22m[39m15:03:07.684 [memory:mongodb:episodes] info: episode materialized: a8a54dea-aaca-4924-b84a-84b40f40ea84 type=thread events=2 agent=agent-e2e-af0b86a0
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 6: Auto Episode Triggers[2m > [22m[2mshould keep auto episode consolidation scoped to the requested session scopeRef
+[22m[39m15:03:07.687 [memory:mongodb:events] info: marked 2 events consolidated into episode=a8a54dea-aaca-4924-b84a-84b40f40ea84
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 6: Auto Episode Triggers[2m > [22m[2mshould keep auto episode consolidation scoped to the requested session scopeRef
+[22m[39m15:03:07.687 [memory:mongodb:episodes] info: auto episode triggered: reason=explicit episode=a8a54dea-aaca-4924-b84a-84b40f40ea84 events=2 agent=agent-e2e-af0b86a0
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 7: Retrieval Planner[2m > [22m[2mshould plan retrieval for entity-heavy query
+[22m[39m  Plan paths (ranked): [ [32m'graph'[39m, [32m'hybrid'[39m, [32m'structured'[39m, [32m'raw-window'[39m, [32m'episodic'[39m ]
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 7: Retrieval Planner[2m > [22m[2mshould plan retrieval for recent-event query
+[22m[39m  Plan paths (ranked): [ [32m'episodic'[39m, [32m'hybrid'[39m, [32m'raw-window'[39m, [32m'graph'[39m ]
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 7: Retrieval Planner[2m > [22m[2mshould plan retrieval for keyword search
+[22m[39m  Plan paths (ranked): [ [32m'hybrid'[39m, [32m'structured'[39m, [32m'raw-window'[39m, [32m'kb'[39m ]
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 8: searchV2 Full Pipeline[2m > [22m[2mshould search with raw-window path
+[22m[39m  raw-window search: 10 results
+  Paths executed: raw-window
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 8: searchV2 Full Pipeline[2m > [22m[2mshould search with multiple paths including graph
+[22m[39m  Multi-path search: 6 results
+  Paths executed: raw-window
+  Results by path: { [32m'raw-window'[39m: [33m6[39m }
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 8: searchV2 Full Pipeline[2m > [22m[2mshould search for bug-related content
+[22m[39m  Bug search: 3 results
+  Top result (conversation): Looking at `/packages/core/src/scheduler.ts` — I found the issue! The scheduler ...
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 8: searchV2 Full Pipeline[2m > [22m[2mshould return reranked results with diversity
+[22m[39m  Reranked search: 8 results, paths: raw-window
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 9: V2 Status & Health[2m > [22m[2mshould return comprehensive v2 status
+[22m[39m
+  ═══ V2 System Status ═══
+  Events: 24 (latest: 2026-09-05T12:03:07.667Z)
+  Entities: 11
+  Relations: 7
+  Episodes: 5 (latest: 2026-09-05T12:03:07.681Z)
+  Projection lag: {
+  chunks: [33m0[39m,
+  entities: [33m0[39m,
+  relations: [33m0[39m,
+  episodes: [33m0[39m,
+  [32m'structured-promotion'[39m: [33m0[39m,
+  procedures: [33m0[39m
+}
+  Retrieval paths: active-critical, structured, raw-window, graph, hybrid, kb, episodic, procedural
+  ════════════════════════
+
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 9: V2 Status & Health[2m > [22m[2mshould have operational records (ingest runs)
+[22m[39m  Recent ingest runs: 5
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 10: Agent Isolation[2m > [22m[2mshould not leak events across agents
+[22m[39m15:03:07.859 [memory:mongodb:events] info: event written: 6633f61f-44df-481a-b2a5-77335ca72426 role=user
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 10: Agent Isolation[2m > [22m[2mshould not leak entities across agents
+[22m[39m15:03:07.881 [memory:mongodb:graph] info: entity created: entity-secret-397a9f5d name=SecretOtherAgent
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 10: Agent Isolation[2m > [22m[2mshould not leak graph expansion across agents
+[22m[39m15:03:07.885 [memory:mongodb:graph] info: entity created: entity-other-root-eb1dd6e8 name=OtherProjectRoot
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 11: Voyage AI AutoEmbed Vector Search[2m > [22m[2mshould have autoEmbed search indexes on chunks
+[22m[39m15:03:07.933 [memory:mongodb:schema] info: created chunks text search index
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 11: Voyage AI AutoEmbed Vector Search[2m > [22m[2mshould have autoEmbed search indexes on chunks
+[22m[39m15:03:07.974 [memory:mongodb:schema] info: created chunks vector search index
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 11: Voyage AI AutoEmbed Vector Search[2m > [22m[2mshould have autoEmbed search indexes on chunks
+[22m[39m15:03:08.048 [memory:mongodb:schema] info: created kb_chunks text search index
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 11: Voyage AI AutoEmbed Vector Search[2m > [22m[2mshould have autoEmbed search indexes on chunks
+[22m[39m15:03:08.231 [memory:mongodb:schema] info: created kb_chunks vector search index
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 11: Voyage AI AutoEmbed Vector Search[2m > [22m[2mshould have autoEmbed search indexes on chunks
+[22m[39m15:03:08.386 [memory:mongodb:schema] info: created structured_mem text search index
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 11: Voyage AI AutoEmbed Vector Search[2m > [22m[2mshould have autoEmbed search indexes on chunks
+[22m[39m15:03:08.509 [memory:mongodb:schema] info: created structured_mem vector search index
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 11: Voyage AI AutoEmbed Vector Search[2m > [22m[2mshould have autoEmbed search indexes on chunks
+[22m[39m15:03:08.648 [memory:mongodb:schema] info: created procedures text search index
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 11: Voyage AI AutoEmbed Vector Search[2m > [22m[2mshould have autoEmbed search indexes on chunks
+[22m[39m15:03:08.738 [memory:mongodb:schema] info: created procedures vector search index
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 11: Voyage AI AutoEmbed Vector Search[2m > [22m[2mshould have autoEmbed search indexes on chunks
+[22m[39m15:03:08.843 [memory:mongodb:schema] info: created events text search index
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 11: Voyage AI AutoEmbed Vector Search[2m > [22m[2mshould have autoEmbed search indexes on chunks
+[22m[39m15:03:08.955 [memory:mongodb:schema] info: created events vector search index
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 11: Voyage AI AutoEmbed Vector Search[2m > [22m[2mshould have autoEmbed search indexes on chunks
+[22m[39m15:03:09.011 [memory:mongodb:schema] info: created query_cache vector search index
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 11: Voyage AI AutoEmbed Vector Search[2m > [22m[2mshould have autoEmbed search indexes on chunks
+[22m[39m15:03:09.176 [memory:mongodb:schema] info: created session_chunks text search index
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 11: Voyage AI AutoEmbed Vector Search[2m > [22m[2mshould have autoEmbed search indexes on chunks
+[22m[39m15:03:09.413 [memory:mongodb:schema] info: created session_chunks vector search index
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 11: Voyage AI AutoEmbed Vector Search[2m > [22m[2mshould have autoEmbed search indexes on chunks
+[22m[39m15:03:09.470 [memory:mongodb:schema] info: created entity autocomplete search index
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 11: Voyage AI AutoEmbed Vector Search[2m > [22m[2mshould have autoEmbed search indexes on chunks
+[22m[39m15:03:09.531 [memory:mongodb:schema] info: created episode autocomplete search index
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 14: Profile Synthesis[2m > [22m[2mshould synthesize a complete profile from real conversation data
+[22m[39m15:04:26.592 [memory:mongodb:profile] info: profile synthesis complete {"agentId":"agent-e2e-af0b86a0","durationMs":96,"totalEvents":18}
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 14: Profile Synthesis[2m > [22m[2mshould synthesize a complete profile from real conversation data
+[22m[39m  Profile entities: sarah(3), Stripe(2), DataVault(2), https://github.com/romiluz/datavault(2), Sarah Chen(2), DataVault Team(1), data(1), romiluz(1), mike(0), recent(0)
+  Profile episodes: DataVault daily: pipeline, database, architecture (9 user turns), DataVault decision: pipeline, database, architecture (9 user turns), DataVault topic: pipeline, database, architecture (9 user turns)
+  Activity: 18 events, roles: {"assistant":9,"user":9}
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 14: Profile Synthesis[2m > [22m[2mshould return empty profile for non-existent agent (no crash)
+[22m[39m15:04:26.613 [memory:mongodb:profile] info: profile synthesis complete {"agentId":"nonexistent-8e178357","durationMs":16,"totalEvents":0}
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 15: Cross-Encoder Re-ranking (Voyage API)[2m > [22m[2mshould rerank search results via Voyage rerank-2.5 with instruction-following
+[22m[39m  Rerank latency: 1690ms
+  Reranked: events/2:0.8555, events/3:0.3320, events/1:0.2178
+
+[90mstderr[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 15: Cross-Encoder Re-ranking (Voyage API)[2m > [22m[2mshould fall back gracefully with invalid API key
+[22m[39m15:04:29.933 [memory:mongodb:reranker] warn: rerank API returned non-OK status {"status":401,"url":"https://api.voyageai.com/v1/rerank"}
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 17: Pluggable Entity Extraction[2m > [22m[2mshould extract entities using RegexEntityExtractor on real conversation data
+[22m[39m15:04:30.113 [memory:mongodb:graph] info: extracted 5 entities and 10 relations from event content for agent=pluggable-e2e-2dd7f1b2
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 17: Pluggable Entity Extraction[2m > [22m[2mshould extract entities using RegexEntityExtractor on real conversation data
+[22m[39m  Extracted 5 entities: alice(person), bob(person), mongodb(topic), https://docs.mongodb.com/manual.(document), Performance Guide(person)
+  Created 10 relations
+
+[90mstderr[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 17: Pluggable Entity Extraction[2m > [22m[2mshould fall back to regex when LLM times out
+[22m[39m15:04:30.238 [memory:mongodb:entity-extractor] warn: LLM entity extraction failed, falling back to regex {"error":"LLM extraction timeout"}
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 17: Pluggable Entity Extraction[2m > [22m[2mshould fall back to regex when LLM times out
+[22m[39m15:04:30.287 [memory:mongodb:graph] info: extracted 3 entities and 3 relations from event content for agent=llm-timeout-e2e-dcad0678
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 17: Pluggable Entity Extraction[2m > [22m[2mshould produce identical results to inline extraction (backward compatibility)
+[22m[39m15:04:30.327 [memory:mongodb:graph] info: extracted 3 entities and 3 relations from event content for agent=compat-e2e-516ae5af
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 17: Pluggable Entity Extraction[2m > [22m[2mshould produce identical results to inline extraction (backward compatibility)
+[22m[39m15:04:30.359 [memory:mongodb:graph] info: extracted 3 entities and 3 relations from event content for agent=compat-default-6012acc5
+
+ [32m✓[39m src/real-e2e-v2.e2e.test.ts [2m([22m[2m81 tests[22m[2m)[22m[33m 84946[2mms[22m[39m
+       [33m[2m✓[22m[39m should have autoEmbed search indexes on chunks [33m 63882[2mms[22m[39m
+       [33m[2m✓[22m[39m should return semantic results for architecture queries via $vectorSearch [33m 3656[2mms[22m[39m
+       [33m[2m✓[22m[39m should find deployment-related content with semantic search [33m 893[2mms[22m[39m
+       [33m[2m✓[22m[39m should find bug-fix content with semantic search [33m 1089[2mms[22m[39m
+       [33m[2m✓[22m[39m should return keyword search results with text index [33m 331[2mms[22m[39m
+       [33m[2m✓[22m[39m should handle semantic similarity — related concepts rank higher [33m 531[2mms[22m[39m
+       [33m[2m✓[22m[39m should respect minScore filter on vector results [33m 1925[2mms[22m[39m
+       [33m[2m✓[22m[39m should write a cache entry and read it back via Tier 1 (exact hash match) [33m 564[2mms[22m[39m
+       [33m[2m✓[22m[39m should increment hitCount on exact cache hit [33m 573[2mms[22m[39m
+       [33m[2m✓[22m[39m should return miss for a completely different query (no cache entry) [33m 1176[2mms[22m[39m
+       [33m[2m✓[22m[39m should upsert (update) an existing cache entry on re-write [33m 520[2mms[22m[39m
+       [33m[2m✓[22m[39m should handle the query_cache collection existing with $jsonSchema validation [33m 530[2mms[22m[39m
+       [33m[2m✓[22m[39m should emit telemetry documents to the time series collection [33m 2215[2mms[22m[39m
+       [33m[2m✓[22m[39m should calculate correct latency percentiles from real data [33m 432[2mms[22m[39m
+       [33m[2m✓[22m[39m should rerank search results via Voyage rerank-2.5 with instruction-following [33m 1704[2mms[22m[39m
+       [33m[2m✓[22m[39m should fall back gracefully with invalid API key [33m 1625[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m1 passed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[32m81 passed[39m[22m[90m (81)[39m
+[2m   Start at [22m 15:03:04
+[2m   Duration [22m 85.89s[2m (transform 602ms, setup 0ms, import 783ms, tests 84.95s, environment 0ms)[22m
+
+exit=0

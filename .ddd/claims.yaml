@@ -300,7 +300,7 @@ entries:
     tier: T2
     status: known-and-supported
     constructs: [packages/memory-engine/src/mongodb-llm-enrichment.ts, packages/memory-engine/src/mongodb-operation-accounting.ts, packages/memory-engine/src/mongodb-telemetry.ts]
-    validations: []
+    validations: [V-090, V-091, V-092]
     exceptions: []
 
   - id: C-018

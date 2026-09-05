@@ -14,6 +14,7 @@ import {
 	createSubsystemLogger,
 } from "@memongo/lib"
 import { isDuplicateKeyError } from "./internal.js"
+import { recordEmbeddingSpend } from "./mongodb-cost-ledger.js"
 import type { EmbeddingStatus } from "./mongodb-embedding-retry.js"
 import { classifyInjection } from "./mongodb-injection-classifier.js"
 import { recordMutation, type MutationMeta } from "./mongodb-mutations.js"
@@ -915,6 +916,13 @@ export async function writeStructuredMemory(params: {
 	 * live transaction would record an audit for a write that may never commit.
 	 */
 	pendingSideEffects?: () => Promise<void>
+	/**
+	 * C-017: true when the persist actually rewrote the document (upsert,
+	 * value change, or reinforcement). A pure event-receipt short-circuit
+	 * returns false. Callers and the cost ledger use this to know whether
+	 * the write triggered a server-side re-embed of the value field.
+	 */
+	changed?: boolean
 }> {
 	const { db, prefix, entry } = params
 
@@ -1363,7 +1371,7 @@ export async function writeStructuredMemory(params: {
 				})()
 			: await persistWithDuplicateKeyRetry()
 	if (!outcome.changed) {
-		return { upserted: false, id: outcome.id }
+		return { upserted: false, id: outcome.id, changed: false }
 	}
 
 	log.info(
@@ -1383,6 +1391,15 @@ export async function writeStructuredMemory(params: {
 			scope,
 			scopeRef,
 		})
+
+		// C-017: an automated-mode persist re-embeds the value field
+		// server-side — an upsert, a value change, and even a same-value
+		// reinforcement all rewrite it, so each changed persist bills one
+		// indexing embedding unit. Runs with the other side effects, i.e.
+		// after the caller's transaction commits in the session path.
+		if (params.embeddingMode === "automated") {
+			recordEmbeddingSpend(db, prefix, entry.agentId, "indexing", 1)
+		}
 
 		const oldSnapshot = existingBeforeWrite
 		const changedFields =
@@ -1417,12 +1434,17 @@ export async function writeStructuredMemory(params: {
 		return {
 			upserted: outcome.upserted,
 			id: outcome.id,
+			changed: outcome.changed,
 			pendingSideEffects: runSideEffects,
 		}
 	}
 
 	await runSideEffects()
-	return { upserted: outcome.upserted, id: outcome.id }
+	return {
+		upserted: outcome.upserted,
+		id: outcome.id,
+		changed: outcome.changed,
+	}
 }
 
 // ---------------------------------------------------------------------------

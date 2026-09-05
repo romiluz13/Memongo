@@ -13,6 +13,7 @@ import {
 	isDuplicateKeyError,
 	runUnorderedBulkWriteCounted,
 } from "./internal.js"
+import { recordEmbeddingSpend } from "./mongodb-cost-ledger.js"
 import type { EmbeddingStatus } from "./mongodb-embedding-retry.js"
 import { invalidateQueryCache } from "./mongodb-query-cache.js"
 import { kbCollection, kbChunksCollection } from "./mongodb-schema.js"
@@ -296,13 +297,16 @@ export async function ingestToKB(params: {
 			// every chunk write lands. writeErrors (not the applied count) is
 			// the completeness signal: re-upserting identical chunk content
 			// matches without modifying, so a fully successful repair can
-			// legitimately apply 0 writes.
-			const persistChunksAndComplete = async (parentId: string) => {
+			// legitimately apply 0 writes. Returns the applied write count —
+			// each applied write re-embeds its text server-side (C-017).
+			const persistChunksAndComplete = async (
+				parentId: string,
+			): Promise<number> => {
 				if (chunkOps.length === 0) {
 					await kb.updateOne({ _id: parentId } as Record<string, unknown>, {
 						$set: { chunksComplete: true },
 					})
-					return
+					return 0
 				}
 				const { applied, writeErrors } = await runUnorderedBulkWriteCounted(
 					() => kbChunks.bulkWrite(chunkOps, { ordered: false }),
@@ -312,11 +316,12 @@ export async function ingestToKB(params: {
 					result.errors.push(
 						`${doc.title}: ${writeErrors.length} of ${chunkOps.length} chunk writes failed (${writeErrors[0]})`,
 					)
-					return
+					return applied
 				}
 				await kb.updateOne({ _id: parentId } as Record<string, unknown>, {
 					$set: { chunksComplete: true },
 				})
+				return applied
 			}
 
 			// Determine whether we need a transaction (re-ingestion involves delete + insert)
@@ -324,11 +329,15 @@ export async function ingestToKB(params: {
 			const oldIdToDelete = reIngestionOldId ?? forceOldId
 			const oldDocIdToDelete = reIngestionOldDocId ?? forceOldDocId
 
+			// C-017: chunks that actually landed this document (0 on skip,
+			// dedup, or no-op repair re-upserts). Billed after the persist path
+			// returns — past the transaction commit on the re-ingest path.
+			let appliedChunks = 0
 			if (repairExistingDocId) {
 				// C2 repair: the parent already exists (incomplete) — do not
 				// re-insert it (its hash owns the unique index); re-upsert the
 				// chunks and flip complete when they all land.
-				await persistChunksAndComplete(repairExistingDocId)
+				appliedChunks = await persistChunksAndComplete(repairExistingDocId)
 			} else if (needsTransaction && oldIdToDelete && oldDocIdToDelete) {
 				// Re-ingestion path: wrap delete-old + insert-new in withTransaction()
 				// for atomicity. Falls back to sequential on standalone topology.
@@ -342,6 +351,7 @@ export async function ingestToKB(params: {
 					chunkOps,
 				})
 				result.chunksCreated += chunksCreated
+				appliedChunks = chunksCreated
 			} else {
 				// Fresh ingestion: no delete needed, no transaction required.
 				// P1-2: a concurrent ingest of the same content can win the
@@ -356,9 +366,16 @@ export async function ingestToKB(params: {
 					}
 					throw err
 				}
-				await persistChunksAndComplete(docId)
+				appliedChunks = await persistChunksAndComplete(docId)
 			}
 
+			// C-017: every applied chunk write embeds its text server-side
+			// (autoEmbed) in automated mode — one indexing unit per landed
+			// chunk, billed after the persist path (and any transaction)
+			// completed.
+			if (params.embeddingMode === "automated" && appliedChunks > 0) {
+				recordEmbeddingSpend(db, prefix, agentId, "indexing", appliedChunks)
+			}
 			result.documentsProcessed++
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err)

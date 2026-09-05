@@ -304,8 +304,13 @@ describe("P2.5(a) writeStructuredMemory revision CAS", () => {
 		])
 
 		const outcomes = [first, second]
-		// One writer applies; the re-run short-circuits on the receipt.
-		expect(outcomes).toContainEqual({ upserted: false, id: "db" })
+		// One writer applies; the re-run short-circuits on the receipt
+		// (changed: false — nothing re-embedded, nothing billed).
+		expect(outcomes).toContainEqual({
+			upserted: false,
+			id: "db",
+			changed: false,
+		})
 		const finalDoc = structured.docs[0]
 		expect(finalDoc.revision).toBe(2)
 		// The same-value re-mention must not $inc reinforcementCount twice and

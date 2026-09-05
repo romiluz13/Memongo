@@ -30,6 +30,14 @@ type OperationMutation = {
 	provider?: string
 	model?: string
 	count?: number
+	/**
+	 * C-017: token usage reported by the transport for the recorded
+	 * successes. Accumulated per operation entry; the snapshot exposes the
+	 * totals and downgrades the cost-unavailable note to "prices not
+	 * configured" once any tokens have been measured.
+	 */
+	inputTokens?: number
+	outputTokens?: number
 }
 
 export type OperationRunConfiguration = {
@@ -95,6 +103,8 @@ export function createOperationRunContext(params: {
 		operation: Exclude<BenchmarkOperationName, "embedding">,
 		metadata?: OperationMutation,
 	) => `${operation}\0${metadata?.provider ?? ""}\0${metadata?.model ?? ""}`
+	/** C-017: any tokens recorded during the run flips the snapshot note. */
+	let tokensMeasured = false
 	operations.set(operationKey("vector-query"), { ...VECTOR_QUERY_ACCOUNTING })
 	for (const operation of OBSERVED_PROVIDER_OPERATIONS) {
 		operations.set(operationKey(operation), {
@@ -160,8 +170,9 @@ export function createOperationRunContext(params: {
 				return {
 					currency: null,
 					totalCost: null,
-					unavailableReason:
-						"provider token usage and prices are not instrumented",
+					unavailableReason: tokensMeasured
+						? "provider token usage is measured; prices are not configured"
+						: "provider token usage and prices are not instrumented",
 					operations: [
 						{ ...AUTOMATED_EMBEDDING_ACCOUNTING },
 						...Array.from(operations.values(), (entry) => ({ ...entry })),
@@ -179,6 +190,20 @@ export function createOperationRunContext(params: {
 				if (!Number.isFinite(count) || count <= 0) return
 				const entry = measuredOperation(operation, metadata)
 				entry.succeeded = (entry.succeeded ?? 0) + count
+				// C-017: accumulate transport-reported tokens alongside the call
+				// count so a run snapshot answers "how many tokens" not just
+				// "how many calls". Transports without a usage block leave the
+				// fields untouched (absent = not reported, distinct from 0).
+				const inputTokens = metadata?.inputTokens
+				const outputTokens = metadata?.outputTokens
+				if (inputTokens !== undefined && Number.isFinite(inputTokens)) {
+					entry.inputTokens = (entry.inputTokens ?? 0) + inputTokens
+					tokensMeasured = true
+				}
+				if (outputTokens !== undefined && Number.isFinite(outputTokens)) {
+					entry.outputTokens = (entry.outputTokens ?? 0) + outputTokens
+					tokensMeasured = true
+				}
 			},
 			recordFailure(operation, metadata) {
 				const count = metadata?.count ?? 1
@@ -238,7 +263,15 @@ export function instrumentOperationProvider(params: {
 			params.runContext.accounting.recordAttempt(params.operation, metadata)
 			try {
 				const response = await params.provider.chatCompletion(request)
-				params.runContext.accounting.recordSuccess(params.operation, metadata)
+				params.runContext.accounting.recordSuccess(params.operation, {
+					...metadata,
+					...(response.usage
+						? {
+								inputTokens: response.usage.inputTokens,
+								outputTokens: response.usage.outputTokens,
+							}
+						: {}),
+				})
 				return response
 			} catch (error) {
 				params.runContext.accounting.recordFailure(params.operation, metadata)

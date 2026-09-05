@@ -39,6 +39,10 @@ import { classifyInjection } from "./mongodb-injection-classifier.js"
 import { extractAndUpsertEntities } from "./mongodb-graph.js"
 import { resolveEnrichmentProvider } from "./mongodb-llm-enrichment.js"
 import {
+	instrumentProviderCostSpend,
+	recordEmbeddingSpend,
+} from "./mongodb-cost-ledger.js"
+import {
 	LLM_DEDUP_MAX_SIMILARITY,
 	LLM_DEDUP_MIN_SIMILARITY,
 	adjudicateFactMerge,
@@ -378,7 +382,13 @@ export async function consolidateMemory(params: {
 	// and every LLM-dependent phase degrades together.
 	const llmProvider = (() => {
 		try {
-			return resolveEnrichmentProvider(process.env)
+			const resolved = resolveEnrichmentProvider(process.env)
+			// C-017: reasoning LLM calls land in the per-tenant cost ledger;
+			// the same seam feeds contradiction/deduction/induction/dedup.
+			return (
+				resolved &&
+				instrumentProviderCostSpend({ db, prefix, agentId, provider: resolved })
+			)
 		} catch (err) {
 			log.warn(
 				`enrichment provider resolution failed; LLM-dependent phases degrade: ${err instanceof Error ? err.message : String(err)}`,
@@ -901,6 +911,9 @@ export async function consolidateMemory(params: {
 						{ $limit: 5 },
 					])
 					.toArray()
+				// C-017: the executed probe embedded candidate.body server-side
+				// (autoEmbed) — bill one consolidation embedding unit.
+				recordEmbeddingSpend(db, prefix, agentId, "consolidation", 1)
 
 				if (similarResults.length > 0) {
 					// Check the top result's similarity score
@@ -1228,6 +1241,9 @@ export async function consolidateMemory(params: {
 								},
 							])
 							.toArray()
+						// C-017: the executed probe embedded fact.value server-side
+						// (autoEmbed) — bill one consolidation embedding unit.
+						recordEmbeddingSpend(db, prefix, agentId, "consolidation", 1)
 
 						for (const dup of similars) {
 							// Tenant floor, belt-and-suspenders: never merge across
@@ -1382,6 +1398,9 @@ export async function consolidateMemory(params: {
 						},
 					])
 					.toArray()
+				// C-017: the executed probe embedded fact.value server-side
+				// (autoEmbed) — bill one consolidation embedding unit.
+				recordEmbeddingSpend(db, prefix, agentId, "consolidation", 1)
 
 				for (const dup of duplicates) {
 					// Tenant floor, belt-and-suspenders: even if the store returns a

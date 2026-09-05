@@ -54,15 +54,55 @@ export type TelemetryDocument = {
 // ---------------------------------------------------------------------------
 
 /**
+ * Sampling controls (08-report fleet audit: unbounded per-operation telemetry
+ * writes at scale). `MEMONGO_TELEMETRY_ENABLED=false|0|off|no` is the kill
+ * switch — no emit even touches the driver. `MEMONGO_TELEMETRY_SAMPLE_RATE`
+ * (0..1, default 1) deterministically samples the documents that do emit;
+ * window aggregates read as counts × 1/rate. Both resolve per emit, so an
+ * operator can flip either without a restart. Invalid values fall back to
+ * the safe defaults (enabled, rate 1) — telemetry failing open matches its
+ * observability role, unlike the cost ledger which never samples.
+ */
+export function resolveTelemetrySampling(env: {
+	MEMONGO_TELEMETRY_ENABLED?: string
+	MEMONGO_TELEMETRY_SAMPLE_RATE?: string
+}): { enabled: boolean; sampleRate: number } {
+	const enabledRaw = env.MEMONGO_TELEMETRY_ENABLED?.trim().toLowerCase()
+	const disabled =
+		enabledRaw === "false" ||
+		enabledRaw === "0" ||
+		enabledRaw === "off" ||
+		enabledRaw === "no"
+	const rateRaw = env.MEMONGO_TELEMETRY_SAMPLE_RATE
+	let sampleRate = 1
+	if (rateRaw !== undefined && rateRaw.trim() !== "") {
+		const parsed = Number(rateRaw)
+		if (Number.isFinite(parsed) && parsed >= 0 && parsed <= 1) {
+			sampleRate = parsed
+		}
+	}
+	return { enabled: !disabled, sampleRate }
+}
+
+/**
  * Emit a telemetry document to the memory_telemetry time series collection.
- * Fire-and-forget: never blocks the caller, never throws.
- * Uses insertOne with .catch() for error-swallowing.
+ * Fire-and-forget: never blocks the caller, never throws. Kill-switched and
+ * sampled via MEMONGO_TELEMETRY_ENABLED / MEMONGO_TELEMETRY_SAMPLE_RATE
+ * (see {@link resolveTelemetrySampling}). Uses insertOne with .catch() for
+ * error-swallowing.
  */
 export function emitTelemetry(
 	db: Db,
 	prefix: string,
 	doc: Omit<TelemetryDocument, "ts">,
 ): void {
+	const { enabled, sampleRate } = resolveTelemetrySampling(process.env)
+	if (!enabled || sampleRate <= 0) {
+		return
+	}
+	if (sampleRate < 1 && Math.random() > sampleRate) {
+		return
+	}
 	const entry: TelemetryDocument = { ...doc, ts: new Date() }
 	telemetryCollection(db, prefix)
 		.insertOne(entry)
