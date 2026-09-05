@@ -113,6 +113,7 @@ const {
 } = await import("./mongodb-schema.js")
 const { getLaneCoverage } = await import("./mongodb-lane-coverage.js")
 const { searchKB } = await import("./mongodb-kb-search.js")
+const { emitTelemetry } = await import("./mongodb-telemetry.js")
 
 // ---------------------------------------------------------------------------
 // 8.2b: P3.1/P3.2 search cost — fused lanes, per-search budget, backstop gating
@@ -1976,5 +1977,93 @@ describe("search degradation sink at the manager boundary (WS-12, C-019)", () =>
 		} as Parameters<typeof manager.searchKB>[1])
 
 		expect(degradations).toHaveLength(0)
+	})
+})
+
+// ---------------------------------------------------------------------------
+// Tests: WS-16 (C-030) search query clamp at the manager boundary
+// searchV2 is real (only collaborators module-mocked), so the clamp runs in
+// its production position: trimmed, clamped, THEN handed to the cache probe,
+// planning, embed, and rerank lanes.
+// ---------------------------------------------------------------------------
+
+describe("search query clamp (C-030)", () => {
+	beforeEach(() => {
+		vi.clearAllMocks()
+	})
+
+	/** Cache miss + empty v2 plan + empty chunks aggregate. */
+	function primeEmptySearch(): ReturnType<typeof vi.fn> {
+		mocked(checkCache).mockResolvedValue({
+			hit: false,
+			tier: "miss",
+			results: [],
+		})
+		mocked(planRetrieval).mockReturnValue({
+			paths: [],
+			confidence: "low",
+			reasoning: "empty plan",
+		})
+		const aggregate = vi.fn().mockReturnValue({
+			toArray: vi.fn().mockResolvedValue([]),
+		})
+		mocked(chunksCollection).mockReturnValue({ aggregate } as never)
+		return aggregate
+	}
+
+	it("clamps before the cache probe and emits search-query-clamped telemetry", async () => {
+		primeEmptySearch()
+		const manager = buildMockManager()
+		const longQuery = `needle-at-start${"x".repeat(2400)}`
+
+		const results = await manager.search(longQuery)
+
+		expect(results).toEqual([])
+		// The cache probe — the first hot-path consumer — saw the bounded
+		// query, proving the clamp happened ahead of it.
+		expect(mocked(checkCache).mock.calls[0][0].query).toHaveLength(2000)
+		// The clamp marker fired with the PRE-clamp length so operators can
+		// see how far over the ceiling the caller was.
+		const clampCall = vi
+			.mocked(emitTelemetry)
+			.mock.calls.find(
+				(call) =>
+					(call[2] as { meta?: { operation?: string } }).meta?.operation ===
+					"search-query-clamped",
+			)
+		expect(clampCall).toBeDefined()
+		const [db, prefix, doc] = clampCall as [
+			typeof fakeDb,
+			string,
+			{
+				meta?: { agentId?: string; operation?: string }
+				ok?: boolean
+				queryLength?: number
+			},
+		]
+		expect(db).toBe(fakeDb)
+		expect(prefix).toBe(fakePrefix)
+		expect(doc.meta).toEqual({
+			agentId: "agent-1",
+			operation: "search-query-clamped",
+		})
+		expect(doc.ok).toBe(true)
+		expect(doc.queryLength).toBe(longQuery.length)
+	})
+
+	it("leaves telemetry silent for in-range queries", async () => {
+		primeEmptySearch()
+		const manager = buildMockManager()
+
+		await manager.search("qzx in-range clamp marker")
+
+		const clampCalls = vi
+			.mocked(emitTelemetry)
+			.mock.calls.filter(
+				(call) =>
+					(call[2] as { meta?: { operation?: string } }).meta?.operation ===
+					"search-query-clamped",
+			)
+		expect(clampCalls).toHaveLength(0)
 	})
 })

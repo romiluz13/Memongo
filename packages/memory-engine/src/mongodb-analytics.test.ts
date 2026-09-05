@@ -497,6 +497,11 @@ describe("measureEmbeddingCoverage on a server without numDocs", () => {
 		// The probe must target the autoEmbed field, or it cannot embed the query.
 		expect(seen?.path).toBe("text")
 		expect(seen?.index).toBe("vec_idx")
+		// WS-16 (C-032): the probe runs exact nearest neighbor with no
+		// numCandidates, so the measured count is what ENN actually returns —
+		// coverage cannot be fabricated by an approximation.
+		expect(seen?.exact).toBe(true)
+		expect(seen).not.toHaveProperty("numCandidates")
 	})
 
 	it("reports the shortfall as pending rather than as covered", async () => {
@@ -533,9 +538,9 @@ describe("measureEmbeddingCoverage on a server without numDocs", () => {
 	})
 
 	it("refuses to guess for a collection larger than one probe can cover", async () => {
-		// numCandidates and limit are both server-capped at 10k, so a bigger
-		// collection cannot be measured in one query. Reporting the capped count
-		// as the total would understate coverage as a hard number.
+		// The server caps `limit` at 10k, so a bigger collection cannot be
+		// measured in one query. Reporting the capped count as the total would
+		// understate coverage as a hard number.
 		let probed = false
 		const collection = collectionWith({
 			total: 10_001,
@@ -570,7 +575,7 @@ describe("measureEmbeddingCoverage on a server without numDocs", () => {
 			embeddingMode: "automated",
 		})
 		expect(result).toMatchObject({ total: 4, success: 4, unknown: 0 })
-		// No reason to pay for an ANN query when the cheap field is present.
+		// No reason to pay for an ENN query when the cheap field is present.
 		expect(probed).toBe(false)
 	})
 

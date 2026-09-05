@@ -23,6 +23,7 @@ export type TelemetryOperation =
 	| "memory-job-dead-letter"
 	| "memory-job-backlog"
 	| "write-queue-saturation"
+	| "search-query-clamped"
 
 export type TelemetryMeta = {
 	agentId: string
@@ -76,6 +77,12 @@ export type TelemetryDocument = {
 	 */
 	depth?: number
 	threshold?: number
+	/**
+	 * WS-16 (C-030): pre-clamp character length carried on
+	 * search-query-clamped docs so operators can see how far past the
+	 * 2,000-character ceiling a caller pushed.
+	 */
+	queryLength?: number
 }
 
 // ---------------------------------------------------------------------------

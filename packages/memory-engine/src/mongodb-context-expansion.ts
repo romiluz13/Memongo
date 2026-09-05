@@ -7,6 +7,14 @@ import type { MemorySearchResult } from "./types.js"
 const log = createSubsystemLogger("memory:mongodb:context-expansion")
 
 /**
+ * WS-16 (C-033): the per-session neighbor fetches run in parallel under
+ * this cap instead of a sequential N+1 that multiplied hot-path latency by
+ * session count. Eight keeps the pool wide enough to cover a typical
+ * result set's sessions while bounding events-collection load.
+ */
+export const CONTEXT_EXPANSION_MAX_CONCURRENCY = 8
+
+/**
  * Expand search results by fetching neighbor events (N-1, N+1 by timestamp)
  * from the same session for event-based chunks.
  *
@@ -25,7 +33,9 @@ const log = createSubsystemLogger("memory:mongodb:context-expansion")
  *   - Neighbor text is rendered via renderEventChunkText() for consistency with chunk text
  *
  * Performance: Batches all neighbor lookups. For each unique sessionId in results,
- * queries events collection ONCE with sessionId + timestamp range to find neighbors.
+ * queries events collection ONCE with sessionId + timestamp range to find neighbors;
+ * the per-session queries run in parallel under CONTEXT_EXPANSION_MAX_CONCURRENCY
+ * (WS-16 / C-033) instead of a sequential N+1 on the search hot path.
  */
 export async function expandSearchContext(params: {
 	db: Db
@@ -89,11 +99,22 @@ export async function expandSearchContext(params: {
 		group.push({ result: item.result, timestamp: item.timestamp })
 	}
 
-	// Fetch neighbors for each session (one query per session)
+	// Fetch neighbors for each session (one query per session).
+	//
+	// WS-16 (C-033): the per-session queries run in PARALLEL under the
+	// CONTEXT_EXPANSION_MAX_CONCURRENCY cap instead of sequentially, so the
+	// stage costs roughly one fetch of wall-clock time instead of N. Each
+	// worker's neighbor-selection section is synchronous, so the shared
+	// `existingPaths` dedup set stays race-free; per-session arrays are
+	// merged back in the original session order so the output is
+	// deterministic regardless of fetch completion order.
 	const neighbors: MemorySearchResult[] = []
 	const collection = eventsCollection(db, prefix)
 
-	for (const [sessionId, items] of bySession) {
+	const fetchSessionNeighbors = async (
+		sessionId: string,
+		items: Array<{ result: MemorySearchResult; timestamp: Date }>,
+	): Promise<MemorySearchResult[]> => {
 		// Find the min and max timestamps in this session's results
 		const timestamps = items.map((i) => i.timestamp.getTime())
 		const minTs = Math.min(...timestamps)
@@ -124,8 +145,10 @@ export async function expandSearchContext(params: {
 				`context expansion query failed for session=${sessionId}, skipping`,
 				{ error: err },
 			)
-			continue
+			return []
 		}
+
+		const sessionNeighbors: MemorySearchResult[] = []
 
 		// For each expandable result, find its N-1 and N+1 neighbors
 		for (const item of items) {
@@ -166,7 +189,7 @@ export async function expandSearchContext(params: {
 					body: event.body,
 				})
 
-				neighbors.push({
+				sessionNeighbors.push({
 					path: eventPath,
 					filePath: eventPath,
 					startLine: 0,
@@ -180,6 +203,32 @@ export async function expandSearchContext(params: {
 				})
 			}
 		}
+
+		return sessionNeighbors
+	}
+
+	const sessionEntries = [...bySession.entries()]
+	const neighborsBySession = new Map<string, MemorySearchResult[]>()
+	let nextSessionIndex = 0
+	const workerCount = Math.min(
+		CONTEXT_EXPANSION_MAX_CONCURRENCY,
+		sessionEntries.length,
+	)
+	const workers = Array.from({ length: workerCount }, async () => {
+		while (nextSessionIndex < sessionEntries.length) {
+			const [sessionId, items] = sessionEntries[nextSessionIndex]
+			nextSessionIndex += 1
+			neighborsBySession.set(
+				sessionId,
+				await fetchSessionNeighbors(sessionId, items),
+			)
+		}
+	})
+	await Promise.all(workers)
+
+	// Deterministic merge: original session order, not fetch completion order.
+	for (const [sessionId] of bySession) {
+		neighbors.push(...(neighborsBySession.get(sessionId) ?? []))
 	}
 
 	if (neighbors.length === 0) {

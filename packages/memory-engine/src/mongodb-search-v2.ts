@@ -27,6 +27,7 @@ import {
 	rewriteQuery,
 	type QueryRewriteConfig,
 } from "./mongodb-query-rewriter.js"
+import { SEMANTIC_PROBE_MAX_TIME_MS } from "./mongodb-query-cache.js"
 import { applyPostRetrievalScoring } from "./mongodb-post-retrieval-scoring.js"
 import {
 	extractSessionIdFromCanonicalId,
@@ -36,7 +37,11 @@ import { isEvidenceMirrorEnabled } from "./mongodb-evidence-mirror.js"
 import { resolveUserfactEvidenceMode } from "./mongodb-userfact-evidence.js"
 import { INDEX_AUTOEMBED_MODEL } from "./mongodb-schema-search-definitions.js"
 import { resolveEnrichmentMode } from "./mongodb-llm-enrichment.js"
-import { crossEncoderRerank, type RerankConfig } from "./mongodb-reranker.js"
+import {
+	crossEncoderRerank,
+	RERANK_TIMEOUT_MS,
+	type RerankConfig,
+} from "./mongodb-reranker.js"
 import {
 	planRetrieval,
 	type RetrievalPath,
@@ -56,6 +61,7 @@ import {
 import { resolveScopeIdentity } from "./mongodb-scope.js"
 import { mongoSearch, vectorSearch } from "./mongodb-search.js"
 import {
+	DEFAULT_USER_SEARCH_MAX_TIME_MS,
 	getSearchBudgetSnapshot,
 	hasActiveSearchBudget,
 	resolveSearchBudgetLimits,
@@ -220,6 +226,19 @@ function normalizeFinalSearchScores(
 }
 
 /**
+ * WS-16 (C-031): the end-to-end tail budget one uncached search may spend —
+ * the documented 13.5s worst-case composition (1.5s semantic probe + 10s
+ * maxTimeMS aggregate + 2s rerank timeout) pinned by
+ * mongodb-search-latency-composition.test.ts. searchV2 stamps its start
+ * time and hands rerank the REMAINDER of this budget, so the provider call
+ * can never stack its full 2s cap on top of an already-consumed tail.
+ */
+export const SEARCH_TAIL_COMPOSITION_BUDGET_MS =
+	SEMANTIC_PROBE_MAX_TIME_MS +
+	DEFAULT_USER_SEARCH_MAX_TIME_MS +
+	RERANK_TIMEOUT_MS
+
+/**
  * searchV2 entry point: opens the per-request cost budget (P3.2) that every
  * lane, waterfall stage, and backstop consumes. When a budget is already
  * active — the recursive hybrid backstop re-entering searchV2 — the call
@@ -345,6 +364,10 @@ async function searchV2WithBudget(
 	agentId: string,
 	context: SearchV2Context,
 ): Promise<{ results: MemorySearchResult[]; metadata: V2SearchMetadata }> {
+	// WS-16 (C-031): wall-clock start of the whole search. The rerank stage
+	// derives its provider timeout from what REMAINS of the tail budget, so
+	// the last stage is bounded by the composition, not just by its own cap.
+	const searchStartedAt = Date.now()
 	try {
 		const graphQueryCandidates =
 			context.knownEntityNames && context.knownEntityNames.length > 0
@@ -1714,6 +1737,13 @@ async function searchV2WithBudget(
 					query,
 					results: rerankInput.length > 0 ? rerankInput : precisionScored,
 					config: rerankCfg,
+					// WS-16 (C-031): the provider call gets only what the
+					// search has left of its tail budget, never its own full
+					// 2s cap stacked on an already-slow tail.
+					remainingBudgetMs: Math.max(
+						0,
+						SEARCH_TAIL_COMPOSITION_BUDGET_MS - (Date.now() - searchStartedAt),
+					),
 					onProviderCall: (outcome) => {
 						const accounting =
 							context.searchOptions?.operationRunContext?.accounting

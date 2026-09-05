@@ -319,6 +319,10 @@ export function schemaModuleMock() {
 
 export function queryCacheModuleMock() {
 	return {
+		// C-032: mongodb-search-v2.ts reads this constant at module scope, so
+		// the mock must carry the real value (mongodb-query-cache.ts) or every
+		// manager test file fails at import time.
+		SEMANTIC_PROBE_MAX_TIME_MS: 1_500,
 		checkCache: vi.fn(),
 		invalidateQueryCache: vi.fn(),
 		writeCache: vi.fn(),
@@ -339,6 +343,10 @@ export function queryRewriterModuleMock() {
 
 export function rerankerModuleMock() {
 	return {
+		// C-031: mongodb-search-v2.ts reads this constant at module scope, so
+		// the mock must carry the real value (mongodb-reranker.ts) or every
+		// manager test file fails at import time.
+		RERANK_TIMEOUT_MS: 2_000,
 		crossEncoderRerank: vi.fn(async ({ results }) => ({
 			results,
 			reranked: false,

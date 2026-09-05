@@ -2528,42 +2528,89 @@ describeIfMongo(
 			;(HAS_ATLAS_MODEL_KEY ? describe : describe.skip)(
 				"$vectorSearch operator",
 				() => {
-					it("returns results with autoEmbed vectors", async () => {
-						// $vectorSearch requires Atlas Search index with vector field.
-						// atlas-local:preview with autoEmbed creates these automatically.
-						const chunksCol = db.collection(`${PREFIX}chunks`)
-						const pipeline = [
-							{
-								$vectorSearch: {
-									index: `${PREFIX}chunks_vector`,
-									path: "text",
-									query: { text: "Kubernetes Helm deployment" },
-									model: "voyage-4-large",
-									numCandidates: 50,
-									limit: 5,
-									filter: { agentId: AGENT_ID },
-								},
-							},
-							{ $project: { text: 1, score: { $meta: "vectorSearchScore" } } },
-						]
+					// autoEmbed populates the materialized view asynchronously after
+					// ingest; mongot serializes mat-view initial syncs
+					// (maxConcurrentEmbeddingInitialSyncs=1) across the ~10 auto-embed
+					// indexes created in beforeAll, so population can lag ingestion by
+					// tens of seconds at suite scale. real-e2e-v2 budgets 180s for the
+					// same wait (waitForVectorResults); mirror that budget here.
+					const AUTOEMBED_POPULATION_TIMEOUT = 180_000
 
-						// P1.9: explicit capability assertion - fail loudly when the
-						// serving vector index is absent instead of branching green
-						// (the old branch swallowed a missing index with a passing no-op).
-						const vectorIndexes = await chunksCol
-							.listSearchIndexes(`${PREFIX}chunks_vector`)
-							.toArray()
-						expect(
-							vectorIndexes.length,
-							`vector search index ${PREFIX}chunks_vector must exist in this environment`,
-						).toBeGreaterThan(0)
-						// No try/catch: a missing or non-queryable index must fail
-						// the test, not degrade silently.
-						const results = await chunksCol.aggregate(pipeline).toArray()
-						expect(results.length).toBeGreaterThan(0)
-						expect(results[0]).toHaveProperty("score")
-						expect(typeof results[0].score).toBe("number")
-					})
+					it(
+						"returns results with autoEmbed vectors",
+						async () => {
+							// $vectorSearch requires Atlas Search index with vector field.
+							// atlas-local:preview with autoEmbed creates these automatically.
+							const chunksCol = db.collection(`${PREFIX}chunks`)
+							const pipeline = [
+								{
+									$vectorSearch: {
+										index: `${PREFIX}chunks_vector`,
+										path: "text",
+										query: { text: "Kubernetes Helm deployment" },
+										model: "voyage-4-large",
+										numCandidates: 50,
+										limit: 5,
+										filter: { agentId: AGENT_ID },
+									},
+								},
+								{
+									$project: { text: 1, score: { $meta: "vectorSearchScore" } },
+								},
+							]
+
+							// P1.9: explicit capability assertion - fail loudly when the
+							// serving vector index is absent instead of branching green
+							// (the old branch swallowed a missing index with a passing no-op).
+							const vectorIndexes = await chunksCol
+								.listSearchIndexes(`${PREFIX}chunks_vector`)
+								.toArray()
+							expect(
+								vectorIndexes.length,
+								`vector search index ${PREFIX}chunks_vector must exist in this environment`,
+							).toBeGreaterThan(0)
+
+							// "Queryable" (asserted in beforeAll) only means the Lucene
+							// index is serving; the mat view still has to embed the
+							// ingested corpus. Poll for the first semantic hits before
+							// asserting - this is a population wait, not a degradation
+							// swallow: budget expiry still fails loudly below.
+							const deadline = Date.now() + AUTOEMBED_POPULATION_TIMEOUT
+							let results = await chunksCol.aggregate(pipeline).toArray()
+							let lastTransientError: unknown
+							while (results.length === 0 && Date.now() < deadline) {
+								try {
+									results = await chunksCol.aggregate(pipeline).toArray()
+								} catch (err) {
+									const message =
+										err instanceof Error ? err.message : String(err)
+									if (
+										message.includes("NOT_STARTED") ||
+										message.includes("INITIAL_SYNC") ||
+										message.includes("BUILDING")
+									) {
+										lastTransientError = err
+									} else {
+										throw err
+									}
+								}
+								if (results.length === 0) {
+									await new Promise((resolve) => setTimeout(resolve, 2_000))
+								}
+							}
+							expect(
+								results.length,
+								`autoEmbed $vectorSearch returned no results for agent ${AGENT_ID} within ${AUTOEMBED_POPULATION_TIMEOUT / 1000}s${
+									lastTransientError
+										? ` (last transient error: ${String(lastTransientError)})`
+										: ""
+								}`,
+							).toBeGreaterThan(0)
+							expect(results[0]).toHaveProperty("score")
+							expect(typeof results[0].score).toBe("number")
+						},
+						AUTOEMBED_POPULATION_TIMEOUT + 30_000,
+					)
 				},
 			)
 

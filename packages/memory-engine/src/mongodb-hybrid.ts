@@ -1,10 +1,14 @@
 /**
- * MongoDB-specific hybrid search merge with OR-join FTS and Reciprocal Rank Fusion.
+ * MongoDB-specific hybrid search merge with RRF score fusion.
  *
  * Replaces upstream hybrid.ts for the MongoDB backend to fix:
- * - AND-join FTS bug (#16021) that drops hit rate from 95% to 40%
  * - Weighted average scoring that penalizes vector results when BM25=0
  * - Score normalization gap when merging results from different search methods
+ *
+ * WS-16 hygiene fold: the dead `buildOrJoinFtsQuery` helper (zero production
+ * callers, ASCII-only tokenizer that would silently return null for
+ * non-Latin queries) was removed. Production text search uses the
+ * full-query `must` clause (buildTextSearchCompound, mongodb-search.ts).
  *
  * @module memory:mongodb:hybrid
  */
@@ -16,32 +20,6 @@ import type { MemorySearchResult } from "./types.js"
 // ---------------------------------------------------------------------------
 
 export type SearchMethod = "vector" | "text" | "hybrid" | "structured" | "kb"
-
-// ---------------------------------------------------------------------------
-// OR-join FTS query builder (replaces upstream AND-join)
-// ---------------------------------------------------------------------------
-
-/**
- * Build a full-text search query string using OR-join instead of AND-join.
- *
- * Upstream hybrid.ts AND-joins all tokens: `"word1" AND "word2" AND "word3"`.
- * This requires ALL tokens to match, which kills recall for natural language queries.
- *
- * Our OR-join: `"word1" OR "word2" OR "word3"` matches ANY token, improving recall
- * from ~40% to ~95% for natural language queries.
- */
-export function buildOrJoinFtsQuery(raw: string): string | null {
-	const tokens =
-		raw
-			.match(/[A-Za-z0-9_]+/g)
-			?.map((t) => t.trim())
-			.filter(Boolean) ?? []
-	if (tokens.length === 0) {
-		return null
-	}
-	const quoted = tokens.map((t) => `"${t.replaceAll('"', "")}"`)
-	return quoted.join(" OR ")
-}
 
 // ---------------------------------------------------------------------------
 // Reciprocal Rank Fusion (RRF) scoring

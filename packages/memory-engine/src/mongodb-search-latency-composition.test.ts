@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 import { DEFAULT_USER_SEARCH_MAX_TIME_MS } from "./mongodb-search-budget.js"
 import { RERANK_TIMEOUT_MS } from "./mongodb-reranker.js"
 import { SEMANTIC_PROBE_MAX_TIME_MS } from "./mongodb-query-cache.js"
+import { SEARCH_TAIL_COMPOSITION_BUDGET_MS } from "./mongodb-search-v2.js"
 
 // WS-11 change 5 (09-report U2): every uncached-search stage was
 // individually bounded, but no test pinned the COMPOSITION — 1.5s semantic
@@ -48,5 +49,19 @@ describe("tail-latency composition (sum of stage bounds vs end-to-end budget)", 
 			DEFAULT_USER_SEARCH_MAX_TIME_MS +
 			RERANK_TIMEOUT_MS
 		expect(worstCaseMs).toBeGreaterThan(BENCHMARK_P95_CONTRACT_MS * 10)
+	})
+
+	// WS-16 (C-031): searchV2 derives the rerank timeout from the REMAINDER
+	// of this budget, so the runtime deadline and the static arithmetic pin
+	// must be the same number or the derivation silently drifts.
+	it("searchV2's runtime tail budget equals the documented composition", () => {
+		expect(SEARCH_TAIL_COMPOSITION_BUDGET_MS).toBe(
+			SEMANTIC_PROBE_MAX_TIME_MS +
+				DEFAULT_USER_SEARCH_MAX_TIME_MS +
+				RERANK_TIMEOUT_MS,
+		)
+		expect(SEARCH_TAIL_COMPOSITION_BUDGET_MS).toBe(
+			DOCUMENTED_TAIL_COMPOSITION_MS,
+		)
 	})
 })

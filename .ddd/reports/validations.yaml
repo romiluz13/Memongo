@@ -955,3 +955,91 @@ entries:
     run_at: "2026-09-05T17:11:46.355Z"
     evidence_hash: "sha256:4951ac422de511410f61f5d360c9211d5afb15e368d21df62e509597f9c3dd9d"
     notes: "Entity and relation provenance bounds from the same final-state WS-15 engine suite: mongodb-graph.test.ts pins upsertEntity's read-merge-write capping merged sourceEventIds at 200 keeping the most recent, and upsertRelation applying the same cap; mongodb-graph.segment2.test.ts pins the batch pipeline's $reduce + concatArrays + $slice -200 expression so the batch path cannot grow unbounded arrays between reads. The dead addToSet sourceEventIds accumulation was removed from the upsert path, so every write surface funnels through the capped merge."
+
+  - id: V-120
+    schema_version: 0.1.0
+    claim_id: C-029
+    construct: packages/memory-engine/src/mongodb-schema-search-indexes.ts
+    method: test
+    target: .ddd/reports/runs/ws16-engine-unit.log
+    result: pass
+    run_at: "2026-09-05T18:54:10.000Z"
+    evidence_hash: sha256:883df0223db259014c408f161e5fb5574917e81d316dace7ce3c5e6a072a1f09
+    notes: "Index-definition side of the analyzer strategy, from the final-state WS-16 engine unit gate (129 files / 2272 tests, 0 failures). mongodb-schema.part2.test.ts 'ensureSearchIndexes text-analyzer strategy (C-029)' pins: default definitions bit-identical to historical (lucene.standard on NL fields, token identifiers); folding switches NL fields to lucene.folding and identifier-heavy fields (kb_chunks.path, structured_mem.key) to the dual keyword+folding mapping; lucene.<language> pins the language analyzer with the folded subfield retained; filter-clause fields (source, sessionId, status, agentId, scope, scopeRef, docId, ...) stay token so Atlas compound filters cannot be rejected. Migration path: ensureNamedSearchIndex compares the server latestDefinition and calls updateSearchIndex on drift, so flipping MEMONGO_SEARCH_TEXT_ANALYZER rebuilds indexes in place on the next ensureSearchIndexes run (boot / manager init) - no manual migration; deployments stay bit-identical until they opt in."
+
+  - id: V-121
+    schema_version: 0.1.0
+    claim_id: C-029
+    construct: packages/memory-engine/src/mongodb-search-ranking.ts
+    method: test
+    target: .ddd/reports/runs/ws16-engine-unit.log
+    result: pass
+    run_at: "2026-09-05T18:54:20.000Z"
+    evidence_hash: sha256:883df0223db259014c408f161e5fb5574917e81d316dace7ce3c5e6a072a1f09
+    notes: "Config-surface side from the same final-state suite: mongodb-schema.part2.test.ts 'resolveSearchTextAnalyzer (C-029)' pins env parsing (unset/empty -> standard; standard|folding accepted trimmed case-insensitive; full lucene.<language> analyzer names accepted; unknown value falls back to standard so a typo cannot mint a broken index), and 'searchTextAnalyzerName / isIdentifierDualMappingEnabled (C-029)' pins strategy-to-analyzer-name mapping plus identifier dual mapping enabled only for improved strategies. Dead legacy ranking code removed in mongodb-hybrid.ts (hybrid test deltas) as the hygiene fold of this change."
+
+  - id: V-122
+    schema_version: 0.1.0
+    claim_id: C-030
+    construct: "packages/memory-engine/src/mongodb-search-ranking.ts#normalizeDetailedSearchRequest"
+    method: test
+    target: .ddd/reports/runs/ws16-engine-unit.log
+    result: pass
+    run_at: "2026-09-05T18:54:30.000Z"
+    evidence_hash: sha256:883df0223db259014c408f161e5fb5574917e81d316dace7ce3c5e6a072a1f09
+    notes: "Query-clamp battery from the same final-state suite: mongodb-manager-search-limit.test.ts 'clampSearchQuery (C-030)' pins the 2,000-character ceiling (MAX_SEARCH_QUERY_LENGTH), prefix-keep (not suffix) semantics, pass-through at or under the ceiling, and normalizeDetailedSearchRequest clamping the trimmed query before any downstream consumer. mongodb-manager-search.part2.test.ts 'search query clamp (C-030)' pins the clamp landing ahead of the cache probe (cache keys cannot grow unbounded) with the search-query-clamped telemetry event carrying pre-clamp queryLength, and telemetry silence for in-range queries. mongodb-telemetry.ts adds the search-query-clamped operation and queryLength field; mongodb-manager.ts re-exports clampSearchQuery and MAX_SEARCH_QUERY_LENGTH as the public surface."
+
+  - id: V-123
+    schema_version: 0.1.0
+    claim_id: C-031
+    construct: packages/memory-engine/src/mongodb-reranker.ts
+    method: test
+    target: .ddd/reports/runs/ws16-engine-unit.log
+    result: pass
+    run_at: "2026-09-05T18:54:40.000Z"
+    evidence_hash: sha256:883df0223db259014c408f161e5fb5574917e81d316dace7ce3c5e6a072a1f09
+    notes: "Rerank-timeout budget derivation from the same final-state suite: mongodb-reranker.test.ts 'resolveRerankTimeoutMs (C-031)' pins no-budget -> fixed 2s cap (historical behavior preserved), remaining budget below the cap -> derived timeout, budget above the cap -> still capped at 2s, and budget below the floor (or non-finite) -> null meaning skip the provider call entirely; 'crossEncoderRerank remaining latency budget (C-031)' pins the skip path (rerankSkipped: budget-exhausted) and that a hanging provider call aborts within the derived timeout rather than the 2s cap. mongodb-search-latency-composition.test.ts pins searchV2's runtime tail budget equal to the documented composition, so the remaining budget handed to rerank is the true end-to-end remainder - one provider call can no longer stack a full 2s onto an already-consumed tail. RERANK_TIMEOUT_MS is exported for module-scope consumers (mongodb-search-v2.ts), with manager-test-kit mocks carrying it."
+
+  - id: V-124
+    schema_version: 0.1.0
+    claim_id: C-032
+    construct: packages/memory-engine/src/mongodb-analytics.ts
+    method: test
+    target: .ddd/reports/runs/ws16-engine-unit.log
+    result: pass
+    run_at: "2026-09-05T18:54:50.000Z"
+    evidence_hash: sha256:883df0223db259014c408f161e5fb5574917e81d316dace7ce3c5e6a072a1f09
+    notes: "Exact-probe pin from the same final-state suite: the embedding-coverage battery in mongodb-analytics.test.ts now asserts the probe $vectorSearch stage carries exact: true and no numCandidates, so measured coverage is what exact nearest-neighbor actually returns and an ANN approximation cannot fabricate coverage that approximate search would not reproduce. countRetrievableViaVectorIndex (mongodb-analytics.ts) runs the probe as ENN; MAX_COVERAGE_PROBE_DOCS keeps the 10k server limit with unknown reported above it. Construct re-pointed from the planned mongodb-manager-admin.ts: the probe implementation lives in mongodb-analytics.ts (countRetrievableViaVectorIndex / measureEmbeddingCoverage); mongodb-manager-admin.ts is untouched by WS-16."
+
+  - id: V-125
+    schema_version: 0.1.0
+    claim_id: C-033
+    construct: packages/memory-engine/src/mongodb-context-expansion.ts
+    method: test
+    target: .ddd/reports/runs/ws16-engine-unit.log
+    result: pass
+    run_at: "2026-09-05T18:55:00.000Z"
+    evidence_hash: sha256:883df0223db259014c408f161e5fb5574917e81d316dace7ce3c5e6a072a1f09
+    notes: "Parallelized per-session neighbor fetches from the same final-state suite: mongodb-context-expansion.test.ts pins that per-session fetches run concurrently (the sequential N+1 on the search hot path is gone, demonstrated by an interleaving probe test), that concurrency is capped at CONTEXT_EXPANSION_MAX_CONCURRENCY, and that the neighbor merge order stays deterministic across sessions regardless of fetch completion order."
+
+  - id: V-126
+    schema_version: 0.1.0
+    claim_id: C-034
+    construct: packages/memory-engine/src/mongodb-episodes.ts
+    method: test
+    target: .ddd/reports/runs/ws16-engine-unit.log
+    result: pass
+    run_at: "2026-09-05T18:55:10.000Z"
+    evidence_hash: sha256:883df0223db259014c408f161e5fb5574917e81d316dace7ce3c5e6a072a1f09
+    notes: "Negative-memo battery from the same final-state suite: mongodb-episodes.test.ts 'auto-trigger negative memo (WS-16 C-034)' pins a negative auto-trigger verdict memoized per agent+scope+prefix key so the next cold write pays only the cooldown query instead of the 500-event scan, per-agent scoping (another agent's cold check still scans), TTL expiry causing exactly one re-scan, and force bypassing the memo while still triggering. mongodb-episodes.segment2.test.ts resets the module-state memo between tests (resetAutoEpisodeNegativeMemoForTests) so batteries sharing the memo key cannot pollute each other."
+
+  - id: V-127
+    schema_version: 0.1.0
+    claim_id: C-034
+    construct: "packages/memory-engine/src/mongodb-episodes.ts#checkAutoEpisodeTriggers"
+    method: test
+    target: .ddd/reports/runs/ws16-engine-unit.log
+    result: pass
+    run_at: "2026-09-05T18:55:20.000Z"
+    evidence_hash: sha256:883df0223db259014c408f161e5fb5574917e81d316dace7ce3c5e6a072a1f09
+    notes: "Trigger-decision anchor for the same memo: checkAutoEpisodeTriggers consults the fresh-negative memo before running the event-count scan and records a negative verdict into the memo (memoized_negative outcome), so the write hot path skips the scan for the ~60s TTL window. Construct re-pointed from the planned mongodb-manager-write.ts, which is untouched by WS-16: the memo and the trigger decision both live in mongodb-episodes.ts."

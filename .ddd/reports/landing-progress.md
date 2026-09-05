@@ -54,7 +54,7 @@ This file is the compaction anchor: any future instance resumes from here.
 | WS-13 | C-020..023 | T2,T2,T2,T2 | Lifecycle scheduling/dead letters | LANDED b175de6955 + artifacts (see session log) |
 | WS-14 | C-024 | T2 | Orphan detection all relation types | LANDED d0184fc2b9 (hash pinned by follow-up ledger commit) |
 | WS-15 | C-025..028 | T1,T2,T1,T1 | Data-model mechanics | LANDED a8cdf60d96 (hash pinned by follow-up ledger commit) |
-| WS-16 | C-029..034 | T2,T1,T2,T0,T2,T1 | Retrieval quality/perf | pending |
+| WS-16 | C-029..034 | T2,T1,T2,T0,T2,T1 | Retrieval quality/perf | LANDED (see session log) |
 | WS-17 | C-035,036 | T2,T2 | kb cross-tenant read; pi opt-in | LANDED 96c8db28bb (see session log) |
 | WS-18 | C-037,038,039 | T1,T2,T2 | dockerignore; publish gates; nightly eval | pending |
 
@@ -116,6 +116,13 @@ carry validations and trace links by hygiene though the sweep does not
 require them; remaining 17 = 1 open C-018 refutation obligation +
 16 pending-workstream violations: 3 C-029 + 2 C-031 + 2 C-033 +
 2 C-038 + 3 C-039 + 4 C-040).
+Sweep violations at WS-16 landing: 9 (was 17 at WS-15; zero for
+C-029..C-034; the 7 WS-16 pending-workstream violations cleared
+(3 C-029 + 2 C-031 + 2 C-033) plus the C-018 t3-without-refutation
+obligation satisfied by refutation-c-018.yaml (round-1 sustained;
+independent round-2 refutation still owed before C-018 is final);
+remaining 9 = 2 C-038 + 3 C-039 + 4 C-040, all pending workstreams
+(WS-18 publish gates / nightly eval, C-040 quartet closure)).
 
 ## Session log
 
@@ -954,3 +961,91 @@ require them; remaining 17 = 1 open C-018 refutation obligation +
   and the pre-existing failure above; (6) cross-package grep for
   hard-coded relation: path callers confirmed the typed locator needs
   no external coordination (apps/ and non-engine packages clean).
+
+### 2026-09-05 — WS-16 (C-029..C-034) landed: retrieval quality/perf
+
+Scope: the six remediation claims from the WS-16 plan, all production
+code + unit batteries + ledger closure landed in one commit.
+
+Implementation summary (one line per claim):
+- C-029: resolveSearchTextAnalyzer (MEMONGO_SEARCH_TEXT_ANALYZER env,
+  typo-safe standard fallback) + searchTextAnalyzerName /
+  isIdentifierDualMappingEnabled in mongodb-search-ranking.ts;
+  ensureSearchIndexes builds NL-field analyzers (lucene.standard
+  default, folding, lucene.<language>), dual keyword+folding
+  identifier mapping for improved strategies, token identifiers for
+  filter clauses; ensureNamedSearchIndex rebuilds on definition drift,
+  so flipping the env heals existing deployments in place. Default
+  stays standard (bit-identical) until the retrieval eval gate passes.
+  Dead legacy ranking code removed from mongodb-hybrid.ts.
+- C-030: clampSearchQuery + MAX_SEARCH_QUERY_LENGTH (2,000 chars,
+  prefix-keep) applied in normalizeDetailedSearchRequest before the
+  cache probe; search-query-clamped telemetry with pre-clamp
+  queryLength; manager.ts re-exports the clamp surface.
+- C-031: resolveRerankTimeoutMs derives the rerank timeout from the
+  remaining search latency budget (2s cap, floor -> skip the provider
+  call entirely); crossEncoderRerank aborts at the derived timeout;
+  searchV2 hands down its documented tail budget
+  (mongodb-search-latency-composition.test.ts pins the composition).
+- C-032: countRetrievableViaVectorIndex runs the embedding-coverage
+  probe as exact nearest-neighbor (exact true, no numCandidates) so
+  measured coverage is what ENN actually returns.
+- C-033: per-session context-expansion neighbor fetches run
+  concurrently, bounded by CONTEXT_EXPANSION_MAX_CONCURRENCY, with
+  deterministic merge order.
+- C-034: checkAutoEpisodeTriggers memoizes a negative verdict per
+  agent+scope+prefix (TTL window), so cold writes pay only the
+  cooldown query instead of the 500-event scan; force bypasses the
+  memo; segment2 tests reset the module-state memo via
+  resetAutoEpisodeNegativeMemoForTests.
+
+Construct re-points (plan vs. actual): C-032 -> mongodb-analytics.ts
+(the probe lives there; planned mongodb-manager-admin.ts untouched)
+and C-034 -> mongodb-episodes.ts (memo + trigger decision both there;
+planned mongodb-manager-write.ts untouched). Claims + traces re-pointed
+consistently (TR-074, TR-077 anchors).
+
+Ledger closure: V-120..V-127 recorded (one per gated trace; V-120/121
+C-029 definition + config sides, V-122 C-030, V-123 C-031, V-124
+C-032, V-125 C-033, V-126/127 C-034), all citing
+.ddd/reports/runs/ws16-engine-unit.log (sha256 883df0223db2...,
+129 files / 2272 tests, 0 failures); TR-070..TR-077 patched
+(validation ids, sweep_pass true, landed notes). Sweep computed by
+.ddd/reports/sweep-ws16-compute.py (adapted from the ws11 script) ->
+sweep-ws16.json: 40 claims / 106 traces, 17 -> 9 violations, zero for
+C-029..C-034; remaining 9 are the pending WS-18 (C-038/C-039) and
+C-040 workstreams; the C-018 t3-without-refutation sweep obligation is
+satisfied by refutation-c-018.yaml (independent round-2 refutation
+still owed before C-018 is final).
+
+Gates at landing: engine unit gate (package scope, e2e excluded) 129
+files / 2272 tests 0 failures (was 2246 at WS-15, +26); engine e2e
+gate (sequential, --no-file-parallelism) 15 files / 297 tests EXIT 0
+(vs 81 + 43 file counts at WS-15: the e2e scripts were consolidated
+into the single sequential gate during WS-16); check-types clean for
+engine, bridge, api, mcp, tools; biome clean on the diff after
+auto-format (6 files).
+
+E2e fix during landing verification: the production-readiness autoEmbed
+"$vectorSearch operator returns results" test failed because it queried
+immediately after ingest while mongot serializes materialized-view
+initial syncs (maxConcurrentEmbeddingInitialSyncs=1) across ~10
+auto-embed indexes; real-e2e-v2 already used a waitForVectorResults
+poll (180s budget). Fixed by adding the same population-wait loop
+(transient-error tolerance for NOT_STARTED/INITIAL_SYNC/BUILDING) to
+the Phase 12 test; 96/96 production-readiness tests pass after.
+
+Methodology lessons: (1) monolithic `vitest run` with default file
+parallelism is NOT a supported invocation for this package — it
+produces shifting contention failures (cache-hit, telemetry,
+memory-jobs e2e) that disappear under the canonical gates; the repo
+gates are the package unit scope plus the sequential e2e gate; (2) a
+$vectorSearch/mat-view assertion needs an explicit population wait —
+querying immediately after ingest races the mat-view embed; (3) the
+trace-matrix had been unparseable by strict yaml.safe_load since two
+WS-12 landed notes embedded unquoted colons (invisible because sweeps
+after ws11 were computed before those notes landed); repaired by
+quoting all 80 unquoted notes scalars (content unchanged) so future
+colons cannot break the ledger; (4) sweep scripts adapted per
+workstream live in .ddd/reports/sweep-ws*-compute.py and read the
+ledger directly — run one after every landing.

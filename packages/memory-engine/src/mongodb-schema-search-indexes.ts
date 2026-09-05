@@ -1,4 +1,23 @@
 // Atlas Search / Vector Search index definitions, readiness, and drift (P4.3 split from mongodb-schema.ts).
+//
+// WS-16 (C-029) text-analyzer strategy: natural-language fields in every
+// text index definition carry the analyzer selected by
+// MEMONGO_SEARCH_TEXT_ANALYZER (see mongodb-search-ranking.ts — `standard`
+// default, `folding` opt-in, `lucene.<language>` for language corpora).
+// Identifier-heavy fields (kb_chunks.path, structured_mem.key) get a dual
+// keyword+folding mapping under the improved strategies so identifier
+// literals become text-matchable. Fields used by compound `equals`/`in`
+// filters (source, sessionId, status, agentId, scope, scopeRef, docId, ...)
+// stay `token` — Atlas filter clauses require token-typed fields.
+//
+// Rebuild / migration path: flipping the env changes the definition
+// signatures below; `ensureNamedSearchIndex` (mongodb-schema-search-readiness.ts)
+// detects the drift against the server's `latestDefinition` and calls
+// `updateSearchIndex`, which rebuilds the index in place on the next
+// `ensureSearchIndexes` run (boot / manager init). No manual migration is
+// required; existing deployments keep `lucene.standard` definitions until
+// they opt in, and the default flips only after the retrieval eval gate
+// (benchmark harness, before/after on the sample corpus) passes.
 import type { Collection, Db, Document } from "mongodb"
 import type {
 	MemoryMongoDBDeploymentProfile,
@@ -21,6 +40,11 @@ import {
 	sessionChunksCollection,
 	memoryEvidenceCollection,
 } from "./mongodb-schema-collections.js"
+import {
+	isIdentifierDualMappingEnabled,
+	resolveSearchTextAnalyzer,
+	searchTextAnalyzerName,
+} from "./mongodb-search-ranking.js"
 
 // ---------------------------------------------------------------------------
 // Search / Vector Search index creation
@@ -82,6 +106,24 @@ export async function ensureSearchIndexes(
 ): Promise<{ text: boolean; vector: boolean }> {
 	void embeddingMode
 	void numDimensions
+
+	// WS-16 (C-029): resolve the BM25 text-analyzer strategy once — every
+	// text index definition below pins this analyzer on its natural-language
+	// fields. `standard` reproduces the historical lucene.standard pinning.
+	const textAnalyzerStrategy = resolveSearchTextAnalyzer()
+	const textAnalyzer = searchTextAnalyzerName(textAnalyzerStrategy)
+	// Identifier-heavy fields switch from `token` to the dual keyword+folding
+	// mapping only under the improved strategies — keeping `standard`
+	// bit-identical to historical definitions so no drift fires until opt-in.
+	const identifierField = isIdentifierDualMappingEnabled(textAnalyzerStrategy)
+		? ({
+				type: "string",
+				analyzer: "lucene.keyword",
+				fields: {
+					folded: { type: "string", analyzer: "lucene.folding" },
+				},
+			} as Document)
+		: ({ type: "token" } as Document)
 
 	// Server version gates storedSource include-lists (P3.3) through the
 	// capability registry; undefined (buildInfo unavailable) keeps them off.
@@ -203,7 +245,7 @@ export async function ensureSearchIndexes(
 			mappings: {
 				dynamic: false,
 				fields: {
-					text: { type: "string", analyzer: "lucene.standard" },
+					text: { type: "string", analyzer: textAnalyzer },
 					source: { type: "token" },
 					path: { type: "token" },
 					agentId: { type: "token" },
@@ -297,8 +339,14 @@ export async function ensureSearchIndexes(
 				mappings: {
 					dynamic: false,
 					fields: {
-						text: { type: "string", analyzer: "lucene.standard" },
-						path: { type: "token" },
+						text: { type: "string", analyzer: textAnalyzer },
+						// Identifier-heavy (file paths): dual keyword+folding under
+						// the improved strategies so path literals are
+						// text-matchable; `token` under standard.
+						path: identifierField,
+						// docId stays token: the KB text lane pushes
+						// `docId: { $in: [...] }` into the Atlas compound filter,
+						// and filter clauses require token-typed fields.
 						docId: { type: "token" },
 						scopeRef: { type: "token" },
 						updatedAt: { type: "date" },
@@ -370,10 +418,14 @@ export async function ensureSearchIndexes(
 			mappings: {
 				dynamic: false,
 				fields: {
-					value: { type: "string", analyzer: "lucene.standard" },
-					context: { type: "string", analyzer: "lucene.standard" },
+					value: { type: "string", analyzer: textAnalyzer },
+					context: { type: "string", analyzer: textAnalyzer },
 					type: { type: "token" },
-					key: { type: "token" },
+					// Identifier-heavy (dot-notation keys like "user.timezone"):
+					// dual keyword+folding under the improved strategies;
+					// `token` under standard. Not a filter path on any lane, so
+					// the mapping switch breaks no query.
+					key: identifierField,
 					tags: { type: "token" },
 					agentId: { type: "token" },
 					scope: { type: "token" },
@@ -453,8 +505,8 @@ export async function ensureSearchIndexes(
 			mappings: {
 				dynamic: false,
 				fields: {
-					name: { type: "string", analyzer: "lucene.standard" },
-					searchText: { type: "string", analyzer: "lucene.standard" },
+					name: { type: "string", analyzer: textAnalyzer },
+					searchText: { type: "string", analyzer: textAnalyzer },
 					intentTags: { type: "token" },
 					agentId: { type: "token" },
 					scope: { type: "token" },
@@ -527,7 +579,7 @@ export async function ensureSearchIndexes(
 			mappings: {
 				dynamic: false,
 				fields: {
-					body: { type: "string", analyzer: "lucene.standard" },
+					body: { type: "string", analyzer: textAnalyzer },
 					agentId: { type: "token" },
 					scope: { type: "token" },
 					scopeRef: { type: "token" },
@@ -634,7 +686,7 @@ export async function ensureSearchIndexes(
 				mappings: {
 					dynamic: false,
 					fields: {
-						text: { type: "string", analyzer: "lucene.standard" },
+						text: { type: "string", analyzer: textAnalyzer },
 						agentId: { type: "token" },
 						scope: { type: "token" },
 						scopeRef: { type: "token" },
@@ -708,7 +760,7 @@ export async function ensureSearchIndexes(
 				mappings: {
 					dynamic: false,
 					fields: {
-						text: { type: "string", analyzer: "lucene.standard" },
+						text: { type: "string", analyzer: textAnalyzer },
 						agentId: { type: "token" },
 						scope: { type: "token" },
 						scopeRef: { type: "token" },

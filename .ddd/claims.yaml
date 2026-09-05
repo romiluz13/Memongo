@@ -492,7 +492,7 @@ entries:
     tier: T2
     status: known-and-supported
     constructs: [packages/memory-engine/src/mongodb-schema-search-indexes.ts, packages/memory-engine/src/mongodb-search-ranking.ts]
-    validations: []
+    validations: [V-120, V-121]
     exceptions: []
 
   - id: C-030
@@ -508,7 +508,7 @@ entries:
     tier: T1
     status: known-and-supported
     constructs: ["packages/memory-engine/src/mongodb-search-ranking.ts#normalizeDetailedSearchRequest"]
-    validations: []
+    validations: [V-122]
     exceptions: []
 
   - id: C-031
@@ -524,7 +524,7 @@ entries:
     tier: T2
     status: known-and-supported
     constructs: [packages/memory-engine/src/mongodb-reranker.ts]
-    validations: []
+    validations: [V-123]
     exceptions: []
 
   - id: C-032
@@ -539,8 +539,8 @@ entries:
     impact: low
     tier: T0
     status: known-and-supported
-    constructs: [packages/memory-engine/src/mongodb-manager-admin.ts]
-    validations: []
+    constructs: [packages/memory-engine/src/mongodb-analytics.ts]
+    validations: [V-124]
     exceptions: []
 
   - id: C-033
@@ -556,7 +556,7 @@ entries:
     tier: T2
     status: known-and-supported
     constructs: [packages/memory-engine/src/mongodb-context-expansion.ts]
-    validations: []
+    validations: [V-125]
     exceptions: []
 
   - id: C-034
@@ -571,8 +571,8 @@ entries:
     impact: medium
     tier: T1
     status: known-and-supported
-    constructs: [packages/memory-engine/src/mongodb-episodes.ts, packages/memory-engine/src/mongodb-manager-write.ts]
-    validations: []
+    constructs: [packages/memory-engine/src/mongodb-episodes.ts]
+    validations: [V-126, V-127]
     exceptions: []
 
   - id: C-035

@@ -12,6 +12,7 @@ vi.mock("./mongodb-events.js", () => ({
 import {
 	checkAutoEpisodeTriggers,
 	getEpisodesByIds,
+	resetAutoEpisodeNegativeMemoForTests,
 	type Episode,
 	type EpisodeSummarizer,
 } from "./mongodb-episodes.js"
@@ -112,6 +113,10 @@ describe("mongodb-episodes", () => {
 	describe("checkAutoEpisodeTriggers", () => {
 		beforeEach(() => {
 			vi.clearAllMocks()
+			// C-034: the negative-result memo is module state keyed by
+			// agent+scope+prefix; these tests share the same key, so a previous
+			// test's memo would short-circuit the next one.
+			resetAutoEpisodeNegativeMemoForTests()
 		})
 
 		it("triggers episode on session gap (>30min default)", async () => {

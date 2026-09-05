@@ -14,7 +14,7 @@ traces:
     direction: forward
     sweep_pass: true
     checked_at: "2026-09-02T22:11:14.000Z"
-    notes: WS-01 MCP HTTP transport authentication (planned change envelope)
+    notes: "WS-01 MCP HTTP transport authentication (planned change envelope)"
   - id: TR-002
     schema_version: 0.1.0
     change_id: WS-01
@@ -24,7 +24,7 @@ traces:
     direction: forward
     sweep_pass: true
     checked_at: "2026-09-02T22:11:14.000Z"
-    notes: WS-01 MCP HTTP transport authentication (planned change envelope)
+    notes: "WS-01 MCP HTTP transport authentication (planned change envelope)"
   - id: TR-003
     schema_version: 0.1.0
     change_id: WS-02
@@ -34,7 +34,7 @@ traces:
     direction: forward
     sweep_pass: true
     checked_at: "2026-09-03T00:15:00.000Z"
-    notes: WS-02 registry close-failure warns log a shared-client-<sha256-8> URI alias plus formatErrorMessage-redacted detail; pinned by the registry battery in the final-state engine suite log
+    notes: "WS-02 registry close-failure warns log a shared-client-<sha256-8> URI alias plus formatErrorMessage-redacted detail; pinned by the registry battery in the final-state engine suite log"
   - id: TR-004
     schema_version: 0.1.0
     change_id: WS-02
@@ -44,7 +44,7 @@ traces:
     direction: forward
     sweep_pass: true
     checked_at: "2026-09-03T00:15:00.000Z"
-    notes: WS-02 central classifier wired to every diagnostic boundary; 40-test battery pins userinfo (password-only and username-only), assignments (bare/quoted/single/escaped/unterminated), vendor tokens, webhooks, and credential-path URLs
+    notes: "WS-02 central classifier wired to every diagnostic boundary; 40-test battery pins userinfo (password-only and username-only), assignments (bare/quoted/single/escaped/unterminated), vendor tokens, webhooks, and credential-path URLs"
   - id: TR-005
     schema_version: 0.1.0
     change_id: WS-02
@@ -54,7 +54,7 @@ traces:
     direction: forward
     sweep_pass: true
     checked_at: "2026-09-03T00:15:00.000Z"
-    notes: WS-02 every subsystem-log line redacted at the boundary (message + JSON.stringify(meta) + raw()); 5-test battery incl. escaped-quoted credential riding inside a meta value
+    notes: "WS-02 every subsystem-log line redacted at the boundary (message + JSON.stringify(meta) + raw()); 5-test battery incl. escaped-quoted credential riding inside a meta value"
   - id: TR-006
     schema_version: 0.1.0
     change_id: WS-02
@@ -64,7 +64,7 @@ traces:
     direction: forward
     sweep_pass: true
     checked_at: "2026-09-03T00:15:00.000Z"
-    notes: WS-02 API error envelope redacted (apiErrorJson message + internalError message/stack); 8-test battery in the final-state api suite log
+    notes: "WS-02 API error envelope redacted (apiErrorJson message + internalError message/stack); 8-test battery in the final-state api suite log"
   - id: TR-007
     schema_version: 0.1.0
     change_id: WS-03
@@ -74,7 +74,7 @@ traces:
     direction: forward
     sweep_pass: true
     checked_at: "2026-09-03T14:59:18.000Z"
-    notes: WS-03 Tenant erasure and retention lifecycle (planned change envelope)
+    notes: "WS-03 Tenant erasure and retention lifecycle (planned change envelope)"
   - id: TR-008
     schema_version: 0.1.0
     change_id: WS-03
@@ -84,7 +84,7 @@ traces:
     direction: forward
     sweep_pass: true
     checked_at: "2026-09-03T14:59:18.000Z"
-    notes: WS-03 Tenant erasure and retention lifecycle (planned change envelope)
+    notes: "WS-03 Tenant erasure and retention lifecycle (planned change envelope)"
   - id: TR-009
     schema_version: 0.1.0
     change_id: WS-03
@@ -94,7 +94,7 @@ traces:
     direction: forward
     sweep_pass: true
     checked_at: "2026-09-03T14:59:18.000Z"
-    notes: WS-03 Tenant erasure and retention lifecycle (planned change envelope)
+    notes: "WS-03 Tenant erasure and retention lifecycle (planned change envelope)"
   - id: TR-010
     schema_version: 0.1.0
     change_id: WS-03
@@ -104,7 +104,7 @@ traces:
     direction: forward
     sweep_pass: true
     checked_at: "2026-09-03T14:59:18.000Z"
-    notes: WS-03 Tenant erasure and retention lifecycle (planned change envelope)
+    notes: "WS-03 Tenant erasure and retention lifecycle (planned change envelope)"
   - id: TR-011
     schema_version: 0.1.0
     change_id: WS-03
@@ -114,7 +114,7 @@ traces:
     direction: forward
     sweep_pass: true
     checked_at: "2026-09-03T14:59:18.000Z"
-    notes: WS-03 Tenant erasure and retention lifecycle (planned change envelope)
+    notes: "WS-03 Tenant erasure and retention lifecycle (planned change envelope)"
   - id: TR-012
     schema_version: 0.1.0
     change_id: WS-03
@@ -124,7 +124,7 @@ traces:
     direction: forward
     sweep_pass: true
     checked_at: "2026-09-03T14:59:18.000Z"
-    notes: WS-03 Tenant erasure and retention lifecycle (planned change envelope)
+    notes: "WS-03 Tenant erasure and retention lifecycle (planned change envelope)"
   - id: TR-013
     schema_version: 0.1.0
     change_id: WS-03
@@ -134,7 +134,7 @@ traces:
     direction: forward
     sweep_pass: true
     checked_at: "2026-09-03T14:59:18.000Z"
-    notes: WS-03 Tenant erasure and retention lifecycle (planned change envelope)
+    notes: "WS-03 Tenant erasure and retention lifecycle (planned change envelope)"
   - id: TR-014
     schema_version: 0.1.0
     change_id: WS-03
@@ -144,7 +144,7 @@ traces:
     direction: forward
     sweep_pass: true
     checked_at: "2026-09-03T14:59:18.000Z"
-    notes: WS-03 Tenant erasure and retention lifecycle (planned change envelope)
+    notes: "WS-03 Tenant erasure and retention lifecycle (planned change envelope)"
   - id: TR-015
     schema_version: 0.1.0
     change_id: WS-03
@@ -154,7 +154,7 @@ traces:
     direction: forward
     sweep_pass: true
     checked_at: "2026-09-03T14:59:18.000Z"
-    notes: WS-03 Tenant erasure and retention lifecycle (planned change envelope)
+    notes: "WS-03 Tenant erasure and retention lifecycle (planned change envelope)"
   - id: TR-016
     schema_version: 0.1.0
     change_id: WS-03
@@ -164,7 +164,7 @@ traces:
     direction: forward
     sweep_pass: true
     checked_at: "2026-09-03T14:59:18.000Z"
-    notes: WS-03 Tenant erasure and retention lifecycle (planned change envelope)
+    notes: "WS-03 Tenant erasure and retention lifecycle (planned change envelope)"
   - id: TR-017
     schema_version: 0.1.0
     change_id: WS-04
@@ -174,7 +174,7 @@ traces:
     direction: forward
     sweep_pass: true
     checked_at: "2026-09-03T17:00:35.000Z"
-    notes: WS-04 autoEmbed Preview de-risking (planned change envelope)
+    notes: "WS-04 autoEmbed Preview de-risking (planned change envelope)"
   - id: TR-018
     schema_version: 0.1.0
     change_id: WS-04
@@ -184,7 +184,7 @@ traces:
     direction: forward
     sweep_pass: true
     checked_at: "2026-09-03T17:00:35.000Z"
-    notes: WS-04 autoEmbed Preview de-risking (planned change envelope)
+    notes: "WS-04 autoEmbed Preview de-risking (planned change envelope)"
   - id: TR-019
     schema_version: 0.1.0
     change_id: WS-04
@@ -194,7 +194,7 @@ traces:
     direction: forward
     sweep_pass: true
     checked_at: "2026-09-03T17:00:35.000Z"
-    notes: WS-04 autoEmbed Preview de-risking (planned change envelope)
+    notes: "WS-04 autoEmbed Preview de-risking (planned change envelope)"
   - id: TR-020
     schema_version: 0.1.0
     change_id: WS-05
@@ -204,7 +204,7 @@ traces:
     direction: forward
     sweep_pass: true
     checked_at: "2026-09-04T07:10:00.000Z"
-    notes: WS-05 Prompt-injection defense unification (planned change envelope)
+    notes: "WS-05 Prompt-injection defense unification (planned change envelope)"
   - id: TR-021
     schema_version: 0.1.0
     change_id: WS-05
@@ -214,7 +214,7 @@ traces:
     direction: forward
     sweep_pass: true
     checked_at: "2026-09-04T07:10:00.000Z"
-    notes: WS-05 Prompt-injection defense unification (planned change envelope)
+    notes: "WS-05 Prompt-injection defense unification (planned change envelope)"
   - id: TR-022
     schema_version: 0.1.0
     change_id: WS-05
@@ -224,7 +224,7 @@ traces:
     direction: forward
     sweep_pass: true
     checked_at: "2026-09-04T07:10:00.000Z"
-    notes: WS-05 Prompt-injection defense unification (planned change envelope)
+    notes: "WS-05 Prompt-injection defense unification (planned change envelope)"
   - id: TR-023
     schema_version: 0.1.0
     change_id: WS-06
@@ -234,7 +234,7 @@ traces:
     direction: forward
     sweep_pass: true
     checked_at: "2026-09-04T08:03:23.000Z"
-    notes: WS-06 Deployment-safe defaults (unconditional LRU + idle-eviction manager cache; landed)
+    notes: "WS-06 Deployment-safe defaults (unconditional LRU + idle-eviction manager cache; landed)"
   - id: TR-024
     schema_version: 0.1.0
     change_id: WS-06
@@ -244,7 +244,7 @@ traces:
     direction: forward
     sweep_pass: true
     checked_at: "2026-09-04T08:03:23.000Z"
-    notes: WS-06 Deployment-safe defaults (shared-client runtime default-on with explicit opt-out and first-resolved-options warning; landed)
+    notes: "WS-06 Deployment-safe defaults (shared-client runtime default-on with explicit opt-out and first-resolved-options warning; landed)"
   - id: TR-025
     schema_version: 0.1.0
     change_id: WS-06
@@ -254,7 +254,7 @@ traces:
     direction: forward
     sweep_pass: true
     checked_at: "2026-09-04T08:03:23.000Z"
-    notes: WS-06 Deployment-safe defaults (per-URI pool budget defaults maxPoolSize 10 / minPoolSize 2; landed)
+    notes: "WS-06 Deployment-safe defaults (per-URI pool budget defaults maxPoolSize 10 / minPoolSize 2; landed)"
   - id: TR-026
     schema_version: 0.1.0
     change_id: WS-07
@@ -264,7 +264,7 @@ traces:
     direction: forward
     sweep_pass: true
     checked_at: "2026-09-02T21:40:21.000Z"
-    notes: WS-07 CI executes existing tests (planned change envelope)
+    notes: "WS-07 CI executes existing tests (planned change envelope)"
   - id: TR-027
     schema_version: 0.1.0
     change_id: WS-07
@@ -274,7 +274,7 @@ traces:
     direction: forward
     sweep_pass: true
     checked_at: "2026-09-02T21:40:21.000Z"
-    notes: WS-07 CI executes existing tests (planned change envelope)
+    notes: "WS-07 CI executes existing tests (planned change envelope)"
   - id: TR-028
     schema_version: 0.1.0
     change_id: WS-07
@@ -284,7 +284,7 @@ traces:
     direction: forward
     sweep_pass: true
     checked_at: "2026-09-02T21:40:21.000Z"
-    notes: WS-07 CI executes existing tests (planned change envelope)
+    notes: "WS-07 CI executes existing tests (planned change envelope)"
   - id: TR-029
     schema_version: 0.1.0
     change_id: WS-07
@@ -294,7 +294,7 @@ traces:
     direction: forward
     sweep_pass: true
     checked_at: "2026-09-02T21:40:21.000Z"
-    notes: WS-07 CI executes existing tests (planned change envelope)
+    notes: "WS-07 CI executes existing tests (planned change envelope)"
   - id: TR-030
     schema_version: 0.1.0
     change_id: WS-08
@@ -454,7 +454,7 @@ traces:
     direction: forward
     sweep_pass: true
     checked_at: "2026-09-05T12:05:20.000Z"
-    notes: WS-10 Cost observability (landed)
+    notes: "WS-10 Cost observability (landed)"
   - id: TR-046
     schema_version: 0.1.0
     change_id: WS-10
@@ -464,7 +464,7 @@ traces:
     direction: forward
     sweep_pass: true
     checked_at: "2026-09-05T12:05:20.000Z"
-    notes: WS-10 Cost observability (landed)
+    notes: "WS-10 Cost observability (landed)"
   - id: TR-047
     schema_version: 0.1.0
     change_id: WS-10
@@ -474,7 +474,7 @@ traces:
     direction: forward
     sweep_pass: true
     checked_at: "2026-09-05T12:05:20.000Z"
-    notes: WS-10 Cost observability (landed)
+    notes: "WS-10 Cost observability (landed)"
   - id: TR-048
     schema_version: 0.1.0
     change_id: WS-11
@@ -484,7 +484,7 @@ traces:
     direction: forward
     sweep_pass: true
     checked_at: "2026-09-05T18:39:52.000Z"
-    notes: WS-11 Admission control and backlog visibility (landed) — backlog gauge + alert threshold + backlog-aware drain scaling
+    notes: "WS-11 Admission control and backlog visibility (landed) — backlog gauge + alert threshold + backlog-aware drain scaling"
   - id: TR-049
     schema_version: 0.1.0
     change_id: WS-11
@@ -494,7 +494,7 @@ traces:
     direction: forward
     sweep_pass: true
     checked_at: "2026-09-05T18:39:52.000Z"
-    notes: WS-11 Admission control and backlog visibility (landed) — bounded per-agent writeQueue with typed fast-fail and saturation telemetry
+    notes: "WS-11 Admission control and backlog visibility (landed) — bounded per-agent writeQueue with typed fast-fail and saturation telemetry"
   - id: TR-050
     schema_version: 0.1.0
     change_id: WS-11
@@ -504,7 +504,7 @@ traces:
     direction: forward
     sweep_pass: true
     checked_at: "2026-09-05T18:39:52.000Z"
-    notes: WS-11 Admission control and backlog visibility (landed) — process-level token bucket at the searchV2 boundary with the distinct throttled outcome surviving executor/manager/recall/KB layers
+    notes: "WS-11 Admission control and backlog visibility (landed) — process-level token bucket at the searchV2 boundary with the distinct throttled outcome surviving executor/manager/recall/KB layers"
   - id: TR-051
     schema_version: 0.1.0
     change_id: WS-12
@@ -514,7 +514,7 @@ traces:
     direction: forward
     sweep_pass: true
     checked_at: "2026-09-05T16:10:38.000Z"
-    notes: WS-12 Distinguishable degradation (landed) — classifySilentFailure in the _silently wrapper: swallowed 401/403 read as auth, 429 as throttled, 500/network as unavailable, each merged into the returned empty so silent mode never reports degraded as healthy-empty; strictly opt-in (silent unset still throws)
+    notes: "WS-12 Distinguishable degradation (landed) — classifySilentFailure in the _silently wrapper: swallowed 401/403 read as auth, 429 as throttled, 500/network as unavailable, each merged into the returned empty so silent mode never reports degraded as healthy-empty; strictly opt-in (silent unset still throws)"
   - id: TR-052
     schema_version: 0.1.0
     change_id: WS-12
@@ -524,7 +524,7 @@ traces:
     direction: forward
     sweep_pass: true
     checked_at: "2026-09-05T16:10:38.000Z"
-    notes: WS-12 Distinguishable degradation (landed) — crossEncoderRerank emits the rerankSkipped telemetry marker on every no-run path (ok:true for intentional skips with reason, ok:false for failure skips) so rerank-off is distinguishable from rerank-broken; success emits nothing
+    notes: "WS-12 Distinguishable degradation (landed) — crossEncoderRerank emits the rerankSkipped telemetry marker on every no-run path (ok:true for intentional skips with reason, ok:false for failure skips) so rerank-off is distinguishable from rerank-broken; success emits nothing"
   - id: TR-053
     schema_version: 0.1.0
     change_id: WS-12
@@ -534,7 +534,7 @@ traces:
     direction: forward
     sweep_pass: true
     checked_at: "2026-09-05T16:10:38.000Z"
-    notes: WS-12 Distinguishable degradation (landed) — the distinct throttling outcome from WS-11 (empty results + throttled marker + retry hint, zero DB touches on denial) is the source the WS-12 boundary chain surfaces: manager sink (TR-101), bridge envelope (TR-102), API routes (TR-103), client classification (TR-051), tools passthrough (TR-104)
+    notes: "WS-12 Distinguishable degradation (landed) — the distinct throttling outcome from WS-11 (empty results + throttled marker + retry hint, zero DB touches on denial) is the source the WS-12 boundary chain surfaces: manager sink (TR-101), bridge envelope (TR-102), API routes (TR-103), client classification (TR-051), tools passthrough (TR-104)"
   - id: TR-054
     schema_version: 0.1.0
     change_id: WS-13
@@ -544,7 +544,7 @@ traces:
     direction: forward
     sweep_pass: true
     checked_at: "2026-09-05T11:21:48.000Z"
-    notes: WS-13 Lifecycle scheduling and durability (planned change envelope)
+    notes: "WS-13 Lifecycle scheduling and durability (planned change envelope)"
   - id: TR-055
     schema_version: 0.1.0
     change_id: WS-13
@@ -554,7 +554,7 @@ traces:
     direction: forward
     sweep_pass: true
     checked_at: "2026-09-05T11:21:48.000Z"
-    notes: WS-13 Lifecycle scheduling and durability (planned change envelope)
+    notes: "WS-13 Lifecycle scheduling and durability (planned change envelope)"
   - id: TR-056
     schema_version: 0.1.0
     change_id: WS-13
@@ -564,7 +564,7 @@ traces:
     direction: forward
     sweep_pass: true
     checked_at: "2026-09-05T11:21:48.000Z"
-    notes: WS-13 Lifecycle scheduling and durability (planned change envelope)
+    notes: "WS-13 Lifecycle scheduling and durability (planned change envelope)"
   - id: TR-057
     schema_version: 0.1.0
     change_id: WS-13
@@ -574,7 +574,7 @@ traces:
     direction: forward
     sweep_pass: true
     checked_at: "2026-09-05T11:21:48.000Z"
-    notes: WS-13 Lifecycle scheduling and durability (planned change envelope)
+    notes: "WS-13 Lifecycle scheduling and durability (planned change envelope)"
   - id: TR-058
     schema_version: 0.1.0
     change_id: WS-13
@@ -584,7 +584,7 @@ traces:
     direction: forward
     sweep_pass: true
     checked_at: "2026-09-05T11:21:48.000Z"
-    notes: WS-13 Lifecycle scheduling and durability (planned change envelope)
+    notes: "WS-13 Lifecycle scheduling and durability (planned change envelope)"
   - id: TR-059
     schema_version: 0.1.0
     change_id: WS-13
@@ -594,7 +594,7 @@ traces:
     direction: forward
     sweep_pass: true
     checked_at: "2026-09-05T11:21:48.000Z"
-    notes: WS-13 Lifecycle scheduling and durability (planned change envelope)
+    notes: "WS-13 Lifecycle scheduling and durability (planned change envelope)"
   - id: TR-060
     schema_version: 0.1.0
     change_id: WS-13
@@ -604,7 +604,7 @@ traces:
     direction: forward
     sweep_pass: true
     checked_at: "2026-09-05T11:21:48.000Z"
-    notes: WS-13 Lifecycle scheduling and durability (planned change envelope)
+    notes: "WS-13 Lifecycle scheduling and durability (planned change envelope)"
   - id: TR-061
     schema_version: 0.1.0
     change_id: WS-14
@@ -614,7 +614,7 @@ traces:
     direction: forward
     sweep_pass: true
     checked_at: "2026-09-05T16:38:04.000Z"
-    notes: WS-14 Referential integrity beyond KB (landed) — four read-only orphan checkers (relations to entities, entity_links to entities, chunks to events via the events/{eventId} path, episodes to events via sourceEventIds), agent-scoped, warn-on-orphan, re-exported from mongodb-schema.js alongside checkKBOrphans
+    notes: "WS-14 Referential integrity beyond KB (landed) — four read-only orphan checkers (relations to entities, entity_links to entities, chunks to events via the events/{eventId} path, episodes to events via sourceEventIds), agent-scoped, warn-on-orphan, re-exported from mongodb-schema.js alongside checkKBOrphans"
   - id: TR-062
     schema_version: 0.1.0
     change_id: WS-14
@@ -624,7 +624,7 @@ traces:
     direction: forward
     sweep_pass: true
     checked_at: "2026-09-05T16:38:04.000Z"
-    notes: WS-14 Referential integrity beyond KB (landed) — getV2Status referentialIntegrity section (allSettled, per-relation-type counts, zero fallback plus failed-check labels on rejection), V2Status type extension; served verbatim at /v1/status/detailed through getDetailedStatus and the bridge
+    notes: "WS-14 Referential integrity beyond KB (landed) — getV2Status referentialIntegrity section (allSettled, per-relation-type counts, zero fallback plus failed-check labels on rejection), V2Status type extension; served verbatim at /v1/status/detailed through getDetailedStatus and the bridge"
   - id: TR-063
     schema_version: 0.1.0
     change_id: WS-15
@@ -634,7 +634,7 @@ traces:
     direction: forward
     sweep_pass: true
     checked_at: "2026-09-05T17:11:49.000Z"
-    notes: WS-15 Data-model temporal correctness (planned change envelope)
+    notes: "WS-15 Data-model temporal correctness (planned change envelope)"
   - id: TR-064
     schema_version: 0.1.0
     change_id: WS-15
@@ -644,7 +644,7 @@ traces:
     direction: forward
     sweep_pass: true
     checked_at: "2026-09-05T17:11:49.000Z"
-    notes: WS-15 Data-model temporal correctness (planned change envelope)
+    notes: "WS-15 Data-model temporal correctness (planned change envelope)"
   - id: TR-065
     schema_version: 0.1.0
     change_id: WS-15
@@ -664,7 +664,7 @@ traces:
     direction: forward
     sweep_pass: true
     checked_at: "2026-09-05T17:11:49.000Z"
-    notes: WS-15 Data-model temporal correctness (planned change envelope)
+    notes: "WS-15 Data-model temporal correctness (planned change envelope)"
   - id: TR-067
     schema_version: 0.1.0
     change_id: WS-15
@@ -674,7 +674,7 @@ traces:
     direction: forward
     sweep_pass: true
     checked_at: "2026-09-05T17:11:49.000Z"
-    notes: WS-15 Data-model temporal correctness (planned change envelope)
+    notes: "WS-15 Data-model temporal correctness (planned change envelope)"
   - id: TR-068
     schema_version: 0.1.0
     change_id: WS-15
@@ -684,7 +684,7 @@ traces:
     direction: forward
     sweep_pass: true
     checked_at: "2026-09-05T17:11:49.000Z"
-    notes: WS-15 Data-model temporal correctness (planned change envelope)
+    notes: "WS-15 Data-model temporal correctness (planned change envelope)"
   - id: TR-069
     schema_version: 0.1.0
     change_id: WS-15
@@ -694,87 +694,87 @@ traces:
     direction: forward
     sweep_pass: true
     checked_at: "2026-09-05T17:11:49.000Z"
-    notes: WS-15 Data-model temporal correctness (planned change envelope)
+    notes: "WS-15 Data-model temporal correctness (planned change envelope)"
   - id: TR-070
     schema_version: 0.1.0
     change_id: WS-16
     claim_id: C-029
     construct_id: packages/memory-engine/src/mongodb-schema-search-indexes.ts
-    validation_id: null
+    validation_id: V-120
     direction: forward
-    sweep_pass: false
-    checked_at: "2026-09-02T13:41:40.091Z"
-    notes: WS-16 Retrieval quality and hot-path cost (planned change envelope)
+    sweep_pass: true
+    checked_at: "2026-09-05T18:55:30.000Z"
+    notes: "WS-16 landed: ensureSearchIndexes builds search-text definitions from resolveSearchTextAnalyzer (lucene.standard default, folding, or lucene.<language>), dual keyword+folding identifier mapping on improved strategies, token identifiers for filter clauses; ensureNamedSearchIndex rebuilds on definition drift. Validated by the unit battery pinned in V-120."
   - id: TR-071
     schema_version: 0.1.0
     change_id: WS-16
     claim_id: C-029
     construct_id: packages/memory-engine/src/mongodb-search-ranking.ts
-    validation_id: null
+    validation_id: V-121
     direction: forward
-    sweep_pass: false
-    checked_at: "2026-09-02T13:41:40.092Z"
-    notes: WS-16 Retrieval quality and hot-path cost (planned change envelope)
+    sweep_pass: true
+    checked_at: "2026-09-05T18:55:30.000Z"
+    notes: "WS-16 landed: resolveSearchTextAnalyzer parses MEMONGO_SEARCH_TEXT_ANALYZER with typo-safe standard fallback; searchTextAnalyzerName/isIdentifierDualMappingEnabled map strategy to index definitions; default stays standard (bit-identical) until the retrieval eval gate passes. Validated in V-121."
   - id: TR-072
     schema_version: 0.1.0
     change_id: WS-16
     claim_id: C-030
     construct_id: "packages/memory-engine/src/mongodb-search-ranking.ts#normalizeDetailedSearchRequest"
-    validation_id: null
+    validation_id: V-122
     direction: forward
-    sweep_pass: false
-    checked_at: "2026-09-02T13:41:40.093Z"
-    notes: WS-16 Retrieval quality and hot-path cost (planned change envelope)
+    sweep_pass: true
+    checked_at: "2026-09-05T18:55:30.000Z"
+    notes: "WS-16 landed: normalizeDetailedSearchRequest clamps the trimmed query to MAX_SEARCH_QUERY_LENGTH (2,000 chars, prefix-keep) before the cache probe; search-query-clamped telemetry carries pre-clamp queryLength. Construct re-pointed from manager.ts, the clamp lives with the rest of request normalization in search-ranking.ts. Validated in V-122."
   - id: TR-073
     schema_version: 0.1.0
     change_id: WS-16
     claim_id: C-031
     construct_id: packages/memory-engine/src/mongodb-reranker.ts
-    validation_id: null
+    validation_id: V-123
     direction: forward
-    sweep_pass: false
-    checked_at: "2026-09-02T13:41:40.094Z"
-    notes: WS-16 Retrieval quality and hot-path cost (planned change envelope)
+    sweep_pass: true
+    checked_at: "2026-09-05T18:55:30.000Z"
+    notes: "WS-16 landed: resolveRerankTimeoutMs derives the rerank timeout from the remaining search latency budget (2s cap, floor skip); crossEncoderRerank aborts the provider call at the derived timeout; searchV2 hands down its documented tail budget. Validated in V-123."
   - id: TR-074
     schema_version: 0.1.0
     change_id: WS-16
     claim_id: C-032
-    construct_id: packages/memory-engine/src/mongodb-manager-admin.ts
-    validation_id: null
+    construct_id: packages/memory-engine/src/mongodb-analytics.ts
+    validation_id: V-124
     direction: forward
-    sweep_pass: false
-    checked_at: "2026-09-02T13:41:40.095Z"
-    notes: WS-16 Retrieval quality and hot-path cost (planned change envelope)
+    sweep_pass: true
+    checked_at: "2026-09-05T18:55:30.000Z"
+    notes: "WS-16 landed: countRetrievableViaVectorIndex runs the embedding-coverage probe as exact nearest-neighbor (exact true, no numCandidates) so coverage is what ENN actually returns. Construct re-pointed from the planned mongodb-manager-admin.ts, the probe lives in mongodb-analytics.ts. Validated in V-124."
   - id: TR-075
     schema_version: 0.1.0
     change_id: WS-16
     claim_id: C-033
     construct_id: packages/memory-engine/src/mongodb-context-expansion.ts
-    validation_id: null
+    validation_id: V-125
     direction: forward
-    sweep_pass: false
-    checked_at: "2026-09-02T13:41:40.096Z"
-    notes: WS-16 Retrieval quality and hot-path cost (planned change envelope)
+    sweep_pass: true
+    checked_at: "2026-09-05T18:55:30.000Z"
+    notes: "WS-16 landed: per-session neighbor fetches run concurrently (bounded by CONTEXT_EXPANSION_MAX_CONCURRENCY) with deterministic merge order, removing the sequential N+1 from the search hot path. Validated in V-125."
   - id: TR-076
     schema_version: 0.1.0
     change_id: WS-16
     claim_id: C-034
     construct_id: packages/memory-engine/src/mongodb-episodes.ts
-    validation_id: null
+    validation_id: V-126
     direction: forward
-    sweep_pass: false
-    checked_at: "2026-09-02T13:41:40.097Z"
-    notes: WS-16 Retrieval quality and hot-path cost (planned change envelope)
+    sweep_pass: true
+    checked_at: "2026-09-05T18:55:30.000Z"
+    notes: "WS-16 landed: checkAutoEpisodeTriggers memoizes a negative verdict per agent+scope+prefix for the TTL window, so cold writes pay only the cooldown query instead of the 500-event scan; force bypasses the memo. Validated in V-126."
   - id: TR-077
     schema_version: 0.1.0
     change_id: WS-16
     claim_id: C-034
-    construct_id: packages/memory-engine/src/mongodb-manager-write.ts
-    validation_id: null
+    construct_id: "packages/memory-engine/src/mongodb-episodes.ts#checkAutoEpisodeTriggers"
+    validation_id: V-127
     direction: forward
-    sweep_pass: false
-    checked_at: "2026-09-02T13:41:40.098Z"
-    notes: WS-16 Retrieval quality and hot-path cost (planned change envelope)
+    sweep_pass: true
+    checked_at: "2026-09-05T18:55:30.000Z"
+    notes: "WS-16 landed: anchor trace for the auto-trigger decision (consults hasFreshNegativeMemo before the scan, records memoized_negative outcome). Construct re-pointed from the planned mongodb-manager-write.ts (untouched by WS-16), memo and decision both live in mongodb-episodes.ts. Validated in V-127."
   - id: TR-078
     schema_version: 0.1.0
     change_id: WS-17
@@ -784,7 +784,7 @@ traces:
     direction: forward
     sweep_pass: true
     checked_at: "2026-09-04T12:15:00.000Z"
-    notes: 'WS-17 readFile kb/reference locator now resolves the caller identity (host.resolveSearchIdentity, honoring the structured-path ?scope=/?scopeRef= convention) and filters findOne on {agentId, scope, scopeRef} + the path $or — was the only unfiltered MongoDB query in the engine. Same-path collisions resolve to the caller''s own doc; other-tenant-only paths return empty; ?scope=global round-trips only for the ingesting agent; unknown scope values fail closed. Companion doc change: mongodb-kb.ts tenant-scoping header now records the two coexisting read semantics (scopeRef-partitioned list/stat/remove/search vs identity-strict readFile full-content reads) so the shared-global corpus semantic is stated, not implicit. Unit battery V-080, e2e regression V-081.'
+    notes: "'WS-17 readFile kb/reference locator now resolves the caller identity (host.resolveSearchIdentity, honoring the structured-path ?scope=/?scopeRef= convention) and filters findOne on {agentId, scope, scopeRef} + the path $or — was the only unfiltered MongoDB query in the engine. Same-path collisions resolve to the caller''s own doc; other-tenant-only paths return empty; ?scope=global round-trips only for the ingesting agent; unknown scope values fail closed. Companion doc change: mongodb-kb.ts tenant-scoping header now records the two coexisting read semantics (scopeRef-partitioned list/stat/remove/search vs identity-strict readFile full-content reads) so the shared-global corpus semantic is stated, not implicit. Unit battery V-080, e2e regression V-081.'"
   - id: TR-079
     schema_version: 0.1.0
     change_id: WS-17
@@ -804,7 +804,7 @@ traces:
     direction: forward
     sweep_pass: false
     checked_at: "2026-09-02T13:41:40.101Z"
-    notes: WS-18 Release engineering (planned change envelope)
+    notes: "WS-18 Release engineering (planned change envelope)"
   - id: TR-081
     schema_version: 0.1.0
     change_id: WS-18
@@ -814,7 +814,7 @@ traces:
     direction: forward
     sweep_pass: false
     checked_at: "2026-09-02T13:41:40.102Z"
-    notes: WS-18 Release engineering (planned change envelope)
+    notes: "WS-18 Release engineering (planned change envelope)"
   - id: TR-082
     schema_version: 0.1.0
     change_id: WS-18
@@ -824,7 +824,7 @@ traces:
     direction: forward
     sweep_pass: false
     checked_at: "2026-09-02T13:41:40.103Z"
-    notes: WS-18 Release engineering (planned change envelope)
+    notes: "WS-18 Release engineering (planned change envelope)"
   - id: TR-083
     schema_version: 0.1.0
     change_id: WS-18
@@ -834,7 +834,7 @@ traces:
     direction: forward
     sweep_pass: false
     checked_at: "2026-09-02T13:41:40.104Z"
-    notes: WS-18 Release engineering (planned change envelope)
+    notes: "WS-18 Release engineering (planned change envelope)"
   - id: TR-084
     schema_version: 0.1.0
     change_id: WS-18
@@ -844,7 +844,7 @@ traces:
     direction: forward
     sweep_pass: false
     checked_at: "2026-09-02T13:41:40.106Z"
-    notes: WS-18 Release engineering (planned change envelope)
+    notes: "WS-18 Release engineering (planned change envelope)"
   - id: TR-085
     schema_version: 0.1.0
     change_id: WS-02
@@ -854,7 +854,7 @@ traces:
     direction: forward
     sweep_pass: true
     checked_at: "2026-09-03T00:15:00.000Z"
-    notes: WS-02 query-echo seam — redactQueryEcho/queryFailureMeta replace verbatim, re-segmented, and credential-redacted query echoes with the [query:<digest>] alias; 19-test battery pins the planner catch seam and the short guard
+    notes: "WS-02 query-echo seam — redactQueryEcho/queryFailureMeta replace verbatim, re-segmented, and credential-redacted query echoes with the [query:<digest>] alias; 19-test battery pins the planner catch seam and the short guard"
   - id: TR-086
     schema_version: 0.1.0
     change_id: WS-02
@@ -864,7 +864,7 @@ traces:
     direction: forward
     sweep_pass: true
     checked_at: "2026-09-03T00:15:00.000Z"
-    notes: WS-02 capability-table render boundary — formatCapabilityTable redacts the probe error at render; 12-test battery incl. the round-3 render-boundary leak vector
+    notes: "WS-02 capability-table render boundary — formatCapabilityTable redacts the probe error at render; 12-test battery incl. the round-3 render-boundary leak vector"
   - id: TR-087
     schema_version: 0.1.0
     change_id: WS-02
@@ -874,7 +874,7 @@ traces:
     direction: forward
     sweep_pass: true
     checked_at: "2026-09-03T00:15:00.000Z"
-    notes: WS-02 tools middleware defaultWarn runs formatErrorMessage over the one-time warn; battery pins credential-bearing warn output
+    notes: "WS-02 tools middleware defaultWarn runs formatErrorMessage over the one-time warn; battery pins credential-bearing warn output"
   - id: TR-088
     schema_version: 0.1.0
     change_id: WS-02
@@ -884,7 +884,7 @@ traces:
     direction: forward
     sweep_pass: true
     checked_at: "2026-09-03T00:15:00.000Z"
-    notes: WS-02 client error message is structural for non-JSON bodies (status + byte count, no raw body text); raw body retained on .body for programmatic use
+    notes: "WS-02 client error message is structural for non-JSON bodies (status + byte count, no raw body text); raw body retained on .body for programmatic use"
   - id: TR-089
     schema_version: 0.1.0
     change_id: WS-02
@@ -894,7 +894,7 @@ traces:
     direction: forward
     sweep_pass: true
     checked_at: "2026-09-03T00:15:00.000Z"
-    notes: WS-02 pi-extension local classifier — sanitizeDiagnostic/errMessage is the single choke point for extension warns and tool responses; 12-test battery mirrors the lib shapes (published package cannot import @memongo/lib)
+    notes: "WS-02 pi-extension local classifier — sanitizeDiagnostic/errMessage is the single choke point for extension warns and tool responses; 12-test battery mirrors the lib shapes (published package cannot import @memongo/lib)"
   - id: TR-090
     schema_version: 0.1.0
     change_id: WS-02
@@ -904,7 +904,7 @@ traces:
     direction: forward
     sweep_pass: true
     checked_at: "2026-09-03T00:15:00.000Z"
-    notes: WS-02 pattern-table integrity — identity-based branch dispatch (indexOf on const patterns, repaired after the round-3 escaped-slash prefix probe silently dropped both userinfo branches) and escaped-quote tolerance for assignments riding inside serialized meta; post-fix re-probe evidence over all 24 round-2/3 vectors
+    notes: "WS-02 pattern-table integrity — identity-based branch dispatch (indexOf on const patterns, repaired after the round-3 escaped-slash prefix probe silently dropped both userinfo branches) and escaped-quote tolerance for assignments riding inside serialized meta; post-fix re-probe evidence over all 24 round-2/3 vectors"
   - id: TR-091
     schema_version: 0.1.0
     change_id: WS-05
@@ -914,7 +914,7 @@ traces:
     direction: forward
     sweep_pass: true
     checked_at: "2026-09-04T07:20:00.000Z"
-    notes: WS-05 classifier gate — classifyInjection on joined key/value/context free text at the single engine seam, injection-likely entries routed to memory_quarantine, scope-keyed pending-row dedup ($exists:false absence semantics); 13-test injection battery
+    notes: "WS-05 classifier gate — classifyInjection on joined key/value/context free text at the single engine seam, injection-likely entries routed to memory_quarantine, scope-keyed pending-row dedup ($exists:false absence semantics); 13-test injection battery"
   - id: TR-092
     schema_version: 0.1.0
     change_id: WS-05
@@ -924,7 +924,7 @@ traces:
     direction: forward
     sweep_pass: true
     checked_at: "2026-09-04T07:20:00.000Z"
-    notes: WS-05 self-edit disposition — transactional branch (round-1 F-002 fix) and non-transactional branch both surface the quarantine disposition; benign self-edit control
+    notes: "WS-05 self-edit disposition — transactional branch (round-1 F-002 fix) and non-transactional branch both surface the quarantine disposition; benign self-edit control"
   - id: TR-093
     schema_version: 0.1.0
     change_id: WS-05
@@ -934,7 +934,7 @@ traces:
     direction: forward
     sweep_pass: true
     checked_at: "2026-09-04T07:20:00.000Z"
-    notes: WS-05 lifecycle/feedback 202 dispositions — MemoryQuarantinedWriteError translated to the hold disposition on /v1/lifecycle/update and /v1/memory/feedback (round-1 F-003 fix for the feedback 500); OpenAPI drift guard keeps the 202 documented
+    notes: "WS-05 lifecycle/feedback 202 dispositions — MemoryQuarantinedWriteError translated to the hold disposition on /v1/lifecycle/update and /v1/memory/feedback (round-1 F-003 fix for the feedback 500); OpenAPI drift guard keeps the 202 documented"
   - id: TR-094
     schema_version: 0.1.0
     change_id: WS-05
@@ -944,7 +944,7 @@ traces:
     direction: forward
     sweep_pass: true
     checked_at: "2026-09-04T07:20:00.000Z"
-    notes: WS-05 client contract — updateLifecycleItem/applyMemoryFeedback widened with the MemongoQuarantineDisposition intersection (compile-time contract, fresh uncached check-types 15/15)
+    notes: "WS-05 client contract — updateLifecycleItem/applyMemoryFeedback widened with the MemongoQuarantineDisposition intersection (compile-time contract, fresh uncached check-types 15/15)"
   - id: TR-095
     schema_version: 0.1.0
     change_id: WS-11
@@ -954,7 +954,7 @@ traces:
     direction: forward
     sweep_pass: true
     checked_at: "2026-09-05T18:39:52.000Z"
-    notes: WS-11 Admission control and backlog visibility (landed) — the process-level token bucket module itself (env-sized RPM/burst, lazy refill, retry hint, snapshot, test reset seam); per-construct validation record repaired during the WS-12 landing (was V-093)
+    notes: "WS-11 Admission control and backlog visibility (landed) — the process-level token bucket module itself (env-sized RPM/burst, lazy refill, retry hint, snapshot, test reset seam); per-construct validation record repaired during the WS-12 landing (was V-093)"
   - id: TR-096
     schema_version: 0.1.0
     change_id: WS-11
@@ -964,7 +964,7 @@ traces:
     direction: forward
     sweep_pass: true
     checked_at: "2026-09-05T18:39:52.000Z"
-    notes: WS-11 Admission control and backlog visibility (landed) — executor throttle-marker propagation into merged pass metadata plus pass-loop break (bypass-audit fix A); per-construct validation record repaired during the WS-12 landing (was V-093)
+    notes: "WS-11 Admission control and backlog visibility (landed) — executor throttle-marker propagation into merged pass metadata plus pass-loop break (bypass-audit fix A); per-construct validation record repaired during the WS-12 landing (was V-093)"
   - id: TR-097
     schema_version: 0.1.0
     change_id: WS-11
@@ -974,7 +974,7 @@ traces:
     direction: forward
     sweep_pass: true
     checked_at: "2026-09-05T18:39:52.000Z"
-    notes: WS-11 Admission control and backlog visibility (landed) — manager-boundary throttle short-circuits for search()/searchDetailed() and per-token legacy re-run gates plus the searchKB() admission envelope with skipVectorLane (bypass-audit fixes B, D, E); per-construct validation record repaired during the WS-12 landing (was V-093)
+    notes: "WS-11 Admission control and backlog visibility (landed) — manager-boundary throttle short-circuits for search()/searchDetailed() and per-token legacy re-run gates plus the searchKB() admission envelope with skipVectorLane (bypass-audit fixes B, D, E); per-construct validation record repaired during the WS-12 landing (was V-093)"
   - id: TR-098
     schema_version: 0.1.0
     change_id: WS-11
@@ -984,7 +984,7 @@ traces:
     direction: forward
     sweep_pass: true
     checked_at: "2026-09-05T18:39:52.000Z"
-    notes: WS-11 Admission control and backlog visibility (landed) — recallConversation one-token-per-querying-recall gate with text-lane degradation and marker (bypass-audit fix C); per-construct validation record repaired during the WS-12 landing (was V-093)
+    notes: "WS-11 Admission control and backlog visibility (landed) — recallConversation one-token-per-querying-recall gate with text-lane degradation and marker (bypass-audit fix C); per-construct validation record repaired during the WS-12 landing (was V-093)"
   - id: TR-099
     schema_version: 0.1.0
     change_id: WS-11
@@ -994,7 +994,7 @@ traces:
     direction: forward
     sweep_pass: true
     checked_at: "2026-09-05T18:39:52.000Z"
-    notes: WS-11 Admission control and backlog visibility (landed) — module-level skipVectorLane degradation honored inside canVector so a denied KB search cannot spend the vector lane (bypass-audit fix D, module half); per-construct validation record repaired during the WS-12 landing (was V-093)
+    notes: "WS-11 Admission control and backlog visibility (landed) — module-level skipVectorLane degradation honored inside canVector so a denied KB search cannot spend the vector lane (bypass-audit fix D, module half); per-construct validation record repaired during the WS-12 landing (was V-093)"
   - id: TR-100
     schema_version: 0.1.0
     change_id: WS-12
@@ -1004,7 +1004,7 @@ traces:
     direction: forward
     sweep_pass: true
     checked_at: "2026-09-05T16:10:38.000Z"
-    notes: WS-12 Distinguishable degradation (landed) — the MemongoDegradation contract type (kind auth/throttled/unavailable, optional status/scope/retryAfterMs) plus degradation? on the six silent-capable response types and throttled? on search-detailed/recall metadata; optional fields so healthy payloads compile unchanged
+    notes: "WS-12 Distinguishable degradation (landed) — the MemongoDegradation contract type (kind auth/throttled/unavailable, optional status/scope/retryAfterMs) plus degradation? on the six silent-capable response types and throttled? on search-detailed/recall metadata; optional fields so healthy payloads compile unchanged"
   - id: TR-101
     schema_version: 0.1.0
     change_id: WS-12
@@ -1014,7 +1014,7 @@ traces:
     direction: forward
     sweep_pass: true
     checked_at: "2026-09-05T16:10:38.000Z"
-    notes: WS-12 Distinguishable degradation (landed) — manager search()/searchKB() accept the onDegradation sink (per-call option, not instance state) and deliver the denial, legacy-fallback-skipped, and vector-lane-skipped markers; a healthy empty answer delivers nothing so absence stays authoritative
+    notes: "WS-12 Distinguishable degradation (landed) — manager search()/searchKB() accept the onDegradation sink (per-call option, not instance state) and deliver the denial, legacy-fallback-skipped, and vector-lane-skipped markers; a healthy empty answer delivers nothing so absence stays authoritative"
   - id: TR-102
     schema_version: 0.1.0
     change_id: WS-12
@@ -1024,7 +1024,7 @@ traces:
     direction: forward
     sweep_pass: true
     checked_at: "2026-09-05T16:10:38.000Z"
-    notes: WS-12 Distinguishable degradation (landed) — memongoBridgeSearchWithDegradation/memongoBridgeSearchKBWithDegradation forward the onDegradation sink into the engine and merge the marker into the {results, degradation} envelope; bare {results} when nothing degraded, plain accessors preserved for the legacy shape
+    notes: "WS-12 Distinguishable degradation (landed) — memongoBridgeSearchWithDegradation/memongoBridgeSearchKBWithDegradation forward the onDegradation sink into the engine and merge the marker into the {results, degradation} envelope; bare {results} when nothing degraded, plain accessors preserved for the legacy shape"
   - id: TR-103
     schema_version: 0.1.0
     change_id: WS-12
@@ -1034,7 +1034,7 @@ traces:
     direction: forward
     sweep_pass: true
     checked_at: "2026-09-05T16:10:38.000Z"
-    notes: WS-12 Distinguishable degradation (landed) — /v1/search and /v1/search-kb serve the degradation object on the 200 (degraded answers still carry real results) and omit the key entirely when authoritative; the non-detailed boundaries report throttling as throttling
+    notes: "WS-12 Distinguishable degradation (landed) — /v1/search and /v1/search-kb serve the degradation object on the 200 (degraded answers still carry real results) and omit the key entirely when authoritative; the non-detailed boundaries report throttling as throttling"
   - id: TR-104
     schema_version: 0.1.0
     change_id: WS-12
@@ -1044,7 +1044,7 @@ traces:
     direction: forward
     sweep_pass: true
     checked_at: "2026-09-05T16:10:38.000Z"
-    notes: WS-12 Distinguishable degradation (landed) — memongo_search/memongo_search_kb pass the client's degradation marker through to the model verbatim ({results, degradation} vs bare {results}) so no tool boundary re-classifies degraded as empty
+    notes: "WS-12 Distinguishable degradation (landed) — memongo_search/memongo_search_kb pass the client's degradation marker through to the model verbatim ({results, degradation} vs bare {results}) so no tool boundary re-classifies degraded as empty"
   - id: TR-105
     schema_version: 0.1.0
     change_id: WS-12
@@ -1054,7 +1054,7 @@ traces:
     direction: forward
     sweep_pass: true
     checked_at: "2026-09-05T16:10:38.000Z"
-    notes: WS-12 Distinguishable degradation (landed) — the served OpenAPI contract documents the degradation object on /v1/search-kb 200 and the throttled object (required retryAfterMs) on search-detailed and recall metadata, so the marker is a published contract field rather than an implementation detail
+    notes: "WS-12 Distinguishable degradation (landed) — the served OpenAPI contract documents the degradation object on /v1/search-kb 200 and the throttled object (required retryAfterMs) on search-detailed and recall metadata, so the marker is a published contract field rather than an implementation detail"
   - id: TR-106
     schema_version: 0.1.0
     change_id: WS-14

@@ -177,14 +177,13 @@ function embeddableChunkCollections(db: Db, prefix: string) {
 type EmbeddingCoverageMeasurement = EmbeddingStatusCoverage
 
 /**
- * Upper bound on the coverage probe below. numCandidates and limit are both
- * capped at 10k by the server, so a collection larger than this cannot be
- * measured in one query — and we report unknown rather than a partial count
- * dressed up as a total.
+ * Upper bound on the coverage probe below. `limit` is server-capped at 10k,
+ * so a collection larger than this cannot be measured in one query — and we
+ * report unknown rather than a partial count dressed up as a total.
  */
 const MAX_COVERAGE_PROBE_DOCS = 10_000
 
-/** Any non-empty text works; autoEmbed embeds it and ANN returns every doc. */
+/** Any non-empty text works; autoEmbed embeds it and ENN returns every doc. */
 const COVERAGE_PROBE_QUERY = "coverage probe"
 
 /**
@@ -197,6 +196,11 @@ const COVERAGE_PROBE_QUERY = "coverage probe"
  *
  * Counting what the index will serve is also the better question: coverage
  * should mean "retrievable", not "claimed by a metadata field".
+ *
+ * WS-16 (C-032): the probe runs as EXACT nearest neighbor with no
+ * `numCandidates`. An ANN probe could fabricate coverage that approximate
+ * search would not reproduce at search time; exact search measures what is
+ * truly retrievable, which is the question coverage exists to answer.
  *
  * Returns null when the probe cannot answer, so the caller can report unknown
  * rather than guess.
@@ -215,7 +219,7 @@ async function countRetrievableViaVectorIndex(params: {
 						index: params.indexName,
 						path: params.path,
 						query: COVERAGE_PROBE_QUERY,
-						numCandidates: params.limit,
+						exact: true,
 						limit: params.limit,
 					},
 				},

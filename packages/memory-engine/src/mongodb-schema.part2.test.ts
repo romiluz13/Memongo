@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/unbound-method -- Vitest mock method assertions */
 import type { Db, Collection, Document } from "mongodb"
-import { describe, it, expect, vi } from "vitest"
+import { describe, it, expect, vi, afterEach } from "vitest"
 import {
 	isCapabilityEnabled,
 	resetCapabilityProbes,
@@ -14,6 +14,12 @@ import {
 	resolveSearchIndexReadinessTiming,
 	waitForSearchIndexesQueryable,
 } from "./mongodb-schema.js"
+import {
+	SEARCH_TEXT_ANALYZER_ENV,
+	isIdentifierDualMappingEnabled,
+	resolveSearchTextAnalyzer,
+	searchTextAnalyzerName,
+} from "./mongodb-search-ranking.js"
 
 // ---------------------------------------------------------------------------
 // Mock helpers
@@ -1302,5 +1308,185 @@ describe("checkKBOrphans", () => {
 		const result = await checkKBOrphans(kbChunksCol, kbCol)
 		expect(result.orphanedChunkCount).toBe(0)
 		expect(result.orphanedDocIds).toEqual([])
+	})
+})
+
+// ---------------------------------------------------------------------------
+// WS-16 (C-029): BM25 text-analyzer strategy
+// ---------------------------------------------------------------------------
+
+describe("resolveSearchTextAnalyzer (C-029)", () => {
+	afterEach(() => {
+		vi.unstubAllEnvs()
+	})
+
+	it("defaults to standard when the env is unset or empty", () => {
+		expect(resolveSearchTextAnalyzer(undefined)).toEqual({ kind: "standard" })
+		vi.stubEnv(SEARCH_TEXT_ANALYZER_ENV, "")
+		expect(resolveSearchTextAnalyzer()).toEqual({ kind: "standard" })
+	})
+
+	it("accepts standard and folding (trimmed, case-insensitive)", () => {
+		expect(resolveSearchTextAnalyzer("standard")).toEqual({ kind: "standard" })
+		expect(resolveSearchTextAnalyzer("folding")).toEqual({ kind: "folding" })
+		vi.stubEnv(SEARCH_TEXT_ANALYZER_ENV, "  Folding ")
+		expect(resolveSearchTextAnalyzer()).toEqual({ kind: "folding" })
+	})
+
+	it("accepts full lucene.<language> analyzer names", () => {
+		expect(resolveSearchTextAnalyzer("lucene.french")).toEqual({
+			kind: "language",
+			analyzer: "lucene.french",
+		})
+	})
+
+	it("falls back to standard on unknown values so a typo cannot mint a broken index", () => {
+		// Bare language names are not accepted: the value must be the full
+		// analyzer name the server expects.
+		expect(resolveSearchTextAnalyzer("french")).toEqual({ kind: "standard" })
+		expect(resolveSearchTextAnalyzer("bogus-analyzer")).toEqual({
+			kind: "standard",
+		})
+		expect(resolveSearchTextAnalyzer("lucene.")).toEqual({ kind: "standard" })
+	})
+})
+
+describe("searchTextAnalyzerName / isIdentifierDualMappingEnabled (C-029)", () => {
+	it("maps a strategy to the concrete analyzer name", () => {
+		expect(searchTextAnalyzerName({ kind: "standard" })).toBe("lucene.standard")
+		expect(searchTextAnalyzerName({ kind: "folding" })).toBe("lucene.folding")
+		expect(
+			searchTextAnalyzerName({ kind: "language", analyzer: "lucene.german" }),
+		).toBe("lucene.german")
+	})
+
+	it("enables the identifier dual mapping only for improved strategies", () => {
+		expect(isIdentifierDualMappingEnabled({ kind: "standard" })).toBe(false)
+		expect(isIdentifierDualMappingEnabled({ kind: "folding" })).toBe(true)
+		expect(
+			isIdentifierDualMappingEnabled({
+				kind: "language",
+				analyzer: "lucene.french",
+			}),
+		).toBe(true)
+	})
+})
+
+describe("ensureSearchIndexes text-analyzer strategy (C-029)", () => {
+	afterEach(() => {
+		vi.unstubAllEnvs()
+		resetCapabilityProbes()
+	})
+
+	function searchIndexDef(db: Db, collection: string, name: string): Document {
+		const col = db.collection(collection) as unknown as {
+			createSearchIndex: ReturnType<typeof vi.fn>
+		}
+		const call = col.createSearchIndex.mock.calls.find(
+			(c: unknown[]) => (c[0] as Document).name === name,
+		)
+		expect(call).toBeDefined()
+		return (call?.[0] as Document).definition
+	}
+
+	it("pins lucene.standard and token identifiers by default (bit-identical to historical definitions)", async () => {
+		const db = mockDb()
+		await ensureSearchIndexes(db, "test_", "atlas-local-preview", "automated")
+
+		const chunksFields = searchIndexDef(db, "test_chunks", "test_chunks_text")
+			.mappings.fields as Document
+		expect(chunksFields.text).toEqual({
+			type: "string",
+			analyzer: "lucene.standard",
+		})
+		expect(chunksFields.path).toEqual({ type: "token" })
+
+		const kbFields = searchIndexDef(db, "test_kb_chunks", "test_kb_chunks_text")
+			.mappings.fields as Document
+		expect(kbFields.text).toEqual({
+			type: "string",
+			analyzer: "lucene.standard",
+		})
+		expect(kbFields.path).toEqual({ type: "token" })
+		expect(kbFields.docId).toEqual({ type: "token" })
+
+		const structFields = searchIndexDef(
+			db,
+			"test_structured_mem",
+			"test_structured_mem_text",
+		).mappings.fields as Document
+		expect(structFields.value).toEqual({
+			type: "string",
+			analyzer: "lucene.standard",
+		})
+		expect(structFields.key).toEqual({ type: "token" })
+	})
+
+	it("folding switches NL fields to lucene.folding and identifier-heavy fields to dual keyword+folding", async () => {
+		vi.stubEnv(SEARCH_TEXT_ANALYZER_ENV, "folding")
+		const db = mockDb()
+		await ensureSearchIndexes(db, "test_", "atlas-local-preview", "automated")
+
+		const chunksFields = searchIndexDef(db, "test_chunks", "test_chunks_text")
+			.mappings.fields as Document
+		expect(chunksFields.text).toEqual({
+			type: "string",
+			analyzer: "lucene.folding",
+		})
+		// Legacy chunks.path (chunk locators, not file paths) stays token.
+		expect(chunksFields.path).toEqual({ type: "token" })
+
+		const kbFields = searchIndexDef(db, "test_kb_chunks", "test_kb_chunks_text")
+			.mappings.fields as Document
+		expect(kbFields.text).toEqual({
+			type: "string",
+			analyzer: "lucene.folding",
+		})
+		expect(kbFields.path).toEqual({
+			type: "string",
+			analyzer: "lucene.keyword",
+			fields: { folded: { type: "string", analyzer: "lucene.folding" } },
+		})
+		// docId is a compound-filter path (docId $in): must stay token.
+		expect(kbFields.docId).toEqual({ type: "token" })
+
+		const structFields = searchIndexDef(
+			db,
+			"test_structured_mem",
+			"test_structured_mem_text",
+		).mappings.fields as Document
+		expect(structFields.value).toEqual({
+			type: "string",
+			analyzer: "lucene.folding",
+		})
+		expect(structFields.key).toEqual({
+			type: "string",
+			analyzer: "lucene.keyword",
+			fields: { folded: { type: "string", analyzer: "lucene.folding" } },
+		})
+	})
+
+	it("lucene.<language> pins the language analyzer on NL fields and keeps the folded subfield", async () => {
+		vi.stubEnv(SEARCH_TEXT_ANALYZER_ENV, "lucene.french")
+		const db = mockDb()
+		await ensureSearchIndexes(db, "test_", "atlas-local-preview", "automated")
+
+		const chunksFields = searchIndexDef(db, "test_chunks", "test_chunks_text")
+			.mappings.fields as Document
+		expect(chunksFields.text).toEqual({
+			type: "string",
+			analyzer: "lucene.french",
+		})
+
+		const kbFields = searchIndexDef(db, "test_kb_chunks", "test_kb_chunks_text")
+			.mappings.fields as Document
+		expect(kbFields.text).toEqual({
+			type: "string",
+			analyzer: "lucene.french",
+		})
+		expect(kbFields.path.fields.folded).toEqual({
+			type: "string",
+			analyzer: "lucene.folding",
+		})
 	})
 })

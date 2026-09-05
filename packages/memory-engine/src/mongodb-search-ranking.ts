@@ -8,6 +8,7 @@
 
 import type { Document } from "mongodb"
 import type { MemoryScope } from "@memongo/lib"
+import { createSubsystemLogger } from "@memongo/lib"
 import type { ResolvedMongoDBConfig } from "./backend-config.js"
 import { rrfScore } from "./mongodb-hybrid.js"
 import type { ProcedureState } from "./mongodb-procedures.js"
@@ -528,10 +529,33 @@ export function clampSearchMaxResults(value: number): number {
 	return Math.max(1, Math.min(MAX_SEARCH_MAX_RESULTS, Math.floor(value)))
 }
 
+/**
+ * WS-16 (C-030): conversation queries are clamped to this ceiling before the
+ * hot path consumes them — ahead of autoEmbed (a 2k+ char query still pays a
+ * full embedding call), BM25 (megabyte-scale $search terms), the query-cache
+ * probe (unbounded cache keys), and rerank (providers meter input tokens).
+ * The HTTP API never enforced a query-length limit, so any caller could push
+ * arbitrarily large payloads into every lane. ~2,000 characters is the
+ * established conversation-query budget: enough for long multi-sentence
+ * questions with context, small enough to bound every downstream consumer.
+ */
+export const MAX_SEARCH_QUERY_LENGTH = 2000
+
+/**
+ * Clamp a trimmed query to {@link MAX_SEARCH_QUERY_LENGTH}. Callers compare
+ * the pre-clamp length against the constant to decide whether to emit the
+ * `search-query-clamped` telemetry event.
+ */
+export function clampSearchQuery(query: string): string {
+	return query.length > MAX_SEARCH_QUERY_LENGTH
+		? query.slice(0, MAX_SEARCH_QUERY_LENGTH)
+		: query
+}
+
 export function normalizeDetailedSearchRequest(
 	request: MemorySearchRequest,
 ): MemorySearchRequest {
-	const query = request.query.trim()
+	const query = clampSearchQuery(request.query.trim())
 	const configuredRequest = applySearchConfig({
 		...request,
 		query,
@@ -744,6 +768,84 @@ export function resolveExplainSources(
 }
 
 import type { MongoDBMemoryManager } from "./mongodb-manager.js"
+
+const log = createSubsystemLogger("memory:mongodb:search")
+
+// ---------------------------------------------------------------------------
+// WS-16 (C-029): BM25 text-analyzer strategy
+// ---------------------------------------------------------------------------
+
+/**
+ * Env knob selecting the analyzer strategy for natural-language fields in
+ * every Atlas Search text index definition. The default (`standard`)
+ * reproduces the historical `lucene.standard` pinning bit-for-bit; existing
+ * deployments see no index drift until they opt in. The default flips to
+ * `folding` only after the retrieval eval gate (benchmark harness,
+ * before/after on the sample corpus) passes — see
+ * `mongodb-schema-search-indexes.ts` for the rebuild/migration path.
+ */
+export const SEARCH_TEXT_ANALYZER_ENV = "MEMONGO_SEARCH_TEXT_ANALYZER"
+
+export type SearchTextAnalyzerStrategy =
+	| { kind: "standard" }
+	| { kind: "folding" }
+	| { kind: "language"; analyzer: string }
+
+const LANGUAGE_ANALYZER_RE = /^lucene\.[a-z][a-z0-9]*$/i
+
+/**
+ * Resolve the configured analyzer strategy. Accepted values: unset or
+ * `standard` (historical behavior), `folding` (`lucene.folding` — diacritic
+ * folding), or a full language analyzer name such as `lucene.french`
+ * (validated by name only; the server rejects unknown analyzers at index
+ * build time). Unknown values fall back to `standard` with a warning so a
+ * typo can never mint a broken index definition.
+ */
+export function resolveSearchTextAnalyzer(
+	raw: string | undefined = process.env[SEARCH_TEXT_ANALYZER_ENV],
+): SearchTextAnalyzerStrategy {
+	const value = raw?.trim().toLowerCase()
+	if (!value || value === "standard") {
+		return { kind: "standard" }
+	}
+	if (value === "folding") {
+		return { kind: "folding" }
+	}
+	if (LANGUAGE_ANALYZER_RE.test(value)) {
+		return { kind: "language", analyzer: value }
+	}
+	log.warn(
+		`unknown ${SEARCH_TEXT_ANALYZER_ENV} value "${raw}" (expected "standard", "folding", or a lucene.<language> analyzer name); falling back to lucene.standard`,
+	)
+	return { kind: "standard" }
+}
+
+/** The concrete analyzer name to pin in index definitions. */
+export function searchTextAnalyzerName(
+	strategy: SearchTextAnalyzerStrategy,
+): string {
+	switch (strategy.kind) {
+		case "standard":
+			return "lucene.standard"
+		case "folding":
+			return "lucene.folding"
+		case "language":
+			return strategy.analyzer
+	}
+}
+
+/**
+ * Whether identifier-heavy fields get the dual keyword+folding mapping
+ * (`string` with `lucene.keyword` plus a `.folded` sub-field) instead of the
+ * historical `token` type. Only the improved strategies need it; `standard`
+ * keeps bit-identical definitions so no drift is detected on existing
+ * deployments.
+ */
+export function isIdentifierDualMappingEnabled(
+	strategy: SearchTextAnalyzerStrategy,
+): boolean {
+	return strategy.kind !== "standard"
+}
 
 /** Type guard: checks if a MemorySearchManager supports structured memory writes (MongoDB backend). */
 export function hasWriteCapability(

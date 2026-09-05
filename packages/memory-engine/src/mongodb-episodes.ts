@@ -809,6 +809,7 @@ export type AutoEpisodeTriggerResult = {
 		| "explicit"
 		| "rate_limited"
 		| "insufficient_events"
+		| "memoized_negative"
 	episode?: Episode
 }
 
@@ -838,6 +839,66 @@ async function hasRecentEpisodeWrite(params: {
 }
 
 // ---------------------------------------------------------------------------
+// WS-16 (C-034): negative-result memoization for the auto-trigger cooldown
+// ---------------------------------------------------------------------------
+
+/**
+ * How long a NEGATIVE auto-trigger check is remembered per agent+scope, so
+ * the cold window (no recent episode write, not enough events) pays the
+ * 500-event unconsolidated scan once per TTL instead of once per write.
+ */
+export const AUTO_EPISODE_NEGATIVE_MEMO_MS = 60_000
+
+const autoEpisodeNegativeMemo = new Map<string, number>()
+
+function autoEpisodeNegativeMemoKey(params: {
+	prefix: string
+	agentId: string
+	scope?: MemoryScope
+	scopeRef?: string
+}): string {
+	return [
+		params.prefix,
+		params.agentId,
+		params.scope ?? "",
+		params.scopeRef ?? "",
+	].join("|")
+}
+
+function hasFreshNegativeMemo(params: {
+	prefix: string
+	agentId: string
+	scope?: MemoryScope
+	scopeRef?: string
+	now?: number
+}): boolean {
+	const memoizedAt = autoEpisodeNegativeMemo.get(
+		autoEpisodeNegativeMemoKey(params),
+	)
+	if (memoizedAt === undefined) return false
+	const now = params.now ?? Date.now()
+	return now - memoizedAt < AUTO_EPISODE_NEGATIVE_MEMO_MS
+}
+
+function rememberNegativeMemo(params: {
+	prefix: string
+	agentId: string
+	scope?: MemoryScope
+	scopeRef?: string
+	now?: number
+}): void {
+	autoEpisodeNegativeMemo.set(
+		autoEpisodeNegativeMemoKey(params),
+		params.now ?? Date.now(),
+	)
+}
+
+/** Test seam: clears the negative-result memo between test cases. */
+export function resetAutoEpisodeNegativeMemoForTests(): void {
+	autoEpisodeNegativeMemo.clear()
+}
+
+// ---------------------------------------------------------------------------
 // Check if auto episode materialization should trigger
 // ---------------------------------------------------------------------------
 
@@ -851,6 +912,9 @@ async function hasRecentEpisodeWrite(params: {
  * MUST be async (not blocking write path) -- the summarizer is an LLM call.
  * The recent-write cooldown is best-effort: it suppresses work observed after
  * a completed episode write, but it is not a distributed scheduling claim.
+ * A recent NEGATIVE result is memoized in-memory per agent+scope for
+ * AUTO_EPISODE_NEGATIVE_MEMO_MS, so cold-window writes pay one cooldown
+ * query instead of a cooldown query plus the 500-event scan.
  */
 export async function checkAutoEpisodeTriggers(params: {
 	db: Db
@@ -896,6 +960,15 @@ export async function checkAutoEpisodeTriggers(params: {
 			if (rateLimited) {
 				return { triggered: false, reason: "rate_limited" }
 			}
+
+			// 1b. WS-16 (C-034): a recent NEGATIVE answer is memoized per
+			// agent+scope for ~60s, so the cold window pays ONE cooldown
+			// query per write — not the cooldown query plus the 500-event
+			// unconsolidated scan every single time. The TTL bounds how long
+			// a fresh trigger condition can be deferred.
+			if (hasFreshNegativeMemo({ prefix, agentId, scope, scopeRef })) {
+				return { triggered: false, reason: "memoized_negative" }
+			}
 		}
 
 		// 2. Get unconsolidated events only when an episode may be created.
@@ -910,6 +983,7 @@ export async function checkAutoEpisodeTriggers(params: {
 
 		// Need at least 2 events for any episode
 		if (events.length < 2) {
+			rememberNegativeMemo({ prefix, agentId, scope, scopeRef })
 			return { triggered: false, reason: "insufficient_events" }
 		}
 
@@ -937,6 +1011,7 @@ export async function checkAutoEpisodeTriggers(params: {
 		}
 
 		if (!triggerReason) {
+			rememberNegativeMemo({ prefix, agentId, scope, scopeRef })
 			return { triggered: false }
 		}
 
@@ -948,6 +1023,7 @@ export async function checkAutoEpisodeTriggers(params: {
 			maxEventsWithoutEpisode,
 		})
 		if (episodeEvents.length < 2) {
+			rememberNegativeMemo({ prefix, agentId, scope, scopeRef })
 			return { triggered: false, reason: "insufficient_events" }
 		}
 		const timeRange = {
@@ -971,6 +1047,7 @@ export async function checkAutoEpisodeTriggers(params: {
 		})
 
 		if (!episode) {
+			rememberNegativeMemo({ prefix, agentId, scope, scopeRef })
 			return { triggered: false, reason: "insufficient_events" }
 		}
 

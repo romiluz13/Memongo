@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest"
-import { expandSearchContext } from "./mongodb-context-expansion.js"
+import type { Document } from "mongodb"
+import {
+	CONTEXT_EXPANSION_MAX_CONCURRENCY,
+	expandSearchContext,
+} from "./mongodb-context-expansion.js"
 import type { MemorySearchResult } from "./types.js"
 
 function makeResult(
@@ -319,4 +323,204 @@ describe("expandSearchContext", () => {
 		})
 		expect(expanded).toHaveLength(2)
 	})
+
+	// -------------------------------------------------------------------------
+	// WS-16 (C-033): the per-session neighbor fetches run in parallel under
+	// a bounded concurrency cap, removing the sequential N+1 from the search
+	// hot path.
+	// -------------------------------------------------------------------------
+
+	it("runs per-session fetches concurrently (no sequential N+1)", async () => {
+		// Each session's fetch resolves only once ALL sessions' fetches are
+		// in flight (or a short fallback fires). Sequential execution can
+		// never raise the in-flight count past 1, so this test is red
+		// exactly when the N+1 comes back.
+		const sessionCount = CONTEXT_EXPANSION_MAX_CONCURRENCY
+		let startedFetches = 0
+		let maxConcurrentFetches = 0
+		let releaseGate!: () => void
+		const gate = new Promise<void>((resolve) => {
+			releaseGate = resolve
+		})
+		const gateOrFallback = Promise.race([
+			gate,
+			new Promise<void>((resolve) => setTimeout(resolve, 1_500)),
+		])
+
+		const findFn = vi
+			.fn()
+			.mockImplementation((filter: { sessionId?: string }) => {
+				const sessionId = filter.sessionId ?? "unknown"
+				return {
+					sort: vi.fn().mockReturnValue({
+						limit: vi.fn().mockReturnValue({
+							toArray: vi.fn().mockImplementation(
+								() =>
+									new Promise<Array<Document>>((resolve) => {
+										startedFetches += 1
+										if (startedFetches === sessionCount) {
+											maxConcurrentFetches = startedFetches
+											releaseGate()
+										}
+										gateOrFallback.then(() => resolve([]))
+									}),
+							),
+						}),
+					}),
+				}
+			})
+		const collectionFn = vi.fn().mockReturnValue({ find: findFn })
+		const db = { collection: collectionFn } as unknown as import("mongodb").Db
+
+		const results = Array.from({ length: sessionCount }, (_, i) =>
+			makeResult({
+				path: `events/parent${i}`,
+				sessionId: `s${i}`,
+				timestamp: new Date(`2026-01-01T00:0${i}:00Z`),
+				score: 0.9,
+			}),
+		)
+
+		await expandSearchContext({
+			db,
+			prefix: "test_",
+			agentId: "agent1",
+			scope: "session",
+			scopeRef: "agent:agent1:session:s1",
+			results,
+		})
+
+		// All sessionCount fetches were in flight simultaneously.
+		expect(maxConcurrentFetches).toBe(sessionCount)
+		expect(findFn).toHaveBeenCalledTimes(sessionCount)
+	}, 10_000)
+
+	it("caps concurrent fetches at CONTEXT_EXPANSION_MAX_CONCURRENCY", async () => {
+		const sessionCount = CONTEXT_EXPANSION_MAX_CONCURRENCY * 3
+		let inFlight = 0
+		let peakInFlight = 0
+		const findFn = vi.fn().mockImplementation(() => {
+			inFlight += 1
+			peakInFlight = Math.max(peakInFlight, inFlight)
+			return {
+				sort: vi.fn().mockReturnValue({
+					limit: vi.fn().mockReturnValue({
+						toArray: vi.fn().mockImplementation(async () => {
+							// One microtask turn so parallel workers overlap.
+							await Promise.resolve()
+							inFlight -= 1
+							return []
+						}),
+					}),
+				}),
+			}
+		})
+		const collectionFn = vi.fn().mockReturnValue({ find: findFn })
+		const db = { collection: collectionFn } as unknown as import("mongodb").Db
+
+		const results = Array.from({ length: sessionCount }, (_, i) =>
+			makeResult({
+				path: `events/parent${i}`,
+				sessionId: `s${i}`,
+				timestamp: new Date(`2026-01-01T00:0${i % 10}:00Z`),
+				score: 0.9,
+			}),
+		)
+
+		await expandSearchContext({
+			db,
+			prefix: "test_",
+			agentId: "agent1",
+			scope: "session",
+			scopeRef: "agent:agent1:session:s1",
+			results,
+		})
+
+		expect(findFn).toHaveBeenCalledTimes(sessionCount)
+		expect(peakInFlight).toBeLessThanOrEqual(CONTEXT_EXPANSION_MAX_CONCURRENCY)
+	}, 10_000)
+
+	it("keeps neighbor merge order deterministic across sessions", async () => {
+		// Session fetches resolve in REVERSE order; merged neighbors must
+		// still come out in the original session order.
+		const sessions = ["s1", "s2", "s3"]
+		const neighborsBySession: Record<string, Document[]> = {
+			s1: [
+				{
+					eventId: "n1",
+					agentId: "agent1",
+					sessionId: "s1",
+					role: "user",
+					body: "one",
+					timestamp: new Date("2026-01-01T00:00:30Z"),
+				},
+			],
+			s2: [
+				{
+					eventId: "n2",
+					agentId: "agent1",
+					sessionId: "s2",
+					role: "user",
+					body: "two",
+					timestamp: new Date("2026-01-01T00:01:30Z"),
+				},
+			],
+			s3: [
+				{
+					eventId: "n3",
+					agentId: "agent1",
+					sessionId: "s3",
+					role: "user",
+					body: "three",
+					timestamp: new Date("2026-01-01T00:02:30Z"),
+				},
+			],
+		}
+		const findFn = vi.fn().mockImplementation((filter: Document) => {
+			const sessionId = filter.sessionId as string
+			const delay = (sessions.length - sessions.indexOf(sessionId)) * 20
+			return {
+				sort: vi.fn().mockReturnValue({
+					limit: vi.fn().mockReturnValue({
+						toArray: vi
+							.fn()
+							.mockImplementation(
+								async () =>
+									await new Promise<Document[]>((resolve) =>
+										setTimeout(
+											() => resolve(neighborsBySession[sessionId] ?? []),
+											delay,
+										),
+									),
+							),
+					}),
+				}),
+			}
+		})
+		const collectionFn = vi.fn().mockReturnValue({ find: findFn })
+		const db = { collection: collectionFn } as unknown as import("mongodb").Db
+
+		const expanded = await expandSearchContext({
+			db,
+			prefix: "test_",
+			agentId: "agent1",
+			scope: "session",
+			scopeRef: "agent:agent1:session:s1",
+			results: sessions.map((sessionId, i) =>
+				makeResult({
+					path: `events/parent-${sessionId}`,
+					sessionId,
+					timestamp: new Date(`2026-01-01T00:0${i}:00Z`),
+					score: 0.9,
+				}),
+			),
+			// maxResults high enough to keep every neighbor.
+			maxResults: 10,
+		})
+
+		const neighborOrder = expanded
+			.filter((r) => r.path.startsWith("events/n"))
+			.map((r) => r.path)
+		expect(neighborOrder).toEqual(["events/n1", "events/n2", "events/n3"])
+	}, 10_000)
 })

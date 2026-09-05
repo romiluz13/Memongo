@@ -1,6 +1,5 @@
 import { describe, it, expect } from "vitest"
 import {
-	buildOrJoinFtsQuery,
 	rrfScore,
 	normalizeVectorScore,
 	normalizeBM25Score,
@@ -9,37 +8,6 @@ import {
 	normalizeSearchResults,
 } from "./mongodb-hybrid.js"
 import type { MemorySearchResult } from "./types.js"
-
-// ---------------------------------------------------------------------------
-// buildOrJoinFtsQuery -- OR-join FTS query builder
-// ---------------------------------------------------------------------------
-
-describe("buildOrJoinFtsQuery", () => {
-	it("joins tokens with OR instead of AND", () => {
-		const result = buildOrJoinFtsQuery("hello world test")
-		expect(result).toBe('"hello" OR "world" OR "test"')
-	})
-
-	it("returns null for empty input", () => {
-		expect(buildOrJoinFtsQuery("")).toBeNull()
-		expect(buildOrJoinFtsQuery("   ")).toBeNull()
-	})
-
-	it("handles single token", () => {
-		expect(buildOrJoinFtsQuery("hello")).toBe('"hello"')
-	})
-
-	it("strips non-alphanumeric characters", () => {
-		const result = buildOrJoinFtsQuery("hello! world? test.")
-		expect(result).toBe('"hello" OR "world" OR "test"')
-	})
-
-	it("strips quotes from tokens (non-alphanumeric splits tokens)", () => {
-		// Quotes are non-alphanumeric, so they split tokens. This is expected.
-		const result = buildOrJoinFtsQuery('he"llo wor"ld')
-		expect(result).toBe('"he" OR "llo" OR "wor" OR "ld"')
-	})
-})
 
 // ---------------------------------------------------------------------------
 // rrfScore -- Reciprocal Rank Fusion scoring

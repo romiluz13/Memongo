@@ -17,6 +17,8 @@ import {
 	searchEpisodes,
 	checkAutoEpisodeTriggers,
 	getEpisodesByIds,
+	AUTO_EPISODE_NEGATIVE_MEMO_MS,
+	resetAutoEpisodeNegativeMemoForTests,
 	type Episode,
 	type EpisodeSummarizer,
 } from "./mongodb-episodes.js"
@@ -1197,6 +1199,141 @@ describe("mongodb-episodes", () => {
 
 			const [filter] = findFn.mock.calls[0]
 			expect(filter.status).toEqual({ $ne: "deleted" })
+		})
+	})
+
+	describe("auto-trigger negative memo (WS-16 C-034)", () => {
+		beforeEach(() => {
+			resetAutoEpisodeNegativeMemoForTests()
+		})
+
+		it("memoizes a negative result: the next cold write pays only the cooldown query", async () => {
+			const episodesCol = createMockCollection()
+			const db = createMockDb({ [`${PREFIX}episodes`]: episodesCol })
+			vi.mocked(getUnconsolidatedEvents).mockResolvedValue([] as never)
+
+			const first = await checkAutoEpisodeTriggers({
+				db,
+				prefix: PREFIX,
+				agentId: AGENT_ID,
+				summarizer: mockSummarizer,
+			})
+			expect(first).toEqual({ triggered: false, reason: "insufficient_events" })
+
+			const second = await checkAutoEpisodeTriggers({
+				db,
+				prefix: PREFIX,
+				agentId: AGENT_ID,
+				summarizer: mockSummarizer,
+			})
+			expect(second).toEqual({
+				triggered: false,
+				reason: "memoized_negative",
+			})
+
+			// One unconsolidated scan total (first call only), but the
+			// recent-write cooldown query ran on both calls.
+			expect(vi.mocked(getUnconsolidatedEvents)).toHaveBeenCalledTimes(1)
+			expect(episodesCol.find).toHaveBeenCalledTimes(2)
+		})
+
+		it("scopes the memo per agent: another agent's cold check still scans", async () => {
+			const db = createMockDb({})
+			vi.mocked(getUnconsolidatedEvents).mockResolvedValue([] as never)
+
+			await checkAutoEpisodeTriggers({
+				db,
+				prefix: PREFIX,
+				agentId: AGENT_ID,
+				summarizer: mockSummarizer,
+			})
+			const other = await checkAutoEpisodeTriggers({
+				db,
+				prefix: PREFIX,
+				agentId: "agent-2",
+				summarizer: mockSummarizer,
+			})
+
+			expect(other).toEqual({
+				triggered: false,
+				reason: "insufficient_events",
+			})
+			expect(vi.mocked(getUnconsolidatedEvents)).toHaveBeenCalledTimes(2)
+		})
+
+		it("re-scans once the negative memo TTL expires", async () => {
+			vi.useFakeTimers()
+			try {
+				const db = createMockDb({})
+				vi.mocked(getUnconsolidatedEvents).mockResolvedValue([] as never)
+
+				await checkAutoEpisodeTriggers({
+					db,
+					prefix: PREFIX,
+					agentId: AGENT_ID,
+					summarizer: mockSummarizer,
+				})
+				vi.setSystemTime(Date.now() + AUTO_EPISODE_NEGATIVE_MEMO_MS + 1)
+
+				const result = await checkAutoEpisodeTriggers({
+					db,
+					prefix: PREFIX,
+					agentId: AGENT_ID,
+					summarizer: mockSummarizer,
+				})
+
+				expect(result).toEqual({
+					triggered: false,
+					reason: "insufficient_events",
+				})
+				expect(vi.mocked(getUnconsolidatedEvents)).toHaveBeenCalledTimes(2)
+			} finally {
+				vi.useRealTimers()
+			}
+		})
+
+		it("force bypasses the negative memo and still triggers", async () => {
+			const start = new Date("2026-03-15T09:00:00Z")
+			vi.mocked(getUnconsolidatedEvents).mockResolvedValue([
+				{
+					eventId: "evt-1",
+					agentId: AGENT_ID,
+					role: "user",
+					body: "Hello",
+					scope: "agent",
+					timestamp: start,
+				},
+				{
+					eventId: "evt-2",
+					agentId: AGENT_ID,
+					role: "assistant",
+					body: "Hi there",
+					scope: "agent",
+					timestamp: new Date(start.getTime() + 60_000),
+				},
+			] as never)
+			const db = createMockDb({})
+
+			// Seed a fresh negative memo: 2 events, no gap, under the count
+			// threshold -> no trigger reason -> negative memo recorded.
+			await checkAutoEpisodeTriggers({
+				db,
+				prefix: PREFIX,
+				agentId: AGENT_ID,
+				summarizer: mockSummarizer,
+			})
+
+			const forced = await checkAutoEpisodeTriggers({
+				db,
+				prefix: PREFIX,
+				agentId: AGENT_ID,
+				summarizer: mockSummarizer,
+				force: true,
+			})
+
+			expect(forced.triggered).toBe(true)
+			expect(forced.reason).toBe("explicit")
+			expect(forced.episode).toBeDefined()
 		})
 	})
 })

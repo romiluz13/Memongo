@@ -41,6 +41,40 @@ export type RerankResult = {
  */
 export const RERANK_TIMEOUT_MS = 2_000
 
+/**
+ * WS-16 (C-031): the floor below which a provider call is not worth
+ * starting. A rerank that cannot complete within the remaining latency
+ * budget is skipped outright (rerankSkipped: "budget-exhausted") rather
+ * than allowed to abort mid-flight a few milliseconds later.
+ */
+export const MIN_RERANK_TIMEOUT_MS = 250
+
+/**
+ * WS-16 (C-031): the rerank timeout derives from the caller's remaining
+ * latency budget, so one provider call can never stack a full 2s cap on
+ * top of an already-consumed tail (probe-miss + slow-lane worst cases).
+ *
+ * - No budget provided → the fixed 2s cap (previous behavior, used by
+ *   direct callers and tests).
+ * - Budget at or above the floor → min(remaining, 2s cap): the provider
+ *   gets whatever the search has left, never more.
+ * - Budget below the floor (or non-finite) → null: skip the call entirely.
+ */
+export function resolveRerankTimeoutMs(
+	remainingBudgetMs?: number,
+): number | null {
+	if (remainingBudgetMs === undefined) {
+		return RERANK_TIMEOUT_MS
+	}
+	if (
+		!Number.isFinite(remainingBudgetMs) ||
+		remainingBudgetMs < MIN_RERANK_TIMEOUT_MS
+	) {
+		return null
+	}
+	return Math.min(Math.floor(remainingBudgetMs), RERANK_TIMEOUT_MS)
+}
+
 // ---------------------------------------------------------------------------
 // Cross-encoder re-ranking via Voyage rerank-2.5 API
 // ---------------------------------------------------------------------------
@@ -84,6 +118,13 @@ export async function crossEncoderRerank(params: {
 	config: RerankConfig
 	onProviderCall?: (outcome: "attempted" | "succeeded" | "failed") => void
 	fetchFn?: typeof globalThis.fetch
+	/**
+	 * WS-16 (C-031): remaining end-to-end latency budget in ms. When present,
+	 * the provider timeout is min(remaining, RERANK_TIMEOUT_MS); when the
+	 * remainder is below MIN_RERANK_TIMEOUT_MS the call is skipped (empty ≠
+	 * error — the search returns unreranked results, it never fails).
+	 */
+	remainingBudgetMs?: number
 }): Promise<RerankResult> {
 	const { db, prefix, agentId, query, results, config } = params
 	const rerankStart = Date.now()
@@ -167,6 +208,22 @@ export async function crossEncoderRerank(params: {
 
 		const documents = validCandidates.map((r) => r.snippet)
 
+		// WS-16 (C-031): derive the provider timeout from the remaining
+		// latency budget. Below the floor the call is not started at all —
+		// a deliberate skip (ok:true) so telemetry distinguishes it from a
+		// provider failure.
+		const timeoutMs = resolveRerankTimeoutMs(params.remainingBudgetMs)
+		if (timeoutMs === null) {
+			emitTelemetry(db, prefix, {
+				meta: { agentId, operation: "rerank" },
+				durationMs: Date.now() - rerankStart,
+				ok: true,
+				rerankModel: config.model,
+				rerankSkipped: "budget-exhausted",
+			})
+			return { results, reranked: false, latencyMs: Date.now() - rerankStart }
+		}
+
 		const rerankUrl = resolveRerankUrl(config.voyageApiKey)
 		recordProviderCall("attempted")
 		const response = await withRemoteHttpResponse({
@@ -185,7 +242,7 @@ export async function crossEncoderRerank(params: {
 					documents,
 					top_k: validCandidates.length,
 				}),
-				signal: AbortSignal.timeout(RERANK_TIMEOUT_MS),
+				signal: AbortSignal.timeout(timeoutMs),
 			},
 			onResponse: async (value) => value,
 		})

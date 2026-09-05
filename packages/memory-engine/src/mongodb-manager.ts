@@ -350,8 +350,10 @@ import { MongoDBManagerSearchOps } from "./mongodb-manager-search.js"
 // ---------------------------------------------------------------------------
 export {
 	MAX_SEARCH_MAX_RESULTS,
+	MAX_SEARCH_QUERY_LENGTH,
 	applyRecencyAccessBoostAfterRerank,
 	clampSearchMaxResults,
+	clampSearchQuery,
 	deduplicateSearchResults,
 	getActiveSources,
 	getActiveSourcesForStatus,

@@ -55,10 +55,12 @@ import type {
 } from "./types.js"
 import {
 	clampSearchMaxResults,
+	clampSearchQuery,
 	deduplicateSearchResults,
 	emptySearchMetadata,
 	getActiveSources,
 	isBenchmarkStrictMode,
+	MAX_SEARCH_QUERY_LENGTH,
 	normalizeDetailedSearchRequest,
 	rerankResults,
 	resolveRuntimeSearchConfig,
@@ -82,6 +84,24 @@ const log = createSubsystemLogger("memory:mongodb")
 
 export class MongoDBManagerSearchOps {
 	constructor(private readonly host: MongoDBManagerHost) {}
+
+	/**
+	 * WS-16 (C-030): fire-and-forget telemetry when a public search entry
+	 * point clamped an over-length query, so operators can see callers
+	 * pushing past the 2,000-character ceiling instead of silently
+	 * truncating their intent.
+	 */
+	private emitQueryClampedTelemetry(originalLength: number): void {
+		emitTelemetry(this.host.db, this.host.prefix, {
+			meta: {
+				agentId: this.host.agentId,
+				operation: "search-query-clamped",
+			},
+			durationMs: 0,
+			ok: true,
+			queryLength: originalLength,
+		})
+	}
 
 	/**
 	 * Resolve the tenant identity a read must be confined to.
@@ -547,7 +567,14 @@ export class MongoDBManagerSearchOps {
 		},
 		operationRunContext?: OperationRunContext,
 	): Promise<MemorySearchResult[]> {
-		const cleaned = query.trim()
+		const trimmed = query.trim()
+		// WS-16 (C-030): clamp before the hot path consumes the query —
+		// autoEmbed, BM25, the cache probe, and rerank all see the bounded
+		// query; the single-flight key below folds in the clamped form.
+		const cleaned = clampSearchQuery(trimmed)
+		if (cleaned.length < trimmed.length) {
+			this.emitQueryClampedTelemetry(trimmed.length)
+		}
 		if (!cleaned) {
 			this.host.setLastSearchMode("v2:empty-query")
 			return []
@@ -1031,6 +1058,12 @@ export class MongoDBManagerSearchOps {
 		request: MemorySearchRequest,
 	): Promise<MemorySearchResponse> {
 		const normalized = normalizeDetailedSearchRequest(request)
+		// WS-16 (C-030): the clamp happened inside normalize — emit the
+		// telemetry marker here, where the host db/prefix are in reach, so
+		// the over-length caller is visible to operators.
+		if (request.query.trim().length > MAX_SEARCH_QUERY_LENGTH) {
+			this.emitQueryClampedTelemetry(request.query.trim().length)
+		}
 		if (!normalized.query) {
 			this.host.setLastSearchMode("v2:empty-query")
 			return {
@@ -1427,9 +1460,7 @@ export class MongoDBManagerSearchOps {
 				// else the resolved config value (env/config, default rankFusion).
 				fusionMethod: opts?.fusionMethod ?? mongoCfg.fusionMethod,
 				kbDocs: kbCollection(this.host.db, this.host.prefix),
-				...(kbAdmission && !kbAdmission.ok
-					? { skipVectorLane: true }
-					: {}),
+				...(kbAdmission && !kbAdmission.ok ? { skipVectorLane: true } : {}),
 			},
 		)
 	}

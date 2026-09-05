@@ -10,7 +10,13 @@ vi.mock("./mongodb-telemetry.js", () => ({
 	emitTelemetry: vi.fn(),
 }))
 
-import { crossEncoderRerank, type RerankConfig } from "./mongodb-reranker.js"
+import {
+	crossEncoderRerank,
+	MIN_RERANK_TIMEOUT_MS,
+	resolveRerankTimeoutMs,
+	RERANK_TIMEOUT_MS,
+	type RerankConfig,
+} from "./mongodb-reranker.js"
 import { emitTelemetry } from "./mongodb-telemetry.js"
 import type { MemorySearchResult } from "./types.js"
 
@@ -824,5 +830,137 @@ describe("crossEncoderRerank skip telemetry (WS-12, C-019)", () => {
 
 		const doc = vi.mocked(emitTelemetry).mock.calls[0]?.[2] ?? {}
 		expect("rerankSkipped" in doc).toBe(false)
+	})
+})
+
+// ---------------------------------------------------------------------------
+// WS-16 (C-031): the rerank timeout derives from the remaining latency
+// budget so one provider call can never stack its full 2s cap on top of an
+// already-consumed tail (probe-miss + slow-lane worst cases).
+// ---------------------------------------------------------------------------
+
+describe("resolveRerankTimeoutMs (C-031)", () => {
+	it("falls back to the fixed 2s cap when no budget is provided", () => {
+		expect(resolveRerankTimeoutMs()).toBe(RERANK_TIMEOUT_MS)
+		expect(resolveRerankTimeoutMs(undefined)).toBe(RERANK_TIMEOUT_MS)
+	})
+
+	it("uses the remaining budget when it is below the cap", () => {
+		expect(resolveRerankTimeoutMs(1_000)).toBe(1_000)
+		expect(resolveRerankTimeoutMs(400)).toBe(400)
+		expect(resolveRerankTimeoutMs(MIN_RERANK_TIMEOUT_MS)).toBe(
+			MIN_RERANK_TIMEOUT_MS,
+		)
+	})
+
+	it("caps at 2s no matter how much budget remains", () => {
+		expect(resolveRerankTimeoutMs(5_000)).toBe(RERANK_TIMEOUT_MS)
+		expect(resolveRerankTimeoutMs(13_500)).toBe(RERANK_TIMEOUT_MS)
+	})
+
+	it("refuses to start a call below the floor (null = skip)", () => {
+		expect(resolveRerankTimeoutMs(MIN_RERANK_TIMEOUT_MS - 1)).toBeNull()
+		expect(resolveRerankTimeoutMs(0)).toBeNull()
+		expect(resolveRerankTimeoutMs(-500)).toBeNull()
+		expect(resolveRerankTimeoutMs(Number.NaN)).toBeNull()
+		expect(resolveRerankTimeoutMs(Number.POSITIVE_INFINITY)).toBeNull()
+	})
+})
+
+describe("crossEncoderRerank remaining latency budget (C-031)", () => {
+	beforeEach(() => {
+		vi.clearAllMocks()
+	})
+
+	it("skips the provider call when the remaining budget is below the floor", async () => {
+		const results = makeResults(3)
+		const fetchFn = vi.fn()
+
+		const out = await crossEncoderRerank({
+			db: DB,
+			prefix: PREFIX,
+			agentId: AGENT_ID,
+			query: QUERY,
+			results,
+			config: makeConfig(),
+			fetchFn,
+			remainingBudgetMs: MIN_RERANK_TIMEOUT_MS - 1,
+		})
+
+		expect(out.reranked).toBe(false)
+		expect(out.results).toBe(results)
+		// No provider round-trip is started at all.
+		expect(fetchFn).not.toHaveBeenCalled()
+		// A deliberate skip, not a failure: ok:true + budget-exhausted marker.
+		expect(emitTelemetry).toHaveBeenCalledWith(
+			DB,
+			PREFIX,
+			expect.objectContaining({
+				meta: { agentId: AGENT_ID, operation: "rerank" },
+				ok: true,
+				rerankSkipped: "budget-exhausted",
+			}),
+		)
+	})
+
+	it("aborts a hanging provider call within the derived timeout, not the 2s cap", async () => {
+		const results = makeResults(3)
+
+		// Hanging fetch that respects the AbortSignal, like real fetch.
+		const fetchFn = vi.fn(
+			(_url: string | URL | Request, init?: RequestInit) => {
+				return new Promise<Response>((_resolve, reject) => {
+					if (init?.signal) {
+						init.signal.addEventListener("abort", () => {
+							reject(
+								new DOMException("The operation was aborted", "AbortError"),
+							)
+						})
+					}
+				})
+			},
+		) as unknown as typeof fetch
+
+		const startedAt = Date.now()
+		const out = await crossEncoderRerank({
+			db: DB,
+			prefix: PREFIX,
+			agentId: AGENT_ID,
+			query: QUERY,
+			results,
+			config: makeConfig(),
+			fetchFn,
+			remainingBudgetMs: 300,
+		})
+		const elapsedMs = Date.now() - startedAt
+
+		expect(out.reranked).toBe(false)
+		expect(out.results).toBe(results)
+		// The call aborted near the 300ms derived timeout — well under the
+		// 2s cap this provider call would otherwise be allowed to spend.
+		expect(elapsedMs).toBeGreaterThanOrEqual(250)
+		expect(elapsedMs).toBeLessThan(1_500)
+	}, 10_000)
+
+	it("still reranks successfully when the remaining budget is ample", async () => {
+		const fetchFn = mockFetchSuccess([
+			{ index: 0, relevance_score: 0.9 },
+			{ index: 1, relevance_score: 0.8 },
+			{ index: 2, relevance_score: 0.7 },
+		])
+
+		const out = await crossEncoderRerank({
+			db: DB,
+			prefix: PREFIX,
+			agentId: AGENT_ID,
+			query: QUERY,
+			results: makeResults(3),
+			config: makeConfig(),
+			fetchFn,
+			remainingBudgetMs: 10_000,
+		})
+
+		expect(out.reranked).toBe(true)
+		expect(fetchFn).toHaveBeenCalledOnce()
 	})
 })
