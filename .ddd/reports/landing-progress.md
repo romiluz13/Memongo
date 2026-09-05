@@ -53,7 +53,7 @@ This file is the compaction anchor: any future instance resumes from here.
 | WS-12 | C-019 | T2 | Degradation vs healthy emptiness | LANDED b02c50635c (hash pinned by follow-up ledger commit) |
 | WS-13 | C-020..023 | T2,T2,T2,T2 | Lifecycle scheduling/dead letters | LANDED b175de6955 + artifacts (see session log) |
 | WS-14 | C-024 | T2 | Orphan detection all relation types | LANDED d0184fc2b9 (hash pinned by follow-up ledger commit) |
-| WS-15 | C-025..028 | T1,T2,T1,T1 | Data-model mechanics | LANDED (see session log) |
+| WS-15 | C-025..028 | T1,T2,T1,T1 | Data-model mechanics | LANDED a8cdf60d96 (hash pinned by follow-up ledger commit) |
 | WS-16 | C-029..034 | T2,T1,T2,T0,T2,T1 | Retrieval quality/perf | pending |
 | WS-17 | C-035,036 | T2,T2 | kb cross-tenant read; pi opt-in | LANDED 96c8db28bb (see session log) |
 | WS-18 | C-037,038,039 | T1,T2,T2 | dockerignore; publish gates; nightly eval | pending |
@@ -889,7 +889,7 @@ require them; remaining 17 = 1 open C-018 refutation obligation +
   engine-internal only, so the return-type widening is safe, and
   createMockDb auto-vivifies unknown collections, so the existing
   deleteEntity tests survived the new entity_links cascade untouched.
-- WS-15/C-025..028 landed: typed relation locator, chunk bitemporal
+- WS-15/C-025..028 landed (commit a8cdf60d96): typed relation locator, chunk bitemporal
   filter, exclusive-relation invalidation fix, bounded sourceEventIds
   provenance. Ledger: V-113 (findRelationByLocatorId, typed-locator +
   migration battery), V-114 (manager-read readFile ?type= forwarding),
