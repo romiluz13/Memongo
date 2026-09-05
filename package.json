@@ -1,6 +1,6 @@
 {
 	"name": "memongo",
-	"version": "2.0.1",
+	"version": "2.1.0",
 	"private": true,
 	"description": "MongoDB-native long-term AI memory with reasoning chains, novelty detection, and consolidation: engine, SDK, HTTP API, MCP server, and web console",
 	"license": "Apache-2.0",

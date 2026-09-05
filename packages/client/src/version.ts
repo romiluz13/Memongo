@@ -4,4 +4,4 @@
  * Must equal packages/client/package.json `version`;
  * `scripts/check-publishability.ts` fails the release gate when they drift.
  */
-export const MEMONGO_CLIENT_VERSION = "2.0.1"
+export const MEMONGO_CLIENT_VERSION = "2.1.0"

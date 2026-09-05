@@ -1,6 +1,6 @@
 {
 	"name": "@memongo/lib",
-	"version": "2.0.1",
+	"version": "2.1.0",
 	"description": "Shared types and utilities for Memongo packages",
 	"type": "module",
 	"engines": {

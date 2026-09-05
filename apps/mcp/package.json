@@ -1,6 +1,6 @@
 {
 	"name": "@memongo/mcp",
-	"version": "2.0.1",
+	"version": "2.1.0",
 	"description": "MCP server for Memongo (stdio + streamable HTTP; calls the Memongo HTTP API)",
 	"type": "module",
 	"engines": {
@@ -44,8 +44,8 @@
 		"prepublishOnly": "bun run build"
 	},
 	"dependencies": {
-		"@memongo/client": "^2.0.1",
-		"@memongo/lib": "^2.0.1",
+		"@memongo/client": "^2.1.0",
+		"@memongo/lib": "^2.1.0",
 		"@modelcontextprotocol/sdk": "^1.30.0"
 	},
 	"devDependencies": {

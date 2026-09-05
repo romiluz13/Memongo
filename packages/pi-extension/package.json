@@ -26,7 +26,9 @@
 		]
 	},
 	"files": [
-		"extensions",
+		"extensions/index.ts",
+		"extensions/diagnostics.ts",
+		"extensions/lifecycle.ts",
 		"README.md"
 	],
 	"scripts": {
@@ -37,8 +39,8 @@
 		"prepublishOnly": "bun run build"
 	},
 	"dependencies": {
-		"@memongo/client": "^2.0.1",
-		"@memongo/tools": "^2.0.1"
+		"@memongo/client": "^2.1.0",
+		"@memongo/tools": "^2.1.0"
 	},
 	"peerDependencies": {
 		"@earendil-works/pi-ai": "*",
