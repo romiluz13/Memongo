@@ -1158,22 +1158,19 @@ describe("durable memory job leases (live MongoDB)", () => {
 		// jobId is agent-scoped, so the first agent's unique index can never
 		// swallow a peer agent's staging (one job per window per agent).
 		const peerAgentId = `${AGENT}-auto-consolidation-peer`
-		const peer = Object.assign(
-			Object.create(MongoDBMemoryManager.prototype),
-			{
-				db,
-				prefix: PREFIX,
-				agentId: peerAgentId,
-				chunkCount: 0,
-				memoryJobWorkerId: "worker-auto-consolidation-peer",
-				memoryJobWorkerStopped: false,
-				memoryJobWorkerActive: false,
-				memoryJobWakeRequested: false,
-				memoryJobWorkerPromise: Promise.resolve(),
-				memoryJobWorkerTimer: null,
-				memoryJobOperationContexts: new Map(),
-			},
-		) as MongoDBMemoryManager
+		const peer = Object.assign(Object.create(MongoDBMemoryManager.prototype), {
+			db,
+			prefix: PREFIX,
+			agentId: peerAgentId,
+			chunkCount: 0,
+			memoryJobWorkerId: "worker-auto-consolidation-peer",
+			memoryJobWorkerStopped: false,
+			memoryJobWorkerActive: false,
+			memoryJobWakeRequested: false,
+			memoryJobWorkerPromise: Promise.resolve(),
+			memoryJobWorkerTimer: null,
+			memoryJobOperationContexts: new Map(),
+		}) as MongoDBMemoryManager
 		await lifecycle.drainMemoryJobQueue.call(peer)
 
 		const peerJobId = `consolidation-auto-${peerAgentId}-${windowIndex}`

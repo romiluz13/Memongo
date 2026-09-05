@@ -691,7 +691,9 @@ export class MongoDBManagerJobsOps {
 	 * gate's rate limiter covers the whole agent, and the per-scope query
 	 * cache is invalidated exactly like the explicit consolidate() path.
 	 */
-	private async runClaimedConsolidationJob(job: ClaimedMemoryJob): Promise<void> {
+	private async runClaimedConsolidationJob(
+		job: ClaimedMemoryJob,
+	): Promise<void> {
 		const startedAt = new Date()
 		const heartbeatTimer = setInterval(() => {
 			renewMemoryJobLease({
@@ -750,9 +752,7 @@ export class MongoDBManagerJobsOps {
 				},
 			})
 			if (!completed) {
-				log.warn(
-					`consolidation job lease lost before completion: ${job.jobId}`,
-				)
+				log.warn(`consolidation job lease lost before completion: ${job.jobId}`)
 			}
 		} catch (err) {
 			try {

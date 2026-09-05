@@ -44,10 +44,7 @@ import {
 	deleteEntity,
 } from "./mongodb-graph.js"
 // v2 manager functions
-import {
-	searchV2,
-	getV2Status,
-} from "./mongodb-manager.js"
+import { searchV2, getV2Status } from "./mongodb-manager.js"
 // Legacy inline write+project primitive (e2e-only, WS-13 moved it off the
 // production surface)
 import { writeEventAndProject } from "./test-helpers/legacy-write-event.js"

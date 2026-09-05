@@ -1182,38 +1182,38 @@ describe("MongoDBMemoryManager background extraction", () => {
 		let finishEmptyClaim: ((value: null) => void) | undefined
 		let firstExtractionClaim = true
 		let extractionClaims = 0
-		mocked(claimMemoryJob).mockImplementation(
-			(async (params: { jobType: string }) => {
-				if (params.jobType === "consolidation") {
-					return null
-				}
-				if (firstExtractionClaim) {
-					firstExtractionClaim = false
-					return new Promise((resolve) => {
-						finishEmptyClaim = resolve
-					})
-				}
-				extractionClaims += 1
-				if (extractionClaims === 1) {
-					return {
-						jobId: "extraction-evt-late-wake",
-						jobType: "extraction",
-						agentId: "agent-1",
-						status: "running",
-						createdAt: new Date("2026-04-09T12:00:00.000Z"),
-						payload: { eventId: "evt-late-wake" },
-						attempts: 1,
-						leaseOwner: "worker-late-wake",
-						leaseToken: "lease-late-wake",
-						heartbeatAt: new Date("2026-04-09T12:00:01.000Z"),
-						leaseExpiresAt: new Date("2026-04-09T12:01:01.000Z"),
-					}
-				}
-				// P3.9: the worker claims up to K jobs per round, so further
-				// polls return null until the queue idles.
+		mocked(claimMemoryJob).mockImplementation((async (params: {
+			jobType: string
+		}) => {
+			if (params.jobType === "consolidation") {
 				return null
-			}) as never,
-		)
+			}
+			if (firstExtractionClaim) {
+				firstExtractionClaim = false
+				return new Promise((resolve) => {
+					finishEmptyClaim = resolve
+				})
+			}
+			extractionClaims += 1
+			if (extractionClaims === 1) {
+				return {
+					jobId: "extraction-evt-late-wake",
+					jobType: "extraction",
+					agentId: "agent-1",
+					status: "running",
+					createdAt: new Date("2026-04-09T12:00:00.000Z"),
+					payload: { eventId: "evt-late-wake" },
+					attempts: 1,
+					leaseOwner: "worker-late-wake",
+					leaseToken: "lease-late-wake",
+					heartbeatAt: new Date("2026-04-09T12:00:01.000Z"),
+					leaseExpiresAt: new Date("2026-04-09T12:01:01.000Z"),
+				}
+			}
+			// P3.9: the worker claims up to K jobs per round, so further
+			// polls return null until the queue idles.
+			return null
+		}) as never)
 		mocked(createMemoryJob).mockResolvedValue("extraction-evt-late-wake")
 		mocked(completeClaimedMemoryJob).mockResolvedValue(true)
 		mocked(eventsCollection).mockReturnValue({

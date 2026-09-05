@@ -947,7 +947,9 @@ export async function writeStructuredMemory(params: {
 					agentId: entry.agentId,
 					content,
 					status: "pending-review",
-					...(entry.scope ? { scope: entry.scope } : { scope: { $exists: false } }),
+					...(entry.scope
+						? { scope: entry.scope }
+						: { scope: { $exists: false } }),
 					...(entry.scopeRef
 						? { scopeRef: entry.scopeRef }
 						: { scopeRef: { $exists: false } }),

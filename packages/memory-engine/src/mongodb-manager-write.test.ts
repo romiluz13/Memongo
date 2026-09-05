@@ -73,7 +73,6 @@ vi.mock("./mongodb-telemetry.js", async () =>
 	(await import("./test-helpers/manager-test-kit.js")).telemetryModuleMock(),
 )
 
-
 describe("MongoDBMemoryManager write idempotency (P0.1)", () => {
 	beforeEach(() => {
 		vi.clearAllMocks()

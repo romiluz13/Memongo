@@ -30,10 +30,7 @@ import { getEventsByTimeRange } from "./mongodb-events.js"
 // v2 graph functions
 import { extractAndUpsertEntities } from "./mongodb-graph.js"
 // v2 event functions
-import {
-	MongoDBMemoryManager,
-	searchV2,
-} from "./mongodb-manager.js"
+import { MongoDBMemoryManager, searchV2 } from "./mongodb-manager.js"
 // Legacy inline write+project primitive (e2e-only, WS-13 moved it off the
 // production surface)
 import { writeEventAndProject } from "./test-helpers/legacy-write-event.js"

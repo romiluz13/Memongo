@@ -71,9 +71,7 @@ const log = createSubsystemLogger("memory:mongodb")
 export class MongoDBManagerLifecycleOps {
 	constructor(private readonly host: MongoDBManagerHost) {}
 
-	async writeStructuredMemory(
-		entry: StructuredMemoryEntry,
-	): Promise<{
+	async writeStructuredMemory(entry: StructuredMemoryEntry): Promise<{
 		upserted: boolean
 		id: string
 		/** C-008: true when the entry was quarantined instead of written. */

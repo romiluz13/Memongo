@@ -290,12 +290,12 @@ describe("mongodb-episodes", () => {
 					makeEventDocs(2, start) as never,
 				)
 				const countDocuments = vi.fn(async () => 5)
-				const findOverflow = vi
-					.fn()
-					.mockReturnValue({ toArray: vi.fn(async () => [
+				const findOverflow = vi.fn().mockReturnValue({
+					toArray: vi.fn(async () => [
 						{ episodeId: "ep-old-1" },
 						{ episodeId: "ep-old-2" },
-					]) })
+					]),
+				})
 				const deleteMany = vi.fn(async () => ({ deletedCount: 2 }))
 				const episodesCol = createMockCollection({
 					countDocuments,

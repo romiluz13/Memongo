@@ -25,7 +25,11 @@
 			"!docker",
 			"!**/docker",
 			"!droid-wiki",
-			"!**/droid-wiki"
+			"!**/droid-wiki",
+			"!.ddd",
+			"!**/.ddd",
+			"!tmp",
+			"!**/tmp"
 		]
 	},
 	"formatter": {
