@@ -52,7 +52,7 @@ This file is the compaction anchor: any future instance resumes from here.
 | WS-11 | C-018 | T3 | Admission control | LANDED fa0f19db62 (per-construct linkage repaired at WS-12; refutation independence OPEN) |
 | WS-12 | C-019 | T2 | Degradation vs healthy emptiness | LANDED b02c50635c (hash pinned by follow-up ledger commit) |
 | WS-13 | C-020..023 | T2,T2,T2,T2 | Lifecycle scheduling/dead letters | LANDED b175de6955 + artifacts (see session log) |
-| WS-14 | C-024 | T2 | Orphan detection all relation types | LANDED (see session log) |
+| WS-14 | C-024 | T2 | Orphan detection all relation types | LANDED d0184fc2b9 (hash pinned by follow-up ledger commit) |
 | WS-15 | C-025..028 | T1,T2,T1,T1 | Data-model mechanics | pending |
 | WS-16 | C-029..034 | T2,T1,T2,T0,T2,T1 | Retrieval quality/perf | pending |
 | WS-17 | C-035,036 | T2,T2 | kb cross-tenant read; pi opt-in | LANDED 96c8db28bb (see session log) |
