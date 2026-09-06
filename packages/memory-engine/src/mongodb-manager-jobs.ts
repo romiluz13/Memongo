@@ -32,6 +32,7 @@ import {
 	claimMemoryJob,
 	completeClaimedMemoryJob,
 	createMemoryJob,
+	deadLetterExpiredMemoryJobs,
 	failClaimedMemoryJob,
 	getMemoryJob,
 	renewMemoryJobLease,
@@ -46,7 +47,7 @@ import {
 	entitiesCollection,
 	memoryJobsCollection,
 } from "./mongodb-schema.js"
-import type { ClaimedMemoryJob } from "./types.js"
+import type { ClaimedMemoryJob, ConsolidationOptions } from "./types.js"
 import { createSubsystemLogger } from "@memongo/lib"
 import type { MemoryScope } from "@memongo/lib"
 
@@ -376,6 +377,14 @@ export class MongoDBManagerJobsOps {
 		})
 		let epochAdvanced = false
 		const leaseFence = async (stage: string): Promise<boolean> => {
+			// W19: force a FRESH server-side ownership proof at every fence —
+			// the periodic heartbeat's boolean could be a whole beat stale, and
+			// a worker whose lease was stolen between beats would otherwise
+			// pass the fence and mutate projections. heartbeat() queues a
+			// conditional renewal (jobId+agentId+leaseOwner+leaseToken+unexpired
+			// lease); awaiting heartbeatInFlight makes the fence read the result
+			// of THAT renewal, so a stolen lease fails here, before the stage.
+			heartbeat()
 			await heartbeatInFlight
 			if (leaseLost) {
 				log.warn(`extraction job lease lost before ${stage}: ${job.jobId}`)
@@ -687,6 +696,25 @@ export class MongoDBManagerJobsOps {
 		// pays one Date.now() comparison per drain and nothing else.
 		await this.host.pruneIdempotencyFingerprints()
 		await this.stageAutoConsolidationJob()
+		// W18: bound the crash/lease-expiry loop. Running rows whose lease
+		// expired with a spent attempt budget are no longer claimable; this
+		// sweep transitions them to visible dead letters (once per round,
+		// idempotent) instead of leaving them looping or stalled in running.
+		const deadLettered = await deadLetterExpiredMemoryJobs({
+			db: this.host.db,
+			prefix: this.host.prefix,
+			agentId: this.host.agentId,
+		}).catch((err: unknown) => {
+			log.warn(
+				`expired-lease dead-letter sweep failed: ${err instanceof Error ? err.message : String(err)}`,
+			)
+			return 0
+		})
+		if (deadLettered > 0) {
+			log.warn(
+				`dead-lettered ${deadLettered} lease-expired job(s) with a spent attempt budget`,
+			)
+		}
 		// P3.9: claim up to K jobs per round and process them concurrently.
 		// Claims stay sequential findOneAndUpdate CAS operations, so two
 		// rounds/workers can never claim the same job; lease fencing inside
@@ -739,33 +767,63 @@ export class MongoDBManagerJobsOps {
 			if (jobs.length === 0) {
 				break
 			}
-			const sessionFacts = await this.host.prefetchExtractionSessionFacts(jobs)
-			const stillOwned = await Promise.all(
-				jobs.map(async (job) => {
-					try {
-						const renewed = await renewMemoryJobLease({
-							db: this.host.db,
-							prefix: this.host.prefix,
-							jobId: job.jobId,
-							agentId: this.host.agentId,
-							leaseOwner: job.leaseOwner,
-							leaseToken: job.leaseToken,
-							leaseMs: MEMORY_JOB_LEASE_MS,
-						})
-						if (!renewed) {
-							log.warn(
-								`extraction job lease lost during session prefetch: ${job.jobId}`,
-							)
-						}
-						return renewed
-					} catch (err) {
+			// W18: heartbeat from claim until the runner takes over. The batched
+			// session-fact prefetch can outlast the lease (its provider timeout
+			// is configurable); renewing every claimed job's lease during it
+			// keeps ownership instead of paying for the prefetch and losing the
+			// claim to another worker. Cleared after the post-prefetch ownership
+			// revalidation — each dispatched runner starts its own heartbeat.
+			const prefetchHeartbeat = setInterval(() => {
+				for (const job of jobs) {
+					void renewMemoryJobLease({
+						db: this.host.db,
+						prefix: this.host.prefix,
+						jobId: job.jobId,
+						agentId: this.host.agentId,
+						leaseOwner: job.leaseOwner,
+						leaseToken: job.leaseToken,
+						leaseMs: MEMORY_JOB_LEASE_MS,
+					}).catch((err: unknown) => {
 						log.warn(
-							`extraction job ownership check failed after session prefetch: ${job.jobId}: ${String(err)}`,
+							`prefetch heartbeat failed for ${job.jobId}: ${err instanceof Error ? err.message : String(err)}`,
 						)
-						return false
-					}
-				}),
-			)
+					})
+				}
+			}, MEMORY_JOB_HEARTBEAT_MS)
+			prefetchHeartbeat.unref?.()
+			let sessionFacts: Map<string, string[]>
+			let stillOwned: boolean[]
+			try {
+				sessionFacts = await this.host.prefetchExtractionSessionFacts(jobs)
+				stillOwned = await Promise.all(
+					jobs.map(async (job) => {
+						try {
+							const renewed = await renewMemoryJobLease({
+								db: this.host.db,
+								prefix: this.host.prefix,
+								jobId: job.jobId,
+								agentId: this.host.agentId,
+								leaseOwner: job.leaseOwner,
+								leaseToken: job.leaseToken,
+								leaseMs: MEMORY_JOB_LEASE_MS,
+							})
+							if (!renewed) {
+								log.warn(
+									`extraction job lease lost during session prefetch: ${job.jobId}`,
+								)
+							}
+							return renewed
+						} catch (err) {
+							log.warn(
+								`extraction job ownership check failed after session prefetch: ${job.jobId}: ${String(err)}`,
+							)
+							return false
+						}
+					}),
+				)
+			} finally {
+				clearInterval(prefetchHeartbeat)
+			}
 			await Promise.all(
 				jobs.map((job, index) => {
 					if (!stillOwned[index]) {
@@ -875,6 +933,44 @@ export class MongoDBManagerJobsOps {
 	 * gate's rate limiter covers the whole agent, and the per-scope query
 	 * cache is invalidated exactly like the explicit consolidate() path.
 	 */
+	/**
+	 * W05: restore a consolidation job's caller options from stored
+	 * metadata. An explicit consolidate persists its params in metadata; a
+	 * worker retry (a failed explicit row, or any claim of work that
+	 * originated from an explicit run) must replay the ORIGINAL
+	 * scope/options instead of silently defaulting to agent scope.
+	 * Field-by-field validation — metadata is Record<string, unknown>.
+	 */
+	private static consolidationOptionsFromMetadata(
+		metadata: Record<string, unknown> | undefined,
+	): ConsolidationOptions | undefined {
+		if (!metadata) {
+			return undefined
+		}
+		const options: Record<string, unknown> = {}
+		if (typeof metadata.maxEvents === "number") {
+			options.maxEvents = metadata.maxEvents
+		}
+		if (typeof metadata.minCombinedScore === "number") {
+			options.minCombinedScore = metadata.minCombinedScore
+		}
+		if (typeof metadata.resolveContradictions === "boolean") {
+			options.resolveContradictions = metadata.resolveContradictions
+		}
+		if (typeof metadata.llmDedup === "boolean") {
+			options.llmDedup = metadata.llmDedup
+		}
+		if (typeof metadata.scope === "string") {
+			options.scope = metadata.scope as MemoryScope
+		}
+		if (typeof metadata.scopeRef === "string") {
+			options.scopeRef = metadata.scopeRef
+		}
+		return Object.keys(options).length > 0
+			? (options as ConsolidationOptions)
+			: undefined
+	}
+
 	private async runClaimedConsolidationJob(
 		job: ClaimedMemoryJob,
 		epochAtClaim: number | null,
@@ -926,21 +1022,31 @@ export class MongoDBManagerJobsOps {
 		}, MEMORY_JOB_HEARTBEAT_MS)
 		heartbeatTimer.unref?.()
 		try {
+			// W05: replay the ORIGINAL caller options (explicit consolidate
+			// persists them in metadata) instead of defaulting to agent scope —
+			// a retried scoped consolidation must stay scoped.
+			const storedOptions =
+				MongoDBManagerJobsOps.consolidationOptionsFromMetadata(job.metadata)
 			const result = await consolidateMemory({
 				db: this.host.db,
 				prefix: this.host.prefix,
 				agentId: this.host.agentId,
+				...(storedOptions ? { options: storedOptions } : {}),
 			})
+			const invalidatedScope = storedOptions?.scope ?? "agent"
+			const invalidatedScopeRef =
+				storedOptions?.scopeRef ??
+				resolveScopeRef({
+					scope: invalidatedScope,
+					agentId: this.host.agentId,
+					workspaceDir: this.host.workspaceDir,
+				})
 			await invalidateQueryCache({
 				db: this.host.db,
 				prefix: this.host.prefix,
 				agentId: this.host.agentId,
-				scope: "agent",
-				scopeRef: resolveScopeRef({
-					scope: "agent",
-					agentId: this.host.agentId,
-					workspaceDir: this.host.workspaceDir,
-				}),
+				scope: invalidatedScope,
+				scopeRef: invalidatedScopeRef,
 			}).catch((err) => {
 				log.warn(
 					`query cache invalidation after consolidation failed: ${err instanceof Error ? err.message : String(err)}`,

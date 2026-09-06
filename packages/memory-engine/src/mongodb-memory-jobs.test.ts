@@ -134,8 +134,21 @@ describe("mongodb-memory-jobs", () => {
 				jobType: "extraction",
 				$or: [
 					{ status: "pending", stagedAt: { $exists: false } },
-					{ status: "running", leaseExpiresAt: { $lte: now } },
-					{ status: "running", leaseExpiresAt: { $exists: false } },
+					// W05: tracking rows (live synchronous runs) are excluded from
+					// reclamation even when lease-less. W18: reclaiming abandoned
+					// running work is bounded by the attempt budget.
+					{
+						status: "running",
+						leaseExpiresAt: { $lte: now },
+						attempts: { $lt: MEMORY_JOB_MAX_ATTEMPTS },
+						tracking: { $ne: true },
+					},
+					{
+						status: "running",
+						leaseExpiresAt: { $exists: false },
+						attempts: { $lt: MEMORY_JOB_MAX_ATTEMPTS },
+						tracking: { $ne: true },
+					},
 					// C4: a failed job stays claimable until its attempt budget is
 					// spent, so a transient failure no longer discards the work.
 					{
@@ -166,6 +179,61 @@ describe("mongodb-memory-jobs", () => {
 				returnDocument: "after",
 				writeConcern: { w: "majority", wtimeoutMS: 5_000 },
 			}),
+		)
+	})
+
+	it("dead-letters lease-expired running rows with a spent attempt budget (W18)", async () => {
+		const { deadLetterExpiredMemoryJobs, MEMORY_JOB_MAX_ATTEMPTS } =
+			await import("./mongodb-memory-jobs.js")
+		const now = new Date("2026-07-23T00:00:00.000Z")
+		const updateMany = vi.fn(async () => ({ modifiedCount: 2 }) as UpdateResult)
+		const db = mockDb({
+			test_memory_jobs: mockCollection({ updateMany }),
+		})
+
+		await expect(
+			deadLetterExpiredMemoryJobs({
+				db,
+				prefix: "test_",
+				agentId: "agent-1",
+				jobType: "extraction",
+				now,
+			}),
+		).resolves.toBe(2)
+
+		expect(updateMany).toHaveBeenCalledWith(
+			{
+				agentId: "agent-1",
+				jobType: "extraction",
+				status: "running",
+				attempts: { $gte: MEMORY_JOB_MAX_ATTEMPTS },
+				// W05: live synchronous tracking rows keep their own terminal
+				// ownership; the sweep must not touch them even though they carry
+				// no lease.
+				tracking: { $ne: true },
+				$or: [
+					{ leaseExpiresAt: { $lte: now } },
+					{ leaseExpiresAt: { $exists: false } },
+				],
+			},
+			{
+				$set: {
+					status: "failed",
+					deadLetterAt: now,
+					error: "lease-expiry retry budget exhausted",
+				},
+				$unset: {
+					leaseOwner: "",
+					leaseToken: "",
+					leaseExpiresAt: "",
+					heartbeatAt: "",
+					retryAt: "",
+					completedAt: "",
+				},
+			},
+			// Majority write concern: a dead letter is a decision (the row leaves
+			// `running` forever), so it must survive a failover.
+			{ writeConcern: { w: "majority", wtimeoutMS: 5_000 } },
 		)
 	})
 

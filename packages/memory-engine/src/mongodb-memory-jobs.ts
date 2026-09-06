@@ -162,11 +162,30 @@ export async function claimMemoryJob(params: {
 			jobType: params.jobType,
 			$or: [
 				{ status: "pending", stagedAt: { $exists: false } },
-				{ status: "running", leaseExpiresAt: { $lte: now } },
-				{ status: "running", leaseExpiresAt: { $exists: false } },
+				// W05: a running row marked `tracking: true` is a LIVE synchronous
+				// run's audit row (explicit consolidate), not queued work — never
+				// claimable, even lease-less. Legacy pre-lease rows (no tracking
+				// field) remain reclaimable as abandoned.
+				// W18: reclaiming lease-expired (or lease-less) running work is
+				// bounded by the same attempt budget as failed retries, so a
+				// crash/lease-expiry loop cannot pay for work forever.
+				{
+					status: "running",
+					leaseExpiresAt: { $lte: now },
+					attempts: { $lt: MEMORY_JOB_MAX_ATTEMPTS },
+					tracking: { $ne: true },
+				},
+				{
+					status: "running",
+					leaseExpiresAt: { $exists: false },
+					attempts: { $lt: MEMORY_JOB_MAX_ATTEMPTS },
+					tracking: { $ne: true },
+				},
 				// A failed job is retried until it exhausts its attempt budget,
 				// after which it stays failed as an explicit dead letter. Jobs that
-				// failed before retryAt existed are eligible immediately.
+				// failed before retryAt existed are eligible immediately. A failed
+				// explicit run keeps its caller options in metadata; the
+				// consolidation runner restores them (W05).
 				{
 					status: "failed",
 					attempts: { $lt: MEMORY_JOB_MAX_ATTEMPTS },
@@ -195,6 +214,62 @@ export async function claimMemoryJob(params: {
 		},
 	)
 	return (claimed as ClaimedMemoryJob | null) ?? null
+}
+
+/**
+ * W18: bound the crash/lease-expiry retry loop. A running row whose lease
+ * expired (or was never set) and whose attempt budget is spent can no longer
+ * be claimed; without this sweep it would sit in `running` forever, invisible
+ * to the failed/dead-letter status counts. The sweep transitions exactly
+ * those rows to the same dead-letter shape finishClaimedMemoryJob writes
+ * (failed + deadLetterAt, no completedAt so the completed-TTL index keeps the
+ * row visible for operator action, lease fields cleared). Idempotent by
+ * construction: transitioned rows leave the `running` state, so a re-run
+ * matches nothing — updateMany is for idempotent operations per the manual.
+ * Live synchronous tracking rows (W05) are excluded: their runner owns its
+ * own terminal transition.
+ */
+export async function deadLetterExpiredMemoryJobs(params: {
+	db: Db
+	prefix: string
+	agentId: string
+	jobType?: MemoryJobType
+	now?: Date
+}): Promise<number> {
+	const now = params.now ?? new Date()
+	const result = await memoryJobsCollection(
+		params.db,
+		params.prefix,
+	).updateMany(
+		{
+			agentId: params.agentId,
+			...(params.jobType ? { jobType: params.jobType } : {}),
+			status: "running",
+			attempts: { $gte: MEMORY_JOB_MAX_ATTEMPTS },
+			tracking: { $ne: true },
+			$or: [
+				{ leaseExpiresAt: { $lte: now } },
+				{ leaseExpiresAt: { $exists: false } },
+			],
+		},
+		{
+			$set: {
+				status: "failed",
+				deadLetterAt: now,
+				error: "lease-expiry retry budget exhausted",
+			},
+			$unset: {
+				leaseOwner: "",
+				leaseToken: "",
+				leaseExpiresAt: "",
+				heartbeatAt: "",
+				retryAt: "",
+				completedAt: "",
+			},
+		},
+		{ writeConcern: DURABLE_JOB_WRITE_CONCERN },
+	)
+	return result.modifiedCount ?? 0
 }
 
 export async function renewMemoryJobLease(params: {

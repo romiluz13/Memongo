@@ -702,15 +702,14 @@ describe("P3.9 extraction worker concurrency + session-batched LLM", () => {
 				.mockResolvedValueOnce(makeExtractionJob("evt-fenced"))
 				.mockResolvedValueOnce(makeExtractionJob("evt-healthy"))
 				.mockResolvedValue(null)
-			// Both jobs pass the post-prefetch ownership check. The fenced job
-			// then loses its lease on the first in-run heartbeat.
-			const renewalsByJob = new Map<string, number>()
+			// Both jobs pass every ownership fence (post-prefetch
+			// revalidation plus the per-stage W19 fences) until both are
+			// mid-promotion; the fenced job then loses its lease on the first
+			// in-run heartbeat. Flipping on `started` keeps the script
+			// independent of how many fences run before promotion.
 			mocked(renewMemoryJobLease).mockImplementation(
-				async ({ jobId }: { jobId: string }) => {
-					const renewal = (renewalsByJob.get(jobId) ?? 0) + 1
-					renewalsByJob.set(jobId, renewal)
-					return jobId !== "extraction-evt-fenced" || renewal === 1
-				},
+				async ({ jobId }: { jobId: string }) =>
+					jobId !== "extraction-evt-fenced" || started.length < 2,
 			)
 			const started: string[] = []
 			let releaseGate: (() => void) | undefined
@@ -892,20 +891,26 @@ describe("C3: typed-relation failure surfacing", () => {
 				extractAndUpsertTypedRelations,
 			} = await primeExtractionJob()
 			const { entitiesCollection } = await import("./mongodb-schema.js")
-			mocked(renewMemoryJobLease)
-				.mockResolvedValueOnce(true)
-				.mockResolvedValue(false)
 			let releaseEntities: (() => void) | undefined
 			const entityGate = new Promise<void>((resolve) => {
 				releaseEntities = resolve
 			})
+			// The job passes every ownership fence until it is inside the
+			// gated entity load for typed relations, then loses its lease on
+			// the in-run heartbeat. Flipping on the load start keeps the
+			// script independent of how many fences run before it.
+			let entitiesLoadStarted = false
 			const toArray = vi.fn(async () => {
+				entitiesLoadStarted = true
 				await entityGate
 				return [
 					{ entityId: "ent-alice", name: "Alice" },
 					{ entityId: "ent-bob", name: "Bob" },
 				]
 			})
+			mocked(renewMemoryJobLease).mockImplementation(
+				async () => !entitiesLoadStarted,
+			)
 			mocked(entitiesCollection).mockReturnValue({
 				find: vi.fn(() => ({ toArray })),
 			} as unknown as import("mongodb").Collection)

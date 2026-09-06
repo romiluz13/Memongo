@@ -115,6 +115,63 @@ describe("MongoDBMemoryManager consolidate job tracking", () => {
 			scopeRef: "agent:agent-1",
 		})
 	})
+	it("marks the explicit consolidate run's row as tracking a live synchronous run (W05)", async () => {
+		const { createMemoryJob } = await import("./mongodb-memory-jobs.js")
+		const { consolidateMemory } = await import("./mongodb-consolidator.js")
+		mocked(createMemoryJob).mockResolvedValue("job-w05-tracking")
+		mocked(consolidateMemory).mockResolvedValue({
+			runId: "run-w05",
+			eventsProcessed: 3,
+			factsPromoted: 2,
+			factsPruned: 0,
+			conflictsResolved: 0,
+			durationMs: 25,
+		})
+		const manager = Object.assign(
+			Object.create(MongoDBMemoryManager.prototype),
+			{
+				db: {} as import("mongodb").Db,
+				prefix: "test_",
+				agentId: "agent-1",
+			},
+		) as MongoDBMemoryManager
+		await manager.consolidate({
+			maxEvents: 10,
+			llmDedup: true,
+			scope: "workspace",
+			scopeRef: "workspace:ws-9",
+		})
+		// The row is RUNNING with NO lease — exactly the shape the claim filter
+		// used to treat as abandoned work. The tracking marker plus persisted
+		// caller options make it nonclaimable-by-the-worker while giving a
+		// later legitimate retry (failed with budget left) its original scope.
+		expect(createMemoryJob).toHaveBeenCalledWith(
+			expect.objectContaining({
+				job: expect.objectContaining({
+					jobType: "consolidation",
+					status: "running",
+					tracking: true,
+					metadata: {
+						maxEvents: 10,
+						llmDedup: true,
+						scope: "workspace",
+						scopeRef: "workspace:ws-9",
+					},
+				}),
+			}),
+		)
+		// The synchronous run replays the caller's own options.
+		expect(consolidateMemory).toHaveBeenCalledWith(
+			expect.objectContaining({
+				options: {
+					maxEvents: 10,
+					llmDedup: true,
+					scope: "workspace",
+					scopeRef: "workspace:ws-9",
+				},
+			}),
+		)
+	})
 
 	it("preserves the original consolidation error when failed job update also fails", async () => {
 		const { createMemoryJob, updateMemoryJob } = await import(

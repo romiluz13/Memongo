@@ -835,9 +835,7 @@ export async function recallConversation(params: {
 	// Denial degrades to the text-only standard lane and marks the response
 	// — never an unexplained empty.
 	const admission =
-		queryText && capabilities.vectorSearch
-			? tryConsumeSearchAdmission()
-			: null
+		queryText && capabilities.vectorSearch ? tryConsumeSearchAdmission() : null
 	const admissionDenied = admission != null && !admission.ok
 	if (admissionDenied && admission) {
 		emitTelemetry(params.db, params.prefix, {
@@ -913,7 +911,12 @@ export async function recallConversation(params: {
 		}
 	}
 
-	if (queryText && !admissionDenied && results.length === 0 && capabilities.vectorSearch) {
+	if (
+		queryText &&
+		!admissionDenied &&
+		results.length === 0 &&
+		capabilities.vectorSearch
+	) {
 		try {
 			results = await semanticRecall({
 				collection,

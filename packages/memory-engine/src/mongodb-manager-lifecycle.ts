@@ -612,6 +612,12 @@ export class MongoDBManagerLifecycleOps {
 					agentId: this.host.agentId,
 					status: "running",
 					startedAt,
+					// W05: this row TRACKS a live synchronous run — it is not
+					// queued work. The marker keeps the standing worker's claim
+					// filter from reclassifying it as abandoned (running without a
+					// lease) and stealing the run; this method owns the row's
+					// terminal transition below.
+					tracking: true,
 					metadata: params ? { ...params } : undefined,
 				},
 			})

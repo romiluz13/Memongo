@@ -369,6 +369,9 @@ export function memoryJobsModuleMock() {
 		completeClaimedMemoryJob: vi.fn(),
 		createMemoryJob: vi.fn(),
 		createMemoryJobsBatch: vi.fn(),
+		// W18: the drain loop calls this every round; default to "nothing to
+		// sweep" so untouched tests keep passing.
+		deadLetterExpiredMemoryJobs: vi.fn(async () => 0),
 		failClaimedMemoryJob: vi.fn(),
 		getMemoryJob: vi.fn(),
 		listMemoryJobs: vi.fn(),

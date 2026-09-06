@@ -611,7 +611,14 @@ describe("MongoDBMemoryManager background extraction", () => {
 					leaseExpiresAt: new Date("2026-04-09T12:01:00.000Z"),
 				})
 				.mockResolvedValueOnce(null)
+			// W19: every stage fence now forces its own server-side renewal, so
+			// the renewal chain is: post-prefetch revalidation, entity-stage
+			// fence, promote-stage fence (all healthy while promotion runs),
+			// then the lease is LOST — the periodic beat during the gated
+			// promotion and the terminal-stage fence both see it gone.
 			mocked(renewMemoryJobLease)
+				.mockResolvedValueOnce(true)
+				.mockResolvedValueOnce(true)
 				.mockResolvedValueOnce(true)
 				.mockResolvedValue(false)
 			mocked(eventsCollection).mockReturnValue({
@@ -713,7 +720,14 @@ describe("MongoDBMemoryManager background extraction", () => {
 					leaseExpiresAt: new Date("2026-04-09T12:01:01.000Z"),
 				})
 				.mockResolvedValueOnce(null)
+			// W19: every stage fence forces its own server-side renewal —
+			// post-prefetch revalidation, entity-stage fence, and promote-stage
+			// fence all succeed while the promotion runs; the renewal outcome
+			// then becomes UNKNOWN (rejection) during the gated promotion, and
+			// both the beat's catch and the terminal-stage fence fail closed.
 			mocked(renewMemoryJobLease)
+				.mockResolvedValueOnce(true)
+				.mockResolvedValueOnce(true)
 				.mockResolvedValueOnce(true)
 				.mockRejectedValue(new Error("heartbeat outcome unknown"))
 			mocked(eventsCollection).mockReturnValue({
@@ -969,6 +983,362 @@ describe("MongoDBMemoryManager background extraction", () => {
 		} finally {
 			vi.useRealTimers()
 		}
+	})
+	it("abandons the job when the fence's forced renewal discovers a stolen lease with no periodic beat fired (W19)", async () => {
+		vi.useFakeTimers()
+		try {
+			const {
+				claimMemoryJob,
+				completeClaimedMemoryJob,
+				createMemoryJob,
+				failClaimedMemoryJob,
+				renewMemoryJobLease,
+			} = await import("./mongodb-memory-jobs.js")
+			const { eventsCollection } = await import("./mongodb-schema.js")
+			const { extractAndUpsertEntities } = await import("./mongodb-graph.js")
+			const { promoteDerivedMemoryFromEvent } = await import(
+				"./mongodb-derived-memory.js"
+			)
+			const { getPendingExtractionEvents } = await import("./mongodb-events.js")
+			// The worker's outbox-repair pass runs before claiming: keep it empty
+			// so no residue from earlier tests' persisted mocks drives writes.
+			mocked(getPendingExtractionEvents).mockResolvedValue([])
+			mocked(createMemoryJob).mockResolvedValue("extraction-evt-w19")
+			mocked(claimMemoryJob)
+				.mockResolvedValueOnce({
+					jobId: "extraction-evt-w19",
+					jobType: "extraction",
+					agentId: "agent-1",
+					status: "running",
+					createdAt: new Date("2026-04-09T12:00:00.000Z"),
+					payload: { eventId: "evt-w19" },
+					attempts: 1,
+					leaseOwner: "worker-w19",
+					leaseToken: "lease-w19",
+					heartbeatAt: new Date("2026-04-09T12:00:00.000Z"),
+					leaseExpiresAt: new Date("2026-04-09T12:01:00.000Z"),
+				})
+				.mockResolvedValueOnce(null)
+			// No timer is advanced in this test, so NO periodic heartbeat beat
+			// ever fires: the in-memory `leaseLost` boolean is still false and
+			// `heartbeatInFlight` is a long-resolved promise. Renewal #1 is the
+			// post-prefetch ownership revalidation (passes); renewal #2 is the
+			// fence's FORCED server-side proof — the lease was stolen between
+			// the claim and the first side-effecting stage, and only the forced
+			// renewal can see it.
+			mocked(renewMemoryJobLease)
+				.mockResolvedValueOnce(true)
+				.mockResolvedValue(false)
+			mocked(eventsCollection).mockReturnValue({
+				findOne: vi.fn(async () => ({
+					eventId: "evt-w19",
+					agentId: "agent-1",
+					role: "user",
+					body: "A stolen lease must not pass a stale-boolean fence.",
+					timestamp: new Date("2026-04-09T12:00:00.000Z"),
+					scope: "agent",
+					scopeRef: "agent:agent-1",
+				})),
+			} as unknown as import("mongodb").Collection)
+
+			const manager = Object.assign(
+				Object.create(MongoDBMemoryManager.prototype),
+				{
+					db: {} as import("mongodb").Db,
+					prefix: "test_",
+					agentId: "agent-1",
+					client: undefined,
+					config: { mongodb: { embeddingMode: "automated" } },
+					workspaceDir: "/tmp/memongo",
+					memoryJobWorkerId: "worker-w19",
+					memoryJobWorkerStopped: false,
+					memoryJobWorkerActive: false,
+					memoryJobWorkerPromise: Promise.resolve(),
+					memoryJobOperationContexts: new Map(),
+				},
+			) as MongoDBMemoryManager & { memoryJobWorkerPromise: Promise<void> }
+
+			await manager.extractEvent({ eventId: "evt-w19" })
+			await manager.memoryJobWorkerPromise
+
+			// Exactly two server-side ownership proofs: the post-prefetch
+			// revalidation, then the fence's forced renewal that caught the
+			// theft. The fence did NOT trust the stale boolean.
+			expect(renewMemoryJobLease).toHaveBeenCalledTimes(2)
+			expect(extractAndUpsertEntities).not.toHaveBeenCalled()
+			expect(promoteDerivedMemoryFromEvent).not.toHaveBeenCalled()
+			expect(completeClaimedMemoryJob).not.toHaveBeenCalled()
+			expect(failClaimedMemoryJob).not.toHaveBeenCalled()
+		} finally {
+			vi.useRealTimers()
+		}
+	})
+	it("renews claimed leases during a long session prefetch and stops after (W18)", async () => {
+		vi.useFakeTimers()
+		try {
+			const { claimMemoryJob, completeClaimedMemoryJob, renewMemoryJobLease } =
+				await import("./mongodb-memory-jobs.js")
+			const { eventsCollection } = await import("./mongodb-schema.js")
+			const { extractAndUpsertEntities } = await import("./mongodb-graph.js")
+			const { promoteDerivedMemoryFromEvent } = await import(
+				"./mongodb-derived-memory.js"
+			)
+			const { getPendingExtractionEvents } = await import("./mongodb-events.js")
+			mocked(getPendingExtractionEvents).mockResolvedValue([])
+			const job = (eventId: string, jobId: string) => ({
+				jobId,
+				jobType: "extraction" as const,
+				agentId: "agent-1",
+				status: "running" as const,
+				createdAt: new Date("2026-04-09T12:00:00.000Z"),
+				payload: { eventId, scope: "agent", scopeRef: "agent:agent-1" },
+				attempts: 1,
+				leaseOwner: "worker-w18",
+				leaseToken: `lease-${jobId}`,
+				heartbeatAt: new Date("2026-04-09T12:00:00.000Z"),
+				leaseExpiresAt: new Date("2026-04-09T12:01:00.000Z"),
+			})
+			let extractionClaims = 0
+			mocked(claimMemoryJob).mockImplementation((async (params: {
+				jobType: string
+			}) => {
+				if (params.jobType === "consolidation") {
+					return null
+				}
+				extractionClaims += 1
+				if (extractionClaims === 1) {
+					return job("evt-hb-1", "extraction-evt-hb-1")
+				}
+				if (extractionClaims === 2) {
+					return job("evt-hb-2", "extraction-evt-hb-2")
+				}
+				return null
+			}) as never)
+			mocked(renewMemoryJobLease).mockResolvedValue(true)
+			mocked(eventsCollection).mockReturnValue({
+				findOne: vi.fn(async (filter?: { eventId?: string }) =>
+					filter?.eventId === "evt-hb-2"
+						? {
+								eventId: "evt-hb-2",
+								agentId: "agent-1",
+								role: "user",
+								body: "Second claimed event of the prefetch round.",
+								timestamp: new Date("2026-04-09T12:00:00.000Z"),
+								scope: "agent",
+								scopeRef: "agent:agent-1",
+							}
+						: {
+								eventId: "evt-hb-1",
+								agentId: "agent-1",
+								role: "user",
+								body: "First claimed event of the prefetch round.",
+								timestamp: new Date("2026-04-09T12:00:00.000Z"),
+								scope: "agent",
+								scopeRef: "agent:agent-1",
+							},
+				),
+			} as unknown as import("mongodb").Collection)
+			mocked(extractAndUpsertEntities).mockResolvedValue({
+				entities: [],
+				relationsCreated: 0,
+			})
+			mocked(promoteDerivedMemoryFromEvent).mockResolvedValue({
+				structuredCreated: 0,
+				proceduresCreated: 0,
+				skipped: false,
+			})
+			mocked(completeClaimedMemoryJob).mockResolvedValue(true)
+
+			const manager = Object.assign(
+				Object.create(MongoDBMemoryManager.prototype),
+				{
+					db: {} as import("mongodb").Db,
+					prefix: "test_",
+					agentId: "agent-1",
+					client: undefined,
+					config: { mongodb: { embeddingMode: "automated" } },
+					workspaceDir: "/tmp/memongo",
+					memoryJobWorkerId: "worker-w18",
+					memoryJobWorkerStopped: false,
+					memoryJobWorkerActive: false,
+					memoryJobWorkerPromise: Promise.resolve(),
+					memoryJobOperationContexts: new Map(),
+				},
+			) as MongoDBMemoryManager & { memoryJobWorkerPromise: Promise<void> }
+
+			// Hold the batched prefetch open (2+ claimed jobs make it real):
+			// its duration is ours to control, standing in for a slow provider.
+			let finishPrefetch: ((value: Map<string, string[]>) => void) | undefined
+			const prefetchGate = new Promise<Map<string, string[]>>((resolve) => {
+				finishPrefetch = resolve
+			})
+			const prefetchSpy = vi
+				.spyOn(
+					manager as unknown as {
+						prefetchExtractionSessionFacts: (
+							jobs: unknown[],
+						) => Promise<Map<string, string[]>>
+					},
+					"prefetchExtractionSessionFacts",
+				)
+				.mockImplementation(() => prefetchGate)
+
+			const lifecycle = MongoDBMemoryManager.prototype as unknown as {
+				wakeMemoryJobWorker: (this: MongoDBMemoryManager) => void
+			}
+			lifecycle.wakeMemoryJobWorker.call(manager)
+			// Microtask-flush until the round has claimed both jobs and its
+			// batch-end poll (3 extraction claims) — the drain is now parked
+			// inside the gated prefetch.
+			for (
+				let i = 0;
+				i < 200 && mocked(claimMemoryJob).mock.calls.length < 3;
+				i += 1
+			) {
+				await Promise.resolve()
+			}
+			expect(claimMemoryJob).toHaveBeenCalledTimes(3)
+
+			// A full lease period passes while the prefetch is still in flight:
+			// the prefetch heartbeat renews BOTH claimed jobs server-side, so
+			// the round does not pay for the prefetch and lose the claims.
+			await vi.advanceTimersByTimeAsync(20_000)
+			const renewedJobIds = new Set(
+				mocked(renewMemoryJobLease).mock.calls.map(([params]) => params?.jobId),
+			)
+			expect(renewedJobIds).toContain("extraction-evt-hb-1")
+			expect(renewedJobIds).toContain("extraction-evt-hb-2")
+
+			finishPrefetch?.(new Map())
+			for (
+				let i = 0;
+				i < 500 && mocked(completeClaimedMemoryJob).mock.calls.length < 2;
+				i += 1
+			) {
+				await Promise.resolve()
+			}
+			await manager.memoryJobWorkerPromise
+			expect(completeClaimedMemoryJob).toHaveBeenCalledTimes(2)
+
+			// Both the prefetch heartbeat and the runners' heartbeat timers are
+			// cleared: further lease periods produce no renewals.
+			const renewalsAfterRun = mocked(renewMemoryJobLease).mock.calls.length
+			await vi.advanceTimersByTimeAsync(60_000)
+			expect(mocked(renewMemoryJobLease).mock.calls.length).toBe(
+				renewalsAfterRun,
+			)
+			prefetchSpy.mockRestore()
+		} finally {
+			vi.useRealTimers()
+		}
+	})
+	it("replays a claimed consolidation job's stored caller options and scope (W05)", async () => {
+		const { claimMemoryJob, completeClaimedMemoryJob } = await import(
+			"./mongodb-memory-jobs.js"
+		)
+		const { consolidateMemory } = await import("./mongodb-consolidator.js")
+		const { invalidateQueryCache } = await import("./mongodb-query-cache.js")
+		const { getPendingExtractionEvents } = await import("./mongodb-events.js")
+		mocked(getPendingExtractionEvents).mockResolvedValue([])
+		// An explicit consolidate() created this row with tracking + caller
+		// options in metadata, then failed mid-run with budget left. The
+		// worker's claim retry must replay the ORIGINAL options — not default
+		// to agent scope.
+		let consolidationClaims = 0
+		mocked(claimMemoryJob).mockImplementation((async (params: {
+			jobType: string
+		}) => {
+			if (params.jobType !== "consolidation") {
+				return null
+			}
+			consolidationClaims += 1
+			if (consolidationClaims === 1) {
+				return {
+					jobId: "consolidation-explicit-1",
+					jobType: "consolidation",
+					agentId: "agent-1",
+					status: "running",
+					createdAt: new Date("2026-04-09T12:00:00.000Z"),
+					startedAt: new Date("2026-04-09T12:00:01.000Z"),
+					attempts: 2,
+					leaseOwner: "worker-w05",
+					leaseToken: "lease-w05",
+					heartbeatAt: new Date("2026-04-09T12:00:01.000Z"),
+					leaseExpiresAt: new Date("2026-04-09T12:01:01.000Z"),
+					metadata: {
+						scope: "workspace",
+						scopeRef: "workspace:ws-9",
+						maxEvents: 5,
+						minCombinedScore: 0.4,
+						resolveContradictions: false,
+						llmDedup: true,
+					},
+				}
+			}
+			return null
+		}) as never)
+		mocked(consolidateMemory).mockResolvedValue({
+			runId: "cons-run-w05",
+			eventsProcessed: 5,
+			factsPromoted: 2,
+			factsPruned: 1,
+			conflictsResolved: 0,
+			durationMs: 42,
+		})
+		mocked(invalidateQueryCache).mockResolvedValue(undefined)
+		mocked(completeClaimedMemoryJob).mockResolvedValue(true)
+
+		const manager = Object.assign(
+			Object.create(MongoDBMemoryManager.prototype),
+			{
+				db: {} as import("mongodb").Db,
+				prefix: "test_",
+				agentId: "agent-1",
+				client: undefined,
+				config: { mongodb: { embeddingMode: "automated" } },
+				workspaceDir: "/tmp/memongo",
+				memoryJobWorkerId: "worker-w05",
+				memoryJobWorkerStopped: false,
+				memoryJobWorkerActive: false,
+				memoryJobWorkerPromise: Promise.resolve(),
+				memoryJobOperationContexts: new Map(),
+			},
+		) as MongoDBMemoryManager & { memoryJobWorkerPromise: Promise<void> }
+		const lifecycle = MongoDBMemoryManager.prototype as unknown as {
+			wakeMemoryJobWorker: (this: MongoDBMemoryManager) => void
+		}
+
+		lifecycle.wakeMemoryJobWorker.call(manager)
+		await manager.memoryJobWorkerPromise
+
+		// The run replays the stored options verbatim...
+		expect(consolidateMemory).toHaveBeenCalledWith(
+			expect.objectContaining({
+				prefix: "test_",
+				agentId: "agent-1",
+				options: {
+					scope: "workspace",
+					scopeRef: "workspace:ws-9",
+					maxEvents: 5,
+					minCombinedScore: 0.4,
+					resolveContradictions: false,
+					llmDedup: true,
+				},
+			}),
+		)
+		// ...and the cache invalidation targets the STORED scope, not agent.
+		expect(invalidateQueryCache).toHaveBeenCalledWith(
+			expect.objectContaining({
+				scope: "workspace",
+				scopeRef: "workspace:ws-9",
+			}),
+		)
+		expect(completeClaimedMemoryJob).toHaveBeenCalledWith(
+			expect.objectContaining({
+				jobId: "consolidation-explicit-1",
+				metadata: expect.objectContaining({ runId: "cons-run-w05" }),
+			}),
+		)
 	})
 
 	it("waits for an active durable extraction before closing MongoDB", async () => {

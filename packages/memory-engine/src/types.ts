@@ -969,6 +969,13 @@ export type MemoryJob = {
 	leaseToken?: string
 	leaseExpiresAt?: Date
 	heartbeatAt?: Date
+	/**
+	 * W05: set on rows that TRACK a live synchronous run (explicit
+	 * consolidate) rather than queueing work. Nonclaimable by the worker's
+	 * claim filter and excluded from the expired-lease dead-letter sweep;
+	 * the synchronous runner owns the row's terminal transition.
+	 */
+	tracking?: boolean
 }
 
 export type ClaimedMemoryJob = MemoryJob & {
