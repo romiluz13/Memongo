@@ -2003,7 +2003,7 @@ describe.skipIf(!HAS_REAL_EMBEDDINGS)("Phase G: Access Tracking", () => {
 		try {
 			// Record 15 accesses (should auto-flush at 5 and 10, then manual flush for last 5)
 			for (let i = 0; i < 15; i++) {
-				tracker.recordAccess(targetEventId, "events")
+				tracker.recordAccess({ collection: "events", id: targetEventId })
 			}
 			// Ensure final flush
 			await tracker.flush()

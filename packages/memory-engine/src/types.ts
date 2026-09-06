@@ -1659,6 +1659,41 @@ export type AccessEventDocument = {
 	 */
 	memoryId: string
 	count: number
+	/**
+	 * W01: identity beyond the short id so a raw access record carries the
+	 * complete handle of the accessed row. Top-level like `memoryId` —
+	 * `scopeRef` is high-cardinality and must stay out of `meta` (see L6).
+	 */
+	scope?: string
+	scopeRef?: string
+	type?: string
+}
+
+/**
+ * W01: full identity of one accessed memory row. The canonical access update
+ * targets the collection's unique compound index, so every member of that
+ * index the tracker cannot derive itself (its own agentId, the primary id)
+ * must travel with the access record. Under-specified identities never
+ * produce a canonical update — the tracker skips them rather than guess.
+ */
+export type AccessRecordTarget = {
+	collection: AccessEventCollection
+	/**
+	 * Per-collection primary id: eventId (events), key (structured_mem),
+	 * procedureId (procedures), episodeId (episodes), entityId (entities),
+	 * or the relation locator `from:type:to` (relations).
+	 */
+	id: string
+	/** Owning scope; required for scope-bearing unique identities. */
+	scope?: string
+	/** Owning scope reference; required for scope-bearing unique identities. */
+	scopeRef?: string
+	/** structured_mem type lane, or the relation type. */
+	type?: string
+	/** relations: source entity of the edge. */
+	fromEntityId?: string
+	/** relations: target entity of the edge. */
+	toEntityId?: string
 }
 
 export type MemoryAccessSummary = {

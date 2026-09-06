@@ -1,7 +1,10 @@
 import path from "node:path"
 import type { Document } from "mongodb"
 import type { MemoryMongoDBFusionMethod, MemoryScope } from "@memongo/lib"
-import { AccessTracker } from "./mongodb-access-tracker.js"
+import {
+	AccessTracker,
+	accessTargetFromSearchResult,
+} from "./mongodb-access-tracker.js"
 import { resolveDefaultScope } from "./backend-config.js"
 import type { ResolvedMongoDBConfig } from "./backend-config.js"
 import type { OperationRunContext } from "./mongodb-operation-accounting.js"
@@ -47,7 +50,6 @@ import {
 	requestHasHardConstraints,
 } from "./mongodb-search-executor.js"
 import type {
-	AccessEventCollection,
 	MemorySearchRequest,
 	MemorySearchResponse,
 	MemorySearchDegradation,
@@ -267,28 +269,17 @@ export class MongoDBManagerSearchOps {
 
 	/**
 	 * Record access for returned search results (fire-and-forget).
-	 * Maps canonicalId prefixes to collection names for the AccessTracker.
+	 * Maps canonicalId + result scope fields to the full access identity
+	 * (W01): every canonical update must target the owning tenant/scope row,
+	 * and results without a usable identity are recorded nowhere rather than
+	 * guessed at.
 	 */
 	recordSearchAccess(results: MemorySearchResult[]): void {
 		if (!this.host.accessTracker || results.length === 0) return
 		for (const result of results) {
-			const cid = result.canonicalId
-			if (!cid) continue
-			const colonIdx = cid.indexOf(":")
-			if (colonIdx < 0) continue
-			const prefix = cid.slice(0, colonIdx)
-			const id = cid.slice(colonIdx + 1)
-			const collectionMap: Record<string, AccessEventCollection> = {
-				event: "events",
-				structured: "structured_mem",
-				procedure: "procedures",
-				episode: "episodes",
-				relation: "relations",
-				entity: "entities",
-			}
-			const collection = collectionMap[prefix]
-			if (collection && id) {
-				this.host.accessTracker.recordAccess(id, collection)
+			const target = accessTargetFromSearchResult(result)
+			if (target) {
+				this.host.accessTracker.recordAccess(target)
 			}
 		}
 	}

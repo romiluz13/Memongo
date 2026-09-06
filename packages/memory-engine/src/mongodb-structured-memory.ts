@@ -1838,6 +1838,11 @@ function toStructuredResult(doc: Document): MemorySearchResult {
 	}`
 	return {
 		path: locator,
+		// W01: the canonicalId (no scope suffix — scope/scopeRef ride as
+		// result fields, matching the discovery-projections convention) lets
+		// recordSearchAccess derive the full owning identity instead of
+		// skipping structured results entirely.
+		canonicalId: `structured:${doc.type ?? "unknown"}:${doc.key ?? ""}`,
 		startLine: 0,
 		endLine: 0,
 		score: typeof doc.score === "number" ? Number(doc.score.toFixed(6)) : 0,

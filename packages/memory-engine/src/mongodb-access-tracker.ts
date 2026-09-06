@@ -7,7 +7,7 @@
  * canonical collections so existing scoring paths keep working.
  */
 
-import type { AnyBulkWriteOperation, Db, Document } from "mongodb"
+import type { AnyBulkWriteOperation, Db, Document, Filter } from "mongodb"
 import { createSubsystemLogger } from "@memongo/lib"
 import {
 	accessEventsCollection,
@@ -21,24 +21,215 @@ import {
 import type {
 	AccessEventCollection,
 	AccessEventDocument,
+	AccessRecordTarget,
 	AccessTrackerConfig,
 	MemoryAccessSummary,
 	MemoryAccessTrend,
+	MemorySearchResult,
 } from "./types.js"
 
-export type { AccessTrackerConfig }
+export type { AccessRecordTarget, AccessTrackerConfig }
 
 const log = createSubsystemLogger("memory:mongodb:access-tracker")
 
 const DAY_MS = 24 * 60 * 60 * 1000
 
-const COLLECTION_ID_FIELDS: Record<AccessEventCollection, string> = {
-	events: "eventId",
-	structured_mem: "key",
-	procedures: "procedureId",
-	episodes: "episodeId",
-	entities: "entityId",
-	relations: "relationId",
+/**
+ * CanonicalId prefix -> canonical collection. Shared by
+ * accessTargetFromSearchResult and its callers.
+ */
+const CANONICAL_ID_PREFIXES: Record<string, AccessEventCollection> = {
+	event: "events",
+	structured: "structured_mem",
+	procedure: "procedures",
+	episode: "episodes",
+	relation: "relations",
+	entity: "entities",
+}
+
+/**
+ * W01: identity fields each collection requires beyond the primary id for a
+ * canonical update to target exactly one row — the members of the
+ * collection's unique compound index that the tracker cannot derive itself
+ * (its own agentId, the primary id):
+ * - structured_mem: uq {agentId, scope, scopeRef, type, key}
+ * - procedures: uq {procedureId, agentId, scope, scopeRef}
+ * - entities: uq {entityId, agentId, scope, scopeRef}
+ * - relations: uq {agentId, scope, scopeRef, fromEntityId, toEntityId, type}
+ * - events / episodes: uq {eventId} / {episodeId} (global per collection)
+ * A canonical update is never written with an under-specified filter: when
+ * any required field is missing the update is skipped (the raw access event
+ * is still recorded).
+ */
+type RequiredIdentityField =
+	| "scope"
+	| "scopeRef"
+	| "type"
+	| "fromEntityId"
+	| "toEntityId"
+
+const REQUIRED_IDENTITY_FIELDS: Record<
+	AccessEventCollection,
+	ReadonlyArray<RequiredIdentityField>
+> = {
+	events: [],
+	episodes: [],
+	structured_mem: ["scope", "scopeRef", "type"],
+	procedures: ["scope", "scopeRef"],
+	entities: ["scope", "scopeRef"],
+	relations: ["scope", "scopeRef", "fromEntityId", "toEntityId", "type"],
+}
+
+function isFilled(value: string | undefined): value is string {
+	return typeof value === "string" && value.length > 0
+}
+
+/**
+ * Canonical update filter matching the collection's unique compound index,
+ * with the tracker's agentId in every update (events/episodes add it on top
+ * of their single-field unique index as defense in depth). Returns null when
+ * a required identity field is missing — callers must skip, never guess.
+ */
+function buildCanonicalFilter(
+	agentId: string,
+	target: AccessRecordTarget,
+): Filter<Document> | null {
+	for (const field of REQUIRED_IDENTITY_FIELDS[target.collection]) {
+		if (!isFilled(target[field])) {
+			return null
+		}
+	}
+	switch (target.collection) {
+		case "events":
+			return { eventId: target.id, agentId }
+		case "episodes":
+			return { episodeId: target.id, agentId }
+		case "structured_mem":
+			return {
+				agentId,
+				scope: target.scope,
+				scopeRef: target.scopeRef,
+				type: target.type,
+				key: target.id,
+			}
+		case "procedures":
+			return {
+				procedureId: target.id,
+				agentId,
+				scope: target.scope,
+				scopeRef: target.scopeRef,
+			}
+		case "entities":
+			return {
+				entityId: target.id,
+				agentId,
+				scope: target.scope,
+				scopeRef: target.scopeRef,
+			}
+		case "relations":
+			return {
+				agentId,
+				scope: target.scope,
+				scopeRef: target.scopeRef,
+				fromEntityId: target.fromEntityId,
+				toEntityId: target.toEntityId,
+				type: target.type,
+			}
+	}
+}
+
+/**
+ * W01: collision-proof buffer identity — the full target tuple, not
+ * collection+id, so same-key rows in different scopes/types never merge
+ * their counts.
+ */
+function bufferKey(target: AccessRecordTarget): string {
+	return JSON.stringify([
+		target.collection,
+		target.id,
+		target.scope ?? null,
+		target.scopeRef ?? null,
+		target.type ?? null,
+		target.fromEntityId ?? null,
+		target.toEntityId ?? null,
+	])
+}
+
+/**
+ * W01: derive the full access identity from a returned search result. The
+ * canonicalId fixes the collection and per-collection id segments; the
+ * result's scope/scopeRef fields (carried by every projection lane) fix the
+ * owning scope. Returns null when the result carries no usable identity —
+ * the caller then records nothing rather than guessing.
+ */
+export function accessTargetFromSearchResult(
+	result: Pick<MemorySearchResult, "canonicalId" | "scope" | "scopeRef">,
+): AccessRecordTarget | null {
+	const cid = result.canonicalId
+	if (!cid) {
+		return null
+	}
+	const colonIdx = cid.indexOf(":")
+	if (colonIdx < 0) {
+		return null
+	}
+	const collection = CANONICAL_ID_PREFIXES[cid.slice(0, colonIdx)]
+	if (!collection) {
+		return null
+	}
+
+	const [base, queryString] = cid.slice(colonIdx + 1).split("?", 2)
+	const trimmed = base.trim()
+	if (!trimmed) {
+		return null
+	}
+
+	// Scope identity: result fields win; a `?scope=&scopeRef=` suffix on the
+	// canonicalId is the fallback (readFile's locator convention).
+	let scope: string | undefined =
+		typeof result.scope === "string" ? result.scope : undefined
+	let scopeRef: string | undefined =
+		typeof result.scopeRef === "string" ? result.scopeRef : undefined
+	if (queryString) {
+		const params = new URLSearchParams(queryString)
+		scope ??= params.get("scope") ?? undefined
+		scopeRef ??= params.get("scopeRef") ?? undefined
+	}
+
+	switch (collection) {
+		case "events":
+		case "episodes":
+		case "entities":
+		case "procedures":
+			return { collection, id: trimmed, scope, scopeRef }
+		case "structured_mem": {
+			// `structured:<type>:<key>` — the key may itself contain colons;
+			// readFile parses the same locator the same way.
+			const [type, ...keyParts] = trimmed.split(":")
+			const key = keyParts.join(":").trim()
+			if (!type || !key) {
+				return null
+			}
+			return { collection, id: key, type, scope, scopeRef }
+		}
+		case "relations": {
+			// `relation:<fromEntityId>:<type>:<toEntityId>` — exactly three
+			// non-empty segments, else the locator is unparseable.
+			const parts = trimmed.split(":")
+			if (parts.length !== 3 || parts.some((part) => !part)) {
+				return null
+			}
+			return {
+				collection,
+				id: trimmed,
+				fromEntityId: parts[0],
+				type: parts[1],
+				toEntityId: parts[2],
+				scope,
+				scopeRef,
+			}
+		}
+	}
 }
 
 function getCanonicalCollection(
@@ -68,10 +259,7 @@ type TrendTarget = {
 }
 
 export class AccessTracker {
-	private buffer: Map<
-		string,
-		{ collection: AccessEventCollection; count: number }
-	>
+	private buffer: Map<string, { target: AccessRecordTarget; count: number }>
 	private readonly config: Required<AccessTrackerConfig>
 	private timer: ReturnType<typeof setInterval> | null = null
 	private totalBuffered = 0
@@ -99,13 +287,18 @@ export class AccessTracker {
 		this.timer.unref?.()
 	}
 
-	recordAccess(id: string, collection: AccessEventCollection): void {
-		const key = `${collection}::${id}`
+	recordAccess(target: AccessRecordTarget): void {
+		const id = target.id.trim()
+		if (!id) {
+			return
+		}
+		const normalized: AccessRecordTarget = { ...target, id }
+		const key = bufferKey(normalized)
 		const entry = this.buffer.get(key)
 		if (entry) {
 			entry.count++
 		} else {
-			this.buffer.set(key, { collection, count: 1 })
+			this.buffer.set(key, { target: normalized, count: 1 })
 		}
 		this.totalBuffered++
 
@@ -157,7 +350,7 @@ export class AccessTracker {
 	 * call may have landed while the flush was in-flight).
 	 */
 	private rebufferSnapshot(
-		snapshot: Map<string, { collection: AccessEventCollection; count: number }>,
+		snapshot: Map<string, { target: AccessRecordTarget; count: number }>,
 	): void {
 		for (const [key, entry] of snapshot) {
 			const existing = this.buffer.get(key)
@@ -165,7 +358,7 @@ export class AccessTracker {
 				existing.count += entry.count
 			} else {
 				this.buffer.set(key, {
-					collection: entry.collection,
+					target: entry.target,
 					count: entry.count,
 				})
 			}
@@ -184,31 +377,53 @@ export class AccessTracker {
 			AccessEventCollection,
 			Array<AnyBulkWriteOperation<Document>>
 		>()
+		const skipped: AccessRecordTarget[] = []
 
-		for (const [key, entry] of snapshot) {
-			const memoryId = key.slice(entry.collection.length + 2)
+		for (const entry of snapshot.values()) {
+			const { target } = entry
 			eventDocs.push({
 				ts: now,
 				meta: {
 					agentId: this.agentId,
-					collection: entry.collection,
+					collection: target.collection,
 				},
-				memoryId,
+				memoryId: target.id,
 				count: entry.count,
+				...(isFilled(target.scope) ? { scope: target.scope } : {}),
+				...(isFilled(target.scopeRef) ? { scopeRef: target.scopeRef } : {}),
+				...(isFilled(target.type) ? { type: target.type } : {}),
 			})
 
-			const idField = COLLECTION_ID_FIELDS[entry.collection]
-			const ops = collectionOps.get(entry.collection) ?? []
+			const filter = buildCanonicalFilter(this.agentId, target)
+			if (!filter) {
+				skipped.push(target)
+				continue
+			}
+			const ops = collectionOps.get(target.collection) ?? []
 			ops.push({
 				updateOne: {
-					filter: { [idField]: memoryId },
+					filter,
 					update: {
 						$inc: { accessCount: entry.count },
 						$set: { lastAccessedAt: now },
 					},
 				},
 			})
-			collectionOps.set(entry.collection, ops)
+			collectionOps.set(target.collection, ops)
+		}
+
+		if (skipped.length > 0) {
+			// W01 fail-safe: an under-specified identity never produces a
+			// canonical update. One warn per flush (not per target) keeps the
+			// log bounded. Raw access events were still recorded above.
+			const byCollection: Record<string, number> = {}
+			for (const target of skipped) {
+				byCollection[target.collection] =
+					(byCollection[target.collection] ?? 0) + 1
+			}
+			log.warn(
+				`skipped ${skipped.length} under-specified canonical access update(s); raw access events still recorded: ${JSON.stringify(byCollection)}`,
+			)
 		}
 
 		// Access-event durability: re-buffer the ENTIRE snapshot on any error so
@@ -250,7 +465,7 @@ export class AccessTracker {
 				// snapshot: the access_events insert already succeeded for
 				// them and the other collections' bulkWrites may have too.
 				for (const [key, entry] of snapshot) {
-					if (entry.collection !== collection) {
+					if (entry.target.collection !== collection) {
 						continue
 					}
 					const existing = this.buffer.get(key)
@@ -258,7 +473,7 @@ export class AccessTracker {
 						existing.count += entry.count
 					} else {
 						this.buffer.set(key, {
-							collection: entry.collection,
+							target: entry.target,
 							count: entry.count,
 						})
 					}

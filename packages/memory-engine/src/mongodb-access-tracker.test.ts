@@ -13,6 +13,7 @@ vi.mock("@memongo/lib", () => ({
 
 import {
 	AccessTracker,
+	accessTargetFromSearchResult,
 	getAccessSummaries,
 	getAccessTrends,
 } from "./mongodb-access-tracker.js"
@@ -101,9 +102,9 @@ describe("AccessTracker", () => {
 		const { db, accessInsertMany, eventsBulkWrite } = createMockDb()
 		tracker = new AccessTracker(db, PREFIX, "agent-1", { flushThreshold: 10 })
 
-		tracker.recordAccess("evt-1", "events")
-		tracker.recordAccess("evt-2", "events")
-		tracker.recordAccess("evt-3", "events")
+		tracker.recordAccess({ collection: "events", id: "evt-1" })
+		tracker.recordAccess({ collection: "events", id: "evt-2" })
+		tracker.recordAccess({ collection: "events", id: "evt-3" })
 
 		expect(accessInsertMany).not.toHaveBeenCalled()
 		expect(eventsBulkWrite).not.toHaveBeenCalled()
@@ -113,9 +114,9 @@ describe("AccessTracker", () => {
 		const { db, accessInsertMany, eventsBulkWrite } = createMockDb()
 		tracker = new AccessTracker(db, PREFIX, "agent-1", { flushThreshold: 3 })
 
-		tracker.recordAccess("evt-1", "events")
-		tracker.recordAccess("evt-2", "events")
-		tracker.recordAccess("evt-3", "events")
+		tracker.recordAccess({ collection: "events", id: "evt-1" })
+		tracker.recordAccess({ collection: "events", id: "evt-2" })
+		tracker.recordAccess({ collection: "events", id: "evt-3" })
 		await tracker.flush()
 
 		expect(accessInsertMany).toHaveBeenCalledTimes(1)
@@ -127,7 +128,7 @@ describe("AccessTracker", () => {
 		tracker = new AccessTracker(db, PREFIX, "agent-1", { flushThreshold: 100 })
 
 		for (let i = 0; i < 5; i++) {
-			tracker.recordAccess("evt-1", "events")
+			tracker.recordAccess({ collection: "events", id: "evt-1" })
 		}
 
 		await tracker.flush()
@@ -150,7 +151,7 @@ describe("AccessTracker", () => {
 			[
 				{
 					updateOne: {
-						filter: { eventId: "evt-1" },
+						filter: { eventId: "evt-1", agentId: "agent-1" },
 						update: {
 							$inc: { accessCount: 5 },
 							$set: { lastAccessedAt: expect.any(Date) },
@@ -172,9 +173,20 @@ describe("AccessTracker", () => {
 		} = createMockDb()
 		tracker = new AccessTracker(db, PREFIX, "agent-1", { flushThreshold: 100 })
 
-		tracker.recordAccess("evt-1", "events")
-		tracker.recordAccess("fact-1", "structured_mem")
-		tracker.recordAccess("proc-1", "procedures")
+		tracker.recordAccess({ collection: "events", id: "evt-1" })
+		tracker.recordAccess({
+			collection: "structured_mem",
+			id: "fact-1",
+			scope: "agent",
+			scopeRef: "agent:agent-1",
+			type: "fact",
+		})
+		tracker.recordAccess({
+			collection: "procedures",
+			id: "proc-1",
+			scope: "agent",
+			scopeRef: "agent:agent-1",
+		})
 
 		await tracker.flush()
 
@@ -188,7 +200,7 @@ describe("AccessTracker", () => {
 		const { db, accessInsertMany } = createMockDb()
 		tracker = new AccessTracker(db, PREFIX, "agent-1", { flushThreshold: 100 })
 
-		tracker.recordAccess("evt-1", "events")
+		tracker.recordAccess({ collection: "events", id: "evt-1" })
 		await tracker.close()
 
 		expect(accessInsertMany).toHaveBeenCalled()
@@ -236,7 +248,7 @@ describe("AccessTracker", () => {
 		})
 
 		for (let i = 0; i < 15; i++) {
-			tracker.recordAccess("evt-1", "events")
+			tracker.recordAccess({ collection: "events", id: "evt-1" })
 		}
 
 		await tracker.flush()
@@ -290,9 +302,9 @@ describe("AccessTracker", () => {
 			flushIntervalMs: 600_000,
 		})
 
-		tracker.recordAccess("evt-1", "events")
-		tracker.recordAccess("evt-1", "events")
-		tracker.recordAccess("evt-2", "events")
+		tracker.recordAccess({ collection: "events", id: "evt-1" })
+		tracker.recordAccess({ collection: "events", id: "evt-1" })
+		tracker.recordAccess({ collection: "events", id: "evt-2" })
 
 		// First flush fails — counts MUST be retained in the buffer.
 		await tracker.flush()
@@ -323,6 +335,265 @@ describe("AccessTracker", () => {
 	}, 5_000)
 
 	// =========================================================================
+	// W01 — canonical updates must target the owning tenant/scope row.
+	// The canonical filter is the collection's unique compound index plus the
+	// tracker's agentId; anything less can increment another tenant's row
+	// (audit reproduced: recording B's `timezone` incremented A).
+	// =========================================================================
+
+	it("W01: structured canonical update filters on the full unique identity", async () => {
+		const { db, structuredBulkWrite } = createMockDb()
+		tracker = new AccessTracker(db, PREFIX, "agent-B", { flushThreshold: 100 })
+
+		tracker.recordAccess({
+			collection: "structured_mem",
+			id: "timezone",
+			scope: "agent",
+			scopeRef: "agent:B",
+			type: "preference",
+		})
+		await tracker.flush()
+
+		expect(structuredBulkWrite).toHaveBeenCalledWith(
+			[
+				{
+					updateOne: {
+						filter: {
+							agentId: "agent-B",
+							scope: "agent",
+							scopeRef: "agent:B",
+							type: "preference",
+							key: "timezone",
+						},
+						update: {
+							$inc: { accessCount: 1 },
+							$set: { lastAccessedAt: expect.any(Date) },
+						},
+					},
+				},
+			],
+			{ ordered: false },
+		)
+	})
+
+	it("W01: same key in different scopes/types buffers as distinct identities", async () => {
+		const { db, structuredBulkWrite } = createMockDb()
+		tracker = new AccessTracker(db, PREFIX, "agent-B", { flushThreshold: 100 })
+
+		tracker.recordAccess({
+			collection: "structured_mem",
+			id: "timezone",
+			scope: "agent",
+			scopeRef: "agent:B",
+			type: "preference",
+		})
+		tracker.recordAccess({
+			collection: "structured_mem",
+			id: "timezone",
+			scope: "user",
+			scopeRef: "user:alice",
+			type: "preference",
+		})
+		tracker.recordAccess({
+			collection: "structured_mem",
+			id: "timezone",
+			scope: "agent",
+			scopeRef: "agent:B",
+			type: "fact",
+		})
+		await tracker.flush()
+
+		expect(structuredBulkWrite).toHaveBeenCalledTimes(1)
+		const ops = structuredBulkWrite.mock.calls[0]?.[0] as Array<{
+			updateOne: { filter: Record<string, unknown> }
+		}>
+		expect(ops).toHaveLength(3)
+		const filters = ops.map((op) => op.updateOne.filter)
+		expect(filters).toContainEqual({
+			agentId: "agent-B",
+			scope: "agent",
+			scopeRef: "agent:B",
+			type: "preference",
+			key: "timezone",
+		})
+		expect(filters).toContainEqual({
+			agentId: "agent-B",
+			scope: "user",
+			scopeRef: "user:alice",
+			type: "preference",
+			key: "timezone",
+		})
+		expect(filters).toContainEqual({
+			agentId: "agent-B",
+			scope: "agent",
+			scopeRef: "agent:B",
+			type: "fact",
+			key: "timezone",
+		})
+	})
+
+	it("W01: under-specified identity never produces a canonical update (fail-safe)", async () => {
+		const { db, accessInsertMany, structuredBulkWrite } = createMockDb()
+		tracker = new AccessTracker(db, PREFIX, "agent-B", { flushThreshold: 100 })
+
+		// The audit's exact repro shape: key only, no scope/scopeRef/type.
+		tracker.recordAccess({ collection: "structured_mem", id: "timezone" })
+		await tracker.flush()
+
+		// Raw access history is still recorded (attributed to B)...
+		expect(accessInsertMany).toHaveBeenCalledTimes(1)
+		expect(accessInsertMany.mock.calls[0]?.[0]).toEqual([
+			expect.objectContaining({
+				meta: { agentId: "agent-B", collection: "structured_mem" },
+				memoryId: "timezone",
+				count: 1,
+			}),
+		])
+		// ...but no canonical update is written with a guessable filter.
+		expect(structuredBulkWrite).not.toHaveBeenCalled()
+	})
+
+	it("W01: partial identity (scope without type) also fails safe", async () => {
+		const { db, structuredBulkWrite } = createMockDb()
+		tracker = new AccessTracker(db, PREFIX, "agent-B", { flushThreshold: 100 })
+
+		tracker.recordAccess({
+			collection: "structured_mem",
+			id: "timezone",
+			scope: "agent",
+			scopeRef: "agent:B",
+		})
+		await tracker.flush()
+
+		expect(structuredBulkWrite).not.toHaveBeenCalled()
+	})
+
+	it("W01: procedures, entities, and relations filter on their unique compounds", async () => {
+		const { db, proceduresBulkWrite, entitiesBulkWrite, relationsBulkWrite } =
+			createMockDb()
+		tracker = new AccessTracker(db, PREFIX, "agent-B", { flushThreshold: 100 })
+
+		tracker.recordAccess({
+			collection: "procedures",
+			id: "p-1",
+			scope: "agent",
+			scopeRef: "agent:B",
+		})
+		tracker.recordAccess({
+			collection: "entities",
+			id: "e-1",
+			scope: "agent",
+			scopeRef: "agent:B",
+		})
+		tracker.recordAccess({
+			collection: "relations",
+			id: "ent-1:related_to:ent-2",
+			scope: "agent",
+			scopeRef: "agent:B",
+			type: "related_to",
+			fromEntityId: "ent-1",
+			toEntityId: "ent-2",
+		})
+		await tracker.flush()
+
+		expect(proceduresBulkWrite).toHaveBeenCalledWith(
+			[
+				{
+					updateOne: {
+						filter: {
+							procedureId: "p-1",
+							agentId: "agent-B",
+							scope: "agent",
+							scopeRef: "agent:B",
+						},
+						update: expect.anything(),
+					},
+				},
+			],
+			{ ordered: false },
+		)
+		expect(entitiesBulkWrite).toHaveBeenCalledWith(
+			[
+				{
+					updateOne: {
+						filter: {
+							entityId: "e-1",
+							agentId: "agent-B",
+							scope: "agent",
+							scopeRef: "agent:B",
+						},
+						update: expect.anything(),
+					},
+				},
+			],
+			{ ordered: false },
+		)
+		expect(relationsBulkWrite).toHaveBeenCalledWith(
+			[
+				{
+					updateOne: {
+						filter: {
+							agentId: "agent-B",
+							scope: "agent",
+							scopeRef: "agent:B",
+							fromEntityId: "ent-1",
+							toEntityId: "ent-2",
+							type: "related_to",
+						},
+						update: expect.anything(),
+					},
+				},
+			],
+			{ ordered: false },
+		)
+	})
+
+	it("W01: episodes filter on episodeId + agentId", async () => {
+		const { db, episodesBulkWrite } = createMockDb()
+		tracker = new AccessTracker(db, PREFIX, "agent-B", { flushThreshold: 100 })
+
+		tracker.recordAccess({ collection: "episodes", id: "ep-1" })
+		await tracker.flush()
+
+		expect(episodesBulkWrite).toHaveBeenCalledWith(
+			[
+				{
+					updateOne: {
+						filter: { episodeId: "ep-1", agentId: "agent-B" },
+						update: expect.anything(),
+					},
+				},
+			],
+			{ ordered: false },
+		)
+	})
+
+	it("W01: raw access events carry the identity beyond the short id", async () => {
+		const { db, accessInsertMany } = createMockDb()
+		tracker = new AccessTracker(db, PREFIX, "agent-B", { flushThreshold: 100 })
+
+		tracker.recordAccess({
+			collection: "structured_mem",
+			id: "timezone",
+			scope: "user",
+			scopeRef: "user:alice",
+			type: "preference",
+		})
+		await tracker.flush()
+
+		expect(accessInsertMany.mock.calls[0]?.[0]).toEqual([
+			expect.objectContaining({
+				meta: { agentId: "agent-B", collection: "structured_mem" },
+				memoryId: "timezone",
+				count: 1,
+				scope: "user",
+				scopeRef: "user:alice",
+				type: "preference",
+			}),
+		])
+	})
+
+	// =========================================================================
 	// Access-count durability — fast-check property: no count loss across any
 	// sequence of recordAccess calls.
 	// Evidence doc:
@@ -339,6 +610,9 @@ describe("AccessTracker", () => {
 							"events" as const,
 							"structured_mem" as const,
 						),
+						scope: fc.constantFrom("agent", "user"),
+						scopeRef: fc.constantFrom("agent:agent-1", "user:alice"),
+						type: fc.constantFrom("fact", "preference"),
 					}),
 					{ minLength: 0, maxLength: 40 },
 				),
@@ -379,7 +653,19 @@ describe("AccessTracker", () => {
 					})
 					try {
 						for (const call of calls) {
-							localTracker.recordAccess(call.id, call.collection)
+							// Full identity for structured rows; events need only
+							// the id (eventId is globally unique per collection).
+							localTracker.recordAccess(
+								call.collection === "events"
+									? { collection: "events", id: call.id }
+									: {
+											collection: "structured_mem",
+											id: call.id,
+											scope: call.scope,
+											scopeRef: call.scopeRef,
+											type: call.type,
+										},
+							)
 						}
 						await localTracker.flush()
 
@@ -410,6 +696,143 @@ describe("AccessTracker", () => {
 		)
 		vi.useFakeTimers()
 	}, 30_000)
+})
+
+// ===========================================================================
+// W01 — canonicalId -> full access identity parsing (recordSearchAccess path).
+// ===========================================================================
+describe("accessTargetFromSearchResult", () => {
+	it("parses structured canonicalIds into key + type + scope identity", () => {
+		expect(
+			accessTargetFromSearchResult({
+				canonicalId: "structured:preference:timezone",
+				scope: "agent",
+				scopeRef: "agent:B",
+			}),
+		).toEqual({
+			collection: "structured_mem",
+			id: "timezone",
+			type: "preference",
+			scope: "agent",
+			scopeRef: "agent:B",
+		})
+	})
+
+	it("parses structured keys that contain colons (readFile convention)", () => {
+		expect(
+			accessTargetFromSearchResult({
+				canonicalId: "structured:fact:tz:UTC:plus:2",
+				scope: "user",
+				scopeRef: "user:alice",
+			}),
+		).toEqual({
+			collection: "structured_mem",
+			id: "tz:UTC:plus:2",
+			type: "fact",
+			scope: "user",
+			scopeRef: "user:alice",
+		})
+	})
+
+	it("falls back to a ?scope=&scopeRef= canonicalId suffix when result fields are absent", () => {
+		expect(
+			accessTargetFromSearchResult({
+				canonicalId: "structured:preference:timezone?scope=user&scopeRef=alice",
+			}),
+		).toEqual({
+			collection: "structured_mem",
+			id: "timezone",
+			type: "preference",
+			scope: "user",
+			scopeRef: "alice",
+		})
+	})
+
+	it("parses relation canonicalIds into the edge identity", () => {
+		expect(
+			accessTargetFromSearchResult({
+				canonicalId: "relation:ent-1:related_to:ent-2",
+				scope: "agent",
+				scopeRef: "agent:B",
+			}),
+		).toEqual({
+			collection: "relations",
+			id: "ent-1:related_to:ent-2",
+			fromEntityId: "ent-1",
+			type: "related_to",
+			toEntityId: "ent-2",
+			scope: "agent",
+			scopeRef: "agent:B",
+		})
+	})
+
+	it("parses event, episode, entity, and procedure canonicalIds", () => {
+		expect(
+			accessTargetFromSearchResult({ canonicalId: "event:evt-1" }),
+		).toEqual({ collection: "events", id: "evt-1" })
+		expect(
+			accessTargetFromSearchResult({
+				canonicalId: "episode:ep-1",
+				scope: "agent",
+				scopeRef: "agent:B",
+			}),
+		).toEqual({
+			collection: "episodes",
+			id: "ep-1",
+			scope: "agent",
+			scopeRef: "agent:B",
+		})
+		expect(
+			accessTargetFromSearchResult({
+				canonicalId: "entity:ent-9",
+				scope: "user",
+				scopeRef: "user:alice",
+			}),
+		).toEqual({
+			collection: "entities",
+			id: "ent-9",
+			scope: "user",
+			scopeRef: "user:alice",
+		})
+		expect(
+			accessTargetFromSearchResult({
+				canonicalId: "procedure:p-1",
+				scope: "agent",
+				scopeRef: "agent:B",
+			}),
+		).toEqual({
+			collection: "procedures",
+			id: "p-1",
+			scope: "agent",
+			scopeRef: "agent:B",
+		})
+	})
+
+	it("returns null for unusable identities rather than guessing", () => {
+		// No canonicalId at all (pre-fix structured results).
+		expect(accessTargetFromSearchResult({})).toBeNull()
+		// Unknown prefix.
+		expect(accessTargetFromSearchResult({ canonicalId: "banana:1" })).toBeNull()
+		// No colon separator.
+		expect(accessTargetFromSearchResult({ canonicalId: "event" })).toBeNull()
+		// Empty id.
+		expect(accessTargetFromSearchResult({ canonicalId: "event:" })).toBeNull()
+		// Structured with no key segment.
+		expect(
+			accessTargetFromSearchResult({ canonicalId: "structured:fact" }),
+		).toBeNull()
+		// Relation with the wrong segment count.
+		expect(
+			accessTargetFromSearchResult({
+				canonicalId: "relation:ent-1:related_to",
+			}),
+		).toBeNull()
+		expect(
+			accessTargetFromSearchResult({
+				canonicalId: "relation:ent-1:related_to:ent-2:extra",
+			}),
+		).toBeNull()
+	})
 })
 
 describe("access event aggregation helpers", () => {

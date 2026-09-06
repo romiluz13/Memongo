@@ -178,8 +178,10 @@ export {
 export type { ManagerReadResult } from "./mongodb-manager-read.js"
 export {
 	AccessTracker,
+	accessTargetFromSearchResult,
 	getAccessSummaries,
 	getAccessTrends,
+	type AccessRecordTarget,
 	type AccessTrackerConfig,
 } from "./mongodb-access-tracker.js"
 export { importConversationDataset } from "./mongodb-conversation-import.js"
