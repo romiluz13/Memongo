@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/unbound-method -- Vitest mock method assertions */
 import type { ClientSession, Collection, Db } from "mongodb"
-import { describe, it, expect, vi, beforeEach } from "vitest"
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest"
 
 // Mock the schema module before imports
 vi.mock("./mongodb-schema.js", () => ({
@@ -26,6 +26,7 @@ import {
 	getEventsBySession,
 	getUnprojectedEvents,
 	markEventsProjected,
+	pruneIdempotencyFingerprints,
 	projectChunksFromEvents,
 	isTransientMongoWriteError,
 	type CanonicalEvent,
@@ -224,6 +225,412 @@ describe("writeEventsBatch", () => {
 			writeEventsBatch({ db: mockDb(), prefix: "test_", events: [] }),
 		).resolves.toEqual([])
 		expect(col.insertMany).not.toHaveBeenCalled()
+	})
+})
+
+// ---------------------------------------------------------------------------
+// Tests: writeEventsBatch outcome reconciliation (W09)
+// ---------------------------------------------------------------------------
+
+describe("writeEventsBatch outcome reconciliation (W09)", () => {
+	beforeEach(() => {
+		vi.clearAllMocks()
+		vi.unstubAllEnvs()
+	})
+
+	afterEach(() => {
+		vi.unstubAllEnvs()
+	})
+
+	const batchInput = [
+		{
+			eventId: "evt-r1",
+			agentId: "agent-1",
+			role: "user" as const,
+			body: "reconciled one",
+			scope: "agent" as const,
+		},
+		{
+			eventId: "evt-r2",
+			agentId: "agent-1",
+			role: "user" as const,
+			body: "reconciled two",
+			scope: "agent" as const,
+		},
+	]
+
+	function createReconcileCol(params: {
+		insertManyImpl: () => Promise<unknown>
+		existingIds?: string[]
+		findImpl?: () => { toArray: () => Promise<Array<{ eventId: string }>> }
+	}): Collection {
+		return {
+			insertMany: vi.fn(params.insertManyImpl),
+			find: vi.fn(
+				params.findImpl ??
+					(() => ({
+						toArray: vi.fn(async () =>
+							(params.existingIds ?? []).map((eventId) => ({ eventId })),
+						),
+					})),
+			),
+			updateMany: vi.fn(async () => ({ modifiedCount: 0 })),
+		} as unknown as Collection
+	}
+
+	it("reconciles a write-concern-only error by read: present items durable, missing items retry-safe", async () => {
+		const col = createReconcileCol({
+			insertManyImpl: async () => {
+				throw Object.assign(new Error("wtimeout"), {
+					writeConcernErrors: [{ code: 64, errmsg: "wtimeout" }],
+				})
+			},
+			existingIds: ["evt-r1"],
+		})
+		vi.mocked(eventsCollection).mockReturnValue(col)
+
+		const results = await writeEventsBatch({
+			db: mockDb(),
+			prefix: "test_",
+			events: batchInput,
+		})
+
+		// The read is the truth: evt-r1 exists → durable-exists receipt;
+		// evt-r2 absent → retry-safe failure, never a throw.
+		expect(results[0]).toMatchObject({
+			ok: true,
+			eventId: "evt-r1",
+			duplicateKey: true,
+		})
+		expect(results[1]).toMatchObject({
+			ok: false,
+			eventId: "evt-r2",
+			duplicateKey: false,
+		})
+		if (!results[1].ok) {
+			expect(results[1].message).toContain("not found on reconciliation read")
+		}
+		expect(col.find).toHaveBeenCalledWith(
+			{ eventId: { $in: ["evt-r1", "evt-r2"] } },
+			{ projection: { _id: 0, eventId: 1 } },
+		)
+	})
+
+	it("returns safe-retry receipts for a NoWritesPerformed error", async () => {
+		// The writeEventsBatch-level retry loop retries NoWritesPerformed; one
+		// attempt keeps this test fast.
+		vi.stubEnv("MEMONGO_MONGODB_TRANSIENT_WRITE_RETRY_ATTEMPTS", "1")
+		const col = createReconcileCol({
+			insertManyImpl: async () => {
+				const err = new Error("NoWritesPerformed") as Error & {
+					hasErrorLabel: (label: string) => boolean
+				}
+				err.hasErrorLabel = (label: string) => label === "NoWritesPerformed"
+				throw err
+			},
+		})
+		vi.mocked(eventsCollection).mockReturnValue(col)
+
+		const results = await writeEventsBatch({
+			db: mockDb(),
+			prefix: "test_",
+			events: batchInput,
+		})
+
+		for (const result of results) {
+			expect(result).toMatchObject({
+				ok: false,
+				duplicateKey: false,
+			})
+			if (!result.ok) {
+				expect(result.message).toContain("no writes performed")
+			}
+		}
+		// Zero writes are guaranteed — no reconciliation read is needed.
+		expect(col.find).not.toHaveBeenCalled()
+	})
+
+	it("read-confirms a keyless E11000 as durable-exists instead of failing the durable write", async () => {
+		const col = createReconcileCol({
+			insertManyImpl: async () => {
+				throw Object.assign(new Error("BulkWriteError"), {
+					name: "MongoBulkWriteError",
+					writeErrors: [
+						{
+							index: 1,
+							code: 11000,
+							errmsg:
+								"E11000 duplicate key error collection: test_events index: uq_events_event_id",
+						},
+					],
+				})
+			},
+			existingIds: ["evt-r2"],
+		})
+		vi.mocked(eventsCollection).mockReturnValue(col)
+
+		const results = await writeEventsBatch({
+			db: mockDb(),
+			prefix: "test_",
+			events: batchInput,
+		})
+
+		// evt-r1 was applied by the unordered insert; evt-r2 collided with an
+		// earlier attempt of this same batch — the read proves it durable.
+		expect(results[0]).toMatchObject({ ok: true, eventId: "evt-r1" })
+		expect(results[0].ok && !results[0].duplicateKey).toBe(true)
+		expect(results[1]).toMatchObject({
+			ok: true,
+			eventId: "evt-r2",
+			duplicateKey: true,
+		})
+	})
+
+	it("keeps a keyless E11000 whose event is absent as a per-item failure", async () => {
+		const col = createReconcileCol({
+			insertManyImpl: async () => {
+				throw Object.assign(new Error("BulkWriteError"), {
+					name: "MongoBulkWriteError",
+					writeErrors: [{ index: 1, code: 11000, errmsg: "E11000" }],
+				})
+			},
+			existingIds: [],
+		})
+		vi.mocked(eventsCollection).mockReturnValue(col)
+
+		const results = await writeEventsBatch({
+			db: mockDb(),
+			prefix: "test_",
+			events: batchInput,
+		})
+
+		expect(results[1]).toMatchObject({ ok: false, duplicateKey: false })
+		if (!results[1].ok) {
+			expect(results[1].message).toContain("not found on reconciliation read")
+		}
+	})
+
+	it("keeps a keyed E11000 as a duplicateKey failure for the winner replay", async () => {
+		const col = createReconcileCol({
+			insertManyImpl: async () => {
+				throw Object.assign(new Error("BulkWriteError"), {
+					name: "MongoBulkWriteError",
+					writeErrors: [{ index: 1, code: 11000, errmsg: "E11000" }],
+				})
+			},
+		})
+		vi.mocked(eventsCollection).mockReturnValue(col)
+
+		const results = await writeEventsBatch({
+			db: mockDb(),
+			prefix: "test_",
+			events: [
+				batchInput[0],
+				{
+					eventId: "evt-keyed",
+					agentId: "agent-1",
+					role: "user" as const,
+					body: "raced idempotency key",
+					scope: "agent" as const,
+					idempotencyKey: "key-raced",
+				},
+			],
+		})
+
+		expect(results[1]).toMatchObject({
+			ok: false,
+			eventId: "evt-keyed",
+			duplicateKey: true,
+		})
+		// Keyed duplicates replay the winner by key — no read needed here.
+		expect(col.find).not.toHaveBeenCalled()
+	})
+
+	it("reconciles unlisted items when a write-concern error rides along with per-item errors", async () => {
+		const col = createReconcileCol({
+			insertManyImpl: async () => {
+				throw Object.assign(new Error("BulkWriteError"), {
+					name: "MongoBulkWriteError",
+					err: { code: 64, errmsg: "wtimeout" },
+					writeErrors: [{ index: 0, code: 11000, errmsg: "E11000" }],
+				})
+			},
+			existingIds: ["evt-r2"],
+		})
+		vi.mocked(eventsCollection).mockReturnValue(col)
+
+		const results = await writeEventsBatch({
+			db: mockDb(),
+			prefix: "test_",
+			events: [
+				{
+					eventId: "evt-keyed",
+					agentId: "agent-1",
+					role: "user" as const,
+					body: "raced idempotency key",
+					scope: "agent" as const,
+					idempotencyKey: "key-raced",
+				},
+				batchInput[1],
+			],
+		})
+
+		// Keyed E11000 → winner-replay failure; unlisted evt-r2 is uncertain
+		// under the write-concern error → read confirms it durable.
+		expect(results[0]).toMatchObject({ ok: false, duplicateKey: true })
+		expect(results[1]).toMatchObject({
+			ok: true,
+			eventId: "evt-r2",
+			duplicateKey: true,
+		})
+	})
+
+	it("yields durability-unconfirmed receipts when the reconciliation read itself fails", async () => {
+		const col = createReconcileCol({
+			insertManyImpl: async () => {
+				throw Object.assign(new Error("wtimeout"), {
+					writeConcernErrors: [{ code: 64, errmsg: "wtimeout" }],
+				})
+			},
+			findImpl: () => {
+				throw new Error("reconciliation read unavailable")
+			},
+		})
+		vi.mocked(eventsCollection).mockReturnValue(col)
+
+		// No throw: a throw after a possible durable commit is the W08
+		// anti-pattern.
+		const results = await writeEventsBatch({
+			db: mockDb(),
+			prefix: "test_",
+			events: batchInput,
+		})
+
+		for (const result of results) {
+			expect(result).toMatchObject({ ok: false, duplicateKey: false })
+			if (!result.ok) {
+				expect(result.message).toContain("durability unconfirmed")
+			}
+		}
+	})
+})
+
+// ---------------------------------------------------------------------------
+// Tests: pruneIdempotencyFingerprints (W10)
+// ---------------------------------------------------------------------------
+
+describe("pruneIdempotencyFingerprints (W10)", () => {
+	beforeEach(() => {
+		vi.clearAllMocks()
+	})
+
+	it("ages by the acceptance instant (recordedAt) with a legacy timestamp fallback", async () => {
+		const updateMany = vi.fn(async () => ({ modifiedCount: 3 }))
+		vi.mocked(eventsCollection).mockReturnValue({
+			updateMany,
+		} as unknown as Collection)
+
+		const now = new Date("2026-09-06T00:00:00.000Z")
+		const { pruned } = await pruneIdempotencyFingerprints({
+			db: mockDb(),
+			prefix: "test_",
+			agentId: "agent-1",
+			olderThanDays: 90,
+			now,
+		})
+
+		expect(pruned).toBe(3)
+		expect(updateMany).toHaveBeenCalledTimes(1)
+		const [filter, update] = updateMany.mock.calls[0]
+		const cutoff = new Date(now.getTime() - 90 * 86_400_000)
+		// W10: retention ages by recordedAt (the immutable acceptance instant),
+		// so a fresh import of historical events keeps its replay protection;
+		// legacy rows without recordedAt keep the old timestamp rule.
+		expect(filter).toEqual({
+			agentId: "agent-1",
+			idempotencyKey: { $exists: true },
+			$or: [
+				{ recordedAt: { $lt: cutoff } },
+				{ recordedAt: { $exists: false }, timestamp: { $lt: cutoff } },
+			],
+		})
+		expect(update).toEqual({
+			$unset: { idempotencyKey: "", idempotencyFingerprint: "" },
+		})
+	})
+})
+
+// ---------------------------------------------------------------------------
+// Tests: projection marker degradation (W08)
+// ---------------------------------------------------------------------------
+
+describe("projection marker degradation (W08)", () => {
+	beforeEach(() => {
+		vi.clearAllMocks()
+	})
+
+	function makeEvent(eventId: string): CanonicalEvent {
+		return {
+			eventId,
+			agentId: "agent-1",
+			role: "user",
+			body: `body of ${eventId}`,
+			scope: "agent",
+			scopeRef: "agent:agent-1",
+			timestamp: new Date("2026-04-09T12:00:00.000Z"),
+		}
+	}
+
+	it("keeps batch chunk receipts when the projectedAt marker update fails", async () => {
+		const chunksCol = {
+			bulkWrite: vi.fn(async () => ({
+				upsertedCount: 1,
+				upsertedIds: { 0: "chunk-id-1" },
+				matchedCount: 0,
+			})),
+		} as unknown as Collection
+		vi.mocked(chunksCollection).mockReturnValue(chunksCol)
+		const eventsCol = {
+			updateMany: vi.fn(async () => {
+				throw new Error("marker write exhausted retries")
+			}),
+		} as unknown as Collection
+		vi.mocked(eventsCollection).mockReturnValue(eventsCol)
+
+		// Not a throw: the chunks are durable; the events stay unprojected for
+		// the repair pass.
+		const results = await projectEventChunksBatch({
+			db: mockDb(),
+			prefix: "test_",
+			events: [makeEvent("evt-w08-b")],
+		})
+
+		expect(results).toEqual([{ chunkCreated: true }])
+	})
+
+	it("keeps the single chunk receipt when its projectedAt marker update fails", async () => {
+		const chunksCol = {
+			updateOne: vi.fn(async () => ({
+				upsertedCount: 1,
+				upsertedId: "chunk-id-1",
+				matchedCount: 0,
+			})),
+		} as unknown as Collection
+		vi.mocked(chunksCollection).mockReturnValue(chunksCol)
+		const eventsCol = {
+			updateMany: vi.fn(async () => {
+				throw new Error("marker write exhausted retries")
+			}),
+		} as unknown as Collection
+		vi.mocked(eventsCollection).mockReturnValue(eventsCol)
+
+		const result = await projectEventChunk({
+			db: mockDb(),
+			prefix: "test_",
+			event: makeEvent("evt-w08-s"),
+		})
+
+		expect(result).toEqual({ chunkCreated: true })
 	})
 })
 

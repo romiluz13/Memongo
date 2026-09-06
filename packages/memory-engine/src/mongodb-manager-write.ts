@@ -536,24 +536,36 @@ export class MongoDBManagerWriteOps {
 				}
 				throw err
 			}
-			const projected = await projectEventChunk({
-				db: this.host.db,
-				prefix: this.host.prefix,
-				event: {
-					eventId: written.eventId,
-					agentId: this.host.agentId,
-					role: event.role,
-					body: event.body,
-					scope,
-					scopeRef: written.scopeRef,
-					timestamp: written.timestamp,
-					validAt: event.validAt ?? written.timestamp,
-					...(event.invalidAt ? { invalidAt: event.invalidAt } : {}),
-					...(expiresAt ? { expiresAt } : {}),
-					...(event.sessionId ? { sessionId: event.sessionId } : {}),
-					...(event.metadata ? { metadata: event.metadata } : {}),
-				},
-			})
+			let projected: { chunkCreated: boolean }
+			try {
+				projected = await projectEventChunk({
+					db: this.host.db,
+					prefix: this.host.prefix,
+					event: {
+						eventId: written.eventId,
+						agentId: this.host.agentId,
+						role: event.role,
+						body: event.body,
+						scope,
+						scopeRef: written.scopeRef,
+						timestamp: written.timestamp,
+						validAt: event.validAt ?? written.timestamp,
+						...(event.invalidAt ? { invalidAt: event.invalidAt } : {}),
+						...(expiresAt ? { expiresAt } : {}),
+						...(event.sessionId ? { sessionId: event.sessionId } : {}),
+						...(event.metadata ? { metadata: event.metadata } : {}),
+					},
+				})
+			} catch (err) {
+				// W08: the event (and its staged job) is durable; a failed
+				// projection must not reject it. The event stays in the
+				// unprojected set the repair pass re-projects (the chunk
+				// upsert is idempotent by path).
+				projected = { chunkCreated: false }
+				log.warn(
+					`chunk projection failed for durable event ${written.eventId}; leaving it unprojected for the repair pass: ${String(err)}`,
+				)
+			}
 			if (projected.chunkCreated) {
 				this.host.chunkCount += 1
 				// C-017: a newly projected chunk is embedded server-side
@@ -574,35 +586,48 @@ export class MongoDBManagerWriteOps {
 				if (operationRunContext) {
 					this.host.memoryJobOperationContexts.set(jobId, operationRunContext)
 				}
-				const released = await releaseStagedMemoryJob({
-					db: this.host.db,
-					prefix: this.host.prefix,
-					jobId,
-					agentId: this.host.agentId,
-				})
-				let clearPendingMarker = released
-				if (!released) {
-					const existing = await getMemoryJob({
+				let clearPendingMarker = false
+				try {
+					const released = await releaseStagedMemoryJob({
 						db: this.host.db,
 						prefix: this.host.prefix,
 						jobId,
 						agentId: this.host.agentId,
 					})
-					if (
-						!existing ||
-						(existing.status === "pending" && Boolean(existing.stagedAt))
-					) {
-						// P0.1: the event is already committed — throwing here turned a
-						// fully durable write into a client-visible 500 that invited
-						// duplicate retries. Leave extractionJobPendingAt SET so
-						// repairExtractionOutbox (which exists for exactly this) re-stages
-						// the job, and acknowledge the write.
-						this.host.memoryJobOperationContexts.delete(jobId)
-						clearPendingMarker = false
-						log.warn(
-							`staged extraction job ${jobId} was not released; leaving the outbox marker set for the repair pass`,
-						)
+					clearPendingMarker = released
+					if (!released) {
+						const existing = await getMemoryJob({
+							db: this.host.db,
+							prefix: this.host.prefix,
+							jobId,
+							agentId: this.host.agentId,
+						})
+						if (
+							!existing ||
+							(existing.status === "pending" && Boolean(existing.stagedAt))
+						) {
+							// P0.1: the event is already committed — throwing here turned a
+							// fully durable write into a client-visible 500 that invited
+							// duplicate retries. Leave extractionJobPendingAt SET so
+							// repairExtractionOutbox (which exists for exactly this) re-stages
+							// the job, and acknowledge the write.
+							this.host.memoryJobOperationContexts.delete(jobId)
+							clearPendingMarker = false
+							log.warn(
+								`staged extraction job ${jobId} was not released; leaving the outbox marker set for the repair pass`,
+							)
+						}
 					}
+				} catch (err) {
+					// W08: a thrown release/lookup error gets the same P0.1
+					// treatment as an unreleased job — the marker stays set
+					// for the repair pass and the durable write is
+					// acknowledged.
+					this.host.memoryJobOperationContexts.delete(jobId)
+					clearPendingMarker = false
+					log.warn(
+						`staged extraction job release failed for ${jobId}; leaving the outbox marker set for the repair pass: ${String(err)}`,
+					)
 				}
 				if (clearPendingMarker) {
 					try {
@@ -853,7 +878,7 @@ export class MongoDBManagerWriteOps {
 				})),
 			})
 			const written: Array<
-				PendingItem & { timestamp: Date; scopeRef: string }
+				PendingItem & { timestamp: Date; scopeRef: string; replayed?: boolean }
 			> = []
 			for (const [position, result] of writeResults.entries()) {
 				const item = pending[position]
@@ -862,6 +887,14 @@ export class MongoDBManagerWriteOps {
 						...item,
 						timestamp: result.timestamp,
 						scopeRef: result.scopeRef,
+						// W09: a duplicateKey ok receipt is a durable event this
+						// attempt did not create — an earlier attempt of the same
+						// logical write (retry E11000 on our own eventId, or a
+						// read-confirmed uncertain outcome). Converge projection
+						// and job staging in this pass (both are idempotent) and
+						// acknowledge it as a replay instead of failing a
+						// durable write.
+						...(result.duplicateKey ? { replayed: true } : {}),
 					})
 					continue
 				}
@@ -942,6 +975,7 @@ export class MongoDBManagerWriteOps {
 						ok: true,
 						eventId: item.eventId,
 						chunkCreated,
+						...(item.replayed ? { replayed: true } : {}),
 					}
 				}
 				// C-017: each newly projected chunk is embedded server-side

@@ -641,4 +641,183 @@ describe("mongodb-memory-jobs", () => {
 			duplicate: true,
 		})
 	})
+
+	it("reconciles a write-concern-only error by read instead of throwing into a persisted batch (W08/W09)", async () => {
+		const { createMemoryJobsBatch } = await import("./mongodb-memory-jobs.js")
+		const insertMany = vi.fn(async () => {
+			throw Object.assign(new Error("wtimeout"), {
+				writeConcernErrors: [{ code: 64, errmsg: "wtimeout" }],
+			})
+		})
+		const find = vi.fn(() => ({
+			toArray: vi.fn(async () => [{ jobId: "extraction-evt-1" }]),
+		}))
+		const db = mockDb({
+			test_memory_jobs: mockCollection({ insertMany, find }),
+		})
+
+		const results = await createMemoryJobsBatch({
+			db,
+			prefix: "test_",
+			jobs: [
+				{
+					jobId: "extraction-evt-1",
+					jobType: "extraction",
+					agentId: "agent-1",
+					status: "pending",
+					payload: { eventId: "evt-1" },
+				},
+				{
+					jobId: "extraction-evt-2",
+					jobType: "extraction",
+					agentId: "agent-1",
+					status: "pending",
+					payload: { eventId: "evt-2" },
+				},
+			],
+		})
+
+		// Present job = satisfied; missing job = retry-safe receipt. No throw.
+		expect(results[0]).toEqual({ ok: true, jobId: "extraction-evt-1" })
+		expect(results[1]).toMatchObject({
+			ok: false,
+			jobId: "extraction-evt-2",
+			duplicate: false,
+		})
+		if (!results[1].ok) {
+			expect(results[1].message).toContain("not found on reconciliation read")
+		}
+		expect(find).toHaveBeenCalledWith(
+			{ jobId: { $in: ["extraction-evt-1", "extraction-evt-2"] } },
+			{ projection: { _id: 0, jobId: 1 } },
+		)
+	})
+
+	it("returns safe-retry receipts for a NoWritesPerformed error (W09)", async () => {
+		const { createMemoryJobsBatch } = await import("./mongodb-memory-jobs.js")
+		const insertMany = vi.fn(async () => {
+			const err = new Error("NoWritesPerformed") as Error & {
+				hasErrorLabel: (label: string) => boolean
+			}
+			err.hasErrorLabel = (label: string) => label === "NoWritesPerformed"
+			throw err
+		})
+		const find = vi.fn(() => ({
+			toArray: vi.fn(async () => []),
+		}))
+		const db = mockDb({
+			test_memory_jobs: mockCollection({ insertMany, find }),
+		})
+
+		const results = await createMemoryJobsBatch({
+			db,
+			prefix: "test_",
+			jobs: [
+				{
+					jobId: "extraction-evt-1",
+					jobType: "extraction",
+					agentId: "agent-1",
+					status: "pending",
+					payload: { eventId: "evt-1" },
+				},
+			],
+		})
+
+		expect(results[0]).toMatchObject({
+			ok: false,
+			jobId: "extraction-evt-1",
+			duplicate: false,
+		})
+		if (!results[0].ok) {
+			expect(results[0].message).toContain("no writes performed")
+		}
+		// Zero writes are guaranteed — no reconciliation read.
+		expect(find).not.toHaveBeenCalled()
+	})
+
+	it("yields durability-unconfirmed receipts when the reconciliation read fails (W08)", async () => {
+		const { createMemoryJobsBatch } = await import("./mongodb-memory-jobs.js")
+		const insertMany = vi.fn(async () => {
+			throw Object.assign(new Error("wtimeout"), {
+				writeConcernErrors: [{ code: 64, errmsg: "wtimeout" }],
+			})
+		})
+		const find = vi.fn(() => {
+			throw new Error("reconciliation read unavailable")
+		})
+		const db = mockDb({
+			test_memory_jobs: mockCollection({ insertMany, find }),
+		})
+
+		// No throw — the batch's events are already durable.
+		const results = await createMemoryJobsBatch({
+			db,
+			prefix: "test_",
+			jobs: [
+				{
+					jobId: "extraction-evt-1",
+					jobType: "extraction",
+					agentId: "agent-1",
+					status: "pending",
+					payload: { eventId: "evt-1" },
+				},
+			],
+		})
+
+		expect(results[0]).toMatchObject({
+			ok: false,
+			jobId: "extraction-evt-1",
+			duplicate: false,
+		})
+		if (!results[0].ok) {
+			expect(results[0].message).toContain("durability unconfirmed")
+		}
+	})
+
+	it("read-confirms unlisted jobs when a write-concern error rides along with per-item errors (W09)", async () => {
+		const { createMemoryJobsBatch } = await import("./mongodb-memory-jobs.js")
+		const insertMany = vi.fn(async () => {
+			throw Object.assign(new Error("BulkWriteError"), {
+				name: "MongoBulkWriteError",
+				err: { code: 64, errmsg: "wtimeout" },
+				writeErrors: [{ index: 0, code: 11000, errmsg: "E11000" }],
+			})
+		})
+		const find = vi.fn(() => ({
+			toArray: vi.fn(async () => [{ jobId: "extraction-evt-2" }]),
+		}))
+		const db = mockDb({
+			test_memory_jobs: mockCollection({ insertMany, find }),
+		})
+
+		const results = await createMemoryJobsBatch({
+			db,
+			prefix: "test_",
+			jobs: [
+				{
+					jobId: "extraction-evt-1",
+					jobType: "extraction",
+					agentId: "agent-1",
+					status: "pending",
+					payload: { eventId: "evt-1" },
+				},
+				{
+					jobId: "extraction-evt-2",
+					jobType: "extraction",
+					agentId: "agent-1",
+					status: "pending",
+					payload: { eventId: "evt-2" },
+				},
+			],
+		})
+
+		// E11000 → duplicate (existing job satisfied); unlisted evt-2 is
+		// uncertain under the write-concern error → read confirms it.
+		expect(results[0]).toMatchObject({
+			ok: false,
+			jobId: "extraction-evt-1",
+			duplicate: true,
+		})
+		expect(results[1]).toEqual({ ok: true, jobId: "extraction-evt-2" })
+	})
 })

@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto"
 import { createSubsystemLogger } from "@memongo/lib"
 import type { ClientSession, Db } from "mongodb"
 import { memoryJobsCollection } from "./mongodb-schema.js"
+import { classifyBulkInsertError } from "./mongodb-events.js"
 import { emitTelemetry } from "./mongodb-telemetry.js"
 import type {
 	ClaimedMemoryJob,
@@ -84,10 +85,93 @@ export type MemoryJobBatchItemResult =
 	| { ok: false; jobId: string; duplicate: boolean; message: string }
 
 /**
- * P3.9: insert many jobs in ONE unordered insertMany with the durable write
- * concern. Per-item receipts isolate failures; E11000 (the deterministic
- * `extraction-<eventId>` job already exists) maps to duplicate:true so the
- * caller can treat an existing job as satisfied instead of an error.
+ * W09 reconciliation read for job inserts: which jobIds already exist. An
+ * existing job is claimable (or already ran) — satisfied either way; a
+ * missing job is not durable and is safe to retry.
+ */
+async function findExistingMemoryJobIds(params: {
+	db: Db
+	prefix: string
+	jobIds: string[]
+}): Promise<Set<string>> {
+	const { db, prefix, jobIds } = params
+	if (jobIds.length === 0) {
+		return new Set()
+	}
+	const docs = await memoryJobsCollection(db, prefix)
+		.find({ jobId: { $in: jobIds } }, { projection: { _id: 0, jobId: 1 } })
+		.toArray()
+	const existing = new Set<string>()
+	for (const doc of docs) {
+		const jobId = (doc as { jobId?: string }).jobId
+		if (typeof jobId === "string") {
+			existing.add(jobId)
+		}
+	}
+	return existing
+}
+
+/**
+ * W09: for jobs whose durability the server did not confirm, read back which
+ * jobIds exist. Present = satisfied; absent = retry-safe receipt. A failed
+ * reconciliation read yields "durability unconfirmed" receipts instead of a
+ * throw — a throw here would reject a batch whose events are already durable
+ * (W08).
+ */
+async function reconcileJobBatchOutcomes(params: {
+	db: Db
+	prefix: string
+	results: MemoryJobBatchItemResult[]
+	docs: MemoryJob[]
+	positions: number[]
+}): Promise<void> {
+	const { db, prefix, results, docs, positions } = params
+	let existing: Set<string>
+	try {
+		existing = await findExistingMemoryJobIds({
+			db,
+			prefix,
+			jobIds: positions.map((position) => docs[position].jobId),
+		})
+	} catch (err) {
+		log.warn(
+			`job batch reconciliation read failed; ${positions.length} item(s) reported durability-unconfirmed: ${String(err)}`,
+		)
+		for (const position of positions) {
+			results[position] = {
+				ok: false,
+				jobId: docs[position].jobId,
+				duplicate: false,
+				message: "job durability unconfirmed (reconciliation read failed)",
+			}
+		}
+		return
+	}
+	for (const position of positions) {
+		const doc = docs[position]
+		if (existing.has(doc.jobId)) {
+			results[position] = { ok: true, jobId: doc.jobId }
+		} else {
+			results[position] = {
+				ok: false,
+				jobId: doc.jobId,
+				duplicate: false,
+				message:
+					"job insert unconfirmed (write concern or network outcome); not found on reconciliation read",
+			}
+		}
+	}
+}
+
+/**
+ * P3.9/W09: insert many jobs in ONE unordered insertMany with the durable
+ * write concern. Per-item receipts isolate failures; E11000 (the
+ * deterministic `extraction-<eventId>` job already exists) maps to
+ * duplicate:true so the caller can treat an existing job as satisfied
+ * instead of an error. Non-per-item errors (write concern, network
+ * exhaustion, NoWritesPerformed) are classified and reconciled by read
+ * instead of throwing into a persisted batch (W08): present jobs are
+ * satisfied, missing ones stay retry-safe receipts.
  */
 export async function createMemoryJobsBatch(params: {
 	db: Db
@@ -113,25 +197,58 @@ export async function createMemoryJobsBatch(params: {
 			writeConcern: DURABLE_JOB_WRITE_CONCERN,
 		})
 	} catch (err) {
-		const writeErrors = (
-			err as {
-				writeErrors?: Array<{ index: number; code?: number; errmsg?: string }>
+		const outcome = classifyBulkInsertError(err)
+		const unconfirmed: number[] = []
+		if (outcome.kind === "no-writes-performed") {
+			// EL-021: zero writes guaranteed; every job stays retry-safe.
+			for (const [index, doc] of docs.entries()) {
+				results[index] = {
+					ok: false,
+					jobId: doc.jobId,
+					duplicate: false,
+					message: "no writes performed (server-confirmed); safe to retry",
+				}
 			}
-		)?.writeErrors
-		if (!Array.isArray(writeErrors)) {
-			throw err
+		} else if (outcome.kind === "item-errors") {
+			const erroredPositions = new Set(
+				outcome.writeErrors.map((writeError) => writeError.index),
+			)
+			for (const writeError of outcome.writeErrors) {
+				const doc = docs[writeError.index]
+				if (!doc) {
+					continue
+				}
+				results[writeError.index] = {
+					ok: false,
+					jobId: doc.jobId,
+					duplicate: writeError.code === 11000,
+					message: writeError.errmsg ?? "job insert failed",
+				}
+			}
+			for (const [position] of docs.entries()) {
+				if (erroredPositions.has(position)) {
+					continue
+				}
+				// EL-020: unlisted jobs were applied — unless a write-concern
+				// error rode along (EL-022), in which case confirm by read.
+				if (outcome.writeConcernError) {
+					unconfirmed.push(position)
+				}
+			}
+		} else {
+			// Uncertain outcome (write concern without per-item report, or a
+			// network error that exhausted retries mid-flight): read back what
+			// actually exists.
+			unconfirmed.push(...docs.keys())
 		}
-		for (const writeError of writeErrors) {
-			const doc = docs[writeError.index]
-			if (!doc) {
-				continue
-			}
-			results[writeError.index] = {
-				ok: false,
-				jobId: doc.jobId,
-				duplicate: writeError.code === 11000,
-				message: writeError.errmsg ?? "job insert failed",
-			}
+		if (unconfirmed.length > 0) {
+			await reconcileJobBatchOutcomes({
+				db,
+				prefix,
+				results,
+				docs,
+				positions: unconfirmed,
+			})
 		}
 	}
 	return results

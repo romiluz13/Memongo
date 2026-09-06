@@ -367,6 +367,61 @@ describe("MongoDBMemoryManager write idempotency (P0.1)", () => {
 		expect(result).toEqual({ eventId: "evt-new-attempt", chunkCreated: false })
 		expect(clearEventExtractionJobPending).not.toHaveBeenCalled()
 	})
+
+	it("acknowledges the write when chunk projection throws after commit (W08)", async () => {
+		const { projectEventChunk } = await import("./mongodb-events.js")
+		const { eventsCollection } = await import("./mongodb-schema.js")
+		await mockWritePathDefaults()
+		mocked(eventsCollection).mockReturnValue({
+			findOne: vi.fn(async () => null),
+		} as unknown as import("mongodb").Collection)
+		mocked(projectEventChunk).mockRejectedValue(
+			new Error("chunk upsert exhausted retries"),
+		)
+
+		const manager = makeManager()
+		const result = await manager.writeConversationEvent({
+			role: "user",
+			body: "durable, but projection failed",
+			scope: "agent",
+		})
+		await manager.derivationSchedulingQueue
+		await manager.memoryJobWorkerPromise
+
+		// The event is durable; the failed projection degrades to a
+		// diagnostic and the repair pass re-projects it — never a rejection.
+		expect(result).toEqual({ eventId: "evt-new-attempt", chunkCreated: false })
+		expect(manager.chunkCount).toBe(0)
+	})
+
+	it("acknowledges the write when the staged job release throws after commit (W08)", async () => {
+		const { clearEventExtractionJobPending } = await import(
+			"./mongodb-events.js"
+		)
+		const { releaseStagedMemoryJob } = await import("./mongodb-memory-jobs.js")
+		const { eventsCollection } = await import("./mongodb-schema.js")
+		await mockWritePathDefaults()
+		mocked(eventsCollection).mockReturnValue({
+			findOne: vi.fn(async () => null),
+		} as unknown as import("mongodb").Collection)
+		mocked(releaseStagedMemoryJob).mockRejectedValue(
+			new Error("release update exhausted retries"),
+		)
+
+		const manager = makeManager()
+		const result = await manager.writeConversationEvent({
+			role: "user",
+			body: "committed, but the job release threw",
+			scope: "agent",
+		})
+		await manager.derivationSchedulingQueue
+		await manager.memoryJobWorkerPromise
+
+		// Same P0.1 treatment as an unreleased job: the marker stays set for
+		// the repair pass and the durable write is acknowledged.
+		expect(result).toEqual({ eventId: "evt-new-attempt", chunkCreated: false })
+		expect(clearEventExtractionJobPending).not.toHaveBeenCalled()
+	})
 })
 
 describe("MongoDBMemoryManager writeConversationEventsBatch (P3.9)", () => {
@@ -542,6 +597,77 @@ describe("MongoDBMemoryManager writeConversationEventsBatch (P3.9)", () => {
 		})
 		expect(mocked(writeEventsBatch).mock.calls[0][0].events).toHaveLength(1)
 		expect(createMemoryJobsBatch).toHaveBeenCalledTimes(1)
+	})
+
+	it("acknowledges a keyless durable-exists receipt as a replay and still converges projection and jobs (W09)", async () => {
+		const { writeEventsBatch, projectEventChunksBatch } = await mockBatchPath()
+		const { clearEventExtractionJobPendingBatch } = await import(
+			"./mongodb-events.js"
+		)
+		const { createMemoryJobsBatch } = await import("./mongodb-memory-jobs.js")
+		const { eventsCollection } = await import("./mongodb-schema.js")
+		const find = vi.fn(() => ({ toArray: vi.fn(async () => []) }))
+		mocked(eventsCollection).mockReturnValue({ find } as never)
+		// A prior attempt of the same logical write holds the slot: the
+		// receipt is ok with duplicateKey set (retry E11000 on our own
+		// eventId, or a read-confirmed uncertain outcome).
+		mocked(writeEventsBatch).mockImplementationOnce(
+			async ({ events }: { events: Array<{ eventId?: string }> }) =>
+				events.map((event, index) =>
+					index === 0
+						? {
+								ok: true as const,
+								eventId: event.eventId ?? "evt-prior-attempt",
+								timestamp: new Date("2026-04-09T12:00:00.000Z"),
+								scopeRef: "agent:agent-1",
+								duplicateKey: true as const,
+							}
+						: {
+								ok: true as const,
+								eventId: event.eventId ?? "evt-fresh-2",
+								timestamp: new Date("2026-04-09T12:00:00.000Z"),
+								scopeRef: "agent:agent-1",
+							},
+				),
+		)
+
+		const manager = makeManager()
+		const receipts = await manager.writeConversationEventsBatch([
+			{ role: "user", body: "prior attempt made this durable", scope: "agent" },
+			{ role: "user", body: "fresh sibling", scope: "agent" },
+		])
+		await manager.memoryJobWorkerPromise
+
+		// The manager assigns eventIds before the batch insert; the duplicate
+		// receipt echoes the same id.
+		const pendingIds: Array<string | undefined> = mocked(
+			writeEventsBatch,
+		).mock.calls[0][0].events.map(
+			(event: { eventId?: string }) => event.eventId,
+		)
+
+		// The durable-exists item is acknowledged as a replay, and BOTH items
+		// flow through projection and job staging in this pass (idempotent
+		// convergence) instead of being failed as WRITE_ERROR.
+		expect(receipts[0]).toEqual({
+			ok: true,
+			eventId: pendingIds[0],
+			chunkCreated: true,
+			replayed: true,
+		})
+		expect(receipts[1]).toMatchObject({
+			ok: true,
+			eventId: pendingIds[1],
+			chunkCreated: false,
+		})
+		expect(receipts[1]).not.toHaveProperty("replayed")
+		expect(
+			mocked(projectEventChunksBatch).mock.calls[0][0].events,
+		).toHaveLength(2)
+		expect(mocked(createMemoryJobsBatch).mock.calls[0][0].jobs).toHaveLength(2)
+		expect(clearEventExtractionJobPendingBatch).toHaveBeenCalledWith(
+			expect.objectContaining({ eventIds: pendingIds }),
+		)
 	})
 
 	it("evaluates automatic episode triggers once per scope identity in a batch", async () => {

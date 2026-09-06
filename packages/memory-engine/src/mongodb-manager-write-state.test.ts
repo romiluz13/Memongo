@@ -317,7 +317,7 @@ describe("writeConversationEventsBatch — collection state", () => {
 })
 
 describe("P0.1 regression — post-persist failure does not produce a client-visible duplicate", () => {
-	it("a chunk-projection failure after the event insert surfaces, and the same-key retry replays instead of duplicating", async () => {
+	it("a chunk-projection failure after the event insert degrades to a diagnostic — the write is acknowledged and a same-key retry still replays (W08)", async () => {
 		const fake = createStatefulMongoFake({ prefix: PREFIX })
 		const manager = buildStatefulManager(fake)
 
@@ -335,28 +335,35 @@ describe("P0.1 regression — post-persist failure does not produce a client-vis
 			sessionId: "s-p01",
 			idempotencyKey: "key-p01",
 		}
-		await expect(manager.writeConversationEvent(input)).rejects.toThrow(
-			"injected chunk projection failure",
-		)
+		// W08: the event (and its staged job) is durable; the failed
+		// projection must not reject it. The receipt acknowledges the write
+		// with chunkCreated:false and a warning is logged — the projection
+		// repair pass owns recovery.
+		const result = await manager.writeConversationEvent(input)
+		expect(result).toEqual({
+			eventId: expect.any(String),
+			chunkCreated: false,
+		})
 
-		// The event is durable even though the write surfaced an error; the
-		// extraction outbox marker is still set (the job was never released)
-		// so the repair pass can recover it.
+		// The event is durable. The degraded projection no longer aborts the
+		// release: the staged job is released and the outbox marker cleared,
+		// so durable extraction recovers entities while the projection
+		// repair pass re-projects the chunk.
 		const eventsAfterFailure = fake.all("events")
 		expect(eventsAfterFailure).toHaveLength(1)
 		const durableEvent = eventsAfterFailure[0]
 		expect(durableEvent.idempotencyKey).toBe("key-p01")
-		expect(durableEvent.extractionJobPendingAt).toBeInstanceOf(Date)
+		expect(durableEvent.extractionJobPendingAt).toBeUndefined()
 		expect(durableEvent.projectedAt).toBeUndefined()
 		expect(fake.all("chunks")).toHaveLength(0)
 		const stagedJobs = fake.all("memory_jobs")
 		expect(stagedJobs).toHaveLength(1)
-		expect(stagedJobs[0].stagedAt).toBeInstanceOf(Date)
+		expect(stagedJobs[0].status).toBe("pending")
+		expect(stagedJobs[0].stagedAt).toBeUndefined()
 
-		// The client retries with the SAME idempotency key (Stripe model).
+		// Even if a client retries with the SAME idempotency key (Stripe
+		// model), the replay observes the original receipt — no duplicate.
 		const retry = await manager.writeConversationEvent(input)
-
-		// The retry observes the replayed receipt — no error, no duplicate.
 		expect(retry.eventId).toBe(durableEvent.eventId)
 		expect(retry.chunkCreated).toBe(false)
 		expect(fake.all("events")).toHaveLength(1)

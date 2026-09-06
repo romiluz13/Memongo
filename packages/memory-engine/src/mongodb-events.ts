@@ -229,11 +229,19 @@ export async function pruneIdempotencyFingerprints(params: {
 		params.olderThanDays ?? resolveIdempotencyRetentionDays()
 	const now = params.now ?? new Date()
 	const cutoff = new Date(now.getTime() - retentionDays * 86_400_000)
+	// W10: age by the immutable acceptance instant (recordedAt), not the
+	// event's own timestamp — a fresh import of historical events keeps its
+	// replay protection for the full window, and a future-dated event can no
+	// longer extend retention. Legacy rows without recordedAt keep the old
+	// timestamp rule so they remain prunable.
 	const result = await eventsCollection(db, prefix).updateMany(
 		{
 			agentId,
 			idempotencyKey: { $exists: true },
-			timestamp: { $lt: cutoff },
+			$or: [
+				{ recordedAt: { $lt: cutoff } },
+				{ recordedAt: { $exists: false }, timestamp: { $lt: cutoff } },
+			],
 		},
 		{ $unset: { idempotencyKey: "", idempotencyFingerprint: "" } },
 	)
@@ -348,7 +356,14 @@ export async function writeEvent(params: {
 // ---------------------------------------------------------------------------
 
 export type EventBatchItemResult =
-	| { ok: true; eventId: string; timestamp: Date; scopeRef: string }
+	| {
+			ok: true
+			eventId: string
+			timestamp: Date
+			scopeRef: string
+			/** Durable, but confirmed by a reconciliation read (a prior attempt of the same logical write holds the slot), not by this insert. */
+			duplicateKey?: true
+	  }
 	| { ok: false; eventId?: string; duplicateKey: boolean; message: string }
 
 type BulkWriteFailure = {
@@ -364,6 +379,178 @@ function asBulkWriteFailure(err: unknown): BulkWriteFailure | null {
 		return null
 	}
 	return err as BulkWriteFailure
+}
+
+export type BulkInsertOutcome =
+	| {
+			kind: "item-errors"
+			writeErrors: Array<{ index: number; code?: number; errmsg?: string }>
+			writeConcernError: boolean
+	  }
+	| { kind: "no-writes-performed" }
+	| { kind: "uncertain" }
+
+/**
+ * W09: classify a thrown insertMany error by what the server actually did,
+ * per the shipped driver 7.5 shapes (EL-023):
+ * - writeErrors array present → per-item failures; unlisted ops were applied
+ *   by the unordered insert (EL-020), unless a write-concern error rides
+ *   along — then their replication is uncertain (EL-022).
+ * - NoWritesPerformed error label → the server guarantees zero writes were
+ *   performed across attempts (EL-021); the whole batch is safe to re-run.
+ * - Anything else (pure write-concern error, network exhaustion, unknown) →
+ *   uncertain: the batch's fate is only knowable by a reconciliation read.
+ */
+export function classifyBulkInsertError(err: unknown): BulkInsertOutcome {
+	const hasErrorLabel = (err as { hasErrorLabel?: (label: string) => boolean })
+		?.hasErrorLabel
+	if (
+		typeof hasErrorLabel === "function" &&
+		hasErrorLabel.call(err, "NoWritesPerformed")
+	) {
+		return { kind: "no-writes-performed" }
+	}
+	const writeErrorsRaw = (err as BulkWriteFailure).writeErrors
+	const writeErrors = Array.isArray(writeErrorsRaw)
+		? writeErrorsRaw.filter((we) => we && typeof we.index === "number")
+		: []
+	if (writeErrors.length > 0) {
+		return {
+			kind: "item-errors",
+			writeErrors,
+			writeConcernError: carriesWriteConcernError(err),
+		}
+	}
+	return { kind: "uncertain" }
+}
+
+/**
+ * EL-022/EL-023: a write-concern error surfaces on a thrown
+ * MongoBulkWriteError as `.err` / `.result.getWriteConcernError()` (and as a
+ * standalone MongoWriteConcernError carrying the server's writeConcernErrors
+ * array). It is an uncertain-outcome signal, never a per-item failure.
+ */
+function carriesWriteConcernError(err: unknown): boolean {
+	if (!err || typeof err !== "object") {
+		return false
+	}
+	const candidate = err as {
+		err?: unknown
+		result?: { getWriteConcernError?: () => unknown }
+		getWriteConcernError?: () => unknown
+		writeConcernErrors?: unknown[]
+	}
+	if (candidate.err != null) {
+		return true
+	}
+	if (
+		Array.isArray(candidate.writeConcernErrors) &&
+		candidate.writeConcernErrors.length > 0
+	) {
+		return true
+	}
+	const viaResult = candidate.result?.getWriteConcernError?.()
+	if (viaResult != null) {
+		return true
+	}
+	const viaSelf = candidate.getWriteConcernError?.()
+	return viaSelf != null
+}
+
+/**
+ * W09 reconciliation read: which of the given eventIds exist in the events
+ * collection. Presence is the ground truth for what an uncertain attempt
+ * (write concern / network) actually applied; absence means the item is not
+ * durable and is safe to retry.
+ */
+export async function findExistingEventIds(params: {
+	db: Db
+	prefix: string
+	eventIds: string[]
+}): Promise<Set<string>> {
+	const { db, prefix, eventIds } = params
+	if (eventIds.length === 0) {
+		return new Set()
+	}
+	const docs = await eventsCollection(db, prefix)
+		.find(
+			{ eventId: { $in: eventIds } },
+			{ projection: { _id: 0, eventId: 1 } },
+		)
+		.toArray()
+	const existing = new Set<string>()
+	for (const doc of docs) {
+		const eventId = (doc as { eventId?: string }).eventId
+		if (typeof eventId === "string") {
+			existing.add(eventId)
+		}
+	}
+	return existing
+}
+
+/**
+ * W09: for docs whose durability the server did not confirm, read back which
+ * eventIds actually exist. Present = durable — receipt ok with duplicateKey
+ * flagged so the caller maps it to the replay path; absent = not durable —
+ * ok:false (retry-safe). If the reconciliation read itself fails, items get
+ * "durability unconfirmed" receipts instead of a throw: a throw after a
+ * possible durable commit is the W08 anti-pattern, and receipts preserve the
+ * batch's siblings.
+ */
+async function reconcileEventBatchOutcomes(params: {
+	db: Db
+	prefix: string
+	results: EventBatchItemResult[]
+	docs: CanonicalEvent[]
+	docIndexes: number[]
+	positions: number[]
+}): Promise<void> {
+	const { db, prefix, results, docs, docIndexes, positions } = params
+	if (positions.length === 0) {
+		return
+	}
+	let existing: Set<string>
+	try {
+		existing = await findExistingEventIds({
+			db,
+			prefix,
+			eventIds: positions.map((position) => docs[position].eventId),
+		})
+	} catch (err) {
+		log.warn(
+			`event batch reconciliation read failed; ${positions.length} item(s) reported durability-unconfirmed: ${String(err)}`,
+		)
+		for (const position of positions) {
+			const doc = docs[position]
+			results[docIndexes[position]] = {
+				ok: false,
+				eventId: doc.eventId,
+				duplicateKey: false,
+				message: "event durability unconfirmed (reconciliation read failed)",
+			}
+		}
+		return
+	}
+	for (const position of positions) {
+		const doc = docs[position]
+		if (existing.has(doc.eventId)) {
+			results[docIndexes[position]] = {
+				ok: true,
+				eventId: doc.eventId,
+				timestamp: doc.timestamp,
+				scopeRef: doc.scopeRef,
+				duplicateKey: true,
+			}
+		} else {
+			results[docIndexes[position]] = {
+				ok: false,
+				eventId: doc.eventId,
+				duplicateKey: false,
+				message:
+					"event insert unconfirmed (write concern or network outcome); not found on reconciliation read",
+			}
+		}
+	}
 }
 
 /**
@@ -429,24 +616,96 @@ export async function writeEventsBatch(params: {
 		)
 		markInserted()
 	} catch (err) {
-		const bulk = asBulkWriteFailure(err)
-		if (!bulk?.writeErrors) {
-			throw err
-		}
-		// Unordered inserts apply every doc that did not error; only the
-		// indexed failures get an error receipt.
-		markInserted()
-		for (const writeError of bulk.writeErrors) {
-			const doc = docs[writeError.index]
-			if (!doc) {
-				continue
+		const outcome = classifyBulkInsertError(err)
+		if (outcome.kind === "no-writes-performed") {
+			// EL-021: the server guarantees zero writes; every item stays a
+			// safe-retry receipt instead of a rejection.
+			for (const [position, doc] of docs.entries()) {
+				results[docIndexes[position]] = {
+					ok: false,
+					eventId: doc.eventId,
+					duplicateKey: false,
+					message: "no writes performed (server-confirmed); safe to retry",
+				}
 			}
-			results[docIndexes[writeError.index]] = {
-				ok: false,
-				eventId: doc.eventId,
-				duplicateKey: writeError.code === 11000,
-				message: writeError.errmsg ?? "event insert failed",
+		} else if (outcome.kind === "item-errors") {
+			const erroredPositions = new Set(
+				outcome.writeErrors.map((writeError) => writeError.index),
+			)
+			const unconfirmedPositions: number[] = []
+			for (const writeError of outcome.writeErrors) {
+				const doc = docs[writeError.index]
+				if (!doc) {
+					continue
+				}
+				if (writeError.code === 11000 && doc.idempotencyKey) {
+					// Keyed duplicate: another logical write carrying the same
+					// idempotency key won the slot — the caller replays the
+					// winner's receipt (Stripe semantics; payload may differ).
+					results[docIndexes[writeError.index]] = {
+						ok: false,
+						eventId: doc.eventId,
+						duplicateKey: true,
+						message: writeError.errmsg ?? "event insert failed",
+					}
+					continue
+				}
+				if (writeError.code === 11000) {
+					// W09: keyless E11000 — the only keyless unique index is
+					// eventId (EL-013), so this is an earlier attempt of this
+					// same batch insert (the writeEventsBatch-level retry saw
+					// the collision after a partial mid-flight application).
+					// Verify by read: present = durable-exists, absent = a
+					// genuine per-item failure.
+					unconfirmedPositions.push(writeError.index)
+					continue
+				}
+				results[docIndexes[writeError.index]] = {
+					ok: false,
+					eventId: doc.eventId,
+					duplicateKey: false,
+					message: writeError.errmsg ?? "event insert failed",
+				}
 			}
+			for (const [position, doc] of docs.entries()) {
+				if (erroredPositions.has(position)) {
+					continue
+				}
+				if (outcome.writeConcernError) {
+					// EL-022: a write-concern error rode along — unlisted items
+					// were applied on the primary but their replication is
+					// uncertain; confirm them by read.
+					unconfirmedPositions.push(position)
+					continue
+				}
+				// EL-020: unordered inserts apply every doc that did not error.
+				results[docIndexes[position]] = {
+					ok: true,
+					eventId: doc.eventId,
+					timestamp: doc.timestamp,
+					scopeRef: doc.scopeRef,
+				}
+			}
+			await reconcileEventBatchOutcomes({
+				db,
+				prefix,
+				results,
+				docs,
+				docIndexes,
+				positions: unconfirmedPositions,
+			})
+		} else {
+			// Uncertain outcome (write concern without per-item report, or a
+			// network error that exhausted retries mid-flight): the batch's
+			// fate is only knowable by reading back what actually exists.
+			await reconcileEventBatchOutcomes({
+				db,
+				prefix,
+				results,
+				docs,
+				docIndexes,
+				positions: docs.map((_, position) => position),
+			})
 		}
 	}
 
@@ -893,9 +1152,21 @@ export async function projectEventChunksBatch(params: {
 	const projectableIds = events
 		.filter((_, index) => !failedIndexes.has(index))
 		.map((event) => event.eventId)
-	await retryTransientMongoWrite("events.markProjectedBatch", () =>
-		markEventsProjected({ db, prefix, eventIds: projectableIds }),
-	)
+	let markerSet = true
+	try {
+		await retryTransientMongoWrite("events.markProjectedBatch", () =>
+			markEventsProjected({ db, prefix, eventIds: projectableIds }),
+		)
+	} catch (err) {
+		// W08: the chunks are durable but the projectedAt marker is not; the
+		// events stay in the unprojected set so the repair pass re-projects
+		// them (the chunk upsert is idempotent by path). Degrade to a
+		// diagnostic instead of throwing out of a durable write path.
+		markerSet = false
+		log.warn(
+			`batch projectedAt marker failed for ${projectableIds.length} event(s); leaving them unprojected for the repair pass: ${String(err)}`,
+		)
+	}
 
 	const results = events.map((_, index) => ({
 		chunkCreated: upsertedIndexes.has(index),
@@ -908,7 +1179,7 @@ export async function projectEventChunksBatch(params: {
 			run: {
 				agentId: events[0].agentId,
 				projectionType: "chunks",
-				status: failedIndexes.size > 0 ? "failed" : "ok",
+				status: failedIndexes.size > 0 || !markerSet ? "failed" : "ok",
 				itemsProjected: chunksCreated,
 				durationMs: Date.now() - startMs,
 			},
@@ -966,9 +1237,19 @@ export async function projectEventChunk(params: {
 			{ upsert: true },
 		),
 	)
-	await retryTransientMongoWrite("events.markProjected", () =>
-		markEventsProjected({ db, prefix, eventIds: [event.eventId] }),
-	)
+	let markerSet = true
+	try {
+		await retryTransientMongoWrite("events.markProjected", () =>
+			markEventsProjected({ db, prefix, eventIds: [event.eventId] }),
+		)
+	} catch (err) {
+		// W08: same degradation as the batch variant — the chunk is durable,
+		// the event stays unprojected, the repair pass re-projects it.
+		markerSet = false
+		log.warn(
+			`projectedAt marker failed for ${event.eventId}; leaving the event unprojected for the repair pass: ${String(err)}`,
+		)
+	}
 	if (params.recordRun !== false) {
 		await recordProjectionRun({
 			db,
@@ -976,7 +1257,7 @@ export async function projectEventChunk(params: {
 			run: {
 				agentId: event.agentId,
 				projectionType: "chunks",
-				status: "ok",
+				status: markerSet ? "ok" : "failed",
 				itemsProjected: result.upsertedCount > 0 ? 1 : 0,
 				durationMs: Date.now() - startMs,
 			},
