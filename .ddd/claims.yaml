@@ -797,3 +797,40 @@ entries:
     constructs: [packages/memory-engine/src/mongodb-events.ts, packages/memory-engine/src/mongodb-memory-jobs.ts, packages/memory-engine/src/mongodb-manager-write.ts]
     validations: [V-150, V-151, V-152, V-153]
     exceptions: []
+
+  - id: C-045
+    schema_version: 0.1.0
+    statement: "Ingest/sync durability MUST preserve every byte of ingested source text and survive enumeration failures, crashes mid-replacement, and legacy rows: chunk identities MUST embed the emission ordinal so a source line longer than the chunk bound round-trips completely — no two segments of one file may share a chunk id or collapse into one stored row, and each segment MUST remain individually addressable behind a unique index on {scopeRef, path, startLine, endLine, ordinal}; a source enumeration that rejects MUST be treated as enumeration-incomplete — stale cleanup skipped, filesFailed/enumerationComplete reported, host dirty flag retained — with only a confirmed-missing path (ENOENT) a legitimate skip, because fsPromises.readdir fulfills with the complete array or rejects wholesale and never returns a partial listing; file replacement MUST be all-or-nothing per file — one callback-API withTransaction over chunk delete + chunk bulkWrite + completing metadata — and where transactions are unavailable or too large the stored hash MUST be invalidated BEFORE any destructive write via a sentinel that can never equal a real content hash, so a crash mid-replacement leaves a state the next non-forced sync re-processes instead of trusting a stale equal hash over missing chunks; stored file and KB rows MUST carry their chunkScheme so a pre-ordinal row is re-chunked on sight (repairing the last-write-wins damage already present in databases), and KB re-ingest of an incomplete parent MUST replace that document's chunks cleanly — removing leftovers — instead of upserting into a poisoned set."
+    rationale: "Filed from the 2026-09-05 independent audit W07/W14/W15: buildChunkId omitted the segment ordinal, so an over-bound source line produced multiple chunks whose delete-then-upsert collapsed to the last segment, silently making most source text unrecoverable (the same identity class also collapsed KB document chunks and multimodal files); listMemoryFiles wrapped enumeration in catch{}, so a transient readdir failure read as an empty source and Phase C stale cleanup deleted every stored chunk; and 'atomic' file replacement committed the chunk delete before the upserts with the metadata hash advanced only afterwards, leaving a crash window where a stored equal hash certified data that no longer existed while a non-forced sync would trust it. Grounded in official documentation: withTransaction is the driver's callback API that commits the whole replacement or nothing, with TransactionTooLargeForCache and standalone topologies requiring fallback (EL-024); bulkWrite updateOne updates only the first match (so shared ids collapse writes into one row) and the first error inside a transaction aborts the whole batch, making the transaction all-or-nothing (EL-025); fsPromises.readdir fulfills with the complete array of names or rejects — there is no partial-result mode, so a rejection means the listing is unavailable, never that the directory is empty (EL-026)."
+    sources:
+      - ref: "docs/audits/2026-09-05-independent/logic_write.md#W07"
+        authority_domain: ingest-durability
+        entailment: explicit
+      - ref: "docs/audits/2026-09-05-independent/logic_write.md#W14"
+        authority_domain: ingest-durability
+        entailment: explicit
+      - ref: "docs/audits/2026-09-05-independent/logic_write.md#W15"
+        authority_domain: ingest-durability
+        entailment: explicit
+      - ref: "EL-024#Transactions and Atomicity"
+        authority_domain: transaction-semantics
+        entailment: explicit
+      - ref: "EL-024#Transactions API"
+        authority_domain: transaction-semantics
+        entailment: explicit
+      - ref: "EL-025#Error Handling inside Transactions"
+        authority_domain: crud-write-semantics
+        entailment: explicit
+      - ref: "EL-025#Write Operations (updateOne and updateMany)"
+        authority_domain: crud-write-semantics
+        entailment: explicit
+      - ref: "EL-026#fsPromises.readdir(path[, options])"
+        authority_domain: ingest-durability
+        entailment: explicit
+    claim_kind: behavioral
+    impact: critical
+    tier: T3
+    status: known-and-supported
+    constructs: [packages/memory-engine/src/internal.ts, packages/memory-engine/src/session-files.ts, packages/memory-engine/src/mongodb-sync.ts, packages/memory-engine/src/mongodb-manager-sync.ts, packages/memory-engine/src/mongodb-kb.ts, packages/memory-engine/src/mongodb-schema-standard-indexes-core.ts, packages/memory-engine/src/mongodb-schema-validators.ts, packages/memory-engine/src/mongodb-schema-validator-knowledge.ts]
+    validations: [V-154, V-155, V-156, V-157]
+    exceptions: []

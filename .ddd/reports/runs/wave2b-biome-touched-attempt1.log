@@ -1,0 +1,327 @@
+packages/memory-engine/src/internal.ts:384:7 lint/complexity/useOptionalChain  FIXABLE  ━━━━━━━━━━━━
+
+  ! Change to an optional chain.
+  
+    382 │ 			filePath: absPath,
+    383 │ 		})
+  > 384 │ 		if (!mimeType || !mimeType.startsWith(`${modality}/`)) {
+        │ 		    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    385 │ 			return null
+    386 │ 		}
+  
+  i Unsafe fix: Change to an optional chain.
+  
+    382 382 │         filePath: absPath,
+    383 383 │       })
+    384     │ - → → if·(!mimeType·||·!mimeType.startsWith(`${modality}/`))·{
+        384 │ + → → if·(!mimeType?.startsWith(`${modality}/`))·{
+    385 385 │         return null
+    386 386 │       }
+  
+
+packages/memory-engine/src/mongodb-manager-sync.ts:239:20 lint/style/noNonNullAssertion ━━━━━━━━━━━━
+
+  ! Forbidden non-null assertion.
+  
+    237 │ 		progress?: (update: MemorySyncProgressUpdate) => void
+    238 │ 	}): Promise<void> {
+  > 239 │ 		const mongoCfg = this.host.config.mongodb!
+        │ 		                 ^^^^^^^^^^^^^^^^^^^^^^^^^
+    240 │ 		try {
+    241 │ 			const result = await syncToMongoDB({
+  
+
+packages/memory-engine/src/mongodb-manager-sync.ts:348:20 lint/style/noNonNullAssertion ━━━━━━━━━━━━
+
+  ! Forbidden non-null assertion.
+  
+    347 │ 	async maybeAutoRefreshKB(): Promise<void> {
+  > 348 │ 		const mongoCfg = this.host.config.mongodb!
+        │ 		                 ^^^^^^^^^^^^^^^^^^^^^^^^^
+    349 │ 		if (!mongoCfg.kb.enabled) {
+    350 │ 			return
+  
+
+packages/memory-engine/src/mongodb-manager-sync.ts:411:20 lint/style/noNonNullAssertion ━━━━━━━━━━━━
+
+  ! Forbidden non-null assertion.
+  
+    409 │ 			return
+    410 │ 		}
+  > 411 │ 		const mongoCfg = this.host.config.mongodb!
+        │ 		                 ^^^^^^^^^^^^^^^^^^^^^^^^^
+    412 │ 		const debounceMs = mongoCfg.watchDebounceMs
+    413 │ 		const watchPaths = new Set<string>([
+  
+
+packages/memory-engine/src/mongodb-manager-sync.ts:438:20 lint/style/noNonNullAssertion ━━━━━━━━━━━━
+
+  ! Forbidden non-null assertion.
+  
+    437 │ 	scheduleWatchSync(): void {
+  > 438 │ 		const mongoCfg = this.host.config.mongodb!
+        │ 		                 ^^^^^^^^^^^^^^^^^^^^^^^^^
+    439 │ 		if (this.host.watchTimer) {
+    440 │ 			clearTimeout(this.host.watchTimer)
+  
+
+packages/memory-engine/src/mongodb-manager-sync.ts:3:8 lint/correctness/noUnusedImports  FIXABLE  ━━━━━━━━━━
+
+  ! This import is unused.
+  
+    1 │ import path from "node:path"
+    2 │ import chokidar from "chokidar"
+  > 3 │ import { isDuplicateKeyError } from "./internal.js"
+      │        ^^^^^^^^^^^^^^^^^^^^^^^
+    4 │ import {
+    5 │ 	clearEventExtractionJobPending,
+  
+  i Unused imports might be the result of an incomplete refactoring.
+  
+  i Unsafe fix: Remove the unused imports.
+  
+      1   1 │   import path from "node:path"
+      2   2 │   import chokidar from "chokidar"
+      3     │ - import·{·isDuplicateKeyError·}·from·"./internal.js"
+      4   3 │   import {
+      5   4 │   	clearEventExtractionJobPending,
+  
+
+packages/memory-engine/src/mongodb-sync.test.ts:521:10 lint/style/noNonNullAssertion  FIXABLE  ━━━━━━━━━━
+
+  ! Forbidden non-null assertion.
+  
+    519 │ 		)
+    520 │ 		expect(sessionCall).toBeDefined()
+  > 521 │ 		expect(sessionCall![1].$set.source).toBe("sessions")
+        │ 		       ^^^^^^^^^^^^
+    522 │ 		expect(sessionCall![1].$set.hash).toBe("session-meta-hash")
+    523 │ 		// W07: completing metadata records the chunk identity scheme.
+  
+  i Unsafe fix: Replace with optional chain operator ?. This operator includes runtime checks, so it is safer than the compile-only non-null assertion operator
+  
+     519  519 │       )
+     520  520 │       expect(sessionCall).toBeDefined()
+     521      │ - → → expect(sessionCall![1].$set.source).toBe("sessions")
+          521 │ + → → expect(sessionCall?.[1].$set.source).toBe("sessions")
+     522  522 │       expect(sessionCall![1].$set.hash).toBe("session-meta-hash")
+     523  523 │       // W07: completing metadata records the chunk identity scheme.
+  
+
+packages/memory-engine/src/mongodb-sync.test.ts:522:10 lint/style/noNonNullAssertion  FIXABLE  ━━━━━━━━━━
+
+  ! Forbidden non-null assertion.
+  
+    520 │ 		expect(sessionCall).toBeDefined()
+    521 │ 		expect(sessionCall![1].$set.source).toBe("sessions")
+  > 522 │ 		expect(sessionCall![1].$set.hash).toBe("session-meta-hash")
+        │ 		       ^^^^^^^^^^^^
+    523 │ 		// W07: completing metadata records the chunk identity scheme.
+    524 │ 		expect(sessionCall![1].$set.chunkScheme).toBe(2)
+  
+  i Unsafe fix: Replace with optional chain operator ?. This operator includes runtime checks, so it is safer than the compile-only non-null assertion operator
+  
+     520  520 │       expect(sessionCall).toBeDefined()
+     521  521 │       expect(sessionCall![1].$set.source).toBe("sessions")
+     522      │ - → → expect(sessionCall![1].$set.hash).toBe("session-meta-hash")
+          522 │ + → → expect(sessionCall?.[1].$set.hash).toBe("session-meta-hash")
+     523  523 │       // W07: completing metadata records the chunk identity scheme.
+     524  524 │       expect(sessionCall![1].$set.chunkScheme).toBe(2)
+  
+
+packages/memory-engine/src/mongodb-sync.test.ts:524:10 lint/style/noNonNullAssertion  FIXABLE  ━━━━━━━━━━
+
+  ! Forbidden non-null assertion.
+  
+    522 │ 		expect(sessionCall![1].$set.hash).toBe("session-meta-hash")
+    523 │ 		// W07: completing metadata records the chunk identity scheme.
+  > 524 │ 		expect(sessionCall![1].$set.chunkScheme).toBe(2)
+        │ 		       ^^^^^^^^^^^^
+    525 │ 		// W15: an invalidation write (sentinel hash) precedes the completing
+    526 │ 		// write for the same path.
+  
+  i Unsafe fix: Replace with optional chain operator ?. This operator includes runtime checks, so it is safer than the compile-only non-null assertion operator
+  
+     522  522 │       expect(sessionCall![1].$set.hash).toBe("session-meta-hash")
+     523  523 │       // W07: completing metadata records the chunk identity scheme.
+     524      │ - → → expect(sessionCall![1].$set.chunkScheme).toBe(2)
+          524 │ + → → expect(sessionCall?.[1].$set.chunkScheme).toBe(2)
+     525  525 │       // W15: an invalidation write (sentinel hash) precedes the completing
+     526  526 │       // write for the same path.
+  
+
+packages/memory-engine/src/mongodb-sync.test.ts:828:10 lint/style/noNonNullAssertion  FIXABLE  ━━━━━━━━━━
+
+  ! Forbidden non-null assertion.
+  
+    826 │ 		)
+    827 │ 		expect(partialCalls.length).toBe(1)
+  > 828 │ 		expect(partialCalls[0]![1].$set.hash).toBe("__invalidated__")
+        │ 		       ^^^^^^^^^^^^^^^^
+    829 │ 		const completingWrite = partialCalls.find(
+    830 │ 			(call) => call[1].$set.hash !== "__invalidated__",
+  
+  i Unsafe fix: Replace with optional chain operator ?. This operator includes runtime checks, so it is safer than the compile-only non-null assertion operator
+  
+     826  826 │       )
+     827  827 │       expect(partialCalls.length).toBe(1)
+     828      │ - → → expect(partialCalls[0]![1].$set.hash).toBe("__invalidated__")
+          828 │ + → → expect(partialCalls[0]?.[1].$set.hash).toBe("__invalidated__")
+     829  829 │       const completingWrite = partialCalls.find(
+     830  830 │         (call) => call[1].$set.hash !== "__invalidated__",
+  
+
+packages/memory-engine/src/mongodb-sync.test.ts:888:17 lint/style/noNonNullAssertion  FIXABLE  ━━━━━━━━━━
+
+  ! Forbidden non-null assertion.
+  
+    886 │ 		)
+    887 │ 		expect(salvagedMeta).toBeDefined()
+  > 888 │ 		expect(typeof salvagedMeta![1].$set.hash).toBe("string")
+        │ 		              ^^^^^^^^^^^^^
+    889 │ 	})
+    890 │ })
+  
+  i Unsafe fix: Replace with optional chain operator ?. This operator includes runtime checks, so it is safer than the compile-only non-null assertion operator
+  
+     886  886 │       )
+     887  887 │       expect(salvagedMeta).toBeDefined()
+     888      │ - → → expect(typeof·salvagedMeta![1].$set.hash).toBe("string")
+          888 │ + → → expect(typeof·salvagedMeta?.[1].$set.hash).toBe("string")
+     889  889 │     })
+     890  890 │   })
+  
+
+packages/memory-engine/src/mongodb-sync.test.ts:1014:10 lint/style/noNonNullAssertion  FIXABLE  ━━━━━━━━━━
+
+  ! Forbidden non-null assertion.
+  
+    1012 │ 		})
+    1013 │ 		expect(staleDeleteCall).toBeDefined()
+  > 1014 │ 		expect(staleDeleteCall![1]).toMatchObject({ session: mockSession })
+         │ 		       ^^^^^^^^^^^^^^^^
+    1015 │ 	})
+    1016 │ 
+  
+  i Unsafe fix: Replace with optional chain operator ?. This operator includes runtime checks, so it is safer than the compile-only non-null assertion operator
+  
+    1012 1012 │       })
+    1013 1013 │       expect(staleDeleteCall).toBeDefined()
+    1014      │ - → → expect(staleDeleteCall![1]).toMatchObject({·session:·mockSession·})
+         1014 │ + → → expect(staleDeleteCall?.[1]).toMatchObject({·session:·mockSession·})
+    1015 1015 │     })
+    1016 1016 │   
+  
+
+packages/memory-engine/src/mongodb-sync.test.ts:1356:10 lint/style/noNonNullAssertion  FIXABLE  ━━━━━━━━━━
+
+  ! Forbidden non-null assertion.
+  
+    1354 │ 		)
+    1355 │ 		expect(sessionBulkOps).toBeDefined()
+  > 1356 │ 		expect(sessionBulkOps![0].length).toBeLessThanOrEqual(5)
+         │ 		       ^^^^^^^^^^^^^^^
+    1357 │ 	})
+    1358 │ 
+  
+  i Unsafe fix: Replace with optional chain operator ?. This operator includes runtime checks, so it is safer than the compile-only non-null assertion operator
+  
+    1354 1354 │       )
+    1355 1355 │       expect(sessionBulkOps).toBeDefined()
+    1356      │ - → → expect(sessionBulkOps![0].length).toBeLessThanOrEqual(5)
+         1356 │ + → → expect(sessionBulkOps?.[0].length).toBeLessThanOrEqual(5)
+    1357 1357 │     })
+    1358 1358 │   
+  
+
+packages/memory-engine/src/mongodb-sync.test.ts:1393:10 lint/style/noNonNullAssertion  FIXABLE  ━━━━━━━━━━
+
+  ! Forbidden non-null assertion.
+  
+    1391 │ 		expect(sessionBulkOps).toBeDefined()
+    1392 │ 		// Small content should produce 1 chunk, which is under the 50 limit
+  > 1393 │ 		expect(sessionBulkOps![0].length).toBeLessThanOrEqual(50)
+         │ 		       ^^^^^^^^^^^^^^^
+    1394 │ 	})
+    1395 │ 
+  
+  i Unsafe fix: Replace with optional chain operator ?. This operator includes runtime checks, so it is safer than the compile-only non-null assertion operator
+  
+    1391 1391 │       expect(sessionBulkOps).toBeDefined()
+    1392 1392 │       // Small content should produce 1 chunk, which is under the 50 limit
+    1393      │ - → → expect(sessionBulkOps![0].length).toBeLessThanOrEqual(50)
+         1393 │ + → → expect(sessionBulkOps?.[0].length).toBeLessThanOrEqual(50)
+    1394 1394 │     })
+    1395 1395 │   
+  
+
+packages/memory-engine/src/mongodb-sync.ts:205:7 lint/complexity/useOptionalChain  FIXABLE  ━━━━━━━━━━
+
+  ! Change to an optional chain.
+  
+    203 │ 		}
+    204 │ 		// Embeddings are generated by MongoDB automatically after write time.
+  > 205 │ 		if (embeddings && embeddings[index]) {
+        │ 		    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    206 │ 			setDoc.embedding = embeddings[index]
+    207 │ 		}
+  
+  i Unsafe fix: Change to an optional chain.
+  
+     203  203 │       }
+     204  204 │       // Embeddings are generated by MongoDB automatically after write time.
+     205      │ - → → if·(embeddings·&&·embeddings[index])·{
+          205 │ + → → if·(embeddings?.[index])·{
+     206  206 │         setDoc.embedding = embeddings[index]
+     207  207 │       }
+  
+
+packages/memory-engine/src/mongodb-kb.test.ts format ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  × Formatter would have printed the following content:
+  
+    941 941 │       // W07: "complete" only means skippable when it was written by the
+    942 942 │       // current chunk scheme.
+    943     │ - → → await·seedParent({·_id:·"done-parent",·chunksComplete:·true,·chunkScheme:·2·})
+        943 │ + → → await·seedParent({
+        944 │ + → → → _id:·"done-parent",
+        945 │ + → → → chunksComplete:·true,
+        946 │ + → → → chunkScheme:·2,
+        947 │ + → → })
+    944 948 │   
+    945 949 │       const result = await ingestToKB(params())
+  
+
+packages/memory-engine/src/mongodb-sync.ts format ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  × Formatter would have printed the following content:
+  
+      31   31 │     isTransactionUnsupported,
+      32   32 │   } from "./mongodb-transactions.js"
+      33      │ - import·{
+      34      │ - → buildSessionEntry,
+      35      │ - → listSessionFilesForAgent,
+      36      │ - }·from·"./session-files.js"
+           33 │ + import·{·buildSessionEntry,·listSessionFilesForAgent·}·from·"./session-files.js"
+      37   34 │   import type {
+      38   35 │     InternalMemoryStoredSource,
+    ········· │ 
+     584  581 │     let memoryEnumerationComplete = true
+     585  582 │     try {
+     586      │ - → → diskPaths·=·await·listMemoryFiles(
+     587      │ - → → → params.workspaceDir,
+     588      │ - → → → params.extraPaths,
+     589      │ - → → )
+          583 │ + → → diskPaths·=·await·listMemoryFiles(params.workspaceDir,·params.extraPaths)
+     590  584 │     } catch (err) {
+     591  585 │       memoryEnumerationComplete = false
+  
+
+Checked 10 files in 28ms. No fixes applied.
+Found 2 errors.
+Found 15 warnings.
+check ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  × Some errors were emitted while running checks.
+  
+

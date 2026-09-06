@@ -577,3 +577,77 @@ entries:
     superseded_by: null
     content_type: "text/markdown"
     notes: "Wave 2a (W09) implementation basis, version-exact to the installed driver: MongoBulkWriteError.result carries the partial BulkWriteResult even on throw; writeErrors are per-item with .index/.code; hasErrorLabel('NoWritesPerformed') detects the zero-writes guarantee; .err/getWriteConcernError() expose the uncertain write-concern signal separately. These are the exact fields the reconciliation branches on."
+
+# EL-024..EL-026 appended 2026-09-06 (Wave 2b / W07+W14+W15 grounding):
+# official MongoDB and Node.js documentation sections relied on for the
+# ingest/sync durability fixes. Captures hold verbatim contract sections
+# plus analysis; digests over the cache files. No prior entry modified.
+
+  - id: EL-024
+    subject: "MongoDB Manual - Transactions (atomicity contract, callback API retries, 6.2/8.1 transaction limits)"
+    schema_version: 0.1.0
+    source_class: official-doc
+    source_url: "https://www.mongodb.com/docs/manual/core/transactions/"
+    publisher: "MongoDB (mongodb.com official documentation)"
+    product: "MongoDB Server Manual"
+    version: "8.x (local stack 8.3.8)"
+    retrieved_at: "2026-09-06T13:40:00.000Z"
+    content_digest: "sha256:bcd0296a9cad7d0cd6d9e4972978990153fdd3fa8bc0e718c2f1a6af39c2910c"
+    doc_version: "manual-current-2026-09-06"
+    cache_path: cache/mongodb-manual-transactions.md
+    sections: ["Transactions and Atomicity", "Transactions API", "Important (driver usage requirements)", "Transactions and Sessions", "Transactions and Operations"]
+    status: active
+    authority_for: [write-durability, crud-write-semantics]
+    freshness: "365d"
+    adapter: web-fetch
+    license: "MongoDB docs: public web documentation, fair-use quotes in cache"
+    independence: independent-of-remediation
+    superseded_by: null
+    content_type: "text/markdown"
+    notes: "Wave 2b (W15) grounding: distributed transactions are all-or-nothing (commit saves all changes; abort discards them without ever becoming visible) — the basis for moving the per-file delete + chunk-upsert + metadata replacement into one callback-API transaction. TransactionTooLargeForCache (6.2+) is not server-retried, bounding per-transaction payload. On 8.1+ an upsert in a transaction does not retry on duplicate key, so chunk-identity collisions (W07) must be fixed before transactional upsert paths are trusted."
+
+  - id: EL-025
+    subject: "MongoDB Manual - db.collection.bulkWrite() (updateOne first-match, ordered/unordered execution, in-transaction error handling)"
+    schema_version: 0.1.0
+    source_class: official-doc
+    source_url: "https://www.mongodb.com/docs/manual/reference/method/db.collection.bulkWrite/"
+    publisher: "MongoDB (mongodb.com official documentation)"
+    product: "MongoDB Server Manual"
+    version: "8.x (local stack 8.3.8)"
+    retrieved_at: "2026-09-06T13:40:00.000Z"
+    content_digest: "sha256:7c9c3dd07f04a7034d1cc0c510ed4d5e13fd69b8106209e477a02b4f8fd31714"
+    doc_version: "manual-current-2026-09-06"
+    cache_path: cache/mongodb-manual-bulkwrite.md
+    sections: ["Write Operations (updateOne and updateMany)", "_id Field", "Execution of Operations", "Error Handling", "Transactions (bulkWrite inside a transaction)", "Error Handling inside Transactions"]
+    status: active
+    authority_for: [crud-write-semantics, write-durability]
+    freshness: "365d"
+    adapter: web-fetch
+    license: "MongoDB docs: public web documentation, fair-use quotes in cache"
+    independence: independent-of-remediation
+    superseded_by: null
+    content_type: "text/markdown"
+    notes: "Wave 2b (W07) grounding: updateOne updates a single document matching the filter (first match only) and upsert:true creates on no match; _id values must be unique within the collection. Two bulk updateOne ops with the same filter/_id collapse onto one document — the second op matches the first op's upserted document and overwrites it (last-write-wins, no duplicate-key guard). This is the exact mechanism by which same-line chunk segments with colliding storageId:startLine:endLine identities lose all but one segment. Also grounds W15: inside a transaction, the first bulkWrite error aborts the whole transaction even when unordered."
+
+  - id: EL-026
+    subject: "Node.js Docs - fsPromises.readdir (complete-listing fulfillment, rejection-only error delivery)"
+    schema_version: 0.1.0
+    source_class: official-doc
+    source_url: "https://nodejs.org/api/fs.html#fspromisesreaddirpath-options"
+    publisher: "Node.js (nodejs.org official documentation)"
+    product: "Node.js runtime documentation"
+    version: "current LTS line (repo requires Node 20+)"
+    retrieved_at: "2026-09-06T13:40:00.000Z"
+    content_digest: "sha256:948c4c7cdb3faa5e35aa4edaff6afdd0bba423cca609655729f83eed5a3ba1fe"
+    doc_version: "nodejs-docs-current-2026-09-06"
+    cache_path: cache/nodejs-fs-readdir-errors.md
+    sections: ["fsPromises.readdir(path[, options])"]
+    status: active
+    authority_for: [ingest-durability]
+    freshness: "365d"
+    adapter: web-fetch
+    license: "Node.js docs: open-source documentation, fair-use quotes in cache"
+    independence: independent-of-remediation
+    superseded_by: null
+    content_type: "text/markdown"
+    notes: "Wave 2b (W14) grounding: fsPromises.readdir fulfills with the complete array of names in the directory and delivers errors exclusively by promise rejection (the official example wraps the call in try/catch); there is no partial-result mode. A rejected enumeration (EACCES, EMFILE, transient I/O) means the listing is unavailable, never that the directory is empty — so the current catch{} in listMemoryFiles that reinterprets enumeration failure as zero files, feeding an empty validPaths into stale-chunk cleanup, is a documented-contract violation and the basis for the enumeration-incomplete guard."

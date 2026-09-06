@@ -1,0 +1,119 @@
+17:42:29.592 [memory:mongodb:schema] info: ensured 44 standard indexes
+probe database ddd_w2b_f86a23a8ff154d77bbd4e250ad839fb0; production indexes ensured
+ok   v2 unique index created === true
+ok   v2 key widened with ordinal === {"scopeRef":1,"path":1,"startLine":1,"endLine":1,"ordinal":1}
+ok   v2 index is unique === true
+ok   old 4-field tenant index dropped === false
+ok   ancient global path+lines index dropped === false
+17:42:29.618 [memory:mongodb:sync] info: sync: found 1 memory files on disk (reason=manual)
+17:42:29.619 [memory:mongodb:sync] info: sync: 1/1 memory files need re-indexing
+17:42:29.636 [memory:mongodb:sync] info: sync complete: memory=1 conversation=0 chunks=9 stale=0 failed=0 enumerationComplete=true
+ok   first sync processes the file === 1
+ok   first sync enumerates completely === true
+long line emitted 6 segments
+ok   long line split into multiple segments === true
+ok   long-line ordinals distinct, contiguous, strictly increasing === true
+ok   file chunk ordinals are the global emission sequence 0..N-1 (design §W07.1) === [0,1,2,3,4,5,6,7,8]
+ok   chunk ids all distinct (no last-write-wins collisions) === 9
+ok   every long-line segment queryable by {path,startLine,endLine,ordinal} === 6
+ok   files row records chunkScheme 2 === 2
+ok   files row hash matches content hash === "bbff5b09bedcb0f37bc91b371b2b191067b057819e9ec2ac5895b015255cf85c"
+17:42:29.645 [memory:mongodb:sync] info: sync: found 1 memory files on disk (reason=manual)
+17:42:29.645 [memory:mongodb:sync] info: sync: 0/1 memory files need re-indexing
+17:42:29.645 [memory:mongodb:sync] info: sync complete: memory=0 conversation=0 chunks=0 stale=0 failed=0 enumerationComplete=true
+ok   same-hash current-scheme sync skips the file === 0
+ok   steady-state sync deletes nothing stale === 0
+17:42:29.646 [memory:mongodb:sync] info: sync: found 1 memory files on disk (reason=manual)
+17:42:29.647 [memory:mongodb:sync] info: sync: 1/1 memory files need re-indexing
+17:42:29.654 [memory:mongodb:sync] info: sync complete: memory=1 conversation=0 chunks=9 stale=0 failed=0 enumerationComplete=true
+ok   forced transactional resync processes the file === 1
+ok   transactional path restores the identical chunk set === 9
+ok   legacy damage: all but last segment removed === 5
+17:42:29.661 [memory:mongodb:sync] info: sync: found 1 memory files on disk (reason=manual)
+17:42:29.661 [memory:mongodb:sync] info: sync: 1/1 memory files need re-indexing
+17:42:29.668 [memory:mongodb:sync] info: sync complete: memory=1 conversation=0 chunks=9 stale=0 failed=0 enumerationComplete=true
+ok   legacy-scheme row re-chunked despite same hash === true
+ok   re-chunk restores every segment ordinal === [2,3,4,5,6,7]
+ok   re-chunk restores the full chunk set === 9
+ok   re-chunked row is scheme 2 again === 2
+ok   re-chunked row carries the real hash (not the sentinel) === "bbff5b09bedcb0f37bc91b371b2b191067b057819e9ec2ac5895b015255cf85c"
+17:42:29.672 [memory:mongodb:sync] info: sync: found 1 memory files on disk (reason=manual)
+17:42:29.672 [memory:mongodb:sync] info: sync: 0/1 memory files need re-indexing
+17:42:29.673 [memory:mongodb:sync] info: sync complete: memory=0 conversation=0 chunks=0 stale=0 failed=0 enumerationComplete=true
+ok   post-repair same-hash sync skips again === 0
+ok   crash window: all chunks removed === 9
+17:42:29.677 [memory:mongodb:sync] info: sync: found 1 memory files on disk (reason=manual)
+17:42:29.677 [memory:mongodb:sync] info: sync: 1/1 memory files need re-indexing
+17:42:29.683 [memory:mongodb:sync] info: sync complete: memory=1 conversation=0 chunks=9 stale=0 failed=0 enumerationComplete=true
+ok   sentinel row re-processed on non-forced sync === true
+ok   crash-window sync restores the full chunk set === 9
+ok   healed row hash is the real digest again === "bbff5b09bedcb0f37bc91b371b2b191067b057819e9ec2ac5895b015255cf85c"
+ok   healed row is scheme 2 === 2
+ok   the sentinel can never equal a real sha256 hex digest === false
+17:42:29.688 [memory:mongodb:sync] info: sync: found 2 memory files on disk (reason=manual)
+17:42:29.688 [memory:mongodb:sync] info: sync: 2/2 memory files need re-indexing
+17:42:29.694 [memory:mongodb:sync] info: sync complete: memory=2 conversation=0 chunks=2 stale=0 failed=0 enumerationComplete=true
+ok   ws2 first sync processes both files === 2
+17:42:29.695 [memory:mongodb:sync] info: sync: found 1 memory files on disk (reason=manual)
+17:42:29.696 [memory:mongodb:sync] info: sync: 0/1 memory files need re-indexing
+17:42:29.698 [memory:mongodb:sync] info: sync: removed 1 stale chunks
+17:42:29.698 [memory:mongodb:sync] info: sync complete: memory=0 conversation=0 chunks=0 stale=1 failed=0 enumerationComplete=true
+ok   stale cleanup is live when enumeration completes === true
+ok   removed file's chunks deleted === 0
+ok   surviving file keeps its chunks === true
+17:42:29.701 [memory:mongodb:sync] warn: sync: memory file enumeration failed; skipping stale cleanup (EACCES: permission denied, scandir '/var/folders/jv/w4dn1rxn3g5b_893qbjl5wc00000gp/T/w2b-ws2-0slDzg/memory')
+17:42:29.701 [memory:mongodb:sync] info: sync: found 0 memory files on disk (reason=manual)
+17:42:29.701 [memory:mongodb:sync] info: sync: 0/0 memory files need re-indexing
+17:42:29.701 [memory:mongodb:sync] warn: sync: skipping stale cleanup — source enumeration incomplete (W14 guard)
+17:42:29.701 [memory:mongodb:sync] info: sync complete: memory=0 conversation=0 chunks=0 stale=0 failed=0 enumerationComplete=false
+ok   unreadable dir: enumeration marked incomplete === false
+ok   unreadable dir: nothing processed === 0
+ok   unreadable dir: stale cleanup skipped === 0
+ok   unreadable dir: stored chunks NOT mass-deleted === true
+ok   unreadable dir: stored files row retained === true
+17:42:29.704 [memory:mongodb:sync] info: sync: found 1 memory files on disk (reason=manual)
+17:42:29.704 [memory:mongodb:sync] warn: sync: failed to read /var/folders/jv/w4dn1rxn3g5b_893qbjl5wc00000gp/T/w2b-ws2-0slDzg/memory/b.md: EACCES: permission denied, open '/var/folders/jv/w4dn1rxn3g5b_893qbjl5wc00000gp/T/w2b-ws2-0slDzg/memory/b.md'
+17:42:29.704 [memory:mongodb:sync] info: sync: 0/1 memory files need re-indexing
+17:42:29.705 [memory:mongodb:sync] warn: sync: skipping stale cleanup — source enumeration incomplete (W14 guard)
+17:42:29.705 [memory:mongodb:sync] info: sync complete: memory=0 conversation=0 chunks=0 stale=0 failed=1 enumerationComplete=false
+ok   unreadable file: counted as failed === 1
+ok   unreadable file: enumeration marked incomplete === false
+ok   unreadable file: stale cleanup skipped === 0
+ok   unreadable file: its chunks NOT deleted === true
+ok   unreadable file: its files row retained === true
+17:42:29.708 [memory:mongodb:sync] info: sync: found 1 memory files on disk (reason=manual)
+17:42:29.708 [memory:mongodb:sync] info: sync: 0/1 memory files need re-indexing
+17:42:29.708 [memory:mongodb:sync] info: sync complete: memory=0 conversation=0 chunks=0 stale=0 failed=0 enumerationComplete=true
+ok   restored permissions: enumeration complete again === true
+ok   restored permissions: no failures === 0
+17:42:29.715 [memory:mongodb:kb] info: KB ingest: processed=1 chunks=7 skipped=0 errors=0
+ok   KB ingest processes the document === 1
+ok   KB ingest reports no errors === 0
+ok   KB parent exists === true
+ok   KB parent is complete === true
+ok   KB parent is scheme 2 === 2
+KB long line emitted 4 segments
+ok   KB long line split into multiple segments === true
+ok   KB long-line ordinals distinct, contiguous, strictly increasing === true
+ok   KB doc ordinals are the global emission sequence 0..N-1 (design §W07.1) === [0,1,2,3,4,5,6]
+ok   KB parent chunkCount matches stored chunks === 7
+17:42:29.721 [memory:mongodb:kb] info: KB ingest: processed=0 chunks=0 skipped=1 errors=0
+ok   complete current-scheme KB re-ingest skips === 1
+ok   skipped KB re-ingest processes nothing === 0
+17:42:29.734 [memory:mongodb:kb] info: KB ingest: processed=1 chunks=7 skipped=0 errors=0
+ok   incomplete KB parent is repaired, not skipped === 1
+ok   KB repair reports no errors === 0
+ok   repaired KB parent is complete again === true
+ok   KB repair restores every segment ordinal === [2,3,4,5]
+ok   KB clean-replace removes the leftover chunk === null
+ok   KB repair leaves exactly the computed chunk set === 7
+17:42:29.746 [memory:mongodb:kb] info: KB ingest: processed=1 chunks=7 skipped=0 errors=0
+ok   legacy-scheme KB parent is re-chunked, not skipped === 1
+ok   re-chunked KB parent is scheme 2 again === 2
+ok   re-chunked KB parent is complete === true
+ok   KB legacy re-chunk restores every ordinal === [2,3,4,5]
+ok   KB legacy re-chunk clean-replaces leftovers too === null
+17:42:29.750 [memory:mongodb:kb] info: KB ingest: processed=0 chunks=0 skipped=1 errors=0
+ok   current-scheme KB skip gating intact after repairs === 1
+PASS: 70/70 assertions
+cleanup: dropped scratch database ddd_w2b_f86a23a8ff154d77bbd4e250ad839fb0

@@ -1511,3 +1511,81 @@ keyless eventId collision taking the durable-exists path.
 Next: Wave 2b (W07/W14/W15 ingest/sync durability), then Wave 2c
 (W06/W11/W13/W16/W17), Waves 3–7, the test-honesty pass, ledger
 closure, and re-audit.
+
+## 2026-09-06 — Wave 2b (W07/W14/W15 ingest/sync durability) landed
+
+Wave 2b — W07 (P1 long-line chunking overwrote most source text under
+duplicate chunk identities: buildChunkId omitted the segment ordinal, so
+an over-bound source line's delete-then-upsert collapsed to the last
+segment, with the same identity class collapsing KB document chunks and
+multimodal files), W14 (P2 source-read failure interpreted as deletion:
+listMemoryFiles' catch{} turned a transient readdir rejection into an
+empty validPaths, feeding stale cleanup that deleted every stored
+chunk), W15 (P2 'atomic' file replacement committed the delete before
+the upserts with the metadata hash advanced only afterwards — a crash
+window where a stored equal hash certified data that no longer existed
+while a non-forced sync trusted it).
+
+Grounding: EL-024 (transactions manual — withTransaction is the
+callback API that commits the whole replacement or nothing;
+TransactionTooLargeForCache and standalone topologies require fallback),
+EL-025 (bulkWrite — updateOne updates only the first match, so shared
+ids collapse writes into one row; the first error inside a transaction
+aborts the whole batch), EL-026 (fsPromises.readdir — fulfills with the
+complete array or rejects wholesale, there is no partial-result mode,
+so a rejection means the listing is unavailable, never an empty
+directory).
+
+Fix: chunk ids embed the emission ordinal behind the widened unique
+index {scopeRef, path, startLine, endLine, ordinal} with legacy
+chunkScheme:1 rows re-chunked on sight (W07); enumeration failures gate
+stale cleanup — enumerationComplete and filesFailed reported, dirty
+retained, only confirmed-missing paths skipped — across memory,
+legacy-markdown, and session listings (W14); per-file replacement is
+one all-or-nothing withTransaction over delete + chunk bulkWrite +
+completing metadata, the two atomic file-sync paths unified into
+syncSourceFileAtomically, with an invalidation-sentinel-first ordering
+for the standalone/too-large fallbacks so a crash mid-replacement heals
+on the next non-forced sync (W15). KB re-ingest of an incomplete parent
+replaces that document's chunks cleanly; completing writes record
+chunkScheme and chunkCount.
+
+Verification: focused battery 288/288 (wave2b-unit-suite.log, re-run
+green after Biome formatting as wave2b-unit-suite-postformat.log); live
+probe 70/70 on memongo-preview — real legacy-index migration (old
+4-field + ancient global uniques dropped, v2 created on the 5-field
+key, verified via listIndexes), a 12,000-char line round-tripping as 6
+segments with 6 distinct ids and global emission ordinals, forced
+transactional resync rewriting the identical set, legacy-scheme
+re-chunk, W15 sentinel healing (hash __invalidated__ + all chunks
+deleted, next non-forced sync restores 9/9 + real hash), both W14
+enumeration guards (EACCES dir and EACCES file: chunks retained,
+staleDeleted=0) with stale cleanup itself proven live on a healthy
+sync, KB long-line ingest behind the real v2 index, complete-parent
+skip, incomplete-parent repair with clean-replace removing an injected
+leftover, and legacy-scheme parent re-chunk (w2b-probe.log; first
+attempt 62/68 in w2b-probe-attempt1.log — all six failures were the
+probe's own per-line ordinal expectations, production behavior was
+correct, no code change resulted); engine battery 144/148 files,
+2616/2625 tests, 0 failures, no environment incidents this run
+(wave2b-engine-battery.log); repo check-types 15/15 with --force
+(wave2b-check-types.log); Biome on the ten touched files 0 errors /
+15 pre-existing warnings, two format errors from this wave's edits
+fixed via safe --write with the pre-fix run preserved
+(wave2b-biome-touched.log + attempt1). Claim C-045, validations
+V-154..V-157. Ledger: EL-024..EL-026 with cache captures. Landed:
+79a00cc401 (engine code); ledger artifacts in this commit.
+
+Residual documented (carried forward): the invalidation-sentinel
+fallback writes chunks non-transactionally between invalidation and
+completion — the stored hash no longer lies about them, which is the
+contract-correct state; ordinals are stable only within chunkScheme 2
+(a scheme change rewrites them wholesale, which is why old-scheme rows
+are never partially updated in place); direct collection writers that
+bypass manager init keep a legacy 4-field unique index where
+multi-segment writes would collide — the manager's unconditional
+startup ensureStandardIndexes migrates and the re-chunk-on-scheme
+repair heals.
+
+Next: Wave 2c (W06/W11/W13/W16/W17), Waves 3–7, the test-honesty pass,
+ledger closure, and re-audit.
