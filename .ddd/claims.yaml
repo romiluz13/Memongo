@@ -729,3 +729,34 @@ entries:
     constructs: [packages/memory-engine/src/mongodb-erasure.ts, packages/memory-engine/src/mongodb-erasure-epoch.ts, packages/memory-engine/src/mongodb-manager-admin.ts, packages/memory-engine/src/mongodb-manager-jobs.ts, packages/memory-engine/src/mongodb-quarantine-review.ts, packages/memory-engine/src/mongodb-structured-memory.ts, packages/memory-engine/src/mongodb-relevance.ts, packages/memory-engine/src/mongodb-schema-standard-indexes-operations.ts]
     validations: [V-142, V-143, V-144, V-145]
     exceptions: []
+
+  - id: C-043
+    schema_version: 0.1.0
+    statement: "Job-queue ownership MUST be exclusive, option-preserving, and bounded: a live synchronous tracking row (explicit consolidate) MUST be nonclaimable — a tracking discriminator excluded from every RUNNING claim arm — while legacy pre-lease rows remain reclaimable, and any worker-side retry MUST replay the caller's stored options field-by-field (maxEvents, minCombinedScore, resolveContradictions, llmDedup, scope, scopeRef) with query-cache invalidation for the STORED scope; ownership MUST span claim -> prefetch -> runner without a gap (heartbeat started at the claim batch, cleared after post-prefetch stillOwned revalidation), every RUNNING reclaim MUST be bounded by the attempt budget, and a lease-expired row at the attempt ceiling MUST dead-letter visibly (status failed + deadLetterAt, no completedAt, lease fields unset) via an idempotent per-document updateMany sweep; every side-effecting stage MUST be preceded by a FRESH server-side ownership proof — a conditional lease renewal matching job + agent + owner + token + unexpired lease, alongside the epoch check — never a stale boolean from the last periodic beat."
+    rationale: "Filed from the 2026-09-05 independent audit W05/W18/W19: the claim filter's RUNNING arms treated a missing leaseExpiresAt as abandoned, so the standing worker stole LIVE explicit-consolidation tracking rows and re-ran them with default options (workspace/session scope replayed as agent scope, the caller's options lost on both the steal and the retry path); jobs were leased before prefetchExtractionSessionFacts with the heartbeat starting only inside the runner, so a prefetch >= leaseMs burned the lease, the post-prefetch renewal failed, and the job repeated the pay-prefetch/lose-ownership loop with no attempts bound on the running arms; leaseFence awaited the last in-flight heartbeat and read a boolean without any fresh ownership check, so a worker whose lease was stolen between beats could still pass the fence and mutate projections. Grounded in official documentation: updateMany idempotency and per-document atomicity for the dead-letter sweep (EL-019), conditional updateOne first-match semantics for the renewal fence (EL-013), Node driver updateOne matched-count semantics (EL-014)."
+    sources:
+      - ref: "docs/audits/2026-09-05-independent/logic_write.md#W05"
+        authority_domain: data-lifecycle
+        entailment: explicit
+      - ref: "docs/audits/2026-09-05-independent/logic_write.md#W18"
+        authority_domain: data-lifecycle
+        entailment: explicit
+      - ref: "docs/audits/2026-09-05-independent/logic_write.md#W19"
+        authority_domain: data-lifecycle
+        entailment: explicit
+      - ref: "EL-019#Idempotent Updates"
+        authority_domain: crud-write-semantics
+        entailment: explicit
+      - ref: "EL-013#Behavior"
+        authority_domain: crud-write-semantics
+        entailment: explicit
+      - ref: "EL-014#updateOne"
+        authority_domain: crud-write-semantics
+        entailment: explicit
+    claim_kind: behavioral
+    impact: critical
+    tier: T3
+    status: known-and-supported
+    constructs: [packages/memory-engine/src/mongodb-memory-jobs.ts, packages/memory-engine/src/mongodb-manager-jobs.ts, packages/memory-engine/src/mongodb-manager-lifecycle.ts, packages/memory-engine/src/types.ts]
+    validations: [V-146, V-147, V-148, V-149]
+    exceptions: []

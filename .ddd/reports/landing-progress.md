@@ -1379,3 +1379,67 @@ raise repeated substrate failures as a target-environment decision.
 
 Next: Wave 1c (ownership registry residuals W05/S13, W18/W19) per the
 INDEX.md wave mapping.
+
+---
+
+## 2026-09-06 — Wave 1c (W05/W18/W19 job ownership + leases) landed
+
+Wave 1c — W05 (P1 worker reclaims live explicit-consolidation tracking
+rows and loses their options; S13's residual is the same construct),
+W18 (P2 prefetch can exhaust leases before heartbeats begin;
+expired-running reclaim unbounded), W19 (P2 the lease fence is a
+periodic observation, not a fresh ownership check).
+
+Grounding: EL-019 (db.collection.updateMany — per-document atomicity,
+idempotent-operations guidance, the manual's own "rerun until no
+additional documents match" == the dead-letter sweep's re-runnable
+filter; matchedCount/modifiedCount returns == the sweep's reported
+count), building on EL-012..018; conditional updateOne renewals and the
+findOneAndUpdate CAS claim re-compared against EL-013/EL-014.
+
+Fix: the explicit consolidate row is marked tracking: true and every
+RUNNING claim arm excludes tracking rows (a live synchronous run can no
+longer be stolen) while legacy pre-lease rows stay reclaimable; the
+runner replays the caller's stored options field-by-field (scope-aware
+cache invalidation for the STORED scope, not hardcoded agent scope), so
+steal and retry both preserve options; ownership spans claim ->
+prefetch -> runner via a heartbeat started at the claim batch and
+cleared after post-prefetch stillOwned revalidation; RUNNING reclaims
+are attempts-bounded, and lease-expired rows at the ceiling dead-letter
+visibly (failed + deadLetterAt, lease fields unset) via the idempotent
+per-document updateMany sweep; leaseFence forces an immediate
+conditional renewal (job + agent + owner + token + unexpired lease)
+before every side-effecting stage, alongside the epoch check — never a
+stale periodic boolean.
+
+Verification: focused battery 55/55 (wave1c-unit-suite.log); live probe
+25/25 on the real server incl. the idempotent 0-modified sweep re-run
+and the wrong-token/expired-lease renewal refusals (w1c-probe.log);
+repo check-types 15/15 with --force (0 cached); full engine battery
+2597/2608. Claim C-043, validations V-146..V-149. Ledger: EL-019 with
+cache capture. Landed: b26d61093a (engine code), 5fc263733b (docker
+hostname pin), ba02f41d93 (biome); ledger artifacts in this commit.
+
+Environment incidents (recorded per the amended v0.7.1 protocol):
+(a) Docker daemon down at wave start, then a host OOM-kill of the
+preview container; the recreate exposed a volume-lineage defect — the
+atlas-local image derives the replica-set identity from the container
+hostname, unpinned Docker assigns a random ID per recreation, and the
+persisted volume's stored replica-set config then never matches (no
+primary elected; the stack answered on the wrong port). Root-caused and
+fixed in-tree: docker/docker-compose.yml pins hostname:
+memongo-preview. (b) A live Voyage rerank call threw mid-battery under
+148-file parallel load and the reranker degraded to input order per its
+WS-12/C-019 design (the one battery failure); the phase is untouched by
+this wave and an isolated re-run passed 2/2 (w1c-rerank-rerun.log) —
+provider-load transient, not code. Environment-caused and code-caused
+failures reported separately; run discipline held.
+
+Residual documented (W19, carried forward): the fresh-ownership proof is
+check-then-write within a stage; per-write lease-token predicates inside
+the graph/structured mutation helpers remain out of scope — bounded by
+stage proofs + the Wave 1b erasure-epoch fence + event-receipt
+idempotency.
+
+Next: Wave 2 (see INDEX.md wave mapping) — schema/contract batch, then
+Waves 3–7, the test-honesty pass, ledger closure, and re-audit.

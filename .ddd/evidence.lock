@@ -462,3 +462,26 @@ entries:
     superseded_by: null
     content_type: "text/markdown"
     notes: "Wave 1b (W12) grounding: partialFilterExpression officially accepts $in; partial TTL indexes expire only matching documents. Basis for widening the quarantine pending-TTL filter to include the leased 'promoting' state, with drop-first migration (same name + different options = IndexOptionsConflict). Live-verified on the local 8.3.8 server."
+
+  - id: EL-019
+    subject: "MongoDB Manual - updateMany (multi-document updates, idempotency requirement, UpdateResult counts)"
+    schema_version: 0.1.0
+    source_class: official-doc
+    source_url: "https://www.mongodb.com/docs/manual/reference/method/db.collection.updateMany/"
+    publisher: "MongoDB (mongodb.com official documentation)"
+    product: "MongoDB Server Manual"
+    version: "8.x (local stack 8.3.8)"
+    retrieved_at: "2026-09-06T08:35:00.000Z"
+    content_digest: "sha256:203f20a89d74e9f7627d55f2a253268eb5859823280e9957f8b4b840c13ca593"
+    doc_version: "manual-current-2026-09-06"
+    cache_path: cache/mongodb-manual-update-many.md
+    sections: ["Definition", "Returns", "Behavior", "Limitations", "Idempotent Updates"]
+    status: active
+    authority_for: [data-lifecycle, crud-write-semantics]
+    freshness: "365d"
+    adapter: web-fetch
+    license: "MongoDB docs: public web documentation, fair-use quotes in cache"
+    independence: independent-of-remediation
+    superseded_by: null
+    content_type: "text/markdown"
+    notes: "Wave 1c (W18) grounding: updateMany is per-document atomic but not atomic as a whole, and 'should only be used for idempotent operations' with the manual's own rerun-until-no-match guidance. Basis for the dead-letter sweep (running rows with spent retry budget and expired/missing lease transition to failed + deadLetterAt, lease fields unset): idempotent by construction because transitioned rows leave the running state, so a re-run matches nothing (modifiedCount 0). Live-verified on the local 8.3.8 server (w1c probe)."

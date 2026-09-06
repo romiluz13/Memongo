@@ -1241,3 +1241,47 @@ entries:
     run_at: "2026-09-06T10:26:00.000Z"
     evidence_hash: sha256:573fb4a7d0c74cadcbb456542c3ab94810aa0386296c031a09da92b7ca54fce9
     notes: "Live-server probe on memongo-preview (MongoDB 8.3.8), production deleteAllForAgent / epoch primitive / promoteQuarantined, disposable scratch database (dropped in finally; cleanup line in the log). 29/29 assertions: W02 two-attempt scenario with a real injected-once artifact deleteMany failure (attempt 1 partial, parents retained with named reason, artifacts + runs survive, other collections swept; attempt 2 complete, artifacts swept before parents, verification clean); W03 epochs monotonic 1..5 across attempts, a failed events delete confirmed by verification.residual [{events,1}] then completed on retry; W12 crashed promote (row manually left promoting with an expired lease) recovered to promoted with the memory id on the row, and a stored structuredCandidate promoted verbatim (fact/home_city/Berlin/0.9, provenance.restoredCandidate true) instead of the matchPatterns reinterpretation the rendered text would have produced. The $in partial TTL filter was additionally live-verified by creating the index shape on a disposable database (accepted by the server, dropped after)."
+
+  - id: V-146
+    schema_version: 0.1.0
+    claim_id: C-043
+    construct: packages/memory-engine/src/mongodb-memory-jobs.test.ts, packages/memory-engine/src/mongodb-manager-jobs.test.ts, packages/memory-engine/src/mongodb-manager-jobs.part2.test.ts, packages/memory-engine/src/mongodb-manager-jobs.part3.test.ts
+    method: test
+    target: .ddd/reports/runs/wave1c-unit-suite.log
+    result: pass
+    run_at: "2026-09-06T18:35:00.000Z"
+    evidence_hash: sha256:c8951b1fa1d36925b140ba58754b24535444459d971587be9f549a78e44219de
+    notes: "Focused unit battery over every Wave 1c-changed suite (4 files, 55/55, target log): memory-jobs — the claim filter's two RUNNING arms now carry attempts < MEMORY_JOB_MAX_ATTEMPTS and tracking != true (legacy abandoned rows still reclaimable, live tracking rows and spent-budget rows not), and the new W18 test asserts deadLetterExpiredMemoryJobs issues the updateMany with the exact sweep filter (expired-or-missing lease, attempts at ceiling, tracking excluded) and passes through modifiedCount; manager-jobs — 'renews claimed leases during a long session prefetch and stops after (W18)' (fake timers: the heartbeat starts at the claim batch, renews every MEMORY_JOB_HEARTBEAT_MS across a prefetch longer than the lease, and is cleared after the post-prefetch stillOwned revalidation), 'replays a claimed consolidation job's stored caller options and scope (W05)' (metadata options forwarded field-by-field to consolidateMemory, query cache invalidated for the STORED scope/scopeRef rather than hardcoded agent scope), 'abandons the job when the fence's forced renewal discovers a stolen lease with no periodic beat fired (W19)' (leaseFence performs an immediate conditional renewal per stage and abandons on a refused renewal even when the periodic boolean is still stale-true), 'marks the explicit consolidate run's row as tracking a live synchronous run (W05)' (tracking: true written at row creation). Existing part2/part3 expectations updated to the new filter arms and fence renewal counts."
+
+  - id: V-147
+    schema_version: 0.1.0
+    claim_id: C-043
+    construct: packages/memory-engine/src
+    method: test
+    target: .ddd/reports/runs/wave1c-engine-suite.log
+    result: pass
+    run_at: "2026-09-06T18:40:00.000Z"
+    evidence_hash: sha256:f209a2a3a85d27995ed62e309c34ef749f0d788bffc09f2aba48f50ce1b9619d
+    notes: "Full memory-engine battery on the final source tree: 2597 passed / 1 failed / 10 skipped of 2608 across 148 files (target log). The single failure (real-e2e-v2 Phase 15 'should rerank search results via Voyage rerank-2.5 with instruction-following') was an ENVIRONMENT incident, not a code failure: the live Voyage rerank call threw mid-battery under 148-file parallel load (catch-path warn 'rerank failed, falling back to input order' at 11:39:19 local; the reranker degraded to input order exactly as designed under WS-12/C-019, returning reranked:false). Wave 1c did not touch the rerank path or its test (empty diff for mongodb-reranker.ts and real-e2e-v2.e2e.test.ts), and an isolated re-run of the same phase against the same live provider passed 2/2 including the previously-failing assertion (.ddd/reports/runs/w1c-rerank-rerun.log, sha256:f52441354aedcbb7c2852979c817f4cf21cb3e09e83c32f3193a9fd54032b131). The 401s in the battery log belong to deliberate invalid-key robustness tests (production-readiness Phase 6, real-e2e-v2's own fallback test) and are expected. Environment-caused and code-caused failures reported separately per the DDD protocol."
+
+  - id: V-148
+    schema_version: 0.1.0
+    claim_id: C-043
+    construct: packages/memory-engine/src
+    method: type-check
+    target: .ddd/reports/runs/wave1c-check-types.log
+    result: pass
+    run_at: "2026-09-06T18:36:30.000Z"
+    evidence_hash: sha256:5ad6dc614ac79d832c06fd204372f13003438e66261f248c2dccc1243d800d84
+    notes: "Repo-wide check-types on the final Wave 1c tree with --force (no turbo cache: 0 cached, 15/15 tasks, target log). Biome on all ten touched files plus docker-compose: error-free, zero new warnings — the 9 remaining warnings (3 unused imports in mongodb-manager-jobs.ts, 6 noNonNullAssertion in mongodb-manager-lifecycle.ts) verified pre-existing at HEAD by symbol-usage comparison against the HEAD versions (the flagged import lines and assertion sites are untouched by the wave); one formatting-only change in mongodb-conversation-recall.ts (two long conditions rewrapped, semantics unchanged)."
+
+  - id: V-149
+    schema_version: 0.1.0
+    claim_id: C-043
+    construct: packages/memory-engine/src/mongodb-memory-jobs.ts
+    method: probe
+    target: .ddd/reports/runs/w1c-probe.log
+    result: pass
+    run_at: "2026-09-06T18:25:00.000Z"
+    evidence_hash: sha256:de9676b72b10d1d487e620785dca7113f7fdc938299039dd8ba34df7a08a1869
+    notes: "Live-server probe on memongo-preview (MongoDB 8.3.8 replica set, port 27019), production claimMemoryJob / deadLetterExpiredMemoryJobs / renewMemoryJobLease, disposable scratch database ddd_w1c_* (dropped in finally; cleanup line in the log). 25/25 assertions: W05 — a live tracking row (status running, tracking: true, no lease) is NOT claimable while a legacy pre-lease running row IS reclaimed, and a dead-lettered (failed) tracking row remains unclaimable by the running arms; W18 — a spent-budget running row (attempts >= MEMORY_JOB_MAX_ATTEMPTS, expired lease) is NOT claimable, the sweep transitions it to failed + deadLetterAt (1 modified) with lease fields unset, an idempotent re-run modifies 0, and live tracking rows are excluded from the sweep (0 modified); W19 — lease renewal as a conditional ownership proof: a renewal with the wrong lease token is refused (false), the valid token renewal succeeds (true), and an expired lease cannot be renewed (false)."

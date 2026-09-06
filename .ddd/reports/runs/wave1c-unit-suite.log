@@ -1,0 +1,107 @@
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/packages/memory-engine[39m
+
+ [32m✓[39m src/mongodb-memory-jobs.test.ts [2m([22m[2m14 tests[22m[2m)[22m[33m 373[2mms[22m[39m
+     [33m[2m✓[22m[39m clamps list limits to a maximum of 100 [33m 363[2mms[22m[39m
+[90mstderr[2m | src/mongodb-manager-jobs.test.ts[2m > [22m[2mMongoDBMemoryManager consolidate job tracking[2m > [22m[2mdoes not abort consolidation when createMemoryJob fails
+[22m[39m11:36:51.775 [memory:mongodb] warn: createMemoryJob failed for consolidation-09bdd816-ee8d-4f15-ae4c-798874e09247: job create failed
+
+[90mstderr[2m | src/mongodb-manager-jobs.part2.test.ts[2m > [22m[2mMongoDBMemoryManager background extraction[2m > [22m[2mschedules and runs a single-event extraction job
+[22m[39m11:36:51.779 [memory:mongodb] warn: tenant epoch read failed at claim of extraction-evt-1; lease-only fencing for this job: Cannot read properties of undefined (reading 'findOne')
+
+[90mstderr[2m | src/mongodb-manager-jobs.test.ts[2m > [22m[2mMongoDBMemoryManager consolidate job tracking[2m > [22m[2mpreserves the original consolidation error when failed job update also fails
+[22m[39m11:36:51.782 [memory:mongodb] warn: updateMemoryJob failed for consolidation-f36e4a5c-f937-414f-934e-45bc070b2870: job update failed
+
+ [32m✓[39m src/mongodb-manager-jobs.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 13[2mms[22m[39m
+[90mstderr[2m | src/mongodb-manager-jobs.part2.test.ts[2m > [22m[2mMongoDBMemoryManager background extraction[2m > [22m[2mmarks graph coverage available before a later extraction stage fails
+[22m[39m11:36:51.784 [memory:mongodb] warn: tenant epoch read failed at claim of extraction-evt-graph; lease-only fencing for this job: Cannot read properties of undefined (reading 'findOne')
+
+[90mstderr[2m | src/mongodb-manager-jobs.part3.test.ts[2m > [22m[2mP3.9 extraction worker concurrency + session-batched LLM[2m > [22m[2mprocesses up to 3 claimed jobs concurrently per drain round
+[22m[39m11:36:51.782 [memory:mongodb] warn: tenant epoch read failed at claim of extraction-evt-c1; lease-only fencing for this job: Cannot read properties of undefined (reading 'findOne')
+11:36:51.784 [memory:mongodb] warn: tenant epoch read failed at claim of extraction-evt-c2; lease-only fencing for this job: Cannot read properties of undefined (reading 'findOne')
+11:36:51.784 [memory:mongodb] warn: tenant epoch read failed at claim of extraction-evt-c3; lease-only fencing for this job: Cannot read properties of undefined (reading 'findOne')
+
+[90mstderr[2m | src/mongodb-manager-jobs.part2.test.ts[2m > [22m[2mMongoDBMemoryManager background extraction[2m > [22m[2mrecovers pending extraction work when the durable worker starts
+[22m[39m11:36:51.786 [memory:mongodb] warn: tenant epoch read failed at claim of extraction-recovered; lease-only fencing for this job: Cannot read properties of undefined (reading 'findOne')
+
+[90mstderr[2m | src/mongodb-manager-jobs.part2.test.ts[2m > [22m[2mMongoDBMemoryManager background extraction[2m > [22m[2mrecovers a pre-upgrade extraction job whose event id is in metadata
+[22m[39m11:36:51.787 [memory:mongodb] warn: tenant epoch read failed at claim of extraction-legacy-event; lease-only fencing for this job: Cannot read properties of undefined (reading 'findOne')
+
+[90mstderr[2m | src/mongodb-manager-jobs.part2.test.ts[2m > [22m[2mMongoDBMemoryManager background extraction[2m > [22m[2mdoes not continue or terminal-write after the extraction lease is lost
+[22m[39m11:36:51.838 [memory:mongodb] warn: tenant epoch read failed at claim of extraction-evt-long; lease-only fencing for this job: Cannot read properties of undefined (reading 'findOne')
+
+[90mstderr[2m | src/mongodb-manager-jobs.part3.test.ts[2m > [22m[2mP3.9 extraction worker concurrency + session-batched LLM[2m > [22m[2mclamps job duration when the server claim timestamp is ahead
+[22m[39m11:36:51.832 [memory:mongodb] warn: tenant epoch read failed at claim of extraction-evt-clock-skew; lease-only fencing for this job: Cannot read properties of undefined (reading 'findOne')
+
+[90mstderr[2m | src/mongodb-manager-jobs.part3.test.ts[2m > [22m[2mP3.9 extraction worker concurrency + session-batched LLM[2m > [22m[2mbatches LLM fact extraction per session across the round
+[22m[39m11:36:51.836 [memory:mongodb] warn: tenant epoch read failed at claim of extraction-evt-s1a; lease-only fencing for this job: Cannot read properties of undefined (reading 'findOne')
+11:36:51.836 [memory:mongodb] warn: tenant epoch read failed at claim of extraction-evt-s1b; lease-only fencing for this job: Cannot read properties of undefined (reading 'findOne')
+11:36:51.836 [memory:mongodb] warn: tenant epoch read failed at claim of extraction-evt-s2; lease-only fencing for this job: Cannot read properties of undefined (reading 'findOne')
+
+[90mstderr[2m | src/mongodb-manager-jobs.part3.test.ts[2m > [22m[2mP3.9 extraction worker concurrency + session-batched LLM[2m > [22m[2mkeeps delimiter-bearing scope tuples in separate extraction batches
+[22m[39m11:36:51.837 [memory:mongodb] warn: tenant epoch read failed at claim of extraction-evt-alpha-1; lease-only fencing for this job: Cannot read properties of undefined (reading 'findOne')
+11:36:51.837 [memory:mongodb] warn: tenant epoch read failed at claim of extraction-evt-alpha-2; lease-only fencing for this job: Cannot read properties of undefined (reading 'findOne')
+11:36:51.837 [memory:mongodb] warn: tenant epoch read failed at claim of extraction-evt-beta-1; lease-only fencing for this job: Cannot read properties of undefined (reading 'findOne')
+11:36:51.837 [memory:mongodb] warn: tenant epoch read failed at claim of extraction-evt-beta-2; lease-only fencing for this job: Cannot read properties of undefined (reading 'findOne')
+
+[90mstderr[2m | src/mongodb-manager-jobs.part3.test.ts[2m > [22m[2mP3.9 extraction worker concurrency + session-batched LLM[2m > [22m[2mprefetches a session fact only to events whose bodies support it
+[22m[39m11:36:51.838 [memory:mongodb] warn: tenant epoch read failed at claim of extraction-evt-evidence-a; lease-only fencing for this job: Cannot read properties of undefined (reading 'findOne')
+11:36:51.838 [memory:mongodb] warn: tenant epoch read failed at claim of extraction-evt-evidence-b; lease-only fencing for this job: Cannot read properties of undefined (reading 'findOne')
+
+[90mstderr[2m | src/mongodb-manager-jobs.part2.test.ts[2m > [22m[2mMongoDBMemoryManager background extraction[2m > [22m[2mdoes not continue or terminal-write after the extraction lease is lost
+[22m[39m11:37:11.889 [memory:mongodb] warn: extraction job lease lost during execution: extraction-evt-long
+
+[90mstderr[2m | src/mongodb-manager-jobs.part2.test.ts[2m > [22m[2mMongoDBMemoryManager background extraction[2m > [22m[2mfails closed when extraction lease renewal is uncertain
+[22m[39m11:36:51.891 [memory:mongodb] warn: tenant epoch read failed at claim of extraction-evt-uncertain-lease; lease-only fencing for this job: Cannot read properties of undefined (reading 'findOne')
+
+[90mstderr[2m | src/mongodb-manager-jobs.part3.test.ts[2m > [22m[2mP3.9 extraction worker concurrency + session-batched LLM[2m > [22m[2mdiscards prefetched work for a reclaimed job while its sibling proceeds
+[22m[39m11:36:51.891 [memory:mongodb] warn: extraction job lease lost during session prefetch: extraction-evt-reclaimed
+
+[90mstderr[2m | src/mongodb-manager-jobs.part3.test.ts[2m > [22m[2mP3.9 extraction worker concurrency + session-batched LLM[2m > [22m[2mdiscards prefetched work for a reclaimed job while its sibling proceeds
+[22m[39m11:36:51.891 [memory:mongodb] warn: tenant epoch read failed at claim of extraction-evt-owned; lease-only fencing for this job: Cannot read properties of undefined (reading 'findOne')
+
+[90mstderr[2m | src/mongodb-manager-jobs.part2.test.ts[2m > [22m[2mMongoDBMemoryManager background extraction[2m > [22m[2mfails closed when extraction lease renewal is uncertain
+[22m[39m11:37:11.891 [memory:mongodb] warn: memory job heartbeat failed for extraction-evt-uncertain-lease: Error: heartbeat outcome unknown
+
+[90mstderr[2m | src/mongodb-manager-jobs.part3.test.ts[2m > [22m[2mP3.9 extraction worker concurrency + session-batched LLM[2m > [22m[2mfences a job that loses its lease mid-batch while its sibling completes
+[22m[39m11:36:51.942 [memory:mongodb] warn: tenant epoch read failed at claim of extraction-evt-fenced; lease-only fencing for this job: Cannot read properties of undefined (reading 'findOne')
+11:36:51.942 [memory:mongodb] warn: tenant epoch read failed at claim of extraction-evt-healthy; lease-only fencing for this job: Cannot read properties of undefined (reading 'findOne')
+
+[90mstderr[2m | src/mongodb-manager-jobs.part2.test.ts[2m > [22m[2mMongoDBMemoryManager background extraction[2m > [22m[2mfails closed when extraction lease renewal is uncertain
+[22m[39m11:37:11.942 [memory:mongodb] warn: extraction job lease lost during execution: extraction-evt-uncertain-lease
+
+[90mstderr[2m | src/mongodb-manager-jobs.part2.test.ts[2m > [22m[2mMongoDBMemoryManager background extraction[2m > [22m[2mfences side-effecting stages when the extraction lease is lost before entity extraction (P2.5 b)
+[22m[39m11:36:51.944 [memory:mongodb] warn: tenant epoch read failed at claim of extraction-evt-fenced; lease-only fencing for this job: Cannot read properties of undefined (reading 'findOne')
+
+[90mstderr[2m | src/mongodb-manager-jobs.part3.test.ts[2m > [22m[2mP3.9 extraction worker concurrency + session-batched LLM[2m > [22m[2mfences a job that loses its lease mid-batch while its sibling completes
+[22m[39m11:37:11.993 [memory:mongodb] warn: extraction job lease lost during execution: extraction-evt-fenced
+
+[90mstderr[2m | src/mongodb-manager-jobs.part2.test.ts[2m > [22m[2mMongoDBMemoryManager background extraction[2m > [22m[2mfences side-effecting stages when the extraction lease is lost before entity extraction (P2.5 b)
+[22m[39m11:37:11.995 [memory:mongodb] warn: extraction job lease lost before entity extraction: extraction-evt-fenced
+
+[90mstderr[2m | src/mongodb-manager-jobs.part3.test.ts[2m > [22m[2mC3: typed-relation failure surfacing[2m > [22m[2mfences typed relation writes after lease loss during entity loading
+[22m[39m11:36:51.995 [memory:mongodb] warn: tenant epoch read failed at claim of extraction-c3; lease-only fencing for this job: Cannot read properties of undefined (reading 'findOne')
+
+[90mstderr[2m | src/mongodb-manager-jobs.part2.test.ts[2m > [22m[2mMongoDBMemoryManager background extraction[2m > [22m[2mabandons the job when the tenant erasure epoch advances before entity extraction (W03)
+[22m[39m11:36:51.948 [memory:mongodb] warn: tenant erasure epoch advanced (1 -> 2) before entity extraction; abandoning pre-erasure job extraction-evt-epoch
+
+[90mstderr[2m | src/mongodb-manager-jobs.part2.test.ts[2m > [22m[2mMongoDBMemoryManager background extraction[2m > [22m[2mabandons the job when the fence's forced renewal discovers a stolen lease with no periodic beat fired (W19)
+[22m[39m11:36:51.951 [memory:mongodb] warn: extraction job lease lost before entity extraction: extraction-evt-w19
+
+[90mstderr[2m | src/mongodb-manager-jobs.part3.test.ts[2m > [22m[2mC3: typed-relation failure surfacing[2m > [22m[2mfences typed relation writes after lease loss during entity loading
+[22m[39m11:37:12.046 [memory:mongodb] warn: extraction job lease lost before typed relation extraction: extraction-c3
+
+[90mstderr[2m | src/mongodb-manager-jobs.part3.test.ts[2m > [22m[2mC3: typed-relation failure surfacing[2m > [22m[2ma typed-relation failure fails the job (retry path) instead of completing silently
+[22m[39m11:36:51.999 [memory:mongodb] warn: tenant epoch read failed at claim of extraction-c3; lease-only fencing for this job: Cannot read properties of undefined (reading 'findOne')
+
+[90mstderr[2m | src/mongodb-manager-jobs.part3.test.ts[2m > [22m[2mC3: typed-relation failure surfacing[2m > [22m[2ma successful typed-relation pass completes and records ok
+[22m[39m11:36:52.000 [memory:mongodb] warn: tenant epoch read failed at claim of extraction-c3; lease-only fencing for this job: Cannot read properties of undefined (reading 'findOne')
+
+ [32m✓[39m src/mongodb-manager-jobs.part3.test.ts [2m([22m[2m15 tests[22m[2m)[22m[32m 229[2mms[22m[39m
+ [32m✓[39m src/mongodb-manager-jobs.part2.test.ts [2m([22m[2m23 tests[22m[2m)[22m[32m 299[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m4 passed[39m[22m[90m (4)[39m
+[2m      Tests [22m [1m[32m55 passed[39m[22m[90m (55)[39m
+[2m   Start at [22m 11:36:50
+[2m   Duration [22m 1.48s[2m (transform 2.27s, setup 0ms, import 3.10s, tests 914ms, environment 0ms)[22m
+

@@ -1,0 +1,187 @@
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/packages/memory-engine[39m
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m11:40:58.609 [memory:mongodb:schema] info: created collection memtest_chunks
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m11:40:58.618 [memory:mongodb:schema] info: created collection memtest_files
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m11:40:58.624 [memory:mongodb:schema] info: created collection memtest_meta
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m11:40:58.630 [memory:mongodb:schema] info: created collection memtest_knowledge_base
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m11:40:58.636 [memory:mongodb:schema] info: created collection memtest_kb_chunks
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m11:40:58.644 [memory:mongodb:schema] info: created collection memtest_structured_mem
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m11:40:58.649 [memory:mongodb:schema] info: created collection memtest_structured_mem_revisions
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m11:40:58.657 [memory:mongodb:schema] info: created collection memtest_procedures
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m11:40:58.662 [memory:mongodb:schema] info: created collection memtest_procedure_revisions
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m11:40:58.667 [memory:mongodb:schema] info: created collection memtest_relevance_runs
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m11:40:58.673 [memory:mongodb:schema] info: created collection memtest_relevance_artifacts
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m11:40:58.678 [memory:mongodb:schema] info: created collection memtest_relevance_regressions
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m11:40:58.685 [memory:mongodb:schema] info: created collection memtest_events
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m11:40:58.692 [memory:mongodb:schema] info: created collection memtest_entities
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m11:40:58.697 [memory:mongodb:schema] info: created collection memtest_relations
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m11:40:58.702 [memory:mongodb:schema] info: created collection memtest_entity_links
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m11:40:58.708 [memory:mongodb:schema] info: created collection memtest_episodes
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m11:40:58.713 [memory:mongodb:schema] info: created collection memtest_ingest_runs
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m11:40:58.718 [memory:mongodb:schema] info: created collection memtest_projection_runs
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m11:40:58.723 [memory:mongodb:schema] info: created collection memtest_query_cache
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m11:40:58.729 [memory:mongodb:schema] info: created collection memtest_memory_mutations
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m11:40:58.734 [memory:mongodb:schema] info: created collection memtest_lane_coverage
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m11:40:58.739 [memory:mongodb:schema] info: created collection memtest_consolidation_runs
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m11:40:58.746 [memory:mongodb:schema] info: created collection memtest_recall_traces
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m11:40:58.751 [memory:mongodb:schema] info: created collection memtest_memory_jobs
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m11:40:58.757 [memory:mongodb:schema] info: created collection memtest_session_chunks
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m11:40:58.763 [memory:mongodb:schema] info: created collection memtest_memory_quarantine
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m11:40:58.768 [memory:mongodb:schema] info: created collection memtest_memory_cost_ledger
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m11:40:58.780 [memory:mongodb:schema] info: created time series collection memtest_memory_telemetry
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m11:40:58.780 [memory:mongodb:schema] info: created telemetry collection memtest_memory_telemetry
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m11:40:58.785 [memory:mongodb:schema] info: created time series collection memtest_access_events
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m11:40:58.785 [memory:mongodb:schema] info: created access events collection memtest_access_events
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m11:40:58.788 [memory:mongodb:schema] info: applied schema validation to memtest_chunks
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m11:40:58.790 [memory:mongodb:schema] info: applied schema validation to memtest_knowledge_base
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m11:40:58.791 [memory:mongodb:schema] info: applied schema validation to memtest_kb_chunks
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m11:40:58.793 [memory:mongodb:schema] info: applied schema validation to memtest_structured_mem
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m11:40:58.795 [memory:mongodb:schema] info: applied schema validation to memtest_structured_mem_revisions
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m11:40:58.798 [memory:mongodb:schema] info: applied schema validation to memtest_procedures
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m11:40:58.799 [memory:mongodb:schema] info: applied schema validation to memtest_procedure_revisions
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m11:40:58.800 [memory:mongodb:schema] info: applied schema validation to memtest_relevance_runs
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m11:40:58.801 [memory:mongodb:schema] info: applied schema validation to memtest_relevance_artifacts
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m11:40:58.804 [memory:mongodb:schema] info: applied schema validation to memtest_relevance_regressions
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m11:40:58.806 [memory:mongodb:schema] info: applied schema validation to memtest_events
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m11:40:58.808 [memory:mongodb:schema] info: applied schema validation to memtest_entities
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m11:40:58.811 [memory:mongodb:schema] info: applied schema validation to memtest_relations
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m11:40:58.811 [memory:mongodb:schema] info: applied schema validation to memtest_entity_links
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m11:40:58.813 [memory:mongodb:schema] info: applied schema validation to memtest_episodes
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m11:40:58.814 [memory:mongodb:schema] info: applied schema validation to memtest_ingest_runs
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m11:40:58.816 [memory:mongodb:schema] info: applied schema validation to memtest_projection_runs
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m11:40:58.818 [memory:mongodb:schema] info: applied schema validation to memtest_query_cache
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m11:40:58.820 [memory:mongodb:schema] info: applied schema validation to memtest_memory_mutations
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m11:40:58.823 [memory:mongodb:schema] info: applied schema validation to memtest_recall_traces
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m11:40:58.825 [memory:mongodb:schema] info: applied schema validation to memtest_memory_jobs
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m11:40:58.828 [memory:mongodb:schema] info: applied schema validation to memtest_memory_quarantine
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m11:40:58.829 [memory:mongodb:schema] info: applied schema validation to memtest_files
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test
+[22m[39m11:40:59.233 [memory:mongodb:schema] info: ensured 44 standard indexes
+
+[90mstdout[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 15: Cross-Encoder Re-ranking (Voyage API)[2m > [22m[2mshould rerank search results via Voyage rerank-2.5 with instruction-following
+[22m[39m  Rerank latency: 512ms
+  Reranked: events/2:0.8555, events/3:0.3320, events/1:0.2178
+
+[90mstderr[2m | src/real-e2e-v2.e2e.test.ts[2m > [22m[2mReal E2E: Memory v2 Full Capability Test[2m > [22m[2mPhase 15: Cross-Encoder Re-ranking (Voyage API)[2m > [22m[2mshould fall back gracefully with invalid API key
+[22m[39m11:41:00.422 [memory:mongodb:reranker] warn: rerank API returned non-OK status {"status":401,"url":"https://api.voyageai.com/v1/rerank"}
+
+ [32m✓[39m src/real-e2e-v2.e2e.test.ts [2m([22m[2m81 tests[22m[2m | [22m[33m79 skipped[39m[2m)[22m[33m 1979[2mms[22m[39m
+       [33m[2m✓[22m[39m should rerank search results via Voyage rerank-2.5 with instruction-following [33m 514[2mms[22m[39m
+       [33m[2m✓[22m[39m should fall back gracefully with invalid API key [33m 659[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m1 passed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[32m2 passed[39m[22m[2m | [22m[33m79 skipped[39m[90m (81)[39m
+[2m   Start at [22m 11:40:57
+[2m   Duration [22m 3.02s[2m (transform 639ms, setup 0ms, import 941ms, tests 1.98s, environment 0ms)[22m
+

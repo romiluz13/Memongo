@@ -1,0 +1,27 @@
+ok   control pending row is claimed === "job-a"
+ok   claim stamps the lease token === true
+ok   claim sets a future lease expiry === true
+ok   W05 tracking row is NOT claimable === null
+ok   legacy lease-less running row is reclaimed === "job-c"
+ok   reclaim spends one more attempt === 2
+ok   W18 spent-budget running row is NOT claimable === null
+ok   W18 sweep transitions the spent row === 1
+ok   swept row status === "failed"
+ok   swept row has deadLetterAt === true
+ok   swept row error names the reason === "lease-expiry retry budget exhausted"
+ok   swept row has no completedAt === undefined
+ok   swept row has no retryAt === undefined
+ok   swept row has no leaseOwner === undefined
+ok   swept row has no leaseToken === undefined
+ok   swept row has no leaseExpiresAt === undefined
+ok   swept row has no heartbeatAt === undefined
+ok   W18 sweep is idempotent on re-run === 0
+ok   W18 sweep excludes the tracking row === 0
+ok   tracking row still running after sweep === "running"
+ok   tracking row not dead-lettered === undefined
+ok   dead-lettered row is NOT claimable === null
+ok   W19 renew rejects a wrong lease token === false
+ok   W19 renew accepts the current lease === true
+ok   W19 renew rejects an expired lease === false
+w1c probe: 25/25 assertions pass on ddd_w1c_7ddea035cac04c95a16bdafb76874e03 (MongoDB mongodb://127.0.0.1:27019/?directConnection=true)
+cleanup: dropped scratch database ddd_w1c_7ddea035cac04c95a16bdafb76874e03
