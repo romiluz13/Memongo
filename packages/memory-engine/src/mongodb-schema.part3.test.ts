@@ -1270,6 +1270,23 @@ describe("access events standard indexes", () => {
 			ts: -1,
 		})
 	})
+
+	it("creates the W11 batchId read-reconcile index on access events", async () => {
+		const db = mockDb()
+		await ensureStandardIndexes(db, "test_")
+		const accessEvents = db.collection("test_access_events") as unknown as {
+			createIndex: ReturnType<typeof vi.fn>
+		}
+		const calls = accessEvents.createIndex.mock.calls
+		const indexCall = calls.find(
+			(c: unknown[]) =>
+				c[1] &&
+				typeof c[1] === "object" &&
+				(c[1] as Record<string, unknown>).name === "idx_access_events_batch_id",
+		)
+		expect(indexCall).toBeDefined()
+		expect(indexCall?.[0]).toEqual({ batchId: 1 })
+	})
 })
 
 describe("ensureCollections total count with query_cache and time series", () => {
@@ -1289,7 +1306,7 @@ describe("ensureStandardIndexes total count with query_cache and time series ind
 		// 25 (v1 base, embedding_cache removed #13) + 9 events (6 + 1 dreamerProcessedAt + 1 bi-temporal SE-1 + 1 idempotency) + 3 entities + 4 relations +
 		// 2 entity links + 5 episodes (4 + 1 promotion) + 1 ingest_runs + 1 projection_runs +
 		// 1 structured scope + 1 structured revisions + 4 procedures + 1 procedure_revisions +
-		// 3 query_cache + 2 telemetry + 2 access_events + 3 memory_mutations
+		// 3 query_cache + 2 telemetry + 3 access_events (2 + 1 W11 batchId) + 3 memory_mutations
 		// + 1 lane_coverage + 2 consolidation_runs + 3 session_chunks
 		// + 1 bi-temporal valid-time (#32) + 2 durable job claim/TTL indexes
 		// + 1 extraction outbox partial index + 1 unique relation identity
@@ -1298,7 +1315,7 @@ describe("ensureStandardIndexes total count with query_cache and time series ind
 		// C-005: +1 partial TTL index (chunks expiresAt) + 1 session_chunks TTL (idx_session_chunks_ttl_expires_at)
 		// C-004: +3 memory_quarantine (unique id, queue listing, pending TTL)
 		// C-017 (WS-10): +2 cost ledger (unique agent/day/kind + TTL)
-		// = 102
-		expect(count).toBe(102)
+		// = 103
+		expect(count).toBe(103)
 	})
 })

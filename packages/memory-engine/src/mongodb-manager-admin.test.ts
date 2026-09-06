@@ -143,25 +143,51 @@ describe("v2 health classification helpers", () => {
 		)
 	})
 
-	it("classifies projection health from latest run and lag", () => {
+	it("classifies projection health from backlog age, not last-run recency (W16)", () => {
+		// Nothing owed + no runs = healthy idle, not health-uncertain. The old
+		// now−lastRun definition degraded exactly this case.
 		expect(
 			classifyProjectionHealth({ latestRun: null, lagSeconds: null }),
-		).toBe("health-uncertain")
+		).toBe("ok")
+		// A failed run always degrades first, regardless of backlog.
 		expect(
 			classifyProjectionHealth({
 				latestRun: { status: "failed" },
 				lagSeconds: null,
 			}),
 		).toBe("derived-product-unavailable")
+		// Backlog older than the threshold degrades, even with no recorded
+		// runs — the old classifier hid stranded events behind "uncertain".
+		expect(
+			classifyProjectionHealth({
+				latestRun: null,
+				lagSeconds: 601,
+			}),
+		).toBe("projection-behind")
 		expect(
 			classifyProjectionHealth({
 				latestRun: { status: "ok" },
 				lagSeconds: 601,
 			}),
 		).toBe("projection-behind")
+		// Fresh backlog or nothing owed is ok.
 		expect(
 			classifyProjectionHealth({ latestRun: { status: "ok" }, lagSeconds: 12 }),
 		).toBe("ok")
+		expect(
+			classifyProjectionHealth({
+				latestRun: { status: "ok" },
+				lagSeconds: null,
+			}),
+		).toBe("ok")
+		// Undefined lag = the backlog check itself failed (unmeasurable),
+		// which stays health-uncertain — distinct from null (nothing owed).
+		expect(
+			classifyProjectionHealth({
+				latestRun: { status: "ok" },
+				lagSeconds: undefined,
+			}),
+		).toBe("health-uncertain")
 	})
 
 	it("distinguishes degraded retrieval from no relevant results", () => {
@@ -260,6 +286,16 @@ describe("getV2Status", () => {
 		expect(status.projectionLag.entities).toBe(20)
 		expect(status.projectionLag.relations).toBe(30)
 		expect(status.projectionLag.episodes).toBeNull()
+		// W16: activity surface exists separately from backlog lag; with no
+		// recorded runs (kit default mock) every lane reports null.
+		expect(status.projectionLastRun).toEqual({
+			chunks: null,
+			entities: null,
+			relations: null,
+			episodes: null,
+			"structured-promotion": null,
+			procedures: null,
+		})
 		expect(status.retrievalPaths).toEqual(
 			expect.arrayContaining([
 				"structured",
@@ -339,6 +375,76 @@ describe("getV2Status", () => {
 			status: "failed",
 			deadLetterAt: { $exists: false },
 		})
+	})
+
+	it("reports per-lane last-run activity and maps rejected lag checks to health-uncertain (W16)", async () => {
+		const latestDate = new Date("2026-03-15T12:00:00Z")
+		const workingCol = {
+			countDocuments: vi.fn().mockResolvedValue(3),
+			findOne: vi.fn().mockResolvedValue({ timestamp: latestDate }),
+		} as unknown as import("mongodb").Collection<import("mongodb").Document>
+		const derivedCol = {
+			countDocuments: vi.fn().mockResolvedValue(3),
+			findOne: vi.fn().mockResolvedValue({ updatedAt: latestDate }),
+		} as unknown as import("mongodb").Collection<import("mongodb").Document>
+		const relevanceCol = {
+			findOne: vi
+				.fn()
+				.mockResolvedValue({ status: "ok", hitSources: ["conversation"] }),
+		} as unknown as import("mongodb").Collection<import("mongodb").Document>
+
+		mocked(eventsCollection).mockReturnValue(workingCol)
+		mocked(entitiesCollection).mockReturnValue(derivedCol)
+		mocked(relationsCollection).mockReturnValue(derivedCol)
+		mocked(episodesCollection).mockReturnValue(derivedCol)
+		mocked(proceduresCollection).mockReturnValue(derivedCol)
+		mocked(relevanceRunsCollection).mockReturnValue(relevanceCol)
+
+		// Backlog outcomes per lane: chunks owed 10s, entities check rejected
+		// (unmeasurable), episodes owes nothing.
+		mocked(getProjectionLag)
+			.mockResolvedValueOnce(10) // chunks lag
+			.mockRejectedValueOnce(new Error("timeout")) // entities lag
+			.mockResolvedValueOnce(15) // relations lag
+			.mockResolvedValueOnce(null) // episodes lag
+			.mockResolvedValueOnce(20) // structured lag
+			.mockResolvedValueOnce(25) // procedures lag
+		const runTs = {
+			chunks: new Date("2026-03-15T12:05:00Z"),
+			entities: new Date("2026-03-15T12:06:00Z"),
+			relations: new Date("2026-03-15T12:07:00Z"),
+			episodes: new Date("2026-03-15T12:08:00Z"),
+			"structured-promotion": new Date("2026-03-15T12:09:00Z"),
+			procedures: new Date("2026-03-15T12:10:00Z"),
+		} as Record<string, Date>
+		mocked(getLatestProjectionRun).mockImplementation(
+			async ({ projectionType }) =>
+				({
+					projectionType,
+					status: "ok",
+					ts: runTs[projectionType],
+				}) as Awaited<ReturnType<typeof getLatestProjectionRun>>,
+		)
+		mocked(getLatestIngestRun).mockResolvedValue({
+			status: "ok",
+		} as Awaited<ReturnType<typeof getLatestIngestRun>>)
+
+		const status = await getV2Status(fakeDb, fakePrefix, "agent-1")
+
+		// Activity surface carries each lane's most recent run timestamp.
+		expect(status.projectionLastRun.chunks).toEqual(runTs.chunks)
+		expect(status.projectionLastRun.entities).toEqual(runTs.entities)
+		expect(status.projectionLastRun.episodes).toEqual(runTs.episodes)
+		// Backlog-based health: owed-but-fresh is ok, a REJECTED lag check is
+		// health-uncertain (not "ok" — the payload's null fallback can no
+		// longer carry that signal), nothing-owed is ok.
+		expect(status.health.derivedProducts.chunks).toBe("ok")
+		expect(status.health.derivedProducts.entities).toBe("health-uncertain")
+		expect(status.health.derivedProducts.episodes).toBe("ok")
+		// The payload keeps its safe null fallback for the failed check.
+		expect(status.projectionLag.entities).toBeNull()
+		// The failed check is reported.
+		expect(status.health.failedChecks).toContain("projectionLag.entities")
 	})
 
 	it.each([

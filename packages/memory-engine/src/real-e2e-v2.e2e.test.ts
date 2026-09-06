@@ -1404,16 +1404,44 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 				`  Episodes: ${status.episodes.count} (latest: ${status.episodes.latestTimestamp?.toISOString() ?? "none"})`,
 			)
 			console.log(`  Projection lag:`, status.projectionLag)
+			console.log(`  Projection last run:`, status.projectionLastRun)
 			console.log(`  Retrieval paths: ${status.retrievalPaths.join(", ")}`)
 			console.log("  ════════════════════════\n")
 
 			expect(status.events.count).toBeGreaterThan(0)
 			expect(status.entities.count).toBeGreaterThan(0)
 			expect(status.episodes.count).toBeGreaterThanOrEqual(1)
-			expect(status.projectionLag.chunks).not.toBeNull()
-			expect(status.projectionLag.entities).not.toBeNull()
-			expect(status.projectionLag.relations).not.toBeNull()
-			expect(status.projectionLag.episodes).not.toBeNull()
+			// W16: lag is the age of the lane's OLDEST unmet obligation. A
+			// converged lane owes nothing (null); a lane with fresh pending
+			// work reports a small age. Both are healthy — what must never
+			// appear is a backlog older than the degrade threshold (300s).
+			const expectHealthyLag = (lag: number | null) => {
+				expect(
+					lag === null || lag < 300,
+					`lane backlog age ${lag}s exceeds the healthy window`,
+				).toBe(true)
+			}
+			expectHealthyLag(status.projectionLag.chunks)
+			expectHealthyLag(status.projectionLag.entities)
+			expectHealthyLag(status.projectionLag.relations)
+			expectHealthyLag(status.projectionLag.episodes)
+			// W16: activity surface — every lane reports its most recent
+			// recorded run (or null when it never ran), separate from health.
+			expect(Object.keys(status.projectionLastRun).sort()).toEqual([
+				"chunks",
+				"entities",
+				"episodes",
+				"procedures",
+				"relations",
+				"structured-promotion",
+			])
+			for (const lane of Object.keys(status.projectionLastRun)) {
+				const lastRun = status.projectionLastRun[lane]
+				expect(
+					lastRun === null || lastRun instanceof Date,
+					`lane ${lane} last-run must be a Date or null`,
+				).toBe(true)
+			}
 			expect(status.health.overall).toBe("ok")
 			expect(status.health.retrieval).toBe("ok")
 			expect(status.health.canonicalIngest).toBe("ok")

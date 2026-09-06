@@ -108,7 +108,9 @@ const EXPECTED_COLLECTION_SUFFIXES = [
 // has been red at HEAD since. 96 + 4 TTL indexes = 100.
 // WS-10 (C-017) added the cost-ledger pair (uq_cost_ledger_agent_day_kind +
 // idx_cost_ledger_ttl): 100 + 2 = 102.
-const EXPECTED_STANDARD_INDEX_COUNT = 102
+// W11 added the access-events batchId lookup index (idx_access_events_batch_id,
+// serving the raw-layer read-reconcile): 102 + 1 = 103.
+const EXPECTED_STANDARD_INDEX_COUNT = 103
 
 let client: MongoClient
 let db: Db
@@ -1124,6 +1126,9 @@ describe("E2E: Analytics (getMemoryStats)", () => {
 		await syncToMongoDB({
 			db,
 			prefix: TEST_PREFIX,
+			// W13: rows carry the tenant identity so the stats surface below
+			// exercises the agentId-scoped aggregations against real MongoDB.
+			agentId: "analytics-agent",
 			workspaceDir: analyticsWorkspace,
 			embeddingMode: "automated",
 			force: true,
@@ -1139,7 +1144,7 @@ describe("E2E: Analytics (getMemoryStats)", () => {
 	})
 
 	it("returns non-zero totals for synced data", async () => {
-		const stats = await getMemoryStats(db, TEST_PREFIX)
+		const stats = await getMemoryStats(db, TEST_PREFIX, "analytics-agent")
 
 		expect(stats.totalFiles).toBe(2)
 		expect(stats.totalChunks).toBeGreaterThanOrEqual(2)
@@ -1155,7 +1160,7 @@ describe("E2E: Analytics (getMemoryStats)", () => {
 	})
 
 	it("reports embedding coverage (automated mode has no embeddings)", async () => {
-		const stats = await getMemoryStats(db, TEST_PREFIX)
+		const stats = await getMemoryStats(db, TEST_PREFIX, "analytics-agent")
 
 		// In automated mode, MongoDB generates embeddings at query-time,
 		// so the stored documents don't have embedding fields
@@ -1168,6 +1173,7 @@ describe("E2E: Analytics (getMemoryStats)", () => {
 		const stats = await getMemoryStats(
 			db,
 			TEST_PREFIX,
+			"analytics-agent",
 			new Set(["memory/analytics-1.md"]),
 		)
 
@@ -1177,7 +1183,7 @@ describe("E2E: Analytics (getMemoryStats)", () => {
 	})
 
 	it("reports collection sizes", async () => {
-		const stats = await getMemoryStats(db, TEST_PREFIX)
+		const stats = await getMemoryStats(db, TEST_PREFIX, "analytics-agent")
 
 		expect(stats.collectionSizes.files).toBe(2)
 		expect(stats.collectionSizes.chunks).toBeGreaterThanOrEqual(2)
@@ -1825,6 +1831,12 @@ describe("E2E v2: health semantics", () => {
 	})
 
 	it("distinguishes healthy, degraded, and unavailable states in v2 status", async () => {
+		// W16: a 10-minute-old event inserted WITHOUT projectedAt (and with
+		// no extraction/dreamer markers) is a stranded obligation for the
+		// chunks and episodes lanes. Backlog-derived lag must surface it even
+		// though a recent successful chunks run exists (the old now−lastRun
+		// lag would average it away) and even though episodes never ran (the
+		// old classifier hid stranded work behind health-uncertain).
 		await eventsCollection(db, TEST_PREFIX).insertOne({
 			eventId: `evt-${randomUUID()}`,
 			agentId,
@@ -1832,7 +1844,7 @@ describe("E2E v2: health semantics", () => {
 			body: "Health status probe",
 			scope: "agent",
 			scopeRef: `agent:${agentId}`,
-			timestamp: new Date(),
+			timestamp: new Date(Date.now() - 10 * 60 * 1000),
 		})
 
 		await db.collection(`${TEST_PREFIX}ingest_runs`).insertOne({
@@ -1898,11 +1910,28 @@ describe("E2E v2: health semantics", () => {
 		expect(status.health.canonicalIngest).toBe("canonical-ingest-failed")
 		expect(status.health.retrieval).toBe("retrieval-degraded")
 		expect(status.health.recentNoRelevantResults).toBe(true)
+		// W16: chunks is behind via its 10-minute-old unprojected event —
+		// the recent ok run cannot conceal the stranded obligation.
 		expect(status.health.derivedProducts.chunks).toBe("projection-behind")
 		expect(status.health.derivedProducts.entities).toBe(
 			"derived-product-unavailable",
 		)
-		expect(status.health.derivedProducts.episodes).toBe("health-uncertain")
+		// W16: episodes never ran, but it OWES the old event (no
+		// dreamerProcessedAt) — stranded work is "behind", not "uncertain".
+		expect(status.health.derivedProducts.episodes).toBe("projection-behind")
+		// W16: relations succeeded and owes nothing (no extraction marker on
+		// the event) → ok; structured-promotion/procedures never ran and owe
+		// nothing → healthy idle, the case the old classifier degraded.
+		expect(status.health.derivedProducts.relations).toBe("ok")
+		expect(status.health.derivedProducts["structured-promotion"]).toBe("ok")
+		expect(status.health.derivedProducts.procedures).toBe("ok")
+		// W16: activity surface — chunks ran (Date), episodes never did
+		// (null); health no longer keys off this distinction.
+		expect(status.projectionLastRun.chunks).toBeInstanceOf(Date)
+		expect(status.projectionLastRun.episodes).toBeNull()
+		expect(status.projectionLag.chunks).toBeGreaterThanOrEqual(599)
+		expect(status.projectionLag.episodes).toBeGreaterThanOrEqual(599)
+		expect(status.projectionLag.relations).toBeNull()
 		expect(status.health.overall).toBe("degraded")
 		expect(status.health.diagnostics).toEqual(
 			expect.arrayContaining([
@@ -1911,7 +1940,7 @@ describe("E2E v2: health semantics", () => {
 				"canonical-ingest-failed",
 				"projection-behind:chunks",
 				"derived-product-unavailable:entities",
-				"health-uncertain:episodes",
+				"projection-behind:episodes",
 			]),
 		)
 	})

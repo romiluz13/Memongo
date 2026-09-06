@@ -540,7 +540,7 @@ describe("ensureStandardIndexes", () => {
 		// 1 structured revisions + 3 relevance_runs + 2 relevance_artifacts +
 		// 2 relevance_regressions + 9 events (6 + 1 dreamerProcessedAt + 1 bi-temporal SE-1 + 1 idempotency) + 6 entities (3 + 2 Phase 3.4 + 1 P3.8 agent/updatedAt ESR) + 4 relations +
 		// 2 entity links + 7 episodes (6 base + 1 promotion) + 1 ingest_runs + 1 projection_runs +
-		// 4 procedures + 1 procedure_revisions + 3 query_cache + 2 telemetry + 2 access_events
+		// 4 procedures + 1 procedure_revisions + 3 query_cache + 2 telemetry + 3 access_events (2 + 1 W11 batchId)
 		// + 3 memory_mutations (compound + TTL + per-document)
 		// + 1 lane_coverage (unique agentId)
 		// + 2 consolidation_runs (agent_time + gate lease)
@@ -557,8 +557,8 @@ describe("ensureStandardIndexes", () => {
 		// C-005: +2 partial TTL indexes (chunks + session_chunks expiresAt)
 		// C-004: +3 memory_quarantine (unique id, queue listing, pending TTL)
 		// C-017 (WS-10): +2 cost ledger (unique agent/day/kind + TTL)
-		// Total = 102
-		expect(count).toBe(102)
+		// Total = 103
+		expect(count).toBe(103)
 		expect(chunks.createIndex).toHaveBeenCalledTimes(5)
 		// C-005: per-document chunk TTL, mirroring idx_events_ttl_expires_at.
 		expect(chunks.createIndex).toHaveBeenCalledWith(
@@ -657,7 +657,8 @@ describe("ensureStandardIndexes", () => {
 		}
 		expect(queryCache.createIndex).toHaveBeenCalledTimes(3)
 		expect(telemetry.createIndex).toHaveBeenCalledTimes(2)
-		expect(accessEvents.createIndex).toHaveBeenCalledTimes(2)
+		// W11: 3 = 2 base + batchId read-reconcile index.
+		expect(accessEvents.createIndex).toHaveBeenCalledTimes(3)
 
 		// Session chunks (Option B)
 		const sessionChunks = db.collection("test_session_chunks") as unknown as {
@@ -702,12 +703,13 @@ describe("ensureStandardIndexes", () => {
 			) as unknown as {
 				createIndex: ReturnType<typeof vi.fn>
 			}
-			// 102 base (incl. 2 consolidation_runs + events idempotency key,
+			// 103 base (incl. 2 consolidation_runs + events idempotency key,
 			// 2 P4.4.1 partial TTL indexes, the 2 C-005 chunks/session_chunks
-			// TTL indexes, the 3 C-004 memory_quarantine indexes, and the
-			// 2 C-017 cost-ledger indexes)
+			// TTL indexes, the 3 C-004 memory_quarantine indexes, the
+			// 2 C-017 cost-ledger indexes, and the W11 access_events batchId
+			// read-reconcile index)
 			// + 4 evidence mirror indexes
-			expect(count).toBe(106)
+			expect(count).toBe(107)
 			expect(memoryEvidence.createIndex).toHaveBeenCalledTimes(4)
 			expect(memoryEvidence.createIndex).toHaveBeenCalledWith(
 				{ canonicalId: 1 },
@@ -815,7 +817,7 @@ describe("ensureStandardIndexes", () => {
 		// 25 (v1 base, embedding_cache removed #13) + 9 events (6 + 1 dreamerProcessedAt + 1 bi-temporal SE-1 + 1 idempotency) + 3 entities + 4 relations +
 		// 2 entity links + 7 episodes (6 base + 1 promotion) + 1 ingest_runs + 1 projection_runs +
 		// 1 structured scope + 1 structured revisions + 4 procedures + 1 procedure_revisions +
-		// 3 query_cache + 2 telemetry + 2 access_events + 3 memory_mutations
+		// 3 query_cache + 2 telemetry + 3 access_events (2 + 1 W11 batchId) + 3 memory_mutations
 		// + 1 lane_coverage + 2 consolidation_runs + 3 session_chunks
 		// + 1 bi-temporal valid-time (#32) + 2 durable job claim/TTL indexes
 		// + 1 extraction outbox partial index + 1 unique relation identity
@@ -824,8 +826,8 @@ describe("ensureStandardIndexes", () => {
 		// C-005: +2 partial TTL indexes (chunks + session_chunks expiresAt)
 		// C-004: +3 memory_quarantine (unique id, queue listing, pending TTL)
 		// C-017 (WS-10): +2 cost ledger (unique agent/day/kind + TTL)
-		// Total = 102
-		expect(count).toBe(102)
+		// Total = 103
+		expect(count).toBe(103)
 	})
 
 	it("creates relevance TTL indexes when relevanceRetentionDays is set", async () => {

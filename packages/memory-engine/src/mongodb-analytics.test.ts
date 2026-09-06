@@ -63,7 +63,7 @@ beforeEach(() => {
 
 describe("getMemoryStats", () => {
 	it("returns zero stats for empty collections", async () => {
-		const stats = await getMemoryStats(db, "test_")
+		const stats = await getMemoryStats(db, "test_", "agent-a")
 
 		expect(stats.totalFiles).toBe(0)
 		expect(stats.totalChunks).toBe(0)
@@ -107,7 +107,7 @@ describe("getMemoryStats", () => {
 			toArray: vi.fn(async () => [{ _id: null, total: 2, withEmbedding: 2 }]),
 		})
 
-		const stats = await getMemoryStats(db, "test_")
+		const stats = await getMemoryStats(db, "test_", "agent-a")
 
 		// success reflects docs that actually carry a vector; nothing is
 		// fabricated as "pending" from the never-advanced embeddingStatus field.
@@ -121,7 +121,7 @@ describe("getMemoryStats", () => {
 		})
 	})
 
-	it("#26: derives automated embedding coverage from queryable Search index documents", async () => {
+	it("#26/W13: derives automated embedding coverage from the tenant-scoped probe, not index-wide numDocs", async () => {
 		;(mockFiles.aggregate as ReturnType<typeof vi.fn>).mockReturnValue({
 			toArray: vi.fn(async () => []),
 		})
@@ -135,11 +135,20 @@ describe("getMemoryStats", () => {
 			mockStructuredMem.countDocuments as ReturnType<typeof vi.fn>
 		).mockResolvedValue(2)
 
+		// numDocs is INDEX-WIDE (every tenant's documents at once) — under a
+		// tenant filter it cannot answer a per-tenant question, so coverage must
+		// come from the $vectorSearch probe carrying the tenant filter instead.
 		const searchIndexCounts = new Map([
+			["test_chunks_vector", 999],
+			["test_kb_chunks_vector", 999],
+			["test_structured_mem_vector", 999],
+		])
+		const probeCounts = new Map([
 			["test_chunks_vector", 8],
 			["test_kb_chunks_vector", 1],
 			["test_structured_mem_vector", 2],
 		])
+		const probeFilters: Array<Record<string, unknown> | undefined> = []
 		for (const col of [mockChunks, mockKbChunks, mockStructuredMem]) {
 			;(col.aggregate as ReturnType<typeof vi.fn>).mockImplementation(
 				(pipeline: Array<Record<string, unknown>>) => ({
@@ -160,13 +169,22 @@ describe("getMemoryStats", () => {
 								},
 							]
 						}
+						const vectorSearch = pipeline[0]?.$vectorSearch as
+							| Record<string, unknown>
+							| undefined
+						if (vectorSearch) {
+							probeFilters.push(
+								vectorSearch.filter as Record<string, unknown> | undefined,
+							)
+							return [{ n: probeCounts.get(vectorSearch.index as string) }]
+						}
 						return []
 					}),
 				}),
 			)
 		}
 
-		const stats = await getMemoryStats(db, "test_", undefined, {
+		const stats = await getMemoryStats(db, "test_", "agent-a", undefined, {
 			embeddingMode: "automated",
 		})
 
@@ -186,6 +204,14 @@ describe("getMemoryStats", () => {
 			unknown: 0,
 			basis: "search-index",
 		})
+		// Every probe carries the tenant filter — the per-agent surface never
+		// counts another tenant's retrievable documents. Four probes: the
+		// chunks coverage measurement plus the three status-coverage
+		// collections (chunks is measured on both surfaces).
+		expect(probeFilters).toHaveLength(4)
+		for (const filter of probeFilters) {
+			expect(filter).toEqual({ agentId: "agent-a" })
+		}
 	})
 
 	it("#26: reports automated coverage as unknown when Search index counts are not observable", async () => {
@@ -222,7 +248,7 @@ describe("getMemoryStats", () => {
 			)
 		}
 
-		const stats = await getMemoryStats(db, "test_", undefined, {
+		const stats = await getMemoryStats(db, "test_", "agent-a", undefined, {
 			embeddingMode: "automated",
 		})
 
@@ -288,7 +314,7 @@ describe("getMemoryStats", () => {
 			})
 		;(mockFiles.countDocuments as ReturnType<typeof vi.fn>).mockResolvedValue(8)
 
-		const stats = await getMemoryStats(db, "test_")
+		const stats = await getMemoryStats(db, "test_", "agent-a")
 
 		expect(stats.sources).toHaveLength(2)
 		const memorySrc = stats.sources.find((s) => s.source === "memory")
@@ -321,7 +347,7 @@ describe("getMemoryStats", () => {
 				]),
 			})
 
-		const stats = await getMemoryStats(db, "test_")
+		const stats = await getMemoryStats(db, "test_", "agent-a")
 
 		expect(stats.embeddingCoverage.withEmbedding).toBe(7)
 		expect(stats.embeddingCoverage.withoutEmbedding).toBe(3)
@@ -345,7 +371,7 @@ describe("getMemoryStats", () => {
 			.mockReturnValueOnce({ toArray: vi.fn(async () => []) })
 
 		const validPaths = new Set(["memory/keep.md"])
-		const stats = await getMemoryStats(db, "test_", validPaths)
+		const stats = await getMemoryStats(db, "test_", "agent-a", validPaths)
 
 		expect(stats.staleFiles).toEqual(["memory/stale.md", "sessions/old.jsonl"])
 	})
@@ -358,7 +384,7 @@ describe("getMemoryStats", () => {
 			.mockReturnValueOnce({ toArray: vi.fn(async () => []) })
 			.mockReturnValueOnce({ toArray: vi.fn(async () => []) })
 
-		const stats = await getMemoryStats(db, "test_")
+		const stats = await getMemoryStats(db, "test_", "agent-a")
 
 		expect(stats.staleFiles).toEqual([])
 		expect(mockFiles.find).not.toHaveBeenCalled()
@@ -385,7 +411,7 @@ describe("getMemoryStats", () => {
 			toArray: vi.fn(async () => [{ _id: null, total: 4, withEmbedding: 4 }]),
 		})
 
-		const stats = await getMemoryStats(db, "test_")
+		const stats = await getMemoryStats(db, "test_", "agent-a")
 
 		// Totals: chunks 15 + kb 6 + structured 4 = 25; embedded 10+5+4 = 19.
 		expect(stats.embeddingStatusCoverage.total).toBe(25)
@@ -413,7 +439,7 @@ describe("getMemoryStats", () => {
 			toArray: vi.fn(async () => []),
 		})
 
-		const stats = await getMemoryStats(db, "test_")
+		const stats = await getMemoryStats(db, "test_", "agent-a")
 
 		expect(stats.embeddingStatusCoverage.pending).toBe(8)
 		expect(stats.embeddingStatusCoverage.success).toBe(0)
@@ -424,6 +450,149 @@ describe("getMemoryStats", () => {
 	// the engine is Atlas autoEmbed end-to-end, so no code path ever produced a
 	// client-side embedding to cache. The removal is enforced at compile time:
 	// mongodb-schema.ts no longer exports embeddingCacheCollection.
+})
+
+describe("getMemoryStats W13 tenant scoping", () => {
+	// Two tenants share the physical collections; the mocks answer the query
+	// they are actually asked (honoring $match / the count filter), so this
+	// suite proves the per-agent surface reports A-only numbers.
+	const lastSync = new Date("2026-01-01")
+	const perAgentFileSources = new Map([
+		["agent-a", [{ _id: "memory", count: 3, lastSync }]],
+		["agent-b", [{ _id: "memory", count: 5, lastSync }]],
+	])
+	const perAgentChunkSources = new Map([
+		["agent-a", [{ _id: "memory", count: 4 }]],
+		["agent-b", [{ _id: "memory", count: 9 }]],
+	])
+	const perAgentFileCount = new Map([
+		["agent-a", 3],
+		["agent-b", 5],
+	])
+
+	function tenantAwareAggregate(
+		perAgent: Map<string, Array<Record<string, unknown>>>,
+	): ReturnType<typeof vi.fn> {
+		return vi.fn((pipeline: Array<Record<string, unknown>>) => ({
+			toArray: vi.fn(async () => {
+				const match = pipeline.find((stage) => "$match" in stage)?.$match as
+					| { agentId?: string }
+					| undefined
+				if (!match?.agentId) {
+					throw new Error("W13: expected a tenant $match stage")
+				}
+				return perAgent.get(match.agentId) ?? []
+			}),
+		}))
+	}
+
+	it("reports only the requesting agent's rows when two tenants share the collections", async () => {
+		;(mockFiles.aggregate as ReturnType<typeof vi.fn>).mockImplementation(
+			tenantAwareAggregate(perAgentFileSources) as never,
+		)
+		;(mockChunks.aggregate as ReturnType<typeof vi.fn>).mockImplementation(
+			tenantAwareAggregate(perAgentChunkSources) as never,
+		)
+		;(mockFiles.countDocuments as ReturnType<typeof vi.fn>).mockImplementation(
+			async (filter?: { agentId?: string }) =>
+				perAgentFileCount.get(filter?.agentId ?? "") ?? 0,
+		)
+
+		const stats = await getMemoryStats(db, "test_", "agent-a")
+
+		// A-only numbers: 3 files (not 8), 4 chunks (not 13), one source row.
+		expect(stats.totalFiles).toBe(3)
+		expect(stats.sources).toEqual([
+			{ source: "memory", fileCount: 3, chunkCount: 4, lastSync },
+		])
+		expect(stats.collectionSizes.files).toBe(3)
+	})
+
+	it("prefixes every files/chunks aggregation with the tenant $match", async () => {
+		;(mockFiles.aggregate as ReturnType<typeof vi.fn>).mockReturnValue({
+			toArray: vi.fn(async () => []),
+		})
+		;(mockChunks.aggregate as ReturnType<typeof vi.fn>).mockReturnValue({
+			toArray: vi.fn(async () => []),
+		})
+
+		await getMemoryStats(db, "test_", "agent-a")
+
+		const filesPipeline = (mockFiles.aggregate as ReturnType<typeof vi.fn>).mock
+			.calls[0]?.[0] as Array<Record<string, unknown>>
+		expect(filesPipeline[0]).toEqual({ $match: { agentId: "agent-a" } })
+		const chunksPipeline = (mockChunks.aggregate as ReturnType<typeof vi.fn>)
+			.mock.calls[0]?.[0] as Array<Record<string, unknown>>
+		expect(chunksPipeline[0]).toEqual({ $match: { agentId: "agent-a" } })
+	})
+
+	it("scopes stale-file detection to the tenant", async () => {
+		;(mockFiles.aggregate as ReturnType<typeof vi.fn>).mockReturnValue({
+			toArray: vi.fn(async () => []),
+		})
+		;(mockChunks.aggregate as ReturnType<typeof vi.fn>).mockReturnValue({
+			toArray: vi.fn(async () => []),
+		})
+		;(mockFiles.find as ReturnType<typeof vi.fn>).mockReturnValue({
+			toArray: vi.fn(async () => [{ path: "memory/stale.md" }]),
+		})
+
+		const stats = await getMemoryStats(
+			db,
+			"test_",
+			"agent-a",
+			new Set(["memory/keep.md"]),
+		)
+
+		expect(stats.staleFiles).toEqual(["memory/stale.md"])
+		// Stale detection counts this agent's files only — another tenant's
+		// files are not on THIS agent's disk and must never be flagged stale.
+		expect(mockFiles.find).toHaveBeenCalledWith(
+			{ agentId: "agent-a" },
+			{ projection: { _id: 0, path: 1 } },
+		)
+	})
+
+	it("counts the tenant's files with the agentId filter", async () => {
+		;(mockFiles.aggregate as ReturnType<typeof vi.fn>).mockReturnValue({
+			toArray: vi.fn(async () => []),
+		})
+		;(mockChunks.aggregate as ReturnType<typeof vi.fn>).mockReturnValue({
+			toArray: vi.fn(async () => []),
+		})
+
+		await getMemoryStats(db, "test_", "agent-a")
+
+		expect(mockFiles.countDocuments).toHaveBeenCalledWith({
+			agentId: "agent-a",
+		})
+	})
+
+	it("prefixes the client-mode coverage aggregation with the tenant $match", async () => {
+		;(mockFiles.aggregate as ReturnType<typeof vi.fn>).mockReturnValue({
+			toArray: vi.fn(async () => []),
+		})
+		const seenPipelines: Array<Array<Record<string, unknown>>> = []
+		;(mockChunks.aggregate as ReturnType<typeof vi.fn>).mockImplementation(
+			(pipeline: Array<Record<string, unknown>>) => {
+				seenPipelines.push(pipeline)
+				return { toArray: vi.fn(async () => []) }
+			},
+		)
+
+		await getMemoryStats(db, "test_", "agent-a")
+
+		// Every chunks aggregation is $match-first — with ONE designed
+		// exception: $indexStats is physical index metadata (server-wide by
+		// nature), not tenant volume, and stays unfiltered (W13 design).
+		for (const pipeline of seenPipelines) {
+			if (pipeline[0] && "$indexStats" in pipeline[0]) {
+				continue
+			}
+			expect(pipeline[0]).toEqual({ $match: { agentId: "agent-a" } })
+		}
+		expect(seenPipelines.length).toBeGreaterThanOrEqual(2)
+	})
 })
 
 describe("measureEmbeddingCoverage on a server without numDocs", () => {
@@ -596,5 +765,85 @@ describe("measureEmbeddingCoverage on a server without numDocs", () => {
 		})
 		expect(result).toMatchObject({ unknown: 3, success: 0 })
 		expect(probed).toBe(false)
+	})
+
+	it("W13: with a tenant filter the probe answers instead of index-wide numDocs", async () => {
+		// numDocs counts EVERY tenant's documents — under a tenant filter it
+		// would fabricate coverage (another tenant's indexed docs counted as
+		// this tenant's success). The tenant-scoped probe must answer instead.
+		let probed = false
+		let seenFilter: Record<string, unknown> | undefined
+		const collection = collectionWith({
+			total: 3,
+			// Index-wide count of 999 must NOT be used for the tenant answer.
+			index: { ...readyAutoEmbedIndex, numDocs: 999 },
+			probeCount: 2,
+			onVectorSearch: (stage) => {
+				probed = true
+				seenFilter = stage.filter as Record<string, unknown> | undefined
+			},
+		})
+
+		const result = await measureEmbeddingCoverage({
+			collection,
+			indexName: "vec_idx",
+			embeddingMode: "automated",
+			tenantFilter: { agentId: "agent-a" },
+		})
+
+		expect(probed).toBe(true)
+		expect(seenFilter).toEqual({ agentId: "agent-a" })
+		expect(result).toMatchObject({
+			total: 3,
+			success: 2,
+			pending: 1,
+			unknown: 0,
+			basis: "search-index",
+		})
+	})
+
+	it("W13: the tenant filter reaches the total count in automated mode", async () => {
+		let seenCountFilter: unknown
+		const collection = {
+			countDocuments: vi.fn(async (filter?: unknown) => {
+				seenCountFilter = filter
+				return 5
+			}),
+			aggregate: vi.fn((pipeline: Array<Record<string, unknown>>) => {
+				const stage = pipeline[0] ?? {}
+				if ("$listSearchIndexes" in stage) {
+					return { toArray: vi.fn(async () => [readyAutoEmbedIndex]) }
+				}
+				return { toArray: vi.fn(async () => []) }
+			}),
+		} as unknown as Collection
+
+		await measureEmbeddingCoverage({
+			collection,
+			indexName: "vec_idx",
+			embeddingMode: "automated",
+			tenantFilter: { agentId: "agent-a" },
+		})
+
+		expect(seenCountFilter).toEqual({ agentId: "agent-a" })
+	})
+
+	it("W13: client mode prepends the tenant $match to the coverage aggregation", async () => {
+		let seenPipeline: Array<Record<string, unknown>> | undefined
+		const collection = {
+			aggregate: vi.fn((pipeline: Array<Record<string, unknown>>) => {
+				seenPipeline = pipeline
+				return { toArray: vi.fn(async () => []) }
+			}),
+		} as unknown as Collection
+
+		await measureEmbeddingCoverage({
+			collection,
+			indexName: "vec_idx",
+			embeddingMode: "client",
+			tenantFilter: { agentId: "agent-a" },
+		})
+
+		expect(seenPipeline?.[0]).toEqual({ $match: { agentId: "agent-a" } })
 	})
 })

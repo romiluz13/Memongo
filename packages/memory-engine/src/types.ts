@@ -1674,6 +1674,15 @@ export type AccessEventDocument = {
 	scope?: string
 	scopeRef?: string
 	type?: string
+	/**
+	 * W11: durable logical batch id of the flush that produced this raw
+	 * event. The flush read-reconciles on it before inserting, so an
+	 * in-process retry of a failed flush never inserts the same batch's raw
+	 * evidence twice. Unique indexes are prohibited on time-series
+	 * collections, so read-reconcile is the available exactly-once shape for
+	 * the raw layer. Top-level like `memoryId` (indexed measurement field).
+	 */
+	batchId: string
 }
 
 /**

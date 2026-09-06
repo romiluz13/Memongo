@@ -78,6 +78,9 @@ function canonicalizeFingerprintValue(value: unknown): unknown {
  * Canonicalization rules:
  * - scope/scopeRef resolve with the SAME rule the write uses (P2.3), so an
  *   implicit session write and the equivalent explicit one fingerprint equal;
+ *   W06: the caller passes the manager's workspaceDir so a workspace-scope
+ *   write fingerprints the SAME hashed workspace partition the write lands
+ *   in (and a search reads from), not the workspace:<agentId> fallback;
  * - dates compare by ISO instant, and an omitted field is DISTINCT from any
  *   explicit value. In particular, accepting the TTL default (omitted
  *   expiresAt) never collides with a pinned expiry, and a TTL-defaulted
@@ -93,6 +96,7 @@ export function computeIdempotencyFingerprint(
 	event: IdempotencyFingerprintInput,
 	agentId: string,
 	defaultScope?: MemoryScope,
+	workspaceDir?: string,
 ): string {
 	const { scope, scopeRef } = resolveScopeIdentity({
 		scope: event.scope,
@@ -100,6 +104,7 @@ export function computeIdempotencyFingerprint(
 		agentId,
 		sessionId: event.sessionId,
 		...(defaultScope ? { defaultScope } : {}),
+		...(workspaceDir ? { workspaceDir } : {}),
 	})
 	const canonical = JSON.stringify({
 		role: event.role,

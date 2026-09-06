@@ -34,6 +34,9 @@ describeAutoEmbed("automated embedding coverage (live MongoDB)", () => {
 				text: `Seeded automated embedding coverage document ${index}`,
 				source: "memory",
 				path: `seed/${index}.md`,
+				// W13: coverage is tenant-scoped — seeded rows must carry the
+				// agent identity the stats call below filters on.
+				agentId: "coverage-agent",
 				updatedAt: new Date(),
 				embeddingStatus: "pending",
 			})),
@@ -49,6 +52,10 @@ describeAutoEmbed("automated embedding coverage (live MongoDB)", () => {
 						path: "text",
 						model: "voyage-4-large",
 					},
+					// W13: the tenant-scoped coverage probe filters by agentId
+					// inside $vectorSearch — the field must be a declared filter
+					// path or mongot rejects the probe.
+					{ type: "filter", path: "agentId" },
 				],
 			},
 		})
@@ -69,7 +76,7 @@ describeAutoEmbed("automated embedding coverage (live MongoDB)", () => {
 			},
 		)
 		if (!readiness.ready) {
-			const stats = await getMemoryStats(db, "", undefined, {
+			const stats = await getMemoryStats(db, "", "coverage-agent", undefined, {
 				embeddingMode: "automated",
 			})
 			expect(stats.embeddingCoverage).toMatchObject({
@@ -84,7 +91,7 @@ describeAutoEmbed("automated embedding coverage (live MongoDB)", () => {
 		}
 
 		const deadline = Date.now() + 180_000
-		let stats = await getMemoryStats(db, "", undefined, {
+		let stats = await getMemoryStats(db, "", "coverage-agent", undefined, {
 			embeddingMode: "automated",
 		})
 		while (
@@ -92,7 +99,7 @@ describeAutoEmbed("automated embedding coverage (live MongoDB)", () => {
 			stats.embeddingCoverage.withEmbedding !== 3
 		) {
 			await new Promise((resolve) => setTimeout(resolve, 2_000))
-			stats = await getMemoryStats(db, "", undefined, {
+			stats = await getMemoryStats(db, "", "coverage-agent", undefined, {
 				embeddingMode: "automated",
 			})
 		}

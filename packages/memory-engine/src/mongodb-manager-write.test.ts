@@ -332,6 +332,92 @@ describe("MongoDBMemoryManager write idempotency (P0.1)", () => {
 		expect(extractAndUpsertEntities).not.toHaveBeenCalled()
 	})
 
+	it("records an ingest run at the production write boundary (W16)", async () => {
+		const { eventsCollection } = await import("./mongodb-schema.js")
+		const { recordIngestRun } = await import("./mongodb-ops.js")
+		await mockWritePathDefaults()
+		mocked(eventsCollection).mockReturnValue({
+			findOne: vi.fn(async () => null),
+		} as unknown as import("mongodb").Collection)
+
+		const manager = makeManager()
+		await manager.writeConversationEvent({
+			role: "user",
+			body: "ingest-run recording boundary",
+			scope: "agent",
+		})
+
+		// The canonicalIngest health lane reads ingest_runs; the production
+		// write path (unlike the legacy helper) must feed it. status stays ok
+		// even though inline chunk projection degraded elsewhere.
+		expect(recordIngestRun).toHaveBeenCalledTimes(1)
+		const [[call]] = mocked(recordIngestRun).mock.calls
+		expect(call.prefix).toBe("test_")
+		expect(call.run).toMatchObject({
+			agentId: "agent-1",
+			source: "event-write",
+			status: "ok",
+			itemsProcessed: 1,
+			itemsFailed: 0,
+		})
+		expect(typeof call.run.durationMs).toBe("number")
+	})
+
+	it("does not record an ingest run for an idempotent replay (W16)", async () => {
+		const { eventsCollection } = await import("./mongodb-schema.js")
+		const { recordIngestRun } = await import("./mongodb-ops.js")
+		const { writeEvent } = await mockWritePathDefaults()
+		mocked(eventsCollection).mockReturnValue({
+			findOne: vi.fn(async () => ({
+				eventId: "evt-original",
+				agentId: "agent-1",
+				role: "user",
+				body: "idempotent hello",
+				scope: "agent",
+				scopeRef: "agent:agent-1",
+				idempotencyKey: "key-replay",
+				timestamp: new Date("2026-04-09T12:00:00.000Z"),
+			})),
+		} as unknown as import("mongodb").Collection)
+
+		const manager = makeManager()
+		const result = await manager.writeConversationEvent({
+			role: "user",
+			body: "idempotent hello",
+			scope: "agent",
+			idempotencyKey: "key-replay",
+		})
+		void writeEvent
+
+		expect(result).toEqual({ eventId: "evt-original", chunkCreated: false })
+		// A replay is not an ingest: no new data landed, so no run is recorded
+		// (the ingestStartMs clock starts only after the replay short-circuit).
+		expect(recordIngestRun).not.toHaveBeenCalled()
+	})
+
+	it("does not fail the write when ingest run recording fails (W16)", async () => {
+		const { eventsCollection } = await import("./mongodb-schema.js")
+		const { recordIngestRun } = await import("./mongodb-ops.js")
+		await mockWritePathDefaults()
+		mocked(eventsCollection).mockReturnValue({
+			findOne: vi.fn(async () => null),
+		} as unknown as import("mongodb").Collection)
+		mocked(recordIngestRun).mockRejectedValue(
+			new Error("ingest_runs unavailable"),
+		)
+
+		const manager = makeManager()
+		const result = await manager.writeConversationEvent({
+			role: "user",
+			body: "durable write, ledger insert failed",
+			scope: "agent",
+		})
+
+		// Best-effort by design: the write is already durable, so a failed
+		// ledger insert logs but never rejects it.
+		expect(result).toEqual({ eventId: "evt-new-attempt", chunkCreated: false })
+	})
+
 	it("does not throw after commit when the staged job release fails — the outbox repair recovers", async () => {
 		const { clearEventExtractionJobPending } = await import(
 			"./mongodb-events.js"
@@ -550,6 +636,117 @@ describe("MongoDBMemoryManager writeConversationEventsBatch (P3.9)", () => {
 			}),
 		)
 		expect(manager.chunkCount).toBe(1)
+	})
+
+	it("records one ingest run summarizing the batch outcomes (W16)", async () => {
+		await mockBatchPath()
+		const { recordIngestRun } = await import("./mongodb-ops.js")
+		const { eventsCollection } = await import("./mongodb-schema.js")
+		mocked(eventsCollection).mockReturnValue({
+			find: vi.fn(() => ({ toArray: vi.fn(async () => []) })),
+		} as never)
+
+		const manager = makeManager()
+		await manager.writeConversationEventsBatch([
+			{ role: "user", body: "first", scope: "agent" },
+			{ role: "assistant", body: "second", scope: "agent" },
+		])
+		await manager.memoryJobWorkerPromise
+
+		// ONE run for the whole call; both inserts landed → status ok.
+		expect(recordIngestRun).toHaveBeenCalledTimes(1)
+		const [[call]] = mocked(recordIngestRun).mock.calls
+		expect(call.run).toMatchObject({
+			agentId: "agent-1",
+			source: "event-write",
+			status: "ok",
+			itemsProcessed: 2,
+			itemsFailed: 0,
+		})
+		expect(typeof call.run.durationMs).toBe("number")
+	})
+
+	it("marks the batch ingest run partial when an insert fails (W16)", async () => {
+		const { writeEventsBatch } = await mockBatchPath()
+		const { recordIngestRun } = await import("./mongodb-ops.js")
+		const { eventsCollection } = await import("./mongodb-schema.js")
+		mocked(eventsCollection).mockReturnValue({
+			find: vi.fn(() => ({ toArray: vi.fn(async () => []) })),
+		} as never)
+		mocked(writeEventsBatch).mockImplementation(
+			async ({ events }: { events: Array<{ eventId?: string }> }) =>
+				events.map((event, index) =>
+					index === 2
+						? {
+								ok: false as const,
+								duplicateKey: false,
+								message: "validation failed",
+							}
+						: {
+								ok: true as const,
+								eventId: event.eventId ?? "evt-generated",
+								timestamp: new Date("2026-04-09T12:00:00.000Z"),
+								scopeRef: "agent:agent-1",
+							},
+				),
+		)
+
+		const manager = makeManager()
+		const receipts = await manager.writeConversationEventsBatch([
+			{ role: "user", body: "first", scope: "agent" },
+			{ role: "assistant", body: "second", scope: "agent" },
+			{ role: "user", body: "third, invalid", scope: "agent" },
+		])
+		await manager.memoryJobWorkerPromise
+
+		expect(receipts[2]).toMatchObject({ ok: false, code: "WRITE_ERROR" })
+		// The failed insert never became durable, so it counts as an ingest
+		// failure — not silently dropped from the run summary.
+		expect(recordIngestRun).toHaveBeenCalledTimes(1)
+		const [[call]] = mocked(recordIngestRun).mock.calls
+		expect(call.run).toMatchObject({
+			status: "partial",
+			itemsProcessed: 2,
+			itemsFailed: 1,
+		})
+	})
+
+	it("records no ingest run when every batch item was a pre-write replay (W16)", async () => {
+		await mockBatchPath()
+		const { recordIngestRun } = await import("./mongodb-ops.js")
+		const { eventsCollection } = await import("./mongodb-schema.js")
+		const originalTs = new Date("2026-04-09T12:00:00.000Z")
+		mocked(eventsCollection).mockReturnValue({
+			find: vi.fn(() => ({
+				toArray: vi.fn(async () => [
+					{
+						eventId: "evt-original-1",
+						agentId: "agent-1",
+						role: "user",
+						body: "first replayed",
+						scope: "agent",
+						scopeRef: "agent:agent-1",
+						idempotencyKey: "key-br1",
+						timestamp: originalTs,
+					},
+				]),
+			})),
+		} as never)
+
+		const manager = makeManager()
+		const receipts = await manager.writeConversationEventsBatch([
+			{
+				role: "user",
+				body: "first replayed",
+				scope: "agent",
+				idempotencyKey: "key-br1",
+			},
+		])
+		await manager.memoryJobWorkerPromise
+
+		expect(receipts[0]).toMatchObject({ ok: true, replayed: true })
+		// No item attempted an insert, so no ingest happened at this boundary.
+		expect(recordIngestRun).not.toHaveBeenCalled()
 	})
 
 	it("replays a known idempotency key from ONE batched lookup and writes the rest", async () => {
@@ -1448,5 +1645,216 @@ describe("MongoDBMemoryManager write TTL defaults (P4.4.1)", () => {
 			after + 3 * 86_400_000,
 		)
 		expect(events[1]).not.toHaveProperty("expiresAt")
+	})
+})
+
+describe("MongoDBMemoryManager workspace-scope identity (W06)", () => {
+	beforeEach(() => {
+		vi.clearAllMocks()
+	})
+
+	function makeManager() {
+		return Object.assign(Object.create(MongoDBMemoryManager.prototype), {
+			db: {} as import("mongodb").Db,
+			prefix: "test_",
+			agentId: "agent-1",
+			client: undefined,
+			closed: false,
+			config: {
+				mongodb: {
+					embeddingMode: "automated",
+					episodes: { enabled: false, minEventsForEpisode: 6 },
+				},
+			},
+			workspaceDir: "/tmp/memongo",
+			writeQueue: Promise.resolve(),
+			derivationQueue: Promise.resolve(),
+			derivationSchedulingQueue: Promise.resolve(),
+			memoryJobWorkerId: "worker-1",
+			memoryJobWorkerStopped: false,
+			memoryJobWorkerActive: false,
+			memoryJobWorkerPromise: Promise.resolve(),
+			memoryJobOperationContexts: new Map(),
+			chunkCount: 0,
+			dirty: true,
+		}) as MongoDBMemoryManager & {
+			writeQueue: Promise<void>
+			memoryJobWorkerPromise: Promise<void>
+		}
+	}
+
+	async function mockWritePathDefaults() {
+		const { writeEvent, projectEventChunk } = await import(
+			"./mongodb-events.js"
+		)
+		const { extractAndUpsertEntities } = await import("./mongodb-graph.js")
+		const { claimMemoryJob, createMemoryJob } = await import(
+			"./mongodb-memory-jobs.js"
+		)
+		const { promoteDerivedMemoryFromEvent } = await import(
+			"./mongodb-derived-memory.js"
+		)
+		mocked(writeEvent).mockResolvedValue({
+			eventId: "evt-w06",
+			timestamp: new Date("2026-09-06T12:00:00.000Z"),
+			scopeRef: "agent:agent-1",
+		})
+		mocked(projectEventChunk).mockResolvedValue({ chunkCreated: false })
+		mocked(extractAndUpsertEntities).mockResolvedValue({
+			entities: [],
+			relationsCreated: 0,
+		})
+		mocked(createMemoryJob).mockResolvedValue("extraction-evt-w06")
+		mocked(claimMemoryJob).mockResolvedValue(null)
+		mocked(promoteDerivedMemoryFromEvent).mockResolvedValue({
+			structuredCreated: 0,
+			proceduresCreated: 0,
+			skipped: true,
+			skipReason: "already-promoted",
+		})
+		return { writeEvent }
+	}
+
+	it("lands an implicit workspace write in the hashed workspace partition, not workspace:<agentId>", async () => {
+		const { writeEvent } = await mockWritePathDefaults()
+		const { resolveScopeIdentity } = await import("./mongodb-scope.js")
+
+		const manager = makeManager()
+		await manager.writeConversationEvent({
+			role: "user",
+			body: "implicit workspace event",
+			scope: "workspace",
+		})
+
+		// The canonical partition the search side reads from: same resolver,
+		// same workspaceDir. Anything else here is a write/read mismatch.
+		const { scopeRef: expectedScopeRef } = resolveScopeIdentity({
+			scope: "workspace",
+			agentId: "agent-1",
+			workspaceDir: "/tmp/memongo",
+		})
+		expect(expectedScopeRef).toMatch(/^workspace:/)
+		expect(expectedScopeRef).not.toBe("workspace:agent-1")
+
+		const writtenEvent = mocked(writeEvent).mock.calls[0][0].event as {
+			scope: string
+			scopeRef: string
+		}
+		expect(writtenEvent.scope).toBe("workspace")
+		expect(writtenEvent.scopeRef).toBe(expectedScopeRef)
+	})
+
+	it("batches implicit workspace writes into the hashed workspace partition", async () => {
+		const { writeEvent } = await import("./mongodb-events.js")
+		const {
+			writeEventsBatch,
+			projectEventChunksBatch,
+			clearEventExtractionJobPendingBatch,
+		} = await import("./mongodb-events.js")
+		const { extractAndUpsertEntities } = await import("./mongodb-graph.js")
+		const { claimMemoryJob, createMemoryJobsBatch } = await import(
+			"./mongodb-memory-jobs.js"
+		)
+		const { resolveScopeIdentity } = await import("./mongodb-scope.js")
+		const { eventsCollection } = await import("./mongodb-schema.js")
+		mocked(writeEvent)
+		mocked(writeEventsBatch).mockImplementation(
+			async ({ events }: { events: Array<{ eventId?: string }> }) =>
+				events.map((event) => ({
+					ok: true as const,
+					eventId: event.eventId ?? "evt-generated",
+					timestamp: new Date("2026-09-06T12:00:00.000Z"),
+					scopeRef: "agent:agent-1",
+				})),
+		)
+		mocked(projectEventChunksBatch).mockImplementation(
+			async ({ events }: { events: Array<{ eventId: string }> }) =>
+				events.map(() => ({ chunkCreated: false })),
+		)
+		mocked(clearEventExtractionJobPendingBatch).mockResolvedValue(2)
+		mocked(extractAndUpsertEntities).mockResolvedValue({
+			entities: [],
+			relationsCreated: 0,
+		})
+		mocked(createMemoryJobsBatch).mockImplementation(
+			async ({ jobs }: { jobs: Array<{ jobId: string }> }) =>
+				jobs.map((job) => ({ ok: true as const, jobId: job.jobId })),
+		)
+		mocked(claimMemoryJob).mockResolvedValue(null)
+		mocked(eventsCollection).mockReturnValue({
+			find: vi.fn(() => ({ toArray: vi.fn(async () => []) })),
+		} as never)
+
+		const manager = makeManager()
+		await manager.writeConversationEventsBatch([
+			{
+				role: "user",
+				body: "batched implicit workspace event",
+				scope: "workspace",
+			},
+			{
+				role: "user",
+				body: "batched explicit workspace event",
+				scope: "workspace",
+				scopeRef: "workspace:explicit-ref",
+			},
+		])
+
+		const events = mocked(writeEventsBatch).mock.calls[0][0].events as Array<{
+			scope: string
+			scopeRef: string
+		}>
+		expect(events).toHaveLength(2)
+
+		const { scopeRef: expectedScopeRef } = resolveScopeIdentity({
+			scope: "workspace",
+			agentId: "agent-1",
+			workspaceDir: "/tmp/memongo",
+		})
+		expect(events[0].scope).toBe("workspace")
+		expect(events[0].scopeRef).toBe(expectedScopeRef)
+		// Explicit scopeRef still wins verbatim (no double-hashing).
+		expect(events[1].scopeRef).toBe("workspace:explicit-ref")
+	})
+
+	it("fingerprints a workspace write against the hashed partition it lands in", async () => {
+		const { writeEvent } = await mockWritePathDefaults()
+		const { eventsCollection } = await import("./mongodb-schema.js")
+		const { computeIdempotencyFingerprint } = await import(
+			"./mongodb-idempotency-fingerprint.js"
+		)
+		// No prior document: the idempotency pre-check misses and the write
+		// proceeds with the freshly computed fingerprint.
+		mocked(eventsCollection).mockReturnValue({
+			findOne: vi.fn(async () => null),
+		} as unknown as import("mongodb").Collection)
+
+		const manager = makeManager()
+		await manager.writeConversationEvent({
+			role: "user",
+			body: "workspace fingerprint event",
+			scope: "workspace",
+			idempotencyKey: "key-w06",
+		})
+
+		const writtenEvent = mocked(writeEvent).mock.calls[0][0].event as {
+			idempotencyFingerprint?: string
+		}
+		// The persisted fingerprint must key to the hashed partition (with
+		// workspaceDir), matching what the conflict detector computes — not the
+		// workspace:<agentId> fallback the request-level fields alone produce.
+		expect(writtenEvent.idempotencyFingerprint).toBe(
+			computeIdempotencyFingerprint(
+				{
+					role: "user",
+					body: "workspace fingerprint event",
+					scope: "workspace",
+					idempotencyKey: "key-w06",
+				},
+				"agent-1",
+				undefined,
+				"/tmp/memongo",
+			),
+		)
 	})
 })

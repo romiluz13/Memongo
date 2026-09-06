@@ -638,78 +638,84 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		const db = client.db(mongoCfg.database)
 		const prefix = mongoCfg.collectionPrefix
 
-		// Ensure collections + schema validation + standard indexes
-		await ensureCollections(db, prefix)
+		// W17: every post-connect factory phase runs inside one guard so a
+		// failure anywhere unwinds everything acquired so far (see catch).
+		let managerRef: MongoDBMemoryManager | null = null
+		try {
+			// Ensure collections + schema validation + standard indexes
+			await ensureCollections(db, prefix)
 
-		const chunksCollectionName = chunksCollection(db, prefix).collectionName
-		const searchIndexManagementAvailable =
-			await isSearchIndexManagementAvailable(db, chunksCollectionName)
+			const chunksCollectionName = chunksCollection(db, prefix).collectionName
+			const searchIndexManagementAvailable =
+				await isSearchIndexManagementAvailable(db, chunksCollectionName)
 
-		// Detect concrete serving readiness. Fusion capability is server-version
-		// based, while Search capabilities require named queryable indexes.
-		let capabilities = await detectCapabilities(
-			db,
-			chunksCollectionName,
-			capabilityDeployment,
-		)
-		log.info(`capabilities: ${JSON.stringify(capabilities)}`)
-		let nativeBitemporalVectorPrefilter = false
-
-		// Guardrail 1: verify query embedding model dimensions match the
-		// autoEmbed index model dimensions. Prevents silent $vectorSearch
-		// recall failure when query and index models produce different-
-		// dimension vectors.
-		assertQueryModelDimensionsMatch(mongoCfg.queryEmbeddingModel)
-
-		// Guardrail 2: refuse to proceed when the autoEmbed index model
-		// changed and existing documents would be re-embedded server-side.
-		// Prevents expensive, surprising full re-embed on accidental model
-		// changes.
-		if (searchIndexManagementAvailable) {
-			await refuseToStrandExistingDocuments(
+			// Detect concrete serving readiness. Fusion capability is server-version
+			// based, while Search capabilities require named queryable indexes.
+			let capabilities = await detectCapabilities(
 				db,
-				prefix,
-				mongoCfg.deploymentProfile,
-				INDEX_AUTOEMBED_MODEL,
-			)
-		}
-
-		// Only bootstrap Search indexes when the deployment can talk to Search
-		// Index Management at all. This keeps runtime startup responsive on
-		// clusters that support fusion stages but do not expose mongot.
-		if (searchIndexManagementAvailable) {
-			const ensuredSearchIndexes = await ensureSearchIndexes(
-				db,
-				prefix,
-				mongoCfg.deploymentProfile,
-				mongoCfg.embeddingMode,
-				mongoCfg.quantization,
-				mongoCfg.numDimensions,
+				chunksCollectionName,
 				capabilityDeployment,
 			)
-			// P3.2: the quantization-on-autoEmbed rejection is a probe outcome
-			// recorded during index creation — fold it into the capabilities so
-			// the search paths see the adopted gate state (detectCapabilities ran
-			// before the probe was recorded).
-			capabilities = {
-				...capabilities,
-				capabilityGates: applyCapabilityProbeResult(
-					capabilities.capabilityGates ?? {},
-					"autoembed-quantization",
-					capabilityDeployment,
-				),
+			log.info(`capabilities: ${JSON.stringify(capabilities)}`)
+			let nativeBitemporalVectorPrefilter = false
+
+			// Guardrail 1: verify query embedding model dimensions match the
+			// autoEmbed index model dimensions. Prevents silent $vectorSearch
+			// recall failure when query and index models produce different-
+			// dimension vectors.
+			assertQueryModelDimensionsMatch(mongoCfg.queryEmbeddingModel)
+
+			// Guardrail 2: refuse to proceed when the autoEmbed index model
+			// changed and existing documents would be re-embedded server-side.
+			// Prevents expensive, surprising full re-embed on accidental model
+			// changes.
+			if (searchIndexManagementAvailable) {
+				await refuseToStrandExistingDocuments(
+					db,
+					prefix,
+					mongoCfg.deploymentProfile,
+					INDEX_AUTOEMBED_MODEL,
+				)
 			}
-			if (
-				ensuredSearchIndexes.text ||
-				ensuredSearchIndexes.vector ||
-				!capabilities.textSearch ||
-				!capabilities.vectorSearch
-			) {
-				const { timeoutMs: readinessTimeoutMs, pollMs: readinessPollMs } =
-					resolveSearchIndexReadinessTiming()
-				const readinessResults = await Promise.all(
-					getExpectedSearchIndexTargets(prefix, mongoCfg.deploymentProfile).map(
-						async (target) => {
+
+			// Only bootstrap Search indexes when the deployment can talk to Search
+			// Index Management at all. This keeps runtime startup responsive on
+			// clusters that support fusion stages but do not expose mongot.
+			if (searchIndexManagementAvailable) {
+				const ensuredSearchIndexes = await ensureSearchIndexes(
+					db,
+					prefix,
+					mongoCfg.deploymentProfile,
+					mongoCfg.embeddingMode,
+					mongoCfg.quantization,
+					mongoCfg.numDimensions,
+					capabilityDeployment,
+				)
+				// P3.2: the quantization-on-autoEmbed rejection is a probe outcome
+				// recorded during index creation — fold it into the capabilities so
+				// the search paths see the adopted gate state (detectCapabilities ran
+				// before the probe was recorded).
+				capabilities = {
+					...capabilities,
+					capabilityGates: applyCapabilityProbeResult(
+						capabilities.capabilityGates ?? {},
+						"autoembed-quantization",
+						capabilityDeployment,
+					),
+				}
+				if (
+					ensuredSearchIndexes.text ||
+					ensuredSearchIndexes.vector ||
+					!capabilities.textSearch ||
+					!capabilities.vectorSearch
+				) {
+					const { timeoutMs: readinessTimeoutMs, pollMs: readinessPollMs } =
+						resolveSearchIndexReadinessTiming()
+					const readinessResults = await Promise.all(
+						getExpectedSearchIndexTargets(
+							prefix,
+							mongoCfg.deploymentProfile,
+						).map(async (target) => {
 							try {
 								const readiness = await waitForSearchIndexesQueryable(
 									db.collection(target.collectionName),
@@ -734,206 +740,248 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 									lastError: message,
 								}
 							}
-						},
-					),
-				)
-				const stalled = readinessResults.filter((result) => !result.ready)
-				const eventsVectorIndexes =
-					readinessResults.find(
-						(result) => result.collectionName === `${prefix}events`,
-					)?.indexes ?? []
-				try {
-					nativeBitemporalVectorPrefilter =
-						await isEventsVectorBitemporalPrefilterReady(
-							eventsCollection(db, prefix),
-							`${prefix}events_vector`,
-							eventsVectorIndexes,
-						)
-					if (!nativeBitemporalVectorPrefilter) {
+						}),
+					)
+					const stalled = readinessResults.filter((result) => !result.ready)
+					const eventsVectorIndexes =
+						readinessResults.find(
+							(result) => result.collectionName === `${prefix}events`,
+						)?.indexes ?? []
+					try {
+						nativeBitemporalVectorPrefilter =
+							await isEventsVectorBitemporalPrefilterReady(
+								eventsCollection(db, prefix),
+								`${prefix}events_vector`,
+								eventsVectorIndexes,
+							)
+						if (!nativeBitemporalVectorPrefilter) {
+							log.warn(
+								"native event bitemporal prefiltering remains disabled until the exact index definition and event representation are ready",
+							)
+						}
+					} catch (err) {
 						log.warn(
-							"native event bitemporal prefiltering remains disabled until the exact index definition and event representation are ready",
+							`could not verify native event bitemporal prefilter readiness: ${String(err)}`,
 						)
 					}
-				} catch (err) {
-					log.warn(
-						`could not verify native event bitemporal prefilter readiness: ${String(err)}`,
+					if (stalled.length > 0) {
+						const summary = stalled
+							.map((result) => {
+								const pending = result.pending.join(",") || "none"
+								const failed = result.failed.join(",") || "none"
+								const lastError = result.lastError
+									? ` lastError=${result.lastError}`
+									: ""
+								return `${result.collectionName} pending=[${pending}] failed=[${failed}]${lastError}`
+							})
+							.join("; ")
+						const readinessMessage = `search indexes not fully queryable after bootstrap wait: ${summary}`
+						if (isStrictSearchReadinessMode()) {
+							throw new Error(readinessMessage)
+						}
+						log.warn(readinessMessage)
+					}
+					capabilities = await detectCapabilities(
+						db,
+						chunksCollectionName,
+						capabilityDeployment,
 					)
 				}
-				if (stalled.length > 0) {
-					const summary = stalled
-						.map((result) => {
-							const pending = result.pending.join(",") || "none"
-							const failed = result.failed.join(",") || "none"
-							const lastError = result.lastError
-								? ` lastError=${result.lastError}`
-								: ""
-							return `${result.collectionName} pending=[${pending}] failed=[${failed}]${lastError}`
-						})
-						.join("; ")
-					const readinessMessage = `search indexes not fully queryable after bootstrap wait: ${summary}`
-					if (isStrictSearchReadinessMode()) {
-						throw new Error(readinessMessage)
-					}
-					log.warn(readinessMessage)
-				}
-				capabilities = await detectCapabilities(
-					db,
-					chunksCollectionName,
-					capabilityDeployment,
-				)
-			}
-		} else {
-			log.info(
-				"search index management unavailable; skipping search index bootstrap",
-			)
-		}
-		await ensureStandardIndexes(db, prefix, {
-			memoryTtlDays: mongoCfg.memoryTtlDays,
-			episodesRetentionDays: mongoCfg.episodesRetentionDays,
-			relevanceRetentionDays: mongoCfg.relevance.retention.days,
-			// BSON $text indexes are retained whenever named serving text indexes
-			// are not queryable. Management API availability alone does not prove
-			// that $search can serve traffic.
-			textFallbackIndexes: shouldEnsureTextFallbackIndexes(capabilities),
-		})
-		if (
-			isStrictSearchReadinessMode() &&
-			(!capabilities.textSearch || !capabilities.vectorSearch)
-		) {
-			throw new Error(
-				`MongoDB Search/vector capabilities are required in strict mode but named serving indexes are not queryable: ${JSON.stringify(capabilities)}`,
-			)
-		}
-		if (
-			isStrictSearchReadinessMode() &&
-			capabilities.vectorSearch &&
-			!nativeBitemporalVectorPrefilter
-		) {
-			throw new Error(
-				"events vector index is not ready with validAt/invalidAt filters and null-compatible data",
-			)
-		}
-
-		let relevance: MongoDBRelevanceRuntime | null = null
-		try {
-			if (mongoCfg.relevance.enabled) {
-				relevance = new MongoDBRelevanceRuntime(
-					db,
-					prefix,
-					params.agentId,
-					mongoCfg,
-					capabilities,
-				)
-			}
-		} catch (err) {
-			const msg = err instanceof Error ? err.message : String(err)
-			log.warn(`relevance runtime initialization failed: ${msg}`)
-		}
-
-		const manager = new MongoDBMemoryManager({
-			client,
-			db,
-			prefix,
-			agentId: params.agentId,
-			workspaceDir,
-			extraMemoryPaths: normalizeExtraMemoryPaths(
-				workspaceDir,
-				params.extraPaths,
-			),
-			capabilities,
-			nativeBitemporalVectorPrefilter,
-			config: params.resolved,
-			relevance,
-			ownsClient,
-			onClosed: params.onClosed,
-		})
-
-		// Phase 4.1 — the tracker now writes raw access events to the time-series
-		// collection while keeping computed access summaries on canonical docs.
-		manager.accessTracker = new AccessTracker(db, prefix, params.agentId, {
-			flushThreshold: 50,
-			flushIntervalMs: 5_000,
-		})
-
-		try {
-			await manager.sync({ reason: "startup" })
-		} catch (err) {
-			const msg = err instanceof Error ? err.message : String(err)
-			log.warn(`initial memory sync failed: ${msg}`)
-		}
-		try {
-			const repaired = await manager.repairEventProjections()
-			if (repaired.eventsProcessed > 0) {
-				log.info(
-					`repaired ${repaired.chunksCreated} chunks from ${repaired.eventsProcessed} canonical events during startup`,
-				)
-			}
-		} catch (err) {
-			log.warn(
-				`startup projection repair failed; remaining canonical events will be retried on restart: ${String(err)}`,
-			)
-		}
-		manager.startMemoryJobWorker()
-
-		// Start watching bridge memory files for changes
-		manager.ensureWatcher()
-
-		// Opt-in: Change Streams for cross-instance sync (requires replica set)
-		if (mongoCfg.enableChangeStreams) {
-			const persistedResumeToken =
-				await manager.loadPersistedChangeStreamResumeToken()
-			const csWatcher = new MongoDBChangeStreamWatcher(
-				chunksCollection(db, prefix),
-				(event) => {
-					if (event.gapDetected) {
-						log.warn(
-							`change stream gap detected (${event.gapDetected.from}); triggering full re-scan`,
-						)
-						// Debounce: dedupe concurrent gap-triggered syncs to avoid a
-						// re-scan storm. If a sync is already in-flight, skip this one.
-						if (!manager.gapReSyncInFlight) {
-							manager.gapReSyncInFlight = true
-							void manager
-								.sync({ reason: "change-stream-gap" })
-								.catch((err) => log.warn(`gap re-scan failed: ${String(err)}`))
-								.finally(() => {
-									manager.gapReSyncInFlight = false
-								})
-						}
-						return // do NOT persist the stale token carried by the gap event
-					}
-					if (event.resumeToken !== undefined && event.resumeToken !== null) {
-						void manager.persistChangeStreamResumeToken(event.resumeToken)
-					}
-				},
-				mongoCfg.changeStreamDebounceMs,
-			)
-			let started = await csWatcher.start(persistedResumeToken ?? undefined)
-			if (!started && persistedResumeToken) {
-				log.warn(
-					"change stream resume failed with persisted token; retrying from latest position",
-				)
-				started = await csWatcher.start()
-				if (started) {
-					await manager.clearPersistedChangeStreamResumeToken()
-				}
-			}
-			if (started) {
-				manager.changeStreamWatcher = csWatcher
-				log.info("change stream watcher enabled for cross-instance sync")
 			} else {
 				log.info(
-					"change streams not available — falling back to file watcher only",
+					"search index management unavailable; skipping search index bootstrap",
 				)
 			}
+			await ensureStandardIndexes(db, prefix, {
+				memoryTtlDays: mongoCfg.memoryTtlDays,
+				episodesRetentionDays: mongoCfg.episodesRetentionDays,
+				relevanceRetentionDays: mongoCfg.relevance.retention.days,
+				// BSON $text indexes are retained whenever named serving text indexes
+				// are not queryable. Management API availability alone does not prove
+				// that $search can serve traffic.
+				textFallbackIndexes: shouldEnsureTextFallbackIndexes(capabilities),
+			})
+			if (
+				isStrictSearchReadinessMode() &&
+				(!capabilities.textSearch || !capabilities.vectorSearch)
+			) {
+				throw new Error(
+					`MongoDB Search/vector capabilities are required in strict mode but named serving indexes are not queryable: ${JSON.stringify(capabilities)}`,
+				)
+			}
+			if (
+				isStrictSearchReadinessMode() &&
+				capabilities.vectorSearch &&
+				!nativeBitemporalVectorPrefilter
+			) {
+				throw new Error(
+					"events vector index is not ready with validAt/invalidAt filters and null-compatible data",
+				)
+			}
+
+			let relevance: MongoDBRelevanceRuntime | null = null
+			try {
+				if (mongoCfg.relevance.enabled) {
+					relevance = new MongoDBRelevanceRuntime(
+						db,
+						prefix,
+						params.agentId,
+						mongoCfg,
+						capabilities,
+					)
+				}
+			} catch (err) {
+				const msg = err instanceof Error ? err.message : String(err)
+				log.warn(`relevance runtime initialization failed: ${msg}`)
+			}
+
+			const manager = new MongoDBMemoryManager({
+				client,
+				db,
+				prefix,
+				agentId: params.agentId,
+				workspaceDir,
+				extraMemoryPaths: normalizeExtraMemoryPaths(
+					workspaceDir,
+					params.extraPaths,
+				),
+				capabilities,
+				nativeBitemporalVectorPrefilter,
+				config: params.resolved,
+				relevance,
+				ownsClient,
+				onClosed: params.onClosed,
+			})
+			// W17: from here on the catch can unwind through the manager's own
+			// close() (queues, worker, watchers, tracker, owned client,
+			// shared-registry release) instead of just the bare client.
+			managerRef = manager
+
+			// Phase 4.1 — the tracker now writes raw access events to the time-series
+			// collection while keeping computed access summaries on canonical docs.
+			manager.accessTracker = new AccessTracker(db, prefix, params.agentId, {
+				flushThreshold: 50,
+				flushIntervalMs: 5_000,
+			})
+
+			try {
+				await manager.sync({ reason: "startup" })
+			} catch (err) {
+				const msg = err instanceof Error ? err.message : String(err)
+				log.warn(`initial memory sync failed: ${msg}`)
+			}
+			try {
+				const repaired = await manager.repairEventProjections()
+				if (repaired.eventsProcessed > 0) {
+					log.info(
+						`repaired ${repaired.chunksCreated} chunks from ${repaired.eventsProcessed} canonical events during startup`,
+					)
+				}
+			} catch (err) {
+				log.warn(
+					`startup projection repair failed; remaining canonical events will be retried on restart: ${String(err)}`,
+				)
+			}
+			manager.startMemoryJobWorker()
+
+			// Start watching bridge memory files for changes
+			manager.ensureWatcher()
+
+			// Opt-in: Change Streams for cross-instance sync (requires replica set)
+			if (mongoCfg.enableChangeStreams) {
+				const persistedResumeToken =
+					await manager.loadPersistedChangeStreamResumeToken()
+				const csWatcher = new MongoDBChangeStreamWatcher(
+					chunksCollection(db, prefix),
+					(event) => {
+						if (event.gapDetected) {
+							log.warn(
+								`change stream gap detected (${event.gapDetected.from}); triggering full re-scan`,
+							)
+							// Debounce: dedupe concurrent gap-triggered syncs to avoid a
+							// re-scan storm. If a sync is already in-flight, skip this one.
+							if (!manager.gapReSyncInFlight) {
+								manager.gapReSyncInFlight = true
+								void manager
+									.sync({ reason: "change-stream-gap" })
+									.catch((err) =>
+										log.warn(`gap re-scan failed: ${String(err)}`),
+									)
+									.finally(() => {
+										manager.gapReSyncInFlight = false
+									})
+							}
+							return // do NOT persist the stale token carried by the gap event
+						}
+						if (event.resumeToken !== undefined && event.resumeToken !== null) {
+							void manager.persistChangeStreamResumeToken(event.resumeToken)
+						}
+					},
+					mongoCfg.changeStreamDebounceMs,
+				)
+				let started = await csWatcher.start(persistedResumeToken ?? undefined)
+				if (!started && persistedResumeToken) {
+					log.warn(
+						"change stream resume failed with persisted token; retrying from latest position",
+					)
+					started = await csWatcher.start()
+					if (started) {
+						await manager.clearPersistedChangeStreamResumeToken()
+					}
+				}
+				if (started) {
+					manager.changeStreamWatcher = csWatcher
+					log.info("change stream watcher enabled for cross-instance sync")
+				} else {
+					log.info(
+						"change streams not available — falling back to file watcher only",
+					)
+				}
+			}
+
+			log.info(
+				`ready: profile=${mongoCfg.deploymentProfile} embedding=${mongoCfg.embeddingMode} ` +
+					`fusion=${mongoCfg.fusionMethod} caps=${JSON.stringify(capabilities)}`,
+			)
+
+			return manager
+		} catch (err) {
+			// W17: a failure in ANY post-connect phase must unwind everything
+			// this factory acquired, in reverse construction order, instead
+			// of leaking it. Before the manager exists only the client is
+			// owned; after it, close() already implements the full ordered
+			// unwind (queued writes → job worker → file watcher → change
+			// stream watcher → AccessTracker timer → owned client → shared
+			// registry release via onClosed) and is idempotent. The unwind is
+			// failure-tolerant: each cleanup is guarded and logs, and the
+			// ORIGINAL factory error wins the rethrow.
+			if (managerRef) {
+				try {
+					await managerRef.close()
+				} catch (cleanupErr) {
+					log.warn(
+						`manager factory unwind failed: ${
+							cleanupErr instanceof Error
+								? cleanupErr.message
+								: String(cleanupErr)
+						}`,
+					)
+				}
+			} else if (ownsClient) {
+				try {
+					await client.close()
+				} catch (cleanupErr) {
+					log.warn(
+						`owned client close during factory unwind failed: ${
+							cleanupErr instanceof Error
+								? cleanupErr.message
+								: String(cleanupErr)
+						}`,
+					)
+				}
+			}
+			throw err
 		}
-
-		log.info(
-			`ready: profile=${mongoCfg.deploymentProfile} embedding=${mongoCfg.embeddingMode} ` +
-				`fusion=${mongoCfg.fusionMethod} caps=${JSON.stringify(capabilities)}`,
-		)
-
-		return manager
 	}
 
 	// ---------------------------------------------------------------------------

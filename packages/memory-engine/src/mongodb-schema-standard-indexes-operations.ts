@@ -198,6 +198,14 @@ export async function ensureOperationalStandardIndexes(
 			{ name: "idx_access_events_agent_collection_ts" },
 		)
 		applied++
+		// W11: serves the access tracker's raw-layer read-reconcile
+		// (batchId $in lookup before a retry inserts). Secondary indexes on
+		// time-series measurement fields are supported from MongoDB 6.0.
+		await accessEvents.createIndex(
+			{ batchId: 1 },
+			{ name: "idx_access_events_batch_id" },
+		)
+		applied++
 	} catch (err) {
 		const msg = err instanceof Error ? err.message : String(err)
 		log.warn(`access events index creation skipped: ${msg}`)

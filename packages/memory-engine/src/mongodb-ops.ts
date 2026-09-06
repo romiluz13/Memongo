@@ -1,10 +1,12 @@
 import { randomUUID } from "node:crypto"
-import type { Db } from "mongodb"
+import type { Db, Document } from "mongodb"
 import { createSubsystemLogger } from "@memongo/lib"
 import {
+	eventsCollection,
 	ingestRunsCollection,
 	projectionRunsCollection,
 } from "./mongodb-schema.js"
+import { buildUnexpiredClause } from "./mongodb-temporal.js"
 import { emitTelemetry } from "./mongodb-telemetry.js"
 
 const log = createSubsystemLogger("memory:mongodb:ops")
@@ -194,6 +196,40 @@ export async function getLatestProjectionRun(params: {
 	}
 }
 
+/**
+ * W16: per-lane unmet-obligation filters over the canonical events
+ * collection. Each projection lane consumes events through its own pending
+ * marker, so the SAME marker defines what the lane still owes:
+ * - chunks: events not yet projected (`projectedAt` unset — the filter
+ *   `getUnprojectedEvents` uses).
+ * - entities / relations / structured-promotion / procedures: events whose
+ *   extraction outbox marker is still set (`extractionJobPendingAt` — the
+ *   filter `getPendingExtractionEvents` uses); one extraction job fulfills
+ *   all four lanes for an event, so they share one marker.
+ * - episodes: events the dreamer has not yet considered
+ *   (`dreamerProcessedAt` unset — the filter `runDreamer` uses).
+ * The brief/contradiction lanes have no per-event pending marker and are
+ * deliberately absent: no backlog age is measurable for them.
+ */
+const PROJECTION_PENDING_EVENT_FILTERS: Partial<
+	Record<ProjectionType, Document>
+> = {
+	chunks: { projectedAt: { $exists: false } },
+	entities: { extractionJobPendingAt: { $exists: true } },
+	relations: { extractionJobPendingAt: { $exists: true } },
+	episodes: { dreamerProcessedAt: { $exists: false } },
+	"structured-promotion": { extractionJobPendingAt: { $exists: true } },
+	procedures: { extractionJobPendingAt: { $exists: true } },
+}
+
+/**
+ * W16: lag is the age of the lane's OLDEST unmet projection obligation —
+ * not now − last successful run. The old definition degraded a healthy idle
+ * agent (no recent runs, nothing owed) while a recent success concealed
+ * older stranded events. Null now means "the lane owes nothing" (healthy
+ * idle); a thrown error means the backlog is unmeasurable, which the status
+ * layer maps to health-uncertain.
+ */
 export async function getProjectionLag(params: {
 	db: Db
 	prefix: string
@@ -201,15 +237,23 @@ export async function getProjectionLag(params: {
 	projectionType: ProjectionType
 }): Promise<number | null> {
 	const { db, prefix, agentId, projectionType } = params
+	const pendingFilter = PROJECTION_PENDING_EVENT_FILTERS[projectionType]
+	if (!pendingFilter) {
+		// Brief/contradiction lanes: no per-event pending marker exists, so
+		// no backlog age is measurable.
+		return null
+	}
 	try {
-		const doc = await projectionRunsCollection(db, prefix).findOne(
-			{ agentId, projectionType, status: "ok" },
-			{ sort: { ts: -1 } },
+		// P4.4.1: expired events are already hidden from every projection
+		// reader and removed by the TTL sweep — they are not obligations.
+		const oldest = await eventsCollection(db, prefix).findOne(
+			{ agentId, ...pendingFilter, ...buildUnexpiredClause() },
+			{ sort: { timestamp: 1 }, projection: { timestamp: 1 } },
 		)
-		if (!doc) {
+		if (!oldest) {
 			return null
 		}
-		const ts = doc.ts as Date
+		const ts = oldest.timestamp as Date
 		return Math.floor((Date.now() - ts.getTime()) / 1000)
 	} catch (err) {
 		log.error("getProjectionLag failed", {

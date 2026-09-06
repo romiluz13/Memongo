@@ -22,6 +22,10 @@ const PREFIX = "test_"
 
 function createMockDb() {
 	const accessInsertMany = vi.fn().mockResolvedValue({ insertedCount: 0 })
+	// W11: the raw-layer read-reconcile (`find` by batchId before a retry
+	// inserts). Default: no batches present.
+	const accessFindToArray = vi.fn(async () => [])
+	const accessFind = vi.fn(() => ({ toArray: accessFindToArray }))
 	const eventsBulkWrite = vi.fn().mockResolvedValue({ modifiedCount: 0 })
 	const structuredBulkWrite = vi.fn().mockResolvedValue({ modifiedCount: 0 })
 	const proceduresBulkWrite = vi.fn().mockResolvedValue({ modifiedCount: 0 })
@@ -34,6 +38,7 @@ function createMockDb() {
 			`${PREFIX}access_events`,
 			{
 				insertMany: accessInsertMany,
+				find: accessFind,
 				aggregate: vi.fn(),
 			} as unknown as Collection,
 		],
@@ -70,6 +75,8 @@ function createMockDb() {
 	return {
 		db,
 		accessInsertMany,
+		accessFind,
+		accessFindToArray,
 		eventsBulkWrite,
 		structuredBulkWrite,
 		proceduresBulkWrite,
@@ -151,10 +158,22 @@ describe("AccessTracker", () => {
 			[
 				{
 					updateOne: {
-						filter: { eventId: "evt-1", agentId: "agent-1" },
+						filter: {
+							eventId: "evt-1",
+							agentId: "agent-1",
+							// W11: per-batch idempotency guard on the canonical op.
+							appliedBatches: { $ne: expect.any(String) },
+						},
 						update: {
 							$inc: { accessCount: 5 },
 							$set: { lastAccessedAt: expect.any(Date) },
+							// W11: batch append rides the same atomic update.
+							$push: {
+								appliedBatches: {
+									$each: [expect.any(String)],
+									$slice: -32,
+								},
+							},
 						},
 					},
 				},
@@ -290,6 +309,7 @@ describe("AccessTracker", () => {
 				if (name === `${PREFIX}access_events`) {
 					return {
 						insertMany: accessInsertMany,
+						find: vi.fn(() => ({ toArray: vi.fn(async () => []) })),
 						aggregate: vi.fn(),
 					} as unknown as Collection
 				}
@@ -364,10 +384,17 @@ describe("AccessTracker", () => {
 							scopeRef: "agent:B",
 							type: "preference",
 							key: "timezone",
+							appliedBatches: { $ne: expect.any(String) },
 						},
 						update: {
 							$inc: { accessCount: 1 },
 							$set: { lastAccessedAt: expect.any(Date) },
+							$push: {
+								appliedBatches: {
+									$each: [expect.any(String)],
+									$slice: -32,
+								},
+							},
 						},
 					},
 				},
@@ -415,6 +442,7 @@ describe("AccessTracker", () => {
 			scopeRef: "agent:B",
 			type: "preference",
 			key: "timezone",
+			appliedBatches: { $ne: expect.any(String) },
 		})
 		expect(filters).toContainEqual({
 			agentId: "agent-B",
@@ -422,6 +450,7 @@ describe("AccessTracker", () => {
 			scopeRef: "user:alice",
 			type: "preference",
 			key: "timezone",
+			appliedBatches: { $ne: expect.any(String) },
 		})
 		expect(filters).toContainEqual({
 			agentId: "agent-B",
@@ -429,6 +458,7 @@ describe("AccessTracker", () => {
 			scopeRef: "agent:B",
 			type: "fact",
 			key: "timezone",
+			appliedBatches: { $ne: expect.any(String) },
 		})
 	})
 
@@ -505,6 +535,7 @@ describe("AccessTracker", () => {
 							agentId: "agent-B",
 							scope: "agent",
 							scopeRef: "agent:B",
+							appliedBatches: { $ne: expect.any(String) },
 						},
 						update: expect.anything(),
 					},
@@ -521,6 +552,7 @@ describe("AccessTracker", () => {
 							agentId: "agent-B",
 							scope: "agent",
 							scopeRef: "agent:B",
+							appliedBatches: { $ne: expect.any(String) },
 						},
 						update: expect.anything(),
 					},
@@ -539,6 +571,7 @@ describe("AccessTracker", () => {
 							fromEntityId: "ent-1",
 							toEntityId: "ent-2",
 							type: "related_to",
+							appliedBatches: { $ne: expect.any(String) },
 						},
 						update: expect.anything(),
 					},
@@ -559,7 +592,11 @@ describe("AccessTracker", () => {
 			[
 				{
 					updateOne: {
-						filter: { episodeId: "ep-1", agentId: "agent-B" },
+						filter: {
+							episodeId: "ep-1",
+							agentId: "agent-B",
+							appliedBatches: { $ne: expect.any(String) },
+						},
 						update: expect.anything(),
 					},
 				},
@@ -696,6 +733,343 @@ describe("AccessTracker", () => {
 		)
 		vi.useFakeTimers()
 	}, 30_000)
+})
+
+// ===========================================================================
+// W11 — batchId-guarded exactly-once flush.
+// A minimal MongoDB-semantics simulation applies the guarded updateOne ops:
+// exact-equality filters, $ne against scalars AND arrays (element
+// containment, EL-029), $inc/$set/$push with $each + $slice bounding
+// (EL-030/EL-031). The invariants under test hold for any sequence of
+// partial failures: raw evidence exactly once, canonical counts exactly
+// once.
+// ===========================================================================
+describe("AccessTracker W11 — batchId-guarded exactly-once flush", () => {
+	let tracker: AccessTracker | null = null
+
+	afterEach(() => {
+		if (tracker) {
+			return tracker.close().finally(() => {
+				tracker = null
+			})
+		}
+	})
+
+	type StoredDoc = Record<string, unknown>
+
+	function makeGuardedStore(seedDocs: StoredDoc[]) {
+		const docs: StoredDoc[] = seedDocs.map((doc) => ({ ...doc }))
+		const bulkWrite = vi.fn(
+			async (
+				ops: Array<{
+					updateOne: {
+						filter: Record<string, unknown>
+						update: Record<string, unknown>
+					}
+				}>,
+			) => {
+				let modifiedCount = 0
+				for (const op of ops) {
+					const { filter, update } = op.updateOne
+					const doc = docs.find((candidate) =>
+						Object.entries(filter).every(([field, expected]) => {
+							if (
+								expected !== null &&
+								typeof expected === "object" &&
+								!Array.isArray(expected) &&
+								"$ne" in expected
+							) {
+								const ne = (expected as { $ne: unknown }).$ne
+								const value = candidate[field]
+								// EL-029: scalar $ne matches documents without the
+								// field; against arrays it matches where the scalar
+								// is not an element.
+								return Array.isArray(value) ? !value.includes(ne) : value !== ne
+							}
+							return candidate[field] === expected
+						}),
+					)
+					if (!doc) {
+						continue
+					}
+					const inc = (update.$inc ?? {}) as Record<string, number>
+					for (const [field, by] of Object.entries(inc)) {
+						doc[field] = (typeof doc[field] === "number" ? doc[field] : 0) + by
+					}
+					const set = (update.$set ?? {}) as Record<string, unknown>
+					for (const [field, value] of Object.entries(set)) {
+						doc[field] = value
+					}
+					const push = (update.$push ?? {}) as Record<
+						string,
+						{ $each?: unknown[]; $slice?: number }
+					>
+					for (const [field, mod] of Object.entries(push)) {
+						const each = mod.$each ?? []
+						const existing = Array.isArray(doc[field])
+							? (doc[field] as unknown[])
+							: []
+						const next = [...existing, ...each]
+						doc[field] =
+							mod.$slice !== undefined && mod.$slice < 0
+								? next.slice(mod.$slice)
+								: next
+					}
+					modifiedCount++
+				}
+				return { modifiedCount }
+			},
+		)
+		return { docs, bulkWrite }
+	}
+
+	function buildRetryDb(params: {
+		store: ReturnType<typeof makeGuardedStore>
+		eventsBulkWrite: ReturnType<typeof vi.fn>
+	}) {
+		// The raw layer: inserts append to `rawDocs` (so the retry's
+		// read-reconcile finds the first batch present, as a real
+		// access_events collection would), find returns them.
+		const rawDocs: Array<Record<string, unknown>> = []
+		const accessInsertMany = vi.fn(
+			async (docs: Array<Record<string, unknown>>) => {
+				for (const doc of docs) {
+					rawDocs.push({ ...doc })
+				}
+				return { insertedCount: docs.length }
+			},
+		)
+		const accessFind = vi.fn(() => ({
+			toArray: vi.fn(async () => rawDocs),
+		}))
+		const db = {
+			collection: vi.fn((name: string) => {
+				if (name === `${PREFIX}access_events`) {
+					return {
+						insertMany: accessInsertMany,
+						find: accessFind,
+						aggregate: vi.fn(),
+					} as unknown as Collection
+				}
+				if (name === `${PREFIX}events`) {
+					return {
+						bulkWrite: params.eventsBulkWrite,
+					} as unknown as Collection
+				}
+				return {
+					bulkWrite: vi.fn().mockResolvedValue({ modifiedCount: 0 }),
+				} as unknown as Collection
+			}),
+		} as unknown as Db
+		return { db, accessInsertMany, accessFind, rawDocs }
+	}
+
+	it("retries a canonical failure exactly once at both layers", async () => {
+		vi.useRealTimers()
+		const store = makeGuardedStore([
+			{ eventId: "evt-1", agentId: "agent-1", accessCount: 0 },
+			{ eventId: "evt-2", agentId: "agent-1", accessCount: 0 },
+		])
+		let bulkCalls = 0
+		const eventsBulkWrite = vi.fn(async (ops: unknown[]) => {
+			bulkCalls++
+			if (bulkCalls === 1) {
+				throw new Error("simulated canonical failure")
+			}
+			return store.bulkWrite(ops as Parameters<typeof store.bulkWrite>[0])
+		})
+		const { db, accessInsertMany, accessFind } = buildRetryDb({
+			store,
+			eventsBulkWrite,
+		})
+
+		tracker = new AccessTracker(db, PREFIX, "agent-1", {
+			flushThreshold: 100,
+			flushIntervalMs: 600_000,
+		})
+		tracker.recordAccess({ collection: "events", id: "evt-1" })
+		tracker.recordAccess({ collection: "events", id: "evt-1" })
+		tracker.recordAccess({ collection: "events", id: "evt-2" })
+
+		// First flush: raw insert succeeds, canonical bulkWrite fails — the
+		// whole snapshot re-buffers (batchIds preserved).
+		await tracker.flush()
+		// Second flush: raw read-reconcile finds the first batch present and
+		// skips the insert; the canonical retry applies the guarded ops.
+		await tracker.flush()
+
+		// Raw layer: exactly one insertMany for the batch.
+		expect(accessInsertMany).toHaveBeenCalledTimes(1)
+		const inserted = accessInsertMany.mock.calls[0]?.[0] as Array<{
+			memoryId: string
+			count: number
+			batchId: string
+		}>
+		expect(inserted).toHaveLength(2)
+		expect(inserted.every((doc) => typeof doc.batchId === "string")).toBe(true)
+		// The reconcile read ran exactly once (on the retry flush only).
+		expect(accessFind).toHaveBeenCalledTimes(1)
+
+		// Canonical layer: exactly once despite the retry.
+		expect(store.docs.find((doc) => doc.eventId === "evt-1")).toMatchObject({
+			accessCount: 2,
+		})
+		expect(store.docs.find((doc) => doc.eventId === "evt-2")).toMatchObject({
+			accessCount: 1,
+		})
+		expect(
+			store.docs.find((doc) => doc.eventId === "evt-1")?.appliedBatches,
+		).toHaveLength(1)
+		expect(
+			store.docs.find((doc) => doc.eventId === "evt-2")?.appliedBatches,
+		).toHaveLength(1)
+
+		vi.useFakeTimers()
+	}, 5_000)
+
+	it("no-matches already-applied ops when an unordered bulk failed partway", async () => {
+		vi.useRealTimers()
+		const store = makeGuardedStore([
+			{ eventId: "evt-1", agentId: "agent-1", accessCount: 0 },
+			{ eventId: "evt-2", agentId: "agent-1", accessCount: 0 },
+		])
+		let bulkCalls = 0
+		const eventsBulkWrite = vi.fn(async (ops: unknown[]) => {
+			bulkCalls++
+			if (bulkCalls === 1) {
+				// Unordered bulk: the first op APPLIES, then the batch fails —
+				// the worst case the guard exists for.
+				const first = (ops as Parameters<typeof store.bulkWrite>[0])[0]
+				await store.bulkWrite([first])
+				throw new Error("simulated partial canonical failure")
+			}
+			return store.bulkWrite(ops as Parameters<typeof store.bulkWrite>[0])
+		})
+		const { db, accessInsertMany } = buildRetryDb({
+			store,
+			eventsBulkWrite,
+		})
+
+		tracker = new AccessTracker(db, PREFIX, "agent-1", {
+			flushThreshold: 100,
+			flushIntervalMs: 600_000,
+		})
+		tracker.recordAccess({ collection: "events", id: "evt-1" })
+		tracker.recordAccess({ collection: "events", id: "evt-2" })
+
+		await tracker.flush()
+		await tracker.flush()
+
+		// Raw exactly once; evt-1's op applied before the failure, evt-2's
+		// applied on the guarded retry — neither double-applied.
+		expect(accessInsertMany).toHaveBeenCalledTimes(1)
+		expect(store.docs.find((doc) => doc.eventId === "evt-1")).toMatchObject({
+			accessCount: 1,
+		})
+		expect(store.docs.find((doc) => doc.eventId === "evt-2")).toMatchObject({
+			accessCount: 1,
+		})
+		expect(
+			store.docs.find((doc) => doc.eventId === "evt-1")?.appliedBatches,
+		).toHaveLength(1)
+		expect(
+			store.docs.find((doc) => doc.eventId === "evt-2")?.appliedBatches,
+		).toHaveLength(1)
+
+		vi.useFakeTimers()
+	}, 5_000)
+
+	it("keeps counts from a re-buffered batch and a fresh batch separate", async () => {
+		vi.useRealTimers()
+		const store = makeGuardedStore([
+			{ eventId: "evt-1", agentId: "agent-1", accessCount: 0 },
+		])
+		let bulkCalls = 0
+		const eventsBulkWrite = vi.fn(async (ops: unknown[]) => {
+			bulkCalls++
+			if (bulkCalls === 1) {
+				throw new Error("simulated canonical failure")
+			}
+			return store.bulkWrite(ops as Parameters<typeof store.bulkWrite>[0])
+		})
+		const { db, accessInsertMany, rawDocs } = buildRetryDb({
+			store,
+			eventsBulkWrite,
+		})
+
+		tracker = new AccessTracker(db, PREFIX, "agent-1", {
+			flushThreshold: 100,
+			flushIntervalMs: 600_000,
+		})
+		tracker.recordAccess({ collection: "events", id: "evt-1" })
+		tracker.recordAccess({ collection: "events", id: "evt-1" })
+		await tracker.flush() // raw inserted for batch B; canonical fails
+
+		// A NEW access while the failed batch waits for retry — it must start
+		// a fresh entry, not merge into the committed batch B entry.
+		tracker.recordAccess({ collection: "events", id: "evt-1" })
+		await tracker.flush()
+
+		// Raw: batch B skipped (present), only the fresh batch's doc inserted.
+		expect(accessInsertMany).toHaveBeenCalledTimes(2)
+		const firstBatchId = (
+			accessInsertMany.mock.calls[0]?.[0] as Array<{ batchId: string }>
+		)[0]?.batchId
+		const secondDocs = accessInsertMany.mock.calls[1]?.[0] as Array<{
+			count: number
+			batchId: string
+		}>
+		expect(secondDocs).toHaveLength(1)
+		expect(secondDocs[0]?.count).toBe(1)
+		expect(secondDocs[0]?.batchId).not.toBe(firstBatchId)
+		expect(rawDocs).toHaveLength(2)
+
+		// Canonical: both ops applied — 2 from batch B, 1 from the fresh
+		// batch; the counts land exactly once each.
+		expect(store.docs.find((doc) => doc.eventId === "evt-1")).toMatchObject({
+			accessCount: 3,
+		})
+		expect(
+			store.docs.find((doc) => doc.eventId === "evt-1")?.appliedBatches,
+		).toHaveLength(2)
+
+		vi.useFakeTimers()
+	}, 5_000)
+
+	it("bounds the appliedBatches window and skips the reconcile read on fresh flushes", async () => {
+		vi.useRealTimers()
+		const store = makeGuardedStore([
+			{ eventId: "evt-1", agentId: "agent-1", accessCount: 0 },
+		])
+		const eventsBulkWrite = vi.fn((ops: unknown[]) =>
+			store.bulkWrite(ops as Parameters<typeof store.bulkWrite>[0]),
+		)
+		const { db, accessInsertMany, accessFind } = buildRetryDb({
+			store,
+			eventsBulkWrite,
+		})
+
+		tracker = new AccessTracker(db, PREFIX, "agent-1", {
+			flushThreshold: 100,
+			flushIntervalMs: 600_000,
+		})
+		// 40 successful single-access flushes: 40 distinct applied batches on
+		// one document — the $slice: -32 window must keep only the newest 32.
+		for (let i = 0; i < 40; i++) {
+			tracker.recordAccess({ collection: "events", id: "evt-1" })
+			await tracker.flush()
+		}
+
+		const doc = store.docs.find((candidate) => candidate.eventId === "evt-1")
+		expect(doc).toMatchObject({ accessCount: 40 })
+		expect(doc?.appliedBatches).toHaveLength(32)
+		// Steady-state cost is unchanged: a fresh flush (no re-buffered
+		// entries) never runs the read-reconcile find.
+		expect(accessFind).not.toHaveBeenCalled()
+		expect(accessInsertMany).toHaveBeenCalledTimes(40)
+
+		vi.useFakeTimers()
+	}, 15_000)
 })
 
 // ===========================================================================

@@ -258,14 +258,17 @@ export class MongoDBManagerSyncOps {
 
 			// Query actual totals from MongoDB (not just the delta from this sync)
 			try {
+				// W13: host.fileCount/chunkCount describe the TENANT, not the
+				// shared deployment — count this agent's rows only.
+				const tenantFilter = { agentId: this.host.agentId }
 				this.host.fileCount = await filesCollection(
 					this.host.db,
 					this.host.prefix,
-				).countDocuments()
+				).countDocuments(tenantFilter)
 				this.host.chunkCount = await chunksCollection(
 					this.host.db,
 					this.host.prefix,
-				).countDocuments()
+				).countDocuments(tenantFilter)
 			} catch {
 				// Fallback to delta counts if count query fails
 				this.host.fileCount =

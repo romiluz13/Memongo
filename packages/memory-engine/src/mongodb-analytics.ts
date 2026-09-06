@@ -54,15 +54,22 @@ export type MemoryStats = {
 export async function getMemoryStats(
 	db: Db,
 	prefix: string,
+	agentId: string,
 	validPaths?: Set<string>,
 	options: MemoryStatsOptions = {},
 ): Promise<MemoryStats> {
 	const chunksCol = chunksCollection(db, prefix)
 	const filesCol = filesCollection(db, prefix)
 
+	// W13: every volume measurement on this per-agent surface is scoped to the
+	// tenant. Physical index diagnostics ($indexStats) are the one exception —
+	// they are server metadata, not tenant data, and stay unfiltered below.
+	const tenantFilter: Document = { agentId }
+
 	// Per-source file breakdown
 	const sourceAgg: Document[] = await filesCol
 		.aggregate([
+			{ $match: tenantFilter },
 			{
 				$group: {
 					_id: "$source",
@@ -82,7 +89,10 @@ export async function getMemoryStats(
 
 	// Per-source chunk counts
 	const chunkSourceAgg: Document[] = await chunksCol
-		.aggregate([{ $group: { _id: "$source", count: { $sum: 1 } } }])
+		.aggregate([
+			{ $match: tenantFilter },
+			{ $group: { _id: "$source", count: { $sum: 1 } } },
+		])
 		.toArray()
 
 	for (const doc of chunkSourceAgg) {
@@ -97,6 +107,7 @@ export async function getMemoryStats(
 		collection: chunksCol,
 		indexName: `${prefix}chunks_vector`,
 		embeddingMode,
+		tenantFilter,
 	})
 	const withEmb = chunkMeasurement.success
 	const totalChunks = chunkMeasurement.total
@@ -119,13 +130,14 @@ export async function getMemoryStats(
 		db,
 		prefix,
 		embeddingMode,
+		agentId,
 	)
 
 	// Stale files (in DB but not on disk)
 	let staleFiles: string[] = []
 	if (validPaths) {
 		const docs = await filesCol
-			.find({}, { projection: { _id: 0, path: 1 } })
+			.find(tenantFilter, { projection: { _id: 0, path: 1 } })
 			.toArray()
 		staleFiles = Array.from(
 			new Set(
@@ -138,10 +150,12 @@ export async function getMemoryStats(
 	}
 
 	// $indexStats: show which indexes are used and which are unused
+	// W13: intentionally unfiltered — $indexStats is physical index metadata
+	// (server-wide by nature), operational rather than tenant volume.
 	const indexStats = await aggregateIndexStats(db, prefix)
 
 	// Collection document counts
-	const totalFiles = await filesCol.countDocuments()
+	const totalFiles = await filesCol.countDocuments(tenantFilter)
 
 	log.info(
 		`stats: files=${totalFiles} chunks=${totalChunks} ` +
@@ -210,6 +224,10 @@ async function countRetrievableViaVectorIndex(params: {
 	indexName: string
 	path: string
 	limit: number
+	/** W13: tenant pre-filter (`$vectorSearch.filter`) — scopes the probe's
+	 *  count to the tenant's documents. Optional; omitted probes count the
+	 *  whole index. */
+	filter?: Document
 }): Promise<number | null> {
 	try {
 		const rows: Document[] = await params.collection
@@ -221,6 +239,7 @@ async function countRetrievableViaVectorIndex(params: {
 						query: COVERAGE_PROBE_QUERY,
 						exact: true,
 						limit: params.limit,
+						...(params.filter ? { filter: params.filter } : {}),
 					},
 				},
 				{ $count: "n" },
@@ -235,15 +254,28 @@ async function countRetrievableViaVectorIndex(params: {
 	}
 }
 
+/**
+ * Measures embedding coverage for one collection.
+ *
+ * With `tenantFilter` (W13) every count is scoped to the tenant: the
+ * stored-vector aggregation is prefixed with `$match`, the total counts only
+ * tenant documents, and the search-index probe carries the filter into
+ * `$vectorSearch`. `numDocs` from `$listSearchIndexes` is INDEX-WIDE — it
+ * counts every tenant's documents — so when a tenant filter is present it
+ * cannot answer a per-tenant question and the tenant-scoped probe is used
+ * instead.
+ */
 export async function measureEmbeddingCoverage(params: {
 	collection: Collection
 	indexName: string
 	embeddingMode: "automated" | "client"
+	tenantFilter?: Document
 }): Promise<EmbeddingCoverageMeasurement> {
 	if (params.embeddingMode === "client") {
 		try {
 			const rows: Document[] = await params.collection
 				.aggregate([
+					...(params.tenantFilter ? [{ $match: params.tenantFilter }] : []),
 					{
 						$group: {
 							_id: null,
@@ -287,7 +319,7 @@ export async function measureEmbeddingCoverage(params: {
 
 	let total = 0
 	try {
-		total = await params.collection.countDocuments()
+		total = await params.collection.countDocuments(params.tenantFilter ?? {})
 		const indexes = await params.collection
 			.aggregate([{ $listSearchIndexes: { name: params.indexName } }])
 			.toArray()
@@ -318,10 +350,18 @@ export async function measureEmbeddingCoverage(params: {
 			return unknownResult
 		}
 
-		let indexedCount =
-			typeof indexed === "number" && Number.isFinite(indexed) && indexed >= 0
-				? Math.floor(indexed)
-				: null
+		let indexedCount: number | null
+		if (params.tenantFilter) {
+			// W13: numDocs is index-wide (every tenant's documents), so it
+			// cannot answer a per-tenant question. Go straight to the
+			// tenant-scoped probe.
+			indexedCount = null
+		} else {
+			indexedCount =
+				typeof indexed === "number" && Number.isFinite(indexed) && indexed >= 0
+					? Math.floor(indexed)
+					: null
+		}
 
 		if (indexedCount === null) {
 			// Atlas serves a READY, queryable index but reports no numDocs. Ask the
@@ -340,6 +380,7 @@ export async function measureEmbeddingCoverage(params: {
 				indexName: params.indexName,
 				path: autoEmbedPath,
 				limit: Math.max(1, Math.min(total, MAX_COVERAGE_PROBE_DOCS)),
+				filter: params.tenantFilter,
 			})
 			if (indexedCount === null) {
 				return unknownResult
@@ -387,23 +428,28 @@ async function aggregateEmbeddingStatusCoverage(
 	db: Db,
 	prefix: string,
 	embeddingMode: "automated" | "client",
+	agentId: string,
 ): Promise<EmbeddingStatusCoverage> {
 	const [chunks, kb, structured] = embeddableChunkCollections(db, prefix)
+	const tenantFilter: Document = { agentId }
 	const measurements = await Promise.all([
 		measureEmbeddingCoverage({
 			collection: chunks,
 			indexName: `${prefix}chunks_vector`,
 			embeddingMode,
+			tenantFilter,
 		}),
 		measureEmbeddingCoverage({
 			collection: kb,
 			indexName: `${prefix}kb_chunks_vector`,
 			embeddingMode,
+			tenantFilter,
 		}),
 		measureEmbeddingCoverage({
 			collection: structured,
 			indexName: `${prefix}structured_mem_vector`,
 			embeddingMode,
+			tenantFilter,
 		}),
 	])
 	return measurements.reduce<EmbeddingStatusCoverage>(

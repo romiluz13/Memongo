@@ -227,20 +227,19 @@ describe("mongodb-ops", () => {
 	})
 
 	describe("getProjectionLag", () => {
-		it("returns seconds since last successful projection of a given type", async () => {
+		// W16: lag is the age of the lane's OLDEST unmet obligation (backlog),
+		// not now − last successful run. Each test asserts both the value and
+		// the pending-marker filter the lane owes.
+		it("returns age in seconds of the oldest unprojected event for the chunks lane", async () => {
 			const pastTs = new Date(Date.now() - 120_000) // 120 seconds ago
-			const projCol = createMockCollection({
+			const eventsCol = createMockCollection({
 				findOne: vi.fn().mockResolvedValue({
-					runId: "run-ok",
+					eventId: "event-old",
 					agentId: "agent-1",
-					projectionType: "chunks",
-					status: "ok",
-					itemsProjected: 10,
-					durationMs: 500,
-					ts: pastTs,
+					timestamp: pastTs,
 				}),
 			})
-			const db = createMockDb({ [`${PREFIX}projection_runs`]: projCol })
+			const db = createMockDb({ [`${PREFIX}events`]: eventsCol })
 
 			const lag = await getProjectionLag({
 				db,
@@ -250,34 +249,103 @@ describe("mongodb-ops", () => {
 			})
 
 			expect(lag).not.toBeNull()
-			// Should be approximately 120 seconds (allow some tolerance for test execution time)
+			// Should be approximately 120 seconds (allow tolerance for test execution time)
 			expect(lag!).toBeGreaterThanOrEqual(119)
 			expect(lag!).toBeLessThanOrEqual(125)
-			// Verify query filter
-			const [filter, opts] = (projCol.findOne as ReturnType<typeof vi.fn>).mock
-				.calls[0]
+			// Verify query: oldest-first over un-expired events with the
+			// chunks pending marker (projectedAt unset).
+			const [filter, opts] = (eventsCol.findOne as ReturnType<typeof vi.fn>)
+				.mock.calls[0]
 			expect(filter).toEqual({
 				agentId: "agent-1",
-				projectionType: "chunks",
-				status: "ok",
+				projectedAt: { $exists: false },
+				$or: [
+					{ expiresAt: { $exists: false } },
+					{ expiresAt: { $gt: expect.any(Date) } },
+				],
 			})
-			expect(opts).toEqual({ sort: { ts: -1 } })
+			expect(opts).toEqual({
+				sort: { timestamp: 1 },
+				projection: { timestamp: 1 },
+			})
 		})
 
-		it("returns null when no successful run exists", async () => {
-			const projCol = createMockCollection({
+		it("returns null when the lane owes nothing (no pending events)", async () => {
+			const eventsCol = createMockCollection({
 				findOne: vi.fn().mockResolvedValue(null),
 			})
-			const db = createMockDb({ [`${PREFIX}projection_runs`]: projCol })
+			const db = createMockDb({ [`${PREFIX}events`]: eventsCol })
 
 			const lag = await getProjectionLag({
+				db,
+				prefix: PREFIX,
+				agentId: "agent-1",
+				projectionType: "chunks",
+			})
+
+			expect(lag).toBeNull()
+		})
+
+		it.each([
+			"entities",
+			"relations",
+			"structured-promotion",
+			"procedures",
+		] as const)("uses the extraction pending marker for the %s lane", async (projectionType) => {
+			const eventsCol = createMockCollection({
+				findOne: vi.fn().mockResolvedValue(null),
+			})
+			const db = createMockDb({ [`${PREFIX}events`]: eventsCol })
+
+			await getProjectionLag({
+				db,
+				prefix: PREFIX,
+				agentId: "agent-1",
+				projectionType,
+			})
+
+			const [filter] = (eventsCol.findOne as ReturnType<typeof vi.fn>).mock
+				.calls[0]
+			expect(filter).toMatchObject({
+				agentId: "agent-1",
+				extractionJobPendingAt: { $exists: true },
+			})
+		})
+
+		it("uses the dreamer pending marker for the episodes lane", async () => {
+			const eventsCol = createMockCollection({
+				findOne: vi.fn().mockResolvedValue(null),
+			})
+			const db = createMockDb({ [`${PREFIX}events`]: eventsCol })
+
+			await getProjectionLag({
 				db,
 				prefix: PREFIX,
 				agentId: "agent-1",
 				projectionType: "episodes",
 			})
 
+			const [filter] = (eventsCol.findOne as ReturnType<typeof vi.fn>).mock
+				.calls[0]
+			expect(filter).toMatchObject({
+				agentId: "agent-1",
+				dreamerProcessedAt: { $exists: false },
+			})
+		})
+
+		it("returns null without querying for lanes with no per-event pending marker", async () => {
+			const eventsCol = createMockCollection()
+			const db = createMockDb({ [`${PREFIX}events`]: eventsCol })
+
+			const lag = await getProjectionLag({
+				db,
+				prefix: PREFIX,
+				agentId: "agent-1",
+				projectionType: "brief",
+			})
+
 			expect(lag).toBeNull()
+			expect(eventsCol.findOne).not.toHaveBeenCalled()
 		})
 	})
 

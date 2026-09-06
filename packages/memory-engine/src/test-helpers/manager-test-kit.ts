@@ -280,6 +280,11 @@ export function schemaModuleMock() {
 		kbCollection: vi.fn(),
 		kbChunksCollection: vi.fn(),
 		relevanceRunsCollection: vi.fn(),
+		// W17: create() constructs the real MongoDBRelevanceRuntime when
+		// relevance is enabled (the resolver default); its constructor reads
+		// these two collections too.
+		relevanceArtifactsCollection: vi.fn(),
+		relevanceRegressionsCollection: vi.fn(),
 		recallTracesCollection: vi.fn(),
 		structuredMemCollection: vi.fn(),
 		detectCapabilities: vi.fn(),
@@ -293,6 +298,9 @@ export function schemaModuleMock() {
 		isSearchIndexReadyWithFilterFields: vi.fn(),
 		isSearchIndexManagementAvailable: vi.fn(),
 		isEventsVectorBitemporalPrefilterReady: vi.fn(),
+		// W17 factory-unwind tests exercise create() end to end; the manager
+		// imports this from mongodb-schema.js for the standard-index phase.
+		shouldEnsureTextFallbackIndexes: vi.fn(() => false),
 		resolveSearchIndexReadinessTiming: vi.fn(() => ({
 			timeoutMs: 60_000,
 			pollMs: 1_000,

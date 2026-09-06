@@ -104,6 +104,15 @@ export type V2Status = {
 	episodes: { count: number; latestTimestamp?: Date }
 	procedures: { count: number; latestTimestamp?: Date }
 	projectionLag: Record<string, number | null>
+	/**
+	 * W16: per-lane last-run ACTIVITY, reported separately from health.
+	 * Lag now measures backlog (age of the oldest unmet obligation), so
+	 * "when did this lane last do work" needs its own surface instead of
+	 * riding implicitly inside a now−lastRun lag value. `ts` is the lane's
+	 * most recent recorded run (any status — the outcome is already
+	 * reflected in projectionHealth); null means the lane never ran.
+	 */
+	projectionLastRun: Record<string, Date | null>
 	projectionHealth: Record<
 		string,
 		| "ok"
@@ -251,23 +260,29 @@ export function classifyCanonicalIngestHealth(
 
 export function classifyProjectionHealth(params: {
 	latestRun: Pick<ProjectionRun, "status"> | null
-	lagSeconds: number | null
+	/**
+	 * W16: age of the lane's oldest unmet projection obligation. null means
+	 * the lane owes nothing (healthy idle — the old now−lastRun lag degraded
+	 * exactly here); undefined means the backlog is unmeasurable (the lag
+	 * check itself failed), which stays health-uncertain.
+	 */
+	lagSeconds: number | null | undefined
 }):
 	| "ok"
 	| "projection-behind"
 	| "derived-product-unavailable"
 	| "health-uncertain" {
 	const { latestRun, lagSeconds } = params
-	if (!latestRun) {
-		return "health-uncertain"
-	}
-	if (latestRun.status === "failed") {
+	if (latestRun?.status === "failed") {
 		return "derived-product-unavailable"
 	}
-	if (lagSeconds === null) {
+	if (lagSeconds === undefined) {
 		return "health-uncertain"
 	}
-	if (lagSeconds > PROJECTION_BEHIND_SECONDS) {
+	// W16: degrade on actual backlog only — an obligation older than the
+	// threshold — never on inactivity. No latest run + nothing owed is a
+	// healthy idle lane.
+	if (lagSeconds !== null && lagSeconds > PROJECTION_BEHIND_SECONDS) {
 		return "projection-behind"
 	}
 	return "ok"
@@ -518,30 +533,39 @@ export async function getV2Status(
 			status: latestRetrievalSafe?.status,
 			hitSources: latestRetrievalSafe?.hitSources,
 		})
+		// W16: a rejected lag check must classify as health-uncertain, not
+		// "ok" — the payload fallback (null) now means "nothing owed" and can
+		// no longer carry the failure signal, so classification reads the
+		// settled result directly: fulfilled → value (null = nothing owed),
+		// rejected → undefined (unmeasurable).
+		const lagForHealth = (index: number): number | null | undefined =>
+			settled[index].status === "fulfilled"
+				? (settled[index].value as number | null)
+				: undefined
 		const derivedProducts = {
 			chunks: classifyProjectionHealth({
 				latestRun: latestChunksProjection,
-				lagSeconds: chunksLag,
+				lagSeconds: lagForHealth(5),
 			}),
 			entities: classifyProjectionHealth({
 				latestRun: latestEntitiesProjection,
-				lagSeconds: entitiesLag,
+				lagSeconds: lagForHealth(6),
 			}),
 			relations: classifyProjectionHealth({
 				latestRun: latestRelationsProjection,
-				lagSeconds: relationsLag,
+				lagSeconds: lagForHealth(7),
 			}),
 			episodes: classifyProjectionHealth({
 				latestRun: latestEpisodesProjection,
-				lagSeconds: episodesLag,
+				lagSeconds: lagForHealth(8),
 			}),
 			"structured-promotion": classifyProjectionHealth({
 				latestRun: latestStructuredPromotion,
-				lagSeconds: structuredPromotionLag,
+				lagSeconds: lagForHealth(9),
 			}),
 			procedures: classifyProjectionHealth({
 				latestRun: latestProceduresProjection,
-				lagSeconds: proceduresLag,
+				lagSeconds: lagForHealth(10),
 			}),
 		}
 		const diagnostics = [
@@ -606,6 +630,16 @@ export async function getV2Status(
 				episodes: episodesLag,
 				"structured-promotion": structuredPromotionLag,
 				procedures: proceduresLag,
+			},
+			// W16: activity surface — per-lane most recent recorded run
+			// (any status). Health no longer keys off this; see V2Status.
+			projectionLastRun: {
+				chunks: latestChunksProjection?.ts ?? null,
+				entities: latestEntitiesProjection?.ts ?? null,
+				relations: latestRelationsProjection?.ts ?? null,
+				episodes: latestEpisodesProjection?.ts ?? null,
+				"structured-promotion": latestStructuredPromotion?.ts ?? null,
+				procedures: latestProceduresProjection?.ts ?? null,
 			},
 			projectionHealth: derivedProducts,
 			laneCoverage: laneCoverageDoc?.lanes ?? {},
@@ -999,8 +1033,16 @@ export class MongoDBManagerAdminOps {
 
 	async stats(): Promise<MemoryStats> {
 		const embeddingMode = this.host.config.mongodb?.embeddingMode ?? "automated"
-		return getMemoryStats(this.host.db, this.host.prefix, undefined, {
-			embeddingMode,
-		})
+		// W13: the stats surface is per-agent — pass the tenant identity so
+		// every volume measurement is scoped to this agent's rows.
+		return getMemoryStats(
+			this.host.db,
+			this.host.prefix,
+			this.host.agentId,
+			undefined,
+			{
+				embeddingMode,
+			},
+		)
 	}
 }

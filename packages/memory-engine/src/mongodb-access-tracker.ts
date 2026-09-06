@@ -8,6 +8,7 @@
  */
 
 import type { AnyBulkWriteOperation, Db, Document, Filter } from "mongodb"
+import { randomUUID } from "node:crypto"
 import { createSubsystemLogger } from "@memongo/lib"
 import {
 	accessEventsCollection,
@@ -258,8 +259,35 @@ type TrendTarget = {
 	memoryId: string
 }
 
+/**
+ * W11: buffered access counts. An entry is MUTABLE only while uncommitted
+ * (no batchId); the flush stamps uncommitted entries with the flush's
+ * logical batch id before they leave the buffer, and from that moment the
+ * entry's count is committed to that batch's raw-insert and
+ * canonical-increment exactly-once accounting — a re-buffer preserves the
+ * batchId instead of merging counts across batches.
+ */
+type UncommittedEntry = {
+	target: AccessRecordTarget
+	count: number
+}
+
+type CommittedEntry = UncommittedEntry & {
+	/** W11: logical flush batch id; assigned at flush time, kept on retry. */
+	batchId: string
+}
+
+type BufferEntry = UncommittedEntry | CommittedEntry
+
+/**
+ * W11: how many applied batch ids a canonical document remembers. A
+ * re-buffered retry (same batchId) stays guarded for this many further
+ * applied batches; `$slice: -32` keeps the array permanently bounded.
+ */
+const APPLIED_BATCHES_WINDOW = 32
+
 export class AccessTracker {
-	private buffer: Map<string, { target: AccessRecordTarget; count: number }>
+	private buffer: Map<string, BufferEntry[]>
 	private readonly config: Required<AccessTrackerConfig>
 	private timer: ReturnType<typeof setInterval> | null = null
 	private totalBuffered = 0
@@ -294,12 +322,20 @@ export class AccessTracker {
 		}
 		const normalized: AccessRecordTarget = { ...target, id }
 		const key = bufferKey(normalized)
-		const entry = this.buffer.get(key)
-		if (entry) {
-			entry.count++
+		const entries = this.buffer.get(key) ?? []
+		// W11: only an uncommitted entry may absorb the new count. An entry
+		// that already carries a batchId is committed to that batch's
+		// exactly-once accounting — incrementing it after the raw insert would
+		// double-count the raw layer and double-increment the canonical layer
+		// (or lose the new count to the $ne guard). A new access therefore
+		// starts a FRESH entry that the next flush stamps with a new batchId.
+		const last = entries[entries.length - 1]
+		if (last && !("batchId" in last)) {
+			last.count++
 		} else {
-			this.buffer.set(key, { target: normalized, count: 1 })
+			entries.push({ target: normalized, count: 1 })
 		}
+		this.buffer.set(key, entries)
 		this.totalBuffered++
 
 		if (
@@ -344,30 +380,46 @@ export class AccessTracker {
 	}
 
 	/**
-	 * Merge a snapshot back into the live buffer. Used by the deadletter path
-	 * so a flush failure does NOT drop access counts. Counts are summed when
-	 * the same key already exists in the live buffer (another recordAccess()
-	 * call may have landed while the flush was in-flight).
+	 * Merge a failed flush's snapshot back into the live buffer. Used by the
+	 * deadletter path so a flush failure does NOT drop access counts.
+	 *
+	 * W11: entries are appended AS-IS with their original batchIds — never
+	 * merged into a live uncommitted entry. Counts from different batches
+	 * must stay separate so each batch's raw insert and canonical $inc stay
+	 * exactly-once on retry (the raw layer read-reconciles by batchId; the
+	 * canonical layer no-matches already-applied batches).
 	 */
-	private rebufferSnapshot(
-		snapshot: Map<string, { target: AccessRecordTarget; count: number }>,
-	): void {
-		for (const [key, entry] of snapshot) {
-			const existing = this.buffer.get(key)
-			if (existing) {
-				existing.count += entry.count
-			} else {
-				this.buffer.set(key, {
-					target: entry.target,
-					count: entry.count,
-				})
-			}
+	private rebufferSnapshot(snapshot: CommittedEntry[]): void {
+		for (const entry of snapshot) {
+			const key = bufferKey(entry.target)
+			const entries = this.buffer.get(key) ?? []
+			entries.push(entry)
+			this.buffer.set(key, entries)
 			this.totalBuffered += entry.count
 		}
 	}
 
 	private async doFlush(): Promise<number> {
-		const snapshot = new Map(this.buffer)
+		if (this.buffer.size === 0) {
+			return 0
+		}
+
+		// W11: one durable logical batch id per flush. Uncommitted entries are
+		// stamped BEFORE the snapshot leaves the buffer so any failure
+		// re-buffers entries that keep their original batchId: the retry then
+		// read-reconciles the raw layer (skipping batches already inserted)
+		// and no-matches canonical ops that already applied.
+		const batchId = randomUUID()
+		const snapshot: CommittedEntry[] = []
+		for (const entries of this.buffer.values()) {
+			for (const entry of entries) {
+				// In-place stamp (Object.assign keeps the object identity the
+				// re-buffer later preserves); committed retries pass through.
+				const committed: CommittedEntry =
+					"batchId" in entry ? entry : Object.assign(entry, { batchId })
+				snapshot.push(committed)
+			}
+		}
 		this.buffer.clear()
 		this.totalBuffered = 0
 
@@ -379,7 +431,7 @@ export class AccessTracker {
 		>()
 		const skipped: AccessRecordTarget[] = []
 
-		for (const entry of snapshot.values()) {
+		for (const entry of snapshot) {
 			const { target } = entry
 			eventDocs.push({
 				ts: now,
@@ -389,6 +441,7 @@ export class AccessTracker {
 				},
 				memoryId: target.id,
 				count: entry.count,
+				batchId: entry.batchId,
 				...(isFilled(target.scope) ? { scope: target.scope } : {}),
 				...(isFilled(target.scopeRef) ? { scopeRef: target.scopeRef } : {}),
 				...(isFilled(target.type) ? { type: target.type } : {}),
@@ -400,13 +453,37 @@ export class AccessTracker {
 				continue
 			}
 			const ops = collectionOps.get(target.collection) ?? []
+			// Typed as a plain Document (house precedent from the bounded
+			// evolutionHistory push in mongodb-procedures.ts): the driver's
+			// PushOperator<Document> does not model the $each/$slice modifier
+			// shape on an index-signature schema.
+			const update: Document = {
+				$inc: { accessCount: entry.count },
+				$set: { lastAccessedAt: now },
+				// W11: the batch append rides the SAME per-document atomic
+				// updateOne as the guarded increments; $slice keeps the newest
+				// APPLIED_BATCHES_WINDOW batch ids so the array stays
+				// permanently bounded while a re-buffered retry stays guarded.
+				$push: {
+					appliedBatches: {
+						$each: [entry.batchId],
+						$slice: -APPLIED_BATCHES_WINDOW,
+					},
+				},
+			}
 			ops.push({
 				updateOne: {
-					filter,
-					update: {
-						$inc: { accessCount: entry.count },
-						$set: { lastAccessedAt: now },
+					// W11: the appliedBatches $ne guard makes the canonical
+					// projection idempotent per batch — the filter matches
+					// legacy documents (missing field) and other-batch
+					// documents, and excludes exactly the documents that
+					// already applied THIS batch, so a re-buffered retry's
+					// updateOne no-matches instead of double-incrementing.
+					filter: {
+						...filter,
+						appliedBatches: { $ne: entry.batchId },
 					},
+					update,
 				},
 			})
 			collectionOps.set(target.collection, ops)
@@ -426,28 +503,56 @@ export class AccessTracker {
 			)
 		}
 
-		// Access-event durability: re-buffer the ENTIRE snapshot on any error so
-		// no access counts are lost. Previously, a failing insertMany or bulk
-		// write silently swallowed the counts. Now the next flush retries.
+		// W11 raw layer: read-reconcile by batchId before inserting. Unique
+		// indexes are prohibited on time-series collections, so the available
+		// exactly-once shape is to skip the insert for any batch whose raw
+		// events are already present (a previous flush inserted them, then
+		// failed a later phase and re-buffered this snapshot). A fresh flush
+		// carries only the just-minted batchId — a UUID cannot collide — so
+		// the reconcile read runs only on retry flushes, keeping the
+		// steady-state cost identical to the pre-guard flush.
 		if (eventDocs.length > 0) {
 			try {
-				await accessEventsCollection(this.db, this.prefix).insertMany(
-					eventDocs,
-					{
-						ordered: false,
-					},
-				)
+				const batchIds = [...new Set(snapshot.map((entry) => entry.batchId))]
+				const isRetry = batchIds.length > 1 || batchIds[0] !== batchId
+				let toInsert = eventDocs
+				if (isRetry) {
+					const present = new Set(
+						(
+							await accessEventsCollection(this.db, this.prefix)
+								.find({ batchId: { $in: batchIds } })
+								.toArray()
+						).map((doc) => String(doc.batchId)),
+					)
+					toInsert = eventDocs.filter((doc) => !present.has(doc.batchId))
+				}
+				if (toInsert.length > 0) {
+					await accessEventsCollection(this.db, this.prefix).insertMany(
+						toInsert,
+						{
+							ordered: false,
+						},
+					)
+				}
 			} catch (err) {
 				const msg = err instanceof Error ? err.message : String(err)
 				log.warn(
-					`access event insert failed (re-buffering ${snapshot.size} keys for retry): ${msg}`,
+					`access event insert failed (re-buffering ${snapshot.length} entries for retry): ${msg}`,
 				)
 				this.rebufferSnapshot(snapshot)
 				return 0
 			}
 		}
 
+		// W11 canonical layer: on ANY collection's failure the WHOLE snapshot
+		// is re-buffered (batchIds preserved) — replacing the old
+		// failed-collection-only re-buffer that desynchronized raw/canonical
+		// alignment across collections. The retry is safe at both layers:
+		// already-inserted batches are skipped by the raw read-reconcile and
+		// already-applied ops no-match on the appliedBatches guard, so every
+		// count lands exactly once across any sequence of partial failures.
 		let updated = 0
+		let canonicalFailed = false
 		for (const [collection, ops] of collectionOps) {
 			try {
 				const result = await getCanonicalCollection(
@@ -455,31 +560,17 @@ export class AccessTracker {
 					this.prefix,
 					collection,
 				).bulkWrite(ops, { ordered: false })
-				updated += result.modifiedCount ?? ops.length
+				updated += result.modifiedCount ?? 0
 			} catch (err) {
 				const msg = err instanceof Error ? err.message : String(err)
 				log.warn(
-					`access summary flush failed for ${collection} (re-buffering ${ops.length} ops for retry): ${msg}`,
+					`access summary flush failed for ${collection} (re-buffering ${snapshot.length} entries for retry): ${msg}`,
 				)
-				// Re-buffer only the failed collection's keys, not the whole
-				// snapshot: the access_events insert already succeeded for
-				// them and the other collections' bulkWrites may have too.
-				for (const [key, entry] of snapshot) {
-					if (entry.target.collection !== collection) {
-						continue
-					}
-					const existing = this.buffer.get(key)
-					if (existing) {
-						existing.count += entry.count
-					} else {
-						this.buffer.set(key, {
-							target: entry.target,
-							count: entry.count,
-						})
-					}
-					this.totalBuffered += entry.count
-				}
+				canonicalFailed = true
 			}
+		}
+		if (canonicalFailed) {
+			this.rebufferSnapshot(snapshot)
 		}
 
 		return updated

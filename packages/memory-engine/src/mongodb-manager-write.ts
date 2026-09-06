@@ -21,6 +21,7 @@ import { computeIdempotencyFingerprint } from "./mongodb-idempotency-fingerprint
 import type { CanonicalEvent } from "./mongodb-events.js"
 import { updateLaneCoverage } from "./mongodb-lane-coverage.js"
 import type { MongoDBManagerHost } from "./mongodb-manager-host.js"
+import { recordIngestRun } from "./mongodb-ops.js"
 import {
 	createMemoryJob,
 	createMemoryJobsBatch,
@@ -263,12 +264,15 @@ export class MongoDBManagerWriteOps {
 	} {
 		// P2.3: the fingerprint must resolve scope with the SAME rule the write
 		// itself uses, or a retried implicit-session write would mismatch the
-		// stored document and surface as a false 422 conflict.
+		// stored document and surface as a false 422 conflict. W06: that
+		// includes the workspaceDir, so a workspace-scope payload compares
+		// against the partition the write actually landed in.
 		const { scope, scopeRef } = resolveScopeIdentity({
 			scope: event.scope,
 			scopeRef: event.scopeRef,
 			agentId: this.host.agentId,
 			sessionId: event.sessionId,
+			workspaceDir: this.host.workspaceDir,
 		})
 		return {
 			role: event.role,
@@ -326,6 +330,7 @@ export class MongoDBManagerWriteOps {
 					event,
 					this.host.agentId,
 					this.resolveWriteDefaultScope(),
+					this.host.workspaceDir,
 				)
 			)
 		}
@@ -399,17 +404,28 @@ export class MongoDBManagerWriteOps {
 					return replay
 				}
 			}
+			// W16: ingest-run clock starts at the write attempt (a replay is
+			// not an ingest and returns above before this point).
+			const ingestStartMs = Date.now()
 			const eventId = randomUUID()
 			// D1/B3: the write side of the canonical identity rule — an implicit
 			// sessionId lands the event in the SAME session scope a sessionKey
 			// search reads from, and an unscoped write falls back to the SAME
 			// unified MEMONGO_DEFAULT_SCOPE an unscoped search queries (the
 			// legacy search-only name does not move writes).
+			// W06: the COMPLETE identity (scope + scopeRef) resolves once here,
+			// with the manager's workspaceDir — a workspace-scope write without
+			// an explicit scopeRef lands in the SAME hashed workspace partition
+			// a workspace-default search reads from, instead of the
+			// workspace:<agentId> fallback the low-level re-resolution would
+			// produce. The resolved scopeRef is what flows downstream.
 			const writeDefaultScope = this.resolveWriteDefaultScope()
-			const { scope } = resolveScopeIdentity({
+			const { scope, scopeRef } = resolveScopeIdentity({
 				scope: event.scope,
+				scopeRef: event.scopeRef,
 				agentId: this.host.agentId,
 				sessionId: event.sessionId,
+				workspaceDir: this.host.workspaceDir,
 				defaultScope: writeDefaultScope,
 			})
 			const postWriteDerivedWorkEnabled =
@@ -431,12 +447,15 @@ export class MongoDBManagerWriteOps {
 			// only — the TTL-resolved value is time-dependent); keyless writes
 			// stay byte-identical. D1/B3: the fingerprint resolves scope with
 			// the same unified default the write used, so an unscoped write and
-			// the equivalent explicit-scope write fingerprint equal.
+			// the equivalent explicit-scope write fingerprint equal. W06: the
+			// workspaceDir rides along so the fingerprint keys to the same
+			// partition the write lands in.
 			const idempotencyFingerprint = event.idempotencyKey
 				? computeIdempotencyFingerprint(
 						event,
 						this.host.agentId,
 						writeDefaultScope,
+						this.host.workspaceDir,
 					)
 				: undefined
 			const persistEvent = (session?: ClientSession) =>
@@ -451,7 +470,11 @@ export class MongoDBManagerWriteOps {
 						role: event.role,
 						body: event.body,
 						scope,
-						scopeRef: event.scopeRef,
+						// W06: the manager-resolved scopeRef (complete identity
+						// resolved once at the boundary), not the raw request
+						// field — buildCanonicalEventDocument consumes this
+						// instead of re-resolving without the workspaceDir.
+						scopeRef,
 						timestamp: event.timestamp,
 						validAt: event.validAt,
 						invalidAt: event.invalidAt,
@@ -734,6 +757,35 @@ export class MongoDBManagerWriteOps {
 				})
 			}
 
+			// W16: the production event-write boundary records ingest runs so
+			// the canonicalIngest health lane reflects real write outcomes —
+			// the legacy helper always recorded them, but this path (the one
+			// production callers use) never did, leaving the lane permanently
+			// health-uncertain. status stays "ok" even when the inline chunk
+			// projection degraded: the INGEST (canonical write) succeeded and
+			// the unprojected event is the chunks lane's own obligation now.
+			// Best-effort by design — the write is already durable and a
+			// failed ledger insert must not reject it.
+			try {
+				await recordIngestRun({
+					db: this.host.db,
+					prefix: this.host.prefix,
+					run: {
+						agentId: this.host.agentId,
+						source: "event-write",
+						status: "ok",
+						itemsProcessed: 1,
+						itemsFailed: 0,
+						durationMs: Date.now() - ingestStartMs,
+					},
+				})
+			} catch (err) {
+				log.warn("ingest run recording failed after durable event write", {
+					eventId: written.eventId,
+					error: err instanceof Error ? err.message : String(err),
+				})
+			}
+
 			this.host.dirty = false
 			return { eventId: written.eventId, chunkCreated: projected.chunkCreated }
 		}
@@ -763,6 +815,8 @@ export class MongoDBManagerWriteOps {
 			)
 		}
 		const execute = async (): Promise<WriteConversationEventReceipt[]> => {
+			// W16: ingest-run clock for the batch boundary (one run per call).
+			const ingestStartMs = Date.now()
 			const receipts: Array<WriteConversationEventReceipt | undefined> =
 				events.map(() => undefined)
 
@@ -817,21 +871,31 @@ export class MongoDBManagerWriteOps {
 				input: WriteConversationEventInput
 				eventId: string
 				scope: MemoryScope
+				// W06: the manager-resolved scopeRef (complete identity at the
+				// boundary; carried so the low-level insert consumes it instead
+				// of re-resolving without the workspaceDir).
+				scopeRef: string
 				// P4.4.1/C-005: expiry computed once per item so the event
 				// document AND its chunk projection carry the same value.
 				expiresAt?: Date
 			}
 			const pending: PendingItem[] = []
 			// D1/B3: same unified-default identity rule as the single write.
+			// W06: same complete-identity resolution — scope AND scopeRef with
+			// the manager's workspaceDir, so batch workspace writes land in the
+			// hashed workspace partition and the resolved scopeRef flows to the
+			// low-level batch insert.
 			const writeDefaultScope = this.resolveWriteDefaultScope()
 			for (const [index, input] of events.entries()) {
 				if (receipts[index]) {
 					continue
 				}
-				const { scope } = resolveScopeIdentity({
+				const { scope, scopeRef } = resolveScopeIdentity({
 					scope: input.scope,
+					scopeRef: input.scopeRef,
 					agentId: this.host.agentId,
 					sessionId: input.sessionId,
+					workspaceDir: this.host.workspaceDir,
 					defaultScope: writeDefaultScope,
 				})
 				// P4.4.1: same TTL rule as the single write — explicit wins,
@@ -841,7 +905,14 @@ export class MongoDBManagerWriteOps {
 					sessionId: input.sessionId,
 					ttl: this.host.config.mongodb?.ttl,
 				})
-				pending.push({ index, input, eventId: randomUUID(), scope, expiresAt })
+				pending.push({
+					index,
+					input,
+					eventId: randomUUID(),
+					scope,
+					scopeRef,
+					expiresAt,
+				})
 			}
 
 			// 3. ONE insertMany for the whole batch (unordered: a per-item
@@ -850,32 +921,36 @@ export class MongoDBManagerWriteOps {
 			const writeResults = await writeEventsBatch({
 				db: this.host.db,
 				prefix: this.host.prefix,
-				events: pending.map(({ input, eventId, scope, expiresAt }) => ({
-					eventId,
-					agentId: this.host.agentId,
-					sessionId: input.sessionId,
-					role: input.role,
-					body: input.body,
-					scope,
-					scopeRef: input.scopeRef,
-					timestamp: input.timestamp,
-					validAt: input.validAt,
-					invalidAt: input.invalidAt,
-					metadata: input.metadata,
-					idempotencyKey: input.idempotencyKey,
-					// B4: same per-item fingerprint rule as the single write.
-					...(input.idempotencyKey
-						? {
-								idempotencyFingerprint: computeIdempotencyFingerprint(
-									input,
-									this.host.agentId,
-									writeDefaultScope,
-								),
-							}
-						: {}),
-					extractionJobPendingAt,
-					...(expiresAt ? { expiresAt } : {}),
-				})),
+				events: pending.map(
+					({ input, eventId, scope, scopeRef, expiresAt }) => ({
+						eventId,
+						agentId: this.host.agentId,
+						sessionId: input.sessionId,
+						role: input.role,
+						body: input.body,
+						scope,
+						scopeRef,
+						timestamp: input.timestamp,
+						validAt: input.validAt,
+						invalidAt: input.invalidAt,
+						metadata: input.metadata,
+						idempotencyKey: input.idempotencyKey,
+						// B4: same per-item fingerprint rule as the single write.
+						// W06: workspaceDir rides along for the same partition.
+						...(input.idempotencyKey
+							? {
+									idempotencyFingerprint: computeIdempotencyFingerprint(
+										input,
+										this.host.agentId,
+										writeDefaultScope,
+										this.host.workspaceDir,
+									),
+								}
+							: {}),
+						extractionJobPendingAt,
+						...(expiresAt ? { expiresAt } : {}),
+					}),
+				),
 			})
 			const written: Array<
 				PendingItem & { timestamp: Date; scopeRef: string; replayed?: boolean }
@@ -1142,6 +1217,46 @@ export class MongoDBManagerWriteOps {
 				log.warn("lane coverage update failed after batch event write", {
 					error: err instanceof Error ? err.message : String(err),
 				})
+			}
+
+			// W16: same boundary contract as the single write — ONE ingest run
+			// per batch call, summarizing the outcomes of the items that
+			// ATTEMPTED an insert this call (`pending`; pre-write idempotency
+			// replays/conflicts never reached the insert and are not ingests).
+			// Counting rides the final per-item receipts: ok = landed durably
+			// (including lost-race replays of an already-durable event),
+			// not-ok = ingest failure. status: ok = everything landed,
+			// partial = some landed, failed = nothing landed.
+			if (pending.length > 0) {
+				let itemsProcessed = 0
+				let itemsFailed = 0
+				for (const item of pending) {
+					if (receipts[item.index]?.ok) {
+						itemsProcessed++
+					} else {
+						itemsFailed++
+					}
+				}
+				const status: "ok" | "partial" | "failed" =
+					itemsFailed === 0 ? "ok" : itemsProcessed > 0 ? "partial" : "failed"
+				try {
+					await recordIngestRun({
+						db: this.host.db,
+						prefix: this.host.prefix,
+						run: {
+							agentId: this.host.agentId,
+							source: "event-write",
+							status,
+							itemsProcessed,
+							itemsFailed,
+							durationMs: Date.now() - ingestStartMs,
+						},
+					})
+				} catch (err) {
+					log.warn("ingest run recording failed after batch event write", {
+						error: err instanceof Error ? err.message : String(err),
+					})
+				}
 			}
 
 			this.host.dirty = false
