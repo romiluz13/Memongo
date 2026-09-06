@@ -291,3 +291,99 @@ entries:
     superseded_by: null
     content_type: "text/markdown"
     notes: "REF-WS05-R2 is the WS-05 (C-008) round-2 refutation finding uncovered-injection-surfaces, executed by an independent worker subagent against the WS-05 landed tree (commit 3c2dee0fdd, 2026-09-04): the AI-SDK tools and the MCP server returned raw stored retrieval payloads outside the C-008 envelope's evidenced pi-surface scope. The finding was adjudicated as a claim-scope defect and routed to the new claim C-040; that adjudication and claim filing constitute the approval recorded here (agent-proposed, accepted into the remediation ledger). Round 3 of the same report spot-checked the finding accurate before it was filed. The finding is captured verbatim into the cache from .ddd/reports/refutation-c-008.yaml round_2; the obligation C-040 derives from it is quoted in the capture."
+# EL-012..EL-015 appended 2026-09-06 (Wave 1a / W01 grounding + compare):
+# official MongoDB documentation sections relied on for the access-identity
+# fix. Captures hold the verbatim contract sections plus analysis; digests
+# over the cache files. No prior entry modified.
+
+  - id: EL-012
+    subject: "MongoDB Manual - Unique Indexes (compound identity contract)"
+    schema_version: 0.1.0
+    source_class: official-doc
+    source_url: "https://www.mongodb.com/docs/manual/core/index-unique/"
+    publisher: "MongoDB (mongodb.com official documentation)"
+    product: "MongoDB Server Manual"
+    version: "8.x (local stack 8.3.8)"
+    retrieved_at: "2026-09-06T06:01:00.000Z"
+    content_digest: "sha256:44a44e781c444e531d1d275232cbfaf2e984ec5570c48a89e16ab3bdca975d24"
+    doc_version: "manual-current-2026-09-06"
+    cache_path: cache/mongodb-manual-unique-indexes.md
+    sections: ["Unique Indexes"]
+    status: active
+    authority_for: [data-model, tenancy-identity]
+    freshness: "365d"
+    adapter: web-fetch
+    license: "MongoDB docs: public web documentation, fair-use quotes in cache"
+    independence: independent-of-remediation
+    superseded_by: null
+    content_type: "text/markdown"
+    notes: "Wave 1a (W01) grounding: a unique compound index makes any given combination of index values appear at most once, so row identity is the full combination. Applied to structured_mem/procedures/entities/relations unique indexes to require full-compound canonical access filters."
+
+  - id: EL-013
+    subject: "MongoDB Manual - db.collection.updateOne() (first-match filter semantics)"
+    schema_version: 0.1.0
+    source_class: official-doc
+    source_url: "https://www.mongodb.com/docs/manual/reference/method/db.collection.updateOne/"
+    publisher: "MongoDB (mongodb.com official documentation)"
+    product: "MongoDB Server Manual"
+    version: "8.x (local stack 8.3.8)"
+    retrieved_at: "2026-09-06T06:02:00.000Z"
+    content_digest: "sha256:e8a0e32027d35ddde0af67cd5d1396793494306b85fcf91956e086c243f00e37"
+    doc_version: "manual-current-2026-09-06"
+    cache_path: cache/mongodb-manual-update-one.md
+    sections: ["Behavior"]
+    status: active
+    authority_for: [crud-write-semantics]
+    freshness: "365d"
+    adapter: web-fetch
+    license: "MongoDB docs: public web documentation, fair-use quotes in cache"
+    independence: independent-of-remediation
+    superseded_by: null
+    content_type: "text/markdown"
+    notes: "Wave 1a (W01) grounding: updateOne modifies the first match of the filter; a non-unique filter in a shared collection can update another tenant's row; zero matches change nothing. Basis for exact-compound filters and the explicit fail-safe skip."
+
+  - id: EL-014
+    subject: "MongoDB Node.js Driver - Modify Documents (driver updateOne semantics)"
+    schema_version: 0.1.0
+    source_class: official-doc
+    source_url: "https://www.mongodb.com/docs/drivers/node/current/fundamentals/crud/write-operations/modify/"
+    publisher: "MongoDB (mongodb.com official documentation)"
+    product: "MongoDB Node.js Driver documentation"
+    version: "current (repo-locked driver v7 line)"
+    retrieved_at: "2026-09-06T06:05:00.000Z"
+    content_digest: "sha256:9e48398c344a651628ce1750d76ca0de465ab679203c41f8ef7944c9ffd7ecd6"
+    doc_version: "driver-current-2026-09-06"
+    cache_path: cache/mongodb-node-driver-modify.md
+    sections: ["Update Documents", "updateOne"]
+    status: active
+    authority_for: [crud-write-semantics]
+    freshness: "365d"
+    adapter: web-fetch
+    license: "MongoDB docs: public web documentation, fair-use quotes in cache"
+    independence: independent-of-remediation
+    superseded_by: null
+    content_type: "text/markdown"
+    notes: "Wave 1a (W01) grounding + compare: the driver bulkWrite updateOne ops used by AccessTracker.doFlush share first-match and no-match-no-change semantics; filter exactness is the caller's obligation."
+
+  - id: EL-015
+    subject: "MongoDB Manual - Time Series Collections (measurement fields and metaField restrictions)"
+    schema_version: 0.1.0
+    source_class: official-doc
+    source_url: "https://www.mongodb.com/docs/manual/core/timeseries-collections/"
+    publisher: "MongoDB (mongodb.com official documentation)"
+    product: "MongoDB Server Manual"
+    version: "8.x (local stack 8.3.8)"
+    retrieved_at: "2026-09-06T09:14:00.000Z"
+    content_digest: "sha256:002c38f629ef706dc977eb0c414b8eaff44f0106c2188f12047e6e8bee641482"
+    doc_version: "manual-current-2026-09-06"
+    cache_path: cache/mongodb-manual-timeseries.md
+    sections: ["Measurements", "metaFields", "Updates"]
+    status: active
+    authority_for: [data-model, time-series]
+    freshness: "365d"
+    adapter: web-fetch
+    license: "MongoDB docs: public web documentation, fair-use quotes in cache"
+    independence: independent-of-remediation
+    superseded_by: null
+    content_type: "text/markdown"
+    notes: "Wave 1a (W01) compare phase: measurements are time + metadata + all metrics recorded at that moment (arbitrary top-level metric fields are the documented shape); metaField cannot be added after creation (unchanged by the fix; new identity fields are top-level metrics); update limitations do not apply (insert-only path). Live round-trip verified in the GREEN probe."

@@ -670,3 +670,31 @@ entries:
     constructs: [packages/tools/src/index.ts, apps/mcp/src/server.ts]
     validations: [V-137, V-138]
     exceptions: []
+
+  - id: C-041
+    schema_version: 0.1.0
+    statement: "Access reinforcement MUST write inside the owning tenant/scope identity: every canonical access update (accessCount/lastAccessedAt) MUST filter on the target collection's full unique compound index plus the accessing agent's identity, an under-specified identity MUST fail safe (no canonical update, raw access event still recorded), and every returned search result that carries a canonicalId MUST transport identity sufficient to derive that compound (structured results included; relation locators parsed to their edge identity)."
+    rationale: "Filed from the 2026-09-05 independent audit W01 (P1): the AccessTracker mapped every collection's identity to a single id field (structured_mem -> key) and flushed canonical counters with {key}-only filters, so updateOne could increment another tenant's row (audit reproduced live: recording B's timezone incremented A). Grounding additionally confirmed two transport gaps on the same construct: toStructuredResult emitted no canonicalId (recordSearchAccess skipped ALL structured results), and canonicalId slicing produced relation/structured filters that matched zero documents. Grounded in MongoDB official documentation: unique compound index identity (EL-012), updateOne first-match semantics (EL-013), Node driver modify semantics (EL-014), time-series measurement fields (EL-015)."
+    sources:
+      - ref: "docs/audits/2026-09-05-independent/logic_write.md#W01"
+        authority_domain: tenancy-identity
+        entailment: explicit
+      - ref: "EL-012#Unique Indexes"
+        authority_domain: data-model
+        entailment: explicit
+      - ref: "EL-013#Behavior"
+        authority_domain: crud-write-semantics
+        entailment: explicit
+      - ref: "EL-014#updateOne"
+        authority_domain: crud-write-semantics
+        entailment: explicit
+      - ref: "EL-015#Measurements"
+        authority_domain: time-series
+        entailment: explicit
+    claim_kind: behavioral
+    impact: critical
+    tier: T3
+    status: known-and-supported
+    constructs: [packages/memory-engine/src/mongodb-access-tracker.ts, packages/memory-engine/src/mongodb-manager-search.ts, packages/memory-engine/src/mongodb-structured-memory.ts, packages/memory-engine/src/types.ts]
+    validations: [V-139, V-140, V-141]
+    exceptions: []

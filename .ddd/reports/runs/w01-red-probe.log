@@ -1,0 +1,150 @@
+{
+  "probe": "W01 RED at HEAD — production AccessTracker, live server",
+  "structured_mem": [
+    {
+      "agentId": "A",
+      "scope": "agent",
+      "scopeRef": "agent:A",
+      "type": "preference",
+      "key": "timezone",
+      "accessCount": 1,
+      "lastAccessedAt": "2026-09-06T06:07:17.919Z"
+    },
+    {
+      "agentId": "B",
+      "scope": "agent",
+      "scopeRef": "agent:B",
+      "type": "preference",
+      "key": "timezone",
+      "accessCount": 0
+    },
+    {
+      "agentId": "B",
+      "scope": "user",
+      "scopeRef": "user:alice",
+      "type": "preference",
+      "key": "timezone",
+      "accessCount": 0
+    },
+    {
+      "agentId": "B",
+      "scope": "agent",
+      "scopeRef": "agent:B",
+      "type": "fact",
+      "key": "timezone",
+      "accessCount": 0
+    }
+  ],
+  "procedures": [
+    {
+      "procedureId": "p-1",
+      "agentId": "A",
+      "scope": "agent",
+      "scopeRef": "agent:A",
+      "accessCount": 1,
+      "lastAccessedAt": "2026-09-06T06:07:17.919Z"
+    },
+    {
+      "procedureId": "p-1",
+      "agentId": "B",
+      "scope": "agent",
+      "scopeRef": "agent:B",
+      "accessCount": 0
+    }
+  ],
+  "entities": [
+    {
+      "entityId": "e-1",
+      "agentId": "A",
+      "scope": "agent",
+      "scopeRef": "agent:A",
+      "accessCount": 1,
+      "lastAccessedAt": "2026-09-06T06:07:17.919Z"
+    },
+    {
+      "entityId": "e-1",
+      "agentId": "B",
+      "scope": "agent",
+      "scopeRef": "agent:B",
+      "accessCount": 0
+    }
+  ],
+  "relations": [
+    {
+      "agentId": "A",
+      "scope": "agent",
+      "scopeRef": "agent:A",
+      "fromEntityId": "ent-1",
+      "toEntityId": "ent-2",
+      "type": "related_to",
+      "relationId": "ent-1-ent-2-related_to",
+      "accessCount": 0
+    },
+    {
+      "agentId": "B",
+      "scope": "agent",
+      "scopeRef": "agent:B",
+      "fromEntityId": "ent-1",
+      "toEntityId": "ent-2",
+      "type": "related_to",
+      "relationId": "ent-1-ent-2-related_to",
+      "accessCount": 0
+    }
+  ],
+  "events": [
+    {
+      "eventId": "evt-1",
+      "agentId": "B",
+      "accessCount": 1,
+      "lastAccessedAt": "2026-09-06T06:07:17.919Z"
+    }
+  ],
+  "raw": [
+    {
+      "ts": "2026-09-06T06:07:17.919Z",
+      "meta": {
+        "agentId": "B",
+        "collection": "relations"
+      },
+      "memoryId": "ent-1:related_to:ent-2",
+      "count": 1
+    },
+    {
+      "ts": "2026-09-06T06:07:17.919Z",
+      "meta": {
+        "agentId": "B",
+        "collection": "entities"
+      },
+      "memoryId": "e-1",
+      "count": 1
+    },
+    {
+      "ts": "2026-09-06T06:07:17.919Z",
+      "meta": {
+        "agentId": "B",
+        "collection": "structured_mem"
+      },
+      "memoryId": "timezone",
+      "count": 1
+    },
+    {
+      "ts": "2026-09-06T06:07:17.919Z",
+      "meta": {
+        "agentId": "B",
+        "collection": "procedures"
+      },
+      "memoryId": "p-1",
+      "count": 1
+    },
+    {
+      "ts": "2026-09-06T06:07:17.919Z",
+      "meta": {
+        "agentId": "B",
+        "collection": "events"
+      },
+      "memoryId": "evt-1",
+      "count": 1
+    }
+  ]
+}
+{"cleanup":"dropped disposable probe database","database":"ddd_w01_4dcc1900cbe04a81b31b13e294ab4331"}

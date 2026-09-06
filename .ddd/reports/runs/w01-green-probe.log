@@ -1,0 +1,18 @@
+09:20:02.716 [memory:mongodb:access-tracker] warn: skipped 1 under-specified canonical access update(s); raw access events still recorded: {"structured_mem":1}
+ok   P1 narrow target leaves every structured row untouched (was: A=1) === ["A/agent/agent:A/preference/timezone=0","B/agent/agent:B/preference/timezone=0","B/user/user:alice/preference/timezone=0","B/agent/agent:B/fact/timezone=0"]
+ok   P1 raw access history still recorded for B === [{"meta":{"agentId":"B","collection":"structured_mem"},"memoryId":"timezone","count":1}]
+ok   P2 only B's agent-scope preference row incremented (x2) === ["A/agent/agent:A/preference/timezone=0","B/agent/agent:B/preference/timezone=2","B/user/user:alice/preference/timezone=0","B/agent/agent:B/fact/timezone=0"]
+ok   P2 procedures: only B's row incremented === [{"agentId":"A","accessCount":0},{"agentId":"B","accessCount":1}]
+ok   P2 entities: only B's row incremented === [{"agentId":"A","accessCount":0},{"agentId":"B","accessCount":1}]
+ok   P2 relations: only B's edge incremented === [{"agentId":"A","accessCount":0},{"agentId":"B","accessCount":1}]
+ok   P2 events: B's event incremented === [{"eventId":"evt-1","accessCount":1}]
+ok   P3 structured result parses to B's user-scope identity === {"collection":"structured_mem","id":"timezone","type":"preference","scope":"user","scopeRef":"user:alice"}
+ok   P3 relation result parses to the edge identity === {"collection":"relations","id":"ent-1:related_to:ent-2","fromEntityId":"ent-1","type":"related_to","toEntityId":"ent-2","scope":"agent","scopeRef":"agent:B"}
+ok   P3 scope-less structured result parses with missing scope === {"collection":"structured_mem","id":"timezone","type":"fact"}
+09:20:02.774 [memory:mongodb:access-tracker] warn: skipped 1 under-specified canonical access update(s); raw access events still recorded: {"structured_mem":1}
+ok   P3 user-scope row +1, relation +1, scope-less target wrote nothing === ["A/agent/agent:A/preference/timezone=0","B/agent/agent:B/preference/timezone=2","B/user/user:alice/preference/timezone=1","B/agent/agent:B/fact/timezone=0"]
+ok   P3 relation row now 2 === [{"agentId":"A","accessCount":0},{"agentId":"B","accessCount":2}]
+ok   P3 raw access event carries scope/scopeRef/type === [{"meta":{"agentId":"B","collection":"structured_mem"},"memoryId":"timezone","count":1,"scope":"user","scopeRef":"user:alice","type":"preference"}]
+
+W01 GREEN probe: all assertions passed
+{"cleanup":"dropped disposable probe database","database":"ddd_w01_a7fa08c5fc994bd7bc41735c12f1e307"}

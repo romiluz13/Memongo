@@ -1164,3 +1164,36 @@ entries:
     run_at: "2026-09-05T21:41:00.000Z"
     evidence_hash: sha256:6261101f5d3c9145668bf8a65944f51e023b2c6b4acfb62585df22a0115e29e2
     notes: "WS-19 provenance label on the MCP server surface (MCP suite green, 1 file / 193 tests, target log): the 7 MCP handlers that serialize stored tenant memory (memongo_search, memongo_search_kb, memongo_search_detailed, memongo_read_file, memongo_profile, memongo_build_context_bundle, memongo_recall_conversation) build their results through the jsonMemoryResult helper, which spreads the canonical UNTRUSTED_MEMORY_PROVENANCE label as the first field of the serialized JSON and mirrors the same labeled payload into structuredContent — pinned by the C-040 describe block asserting label-first key ordering, payload passthrough, and the structuredContent mirror on all 7 surfaces, plus an alias test pinning memongo_recall_messages identical labeling. Both the text content and the structured mirror carry the label, so no MCP client surface can render stored memory as unlabeled trusted system text."
+
+  - id: V-139
+    schema_version: 0.1.0
+    claim_id: C-041
+    construct: packages/memory-engine/src/mongodb-access-tracker.test.ts
+    method: test
+    target: .ddd/reports/runs/wave1a-access-tracker-suite.log
+    result: pass
+    run_at: "2026-09-06T09:20:00.000Z"
+    evidence_hash: sha256:275bd45926cb566985fe0ca64619d4d4f8501db2b0647466bf0de78878c657fa
+    notes: "Access-tracker suite 24/24 (target log): canonical filters pinned per collection as the exact unique compound index + tracker agentId (structured {agentId,scope,scopeRef,type,key}; procedures {procedureId,agentId,scope,scopeRef}; entities {entityId,agentId,scope,scopeRef}; relations {agentId,scope,scopeRef,fromEntityId,toEntityId,type}; events/episodes single-field-unique + agentId defense in depth); under-specified and partial identities fail safe (no bulkWrite op, raw insertMany still called); same-key different-scope/type buffer as distinct identities with distinct ops; raw events carry scope/scopeRef/type; accessTargetFromSearchResult parse matrix (colon-bearing keys per readFile convention, relation 3-segment rule, query-suffix fallback, null for unusable identities); fast-check count-safety property on the new API (seed 20260512, 200 runs)."
+
+  - id: V-140
+    schema_version: 0.1.0
+    claim_id: C-041
+    construct: packages/memory-engine/src
+    method: test
+    target: .ddd/reports/runs/wave1a-engine-suite.log
+    result: pass
+    run_at: "2026-09-06T09:20:00.000Z"
+    evidence_hash: sha256:8c318ac905e415336ad66ba4422f30aff774bb577c8de9d6ab8f4202b181e227
+    notes: "Full memory-engine unit suite after the W01 fix: 144 files passed / 4 skipped, 2585 tests passed / 10 skipped / 0 failed (target log; post-Biome-format tree) — no regressions, and the audit's 18 mid-remediation drift failures no longer reproduce at HEAD. Repo-wide check-types 15/15 tasks (.ddd/reports/runs/wave1a-check-types.log, sha256:b7e65a297b59823deadba2b8b50be7187795faa74977d4f39794b8921e45e898)."
+
+  - id: V-141
+    schema_version: 0.1.0
+    claim_id: C-041
+    construct: packages/memory-engine/src/mongodb-access-tracker.ts
+    method: probe
+    target: .ddd/reports/runs/w01-green-probe.log
+    result: pass
+    run_at: "2026-09-06T09:20:00.000Z"
+    evidence_hash: sha256:a0d2b75f1f220aa91905ea8da2f4db1aa931c60445584b2c40eb200161629edf
+    notes: "Live-server RED->GREEN on memongo-preview (MongoDB 8.3.8 replica set), production AccessTracker + accessTargetFromSearchResult, disposable scratch database (dropped in the finally block; cleanup line in the log). RED (pre-fix, .ddd/reports/runs/w01-red-probe.log, sha256:d8dae7aa6534a61312673d5a5ac537579f91e1e8d4d2aa71250a2f159af08119): B's narrow structured access incremented A's row (audit reproduction extended: procedures and entities also incremented A; the relation filter matched nothing). GREEN (post-fix, target log): 13/13 assertions — narrow target (audit repro shape) leaves every same-key row untouched with one bounded warn while raw history is still recorded for B; full-identity targets increment exactly the owning row (x2) across all six collections while other-tenant/other-scope/other-type same-key rows stay untouched; search-result identity parse feeds the tracker end to end; scope-less results skip; raw access events carry the complete handle (scope/scopeRef/type) and round-trip on a real time-series collection."

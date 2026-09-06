@@ -1264,3 +1264,70 @@ disclosure must state exactly what independence means in that context
 from the current tree, adaptations listed); (3) sweep re-runs between
 closure edits (after each ledger write, not only at the end) localize
 which edit cleared which violation.
+
+## 2026-09-06 — Independent-audit remediation program: Phase 0 complete,
+Wave 1a (W01 access identity) landed
+
+Program start: full remediation of docs/audits/2026-09-05-independent
+under DDD v0.7.0 (discover -> ground -> implement -> compare, official
+documentation for every change, self-resolution via subagents).
+
+Phase 0 (dispositions): 14 independent worker subagents cross-referenced
+every finding against HEAD d9784266d2; fragments under
+.ddd/reports/audit-dispositions/. Authoritative inventory reconciled to
+178 findings across 16 series docs (the prior "189" overcounted: the
+test_review write/retrieval supplements carry no findings of their own,
+and README/architecture/verification are framing docs). Aggregate at
+HEAD: 132 OPEN, 7 FIXED (WS-11..19-era landings, verified), 38 PARTIAL
+(residual scopes described per fragment), 1 SUPERSEDED. Master index:
+audit-dispositions/INDEX.md. The audit's "18 failing engine tests" no
+longer reproduce (2585/0 at HEAD after Wave 1a).
+
+Wave 1a — W01 (P1: access reinforcement writes outside the owning
+tenant/scope), plus the two transport gaps on the same construct
+(structured results carried no canonicalId so recordSearchAccess skipped
+them entirely; relation canonicalId slicing produced filters that matched
+zero documents — RET-20's id-mapping aspect).
+
+Grounding (evidence.lock EL-012..EL-015, cache captures in .ddd/cache/):
+unique compound index identity contract; updateOne first-match filter
+semantics; Node driver modify semantics; time-series measurement-fields
+contract (compare phase).
+
+Fix: AccessRecordTarget full-identity API (types.ts); canonical update
+filters = each collection's exact unique compound index + tracker agentId
+(events/episodes defense in depth); fail-safe skip with one bounded warn
+per flush when required identity fields are missing (raw access events
+still recorded); collision-proof full-identity buffer keys (same key in
+different scope/type no longer merges counts); accessTargetFromSearchResult
+parser (readFile parse conventions, relation 3-segment rule, query-suffix
+fallback); toStructuredResult now emits canonicalId; AccessEventDocument
+carries scope/scopeRef/type (complete handle, top-level metrics per the
+time-series doc, meta unchanged); public accessSummaries/accessTrends
+memoryIds contract unchanged.
+
+Verification: RED probe against live memongo-preview reproduced the
+audit exactly (B's access incremented A's structured/procedure/entity
+rows; relation filter matched nothing) — runs/w01-red-probe.log. After
+the fix, GREEN probe: 13/13 assertions on the live server (narrow target
+fails safe; full identity increments exactly the owning row; cross-
+tenant/cross-scope/cross-type same-key rows untouched; raw events carry
+the complete handle) — runs/w01-green-probe.log. Access-tracker unit
+suite 24/24 (new: compound-filter matrix, fail-safe skips, identity
+dedupe, raw-event identity, parse matrix incl. colon keys and
+unparseable locators; updated fast-check property on the new API, seed
+20260512). Full engine suite 2585 passed / 0 failed / 10 skipped.
+Repo check-types 15/15. Biome: 3 format errors auto-fixed; 15 remaining
+warnings verified pre-existing at HEAD (unused imports/noNonNullAssertion
+in untouched regions).
+
+Compare phase: all four official pages reopened; every documented API
+use in the diff re-checked (filter exactness vs unique compounds,
+first-match semantics, no-match-no-change as the explicit fail-safe,
+measurement-fields vs metaField restriction). Corrections: none
+required. Open limitation recorded: trend aggregation still groups by
+short memoryId (within-agent, same-key-cross-scope) — pre-existing, out
+of W01's tenant-corruption scope, queued for the retrieval wave.
+
+Next: Wave 1b (W02/W03/W12 erasure and lifecycle safety), then Wave 1c
+(ownership registry residuals), per INDEX.md wave mapping.
