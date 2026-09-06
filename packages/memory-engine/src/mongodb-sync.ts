@@ -12,6 +12,7 @@ import {
 	createSubsystemLogger,
 } from "@memongo/lib"
 import {
+	CHUNK_SCHEME_VERSION,
 	buildFileEntry,
 	chunkMarkdown,
 	listMemoryFiles,
@@ -26,14 +27,10 @@ import { INDEX_AUTOEMBED_MODEL } from "./mongodb-schema-search-definitions.js"
 import { resolveScopeRef } from "./mongodb-scope.js"
 import {
 	MAJORITY_TRANSACTION_OPTIONS,
+	isTransactionTooLargeForCache,
 	isTransactionUnsupported,
-	withTransactionBatched,
 } from "./mongodb-transactions.js"
-import {
-	buildSessionEntry,
-	listSessionFilesForAgent,
-	type SessionFileEntry,
-} from "./session-files.js"
+import { buildSessionEntry, listSessionFilesForAgent } from "./session-files.js"
 import type {
 	InternalMemoryStoredSource,
 	MemorySyncProgressUpdate,
@@ -79,26 +76,50 @@ function buildStorageId(namespace: SyncNamespace, relPath: string): string {
 	].join("::")
 }
 
+/** Stored per-file metadata needed by the sync loop. */
+type StoredFileMeta = {
+	hash: string
+	mtime: number
+	size: number
+	/**
+	 * W07: chunk identity scheme that wrote this file's stored chunks.
+	 * Rows written before the ordinal discriminator carry no value (or a
+	 * lower version) and must be re-chunked once even when the content hash
+	 * is unchanged — a same-hash skip is only valid for current-scheme rows.
+	 */
+	chunkScheme: number
+}
+
 async function getStoredFiles(
 	files: Collection,
 	namespace: SyncNamespace,
-): Promise<Map<string, { hash: string; mtime: number; size: number }>> {
+): Promise<Map<string, StoredFileMeta>> {
 	const docs = await files.find(buildNamespaceFilter(namespace)).toArray()
-	const map = new Map<string, { hash: string; mtime: number; size: number }>()
+	const map = new Map<string, StoredFileMeta>()
 	for (const doc of docs) {
 		const relPath = typeof doc.path === "string" ? doc.path : String(doc._id)
+		const scheme = doc.chunkScheme
 		map.set(relPath, {
 			hash: doc.hash as string,
 			mtime: doc.mtime as number,
 			size: doc.size as number,
+			chunkScheme: typeof scheme === "number" ? scheme : 1,
 		})
 	}
 	return map
 }
 
+/** Shape shared by memory file entries and session file entries. */
+type SyncableFileEntry = {
+	path: string
+	hash: string
+	mtimeMs: number
+	size: number
+}
+
 async function upsertFileMetadata(
 	files: Collection,
-	entry: MemoryFileEntry,
+	entry: SyncableFileEntry,
 	namespace: SyncNamespace,
 	session?: ClientSession,
 ): Promise<void> {
@@ -112,6 +133,9 @@ async function upsertFileMetadata(
 			hash: entry.hash,
 			mtime: entry.mtimeMs,
 			size: entry.size,
+			// W07: record the chunk identity scheme that wrote these chunks so
+			// future syncs know a same-hash skip is valid for them.
+			chunkScheme: CHUNK_SCHEME_VERSION,
 			updatedAt: new Date(),
 		},
 	}
@@ -134,8 +158,13 @@ function buildChunkId(
 	storageId: string,
 	startLine: number,
 	endLine: number,
+	ordinal: number,
 ): string {
-	return `${storageId}:${startLine}:${endLine}`
+	// W07: the ordinal disambiguates multiple segments of one long source
+	// line, which all share {startLine, endLine}. Without it their ids
+	// collided and the chunk bulkWrite silently overwrote all but the last
+	// segment (last-write-wins upserts).
+	return `${storageId}:${startLine}:${endLine}:${ordinal}`
 }
 
 function buildChunkOps(
@@ -151,6 +180,7 @@ function buildChunkOps(
 			buildStorageId(namespace, path),
 			chunk.startLine,
 			chunk.endLine,
+			chunk.ordinal,
 		)
 		const setDoc: Document = {
 			path,
@@ -160,6 +190,8 @@ function buildChunkOps(
 			...(namespace.scopeRef ? { scopeRef: namespace.scopeRef } : {}),
 			startLine: chunk.startLine,
 			endLine: chunk.endLine,
+			// W07: persist the emission ordinal (see buildChunkId).
+			ordinal: chunk.ordinal,
 			hash: chunk.hash,
 			model,
 			text: chunk.text,
@@ -237,24 +269,35 @@ async function upsertChunks(
 }
 
 /**
- * Upsert chunk ops in batched transactions. If the batch throws
- * `TransactionTooLargeForCache` (MongoDB 6.2+, code 388), split it in half and
- * retry each half in its own transaction. Every op still runs transactionally —
- * we only split the work so each transaction's cache footprint is smaller.
+ * W15: hash sentinel marking a stored metadata row as must-rechunk. Written
+ * BEFORE any non-transactional replacement of a file's chunks so a crash at
+ * any later point leaves a hash that never matches real content — the next
+ * sync re-processes the file instead of skipping it with missing chunks.
+ * (Real hashes are hex sha256 digests, so this value can never collide.)
  */
-async function upsertChunksBatched(
-	chunks: Collection,
-	session: ClientSession,
-	ops: AnyBulkWriteOperation<Document>[],
-): Promise<number> {
-	let upserted = 0
-	await withTransactionBatched(session, ops, async (batch) => {
-		// Inside a transaction a write error aborts the whole batch, so no
-		// partial-count handling here — the transaction guarantees all-or-nothing.
-		const result = await chunks.bulkWrite(batch, { ordered: false, session })
-		upserted += result.upsertedCount + result.modifiedCount
-	})
-	return upserted
+const INVALIDATED_HASH = "__invalidated__"
+
+async function invalidateStoredHash(
+	files: Collection,
+	relPath: string,
+	namespace: SyncNamespace,
+): Promise<void> {
+	const filter = { _id: buildStorageId(namespace, relPath) } as Record<
+		string,
+		unknown
+	>
+	try {
+		// No upsert: a path with no stored row needs no invalidation (the
+		// absence of a row already forces a full sync).
+		await files.updateOne(filter, { $set: { hash: INVALIDATED_HASH } })
+	} catch (err) {
+		// Invalidation is a safety net; a failure here must not mask the
+		// chunk writes that follow. The completing metadata write is what
+		// actually guards the next sync, and it is written last.
+		log.warn(
+			`sync: could not invalidate stored hash for ${relPath}: ${err instanceof Error ? err.message : String(err)}`,
+		)
+	}
 }
 
 async function deleteChunksForPath(
@@ -296,12 +339,69 @@ async function deleteStaleChunks(
 // Atomic file sync
 // ---------------------------------------------------------------------------
 
-async function syncFileAtomically(params: {
+/**
+ * W15: non-transactional replacement ordering. Invalidate the stored hash
+ * FIRST, then replace chunks, then write the completing metadata. A crash at
+ * any point leaves the stored hash at the sentinel, so the next sync always
+ * re-processes the file — chunks can never be silently missing while the
+ * metadata says "up to date".
+ */
+async function syncFileNonTransactional(params: {
+	chunksCol: Collection
+	filesCol: Collection
+	entry: SyncableFileEntry
+	namespace: SyncNamespace
+	chunks: MemoryChunk[]
+	model: string
+	embeddings: number[][] | null
+	embeddingStatus: EmbeddingStatus
+}): Promise<{ upserted: number; failed: boolean }> {
+	const { chunksCol, filesCol, entry, namespace, chunks, model } = params
+	await invalidateStoredHash(filesCol, entry.path, namespace)
+	await deleteChunksForPath(chunksCol, entry.path, namespace)
+	const result = await upsertChunks(
+		chunksCol,
+		entry.path,
+		namespace,
+		chunks,
+		model,
+		params.embeddings,
+		params.embeddingStatus,
+	)
+	if (result.failed > 0) {
+		// Chunks were lost — do NOT write the completing metadata. The row
+		// still holds the sentinel hash, so the next sync re-attempts this
+		// file instead of skipping it (P0.3 silent recall gap).
+		log.warn(
+			`sync: ${result.failed} chunk writes failed for ${entry.path}; keeping invalidated metadata hash so next sync retries`,
+		)
+		return { upserted: result.applied, failed: true }
+	}
+	await upsertFileMetadata(filesCol, entry, namespace)
+	return { upserted: result.applied, failed: false }
+}
+
+/**
+ * W15: replace one source file's chunks + metadata.
+ *
+ * Transactional path: delete, chunk upserts, and metadata land in ONE
+ * withTransaction — all-or-nothing, no crash window with chunks missing while
+ * the hash still says current.
+ *
+ * Fallbacks (standalone server, or a transaction too large for the WiredTiger
+ * cache): the transaction aborted, so nothing from it is visible. We then run
+ * the invalidation-first non-transactional ordering, which keeps every crash
+ * window self-healing.
+ *
+ * Unifies the former syncFileAtomically + syncSessionFileAtomically — memory
+ * files and session transcripts share the exact same durability contract.
+ */
+async function syncSourceFileAtomically(params: {
 	client: MongoClient | undefined
 	useTransactions: boolean
 	chunksCol: Collection
 	filesCol: Collection
-	file: MemoryFileEntry
+	entry: SyncableFileEntry
 	namespace: SyncNamespace
 	chunks: MemoryChunk[]
 	model: string
@@ -316,7 +416,7 @@ async function syncFileAtomically(params: {
 		client,
 		chunksCol,
 		filesCol,
-		file,
+		entry,
 		namespace,
 		chunks,
 		model,
@@ -325,87 +425,81 @@ async function syncFileAtomically(params: {
 	} = params
 
 	if (!client || !params.useTransactions) {
-		await deleteChunksForPath(chunksCol, file.path, namespace)
-		const result = await upsertChunks(
+		const result = await syncFileNonTransactional({
 			chunksCol,
-			file.path,
+			filesCol,
+			entry,
 			namespace,
 			chunks,
 			model,
 			embeddings,
 			embeddingStatus,
-		)
-		if (result.failed > 0) {
-			// Chunks were lost — do NOT advance the metadata hash. Leaving the old
-			// hash (or no metadata) means the next sync re-attempts this file.
-			log.warn(
-				`sync: ${result.failed} chunk writes failed for ${file.path}; keeping old metadata hash so next sync retries`,
-			)
-			return {
-				upserted: result.applied,
-				disableTransactions: false,
-				failed: true,
-			}
-		}
-		await upsertFileMetadata(filesCol, file, namespace)
+		})
 		return {
-			upserted: result.applied,
+			upserted: result.upserted,
 			disableTransactions: false,
-			failed: false,
+			failed: result.failed,
 		}
 	}
 
 	const session = client.startSession()
 	try {
-		// Delete in one small transaction, then upsert chunks in batched
-		// transactions (so a TransactionTooLargeForCache on a large file doesn't
-		// abort the whole sync). File metadata is written AFTER the chunks succeed
-		// so a partial chunk failure isn't masked as a completed sync.
+		// W15: everything in ONE transaction. Chunk writes are limited to one
+		// file's chunks (bounded by chunking + maxSessionChunks), so a
+		// TransactionTooLargeForCache here falls back below instead of
+		// pre-splitting the work across transactions (which reintroduced the
+		// crash window this fix closes).
 		let upserted = 0
 		await session.withTransaction(async () => {
-			await deleteChunksForPath(chunksCol, file.path, namespace, session)
-		}, MAJORITY_TRANSACTION_OPTIONS)
-		const chunkOps = buildChunkOps(
-			file.path,
-			namespace,
-			chunks,
-			model,
-			embeddings,
-			embeddingStatus,
-		)
-		upserted = await upsertChunksBatched(chunksCol, session, chunkOps)
-		await upsertFileMetadata(filesCol, file, namespace, session)
-		return { upserted, disableTransactions: false, failed: false }
-	} catch (err) {
-		if (isTransactionUnsupported(err)) {
-			log.info(
-				"transactions not supported (standalone), falling back for file sync",
-			)
-			await deleteChunksForPath(chunksCol, file.path, namespace)
-			const result = await upsertChunks(
-				chunksCol,
-				file.path,
+			await deleteChunksForPath(chunksCol, entry.path, namespace, session)
+			const chunkOps = buildChunkOps(
+				entry.path,
 				namespace,
 				chunks,
 				model,
 				embeddings,
 				embeddingStatus,
 			)
-			if (result.failed > 0) {
-				log.warn(
-					`sync: ${result.failed} chunk writes failed for ${file.path}; keeping old metadata hash so next sync retries`,
+			// Inside a transaction a write error aborts the whole batch, so
+			// there is no partial-count handling here — the transaction is
+			// all-or-nothing.
+			const result = await chunksCol.bulkWrite(chunkOps, {
+				ordered: false,
+				session,
+			})
+			upserted = result.upsertedCount + result.modifiedCount
+			await upsertFileMetadata(filesCol, entry, namespace, session)
+		}, MAJORITY_TRANSACTION_OPTIONS)
+		return { upserted, disableTransactions: false, failed: false }
+	} catch (err) {
+		if (isTransactionTooLargeForCache(err) || isTransactionUnsupported(err)) {
+			if (isTransactionUnsupported(err)) {
+				log.info(
+					"transactions not supported (standalone), falling back for file sync",
 				)
-				return {
-					upserted: result.applied,
-					disableTransactions: true,
-					failed: true,
-				}
+			} else {
+				log.warn(
+					"transaction too large for cache, falling back to invalidation-first ordering",
+				)
 			}
-			await upsertFileMetadata(filesCol, file, namespace)
+			// The transaction aborted — nothing from it is visible. Replace
+			// the file non-transactionally with crash-window-safe ordering.
+			const result = await syncFileNonTransactional({
+				chunksCol,
+				filesCol,
+				entry,
+				namespace,
+				chunks,
+				model,
+				embeddings,
+				embeddingStatus,
+			})
 			return {
-				upserted: result.applied,
-				disableTransactions: true,
-				failed: false,
+				upserted: result.upserted,
+				// Only a standalone server keeps needing the fallback; a
+				// too-large transaction is per-file, so keep transactions on.
+				disableTransactions: isTransactionUnsupported(err),
+				failed: result.failed,
 			}
 		}
 		throw err
@@ -427,6 +521,14 @@ export type SyncResult = {
 	/** Files whose chunk writes failed even after individual retry; their
 	 * metadata hash was NOT advanced so the next sync re-attempts them. */
 	filesFailed: number
+	/**
+	 * W14: true only when BOTH enumerations (memory dir + session transcripts)
+	 * and every per-file read succeeded. Stale cleanup is skipped whenever this
+	 * is false — deleting stale paths requires knowing the full valid-path set,
+	 * and an enumeration failure would otherwise read as "everything is stale"
+	 * and delete every stored chunk.
+	 */
+	enumerationComplete: boolean
 }
 
 export async function syncToMongoDB(params: {
@@ -472,15 +574,27 @@ export async function syncToMongoDB(params: {
 	// =========================================================================
 
 	// 1. List memory files on disk (returns absolute paths)
-	const diskPaths = await listMemoryFiles(
-		params.workspaceDir,
-		params.extraPaths,
-	)
+	// W14: an enumeration failure must not read as "no memory files" — the
+	// stale cleanup below would then delete every stored chunk. Mark the
+	// enumeration incomplete and skip stale cleanup instead.
+	let diskPaths: string[] = []
+	let memoryEnumerationComplete = true
+	try {
+		diskPaths = await listMemoryFiles(params.workspaceDir, params.extraPaths)
+	} catch (err) {
+		memoryEnumerationComplete = false
+		log.warn(
+			`sync: memory file enumeration failed; skipping stale cleanup (${err instanceof Error ? err.message : String(err)})`,
+		)
+	}
 	log.info(
 		`sync: found ${diskPaths.length} memory files on disk (reason=${params.reason ?? "manual"})`,
 	)
 
 	// Build file entries with hash, mtime, size
+	let filesProcessed = 0
+	let filesFailed = 0
+	let totalChunksUpserted = 0
 	const diskFiles: MemoryFileEntry[] = []
 	for (const absPath of diskPaths) {
 		try {
@@ -489,6 +603,11 @@ export async function syncToMongoDB(params: {
 				diskFiles.push(entry)
 			}
 		} catch (err) {
+			// W14: a file we listed but could not read is neither processed nor
+			// valid for stale accounting — count it failed and keep stale
+			// cleanup off (its stored chunks must not be treated as stale).
+			memoryEnumerationComplete = false
+			filesFailed++
 			const msg = err instanceof Error ? err.message : String(err)
 			log.warn(`sync: failed to read ${absPath}: ${msg}`)
 		}
@@ -501,7 +620,15 @@ export async function syncToMongoDB(params: {
 	for (const file of diskFiles) {
 		validPaths.add(file.path)
 		const stored = storedFiles.get(file.path)
-		if (params.force || !stored || stored.hash !== file.hash) {
+		// W07: also re-chunk legacy rows whose chunks were written by a
+		// pre-ordinal identity scheme — a same-hash skip is only valid for
+		// current-scheme chunks.
+		if (
+			params.force ||
+			!stored ||
+			stored.hash !== file.hash ||
+			stored.chunkScheme !== CHUNK_SCHEME_VERSION
+		) {
 			filesToProcess.push(file)
 		}
 	}
@@ -516,10 +643,6 @@ export async function syncToMongoDB(params: {
 	})
 
 	// Process each changed memory file
-	let filesProcessed = 0
-	let filesFailed = 0
-	let totalChunksUpserted = 0
-
 	for (const file of filesToProcess) {
 		try {
 			const content = await fs.readFile(file.absPath, "utf-8")
@@ -530,12 +653,12 @@ export async function syncToMongoDB(params: {
 			const embeddings: number[][] | null = null
 
 			const { upserted, disableTransactions, failed } =
-				await syncFileAtomically({
+				await syncSourceFileAtomically({
 					client: params.client,
 					useTransactions,
 					chunksCol,
 					filesCol,
-					file,
+					entry: file,
 					namespace: memoryNamespace,
 					chunks,
 					model,
@@ -558,6 +681,9 @@ export async function syncToMongoDB(params: {
 				label: file.path,
 			})
 		} catch (err) {
+			// W14: count per-file failures so the caller (dirty-flag gating in
+			// the manager) can refuse to treat this sync as clean.
+			filesFailed++
 			const msg = err instanceof Error ? err.message : String(err)
 			log.warn(`sync: failed to process ${file.path}: ${msg}`)
 		}
@@ -570,6 +696,7 @@ export async function syncToMongoDB(params: {
 	let sessionFilesProcessed = 0
 	let sessionChunksUpserted = 0
 	let sessionStaleDeleted = 0
+	let sessionEnumerationComplete = true
 
 	if (params.agentId && params.sessionMemoryEnabled !== false) {
 		try {
@@ -600,11 +727,16 @@ export async function syncToMongoDB(params: {
 			sessionChunksUpserted = sessionResult.chunksUpserted
 			sessionStaleDeleted = sessionResult.staleDeleted
 			filesFailed += sessionResult.filesFailed
+			sessionEnumerationComplete = sessionResult.enumerationComplete
 			// Propagate standalone detection from session sync to stale cleanup
 			if (!sessionResult.useTransactions) {
 				useTransactions = false
 			}
 		} catch (err) {
+			// W14: a session-sync-level failure leaves the valid-path set
+			// incomplete for the sessions namespace — stale cleanup must not
+			// run on partial knowledge.
+			sessionEnumerationComplete = false
 			const msg = err instanceof Error ? err.message : String(err)
 			log.warn(`session sync failed: ${msg}`)
 		}
@@ -614,66 +746,78 @@ export async function syncToMongoDB(params: {
 	// Phase C: Stale cleanup (covers markdown paths and active conversation paths)
 	// =========================================================================
 
-	// Compute stale paths OUTSIDE any transaction (avoid read pressure inside txn)
-	const staleFileIds: string[] = []
-	for (const [storedPath] of storedFiles) {
-		if (!validPaths.has(storedPath)) {
-			staleFileIds.push(buildStorageId(memoryNamespace, storedPath))
-		}
-	}
+	// W14: stale deletion is only sound with a COMPLETE valid-path set. Any
+	// enumeration or per-file read failure (memory or sessions) means stored
+	// chunks we could not account for — deleting "stale" paths then risks
+	// mass-deleting live data, so skip the whole phase and let the next
+	// successful sync do the cleanup.
+	const enumerationComplete =
+		memoryEnumerationComplete && sessionEnumerationComplete
 
 	let staleDeleted = 0
-	if (params.client && useTransactions) {
-		let session: ClientSession | undefined
-		try {
-			session = params.client.startSession()
-			await session.withTransaction(async () => {
-				staleDeleted = await deleteStaleChunks(
-					chunksCol,
-					memoryNamespace,
-					validPaths,
-					session,
-				)
-				if (staleFileIds.length > 0) {
-					await filesCol.deleteMany(
-						{ _id: { $in: staleFileIds } } as Record<string, unknown>,
-						{
-							session,
-						},
-					)
-				}
-			}, MAJORITY_TRANSACTION_OPTIONS)
-		} catch (err) {
-			if (isTransactionUnsupported(err)) {
-				// Fallback: non-transactional stale cleanup
-				staleDeleted = await deleteStaleChunks(
-					chunksCol,
-					memoryNamespace,
-					validPaths,
-				)
-				if (staleFileIds.length > 0) {
-					await filesCol.deleteMany({ _id: { $in: staleFileIds } } as Record<
-						string,
-						unknown
-					>)
-				}
-			} else {
-				throw err
-			}
-		} finally {
-			await session?.endSession()
-		}
-	} else {
-		staleDeleted = await deleteStaleChunks(
-			chunksCol,
-			memoryNamespace,
-			validPaths,
+	if (!enumerationComplete) {
+		log.warn(
+			"sync: skipping stale cleanup — source enumeration incomplete (W14 guard)",
 		)
-		if (staleFileIds.length > 0) {
-			await filesCol.deleteMany({ _id: { $in: staleFileIds } } as Record<
-				string,
-				unknown
-			>)
+	} else {
+		// Compute stale paths OUTSIDE any transaction (avoid read pressure inside txn)
+		const staleFileIds: string[] = []
+		for (const [storedPath] of storedFiles) {
+			if (!validPaths.has(storedPath)) {
+				staleFileIds.push(buildStorageId(memoryNamespace, storedPath))
+			}
+		}
+
+		if (params.client && useTransactions) {
+			let session: ClientSession | undefined
+			try {
+				session = params.client.startSession()
+				await session.withTransaction(async () => {
+					staleDeleted = await deleteStaleChunks(
+						chunksCol,
+						memoryNamespace,
+						validPaths,
+						session,
+					)
+					if (staleFileIds.length > 0) {
+						await filesCol.deleteMany(
+							{ _id: { $in: staleFileIds } } as Record<string, unknown>,
+							{
+								session,
+							},
+						)
+					}
+				}, MAJORITY_TRANSACTION_OPTIONS)
+			} catch (err) {
+				if (isTransactionUnsupported(err)) {
+					// Fallback: non-transactional stale cleanup
+					staleDeleted = await deleteStaleChunks(
+						chunksCol,
+						memoryNamespace,
+						validPaths,
+					)
+					if (staleFileIds.length > 0) {
+						await filesCol.deleteMany({
+							_id: { $in: staleFileIds },
+						} as Record<string, unknown>)
+					}
+				} else {
+					throw err
+				}
+			} finally {
+				await session?.endSession()
+			}
+		} else {
+			staleDeleted = await deleteStaleChunks(
+				chunksCol,
+				memoryNamespace,
+				validPaths,
+			)
+			if (staleFileIds.length > 0) {
+				await filesCol.deleteMany({
+					_id: { $in: staleFileIds },
+				} as Record<string, unknown>)
+			}
 		}
 	}
 
@@ -685,7 +829,7 @@ export async function syncToMongoDB(params: {
 	}
 
 	log.info(
-		`sync complete: memory=${filesProcessed} conversation=${sessionFilesProcessed} chunks=${totalChunksUpserted + sessionChunksUpserted} stale=${staleDeleted + sessionStaleDeleted} failed=${filesFailed}`,
+		`sync complete: memory=${filesProcessed} conversation=${sessionFilesProcessed} chunks=${totalChunksUpserted + sessionChunksUpserted} stale=${staleDeleted + sessionStaleDeleted} failed=${filesFailed} enumerationComplete=${enumerationComplete}`,
 	)
 
 	return {
@@ -695,6 +839,7 @@ export async function syncToMongoDB(params: {
 		sessionFilesProcessed,
 		sessionChunksUpserted,
 		filesFailed,
+		enumerationComplete,
 	}
 }
 
@@ -708,7 +853,7 @@ async function syncSessionFiles(params: {
 	agentId: string
 	chunksCol: Collection
 	filesCol: Collection
-	storedFiles: Map<string, { hash: string; mtime: number; size: number }>
+	storedFiles: Map<string, StoredFileMeta>
 	validPaths: Set<string>
 	embeddingMode: MemoryMongoDBEmbeddingMode
 	chunking: { tokens: number; overlap: number }
@@ -722,6 +867,7 @@ async function syncSessionFiles(params: {
 	staleDeleted: number
 	useTransactions: boolean
 	filesFailed: number
+	enumerationComplete: boolean
 }> {
 	const sessionNamespace: SyncNamespace = {
 		source: "sessions",
@@ -729,7 +875,18 @@ async function syncSessionFiles(params: {
 		scope: "agent",
 		scopeRef: resolveScopeRef({ scope: "agent", agentId: params.agentId }),
 	}
-	const sessionPaths = await listSessionFilesForAgent(params.agentId)
+	// W14: enumeration failures must not read as "no session files" — the
+	// stale cleanup below would then delete every stored transcript chunk.
+	let sessionPaths: string[] = []
+	let enumerationComplete = true
+	try {
+		sessionPaths = await listSessionFilesForAgent(params.agentId)
+	} catch (err) {
+		enumerationComplete = false
+		log.warn(
+			`sync: session file enumeration failed; skipping session stale cleanup (${err instanceof Error ? err.message : String(err)})`,
+		)
+	}
 	if (sessionPaths.length === 0) {
 		return {
 			filesProcessed: 0,
@@ -737,6 +894,7 @@ async function syncSessionFiles(params: {
 			staleDeleted: 0,
 			useTransactions: params.useTransactions,
 			filesFailed: 0,
+			enumerationComplete,
 		}
 	}
 
@@ -754,7 +912,17 @@ async function syncSessionFiles(params: {
 	for (const absPath of sessionPaths) {
 		try {
 			const entry = await buildSessionEntry(absPath)
-			if (!entry || !entry.content) {
+			if (!entry) {
+				// W14: confirmed-missing file — legitimately stale; keep it out
+				// of validPaths so cleanup removes its stored data.
+				params.progress?.({
+					completed: filesProcessed,
+					total: sessionPaths.length,
+					label: `Skipping missing conversation transcript (${path.basename(absPath)})`,
+				})
+				continue
+			}
+			if (!entry.content) {
 				params.progress?.({
 					completed: filesProcessed,
 					total: sessionPaths.length,
@@ -768,7 +936,12 @@ async function syncSessionFiles(params: {
 
 			// Check if already indexed with same hash
 			const stored = params.storedFiles.get(entry.path)
-			if (!params.force && stored?.hash === entry.hash) {
+			// W07: re-chunk legacy pre-ordinal rows once even on same hash.
+			if (
+				!params.force &&
+				stored?.hash === entry.hash &&
+				stored?.chunkScheme === CHUNK_SCHEME_VERSION
+			) {
 				params.progress?.({
 					completed: filesProcessed,
 					total: sessionPaths.length,
@@ -796,9 +969,9 @@ async function syncSessionFiles(params: {
 			const embeddingStatus: EmbeddingStatus = "pending"
 			const embeddings: number[][] | null = null
 
-			// Atomic write: delete + upsert + metadata (reuse syncFileAtomically)
+			// Atomic write: delete + upsert + metadata in one transaction (W15)
 			const { upserted, disableTransactions, failed } =
-				await syncSessionFileAtomically({
+				await syncSourceFileAtomically({
 					client: params.client,
 					useTransactions,
 					chunksCol: params.chunksCol,
@@ -825,6 +998,11 @@ async function syncSessionFiles(params: {
 				label: `Indexed conversation transcript ${filesProcessed + filesFailed}/${sessionPaths.length}`,
 			})
 		} catch (err) {
+			// W14: a transient per-file failure must count (dirty-flag gating)
+			// and must keep stale cleanup off — the file's path never made it
+			// into validPaths, so its stored chunks are not accounted for.
+			filesFailed++
+			enumerationComplete = false
 			const msg = err instanceof Error ? err.message : String(err)
 			log.warn(`session sync failed for ${absPath}: ${msg}`)
 			params.progress?.({
@@ -835,27 +1013,34 @@ async function syncSessionFiles(params: {
 		}
 	}
 
-	const staleSessionPaths = Array.from(params.storedFiles.keys()).filter(
-		(storedPath) => !params.validPaths.has(storedPath),
-	)
+	// W14: stale deletion needs the complete valid-path set for this agent.
 	let staleDeleted = 0
-	if (staleSessionPaths.length > 0) {
-		staleDeleted = await deleteStaleChunks(
-			params.chunksCol,
-			sessionNamespace,
-			new Set(params.validPaths),
+	if (!enumerationComplete) {
+		log.warn(
+			"sync: skipping session stale cleanup — enumeration incomplete (W14 guard)",
 		)
-		await params.filesCol.deleteMany({
-			_id: {
-				$in: staleSessionPaths.map((storedPath) =>
-					buildStorageId(sessionNamespace, storedPath),
-				),
-			},
-		} as Record<string, unknown>)
+	} else {
+		const staleSessionPaths = Array.from(params.storedFiles.keys()).filter(
+			(storedPath) => !params.validPaths.has(storedPath),
+		)
+		if (staleSessionPaths.length > 0) {
+			staleDeleted = await deleteStaleChunks(
+				params.chunksCol,
+				sessionNamespace,
+				new Set(params.validPaths),
+			)
+			await params.filesCol.deleteMany({
+				_id: {
+					$in: staleSessionPaths.map((storedPath) =>
+						buildStorageId(sessionNamespace, storedPath),
+					),
+				},
+			} as Record<string, unknown>)
+		}
 	}
 
 	log.info(
-		`sync: sessions processed=${filesProcessed} chunks=${chunksUpserted} stale=${staleDeleted} failed=${filesFailed}`,
+		`sync: sessions processed=${filesProcessed} chunks=${chunksUpserted} stale=${staleDeleted} failed=${filesFailed} enumerationComplete=${enumerationComplete}`,
 	)
 	return {
 		filesProcessed,
@@ -863,153 +1048,6 @@ async function syncSessionFiles(params: {
 		staleDeleted,
 		useTransactions,
 		filesFailed,
-	}
-}
-
-/** Atomic session file sync — same pattern as syncFileAtomically but for SessionFileEntry. */
-async function syncSessionFileAtomically(params: {
-	client: MongoClient | undefined
-	useTransactions: boolean
-	chunksCol: Collection
-	filesCol: Collection
-	entry: SessionFileEntry
-	namespace: SyncNamespace
-	chunks: MemoryChunk[]
-	model: string
-	embeddings: number[][] | null
-	embeddingStatus: EmbeddingStatus
-}): Promise<{
-	upserted: number
-	disableTransactions: boolean
-	failed: boolean
-}> {
-	const {
-		client,
-		chunksCol,
-		filesCol,
-		entry,
-		namespace,
-		chunks,
-		model,
-		embeddings,
-		embeddingStatus,
-	} = params
-
-	if (!client || !params.useTransactions) {
-		await deleteChunksForPath(chunksCol, entry.path, namespace)
-		const result = await upsertChunks(
-			chunksCol,
-			entry.path,
-			namespace,
-			chunks,
-			model,
-			embeddings,
-			embeddingStatus,
-		)
-		if (result.failed > 0) {
-			// Same P0.3 guard as memory files: keep the old metadata hash so the
-			// next sync re-attempts this session transcript.
-			log.warn(
-				`sync: ${result.failed} chunk writes failed for ${entry.path}; keeping old metadata hash so next sync retries`,
-			)
-			return {
-				upserted: result.applied,
-				disableTransactions: false,
-				failed: true,
-			}
-		}
-		await upsertSessionFileMetadata(filesCol, entry, namespace)
-		return {
-			upserted: result.applied,
-			disableTransactions: false,
-			failed: false,
-		}
-	}
-
-	const session = client.startSession()
-	try {
-		// Delete in one small transaction, then upsert chunks in batched
-		// transactions. Session metadata is written AFTER the chunks succeed so a
-		// partial chunk failure isn't masked as a completed sync.
-		let upserted = 0
-		await session.withTransaction(async () => {
-			await deleteChunksForPath(chunksCol, entry.path, namespace, session)
-		}, MAJORITY_TRANSACTION_OPTIONS)
-		const chunkOps = buildChunkOps(
-			entry.path,
-			namespace,
-			chunks,
-			model,
-			embeddings,
-			embeddingStatus,
-		)
-		upserted = await upsertChunksBatched(chunksCol, session, chunkOps)
-		await upsertSessionFileMetadata(filesCol, entry, namespace, session)
-		return { upserted, disableTransactions: false, failed: false }
-	} catch (err) {
-		if (isTransactionUnsupported(err)) {
-			log.info(
-				"transactions not supported (standalone), falling back for session sync",
-			)
-			await deleteChunksForPath(chunksCol, entry.path, namespace)
-			const result = await upsertChunks(
-				chunksCol,
-				entry.path,
-				namespace,
-				chunks,
-				model,
-				embeddings,
-				embeddingStatus,
-			)
-			if (result.failed > 0) {
-				log.warn(
-					`sync: ${result.failed} chunk writes failed for ${entry.path}; keeping old metadata hash so next sync retries`,
-				)
-				return {
-					upserted: result.applied,
-					disableTransactions: true,
-					failed: true,
-				}
-			}
-			await upsertSessionFileMetadata(filesCol, entry, namespace)
-			return {
-				upserted: result.applied,
-				disableTransactions: true,
-				failed: false,
-			}
-		}
-		throw err
-	} finally {
-		await session.endSession()
-	}
-}
-
-async function upsertSessionFileMetadata(
-	files: Collection,
-	entry: SessionFileEntry,
-	namespace: SyncNamespace,
-	session?: ClientSession,
-): Promise<void> {
-	const update = {
-		$set: {
-			path: entry.path,
-			source: namespace.source,
-			...(namespace.agentId ? { agentId: namespace.agentId } : {}),
-			...(namespace.scope ? { scope: namespace.scope } : {}),
-			...(namespace.scopeRef ? { scopeRef: namespace.scopeRef } : {}),
-			hash: entry.hash,
-			mtime: entry.mtimeMs,
-			size: entry.size,
-			updatedAt: new Date(),
-		},
-	}
-	const filter = { _id: buildStorageId(namespace, entry.path) } as Record<
-		string,
-		unknown
-	>
-	if (session) {
-		await files.updateOne(filter, update, { upsert: true, session })
-	} else {
-		await files.updateOne(filter, update, { upsert: true })
+		enumerationComplete,
 	}
 }

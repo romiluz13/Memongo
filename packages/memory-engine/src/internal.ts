@@ -33,6 +33,13 @@ export type MemoryFileEntry = {
 export type MemoryChunk = {
 	startLine: number
 	endLine: number
+	/**
+	 * W07: 0-based emission index of this chunk within the chunk list.
+	 * Multiple segments of one long source line share the same
+	 * {startLine, endLine}; the ordinal keeps their storage identities
+	 * distinct so colliding upserts can no longer overwrite each other.
+	 */
+	ordinal: number
 	text: string
 	hash: string
 	embeddingInput?: EmbeddingInput
@@ -42,6 +49,15 @@ export type MultimodalMemoryChunk = {
 	chunk: MemoryChunk
 	structuredInputBytes: number
 }
+
+/**
+ * W07: chunk identity scheme version. 2 = chunk ids and KB chunk keys carry
+ * the per-file `ordinal` segment discriminator. File metadata rows and KB
+ * parent documents record the scheme that wrote their chunks; sync treats a
+ * same-hash skip as valid only when the stored chunks came from the current
+ * scheme, so every legacy row is re-chunked exactly once after this change.
+ */
+export const CHUNK_SCHEME_VERSION = 2
 
 const DISABLED_MULTIMODAL_SETTINGS: MemoryMultimodalSettings = {
 	enabled: false,
@@ -196,12 +212,20 @@ export async function listMemoryFiles(
 	const result: string[] = []
 	const memoryDir = path.join(workspaceDir, "memory")
 
+	// W14: a rejected enumeration (readdir rejects wholesale — there is no
+	// partial-result mode) must surface as an error, never as "source is
+	// empty": an empty result would make the caller's stale cleanup delete
+	// every stored chunk. ENOENT stays a legitimate skip (no memory dir).
 	try {
 		const dirStat = await fs.lstat(memoryDir)
 		if (!dirStat.isSymbolicLink() && dirStat.isDirectory()) {
 			await walkDir(memoryDir, result)
 		}
-	} catch {}
+	} catch (err) {
+		if (!isFileMissingError(err)) {
+			throw err
+		}
+	}
 
 	const normalizedExtraPaths = normalizeExtraMemoryPaths(
 		workspaceDir,
@@ -221,7 +245,12 @@ export async function listMemoryFiles(
 				if (stat.isFile() && isAllowedMemoryFilePath(inputPath, multimodal)) {
 					result.push(inputPath)
 				}
-			} catch {}
+			} catch (err) {
+				if (isFileMissingError(err)) {
+					continue
+				}
+				throw err
+			}
 		}
 	}
 	if (result.length <= 1) {
@@ -231,6 +260,9 @@ export async function listMemoryFiles(
 	const deduped: string[] = []
 	for (const entry of result) {
 		let key = entry
+		// Dedup is an optimization, not an enumeration result: a realpath
+		// failure falls back to the raw path (upserts are idempotent by
+		// storage id) instead of failing the whole listing.
 		try {
 			key = await fs.realpath(entry)
 		} catch {}
@@ -250,13 +282,19 @@ export async function listLegacyMarkdownMemoryFiles(
 	const result: string[] = []
 	const memoryDir = path.join(workspaceDir, "memory")
 
+	// W14: same enumeration contract as listMemoryFiles — surface transient
+	// failures, skip only confirmed-missing paths.
 	try {
 		const dirStat = await fs.lstat(memoryDir)
 		if (!dirStat.isSymbolicLink() && dirStat.isDirectory()) {
 			// Legacy markdown listing intentionally excludes multimodal files.
 			await walkDir(memoryDir, result)
 		}
-	} catch {}
+	} catch (err) {
+		if (!isFileMissingError(err)) {
+			throw err
+		}
+	}
 
 	const normalizedExtraPaths = normalizeExtraMemoryPaths(
 		workspaceDir,
@@ -276,7 +314,12 @@ export async function listLegacyMarkdownMemoryFiles(
 				if (stat.isFile() && inputPath.endsWith(".md")) {
 					result.push(inputPath)
 				}
-			} catch {}
+			} catch (err) {
+				if (isFileMissingError(err)) {
+					continue
+				}
+				throw err
+			}
 		}
 	}
 	if (result.length <= 1) {
@@ -451,6 +494,8 @@ export async function buildMultimodalChunkForIndexing(
 		chunk: {
 			startLine: 1,
 			endLine: 1,
+			// W07: single chunk per multimodal file — emission index 0.
+			ordinal: 0,
 			text: entry.contentText ?? embeddingInput.text,
 			hash: entry.hash,
 			embeddingInput,
@@ -489,10 +534,29 @@ export function chunkMarkdown(
 		chunks.push({
 			startLine,
 			endLine,
+			// W07: segments of one long line all share {startLine, endLine};
+			// the emission ordinal keeps their identities distinct.
+			ordinal: chunks.length,
 			text,
 			hash: hashText(text),
 			embeddingInput: buildTextEmbeddingInput(text),
 		})
+	}
+
+	/** Drop leading chars without splitting a surrogate pair (W07). */
+	const trimLeadingChars = (line: string, count: number): string => {
+		if (count <= 0) {
+			return line
+		}
+		if (count >= line.length) {
+			return ""
+		}
+		const boundary = line.slice(count - 1, count + 1)
+		const splitsSurrogatePair =
+			boundary.length === 2 &&
+			boundary.charCodeAt(0) >= 0xd800 &&
+			boundary.charCodeAt(0) <= 0xdbff
+		return line.slice(count + (splitsSurrogatePair ? 1 : 0))
 	}
 
 	const carryOverlap = () => {
@@ -513,6 +577,29 @@ export function chunkMarkdown(
 			if (acc >= overlapChars) {
 				break
 			}
+		}
+		// W07: bound the carried overlap in character space. Carrying whole
+		// entries let one maxChars-sized segment drag a maxChars-sized overlap
+		// into the next chunk (3201 chars against a 1600 target). Trim from the
+		// front so the total carried, counting join newlines, is at most
+		// overlapChars — a chunk is then at most maxChars + overlapChars.
+		let excess = acc - overlapChars
+		while (excess > 0 && kept.length > 0) {
+			const first = kept[0]
+			if (!first) {
+				break
+			}
+			const entrySize = first.line.length + 1
+			if (excess >= entrySize) {
+				kept.shift()
+				excess -= entrySize
+				continue
+			}
+			kept[0] = {
+				line: trimLeadingChars(first.line, excess),
+				lineNo: first.lineNo,
+			}
+			excess = 0
 		}
 		current = kept
 		currentChars = kept.reduce((sum, entry) => sum + entry.line.length + 1, 0)

@@ -27,6 +27,10 @@ export const KB_SCHEMA: Document = {
 			category: { bsonType: "string" },
 			tags: { bsonType: "array", items: { bsonType: "string" } },
 			chunkCount: { bsonType: "number" },
+			// W07: chunk identity scheme that wrote this document's chunks.
+			// Absent on legacy rows — ingest re-chunks those once.
+			chunkScheme: { bsonType: "number" },
+			chunksComplete: { bsonType: "bool" },
 			importedBy: { bsonType: "string" },
 			wikiSource: {
 				bsonType: "string",
@@ -65,6 +69,9 @@ export const KB_CHUNKS_SCHEMA: Document = {
 			text: { bsonType: "string", description: "Chunk text content" },
 			startLine: { bsonType: "number" },
 			endLine: { bsonType: "number" },
+			// W07: 0-based emission index within the document's chunk list —
+			// disambiguates segments of one long source line.
+			ordinal: { bsonType: "number" },
 			source: {
 				bsonType: "string",
 				description: "Source identifier (e.g., 'kb')",
@@ -396,6 +403,8 @@ export const CHUNKS_SCHEMA: Document = {
 					source: { bsonType: "string" },
 					startLine: { bsonType: "number" },
 					endLine: { bsonType: "number" },
+					// W07: emission index within the file's chunk list.
+					ordinal: { bsonType: "number" },
 					embedding: { bsonType: "array" },
 					model: { bsonType: "string" },
 					updatedAt: { bsonType: "date" },

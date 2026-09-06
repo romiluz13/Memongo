@@ -46,7 +46,7 @@ function createMockChunksCol(): ReturnType<typeof vi.fn> & Collection {
 function createMockFilesCol(
 	storedFiles: Map<
 		string,
-		{ hash: string; mtime: number; size: number }
+		{ hash: string; mtime: number; size: number; chunkScheme?: number }
 	> = new Map(),
 ): Collection {
 	const docs = Array.from(storedFiles.entries()).map(([filePath, data]) => ({
@@ -506,17 +506,31 @@ describe("syncToMongoDB — session files", () => {
 			embeddingMode: "automated",
 		})
 
-		// updateOne is called for session file metadata
+		// updateOne is called for session file metadata. W15: the first write
+		// for a path is the hash invalidation; the completing write carries the
+		// real hash and source.
 		const updateCalls = (mockFiles.updateOne as ReturnType<typeof vi.fn>).mock
 			.calls
 		const sessionCall = updateCalls.find(
 			(call) =>
 				typeof call[0]._id === "string" &&
-				call[0]._id.endsWith("::sessions/meta-test.jsonl"),
+				call[0]._id.endsWith("::sessions/meta-test.jsonl") &&
+				call[1].$set?.source === "sessions",
 		)
 		expect(sessionCall).toBeDefined()
 		expect(sessionCall![1].$set.source).toBe("sessions")
 		expect(sessionCall![1].$set.hash).toBe("session-meta-hash")
+		// W07: completing metadata records the chunk identity scheme.
+		expect(sessionCall![1].$set.chunkScheme).toBe(2)
+		// W15: an invalidation write (sentinel hash) precedes the completing
+		// write for the same path.
+		const invalidationCall = updateCalls.find(
+			(call) =>
+				typeof call[0]._id === "string" &&
+				call[0]._id.endsWith("::sessions/meta-test.jsonl") &&
+				call[1].$set?.hash === "__invalidated__",
+		)
+		expect(invalidationCall).toBeDefined()
 	})
 
 	it("skips unchanged session files based on hash", async () => {
@@ -535,12 +549,13 @@ describe("syncToMongoDB — session files", () => {
 		])
 		vi.mocked(buildSessionEntry).mockResolvedValue(sessionEntry)
 
-		// Pre-populate stored files with matching hash
+		// Pre-populate stored files with matching hash (W07: current chunk
+		// scheme — a legacy row would be re-chunked even on same hash)
 		mockFiles = createMockFilesCol(
 			new Map([
 				[
 					"sessions/unchanged.jsonl",
-					{ hash: "already-indexed-hash", mtime: 0, size: 0 },
+					{ hash: "already-indexed-hash", mtime: 0, size: 0, chunkScheme: 2 },
 				],
 			]),
 		)
@@ -641,7 +656,11 @@ describe("syncToMongoDB — session files", () => {
 		vi.mocked(buildSessionEntry).mockResolvedValue(sessionEntry)
 		mockFiles = createMockFilesCol(
 			new Map([
-				["sessions/tracked.jsonl", { hash: "tracked-hash", mtime: 0, size: 0 }],
+				[
+					"sessions/tracked.jsonl",
+					// W07: current scheme + matching hash → tracked file is skipped
+					{ hash: "tracked-hash", mtime: 0, size: 0, chunkScheme: 2 },
+				],
 				["sessions/old.jsonl", { hash: "old-hash", mtime: 0, size: 0 }],
 			]),
 		)
@@ -795,18 +814,25 @@ describe("syncToMongoDB — partial chunk failure (P0.3)", () => {
 		expect(result.filesFailed).toBe(1)
 		expect(result.filesProcessed).toBe(0)
 
-		// Metadata with the NEW hash must NOT be written — the old hash is
-		// retained so the next sync re-attempts the file.
+		// W15: the stored hash was invalidated FIRST, and the completing
+		// metadata (real content hash) must NOT be written — the sentinel
+		// keeps the next sync re-attempting the file.
 		const metadataCalls = (mockFiles.updateOne as ReturnType<typeof vi.fn>).mock
 			.calls
-		const partialMeta = metadataCalls.find(
+		const partialCalls = metadataCalls.filter(
 			(call) =>
 				typeof call[0]?._id === "string" &&
 				call[0]._id.endsWith("::memory/partial.md"),
 		)
-		expect(partialMeta).toBeUndefined()
+		expect(partialCalls.length).toBe(1)
+		expect(partialCalls[0]![1].$set.hash).toBe("__invalidated__")
+		const completingWrite = partialCalls.find(
+			(call) => call[1].$set.hash !== "__invalidated__",
+		)
+		expect(completingWrite).toBeUndefined()
 
-		// Re-running sync retries the file (stored hash still the old one)
+		// Re-running sync retries the file (stored hash is the sentinel/old
+		// one, never the new content hash)
 		const callsBefore = (mockChunks.bulkWrite as ReturnType<typeof vi.fn>).mock
 			.calls.length
 		await syncToMongoDB({
@@ -850,10 +876,13 @@ describe("syncToMongoDB — partial chunk failure (P0.3)", () => {
 
 		const metadataCalls = (mockFiles.updateOne as ReturnType<typeof vi.fn>).mock
 			.calls
+		// W15: the invalidation sentinel is written first, then the completing
+		// write with the real hash lands once every chunk applied.
 		const salvagedMeta = metadataCalls.find(
 			(call) =>
 				typeof call[0]?._id === "string" &&
-				call[0]._id.endsWith("::memory/salvaged.md"),
+				call[0]._id.endsWith("::memory/salvaged.md") &&
+				call[1].$set?.hash !== "__invalidated__",
 		)
 		expect(salvagedMeta).toBeDefined()
 		expect(typeof salvagedMeta![1].$set.hash).toBe("string")

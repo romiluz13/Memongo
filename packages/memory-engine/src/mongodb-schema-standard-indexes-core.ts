@@ -153,14 +153,25 @@ export async function ensureCoreStandardIndexes(
 	} catch {
 		// Index may not exist — safe to ignore.
 	}
+	// W07: widen the tenant-scoped unique chunk key with the emission ordinal.
+	// Multiple segments of one long source line share {startLine, endLine}, so
+	// the 4-field key rejected all but the last segment of such lines (the
+	// bulkWrite's unordered upserts raced on the unique index). The old index
+	// already enforced uniqueness on the 4-field prefix, so no existing data
+	// can violate the widened key — drop and recreate is a safe migration.
+	try {
+		await kbChunks.dropIndex("uq_kbchunks_scope_path_lines")
+	} catch {
+		// Index may not exist on a fresh install — safe to ignore.
+	}
 	try {
 		await kbChunks.createIndex(
-			{ scopeRef: 1, path: 1, startLine: 1, endLine: 1 },
-			{ name: "uq_kbchunks_scope_path_lines", unique: true },
+			{ scopeRef: 1, path: 1, startLine: 1, endLine: 1, ordinal: 1 },
+			{ name: "uq_kbchunks_scope_path_lines_v2", unique: true },
 		)
 		applied++
 	} catch (err) {
-		handleUniqueIndexCreationError(err, "uq_kbchunks_path_lines")
+		handleUniqueIndexCreationError(err, "uq_kbchunks_scope_path_lines_v2")
 		applied++
 	}
 	// $text index on kb_chunks text field for text search fallback

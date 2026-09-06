@@ -84,6 +84,9 @@ const VALIDATED_COLLECTIONS: Record<string, Document> = {
 			required: ["updatedAt"],
 			properties: {
 				updatedAt: { bsonType: "date" },
+				// W07: chunk identity scheme that wrote this file's chunks.
+				// Absent on legacy rows — sync re-chunks those once.
+				chunkScheme: { bsonType: "number" },
 			},
 		},
 	},

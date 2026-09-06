@@ -8,6 +8,7 @@ import {
 	createSubsystemLogger,
 } from "@memongo/lib"
 import {
+	CHUNK_SCHEME_VERSION,
 	chunkMarkdown,
 	hashText,
 	isDuplicateKeyError,
@@ -188,7 +189,13 @@ export async function ingestToKB(params: {
 				})
 				if (existingByPath) {
 					if (existingByPath.hash === doc.hash) {
-						if (existingByPath.chunksComplete === true) {
+						// W07: a same-hash skip is only valid when the stored
+						// chunks were written by the current identity scheme.
+						// Legacy pre-ordinal rows fall through to the repair
+						// path (clean-replace chunks, re-flag the parent).
+						const schemeCurrent =
+							existingByPath.chunkScheme === CHUNK_SCHEME_VERSION
+						if (existingByPath.chunksComplete === true && schemeCurrent) {
 							// Same content, fully persisted — skip
 							result.skipped++
 							continue
@@ -203,7 +210,9 @@ export async function ingestToKB(params: {
 					// No path match — check hash as fallback
 					const existingByHash = await kb.findOne({ hash: doc.hash, scopeRef })
 					if (existingByHash) {
-						if (existingByHash.chunksComplete === true) {
+						const schemeCurrent =
+							existingByHash.chunkScheme === CHUNK_SCHEME_VERSION
+						if (existingByHash.chunksComplete === true && schemeCurrent) {
 							result.skipped++
 							continue
 						}
@@ -246,6 +255,10 @@ export async function ingestToKB(params: {
 					source: "kb",
 					startLine: chunk.startLine,
 					endLine: chunk.endLine,
+					// W07: emission ordinal — segments of one long source line
+					// share {startLine, endLine}, so the ordinal is what keeps
+					// their unique-key identities distinct.
+					ordinal: chunk.ordinal,
 					hash: chunk.hash,
 					model,
 					text: chunk.text,
@@ -259,6 +272,7 @@ export async function ingestToKB(params: {
 							path: doc.source.path ?? doc.title,
 							startLine: chunk.startLine,
 							endLine: chunk.endLine,
+							ordinal: chunk.ordinal,
 						},
 						update: { $set: chunkDoc },
 						upsert: true,
@@ -290,6 +304,9 @@ export async function ingestToKB(params: {
 				hash: doc.hash,
 				chunkCount: chunks.length,
 				chunksComplete: false,
+				// W07: identity scheme of the chunks this parent owns; a same-hash
+				// skip is only valid when this matches CHUNK_SCHEME_VERSION.
+				chunkScheme: CHUNK_SCHEME_VERSION,
 				updatedAt: new Date(),
 			}
 
@@ -304,10 +321,21 @@ export async function ingestToKB(params: {
 			): Promise<number> => {
 				if (chunkOps.length === 0) {
 					await kb.updateOne({ _id: parentId } as Record<string, unknown>, {
-						$set: { chunksComplete: true },
+						$set: {
+							chunksComplete: true,
+							chunkScheme: CHUNK_SCHEME_VERSION,
+							chunkCount: 0,
+						},
 					})
 					return 0
 				}
+				// W07: clean-replace this parent's previously written chunks
+				// before re-upserting. The repair path used to re-upsert without
+				// deleting, so chunks left behind by an earlier partial write —
+				// or written with the pre-ordinal identity — survived alongside
+				// the new set. Deleting by docId first makes the parent's chunk
+				// set exactly what this ingest computed.
+				await kbChunks.deleteMany({ docId: parentId })
 				const { applied, writeErrors } = await runUnorderedBulkWriteCounted(
 					() => kbChunks.bulkWrite(chunkOps, { ordered: false }),
 				)
@@ -319,7 +347,11 @@ export async function ingestToKB(params: {
 					return applied
 				}
 				await kb.updateOne({ _id: parentId } as Record<string, unknown>, {
-					$set: { chunksComplete: true },
+					$set: {
+						chunksComplete: true,
+						chunkScheme: CHUNK_SCHEME_VERSION,
+						chunkCount: chunkOps.length,
+					},
 				})
 				return applied
 			}
@@ -478,11 +510,18 @@ async function reIngestAtomically(params: {
 					chunksCreated = 0
 					await performMetadataWrites(session)
 					chunksCreated = await runChunkBatch(chunkOps, session)
-					// C2: a commit implies every chunk persisted — flip the parent
-					// complete inside the same transaction.
+					// C2 + W07: a commit implies every chunk persisted — flip the
+					// parent complete (stamped with the chunk identity scheme)
+					// inside the same transaction.
 					await kb.updateOne(
 						{ _id: newKBDoc._id } as Record<string, unknown>,
-						{ $set: { chunksComplete: true } },
+						{
+							$set: {
+								chunksComplete: true,
+								chunkScheme: CHUNK_SCHEME_VERSION,
+								chunkCount: chunkOps.length,
+							},
+						},
 						{ session },
 					)
 				}, MAJORITY_TRANSACTION_OPTIONS)
@@ -507,8 +546,13 @@ async function reIngestAtomically(params: {
 	const chunksCreated = await runChunkBatch(chunkOps)
 	// C2: reaching here means every chunk write landed (runChunkBatch throws
 	// on partial failure, leaving the parent incomplete for a repair retry).
+	// W07: stamp the completing write with the chunk identity scheme.
 	await kb.updateOne({ _id: newKBDoc._id } as Record<string, unknown>, {
-		$set: { chunksComplete: true },
+		$set: {
+			chunksComplete: true,
+			chunkScheme: CHUNK_SCHEME_VERSION,
+			chunkCount: chunkOps.length,
+		},
 	})
 	return chunksCreated
 }

@@ -253,12 +253,14 @@ describe("ingestToKB", () => {
 		}
 
 		// First, make findOne return existing doc with same hash.
-		// C2: the fixture models a COMPLETE duplicate — an unmarked parent now
+		// C2 + W07: the fixture models a COMPLETE duplicate written by the
+		// current chunk scheme — an unmarked or legacy-scheme parent now
 		// triggers repair, not a skip.
 		vi.mocked(mockKB.findOne).mockResolvedValueOnce({
 			_id: "existing-id",
 			hash,
 			chunksComplete: true,
+			chunkScheme: 2,
 		})
 
 		const result = await ingestToKB({
@@ -314,12 +316,13 @@ describe("ingestToKB", () => {
 		}
 
 		// Mock findOne to return existing doc by path with same hash
-		// (C2: complete, so the duplicate still skips).
+		// (C2 + W07: complete and current-scheme, so the duplicate skips).
 		vi.mocked(mockKB.findOne).mockResolvedValueOnce({
 			_id: "existing-id",
 			hash: doc.hash,
 			"source.path": "/docs/guide.md",
 			chunksComplete: true,
+			chunkScheme: 2,
 		})
 
 		const result = await ingestToKB({
@@ -856,11 +859,22 @@ describe("ingestToKB — C2 partial-chunk completeness", () => {
 			unknown
 		>
 		expect(inserted.chunksComplete).toBe(false)
-		// …and is flipped complete exactly once all chunk writes succeed.
+		expect(inserted.chunkScheme).toBe(2)
+		// …and is flipped complete exactly once all chunk writes succeed,
+		// stamping the current chunk identity scheme and final chunk count.
 		expect(vi.mocked(mockKB.updateOne)).toHaveBeenCalledWith(
 			{ _id: expect.any(String) },
-			{ $set: { chunksComplete: true } },
+			{
+				$set: expect.objectContaining({
+					chunksComplete: true,
+					chunkScheme: 2,
+				}),
+			},
 		)
+		const setOp = vi.mocked(mockKB.updateOne).mock.calls[0]?.[1] as {
+			$set: Record<string, unknown>
+		}
+		expect(setOp.$set.chunkCount).toBeGreaterThanOrEqual(1)
 	})
 
 	it("partial chunk failure leaves the parent incomplete and records the error", async () => {
@@ -882,16 +896,27 @@ describe("ingestToKB — C2 partial-chunk completeness", () => {
 		const result = await ingestToKB(params())
 
 		expect(result.skipped).toBe(0)
+		// W15 clean-replace: old chunks for the parent are deleted before the
+		// re-upsert, so a partial repair cannot leave mixed-scheme chunks.
+		expect(vi.mocked(mockKBChunks.deleteMany)).toHaveBeenCalledWith({
+			docId: "existing-parent",
+		})
 		// Chunks are re-upserted, attached to the EXISTING parent id…
 		expect(vi.mocked(mockKBChunks.bulkWrite)).toHaveBeenCalled()
 		const ops = vi.mocked(mockKBChunks.bulkWrite).mock.calls[0]?.[0] as Array<{
 			updateOne: { update: { $set: Record<string, unknown> } }
 		}>
 		expect(ops[0]?.updateOne.update.$set.docId).toBe("existing-parent")
-		// …and the parent flips complete once the repair fully lands.
+		// …and the parent flips complete once the repair fully lands, with
+		// the current scheme stamped.
 		expect(vi.mocked(mockKB.updateOne)).toHaveBeenCalledWith(
 			{ _id: "existing-parent" },
-			{ $set: { chunksComplete: true } },
+			{
+				$set: expect.objectContaining({
+					chunksComplete: true,
+					chunkScheme: 2,
+				}),
+			},
 		)
 	})
 
@@ -903,17 +928,51 @@ describe("ingestToKB — C2 partial-chunk completeness", () => {
 		expect(result.skipped).toBe(0)
 		expect(vi.mocked(mockKB.updateOne)).toHaveBeenCalledWith(
 			{ _id: "legacy-parent" },
-			{ $set: { chunksComplete: true } },
+			{
+				$set: expect.objectContaining({
+					chunksComplete: true,
+					chunkScheme: 2,
+				}),
+			},
 		)
 	})
 
 	it("still skips a complete parent with no redundant chunk writes", async () => {
-		await seedParent({ _id: "done-parent", chunksComplete: true })
+		// W07: "complete" only means skippable when it was written by the
+		// current chunk scheme.
+		await seedParent({
+			_id: "done-parent",
+			chunksComplete: true,
+			chunkScheme: 2,
+		})
 
 		const result = await ingestToKB(params())
 
 		expect(result.skipped).toBe(1)
 		expect(vi.mocked(mockKBChunks.bulkWrite)).not.toHaveBeenCalled()
 		expect(vi.mocked(mockKB.updateOne)).not.toHaveBeenCalled()
+	})
+
+	it("repairs a complete parent written by a legacy chunk scheme (W07)", async () => {
+		// A parent completed under chunk scheme v1 (line-range identity) is
+		// NOT skippable: its chunks may collide on long lines and must be
+		// re-chunked under the ordinal identity.
+		await seedParent({ _id: "legacy-scheme-parent", chunksComplete: true })
+
+		const result = await ingestToKB(params())
+
+		expect(result.skipped).toBe(0)
+		expect(vi.mocked(mockKBChunks.deleteMany)).toHaveBeenCalledWith({
+			docId: "legacy-scheme-parent",
+		})
+		expect(vi.mocked(mockKB.updateOne)).toHaveBeenCalledWith(
+			{ _id: "legacy-scheme-parent" },
+			{
+				$set: expect.objectContaining({
+					chunksComplete: true,
+					chunkScheme: 2,
+				}),
+			},
+		)
 	})
 })

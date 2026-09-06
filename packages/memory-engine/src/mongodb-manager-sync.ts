@@ -274,7 +274,18 @@ export class MongoDBManagerSyncOps {
 					result.chunksUpserted + result.sessionChunksUpserted
 			}
 
-			this.host.dirty = false
+			// W14: only a fully-successful sync may clear the dirty flag. With
+			// failed files or an incomplete source enumeration, chunks are
+			// missing or unaccounted for — keep dirty set so the next sync
+			// (watch trigger, restart, manual) re-runs instead of trusting a
+			// clean state that was never reached.
+			if (result.filesFailed === 0 && result.enumerationComplete) {
+				this.host.dirty = false
+			} else {
+				log.warn(
+					`sync finished dirty: filesFailed=${result.filesFailed} enumerationComplete=${result.enumerationComplete}; keeping dirty flag set`,
+				)
+			}
 			log.info(
 				`sync complete: processed=${result.filesProcessed}+${result.sessionFilesProcessed} ` +
 					`chunks=${result.chunksUpserted}+${result.sessionChunksUpserted} ` +
