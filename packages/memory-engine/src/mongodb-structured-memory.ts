@@ -975,6 +975,25 @@ export async function writeStructuredMemory(params: {
 					...(entry.scope ? { scope: entry.scope } : {}),
 					...(entry.scopeRef ? { scopeRef: entry.scopeRef } : {}),
 					content,
+					// W12: persist the FULL candidate shape at ingress. The
+					// quarantine row is the only durable record of the original
+					// structured intent — without it, promotion must re-derive
+					// type/key/value from the rendered text (matchPatterns) and
+					// can fail or alter identity. Promotion rebuilds this entry
+					// verbatim (see promoteQuarantined's restoredCandidate path).
+					structuredCandidate: {
+						type: entry.type,
+						key: entry.key,
+						value: entry.value,
+						...(typeof entry.confidence === "number"
+							? { confidence: entry.confidence }
+							: {}),
+						...(entry.sourceAgent ? { sourceAgent: entry.sourceAgent } : {}),
+						...(Array.isArray(entry.tags) ? { tags: entry.tags } : {}),
+						...(typeof entry.context === "string"
+							? { context: entry.context }
+							: {}),
+					},
 					classification: "injection-likely",
 					tier: verdict.tier,
 					matchedPatterns: verdict.matchedPatterns,
@@ -984,6 +1003,32 @@ export async function writeStructuredMemory(params: {
 						? { sourceEventIds: entry.sourceEventIds }
 						: {}),
 				})
+			} else {
+				// Dedup hit: the row is reused for the re-run, so refresh the
+				// stored candidate to the latest attempt's shape (a re-run with
+				// a different shape must not promote the first attempt's).
+				await memoryQuarantineCollection(db, prefix).updateOne(
+					{ quarantineId },
+					{
+						$set: {
+							structuredCandidate: {
+								type: entry.type,
+								key: entry.key,
+								value: entry.value,
+								...(typeof entry.confidence === "number"
+									? { confidence: entry.confidence }
+									: {}),
+								...(entry.sourceAgent
+									? { sourceAgent: entry.sourceAgent }
+									: {}),
+								...(Array.isArray(entry.tags) ? { tags: entry.tags } : {}),
+								...(typeof entry.context === "string"
+									? { context: entry.context }
+									: {}),
+							},
+						},
+					},
+				)
 			}
 			log.warn(
 				`quarantined structured write type=${entry.type} key=${entry.key}: injection patterns=${verdict.matchedPatterns.join(",")}`,

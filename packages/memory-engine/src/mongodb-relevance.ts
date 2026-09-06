@@ -309,6 +309,12 @@ export class MongoDBRelevanceRuntime {
 					const rawExplain = persistRaw ? artifact.rawExplain : undefined
 					return {
 						runId,
+						// W02: artifacts carry their own immutable tenant identity
+						// so tenant erasure can reach them directly instead of
+						// only through their parent run row. Legacy rows (no
+						// agentId) remain covered by the runId join while their
+						// parents exist.
+						agentId: this.agentId,
 						artifactType: artifact.artifactType,
 						summary: artifact.summary,
 						rawExplain,

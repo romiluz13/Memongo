@@ -2,9 +2,11 @@
 // dead-ended into memory_quarantine with no review path — classifier false
 // positives were silent permanent data loss. These tests pin the three
 // review operations: listQuarantined (agent-isolated, oldest-first queue),
-// promoteQuarantined (claim-first status flip, consolidator-identical
-// extraction, provenance back-reference, compensating revert on write
-// failure), and rejectQuarantined (decision metadata + durable audit).
+// promoteQuarantined (leased promoting claim, consolidator-identical
+// extraction for text rows, verbatim candidate roundtrip for
+// structured-write rows, compensating revert on write failure, expired-
+// lease crash recovery), and rejectQuarantined (decision metadata + durable
+// audit, including recovery of an abandoned promoting claim).
 // The stateful fake IS the database; the facade test wires the real
 // prototype without any module mocks.
 import { describe, expect, it } from "vitest"
@@ -331,6 +333,175 @@ describe("promoteQuarantined — classifier overrule (C-004)", () => {
 		expect(
 			fake.findDoc("memory_mutations", { collectionName: "memory_quarantine" }),
 		).toBeNull()
+	})
+
+	// =========================================================================
+	// W12 — the promote crash window. The claim now holds a LEASED
+	// intermediate "promoting" state: a process dying between claim and
+	// finalize leaves a recoverable row instead of an unrecoverable
+	// "promoted" row with no memory.
+	// =========================================================================
+
+	it("W12: a crashed promote (expired lease) is recovered by re-promotion, idempotently", async () => {
+		const fake = createStatefulMongoFake({ prefix: PREFIX })
+		const quarantineId = await seedPending(fake)
+		// Simulate the crash: the row was claimed into "promoting" with a
+		// lease that has since expired, and no memory was written.
+		await fake.collection("memory_quarantine").updateOne(
+			{ quarantineId },
+			{
+				$set: {
+					status: "promoting",
+					promoteClaimedAt: new Date("2026-09-01T10:00:00.000Z"),
+					promoteLeaseExpiresAt: new Date("2026-09-01T10:02:00.000Z"),
+				},
+			},
+		)
+
+		const receipt = await promoteQuarantined({
+			db: fake.db,
+			prefix: PREFIX,
+			agentId: AGENT,
+			quarantineId,
+			embeddingMode: "automated",
+			reviewerId: "reviewer-7",
+		})
+
+		expect(receipt.status).toBe("promoted")
+		expect(receipt.memoryId).toBeTruthy()
+		expect(receipt.finalizeError).toBeUndefined()
+		const row = fake.findDoc("memory_quarantine", { quarantineId })
+		expect(row).toMatchObject({
+			status: "promoted",
+			memoryId: receipt.memoryId,
+			reviewerId: "reviewer-7",
+		})
+		// Exactly one memory row exists (identity-keyed upsert, idempotent).
+		expect(fake.all("structured_mem").length).toBe(1)
+	})
+
+	it("W12: a live promote lease refuses a second promotion", async () => {
+		const fake = createStatefulMongoFake({ prefix: PREFIX })
+		const quarantineId = await seedPending(fake)
+		await fake.collection("memory_quarantine").updateOne(
+			{ quarantineId },
+			{
+				$set: {
+					status: "promoting",
+					promoteClaimedAt: new Date(),
+					promoteLeaseExpiresAt: new Date(Date.now() + 60_000),
+				},
+			},
+		)
+
+		await expect(
+			promoteQuarantined({
+				db: fake.db,
+				prefix: PREFIX,
+				agentId: AGENT,
+				quarantineId,
+				embeddingMode: "automated",
+			}),
+		).rejects.toThrow(/promotion already in progress/)
+
+		// The live claim is untouched; no memory was written by the refusal.
+		const row = fake.findDoc("memory_quarantine", { quarantineId })
+		expect(row?.status).toBe("promoting")
+		expect(fake.all("structured_mem")).toEqual([])
+	})
+
+	it("W12: restores the persisted candidate shape verbatim (no matchPatterns reinterpretation)", async () => {
+		const fake = createStatefulMongoFake({ prefix: PREFIX })
+		// A structured write was routed to quarantine; its FULL entry was
+		// persisted at ingress. The rendered content WOULD matchPatterns into
+		// a preference — the promotion must NOT use that derivation.
+		const quarantineId = "cand-1"
+		await fake.collection("memory_quarantine").insertOne({
+			quarantineId,
+			agentId: AGENT,
+			scope: "user",
+			scopeRef: "user-42",
+			content: PREFER_CONTENT,
+			structuredCandidate: {
+				type: "fact",
+				key: "home_city",
+				value: "Berlin",
+				confidence: 0.9,
+				sourceAgent: { id: "ext-1", name: "original writer" },
+			},
+			classification: "injection-likely",
+			tier: "pattern",
+			matchedPatterns: ["instruction-override"],
+			status: "pending-review",
+			createdAt: new Date("2026-09-01T10:00:00.000Z"),
+			sourceEventIds: ["event-9"],
+		})
+
+		const receipt = await promoteQuarantined({
+			db: fake.db,
+			prefix: PREFIX,
+			agentId: AGENT,
+			quarantineId,
+			embeddingMode: "automated",
+		})
+
+		expect(receipt.status).toBe("promoted")
+		const memory = fake.findDoc("structured_mem", { agentId: AGENT })
+		expect(memory).toMatchObject({
+			type: "fact",
+			key: "home_city",
+			value: "Berlin",
+			confidence: 0.9,
+			scope: "user",
+			scopeRef: "user-42",
+			sourceEventIds: ["event-9"],
+			sourceAgent: { id: "ext-1", name: "original writer" },
+			provenance: expect.objectContaining({
+				quarantineId,
+				promotedByReview: true,
+				restoredCandidate: true,
+			}),
+		})
+		// The audit row records that the candidate (not the pattern match)
+		// was restored.
+		const audit = fake.findDoc("memory_mutations", {
+			collectionName: "memory_quarantine",
+			documentId: quarantineId,
+		})
+		expect(audit?.meta).toMatchObject({ restoredCandidate: true })
+	})
+
+	it("W12: an expired promoting row can be rejected, with the in-flight attempt recorded", async () => {
+		const fake = createStatefulMongoFake({ prefix: PREFIX })
+		const quarantineId = await seedPending(fake)
+		await fake.collection("memory_quarantine").updateOne(
+			{ quarantineId },
+			{
+				$set: {
+					status: "promoting",
+					promoteClaimedAt: new Date("2026-09-01T10:00:00.000Z"),
+					promoteLeaseExpiresAt: new Date("2026-09-01T10:02:00.000Z"),
+				},
+			},
+		)
+
+		const receipt = await rejectQuarantined({
+			db: fake.db,
+			prefix: PREFIX,
+			agentId: AGENT,
+			quarantineId,
+			reviewerId: "reviewer-7",
+		})
+
+		expect(receipt.status).toBe("rejected")
+		const row = fake.findDoc("memory_quarantine", { quarantineId })
+		expect(row?.status).toBe("rejected")
+		expect(row?.promoteClaimedAt).toBeUndefined()
+		const audit = fake.findDoc("memory_mutations", {
+			collectionName: "memory_quarantine",
+			documentId: quarantineId,
+		})
+		expect(audit?.meta).toMatchObject({ recoveredFromPromoting: true })
 	})
 })
 

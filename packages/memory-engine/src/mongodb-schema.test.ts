@@ -904,15 +904,25 @@ describe("ensureStandardIndexes", () => {
 			{ agentId: 1, status: 1, createdAt: 1 },
 			{ name: "idx_memory_quarantine_agent_status_created" },
 		)
-		// Retention cap on UNREVIEWED entries only, 30-day default. Partial on
-		// status so promote/reject decisions (the audit trail) never expire.
+		// Retention cap on UNREVIEWED and mid-promotion entries only, 30-day
+		// default. Partial on status so terminal decisions (the audit trail)
+		// never expire; W12 widened the filter to include "promoting" so an
+		// abandoned promote claim cannot outlive the backstop (partial
+		// indexes officially accept $in).
 		expect(quarantine.createIndex).toHaveBeenCalledWith(
 			{ createdAt: 1 },
 			{
 				name: "idx_memory_quarantine_ttl_pending",
 				expireAfterSeconds: 30 * 24 * 60 * 60,
-				partialFilterExpression: { status: "pending-review" },
+				partialFilterExpression: {
+					status: { $in: ["pending-review", "promoting"] },
+				},
 			},
+		)
+		// The same-named index with the old single-status filter is dropped
+		// first (same name + different options = IndexOptionsConflict).
+		expect(quarantine.dropIndex).toHaveBeenCalledWith(
+			"idx_memory_quarantine_ttl_pending",
 		)
 	})
 

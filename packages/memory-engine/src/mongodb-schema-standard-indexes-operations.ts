@@ -439,12 +439,25 @@ export async function ensureOperationalStandardIndexes(
 			? ttlOpts.quarantineRetentionDays
 			: 30
 	if (quarantineRetentionDays > 0) {
+		// W12: "promoting" rows (a crashed promote claim between the leased
+		// claim and the finalize) must stay inside the TTL backstop — without
+		// them in the partial filter an abandoned claim would persist forever.
+		// partialFilterExpression accepts $in (MongoDB manual, partial
+		// indexes). Same index name with different options is an
+		// IndexOptionsConflict, so drop the old filter's index first.
+		try {
+			await memoryQuarantine.dropIndex("idx_memory_quarantine_ttl_pending")
+		} catch {
+			// Index may not exist yet — safe to ignore.
+		}
 		await memoryQuarantine.createIndex(
 			{ createdAt: 1 },
 			{
 				name: "idx_memory_quarantine_ttl_pending",
 				expireAfterSeconds: quarantineRetentionDays * 24 * 60 * 60,
-				partialFilterExpression: { status: "pending-review" },
+				partialFilterExpression: {
+					status: { $in: ["pending-review", "promoting"] },
+				},
 			},
 		)
 		applied++

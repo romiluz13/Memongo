@@ -874,6 +874,103 @@ describe("MongoDBMemoryManager background extraction", () => {
 		}
 	})
 
+	it("abandons the job when the tenant erasure epoch advances before entity extraction (W03)", async () => {
+		vi.useFakeTimers()
+		try {
+			const {
+				claimMemoryJob,
+				completeClaimedMemoryJob,
+				createMemoryJob,
+				failClaimedMemoryJob,
+				renewMemoryJobLease,
+			} = await import("./mongodb-memory-jobs.js")
+			const { eventsCollection, metaCollection } = await import(
+				"./mongodb-schema.js"
+			)
+			const { extractAndUpsertEntities } = await import("./mongodb-graph.js")
+			const { promoteDerivedMemoryFromEvent } = await import(
+				"./mongodb-derived-memory.js"
+			)
+			const { getPendingExtractionEvents } = await import("./mongodb-events.js")
+			// The worker's outbox-repair pass runs before claiming: keep it empty
+			// so no residue from earlier tests' persisted mocks drives writes.
+			mocked(getPendingExtractionEvents).mockResolvedValue([])
+			mocked(createMemoryJob).mockResolvedValue("extraction-evt-epoch")
+			mocked(claimMemoryJob)
+				.mockResolvedValueOnce({
+					jobId: "extraction-evt-epoch",
+					jobType: "extraction",
+					agentId: "agent-1",
+					status: "running",
+					createdAt: new Date("2026-04-09T12:00:00.000Z"),
+					payload: { eventId: "evt-epoch" },
+					attempts: 1,
+					leaseOwner: "worker-epoch",
+					leaseToken: "lease-epoch",
+					heartbeatAt: new Date("2026-04-09T12:00:00.000Z"),
+					leaseExpiresAt: new Date("2026-04-09T12:01:00.000Z"),
+				})
+				.mockResolvedValueOnce(null)
+			// The lease stays healthy the whole time — ONLY the tenant erasure
+			// epoch advances between the claim and the first fence check.
+			mocked(renewMemoryJobLease).mockResolvedValue(true)
+			mocked(eventsCollection).mockReturnValue({
+				findOne: vi.fn(async () => ({
+					eventId: "evt-epoch",
+					agentId: "agent-1",
+					role: "user",
+					body: "Remember this pre-erasure extraction.",
+					timestamp: new Date("2026-04-09T12:00:00.000Z"),
+					scope: "agent",
+					scopeRef: "agent:agent-1",
+				})),
+			} as unknown as import("mongodb").Collection)
+			// First meta read = the claim-time epoch (1); every later read (the
+			// fence checks) = 2 — a tenant erasure bumped it after this job was
+			// claimed, so the job's source data was swept mid-flight.
+			let metaReads = 0
+			mocked(metaCollection).mockReturnValue({
+				findOne: vi.fn(async () => ({
+					_id: "tenant-erasure-epoch:agent-1",
+					agentId: "agent-1",
+					epoch: ++metaReads === 1 ? 1 : 2,
+					updatedAt: new Date("2026-04-09T12:00:05.000Z"),
+				})),
+			} as unknown as import("mongodb").Collection)
+
+			const manager = Object.assign(
+				Object.create(MongoDBMemoryManager.prototype),
+				{
+					db: {} as import("mongodb").Db,
+					prefix: "test_",
+					agentId: "agent-1",
+					client: undefined,
+					config: { mongodb: { embeddingMode: "automated" } },
+					workspaceDir: "/tmp/memongo",
+					memoryJobWorkerId: "worker-epoch",
+					memoryJobWorkerStopped: false,
+					memoryJobWorkerActive: false,
+					memoryJobWorkerPromise: Promise.resolve(),
+					memoryJobOperationContexts: new Map(),
+				},
+			) as MongoDBMemoryManager & { memoryJobWorkerPromise: Promise<void> }
+
+			await manager.extractEvent({ eventId: "evt-epoch" })
+			await vi.advanceTimersByTimeAsync(20_001)
+			await manager.memoryJobWorkerPromise
+
+			// The lease was NEVER lost — the epoch fence alone abandoned the
+			// pre-erasure job before any side-effecting stage, so its in-memory
+			// event cannot resurrect erased data.
+			expect(extractAndUpsertEntities).not.toHaveBeenCalled()
+			expect(promoteDerivedMemoryFromEvent).not.toHaveBeenCalled()
+			expect(completeClaimedMemoryJob).not.toHaveBeenCalled()
+			expect(failClaimedMemoryJob).not.toHaveBeenCalled()
+		} finally {
+			vi.useRealTimers()
+		}
+	})
+
 	it("waits for an active durable extraction before closing MongoDB", async () => {
 		let finishWorker: (() => void) | undefined
 		const worker = new Promise<void>((resolve) => {

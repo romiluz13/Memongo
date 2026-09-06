@@ -937,8 +937,20 @@ export class MongoDBManagerAdminOps {
 	 * C-003 tenant-level erasure: delete every document this agent owns
 	 * across every collection, with per-collection receipts and a
 	 * critical-severity audit record that survives the erase.
+	 *
+	 * W03 fencing: the erasure bumps a durable per-agent epoch (inside the
+	 * erasure primitive) so workers that claimed pre-erasure work abandon
+	 * at their fence checks, and this manager drains its OWN local work
+	 * first — the per-agent job worker is stopped (stopMemoryJobWorker
+	 * awaits the in-flight runner, so its writes land before the sweep and
+	 * are erased) and the access tracker is flushed (buffered counts land
+	 * pre-sweep). The worker restarts on the next legitimate post-erasure
+	 * write (the established memoryJobWorkerStopped restart pattern in the
+	 * write path): new writes intentionally recreate the tenant.
 	 */
 	async deleteAllForAgent(): Promise<TenantErasureReceipt> {
+		await this.host.stopMemoryJobWorker()
+		await this.host.accessTracker?.flush()
 		return runTenantErasure({
 			db: this.host.db,
 			prefix: this.host.prefix,

@@ -1,6 +1,7 @@
 import path from "node:path"
 import type { Db } from "mongodb"
 import { instrumentProviderCostSpend } from "./mongodb-cost-ledger.js"
+import { getTenantErasureEpoch } from "./mongodb-erasure-epoch.js"
 import {
 	instrumentOperationProvider,
 	type OperationRunContext,
@@ -351,12 +352,57 @@ export class MongoDBManagerJobsOps {
 		// (hasProcessedSourceEvents, wired through
 		// promoteDerivedMemoryFromEvent's eventReceiptIds) keeps that
 		// re-execution free of duplicate side effects.
+		// W03 erasure fencing: the tenant epoch captured at claim is
+		// re-read at every fence check too. An erasure bumps the epoch and
+		// deletes this job row (killing the lease) — but the lease check
+		// alone cannot distinguish "erasure deleted my row" from any other
+		// renewal failure, and a cross-process worker holding the event in
+		// memory would otherwise keep projecting erased data. An advanced
+		// epoch abandons the job before the next side-effecting stage.
+		// The epoch read is BEST-EFFORT: on a read error (e.g. the meta
+		// collection momentarily unavailable) the comparison is skipped and
+		// the lease fence remains the owner guard — a meta read failure says
+		// nothing about ownership, and the erasure's post-sweep verification
+		// pass is the truth gate for anything that slips a fence.
+		const epochAtClaim = await getTenantErasureEpoch(
+			this.host.db,
+			this.host.prefix,
+			this.host.agentId,
+		).catch((err: unknown) => {
+			log.warn(
+				`tenant epoch read failed at claim of ${job.jobId}; lease-only fencing for this job: ${err instanceof Error ? err.message : String(err)}`,
+			)
+			return null
+		})
+		let epochAdvanced = false
 		const leaseFence = async (stage: string): Promise<boolean> => {
 			await heartbeatInFlight
 			if (leaseLost) {
 				log.warn(`extraction job lease lost before ${stage}: ${job.jobId}`)
+				return true
 			}
-			return leaseLost
+			if (epochAtClaim !== null) {
+				const currentEpoch = await getTenantErasureEpoch(
+					this.host.db,
+					this.host.prefix,
+					this.host.agentId,
+				).catch((err: unknown) => {
+					log.warn(
+						`tenant epoch read failed before ${stage} of ${job.jobId}; skipping epoch check: ${err instanceof Error ? err.message : String(err)}`,
+					)
+					return null
+				})
+				if (currentEpoch !== null && currentEpoch !== epochAtClaim) {
+					epochAdvanced = true
+				}
+				if (epochAdvanced) {
+					log.warn(
+						`tenant erasure epoch advanced (${epochAtClaim} -> ${currentEpoch}) before ${stage}; abandoning pre-erasure job ${job.jobId}`,
+					)
+					return true
+				}
+			}
+			return false
 		}
 
 		try {
@@ -744,6 +790,15 @@ export class MongoDBManagerJobsOps {
 		// runs here, completes (or is skipped by the gate's rate limiter), and
 		// the next drain picks up the next one.
 		if (!this.host.memoryJobWorkerStopped) {
+			// W03: capture the tenant epoch BEFORE the claim — work claimed at
+			// epoch E must not execute at a higher epoch (an erasure bumped
+			// it and swept the tenant). Checked again inside the runner.
+			// Read errors degrade to lease-only fencing (see the runner).
+			const consolidationEpochAtClaim = await getTenantErasureEpoch(
+				this.host.db,
+				this.host.prefix,
+				this.host.agentId,
+			).catch(() => null)
 			const consolidationJob = await claimMemoryJob({
 				db: this.host.db,
 				prefix: this.host.prefix,
@@ -753,7 +808,10 @@ export class MongoDBManagerJobsOps {
 				leaseMs: MEMORY_JOB_LEASE_MS,
 			})
 			if (consolidationJob) {
-				await this.runClaimedConsolidationJob(consolidationJob)
+				await this.runClaimedConsolidationJob(
+					consolidationJob,
+					consolidationEpochAtClaim,
+				)
 			}
 		}
 	}
@@ -819,8 +877,38 @@ export class MongoDBManagerJobsOps {
 	 */
 	private async runClaimedConsolidationJob(
 		job: ClaimedMemoryJob,
+		epochAtClaim: number | null,
 	): Promise<void> {
 		const startedAt = new Date()
+		// W03 erasure fencing: consolidation derives new tenant data
+		// (entities, structured memories) from state it reads at run time; a
+		// job claimed before an erasure must not execute after it — its
+		// source state was swept and its writes would resurrect erased data.
+		// The job row itself is deleted by the sweep, so no re-claim follows.
+		// The check is BEST-EFFORT like the extraction fence: on a read
+		// error the lease fence still guards the run, and the erasure's
+		// post-sweep verification pass is the truth gate for any in-flight
+		// straddle.
+		const currentEpoch = await getTenantErasureEpoch(
+			this.host.db,
+			this.host.prefix,
+			this.host.agentId,
+		).catch((err: unknown) => {
+			log.warn(
+				`tenant epoch read failed for consolidation job ${job.jobId}; proceeding lease-only: ${err instanceof Error ? err.message : String(err)}`,
+			)
+			return null
+		})
+		if (
+			currentEpoch !== null &&
+			epochAtClaim !== null &&
+			currentEpoch !== epochAtClaim
+		) {
+			log.warn(
+				`tenant erasure epoch advanced (${epochAtClaim} -> ${currentEpoch}); abandoning consolidation job ${job.jobId}`,
+			)
+			return
+		}
 		const heartbeatTimer = setInterval(() => {
 			renewMemoryJobLease({
 				db: this.host.db,

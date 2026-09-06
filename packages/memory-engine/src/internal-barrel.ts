@@ -184,6 +184,10 @@ export {
 	type AccessRecordTarget,
 	type AccessTrackerConfig,
 } from "./mongodb-access-tracker.js"
+export {
+	bumpTenantErasureEpoch,
+	getTenantErasureEpoch,
+} from "./mongodb-erasure-epoch.js"
 export { importConversationDataset } from "./mongodb-conversation-import.js"
 export {
 	queryCacheCollection,

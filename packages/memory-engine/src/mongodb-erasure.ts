@@ -17,19 +17,27 @@
 //   - 2 time-series collections keyed by meta.agentId (memory_telemetry,
 //     access_events) — the time-series metaField is `meta`, so the tenant
 //     identity lives at meta.agentId, not at the top level
-//   - relevance_artifacts carries NO agentId (only runId): erased in two
-//     phases — collect the agent's relevance_runs ids first, then
-//     deleteMany({runId: {$in}}) — BEFORE relevance_runs itself is deleted
+//   - relevance_artifacts: legacy rows carry no agentId (only runId) and
+//     are swept through the runId join; new rows carry their own immutable
+//     agentId (mongodb-relevance.ts persistRun) and are swept directly.
+//     Artifacts are deleted BEFORE relevance_runs, and whenever artifact
+//     ownership cannot be fully resolved or the artifact delete fails, the
+//     relevance_runs parents are RETAINED for the next attempt (W02) so a
+//     retry can never report complete with artifacts still present.
 //   - meta is global operational state (no agentId) and is deliberately
-//     NOT touched
+//     NOT touched — which is also where the per-agent erasure epoch lives
+//     (mongodb-erasure-epoch.ts, W03 fence).
 // The audit record is written AFTER the deletes so it survives the
 // memory_mutations erase as the durable proof-of-erasure receipt.
-// Receipt integrity: a failed relevance-run-id lookup (phase 1) or a failed
-// audit write surfaces on the receipt and forces status "partial" — the
-// receipt never claims "complete" while known tenant data (artifacts) or the
-// proof-of-erasure itself is missing.
+// Receipt integrity: a failed epoch bump aborts the sweep (epochError, no
+// deletes); a failed artifact sweep or unresolved artifact ownership
+// retains the parents (partial); a failed collection delete, a post-sweep
+// verification residual, or a failed audit write all force "partial" — the
+// receipt never claims "complete" while known tenant data, unverified
+// state, or the proof-of-erasure itself is missing.
 import type { Db, Document } from "mongodb"
 import { createSubsystemLogger } from "@memongo/lib"
+import { bumpTenantErasureEpoch } from "./mongodb-erasure-epoch.js"
 import { recordMutation } from "./mongodb-mutations.js"
 import {
 	accessEventsCollection,
@@ -78,7 +86,8 @@ export type TenantErasureCollectionReceipt = {
 export type TenantErasureReceipt = {
 	agentId: string
 	/**
-	 * "complete" only when every collection delete succeeded AND the
+	 * "complete" only when every collection delete succeeded, the post-sweep
+	 * verification found no residual tenant documents, AND the
 	 * proof-of-erasure audit record was written.
 	 */
 	status: "complete" | "partial"
@@ -91,6 +100,28 @@ export type TenantErasureReceipt = {
 	 * erasure has no durable audit trail.
 	 */
 	auditError?: string
+	/**
+	 * W03: the erasure epoch this attempt fenced with. Every worker that
+	 * claimed this tenant's work at a lower epoch abandons at its next
+	 * fence check; work claimed at this epoch or later is legitimate
+	 * post-erasure activity.
+	 */
+	epoch?: number
+	/**
+	 * W03: set when the epoch bump itself failed — NO deletes ran in that
+	 * attempt. An unfenced erasure must never sweep.
+	 */
+	epochError?: string
+	/**
+	 * W03: post-sweep verification. `residual` lists collections that still
+	 * held this agent's documents after the sweep (a concurrent writer
+	 * resurrecting data, or a delete that under-reported); any residual
+	 * forces status "partial".
+	 */
+	verification?: {
+		checked: number
+		residual: Array<{ collection: string; count: number }>
+	}
 	completedAt: Date
 }
 
@@ -212,11 +243,18 @@ function accessorFor(
  * every collection, returns per-collection receipts, and writes a
  * critical-severity audit record that survives the erase as the
  * proof-of-erasure. A failed collection delete never aborts the sweep —
- * the receipt reports it and the overall status is "partial". The same
- * receipt-integrity rule covers the two indirect failure modes: a failed
- * phase-1 relevance-run-id lookup yields a zero-delete error receipt for
- * relevance_artifacts, and a failed audit write surfaces as
- * receipt.auditError — neither may report "complete".
+ * the receipt reports it and the overall status is "partial".
+ *
+ * W02 (retry integrity): relevance_artifacts are swept BEFORE their
+ * relevance_runs parents, and the parents are RETAINED for the next
+ * attempt whenever artifact ownership could not be fully resolved or the
+ * artifact delete failed — a retry can therefore never report "complete"
+ * while tenant artifacts are still present.
+ *
+ * W03 (fencing): the sweep is fenced by a durable per-agent epoch bumped
+ * BEFORE any delete (workers abandon pre-erasure claims at their fence
+ * checks), and verified AFTER the deletes with per-collection counts —
+ * residual tenant documents force "partial" instead of a false complete.
  */
 export async function deleteAllForAgent(params: {
 	db: Db
@@ -225,40 +263,118 @@ export async function deleteAllForAgent(params: {
 }): Promise<TenantErasureReceipt> {
 	const { db, prefix, agentId } = params
 
-	// Phase 1: collect the agent's relevance run ids BEFORE relevance_runs is
-	// deleted — relevance_artifacts has no agentId and can only be reached
-	// through its parent run. A phase-1 failure is NOT silently degraded:
-	// the agent's artifacts are then known-unswept tenant data, so it is
-	// reported as a zero-delete error receipt (forcing status "partial").
-	let artifactRunIds: string[] = []
-	let artifactPhaseError: string | undefined
+	// W03 fence: advance the durable per-agent epoch FIRST. Pre-erasure
+	// claimed work becomes stale the moment this lands. A failed bump means
+	// the sweep cannot be fenced — NO deletes run and the receipt says why.
+	let epoch: number | undefined
+	let epochError: string | undefined
+	try {
+		epoch = await bumpTenantErasureEpoch(db, prefix, agentId)
+	} catch (err) {
+		epochError = err instanceof Error ? err.message : String(err)
+		log.warn("tenant erasure epoch bump failed; refusing to sweep unfenced", {
+			agentId,
+			error: err,
+		})
+		return {
+			agentId,
+			status: "partial",
+			receipts: [],
+			epochError,
+			completedAt: new Date(),
+		}
+	}
+
+	// Phase 1: collect the agent's relevance run ids BEFORE relevance_runs
+	// is deleted — legacy relevance_artifacts rows carry no agentId and can
+	// only be reached through their parent run. A phase-1 failure (or a run
+	// row without a usable runId) leaves artifact ownership UNRESOLVED: the
+	// parents are retained for the next attempt (W02) so the retry can
+	// re-resolve and sweep the children first.
+	const artifactRunIds: string[] = []
+	let unresolvedOwnership = false
+	let ownershipError: string | undefined
 	try {
 		const runs = await relevanceRunsCollection(db, prefix)
 			.find({ agentId }, { projection: { _id: 0, runId: 1 } })
 			.toArray()
-		artifactRunIds = runs
-			.map((run) => (run as { runId?: unknown }).runId)
-			.filter((runId): runId is string => typeof runId === "string")
+		let runsWithoutUsableRunId = 0
+		for (const run of runs) {
+			const runId = (run as { runId?: unknown }).runId
+			if (typeof runId === "string") {
+				artifactRunIds.push(runId)
+			} else {
+				runsWithoutUsableRunId++
+			}
+		}
+		if (runsWithoutUsableRunId > 0) {
+			unresolvedOwnership = true
+			ownershipError = `${runsWithoutUsableRunId} relevance run document(s) have no usable runId; their artifacts cannot be resolved`
+			log.warn("relevance runs without usable runId; retaining parents", {
+				agentId,
+				runsWithoutUsableRunId,
+			})
+		}
 	} catch (err) {
-		artifactPhaseError = err instanceof Error ? err.message : String(err)
+		unresolvedOwnership = true
+		ownershipError = err instanceof Error ? err.message : String(err)
 		log.warn("relevance run id collection failed; artifacts not swept", {
 			agentId,
 			error: err,
 		})
 	}
 
-	// Phase 2: every delete runs to completion; failures become receipts.
-	const targets: Array<{ collection: string; filter: Document }> = [
-		...agentKeyedCollections(agentId),
-	]
-	if (artifactRunIds.length > 0) {
-		targets.push({
+	// Phase 1.5 (W02): sweep relevance_artifacts BEFORE the parallel sweep
+	// can delete their parents. The agentId arm covers artifacts written
+	// with their own tenant identity; the runId arm covers legacy rows
+	// while their parents still exist. Runs even when phase 1 failed (the
+	// agentId arm is independent of the run join).
+	const artifactFilter: Document = {
+		$or: [
+			{ agentId },
+			...(artifactRunIds.length > 0
+				? [{ runId: { $in: artifactRunIds } }]
+				: []),
+		],
+	}
+	let artifactDeleteFailed = false
+	let artifactReceipt: TenantErasureCollectionReceipt
+	try {
+		const result = await relevanceArtifactsCollection(db, prefix).deleteMany(
+			artifactFilter,
+		)
+		artifactReceipt = {
 			collection: "relevance_artifacts",
-			filter: { runId: { $in: artifactRunIds } },
+			deleted: result.deletedCount ?? 0,
+		}
+	} catch (err) {
+		artifactDeleteFailed = true
+		artifactReceipt = {
+			collection: "relevance_artifacts",
+			deleted: 0,
+			error: err instanceof Error ? err.message : String(err),
+		}
+		log.warn("relevance artifact sweep failed; retaining parents", {
+			agentId,
+			error: err,
 		})
 	}
 
-	const receipts: TenantErasureCollectionReceipt[] = []
+	// W02 retention rule: whenever artifact ownership was unresolved or the
+	// artifact delete failed, relevance_runs stays OUT of this attempt's
+	// sweep. The next attempt re-resolves the children from the retained
+	// parents, sweeps them, and only then deletes the parents — the
+	// retry-false-complete path is structurally gone.
+	const retainRelevanceRuns = unresolvedOwnership || artifactDeleteFailed
+
+	// Phase 2: every delete runs to completion; failures become receipts.
+	const targets: Array<{ collection: string; filter: Document }> =
+		agentKeyedCollections(agentId).filter(
+			(target) =>
+				!(retainRelevanceRuns && target.collection === "relevance_runs"),
+		)
+
+	const receipts: TenantErasureCollectionReceipt[] = [artifactReceipt]
 	await Promise.all(
 		targets.map(async (target) => {
 			try {
@@ -280,20 +396,68 @@ export async function deleteAllForAgent(params: {
 			}
 		}),
 	)
-	// Deterministic order regardless of settle order.
-	// Phase-1 failure: relevance_artifacts could not be swept, so it gets a
-	// zero-delete error receipt alongside the successful deletes — the
-	// per-collection receipts stay a complete account of what was erased.
-	if (artifactPhaseError !== undefined) {
+	if (retainRelevanceRuns) {
+		// The retained parents are reported on the receipt so "partial" is
+		// explained: ownership is kept deliberately so the retry can resolve
+		// the children first.
 		receipts.push({
-			collection: "relevance_artifacts",
+			collection: "relevance_runs",
 			deleted: 0,
-			error: `relevance run ids unavailable: ${artifactPhaseError}`,
+			error: `retained for artifact retry: ${
+				ownershipError ??
+				(artifactDeleteFailed
+					? "artifact sweep failed this attempt"
+					: "artifact ownership unresolved")
+			}`,
 		})
 	}
 	receipts.sort((a, b) => a.collection.localeCompare(b.collection))
 
-	const deletesOk = receipts.every((receipt) => receipt.error === undefined)
+	const deletesOk =
+		receipts.every((receipt) => receipt.error === undefined) &&
+		!retainRelevanceRuns
+
+	// W03 verification: re-count every swept target (and the artifact
+	// filter) AFTER the deletes. Any residual tenant document — a
+	// concurrent writer resurrecting data, or a delete that under-reported —
+	// is listed on the receipt and forces "partial". The retained
+	// relevance_runs parents are expected survivors this attempt and are
+	// excluded from the residual check. Runs BEFORE the audit write so the
+	// proof-of-erasure record (an agentId-keyed memory_mutations doc written
+	// after this point) is not counted as residual.
+	const verifyTargets: Array<{ collection: string; filter: Document }> = [
+		{ collection: "relevance_artifacts", filter: artifactFilter },
+		...targets,
+	]
+	const residual: Array<{ collection: string; count: number }> = []
+	for (const target of verifyTargets) {
+		try {
+			const count = await accessorFor(
+				db,
+				prefix,
+				target.collection,
+			).countDocuments(target.filter)
+			if (count > 0) {
+				residual.push({ collection: target.collection, count })
+			}
+		} catch (err) {
+			residual.push({
+				collection: target.collection,
+				count: -1,
+			})
+			log.warn("post-sweep verification count failed", {
+				agentId,
+				collection: target.collection,
+				error: err,
+			})
+		}
+	}
+	const verification = {
+		checked: verifyTargets.length,
+		residual,
+	}
+	const verified = residual.length === 0
+
 	const completedAt = new Date()
 
 	// Audit record AFTER the deletes: it survives the memory_mutations erase
@@ -316,12 +480,14 @@ export async function deleteAllForAgent(params: {
 				severity: "critical",
 				meta: {
 					kind: "tenant-erasure",
-					status: deletesOk ? "complete" : "partial",
+					status: deletesOk && verified ? "complete" : "partial",
+					epoch,
 					collections: receipts.length,
 					deletedTotal: receipts.reduce((sum, r) => sum + r.deleted, 0),
 					failedCollections: receipts
 						.filter((r) => r.error !== undefined)
 						.map((r) => r.collection),
+					residualCollections: residual.map((r) => r.collection),
 					completedAt,
 				},
 			},
@@ -332,15 +498,17 @@ export async function deleteAllForAgent(params: {
 		log.warn("tenant erasure audit record failed", { agentId, error: err })
 	}
 
-	// "complete" requires both a fully successful sweep AND the durable
+	// "complete" requires a fully successful, verified sweep AND the durable
 	// proof-of-erasure audit record.
 	const status: TenantErasureReceipt["status"] =
-		deletesOk && auditError === undefined ? "complete" : "partial"
+		deletesOk && verified && auditError === undefined ? "complete" : "partial"
 
 	const receipt: TenantErasureReceipt = {
 		agentId,
 		status,
 		receipts,
+		epoch,
+		verification,
 		completedAt,
 		...(mutationId ? { mutationId } : {}),
 		...(auditError ? { auditError } : {}),
@@ -352,11 +520,13 @@ export async function deleteAllForAgent(params: {
 			failed: receipts
 				.filter((r) => r.error !== undefined)
 				.map((r) => r.collection),
+			residual: residual.map((r) => r.collection),
 		})
 	} else {
 		log.info("tenant erasure complete", {
 			agentId,
 			collections: receipts.length,
+			epoch,
 		})
 	}
 	return receipt
