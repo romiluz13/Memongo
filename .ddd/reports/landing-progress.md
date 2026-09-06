@@ -1443,3 +1443,71 @@ idempotency.
 
 Next: Wave 2 (see INDEX.md wave mapping) — schema/contract batch, then
 Waves 3–7, the test-honesty pass, ledger closure, and re-audit.
+## 2026-09-06 — Wave 2a (W08/W09/W10 event-write durability) landed
+
+Wave 2a — W08 residual (P1 thrown post-commit errors rejected
+already-durable writes: projection marker, staged-job release, batch
+markEventsProjected, non-bulk job inserts), W09 (P1 insertMany retries
+and writeConcernErrors never reconciled against what the server
+applied: a retry's own E11000 read as item failure, writeErrors-array
+shape-matching only, unlisted items blindly durable), W10 (P2 the
+idempotency retention sweep aged by event timestamp, so historical
+imports lost replay protection immediately and future-dated events
+extended retention unboundedly).
+
+Grounding: EL-020 (insertMany manual — unordered continues past
+per-item errors; writeErrors and writeConcernErrors are separate
+report fields; the thrown error carries the partial result), EL-021
+(retryable writes — the driver's single automatic retry; the
+NoWritesPerformed label is the zero-writes guarantee, its absence means
+partial-or-full work persisted), EL-022 (write concern — a
+writeConcernError is an uncertain outcome; MongoDB does not undo
+successful modifications), EL-023 (driver 7.5.0 shipped types — the
+exact MongoBulkWriteError/writeErrors/hasErrorLabel/getWriteConcernError
+shapes the classifier branches on), building on EL-013/EL-019.
+
+Fix: the durable acknowledgment boundary is the canonical-event commit;
+every post-commit failure degrades to a diagnostic with its repair
+marker retained (W08). A shared structural classifyBulkInsertError
+replaces the writeErrors-only matcher in both batch paths: per-item
+receipts for writeErrors (keyed E11000 = winner-replay signal, keyless
+E11000 = read-confirmed durable-exists mapped to a replayed receipt),
+whole-batch safe-retry for NoWritesPerformed, and uncertain outcomes
+(writeConcernError without writeErrors, or a ride-along on unlisted
+items, or network exhaustion) reconciled by read — present = durable,
+absent = retry-safe, reconciliation-read failure = durability-
+unconfirmed receipts, never a throw (W09). Retention prunes on the
+immutable acceptance instant recordedAt with a legacy timestamp
+fallback (W10).
+
+Verification: focused battery 116/116 (wave2a-unit-suite.log); live
+probe 26/26 on the real server incl. a REAL MongoWriteConcernError
+(unsatisfiable w on the live set) classified uncertain with the applied
+doc present on read-back, unordered sibling survival, and the five-case
+W10 retention matrix (w2a-probe.log); repo check-types 15/15 with
+--force (0 cached); full engine battery 144/148 files, 2615/2625, 0
+code failures. Claim C-044, validations V-150..V-153. Ledger: EL-020..
+EL-023 with cache captures. Landed: dfb09e3866 (engine code); ledger
+artifacts in this commit.
+
+Environment incidents (recorded per the amended v0.7.1 protocol): a
+live Voyage rerank latency assertion failed once under 148-file
+parallel load in an earlier same-tree battery run; the phase is
+untouched by this wave (write-path only), an isolated re-run of the
+suite was 81/81 green, and the flake did not recur in the recorded
+battery — provider-load transient, not code. Environment-caused and
+code-caused failures reported separately; run discipline held.
+
+Residual documented (carried forward): read-reconciliation confirms
+presence at read time — a later replica-set rollback of an
+uncertain-outcome write is not retracted from receipts (bounded by the
+durable-path write concern and the repair passes; inherent to EL-022's
+uncertain semantics); a writeConcernError riding writeErrors leaves
+unlisted items read-reconciled and a failed reconciliation read yields
+durability-unconfirmed receipts (deliberately weaker than a throw);
+keyed E11000 keeps Stripe-style winner-replay semantics, with only the
+keyless eventId collision taking the durable-exists path.
+
+Next: Wave 2b (W07/W14/W15 ingest/sync durability), then Wave 2c
+(W06/W11/W13/W16/W17), Waves 3–7, the test-honesty pass, ledger
+closure, and re-audit.

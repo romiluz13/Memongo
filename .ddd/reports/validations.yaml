@@ -1285,3 +1285,47 @@ entries:
     run_at: "2026-09-06T18:25:00.000Z"
     evidence_hash: sha256:de9676b72b10d1d487e620785dca7113f7fdc938299039dd8ba34df7a08a1869
     notes: "Live-server probe on memongo-preview (MongoDB 8.3.8 replica set, port 27019), production claimMemoryJob / deadLetterExpiredMemoryJobs / renewMemoryJobLease, disposable scratch database ddd_w1c_* (dropped in finally; cleanup line in the log). 25/25 assertions: W05 — a live tracking row (status running, tracking: true, no lease) is NOT claimable while a legacy pre-lease running row IS reclaimed, and a dead-lettered (failed) tracking row remains unclaimable by the running arms; W18 — a spent-budget running row (attempts >= MEMORY_JOB_MAX_ATTEMPTS, expired lease) is NOT claimable, the sweep transitions it to failed + deadLetterAt (1 modified) with lease fields unset, an idempotent re-run modifies 0, and live tracking rows are excluded from the sweep (0 modified); W19 — lease renewal as a conditional ownership proof: a renewal with the wrong lease token is refused (false), the valid token renewal succeeds (true), and an expired lease cannot be renewed (false)."
+
+  - id: V-150
+    schema_version: 0.1.0
+    claim_id: C-044
+    construct: packages/memory-engine/src/mongodb-events.test.ts, packages/memory-engine/src/mongodb-memory-jobs.test.ts, packages/memory-engine/src/mongodb-manager-write.test.ts, packages/memory-engine/src/mongodb-manager-write-state.test.ts
+    method: test
+    target: .ddd/reports/runs/wave2a-unit-suite.log
+    result: pass
+    run_at: "2026-09-06T12:27:00.000Z"
+    evidence_hash: sha256:64a08bf68034d6b46e5d17f204df777bff9cde01dc69b8c84409a457f6516f43
+    notes: "Focused unit battery over every Wave 2a-changed suite (4 files, 116/116, target log) re-run after Biome formatting on the same files: events — writeConcern-only errors classify uncertain and reconcile by read (present = ok + duplicateKey receipt, absent = retry-safe), NoWritesPerformed maps the whole batch to safe-retry failures, a reconciliation-read failure yields 'durability unconfirmed' receipts instead of throwing, a writeConcernError riding writeErrors leaves unlisted items read-reconciled, and reconcileEventBatchOutcomes/findExistingEventIds cover the read-back shapes; memory-jobs — the same classifier paths for jobs (writeConcern-only read, NoWritesPerformed safe-retry, read-failure unconfirmed, wc+writeErrors ride-along); manager-write — W08 projection-marker throw acknowledges the write with chunkCreated:false, W08 staged-job release throw takes the P0.1 route (marker retained for repairExtractionOutbox), and the W09 keyless duplicate receipt converges to the replayed outcome with the REAL manager-assigned eventIds (not hardcoded); manager-write-state — the P0.1 regression rewritten to the W08 world: the write RESOLVES on projection failure, release still runs after degradation, and the pending marker drives repair. W10 — pruneIdempotencyFingerprints ages by recordedAt with the legacy timestamp fallback (fresh recordedAt retained, old recordedAt pruned, legacy rows pruned by timestamp)."
+
+  - id: V-151
+    schema_version: 0.1.0
+    claim_id: C-044
+    construct: packages/memory-engine/src
+    method: test
+    target: .ddd/reports/runs/wave2a-engine-suite.log
+    result: pass
+    run_at: "2026-09-06T12:29:00.000Z"
+    evidence_hash: sha256:8dc597f83d1c115902688eb6746528b4bbf6d9b3b3e28ba7b65fa5a18c7bbc7e
+    notes: "Full memory-engine battery on the final Wave 2a tree: 144 files passed | 4 skipped of 148, 2615 passed / 0 failed / 10 skipped of 2625 (target log). An earlier same-tree run hit the real-e2e-v2 rerank latency assertion under 148-file parallel load; classified as an ENVIRONMENT incident per the amended v0.7.1 protocol — the phase is untouched by this wave (write-path only) and a solo re-run of the suite was 81/81 green; the flake did not recur in the recorded battery above. The 401s in the battery log belong to deliberate invalid-key robustness tests (production-readiness Phase 6, real-e2e-v2's own fallback test) and are expected. Environment-caused and code-caused failures reported separately per the DDD protocol."
+
+  - id: V-152
+    schema_version: 0.1.0
+    claim_id: C-044
+    construct: packages/memory-engine/src
+    method: type-check
+    target: .ddd/reports/runs/wave2a-check-types.log
+    result: pass
+    run_at: "2026-09-06T12:27:15.000Z"
+    evidence_hash: sha256:4dc8f90d0809615ad780550c86c9e7194fcd690f49f29913c67407594dbc02d1
+    notes: "Repo-wide check-types on the final Wave 2a tree with --force (no turbo cache: 0 cached, 15/15 tasks, target log). Biome on all seven touched files: zero new warnings — formatting applied via safe --write to mongodb-events.ts (classifyBulkInsertError return + findExistingEventIds projection rewrap), mongodb-memory-jobs.ts, and mongodb-manager-write.test.ts, all semantics-identical and re-verified by the V-150 focused battery after formatting; the 2 remaining warnings (noUnusedImports for the Db import at mongodb-manager-write.ts:42, useOptionalChain at mongodb-manager-write.ts:1099) verified pre-existing at HEAD — the flagged lines are untouched by this wave and identical at HEAD (the optional-chain site was line 1065 pre-wave)."
+
+  - id: V-153
+    schema_version: 0.1.0
+    claim_id: C-044
+    construct: packages/memory-engine/src/mongodb-events.ts
+    method: probe
+    target: .ddd/reports/runs/w2a-probe.log
+    result: pass
+    run_at: "2026-09-06T12:25:15.000Z"
+    evidence_hash: sha256:f2dc9aa67fba05a3b575e6e2477aa5d5f7746a6292ea44cb1539a3ad8177bf03
+    notes: "Live-server probe on memongo-preview (MongoDB 8.3.8 replica set, port 27019), production writeEventsBatch / classifyBulkInsertError / findExistingEventIds / createMemoryJobsBatch / pruneIdempotencyFingerprints plus the production ensureStandardIndexes unique indexes, on a disposable scratch database ddd_w2a_* (dropped in finally; cleanup line in the log). 26/26 assertions: W09 — a keyed E11000 (agentId+idempotencyKey unique index) stays the winner-replay signal (ok:false, duplicateKey:true) with the winner document untouched; a keyless E11000 on the eventId unique index is read-confirmed durable-exists (ok:true, duplicateKey:true), exactly one document, body not overwritten; in an unordered batch the fresh sibling survives the per-item E11000 and is acknowledged while the duplicate is read-confirmed (EL-020); a REAL MongoWriteConcernError raised by the server (unsatisfiable w = dataBearing+1 with wtimeout 250 on the live set) classifies uncertain — never per-item — and the applied document is still present on read-back (EL-022: MongoDB does not undo successful modifications); a duplicate jobId insert maps to a per-item duplicate receipt with the sibling job inserted. W10 — prune modifies exactly 2 (old recordedAt + legacy stale-by-timestamp), retains a fresh import of historical events (ages by acceptance instant), retains the legacy fresh row, prunes the legacy stale row via the timestamp fallback, and a future-dated event with fresh recordedAt is retained for the window rather than immortal."

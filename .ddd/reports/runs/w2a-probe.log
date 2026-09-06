@@ -1,0 +1,35 @@
+12:25:15.590 [memory:mongodb:schema] info: ensured 44 standard indexes
+probe database ddd_w2a_ff217090aa0e4863a7f4504c7c131c68; production indexes ensured
+12:25:15.599 [memory:mongodb:events] info: event batch written: 1 event(s)
+ok   keyed dup receipt.ok === false
+ok   keyed dup receipt.duplicateKey === true
+ok   keyed winner untouched (exactly one doc, original body) === [{"body":"original keyed write"}]
+12:25:15.605 [memory:mongodb:events] info: event batch written: 1 event(s)
+ok   keyless dup receipt.ok (durable-exists) === true
+ok   keyless dup receipt.duplicateKey === true
+ok   prior attempt still exactly one doc === 1
+ok   prior attempt body not overwritten === [{"body":"original from the prior attempt"}]
+12:25:15.611 [memory:mongodb:events] info: event batch written: 2 event(s)
+ok   unordered dup receipt.ok (read-confirmed) === true
+ok   unordered dup receipt.duplicateKey === true
+ok   sibling receipt.ok === true
+ok   sibling receipt carries no duplicateKey === false
+ok   sibling doc present === 1
+ok   batch dup still exactly one doc === 1
+replica set: 1 member(s), 1 data-bearing
+write-concern error shape: MongoWriteConcernError
+ok   real write-concern error classifies uncertain (never per-item) === "uncertain"
+ok   write-concern doc still present on read-back (EL-022: not undone) === 1
+ok   dup job receipt.ok === false
+ok   dup job receipt.duplicate === true
+ok   fresh job receipt.ok === true
+ok   fresh job doc present === 1
+ok   dup job still exactly one doc === 1
+ok   prune modifiedCount (stale accepted + legacy stale only) === 2
+ok   (a) old recordedAt pruned === undefined
+ok   (b) historical import RETAINED (ages by acceptance, not event time) === "key-evt-w2a-r-hist-a02af5c6f2114327b5b41b2d902f6ec8"
+ok   (c) legacy row without recordedAt still pruned by timestamp === undefined
+ok   (d) legacy fresh row retained === "key-evt-w2a-r-legfresh-10f45c4f62f7487498b26afa0f9f7fff"
+ok   (e) future-dated event no longer extends retention (retained, not immortal) === "key-evt-w2a-r-future-60bd44f258f245749df8da7d4478fac6"
+PASS: 26/26 assertions
+cleanup: dropped scratch database ddd_w2a_ff217090aa0e4863a7f4504c7c131c68

@@ -485,3 +485,95 @@ entries:
     superseded_by: null
     content_type: "text/markdown"
     notes: "Wave 1c (W18) grounding: updateMany is per-document atomic but not atomic as a whole, and 'should only be used for idempotent operations' with the manual's own rerun-until-no-match guidance. Basis for the dead-letter sweep (running rows with spent retry budget and expired/missing lease transition to failed + deadLetterAt, lease fields unset): idempotent by construction because transitioned rows leave the running state, so a re-run matches nothing (modifiedCount 0). Live-verified on the local 8.3.8 server (w1c probe)."
+
+  - id: EL-020
+    subject: "MongoDB Manual - db.collection.insertMany() (unordered execution, writeErrors vs writeConcernErrors, partial-result shape)"
+    schema_version: 0.1.0
+    source_class: official-doc
+    source_url: "https://www.mongodb.com/docs/manual/reference/method/db.collection.insertMany/"
+    publisher: "MongoDB (mongodb.com official documentation)"
+    product: "MongoDB Server Manual"
+    version: "8.x (local stack 8.3.8)"
+    retrieved_at: "2026-09-06T12:15:00.000Z"
+    content_digest: "sha256:001721ee6827460624771028c9b041ac0413fef7586182f9f57624c5a7cf54b4"
+    doc_version: "manual-current-2026-09-06"
+    cache_path: cache/mongodb-manual-insert-many.md
+    sections: ["Execution of Operations", "Error Handling", "Collection and _id Field Creation", "Unordered Inserts", "Using Write Concern", "Batching"]
+    status: active
+    authority_for: [crud-write-semantics, write-durability]
+    freshness: "365d"
+    adapter: web-fetch
+    license: "MongoDB docs: public web documentation, fair-use quotes in cache"
+    independence: independent-of-remediation
+    superseded_by: null
+    content_type: "text/markdown"
+    notes: "Wave 2a (W09) grounding: unordered inserts continue past per-item errors; writeErrors and writeConcernErrors are reported in separate fields; the thrown MongoBulkWriteError carries a full partial result (insertedIds keyed by original array index) plus per-error index/code. E11000 on a self-retried item is evidence the first copy is durable, not a fresh failure."
+
+  - id: EL-021
+    subject: "MongoDB Manual - Retryable Writes (driver single retry, NoWritesPerformed tri-state)"
+    schema_version: 0.1.0
+    source_class: official-doc
+    source_url: "https://www.mongodb.com/docs/manual/core/retryable-writes/"
+    publisher: "MongoDB (mongodb.com official documentation)"
+    product: "MongoDB Server Manual"
+    version: "8.x (local stack 8.3.8)"
+    retrieved_at: "2026-09-06T12:15:00.000Z"
+    content_digest: "sha256:13cea595d22b53c54933c2cccb37dd46aca982d7f960b6979b13e454ef91fc8b"
+    doc_version: "manual-current-2026-09-06"
+    cache_path: cache/mongodb-manual-retryable-writes.md
+    sections: ["Retryable Write Operations", "Persistent Network Errors", "Failover Period", "Error Handling"]
+    status: active
+    authority_for: [write-durability, retry-semantics]
+    freshness: "365d"
+    adapter: web-fetch
+    license: "MongoDB docs: public web documentation, fair-use quotes in cache"
+    independence: independent-of-remediation
+    superseded_by: null
+    content_type: "text/markdown"
+    notes: "Wave 2a (W09) grounding: insertMany (single-document inserts) is driver-retried once automatically; an error without the NoWritesPerformed label means partial-or-full work persisted; with the label (6.1+) zero writes were performed. Client-unresponsive-beyond-session-timeout may retry-and-apply-again: caller-side retries must be idempotent via stable _ids."
+
+  - id: EL-022
+    subject: "MongoDB Manual - Write Concern (writeConcernError means uncertain, not failed; wtimeout does not undo writes)"
+    schema_version: 0.1.0
+    source_class: official-doc
+    source_url: "https://www.mongodb.com/docs/manual/reference/write-concern/"
+    publisher: "MongoDB (mongodb.com official documentation)"
+    product: "MongoDB Server Manual"
+    version: "8.x (local stack 8.3.8)"
+    retrieved_at: "2026-09-06T12:15:00.000Z"
+    content_digest: "sha256:6009a39475ec0f1257bc5cffacd5497ea25b682b6365e3a81aff5d38f6ffd46d"
+    doc_version: "manual-current-2026-09-06"
+    cache_path: cache/mongodb-manual-write-concern.md
+    sections: ["Write Concern Specification", "wtimeout", "Implicit Default Write Concern", "Acknowledgment Behavior"]
+    status: active
+    authority_for: [write-durability, retry-semantics]
+    freshness: "365d"
+    adapter: web-fetch
+    license: "MongoDB docs: public web documentation, fair-use quotes in cache"
+    independence: independent-of-remediation
+    superseded_by: null
+    content_type: "text/markdown"
+    notes: "Wave 2a (W09) grounding: wtimeout returns a write concern error even when the write succeeded on the primary and MongoDB does not undo successful modifications; a writeConcernError is an uncertain outcome (may replicate or roll back), never a per-item failure signal. Application must keep repair markers intact and verify by read before classifying."
+
+  - id: EL-023
+    subject: "MongoDB Node Driver 7.5.0 - MongoBulkWriteError / BulkWriteResult / WriteError shapes (shipped type declarations)"
+    schema_version: 0.1.0
+    source_class: code-derived
+    source_url: "file:///Users/rom.iluz/Dev/memongo/node_modules/mongodb/mongodb.d.ts"
+    publisher: "MongoDB Node.js Driver (installed npm package)"
+    product: "mongodb npm package"
+    version: "7.5.0 (installed, engine dependency)"
+    retrieved_at: "2026-09-06T12:15:00.000Z"
+    content_digest: "sha256:4187655dccf386590cd167f51dee1a027e97e71c052ca23a0f1ec46a16ef2550"
+    doc_version: "7.5.0"
+    cache_path: cache/mongodb-driver-7.5-bulk-write-types.md
+    sections: ["MongoBulkWriteError", "BulkWriteResult", "WriteError", "WriteConcernError", "NoWritesPerformed label"]
+    status: active
+    authority_for: [crud-write-semantics, retry-semantics]
+    freshness: "365d"
+    adapter: local-package-types
+    license: "Apache-2.0 (mongodb driver); type excerpts quoted for verification"
+    independence: independent-of-remediation
+    superseded_by: null
+    content_type: "text/markdown"
+    notes: "Wave 2a (W09) implementation basis, version-exact to the installed driver: MongoBulkWriteError.result carries the partial BulkWriteResult even on throw; writeErrors are per-item with .index/.code; hasErrorLabel('NoWritesPerformed') detects the zero-writes guarantee; .err/getWriteConcernError() expose the uncertain write-concern signal separately. These are the exact fields the reconciliation branches on."

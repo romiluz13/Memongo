@@ -760,3 +760,40 @@ entries:
     constructs: [packages/memory-engine/src/mongodb-memory-jobs.ts, packages/memory-engine/src/mongodb-manager-jobs.ts, packages/memory-engine/src/mongodb-manager-lifecycle.ts, packages/memory-engine/src/types.ts]
     validations: [V-146, V-147, V-148, V-149]
     exceptions: []
+
+  - id: C-044
+    schema_version: 0.1.0
+    statement: "Event-write durability MUST be reconciled against what the server actually applied, and nothing after the canonical-event commit may reject an already-durable write: every thrown post-commit error (projection-marker set, staged-job release, non-per-item job insert) degrades to a diagnostic — the write is acknowledged, the repair marker (extractionJobPendingAt / unset projectedAt) is retained for the existing repair passes, and health telemetry records the degraded run — never a caller-facing failure; an insertMany outcome MUST be classified structurally (per-item writeErrors, the NoWritesPerformed zero-writes label, a riding writeConcernError) with keyless E11000 on the eventId unique index read-confirmed as durable-exists (receipt ok + duplicateKey, caller maps to replayed), keyed E11000 kept as the winner-replay signal, unlisted items in an unordered batch confirmed unless a writeConcernError rode along, and uncertain outcomes reconciled by read (present = durable, absent = retry-safe, reconciliation-read failure = 'durability unconfirmed' receipts, never a throw); idempotency-key retention MUST age by the immutable acceptance instant recordedAt with a legacy timestamp fallback, so a fresh import of historical events keeps its replay protection for the full window and future-dated events cannot extend retention."
+    rationale: "Filed from the 2026-09-05 independent audit W08/W09/W10: thrown post-commit errors rejected writes that were already durable on the server, so a keyless retry duplicated the event; insertMany (unordered) was wrapped in a generic transient retry whose own first-attempt E11000 was read as item failure, writeConcernErrors were never inspected (a lost acknowledgment could evict durable events from projection while a majority-ack failure cleared recovery markers), and the retention sweep aged by event timestamp so historical imports lost replay protection immediately and future-dated events extended retention unboundedly. Grounded in official documentation: unordered insertMany continues past per-item errors, reports writeErrors and writeConcernErrors in separate fields, and the thrown error carries the partial result (EL-020); the driver's single automatic retry with the NoWritesPerformed zero-writes tri-state (EL-021); writeConcernError is an uncertain outcome MongoDB does not undo (EL-022); the version-exact driver 7.5.0 error shapes the classifier branches on (EL-023); building on the eventId unique index (EL-013)."
+    sources:
+      - ref: "docs/audits/2026-09-05-independent/logic_write.md#W08"
+        authority_domain: write-durability
+        entailment: explicit
+      - ref: "docs/audits/2026-09-05-independent/logic_write.md#W09"
+        authority_domain: write-durability
+        entailment: explicit
+      - ref: "docs/audits/2026-09-05-independent/logic_write.md#W10"
+        authority_domain: write-durability
+        entailment: explicit
+      - ref: "EL-020#Error Handling"
+        authority_domain: crud-write-semantics
+        entailment: explicit
+      - ref: "EL-021#Error Handling"
+        authority_domain: retry-semantics
+        entailment: explicit
+      - ref: "EL-022#wtimeout"
+        authority_domain: write-durability
+        entailment: explicit
+      - ref: "EL-023#MongoBulkWriteError"
+        authority_domain: crud-write-semantics
+        entailment: explicit
+      - ref: "EL-013#Behavior"
+        authority_domain: crud-write-semantics
+        entailment: explicit
+    claim_kind: behavioral
+    impact: critical
+    tier: T3
+    status: known-and-supported
+    constructs: [packages/memory-engine/src/mongodb-events.ts, packages/memory-engine/src/mongodb-memory-jobs.ts, packages/memory-engine/src/mongodb-manager-write.ts]
+    validations: [V-150, V-151, V-152, V-153]
+    exceptions: []

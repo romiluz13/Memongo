@@ -1,0 +1,192 @@
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/packages/memory-engine[39m
+
+[90mstdout[2m | src/mongodb-events.test.ts[2m > [22m[2mwriteEventsBatch[2m > [22m[2minserts every event in ONE insertMany with unordered majority writes
+[22m[39m12:27:06.085 [memory:mongodb:events] info: event batch written: 2 event(s)
+
+[90mstdout[2m | src/mongodb-events.test.ts[2m > [22m[2mwriteEventsBatch[2m > [22m[2misolates a per-item validation failure without failing the batch
+[22m[39m12:27:06.090 [memory:mongodb:events] info: event batch written: 1 event(s)
+
+[90mstdout[2m | src/mongodb-events.test.ts[2m > [22m[2mwriteEventsBatch[2m > [22m[2mmaps a bulk E11000 to a per-item duplicateKey receipt and keeps siblings ok
+[22m[39m12:27:06.092 [memory:mongodb:events] info: event batch written: 2 event(s)
+
+[90mstdout[2m | src/mongodb-events.test.ts[2m > [22m[2mwriteEventsBatch outcome reconciliation (W09)[2m > [22m[2mreconciles a write-concern-only error by read: present items durable, missing items retry-safe
+[22m[39m12:27:06.094 [memory:mongodb:events] info: event batch written: 2 event(s)
+
+[90mstdout[2m | src/mongodb-events.test.ts[2m > [22m[2mwriteEventsBatch outcome reconciliation (W09)[2m > [22m[2mreturns safe-retry receipts for a NoWritesPerformed error
+[22m[39m12:27:06.095 [memory:mongodb:events] info: event batch written: 2 event(s)
+
+[90mstdout[2m | src/mongodb-events.test.ts[2m > [22m[2mwriteEventsBatch outcome reconciliation (W09)[2m > [22m[2mread-confirms a keyless E11000 as durable-exists instead of failing the durable write
+[22m[39m12:27:06.096 [memory:mongodb:events] info: event batch written: 2 event(s)
+
+[90mstdout[2m | src/mongodb-events.test.ts[2m > [22m[2mwriteEventsBatch outcome reconciliation (W09)[2m > [22m[2mkeeps a keyless E11000 whose event is absent as a per-item failure
+[22m[39m12:27:06.097 [memory:mongodb:events] info: event batch written: 2 event(s)
+
+[90mstdout[2m | src/mongodb-events.test.ts[2m > [22m[2mwriteEventsBatch outcome reconciliation (W09)[2m > [22m[2mkeeps a keyed E11000 as a duplicateKey failure for the winner replay
+[22m[39m12:27:06.097 [memory:mongodb:events] info: event batch written: 2 event(s)
+
+[90mstdout[2m | src/mongodb-events.test.ts[2m > [22m[2mwriteEventsBatch outcome reconciliation (W09)[2m > [22m[2mreconciles unlisted items when a write-concern error rides along with per-item errors
+[22m[39m12:27:06.097 [memory:mongodb:events] info: event batch written: 2 event(s)
+
+[90mstderr[2m | src/mongodb-events.test.ts[2m > [22m[2mwriteEventsBatch outcome reconciliation (W09)[2m > [22m[2myields durability-unconfirmed receipts when the reconciliation read itself fails
+[22m[39m12:27:06.098 [memory:mongodb:events] warn: event batch reconciliation read failed; 2 item(s) reported durability-unconfirmed: Error: reconciliation read unavailable
+
+[90mstdout[2m | src/mongodb-events.test.ts[2m > [22m[2mwriteEventsBatch outcome reconciliation (W09)[2m > [22m[2myields durability-unconfirmed receipts when the reconciliation read itself fails
+[22m[39m12:27:06.098 [memory:mongodb:events] info: event batch written: 2 event(s)
+
+[90mstderr[2m | src/mongodb-events.test.ts[2m > [22m[2mprojection marker degradation (W08)[2m > [22m[2mkeeps batch chunk receipts when the projectedAt marker update fails
+[22m[39m12:27:06.099 [memory:mongodb:events] warn: batch projectedAt marker failed for 1 event(s); leaving them unprojected for the repair pass: Error: marker write exhausted retries
+
+[90mstderr[2m | src/mongodb-events.test.ts[2m > [22m[2mprojection marker degradation (W08)[2m > [22m[2mkeeps the single chunk receipt when its projectedAt marker update fails
+[22m[39m12:27:06.100 [memory:mongodb:events] warn: projectedAt marker failed for evt-w08-s; leaving the event unprojected for the repair pass: Error: marker write exhausted retries
+
+[90mstderr[2m | src/mongodb-events.test.ts[2m > [22m[2mprojectEventChunksBatch[2m > [22m[2mdegrades to chunkCreated:false for all when the bulk write fails outright
+[22m[39m12:27:06.101 [memory:mongodb:events] warn: batch chunk projection failed outright for 2 event(s); leaving them unprojected for the repair pass: Error: bulk projection unavailable
+
+[90mstdout[2m | src/mongodb-events.test.ts[2m > [22m[2mwriteEvent[2m > [22m[2minserts an event and returns the eventId
+[22m[39m12:27:06.104 [memory:mongodb:events] info: event written: bf7f0ce5-c0b5-436c-96d5-56f5369e9004 role=user
+
+[90mstdout[2m | src/mongodb-events.test.ts[2m > [22m[2mwriteEvent[2m > [22m[2mpropagates a transaction session to the canonical event write
+[22m[39m12:27:06.104 [memory:mongodb:events] info: event written: event-transactional role=user
+
+[90mstdout[2m | src/mongodb-events.test.ts[2m > [22m[2mwriteEvent[2m > [22m[2mpersists a durable extraction outbox marker with the event
+[22m[39m12:27:06.105 [memory:mongodb:events] info: event written: event-with-extraction-outbox role=user
+
+[90mstdout[2m | src/mongodb-events.test.ts[2m > [22m[2mwriteEvent[2m > [22m[2mstores event validity separately from the write clock
+[22m[39m12:27:06.105 [memory:mongodb:events] info: event written: eecf4f1b-4a07-42ed-bc9c-d0f5f1a63c77 role=user
+
+[90mstdout[2m | src/mongodb-events.test.ts[2m > [22m[2mwriteEvent[2m > [22m[2mowns recordedAt even when an untyped caller supplies one
+[22m[39m12:27:06.106 [memory:mongodb:events] info: event written: 89303d3a-d401-4871-9079-80107694f2ea role=user
+
+[90mstdout[2m | src/mongodb-events.test.ts[2m > [22m[2mwriteEvent[2m > [22m[2mstores an explicit event validity window
+[22m[39m12:27:06.106 [memory:mongodb:events] info: event written: ff8d3eba-e86c-491a-92de-ff76fb58e0ae role=user
+
+[90mstdout[2m | src/mongodb-events.test.ts[2m > [22m[2mwriteEvent[2m > [22m[2mwith duplicate eventId is idempotent
+[22m[39m12:27:06.107 [memory:mongodb:events] info: event written: existing-id role=user
+
+[90mstderr[2m | src/mongodb-events.test.ts[2m > [22m[2mwriteEvent[2m > [22m[2mretries transient MongoDB write errors with the same eventId
+[22m[39m12:27:06.107 [memory:mongodb:events] warn: transient MongoDB write retry: events.updateOne nextAttempt=2/3 delayMs=577 error=Connection to memongo-shard interrupted due to server monitor timeout
+
+[90mstdout[2m | src/mongodb-events.test.ts[2m > [22m[2mwriteEvent[2m > [22m[2mretries transient MongoDB write errors with the same eventId
+[22m[39m12:27:06.684 [memory:mongodb:events] info: event written: f92ffff8-b173-4b80-8e13-28595ba062c9 role=user
+
+[90mstdout[2m | src/mongodb-events.test.ts[2m > [22m[2mwriteEvent[2m > [22m[2mdefaults scope to agent when not provided
+[22m[39m12:27:06.111 [memory:mongodb:events] info: event written: cc3f509c-a575-4258-bb69-7947f5f13e4f role=assistant
+
+[90mstdout[2m | src/mongodb-events.test.ts[2m > [22m[2mwriteEvent[2m > [22m[2mP2.3: a sessionId with no explicit scope lands in the session scope
+[22m[39m12:27:06.112 [memory:mongodb:events] info: event written: 5e465e34-bb23-4a01-a0fd-422204675288 role=user
+
+[90mstdout[2m | src/mongodb-events.test.ts[2m > [22m[2mwriteEvent[2m > [22m[2mP2.3: explicit scope still wins over an implicit sessionId
+[22m[39m12:27:06.113 [memory:mongodb:events] info: event written: 2c82f81f-abeb-45f9-9d8e-90fd9f632194 role=user
+
+[90mstdout[2m | src/mongodb-events.test.ts[2m > [22m[2mwriteEvent[2m > [22m[2mstores idempotencyKey on the event document when provided
+[22m[39m12:27:06.114 [memory:mongodb:events] info: event written: 4ff59a21-8aa2-47a5-918c-715d580f43bb role=user
+
+[90mstdout[2m | src/mongodb-events.test.ts[2m > [22m[2mwriteEvent[2m > [22m[2mpreserves optional fields when provided
+[22m[39m12:27:06.114 [memory:mongodb:events] info: event written: 05370fcb-6606-4d17-981a-786319638122 role=user
+
+[90mstdout[2m | src/mongodb-events.test.ts[2m > [22m[2mprojectChunksFromEvents[2m > [22m[2mcreates chunks and marks events as projected
+[22m[39m12:27:06.119 [memory:mongodb:events] info: projected 2 chunks from 2 events for agent=agent-1
+
+[90mstdout[2m | src/mongodb-events.test.ts[2m > [22m[2mprojectChunksFromEvents[2m > [22m[2mprojected chunks have correct source and path format
+[22m[39m12:27:06.120 [memory:mongodb:events] info: projected 1 chunks from 1 events for agent=agent-1
+
+[90mstdout[2m | src/mongodb-events.test.ts[2m > [22m[2mprojectChunksFromEvents[2m > [22m[2monly counts chunksCreated when upsertedCount > 0 (not duplicates)
+[22m[39m12:27:06.121 [memory:mongodb:events] info: projected 1 chunks from 2 events for agent=agent-1
+
+ [32m✓[39m src/mongodb-events.test.ts [2m([22m[2m51 tests[22m[2m)[22m[32m 41[2mms[22m[39m
+ [32m✓[39m src/mongodb-memory-jobs.test.ts [2m([22m[2m18 tests[22m[2m)[22m[33m 417[2mms[22m[39m
+     [33m[2m✓[22m[39m clamps list limits to a maximum of 100 [33m 404[2mms[22m[39m
+[90mstderr[2m | src/mongodb-manager-write.test.ts[2m > [22m[2mMongoDBMemoryManager write idempotency (P0.1)[2m > [22m[2mdoes not throw after commit when the staged job release fails — the outbox repair recovers
+[22m[39m12:27:06.540 [memory:mongodb] warn: staged extraction job extraction-evt-new-attempt was not released; leaving the outbox marker set for the repair pass
+
+[90mstderr[2m | src/mongodb-manager-write.test.ts[2m > [22m[2mMongoDBMemoryManager write idempotency (P0.1)[2m > [22m[2macknowledges the write when chunk projection throws after commit (W08)
+[22m[39m12:27:06.541 [memory:mongodb] warn: chunk projection failed for durable event evt-new-attempt; leaving it unprojected for the repair pass: Error: chunk upsert exhausted retries
+
+[90mstderr[2m | src/mongodb-manager-write.test.ts[2m > [22m[2mMongoDBMemoryManager write idempotency (P0.1)[2m > [22m[2macknowledges the write when chunk projection throws after commit (W08)
+[22m[39m12:27:06.541 [memory:mongodb] warn: staged extraction job extraction-evt-new-attempt was not released; leaving the outbox marker set for the repair pass
+
+[90mstderr[2m | src/mongodb-manager-write.test.ts[2m > [22m[2mMongoDBMemoryManager write idempotency (P0.1)[2m > [22m[2macknowledges the write when the staged job release throws after commit (W08)
+[22m[39m12:27:06.541 [memory:mongodb] warn: staged extraction job release failed for extraction-evt-new-attempt; leaving the outbox marker set for the repair pass: Error: release update exhausted retries
+
+[90mstderr[2m | src/mongodb-manager-write.test.ts[2m > [22m[2mMongoDBMemoryManager writeConversationEventsBatch (P3.9)[2m > [22m[2mamortizes a batch into one insertMany/bulkWrite pass with per-item receipts
+[22m[39m12:27:06.542 [memory:mongodb:cost-ledger] warn: cost ledger write failed {"agentId":"agent-1","kind":"indexing","error":"db.collection is not a function"}
+
+[90mstderr[2m | src/mongodb-manager-write.test.ts[2m > [22m[2mMongoDBMemoryManager writeConversationEventsBatch (P3.9)[2m > [22m[2mreplays a known idempotency key from ONE batched lookup and writes the rest
+[22m[39m12:27:06.544 [memory:mongodb:cost-ledger] warn: cost ledger write failed {"agentId":"agent-1","kind":"indexing","error":"db.collection is not a function"}
+
+[90mstderr[2m | src/mongodb-manager-write.test.ts[2m > [22m[2mMongoDBMemoryManager writeConversationEventsBatch (P3.9)[2m > [22m[2macknowledges a keyless durable-exists receipt as a replay and still converges projection and jobs (W09)
+[22m[39m12:27:06.545 [memory:mongodb:cost-ledger] warn: cost ledger write failed {"agentId":"agent-1","kind":"indexing","error":"db.collection is not a function"}
+
+[90mstderr[2m | src/mongodb-manager-write.test.ts[2m > [22m[2mMongoDBMemoryManager writeConversationEventsBatch (P3.9)[2m > [22m[2mevaluates automatic episode triggers once per scope identity in a batch
+[22m[39m12:27:06.546 [memory:mongodb:cost-ledger] warn: cost ledger write failed {"agentId":"agent-1","kind":"indexing","error":"db.collection is not a function"}
+
+[90mstderr[2m | src/mongodb-manager-write.test.ts[2m > [22m[2mMongoDBMemoryManager writeConversationEventsBatch (P3.9)[2m > [22m[2mmaps key+payload mismatch to a per-item conflict receipt; the sibling writes
+[22m[39m12:27:06.546 [memory:mongodb:cost-ledger] warn: cost ledger write failed {"agentId":"agent-1","kind":"indexing","error":"db.collection is not a function"}
+
+[90mstdout[2m | src/mongodb-manager-write-state.test.ts[2m > [22m[2mwriteConversationEvent — collection state[2m > [22m[2mpersists the canonical event, projects the chunk, stages+releases the extraction job, and aggregates lane coverage
+[22m[39m12:27:06.546 [memory:mongodb:events] info: event written: 23cfc655-19ce-46d1-a053-8544195d4e26 role=user
+
+[90mstderr[2m | src/mongodb-manager-write.test.ts[2m > [22m[2mMongoDBMemoryManager writeConversationEventsBatch (P3.9)[2m > [22m[2misolates a per-item write failure without failing the batch
+[22m[39m12:27:06.548 [memory:mongodb:cost-ledger] warn: cost ledger write failed {"agentId":"agent-1","kind":"indexing","error":"db.collection is not a function"}
+
+[90mstderr[2m | src/mongodb-manager-write.test.ts[2m > [22m[2mMongoDBMemoryManager writeConversationEventsBatch (P3.9)[2m > [22m[2mleaves the outbox marker armed when the batch job insert fails — the backstop repair re-stages (C-023)
+[22m[39m12:27:06.548 [memory:mongodb:cost-ledger] warn: cost ledger write failed {"agentId":"agent-1","kind":"indexing","error":"db.collection is not a function"}
+
+[90mstderr[2m | src/mongodb-manager-write.test.ts[2m > [22m[2mMongoDBMemoryManager writeConversationEventsBatch (P3.9)[2m > [22m[2mleaves the outbox marker armed when the batch job insert fails — the backstop repair re-stages (C-023)
+[22m[39m12:27:06.548 [memory:mongodb] warn: batch extraction job insert failed for 7a410d70-f3f2-4bd1-92b9-20a410d58728; leaving the outbox marker for the repair pass: forced batch job insert failure
+12:27:06.548 [memory:mongodb] warn: batch extraction job insert failed for 570128de-9267-460d-833a-01d87e8a6aa5; leaving the outbox marker for the repair pass: forced batch job insert failure
+
+[90mstdout[2m | src/mongodb-manager-write-state.test.ts[2m > [22m[2mwriteConversationEvent — collection state[2m > [22m[2mreplays the original receipt for a duplicate idempotency key — the collection holds exactly ONE event
+[22m[39m12:27:06.557 [memory:mongodb:events] info: event written: c66dd70a-0386-439b-ac08-d7486687914a role=user
+
+[90mstdout[2m | src/mongodb-manager-write-state.test.ts[2m > [22m[2mwriteConversationEvent — collection state[2m > [22m[2mrejects key reuse with a different payload (IdempotencyConflictError) and stores nothing new
+[22m[39m12:27:06.558 [memory:mongodb:events] info: event written: 5d2f6c4f-2aaa-423e-8c41-e56fb8822e09 role=user
+
+[90mstdout[2m | src/mongodb-manager-write-state.test.ts[2m > [22m[2mwriteConversationEventsBatch — collection state[2m > [22m[2mpersists every event with per-item receipts and one aggregated lane-coverage update
+[22m[39m12:27:06.559 [memory:mongodb:events] info: event batch written: 3 event(s)
+
+[90mstderr[2m | src/mongodb-manager-write.test.ts[2m > [22m[2mMongoDBMemoryManager writeConversationEventsBatch (P3.9)[2m > [22m[2mqueues the whole batch behind a previously queued write
+[22m[39m12:27:06.560 [memory:mongodb:cost-ledger] warn: cost ledger write failed {"agentId":"agent-1","kind":"indexing","error":"db.collection is not a function"}
+
+[90mstdout[2m | src/mongodb-manager-write-state.test.ts[2m > [22m[2mwriteConversationEventsBatch — collection state[2m > [22m[2mreplays a pre-existing key inside the batch without duplicating the event
+[22m[39m12:27:06.560 [memory:mongodb:events] info: event written: 90736466-b61c-4d8e-a621-ecbc01552f38 role=user
+
+[90mstdout[2m | src/mongodb-manager-write-state.test.ts[2m > [22m[2mwriteConversationEventsBatch — collection state[2m > [22m[2mreplays a pre-existing key inside the batch without duplicating the event
+[22m[39m12:27:06.561 [memory:mongodb:events] info: event batch written: 1 event(s)
+
+[90mstderr[2m | src/mongodb-manager-write.test.ts[2m > [22m[2mReceipts parity: batch vs single write (UU-3)[2m > [22m[2msuccess: the batch receipt carries every field the single receipt carries
+[22m[39m12:27:06.561 [memory:mongodb:cost-ledger] warn: cost ledger write failed {"agentId":"agent-1","kind":"indexing","error":"db.collection is not a function"}
+
+[90mstderr[2m | src/mongodb-manager-write.test.ts[2m > [22m[2mReceipts parity: batch vs single write (UU-3)[2m > [22m[2msuccess: the batch receipt carries every field the single receipt carries
+[22m[39m12:27:06.561 [memory:mongodb:cost-ledger] warn: cost ledger write failed {"agentId":"agent-1","kind":"indexing","error":"db.collection is not a function"}
+
+[90mstdout[2m | src/mongodb-manager-write-state.test.ts[2m > [22m[2mwriteConversationEventsBatch — collection state[2m > [22m[2mcollapses a duplicated key inside one batch via the unique index (E11000 → replay)
+[22m[39m12:27:06.562 [memory:mongodb:events] info: event batch written: 2 event(s)
+
+[90mstdout[2m | src/mongodb-manager-write-state.test.ts[2m > [22m[2mwriteConversationEventsBatch — collection state[2m > [22m[2mreports a per-item IDEMPOTENCY_CONFLICT for key reuse with a different payload
+[22m[39m12:27:06.562 [memory:mongodb:events] info: event written: 8013ebb9-7cf1-4709-9e8e-1300e146e55f role=user
+
+[90mstdout[2m | src/mongodb-manager-write-state.test.ts[2m > [22m[2mP0.1 regression — post-persist failure does not produce a client-visible duplicate[2m > [22m[2ma chunk-projection failure after the event insert degrades to a diagnostic — the write is acknowledged and a same-key retry still replays (W08)
+[22m[39m12:27:06.563 [memory:mongodb:events] info: event written: 98d809c9-ecfa-41ff-aabf-dc3835b775c2 role=user
+
+[90mstderr[2m | src/mongodb-manager-write-state.test.ts[2m > [22m[2mP0.1 regression — post-persist failure does not produce a client-visible duplicate[2m > [22m[2ma chunk-projection failure after the event insert degrades to a diagnostic — the write is acknowledged and a same-key retry still replays (W08)
+[22m[39m12:27:06.563 [memory:mongodb] warn: chunk projection failed for durable event 98d809c9-ecfa-41ff-aabf-dc3835b775c2; leaving it unprojected for the repair pass: Error: injected chunk projection failure
+
+[90mstdout[2m | src/mongodb-manager-write-state.test.ts[2m > [22m[2mwriteConversationEvent — TTL expiry propagation onto chunks (C-005)[2m > [22m[2mpersists the event AND its chunk with the SAME explicit expiresAt (single write handoff)
+[22m[39m12:27:06.564 [memory:mongodb:events] info: event written: 6b1ac862-ce42-45b8-90da-061b80f92894 role=user
+
+[90mstdout[2m | src/mongodb-manager-write-state.test.ts[2m > [22m[2mwriteConversationEvent — TTL expiry propagation onto chunks (C-005)[2m > [22m[2mleaves both event and chunk expiry-free when no retention applies
+[22m[39m12:27:06.564 [memory:mongodb:events] info: event written: 3490cca0-389d-47b8-83bb-2b55b25a119a role=user
+
+ [32m✓[39m src/mongodb-manager-write.test.ts [2m([22m[2m33 tests[22m[2m)[22m[32m 32[2mms[22m[39m
+[90mstdout[2m | src/mongodb-manager-write-state.test.ts[2m > [22m[2mwriteConversationEvent — TTL expiry propagation onto chunks (C-005)[2m > [22m[2mpropagates a per-item expiry through the batch write handoff
+[22m[39m12:27:06.565 [memory:mongodb:events] info: event batch written: 2 event(s)
+
+ [32m✓[39m src/mongodb-manager-write-state.test.ts [2m([22m[2m14 tests[22m[2m)[22m[32m 23[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m4 passed[39m[22m[90m (4)[39m
+[2m      Tests [22m [1m[32m116 passed[39m[22m[90m (116)[39m
+[2m   Start at [22m 12:27:05
+[2m   Duration [22m 918ms[2m (transform 1.48s, setup 0ms, import 1.88s, tests 514ms, environment 0ms)[22m
+
