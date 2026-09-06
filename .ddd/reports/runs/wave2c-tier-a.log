@@ -1,0 +1,1328 @@
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/packages/memory-engine[39m
+
+ [32m✓[39m src/mongodb-rankfusion-score.e2e.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 2219[2mms[22m[39m
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)
+[22m[39m18:51:52.228 [memory:mongodb:schema] info: created collection jobs_chunks
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)
+[22m[39m18:51:52.238 [memory:mongodb:schema] info: created collection jobs_files
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)
+[22m[39m18:51:52.244 [memory:mongodb:schema] info: created collection jobs_meta
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)
+[22m[39m18:51:52.249 [memory:mongodb:schema] info: created collection jobs_knowledge_base
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)
+[22m[39m18:51:52.255 [memory:mongodb:schema] info: created collection jobs_kb_chunks
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)
+[22m[39m18:51:52.260 [memory:mongodb:schema] info: created collection jobs_structured_mem
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)
+[22m[39m18:51:52.266 [memory:mongodb:schema] info: created collection jobs_structured_mem_revisions
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)
+[22m[39m18:51:52.271 [memory:mongodb:schema] info: created collection jobs_procedures
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)
+[22m[39m18:51:52.278 [memory:mongodb:schema] info: created collection jobs_procedure_revisions
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)
+[22m[39m18:51:52.283 [memory:mongodb:schema] info: created collection jobs_relevance_runs
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)
+[22m[39m18:51:52.288 [memory:mongodb:schema] info: created collection jobs_relevance_artifacts
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)
+[22m[39m18:51:52.294 [memory:mongodb:schema] info: created collection jobs_relevance_regressions
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)
+[22m[39m18:51:52.299 [memory:mongodb:schema] info: created collection jobs_events
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)
+[22m[39m18:51:52.306 [memory:mongodb:schema] info: created collection jobs_entities
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)
+[22m[39m18:51:52.311 [memory:mongodb:schema] info: created collection jobs_relations
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)
+[22m[39m18:51:52.316 [memory:mongodb:schema] info: created collection jobs_entity_links
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)
+[22m[39m18:51:52.321 [memory:mongodb:schema] info: created collection jobs_episodes
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)
+[22m[39m18:51:52.326 [memory:mongodb:schema] info: created collection jobs_ingest_runs
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)
+[22m[39m18:51:52.332 [memory:mongodb:schema] info: created collection jobs_projection_runs
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)
+[22m[39m18:51:52.338 [memory:mongodb:schema] info: created collection jobs_query_cache
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)
+[22m[39m18:51:52.343 [memory:mongodb:schema] info: created collection jobs_memory_mutations
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)
+[22m[39m18:51:52.347 [memory:mongodb:schema] info: created collection jobs_lane_coverage
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)
+[22m[39m18:51:52.351 [memory:mongodb:schema] info: created collection jobs_consolidation_runs
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)
+[22m[39m18:51:52.356 [memory:mongodb:schema] info: created collection jobs_recall_traces
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)
+[22m[39m18:51:52.361 [memory:mongodb:schema] info: created collection jobs_memory_jobs
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)
+[22m[39m18:51:52.367 [memory:mongodb:schema] info: created collection jobs_session_chunks
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)
+[22m[39m18:51:52.374 [memory:mongodb:schema] info: created collection jobs_memory_quarantine
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)
+[22m[39m18:51:52.378 [memory:mongodb:schema] info: created collection jobs_memory_cost_ledger
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)
+[22m[39m18:51:52.387 [memory:mongodb:schema] info: created time series collection jobs_memory_telemetry
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)
+[22m[39m18:51:52.387 [memory:mongodb:schema] info: created telemetry collection jobs_memory_telemetry
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)
+[22m[39m18:51:52.391 [memory:mongodb:schema] info: created time series collection jobs_access_events
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)
+[22m[39m18:51:52.391 [memory:mongodb:schema] info: created access events collection jobs_access_events
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)
+[22m[39m18:51:52.394 [memory:mongodb:schema] info: applied schema validation to jobs_chunks
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)
+[22m[39m18:51:52.396 [memory:mongodb:schema] info: applied schema validation to jobs_knowledge_base
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)
+[22m[39m18:51:52.398 [memory:mongodb:schema] info: applied schema validation to jobs_kb_chunks
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)
+[22m[39m18:51:52.400 [memory:mongodb:schema] info: applied schema validation to jobs_structured_mem
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)
+[22m[39m18:51:52.403 [memory:mongodb:schema] info: applied schema validation to jobs_structured_mem_revisions
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)
+[22m[39m18:51:52.404 [memory:mongodb:schema] info: applied schema validation to jobs_procedures
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)
+[22m[39m18:51:52.406 [memory:mongodb:schema] info: applied schema validation to jobs_procedure_revisions
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)
+[22m[39m18:51:52.408 [memory:mongodb:schema] info: applied schema validation to jobs_relevance_runs
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)
+[22m[39m18:51:52.409 [memory:mongodb:schema] info: applied schema validation to jobs_relevance_artifacts
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)
+[22m[39m18:51:52.410 [memory:mongodb:schema] info: applied schema validation to jobs_relevance_regressions
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)
+[22m[39m18:51:52.412 [memory:mongodb:schema] info: applied schema validation to jobs_events
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)
+[22m[39m18:51:52.413 [memory:mongodb:schema] info: applied schema validation to jobs_entities
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)
+[22m[39m18:51:52.414 [memory:mongodb:schema] info: applied schema validation to jobs_relations
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)
+[22m[39m18:51:52.417 [memory:mongodb:schema] info: applied schema validation to jobs_entity_links
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)
+[22m[39m18:51:52.418 [memory:mongodb:schema] info: applied schema validation to jobs_episodes
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)
+[22m[39m18:51:52.419 [memory:mongodb:schema] info: applied schema validation to jobs_ingest_runs
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)
+[22m[39m18:51:52.420 [memory:mongodb:schema] info: applied schema validation to jobs_projection_runs
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)
+[22m[39m18:51:52.421 [memory:mongodb:schema] info: applied schema validation to jobs_query_cache
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)
+[22m[39m18:51:52.423 [memory:mongodb:schema] info: applied schema validation to jobs_memory_mutations
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)
+[22m[39m18:51:52.424 [memory:mongodb:schema] info: applied schema validation to jobs_recall_traces
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)
+[22m[39m18:51:52.426 [memory:mongodb:schema] info: applied schema validation to jobs_memory_jobs
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)
+[22m[39m18:51:52.429 [memory:mongodb:schema] info: applied schema validation to jobs_memory_quarantine
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)
+[22m[39m18:51:52.429 [memory:mongodb:schema] info: applied schema validation to jobs_files
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)[2m > [22m[2mapplies one typed-relation side effect when replacement workers overlap
+[22m[39m18:51:52.486 [memory:mongodb:graph] info: relation created: old-owner -[owns]-> project-39cfa132-9637-451a-9f3a-c29fd6d05f7a
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)[2m > [22m[2mapplies one typed-relation side effect when replacement workers overlap
+[22m[39m18:51:52.494 [memory:mongodb:graph] info: relation created: new-owner -[owns]-> project-39cfa132-9637-451a-9f3a-c29fd6d05f7a
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)[2m > [22m[2mapplies one typed-relation side effect when replacement workers overlap
+[22m[39m18:51:52.499 [memory:mongodb:graph] info: relation updated: new-owner -[owns]-> project-39cfa132-9637-451a-9f3a-c29fd6d05f7a
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)[2m > [22m[2mapplies one typed-relation side effect when replacement workers overlap
+[22m[39m18:51:52.503 [memory:mongodb:graph] info: relation updated: new-owner -[owns]-> project-39cfa132-9637-451a-9f3a-c29fd6d05f7a
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)[2m > [22m[2mapplies one typed-relation side effect when replacement workers overlap
+[22m[39m18:51:52.505 [memory:mongodb:graph] info: relation updated: new-owner -[owns]-> project-39cfa132-9637-451a-9f3a-c29fd6d05f7a
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)[2m > [22m[2mapplies one typed-relation side effect when replacement workers overlap
+[22m[39m18:51:52.507 [memory:mongodb:graph] info: relation updated: new-owner -[owns]-> project-39cfa132-9637-451a-9f3a-c29fd6d05f7a
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)[2m > [22m[2mapplies one typed-relation side effect when replacement workers overlap
+[22m[39m18:51:52.510 [memory:mongodb:graph] info: relation updated: new-owner -[owns]-> project-39cfa132-9637-451a-9f3a-c29fd6d05f7a
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)[2m > [22m[2mapplies one typed-relation side effect when replacement workers overlap
+[22m[39m18:51:52.512 [memory:mongodb:graph] info: relation updated: new-owner -[owns]-> project-39cfa132-9637-451a-9f3a-c29fd6d05f7a
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)[2m > [22m[2mapplies one typed-relation side effect when replacement workers overlap
+[22m[39m18:51:52.516 [memory:mongodb:graph] info: relation updated: new-owner -[owns]-> project-39cfa132-9637-451a-9f3a-c29fd6d05f7a
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)[2m > [22m[2mapplies one typed-relation side effect when replacement workers overlap
+[22m[39m18:51:52.517 [memory:mongodb:graph] info: relation updated: new-owner -[owns]-> project-39cfa132-9637-451a-9f3a-c29fd6d05f7a
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)[2m > [22m[2mapplies one typed-relation side effect when replacement workers overlap
+[22m[39m18:51:52.523 [memory:mongodb:graph] info: relation updated: new-owner -[owns]-> project-39cfa132-9637-451a-9f3a-c29fd6d05f7a
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)[2m > [22m[2mapplies one typed-relation side effect when replacement workers overlap
+[22m[39m18:51:52.531 [memory:mongodb:graph] info: relation updated: new-owner -[owns]-> project-39cfa132-9637-451a-9f3a-c29fd6d05f7a
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)[2m > [22m[2mapplies one typed-relation side effect when replacement workers overlap
+[22m[39m18:51:52.535 [memory:mongodb:graph] info: relation updated: new-owner -[owns]-> project-39cfa132-9637-451a-9f3a-c29fd6d05f7a
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)[2m > [22m[2mapplies one structured and procedure promotion when replacement workers overlap
+[22m[39m18:51:52.543 [memory:mongodb:structured] info: structured memory created: type=fact key=fact-f***6d4d revision=1
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)[2m > [22m[2mapplies one structured and procedure promotion when replacement workers overlap
+[22m[39m18:51:52.555 [memory:mongodb:procedures] info: procedure created: id=procedure-eaed3c85-5226-4a26-86bb-239f5ff4a1b6 revision=1
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)[2m > [22m[2mcommits the canonical event and staged job as one transaction
+[22m[39m18:51:52.571 [memory:mongodb:events] info: event written: event-transaction-commit-1aff8713-e14a-447c-9538-e03ba1a3ebcb role=user
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)[2m > [22m[2maborts the canonical event when staging the job fails
+[22m[39m18:51:52.575 [memory:mongodb:events] info: event written: event-transaction-abort-ca759b42-5853-4685-b432-14f66fd81e9a role=user
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)[2m > [22m[2mrepairs a standalone crash from the canonical event outbox
+[22m[39m18:51:52.577 [memory:mongodb:events] info: event written: event-standalone-repair-f5d0fb90-ac8b-4fa5-8616-16886a5425a0 role=user
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)[2m > [22m[2mrepairs a standalone crash from the canonical event outbox
+[22m[39m18:51:52.589 [memory:mongodb:graph] info: extracted 2 entities and 1 relations from event content for agent=agent-905804a1-standalone-repair
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)[2m > [22m[2mbackstops batch-durable events that committed without extraction jobs (C-023)
+[22m[39m18:51:52.597 [memory:mongodb:events] info: event batch written: 2 event(s)
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)[2m > [22m[2mbackstops batch-durable events that committed without extraction jobs (C-023)
+[22m[39m18:51:52.610 [memory:mongodb:graph] info: extracted 2 entities and 1 relations from event content for agent=agent-905804a1-batch-backstop
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)[2m > [22m[2mbackstops batch-durable events that committed without extraction jobs (C-023)
+[22m[39m18:51:52.621 [memory:mongodb:graph] info: extracted 2 entities and 1 relations from event content for agent=agent-905804a1-batch-backstop
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)[2m > [22m[2mrecovers and executes staged outbox work through the public manager factory
+[22m[39m18:51:52.628 [memory:mongodb:events] info: event written: event-factory-startup-f44c492c-8993-4c15-92eb-8cf2897fed95 role=user
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)[2m > [22m[2mrecovers and executes staged outbox work through the public manager factory
+[22m[39m18:51:52.629 [memory:mongodb] info: connecting to MongoDB: mongodb://127.0.0.1:27019/?directConnection=true (db=memongo_memory_jobs_a21c610c)
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)[2m > [22m[2mrecovers and executes staged outbox work through the public manager factory
+[22m[39m18:51:52.643 [memory:mongodb:schema] info: applied schema validation to jobs_chunks
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)[2m > [22m[2mrecovers and executes staged outbox work through the public manager factory
+[22m[39m18:51:52.645 [memory:mongodb:schema] info: applied schema validation to jobs_knowledge_base
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)[2m > [22m[2mrecovers and executes staged outbox work through the public manager factory
+[22m[39m18:51:52.647 [memory:mongodb:schema] info: applied schema validation to jobs_kb_chunks
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)[2m > [22m[2mrecovers and executes staged outbox work through the public manager factory
+[22m[39m18:51:52.649 [memory:mongodb:schema] info: applied schema validation to jobs_structured_mem
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)[2m > [22m[2mrecovers and executes staged outbox work through the public manager factory
+[22m[39m18:51:52.652 [memory:mongodb:schema] info: applied schema validation to jobs_structured_mem_revisions
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)[2m > [22m[2mrecovers and executes staged outbox work through the public manager factory
+[22m[39m18:51:52.654 [memory:mongodb:schema] info: applied schema validation to jobs_procedures
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)[2m > [22m[2mrecovers and executes staged outbox work through the public manager factory
+[22m[39m18:51:52.655 [memory:mongodb:schema] info: applied schema validation to jobs_procedure_revisions
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)[2m > [22m[2mrecovers and executes staged outbox work through the public manager factory
+[22m[39m18:51:52.656 [memory:mongodb:schema] info: applied schema validation to jobs_relevance_runs
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)[2m > [22m[2mrecovers and executes staged outbox work through the public manager factory
+[22m[39m18:51:52.657 [memory:mongodb:schema] info: applied schema validation to jobs_relevance_artifacts
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)[2m > [22m[2mrecovers and executes staged outbox work through the public manager factory
+[22m[39m18:51:52.659 [memory:mongodb:schema] info: applied schema validation to jobs_relevance_regressions
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)[2m > [22m[2mrecovers and executes staged outbox work through the public manager factory
+[22m[39m18:51:52.660 [memory:mongodb:schema] info: applied schema validation to jobs_events
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)[2m > [22m[2mrecovers and executes staged outbox work through the public manager factory
+[22m[39m18:51:52.661 [memory:mongodb:schema] info: applied schema validation to jobs_entities
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)[2m > [22m[2mrecovers and executes staged outbox work through the public manager factory
+[22m[39m18:51:52.663 [memory:mongodb:schema] info: applied schema validation to jobs_relations
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)[2m > [22m[2mrecovers and executes staged outbox work through the public manager factory
+[22m[39m18:51:52.665 [memory:mongodb:schema] info: applied schema validation to jobs_entity_links
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)[2m > [22m[2mrecovers and executes staged outbox work through the public manager factory
+[22m[39m18:51:52.666 [memory:mongodb:schema] info: applied schema validation to jobs_episodes
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)[2m > [22m[2mrecovers and executes staged outbox work through the public manager factory
+[22m[39m18:51:52.668 [memory:mongodb:schema] info: applied schema validation to jobs_ingest_runs
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)[2m > [22m[2mrecovers and executes staged outbox work through the public manager factory
+[22m[39m18:51:52.670 [memory:mongodb:schema] info: applied schema validation to jobs_projection_runs
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)[2m > [22m[2mrecovers and executes staged outbox work through the public manager factory
+[22m[39m18:51:52.671 [memory:mongodb:schema] info: applied schema validation to jobs_query_cache
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)[2m > [22m[2mrecovers and executes staged outbox work through the public manager factory
+[22m[39m18:51:52.674 [memory:mongodb:schema] info: applied schema validation to jobs_memory_mutations
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)[2m > [22m[2mrecovers and executes staged outbox work through the public manager factory
+[22m[39m18:51:52.675 [memory:mongodb:schema] info: applied schema validation to jobs_recall_traces
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)[2m > [22m[2mrecovers and executes staged outbox work through the public manager factory
+[22m[39m18:51:52.676 [memory:mongodb:schema] info: applied schema validation to jobs_memory_jobs
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)[2m > [22m[2mrecovers and executes staged outbox work through the public manager factory
+[22m[39m18:51:52.677 [memory:mongodb:schema] info: applied schema validation to jobs_memory_quarantine
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)[2m > [22m[2mrecovers and executes staged outbox work through the public manager factory
+[22m[39m18:51:52.678 [memory:mongodb:schema] info: applied schema validation to jobs_files
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)[2m > [22m[2mrecovers and executes staged outbox work through the public manager factory
+[22m[39m18:51:52.707 [memory:mongodb:capabilities] info: capability rerank-stage disabled: blocked on Atlas Search Preview; Atlas-managed deployments only; fix-plan-2026-08-03 P3.6 — adopt when $rerank reaches GA
+18:51:52.709 [memory:mongodb:capabilities] info: capability lexical-prefilters disabled: blocked on Atlas Search Preview; fix-plan-2026-08-03 P3.6 — adopt when lexical prefilters reach GA
+18:51:52.709 [memory:mongodb:capabilities] info: capability flat-indexes disabled: requires MongoDB >= 8.3.7; fix-plan-2026-08-03 P3.6 — drop the env opt-in when flat indexingMethod is GA
+18:51:52.709 [memory:mongodb:schema] info: detected capabilities: {"vectorSearch":false,"textSearch":false,"scoreFusion":true,"rankFusion":true,"storedSource":false,"vectorIndexMethod":false,"capabilityGates":{"vector-stored-source":true,"autoembed-quantization":true,"rerank-stage":false,"lexical-prefilters":false,"flat-indexes":false}}
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)[2m > [22m[2mrecovers and executes staged outbox work through the public manager factory
+[22m[39m18:51:52.709 [memory:mongodb] info: capabilities: {"vectorSearch":false,"textSearch":false,"scoreFusion":true,"rankFusion":true,"storedSource":false,"vectorIndexMethod":false,"capabilityGates":{"vector-stored-source":true,"autoembed-quantization":true,"rerank-stage":false,"lexical-prefilters":false,"flat-indexes":false}}
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)[2m > [22m[2mrecovers and executes staged outbox work through the public manager factory
+[22m[39m18:51:52.967 [memory:mongodb:schema] info: created chunks text search index
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)[2m > [22m[2mrecovers and executes staged outbox work through the public manager factory
+[22m[39m18:51:52.998 [memory:mongodb:schema] info: created chunks vector search index
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)[2m > [22m[2mrecovers and executes staged outbox work through the public manager factory
+[22m[39m18:51:53.029 [memory:mongodb:schema] info: created kb_chunks text search index
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)[2m > [22m[2mrecovers and executes staged outbox work through the public manager factory
+[22m[39m18:51:53.061 [memory:mongodb:schema] info: created kb_chunks vector search index
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)[2m > [22m[2mrecovers and executes staged outbox work through the public manager factory
+[22m[39m18:51:53.093 [memory:mongodb:schema] info: created structured_mem text search index
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)[2m > [22m[2mrecovers and executes staged outbox work through the public manager factory
+[22m[39m18:51:53.124 [memory:mongodb:schema] info: created structured_mem vector search index
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)[2m > [22m[2mrecovers and executes staged outbox work through the public manager factory
+[22m[39m18:51:53.156 [memory:mongodb:schema] info: created procedures text search index
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)[2m > [22m[2mrecovers and executes staged outbox work through the public manager factory
+[22m[39m18:51:53.186 [memory:mongodb:schema] info: created procedures vector search index
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)[2m > [22m[2mrecovers and executes staged outbox work through the public manager factory
+[22m[39m18:51:53.217 [memory:mongodb:schema] info: created events text search index
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)[2m > [22m[2mrecovers and executes staged outbox work through the public manager factory
+[22m[39m18:51:53.250 [memory:mongodb:schema] info: created events vector search index
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)[2m > [22m[2mrecovers and executes staged outbox work through the public manager factory
+[22m[39m18:51:53.279 [memory:mongodb:schema] info: created query_cache vector search index
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)[2m > [22m[2mrecovers and executes staged outbox work through the public manager factory
+[22m[39m18:51:53.310 [memory:mongodb:schema] info: created session_chunks text search index
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)[2m > [22m[2mrecovers and executes staged outbox work through the public manager factory
+[22m[39m18:51:53.341 [memory:mongodb:schema] info: created session_chunks vector search index
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)[2m > [22m[2mrecovers and executes staged outbox work through the public manager factory
+[22m[39m18:51:53.372 [memory:mongodb:schema] info: created entity autocomplete search index
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)[2m > [22m[2mrecovers and executes staged outbox work through the public manager factory
+[22m[39m18:51:53.403 [memory:mongodb:schema] info: created episode autocomplete search index
+
+[90mstderr[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)[2m > [22m[2mrecovers and executes staged outbox work through the public manager factory
+[22m[39m18:51:53.433 [memory:mongodb] warn: native event bitemporal prefiltering remains disabled until the exact index definition and event representation are ready
+18:51:53.433 [memory:mongodb] warn: search indexes not fully queryable after bootstrap wait: jobs_chunks pending=[jobs_chunks_text,jobs_chunks_vector] failed=[none]; jobs_kb_chunks pending=[jobs_kb_chunks_text,jobs_kb_chunks_vector] failed=[none]; jobs_structured_mem pending=[jobs_structured_mem_text,jobs_structured_mem_vector] failed=[none]; jobs_procedures pending=[jobs_procedures_text,jobs_procedures_vector] failed=[none]; jobs_events pending=[jobs_events_text,jobs_events_vector] failed=[none]; jobs_session_chunks pending=[jobs_session_chunks_text,jobs_session_chunks_vector] failed=[none]; jobs_query_cache pending=[jobs_query_cache_vector] failed=[none]; jobs_entities pending=[entity_autocomplete] failed=[none]; jobs_episodes pending=[episode_autocomplete] failed=[none]
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)[2m > [22m[2mrecovers and executes staged outbox work through the public manager factory
+[22m[39m18:51:53.450 [memory:mongodb:capabilities] info: capability rerank-stage disabled: blocked on Atlas Search Preview; Atlas-managed deployments only; fix-plan-2026-08-03 P3.6 — adopt when $rerank reaches GA
+18:51:53.450 [memory:mongodb:capabilities] info: capability lexical-prefilters disabled: blocked on Atlas Search Preview; fix-plan-2026-08-03 P3.6 — adopt when lexical prefilters reach GA
+18:51:53.450 [memory:mongodb:capabilities] info: capability flat-indexes disabled: requires MongoDB >= 8.3.7; fix-plan-2026-08-03 P3.6 — drop the env opt-in when flat indexingMethod is GA
+18:51:53.450 [memory:mongodb:schema] info: detected capabilities: {"vectorSearch":false,"textSearch":false,"scoreFusion":true,"rankFusion":true,"storedSource":false,"vectorIndexMethod":false,"capabilityGates":{"vector-stored-source":true,"autoembed-quantization":true,"rerank-stage":false,"lexical-prefilters":false,"flat-indexes":false}}
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)[2m > [22m[2mrecovers and executes staged outbox work through the public manager factory
+[22m[39m18:51:58.440 [memory:mongodb:schema] info: ensured 45 standard indexes
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)[2m > [22m[2mrecovers and executes staged outbox work through the public manager factory
+[22m[39m18:51:58.448 [memory:mongodb:sync] info: sync: found 0 memory files on disk (reason=startup)
+18:51:58.448 [memory:mongodb:sync] info: sync: 0/0 memory files need re-indexing
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)[2m > [22m[2mrecovers and executes staged outbox work through the public manager factory
+[22m[39m18:51:58.454 [memory:mongodb:sync] info: sync complete: memory=0 conversation=0 chunks=0 stale=0 failed=0 enumerationComplete=true
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)[2m > [22m[2mrecovers and executes staged outbox work through the public manager factory
+[22m[39m18:51:58.458 [memory:mongodb] info: sync complete: processed=0+0 chunks=0+0 totals=0 files, 0 chunks
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)[2m > [22m[2mrecovers and executes staged outbox work through the public manager factory
+[22m[39m18:51:58.475 [memory:mongodb:events] info: projected 1 chunks from 1 events for agent=agent-905804a1-factory-startup
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)[2m > [22m[2mrecovers and executes staged outbox work through the public manager factory
+[22m[39m18:51:58.476 [memory:mongodb] info: repaired 1 chunks from 1 canonical events during startup
+18:51:58.478 [memory:mongodb] info: ready: profile=atlas-local-preview embedding=automated fusion=scoreFusion caps={"vectorSearch":false,"textSearch":false,"scoreFusion":true,"rankFusion":true,"storedSource":false,"vectorIndexMethod":false,"capabilityGates":{"vector-stored-source":true,"autoembed-quantization":true,"rerank-stage":false,"lexical-prefilters":false,"flat-indexes":false}}
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)[2m > [22m[2mrecovers and executes staged outbox work through the public manager factory
+[22m[39m18:51:58.512 [memory:mongodb:graph] info: extracted 2 entities and 1 relations from event content for agent=agent-905804a1-factory-startup
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)[2m > [22m[2mrecovers and executes staged outbox work through the public manager factory
+[22m[39m18:51:58.556 [memory:mongodb:graph] info: extracted 2 entities and 1 relations from event content for agent=agent-905804a1-factory-startup
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)[2m > [22m[2mrecovers and executes staged outbox work through the public manager factory
+[22m[39m18:51:58.586 [memory:mongodb:consolidator] info: orient: 1 unprocessed, 1 roles, 1 top scopes
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)[2m > [22m[2mrecovers and executes staged outbox work through the public manager factory
+[22m[39m18:51:58.967 [memory:mongodb:graph] info: extracted 2 entities and 1 relations from event content for agent=agent-905804a1-factory-startup
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)[2m > [22m[2mrecovers and executes staged outbox work through the public manager factory
+[22m[39m18:51:58.972 [memory:mongodb:consolidator] info: entity extraction completed for 1 events in dreamer run=ddf8c090-d34b-4446-a181-78c08443a885
+18:51:58.973 [memory:mongodb:consolidator] info: deduction phase: no LLM configured, skipping
+18:51:58.973 [memory:mongodb:consolidator] info: induction phase: no LLM configured, skipping
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)[2m > [22m[2mrecovers and executes staged outbox work through the public manager factory
+[22m[39m18:51:58.982 [memory:mongodb:consolidator] info: marked 1 events as dreamer-processed (runId=ddf8c090-d34b-4446-a181-78c08443a885)
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)[2m > [22m[2mrecovers and executes staged outbox work through the public manager factory
+[22m[39m18:51:58.986 [memory:mongodb:consolidator] info: consolidation run=ddf8c090-d34b-4446-a181-78c08443a885 completed: 1 events processed, 0 facts promoted, 0 pruned, 404ms
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)[2m > [22m[2mreplays foreground entity projection without double-counting an event
+[22m[39m18:51:59.022 [memory:mongodb:graph] info: extracted 2 entities and 1 relations from event content for agent=agent-905804a1-entity-replay
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)[2m > [22m[2mreplays foreground entity projection without double-counting an event
+[22m[39m18:51:59.030 [memory:mongodb:graph] info: extracted 2 entities and 1 relations from event content for agent=agent-905804a1-entity-replay
+
+[90mstdout[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)[2m > [22m[2mreplays foreground entity projection without double-counting an event
+[22m[39m18:51:59.048 [memory:mongodb:graph] info: extracted 2 entities and 1 relations from event content for agent=agent-905804a1-entity-replay
+
+[90mstderr[2m | src/mongodb-memory-jobs.e2e.test.ts[2m > [22m[2mdurable memory job leases (live MongoDB)[2m > [22m[2mretries a failed job until it exhausts its attempt budget (C4)
+[22m[39m18:51:59.094 [memory:mongodb:memory-jobs] error: memory job dead-lettered after 3 attempts: jobId=extraction-retry-6700cf09-ee73-4d9e-8af1-b43783fa44c5 jobType=unknown error=transient failure 2
+
+ [32m✓[39m src/mongodb-memory-jobs.e2e.test.ts [2m([22m[2m18 tests[22m[2m)[22m[33m 7054[2mms[22m[39m
+     [33m[2m✓[22m[39m recovers and executes staged outbox work through the public manager factory [33m 6383[2mms[22m[39m
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m18:51:59.581 [memory:mongodb:schema] info: created collection shared_chunks
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m18:51:59.589 [memory:mongodb:schema] info: created collection shared_files
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m18:51:59.595 [memory:mongodb:schema] info: created collection shared_meta
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m18:51:59.601 [memory:mongodb:schema] info: created collection shared_knowledge_base
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m18:51:59.608 [memory:mongodb:schema] info: created collection shared_kb_chunks
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m18:51:59.615 [memory:mongodb:schema] info: created collection shared_structured_mem
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m18:51:59.621 [memory:mongodb:schema] info: created collection shared_structured_mem_revisions
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m18:51:59.626 [memory:mongodb:schema] info: created collection shared_procedures
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m18:51:59.631 [memory:mongodb:schema] info: created collection shared_procedure_revisions
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m18:51:59.638 [memory:mongodb:schema] info: created collection shared_relevance_runs
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m18:51:59.645 [memory:mongodb:schema] info: created collection shared_relevance_artifacts
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m18:51:59.651 [memory:mongodb:schema] info: created collection shared_relevance_regressions
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m18:51:59.657 [memory:mongodb:schema] info: created collection shared_events
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m18:51:59.662 [memory:mongodb:schema] info: created collection shared_entities
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m18:51:59.667 [memory:mongodb:schema] info: created collection shared_relations
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m18:51:59.672 [memory:mongodb:schema] info: created collection shared_entity_links
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m18:51:59.678 [memory:mongodb:schema] info: created collection shared_episodes
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m18:51:59.684 [memory:mongodb:schema] info: created collection shared_ingest_runs
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m18:51:59.689 [memory:mongodb:schema] info: created collection shared_projection_runs
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m18:51:59.693 [memory:mongodb:schema] info: created collection shared_query_cache
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m18:51:59.697 [memory:mongodb:schema] info: created collection shared_memory_mutations
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m18:51:59.702 [memory:mongodb:schema] info: created collection shared_lane_coverage
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m18:51:59.709 [memory:mongodb:schema] info: created collection shared_consolidation_runs
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m18:51:59.715 [memory:mongodb:schema] info: created collection shared_recall_traces
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m18:51:59.720 [memory:mongodb:schema] info: created collection shared_memory_jobs
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m18:51:59.724 [memory:mongodb:schema] info: created collection shared_session_chunks
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m18:51:59.729 [memory:mongodb:schema] info: created collection shared_memory_quarantine
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m18:51:59.734 [memory:mongodb:schema] info: created collection shared_memory_cost_ledger
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m18:51:59.744 [memory:mongodb:schema] info: created time series collection shared_memory_telemetry
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m18:51:59.744 [memory:mongodb:schema] info: created telemetry collection shared_memory_telemetry
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m18:51:59.751 [memory:mongodb:schema] info: created time series collection shared_access_events
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m18:51:59.751 [memory:mongodb:schema] info: created access events collection shared_access_events
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m18:51:59.754 [memory:mongodb:schema] info: applied schema validation to shared_chunks
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m18:51:59.755 [memory:mongodb:schema] info: applied schema validation to shared_knowledge_base
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m18:51:59.757 [memory:mongodb:schema] info: applied schema validation to shared_kb_chunks
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m18:51:59.759 [memory:mongodb:schema] info: applied schema validation to shared_structured_mem
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m18:51:59.760 [memory:mongodb:schema] info: applied schema validation to shared_structured_mem_revisions
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m18:51:59.762 [memory:mongodb:schema] info: applied schema validation to shared_procedures
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m18:51:59.763 [memory:mongodb:schema] info: applied schema validation to shared_procedure_revisions
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m18:51:59.764 [memory:mongodb:schema] info: applied schema validation to shared_relevance_runs
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m18:51:59.766 [memory:mongodb:schema] info: applied schema validation to shared_relevance_artifacts
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m18:51:59.767 [memory:mongodb:schema] info: applied schema validation to shared_relevance_regressions
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m18:51:59.770 [memory:mongodb:schema] info: applied schema validation to shared_events
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m18:51:59.772 [memory:mongodb:schema] info: applied schema validation to shared_entities
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m18:51:59.774 [memory:mongodb:schema] info: applied schema validation to shared_relations
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m18:51:59.775 [memory:mongodb:schema] info: applied schema validation to shared_entity_links
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m18:51:59.777 [memory:mongodb:schema] info: applied schema validation to shared_episodes
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m18:51:59.778 [memory:mongodb:schema] info: applied schema validation to shared_ingest_runs
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m18:51:59.778 [memory:mongodb:schema] info: applied schema validation to shared_projection_runs
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m18:51:59.779 [memory:mongodb:schema] info: applied schema validation to shared_query_cache
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m18:51:59.781 [memory:mongodb:schema] info: applied schema validation to shared_memory_mutations
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m18:51:59.782 [memory:mongodb:schema] info: applied schema validation to shared_recall_traces
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m18:51:59.782 [memory:mongodb:schema] info: applied schema validation to shared_memory_jobs
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m18:51:59.784 [memory:mongodb:schema] info: applied schema validation to shared_memory_quarantine
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m18:51:59.785 [memory:mongodb:schema] info: applied schema validation to shared_files
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m18:52:00.270 [memory:mongodb:schema] info: ensured 45 standard indexes
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m18:52:00.287 [memory:mongodb:kb] info: KB ingest: processed=1 chunks=1 skipped=0 errors=0
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts
+[22m[39m18:52:00.301 [memory:mongodb:kb] info: KB ingest: processed=1 chunks=1 skipped=0 errors=0
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts[2m > [22m[2mKB tenant isolation (shared collection)[2m > [22m[2mlets two tenants ingest identical content without colliding
+[22m[39m18:52:00.324 [memory:mongodb:kb] info: KB ingest: processed=1 chunks=1 skipped=0 errors=0
+
+[90mstdout[2m | src/mongodb-kb-isolation.e2e.test.ts[2m > [22m[2mKB tenant isolation (shared collection)[2m > [22m[2mlets two tenants ingest identical content without colliding
+[22m[39m18:52:00.335 [memory:mongodb:kb] info: KB ingest: processed=1 chunks=1 skipped=0 errors=0
+
+ [32m✓[39m src/mongodb-kb-isolation.e2e.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 893[2mms[22m[39m
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m18:52:00.766 [memory:mongodb:schema] info: created collection temporal_chunks
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m18:52:00.775 [memory:mongodb:schema] info: created collection temporal_files
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m18:52:00.781 [memory:mongodb:schema] info: created collection temporal_meta
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m18:52:00.786 [memory:mongodb:schema] info: created collection temporal_knowledge_base
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m18:52:00.793 [memory:mongodb:schema] info: created collection temporal_kb_chunks
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m18:52:00.799 [memory:mongodb:schema] info: created collection temporal_structured_mem
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m18:52:00.805 [memory:mongodb:schema] info: created collection temporal_structured_mem_revisions
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m18:52:00.812 [memory:mongodb:schema] info: created collection temporal_procedures
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m18:52:00.818 [memory:mongodb:schema] info: created collection temporal_procedure_revisions
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m18:52:00.823 [memory:mongodb:schema] info: created collection temporal_relevance_runs
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m18:52:00.829 [memory:mongodb:schema] info: created collection temporal_relevance_artifacts
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m18:52:00.834 [memory:mongodb:schema] info: created collection temporal_relevance_regressions
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m18:52:00.840 [memory:mongodb:schema] info: created collection temporal_events
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m18:52:00.847 [memory:mongodb:schema] info: created collection temporal_entities
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m18:52:00.854 [memory:mongodb:schema] info: created collection temporal_relations
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m18:52:00.863 [memory:mongodb:schema] info: created collection temporal_entity_links
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m18:52:00.873 [memory:mongodb:schema] info: created collection temporal_episodes
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m18:52:00.880 [memory:mongodb:schema] info: created collection temporal_ingest_runs
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m18:52:00.886 [memory:mongodb:schema] info: created collection temporal_projection_runs
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m18:52:00.891 [memory:mongodb:schema] info: created collection temporal_query_cache
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m18:52:00.896 [memory:mongodb:schema] info: created collection temporal_memory_mutations
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m18:52:00.901 [memory:mongodb:schema] info: created collection temporal_lane_coverage
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m18:52:00.905 [memory:mongodb:schema] info: created collection temporal_consolidation_runs
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m18:52:00.911 [memory:mongodb:schema] info: created collection temporal_recall_traces
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m18:52:00.915 [memory:mongodb:schema] info: created collection temporal_memory_jobs
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m18:52:00.920 [memory:mongodb:schema] info: created collection temporal_session_chunks
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m18:52:00.925 [memory:mongodb:schema] info: created collection temporal_memory_quarantine
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m18:52:00.932 [memory:mongodb:schema] info: created collection temporal_memory_cost_ledger
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m18:52:00.941 [memory:mongodb:schema] info: created time series collection temporal_memory_telemetry
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m18:52:00.941 [memory:mongodb:schema] info: created telemetry collection temporal_memory_telemetry
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m18:52:00.948 [memory:mongodb:schema] info: created time series collection temporal_access_events
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m18:52:00.948 [memory:mongodb:schema] info: created access events collection temporal_access_events
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m18:52:00.952 [memory:mongodb:schema] info: applied schema validation to temporal_chunks
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m18:52:00.954 [memory:mongodb:schema] info: applied schema validation to temporal_knowledge_base
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m18:52:00.955 [memory:mongodb:schema] info: applied schema validation to temporal_kb_chunks
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m18:52:00.956 [memory:mongodb:schema] info: applied schema validation to temporal_structured_mem
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m18:52:00.958 [memory:mongodb:schema] info: applied schema validation to temporal_structured_mem_revisions
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m18:52:00.959 [memory:mongodb:schema] info: applied schema validation to temporal_procedures
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m18:52:00.961 [memory:mongodb:schema] info: applied schema validation to temporal_procedure_revisions
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m18:52:00.962 [memory:mongodb:schema] info: applied schema validation to temporal_relevance_runs
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m18:52:00.964 [memory:mongodb:schema] info: applied schema validation to temporal_relevance_artifacts
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m18:52:00.966 [memory:mongodb:schema] info: applied schema validation to temporal_relevance_regressions
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m18:52:00.968 [memory:mongodb:schema] info: applied schema validation to temporal_events
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m18:52:00.970 [memory:mongodb:schema] info: applied schema validation to temporal_entities
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m18:52:00.971 [memory:mongodb:schema] info: applied schema validation to temporal_relations
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m18:52:00.973 [memory:mongodb:schema] info: applied schema validation to temporal_entity_links
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m18:52:00.975 [memory:mongodb:schema] info: applied schema validation to temporal_episodes
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m18:52:00.976 [memory:mongodb:schema] info: applied schema validation to temporal_ingest_runs
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m18:52:00.977 [memory:mongodb:schema] info: applied schema validation to temporal_projection_runs
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m18:52:00.979 [memory:mongodb:schema] info: applied schema validation to temporal_query_cache
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m18:52:00.980 [memory:mongodb:schema] info: applied schema validation to temporal_memory_mutations
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m18:52:00.981 [memory:mongodb:schema] info: applied schema validation to temporal_recall_traces
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m18:52:00.983 [memory:mongodb:schema] info: applied schema validation to temporal_memory_jobs
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m18:52:00.984 [memory:mongodb:schema] info: applied schema validation to temporal_memory_quarantine
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m18:52:00.986 [memory:mongodb:schema] info: applied schema validation to temporal_files
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m18:52:01.431 [memory:mongodb:schema] info: ensured 45 standard indexes
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m18:52:01.444 [memory:mongodb:structured] info: structured memory created: type=fact key=*** revision=1
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)
+[22m[39m18:52:01.458 [memory:mongodb:structured] info: structured memory created: type=fact key=*** revision=1
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)[2m > [22m[2mdoes not push validFrom forward when the same fact is re-mentioned later (#32 review F1)
+[22m[39m18:52:01.480 [memory:mongodb:structured] info: structured memory created: type=fact key=*** revision=1
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)[2m > [22m[2mdoes not push validFrom forward when the same fact is re-mentioned later (#32 review F1)
+[22m[39m18:52:01.491 [memory:mongodb:structured] info: structured memory updated: type=fact key=*** revision=2
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)[2m > [22m[2mclears a stale validTo when the value genuinely changes (#32 review F2)
+[22m[39m18:52:01.509 [memory:mongodb:structured] info: structured memory created: type=fact key=*** revision=1
+
+[90mstdout[2m | src/mongodb-temporal-validity.e2e.test.ts[2m > [22m[2mbi-temporal valid-time (live MongoDB)[2m > [22m[2mclears a stale validTo when the value genuinely changes (#32 review F2)
+[22m[39m18:52:01.529 [memory:mongodb:structured] info: structured memory updated: type=fact key=*** revision=2
+
+ [32m✓[39m src/mongodb-temporal-validity.e2e.test.ts [2m([22m[2m6 tests[22m[2m)[22m[33m 1014[2mms[22m[39m
+[90mstdout[2m | src/mongodb-kb-reingest.e2e.test.ts
+[22m[39m18:52:02.414 [memory:mongodb:schema] info: created collection reingest_chunks
+
+[90mstdout[2m | src/mongodb-kb-reingest.e2e.test.ts
+[22m[39m18:52:02.423 [memory:mongodb:schema] info: created collection reingest_files
+
+[90mstdout[2m | src/mongodb-kb-reingest.e2e.test.ts
+[22m[39m18:52:02.429 [memory:mongodb:schema] info: created collection reingest_meta
+
+[90mstdout[2m | src/mongodb-kb-reingest.e2e.test.ts
+[22m[39m18:52:02.436 [memory:mongodb:schema] info: created collection reingest_knowledge_base
+
+[90mstdout[2m | src/mongodb-kb-reingest.e2e.test.ts
+[22m[39m18:52:02.441 [memory:mongodb:schema] info: created collection reingest_kb_chunks
+
+[90mstdout[2m | src/mongodb-kb-reingest.e2e.test.ts
+[22m[39m18:52:02.448 [memory:mongodb:schema] info: created collection reingest_structured_mem
+
+[90mstdout[2m | src/mongodb-kb-reingest.e2e.test.ts
+[22m[39m18:52:02.455 [memory:mongodb:schema] info: created collection reingest_structured_mem_revisions
+
+[90mstdout[2m | src/mongodb-kb-reingest.e2e.test.ts
+[22m[39m18:52:02.465 [memory:mongodb:schema] info: created collection reingest_procedures
+
+[90mstdout[2m | src/mongodb-kb-reingest.e2e.test.ts
+[22m[39m18:52:02.473 [memory:mongodb:schema] info: created collection reingest_procedure_revisions
+
+[90mstdout[2m | src/mongodb-kb-reingest.e2e.test.ts
+[22m[39m18:52:02.479 [memory:mongodb:schema] info: created collection reingest_relevance_runs
+
+[90mstdout[2m | src/mongodb-kb-reingest.e2e.test.ts
+[22m[39m18:52:02.485 [memory:mongodb:schema] info: created collection reingest_relevance_artifacts
+
+[90mstdout[2m | src/mongodb-kb-reingest.e2e.test.ts
+[22m[39m18:52:02.491 [memory:mongodb:schema] info: created collection reingest_relevance_regressions
+
+[90mstdout[2m | src/mongodb-kb-reingest.e2e.test.ts
+[22m[39m18:52:02.495 [memory:mongodb:schema] info: created collection reingest_events
+
+[90mstdout[2m | src/mongodb-kb-reingest.e2e.test.ts
+[22m[39m18:52:02.502 [memory:mongodb:schema] info: created collection reingest_entities
+
+[90mstdout[2m | src/mongodb-kb-reingest.e2e.test.ts
+[22m[39m18:52:02.509 [memory:mongodb:schema] info: created collection reingest_relations
+
+[90mstdout[2m | src/mongodb-kb-reingest.e2e.test.ts
+[22m[39m18:52:02.521 [memory:mongodb:schema] info: created collection reingest_entity_links
+
+[90mstdout[2m | src/mongodb-kb-reingest.e2e.test.ts
+[22m[39m18:52:02.531 [memory:mongodb:schema] info: created collection reingest_episodes
+
+[90mstdout[2m | src/mongodb-kb-reingest.e2e.test.ts
+[22m[39m18:52:02.542 [memory:mongodb:schema] info: created collection reingest_ingest_runs
+
+[90mstdout[2m | src/mongodb-kb-reingest.e2e.test.ts
+[22m[39m18:52:02.549 [memory:mongodb:schema] info: created collection reingest_projection_runs
+
+[90mstdout[2m | src/mongodb-kb-reingest.e2e.test.ts
+[22m[39m18:52:02.558 [memory:mongodb:schema] info: created collection reingest_query_cache
+
+[90mstdout[2m | src/mongodb-kb-reingest.e2e.test.ts
+[22m[39m18:52:02.567 [memory:mongodb:schema] info: created collection reingest_memory_mutations
+
+[90mstdout[2m | src/mongodb-kb-reingest.e2e.test.ts
+[22m[39m18:52:02.586 [memory:mongodb:schema] info: created collection reingest_lane_coverage
+
+[90mstdout[2m | src/mongodb-kb-reingest.e2e.test.ts
+[22m[39m18:52:02.598 [memory:mongodb:schema] info: created collection reingest_consolidation_runs
+
+[90mstdout[2m | src/mongodb-kb-reingest.e2e.test.ts
+[22m[39m18:52:02.607 [memory:mongodb:schema] info: created collection reingest_recall_traces
+
+[90mstdout[2m | src/mongodb-kb-reingest.e2e.test.ts
+[22m[39m18:52:02.625 [memory:mongodb:schema] info: created collection reingest_memory_jobs
+
+[90mstdout[2m | src/mongodb-kb-reingest.e2e.test.ts
+[22m[39m18:52:02.633 [memory:mongodb:schema] info: created collection reingest_session_chunks
+
+[90mstdout[2m | src/mongodb-kb-reingest.e2e.test.ts
+[22m[39m18:52:02.643 [memory:mongodb:schema] info: created collection reingest_memory_quarantine
+
+[90mstdout[2m | src/mongodb-kb-reingest.e2e.test.ts
+[22m[39m18:52:02.653 [memory:mongodb:schema] info: created collection reingest_memory_cost_ledger
+
+[90mstdout[2m | src/mongodb-kb-reingest.e2e.test.ts
+[22m[39m18:52:02.664 [memory:mongodb:schema] info: created time series collection reingest_memory_telemetry
+
+[90mstdout[2m | src/mongodb-kb-reingest.e2e.test.ts
+[22m[39m18:52:02.664 [memory:mongodb:schema] info: created telemetry collection reingest_memory_telemetry
+
+[90mstdout[2m | src/mongodb-kb-reingest.e2e.test.ts
+[22m[39m18:52:02.678 [memory:mongodb:schema] info: created time series collection reingest_access_events
+
+[90mstdout[2m | src/mongodb-kb-reingest.e2e.test.ts
+[22m[39m18:52:02.678 [memory:mongodb:schema] info: created access events collection reingest_access_events
+
+[90mstdout[2m | src/mongodb-kb-reingest.e2e.test.ts
+[22m[39m18:52:02.682 [memory:mongodb:schema] info: applied schema validation to reingest_chunks
+
+[90mstdout[2m | src/mongodb-kb-reingest.e2e.test.ts
+[22m[39m18:52:02.684 [memory:mongodb:schema] info: applied schema validation to reingest_knowledge_base
+
+[90mstdout[2m | src/mongodb-kb-reingest.e2e.test.ts
+[22m[39m18:52:02.688 [memory:mongodb:schema] info: applied schema validation to reingest_kb_chunks
+
+[90mstdout[2m | src/mongodb-kb-reingest.e2e.test.ts
+[22m[39m18:52:02.691 [memory:mongodb:schema] info: applied schema validation to reingest_structured_mem
+
+[90mstdout[2m | src/mongodb-kb-reingest.e2e.test.ts
+[22m[39m18:52:02.696 [memory:mongodb:schema] info: applied schema validation to reingest_structured_mem_revisions
+
+[90mstdout[2m | src/mongodb-kb-reingest.e2e.test.ts
+[22m[39m18:52:02.699 [memory:mongodb:schema] info: applied schema validation to reingest_procedures
+
+[90mstdout[2m | src/mongodb-kb-reingest.e2e.test.ts
+[22m[39m18:52:02.703 [memory:mongodb:schema] info: applied schema validation to reingest_procedure_revisions
+
+[90mstdout[2m | src/mongodb-kb-reingest.e2e.test.ts
+[22m[39m18:52:02.708 [memory:mongodb:schema] info: applied schema validation to reingest_relevance_runs
+
+[90mstdout[2m | src/mongodb-kb-reingest.e2e.test.ts
+[22m[39m18:52:02.709 [memory:mongodb:schema] info: applied schema validation to reingest_relevance_artifacts
+
+[90mstdout[2m | src/mongodb-kb-reingest.e2e.test.ts
+[22m[39m18:52:02.711 [memory:mongodb:schema] info: applied schema validation to reingest_relevance_regressions
+
+[90mstdout[2m | src/mongodb-kb-reingest.e2e.test.ts
+[22m[39m18:52:02.713 [memory:mongodb:schema] info: applied schema validation to reingest_events
+
+[90mstdout[2m | src/mongodb-kb-reingest.e2e.test.ts
+[22m[39m18:52:02.715 [memory:mongodb:schema] info: applied schema validation to reingest_entities
+
+[90mstdout[2m | src/mongodb-kb-reingest.e2e.test.ts
+[22m[39m18:52:02.717 [memory:mongodb:schema] info: applied schema validation to reingest_relations
+
+[90mstdout[2m | src/mongodb-kb-reingest.e2e.test.ts
+[22m[39m18:52:02.719 [memory:mongodb:schema] info: applied schema validation to reingest_entity_links
+
+[90mstdout[2m | src/mongodb-kb-reingest.e2e.test.ts
+[22m[39m18:52:02.726 [memory:mongodb:schema] info: applied schema validation to reingest_episodes
+
+[90mstdout[2m | src/mongodb-kb-reingest.e2e.test.ts
+[22m[39m18:52:02.729 [memory:mongodb:schema] info: applied schema validation to reingest_ingest_runs
+
+[90mstdout[2m | src/mongodb-kb-reingest.e2e.test.ts
+[22m[39m18:52:02.730 [memory:mongodb:schema] info: applied schema validation to reingest_projection_runs
+
+[90mstdout[2m | src/mongodb-kb-reingest.e2e.test.ts
+[22m[39m18:52:02.732 [memory:mongodb:schema] info: applied schema validation to reingest_query_cache
+
+[90mstdout[2m | src/mongodb-kb-reingest.e2e.test.ts
+[22m[39m18:52:02.734 [memory:mongodb:schema] info: applied schema validation to reingest_memory_mutations
+
+[90mstdout[2m | src/mongodb-kb-reingest.e2e.test.ts
+[22m[39m18:52:02.735 [memory:mongodb:schema] info: applied schema validation to reingest_recall_traces
+
+[90mstdout[2m | src/mongodb-kb-reingest.e2e.test.ts
+[22m[39m18:52:02.737 [memory:mongodb:schema] info: applied schema validation to reingest_memory_jobs
+
+[90mstdout[2m | src/mongodb-kb-reingest.e2e.test.ts
+[22m[39m18:52:02.741 [memory:mongodb:schema] info: applied schema validation to reingest_memory_quarantine
+
+[90mstdout[2m | src/mongodb-kb-reingest.e2e.test.ts
+[22m[39m18:52:02.747 [memory:mongodb:schema] info: applied schema validation to reingest_files
+
+[90mstdout[2m | src/mongodb-kb-reingest.e2e.test.ts
+[22m[39m18:52:03.257 [memory:mongodb:schema] info: ensured 45 standard indexes
+
+[90mstdout[2m | src/mongodb-kb-reingest.e2e.test.ts[2m > [22m[2mKB re-ingestion on a real replica set[2m > [22m[2mre-ingests a changed document without transaction errors
+[22m[39m18:52:03.279 [memory:mongodb:kb] info: KB ingest: processed=1 chunks=1 skipped=0 errors=0
+
+[90mstdout[2m | src/mongodb-kb-reingest.e2e.test.ts[2m > [22m[2mKB re-ingestion on a real replica set[2m > [22m[2mre-ingests a changed document without transaction errors
+[22m[39m18:52:03.293 [memory:mongodb:kb] info: KB ingest: processed=1 chunks=1 skipped=0 errors=0
+
+ [32m✓[39m src/mongodb-kb-reingest.e2e.test.ts [2m([22m[2m2 tests[22m[2m)[22m[33m 1021[2mms[22m[39m
+[90mstdout[2m | src/mongodb-legacy-search-isolation.e2e.test.ts
+[22m[39m18:52:03.817 [memory:mongodb:schema] info: created collection shared_chunks
+
+[90mstdout[2m | src/mongodb-legacy-search-isolation.e2e.test.ts
+[22m[39m18:52:03.825 [memory:mongodb:schema] info: created collection shared_files
+
+[90mstdout[2m | src/mongodb-legacy-search-isolation.e2e.test.ts
+[22m[39m18:52:03.832 [memory:mongodb:schema] info: created collection shared_meta
+
+[90mstdout[2m | src/mongodb-legacy-search-isolation.e2e.test.ts
+[22m[39m18:52:03.878 [memory:mongodb:schema] info: created collection shared_knowledge_base
+
+[90mstdout[2m | src/mongodb-legacy-search-isolation.e2e.test.ts
+[22m[39m18:52:03.889 [memory:mongodb:schema] info: created collection shared_kb_chunks
+
+[90mstdout[2m | src/mongodb-legacy-search-isolation.e2e.test.ts
+[22m[39m18:52:03.913 [memory:mongodb:schema] info: created collection shared_structured_mem
+
+[90mstdout[2m | src/mongodb-legacy-search-isolation.e2e.test.ts
+[22m[39m18:52:03.920 [memory:mongodb:schema] info: created collection shared_structured_mem_revisions
+
+[90mstdout[2m | src/mongodb-legacy-search-isolation.e2e.test.ts
+[22m[39m18:52:03.927 [memory:mongodb:schema] info: created collection shared_procedures
+
+[90mstdout[2m | src/mongodb-legacy-search-isolation.e2e.test.ts
+[22m[39m18:52:03.935 [memory:mongodb:schema] info: created collection shared_procedure_revisions
+
+[90mstdout[2m | src/mongodb-legacy-search-isolation.e2e.test.ts
+[22m[39m18:52:03.945 [memory:mongodb:schema] info: created collection shared_relevance_runs
+
+[90mstdout[2m | src/mongodb-legacy-search-isolation.e2e.test.ts
+[22m[39m18:52:03.953 [memory:mongodb:schema] info: created collection shared_relevance_artifacts
+
+[90mstdout[2m | src/mongodb-legacy-search-isolation.e2e.test.ts
+[22m[39m18:52:03.961 [memory:mongodb:schema] info: created collection shared_relevance_regressions
+
+[90mstdout[2m | src/mongodb-legacy-search-isolation.e2e.test.ts
+[22m[39m18:52:03.968 [memory:mongodb:schema] info: created collection shared_events
+
+[90mstdout[2m | src/mongodb-legacy-search-isolation.e2e.test.ts
+[22m[39m18:52:03.977 [memory:mongodb:schema] info: created collection shared_entities
+
+[90mstdout[2m | src/mongodb-legacy-search-isolation.e2e.test.ts
+[22m[39m18:52:03.983 [memory:mongodb:schema] info: created collection shared_relations
+
+[90mstdout[2m | src/mongodb-legacy-search-isolation.e2e.test.ts
+[22m[39m18:52:03.990 [memory:mongodb:schema] info: created collection shared_entity_links
+
+[90mstdout[2m | src/mongodb-legacy-search-isolation.e2e.test.ts
+[22m[39m18:52:03.996 [memory:mongodb:schema] info: created collection shared_episodes
+
+[90mstdout[2m | src/mongodb-legacy-search-isolation.e2e.test.ts
+[22m[39m18:52:04.003 [memory:mongodb:schema] info: created collection shared_ingest_runs
+
+[90mstdout[2m | src/mongodb-legacy-search-isolation.e2e.test.ts
+[22m[39m18:52:04.021 [memory:mongodb:schema] info: created collection shared_projection_runs
+
+[90mstdout[2m | src/mongodb-legacy-search-isolation.e2e.test.ts
+[22m[39m18:52:04.038 [memory:mongodb:schema] info: created collection shared_query_cache
+
+[90mstdout[2m | src/mongodb-legacy-search-isolation.e2e.test.ts
+[22m[39m18:52:04.058 [memory:mongodb:schema] info: created collection shared_memory_mutations
+
+[90mstdout[2m | src/mongodb-legacy-search-isolation.e2e.test.ts
+[22m[39m18:52:04.073 [memory:mongodb:schema] info: created collection shared_lane_coverage
+
+[90mstdout[2m | src/mongodb-legacy-search-isolation.e2e.test.ts
+[22m[39m18:52:04.089 [memory:mongodb:schema] info: created collection shared_consolidation_runs
+
+[90mstdout[2m | src/mongodb-legacy-search-isolation.e2e.test.ts
+[22m[39m18:52:04.099 [memory:mongodb:schema] info: created collection shared_recall_traces
+
+[90mstdout[2m | src/mongodb-legacy-search-isolation.e2e.test.ts
+[22m[39m18:52:04.110 [memory:mongodb:schema] info: created collection shared_memory_jobs
+
+[90mstdout[2m | src/mongodb-legacy-search-isolation.e2e.test.ts
+[22m[39m18:52:04.118 [memory:mongodb:schema] info: created collection shared_session_chunks
+
+[90mstdout[2m | src/mongodb-legacy-search-isolation.e2e.test.ts
+[22m[39m18:52:04.126 [memory:mongodb:schema] info: created collection shared_memory_quarantine
+
+[90mstdout[2m | src/mongodb-legacy-search-isolation.e2e.test.ts
+[22m[39m18:52:04.133 [memory:mongodb:schema] info: created collection shared_memory_cost_ledger
+
+[90mstdout[2m | src/mongodb-legacy-search-isolation.e2e.test.ts
+[22m[39m18:52:04.150 [memory:mongodb:schema] info: created time series collection shared_memory_telemetry
+
+[90mstdout[2m | src/mongodb-legacy-search-isolation.e2e.test.ts
+[22m[39m18:52:04.151 [memory:mongodb:schema] info: created telemetry collection shared_memory_telemetry
+
+[90mstdout[2m | src/mongodb-legacy-search-isolation.e2e.test.ts
+[22m[39m18:52:04.160 [memory:mongodb:schema] info: created time series collection shared_access_events
+
+[90mstdout[2m | src/mongodb-legacy-search-isolation.e2e.test.ts
+[22m[39m18:52:04.160 [memory:mongodb:schema] info: created access events collection shared_access_events
+
+[90mstdout[2m | src/mongodb-legacy-search-isolation.e2e.test.ts
+[22m[39m18:52:04.165 [memory:mongodb:schema] info: applied schema validation to shared_chunks
+
+[90mstdout[2m | src/mongodb-legacy-search-isolation.e2e.test.ts
+[22m[39m18:52:04.167 [memory:mongodb:schema] info: applied schema validation to shared_knowledge_base
+
+[90mstdout[2m | src/mongodb-legacy-search-isolation.e2e.test.ts
+[22m[39m18:52:04.170 [memory:mongodb:schema] info: applied schema validation to shared_kb_chunks
+
+[90mstdout[2m | src/mongodb-legacy-search-isolation.e2e.test.ts
+[22m[39m18:52:04.172 [memory:mongodb:schema] info: applied schema validation to shared_structured_mem
+
+[90mstdout[2m | src/mongodb-legacy-search-isolation.e2e.test.ts
+[22m[39m18:52:04.175 [memory:mongodb:schema] info: applied schema validation to shared_structured_mem_revisions
+
+[90mstdout[2m | src/mongodb-legacy-search-isolation.e2e.test.ts
+[22m[39m18:52:04.178 [memory:mongodb:schema] info: applied schema validation to shared_procedures
+
+[90mstdout[2m | src/mongodb-legacy-search-isolation.e2e.test.ts
+[22m[39m18:52:04.180 [memory:mongodb:schema] info: applied schema validation to shared_procedure_revisions
+
+[90mstdout[2m | src/mongodb-legacy-search-isolation.e2e.test.ts
+[22m[39m18:52:04.181 [memory:mongodb:schema] info: applied schema validation to shared_relevance_runs
+
+[90mstdout[2m | src/mongodb-legacy-search-isolation.e2e.test.ts
+[22m[39m18:52:04.182 [memory:mongodb:schema] info: applied schema validation to shared_relevance_artifacts
+
+[90mstdout[2m | src/mongodb-legacy-search-isolation.e2e.test.ts
+[22m[39m18:52:04.184 [memory:mongodb:schema] info: applied schema validation to shared_relevance_regressions
+
+[90mstdout[2m | src/mongodb-legacy-search-isolation.e2e.test.ts
+[22m[39m18:52:04.185 [memory:mongodb:schema] info: applied schema validation to shared_events
+
+[90mstdout[2m | src/mongodb-legacy-search-isolation.e2e.test.ts
+[22m[39m18:52:04.187 [memory:mongodb:schema] info: applied schema validation to shared_entities
+
+[90mstdout[2m | src/mongodb-legacy-search-isolation.e2e.test.ts
+[22m[39m18:52:04.189 [memory:mongodb:schema] info: applied schema validation to shared_relations
+
+[90mstdout[2m | src/mongodb-legacy-search-isolation.e2e.test.ts
+[22m[39m18:52:04.191 [memory:mongodb:schema] info: applied schema validation to shared_entity_links
+
+[90mstdout[2m | src/mongodb-legacy-search-isolation.e2e.test.ts
+[22m[39m18:52:04.194 [memory:mongodb:schema] info: applied schema validation to shared_episodes
+
+[90mstdout[2m | src/mongodb-legacy-search-isolation.e2e.test.ts
+[22m[39m18:52:04.194 [memory:mongodb:schema] info: applied schema validation to shared_ingest_runs
+
+[90mstdout[2m | src/mongodb-legacy-search-isolation.e2e.test.ts
+[22m[39m18:52:04.196 [memory:mongodb:schema] info: applied schema validation to shared_projection_runs
+
+[90mstdout[2m | src/mongodb-legacy-search-isolation.e2e.test.ts
+[22m[39m18:52:04.197 [memory:mongodb:schema] info: applied schema validation to shared_query_cache
+
+[90mstdout[2m | src/mongodb-legacy-search-isolation.e2e.test.ts
+[22m[39m18:52:04.200 [memory:mongodb:schema] info: applied schema validation to shared_memory_mutations
+
+[90mstdout[2m | src/mongodb-legacy-search-isolation.e2e.test.ts
+[22m[39m18:52:04.203 [memory:mongodb:schema] info: applied schema validation to shared_recall_traces
+
+[90mstdout[2m | src/mongodb-legacy-search-isolation.e2e.test.ts
+[22m[39m18:52:04.206 [memory:mongodb:schema] info: applied schema validation to shared_memory_jobs
+
+[90mstdout[2m | src/mongodb-legacy-search-isolation.e2e.test.ts
+[22m[39m18:52:04.213 [memory:mongodb:schema] info: applied schema validation to shared_memory_quarantine
+
+[90mstdout[2m | src/mongodb-legacy-search-isolation.e2e.test.ts
+[22m[39m18:52:04.214 [memory:mongodb:schema] info: applied schema validation to shared_files
+
+[90mstdout[2m | src/mongodb-legacy-search-isolation.e2e.test.ts
+[22m[39m18:52:04.604 [memory:mongodb:schema] info: ensured 45 standard indexes
+
+[90mstdout[2m | src/mongodb-legacy-search-isolation.e2e.test.ts
+[22m[39m18:52:04.621 [memory:mongodb:kb] info: KB ingest: processed=1 chunks=1 skipped=0 errors=0
+
+[90mstdout[2m | src/mongodb-legacy-search-isolation.e2e.test.ts
+[22m[39m18:52:04.627 [memory:mongodb:kb] info: KB ingest: processed=1 chunks=1 skipped=0 errors=0
+
+ [32m✓[39m src/mongodb-legacy-search-isolation.e2e.test.ts [2m([22m[2m2 tests[22m[2m)[22m[33m 948[2mms[22m[39m
+[90mstdout[2m | src/mongodb-projection-repair.e2e.test.ts[2m > [22m[2mcanonical event projection repair (live MongoDB)
+[22m[39m18:52:05.045 [memory:mongodb:schema] info: created collection repair_chunks
+
+[90mstdout[2m | src/mongodb-projection-repair.e2e.test.ts[2m > [22m[2mcanonical event projection repair (live MongoDB)
+[22m[39m18:52:05.053 [memory:mongodb:schema] info: created collection repair_files
+
+[90mstdout[2m | src/mongodb-projection-repair.e2e.test.ts[2m > [22m[2mcanonical event projection repair (live MongoDB)
+[22m[39m18:52:05.060 [memory:mongodb:schema] info: created collection repair_meta
+
+[90mstdout[2m | src/mongodb-projection-repair.e2e.test.ts[2m > [22m[2mcanonical event projection repair (live MongoDB)
+[22m[39m18:52:05.065 [memory:mongodb:schema] info: created collection repair_knowledge_base
+
+[90mstdout[2m | src/mongodb-projection-repair.e2e.test.ts[2m > [22m[2mcanonical event projection repair (live MongoDB)
+[22m[39m18:52:05.071 [memory:mongodb:schema] info: created collection repair_kb_chunks
+
+[90mstdout[2m | src/mongodb-projection-repair.e2e.test.ts[2m > [22m[2mcanonical event projection repair (live MongoDB)
+[22m[39m18:52:05.082 [memory:mongodb:schema] info: created collection repair_structured_mem
+
+[90mstdout[2m | src/mongodb-projection-repair.e2e.test.ts[2m > [22m[2mcanonical event projection repair (live MongoDB)
+[22m[39m18:52:05.088 [memory:mongodb:schema] info: created collection repair_structured_mem_revisions
+
+[90mstdout[2m | src/mongodb-projection-repair.e2e.test.ts[2m > [22m[2mcanonical event projection repair (live MongoDB)
+[22m[39m18:52:05.093 [memory:mongodb:schema] info: created collection repair_procedures
+
+[90mstdout[2m | src/mongodb-projection-repair.e2e.test.ts[2m > [22m[2mcanonical event projection repair (live MongoDB)
+[22m[39m18:52:05.100 [memory:mongodb:schema] info: created collection repair_procedure_revisions
+
+[90mstdout[2m | src/mongodb-projection-repair.e2e.test.ts[2m > [22m[2mcanonical event projection repair (live MongoDB)
+[22m[39m18:52:05.105 [memory:mongodb:schema] info: created collection repair_relevance_runs
+
+[90mstdout[2m | src/mongodb-projection-repair.e2e.test.ts[2m > [22m[2mcanonical event projection repair (live MongoDB)
+[22m[39m18:52:05.112 [memory:mongodb:schema] info: created collection repair_relevance_artifacts
+
+[90mstdout[2m | src/mongodb-projection-repair.e2e.test.ts[2m > [22m[2mcanonical event projection repair (live MongoDB)
+[22m[39m18:52:05.117 [memory:mongodb:schema] info: created collection repair_relevance_regressions
+
+[90mstdout[2m | src/mongodb-projection-repair.e2e.test.ts[2m > [22m[2mcanonical event projection repair (live MongoDB)
+[22m[39m18:52:05.121 [memory:mongodb:schema] info: created collection repair_events
+
+[90mstdout[2m | src/mongodb-projection-repair.e2e.test.ts[2m > [22m[2mcanonical event projection repair (live MongoDB)
+[22m[39m18:52:05.126 [memory:mongodb:schema] info: created collection repair_entities
+
+[90mstdout[2m | src/mongodb-projection-repair.e2e.test.ts[2m > [22m[2mcanonical event projection repair (live MongoDB)
+[22m[39m18:52:05.131 [memory:mongodb:schema] info: created collection repair_relations
+
+[90mstdout[2m | src/mongodb-projection-repair.e2e.test.ts[2m > [22m[2mcanonical event projection repair (live MongoDB)
+[22m[39m18:52:05.137 [memory:mongodb:schema] info: created collection repair_entity_links
+
+[90mstdout[2m | src/mongodb-projection-repair.e2e.test.ts[2m > [22m[2mcanonical event projection repair (live MongoDB)
+[22m[39m18:52:05.143 [memory:mongodb:schema] info: created collection repair_episodes
+
+[90mstdout[2m | src/mongodb-projection-repair.e2e.test.ts[2m > [22m[2mcanonical event projection repair (live MongoDB)
+[22m[39m18:52:05.148 [memory:mongodb:schema] info: created collection repair_ingest_runs
+
+[90mstdout[2m | src/mongodb-projection-repair.e2e.test.ts[2m > [22m[2mcanonical event projection repair (live MongoDB)
+[22m[39m18:52:05.152 [memory:mongodb:schema] info: created collection repair_projection_runs
+
+[90mstdout[2m | src/mongodb-projection-repair.e2e.test.ts[2m > [22m[2mcanonical event projection repair (live MongoDB)
+[22m[39m18:52:05.157 [memory:mongodb:schema] info: created collection repair_query_cache
+
+[90mstdout[2m | src/mongodb-projection-repair.e2e.test.ts[2m > [22m[2mcanonical event projection repair (live MongoDB)
+[22m[39m18:52:05.161 [memory:mongodb:schema] info: created collection repair_memory_mutations
+
+[90mstdout[2m | src/mongodb-projection-repair.e2e.test.ts[2m > [22m[2mcanonical event projection repair (live MongoDB)
+[22m[39m18:52:05.166 [memory:mongodb:schema] info: created collection repair_lane_coverage
+
+[90mstdout[2m | src/mongodb-projection-repair.e2e.test.ts[2m > [22m[2mcanonical event projection repair (live MongoDB)
+[22m[39m18:52:05.171 [memory:mongodb:schema] info: created collection repair_consolidation_runs
+
+[90mstdout[2m | src/mongodb-projection-repair.e2e.test.ts[2m > [22m[2mcanonical event projection repair (live MongoDB)
+[22m[39m18:52:05.177 [memory:mongodb:schema] info: created collection repair_recall_traces
+
+[90mstdout[2m | src/mongodb-projection-repair.e2e.test.ts[2m > [22m[2mcanonical event projection repair (live MongoDB)
+[22m[39m18:52:05.182 [memory:mongodb:schema] info: created collection repair_memory_jobs
+
+[90mstdout[2m | src/mongodb-projection-repair.e2e.test.ts[2m > [22m[2mcanonical event projection repair (live MongoDB)
+[22m[39m18:52:05.186 [memory:mongodb:schema] info: created collection repair_session_chunks
+
+[90mstdout[2m | src/mongodb-projection-repair.e2e.test.ts[2m > [22m[2mcanonical event projection repair (live MongoDB)
+[22m[39m18:52:05.191 [memory:mongodb:schema] info: created collection repair_memory_quarantine
+
+[90mstdout[2m | src/mongodb-projection-repair.e2e.test.ts[2m > [22m[2mcanonical event projection repair (live MongoDB)
+[22m[39m18:52:05.197 [memory:mongodb:schema] info: created collection repair_memory_cost_ledger
+
+[90mstdout[2m | src/mongodb-projection-repair.e2e.test.ts[2m > [22m[2mcanonical event projection repair (live MongoDB)
+[22m[39m18:52:05.207 [memory:mongodb:schema] info: created time series collection repair_memory_telemetry
+
+[90mstdout[2m | src/mongodb-projection-repair.e2e.test.ts[2m > [22m[2mcanonical event projection repair (live MongoDB)
+[22m[39m18:52:05.207 [memory:mongodb:schema] info: created telemetry collection repair_memory_telemetry
+
+[90mstdout[2m | src/mongodb-projection-repair.e2e.test.ts[2m > [22m[2mcanonical event projection repair (live MongoDB)
+[22m[39m18:52:05.214 [memory:mongodb:schema] info: created time series collection repair_access_events
+
+[90mstdout[2m | src/mongodb-projection-repair.e2e.test.ts[2m > [22m[2mcanonical event projection repair (live MongoDB)
+[22m[39m18:52:05.214 [memory:mongodb:schema] info: created access events collection repair_access_events
+
+[90mstdout[2m | src/mongodb-projection-repair.e2e.test.ts[2m > [22m[2mcanonical event projection repair (live MongoDB)
+[22m[39m18:52:05.216 [memory:mongodb:schema] info: applied schema validation to repair_chunks
+
+[90mstdout[2m | src/mongodb-projection-repair.e2e.test.ts[2m > [22m[2mcanonical event projection repair (live MongoDB)
+[22m[39m18:52:05.218 [memory:mongodb:schema] info: applied schema validation to repair_knowledge_base
+
+[90mstdout[2m | src/mongodb-projection-repair.e2e.test.ts[2m > [22m[2mcanonical event projection repair (live MongoDB)
+[22m[39m18:52:05.219 [memory:mongodb:schema] info: applied schema validation to repair_kb_chunks
+
+[90mstdout[2m | src/mongodb-projection-repair.e2e.test.ts[2m > [22m[2mcanonical event projection repair (live MongoDB)
+[22m[39m18:52:05.221 [memory:mongodb:schema] info: applied schema validation to repair_structured_mem
+
+[90mstdout[2m | src/mongodb-projection-repair.e2e.test.ts[2m > [22m[2mcanonical event projection repair (live MongoDB)
+[22m[39m18:52:05.223 [memory:mongodb:schema] info: applied schema validation to repair_structured_mem_revisions
+
+[90mstdout[2m | src/mongodb-projection-repair.e2e.test.ts[2m > [22m[2mcanonical event projection repair (live MongoDB)
+[22m[39m18:52:05.224 [memory:mongodb:schema] info: applied schema validation to repair_procedures
+
+[90mstdout[2m | src/mongodb-projection-repair.e2e.test.ts[2m > [22m[2mcanonical event projection repair (live MongoDB)
+[22m[39m18:52:05.225 [memory:mongodb:schema] info: applied schema validation to repair_procedure_revisions
+
+[90mstdout[2m | src/mongodb-projection-repair.e2e.test.ts[2m > [22m[2mcanonical event projection repair (live MongoDB)
+[22m[39m18:52:05.226 [memory:mongodb:schema] info: applied schema validation to repair_relevance_runs
+
+[90mstdout[2m | src/mongodb-projection-repair.e2e.test.ts[2m > [22m[2mcanonical event projection repair (live MongoDB)
+[22m[39m18:52:05.227 [memory:mongodb:schema] info: applied schema validation to repair_relevance_artifacts
+
+[90mstdout[2m | src/mongodb-projection-repair.e2e.test.ts[2m > [22m[2mcanonical event projection repair (live MongoDB)
+[22m[39m18:52:05.228 [memory:mongodb:schema] info: applied schema validation to repair_relevance_regressions
+
+[90mstdout[2m | src/mongodb-projection-repair.e2e.test.ts[2m > [22m[2mcanonical event projection repair (live MongoDB)
+[22m[39m18:52:05.229 [memory:mongodb:schema] info: applied schema validation to repair_events
+
+[90mstdout[2m | src/mongodb-projection-repair.e2e.test.ts[2m > [22m[2mcanonical event projection repair (live MongoDB)
+[22m[39m18:52:05.229 [memory:mongodb:schema] info: applied schema validation to repair_entities
+
+[90mstdout[2m | src/mongodb-projection-repair.e2e.test.ts[2m > [22m[2mcanonical event projection repair (live MongoDB)
+[22m[39m18:52:05.231 [memory:mongodb:schema] info: applied schema validation to repair_relations
+
+[90mstdout[2m | src/mongodb-projection-repair.e2e.test.ts[2m > [22m[2mcanonical event projection repair (live MongoDB)
+[22m[39m18:52:05.233 [memory:mongodb:schema] info: applied schema validation to repair_entity_links
+
+[90mstdout[2m | src/mongodb-projection-repair.e2e.test.ts[2m > [22m[2mcanonical event projection repair (live MongoDB)
+[22m[39m18:52:05.234 [memory:mongodb:schema] info: applied schema validation to repair_episodes
+
+[90mstdout[2m | src/mongodb-projection-repair.e2e.test.ts[2m > [22m[2mcanonical event projection repair (live MongoDB)
+[22m[39m18:52:05.236 [memory:mongodb:schema] info: applied schema validation to repair_ingest_runs
+
+[90mstdout[2m | src/mongodb-projection-repair.e2e.test.ts[2m > [22m[2mcanonical event projection repair (live MongoDB)
+[22m[39m18:52:05.237 [memory:mongodb:schema] info: applied schema validation to repair_projection_runs
+
+[90mstdout[2m | src/mongodb-projection-repair.e2e.test.ts[2m > [22m[2mcanonical event projection repair (live MongoDB)
+[22m[39m18:52:05.237 [memory:mongodb:schema] info: applied schema validation to repair_query_cache
+
+[90mstdout[2m | src/mongodb-projection-repair.e2e.test.ts[2m > [22m[2mcanonical event projection repair (live MongoDB)
+[22m[39m18:52:05.239 [memory:mongodb:schema] info: applied schema validation to repair_memory_mutations
+
+[90mstdout[2m | src/mongodb-projection-repair.e2e.test.ts[2m > [22m[2mcanonical event projection repair (live MongoDB)
+[22m[39m18:52:05.241 [memory:mongodb:schema] info: applied schema validation to repair_recall_traces
+
+[90mstdout[2m | src/mongodb-projection-repair.e2e.test.ts[2m > [22m[2mcanonical event projection repair (live MongoDB)
+[22m[39m18:52:05.242 [memory:mongodb:schema] info: applied schema validation to repair_memory_jobs
+
+[90mstdout[2m | src/mongodb-projection-repair.e2e.test.ts[2m > [22m[2mcanonical event projection repair (live MongoDB)
+[22m[39m18:52:05.244 [memory:mongodb:schema] info: applied schema validation to repair_memory_quarantine
+
+[90mstdout[2m | src/mongodb-projection-repair.e2e.test.ts[2m > [22m[2mcanonical event projection repair (live MongoDB)
+[22m[39m18:52:05.245 [memory:mongodb:schema] info: applied schema validation to repair_files
+
+[90mstdout[2m | src/mongodb-projection-repair.e2e.test.ts[2m > [22m[2mcanonical event projection repair (live MongoDB)[2m > [22m[2mrecovers an unprojected event and is idempotent on retry
+[22m[39m18:52:05.248 [memory:mongodb:events] info: event written: evt-repair role=assistant
+
+[90mstdout[2m | src/mongodb-projection-repair.e2e.test.ts[2m > [22m[2mcanonical event projection repair (live MongoDB)[2m > [22m[2mrecovers an unprojected event and is idempotent on retry
+[22m[39m18:52:05.254 [memory:mongodb:events] info: projected 1 chunks from 1 events for agent=agent-22bf7b74
+
+ [32m✓[39m src/mongodb-projection-repair.e2e.test.ts [2m([22m[2m1 test[22m[2m)[22m[33m 343[2mms[22m[39m
+ [32m✓[39m src/mongodb-vector-index-shape.e2e.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 157[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m8 passed[39m[22m[90m (8)[39m
+[2m      Tests [22m [1m[32m40 passed[39m[22m[90m (40)[39m
+[2m   Start at [22m 18:51:48
+[2m   Duration [22m 17.08s[2m (transform 683ms, setup 0ms, import 2.31s, tests 13.65s, environment 0ms)[22m
+

@@ -1,0 +1,1046 @@
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/Users/rom.iluz/Dev/memongo/packages/memory-engine[39m
+
+[90mstdout[2m | src/mongodb-embedding-coverage.e2e.test.ts[2m > [22m[2mautomated embedding coverage (live MongoDB)[2m > [22m[2mreports queryable Search-index coverage without inventing pending state when the index is unobservable
+[22m[39m18:51:23.272 [memory:mongodb:analytics] info: stats: files=0 chunks=3 embeddingStatus={basis=search-index,success=3,failed=0,pending=0,unknown=0} stale=0
+
+ [32m✓[39m src/mongodb-embedding-coverage.e2e.test.ts [2m([22m[2m1 test[22m[2m)[22m[33m 63578[2mms[22m[39m
+     [33m[2m✓[22m[39m reports queryable Search-index coverage without inventing pending state when the index is unobservable [33m 63433[2mms[22m[39m
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mcreates all required collections
+[22m[39m18:51:24.328 [memory:mongodb:schema] info: created collection e2e_chunks
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mcreates all required collections
+[22m[39m18:51:24.338 [memory:mongodb:schema] info: created collection e2e_files
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mcreates all required collections
+[22m[39m18:51:24.344 [memory:mongodb:schema] info: created collection e2e_meta
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mcreates all required collections
+[22m[39m18:51:24.352 [memory:mongodb:schema] info: created collection e2e_knowledge_base
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mcreates all required collections
+[22m[39m18:51:24.358 [memory:mongodb:schema] info: created collection e2e_kb_chunks
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mcreates all required collections
+[22m[39m18:51:24.365 [memory:mongodb:schema] info: created collection e2e_structured_mem
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mcreates all required collections
+[22m[39m18:51:24.370 [memory:mongodb:schema] info: created collection e2e_structured_mem_revisions
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mcreates all required collections
+[22m[39m18:51:24.376 [memory:mongodb:schema] info: created collection e2e_procedures
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mcreates all required collections
+[22m[39m18:51:24.382 [memory:mongodb:schema] info: created collection e2e_procedure_revisions
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mcreates all required collections
+[22m[39m18:51:24.389 [memory:mongodb:schema] info: created collection e2e_relevance_runs
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mcreates all required collections
+[22m[39m18:51:24.394 [memory:mongodb:schema] info: created collection e2e_relevance_artifacts
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mcreates all required collections
+[22m[39m18:51:24.399 [memory:mongodb:schema] info: created collection e2e_relevance_regressions
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mcreates all required collections
+[22m[39m18:51:24.404 [memory:mongodb:schema] info: created collection e2e_events
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mcreates all required collections
+[22m[39m18:51:24.409 [memory:mongodb:schema] info: created collection e2e_entities
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mcreates all required collections
+[22m[39m18:51:24.414 [memory:mongodb:schema] info: created collection e2e_relations
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mcreates all required collections
+[22m[39m18:51:24.421 [memory:mongodb:schema] info: created collection e2e_entity_links
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mcreates all required collections
+[22m[39m18:51:24.426 [memory:mongodb:schema] info: created collection e2e_episodes
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mcreates all required collections
+[22m[39m18:51:24.431 [memory:mongodb:schema] info: created collection e2e_ingest_runs
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mcreates all required collections
+[22m[39m18:51:24.436 [memory:mongodb:schema] info: created collection e2e_projection_runs
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mcreates all required collections
+[22m[39m18:51:24.441 [memory:mongodb:schema] info: created collection e2e_query_cache
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mcreates all required collections
+[22m[39m18:51:24.446 [memory:mongodb:schema] info: created collection e2e_memory_mutations
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mcreates all required collections
+[22m[39m18:51:24.451 [memory:mongodb:schema] info: created collection e2e_lane_coverage
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mcreates all required collections
+[22m[39m18:51:24.456 [memory:mongodb:schema] info: created collection e2e_consolidation_runs
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mcreates all required collections
+[22m[39m18:51:24.462 [memory:mongodb:schema] info: created collection e2e_recall_traces
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mcreates all required collections
+[22m[39m18:51:24.467 [memory:mongodb:schema] info: created collection e2e_memory_jobs
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mcreates all required collections
+[22m[39m18:51:24.472 [memory:mongodb:schema] info: created collection e2e_session_chunks
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mcreates all required collections
+[22m[39m18:51:24.476 [memory:mongodb:schema] info: created collection e2e_memory_quarantine
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mcreates all required collections
+[22m[39m18:51:24.481 [memory:mongodb:schema] info: created collection e2e_memory_cost_ledger
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mcreates all required collections
+[22m[39m18:51:24.492 [memory:mongodb:schema] info: created time series collection e2e_memory_telemetry
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mcreates all required collections
+[22m[39m18:51:24.492 [memory:mongodb:schema] info: created telemetry collection e2e_memory_telemetry
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mcreates all required collections
+[22m[39m18:51:24.497 [memory:mongodb:schema] info: created time series collection e2e_access_events
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mcreates all required collections
+[22m[39m18:51:24.497 [memory:mongodb:schema] info: created access events collection e2e_access_events
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mcreates all required collections
+[22m[39m18:51:24.500 [memory:mongodb:schema] info: applied schema validation to e2e_chunks
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mcreates all required collections
+[22m[39m18:51:24.501 [memory:mongodb:schema] info: applied schema validation to e2e_knowledge_base
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mcreates all required collections
+[22m[39m18:51:24.503 [memory:mongodb:schema] info: applied schema validation to e2e_kb_chunks
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mcreates all required collections
+[22m[39m18:51:24.505 [memory:mongodb:schema] info: applied schema validation to e2e_structured_mem
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mcreates all required collections
+[22m[39m18:51:24.506 [memory:mongodb:schema] info: applied schema validation to e2e_structured_mem_revisions
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mcreates all required collections
+[22m[39m18:51:24.508 [memory:mongodb:schema] info: applied schema validation to e2e_procedures
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mcreates all required collections
+[22m[39m18:51:24.511 [memory:mongodb:schema] info: applied schema validation to e2e_procedure_revisions
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mcreates all required collections
+[22m[39m18:51:24.512 [memory:mongodb:schema] info: applied schema validation to e2e_relevance_runs
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mcreates all required collections
+[22m[39m18:51:24.513 [memory:mongodb:schema] info: applied schema validation to e2e_relevance_artifacts
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mcreates all required collections
+[22m[39m18:51:24.515 [memory:mongodb:schema] info: applied schema validation to e2e_relevance_regressions
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mcreates all required collections
+[22m[39m18:51:24.516 [memory:mongodb:schema] info: applied schema validation to e2e_events
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mcreates all required collections
+[22m[39m18:51:24.517 [memory:mongodb:schema] info: applied schema validation to e2e_entities
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mcreates all required collections
+[22m[39m18:51:24.519 [memory:mongodb:schema] info: applied schema validation to e2e_relations
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mcreates all required collections
+[22m[39m18:51:24.521 [memory:mongodb:schema] info: applied schema validation to e2e_entity_links
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mcreates all required collections
+[22m[39m18:51:24.523 [memory:mongodb:schema] info: applied schema validation to e2e_episodes
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mcreates all required collections
+[22m[39m18:51:24.524 [memory:mongodb:schema] info: applied schema validation to e2e_ingest_runs
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mcreates all required collections
+[22m[39m18:51:24.525 [memory:mongodb:schema] info: applied schema validation to e2e_projection_runs
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mcreates all required collections
+[22m[39m18:51:24.526 [memory:mongodb:schema] info: applied schema validation to e2e_query_cache
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mcreates all required collections
+[22m[39m18:51:24.528 [memory:mongodb:schema] info: applied schema validation to e2e_memory_mutations
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mcreates all required collections
+[22m[39m18:51:24.529 [memory:mongodb:schema] info: applied schema validation to e2e_recall_traces
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mcreates all required collections
+[22m[39m18:51:24.531 [memory:mongodb:schema] info: applied schema validation to e2e_memory_jobs
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mcreates all required collections
+[22m[39m18:51:24.532 [memory:mongodb:schema] info: applied schema validation to e2e_memory_quarantine
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mcreates all required collections
+[22m[39m18:51:24.532 [memory:mongodb:schema] info: applied schema validation to e2e_files
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mensureCollections is idempotent
+[22m[39m18:51:24.542 [memory:mongodb:schema] info: applied schema validation to e2e_chunks
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mensureCollections is idempotent
+[22m[39m18:51:24.543 [memory:mongodb:schema] info: applied schema validation to e2e_knowledge_base
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mensureCollections is idempotent
+[22m[39m18:51:24.543 [memory:mongodb:schema] info: applied schema validation to e2e_kb_chunks
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mensureCollections is idempotent
+[22m[39m18:51:24.546 [memory:mongodb:schema] info: applied schema validation to e2e_structured_mem
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mensureCollections is idempotent
+[22m[39m18:51:24.547 [memory:mongodb:schema] info: applied schema validation to e2e_structured_mem_revisions
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mensureCollections is idempotent
+[22m[39m18:51:24.550 [memory:mongodb:schema] info: applied schema validation to e2e_procedures
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mensureCollections is idempotent
+[22m[39m18:51:24.551 [memory:mongodb:schema] info: applied schema validation to e2e_procedure_revisions
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mensureCollections is idempotent
+[22m[39m18:51:24.553 [memory:mongodb:schema] info: applied schema validation to e2e_relevance_runs
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mensureCollections is idempotent
+[22m[39m18:51:24.556 [memory:mongodb:schema] info: applied schema validation to e2e_relevance_artifacts
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mensureCollections is idempotent
+[22m[39m18:51:24.558 [memory:mongodb:schema] info: applied schema validation to e2e_relevance_regressions
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mensureCollections is idempotent
+[22m[39m18:51:24.560 [memory:mongodb:schema] info: applied schema validation to e2e_events
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mensureCollections is idempotent
+[22m[39m18:51:24.562 [memory:mongodb:schema] info: applied schema validation to e2e_entities
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mensureCollections is idempotent
+[22m[39m18:51:24.563 [memory:mongodb:schema] info: applied schema validation to e2e_relations
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mensureCollections is idempotent
+[22m[39m18:51:24.564 [memory:mongodb:schema] info: applied schema validation to e2e_entity_links
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mensureCollections is idempotent
+[22m[39m18:51:24.567 [memory:mongodb:schema] info: applied schema validation to e2e_episodes
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mensureCollections is idempotent
+[22m[39m18:51:24.568 [memory:mongodb:schema] info: applied schema validation to e2e_ingest_runs
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mensureCollections is idempotent
+[22m[39m18:51:24.569 [memory:mongodb:schema] info: applied schema validation to e2e_projection_runs
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mensureCollections is idempotent
+[22m[39m18:51:24.570 [memory:mongodb:schema] info: applied schema validation to e2e_query_cache
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mensureCollections is idempotent
+[22m[39m18:51:24.571 [memory:mongodb:schema] info: applied schema validation to e2e_memory_mutations
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mensureCollections is idempotent
+[22m[39m18:51:24.572 [memory:mongodb:schema] info: applied schema validation to e2e_recall_traces
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mensureCollections is idempotent
+[22m[39m18:51:24.573 [memory:mongodb:schema] info: applied schema validation to e2e_memory_jobs
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mensureCollections is idempotent
+[22m[39m18:51:24.575 [memory:mongodb:schema] info: applied schema validation to e2e_memory_quarantine
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mensureCollections is idempotent
+[22m[39m18:51:24.576 [memory:mongodb:schema] info: applied schema validation to e2e_files
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mensureCollections is idempotent
+[22m[39m18:51:24.583 [memory:mongodb:schema] info: applied schema validation to e2e_chunks
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mensureCollections is idempotent
+[22m[39m18:51:24.585 [memory:mongodb:schema] info: applied schema validation to e2e_knowledge_base
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mensureCollections is idempotent
+[22m[39m18:51:24.586 [memory:mongodb:schema] info: applied schema validation to e2e_kb_chunks
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mensureCollections is idempotent
+[22m[39m18:51:24.588 [memory:mongodb:schema] info: applied schema validation to e2e_structured_mem
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mensureCollections is idempotent
+[22m[39m18:51:24.591 [memory:mongodb:schema] info: applied schema validation to e2e_structured_mem_revisions
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mensureCollections is idempotent
+[22m[39m18:51:24.594 [memory:mongodb:schema] info: applied schema validation to e2e_procedures
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mensureCollections is idempotent
+[22m[39m18:51:24.595 [memory:mongodb:schema] info: applied schema validation to e2e_procedure_revisions
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mensureCollections is idempotent
+[22m[39m18:51:24.597 [memory:mongodb:schema] info: applied schema validation to e2e_relevance_runs
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mensureCollections is idempotent
+[22m[39m18:51:24.597 [memory:mongodb:schema] info: applied schema validation to e2e_relevance_artifacts
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mensureCollections is idempotent
+[22m[39m18:51:24.599 [memory:mongodb:schema] info: applied schema validation to e2e_relevance_regressions
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mensureCollections is idempotent
+[22m[39m18:51:24.601 [memory:mongodb:schema] info: applied schema validation to e2e_events
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mensureCollections is idempotent
+[22m[39m18:51:24.602 [memory:mongodb:schema] info: applied schema validation to e2e_entities
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mensureCollections is idempotent
+[22m[39m18:51:24.604 [memory:mongodb:schema] info: applied schema validation to e2e_relations
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mensureCollections is idempotent
+[22m[39m18:51:24.606 [memory:mongodb:schema] info: applied schema validation to e2e_entity_links
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mensureCollections is idempotent
+[22m[39m18:51:24.607 [memory:mongodb:schema] info: applied schema validation to e2e_episodes
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mensureCollections is idempotent
+[22m[39m18:51:24.608 [memory:mongodb:schema] info: applied schema validation to e2e_ingest_runs
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mensureCollections is idempotent
+[22m[39m18:51:24.609 [memory:mongodb:schema] info: applied schema validation to e2e_projection_runs
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mensureCollections is idempotent
+[22m[39m18:51:24.610 [memory:mongodb:schema] info: applied schema validation to e2e_query_cache
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mensureCollections is idempotent
+[22m[39m18:51:24.611 [memory:mongodb:schema] info: applied schema validation to e2e_memory_mutations
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mensureCollections is idempotent
+[22m[39m18:51:24.613 [memory:mongodb:schema] info: applied schema validation to e2e_recall_traces
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mensureCollections is idempotent
+[22m[39m18:51:24.615 [memory:mongodb:schema] info: applied schema validation to e2e_memory_jobs
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mensureCollections is idempotent
+[22m[39m18:51:24.617 [memory:mongodb:schema] info: applied schema validation to e2e_memory_quarantine
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mensureCollections is idempotent
+[22m[39m18:51:24.618 [memory:mongodb:schema] info: applied schema validation to e2e_files
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mrefreshes validators on existing collections when the schema changes
+[22m[39m18:51:24.635 [memory:mongodb:schema] info: created collection legacy_d4d5c0fc_chunks
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mrefreshes validators on existing collections when the schema changes
+[22m[39m18:51:24.640 [memory:mongodb:schema] info: created collection legacy_d4d5c0fc_files
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mrefreshes validators on existing collections when the schema changes
+[22m[39m18:51:24.645 [memory:mongodb:schema] info: created collection legacy_d4d5c0fc_meta
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mrefreshes validators on existing collections when the schema changes
+[22m[39m18:51:24.651 [memory:mongodb:schema] info: created collection legacy_d4d5c0fc_knowledge_base
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mrefreshes validators on existing collections when the schema changes
+[22m[39m18:51:24.657 [memory:mongodb:schema] info: created collection legacy_d4d5c0fc_kb_chunks
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mrefreshes validators on existing collections when the schema changes
+[22m[39m18:51:24.663 [memory:mongodb:schema] info: created collection legacy_d4d5c0fc_structured_mem
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mrefreshes validators on existing collections when the schema changes
+[22m[39m18:51:24.668 [memory:mongodb:schema] info: created collection legacy_d4d5c0fc_structured_mem_revisions
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mrefreshes validators on existing collections when the schema changes
+[22m[39m18:51:24.674 [memory:mongodb:schema] info: created collection legacy_d4d5c0fc_procedures
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mrefreshes validators on existing collections when the schema changes
+[22m[39m18:51:24.679 [memory:mongodb:schema] info: created collection legacy_d4d5c0fc_procedure_revisions
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mrefreshes validators on existing collections when the schema changes
+[22m[39m18:51:24.685 [memory:mongodb:schema] info: created collection legacy_d4d5c0fc_relevance_runs
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mrefreshes validators on existing collections when the schema changes
+[22m[39m18:51:24.690 [memory:mongodb:schema] info: created collection legacy_d4d5c0fc_relevance_artifacts
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mrefreshes validators on existing collections when the schema changes
+[22m[39m18:51:24.695 [memory:mongodb:schema] info: created collection legacy_d4d5c0fc_relevance_regressions
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mrefreshes validators on existing collections when the schema changes
+[22m[39m18:51:24.702 [memory:mongodb:schema] info: created collection legacy_d4d5c0fc_events
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mrefreshes validators on existing collections when the schema changes
+[22m[39m18:51:24.710 [memory:mongodb:schema] info: created collection legacy_d4d5c0fc_entities
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mrefreshes validators on existing collections when the schema changes
+[22m[39m18:51:24.720 [memory:mongodb:schema] info: created collection legacy_d4d5c0fc_relations
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mrefreshes validators on existing collections when the schema changes
+[22m[39m18:51:24.728 [memory:mongodb:schema] info: created collection legacy_d4d5c0fc_entity_links
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mrefreshes validators on existing collections when the schema changes
+[22m[39m18:51:24.733 [memory:mongodb:schema] info: created collection legacy_d4d5c0fc_episodes
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mrefreshes validators on existing collections when the schema changes
+[22m[39m18:51:24.740 [memory:mongodb:schema] info: created collection legacy_d4d5c0fc_ingest_runs
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mrefreshes validators on existing collections when the schema changes
+[22m[39m18:51:24.745 [memory:mongodb:schema] info: created collection legacy_d4d5c0fc_query_cache
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mrefreshes validators on existing collections when the schema changes
+[22m[39m18:51:24.752 [memory:mongodb:schema] info: created collection legacy_d4d5c0fc_memory_mutations
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mrefreshes validators on existing collections when the schema changes
+[22m[39m18:51:24.759 [memory:mongodb:schema] info: created collection legacy_d4d5c0fc_lane_coverage
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mrefreshes validators on existing collections when the schema changes
+[22m[39m18:51:24.764 [memory:mongodb:schema] info: created collection legacy_d4d5c0fc_consolidation_runs
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mrefreshes validators on existing collections when the schema changes
+[22m[39m18:51:24.770 [memory:mongodb:schema] info: created collection legacy_d4d5c0fc_recall_traces
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mrefreshes validators on existing collections when the schema changes
+[22m[39m18:51:24.775 [memory:mongodb:schema] info: created collection legacy_d4d5c0fc_memory_jobs
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mrefreshes validators on existing collections when the schema changes
+[22m[39m18:51:24.781 [memory:mongodb:schema] info: created collection legacy_d4d5c0fc_session_chunks
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mrefreshes validators on existing collections when the schema changes
+[22m[39m18:51:24.788 [memory:mongodb:schema] info: created collection legacy_d4d5c0fc_memory_quarantine
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mrefreshes validators on existing collections when the schema changes
+[22m[39m18:51:24.793 [memory:mongodb:schema] info: created collection legacy_d4d5c0fc_memory_cost_ledger
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mrefreshes validators on existing collections when the schema changes
+[22m[39m18:51:24.800 [memory:mongodb:schema] info: created time series collection legacy_d4d5c0fc_memory_telemetry
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mrefreshes validators on existing collections when the schema changes
+[22m[39m18:51:24.800 [memory:mongodb:schema] info: created telemetry collection legacy_d4d5c0fc_memory_telemetry
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mrefreshes validators on existing collections when the schema changes
+[22m[39m18:51:24.805 [memory:mongodb:schema] info: created time series collection legacy_d4d5c0fc_access_events
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mrefreshes validators on existing collections when the schema changes
+[22m[39m18:51:24.806 [memory:mongodb:schema] info: created access events collection legacy_d4d5c0fc_access_events
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mrefreshes validators on existing collections when the schema changes
+[22m[39m18:51:24.810 [memory:mongodb:schema] info: applied schema validation to legacy_d4d5c0fc_chunks
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mrefreshes validators on existing collections when the schema changes
+[22m[39m18:51:24.813 [memory:mongodb:schema] info: applied schema validation to legacy_d4d5c0fc_knowledge_base
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mrefreshes validators on existing collections when the schema changes
+[22m[39m18:51:24.816 [memory:mongodb:schema] info: applied schema validation to legacy_d4d5c0fc_kb_chunks
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mrefreshes validators on existing collections when the schema changes
+[22m[39m18:51:24.818 [memory:mongodb:schema] info: applied schema validation to legacy_d4d5c0fc_structured_mem
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mrefreshes validators on existing collections when the schema changes
+[22m[39m18:51:24.822 [memory:mongodb:schema] info: applied schema validation to legacy_d4d5c0fc_structured_mem_revisions
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mrefreshes validators on existing collections when the schema changes
+[22m[39m18:51:24.825 [memory:mongodb:schema] info: applied schema validation to legacy_d4d5c0fc_procedures
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mrefreshes validators on existing collections when the schema changes
+[22m[39m18:51:24.827 [memory:mongodb:schema] info: applied schema validation to legacy_d4d5c0fc_procedure_revisions
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mrefreshes validators on existing collections when the schema changes
+[22m[39m18:51:24.828 [memory:mongodb:schema] info: applied schema validation to legacy_d4d5c0fc_relevance_runs
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mrefreshes validators on existing collections when the schema changes
+[22m[39m18:51:24.831 [memory:mongodb:schema] info: applied schema validation to legacy_d4d5c0fc_relevance_artifacts
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mrefreshes validators on existing collections when the schema changes
+[22m[39m18:51:24.832 [memory:mongodb:schema] info: applied schema validation to legacy_d4d5c0fc_relevance_regressions
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mrefreshes validators on existing collections when the schema changes
+[22m[39m18:51:24.834 [memory:mongodb:schema] info: applied schema validation to legacy_d4d5c0fc_events
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mrefreshes validators on existing collections when the schema changes
+[22m[39m18:51:24.836 [memory:mongodb:schema] info: applied schema validation to legacy_d4d5c0fc_entities
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mrefreshes validators on existing collections when the schema changes
+[22m[39m18:51:24.838 [memory:mongodb:schema] info: applied schema validation to legacy_d4d5c0fc_relations
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mrefreshes validators on existing collections when the schema changes
+[22m[39m18:51:24.839 [memory:mongodb:schema] info: applied schema validation to legacy_d4d5c0fc_entity_links
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mrefreshes validators on existing collections when the schema changes
+[22m[39m18:51:24.840 [memory:mongodb:schema] info: applied schema validation to legacy_d4d5c0fc_episodes
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mrefreshes validators on existing collections when the schema changes
+[22m[39m18:51:24.841 [memory:mongodb:schema] info: applied schema validation to legacy_d4d5c0fc_ingest_runs
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mrefreshes validators on existing collections when the schema changes
+[22m[39m18:51:24.842 [memory:mongodb:schema] info: applied schema validation to legacy_d4d5c0fc_projection_runs
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mrefreshes validators on existing collections when the schema changes
+[22m[39m18:51:24.844 [memory:mongodb:schema] info: applied schema validation to legacy_d4d5c0fc_query_cache
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mrefreshes validators on existing collections when the schema changes
+[22m[39m18:51:24.845 [memory:mongodb:schema] info: applied schema validation to legacy_d4d5c0fc_memory_mutations
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mrefreshes validators on existing collections when the schema changes
+[22m[39m18:51:24.847 [memory:mongodb:schema] info: applied schema validation to legacy_d4d5c0fc_recall_traces
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mrefreshes validators on existing collections when the schema changes
+[22m[39m18:51:24.849 [memory:mongodb:schema] info: applied schema validation to legacy_d4d5c0fc_memory_jobs
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mrefreshes validators on existing collections when the schema changes
+[22m[39m18:51:24.852 [memory:mongodb:schema] info: applied schema validation to legacy_d4d5c0fc_memory_quarantine
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mrefreshes validators on existing collections when the schema changes
+[22m[39m18:51:24.855 [memory:mongodb:schema] info: applied schema validation to legacy_d4d5c0fc_files
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mcreates standard indexes
+[22m[39m18:51:24.874 [memory:mongodb:schema] info: applied schema validation to e2e_chunks
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mcreates standard indexes
+[22m[39m18:51:24.877 [memory:mongodb:schema] info: applied schema validation to e2e_knowledge_base
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mcreates standard indexes
+[22m[39m18:51:24.878 [memory:mongodb:schema] info: applied schema validation to e2e_kb_chunks
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mcreates standard indexes
+[22m[39m18:51:24.881 [memory:mongodb:schema] info: applied schema validation to e2e_structured_mem
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mcreates standard indexes
+[22m[39m18:51:24.883 [memory:mongodb:schema] info: applied schema validation to e2e_structured_mem_revisions
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mcreates standard indexes
+[22m[39m18:51:24.886 [memory:mongodb:schema] info: applied schema validation to e2e_procedures
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mcreates standard indexes
+[22m[39m18:51:24.889 [memory:mongodb:schema] info: applied schema validation to e2e_procedure_revisions
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mcreates standard indexes
+[22m[39m18:51:24.890 [memory:mongodb:schema] info: applied schema validation to e2e_relevance_runs
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mcreates standard indexes
+[22m[39m18:51:24.892 [memory:mongodb:schema] info: applied schema validation to e2e_relevance_artifacts
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mcreates standard indexes
+[22m[39m18:51:24.894 [memory:mongodb:schema] info: applied schema validation to e2e_relevance_regressions
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mcreates standard indexes
+[22m[39m18:51:24.896 [memory:mongodb:schema] info: applied schema validation to e2e_events
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mcreates standard indexes
+[22m[39m18:51:24.898 [memory:mongodb:schema] info: applied schema validation to e2e_entities
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mcreates standard indexes
+[22m[39m18:51:24.899 [memory:mongodb:schema] info: applied schema validation to e2e_relations
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mcreates standard indexes
+[22m[39m18:51:24.901 [memory:mongodb:schema] info: applied schema validation to e2e_entity_links
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mcreates standard indexes
+[22m[39m18:51:24.902 [memory:mongodb:schema] info: applied schema validation to e2e_episodes
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mcreates standard indexes
+[22m[39m18:51:24.903 [memory:mongodb:schema] info: applied schema validation to e2e_ingest_runs
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mcreates standard indexes
+[22m[39m18:51:24.904 [memory:mongodb:schema] info: applied schema validation to e2e_projection_runs
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mcreates standard indexes
+[22m[39m18:51:24.905 [memory:mongodb:schema] info: applied schema validation to e2e_query_cache
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mcreates standard indexes
+[22m[39m18:51:24.907 [memory:mongodb:schema] info: applied schema validation to e2e_memory_mutations
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mcreates standard indexes
+[22m[39m18:51:24.908 [memory:mongodb:schema] info: applied schema validation to e2e_recall_traces
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mcreates standard indexes
+[22m[39m18:51:24.910 [memory:mongodb:schema] info: applied schema validation to e2e_memory_jobs
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mcreates standard indexes
+[22m[39m18:51:24.912 [memory:mongodb:schema] info: applied schema validation to e2e_memory_quarantine
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mcreates standard indexes
+[22m[39m18:51:24.913 [memory:mongodb:schema] info: applied schema validation to e2e_files
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mcreates standard indexes
+[22m[39m18:51:25.327 [memory:mongodb:schema] info: ensured 45 standard indexes
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mensureStandardIndexes is idempotent
+[22m[39m18:51:25.409 [memory:mongodb:schema] info: ensured 45 standard indexes
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mensureStandardIndexes is idempotent
+[22m[39m18:51:25.476 [memory:mongodb:schema] info: ensured 45 standard indexes
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mensures search indexes according to the live deployment
+[22m[39m18:51:25.509 [memory:mongodb:schema] info: created chunks text search index
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mensures search indexes according to the live deployment
+[22m[39m18:51:25.541 [memory:mongodb:schema] info: created chunks vector search index
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mensures search indexes according to the live deployment
+[22m[39m18:51:25.571 [memory:mongodb:schema] info: created kb_chunks text search index
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mensures search indexes according to the live deployment
+[22m[39m18:51:25.601 [memory:mongodb:schema] info: created kb_chunks vector search index
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mensures search indexes according to the live deployment
+[22m[39m18:51:25.631 [memory:mongodb:schema] info: created structured_mem text search index
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mensures search indexes according to the live deployment
+[22m[39m18:51:25.665 [memory:mongodb:schema] info: created structured_mem vector search index
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mensures search indexes according to the live deployment
+[22m[39m18:51:25.696 [memory:mongodb:schema] info: created procedures text search index
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mensures search indexes according to the live deployment
+[22m[39m18:51:25.727 [memory:mongodb:schema] info: created procedures vector search index
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mensures search indexes according to the live deployment
+[22m[39m18:51:25.762 [memory:mongodb:schema] info: created events text search index
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mensures search indexes according to the live deployment
+[22m[39m18:51:25.801 [memory:mongodb:schema] info: created events vector search index
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mensures search indexes according to the live deployment
+[22m[39m18:51:25.841 [memory:mongodb:schema] info: created query_cache vector search index
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mensures search indexes according to the live deployment
+[22m[39m18:51:25.873 [memory:mongodb:schema] info: created session_chunks text search index
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mensures search indexes according to the live deployment
+[22m[39m18:51:25.910 [memory:mongodb:schema] info: created session_chunks vector search index
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mensures search indexes according to the live deployment
+[22m[39m18:51:25.951 [memory:mongodb:schema] info: created entity autocomplete search index
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: MongoDB Collections and Indexes[2m > [22m[2mensures search indexes according to the live deployment
+[22m[39m18:51:25.984 [memory:mongodb:schema] info: created episode autocomplete search index
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: Capability Detection[2m > [22m[2mmatches the live deployment's actual search capabilities
+[22m[39m18:51:26.021 [memory:mongodb:capabilities] info: capability rerank-stage disabled: blocked on Atlas Search Preview; Atlas-managed deployments only; fix-plan-2026-08-03 P3.6 — adopt when $rerank reaches GA
+18:51:26.022 [memory:mongodb:capabilities] info: capability lexical-prefilters disabled: blocked on Atlas Search Preview; fix-plan-2026-08-03 P3.6 — adopt when lexical prefilters reach GA
+18:51:26.023 [memory:mongodb:capabilities] info: capability flat-indexes disabled: requires MongoDB >= 8.3.7; fix-plan-2026-08-03 P3.6 — drop the env opt-in when flat indexingMethod is GA
+18:51:26.023 [memory:mongodb:schema] info: detected capabilities: {"vectorSearch":false,"textSearch":false,"scoreFusion":true,"rankFusion":true,"storedSource":false,"vectorIndexMethod":false,"capabilityGates":{"vector-stored-source":true,"autoembed-quantization":true,"rerank-stage":false,"lexical-prefilters":false,"flat-indexes":false}}
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: Sync Workflow[2m > [22m[2msyncs memory files to MongoDB
+[22m[39m18:51:26.055 [memory:mongodb:sync] info: sync: found 2 memory files on disk (reason=manual)
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: Sync Workflow[2m > [22m[2msyncs memory files to MongoDB
+[22m[39m18:51:26.057 [memory:mongodb:sync] info: sync: 2/2 memory files need re-indexing
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: Sync Workflow[2m > [22m[2msyncs memory files to MongoDB
+[22m[39m18:51:26.079 [memory:mongodb:sync] info: sync complete: memory=2 conversation=0 chunks=2 stale=0 failed=0 enumerationComplete=true
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: Sync Workflow[2m > [22m[2mskips unchanged files on re-sync
+[22m[39m18:51:26.086 [memory:mongodb:sync] info: sync: found 2 memory files on disk (reason=manual)
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: Sync Workflow[2m > [22m[2mskips unchanged files on re-sync
+[22m[39m18:51:26.087 [memory:mongodb:sync] info: sync: 0/2 memory files need re-indexing
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: Sync Workflow[2m > [22m[2mskips unchanged files on re-sync
+[22m[39m18:51:26.088 [memory:mongodb:sync] info: sync complete: memory=0 conversation=0 chunks=0 stale=0 failed=0 enumerationComplete=true
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: Sync Workflow[2m > [22m[2mre-indexes when file content changes
+[22m[39m18:51:26.091 [memory:mongodb:sync] info: sync: found 2 memory files on disk (reason=manual)
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: Sync Workflow[2m > [22m[2mre-indexes when file content changes
+[22m[39m18:51:26.092 [memory:mongodb:sync] info: sync: 1/2 memory files need re-indexing
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: Sync Workflow[2m > [22m[2mre-indexes when file content changes
+[22m[39m18:51:26.100 [memory:mongodb:sync] info: sync complete: memory=1 conversation=0 chunks=1 stale=0 failed=0 enumerationComplete=true
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: Sync Workflow[2m > [22m[2mforce re-indexes all files
+[22m[39m18:51:26.103 [memory:mongodb:sync] info: sync: found 2 memory files on disk (reason=manual)
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: Sync Workflow[2m > [22m[2mforce re-indexes all files
+[22m[39m18:51:26.104 [memory:mongodb:sync] info: sync: 2/2 memory files need re-indexing
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: Sync Workflow[2m > [22m[2mforce re-indexes all files
+[22m[39m18:51:26.114 [memory:mongodb:sync] info: sync complete: memory=2 conversation=0 chunks=2 stale=0 failed=0 enumerationComplete=true
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: Sync Workflow[2m > [22m[2mdeletes stale chunks when files are removed
+[22m[39m18:51:26.117 [memory:mongodb:sync] info: sync: found 1 memory files on disk (reason=manual)
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: Sync Workflow[2m > [22m[2mdeletes stale chunks when files are removed
+[22m[39m18:51:26.118 [memory:mongodb:sync] info: sync: 0/1 memory files need re-indexing
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: Sync Workflow[2m > [22m[2mdeletes stale chunks when files are removed
+[22m[39m18:51:26.122 [memory:mongodb:sync] info: sync: removed 1 stale chunks
+18:51:26.122 [memory:mongodb:sync] info: sync complete: memory=0 conversation=0 chunks=0 stale=1 failed=0 enumerationComplete=true
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: Sync Workflow[2m > [22m[2mreports progress during sync
+[22m[39m18:51:26.133 [memory:mongodb:sync] info: sync: found 3 memory files on disk (reason=manual)
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: Sync Workflow[2m > [22m[2mreports progress during sync
+[22m[39m18:51:26.135 [memory:mongodb:sync] info: sync: 3/3 memory files need re-indexing
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: Sync Workflow[2m > [22m[2mreports progress during sync
+[22m[39m18:51:26.145 [memory:mongodb:sync] info: sync complete: memory=3 conversation=0 chunks=3 stale=0 failed=0 enumerationComplete=true
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: $text Search fallback
+[22m[39m18:51:26.156 [memory:mongodb:schema] info: applied schema validation to e2e_chunks
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: $text Search fallback
+[22m[39m18:51:26.159 [memory:mongodb:schema] info: applied schema validation to e2e_knowledge_base
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: $text Search fallback
+[22m[39m18:51:26.160 [memory:mongodb:schema] info: applied schema validation to e2e_kb_chunks
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: $text Search fallback
+[22m[39m18:51:26.162 [memory:mongodb:schema] info: applied schema validation to e2e_structured_mem
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: $text Search fallback
+[22m[39m18:51:26.164 [memory:mongodb:schema] info: applied schema validation to e2e_structured_mem_revisions
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: $text Search fallback
+[22m[39m18:51:26.165 [memory:mongodb:schema] info: applied schema validation to e2e_procedures
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: $text Search fallback
+[22m[39m18:51:26.167 [memory:mongodb:schema] info: applied schema validation to e2e_procedure_revisions
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: $text Search fallback
+[22m[39m18:51:26.168 [memory:mongodb:schema] info: applied schema validation to e2e_relevance_runs
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: $text Search fallback
+[22m[39m18:51:26.170 [memory:mongodb:schema] info: applied schema validation to e2e_relevance_artifacts
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: $text Search fallback
+[22m[39m18:51:26.171 [memory:mongodb:schema] info: applied schema validation to e2e_relevance_regressions
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: $text Search fallback
+[22m[39m18:51:26.173 [memory:mongodb:schema] info: applied schema validation to e2e_events
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: $text Search fallback
+[22m[39m18:51:26.175 [memory:mongodb:schema] info: applied schema validation to e2e_entities
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: $text Search fallback
+[22m[39m18:51:26.176 [memory:mongodb:schema] info: applied schema validation to e2e_relations
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: $text Search fallback
+[22m[39m18:51:26.179 [memory:mongodb:schema] info: applied schema validation to e2e_entity_links
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: $text Search fallback
+[22m[39m18:51:26.180 [memory:mongodb:schema] info: applied schema validation to e2e_episodes
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: $text Search fallback
+[22m[39m18:51:26.181 [memory:mongodb:schema] info: applied schema validation to e2e_ingest_runs
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: $text Search fallback
+[22m[39m18:51:26.183 [memory:mongodb:schema] info: applied schema validation to e2e_projection_runs
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: $text Search fallback
+[22m[39m18:51:26.184 [memory:mongodb:schema] info: applied schema validation to e2e_query_cache
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: $text Search fallback
+[22m[39m18:51:26.185 [memory:mongodb:schema] info: applied schema validation to e2e_memory_mutations
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: $text Search fallback
+[22m[39m18:51:26.187 [memory:mongodb:schema] info: applied schema validation to e2e_recall_traces
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: $text Search fallback
+[22m[39m18:51:26.188 [memory:mongodb:schema] info: applied schema validation to e2e_memory_jobs
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: $text Search fallback
+[22m[39m18:51:26.189 [memory:mongodb:schema] info: applied schema validation to e2e_memory_quarantine
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: $text Search fallback
+[22m[39m18:51:26.190 [memory:mongodb:schema] info: applied schema validation to e2e_files
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: $text Search fallback
+[22m[39m18:51:26.248 [memory:mongodb:schema] info: ensured 45 standard indexes
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: $text Search fallback
+[22m[39m18:51:26.252 [memory:mongodb:sync] info: sync: found 2 memory files on disk (reason=manual)
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: $text Search fallback
+[22m[39m18:51:26.253 [memory:mongodb:sync] info: sync: 2/2 memory files need re-indexing
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: $text Search fallback
+[22m[39m18:51:26.261 [memory:mongodb:sync] info: sync complete: memory=2 conversation=0 chunks=2 stale=0 failed=0 enumerationComplete=true
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: mongoSearch dispatcher fallback
+[22m[39m18:51:26.279 [memory:mongodb:schema] info: applied schema validation to e2e_chunks
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: mongoSearch dispatcher fallback
+[22m[39m18:51:26.282 [memory:mongodb:schema] info: applied schema validation to e2e_knowledge_base
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: mongoSearch dispatcher fallback
+[22m[39m18:51:26.283 [memory:mongodb:schema] info: applied schema validation to e2e_kb_chunks
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: mongoSearch dispatcher fallback
+[22m[39m18:51:26.290 [memory:mongodb:schema] info: applied schema validation to e2e_structured_mem
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: mongoSearch dispatcher fallback
+[22m[39m18:51:26.293 [memory:mongodb:schema] info: applied schema validation to e2e_structured_mem_revisions
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: mongoSearch dispatcher fallback
+[22m[39m18:51:26.295 [memory:mongodb:schema] info: applied schema validation to e2e_procedures
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: mongoSearch dispatcher fallback
+[22m[39m18:51:26.296 [memory:mongodb:schema] info: applied schema validation to e2e_procedure_revisions
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: mongoSearch dispatcher fallback
+[22m[39m18:51:26.298 [memory:mongodb:schema] info: applied schema validation to e2e_relevance_runs
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: mongoSearch dispatcher fallback
+[22m[39m18:51:26.299 [memory:mongodb:schema] info: applied schema validation to e2e_relevance_artifacts
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: mongoSearch dispatcher fallback
+[22m[39m18:51:26.300 [memory:mongodb:schema] info: applied schema validation to e2e_relevance_regressions
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: mongoSearch dispatcher fallback
+[22m[39m18:51:26.301 [memory:mongodb:schema] info: applied schema validation to e2e_events
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: mongoSearch dispatcher fallback
+[22m[39m18:51:26.302 [memory:mongodb:schema] info: applied schema validation to e2e_entities
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: mongoSearch dispatcher fallback
+[22m[39m18:51:26.305 [memory:mongodb:schema] info: applied schema validation to e2e_relations
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: mongoSearch dispatcher fallback
+[22m[39m18:51:26.309 [memory:mongodb:schema] info: applied schema validation to e2e_entity_links
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: mongoSearch dispatcher fallback
+[22m[39m18:51:26.309 [memory:mongodb:schema] info: applied schema validation to e2e_episodes
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: mongoSearch dispatcher fallback
+[22m[39m18:51:26.311 [memory:mongodb:schema] info: applied schema validation to e2e_ingest_runs
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: mongoSearch dispatcher fallback
+[22m[39m18:51:26.312 [memory:mongodb:schema] info: applied schema validation to e2e_projection_runs
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: mongoSearch dispatcher fallback
+[22m[39m18:51:26.313 [memory:mongodb:schema] info: applied schema validation to e2e_query_cache
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: mongoSearch dispatcher fallback
+[22m[39m18:51:26.314 [memory:mongodb:schema] info: applied schema validation to e2e_memory_mutations
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: mongoSearch dispatcher fallback
+[22m[39m18:51:26.316 [memory:mongodb:schema] info: applied schema validation to e2e_recall_traces
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: mongoSearch dispatcher fallback
+[22m[39m18:51:26.318 [memory:mongodb:schema] info: applied schema validation to e2e_memory_jobs
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: mongoSearch dispatcher fallback
+[22m[39m18:51:26.319 [memory:mongodb:schema] info: applied schema validation to e2e_memory_quarantine
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: mongoSearch dispatcher fallback
+[22m[39m18:51:26.320 [memory:mongodb:schema] info: applied schema validation to e2e_files
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: mongoSearch dispatcher fallback
+[22m[39m18:51:26.368 [memory:mongodb:schema] info: ensured 45 standard indexes
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: mongoSearch dispatcher fallback
+[22m[39m18:51:26.372 [memory:mongodb:sync] info: sync: found 2 memory files on disk (reason=manual)
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: mongoSearch dispatcher fallback
+[22m[39m18:51:26.373 [memory:mongodb:sync] info: sync: 2/2 memory files need re-indexing
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: mongoSearch dispatcher fallback
+[22m[39m18:51:26.380 [memory:mongodb:sync] info: sync complete: memory=2 conversation=0 chunks=2 stale=0 failed=0 enumerationComplete=true
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: mongoSearch dispatcher fallback[2m > [22m[2mranks a nonsense query below a genuine match instead of inventing relevance
+[22m[39m18:51:26.399 [memory:mongodb:capabilities] info: capability rerank-stage disabled: blocked on Atlas Search Preview; Atlas-managed deployments only; fix-plan-2026-08-03 P3.6 — adopt when $rerank reaches GA
+18:51:26.400 [memory:mongodb:capabilities] info: capability lexical-prefilters disabled: blocked on Atlas Search Preview; fix-plan-2026-08-03 P3.6 — adopt when lexical prefilters reach GA
+18:51:26.400 [memory:mongodb:capabilities] info: capability flat-indexes disabled: requires MongoDB >= 8.3.7; fix-plan-2026-08-03 P3.6 — drop the env opt-in when flat indexingMethod is GA
+18:51:26.400 [memory:mongodb:schema] info: detected capabilities: {"vectorSearch":false,"textSearch":true,"scoreFusion":true,"rankFusion":true,"storedSource":false,"vectorIndexMethod":false,"capabilityGates":{"vector-stored-source":true,"autoembed-quantization":true,"rerank-stage":false,"lexical-prefilters":false,"flat-indexes":false}}
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: mongoSearch dispatcher fallback[2m > [22m[2mrespects maxResults limit
+[22m[39m18:51:26.425 [memory:mongodb:capabilities] info: capability rerank-stage disabled: blocked on Atlas Search Preview; Atlas-managed deployments only; fix-plan-2026-08-03 P3.6 — adopt when $rerank reaches GA
+18:51:26.425 [memory:mongodb:capabilities] info: capability lexical-prefilters disabled: blocked on Atlas Search Preview; fix-plan-2026-08-03 P3.6 — adopt when lexical prefilters reach GA
+18:51:26.425 [memory:mongodb:capabilities] info: capability flat-indexes disabled: requires MongoDB >= 8.3.7; fix-plan-2026-08-03 P3.6 — drop the env opt-in when flat indexingMethod is GA
+18:51:26.425 [memory:mongodb:schema] info: detected capabilities: {"vectorSearch":false,"textSearch":true,"scoreFusion":true,"rankFusion":true,"storedSource":false,"vectorIndexMethod":false,"capabilityGates":{"vector-stored-source":true,"autoembed-quantization":true,"rerank-stage":false,"lexical-prefilters":false,"flat-indexes":false}}
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: Chunk IDs and Deduplication
+[22m[39m18:51:26.442 [memory:mongodb:sync] info: sync: found 1 memory files on disk (reason=manual)
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: Chunk IDs and Deduplication
+[22m[39m18:51:26.443 [memory:mongodb:sync] info: sync: 1/1 memory files need re-indexing
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: Chunk IDs and Deduplication
+[22m[39m18:51:26.448 [memory:mongodb:sync] info: sync complete: memory=1 conversation=0 chunks=1 stale=0 failed=0 enumerationComplete=true
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: Chunk IDs and Deduplication[2m > [22m[2mre-sync upserts (not duplicates) existing chunks
+[22m[39m18:51:26.452 [memory:mongodb:sync] info: sync: found 1 memory files on disk (reason=manual)
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: Chunk IDs and Deduplication[2m > [22m[2mre-sync upserts (not duplicates) existing chunks
+[22m[39m18:51:26.453 [memory:mongodb:sync] info: sync: 1/1 memory files need re-indexing
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: Chunk IDs and Deduplication[2m > [22m[2mre-sync upserts (not duplicates) existing chunks
+[22m[39m18:51:26.460 [memory:mongodb:sync] info: sync complete: memory=1 conversation=0 chunks=1 stale=0 failed=0 enumerationComplete=true
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: Transactions (replica set)[2m > [22m[2msyncToMongoDB uses transactions when client is provided on replica set
+[22m[39m18:51:26.469 [memory:mongodb:sync] info: sync: found 1 memory files on disk (reason=manual)
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: Transactions (replica set)[2m > [22m[2msyncToMongoDB uses transactions when client is provided on replica set
+[22m[39m18:51:26.469 [memory:mongodb:sync] info: sync: 1/1 memory files need re-indexing
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: Transactions (replica set)[2m > [22m[2msyncToMongoDB uses transactions when client is provided on replica set
+[22m[39m18:51:26.476 [memory:mongodb:sync] info: sync complete: memory=1 conversation=0 chunks=1 stale=0 failed=0 enumerationComplete=true
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: Transactions (replica set)[2m > [22m[2mtransaction commit is atomic — all-or-nothing per file
+[22m[39m18:51:26.481 [memory:mongodb:sync] info: sync: found 1 memory files on disk (reason=manual)
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: Transactions (replica set)[2m > [22m[2mtransaction commit is atomic — all-or-nothing per file
+[22m[39m18:51:26.482 [memory:mongodb:sync] info: sync: 1/1 memory files need re-indexing
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: Transactions (replica set)[2m > [22m[2mtransaction commit is atomic — all-or-nothing per file
+[22m[39m18:51:26.488 [memory:mongodb:sync] info: sync complete: memory=1 conversation=0 chunks=1 stale=0 failed=0 enumerationComplete=true
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: Transactions (replica set)[2m > [22m[2mstale file cleanup works transactionally
+[22m[39m18:51:26.491 [memory:mongodb:sync] info: sync: found 0 memory files on disk (reason=manual)
+18:51:26.491 [memory:mongodb:sync] info: sync: 0/0 memory files need re-indexing
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: Transactions (replica set)[2m > [22m[2mstale file cleanup works transactionally
+[22m[39m18:51:26.493 [memory:mongodb:sync] info: sync: removed 1 stale chunks
+18:51:26.493 [memory:mongodb:sync] info: sync complete: memory=0 conversation=0 chunks=0 stale=1 failed=0 enumerationComplete=true
+
+[90mstderr[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: TTL Indexes[2m > [22m[2mcreates TTL index on files when memoryTtlDays > 0
+[22m[39m18:51:26.514 [memory:mongodb:schema] warn: created TTL index on files: 90 days — old memory files will be auto-deleted
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: TTL Indexes[2m > [22m[2mcreates TTL index on files when memoryTtlDays > 0
+[22m[39m18:51:26.571 [memory:mongodb:schema] info: ensured 45 standard indexes
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: TTL Indexes[2m > [22m[2mskips files TTL index when memoryTtlDays is 0
+[22m[39m18:51:26.638 [memory:mongodb:schema] info: ensured 45 standard indexes
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: Analytics (getMemoryStats)
+[22m[39m18:51:26.645 [memory:mongodb:sync] info: sync: found 2 memory files on disk (reason=manual)
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: Analytics (getMemoryStats)
+[22m[39m18:51:26.646 [memory:mongodb:sync] info: sync: 2/2 memory files need re-indexing
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: Analytics (getMemoryStats)
+[22m[39m18:51:26.656 [memory:mongodb:sync] info: sync complete: memory=2 conversation=0 chunks=2 stale=0 failed=0 enumerationComplete=true
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: Analytics (getMemoryStats)[2m > [22m[2mreturns non-zero totals for synced data
+[22m[39m18:51:26.666 [memory:mongodb:analytics] info: stats: files=2 chunks=2 embeddingStatus={basis=stored-vector,success=0,failed=0,pending=2,unknown=0} stale=0
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: Analytics (getMemoryStats)[2m > [22m[2mreports embedding coverage (automated mode has no embeddings)
+[22m[39m18:51:26.671 [memory:mongodb:analytics] info: stats: files=2 chunks=2 embeddingStatus={basis=stored-vector,success=0,failed=0,pending=2,unknown=0} stale=0
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: Analytics (getMemoryStats)[2m > [22m[2mdetects stale files when validPaths provided
+[22m[39m18:51:26.678 [memory:mongodb:analytics] info: stats: files=2 chunks=2 embeddingStatus={basis=stored-vector,success=0,failed=0,pending=2,unknown=0} stale=1
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: Analytics (getMemoryStats)[2m > [22m[2mreports collection sizes
+[22m[39m18:51:26.683 [memory:mongodb:analytics] info: stats: files=2 chunks=2 embeddingStatus={basis=stored-vector,success=0,failed=0,pending=2,unknown=0} stale=0
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: Change Streams[2m > [22m[2mstarts change stream watcher on replica set
+[22m[39m18:51:26.687 [memory:mongodb:changestream] info: change stream started
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: Change Streams[2m > [22m[2mstarts change stream watcher on replica set
+[22m[39m18:51:26.687 [memory:mongodb:changestream] info: change stream closed
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: Change Streams[2m > [22m[2mdetects insert events via change stream
+[22m[39m18:51:26.688 [memory:mongodb:changestream] info: change stream started
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E: Change Streams[2m > [22m[2mdetects insert events via change stream
+[22m[39m18:51:27.001 [memory:mongodb:changestream] info: change stream closed
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E v2: event -> chunk projection[2m > [22m[2mwrites event, projects chunk, retrieves via search
+[22m[39m18:51:27.021 [memory:mongodb:events] info: event written: 396b8d93-c776-4e3f-b31b-45fd8c5fb892 role=user
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E v2: event -> chunk projection[2m > [22m[2mwrites event, projects chunk, retrieves via search
+[22m[39m18:51:27.031 [memory:mongodb:events] info: projected 1 chunks from 1 events for agent=e2e-evt-5798157d-51e5-4d99-8ddd-9ddddaca022f
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E v2: structured memory with scope[2m > [22m[2mwrites structured entries with different scopes
+[22m[39m18:51:27.046 [memory:mongodb:structured] info: structured memory created: type=preference key=*** revision=1
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E v2: structured memory with scope[2m > [22m[2mwrites structured entries with different scopes
+[22m[39m18:51:27.054 [memory:mongodb:structured] info: structured memory created: type=preference key=*** revision=1
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E v2: structured memory with scope[2m > [22m[2mpreserves superseded structured values in the revisions collection
+[22m[39m18:51:27.062 [memory:mongodb:structured] info: structured memory created: type=decision key=*** revision=1
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E v2: structured memory with scope[2m > [22m[2mpreserves superseded structured values in the revisions collection
+[22m[39m18:51:27.068 [memory:mongodb:structured] info: structured memory updated: type=decision key=*** revision=2
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E v2: graph expansion[2m > [22m[2mcreates entities and relations, expands graph via $graphLookup
+[22m[39m18:51:27.076 [memory:mongodb:graph] info: entity created: ec3db2b3-10be-4efe-8b71-35d5621fa0f0 name=Rom
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E v2: graph expansion[2m > [22m[2mcreates entities and relations, expands graph via $graphLookup
+[22m[39m18:51:27.079 [memory:mongodb:graph] info: entity created: eb50afe1-ef41-4ba5-9177-90b90d7b3a33 name=Memongo
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E v2: graph expansion[2m > [22m[2mcreates entities and relations, expands graph via $graphLookup
+[22m[39m18:51:27.083 [memory:mongodb:graph] info: relation created: ec3db2b3-10be-4efe-8b71-35d5621fa0f0 -[works_on]-> eb50afe1-ef41-4ba5-9177-90b90d7b3a33
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E v2: graph expansion[2m > [22m[2mstores candidate links as reversible records and keeps same-name entities isolated by scope
+[22m[39m18:51:27.089 [memory:mongodb:graph] info: entity created: b8328061-f462-4e7c-a2b7-2809a84f2917 name=Alex
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E v2: graph expansion[2m > [22m[2mstores candidate links as reversible records and keeps same-name entities isolated by scope
+[22m[39m18:51:27.090 [memory:mongodb:graph] info: entity created: 6510dd8c-9cfc-47ab-80b3-b90d9b6585dd name=Alex
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E v2: episode materialization[2m > [22m[2mwrites events, materializes episode, searches episode
+[22m[39m18:51:27.099 [memory:mongodb:events] info: event written: 5c85e77c-7536-43e8-8e2b-f803808acdff role=user
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E v2: episode materialization[2m > [22m[2mwrites events, materializes episode, searches episode
+[22m[39m18:51:27.100 [memory:mongodb:events] info: event written: e03d8ba4-7e10-4a5e-a243-3fd6a1558160 role=assistant
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E v2: episode materialization[2m > [22m[2mwrites events, materializes episode, searches episode
+[22m[39m18:51:27.101 [memory:mongodb:events] info: event written: bed7ba60-8c4d-4fad-9e85-7b3ea42faa15 role=user
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E v2: episode materialization[2m > [22m[2mwrites events, materializes episode, searches episode
+[22m[39m18:51:27.102 [memory:mongodb:events] info: event written: 44e47a27-be8b-45c3-a738-3a74657f0b8b role=assistant
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E v2: episode materialization[2m > [22m[2mwrites events, materializes episode, searches episode
+[22m[39m18:51:27.104 [memory:mongodb:events] info: event written: 39a0c385-f967-4884-9d52-82f46f93607e role=user
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E v2: episode materialization[2m > [22m[2mwrites events, materializes episode, searches episode
+[22m[39m18:51:27.108 [memory:mongodb:episodes] info: episode materialized: 6cd51419-3bed-4bdc-b170-ebc34de45efd type=daily events=5 agent=e2e-episode-4ed56f2a-d6b9-406d-ad54-d3229690c11b
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E v2: migration backfill[2m > [22m[2mbackfills events from existing v1 chunks
+[22m[39m18:51:27.120 [memory:mongodb:migration] info: backfill complete: chunksProcessed=2 eventsCreated=2 skipped=0
+
+[90mstdout[2m | src/mongodb-e2e.e2e.test.ts[2m > [22m[2mE2E v2: migration backfill[2m > [22m[2mbackfills events from existing v1 chunks
+[22m[39m18:51:27.123 [memory:mongodb:migration] info: backfill complete: chunksProcessed=2 eventsCreated=0 skipped=0
+
+ [31m❯[39m src/mongodb-e2e.e2e.test.ts [2m([22m[2m43 tests[22m[2m | [22m[31m1 failed[39m[2m)[22m[33m 2926[2mms[22m[39m
+     [32m✓[39m creates all required collections[32m 219[2mms[22m[39m
+     [32m✓[39m ensureCollections is idempotent[32m 84[2mms[22m[39m
+     [32m✓[39m refreshes validators on existing collections when the schema changes[32m 241[2mms[22m[39m
+[31m     [31m×[31m creates standard indexes[39m[33m 481[2mms[22m[39m
+     [32m✓[39m ensureStandardIndexes is idempotent[32m 132[2mms[22m[39m
+     [33m[2m✓[22m[39m ensures search indexes according to the live deployment [33m 526[2mms[22m[39m
+     [32m✓[39m matches the live deployment's actual search capabilities[32m 37[2mms[22m[39m
+     [32m✓[39m syncs memory files to MongoDB[32m 40[2mms[22m[39m
+     [32m✓[39m skips unchanged files on re-sync[32m 4[2mms[22m[39m
+     [32m✓[39m re-indexes when file content changes[32m 13[2mms[22m[39m
+     [32m✓[39m force re-indexes all files[32m 14[2mms[22m[39m
+     [32m✓[39m deletes stale chunks when files are removed[32m 10[2mms[22m[39m
+     [32m✓[39m reports progress during sync[32m 21[2mms[22m[39m
+     [32m✓[39m $text search finds relevant documents[32m 2[2mms[22m[39m
+     [32m✓[39m $text search returns empty for unrelated queries[32m 1[2mms[22m[39m
+     [32m✓[39m $text search with source filter[32m 1[2mms[22m[39m
+     [32m✓[39m falls through to $text search when Search is unavailable[32m 2[2mms[22m[39m
+     [32m✓[39m ranks a nonsense query below a genuine match instead of inventing relevance[32m 24[2mms[22m[39m
+     [32m✓[39m respects maxResults limit[32m 25[2mms[22m[39m
+     [32m✓[39m chunks have deterministic namespaced _id based on source scope and line range[32m 1[2mms[22m[39m
+     [32m✓[39m re-sync upserts (not duplicates) existing chunks[32m 12[2mms[22m[39m
+     [32m✓[39m collection helpers return correct collection names[32m 0[2mms[22m[39m
+     [32m✓[39m syncToMongoDB uses transactions when client is provided on replica set[32m 12[2mms[22m[39m
+     [32m✓[39m transaction commit is atomic — all-or-nothing per file[32m 11[2mms[22m[39m
+     [32m✓[39m stale file cleanup works transactionally[32m 6[2mms[22m[39m
+     [32m✓[39m withTransaction retries on transient errors[32m 3[2mms[22m[39m
+     [32m✓[39m creates TTL index on files when memoryTtlDays > 0[32m 73[2mms[22m[39m
+     [32m✓[39m skips files TTL index when memoryTtlDays is 0[32m 67[2mms[22m[39m
+     [32m✓[39m returns non-zero totals for synced data[32m 10[2mms[22m[39m
+     [32m✓[39m reports embedding coverage (automated mode has no embeddings)[32m 5[2mms[22m[39m
+     [32m✓[39m detects stale files when validPaths provided[32m 6[2mms[22m[39m
+     [32m✓[39m reports collection sizes[32m 6[2mms[22m[39m
+     [32m✓[39m starts change stream watcher on replica set[32m 2[2mms[22m[39m
+     [33m[2m✓[22m[39m detects insert events via change stream [33m 318[2mms[22m[39m
+     [32m✓[39m writes event, projects chunk, retrieves via search[32m 21[2mms[22m[39m
+     [32m✓[39m writes structured entries with different scopes[32m 19[2mms[22m[39m
+     [32m✓[39m preserves superseded structured values in the revisions collection[32m 15[2mms[22m[39m
+     [32m✓[39m creates entities and relations, expands graph via $graphLookup[32m 14[2mms[22m[39m
+     [32m✓[39m stores candidate links as reversible records and keeps same-name entities isolated by scope[32m 9[2mms[22m[39m
+     [32m✓[39m writes events, materializes episode, searches episode[32m 14[2mms[22m[39m
+     [32m✓[39m backfills events from existing v1 chunks[32m 9[2mms[22m[39m
+     [32m✓[39m plans retrieval paths based on query and config[32m 3[2mms[22m[39m
+     [32m✓[39m distinguishes healthy, degraded, and unavailable states in v2 status[32m 18[2mms[22m[39m
+
+[31m⎯⎯⎯⎯⎯⎯⎯[39m[1m[41m Failed Tests 1 [49m[22m[31m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[41m[1m FAIL [22m[49m src/mongodb-e2e.e2e.test.ts[2m > [22mE2E: MongoDB Collections and Indexes[2m > [22mcreates standard indexes
+[31m[1mAssertionError[22m: expected 103 to be 102 // Object.is equality[39m
+
+[32m- Expected[39m
+[31m+ Received[39m
+
+[32m- 102[39m
+[31m+ 103[39m
+
+[36m [2m❯[22m src/mongodb-e2e.e2e.test.ts:[2m242:19[22m[39m
+    [90m240|[39m   [35mawait[39m [34mensureCollections[39m(db[33m,[39m [33mTEST_PREFIX[39m)
+    [90m241|[39m   [35mconst[39m applied [33m=[39m [35mawait[39m [34mensureStandardIndexes[39m(db[33m,[39m [33mTEST_PREFIX[39m)
+    [90m242|[39m   [34mexpect[39m(applied)[33m.[39m[34mtoBe[39m([33mEXPECTED_STANDARD_INDEX_COUNT[39m)
+    [90m   |[39m                   [31m^[39m
+    [90m243|[39m
+    [90m244|[39m   [90m// Verify chunks indexes[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯[22m[39m
+
+
+[2m Test Files [22m [1m[31m1 failed[39m[22m[2m | [22m[1m[32m1 passed[39m[22m[90m (2)[39m
+[2m      Tests [22m [1m[31m1 failed[39m[22m[2m | [22m[1m[32m43 passed[39m[22m[90m (44)[39m
+[2m   Start at [22m 18:50:19
+[2m   Duration [22m 67.96s[2m (transform 669ms, setup 0ms, import 1.21s, tests 66.50s, environment 0ms)[22m
+

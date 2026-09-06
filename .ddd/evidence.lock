@@ -651,3 +651,124 @@ entries:
     superseded_by: null
     content_type: "text/markdown"
     notes: "Wave 2b (W14) grounding: fsPromises.readdir fulfills with the complete array of names in the directory and delivers errors exclusively by promise rejection (the official example wraps the call in try/catch); there is no partial-result mode. A rejected enumeration (EACCES, EMFILE, transient I/O) means the listing is unavailable, never that the directory is empty — so the current catch{} in listMemoryFiles that reinterprets enumeration failure as zero files, feeding an empty validPaths into stale-chunk cleanup, is a documented-contract violation and the basis for the enumeration-incomplete guard."
+
+# EL-027..EL-031 appended 2026-09-06 (Wave 2c / W06+W11+W13+W16+W17
+# grounding): official MongoDB documentation sections relied on for the
+# access-tracker exactly-once flush and the time-series constraint set that
+# shapes it. Captures hold verbatim contract sections plus analysis; digests
+# over the cache files. No prior entry modified.
+
+  - id: EL-027
+    subject: "MongoDB Manual - Time Series Indexes (secondary indexes on any field, prohibited unique/text/2d)"
+    schema_version: 0.1.0
+    source_class: official-doc
+    source_url: "https://www.mongodb.com/docs/manual/core/timeseries/timeseries-index/"
+    publisher: "MongoDB (mongodb.com official documentation)"
+    product: "MongoDB Server Manual"
+    version: "8.x (local stack 8.3.8)"
+    retrieved_at: "2026-09-06T15:04:18.000Z"
+    content_digest: "sha256:6b6ca72ae248da98fa163cb4e6a5d70d84df17354bf7f3ab3a259fa4991ba7fe"
+    doc_version: "manual-current-2026-09-06"
+    cache_path: cache/mongodb-manual-timeseries-index.md
+    sections: ["Secondary indexes on any field", "Prohibited Indexes", "Compound Indexes"]
+    status: active
+    authority_for: [data-model, time-series]
+    freshness: "365d"
+    adapter: web-fetch
+    license: "MongoDB docs: public web documentation, fair-use quotes in cache"
+    independence: independent-of-remediation
+    superseded_by: null
+    content_type: "text/markdown"
+    notes: "Wave 2c (W11) grounding: secondary indexes on ANY field are allowed on time-series collections from 6.0 (basis for the batchId index on access_events); unique indexes are prohibited on time-series collections, so raw-event dedupe cannot be constraint-enforced and must be read-reconcile by batchId."
+
+  - id: EL-028
+    subject: "MongoDB Manual - Time Series Collection Limitations (no transactions, no _id index, update restrictions)"
+    schema_version: 0.1.0
+    source_class: official-doc
+    source_url: "https://www.mongodb.com/docs/manual/core/timeseries/timeseries-limitations/"
+    publisher: "MongoDB (mongodb.com official documentation)"
+    product: "MongoDB Server Manual"
+    version: "8.x (local stack 8.3.8)"
+    retrieved_at: "2026-09-06T15:04:18.000Z"
+    content_digest: "sha256:3fbb4745458ba60849f24b57207c5df302aff19f43c620ce794ad3d0c01a13da"
+    doc_version: "manual-current-2026-09-06"
+    cache_path: cache/mongodb-manual-timeseries-limitations.md
+    sections: ["Transactions", "Indexes (Default Index, unsupported index types)", "Updates", "Unsupported Features"]
+    status: active
+    authority_for: [time-series, crud-write-semantics]
+    freshness: "365d"
+    adapter: web-fetch
+    license: "MongoDB docs: public web documentation, fair-use quotes in cache"
+    independence: independent-of-remediation
+    superseded_by: null
+    content_type: "text/markdown"
+    notes: "Wave 2c (W11) grounding: you cannot write to time-series collections in transactions, so a tracker flush spanning access_events plus canonical collections cannot be jointly atomic and each phase must be independently idempotent; no default _id index and no unique indexes on time-series collections force read-reconcile dedupe for raw events. Update restrictions are out of scope for the fix (access_events path is insert-only)."
+
+  - id: EL-029
+    subject: "MongoDB Manual - $ne query operator (missing-field and scalar-on-array semantics)"
+    schema_version: 0.1.0
+    source_class: official-doc
+    source_url: "https://www.mongodb.com/docs/manual/reference/operator/query/ne/"
+    publisher: "MongoDB (mongodb.com official documentation)"
+    product: "MongoDB Server Manual"
+    version: "8.x (local stack 8.3.8)"
+    retrieved_at: "2026-09-06T15:04:18.000Z"
+    content_digest: "sha256:31aeeb793ac6735c7a3eee085e4f7f6a4fc8422e484115bf3aa6b6126571be1d"
+    doc_version: "manual-current-2026-09-06"
+    cache_path: cache/mongodb-manual-query-ne.md
+    sections: ["Definition", "Arrays (Scalar comparison)"]
+    status: active
+    authority_for: [crud-write-semantics, retry-semantics]
+    freshness: "365d"
+    adapter: web-fetch
+    license: "MongoDB docs: public web documentation, fair-use quotes in cache"
+    independence: independent-of-remediation
+    superseded_by: null
+    content_type: "text/markdown"
+    notes: "Wave 2c (W11) grounding: $ne selects documents where the field value is not equal to the specified value, including documents that do not contain the field; scalar $ne against an array matches where the scalar is not an element of the array, including missing fields. Basis for the filter-side canonical exactly-once guard: {compound identity, appliedBatches: {$ne: batchId}} matches legacy and other-batch documents, excludes exactly the documents that already applied this batch, and a no-match updateOne changes nothing."
+
+  - id: EL-030
+    subject: "MongoDB Manual - $push update operator (missing-field creation, $each/$slice modifiers)"
+    schema_version: 0.1.0
+    source_class: official-doc
+    source_url: "https://www.mongodb.com/docs/manual/reference/operator/update/push/"
+    publisher: "MongoDB (mongodb.com official documentation)"
+    product: "MongoDB Server Manual"
+    version: "8.x (local stack 8.3.8)"
+    retrieved_at: "2026-09-06T15:04:18.000Z"
+    content_digest: "sha256:698d71a9918f62a57684024c26499191fbdca3bf2f813def4112a6bfb0b0c82f"
+    doc_version: "manual-current-2026-09-06"
+    cache_path: cache/mongodb-manual-update-push.md
+    sections: ["Definition", "Behavior (missing field)", "Modifiers"]
+    status: active
+    authority_for: [crud-write-semantics, retry-semantics]
+    freshness: "365d"
+    adapter: web-fetch
+    license: "MongoDB docs: public web documentation, fair-use quotes in cache"
+    independence: independent-of-remediation
+    superseded_by: null
+    content_type: "text/markdown"
+    notes: "Wave 2c (W11) grounding: $push appends a value to an array, creating the array field if absent; $each appends multiple values and $slice (which requires $each) limits the number of elements. Basis for recording appliedBatches in the same atomic updateOne that performs the guarded increments, with bounded growth via $slice."
+
+  - id: EL-031
+    subject: "MongoDB Manual - $slice update modifier (negative value keeps last N elements)"
+    schema_version: 0.1.0
+    source_class: official-doc
+    source_url: "https://www.mongodb.com/docs/manual/reference/operator/update/slice/"
+    publisher: "MongoDB (mongodb.com official documentation)"
+    product: "MongoDB Server Manual"
+    version: "8.x (local stack 8.3.8)"
+    retrieved_at: "2026-09-06T15:04:18.000Z"
+    content_digest: "sha256:31e76a3bd76767a2d285b758a123e7b2f98c6e2002417776bd08b79032ac5f03"
+    doc_version: "manual-current-2026-09-06"
+    cache_path: cache/mongodb-manual-update-slice.md
+    sections: ["Definition", "Value semantics", "Slice from the End of the Array"]
+    status: active
+    authority_for: [crud-write-semantics, retry-semantics]
+    freshness: "365d"
+    adapter: web-fetch
+    license: "MongoDB docs: public web documentation, fair-use quotes in cache"
+    independence: independent-of-remediation
+    superseded_by: null
+    content_type: "text/markdown"
+    notes: "Wave 2c (W11) grounding: a negative $slice value updates the array to contain only the last N elements, so appliedBatches { $each: [batchId], $slice: -32 } retains the most recent batch ids — the re-buffered retry's batchId stays guarded for 32 further applied batches on the same document while the array is permanently bounded."

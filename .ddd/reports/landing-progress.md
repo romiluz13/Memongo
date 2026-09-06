@@ -1589,3 +1589,87 @@ repair heals.
 
 Next: Wave 2c (W06/W11/W13/W16/W17), Waves 3–7, the test-honesty pass,
 ledger closure, and re-audit.
+
+## 2026-09-06 — Wave 2c (W06/W11/W13/W16/W17 workspace/stats/health/unwind) landed
+
+Wave 2c — W06 (P1 write/read partition mismatch: the write path resolved
+workspace scope without the workspace directory, keying writes and their
+idempotency fingerprints to the workspace:<agentId> fallback while search
+read the true hashed workspace directory — no round-trip), W11 (P2 access
+tracker duplicated raw evidence and double-incremented summaries on
+retry: raw events inserted before the canonical bulk, then a
+failed-collection-only re-buffer), W13 (P2 shared-manager stats exposed
+all agents' volumes through a per-agent surface with no tenant filter),
+W16 (P2 projection health measured inactivity — now minus last
+successful run — degrading idle caught-up agents while recent success
+concealed stranded obligations), W17 (P2 startup leaked the dedicated
+pool, tracker timer, worker, and watchers on any post-connect throw).
+
+Grounding: EL-027 (time-series indexes — secondaries on any field legal
+from 6.0, unique indexes prohibited, so raw dedupe must read-reconcile),
+EL-028 (time-series limitations — no transactions across the raw +
+canonical flush, each phase independently idempotent), EL-029 ($ne
+matches documents missing the field and excludes exactly the
+already-applied batch), EL-030 ($push/$each appends atomically in the
+same updateOne), EL-031 (negative $slice keeps the last N elements —
+permanently bounded appliedBatches window), building on EL-012/EL-015/
+EL-025 from earlier waves.
+
+Fix: one complete identity at the manager boundary — resolveScopeIdentity
+threads host workspaceDir through the single write, batch write, and
+idempotency fingerprint paths, the resolved scopeRef rides the event into
+writeEvent, and explicit + workspace-default writes land in
+workspace:<hash16(realpath)> with the fingerprint keyed to the same
+partition (W06); batchId-guarded exactly-once flush — per-snapshot
+batchIds preserved across whole-snapshot re-buffering, raw layer
+read-reconciles by batchId before insert, canonical layer guards every
+increment with appliedBatches {$ne: batchId} and records the batchId in
+the same atomic updateOne with a $slice-bounded 32-id window, new
+idx_access_events_batch_id secondary on the time-series collection (W11);
+tenant-scoped stats — getMemoryStats takes a required agentId, every
+files/chunks volume measurement and the sync count refresh filters by the
+requesting tenant, index diagnostics stay server-wide operator metadata
+(W13); backlog-derived lag — the oldest unmet projection obligation per
+lane, projectionLastRun as a separate activity field, ingest runs
+recorded at the production write boundary (W16); full-factory unwind —
+every post-connect phase enclosed, owned resources closed exactly once in
+reverse construction order, guarded cleanup, shared references released
+through the caller contract, eight phase-injection unit tests (W17).
+
+Verification: full unit battery 2356/2356 twice — pre-format
+(wave2c-unit-suite.log) and post-Biome-format on the final tree
+(wave2c-unit-suite-postformat.log); e2e battery 297 passed / 0 failed /
+10 skipped of 307 on memongo-preview (wave2c-engine-e2e-battery.log;
+real-e2e-v2 81/81 with projectionLastRun assertions, tier-a 40/40; the
+standalone first mongodb-e2e run at 43/44 honestly records the
+EXPECTED_STANDARD_INDEX_COUNT 102→103 iteration, green inside the
+battery); repo check-types 15/15 with --force (wave2c-check-types.log);
+Biome 0 errors / 144 warnings / 3 infos on the 23 touched files — four
+new format errors from this wave's edits fixed via safe --write, HEAD
+baseline equality proven via a git-worktree comparison
+(wave2c-biome-touched.log); live probe 32/32 (w2c-probe.log) — W06
+hashed-partition round-trip + fingerprint/replay/conflict identity +
+agent-scope isolation, W11 injected canonical bulk failure with
+exactly-once at both layers and the bounded 32-id window over 35 batches
+plus the batchId index proven used via hinted explain, W13 two-tenant
+stats separation with a never-synced agent seeing zero rows. W16's live
+evidence is the e2e battery (mongodb-e2e stranded-obligation health
+semantics, real-e2e-v2 projectionLastRun payload) — the health surface
+is async-driven and the e2e suites already exercise it against the real
+server. Two probe iterations recorded in V-161 (different-payload replay
+correctly rejected by production; miswritten stats-lane expectation with
+a zero-data diagnostic ruling out any real leak) — no production change
+resulted from either. Claim C-046, validations V-158..V-161. Ledger:
+EL-027..EL-031 with cache captures (landed in this commit).
+Landed: df6cdb3151 (engine code); ledger artifacts in this commit.
+
+Residual documented (carried forward): tracker exactly-once is an
+in-process retry contract — a crash mid-flush loses the in-memory buffer
+and a crash between raw insert and canonical apply leaves reconcilable
+raw evidence without increments; the raw read-reconcile is a pre-check,
+not a constraint (unique indexes prohibited on time-series collections),
+safe because batchIds are per-snapshot UUIDs held only in memory. Stats
+tenancy filters by agentId on rows that carry it; server-wide index
+metadata is intentionally unfiltered operator diagnostics.
+
+Next: Waves 3–7, the test-honesty pass, ledger closure, and re-audit.

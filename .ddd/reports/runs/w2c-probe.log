@@ -1,0 +1,166 @@
+probe database: ddd_w2c_ce4a9e49750e450e9c9cea9712aa03b3
+creating production MongoDBMemoryManager (workspace default scope)...
+20:47:20.245 [memory:mongodb] info: connecting to MongoDB: mongodb://127.0.0.1:27019/?directConnection=true (db=ddd_w2c_ce4a9e49750e450e9c9cea9712aa03b3)
+20:47:20.271 [memory:mongodb:schema] info: created collection probe_chunks
+20:47:20.278 [memory:mongodb:schema] info: created collection probe_files
+20:47:20.284 [memory:mongodb:schema] info: created collection probe_meta
+20:47:20.289 [memory:mongodb:schema] info: created collection probe_knowledge_base
+20:47:20.294 [memory:mongodb:schema] info: created collection probe_kb_chunks
+20:47:20.300 [memory:mongodb:schema] info: created collection probe_structured_mem
+20:47:20.304 [memory:mongodb:schema] info: created collection probe_structured_mem_revisions
+20:47:20.310 [memory:mongodb:schema] info: created collection probe_procedures
+20:47:20.317 [memory:mongodb:schema] info: created collection probe_procedure_revisions
+20:47:20.322 [memory:mongodb:schema] info: created collection probe_relevance_runs
+20:47:20.327 [memory:mongodb:schema] info: created collection probe_relevance_artifacts
+20:47:20.332 [memory:mongodb:schema] info: created collection probe_relevance_regressions
+20:47:20.337 [memory:mongodb:schema] info: created collection probe_events
+20:47:20.343 [memory:mongodb:schema] info: created collection probe_entities
+20:47:20.350 [memory:mongodb:schema] info: created collection probe_relations
+20:47:20.356 [memory:mongodb:schema] info: created collection probe_entity_links
+20:47:20.362 [memory:mongodb:schema] info: created collection probe_episodes
+20:47:20.369 [memory:mongodb:schema] info: created collection probe_ingest_runs
+20:47:20.374 [memory:mongodb:schema] info: created collection probe_projection_runs
+20:47:20.384 [memory:mongodb:schema] info: created collection probe_query_cache
+20:47:20.389 [memory:mongodb:schema] info: created collection probe_memory_mutations
+20:47:20.394 [memory:mongodb:schema] info: created collection probe_lane_coverage
+20:47:20.400 [memory:mongodb:schema] info: created collection probe_consolidation_runs
+20:47:20.406 [memory:mongodb:schema] info: created collection probe_recall_traces
+20:47:20.412 [memory:mongodb:schema] info: created collection probe_memory_jobs
+20:47:20.419 [memory:mongodb:schema] info: created collection probe_session_chunks
+20:47:20.425 [memory:mongodb:schema] info: created collection probe_memory_quarantine
+20:47:20.429 [memory:mongodb:schema] info: created collection probe_memory_cost_ledger
+20:47:20.439 [memory:mongodb:schema] info: created time series collection probe_memory_telemetry
+20:47:20.439 [memory:mongodb:schema] info: created telemetry collection probe_memory_telemetry
+20:47:20.443 [memory:mongodb:schema] info: created time series collection probe_access_events
+20:47:20.443 [memory:mongodb:schema] info: created access events collection probe_access_events
+20:47:20.446 [memory:mongodb:schema] info: applied schema validation to probe_chunks
+20:47:20.450 [memory:mongodb:schema] info: applied schema validation to probe_knowledge_base
+20:47:20.451 [memory:mongodb:schema] info: applied schema validation to probe_kb_chunks
+20:47:20.453 [memory:mongodb:schema] info: applied schema validation to probe_structured_mem
+20:47:20.456 [memory:mongodb:schema] info: applied schema validation to probe_structured_mem_revisions
+20:47:20.457 [memory:mongodb:schema] info: applied schema validation to probe_procedures
+20:47:20.458 [memory:mongodb:schema] info: applied schema validation to probe_procedure_revisions
+20:47:20.460 [memory:mongodb:schema] info: applied schema validation to probe_relevance_runs
+20:47:20.462 [memory:mongodb:schema] info: applied schema validation to probe_relevance_artifacts
+20:47:20.463 [memory:mongodb:schema] info: applied schema validation to probe_relevance_regressions
+20:47:20.465 [memory:mongodb:schema] info: applied schema validation to probe_events
+20:47:20.467 [memory:mongodb:schema] info: applied schema validation to probe_entities
+20:47:20.470 [memory:mongodb:schema] info: applied schema validation to probe_relations
+20:47:20.470 [memory:mongodb:schema] info: applied schema validation to probe_entity_links
+20:47:20.472 [memory:mongodb:schema] info: applied schema validation to probe_episodes
+20:47:20.473 [memory:mongodb:schema] info: applied schema validation to probe_ingest_runs
+20:47:20.475 [memory:mongodb:schema] info: applied schema validation to probe_projection_runs
+20:47:20.476 [memory:mongodb:schema] info: applied schema validation to probe_query_cache
+20:47:20.477 [memory:mongodb:schema] info: applied schema validation to probe_memory_mutations
+20:47:20.478 [memory:mongodb:schema] info: applied schema validation to probe_recall_traces
+20:47:20.479 [memory:mongodb:schema] info: applied schema validation to probe_memory_jobs
+20:47:20.480 [memory:mongodb:schema] info: applied schema validation to probe_memory_quarantine
+20:47:20.480 [memory:mongodb:schema] info: applied schema validation to probe_files
+20:47:20.522 [memory:mongodb:capabilities] info: capability rerank-stage disabled: blocked on Atlas Search Preview; Atlas-managed deployments only; fix-plan-2026-08-03 P3.6 — adopt when $rerank reaches GA
+20:47:20.523 [memory:mongodb:capabilities] info: capability lexical-prefilters disabled: blocked on Atlas Search Preview; fix-plan-2026-08-03 P3.6 — adopt when lexical prefilters reach GA
+20:47:20.523 [memory:mongodb:capabilities] info: capability flat-indexes disabled: requires MongoDB >= 8.3.7; fix-plan-2026-08-03 P3.6 — drop the env opt-in when flat indexingMethod is GA
+20:47:20.523 [memory:mongodb:schema] info: detected capabilities: {"vectorSearch":false,"textSearch":false,"scoreFusion":true,"rankFusion":true,"storedSource":false,"vectorIndexMethod":false,"capabilityGates":{"vector-stored-source":true,"autoembed-quantization":true,"rerank-stage":false,"lexical-prefilters":false,"flat-indexes":false}}
+20:47:20.523 [memory:mongodb] info: capabilities: {"vectorSearch":false,"textSearch":false,"scoreFusion":true,"rankFusion":true,"storedSource":false,"vectorIndexMethod":false,"capabilityGates":{"vector-stored-source":true,"autoembed-quantization":true,"rerank-stage":false,"lexical-prefilters":false,"flat-indexes":false}}
+20:47:20.776 [memory:mongodb:schema] info: created chunks text search index
+20:47:20.807 [memory:mongodb:schema] info: created chunks vector search index
+20:47:20.836 [memory:mongodb:schema] info: created kb_chunks text search index
+20:47:20.869 [memory:mongodb:schema] info: created kb_chunks vector search index
+20:47:20.901 [memory:mongodb:schema] info: created structured_mem text search index
+20:47:20.932 [memory:mongodb:schema] info: created structured_mem vector search index
+20:47:20.965 [memory:mongodb:schema] info: created procedures text search index
+20:47:20.999 [memory:mongodb:schema] info: created procedures vector search index
+20:47:21.030 [memory:mongodb:schema] info: created events text search index
+20:47:21.062 [memory:mongodb:schema] info: created events vector search index
+20:47:21.094 [memory:mongodb:schema] info: created query_cache vector search index
+20:47:21.125 [memory:mongodb:schema] info: created session_chunks text search index
+20:47:21.161 [memory:mongodb:schema] info: created session_chunks vector search index
+20:47:21.194 [memory:mongodb:schema] info: created entity autocomplete search index
+20:47:21.228 [memory:mongodb:schema] info: created episode autocomplete search index
+20:48:21.655 [memory:mongodb] warn: native event bitemporal prefiltering remains disabled until the exact index definition and event representation are ready
+20:48:21.655 [memory:mongodb] warn: search indexes not fully queryable after bootstrap wait: probe_events pending=[probe_events_vector] failed=[none]
+20:48:21.707 [memory:mongodb:schema] warn: storedSource operational probe failed for probe_chunks_vector; disabling returnStoredSource: Executor error during aggregate command on namespace: ddd_w2c_ce4a9e49750e450e9c9cea9712aa03b3.probe_chunks :: caused by :: storedSource is not configured for this index.
+20:48:21.707 [memory:mongodb:capabilities] info: capability rerank-stage disabled: blocked on Atlas Search Preview; Atlas-managed deployments only; fix-plan-2026-08-03 P3.6 — adopt when $rerank reaches GA
+20:48:21.707 [memory:mongodb:capabilities] info: capability lexical-prefilters disabled: blocked on Atlas Search Preview; fix-plan-2026-08-03 P3.6 — adopt when lexical prefilters reach GA
+20:48:21.707 [memory:mongodb:capabilities] info: capability flat-indexes disabled: requires MongoDB >= 8.3.7; fix-plan-2026-08-03 P3.6 — drop the env opt-in when flat indexingMethod is GA
+20:48:21.707 [memory:mongodb:schema] info: detected capabilities: {"vectorSearch":true,"textSearch":true,"scoreFusion":true,"rankFusion":true,"storedSource":false,"vectorIndexMethod":false,"capabilityGates":{"vector-stored-source":true,"autoembed-quantization":true,"rerank-stage":false,"lexical-prefilters":false,"flat-indexes":false}}
+20:48:22.061 [memory:mongodb:schema] info: ensured 44 standard indexes
+20:48:22.071 [memory:mongodb:sync] info: sync: found 2 memory files on disk (reason=startup)
+20:48:22.073 [memory:mongodb:sync] info: sync: 2/2 memory files need re-indexing
+20:48:22.084 [memory:mongodb:sync] info: sync complete: memory=2 conversation=0 chunks=2 stale=0 failed=0 enumerationComplete=true
+20:48:22.086 [memory:mongodb] info: sync complete: processed=2+0 chunks=2+0 totals=2 files, 2 chunks
+20:48:22.089 [memory:mongodb] info: ready: profile=atlas-local-preview embedding=automated fusion=scoreFusion caps={"vectorSearch":true,"textSearch":true,"scoreFusion":true,"rankFusion":true,"storedSource":false,"vectorIndexMethod":false,"capabilityGates":{"vector-stored-source":true,"autoembed-quantization":true,"rerank-stage":false,"lexical-prefilters":false,"flat-indexes":false}}
+manager created
+
+=== W06: workspace identity ===
+  ok 1: resolver yields the hashed workspace partition (workspace:36cc3d6f383d0f62), not workspace:w2c-agent
+20:48:22.093 [memory:mongodb:events] info: event written: 0437972e-19b9-4022-a973-15c2e645f5d1 role=user
+20:48:22.118 [memory:mongodb:consolidator] info: orient: 1 unprocessed, 1 roles, 1 top scopes
+  ok 2: explicit workspace write persisted a canonical event
+  ok 3: explicit workspace write landed in the hashed partition (workspace:36cc3d6f383d0f62)
+  ok 4: explicit workspace write did NOT fall back to workspace:<agentId>
+20:48:22.119 [memory:mongodb:events] info: event written: 8e511be8-80f3-4845-aeb9-134170108c5b role=user
+  ok 5: unscoped (MEMONGO_DEFAULT_SCOPE=workspace) write landed in the SAME hashed partition (workspace:36cc3d6f383d0f62)
+20:48:22.134 [memory:mongodb:events] info: event written: 4e536c9a-516d-492b-9070-1052e3ad947f role=user
+  ok 6: persisted idempotency fingerprint keys to the hashed workspace partition
+  ok 7: same-payload idempotencyKey replay returns the original eventId
+  ok 8: replay produced no second document (1 doc for the key)
+  ok 9: different-payload key reuse raises IdempotencyConflictError
+20:48:22.535 [memory:mongodb:structured] warn: structured memory $text search fallback failed; returning empty results
+20:48:22.536 [memory:mongodb:procedures] warn: procedure $text search fallback failed; returning empty results
+20:48:22.543 [memory:mongodb:search-budget] warn: per-search budget exhausted (embeds hit the limit); degrading remaining lanes to empty results {"maxAggregations":12,"maxEmbeds":5,"aggregations":6,"embeds":5,"exhausted":true}
+20:48:22.776 [memory:mongodb:structured] info: structured memory created: type=todo key=*** on the hashed workspace partition. revision=1
+20:48:22.783 [memory:mongodb:consolidator] info: entity extraction completed for 1 events in dreamer run=3c46273f-262c-44b7-a817-ab3f4a29357b
+20:48:22.784 [memory:mongodb:consolidator] info: deduction phase: no LLM configured, skipping
+20:48:22.784 [memory:mongodb:consolidator] info: induction phase: no LLM configured, skipping
+20:48:23.043 [memory:mongodb:consolidator] info: marked 1 events as dreamer-processed (runId=3c46273f-262c-44b7-a817-ab3f4a29357b)
+20:48:23.045 [memory:mongodb:consolidator] info: consolidation run=3c46273f-262c-44b7-a817-ab3f4a29357b completed: 1 events processed, 1 facts promoted, 0 pruned, 932ms
+20:48:24.065 [memory:mongodb:structured] warn: structured memory $text search fallback failed; returning empty results
+20:48:24.071 [memory:mongodb:procedures] warn: procedure $text search fallback failed; returning empty results
+20:48:24.088 [memory:mongodb:search-budget] warn: per-search budget exhausted (embeds hit the limit); degrading remaining lanes to empty results {"maxAggregations":12,"maxEmbeds":5,"aggregations":6,"embeds":5,"exhausted":true}
+  ok 10: workspace-default search round-trips the workspace-partition write (2 results)
+20:48:25.254 [memory:mongodb:procedures] warn: procedure $text search fallback failed; returning empty results
+20:48:25.256 [memory:mongodb:structured] warn: structured memory $text search fallback failed; returning empty results
+  ok 11: agent-scoped search does NOT see the workspace-partition event (0 results)
+
+=== W11: tracker exactly-once flush ===
+20:48:25.593 [memory:mongodb:events] info: event written: w2c-evt-tracker-1 role=user
+  ok 12: canonical event row seeded via production writeEvent
+20:48:25.599 [memory:mongodb:access-tracker] warn: access summary flush failed for events (re-buffering 1 entries for retry): probe-injected canonical bulk failure
+  ok 13: flush with injected canonical failure returns 0 (0)
+  ok 14: canonical bulkWrite failed exactly once (injection armed)
+  ok 15: retry flush applies exactly one canonical op (1)
+  ok 16: raw access_events holds exactly ONE document for the batch (1)
+  ok 17: raw document carries count 2 and its batchId (2/d02aa72f-b668-4d75-92fd-9943401d0e21)
+  ok 18: canonical accessCount incremented EXACTLY once by 2 (2)
+  ok 19: canonical lastAccessedAt set by the same atomic updateOne
+  ok 20: appliedBatches records the applied batch exactly once (["d02aa72f-b668-4d75-92fd-9943401d0e21"])
+  ok 21: fresh batch increments once more (accessCount 3, window 2 ids: ["d02aa72f-b668-4d75-92fd-9943401d0e21","46c9a291-efbe-4a21-bfd7-4602066ae2a5"])
+  ok 22: appliedBatches window bounded at the newest 32 distinct ids (32)
+  ok 23: every batch incremented exactly once across 36 accesses (36)
+  ok 24: raw layer holds exactly one document per batch (35)
+  ok 25: idx_access_events_batch_id exists on access_events (meta_1_ts_1, idx_access_events_agent_collection_memory_ts, idx_access_events_agent_collection_ts, idx_access_events_batch_id)
+  ok 26: hinted explain uses idx_access_events_batch_id (IXSCAN) for the reconcile filter
+  (info) unhinted reconcile-read plan: {"explainVersion":"1","stages":[{"$cursor":{"queryPlanner":{"namespace":"ddd_w2c_ce4a9e49750e450e9c9cea9712aa03b3.system.buckets.probe_access_events","parsedQuery":{"$and":[{"control.max.batchId":{"$_internalExprGte":"d0
+
+=== W13: tenant stats separation ===
+20:48:25.709 [memory:mongodb:sync] info: sync: found 2 memory files on disk (reason=manual)
+20:48:25.710 [memory:mongodb:sync] info: sync: 2/2 memory files need re-indexing
+20:48:25.723 [memory:mongodb:sync] info: sync: removed 3 stale chunks
+20:48:25.723 [memory:mongodb:sync] info: sync complete: memory=2 conversation=0 chunks=2 stale=3 failed=0 enumerationComplete=true
+20:48:25.725 [memory:mongodb:sync] info: sync: found 3 memory files on disk (reason=manual)
+20:48:25.726 [memory:mongodb:sync] info: sync: 3/3 memory files need re-indexing
+20:48:25.738 [memory:mongodb:sync] info: sync complete: memory=3 conversation=0 chunks=3 stale=0 failed=0 enumerationComplete=true
+20:48:25.746 [memory:mongodb:analytics] info: stats: files=2 chunks=2 embeddingStatus={basis=stored-vector,success=0,failed=0,pending=3,unknown=0} stale=0
+  ok 27: agent stats see only the agent's 2 files (2)
+20:48:25.752 [memory:mongodb:analytics] info: stats: files=3 chunks=3 embeddingStatus={basis=stored-vector,success=0,failed=0,pending=3,unknown=0} stale=0
+  ok 28: agent-b stats see only agent-b's 3 files (3)
+  ok 29: per-lane source rows split by tenant (conversation lane: 2 vs 3)
+20:48:25.757 [memory:mongodb:analytics] info: stats: files=0 chunks=0 embeddingStatus={basis=stored-vector,success=0,failed=0,pending=0,unknown=0} stale=0
+  ok 30: a never-synced agent on the shared deployment sees zero rows (0 files, 0 source rows)
+20:48:26.277 [memory:mongodb:analytics] info: stats: files=2 chunks=2 embeddingStatus={basis=search-index,success=0,failed=0,pending=0,unknown=3} stale=0
+  ok 31: production manager.stats() is tenant-scoped: 2 files, not the deployment-wide 5 (2)
+  ok 32: manager.stats() files collection size is tenant-scoped (2)
+
+probe complete: 32 passed, 0 failed
+cleanup: dropped ddd_w2c_ce4a9e49750e450e9c9cea9712aa03b3
+cleanup: closed client, removed workspaces

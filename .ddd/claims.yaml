@@ -834,3 +834,61 @@ entries:
     constructs: [packages/memory-engine/src/internal.ts, packages/memory-engine/src/session-files.ts, packages/memory-engine/src/mongodb-sync.ts, packages/memory-engine/src/mongodb-manager-sync.ts, packages/memory-engine/src/mongodb-kb.ts, packages/memory-engine/src/mongodb-schema-standard-indexes-core.ts, packages/memory-engine/src/mongodb-schema-validators.ts, packages/memory-engine/src/mongodb-schema-validator-knowledge.ts]
     validations: [V-154, V-155, V-156, V-157]
     exceptions: []
+
+  - id: C-046
+    schema_version: 0.1.0
+    statement: "Workspace-scope writes MUST resolve one complete identity at the manager boundary and thread it to both persistence and idempotency paths — an explicit workspace scope without scopeRef and an unscoped write under the workspace default scope MUST resolve to the hashed workspace partition workspace:<hash16(realpath of the configured workspace directory)>, never the workspace:<agentId> fallback, and the idempotency fingerprint MUST be computed over the same workspace directory so replay and conflict identity key to the partition the write actually lands in, with workspace-default search reading that same partition. Access-summary flushes MUST apply exactly once at both layers across in-process retries: each flush snapshot MUST carry a durable batchId preserved through re-buffering, the raw time-series layer MUST skip its insert when a document with that batchId already exists (read-reconcile, since unique indexes are prohibited on time-series collections), every canonical increment MUST be guarded by appliedBatches not containing the batchId and MUST record the batchId in the same atomic updateOne with a bounded $push/$each/$slice window, and a failed flush MUST re-buffer the WHOLE snapshot with batchIds preserved, never a failed-collection subset. Per-agent stats surfaces MUST be tenant-scoped on shared deployments — every files/chunks volume measurement, the sync count refresh, and the manager stats() MUST filter by the requesting agent's identity, with physical index diagnostics remaining distinct server-wide operator metadata. Projection health MUST derive lag from the oldest unmet projection obligation, not from time since the last successful run — an idle caught-up system MUST stay healthy and a stranded obligation MUST degrade regardless of recent success — with last successful activity reported as a separate field and the production event-write boundary recording ingest runs. Startup MUST fully unwind on any post-connect failure: every factory phase after connect MUST be enclosed so a throw closes the owned client and every constructed resource (change-stream watcher, memory job worker, AccessTracker timer, file watcher, relevance runtime) exactly once in reverse construction order, releasing shared references through the caller contract."
+    rationale: "Filed from the 2026-09-05 independent audit W06/W11/W13/W16/W17: the write path resolved scope without the workspace directory, so workspace-scope writes and their idempotency fingerprints keyed to the workspace:<agentId> fallback while search read the true hashed workspace directory — writes and reads landed in different partitions, and an unscoped add followed by workspace-default search did not round-trip; the access tracker inserted raw events before the canonical bulk and re-buffered only the failed collection's keys, so a canonical failure followed by retry re-inserted every raw event and re-ran every increment (a production-code probe recorded three raw events for two accesses); stats() and getMemoryStats carried no agent identity, so the per-agent surface reported deployment-wide volume reachable through an agentId-only key; getProjectionLag returned now minus the last successful run, degrading healthy idle agents while recent success concealed older stranded events; and create() closed the client only on connect/ping failure, leaking the dedicated pool, tracker timer, worker, and watchers on any later throw. Grounded in official documentation: secondary indexes on any time-series field are supported from 6.0 but unique indexes are prohibited (EL-027), and time-series collections cannot be written in transactions (EL-028), so a flush spanning the raw and canonical layers cannot be jointly atomic and each phase must be independently idempotent — read-reconcile by batchId for the raw layer, a guarded filter for the canonical layer; $ne selects documents whose field value is not equal to the specified value, including documents that do not contain the field (EL-029), so the appliedBatches guard matches legacy and other-batch documents and excludes exactly the documents that already applied this batch, and a no-match updateOne changes nothing; $push appends a value to an array creating the field if absent, with $each/$slice modifiers in the same atomic updateOne as the increments (EL-030), and a negative $slice keeps only the last N elements, permanently bounding the appliedBatches window (EL-031); the batchId rides the time-series measurement-field shape (EL-015); building on the compound canonical identity behind the eventId unique index (EL-012) and bulkWrite updateOne first-match semantics (EL-025)."
+    sources:
+      - ref: "docs/audits/2026-09-05-independent/logic_write.md#W06"
+        authority_domain: tenancy-identity
+        entailment: explicit
+      - ref: "docs/audits/2026-09-05-independent/logic_write.md#W11"
+        authority_domain: retry-semantics
+        entailment: explicit
+      - ref: "docs/audits/2026-09-05-independent/logic_write.md#W13"
+        authority_domain: tenancy-identity
+        entailment: explicit
+      - ref: "docs/audits/2026-09-05-independent/logic_write.md#W16"
+        authority_domain: write-durability
+        entailment: explicit
+      - ref: "docs/audits/2026-09-05-independent/logic_write.md#W17"
+        authority_domain: memory-lifecycle
+        entailment: explicit
+      - ref: "EL-012#Unique Indexes"
+        authority_domain: data-model
+        entailment: explicit
+      - ref: "EL-015#Measurements"
+        authority_domain: time-series
+        entailment: explicit
+      - ref: "EL-025#Write Operations (updateOne and updateMany)"
+        authority_domain: crud-write-semantics
+        entailment: explicit
+      - ref: "EL-027#Secondary indexes on any field"
+        authority_domain: time-series
+        entailment: explicit
+      - ref: "EL-027#Prohibited Indexes"
+        authority_domain: time-series
+        entailment: explicit
+      - ref: "EL-028#Transactions"
+        authority_domain: time-series
+        entailment: explicit
+      - ref: "EL-029#Definition"
+        authority_domain: crud-write-semantics
+        entailment: explicit
+      - ref: "EL-029#Arrays (Scalar comparison)"
+        authority_domain: crud-write-semantics
+        entailment: explicit
+      - ref: "EL-030#Modifiers"
+        authority_domain: crud-write-semantics
+        entailment: explicit
+      - ref: "EL-031#Value semantics"
+        authority_domain: crud-write-semantics
+        entailment: explicit
+    claim_kind: behavioral
+    impact: critical
+    tier: T3
+    status: known-and-supported
+    constructs: [packages/memory-engine/src/mongodb-manager.ts, packages/memory-engine/src/mongodb-manager-write.ts, packages/memory-engine/src/mongodb-idempotency-fingerprint.ts, packages/memory-engine/src/mongodb-access-tracker.ts, packages/memory-engine/src/mongodb-analytics.ts, packages/memory-engine/src/mongodb-manager-admin.ts, packages/memory-engine/src/mongodb-manager-sync.ts, packages/memory-engine/src/mongodb-ops.ts, packages/memory-engine/src/mongodb-schema-standard-indexes-operations.ts, packages/memory-engine/src/mongodb-schema-search-indexes.ts, packages/memory-engine/src/types.ts]
+    validations: [V-158, V-159, V-160, V-161]
+    exceptions: []

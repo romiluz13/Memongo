@@ -1,0 +1,293 @@
+packages/memory-engine/src/mongodb-access-tracker.ts:645:17 lint/style/noNonNullAssertion ━━━━━━━━━━
+
+  ! Forbidden non-null assertion.
+  
+    643 │ 		if (params.collection) {
+    644 │ 			return params.memoryIds.map((memoryId) => ({
+  > 645 │ 				collection: params.collection!,
+        │ 				            ^^^^^^^^^^^^^^^^^^
+    646 │ 				memoryId,
+    647 │ 			}))
+  
+
+packages/memory-engine/src/mongodb-e2e.e2e.test.ts:260:10 lint/style/noNonNullAssertion  FIXABLE  ━━━━━━━━━━
+
+  ! Forbidden non-null assertion.
+  
+    258 │ 		const textIdx = chunksIndexes.find((i) => i.name === "idx_chunks_text")
+    259 │ 		expect(textIdx).toBeDefined()
+  > 260 │ 		expect(textIdx!.key).toHaveProperty("_fts", "text")
+        │ 		       ^^^^^^^^
+    261 │ 
+    262 │ 		// #13: embedding_cache was removed (Atlas autoEmbed engine never
+  
+  i Unsafe fix: Replace with optional chain operator ?. This operator includes runtime checks, so it is safer than the compile-only non-null assertion operator
+  
+     258  258 │       const textIdx = chunksIndexes.find((i) => i.name === "idx_chunks_text")
+     259  259 │       expect(textIdx).toBeDefined()
+     260      │ - → → expect(textIdx!.key).toHaveProperty("_fts",·"text")
+          260 │ + → → expect(textIdx?.key).toHaveProperty("_fts",·"text")
+     261  261 │   
+     262  262 │       // #13: embedding_cache was removed (Atlas autoEmbed engine never
+  
+
+packages/memory-engine/src/mongodb-e2e.e2e.test.ts:405:10 lint/style/noNonNullAssertion  FIXABLE  ━━━━━━━━━━
+
+  ! Forbidden non-null assertion.
+  
+    403 │ 		const sampleChunk = await chunksCollection(db, TEST_PREFIX).findOne({})
+    404 │ 		expect(sampleChunk).toBeDefined()
+  > 405 │ 		expect(sampleChunk!.path).toMatch(/^memory\//)
+        │ 		       ^^^^^^^^^^^^
+    406 │ 		expect(sampleChunk!.source).toBe("conversation")
+    407 │ 		expect(typeof sampleChunk!.startLine).toBe("number")
+  
+  i Unsafe fix: Replace with optional chain operator ?. This operator includes runtime checks, so it is safer than the compile-only non-null assertion operator
+  
+     403  403 │       const sampleChunk = await chunksCollection(db, TEST_PREFIX).findOne({})
+     404  404 │       expect(sampleChunk).toBeDefined()
+     405      │ - → → expect(sampleChunk!.path).toMatch(/^memory\//)
+          405 │ + → → expect(sampleChunk?.path).toMatch(/^memory\//)
+     406  406 │       expect(sampleChunk!.source).toBe("conversation")
+     407  407 │       expect(typeof sampleChunk!.startLine).toBe("number")
+  
+
+packages/memory-engine/src/mongodb-manager-admin.ts:755:20 lint/style/noNonNullAssertion ━━━━━━━━━━━
+
+  ! Forbidden non-null assertion.
+  
+    754 │ 	status(): MemoryProviderStatus {
+  > 755 │ 		const mongoCfg = this.host.config.mongodb!
+        │ 		                 ^^^^^^^^^^^^^^^^^^^^^^^^^
+    756 │ 		const vectorEnabled =
+    757 │ 			this.host.capabilities.vectorSearch &&
+  
+
+packages/memory-engine/src/mongodb-manager-admin.ts:834:20 lint/style/noNonNullAssertion ━━━━━━━━━━━
+
+  ! Forbidden non-null assertion.
+  
+    833 │ 	async probeEmbeddingAvailability(): Promise<MemoryEmbeddingProbeResult> {
+  > 834 │ 		const mongoCfg = this.host.config.mongodb!
+        │ 		                 ^^^^^^^^^^^^^^^^^^^^^^^^^
+    835 │ 
+    836 │ 		if (mongoCfg.embeddingMode === "automated") {
+  
+
+packages/memory-engine/src/mongodb-manager-admin.ts:934:20 lint/style/noNonNullAssertion ━━━━━━━━━━━
+
+  ! Forbidden non-null assertion.
+  
+    933 │ 	probeEmbeddingModeSupportsVector(): boolean {
+  > 934 │ 		const mongoCfg = this.host.config.mongodb!
+        │ 		                 ^^^^^^^^^^^^^^^^^^^^^^^^^
+    935 │ 		return (
+    936 │ 			mongoCfg.embeddingMode === "automated" &&
+  
+
+packages/memory-engine/src/mongodb-manager-admin.ts:44:8 lint/correctness/noUnusedImports  FIXABLE  ━━━━━━━━━━
+
+  ! This import is unused.
+  
+    42 │ } from "./mongodb-schema-integrity.js"
+    43 │ import { getActiveSourcesForStatus } from "./mongodb-search-ranking.js"
+  > 44 │ import { vectorSearch } from "./mongodb-search.js"
+       │        ^^^^^^^^^^^^^^^^
+    45 │ import type {
+    46 │ 	AccessEventCollection,
+  
+  i Unused imports might be the result of an incomplete refactoring.
+  
+  i Unsafe fix: Remove the unused imports.
+  
+      42   42 │   } from "./mongodb-schema-integrity.js"
+      43   43 │   import { getActiveSourcesForStatus } from "./mongodb-search-ranking.js"
+      44      │ - import·{·vectorSearch·}·from·"./mongodb-search.js"
+      45   44 │   import type {
+      46   45 │   	AccessEventCollection,
+  
+
+packages/memory-engine/src/mongodb-manager-sync.ts:239:20 lint/style/noNonNullAssertion ━━━━━━━━━━━━
+
+  ! Forbidden non-null assertion.
+  
+    237 │ 		progress?: (update: MemorySyncProgressUpdate) => void
+    238 │ 	}): Promise<void> {
+  > 239 │ 		const mongoCfg = this.host.config.mongodb!
+        │ 		                 ^^^^^^^^^^^^^^^^^^^^^^^^^
+    240 │ 		try {
+    241 │ 			const result = await syncToMongoDB({
+  
+
+packages/memory-engine/src/mongodb-manager-sync.ts:351:20 lint/style/noNonNullAssertion ━━━━━━━━━━━━
+
+  ! Forbidden non-null assertion.
+  
+    350 │ 	async maybeAutoRefreshKB(): Promise<void> {
+  > 351 │ 		const mongoCfg = this.host.config.mongodb!
+        │ 		                 ^^^^^^^^^^^^^^^^^^^^^^^^^
+    352 │ 		if (!mongoCfg.kb.enabled) {
+    353 │ 			return
+  
+
+packages/memory-engine/src/mongodb-manager-sync.ts:414:20 lint/style/noNonNullAssertion ━━━━━━━━━━━━
+
+  ! Forbidden non-null assertion.
+  
+    412 │ 			return
+    413 │ 		}
+  > 414 │ 		const mongoCfg = this.host.config.mongodb!
+        │ 		                 ^^^^^^^^^^^^^^^^^^^^^^^^^
+    415 │ 		const debounceMs = mongoCfg.watchDebounceMs
+    416 │ 		const watchPaths = new Set<string>([
+  
+
+packages/memory-engine/src/mongodb-manager-sync.ts:441:20 lint/style/noNonNullAssertion ━━━━━━━━━━━━
+
+  ! Forbidden non-null assertion.
+  
+    440 │ 	scheduleWatchSync(): void {
+  > 441 │ 		const mongoCfg = this.host.config.mongodb!
+        │ 		                 ^^^^^^^^^^^^^^^^^^^^^^^^^
+    442 │ 		if (this.host.watchTimer) {
+    443 │ 			clearTimeout(this.host.watchTimer)
+  
+
+packages/memory-engine/src/mongodb-manager-sync.ts:3:8 lint/correctness/noUnusedImports  FIXABLE  ━━━━━━━━━━
+
+  ! This import is unused.
+  
+    1 │ import path from "node:path"
+    2 │ import chokidar from "chokidar"
+  > 3 │ import { isDuplicateKeyError } from "./internal.js"
+      │        ^^^^^^^^^^^^^^^^^^^^^^^
+    4 │ import {
+    5 │ 	clearEventExtractionJobPending,
+  
+  i Unused imports might be the result of an incomplete refactoring.
+  
+  i Unsafe fix: Remove the unused imports.
+  
+      1   1 │   import path from "node:path"
+      2   2 │   import chokidar from "chokidar"
+      3     │ - import·{·isDuplicateKeyError·}·from·"./internal.js"
+      4   3 │   import {
+      5   4 │   	clearEventExtractionJobPending,
+  
+
+packages/memory-engine/src/mongodb-manager-write.ts:43:30 lint/correctness/noUnusedImports  FIXABLE  ━━━━━━━━━━
+
+  ! Several of these imports are unused.
+  
+    41 │ } from "./mongodb-transactions.js"
+    42 │ import type { MemoryScope } from "@memongo/lib"
+  > 43 │ import type { ClientSession, Db } from "mongodb"
+       │                              ^^
+    44 │ import { createSubsystemLogger } from "@memongo/lib"
+    45 │ 
+  
+  i Unused imports might be the result of an incomplete refactoring.
+  
+  i Unsafe fix: Remove the unused imports.
+  
+    43 │ import·type·{·ClientSession,·Db·}·from·"mongodb"
+       │                              ---                
+
+packages/memory-engine/src/mongodb-manager-write.ts:1174:21 lint/complexity/useOptionalChain  FIXABLE  ━━━━━━━━━━
+
+  ! Change to an optional chain.
+  
+    1172 │ 					bump("raw-window", 1)
+    1173 │ 					const receipt = receipts[item.index]
+  > 1174 │ 					bump("hybrid", receipt && receipt.ok && receipt.chunkCreated ? 1 : 0)
+         │ 					               ^^^^^^^^^^^^^^^^^^^^^
+    1175 │ 					if (postWriteDerivedWorkEnabled) {
+    1176 │ 						const candidates = extractStructuredCandidatesFromEvent({
+  
+  i Unsafe fix: Change to an optional chain.
+  
+    1172 1172 │             bump("raw-window", 1)
+    1173 1173 │             const receipt = receipts[item.index]
+    1174      │ - → → → → → bump("hybrid",·receipt·&&·receipt.ok·&&·receipt.chunkCreated·?·1·:·0)
+         1174 │ + → → → → → bump("hybrid",·receipt?.ok·&&·receipt.chunkCreated·?·1·:·0)
+    1175 1175 │             if (postWriteDerivedWorkEnabled) {
+    1176 1176 │               const candidates = extractStructuredCandidatesFromEvent({
+  
+
+packages/memory-engine/src/mongodb-ops.test.ts:253:11 lint/style/noNonNullAssertion ━━━━━━━━━━━━━━━━
+
+  ! Forbidden non-null assertion.
+  
+    251 │ 			expect(lag).not.toBeNull()
+    252 │ 			// Should be approximately 120 seconds (allow tolerance for test execution time)
+  > 253 │ 			expect(lag!).toBeGreaterThanOrEqual(119)
+        │ 			       ^^^^
+    254 │ 			expect(lag!).toBeLessThanOrEqual(125)
+    255 │ 			// Verify query: oldest-first over un-expired events with the
+  
+
+packages/memory-engine/src/mongodb-ops.test.ts:254:11 lint/style/noNonNullAssertion ━━━━━━━━━━━━━━━━
+
+  ! Forbidden non-null assertion.
+  
+    252 │ 			// Should be approximately 120 seconds (allow tolerance for test execution time)
+    253 │ 			expect(lag!).toBeGreaterThanOrEqual(119)
+  > 254 │ 			expect(lag!).toBeLessThanOrEqual(125)
+        │ 			       ^^^^
+    255 │ 			// Verify query: oldest-first over un-expired events with the
+    256 │ 			// chunks pending marker (projectedAt unset).
+  
+
+packages/memory-engine/src/mongodb-schema.part3.test.ts:47:11 lint/style/noNonNullAssertion ━━━━━━━━━━
+
+  ! Forbidden non-null assertion.
+  
+    45 │ 				collections.set(name, mockCollection(name))
+    46 │ 			}
+  > 47 │ 			return collections.get(name)!
+       │ 			       ^^^^^^^^^^^^^^^^^^^^^^
+    48 │ 		}),
+    49 │ 		command: vi.fn(async () => ({ ok: 1 })),
+  
+
+packages/memory-engine/src/mongodb-schema.part3.test.ts:59:11 lint/style/noNonNullAssertion ━━━━━━━━━━
+
+  ! Forbidden non-null assertion.
+  
+    57 │ 		createCollection: vi.fn(async (name: string) => {
+    58 │ 			collections.set(name, mockCollection(name))
+  > 59 │ 			return collections.get(name)!
+       │ 			       ^^^^^^^^^^^^^^^^^^^^^^
+    60 │ 		}),
+    61 │ 		listCollections: vi.fn(() => ({
+  
+
+packages/memory-engine/src/mongodb-schema.test.ts:56:11 lint/style/noNonNullAssertion ━━━━━━━━━━━━━━
+
+  ! Forbidden non-null assertion.
+  
+    54 │ 				collections.set(name, mockCollection(name))
+    55 │ 			}
+  > 56 │ 			return collections.get(name)!
+       │ 			       ^^^^^^^^^^^^^^^^^^^^^^
+    57 │ 		}),
+    58 │ 		command: vi.fn(async () => ({ ok: 1 })),
+  
+
+packages/memory-engine/src/mongodb-schema.test.ts:68:11 lint/style/noNonNullAssertion ━━━━━━━━━━━━━━
+
+  ! Forbidden non-null assertion.
+  
+    66 │ 		createCollection: vi.fn(async (name: string) => {
+    67 │ 			collections.set(name, mockCollection(name))
+  > 68 │ 			return collections.get(name)!
+       │ 			       ^^^^^^^^^^^^^^^^^^^^^^
+    69 │ 		}),
+    70 │ 		listCollections: vi.fn(() => ({
+  
+
+The number of diagnostics exceeds the limit allowed. Use --max-diagnostics to increase it.
+Diagnostics not shown: 127.
+Checked 23 files in 54ms. No fixes applied.
+Found 144 warnings.
+Found 3 infos.
