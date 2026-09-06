@@ -22,6 +22,11 @@ services:
     # Pinned to a dated tag (verify auto-embedding parity when bumping).
     image: mongodb/mongodb-atlas-local:preview
     container_name: memongo-preview
+    # Pin the hostname: the atlas-local image derives the replica-set name
+    # (and member host) from the container hostname. Without a pin, Docker
+    # assigns a random ID on each recreation, so a persisted volume's stored
+    # replica-set config no longer matches and mongod never elects a primary.
+    hostname: memongo-preview
     ports:
       # Loopback-only publish (compose-spec short syntax).
       - "127.0.0.1:${MONGODB_PORT:-27017}:27017"
