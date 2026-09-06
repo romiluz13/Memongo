@@ -1331,3 +1331,51 @@ of W01's tenant-corruption scope, queued for the retrieval wave.
 
 Next: Wave 1b (W02/W03/W12 erasure and lifecycle safety), then Wave 1c
 (ownership registry residuals), per INDEX.md wave mapping.
+
+## 2026-09-06 — Wave 1b (W02/W03/W12 erasure + lifecycle) landed;
+DDD methodology amended to v0.7.1
+
+Wave 1b — W02 (P1 erasure retry false-complete), W03 (P1 erasure races
+active work), W12 (P2 quarantine promotion crash window), plus the W02
+remedy's "preferably": relevance_artifacts now carry their own agentId.
+
+Grounding: EL-016 (deleteMany + the manual's own re-check guidance ->
+the post-sweep verification pass), EL-017 (countDocuments accuracy ->
+residual checking), EL-018 (partialFilterExpression $in -> the widened
+quarantine TTL backstop), building on EL-012..015.
+
+Fix: erasure sweeps artifacts BEFORE parents and RETAINS relevance_runs
+whenever artifact ownership is unresolved or the artifact delete fails
+(the retry-false-complete path is structurally gone); every sweep is
+fenced by a durable per-agent epoch (bumped first; a failed bump aborts
+unfenced) and verified after (residual -> partial, never false
+complete); the erasing manager drains its worker + tracker before
+sweeping; extraction/consolidation runners abandon pre-erasure claimed
+work at their fence checks (best-effort; lease fence + verification
+backstop); quarantine promote claims a LEASED "promoting" state finalized
+only after the canonical write, with expired-lease recovery (idempotent
+re-promotion or rejection) and the full structured candidate persisted at
+ingress so promotion restores type/key/value verbatim.
+
+Verification: focused battery 102/102 (wave1b-unit-suite.log); live probe
+29/29 on the real server incl. the W02 two-attempt reproduction with a
+real injected delete failure (w1b-probe.log); $in partial TTL index
+live-verified; repo check-types 15/15. Claim C-042, validations
+V-142..V-145. Ledger: EL-016..018 with cache captures.
+
+Environment incident (recorded per the amended protocol): the shared
+local preview mongod wedged under repeated full-battery connection load;
+diagnosed via the substrate's own observability, restarted, re-ran green
+(2591 + 96/96 re-run; the one failure was autoEmbed warm-up, not code).
+Run discipline adopted (focused suites during iteration; one full battery
+per wave); target stays local Docker with an agreed switch criterion.
+
+Methodology: DDD skill amended to v0.7.1 (canonical, at the user's
+request): an Execution Environment Failures protocol in phase 3 —
+classify from the substrate's own documented evidence, remediate or
+switch the target environment, re-run before concluding, keep
+environment-caused and code-caused failures separately reported, and
+raise repeated substrate failures as a target-environment decision.
+
+Next: Wave 1c (ownership registry residuals W05/S13, W18/W19) per the
+INDEX.md wave mapping.

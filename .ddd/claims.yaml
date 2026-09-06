@@ -698,3 +698,34 @@ entries:
     constructs: [packages/memory-engine/src/mongodb-access-tracker.ts, packages/memory-engine/src/mongodb-manager-search.ts, packages/memory-engine/src/mongodb-structured-memory.ts, packages/memory-engine/src/types.ts]
     validations: [V-139, V-140, V-141]
     exceptions: []
+
+  - id: C-042
+    schema_version: 0.1.0
+    statement: "Tenant erasure MUST be repeatable and fenced: relevance_artifacts are swept BEFORE their relevance_runs parents and the parents are RETAINED whenever artifact ownership is unresolved or the artifact delete fails (a retry can never report complete with artifacts retained); the sweep is fenced by a durable per-agent epoch bumped before any delete (a failed bump aborts unfenced; workers abandon pre-erasure claimed work at their fence checks; the erasing manager drains its worker and tracker first) and verified after (any residual tenant document forces partial); new relevance_artifacts carry their own immutable agentId. Quarantine promotion MUST be crash-recoverable: the claim holds a leased intermediate 'promoting' state finalized only after the canonical write, an expired lease is re-claimable idempotently or rejectable, and a structured write routed to quarantine persists its full candidate shape so promotion restores type/key/value verbatim."
+    rationale: "Filed from the 2026-09-05 independent audit W02/W03/W12: erasure deleted relevance_runs parents in the same sweep as artifacts and even on ownership-discovery failure, so a retry found no parents and reported complete with tenant artifacts retained (reproduced by the audit); erasure had no admission fencing or drain while an in-flight worker continued projection writes from an in-memory event; quarantine promote flipped to terminal 'promoted' before the canonical write (unrecoverable crash window, row outside the pending TTL) and lost the original structured shape at ingress. Grounded in official documentation: updateOne/upsert with uniquely-indexed filter (EL-013), deleteMany + re-check guidance (EL-016), countDocuments accuracy (EL-017), partial-index $in and partial TTL (EL-018)."
+    sources:
+      - ref: "docs/audits/2026-09-05-independent/logic_write.md#W02"
+        authority_domain: erasure-integrity
+        entailment: explicit
+      - ref: "docs/audits/2026-09-05-independent/logic_write.md#W03"
+        authority_domain: erasure-integrity
+        entailment: explicit
+      - ref: "docs/audits/2026-09-05-independent/logic_write.md#W12"
+        authority_domain: data-lifecycle
+        entailment: explicit
+      - ref: "EL-016#Behavior"
+        authority_domain: crud-write-semantics
+        entailment: explicit
+      - ref: "EL-017#Mechanics"
+        authority_domain: erasure-integrity
+        entailment: explicit
+      - ref: "EL-018#Create a Partial Index"
+        authority_domain: data-lifecycle
+        entailment: explicit
+    claim_kind: behavioral
+    impact: critical
+    tier: T3
+    status: known-and-supported
+    constructs: [packages/memory-engine/src/mongodb-erasure.ts, packages/memory-engine/src/mongodb-erasure-epoch.ts, packages/memory-engine/src/mongodb-manager-admin.ts, packages/memory-engine/src/mongodb-manager-jobs.ts, packages/memory-engine/src/mongodb-quarantine-review.ts, packages/memory-engine/src/mongodb-structured-memory.ts, packages/memory-engine/src/mongodb-relevance.ts, packages/memory-engine/src/mongodb-schema-standard-indexes-operations.ts]
+    validations: [V-142, V-143, V-144, V-145]
+    exceptions: []

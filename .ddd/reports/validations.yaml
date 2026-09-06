@@ -1197,3 +1197,47 @@ entries:
     run_at: "2026-09-06T09:20:00.000Z"
     evidence_hash: sha256:a0d2b75f1f220aa91905ea8da2f4db1aa931c60445584b2c40eb200161629edf
     notes: "Live-server RED->GREEN on memongo-preview (MongoDB 8.3.8 replica set), production AccessTracker + accessTargetFromSearchResult, disposable scratch database (dropped in the finally block; cleanup line in the log). RED (pre-fix, .ddd/reports/runs/w01-red-probe.log, sha256:d8dae7aa6534a61312673d5a5ac537579f91e1e8d4d2aa71250a2f159af08119): B's narrow structured access incremented A's row (audit reproduction extended: procedures and entities also incremented A; the relation filter matched nothing). GREEN (post-fix, target log): 13/13 assertions — narrow target (audit repro shape) leaves every same-key row untouched with one bounded warn while raw history is still recorded for B; full-identity targets increment exactly the owning row (x2) across all six collections while other-tenant/other-scope/other-type same-key rows stay untouched; search-result identity parse feeds the tracker end to end; scope-less results skip; raw access events carry the complete handle (scope/scopeRef/type) and round-trip on a real time-series collection."
+
+  - id: V-142
+    schema_version: 0.1.0
+    claim_id: C-042
+    construct: packages/memory-engine/src/mongodb-tenant-erasure.test.ts
+    method: test
+    target: .ddd/reports/runs/wave1b-unit-suite.log
+    result: pass
+    run_at: "2026-09-06T10:27:00.000Z"
+    evidence_hash: sha256:940d06ebaaf59f5018b2d2de0543e1b20f0be04976062f8be8345389ffe96f5b
+    notes: "Focused unit battery over every Wave 1b-changed source file's suite (4 files, 102/102, target log): erasure — happy path with epoch + clean verification + both artifact arms (legacy runId join and new agentId arm), the W02 audit reproduction inverted (artifact-delete failure -> partial with relevance_runs RETAINED -> retry sweeps children first -> complete, artifacts gone), phase-1 read failure retention, malformed-runId retention, failed-delete residual confirmed by verification, epoch-bump failure aborts unfenced with no deletes, audit-write failure partial; quarantine — leased promoting claim/finalize ordering, write-failure revert, expired-lease crash recovery (idempotent re-promotion), live-lease refusal, verbatim structuredCandidate roundtrip (type/key/value/confidence/sourceAgent restored, provenance.restoredCandidate), reject-recovery of an abandoned claim; epoch primitive monotonic + per-agent isolation; extraction runner abandons on epoch advance with the lease healthy (W03); schema pins the widened $in partial TTL filter + drop-first migration."
+
+  - id: V-143
+    schema_version: 0.1.0
+    claim_id: C-042
+    construct: packages/memory-engine/src
+    method: test
+    target: .ddd/reports/runs/wave1b-engine-suite.log
+    result: pass
+    run_at: "2026-09-06T10:27:00.000Z"
+    evidence_hash: sha256:985733fa4c9ec5abb3552915944af7621dfac09fbbaa83bddf1daf29b7fb4691
+    notes: "Full memory-engine battery on the final source tree: 2591 passed / 1 failed / 10 skipped (target log). The single failure (production-readiness $vectorSearch autoEmbed) was an ENVIRONMENT incident, not a code failure: the shared local preview container's mongod wedged under repeated full-battery connection load (even in-container mongosh got ECONNRESET; backpressure + 100ms handshake slow-query logs; RAM 40%, not OOM). Per the amended DDD environment-failure protocol: diagnosed from the substrate's own documented observability (docker logs/stats/health, serverStatus().connections), remediated (container restart), re-ran the check — the same file then passed 96/96 (autoEmbed index re-materialization warm-up after restart). Post-battery tree changes were test files plus one semantics-identical formatting refactor in quarantine-review, each re-verified by the V-142 focused battery and the V-144 type check. Environment-caused and code-caused failures reported separately per the protocol."
+
+  - id: V-144
+    schema_version: 0.1.0
+    claim_id: C-042
+    construct: packages/memory-engine/src
+    method: type-check
+    target: .ddd/reports/runs/wave1b-check-types.log
+    result: pass
+    run_at: "2026-09-06T10:27:00.000Z"
+    evidence_hash: sha256:e1a224bd45fc33a769ca105b6f95eed1085b7d2b9ff317c5ef008604f8b97aa4
+    notes: "Repo-wide check-types on the final Wave 1b tree: 15/15 tasks (target log). Biome on all twelve touched files: error-free; the one new-code style warning (useOptionalChain in the quarantine candidate path) fixed; remaining warnings verified pre-existing at HEAD (unused imports/noNonNullAssertion in untouched regions)."
+
+  - id: V-145
+    schema_version: 0.1.0
+    claim_id: C-042
+    construct: packages/memory-engine/src/mongodb-erasure.ts
+    method: probe
+    target: .ddd/reports/runs/w1b-probe.log
+    result: pass
+    run_at: "2026-09-06T10:26:00.000Z"
+    evidence_hash: sha256:573fb4a7d0c74cadcbb456542c3ab94810aa0386296c031a09da92b7ca54fce9
+    notes: "Live-server probe on memongo-preview (MongoDB 8.3.8), production deleteAllForAgent / epoch primitive / promoteQuarantined, disposable scratch database (dropped in finally; cleanup line in the log). 29/29 assertions: W02 two-attempt scenario with a real injected-once artifact deleteMany failure (attempt 1 partial, parents retained with named reason, artifacts + runs survive, other collections swept; attempt 2 complete, artifacts swept before parents, verification clean); W03 epochs monotonic 1..5 across attempts, a failed events delete confirmed by verification.residual [{events,1}] then completed on retry; W12 crashed promote (row manually left promoting with an expired lease) recovered to promoted with the memory id on the row, and a stored structuredCandidate promoted verbatim (fact/home_city/Berlin/0.9, provenance.restoredCandidate true) instead of the matchPatterns reinterpretation the rendered text would have produced. The $in partial TTL filter was additionally live-verified by creating the index shape on a disposable database (accepted by the server, dropped after)."

@@ -387,3 +387,78 @@ entries:
     superseded_by: null
     content_type: "text/markdown"
     notes: "Wave 1a (W01) compare phase: measurements are time + metadata + all metrics recorded at that moment (arbitrary top-level metric fields are the documented shape); metaField cannot be added after creation (unchanged by the fix; new identity fields are top-level metrics); update limitations do not apply (insert-only path). Live round-trip verified in the GREEN probe."
+
+# EL-016..EL-018 appended 2026-09-06 (Wave 1b / W02+W03+W12 grounding and
+# compare): official MongoDB documentation sections relied on for the erasure
+# retry/race and quarantine crash-window fixes. Captures hold verbatim
+# contract sections plus analysis; digests over the cache files. No prior
+# entry modified.
+
+  - id: EL-016
+    subject: "MongoDB Manual - db.collection.deleteMany() (delete semantics and re-check guidance)"
+    schema_version: 0.1.0
+    source_class: official-doc
+    source_url: "https://www.mongodb.com/docs/manual/reference/method/db.collection.deleteMany/"
+    publisher: "MongoDB (mongodb.com official documentation)"
+    product: "MongoDB Server Manual"
+    version: "8.x (local stack 8.3.8)"
+    retrieved_at: "2026-09-06T07:12:00.000Z"
+    content_digest: "sha256:fff6e9afe65a01e5195c9e44024d274184d75af49ecf60d8d01f599417502059"
+    doc_version: "manual-current-2026-09-06"
+    cache_path: cache/mongodb-manual-delete-many.md
+    sections: ["Definition", "Behavior"]
+    status: active
+    authority_for: [crud-write-semantics, erasure-integrity]
+    freshness: "365d"
+    adapter: web-fetch
+    license: "MongoDB docs: public web documentation, fair-use quotes in cache"
+    independence: independent-of-remediation
+    superseded_by: null
+    content_type: "text/markdown"
+    notes: "Wave 1b (W02) grounding: deleteMany removes all filter matches and returns deletedCount; the manual's own re-check guidance (re-query until empty) is the basis for the erasure post-sweep verification pass."
+
+  - id: EL-017
+    subject: "MongoDB Manual - db.collection.countDocuments() (accurate post-delete counting)"
+    schema_version: 0.1.0
+    source_class: official-doc
+    source_url: "https://www.mongodb.com/docs/manual/reference/method/db.collection.countDocuments/"
+    publisher: "MongoDB (mongodb.com official documentation)"
+    product: "MongoDB Server Manual"
+    version: "8.x (local stack 8.3.8)"
+    retrieved_at: "2026-09-06T07:12:00.000Z"
+    content_digest: "sha256:474b15e0723017feeaa621fbcafc7ca2e4d377a28e2fb8c95f23b63186b146a3"
+    doc_version: "manual-current-2026-09-06"
+    cache_path: cache/mongodb-manual-count-documents.md
+    sections: ["Mechanics", "Empty or Non-Existing Collections and Views"]
+    status: active
+    authority_for: [erasure-integrity, observability]
+    freshness: "365d"
+    adapter: web-fetch
+    license: "MongoDB docs: public web documentation, fair-use quotes in cache"
+    independence: independent-of-remediation
+    superseded_by: null
+    content_type: "text/markdown"
+    notes: "Wave 1b (W03) grounding: countDocuments is aggregation-based and accurate (unlike metadata counts) and returns 0 for missing collections — the semantics the erasure residual verification requires."
+
+  - id: EL-018
+    subject: "MongoDB Manual - Partial Indexes (partialFilterExpression operators, partial TTL)"
+    schema_version: 0.1.0
+    source_class: official-doc
+    source_url: "https://www.mongodb.com/docs/manual/core/index-partial/"
+    publisher: "MongoDB (mongodb.com official documentation)"
+    product: "MongoDB Server Manual"
+    version: "8.x (local stack 8.3.8)"
+    retrieved_at: "2026-09-06T07:12:00.000Z"
+    content_digest: "sha256:f4d88bffb68055534b3cf80dde4a29b11ce4f2dceb5a2cf57668d2dd381634b3"
+    doc_version: "manual-current-2026-09-06"
+    cache_path: cache/mongodb-manual-partial-indexes.md
+    sections: ["Create a Partial Index", "Partial TTL Indexes", "Restrictions"]
+    status: active
+    authority_for: [data-lifecycle, schema]
+    freshness: "365d"
+    adapter: web-fetch
+    license: "MongoDB docs: public web documentation, fair-use quotes in cache"
+    independence: independent-of-remediation
+    superseded_by: null
+    content_type: "text/markdown"
+    notes: "Wave 1b (W12) grounding: partialFilterExpression officially accepts $in; partial TTL indexes expire only matching documents. Basis for widening the quarantine pending-TTL filter to include the leased 'promoting' state, with drop-first migration (same name + different options = IndexOptionsConflict). Live-verified on the local 8.3.8 server."

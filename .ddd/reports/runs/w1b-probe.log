@@ -1,0 +1,39 @@
+10:25:40.458 [memory:mongodb:erasure] warn: relevance artifact sweep failed; retaining parents {"agentId":"B","error":{}}
+10:25:40.696 [memory:mongodb:erasure] warn: tenant erasure completed with failures {"agentId":"B","failed":["relevance_artifacts","relevance_runs"],"residual":["relevance_artifacts"]}
+ok   W02 attempt1 status partial === "partial"
+ok   W02 attempt1 epoch 1 === 1
+ok   W02 attempt1 artifact delete error surfaced === "injected artifact delete failure"
+ok   W02 attempt1 relevance_runs retained with reason === true
+ok   W02 attempt1 runs row survives === 1
+ok   W02 attempt1 both artifacts survive === 2
+ok   W02 attempt1 events swept === 0
+10:25:40.839 [memory:mongodb:erasure] info: tenant erasure complete {"agentId":"B","collections":30,"epoch":2}
+ok   W02 attempt2 status complete === "complete"
+ok   W02 attempt2 epoch 2 === 2
+ok   W02 attempt2 verification clean === {"checked":30,"residual":[]}
+ok   W02 attempt2 no artifacts remain === 0
+ok   W02 attempt2 runs gone === 0
+10:25:40.940 [memory:mongodb:erasure] warn: tenant erasure completed with failures {"agentId":"B","failed":["events"],"residual":["events"]}
+ok   W03 failed-delete status partial === "partial"
+ok   W03 residual confirmed by verification === [{"collection":"events","count":1}]
+10:25:40.990 [memory:mongodb:erasure] info: tenant erasure complete {"agentId":"B","collections":30,"epoch":4}
+ok   W03 retry complete === "complete"
+ok   W03 retry epoch 4 === 4
+ok   W03 epoch primitive monotonic === 4
+ok   W03 epoch bump returns next value === 5
+10:25:41.112 [memory:mongodb:structured] info: structured memory created: type=preference key=*** over spaces in TypeScript files revision=1
+ok   W12 recovered promote status === "promoted"
+ok   W12 recovered promote finalize clean === undefined
+ok   W12 recovered promote memory written === "string"
+ok   W12 row finalized promoted === "promoted"
+ok   W12 row carries memoryId === "6a9d15755d79a6a56b1f812d"
+10:25:41.153 [memory:mongodb:structured] info: structured memory created: type=fact key=*** revision=1
+ok   W12 restored promote status === "promoted"
+ok   W12 candidate type verbatim === "fact"
+ok   W12 candidate key verbatim === "home_city"
+ok   W12 candidate value verbatim === "Berlin"
+ok   W12 candidate confidence verbatim === 0.9
+ok   W12 provenance marks restoredCandidate === true
+
+Wave 1b probe: all assertions passed
+{"cleanup":"dropped disposable probe database","database":"ddd_w1b_d97f626eb1244d1f989aaeded69dba19"}
