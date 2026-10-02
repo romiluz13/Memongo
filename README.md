@@ -31,7 +31,7 @@ with vector search, full-text search, and hybrid ranking.
 
 The public repo is intentionally focused: a runnable API, MCP server, TypeScript client, AI SDK tools, web console, docs, Docker MongoDB setup, and release checks.
 
-**Project handoff:** development is closed as of 2026-10-02. Read the [review report, unfinished roadmap and project memory](docs/handoff/2026-10-02/README.md). Version 2.2.0 ships as downloadable packages and an API container; npm publication is pending restored publishing access.
+**Project handoff:** development is closed as of 2026-10-02. Read the [review report, unfinished roadmap and project memory](docs/handoff/2026-10-02/README.md). Version 2.2.0 is available on npm, as verified downloadable packages, and as an API container.
 
 ## Quickstart
 

@@ -1733,7 +1733,7 @@
 			"id": "O01",
 			"phase": "1",
 			"title": "Repair CI coverage and validate installed artifacts",
-			"remaining": "Release CI, frozen install, clean tarball install/imports, MCP executable, full unit selection and 69 native fixtures passed. Full manual provider E2E remains incompatible with owned-port fixtures; original per-criterion CI-failure/rollback proof is not certified. npm registry publication remains blocked.",
+			"remaining": "Release CI, frozen install, clean tarball install/imports, MCP executable, full unit selection and 69 native fixtures passed. Full manual provider E2E remains incompatible with owned-port fixtures; original per-criterion CI-failure/rollback proof is not certified. npm registry publication and independent fresh-cache install/import/bin verification passed; the workflow remains failed on its immediate propagation-limited registry smoke.",
 			"acceptanceCriteria": [
 				"Critical DB suite actually collects and fails an injected regression",
 				"Script/tests type error fails CI",

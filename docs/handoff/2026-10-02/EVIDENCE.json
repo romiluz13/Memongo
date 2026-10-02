@@ -4,9 +4,9 @@
 	"public": {
 		"mainCi": "https://github.com/romiluz13/Memongo/actions/runs/36980293298",
 		"containerRun": "https://github.com/romiluz13/Memongo/actions/runs/36980657591",
-		"npmFailedRun": "https://github.com/romiluz13/Memongo/actions/runs/36980657586",
 		"release": "https://github.com/romiluz13/Memongo/releases/tag/v2.2.0",
-		"site": "https://memongo.rom-88f.workers.dev"
+		"site": "https://memongo.rom-88f.workers.dev",
+		"npmPublicationRun": "https://github.com/romiluz13/Memongo/actions/runs/36980657586"
 	},
 	"inputCounts": {
 		"parents": 58,
@@ -35,5 +35,6 @@
 		"campaignHandoff": "campaign/HANDOFF.md"
 	},
 	"fileManifests": "Private archive MANIFEST.json plus outer SHA256SUMS; clean source archive generated from committed Git only.",
-	"claimLimits": "140 repairs are accepted changes, not 140 unique defects or 140 of 381 findings closed. Finding-to-repair closure has not been fully reconciled. Every original criterion is retained. Historical evidence paths resolve inside the private context archive, not a public clean clone. No future task is authorized by this ledger."
+	"claimLimits": "140 repairs are accepted changes, not 140 unique defects or 140 of 381 findings closed. Finding-to-repair closure has not been fully reconciled. Every original criterion is retained. Historical evidence paths resolve inside the private context archive, not a public clean clone. No future task is authorized by this ledger.",
+	"npmVerification": "NPM-PUBLICATION.json: eight exact versions/download hashes/provenance plus independent fresh-cache registry install/import/MCP initialization; original workflow attempt2 failed registry propagation retries."
 }

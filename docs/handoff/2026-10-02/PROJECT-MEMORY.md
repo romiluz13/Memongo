@@ -18,7 +18,7 @@ The engineering release/tag `v2.2.0` is commit `d2579054a4488e2c4d301c0bcd7c58d2
 
 Campaign and release checkouts are separate. The live campaign uses pinned earlier revisions, not released code. Its local source pin must remain unchanged until B2 finishes. Exact campaign revisions and local preservation instructions are retained in the private archive's `campaign/HANDOFF.md`. Refresh them before acting; do not use B2 as release validation.
 
-Public deliverables are the GitHub release's eight downloadable packages, GHCR image `2.2.0`, and the existing Cloudflare web worker. No hosted API deployment target is configured. npm `2.2.0` is pending: the first scoped-package PUT returned HTTP 404. A publish-access or token failure is suspected; the exact cause is unresolved. A Sigstore record is not registry publication.
+Public deliverables are the GitHub release's eight downloadable packages, GHCR image `2.2.0`, and the existing Cloudflare web worker. No hosted API deployment target is configured. All eight npm `2.2.0` packages are published with provenance after access restoration. Exact downloaded tarballs match the verified release; fresh-cache install/import/Pi source/MCP initialize passed. Publish workflow attempt 2 failed only at its immediate registry-install smoke after ten version-not-found retries; that failure remains recorded. The original HTTP 404 cause was not established. A Sigstore record alone is not registry publication.
 
 ## Before any resume
 

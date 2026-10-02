@@ -13,3 +13,7 @@ The handoff reports what shipped and what remains unproven. Agreement does not c
 Claude and Droid both returned **ACCEPT, no blocking findings** in CLOSEOUT-FINAL-R2. Each recomputed all 11 candidate file hashes. Claude checked all 58 original task hashes; Droid rechecked all 58 acceptance arrays. Their recorded reading limits remain in the review bundle. Herdr observed both agents done: Claude sequence 5645, Droid sequence 5644.
 
 After acceptance, root mechanically appended this result and applied Claude’s exact cosmetic correction, “reports2.2.0” → “reports 2.2.0”. The delivery manifest records these two final file hashes; all other candidate hashes remain unchanged. No product source changed in closeout.
+
+## npm distribution follow-up
+
+The npm status correction changes documentation only. Product code and all 58 original acceptance arrays remain unchanged. The publication receipt records eight exact matching downloads, provenance metadata and the subsequent independent fresh-cache smoke, while preserving the failed workflow verdict. This follow-up requires bounded review of the exact changed files before delivery.

@@ -10,7 +10,7 @@ The immutable engineering/release basis is `v2.2.0`, commit `d2579054a4488e2c4d3
 
 A clean clone or the clean code archive excludes local credentials, datasets, checkpoints, dependencies, worktrees and raw private evidence. The reviewer bundle's SHA256SUMS proves the delivered files; it does not prove runtime correctness. Private context is preserved separately, with original audits, full task briefs, consensus routing and source-document copies. Never publish that archive without a separate content/privacy review.
 
-The public [GitHub release](https://github.com/romiluz13/Memongo/releases/tag/v2.2.0) includes eight downloadable packages with checksums. The [Cloudflare site](https://memongo.rom-88f.workers.dev) is deployed. The API container is `ghcr.io/romiluz13/memongo:2.2.0`; container publication is not a hosted API service. npm 2.2.0 publication remains blocked on restored publishing access as of this handoff.
+The public [GitHub release](https://github.com/romiluz13/Memongo/releases/tag/v2.2.0) includes eight downloadable packages with checksums. The [Cloudflare site](https://memongo.rom-88f.workers.dev) is deployed. The API container is `ghcr.io/romiluz13/memongo:2.2.0`; container publication is not a hosted API service. All eight npm 2.2.0 packages are published with provenance and verified downloaded bytes. The subsequent fresh-cache registry install/import/MCP initialization passed. The publish workflow remains failed on its earlier propagation-limited install check; see [npm verification](NPM-PUBLICATION.json).
 
 ## Closure boundary
 
