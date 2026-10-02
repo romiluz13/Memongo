@@ -57,6 +57,7 @@ jobs:
       - name: E2E (full suite)
         env:
           MONGODB_TEST_URI: mongodb://127.0.0.1:27017/?directConnection=true
+          MEMONGO_TEST_MONGODB_URI: mongodb://127.0.0.1:27017/?directConnection=true
           VOYAGE_API_KEY: ${{ secrets.VOYAGE_API_KEY }}
           MEMONGO_ENRICHMENT_API_KEY: ${{ secrets.MEMONGO_ENRICHMENT_API_KEY }}
           MEMONGO_ENRICHMENT_BASE_URL: ${{ vars.MEMONGO_ENRICHMENT_BASE_URL }}

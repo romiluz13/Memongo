@@ -95,6 +95,7 @@ jobs:
       - name: E2E (tier A)
         env:
           MONGODB_TEST_URI: mongodb://127.0.0.1:27017/?directConnection=true
+          MEMONGO_TEST_MONGODB_URI: mongodb://127.0.0.1:27017/?directConnection=true
         run: bun run --filter @memongo/memory-engine test:e2e:tier-a
 
       # Skip-green guard for tier A: every gated file must have executed at
