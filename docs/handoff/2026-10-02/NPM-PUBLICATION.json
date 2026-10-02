@@ -77,5 +77,13 @@
 			"attestationsPresent": true
 		}
 	],
-	"limits": "Provenance metadata presence checked; cryptographic attestation signature verification not performed. Workflow failure is preserved. No full-roadmap, production-SLA or benchmark leadership claim."
+	"limits": "Provenance metadata presence checked; cryptographic attestation signature verification not performed. Workflow failure is preserved. No full-roadmap, production-SLA or benchmark leadership claim.",
+	"postPublicationMainCi": {
+		"url": "https://github.com/romiluz13/Memongo/actions/runs/36987739727",
+		"commit": "35504de77df9f8b5e541b4643f04460eb0a7f163",
+		"conclusion": "failure",
+		"mongodbTierA": "success",
+		"qualityFailure": "Check publishability rejects already-published @memongo/lib@2.2.0; subsequent unit step not executed",
+		"remainingTask": "Separate ordinary package validation from the mandatory unpublished-version release guard, preserving artifact validation and publish protections. Requires new engineering authorization."
+	}
 }
