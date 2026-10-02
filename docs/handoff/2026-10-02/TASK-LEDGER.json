@@ -622,7 +622,7 @@
 			"id": "S04",
 			"phase": "1",
 			"title": "Repair quarantine transition, recovery and scope",
-			"remaining": "Validator, promotion/rejection fences and resolved identity repaired; partial-promotion rejection disclosure/revocation and TTL/original-field retention remain separate.",
+			"remaining": "Validator, promotion/rejection fences and resolved identity are repaired. N-QR adds memoryMayRemain: true to successful expired-promotion rejection, independent of audit failure; it discloses possible surviving memory without deletion or an existence guarantee. Broader recovery, TTL/original-field retention and parent criteria remain uncertified.",
 			"acceptanceCriteria": [
 				"Valid pending row can transition under moderate validator",
 				"Crash after memory write before final promotion has one recoverable outcome",
@@ -1047,7 +1047,7 @@
 			"id": "A03",
 			"phase": "1",
 			"title": "Unify input, errors and response variants",
-			"remaining": "Bounded children may contribute, but original acceptance criteria have not been fully reconciled to current receipts; no completion inference.",
+			"remaining": "N-QR exposes memoryMayRemain?: true and the existing finalizeError?: string in the client receipt; engine, bridge, API and client seam checks pass separately. Hosted transport end-to-end behavior and wider input/error/retry criteria remain uncertified.",
 			"acceptanceCriteria": [
 				"API/MCP/tools agree on accepted inputs and errors",
 				"NaN revision cannot bypass stale check",
@@ -1733,7 +1733,7 @@
 			"id": "O01",
 			"phase": "1",
 			"title": "Repair CI coverage and validate installed artifacts",
-			"remaining": "Release CI, frozen install, clean tarball install/imports, MCP executable, full unit selection and 69 native fixtures passed. Full manual provider E2E remains incompatible with owned-port fixtures; original per-criterion CI-failure/rollback proof is not certified. npm registry publication and independent fresh-cache install/import/bin verification passed; the workflow remains failed on its immediate propagation-limited registry smoke. The bounded follow-up separates ordinary artifact validation from the strict unpublished-version release gate. Historical post-publication main CI 36987739727 failed freshness; MongoDB tier-A passed and the later unit step did not execute. Follow-up main aadffd324b exact-head CI 37033780070 passed quality/artifacts/unit and real MongoDB tier-A with execution guards; final evidence is recorded in the review report; wider parent criteria remain uncertified.",
+			"remaining": "EX-GATE preserves port27017, adds owned27218 mapping, pairs test URIs and prepares required evidence; four owned suites and missing/all-skipped execution controls pass locally. Combined 71 owned native files pass. Full manual/provider/Preview/Docker-hosted validation, registry propagation retry, migration/rollback and remaining original criteria are not certified. Prior ordinary artifact-versus-strict-release separation remains intact; no publication was rerun.",
 			"acceptanceCriteria": [
 				"Critical DB suite actually collects and fails an injected regression",
 				"Script/tests type error fails CI",
@@ -2806,5 +2806,5 @@
 		}
 	],
 	"archiveLinkNote": "plannedChecks retains verbatim original-task Markdown such as ../execution/CHECKS.json; those links resolve relative to originalTaskArchivePath in the private archive, not relative to this public JSON file.",
-	"followUpSourceBasis": "aadffd324b8af482b66ab29710363bcb5958b1d3"
+	"followUpSourceBasis": "0aabbc887b73c11e983bcf2578b6eecbcedefa1a"
 }

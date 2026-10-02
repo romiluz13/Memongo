@@ -1,10 +1,14 @@
 # Memongo reviewer handoff — 2026-10-02
 
-**Memongo 2.2.0 is delivered; the bounded CI and structured current-history coding sprint is complete. Development is awaiting manager approval.** Unfinished engineering and evidence work is explicitly preserved; closure is not certification of the entire original roadmap. New implementation, model calls, benchmark launches, comparisons and rejudges require fresh owner/manager authorization.
+**Memongo 2.2.0 is delivered; the subsequent CI/history repairs and agreed two-child implementation are complete.** The latest source adds truthful quarantine-recovery disclosure and repairs manual owned-MongoDB fixture routing. Further work awaits reevaluation and explicit scope; original parent closure, benchmark leadership and production readiness remain unproved. No model, benchmark, publication or deployment was run for these two repairs.
 
 Start with [REVIEW-REPORT.md](REVIEW-REPORT.md) for what exists and what was verified, then [ROADMAP.md](ROADMAP.md) for the remaining work and why. [TASK-LEDGER.json](TASK-LEDGER.json) preserves every acceptance criterion for all 58 original work packages. [PROJECT-MEMORY.md](PROJECT-MEMORY.md) records decisions and safe resume conditions. [DOCUMENTATION-REGISTER.md](DOCUMENTATION-REGISTER.md) distinguishes authoritative sources, historical plans, and unverified claims. [EVIDENCE.json](EVIDENCE.json) identifies the public evidence and local archival inputs. [TEAM-REVIEW.md](TEAM-REVIEW.md) records the bounded independent handoff review.
 
 ## Current source and evidence
+
+The latest reviewed code is `0aabbc887b73c11e983bcf2578b6eecbcedefa1a`, following documentation basis `5f5be80f60ab689fa7595b5468d95e6073d33aef`. Recovered-promotion rejection returns `memoryMayRemain: true`, including audit failure; this is possible surviving memory, not an existence or erasure claim. The client exposes that marker and existing `finalizeError`. The manual workflow retains port 27017, adds owned port 27218 and evidence setup, and requires four owned suites. Sequential local proof passed 5,753 unit tests (four existing skips), 596 native cases across 71 files and all eight artifact checks. Read [the latest proof and limits](REVIEW-REPORT.md#agreed-two-child-follow-up). The handoff documentation commit is separate; its [ordinary CI status](https://github.com/romiluz13/Memongo/actions/workflows/ci.yml) is not a manual/provider run.
+
+The earlier CI/history milestone below remains historical evidence.
 
 The coding sprint is complete on source main `aadffd324b8af482b66ab29710363bcb5958b1d3`; [exact-head CI](https://github.com/romiluz13/Memongo/actions/runs/37033780070) passed both quality and real MongoDB tier-A jobs and execution guards at 16:29:54 UTC. Ordinary CI validates artifacts after publication while the release default remains strict; structured current history filters by current raw physical identity before limit. These repairs are on main, not in newly published packages. Immutable npm/tag `v2.2.0` remains `d2579054a4488e2c4d301c0bcd7c58d20baef36c`.
 
@@ -20,4 +24,4 @@ The public [GitHub release](https://github.com/romiluz13/Memongo/releases/tag/v2
 
 ## Closure boundary
 
-The two-repair coding sprint is complete. This documentation refresh grants no further engineering or campaign analysis. B2 was previously observed running on an older pinned revision; its current process/terminal state is not refreshed here. Verify cheap metadata before any separately authorized preservation or analysis. No new repetitions or paid analysis are authorized. Existing Atlas resources may still incur infrastructure charges: closure is not proof they were shut down. Credentials and campaign databases are preserved until their owner approves retention or shutdown.
+The two agreed implementation children are complete. This handoff grants no further engineering or campaign analysis. B2 was previously observed running on an older pinned revision; its current process/terminal state is not refreshed here. Verify cheap metadata before any separately authorized preservation or analysis. No new repetitions or paid analysis are authorized. Existing Atlas resources may still incur infrastructure charges: closure is not proof they were shut down. Credentials and campaign databases are preserved until their owner approves retention or shutdown.
