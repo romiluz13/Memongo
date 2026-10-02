@@ -51,6 +51,46 @@ async function request(
 	})
 }
 describe("quarantine review HTTP errors", () => {
+	it.each([
+		{
+			path: "/v1/admin/quarantine/reject",
+			mock: bridge.memongoBridgeRejectQuarantined,
+			status: "rejected",
+			fields: { memoryMayRemain: true, auditError: "fixture audit failed" },
+		},
+		{
+			path: "/v1/admin/quarantine/promote",
+			mock: bridge.memongoBridgePromoteQuarantined,
+			status: "promoted",
+			fields: { memoryId: "memory", finalizeError: "fixture finalize failed" },
+		},
+	])("$path preserves recovery fields on the wire", async ({
+		path,
+		mock,
+		status,
+		fields,
+	}) => {
+		const receipt = {
+			quarantineId: "quarantine",
+			agentId: "agent",
+			status,
+			reviewedAt: new Date("2026-10-02T00:00:00.000Z"),
+			...fields,
+		}
+		mock.mockResolvedValueOnce(receipt)
+		const response = await request(path)
+		expect(response.status).toBe(200)
+		expect(await response.json()).toEqual({
+			...receipt,
+			reviewedAt: receipt.reviewedAt.toISOString(),
+		})
+		expect(mock).toHaveBeenCalledExactlyOnceWith({
+			agentId: "agent",
+			quarantineId: "quarantine",
+			reviewerId: undefined,
+			reviewNotes: undefined,
+		})
+	})
 	for (const { path, mock } of operations) {
 		it.each([
 			{

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import type { QuarantineReviewReceipt } from "@memongo/memory-engine"
 
 // C-004 quarantine review bridge wiring: the bridge must select the manager
 // for the AUTHORIZED agentId (never a body-smuggled one), forward
@@ -16,22 +17,26 @@ const listQuarantined = vi.fn(async () => [
 	},
 ])
 
-const promoteQuarantined = vi.fn(async () => ({
-	quarantineId: "q-1",
-	agentId: "agent-A",
-	status: "promoted",
-	reviewedAt: new Date("2026-08-15T01:00:00.000Z"),
-	memoryId: "mem-1",
-	mutationId: "mut-1",
-}))
+const promoteQuarantined = vi.fn(
+	async (): Promise<QuarantineReviewReceipt> => ({
+		quarantineId: "q-1",
+		agentId: "agent-A",
+		status: "promoted",
+		reviewedAt: new Date("2026-08-15T01:00:00.000Z"),
+		memoryId: "mem-1",
+		mutationId: "mut-1",
+	}),
+)
 
-const rejectQuarantined = vi.fn(async () => ({
-	quarantineId: "q-2",
-	agentId: "agent-A",
-	status: "rejected",
-	reviewedAt: new Date("2026-08-15T01:00:00.000Z"),
-	mutationId: "mut-2",
-}))
+const rejectQuarantined = vi.fn(
+	async (): Promise<QuarantineReviewReceipt> => ({
+		quarantineId: "q-2",
+		agentId: "agent-A",
+		status: "rejected",
+		reviewedAt: new Date("2026-08-15T01:00:00.000Z"),
+		mutationId: "mut-2",
+	}),
+)
 
 vi.mock("@memongo/memory-engine", () => ({
 	getMemorySearchManager: vi.fn(async ({ agentId }: { agentId: string }) => ({
@@ -134,6 +139,43 @@ describe("bridge quarantine review (C-004)", () => {
 		expect(vi.mocked(getMemorySearchManager)).toHaveBeenCalledWith(
 			expect.objectContaining({ agentId: "main" }),
 		)
+	})
+
+	it("keeps recovered rejection disclosure even when audit failed", async () => {
+		const result: QuarantineReviewReceipt = {
+			quarantineId: "q-2",
+			agentId: "agent-A",
+			status: "rejected",
+			reviewedAt: new Date("2026-10-02T00:00:00.000Z"),
+			memoryMayRemain: true as const,
+			auditError: "fixture audit failed",
+		}
+		rejectQuarantined.mockResolvedValueOnce(result)
+		expect(
+			await memongoBridgeRejectQuarantined({
+				agentId: "agent-A",
+				quarantineId: "q-2",
+			}),
+		).toBe(result)
+	})
+
+	it("keeps the existing promotion finalization gap", async () => {
+		const result: QuarantineReviewReceipt = {
+			quarantineId: "q-1",
+			agentId: "agent-A",
+			status: "promoted",
+			reviewedAt: new Date("2026-10-02T00:00:00.000Z"),
+			memoryId: "mem-1",
+			mutationId: "mut-1",
+			finalizeError: "fixture finalize failed",
+		}
+		promoteQuarantined.mockResolvedValueOnce(result)
+		expect(
+			await memongoBridgePromoteQuarantined({
+				agentId: "agent-A",
+				quarantineId: "q-1",
+			}),
+		).toBe(result)
 	})
 
 	it("propagates engine failures to the caller", async () => {

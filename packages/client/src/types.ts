@@ -737,8 +737,12 @@ export type MemongoQuarantineReviewReceipt = {
 	reviewNotes?: string
 	/** structured_mem document id; promote only. */
 	memoryId?: string
+	/** Rejection recovered a promotion claim; structured memory may remain. */
+	memoryMayRemain?: true
 	/** Audit record id in memory_mutations; absent when the audit write failed. */
 	mutationId?: string
+	/** Memory was written, but the quarantine row could not be finalized. */
+	finalizeError?: string
 	/** Audit write failed; the decision is durable on the row but unaudited. */
 	auditError?: string
 }

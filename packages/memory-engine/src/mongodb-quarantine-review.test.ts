@@ -9,7 +9,7 @@
 // audit, including recovery of an abandoned promoting claim).
 // The stateful fake IS the database; the facade test wires the real
 // prototype without any module mocks.
-import { describe, expect, it } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
 import {
 	insertQuarantinedForReview,
 	listQuarantined,
@@ -494,6 +494,8 @@ describe("promoteQuarantined — classifier overrule (C-004)", () => {
 		})
 
 		expect(receipt.status).toBe("rejected")
+		expect(receipt).toHaveProperty("memoryMayRemain", true)
+		expect(fake.all("structured_mem")).toEqual([])
 		const row = fake.findDoc("memory_quarantine", { quarantineId })
 		expect(row?.status).toBe("rejected")
 		expect(row?.promoteClaimedAt).toBeUndefined()
@@ -526,6 +528,7 @@ describe("rejectQuarantined — discard with audit trail (C-004)", () => {
 			reviewerId: "reviewer-7",
 			reviewNotes: "confirmed injection attempt",
 		})
+		expect(receipt).not.toHaveProperty("memoryMayRemain")
 
 		const row = fake.findDoc("memory_quarantine", { quarantineId })
 		expect(row).toMatchObject({
@@ -574,6 +577,7 @@ describe("rejectQuarantined — discard with audit trail (C-004)", () => {
 		// receipt says so instead of swallowing the gap.
 		expect(receipt.status).toBe("rejected")
 		expect(receipt.auditError).toBe("audit insert failed")
+		expect(receipt).not.toHaveProperty("memoryMayRemain")
 		expect(receipt.mutationId).toBeUndefined()
 		const row = fake.findDoc("memory_quarantine", { quarantineId })
 		expect(row).toMatchObject({
@@ -622,6 +626,64 @@ describe("rejectQuarantined — discard with audit trail (C-004)", () => {
 			}),
 		).rejects.toThrow(/already reviewed/)
 		expect(receipt.status).toBe("rejected")
+	})
+})
+
+describe("rejected recovery receipt", () => {
+	afterEach(() => vi.restoreAllMocks())
+	it.each([
+		false,
+		true,
+	])("discloses retained memory after promotion finalization failed (audit failure: %s)", async (auditFails) => {
+		const fake = createStatefulMongoFake({ prefix: PREFIX })
+		const quarantineId = await seedPending(fake)
+		const collection = fake.collection("memory_quarantine")
+		const update = collection.updateOne.bind(collection)
+		const finalize = vi
+			.spyOn(collection, "updateOne")
+			.mockImplementation(async (...args) => {
+				if (!Array.isArray(args[1]) && args[1].$set?.status === "promoted")
+					throw new Error("fixture finalize failed")
+				return update(...args)
+			})
+		const promoted = await promoteQuarantined({
+			db: fake.db,
+			prefix: PREFIX,
+			agentId: AGENT,
+			quarantineId,
+			embeddingMode: "automated",
+		})
+		finalize.mockRestore()
+		expect(promoted.finalizeError).toBe("fixture finalize failed")
+		expect(promoted.memoryId).toBeTruthy()
+		const retained = fake.all("structured_mem")
+		expect(retained).toHaveLength(1)
+		expect(retained[0]?.provenance).toMatchObject({ quarantineId })
+		expect(fake.findDoc("memory_quarantine", { quarantineId })?.status).toBe(
+			"promoting",
+		)
+		await collection.updateOne(
+			{ quarantineId },
+			{ $set: { promoteLeaseExpiresAt: new Date(Date.now() - 1000) } },
+		)
+		if (auditFails)
+			fake.injectFailure({
+				collection: "memory_mutations",
+				method: "insertOne",
+				error: new Error("fixture reject audit failed"),
+			})
+		const rejected = await rejectQuarantined({
+			db: fake.db,
+			prefix: PREFIX,
+			agentId: AGENT,
+			quarantineId,
+		})
+		expect(rejected.status).toBe("rejected")
+		expect(rejected.auditError).toBe(
+			auditFails ? "fixture reject audit failed" : undefined,
+		)
+		expect(fake.all("structured_mem")).toEqual(retained)
+		expect(rejected).toHaveProperty("memoryMayRemain", true)
 	})
 })
 

@@ -109,6 +109,8 @@ export type QuarantineReviewReceipt = {
 	reviewNotes?: string
 	/** structured_mem document id; promote only. */
 	memoryId?: string
+	/** Rejection recovered a promotion claim; structured memory may remain. */
+	memoryMayRemain?: true
 	/** Audit record id in memory_mutations. */
 	mutationId?: string
 	/**
@@ -648,6 +650,7 @@ export async function rejectQuarantined(params: {
 		agentId,
 		status: "rejected",
 		reviewedAt: decision.reviewedAt,
+		...(recoveringPromotion ? { memoryMayRemain: true as const } : {}),
 		...(params.reviewerId ? { reviewerId: params.reviewerId } : {}),
 		...(params.reviewNotes ? { reviewNotes: params.reviewNotes } : {}),
 	}
