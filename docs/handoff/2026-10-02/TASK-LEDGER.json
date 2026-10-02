@@ -561,7 +561,7 @@
 			"id": "S03",
 			"phase": "1",
 			"title": "Complete revision CAS and canonical mutation semantics",
-			"remaining": "Ambiguous legacy structured history policy is resolved: exclude snapshots without physical identity from current history while preserving storage. E257 implementation is deferred; final release checkpoint no longer blocks scheduling. New authorization is required.",
+			"remaining": "E257 implements the resolved policy for structured current history: exclude unbound or earlier-generation snapshots while preserving storage. Procedure history, what-changed, mixed old writers, numeric BSON equivalence, manual physical-id reuse and the remaining parent criteria are not certified.",
 			"acceptanceCriteria": [
 				"Concurrent create cannot overwrite an already revised winner",
 				"Rejected/uncommitted candidate cannot invalidate an observed fact",
@@ -1733,7 +1733,7 @@
 			"id": "O01",
 			"phase": "1",
 			"title": "Repair CI coverage and validate installed artifacts",
-			"remaining": "Release CI, frozen install, clean tarball install/imports, MCP executable, full unit selection and 69 native fixtures passed. Full manual provider E2E remains incompatible with owned-port fixtures; original per-criterion CI-failure/rollback proof is not certified. npm registry publication and independent fresh-cache install/import/bin verification passed; the workflow remains failed on its immediate propagation-limited registry smoke. Post-publication main CI 36987739727 also fails because the ordinary quality job calls the strict unpublished-version release check; separate validation purposes without weakening release protections. MongoDB tier-A passed; the later unit step did not execute.",
+			"remaining": "Release CI, frozen install, clean tarball install/imports, MCP executable, full unit selection and 69 native fixtures passed. Full manual provider E2E remains incompatible with owned-port fixtures; original per-criterion CI-failure/rollback proof is not certified. npm registry publication and independent fresh-cache install/import/bin verification passed; the workflow remains failed on its immediate propagation-limited registry smoke. The bounded follow-up separates ordinary artifact validation from the strict unpublished-version release gate. Historical post-publication main CI 36987739727 failed freshness; MongoDB tier-A passed and the later unit step did not execute. Final follow-up evidence is recorded in the review report; wider parent criteria remain uncertified.",
 			"acceptanceCriteria": [
 				"Critical DB suite actually collects and fails an injected regression",
 				"Script/tests type error fails CI",

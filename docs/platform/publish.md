@@ -66,6 +66,12 @@ This monorepo uses the `@memongo` npm scope. Publishing is maintainer-operated; 
 
 ## Publish mechanics
 
+Ordinary CI runs `bun run check-publishability --artifacts-only`. This runs the
+same build, tarball, metadata, version-alignment and installation checks after a
+version has been published, without checking registry version availability.
+The default command below remains the release gate: it also rejects existing
+npm versions and registry lookup errors. The publish workflow uses that default.
+
 From repo root, after all release-blocking lanes are green:
 
 ```bash

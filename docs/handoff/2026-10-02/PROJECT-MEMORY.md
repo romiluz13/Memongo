@@ -6,9 +6,9 @@ Recorded 2026-10-02. This is current handoff state; original plans and task Retu
 
 - Primary target: production agent memory plus broad benchmark coverage across conversations, coding-agent workloads and scale. Each evidence track is separate.
 - Preserve MongoDB-native storage and evolve public APIs compatibly.
-- Earlier “no fixed deadline/budget” is superseded by the owner's manager-directed stop. New development, model calls, benchmark runs, comparisons and rejudges require fresh owner/manager authorization.
+- Earlier “no fixed deadline/budget” is superseded by the owner's manager-directed stop and a bounded follow-up for ordinary CI and structured current history. New development, model calls, benchmark runs, comparisons and rejudges require fresh owner/manager authorization.
 - Existing B2 may finish. Preserve terminal evidence; no new repetition. Campaign analysis after terminal requires fresh authorization.
-- Legacy history ambiguity is resolved: exclude snapshots that cannot be bound to the current document from its history, while preserving them in storage. E257 is deferred, not implemented.
+- Legacy history ambiguity is resolved: exclude snapshots that cannot be bound to the current document from its history, while preserving them in storage. The bounded E257 follow-up now implements this policy for structured current history only. Procedure history, what-changed, mixed old writers, numeric BSON equivalence and manual physical-id reuse remain open.
 - U04 (agent versus session grants) and U05 (retention, granular erasure, expiry and backups) remain held. Rationale/self-edit policy and unsupported-topology choices need explicit intent.
 - Final closeout documentation, context preservation, project memory and npm distribution follow-up are authorized. npm requires actual access; credentials stay outside chat, logs and reviewer bundles.
 

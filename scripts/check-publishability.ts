@@ -950,11 +950,18 @@ function installSmoke(
 }
 
 function main() {
+	const args = process.argv.slice(2)
+	const artifactsOnly = args.length === 1 && args[0] === "--artifacts-only"
+	if (args.length > 0 && !artifactsOnly) {
+		fail(`unknown publishability arguments: ${args.join(" ")}`)
+	}
 	checkRemovedPaths()
 	checkPublishWorkflow()
 	const publishedVersions = checkVersionConsistency()
-	for (const [packageName, version] of publishedVersions) {
-		assertVersionIsUnpublished(packageName, version)
+	if (!artifactsOnly) {
+		for (const [packageName, version] of publishedVersions) {
+			assertVersionIsUnpublished(packageName, version)
+		}
 	}
 	for (const packageSpec of publishablePackages) {
 		assertReproducibleBuild(packageSpec)

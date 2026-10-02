@@ -92,7 +92,7 @@ bun run check-types
 bun run lint
 bun run build
 bun run test
-bun run check-publishability
+bun run check-publishability --artifacts-only
 ```
 
 With API + Mongo running:
