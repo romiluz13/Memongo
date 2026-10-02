@@ -6,6 +6,12 @@ Technical authority is current code plus official documentation matched to the i
 
 [Reviewer handoff](README.md) → [review report](REVIEW-REPORT.md) → [unfinished roadmap](ROADMAP.md) → [project memory](PROJECT-MEMORY.md) → [release scope](../../platform/releases/2.2.0.md) → [maintainer map](../../platform/MAINTAINER-MAP.md). Package/runtime versions come from the released lockfile/manifests and validation receipts, not manifest ranges or old notes. Installed release web build usedNext 15.5.23/OpenNext 1.20.2/Wrangler 4.123.0.
 
+## Completed follow-up and source boundaries
+
+Current product inputs are source main `aadffd324b8af482b66ab29710363bcb5958b1d3`, with ordinary exact-head CI 37033780070 SUCCESS. The 2.2.0 npm/tag basis remains d2579054; the later documentation refresh is separate. Read the review report for local 5,743 unit passes/four skips, 47 native cases and the eight-package artifact gate, plus limitations. Original audit/consensus inputs remain historical hypotheses and were not exhaustively re-adjudicated here.
+
+The sprint consulted npm v11 publish rules and GitHub workflow syntax for strict release versus ordinary artifact checking. MongoDB equality/BSON sources support the chosen query intent, but requested current manual URLs redirected to newer manuals; do not claim every guarantee is version-matched. Actual MongoDB 8.2.6/driver 7.6 native fixtures establish the disclosed typed-identity cases. No new external research or capability claim is introduced by this refresh.
+
 ## Preserved research
 
 The original planning snapshot contains44 official documentation source entries, 58 task briefs,381 findingroutes (364 original+14 prior omissions+3 new traces),206 hypotheses,122 public claims and29 protocol-gapchecks. These are baseline4b7d07 sources.91 hypotheses retain unverified premises in the original holds; do not count them as implemented or disproven. The MongoDB reconciliation contains17 roottechnologyquestions and version/probe gates, including correcting overly broad fusion availability assumptions in skill text. Counts refer to historical input routing, not current defects.

@@ -12,7 +12,7 @@
 			"id": "B00",
 			"phase": "0",
 			"title": "Seal and classify the completed campaign",
-			"remaining": "A and B1 are terminal; B2 is still running as last observed 2026-10-02. Seal, matched-setting/eligibility reconciliation and joins are unfinished. After B2, only terminal artifact preservation is authorized; analysis needs new approval.",
+			"remaining": "A and B1 are terminal. B2 was previously observed running on earlier pinned code; current process/terminal status is unverified. Seal, setting/eligibility reconciliation and joins remain unfinished. A fixed-cap offline lineage/eligibility/seal memo requires manager approval; no new calls or parent closure are implied.",
 			"acceptanceCriteria": [
 				"Original checkpoint, prediction sidecar, raw report, logs and manifests are preserved with hashes",
 				"Separate QA accuracy, retrieval diagnostics, subset scope and publishability; explain each blocker",
@@ -561,7 +561,7 @@
 			"id": "S03",
 			"phase": "1",
 			"title": "Complete revision CAS and canonical mutation semantics",
-			"remaining": "E257 implements the resolved policy for structured current history: exclude unbound or earlier-generation snapshots while preserving storage. Procedure history, what-changed, mixed old writers, numeric BSON equivalence, manual physical-id reuse and the remaining parent criteria are not certified.",
+			"remaining": "E257 implements the resolved policy for structured current history: exclude unbound or earlier-generation snapshots while preserving storage. Procedure history, what-changed, mixed old writers, numeric BSON equivalence, manual physical-id reuse and the remaining parent criteria are not certified. The two reads do not promise a linearizable latest view.",
 			"acceptanceCriteria": [
 				"Concurrent create cannot overwrite an already revised winner",
 				"Rejected/uncommitted candidate cannot invalidate an observed fact",
@@ -1733,7 +1733,7 @@
 			"id": "O01",
 			"phase": "1",
 			"title": "Repair CI coverage and validate installed artifacts",
-			"remaining": "Release CI, frozen install, clean tarball install/imports, MCP executable, full unit selection and 69 native fixtures passed. Full manual provider E2E remains incompatible with owned-port fixtures; original per-criterion CI-failure/rollback proof is not certified. npm registry publication and independent fresh-cache install/import/bin verification passed; the workflow remains failed on its immediate propagation-limited registry smoke. The bounded follow-up separates ordinary artifact validation from the strict unpublished-version release gate. Historical post-publication main CI 36987739727 failed freshness; MongoDB tier-A passed and the later unit step did not execute. Final follow-up evidence is recorded in the review report; wider parent criteria remain uncertified.",
+			"remaining": "Release CI, frozen install, clean tarball install/imports, MCP executable, full unit selection and 69 native fixtures passed. Full manual provider E2E remains incompatible with owned-port fixtures; original per-criterion CI-failure/rollback proof is not certified. npm registry publication and independent fresh-cache install/import/bin verification passed; the workflow remains failed on its immediate propagation-limited registry smoke. The bounded follow-up separates ordinary artifact validation from the strict unpublished-version release gate. Historical post-publication main CI 36987739727 failed freshness; MongoDB tier-A passed and the later unit step did not execute. Follow-up main aadffd324b exact-head CI 37033780070 passed quality/artifacts/unit and real MongoDB tier-A with execution guards; final evidence is recorded in the review report; wider parent criteria remain uncertified.",
 			"acceptanceCriteria": [
 				"Critical DB suite actually collects and fails an injected regression",
 				"Script/tests type error fails CI",
@@ -2805,5 +2805,6 @@
 			"findingIds": ["F027", "F068", "F096", "F196", "F325", "F326", "F337"]
 		}
 	],
-	"archiveLinkNote": "plannedChecks retains verbatim original-task Markdown such as ../execution/CHECKS.json; those links resolve relative to originalTaskArchivePath in the private archive, not relative to this public JSON file."
+	"archiveLinkNote": "plannedChecks retains verbatim original-task Markdown such as ../execution/CHECKS.json; those links resolve relative to originalTaskArchivePath in the private archive, not relative to this public JSON file.",
+	"followUpSourceBasis": "aadffd324b8af482b66ab29710363bcb5958b1d3"
 }

@@ -1,8 +1,14 @@
 # Memongo reviewer handoff — 2026-10-02
 
-**Memongo 2.2.0 is delivered as a finite reliability release. The owner authorized a bounded follow-up sprint for ordinary CI and structured current history.** Unfinished engineering and evidence work is explicitly preserved; closure is not certification of the entire original roadmap. New implementation, model calls, benchmark launches, comparisons and rejudges require fresh owner/manager authorization.
+**Memongo 2.2.0 is delivered; the bounded CI and structured current-history coding sprint is complete. Development is awaiting manager approval.** Unfinished engineering and evidence work is explicitly preserved; closure is not certification of the entire original roadmap. New implementation, model calls, benchmark launches, comparisons and rejudges require fresh owner/manager authorization.
 
 Start with [REVIEW-REPORT.md](REVIEW-REPORT.md) for what exists and what was verified, then [ROADMAP.md](ROADMAP.md) for the remaining work and why. [TASK-LEDGER.json](TASK-LEDGER.json) preserves every acceptance criterion for all 58 original work packages. [PROJECT-MEMORY.md](PROJECT-MEMORY.md) records decisions and safe resume conditions. [DOCUMENTATION-REGISTER.md](DOCUMENTATION-REGISTER.md) distinguishes authoritative sources, historical plans, and unverified claims. [EVIDENCE.json](EVIDENCE.json) identifies the public evidence and local archival inputs. [TEAM-REVIEW.md](TEAM-REVIEW.md) records the bounded independent handoff review.
+
+## Current source and evidence
+
+The coding sprint is complete on source main `aadffd324b8af482b66ab29710363bcb5958b1d3`; [exact-head CI](https://github.com/romiluz13/Memongo/actions/runs/37033780070) passed both quality and real MongoDB tier-A jobs and execution guards at 16:29:54 UTC. Ordinary CI validates artifacts after publication while the release default remains strict; structured current history filters by current raw physical identity before limit. These repairs are on main, not in newly published packages. Immutable npm/tag `v2.2.0` remains `d2579054a4488e2c4d301c0bcd7c58d20baef36c`.
+
+Start with the review report for completed release and follow-up proof, then the roadmap for open work and the gated manager proposal. Older source/reviewer archives retain their recorded revision; they were not regenerated for this source follow-up.
 
 ## Review the code
 
@@ -14,4 +20,4 @@ The public [GitHub release](https://github.com/romiluz13/Memongo/releases/tag/v2
 
 ## Closure boundary
 
-The authorized follow-up covers only ordinary CI purpose separation and structured current history; further engineering requires new authorization. The already-started B2 benchmark may finish; terminal logs, checkpoints and envelopes are preserved, with no new repetition or paid analysis. Existing Atlas resources may still incur infrastructure charges: closure is not proof they were shut down. Credentials and campaign databases are preserved until their owner approves retention or shutdown.
+The two-repair coding sprint is complete. This documentation refresh grants no further engineering or campaign analysis. B2 was previously observed running on an older pinned revision; its current process/terminal state is not refreshed here. Verify cheap metadata before any separately authorized preservation or analysis. No new repetitions or paid analysis are authorized. Existing Atlas resources may still incur infrastructure charges: closure is not proof they were shut down. Credentials and campaign databases are preserved until their owner approves retention or shutdown.

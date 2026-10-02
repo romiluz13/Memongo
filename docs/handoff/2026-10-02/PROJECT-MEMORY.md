@@ -6,11 +6,11 @@ Recorded 2026-10-02. This is current handoff state; original plans and task Retu
 
 - Primary target: production agent memory plus broad benchmark coverage across conversations, coding-agent workloads and scale. Each evidence track is separate.
 - Preserve MongoDB-native storage and evolve public APIs compatibly.
-- Earlier “no fixed deadline/budget” is superseded by the owner's manager-directed stop and a bounded follow-up for ordinary CI and structured current history. New development, model calls, benchmark runs, comparisons and rejudges require fresh owner/manager authorization.
-- Existing B2 may finish. Preserve terminal evidence; no new repetition. Campaign analysis after terminal requires fresh authorization.
+- Earlier “no fixed deadline/budget” is superseded by the manager-directed stop. The bounded CI/history coding sprint is complete; this documentation closeout is not renewed engineering authority. New development, model calls, benchmark runs, comparisons and rejudges require fresh owner/manager authorization.
+- B2 was last observed running on earlier pinned code; current process/terminal status is unverified here. Verify cheap metadata and preserve originals before any approved offline work. No new repetitions or analysis without fresh authority.
 - Legacy history ambiguity is resolved: exclude snapshots that cannot be bound to the current document from its history, while preserving them in storage. The bounded E257 follow-up now implements this policy for structured current history only. Procedure history, what-changed, mixed old writers, numeric BSON equivalence and manual physical-id reuse remain open.
 - U04 (agent versus session grants) and U05 (retention, granular erasure, expiry and backups) remain held. Rationale/self-edit policy and unsupported-topology choices need explicit intent.
-- Final closeout documentation, context preservation, project memory and npm distribution follow-up are authorized. npm requires actual access; credentials stay outside chat, logs and reviewer bundles.
+- This closeout authorizes documentation/context and one memory note only. npm 2.2.0 is already published; no rerun is authorized. Credentials stay outside chat, logs and reviewer bundles.
 
 ## Identity of delivered work
 
@@ -20,9 +20,11 @@ Campaign and release checkouts are separate. The live campaign uses pinned earli
 
 Public deliverables are the GitHub release's eight downloadable packages, GHCR image `2.2.0`, and the existing Cloudflare web worker. No hosted API deployment target is configured. All eight npm `2.2.0` packages are published with provenance after access restoration. Exact downloaded tarballs match the verified release; fresh-cache install/import/Pi source/MCP initialize passed. Publish workflow attempt 2 failed only at its immediate registry-install smoke after ten version-not-found retries; that failure remains recorded. The original HTTP 404 cause was not established. A Sigstore record alone is not registry publication.
 
+The follow-up source is main `aadffd324b8af482b66ab29710363bcb5958b1d3`; exact-head CI 37033780070 passed both jobs and guards. Clean release checkout remains at documentation basis `effced564536e6c609c2123cb03870985ad9bdec`; primary campaign checkout remains `4b7d07fba8632dfc0cccf78fc790f50b739e0d07`. These local copies were preserved, not updated. The later documentation-only closeout commit is separate from tested product inputs.
+
 ## Before any resume
 
-1. Read this handoff, the task ledger, the target task and applicable repo rules. Obtain new manager/owner authority and bounded spending for dependent work.
+1. Obtain explicit manager approval and a fixed cap for the single offline lineage/eligibility/seal memo proposed in the review report, with Rom accountable and no new model calls. Verify cheap process/terminal metadata before sealing preserved originals. If another task is chosen, authorize its exact scope separately; this is not permission to resume the whole roadmap. Read its ledger criteria and applicable repo rules.
 2. Verify live Git, process and campaign facts. These documents are timestamped snapshots. Preserve user changes, campaign credentials and data. Use a separate isolated checkout; keep the pinned measurement surface intact while live.
 3. Use one writer per file and the official source registers. Compare installed versions with documentation before relying on APIs. Skill guidance is advisory; code and version-matched official contracts decide technical behavior.
 4. Select one task and bind each relevant acceptance criterion to exact revision evidence. Preserve refuted and deferred findings. Do not infer closure of 381 audit routes from 140 accepted changes.
