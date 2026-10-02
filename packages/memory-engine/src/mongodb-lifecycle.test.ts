@@ -36,6 +36,8 @@ function matchesCondition(docValue: unknown, condition: unknown): boolean {
 		if (opKeys.some((key) => key.startsWith("$"))) {
 			return opKeys.every((op) => {
 				switch (op) {
+					case "$eq":
+						return docValue === ops.$eq
 					case "$exists":
 						return ops.$exists === false
 							? docValue === undefined
@@ -245,6 +247,7 @@ describe("lifecycle ergonomics", () => {
 			{
 				type: "fact",
 				key: "launch",
+				_id: "launch-physical",
 				value: "Launch is Monday",
 				agentId: "agent-1",
 				scope: "agent",
@@ -492,5 +495,131 @@ describe("lifecycle ergonomics", () => {
 				data: expect.objectContaining({ value: "Use Vim" }),
 			}),
 		)
+	})
+})
+
+describe("structured current history identity", () => {
+	const current = {
+		_id: "current-physical",
+		agentId: "agent-1",
+		scope: "agent",
+		scopeRef: "agent-1",
+		type: "decision",
+		key: "db",
+		value: "current",
+		revision: 3,
+		state: "active",
+	}
+	const snapshot = {
+		...current,
+		_id: "bound-r1",
+		structuredId: current._id,
+		value: "bound",
+		revision: 1,
+	}
+
+	it("excludes legacy snapshots and preserves their storage", async () => {
+		const { structuredId: _binding, ...legacy } = snapshot
+		const revisions = new MemoryCollection([
+			snapshot,
+			{ ...legacy, _id: "legacy-r2", value: "legacy", revision: 2 },
+		])
+		const before = clone(revisions.docs)
+		const db = createDb({
+			test_structured_mem: new MemoryCollection([current]),
+			test_structured_mem_revisions: revisions,
+		})
+		const history = await getStructuredMemoryHistoryByHandle({
+			db,
+			prefix: PREFIX,
+			handle: structuredHandle(),
+		})
+		expect(history.map((item) => item.data.value)).toEqual(["bound", "current"])
+		expect(revisions.docs).toEqual(before)
+	})
+
+	it("excludes a prior physical generation sharing the logical handle", async () => {
+		const db = createDb({
+			test_structured_mem: new MemoryCollection([current]),
+			test_structured_mem_revisions: new MemoryCollection([
+				snapshot,
+				{
+					...snapshot,
+					_id: "old-r2",
+					structuredId: "old-physical",
+					value: "old",
+					revision: 2,
+				},
+			]),
+		})
+		const history = await getStructuredMemoryHistoryByHandle({
+			db,
+			prefix: PREFIX,
+			handle: structuredHandle(),
+		})
+		expect(history.map((item) => item.data.value)).toEqual(["bound", "current"])
+	})
+
+	it("returns no history when the current document is missing", async () => {
+		const revisions = new MemoryCollection([snapshot])
+		const before = clone(revisions.docs)
+		const db = createDb({
+			test_structured_mem: new MemoryCollection(),
+			test_structured_mem_revisions: revisions,
+		})
+		expect(
+			await getStructuredMemoryHistoryByHandle({
+				db,
+				prefix: PREFIX,
+				handle: structuredHandle(),
+			}),
+		).toEqual([])
+		expect(revisions.docs).toEqual(before)
+	})
+
+	it("filters ownership before higher foreign revisions consume the limit", async () => {
+		const db = createDb({
+			test_structured_mem: new MemoryCollection([current]),
+			test_structured_mem_revisions: new MemoryCollection([
+				snapshot,
+				...[50, 60, 70].map((revision) => ({
+					...snapshot,
+					_id: `old-r${revision}`,
+					structuredId: "old-physical",
+					value: "old",
+					revision,
+				})),
+			]),
+		})
+		const history = await getStructuredMemoryHistoryByHandle({
+			db,
+			prefix: PREFIX,
+			handle: structuredHandle(),
+			limit: 2,
+		})
+		expect(history.map((item) => item.data.value)).toEqual(["bound", "current"])
+	})
+
+	it("keeps bound revisions ordered and includes an invalidated current row", async () => {
+		const db = createDb({
+			test_structured_mem: new MemoryCollection([
+				{ ...current, state: "invalidated" },
+			]),
+			test_structured_mem_revisions: new MemoryCollection([
+				{ ...snapshot, _id: "bound-r2", value: "second", revision: 2 },
+				snapshot,
+			]),
+		})
+		const history = await getStructuredMemoryHistoryByHandle({
+			db,
+			prefix: PREFIX,
+			handle: structuredHandle(),
+		})
+		expect(history.map((item) => item.data.value)).toEqual([
+			"bound",
+			"second",
+			"current",
+		])
+		expect(history.at(-1)?.handle.state).toBe("invalidated")
 	})
 })

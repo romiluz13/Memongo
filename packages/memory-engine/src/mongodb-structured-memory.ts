@@ -2088,17 +2088,23 @@ export async function getStructuredMemoryHistoryByHandle(params: {
 			: 50
 	const maxItems = Math.max(1, Math.min(requested, 200))
 	const filter = structuredFilterFromHandle(params.handle)
-	const revisionLimit = Math.max(0, maxItems - 1)
-	const revisionDocs =
-		revisionLimit > 0
-			? await structuredMemRevisionsCollection(params.db, params.prefix)
-					.find(filter, { sort: { revision: -1 }, limit: revisionLimit })
-					.toArray()
-			: []
 	const current = await structuredMemCollection(
 		params.db,
 		params.prefix,
 	).findOne(filter)
+	if (!current) {
+		return []
+	}
+	const revisionLimit = Math.max(0, maxItems - 1)
+	const revisionDocs =
+		revisionLimit > 0
+			? await structuredMemRevisionsCollection(params.db, params.prefix)
+					.find(
+						{ ...filter, structuredId: { $eq: current._id } },
+						{ sort: { revision: -1 }, limit: revisionLimit },
+					)
+					.toArray()
+			: []
 
 	const entries: Array<
 		Extract<MemoryLifecycleItem, { family: "structured" }> & {
