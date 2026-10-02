@@ -14,13 +14,14 @@ import {
 	memongoBridgeRelevanceSampleRate,
 	memongoBridgeRejectQuarantined,
 } from "@memongo/memory-bridge"
-import { internalError, jsonError } from "../lib/errors.js"
+import { apiErrorJson, internalError, jsonError } from "../lib/errors.js"
 
 import {
 	readAgentId,
 	readJsonBody,
 	parseListLimit,
 	readAccessCollection,
+	isErasureGateConflictError,
 	type V1RouterEnv,
 } from "./v1-helpers.js"
 
@@ -49,6 +50,7 @@ export function registerAdminRoutes(v1: Hono<V1RouterEnv>): void {
 					typeof body.maxResults === "number" ? body.maxResults : undefined,
 				minScore: typeof body.minScore === "number" ? body.minScore : undefined,
 				deep: typeof body.deep === "boolean" ? body.deep : undefined,
+				kbRestricted: c.get("kbRestricted"),
 			})
 			return c.json(out)
 		} catch (err) {
@@ -189,12 +191,54 @@ export function registerAdminRoutes(v1: Hono<V1RouterEnv>): void {
 				'confirm must be the literal string "erase"',
 			)
 		}
+		// The recovery option is a typed literal that flows unchanged through
+		// bridge, manager, and engine — nothing in the chain translates it to a
+		// boolean. Any other value is rejected here so the engine only ever sees
+		// "takeover" or no recovery intent at all.
+		let recovery: "takeover" | undefined
+		if (body.recovery !== undefined) {
+			if (body.recovery !== "takeover") {
+				return jsonError(
+					c,
+					400,
+					"VALIDATION_ERROR",
+					'recovery must be the literal string "takeover"',
+				)
+			}
+			recovery = "takeover"
+		}
+		const agentId = await readAgentId(c)
+		if (!agentId) {
+			return jsonError(
+				c,
+				400,
+				"VALIDATION_ERROR",
+				"agentId must be explicitly provided for erasure",
+			)
+		}
 		try {
 			const receipt = await memongoBridgeDeleteAllForAgent({
-				agentId: await readAgentId(c),
+				agentId,
+				...(recovery !== undefined ? { recovery } : {}),
 			})
 			return c.json(receipt)
 		} catch (err) {
+			// Typed 409 with NO observed gate snapshot (F7 deferred — a snapshot
+			// would imply a liveness claim on a state the route only saw at
+			// throw time). The body carries the typed conflict code and the
+			// agentId the request targeted, nothing else.
+			if (isErasureGateConflictError(err)) {
+				return c.json(
+					{
+						...apiErrorJson(
+							"ERASURE_GATE_CONFLICT",
+							"erase conflicts with the erasure gate state",
+						),
+						agentId,
+					},
+					409,
+				)
+			}
 			return internalError(c, err, "ERASE_FAILED")
 		}
 	})
@@ -205,12 +249,27 @@ export function registerAdminRoutes(v1: Hono<V1RouterEnv>): void {
 	// or overrule the classifier on its own behalf.
 	v1.get("/admin/quarantine", async (c) => {
 		const status = c.req.query("status")
+		if (
+			status !== undefined &&
+			status !== "pending-review" &&
+			status !== "promoting" &&
+			status !== "promoted" &&
+			status !== "rejected"
+		) {
+			return jsonError(
+				c,
+				400,
+				"VALIDATION_ERROR",
+				"status must be pending-review|promoting|promoted|rejected",
+			)
+		}
 		const limit = parseListLimit(c.req.query("limit"))
 		try {
 			const entries = await memongoBridgeListQuarantined({
 				agentId: c.req.query("agentId") || undefined,
 				status:
 					status === "pending-review" ||
+					status === "promoting" ||
 					status === "promoted" ||
 					status === "rejected"
 						? status
@@ -241,6 +300,20 @@ export function registerAdminRoutes(v1: Hono<V1RouterEnv>): void {
 			})
 			return c.json(receipt)
 		} catch (err) {
+			if (err instanceof Error && err.name === "QuarantineReviewError") {
+				const reason = (err as { reason?: unknown }).reason
+				if (reason === "not-found") {
+					return jsonError(c, 404, "NOT_FOUND", "quarantine entry not found")
+				}
+				if (reason === "conflict") {
+					return jsonError(
+						c,
+						409,
+						"QUARANTINE_REVIEW_CONFLICT",
+						"quarantine entry was reviewed or is being reviewed; refresh its state before deciding again",
+					)
+				}
+			}
 			return internalError(c, err, "QUARANTINE_PROMOTE_FAILED")
 		}
 	})
@@ -263,6 +336,20 @@ export function registerAdminRoutes(v1: Hono<V1RouterEnv>): void {
 			})
 			return c.json(receipt)
 		} catch (err) {
+			if (err instanceof Error && err.name === "QuarantineReviewError") {
+				const reason = (err as { reason?: unknown }).reason
+				if (reason === "not-found") {
+					return jsonError(c, 404, "NOT_FOUND", "quarantine entry not found")
+				}
+				if (reason === "conflict") {
+					return jsonError(
+						c,
+						409,
+						"QUARANTINE_REVIEW_CONFLICT",
+						"quarantine entry was reviewed or is being reviewed; refresh its state before deciding again",
+					)
+				}
+			}
 			return internalError(c, err, "QUARANTINE_REJECT_FAILED")
 		}
 	})

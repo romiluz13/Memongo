@@ -18,7 +18,10 @@
  */
 
 import { createSubsystemLogger } from "@memongo/lib"
-import { resolveEnrichmentProvider } from "../../packages/memory-engine/src/mongodb-llm-enrichment.js"
+import {
+	benchmarkAnswerModelName,
+	resolveBenchmarkAnswerProvider,
+} from "./benchmark-answer-provider.js"
 import type { BenchmarkRunAccounting } from "./benchmark-parity-envelope.js"
 import type { E2eQaCase } from "../mongodb-e2e-qa.js"
 import { runE2eQa } from "../mongodb-e2e-qa.js"
@@ -26,6 +29,7 @@ import type {
 	BenchmarkE2eQaEnvelope,
 	MemoryBenchmarkDatasetKind,
 	MemoryBenchmarkOfficialMetrics,
+	MemoryResultRole,
 } from "../../packages/memory-engine/src/types.js"
 
 const log = createSubsystemLogger("benchmark:answer-quality")
@@ -34,6 +38,14 @@ const log = createSubsystemLogger("benchmark:answer-quality")
  * QA material captured per evaluation case during the pass-0 retrieval loop.
  * `contextPassages` are the snippets of the pass-0 search results; the gold
  * answer and abstention flag come from the dataset's evaluation metadata.
+ *
+ * Official-mode fields (populated when the benchmark runs with
+ * MEMONGO_BENCHMARK_QA_PROTOCOL=official): `questionType` routes the judge
+ * template, `questionDate` and `passageDates` (index-aligned with
+ * `contextPassages`, `[]` when a passage has no resolved session dates) feed
+ * the dated answer prompt, and `passageRoles` (index-aligned, `undefined`
+ * when the source lane has no turn-level authorship) labels each passage
+ * with its speaking role so the prompt can render User:/Assistant:.
  */
 export type BenchmarkJudgedAnswerMaterial = {
 	caseId: string
@@ -42,6 +54,10 @@ export type BenchmarkJudgedAnswerMaterial = {
 	abstention: boolean
 	contextPassages: string[]
 	upstreamFailure?: string
+	questionType?: string
+	questionDate?: string
+	passageDates?: string[][]
+	passageRoles?: Array<MemoryResultRole | undefined>
 }
 
 /** All-null envelope with the reason accuracy was not measured. */
@@ -72,7 +88,11 @@ export function buildUnavailableE2eQaEnvelope(params: {
  * Project the QA envelope into `officialMetrics.longMemEval.answerQuality`.
  * Pure: returns the input unchanged when there is nothing to merge (no
  * LongMemEval metrics or no envelope), so legacy and loCoMo runs pass
- * through untouched.
+ * through untouched. Official-protocol envelopes additionally project their
+ * `official` summary into `longMemEval.answerQuality.official`, and
+ * custom-judge envelopes project their `customJudge` summary into
+ * `longMemEval.answerQuality.customJudge` (Slice B + custom-judge
+ * integration, additive — the nested canonical locations, no sibling field).
  */
 export function mergeLongMemEvalAnswerQuality(params: {
 	officialMetrics?: MemoryBenchmarkOfficialMetrics
@@ -97,6 +117,8 @@ export function mergeLongMemEvalAnswerQuality(params: {
 				...(e2eQa.unavailableReason
 					? { unavailableReason: e2eQa.unavailableReason }
 					: {}),
+				...(e2eQa.official ? { official: e2eQa.official } : {}),
+				...(e2eQa.customJudge ? { customJudge: e2eQa.customJudge } : {}),
 			},
 		},
 	}
@@ -135,7 +157,9 @@ export function buildJudgedAnswerCases(
  * Run judged answers for a benchmark scenario pass. Returns undefined for
  * datasets without an answer-accuracy contract (scope: LongMemEval), and an
  * all-null envelope — never a fabricated zero — when accuracy cannot be
- * measured (no provider, no material, resumed from checkpoint).
+ * measured (no provider, no material, resumed from checkpoint, or a judge
+ * model that is missing or equal to the answer model: the contract requires
+ * a distinct judge on the same provider).
  */
 export async function runBenchmarkJudgedAnswers(params: {
 	datasetKind?: MemoryBenchmarkDatasetKind | "legacy-query"
@@ -170,40 +194,70 @@ export async function runBenchmarkJudgedAnswers(params: {
 	}
 	let provider = null
 	try {
-		provider = resolveEnrichmentProvider(process.env)
+		provider = resolveBenchmarkAnswerProvider(process.env)
 	} catch (error) {
 		return buildUnavailableE2eQaEnvelope({
-			reason: `enrichment provider misconfigured: ${error instanceof Error ? error.message : String(error)}`,
+			reason: `benchmark answer provider misconfigured: ${error instanceof Error ? error.message : String(error)}`,
 			eligibleCases: cases.length,
 		})
 	}
 	if (!provider) {
 		return buildUnavailableE2eQaEnvelope({
 			reason:
-				"no enrichment provider configured (set MEMONGO_ENRICHMENT_API_KEY, MEMONGO_ENRICHMENT_BASE_URL, MEMONGO_ENRICHMENT_MODEL): judged answer accuracy not measured",
+				"no benchmark answer provider configured (set MEMONGO_BENCHMARK_ANSWER_API_KEY, MEMONGO_BENCHMARK_ANSWER_BASE_URL, MEMONGO_BENCHMARK_ANSWER_MODEL, or the MEMONGO_ENRICHMENT_* fallback): judged answer accuracy not measured",
 			eligibleCases: cases.length,
 		})
 	}
-	const model = process.env.MEMONGO_ENRICHMENT_MODEL?.trim() ?? ""
+	const model = benchmarkAnswerModelName(process.env)
 	if (!model) {
 		return buildUnavailableE2eQaEnvelope({
 			reason:
-				"MEMONGO_ENRICHMENT_MODEL is not set, so the answer/judge model is unknown",
+				"MEMONGO_BENCHMARK_ANSWER_MODEL (or the MEMONGO_ENRICHMENT_MODEL fallback) is not set, so the answer model is unknown",
+			eligibleCases: cases.length,
+		})
+	}
+	// The answer-accuracy contract requires a judge model DISTINCT from the
+	// answer model on the same provider: a model grading its own answers is
+	// self-judging. Refuse before any QA call so no tokens are billed for a
+	// run that cannot satisfy the contract.
+	const judgeModel = process.env.MEMONGO_BENCHMARK_JUDGE_MODEL?.trim() ?? ""
+	if (!judgeModel) {
+		return buildUnavailableE2eQaEnvelope({
+			reason:
+				"MEMONGO_BENCHMARK_JUDGE_MODEL is not set: a judge model distinct from the answer model is required for the answer-accuracy contract, so judged answer accuracy was not measured",
+			eligibleCases: cases.length,
+		})
+	}
+	if (judgeModel === model) {
+		return buildUnavailableE2eQaEnvelope({
+			reason:
+				"MEMONGO_BENCHMARK_JUDGE_MODEL must differ from the benchmark answer model (MEMONGO_BENCHMARK_ANSWER_MODEL or the MEMONGO_ENRICHMENT_MODEL fallback): a judge cannot grade its own answers, so judged answer accuracy was not measured",
 			eligibleCases: cases.length,
 		})
 	}
 	log.info("benchmark judged answers: generating and judging", {
 		cases: cases.length,
 		model,
+		judgeModel,
 	})
 	const envelope = await runE2eQa({
 		provider,
 		model,
+		answerModel: model,
+		judgeModel,
 		cases,
 		...(params.accounting
 			? {
-					onProviderCall: (operation, outcome) => {
-						const metadata = { provider: provider?.name, model }
+					onProviderCall: (operation, outcome, usage) => {
+						// Per-role attribution: answer-generation bills the answer
+						// model; answer-judge/decoy-judge bill the judge model. Usage
+						// reported by the transport is forwarded unchanged, and a
+						// missing usage stays missing (never zeroed).
+						const metadata = {
+							provider: provider?.name,
+							model: operation === "answer-generation" ? model : judgeModel,
+							...(usage ?? {}),
+						}
 						if (outcome === "attempted") {
 							params.accounting?.recordAttempt(operation, metadata)
 						} else if (outcome === "succeeded") {

@@ -61,6 +61,7 @@ export const maintenancePaths = {
 									type: "number",
 									description: "Max items to scan.",
 								},
+								scopeRef: { type: "string" },
 								scope: {
 									type: "string",
 									description: "Scope filter.",

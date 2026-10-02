@@ -27,6 +27,13 @@ export class InvalidJsonError extends Error {
 	}
 }
 
+export class UnsupportedMediaTypeError extends Error {
+	override readonly name = "UnsupportedMediaTypeError"
+	constructor() {
+		super("request body must be sent with Content-Type: application/json")
+	}
+}
+
 export function isInvalidJsonError(error: unknown): error is InvalidJsonError {
 	return error instanceof InvalidJsonError
 }
@@ -76,7 +83,7 @@ export const structuredEntrySchema = z
 		key: z.string().trim().min(1),
 		value: z.string(),
 		context: z.string().optional(),
-		confidence: z.number().finite().optional(),
+		confidence: z.number().finite().min(0).max(1).optional(),
 		source: z.enum(["agent", "user", "session", "ingestion"]).optional(),
 		sessionId: z.string().optional(),
 		tags: z.array(z.string()).optional(),
@@ -86,6 +93,10 @@ export const structuredEntrySchema = z
 			.optional(),
 		provenance: z.record(z.unknown()).optional(),
 		sourceEventIds: z.array(z.string()).optional(),
+		sourceReliability: z.number().finite().min(0).max(1).optional(),
+		validFrom: z.string().datetime({ offset: true }).optional(),
+		validTo: z.string().datetime({ offset: true }).optional(),
+		lastConfirmedAt: z.string().datetime({ offset: true }).optional(),
 		// B1: optional absolute expiry instant (P4.4.1 engine TTL). Validated
 		// as an ISO datetime string here; the route converts it to a Date —
 		// without this the passthrough string silently failed the engine's
@@ -107,7 +118,7 @@ export const procedureEntrySchema = z
 		intentTags: z.array(z.string()).optional(),
 		triggerQueries: z.array(z.string()).optional(),
 		successSignals: z.array(z.string()).optional(),
-		confidence: z.number().finite().optional(),
+		confidence: z.number().finite().min(0).max(1).optional(),
 		provenance: z.record(z.unknown()).optional(),
 		sourceEventIds: z.array(z.string()).optional(),
 	})
@@ -241,6 +252,7 @@ export const searchConfigSchema = z
 		sourcePreference: sourcePreferenceSchema.optional(),
 		timeRange: timeRangeSchema.optional(),
 		needExactEvidence: z.boolean().optional(),
+		allowConstraintRelaxation: z.boolean().optional(),
 		numCandidates: z.number().int().positive().optional(),
 		fusionMethod: z.enum(["scoreFusion", "rankFusion", "js-merge"]).optional(),
 		hybridMode: z.enum(["hybrid", "vector-only"]).optional(),

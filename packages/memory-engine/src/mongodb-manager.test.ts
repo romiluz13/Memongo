@@ -1,7 +1,6 @@
 /* eslint-disable @typescript-eslint/unbound-method -- Vitest mock method assertions */
 import { describe, it, expect, vi, beforeEach } from "vitest"
 import { MongoDBMemoryManager } from "./mongodb-manager.js"
-import { checkCache } from "./mongodb-query-cache.js"
 import {
 	mocked,
 	buildMockManager,
@@ -78,10 +77,19 @@ vi.mock("./mongodb-telemetry.js", async () =>
 	(await import("./test-helpers/manager-test-kit.js")).telemetryModuleMock(),
 )
 
+vi.mock("./mongodb-write-fence.js", async () =>
+	(await import("./test-helpers/manager-test-kit.js")).writeFenceModuleMock(),
+)
+
+vi.mock("./mongodb-erasure.js", () => ({
+	deleteAllForAgent: vi.fn(),
+}))
+
 const { projectEventChunk } = await import("./mongodb-events.js")
 const { planRetrieval } = await import("./mongodb-retrieval-planner.js")
 const { searchEpisodes } = await import("./mongodb-episodes.js")
 const { chunksCollection } = await import("./mongodb-schema.js")
+const { deleteAllForAgent } = await import("./mongodb-erasure.js")
 
 // ---------------------------------------------------------------------------
 // P2.3 scope identity unification: writes and reads resolve the SAME
@@ -136,16 +144,11 @@ describe("P2.3 scope identity unification", () => {
 		return { writeEvent, invalidateQueryCache }
 	}
 
-	// The identity a search actually queried with, observed at the cache seam
-	// (checkCache receives the resolved scope/scopeRef before any lane runs).
-	async function searchIdentityViaCache(
+	// The identity a search actually queried with, observed at the episodic
+	// retrieval lane after manager scope resolution.
+	async function searchIdentityViaLane(
 		opts?: Parameters<MongoDBMemoryManager["search"]>[1],
 	): Promise<{ scope: string; scopeRef: string }> {
-		mocked(checkCache).mockResolvedValue({
-			hit: false,
-			tier: "miss",
-			results: [],
-		} as never)
 		mocked(planRetrieval).mockReturnValue({
 			paths: ["episodic"],
 			confidence: "high",
@@ -167,7 +170,7 @@ describe("P2.3 scope identity unification", () => {
 		] as never)
 		const manager = buildMockManager()
 		await manager.search("identity probe", opts)
-		const calls = mocked(checkCache).mock.calls
+		const calls = mocked(searchEpisodes).mock.calls
 		const call = calls[calls.length - 1]?.[0] as unknown as {
 			scope: string
 			scopeRef: string
@@ -224,12 +227,12 @@ describe("P2.3 scope identity unification", () => {
 	})
 
 	it("read: sessionKey with no explicit scope queries the session scope", async () => {
-		const identity = await searchIdentityViaCache({ sessionKey: "s1" })
+		const identity = await searchIdentityViaLane({ sessionKey: "s1" })
 		expect(identity).toEqual({ scope: "session", scopeRef: "session:s1" })
 	})
 
 	it("read: explicit scope wins over an implicit sessionKey", async () => {
-		const identity = await searchIdentityViaCache({
+		const identity = await searchIdentityViaLane({
 			scope: "agent",
 			sessionKey: "s1",
 		})
@@ -237,19 +240,19 @@ describe("P2.3 scope identity unification", () => {
 	})
 
 	it("read: bare search defaults to agent, or MEMONGO_SEARCH_DEFAULT_SCOPE when set", async () => {
-		expect(await searchIdentityViaCache()).toEqual({
+		expect(await searchIdentityViaLane()).toEqual({
 			scope: "agent",
 			scopeRef: "agent:agent-1",
 		})
 
 		vi.stubEnv("MEMONGO_SEARCH_DEFAULT_SCOPE", "global")
 		try {
-			expect(await searchIdentityViaCache()).toEqual({
+			expect(await searchIdentityViaLane()).toEqual({
 				scope: "global",
 				scopeRef: "global",
 			})
 			// Precedence proof: the session implication still beats the env default.
-			expect(await searchIdentityViaCache({ sessionKey: "s1" })).toEqual({
+			expect(await searchIdentityViaLane({ sessionKey: "s1" })).toEqual({
 				scope: "session",
 				scopeRef: "session:s1",
 			})
@@ -270,7 +273,7 @@ describe("P2.3 scope identity unification", () => {
 			event: { scope: string; sessionId?: string }
 		}
 
-		const read = await searchIdentityViaCache({ sessionKey: "s1" })
+		const read = await searchIdentityViaLane({ sessionKey: "s1" })
 
 		// The write's scope plus the canonical session scopeRef (writeEvent
 		// resolves it via the same rule — see mongodb-events.test.ts) must equal
@@ -294,7 +297,7 @@ describe("P2.3 scope identity unification", () => {
 				event: expect.objectContaining({ scope: "global" }),
 			})
 
-			expect(await searchIdentityViaCache()).toEqual({
+			expect(await searchIdentityViaLane()).toEqual({
 				scope: "global",
 				scopeRef: "global",
 			})
@@ -313,7 +316,7 @@ describe("P2.3 scope identity unification", () => {
 				body: "legacy env configured, write stays put",
 			})
 			// Reads honor the legacy alias…
-			expect(await searchIdentityViaCache()).toEqual({
+			expect(await searchIdentityViaLane()).toEqual({
 				scope: "global",
 				scopeRef: "global",
 			})
@@ -353,7 +356,7 @@ describe("P2.3 scope identity unification", () => {
 			})
 
 			// …and on the read.
-			expect(await searchIdentityViaCache({ sessionKey: "s9" })).toEqual({
+			expect(await searchIdentityViaLane({ sessionKey: "s9" })).toEqual({
 				scope: "session",
 				scopeRef: "session:s9",
 			})
@@ -363,9 +366,7 @@ describe("P2.3 scope identity unification", () => {
 	})
 
 	it("searchDetailed: conversationScope.sessionKey implies the session scope", async () => {
-		// searchDetailed always injects a searchConfig, so its cache seam is
-		// disabled by design (shouldUseDetailedSearchCache) — observe the
-		// identity at the conversation-lane pipeline instead.
+		// Observe the identity at the conversation-lane pipeline.
 		mocked(planRetrieval).mockReturnValue({
 			paths: ["hybrid"],
 			confidence: "high",
@@ -419,5 +420,155 @@ describe("P2.3 scope identity unification", () => {
 			(payload.includes('"path":"scope","value":"session"') &&
 				payload.includes('"path":"scopeRef","value":"session:s1"'))
 		expect(observed.some(carriesSessionIdentity)).toBe(true)
+	})
+})
+
+describe("result-cache removal regressions", () => {
+	type EpisodeSearchResult = Awaited<ReturnType<typeof searchEpisodes>>
+
+	function deferred<T>() {
+		let resolve!: (value: T) => void
+		const promise = new Promise<T>((resolvePromise) => {
+			resolve = resolvePromise
+		})
+		return { promise, resolve }
+	}
+
+	function configureEpisodicSearch(): void {
+		mocked(planRetrieval).mockReturnValue({
+			paths: ["episodic"],
+			confidence: "high",
+			reasoning: "cache-removal regression",
+		})
+	}
+
+	function episode(
+		episodeId: string,
+		summary: string,
+		scopeRef = "agent:agent-1",
+	): EpisodeSearchResult[number] {
+		return {
+			episodeId,
+			title: "live retrieval",
+			summary,
+			type: "daily",
+			agentId: "agent-1",
+			scope: scopeRef.startsWith("session:") ? "session" : "agent",
+			scopeRef,
+			timeRange: { start: new Date(), end: new Date() },
+			sourceEventCount: 1,
+			updatedAt: new Date(),
+		} as EpisodeSearchResult[number]
+	}
+
+	beforeEach(() => {
+		vi.clearAllMocks()
+		configureEpisodicSearch()
+	})
+
+	it("never reads a stale persisted query-cache row", async () => {
+		const collection = vi.fn(() => ({
+			findOne: vi.fn(async () => ({
+				query: "identity probe",
+				results: [{ snippet: "stale persisted result" }],
+			})),
+		}))
+		mocked(searchEpisodes).mockResolvedValue([
+			episode("ep-live", "live result"),
+		])
+		const manager = buildMockManager({
+			db: { collection } as unknown as import("mongodb").Db,
+		})
+
+		const results = await manager.search("identity probe")
+
+		expect(results[0]?.snippet).toContain("live result")
+		expect(collection).not.toHaveBeenCalledWith("test_query_cache")
+	})
+
+	it("executes concurrent same-namespace searches from distinct sessions separately", async () => {
+		// W1 regression schedule: both calls share ONE explicit namespace
+		// ({scope:"agent", scopeRef:"agent:agent-1"}) and differ only in
+		// sessionKey. The removed in-flight coalescer keyed its flight on
+		// agent+scope+scopeRef+query+limits — no session — so it joined
+		// exactly this schedule and handed the second caller the first
+		// caller's results.
+		//
+		// Hard session filters, honestly observed: on the plain search()
+		// path an ordinary sessionKey adds NO lane predicate.
+		// resolveLegacySourceFilter maps only the magic "__memory__" /
+		// "__sessions__" keys to a chunk-lane source filter, and the
+		// result-level session rejection (applyHardConstraintRejections)
+		// runs on the searchDetailed executor path, not here. The two lane
+		// calls below must therefore be parameter-identical, and per-caller
+		// separation rests entirely on each caller getting its own
+		// execution — the guarantee this test pins.
+		const first = deferred<EpisodeSearchResult>()
+		const second = deferred<EpisodeSearchResult>()
+		// Call-order sequencing: with a constant namespace the scopeRef can
+		// no longer distinguish the calls.
+		mocked(searchEpisodes)
+			.mockImplementationOnce(() => first.promise)
+			.mockImplementationOnce(() => second.promise)
+		const manager = buildMockManager()
+
+		const namespace = { scope: "agent", scopeRef: "agent:agent-1" } as const
+		const firstSearch = manager.search("same query", {
+			...namespace,
+			sessionKey: "s1",
+		})
+		const secondSearch = manager.search("same query", {
+			...namespace,
+			sessionKey: "s2",
+		})
+
+		await vi.waitFor(() => expect(searchEpisodes).toHaveBeenCalledTimes(2))
+		// Constant identity at the lane = the old flight key would have
+		// collided; two executions prove no caller joined the other.
+		expect(
+			mocked(searchEpisodes).mock.calls.map(([params]) => [
+				params.scope,
+				params.scopeRef,
+			]),
+		).toEqual([
+			["agent", "agent:agent-1"],
+			["agent", "agent:agent-1"],
+		])
+
+		first.resolve([episode("ep-s1", "session one")])
+		second.resolve([episode("ep-s2", "session two")])
+
+		await expect(firstSearch).resolves.toEqual([
+			expect.objectContaining({ snippet: "live retrieval: session one" }),
+		])
+		await expect(secondSearch).resolves.toEqual([
+			expect.objectContaining({ snippet: "live retrieval: session two" }),
+		])
+	})
+
+	it("starts a fresh search after erasure instead of joining an earlier result", async () => {
+		const beforeErasure = deferred<EpisodeSearchResult>()
+		mocked(searchEpisodes)
+			.mockImplementationOnce(() => beforeErasure.promise)
+			.mockResolvedValueOnce([])
+		mocked(deleteAllForAgent).mockResolvedValue({} as never)
+		const manager = buildMockManager({
+			stopMemoryJobWorker: vi.fn(async () => {}),
+		})
+
+		const earlierSearch = manager.search("erasure boundary")
+		await vi.waitFor(() => expect(searchEpisodes).toHaveBeenCalledTimes(1))
+
+		await manager.deleteAllForAgent()
+		const postErasureSearch = manager.search("erasure boundary")
+		await expect(postErasureSearch).resolves.toEqual([])
+		expect(searchEpisodes).toHaveBeenCalledTimes(2)
+
+		beforeErasure.resolve([episode("ep-stale", "pre-erasure result")])
+		await expect(earlierSearch).resolves.toEqual([
+			expect.objectContaining({
+				snippet: "live retrieval: pre-erasure result",
+			}),
+		])
 	})
 })

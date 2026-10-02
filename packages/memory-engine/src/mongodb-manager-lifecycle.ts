@@ -1,6 +1,8 @@
+import { settledFailureMeta } from "./query-diagnostics.js"
 import { randomUUID } from "node:crypto"
 import { hydrateActiveSlate } from "./mongodb-active-slate.js"
 import { consolidateMemory } from "./mongodb-consolidator.js"
+import { resolveConsolidationMaxEvents } from "./mongodb-consolidation-options.js"
 import { buildContextBundle as composeContextBundle } from "./mongodb-context-bundle.js"
 import { expandSearchContext } from "./mongodb-context-expansion.js"
 import { recallConversation as recallConversationCore } from "./mongodb-conversation-recall.js"
@@ -20,6 +22,13 @@ import type {
 import { synthesizeProfile } from "./mongodb-profile.js"
 import type { ProfileSynthesis } from "./mongodb-profile.js"
 import { invalidateQueryCache } from "./mongodb-query-cache.js"
+import {
+	captureAdmissionToken,
+	ErasureGateConflictError,
+	isErasureGateConflictError,
+	isMalformedGateError,
+	withFencedWrite,
+} from "./mongodb-write-fence.js"
 import {
 	getRecallTrace,
 	listRecallTraces,
@@ -79,6 +88,13 @@ export class MongoDBManagerLifecycleOps {
 		/** C-008: matched INJECTION_PATTERNS ids, present iff quarantined. */
 		matchedPatterns?: string[]
 	}> {
+		if (entry.agentId !== this.host.agentId)
+			throw new ErasureGateConflictError(this.host.agentId)
+		const admission = await captureAdmissionToken({
+			db: this.host.db,
+			prefix: this.host.prefix,
+			agentId: this.host.agentId,
+		})
 		const mongoCfg = this.host.config.mongodb!
 		const { writeStructuredMemory: writeFn } = await import(
 			"./mongodb-structured-memory.js"
@@ -96,6 +112,7 @@ export class MongoDBManagerLifecycleOps {
 				},
 			},
 			embeddingMode: mongoCfg.embeddingMode,
+			admission,
 			client: this.host.client,
 			// P4.4.1: session-scope TTL default (off unless explicitly enabled).
 			ttl: mongoCfg.ttl,
@@ -109,6 +126,13 @@ export class MongoDBManagerLifecycleOps {
 	async writeProcedure(
 		entry: ProcedureEntry,
 	): Promise<{ upserted: boolean; id: string }> {
+		if (entry.agentId !== this.host.agentId)
+			throw new ErasureGateConflictError(this.host.agentId)
+		const admission = await captureAdmissionToken({
+			db: this.host.db,
+			prefix: this.host.prefix,
+			agentId: this.host.agentId,
+		})
 		const mongoCfg = this.host.config.mongodb!
 		const { writeProcedure: writeFn } = await import("./mongodb-procedures.js")
 		return writeFn({
@@ -125,6 +149,7 @@ export class MongoDBManagerLifecycleOps {
 			},
 			embeddingMode: mongoCfg.embeddingMode,
 			client: this.host.client,
+			admission,
 		})
 	}
 
@@ -153,6 +178,13 @@ export class MongoDBManagerLifecycleOps {
 		handle: MemoryStableHandle,
 		patch: StructuredMemoryLifecyclePatch | ProcedureLifecyclePatch,
 	): Promise<MemoryLifecycleItem | null> {
+		if (handle.agentId !== this.host.agentId)
+			throw new ErasureGateConflictError(this.host.agentId)
+		const admission = await captureAdmissionToken({
+			db: this.host.db,
+			prefix: this.host.prefix,
+			agentId: this.host.agentId,
+		})
 		const mongoCfg = this.host.config.mongodb!
 		if (handle.family === "structured") {
 			const { updateStructuredMemoryByHandle } = await import(
@@ -165,6 +197,7 @@ export class MongoDBManagerLifecycleOps {
 				patch: patch as StructuredMemoryLifecyclePatch,
 				embeddingMode: mongoCfg.embeddingMode,
 				client: this.host.client,
+				admission,
 			})
 		}
 		const { updateProcedureByHandle } = await import("./mongodb-procedures.js")
@@ -175,6 +208,7 @@ export class MongoDBManagerLifecycleOps {
 			patch: patch as ProcedureLifecyclePatch,
 			embeddingMode: mongoCfg.embeddingMode,
 			client: this.host.client,
+			admission,
 		})
 	}
 
@@ -182,6 +216,13 @@ export class MongoDBManagerLifecycleOps {
 		handle: MemoryStableHandle,
 		invalidatedBy?: Record<string, unknown>,
 	): Promise<MemoryLifecycleItem | null> {
+		if (handle.agentId !== this.host.agentId)
+			throw new ErasureGateConflictError(this.host.agentId)
+		const admission = await captureAdmissionToken({
+			db: this.host.db,
+			prefix: this.host.prefix,
+			agentId: this.host.agentId,
+		})
 		if (handle.family === "structured") {
 			const { invalidateStructuredMemoryByHandle } = await import(
 				"./mongodb-structured-memory.js"
@@ -192,6 +233,7 @@ export class MongoDBManagerLifecycleOps {
 				handle,
 				...(invalidatedBy ? { invalidatedBy } : {}),
 				client: this.host.client,
+				admission,
 			})
 		}
 		const { invalidateProcedureByHandle } = await import(
@@ -203,6 +245,7 @@ export class MongoDBManagerLifecycleOps {
 			handle,
 			...(invalidatedBy ? { invalidatedBy } : {}),
 			client: this.host.client,
+			admission,
 		})
 	}
 
@@ -238,27 +281,25 @@ export class MongoDBManagerLifecycleOps {
 		note?: string
 		actorRole?: MemoryActorRole
 	}): Promise<Extract<MemoryLifecycleItem, { family: "procedure" }> | null> {
+		if (params.handle.agentId !== this.host.agentId)
+			throw new ErasureGateConflictError(this.host.agentId)
+		const admission = await captureAdmissionToken({
+			db: this.host.db,
+			prefix: this.host.prefix,
+			agentId: this.host.agentId,
+		})
 		const { reportProcedureOutcomeByHandle } = await import(
 			"./mongodb-procedures.js"
 		)
-		const result = await reportProcedureOutcomeByHandle({
+		return reportProcedureOutcomeByHandle({
 			db: this.host.db,
 			prefix: this.host.prefix,
 			handle: params.handle,
 			success: params.success,
 			note: params.note,
 			actorRole: params.actorRole,
+			admission,
 		})
-		if (result) {
-			await invalidateQueryCache({
-				db: this.host.db,
-				prefix: this.host.prefix,
-				agentId: params.handle.agentId,
-				scope: params.handle.scope,
-				scopeRef: params.handle.scopeRef,
-			})
-		}
-		return result
 	}
 
 	async applyMemoryFeedback(params: {
@@ -269,11 +310,18 @@ export class MongoDBManagerLifecycleOps {
 		note?: string
 		actorRole?: MemoryActorRole
 	}): Promise<Extract<MemoryLifecycleItem, { family: "structured" }> | null> {
+		if (params.handle.agentId !== this.host.agentId)
+			throw new ErasureGateConflictError(this.host.agentId)
+		const admission = await captureAdmissionToken({
+			db: this.host.db,
+			prefix: this.host.prefix,
+			agentId: this.host.agentId,
+		})
 		const mongoCfg = this.host.config.mongodb!
 		const { applyStructuredMemoryFeedbackByHandle } = await import(
 			"./mongodb-structured-memory.js"
 		)
-		const result = await applyStructuredMemoryFeedbackByHandle({
+		return applyStructuredMemoryFeedbackByHandle({
 			db: this.host.db,
 			prefix: this.host.prefix,
 			handle: params.handle,
@@ -283,18 +331,9 @@ export class MongoDBManagerLifecycleOps {
 			note: params.note,
 			embeddingMode: mongoCfg.embeddingMode,
 			client: this.host.client,
+			admission,
 			actorRole: params.actorRole,
 		})
-		if (result) {
-			await invalidateQueryCache({
-				db: this.host.db,
-				prefix: this.host.prefix,
-				agentId: params.handle.agentId,
-				scope: params.handle.scope,
-				scopeRef: params.handle.scopeRef,
-			})
-		}
-		return result
 	}
 
 	async selfEditBlock(params: {
@@ -308,6 +347,11 @@ export class MongoDBManagerLifecycleOps {
 		quarantined?: boolean
 		matchedPatterns?: string[]
 	}> {
+		const admission = await captureAdmissionToken({
+			db: this.host.db,
+			prefix: this.host.prefix,
+			agentId: this.host.agentId,
+		})
 		const mongoCfg = this.host.config.mongodb!
 		const { selfEditBlock: editFn } = await import("./mongodb-self-edit.js")
 		return editFn({
@@ -319,11 +363,13 @@ export class MongoDBManagerLifecycleOps {
 			block: params.block,
 			action: params.action,
 			content: params.content,
+			admission,
 		})
 	}
 
 	async synthesizeProfile(
 		params: {
+			sessionId?: string
 			scope?: MemoryScope
 			scopeRef?: string
 			maxPerType?: number
@@ -332,12 +378,26 @@ export class MongoDBManagerLifecycleOps {
 			activityWindowMs?: number
 		} = {},
 	): Promise<ProfileSynthesis> {
-		return synthesizeProfile({
+		const admission = await captureAdmissionToken({
 			db: this.host.db,
 			prefix: this.host.prefix,
 			agentId: this.host.agentId,
-			scope: params.scope ?? "agent",
-			scopeRef: params.scopeRef ?? this.host.agentScopeRef,
+		})
+		const scope = params.scope ?? "agent"
+		return synthesizeProfile({
+			admission,
+			db: this.host.db,
+			prefix: this.host.prefix,
+			agentId: this.host.agentId,
+			scope,
+			scopeRef:
+				params.scopeRef ??
+				resolveScopeRef({
+					scope,
+					agentId: this.host.agentId,
+					sessionId: params.sessionId,
+					workspaceDir: this.host.workspaceDir,
+				}),
 			maxPerType: params.maxPerType,
 			maxEntities: params.maxEntities,
 			maxEpisodes: params.maxEpisodes,
@@ -346,14 +406,33 @@ export class MongoDBManagerLifecycleOps {
 	}
 
 	async hydrateActiveSlate(
-		params: { scope?: MemoryScope; scopeRef?: string; maxItems?: number } = {},
+		params: {
+			scope?: MemoryScope
+			scopeRef?: string
+			sessionId?: string
+			maxItems?: number
+		} = {},
 	): Promise<MemoryActiveSlate> {
-		return hydrateActiveSlate({
+		const admission = await captureAdmissionToken({
 			db: this.host.db,
 			prefix: this.host.prefix,
 			agentId: this.host.agentId,
-			scope: params.scope ?? "agent",
-			scopeRef: params.scopeRef ?? this.host.agentScopeRef,
+		})
+		const scope = params.scope ?? "agent"
+		return hydrateActiveSlate({
+			admission,
+			db: this.host.db,
+			prefix: this.host.prefix,
+			agentId: this.host.agentId,
+			scope,
+			scopeRef:
+				params.scopeRef ??
+				resolveScopeRef({
+					scope,
+					agentId: this.host.agentId,
+					sessionId: params.sessionId,
+					workspaceDir: this.host.workspaceDir,
+				}),
 			maxItems: params.maxItems,
 		})
 	}
@@ -361,14 +440,28 @@ export class MongoDBManagerLifecycleOps {
 	async buildDiscoveryProjection(
 		request: MemoryDiscoveryProjectionRequest,
 	): Promise<MemoryDiscoveryProjection> {
+		const admission = await captureAdmissionToken({
+			db: this.host.db,
+			prefix: this.host.prefix,
+			agentId: this.host.agentId,
+		})
+		const scope = request.scope ?? "agent"
 		return buildDiscoveryProjection({
+			admission,
 			db: this.host.db,
 			prefix: this.host.prefix,
 			agentId: this.host.agentId,
 			kind: request.kind,
 			query: request.query,
-			scope: request.scope ?? "agent",
-			scopeRef: request.scopeRef ?? this.host.agentScopeRef,
+			scope,
+			scopeRef:
+				request.scopeRef ??
+				resolveScopeRef({
+					scope,
+					agentId: this.host.agentId,
+					sessionId: request.sessionId,
+					workspaceDir: this.host.workspaceDir,
+				}),
 			maxItems: request.maxItems,
 			timeRange: request.timeRange,
 		})
@@ -377,6 +470,11 @@ export class MongoDBManagerLifecycleOps {
 	async buildContextBundle(
 		request: MemoryContextBundleRequest = {},
 	): Promise<MemoryContextBundle> {
+		const readAdmission = await captureAdmissionToken({
+			db: this.host.db,
+			prefix: this.host.prefix,
+			agentId: this.host.agentId,
+		})
 		const scope = request.scope ?? "agent"
 		const scopeRef =
 			request.scopeRef ??
@@ -389,7 +487,7 @@ export class MongoDBManagerLifecycleOps {
 		const mongoCfg = this.host.config.mongodb!
 		const activeSources = getActiveSources(
 			mongoCfg.sources,
-			mongoCfg.kb.enabled,
+			mongoCfg.kb.enabled && request.kbRestricted !== true,
 		)
 		const availablePaths = this.host.buildV2AvailablePaths(activeSources)
 		const startedAt = Date.now()
@@ -402,6 +500,7 @@ export class MongoDBManagerLifecycleOps {
 			| undefined
 
 		const bundle = await composeContextBundle({
+			admission: readAdmission,
 			db: this.host.db,
 			prefix: this.host.prefix,
 			agentId: this.host.agentId,
@@ -415,6 +514,7 @@ export class MongoDBManagerLifecycleOps {
 					params.query,
 					this.host.agentId,
 					{
+						admission: readAdmission,
 						availablePaths,
 						hasEpisodes: mongoCfg.episodes.enabled,
 						hasGraphData: mongoCfg.graph.enabled,
@@ -484,10 +584,16 @@ export class MongoDBManagerLifecycleOps {
 			},
 		})
 		void recordRecallTrace({
+			admission: readAdmission,
 			db: this.host.db,
 			prefix: this.host.prefix,
+			// RET-21: the context-bundle trace obeys the same diagnostic
+			// privacy policy as every other query-bearing store.
+			privacyMode: mongoCfg.relevance.telemetry.queryPrivacyMode,
 			trace: {
 				agentId: this.host.agentId,
+				scope,
+				scopeRef,
 				query: request.query?.trim() || "(context-bundle)",
 				lanesUsed:
 					bundleSearchTrace?.pathsExecuted ?? bundle.metadata.pathsExecuted,
@@ -505,7 +611,10 @@ export class MongoDBManagerLifecycleOps {
 				bundleMode: request.mode ?? "full",
 			},
 		}).catch((err) =>
-			log.warn(`buildContextBundle recall trace write failed: ${String(err)}`),
+			log.warn(
+				"buildContextBundle recall trace write failed",
+				settledFailureMeta(err),
+			),
 		)
 		return bundle
 	}
@@ -528,6 +637,11 @@ export class MongoDBManagerLifecycleOps {
 				this.host.config?.mongodb?.queryEmbeddingModel ?? INDEX_AUTOEMBED_MODEL,
 			capabilities: this.host.capabilities,
 			nativeBitemporalVectorPrefilter,
+			// RET-13: recall stage failures (hybrid/semantic) surface through
+			// the same lane failure sink the search paths use, so index
+			// readiness re-polls instead of staying stale.
+			onLaneFailure: (lane, error) =>
+				this.host.noteSearchLaneFailure(lane, error),
 		})
 	}
 
@@ -598,31 +712,45 @@ export class MongoDBManagerLifecycleOps {
 		scope?: MemoryScope
 		scopeRef?: string
 	}) {
+		resolveConsolidationMaxEvents(params?.maxEvents)
+		const admission = await captureAdmissionToken({
+			db: this.host.db,
+			prefix: this.host.prefix,
+			agentId: this.host.agentId,
+		})
 		const startedAt = new Date()
 		const runId = randomUUID()
 		const jobId = `consolidation-${runId}`
 		let jobTrackingEnabled = false
+		const job = {
+			jobId,
+			jobType: "consolidation" as const,
+			agentId: this.host.agentId,
+			status: "running" as const,
+			createdAt: startedAt,
+			startedAt,
+			admissionEpoch: admission.epoch,
+			// Tracking prevents the standing worker from claiming a live synchronous run.
+			tracking: true,
+			metadata: params ? { ...params } : undefined,
+		}
 		try {
-			await createMemoryJob({
+			await withFencedWrite({
 				db: this.host.db,
 				prefix: this.host.prefix,
-				job: {
-					jobId,
-					jobType: "consolidation",
-					agentId: this.host.agentId,
-					status: "running",
-					startedAt,
-					// W05: this row TRACKS a live synchronous run — it is not
-					// queued work. The marker keeps the standing worker's claim
-					// filter from reclassifying it as abandoned (running without a
-					// lease) and stealing the run; this method owns the row's
-					// terminal transition below.
-					tracking: true,
-					metadata: params ? { ...params } : undefined,
-				},
+				token: admission,
+				fn: (session) =>
+					createMemoryJob({
+						db: this.host.db,
+						prefix: this.host.prefix,
+						session,
+						job,
+					}),
 			})
 			jobTrackingEnabled = true
 		} catch (err) {
+			if (isErasureGateConflictError(err) || isMalformedGateError(err))
+				throw err
 			log.warn(
 				`createMemoryJob failed for ${jobId}: ${err instanceof Error ? err.message : String(err)}`,
 			)
@@ -633,6 +761,7 @@ export class MongoDBManagerLifecycleOps {
 				prefix: this.host.prefix,
 				agentId: this.host.agentId,
 				options: params,
+				admission,
 			})
 			const scope = params?.scope ?? "agent"
 			const scopeRef =

@@ -35,8 +35,7 @@ The public repo is intentionally focused: a runnable API, MCP server, TypeScript
 
 Prerequisites:
 
-- Node.js 20+
-- Bun 1.2+
+- Node.js and Bun versions specified by `engines.node` and `packageManager` in [package.json](package.json)
 - Docker (for the local MongoDB path — uses MongoDB Atlas Local Preview with mongot for Atlas Search)
 
 ```bash
@@ -60,11 +59,9 @@ to a MongoDB Atlas Model API key with the `al-...` prefix when you want MongoDB
 auto-embeddings. Without it, you can still use local development paths that do
 not require auto-embed.
 
-> [!WARNING]
-> [MongoDB Automated Embedding](https://www.mongodb.com/docs/vector-search/crud-embeddings/automated-embedding/)
-> is an upstream Preview feature. MongoDB says not to use it in production.
-> Memongo's current automated semantic-search lane is therefore for evaluation
-> and controlled preview deployments, not production certification.
+[MongoDB Automated Embedding](https://www.mongodb.com/docs/vector-search/crud-embeddings/automated-embedding/)
+is an upstream Preview feature. Review its deployment requirements and current
+limitations when configuring your environment.
 
 Start the API:
 
@@ -80,12 +77,12 @@ curl -s http://127.0.0.1:3847/health
 
 curl -s http://127.0.0.1:3847/v1/add \
   -H "content-type: application/json" \
-  -H "authorization: Bearer local-dev-secret" \
+  -H "authorization: Bearer $MEMONGO_API_KEY" \
   -d '{"content":"The user prefers TypeScript and concise release notes.","sessionId":"demo-user"}'
 
 curl -s http://127.0.0.1:3847/v1/search \
   -H "content-type: application/json" \
-  -H "authorization: Bearer local-dev-secret" \
+  -H "authorization: Bearer $MEMONGO_API_KEY" \
   -d '{"query":"What does the user prefer?","sessionKey":"demo-user","maxResults":5}'
 ```
 

@@ -4,6 +4,7 @@ import type {
 	MemoryScope,
 } from "@memongo/lib"
 import type { ProcedureLifecyclePatch } from "./mongodb-procedures.js"
+import type { SearchBudgetSnapshot } from "./mongodb-search-budget.js"
 import type { StructuredMemoryLifecyclePatch } from "./mongodb-structured-memory.js"
 
 export type MemorySource = "reference" | "conversation" | "structured"
@@ -59,6 +60,33 @@ export type MemorySearchTrustSummary = {
 	sourceDiversity: "single" | "multi" | "none"
 }
 
+/**
+ * Provenance derivation for a search result (RET-09): who authored the
+ * underlying span, independent of retrieval score.
+ *   - "user": user-authored span (role "user" turn, verbatim session text)
+ *   - "user-extracted": normalized/paraphrased facts extracted FROM user
+ *     turns (userfact evidence) — user-attributed but not verbatim
+ *   - "agent": agent-generated text (assistant/tool/system turns)
+ *   - "derived": summaries, procedures, structured records, or legacy rows
+ *     with no provenance metadata (conservative default)
+ *   - "inferred": graph relations and LLM-inferred facts
+ *   - "reference": verbatim spans of ingested external documents (KB)
+ */
+export type MemoryResultDerivation =
+	| "user"
+	| "user-extracted"
+	| "agent"
+	| "derived"
+	| "inferred"
+	| "reference"
+
+/**
+ * Authoring role of the underlying event turn, when the source lane
+ * preserves it (conversation chunks; raw-window events). Absent on lanes
+ * with no turn-level authorship (KB, structured, procedures, graph).
+ */
+export type MemoryResultRole = "user" | "assistant" | "system" | "tool"
+
 export type MemorySearchResult = {
 	path: string
 	filePath?: string
@@ -66,6 +94,13 @@ export type MemorySearchResult = {
 	endLine: number
 	score: number
 	snippet: string
+	/**
+	 * Full passage text for the reranker and the reader (B5). `snippet`
+	 * stays the short display preview; this carries the complete body so
+	 * answers past the preview length remain reachable. Absent on lanes
+	 * that only produce previews (fall back to `snippet`).
+	 */
+	text?: string
 	source: MemorySource
 	sourceType?: MemorySource
 	citation?: string
@@ -88,11 +123,19 @@ export type MemorySearchResult = {
 	reinforcementCount?: number
 	validFrom?: Date
 	validTo?: Date
+	/**
+	 * Retention deadline of the source document (TTL-managed), when present.
+	 */
+	expiresAt?: Date
 	factLineage?: string
 	sourceRef?: string
 	reviewAt?: Date
 	lastConfirmedAt?: Date
 	confidence?: number
+	/** Authoring role of the source turn (conversation/raw-window lanes). */
+	role?: MemoryResultRole
+	/** Provenance derivation of the source span (see MemoryResultDerivation). */
+	derivation?: MemoryResultDerivation
 	trust?: MemoryResultTrust
 	/**
 	 * Task 35 observability: when the retrieval path was `$rankFusion`
@@ -257,6 +300,7 @@ export type MemoryProviderStatus = {
 	workspaceDir?: string
 	sources?: MemorySource[]
 	sourceCounts?: Array<{ source: MemorySource; files: number; chunks: number }>
+	/** @deprecated Persisted search-result serving is disabled. */
 	cache?: { enabled: boolean; entries?: number; maxEntries?: number }
 	fts?: { enabled: boolean; available: boolean; error?: string }
 	vector?: {
@@ -332,6 +376,15 @@ export type SearchConfig = {
 	sourcePreference?: MemorySearchSourcePreference[]
 	timeRange?: MemorySearchTimeRange
 	needExactEvidence?: boolean
+	/**
+	 * RET-01: opt-in for the executor's constraint-relaxation fallback.
+	 * Explicit caller constraints (timeRange, needExactEvidence) are hard by
+	 * default — an empty constrained answer stays empty (with an honest
+	 * noDirectEvidenceReason). Only when this flag is true may the executor
+	 * re-run a pass with the dominant constraint removed, disclosed via
+	 * metadata.constraintRelaxations.
+	 */
+	allowConstraintRelaxation?: boolean
 	numCandidates?: number
 	fusionMethod?: SearchFusionMethod
 	hybridMode?: SearchHybridMode
@@ -348,6 +401,7 @@ export type ResolvedSearchConfig = {
 	sourcePreference: MemorySearchSourcePreference[]
 	timeRange?: MemorySearchTimeRange
 	needExactEvidence: boolean
+	allowConstraintRelaxation: boolean
 	numCandidates: number
 	fusionMethod: SearchFusionMethod
 	hybridMode: SearchHybridMode
@@ -380,12 +434,16 @@ export type MemorySearchRequest = {
 	query: string
 	scope?: MemoryScope
 	scopeRef?: string
+	/** Trusted boundary decision: exclude shared-KB retrieval for this request. */
+	kbRestricted?: boolean
 	maxResults?: number
 	minScore?: number
 	searchMode?: MemorySearchMode
 	sourcePreference?: MemorySearchSourcePreference[]
 	timeRange?: MemorySearchTimeRange
 	needExactEvidence?: boolean
+	/** RET-01: top-level mirror of searchConfig.allowConstraintRelaxation (explicit constraints stay hard unless opted in). */
+	allowConstraintRelaxation?: boolean
 	maxPasses?: number
 	returnPlan?: boolean
 	conversationScope?: MemoryConversationScope
@@ -411,6 +469,24 @@ export type MemorySearchPass = {
 	queryRewritten: boolean
 	reranked: boolean
 	correctionApplied?: string
+}
+
+/**
+ * RET-13: per-lane outcome for the metadata surface — one entry per
+ * executed path, failed sub-lane/phase, budget-denied lane, or
+ * capability-gated skip. Statuses distinguish what pathsExecuted (attempted
+ * paths) and resultsByPath (contributing lanes) cannot: WHY a lane that ran
+ * produced nothing. Shared by V2SearchMetadata (per pass) and
+ * MemorySearchMetadata (executor-merged across passes).
+ */
+export type SearchLaneOutcome = {
+	/** Seam label: path name, sub-lane (hybrid:chunks), or phase. */
+	lane: string
+	status: "ok" | "failed" | "budget-denied" | "unavailable"
+	/** Number of results the lane contributed (ok lanes). */
+	resultCount?: number
+	/** Failure text (failed lanes). */
+	error?: string
 }
 
 export type MemorySearchMetadata = {
@@ -444,6 +520,20 @@ export type MemorySearchMetadata = {
 	 * memories" at the detailed-search boundary, not only inside searchV2.
 	 */
 	throttled?: { retryAfterMs: number }
+	/**
+	 * RET-13: per-lane outcome ledger concatenated across passes by the
+	 * executor merge — one entry per attempted path, failed sub-lane/phase,
+	 * or budget-denied lane. Absent on cache-hit and legacy-fallback
+	 * responses, which never run v2 lanes.
+	 */
+	laneOutcomes?: SearchLaneOutcome[]
+	/**
+	 * RET-16: the request-level search budget snapshot (aggregations/embeds
+	 * consumed across ALL passes of this request, plus the limits). Set by
+	 * searchDetailed's request-boundary wrapper; absent on admission-denied
+	 * responses where no lanes ran.
+	 */
+	budget?: SearchBudgetSnapshot
 }
 
 /**
@@ -526,6 +616,7 @@ export type MemoryDiscoveryProjection = {
 }
 
 export type MemoryDiscoveryProjectionRequest = {
+	sessionId?: string
 	kind: MemoryDiscoveryProjectionKind
 	query?: string
 	scope?: MemoryScope
@@ -670,6 +761,8 @@ export type MemoryContextBundleRequest = {
 	query?: string
 	scope?: MemoryScope
 	scopeRef?: string
+	/** Trusted boundary decision: exclude shared-KB retrieval for this request. */
+	kbRestricted?: boolean
 	sessionId?: string
 	tokenBudget?: number
 	maxActiveItems?: number
@@ -698,6 +791,7 @@ export interface MemorySearchManager {
 			sessionKey?: string
 			scope?: MemoryScope
 			scopeRef?: string
+			kbRestricted?: boolean
 		},
 	): Promise<MemorySearchResult[]>
 	searchDetailed(request: MemorySearchRequest): Promise<MemorySearchResponse>
@@ -705,6 +799,7 @@ export interface MemorySearchManager {
 		request: MemoryDiscoveryProjectionRequest,
 	): Promise<MemoryDiscoveryProjection>
 	hydrateActiveSlate(params?: {
+		sessionId?: string
 		scope?: MemoryScope
 		scopeRef?: string
 		maxItems?: number
@@ -752,6 +847,8 @@ export interface MemorySearchManager {
 		opts?: {
 			maxResults?: number
 			minScore?: number
+			scope?: MemoryScope
+			sessionKey?: string
 			scopeRef?: string
 			filter?: { tags?: string[]; category?: string; source?: string }
 			/** Per-call override; defaults to the resolved config fusionMethod. */
@@ -901,7 +998,18 @@ export type MemorySelfEditRequest = {
 export type RecallTrace = {
 	traceId: string
 	agentId: string
-	query: string
+	/**
+	 * RET-21: the query as the deployment's diagnostic privacy policy allows
+	 * it to be stored — verbatim in "raw" mode, shape-preserving redacted
+	 * text in "redacted-hash" mode, absent in "none" mode. Legacy traces
+	 * written before the policy hold the raw query verbatim.
+	 */
+	query?: string
+	/** sha256 of the normalized query; present whenever query text is stored. */
+	queryHash?: string
+	/** RET-21: scope retention fields — traces are tenant-sensitive rows. */
+	scope?: MemoryScope
+	scopeRef?: string
 	timestamp: Date
 	lanesUsed?: string[]
 	lanesSkipped?: string[]
@@ -954,6 +1062,8 @@ export type MemoryJob = {
 	metadata?: Record<string, unknown>
 	payload?: MemoryExtractionJobPayload
 	attempts?: number
+	/** Erasure admission epoch captured before this write entered the queue. */
+	admissionEpoch?: number
 	/** Earliest time a failed job may be claimed again. */
 	retryAt?: Date
 	/**
@@ -973,7 +1083,10 @@ export type MemoryJob = {
 	 * W05: set on rows that TRACK a live synchronous run (explicit
 	 * consolidate) rather than queueing work. Nonclaimable by the worker's
 	 * claim filter and excluded from the expired-lease dead-letter sweep;
-	 * the synchronous runner owns the row's terminal transition.
+	 * the synchronous runner owns the row's terminal transition. When a
+	 * failed tracking row is claimed for retry, the claim clears this
+	 * marker atomically: ownership moves to the worker, so a post-claim
+	 * crash recovers via normal lease expiry.
 	 */
 	tracking?: boolean
 }
@@ -1121,6 +1234,83 @@ export type MemoryBenchmarkEvaluatorIdentity = {
 	comparability: "canonical" | "adapted"
 }
 
+/**
+ * Slice B: summary of an official LongMemEval QA protocol run. Mirrors the
+ * `official` block of the e2e QA envelope produced by the official scoring
+ * pipeline (separate judge provider, dated answer prompts, anscheck verdicts).
+ */
+export type MemoryBenchmarkOfficialQaSummary = {
+	protocol: "official-anscheck"
+	coverage: "full" | "partial" | "unavailable"
+	overallAccuracy: number | null
+	taskAveragedAccuracy: number | null
+	/**
+	 * B8-3/B9-1: question ids the run recorded as unreliable (provider
+	 * failure, budget truncation, or a response with no extractable
+	 * answer). Terminal but excluded from judged coverage; named so an
+	 * unmeasured case is never just an anonymous missing id. Absent when
+	 * the summary predates the unreliable stage.
+	 */
+	unreliableQuestionIds?: string[]
+	/**
+	 * Slice B round 2: abstention-only accuracy over the judged abstention
+	 * rows. Null when not measured (partial coverage or no abstention rows);
+	 * never a fabricated zero.
+	 */
+	abstentionAccuracy: number | null
+	/** Judged abstention row count; 0 when none were judged. */
+	abstentionCount: number
+	perType: Array<{
+		questionType: string
+		accuracy: number | null
+		count: number
+	}>
+	missingQuestionIds: string[]
+	lostPreCheckpointQuestionIds: string[]
+	accountingCompleteness: "complete" | "incomplete"
+	export?: {
+		kind: "sample" | "full"
+		path: string
+		rows: number
+	}
+}
+
+/**
+ * Custom-judge (non-official) QA protocol summary: the same reviewed
+ * machinery and metric shape as the official summary, but judged by a
+ * separately configured non-official judge model (for example
+ * gpt-5.6-luna). `judgeModel` records the actual judging model; the
+ * `custom-judge-anscheck` protocol label keeps non-official provenance
+ * visible wherever the summary is published.
+ */
+export type MemoryBenchmarkCustomJudgeQaSummary = {
+	protocol: "custom-judge-anscheck"
+	judgeModel: string
+	coverage: "full" | "partial" | "unavailable"
+	overallAccuracy: number | null
+	taskAveragedAccuracy: number | null
+	/**
+	 * B8-3/B9-1: question ids the run recorded as unreliable (see
+	 * MemoryBenchmarkOfficialQaSummary.unreliableQuestionIds).
+	 */
+	unreliableQuestionIds?: string[]
+	abstentionAccuracy: number | null
+	abstentionCount: number
+	perType: Array<{
+		questionType: string
+		accuracy: number | null
+		count: number
+	}>
+	missingQuestionIds: string[]
+	lostPreCheckpointQuestionIds: string[]
+	accountingCompleteness: "complete" | "incomplete"
+	export?: {
+		kind: "sample" | "full"
+		path: string
+		rows: number
+	}
+}
+
 export type MemoryBenchmarkOfficialMetrics = {
 	longMemEval?: {
 		evaluator: MemoryBenchmarkEvaluatorIdentity
@@ -1148,6 +1338,22 @@ export type MemoryBenchmarkOfficialMetrics = {
 			eligibleCases: number
 			completedCases: number
 			unavailableReason?: string
+			/**
+			 * Slice B: per-run official QA protocol summary (separate judge
+			 * provider, dated answer prompts, anscheck-verified hypotheses).
+			 * Absent means the run did not use the official QA protocol.
+			 * Nested canonical location (typed projection of
+			 * `BenchmarkE2eQaEnvelope.official`); there is deliberately no
+			 * sibling `officialQa` field.
+			 */
+			official?: MemoryBenchmarkOfficialQaSummary
+			/**
+			 * Custom-judge integration: per-run non-official judge summary
+			 * (typed projection of `BenchmarkE2eQaEnvelope.customJudge`).
+			 * Present only for custom-judge protocol runs, which never carry
+			 * an `official` block.
+			 */
+			customJudge?: MemoryBenchmarkCustomJudgeQaSummary
 		}
 	}
 	loCoMo?: {
@@ -1241,6 +1447,13 @@ export type MemoryBenchmarkCaseOutcome = {
 		  }
 	empty: boolean
 	latencyMs: number
+	/**
+	 * B2: per-case session-level recallAny at the loop's decision depths, so
+	 * a single result artifact carries the R side of the per-question join
+	 * (the full depth ladder stays on the checkpoint executions).
+	 */
+	recallAnyAt10?: number
+	recallAnyAt50?: number
 	/** #66: wall-clock ms per lane, hybrid sub-lane, and serial backstop. */
 	latencyByLane?: Record<string, number>
 	failure?: { stage: "retrieval"; message: string }
@@ -1418,6 +1631,13 @@ export type BenchmarkOperationAccounting = {
 	 */
 	inputTokens?: number | null
 	outputTokens?: number | null
+	/**
+	 * C-017: reasoning tokens accumulated across recorded successes,
+	 * present once at least one transport response reported them
+	 * (OpenAI-compatible completion_tokens_details.reasoning_tokens).
+	 * Absent when the gateway does not report reasoning spend.
+	 */
+	reasoningTokens?: number | null
 }
 
 export type BenchmarkCostAccounting = {
@@ -1455,6 +1675,21 @@ export type BenchmarkE2eQaEnvelope = {
 		error?: string
 	}>
 	unavailableReason?: string
+	/**
+	 * Slice B: official QA protocol summary (separate judge provider, dated
+	 * answer prompts, anscheck-verified hypotheses). Absent means the run
+	 * used the legacy custom-v1 harness or measured no QA. Canonical home of
+	 * the official summary; `officialMetrics.longMemEval.answerQuality.official`
+	 * is the typed projection of this field.
+	 */
+	official?: MemoryBenchmarkOfficialQaSummary
+	/**
+	 * Custom-judge integration: non-official judge summary (same reviewed
+	 * machinery, separately configured judge model such as gpt-5.6-luna).
+	 * Present only for custom-judge protocol runs, which never carry an
+	 * `official` block; `answerQuality.customJudge` is the typed projection.
+	 */
+	customJudge?: MemoryBenchmarkCustomJudgeQaSummary
 }
 
 export type MemoryBenchmarkRunReport = {
@@ -1567,6 +1802,7 @@ export type ConversationRecallResponse = {
 	results: ConversationRecallResult[]
 	metadata: {
 		totalMatched: number
+		/** Delivered query after trimming and the 2,000 UTF-16 code-unit ceiling. */
 		queryUsed?: string
 		filtersApplied: string[]
 		searchMethod: "standard" | "semantic" | "hybrid"
@@ -1779,8 +2015,9 @@ export type ConsolidationOptions = {
 	/**
 	 * Phase-0 gate lease duration. A run that crashes leaves the gate
 	 * "running"; the next claim may proceed once this lease has expired.
-	 * Must exceed the worst-case run duration or the run's own completion
-	 * is fenced off as stale.
+	 * Renewed every third of this duration during asynchronous work when it
+	 * is finite and at least 3000ms. Shorter or non-finite durations do not
+	 * start a heartbeat; expired leases still reject writes.
 	 */
 	leaseMs?: number
 	/**

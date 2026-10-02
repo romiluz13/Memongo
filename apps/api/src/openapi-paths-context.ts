@@ -360,6 +360,10 @@ export const contextPaths = {
 				},
 			],
 			responses: {
+				"503": {
+					description:
+						"All unified state reads failed with supported dependency-unavailable errors",
+				},
 				"200": {
 					description: "Unified state family for the requested scope",
 					content: {

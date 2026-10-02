@@ -69,7 +69,8 @@ describe("internalError (C-002: redacted server-side log, generic client body)",
 		await app.request("/boom")
 
 		const logged = capturedCalls(errorLog)
-		expect(logged).toContain("plain failure")
+		expect(logged).not.toContain("plain failure")
+		expect(JSON.parse(String(errorLog.mock.calls[0][0])).error).toEqual({})
 		expect(logged).not.toContain("dummy-cred-000")
 	})
 

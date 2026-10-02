@@ -5,7 +5,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest"
 // ---------------------------------------------------------------------------
 
 vi.mock("./mongodb-telemetry.js", () => ({
-	emitTelemetry: vi.fn(),
+	emitTelemetry: vi.fn().mockResolvedValue(undefined),
 }))
 
 import type { Db } from "mongodb"
@@ -251,4 +251,51 @@ describe("rewriteQuery", () => {
 		expect(result.rewrittenQuery).toContain("javascript")
 		expect(result.rewrittenQuery).toContain("python")
 	})
+})
+
+describe("original-admission query-rewrite telemetry", () => {
+	beforeEach(() => vi.clearAllMocks())
+	it("keeps the rewrite when original telemetry rejects", async () => {
+		const db = mockDb()
+		const admission = {
+			kind: "admission",
+			agentId: AGENT_ID,
+			epoch: 19,
+		} as const
+		vi.mocked(emitTelemetry).mockRejectedValueOnce(
+			new Error("telemetry fixture"),
+		)
+		const out = await rewriteQuery({
+			db,
+			prefix: PREFIX,
+			agentId: AGENT_ID,
+			admission,
+			query: "auth",
+			config: enabledConfig(),
+		})
+		expect(out.rewrittenQuery).toBe(expandSynonyms("auth"))
+		expect(out.rewritten).toBe(true)
+		expect(emitTelemetry).toHaveBeenCalledExactlyOnceWith(
+			db,
+			PREFIX,
+			expect.objectContaining({
+				meta: { agentId: AGENT_ID, operation: "query-rewrite" },
+			}),
+			{ admission },
+		)
+	})
+	it("returns without waiting for telemetry completion", async () => {
+		vi.mocked(emitTelemetry).mockImplementationOnce(
+			() => new Promise<void>(() => {}),
+		)
+		const out = await rewriteQuery({
+			db: mockDb(),
+			prefix: PREFIX,
+			agentId: AGENT_ID,
+			admission: { kind: "admission", agentId: AGENT_ID, epoch: 19 },
+			query: "auth",
+			config: enabledConfig(),
+		})
+		expect(out.rewrittenQuery).toBe(expandSynonyms("auth"))
+	}, 1_000)
 })

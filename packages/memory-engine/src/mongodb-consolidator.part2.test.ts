@@ -29,10 +29,33 @@ function mockCollection(
 }
 
 function mockDb(collectionMap: Record<string, Collection> = {}): Db {
-	return {
-		collection: vi.fn((name: string) => {
-			return collectionMap[name] ?? mockCollection()
+	const gate: Document = { agentId: "", epoch: 0, state: "open", serial: 0 }
+	const meta = mockCollection({
+		findOneAndUpdate: vi.fn(
+			async (
+				_filter: unknown,
+				update: { $setOnInsert: { agentId: string } },
+			) => {
+				gate.agentId = update.$setOnInsert.agentId
+				return { ...gate }
+			},
+		),
+		findOne: vi.fn(async () => ({ ...gate })),
+		updateOne: vi.fn(async () => {
+			gate.serial += 1
+			return { matchedCount: 1, modifiedCount: 1 }
 		}),
+	})
+	const session = {
+		inTransaction: () => false,
+		withTransaction: async (fn: () => Promise<unknown>) => fn(),
+		endSession: async () => {},
+	}
+	return {
+		client: { startSession: () => session },
+		collection: vi.fn((name: string) =>
+			name === "test_meta" ? meta : (collectionMap[name] ?? mockCollection()),
+		),
 	} as unknown as Db
 }
 
@@ -232,26 +255,27 @@ describe("consolidateMemory", () => {
 			const col = mockCollection({
 				findOneAndUpdate: vi.fn(async (filter: Document) => {
 					const clauses = (filter.$or ?? []) as Document[]
+					const current = doc
 					const matches =
-						doc !== null &&
+						current !== null &&
 						clauses.some((c) => {
-							if (c.status !== doc.status) {
+							if (c.status !== current.status) {
 								return false
 							}
 							if (c.startedAt?.$lte instanceof Date) {
 								return (
-									doc.startedAt instanceof Date &&
-									doc.startedAt <= c.startedAt.$lte
+									current.startedAt instanceof Date &&
+									current.startedAt <= c.startedAt.$lte
 								)
 							}
 							if (c.leaseExpiresAt?.$lte instanceof Date) {
 								return (
-									doc.leaseExpiresAt instanceof Date &&
-									doc.leaseExpiresAt <= c.leaseExpiresAt.$lte
+									current.leaseExpiresAt instanceof Date &&
+									current.leaseExpiresAt <= c.leaseExpiresAt.$lte
 								)
 							}
 							if (c.leaseExpiresAt?.$exists === false) {
-								return doc.leaseExpiresAt === undefined
+								return current.leaseExpiresAt === undefined
 							}
 							return false
 						})
@@ -527,8 +551,9 @@ describe("consolidateMemory", () => {
 		).rejects.toThrow(writeFailure)
 
 		expect(eventsCol.updateMany).toHaveBeenCalledWith(
-			{ eventId: { $in: ["e1"] } },
+			{ agentId: "agent-1", eventId: { $in: ["e1"] } },
 			expect.any(Object),
+			expect.objectContaining({ session: expect.any(Object) }),
 		)
 		expect(consolidationRunsCol.updateOne).toHaveBeenCalledWith(
 			expect.any(Object),
@@ -768,7 +793,7 @@ describe("consolidateMemory", () => {
 			})),
 			updateMany: vi.fn(async () => ({ modifiedCount: 1 }) as UpdateResult),
 		})
-		const aggregate = vi.fn(() => ({
+		const aggregate = vi.fn((_pipeline: Document[]) => ({
 			toArray: vi.fn(async () => []),
 		}))
 		const structuredCol = mockCollection({
@@ -796,6 +821,7 @@ describe("consolidateMemory", () => {
 			agentId: "agent-1",
 			scope: "workspace",
 			scopeRef: "workspace:memongo",
+			state: { $ne: "invalidated" },
 		})
 		expect(writeStructuredMemory).toHaveBeenCalledWith(
 			expect.objectContaining({
@@ -1163,12 +1189,13 @@ describe("consolidateMemory", () => {
 
 		// Should mark both events regardless of pattern match
 		expect(eventsCol.updateMany).toHaveBeenCalledWith(
-			{ eventId: { $in: ["e1", "e2"] } },
+			{ agentId: "agent-1", eventId: { $in: ["e1", "e2"] } },
 			expect.objectContaining({
 				$set: expect.objectContaining({
 					dreamerRunId: expect.any(String),
 				}),
 			}),
+			expect.objectContaining({ session: expect.any(Object) }),
 		)
 	})
 

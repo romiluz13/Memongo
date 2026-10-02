@@ -17,6 +17,7 @@ import {
 	resolveConversationEvidenceMode,
 } from "./mongodb-conversation-evidence-mode.js"
 import { INDEX_AUTOEMBED_MODEL } from "./mongodb-schema-search-definitions.js"
+import type { DiagnosticQueryPrivacyMode } from "./mongodb-diagnostic-privacy.js"
 
 const log = createSubsystemLogger("memory:backend-config")
 
@@ -60,10 +61,13 @@ export type ResolvedMongoDBConfig = {
 	/**
 	 * P3.2: resolved per-search cost budget (mongodb-search-budget.ts) —
 	 * user overrides applied over DEFAULT_SEARCH_BUDGET, always populated.
+	 * RET-16: maxWallMs is present only when the operator opted in (the
+	 * mechanism defaults off).
 	 */
 	searchBudget: {
 		maxAggregations: number
 		maxEmbeds: number
+		maxWallMs?: number
 	}
 	maxPoolSize: number
 	minPoolSize: number
@@ -113,7 +117,8 @@ export type ResolvedMongoDBConfig = {
 				minWindowSize: number
 			}
 			persistRawExplain: boolean
-			queryPrivacyMode: "redacted-hash" | "raw" | "none"
+			/** RET-21: canonical mode type lives in mongodb-diagnostic-privacy.js. */
+			queryPrivacyMode: DiagnosticQueryPrivacyMode
 		}
 		retention: {
 			days: number
@@ -149,6 +154,7 @@ export type ResolvedMongoDBConfig = {
 		accessBoost: number
 		temporalProximityBoost: number
 	}
+	/** @deprecated Persisted search-result serving is disabled. */
 	cache: {
 		enabled: boolean
 		conversationTtlSec: number
@@ -670,7 +676,7 @@ export function resolveMemoryBackendConfig(params: {
 					),
 				},
 				cache: {
-					enabled: mongoCfg?.cache?.enabled !== false,
+					enabled: false,
 					conversationTtlSec: mongoCfg?.cache?.conversationTtlSec ?? 300,
 					kbTtlSec: mongoCfg?.cache?.kbTtlSec ?? 3600,
 					similarityThreshold: mongoCfg?.cache?.similarityThreshold ?? 0.95,

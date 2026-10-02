@@ -1,6 +1,9 @@
 import { Hono } from "hono"
 import { jsonError } from "../lib/errors.js"
-import { InvalidJsonError } from "../lib/validation.js"
+import {
+	InvalidJsonError,
+	UnsupportedMediaTypeError,
+} from "../lib/validation.js"
 
 import { parseJsonRequestBody, type V1RouterEnv } from "./v1-helpers.js"
 
@@ -30,6 +33,9 @@ export function createV1Router(): Hono<V1RouterEnv> {
 		try {
 			body = await parseJsonRequestBody(c)
 		} catch (error) {
+			if (error instanceof UnsupportedMediaTypeError) {
+				return jsonError(c, 415, "UNSUPPORTED_MEDIA_TYPE", error.message)
+			}
 			if (error instanceof InvalidJsonError) {
 				return jsonError(c, 400, "INVALID_JSON", error.message)
 			}

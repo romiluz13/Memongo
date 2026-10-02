@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
+import { createStatefulMongoFake } from "./test-helpers/stateful-mongo-fake.js"
+import { resetSearchAdmissionForTests } from "./mongodb-search-admission.js"
 
 // Kept separate from mongodb-manager.test.ts (which does not mock the KB
 // module): verifies the manager threads the configured fusionMethod into the
@@ -20,7 +22,8 @@ function makeManagerStub(
 	fusionMethod: "scoreFusion" | "rankFusion" | "js-merge",
 ) {
 	return {
-		db: {},
+		db: createStatefulMongoFake().db,
+		agentId: "agent-1",
 		prefix: "test_",
 		config: {
 			mongodb: {
@@ -42,6 +45,7 @@ function makeManagerStub(
 
 describe("MongoDBMemoryManager.searchKB fusionMethod plumbing (P0.10)", () => {
 	beforeEach(() => {
+		resetSearchAdmissionForTests()
 		searchKBFake.mockReset()
 		searchKBFake.mockResolvedValue([])
 	})

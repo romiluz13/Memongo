@@ -192,7 +192,13 @@ describe("selfEditBlock", () => {
 
 		expect(client.startSession).toHaveBeenCalledTimes(1)
 		expect(findOne).toHaveBeenCalledWith(
-			{ agentId: "agent-1", type: "preference", key: "core:user" },
+			{
+				agentId: "agent-1",
+				scope: "agent",
+				scopeRef: "agent:agent-1",
+				type: "preference",
+				key: "core:user",
+			},
 			{ session },
 		)
 		expect(writeStructuredMemory).toHaveBeenCalledWith(

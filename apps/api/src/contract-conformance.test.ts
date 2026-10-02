@@ -241,6 +241,30 @@ describe("contract conformance: routes vs OpenAPI document", () => {
 		expect(failures).toEqual([])
 	})
 
+	it("declares the write routes' actual conflict statuses in the manifest and generated OpenAPI", () => {
+		// W14: the write routes emit 409 ERASURE_GATE_CONFLICT at runtime (all
+		// three), 422 IDEMPOTENCY_CONFLICT (single writes), and 429
+		// WRITE_QUEUE_FULL (all three). The manifest and generated
+		// OpenAPI document must declare exactly those.
+		const expected: Array<{ path: string; statuses: readonly number[] }> = [
+			{ path: "/v1/add", statuses: [400, 409, 422, 429, 500] },
+			{ path: "/v1/write-event", statuses: [400, 409, 422, 429, 500] },
+			{ path: "/v1/write-events", statuses: [400, 409, 429, 500] },
+		]
+		for (const { path, statuses } of expected) {
+			const route = MEMONGO_API_ROUTES.find((r) => r.path === path)
+			expect(route?.errorStatuses, `${path} errorStatuses`).toEqual(statuses)
+			const operation = operationFor(path, "post")
+			for (const status of statuses) {
+				expect(
+					operation?.responses?.[String(status)]?.content?.["application/json"]
+						?.schema?.$ref,
+					`${path} should document ${status} with the ApiError envelope`,
+				).toBe(API_ERROR_OPENAPI_REF)
+			}
+		}
+	})
+
 	it("declares the bearer security scheme and applies it globally", () => {
 		const scheme =
 			spec.components?.securitySchemes?.[BEARER_SECURITY_SCHEME_NAME]

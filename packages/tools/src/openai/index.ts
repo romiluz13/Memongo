@@ -10,7 +10,7 @@ import {
 
 interface ChatMessage {
 	role: string
-	content: string | null
+	content: string | null | Array<{ type: string; text?: string }>
 }
 
 interface ChatCreateParams {
@@ -19,7 +19,7 @@ interface ChatCreateParams {
 }
 
 interface ChatChoice {
-	message: ChatMessage
+	message: { role: string; content: string | null }
 }
 
 interface ChatCompletion {
@@ -33,8 +33,20 @@ interface ChatCompletion {
 
 function extractUserQuery(messages: ChatMessage[]): string | undefined {
 	for (let i = messages.length - 1; i >= 0; i--) {
-		if (messages[i].role === "user" && messages[i].content) {
-			return messages[i].content!
+		if (messages[i].role !== "user") continue
+		const content = messages[i].content
+		if (typeof content === "string" && content) return content
+		if (Array.isArray(content)) {
+			const text = content
+				.filter(
+					(part) =>
+						part.type === "text" &&
+						typeof part.text === "string" &&
+						part.text.length > 0,
+				)
+				.map((part) => part.text)
+				.join("\n")
+			return text || undefined
 		}
 	}
 	return undefined
@@ -49,9 +61,9 @@ function extractUserQuery(messages: ChatMessage[]): string | undefined {
  * call is enriched with Memongo memory context. No runtime `openai` dependency
  * is required: the middleware accepts any object matching the shape.
  *
- * All Memongo traffic routes through `@memongo/client` (P1.5) with the
- * canonical-identity cache shared with the Vercel middleware. The OpenAI
- * chat-completions shape has no `providerOptions` channel, so identity comes
+ * All Memongo traffic routes through `@memongo/client`, with fresh context
+ * retrieval for each call. The OpenAI chat-completions shape has no
+ * `providerOptions` channel, so identity comes
  * from the constructor options (per middleware instance) only.
  */
 export function createOpenAIMiddleware<

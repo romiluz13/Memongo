@@ -65,6 +65,7 @@ const recallMessagesInputSchema = {
 export const aliasTools: readonly McpToolDefinition[] = [
 	{
 		name: "memongo_recall_messages",
+		canonical: "memongo_recall_conversation",
 		description:
 			"Semantic alias for memongo_recall_conversation. Recall past messages with exact time/session/role filters and canonical citations from the same runtime truth.",
 		inputSchema: recallMessagesInputSchema,
@@ -72,6 +73,7 @@ export const aliasTools: readonly McpToolDefinition[] = [
 	},
 	{
 		name: "memongo_memory_get",
+		canonical: "memongo_lifecycle_get",
 		description:
 			"Semantic alias for memongo_lifecycle_get. Fetch the current structured memory or procedure for a stable memory handle.",
 		inputSchema: {
@@ -89,6 +91,7 @@ export const aliasTools: readonly McpToolDefinition[] = [
 	},
 	{
 		name: "memongo_memory_update",
+		canonical: "memongo_lifecycle_update",
 		description:
 			"Semantic alias for memongo_lifecycle_update. Update a memory item by stable handle while preserving revision history.",
 		inputSchema: {
@@ -111,6 +114,7 @@ export const aliasTools: readonly McpToolDefinition[] = [
 	},
 	{
 		name: "memongo_memory_delete",
+		canonical: "memongo_lifecycle_delete",
 		description:
 			"Semantic alias for memongo_lifecycle_delete. Delete a memory item using invalidate-with-history semantics rather than hard delete.",
 		inputSchema: {
@@ -133,6 +137,7 @@ export const aliasTools: readonly McpToolDefinition[] = [
 	},
 	{
 		name: "memongo_memory_history",
+		canonical: "memongo_lifecycle_history",
 		description:
 			"Semantic alias for memongo_lifecycle_history. Fetch ordered memory revision history from a stable handle.",
 		inputSchema: {
@@ -155,6 +160,7 @@ export const aliasTools: readonly McpToolDefinition[] = [
 	},
 	{
 		name: "memongo_import_conversation_history",
+		canonical: "memongo_import_conversations",
 		description:
 			"Semantic alias for memongo_import_conversations. Import conversation history through the same canonical writeConversationEvent() runtime path.",
 		inputSchema: {

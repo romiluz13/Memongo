@@ -1,5 +1,8 @@
 import { createSubsystemLogger } from "@memongo/lib"
-import type { EnrichmentProvider } from "../packages/memory-engine/src/mongodb-llm-enrichment.js"
+import type {
+	EnrichmentChatUsage,
+	EnrichmentProvider,
+} from "../packages/memory-engine/src/mongodb-llm-enrichment.js"
 import type { BenchmarkE2eQaEnvelope } from "../packages/memory-engine/src/types.js"
 
 /**
@@ -38,12 +41,17 @@ type E2eQaProviderOperation =
 	| "decoy-judge"
 type ProviderCallOutcome = "attempted" | "succeeded" | "failed"
 
+// Observer errors are swallowed on purpose: a broken observer must never
+// fail (or retry) a provider call that actually succeeded or failed.
 function recordProviderCall(
-	observer: ((outcome: ProviderCallOutcome) => void) | undefined,
+	observer:
+		| ((outcome: ProviderCallOutcome, usage?: EnrichmentChatUsage) => void)
+		| undefined,
 	outcome: ProviderCallOutcome,
+	usage?: EnrichmentChatUsage,
 ): void {
 	try {
-		observer?.(outcome)
+		observer?.(outcome, usage)
 	} catch (error) {
 		log.warn("E2E QA provider-call observer failed", { error })
 	}
@@ -74,7 +82,10 @@ export async function generateAnswer(params: {
 	question: string
 	contextPassages: string[]
 	onFailure?: (error: Error) => void
-	onProviderCall?: (outcome: ProviderCallOutcome) => void
+	onProviderCall?: (
+		outcome: ProviderCallOutcome,
+		usage?: EnrichmentChatUsage,
+	) => void
 }): Promise<string> {
 	const context = params.contextPassages
 		.slice(0, MAX_CONTEXT_PASSAGES)
@@ -88,9 +99,10 @@ export async function generateAnswer(params: {
 		'Return only {"answer":"..."}.',
 	].join("\n")
 
+	recordProviderCall(params.onProviderCall, "attempted")
+	let response: Awaited<ReturnType<EnrichmentProvider["chatCompletion"]>>
 	try {
-		recordProviderCall(params.onProviderCall, "attempted")
-		const response = await params.provider.chatCompletion({
+		response = await params.provider.chatCompletion({
 			model: params.model,
 			messages: [
 				{ role: "system", content: ANSWER_SYSTEM_PROMPT },
@@ -99,16 +111,28 @@ export async function generateAnswer(params: {
 			responseFormat: { type: "json_object" },
 			maxTokens: ANSWER_MAX_TOKENS,
 		})
-		const parsed = JSON.parse(stripFences(response.content)) as {
-			answer?: unknown
-		}
-		recordProviderCall(params.onProviderCall, "succeeded")
-		return typeof parsed.answer === "string" ? parsed.answer.trim() : ""
 	} catch (err) {
 		recordProviderCall(params.onProviderCall, "failed")
 		const error = err instanceof Error ? err : new Error(String(err))
 		params.onFailure?.(error)
 		log.warn("answer generation failed", {
+			error: error.message,
+		})
+		return ""
+	}
+	// The transport succeeded: record success — with any usage it reported —
+	// BEFORE parsing the body, so a malformed response neither loses billed
+	// usage nor double-counts as a transport failure.
+	recordProviderCall(params.onProviderCall, "succeeded", response.usage)
+	try {
+		const parsed = JSON.parse(stripFences(response.content)) as {
+			answer?: unknown
+		}
+		return typeof parsed.answer === "string" ? parsed.answer.trim() : ""
+	} catch (err) {
+		const error = err instanceof Error ? err : new Error(String(err))
+		params.onFailure?.(error)
+		log.warn("answer generation returned unparseable output", {
 			error: error.message,
 		})
 		return ""
@@ -122,7 +146,10 @@ export async function judgeAnswer(params: {
 	goldAnswer: string
 	candidateAnswer: string
 	onFailure?: (error: Error) => void
-	onProviderCall?: (outcome: ProviderCallOutcome) => void
+	onProviderCall?: (
+		outcome: ProviderCallOutcome,
+		usage?: EnrichmentChatUsage,
+	) => void
 }): Promise<{ correct: boolean; rationale: string }> {
 	const user = [
 		`QUESTION: ${params.question}`,
@@ -131,9 +158,10 @@ export async function judgeAnswer(params: {
 		'Return only {"correct":...,"rationale":"..."}.',
 	].join("\n")
 
+	recordProviderCall(params.onProviderCall, "attempted")
+	let response: Awaited<ReturnType<EnrichmentProvider["chatCompletion"]>>
 	try {
-		recordProviderCall(params.onProviderCall, "attempted")
-		const response = await params.provider.chatCompletion({
+		response = await params.provider.chatCompletion({
 			model: params.model,
 			messages: [
 				{ role: "system", content: JUDGE_SYSTEM_PROMPT },
@@ -142,11 +170,24 @@ export async function judgeAnswer(params: {
 			responseFormat: { type: "json_object" },
 			maxTokens: JUDGE_MAX_TOKENS,
 		})
+	} catch (err) {
+		recordProviderCall(params.onProviderCall, "failed")
+		const error = err instanceof Error ? err : new Error(String(err))
+		params.onFailure?.(error)
+		log.warn("answer judging failed", {
+			error: error.message,
+		})
+		return { correct: false, rationale: "judge-error" }
+	}
+	// Transport success (with reported usage) is recorded before parsing, so an
+	// unparseable verdict keeps billed usage and is not re-counted as a
+	// transport failure; it degrades to INCORRECT below, never a silent pass.
+	recordProviderCall(params.onProviderCall, "succeeded", response.usage)
+	try {
 		const parsed = JSON.parse(stripFences(response.content)) as {
 			correct?: unknown
 			rationale?: unknown
 		}
-		recordProviderCall(params.onProviderCall, "succeeded")
 		return {
 			// An unparseable/ambiguous verdict is never a silent pass.
 			correct: parsed.correct === true,
@@ -154,10 +195,9 @@ export async function judgeAnswer(params: {
 				typeof parsed.rationale === "string" ? parsed.rationale.trim() : "",
 		}
 	} catch (err) {
-		recordProviderCall(params.onProviderCall, "failed")
 		const error = err instanceof Error ? err : new Error(String(err))
 		params.onFailure?.(error)
-		log.warn("answer judging failed", {
+		log.warn("answer judging returned unparseable output", {
 			error: error.message,
 		})
 		return { correct: false, rationale: "judge-error" }
@@ -219,6 +259,7 @@ export async function runE2eQa(params: {
 	onProviderCall?: (
 		operation: E2eQaProviderOperation,
 		outcome: ProviderCallOutcome,
+		usage?: EnrichmentChatUsage,
 	) => void
 }): Promise<BenchmarkE2eQaEnvelope> {
 	const { provider, model, cases } = params
@@ -272,8 +313,8 @@ export async function runE2eQa(params: {
 			model: answerModel,
 			question: testCase.question,
 			contextPassages: testCase.contextPassages,
-			onProviderCall: (outcome) =>
-				params.onProviderCall?.("answer-generation", outcome),
+			onProviderCall: (outcome, usage) =>
+				params.onProviderCall?.("answer-generation", outcome, usage),
 			onFailure: (error) => {
 				caseError = `answer-generation: ${error.message}`
 			},
@@ -309,8 +350,8 @@ export async function runE2eQa(params: {
 				question: testCase.question,
 				goldAnswer: testCase.goldAnswer,
 				candidateAnswer: candidate,
-				onProviderCall: (outcome) =>
-					params.onProviderCall?.("answer-judge", outcome),
+				onProviderCall: (outcome, usage) =>
+					params.onProviderCall?.("answer-judge", outcome, usage),
 				onFailure: (error) => {
 					caseError = `answer-judge: ${error.message}`
 				},
@@ -331,8 +372,8 @@ export async function runE2eQa(params: {
 				question: testCase.question,
 				goldAnswer: testCase.goldAnswer,
 				candidateAnswer: decoy,
-				onProviderCall: (outcome) =>
-					params.onProviderCall?.("decoy-judge", outcome),
+				onProviderCall: (outcome, usage) =>
+					params.onProviderCall?.("decoy-judge", outcome, usage),
 				onFailure: (error) => {
 					caseError = `decoy-judge: ${error.message}`
 				},
@@ -360,7 +401,9 @@ export async function runE2eQa(params: {
 		answerModel,
 		judge: judgeModel,
 		judgeVersion,
-		accuracy: completedCases > 0 ? correctCount / completedCases : null,
+		// Failures remain attempted and deflate accuracy. The empty set returned
+		// above retains explicit unavailable semantics.
+		accuracy: correctCount / cases.length,
 		latencyMs: totalLatency / cases.length,
 		// Null (not 0) when no viable decoy could be constructed — an unmeasured
 		// probe must not read as a perfectly-calibrated judge.

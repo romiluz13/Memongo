@@ -29,6 +29,7 @@ import type {
 } from "./backend-config.js"
 import { resolveSearchDefaultScope } from "./backend-config.js"
 import { isDuplicateKeyError, normalizeExtraMemoryPaths } from "./internal.js"
+import type { AdmissionToken } from "./mongodb-erasure-epoch.js"
 import { getMemoryStats, type MemoryStats } from "./mongodb-analytics.js"
 import { MongoDBChangeStreamWatcher } from "./mongodb-change-stream.js"
 import {
@@ -119,13 +120,8 @@ import { buildDiscoveryProjection } from "./mongodb-discovery-projections.js"
 import { hydrateActiveSlate } from "./mongodb-active-slate.js"
 import { buildContextBundle as composeContextBundle } from "./mongodb-context-bundle.js"
 import { synthesizeProfile, type ProfileSynthesis } from "./mongodb-profile.js"
-import {
-	checkCache,
-	invalidateQueryCache,
-	writeCache,
-} from "./mongodb-query-cache.js"
+import { invalidateQueryCache } from "./mongodb-query-cache.js"
 import type { QueryCacheInvalidationCoalescer } from "./mongodb-query-cache-invalidation.js"
-import { runSingleFlight } from "./mongodb-single-flight.js"
 import {
 	rewriteQuery,
 	type QueryRewriteConfig,
@@ -196,7 +192,6 @@ import {
 	kbChunksCollection,
 	metaCollection,
 	proceduresCollection,
-	queryCacheCollection,
 	relevanceRunsCollection,
 	resolveSearchIndexReadinessTiming,
 	structuredMemCollection,
@@ -309,7 +304,6 @@ import {
 	rerankResults,
 	resolveExplainSources,
 	resolveRuntimeSearchConfig,
-	shouldUseDetailedSearchCache,
 	type ActiveSources,
 	type RelevanceExplainResult,
 } from "./mongodb-search-ranking.js"
@@ -525,6 +519,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 	private derivationSchedulingQueue: Promise<void> = Promise.resolve()
 	private derivationQueue: Promise<void> = Promise.resolve()
 	private readonly memoryJobWorkerId = `${process.pid}:${randomUUID()}`
+	private memoryJobWorkerGeneration = 0
 	private memoryJobWorkerStopped = true
 	private memoryJobWorkerActive = false
 	private memoryJobWakeRequested = false
@@ -857,8 +852,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 			// shared-registry release) instead of just the bare client.
 			managerRef = manager
 
-			// Phase 4.1 — the tracker now writes raw access events to the time-series
-			// collection while keeping computed access summaries on canonical docs.
+			// Buffered access writes carry the search admission through erasure fencing.
 			manager.accessTracker = new AccessTracker(db, prefix, params.agentId, {
 				flushThreshold: 50,
 				flushIntervalMs: 5_000,
@@ -1001,6 +995,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		agentId: string
 		scope: MemoryScope
 		scopeRef: string
+		admission?: AdmissionToken
 	}): void {
 		writeOpsOf(this).scheduleQueryCacheInvalidation(params)
 	}
@@ -1074,8 +1069,11 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 	 * Record access for returned search results (fire-and-forget).
 	 * Maps canonicalId prefixes to collection names for the AccessTracker.
 	 */
-	private recordSearchAccess(results: MemorySearchResult[]): void {
-		searchOpsOf(this).recordSearchAccess(results)
+	private recordSearchAccess(
+		results: MemorySearchResult[],
+		admission?: AdmissionToken,
+	): void {
+		searchOpsOf(this).recordSearchAccess(results, admission)
 	}
 
 	private setLastSearchMode(mode: string, details?: Record<string, unknown>) {
@@ -1090,9 +1088,11 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 			sessionKey?: string
 			scope?: MemoryScope
 			scopeRef?: string
+			kbRestricted?: boolean
 		},
+		admission?: AdmissionToken,
 	): Promise<MemorySearchResult[]> {
-		return searchOpsOf(this).legacySearch(query, opts)
+		return searchOpsOf(this).legacySearch(query, opts, admission)
 	}
 
 	async search(
@@ -1103,6 +1103,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 			sessionKey?: string
 			scope?: MemoryScope
 			scopeRef?: string
+			kbRestricted?: boolean
 			questionDate?: Date
 			/**
 			 * #66: receives the per-lane latency breakdown of this call. A sink
@@ -1133,14 +1134,16 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		searchScope: MemoryScope
 		searchScopeRef: string
 		operationRunContext?: OperationRunContext
+		readAdmission?: AdmissionToken
 	}): Promise<MemorySearchResult[]> {
 		return searchOpsOf(this).executeSearchUncoalesced(params)
 	}
 
 	async searchDetailed(
 		request: MemorySearchRequest,
+		operationRunContext?: OperationRunContext,
 	): Promise<MemorySearchResponse> {
-		return searchOpsOf(this).searchDetailed(request)
+		return searchOpsOf(this).searchDetailed(request, operationRunContext)
 	}
 
 	async relevanceExplain(params: {
@@ -1151,6 +1154,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		minScore?: number
 		deep?: boolean
 		questionDate?: Date
+		kbRestricted?: boolean
 	}): Promise<RelevanceExplainResult> {
 		return relevanceOpsOf(this).relevanceExplain(params)
 	}
@@ -1248,6 +1252,8 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		opts?: {
 			maxResults?: number
 			minScore?: number
+			scope?: MemoryScope
+			sessionKey?: string
 			scopeRef?: string
 			filter?: { tags?: string[]; category?: string; source?: string }
 			/** Per-call override; defaults to the resolved config fusionMethod. */
@@ -1315,29 +1321,33 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		rawPath: string,
 		from?: number,
 		lines?: number,
+		session?: ClientSession,
 	): Promise<ManagerReadResult> {
-		return readOpsOf(this).readConversationChunk(rawPath, from, lines)
+		return readOpsOf(this).readConversationChunk(rawPath, from, lines, session)
 	}
 
 	private async readCanonicalEvent(
 		eventId: string,
 		rawPath: string,
+		session?: ClientSession,
 	): Promise<ManagerReadResult> {
-		return readOpsOf(this).readCanonicalEvent(eventId, rawPath)
+		return readOpsOf(this).readCanonicalEvent(eventId, rawPath, session)
 	}
 
 	private async readBridgeChunk(
 		rawPath: string,
 		from?: number,
 		lines?: number,
+		session?: ClientSession,
 	): Promise<ManagerReadResult> {
-		return readOpsOf(this).readBridgeChunk(rawPath, from, lines)
+		return readOpsOf(this).readBridgeChunk(rawPath, from, lines, session)
 	}
 
 	private async readEpisodeLocator(params: {
 		rawPath: string
 		episodeId: string
 		expandEvents: boolean
+		session?: ClientSession
 	}): Promise<ManagerReadResult> {
 		return readOpsOf(this).readEpisodeLocator(params)
 	}
@@ -1354,14 +1364,20 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		return syncOpsOf(this).sync(params)
 	}
 
-	private async repairEventProjections(): Promise<{
+	private async repairEventProjections(params?: {
+		admission?: AdmissionToken
+		singleBatch?: boolean
+	}): Promise<{
 		eventsProcessed: number
 		chunksCreated: number
 	}> {
-		return syncOpsOf(this).repairEventProjections()
+		return syncOpsOf(this).repairEventProjections(params)
 	}
 
-	async repairExtractionOutbox(params?: { limit?: number }): Promise<{
+	async repairExtractionOutbox(params?: {
+		limit?: number
+		admission?: AdmissionToken
+	}): Promise<{
 		eventsProcessed: number
 		jobsCreated: number
 		jobsReleased: number
@@ -1528,9 +1544,17 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 	 * C-003 tenant-level erasure: delete every document this agent owns
 	 * across every collection. Irreversible; returns per-collection receipts
 	 * and the proof-of-erasure audit record id.
+	 *
+	 * Gate semantics: the sweep runs behind the per-agent erasure gate;
+	 * recovery:"takeover" deliberately replaces the observed owner (it can
+	 * replace a paused live owner), and an ordinary request on an active
+	 * owner conflicts — the ErasureGateConflictError propagates to the
+	 * route's typed 409.
 	 */
-	async deleteAllForAgent(): Promise<TenantErasureReceipt> {
-		return adminOpsOf(this).deleteAllForAgent()
+	async deleteAllForAgent(params?: {
+		recovery?: "takeover"
+	}): Promise<TenantErasureReceipt> {
+		return adminOpsOf(this).deleteAllForAgent(params)
 	}
 
 	/** C-004: list this agent's quarantine review queue, oldest first. */
@@ -1571,6 +1595,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 	// C2-manager audit fix: synthesizeProfile delegation to standalone function
 	async synthesizeProfile(
 		params: {
+			sessionId?: string
 			scope?: MemoryScope
 			scopeRef?: string
 			maxPerType?: number
@@ -1583,7 +1608,12 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 	}
 
 	async hydrateActiveSlate(
-		params: { scope?: MemoryScope; scopeRef?: string; maxItems?: number } = {},
+		params: {
+			scope?: MemoryScope
+			scopeRef?: string
+			sessionId?: string
+			maxItems?: number
+		} = {},
 	): Promise<MemoryActiveSlate> {
 		return lifecycleOpsOf(this).hydrateActiveSlate(params)
 	}
@@ -1687,8 +1717,10 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		)
 	}
 
-	private async drainMemoryJobQueue(): Promise<void> {
-		return jobsOpsOf(this).drainMemoryJobQueue()
+	private async drainMemoryJobQueue(params?: {
+		admission?: AdmissionToken
+	}): Promise<void> {
+		return jobsOpsOf(this).drainMemoryJobQueue(params)
 	}
 
 	/**
@@ -1706,12 +1738,22 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		return jobsOpsOf(this).prefetchExtractionSessionFacts(jobs)
 	}
 
-	private wakeMemoryJobWorker(): void {
-		jobsOpsOf(this).wakeMemoryJobWorker()
+	private wakeMemoryJobWorker(
+		admission?: AdmissionToken,
+		generation?: number,
+		expectedTimer?: NodeJS.Timeout,
+	): void {
+		jobsOpsOf(this).wakeMemoryJobWorker(admission, generation, expectedTimer)
 	}
 
-	private startMemoryJobWorker(): void {
-		jobsOpsOf(this).startMemoryJobWorker()
+	private startMemoryJobWorker(
+		admission?: AdmissionToken,
+		generation?: number,
+	): void {
+		jobsOpsOf(this).startMemoryJobWorker(
+			admission,
+			generation ?? this.memoryJobWorkerGeneration,
+		)
 	}
 
 	private async stopMemoryJobWorker(): Promise<void> {
@@ -1722,11 +1764,13 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		eventId: string,
 		tenant?: { scope?: MemoryScope; scopeRef?: string },
 		runContext?: OperationRunContext,
+		params?: { admission?: AdmissionToken; generation?: number },
 	): Promise<{ jobId: string; scheduled: boolean }> {
 		return jobsOpsOf(this).scheduleBackgroundExtraction(
 			eventId,
 			tenant,
 			runContext,
+			params,
 		)
 	}
 
@@ -1739,6 +1783,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 		scope: MemoryScope
 		scopeRef: string
 		runContext?: OperationRunContext
+		admission?: AdmissionToken
 	}): Promise<void> {
 		return jobsOpsOf(this).schedulePostWriteDerivations(params)
 	}
@@ -1780,6 +1825,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 			scope?: MemoryScope
 			scopeRef?: string
 		}
+		session?: ClientSession
 	}): Promise<{ eventId: string; chunkCreated: boolean } | null> {
 		return writeOpsOf(this).replayIdempotentEventWrite(params)
 	}
@@ -1802,6 +1848,7 @@ export class MongoDBMemoryManager implements MemorySearchManager {
 	async pruneIdempotencyFingerprints(params?: {
 		olderThanDays?: number
 		force?: boolean
+		admission?: AdmissionToken
 	}): Promise<{ pruned: number }> {
 		return writeOpsOf(this).pruneIdempotencyFingerprints(params)
 	}

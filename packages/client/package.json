@@ -1,6 +1,6 @@
 {
 	"name": "@memongo/client",
-	"version": "2.1.0",
+	"version": "2.2.0",
 	"description": "TypeScript client SDK for the Memongo HTTP API",
 	"type": "module",
 	"engines": {
@@ -24,7 +24,8 @@
 	"types": "./dist/index.d.ts",
 	"files": [
 		"dist",
-		"README.md"
+		"README.md",
+		"NOTICE"
 	],
 	"exports": {
 		".": {
@@ -40,7 +41,7 @@
 		"prepublishOnly": "bun run build"
 	},
 	"devDependencies": {
-		"@memongo/lib": "^2.1.0",
+		"@memongo/lib": "^2.2.0",
 		"typescript": "^5.8.0"
 	},
 	"homepage": "https://github.com/romiluz13/memongo#readme",

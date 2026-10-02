@@ -1,6 +1,11 @@
 import { createSubsystemLogger } from "@memongo/lib"
 import type { RelationType } from "./mongodb-graph.js"
-import type { EnrichmentProvider } from "./mongodb-llm-enrichment.js"
+import {
+	EnrichmentParseError,
+	EnrichmentResponseError,
+	formatEnrichmentUsage,
+	type EnrichmentProvider,
+} from "./mongodb-llm-enrichment.js"
 
 /**
  * LLM typed semantic relation extraction (issue #34).
@@ -11,8 +16,14 @@ import type { EnrichmentProvider } from "./mongodb-llm-enrichment.js"
  * extracted entities (works_on, owns, depends_on, ...), so $graphLookup
  * traversal carries real meaning.
  *
- * Every failure path degrades to an empty result rather than throwing, so a
- * missing/misbehaving LLM never blocks a write.
+ * Fail-loud by design: provider-call failures, unusable provider responses
+ * (empty/refusal/length/malformed envelope — see EnrichmentResponseShape), and
+ * unparseable completions all THROW typed errors. There is no repair ladder and
+ * no empty-result fallback: fabricated or guessed relations would poison the
+ * graph. Recovery is owned by the durable memory-job layer, which retries the
+ * whole extraction a bounded number of times and dead-letters with the error
+ * message verbatim — so these messages must stay self-describing (they are the
+ * only provenance an operator sees).
  */
 
 const log = createSubsystemLogger("memory:mongodb:relation-extraction")
@@ -21,6 +32,26 @@ const MAX_TOKENS = 2048
 // Cap the entity set fed to the model; the caller narrows to one event's
 // entities, this is a hard ceiling on prompt size and edge fan-out.
 const MAX_ENTITIES = 25
+
+/**
+ * Relation-lane completion limit (repair 2026-09-21): env-configurable via
+ * MEMONGO_LLM_RELATION_EXTRACTION_MAX_TOKENS, default 2048, resolved at the
+ * single shared provider call. A non-safe-integer or non-positive value is a
+ * sanitized refusal raised BEFORE any provider dispatch (value never echoed).
+ */
+function resolveRelationMaxTokens(
+	envValue: string | undefined = process.env
+		.MEMONGO_LLM_RELATION_EXTRACTION_MAX_TOKENS,
+): number {
+	if (envValue === undefined || envValue.trim() === "") return MAX_TOKENS
+	const parsed = Number(envValue.trim())
+	if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+		throw new Error(
+			"MEMONGO_LLM_RELATION_EXTRACTION_MAX_TOKENS must be a positive integer; refusing before dispatch",
+		)
+	}
+	return parsed
+}
 
 // Extractable semantic types — everything except:
 //  - `mentioned_with`: the co-occurrence default the rule-based path emits.
@@ -105,11 +136,20 @@ export async function extractTypedRelations(params: {
 	entities: Array<{ entityId: string; name: string }>
 }): Promise<TypedRelationCandidate[]> {
 	const { provider, model, text } = params
+	// Invalid caps refuse before ANY provider call, regardless of the
+	// entity count below.
+	const maxTokens = resolveRelationMaxTokens()
 	const entities = params.entities.slice(0, MAX_ENTITIES)
 	if (entities.length < 2) return []
 	const validIds = new Set(entities.map((e) => e.entityId))
 
 	let content: string
+	let responseMeta:
+		| Awaited<ReturnType<EnrichmentProvider["chatCompletion"]>>["responseMeta"]
+		| undefined
+	let responseUsage:
+		| Awaited<ReturnType<EnrichmentProvider["chatCompletion"]>>["usage"]
+		| undefined
 	try {
 		const response = await provider.chatCompletion({
 			model,
@@ -118,14 +158,53 @@ export async function extractTypedRelations(params: {
 				{ role: "user", content: buildUserPrompt(text, entities) },
 			],
 			responseFormat: { type: "json_object" },
-			maxTokens: MAX_TOKENS,
+			maxTokens,
 		})
 		content = response.content
+		responseMeta = response.responseMeta
+		responseUsage = response.usage
 	} catch (err) {
 		log.warn("relation extraction LLM call failed", {
 			error: err instanceof Error ? err.message : String(err),
 		})
 		throw err
+	}
+
+	// Usable-response gate: an empty/refused/filtered/length-truncated/malformed
+	// envelope cannot yield relations. Fail loud with the typed cause — never
+	// fabricate or repair, and never silently return [] (that would make a
+	// dead provider look like "no relations found"). A legacy provider without
+	// responseMeta can only be judged by its content, so empty content maps to
+	// the empty-content shape. Provenance rides in the error STRING (job
+	// dead-letter persistence) — the job metadata field is not used for
+	// response diagnostics (p6: it wholesale-replaces caller metadata).
+	const shape = responseMeta?.shape ?? (content === "" ? "empty-content" : "ok")
+	if (content === "" || shape !== "ok") {
+		const usageFragment =
+			responseUsage !== undefined
+				? `, ${formatEnrichmentUsage(responseUsage)}`
+				: ""
+		const error = new EnrichmentResponseError(
+			`relation extraction: provider response unusable (shape=${shape}, finishReason=${
+				responseMeta?.finishReason ?? "unknown"
+			}, refusal=${responseMeta?.refusal === true}, provider=${
+				provider.name
+			}${usageFragment})`,
+			shape,
+			responseMeta?.finishReason,
+			responseMeta?.refusal,
+			responseUsage,
+		)
+		log.warn("relation extraction provider response unusable", {
+			shape,
+			finishReason: responseMeta?.finishReason ?? "unknown",
+			refusal: responseMeta?.refusal === true,
+			provider: provider.name,
+			...(responseUsage !== undefined
+				? { usage: formatEnrichmentUsage(responseUsage) }
+				: {}),
+		})
+		throw error
 	}
 
 	let parsed: unknown
@@ -137,8 +216,21 @@ export async function extractTypedRelations(params: {
 	} catch (err) {
 		log.warn("relation extraction JSON parse failed", {
 			preview: content.slice(0, 200),
+			finishReason: responseMeta?.finishReason ?? "unknown",
 		})
-		throw err
+		// Labeled parse error: finish_reason "length" means the completion was
+		// cut mid-JSON by the token budget; anything else is malformed model
+		// output. The label rides along into the job dead-letter error string.
+		// F7: no raw payload in error strings — only sanitized provenance
+		// (finishReason/provider). Length never reaches this branch: the
+		// classifier types finish_reason=length before any parse judgment, so
+		// the usable-response gate above already threw. The pre-existing
+		// preview log line above is unchanged.
+		throw new EnrichmentParseError(
+			`relation extraction JSON parse failed (finishReason=${
+				responseMeta?.finishReason ?? "unknown"
+			}, provider=${provider.name})`,
+		)
 	}
 
 	if (!parsed || typeof parsed !== "object") return []

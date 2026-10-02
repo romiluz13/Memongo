@@ -106,8 +106,8 @@ export function getExpectedSearchIndexTargets(
 	const plannedSearchIndexCount = rawSessionIndexProfile
 		? 1
 		: evidenceMirrorEnabled
-			? 17
-			: 15
+			? 16
+			: 14
 	const budget = assertIndexBudget(profile, plannedSearchIndexCount)
 	const reducedBudget =
 		!budget.withinBudget &&
@@ -194,10 +194,6 @@ export function getExpectedSearchIndexTargets(
 			],
 		},
 		...evidenceTargets,
-		{
-			collectionName: `${prefix}query_cache`,
-			indexNames: [`${prefix}query_cache_vector`],
-		},
 		{
 			collectionName: `${prefix}entities`,
 			indexNames: ["entity_autocomplete"],
@@ -293,8 +289,6 @@ export function autoEmbedVectorField(
  *   $exists:false branches would pass every document and bi-temporal
  *   enforcement would silently die. Events also carry the largest corpus,
  *   so mirroring bodies into mongot is the most expensive place to start.
- * - query_cache: its `results` field is an unbounded array of serialized
- *   search results; storing it would inflate the index materially.
  * - memory_evidence: no latency-critical consumer.
  * Consolidator and novelty pipelines never pass returnStoredSource, so they
  * keep reading full documents regardless of what the index stores.

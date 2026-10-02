@@ -55,6 +55,7 @@ const bridgeMocks = vi.hoisted(() => ({
 vi.mock("@memongo/memory-bridge", () => bridgeMocks)
 
 import { createApp } from "./app.js"
+import { adminPaths } from "./openapi-paths-admin.js"
 
 describe("createApp", () => {
 	const prevEnv = { ...process.env }
@@ -1177,12 +1178,109 @@ describe("createApp", () => {
 		const res = await createApp().request("/v1/admin/erase", {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ confirm: "erase" }),
+			body: JSON.stringify({ confirm: "erase", agentId: "agent-42" }),
 		})
 
 		expect(res.status).toBe(500)
 		const json = (await res.json()) as { error: { code: string } }
 		expect(json.error.code).toBe("ERASE_FAILED")
+	})
+
+	it("forwards a deliberate recovery takeover to the bridge unchanged", async () => {
+		bridgeMocks.memongoBridgeDeleteAllForAgent.mockResolvedValue({
+			agentId: "agent-42",
+			status: "partial",
+			runId: "run-1",
+			gateState: "erasing",
+			receipts: [],
+			completedAt: "2026-08-15T00:00:00.000Z",
+		})
+
+		const res = await createApp().request("/v1/admin/erase", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				confirm: "erase",
+				agentId: "agent-42",
+				recovery: "takeover",
+			}),
+		})
+
+		expect(res.status).toBe(200)
+		// The literal flows unchanged — no layer in the chain translates it,
+		// and the engine's additive receipt fields cross the route verbatim.
+		expect(bridgeMocks.memongoBridgeDeleteAllForAgent).toHaveBeenCalledWith({
+			agentId: "agent-42",
+			recovery: "takeover",
+		})
+		await expect(res.json()).resolves.toEqual(
+			expect.objectContaining({ status: "partial", gateState: "erasing" }),
+		)
+	})
+
+	it("rejects a recovery value other than the takeover literal", async () => {
+		for (const body of [
+			{ confirm: "erase", recovery: "resume" },
+			{ confirm: "erase", recovery: true },
+		]) {
+			const res = await createApp().request("/v1/admin/erase", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify(body),
+			})
+			expect(res.status).toBe(400)
+			const json = (await res.json()) as { error: { code: string } }
+			expect(json.error.code).toBe("VALIDATION_ERROR")
+		}
+		// The engine only ever sees "takeover" or no recovery intent at all.
+		expect(bridgeMocks.memongoBridgeDeleteAllForAgent).not.toHaveBeenCalled()
+	})
+
+	it("maps a gate conflict to the typed 409 with agentId and no snapshot", async () => {
+		// Name-stable construction, matching the route guard (engine classes
+		// do not cross every boundary as instanceof).
+		const conflict = new Error(
+			"erasure gate conflict at mongodb://writer:super-secret@localhost",
+		)
+		conflict.name = "ErasureGateConflictError"
+		bridgeMocks.memongoBridgeDeleteAllForAgent.mockRejectedValueOnce(conflict)
+
+		const res = await createApp().request("/v1/admin/erase", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ confirm: "erase", agentId: "agent-42" }),
+		})
+
+		expect(res.status).toBe(409)
+		// F7 deferred: the body carries the typed code and the targeted
+		// agentId ONLY — never a gate snapshot — and no upstream text leaks
+		// (the message is route-authored, so redaction is a no-op).
+		const json = (await res.json()) as Record<string, unknown>
+		expect(json).toEqual({
+			error: {
+				code: "ERASURE_GATE_CONFLICT",
+				message: "erase conflicts with the erasure gate state",
+			},
+			agentId: "agent-42",
+		})
+	})
+
+	it("documents the takeover semantics and 409 race in the erase spec entry", () => {
+		const erase = adminPaths["/v1/admin/erase"].post
+		// Takeover replaces a paused live owner — the operator is the
+		// liveness oracle; ordinary requests never silently take over.
+		expect(erase.description).toContain("replaces a paused live erasure owner")
+		const schema = erase.requestBody?.content["application/json"]
+			.schema as Record<string, unknown>
+		const recovery = (schema.properties as Record<string, { enum?: string[] }>)
+			.recovery
+		expect(recovery?.enum).toEqual(["takeover"])
+		const responses = erase.responses as Record<string, { description: string }>
+		// The begin-conflict→takeover finalize race is documented at the 409.
+		expect(responses["409"]?.description).toContain("may have finalized")
+		expect(Object.keys(responses)).toEqual(
+			expect.arrayContaining(["200", "400", "409"]),
+		)
 	})
 
 	it("rejects a scoped API key from the admin-only erase route", async () => {
@@ -1245,15 +1343,17 @@ describe("createApp", () => {
 		})
 	})
 
-	it("drops an invalid quarantine status filter instead of erroring", async () => {
+	it("rejects an invalid quarantine status filter before the bridge", async () => {
 		bridgeMocks.memongoBridgeListQuarantined.mockResolvedValue([])
 		const res = await createApp().request("/v1/admin/quarantine?status=garbage")
-		expect(res.status).toBe(200)
-		expect(bridgeMocks.memongoBridgeListQuarantined).toHaveBeenCalledWith({
-			agentId: undefined,
-			status: undefined,
-			limit: undefined,
+		expect(res.status).toBe(400)
+		expect(await res.json()).toEqual({
+			error: {
+				code: "VALIDATION_ERROR",
+				message: "status must be pending-review|promoting|promoted|rejected",
+			},
 		})
+		expect(bridgeMocks.memongoBridgeListQuarantined).not.toHaveBeenCalled()
 	})
 
 	it("returns QUARANTINE_LIST_FAILED when the bridge throws", async () => {

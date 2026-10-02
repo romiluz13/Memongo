@@ -26,7 +26,7 @@ const llmState = {
 }
 
 vi.mock("./mongodb-llm-enrichment.js", async (importOriginal) => {
-	const actual = await importOriginal()
+	const actual = await importOriginal<Record<string, unknown>>()
 	return {
 		...actual,
 		resolveEnrichmentProvider: () => ({
@@ -58,7 +58,7 @@ vi.mock("./mongodb-llm-enrichment.js", async (importOriginal) => {
 })
 
 vi.mock("./mongodb-graph.js", async (importOriginal) => {
-	const actual = await importOriginal()
+	const actual = await importOriginal<Record<string, unknown>>()
 	return {
 		...actual,
 		extractAndUpsertEntities: vi.fn(async () => ({ entities: [] })),
@@ -250,6 +250,78 @@ describe("consolidation gate + promotion — collection state", () => {
 })
 
 describe("NOOP gate — similarity decision against stored state", () => {
+	it.each([
+		["invalidated", { state: "invalidated" }, false, 1],
+		["inferred", { provenance: { origin: "llm-inference" } }, false, 1],
+		["observed", { provenance: { origin: "user" } }, false, 0],
+		["legacy", { state: undefined, provenance: undefined }, false, 0],
+		["stale invalidated", { state: "invalidated" }, true, 1],
+		["stale owner", { agentId: "another-agent" }, true, 1],
+		["stale scope", { scope: "workspace" }, true, 1],
+		["stale scope reference", { scopeRef: "agent:another" }, true, 1],
+		["expired", { expiresAt: new Date(0) }, false, 1],
+		["low score", {}, true, 1],
+		["probe failure", {}, true, 1],
+	] as const)("%s lookalike preserves the promotion decision", async (label, patch, staleIndex, promoted) => {
+		const fake = createStatefulMongoFake({ prefix: PREFIX })
+		await seedFact(fake, {
+			key: "existing decision record",
+			type: "decision",
+			value: "We decided to use Biome for linting",
+		})
+		const structured = fake.collection("structured_mem")
+		const fields: Document = { ...patch }
+		const unset: Document = {}
+		for (const key of Object.keys(fields)) {
+			if (fields[key] === undefined) {
+				unset[key] = ""
+				delete fields[key]
+			}
+		}
+		await structured.updateOne(
+			{ key: "existing decision record" },
+			{ $set: fields, $unset: unset },
+		)
+		const original = structured.aggregate.bind(structured)
+		const probes: Document[][] = []
+		const spy = vi
+			.spyOn(structured, "aggregate")
+			.mockImplementation((pipeline) => {
+				const vector = pipeline[0]?.$vectorSearch as Document | undefined
+				if (vector?.numCandidates !== 100) return original(pipeline)
+				probes.push(pipeline)
+				if (label === "probe failure") throw new Error("owned probe failure")
+				if (!staleIndex) return original(pipeline)
+				return original([
+					{ $match: { key: "existing decision record" } },
+					{ $addFields: { score: label === "low score" ? 0.5 : 0.99 } },
+					...pipeline.slice(2),
+				])
+			})
+		try {
+			await seedEvent(fake, {
+				eventId: "evt-repeat",
+				body: "We decided to use Biome for linting",
+			})
+			const result = await consolidateMemory({
+				db: fake.db,
+				prefix: PREFIX,
+				agentId: AGENT,
+			})
+			expect(probes).toHaveLength(1)
+			expect(result.factsPromoted).toBe(promoted)
+			expect(result.eventsProcessed).toBe(1)
+			if (promoted) {
+				expect(
+					fake.findDoc("structured_mem", { key: "to use Biome for linting" })
+						?.sourceEventIds,
+				).toEqual(["evt-repeat"])
+			}
+		} finally {
+			spy.mockRestore()
+		}
+	})
+
 	it("does not promote a fact when an identical memory already exists", async () => {
 		const fake = createStatefulMongoFake({ prefix: PREFIX })
 		await seedFact(fake, {

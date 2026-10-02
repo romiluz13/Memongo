@@ -388,8 +388,7 @@ describe("ensureSearchIndexes", () => {
 		// events is excluded because its recall pipelines $match on
 		// validAt/invalidAt AFTER $vectorSearch — with returnStoredSource and
 		// those fields missing, $exists:false branches pass everything and
-		// bi-temporal enforcement silently dies; query_cache is excluded
-		// because its results blob is unbounded; memory_evidence keeps full
+		// bi-temporal enforcement silently dies; memory_evidence keeps full
 		// lookup. Consolidator/novelty paths never pass returnStoredSource, so
 		// they keep reading full documents regardless.
 		const previous = process.env.MEMONGO_VECTOR_STORED_SOURCE
@@ -1074,10 +1073,6 @@ describe("search index readiness helpers", () => {
 			{
 				collectionName: "test_session_chunks",
 				indexNames: ["test_session_chunks_text", "test_session_chunks_vector"],
-			},
-			{
-				collectionName: "test_query_cache",
-				indexNames: ["test_query_cache_vector"],
 			},
 			{
 				collectionName: "test_entities",

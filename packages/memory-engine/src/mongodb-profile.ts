@@ -6,10 +6,32 @@ import {
 	episodesCollection,
 	eventsCollection,
 } from "./mongodb-schema.js"
-import { buildUnexpiredClause } from "./mongodb-temporal.js"
-import { emitTelemetry } from "./mongodb-telemetry.js"
+import {
+	buildCurrentValidityClause,
+	buildUnexpiredClause,
+	mergeQueryClauses,
+} from "./mongodb-temporal.js"
+import { emitTelemetry, type TelemetryDocument } from "./mongodb-telemetry.js"
+import {
+	ErasureGateConflictError,
+	type AdmissionToken,
+} from "./mongodb-write-fence.js"
 
 const log = createSubsystemLogger("memory:mongodb:profile")
+function emitReadTelemetry(
+	db: Db,
+	prefix: string,
+	doc: Omit<TelemetryDocument, "ts">,
+	admission?: AdmissionToken,
+): void {
+	if (admission) {
+		void emitTelemetry(db, prefix, doc, { admission }).catch(() =>
+			log.warn("profile telemetry emit failed"),
+		)
+	} else {
+		emitTelemetry(db, prefix, doc)
+	}
+}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -76,6 +98,7 @@ export type ActivityPatterns = {
  * event activity patterns.
  */
 export async function synthesizeProfile(params: {
+	admission?: AdmissionToken
 	db: Db
 	prefix: string
 	agentId: string
@@ -102,173 +125,169 @@ export async function synthesizeProfile(params: {
 		maxEpisodes = 10,
 		activityWindowMs = 30 * 24 * 60 * 60 * 1000,
 	} = params
+	if (
+		params.admission &&
+		(params.admission.kind !== "admission" ||
+			params.admission.agentId !== agentId)
+	)
+		throw new ErasureGateConflictError(agentId)
 
 	const scopeFilter = { agentId, scope, scopeRef }
-
-	// Settled-query helper: each query catches its own errors and returns null on failure.
-	// This gives partial-result resilience — if one query fails, the others still contribute.
-	async function settled<T>(
-		label: string,
-		fn: () => Promise<T>,
-	): Promise<T | null> {
-		try {
-			return await fn()
-		} catch (err) {
-			log.warn(`synthesizeProfile: ${label} query failed`, { error: err })
-			return null
-		}
-	}
+	// One captured instant for the temporal guards and the activity window so
+	// every guard evaluates against the same moment.
+	const asOf = new Date()
+	const activitySince = new Date(asOf.getTime() - activityWindowMs)
 
 	try {
-		// Run all 4 queries concurrently — each is independent and fault-isolated
+		// Run all 4 queries concurrently; a source failure rejects the whole
+		// synthesis into the outer ok:false path instead of resolving empty.
 		const [structuredResults, entityResults, episodeResults, activityResults] =
 			await Promise.all([
 				// 1. Structured memory via $facet (single pass, pre-filtered by $match to stay under 100MB)
-				settled("structured", () =>
-					structuredMemCollection(db, prefix)
-						.aggregate([
-							// P4.4.1 (B1): hide TTL-expired docs until the sweep removes
-							// them.
-							{
-								$match: {
-									...scopeFilter,
-									state: "active",
-									...buildUnexpiredClause(),
-								},
+				structuredMemCollection(db, prefix)
+					.aggregate([
+						// P4.4.1 (B1): hide TTL-expired docs until the sweep removes
+						// them.
+						{
+							$match: mergeQueryClauses(
+								scopeFilter,
+								{ state: "active" },
+								buildUnexpiredClause({ asOf }),
+								buildCurrentValidityClause({ asOf }),
+							),
+						},
+						{
+							$facet: {
+								preferences: [
+									{ $match: { type: "preference" } },
+									{ $sort: { updatedAt: -1 } },
+									{ $limit: maxPerType },
+									{
+										$project: { key: 1, value: 1, salience: 1, updatedAt: 1 },
+									},
+								],
+								decisions: [
+									{ $match: { type: "decision" } },
+									{ $sort: { updatedAt: -1 } },
+									{ $limit: maxPerType },
+									{
+										$project: { key: 1, value: 1, salience: 1, updatedAt: 1 },
+									},
+								],
+								facts: [
+									{ $match: { type: "fact" } },
+									{ $sort: { updatedAt: -1 } },
+									{ $limit: maxPerType },
+									{
+										$project: { key: 1, value: 1, salience: 1, updatedAt: 1 },
+									},
+								],
+								todos: [
+									{ $match: { type: "todo" } },
+									{ $sort: { updatedAt: -1 } },
+									{ $limit: maxPerType },
+									{
+										$project: { key: 1, value: 1, salience: 1, updatedAt: 1 },
+									},
+								],
 							},
-							{
-								$facet: {
-									preferences: [
-										{ $match: { type: "preference" } },
-										{ $sort: { updatedAt: -1 } },
-										{ $limit: maxPerType },
-										{
-											$project: { key: 1, value: 1, salience: 1, updatedAt: 1 },
-										},
-									],
-									decisions: [
-										{ $match: { type: "decision" } },
-										{ $sort: { updatedAt: -1 } },
-										{ $limit: maxPerType },
-										{
-											$project: { key: 1, value: 1, salience: 1, updatedAt: 1 },
-										},
-									],
-									facts: [
-										{ $match: { type: "fact" } },
-										{ $sort: { updatedAt: -1 } },
-										{ $limit: maxPerType },
-										{
-											$project: { key: 1, value: 1, salience: 1, updatedAt: 1 },
-										},
-									],
-									todos: [
-										{ $match: { type: "todo" } },
-										{ $sort: { updatedAt: -1 } },
-										{ $limit: maxPerType },
-										{
-											$project: { key: 1, value: 1, salience: 1, updatedAt: 1 },
-										},
-									],
-								},
-							},
-						])
-						.toArray(),
-				),
+						},
+					])
+					.toArray(),
 
 				// 2. Top entities by relation count via two indexed $eq lookups (C2/M3 audit fix)
 				// Split $or in $expr into two separate $lookup stages so each can use its own index.
 				// $expr with $or cannot use indexes; $expr with $eq can.
-				settled("entities", () =>
-					entitiesCollection(db, prefix)
-						.aggregate([
-							{ $match: scopeFilter },
-							// Lookup 1: outgoing relations count (uses index on fromEntityId)
-							{
-								$lookup: {
-									from: `${prefix}relations`,
-									let: { eid: "$entityId" },
-									pipeline: [
-										{
-											$match: {
-												$expr: { $eq: ["$fromEntityId", "$$eid"] },
-												...scopeFilter,
-											},
+				entitiesCollection(db, prefix)
+					.aggregate([
+						{ $match: scopeFilter },
+						// Lookup 1: outgoing relations count (uses index on fromEntityId)
+						{
+							$lookup: {
+								from: `${prefix}relations`,
+								let: { eid: "$entityId" },
+								pipeline: [
+									{
+										$match: {
+											$expr: { $eq: ["$fromEntityId", "$$eid"] },
+											...scopeFilter,
 										},
-										{ $count: "cnt" },
-									],
-									as: "outRels",
-								},
-							},
-							// Lookup 2: incoming relations count (uses index on toEntityId)
-							{
-								$lookup: {
-									from: `${prefix}relations`,
-									let: { eid: "$entityId" },
-									pipeline: [
-										{
-											$match: {
-												$expr: { $eq: ["$toEntityId", "$$eid"] },
-												...scopeFilter,
-											},
-										},
-										{ $count: "cnt" },
-									],
-									as: "inRels",
-								},
-							},
-							// Sum the two counts (no full relation docs in memory — only $count results)
-							{
-								$addFields: {
-									relationCount: {
-										$add: [
-											{ $ifNull: [{ $arrayElemAt: ["$outRels.cnt", 0] }, 0] },
-											{ $ifNull: [{ $arrayElemAt: ["$inRels.cnt", 0] }, 0] },
-										],
 									},
+									{ $count: "cnt" },
+								],
+								as: "outRels",
+							},
+						},
+						// Lookup 2: incoming relations count (uses index on toEntityId)
+						{
+							$lookup: {
+								from: `${prefix}relations`,
+								let: { eid: "$entityId" },
+								pipeline: [
+									{
+										$match: {
+											$expr: { $eq: ["$toEntityId", "$$eid"] },
+											...scopeFilter,
+										},
+									},
+									{ $count: "cnt" },
+								],
+								as: "inRels",
+							},
+						},
+						// Sum the two counts (no full relation docs in memory — only $count results)
+						{
+							$addFields: {
+								relationCount: {
+									$add: [
+										{ $ifNull: [{ $arrayElemAt: ["$outRels.cnt", 0] }, 0] },
+										{ $ifNull: [{ $arrayElemAt: ["$inRels.cnt", 0] }, 0] },
+									],
 								},
 							},
-							{ $sort: { relationCount: -1 } },
-							{ $limit: maxEntities },
-							{ $project: { name: 1, type: 1, relationCount: 1 } },
-						])
-						.toArray(),
-				),
+						},
+						{ $sort: { relationCount: -1 } },
+						{ $limit: maxEntities },
+						{ $project: { name: 1, type: 1, relationCount: 1 } },
+					])
+					.toArray(),
 
 				// 3. Recent episodes
-				settled("episodes", () =>
-					episodesCollection(db, prefix)
-						.find({ ...scopeFilter, status: { $ne: "deleted" } })
-						// MongoDB FindCursor.sort — not Array#sort (unicorn false positive).
-						// oxlint-disable-next-line unicorn/no-array-sort
-						.sort({ "timeRange.start": -1 })
-						.limit(maxEpisodes)
-						.project({ title: 1, summary: 1, type: 1, timeRange: 1 })
-						.toArray(),
-				),
+				episodesCollection(db, prefix)
+					.find({ ...scopeFilter, status: { $ne: "deleted" } })
+					// MongoDB FindCursor.sort — not Array#sort (unicorn false positive).
+					// oxlint-disable-next-line unicorn/no-array-sort
+					.sort({ "timeRange.start": -1 })
+					.limit(maxEpisodes)
+					.project({ title: 1, summary: 1, type: 1, timeRange: 1 })
+					.toArray(),
 
 				// 4. Activity patterns from events (last N days)
-				settled("activity", () => {
-					const activitySince = new Date(Date.now() - activityWindowMs)
-					return eventsCollection(db, prefix)
-						.aggregate([
-							{
-								$match: { ...scopeFilter, timestamp: { $gte: activitySince } },
+				eventsCollection(db, prefix)
+					.aggregate([
+						{
+							// P4.4.1 (B1): hide TTL-expired docs until the sweep removes
+							// them — the same read-side guard the other events readers
+							// apply.
+							$match: mergeQueryClauses(
+								scopeFilter,
+								buildUnexpiredClause({ asOf }),
+								{ timestamp: { $gte: activitySince } },
+							),
+						},
+						{
+							$group: {
+								_id: "$role",
+								count: { $sum: 1 },
+								lastTs: { $max: "$timestamp" },
 							},
-							{
-								$group: {
-									_id: "$role",
-									count: { $sum: 1 },
-									lastTs: { $max: "$timestamp" },
-								},
-							},
-						])
-						.toArray()
-				}),
+						},
+					])
+					.toArray(),
 			])
 
-		// Assemble results with graceful defaults for failed queries
-		const structured = structuredResults?.[0] ?? {
+		// Assemble results; the defaults cover legitimately empty sources.
+		const structured = structuredResults[0] ?? {
 			preferences: [],
 			decisions: [],
 			facts: [],
@@ -278,7 +297,7 @@ export async function synthesizeProfile(params: {
 		const roleDistribution: Record<string, number> = {}
 		let totalEvents = 0
 		let lastActive: Date | null = null
-		for (const r of activityResults ?? []) {
+		for (const r of activityResults) {
 			roleDistribution[r._id as string] = r.count as number
 			totalEvents += r.count as number
 			const ts = r.lastTs as Date
@@ -288,12 +307,17 @@ export async function synthesizeProfile(params: {
 		}
 
 		const durationMs = Date.now() - profileStart
-		emitTelemetry(db, prefix, {
-			meta: { agentId, operation: "profile-synthesis" },
-			durationMs,
-			ok: true,
-			resultCount: totalEvents,
-		})
+		emitReadTelemetry(
+			db,
+			prefix,
+			{
+				meta: { agentId, operation: "profile-synthesis" },
+				durationMs,
+				ok: true,
+				resultCount: totalEvents,
+			},
+			params.admission,
+		)
 
 		log.info("profile synthesis complete", { agentId, durationMs, totalEvents })
 
@@ -305,12 +329,12 @@ export async function synthesizeProfile(params: {
 			decisions: mapMemoryItems(structured.decisions as Document[]),
 			facts: mapMemoryItems(structured.facts as Document[]),
 			todos: mapMemoryItems(structured.todos as Document[]),
-			topEntities: (entityResults ?? []).map((e) => ({
+			topEntities: entityResults.map((e) => ({
 				name: e.name as string,
 				type: e.type as string,
 				relationCount: e.relationCount as number,
 			})),
-			recentEpisodes: (episodeResults ?? []).map((e) => ({
+			recentEpisodes: episodeResults.map((e) => ({
 				title: e.title as string,
 				summary: e.summary as string,
 				type: e.type as string,
@@ -321,11 +345,16 @@ export async function synthesizeProfile(params: {
 		}
 	} catch (err) {
 		log.error("synthesizeProfile failed", { agentId, error: err })
-		emitTelemetry(db, prefix, {
-			meta: { agentId, operation: "profile-synthesis" },
-			durationMs: Date.now() - profileStart,
-			ok: false,
-		})
+		emitReadTelemetry(
+			db,
+			prefix,
+			{
+				meta: { agentId, operation: "profile-synthesis" },
+				durationMs: Date.now() - profileStart,
+				ok: false,
+			},
+			params.admission,
+		)
 		throw err
 	}
 }

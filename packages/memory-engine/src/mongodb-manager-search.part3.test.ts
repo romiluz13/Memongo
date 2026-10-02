@@ -1,7 +1,6 @@
 /* eslint-disable @typescript-eslint/unbound-method -- Vitest mock method assertions */
 import { describe, it, expect, vi, beforeEach } from "vitest"
 import { MongoDBMemoryManager, searchV2 } from "./mongodb-manager.js"
-import { checkCache } from "./mongodb-query-cache.js"
 import { crossEncoderRerank } from "./mongodb-reranker.js"
 import { rewriteQuery } from "./mongodb-query-rewriter.js"
 import { normalizeSinglePathScores } from "./mongodb-search-v2.js"
@@ -296,6 +295,12 @@ describe("searchV2 non-lane phase latency instrumentation", () => {
 			results: [],
 			reranked: true,
 			latencyMs: 0,
+			partitions: {
+				reranked: [],
+				emptySnippet: [],
+				overflow: [],
+				below: [],
+			},
 		})
 
 		const result = await searchV2(fakeDb, fakePrefix, "espresso", "agent-1", {
@@ -328,13 +333,7 @@ describe("search() phase latency reporting", () => {
 		}))
 	})
 
-	it("reports the cache check, cache write, total and unaccounted phases", async () => {
-		mocked(checkCache).mockResolvedValue({
-			hit: false,
-			tier: "miss",
-			results: [],
-			latency: { exactMs: 4, semanticMs: 11 },
-		} as never)
+	it("reports total and unaccounted phases without cache spans", async () => {
 		mocked(planRetrieval).mockReturnValue({
 			paths: ["episodic"],
 			confidence: "high",
@@ -344,7 +343,7 @@ describe("search() phase latency reporting", () => {
 			{
 				episodeId: "ep-phase-1",
 				title: "Phase probe episode",
-				summary: "Evidence so the cache write path runs",
+				summary: "Evidence for phase accounting",
 				type: "daily",
 				agentId: "agent-1",
 				scope: "agent",
@@ -365,21 +364,14 @@ describe("search() phase latency reporting", () => {
 
 		expect(seen).toHaveLength(1)
 		const phases = seen[0]!
-		expect(phases["phase:cache-check"]).toBeGreaterThanOrEqual(0)
-		expect(phases["phase:cache-exact"]).toBe(4)
-		expect(phases["phase:cache-semantic"]).toBe(11)
-		expect(phases["phase:cache-write"]).toBeGreaterThanOrEqual(0)
+		expect(phases).not.toHaveProperty("phase:cache-check")
+		expect(phases).not.toHaveProperty("phase:cache-write")
 		expect(phases["phase:total"]).toBeGreaterThanOrEqual(0)
 		expect(phases["phase:unaccounted"]).toBeGreaterThanOrEqual(0)
 		expect(phases["phase:lanes"]).toBeGreaterThanOrEqual(0)
 	})
 
 	it("computes unaccounted as the total minus the measured phases", async () => {
-		mocked(checkCache).mockResolvedValue({
-			hit: false,
-			tier: "miss",
-			results: [],
-		} as never)
 		mocked(planRetrieval).mockReturnValue({
 			paths: ["episodic"],
 			confidence: "high",
@@ -419,7 +411,6 @@ describe("search() phase latency reporting", () => {
 			"phase:lane-controls-post-rerank",
 			"phase:final-normalize",
 			"phase:projection",
-			"phase:cache-write",
 		].reduce((total, phase) => total + (phases[phase] ?? 0), 0)
 		expect(phases["phase:unaccounted"]).toBe(
 			Math.max(0, (phases["phase:total"] ?? 0) - measuredInsideTotal),
@@ -625,3 +616,7 @@ describe("normalizeSinglePathScores (C1: single-lane BM25 normalization)", () =>
 		expect(normalizeSinglePathScores([], ["kb"])).toEqual([])
 	})
 })
+
+vi.mock("./mongodb-write-fence.js", async () =>
+	(await import("./test-helpers/manager-test-kit.js")).writeFenceModuleMock(),
+)

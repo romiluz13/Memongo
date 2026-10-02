@@ -3,9 +3,13 @@ import type {
 	MemoryStableHandle,
 	StructuredMemoryEntry,
 } from "@memongo/memory-bridge"
-import { InvalidJsonError } from "../lib/validation.js"
+import {
+	InvalidJsonError,
+	UnsupportedMediaTypeError,
+} from "../lib/validation.js"
 import {
 	type ApiScope,
+	isJsonContentType,
 	resolveRequestAgentId,
 	resolveScopeField,
 	resolveScopeInput,
@@ -14,6 +18,7 @@ import {
 
 export const MAX_LIST_LIMIT = 100
 export const MAX_HISTORY_LIMIT = 200
+export const MAX_RECALL_CONVERSATION_LIMIT = 200
 // P3.9: cap the bulk write batch so one request cannot stage an unbounded
 // insertMany (the default 1MB body limit binds item size too).
 export const MAX_WRITE_EVENTS_BATCH = 500
@@ -50,6 +55,9 @@ export async function parseJsonRequestBody(
 	// silently became `{}` and the request ran on defaults.
 	if (!text.trim()) {
 		return {}
+	}
+	if (!isJsonContentType(c.req.header("Content-Type"))) {
+		throw new UnsupportedMediaTypeError()
 	}
 	try {
 		return JSON.parse(text) as Record<string, unknown>
@@ -94,7 +102,10 @@ export function readQuery(body: Record<string, unknown>): string {
 	return ""
 }
 
-export function readLimit(body: Record<string, unknown>): number | undefined {
+export function readLimit(
+	body: Record<string, unknown>,
+	max = MAX_LIST_LIMIT,
+): number | undefined {
 	const raw =
 		typeof body.limit === "number"
 			? body.limit
@@ -107,7 +118,7 @@ export function readLimit(body: Record<string, unknown>): number | undefined {
 	// P2.8: search-like routes forwarded `limit` uncapped, letting a caller
 	// force unbounded result sets through fusion/rerank. Clamp to the same
 	// ceiling as the list routes (defense-in-depth with the engine clamp).
-	return Math.max(1, Math.min(MAX_LIST_LIMIT, Math.floor(raw)))
+	return Math.max(1, Math.min(max, Math.floor(raw)))
 }
 
 export function pickSessionId(
@@ -132,6 +143,16 @@ export async function readSessionId(c: Context): Promise<string | undefined> {
 
 export async function readSessionKey(c: Context): Promise<string | undefined> {
 	return pickSessionKey(await resolveScopeInput(c))
+}
+
+export async function readSessionCoordinate(
+	c: Context,
+): Promise<string | undefined> {
+	const input = await resolveScopeInput(c)
+	return (
+		resolveScopeField(input, "sessionId") ??
+		resolveScopeField(input, "sessionKey")
+	)
 }
 
 // Issue #57: scope and scopeRef are tenant-isolation boundaries, so the value
@@ -326,6 +347,29 @@ export function isIdempotencyConflictError(error: unknown): boolean {
 	return error instanceof Error && error.name === "IdempotencyConflictError"
 }
 
+// Engine error classes do not cross every bridge/runtime boundary reliably,
+// so use the stable error name rather than instanceof.
+export function isErasureGateConflictError(error: unknown): boolean {
+	return error instanceof Error && error.name === "ErasureGateConflictError"
+}
+
+export function isStructuredMemoryRevisionConflictError(
+	error: unknown,
+): boolean {
+	return (
+		error instanceof Error &&
+		error.name === "StructuredMemoryRevisionConflictError"
+	)
+}
+
+export function isWriteQueueFullError(error: unknown): boolean {
+	return (
+		error instanceof Error &&
+		error.name === "WriteQueueFullError" &&
+		(error as { code?: unknown }).code === "WRITE_QUEUE_FULL"
+	)
+}
+
 export type LifecycleSourceAgent = {
 	id: string
 	name: string
@@ -444,7 +488,7 @@ export function readLifecycleHandle(raw: unknown): MemoryStableHandle | null {
 			? raw.revision
 			: Number.NaN
 	const state = readLifecycleState(raw.state)
-	if (!id || !agentId || !scope || !scopeRef || revision < 1 || !state) {
+	if (!id || !agentId || !scope || !scopeRef || !(revision >= 1) || !state) {
 		return null
 	}
 	const validFrom = readDateValue(raw.validFrom)
@@ -521,7 +565,9 @@ export function readStructuredLifecyclePatch(
 	if ("confidence" in raw) {
 		if (
 			typeof raw.confidence !== "number" ||
-			!Number.isFinite(raw.confidence)
+			!Number.isFinite(raw.confidence) ||
+			raw.confidence < 0 ||
+			raw.confidence > 1
 		) {
 			return null
 		}
@@ -596,7 +642,9 @@ export function readStructuredLifecyclePatch(
 	if ("sourceReliability" in raw) {
 		if (
 			typeof raw.sourceReliability !== "number" ||
-			!Number.isFinite(raw.sourceReliability)
+			!Number.isFinite(raw.sourceReliability) ||
+			raw.sourceReliability < 0 ||
+			raw.sourceReliability > 1
 		) {
 			return null
 		}
@@ -663,7 +711,9 @@ export function readProcedureLifecyclePatch(
 	if ("confidence" in raw) {
 		if (
 			typeof raw.confidence !== "number" ||
-			!Number.isFinite(raw.confidence)
+			!Number.isFinite(raw.confidence) ||
+			raw.confidence < 0 ||
+			raw.confidence > 1
 		) {
 			return null
 		}
@@ -686,7 +736,10 @@ export function readProcedureLifecyclePatch(
 	return Object.keys(patch).length > 0 ? patch : null
 }
 
-/** Router env carrying the P2.8 pre-parsed JSON body (see the middleware). */
+/** Router env carrying trusted request-local values set by API middleware. */
 export type V1RouterEnv = {
-	Variables: { jsonBody: Record<string, unknown> }
+	Variables: {
+		jsonBody: Record<string, unknown>
+		kbRestricted?: boolean
+	}
 }

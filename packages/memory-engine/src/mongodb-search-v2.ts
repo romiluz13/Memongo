@@ -7,7 +7,7 @@
 
 import type { Db, Document } from "mongodb"
 import { createSubsystemLogger, type MemoryScope } from "@memongo/lib"
-import { queryFailureMeta } from "./query-diagnostics.js"
+import { settledFailureMeta } from "./query-diagnostics.js"
 import type { ResolvedMongoDBConfig } from "./backend-config.js"
 import { resolveDefaultScope } from "./backend-config.js"
 import { resolveConversationEvidenceMode } from "./mongodb-conversation-evidence-mode.js"
@@ -15,6 +15,8 @@ import { searchEpisodes } from "./mongodb-episodes.js"
 import type { OperationRunContext } from "./mongodb-operation-accounting.js"
 import { getEventsByTimeRange } from "./mongodb-events.js"
 import { searchEntitiesAutocomplete, expandGraph } from "./mongodb-graph.js"
+import type { GraphExpansionResult } from "./mongodb-graph.js"
+import { derivationFromRole } from "./memory-derivation.js"
 import { normalizeSearchResults, rrfScore } from "./mongodb-hybrid.js"
 import { searchKB } from "./mongodb-kb-search.js"
 import { getLaneCoverage } from "./mongodb-lane-coverage.js"
@@ -27,7 +29,6 @@ import {
 	rewriteQuery,
 	type QueryRewriteConfig,
 } from "./mongodb-query-rewriter.js"
-import { SEMANTIC_PROBE_MAX_TIME_MS } from "./mongodb-query-cache.js"
 import { applyPostRetrievalScoring } from "./mongodb-post-retrieval-scoring.js"
 import {
 	extractSessionIdFromCanonicalId,
@@ -71,7 +72,8 @@ import {
 	tryReserveSearchBudget,
 } from "./mongodb-search-budget.js"
 import { tryConsumeSearchAdmission } from "./mongodb-search-admission.js"
-import { emitTelemetry } from "./mongodb-telemetry.js"
+import { emitTelemetry, type TelemetryDocument } from "./mongodb-telemetry.js"
+import type { AdmissionToken } from "./mongodb-write-fence.js"
 import type {
 	StructuredMemorySalience,
 	StructuredMemoryState,
@@ -80,15 +82,23 @@ import { searchStructuredMemory } from "./mongodb-structured-memory.js"
 import {
 	classifyExecutorSearch,
 	applyLaneAwareResultControls,
+	resolveExecutorTimeRangeAt,
 } from "./mongodb-search-executor.js"
+import { buildUnexpiredClause, mergeQueryClauses } from "./mongodb-temporal.js"
 import type {
 	MemorySearchRequest,
 	MemorySearchResult,
 	MemorySource,
 	ResolvedSearchConfig,
+	SearchLaneOutcome,
 } from "./types.js"
+// RET-13: the shared per-lane outcome shape lives in types.ts (the executor
+// merge consumes it on MemorySearchMetadata too); re-exported here so the
+// v2 public surface is unchanged.
+export type { SearchLaneOutcome } from "./types.js"
 import {
 	applyPreferenceEvidenceBoostAfterRerank,
+	clampSearchQuery,
 	applyRecencyAccessBoostAfterRerank,
 	deduplicateSearchResults,
 	isBenchmarkStrictMode,
@@ -132,8 +142,17 @@ const DEFAULT_TEMPORAL_PROXIMITY_BOOST = 0.1
 
 export type V2SearchMetadata = {
 	plan: RetrievalPlan
+	/**
+	 * RET-13: paths whose lanes were ATTEMPTED this search — including
+	 * ones that returned empty or failed (their detail is in laneOutcomes;
+	 * contribution is in resultsByPath). Previously only contributing
+	 * paths were listed, making executed-empty and failed lanes
+	 * indistinguishable from skipped ones.
+	 */
 	pathsExecuted: RetrievalPath[]
 	resultsByPath: Record<string, number>
+	/** RET-13: per-lane/phase outcome detail (attempted, failed, denied). */
+	laneOutcomes?: SearchLaneOutcome[]
 	reranked?: boolean
 	queryRewritten?: boolean
 	laneControls?: ReturnType<typeof applyLaneAwareResultControls>["summary"]
@@ -226,25 +245,69 @@ function normalizeFinalSearchScores(
 }
 
 /**
- * WS-16 (C-031): the end-to-end tail budget one uncached search may spend —
- * the documented 13.5s worst-case composition (1.5s semantic probe + 10s
- * maxTimeMS aggregate + 2s rerank timeout) pinned by
+ * RET-05: render the graph-lane snippet from the ACTUAL edge, not from the
+ * assumption that the root is the edge's subject. The old
+ * `${root.name} ${type} ${neighbor.name}` template asserted false facts for
+ * incoming edges (the neighbor was the subject) and for multi-hop edges
+ * (neither endpoint was the root at all). Direction comes from the resolved
+ * endpoints expandGraph now carries; a multi-hop edge between two neighbors
+ * gets an explicit "observed near" note instead of a direct root assertion.
+ */
+export function renderGraphRelationSnippet(
+	connection: GraphExpansionResult["connections"][number],
+	root: { entityId: string; name: string },
+): string {
+	const { relation, depth } = connection
+	const fromName = connection.fromEntity?.name
+	const toName = connection.toEntity?.name
+	if (!fromName || !toName) {
+		// Dangling endpoint document(s): assert nothing about direction.
+		return `${connection.entity.name} (${relation.type})`
+	}
+	const edge = `${fromName} ${relation.type} ${toName}`
+	const rootIsEndpoint =
+		relation.fromEntityId === root.entityId ||
+		relation.toEntityId === root.entityId
+	if (!rootIsEndpoint && depth > 0) {
+		return `${edge} (observed near ${root.name}, ${depth}-hop)`
+	}
+	return edge
+}
+
+/**
+ * WS-16 (C-031): the end-to-end tail budget one search may spend — the
+ * documented 12s worst-case composition (10s maxTimeMS aggregate + 2s
+ * rerank timeout) pinned by
  * mongodb-search-latency-composition.test.ts. searchV2 stamps its start
  * time and hands rerank the REMAINDER of this budget, so the provider call
  * can never stack its full 2s cap on top of an already-consumed tail.
  */
 export const SEARCH_TAIL_COMPOSITION_BUDGET_MS =
-	SEMANTIC_PROBE_MAX_TIME_MS +
-	DEFAULT_USER_SEARCH_MAX_TIME_MS +
-	RERANK_TIMEOUT_MS
+	DEFAULT_USER_SEARCH_MAX_TIME_MS + RERANK_TIMEOUT_MS
 
 /**
  * searchV2 entry point: opens the per-request cost budget (P3.2) that every
- * lane, waterfall stage, and backstop consumes. When a budget is already
- * active — the recursive hybrid backstop re-entering searchV2 — the call
+ * lane, waterfall stage, and backstop consumes. Every entry clamps query text.
+ * When a budget is already active — the recursive hybrid backstop re-entering
+ * searchV2 — the call
  * shares it instead of opening a fresh one, so a backstop can never reset
  * the storm counter.
  */
+function emitSearchTelemetry(
+	db: Db,
+	prefix: string,
+	doc: Omit<TelemetryDocument, "ts">,
+	admission?: AdmissionToken,
+): void {
+	if (admission) {
+		void emitTelemetry(db, prefix, doc, { admission }).catch(() =>
+			log.warn("searchV2 telemetry emit failed"),
+		)
+	} else {
+		emitTelemetry(db, prefix, doc)
+	}
+}
+
 export async function searchV2(
 	db: Db,
 	prefix: string,
@@ -252,8 +315,28 @@ export async function searchV2(
 	agentId: string,
 	context: SearchV2Context,
 ): Promise<{ results: MemorySearchResult[]; metadata: V2SearchMetadata }> {
+	const boundedQuery = clampSearchQuery(query)
+	if (boundedQuery.length < query.length) {
+		emitSearchTelemetry(
+			db,
+			prefix,
+			{
+				meta: { agentId, operation: "search-query-clamped" },
+				durationMs: 0,
+				ok: true,
+				queryLength: query.length,
+			},
+			context.admission,
+		)
+	}
 	if (hasActiveSearchBudget()) {
-		const value = await searchV2WithBudget(db, prefix, query, agentId, context)
+		const value = await searchV2WithBudget(
+			db,
+			prefix,
+			boundedQuery,
+			agentId,
+			context,
+		)
 		return {
 			results: value.results,
 			metadata: {
@@ -272,14 +355,19 @@ export async function searchV2(
 	// apart from "no memories", which is what WS-12 reports upstream.
 	const admission = tryConsumeSearchAdmission()
 	if (!admission.ok) {
-		emitTelemetry(db, prefix, {
-			meta: { agentId, operation: "search" },
-			durationMs: 0,
-			ok: false,
-			throttled: true,
-			resultCount: 0,
-		})
-		const plan = planRetrieval(query, {
+		emitSearchTelemetry(
+			db,
+			prefix,
+			{
+				meta: { agentId, operation: "search" },
+				durationMs: 0,
+				ok: false,
+				throttled: true,
+				resultCount: 0,
+			},
+			context.admission,
+		)
+		const plan = planRetrieval(boundedQuery, {
 			availablePaths: context.availablePaths,
 			hasEpisodes: context.hasEpisodes,
 			hasGraphData: context.hasGraphData,
@@ -305,24 +393,28 @@ export async function searchV2(
 	}
 	const limits = resolveSearchBudgetLimits(context.searchOptions?.budget)
 	const { value, budget } = await runWithSearchBudget(limits, () =>
-		searchV2WithBudget(db, prefix, query, agentId, context),
+		searchV2WithBudget(db, prefix, boundedQuery, agentId, context),
 	)
 	return { results: value.results, metadata: { ...value.metadata, budget } }
 }
 
 export type SearchV2Context = {
+	admission?: AdmissionToken
 	availablePaths: Set<RetrievalPath>
 	knownEntityNames?: string[]
 	hasEpisodes?: boolean
 	hasGraphData?: boolean
 	maxResults?: number
 	/**
-	 * C-016: invoked when an individual retrieval path fails at query time
-	 * (non-strict mode). The manager wires this to
-	 * noteSearchLaneFailure() so index readiness is re-polled and the
-	 * outage is reflected in status instead of the boot-time snapshot.
+	 * C-016 + RET-13: invoked at the ACTUAL catch seam when an individual
+	 * lane, sub-lane, or phase fails at query time (non-strict mode). The
+	 * manager wires this to noteSearchLaneFailure() so index readiness is
+	 * re-polled and the outage is reflected in status instead of the
+	 * boot-time snapshot. Labels are seam-level strings — a path name
+	 * ("hybrid"), a sub-lane ("hybrid:chunks"), or a phase
+	 * ("phase:conversation-evidence", "kb:$text").
 	 */
-	onPathFailure?: (path: RetrievalPath, error: unknown) => void
+	onPathFailure?: (lane: string, error: unknown) => void
 	searchOptions?: {
 		minScore?: number
 		sessionKey?: string
@@ -344,6 +436,17 @@ export type SearchV2Context = {
 		sourcePreference?: MemorySearchRequest["sourcePreference"]
 		needExactEvidence?: boolean
 		timeRange?: MemorySearchRequest["timeRange"]
+		/**
+		 * RET-02: executor-resolved bounds (preset resolved, or explicit
+		 * start+end parsed) forwarded by the manager's executePass — the
+		 * pass-level original or corrective-widened window. Engine-internal
+		 * seam: the public `timeRange` request field already exists on every
+		 * public surface; this is only the manager→V2 hand-off, and it takes
+		 * precedence over both the raw `timeRange` and any plan-inferred
+		 * preset. Direct callers omit it and have their raw `timeRange`
+		 * resolved here with the executor's precedence.
+		 */
+		resolvedTimeRange?: { start: Date; end: Date }
 		conversationScope?: MemorySearchRequest["conversationScope"]
 		structuredScope?: MemorySearchRequest["structuredScope"]
 		referenceScope?: MemorySearchRequest["referenceScope"]
@@ -354,6 +457,28 @@ export type SearchV2Context = {
 		operationRunContext?: OperationRunContext
 		/** P3.2: per-request cost budget overrides (resolved over defaults). */
 		budget?: Partial<SearchBudgetLimits>
+	}
+}
+
+/**
+ * RET-06 (wave 3b): a caller-supplied chunk filter cannot widen tenant
+ * identity. The resolved identity keys (agentId, scope, scopeRef) overwrite
+ * any caller-supplied top-level values — a foreign identity arm (e.g.
+ * `agentId: {$in: [...]}` or a different scope) can never cross scopes.
+ * Nested $and/$or arms only ever AND with the forced top-level keys, so
+ * enforcement strictly narrows. Lifecycle predicates (status, expiresAt)
+ * remain the custom filter's responsibility — the audit's validation
+ * requirement is identity-scoped ("cannot widen identity").
+ */
+function enforceResolvedChunkIdentity(
+	filter: Document,
+	identity: { agentId: string; scope: MemoryScope; scopeRef: string },
+): Document {
+	return {
+		...filter,
+		agentId: identity.agentId,
+		scope: identity.scope,
+		scopeRef: identity.scopeRef,
 	}
 }
 
@@ -416,13 +541,70 @@ async function searchV2WithBudget(
 				chunkSources.push("userfact-evidence")
 			}
 		}
+		// B14: one reference clock per request. Benchmarks stamp
+		// searchOptions.questionDate so fixed-clock ranking is deterministic;
+		// live traffic falls back to the wall clock. Every relative-time
+		// derivation below (time-range preset resolution, explicit range
+		// resolution, raw-window fallback bounds, temporal-window extraction)
+		// uses this clock instead of reading Date.now() independently.
+		// Retention is the exception; see retentionDate below.
+		const referenceDate = context.searchOptions?.questionDate ?? new Date()
+		// Expiration uses the current time, independently of the historical
+		// validity clock above.
+		const retentionDate = new Date()
+		// RET-02: resolved explicit bounds are a first-class V2 input. The
+		// manager forwards the executor-resolved pass range (original or
+		// widened corrective window) as `resolvedTimeRange`; a direct
+		// caller's raw `timeRange` request field is resolved here with the
+		// SAME precedence the executor applies (preset wins; partial or
+		// unparseable explicit bounds mean no range), against the B14
+		// reference clock. Inferred (query-text) presets never set this —
+		// they stay soft ranking hints (Decision 2 in the wave 3b report).
+		const explicitTimeRange =
+			context.searchOptions?.resolvedTimeRange ??
+			resolveExecutorTimeRangeAt(
+				context.searchOptions?.timeRange,
+				referenceDate,
+			)
+		// RET-06: the default conversation filter at this direct-call seam
+		// now derives from the resolved tenant identity and the canonical
+		// lifecycle predicates — the same shape the manager path builds
+		// (buildConversationChunkFilter): identity pinned to the resolved
+		// scope/scopeRef, non-deleted status, and the TTL-expiry clause
+		// against the wall clock (retention is never historical). Direct
+		// callers can no longer read across scopes or surface expired chunks
+		// by default.
+		// Caller-supplied custom filters keep their own lifecycle arms but
+		// get the resolved identity keys overwritten — identity cannot be
+		// widened (nested $and/$or arms only ever AND with the forced
+		// top-level keys).
 		const baseConversationChunkFilter: Document = context.searchOptions
-			?.conversationFilter ?? {
-			source: { $in: chunkSources },
-			agentId,
-			status: { $ne: "deleted" },
-		}
+			?.conversationFilter
+			? enforceResolvedChunkIdentity(context.searchOptions.conversationFilter, {
+					agentId,
+					scope,
+					scopeRef: agentScopeRef,
+				})
+			: mergeQueryClauses(
+					{
+						source: { $in: chunkSources },
+						agentId,
+						scope,
+						scopeRef: agentScopeRef,
+						status: { $ne: "deleted" },
+					},
+					buildUnexpiredClause({
+						field: "expiresAt",
+						asOf: retentionDate,
+					}),
+				)
 		const baseBridgeChunkFilter = context.searchOptions?.bridgeFilter
+			? enforceResolvedChunkIdentity(context.searchOptions.bridgeFilter, {
+					agentId,
+					scope,
+					scopeRef: agentScopeRef,
+				})
+			: undefined
 		const maxResults = context.maxResults ?? 20
 		const minScore = context.searchOptions?.minScore ?? 0.01
 		const numCandidates = context.searchOptions?.numCandidates ?? 500
@@ -450,14 +632,6 @@ async function searchV2WithBudget(
 			Math.max(2, Math.ceil(maxResults / 3))
 		const allowHybridBackstop =
 			context.searchOptions?.allowHybridBackstop ?? true
-		// B14: one reference clock per request. Benchmarks stamp
-		// searchOptions.questionDate so fixed-clock ranking is deterministic;
-		// live traffic falls back to the wall clock. Every relative-time
-		// derivation below (time-range preset resolution, raw-window fallback
-		// bounds, temporal-window extraction) uses this clock instead of
-		// reading Date.now() independently.
-		const referenceDate = context.searchOptions?.questionDate ?? new Date()
-
 		// C-026: conversation chunks are bitemporal — each carries the
 		// event-valid interval [validAt, invalidAt) carved from its event by
 		// projectEventChunk. A chunk not yet valid (validAt after the request's
@@ -469,22 +643,42 @@ async function searchV2WithBudget(
 		// missing field on pre-C-026 chunks ($exists is NOT supported inside
 		// $vectorSearch filters). Both wrapped filters carry identical arms,
 		// so lane fusion's conversation-filter spread drops only a duplicate.
-		const bitemporalChunkArms: Document[] = [
+		//
+		// RET-02 (wave 3b): the wrapper now also carries the occurrence-time
+		// guard — an explicit caller range appends a `timestamp` $gte/$lte
+		// arm so the vector/text candidate pool is bounded BEFORE ANN
+		// traversal / postMatch instead of being crowded out pre-filter.
+		// `timestamp` (event occurrence time, the same field the executor's
+		// final original-constraint check validates on result.timestamp) is
+		// declared as a filter path on chunks_vector; a missing-timestamp
+		// legacy doc fails this arm exactly as it fails that check. Inferred
+		// (plan-preset) windows add NO arm — they stay soft ranking hints.
+		const chunkLaneGuardArms: Document[] = [
 			{ $or: [{ validAt: null }, { validAt: { $lte: referenceDate } }] },
 			{ $or: [{ invalidAt: null }, { invalidAt: { $gt: referenceDate } }] },
+			...(explicitTimeRange
+				? [
+						{
+							timestamp: {
+								$gte: explicitTimeRange.start,
+								$lte: explicitTimeRange.end,
+							},
+						},
+					]
+				: []),
 		]
-		const withBitemporalChunkFilter = (base: Document): Document => ({
+		const withChunkLaneGuards = (base: Document): Document => ({
 			...base,
 			$and: [
 				...(Array.isArray(base.$and) ? base.$and : []),
-				...bitemporalChunkArms,
+				...chunkLaneGuardArms,
 			],
 		})
-		const conversationChunkFilter = withBitemporalChunkFilter(
+		const conversationChunkFilter = withChunkLaneGuards(
 			baseConversationChunkFilter,
 		)
 		const bridgeChunkFilter = baseBridgeChunkFilter
-			? withBitemporalChunkFilter(baseBridgeChunkFilter)
+			? withChunkLaneGuards(baseBridgeChunkFilter)
 			: undefined
 
 		// #66: measurement only — records elapsed ms per lane and per non-lane
@@ -522,12 +716,10 @@ async function searchV2WithBudget(
 				laneCoverage = coverageDoc.lanes
 			}
 		} catch (err) {
-			// C-002: the coverage read can echo the query-bearing filter or
-			// credentials in its driver message; queryFailureMeta redacts both
-			// and preserves digest correlation, same as the outer failure seam.
+			// Driver text may echo user content; structural fields avoid echo processing.
 			log.warn("Failed to load lane coverage for planner", {
 				agentId,
-				...queryFailureMeta(query, err),
+				...settledFailureMeta(err, query),
 			})
 		}
 		/**
@@ -570,6 +762,7 @@ async function searchV2WithBudget(
 		if (qrConfig?.enabled) {
 			const rewriteResult = await timeLane("phase:rewrite", () =>
 				rewriteQuery({
+					admission: context.admission,
 					db,
 					prefix,
 					agentId,
@@ -578,7 +771,20 @@ async function searchV2WithBudget(
 				}),
 			)
 			if (rewriteResult.rewritten) {
-				searchQuery = rewriteResult.rewrittenQuery
+				searchQuery = clampSearchQuery(rewriteResult.rewrittenQuery)
+				if (searchQuery.length < rewriteResult.rewrittenQuery.length) {
+					emitSearchTelemetry(
+						db,
+						prefix,
+						{
+							meta: { agentId, operation: "search-query-clamped" },
+							durationMs: 0,
+							ok: true,
+							queryLength: rewriteResult.rewrittenQuery.length,
+						},
+						context.admission,
+					)
+				}
 				wasQueryRewritten = true
 			}
 		}
@@ -588,9 +794,20 @@ async function searchV2WithBudget(
 			plan.constraints.entities.names.length > 0
 				? plan.constraints.entities.names
 				: graphQueryCandidates
-		const timeRange = plan.constraints?.timeRange
-			? resolveTimeRangePreset(plan.constraints.timeRange.preset, referenceDate)
-			: undefined
+		// RET-02: an explicit caller range takes precedence over the
+		// plan-inferred (query-text) preset — every existing consumer of
+		// this binding (raw-window start/end, episodic forwarding,
+		// structured/procedural/active-critical/graph asOf) now sees the
+		// explicit bounds first. Inferred presets keep today's soft-window
+		// behavior when no explicit range exists.
+		const timeRange =
+			explicitTimeRange ??
+			(plan.constraints?.timeRange
+				? resolveTimeRangePreset(
+						plan.constraints.timeRange.preset,
+						referenceDate,
+					)
+				: undefined)
 		const normalizedStructuredState = normalizeStructuredState(
 			context.searchOptions?.structuredScope?.state,
 		)
@@ -626,10 +843,10 @@ async function searchV2WithBudget(
 			...(structuredCurrentOnly
 				? { currentOnly: true, asOf: timeRange?.end }
 				: {}),
-			...(plan.constraints?.structured?.type
-				? { type: plan.constraints.structured.type }
-				: context.searchOptions?.structuredScope?.type
-					? { type: context.searchOptions.structuredScope.type }
+			...(context.searchOptions?.structuredScope?.type
+				? { type: context.searchOptions.structuredScope.type }
+				: plan.constraints?.structured?.type
+					? { type: plan.constraints.structured.type }
 					: {}),
 		}
 		const activeCriticalFilter = {
@@ -673,11 +890,16 @@ async function searchV2WithBudget(
 			...(context.searchOptions?.referenceScope?.tags?.length
 				? { tags: context.searchOptions.referenceScope.tags }
 				: {}),
-			...(plan.constraints?.kb?.source
-				? { source: plan.constraints.kb.source }
-				: {}),
-			...(plan.constraints?.kb?.category
-				? { category: plan.constraints.kb.category }
+			...(!context.searchOptions?.referenceScope?.source &&
+			!context.searchOptions?.referenceScope?.category
+				? {
+						...(plan.constraints?.kb?.source
+							? { source: plan.constraints.kb.source }
+							: {}),
+						...(plan.constraints?.kb?.category
+							? { category: plan.constraints.kb.category }
+							: {}),
+					}
 				: {}),
 		}
 
@@ -686,6 +908,42 @@ async function searchV2WithBudget(
 		const resultsByPath: Record<string, number> = {}
 		// C3 audit fix: track per-path results for RRF score normalization
 		const perPathResults: Record<string, MemorySearchResult[]> = {}
+		// RET-13: per-lane outcome ledger (metadata surface) + the ONE
+		// failure policy used at every catch seam — the outer
+		// executeSearchPath catch's model: strict → rethrow so the search
+		// fails loudly; else log + surface at the actual seam via
+		// onPathFailure + record the outcome + degrade to empty.
+		const laneOutcomes: SearchLaneOutcome[] = []
+		const emitLaneFailure = (lane: string, err: unknown): void => {
+			log.warn("searchV2 lane failed", { lane, ...settledFailureMeta(err) })
+			laneOutcomes.push({
+				lane,
+				status: "failed",
+				error: err instanceof Error ? err.message : String(err),
+			})
+			// C-016: surface the failure so the manager can re-poll index
+			// readiness. Never let the hook break the remaining lanes.
+			try {
+				context.onPathFailure?.(lane, err)
+			} catch (hookErr) {
+				log.warn(`searchV2 onPathFailure hook failed`, { error: hookErr })
+			}
+		}
+		/**
+		 * Shared inner-catch handler for sub-lane promises (RET-13): the
+		 * catch sits on the individual lane promise, so a failure degrades
+		 * ONLY that lane — sibling lanes inside the same path keep their
+		 * results — while still surfacing the failure in non-strict mode.
+		 */
+		const onLaneError =
+			(lane: string) =>
+			(err: unknown): MemorySearchResult[] => {
+				if (isBenchmarkStrictMode()) {
+					throw err
+				}
+				emitLaneFailure(lane, err)
+				return []
+			}
 
 		// Execute the top planned paths first, but keep hybrid as the backstop when
 		// specialized paths come back weak or empty. Intersect with availablePaths
@@ -731,10 +989,7 @@ async function searchV2WithBudget(
 								embeddingMode,
 								queryEmbeddingModel,
 							},
-						).catch((err) => {
-							log.warn(`searchV2 active-critical path failed: ${String(err)}`)
-							return [] as MemorySearchResult[]
-						})
+						).catch(onLaneError("active-critical"))
 						pathResults = criticalHits
 						break
 					}
@@ -753,10 +1008,7 @@ async function searchV2WithBudget(
 								embeddingMode,
 								queryEmbeddingModel,
 							},
-						).catch((err) => {
-							log.warn(`searchV2 structured path failed: ${String(err)}`)
-							return [] as MemorySearchResult[]
-						})
+						).catch(onLaneError("structured"))
 						pathResults = structuredHits
 						break
 					}
@@ -840,6 +1092,10 @@ async function searchV2WithBudget(
 								),
 								canonicalId: `event:${e.eventId}`,
 								source: "conversation" as MemorySource,
+								// RET-09: raw events carry the turn's authoring
+								// role natively — label it instead of dropping it.
+								role: e.role,
+								derivation: derivationFromRole(e.role),
 								...(e.sessionId ? { sessionId: e.sessionId } : {}),
 								timestamp: e.timestamp,
 								scope: e.scope,
@@ -904,7 +1160,14 @@ async function searchV2WithBudget(
 										filePath: `relation:${c.relation.fromEntityId}-${c.relation.toEntityId}-${c.relation.type}`,
 										startLine: 0,
 										endLine: 0,
-										snippet: `${graph.rootEntity.name} ${c.relation.type} ${c.entity.name}`,
+										// RET-05: render the actual edge (see
+										// renderGraphRelationSnippet) — the old
+										// root-subject template asserted false facts for
+										// incoming and multi-hop edges.
+										snippet: renderGraphRelationSnippet(c, {
+											entityId: entity.entityId,
+											name: graph.rootEntity.name,
+										}),
 										score: Math.min(
 											1.0,
 											Math.max(
@@ -917,6 +1180,9 @@ async function searchV2WithBudget(
 										),
 										canonicalId: `relation:${c.relation.fromEntityId}:${c.relation.type}:${c.relation.toEntityId}`,
 										source: "conversation" as MemorySource,
+										// RET-09: graph relations are extracted/inferred
+										// structure, never user-authored spans.
+										derivation: "inferred",
 										timestamp: c.relation.updatedAt,
 										scope: c.relation.scope,
 										scopeRef: c.relation.scopeRef,
@@ -958,6 +1224,9 @@ async function searchV2WithBudget(
 							score: 0.85 - i * 0.01,
 							canonicalId: `episode:${ep.episodeId}`,
 							source: "conversation" as MemorySource,
+							// RET-09: episodes are agent-generated layered
+							// summaries of consolidated events.
+							derivation: "derived",
 							timestamp: ep.timeRange.end,
 							scope: ep.scope,
 							scopeRef: ep.scopeRef,
@@ -988,15 +1257,16 @@ async function searchV2WithBudget(
 								embeddingMode,
 								queryEmbeddingModel,
 							},
-						).catch((err) => {
-							log.warn(`searchV2 procedural path failed: ${String(err)}`)
-							return [] as MemorySearchResult[]
-						})
+						).catch(onLaneError("procedural"))
 						pathResults = procedureHits
 						break
 					}
 					case "hybrid": {
-						if (!capabilities.vectorSearch && !capabilities.textSearch) {
+						if (
+							hybridMode === "vector-only" &&
+							!capabilities.vectorSearch &&
+							!capabilities.textSearch
+						) {
 							pathResults = []
 							break
 						}
@@ -1050,15 +1320,7 @@ async function searchV2WithBudget(
 													queryEmbeddingModel,
 												},
 											)
-									).catch((err) => {
-										if (isBenchmarkStrictMode()) {
-											throw err
-										}
-										log.warn(
-											`searchV2 hybrid chunks path failed: ${String(err)}`,
-										)
-										return [] as MemorySearchResult[]
-									}),
+									).catch(onLaneError("hybrid:chunks")),
 								),
 							)
 						} else if (conversationChunkFilter) {
@@ -1096,15 +1358,7 @@ async function searchV2WithBudget(
 													queryEmbeddingModel,
 												},
 											)
-									).catch((err) => {
-										if (isBenchmarkStrictMode()) {
-											throw err
-										}
-										log.warn(
-											`searchV2 hybrid conversation path failed: ${String(err)}`,
-										)
-										return [] as MemorySearchResult[]
-									}),
+									).catch(onLaneError("hybrid:chunks")),
 								),
 							)
 						}
@@ -1143,15 +1397,7 @@ async function searchV2WithBudget(
 													queryEmbeddingModel,
 												},
 											)
-									).catch((err) => {
-										if (isBenchmarkStrictMode()) {
-											throw err
-										}
-										log.warn(
-											`searchV2 hybrid bridge path failed: ${String(err)}`,
-										)
-										return [] as MemorySearchResult[]
-									}),
+									).catch(onLaneError("hybrid:bridge")),
 								),
 							)
 						}
@@ -1162,7 +1408,10 @@ async function searchV2WithBudget(
 						const sessionMode = resolveSessionEvidenceMode(
 							process.env.MEMONGO_SESSION_EVIDENCE_MODE,
 						)
-						if (sessionMode === "B") {
+						if (
+							sessionMode === "B" &&
+							(capabilities.vectorSearch || capabilities.textSearch)
+						) {
 							const requestedMaxResults = context.maxResults ?? 10
 							const sessionEvidenceMaxResults = Math.max(
 								requestedMaxResults,
@@ -1173,12 +1422,28 @@ async function searchV2WithBudget(
 								scope,
 								scopeRef: agentScopeRef,
 								// C-005: hide expired session-evidence docs
-								// during the TTL sweep lag. $vectorSearch
-								// filters do not support $exists, so the
-								// "missing field" arm uses $eq null (null
-								// equality matches missing fields under
-								// $match semantics).
+								// during the TTL sweep lag. The "missing
+								// field" arm uses $eq null (null equality
+								// matches missing fields under $match
+								// semantics). $vectorSearch filters do support
+								// $exists (MongoDB changelog, 06 Nov 2025); the
+								// null arm is kept deliberately since it also
+								// covers explicit nulls.
 								$or: [{ expiresAt: null }, { expiresAt: { $gt: new Date() } }],
+								// RET-02 (wave 3b): occurrence-time guard for
+								// the session-evidence lane — same
+								// explicit-range semantics as the chunk
+								// lanes. `timestamp` (first user turn time)
+								// is declared as a filter path on
+								// session_chunks_vector.
+								...(explicitTimeRange
+									? {
+											timestamp: {
+												$gte: explicitTimeRange.start,
+												$lte: explicitTimeRange.end,
+											},
+										}
+									: {}),
 							}
 							searches.push(
 								timeLane("hybrid:session_chunks", () =>
@@ -1214,19 +1479,14 @@ async function searchV2WithBudget(
 													queryEmbeddingModel,
 												},
 											)
-									).catch((err) => {
-										if (isBenchmarkStrictMode()) {
-											throw err
-										}
-										log.warn(
-											`searchV2 session_chunks path failed: ${String(err)}`,
-										)
-										return [] as MemorySearchResult[]
-									}),
+									).catch(onLaneError("hybrid:session_chunks")),
 								),
 							)
 						}
-						if (isEvidenceMirrorEnabled()) {
+						if (
+							isEvidenceMirrorEnabled() &&
+							(capabilities.vectorSearch || capabilities.textSearch)
+						) {
 							const requestedMaxResults = context.maxResults ?? 10
 							const evidenceMaxResults = Math.max(requestedMaxResults * 6, 30)
 							const evidenceFilter: Document = {
@@ -1234,6 +1494,18 @@ async function searchV2WithBudget(
 								scope,
 								scopeRef: agentScopeRef,
 								status: "active",
+								// RET-02 (wave 3b): occurrence-time guard for
+								// the memory-evidence lane — `timestamp` is
+								// already declared as a filter path on
+								// memory_evidence_vector.
+								...(explicitTimeRange
+									? {
+											timestamp: {
+												$gte: explicitTimeRange.start,
+												$lte: explicitTimeRange.end,
+											},
+										}
+									: {}),
 							}
 							searches.push(
 								timeLane("hybrid:memory_evidence", () =>
@@ -1281,15 +1553,7 @@ async function searchV2WithBudget(
 												},
 											})),
 										)
-										.catch((err) => {
-											if (isBenchmarkStrictMode()) {
-												throw err
-											}
-											log.warn(
-												`searchV2 memory_evidence path failed: ${String(err)}`,
-											)
-											return [] as MemorySearchResult[]
-										}),
+										.catch(onLaneError("hybrid:memory_evidence")),
 								),
 							)
 						}
@@ -1322,25 +1586,42 @@ async function searchV2WithBudget(
 								queryEmbeddingModel,
 								fusionMethod,
 								kbDocs: kbCollection(db, prefix),
+								// RET-13: the KB waterfall runs its own degrade chain —
+								// thread the shared policy so stage failures surface (and
+								// strict mode fails loudly) instead of being swallowed
+								// inside the waterfall.
+								strict: isBenchmarkStrictMode(),
+								onLaneFailure: (lane, err) => emitLaneFailure(lane, err),
 							},
-						).catch((err) => {
-							if (isBenchmarkStrictMode()) {
-								throw err
-							}
-							log.warn(`searchV2 kb path failed: ${String(err)}`)
-							return [] as MemorySearchResult[]
-						})
+						).catch(onLaneError("kb"))
 						pathResults = kbHits
 						break
 					}
 				}
 
+				// RET-13: success outcome at the executor's single success exit
+				// (failed paths record "failed" in the catch below; empty is
+				// still ok — resultCount carries the distinction).
+				laneOutcomes.push({
+					lane: path,
+					status: "ok",
+					resultCount: pathResults.length,
+				})
 				return pathResults
 			} catch (pathErr) {
 				if (isBenchmarkStrictMode()) {
 					throw pathErr
 				}
 				log.error(`searchV2 path ${path} failed`, { error: pathErr })
+				// RET-13: the outer catch models the shared policy (strict →
+				// rethrow; else record + surface + degrade). Whole-path
+				// failures keep their error-level log; inner lanes log at
+				// warn.
+				laneOutcomes.push({
+					lane: path,
+					status: "failed",
+					error: pathErr instanceof Error ? pathErr.message : String(pathErr),
+				})
 				// C-016: surface the failure so the manager can re-poll index
 				// readiness. Never let the hook break the remaining paths.
 				try {
@@ -1361,6 +1642,8 @@ async function searchV2WithBudget(
 			timeLane("phase:conversation-evidence", async () => {
 				try {
 					return await searchConversationEvidenceEvents({
+						onBranchFailure: (branch, error) =>
+							emitLaneFailure(`phase:conversation-evidence:${branch}`, error),
 						db,
 						prefix,
 						query: searchQuery,
@@ -1374,12 +1657,18 @@ async function searchV2WithBudget(
 						embeddingMode,
 						queryEmbeddingModel,
 						budgetReservation: reservation,
+						// RET-02 (wave 3b): explicit bounds reach the evidence
+						// lane; it composes them with the questionDate upper
+						// bound (no future leakage past what the user had
+						// seen). Inferred presets keep the questionDate-only
+						// bound.
+						...(explicitTimeRange ? { timeRange: explicitTimeRange } : {}),
 					})
 				} catch (err) {
 					if (isBenchmarkStrictMode()) {
 						throw err
 					}
-					log.warn(`conversation evidence search failed: ${String(err)}`)
+					emitLaneFailure("phase:conversation-evidence", err)
 					return []
 				} finally {
 					reservation?.release()
@@ -1425,7 +1714,15 @@ async function searchV2WithBudget(
 				: undefined
 			parallelConversationEvidence =
 				isEvidenceQuery && !reservation
-					? Promise.resolve({ results: [] })
+					? (async () => {
+							// RET-16/RET-13: budget refused the conversation-evidence
+							// lane — record the denial instead of silently dropping it.
+							laneOutcomes.push({
+								lane: "phase:conversation-evidence",
+								status: "budget-denied",
+							})
+							return { results: [] as MemorySearchResult[] }
+						})()
 					: captureConversationEvidence(runConversationEvidence(reservation))
 		}
 
@@ -1439,8 +1736,11 @@ async function searchV2WithBudget(
 		)
 		for (const [pathIndex, path] of pathsToExecute.entries()) {
 			const pathResults = pathOutcomes[pathIndex] ?? []
+			// RET-13: pathsExecuted is ATTEMPTED semantics — a path that ran
+			// empty or failed still executed (outcome ledger records which).
+			// resultsByPath keeps contributed-only semantics.
+			pathsExecuted.push(path)
 			if (pathResults.length > 0) {
-				pathsExecuted.push(path)
 				resultsByPath[path] = pathResults.length
 				perPathResults[path] = pathResults
 				results.push(...pathResults)
@@ -1475,7 +1775,10 @@ async function searchV2WithBudget(
 				if (isBenchmarkStrictMode()) {
 					throw err
 				}
-				log.warn(`searchV2 exact procedural backstop failed: ${String(err)}`)
+				log.warn(
+					"searchV2 exact procedural backstop failed",
+					settledFailureMeta(err),
+				)
 			}
 		}
 		const needsProceduralBackstop =
@@ -1505,7 +1808,17 @@ async function searchV2WithBudget(
 					),
 				)
 				if (procedureFallback.length > 0) {
-					pathsExecuted.push("procedural")
+					// RET-13: the main loop already registers an attempted
+					// (empty) procedural pass under attempted semantics —
+					// never double-list the path.
+					if (!pathsExecuted.includes("procedural")) {
+						pathsExecuted.push("procedural")
+					}
+					laneOutcomes.push({
+						lane: "backstop:procedural",
+						status: "ok",
+						resultCount: procedureFallback.length,
+					})
 					resultsByPath.procedural = procedureFallback.length
 					perPathResults.procedural = procedureFallback
 					deduped = deduplicateSearchResults([...deduped, ...procedureFallback])
@@ -1514,7 +1827,7 @@ async function searchV2WithBudget(
 				if (isBenchmarkStrictMode()) {
 					throw err
 				}
-				log.warn(`searchV2 procedural backstop failed: ${String(err)}`)
+				emitLaneFailure("backstop:procedural", err)
 			}
 		}
 
@@ -1544,6 +1857,11 @@ async function searchV2WithBudget(
 				)
 				if (fallback.results.length > 0) {
 					pathsExecuted.push("hybrid")
+					laneOutcomes.push({
+						lane: "backstop:hybrid",
+						status: "ok",
+						resultCount: fallback.results.length,
+					})
 					resultsByPath.hybrid = fallback.results.length
 					perPathResults.hybrid = fallback.results
 					deduped = deduplicateSearchResults([...deduped, ...fallback.results])
@@ -1552,7 +1870,7 @@ async function searchV2WithBudget(
 				if (isBenchmarkStrictMode()) {
 					throw err
 				}
-				log.warn(`searchV2 hybrid backstop failed: ${String(err)}`)
+				emitLaneFailure("backstop:hybrid", err)
 			}
 		}
 		latencyByPath["phase:lanes"] = Date.now() - lanesStartedAt
@@ -1609,6 +1927,13 @@ async function searchV2WithBudget(
 			conversationRetrievalAvailable
 		) {
 			conversationEvidenceResults = await runConversationEvidence()
+		} else if (conversationEvidenceMode === "serial") {
+			// RET-13: serial mode asked for conversation evidence but no
+			// conversation-capable lane is available — record, don't imply it ran.
+			laneOutcomes.push({
+				lane: "phase:conversation-evidence",
+				status: "unavailable",
+			})
 		}
 		const temporalCoverageResults = isTemporalCoverageMode()
 			? await timeLane("phase:temporal-coverage", () =>
@@ -1626,7 +1951,7 @@ async function searchV2WithBudget(
 						if (isBenchmarkStrictMode()) {
 							throw err
 						}
-						log.warn(`temporal coverage search failed: ${String(err)}`)
+						emitLaneFailure("phase:temporal-coverage", err)
 						return [] as MemorySearchResult[]
 					}),
 				)
@@ -1641,9 +1966,12 @@ async function searchV2WithBudget(
 		const turnPrecisionResults = isBenchmarkTurnPrecisionMode()
 			? await timeLane("phase:turn-precision", () =>
 					searchTurnEventsWithinSessions({
+						onBranchFailure: (branch, error) =>
+							emitLaneFailure(`phase:turn-precision:${branch}`, error),
 						db,
 						prefix,
 						query: searchQuery,
+						questionDate: context.searchOptions?.questionDate,
 						agentId,
 						scope,
 						scopeRef: agentScopeRef,
@@ -1665,7 +1993,7 @@ async function searchV2WithBudget(
 						if (isBenchmarkStrictMode()) {
 							throw err
 						}
-						log.warn(`turn precision rerank failed: ${String(err)}`)
+						emitLaneFailure("phase:turn-precision", err)
 						return [] as MemorySearchResult[]
 					}),
 				)
@@ -1731,6 +2059,7 @@ async function searchV2WithBudget(
 			latencyByPath["phase:rerank-input"] = Date.now() - rerankInputStartedAt
 			const rerankResult = await timeLane("phase:rerank", () =>
 				crossEncoderRerank({
+					admission: context.admission,
 					db,
 					prefix,
 					agentId,
@@ -1761,20 +2090,38 @@ async function searchV2WithBudget(
 			)
 			if (rerankResult.reranked) {
 				const postRerankLaneControlsStartedAt = Date.now()
+				// RET-08: post-CE boosts refine only the CE-scored partition
+				// (they are cross-encoder refinements, not retrieval-score
+				// corrections), and the untouched partitions keep their
+				// original retrieval order behind the CE head. Composing in
+				// partition order — then sorting segment-stable in lane
+				// controls — keeps CE-ranked results ahead of higher-scoring
+				// unreranked overflow instead of comparing uncalibrated score
+				// domains.
+				const boostedReranked = applyPreferenceEvidenceBoostAfterRerank(
+					query,
+					applyRecencyAccessBoostAfterRerank(rerankResult.partitions.reranked, {
+						recencyBoost: rerankCfg.recencyBoost,
+						accessBoost: rerankCfg.accessBoost,
+					}),
+				)
+				const composedTimeline = orderTimelineAfterSourceEvidence(
+					deduplicateSearchResults([
+						...boostedReranked,
+						...rerankResult.partitions.emptySnippet,
+						...rerankResult.partitions.overflow,
+						...rerankResult.partitions.below,
+						...timelineResults,
+					]),
+				)
 				const postRerankLaneControlled = applyLaneAwareResultControls({
 					query,
-					results: orderTimelineAfterSourceEvidence(
-						deduplicateSearchResults([
-							...applyPreferenceEvidenceBoostAfterRerank(
-								query,
-								applyRecencyAccessBoostAfterRerank(rerankResult.results, {
-									recencyBoost: rerankCfg.recencyBoost,
-									accessBoost: rerankCfg.accessBoost,
-								}),
-							),
-							...timelineResults,
-						]),
-					),
+					results: composedTimeline,
+					// RET-08: the rerank input was deduplicated upstream and
+					// timeline items are appended behind the partitions, so the
+					// CE-scored partition is exactly the first
+					// `boostedReranked.length` composed results.
+					rerankPartitionCount: boostedReranked.length,
 					classification: classifyExecutorSearch({
 						query,
 						timeRange: context.searchOptions?.timeRange,
@@ -1820,12 +2167,16 @@ async function searchV2WithBudget(
 				queryRewritten: wasQueryRewritten,
 				laneControls: laneControlSummary,
 				latencyByPath,
+				// RET-13: per-lane outcome ledger — every attempted lane's
+				// ok/failed/budget-denied/unavailable status (pathsExecuted
+				// now lists attempts, this explains each one).
+				laneOutcomes,
 			},
 		}
 	} catch (err) {
 		// C-002: raw query text never enters diagnostics — length + digest
 		// preserve correlation without content (see query-diagnostics.ts).
-		log.error("searchV2 failed", queryFailureMeta(query, err))
+		log.error("searchV2 failed", settledFailureMeta(err, query))
 		throw err
 	}
 }

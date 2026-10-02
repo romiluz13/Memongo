@@ -27,7 +27,7 @@ COPY . .
 RUN turbo prune --docker @memongo/api
 
 # ─── Stage 2: Install deps + build ─────────────────────────────────
-FROM oven/bun:1-debian AS installer
+FROM oven/bun:1.4.2-debian AS installer
 WORKDIR /app
 
 # Install dependencies from the pruned lockfile (Bun understands workspace: protocol)

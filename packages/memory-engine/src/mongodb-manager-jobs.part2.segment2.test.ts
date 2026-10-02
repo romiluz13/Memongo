@@ -74,6 +74,10 @@ vi.mock("./mongodb-telemetry.js", async () =>
 	(await import("./test-helpers/manager-test-kit.js")).telemetryModuleMock(),
 )
 
+vi.mock("./mongodb-write-fence.js", async () =>
+	(await import("./test-helpers/manager-test-kit.js")).writeFenceModuleMock(),
+)
+
 describe("MongoDBMemoryManager background extraction", () => {
 	beforeEach(async () => {
 		vi.clearAllMocks()
@@ -332,6 +336,8 @@ describe("MongoDBMemoryManager background extraction", () => {
 			agentId: "agent-1",
 			scope: "agent",
 			scopeRef: "agent:agent-1",
+			session: expect.anything(),
+			throwOnError: true,
 		})
 	})
 
@@ -450,7 +456,7 @@ describe("MongoDBMemoryManager background extraction", () => {
 		const manager = Object.assign(
 			Object.create(MongoDBMemoryManager.prototype),
 			{
-				db: {} as import("mongodb").Db,
+				db: { client } as unknown as import("mongodb").Db,
 				prefix: "test_",
 				agentId: "agent-1",
 				client,
@@ -481,7 +487,7 @@ describe("MongoDBMemoryManager background extraction", () => {
 		})
 		await manager.memoryJobWorkerPromise
 
-		expect(client.startSession).toHaveBeenCalledOnce()
+		expect(client.startSession).toHaveBeenCalledTimes(9)
 		expect(session.withTransaction).toHaveBeenCalledWith(expect.any(Function), {
 			writeConcern: { w: "majority", wtimeoutMS: 5000 },
 		})
@@ -517,7 +523,7 @@ describe("MongoDBMemoryManager background extraction", () => {
 		).toBeLessThan(
 			mocked(clearEventExtractionJobPending).mock.invocationCallOrder[0],
 		)
-		expect(session.endSession).toHaveBeenCalledOnce()
+		expect(session.endSession).toHaveBeenCalledTimes(9)
 	})
 
 	it("accepts a staged job already released by a concurrent recovery worker", async () => {
@@ -727,6 +733,168 @@ describe("MongoDBMemoryManager background extraction", () => {
 		} finally {
 			providerSpy.mockRestore()
 			vi.unstubAllEnvs()
+		}
+	})
+
+	/**
+	 * N5 acceptance gap: prove on the REAL manager-jobs runner path that a
+	 * typed EnrichmentResponseError routes through failClaimedMemoryJob with
+	 * `terminal: true` and the job's TRUTHFUL attempt count for the
+	 * non-retryable shapes (refusal / content-filter / length), while a
+	 * transient empty completion keeps the normal bounded-retry ladder (no
+	 * `terminal`). Mirrors the benchmark-attribution recipe above, but the
+	 * derivation step rejects with the typed error instead of calling the
+	 * provider.
+	 */
+	async function runClaimedExtractionWithProviderError(
+		rejectWith: Error,
+	): Promise<Record<string, unknown> | undefined> {
+		vi.stubEnv("MEMONGO_ENRICHMENT_MODEL", "derived-model")
+		const { writeEvent, projectEventChunk } = await import(
+			"./mongodb-events.js"
+		)
+		const { extractAndUpsertEntities } = await import("./mongodb-graph.js")
+		const { claimMemoryJob, createMemoryJob, failClaimedMemoryJob } =
+			await import("./mongodb-memory-jobs.js")
+		const { eventsCollection } = await import("./mongodb-schema.js")
+		const { promoteDerivedMemoryFromEvent } = await import(
+			"./mongodb-derived-memory.js"
+		)
+		const enrichment = await import("./mongodb-llm-enrichment.js")
+		const eventId = `evt-n5-${Math.random().toString(36).slice(2, 10)}`
+		const jobId = `extraction-${eventId}`
+		const provider = {
+			name: "mock-provider",
+			chatCompletion: vi.fn(),
+		}
+		const providerSpy = vi
+			.spyOn(enrichment, "resolveEnrichmentProvider")
+			.mockReturnValue(provider)
+		mocked(writeEvent).mockResolvedValue({
+			eventId,
+			timestamp: new Date("2026-04-09T12:00:00.000Z"),
+			scopeRef: "agent:n5-terminal",
+		})
+		mocked(projectEventChunk).mockResolvedValue({ chunkCreated: false })
+		mocked(extractAndUpsertEntities).mockResolvedValue({
+			entities: [],
+			relationsCreated: 0,
+		})
+		mocked(createMemoryJob).mockResolvedValue(jobId)
+		mocked(claimMemoryJob)
+			.mockResolvedValueOnce({
+				jobId,
+				jobType: "extraction",
+				agentId: "n5-terminal",
+				status: "running",
+				createdAt: new Date("2026-04-09T12:00:00.000Z"),
+				payload: {
+					eventId,
+					scope: "agent",
+					scopeRef: "agent:n5-terminal",
+				},
+				attempts: 1,
+				leaseOwner: "worker-n5",
+				leaseToken: "lease-n5",
+				heartbeatAt: new Date("2026-04-09T12:00:01.000Z"),
+				leaseExpiresAt: new Date("2026-04-09T12:01:01.000Z"),
+			})
+			.mockResolvedValueOnce(null)
+		mocked(failClaimedMemoryJob).mockResolvedValue(true)
+		mocked(eventsCollection).mockReturnValue({
+			findOne: vi.fn(async () => ({
+				eventId,
+				agentId: "n5-terminal",
+				role: "user",
+				body: "Remember this typed provider failure.",
+				timestamp: new Date("2026-04-09T12:00:00.000Z"),
+				scope: "agent",
+				scopeRef: "agent:n5-terminal",
+			})),
+		} as unknown as import("mongodb").Collection)
+		mocked(promoteDerivedMemoryFromEvent).mockRejectedValue(rejectWith)
+		const manager = Object.assign(
+			Object.create(MongoDBMemoryManager.prototype),
+			{
+				db: {} as import("mongodb").Db,
+				prefix: "test_",
+				agentId: "n5-terminal",
+				client: undefined,
+				config: {
+					mongodb: {
+						embeddingMode: "automated",
+						episodes: { enabled: false, minEventsForEpisode: 6 },
+					},
+				},
+				workspaceDir: "/tmp/memongo",
+				writeQueue: Promise.resolve(),
+				derivationQueue: Promise.resolve(),
+				derivationSchedulingQueue: Promise.resolve(),
+				memoryJobWorkerId: "worker-n5",
+				memoryJobWorkerStopped: false,
+				memoryJobWorkerActive: false,
+				memoryJobWorkerPromise: Promise.resolve(),
+				memoryJobOperationContexts: new Map(),
+				chunkCount: 0,
+				dirty: true,
+				benchmarkShippedProfile: true,
+			},
+		) as MongoDBMemoryManager & {
+			derivationQueue: Promise<void>
+			derivationSchedulingQueue: Promise<void>
+			memoryJobWorkerPromise: Promise<void>
+		}
+		const runContext = testOperationRunContext("n5-run")
+		try {
+			await manager.writeConversationEvent(
+				{
+					role: "user",
+					body: "Remember this typed provider failure.",
+					scope: "agent",
+				},
+				runContext,
+			)
+			await manager.derivationSchedulingQueue
+			await manager.memoryJobWorkerPromise
+			const calls = mocked(failClaimedMemoryJob).mock.calls
+			return calls.length > 0
+				? (calls[calls.length - 1][0] as Record<string, unknown>)
+				: undefined
+		} finally {
+			providerSpy.mockRestore()
+			vi.unstubAllEnvs()
+		}
+	}
+
+	it.each([
+		["refusal", true],
+		["content-filter", true],
+		["length", true],
+		["empty-content", false],
+	])("routes typed provider shape %s through failClaimedMemoryJob (terminal=%s, truthful attempts) (N5)", async (shape, terminal) => {
+		const { EnrichmentResponseError } = await import(
+			"./mongodb-llm-enrichment.js"
+		)
+		const typedShape = shape as "refusal"
+		const error = new EnrichmentResponseError(
+			`relation extraction: provider response unusable (shape=${shape}, finishReason=stop, refusal=${shape === "refusal"}, provider=mock-provider)`,
+			typedShape,
+			"stop",
+			shape === "refusal",
+		)
+		const failCall = await runClaimedExtractionWithProviderError(error)
+		expect(failCall).toBeDefined()
+		expect(failCall).toEqual(
+			expect.objectContaining({
+				agentId: "n5-terminal",
+				attempts: 1, // truthful attempt count of the claimed job
+				error: error.message, // self-describing cause persisted verbatim
+			}),
+		)
+		if (terminal) {
+			expect(failCall).toHaveProperty("terminal", true)
+		} else {
+			expect(failCall).not.toHaveProperty("terminal")
 		}
 	})
 })

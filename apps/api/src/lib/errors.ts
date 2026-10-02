@@ -61,9 +61,9 @@ export function isDependencyUnavailableError(err: unknown): boolean {
 /**
  * P0.8 safe error envelope (official Hono pattern: deliberate codes stay on
  * the route, unexpected failures go through one central mapper). The raw
- * error — driver messages, hostnames, absolute paths, stack — is logged
- * server-side under the request id; the client body carries only the
- * route's deliberate code and the id reference for correlation.
+ * error is represented by an optional numeric code under the request id;
+ * messages, stacks and arbitrary properties are omitted. The client body
+ * carries only the route's deliberate code and the id reference for correlation.
  *
  * P1.3: genuine dependency-unavailable failures (Mongo network/selection
  * errors, see isDependencyUnavailableError) map to 503 SERVICE_UNAVAILABLE
@@ -71,6 +71,14 @@ export function isDependencyUnavailableError(err: unknown): boolean {
  */
 export function internalError(c: Context, err: unknown, code: string) {
 	const requestId = c.get("requestId") ?? "no-request-id"
+	let errorCode: unknown
+	try {
+		if (err && typeof err === "object") {
+			errorCode = Object.getOwnPropertyDescriptor(err, "code")?.value
+		}
+	} catch {
+		// A proxy descriptor trap must not replace the original failure.
+	}
 	console.error(
 		JSON.stringify({
 			level: "error",
@@ -80,16 +88,9 @@ export function internalError(c: Context, err: unknown, code: string) {
 			method: c.req.method,
 			path: c.req.path,
 			error:
-				err instanceof Error
-					? {
-							// C-002: server-side diagnostic detail is redacted at the
-							// boundary — driver errors can embed connection strings
-							// or credentials in messages and stacks.
-							name: err.name,
-							message: redactSensitiveText(err.message),
-							stack: err.stack ? redactSensitiveText(err.stack) : undefined,
-						}
-					: redactSensitiveText(String(err)),
+				typeof errorCode === "number" && Number.isFinite(errorCode)
+					? { code: errorCode }
+					: {},
 		}),
 	)
 	if (isDependencyUnavailableError(err)) {

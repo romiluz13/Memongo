@@ -44,8 +44,8 @@ describe("clampSearchMaxResults (P2.8)", () => {
 
 /**
  * WS-16 (C-030): queries are clamped at every public search entry point
- * before the hot path consumes them — ahead of autoEmbed, BM25, the
- * query-cache probe, and rerank — so an over-length payload bounds every
+ * before the hot path consumes them — ahead of autoEmbed, BM25, and rerank
+ * — so an over-length payload bounds every
  * downstream consumer. normalizeDetailedSearchRequest applies the clamp to
  * the trimmed query, the same defense-in-depth posture as
  * clampSearchMaxResults above.

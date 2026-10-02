@@ -57,6 +57,12 @@ export type SearchConfig = {
 	>
 	timeRange?: { preset?: string; start?: string; end?: string }
 	needExactEvidence?: boolean
+	/**
+	 * Opt-in for the executor's constraint-relaxation fallback (RET-01).
+	 * Default false: explicit constraints (timeRange, needExactEvidence)
+	 * stay hard and an empty constrained answer stays empty.
+	 */
+	allowConstraintRelaxation?: boolean
 	numCandidates?: number
 	fusionMethod?: "scoreFusion" | "rankFusion" | "js-merge"
 	hybridMode?: "hybrid" | "vector-only"
@@ -347,21 +353,22 @@ export type MemongoSelfEditResponse = {
 	matchedPatterns?: string[]
 }
 
-/**
- * C-008: quarantine disposition carried on 202 responses. Lifecycle update
- * and memory feedback hold a write for injection review instead of applying
- * it; the server answers 202 with these fields instead of the updated item.
- * All fields are optional so non-quarantined 200 payloads (the normal
- * `MemongoLifecycleItem`) type-check unchanged.
- */
+/** Quarantine disposition fields; a held lifecycle write has no updated item. */
 export type MemongoQuarantineDisposition = {
 	/** True when the write was held in memory_quarantine for review. */
 	quarantined?: boolean
-	/** Quarantine row id, present when quarantined. */
+	/** Quarantine row id, when supplied by the server. */
 	quarantineId?: string
 	/** INJECTION_PATTERNS ids that matched, present when quarantined. */
 	matchedPatterns?: string[]
 }
+
+export type MemongoLifecycleMutationResult =
+	| (MemongoLifecycleItem & { quarantined?: false })
+	| (MemongoQuarantineDisposition & {
+			quarantined: true
+			matchedPatterns: string[]
+	  })
 
 export type MemongoExtractInput = {
 	eventId: string
@@ -423,6 +430,7 @@ export type MemongoStatusResponse = {
 	workspaceDir?: string
 	sources?: string[]
 	sourceCounts?: Array<{ source: string; files: number; chunks: number }>
+	/** @deprecated Persisted search-result serving is disabled. */
 	cache?: { enabled: boolean; entries?: number; maxEntries?: number }
 	fts?: { enabled: boolean; available: boolean; error?: string }
 	vector?: {
@@ -660,6 +668,34 @@ export type MemongoEraseAgentResponse = {
 	mutationId?: string
 	/** Set when the proof-of-erasure audit write failed (status is "partial"). */
 	auditError?: string
+	/**
+	 * Id of this erasure run. Present whenever the attempt entered the
+	 * erasure gate (begin or takeover succeeded); omitted on gate-entry
+	 * failure, when nothing ran.
+	 */
+	runId?: string
+	/**
+	 * The gate state this attempt itself established: "open" after its own
+	 * finalize reopened admission, "erasing" when an acknowledged fenced
+	 * partial audit re-validated ownership. Omitted on ownership loss,
+	 * finalize-indeterminate outcomes, gate-entry failure, and partials
+	 * whose audit errored without confirming ownership — the receipt never
+	 * asserts a gate state the attempt did not itself establish.
+	 */
+	gateState?: "open" | "erasing"
+	/**
+	 * Set when a fenced batch or the finalize owner validation observed a
+	 * successor takeover; the attempt aborted terminally with no further
+	 * deletes.
+	 */
+	ownershipLost?: true
+	/**
+	 * Set when the finalize transaction ended commit-ambiguous (the commit
+	 * may have landed); no compensating reopen/reclose was attempted.
+	 */
+	finalizeIndeterminate?: true
+	/** Echoes "takeover" when this request recovered a stuck erasure. */
+	recovery?: "takeover"
 	completedAt: string
 }
 
@@ -667,7 +703,11 @@ export type MemongoEraseAgentResponse = {
 // C-004 quarantine review (JSON wire format — dates as strings)
 // ---------------------------------------------------------------------------
 
-export type MemongoQuarantineStatus = "pending-review" | "promoted" | "rejected"
+export type MemongoQuarantineStatus =
+	| "pending-review"
+	| "promoting"
+	| "promoted"
+	| "rejected"
 
 /** One memory_quarantine row as surfaced to a reviewer. */
 export type MemongoQuarantinedMemory = {
@@ -779,7 +819,18 @@ export type MemongoConsolidateResponse = {
 export type MemongoRecallTrace = {
 	traceId: string
 	agentId: string
-	query: string
+	/**
+	 * RET-21: present only when the deployment's diagnostic privacy mode
+	 * stores query text ("raw" verbatim, "redacted-hash" shape-preserving
+	 * redaction); absent in "none" mode. Pre-policy traces keep the raw
+	 * query they were written with.
+	 */
+	query?: string
+	/** sha256 of the normalized query; present whenever query text is stored. */
+	queryHash?: string
+	/** RET-21: tenant-retention fields carried on every new trace. */
+	scope?: "session" | "user" | "agent" | "workspace" | "tenant" | "global"
+	scopeRef?: string
 	timestamp: string
 	lanesUsed?: string[]
 	lanesSkipped?: string[]

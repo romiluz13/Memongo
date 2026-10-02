@@ -104,6 +104,7 @@ const {
 	structuredMemCollection,
 	sessionChunksCollection,
 	memoryEvidenceCollection,
+	kbChunksCollection,
 } = await import("./mongodb-schema.js")
 const { getLaneCoverage } = await import("./mongodb-lane-coverage.js")
 
@@ -609,10 +610,188 @@ describe("searchV2", () => {
 			},
 		)
 
-		// Should still have results from raw-window despite episodic failure
+		// Should still have results from raw-window despite episodic failure.
+		// RET-13: pathsExecuted lists ATTEMPTED paths (episodic ran and
+		// threw), the failure lives in laneOutcomes, and resultsByPath
+		// shows only lanes that contributed.
 		expect(result.results.length).toBeGreaterThan(0)
 		expect(result.metadata.pathsExecuted).toContain("raw-window")
-		expect(result.metadata.pathsExecuted).not.toContain("episodic")
+		expect(result.metadata.pathsExecuted).toContain("episodic")
+		expect(result.metadata.resultsByPath?.episodic).toBeUndefined()
+		const episodicOutcome = result.metadata.laneOutcomes?.find(
+			(outcome) => outcome.lane === "episodic",
+		)
+		expect(episodicOutcome).toMatchObject({
+			lane: "episodic",
+			status: "failed",
+			error: "episodic broke",
+		})
+	})
+
+	it("surfaces a whole-path failure at the actual seam: onPathFailure + laneOutcomes (RET-13)", async () => {
+		mocked(planRetrieval).mockReturnValue({
+			paths: ["episodic"],
+			confidence: "high",
+			reasoning: "episodic keywords",
+		})
+		mocked(searchEpisodes).mockRejectedValue(new Error("episodic broke"))
+		const laneFailures: Array<{ lane: string; error: unknown }> = []
+
+		const result = await searchV2(
+			fakeDb,
+			fakePrefix,
+			"summarize today",
+			"agent-1",
+			{
+				availablePaths: new Set(["episodic"]),
+				onPathFailure: (lane, error) => laneFailures.push({ lane, error }),
+				searchOptions: { allowHybridBackstop: false },
+			},
+		)
+
+		// Attempted (pathsExecuted) but contributed nothing (resultsByPath).
+		expect(result.results).toHaveLength(0)
+		expect(result.metadata.pathsExecuted).toContain("episodic")
+		expect(result.metadata.resultsByPath.episodic).toBeUndefined()
+		expect(laneFailures).toEqual([
+			{ lane: "episodic", error: new Error("episodic broke") },
+		])
+		expect(result.metadata.laneOutcomes).toEqual([
+			{ lane: "episodic", status: "failed", error: "episodic broke" },
+		])
+	})
+
+	it("fails loudly in benchmark strict mode when a whole path fails (RET-13)", async () => {
+		const previous = process.env.MEMONGO_BENCHMARK_STRICT
+		process.env.MEMONGO_BENCHMARK_STRICT = "1"
+		try {
+			mocked(planRetrieval).mockReturnValue({
+				paths: ["episodic"],
+				confidence: "high",
+				reasoning: "episodic keywords",
+			})
+			mocked(searchEpisodes).mockRejectedValue(new Error("episodic broke"))
+
+			await expect(
+				searchV2(fakeDb, fakePrefix, "summarize today", "agent-1", {
+					availablePaths: new Set(["episodic"]),
+					searchOptions: { allowHybridBackstop: false },
+				}),
+			).rejects.toThrow("episodic broke")
+		} finally {
+			if (previous === undefined) {
+				delete process.env.MEMONGO_BENCHMARK_STRICT
+			} else {
+				process.env.MEMONGO_BENCHMARK_STRICT = previous
+			}
+		}
+	})
+
+	it("degrades only the failing KB sub-lanes and keeps sibling paths contributing (RET-13)", async () => {
+		// The KB chunks collection rejects every aggregate: the real searchKB
+		// waterfall (not mocked here) must surface each failed stage at its
+		// seam while the sibling episodic path still contributes.
+		mocked(planRetrieval).mockReturnValue({
+			paths: ["kb", "episodic"],
+			confidence: "medium",
+			reasoning: "reference + episodic",
+		})
+		mocked(kbChunksCollection).mockReturnValue({
+			aggregate: vi.fn(() => ({
+				toArray: vi.fn(async () => {
+					throw new Error("kb lane broke")
+				}),
+			})),
+		} as never)
+		mocked(searchEpisodes).mockResolvedValue([
+			{
+				episodeId: "ep-1",
+				title: "Morning standup",
+				summary: "Discussed sprint goals",
+				type: "daily",
+				agentId: "agent-1",
+				scope: "agent",
+				scopeRef: "agent:agent-1",
+				timeRange: { start: new Date(), end: new Date() },
+				sourceEventCount: 1,
+				updatedAt: new Date(),
+			},
+		])
+		const laneFailures: string[] = []
+
+		const result = await searchV2(
+			fakeDb,
+			fakePrefix,
+			"sprint goals architecture",
+			"agent-1",
+			{
+				availablePaths: new Set(["kb", "episodic"]),
+				onPathFailure: (lane) => laneFailures.push(lane),
+				searchOptions: { allowHybridBackstop: false },
+			},
+		)
+
+		// Every KB waterfall stage failed and was reported at its seam; the
+		// path itself still executed (ok, zero results) and the sibling
+		// episodic path kept its results.
+		expect(laneFailures).toEqual([
+			"kb:$rankFusion",
+			"kb:vector",
+			"kb:keyword",
+			"kb:$text",
+		])
+		expect(result.metadata.pathsExecuted).toEqual(
+			expect.arrayContaining(["kb", "episodic"]),
+		)
+		expect(result.metadata.resultsByPath.episodic).toBeGreaterThan(0)
+		expect(result.metadata.resultsByPath.kb).toBeUndefined()
+		const kbOutcome = result.metadata.laneOutcomes?.find(
+			(outcome) => outcome.lane === "kb",
+		)
+		expect(kbOutcome).toEqual({ lane: "kb", status: "ok", resultCount: 0 })
+		const kbStageOutcomes = result.metadata.laneOutcomes?.filter((outcome) =>
+			outcome.lane.startsWith("kb:"),
+		)
+		expect(kbStageOutcomes).toHaveLength(4)
+		for (const outcome of kbStageOutcomes ?? []) {
+			expect(outcome).toMatchObject({
+				status: "failed",
+				error: "kb lane broke",
+			})
+		}
+	})
+
+	it("fails loudly in benchmark strict mode when a KB waterfall stage fails (RET-13)", async () => {
+		const previous = process.env.MEMONGO_BENCHMARK_STRICT
+		process.env.MEMONGO_BENCHMARK_STRICT = "1"
+		try {
+			mocked(planRetrieval).mockReturnValue({
+				paths: ["kb", "episodic"],
+				confidence: "medium",
+				reasoning: "reference + episodic",
+			})
+			mocked(kbChunksCollection).mockReturnValue({
+				aggregate: vi.fn(() => ({
+					toArray: vi.fn(async () => {
+						throw new Error("kb lane broke")
+					}),
+				})),
+			} as never)
+			mocked(searchEpisodes).mockResolvedValue([])
+
+			await expect(
+				searchV2(fakeDb, fakePrefix, "sprint goals architecture", "agent-1", {
+					availablePaths: new Set(["kb", "episodic"]),
+					searchOptions: { allowHybridBackstop: false },
+				}),
+			).rejects.toThrow("kb lane broke")
+		} finally {
+			if (previous === undefined) {
+				delete process.env.MEMONGO_BENCHMARK_STRICT
+			} else {
+				process.env.MEMONGO_BENCHMARK_STRICT = previous
+			}
+		}
 	})
 
 	it("threads the textSearch capability into the episodic lane lookup (P3.8)", async () => {
@@ -1096,11 +1275,20 @@ describe("searchV2", () => {
 				confidence: "high",
 				reasoning: "temporal coverage query",
 			})
-			mocked(crossEncoderRerank).mockImplementation(async ({ results }) => ({
-				results: [...results].toReversed(),
-				reranked: true,
-				latencyMs: 1,
-			}))
+			mocked(crossEncoderRerank).mockImplementation(async ({ results }) => {
+				const reranked = [...results].toReversed()
+				return {
+					results: reranked,
+					reranked: true,
+					latencyMs: 1,
+					partitions: {
+						reranked,
+						emptySnippet: [],
+						overflow: [],
+						below: [],
+					},
+				}
+			})
 
 			mocked(getEventsByTimeRange).mockResolvedValue([
 				{
@@ -1301,8 +1489,8 @@ describe("searchV2", () => {
 					},
 				]),
 			})
-			mocked(crossEncoderRerank).mockImplementation(async ({ results }) => ({
-				results: results
+			mocked(crossEncoderRerank).mockImplementation(async ({ results }) => {
+				const reranked = results
 					.map((entry) => ({
 						...entry,
 						score:
@@ -1312,10 +1500,19 @@ describe("searchV2", () => {
 									? 0.57
 									: 0.52,
 					}))
-					.toSorted((left, right) => right.score - left.score),
-				reranked: true,
-				latencyMs: 1,
-			}))
+					.toSorted((left, right) => right.score - left.score)
+				return {
+					results: reranked,
+					reranked: true,
+					latencyMs: 1,
+					partitions: {
+						reranked,
+						emptySnippet: [],
+						overflow: [],
+						below: [],
+					},
+				}
+			})
 			mocked(eventsCollection).mockReturnValue({ aggregate } as never)
 
 			const result = await searchV2(
@@ -1362,5 +1559,125 @@ describe("searchV2", () => {
 				process.env.MEMONGO_BENCHMARK_TURN_PRECISION_MODE = previousMode
 			}
 		}
+	})
+
+	it("keeps CE-ranked results ahead of unreranked overflow through the composed pipeline (RET-08)", async () => {
+		mocked(planRetrieval).mockReturnValue({
+			paths: ["raw-window"],
+			confidence: "high",
+			reasoning: "overflow displacement probe",
+		})
+		const makeEvent = (
+			eventId: string,
+			body: string,
+			sessionId: string,
+			hour: number,
+		) => ({
+			_id: eventId,
+			eventId,
+			body,
+			role: "user" as const,
+			timestamp: new Date(`2023-06-04T${String(hour).padStart(2, "0")}:00:00Z`),
+			agentId: "agent-1",
+			scope: "agent" as const,
+			scopeRef: "agent:agent-1",
+			sessionId,
+			channel: "default",
+		})
+		mocked(getEventsByTimeRange).mockResolvedValue([
+			makeEvent(
+				"evt-ce-a",
+				"espresso machine calibration notes alpha",
+				"session-a",
+				10,
+			),
+			makeEvent(
+				"evt-ce-b",
+				"espresso machine calibration notes bravo",
+				"session-b",
+				9,
+			),
+			makeEvent(
+				"evt-overflow-c",
+				"espresso machine calibration notes charlie",
+				"session-c",
+				8,
+			),
+			makeEvent(
+				"evt-overflow-d",
+				"espresso machine calibration notes delta",
+				"session-d",
+				7,
+			),
+		])
+		// The mock cross-encoder scores only the top-2 (topN) candidates,
+		// weakly (.2/.1); the overflow pair keeps its higher retrieval scores.
+		mocked(crossEncoderRerank).mockImplementation(async ({ results }) => {
+			const isCeRanked = (path: string) =>
+				path === "events/evt-ce-a" || path === "events/evt-ce-b"
+			const reranked = results
+				.filter((entry) => isCeRanked(entry.path))
+				.map((entry) => ({
+					...entry,
+					score: entry.path === "events/evt-ce-a" ? 0.2 : 0.1,
+				}))
+				.toSorted((left, right) => right.score - left.score)
+			const overflow = results.filter((entry) => !isCeRanked(entry.path))
+			return {
+				results: [...reranked, ...overflow],
+				reranked: true,
+				latencyMs: 1,
+				partitions: {
+					reranked,
+					emptySnippet: [],
+					overflow,
+					below: [],
+				},
+			}
+		})
+
+		const result = await searchV2(
+			fakeDb,
+			fakePrefix,
+			"espresso machine calibration",
+			"agent-1",
+			{
+				availablePaths: new Set(["raw-window"]),
+				searchOptions: {
+					allowHybridBackstop: false,
+					rerankConfig: {
+						enabled: true,
+						model: "rerank-2.5-lite",
+						topN: 2,
+						minScore: 0,
+						voyageApiKey: "test-key",
+						// Isolate the partition-ordering behavior under test
+						// from the orthogonal post-CE recency/access boost.
+						recencyBoost: 0,
+						accessBoost: 0,
+					},
+				},
+			},
+		)
+
+		expect(crossEncoderRerank).toHaveBeenCalledOnce()
+		const rerankInput = mocked(crossEncoderRerank).mock.calls[0]?.[0] as
+			| { results: MemorySearchResult[] }
+			| undefined
+		expect(rerankInput?.results).toHaveLength(4)
+		expect(result.metadata.reranked).toBe(true)
+		// Audit proof, end to end: CE-scored .2/.1 stay ahead of untouched
+		// overflow even though the overflow items keep higher retrieval
+		// scores. Pre-RET-08 the post-rerank score sorts displaced the
+		// CE-ranked pair behind the overflow pair.
+		expect(result.results.map((entry) => entry.path)).toEqual([
+			"events/evt-ce-a",
+			"events/evt-ce-b",
+			"events/evt-overflow-c",
+			"events/evt-overflow-d",
+		])
+		expect(result.results[2]?.score).toBeGreaterThan(
+			result.results[0]?.score ?? 0,
+		)
 	})
 })

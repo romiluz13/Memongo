@@ -46,6 +46,12 @@ export type CapabilityGate = {
 	todo: string
 	/** Re-enable condition evaluated inside detectCapabilities. */
 	shouldEnable: (context: CapabilityGateContext) => boolean
+	/**
+	 * Context-specific truthful reason the gate is disabled (env kill-switch,
+	 * missing opt-in). Return undefined when the static blocker line IS the
+	 * actual reason; a recorded probe rejection takes precedence over both.
+	 */
+	explainDisabled?: (context: CapabilityGateContext) => string | undefined
 }
 
 /**
@@ -228,6 +234,12 @@ export const CAPABILITY_GATES: readonly CapabilityGate[] = [
 			}
 			return serverVersionAtLeast(versionArray, 8, 3, 7)
 		},
+		explainDisabled: ({ env }) => {
+			if (env?.MEMONGO_VECTOR_STORED_SOURCE?.trim() === "0") {
+				return "disabled by MEMONGO_VECTOR_STORED_SOURCE=0"
+			}
+			return undefined
+		},
 	},
 	{
 		id: "autoembed-quantization",
@@ -249,14 +261,20 @@ export const CAPABILITY_GATES: readonly CapabilityGate[] = [
 		description: "$rerank aggregation stage for server-side reranking",
 		blockedOn: "Atlas Search Preview; Atlas-managed deployments only",
 		todo: "fix-plan-2026-08-03 P3.6 — adopt when $rerank reaches GA",
+		// Not wired into memongo at all: the operator-facing truth is "not
+		// implemented", not the external Preview dependency it sits behind.
 		shouldEnable: () => false,
+		explainDisabled: () => "not implemented in this memongo release",
 	},
 	{
 		id: "lexical-prefilters",
 		description: "prefilters on lexical ($search) indexes",
 		blockedOn: "Atlas Search Preview",
 		todo: "fix-plan-2026-08-03 P3.6 — adopt when lexical prefilters reach GA",
+		// Same as rerank-stage: nothing is wired, so "not implemented" is the
+		// truthful operator line; the Preview dependency stays in blockedOn.
 		shouldEnable: () => false,
+		explainDisabled: () => "not implemented in this memongo release",
 	},
 	{
 		id: "flat-indexes",
@@ -267,9 +285,31 @@ export const CAPABILITY_GATES: readonly CapabilityGate[] = [
 		minServerVersion: [8, 3, 7],
 		blockedOn: "Preview-to-GA watch on autoEmbed indexingMethod",
 		todo: "fix-plan-2026-08-03 P3.6 — drop the env opt-in when flat indexingMethod is GA",
-		shouldEnable: ({ versionArray, env }) =>
-			env?.MEMONGO_VECTOR_INDEXING_METHOD?.trim() === "flat" &&
-			serverVersionAtLeast(versionArray, 8, 3, 7),
+		shouldEnable: ({ versionArray, env }) => {
+			// Mirror vectorIndexingMethodFromEnv(): trim + lowercase so the
+			// gate verdict always matches what index creation actually ships.
+			const method = env?.MEMONGO_VECTOR_INDEXING_METHOD?.trim().toLowerCase()
+			return method === "flat" && serverVersionAtLeast(versionArray, 8, 3, 7)
+		},
+		explainDisabled: ({ versionArray, env }) => {
+			// [8, 3, 7] mirrors minServerVersion above.
+			const method = env?.MEMONGO_VECTOR_INDEXING_METHOD?.trim().toLowerCase()
+			if (method !== "flat") {
+				if (serverVersionAtLeast(versionArray, 8, 3, 7)) {
+					return "requires the MEMONGO_VECTOR_INDEXING_METHOD=flat opt-in"
+				}
+				const label = serverVersionLabel(versionArray)
+				const version =
+					label === undefined
+						? "server version unknown or unavailable"
+						: `server is ${label}`
+				return (
+					"requires the MEMONGO_VECTOR_INDEXING_METHOD=flat opt-in and " +
+					`MongoDB >= 8.3.7 (${version})`
+				)
+			}
+			return undefined
+		},
 	},
 ]
 
@@ -325,9 +365,50 @@ export function applyCapabilityProbeResult(
 }
 
 /**
- * One info line per disabled gate, with what unblocks it and the tracked
- * TODO — the visible counterpart of the half-wired features this registry
- * replaced.
+ * Human label for a buildInfo versionArray ("8.0.13"), or undefined when the
+ * array is missing or malformed. An unknown version must be reported as
+ * unknown — never confused with a known below-minimum server (D2).
+ */
+function serverVersionLabel(versionArray: unknown): string | undefined {
+	if (!Array.isArray(versionArray) || versionArray.length < 2) {
+		return undefined
+	}
+	const parts = [Number(versionArray[0]), Number(versionArray[1])]
+	if (versionArray.length > 2) {
+		parts.push(Number(versionArray[2]))
+	}
+	if (parts.some((part) => !Number.isFinite(part))) {
+		return undefined
+	}
+	return parts.join(".")
+}
+
+/**
+ * Version-gate disabled reason that distinguishes a known below-minimum
+ * server from a missing or malformed version.
+ */
+function versionRequirementReason(
+	minServerVersion: readonly [number, number, number],
+	versionArray: unknown,
+): string {
+	const minimum = `MongoDB >= ${minServerVersion.join(".")}`
+	const label = serverVersionLabel(versionArray)
+	if (label === undefined) {
+		return `requires ${minimum} (server version unknown or unavailable)`
+	}
+	return `requires ${minimum} (server is ${label})`
+}
+
+/**
+ * One info line per disabled gate with what ACTUALLY blocks it in this
+ * context — the visible counterpart of the half-wired features this
+ * registry replaced. The reason is truthful for the specific evaluation:
+ * a recorded probe rejection, an env kill-switch, or a missing opt-in is
+ * reported as itself, never papered over with the static version
+ * requirement; an unknown server version is never confused with a known
+ * below-minimum one; gates with nothing wired report "not implemented".
+ * Registry-internal tracking (fix-plan/GA TODO references) stays out of
+ * operator lines.
  */
 export function logDisabledCapabilityGates(
 	context: CapabilityGateContext,
@@ -336,10 +417,13 @@ export function logDisabledCapabilityGates(
 		if (isCapabilityEnabled(gate.id, context)) {
 			continue
 		}
-		const blocker =
-			gate.minServerVersion !== undefined
-				? `requires MongoDB >= ${gate.minServerVersion.join(".")}`
-				: `blocked on ${gate.blockedOn}`
-		log.info(`capability ${gate.id} disabled: ${blocker}; ${gate.todo}`)
+		const reason =
+			(probeRejected(gate.id, context.deployment)
+				? "server rejected it at index creation (recorded probe)"
+				: gate.explainDisabled?.(context)) ??
+			(gate.minServerVersion !== undefined
+				? versionRequirementReason(gate.minServerVersion, context.versionArray)
+				: `blocked on ${gate.blockedOn}`)
+		log.info(`capability ${gate.id} disabled: ${reason}`)
 	}
 }

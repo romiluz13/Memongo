@@ -401,6 +401,14 @@ export const CHUNKS_SCHEMA: Document = {
 					text: { bsonType: "string" },
 					hash: { bsonType: "string" },
 					source: { bsonType: "string" },
+					// RET-09: authoring role of the source turn (user |
+					// assistant | system | tool), written at projection
+					// time. Absent on legacy chunks, where the renderEvent
+					// text prefix carries it.
+					role: {
+						enum: ["user", "assistant", "system", "tool"],
+						description: "Authoring role of the source conversation turn",
+					},
 					startLine: { bsonType: "number" },
 					endLine: { bsonType: "number" },
 					// W07: emission index within the file's chunk list.

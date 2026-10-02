@@ -167,6 +167,62 @@ describe("operation run accounting", () => {
 		)
 	})
 
+	it("accumulates reasoning tokens only when the gateway reports them (C-017)", () => {
+		const context = createOperationRunContext({
+			runId: "run-reasoning-tokens",
+			configuration: RUN_CONFIGURATION,
+		})
+
+		context.accounting.recordSuccess("enrichment", {
+			provider: "gateway",
+			model: "glm-5.3",
+			inputTokens: 10,
+			outputTokens: 2,
+		})
+		let enrichment = context.accounting
+			.snapshot()
+			.operations.find(
+				(entry) =>
+					entry.operation === "enrichment" && entry.provider === "gateway",
+			)
+		// no reasoning reported → field stays absent (not reported ≠ 0)
+		expect(enrichment).not.toHaveProperty("reasoningTokens")
+
+		context.accounting.recordSuccess("enrichment", {
+			provider: "gateway",
+			model: "glm-5.3",
+			inputTokens: 1,
+			outputTokens: 1,
+			reasoningTokens: 1899,
+		})
+		context.accounting.recordSuccess("enrichment", {
+			provider: "gateway",
+			model: "glm-5.3",
+			inputTokens: 1,
+			outputTokens: 1,
+			reasoningTokens: 101,
+		})
+		context.accounting.recordSuccess("enrichment", {
+			provider: "gateway",
+			model: "glm-5.3",
+			inputTokens: 1,
+			outputTokens: 1,
+			reasoningTokens: Number.NaN,
+		})
+		enrichment = context.accounting
+			.snapshot()
+			.operations.find(
+				(entry) =>
+					entry.operation === "enrichment" && entry.provider === "gateway",
+			)
+		// accumulated when finite; non-finite does not poison the sum
+		expect(enrichment).toMatchObject({
+			inputTokens: 13,
+			outputTokens: 5,
+			reasoningTokens: 2000,
+		})
+	})
+
 	it("threads transport usage through instrumentOperationProvider (C-017)", async () => {
 		const context = createOperationRunContext({
 			runId: "run-provider-threading",
@@ -202,6 +258,91 @@ describe("operation run accounting", () => {
 			failed: 0,
 			inputTokens: 17,
 			outputTokens: 4,
+		})
+	})
+
+	it("threads gateway reasoning tokens through the cost wrapper (C-017)", async () => {
+		const context = createOperationRunContext({
+			runId: "run-reasoning-threading",
+			configuration: RUN_CONFIGURATION,
+		})
+		const transport = {
+			name: "gateway",
+			chatCompletion: async () => ({
+				text: "{}",
+				usage: {
+					inputTokens: 410,
+					outputTokens: 2048,
+					reasoningTokens: 1899,
+				},
+			}),
+		}
+		const provider = instrumentOperationProvider({
+			provider: transport,
+			runContext: context,
+			operation: "relation-extraction",
+		})
+
+		await provider.chatCompletion({
+			model: "glm-5.3",
+			messages: [{ role: "user", content: "extract" }],
+		})
+
+		const extraction = context.accounting
+			.snapshot()
+			.operations.find(
+				(entry) =>
+					entry.operation === "relation-extraction" &&
+					entry.provider === "gateway",
+			)
+		expect(extraction).toMatchObject({
+			attempted: 1,
+			succeeded: 1,
+			failed: 0,
+			inputTokens: 410,
+			outputTokens: 2048,
+			reasoningTokens: 1899,
+		})
+	})
+
+	it("accounts an empty-200 response as a successful paid call (C-017)", async () => {
+		const context = createOperationRunContext({
+			runId: "run-empty-200",
+			configuration: RUN_CONFIGURATION,
+		})
+		const transport = {
+			name: "gateway",
+			chatCompletion: async () => ({
+				text: "",
+				usage: { inputTokens: 9, outputTokens: 2 },
+			}),
+		}
+		const provider = instrumentOperationProvider({
+			provider: transport,
+			runContext: context,
+			operation: "enrichment",
+		})
+
+		await provider.chatCompletion({
+			model: "glm-5.3",
+			messages: [{ role: "user", content: "extract" }],
+		})
+
+		const enrichment = context.accounting
+			.snapshot()
+			.operations.find(
+				(entry) =>
+					entry.operation === "enrichment" && entry.provider === "gateway",
+			)
+		// Empty content is a classification concern at the consumer; the
+		// transport call itself succeeded (empty-200 is a paid call), so
+		// its usage flows through success accounting with no gap.
+		expect(enrichment).toMatchObject({
+			attempted: 1,
+			succeeded: 1,
+			failed: 0,
+			inputTokens: 9,
+			outputTokens: 2,
 		})
 	})
 

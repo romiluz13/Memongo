@@ -16,9 +16,13 @@ import type {
 	ResolvedMemoryBackendConfig,
 	ResolvedMongoDBConfig,
 } from "./backend-config.js"
-import type { OperationRunContext } from "./mongodb-operation-accounting.js"
+import type {
+	OperationAccountingEffect,
+	OperationRunContext,
+} from "./mongodb-operation-accounting.js"
 import { isDuplicateKeyError } from "./internal.js"
 import type { AccessTracker } from "./mongodb-access-tracker.js"
+import type { AdmissionToken } from "./mongodb-erasure-epoch.js"
 import { hydrateActiveSlate } from "./mongodb-active-slate.js"
 import type { MemoryStats } from "./mongodb-analytics.js"
 import type { MongoDBChangeStreamWatcher } from "./mongodb-change-stream.js"
@@ -101,8 +105,7 @@ import type {
 } from "./types.js"
 import type { MemoryMongoDBFusionMethod, MemoryScope } from "@memongo/lib"
 import type { FSWatcher } from "chokidar"
-import type { MongoClient } from "mongodb"
-import type { Db, Document } from "mongodb"
+import type { ClientSession, Db, Document, MongoClient } from "mongodb"
 
 export interface MongoDBManagerHost {
 	readonly client: MongoClient
@@ -138,6 +141,7 @@ export interface MongoDBManagerHost {
 	derivationSchedulingQueue: Promise<void>
 	derivationQueue: Promise<void>
 	readonly memoryJobWorkerId: string
+	memoryJobWorkerGeneration: number
 	memoryJobWorkerStopped: boolean
 	memoryJobWorkerActive: boolean
 	memoryJobWakeRequested: boolean
@@ -170,7 +174,10 @@ export interface MongoDBManagerHost {
 	): Document | undefined
 	getBridgeChunkBudget(maxResults: number): number
 	buildV2AvailablePaths(activeSources: ActiveSources): Set<RetrievalPath>
-	recordSearchAccess(results: MemorySearchResult[]): void
+	recordSearchAccess(
+		results: MemorySearchResult[],
+		admission?: AdmissionToken,
+	): void
 	setLastSearchMode(mode: string, details?: Record<string, unknown>): void
 	legacySearch(
 		query: string,
@@ -180,7 +187,9 @@ export interface MongoDBManagerHost {
 			sessionKey?: string
 			scope?: MemoryScope
 			scopeRef?: string
+			kbRestricted?: boolean
 		},
+		admission?: AdmissionToken,
 	): Promise<MemorySearchResult[]>
 	search(
 		query: string,
@@ -190,6 +199,7 @@ export interface MongoDBManagerHost {
 			sessionKey?: string
 			scope?: MemoryScope
 			scopeRef?: string
+			kbRestricted?: boolean
 			questionDate?: Date
 			/**
 			 * #66: receives the per-lane latency breakdown of this call. A sink
@@ -216,13 +226,19 @@ export interface MongoDBManagerHost {
 		searchScope: MemoryScope
 		searchScopeRef: string
 		operationRunContext?: OperationRunContext
+		readAdmission?: AdmissionToken
 	}): Promise<MemorySearchResult[]>
-	searchDetailed(request: MemorySearchRequest): Promise<MemorySearchResponse>
+	searchDetailed(
+		request: MemorySearchRequest,
+		operationRunContext?: OperationRunContext,
+	): Promise<MemorySearchResponse>
 	searchKB(
 		query: string,
 		opts?: {
 			maxResults?: number
 			minScore?: number
+			scope?: MemoryScope
+			sessionKey?: string
 			scopeRef?: string
 			filter?: { tags?: string[]; category?: string; source?: string }
 			/** Per-call override; defaults to the resolved config fusionMethod. */
@@ -247,6 +263,7 @@ export interface MongoDBManagerHost {
 		minScore?: number
 		deep?: boolean
 		questionDate?: Date
+		kbRestricted?: boolean
 	}): Promise<RelevanceExplainResult>
 	relevanceReport(params?: { windowMs?: number }): Promise<RelevanceReport>
 	relevanceSampleRate(): RelevanceSampleState
@@ -262,11 +279,17 @@ export interface MongoDBManagerHost {
 		force?: boolean
 		progress?: (update: MemorySyncProgressUpdate) => void
 	}): Promise<void>
-	repairEventProjections(): Promise<{
+	repairEventProjections(params?: {
+		admission?: AdmissionToken
+		singleBatch?: boolean
+	}): Promise<{
 		eventsProcessed: number
 		chunksCreated: number
 	}>
-	repairExtractionOutbox(params?: { limit?: number }): Promise<{
+	repairExtractionOutbox(params?: {
+		limit?: number
+		admission?: AdmissionToken
+	}): Promise<{
 		eventsProcessed: number
 		jobsCreated: number
 		jobsReleased: number
@@ -290,18 +313,31 @@ export interface MongoDBManagerHost {
 	runClaimedBackgroundExtractionJob(
 		job: ClaimedMemoryJob,
 		prefetchedLlmFacts?: string[],
+		prefetchedEffects?: {
+			llmUsage: Array<{
+				inputTokens?: number
+				outputTokens?: number
+				at: Date
+			}>
+			operationAccounting: OperationAccountingEffect[]
+		},
 	): Promise<void>
-	drainMemoryJobQueue(): Promise<void>
+	drainMemoryJobQueue(params?: { admission?: AdmissionToken }): Promise<void>
 	prefetchExtractionSessionFacts(
 		jobs: ClaimedMemoryJob[],
 	): Promise<Map<string, string[]>>
-	wakeMemoryJobWorker(): void
-	startMemoryJobWorker(): void
+	wakeMemoryJobWorker(
+		admission?: AdmissionToken,
+		generation?: number,
+		expectedTimer?: NodeJS.Timeout,
+	): void
+	startMemoryJobWorker(admission?: AdmissionToken, generation?: number): void
 	stopMemoryJobWorker(): Promise<void>
 	scheduleBackgroundExtraction(
 		eventId: string,
 		tenant?: { scope?: MemoryScope; scopeRef?: string },
 		runContext?: OperationRunContext,
+		params?: { admission?: AdmissionToken; generation?: number },
 	): Promise<{ jobId: string; scheduled: boolean }>
 	schedulePostWriteDerivations(params: {
 		eventId: string
@@ -312,11 +348,13 @@ export interface MongoDBManagerHost {
 		scope: MemoryScope
 		scopeRef: string
 		runContext?: OperationRunContext
+		admission?: AdmissionToken
 	}): Promise<void>
 	scheduleQueryCacheInvalidation(params: {
 		agentId: string
 		scope: MemoryScope
 		scopeRef: string
+		admission?: AdmissionToken
 	}): void
 	resolveIdempotencyFingerprint(event: {
 		role: "user" | "assistant" | "system" | "tool"
@@ -340,10 +378,12 @@ export interface MongoDBManagerHost {
 			scope?: MemoryScope
 			scopeRef?: string
 		}
+		session?: ClientSession
 	}): Promise<{ eventId: string; chunkCreated: boolean } | null>
 	pruneIdempotencyFingerprints(params?: {
 		olderThanDays?: number
 		force?: boolean
+		admission?: AdmissionToken
 	}): Promise<{ pruned: number }>
 	writeConversationEvent(
 		event: WriteConversationEventInput,
@@ -386,20 +426,24 @@ export interface MongoDBManagerHost {
 		rawPath: string,
 		from?: number,
 		lines?: number,
+		session?: ClientSession,
 	): Promise<ManagerReadResult>
 	readCanonicalEvent(
 		eventId: string,
 		rawPath: string,
+		session?: ClientSession,
 	): Promise<ManagerReadResult>
 	readBridgeChunk(
 		rawPath: string,
 		from?: number,
 		lines?: number,
+		session?: ClientSession,
 	): Promise<ManagerReadResult>
 	readEpisodeLocator(params: {
 		rawPath: string
 		episodeId: string
 		expandEvents: boolean
+		session?: ClientSession
 	}): Promise<ManagerReadResult>
 	writeStructuredMemory(entry: StructuredMemoryEntry): Promise<{
 		upserted: boolean

@@ -1,4 +1,4 @@
-import type { Collection, Db, UpdateResult } from "mongodb"
+import type { Collection, Db, Document, UpdateResult } from "mongodb"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
 // ---------------------------------------------------------------------------
@@ -29,10 +29,33 @@ function mockCollection(
 }
 
 function mockDb(collectionMap: Record<string, Collection> = {}): Db {
-	return {
-		collection: vi.fn((name: string) => {
-			return collectionMap[name] ?? mockCollection()
+	const gate: Document = { agentId: "", epoch: 0, state: "open", serial: 0 }
+	const meta = mockCollection({
+		findOneAndUpdate: vi.fn(
+			async (
+				_filter: unknown,
+				update: { $setOnInsert: { agentId: string } },
+			) => {
+				gate.agentId = update.$setOnInsert.agentId
+				return { ...gate }
+			},
+		),
+		findOne: vi.fn(async () => ({ ...gate })),
+		updateOne: vi.fn(async () => {
+			gate.serial += 1
+			return { matchedCount: 1, modifiedCount: 1 }
 		}),
+	})
+	const session = {
+		inTransaction: () => false,
+		withTransaction: async (fn: () => Promise<unknown>) => fn(),
+		endSession: async () => {},
+	}
+	return {
+		client: { startSession: () => session },
+		collection: vi.fn((name: string) =>
+			name === "test_meta" ? meta : (collectionMap[name] ?? mockCollection()),
+		),
 	} as unknown as Db
 }
 
@@ -164,5 +187,55 @@ describe("markEventsDreamerProcessed", () => {
 		})
 
 		expect(count).toBe(0)
+	})
+})
+
+describe("consolidateMemory LLM seam gating (B1)", () => {
+	beforeEach(() => {
+		vi.clearAllMocks()
+	})
+
+	it("resolves the enrichment provider for the reasoning seam by default", async () => {
+		const { consolidateMemory } = await import("./mongodb-consolidator.js")
+		resolveEnrichmentProviderMock.mockReturnValueOnce({
+			name: "mock-provider",
+			chatCompletion: vi.fn(async () => ({ content: "{}" })),
+		})
+
+		const result = await consolidateMemory({
+			db: mockDb(),
+			prefix: "test_",
+			agentId: "agent-1",
+		})
+
+		expect(resolveEnrichmentProviderMock).toHaveBeenCalledTimes(1)
+		expect(result.eventsProcessed).toBe(0)
+	})
+
+	it("makes zero provider resolution calls when MEMONGO_EXTRACTION_LLM=off (B1)", async () => {
+		const { consolidateMemory } = await import("./mongodb-consolidator.js")
+		// Full enrichment env: without the gate the seam would resolve the
+		// provider, so this proves the gate (not missing config) holds.
+		resolveEnrichmentProviderMock.mockReturnValue({
+			name: "mock-provider",
+			chatCompletion: vi.fn(async () => ({ content: "{}" })),
+		})
+		vi.stubEnv("MEMONGO_EXTRACTION_LLM", "off")
+		vi.stubEnv("MEMONGO_ENRICHMENT_API_KEY", "test-key")
+		vi.stubEnv("MEMONGO_ENRICHMENT_BASE_URL", "https://enrichment.example")
+		vi.stubEnv("MEMONGO_ENRICHMENT_MODEL", "test-model")
+		try {
+			const result = await consolidateMemory({
+				db: mockDb(),
+				prefix: "test_",
+				agentId: "agent-1",
+			})
+
+			expect(resolveEnrichmentProviderMock).not.toHaveBeenCalled()
+			expect(result.eventsProcessed).toBe(0)
+		} finally {
+			vi.unstubAllEnvs()
+			resolveEnrichmentProviderMock.mockReturnValue(null)
+		}
 	})
 })

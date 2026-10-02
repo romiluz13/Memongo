@@ -1,6 +1,14 @@
 import { randomUUID } from "node:crypto"
 import type { Db } from "mongodb"
+import type { DiagnosticQueryPrivacyMode } from "./mongodb-diagnostic-privacy.js"
+import { applyDiagnosticQueryPrivacy } from "./mongodb-diagnostic-privacy.js"
 import { recallTracesCollection } from "./mongodb-schema.js"
+import {
+	type AdmissionToken,
+	captureAdmissionToken,
+	ErasureGateConflictError,
+	withFencedWrite,
+} from "./mongodb-write-fence.js"
 import type { RecallTrace } from "./types.js"
 
 const DEFAULT_LIST_LIMIT = 20
@@ -16,19 +24,49 @@ function clampListLimit(limit?: number): number {
 export async function recordRecallTrace(params: {
 	db: Db
 	prefix: string
-	trace: Omit<RecallTrace, "traceId" | "timestamp"> & {
+	admission?: AdmissionToken
+	/**
+	 * RET-21: the recorder — not the call sites — applies the diagnostic
+	 * privacy policy, so no trace writer can persist a raw query around
+	 * the configured mode. Required parameter: a missed site is a compile
+	 * error, not a silent leak.
+	 */
+	privacyMode: DiagnosticQueryPrivacyMode
+	trace: Omit<RecallTrace, "traceId" | "timestamp" | "query"> & {
+		query: string
 		traceId?: string
 		timestamp?: Date
 	}
 }): Promise<string> {
-	const { db, prefix, trace } = params
+	const { db, prefix, privacyMode, trace } = params
+	const admission =
+		params.admission ??
+		(await captureAdmissionToken({ db, prefix, agentId: trace.agentId }))
+	if (admission.agentId !== trace.agentId)
+		throw new ErasureGateConflictError(trace.agentId)
 	const traceId = trace.traceId ?? randomUUID()
+	const { query, ...rest } = trace
+	// Same transform the relevance-run path applies (one policy module):
+	// "none" → no query text and no hash; "redacted-hash" → redacted text
+	// + hash; "raw" → verbatim text + hash.
+	const { queryHash, queryRedacted } = applyDiagnosticQueryPrivacy(
+		query,
+		privacyMode,
+	)
 	const doc: RecallTrace = {
-		...trace,
+		...rest,
+		...(queryRedacted !== undefined ? { query: queryRedacted } : {}),
+		...(queryHash ? { queryHash } : {}),
 		traceId,
 		timestamp: trace.timestamp ?? new Date(),
 	}
-	await recallTracesCollection(db, prefix).insertOne(doc)
+	await withFencedWrite({
+		db,
+		prefix,
+		token: admission,
+		fn: (session) =>
+			recallTracesCollection(db, prefix).insertOne(doc, { session }),
+	})
 	return traceId
 }
 

@@ -51,8 +51,6 @@ import { writeEventAndProject } from "./test-helpers/legacy-write-event.js"
 // v2 ops
 import { getRecentIngestRuns } from "./mongodb-ops.js"
 import { synthesizeProfile } from "./mongodb-profile.js"
-// Semantic query cache
-import { checkCache, writeCache } from "./mongodb-query-cache.js"
 import { rewriteQuery, expandSynonyms } from "./mongodb-query-rewriter.js"
 import { crossEncoderRerank, type RerankConfig } from "./mongodb-reranker.js"
 // v2 retrieval planner
@@ -75,7 +73,6 @@ import {
 import {
 	emitTelemetry,
 	getLatencyStats,
-	getCacheHitRate,
 	getOperationDistribution,
 } from "./mongodb-telemetry.js"
 import {
@@ -1828,248 +1825,14 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 		})
 	})
 
-	// ─── Phase 12: Semantic Query Cache (Real MongoDB) ──────────────────────────
-	// Tests the two-tier cache against a live MongoDB with real data written and read.
-	// Tier 1: exact SHA-256 hash match. Tier 2: $vectorSearch with autoEmbed.
-	// No mocks — real insertOne, real findOne, real $vectorSearch.
+	// ─── Phase 13: Telemetry (Real MongoDB) ──────────────────────────────────────
+	// Tests emitTelemetry against a real ordinary collection and verifies
+	// aggregation queries return correct results from real data.
 
-	describe("Phase 12: Semantic Query Cache", () => {
-		const cacheAgentId = `agent-cache-e2e-${randomUUID().slice(0, 8)}`
-		const cacheScope = "agent" as const
-		const cacheScopeRef = `agent:${cacheAgentId}`
-		const cacheConfig = {
-			enabled: true,
-			conversationTtlSec: 300,
-			kbTtlSec: 3600,
-			similarityThreshold: 0.95,
-		}
-
-		const fakeResults: MemorySearchResult[] = [
-			{
-				path: "/e2e/cache.md",
-				startLine: 1,
-				endLine: 5,
-				snippet: "DataVault pipeline architecture",
-				score: 0.88,
-				source: "conversation",
-			},
-			{
-				path: "/e2e/cache2.md",
-				startLine: 1,
-				endLine: 3,
-				snippet: "MongoDB data model for pipelines",
-				score: 0.82,
-				source: "conversation",
-			},
-		]
-
-		it("should write a cache entry and read it back via Tier 1 (exact hash match)", async () => {
-			const query = "What is the DataVault pipeline architecture?"
-
-			// Write to cache (fire-and-forget, but we await a small delay for it to complete)
-			writeCache({
-				db,
-				prefix: PREFIX,
-				query,
-				agentId: cacheAgentId,
-				scope: cacheScope,
-				scopeRef: cacheScopeRef,
-				results: fakeResults,
-				pathUsed: "hybrid",
-				sourceScope: "conversation",
-				ttlSec: 300,
-			})
-
-			// Small delay for the fire-and-forget upsert to complete
-			await new Promise((resolve) => setTimeout(resolve, 500))
-
-			// Tier 1: exact match — same query should hit the cache
-			const result = await checkCache({
-				db,
-				prefix: PREFIX,
-				query,
-				agentId: cacheAgentId,
-				scope: cacheScope,
-				scopeRef: cacheScopeRef,
-				config: cacheConfig,
-			})
-
-			expect(result.hit).toBe(true)
-			expect(result.tier).toBe("exact")
-			expect(result.results).toHaveLength(2)
-			expect(result.results[0].snippet).toBe("DataVault pipeline architecture")
-			expect(result.pathUsed).toBe("hybrid")
-			expect(result.sourceScope).toBe("conversation")
-		})
-
-		it("should increment hitCount on exact cache hit", async () => {
-			const query = "What is the DataVault pipeline architecture?"
-
-			// Hit the cache a second time
-			const result = await checkCache({
-				db,
-				prefix: PREFIX,
-				query,
-				agentId: cacheAgentId,
-				scope: cacheScope,
-				scopeRef: cacheScopeRef,
-				config: cacheConfig,
-			})
-
-			expect(result.hit).toBe(true)
-
-			// Wait for fire-and-forget $inc to complete
-			await new Promise((resolve) => setTimeout(resolve, 500))
-
-			// Verify hitCount was incremented in the actual document
-			const col = db.collection(`${PREFIX}query_cache`)
-			const doc = await col.findOne({ agentId: cacheAgentId })
-			expect(doc).not.toBeNull()
-			expect(doc!.hitCount).toBeGreaterThanOrEqual(1)
-		})
-
-		it("should return miss for a completely different query (no cache entry)", async () => {
-			const result = await checkCache({
-				db,
-				prefix: PREFIX,
-				query: "quantum physics black holes singularity",
-				agentId: cacheAgentId,
-				scope: cacheScope,
-				scopeRef: cacheScopeRef,
-				config: cacheConfig,
-			})
-
-			expect(result.hit).toBe(false)
-			expect(result.tier).toBe("miss")
-			expect(result.results).toHaveLength(0)
-		})
-
-		it("should return miss for a different agentId (tenant isolation)", async () => {
-			const query = "What is the DataVault pipeline architecture?"
-
-			const result = await checkCache({
-				db,
-				prefix: PREFIX,
-				query,
-				agentId: "completely-different-agent",
-				scope: cacheScope,
-				scopeRef: "agent:completely-different-agent",
-				config: cacheConfig,
-			})
-
-			expect(result.hit).toBe(false)
-			expect(result.tier).toBe("miss")
-		})
-
-		it("should return miss when cache is disabled", async () => {
-			const result = await checkCache({
-				db,
-				prefix: PREFIX,
-				query: "What is the DataVault pipeline architecture?",
-				agentId: cacheAgentId,
-				scope: cacheScope,
-				scopeRef: cacheScopeRef,
-				config: { ...cacheConfig, enabled: false },
-			})
-
-			expect(result.hit).toBe(false)
-			expect(result.tier).toBe("miss")
-		})
-
-		it("should upsert (update) an existing cache entry on re-write", async () => {
-			const query = "What is the DataVault pipeline architecture?"
-			const updatedResults: MemorySearchResult[] = [
-				{
-					path: "/e2e/updated.md",
-					startLine: 1,
-					endLine: 2,
-					snippet: "Updated architecture result",
-					score: 0.95,
-					source: "conversation",
-				},
-			]
-
-			writeCache({
-				db,
-				prefix: PREFIX,
-				query,
-				agentId: cacheAgentId,
-				scope: cacheScope,
-				scopeRef: cacheScopeRef,
-				results: updatedResults,
-				pathUsed: "vector",
-				sourceScope: "conversation",
-				ttlSec: 600,
-			})
-
-			await new Promise((resolve) => setTimeout(resolve, 500))
-
-			const result = await checkCache({
-				db,
-				prefix: PREFIX,
-				query,
-				agentId: cacheAgentId,
-				scope: cacheScope,
-				scopeRef: cacheScopeRef,
-				config: cacheConfig,
-			})
-
-			expect(result.hit).toBe(true)
-			expect(result.results).toHaveLength(1)
-			expect(result.results[0].snippet).toBe("Updated architecture result")
-			expect(result.pathUsed).toBe("vector")
-		})
-
-		it("should handle the query_cache collection existing with $jsonSchema validation", async () => {
-			// Verify the collection validates documents — try inserting a bad document directly
-			const col = db.collection(`${PREFIX}query_cache`)
-			try {
-				await col.insertOne({ bad: "document" } as never)
-				// If validation is moderate, this might succeed for some schemas
-				// Either way, our writeCache should work correctly
-			} catch {
-				// Expected: validation rejects malformed document
-			}
-
-			// Our real writeCache should still work (it uses the correct schema)
-			writeCache({
-				db,
-				prefix: PREFIX,
-				query: "schema validation test query",
-				agentId: cacheAgentId,
-				scope: cacheScope,
-				scopeRef: cacheScopeRef,
-				results: fakeResults,
-				pathUsed: "text",
-				sourceScope: "conversation",
-				ttlSec: 300,
-			})
-
-			await new Promise((resolve) => setTimeout(resolve, 500))
-
-			const result = await checkCache({
-				db,
-				prefix: PREFIX,
-				query: "schema validation test query",
-				agentId: cacheAgentId,
-				scope: cacheScope,
-				scopeRef: cacheScopeRef,
-				config: cacheConfig,
-			})
-
-			expect(result.hit).toBe(true)
-		})
-	})
-
-	// ─── Phase 13: Time Series Telemetry (Real MongoDB) ─────────────────────────
-	// Tests emitTelemetry against a real time series collection and verifies
-	// aggregation queries (getLatencyStats, getCacheHitRate, getOperationDistribution)
-	// return correct results from real data.
-
-	describe("Phase 13: Time Series Telemetry", () => {
+	describe("Phase 13: Telemetry", () => {
 		const telemetryAgentId = `agent-telemetry-e2e-${randomUUID().slice(0, 8)}`
 
-		it("should emit telemetry documents to the time series collection", async () => {
+		it("should emit telemetry documents to the diagnostic collection", async () => {
 			// Emit several telemetry documents with different operations
 			emitTelemetry(db, PREFIX, {
 				meta: { agentId: telemetryAgentId, operation: "search" },
@@ -2110,27 +1873,6 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 			})
 
 			emitTelemetry(db, PREFIX, {
-				meta: { agentId: telemetryAgentId, operation: "cache-check" },
-				durationMs: 2,
-				ok: true,
-				cacheHit: true,
-			})
-
-			emitTelemetry(db, PREFIX, {
-				meta: { agentId: telemetryAgentId, operation: "cache-check" },
-				durationMs: 15,
-				ok: true,
-				cacheHit: false,
-			})
-
-			emitTelemetry(db, PREFIX, {
-				meta: { agentId: telemetryAgentId, operation: "cache-check" },
-				durationMs: 3,
-				ok: true,
-				cacheHit: true,
-			})
-
-			emitTelemetry(db, PREFIX, {
 				meta: { agentId: telemetryAgentId, operation: "graph-expansion" },
 				durationMs: 65,
 				ok: true,
@@ -2140,12 +1882,12 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 			// Wait for all fire-and-forget writes to complete
 			await new Promise((resolve) => setTimeout(resolve, 2000))
 
-			// Verify documents were actually written to the time series collection
+			// Verify documents were actually written to the diagnostic collection
 			const col = db.collection(`${PREFIX}memory_telemetry`)
 			const count = await col.countDocuments({
 				"meta.agentId": telemetryAgentId,
 			})
-			expect(count).toBe(8)
+			expect(count).toBe(5)
 		})
 
 		it("should calculate correct latency percentiles from real data", async () => {
@@ -2164,20 +1906,6 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 			expect(stats.p99).toBe(200) // index 2 of 3 = 200
 		})
 
-		it("should calculate correct cache hit rate from real data", async () => {
-			const rate = await getCacheHitRate({
-				db,
-				prefix: PREFIX,
-				agentId: telemetryAgentId,
-				windowMs: 60_000,
-			})
-
-			expect(rate.total).toBe(3) // 3 cache-check events
-			expect(rate.hits).toBe(2) // 2 with cacheHit: true
-			expect(rate.misses).toBe(1) // 1 with cacheHit: false
-			expect(rate.hitRate).toBeCloseTo(2 / 3, 2)
-		})
-
 		it("should return correct operation distribution from real data", async () => {
 			const dist = await getOperationDistribution({
 				db,
@@ -2186,16 +1914,12 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 				windowMs: 60_000,
 			})
 
-			expect(dist.length).toBe(4) // search, event-write, cache-check, graph-expansion
+			expect(dist.length).toBe(3) // search, event-write, graph-expansion
 
 			const searchDist = dist.find((d) => d.operation === "search")
 			expect(searchDist).toBeDefined()
 			expect(searchDist!.count).toBe(3)
 			expect(searchDist!.avgDurationMs).toBe(Math.round((120 + 85 + 200) / 3))
-
-			const cacheDist = dist.find((d) => d.operation === "cache-check")
-			expect(cacheDist).toBeDefined()
-			expect(cacheDist!.count).toBe(3)
 
 			const writeDist = dist.find((d) => d.operation === "event-write")
 			expect(writeDist).toBeDefined()
@@ -2233,8 +1957,7 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 			expect(stats.count).toBe(0)
 		})
 
-		it("should verify time series collection has correct options", async () => {
-			// List collections and find our time series collection
+		it("should verify the diagnostic collection type and retention", async () => {
 			const collections = await db
 				.listCollections(
 					{ name: `${PREFIX}memory_telemetry` },
@@ -2243,20 +1966,18 @@ describe("Real E2E: Memory v2 Full Capability Test", () => {
 				.toArray()
 			expect(collections).toHaveLength(1)
 
-			const colInfo = collections[0] as {
-				type?: string
-				options?: {
-					timeseries?: {
-						timeField?: string
-						metaField?: string
-						granularity?: string
-					}
-				}
-			}
-			expect(colInfo.type).toBe("timeseries")
-			expect(colInfo.options?.timeseries?.timeField).toBe("ts")
-			expect(colInfo.options?.timeseries?.metaField).toBe("meta")
-			expect(colInfo.options?.timeseries?.granularity).toBe("seconds")
+			expect(collections[0]?.type).toBe("collection")
+			expect(collections[0]?.options?.timeseries).toBeUndefined()
+			const indexes = await db
+				.collection(`${PREFIX}memory_telemetry`)
+				.listIndexes()
+				.toArray()
+			expect(indexes).toContainEqual(
+				expect.objectContaining({
+					key: { ts: 1 },
+					expireAfterSeconds: 7 * 24 * 3600,
+				}),
+			)
 		})
 	})
 

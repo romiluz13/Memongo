@@ -20,6 +20,7 @@ export type McpToolDefinition = {
 	description: string
 	inputSchema: McpToolInputSchema
 	category: McpToolCategory
+	canonical?: string
 }
 
 /** Tool shape served over the wire (category is server-internal metadata). */
@@ -58,13 +59,18 @@ export function parseMcpToolFlags(env: McpToolEnv): McpToolFlags {
 	}
 }
 
+export function requiresAdmin(tool: McpToolDefinition): boolean {
+	if (tool.category !== "alias") return tool.category === "admin"
+	const canonical = toolCatalog.find((target) => target.name === tool.canonical)
+	return canonical?.category !== "core"
+}
+
 export function selectEnabledTools(env: McpToolEnv): McpToolDefinition[] {
 	const flags = parseMcpToolFlags(env)
 	return toolCatalog.filter(
 		(tool) =>
-			tool.category === "core" ||
-			(tool.category === "admin" && flags.admin) ||
-			(tool.category === "alias" && flags.aliases),
+			(tool.category !== "alias" || flags.aliases) &&
+			(!requiresAdmin(tool) || flags.admin),
 	)
 }
 

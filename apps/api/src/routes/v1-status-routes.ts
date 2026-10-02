@@ -9,12 +9,17 @@ import {
 	memongoBridgeStatus,
 	memongoBridgeSync,
 } from "@memongo/memory-bridge"
-import { internalError, jsonError } from "../lib/errors.js"
+import {
+	internalError,
+	isDependencyUnavailableError,
+	jsonError,
+} from "../lib/errors.js"
 import { MEMONGO_API_VERSION } from "../version.js"
 
 import {
 	readAgentId,
 	readJsonBody,
+	readSessionCoordinate,
 	readScope,
 	readScopeRef,
 	readScopeInputError,
@@ -31,6 +36,7 @@ export function registerStatusRoutes(v1: Hono<V1RouterEnv>): void {
 		try {
 			const profile = await memongoBridgeProfile({
 				agentId: await readAgentId(c),
+				sessionId: await readSessionCoordinate(c),
 				scope: await readScope(c),
 				scopeRef: await readScopeRef(c),
 				maxEntities:
@@ -59,9 +65,21 @@ export function registerStatusRoutes(v1: Hono<V1RouterEnv>): void {
 		const scope = await readScope(c)
 		const scopeRef = await readScopeRef(c)
 		try {
-			const state = await memongoBridgeGetState({ agentId, scope, scopeRef })
+			const state = await memongoBridgeGetState({
+				agentId,
+				scope,
+				scopeRef,
+				kbRestricted: c.get("kbRestricted"),
+			})
 			return c.json(state)
 		} catch (err) {
+			if (
+				err instanceof AggregateError &&
+				err.errors.length > 0 &&
+				err.errors.every(isDependencyUnavailableError)
+			) {
+				return internalError(c, err.errors[0], "STATE_FAILED")
+			}
 			return internalError(c, err, "STATE_FAILED")
 		}
 	})

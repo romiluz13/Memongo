@@ -44,8 +44,6 @@ import {
 } from "./mongodb-procedures.js"
 // Profile synthesis
 import { synthesizeProfile } from "./mongodb-profile.js"
-// Semantic query cache
-import { checkCache, writeCache } from "./mongodb-query-cache.js"
 // Query rewriter
 import { rewriteQuery, expandSynonyms } from "./mongodb-query-rewriter.js"
 // Reranker
@@ -64,7 +62,6 @@ import {
 	relationsCollection,
 	structuredMemCollection,
 	telemetryCollection,
-	queryCacheCollection,
 	kbChunksCollection,
 	mutationsCollection,
 	proceduresCollection,
@@ -84,7 +81,6 @@ import { writeStructuredMemory } from "./mongodb-structured-memory.js"
 import {
 	emitTelemetry,
 	getLatencyStats,
-	getCacheHitRate,
 	getOperationDistribution,
 } from "./mongodb-telemetry.js"
 import { kbLaneEnvironmentAvailable } from "./test-helpers/kb-path-visibility.js"
@@ -267,22 +263,6 @@ async function waitForTelemetry(
 	while (Date.now() - start < maxWaitMs) {
 		const count = await telemetryCollection(db, prefix).countDocuments(filter)
 		if (count > 0) {
-			return
-		}
-		await new Promise((r) => setTimeout(r, 200))
-	}
-}
-
-async function waitForCache(
-	db: Db,
-	prefix: string,
-	filter: Record<string, unknown>,
-	maxWaitMs = 2000,
-): Promise<void> {
-	const start = Date.now()
-	while (Date.now() - start < maxWaitMs) {
-		const doc = await queryCacheCollection(db, prefix).findOne(filter)
-		if (doc) {
 			return
 		}
 		await new Promise((r) => setTimeout(r, 200))
@@ -1139,218 +1119,7 @@ describeIfMongo(
 		})
 
 		// =========================================================================
-		// PHASE 5: Cache Behavior (Gaps #2, #11)
-		// =========================================================================
-
-		describe("Phase 5: Cache Behavior", () => {
-			const cacheAgentId = `agent-cache-${randomUUID().slice(0, 8)}`
-			const cacheScope = "agent" as const
-			const cacheScopeRef = `agent:${cacheAgentId}`
-			const cacheConfig = {
-				enabled: true,
-				conversationTtlSec: 300,
-				kbTtlSec: 3600,
-				similarityThreshold: 0.95,
-			}
-
-			const mockResults: MemorySearchResult[] = [
-				{
-					path: "/events/k8s-helm.md",
-					startLine: 1,
-					endLine: 5,
-					snippet:
-						"Helm chart configuration for the API gateway deployment with Istio service mesh integration",
-					score: 0.88,
-					source: "conversation",
-				},
-				{
-					path: "/events/monitoring.md",
-					startLine: 1,
-					endLine: 3,
-					snippet:
-						"Prometheus metrics and Grafana dashboards for Kubernetes cluster monitoring",
-					score: 0.82,
-					source: "conversation",
-				},
-			]
-
-			it("reports cache miss on first query", async () => {
-				const result = await checkCache({
-					db,
-					prefix: PREFIX,
-					query: "Kubernetes Helm chart deployment configuration",
-					agentId: cacheAgentId,
-					scope: cacheScope,
-					scopeRef: cacheScopeRef,
-					config: cacheConfig,
-				})
-
-				expect(result.hit).toBe(false)
-				expect(result.tier).toBe("miss")
-			})
-
-			it("reports exact cache hit after write", async () => {
-				const query = "Kubernetes Helm chart deployment configuration"
-
-				writeCache({
-					db,
-					prefix: PREFIX,
-					query,
-					agentId: cacheAgentId,
-					scope: cacheScope,
-					scopeRef: cacheScopeRef,
-					results: mockResults,
-					pathUsed: "hybrid",
-					sourceScope: "conversation",
-					ttlSec: 300,
-				})
-
-				await waitForCache(db, PREFIX, {
-					agentId: cacheAgentId,
-					pathUsed: "hybrid",
-				})
-
-				const result = await checkCache({
-					db,
-					prefix: PREFIX,
-					query,
-					agentId: cacheAgentId,
-					scope: cacheScope,
-					scopeRef: cacheScopeRef,
-					config: cacheConfig,
-				})
-
-				expect(result.hit).toBe(true)
-				expect(result.tier).toBe("exact")
-				expect(result.results).toHaveLength(2)
-				expect(result.pathUsed).toBe("hybrid")
-				expect(result.sourceScope).toBe("conversation")
-			})
-
-			it("attempts semantic similarity lookup on near-miss query", async () => {
-				// Slightly different query — should miss exact, attempt semantic
-				const result = await checkCache({
-					db,
-					prefix: PREFIX,
-					query: "K8s Helm deployment config",
-					agentId: cacheAgentId,
-					scope: cacheScope,
-					scopeRef: cacheScopeRef,
-					config: cacheConfig,
-				})
-
-				// Tier 2 (semantic) requires vector search index on query_cache.
-				// In atlas-local without autoEmbed, this will be a miss.
-				// Either "semantic" (if index exists) or "miss" (graceful degradation)
-				expect(["semantic", "miss"]).toContain(result.tier)
-			})
-
-			it("derives TTL from source type: conversation=300s, kb=3600s", async () => {
-				const convQuery = "conversation cache TTL test"
-				writeCache({
-					db,
-					prefix: PREFIX,
-					query: convQuery,
-					agentId: cacheAgentId,
-					scope: cacheScope,
-					scopeRef: cacheScopeRef,
-					results: mockResults,
-					pathUsed: "hybrid",
-					sourceScope: "conversation",
-					ttlSec: 300, // conversation TTL
-				})
-
-				const kbQuery = "knowledge base cache TTL test"
-				writeCache({
-					db,
-					prefix: PREFIX,
-					query: kbQuery,
-					agentId: cacheAgentId,
-					scope: cacheScope,
-					scopeRef: cacheScopeRef,
-					results: mockResults,
-					pathUsed: "kb",
-					sourceScope: "reference",
-					ttlSec: 3600, // KB TTL
-				})
-
-				await waitForCache(db, PREFIX, {
-					agentId: cacheAgentId,
-					sourceScope: "reference",
-				})
-
-				const cacheCol = queryCacheCollection(db, PREFIX)
-				const convDoc = await cacheCol.findOne({
-					agentId: cacheAgentId,
-					sourceScope: "conversation",
-				})
-				const kbDoc = await cacheCol.findOne({
-					agentId: cacheAgentId,
-					sourceScope: "reference",
-				})
-
-				expect(convDoc).not.toBeNull()
-				expect(kbDoc).not.toBeNull()
-
-				// KB TTL should result in a later expiresAt than conversation TTL
-				const convExpiry = (convDoc!.expiresAt as Date).getTime()
-				const kbExpiry = (kbDoc!.expiresAt as Date).getTime()
-				expect(kbExpiry).toBeGreaterThan(convExpiry)
-
-				// Verify approximate TTL difference (~3300s difference = 3600-300)
-				const diffSec = (kbExpiry - convExpiry) / 1000
-				expect(diffSec).toBeGreaterThan(3000) // roughly 3600-300 = 3300
-				expect(diffSec).toBeLessThan(3700)
-			})
-
-			it("increments hitCount and updates lastHitAt", async () => {
-				const query = "Kubernetes Helm chart deployment configuration"
-
-				// Hit cache twice
-				await checkCache({
-					db,
-					prefix: PREFIX,
-					query,
-					agentId: cacheAgentId,
-					scope: cacheScope,
-					scopeRef: cacheScopeRef,
-					config: cacheConfig,
-				})
-
-				await waitForTelemetry(db, PREFIX, {
-					"meta.operation": "cache-check",
-					"meta.agentId": cacheAgentId,
-				})
-
-				await checkCache({
-					db,
-					prefix: PREFIX,
-					query,
-					agentId: cacheAgentId,
-					scope: cacheScope,
-					scopeRef: cacheScopeRef,
-					config: cacheConfig,
-				})
-
-				await waitForCache(db, PREFIX, {
-					agentId: cacheAgentId,
-					pathUsed: "hybrid",
-					lastHitAt: { $exists: true },
-				})
-
-				const cacheCol = queryCacheCollection(db, PREFIX)
-				const doc = await cacheCol.findOne({
-					agentId: cacheAgentId,
-					pathUsed: "hybrid",
-				})
-				expect(doc).not.toBeNull()
-				expect(doc!.hitCount as number).toBeGreaterThanOrEqual(1)
-				expect(doc!.lastHitAt).toBeDefined()
-			})
-		})
-
-		// =========================================================================
-		// PHASE 6: Reranker Robustness (Gaps #8, #9)
+		// PHASE 6: Reranker Robustness
 		// =========================================================================
 
 		describe("Phase 6: Reranker Robustness", () => {
@@ -1777,7 +1546,7 @@ describeIfMongo(
 					windowMs: 300_000, // 5 minutes
 				})
 
-				// Prior phases generated entity-extraction, cache-check, profile-synthesis, search telemetry
+				// Prior phases generated entity-extraction, profile-synthesis, and search telemetry.
 				expect(dist.length).toBeGreaterThanOrEqual(3)
 
 				for (const entry of dist) {
@@ -1785,19 +1554,6 @@ describeIfMongo(
 					expect(typeof entry.avgDurationMs).toBe("number")
 					expect(entry.avgDurationMs).toBeGreaterThanOrEqual(0)
 				}
-			})
-
-			it("getCacheHitRate returns valid rate", async () => {
-				const rate = await getCacheHitRate({
-					db,
-					prefix: PREFIX,
-					agentId: AGENT_ID,
-					windowMs: 300_000,
-				})
-
-				expect(rate.hitRate).toBeGreaterThanOrEqual(0)
-				expect(rate.hitRate).toBeLessThanOrEqual(1)
-				expect(rate.total).toBeGreaterThanOrEqual(0)
 			})
 
 			it("telemetry covers all operation types from prior phases", async () => {
@@ -1976,26 +1732,6 @@ describeIfMongo(
 				expect(stats.p95).toBeGreaterThanOrEqual(0)
 				expect(stats.p99).toBeGreaterThanOrEqual(0)
 				expect(stats.count).toBeGreaterThanOrEqual(0)
-			})
-
-			it("checkCache returns miss on empty cache", async () => {
-				const result = await checkCache({
-					db,
-					prefix: PREFIX,
-					query: "nonexistent query about nothing",
-					agentId: emptyAgentId,
-					scope: "agent",
-					scopeRef: `agent:${emptyAgentId}`,
-					config: {
-						enabled: true,
-						conversationTtlSec: 300,
-						kbTtlSec: 3600,
-						similarityThreshold: 0.95,
-					},
-				})
-
-				expect(result.hit).toBe(false)
-				expect(result.tier).toBe("miss")
 			})
 
 			it("searchV2 degrades gracefully with no vector capabilities", async () => {
@@ -3620,7 +3356,7 @@ describeIfMongo(
 				expect(response.metadata.passes.length).toBeGreaterThanOrEqual(1)
 			})
 
-			it("(g) cache coherence under mode switching", async () => {
+			it("(g) plan stability under mode switching", async () => {
 				const query = "Emergency rollback procedure"
 				const directReq: MemorySearchRequest = {
 					query,
@@ -3803,8 +3539,7 @@ describeIfMongo(
 				// Both should complete within budget
 				expect(exactMs).toBeLessThan(30_000)
 				expect(familyMs).toBeLessThan(30_000)
-				// Exact lookups should generally be faster (or equal if cached)
-				// Using tolerance to allow for cache-fast equality
+				// Allow a small tolerance for ordinary timing jitter.
 				expect(exactMs).toBeLessThanOrEqual(familyMs + 500)
 			})
 		})

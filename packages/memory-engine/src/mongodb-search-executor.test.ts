@@ -8,6 +8,7 @@ import {
 	buildExecutorPasses,
 	buildMemorySearchRequestSignature,
 	classifyExecutorSearch,
+	computeEvidenceCoverage,
 	executeMongoSearchPlan,
 	identifyRelaxableConstraint,
 	inferSearchResultLane,
@@ -15,6 +16,8 @@ import {
 	resolveSearchConfig,
 	requestHasHardConstraints,
 	resolveExecutorTimeRange,
+	resolveExecutorTimeRangeAt,
+	resultHasExactEvidence,
 } from "./mongodb-search-executor.js"
 import type { MemorySearchResult } from "./types.js"
 
@@ -156,6 +159,76 @@ describe("classifyExecutorSearch", () => {
 	})
 })
 
+describe("resolveExecutorTimeRangeAt (RET-02)", () => {
+	const NOW = new Date("2026-09-06T12:00:00.000Z")
+
+	it("resolves a preset against the injected clock, ignoring explicit bounds", () => {
+		const resolved = resolveExecutorTimeRangeAt(
+			{
+				preset: "last-24h",
+				start: new Date("2026-01-01T00:00:00.000Z"),
+				end: new Date("2026-01-02T00:00:00.000Z"),
+			},
+			NOW,
+		)
+		// The preset wins over any explicit bounds and derives its window
+		// from the B14 reference clock, not the wall clock.
+		expect(resolved).toEqual({
+			start: new Date("2026-09-05T12:00:00.000Z"),
+			end: NOW,
+		})
+	})
+
+	it("normalizes full explicit bounds into Dates", () => {
+		const resolved = resolveExecutorTimeRangeAt(
+			{
+				start: "2026-08-01T00:00:00.000Z",
+				end: "2026-08-31T00:00:00.000Z",
+			},
+			NOW,
+		)
+		expect(resolved).toEqual({
+			start: new Date("2026-08-01T00:00:00.000Z"),
+			end: new Date("2026-08-31T00:00:00.000Z"),
+		})
+	})
+
+	it("treats a partial explicit range as no range", () => {
+		expect(resolveExecutorTimeRangeAt({ start: NOW }, NOW)).toBeUndefined()
+		expect(resolveExecutorTimeRangeAt({ end: NOW }, NOW)).toBeUndefined()
+	})
+
+	it("treats an unparseable explicit bound as no range", () => {
+		expect(
+			resolveExecutorTimeRangeAt({ start: "not-a-date", end: NOW }, NOW),
+		).toBeUndefined()
+		expect(
+			resolveExecutorTimeRangeAt({ start: NOW, end: "not-a-date" }, NOW),
+		).toBeUndefined()
+	})
+
+	it("returns undefined when the request carries no range", () => {
+		expect(resolveExecutorTimeRangeAt(undefined, NOW)).toBeUndefined()
+	})
+
+	it("forwards the wall-clock wrapper for preset-less requests", () => {
+		// The wrapper exists for callers without a reference clock; with
+		// explicit bounds it never reads the clock, so the round trip is
+		// identity regardless of when it runs.
+		const resolved = resolveExecutorTimeRange({
+			query: "deployment history",
+			timeRange: {
+				start: new Date("2026-08-01T00:00:00.000Z"),
+				end: new Date("2026-08-31T00:00:00.000Z"),
+			},
+		})
+		expect(resolved).toEqual({
+			start: new Date("2026-08-01T00:00:00.000Z"),
+			end: new Date("2026-08-31T00:00:00.000Z"),
+		})
+	})
+})
+
 describe("buildExecutorPasses", () => {
 	it("keeps direct auto queries single-pass", () => {
 		const passes = buildExecutorPasses(
@@ -278,6 +351,7 @@ describe("applyHardConstraintRejections", () => {
 					score: 0.91,
 					snippet: "Stored. The launch codeword is Blue Finch.",
 					source: "conversation",
+					derivation: "user-extracted",
 				},
 			],
 		})
@@ -301,11 +375,133 @@ describe("applyHardConstraintRejections", () => {
 					score: 0.91,
 					snippet: "Phoenix deploys on Monday afternoon after validation.",
 					source: "structured",
+					derivation: "user-extracted",
 				},
 			],
 		})
 		expect(result.accepted).toHaveLength(1)
 		expect(result.rejected).toHaveLength(0)
+	})
+})
+
+describe("resultHasExactEvidence (RET-09 derivation-narrowed)", () => {
+	const base = {
+		path: "events/turn-1",
+		startLine: 0,
+		endLine: 0,
+		score: 0.9,
+		snippet: "deploy on Monday",
+		source: "conversation" as const,
+	}
+
+	it("accepts user-authored turns with a locator", () => {
+		expect(
+			resultHasExactEvidence({ ...base, role: "user", derivation: "user" }),
+		).toBe(true)
+	})
+
+	it("accepts user-extracted facts with a locator", () => {
+		expect(
+			resultHasExactEvidence({
+				...base,
+				derivation: "user-extracted",
+			}),
+		).toBe(true)
+	})
+
+	it("accepts verbatim reference spans with a locator", () => {
+		expect(resultHasExactEvidence({ ...base, derivation: "reference" })).toBe(
+			true,
+		)
+	})
+
+	it("rejects agent-authored turns even with a locator", () => {
+		expect(
+			resultHasExactEvidence({
+				...base,
+				role: "assistant",
+				derivation: "agent",
+			}),
+		).toBe(false)
+	})
+
+	it("rejects inferred graph relations even with a locator", () => {
+		expect(resultHasExactEvidence({ ...base, derivation: "inferred" })).toBe(
+			false,
+		)
+	})
+
+	it("rejects derived summaries even with a locator", () => {
+		expect(resultHasExactEvidence({ ...base, derivation: "derived" })).toBe(
+			false,
+		)
+	})
+
+	it("rejects locator-less results regardless of derivation", () => {
+		expect(
+			resultHasExactEvidence({
+				...base,
+				path: "",
+				role: "user",
+				derivation: "user",
+			}),
+		).toBe(false)
+	})
+
+	it("rejects legacy rows with no provenance metadata", () => {
+		expect(resultHasExactEvidence({ ...base })).toBe(false)
+	})
+
+	it("rejects with a derivation-specific reason under needExactEvidence", () => {
+		const result = applyHardConstraintRejections({
+			request: { query: "exact", needExactEvidence: true },
+			results: [
+				{
+					...base,
+					role: "assistant",
+					derivation: "agent",
+				},
+			],
+		})
+		expect(result.accepted).toHaveLength(0)
+		expect(result.rejected[0]?.reason).toBe(
+			"exact evidence requires user-authored or reference span",
+		)
+	})
+
+	it("keeps the locator reason for locator-less results", () => {
+		const result = applyHardConstraintRejections({
+			request: { query: "exact", needExactEvidence: true },
+			results: [
+				{
+					path: "",
+					startLine: 0,
+					endLine: 0,
+					score: 0.7,
+					snippet: "no locator",
+					source: "conversation",
+				},
+			],
+		})
+		expect(result.accepted).toHaveLength(0)
+		expect(result.rejected[0]?.reason).toBe("missing exact evidence locator")
+	})
+
+	it("treats all-user evidence as direct and mixed sets as partial/indirect", () => {
+		const userHit = {
+			...base,
+			role: "user" as const,
+			derivation: "user" as const,
+		}
+		const agentHit = {
+			...base,
+			path: "events/turn-2",
+			role: "assistant" as const,
+			derivation: "agent" as const,
+		}
+		expect(computeEvidenceCoverage([userHit])).toBe("direct")
+		expect(computeEvidenceCoverage([userHit, agentHit])).toBe("partial")
+		expect(computeEvidenceCoverage([agentHit])).toBe("indirect")
 	})
 })
 
@@ -407,6 +603,69 @@ describe("lane-aware result controls", () => {
 		).toHaveLength(1)
 	})
 
+	it("sorts segment-stable so unreranked overflow cannot displace CE-ranked results (RET-08)", () => {
+		// Audit proof: cross-encoder scored .2/.1 on the reranked partition,
+		// while untouched overflow keeps a high retrieval score. A global
+		// score sort puts overflow first; the partition boundary keeps the
+		// CE-ranked results ahead even though their scores are lower.
+		const ceRanked = [
+			makeResult({
+				path: "events/evt-ce1",
+				canonicalId: "event:evt-ce1",
+				score: 0.2,
+				sessionId: "session-ce1",
+				sourceEventIds: ["evt-ce1"],
+			}),
+			makeResult({
+				path: "events/evt-ce2",
+				canonicalId: "event:evt-ce2",
+				score: 0.1,
+				sessionId: "session-ce2",
+				sourceEventIds: ["evt-ce2"],
+			}),
+		]
+		const overflowGraph = makeResult({
+			path: "relation:overflow",
+			canonicalId: "relation:overflow",
+			score: 0.9,
+			source: "structured",
+			provenance: { lane: "graph" },
+		})
+		const results = [...ceRanked, overflowGraph]
+
+		const controlled = applyLaneAwareResultControls({
+			query: "What did I say I prefer in the last conversation?",
+			results,
+			classification: "direct",
+			planPaths: ["hybrid", "raw-window", "graph"],
+			topK: 3,
+			rerankPartitionCount: 2,
+		})
+
+		expect(controlled.summary.applied).toBe(true)
+		expect(controlled.results.map((result) => result.path)).toEqual([
+			"events/evt-ce1",
+			"events/evt-ce2",
+			"relation:overflow",
+		])
+		// The CE-ranked head stays ahead DESPITE the overflow item's higher
+		// (uncalibrated) retrieval score.
+		expect(controlled.results[0].score).toBeLessThan(
+			controlled.results[2].score,
+		)
+
+		// Without a partition boundary the default global sort applies
+		// (pre-rerank and non-reranked callers) — overflow first.
+		const globalSorted = applyLaneAwareResultControls({
+			query: "What did I say I prefer in the last conversation?",
+			results,
+			classification: "direct",
+			planPaths: ["hybrid", "raw-window", "graph"],
+			topK: 3,
+		})
+		expect(globalSorted.results[0].path).toBe("relation:overflow")
+	})
+
 	it("boosts newer session evidence for current personal setup queries", () => {
 		const oldSession = makeResult({
 			path: "",
@@ -472,14 +731,117 @@ describe("lane-aware result controls", () => {
 		expect(
 			controlled.results.slice(0, 5).map((result) => result.sessionId),
 		).toContain("session-c")
+		// B10: non-multi-session queries allow 3 per session — the query's
+		// "before" is a broad time word, not multi-session phrasing, so it
+		// no longer forces the breadth cap of 1.
 		expect(
 			controlled.results
 				.slice(0, 5)
 				.filter((result) => result.sessionId === "session-a"),
-		).toHaveLength(2)
+		).toHaveLength(3)
+	})
+
+	it("keeps three turns of the best session for single-session questions (B10)", () => {
+		// First-person phrasing with no multi-session words: the old
+		// conversation-evidence detector forced a cap of 1 here, cutting the
+		// assistant turn of the very session the answer lives in.
+		const sameSession = Array.from({ length: 4 }, (_, index) =>
+			makeResult({
+				path: `events/a-${index}`,
+				canonicalId: `event:a-${index}`,
+				score: 1 - index * 0.01,
+				sessionId: "session-a",
+				sourceEventIds: [`a-${index}`],
+			}),
+		)
+		const otherSessions = ["b", "c"].map((id, index) =>
+			makeResult({
+				path: `events/${id}-1`,
+				canonicalId: `event:${id}-1`,
+				score: 0.94 - index * 0.01,
+				sessionId: `session-${id}`,
+				sourceEventIds: [`${id}-1`],
+			}),
+		)
+
+		const controlled = applyLaneAwareResultControls({
+			query: "What did I tell you about my apartment lease?",
+			results: [...sameSession, ...otherSessions],
+			classification: "direct",
+			planPaths: ["hybrid"],
+			topK: 5,
+		})
+
+		expect(
+			controlled.results
+				.slice(0, 5)
+				.filter((result) => result.sessionId === "session-a"),
+		).toHaveLength(3)
+		expect(
+			controlled.results.slice(0, 5).map((result) => result.sessionId),
+		).toContain("session-b")
+	})
+
+	it("never re-applies the per-session cap after the reranker (B10)", () => {
+		// Multi-session phrasing ("how many", "across sessions") earns the
+		// breadth cap of 1 pre-rerank — but never post-rerank, where it would
+		// override the cross-encoder's ordering of same-session turns.
+		const ceRankedSameSession = Array.from({ length: 3 }, (_, index) =>
+			makeResult({
+				path: `events/ce-${index}`,
+				canonicalId: `event:ce-${index}`,
+				score: 0.5 - index * 0.01,
+				sessionId: "session-a",
+				sourceEventIds: [`ce-${index}`],
+			}),
+		)
+		const otherSessions = ["b", "c", "d", "e"].map((id, index) =>
+			makeResult({
+				path: `events/${id}-1`,
+				canonicalId: `event:${id}-1`,
+				score: 0.9 - index * 0.01,
+				sessionId: `session-${id}`,
+				sourceEventIds: [`${id}-1`],
+			}),
+		)
+		const query = "How many times did we discuss the apartment across sessions?"
+
+		const postRerank = applyLaneAwareResultControls({
+			query,
+			results: [...ceRankedSameSession, ...otherSessions],
+			classification: "direct",
+			planPaths: ["hybrid"],
+			topK: 5,
+			rerankPartitionCount: 3,
+		})
+		expect(postRerank.summary.sessionCapped).toBe(0)
+		expect(
+			postRerank.results.slice(0, 3).map((result) => result.sessionId),
+		).toEqual(["session-a", "session-a", "session-a"])
+		expect(
+			postRerank.results
+				.slice(0, 5)
+				.filter((result) => result.sessionId === "session-a"),
+		).toHaveLength(3)
+
+		// Pre-rerank, the same query keeps the breadth cap of 1.
+		const preRerank = applyLaneAwareResultControls({
+			query,
+			results: [...ceRankedSameSession, ...otherSessions],
+			classification: "direct",
+			planPaths: ["hybrid"],
+			topK: 5,
+		})
+		expect(
+			preRerank.results
+				.slice(0, 5)
+				.filter((result) => result.sessionId === "session-a"),
+		).toHaveLength(1)
 	})
 
 	it("exhausts distinct session coverage before repeated turns for temporal queries", () => {
+		// B10: "across sessions" is explicit multi-session phrasing, so the
+		// breadth cap of 1 still applies here.
 		const repeatedSession = Array.from({ length: 5 }, (_, index) =>
 			makeResult({
 				path: `events/a-${index}`,
@@ -589,6 +951,18 @@ describe("buildMemorySearchRequestSignature", () => {
 			referenceScope: { tags: ["a", "b"], category: "docs" },
 		})
 		expect(left).toBe(right)
+	})
+
+	it("distinguishes requests with different KB authorization", () => {
+		const unrestricted = buildMemorySearchRequestSignature({
+			query: "shared reference",
+		})
+		const restricted = buildMemorySearchRequestSignature({
+			query: "shared reference",
+			kbRestricted: true,
+		})
+
+		expect(restricted).not.toBe(unrestricted)
 	})
 })
 
@@ -889,6 +1263,106 @@ describe("executeMongoSearchPlan", () => {
 		expect(ids).toContain("unique-id")
 	})
 
+	it("considers every preferred source's lanes in the first pass", async () => {
+		// RET-03: source ordering is a ranking signal, not an exclusion
+		// filter. The default first pass must be eligible for all available
+		// lanes — not just the first preferred source's conversation lanes.
+		const mock = makeMockExecutePass([[makeResult({ canonicalId: "r1" })]])
+
+		await executeMongoSearchPlan({
+			request: { query: "what is Bloom" },
+			availablePaths: allPaths,
+			executePass: mock,
+		})
+
+		expect(mock).toHaveBeenCalledTimes(1)
+		expect([...(mock.mock.calls[0]?.[0]?.availablePaths ?? [])].sort()).toEqual(
+			[...allPaths].sort(),
+		)
+	})
+
+	it("restricts first-pass lanes to time-capable paths under an explicit time range", async () => {
+		const mock = makeMockExecutePass([
+			[makeResult({ canonicalId: "r1", timestamp: new Date() })],
+		])
+
+		await executeMongoSearchPlan({
+			request: {
+				query: "what is Bloom",
+				timeRange: { preset: "today" },
+			},
+			availablePaths: allPaths,
+			executePass: mock,
+		})
+
+		expect([...(mock.mock.calls[0]?.[0]?.availablePaths ?? [])].sort()).toEqual(
+			["episodic", "hybrid", "raw-window"],
+		)
+	})
+
+	it("honors sourcePreference as an exclusion list in the first pass", async () => {
+		const mock = makeMockExecutePass([[makeResult({ canonicalId: "r1" })]])
+
+		await executeMongoSearchPlan({
+			request: {
+				query: "what is Bloom",
+				sourcePreference: ["conversation"],
+			},
+			availablePaths: allPaths,
+			executePass: mock,
+		})
+
+		expect([...(mock.mock.calls[0]?.[0]?.availablePaths ?? [])].sort()).toEqual(
+			["hybrid", "raw-window"],
+		)
+	})
+
+	it("caps the served multipass response at maxResults", async () => {
+		// RET-04: passes may accumulate more unique results than maxResults;
+		// the served response is sliced after final reranking, and the
+		// metadata describes the served slice.
+		const r1 = makeResult({ canonicalId: "r1" })
+		const r2 = makeResult({ canonicalId: "r2" })
+		const r3 = makeResult({ canonicalId: "r3" })
+		const mock = makeMockExecutePass([[r1], [r2, r3]])
+
+		const response = await executeMongoSearchPlan({
+			request: {
+				query: "eval tools family",
+				searchMode: "agentic",
+				maxPasses: 3,
+				maxResults: 2,
+			},
+			availablePaths: allPaths,
+			executePass: mock,
+		})
+
+		expect(mock).toHaveBeenCalledTimes(2)
+		expect(response.results).toHaveLength(2)
+		expect(new Set(response.results.map((r) => r.canonicalId)).size).toBe(2)
+	})
+
+	it("caps the served response at maxResults even when later passes return duplicates plus new hits", async () => {
+		const r1 = makeResult({ canonicalId: "r1" })
+		const r2 = makeResult({ canonicalId: "r2" })
+		const r3 = makeResult({ canonicalId: "r3" })
+		const mock = makeMockExecutePass([[r1], [{ ...r1 }, r2, r3]])
+
+		const response = await executeMongoSearchPlan({
+			request: {
+				query: "eval tools family",
+				searchMode: "agentic",
+				maxPasses: 3,
+				maxResults: 2,
+			},
+			availablePaths: allPaths,
+			executePass: mock,
+		})
+
+		expect(response.results).toHaveLength(2)
+		expect(new Set(response.results.map((r) => r.canonicalId)).size).toBe(2)
+	})
+
 	it("propagates hard constraint rejections into metadata", async () => {
 		const oldResult = makeResult({
 			canonicalId: "old",
@@ -912,8 +1386,10 @@ describe("executeMongoSearchPlan", () => {
 		expect(response.metadata.resultsRejected[0]?.reason).toBe(
 			"outside requested time range",
 		)
+		// RET-01: the dominant rejection is temporal, so the honest empty
+		// names the time range (not the secondary exact-evidence flag).
 		expect(response.metadata.noDirectEvidenceReason).toContain(
-			"No exact-evidence results",
+			"the requested time range",
 		)
 	})
 
@@ -940,8 +1416,14 @@ describe("executeMongoSearchPlan", () => {
 		})
 
 		expect(response.results).toHaveLength(0)
+		// RET-01: the exact-evidence requirement is the constraint that
+		// rejected every candidate, so the reason names it (and the opt-in
+		// that would permit a relaxed retry).
 		expect(response.metadata.noDirectEvidenceReason).toContain(
-			"No exact-evidence results",
+			"the exact-evidence requirement",
+		)
+		expect(response.metadata.noDirectEvidenceReason).toContain(
+			"allowConstraintRelaxation",
 		)
 	})
 
@@ -1128,64 +1610,18 @@ describe("executeMongoSearchPlan", () => {
 			(p) => p.correctionApplied,
 		)
 		expect(correctivePasses.length).toBeGreaterThanOrEqual(1)
-		expect(correctivePasses[0]?.correctionApplied).toBe("time-range-widened-2x")
+		expect(correctivePasses[0]?.correctionApplied).toBe("time-range-widened-3x")
 	})
 
-	it("triggers constraint relaxation when all results are rejected", async () => {
-		// All passes return results outside time range -> all rejected -> relaxation fires
+	it("does not relax caller time constraints without opt-in", async () => {
+		// RET-01: explicit constraints are hard by default. The relaxation
+		// fallback must not run (and must not remove the caller's time
+		// range) unless the caller opted in via allowConstraintRelaxation.
 		const oldResult = makeResult({
 			canonicalId: "old",
 			timestamp: new Date("2001-01-01T00:00:00.000Z"),
 		})
-		// Relaxation pass returns result without time constraint
-		const anyResult = makeResult({ canonicalId: "any" })
-		const mock = vi
-			.fn()
-			// Pass 1 (main): returns old result
-			.mockResolvedValueOnce({
-				results: [oldResult],
-				metadata: {
-					plan: {
-						paths: ["hybrid"],
-						confidence: "high" as const,
-						reasoning: "pass 1",
-					},
-					pathsExecuted: ["hybrid"],
-					resultsByPath: { hybrid: 1 },
-					reranked: false,
-					queryRewritten: false,
-				},
-			})
-			// Corrective pass: also returns old result
-			.mockResolvedValueOnce({
-				results: [oldResult],
-				metadata: {
-					plan: {
-						paths: ["hybrid"],
-						confidence: "high" as const,
-						reasoning: "corrective",
-					},
-					pathsExecuted: ["hybrid"],
-					resultsByPath: { hybrid: 1 },
-					reranked: false,
-					queryRewritten: false,
-				},
-			})
-			// Relaxation pass: returns valid result
-			.mockResolvedValueOnce({
-				results: [anyResult],
-				metadata: {
-					plan: {
-						paths: ["hybrid"],
-						confidence: "high" as const,
-						reasoning: "relaxation",
-					},
-					pathsExecuted: ["hybrid"],
-					resultsByPath: { hybrid: 1 },
-					reranked: false,
-					queryRewritten: false,
-				},
-			})
+		const mock = makeMockExecutePass([[oldResult]])
 
 		const response = await executeMongoSearchPlan({
 			request: {
@@ -1197,11 +1633,199 @@ describe("executeMongoSearchPlan", () => {
 			executePass: mock,
 		})
 
-		expect(response.metadata.constraintRelaxations).toBeDefined()
-		expect(response.metadata.constraintRelaxations?.[0]?.action).toBe(
-			"removed-time-range",
+		expect(mock).toHaveBeenCalledTimes(1)
+		expect(response.results).toHaveLength(0)
+		expect(response.metadata.constraintRelaxations).toBeUndefined()
+		expect(response.metadata.resultsRejected[0]?.reason).toBe(
+			"outside requested time range",
 		)
-		expect(response.results.length).toBeGreaterThan(0)
+		expect(response.metadata.noDirectEvidenceReason).toContain(
+			"the requested time range",
+		)
+		expect(response.metadata.noDirectEvidenceReason).toContain(
+			"allowConstraintRelaxation",
+		)
+	})
+
+	it("keeps an explicit time range hard under direct mode with a single-pass budget", async () => {
+		// RET-01 audit trigger: explicit start/end range, direct mode,
+		// maxPasses 1. The out-of-range result must be rejected, no second
+		// pass may run, and the empty answer must say why.
+		const marchResult = makeResult({
+			canonicalId: "march",
+			timestamp: new Date("2024-03-01T12:00:00.000Z"),
+		})
+		const mock = makeMockExecutePass([[marchResult]])
+
+		const response = await executeMongoSearchPlan({
+			request: {
+				query: "deploy timeline",
+				searchMode: "direct",
+				maxPasses: 1,
+				timeRange: {
+					start: "2024-01-01T00:00:00.000Z",
+					end: "2024-01-31T23:59:59.000Z",
+				},
+			},
+			availablePaths: allPaths,
+			executePass: mock,
+		})
+
+		expect(mock).toHaveBeenCalledTimes(1)
+		expect(response.results).toHaveLength(0)
+		expect(response.metadata.constraintRelaxations).toBeUndefined()
+		expect(response.metadata.resultsRejected[0]?.reason).toBe(
+			"outside requested time range",
+		)
+		expect(response.metadata.noDirectEvidenceReason).toContain(
+			"the requested time range",
+		)
+	})
+
+	it("relaxes the dominant constraint only when opted in, counting every pass against maxPasses", async () => {
+		const oldResult = makeResult({
+			canonicalId: "old",
+			timestamp: new Date("2001-01-01T00:00:00.000Z"),
+		})
+		const anyResult = makeResult({ canonicalId: "any" })
+		// Pass 1 rejects against the original range. Relaxation is armed
+		// (opt-in + spare budget + relaxable dominant constraint), so the
+		// corrective widening pass is skipped — it re-validates against the
+		// ORIGINAL range and could not serve — and the relaxation pass 2
+		// serves the unconstrained result.
+		const mock = makeMockExecutePass([[oldResult], [anyResult]])
+
+		const response = await executeMongoSearchPlan({
+			request: {
+				query: "some query",
+				searchMode: "direct",
+				maxPasses: 3,
+				timeRange: { preset: "today" },
+				allowConstraintRelaxation: true,
+			},
+			availablePaths: allPaths,
+			executePass: mock,
+		})
+
+		expect(mock).toHaveBeenCalledTimes(2)
+		expect(response.metadata.constraintRelaxations).toEqual([
+			{ constraint: "timeRange", action: "removed-time-range" },
+		])
+		expect(response.results.map((r) => r.canonicalId)).toEqual(["any"])
+		expect(response.metadata.passes[1]?.correctionApplied).toBe(
+			"relaxation:removed-time-range",
+		)
+	})
+
+	it("skips the corrective widening pass when relaxation is armed", async () => {
+		// RET-01 live-probe regression: at maxPasses 2 with opt-in, the
+		// corrective widening used to consume pass 2 and starve the
+		// relaxation fallback (its fetch is re-validated against the ORIGINAL
+		// range, so it can never admit out-of-range results). Relaxation
+		// takes the budget instead and serves.
+		const oldResult = makeResult({
+			canonicalId: "old",
+			timestamp: new Date("2001-01-01T00:00:00.000Z"),
+		})
+		const anyResult = makeResult({ canonicalId: "any" })
+		const mock = makeMockExecutePass([[oldResult], [anyResult]])
+
+		const response = await executeMongoSearchPlan({
+			request: {
+				query: "some query",
+				searchMode: "direct",
+				maxPasses: 2,
+				timeRange: { preset: "today" },
+				allowConstraintRelaxation: true,
+			},
+			availablePaths: allPaths,
+			executePass: mock,
+		})
+
+		expect(mock).toHaveBeenCalledTimes(2)
+		expect(
+			response.metadata.passes.some(
+				(p) => p.correctionApplied === "time-range-widened-3x",
+			),
+		).toBe(false)
+		expect(response.metadata.constraintRelaxations).toEqual([
+			{ constraint: "timeRange", action: "removed-time-range" },
+		])
+		expect(response.results.map((r) => r.canonicalId)).toEqual(["any"])
+	})
+
+	it("withholds the relaxation pass when the maxPasses budget is exhausted even with opt-in", async () => {
+		const oldResult = makeResult({
+			canonicalId: "old",
+			timestamp: new Date("2001-01-01T00:00:00.000Z"),
+		})
+		// maxPasses 1 leaves no budget after the original pass, so the
+		// opted-in relaxation cannot run: the answer stays empty and the
+		// reason says the pass budget, not the opt-in, is what withheld it.
+		const mock = makeMockExecutePass([[oldResult]])
+
+		const response = await executeMongoSearchPlan({
+			request: {
+				query: "some query",
+				searchMode: "direct",
+				maxPasses: 1,
+				timeRange: { preset: "today" },
+				allowConstraintRelaxation: true,
+			},
+			availablePaths: allPaths,
+			executePass: mock,
+		})
+
+		expect(mock).toHaveBeenCalledTimes(1)
+		expect(response.results).toHaveLength(0)
+		expect(response.metadata.constraintRelaxations).toBeUndefined()
+		expect(response.metadata.noDirectEvidenceReason).toContain(
+			"the requested time range",
+		)
+		expect(response.metadata.noDirectEvidenceReason).toContain(
+			"pass budget (maxPasses) was already exhausted",
+		)
+	})
+
+	it("keeps corrective time widening a retrieval aid that cannot admit out-of-range results", async () => {
+		// RET-01: the corrective pass fetches a widened window, but its
+		// outputs are re-validated against the ORIGINAL caller range. A
+		// March result fetched under a January query can never be served.
+		const marchResult = makeResult({
+			canonicalId: "march",
+			timestamp: new Date("2024-03-01T12:00:00.000Z"),
+		})
+		const mock = makeMockExecutePass([
+			[marchResult],
+			[marchResult],
+			[marchResult],
+		])
+
+		const response = await executeMongoSearchPlan({
+			request: {
+				query: "what happened recently",
+				searchMode: "agentic",
+				maxPasses: 3,
+				timeRange: {
+					start: "2024-01-01T00:00:00.000Z",
+					end: "2024-01-31T23:59:59.000Z",
+				},
+			},
+			availablePaths: allPaths,
+			executePass: mock,
+		})
+
+		const correctivePasses = response.metadata.passes.filter(
+			(p) => p.correctionApplied,
+		)
+		expect(correctivePasses[0]?.correctionApplied).toBe("time-range-widened-3x")
+		// The corrective pass fetched results but validated them against the
+		// original January range: nothing was admitted.
+		expect(correctivePasses[0]?.resultCount).toBe(0)
+		expect(response.results).toHaveLength(0)
+		expect(response.metadata.noDirectEvidenceReason).toContain(
+			"the requested time range",
+		)
 	})
 })
 
@@ -1233,7 +1857,7 @@ describe("analyzeCorrectionNeeded", () => {
 			maxPasses: 3,
 		})
 		expect(result.needed).toBe(true)
-		expect(result.correction).toBe("time-range-widened-2x")
+		expect(result.correction).toBe("time-range-widened-3x")
 	})
 
 	it("identifies evidence relaxation when dominant rejection is locator", () => {
@@ -1282,6 +1906,21 @@ describe("identifyRelaxableConstraint", () => {
 	it("identifies exact evidence as relaxable constraint", () => {
 		const result = identifyRelaxableConstraint([
 			{ reason: "missing exact evidence locator" },
+		])
+		expect(result).toEqual({
+			constraint: "needExactEvidence",
+			action: "disabled-exact-evidence",
+		})
+	})
+
+	it("arms relaxation for the provenance-based exact-evidence rejection (RET-09)", () => {
+		// A dominant "locators exist but nothing is exact-capable" rejection
+		// is the same binding constraint (needExactEvidence) as the
+		// locator-missing one — opt-in relaxation must recognize both or
+		// agent-derived hits become un-relaxable.
+		const result = identifyRelaxableConstraint([
+			{ reason: "exact evidence requires user-authored or reference span" },
+			{ reason: "exact evidence requires user-authored or reference span" },
 		])
 		expect(result).toEqual({
 			constraint: "needExactEvidence",

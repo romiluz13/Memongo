@@ -1,4 +1,4 @@
-import type { Collection, Db } from "mongodb"
+import type { ClientSession, Collection, Db } from "mongodb"
 import fc from "fast-check"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
@@ -9,6 +9,28 @@ vi.mock("@memongo/lib", () => ({
 		error: vi.fn(),
 		debug: vi.fn(),
 	}),
+}))
+
+vi.mock("./mongodb-write-fence.js", () => ({
+	captureAdmissionToken: vi.fn(async ({ agentId }: { agentId: string }) => ({
+		kind: "admission",
+		agentId,
+		epoch: 0,
+	})),
+	withFencedWrite: vi.fn(
+		async ({ fn }: { fn: (session: ClientSession) => Promise<number> }) =>
+			fn({} as ClientSession),
+	),
+	isErasureGateConflictError: (error: unknown) =>
+		typeof error === "object" &&
+		error !== null &&
+		"code" in error &&
+		error.code === "ERASURE_GATE_CONFLICT",
+	isMalformedGateError: (error: unknown) =>
+		typeof error === "object" &&
+		error !== null &&
+		"code" in error &&
+		error.code === "MALFORMED_ERASURE_GATE",
 }))
 
 import {
@@ -69,6 +91,9 @@ function createMockDb() {
 	])
 
 	const db = {
+		listCollections: vi.fn(() => ({
+			toArray: vi.fn(async () => [{ type: "collection" }]),
+		})),
 		collection: vi.fn((name: string) => collections.get(name)),
 	} as unknown as Db
 
@@ -152,7 +177,7 @@ describe("AccessTracker", () => {
 					ts: expect.any(Date),
 				}),
 			],
-			{ ordered: false },
+			{ ordered: false, session: expect.anything() },
 		)
 		expect(eventsBulkWrite).toHaveBeenCalledWith(
 			[
@@ -178,7 +203,7 @@ describe("AccessTracker", () => {
 					},
 				},
 			],
-			{ ordered: false },
+			{ ordered: false, session: expect.anything() },
 		)
 	})
 
@@ -248,6 +273,9 @@ describe("AccessTracker", () => {
 			)
 		const eventsBulkWrite = vi.fn().mockResolvedValue({ modifiedCount: 1 })
 		const db = {
+			listCollections: vi.fn(() => ({
+				toArray: vi.fn(async () => [{ type: "collection" }]),
+			})),
 			collection: vi.fn((name: string) => {
 				if (name === `${PREFIX}access_events`) {
 					return {
@@ -305,6 +333,9 @@ describe("AccessTracker", () => {
 		})
 		const eventsBulkWrite = vi.fn().mockResolvedValue({ modifiedCount: 1 })
 		const db = {
+			listCollections: vi.fn(() => ({
+				toArray: vi.fn(async () => [{ type: "collection" }]),
+			})),
 			collection: vi.fn((name: string) => {
 				if (name === `${PREFIX}access_events`) {
 					return {
@@ -399,7 +430,7 @@ describe("AccessTracker", () => {
 					},
 				},
 			],
-			{ ordered: false },
+			{ ordered: false, session: expect.anything() },
 		)
 	})
 
@@ -541,7 +572,7 @@ describe("AccessTracker", () => {
 					},
 				},
 			],
-			{ ordered: false },
+			{ ordered: false, session: expect.anything() },
 		)
 		expect(entitiesBulkWrite).toHaveBeenCalledWith(
 			[
@@ -558,7 +589,7 @@ describe("AccessTracker", () => {
 					},
 				},
 			],
-			{ ordered: false },
+			{ ordered: false, session: expect.anything() },
 		)
 		expect(relationsBulkWrite).toHaveBeenCalledWith(
 			[
@@ -577,7 +608,7 @@ describe("AccessTracker", () => {
 					},
 				},
 			],
-			{ ordered: false },
+			{ ordered: false, session: expect.anything() },
 		)
 	})
 
@@ -601,7 +632,7 @@ describe("AccessTracker", () => {
 					},
 				},
 			],
-			{ ordered: false },
+			{ ordered: false, session: expect.anything() },
 		)
 	})
 
@@ -661,6 +692,9 @@ describe("AccessTracker", () => {
 						.fn()
 						.mockResolvedValue({ insertedCount: 0 })
 					const db = {
+						listCollections: vi.fn(() => ({
+							toArray: vi.fn(async () => [{ type: "collection" }]),
+						})),
 						collection: vi.fn((name: string) => {
 							if (name === `${PREFIX}access_events`) {
 								return {
@@ -843,6 +877,9 @@ describe("AccessTracker W11 — batchId-guarded exactly-once flush", () => {
 			toArray: vi.fn(async () => rawDocs),
 		}))
 		const db = {
+			listCollections: vi.fn(() => ({
+				toArray: vi.fn(async () => [{ type: "collection" }]),
+			})),
 			collection: vi.fn((name: string) => {
 				if (name === `${PREFIX}access_events`) {
 					return {

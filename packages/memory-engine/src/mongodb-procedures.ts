@@ -12,11 +12,23 @@ import {
 	createSubsystemLogger,
 } from "@memongo/lib"
 import { isDuplicateKeyError } from "./internal.js"
-import { recordEmbeddingSpend } from "./mongodb-cost-ledger.js"
+import {
+	ErasureGateConflictError,
+	withFencedWrite,
+	type AdmissionToken,
+} from "./mongodb-write-fence.js"
+import {
+	recordEmbeddingSpend,
+	recordEmbeddingSpendInSession,
+} from "./mongodb-cost-ledger.js"
 import { recordMutation, type MutationMeta } from "./mongodb-mutations.js"
 import { invalidateQueryCache } from "./mongodb-query-cache.js"
 import { summarizeExplain } from "./mongodb-relevance.js"
-import { splitAtlasSearchFilter } from "./mongodb-search.js"
+import { resolveUserSearchMaxTimeMs } from "./mongodb-search-budget.js"
+import {
+	freshnessRevalidationStages,
+	splitAtlasSearchFilter,
+} from "./mongodb-search.js"
 import type { DetectedCapabilities } from "./mongodb-schema.js"
 import {
 	procedureRevisionsCollection,
@@ -375,7 +387,12 @@ function buildRevisionDoc(params: {
 		revision,
 		searchText: String(params.existing.searchText ?? ""),
 		validFrom,
-		validTo: params.now,
+		validTo:
+			params.existing.state === "invalidated" &&
+			params.existing.validTo instanceof Date &&
+			params.existing.validTo <= params.now
+				? params.existing.validTo
+				: params.now,
 		supersededAt: params.now,
 		updatedAt:
 			params.existing.updatedAt instanceof Date
@@ -625,11 +642,44 @@ export async function writeProcedure(params: {
 	entry: ProcedureEntry
 	embeddingMode: MemoryMongoDBEmbeddingMode
 	client?: MongoClient
+	session?: ClientSession
+	admission?: AdmissionToken
+	transactionalSideEffects?: "defer" | "inline"
 	actorRole?: MemoryActorRole
 	mutationMeta?: MutationMeta
 	eventReceiptIds?: string[]
 	expectedRevision?: number
-}): Promise<{ upserted: boolean; id: string }> {
+}): Promise<{
+	upserted: boolean
+	id: string
+	changed?: boolean
+	pendingSideEffects?: () => Promise<void>
+}> {
+	const { admission, ...rest } = params
+	if (admission) {
+		if (params.session)
+			throw new Error(
+				"procedure admission cannot accompany an external session",
+			)
+		if (
+			admission.kind !== "admission" ||
+			admission.agentId !== params.entry.agentId
+		)
+			throw new ErasureGateConflictError(params.entry.agentId)
+		return withProcedureRevisionCasRetry(() =>
+			withFencedWrite({
+				db: params.db,
+				prefix: params.prefix,
+				token: admission,
+				fn: (session) =>
+					writeProcedure({
+						...rest,
+						session,
+						transactionalSideEffects: "inline",
+					}),
+			}),
+		)
+	}
 	const { db, prefix, entry } = params
 	const collection = proceduresCollection(db, prefix)
 	const revisions = procedureRevisionsCollection(db, prefix)
@@ -662,6 +712,7 @@ export async function writeProcedure(params: {
 		revision: number
 		changed: boolean
 	}> => {
+		persistedSetDoc = {}
 		const now = new Date()
 		const setDoc = buildProcedureSetDoc({
 			entry,
@@ -676,22 +727,29 @@ export async function writeProcedure(params: {
 		)
 		existingBeforeWrite = existing
 		if (!existing) {
+			if (params.expectedRevision !== undefined)
+				throw new MemoryLifecycleConflictError({
+					reason: "stale-revision",
+					expectedRevision: params.expectedRevision,
+					actualRevision: 0,
+				})
+			persistedSetDoc = {
+				...setDoc,
+				revision: 1,
+				validFrom: now,
+				createdAt: now,
+				openedCount: 0,
+				version: 1,
+				successCount: 0,
+				failCount: 0,
+				evolutionHistory: [],
+			}
 			let result: Awaited<ReturnType<Collection["updateOne"]>>
 			try {
 				result = await collection.updateOne(
 					identityFilter,
 					{
-						$setOnInsert: {
-							...setDoc,
-							revision: 1,
-							validFrom: now,
-							createdAt: now,
-							openedCount: 0,
-							version: 1,
-							successCount: 0,
-							failCount: 0,
-							evolutionHistory: [],
-						},
+						$setOnInsert: persistedSetDoc,
 					},
 					{ upsert: true, ...(session ? { session } : {}) },
 				)
@@ -777,6 +835,10 @@ export async function writeProcedure(params: {
 					revision: currentRevision + 1,
 					validFrom: now,
 				},
+				...(existing.state === "invalidated" &&
+				persistedSetDoc.state === "active"
+					? { $unset: { validTo: "", invalidatedBy: "" } }
+					: {}),
 			},
 			session ? { session } : {},
 		)
@@ -803,44 +865,46 @@ export async function writeProcedure(params: {
 	}
 
 	const client = params.client
-	const outcome = client
-		? await withProcedureRevisionCasRetry(async () => {
-				const session = client.startSession()
-				try {
-					let result:
-						| {
-								upserted: boolean
-								id: string
-								revision: number
-								changed: boolean
-						  }
-						| undefined
-					await session.withTransaction(async () => {
-						result = await persist(session)
-					}, MAJORITY_TRANSACTION_OPTIONS)
-					return (
-						result ?? {
-							upserted: false,
-							id: entry.procedureId,
-							revision: 1,
-							changed: false,
+	const outcome = params.session
+		? await persist(params.session)
+		: client
+			? await withProcedureRevisionCasRetry(async () => {
+					const session = client.startSession()
+					try {
+						let result:
+							| {
+									upserted: boolean
+									id: string
+									revision: number
+									changed: boolean
+							  }
+							| undefined
+						await session.withTransaction(async () => {
+							result = await persist(session)
+						}, MAJORITY_TRANSACTION_OPTIONS)
+						return (
+							result ?? {
+								upserted: false,
+								id: entry.procedureId,
+								revision: 1,
+								changed: false,
+							}
+						)
+					} catch (err) {
+						if (!isTransactionUnsupported(err)) {
+							throw err
 						}
-					)
-				} catch (err) {
-					if (!isTransactionUnsupported(err)) {
-						throw err
+						log.info(
+							"transactions not supported for procedure writes, falling back to direct writes",
+						)
+						return await persist()
+					} finally {
+						await session.endSession()
 					}
-					log.info(
-						"transactions not supported for procedure writes, falling back to direct writes",
-					)
-					return await persist()
-				} finally {
-					await session.endSession()
-				}
-			})
-		: await persist()
+				})
+			: await persist()
 	if (!outcome.changed) {
-		return { upserted: false, id: outcome.id }
+		return { upserted: false, id: outcome.id, changed: false }
 	}
 
 	log.info(
@@ -849,40 +913,77 @@ export async function writeProcedure(params: {
 	// C-017: a changed persist rewrites searchText, which the procedures
 	// vector index embeds server-side (autoEmbed) in automated mode — one
 	// indexing unit per changed write.
-	if (params.embeddingMode === "automated") {
-		recordEmbeddingSpend(db, prefix, entry.agentId, "indexing", 1)
-	}
-	await invalidateQueryCache({
-		db,
-		prefix,
-		agentId: entry.agentId,
-		scope,
-		scopeRef,
-	})
-
 	const oldSnapshot = existingBeforeWrite
-	const changedFields =
-		oldSnapshot != null
-			? computeChangedFields(oldSnapshot, persistedSetDoc)
-			: undefined
-	recordMutation({
-		db,
-		prefix,
-		mutation: {
-			collectionName: "procedures",
-			documentId: entry.procedureId,
-			operation: oldSnapshot == null ? "create" : "update",
+	const changedFields = computeChangedFields(oldSnapshot ?? {}, persistedSetDoc)
+	const runSideEffects = async (session?: ClientSession): Promise<void> => {
+		if (params.embeddingMode === "automated") {
+			if (session) {
+				await recordEmbeddingSpendInSession({
+					db,
+					prefix,
+					agentId: entry.agentId,
+					kind: "indexing",
+					units: 1,
+					session,
+				})
+			} else {
+				recordEmbeddingSpend(db, prefix, entry.agentId, "indexing", 1)
+			}
+		}
+		await invalidateQueryCache({
+			db,
+			prefix,
 			agentId: entry.agentId,
-			oldValue: oldSnapshot ?? null,
-			newValue: persistedSetDoc,
-			changedFields,
-			actorRole: params.actorRole ?? "system",
-			...(params.mutationMeta ? { meta: params.mutationMeta } : {}),
-		},
-	}).catch((err) => {
-		log.warn("procedure audit failed", { error: err })
-	})
-	return { upserted: outcome.upserted, id: outcome.id }
+			scope,
+			scopeRef,
+			...(session ? { session, throwOnError: true } : {}),
+		})
+		const audit = recordMutation({
+			db,
+			prefix,
+			...(session ? { session } : {}),
+			mutation: {
+				collectionName: "procedures",
+				documentId: entry.procedureId,
+				operation: oldSnapshot == null ? "create" : "update",
+				agentId: entry.agentId,
+				oldValue: oldSnapshot ?? null,
+				newValue: persistedSetDoc,
+				changedFields,
+				actorRole: params.actorRole ?? "system",
+				...(params.mutationMeta ? { meta: params.mutationMeta } : {}),
+			},
+		})
+		if (session) {
+			await audit
+		} else {
+			audit.catch((err) => {
+				log.warn("procedure audit failed", { error: err })
+			})
+		}
+	}
+	if (params.session) {
+		if (params.transactionalSideEffects === "inline") {
+			await runSideEffects(params.session)
+			return {
+				upserted: outcome.upserted,
+				id: outcome.id,
+				changed: outcome.changed,
+			}
+		}
+		return {
+			upserted: outcome.upserted,
+			id: outcome.id,
+			changed: outcome.changed,
+			pendingSideEffects: runSideEffects,
+		}
+	}
+	await runSideEffects()
+	return {
+		upserted: outcome.upserted,
+		id: outcome.id,
+		changed: outcome.changed,
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -909,7 +1010,14 @@ export async function updateProcedureByHandle(params: {
 	client?: MongoClient
 	actorRole?: MemoryActorRole
 	mutationMeta?: MutationMeta
+	admission?: AdmissionToken
 }): Promise<Extract<MemoryLifecycleItem, { family: "procedure" }> | null> {
+	if (
+		params.admission &&
+		(params.admission.kind !== "admission" ||
+			params.admission.agentId !== params.handle.agentId)
+	)
+		throw new ErasureGateConflictError(params.handle.agentId)
 	const collection = proceduresCollection(params.db, params.prefix)
 	const existing = await collection.findOne(
 		procedureFilterFromHandle(params.handle),
@@ -931,6 +1039,7 @@ export async function updateProcedureByHandle(params: {
 		actorRole: params.actorRole,
 		mutationMeta: params.mutationMeta,
 		expectedRevision: currentRevision,
+		admission: params.admission,
 	})
 	return getProcedureByHandle(params)
 }
@@ -941,9 +1050,37 @@ export async function invalidateProcedureByHandle(params: {
 	handle: MemoryProcedureStableHandle
 	invalidatedBy?: Record<string, unknown>
 	client?: MongoClient
+	session?: ClientSession
+	transactionalSideEffects?: "defer" | "inline"
 	actorRole?: MemoryActorRole
 	mutationMeta?: MutationMeta
+	admission?: AdmissionToken
 }): Promise<Extract<MemoryLifecycleItem, { family: "procedure" }> | null> {
+	const { admission, ...rest } = params
+	if (admission) {
+		if (params.session)
+			throw new Error(
+				"admitted procedure invalidation cannot use an external session",
+			)
+		if (
+			admission.kind !== "admission" ||
+			admission.agentId !== params.handle.agentId
+		)
+			throw new ErasureGateConflictError(params.handle.agentId)
+		return withProcedureRevisionCasRetry(() =>
+			withFencedWrite({
+				db: params.db,
+				prefix: params.prefix,
+				token: admission,
+				fn: (session) =>
+					invalidateProcedureByHandle({
+						...rest,
+						session,
+						transactionalSideEffects: "inline",
+					}),
+			}),
+		)
+	}
 	const collection = proceduresCollection(params.db, params.prefix)
 	const revisions = procedureRevisionsCollection(params.db, params.prefix)
 	const filter = procedureFilterFromHandle(params.handle)
@@ -1012,7 +1149,9 @@ export async function invalidateProcedureByHandle(params: {
 		return withProcedureRevisionCasRetry(() => persistOnce())
 	}
 
-	if (params.client) {
+	if (params.session) {
+		await persist(params.session)
+	} else if (params.client) {
 		await withProcedureRevisionCasRetry(async () => {
 			const session = params.client?.startSession()
 			if (!session) {
@@ -1041,34 +1180,49 @@ export async function invalidateProcedureByHandle(params: {
 	if (!newSnapshot) {
 		return null
 	}
+	const persistedSnapshot = newSnapshot
 	if (changed) {
-		await invalidateQueryCache({
-			db: params.db,
-			prefix: params.prefix,
-			agentId: params.handle.agentId,
-			scope: params.handle.scope,
-			scopeRef: params.handle.scopeRef,
-		})
-		recordMutation({
-			db: params.db,
-			prefix: params.prefix,
-			mutation: {
-				collectionName: "procedures",
-				documentId: procedureHandleFromDoc(newSnapshot).id,
-				operation: "invalidate",
+		const runSideEffects = async (session?: ClientSession): Promise<void> => {
+			await invalidateQueryCache({
+				db: params.db,
+				prefix: params.prefix,
 				agentId: params.handle.agentId,
-				oldValue: oldSnapshot,
-				newValue: newSnapshot,
-				changedFields: ["state", "validTo", "revision", "invalidatedBy"],
-				actorRole: params.actorRole ?? "system",
-				severity: "warning",
-				...(params.mutationMeta ? { meta: params.mutationMeta } : {}),
-			},
-		}).catch((err) => {
-			log.warn("procedure invalidate audit failed", { error: err })
-		})
+				scope: params.handle.scope,
+				scopeRef: params.handle.scopeRef,
+				...(session ? { session, throwOnError: true } : {}),
+			})
+			const audit = recordMutation({
+				db: params.db,
+				prefix: params.prefix,
+				...(session ? { session } : {}),
+				mutation: {
+					collectionName: "procedures",
+					documentId: procedureHandleFromDoc(persistedSnapshot).id,
+					operation: "invalidate",
+					agentId: params.handle.agentId,
+					oldValue: oldSnapshot,
+					newValue: persistedSnapshot,
+					changedFields: ["state", "validTo", "revision", "invalidatedBy"],
+					actorRole: params.actorRole ?? "system",
+					severity: "warning",
+					...(params.mutationMeta ? { meta: params.mutationMeta } : {}),
+				},
+			})
+			if (session) {
+				await audit
+			} else {
+				audit.catch((err) => {
+					log.warn("procedure invalidate audit failed", { error: err })
+				})
+			}
+		}
+		if (params.session && params.transactionalSideEffects === "inline") {
+			await runSideEffects(params.session)
+		} else if (!params.session) {
+			await runSideEffects()
+		}
 	}
-	return procedureLifecycleItemFromDoc(newSnapshot)
+	return procedureLifecycleItemFromDoc(persistedSnapshot)
 }
 
 export async function getProcedureHistoryByHandle(params: {
@@ -1210,52 +1364,87 @@ export async function reportProcedureOutcomeByHandle(params: {
 	success: boolean
 	note?: string
 	actorRole?: MemoryActorRole
+	admission?: AdmissionToken
 }): Promise<Extract<MemoryLifecycleItem, { family: "procedure" }> | null> {
-	const collection = proceduresCollection(params.db, params.prefix)
-	const filter = procedureFilterFromHandle(params.handle)
-	const now = new Date()
-	const oldSnapshot = await collection.findOneAndUpdate(
-		filter,
-		{
-			$inc: params.success ? { successCount: 1 } : { failCount: 1 },
-			$set: params.success ? { lastSuccessAt: now } : { lastFailureAt: now },
-		},
-		{ returnDocument: "before" },
+	const { admission } = params
+	if (
+		admission &&
+		(admission.kind !== "admission" ||
+			admission.agentId !== params.handle.agentId)
 	)
-	if (!oldSnapshot) {
-		return null
-	}
-	const updated = applyProcedureOutcomeSnapshot(
-		oldSnapshot,
-		params.success,
-		now,
-	)
-	recordMutation({
-		db: params.db,
-		prefix: params.prefix,
-		mutation: {
-			collectionName: "procedures",
-			documentId: procedureHandleFromDoc(updated).id,
-			operation: "update",
-			agentId: params.handle.agentId,
-			oldValue: oldSnapshot,
-			newValue: updated,
-			changedFields: params.success
-				? ["successCount", "lastSuccessAt"]
-				: ["failCount", "lastFailureAt"],
-			actorRole: params.actorRole ?? "user",
-			meta: {
-				source: "procedure-outcome",
-				success: params.success,
-				...(typeof params.note === "string" && params.note.trim()
-					? { note: params.note }
-					: {}),
+		throw new ErasureGateConflictError(params.handle.agentId)
+	const persistOutcome = async (session?: ClientSession) => {
+		const collection = proceduresCollection(params.db, params.prefix)
+		const filter = procedureFilterFromHandle(params.handle)
+		const now = new Date()
+		const oldSnapshot = await collection.findOneAndUpdate(
+			filter,
+			{
+				$inc: params.success ? { successCount: 1 } : { failCount: 1 },
+				$set: params.success ? { lastSuccessAt: now } : { lastFailureAt: now },
 			},
-		},
-	}).catch((error) => {
-		log.warn("procedure outcome audit failed", { error })
-	})
-	return procedureLifecycleItemFromDoc(updated)
+			{ returnDocument: "before", ...(session ? { session } : {}) },
+		)
+		if (!oldSnapshot) {
+			return null
+		}
+		const updated = applyProcedureOutcomeSnapshot(
+			oldSnapshot,
+			params.success,
+			now,
+		)
+		if (session) {
+			await invalidateQueryCache({
+				db: params.db,
+				prefix: params.prefix,
+				agentId: params.handle.agentId,
+				scope: params.handle.scope,
+				scopeRef: params.handle.scopeRef,
+				session,
+				throwOnError: true,
+			})
+		}
+		const audit = recordMutation({
+			db: params.db,
+			prefix: params.prefix,
+			...(session ? { session } : {}),
+			mutation: {
+				collectionName: "procedures",
+				documentId: procedureHandleFromDoc(updated).id,
+				operation: "update",
+				agentId: params.handle.agentId,
+				oldValue: oldSnapshot,
+				newValue: updated,
+				changedFields: params.success
+					? ["successCount", "lastSuccessAt"]
+					: ["failCount", "lastFailureAt"],
+				actorRole: params.actorRole ?? "user",
+				meta: {
+					source: "procedure-outcome",
+					success: params.success,
+					...(typeof params.note === "string" && params.note.trim()
+						? { note: params.note }
+						: {}),
+				},
+			},
+		})
+		if (session) {
+			await audit
+		} else {
+			audit.catch((error) => {
+				log.warn("procedure outcome audit failed", { error })
+			})
+		}
+		return procedureLifecycleItemFromDoc(updated)
+	}
+	return admission
+		? withFencedWrite({
+				db: params.db,
+				prefix: params.prefix,
+				token: admission,
+				fn: persistOutcome,
+			})
+		: persistOutcome()
 }
 
 /**
@@ -1396,8 +1585,14 @@ function toProcedureResult(doc: Document): MemorySearchResult {
 			typeof doc.searchText === "string" ? doc.searchText.slice(0, 700) : "",
 		source: "structured",
 		sourceType: "structured",
+		// RET-09: procedures are agent-distilled playbooks (mixed-turn
+		// summaries), never user-authored spans.
+		derivation: "derived",
 		...(typeof doc.sessionId === "string" ? { sessionId: doc.sessionId } : {}),
 		...(doc.updatedAt instanceof Date ? { timestamp: doc.updatedAt } : {}),
+		...(typeof doc.confidence === "number"
+			? { confidence: doc.confidence }
+			: {}),
 		...(typeof doc.scope === "string"
 			? { scope: doc.scope as MemoryScope }
 			: {}),
@@ -1486,11 +1681,15 @@ export async function findExactProcedureMatches(
 				exactAliasFilter,
 			),
 			{
+				maxTimeMS: resolveUserSearchMaxTimeMs(),
 				projection: {
 					_id: 0,
 					procedureId: 1,
 					searchText: 1,
 					sessionId: 1,
+					// RET-09: surface the stored confidence for the
+					// provenance classifier.
+					confidence: 1,
 					updatedAt: 1,
 					state: 1,
 					scope: 1,
@@ -1579,6 +1778,7 @@ export async function searchProcedures(
 
 	if (canVector) {
 		try {
+			const filter = buildFilter()
 			const vsStage = buildVectorSearchStage({
 				queryVector,
 				queryText: query,
@@ -1587,14 +1787,20 @@ export async function searchProcedures(
 				indexName: opts.vectorIndexName,
 				numCandidates,
 				limit: opts.maxResults,
-				filter:
-					Object.keys(buildFilter()).length > 0 ? buildFilter() : undefined,
+				filter: Object.keys(filter).length > 0 ? filter : undefined,
 				textFieldPath: "searchText",
-				returnStoredSource: opts.capabilities.storedSource,
+				// Authoritative serving hydrates the full current document from
+				// mongod (the documented default); storedSource may return stale
+				// data and would defeat the post-stage freshness $match below.
+				returnStoredSource: false,
 			})
 			if (vsStage) {
 				const pipeline: Document[] = [
 					{ $vectorSearch: vsStage },
+					// Re-validate the full filter against the hydrated document —
+					// the ANN prefilter runs against the indexed copy, which can
+					// lag the latest write.
+					...freshnessRevalidationStages(filter),
 					{ $limit: opts.maxResults },
 					{
 						$project: {
@@ -1602,6 +1808,9 @@ export async function searchProcedures(
 							procedureId: 1,
 							searchText: 1,
 							sessionId: 1,
+							// RET-09: surface the stored confidence for the
+							// provenance classifier.
+							confidence: 1,
 							updatedAt: 1,
 							state: 1,
 							scope: 1,
@@ -1656,7 +1865,7 @@ export async function searchProcedures(
 	if (canText && opts.textIndexName) {
 		try {
 			const textFilter = buildFilter()
-			const { compoundFilter, postMatch } = splitAtlasSearchFilter(textFilter)
+			const { compoundFilter } = splitAtlasSearchFilter(textFilter)
 			const pipeline: Document[] = [
 				{
 					$search: {
@@ -1667,7 +1876,10 @@ export async function searchProcedures(
 						},
 					},
 				},
-				...(postMatch ? [{ $match: postMatch }] : []),
+				// Re-validate the full filter against the hydrated document —
+				// the compound filter runs against the indexed copy, which can
+				// lag the latest write.
+				...freshnessRevalidationStages(textFilter),
 				{ $limit: opts.maxResults * 4 },
 				{
 					$project: {
@@ -1675,6 +1887,9 @@ export async function searchProcedures(
 						procedureId: 1,
 						searchText: 1,
 						sessionId: 1,
+						// RET-09: surface the stored confidence for the
+						// provenance classifier.
+						confidence: 1,
 						updatedAt: 1,
 						state: 1,
 						scope: 1,
@@ -1720,6 +1935,9 @@ export async function searchProcedures(
 						procedureId: 1,
 						searchText: 1,
 						sessionId: 1,
+						// RET-09: surface the stored confidence for the
+						// provenance classifier.
+						confidence: 1,
 						updatedAt: 1,
 						state: 1,
 						scope: 1,

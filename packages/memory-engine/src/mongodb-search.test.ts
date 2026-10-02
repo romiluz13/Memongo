@@ -176,6 +176,54 @@ describe("runSearchAggregateWithRetry maxTimeMS (P3.8)", () => {
 })
 
 // ---------------------------------------------------------------------------
+// runSearchAggregateWithRetry — RET-16 per-attempt budget charging
+// ---------------------------------------------------------------------------
+
+describe("runSearchAggregateWithRetry budget charging (RET-16)", () => {
+	it("charges the budget once per ATTEMPT — warmup retries are real aggregations", async () => {
+		const col = mockCollectionWithWarmupSequence(
+			2,
+			"cannot query vector index while in state NOT_STARTED",
+			SAMPLE_DOCS,
+		)
+
+		const { budget } = await runWithSearchBudget(
+			{ maxAggregations: 12, maxEmbeds: 5 },
+			async () =>
+				runSearchAggregateWithRetry(col, [{ $match: {} }], {
+					initialDelayMs: 1,
+				}),
+		)
+
+		expect(col.aggregate).toHaveBeenCalledTimes(3)
+		expect(budget.aggregations).toBe(3)
+		expect(budget.exhausted).toBe(false)
+	})
+
+	it("degrades to an empty result without further executions when the budget exhausts mid-retry", async () => {
+		const col = mockCollectionWithWarmupSequence(
+			99,
+			"cannot query vector index while in state NOT_STARTED",
+			SAMPLE_DOCS,
+		)
+
+		const { value: docs, budget } = await runWithSearchBudget(
+			{ maxAggregations: 2, maxEmbeds: 5 },
+			async () =>
+				runSearchAggregateWithRetry(col, [{ $match: {} }], {
+					maxAttempts: 5,
+					initialDelayMs: 1,
+				}),
+		)
+
+		expect(docs).toEqual([])
+		expect(col.aggregate).toHaveBeenCalledTimes(2)
+		expect(budget.aggregations).toBe(2)
+		expect(budget.exhausted).toBe(true)
+	})
+})
+
+// ---------------------------------------------------------------------------
 // vectorSearch
 // ---------------------------------------------------------------------------
 
@@ -381,6 +429,86 @@ describe("vectorSearch", () => {
 		expect(projectStage._id).toBe(0)
 	})
 
+	it("projects retention deadline and provenance fields in $project (RET-11 followup, RET-09)", async () => {
+		// Wave-3e §5 discovery: expiresAt was carried by the mapper since
+		// wave 3d but never included in any $project stage, so the carry was
+		// dead on every live path. Guard all four provenance-feeding fields
+		// against silent re-dropping.
+		const col = mockCollectionWithResults(SAMPLE_DOCS)
+		await vectorSearch(col, null, {
+			maxResults: 10,
+			minScore: 0.1,
+			indexName: "idx",
+			queryText: "query",
+			embeddingMode: "automated",
+		})
+
+		const pipeline = (col.aggregate as ReturnType<typeof vi.fn>).mock
+			.calls[0][0]
+		const projectStage = pipeline[2].$project
+		expect(projectStage.expiresAt).toBe(1)
+		expect(projectStage.role).toBe(1)
+		expect(projectStage.confidence).toBe(1)
+		expect(projectStage.sourceReliability).toBe(1)
+	})
+
+	it("resolves authorship provenance onto results (RET-09)", async () => {
+		const col = mockCollectionWithResults([
+			{
+				path: "events/turn-1",
+				startLine: 1,
+				endLine: 2,
+				text: "User: deploy on Monday",
+				source: "conversation",
+				score: 0.95,
+			},
+			{
+				path: "events/turn-2",
+				startLine: 1,
+				endLine: 2,
+				text: "Noted.",
+				source: "conversation",
+				role: "assistant",
+				score: 0.9,
+			},
+			{
+				path: "memory/kb-doc.md",
+				startLine: 1,
+				endLine: 2,
+				text: "reference span",
+				source: "kb",
+				score: 0.85,
+			},
+			{
+				path: "memory/evidence.md",
+				startLine: 1,
+				endLine: 2,
+				text: "unknown authorship",
+				source: "conversation",
+				score: 0.8,
+			},
+		])
+		const results = await vectorSearch(col, null, {
+			maxResults: 10,
+			minScore: 0,
+			indexName: "idx",
+			queryText: "deploy",
+			embeddingMode: "automated",
+		})
+
+		// Legacy conversation chunk: role recovered from the text prefix.
+		expect(results[0]?.role).toBe("user")
+		expect(results[0]?.derivation).toBe("user")
+		// New chunk: authoritative role field wins.
+		expect(results[1]?.role).toBe("assistant")
+		expect(results[1]?.derivation).toBe("agent")
+		// KB chunk: verbatim reference span.
+		expect(results[2]?.derivation).toBe("reference")
+		// Unknown row: conservative derived default.
+		expect(results[3]?.derivation).toBe("derived")
+		expect(results[3]?.role).toBeUndefined()
+	})
+
 	it("retries transient warmup errors before succeeding", async () => {
 		const col = mockCollectionWithWarmupSequence(
 			2,
@@ -422,6 +550,43 @@ describe("vectorSearch", () => {
 		expect(results[0]?.canonicalId).toBe("event:evt-123")
 		expect(results[0]?.sourceEventIds).toEqual(["evt-123"])
 		expect(results[0]?.sessionId).toBe("mini-q1::s1")
+	})
+	it("carries the source retention deadline onto the result shape (RET-11)", async () => {
+		// toSearchResult preserves a source retention deadline for provenance;
+		// a non-Date value is dropped, matching the mapper's defensive
+		// instanceof style for other date fields.
+		const expiresAt = new Date("2026-09-01T00:00:00.000Z")
+		const col = mockCollectionWithResults([
+			{
+				path: "memory/test.md",
+				startLine: 1,
+				endLine: 2,
+				text: "retained content",
+				source: "conversation",
+				score: 0.9,
+				expiresAt,
+			},
+			{
+				path: "memory/other.md",
+				startLine: 1,
+				endLine: 2,
+				text: "malformed deadline",
+				source: "conversation",
+				score: 0.8,
+				expiresAt: "2026-09-01T00:00:00.000Z",
+			},
+		])
+		const results = await vectorSearch(col, null, {
+			maxResults: 10,
+			minScore: 0,
+			indexName: "idx",
+			queryText: "retained content",
+			embeddingMode: "automated",
+		})
+
+		expect(results[0]?.expiresAt).toEqual(expiresAt)
+		expect(results[0]?.expiresAt instanceof Date).toBe(true)
+		expect(results[1]?.expiresAt).toBeUndefined()
 	})
 })
 
@@ -493,6 +658,12 @@ describe("keywordSearch", () => {
 		expect(projectStage.score).toEqual({ $meta: "searchScore" })
 		expect(projectStage.canonicalId).toBe(1)
 		expect(projectStage["metadata.sourceEventIds"]).toBe(1)
+		// RET-11 followup / RET-09: same four provenance-feeding fields the
+		// vector lane projects — guard against silent re-dropping here too.
+		expect(projectStage.expiresAt).toBe(1)
+		expect(projectStage.role).toBe(1)
+		expect(projectStage.confidence).toBe(1)
+		expect(projectStage.sourceReliability).toBe(1)
 	})
 
 	it("pushes supported hard filters into compound.filter", async () => {
@@ -515,7 +686,14 @@ describe("keywordSearch", () => {
 			{ equals: { path: "scope", value: "agent" } },
 			{ in: { path: "source", value: ["conversation", "sessions"] } },
 		])
-		expect(pipeline[1]?.$match).toBeUndefined()
+		// The full filter is re-validated post-$search against the
+		// hydrated document — pushdown alone runs against the indexed copy,
+		// which can lag the latest write (platform probe: stale admissions).
+		expect(pipeline[1]?.$match).toEqual({
+			agentId: "agent-1",
+			scope: "agent",
+			source: { $in: ["conversation", "sessions"] },
+		})
 	})
 })
 
@@ -1502,5 +1680,131 @@ describe("splitAtlasSearchFilter operator handling", () => {
 			{ equals: { path: "agentId", value: "a1" } },
 		])
 		expect(out.postMatch).toEqual({ $and: ["not-an-object"] })
+	})
+})
+
+// ---------------------------------------------------------------------------
+// Freshness hard filter
+// ---------------------------------------------------------------------------
+
+// Bounded pipeline-aware mock: applies a pipeline's $match/$limit stages to
+// the candidate set the way mongod would, limited to the operators these
+// tests use (scalar equality, $in, $and). It simulates the live-probed
+// scenario: the Search stage admits a STALE index copy of a mutated
+// document, and the post-stage $match on the hydrated document is the
+// corrective.
+function applyFreshnessMatch(doc: Document, match: Document): boolean {
+	return Object.entries(match).every(([key, value]) => {
+		if (key === "$and" && Array.isArray(value)) {
+			return value.every((entry) => applyFreshnessMatch(doc, entry as Document))
+		}
+		if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+			const ops = value as Document
+			if ("$in" in ops && Array.isArray(ops.$in)) {
+				return (ops.$in as unknown[]).includes(doc[key])
+			}
+		}
+		return doc[key] === value
+	})
+}
+
+function mockCollectionApplyingMatch(candidates: Document[]): Collection {
+	return {
+		aggregate: vi.fn((pipeline: Document[]) => ({
+			toArray: vi.fn(async () => {
+				let docs = candidates
+				for (const stage of pipeline) {
+					if (stage.$match) {
+						docs = docs.filter((doc) => applyFreshnessMatch(doc, stage.$match))
+					}
+					if (typeof stage.$limit === "number") {
+						docs = docs.slice(0, stage.$limit)
+					}
+				}
+				return docs
+			}),
+		})),
+	} as unknown as Collection
+}
+
+// A stale index admission: the document was re-written to agent-2 (and
+// committed), but mongot's indexed copy still matches the agent-1 filter.
+// Hydrated to its current values, it must be excluded by the post-stage
+// $match. The control remains valid under the filter.
+const STALE_VICTIM: Document = {
+	path: "memory/victim.md",
+	startLine: 1,
+	endLine: 5,
+	text: "stale copy still indexed under the old owner",
+	source: "conversation",
+	agentId: "agent-2",
+	score: 0.99,
+}
+const FRESH_CONTROL: Document = {
+	path: "memory/control.md",
+	startLine: 1,
+	endLine: 5,
+	text: "fresh document",
+	source: "conversation",
+	agentId: "agent-1",
+	score: 0.9,
+}
+
+describe("freshness hard filter", () => {
+	it("vectorSearch excludes a stale index admission and keeps the fresh control", async () => {
+		const col = mockCollectionApplyingMatch([STALE_VICTIM, FRESH_CONTROL])
+		const results = await vectorSearch(col, null, {
+			maxResults: 5,
+			minScore: 0,
+			indexName: "idx",
+			queryText: "fresh document",
+			embeddingMode: "automated",
+			filter: { agentId: "agent-1" },
+		})
+		expect(results.map((result) => result.path)).toEqual(["memory/control.md"])
+	})
+
+	it("keywordSearch excludes a stale index admission and keeps the fresh control", async () => {
+		const col = mockCollectionApplyingMatch([STALE_VICTIM, FRESH_CONTROL])
+		const results = await keywordSearch(col, "stale copy", {
+			maxResults: 5,
+			minScore: 0,
+			indexName: "idx",
+			filter: { agentId: "agent-1" },
+		})
+		expect(results.map((result) => result.path)).toEqual(["memory/control.md"])
+	})
+
+	it("mongoSearch pins storedSource off and revalidates the full filter inside both fusion input pipelines", async () => {
+		const col = mockCollectionWithResults(SAMPLE_DOCS)
+		await mongoSearch(col, "test query", [0.1, 0.2], {
+			maxResults: 10,
+			minScore: 0.1,
+			fusionMethod: "rankFusion",
+			vectorIndexName: "chunks_vector",
+			textIndexName: "chunks_text",
+			vectorWeight: 0.7,
+			textWeight: 0.3,
+			capabilities: { ...FULL_CAPS, storedSource: true },
+			embeddingMode: "automated",
+			filter: { agentId: "agent-1" },
+		})
+
+		const pipeline = (col.aggregate as ReturnType<typeof vi.fn>).mock
+			.calls[0][0]
+		const fusion = pipeline[0].$rankFusion
+		expect(fusion).toBeDefined()
+		const vectorLane = fusion.input.pipelines.vector as Document[]
+		const textLane = fusion.input.pipelines.text as Document[]
+		// storedSource reads the indexed copy, which may return stale data —
+		// authoritative serving hydrates from mongod even when the platform
+		// supports storedSource.
+		expect(
+			(vectorLane[0]?.$vectorSearch as Document).returnStoredSource ?? false,
+		).toBe(false)
+		// $match is a legal selection-pipeline stage inside fusion input
+		// pipelines; the full filter is re-validated post-stage in both lanes.
+		expect(vectorLane[1]).toEqual({ $match: { agentId: "agent-1" } })
+		expect(textLane[1]).toEqual({ $match: { agentId: "agent-1" } })
 	})
 })

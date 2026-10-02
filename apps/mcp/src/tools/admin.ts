@@ -498,7 +498,7 @@ export const adminTools: readonly McpToolDefinition[] = [
 	{
 		name: "memongo_erase_agent",
 		description:
-			"Irreversibly erase every collection entry for one agent (tenant erasure); returns a per-collection receipt. Requires confirm='erase'",
+			"Irreversibly erase every collection entry for one agent (tenant erasure); returns a per-collection receipt. Requires confirm='erase' and an explicit agentId",
 		inputSchema: {
 			type: "object",
 			properties: {
@@ -507,9 +507,20 @@ export const adminTools: readonly McpToolDefinition[] = [
 					enum: ["erase"],
 					description: "Typed confirmation; the call is a no-op 400 without it",
 				},
-				agentId: { type: "string" },
+				agentId: {
+					type: "string",
+					minLength: 1,
+					description:
+						"Explicit agent to erase; no environment or default target",
+				},
+				recovery: {
+					type: "string",
+					enum: ["takeover"],
+					description:
+						"Deliberate recovery: replaces the observed owner of an erasing gate, possibly still live or paused, and never begins a fresh erase; conflicts on an open or absent gate or a raced finalize. Without it, an ordinary erase starts on an open or absent gate and conflicts with a typed 409 while an erasure is active",
+				},
 			},
-			required: ["confirm"],
+			required: ["confirm", "agentId"],
 		},
 		category: "admin",
 	},
@@ -523,7 +534,7 @@ export const adminTools: readonly McpToolDefinition[] = [
 				agentId: { type: "string" },
 				status: {
 					type: "string",
-					enum: ["pending-review", "promoted", "rejected"],
+					enum: ["pending-review", "promoting", "promoted", "rejected"],
 				},
 				limit: { type: "integer", minimum: 1, maximum: 100 },
 			},

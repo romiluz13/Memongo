@@ -185,11 +185,18 @@ export const MEMORY_MUTATIONS_SCHEMA: Document = {
 export const RECALL_TRACES_SCHEMA: Document = {
 	$jsonSchema: {
 		bsonType: "object",
-		required: ["traceId", "agentId", "query", "timestamp"],
+		// RET-21: `query` is no longer required — the diagnostic privacy
+		// policy ("none") writes traces with no query text at all. When
+		// present it is the policy-transformed text ("raw" verbatim,
+		// "redacted-hash" shape-preserving redaction), never a bypass.
+		required: ["traceId", "agentId", "timestamp"],
 		properties: {
 			traceId: { bsonType: "string" },
 			agentId: { bsonType: "string" },
 			query: { bsonType: "string" },
+			queryHash: { bsonType: "string" },
+			scope: { enum: [...SCOPE_ENUM, null] },
+			scopeRef: { bsonType: ["string", "null"] },
 			timestamp: { bsonType: "date" },
 			lanesUsed: {
 				bsonType: "array",
@@ -301,8 +308,9 @@ export const MEMORY_QUARANTINE_SCHEMA: Document = {
 				description: "Every INJECTION_PATTERNS id that matched the content",
 			},
 			status: {
-				enum: ["pending-review", "rejected", "promoted"],
-				description: "Lifecycle status; canonical write requires 'promoted'",
+				enum: ["pending-review", "promoting", "rejected", "promoted"],
+				description:
+					"Lifecycle: pending-review -> promoting (leased claim) -> promoted; pending-review or expired promoting -> rejected",
 			},
 			createdAt: { bsonType: "date" },
 			reviewedAt: { bsonType: "date" },

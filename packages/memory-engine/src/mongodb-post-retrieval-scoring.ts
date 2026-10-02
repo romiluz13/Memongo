@@ -187,9 +187,6 @@ const TEMPORAL_PATTERNS: TemporalPattern[] = [
 	{ regex: /\ba\s+year\s+ago\b/i, windowDays: 365 },
 ]
 
-/** Default window when no temporal pattern is detected but questionDate exists */
-const DEFAULT_TEMPORAL_WINDOW_DAYS = 30
-
 // ---------------------------------------------------------------------------
 // keywordOverlapBoost
 // ---------------------------------------------------------------------------
@@ -230,6 +227,11 @@ export function keywordOverlapBoost(
  * Parse relative time expressions ("a week ago", "last month", "recently"),
  * compute the distance between questionDate and result timestamp, and apply
  * a graduated linear falloff boost.
+ *
+ * B12: the boost only fires when the query contains an explicit temporal
+ * expression. Queries without one return the original score unchanged —
+ * there is no default 30-day window, so non-temporal queries no longer get
+ * an implicit recency preference from merely passing a questionDate.
  */
 export function temporalProximityBoost(
 	query: string,
@@ -241,6 +243,7 @@ export function temporalProximityBoost(
 	if (!questionDate || !resultTimestamp) return originalScore
 
 	const windowDays = detectTemporalWindow(query)
+	if (windowDays === null) return originalScore
 	const windowMs = windowDays * 24 * 60 * 60 * 1000
 	const distanceMs = Math.abs(
 		questionDate.getTime() - resultTimestamp.getTime(),
@@ -378,13 +381,18 @@ function extractKeywords(text: string): string[] {
 	return words.filter((w) => !STOP_WORDS.has(w) && w.length > 1)
 }
 
-function detectTemporalWindow(query: string): number {
+/**
+ * B12: returns null when the query carries no explicit temporal expression,
+ * so the caller can skip the temporal-proximity boost entirely instead of
+ * falling back to a default window.
+ */
+function detectTemporalWindow(query: string): number | null {
 	for (const pattern of TEMPORAL_PATTERNS) {
 		if (pattern.regex.test(query)) {
 			return pattern.windowDays
 		}
 	}
-	return DEFAULT_TEMPORAL_WINDOW_DAYS
+	return null
 }
 
 function extractProperNouns(text: string): string[] {

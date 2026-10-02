@@ -1,6 +1,10 @@
 /* eslint-disable @typescript-eslint/unbound-method -- Vitest mock method assertions */
 import type { Collection, Document } from "mongodb"
 import { describe, it, expect, vi } from "vitest"
+import {
+	runWithSearchBudget,
+	tryConsumeSearchAggregation,
+} from "./mongodb-search-budget.js"
 import { searchKB } from "./mongodb-kb-search.js"
 import type { DetectedCapabilities } from "./mongodb-schema.js"
 
@@ -73,8 +77,84 @@ describe("searchKB", () => {
 
 		expect(results).toHaveLength(1)
 		expect(results[0].source).toBe("reference")
+		// RET-09: KB chunks are verbatim spans of ingested documents —
+		// cited reference material, not conversation authorship.
+		expect(results[0].derivation).toBe("reference")
 		expect(results[0].score).toBe(0.85)
 		expect(results[0].snippet).toContain("KB content about architecture")
+	})
+
+	it("projects the retention deadline in every $project stage (RET-11 followup)", async () => {
+		// Wave-3e §5 discovery: the KB mapper carried expiresAt since wave
+		// 3d but no KB $project included the field, so the carry was dead.
+		// Guard the vector lane's projection against silent re-dropping.
+		const col = mockKBChunksCol([
+			{
+				path: "guide.md",
+				startLine: 1,
+				endLine: 10,
+				text: "KB content about architecture",
+				docId: "doc-1",
+				score: 0.85,
+			},
+		])
+
+		await searchKB(col, "architecture", [0.1, 0.2], {
+			maxResults: 5,
+			minScore: 0.1,
+			scopeRef: "agent:test",
+			vectorIndexName: "test_kb_chunks_vector",
+			textIndexName: "test_kb_chunks_text",
+			capabilities: baseCapabilities,
+			embeddingMode: "automated",
+		})
+
+		const pipeline = (col.aggregate as ReturnType<typeof vi.fn>).mock
+			.calls[0][0]
+		// Pipeline: $vectorSearch, $match (freshness revalidation), $limit, $project
+		const projectStage = pipeline[3].$project
+		expect(projectStage.expiresAt).toBe(1)
+	})
+
+	it("carries the source retention deadline onto the result shape (RET-11)", async () => {
+		// The KB mapper preserves a source retention deadline for provenance;
+		// a non-Date value is dropped, matching the mapper's defensive
+		// instanceof style for other date fields.
+		const expiresAt = new Date("2026-09-01T00:00:00.000Z")
+		const col = mockKBChunksCol([
+			{
+				path: "guide.md",
+				startLine: 1,
+				endLine: 10,
+				text: "KB content with a retention deadline",
+				docId: "doc-1",
+				score: 0.85,
+				expiresAt,
+			},
+			{
+				path: "stale-shape.md",
+				startLine: 1,
+				endLine: 5,
+				text: "Non-Date deadline is dropped",
+				docId: "doc-2",
+				score: 0.8,
+				expiresAt: "2026-09-01T00:00:00.000Z",
+			},
+		])
+
+		const results = await searchKB(col, "retention", [0.1, 0.2], {
+			maxResults: 5,
+			minScore: 0,
+			scopeRef: "agent:test",
+			vectorIndexName: "test_kb_chunks_vector",
+			textIndexName: "test_kb_chunks_text",
+			capabilities: baseCapabilities,
+			embeddingMode: "automated",
+		})
+
+		expect(results[0].expiresAt).toEqual(expiresAt)
+		expect(results[0].expiresAt instanceof Date).toBe(true)
+		expect(results[1].expiresAt).toBeUndefined()
 	})
 
 	it("returns empty results when no matches", async () => {
@@ -181,7 +261,8 @@ describe("searchKB", () => {
 
 		const pipeline = (col.aggregate as ReturnType<typeof vi.fn>).mock
 			.calls[0][0]
-		expect(pipeline[1].$limit).toBe(3)
+		// Pipeline: $vectorSearch, $match (freshness revalidation), $limit, $project
+		expect(pipeline[2].$limit).toBe(3)
 	})
 
 	it("tries hybrid search ($rankFusion) before vector-only when rankFusion available (F12)", async () => {
@@ -509,7 +590,14 @@ describe("searchKB", () => {
 			{ equals: { path: "scopeRef", value: "agent:test" } },
 			{ in: { path: "docId", value: ["doc-a", "doc-b"] } },
 		])
-		expect(textPipeline[1]?.$match).toBeUndefined()
+		// The full chunk filter is re-validated post-$search against the
+		// hydrated document — the compound filter runs against the indexed
+		// copy, which can lag the latest write (platform probe: stale
+		// admissions in both lanes).
+		expect(textPipeline[1]?.$match).toEqual({
+			scopeRef: "agent:test",
+			docId: { $in: ["doc-a", "doc-b"] },
+		})
 	})
 
 	// WS-11: the manager passes skipVectorLane when the search-admission
@@ -579,5 +667,142 @@ describe("searchKB", () => {
 		// Contrast with the skipVectorLane test: without the flag the
 		// automated-mode lane issues a server-side query embed.
 		expect(sawVectorStage).toBe(true)
+	})
+})
+
+// ---------------------------------------------------------------------------
+// RET-13/RET-16: KB waterfall lane-failure policy + $text budget charging
+// ---------------------------------------------------------------------------
+
+describe("searchKB lane failure policy + $text budget (RET-13/RET-16)", () => {
+	it("charges the budget and carries maxTimeMS when the $text last resort executes", async () => {
+		const col = mockKBChunksCol([
+			{
+				path: "fallback.md",
+				startLine: 1,
+				endLine: 3,
+				text: "Fallback text match",
+				score: 1.5,
+			},
+		])
+
+		const { budget } = await runWithSearchBudget(
+			{ maxAggregations: 5, maxEmbeds: 5 },
+			async () =>
+				searchKB(col, "fallback", null, {
+					maxResults: 5,
+					minScore: 0.1,
+					scopeRef: "agent:test",
+					vectorIndexName: "test_kb_chunks_vector",
+					textIndexName: "test_kb_chunks_text",
+					capabilities: noSearchCapabilities,
+					embeddingMode: "automated",
+				}),
+		)
+
+		// No earlier lane ran (no capabilities), so the $text aggregate is
+		// the one and only budget charge.
+		expect(budget.aggregations).toBe(1)
+		const call = (col.aggregate as ReturnType<typeof vi.fn>).mock.calls[0]
+		const options = call[1] as { maxTimeMS?: number }
+		expect(typeof options?.maxTimeMS).toBe("number")
+		expect(options.maxTimeMS).toBeGreaterThan(0)
+	})
+
+	it("returns [] without executing the $text aggregate when the budget is exhausted (RET-16)", async () => {
+		const col = mockKBChunksCol([
+			{
+				path: "fallback.md",
+				startLine: 1,
+				endLine: 3,
+				text: "Fallback text match",
+				score: 1.5,
+			},
+		])
+
+		const { value: results, budget } = await runWithSearchBudget(
+			{ maxAggregations: 1, maxEmbeds: 5 },
+			async () => {
+				// Spend the single aggregation so the $text lane is refused.
+				tryConsumeSearchAggregation()
+				return searchKB(col, "fallback", null, {
+					maxResults: 5,
+					minScore: 0.1,
+					scopeRef: "agent:test",
+					vectorIndexName: "test_kb_chunks_vector",
+					textIndexName: "test_kb_chunks_text",
+					capabilities: noSearchCapabilities,
+					embeddingMode: "automated",
+				})
+			},
+		)
+
+		// Budget refusal degrades to empty — never an error, never an
+		// off-ledger aggregate.
+		expect(results).toEqual([])
+		expect(col.aggregate).not.toHaveBeenCalled()
+		expect(budget.exhausted).toBe(true)
+	})
+
+	it("rethrows in strict mode when the $text last resort fails (RET-13)", async () => {
+		const col = {
+			aggregate: vi.fn(() => ({
+				toArray: vi.fn(async () => {
+					throw new Error("text index missing")
+				}),
+			})),
+		} as unknown as Collection
+
+		await expect(
+			searchKB(col, "anything", null, {
+				maxResults: 5,
+				minScore: 0.1,
+				scopeRef: "agent:test",
+				vectorIndexName: "test_kb_chunks_vector",
+				textIndexName: "test_kb_chunks_text",
+				capabilities: noSearchCapabilities,
+				embeddingMode: "automated",
+				strict: true,
+			}),
+		).rejects.toThrow("text index missing")
+	})
+
+	it("continues the waterfall and fires onLaneFailure at the failing seam in non-strict mode (RET-13)", async () => {
+		// Vector lane fails; the keyword lane behind it still answers.
+		const col = {
+			aggregate: vi.fn((pipeline: Document[]) => ({
+				toArray: vi.fn(async () => {
+					if (JSON.stringify(pipeline).includes("$vectorSearch")) {
+						throw new Error("vector lane broke")
+					}
+					return [
+						{
+							path: "keyword.md",
+							startLine: 1,
+							endLine: 3,
+							text: "keyword hit",
+							docId: "doc-1",
+							score: 0.8,
+						},
+					]
+				}),
+			})),
+		} as unknown as Collection
+
+		const laneFailures: string[] = []
+		const results = await searchKB(col, "keyword", null, {
+			maxResults: 5,
+			minScore: 0.1,
+			scopeRef: "agent:test",
+			vectorIndexName: "test_kb_chunks_vector",
+			textIndexName: "test_kb_chunks_text",
+			capabilities: baseCapabilities,
+			embeddingMode: "automated",
+			onLaneFailure: (lane) => laneFailures.push(lane),
+		})
+
+		expect(results).toHaveLength(1)
+		expect(results[0].snippet).toContain("keyword hit")
+		expect(laneFailures).toEqual(["kb:vector"])
 	})
 })

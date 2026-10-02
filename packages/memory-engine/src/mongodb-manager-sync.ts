@@ -1,11 +1,11 @@
 import path from "node:path"
 import chokidar from "chokidar"
-import { isDuplicateKeyError } from "./internal.js"
 import {
 	clearEventExtractionJobPending,
 	getPendingExtractionEvents,
-	projectChunksFromEvents,
+	getUnprojectedEvents,
 	projectEventChunk,
+	projectEventChunksBatch,
 } from "./mongodb-events.js"
 import { extractAndUpsertEntities } from "./mongodb-graph.js"
 import {
@@ -13,12 +13,22 @@ import {
 	getMemoryJob,
 	releaseStagedMemoryJob,
 } from "./mongodb-memory-jobs.js"
+import { recordProjectionRun } from "./mongodb-ops.js"
 import {
 	chunksCollection,
 	filesCollection,
 	metaCollection,
 } from "./mongodb-schema.js"
 import { syncToMongoDB } from "./mongodb-sync.js"
+import { emitTelemetry } from "./mongodb-telemetry.js"
+import {
+	type AdmissionToken,
+	captureAdmissionToken,
+	ErasureGateConflictError,
+	readErasureGate,
+	isErasureGateConflictError,
+	withFencedWrite,
+} from "./mongodb-write-fence.js"
 import type { MemorySyncProgressUpdate } from "./types.js"
 import type { MongoDBManagerHost } from "./mongodb-manager-host.js"
 import { createSubsystemLogger } from "@memongo/lib"
@@ -34,8 +44,89 @@ const log = createSubsystemLogger("memory:mongodb")
 
 const CHANGE_STREAM_RESUME_TOKEN_META_KEY = "change_stream_resume_token"
 
+type RepairDiagnostics = {
+	status: "ok" | "failed"
+	durationMs: number
+	chunkCreated: boolean
+	entitiesExtracted: number
+	relationsCreated: number
+	extractionMethod: "regex" | "llm"
+}
+
 export class MongoDBManagerSyncOps {
 	constructor(private readonly host: MongoDBManagerHost) {}
+
+	private async emitRepairDiagnostics(params: {
+		admission: AdmissionToken
+		eventId: string
+		diagnostics: RepairDiagnostics
+	}): Promise<void> {
+		const { admission, eventId, diagnostics } = params
+		try {
+			await withFencedWrite({
+				db: this.host.db,
+				prefix: this.host.prefix,
+				token: admission,
+				fn: async (session) => {
+					await recordProjectionRun({
+						db: this.host.db,
+						prefix: this.host.prefix,
+						run: {
+							agentId: this.host.agentId,
+							projectionType: "chunks",
+							status: diagnostics.status,
+							itemsProjected: diagnostics.chunkCreated ? 1 : 0,
+							durationMs: diagnostics.durationMs,
+						},
+						session,
+					})
+					await emitTelemetry(
+						this.host.db,
+						this.host.prefix,
+						{
+							meta: {
+								agentId: this.host.agentId,
+								operation: "entity-extraction",
+							},
+							durationMs: diagnostics.durationMs,
+							ok: diagnostics.status === "ok",
+							extractionMethod: diagnostics.extractionMethod,
+							entitiesExtracted: diagnostics.entitiesExtracted,
+						},
+						{ session },
+					)
+					await recordProjectionRun({
+						db: this.host.db,
+						prefix: this.host.prefix,
+						run: {
+							agentId: this.host.agentId,
+							projectionType: "entities",
+							status: diagnostics.status,
+							itemsProjected: diagnostics.entitiesExtracted,
+							durationMs: diagnostics.durationMs,
+						},
+						session,
+					})
+					await recordProjectionRun({
+						db: this.host.db,
+						prefix: this.host.prefix,
+						run: {
+							agentId: this.host.agentId,
+							projectionType: "relations",
+							status: diagnostics.status,
+							itemsProjected: diagnostics.relationsCreated,
+							durationMs: diagnostics.durationMs,
+						},
+						session,
+					})
+				},
+			})
+		} catch {
+			log.warn(
+				`deferred extraction repair diagnostics were not recorded for ${eventId}`,
+			)
+		}
+	}
 
 	async sync(params?: {
 		reason?: string
@@ -54,34 +145,162 @@ export class MongoDBManagerSyncOps {
 		return this.host.syncing
 	}
 
-	async repairEventProjections(): Promise<{
+	/**
+	 * Fenced event-chunk projection repair (the startup T-R1/T-R2 path). One
+	 * admission covers the whole pass; every snapshot stays OUTSIDE the
+	 * fences, each batch projects inside withFencedWrite on the fence session
+	 * with recordRun:false, and diagnostics record in separate best-effort
+	 * fenced writes carrying the SAME token. Host counters advance only from
+	 * committed primaries; a gate conflict propagates with no diagnostic
+	 * attempt; any other failure records a fenced failed run with the
+	 * original token before rethrowing.
+	 */
+	async repairEventProjections(params?: {
+		admission?: AdmissionToken
+		singleBatch?: boolean
+	}): Promise<{
 		eventsProcessed: number
 		chunksCreated: number
 	}> {
 		const batchSize = 500
-		let eventsProcessed = 0
-		let chunksCreated = 0
-		for (;;) {
-			const batch = await projectChunksFromEvents({
+		const token =
+			params?.admission ??
+			(await captureAdmissionToken({
 				db: this.host.db,
 				prefix: this.host.prefix,
 				agentId: this.host.agentId,
-				batchSize,
+			}))
+		if (params?.admission) {
+			if (token.kind !== "admission" || token.agentId !== this.host.agentId)
+				throw new ErasureGateConflictError(this.host.agentId)
+			const gate = await readErasureGate({
+				db: this.host.db,
+				prefix: this.host.prefix,
+				agentId: this.host.agentId,
 			})
-			eventsProcessed += batch.eventsProcessed
-			chunksCreated += batch.chunksCreated
-			if (batch.eventsProcessed < batchSize) {
+			if (!gate || gate.state !== "open" || gate.epoch !== token.epoch)
+				throw new ErasureGateConflictError(this.host.agentId)
+		}
+		let eventsProcessed = 0
+		let chunksCreated = 0
+		for (;;) {
+			// Snapshots stay outside the fences: the gate decides per batch,
+			// and a short snapshot (< batchSize) ends the drain.
+			const events = await getUnprojectedEvents({
+				db: this.host.db,
+				prefix: this.host.prefix,
+				agentId: this.host.agentId,
+				limit: batchSize,
+			})
+			if (events.length === 0) {
+				return { eventsProcessed, chunksCreated }
+			}
+			const startMs = Date.now()
+			let results: Array<{ chunkCreated: boolean }>
+			try {
+				results = await withFencedWrite({
+					db: this.host.db,
+					prefix: this.host.prefix,
+					token,
+					fn: (session) =>
+						projectEventChunksBatch({
+							db: this.host.db,
+							prefix: this.host.prefix,
+							events,
+							recordRun: false,
+							session,
+						}),
+				})
+			} catch (err) {
+				if (isErasureGateConflictError(err)) {
+					// The tenant's bytes are gone: refuse with no diagnostic
+					// attempt and no counter movement.
+					throw err
+				}
+				// Best-effort fenced failed-run record with the ORIGINAL
+				// token; the failure itself then propagates.
+				try {
+					await withFencedWrite({
+						db: this.host.db,
+						prefix: this.host.prefix,
+						token,
+						fn: (session) =>
+							recordProjectionRun({
+								db: this.host.db,
+								prefix: this.host.prefix,
+								run: {
+									agentId: this.host.agentId,
+									projectionType: "chunks",
+									status: "failed",
+									itemsProjected: 0,
+									durationMs: Date.now() - startMs,
+								},
+								session,
+							}),
+					})
+				} catch (diagnosticErr) {
+					log.warn(
+						`projection repair failed-run record was not written: ${String(diagnosticErr)}`,
+					)
+				}
+				throw err
+			}
+			eventsProcessed += events.length
+			const committed = results.filter((result) => result.chunkCreated).length
+			chunksCreated += committed
+			this.host.chunkCount += committed
+			// Diagnostics ride a separate fenced write AFTER the committed
+			// primary; best-effort, they never fail the repair.
+			try {
+				await withFencedWrite({
+					db: this.host.db,
+					prefix: this.host.prefix,
+					token,
+					fn: (session) =>
+						recordProjectionRun({
+							db: this.host.db,
+							prefix: this.host.prefix,
+							run: {
+								agentId: this.host.agentId,
+								projectionType: "chunks",
+								status: "ok",
+								itemsProjected: committed,
+								durationMs: Date.now() - startMs,
+							},
+							session,
+						}),
+				})
+			} catch (diagnosticErr) {
+				log.warn(
+					`projection repair diagnostics were not recorded: ${String(diagnosticErr)}`,
+				)
+			}
+			if (params?.singleBatch || events.length < batchSize) {
 				return { eventsProcessed, chunksCreated }
 			}
 		}
 	}
 
-	async repairExtractionOutbox(params?: { limit?: number }): Promise<{
+	async repairExtractionOutbox(params?: {
+		limit?: number
+		admission?: AdmissionToken
+	}): Promise<{
 		eventsProcessed: number
 		jobsCreated: number
 		jobsReleased: number
 		eventsFailed: number
 	}> {
+		// W8: one admission per write chain. A wake-triggered repair reuses
+		// the calling write's admission (captured at the write boundary, so
+		// strictly before this scan); a standalone repair pass captures its
+		// own admission before scanning, per the W11 capture-before-scan rule.
+		const admission =
+			params?.admission ??
+			(await captureAdmissionToken({
+				db: this.host.db,
+				prefix: this.host.prefix,
+				agentId: this.host.agentId,
+			}))
 		const pendingEvents = await getPendingExtractionEvents({
 			db: this.host.db,
 			prefix: this.host.prefix,
@@ -94,137 +313,172 @@ export class MongoDBManagerSyncOps {
 		let eventsFailed = 0
 
 		for (const event of pendingEvents) {
+			const eventStartMs = Date.now()
 			try {
 				const jobId = `extraction-${event.eventId}`
-				let existing = await getMemoryJob({
+				const outcome = await withFencedWrite({
 					db: this.host.db,
 					prefix: this.host.prefix,
-					jobId,
-					agentId: this.host.agentId,
-				})
-				let staged =
-					existing?.status === "pending" && Boolean(existing.stagedAt)
-				if (!existing) {
-					try {
-						await createMemoryJob({
+					token: admission,
+					fn: async (session) => {
+						let created = 0
+						let released = 0
+						let chunkCreated = false
+						let diagnostics: RepairDiagnostics | undefined
+						let existing = await getMemoryJob({
 							db: this.host.db,
 							prefix: this.host.prefix,
-							job: {
-								jobId,
-								jobType: "extraction",
-								agentId: this.host.agentId,
-								status: "pending",
-								stagedAt: event.extractionJobPendingAt ?? new Date(),
-								metadata: { eventId: event.eventId },
-								payload: {
+							jobId,
+							agentId: this.host.agentId,
+							session,
+						})
+						let staged =
+							existing?.status === "pending" && Boolean(existing.stagedAt)
+						if (!existing) {
+							await createMemoryJob({
+								db: this.host.db,
+								prefix: this.host.prefix,
+								job: {
+									jobId,
+									jobType: "extraction",
+									agentId: this.host.agentId,
+									status: "pending",
+									stagedAt: event.extractionJobPendingAt ?? new Date(),
+									admissionEpoch: admission.epoch,
+									metadata: { eventId: event.eventId },
+									payload: {
+										eventId: event.eventId,
+										scope: event.scope,
+										scopeRef: event.scopeRef,
+									},
+								},
+								session,
+							})
+							created = 1
+							staged = true
+						}
+
+						if (staged) {
+							const projected = await projectEventChunk({
+								db: this.host.db,
+								prefix: this.host.prefix,
+								event: {
 									eventId: event.eventId,
+									agentId: event.agentId,
+									role: event.role,
+									body: event.body,
 									scope: event.scope,
 									scopeRef: event.scopeRef,
+									timestamp: event.timestamp,
+									validAt: event.validAt ?? event.timestamp,
+									...(event.invalidAt ? { invalidAt: event.invalidAt } : {}),
+									...(event.expiresAt ? { expiresAt: event.expiresAt } : {}),
+									...(event.sessionId ? { sessionId: event.sessionId } : {}),
+									...(event.metadata ? { metadata: event.metadata } : {}),
 								},
-							},
-						})
-						jobsCreated++
-						staged = true
-					} catch (err) {
-						if (!this.host.isDuplicateKeyError(err)) {
-							throw err
+								recordRun: false,
+								session,
+							})
+							chunkCreated = projected.chunkCreated
+							const graph = await extractAndUpsertEntities({
+								db: this.host.db,
+								prefix: this.host.prefix,
+								agentId: this.host.agentId,
+								eventContent: event.body,
+								scope: event.scope,
+								scopeRef: event.scopeRef,
+								sourceEventId: event.eventId,
+								role: event.role,
+								recordRun: false,
+								session,
+							})
+
+							const wasReleased = await releaseStagedMemoryJob({
+								db: this.host.db,
+								prefix: this.host.prefix,
+								jobId,
+								agentId: this.host.agentId,
+								session,
+							})
+							if (wasReleased) {
+								released = 1
+							} else {
+								existing = await getMemoryJob({
+									db: this.host.db,
+									prefix: this.host.prefix,
+									jobId,
+									agentId: this.host.agentId,
+									session,
+								})
+								if (
+									!existing ||
+									(existing.status === "pending" && Boolean(existing.stagedAt))
+								) {
+									throw new Error(
+										`failed to release staged extraction job: ${jobId}`,
+									)
+								}
+							}
+							diagnostics = {
+								status: "ok",
+								durationMs:
+									graph.diagnostics?.durationMs ?? Date.now() - eventStartMs,
+								chunkCreated,
+								entitiesExtracted:
+									graph.diagnostics?.entitiesExtracted ?? graph.entities.length,
+								relationsCreated:
+									graph.diagnostics?.relationsCreated ?? graph.relationsCreated,
+								extractionMethod:
+									graph.diagnostics?.extractionMethod ?? "regex",
+							}
 						}
-						existing = await getMemoryJob({
+
+						await clearEventExtractionJobPending({
 							db: this.host.db,
 							prefix: this.host.prefix,
-							jobId,
-							agentId: this.host.agentId,
-						})
-						if (!existing) {
-							throw new Error(
-								`duplicate extraction job is unreadable: ${jobId}`,
-							)
-						}
-						staged = existing.status === "pending" && Boolean(existing.stagedAt)
-					}
-				}
-
-				if (staged) {
-					const projected = await projectEventChunk({
-						db: this.host.db,
-						prefix: this.host.prefix,
-						event: {
 							eventId: event.eventId,
-							agentId: event.agentId,
-							role: event.role,
-							body: event.body,
-							scope: event.scope,
-							scopeRef: event.scopeRef,
-							timestamp: event.timestamp,
-							validAt: event.validAt ?? event.timestamp,
-							...(event.invalidAt ? { invalidAt: event.invalidAt } : {}),
-							// C-005: stored events carry the persisted expiry —
-							// the chunk must inherit it (and re-projection heals
-							// older chunks that were written without it).
-							...(event.expiresAt ? { expiresAt: event.expiresAt } : {}),
-							...(event.sessionId ? { sessionId: event.sessionId } : {}),
-							...(event.metadata ? { metadata: event.metadata } : {}),
-						},
-					})
-					if (projected.chunkCreated) {
-						this.host.chunkCount += 1
-					}
-					try {
-						await extractAndUpsertEntities({
-							db: this.host.db,
-							prefix: this.host.prefix,
 							agentId: this.host.agentId,
-							eventContent: event.body,
-							scope: event.scope,
-							scopeRef: event.scopeRef,
-							sourceEventId: event.eventId,
-							role: event.role,
+							session,
 						})
-					} catch (err) {
-						log.warn("entity extraction failed during outbox repair", {
-							error: err instanceof Error ? err.message : String(err),
-							eventId: event.eventId,
-						})
-					}
-
-					const released = await releaseStagedMemoryJob({
-						db: this.host.db,
-						prefix: this.host.prefix,
-						jobId,
-						agentId: this.host.agentId,
-					})
-					if (released) {
-						jobsReleased++
-					} else {
-						existing = await getMemoryJob({
-							db: this.host.db,
-							prefix: this.host.prefix,
-							jobId,
-							agentId: this.host.agentId,
-						})
-						if (
-							!existing ||
-							(existing.status === "pending" && Boolean(existing.stagedAt))
-						) {
-							throw new Error(
-								`failed to release staged extraction job: ${jobId}`,
-							)
+						return {
+							jobsCreated: created,
+							jobsReleased: released,
+							chunkCreated,
+							diagnostics,
 						}
-					}
-				}
-
-				await clearEventExtractionJobPending({
-					db: this.host.db,
-					prefix: this.host.prefix,
-					eventId: event.eventId,
-					agentId: this.host.agentId,
+					},
 				})
+				jobsCreated += outcome.jobsCreated
+				jobsReleased += outcome.jobsReleased
+				if (outcome.chunkCreated) {
+					this.host.chunkCount += 1
+				}
 				eventsProcessed++
+				if (outcome.diagnostics) {
+					await this.emitRepairDiagnostics({
+						admission,
+						eventId: event.eventId,
+						diagnostics: outcome.diagnostics,
+					})
+				}
 			} catch (err) {
+				if (isErasureGateConflictError(err)) {
+					throw err
+				}
 				eventsFailed++
-				log.warn(
-					`extraction outbox repair failed for ${event.eventId}: ${String(err)}`,
-				)
+				await this.emitRepairDiagnostics({
+					admission,
+					eventId: event.eventId,
+					diagnostics: {
+						status: "failed",
+						durationMs: Date.now() - eventStartMs,
+						chunkCreated: false,
+						entitiesExtracted: 0,
+						relationsCreated: 0,
+						extractionMethod: "regex",
+					},
+				})
+				log.warn(`extraction outbox repair failed for ${event.eventId}`)
 			}
 		}
 
@@ -236,13 +490,19 @@ export class MongoDBManagerSyncOps {
 		force?: boolean
 		progress?: (update: MemorySyncProgressUpdate) => void
 	}): Promise<void> {
-		const mongoCfg = this.host.config.mongodb!
 		try {
+			const admission = await captureAdmissionToken({
+				db: this.host.db,
+				prefix: this.host.prefix,
+				agentId: this.host.agentId,
+			})
+			const mongoCfg = this.host.config.mongodb!
 			const result = await syncToMongoDB({
 				client: this.host.client,
 				db: this.host.db,
 				prefix: this.host.prefix,
 				agentId: this.host.agentId,
+				admission,
 				// Runtime conversation memory is event-native in MongoDB. Manager-level
 				// sync only keeps bridge Markdown in sync and must not rebuild live
 				// conversation memory from session transcript files.
@@ -364,7 +624,7 @@ export class MongoDBManagerSyncOps {
 		// Check last KB import time from meta collection
 		const meta = metaCollection(this.host.db, this.host.prefix)
 		const lastRefresh = await meta.findOne({
-			_id: "kb_last_auto_refresh",
+			_id: `kb_last_auto_refresh:${this.host.agentId}`,
 		} as Record<string, unknown>)
 		const lastRefreshTime =
 			lastRefresh?.timestamp instanceof Date
@@ -380,6 +640,14 @@ export class MongoDBManagerSyncOps {
 			`KB auto-refresh: ${hoursSinceRefresh.toFixed(1)}h since last import, refreshing ${paths.length} paths`,
 		)
 		try {
+			// S1 (plan e5ec10dc §4.1): capture once before any scan/read/CPU
+			// work; the token threads through the ingest and the marker
+			// fence so no effect of this attempt lands unfenced.
+			const token = await captureAdmissionToken({
+				db: this.host.db,
+				prefix: this.host.prefix,
+				agentId: this.host.agentId,
+			})
 			const { ingestFilesToKB } = await import("./mongodb-kb.js")
 			const result = await ingestFilesToKB({
 				db: this.host.db,
@@ -390,18 +658,36 @@ export class MongoDBManagerSyncOps {
 				importedBy: "agent",
 				embeddingMode: mongoCfg.embeddingMode,
 				chunking: mongoCfg.kb.chunking,
+				admission: token,
 			})
 			log.info(
 				`KB auto-refresh complete: ${result.documentsProcessed} docs, ${result.chunksCreated} chunks, ${result.skipped} skipped`,
 			)
 
-			// Update last refresh timestamp
-			await meta.updateOne(
-				{ _id: "kb_last_auto_refresh" } as Record<string, unknown>,
-				{ $set: { timestamp: new Date() } },
-				{ upsert: true },
-			)
+			// Update last refresh timestamp inside the fence: a gate
+			// conflict here means the marker must NOT land — the next
+			// cycle re-attempts the whole refresh.
+			await withFencedWrite({
+				db: this.host.db,
+				prefix: this.host.prefix,
+				token,
+				fn: async (session) => {
+					await meta.updateOne(
+						{
+							_id: `kb_last_auto_refresh:${this.host.agentId}`,
+						} as Record<string, unknown>,
+						{ $set: { timestamp: new Date() } },
+						{ upsert: true, session },
+					)
+				},
+			})
 		} catch (err) {
+			if (isErasureGateConflictError(err)) {
+				// Deferred, not failed: the attempt is retried whole on a
+				// later cycle once the erasure completes.
+				log.warn("KB auto-refresh deferred: tenant erasure in progress")
+				return
+			}
 			const msg = err instanceof Error ? err.message : String(err)
 			log.warn(`KB auto-refresh failed: ${msg}`)
 		}

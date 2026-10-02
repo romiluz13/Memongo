@@ -1,10 +1,12 @@
-import type { Collection, Db } from "mongodb"
+import type { ClientSession, Collection, Db } from "mongodb"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import {
 	extractLlmStructuredCandidates,
 	extractProcedureCandidatesFromEvent,
 	extractStructuredCandidatesFromEvent,
 	heuristicEpisodeSummarizer,
+	persistPreparedDerivedMemoryPromotion,
+	prepareDerivedMemoryPromotion,
 	promoteDerivedMemoryFromEvent,
 	resolveStructuredCandidatesForPromotion,
 } from "./mongodb-derived-memory.js"
@@ -305,6 +307,157 @@ describe("mongodb-derived-memory", () => {
 		expect(promotable[0]?.value).toContain("Blue Finch")
 		expect(structuredCol.findOne).not.toHaveBeenCalled()
 		expect(eventsCol.find).not.toHaveBeenCalled()
+	})
+
+	it("prepares an existing-memory promotion with its exact revision and value", async () => {
+		const event = {
+			eventId: "evt-existing-guard",
+			agentId: "agent-1",
+			role: "user" as const,
+			body: "I prefer concise answers with direct tradeoffs.",
+			timestamp: new Date("2026-03-21T10:00:00Z"),
+			scope: "agent" as const,
+			scopeRef: "agent:agent-1",
+		}
+		const findOne = vi
+			.fn()
+			.mockResolvedValueOnce({ key: "durable-preference" })
+			.mockResolvedValueOnce({
+				value: "Previously stored preference",
+				revision: 4,
+			})
+		const prepared = await prepareDerivedMemoryPromotion({
+			db: createMockDb({
+				test_structured_mem: createMockCollection({ findOne }),
+				test_events: createMockCollection(),
+			}),
+			prefix: "test_",
+			event,
+		})
+
+		expect(prepared.structuredCandidates).toHaveLength(1)
+		const candidate = prepared.structuredCandidates[0]
+		expect(
+			prepared.promotionGuards[`${candidate.type}\0${candidate.key}`],
+		).toEqual({
+			kind: "existing",
+			revision: 4,
+			value: "Previously stored preference",
+		})
+	})
+
+	it("skips a prepared promotion when its pinned existing revision changed", async () => {
+		const { writeStructuredMemory } = await import(
+			"./mongodb-structured-memory.js"
+		)
+		const event = {
+			eventId: "evt-stale-existing",
+			agentId: "agent-1",
+			role: "user" as const,
+			body: "Remember this: the deploy region is us-east-1.",
+			timestamp: new Date("2026-03-21T10:00:00Z"),
+			scope: "agent" as const,
+			scopeRef: "agent:agent-1",
+		}
+		const candidate = extractStructuredCandidatesFromEvent(event)[0]
+		expect(candidate).toBeDefined()
+		const findOne = vi.fn(async () => null)
+		const session = {} as ClientSession
+
+		const result = await persistPreparedDerivedMemoryPromotion({
+			db: createMockDb({
+				test_structured_mem: createMockCollection({ findOne }),
+				test_procedures: createMockCollection(),
+			}),
+			prefix: "test_",
+			session,
+			embeddingMode: "automated",
+			event,
+			prepared: {
+				structuredCandidates: [candidate],
+				procedureCandidates: [],
+				promotionGuards: {
+					[`${candidate.type}\0${candidate.key}`]: {
+						kind: "existing",
+						revision: 3,
+						value: "the deploy region was us-west-2",
+					},
+				},
+			},
+		})
+
+		expect(result).toEqual({
+			structuredCreated: 0,
+			proceduresCreated: 0,
+			skipped: false,
+		})
+		expect(findOne).toHaveBeenCalledWith(
+			expect.objectContaining({
+				key: candidate.key,
+				value: "the deploy region was us-west-2",
+				revision: 3,
+			}),
+			{ session },
+		)
+		expect(writeStructuredMemory).not.toHaveBeenCalled()
+	})
+
+	it("skips a prepared promotion when supporting evidence changed", async () => {
+		const { writeStructuredMemory } = await import(
+			"./mongodb-structured-memory.js"
+		)
+		const event = {
+			eventId: "evt-stale-evidence",
+			agentId: "agent-1",
+			role: "user" as const,
+			body: "Remember this: the deploy region is us-east-1.",
+			timestamp: new Date("2026-03-21T10:00:00Z"),
+			scope: "agent" as const,
+			scopeRef: "agent:agent-1",
+		}
+		const candidate = extractStructuredCandidatesFromEvent(event)[0]
+		expect(candidate).toBeDefined()
+		const evidenceAt = new Date("2026-03-20T10:00:00Z")
+		const evidenceFindOne = vi.fn(async () => null)
+		const session = {} as ClientSession
+
+		await persistPreparedDerivedMemoryPromotion({
+			db: createMockDb({
+				test_structured_mem: createMockCollection(),
+				test_procedures: createMockCollection(),
+				test_events: createMockCollection({ findOne: evidenceFindOne }),
+			}),
+			prefix: "test_",
+			session,
+			embeddingMode: "automated",
+			event,
+			prepared: {
+				structuredCandidates: [candidate],
+				procedureCandidates: [],
+				promotionGuards: {
+					[`${candidate.type}\0${candidate.key}`]: {
+						kind: "evidence",
+						events: [
+							{
+								eventId: "evt-support",
+								body: "the deploy region is us-east-1",
+								timestamp: evidenceAt,
+							},
+						],
+					},
+				},
+			},
+		})
+
+		expect(evidenceFindOne).toHaveBeenCalledWith(
+			expect.objectContaining({
+				eventId: "evt-support",
+				body: "the deploy region is us-east-1",
+				timestamp: evidenceAt,
+			}),
+			{ session },
+		)
+		expect(writeStructuredMemory).not.toHaveBeenCalled()
 	})
 
 	it("merges LLM-extracted facts into promotable candidates when a provider is configured", async () => {
@@ -736,10 +889,27 @@ describe("TTL expiry guards (B1)", () => {
 
 		expect(supportingFind).toHaveBeenCalled()
 		expect(supportingFind.mock.calls[0]?.[0]).toMatchObject({
-			$or: [
-				{ expiresAt: { $exists: false } },
-				{ expiresAt: { $gt: expect.any(Date) } },
-			],
+			$and: expect.arrayContaining([
+				{
+					$or: [
+						{ expiresAt: { $exists: false } },
+						{ expiresAt: { $gt: expect.any(Date) } },
+					],
+				},
+				{
+					$or: [
+						{ validAt: { $exists: false } },
+						{ validAt: { $lte: expect.any(Date) } },
+					],
+				},
+				{
+					$or: [
+						{ invalidAt: { $exists: false } },
+						{ invalidAt: null },
+						{ invalidAt: { $gt: expect.any(Date) } },
+					],
+				},
+			]),
 		})
 	})
 

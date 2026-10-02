@@ -122,6 +122,14 @@ describe("expandSearchContext", () => {
 		expect(expanded.length).toBeGreaterThanOrEqual(2)
 		const paths = expanded.map((r) => r.path)
 		expect(paths).toContain("events/mid")
+		// RET-09: neighbors carry their authoring role — expanded context
+		// classifies like lane results instead of reading as unattributed.
+		const prev = expanded.find((r) => r.path === "events/prev")
+		const next = expanded.find((r) => r.path === "events/next")
+		expect(prev?.role).toBe("user")
+		expect(prev?.derivation).toBe("user")
+		expect(next?.role).toBe("assistant")
+		expect(next?.derivation).toBe("agent")
 	})
 
 	it("confines the neighbor lookup to the caller's scope and scopeRef", async () => {
@@ -227,6 +235,62 @@ describe("expandSearchContext", () => {
 		// Should not duplicate event b
 		const bResults = expanded.filter((r) => r.path === "events/b")
 		expect(bResults.length).toBeLessThanOrEqual(1)
+	})
+
+	it("applies the event lifecycle guard to neighbor fetches (RET-10)", async () => {
+		const ts = new Date("2026-01-01T00:02:00Z")
+		const { db, findFn } = createMockDb([])
+		const results = [
+			makeResult({
+				path: "events/a",
+				sessionId: "s1",
+				timestamp: ts,
+				score: 0.9,
+			}),
+		]
+
+		await expandSearchContext({
+			db,
+			prefix: "test_",
+			agentId: "agent1",
+			scope: "session",
+			scopeRef: "agent:agent1:session:s1",
+			results,
+		})
+
+		// Neighbor candidates are events: the fetch must carry the same
+		// events-lane arms (bitemporal validAt/invalidAt — including the
+		// explicit-null branch for upsert-written open windows — plus TTL
+		// expiresAt) so an expired or invalidated turn cannot re-enter
+		// context as an expanded neighbor.
+		const filter = findFn.mock.calls[0]?.[0] as Document | undefined
+		expect(filter).toMatchObject({
+			agentId: "agent1",
+			scope: "session",
+			scopeRef: "agent:agent1:session:s1",
+			sessionId: "s1",
+			$and: expect.arrayContaining([
+				{
+					$or: [
+						{ validAt: { $exists: false } },
+						{ validAt: { $lte: expect.any(Date) } },
+					],
+				},
+				{
+					$or: [
+						{ invalidAt: { $exists: false } },
+						{ invalidAt: null },
+						{ invalidAt: { $gt: expect.any(Date) } },
+					],
+				},
+				{
+					$or: [
+						{ expiresAt: { $exists: false } },
+						{ expiresAt: { $gt: expect.any(Date) } },
+					],
+				},
+			]),
+		})
 	})
 
 	it("drops lowest-scored tail when neighbors would exceed maxResults", async () => {

@@ -33,10 +33,14 @@ export function isValidScope(value: string): value is ApiScope {
  * partition). Both the auth layer and the route layer call these helpers.
  */
 
+export function isJsonContentType(header: string | undefined): boolean {
+	return header?.split(";", 1)[0]?.trim().toLowerCase() === "application/json"
+}
+
 /**
  * The merged request scope input: query params overlaid by JSON body (body
  * wins). Mirrors what the auth layer inspects so downstream identity resolution
- * cannot diverge. Uses `raw.clone()` so the handler can still read the body.
+ * cannot diverge. Uses Hono's cached body so later handlers can read it.
  */
 export async function resolveScopeInput(
 	c: Context,
@@ -45,8 +49,7 @@ export async function resolveScopeInput(
 	if (c.req.method === "GET" || c.req.method === "HEAD") {
 		return query
 	}
-	const contentType = c.req.header("Content-Type") ?? ""
-	if (!contentType.toLowerCase().includes("application/json")) {
+	if (!isJsonContentType(c.req.header("Content-Type"))) {
 		return query
 	}
 	// Use Hono's cached body parse (c.req.json()) rather than cloning the raw

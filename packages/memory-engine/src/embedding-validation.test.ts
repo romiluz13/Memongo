@@ -1,4 +1,4 @@
-import type { Db, Collection } from "mongodb"
+import type { Collection, Db, Document } from "mongodb"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import {
 	assertQueryModelDimensionsMatch,
@@ -9,12 +9,28 @@ import {
 	isEmbeddingModelMismatchError,
 	refuseToStrandExistingDocuments,
 } from "./embedding-validation.js"
-import { INDEX_AUTOEMBED_MODEL } from "./mongodb-schema-search-definitions.js"
-import type { SearchIndexDescription } from "./mongodb-schema-search-readiness.js"
+import {
+	getExpectedSearchIndexTargets,
+	INDEX_AUTOEMBED_MODEL,
+} from "./mongodb-schema-search-definitions.js"
+import {
+	ensureNamedSearchIndex,
+	type SearchIndexDescription,
+} from "./mongodb-schema-search-readiness.js"
 
-vi.mock("./mongodb-schema-search-readiness.js", () => ({
-	listSearchIndexes: vi.fn(),
-}))
+// Partial mock: keep the REAL ensureNamedSearchIndex so the recovering-ensure
+// oracle exercises it against driver-surface fakes; only the module-level
+// list helper is controlled (per startup-safety review F2).
+vi.mock("./mongodb-schema-search-readiness.js", async (importOriginal) => {
+	const actual =
+		await importOriginal<
+			typeof import("./mongodb-schema-search-readiness.js")
+		>()
+	return {
+		...actual,
+		listSearchIndexes: vi.fn(),
+	}
+})
 
 vi.mock("./mongodb-schema-search-definitions.js", () => ({
 	INDEX_AUTOEMBED_MODEL: "voyage-4-large",
@@ -199,7 +215,7 @@ describe("Guardrail 2: findStrandingModelChanges", () => {
 		expect(findings).toEqual([])
 	})
 
-	it("returns empty findings and warns with redacted detail when listSearchIndexes throws (C-002)", async () => {
+	it("refuses with redacted detail on both the warn and throw paths when listSearchIndexes throws (C-002)", async () => {
 		const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {})
 		mockedListSearchIndexes.mockRejectedValue(
 			new Error(
@@ -212,19 +228,31 @@ describe("Guardrail 2: findStrandingModelChanges", () => {
 			),
 		)
 		const db = makeDb({ test_chunks: makeCollection("test_chunks", 100) })
-		const findings = await findStrandingModelChanges(
+		const outcome = await findStrandingModelChanges(
 			db,
 			"test_",
 			"atlas-managed",
 			"voyage-4-large",
+		).then(
+			() => "resolved" as const,
+			(err: unknown) => err,
 		)
-		expect(findings).toEqual([])
 		expect(warnSpy).toHaveBeenCalled()
 		const out = warnSpy.mock.calls.map((args) => args.join(" ")).join("\n")
 		expect(out).toContain("test_chunks")
 		expect(out).toContain("[guardrail] Could not inspect search indexes")
 		expect(out).not.toContain("dummy-cred-000000")
 		warnSpy.mockRestore()
+		expect(
+			outcome,
+			"incomplete inspection must refuse instead of returning []",
+		).toBeInstanceOf(Error)
+		if (!(outcome instanceof Error)) return
+		expect(isEmbeddingModelMigrationError(outcome)).toBe(false)
+		expect(outcome.message).toMatch(/incomplete/i)
+		expect(outcome.message).toContain("test_chunks")
+		// C-002 redaction must hold on the throw path, not just the log path.
+		expect(outcome.message).not.toContain("dummy-cred-000000")
 	})
 
 	it("returns finding with documentCount=-1 when countDocuments throws", async () => {
@@ -337,5 +365,276 @@ describe("isEmbeddingModelMigrationError", () => {
 
 	it("returns false for non-Error values", () => {
 		expect(isEmbeddingModelMigrationError(null)).toBe(false)
+	})
+})
+
+describe("Guardrail 2 startup composition: refusal vs recovering ensure (Stage 1 G2)", () => {
+	const mockedListSearchIndexes = vi.mocked(listSearchIndexes)
+	const mockedTargets = vi.mocked(getExpectedSearchIndexTargets)
+
+	const INDEX_NAME = "test_chunks_vector"
+	const WANTED_DEFINITION: Document = {
+		fields: [{ type: "autoEmbed", model: "voyage-4-large" }],
+	}
+	const SINGLE_TARGET = [
+		{ collectionName: "test_chunks", indexNames: [INDEX_NAME] },
+	]
+	const TWO_TARGETS = [
+		{ collectionName: "test_chunks", indexNames: [INDEX_NAME] },
+		{
+			collectionName: "test_kb_chunks",
+			indexNames: ["test_kb_chunks_vector"],
+		},
+	]
+
+	function autoEmbedIndexRow(name: string, model: string) {
+		return {
+			name,
+			type: "vectorSearch",
+			queryable: true,
+			latestDefinition: { fields: [{ type: "autoEmbed", model }] },
+		}
+	}
+
+	function makeDriverCollection(
+		collectionName: string,
+		opts: {
+			indexes?: Array<ReturnType<typeof autoEmbedIndexRow>>
+			documentCount?: number
+		} = {},
+	) {
+		const driverList = vi.fn().mockImplementation(() => ({
+			toArray: vi.fn().mockResolvedValue(opts.indexes ?? []),
+		}))
+		const updateSearchIndex = vi.fn().mockResolvedValue(undefined)
+		const createSearchIndex = vi.fn().mockResolvedValue(undefined)
+		const collection = {
+			collectionName,
+			countDocuments: vi.fn().mockResolvedValue(opts.documentCount ?? 50),
+			listSearchIndexes: driverList,
+			updateSearchIndex,
+			createSearchIndex,
+		} as unknown as Collection
+		return { collection, driverList, updateSearchIndex, createSearchIndex }
+	}
+
+	async function runRealEnsure(collection: Collection) {
+		await ensureNamedSearchIndex({
+			collection,
+			name: INDEX_NAME,
+			type: "vectorSearch",
+			definition: WANTED_DEFINITION,
+			label: "chunks vector",
+		})
+	}
+
+	// Granted chain (R1): a startup whose inspection failed must refuse so
+	// the manager never reaches the recovering ensure. The composition
+	// awaits the real refusal, then — only when startup did not refuse —
+	// the real recovering ensure, mirroring manager ordering.
+	async function startupRefusalThenRecoveringEnsure(
+		db: Db,
+		recoveryCollection: Collection,
+	) {
+		const refusal = await refuseToStrandExistingDocuments(
+			db,
+			"test_",
+			"atlas-managed",
+			"voyage-4-large",
+		).then(
+			() => "resolved" as const,
+			(err: unknown) => err,
+		)
+		if (refusal === "resolved") {
+			await runRealEnsure(recoveryCollection)
+		}
+		return refusal
+	}
+
+	beforeEach(() => {
+		delete process.env.MEMONGO_ALLOW_EMBEDDING_MODEL_CHANGE
+		vi.unstubAllEnvs()
+		mockedListSearchIndexes.mockReset()
+		mockedTargets.mockReset()
+		mockedTargets.mockImplementation(() => SINGLE_TARGET)
+	})
+
+	afterEach(() => {
+		vi.unstubAllEnvs()
+		// Restore the file-level single-target default for other suites.
+		mockedTargets.mockImplementation(() => SINGLE_TARGET)
+	})
+
+	it("rejects startup on real drift and the recovering ensure performs no writes", async () => {
+		mockedListSearchIndexes.mockResolvedValue([
+			autoEmbedIndexRow(INDEX_NAME, "voyage-3-lite"),
+		])
+		const fake = makeDriverCollection("test_chunks", {
+			indexes: [autoEmbedIndexRow(INDEX_NAME, "voyage-3-lite")],
+			documentCount: 50,
+		})
+		const db = makeDb({ test_chunks: fake.collection })
+		await expect(
+			refuseToStrandExistingDocuments(
+				db,
+				"test_",
+				"atlas-managed",
+				"voyage-4-large",
+			),
+		).rejects.toThrow(EmbeddingModelMigrationError)
+		// Manager ordering (mongodb-manager.ts:665-691) never reaches
+		// ensureNamedSearchIndex after a refused startup; pin that the driver
+		// surface saw no writes on the same fake.
+		expect(fake.updateSearchIndex).not.toHaveBeenCalled()
+		expect(fake.createSearchIndex).not.toHaveBeenCalled()
+	})
+
+	it("override routes the only sanctioned re-embed through real ensureNamedSearchIndex", async () => {
+		vi.stubEnv("MEMONGO_ALLOW_EMBEDDING_MODEL_CHANGE", "true")
+		mockedListSearchIndexes.mockResolvedValue([
+			autoEmbedIndexRow(INDEX_NAME, "voyage-3-lite"),
+		])
+		const fake = makeDriverCollection("test_chunks", {
+			indexes: [autoEmbedIndexRow(INDEX_NAME, "voyage-3-lite")],
+			documentCount: 50,
+		})
+		const db = makeDb({ test_chunks: fake.collection })
+		await refuseToStrandExistingDocuments(
+			db,
+			"test_",
+			"atlas-managed",
+			"voyage-4-large",
+		)
+		await runRealEnsure(fake.collection)
+		expect(fake.driverList).toHaveBeenCalledWith(INDEX_NAME)
+		expect(fake.updateSearchIndex).toHaveBeenCalledTimes(1)
+		expect(fake.updateSearchIndex).toHaveBeenCalledWith(
+			INDEX_NAME,
+			WANTED_DEFINITION,
+		)
+		expect(fake.createSearchIndex).not.toHaveBeenCalled()
+	})
+
+	it("matching model passes startup and ensure performs no writes", async () => {
+		mockedListSearchIndexes.mockResolvedValue([
+			autoEmbedIndexRow(INDEX_NAME, "voyage-4-large"),
+		])
+		const fake = makeDriverCollection("test_chunks", {
+			indexes: [autoEmbedIndexRow(INDEX_NAME, "voyage-4-large")],
+			documentCount: 50,
+		})
+		const db = makeDb({ test_chunks: fake.collection })
+		await refuseToStrandExistingDocuments(
+			db,
+			"test_",
+			"atlas-managed",
+			"voyage-4-large",
+		)
+		await runRealEnsure(fake.collection)
+		expect(fake.updateSearchIndex).not.toHaveBeenCalled()
+		expect(fake.createSearchIndex).not.toHaveBeenCalled()
+	})
+
+	it("composition fails closed when the very first target's inspection throws", async () => {
+		const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {})
+		mockedListSearchIndexes.mockRejectedValue(
+			new Error("list failed on test_chunks"),
+		)
+		const fake = makeDriverCollection("test_chunks", {
+			indexes: [autoEmbedIndexRow(INDEX_NAME, "voyage-3-lite")],
+			documentCount: 50,
+		})
+		const db = makeDb({ test_chunks: fake.collection })
+		const outcome = await startupRefusalThenRecoveringEnsure(
+			db,
+			fake.collection,
+		)
+		warnSpy.mockRestore()
+		// No-write anchors first: a refused startup must never reach the
+		// recovering ensure, so no driver write may occur.
+		expect(
+			fake.updateSearchIndex,
+			"failed inspection must refuse startup before any driver write",
+		).not.toHaveBeenCalled()
+		expect(fake.createSearchIndex).not.toHaveBeenCalled()
+		expect(
+			outcome,
+			"guardrail must fail closed when inspection is incomplete",
+		).toBeInstanceOf(Error)
+		if (!(outcome instanceof Error)) return
+		// Distinct from drift-confirmed: operators must tell an incomplete
+		// inspection from a real EmbeddingModelMigrationError refusal.
+		expect(isEmbeddingModelMigrationError(outcome)).toBe(false)
+		expect(outcome.message).toMatch(/incomplete/i)
+		expect(outcome.message).toContain(
+			"MEMONGO_ALLOW_EMBEDDING_MODEL_CHANGE=true",
+		)
+	})
+
+	it("fails closed when a later target's inspection throws after an earlier drift finding", async () => {
+		const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {})
+		mockedTargets.mockImplementation(() => TWO_TARGETS)
+		mockedListSearchIndexes.mockImplementation(async (collection) => {
+			if (collection.collectionName === "test_kb_chunks") {
+				throw new Error(
+					[
+						"list failed on kb_chunks: ",
+						"mongodb://svc:dummy-cred-000000@host.example.net:27017",
+					].join(""),
+				)
+			}
+			return [autoEmbedIndexRow(INDEX_NAME, "voyage-3-lite")]
+		})
+		const chunks = makeDriverCollection("test_chunks", {
+			indexes: [autoEmbedIndexRow(INDEX_NAME, "voyage-3-lite")],
+			documentCount: 50,
+		})
+		const kbChunks = makeDriverCollection("test_kb_chunks", {
+			indexes: [],
+			documentCount: 0,
+		})
+		const db = makeDb({
+			test_chunks: chunks.collection,
+			test_kb_chunks: kbChunks.collection,
+		})
+		const outcome = await startupRefusalThenRecoveringEnsure(
+			db,
+			chunks.collection,
+		)
+		warnSpy.mockRestore()
+		// Prove the earlier target's drift was counted before the kb_chunks
+		// inspection threw: chunks documents were counted and the kb target
+		// list was actually reached.
+		expect(chunks.collection.countDocuments).toHaveBeenCalledWith({})
+		expect(
+			mockedListSearchIndexes.mock.calls.some(
+				([collection]) => collection.collectionName === "test_kb_chunks",
+			),
+		).toBe(true)
+		// No-write anchors next: a refused startup must never reach the
+		// recovering ensure, so no driver write may occur.
+		expect(
+			chunks.updateSearchIndex,
+			"guardrail must fail closed instead of discarding the accumulated chunks finding and letting the recovering ensure re-embed",
+		).not.toHaveBeenCalled()
+		expect(chunks.createSearchIndex).not.toHaveBeenCalled()
+		expect(kbChunks.updateSearchIndex).not.toHaveBeenCalled()
+		expect(kbChunks.createSearchIndex).not.toHaveBeenCalled()
+		expect(
+			outcome,
+			"guardrail must fail closed instead of discarding the accumulated chunks finding",
+		).toBeInstanceOf(Error)
+		if (!(outcome instanceof Error)) return
+		expect(isEmbeddingModelMigrationError(outcome)).toBe(false)
+		expect(outcome.message).toMatch(/incomplete/i)
+		// The incomplete error names the failing target; the earlier
+		// finding is protected by refusing ALL reconciliation, not by
+		// printing it.
+		expect(outcome.message).toContain("test_kb_chunks")
+		expect(outcome.message).toContain(
+			"MEMONGO_ALLOW_EMBEDDING_MODEL_CHANGE=true",
+		)
+		// C-002 redaction must hold on the throw path, not just the log path.
+		expect(outcome.message).not.toContain("dummy-cred-000000")
 	})
 })

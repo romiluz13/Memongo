@@ -61,7 +61,6 @@ This matrix maps the supported Memongo memory engine to the standalone product s
 | Knowledge base | `packages/memory-engine/src/mongodb-kb.ts`, `packages/memory-engine/src/mongodb-kb-search.ts` |
 | Graph and entities | `packages/memory-engine/src/mongodb-graph.ts`, `packages/memory-engine/src/mongodb-entity-extractor.ts` |
 | Episodes | `packages/memory-engine/src/mongodb-episodes.ts` |
-| Query cache | `packages/memory-engine/src/mongodb-query-cache.ts` |
 | Relevance and telemetry | `packages/memory-engine/src/mongodb-relevance.ts`, `packages/memory-engine/src/mongodb-telemetry.ts` |
 | Reasoning chains | `packages/memory-engine/src/mongodb-reasoning-chain.ts` |
 | Novelty detection | `packages/memory-engine/src/mongodb-novelty.ts` |
@@ -69,6 +68,10 @@ This matrix maps the supported Memongo memory engine to the standalone product s
 | Importance decay | `packages/memory-engine/src/mongodb-trust.ts` |
 | Consolidation (Dreamer) | `packages/memory-engine/src/mongodb-consolidator.ts` |
 | Migration | `packages/memory-engine/src/mongodb-migration.ts` |
+
+Search results are always produced by live retrieval. The legacy
+`query_cache` collection remains only for TTL cleanup, write-side invalidation,
+and tenant erasure while old rows age out.
 
 ## Proof path
 

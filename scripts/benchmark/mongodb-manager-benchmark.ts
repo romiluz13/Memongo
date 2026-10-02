@@ -5,6 +5,7 @@
  */
 
 import { createHash, randomUUID } from "node:crypto"
+import { access } from "node:fs/promises"
 import path from "node:path"
 import {
 	createBenchmarkRunContext,
@@ -52,12 +53,25 @@ import {
 	type BenchmarkJudgedAnswerMaterial,
 } from "./benchmark-answer-quality.js"
 import {
+	prepareOfficialQa,
+	resolveBenchmarkQaProtocol,
+	scoreOfficialScenario,
+	summarizeOfficialBenchmarkQaRun,
+} from "./longmemeval-official-scoring.js"
+import type { OfficialQaContext } from "./longmemeval-official-scoring.js"
+import {
+	isExtractionLlmDisabled,
 	resolveEnrichmentMode,
 	resolveEnrichmentStrictMode,
 	resolveEnrichmentProvider,
 	enrichSessionsWithLLM,
 } from "../../packages/memory-engine/src/mongodb-llm-enrichment.js"
+import {
+	benchmarkAnswerModelName,
+	resolveBenchmarkAnswerProvider,
+} from "./benchmark-answer-provider.js"
 import { MongoDBManagerBenchmarkScenarioOps } from "./mongodb-manager-benchmark-scenario.js"
+import type { BenchmarkReadinessSkip } from "./mongodb-manager-benchmark-scenario.js"
 import type { MongoDBManagerHost } from "../../packages/memory-engine/src/mongodb-manager-host.js"
 import { MongoDBMemoryManager } from "../../packages/memory-engine/src/mongodb-manager.js"
 import {
@@ -202,6 +216,27 @@ export function parseBenchmarkTurnTimestamp(value?: string): Date | undefined {
 	return Number.isNaN(parsed.getTime()) ? undefined : parsed
 }
 
+/**
+ * LongMemEval quirk (backlog B3): `question_date` carries a wall-clock
+ * timestamp in the nonstandard `YYYY/MM/DD (Ddd) HH:MM` format, which both
+ * this driver and the engine parse leniently with `new Date()` — in the
+ * machine's LOCAL timezone, not UTC. Answer sessions can sit at a later
+ * time-of-day on the question's own day, so the engine's correct production
+ * guard (`validAt <= questionDate`) would drop them. The benchmark driver
+ * therefore widens the reference date it passes to search to the end of the
+ * question's calendar day IN THE SAME LOCAL FRAME as that lenient parse, so
+ * the boundary is machine-timezone-independent: any session later on the
+ * question's wall-clock day stays eligible, and nothing from the next day
+ * leaks in (a UTC end-of-day would overshoot by the machine's UTC offset).
+ * Engine semantics are unchanged; production callers keep passing exact
+ * timestamps.
+ */
+export function endOfBenchmarkQuestionDay(date: Date): Date {
+	const endOfDay = new Date(date.getTime())
+	endOfDay.setHours(23, 59, 59, 999)
+	return endOfDay
+}
+
 export function buildBenchmarkReplayMetadata(params: {
 	baseMetadata?: Record<string, unknown>
 	turnMetadata?: Record<string, unknown>
@@ -284,6 +319,18 @@ export function resolveBenchmarkMeasurementPasses(): number {
 	return Math.floor(raw)
 }
 
+/**
+ * B12: benchmark scenario runs force the post-cross-encoder recency and
+ * access-boost weights to 0. Benchmark replay writes every result freshly,
+ * so recency and access counts carry no signal — leaving them on lets the
+ * boost reorder results on ingestion artifacts instead of retrieval and
+ * reranking quality.
+ */
+export const BENCHMARK_RERANK_BOOST_OVERRIDES = {
+	recencyBoost: 0,
+	accessBoost: 0,
+} as const
+
 export class MongoDBManagerBenchmarkOps {
 	constructor(private readonly host: MongoDBManagerHost) {
 		this.scenario = new MongoDBManagerBenchmarkScenarioOps(host)
@@ -313,7 +360,21 @@ export class MongoDBManagerBenchmarkOps {
 			capabilities: this.host.capabilities,
 			nativeBitemporalVectorPrefilter:
 				this.host.nativeBitemporalVectorPrefilter,
-			config: this.host.config,
+			// B12: scenario managers get a config copy with the post-rerank
+			// recency/access boosts zeroed (see BENCHMARK_RERANK_BOOST_OVERRIDES).
+			// The host config object itself is never mutated.
+			config: {
+				...this.host.config,
+				mongodb: mongoConfig
+					? {
+							...mongoConfig,
+							reranking: {
+								...(mongoConfig.reranking ?? {}),
+								...BENCHMARK_RERANK_BOOST_OVERRIDES,
+							},
+						}
+					: mongoConfig,
+			},
 			relevance,
 		}) as unknown as MongoDBManagerHost
 	}
@@ -362,6 +423,19 @@ export class MongoDBManagerBenchmarkOps {
 		const mongoCfg = this.host.config.mongodb!
 		if (!mongoCfg.relevance.benchmark.enabled) {
 			throw new Error("relevance benchmark is disabled by configuration")
+		}
+		// B7: refuse to run with the reranker enabled but unconfigured. A
+		// missing key previously made the engine silently skip reranking, so
+		// a retrieval-only pipeline could produce benchmark numbers that
+		// looked identical to reranked runs. --no-rerank (run-benchmark CLI)
+		// sets MEMONGO_RERANKING_ENABLED=false before the manager exists,
+		// which both disables reranking here and records the deviation in the
+		// run manifest's settings snapshot.
+		const reranking = mongoCfg.reranking
+		if (reranking?.enabled && !reranking.voyageApiKey) {
+			throw new Error(
+				"benchmark refuses to run with reranking enabled but no reranker key: set VOYAGE_API_KEY or pass --no-rerank (recorded in the manifest)",
+			)
 		}
 		const datasetPath =
 			params?.datasetPath ?? mongoCfg.relevance.benchmark.datasetPath
@@ -821,6 +895,9 @@ export class MongoDBManagerBenchmarkOps {
 		const completedCheckpointScenarios = [
 			...(params.resumeCheckpoint?.completedScenarios ?? []),
 		]
+		// Snapshot original restored work before current completions are appended.
+		// An empty restored checkpoint has no missing pass-0 material.
+		const restoredCheckpointScenarioCount = completedCheckpointScenarios.length
 		const completedCheckpointIndexes = new Set(
 			completedCheckpointScenarios.map((scenario) => scenario.index),
 		)
@@ -868,6 +945,102 @@ export class MongoDBManagerBenchmarkOps {
 				storageFailures.push(checkpointScenario.storageFailure)
 			}
 		}
+		// Slice B: durable QA protocol preflight — separate judge provider,
+		// dated answer prompts, anscheck-verified hypotheses persisted to a
+		// sidecar beside the checkpoint. Only the exact env values "official"
+		// and "custom-judge" opt in; every other value keeps the legacy
+		// custom-v1 harness or fails here, before any scenario or provider
+		// work is paid for. Custom-judge runs dispatch through the SAME
+		// durable scoring path as official runs (preflight, per-scenario
+		// scoring, checkpoint gating, summary); only the judge provenance
+		// differs.
+		let officialQaContext: OfficialQaContext | undefined
+		const benchmarkQaProtocol = resolveBenchmarkQaProtocol(process.env)
+		if (
+			benchmarkQaProtocol === "official" ||
+			benchmarkQaProtocol === "custom-judge"
+		) {
+			if (params.dataset.datasetKind !== "longmemeval") {
+				throw new Error(
+					`MEMONGO_BENCHMARK_QA_PROTOCOL=${benchmarkQaProtocol} requires a LongMemEval dataset, got datasetKind=${params.dataset.datasetKind ?? "unknown"}`,
+				)
+			}
+			officialQaContext = await prepareOfficialQa({
+				env: process.env,
+				checkpointPath: params.checkpointPath,
+				runId: params.runContext.runId,
+				configurationHash: params.runContext.configurationHash,
+				datasetSha256: params.datasetSha256 ?? "",
+				resumeCompletedScenarios: completedCheckpointScenarios.map(
+					(checkpointScenario) => ({
+						scenarioId: checkpointScenario.scenarioId,
+						declaredCaseIds:
+							scenarios[checkpointScenario.index]?.evaluations.map(
+								(evaluation) => evaluation.caseId,
+							) ?? [],
+					}),
+				),
+			})
+		}
+		// Slice B round 2: startup orphan accounting. Judged sidecar rows whose
+		// scenario had no completed checkpoint entry when this run started stay
+		// lost for accounting even if this run later covers them, so recovery
+		// cannot silently clear pre-crash uncertainty. Computed from the
+		// restored entries only, before this run appends its own completions.
+		const officialStartupCoveredCaseIds = new Set<string>()
+		for (const checkpointScenario of completedCheckpointScenarios) {
+			for (const evaluation of scenarios[checkpointScenario.index]
+				?.evaluations ?? []) {
+				officialStartupCoveredCaseIds.add(evaluation.caseId)
+			}
+		}
+		const officialStartupLostQuestionIds = officialQaContext
+			? Object.values(officialQaContext.sidecar.rows)
+					.filter((row) => row.stage === "judged")
+					.map((row) => row.questionId)
+					.filter(
+						(questionId) => !officialStartupCoveredCaseIds.has(questionId),
+					)
+			: []
+		// Slice B round 2: seed an empty identity/accounting checkpoint right
+		// after official preflight and BEFORE the first paid scenario, so a
+		// crash after the first answered/judged sidecar row still resumes with
+		// a recoverable runId (the checkpoint carries the identity gates).
+		// Fresh official runs only (a resumed run already has its checkpoint),
+		// and never over an existing file — the post-scenario write keeps its
+		// overwrite semantics. Same v1 schema; identity gates untouched.
+		if (
+			officialQaContext &&
+			params.checkpointPath &&
+			!params.resumeCheckpoint
+		) {
+			const seedDatasetSha256 = params.datasetSha256
+			if (!seedDatasetSha256) {
+				throw new Error(
+					"benchmark checkpointing requires the resolved dataset digest",
+				)
+			}
+			let checkpointExists = false
+			try {
+				await access(params.checkpointPath)
+				checkpointExists = true
+			} catch {
+				checkpointExists = false
+			}
+			if (!checkpointExists) {
+				await writeBenchmarkCheckpointAtomic(params.checkpointPath, {
+					version: 1,
+					runId: params.runContext.runId,
+					datasetSha256: seedDatasetSha256,
+					configurationHash: params.runContext.configurationHash,
+					totalScenarios: scenarios.length,
+					scenarioIds: scenarios.map((entry) => entry.scenarioId),
+					completedScenarios: [],
+					accounting: params.runContext.accounting.snapshot(),
+					updatedAt: new Date().toISOString(),
+				})
+			}
+		}
 		const runForegroundRead = <T>(
 			label: string,
 			operation: () => Promise<T>,
@@ -912,6 +1085,44 @@ export class MongoDBManagerBenchmarkOps {
 				sessionIds: new Map<string, string>(),
 				turnIds: new Map<string, string>(),
 				dialogIds: new Map<string, string>(),
+			}
+			// Slice B round 2: per-scenario official scoring outcome. Stays true
+			// for non-official runs (the checkpoint gate is official-only) and
+			// is only assigned inside the try, so a scoring throw propagates
+			// through the finally without ever reaching the checkpoint write.
+			let officialScenarioComplete = true
+			// Official QA: dataset session dates (haystack timestamps) by
+			// session id, so pass-0 passages can carry the dates of the
+			// sessions they were retrieved from into the dated answer prompt.
+			const sessionDatesBySessionId = new Map<string, string[]>()
+			for (const conversation of scenario.conversations) {
+				if (typeof conversation.sessionId !== "string") {
+					continue
+				}
+				const dates = new Set<string>()
+				for (const turn of conversation.turns) {
+					if (
+						typeof turn.timestamp === "string" &&
+						turn.timestamp.trim().length > 0
+					) {
+						dates.add(turn.timestamp.trim())
+					}
+				}
+				if (dates.size > 0) {
+					sessionDatesBySessionId.set(conversation.sessionId, [...dates].sort())
+				}
+			}
+			const sessionDatesForResult = (result: MemorySearchResult): string[] => {
+				const dates = new Set<string>()
+				for (const sessionId of this.resolveBenchmarkResultSessionIds(
+					result,
+					eventEvidence,
+				)) {
+					for (const date of sessionDatesBySessionId.get(sessionId) ?? []) {
+						dates.add(date)
+					}
+				}
+				return [...dates].sort()
 			}
 			try {
 				log.info("benchmark scenario start", {
@@ -1069,9 +1280,14 @@ export class MongoDBManagerBenchmarkOps {
 								})
 							}
 
-							// LLM enrichment: replaces regex userfact when available
+							// LLM enrichment: replaces regex userfact when available.
+							// B1: MEMONGO_EXTRACTION_LLM=off skips ingest-time LLM
+							// extraction entirely (the B20 ablation) without
+							// unsetting the enrichment env the answerer may share.
 							const enrichmentProvider =
-								!rawSessionLane && enrichmentMode !== "none"
+								!rawSessionLane &&
+								enrichmentMode !== "none" &&
+								!isExtractionLlmDisabled(process.env)
 									? resolveEnrichmentProvider(process.env)
 									: null
 							const enrichmentStrict =
@@ -1086,6 +1302,11 @@ export class MongoDBManagerBenchmarkOps {
 								enrichmentStrict &&
 								!enrichmentProvider
 							) {
+								if (isExtractionLlmDisabled(process.env)) {
+									throw new Error(
+										"MEMONGO_LLM_ENRICHMENT_STRICT cannot be combined with MEMONGO_EXTRACTION_LLM=off: strict mode requires the extraction LLM",
+									)
+								}
 								throw new Error(
 									"MEMONGO_LLM_ENRICHMENT_STRICT requires a configured LLM enrichment provider",
 								)
@@ -1325,9 +1546,6 @@ export class MongoDBManagerBenchmarkOps {
 				// n samples of a condition cost n eval loops instead of n full runs.
 				for (let pass = 0; pass < measurementPasses; pass++) {
 					const passExecutions = executionsByPass[pass]!
-					if (pass > 0) {
-						await this.flushBenchmarkQueryCache(scenarioManager.agentId)
-					}
 					for (const evaluation of scenario.evaluations) {
 						const startedAt = Date.now()
 						// Parse questionDate from evaluation metadata for temporal scoring
@@ -1339,6 +1557,12 @@ export class MongoDBManagerBenchmarkOps {
 							evalQuestionDate && !Number.isNaN(evalQuestionDate.getTime())
 								? evalQuestionDate
 								: undefined
+						// B3: search with the end of the question's calendar day (see
+						// endOfBenchmarkQuestionDay) so same-day answer sessions remain
+						// eligible under the engine's validAt guard.
+						const searchableQuestionDate = validQuestionDate
+							? endOfBenchmarkQuestionDay(validQuestionDate)
+							: undefined
 						try {
 							// Query decomposition: break preference-style queries into sub-queries
 							const decompositionMode = resolveDecompositionMode(
@@ -1346,7 +1570,7 @@ export class MongoDBManagerBenchmarkOps {
 							)
 							const decompositionProvider =
 								decompositionMode === "enabled"
-									? resolveEnrichmentProvider(process.env)
+									? resolveBenchmarkAnswerProvider(process.env)
 									: null
 
 							let results: MemorySearchResult[]
@@ -1373,14 +1597,17 @@ export class MongoDBManagerBenchmarkOps {
 								const decomposeStartedAt = Date.now()
 								const decomposed = await decomposeQuery({
 									provider: decompositionProvider,
-									model: process.env.MEMONGO_ENRICHMENT_MODEL?.trim() ?? "",
+									// B1: decomposition is a query-side call in the answer
+									// pipeline, so it follows the benchmark answer provider,
+									// not the extraction provider.
+									model: benchmarkAnswerModelName(process.env),
 									query: evaluation.query,
 									questionType: evaluation.questionType,
 									onProviderCall: (outcome) => {
 										const accounting = params.runContext.accounting
 										const metadata = {
 											provider: decompositionProvider.name,
-											model: process.env.MEMONGO_ENRICHMENT_MODEL?.trim() ?? "",
+											model: benchmarkAnswerModelName(process.env),
 										}
 										if (outcome === "attempted") {
 											accounting.recordAttempt("query-decomposition", metadata)
@@ -1404,7 +1631,7 @@ export class MongoDBManagerBenchmarkOps {
 												{
 													maxResults: params.maxResults,
 													minScore: params.minScore,
-													questionDate: validQuestionDate,
+													questionDate: searchableQuestionDate,
 												},
 												params.runContext,
 											),
@@ -1420,7 +1647,7 @@ export class MongoDBManagerBenchmarkOps {
 											{
 												maxResults: params.maxResults,
 												minScore: params.minScore,
-												questionDate: validQuestionDate,
+												questionDate: searchableQuestionDate,
 											},
 											params.runContext,
 										),
@@ -1453,7 +1680,7 @@ export class MongoDBManagerBenchmarkOps {
 														maxResults: params.maxResults,
 														minScore: params.minScore,
 														deep: false,
-														questionDate: validQuestionDate,
+														questionDate: searchableQuestionDate,
 													}),
 											)
 										).results
@@ -1465,7 +1692,7 @@ export class MongoDBManagerBenchmarkOps {
 													{
 														maxResults: params.maxResults,
 														minScore: params.minScore,
-														questionDate: validQuestionDate,
+														questionDate: searchableQuestionDate,
 														onLaneLatency: (lanes) => {
 															latencyByLane = lanes
 														},
@@ -1502,18 +1729,38 @@ export class MongoDBManagerBenchmarkOps {
 								}),
 							)
 							if (pass === 0) {
+								// Keep passages and their per-passage session dates
+								// and roles index-aligned: a dropped passage drops
+								// its dates and role too. B5: the reader gets the
+								// full passage text, not the 700-char display
+								// preview. B9: the role labels the speaking turn
+								// (User:/Assistant:) in the dated answer prompt.
+								const passagesWithDates = results
+									.map((result) => ({
+										passage: result.text ?? result.snippet,
+										dates: sessionDatesForResult(result),
+										role: result.role,
+									}))
+									.filter(
+										(entry) =>
+											typeof entry.passage === "string" &&
+											entry.passage.trim().length > 0,
+									)
 								e2eQaMaterialByCaseId.set(evaluation.caseId, {
 									caseId: evaluation.caseId,
 									question: evaluation.query,
 									goldAnswer: evaluation.answer ?? "",
 									abstention: evaluation.abstention === true,
-									contextPassages: results
-										.map((result) => result.snippet)
-										.filter(
-											(snippet) =>
-												typeof snippet === "string" &&
-												snippet.trim().length > 0,
-										),
+									contextPassages: passagesWithDates.map(
+										(entry) => entry.passage,
+									),
+									questionType: evaluation.questionType,
+									questionDate:
+										typeof evaluation.metadata?.questionDate === "string"
+											? evaluation.metadata.questionDate
+											: undefined,
+									passageDates: passagesWithDates.map((entry) => entry.dates),
+									passageRoles: passagesWithDates.map((entry) => entry.role),
 								})
 							}
 							// Track expected IDs for miss ledger
@@ -1537,11 +1784,16 @@ export class MongoDBManagerBenchmarkOps {
 								caseId: evaluation.caseId,
 								error: err instanceof Error ? err.message : String(err),
 							})
+							// B4: a query failure is a reliability failure, not a wrong
+							// answer. executionError (a pre-existing evaluateRankingCase
+							// mechanism) marks the case system-failure and excludes it
+							// from scoring.
 							passExecutions.push(
 								evaluateRankingCase({
 									caseId: evaluation.caseId,
 									results: [],
 									latencyMs: Date.now() - startedAt,
+									executionError: message,
 									relevantSessionIds: evaluation.expectedSessionIds,
 									relevantTurnIds: evaluation.expectedTurnIds,
 									relevantDialogIds: evaluation.expectedDialogIds,
@@ -1558,7 +1810,6 @@ export class MongoDBManagerBenchmarkOps {
 									officialRetrieval: evaluation.officialRetrieval,
 									questionType: evaluation.questionType,
 									abstention: evaluation.abstention,
-									executionError: message,
 								}),
 							)
 							if (pass === 0) {
@@ -1568,7 +1819,14 @@ export class MongoDBManagerBenchmarkOps {
 									goldAnswer: evaluation.answer ?? "",
 									abstention: evaluation.abstention === true,
 									contextPassages: [],
+									passageDates: [],
+									passageRoles: [],
 									upstreamFailure: message,
+									questionType: evaluation.questionType,
+									questionDate:
+										typeof evaluation.metadata?.questionDate === "string"
+											? evaluation.metadata.questionDate
+											: undefined,
 								})
 							}
 							expectedSessionMap.set(
@@ -1590,6 +1848,73 @@ export class MongoDBManagerBenchmarkOps {
 					evaluations: scenario.evaluations.length,
 					elapsedMs: Date.now() - scenarioStartedAt,
 				})
+				// Slice B round 2 (corrections 1+3): official per-scenario scoring
+				// runs INSIDE the try, after the evaluations and BEFORE the
+				// finally block's worker stop / storage measurement / cleanup —
+				// answer every declared case with the dated prompt and judge with
+				// the separate provider, persisting to the sidecar before the
+				// checkpoint write. A scoring failure leaves the scenario
+				// un-checkpointed (retry re-pays only this scenario), and the
+				// return value's `complete` gates the checkpoint below: an
+				// incomplete scenario (unavailable cases) is never recorded as
+				// completed, so it re-runs on resume.
+				if (officialQaContext) {
+					const officialQa = officialQaContext
+					const officialOutcome = await scoreOfficialScenario({
+						context: officialQa,
+						scenarioId: scenario.scenarioId,
+						declaredCaseIds: scenario.evaluations.map(
+							(evaluation) => evaluation.caseId,
+						),
+						materialByCaseId: e2eQaMaterialByCaseId,
+						onProviderCall: (operation, outcome, usage) => {
+							// Per-role attribution matching the custom-v1 harness:
+							// answer-generation bills the answer model, judging bills
+							// the judge model. Transport usage forwards unchanged; a
+							// missing usage stays missing (never zeroed).
+							const metadata = {
+								provider:
+									operation === "answer-generation"
+										? officialQa.answerProvider.name
+										: officialQa.judgeProvider.name,
+								model:
+									operation === "answer-generation"
+										? officialQa.answerModel
+										: officialQa.judgeModel,
+								...(usage ?? {}),
+							}
+							if (outcome === "attempted") {
+								params.runContext.accounting.recordAttempt(operation, metadata)
+							} else if (outcome === "succeeded") {
+								params.runContext.accounting.recordSuccess(operation, metadata)
+							} else {
+								params.runContext.accounting.recordFailure(operation, metadata)
+							}
+						},
+					})
+					officialScenarioComplete = officialOutcome.complete
+				}
+			} catch (scenarioErr) {
+				// B4 (d): a readiness failure (convergence timeout, permanent
+				// probe error, empty required lane) aborts the run instead of
+				// continuing: such failures are cluster-correlated, so the
+				// remaining scenarios would spend answer/judge tokens against
+				// a half-indexed store. The checkpoint keeps every completed
+				// scenario, so a --resume re-runs and re-pays only this one.
+				log.error(
+					"benchmark scenario failed; run aborted (resume re-runs only this scenario)",
+					{
+						scenarioId: scenario.scenarioId,
+						index,
+						totalScenarios: scenarios.length,
+						checkpointPath: params.checkpointPath,
+						error:
+							scenarioErr instanceof Error
+								? scenarioErr.message
+								: String(scenarioErr),
+					},
+				)
+				throw scenarioErr
 			} finally {
 				if (scenarioManager !== this.host) {
 					await scenarioManager.stopMemoryJobWorker()
@@ -1617,7 +1942,15 @@ export class MongoDBManagerBenchmarkOps {
 					await this.cleanupBenchmarkScenarioData(scenarioManager.agentId)
 				}
 			}
-			if (params.checkpointPath) {
+			// Slice B round 2: the checkpoint write happens after the finally
+			// block's worker stop / storage measurement / cleanup, and only for
+			// complete official scenarios (an incomplete one must re-run on
+			// resume, so it is never recorded as completed). Non-official runs
+			// keep the legacy always-write behavior.
+			if (
+				params.checkpointPath &&
+				(!officialQaContext || officialScenarioComplete)
+			) {
 				const datasetSha256 = params.datasetSha256
 				if (!datasetSha256) {
 					throw new Error(
@@ -1673,6 +2006,7 @@ export class MongoDBManagerBenchmarkOps {
 				scenarios: scenarios.length,
 				executions: passExecutions,
 				ingest,
+				readinessSkips: this.readinessSkips,
 			}),
 		)
 		const summary = passSummaries[0]!
@@ -1718,14 +2052,42 @@ export class MongoDBManagerBenchmarkOps {
 		// C-039: LLM-judged answer accuracy over the pass-0 (gate) retrieval
 		// results. Returns undefined for non-LongMemEval datasets; an
 		// all-null envelope with a reason when accuracy cannot be measured.
-		// The merge into officialMetrics happens in
+		// Slice B: official mode summarizes from the sidecar instead — the
+		// custom-v1 judged-answers path never runs alongside the official
+		// protocol. The merge into officialMetrics happens in
 		// attachBenchmarkOperationsReport.
-		const e2eQa = await runBenchmarkJudgedAnswers({
-			datasetKind: params.dataset.datasetKind,
-			materialByCaseId: e2eQaMaterialByCaseId,
-			resumedFromCheckpoint: completedCheckpointScenarios.length > 0,
-			accounting: params.runContext?.accounting,
-		})
+		let e2eQa: BenchmarkE2eQaEnvelope | undefined
+		if (officialQaContext) {
+			// Covered = every scenario that either completed in this run or was
+			// restored from the checkpoint; official preflight guarantees a
+			// checkpoint exists, so these two sets are the full run.
+			const coveredCaseIds = new Set<string>()
+			for (const checkpointScenario of completedCheckpointScenarios) {
+				for (const evaluation of scenarios[checkpointScenario.index]
+					?.evaluations ?? []) {
+					coveredCaseIds.add(evaluation.caseId)
+				}
+			}
+			const officialSummary = await summarizeOfficialBenchmarkQaRun({
+				context: officialQaContext,
+				scenarios,
+				coveredCaseIds,
+				datasetSha256: params.datasetSha256 ?? "",
+				// Slice B round 2 (correction 6): a resumed official run is
+				// honestly incomplete even when coverage ends up full, and
+				// startup orphans stay lost no matter what this run covered.
+				resumedFromCheckpoint: params.resumeCheckpoint !== undefined,
+				startupLostQuestionIds: officialStartupLostQuestionIds,
+			})
+			e2eQa = officialSummary.envelope
+		} else {
+			e2eQa = await runBenchmarkJudgedAnswers({
+				datasetKind: params.dataset.datasetKind,
+				materialByCaseId: e2eQaMaterialByCaseId,
+				resumedFromCheckpoint: restoredCheckpointScenarioCount > 0,
+				accounting: params.runContext?.accounting,
+			})
+		}
 		// Explicitly pick only the fields defined in RelevanceBenchmarkResult
 		// to prevent any runtime-leaked properties from inflating the response
 		// beyond V8's JSON.stringify limit (~512 MB).
@@ -1931,16 +2293,22 @@ export class MongoDBManagerBenchmarkOps {
 		collectionName: string
 		indexName: string
 		textPath: string
+		requireSearchableDocuments?: boolean
 	}): Promise<void> {
 		return this.scenario.waitForBenchmarkSearchCollectionConvergence(params)
 	}
 
-	async cleanupBenchmarkScenarioData(agentId: string): Promise<void> {
-		return this.scenario.cleanupBenchmarkScenarioData(agentId)
+	/**
+	 * B4: readiness waits skipped without evidence (no capability, no vector
+	 * stage, legitimately empty lane) in non-strict mode. Surfaced in the run
+	 * summary next to the execution failure counts.
+	 */
+	get readinessSkips(): BenchmarkReadinessSkip[] {
+		return this.scenario.readinessSkips
 	}
 
-	async flushBenchmarkQueryCache(agentId: string): Promise<void> {
-		return this.scenario.flushBenchmarkQueryCache(agentId)
+	async cleanupBenchmarkScenarioData(agentId: string): Promise<void> {
+		return this.scenario.cleanupBenchmarkScenarioData(agentId)
 	}
 
 	async listBenchmarkEventSessions(

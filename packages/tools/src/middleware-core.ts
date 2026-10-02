@@ -1,16 +1,12 @@
 import { MemongoClient, type MemongoScope } from "@memongo/client"
 import { formatErrorMessage } from "@memongo/lib"
-import {
-	cacheGet,
-	cacheSet,
-	computeCacheKey,
-	sha256Hex,
-} from "./cache-identity.js"
+import { sha256Hex } from "./cache-identity.js"
 
 /**
  * Shared core for the Vercel AI SDK and OpenAI middlewares (P1.5): both
- * route ALL Memongo traffic through `@memongo/client` (no hand-rolled fetch)
- * and share the canonical-identity cache from `cache-identity.ts`.
+ * route ALL Memongo traffic through `@memongo/client` (no hand-rolled fetch).
+ *
+ * Fetch context per request so reuse cannot bypass the API's current checks.
  *
  * P1.4: after-turn capture and failure observability.
  * - Capture: after a generation completes, the user prompt and assistant
@@ -31,16 +27,17 @@ export interface MemongoCoreOptions {
 	apiUrl: string
 	apiKey: string
 	/**
-	 * Default tenant identity. The Vercel middleware can override every field
-	 * per request via `providerOptions.memongo`; these are defaults only.
-	 * When neither constructor defaults nor the request carry ANY of
-	 * userId/agentId/sessionId, the cache is bypassed (no safe tenant
-	 * boundary exists to key on).
+	 * Trusted-host memory coordinates; these do not authenticate end users.
+	 * Vercel requests can override them via `providerOptions.memongo`.
 	 */
 	userId?: string
 	agentId?: string
 	scope?: MemongoScope
+	/** Explicit owner ref; a constructor ref is inherited only with its scope. */
+	scopeRef?: string
 	sessionId?: string
+	/** Stable ID for one logical model call; use a new ID for each distinct turn. */
+	requestId?: string
 	mode?: "wake-up" | "full"
 	/**
 	 * After-turn capture: write the user prompt + assistant response back as
@@ -62,7 +59,9 @@ export interface MemongoRequestIdentity {
 	agentId?: string
 	userId?: string
 	scope?: MemongoScope
+	scopeRef?: string
 	sessionId?: string
+	requestId?: string
 	mode?: "wake-up" | "full"
 }
 
@@ -131,49 +130,32 @@ export function createMemongoMiddlewareCore(
 		)
 	}
 
-	// SHA-256 of the raw key, computed once per middleware instance. The raw
-	// key never participates in the cache; apiUrl + apiKeyHash in the key mean
-	// two middleware instances against different deployments/credentials can
-	// never share entries.
-	let apiKeyHashPromise: Promise<string | undefined> | undefined
-	const apiKeyHash = () => (apiKeyHashPromise ??= sha256Hex(options.apiKey))
+	function resolveOwner(identity: MemongoRequestIdentity) {
+		const agentId = identity.agentId ?? options.agentId
+		const userId = identity.userId ?? options.userId
+		const scope = identity.scope ?? options.scope
+		const sessionId = identity.sessionId ?? options.sessionId
+		// A request scope must not reuse a ref belonging to the default scope.
+		const inheritRef =
+			identity.scope === undefined &&
+			(scope !== "user" || identity.userId === undefined)
+		const scopeRef =
+			identity.scopeRef?.trim() ||
+			(inheritRef ? options.scopeRef?.trim() : undefined) ||
+			(scope === "user" && userId?.trim() ? `user:${userId.trim()}` : undefined)
+		return { agentId, userId, scope, scopeRef, sessionId }
+	}
 
 	async function getContextBundle(
 		identity: MemongoRequestIdentity,
 		userQuery?: string,
 	): Promise<string> {
 		// Per-request identity wins; constructor values are defaults only.
-		const agentId = identity.agentId ?? options.agentId
-		const userId = identity.userId ?? options.userId
-		const scope = identity.scope ?? options.scope
-		const sessionId = identity.sessionId ?? options.sessionId
+		const { agentId, userId, scope, scopeRef, sessionId } =
+			resolveOwner(identity)
 		const modePref = identity.mode ?? options.mode
 		const mode =
 			userQuery && modePref !== "wake-up" ? "full" : (modePref ?? "wake-up")
-		const query = mode === "full" ? (userQuery ?? "") : ""
-
-		// Without any tenant discriminator there is no safe boundary to key
-		// on — bypass the cache entirely (never served from, never written to).
-		const hasTenantIdentity = Boolean(userId ?? agentId ?? sessionId)
-		const keyHash = await apiKeyHash()
-		const cacheKey =
-			hasTenantIdentity && keyHash
-				? await computeCacheKey({
-						agentId,
-						apiUrl: options.apiUrl,
-						apiKeyHash: keyHash,
-						mode,
-						scope,
-						sessionId,
-						userId,
-						query,
-					})
-				: undefined
-
-		if (cacheKey) {
-			const hit = cacheGet(cacheKey)
-			if (hit !== undefined) return hit
-		}
 
 		let rendered: string
 		try {
@@ -182,15 +164,13 @@ export function createMemongoMiddlewareCore(
 				mode,
 				query: mode === "full" && userQuery ? userQuery : undefined,
 				scope,
+				scopeRef,
 				sessionId,
 			})
 			rendered = bundle.rendered ?? ""
 		} catch (err) {
 			reportError(err, "inject")
 			return ""
-		}
-		if (rendered && cacheKey) {
-			cacheSet(cacheKey, rendered)
 		}
 		return rendered
 	}
@@ -203,32 +183,41 @@ export function createMemongoMiddlewareCore(
 		if (options.capture === false) return
 		if (!parts.user && !parts.assistant) return
 
-		const agentId = identity.agentId ?? options.agentId
-		const userId = identity.userId ?? options.userId
-		const scope = identity.scope ?? options.scope
-		const sessionId = identity.sessionId ?? options.sessionId
+		const { agentId, userId, scope, scopeRef, sessionId } =
+			resolveOwner(identity)
 
-		// Derived idempotency (P1.4): the turn id is SHA-256 over the canonical
-		// identity tuple + the tail of the turn's source text. Stable across
-		// retries of the same logical turn (the server dedups on customId) and
-		// unique across turns with distinct content. Trade-off: two byte-
-		// identical turns under one identity dedupe to a single stored turn —
-		// that is exactly what idempotency is for. When WebCrypto is absent
-		// (exotic runtime) a random UUID keeps uniqueness, losing only
-		// cross-retry stability.
+		// Preserve legacy keys when no caller-supplied logical ID is available.
 		const source = hashSource ?? parts.user ?? parts.assistant ?? ""
 		const tail = source.slice(-TURN_HASH_TAIL_LENGTH)
+		const turnIdentity = [
+			options.apiUrl,
+			agentId ?? "",
+			userId ?? "",
+			sessionId ?? "",
+			scope ?? "",
+			tail,
+		]
+		if (scopeRef !== undefined) turnIdentity.push(scopeRef)
+		const requestId = identity.requestId?.trim()
+			? identity.requestId
+			: options.requestId?.trim()
+				? options.requestId
+				: undefined
+		const hashIdentity =
+			requestId === undefined
+				? turnIdentity
+				: [
+						"memongo-request-v1",
+						options.apiUrl,
+						agentId ?? null,
+						userId ?? null,
+						sessionId ?? null,
+						scope ?? null,
+						scopeRef ?? null,
+						requestId,
+					]
 		const turnHash =
-			(await sha256Hex(
-				JSON.stringify([
-					options.apiUrl,
-					agentId ?? "",
-					userId ?? "",
-					sessionId ?? "",
-					scope ?? "",
-					tail,
-				]),
-			)) ??
+			(await sha256Hex(JSON.stringify(hashIdentity))) ??
 			globalThis.crypto?.randomUUID?.() ??
 			`${Date.now()}-${Math.random()}`
 
@@ -245,6 +234,7 @@ export function createMemongoMiddlewareCore(
 					agentId: agentId ?? userId,
 					sessionId,
 					scope,
+					scopeRef,
 					customId: `memongo-turn:${turnHash}:${write.role}`,
 				})
 			} catch (err) {

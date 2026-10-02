@@ -1,9 +1,19 @@
 import type { Db } from "mongodb"
 import { type MemoryScope, createSubsystemLogger } from "@memongo/lib"
+import { settledFailureMeta } from "./query-diagnostics.js"
 import {
 	detectContradictions,
 	invalidateContradictedFacts,
+	prepareContradictionInvalidations,
+	persistPreparedContradictionInvalidations,
+	type PreparedContradictionInvalidation,
 } from "./mongodb-contradiction.js"
+import type { AdmissionToken } from "./mongodb-erasure-epoch.js"
+import {
+	isErasureGateConflictError,
+	isMalformedGateError,
+	withFencedWrite,
+} from "./mongodb-write-fence.js"
 import type { EnrichmentProvider } from "./mongodb-llm-enrichment.js"
 import { structuredMemCollection } from "./mongodb-schema.js"
 import { buildUnexpiredClause } from "./mongodb-temporal.js"
@@ -100,7 +110,8 @@ export function foldSourceEventIds(
  *
  * Returns { resolved, invalidatedCount }. `resolved: true` means the caller
  * should re-evaluate the candidate through the normal pipeline instead of
- * skipping it. Never throws: any failure degrades to unresolved, which is
+ * skipping it. With admission, failures are rethrown so database errors remain retryable.
+ * Without admission, failures degrade to unresolved, which is
  * exactly the pre-P4.4.2 skip behavior.
  */
 export async function resolveConflictedCandidate(params: {
@@ -116,6 +127,7 @@ export async function resolveConflictedCandidate(params: {
 		scopeRef?: string
 	}
 	runId?: string
+	admission?: AdmissionToken
 }): Promise<{ resolved: boolean; invalidatedCount: number }> {
 	const { db, prefix, provider, model, agentId, candidate, runId } = params
 	const unresolved = { resolved: false, invalidatedCount: 0 }
@@ -129,49 +141,10 @@ export async function resolveConflictedCandidate(params: {
 	const scopeRef = candidate.scopeRef ?? `agent:${agentId}`
 
 	try {
-		// Same comparison set invalidateContradictedFacts builds: this tenant's
-		// active facts under DIFFERENT keys (same-key overwrite is already
-		// superseded by the canonical write).
-		const existing = await structuredMemCollection(db, prefix)
-			.find(
-				{
-					agentId,
-					scope,
-					scopeRef,
-					type: "fact",
-					state: "active",
-					key: { $ne: candidate.key },
-					// P4.4.1 (B1): an expired fact reads as gone — it must not feed
-					// the comparison set ahead of the TTL sweep.
-					...buildUnexpiredClause(),
-				},
-				{ projection: { key: 1, value: 1, _id: 0 } },
-			)
-			.sort({ updatedAt: -1 })
-			.limit(MAX_EXISTING_FACTS)
-			.toArray()
-		const existingFacts = existing
-			.map((doc) => ({ key: String(doc.key), value: String(doc.value ?? "") }))
-			.filter((fact) => fact.value)
-		if (existingFacts.length === 0) {
-			return unresolved
-		}
-
-		// detect: does the candidate make any existing fact false?
-		const findings = await detectContradictions({
-			provider,
-			model,
-			newFact: { key: candidate.key, value: candidate.value },
-			existingFacts,
-		})
-		if (findings.length === 0) {
-			// The candidate supersedes nothing — IT is the loser.
-			return unresolved
-		}
-
+		if (!(await candidateSupersedesExistingFact(params))) return unresolved
 		// invalidate the losing (existing) side per invalidateContradictedFacts
 		// semantics, then let the caller re-evaluate the surviving candidate.
-		const invalidatedCount = await invalidateContradictedFacts({
+		const invalidation = {
 			db,
 			prefix,
 			provider,
@@ -181,13 +154,123 @@ export async function resolveConflictedCandidate(params: {
 			scopeRef,
 			newFacts: [{ key: candidate.key, value: candidate.value }],
 			...(runId ? { runId } : {}),
-		})
+		}
+		let invalidatedCount: number
+		if (params.admission) {
+			const prepared = await prepareContradictionInvalidations(invalidation)
+			invalidatedCount =
+				prepared.length === 0
+					? 0
+					: await withFencedWrite({
+							db,
+							prefix,
+							token: params.admission,
+							fn: (session) =>
+								persistPreparedContradictionInvalidations({
+									db,
+									prefix,
+									agentId,
+									scope,
+									scopeRef,
+									prepared,
+									runId,
+									session,
+								}),
+						})
+		} else {
+			invalidatedCount = await invalidateContradictedFacts(invalidation)
+		}
 		return { resolved: invalidatedCount > 0, invalidatedCount }
 	} catch (err) {
+		if (
+			params.admission ||
+			isErasureGateConflictError(err) ||
+			isMalformedGateError(err)
+		)
+			throw err
 		log.warn("conflicted candidate resolution failed; preserving skip", {
-			error: err instanceof Error ? err.message : String(err),
+			...settledFailureMeta(err),
 		})
 		return unresolved
+	}
+}
+
+async function candidateSupersedesExistingFact(
+	params: Parameters<typeof resolveConflictedCandidate>[0],
+): Promise<boolean> {
+	const { db, prefix, provider, model, agentId, candidate } = params
+	if (!candidate.key || !candidate.value) return false
+	const scope = candidate.scope ?? "agent"
+	const scopeRef = candidate.scopeRef ?? `agent:${agentId}`
+	// Same comparison set invalidateContradictedFacts builds: this tenant's
+	// active facts under DIFFERENT keys (same-key overwrite is already
+	// superseded by the canonical write).
+	const existing = await structuredMemCollection(db, prefix)
+		.find(
+			{
+				agentId,
+				scope,
+				scopeRef,
+				type: "fact",
+				state: "active",
+				key: { $ne: candidate.key },
+				// P4.4.1 (B1): an expired fact reads as gone — it must not feed
+				// the comparison set ahead of the TTL sweep.
+				...buildUnexpiredClause(),
+			},
+			{ projection: { key: 1, value: 1, _id: 0 } },
+		)
+		.sort({ updatedAt: -1 })
+		.limit(MAX_EXISTING_FACTS)
+		.toArray()
+	const existingFacts = existing
+		.map((doc) => ({ key: String(doc.key), value: String(doc.value ?? "") }))
+		.filter((fact) => fact.value)
+	if (existingFacts.length === 0) {
+		return false
+	}
+
+	// detect: does the candidate make any existing fact false?
+	const findings = await detectContradictions({
+		provider,
+		model,
+		newFact: { key: candidate.key, value: candidate.value },
+		existingFacts,
+	})
+	if (findings.length === 0) {
+		// The candidate supersedes nothing — IT is the loser.
+		return false
+	}
+
+	return true
+}
+
+export async function prepareConflictedCandidateResolution(
+	params: Parameters<typeof resolveConflictedCandidate>[0],
+): Promise<PreparedContradictionInvalidation[]> {
+	try {
+		if (!(await candidateSupersedesExistingFact(params))) return []
+		return await prepareContradictionInvalidations({
+			db: params.db,
+			prefix: params.prefix,
+			provider: params.provider,
+			model: params.model,
+			agentId: params.agentId,
+			scope: params.candidate.scope ?? "agent",
+			scopeRef: params.candidate.scopeRef ?? `agent:${params.agentId}`,
+			newFacts: [{ key: params.candidate.key, value: params.candidate.value }],
+		})
+	} catch (err) {
+		if (
+			params.admission ||
+			isErasureGateConflictError(err) ||
+			isMalformedGateError(err)
+		)
+			throw err
+		log.warn("conflicted candidate preparation failed; preserving skip", {
+			...settledFailureMeta(err),
+		})
+		return []
 	}
 }
 
@@ -255,7 +338,7 @@ export async function adjudicateFactMerge(params: {
 		content = response.content
 	} catch (err) {
 		log.warn("llm dedup adjudication call failed", {
-			error: err instanceof Error ? err.message : String(err),
+			...settledFailureMeta(err),
 		})
 		return { verdict: "NO_MERGE" }
 	}

@@ -74,9 +74,28 @@ vi.mock("./mongodb-telemetry.js", async () =>
 	(await import("./test-helpers/manager-test-kit.js")).telemetryModuleMock(),
 )
 
+vi.mock("./mongodb-write-fence.js", async () =>
+	(await import("./test-helpers/manager-test-kit.js")).writeFenceModuleMock(),
+)
+
 describe("MongoDBMemoryManager background extraction", () => {
 	beforeEach(async () => {
 		vi.clearAllMocks()
+		const { captureAdmissionToken, readErasureGate } = await import(
+			"./mongodb-write-fence.js"
+		)
+		vi.mocked(captureAdmissionToken).mockResolvedValue({
+			kind: "admission",
+			agentId: "agent-1",
+			epoch: 0,
+		})
+		vi.mocked(readErasureGate).mockResolvedValue({
+			_id: "tenant-erasure-epoch:agent-1",
+			agentId: "agent-1",
+			epoch: 0,
+			state: "open",
+			serial: 0,
+		})
 		const { renewMemoryJobLease } = await import("./mongodb-memory-jobs.js")
 		mocked(renewMemoryJobLease).mockResolvedValue(true)
 	})
@@ -314,6 +333,7 @@ describe("MongoDBMemoryManager background extraction", () => {
 			prefix: "test_",
 			agentId: "agent-1",
 			lane: "graph",
+			session: expect.any(Object),
 		})
 		expect(failClaimedMemoryJob).toHaveBeenCalledWith(
 			expect.objectContaining({
@@ -333,7 +353,34 @@ describe("MongoDBMemoryManager background extraction", () => {
 		const { extractAndUpsertEntities } = await import("./mongodb-graph.js")
 		const { createMemoryJob, getMemoryJob, releaseStagedMemoryJob } =
 			await import("./mongodb-memory-jobs.js")
+		const { recordProjectionRun } = await import("./mongodb-ops.js")
+		const { emitTelemetry } = await import("./mongodb-telemetry.js")
+		const { captureAdmissionToken, readErasureGate, withFencedWrite } =
+			await import("./mongodb-write-fence.js")
 		const pendingAt = new Date("2026-04-09T12:00:00.000Z")
+		const admission = {
+			kind: "admission" as const,
+			agentId: "agent-1",
+			epoch: 7,
+		}
+		const primarySession = { id: "primary-session" }
+		const diagnosticSession = { id: "diagnostic-session" }
+		mocked(captureAdmissionToken).mockResolvedValue(admission)
+		vi.mocked(readErasureGate).mockResolvedValue({
+			_id: "tenant-erasure-epoch:agent-1",
+			agentId: "agent-1",
+			epoch: 7,
+			state: "open",
+			serial: 0,
+		})
+		mocked(withFencedWrite)
+			.mockImplementationOnce(async ({ fn }) => {
+				await fn(primarySession as never)
+				expect(recordProjectionRun).not.toHaveBeenCalled()
+				expect(emitTelemetry).not.toHaveBeenCalled()
+				return fn(primarySession as never)
+			})
+			.mockImplementationOnce(async ({ fn }) => fn(diagnosticSession as never))
 		mocked(getPendingExtractionEvents).mockResolvedValue([
 			{
 				eventId: "evt-outbox-repair",
@@ -352,6 +399,12 @@ describe("MongoDBMemoryManager background extraction", () => {
 		mocked(extractAndUpsertEntities).mockResolvedValue({
 			entities: [],
 			relationsCreated: 0,
+			diagnostics: {
+				durationMs: 5,
+				extractionMethod: "regex",
+				entitiesExtracted: 0,
+				relationsCreated: 0,
+			},
 		})
 		mocked(releaseStagedMemoryJob).mockResolvedValue(true)
 		mocked(clearEventExtractionJobPending).mockResolvedValue(true)
@@ -382,6 +435,12 @@ describe("MongoDBMemoryManager background extraction", () => {
 			jobsReleased: 1,
 			eventsFailed: 0,
 		})
+		expect(manager.chunkCount).toBe(1)
+		expect(
+			mocked(captureAdmissionToken).mock.invocationCallOrder[0],
+		).toBeLessThan(
+			mocked(getPendingExtractionEvents).mock.invocationCallOrder[0],
+		)
 		expect(getPendingExtractionEvents).toHaveBeenCalledWith({
 			db: manager.db,
 			prefix: "test_",
@@ -393,23 +452,193 @@ describe("MongoDBMemoryManager background extraction", () => {
 				job: expect.objectContaining({
 					jobId: "extraction-evt-outbox-repair",
 					stagedAt: pendingAt,
+					admissionEpoch: 7,
 					payload: {
 						eventId: "evt-outbox-repair",
 						scope: "agent",
 						scopeRef: "agent:agent-1",
 					},
 				}),
+				session: primarySession,
 			}),
+		)
+		expect(createMemoryJob).toHaveBeenCalledTimes(2)
+		expect(getMemoryJob).toHaveBeenCalledWith(
+			expect.objectContaining({ session: primarySession }),
+		)
+		expect(projectEventChunk).toHaveBeenCalledWith(
+			expect.objectContaining({
+				session: primarySession,
+				recordRun: false,
+			}),
+		)
+		expect(extractAndUpsertEntities).toHaveBeenCalledWith(
+			expect.objectContaining({
+				session: primarySession,
+				recordRun: false,
+			}),
+		)
+		expect(releaseStagedMemoryJob).toHaveBeenCalledWith(
+			expect.objectContaining({ session: primarySession }),
 		)
 		expect(mocked(projectEventChunk).mock.invocationCallOrder[0]).toBeLessThan(
 			mocked(releaseStagedMemoryJob).mock.invocationCallOrder[0],
 		)
-		expect(clearEventExtractionJobPending).toHaveBeenCalledWith({
-			db: manager.db,
-			prefix: "test_",
-			eventId: "evt-outbox-repair",
-			agentId: "agent-1",
+		expect(clearEventExtractionJobPending).toHaveBeenCalledWith(
+			expect.objectContaining({
+				db: manager.db,
+				prefix: "test_",
+				eventId: "evt-outbox-repair",
+				agentId: "agent-1",
+				session: primarySession,
+			}),
+		)
+		expect(withFencedWrite).toHaveBeenCalledTimes(2)
+		expect(mocked(withFencedWrite).mock.calls[0][0].token).toBe(admission)
+		expect(mocked(withFencedWrite).mock.calls[1][0].token).toBe(admission)
+		expect(recordProjectionRun).toHaveBeenCalledTimes(3)
+		for (const [call] of mocked(recordProjectionRun).mock.calls) {
+			expect(call.session).toBe(diagnosticSession)
+		}
+		expect(emitTelemetry).toHaveBeenCalledWith(
+			manager.db,
+			"test_",
+			expect.objectContaining({
+				meta: {
+					agentId: "agent-1",
+					operation: "entity-extraction",
+				},
+				ok: true,
+			}),
+			{ session: diagnosticSession },
+		)
+	})
+
+	it("stops the repair round on an erasure-gate conflict", async () => {
+		const { getPendingExtractionEvents } = await import("./mongodb-events.js")
+		const { getMemoryJob } = await import("./mongodb-memory-jobs.js")
+		const { recordProjectionRun } = await import("./mongodb-ops.js")
+		const { emitTelemetry } = await import("./mongodb-telemetry.js")
+		const { ErasureGateConflictError, withFencedWrite } = await import(
+			"./mongodb-write-fence.js"
+		)
+		const pendingAt = new Date("2026-04-09T12:00:00.000Z")
+		mocked(getPendingExtractionEvents).mockResolvedValue([
+			{
+				eventId: "evt-conflict-1",
+				agentId: "agent-1",
+				role: "user",
+				body: "First repair event",
+				scope: "agent",
+				scopeRef: "agent:agent-1",
+				timestamp: pendingAt,
+				extractionJobPendingAt: pendingAt,
+			},
+			{
+				eventId: "evt-conflict-2",
+				agentId: "agent-1",
+				role: "user",
+				body: "Second repair event",
+				scope: "agent",
+				scopeRef: "agent:agent-1",
+				timestamp: pendingAt,
+				extractionJobPendingAt: pendingAt,
+			},
+		])
+		const conflict = new ErasureGateConflictError("agent-1")
+		mocked(withFencedWrite).mockRejectedValueOnce(conflict)
+		const manager = Object.assign(
+			Object.create(MongoDBMemoryManager.prototype),
+			{
+				db: {} as import("mongodb").Db,
+				prefix: "test_",
+				agentId: "agent-1",
+				chunkCount: 0,
+			},
+		) as MongoDBMemoryManager
+		const repair = (
+			manager as unknown as {
+				repairExtractionOutbox: () => Promise<unknown>
+			}
+		).repairExtractionOutbox
+
+		await expect(repair.call(manager)).rejects.toBe(conflict)
+		expect(withFencedWrite).toHaveBeenCalledOnce()
+		expect(getMemoryJob).not.toHaveBeenCalled()
+		expect(recordProjectionRun).not.toHaveBeenCalled()
+		expect(emitTelemetry).not.toHaveBeenCalled()
+	})
+
+	it("does not resurrect zero-entity diagnostics after a post-commit erasure conflict", async () => {
+		const {
+			clearEventExtractionJobPending,
+			getPendingExtractionEvents,
+			projectEventChunk,
+		} = await import("./mongodb-events.js")
+		const { extractAndUpsertEntities } = await import("./mongodb-graph.js")
+		const { createMemoryJob, getMemoryJob, releaseStagedMemoryJob } =
+			await import("./mongodb-memory-jobs.js")
+		const { recordProjectionRun } = await import("./mongodb-ops.js")
+		const { emitTelemetry } = await import("./mongodb-telemetry.js")
+		const { ErasureGateConflictError, withFencedWrite } = await import(
+			"./mongodb-write-fence.js"
+		)
+		const pendingAt = new Date("2026-04-09T12:00:00.000Z")
+		mocked(getPendingExtractionEvents).mockResolvedValue([
+			{
+				eventId: "evt-zero-diagnostics",
+				agentId: "agent-1",
+				role: "user",
+				body: "No graph entities in this sentence.",
+				scope: "agent",
+				scopeRef: "agent:agent-1",
+				timestamp: pendingAt,
+				extractionJobPendingAt: pendingAt,
+			},
+		])
+		mocked(getMemoryJob).mockResolvedValue(null)
+		mocked(createMemoryJob).mockResolvedValue("extraction-evt-zero-diagnostics")
+		mocked(projectEventChunk).mockResolvedValue({ chunkCreated: true })
+		mocked(extractAndUpsertEntities).mockResolvedValue({
+			entities: [],
+			relationsCreated: 0,
+			diagnostics: {
+				durationMs: 3,
+				extractionMethod: "regex",
+				entitiesExtracted: 0,
+				relationsCreated: 0,
+			},
 		})
+		mocked(releaseStagedMemoryJob).mockResolvedValue(true)
+		mocked(clearEventExtractionJobPending).mockResolvedValue(true)
+		const primarySession = { id: "primary-session" }
+		mocked(withFencedWrite)
+			.mockImplementationOnce(async ({ fn }) => fn(primarySession as never))
+			.mockRejectedValueOnce(new ErasureGateConflictError("agent-1"))
+		const manager = Object.assign(
+			Object.create(MongoDBMemoryManager.prototype),
+			{
+				db: {} as import("mongodb").Db,
+				prefix: "test_",
+				agentId: "agent-1",
+				chunkCount: 0,
+			},
+		) as MongoDBMemoryManager
+		const repair = (
+			manager as unknown as {
+				repairExtractionOutbox: () => Promise<unknown>
+			}
+		).repairExtractionOutbox
+
+		await expect(repair.call(manager)).resolves.toEqual({
+			eventsProcessed: 1,
+			jobsCreated: 1,
+			jobsReleased: 1,
+			eventsFailed: 0,
+		})
+		expect(withFencedWrite).toHaveBeenCalledTimes(2)
+		expect(recordProjectionRun).not.toHaveBeenCalled()
+		expect(emitTelemetry).not.toHaveBeenCalled()
 	})
 
 	it("recovers pending extraction work when the durable worker starts", async () => {
@@ -897,9 +1126,11 @@ describe("MongoDBMemoryManager background extraction", () => {
 				createMemoryJob,
 				failClaimedMemoryJob,
 				renewMemoryJobLease,
+				withClaimedMemoryJobEffectBatch,
 			} = await import("./mongodb-memory-jobs.js")
-			const { eventsCollection, metaCollection } = await import(
-				"./mongodb-schema.js"
+			const { eventsCollection } = await import("./mongodb-schema.js")
+			const { ErasureGateConflictError } = await import(
+				"./mongodb-write-fence.js"
 			)
 			const { extractAndUpsertEntities } = await import("./mongodb-graph.js")
 			const { promoteDerivedMemoryFromEvent } = await import(
@@ -923,11 +1154,15 @@ describe("MongoDBMemoryManager background extraction", () => {
 					leaseToken: "lease-epoch",
 					heartbeatAt: new Date("2026-04-09T12:00:00.000Z"),
 					leaseExpiresAt: new Date("2026-04-09T12:01:00.000Z"),
+					admissionEpoch: 1,
 				})
 				.mockResolvedValueOnce(null)
 			// The lease stays healthy the whole time — ONLY the tenant erasure
 			// epoch advances between the claim and the first fence check.
 			mocked(renewMemoryJobLease).mockResolvedValue(true)
+			mocked(withClaimedMemoryJobEffectBatch).mockRejectedValueOnce(
+				new ErasureGateConflictError(),
+			)
 			mocked(eventsCollection).mockReturnValue({
 				findOne: vi.fn(async () => ({
 					eventId: "evt-epoch",
@@ -937,18 +1172,6 @@ describe("MongoDBMemoryManager background extraction", () => {
 					timestamp: new Date("2026-04-09T12:00:00.000Z"),
 					scope: "agent",
 					scopeRef: "agent:agent-1",
-				})),
-			} as unknown as import("mongodb").Collection)
-			// First meta read = the claim-time epoch (1); every later read (the
-			// fence checks) = 2 — a tenant erasure bumped it after this job was
-			// claimed, so the job's source data was swept mid-flight.
-			let metaReads = 0
-			mocked(metaCollection).mockReturnValue({
-				findOne: vi.fn(async () => ({
-					_id: "tenant-erasure-epoch:agent-1",
-					agentId: "agent-1",
-					epoch: ++metaReads === 1 ? 1 : 2,
-					updatedAt: new Date("2026-04-09T12:00:05.000Z"),
 				})),
 			} as unknown as import("mongodb").Collection)
 
@@ -970,7 +1193,6 @@ describe("MongoDBMemoryManager background extraction", () => {
 			) as MongoDBMemoryManager & { memoryJobWorkerPromise: Promise<void> }
 
 			await manager.extractEvent({ eventId: "evt-epoch" })
-			await vi.advanceTimersByTimeAsync(20_001)
 			await manager.memoryJobWorkerPromise
 
 			// The lease was NEVER lost — the epoch fence alone abandoned the

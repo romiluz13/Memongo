@@ -1,7 +1,7 @@
 {
 	"name": "@memongo/pi-extension",
-	"version": "2.1.2",
-	"description": "Pi coding-agent extension — exposes Memongo's durable, cross-project, MongoDB-backed semantic memory as additive tools alongside pi-hermes-memory.",
+	"version": "2.2.0",
+	"description": "Pi coding-agent extension \u2014 exposes Memongo's durable, cross-project, MongoDB-backed semantic memory as additive tools alongside pi-hermes-memory.",
 	"type": "module",
 	"engines": {
 		"node": ">=20.19.0"
@@ -29,7 +29,8 @@
 		"extensions/index.ts",
 		"extensions/diagnostics.ts",
 		"extensions/lifecycle.ts",
-		"README.md"
+		"README.md",
+		"NOTICE"
 	],
 	"scripts": {
 		"clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
@@ -39,8 +40,8 @@
 		"prepublishOnly": "bun run build"
 	},
 	"dependencies": {
-		"@memongo/client": "^2.1.0",
-		"@memongo/tools": "^2.1.0"
+		"@memongo/client": "^2.2.0",
+		"@memongo/tools": "^2.2.0"
 	},
 	"peerDependencies": {
 		"@earendil-works/pi-ai": "*",

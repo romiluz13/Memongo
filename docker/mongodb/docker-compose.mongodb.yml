@@ -43,7 +43,7 @@ services:
 
   # Tier 1: Standalone MongoDB (simplest - no transactions, no search)
   mongod-standalone:
-    image: mongodb/mongodb-community-server:8.0.13-ubuntu2204
+    image: mongodb/mongodb-community-server:9.0.0-rc0-ubuntu2204
     container_name: memongo-mongod-standalone
     ports:
       # Loopback-only publish (compose-spec short syntax).
@@ -61,7 +61,7 @@ services:
 
   # Tier 2 & 3: MongoDB with replica set (used by both replicaset and fullstack profiles)
   mongod:
-    image: mongodb/mongodb-community-server:8.0.13-ubuntu2204
+    image: mongodb/mongodb-community-server:9.0.0-rc0-ubuntu2204
     container_name: memongo-mongod
     environment:
       MONGODB_INITDB_ROOT_USERNAME: admin
@@ -100,7 +100,7 @@ services:
   # oplog, no transactions, and mongot has nothing to sync from.
   # Idempotent: an already-initialized set is treated as success.
   rs-init:
-    image: mongodb/mongodb-community-server:8.0.13-ubuntu2204
+    image: mongodb/mongodb-community-server:9.0.0-rc0-ubuntu2204
     container_name: memongo-rs-init
     environment:
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:?set ADMIN_PASSWORD}
@@ -119,7 +119,7 @@ services:
 
   # Tier 3: mongot search engine (fullstack only)
   mongot:
-    image: mongodb/mongodb-community-search:1.70.1
+    image: mongodb/mongodb-community-search:1.70.4
     container_name: memongo-mongot
     environment:
       MONGOT_EMBEDDING_PROVIDER_ENDPOINT: ${MONGOT_EMBEDDING_PROVIDER_ENDPOINT:-https://ai.mongodb.com/v1/embeddings}

@@ -452,6 +452,100 @@ describe("getMemorySearchManager runtime (P2.1)", () => {
 		}
 	})
 
+	it("owned: acquisition skips the cache and the in-flight dedup", async () => {
+		const first = await getMemorySearchManager({
+			cfg,
+			agentId: "agent-a",
+			ownership: "owned",
+		})
+		const second = await getMemorySearchManager({
+			cfg,
+			agentId: "agent-a",
+			ownership: "owned",
+		})
+		expect(first.manager).not.toBeNull()
+		expect(second.manager).not.toBeNull()
+		// Every owned request is an independent manager: no dedup, no cache hit.
+		expect(first.manager).not.toBe(second.manager)
+		expect(managerMocks.create).toHaveBeenCalledTimes(2)
+
+		// A later cached acquisition still creates its own cache entry.
+		await getMemorySearchManager({ cfg, agentId: "agent-a" })
+		expect(managerMocks.create).toHaveBeenCalledTimes(3)
+	})
+
+	it("owned: idle TTL sweep leaves the owned manager open; caller close releases the shared client exactly once", async () => {
+		vi.stubEnv("MEMONGO_MANAGER_CACHE_IDLE_TTL_MS", "1000")
+		managerMocks.create.mockImplementation(
+			async (params: { onClosed?: () => void }) => {
+				// Mirrors mongodb-manager.ts:1943 — close() ends with the
+				// onClosed hook, which releases the shared-client reference.
+				const manager = {
+					close: vi.fn(async () => {
+						await params.onClosed?.()
+					}),
+				}
+				createdManagers.push(manager)
+				return manager
+			},
+		)
+		vi.useFakeTimers()
+		try {
+			const { manager } = await getMemorySearchManager({
+				cfg,
+				agentId: "agent-a",
+				ownership: "owned",
+			})
+			expect(manager).not.toBeNull()
+
+			vi.advanceTimersByTime(2_000)
+			await evictIdleMemorySearchManagers()
+
+			// Owned: the sweep cannot close a manager it never cached.
+			expect(createdManagers[0]!.close).not.toHaveBeenCalled()
+			expect(sharedClientClose).not.toHaveBeenCalled()
+
+			// Caller-owned cleanup releases the shared-client ref once; the
+			// registry closes the client at refcount 0.
+			await (manager as unknown as { close: () => Promise<void> }).close()
+			await vi.waitFor(() => {
+				expect(sharedClientClose).toHaveBeenCalledTimes(1)
+			})
+			expect(createdManagers[0]!.close).toHaveBeenCalledTimes(1)
+		} finally {
+			vi.useRealTimers()
+		}
+	})
+
+	it("owned: nonshared mode creates an independent manager without a shared client", async () => {
+		vi.stubEnv("MEMONGO_SHARED_CLIENT", "0")
+		const { manager } = await getMemorySearchManager({
+			cfg,
+			agentId: "agent-a",
+			ownership: "owned",
+		})
+		expect(manager).not.toBeNull()
+		expect(sharedConnect).not.toHaveBeenCalled()
+		expect(managerMocks.create.mock.calls[0][0]).not.toHaveProperty("client")
+		expect(managerMocks.create.mock.calls[0][0]).not.toHaveProperty("onClosed")
+	})
+
+	it("owned: initialization failure returns the error and releases the shared client", async () => {
+		managerMocks.create.mockRejectedValueOnce(new Error("owned init failed"))
+		const result = await getMemorySearchManager({
+			cfg,
+			agentId: "agent-a",
+			ownership: "owned",
+		})
+		expect(result.manager).toBeNull()
+		expect(result.error).toContain("mongodb memory unavailable")
+		// Failure cleanup mirrors the cached path: the acquired shared-client
+		// reference is released exactly once.
+		await vi.waitFor(() => {
+			expect(sharedClientClose).toHaveBeenCalledTimes(1)
+		})
+	})
+
 	it("B9: in-flight operation survives LRU eviction; evicted manager closes at quiescence exactly once", async () => {
 		vi.stubEnv("MEMONGO_SHARED_CLIENT", "1")
 		vi.stubEnv("MEMONGO_MANAGER_CACHE_MAX", "1")

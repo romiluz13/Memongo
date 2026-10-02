@@ -781,9 +781,15 @@ describe("recallConversation", () => {
 		})
 
 		const pipeline = vi.mocked(col.aggregate).mock.calls[0]?.[0] as Document[]
-		// stage 0 = $vectorSearch, stage 1 = $match(bitemporal)
+		// stage 0 = $vectorSearch, stage 1 = $match(full request predicate,
+		// revalidated post-stage), stage 2 = $match(bitemporal)
 		expect(pipeline[0]?.$vectorSearch).toBeDefined()
-		expect(pipeline[1]?.$match).toEqual({
+		// The post-stage revalidation reapplies the SAME resolved filter the
+		// $vectorSearch prefilter used (owner/scope/session/role/time).
+		expect(pipeline[1]).toEqual({
+			$match: (pipeline[0]?.$vectorSearch as { filter?: Document }).filter,
+		})
+		expect(pipeline[2]?.$match).toEqual({
 			$and: [
 				{
 					$or: [{ validAt: { $exists: false } }, { validAt: { $lte: asOf } }],
@@ -851,7 +857,7 @@ describe("recallConversation", () => {
 		expect(limitStage?.$limit).toBe(limit)
 	})
 
-	it("uses native bitemporal prefiltering only when the serving events index is verified", async () => {
+	it("uses native bitemporal prefiltering when the serving events index is verified and still revalidates validity post-stage", async () => {
 		const col = makeAggregateCollection({ results: [] })
 		vi.mocked(eventsCollection).mockReturnValue(col)
 
@@ -912,15 +918,17 @@ describe("recallConversation", () => {
 				$or: [{ invalidAt: { $exists: false } }, { invalidAt: { $gt: asOf } }],
 			},
 		])
-		// No bitemporal post-$match when the native prefilter serves validity;
-		// the P4.4.1 unexpired $match (expiresAt) is still present.
+		// The canonical bi-temporal post-$match is unconditional — the
+		// native prefilter runs against the indexed copy, which can lag the
+		// latest write. The P4.4.1 unexpired $match (expiresAt) is still
+		// present.
 		expect(
 			pipeline.some(
 				(stage) =>
 					stage.$match !== undefined &&
 					JSON.stringify(stage.$match).includes("validAt"),
 			),
-		).toBe(false)
+		).toBe(true)
 	})
 
 	it("recall overfetch (issue #41): hybridRecall $rankFusion vector inner lane over-fetches beyond the final limit", async () => {
@@ -959,7 +967,7 @@ describe("recallConversation", () => {
 		expect(vectorLimit).toBeGreaterThan(limit)
 	})
 
-	it("uses native validity only in the verified hybrid vector lane and retains text-lane validity", async () => {
+	it("uses native validity in the verified hybrid vector lane and retains post-stage validity in both lanes", async () => {
 		const col = makeAggregateCollection({ results: [] })
 		vi.mocked(eventsCollection).mockReturnValue(col)
 
@@ -992,7 +1000,10 @@ describe("recallConversation", () => {
 		}
 		const vectorInner = rankFusion.input?.pipelines?.vector ?? []
 		const textInner = rankFusion.input?.pipelines?.text ?? []
-		expect(vectorInner).toHaveLength(1)
+		// The vector inner lane revalidates the full resolved predicate AND
+		// the canonical bi-temporal window post-stage, even when the native
+		// prefilter serves validity.
+		expect(vectorInner).toHaveLength(3)
 		expect(vectorInner[0]?.$vectorSearch?.limit).toBe(5)
 		expect(vectorInner[0]?.$vectorSearch?.filter?.$and).toEqual([
 			{
@@ -1002,12 +1013,151 @@ describe("recallConversation", () => {
 				$or: [{ invalidAt: { $exists: false } }, { invalidAt: { $gt: asOf } }],
 			},
 		])
+		// Post-stage revalidation reapplies the SAME resolved filter the
+		// $vectorSearch prefilter used (owner/scope/session/role/time).
+		expect(vectorInner[1]).toEqual({
+			$match: vectorInner[0]?.$vectorSearch?.filter,
+		})
+		expect(vectorInner[2]).toEqual({ $match: expectedBitemporalAnd(asOf)[0] })
 		expect(textInner).toEqual(
 			expect.arrayContaining([{ $match: expectedBitemporalAnd(asOf)[0] }]),
 		)
-		// pipeline: $rankFusion, $match (P4.4.1 unexpired), $limit, ...
+		// pipeline: $rankFusion, $match (P4.4.1 unexpired, wall-now), $limit, ...
 		expect(pipeline[1]).toEqual({ $match: { $or: expectedUnexpiredOr() } })
 		expect(pipeline[2]).toEqual({ $limit: 5 })
+	})
+
+	// =========================================================================
+	// Expiry-clock contract (public recall): expiresAt is RETENTION, always
+	// checked at wall-now; validAt/invalidAt stay on the historical asOf.
+	// Regression: these guards previously passed params.asOf to the expiry
+	// clause, so a historical recall could revive memories awaiting physical
+	// TTL deletion. Window assertions discriminate wall-now from asOf without
+	// fake timers; hard-filter content is asserted with actual request values.
+	// =========================================================================
+
+	it("expiry clock: semantic recall checks expiresAt at wall-now and validity at asOf", async () => {
+		const col = makeAggregateCollection({ results: [] })
+		vi.mocked(eventsCollection).mockReturnValue(col)
+
+		const asOf = new Date("2026-05-12T10:00:00.000Z")
+		const callStart = new Date()
+		await recallConversation({
+			db: mockDb(),
+			prefix: "mem_",
+			request: {
+				agentId: "agent-1",
+				scope: "tenant",
+				scopeRef: "tenant:acme",
+				sessionId: "session-1",
+				roles: ["assistant"],
+				query: "semantic query",
+				startTime: "2026-05-01T00:00:00.000Z",
+				endTime: "2026-05-11T23:59:59.999Z",
+				asOf,
+			},
+			capabilities: {
+				vectorSearch: true,
+				textSearch: false,
+				rankFusion: false,
+				storedSource: false,
+				vectorIndexMethod: false,
+				scoreFusion: false,
+			},
+		})
+		const callEnd = new Date()
+
+		const pipeline = vi.mocked(col.aggregate).mock.calls[0]?.[0] as Document[]
+		expect(pipeline[0]?.$vectorSearch).toBeDefined()
+		// Post-stage revalidation carries the actual request predicate values
+		// (owner/scope/session/role/time), not merely the prefilter object.
+		expect(pipeline[1]?.$match).toEqual(
+			expect.objectContaining({
+				agentId: { $eq: "agent-1" },
+				scope: { $eq: "tenant" },
+				scopeRef: { $eq: "tenant:acme" },
+				sessionId: { $eq: "session-1" },
+				role: { $in: ["assistant"] },
+				timestamp: {
+					$gte: new Date("2026-05-01T00:00:00.000Z"),
+					$lte: new Date("2026-05-11T23:59:59.999Z"),
+				},
+			}),
+		)
+		// Validity stays historical: bitemporal $match at asOf.
+		expect(pipeline[2]?.$match).toEqual(expectedBitemporalAnd(asOf)[0])
+		// Retention is current: expiresAt is checked against wall-now (inside
+		// the captured [callStart, callEnd] window), never at asOf.
+		const expiryStage = pipeline[3]?.$match as Document | undefined
+		const expiryDate = (expiryStage?.$or as Document[] | undefined)?.[1]
+			?.expiresAt?.$gt as Date | undefined
+		expect(expiryDate).toBeInstanceOf(Date)
+		expect(expiryDate?.getTime()).toBeGreaterThanOrEqual(callStart.getTime())
+		expect(expiryDate?.getTime()).toBeLessThanOrEqual(callEnd.getTime())
+		expect(expiryDate?.getTime()).not.toBe(asOf.getTime())
+	})
+
+	it("expiry clock: hybrid recall checks expiresAt at wall-now and validity at asOf", async () => {
+		const col = makeAggregateCollection({ results: [] })
+		vi.mocked(eventsCollection).mockReturnValue(col)
+
+		const asOf = new Date("2026-05-12T10:00:00.000Z")
+		const callStart = new Date()
+		await recallConversation({
+			db: mockDb(),
+			prefix: "mem_",
+			request: {
+				agentId: "agent-1",
+				scope: "tenant",
+				scopeRef: "tenant:acme",
+				sessionId: "session-1",
+				roles: ["assistant"],
+				query: "hybrid query",
+				startTime: "2026-05-01T00:00:00.000Z",
+				endTime: "2026-05-11T23:59:59.999Z",
+				asOf,
+				limit: 5,
+			},
+			capabilities: {
+				vectorSearch: true,
+				textSearch: true,
+				rankFusion: true,
+				storedSource: false,
+				vectorIndexMethod: false,
+				scoreFusion: false,
+			},
+		})
+		const callEnd = new Date()
+
+		const pipeline = vi.mocked(col.aggregate).mock.calls[0]?.[0] as Document[]
+		const rankFusion = pipeline[0]?.$rankFusion as {
+			input?: { pipelines?: { vector?: Document[] } }
+		}
+		const vectorInner = rankFusion.input?.pipelines?.vector ?? []
+		// Full-predicate revalidation with actual request values post-stage.
+		expect(vectorInner[1]?.$match).toEqual(
+			expect.objectContaining({
+				agentId: { $eq: "agent-1" },
+				scope: { $eq: "tenant" },
+				scopeRef: { $eq: "tenant:acme" },
+				sessionId: { $eq: "session-1" },
+				role: { $in: ["assistant"] },
+				timestamp: {
+					$gte: new Date("2026-05-01T00:00:00.000Z"),
+					$lte: new Date("2026-05-11T23:59:59.999Z"),
+				},
+			}),
+		)
+		// Validity stays historical in the vector inner lane.
+		expect(vectorInner[2]).toEqual({ $match: expectedBitemporalAnd(asOf)[0] })
+		// Retention is current: the post-fusion expiry guard is wall-now.
+		const expiryStage = pipeline[1]?.$match as Document | undefined
+		const expiryDate = (expiryStage?.$or as Document[] | undefined)?.[1]
+			?.expiresAt?.$gt as Date | undefined
+		expect(expiryDate).toBeInstanceOf(Date)
+		expect(expiryDate?.getTime()).toBeGreaterThanOrEqual(callStart.getTime())
+		expect(expiryDate?.getTime()).toBeLessThanOrEqual(callEnd.getTime())
+		expect(expiryDate?.getTime()).not.toBe(asOf.getTime())
 	})
 
 	it("bi-temporal safety: hybridRecall $rankFusion injects bi-temporal $match into BOTH vector and text inner pipelines", async () => {
@@ -1525,5 +1675,73 @@ describe("recallConversation search admission (WS-11)", () => {
 		expect(col.aggregate).toHaveBeenCalled()
 		expect(response.metadata.searchMethod).toBe("hybrid")
 		expect(response.metadata.throttled).toBeUndefined()
+	})
+
+	it("reports hybrid and semantic lane failures via onLaneFailure and still answers from the standard lane (RET-13)", async () => {
+		resetSearchAdmissionForTests(Date.now())
+		const laneFailures: Array<{ lane: string; error: unknown }> = []
+		const hybridError = new Error("rankFusion exploded")
+		const semanticError = new Error("vectorSearch exploded")
+		const aggregateCalls: Document[][] = []
+
+		const standardDoc = {
+			eventId: "evt-std",
+			agentId: "agent-1",
+			sessionId: "sess-1",
+			role: "assistant",
+			body: "Standard lane keeps answering when ranking lanes fail.",
+			scope: "agent",
+			scopeRef: "agent:agent-1",
+			timestamp: new Date("2026-08-02T00:00:00.000Z"),
+		}
+
+		const limit = vi.fn((value?: number) => ({
+			toArray: vi.fn(async () => [standardDoc].slice(0, value ?? 1)),
+		}))
+		const col = {
+			find: vi.fn(() => ({ sort: vi.fn(() => ({ limit })) })),
+			// Every aggregate attempt rejects: hybrid first, then the
+			// semantic fallback.
+			aggregate: vi.fn((pipeline: Document[]) => {
+				aggregateCalls.push(pipeline)
+				const stage = pipeline[0] ?? {}
+				const isSemantic = "$vectorSearch" in stage
+				return {
+					toArray: vi.fn(async () => {
+						throw isSemantic ? semanticError : hybridError
+					}),
+				}
+			}),
+		} as unknown as Collection
+		vi.mocked(eventsCollection).mockReturnValue(col)
+
+		const response = await recallConversation({
+			db: mockDb(),
+			prefix: "mem_",
+			request: { agentId: "agent-1", query: "deploy runbook", limit: 10 },
+			capabilities: {
+				vectorSearch: true,
+				textSearch: true,
+				rankFusion: true,
+				storedSource: false,
+				vectorIndexMethod: false,
+				scoreFusion: false,
+			},
+			onLaneFailure: (lane, error) => laneFailures.push({ lane, error }),
+		})
+
+		// Both ranking lanes attempted and failed...
+		expect(aggregateCalls.length).toBe(2)
+		// ...each failure surfaced through the callback with the original
+		// error object, in attempt order.
+		expect(laneFailures).toEqual([
+			{ lane: "recall:hybrid", error: hybridError },
+			{ lane: "recall:semantic", error: semanticError },
+		])
+		// ...and the recall still answered from the standard find lane
+		// instead of erroring out.
+		expect(col.find).toHaveBeenCalled()
+		expect(response.metadata.searchMethod).toBe("standard")
+		expect(response.results.length).toBeGreaterThan(0)
 	})
 })

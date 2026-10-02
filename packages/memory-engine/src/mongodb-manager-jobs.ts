@@ -1,14 +1,22 @@
-import path from "node:path"
-import type { Db } from "mongodb"
-import { instrumentProviderCostSpend } from "./mongodb-cost-ledger.js"
+import type { ClientSession, Db } from "mongodb"
+import {
+	instrumentProviderCostSpend,
+	recordLLMSpendInSession,
+} from "./mongodb-cost-ledger.js"
+import {
+	persistPreparedContradictionInvalidations,
+	prepareContradictionInvalidations,
+} from "./mongodb-contradiction.js"
 import { getTenantErasureEpoch } from "./mongodb-erasure-epoch.js"
 import {
+	applyOperationAccountingEffects,
 	instrumentOperationProvider,
+	type OperationAccountingEffect,
 	type OperationRunContext,
 } from "./mongodb-operation-accounting.js"
-import { isDuplicateKeyError } from "./internal.js"
 import {
 	heuristicEpisodeSummarizer,
+	prepareDerivedMemoryPromotion,
 	promoteDerivedMemoryFromEvent,
 } from "./mongodb-derived-memory.js"
 import { checkAutoEpisodeTriggers } from "./mongodb-episodes.js"
@@ -16,31 +24,39 @@ import { consolidateMemory } from "./mongodb-consolidator.js"
 import {
 	extractAndUpsertEntities,
 	extractAndUpsertTypedRelations,
+	prepareTypedRelations,
 } from "./mongodb-graph.js"
 import {
 	markLaneAvailable,
 	updateLaneCoverage,
 } from "./mongodb-lane-coverage.js"
 import {
+	EnrichmentResponseError,
+	isExtractionLlmDisabled,
 	resolveEnrichmentProvider,
-	enrichSessionsWithLLM,
 	extractSessionEnrichment,
 } from "./mongodb-llm-enrichment.js"
 import type { EnrichmentProvider } from "./mongodb-llm-enrichment.js"
 import type { MongoDBManagerHost } from "./mongodb-manager-host.js"
 import {
 	claimMemoryJob,
+	captureClaimedMemoryJobAdmissionEpoch,
 	completeClaimedMemoryJob,
 	createMemoryJob,
 	deadLetterExpiredMemoryJobs,
 	failClaimedMemoryJob,
 	getMemoryJob,
+	isMemoryJobOwnershipLostError,
+	MemoryJobOwnershipLostError,
 	renewMemoryJobLease,
 	retryFailedMemoryJob,
+	withClaimedMemoryJobEffectBatch,
 } from "./mongodb-memory-jobs.js"
 import { recordProjectionRun } from "./mongodb-ops.js"
 import { invalidateQueryCache } from "./mongodb-query-cache.js"
 import { resolveScopeRef } from "./mongodb-scope.js"
+import { buildEventLifecycleClause } from "./mongodb-temporal.js"
+import { settledFailureMeta } from "./query-diagnostics.js"
 import { emitTelemetry } from "./mongodb-telemetry.js"
 import {
 	eventsCollection,
@@ -48,6 +64,14 @@ import {
 	memoryJobsCollection,
 } from "./mongodb-schema.js"
 import type { ClaimedMemoryJob, ConsolidationOptions } from "./types.js"
+import {
+	captureAdmissionToken,
+	ErasureGateConflictError,
+	readErasureGate,
+	isErasureGateConflictError,
+	type AdmissionToken,
+	withFencedWrite,
+} from "./mongodb-write-fence.js"
 import { createSubsystemLogger } from "@memongo/lib"
 import type { MemoryScope } from "@memongo/lib"
 
@@ -72,6 +96,33 @@ function bodySupportsFact(body: string, fact: string): boolean {
 		normalizedFact.length > 0 &&
 		` ${normalizedBody} `.includes(` ${normalizedFact} `)
 	)
+}
+
+type BufferedWorkerEffects = {
+	llmUsage: Array<{
+		inputTokens?: number
+		outputTokens?: number
+		at: Date
+	}>
+	operationAccounting: OperationAccountingEffect[]
+}
+
+const PREFETCH_EFFECTS = Symbol("prefetchEffects")
+type PrefetchedFactsMap = Map<string, string[]> & {
+	[PREFETCH_EFFECTS]?: Map<string, BufferedWorkerEffects>
+}
+
+function newBufferedWorkerEffects(): BufferedWorkerEffects {
+	return { llmUsage: [], operationAccounting: [] }
+}
+
+function appendBufferedWorkerEffects(
+	target: BufferedWorkerEffects,
+	source: BufferedWorkerEffects | undefined,
+): void {
+	if (!source) return
+	target.llmUsage.push(...source.llmUsage)
+	target.operationAccounting.push(...source.operationAccounting)
 }
 
 /**
@@ -238,6 +289,8 @@ export function resolveAutoConsolidationMs(): number {
 /** Input shape shared by writeConversationEvent and its batch variant. */
 
 export class MongoDBManagerJobsOps {
+	private pendingWake?: { admission?: AdmissionToken; generation: number }
+	private workerAdmission?: AdmissionToken
 	constructor(private readonly host: MongoDBManagerHost) {}
 
 	enqueueDerivedWork(task: () => Promise<void>): void {
@@ -295,31 +348,96 @@ export class MongoDBManagerJobsOps {
 	async runClaimedBackgroundExtractionJob(
 		job: ClaimedMemoryJob,
 		prefetchedLlmFacts?: string[],
+		prefetchedEffects?: BufferedWorkerEffects,
 	): Promise<void> {
+		const startedAt = job.startedAt ?? new Date()
 		const payloadEventId = job.payload?.eventId?.trim()
 		const metadataEventId =
 			typeof job.metadata?.eventId === "string"
 				? job.metadata.eventId.trim()
 				: undefined
 		const eventId = payloadEventId || metadataEventId
-		if (!eventId) {
-			await failClaimedMemoryJob({
-				db: this.host.db,
-				prefix: this.host.prefix,
-				jobId: job.jobId,
+		const storedEpoch = job.admissionEpoch
+		let admissionToken:
+			| {
+					kind: "admission"
+					agentId: string
+					epoch: number
+			  }
+			| undefined
+		if (storedEpoch !== undefined) {
+			if (
+				!Number.isInteger(storedEpoch) ||
+				storedEpoch < 0 ||
+				!Number.isFinite(storedEpoch)
+			) {
+				log.warn(
+					`extraction job ${job.jobId} has an invalid admission epoch; refusing to run`,
+				)
+				return
+			}
+			admissionToken = {
+				kind: "admission",
 				agentId: this.host.agentId,
-				leaseOwner: job.leaseOwner,
-				leaseToken: job.leaseToken,
-				error: "extraction job payload.eventId is required",
-			})
+				epoch: storedEpoch,
+			}
+		} else {
+			// Legacy rows are upgraded before reading event/provider data. The
+			// trusted capture primitive initializes a missing gate and fails
+			// closed on malformed/unreadable/erasing state.
+			try {
+				const captured = await captureAdmissionToken({
+					db: this.host.db,
+					prefix: this.host.prefix,
+					agentId: this.host.agentId,
+				})
+				const attached = await captureClaimedMemoryJobAdmissionEpoch({
+					db: this.host.db,
+					prefix: this.host.prefix,
+					token: captured,
+					jobId: job.jobId,
+					agentId: this.host.agentId,
+					leaseOwner: job.leaseOwner,
+					leaseToken: job.leaseToken,
+				})
+				if (!attached) {
+					log.warn(
+						`extraction job lease lost before legacy admission capture: ${job.jobId}`,
+					)
+					return
+				}
+				job.admissionEpoch = captured.epoch
+				admissionToken = captured
+			} catch (err) {
+				log.warn(
+					`extraction job admission capture failed for ${job.jobId}: ${err instanceof Error ? err.message : String(err)}`,
+				)
+				return
+			}
+		}
+		if (!eventId || !admissionToken) {
+			log.warn(`extraction job ${job.jobId} has no event id; refusing to run`)
 			return
 		}
 		const scope = job.payload?.scope
 		const scopeRef = job.payload?.scopeRef
 		const runContext = this.host.memoryJobOperationContexts?.get(job.jobId)
-		const startedAt = job.startedAt ?? new Date()
-		let leaseLost = false
+		const bufferedEffects = newBufferedWorkerEffects()
+		appendBufferedWorkerEffects(bufferedEffects, prefetchedEffects)
+		let eventSnapshot:
+			| {
+					eventId: string
+					agentId: string
+					role: "user" | "assistant" | "system" | "tool"
+					body: string
+					timestamp: Date
+					sessionId?: string
+					scope: MemoryScope
+					scopeRef: string
+			  }
+			| undefined
 		let heartbeatInFlight = Promise.resolve()
+		let leaseFailure: MemoryJobOwnershipLostError | undefined
 		const heartbeat = () => {
 			heartbeatInFlight = heartbeatInFlight
 				.then(async () => {
@@ -333,11 +451,12 @@ export class MongoDBManagerJobsOps {
 						leaseMs: MEMORY_JOB_LEASE_MS,
 					})
 					if (!renewed) {
-						leaseLost = true
+						leaseFailure ??= new MemoryJobOwnershipLostError(job.jobId)
+						log.warn(`memory job heartbeat lost lease for ${job.jobId}`)
 					}
 				})
 				.catch((err) => {
-					leaseLost = true
+					leaseFailure ??= new MemoryJobOwnershipLostError(job.jobId)
 					log.warn(
 						`memory job heartbeat failed for ${job.jobId}: ${String(err)}`,
 					)
@@ -346,72 +465,78 @@ export class MongoDBManagerJobsOps {
 		const heartbeatTimer = setInterval(heartbeat, MEMORY_JOB_HEARTBEAT_MS)
 		heartbeatTimer.unref?.()
 
-		// (P2.5 b) lease fencing is enforced BEFORE every side-effecting
-		// stage, not only before the terminal write: a worker that lost its
-		// lease must not commit entity/derived/relation writes at all. The new
-		// lease owner re-runs the job, and event-receipt idempotency
-		// (hasProcessedSourceEvents, wired through
-		// promoteDerivedMemoryFromEvent's eventReceiptIds) keeps that
-		// re-execution free of duplicate side effects.
-		// W03 erasure fencing: the tenant epoch captured at claim is
-		// re-read at every fence check too. An erasure bumps the epoch and
-		// deletes this job row (killing the lease) — but the lease check
-		// alone cannot distinguish "erasure deleted my row" from any other
-		// renewal failure, and a cross-process worker holding the event in
-		// memory would otherwise keep projecting erased data. An advanced
-		// epoch abandons the job before the next side-effecting stage.
-		// The epoch read is BEST-EFFORT: on a read error (e.g. the meta
-		// collection momentarily unavailable) the comparison is skipped and
-		// the lease fence remains the owner guard — a meta read failure says
-		// nothing about ownership, and the erasure's post-sweep verification
-		// pass is the truth gate for anything that slips a fence.
-		const epochAtClaim = await getTenantErasureEpoch(
-			this.host.db,
-			this.host.prefix,
-			this.host.agentId,
-		).catch((err: unknown) => {
-			log.warn(
-				`tenant epoch read failed at claim of ${job.jobId}; lease-only fencing for this job: ${err instanceof Error ? err.message : String(err)}`,
-			)
-			return null
-		})
-		let epochAdvanced = false
-		const leaseFence = async (stage: string): Promise<boolean> => {
-			// W19: force a FRESH server-side ownership proof at every fence —
-			// the periodic heartbeat's boolean could be a whole beat stale, and
-			// a worker whose lease was stolen between beats would otherwise
-			// pass the fence and mutate projections. heartbeat() queues a
-			// conditional renewal (jobId+agentId+leaseOwner+leaseToken+unexpired
-			// lease); awaiting heartbeatInFlight makes the fence read the result
-			// of THAT renewal, so a stolen lease fails here, before the stage.
+		const commitBatch = async <T>(
+			stage: string,
+			fn: (session: ClientSession) => Promise<T>,
+			validateEvent = true,
+		): Promise<T> => {
 			heartbeat()
 			await heartbeatInFlight
-			if (leaseLost) {
-				log.warn(`extraction job lease lost before ${stage}: ${job.jobId}`)
-				return true
+			if (leaseFailure) {
+				throw leaseFailure
 			}
-			if (epochAtClaim !== null) {
-				const currentEpoch = await getTenantErasureEpoch(
-					this.host.db,
-					this.host.prefix,
-					this.host.agentId,
-				).catch((err: unknown) => {
-					log.warn(
-						`tenant epoch read failed before ${stage} of ${job.jobId}; skipping epoch check: ${err instanceof Error ? err.message : String(err)}`,
-					)
-					return null
-				})
-				if (currentEpoch !== null && currentEpoch !== epochAtClaim) {
-					epochAdvanced = true
-				}
-				if (epochAdvanced) {
-					log.warn(
-						`tenant erasure epoch advanced (${epochAtClaim} -> ${currentEpoch}) before ${stage}; abandoning pre-erasure job ${job.jobId}`,
-					)
-					return true
-				}
+			const usage = bufferedEffects.llmUsage.slice()
+			const accounting = bufferedEffects.operationAccounting.slice()
+			const value = await withClaimedMemoryJobEffectBatch({
+				db: this.host.db,
+				prefix: this.host.prefix,
+				token: admissionToken,
+				jobId: job.jobId,
+				agentId: this.host.agentId,
+				leaseOwner: job.leaseOwner,
+				leaseToken: job.leaseToken,
+				fn: async (session) => {
+					if (validateEvent) {
+						if (!eventSnapshot) {
+							throw new Error(
+								`event snapshot missing before ${stage}: ${eventId}`,
+							)
+						}
+						const currentEvent = await eventsCollection(
+							this.host.db,
+							this.host.prefix,
+						).findOne(
+							{
+								eventId,
+								agentId: eventSnapshot.agentId,
+								role: eventSnapshot.role,
+								body: eventSnapshot.body,
+								timestamp: eventSnapshot.timestamp,
+								scope: eventSnapshot.scope,
+								scopeRef: eventSnapshot.scopeRef,
+								...(eventSnapshot.sessionId
+									? { sessionId: eventSnapshot.sessionId }
+									: { sessionId: { $exists: false } }),
+								...buildEventLifecycleClause(),
+							},
+							{ session, projection: { _id: 1 } },
+						)
+						if (!currentEvent) {
+							throw new Error(
+								`event changed before ${stage}: ${eventSnapshot.eventId}`,
+							)
+						}
+					}
+					const result = await fn(session)
+					for (const spend of usage) {
+						await recordLLMSpendInSession({
+							db: this.host.db,
+							prefix: this.host.prefix,
+							agentId: this.host.agentId,
+							spend,
+							at: spend.at,
+							session,
+						})
+					}
+					return result
+				},
+			})
+			bufferedEffects.llmUsage.splice(0, usage.length)
+			bufferedEffects.operationAccounting.splice(0, accounting.length)
+			if (runContext) {
+				applyOperationAccountingEffects(runContext, accounting)
 			}
-			return false
+			return value
 		}
 
 		try {
@@ -426,6 +551,7 @@ export class MongoDBManagerJobsOps {
 				// simply not found here.
 				...(scope !== undefined ? { scope } : {}),
 				...(scopeRef !== undefined ? { scopeRef } : {}),
+				...buildEventLifecycleClause(),
 			})) as {
 				eventId: string
 				agentId: string
@@ -439,40 +565,67 @@ export class MongoDBManagerJobsOps {
 			if (!eventDoc) {
 				throw new Error(`event not found: ${eventId}`)
 			}
-			if (await leaseFence("entity extraction")) {
-				return
-			}
-			const entityResult = await extractAndUpsertEntities({
-				db: this.host.db,
-				prefix: this.host.prefix,
-				agentId: this.host.agentId,
-				eventContent: eventDoc.body,
-				scope: eventDoc.scope,
-				scopeRef: eventDoc.scopeRef,
-				sourceEventId: eventDoc.eventId,
-				role: eventDoc.role,
-			})
-			if (entityResult.entities.length > 0) {
-				if (await leaseFence("graph lane availability")) {
-					return
-				}
-				// Availability is a separate idempotent bit from the useful
-				// successful-job count. Persist it as soon as graph entities exist
-				// so a permanent failure in promotion or relation extraction cannot
-				// leave those entities gated from retrieval.
-				await markLaneAvailable({
+			eventSnapshot = eventDoc
+			await commitBatch("entity extraction", async (session) => {
+				const extracted = await extractAndUpsertEntities({
 					db: this.host.db,
 					prefix: this.host.prefix,
 					agentId: this.host.agentId,
-					lane: "graph",
+					eventContent: eventDoc.body,
+					scope: eventDoc.scope,
+					scopeRef: eventDoc.scopeRef,
+					sourceEventId: eventDoc.eventId,
+					role: eventDoc.role,
+					session,
+					recordRun: false,
 				})
-			}
+				if (extracted.entities.length > 0) {
+					await markLaneAvailable({
+						db: this.host.db,
+						prefix: this.host.prefix,
+						agentId: this.host.agentId,
+						lane: "graph",
+						session,
+					})
+				}
+				const durationMs = extracted.diagnostics?.durationMs ?? 0
+				await recordProjectionRun({
+					db: this.host.db,
+					prefix: this.host.prefix,
+					session,
+					run: {
+						agentId: this.host.agentId,
+						projectionType: "entities",
+						status: "ok",
+						itemsProjected: extracted.entities.length,
+						durationMs,
+					},
+				})
+				await recordProjectionRun({
+					db: this.host.db,
+					prefix: this.host.prefix,
+					session,
+					run: {
+						agentId: this.host.agentId,
+						projectionType: "relations",
+						status: "ok",
+						itemsProjected: extracted.relationsCreated,
+						durationMs,
+					},
+				})
+				return extracted
+			})
 
 			// LLM fact extraction (issue #30): degrade to regex-only when the
-			// provider is unconfigured or misconfigured.
+			// provider is unconfigured or misconfigured. B1: an explicit
+			// MEMONGO_EXTRACTION_LLM=off forces the same regex-only path with
+			// zero provider calls (the B20 ablation switch), without touching
+			// the enrichment env the benchmark answerer may share.
 			let enrichmentProvider: EnrichmentProvider | null = null
 			try {
-				const resolved = resolveEnrichmentProvider(process.env)
+				const resolved = isExtractionLlmDisabled(process.env)
+					? null
+					: resolveEnrichmentProvider(process.env)
 				// C-017: every production extraction call lands in the per-tenant
 				// per-day cost ledger (tokens from the transport usage block).
 				enrichmentProvider = resolved
@@ -481,6 +634,7 @@ export class MongoDBManagerJobsOps {
 							prefix: this.host.prefix,
 							agentId: this.host.agentId,
 							provider: resolved,
+							onUsage: (usage) => bufferedEffects.llmUsage.push(usage),
 						})
 					: null
 			} catch (err) {
@@ -496,6 +650,8 @@ export class MongoDBManagerJobsOps {
 							runContext,
 							operation: "structured-extraction",
 							model: enrichmentModel,
+							onEffect: (effect) =>
+								bufferedEffects.operationAccounting.push(effect),
 						})
 					: enrichmentProvider
 			const temporalProvider =
@@ -505,6 +661,8 @@ export class MongoDBManagerJobsOps {
 							runContext,
 							operation: "temporal-extraction",
 							model: enrichmentModel,
+							onEffect: (effect) =>
+								bufferedEffects.operationAccounting.push(effect),
 						})
 					: enrichmentProvider
 			const contradictionProvider =
@@ -514,33 +672,74 @@ export class MongoDBManagerJobsOps {
 							runContext,
 							operation: "contradiction-detection",
 							model: enrichmentModel,
+							onEffect: (effect) =>
+								bufferedEffects.operationAccounting.push(effect),
 						})
 					: enrichmentProvider
 
-			if (await leaseFence("derived-memory promotion")) {
-				return
+			const event = {
+				...eventDoc,
+				workspaceDir: this.host.workspaceDir,
 			}
-			const result = await promoteDerivedMemoryFromEvent({
+			const preparedPromotion = await prepareDerivedMemoryPromotion({
 				db: this.host.db,
 				prefix: this.host.prefix,
-				client: this.host.client,
-				embeddingMode: this.host.config.mongodb?.embeddingMode ?? "automated",
-				event: {
-					...eventDoc,
-					workspaceDir: this.host.workspaceDir,
-				},
+				event,
 				provider: structuredProvider,
 				temporalProvider,
-				contradictionProvider,
 				model: enrichmentModel,
-				// P3.9: facts from the round's session-batched extraction; when
-				// present, promotion skips its own per-event provider call.
 				...(prefetchedLlmFacts ? { prefetchedLlmFacts } : {}),
 			})
-			await heartbeatInFlight
-			if (leaseLost) {
-				log.warn(`extraction job lease lost during execution: ${job.jobId}`)
-				return
+			const result = await commitBatch("derived-memory promotion", (session) =>
+				promoteDerivedMemoryFromEvent({
+					db: this.host.db,
+					prefix: this.host.prefix,
+					session,
+					embeddingMode: this.host.config.mongodb?.embeddingMode ?? "automated",
+					event,
+					prepared: preparedPromotion,
+					skipContradictions: true,
+					// Pass the instrumented providers so provider usage inside
+					// the promotion (when `prepared` does not already cover it)
+					// is attributed to the originating run's accounting. With
+					// `prepared` supplied the real path never re-extracts, so
+					// this is instrumentation wiring, not a second LLM call.
+					provider: structuredProvider,
+					temporalProvider,
+					contradictionProvider,
+					model: enrichmentModel,
+				}),
+			)
+
+			if (contradictionProvider) {
+				const preparedContradictions = await prepareContradictionInvalidations({
+					db: this.host.db,
+					prefix: this.host.prefix,
+					provider: contradictionProvider,
+					model: enrichmentModel,
+					requirePersistedSource: true,
+					agentId: this.host.agentId,
+					scope: eventDoc.scope,
+					scopeRef: eventDoc.scopeRef,
+					newFacts: preparedPromotion.structuredCandidates
+						.filter((candidate) => candidate.type === "fact")
+						.map((candidate) => ({
+							key: candidate.key,
+							value: candidate.value,
+						})),
+				})
+				await commitBatch("contradiction invalidation", (session) =>
+					persistPreparedContradictionInvalidations({
+						db: this.host.db,
+						prefix: this.host.prefix,
+						session,
+						agentId: this.host.agentId,
+						scope: eventDoc.scope,
+						scopeRef: eventDoc.scopeRef,
+						prepared: preparedContradictions,
+						runId: eventDoc.eventId,
+					}),
+				)
 			}
 
 			// Typed semantic edge extraction (issue #34): LLM-only, background-only.
@@ -567,45 +766,51 @@ export class MongoDBManagerJobsOps {
 						}))
 						.filter((e) => e.entityId && e.name)
 					if (eventEntities.length >= 2) {
-						if (await leaseFence("typed relation extraction")) {
-							return
-						}
 						const relationProvider = runContext
 							? instrumentOperationProvider({
 									provider: enrichmentProvider,
 									runContext,
 									operation: "relation-extraction",
 									model: enrichmentModel,
+									onEffect: (effect) =>
+										bufferedEffects.operationAccounting.push(effect),
 								})
 							: enrichmentProvider
-						const relationsCreated = await extractAndUpsertTypedRelations({
-							db: this.host.db,
-							prefix: this.host.prefix,
-							client: this.host.client,
-							agentId: this.host.agentId,
-							scope: eventDoc.scope,
-							scopeRef: eventDoc.scopeRef,
-							eventContent: eventDoc.body,
-							entities: eventEntities,
+						const preparedRelations = await prepareTypedRelations({
 							provider: relationProvider,
 							model: enrichmentModel,
-							sourceEventId: eventDoc.eventId,
-							validFrom: eventDoc.timestamp,
-							leaseFence: () => leaseFence("typed relation write"),
+							eventContent: eventDoc.body,
+							entities: eventEntities,
 						})
-						// Surface the pass so silent degradation to mentioned_with-only
-						// is observable rather than an invisible no-op.
-						await recordProjectionRun({
-							db: this.host.db,
-							prefix: this.host.prefix,
-							run: {
+						await commitBatch("typed relation persistence", async (session) => {
+							const relationsCreated = await extractAndUpsertTypedRelations({
+								db: this.host.db,
+								prefix: this.host.prefix,
+								session,
 								agentId: this.host.agentId,
-								projectionType: "relations",
-								status: "ok",
-								itemsProjected: relationsCreated,
-								durationMs: 0,
-							},
-						}).catch(() => {})
+								scope: eventDoc.scope,
+								scopeRef: eventDoc.scopeRef,
+								eventContent: eventDoc.body,
+								entities: eventEntities,
+								model: enrichmentModel,
+								preparedRelations,
+								sourceEventId: eventDoc.eventId,
+								validFrom: eventDoc.timestamp,
+							})
+							await recordProjectionRun({
+								db: this.host.db,
+								prefix: this.host.prefix,
+								session,
+								run: {
+									agentId: this.host.agentId,
+									projectionType: "relations",
+									status: "ok",
+									itemsProjected: relationsCreated,
+									durationMs: 0,
+								},
+							})
+							return relationsCreated
+						})
 					}
 				} catch (err) {
 					// C3: no silent success. Record the failed pass in the
@@ -613,42 +818,48 @@ export class MongoDBManagerJobsOps {
 					// routes the error through failClaimedMemoryJob — the job
 					// retries via the existing mechanism instead of completing
 					// with the relations silently lost.
-					await recordProjectionRun({
-						db: this.host.db,
-						prefix: this.host.prefix,
-						run: {
-							agentId: this.host.agentId,
-							projectionType: "relations",
-							status: "failed",
-							itemsProjected: 0,
-							durationMs: 0,
-						},
-					}).catch(() => {})
+					await commitBatch("typed relation failure", (session) =>
+						recordProjectionRun({
+							db: this.host.db,
+							prefix: this.host.prefix,
+							session,
+							run: {
+								agentId: this.host.agentId,
+								projectionType: "relations",
+								status: "failed",
+								itemsProjected: 0,
+								durationMs: 0,
+							},
+						}),
+					)
 					throw err
 				}
 			}
 
 			try {
-				const completed = await completeClaimedMemoryJob({
-					db: this.host.db,
-					prefix: this.host.prefix,
-					jobId: job.jobId,
-					agentId: this.host.agentId,
-					leaseOwner: job.leaseOwner,
-					leaseToken: job.leaseToken,
-					completedAt: new Date(),
-					durationMs: elapsedMsSince(startedAt),
-					inputCount: 1,
-					outputCount: result.structuredCreated + result.proceduresCreated,
-					metadata: {
-						eventId,
-						structuredCreated: result.structuredCreated,
-						proceduresCreated: result.proceduresCreated,
-						...(result.skipped
-							? { skipped: true, skipReason: result.skipReason }
-							: {}),
-					},
-				})
+				const completed = await commitBatch("job completion", (session) =>
+					completeClaimedMemoryJob({
+						db: this.host.db,
+						prefix: this.host.prefix,
+						session,
+						jobId: job.jobId,
+						agentId: this.host.agentId,
+						leaseOwner: job.leaseOwner,
+						leaseToken: job.leaseToken,
+						completedAt: new Date(),
+						durationMs: elapsedMsSince(startedAt),
+						inputCount: 1,
+						outputCount: result.structuredCreated + result.proceduresCreated,
+						metadata: {
+							eventId,
+							structuredCreated: result.structuredCreated,
+							proceduresCreated: result.proceduresCreated,
+							...(result.skipped
+								? { skipped: true, skipReason: result.skipReason }
+								: {}),
+						},
+					}),
+				)
 				if (!completed) {
 					log.warn(`extraction job lease lost before completion: ${job.jobId}`)
 				}
@@ -658,20 +869,48 @@ export class MongoDBManagerJobsOps {
 				)
 			}
 		} catch (err) {
+			if (
+				isMemoryJobOwnershipLostError(err) ||
+				isErasureGateConflictError(err)
+			) {
+				log.warn(
+					`extraction job ownership lost before a guarded effect commit: ${job.jobId}`,
+				)
+				return
+			}
+			// Non-retryable provider failure class (lead decision): a policy
+			// refusal, content filter, or token-budget truncation fails
+			// identically on every retry, so the job dead-letters on FIRST
+			// failure with its truthful attempt count (failClaimedMemoryJob
+			// `terminal` — no retryAt, deadLetterAt, attempts preserved).
+			// Everything else (transient empties, parse errors, HTTP errors)
+			// keeps the bounded retry ladder.
+			const terminalFailure =
+				err instanceof EnrichmentResponseError &&
+				(err.shape === "refusal" ||
+					err.shape === "content-filter" ||
+					err.shape === "length")
 			try {
-				await failClaimedMemoryJob({
-					db: this.host.db,
-					prefix: this.host.prefix,
-					jobId: job.jobId,
-					agentId: this.host.agentId,
-					leaseOwner: job.leaseOwner,
-					leaseToken: job.leaseToken,
-					completedAt: new Date(),
-					durationMs: elapsedMsSince(startedAt),
-					error: err instanceof Error ? err.message : String(err),
-					metadata: { eventId },
-					attempts: job.attempts,
-				})
+				await commitBatch(
+					"job failure",
+					(session) =>
+						failClaimedMemoryJob({
+							db: this.host.db,
+							prefix: this.host.prefix,
+							session,
+							jobId: job.jobId,
+							agentId: this.host.agentId,
+							leaseOwner: job.leaseOwner,
+							leaseToken: job.leaseToken,
+							completedAt: new Date(),
+							durationMs: elapsedMsSince(startedAt),
+							error: err instanceof Error ? err.message : String(err),
+							metadata: { eventId },
+							attempts: job.attempts,
+							...(terminalFailure ? { terminal: true } : {}),
+						}),
+					false,
+				)
 			} catch (updateErr) {
 				log.warn(
 					`failClaimedMemoryJob failed for ${job.jobId}: ${updateErr instanceof Error ? updateErr.message : String(updateErr)}`,
@@ -680,33 +919,96 @@ export class MongoDBManagerJobsOps {
 		} finally {
 			clearInterval(heartbeatTimer)
 			await heartbeatInFlight
+			// Benchmark attribution must survive job failure: a provider
+			// error thrown mid-batch buffers its accounting effect but never
+			// reaches a commitBatch flush (those only run on success). Apply
+			// whatever is still buffered so a failed extraction is reported as
+			// measured with its truthful failure count, not "not-run".
+			if (runContext && bufferedEffects.operationAccounting.length > 0) {
+				applyOperationAccountingEffects(
+					runContext,
+					bufferedEffects.operationAccounting.splice(0),
+				)
+			}
 			this.host.memoryJobOperationContexts?.delete(job.jobId)
 		}
 	}
 
-	async drainMemoryJobQueue(): Promise<void> {
-		const repaired = await this.host.repairExtractionOutbox()
+	async drainMemoryJobQueue(params?: {
+		admission?: AdmissionToken
+	}): Promise<void> {
+		const extractionAdmission =
+			params?.admission ??
+			(await captureAdmissionToken({
+				db: this.host.db,
+				prefix: this.host.prefix,
+				agentId: this.host.agentId,
+			}))
+		if (extractionAdmission.agentId !== this.host.agentId)
+			throw new ErasureGateConflictError(this.host.agentId)
+		const gate = await readErasureGate({
+			db: this.host.db,
+			prefix: this.host.prefix,
+			agentId: this.host.agentId,
+		})
+		if (
+			!gate ||
+			gate.state !== "open" ||
+			gate.epoch !== extractionAdmission.epoch
+		)
+			throw new ErasureGateConflictError(this.host.agentId)
+		const repaired = await this.host.repairExtractionOutbox({
+			admission: extractionAdmission,
+		})
 		if (repaired.eventsFailed > 0) {
 			log.warn(
 				`extraction outbox repair left ${repaired.eventsFailed} event(s) pending retry`,
 			)
 		}
+		try {
+			await this.host.repairEventProjections({
+				admission: extractionAdmission,
+				singleBatch: true,
+			})
+		} catch (err) {
+			if (isErasureGateConflictError(err)) throw err
+			log.warn("worker chunk projection repair failed", settledFailureMeta(err))
+		}
 		// C-006: fingerprint retention enforcement rides the worker sweep —
 		// the prune is hourly-gated inside the write ops, so an idle queue
 		// pays one Date.now() comparison per drain and nothing else.
-		await this.host.pruneIdempotencyFingerprints()
-		await this.stageAutoConsolidationJob()
+		await this.host
+			.pruneIdempotencyFingerprints({
+				admission: extractionAdmission,
+			})
+			.catch((err: unknown) => {
+				if (isErasureGateConflictError(err)) throw err
+				log.warn("worker fingerprint prune failed", settledFailureMeta(err))
+				return { pruned: 0 }
+			})
+		await this.stageAutoConsolidationJob(extractionAdmission)
 		// W18: bound the crash/lease-expiry loop. Running rows whose lease
 		// expired with a spent attempt budget are no longer claimable; this
 		// sweep transitions them to visible dead letters (once per round,
 		// idempotent) instead of leaving them looping or stalled in running.
-		const deadLettered = await deadLetterExpiredMemoryJobs({
+		const deadLetterAt = new Date()
+		const deadLettered = await withFencedWrite({
 			db: this.host.db,
 			prefix: this.host.prefix,
-			agentId: this.host.agentId,
+			token: extractionAdmission,
+			fn: (session) =>
+				deadLetterExpiredMemoryJobs({
+					db: this.host.db,
+					prefix: this.host.prefix,
+					agentId: this.host.agentId,
+					now: deadLetterAt,
+					session,
+				}),
 		}).catch((err: unknown) => {
+			if (isErasureGateConflictError(err)) throw err
 			log.warn(
-				`expired-lease dead-letter sweep failed: ${err instanceof Error ? err.message : String(err)}`,
+				"expired-lease dead-letter sweep failed",
+				settledFailureMeta(err),
 			)
 			return 0
 		})
@@ -734,13 +1036,20 @@ export class MongoDBManagerJobsOps {
 			jobType: "extraction",
 		})
 		if (backlogDepth > backlogThreshold) {
-			emitTelemetry(this.host.db, this.host.prefix, {
-				meta: { agentId: this.host.agentId, operation: "memory-job-backlog" },
-				durationMs: 0,
-				ok: false,
-				itemCount: backlogDepth,
-				depth: backlogDepth,
-				threshold: backlogThreshold,
+			void emitTelemetry(
+				this.host.db,
+				this.host.prefix,
+				{
+					meta: { agentId: this.host.agentId, operation: "memory-job-backlog" },
+					durationMs: 0,
+					ok: false,
+					itemCount: backlogDepth,
+					depth: backlogDepth,
+					threshold: backlogThreshold,
+				},
+				{ admission: extractionAdmission },
+			).catch(() => {
+				log.warn("worker backlog telemetry emit failed")
 			})
 		}
 		const concurrency = resolveDrainConcurrency({
@@ -748,7 +1057,7 @@ export class MongoDBManagerJobsOps {
 			base: resolveMemoryJobWorkerConcurrency(),
 			threshold: backlogThreshold,
 		})
-		while (!this.host.memoryJobWorkerStopped) {
+		while (!this.host.memoryJobWorkerStopped && extractionAdmission) {
 			const jobs: ClaimedMemoryJob[] = []
 			for (let claimed = 0; claimed < concurrency; claimed++) {
 				const job = await claimMemoryJob({
@@ -758,10 +1067,15 @@ export class MongoDBManagerJobsOps {
 					jobType: "extraction",
 					workerId: this.host.memoryJobWorkerId,
 					leaseMs: MEMORY_JOB_LEASE_MS,
+					admissionEpoch: extractionAdmission.epoch,
 				})
 				if (!job) {
 					break
 				}
+				// The storage helper preserves an older stored epoch and only
+				// fills legacy missing values. Test doubles may omit that
+				// returned field, so mirror the claimed default locally.
+				job.admissionEpoch ??= extractionAdmission.epoch
 				jobs.push(job)
 			}
 			if (jobs.length === 0) {
@@ -791,10 +1105,12 @@ export class MongoDBManagerJobsOps {
 				}
 			}, MEMORY_JOB_HEARTBEAT_MS)
 			prefetchHeartbeat.unref?.()
-			let sessionFacts: Map<string, string[]>
+			let sessionFacts: PrefetchedFactsMap
 			let stillOwned: boolean[]
 			try {
-				sessionFacts = await this.host.prefetchExtractionSessionFacts(jobs)
+				sessionFacts = (await this.host.prefetchExtractionSessionFacts(
+					jobs,
+				)) as PrefetchedFactsMap
 				stillOwned = await Promise.all(
 					jobs.map(async (job) => {
 						try {
@@ -837,6 +1153,7 @@ export class MongoDBManagerJobsOps {
 					return this.host.runClaimedBackgroundExtractionJob(
 						job,
 						eventId ? sessionFacts.get(eventId) : undefined,
+						eventId ? sessionFacts[PREFETCH_EFFECTS]?.get(eventId) : undefined,
 					)
 				}),
 			)
@@ -891,7 +1208,9 @@ export class MongoDBManagerJobsOps {
 	 * trips. Staged jobs carry no stagedAt, so they are claimable immediately
 	 * — unlike extraction jobs, which a transaction stages until commit.
 	 */
-	private async stageAutoConsolidationJob(): Promise<void> {
+	private async stageAutoConsolidationJob(
+		admission: AdmissionToken,
+	): Promise<void> {
 		const intervalMs = resolveAutoConsolidationMs()
 		if (intervalMs <= 0) {
 			return
@@ -901,19 +1220,31 @@ export class MongoDBManagerJobsOps {
 			return
 		}
 		const jobId = `consolidation-auto-${this.host.agentId}-${windowIndex}`
+		const createdAt = new Date()
 		try {
-			await createMemoryJob({
+			const job = {
+				jobId,
+				jobType: "consolidation" as const,
+				agentId: this.host.agentId,
+				status: "pending" as const,
+				createdAt,
+				admissionEpoch: admission.epoch,
+				metadata: { auto: true, window: windowIndex },
+			}
+			await withFencedWrite({
 				db: this.host.db,
 				prefix: this.host.prefix,
-				job: {
-					jobId,
-					jobType: "consolidation",
-					agentId: this.host.agentId,
-					status: "pending",
-					metadata: { auto: true, window: windowIndex },
-				},
+				token: admission,
+				fn: (session) =>
+					createMemoryJob({
+						db: this.host.db,
+						prefix: this.host.prefix,
+						session,
+						job,
+					}),
 			})
 		} catch (err) {
+			if (isErasureGateConflictError(err)) throw err
 			if (this.host.isDuplicateKeyError(err)) {
 				// Another drain round or manager already staged this window.
 			} else {
@@ -1032,6 +1363,15 @@ export class MongoDBManagerJobsOps {
 				prefix: this.host.prefix,
 				agentId: this.host.agentId,
 				...(storedOptions ? { options: storedOptions } : {}),
+				...(job.admissionEpoch == null
+					? {}
+					: {
+							admission: {
+								kind: "admission" as const,
+								agentId: job.agentId,
+								epoch: job.admissionEpoch,
+							},
+						}),
 			})
 			const invalidatedScope = storedOptions?.scope ?? "agent"
 			const invalidatedScopeRef =
@@ -1088,7 +1428,8 @@ export class MongoDBManagerJobsOps {
 					error: err instanceof Error ? err.message : String(err),
 					jobType: job.jobType,
 					attempts: job.attempts,
-					metadata: { auto: true },
+					// No metadata override: the failed row keeps the caller's
+					// options so a retry restores them.
 				})
 			} catch (updateErr) {
 				log.warn(
@@ -1112,23 +1453,22 @@ export class MongoDBManagerJobsOps {
 	async prefetchExtractionSessionFacts(
 		jobs: ClaimedMemoryJob[],
 	): Promise<Map<string, string[]>> {
-		const facts = new Map<string, string[]>()
+		const facts = new Map<string, string[]>() as PrefetchedFactsMap
+		Object.defineProperty(facts, PREFETCH_EFFECTS, {
+			value: new Map<string, BufferedWorkerEffects>(),
+		})
 		if (jobs.length < 2) {
 			return facts
 		}
 		let provider: EnrichmentProvider | null = null
 		try {
-			const resolved = resolveEnrichmentProvider(process.env)
-			// C-017: session-batched prefetch calls bill the same per-tenant
-			// ledger as per-event extraction.
+			// B1: MEMONGO_EXTRACTION_LLM=off skips session-batched LLM
+			// prefetch entirely (zero provider calls); the single-job path
+			// above degrades the same way.
+			const resolved = isExtractionLlmDisabled(process.env)
+				? null
+				: resolveEnrichmentProvider(process.env)
 			provider = resolved
-				? instrumentProviderCostSpend({
-						db: this.host.db,
-						prefix: this.host.prefix,
-						agentId: this.host.agentId,
-						provider: resolved,
-					})
-				: null
 		} catch (err) {
 			log.warn(
 				`session-batched extraction prefetch skipped; provider resolution failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -1167,6 +1507,7 @@ export class MongoDBManagerJobsOps {
 				{
 					agentId: this.host.agentId,
 					eventId: { $in: [...jobByEventId.keys()] },
+					...buildEventLifecycleClause(),
 				},
 				{
 					projection: {
@@ -1208,17 +1549,30 @@ export class MongoDBManagerJobsOps {
 				// Benchmark accounting parity with the per-event path: instrument
 				// with the first group member's run context when one is registered.
 				const firstJob = jobByEventId.get(group[0].eventId)
+				if (!firstJob) {
+					return
+				}
+				const effects = newBufferedWorkerEffects()
+				facts[PREFETCH_EFFECTS]?.set(group[0].eventId, effects)
 				const runContext = firstJob
 					? this.host.memoryJobOperationContexts?.get(firstJob.jobId)
 					: undefined
+				const costProvider = instrumentProviderCostSpend({
+					db: this.host.db,
+					prefix: this.host.prefix,
+					agentId: this.host.agentId,
+					provider,
+					onUsage: (usage) => effects.llmUsage.push(usage),
+				})
 				const structuredProvider = runContext
 					? instrumentOperationProvider({
-							provider,
+							provider: costProvider,
 							runContext,
 							operation: "structured-extraction",
 							model,
+							onEffect: (effect) => effects.operationAccounting.push(effect),
 						})
-					: provider
+					: costProvider
 				try {
 					const enrichment = await extractSessionEnrichment(
 						structuredProvider,
@@ -1246,122 +1600,242 @@ export class MongoDBManagerJobsOps {
 		return facts
 	}
 
-	wakeMemoryJobWorker(): void {
-		if (this.host.memoryJobWorkerStopped) {
+	wakeMemoryJobWorker(
+		admission?: AdmissionToken,
+		generation = this.host.memoryJobWorkerGeneration ?? 0,
+		expectedTimer?: NodeJS.Timeout,
+	): void {
+		if (
+			this.host.closed ||
+			this.host.memoryJobWorkerStopped ||
+			generation !== (this.host.memoryJobWorkerGeneration ?? 0) ||
+			(expectedTimer && expectedTimer !== this.host.memoryJobWorkerTimer)
+		)
 			return
-		}
+		if (admission && admission.agentId !== this.host.agentId) return
 		if (this.host.memoryJobWorkerActive) {
+			const pending = this.pendingWake
+			if (
+				!pending ||
+				pending.generation !== generation ||
+				(admission &&
+					(!pending.admission || admission.epoch >= pending.admission.epoch))
+			)
+				this.pendingWake = { admission, generation }
 			this.host.memoryJobWakeRequested = true
 			return
 		}
 		this.host.memoryJobWorkerActive = true
 		this.host.memoryJobWakeRequested = false
-		const run = this.host.drainMemoryJobQueue().catch((err) => {
-			log.warn(`memory job worker failed: ${String(err)}`)
-		})
-		this.host.memoryJobWorkerPromise = run.finally(() => {
-			this.host.memoryJobWorkerActive = false
-			if (this.host.memoryJobWakeRequested) {
-				this.host.wakeMemoryJobWorker()
+		let selectedTimer = expectedTimer
+		const isCurrent = () =>
+			!this.host.closed &&
+			!this.host.memoryJobWorkerStopped &&
+			generation === (this.host.memoryJobWorkerGeneration ?? 0)
+		const installInterval = () => {
+			if (this.host.memoryJobWorkerTimer)
+				clearInterval(this.host.memoryJobWorkerTimer)
+			const token = admission
+			const timer = setInterval(() => {
+				this.host.wakeMemoryJobWorker(token, generation, timer)
+			}, resolveMemoryJobSweepMs())
+			timer.unref?.()
+			this.host.memoryJobWorkerTimer = timer
+			return timer
+		}
+		const run = async () => {
+			try {
+				admission ??= await captureAdmissionToken({
+					db: this.host.db,
+					prefix: this.host.prefix,
+					agentId: this.host.agentId,
+				})
+				const gate = await readErasureGate({
+					db: this.host.db,
+					prefix: this.host.prefix,
+					agentId: this.host.agentId,
+				})
+				if (!gate || gate.state !== "open" || gate.epoch !== admission.epoch)
+					throw new ErasureGateConflictError(this.host.agentId)
+				if (!isCurrent()) return
+				if (
+					!this.host.memoryJobWorkerTimer ||
+					this.workerAdmission?.epoch !== admission.epoch
+				)
+					selectedTimer = installInterval()
+				else selectedTimer = this.host.memoryJobWorkerTimer
+				this.workerAdmission = admission
+				await this.host.drainMemoryJobQueue({ admission })
+			} catch (error) {
+				if (isErasureGateConflictError(error)) {
+					if (
+						isCurrent() &&
+						selectedTimer &&
+						selectedTimer === this.host.memoryJobWorkerTimer &&
+						(!this.workerAdmission ||
+							this.workerAdmission.epoch === admission?.epoch)
+					) {
+						clearInterval(selectedTimer)
+						this.host.memoryJobWorkerTimer = null
+						this.workerAdmission = undefined
+					}
+				} else {
+					log.warn("memory job worker failed", settledFailureMeta(error))
+					if (isCurrent() && !this.host.memoryJobWorkerTimer) installInterval()
+				}
 			}
+		}
+		this.host.memoryJobWorkerPromise = run().finally(() => {
+			this.host.memoryJobWorkerActive = false
+			const pending = this.pendingWake
+			this.pendingWake = undefined
+			this.host.memoryJobWakeRequested = false
+			if (
+				pending &&
+				!this.host.closed &&
+				!this.host.memoryJobWorkerStopped &&
+				pending.generation === (this.host.memoryJobWorkerGeneration ?? 0)
+			)
+				this.host.wakeMemoryJobWorker(pending.admission, pending.generation)
 		})
 	}
 
-	startMemoryJobWorker(): void {
-		// (P2.5 e) never (re)start the worker during/after shutdown — a write
-		// drained by close() stages its extraction job for the NEXT boot's
-		// outbox repair instead of reviving a stopped worker mid-close.
-		if (this.host.closed) {
+	startMemoryJobWorker(
+		admission?: AdmissionToken,
+		generation = this.host.memoryJobWorkerGeneration ?? 0,
+	): void {
+		if (
+			this.host.closed ||
+			generation !== (this.host.memoryJobWorkerGeneration ?? 0)
+		)
 			return
-		}
-		if (!this.host.memoryJobWorkerStopped && this.host.memoryJobWorkerTimer) {
-			return
-		}
 		this.host.memoryJobWorkerStopped = false
-		this.host.wakeMemoryJobWorker()
-		this.host.memoryJobWorkerTimer = setInterval(() => {
-			this.host.wakeMemoryJobWorker()
-		}, resolveMemoryJobSweepMs())
-		this.host.memoryJobWorkerTimer.unref?.()
+		this.host.wakeMemoryJobWorker(admission, generation)
 	}
 
 	async stopMemoryJobWorker(): Promise<void> {
+		this.host.memoryJobWorkerGeneration =
+			(this.host.memoryJobWorkerGeneration ?? 0) + 1
 		this.host.memoryJobWorkerStopped = true
 		this.host.memoryJobWakeRequested = false
+		this.pendingWake = undefined
+		this.workerAdmission = undefined
 		if (this.host.memoryJobWorkerTimer) {
 			clearInterval(this.host.memoryJobWorkerTimer)
 			this.host.memoryJobWorkerTimer = null
 		}
-		await this.host.memoryJobWorkerPromise
+		for (;;) {
+			const promise = this.host.memoryJobWorkerPromise
+			await promise
+			if (promise === this.host.memoryJobWorkerPromise) return
+		}
 	}
 
 	async scheduleBackgroundExtraction(
 		eventId: string,
 		tenant?: { scope?: MemoryScope; scopeRef?: string },
 		runContext?: OperationRunContext,
+		params?: { admission?: AdmissionToken; generation?: number },
 	): Promise<{ jobId: string; scheduled: boolean }> {
-		// (P2.5 e) shutdown intake stop: scheduling after close would stage a
-		// job and wake workers that close() is stopping.
 		if (this.host.closed) {
 			throw new Error(
 				"MongoDBMemoryManager is closed; refusing to schedule extraction",
 			)
 		}
+		const generation =
+			params?.generation ?? this.host.memoryJobWorkerGeneration ?? 0
+		const admission =
+			params?.admission ??
+			(await captureAdmissionToken({
+				db: this.host.db,
+				prefix: this.host.prefix,
+				agentId: this.host.agentId,
+			}))
+		if (admission.agentId !== this.host.agentId)
+			throw new ErasureGateConflictError(this.host.agentId)
+		const gate = await readErasureGate({
+			db: this.host.db,
+			prefix: this.host.prefix,
+			agentId: this.host.agentId,
+		})
+		if (!gate || gate.state !== "open" || gate.epoch !== admission.epoch)
+			throw new ErasureGateConflictError(this.host.agentId)
 		const jobId = `extraction-${eventId}`
 		const payload = {
 			eventId,
 			...(tenant?.scope !== undefined ? { scope: tenant.scope } : {}),
 			...(tenant?.scopeRef !== undefined ? { scopeRef: tenant.scopeRef } : {}),
 		}
+		const createdAt = new Date(),
+			metadata = { eventId }
+		let scheduled = true
 		try {
-			await createMemoryJob({
+			await withFencedWrite({
 				db: this.host.db,
 				prefix: this.host.prefix,
-				job: {
-					jobId,
-					jobType: "extraction",
-					agentId: this.host.agentId,
-					status: "pending",
-					metadata: { eventId },
-					payload,
-				},
+				token: admission,
+				fn: (session) =>
+					createMemoryJob({
+						db: this.host.db,
+						prefix: this.host.prefix,
+						session,
+						job: {
+							jobId,
+							jobType: "extraction",
+							agentId: this.host.agentId,
+							status: "pending",
+							createdAt,
+							admissionEpoch: admission.epoch,
+							metadata,
+							payload,
+						},
+					}),
 			})
 		} catch (err) {
-			if (this.host.isDuplicateKeyError(err)) {
-				const existing = await getMemoryJob({
-					db: this.host.db,
-					prefix: this.host.prefix,
-					jobId,
-					agentId: this.host.agentId,
-				})
-				let recoverable =
-					existing?.status === "pending" ||
-					(existing?.status === "running" &&
-						(existing.leaseExpiresAt === undefined ||
-							existing.leaseExpiresAt.getTime() <= Date.now()))
-				if (existing?.status === "failed") {
-					recoverable = await retryFailedMemoryJob({
+			if (!this.host.isDuplicateKeyError(err)) throw err
+			scheduled = await withFencedWrite({
+				db: this.host.db,
+				prefix: this.host.prefix,
+				token: admission,
+				fn: async (session) => {
+					const existing = await getMemoryJob({
 						db: this.host.db,
 						prefix: this.host.prefix,
 						jobId,
 						agentId: this.host.agentId,
-						payload,
-						metadata: { eventId },
+						session,
 					})
-				}
-				if (!recoverable) {
-					// (P2.5 e) a terminal job state (completed, or failed without a
-					// recoverable retry) will never be claimed by this manager —
-					// drop any stale benchmark run context instead of leaking the
-					// entry for the process lifetime.
-					this.host.memoryJobOperationContexts?.delete(jobId)
-					return { jobId, scheduled: false }
-				}
-			} else {
-				throw err
-			}
+					if (
+						existing &&
+						existing.admissionEpoch !== undefined &&
+						(typeof existing.admissionEpoch !== "number" ||
+							existing.admissionEpoch !== admission.epoch)
+					)
+						throw new ErasureGateConflictError(this.host.agentId)
+					if (existing?.status === "failed")
+						return retryFailedMemoryJob({
+							db: this.host.db,
+							prefix: this.host.prefix,
+							jobId,
+							agentId: this.host.agentId,
+							payload,
+							metadata,
+							session,
+							admissionEpoch: admission.epoch,
+						})
+					return (
+						existing?.status === "pending" ||
+						(existing?.status === "running" &&
+							(existing.leaseExpiresAt === undefined ||
+								existing.leaseExpiresAt.getTime() <= createdAt.getTime()))
+					)
+				},
+			})
 		}
-
+		if (!scheduled) {
+			this.host.memoryJobOperationContexts?.delete(jobId)
+			return { jobId, scheduled: false }
+		}
 		if (runContext) {
 			this.host.memoryJobOperationContexts ??= new Map<
 				string,
@@ -1369,11 +1843,9 @@ export class MongoDBManagerJobsOps {
 			>()
 			this.host.memoryJobOperationContexts.set(jobId, runContext)
 		}
-		if (this.host.memoryJobWorkerStopped) {
-			this.host.startMemoryJobWorker()
-		} else {
-			this.host.wakeMemoryJobWorker()
-		}
+		if (this.host.memoryJobWorkerStopped)
+			this.host.startMemoryJobWorker(admission, generation)
+		else this.host.wakeMemoryJobWorker(admission, generation)
 		return { jobId, scheduled: true }
 	}
 
@@ -1386,7 +1858,14 @@ export class MongoDBManagerJobsOps {
 		scope: MemoryScope
 		scopeRef: string
 		runContext?: OperationRunContext
+		admission?: AdmissionToken
 	}): Promise<void> {
+		if (
+			params.admission &&
+			(params.admission.kind !== "admission" ||
+				params.admission.agentId !== this.host.agentId)
+		)
+			throw new ErasureGateConflictError(this.host.agentId)
 		const mongoCfg = this.host.config.mongodb
 		if (!mongoCfg) {
 			return
@@ -1413,15 +1892,26 @@ export class MongoDBManagerJobsOps {
 					scope: params.scope,
 					scopeRef: params.scopeRef,
 					maxEventsWithoutEpisode: triggerThreshold,
+					...(params.admission ? { admission: params.admission } : {}),
 				})
 				// Update episodic lane coverage when an episode is materialized
 				if (episodeResult.triggered) {
-					await updateLaneCoverage({
+					const coverageParams = {
 						db: this.host.db,
 						prefix: this.host.prefix,
 						agentId: this.host.agentId,
 						increments: { episodic: 1 },
-					}).catch((coverageErr) => {
+					}
+					await (params.admission
+						? withFencedWrite({
+								db: this.host.db,
+								prefix: this.host.prefix,
+								token: params.admission,
+								fn: (session) =>
+									updateLaneCoverage({ ...coverageParams, session }),
+							})
+						: updateLaneCoverage(coverageParams)
+					).catch((coverageErr) => {
 						log.warn(
 							`episodic lane coverage update failed: ${String(coverageErr)}`,
 						)

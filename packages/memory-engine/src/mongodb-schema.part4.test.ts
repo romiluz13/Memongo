@@ -18,6 +18,7 @@ function mockCollection(name: string): Collection {
 		createSearchIndex: vi.fn(async () => name),
 		updateSearchIndex: vi.fn(async () => undefined),
 		dropIndex: vi.fn(async () => ({ ok: 1 })),
+		listIndexes: vi.fn(() => ({ toArray: async () => [] })),
 		listSearchIndexes: vi.fn(() => ({ toArray: async () => [] })),
 		aggregate: vi.fn(() => ({ toArray: async () => [] })),
 	} as unknown as Collection
@@ -311,37 +312,6 @@ describe("ensureNamedSearchIndex used for all collections", () => {
 		}
 		expect(procedures.listSearchIndexes).toHaveBeenCalled()
 	})
-
-	it("uses ensureNamedSearchIndex for query_cache (checks listSearchIndexes is called)", async () => {
-		const db = mockDb()
-		await ensureSearchIndexes(db, "test_", "atlas-local-preview", "automated")
-
-		const queryCache = db.collection("test_query_cache") as unknown as {
-			listSearchIndexes: ReturnType<typeof vi.fn>
-		}
-		expect(queryCache.listSearchIndexes).toHaveBeenCalled()
-	})
-})
-
-// ---------------------------------------------------------------------------
-// Fix 4: query_cache_vector includes expiresAt filter field
-// ---------------------------------------------------------------------------
-
-describe("query_cache_vector expiresAt filter", () => {
-	it("includes expiresAt as a filter field in query_cache_vector index", async () => {
-		const db = mockDb()
-		await ensureSearchIndexes(db, "test_", "atlas-local-preview", "automated")
-
-		const qc = db.collection("test_query_cache") as unknown as {
-			createSearchIndex: ReturnType<typeof vi.fn>
-		}
-		const call = qc.createSearchIndex.mock.calls[0]
-		const fields = (call[0] as Document).definition.fields
-		const filterPaths = fields
-			.filter((f: Document) => f.type === "filter")
-			.map((f: Document) => f.path)
-		expect(filterPaths).toContain("expiresAt")
-	})
 })
 
 // ---------------------------------------------------------------------------
@@ -468,6 +438,7 @@ describe("episodes retention TTL index (WS-13)", () => {
 			{
 				name: "idx_episodes_ttl_updated",
 				expireAfterSeconds: 7 * 24 * 60 * 60,
+				collation: { locale: "simple" },
 			},
 		)
 		expect(episodes.dropIndex).not.toHaveBeenCalledWith(

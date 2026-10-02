@@ -5,9 +5,11 @@
  */
 
 import type { Db, Document } from "mongodb"
-import type { MemoryScope } from "@memongo/lib"
+import { createSubsystemLogger, type MemoryScope } from "@memongo/lib"
+import { settledFailureMeta } from "./query-diagnostics.js"
 import type { ResolvedMongoDBConfig } from "./backend-config.js"
 import type { Entity, RelationType } from "./mongodb-graph.js"
+import type { MemorySearchExecutorTimeRange } from "./mongodb-search-executor.js"
 import type { DetectedCapabilities } from "./mongodb-schema.js"
 import { eventsCollection } from "./mongodb-schema.js"
 import {
@@ -35,6 +37,60 @@ import {
 	orderTemporalCoverageByTimeBucket,
 	scoreTemporalCoverageSessionEvent,
 } from "./mongodb-search-temporal.js"
+import { freshnessRevalidationStages } from "./mongodb-search.js"
+import {
+	buildEventLifecycleClause,
+	mergeQueryClauses,
+} from "./mongodb-temporal.js"
+
+type EventSearchBranch = "turn-vector" | "turn-text"
+type EventSearchFailureHook = (
+	branch: EventSearchBranch,
+	error: unknown,
+) => void
+type EventBranchSearch = {
+	branch: EventSearchBranch
+	results: Promise<MemorySearchResult[]>
+}
+const branchLog = createSubsystemLogger("memory:mongodb:search")
+
+async function settleEventBranches(
+	searches: EventBranchSearch[],
+	onBranchFailure?: EventSearchFailureHook,
+): Promise<MemorySearchResult[][]> {
+	const outcomes = await Promise.allSettled(
+		searches.map((search) => search.results),
+	)
+	const failure = outcomes.find((outcome) => outcome.status === "rejected")
+	if (
+		failure?.status === "rejected" &&
+		(isBenchmarkStrictMode() ||
+			outcomes.every((outcome) => outcome.status === "rejected"))
+	) {
+		throw failure.reason
+	}
+	const results: MemorySearchResult[][] = []
+	for (const [index, outcome] of outcomes.entries()) {
+		if (outcome.status === "fulfilled") {
+			results.push(outcome.value)
+			continue
+		}
+		const branch = searches[index].branch
+		if (onBranchFailure) {
+			try {
+				onBranchFailure(branch, outcome.reason)
+				continue
+			} catch {
+				// A diagnostic callback must not discard usable sibling evidence.
+			}
+		}
+		branchLog.warn("event search branch failed", {
+			branch,
+			...settledFailureMeta(outcome.reason),
+		})
+	}
+	return results
+}
 
 async function expandTemporalCoverageSessionEvents(params: {
 	db: Db
@@ -52,14 +108,18 @@ async function expandTemporalCoverageSessionEvents(params: {
 	if (sessionIds.length === 0) return []
 	const docs = await eventsCollection(params.db, params.prefix)
 		.find(
-			{
-				agentId: params.agentId,
-				scope: params.scope,
-				scopeRef: params.scopeRef,
-				sessionId: { $in: sessionIds },
-				role: "user",
-				timestamp: { $lte: params.questionDate },
-			},
+			mergeQueryClauses(
+				{
+					agentId: params.agentId,
+					scope: params.scope,
+					scopeRef: params.scopeRef,
+					sessionId: { $in: sessionIds },
+					role: "user",
+					timestamp: { $lte: params.questionDate },
+				},
+				// Apply the same lifecycle constraints to neighboring events.
+				buildEventLifecycleClause({ asOf: params.questionDate }),
+			),
 			{
 				projection: {
 					_id: 0,
@@ -194,6 +254,18 @@ export async function searchTemporalCoverageEvents(params: {
 	].filter((value): value is Document => Boolean(value))
 
 	const temporalPivotMs = 180 * 24 * 60 * 60 * 1000
+	// $search candidates can be stale index admissions, so the current
+	// owner/scope, timestamp, and lifecycle window are revalidated
+	// post-stage against the hydrated document before limit/projection.
+	const canonicalFilter: Document = {
+		agentId: params.agentId,
+		scope: params.scope,
+		scopeRef: params.scopeRef,
+		timestamp: { $lte: params.questionDate },
+	}
+	const lifecycleMatch = buildEventLifecycleClause({
+		asOf: params.questionDate,
+	})
 	const pipeline: Document[] = [
 		{
 			$search: {
@@ -227,6 +299,8 @@ export async function searchTemporalCoverageEvents(params: {
 				},
 			},
 		},
+		...freshnessRevalidationStages(canonicalFilter),
+		{ $match: lifecycleMatch },
 		{ $limit: Math.max(params.maxResults * 3, 30) },
 		{
 			$project: {
@@ -305,6 +379,10 @@ export async function searchTurnEventsWithinSessions(params: {
 	db: Db
 	prefix: string
 	query: string
+	/** Optional caller question clock for the validity window
+	 * (validAt/invalidAt); defaults to wall-now. expiresAt retention always
+	 * uses wall-now. Benchmark evaluations carry a fixed historical date. */
+	questionDate?: Date
 	agentId: string
 	scope: MemoryScope
 	scopeRef: string
@@ -314,6 +392,7 @@ export async function searchTurnEventsWithinSessions(params: {
 	capabilities: DetectedCapabilities
 	embeddingMode: ResolvedMongoDBConfig["embeddingMode"]
 	queryEmbeddingModel: ResolvedMongoDBConfig["queryEmbeddingModel"]
+	onBranchFailure?: EventSearchFailureHook
 }): Promise<MemorySearchResult[]> {
 	const sessionIds = Array.from(new Set(params.sessionIds)).filter(
 		(value) => value.trim().length > 0,
@@ -321,6 +400,36 @@ export async function searchTurnEventsWithinSessions(params: {
 	if (sessionIds.length === 0) return []
 
 	const events = eventsCollection(params.db, params.prefix)
+	// The Search stages run against the indexed copy, which can lag a
+	// retraction (invalidAt), an expiry (expiresAt), or an owner/scope/
+	// session mutation. Post-stage, the full request filter AND the
+	// lifecycle window are re-checked against the hydrated document so a
+	// stale index admission cannot reach authoritative results.
+	// Historical validity (validAt/invalidAt) uses the caller's question
+	// clock when supplied; expiresAt is RETENTION and is always evaluated
+	// at wall-now so a historical question cannot revive a turn awaiting
+	// physical TTL deletion.
+	const validityTime =
+		params.questionDate && !Number.isNaN(params.questionDate.getTime())
+			? params.questionDate
+			: new Date()
+	const lifecycleMatch: Document = {
+		$and: [
+			{
+				$or: [
+					{ validAt: { $exists: false } },
+					{ validAt: { $lte: validityTime } },
+				],
+			},
+			{ $or: [{ invalidAt: null }, { invalidAt: { $gt: validityTime } }] },
+			{
+				$or: [
+					{ expiresAt: { $exists: false } },
+					{ expiresAt: { $gt: new Date() } },
+				],
+			},
+		],
+	}
 	const vectorFilter: Document = {
 		agentId: params.agentId,
 		scope: params.scope,
@@ -334,7 +443,7 @@ export async function searchTurnEventsWithinSessions(params: {
 		buildSearchFilterEquals("sessionId", sessionIds),
 	].filter((value): value is Document => Boolean(value))
 
-	const searches: Array<Promise<MemorySearchResult[]>> = []
+	const searches: EventBranchSearch[] = []
 	if (
 		params.capabilities.vectorSearch &&
 		params.embeddingMode === "automated" &&
@@ -357,6 +466,8 @@ export async function searchTurnEventsWithinSessions(params: {
 					returnStoredSource: false,
 				},
 			},
+			...freshnessRevalidationStages(vectorFilter),
+			{ $match: lifecycleMatch },
 			{
 				$project: {
 					_id: 0,
@@ -372,8 +483,9 @@ export async function searchTurnEventsWithinSessions(params: {
 				},
 			},
 		]
-		searches.push(
-			events
+		searches.push({
+			branch: "turn-vector",
+			results: events
 				// P3.8: user-driven $vectorSearch pipelines carry a maxTimeMS ceiling.
 				.aggregate(vectorPipeline, { maxTimeMS: resolveUserSearchMaxTimeMs() })
 				.toArray()
@@ -382,7 +494,7 @@ export async function searchTurnEventsWithinSessions(params: {
 						.map((doc) => mapEventSearchDocToResult(doc, "turn-vector"))
 						.filter((result): result is MemorySearchResult => Boolean(result)),
 				),
-		)
+		})
 	}
 	// P3.2: direct aggregates consume the per-request budget here.
 	if (params.capabilities.textSearch && tryConsumeSearchAggregation()) {
@@ -396,6 +508,8 @@ export async function searchTurnEventsWithinSessions(params: {
 					},
 				},
 			},
+			...freshnessRevalidationStages(vectorFilter),
+			{ $match: lifecycleMatch },
 			{ $limit: params.maxResults },
 			{
 				$project: {
@@ -412,8 +526,9 @@ export async function searchTurnEventsWithinSessions(params: {
 				},
 			},
 		]
-		searches.push(
-			events
+		searches.push({
+			branch: "turn-text",
+			results: events
 				// P3.8: user-driven $search pipelines carry a maxTimeMS ceiling.
 				.aggregate(textPipeline, { maxTimeMS: resolveUserSearchMaxTimeMs() })
 				.toArray()
@@ -422,11 +537,11 @@ export async function searchTurnEventsWithinSessions(params: {
 						.map((doc) => mapEventSearchDocToResult(doc, "turn-text"))
 						.filter((result): result is MemorySearchResult => Boolean(result)),
 				),
-		)
+		})
 	}
 
 	if (searches.length === 0) return []
-	const results = await Promise.all(searches)
+	const results = await settleEventBranches(searches, params.onBranchFailure)
 	return mergeTurnPrecisionResults(results)
 		.map((result, index) => ({
 			...result,
@@ -451,7 +566,10 @@ export async function searchConversationEvidenceEvents(params: {
 	capabilities: DetectedCapabilities
 	embeddingMode: ResolvedMongoDBConfig["embeddingMode"]
 	queryEmbeddingModel: ResolvedMongoDBConfig["queryEmbeddingModel"]
+	onBranchFailure?: EventSearchFailureHook
 	budgetReservation?: SearchBudgetReservation
+	/** RET-02: explicit caller-resolved occurrence-time bounds. */
+	timeRange?: MemorySearchExecutorTimeRange
 }): Promise<MemorySearchResult[]> {
 	if (!isConversationEvidenceQuery(params.query, params.questionDate)) {
 		return []
@@ -470,6 +588,10 @@ export async function searchConversationEvidenceEvents(params: {
 		params.questionDate && !Number.isNaN(params.questionDate.getTime())
 			? params.questionDate
 			: new Date()
+	// Post-stage, the full request filter AND the lifecycle window are
+	// re-checked against the hydrated document: the Search-stage filters run
+	// against the indexed copy, which can lag an owner/scope mutation, a
+	// timestamp drift, a retraction, or an expiry.
 	const lifecycleMatch: Document = {
 		$and: [
 			{
@@ -494,25 +616,51 @@ export async function searchConversationEvidenceEvents(params: {
 		scope: params.scope,
 		scopeRef: params.scopeRef,
 	}
-	if (params.questionDate && !Number.isNaN(params.questionDate.getTime())) {
-		vectorFilter.timestamp = { $lte: params.questionDate }
+	// RET-02: an explicit caller range narrows the evidence window, while
+	// questionDate stays an upper bound (no future leakage past what the
+	// user had seen when asking). Without an explicit range, today's
+	// questionDate-only bound applies unchanged.
+	const questionBound =
+		params.questionDate && !Number.isNaN(params.questionDate.getTime())
+			? params.questionDate
+			: undefined
+	const rangeEnd = params.timeRange
+		? questionBound && questionBound < params.timeRange.end
+			? questionBound
+			: params.timeRange.end
+		: questionBound
+	if (params.timeRange?.start && rangeEnd) {
+		vectorFilter.timestamp = {
+			$gte: params.timeRange.start,
+			$lte: rangeEnd,
+		}
+	} else if (rangeEnd) {
+		vectorFilter.timestamp = { $lte: rangeEnd }
 	}
 
 	const searchFilters = [
 		buildSearchFilterEquals("agentId", params.agentId),
 		buildSearchFilterEquals("scope", params.scope),
 		buildSearchFilterEquals("scopeRef", params.scopeRef),
-		params.questionDate && !Number.isNaN(params.questionDate.getTime())
+		params.timeRange?.start && rangeEnd
 			? {
 					range: {
 						path: "timestamp",
-						lte: params.questionDate,
+						gte: params.timeRange.start,
+						lte: rangeEnd,
 					},
 				}
-			: null,
+			: rangeEnd
+				? {
+						range: {
+							path: "timestamp",
+							lte: rangeEnd,
+						},
+					}
+				: null,
 	].filter((value): value is Document => Boolean(value))
 
-	const searches: Array<Promise<MemorySearchResult[]>> = []
+	const searches: EventBranchSearch[] = []
 	if (
 		params.capabilities.vectorSearch &&
 		params.embeddingMode === "automated" &&
@@ -539,6 +687,7 @@ export async function searchConversationEvidenceEvents(params: {
 					returnStoredSource: false,
 				},
 			},
+			...freshnessRevalidationStages(vectorFilter),
 			{ $match: lifecycleMatch },
 			{
 				$project: {
@@ -555,8 +704,9 @@ export async function searchConversationEvidenceEvents(params: {
 				},
 			},
 		]
-		searches.push(
-			events
+		searches.push({
+			branch: "turn-vector",
+			results: events
 				// P3.8: user-driven $vectorSearch pipelines carry a maxTimeMS ceiling.
 				.aggregate(vectorPipeline, { maxTimeMS: resolveUserSearchMaxTimeMs() })
 				.toArray()
@@ -565,7 +715,7 @@ export async function searchConversationEvidenceEvents(params: {
 						.map((doc) => mapEventSearchDocToResult(doc, "turn-vector"))
 						.filter((result): result is MemorySearchResult => Boolean(result)),
 				),
-		)
+		})
 	}
 
 	// P3.2: direct aggregates consume the per-request budget here.
@@ -597,6 +747,7 @@ export async function searchConversationEvidenceEvents(params: {
 					},
 				},
 			},
+			...freshnessRevalidationStages(vectorFilter),
 			{ $match: lifecycleMatch },
 			{ $limit: params.maxResults },
 			{
@@ -614,8 +765,9 @@ export async function searchConversationEvidenceEvents(params: {
 				},
 			},
 		]
-		searches.push(
-			events
+		searches.push({
+			branch: "turn-text",
+			results: events
 				// P3.8: user-driven $search pipelines carry a maxTimeMS ceiling.
 				.aggregate(textPipeline, { maxTimeMS: resolveUserSearchMaxTimeMs() })
 				.toArray()
@@ -631,11 +783,11 @@ export async function searchConversationEvidenceEvents(params: {
 							},
 						})),
 				),
-		)
+		})
 	}
 
 	if (searches.length === 0) return []
-	const results = await Promise.all(searches)
+	const results = await settleEventBranches(searches, params.onBranchFailure)
 	return mergeTurnPrecisionResults(results)
 		.map((result, index) => ({
 			...result,

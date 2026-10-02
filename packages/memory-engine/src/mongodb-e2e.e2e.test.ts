@@ -110,7 +110,11 @@ const EXPECTED_COLLECTION_SUFFIXES = [
 // idx_cost_ledger_ttl): 100 + 2 = 102.
 // W11 added the access-events batchId lookup index (idx_access_events_batch_id,
 // serving the raw-layer read-reconcile): 102 + 1 = 103.
-const EXPECTED_STANDARD_INDEX_COUNT = 103
+// The query-cache removal dropped two of the three query_cache standard
+// indexes (uq_query_cache_hash_agent_scope_scoperef and
+// idx_query_cache_agent_hitcount); idx_query_cache_ttl stays so legacy rows
+// age out: 103 − 2 = 101.
+const EXPECTED_STANDARD_INDEX_COUNT = 101
 
 let client: MongoClient
 let db: Db

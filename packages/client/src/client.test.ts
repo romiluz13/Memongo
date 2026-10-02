@@ -601,6 +601,89 @@ describe("MemongoClient tenant erasure (C-003)", () => {
 		})
 		expect(response).toEqual(receipt)
 	})
+
+	it("forwards a deliberate recovery takeover and returns the additive receipt fields", async () => {
+		const calls: Array<{ url: string; init: RequestInit }> = []
+		const receipt = {
+			agentId: "agent-42",
+			status: "partial",
+			receipts: [{ collection: "chunks", deleted: 3, error: "boom" }],
+			runId: "run-9",
+			gateState: "erasing",
+			recovery: "takeover",
+			completedAt: "2026-08-15T00:00:00.000Z",
+		}
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (url: string, init?: RequestInit) => {
+				calls.push({ url: String(url), init: init ?? {} })
+				return new Response(JSON.stringify(receipt), {
+					status: 200,
+					headers: { "Content-Type": "application/json" },
+				})
+			}),
+		)
+
+		const client = new MemongoClient({ baseUrl: "http://127.0.0.1:3100" })
+		const response = await client.eraseAgent({
+			confirm: "erase",
+			agentId: "agent-42",
+			recovery: "takeover",
+		})
+
+		// The takeover literal flows to the request body unchanged.
+		expect(JSON.parse(String(calls[0].init.body))).toEqual({
+			confirm: "erase",
+			agentId: "agent-42",
+			recovery: "takeover",
+		})
+		// The engine's additive receipt fields cross the client verbatim.
+		expect(response).toEqual(receipt)
+	})
+
+	it("returns an ownershipLost partial receipt unchanged", async () => {
+		// C-1 site 1 shape: the audit fence observed a conflict before
+		// ownership could be confirmed, so the receipt flags ownershipLost.
+		const receipt = {
+			agentId: "agent-42",
+			status: "partial",
+			receipts: [],
+			runId: "run-10",
+			ownershipLost: true,
+			completedAt: "2026-08-15T00:00:00.000Z",
+		}
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => new Response(JSON.stringify(receipt), { status: 200 })),
+		)
+
+		const client = new MemongoClient({ baseUrl: "http://127.0.0.1:3100" })
+		await expect(
+			client.eraseAgent({ confirm: "erase", agentId: "agent-42" }),
+		).resolves.toEqual(receipt)
+	})
+
+	it("returns a finalizeIndeterminate partial receipt unchanged", async () => {
+		// C-1 site 2 shape: still the owner, but the finalize audit could not
+		// confirm the outcome, so the receipt flags finalizeIndeterminate.
+		const receipt = {
+			agentId: "agent-42",
+			status: "partial",
+			receipts: [],
+			runId: "run-11",
+			finalizeIndeterminate: true,
+			completedAt: "2026-08-15T00:00:00.000Z",
+		}
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => new Response(JSON.stringify(receipt), { status: 200 })),
+		)
+
+		const client = new MemongoClient({ baseUrl: "http://127.0.0.1:3100" })
+		await expect(
+			client.eraseAgent({ confirm: "erase", agentId: "agent-42" }),
+		).resolves.toEqual(receipt)
+	})
 })
 
 describe("MemongoClient quarantine review (C-004)", () => {

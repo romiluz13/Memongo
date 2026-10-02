@@ -1,7 +1,9 @@
 import type { Db, Document } from "mongodb"
 import { type MemoryScope, createSubsystemLogger } from "@memongo/lib"
+import { derivationFromRole } from "./memory-derivation.js"
 import { renderEventChunkText } from "./mongodb-events.js"
 import { eventsCollection } from "./mongodb-schema.js"
+import { buildEventLifecycleClause } from "./mongodb-temporal.js"
 import type { MemorySearchResult } from "./types.js"
 
 const log = createSubsystemLogger("memory:mongodb:context-expansion")
@@ -131,6 +133,11 @@ export async function expandSearchContext(params: {
 				$gte: new Date(minTs - windowMs),
 				$lte: new Date(maxTs + windowMs),
 			},
+			// RET-10: neighbor candidates are events — apply the same
+			// lifecycle guard the events search lanes apply so an expired,
+			// invalidated, or not-yet-valid turn cannot re-enter context as
+			// an expanded neighbor.
+			...buildEventLifecycleClause(),
 		}
 
 		let sessionEvents: Document[]
@@ -198,6 +205,10 @@ export async function expandSearchContext(params: {
 					snippet,
 					source: "conversation",
 					sourceType: "conversation",
+					// RET-09: neighboring turns carry their authoring role —
+					// expanded context should classify like the lane results.
+					role: event.role,
+					derivation: derivationFromRole(event.role),
 					sessionId: event.sessionId,
 					timestamp: event.timestamp,
 				})

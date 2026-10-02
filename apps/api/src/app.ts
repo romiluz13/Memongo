@@ -9,6 +9,7 @@ import { formatErrorMessage, timingSafeBearerEquals } from "@memongo/lib"
 import { openApiSpec } from "./openapi-spec.js"
 import { internalError } from "./lib/errors.js"
 import { checkReadiness } from "./lib/readiness.js"
+import type { V1RouterEnv } from "./routes/v1-helpers.js"
 import { createV1Router } from "./routes/v1.js"
 import {
 	isValidScope,
@@ -234,7 +235,6 @@ export function createClientVersionSkewLogger(
 function asStringList(
 	value: unknown,
 	label: "agentIds" | "scopes" | "scopeRefs",
-	token: string,
 ): string[] | undefined {
 	if (value === undefined) {
 		return undefined
@@ -245,7 +245,7 @@ function asStringList(
 		value.some((item) => typeof item !== "string" || item.trim() === "")
 	) {
 		throw new Error(
-			`MEMONGO_API_SCOPED_KEYS policy for token ${token} must define ${label} as a non-empty array of non-empty strings`,
+			`MEMONGO_API_SCOPED_KEYS policy must define ${label} as a non-empty array of non-empty strings`,
 		)
 	}
 	return value.map((item) => (item as string).trim())
@@ -262,9 +262,9 @@ function normalizePolicy(raw: unknown): ScopedApiKeyPolicy | null {
 	}
 	return {
 		token,
-		agentIds: asStringList(item.agentIds, "agentIds", token),
-		scopes: asStringList(item.scopes, "scopes", token),
-		scopeRefs: asStringList(item.scopeRefs, "scopeRefs", token),
+		agentIds: asStringList(item.agentIds, "agentIds"),
+		scopes: asStringList(item.scopes, "scopes"),
+		scopeRefs: asStringList(item.scopeRefs, "scopeRefs"),
 	}
 }
 
@@ -288,7 +288,7 @@ function requireValidScopedPolicies(
 	)
 	if (unconstrained) {
 		throw new Error(
-			`MEMONGO_API_SCOPED_KEYS policy for token ${unconstrained.token} must constrain agentIds, scopes, or scopeRefs with at least one concrete value`,
+			"MEMONGO_API_SCOPED_KEYS policy must constrain agentIds, scopes, or scopeRefs with at least one concrete value",
 		)
 	}
 	// Fail closed on a non-canonical scope value. Auth matches scope by raw
@@ -304,16 +304,16 @@ function requireValidScopedPolicies(
 		] as const) {
 			if (values?.includes(WILDCARD) && values.length !== 1) {
 				throw new Error(
-					`MEMONGO_API_SCOPED_KEYS policy for token ${policy.token} must use "*" as the only ${label} value`,
+					`MEMONGO_API_SCOPED_KEYS policy must use "*" as the only ${label} value`,
 				)
 			}
 		}
-		const invalidScope = policy.scopes?.find(
+		const hasInvalidScope = policy.scopes?.some(
 			(scope) => scope !== WILDCARD && !isValidScope(scope),
 		)
-		if (invalidScope !== undefined) {
+		if (hasInvalidScope) {
 			throw new Error(
-				`MEMONGO_API_SCOPED_KEYS policy for token ${policy.token} has an invalid scope "${invalidScope}"; valid scopes: session, user, agent, workspace, tenant, global`,
+				"MEMONGO_API_SCOPED_KEYS policy has an invalid scope; valid scopes: session, user, agent, workspace, tenant, global",
 			)
 		}
 	}
@@ -554,8 +554,8 @@ export function registerGracefulShutdown(
 	}
 }
 
-export function createApp(): Hono {
-	const app = new Hono()
+export function createApp(): Hono<V1RouterEnv> {
+	const app = new Hono<V1RouterEnv>()
 	app.use("*", secureHeaders())
 	// P0.8: one canonical error envelope. Deliberate HTTPExceptions keep their
 	// status/body; anything unexpected is logged with a request id and returned
@@ -688,6 +688,10 @@ export function createApp(): Hono {
 					403,
 				)
 			}
+			// Shared-KB admission is derived only from the authenticated policy.
+			// Request bodies cannot grant this authority, and the context value
+			// lives only for this request even when the manager is cached.
+			c.set("kbRestricted", !hasConcreteConstraint(scopedPolicy.scopeRefs))
 			await next()
 		})
 	} else if (allowInsecureNoAuth) {

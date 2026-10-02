@@ -1,6 +1,7 @@
 import type { Db } from "mongodb"
 import { createSubsystemLogger } from "@memongo/lib"
-import { emitTelemetry } from "./mongodb-telemetry.js"
+import { emitTelemetry, type TelemetryDocument } from "./mongodb-telemetry.js"
+import type { AdmissionToken } from "./mongodb-write-fence.js"
 import { withRemoteHttpResponse } from "./remote-http.js"
 import type { MemorySearchResult } from "./types.js"
 
@@ -26,11 +27,38 @@ export type RerankConfig = {
 	temporalProximityBoost?: number
 }
 
-export type RerankResult = {
-	results: MemorySearchResult[]
-	reranked: boolean
-	latencyMs: number
+/**
+ * RET-08: per-bucket result split. The cross-encoder only scores the topN
+ * candidates; the other partitions keep their ORIGINAL retrieval scores,
+ * which are not calibrated against CE scores. Consumers must compose the
+ * partitions in authority order (reranked → emptySnippet → overflow →
+ * below) and never re-sort across the partition boundary, or unreranked
+ * overflow with a high retrieval score will displace CE-ranked results.
+ */
+export type RerankPartitions = {
+	/** Candidates scored by the cross-encoder (CE score applied, best first). */
+	reranked: MemorySearchResult[]
+	/** Candidates with empty snippets, never sent to the CE. */
+	emptySnippet: MemorySearchResult[]
+	/** Results above minScore beyond topN, never sent to the CE. */
+	overflow: MemorySearchResult[]
+	/** Results below minScore, never sent to the CE. */
+	below: MemorySearchResult[]
 }
+
+export type RerankResult =
+	| { results: MemorySearchResult[]; reranked: false; latencyMs: number }
+	| {
+			/**
+			 * Flat concatenation in partition order (reranked, emptySnippet,
+			 * overflow, below) — same order as `partitions`.
+			 */
+			results: MemorySearchResult[]
+			reranked: true
+			latencyMs: number
+			/** Authoritative partition split (RET-08). */
+			partitions: RerankPartitions
+	  }
 
 /**
  * WS-11 change 5 (09-report U2): the rerank stage's individual bound. Part
@@ -101,15 +129,32 @@ function isStrictRerankMode(): boolean {
 	)
 }
 
+function emitLeafTelemetry(
+	db: Db,
+	prefix: string,
+	doc: Omit<TelemetryDocument, "ts">,
+	admission?: AdmissionToken,
+): void {
+	if (admission) {
+		void emitTelemetry(db, prefix, doc, { admission }).catch(() =>
+			log.warn("rerank telemetry emit failed"),
+		)
+	} else {
+		emitTelemetry(db, prefix, doc)
+	}
+}
+
 /**
  * Cross-encoder re-ranking of search results using Voyage rerank-2.5 API.
  *
  * On ANY error (network, API, JSON parse, unexpected shape): falls back to
  * input order unchanged, logs a warning, and never crashes the search pipeline.
  *
- * Uses `r.snippet` for document text (MemorySearchResult has no `text` field).
+ * Uses the full passage `text` when present, falling back to `r.snippet`
+ * (B5: the preview alone hides answers past 700 characters).
  */
 export async function crossEncoderRerank(params: {
+	admission?: AdmissionToken
 	db: Db
 	prefix: string
 	agentId: string
@@ -157,56 +202,79 @@ export async function crossEncoderRerank(params: {
 			: results.length === 0
 				? "no-results"
 				: "no-api-key"
-		emitTelemetry(db, prefix, {
-			meta: { agentId, operation: "rerank" },
-			durationMs: 0,
-			ok: true,
-			rerankModel: config.model,
-			rerankSkipped: skipReason,
-		})
+		emitLeafTelemetry(
+			db,
+			prefix,
+			{
+				meta: { agentId, operation: "rerank" },
+				durationMs: 0,
+				ok: true,
+				rerankModel: config.model,
+				rerankSkipped: skipReason,
+			},
+			params.admission,
+		)
 		return { results, reranked: false, latencyMs: 0 }
 	}
 
-	// Three-bucket split: candidates (sent to reranker), overflow (above minScore but beyond topN), below (under minScore)
-	const aboveMinScore = results.filter((r) => r.score >= config.minScore)
-	const candidates = aboveMinScore.slice(0, config.topN)
-	const overflow = aboveMinScore.slice(config.topN) // above minScore but not sent to reranker
-	const below = results.filter((r) => r.score < config.minScore)
+	// B7: candidates are the first `topN` results BY RANK, not by a
+	// first-stage score threshold. The retrieval score is produced by a
+	// different, uncalibrated scoring domain than the cross-encoder's
+	// relevance scores, so filtering candidates on `config.minScore` could
+	// silently drop the exact results the cross-encoder would have ranked
+	// highest. `minScore` now applies to the CE scores after the rerank (see
+	// the partition split below).
+	const candidates = results.slice(0, config.topN)
+	const overflow = results.slice(config.topN) // beyond topN, never sent to the reranker
 
 	// Need at least 2 candidates for reranking to have any benefit
 	if (candidates.length <= 1) {
-		emitTelemetry(db, prefix, {
-			meta: { agentId, operation: "rerank" },
-			durationMs: 0,
-			ok: true,
-			rerankModel: config.model,
-			rerankSkipped: "too-few-candidates",
-		})
+		emitLeafTelemetry(
+			db,
+			prefix,
+			{
+				meta: { agentId, operation: "rerank" },
+				durationMs: 0,
+				ok: true,
+				rerankModel: config.model,
+				rerankSkipped: "too-few-candidates",
+			},
+			params.admission,
+		)
 		return { results, reranked: false, latencyMs: 0 }
 	}
 
 	try {
 		// H5: Filter out candidates with empty/blank snippets (graph relations can produce near-empty text)
+		// B5: prefer the full-text field over the 700-char snippet preview.
+		const rerankText = (r: MemorySearchResult) => r.text ?? r.snippet
 		const validCandidates = candidates.filter(
-			(r) => r.snippet.trim().length > 0,
+			(r) => rerankText(r).trim().length > 0,
 		)
 		const emptySnippetCandidates = candidates.filter(
-			(r) => r.snippet.trim().length === 0,
+			(r) => rerankText(r).trim().length === 0,
 		)
 
 		// Need at least 2 valid candidates for reranking to have any benefit
 		if (validCandidates.length <= 1) {
-			emitTelemetry(db, prefix, {
-				meta: { agentId, operation: "rerank" },
-				durationMs: Date.now() - rerankStart,
-				ok: true,
-				rerankModel: config.model,
-				rerankSkipped: "too-few-valid-candidates",
-			})
+			emitLeafTelemetry(
+				db,
+				prefix,
+				{
+					meta: { agentId, operation: "rerank" },
+					durationMs: Date.now() - rerankStart,
+					ok: true,
+					rerankModel: config.model,
+					rerankSkipped: "too-few-valid-candidates",
+				},
+				params.admission,
+			)
 			return { results, reranked: false, latencyMs: 0 }
 		}
 
-		const documents = validCandidates.map((r) => r.snippet)
+		// B5: the Voyage reranker accepts long documents — send the full
+		// passage text, not the truncated preview.
+		const documents = validCandidates.map((r) => r.text ?? r.snippet)
 
 		// WS-16 (C-031): derive the provider timeout from the remaining
 		// latency budget. Below the floor the call is not started at all —
@@ -214,13 +282,18 @@ export async function crossEncoderRerank(params: {
 		// provider failure.
 		const timeoutMs = resolveRerankTimeoutMs(params.remainingBudgetMs)
 		if (timeoutMs === null) {
-			emitTelemetry(db, prefix, {
-				meta: { agentId, operation: "rerank" },
-				durationMs: Date.now() - rerankStart,
-				ok: true,
-				rerankModel: config.model,
-				rerankSkipped: "budget-exhausted",
-			})
+			emitLeafTelemetry(
+				db,
+				prefix,
+				{
+					meta: { agentId, operation: "rerank" },
+					durationMs: Date.now() - rerankStart,
+					ok: true,
+					rerankModel: config.model,
+					rerankSkipped: "budget-exhausted",
+				},
+				params.admission,
+			)
 			return { results, reranked: false, latencyMs: Date.now() - rerankStart }
 		}
 
@@ -260,14 +333,19 @@ export async function crossEncoderRerank(params: {
 			// WS-12 (C-019): a provider failure that degraded to input order
 			// is a FAILED rerank, not a skip — the marker distinguishes it
 			// from config-off (ok:true) in the telemetry time series.
-			emitTelemetry(db, prefix, {
-				meta: { agentId, operation: "rerank" },
-				durationMs: Date.now() - rerankStart,
-				ok: false,
-				rerankModel: config.model,
-				rerankLatencyMs: Date.now() - rerankStart,
-				rerankSkipped: "api-error",
-			})
+			emitLeafTelemetry(
+				db,
+				prefix,
+				{
+					meta: { agentId, operation: "rerank" },
+					durationMs: Date.now() - rerankStart,
+					ok: false,
+					rerankModel: config.model,
+					rerankLatencyMs: Date.now() - rerankStart,
+					rerankSkipped: "api-error",
+				},
+				params.admission,
+			)
 			return { results, reranked: false, latencyMs: Date.now() - rerankStart }
 		}
 
@@ -281,19 +359,24 @@ export async function crossEncoderRerank(params: {
 				throw new Error("rerank API returned unexpected response shape")
 			}
 			log.warn("rerank API returned unexpected response shape")
-			emitTelemetry(db, prefix, {
-				meta: { agentId, operation: "rerank" },
-				durationMs: Date.now() - rerankStart,
-				ok: false,
-				rerankModel: config.model,
-				rerankLatencyMs: Date.now() - rerankStart,
-				rerankSkipped: "bad-response-shape",
-			})
+			emitLeafTelemetry(
+				db,
+				prefix,
+				{
+					meta: { agentId, operation: "rerank" },
+					durationMs: Date.now() - rerankStart,
+					ok: false,
+					rerankModel: config.model,
+					rerankLatencyMs: Date.now() - rerankStart,
+					rerankSkipped: "bad-response-shape",
+				},
+				params.admission,
+			)
 			return { results, reranked: false, latencyMs: Date.now() - rerankStart }
 		}
 
 		// Map scores back onto candidate results with bounds validation (Voyage SDK does NO validation)
-		const reranked = body.data
+		const ceScored = body.data
 			.filter((r) => {
 				if (
 					typeof r.index !== "number" ||
@@ -319,34 +402,61 @@ export async function crossEncoderRerank(params: {
 				score: Math.min(1, Math.max(0, r.relevance_score)),
 			}))
 
+		// B7: `minScore` gates the cross-encoder's own relevance scores, not
+		// the first-stage retrieval scores. Results the CE scored below
+		// minScore are preserved (appended last, after overflow) rather than
+		// dropped, so the caller keeps the full candidate set while the
+		// CE-authoritative head stays above the configured relevance floor.
+		const reranked = ceScored.filter((r) => r.score >= config.minScore)
+		const below = ceScored.filter((r) => r.score < config.minScore)
+
 		const latencyMs = Date.now() - rerankStart
 		recordProviderCall("succeeded")
-		emitTelemetry(db, prefix, {
-			meta: { agentId, operation: "rerank" },
-			durationMs: latencyMs,
-			ok: true,
-			resultCount: reranked.length,
-			rerankModel: config.model,
-			rerankLatencyMs: latencyMs,
-		})
+		emitLeafTelemetry(
+			db,
+			prefix,
+			{
+				meta: { agentId, operation: "rerank" },
+				durationMs: latencyMs,
+				ok: true,
+				resultCount: reranked.length,
+				rerankModel: config.model,
+				rerankLatencyMs: latencyMs,
+			},
+			params.admission,
+		)
 
 		// Preserve all results: reranked first, then empty-snippet candidates, then overflow, then below
+		// (RET-08: partitions carry the split so callers can keep CE-ranked
+		// results ahead of untouched overflow instead of re-sorting across
+		// uncalibrated score domains).
 		return {
 			results: [...reranked, ...emptySnippetCandidates, ...overflow, ...below],
 			reranked: true,
 			latencyMs,
+			partitions: {
+				reranked,
+				emptySnippet: emptySnippetCandidates,
+				overflow,
+				below,
+			},
 		}
 	} catch (err) {
 		recordProviderCall("failed")
 		log.warn("rerank failed, falling back to input order", { error: err })
 		// M1: Emit failure telemetry in catch block
-		emitTelemetry(db, prefix, {
-			meta: { agentId, operation: "rerank" },
-			durationMs: Date.now() - rerankStart,
-			ok: false,
-			rerankModel: config.model,
-			rerankLatencyMs: Date.now() - rerankStart,
-		})
+		emitLeafTelemetry(
+			db,
+			prefix,
+			{
+				meta: { agentId, operation: "rerank" },
+				durationMs: Date.now() - rerankStart,
+				ok: false,
+				rerankModel: config.model,
+				rerankLatencyMs: Date.now() - rerankStart,
+			},
+			params.admission,
+		)
 		if (isStrictRerankMode()) {
 			throw err
 		}

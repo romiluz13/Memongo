@@ -67,6 +67,13 @@ export type MemoryMongoDBConfig = {
 	searchBudget?: {
 		maxAggregations?: number
 		maxEmbeds?: number
+		/**
+		 * RET-16: optional wall-clock ceiling (ms) for one search request —
+		 * the deadline spans retries and all passes, and consumption past it
+		 * degrades remaining lanes to empty results. Default OFF; see
+		 * packages/memory-engine/src/mongodb-search-budget.ts.
+		 */
+		maxWallMs?: number
 	}
 	maxPoolSize?: number
 	minPoolSize?: number
@@ -172,6 +179,10 @@ export type MemoryMongoDBConfig = {
 		 */
 		temporalProximityBoost?: number
 	}
+	/**
+	 * @deprecated Persisted MongoDB search-result serving has been removed.
+	 * Accepted temporarily for configuration compatibility and always disabled.
+	 */
 	cache?: {
 		enabled?: boolean
 		conversationTtlSec?: number

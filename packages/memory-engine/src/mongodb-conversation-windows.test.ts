@@ -1,4 +1,6 @@
+import type { Document } from "mongodb"
 import { describe, expect, it, vi } from "vitest"
+import { createStatefulMongoFake } from "./test-helpers/stateful-mongo-fake.js"
 import {
 	buildConversationWindows,
 	projectConversationWindows,
@@ -86,28 +88,28 @@ describe("buildConversationWindows", () => {
 
 describe("projectConversationWindows", () => {
 	function createMockDb() {
-		const findResults: unknown[] = []
-		const toArrayFn = vi.fn().mockResolvedValue(findResults)
-		const limitFn = vi.fn().mockReturnValue({ toArray: toArrayFn })
-		const sortFn = vi.fn().mockReturnValue({ limit: limitFn })
-		const findFn = vi.fn().mockReturnValue({
-			sort: sortFn,
-		})
-		const updateOneFn = vi.fn().mockResolvedValue({ upsertedCount: 1 })
-		const collectionFn = vi.fn().mockReturnValue({
-			find: findFn,
-			updateOne: updateOneFn,
-		})
-
+		const fake = createStatefulMongoFake({ prefix: "test_" })
+		const events = fake.collection("events")
 		return {
-			db: {
-				collection: collectionFn,
-			} as unknown as import("mongodb").Db,
-			findFn,
-			toArrayFn,
-			updateOneFn,
-			setFindResults(results: unknown[]) {
-				toArrayFn.mockResolvedValue(results)
+			db: fake.db,
+			findFn: vi.spyOn(events, "find"),
+			updateOneFn: vi.spyOn(fake.collection("chunks"), "updateOne"),
+			setFindResults(
+				results: unknown[],
+				scope = "agent",
+				scopeRef = "agent:agent1",
+			) {
+				events.docs.splice(
+					0,
+					events.docs.length,
+					...(results as Document[]).map((event) => ({
+						...event,
+						agentId: "agent1",
+						sessionId: "s1",
+						scope,
+						scopeRef,
+					})),
+				)
 			},
 		}
 	}
@@ -195,7 +197,7 @@ describe("projectConversationWindows", () => {
 			scopeRef: "agent:agent1",
 		})
 
-		const firstCallUpdate = mock.updateOneFn.mock.calls[0][1]
+		const firstCallUpdate = mock.updateOneFn.mock.calls[0][1] as Document
 		// The update should contain sessionId and windowIndex
 		const allFields = {
 			...firstCallUpdate.$set,
@@ -203,5 +205,46 @@ describe("projectConversationWindows", () => {
 		}
 		expect(allFields.sessionId).toBe("s1")
 		expect(typeof allFields.windowIndex).toBe("number")
+	})
+
+	it("reads only the requested scope partition of the session", async () => {
+		const mock = createMockDb()
+		mock.setFindResults(makeEvents(5), "user", "user:one")
+		await projectConversationWindows({
+			db: mock.db,
+			prefix: "test_",
+			agentId: "agent1",
+			sessionId: "s1",
+			scope: "user",
+			scopeRef: "user:one",
+		})
+		expect(mock.findFn).toHaveBeenCalledWith(
+			expect.objectContaining({
+				agentId: "agent1",
+				sessionId: "s1",
+				scope: "user",
+				scopeRef: "user:one",
+			}),
+		)
+	})
+
+	it("matches window writes within the requested conversation namespace", async () => {
+		const mock = createMockDb()
+		mock.setFindResults(makeEvents(5), "user", "user:one")
+		await projectConversationWindows({
+			db: mock.db,
+			prefix: "test_",
+			agentId: "agent1",
+			sessionId: "s1",
+			scope: "user",
+			scopeRef: "user:one",
+		})
+		expect(mock.updateOneFn.mock.calls[0][0]).toEqual({
+			path: "windows/s1/0",
+			agentId: "agent1",
+			scope: "user",
+			scopeRef: "user:one",
+			source: "conversation",
+		})
 	})
 })

@@ -779,6 +779,10 @@ describe("mongodb-graph", () => {
 			expect(result?.connections[0]?.entity.entityId).toBe("ent-2")
 			expect(result?.connections[0]?.relation.type).toBe("works_on")
 			expect(result?.connections[0]?.depth).toBe(0)
+			// RET-05: both endpoints resolve so consumers can render the
+			// actual edge. Outgoing edge: root is the subject.
+			expect(result?.connections[0]?.fromEntity?.entityId).toBe("ent-1")
+			expect(result?.connections[0]?.toEntity?.entityId).toBe("ent-2")
 
 			// Verify $graphLookup was used on relations collection
 			expect(relationsCol.aggregate).toHaveBeenCalledOnce()
@@ -913,6 +917,63 @@ describe("mongodb-graph", () => {
 
 			// Should return null when root entity not found for agent
 			expect(result).toBeNull()
+		})
+
+		it("resolves incoming-edge endpoints with the neighbor as subject (RET-05)", async () => {
+			// The RET-05 defect: consumers assumed every edge was
+			// root→neighbor. An incoming edge ent-2→ent-1 must resolve
+			// fromEntity=ent-2 (the neighbor), toEntity=root — the stored
+			// direction, not the traversal direction.
+			const rootEntity = makeEntity()
+			const incomingRelation = {
+				fromEntityId: "ent-2",
+				toEntityId: "ent-1",
+				type: "blocked_by",
+				agentId: "agent-1",
+				scope: "agent",
+				updatedAt: new Date("2026-01-01"),
+				depth: 0,
+			}
+			const neighbor = makeEntity({
+				entityId: "ent-2",
+				name: "Atlas Local",
+				type: "system",
+			})
+
+			const entitiesCol = createMockCollection({
+				find: vi.fn().mockReturnValue({
+					toArray: vi.fn().mockResolvedValue([neighbor]),
+				}),
+			})
+			;(entitiesCol as unknown as Record<string, unknown>).findOne = vi
+				.fn()
+				.mockResolvedValue(rootEntity)
+			const relationsCol = createMockCollection({
+				aggregate: vi.fn().mockReturnValue({
+					toArray: vi.fn().mockResolvedValue([incomingRelation]),
+				}),
+			})
+
+			const db = createMockDb({
+				[`${PREFIX}entities`]: entitiesCol,
+				[`${PREFIX}relations`]: relationsCol,
+			})
+
+			const result = await expandGraph({
+				db,
+				prefix: PREFIX,
+				entityId: "ent-1",
+				agentId: "agent-1",
+				maxDepth: 1,
+			})
+
+			expect(result).not.toBeNull()
+			expect(result?.connections).toHaveLength(1)
+			expect(result?.connections[0]?.entity.entityId).toBe("ent-2")
+			// Stored direction preserved: neighbor is the subject.
+			expect(result?.connections[0]?.fromEntity?.entityId).toBe("ent-2")
+			expect(result?.connections[0]?.fromEntity?.name).toBe("Atlas Local")
+			expect(result?.connections[0]?.toEntity?.entityId).toBe("ent-1")
 		})
 	})
 

@@ -31,7 +31,6 @@ monthly reporting cycles on the same data.
 | `inputTokens` / `outputTokens` | `llm` | tokens reported by the enrichment provider transport (`prompt_tokens`/`completion_tokens` for OpenAI-compatible gateways, `input_tokens`/`output_tokens` for Anthropic) |
 | `embedUnits` | `indexing` | one write that triggers a server-side autoEmbed of an indexed field |
 | `embedUnits` | `search` | one query-time lane probe (counted from the per-request search budget) |
-| `embedUnits` | `cache-probe` | one query-cache tier-2 semantic lookup |
 | `embedUnits` | `consolidation` | one consolidator similarity probe |
 
 Embedding spend is counted in **operations**, not billable tokens: with

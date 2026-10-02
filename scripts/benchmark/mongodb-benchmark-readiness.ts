@@ -50,6 +50,24 @@ export type ReadSearchIndexStatusResult =
 	  }
 	| { kind: "fallback"; reason: "command-not-found" | "unsupported" }
 
+const TERMINAL_SEARCH_INDEX_STATUSES: readonly SearchIndexStatus[] = [
+	"FAILED",
+	"DELETING",
+	"DOES_NOT_EXIST",
+]
+
+/**
+ * Statuses that can never become queryable by waiting. FAILED and DELETING
+ * already abort the benchmark readiness wait; DOES_NOT_EXIST is the same
+ * kind of dead end — `$search` / `$vectorSearch` on a missing index return
+ * empty results instead of throwing, so polling it burns the settle timeout.
+ */
+export function isTerminalSearchIndexStatus(
+	status: SearchIndexStatus,
+): boolean {
+	return TERMINAL_SEARCH_INDEX_STATUSES.includes(status)
+}
+
 function normalizeStatus(raw: unknown): SearchIndexStatus {
 	if (typeof raw !== "string") return "DOES_NOT_EXIST"
 	const upper = raw.toUpperCase()

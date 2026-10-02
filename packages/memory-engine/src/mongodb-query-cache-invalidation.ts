@@ -1,21 +1,20 @@
-import type { Db } from "mongodb"
+import type { ClientSession, Db } from "mongodb"
 import { type MemoryScope, createSubsystemLogger } from "@memongo/lib"
 import { queryCacheCollection } from "./mongodb-schema.js"
 
 const log = createSubsystemLogger("memory:mongodb:query-cache")
 
 /**
- * P2.4: per-write `deleteMany` invalidation drove the cache hit rate toward 0
- * under write load AND put an extra round trip on the write path. Burst
- * invalidation is coalesced instead; staleness is bounded by this window and
- * the TTL backstop.
+ * Legacy query-cache rows are removed after writes while existing
+ * installations age them out. Coalescing bounds cleanup round trips during
+ * write bursts; the TTL index remains the final backstop.
  */
 export const QUERY_CACHE_INVALIDATION_DEBOUNCE_MS = 250
 
 /**
- * Invalidate the cache for one (agent, scope, scopeRef) namespace,
- * immediately. Failure is logged and swallowed: cache invalidation must
- * never break a completed primary mutation.
+ * Delete legacy cache rows for one (agent, scope, scopeRef) namespace.
+ * Failure is logged and swallowed: cleanup must never break a completed
+ * primary mutation.
  */
 export async function invalidateQueryCache(params: {
 	db: Db
@@ -23,25 +22,38 @@ export async function invalidateQueryCache(params: {
 	agentId: string
 	scope: MemoryScope
 	scopeRef: string
+	session?: ClientSession
+	/** Opt-in: rethrow instead of swallow. Used ONLY inside fenced
+	 * transactions, where a swallowed operation error breaks the driver's
+	 * withTransaction retry/abort handling. Default false keeps the
+	 * documented best-effort contract for every existing caller. */
+	throwOnError?: boolean
 }): Promise<number> {
 	try {
-		const result = await queryCacheCollection(
-			params.db,
-			params.prefix,
-		).deleteMany({
+		const collection = queryCacheCollection(params.db, params.prefix)
+		const filter = {
 			agentId: params.agentId,
 			scope: params.scope,
 			scopeRef: params.scopeRef,
-		})
+		}
+		// Without a session the call keeps the single-argument legacy shape
+		// (byte-pinned by the mongodb-kb.test.ts regression suite); only
+		// fenced callers, which always hold a session, get the options arg.
+		const result = params.session
+			? await collection.deleteMany(filter, { session: params.session })
+			: await collection.deleteMany(filter)
 		return result.deletedCount
 	} catch (err) {
+		if (params.throwOnError) {
+			throw err
+		}
 		log.warn(`query cache invalidation failed: ${String(err)}`)
 		return 0
 	}
 }
 
 /**
- * P2.4 burst coalescer for the hot write path, leading + trailing:
+ * Burst coalescer for legacy cleanup on the hot write path, leading + trailing:
  * - A write to a QUIET namespace fires immediately (leading), so the common
  *   single-write flow keeps its old eager-invalidation behavior and no
  *   staleness window opens.

@@ -1,12 +1,23 @@
+import { settledFailureMeta } from "./query-diagnostics.js"
 import type { Db, Document } from "mongodb"
 import { type MemoryScope, createSubsystemLogger } from "@memongo/lib"
+import {
+	derivationFromRole,
+	isUserDerivation,
+	parseResultRole,
+} from "./memory-derivation.js"
 import { buildDiscoveryProjection } from "./mongodb-discovery-projections.js"
 import { hydrateActiveSlate } from "./mongodb-active-slate.js"
 import { synthesizeProfile, type ProfileSynthesis } from "./mongodb-profile.js"
 import { resolveTimeRangePreset } from "./mongodb-retrieval-planner.js"
 import { episodesCollection, eventsCollection } from "./mongodb-schema.js"
 import { resolveScopeRef } from "./mongodb-scope.js"
-import { emitTelemetry } from "./mongodb-telemetry.js"
+import { emitTelemetry, type TelemetryDocument } from "./mongodb-telemetry.js"
+import {
+	ErasureGateConflictError,
+	type AdmissionToken,
+} from "./mongodb-write-fence.js"
+import { buildEventLifecycleClause } from "./mongodb-temporal.js"
 import type {
 	MemoryContextBundle,
 	MemoryContextBundleRequest,
@@ -14,12 +25,27 @@ import type {
 	MemoryContextBundleSectionItem,
 	MemoryDiscoveryProjection,
 	MemoryDiscoveryProjectionKind,
+	MemoryResultDerivation,
 	MemorySearchResult,
 	MemorySearchTimeRange,
 	MemorySearchTrustSummary,
 } from "./types.js"
 
 const log = createSubsystemLogger("memory:mongodb:context-bundle")
+function emitReadTelemetry(
+	db: Db,
+	prefix: string,
+	doc: Omit<TelemetryDocument, "ts">,
+	admission?: AdmissionToken,
+): void {
+	if (admission) {
+		void emitTelemetry(db, prefix, doc, { admission }).catch(() =>
+			log.warn("context-bundle telemetry emit failed"),
+		)
+	} else {
+		emitTelemetry(db, prefix, doc)
+	}
+}
 
 const DEFAULT_TOKEN_BUDGET = 450
 const MIN_TOKEN_BUDGET = 128
@@ -216,13 +242,62 @@ function formatTimestamp(value?: Date): string | undefined {
 	return value.toISOString().replace(".000Z", "Z")
 }
 
+// JSON.stringify escapes all C0 controls but emits U+0085/U+2028/U+2029
+// raw; escaping those three keeps framed text free of any line-terminating
+// code point, so payload text can never start a line.
+function frameUntrusted(value: string | undefined): string {
+	const trimmed = value?.trim()
+	if (!trimmed) {
+		return ""
+	}
+	return JSON.stringify(trimmed)
+		.replace(/\u2028/g, "\\u2028")
+		.replace(/\u2029/g, "\\u2029")
+		.replace(/\u0085/g, "\\u0085")
+}
+
+const KNOWN_DERIVATIONS = new Set<string>([
+	"user",
+	"user-extracted",
+	"agent",
+	"derived",
+	"inferred",
+	"reference",
+] satisfies Array<MemoryResultDerivation>)
+
+// Both section selection and item markers use derivation before role.
+function resolveEvidenceDerivation(source: {
+	derivation?: unknown
+	role?: unknown
+}): MemoryResultDerivation | undefined {
+	const derivation = source.derivation
+	if (typeof derivation === "string" && KNOWN_DERIVATIONS.has(derivation)) {
+		return derivation as MemoryResultDerivation
+	}
+	const role = parseResultRole(source.role)
+	if (role) {
+		return derivationFromRole(role)
+	}
+	return undefined
+}
+
+// Authorship comes only from provenance metadata (RET-09), never item
+// text; unknown or absent provenance must not read as user-stated.
+function authorshipMarker(item: MemoryContextBundleSectionItem): string {
+	const derivation = resolveEvidenceDerivation(item.metadata ?? {})
+	return derivation ? `[${derivation}]` : "[unattributed]"
+}
+
 function renderItem(item: MemoryContextBundleSectionItem): string {
-	const summary = item.summary.trim()
+	// Trusted markers (authorship, timestamp, trust enum) render outside
+	// the quotes so they stay structurally distinct from framed payload.
+	const title = frameUntrusted(item.title) || '"Untitled"'
+	const summary = frameUntrusted(item.summary)
+	const pathLabel = frameUntrusted(item.path)
 	const timeLabel = formatTimestamp(item.timestamp)
-	const pathLabel = item.path?.trim()
 	const trustLabel = item.trust?.confidence
 
-	let line = `- ${item.title.trim() || "Untitled"}`
+	let line = `- ${authorshipMarker(item)} ${title}`
 	if (timeLabel) {
 		line += ` [${timeLabel}]`
 	}
@@ -244,8 +319,10 @@ function renderSectionText(section: {
 	items: MemoryContextBundleSectionItem[]
 }): string {
 	const lines = [`## ${section.title}`]
-	if (section.summary?.trim()) {
-		lines.push(section.summary.trim())
+	// Summaries embed stored source labels and the client sessionId.
+	const summary = frameUntrusted(section.summary)
+	if (summary) {
+		lines.push(summary)
 	}
 	for (const item of section.items) {
 		lines.push(renderItem(item))
@@ -306,11 +383,15 @@ function materializeSection(
 async function settled<T>(
 	label: string,
 	fn: () => Promise<T>,
+	query?: string,
 ): Promise<{ value: T | null; failed: boolean }> {
 	try {
 		return { value: await fn(), failed: false }
 	} catch (error) {
-		log.warn(`buildContextBundle: ${label} query failed`, { error })
+		log.warn(
+			`buildContextBundle: ${label} query failed`,
+			settledFailureMeta(error, query),
+		)
 		return { value: null, failed: true }
 	}
 }
@@ -367,14 +448,8 @@ async function loadEpisodeSummary(params: {
 		.next() as Promise<EpisodeSummaryDoc | null>
 }
 
-/** Classify a search result as explicit (user-stated) or derived (agent-inferred). */
 function isExplicitEvidence(result: MemorySearchResult): boolean {
-	// High confidence (>=0.9) or no confidence (pre-existing data) = explicit
-	if (typeof result.confidence === "number") {
-		return result.confidence >= 0.9
-	}
-	// No confidence field = pre-existing data, treat as explicit
-	return true
+	return isUserDerivation(resolveEvidenceDerivation(result))
 }
 
 function toEvidenceItem(result: MemorySearchResult) {
@@ -389,6 +464,12 @@ function toEvidenceItem(result: MemorySearchResult) {
 		scopeRef: result.scopeRef,
 		sourceEventIds: result.sourceEventIds,
 		trust: result.trust,
+		// RET-09: surface the classification basis so bundle consumers (and
+		// tests) can see WHY an item landed in its section.
+		metadata: {
+			...(result.role ? { role: result.role } : {}),
+			...(result.derivation ? { derivation: result.derivation } : {}),
+		},
 	}
 }
 
@@ -431,10 +512,21 @@ function buildQueryEvidenceSections(
 	if (derived.length > 0) {
 		const items = derived.map(toEvidenceItem)
 		const sourceSummary = summarizeSources(items)
+		// RET-09: the derived bucket can hold cited reference spans (KB)
+		// alongside agent-generated text — say which, instead of labeling
+		// everything "agent-inferred".
+		const referenceCount = items.filter(
+			(item) => item.metadata?.derivation === "reference",
+		).length
+		const agentCount = items.length - referenceCount
+		const summary =
+			referenceCount > 0
+				? `${agentCount} agent-inferred insight${agentCount === 1 ? "" : "s"} and ${referenceCount} reference span${referenceCount === 1 ? "" : "s"} across ${sourceSummary}.`
+				: `${items.length} agent-inferred insight${items.length === 1 ? "" : "s"} across ${sourceSummary}.`
 		sections.push({
 			kind: "query-evidence",
 			title: "Derived Insights",
-			summary: `${items.length} agent-inferred insight${items.length === 1 ? "" : "s"} across ${sourceSummary}.`,
+			summary,
 			items,
 		})
 	}
@@ -587,6 +679,7 @@ function buildProfileSection(
 }
 
 export async function buildContextBundle(params: {
+	admission?: AdmissionToken
 	db: Db
 	prefix: string
 	agentId: string
@@ -603,6 +696,12 @@ export async function buildContextBundle(params: {
 }): Promise<MemoryContextBundle> {
 	const startedAt = Date.now()
 	const { db, prefix, agentId, scope, scopeRef } = params
+	if (
+		params.admission &&
+		(params.admission.kind !== "admission" ||
+			params.admission.agentId !== agentId)
+	)
+		throw new ErasureGateConflictError(agentId)
 	const request = params.request ?? {}
 	const isWakeUp = request.mode === "wake-up"
 	const query = isWakeUp ? undefined : request.query?.trim() || undefined
@@ -642,6 +741,7 @@ export async function buildContextBundle(params: {
 		await Promise.all([
 			settled("active-slate", () =>
 				hydrateActiveSlate({
+					admission: params.admission,
 					db,
 					prefix,
 					agentId,
@@ -661,18 +761,22 @@ export async function buildContextBundle(params: {
 								maxResults: maxEvidenceItems,
 								sessionId,
 							}) ?? Promise.resolve({ results: [], pathsExecuted: [] }),
+						query,
 					)
 				: Promise.resolve({ value: null, failed: false }),
-			settled("episode-summary", () =>
-				loadEpisodeSummary({
-					db,
-					prefix,
-					agentId,
-					scope,
-					scopeRef,
-					query,
-					timeRange: request.timeRange,
-				}),
+			settled(
+				"episode-summary",
+				() =>
+					loadEpisodeSummary({
+						db,
+						prefix,
+						agentId,
+						scope,
+						scopeRef,
+						query,
+						timeRange: request.timeRange,
+					}),
+				query,
 			),
 			settled("recent-events", () =>
 				eventsCollection(db, prefix)
@@ -680,6 +784,10 @@ export async function buildContextBundle(params: {
 						agentId,
 						scope: recentEventScope,
 						scopeRef: recentEventScopeRef,
+						// RET-10: same event lifecycle guard the events search lanes
+						// apply — an expired, invalidated, or not-yet-valid
+						// event must not re-enter context through hydration.
+						...buildEventLifecycleClause(),
 					})
 					.sort({ timestamp: -1 })
 					.limit(maxRecentEvents)
@@ -765,18 +873,22 @@ export async function buildContextBundle(params: {
 			: query
 				? "topic-brief"
 				: "what-changed"
-		const projectionResult = await settled("discovery-projection", () =>
-			buildDiscoveryProjection({
-				db,
-				prefix,
-				agentId,
-				kind: inferredKind,
-				query,
-				scope,
-				scopeRef,
-				maxItems: maxEvidenceItems,
-				timeRange: request.timeRange,
-			}),
+		const projectionResult = await settled(
+			"discovery-projection",
+			() =>
+				buildDiscoveryProjection({
+					admission: params.admission,
+					db,
+					prefix,
+					agentId,
+					kind: inferredKind,
+					query,
+					scope,
+					scopeRef,
+					maxItems: maxEvidenceItems,
+					timeRange: request.timeRange,
+				}),
+			query,
 		)
 		partial ||= projectionResult.failed
 		if (projectionResult.value) {
@@ -791,6 +903,7 @@ export async function buildContextBundle(params: {
 	if (request.includeProfile || isWakeUp) {
 		const profileResult = await settled("profile", () =>
 			synthesizeProfile({
+				admission: params.admission,
 				db,
 				prefix,
 				agentId,
@@ -812,45 +925,57 @@ export async function buildContextBundle(params: {
 	}
 
 	const sections: MemoryContextBundleSection[] = []
-	let estimatedTokensUsed = 0
+	const renderedParts: string[] = []
 	let truncated = false
 
 	for (const candidate of candidates) {
+		// Per-section estimates never see the "\n\n" join separators, so a
+		// summed budget can admit sections whose joined render overflows.
+		// Charge each pending separator before admitting the next section.
+		const committedText = renderedParts.join("\n\n")
+		const committedTokens = estimateTokens(
+			renderedParts.length > 0 ? `${committedText}\n\n` : committedText,
+		)
 		const section = materializeSection(
 			candidate,
-			Math.max(0, tokenBudget - estimatedTokensUsed),
+			Math.max(0, tokenBudget - committedTokens),
 		)
 		if (!section) {
 			truncated = true
 			continue
 		}
 		sections.push(section)
-		estimatedTokensUsed += section.estimatedTokens
-		truncated ||= section.truncated
-		partial ||= section.partial
-	}
-
-	const rendered = sections
-		.map((section) =>
+		renderedParts.push(
 			renderSectionText({
 				title: section.title,
 				summary: section.summary,
 				items: section.items,
 			}),
 		)
-		.join("\n\n")
+		truncated ||= section.truncated
+		partial ||= section.partial
+	}
 
-	emitTelemetry(db, prefix, {
-		meta: { agentId, operation: "context-bundle" },
-		durationMs: Date.now() - startedAt,
-		ok: sections.length > 0,
-		pathUsed: Array.from(pathsExecuted).join(","),
-		itemCount: sections.reduce(
-			(total, section) => total + section.items.length,
-			0,
-		),
-		resultCount: sections.length,
-	})
+	const rendered = renderedParts.join("\n\n")
+	// Report the joined render (separators included), not a per-section sum.
+	const estimatedTokensUsed = estimateTokens(rendered)
+
+	emitReadTelemetry(
+		db,
+		prefix,
+		{
+			meta: { agentId, operation: "context-bundle" },
+			durationMs: Date.now() - startedAt,
+			ok: sections.length > 0,
+			pathUsed: Array.from(pathsExecuted).join(","),
+			itemCount: sections.reduce(
+				(total, section) => total + section.items.length,
+				0,
+			),
+			resultCount: sections.length,
+		},
+		params.admission,
+	)
 
 	return {
 		agentId,

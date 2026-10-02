@@ -67,3 +67,12 @@ handler work.
 - **Interim posture.** Static bearer tokens have no rotation, audience, or expiry.
   The OAuth 2.1 deferral record above governs the upgrade path when an authorization
   server exists.
+
+## Amendment: aliases inherit canonical authority
+
+Semantic aliases now carry an internal canonical-tool binding. Tool selection and
+credential-scope filtering derive admin authority from that canonical operation,
+so an alias cannot bypass the admin flag or the standard credential restriction.
+The recall alias remains a core operation; the five lifecycle/import aliases
+require the same admin authorization as their canonical tools. Both tool listing
+and dispatch use the resulting enabled-tool set. The binding stays off the wire.

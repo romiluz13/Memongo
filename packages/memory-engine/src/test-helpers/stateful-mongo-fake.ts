@@ -33,7 +33,7 @@
 // NOT implemented (callers degrade or the paths are out of scope): sessions/
 // transactions, change streams, real text/vector indexes, TTL sweeps,
 // ordered bulk semantics.
-import type { Db, Document } from "mongodb"
+import type { BSONSerializeOptions, Db, Document } from "mongodb"
 
 // ---------------------------------------------------------------------------
 // Errors (shaped so isDuplicateKeyError / asBulkWriteFailure recognize them)
@@ -409,6 +409,18 @@ function evalPipelineExpression(expr: unknown, doc: Document): unknown {
 			}
 			return sawDate ? new Date(totalMs) : totalMs
 		}
+		if (keys.length === 1 && keys[0] === "$max" && Array.isArray(record.$max)) {
+			const operands = record.$max
+				.map((entry) => evalPipelineExpression(entry, doc))
+				.filter((value) => value !== null && value !== undefined)
+			return operands.reduce<unknown>(
+				(maximum, value) =>
+					maximum === null || compareValues(value, maximum) > 0
+						? value
+						: maximum,
+				null,
+			)
+		}
 		if (keys.length === 1 && keys[0] === "$ifNull") {
 			const [candidate, fallback] = (record.$ifNull as unknown[]).map((entry) =>
 				evalPipelineExpression(entry, doc),
@@ -653,6 +665,13 @@ class FakeCursor {
 
 class FakeCollection {
 	readonly docs: Document[] = []
+	readonly bsonOptions: Pick<
+		BSONSerializeOptions,
+		"ignoreUndefined" | "serializeFunctions"
+	> = {
+		ignoreUndefined: false,
+		serializeFunctions: false,
+	}
 	private readonly uniqueSpecs: UniqueSpec[] = []
 	private idCounter = 0
 
@@ -1270,8 +1289,17 @@ export function createStatefulMongoFake(params?: {
 		keys: ["path"],
 	})
 
+	// Fenced writes (mongodb-write-fence.ts) open a transaction session via
+	// db.client.startSession(); the fake executes the body directly — it is
+	// single-threaded, so the fence's meta-gate checks are what matter.
+	const fenceSession = {
+		inTransaction: () => false,
+		withTransaction: async (fn: () => Promise<unknown>) => fn(),
+		endSession: async () => {},
+	}
 	const db = {
 		collection: (name: string) => obtain(name),
+		client: { startSession: () => fenceSession },
 	} as unknown as Db
 
 	return {

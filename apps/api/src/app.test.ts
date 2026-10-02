@@ -1289,6 +1289,75 @@ describe("createApp", () => {
 		).toThrow(/concrete/i)
 	})
 
+	it("scoped-policy validation errors never embed the credential (array form)", () => {
+		const secret = "synthetic-redaction-secret-array"
+		const malformedConfigs = [
+			// invalid scope value
+			JSON.stringify([{ token: secret, scopes: ["tennant"] }]),
+			// unconstrained policy
+			JSON.stringify([{ token: secret }]),
+			// wildcard mixed with concrete values
+			JSON.stringify([{ token: secret, agentIds: ["*", "agent-a"] }]),
+			// non-array constraint list
+			JSON.stringify([{ token: secret, scopeRefs: "ref-a" }]),
+		]
+		for (const raw of malformedConfigs) {
+			let message = ""
+			try {
+				parseScopedApiKeyPolicies(raw)
+			} catch (err) {
+				message = err instanceof Error ? err.message : String(err)
+			}
+			// Still fails closed with an actionable message...
+			expect(message).not.toBe("")
+			// ...but the credential never travels into operator logs.
+			expect(message).not.toContain(secret)
+		}
+	})
+
+	it("object-form scoped-policy errors never embed the credential (the object key is the token)", () => {
+		const secret = "synthetic-redaction-secret-object"
+		let message = ""
+		try {
+			parseScopedApiKeyPolicies(
+				JSON.stringify({ [secret]: { scopes: ["bogus"] } }),
+			)
+		} catch (err) {
+			message = err instanceof Error ? err.message : String(err)
+		}
+		expect(message).not.toBe("")
+		expect(message).not.toContain(secret)
+	})
+
+	it("startup createApp config failure never embeds the credential", () => {
+		const secret = "synthetic-redaction-secret-startup"
+		process.env.MEMONGO_API_SCOPED_KEYS = JSON.stringify([
+			{ token: secret, scopes: ["bogus"] },
+		])
+		let message = ""
+		try {
+			createApp()
+		} catch (err) {
+			message = err instanceof Error ? err.message : String(err)
+		}
+		expect(message).not.toBe("")
+		expect(message).not.toContain(secret)
+	})
+
+	it("invalid-scope errors never echo the offending config value (credential pasted into scopes)", () => {
+		const secret = "synthetic-redaction-secret-in-scopes"
+		let message = ""
+		try {
+			parseScopedApiKeyPolicies(
+				JSON.stringify([{ token: "k", scopes: [secret] }]),
+			)
+		} catch (err) {
+			message = err instanceof Error ? err.message : String(err)
+		}
+		expect(message).not.toBe("")
+		expect(message).not.toContain(secret)
+	})
+
 	it("#28: rate-limits per identity and returns 429 with Retry-After", async () => {
 		process.env.MEMONGO_API_KEY = ""
 		process.env.MEMONGO_API_SCOPED_KEYS = ""

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto"
-import type { Db, Document } from "mongodb"
+import type { ClientSession, Db, Document } from "mongodb"
 import { createSubsystemLogger } from "@memongo/lib"
 import {
 	eventsCollection,
@@ -64,15 +64,23 @@ export async function recordIngestRun(params: {
 	db: Db
 	prefix: string
 	run: Omit<IngestRun, "runId" | "ts">
+	session?: ClientSession
 }): Promise<string> {
 	const { db, prefix, run } = params
 	const runId = randomUUID()
 	const doc: IngestRun = { ...run, runId, ts: new Date() }
 	try {
-		await ingestRunsCollection(db, prefix).insertOne(doc)
+		const collection = ingestRunsCollection(db, prefix)
+		if (params.session) {
+			await collection.insertOne(doc, { session: params.session })
+		} else {
+			await collection.insertOne(doc)
+		}
 		return runId
 	} catch (err) {
-		log.error("recordIngestRun failed", { runId, error: err })
+		if (!params.session) {
+			log.error("recordIngestRun failed", { runId, error: err })
+		}
 		throw err
 	}
 }
@@ -81,21 +89,34 @@ export async function recordProjectionRun(params: {
 	db: Db
 	prefix: string
 	run: Omit<ProjectionRun, "runId" | "ts">
+	session?: ClientSession
 }): Promise<string> {
 	const { db, prefix, run } = params
 	const runId = randomUUID()
 	const doc: ProjectionRun = { ...run, runId, ts: new Date() }
 	try {
-		await projectionRunsCollection(db, prefix).insertOne(doc)
-		emitTelemetry(db, prefix, {
+		const collection = projectionRunsCollection(db, prefix)
+		if (params.session) {
+			await collection.insertOne(doc, { session: params.session })
+		} else {
+			await collection.insertOne(doc)
+		}
+		const telemetry = {
 			meta: { agentId: run.agentId, operation: "projection-run" },
 			durationMs: run.durationMs,
 			ok: run.status === "ok",
 			itemCount: run.itemsProjected,
-		})
+		} as const
+		if (params.session) {
+			await emitTelemetry(db, prefix, telemetry, { session: params.session })
+		} else {
+			emitTelemetry(db, prefix, telemetry)
+		}
 		return runId
 	} catch (err) {
-		log.error("recordProjectionRun failed", { runId, error: err })
+		if (!params.session) {
+			log.error("recordProjectionRun failed", { runId, error: err })
+		}
 		throw err
 	}
 }

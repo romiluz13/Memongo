@@ -205,16 +205,30 @@ export async function findStrandingModelChanges(
 			try {
 				existing = await listSearchIndexes(collection)
 			} catch (err) {
-				// Not an Atlas deployment, or search is unavailable. Fail open
-				// but log — the operator should know the scan was incomplete.
-				// Matches agent-memory's pattern of warning on mid-scan errors.
-				// C-002: the error chain is redacted before it reaches the log.
+				// Not an Atlas deployment, or search is unavailable. Fail closed:
+				// an incomplete scan cannot prove the model did not change, and
+				// proceeding would let the recovering ensure re-embed every
+				// document on the wrong premise. C-002: the error chain is
+				// redacted before it reaches the log; the thrown error carries
+				// no cause at all — only the failing collection and remediation.
 				console.warn(
 					`[guardrail] Could not inspect search indexes on ` +
-						`${target.collectionName}: ${formatErrorMessage(err)}. Proceeding; if the model ` +
-						`did change, existing documents will be re-embedded on startup.`,
+						`${target.collectionName}: ${formatErrorMessage(err)}. ` +
+						`Refusing to start; the model scan was incomplete.`,
 				)
-				return []
+				const incomplete = new Error(
+					`Refusing to start: the autoEmbed model scan was incomplete — ` +
+						`could not inspect search indexes on ${target.collectionName}. ` +
+						`An unconfirmed model change could re-embed existing ` +
+						`documents server-side on startup.\n` +
+						`Choose one:\n` +
+						`  • Retry the startup, or check Atlas Search availability and ` +
+						`index-management privileges for this collection.\n` +
+						`  • Confirm the change is intentional and set ` +
+						`MEMONGO_ALLOW_EMBEDDING_MODEL_CHANGE=true to proceed.`,
+				)
+				incomplete.name = "EmbeddingModelInspectionError"
+				throw incomplete
 			}
 			const index = existing.find((idx) => idx.name === indexName)
 			if (!index) continue

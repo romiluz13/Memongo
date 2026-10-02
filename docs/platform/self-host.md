@@ -4,7 +4,7 @@ Memongo is data-plane memory you run next to your agents. This runbook describes
 
 ## Components
 
-1. MongoDB via managed Atlas cloud or `mongodb/mongodb-atlas-local` (pinned dated tag in `docker/docker-compose.yml`).
+1. MongoDB via managed Atlas cloud or `mongodb/mongodb-atlas-local:preview` (floating tag in `docker/docker-compose.yml`; record its resolved digest when validating a deployment).
 2. `apps/api` - stateless HTTP service.
 3. Optional: `apps/web` and `apps/mcp`.
 
@@ -56,10 +56,9 @@ flipped without a restart:
   `1 / rate`. Invalid values fall back to full emission; the cost ledger is
   never sampled regardless of this setting.
 
-> [!WARNING]
-> MongoDB Automated Embedding is an upstream Preview feature that MongoDB says
-> not to use in production. The current automated semantic-search path is for
-> evaluation and controlled preview deployments.
+Memongo's automated semantic-search path uses MongoDB Automated Embedding,
+currently labeled [Preview by MongoDB](https://www.mongodb.com/docs/vector-search/crud-embeddings/automated-embedding/).
+Verify the upstream requirements for the deployment you use.
 
 ## MongoDB runtimes
 
@@ -79,6 +78,47 @@ export MEMONGO_MONGODB_URI="mongodb://127.0.0.1:27017/?directConnection=true"
 ```
 
 Use managed Atlas cloud for benchmark/control runs and Atlas Local Preview for local reproducibility.
+
+## Migrating retained diagnostics to ordinary collections
+
+Older Memongo versions created `memory_telemetry` and `access_events` as
+time-series collections. Current versions write ordinary collections with a
+TTL index on `ts`; startup leaves existing time-series collections untouched,
+so retained history keeps working but stays on the old layout. The offline
+converter moves that history during a maintenance window. Stop application
+writes and external DDL for the target database until conversion finishes:
+
+```bash
+export MEMONGO_MONGODB_URI="mongodb://..."
+bun scripts/migrate-diagnostics-to-ordinary.ts --state /tmp/migrate-state.json
+```
+
+- Default mode is a dry run: it reports what it would do, mutates nothing,
+  and writes no state file. Add `--apply` to convert, `--abort` to clean up.
+- The tool requires MongoDB 9 or newer with FCV 9 or newer. This is a minimum
+  gate, not certification of untested future releases; namespace, digest, UUID,
+  and command checks still fail safely if the server does not support the
+  required behavior. The tested baseline is MongoDB 9.0.0-rc0 with FCV 9.
+- Each surface is copied into a `...__ordinary_candidate` collection under a
+  snapshot session, verified against a pinned digest of the source, then
+  installed by renaming over the source. The state file records every step,
+  so an interrupted `--apply` reconciles the observed namespaces before it
+  resumes or safely restarts an incomplete copy.
+- Time-series `_id` values are not unique (duplicates and missing values
+  occur). The conversion assigns fresh unique `_id` values and preserves
+  every other field byte-for-byte; the digest check proves payload equality
+  before the install step.
+- Canonical retention is 7 days for telemetry and 30 days for access events
+  (the values the engine enforces at startup). If a source carries a
+  different TTL, the run stops with the source unchanged; pass
+  `--accept-retention-change` to adopt the canonical value.
+- `--abort` drops only candidate collections whose UUID matches the state
+  file. Once a surface is installed, abort refuses: the rename already
+  removed the time-series source, and the ordinary collection is the data.
+
+`MEMONGO_MONGODB_DATABASE` (default `memongo`) and
+`MEMONGO_MONGODB_COLLECTION_PREFIX` (default `memongo_`) select the target
+names and must match the values the deployment uses.
 
 ## Running the API
 

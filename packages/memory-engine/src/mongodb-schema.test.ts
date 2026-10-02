@@ -34,6 +34,7 @@ function mockCollection(name: string): Collection {
 	return {
 		collectionName: name,
 		createIndex: vi.fn(async () => name),
+		listIndexes: vi.fn(() => ({ toArray: async () => [] })),
 		createSearchIndex: vi.fn(async () => name),
 		updateSearchIndex: vi.fn(async () => undefined),
 		dropIndex: vi.fn(async () => ({ ok: 1 })),
@@ -67,10 +68,14 @@ function mockDb(
 			collections.set(name, mockCollection(name))
 			return collections.get(name)!
 		}),
-		listCollections: vi.fn(() => ({
+		listCollections: vi.fn((filter?: { name?: string }) => ({
 			map: vi.fn(() => ({
 				toArray: async () => existingCollections,
 			})),
+			toArray: async () =>
+				existingCollections
+					.filter((name) => !filter?.name || name === filter.name)
+					.map((name) => ({ name, type: "collection" })),
 		})),
 	} as unknown as Db
 
@@ -291,9 +296,10 @@ describe("schema constants", () => {
 		expect(schema.required).toContain("status")
 		// `classification` is tightly scoped — only injection-likely rows land here.
 		expect(schema.properties.classification.enum).toEqual(["injection-likely"])
-		// Lifecycle statuses for the pending → promoted / rejected flow.
+		// Lifecycle statuses for the pending → promoting → promoted / rejected flow.
 		expect(schema.properties.status.enum).toEqual([
 			"pending-review",
+			"promoting",
 			"rejected",
 			"promoted",
 		])
@@ -348,7 +354,7 @@ describe("schema constants", () => {
 // ---------------------------------------------------------------------------
 
 describe("ensureCollections", () => {
-	it("creates all collections when none exist, including both time series collections", async () => {
+	it("creates all collections when none exist, including both ordinary diagnostic sinks", async () => {
 		const db = mockDb([])
 		await ensureCollections(db, "test_")
 		// 30 = 28 baseline + 1 memory_quarantine (embedding_cache removed, #13)
@@ -540,7 +546,7 @@ describe("ensureStandardIndexes", () => {
 		// 1 structured revisions + 3 relevance_runs + 2 relevance_artifacts +
 		// 2 relevance_regressions + 9 events (6 + 1 dreamerProcessedAt + 1 bi-temporal SE-1 + 1 idempotency) + 6 entities (3 + 2 Phase 3.4 + 1 P3.8 agent/updatedAt ESR) + 4 relations +
 		// 2 entity links + 7 episodes (6 base + 1 promotion) + 1 ingest_runs + 1 projection_runs +
-		// 4 procedures + 1 procedure_revisions + 3 query_cache + 2 telemetry + 3 access_events (2 + 1 W11 batchId)
+		// 4 procedures + 1 procedure_revisions + 1 legacy query_cache TTL + 2 telemetry + 3 access_events (2 + 1 W11 batchId)
 		// + 3 memory_mutations (compound + TTL + per-document)
 		// + 1 lane_coverage (unique agentId)
 		// + 2 consolidation_runs (agent_time + gate lease)
@@ -557,8 +563,8 @@ describe("ensureStandardIndexes", () => {
 		// C-005: +2 partial TTL indexes (chunks + session_chunks expiresAt)
 		// C-004: +3 memory_quarantine (unique id, queue listing, pending TTL)
 		// C-017 (WS-10): +2 cost ledger (unique agent/day/kind + TTL)
-		// Total = 103
-		expect(count).toBe(103)
+		// Total = 101
+		expect(count).toBe(101)
 		expect(chunks.createIndex).toHaveBeenCalledTimes(5)
 		// C-005: per-document chunk TTL, mirroring idx_events_ttl_expires_at.
 		expect(chunks.createIndex).toHaveBeenCalledWith(
@@ -645,7 +651,7 @@ describe("ensureStandardIndexes", () => {
 		expect(procedures.createIndex).toHaveBeenCalledTimes(6)
 		expect(procedureRevisions.createIndex).toHaveBeenCalledTimes(1)
 
-		// Query cache and telemetry
+		// Legacy query-cache retention and telemetry
 		const queryCache = db.collection("test_query_cache") as unknown as {
 			createIndex: ReturnType<typeof vi.fn>
 		}
@@ -655,7 +661,7 @@ describe("ensureStandardIndexes", () => {
 		const accessEvents = db.collection("test_access_events") as unknown as {
 			createIndex: ReturnType<typeof vi.fn>
 		}
-		expect(queryCache.createIndex).toHaveBeenCalledTimes(3)
+		expect(queryCache.createIndex).toHaveBeenCalledTimes(1)
 		expect(telemetry.createIndex).toHaveBeenCalledTimes(2)
 		// W11: 3 = 2 base + batchId read-reconcile index.
 		expect(accessEvents.createIndex).toHaveBeenCalledTimes(3)
@@ -703,13 +709,13 @@ describe("ensureStandardIndexes", () => {
 			) as unknown as {
 				createIndex: ReturnType<typeof vi.fn>
 			}
-			// 103 base (incl. 2 consolidation_runs + events idempotency key,
+			// 101 base (incl. 2 consolidation_runs + events idempotency key,
 			// 2 P4.4.1 partial TTL indexes, the 2 C-005 chunks/session_chunks
 			// TTL indexes, the 3 C-004 memory_quarantine indexes, the
 			// 2 C-017 cost-ledger indexes, and the W11 access_events batchId
 			// read-reconcile index)
 			// + 4 evidence mirror indexes
-			expect(count).toBe(107)
+			expect(count).toBe(105)
 			expect(memoryEvidence.createIndex).toHaveBeenCalledTimes(4)
 			expect(memoryEvidence.createIndex).toHaveBeenCalledWith(
 				{ canonicalId: 1 },
@@ -817,7 +823,7 @@ describe("ensureStandardIndexes", () => {
 		// 25 (v1 base, embedding_cache removed #13) + 9 events (6 + 1 dreamerProcessedAt + 1 bi-temporal SE-1 + 1 idempotency) + 3 entities + 4 relations +
 		// 2 entity links + 7 episodes (6 base + 1 promotion) + 1 ingest_runs + 1 projection_runs +
 		// 1 structured scope + 1 structured revisions + 4 procedures + 1 procedure_revisions +
-		// 3 query_cache + 2 telemetry + 3 access_events (2 + 1 W11 batchId) + 3 memory_mutations
+		// 1 legacy query_cache TTL + 2 telemetry + 3 access_events (2 + 1 W11 batchId) + 3 memory_mutations
 		// + 1 lane_coverage + 2 consolidation_runs + 3 session_chunks
 		// + 1 bi-temporal valid-time (#32) + 2 durable job claim/TTL indexes
 		// + 1 extraction outbox partial index + 1 unique relation identity
@@ -826,8 +832,8 @@ describe("ensureStandardIndexes", () => {
 		// C-005: +2 partial TTL indexes (chunks + session_chunks expiresAt)
 		// C-004: +3 memory_quarantine (unique id, queue listing, pending TTL)
 		// C-017 (WS-10): +2 cost ledger (unique agent/day/kind + TTL)
-		// Total = 103
-		expect(count).toBe(103)
+		// Total = 101
+		expect(count).toBe(101)
 	})
 
 	it("creates relevance TTL indexes when relevanceRetentionDays is set", async () => {
@@ -962,6 +968,470 @@ describe("ensureStandardIndexes", () => {
 		).toBeUndefined()
 		// The non-TTL review indexes are still created.
 		expect(quarantineOff.createIndex).toHaveBeenCalledTimes(2)
+	})
+})
+
+// ---------------------------------------------------------------------------
+// F1: TTL convergence — inspect the named index first; create absent, no-op on
+// key+expiry match, collMod on TTL expiry drift, fail on incompatible same-name
+// indexes. Drop-when-disabled and the relevance TTL↔plain swap are preserved.
+// ---------------------------------------------------------------------------
+
+describe("TTL index convergence (F1)", () => {
+	const collModCalls = (db: Db, collectionName: string): unknown[][] => {
+		const command = db.command as unknown as ReturnType<typeof vi.fn>
+		return command.mock.calls.filter(
+			(c: unknown[]) =>
+				c[0] !== null &&
+				typeof c[0] === "object" &&
+				(c[0] as Record<string, unknown>).collMod === collectionName,
+		)
+	}
+
+	const createIndexCallsFor = (
+		coll: { createIndex: ReturnType<typeof vi.fn> },
+		indexName: string,
+	): unknown[][] =>
+		coll.createIndex.mock.calls.filter(
+			(c: unknown[]) =>
+				c[1] &&
+				typeof c[1] === "object" &&
+				(c[1] as Record<string, unknown>).name === indexName,
+		)
+
+	const stubListIndexes = (
+		db: Db,
+		collectionName: string,
+		firstCallSpecs: Array<Record<string, unknown>>,
+		laterCallSpecs = firstCallSpecs,
+	) => {
+		const coll = db.collection(collectionName) as unknown as {
+			listIndexes: ReturnType<typeof vi.fn>
+			createIndex: ReturnType<typeof vi.fn>
+			dropIndex: ReturnType<typeof vi.fn>
+		}
+		coll.listIndexes
+			.mockImplementationOnce(() => ({
+				toArray: async () => firstCallSpecs,
+			}))
+			.mockImplementation(() => ({
+				toArray: async () => laterCallSpecs,
+			}))
+		return coll
+	}
+
+	it("creates the TTL index with exact options when no same-name index exists", async () => {
+		const db = mockDb()
+		await ensureStandardIndexes(db, "test_", { memoryTtlDays: 90 })
+		const files = db.collection("test_files") as unknown as {
+			createIndex: ReturnType<typeof vi.fn>
+		}
+		const created = createIndexCallsFor(files, "idx_files_ttl")
+		expect(created).toHaveLength(1)
+		expect(created[0]?.[0]).toEqual({ updatedAt: 1 })
+		// F1 (review): the simple collation is pinned explicitly — a collection
+		// whose default collation is non-simple must not leak it into the
+		// managed index (the next run would then reject what this run made).
+		expect(created[0]?.[1]).toEqual({
+			name: "idx_files_ttl",
+			expireAfterSeconds: 90 * 24 * 60 * 60,
+			collation: { locale: "simple" },
+		})
+		expect(collModCalls(db, "test_files")).toHaveLength(0)
+	})
+
+	it("retires a present same-key counterpart before creating the target", async () => {
+		const db = mockDb()
+		stubListIndexes(db, "test_files", [
+			{ name: "_id_", key: { _id: 1 } },
+			{ name: "idx_files_updated", key: { updatedAt: 1 } },
+		])
+		await ensureStandardIndexes(db, "test_", { memoryTtlDays: 90 })
+		const files = db.collection("test_files") as unknown as {
+			createIndex: ReturnType<typeof vi.fn>
+			dropIndex: ReturnType<typeof vi.fn>
+		}
+		// F18: the counterpart is dropped by the helper, then the target created.
+		expect(files.dropIndex.mock.calls).toEqual([["idx_files_updated"]])
+		expect(createIndexCallsFor(files, "idx_files_ttl")).toHaveLength(1)
+	})
+
+	it("no-ops when the existing TTL index matches key and expiry", async () => {
+		const db = mockDb()
+		const files = stubListIndexes(db, "test_files", [
+			{ name: "_id_", key: { _id: 1 } },
+			{
+				name: "idx_files_ttl",
+				key: { updatedAt: 1 },
+				expireAfterSeconds: 90 * 24 * 60 * 60,
+			},
+		])
+		await ensureStandardIndexes(db, "test_", { memoryTtlDays: 90 })
+		expect(createIndexCallsFor(files, "idx_files_ttl")).toHaveLength(0)
+		expect(collModCalls(db, "test_files")).toHaveLength(0)
+	})
+
+	it("converges a changed files expiry with exactly one collMod", async () => {
+		const db = mockDb()
+		const files = stubListIndexes(
+			db,
+			"test_files",
+			[
+				{
+					name: "idx_files_ttl",
+					key: { updatedAt: 1 },
+					expireAfterSeconds: 31 * 24 * 60 * 60,
+				},
+			],
+			[
+				{
+					name: "idx_files_ttl",
+					key: { updatedAt: 1 },
+					expireAfterSeconds: 45 * 24 * 60 * 60,
+				},
+			],
+		)
+		await ensureStandardIndexes(db, "test_", { memoryTtlDays: 45 })
+		const collMods = collModCalls(db, "test_files")
+		expect(collMods).toHaveLength(1)
+		expect(collMods[0]?.[0]).toEqual({
+			collMod: "test_files",
+			index: {
+				name: "idx_files_ttl",
+				expireAfterSeconds: 45 * 24 * 60 * 60,
+			},
+		})
+		// Converged in place — never dropped/recreated.
+		expect(createIndexCallsFor(files, "idx_files_ttl")).toHaveLength(0)
+	})
+
+	// Regression: MongoDB 9.0 records the default collation explicitly
+	// (verified on 9.0.0-rc0 — a plain createIndex reports
+	// collation: { locale: "simple" } in listIndexes). Per the collation
+	// reference, simple is binary comparison, the semantics of no collation;
+	// it must not be mistaken for an operator-applied foreign option.
+	it("converges when the server records the default simple collation on the index", async () => {
+		const db = mockDb()
+		const files = stubListIndexes(
+			db,
+			"test_files",
+			[
+				{
+					name: "idx_files_ttl",
+					key: { updatedAt: 1 },
+					expireAfterSeconds: 31 * 24 * 60 * 60,
+					collation: { locale: "simple" },
+				},
+			],
+			[
+				{
+					name: "idx_files_ttl",
+					key: { updatedAt: 1 },
+					expireAfterSeconds: 45 * 24 * 60 * 60,
+					collation: { locale: "simple" },
+				},
+			],
+		)
+		await ensureStandardIndexes(db, "test_", { memoryTtlDays: 45 })
+		expect(collModCalls(db, "test_files")).toEqual([
+			[
+				{
+					collMod: "test_files",
+					index: {
+						name: "idx_files_ttl",
+						expireAfterSeconds: 45 * 24 * 60 * 60,
+					},
+				},
+			],
+		])
+		expect(createIndexCallsFor(files, "idx_files_ttl")).toHaveLength(0)
+	})
+
+	it("no-ops when the matching TTL index carries the server-default simple collation", async () => {
+		const db = mockDb()
+		const files = stubListIndexes(db, "test_files", [
+			{
+				name: "idx_files_ttl",
+				key: { updatedAt: 1 },
+				expireAfterSeconds: 90 * 24 * 60 * 60,
+				collation: { locale: "simple" },
+			},
+		])
+		await ensureStandardIndexes(db, "test_", { memoryTtlDays: 90 })
+		expect(createIndexCallsFor(files, "idx_files_ttl")).toHaveLength(0)
+		expect(collModCalls(db, "test_files")).toHaveLength(0)
+	})
+
+	it("still fails when the same-name index carries a non-simple collation", async () => {
+		const db = mockDb()
+		const files = stubListIndexes(db, "test_files", [
+			{
+				name: "idx_files_ttl",
+				key: { updatedAt: 1 },
+				expireAfterSeconds: 5,
+				collation: { locale: "en", strength: 2 },
+			},
+		])
+		await expect(
+			ensureStandardIndexes(db, "test_", { memoryTtlDays: 90 }),
+		).rejects.toThrow(/collMod cannot remove: collation/)
+		expect(collModCalls(db, "test_files")).toHaveLength(0)
+		expect(createIndexCallsFor(files, "idx_files_ttl")).toHaveLength(0)
+	})
+
+	it("fails when collMod returns success but the catalog still shows the old expiry", async () => {
+		const db = mockDb()
+		stubListIndexes(db, "test_files", [
+			{
+				name: "idx_files_ttl",
+				key: { updatedAt: 1 },
+				expireAfterSeconds: 31 * 24 * 60 * 60,
+			},
+		])
+		await expect(
+			ensureStandardIndexes(db, "test_", { memoryTtlDays: 45 }),
+		).rejects.toThrow(/collMod returned success/)
+	})
+
+	it("fails without mutating when a same-name index has a different key", async () => {
+		const db = mockDb()
+		const files = stubListIndexes(db, "test_files", [
+			{
+				name: "idx_files_ttl",
+				key: { createdAt: 1 },
+				expireAfterSeconds: 123,
+			},
+		])
+		await expect(
+			ensureStandardIndexes(db, "test_", { memoryTtlDays: 90 }),
+		).rejects.toThrow(/idx_files_ttl.*incompatible|incompatible.*idx_files_ttl/)
+		expect(collModCalls(db, "test_files")).toHaveLength(0)
+		expect(createIndexCallsFor(files, "idx_files_ttl")).toHaveLength(0)
+	})
+
+	it("fails when the same-name index is not a TTL index", async () => {
+		const db = mockDb()
+		stubListIndexes(db, "test_files", [
+			{ name: "idx_files_ttl", key: { updatedAt: 1 } },
+		])
+		await expect(
+			ensureStandardIndexes(db, "test_", { memoryTtlDays: 90 }),
+		).rejects.toThrow(/is not a TTL index/)
+	})
+
+	it("fails when the same-name index carries options collMod cannot remove", async () => {
+		const db = mockDb()
+		stubListIndexes(db, "test_files", [
+			{
+				name: "idx_files_ttl",
+				key: { updatedAt: 1 },
+				expireAfterSeconds: 5,
+				unique: true,
+			},
+		])
+		await expect(
+			ensureStandardIndexes(db, "test_", { memoryTtlDays: 90 }),
+		).rejects.toThrow(/collMod cannot remove/)
+	})
+
+	it("rejects an out-of-range expireAfterSeconds before touching the catalog", async () => {
+		const db = mockDb()
+		const files = stubListIndexes(db, "test_files", [])
+		await expect(
+			// 30000 days * 86400 exceeds the documented 2147483647 ceiling
+			ensureStandardIndexes(db, "test_", { memoryTtlDays: 30000 }),
+		).rejects.toThrow(/invalid/)
+		expect(collModCalls(db, "test_files")).toHaveLength(0)
+		expect(createIndexCallsFor(files, "idx_files_ttl")).toHaveLength(0)
+	})
+
+	it("converges the episodes TTL expiry via collMod", async () => {
+		const db = mockDb()
+		const episodes = stubListIndexes(
+			db,
+			"test_episodes",
+			[
+				{
+					name: "idx_episodes_ttl_updated",
+					key: { updatedAt: 1 },
+					expireAfterSeconds: 9 * 24 * 60 * 60,
+				},
+			],
+			[
+				{
+					name: "idx_episodes_ttl_updated",
+					key: { updatedAt: 1 },
+					expireAfterSeconds: 12 * 24 * 60 * 60,
+				},
+			],
+		)
+		await ensureStandardIndexes(db, "test_", { episodesRetentionDays: 12 })
+		expect(collModCalls(db, "test_episodes")).toEqual([
+			[
+				{
+					collMod: "test_episodes",
+					index: {
+						name: "idx_episodes_ttl_updated",
+						expireAfterSeconds: 12 * 24 * 60 * 60,
+					},
+				},
+			],
+		])
+		expect(
+			createIndexCallsFor(episodes, "idx_episodes_ttl_updated"),
+		).toHaveLength(0)
+	})
+
+	it("converges both relevance TTL indexes and keeps the plain counterparts dropped", async () => {
+		const db = mockDb()
+		const runs = stubListIndexes(
+			db,
+			"test_relevance_runs",
+			[
+				{
+					name: "idx_relruns_ttl",
+					key: { ts: 1 },
+					expireAfterSeconds: 17 * 24 * 60 * 60,
+				},
+				{ name: "idx_relruns_ts", key: { ts: 1 } },
+			],
+			[
+				{
+					name: "idx_relruns_ttl",
+					key: { ts: 1 },
+					expireAfterSeconds: 23 * 24 * 60 * 60,
+				},
+			],
+		)
+		const artifacts = stubListIndexes(
+			db,
+			"test_relevance_artifacts",
+			[
+				{
+					name: "idx_relart_ttl",
+					key: { ts: 1 },
+					expireAfterSeconds: 17 * 24 * 60 * 60,
+				},
+				{ name: "idx_relart_ts", key: { ts: 1 } },
+			],
+			[
+				{
+					name: "idx_relart_ttl",
+					key: { ts: 1 },
+					expireAfterSeconds: 23 * 24 * 60 * 60,
+				},
+			],
+		)
+		await ensureStandardIndexes(db, "test_", { relevanceRetentionDays: 23 })
+		// F2: the helper drops each counterpart only after the target is
+		// verified converged.
+		expect(runs.dropIndex).toHaveBeenCalledWith("idx_relruns_ts")
+		expect(artifacts.dropIndex).toHaveBeenCalledWith("idx_relart_ts")
+		expect(collModCalls(db, "test_relevance_runs")).toEqual([
+			[
+				{
+					collMod: "test_relevance_runs",
+					index: {
+						name: "idx_relruns_ttl",
+						expireAfterSeconds: 23 * 24 * 60 * 60,
+					},
+				},
+			],
+		])
+		expect(collModCalls(db, "test_relevance_artifacts")).toEqual([
+			[
+				{
+					collMod: "test_relevance_artifacts",
+					index: {
+						name: "idx_relart_ttl",
+						expireAfterSeconds: 23 * 24 * 60 * 60,
+					},
+				},
+			],
+		])
+		expect(createIndexCallsFor(runs, "idx_relruns_ttl")).toHaveLength(0)
+		expect(createIndexCallsFor(artifacts, "idx_relart_ttl")).toHaveLength(0)
+	})
+
+	it("leaves the same-key counterpart untouched when the files target is incompatible", async () => {
+		const db = mockDb()
+		stubListIndexes(db, "test_files", [
+			{ name: "_id_", key: { _id: 1 } },
+			// Same name, plain index (no TTL) — the helper must throw here.
+			{ name: "idx_files_ttl", key: { updatedAt: 1 } },
+			{ name: "idx_files_updated", key: { updatedAt: 1 } },
+		])
+		await expect(
+			ensureStandardIndexes(db, "test_", { memoryTtlDays: 90 }),
+		).rejects.toThrow(/is not a TTL index/)
+		const files = db.collection("test_files") as unknown as {
+			dropIndex: ReturnType<typeof vi.fn>
+		}
+		// F2: classify before mutating — the counterpart survives a refusal.
+		expect(files.dropIndex).not.toHaveBeenCalled()
+	})
+
+	it("leaves the same-key counterpart untouched when a relevance target is incompatible", async () => {
+		const db = mockDb()
+		stubListIndexes(db, "test_relevance_runs", [
+			{
+				name: "idx_relruns_ttl",
+				key: { ts: 1 },
+				expireAfterSeconds: 5 * 24 * 60 * 60,
+				unique: true,
+			},
+			{ name: "idx_relruns_ts", key: { ts: 1 } },
+		])
+		await expect(
+			ensureStandardIndexes(db, "test_", { relevanceRetentionDays: 23 }),
+		).rejects.toThrow(/collMod cannot remove/)
+		const runs = db.collection("test_relevance_runs") as unknown as {
+			dropIndex: ReturnType<typeof vi.fn>
+		}
+		expect(runs.dropIndex).not.toHaveBeenCalled()
+	})
+
+	it("swaps relevance TTL back to the plain ts indexes when retention is disabled", async () => {
+		const db = mockDb()
+		const runs = db.collection("test_relevance_runs") as unknown as {
+			createIndex: ReturnType<typeof vi.fn>
+			dropIndex: ReturnType<typeof vi.fn>
+		}
+		const artifacts = db.collection("test_relevance_artifacts") as unknown as {
+			createIndex: ReturnType<typeof vi.fn>
+			dropIndex: ReturnType<typeof vi.fn>
+		}
+		await ensureStandardIndexes(db, "test_", { relevanceRetentionDays: 0 })
+		expect(runs.dropIndex).toHaveBeenCalledWith("idx_relruns_ttl")
+		expect(artifacts.dropIndex).toHaveBeenCalledWith("idx_relart_ttl")
+		expect(createIndexCallsFor(runs, "idx_relruns_ts")).toHaveLength(1)
+		expect(createIndexCallsFor(artifacts, "idx_relart_ts")).toHaveLength(1)
+		expect(collModCalls(db, "test_relevance_runs")).toHaveLength(0)
+		expect(collModCalls(db, "test_relevance_artifacts")).toHaveLength(0)
+	})
+
+	it("drops the files and episodes TTL ghosts when retention is disabled", async () => {
+		const db = mockDb()
+		const files = db.collection("test_files") as unknown as {
+			createIndex: ReturnType<typeof vi.fn>
+			dropIndex: ReturnType<typeof vi.fn>
+		}
+		const episodes = db.collection("test_episodes") as unknown as {
+			createIndex: ReturnType<typeof vi.fn>
+			dropIndex: ReturnType<typeof vi.fn>
+		}
+		await ensureStandardIndexes(db, "test_", {
+			memoryTtlDays: 0,
+			episodesRetentionDays: 0,
+		})
+		expect(files.dropIndex).toHaveBeenCalledWith("idx_files_ttl")
+		expect(episodes.dropIndex).toHaveBeenCalledWith("idx_episodes_ttl_updated")
+		expect(createIndexCallsFor(files, "idx_files_ttl")).toHaveLength(0)
+		expect(
+			createIndexCallsFor(episodes, "idx_episodes_ttl_updated"),
+		).toHaveLength(0)
+		expect(collModCalls(db, "test_files")).toHaveLength(0)
+		expect(collModCalls(db, "test_episodes")).toHaveLength(0)
 	})
 })
 
@@ -1186,29 +1656,44 @@ describe("P4.4.1 TTL expiration indexes", () => {
 })
 
 // ---------------------------------------------------------------------------
-// ensureSearchIndexes
+// validationAction (log privacy)
 // ---------------------------------------------------------------------------
 
-describe("validationAction version gate (P3.5)", () => {
-	it("uses errorAndLog on MongoDB 8.1+ when creating collections", async () => {
-		const db = mockDb([], [8, 1, 0, 0])
-		await ensureCollections(db, "test_")
-		expect(db.createCollection).toHaveBeenCalledWith(
-			"test_chunks",
-			expect.objectContaining({ validationAction: "errorAndLog" }),
-		)
-		expect(db.createCollection).toHaveBeenCalledWith(
-			"test_knowledge_base",
-			expect.objectContaining({ validationAction: "errorAndLog" }),
-		)
-	})
-
-	it("keeps error below MongoDB 8.1 when creating collections", async () => {
-		const db = mockDb([], [8, 0, 13, 0])
+// Invalid documents are rejected (error action) without their bodies being
+// copied into the mongod log: errorAndLog logs the full rejected document,
+// including agentId/body, to ops-visible server logs.
+describe("validationAction error action (log privacy)", () => {
+	it("creates collections with error on MongoDB 9", async () => {
+		const db = mockDb([], [9, 0, 0, 0])
 		await ensureCollections(db, "test_")
 		expect(db.createCollection).toHaveBeenCalledWith(
 			"test_chunks",
 			expect.objectContaining({ validationAction: "error" }),
+		)
+		expect(db.createCollection).toHaveBeenCalledWith(
+			"test_events",
+			expect.objectContaining({ validationAction: "error" }),
+		)
+		expect(db.createCollection).not.toHaveBeenCalledWith(
+			"test_chunks",
+			expect.objectContaining({ validationAction: "errorAndLog" }),
+		)
+	})
+
+	it("installs collMod schema validation with error on MongoDB 9", async () => {
+		const db = mockDb([], [9, 0, 0, 0])
+		await ensureSchemaValidation(db, "test_")
+		expect(db.command).toHaveBeenCalledWith(
+			expect.objectContaining({
+				collMod: "test_chunks",
+				validationAction: "error",
+			}),
+		)
+		expect(db.command).not.toHaveBeenCalledWith(
+			expect.objectContaining({
+				collMod: "test_chunks",
+				validationAction: "errorAndLog",
+			}),
 		)
 	})
 
@@ -1219,21 +1704,6 @@ describe("validationAction version gate (P3.5)", () => {
 			"test_chunks",
 			expect.objectContaining({ validationAction: "error" }),
 		)
-	})
-
-	it("uses errorAndLog on MongoDB 8.1+ for collMod schema validation", async () => {
-		const db = mockDb([], [8, 2, 6, 0])
-		await ensureSchemaValidation(db, "test_")
-		expect(db.command).toHaveBeenCalledWith(
-			expect.objectContaining({
-				collMod: "test_chunks",
-				validationAction: "errorAndLog",
-			}),
-		)
-	})
-
-	it("keeps error below MongoDB 8.1 for collMod schema validation", async () => {
-		const db = mockDb([], [8, 0, 13, 0])
 		await ensureSchemaValidation(db, "test_")
 		expect(db.command).toHaveBeenCalledWith(
 			expect.objectContaining({

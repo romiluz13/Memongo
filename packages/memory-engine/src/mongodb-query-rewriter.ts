@@ -1,5 +1,9 @@
+import { createSubsystemLogger } from "@memongo/lib"
 import type { Db } from "mongodb"
-import { emitTelemetry } from "./mongodb-telemetry.js"
+import { emitTelemetry, type TelemetryDocument } from "./mongodb-telemetry.js"
+import type { AdmissionToken } from "./mongodb-write-fence.js"
+
+const log = createSubsystemLogger("memory:mongodb:query-rewriter")
 
 // ---------------------------------------------------------------------------
 // Types
@@ -102,6 +106,21 @@ export function expandSynonyms(query: string): string {
 // Query rewriting
 // ---------------------------------------------------------------------------
 
+function emitLeafTelemetry(
+	db: Db,
+	prefix: string,
+	doc: Omit<TelemetryDocument, "ts">,
+	admission?: AdmissionToken,
+): void {
+	if (admission) {
+		void emitTelemetry(db, prefix, doc, { admission }).catch(() =>
+			log.warn("query-rewriter telemetry emit failed"),
+		)
+	} else {
+		emitTelemetry(db, prefix, doc)
+	}
+}
+
 /**
  * Rewrite a query for improved vector search recall.
  *
@@ -115,6 +134,7 @@ export function expandSynonyms(query: string): string {
  *   - Preserve original terms (expansion, not replacement)
  */
 export async function rewriteQuery(params: {
+	admission?: AdmissionToken
 	db: Db
 	prefix: string
 	agentId: string
@@ -162,13 +182,18 @@ export async function rewriteQuery(params: {
 		}
 	}
 
-	emitTelemetry(db, prefix, {
-		meta: { agentId, operation: "query-rewrite" },
-		durationMs: Date.now() - rewriteStart,
-		ok: true,
-		queryRewritten: wasRewritten,
-		rewriteMethod: method,
-	})
+	emitLeafTelemetry(
+		db,
+		prefix,
+		{
+			meta: { agentId, operation: "query-rewrite" },
+			durationMs: Date.now() - rewriteStart,
+			ok: true,
+			queryRewritten: wasRewritten,
+			rewriteMethod: method,
+		},
+		params.admission,
+	)
 
 	return {
 		originalQuery: query,

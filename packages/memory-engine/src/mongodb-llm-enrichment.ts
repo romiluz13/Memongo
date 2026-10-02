@@ -54,11 +54,70 @@ type EnrichmentTransportOptions = {
  * provider response carries a usage block (OpenAI-compatible
  * prompt_tokens/completion_tokens, Anthropic input_tokens/output_tokens);
  * absent when the transport does not report usage — spend accounting then
- * degrades to call counts instead of tokens.
+ * degrades to call counts instead of tokens. `reasoningTokens` is surfaced
+ * when the gateway reports it (OpenAI completion_tokens_details) so budget
+ * decisions (finish_reason=length) are evidence-driven.
  */
 export type EnrichmentChatUsage = {
 	inputTokens: number
 	outputTokens: number
+	reasoningTokens?: number
+}
+
+/**
+ * Typed classification of a provider response envelope. The wrapper validates
+ * the raw transport JSON and records WHY usable content is missing, so callers
+ * (relation extraction) fail loudly with a self-describing cause instead of a
+ * bare `JSON.parse("")` SyntaxError. Absent `responseMeta` means a legacy/mock
+ * provider that was never validated.
+ *
+ *   - ok: non-empty content string
+ *   - missing-choices: choices array absent/empty/not an array
+ *   - malformed-message: choices[0].message absent/not an object
+ *   - null-content: message.content null/undefined (no refusal)
+ *   - empty-content: message.content empty or whitespace-only (finish_reason
+ *     not "length") — a whitespace-only body parses no better than an empty
+ *     one, so it is typed as valid-empty, not left to the JSON parser
+ *   - refusal: explicit refusal via message.refusal non-empty (OpenAI) or
+ *     stop_reason "refusal" (Anthropic); no doc basis for retrying
+ *   - content-filter: finish_reason "content_filter" — Azure-style filtered
+ *     completions are HTTP 200 with no content; no doc basis for retrying
+ *   - length: finish_reason "length" (OpenAI) or stop_reason "max_tokens"
+ *     (Anthropic) — the completion was cut by the token budget. Classified
+ *     from the stop signal BEFORE any content or parse judgment, so content
+ *     may be non-empty yet semantically truncated (valid-but-truncated JSON
+ *     cannot masquerade as ok). Usage (incl. reasoning tokens) is surfaced so
+ *     any cap decision is evidence-driven
+ *   - malformed-body: HTTP 200 body that is not valid JSON (metadata-returned
+ *     with content ""; no content string can be produced)
+ */
+export type EnrichmentResponseShape =
+	| "ok"
+	| "missing-choices"
+	| "malformed-message"
+	| "null-content"
+	| "empty-content"
+	| "refusal"
+	| "content-filter"
+	| "length"
+	| "malformed-body"
+
+export type EnrichmentResponseMeta = {
+	shape: EnrichmentResponseShape
+	/**
+	 * Raw provider stop signal, preserved verbatim for diagnosis
+	 * ("stop" | "length" | "content_filter" | Anthropic stop_reason …).
+	 */
+	finishReason?: string
+	/** True when the provider explicitly refused the request. */
+	refusal?: boolean
+}
+
+export type EnrichmentChatResponse = {
+	content: string
+	usage?: EnrichmentChatUsage
+	/** Present when the provider response envelope was typed-validated. */
+	responseMeta?: EnrichmentResponseMeta
 }
 
 export type EnrichmentProvider = {
@@ -68,7 +127,8 @@ export type EnrichmentProvider = {
 		messages: Array<{ role: string; content: string }>
 		responseFormat?: { type: "json_object" }
 		maxTokens?: number
-	}): Promise<{ content: string; usage?: EnrichmentChatUsage }>
+		temperature?: number
+	}): Promise<EnrichmentChatResponse>
 }
 
 export type EnrichmentResult = {
@@ -128,7 +188,8 @@ const QA_CHUNK_PREFIX = "qa-chunk/"
 const MAX_CONCURRENT = 5
 const DEFAULT_MAX_RETRIES = 3
 const INITIAL_BACKOFF_MS = 1000
-const RETRYABLE_STATUS_CODES = new Set([408, 429, 500, 503])
+// N1-a: the common gateway failures (502, 504) retry alongside 408/429/500/503.
+const RETRYABLE_STATUS_CODES = new Set([408, 429, 500, 502, 503, 504])
 const DEFAULT_LLM_TIMEOUT_MS = 30_000
 const DEFAULT_LLM_MAX_TOKENS = 1024
 const MAX_ENRICHED_DOC_CHARS = 700
@@ -218,6 +279,77 @@ function isAbortError(err: unknown): boolean {
 
 function isFetchTransportError(err: unknown): err is TypeError {
 	return err instanceof TypeError
+}
+
+/**
+ * Typed validation of an OpenAI-compatible chat completion envelope. Never
+ * throws for shape problems — the classification is returned as metadata with
+ * content normalized to "" so legacy degrade-style consumers keep their exact
+ * prior behavior; fail-loud consumers (relation extraction) convert the same
+ * metadata into a typed error.
+ */
+function classifyOpenAiCompatibleResponse(json: {
+	choices?: Array<{
+		message?: { content?: string; refusal?: string }
+		finish_reason?: unknown
+	}>
+}): { content: string; responseMeta: EnrichmentResponseMeta } {
+	const choice = Array.isArray(json.choices) ? json.choices[0] : undefined
+	if (choice === undefined) {
+		return { content: "", responseMeta: { shape: "missing-choices" } }
+	}
+	const message = choice.message
+	if (message === null || typeof message !== "object") {
+		return { content: "", responseMeta: { shape: "malformed-message" } }
+	}
+	const finishReason =
+		typeof choice.finish_reason === "string" ? choice.finish_reason : undefined
+	// Refusal is checked BEFORE content: a refused/filtered completion
+	// typically comes with content null, and "the provider refused" is the
+	// more precise cause than "content was null".
+	if (typeof message.refusal === "string" && message.refusal.length > 0) {
+		return {
+			content: "",
+			responseMeta: { shape: "refusal", finishReason, refusal: true },
+		}
+	}
+	if (finishReason === "content_filter") {
+		// Azure-style content filtering: HTTP 200, no content,
+		// finish_reason=content_filter ("Always check the finish_reason").
+		return {
+			content: "",
+			responseMeta: { shape: "content-filter", finishReason, refusal: true },
+		}
+	}
+	if (finishReason === "length") {
+		// Token budget cut the completion short. Checked BEFORE the content
+		// checks so a non-empty but truncated completion is typed as length —
+		// content is preserved for diagnosis, but consumers must not treat a
+		// finish_reason=length body as a complete answer (a syntactically
+		// valid-but-truncated JSON payload cannot masquerade as ok).
+		return {
+			content: typeof message.content === "string" ? message.content : "",
+			responseMeta: { shape: "length", finishReason },
+		}
+	}
+	if (typeof message.content !== "string") {
+		return {
+			content: "",
+			responseMeta: { shape: "null-content", finishReason },
+		}
+	}
+	if (message.content.trim() === "") {
+		// Whitespace-only content is valid-empty: leaving it as ok would push
+		// it into JSON.parse, misclassifying it as malformed output.
+		return {
+			content: "",
+			responseMeta: { shape: "empty-content", finishReason },
+		}
+	}
+	return {
+		content: message.content,
+		responseMeta: { shape: "ok", finishReason },
+	}
 }
 
 function resolveAuthStyle(
@@ -330,6 +462,9 @@ export function createHttpProvider(
 			if (params.maxTokens !== undefined) {
 				body[tokenParam] = params.maxTokens
 			}
+			if (params.temperature !== undefined) {
+				body.temperature = params.temperature
+			}
 
 			const timeoutMs = resolveEnrichmentTimeoutMs()
 			const controller = new AbortController()
@@ -370,13 +505,36 @@ export function createHttpProvider(
 					)
 				}
 
-				const json = (await response.json()) as {
+				let json: {
 					choices?: Array<{
-						message?: { content?: string }
+						message?: { content?: string; refusal?: string }
+						finish_reason?: unknown
 					}>
-					usage?: { prompt_tokens?: number; completion_tokens?: number }
+					usage?: {
+						prompt_tokens?: number
+						completion_tokens?: number
+						completion_tokens_details?: { reasoning_tokens?: number }
+					}
 				}
-				const content = json.choices?.[0]?.message?.content ?? ""
+				try {
+					json = (await response.json()) as typeof json
+				} catch (err) {
+					// HTTP 200 but the body is not valid JSON. Metadata-return, not
+					// a throw: the transport never throws for envelope problems —
+					// fail-loud consumers (relation extraction) convert this shape
+					// into a typed error, and default-deny consumers surface it as
+					// a protocol/config failure instead of silently degrading.
+					// F7-1: the log carries FIXED safe metadata only (shape plus
+					// the error class name) — the raw parser message is provider
+					// response body and must never reach the logs.
+					log.warn("LLM enrichment response body was not valid JSON", {
+						shape: "malformed-body",
+						errorClass: err instanceof Error ? err.name : "non-error",
+					})
+					return { content: "", responseMeta: { shape: "malformed-body" } }
+				}
+				const classified = classifyOpenAiCompatibleResponse(json)
+				const content = classified.content
 				// C-017: keep the transport's usage block so spend accounting can
 				// record tokens per call. Numbers are validated — a gateway that
 				// reports non-finite counts must not poison the ledger.
@@ -387,9 +545,24 @@ export function createHttpProvider(
 					Number.isFinite(usageInput) &&
 					typeof usageOutput === "number" &&
 					Number.isFinite(usageOutput)
-						? { inputTokens: usageInput, outputTokens: usageOutput }
+						? {
+								inputTokens: usageInput,
+								outputTokens: usageOutput,
+								...(typeof json.usage?.completion_tokens_details
+									?.reasoning_tokens === "number" &&
+								Number.isFinite(
+									json.usage.completion_tokens_details.reasoning_tokens,
+								)
+									? {
+											reasoningTokens:
+												json.usage.completion_tokens_details.reasoning_tokens,
+										}
+									: {}),
+							}
 						: undefined
-				return usage ? { content, usage } : { content }
+				return usage
+					? { content, usage, responseMeta: classified.responseMeta }
+					: { content, responseMeta: classified.responseMeta }
 			} catch (err) {
 				// Wrap AbortError (timeout) as retryable 408
 				if (isAbortError(err)) {
@@ -435,6 +608,9 @@ export function createAnthropicProvider(
 				model: params.model,
 				messages,
 				max_tokens: params.maxTokens ?? 1024,
+			}
+			if (params.temperature !== undefined) {
+				body.temperature = params.temperature
 			}
 			if (system) {
 				body.system = system
@@ -483,6 +659,7 @@ export function createAnthropicProvider(
 				const json = (await response.json()) as {
 					content?: Array<{ type?: string; text?: string }>
 					usage?: { input_tokens?: number; output_tokens?: number }
+					stop_reason?: unknown
 				}
 				const content =
 					json.content
@@ -500,7 +677,30 @@ export function createAnthropicProvider(
 					Number.isFinite(usageOutput)
 						? { inputTokens: usageInput, outputTokens: usageOutput }
 						: undefined
-				return usage ? { content, usage } : { content }
+				// B8-1: Anthropic truncation is stop_reason "max_tokens", not
+				// OpenAI finish_reason "length". Surface it as finishReason so
+				// the benchmark length arm can see it. Only the two named
+				// reasons are mapped; the OpenAI classifier is untouched.
+				const stopReason =
+					typeof json.stop_reason === "string" ? json.stop_reason : undefined
+				const finishReason =
+					stopReason === "max_tokens"
+						? "max_tokens"
+						: stopReason === "stop"
+							? "stop"
+							: undefined
+				const responseMeta =
+					finishReason === undefined
+						? undefined
+						: ({
+								shape: finishReason === "max_tokens" ? "length" : "ok",
+								finishReason,
+							} satisfies EnrichmentResponseMeta)
+				return {
+					content,
+					...(usage ? { usage } : {}),
+					...(responseMeta ? { responseMeta } : {}),
+				}
 			} catch (err) {
 				if (isAbortError(err)) {
 					throw new EnrichmentHttpError(
@@ -532,6 +732,35 @@ export class EnrichmentHttpError extends Error {
 	}
 }
 
+/**
+ * Typed provider-response failure. `shape` names the exact envelope problem
+ * (see EnrichmentResponseShape); `finishReason`/`refusal` preserve the
+ * provider's own stop signal; `usage` preserves spend evidence (including
+ * reasoning tokens when reported) so length/budget decisions stay
+ * evidence-driven. The message is self-describing so it stays meaningful when
+ * persisted verbatim as a memory-job dead-letter error.
+ */
+export class EnrichmentResponseError extends Error {
+	constructor(
+		message: string,
+		public readonly shape: EnrichmentResponseShape,
+		public readonly finishReason?: string,
+		public readonly refusal?: boolean,
+		public readonly usage?: EnrichmentChatUsage,
+	) {
+		super(message)
+		this.name = "EnrichmentResponseError"
+	}
+}
+
+/** Token-spend fragment for error messages; empty string when usage absent. */
+export function formatEnrichmentUsage(usage: EnrichmentChatUsage): string {
+	const base = `tokens in=${usage.inputTokens} out=${usage.outputTokens}`
+	return usage.reasoningTokens !== undefined
+		? `${base} reasoning=${usage.reasoningTokens}`
+		: base
+}
+
 export class EnrichmentParseError extends Error {
 	constructor(message: string) {
 		super(message)
@@ -542,6 +771,23 @@ export class EnrichmentParseError extends Error {
 // ---------------------------------------------------------------------------
 // Provider resolution from env vars
 // ---------------------------------------------------------------------------
+
+/**
+ * B1: explicit extraction-off switch. When `MEMONGO_EXTRACTION_LLM=off`
+ * ("off", "0", or "false"), the memory job path (LLM fact extraction,
+ * session-batched prefetch, contradiction, consolidation) is regex-only and
+ * makes zero enrichment-provider calls regardless of the enrichment env.
+ *
+ * This is the B20 ablation switch. It must not be emulated by unsetting the
+ * enrichment provider: the benchmark answerer may share that configuration,
+ * and unsetting it would also disable answer generation.
+ */
+export function isExtractionLlmDisabled(
+	env: Record<string, string | undefined>,
+): boolean {
+	const value = env.MEMONGO_EXTRACTION_LLM?.trim().toLowerCase()
+	return value === "off" || value === "0" || value === "false"
+}
 
 export function resolveEnrichmentProvider(
 	env: Record<string, string | undefined>,
@@ -591,6 +837,24 @@ export function resolveEnrichmentProvider(
 // LLM extraction
 // ---------------------------------------------------------------------------
 
+/**
+ * Bounded in-step retry for transient empty completions (lead F5): ONE extra
+ * attempt. Session-lane retries must not multiply blindly with the
+ * transport-level withRetry — worst case per session is
+ * (1 + transport retries) x (1 + SESSION_EMPTY_RESPONSE_RETRIES) calls, and
+ * the total-call budget tests assert that bound.
+ */
+const SESSION_EMPTY_RESPONSE_RETRIES = 1
+
+/**
+ * Envelope shapes that fail a session loudly instead of degrading. A 200
+ * error-object / missing choices / unparseable body can hide an
+ * auth/config/protocol failure (lead default-deny) — it must not silently
+ * become "no enrichment found".
+ */
+const SESSION_ENVELOPE_FATAL_SHAPES: ReadonlySet<EnrichmentResponseShape> =
+	new Set(["missing-choices", "malformed-message", "malformed-body"])
+
 export async function extractSessionEnrichment(
 	provider: EnrichmentProvider,
 	sessionText: string,
@@ -603,15 +867,56 @@ export async function extractSessionEnrichment(
 		hasPersonalContent: false,
 	}
 
-	const response = await provider.chatCompletion({
-		model,
-		messages: [
-			{ role: "system", content: ENRICHMENT_SYSTEM_PROMPT },
-			{ role: "user", content: buildEnrichmentUserPrompt(sessionText) },
-		],
-		responseFormat: { type: "json_object" },
-		maxTokens: resolveEnrichmentMaxTokens(),
-	})
+	const messages: Array<{ role: string; content: string }> = [
+		{ role: "system", content: ENRICHMENT_SYSTEM_PROMPT },
+		{ role: "user", content: buildEnrichmentUserPrompt(sessionText) },
+	]
+	const callProvider = () =>
+		provider.chatCompletion({
+			model,
+			messages,
+			responseFormat: { type: "json_object" },
+			maxTokens: resolveEnrichmentMaxTokens(),
+		})
+
+	let response = await callProvider()
+	// F5: a transient empty completion (VALID envelope, no content) gets one
+	// bounded in-step retry. Refusal/content-filter/length never retry here —
+	// a retry would be a pointless identical request — and fall straight
+	// through to the existing semantics below (parse of "" fails → strict
+	// throws / non-strict degrades). A legacy provider without responseMeta
+	// is judged by content alone (backward compatible).
+	for (let retry = 0; retry < SESSION_EMPTY_RESPONSE_RETRIES; retry++) {
+		const shape = response.responseMeta?.shape
+		const transientEmpty =
+			shape === "empty-content" ||
+			shape === "null-content" ||
+			(shape === undefined && response.content === "")
+		if (!transientEmpty) break
+		log.warn(
+			"session enrichment transient empty response; bounded in-step retry",
+			{
+				shape: shape ?? "unknown",
+				attempt: retry + 1,
+				provider: provider.name,
+			},
+		)
+		response = await callProvider()
+	}
+
+	// Default-deny: an invalid envelope fails the session loudly (counted in
+	// sessionsFailed with a sanitized sample) instead of degrading to empty.
+	const envelopeShape = response.responseMeta?.shape
+	if (
+		envelopeShape !== undefined &&
+		SESSION_ENVELOPE_FATAL_SHAPES.has(envelopeShape)
+	) {
+		throw new EnrichmentResponseError(
+			`session enrichment: provider response envelope invalid (shape=${envelopeShape}, provider=${provider.name})`,
+			envelopeShape,
+			response.responseMeta?.finishReason,
+		)
+	}
 
 	let parsed: unknown
 	try {
@@ -818,9 +1123,16 @@ async function enrichSingleSession(params: {
 	return { userfactDoc, qaDoc }
 }
 
-async function withRetry<T>(
+/**
+ * Bounded transport-level retry: 408/429/5xx, abort (timeout) and network
+ * TypeError failures retry with exponential backoff and jitter; every other
+ * error rethrows immediately. Exported so benchmark answer calls (N1) can
+ * reuse the exact classification instead of growing a second policy.
+ */
+export async function withRetry<T>(
 	fn: () => Promise<T>,
 	maxRetries: number = resolveEnrichmentMaxRetries(),
+	initialBackoffMs: number = INITIAL_BACKOFF_MS,
 ): Promise<T> {
 	let lastError: unknown
 	for (let attempt = 0; attempt <= maxRetries; attempt++) {
@@ -834,7 +1146,7 @@ async function withRetry<T>(
 				isAbortError(err) ||
 				isFetchTransportError(err)
 			if (attempt < maxRetries && isRetryable) {
-				const baseDelay = INITIAL_BACKOFF_MS * 2 ** attempt
+				const baseDelay = initialBackoffMs * 2 ** attempt
 				const delay = Math.round(baseDelay * (0.5 + Math.random()))
 				await new Promise((resolve) => setTimeout(resolve, delay))
 				continue

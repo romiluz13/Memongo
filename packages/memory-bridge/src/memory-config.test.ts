@@ -1,7 +1,7 @@
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
-import { afterEach, describe, expect, it } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
 import {
 	buildMemongoConfig,
 	resolveMemongoConfigFilePath,
@@ -89,13 +89,16 @@ describe("memory-config standalone", () => {
 	): { env: NodeJS.ProcessEnv; cleanup: () => void } {
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "memongo-cfg-p26-"))
 		const cfgPath = path.join(dir, "memongo.json")
-		if (fileUri !== undefined) {
-			fs.writeFileSync(
-				cfgPath,
-				JSON.stringify({ memory: { mongodb: { uri: fileUri } } }),
-				"utf-8",
-			)
-		}
+		// MEMONGO_CONFIG_PATH selects the file explicitly, so it must always
+		// exist and be valid: an explicitly selected missing file now fails
+		// clearly instead of silently reverting to env/defaults.
+		fs.writeFileSync(
+			cfgPath,
+			fileUri === undefined
+				? "{}"
+				: JSON.stringify({ memory: { mongodb: { uri: fileUri } } }),
+			"utf-8",
+		)
 		return {
 			env: { MEMONGO_CONFIG_PATH: cfgPath, ...extra },
 			cleanup: () => fs.rmSync(dir, { recursive: true, force: true }),
@@ -194,6 +197,124 @@ describe("memory-config standalone", () => {
 		const cfg = buildMemongoConfig(process.env)
 		expect(cfg.memory?.mongodb?.database).toBe("fromfile")
 		expect(resolveMemongoConfigFilePath(process.env)).toBe(cfgPath)
+		fs.rmSync(dir, { recursive: true, force: true })
+	})
+})
+
+// ---------------------------------------------------------------------------
+// Loader failure behavior: an absent OPTIONAL default config is allowed, but
+// an explicitly selected missing file, an unreadable existing file, malformed
+// JSON, or a non-object top level must fail clearly instead of silently
+// dropping file-only settings (for example retention) back to defaults.
+// Error text must never echo file content (it may carry credentials).
+// ---------------------------------------------------------------------------
+
+describe("memongo.json loader failure behavior", () => {
+	const prev = { ...process.env }
+
+	afterEach(() => {
+		process.env = { ...prev }
+	})
+
+	function tempDir(): string {
+		return fs.mkdtempSync(path.join(os.tmpdir(), "memongo-cfg-fail-"))
+	}
+
+	it("allows an absent default config file", () => {
+		const home = tempDir()
+		const homedir = vi.spyOn(os, "homedir").mockReturnValue(home)
+		process.env = {
+			...prev,
+			MEMONGO_MONGODB_URI: "mongodb://127.0.0.1:27017/x",
+		}
+		delete process.env.MEMONGO_CONFIG_PATH
+		try {
+			const cfg = buildMemongoConfig(process.env)
+			expect(cfg.memory?.mongodb?.uri).toBe("mongodb://127.0.0.1:27017/x")
+		} finally {
+			homedir.mockRestore()
+			fs.rmSync(home, { recursive: true, force: true })
+		}
+	})
+
+	it("throws when the MEMONGO_CONFIG_PATH-selected file is missing", () => {
+		const dir = tempDir()
+		const cfgPath = path.join(dir, "absent.json")
+		process.env = { ...prev, MEMONGO_CONFIG_PATH: cfgPath }
+		expect(() => buildMemongoConfig(process.env)).toThrow(
+			/Memongo config file not found at ".*absent\.json".*MEMONGO_CONFIG_PATH/,
+		)
+		fs.rmSync(dir, { recursive: true, force: true })
+	})
+
+	it("throws on malformed JSON without echoing file content", () => {
+		const dir = tempDir()
+		const cfgPath = path.join(dir, "memongo.json")
+		fs.writeFileSync(
+			cfgPath,
+			'{"memory":{"mongodb":{"uri":"mongodb://user:SECRET-CREDENTIAL@host/db"},},}',
+			"utf-8",
+		)
+		process.env = { ...prev, MEMONGO_CONFIG_PATH: cfgPath }
+		let message = ""
+		try {
+			buildMemongoConfig(process.env)
+		} catch (error) {
+			message = (error as Error).message
+		}
+		expect(message).toMatch(/is not valid JSON/)
+		expect(message).toContain(cfgPath)
+		expect(message).not.toContain("SECRET-CREDENTIAL")
+		fs.rmSync(dir, { recursive: true, force: true })
+	})
+
+	it("throws on a non-object top level (array)", () => {
+		const dir = tempDir()
+		const cfgPath = path.join(dir, "memongo.json")
+		fs.writeFileSync(cfgPath, '["memory"]', "utf-8")
+		process.env = { ...prev, MEMONGO_CONFIG_PATH: cfgPath }
+		expect(() => buildMemongoConfig(process.env)).toThrow(
+			/must contain a JSON object at the top level/,
+		)
+		fs.rmSync(dir, { recursive: true, force: true })
+	})
+
+	it("throws on a non-object top level (primitive)", () => {
+		const dir = tempDir()
+		const cfgPath = path.join(dir, "memongo.json")
+		fs.writeFileSync(cfgPath, "42", "utf-8")
+		process.env = { ...prev, MEMONGO_CONFIG_PATH: cfgPath }
+		expect(() => buildMemongoConfig(process.env)).toThrow(
+			/must contain a JSON object at the top level/,
+		)
+		fs.rmSync(dir, { recursive: true, force: true })
+	})
+
+	it("throws on malformed JSON at the default path too", () => {
+		const home = tempDir()
+		const cfgDir = path.join(home, ".memongo")
+		fs.mkdirSync(cfgDir, { recursive: true })
+		fs.writeFileSync(path.join(cfgDir, "memongo.json"), "{not json", "utf-8")
+		const homedir = vi.spyOn(os, "homedir").mockReturnValue(home)
+		process.env = {
+			...prev,
+			MEMONGO_MONGODB_URI: "mongodb://127.0.0.1:27017/x",
+		}
+		delete process.env.MEMONGO_CONFIG_PATH
+		try {
+			expect(() => buildMemongoConfig(process.env)).toThrow(/is not valid JSON/)
+		} finally {
+			homedir.mockRestore()
+			fs.rmSync(home, { recursive: true, force: true })
+		}
+	})
+
+	it("throws when the existing config file cannot be read", () => {
+		// A directory used as the config path makes readFileSync fail
+		// deterministically across platforms without relying on permission bits.
+		const dir = tempDir()
+		process.env = { ...prev, MEMONGO_CONFIG_PATH: dir }
+		expect(() => buildMemongoConfig(process.env)).toThrow(/could not be read/)
 		fs.rmSync(dir, { recursive: true, force: true })
 	})
 })

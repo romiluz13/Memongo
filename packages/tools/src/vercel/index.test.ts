@@ -33,7 +33,6 @@ describe("withMemongo (Vercel AI SDK middleware)", () => {
 
 	beforeEach(() => {
 		globalThis.fetch = vi.fn()
-		_clearCache()
 	})
 
 	afterEach(() => {
@@ -171,8 +170,22 @@ describe("withMemongo (Vercel AI SDK middleware)", () => {
 		expect(assistantBody.body).toBe("Hello from LLM")
 	})
 
-	it("uses LRU cache on second identical call", async () => {
-		const mockFetch = mockFetchForContextBundle()
+	it("re-fetches on every call: erased server memory is never served as the old string (W7)", async () => {
+		const renderedQueue = ["first retrieval", ""]
+		const mockFetch = globalThis.fetch as ReturnType<typeof vi.fn>
+		mockFetch.mockImplementation(async (url: unknown) => {
+			if (String(url).includes("/v1/context-bundle")) {
+				const rendered = renderedQueue.shift() ?? ""
+				return new Response(JSON.stringify({ rendered }), {
+					status: 200,
+					headers: { "Content-Type": "application/json" },
+				})
+			}
+			return new Response(
+				JSON.stringify({ ok: true, eventId: "evt", chunkCreated: false }),
+				{ status: 200, headers: { "Content-Type": "application/json" } },
+			)
+		})
 
 		const model = createMockModel()
 		const wrapped = withMemongo(model, BASE_OPTIONS)
@@ -188,29 +201,29 @@ describe("withMemongo (Vercel AI SDK middleware)", () => {
 			mode: { type: "regular" },
 		}
 
-		// First call — should hit the API
+		// First call: memory present -> system prompt injected.
 		await wrapped.doGenerate(params)
-		await new Promise((r) => setTimeout(r, 50))
+		const inner = model.doGenerate as ReturnType<typeof vi.fn>
+		const firstParams = inner.mock.calls[0][0] as LanguageModelV2CallOptions
+		expect(firstParams.prompt[0].role).toBe("system")
 
-		const callsAfterFirst = mockFetch.mock.calls.filter((call: unknown[]) =>
+		// Second identical call after server-side erasure: fresh fetch, no
+		// stale system prompt — the removed cache would have replayed the
+		// first string with zero underlying requests.
+		await wrapped.doGenerate(params)
+		const secondParams = inner.mock.calls[1][0] as LanguageModelV2CallOptions
+		expect(secondParams.prompt[0].role).toBe("user")
+
+		const bundleCalls = mockFetch.mock.calls.filter((call: unknown[]) =>
 			String(call[0]).includes("/v1/context-bundle"),
-		).length
-		expect(callsAfterFirst).toBe(1)
-
-		// Reset mock to track new calls
-		mockFetch.mockClear()
-		mockFetch.mockResolvedValue(
-			new Response(JSON.stringify({}), { status: 200 }),
 		)
+		expect(bundleCalls).toHaveLength(2)
+	})
 
-		// Second call with same query — should use cache, no new context-bundle fetch
-		await wrapped.doGenerate(params)
-		await new Promise((r) => setTimeout(r, 50))
-
-		const contextBundleCalls = mockFetch.mock.calls.filter((call: unknown[]) =>
-			String(call[0]).includes("/v1/context-bundle"),
-		).length
-		expect(contextBundleCalls).toBe(0)
+	it("_clearCache stays exported as a callable no-op (published compatibility surface)", () => {
+		expect(typeof _clearCache).toBe("function")
+		expect(_clearCache()).toBeUndefined()
+		expect(() => _clearCache()).not.toThrow()
 	})
 
 	it("uses wake-up mode by default when no user query is present", async () => {
@@ -322,12 +335,11 @@ describe("withMemongo (Vercel AI SDK middleware)", () => {
 	})
 })
 
-describe("P1.5: cross-tenant cache identity", () => {
+describe("P1.5: per-request identity (W7 fresh per-call retrieval)", () => {
 	const originalFetch = globalThis.fetch
 
 	beforeEach(() => {
 		globalThis.fetch = vi.fn()
-		_clearCache()
 	})
 
 	afterEach(() => {
@@ -383,11 +395,46 @@ describe("P1.5: cross-tenant cache identity", () => {
 			.content
 	}
 
-	it("same query + different per-request agentId -> distinct entries, no cross-serve", async () => {
-		const mockFetch = mockFetchRouting([
-			"memory for agent A",
-			"memory for agent B",
-		])
+	/** Route context-bundle calls by the request body's agentId. */
+	function mockFetchRoutingByIdentity(
+		memoryByAgent: Record<string, string>,
+		fallback: string,
+	) {
+		const mockFetch = globalThis.fetch as ReturnType<typeof vi.fn>
+		mockFetch.mockImplementation(
+			async (url: unknown, init?: { body?: string }) => {
+				if (String(url).includes("/v1/context-bundle")) {
+					const body = JSON.parse(String(init?.body ?? "{}")) as {
+						agentId?: string
+					}
+					const rendered = memoryByAgent[body.agentId ?? ""] ?? fallback
+					return new Response(JSON.stringify({ rendered }), {
+						status: 200,
+						headers: { "Content-Type": "application/json" },
+					})
+				}
+				return new Response(
+					JSON.stringify({ ok: true, eventId: "evt", chunkCreated: false }),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				)
+			},
+		)
+		return mockFetch
+	}
+
+	function bundleBodies(mockFetch: ReturnType<typeof vi.fn>) {
+		return mockFetch.mock.calls
+			.filter((call: unknown[]) =>
+				String(call[0]).includes("/v1/context-bundle"),
+			)
+			.map((call: unknown[]) => JSON.parse(String(call[1]?.body ?? "{}")))
+	}
+
+	it("same query + different per-request agentId -> each request carries its own identity, no cross-serve", async () => {
+		const mockFetch = mockFetchRoutingByIdentity(
+			{ "agent-A": "memory for agent A", "agent-B": "memory for agent B" },
+			"memory for no-agent",
+		)
 		const model = createMockModel()
 		const wrapped = withMemongo(model, BASE_OPTIONS)
 
@@ -403,15 +450,17 @@ describe("P1.5: cross-tenant cache identity", () => {
 		expect(firstPromptContent(model, 1)).toContain("memory for agent B")
 		expect(firstPromptContent(model, 1)).not.toContain("memory for agent A")
 
-		// Repeating agent A's exact identity hits the cache — still A's memory.
+		// W7: repeating agent A's exact identity fetches again — and gets
+		// A's current memory, never B's and never a stale string.
 		await wrapped.doGenerate(
 			paramsWithIdentity("shared question", { agentId: "agent-A" }),
 		)
-		expect(countBundleCalls(mockFetch)).toBe(2)
+		expect(countBundleCalls(mockFetch)).toBe(3)
 		expect(firstPromptContent(model, 2)).toContain("memory for agent A")
+		expect(firstPromptContent(model, 2)).not.toContain("memory for agent B")
 	})
 
-	it("same query + different scope -> distinct entries", async () => {
+	it("same query + different scope -> each request forwards its own scope", async () => {
 		const mockFetch = mockFetchRouting([
 			"session-scoped memory",
 			"global-scoped memory",
@@ -427,11 +476,14 @@ describe("P1.5: cross-tenant cache identity", () => {
 		)
 
 		expect(countBundleCalls(mockFetch)).toBe(2)
+		const bodies = bundleBodies(mockFetch)
+		expect(bodies[0].scope).toBe("session")
+		expect(bodies[1].scope).toBe("global")
 		expect(firstPromptContent(model, 0)).toContain("session-scoped memory")
 		expect(firstPromptContent(model, 1)).toContain("global-scoped memory")
 	})
 
-	it("same query + different apiKey (two middleware instances) -> distinct entries", async () => {
+	it("same query + different apiKey (two middleware instances) -> each instance fetches its own memory", async () => {
 		const mockFetch = mockFetchRouting([
 			"tenant one memory",
 			"tenant two memory",
@@ -455,8 +507,8 @@ describe("P1.5: cross-tenant cache identity", () => {
 		expect(firstPromptContent(modelTwo, 0)).toContain("tenant two memory")
 	})
 
-	it("identical identity -> cache HIT (exactly one underlying call)", async () => {
-		const mockFetch = mockFetchRouting(["cached memory"])
+	it("identical identity -> fresh fetch every time: changed server memory is reflected, never a stale string", async () => {
+		const mockFetch = mockFetchRouting(["first state", "second state"])
 		const model = createMockModel()
 		const wrapped = withMemongo(model, BASE_OPTIONS)
 		const identity = { agentId: "agent-x", sessionId: "session-1" }
@@ -464,15 +516,21 @@ describe("P1.5: cross-tenant cache identity", () => {
 		await wrapped.doGenerate(paramsWithIdentity("repeatable", identity))
 		await wrapped.doGenerate(paramsWithIdentity("repeatable", identity))
 
-		expect(countBundleCalls(mockFetch)).toBe(1)
-		expect(firstPromptContent(model, 1)).toContain("cached memory")
+		// W7 discriminator: the removed cache served the first string with
+		// exactly one underlying call; fresh retrieval fetches twice and
+		// reflects the server's current state on the second call.
+		expect(countBundleCalls(mockFetch)).toBe(2)
+		expect(firstPromptContent(model, 0)).toContain("first state")
+		expect(firstPromptContent(model, 1)).toContain("second state")
+		expect(firstPromptContent(model, 1)).not.toContain("first state")
 	})
 
-	it("bypasses the cache when no tenant identity is available at all", async () => {
+	it("requests without any tenant identity still reach the client on every call", async () => {
 		const mockFetch = mockFetchRouting(["first", "second"])
 		const model = createMockModel()
-		// No userId / agentId anywhere: there is no safe tenant boundary, so
-		// the middleware must never serve cached memory here.
+		// No userId / agentId anywhere: there is no tenant boundary, so the
+		// middleware must never serve one caller's memory to another — with
+		// no cache, that holds by construction (every call fetches fresh).
 		const wrapped = withMemongo(model, {
 			apiUrl: "http://localhost:3847",
 			apiKey: "test-key",
@@ -482,6 +540,9 @@ describe("P1.5: cross-tenant cache identity", () => {
 		await wrapped.doGenerate(paramsWithIdentity("same question"))
 
 		expect(countBundleCalls(mockFetch)).toBe(2)
+		for (const body of bundleBodies(mockFetch)) {
+			expect("agentId" in body).toBe(false)
+		}
 	})
 })
 
@@ -490,7 +551,6 @@ describe("P1.4: after-turn capture + onError", () => {
 
 	beforeEach(() => {
 		globalThis.fetch = vi.fn()
-		_clearCache()
 	})
 
 	afterEach(() => {

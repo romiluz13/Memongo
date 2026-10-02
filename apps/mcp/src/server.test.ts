@@ -566,6 +566,42 @@ describe("memongo_erase_agent (C-003)", () => {
 			error: "confirm must be the literal string 'erase'",
 		})
 	})
+
+	it("forwards a deliberate recovery takeover to the client", async () => {
+		const eraseAgent = vi.fn().mockResolvedValue(receipt)
+
+		const out = await handleToolCall(
+			"memongo_erase_agent",
+			{ confirm: "erase", agentId: "agent-42", recovery: "takeover" },
+			{ eraseAgent } as any,
+		)
+
+		// The literal flows unchanged — the MCP layer never translates
+		// recovery intent.
+		expect(eraseAgent).toHaveBeenCalledWith({
+			confirm: "erase",
+			agentId: "agent-42",
+			recovery: "takeover",
+		})
+		expect(out.isError).toBeUndefined()
+		expect(parseTextPayload(out)).toEqual(receipt)
+	})
+
+	it("rejects a recovery value other than 'takeover' before calling the client", async () => {
+		const eraseAgent = vi.fn()
+
+		const out = await handleToolCall(
+			"memongo_erase_agent",
+			{ confirm: "erase", recovery: "resume" },
+			{ eraseAgent } as any,
+		)
+
+		expect(eraseAgent).not.toHaveBeenCalled()
+		expect(out.isError).toBe(true)
+		expect(parseTextPayload(out)).toEqual({
+			error: "recovery must be the literal string 'takeover'",
+		})
+	})
 })
 
 describe("memongo quarantine review (C-004)", () => {
@@ -607,18 +643,20 @@ describe("memongo quarantine review (C-004)", () => {
 		expect(parseTextPayload(out)).toEqual([entry])
 	})
 
-	it("drops an unrecognized status instead of forwarding it", async () => {
+	it("rejects an unrecognized status before calling the client", async () => {
 		const listQuarantined = vi.fn().mockResolvedValue([])
 
-		await handleToolCall("memongo_quarantine_list", { status: "archived" }, {
-			listQuarantined,
-		} as any)
+		const result = await handleToolCall(
+			"memongo_quarantine_list",
+			{ status: "archived" },
+			{ listQuarantined } as unknown as MemongoClient,
+		)
 
-		expect(listQuarantined).toHaveBeenCalledWith({
-			agentId: undefined,
-			status: undefined,
-			limit: undefined,
+		expect(result.isError).toBe(true)
+		expect(parseTextPayload(result)).toEqual({
+			error: "status must be pending-review|promoting|promoted|rejected",
 		})
+		expect(listQuarantined).not.toHaveBeenCalled()
 	})
 
 	it("forwards promote with reviewer metadata", async () => {
@@ -747,7 +785,7 @@ describe("structuredContent envelopes (P1.2)", () => {
 		},
 		memongo_admin_get_trace: { traceId: "trace-1" },
 		memongo_chain_trace: { factId: "fact-1", collection: "structured_mem" },
-		memongo_erase_agent: { confirm: "erase" },
+		memongo_erase_agent: { confirm: "erase", agentId: "agent-42" },
 		memongo_quarantine_promote: { quarantineId: "q-1" },
 		memongo_quarantine_reject: { quarantineId: "q-1" },
 		memongo_get_job: { jobId: "job-1" },

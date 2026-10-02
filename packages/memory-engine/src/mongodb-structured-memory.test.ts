@@ -219,6 +219,8 @@ describe("writeStructuredMemory", () => {
 	it("updates existing entry with same type+key", async () => {
 		const col = createMockStructuredCol()
 		const revisionsCol = createMockStructuredCol()
+		const findOneAndUpdate = vi.fn(async () => ({ reinforcementCount: 2 }))
+		Object.assign(col, { findOneAndUpdate })
 		vi.mocked(col.findOne).mockResolvedValueOnce({
 			type: "preference",
 			key: "editor",
@@ -227,6 +229,10 @@ describe("writeStructuredMemory", () => {
 			scope: "agent",
 			scopeRef: "agent:main",
 			revision: 1,
+			state: "active",
+			salience: "high",
+			temporalScope: "permanent",
+			sourceReliability: 0.75,
 			validFrom: new Date("2026-03-01T00:00:00.000Z"),
 			createdAt: new Date("2026-03-01T00:00:00.000Z"),
 			updatedAt: new Date("2026-03-01T00:00:00.000Z"),
@@ -248,6 +254,16 @@ describe("writeStructuredMemory", () => {
 			embeddingMode: "automated",
 		})
 
+		expect(findOneAndUpdate).toHaveBeenCalledWith(
+			expect.objectContaining({ revision: 1 }),
+			expect.objectContaining({ $inc: { reinforcementCount: 1 } }),
+			expect.objectContaining({
+				returnDocument: "after",
+				includeResultMetadata: false,
+				projection: { reinforcementCount: 1, _id: 0 },
+			}),
+		)
+		expect(col.updateOne).not.toHaveBeenCalled()
 		expect(result.upserted).toBe(false)
 		expect(result.id).toBe("editor")
 		expect(revisionsCol.insertOne).not.toHaveBeenCalled()
@@ -402,8 +418,8 @@ describe("writeStructuredMemory", () => {
 		})
 
 		const updateCall = (col.updateOne as ReturnType<typeof vi.fn>).mock.calls[0]
-		expect(updateCall[1].$set.embeddingStatus).toBe("pending")
-		expect(updateCall[1].$set.embedding).toBeUndefined()
+		expect(updateCall[1].$setOnInsert.embeddingStatus).toBe("pending")
+		expect(updateCall[1].$setOnInsert.embedding).toBeUndefined()
 	})
 
 	it("infers critical salience for crisis-like ongoing facts", async () => {
@@ -426,9 +442,9 @@ describe("writeStructuredMemory", () => {
 		})
 
 		const updateCall = (col.updateOne as ReturnType<typeof vi.fn>).mock.calls[0]
-		expect(updateCall[1].$set.salience).toBe("critical")
-		expect(updateCall[1].$set.temporalScope).toBe("ongoing")
-		expect(updateCall[1].$set.reviewAt).toBeInstanceOf(Date)
+		expect(updateCall[1].$setOnInsert.salience).toBe("critical")
+		expect(updateCall[1].$setOnInsert.temporalScope).toBe("ongoing")
+		expect(updateCall[1].$setOnInsert.reviewAt).toBeInstanceOf(Date)
 	})
 
 	it("writes explicit scope to structured memory entry", async () => {
@@ -454,8 +470,8 @@ describe("writeStructuredMemory", () => {
 		})
 
 		const updateCall = (col.updateOne as ReturnType<typeof vi.fn>).mock.calls[0]
-		expect(updateCall[1].$set.scope).toBe("workspace")
-		expect(updateCall[1].$set.scopeRef).toBe("workspace:main")
+		expect(updateCall[1].$setOnInsert.scope).toBe("workspace")
+		expect(updateCall[1].$setOnInsert.scopeRef).toBe("workspace:main")
 	})
 
 	it("defaults scope to agent when not specified", async () => {
@@ -480,7 +496,7 @@ describe("writeStructuredMemory", () => {
 		})
 
 		const updateCall = (col.updateOne as ReturnType<typeof vi.fn>).mock.calls[0]
-		expect(updateCall[1].$set.scope).toBe("agent")
+		expect(updateCall[1].$setOnInsert.scope).toBe("agent")
 	})
 
 	it("does not include embedding vectors in Memongo write path", async () => {
@@ -505,7 +521,7 @@ describe("writeStructuredMemory", () => {
 		})
 
 		const updateCall = (col.updateOne as ReturnType<typeof vi.fn>).mock.calls[0]
-		const setDoc = updateCall[1].$set
+		const setDoc = updateCall[1].$setOnInsert
 		expect(setDoc.embeddingStatus).toBe("pending")
 		expect(setDoc.embedding).toBeUndefined()
 	})
@@ -533,7 +549,7 @@ describe("writeStructuredMemory", () => {
 		})
 
 		const updateCall = (col.updateOne as ReturnType<typeof vi.fn>).mock.calls[0]
-		expect(updateCall[1].$set.sourceAgent).toEqual({
+		expect(updateCall[1].$setOnInsert.sourceAgent).toEqual({
 			id: "agent-1",
 			name: "dreamer",
 			runId: "run-123",
@@ -562,7 +578,7 @@ describe("writeStructuredMemory", () => {
 		})
 
 		const updateCall = (col.updateOne as ReturnType<typeof vi.fn>).mock.calls[0]
-		expect(updateCall[1].$set.sourceAgent).toBeUndefined()
+		expect(updateCall[1].$setOnInsert.sourceAgent).toBeUndefined()
 	})
 
 	it("writes a revision snapshot before updating current truth", async () => {
@@ -675,7 +691,7 @@ describe("writeStructuredMemory sourceAgent handling", () => {
 		})
 
 		const call = (col.updateOne as ReturnType<typeof vi.fn>).mock.calls[0]
-		expect(call[1].$set.sourceAgent).toEqual({
+		expect(call[1].$setOnInsert.sourceAgent).toEqual({
 			id: "agent-1",
 			name: "dreamer",
 			runId: "run-abc",
@@ -713,6 +729,9 @@ describe("searchStructuredMemory", () => {
 		expect(results[0].source).toBe("structured")
 		expect(results[0].snippet).toContain("Microservices")
 		expect(results[0].path).toContain("structured:decision:arch")
+		// RET-09: structured records are distilled observations — labeled
+		// agent-derived unless a lane knows better.
+		expect(results[0].derivation).toBe("derived")
 	})
 
 	it("returns empty results when no matches", async () => {
@@ -792,7 +811,7 @@ describe("searchStructuredMemory", () => {
 		expect(vsStage.path).toBe("value")
 	})
 
-	it("returns stored source when the serving vector index supports it", async () => {
+	it("pins storedSource off on the authoritative lane even when the serving vector index supports it", async () => {
 		const col = createMockStructuredCol()
 		vi.mocked(col.aggregate).mockReturnValueOnce({
 			toArray: vi.fn(async () => []),
@@ -807,7 +826,11 @@ describe("searchStructuredMemory", () => {
 
 		const pipeline = (col.aggregate as ReturnType<typeof vi.fn>).mock
 			.calls[0][0]
-		expect(pipeline[0].$vectorSearch.returnStoredSource).toBe(true)
+		// Freshness contract: authoritative serving hydrates full current
+		// documents from mongod (documented default) — storedSource reads the
+		// indexed copy, which may return stale data, so the lane must not
+		// request it even when the platform supports it.
+		expect(pipeline[0].$vectorSearch.returnStoredSource ?? false).toBe(false)
 	})
 
 	it("filters by type when provided", async () => {
@@ -994,7 +1017,7 @@ describe("getStructuredMemoryByType", () => {
 describe("structured memory TTL expiration (P4.4.1)", () => {
 	function lastSetDoc(col: Collection): Record<string, unknown> {
 		const call = (col.updateOne as ReturnType<typeof vi.fn>).mock.calls[0]
-		return (call[1] as Record<string, Record<string, unknown>>).$set
+		return (call[1] as Record<string, Record<string, unknown>>).$setOnInsert
 	}
 
 	it("persists an explicit per-write expiresAt", async () => {

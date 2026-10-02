@@ -30,7 +30,6 @@ function benchmarkOps(
 		"settleBenchmarkScenarioManager",
 		"listBenchmarkEventEvidence",
 		"waitForBenchmarkSearchConvergence",
-		"flushBenchmarkQueryCache",
 		"cleanupBenchmarkScenarioData",
 		"resolveBenchmarkResultSessionIds",
 		"resolveBenchmarkResultTurnIds",
@@ -185,12 +184,12 @@ vi.mock(
 		).derivedMemoryModuleMock(),
 )
 
-vi.mock("./mongodb-benchmark-readiness.js", async () =>
+vi.mock("./mongodb-benchmark-readiness.js", async (importOriginal) =>
 	(
 		await import(
 			"../../packages/memory-engine/src/test-helpers/manager-test-kit.js"
 		)
-	).benchmarkReadinessModuleMock(),
+	).benchmarkReadinessModuleMock(importOriginal),
 )
 
 vi.mock("../../packages/memory-engine/src/mongodb-telemetry.js", async () =>
@@ -525,9 +524,6 @@ describe("benchmark scenario queue settling", () => {
 			search,
 			stopMemoryJobWorker: vi.fn(async () => {}),
 		} as unknown as MongoDBMemoryManager
-		const flushBenchmarkQueryCache = vi.fn(async () => {
-			order.push("flush")
-		})
 		const manager = Object.assign(
 			Object.create(MongoDBMemoryManager.prototype),
 			{
@@ -552,7 +548,6 @@ describe("benchmark scenario queue settling", () => {
 				waitForBenchmarkSearchConvergence: vi.fn(async () => {
 					order.push("converge")
 				}),
-				flushBenchmarkQueryCache,
 				cleanupBenchmarkScenarioData: vi.fn(async () => {
 					order.push("cleanup")
 				}),
@@ -598,15 +593,10 @@ describe("benchmark scenario queue settling", () => {
 			"ingest",
 			"converge",
 			"search",
-			"flush",
 			"search",
-			"flush",
 			"search",
 			"cleanup",
 		])
-		expect(flushBenchmarkQueryCache).toHaveBeenCalledWith(
-			"benchmark-measurement-passes",
-		)
 		// The published result is pass 1 only.
 		expect(result.result.cases).toBe(1)
 		expect(result.result.measurementPasses?.passes).toBe(3)
@@ -638,7 +628,6 @@ describe("benchmark scenario queue settling", () => {
 			search,
 			stopMemoryJobWorker: vi.fn(async () => {}),
 		} as unknown as MongoDBMemoryManager
-		const flushBenchmarkQueryCache = vi.fn(async () => {})
 		const manager = Object.assign(
 			Object.create(MongoDBMemoryManager.prototype),
 			{
@@ -661,7 +650,6 @@ describe("benchmark scenario queue settling", () => {
 					dialogIds: new Map(),
 				})),
 				waitForBenchmarkSearchConvergence: vi.fn(async () => {}),
-				flushBenchmarkQueryCache,
 				cleanupBenchmarkScenarioData: vi.fn(async () => {}),
 			},
 		) as MongoDBMemoryManager
@@ -701,7 +689,6 @@ describe("benchmark scenario queue settling", () => {
 		})) as { result: RelevanceBenchmarkResult }
 
 		expect(search).toHaveBeenCalledTimes(1)
-		expect(flushBenchmarkQueryCache).not.toHaveBeenCalled()
 		expect(result.result.measurementPasses).toBeUndefined()
 	})
 })

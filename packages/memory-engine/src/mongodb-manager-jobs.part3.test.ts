@@ -71,6 +71,10 @@ vi.mock("./mongodb-telemetry.js", async () =>
 	(await import("./test-helpers/manager-test-kit.js")).telemetryModuleMock(),
 )
 
+vi.mock("./mongodb-write-fence.js", async () =>
+	(await import("./test-helpers/manager-test-kit.js")).writeFenceModuleMock(),
+)
+
 describe("P2.1 memory-job worker sweep", () => {
 	function buildWorkerManager() {
 		return Object.assign(Object.create(MongoDBMemoryManager.prototype), {
@@ -287,9 +291,8 @@ describe("P3.9 extraction worker concurrency + session-batched LLM", () => {
 			"./mongodb-schema.js"
 		)
 		const { extractAndUpsertEntities } = await import("./mongodb-graph.js")
-		const { promoteDerivedMemoryFromEvent } = await import(
-			"./mongodb-derived-memory.js"
-		)
+		const { prepareDerivedMemoryPromotion, promoteDerivedMemoryFromEvent } =
+			await import("./mongodb-derived-memory.js")
 		mocked(eventsCollection).mockReturnValue({
 			findOne: vi.fn(async (filter: { eventId?: string }) =>
 				docs.find((doc) => doc.eventId === filter.eventId),
@@ -310,6 +313,7 @@ describe("P3.9 extraction worker concurrency + session-batched LLM", () => {
 		return {
 			claimMemoryJob,
 			completeClaimedMemoryJob,
+			prepareDerivedMemoryPromotion,
 			renewMemoryJobLease,
 			promoteDerivedMemoryFromEvent,
 		}
@@ -414,8 +418,11 @@ describe("P3.9 extraction worker concurrency + session-batched LLM", () => {
 				),
 				makeEventDoc("evt-s2", "session-2"),
 			]
-			const { claimMemoryJob, promoteDerivedMemoryFromEvent } =
-				await mockJobRunBase(docs)
+			const {
+				claimMemoryJob,
+				prepareDerivedMemoryPromotion,
+				promoteDerivedMemoryFromEvent,
+			} = await mockJobRunBase(docs)
 			mocked(claimMemoryJob)
 				.mockResolvedValueOnce(makeExtractionJob("evt-s1a"))
 				.mockResolvedValueOnce(makeExtractionJob("evt-s1b"))
@@ -433,9 +440,9 @@ describe("P3.9 extraction worker concurrency + session-batched LLM", () => {
 			// ONE provider call for the two session-1 events; the session-2
 			// singleton keeps its per-event path (no prefetch call).
 			expect(provider.chatCompletion).toHaveBeenCalledTimes(1)
-			const promoteCalls = mocked(promoteDerivedMemoryFromEvent).mock.calls
+			const prepareCalls = mocked(prepareDerivedMemoryPromotion).mock.calls
 			const byEvent = new Map(
-				promoteCalls.map((call) => [
+				prepareCalls.map((call) => [
 					(call[0] as { event: { eventId: string } }).event.eventId,
 					call[0] as { prefetchedLlmFacts?: string[] },
 				]),
@@ -448,6 +455,115 @@ describe("P3.9 extraction worker concurrency + session-batched LLM", () => {
 			])
 			expect(byEvent.get("evt-s2")?.prefetchedLlmFacts).toBeUndefined()
 		} finally {
+			providerSpy.mockRestore()
+		}
+	})
+
+	it("makes zero provider calls across job paths when MEMONGO_EXTRACTION_LLM=off (B1)", async () => {
+		const enrichment = await import("./mongodb-llm-enrichment.js")
+		const provider = {
+			name: "mock-provider",
+			chatCompletion: vi.fn(async () => ({
+				content: JSON.stringify({
+					facts: ["gated session fact"],
+					qa_pairs: [],
+					has_personal_content: true,
+				}),
+			})),
+		}
+		const providerSpy = vi
+			.spyOn(enrichment, "resolveEnrichmentProvider")
+			.mockReturnValue(provider as never)
+		vi.stubEnv("MEMONGO_EXTRACTION_LLM", "off")
+		try {
+			const docs = [
+				makeEventDoc("evt-off-a", "session-off", "Remember this."),
+				makeEventDoc("evt-off-b", "session-off", "Remember this too."),
+				makeEventDoc("evt-off-c", "session-off-single"),
+			]
+			const {
+				claimMemoryJob,
+				completeClaimedMemoryJob,
+				promoteDerivedMemoryFromEvent,
+			} = await mockJobRunBase(docs)
+			mocked(claimMemoryJob)
+				.mockResolvedValueOnce(makeExtractionJob("evt-off-a"))
+				.mockResolvedValueOnce(makeExtractionJob("evt-off-b"))
+				.mockResolvedValueOnce(makeExtractionJob("evt-off-c"))
+				.mockResolvedValue(null)
+			mocked(promoteDerivedMemoryFromEvent).mockResolvedValue({
+				structuredCreated: 0,
+				proceduresCreated: 0,
+				skipped: false,
+			})
+
+			const manager = makeDrainManager()
+			await drainLifecycle.drainMemoryJobQueue.call(manager)
+
+			// B1: the off gate is checked BEFORE provider resolution, so the
+			// per-event path, the session batch prefetch, and relation
+			// extraction never resolve or call the provider — and the jobs
+			// still complete.
+			expect(providerSpy).not.toHaveBeenCalled()
+			expect(provider.chatCompletion).not.toHaveBeenCalled()
+			expect(completeClaimedMemoryJob).toHaveBeenCalledTimes(3)
+		} finally {
+			vi.unstubAllEnvs()
+			providerSpy.mockRestore()
+		}
+	})
+
+	it("completes a >=2-entity event with no relation extraction and no retry under MEMONGO_EXTRACTION_LLM=off (B1)", async () => {
+		const enrichment = await import("./mongodb-llm-enrichment.js")
+		const providerSpy = vi
+			.spyOn(enrichment, "resolveEnrichmentProvider")
+			.mockReturnValue({
+				name: "mock-provider",
+				chatCompletion: vi.fn(async () => ({ content: "{}" })),
+			} as never)
+		const { prepareTypedRelations } = await import("./mongodb-graph.js")
+		const { failClaimedMemoryJob } = await import("./mongodb-memory-jobs.js")
+		const { entitiesCollection } = await import("./mongodb-schema.js")
+		vi.stubEnv("MEMONGO_EXTRACTION_LLM", "off")
+		try {
+			const docs = [
+				makeEventDoc("evt-rel-off", "session-rel", "Alice met Bob."),
+			]
+			const {
+				claimMemoryJob,
+				completeClaimedMemoryJob,
+				promoteDerivedMemoryFromEvent,
+			} = await mockJobRunBase(docs)
+			// Two upserted entities would normally trigger typed-relation
+			// extraction; under off the whole block is bypassed.
+			mocked(entitiesCollection).mockReturnValue({
+				find: vi.fn(() => ({
+					toArray: vi.fn(async () => [
+						{ entityId: "ent-1", name: "Alice" },
+						{ entityId: "ent-2", name: "Bob" },
+					]),
+				})),
+			} as never)
+			mocked(claimMemoryJob)
+				.mockResolvedValueOnce(makeExtractionJob("evt-rel-off"))
+				.mockResolvedValue(null)
+			mocked(promoteDerivedMemoryFromEvent).mockResolvedValue({
+				structuredCreated: 0,
+				proceduresCreated: 0,
+				skipped: false,
+			})
+
+			const manager = makeDrainManager()
+			await drainLifecycle.drainMemoryJobQueue.call(manager)
+
+			// B1: no prepareTypedRelations call, no failed projection run, no
+			// failClaimedMemoryJob retry — the job completes cleanly.
+			expect(providerSpy).not.toHaveBeenCalled()
+			expect(prepareTypedRelations).not.toHaveBeenCalled()
+			expect(failClaimedMemoryJob).not.toHaveBeenCalled()
+			expect(completeClaimedMemoryJob).toHaveBeenCalledTimes(1)
+		} finally {
+			vi.unstubAllEnvs()
 			providerSpy.mockRestore()
 		}
 	})
@@ -503,8 +619,11 @@ describe("P3.9 extraction worker concurrency + session-batched LLM", () => {
 					scopeRef: "left",
 				},
 			]
-			const { claimMemoryJob, promoteDerivedMemoryFromEvent } =
-				await mockJobRunBase(docs)
+			const {
+				claimMemoryJob,
+				prepareDerivedMemoryPromotion,
+				promoteDerivedMemoryFromEvent,
+			} = await mockJobRunBase(docs)
 			for (const doc of docs) {
 				mocked(claimMemoryJob).mockResolvedValueOnce(
 					makeExtractionJob(doc.eventId),
@@ -522,7 +641,7 @@ describe("P3.9 extraction worker concurrency + session-batched LLM", () => {
 
 			expect(provider.chatCompletion).toHaveBeenCalledTimes(2)
 			const byEvent = new Map(
-				mocked(promoteDerivedMemoryFromEvent).mock.calls.map((call) => [
+				mocked(prepareDerivedMemoryPromotion).mock.calls.map((call) => [
 					(call[0] as { event: { eventId: string } }).event.eventId,
 					(call[0] as { prefetchedLlmFacts?: string[] }).prefetchedLlmFacts,
 				]),
@@ -565,8 +684,11 @@ describe("P3.9 extraction worker concurrency + session-batched LLM", () => {
 					"Bob owns a red scooter.",
 				),
 			]
-			const { claimMemoryJob, promoteDerivedMemoryFromEvent } =
-				await mockJobRunBase(docs)
+			const {
+				claimMemoryJob,
+				prepareDerivedMemoryPromotion,
+				promoteDerivedMemoryFromEvent,
+			} = await mockJobRunBase(docs)
 			mocked(claimMemoryJob)
 				.mockResolvedValueOnce(makeExtractionJob("evt-evidence-a"))
 				.mockResolvedValueOnce(makeExtractionJob("evt-evidence-b"))
@@ -581,9 +703,9 @@ describe("P3.9 extraction worker concurrency + session-batched LLM", () => {
 			await drainLifecycle.drainMemoryJobQueue.call(manager)
 
 			expect(provider.chatCompletion).toHaveBeenCalledTimes(1)
-			const promoteCalls = mocked(promoteDerivedMemoryFromEvent).mock.calls
+			const prepareCalls = mocked(prepareDerivedMemoryPromotion).mock.calls
 			const byEvent = new Map(
-				promoteCalls.map((call) => [
+				prepareCalls.map((call) => [
 					(call[0] as { event: { eventId: string } }).event.eventId,
 					call[0] as { prefetchedLlmFacts?: string[] },
 				]),
@@ -933,6 +1055,33 @@ describe("C3: typed-relation failure surfacing", () => {
 		}
 	})
 
+	it("a graph entity-extraction failure fails the job (retry path) instead of completing silently", async () => {
+		const { completeClaimedMemoryJob, failClaimedMemoryJob } =
+			await primeExtractionJob()
+		const { extractAndUpsertEntities } = await import("./mongodb-graph.js")
+		mocked(extractAndUpsertEntities).mockReset()
+		mocked(extractAndUpsertEntities).mockRejectedValue(
+			new Error(
+				"bulkWrite entity upserts failed: 1 non-duplicate write error(s)",
+			),
+		)
+		const { manager, lifecycle } = buildWorkerManager()
+
+		lifecycle.startMemoryJobWorker.call(manager)
+		await manager.memoryJobWorkerPromise
+
+		// The failure must surface through the job retry mechanism…
+		expect(failClaimedMemoryJob).toHaveBeenCalledWith(
+			expect.objectContaining({
+				jobId: "extraction-c3",
+				error: expect.stringContaining("bulkWrite entity upserts failed"),
+			}),
+		)
+		// …not be swallowed as a silent success.
+		expect(completeClaimedMemoryJob).not.toHaveBeenCalled()
+		await lifecycle.stopMemoryJobWorker.call(manager)
+	})
+
 	it("a typed-relation failure fails the job (retry path) instead of completing silently", async () => {
 		stubEnrichmentEnv()
 		try {
@@ -993,7 +1142,10 @@ describe("C3: typed-relation failure surfacing", () => {
 				expect.objectContaining({ jobId: "extraction-c3" }),
 			)
 			expect(extractAndUpsertTypedRelations).toHaveBeenCalledWith(
-				expect.objectContaining({ leaseFence: expect.any(Function) }),
+				expect.objectContaining({
+					preparedRelations: expect.any(Array),
+					session: expect.any(Object),
+				}),
 			)
 			expect(failClaimedMemoryJob).not.toHaveBeenCalled()
 			expect(recordProjectionRun).toHaveBeenCalledWith(

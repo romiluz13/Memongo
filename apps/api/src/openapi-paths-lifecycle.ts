@@ -84,6 +84,10 @@ export const lifecyclePaths = {
 				},
 				"400": { description: "Validation error" },
 				"404": { description: "Not found" },
+				"409": {
+					description:
+						"MEMORY_LIFECYCLE_CONFLICT: stale or invalidated handle; STRUCTURED_MEMORY_REVISION_CONFLICT: concurrent structured revision conflict. Fetch current state before retrying",
+				},
 				"500": { description: "Lifecycle update failed" },
 			},
 		},
@@ -122,6 +126,10 @@ export const lifecyclePaths = {
 				},
 				"400": { description: "Validation error" },
 				"404": { description: "Not found" },
+				"409": {
+					description:
+						"MEMORY_LIFECYCLE_CONFLICT: stale or invalidated handle; STRUCTURED_MEMORY_REVISION_CONFLICT: concurrent structured revision conflict. Fetch current state before retrying",
+				},
 				"500": { description: "Lifecycle invalidation failed" },
 			},
 		},
@@ -268,6 +276,10 @@ export const lifecyclePaths = {
 				},
 				"400": { description: "Validation error" },
 				"404": { description: "Not found" },
+				"409": {
+					description:
+						"MEMORY_LIFECYCLE_CONFLICT: stale or invalidated handle; STRUCTURED_MEMORY_REVISION_CONFLICT: concurrent structured revision conflict. Fetch current state before retrying",
+				},
 				"500": { description: "Memory feedback failed" },
 			},
 		},

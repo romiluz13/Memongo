@@ -1,10 +1,12 @@
 # Secret redaction at every diagnostic boundary
 
-We redact credentials, connection strings, and raw query text at each diagnostic
-boundary — the subsystem logger, the error-message formatter, the API error envelope,
+We redact known credential shapes at the listed diagnostic
+boundaries — the subsystem logger, the error-message formatter, the API error envelope,
 the capability table, the client error message, the tools middleware warn, and the
 pi-extension diagnostic choke point — using one central classifier instead of
-per-site ad-hoc masking.
+per-site ad-hoc masking. Selected engine diagnostics and API unexpected-error logs
+omit upstream error text instead. This does not guarantee that arbitrary user
+content is absent from every diagnostic path.
 
 ## Context
 
@@ -38,7 +40,7 @@ defect (capturing only `console.log` while the error level writes via
   `redactSensitiveText` in `@memongo/lib`, wired at every boundary a diagnostic can
   exit: `formatLine` (message and serialized meta), `formatErrorMessage` /
   `formatUncaughtError` (message and error chain), `apiErrorJson` (envelope message
-  and the internalError server log), the capability-table render, the
+  and structural metadata in the internalError server log), the capability-table render, the
   `MemongoClientError` message, the tools middleware default warn, and the engine's
   query-echo seam. One place to extend when a new credential shape is found; the
   pinning batteries document every shape the refutation rounds demonstrated.
@@ -50,11 +52,33 @@ defect (capturing only `console.log` while the error level writes via
   problem entirely, but Memongo emits human-readable console lines today;
   introducing a logging framework is a separate change with its own assurance
   burden. The boundary enumeration here is pinned by tests, not by hope.
-- **Suppression instead of redaction — rejected.** Dropping whole messages on
+- **Suppression instead of redaction — rejected for ordinary diagnostics.** Dropping whole messages on
   suspicion destroys debuggability (no host, no error class, no correlation).
   Over-redaction only adds stars where the operator can still see structure.
+  API unexpected errors are a scoped exception: upstream free text is omitted
+  because it can echo user content and feed unbounded input into the redactor.
+  Request and route fields plus a finite numeric error code retain correlation.
 
 ## Consequences
+
+- **API unexpected-error logs omit upstream text.** `internalError` keeps the
+  request ID, route code, method and path, with an optional finite own numeric
+  error code. It omits names, messages, stacks, cause text and arbitrary error
+  properties without stringifying the thrown value or reading code accessors.
+  A throwing code descriptor trap is ignored. The existing 500/503 classifier
+  and client envelope are unchanged; its name/cause getters can still throw.
+  The logged route code does not distinguish an outgoing 500 from 503 when no
+  numeric code identifies the failure. Request/path fields and other API
+  diagnostics remain outside this error-content guarantee; no total log-size
+  or hostile-object execution bound is established.
+
+- Userinfo matching starts at the beginning of each contiguous scheme-character
+  run. Leading digits and punctuation are copied unchanged, preserving the
+  former credential output while avoiding repeated scans of a long scheme
+  near-miss. `getDefaultRedactPatterns()` exposes the changed pattern strings.
+  This is a bounded near-miss repair, not a claim that every redactor pattern
+  is linear. The Pi password pattern still permits slashes and repeated
+  malformed URL tokens can still cause superlinear scans.
 
 - **Redaction runs after serialization.** `formatLine` redacts the message and the
   `JSON.stringify(meta)` output, so nested values are covered — and this is exactly
@@ -76,6 +100,11 @@ defect (capturing only `console.log` while the error level writes via
   so the callback branches cannot silently fall into the fallback when a pattern
   literal is edited (the round-3 defect: an escaped-slash prefix probe failed and
   dropped both branches).
+- **Credential masking uses captured positions.** Each pass retains its regex
+  language and masks the captured UTF-16 span. Searching the matched text for a
+  capture value can mask an earlier identical username, scheme or field name
+  while leaving the credential visible. The published Pi classifier uses the
+  same position rule while retaining its existing full-mask behavior.
 - **Raw query text is aliased, not starred.** Queries are content, not credentials,
   but a downstream error echoing the verbatim query leaks user text into logs; the
   engine replaces every echo with a correlatable `[query:<digest>]` alias and the
@@ -84,6 +113,31 @@ defect (capturing only `console.log` while the error level writes via
   structural (`Memongo API 502 (non-JSON body, N bytes)`) while the raw body stays
   on `.body` for callers that need it — redaction governs what is *printed*, not
   what code may hold.
+- **Credential-path matching avoids nested repetition.** The path prefix uses
+  one optional delimiter-ending character run, preserving mixed slash, dot,
+  underscore and hyphen paths without enumerating exponentially many segment
+  partitions on a near miss. Other unanchored patterns can still scale
+  superlinearly; this repair does not establish a linear-time redactor.
+- **Query and hydration failures use structural diagnostics.** Context-bundle,
+  discovery-projection and active-slate warnings, planner/search failure logs and
+  lane-coverage warnings keep their fixed operation label and finite own numeric
+  error code, adding query length and a digest where a query is available. They
+  omit error messages and arbitrary error properties: MongoDB server errors carry
+  enumerable response documents that can expose user content, while message
+  redaction can stall or throw on unbounded input. These diagnostics lose free-text
+  server, network and programming-error details. Planner/search callers retain the
+  original error; query inputs, responses and coverage/partial fallbacks retain
+  their existing behavior. The legacy echo-redaction utility remains for tests
+  only and keeps its documented cost residuals. Other API and lane-failure logging
+  paths remain outside this repair; hashing is proportional to query length.
+- **Subsystem messages and metadata have redactor input bounds.** Messages over
+  4096 UTF-16 code units are omitted before matching, including raw messages.
+  Serialized metadata over that limit is omitted; key enumeration, serialization
+  failures and a non-string serialization result produce a fixed omission marker.
+  Short messages and serializable metadata retain their existing redaction.
+  This does not bound subsystem names, total line length, incoming allocations,
+  or execution and allocation inside metadata getters, proxies and `toJSON`.
+  Disabled log levels still return before inspecting metadata.
 - **Negative knowledge.** The classifier is pattern-based and shape-driven: secrets
   outside its shapes (credential-free random tokens, non-JSON serialization
   formats, JSON-in-JSON double escaping) are not caught, and nothing here detects

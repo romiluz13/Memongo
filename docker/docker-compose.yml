@@ -1,5 +1,5 @@
 # docker-compose.yml - Memongo one-command setup
-# Uses mongodb/mongodb-atlas-local (pinned dated tag below; the image line
+# Uses mongodb/mongodb-atlas-local (floating preview tag; the image line
 # with auto-embedding support — plain mongo/mongo:7 does NOT work).
 #
 # Usage:
@@ -19,7 +19,7 @@
 
 services:
   mongodb:
-    # Pinned to a dated tag (verify auto-embedding parity when bumping).
+    # Record the resolved image digest when validating a deployment.
     image: mongodb/mongodb-atlas-local:preview
     container_name: memongo-preview
     # Pin the hostname: the atlas-local image derives the replica-set name

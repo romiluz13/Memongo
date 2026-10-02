@@ -1,32 +1,48 @@
 import { randomUUID } from "node:crypto"
+import type { MemoryJob } from "./types.js"
 import type { OperationRunContext } from "./mongodb-operation-accounting.js"
 import { isDuplicateKeyError } from "./internal.js"
+import { settledFailureMeta } from "./query-diagnostics.js"
 import { recordEmbeddingSpend } from "./mongodb-cost-ledger.js"
 import {
 	extractStructuredCandidatesFromEvent,
 	extractProcedureCandidatesFromEvent,
 } from "./mongodb-derived-memory.js"
 import {
+	buildCanonicalEventDocument,
+	classifyBulkInsertError,
+	EVENT_IDEMPOTENCY_REPLAY_PROJECTION,
 	clearEventExtractionJobPending,
 	clearEventExtractionJobPendingBatch,
-	writeEvent,
-	writeEventsBatch,
+	eventReplayMatches,
+	type EventReplayDocument,
+	type EventWriteInput,
+	findExistingEventsForReplay,
+	isStoredEventReplayDocument,
 	projectEventChunk,
 	projectEventChunksBatch,
+	writeEvent,
 	IdempotencyConflictError,
 	pruneIdempotencyFingerprints,
+	resolveIdempotencyRetentionDays,
 	IDEMPOTENCY_FINGERPRINT_PRUNE_INTERVAL_MS,
 } from "./mongodb-events.js"
+import {
+	EVENT_IDENTITY_READ_OPTIONS,
+	type EventMetadataWriteOptions,
+	eventMetadataMatchesPersistedForm,
+} from "./mongodb-event-metadata-identity.js"
 import { computeIdempotencyFingerprint } from "./mongodb-idempotency-fingerprint.js"
 import type { CanonicalEvent } from "./mongodb-events.js"
 import { updateLaneCoverage } from "./mongodb-lane-coverage.js"
 import type { MongoDBManagerHost } from "./mongodb-manager-host.js"
-import { recordIngestRun } from "./mongodb-ops.js"
+import { recordIngestRun, recordProjectionRun } from "./mongodb-ops.js"
 import {
 	createMemoryJob,
 	createMemoryJobsBatch,
 	getMemoryJob,
 	releaseStagedMemoryJob,
+	releaseStagedMemoryJobsBatch,
 } from "./mongodb-memory-jobs.js"
 import { QueryCacheInvalidationCoalescer } from "./mongodb-query-cache-invalidation.js"
 import { invalidateQueryCache } from "./mongodb-query-cache.js"
@@ -36,14 +52,302 @@ import { resolveScopeIdentity } from "./mongodb-scope.js"
 import { resolveWriteExpiresAt } from "./mongodb-temporal.js"
 import { resolveDefaultScope } from "./backend-config.js"
 import {
-	isTransactionUnsupported,
-	MAJORITY_TRANSACTION_OPTIONS,
-} from "./mongodb-transactions.js"
+	type AdmissionToken,
+	captureAdmissionToken,
+	ErasureGateConflictError,
+	withFencedWrite,
+} from "./mongodb-write-fence.js"
 import type { MemoryScope } from "@memongo/lib"
-import type { ClientSession, Db } from "mongodb"
+import type { ClientSession, Document } from "mongodb"
 import { createSubsystemLogger } from "@memongo/lib"
 
 const log = createSubsystemLogger("memory:mongodb")
+
+type BatchEventWriteReceipt =
+	| {
+			ok: true
+			eventId: string
+			chunkCreated: boolean
+			replayed?: boolean
+	  }
+	| {
+			ok: false
+			code: "IDEMPOTENCY_CONFLICT" | "WRITE_ERROR"
+			message: string
+	  }
+
+type PreparedBatchItem = {
+	index: number
+	input: EventWriteInput
+	event: CanonicalEvent
+	job?: Omit<MemoryJob, "createdAt"> & { createdAt?: Date }
+}
+
+type PreparedBatchGroup = {
+	idempotencyKey?: string
+	members: PreparedBatchItem[]
+}
+
+type BatchRoundDraft = {
+	receipts: Map<number, BatchEventWriteReceipt>
+	inserted: PreparedBatchItem[]
+}
+
+type AttributableEventIssue = {
+	kind: "validation" | "idempotency-duplicate"
+	originalIndex: number
+	message: string
+}
+
+class AttributableEventBatchAbort extends Error {
+	readonly issues: AttributableEventIssue[]
+	readonly attemptedIndexes: number[]
+
+	constructor(
+		issues: AttributableEventIssue[],
+		attemptedIndexes: number[],
+		cause: unknown,
+	) {
+		super("transactional event insert had attributable item errors", {
+			cause,
+		})
+		this.name = "AttributableEventBatchAbort"
+		this.issues = issues
+		this.attemptedIndexes = attemptedIndexes
+	}
+}
+
+class BatchBodyAbort extends Error {
+	readonly attemptedIndexes: number[]
+
+	constructor(cause: unknown, attemptedIndexes: number[] = []) {
+		super(cause instanceof Error ? cause.message : String(cause), { cause })
+		this.name = "BatchBodyAbort"
+		this.attemptedIndexes = attemptedIndexes
+	}
+}
+
+function hasMongoErrorLabel(err: unknown, label: string): boolean {
+	const hasErrorLabel = (err as { hasErrorLabel?: (value: string) => boolean })
+		?.hasErrorLabel
+	return (
+		typeof hasErrorLabel === "function" &&
+		hasErrorLabel.call(err, label) === true
+	)
+}
+
+function isIdempotencyIndexWriteError(writeError: {
+	errmsg?: string
+	errInfo?: Document
+}): boolean {
+	const keyPattern = writeError.errInfo?.keyPattern
+	if (keyPattern && typeof keyPattern === "object") {
+		const keys = Object.keys(keyPattern)
+		if (
+			keys.length === 2 &&
+			keys.includes("agentId") &&
+			keys.includes("idempotencyKey")
+		) {
+			return true
+		}
+	}
+	return (
+		writeError.errmsg?.includes("index: uq_events_agent_idempotency_key ") ===
+		true
+	)
+}
+
+function classifyAttributableEventBatchAbort(
+	err: unknown,
+	leaders: PreparedBatchItem[],
+): AttributableEventIssue[] | undefined {
+	const outcome = classifyBulkInsertError(err)
+	const rawWriteErrors = (
+		err as {
+			writeErrors?: unknown
+		}
+	)?.writeErrors
+	if (
+		outcome.kind !== "item-errors" ||
+		outcome.writeConcernError ||
+		outcome.writeErrors.length === 0 ||
+		!Array.isArray(rawWriteErrors) ||
+		rawWriteErrors.length !== outcome.writeErrors.length
+	) {
+		return undefined
+	}
+	const seen = new Set<number>()
+	const issues: AttributableEventIssue[] = []
+	for (const writeError of outcome.writeErrors) {
+		if (
+			!Number.isInteger(writeError.index) ||
+			writeError.index < 0 ||
+			writeError.index >= leaders.length ||
+			seen.has(writeError.index)
+		) {
+			return undefined
+		}
+		seen.add(writeError.index)
+		const leader = leaders[writeError.index]
+		if (writeError.code === 121) {
+			issues.push({
+				kind: "validation",
+				originalIndex: leader.index,
+				message: writeError.errmsg ?? "event validation failed",
+			})
+			continue
+		}
+		if (
+			writeError.code === 11000 &&
+			leader.event.idempotencyKey &&
+			isIdempotencyIndexWriteError(writeError)
+		) {
+			issues.push({
+				kind: "idempotency-duplicate",
+				originalIndex: leader.index,
+				message: writeError.errmsg ?? "event insert failed",
+			})
+			continue
+		}
+		return undefined
+	}
+	return issues
+}
+
+function batchWriteError(message: string): BatchEventWriteReceipt {
+	return { ok: false, code: "WRITE_ERROR", message }
+}
+
+function replayMatches(
+	stored: EventReplayDocument,
+	item: PreparedBatchItem,
+	writeOptions: EventMetadataWriteOptions,
+): boolean {
+	const fingerprintOrLegacyFieldsMatch = stored.idempotencyFingerprint
+		? stored.idempotencyFingerprint === item.event.idempotencyFingerprint
+		: stored.role === item.event.role &&
+			stored.body === item.event.body &&
+			(stored.sessionId ?? undefined) === item.event.sessionId &&
+			stored.scope === item.event.scope &&
+			stored.scopeRef === item.event.scopeRef
+	if (!fingerprintOrLegacyFieldsMatch) {
+		return false
+	}
+	return eventMetadataMatchesPersistedForm(
+		stored.metadata ?? {},
+		item.input.metadata ?? {},
+		writeOptions,
+	)
+}
+
+function mintedAttemptMatches(
+	stored: EventReplayDocument,
+	item: PreparedBatchItem,
+	writeOptions: EventMetadataWriteOptions,
+): boolean {
+	if (stored.eventId !== item.event.eventId) {
+		return false
+	}
+	for (const field of ["invalidAt", "expiresAt"] as const) {
+		if (Object.hasOwn(stored, field) !== Object.hasOwn(item.event, field)) {
+			return false
+		}
+	}
+	return eventReplayMatches(
+		stored,
+		item.event,
+		{
+			...item.input,
+			timestamp: item.event.timestamp,
+			validAt: item.event.validAt,
+		},
+		writeOptions,
+	)
+}
+
+function draftGroupAgainstWinner(params: {
+	group: PreparedBatchGroup
+	stored: Document
+	writeOptions: EventMetadataWriteOptions
+}): Map<number, BatchEventWriteReceipt> {
+	const receipts = new Map<number, BatchEventWriteReceipt>()
+	if (!isStoredEventReplayDocument(params.stored)) {
+		for (const member of params.group.members) {
+			receipts.set(
+				member.index,
+				batchWriteError(
+					"idempotency replay identity unconfirmed; stored event was malformed",
+				),
+			)
+		}
+		return receipts
+	}
+	for (const member of params.group.members) {
+		try {
+			if (replayMatches(params.stored, member, params.writeOptions)) {
+				receipts.set(member.index, {
+					ok: true,
+					eventId: params.stored.eventId,
+					chunkCreated: false,
+					replayed: true,
+				})
+			} else {
+				receipts.set(member.index, {
+					ok: false,
+					code: "IDEMPOTENCY_CONFLICT",
+					message: "idempotency key was reused with a different payload",
+				})
+			}
+		} catch {
+			receipts.set(
+				member.index,
+				batchWriteError(
+					"idempotency payload comparison could not be completed",
+				),
+			)
+		}
+	}
+	return receipts
+}
+
+function draftInsertedGroup(params: {
+	group: PreparedBatchGroup
+	writeOptions: EventMetadataWriteOptions
+}): Map<number, BatchEventWriteReceipt> {
+	const [leader, ...followers] = params.group.members
+	const receipts = new Map<number, BatchEventWriteReceipt>([
+		[
+			leader.index,
+			{ ok: true, eventId: leader.event.eventId, chunkCreated: false },
+		],
+	])
+	for (const follower of followers) {
+		try {
+			if (replayMatches(leader.event, follower, params.writeOptions)) {
+				receipts.set(follower.index, {
+					ok: true,
+					eventId: leader.event.eventId,
+					chunkCreated: false,
+					replayed: true,
+				})
+			} else {
+				receipts.set(follower.index, {
+					ok: false,
+					code: "IDEMPOTENCY_CONFLICT",
+					message: "idempotency key was reused with a different payload",
+				})
+			}
+		} catch {
+			receipts.set(
+				follower.index,
+				batchWriteError(
+					"idempotency payload comparison could not be completed",
+				),
+			)
+		}
+	}
+	return receipts
+}
 
 // ---------------------------------------------------------------------------
 // WS-11 change 4 (09-report R7/B5): bounded per-agent writeQueue.
@@ -190,10 +494,8 @@ export class MongoDBManagerWriteOps {
 	async pruneIdempotencyFingerprints(params?: {
 		olderThanDays?: number
 		force?: boolean
+		admission?: AdmissionToken
 	}): Promise<{ pruned: number }> {
-		// The entire method is failure-safe: the worker drain sweep awaits it
-		// inline, so ANY error source (gate read, prune call) must degrade to
-		// a no-op instead of rejecting the drain.
 		try {
 			const now = Date.now()
 			if (
@@ -201,21 +503,39 @@ export class MongoDBManagerWriteOps {
 				this.lastFingerprintPruneAt !== 0 &&
 				now - this.lastFingerprintPruneAt <
 					IDEMPOTENCY_FINGERPRINT_PRUNE_INTERVAL_MS
-			) {
+			)
 				return { pruned: 0 }
-			}
-			this.lastFingerprintPruneAt = now
-			return await pruneIdempotencyFingerprints({
+			const admission =
+				params?.admission ??
+				(await captureAdmissionToken({
+					db: this.host.db,
+					prefix: this.host.prefix,
+					agentId: this.host.agentId,
+				}))
+			if (admission.agentId !== this.host.agentId)
+				throw new ErasureGateConflictError(this.host.agentId)
+			const at = new Date(now)
+			const olderThanDays =
+				params?.olderThanDays ?? resolveIdempotencyRetentionDays()
+			const result = await withFencedWrite({
 				db: this.host.db,
 				prefix: this.host.prefix,
-				agentId: this.host.agentId,
-				...(params?.olderThanDays !== undefined
-					? { olderThanDays: params.olderThanDays }
-					: {}),
+				token: admission,
+				fn: (session) =>
+					pruneIdempotencyFingerprints({
+						db: this.host.db,
+						prefix: this.host.prefix,
+						agentId: this.host.agentId,
+						now: at,
+						session,
+						olderThanDays,
+					}),
 			})
+			this.lastFingerprintPruneAt = now
+			return result
 		} catch (err) {
-			// Prune failure must never block the worker drain that invoked it.
-			log.warn("pruneIdempotencyFingerprints failed", { error: err })
+			if (params?.admission) throw err
+			log.warn("pruneIdempotencyFingerprints failed", settledFailureMeta(err))
 			return { pruned: 0 }
 		}
 	}
@@ -224,22 +544,55 @@ export class MongoDBManagerWriteOps {
 		agentId: string
 		scope: MemoryScope
 		scopeRef: string
+		admission?: AdmissionToken
 	}): void {
+		const { admission, agentId, scope, scopeRef } = params
+		if (
+			admission &&
+			(admission.kind !== "admission" ||
+				admission.agentId !== agentId ||
+				agentId !== this.host.agentId)
+		) {
+			log.warn("query cache invalidation admission mismatch")
+			return
+		}
 		if (!this.host.queryCacheInvalidationCoalescer) {
 			this.host.queryCacheInvalidationCoalescer =
 				new QueryCacheInvalidationCoalescer()
 		}
+		const namespace = {
+			db: this.host.db,
+			prefix: this.host.prefix,
+			agentId,
+			scope,
+			scopeRef,
+		}
 		const coalescer = this.host.queryCacheInvalidationCoalescer
 		coalescer.schedule(
-			`${params.agentId}|${params.scope}|${params.scopeRef}`,
+			admission
+				? JSON.stringify([agentId, scope, scopeRef, admission.epoch])
+				: `${agentId}|${scope}|${scopeRef}`,
 			() => {
-				void invalidateQueryCache({
-					db: this.host.db,
-					prefix: this.host.prefix,
-					agentId: params.agentId,
-					scope: params.scope,
-					scopeRef: params.scopeRef,
-				})
+				if (admission) {
+					void withFencedWrite({
+						db: namespace.db,
+						prefix: namespace.prefix,
+						token: admission,
+						fn: (session) =>
+							invalidateQueryCache({
+								...namespace,
+								session,
+								throwOnError: true,
+							}),
+					}).catch((err) =>
+						log.warn(
+							"query cache invalidation failed",
+							settledFailureMeta(err),
+						),
+					)
+				} else {
+					void invalidateQueryCache(namespace)
+				}
 			},
 		)
 	}
@@ -302,11 +655,12 @@ export class MongoDBManagerWriteOps {
 	 * B4: does this request payload match the event previously persisted
 	 * under its idempotency key? Both write paths (single + batch) share this
 	 * one comparison. Docs written with a stored fingerprint (B4 onward)
-	 * compare the full canonical fingerprint — ANY changed immutable input
-	 * (timestamp, validAt, invalidAt, metadata, expiresAt, not just role/
-	 * body/session/scope) is a mismatch. Pre-B4 docs carry no fingerprint
-	 * and fall back to the legacy five-field compare so in-flight retries
-	 * across the upgrade still replay instead of false-conflicting.
+	 * first compare the unchanged canonical fingerprint. Pre-B4 docs carry no
+	 * fingerprint and fall back to the legacy five-field compare so in-flight
+	 * retries across the upgrade still replay instead of false-conflicting.
+	 * After that gate passes, both variants compare metadata by its BSON-
+	 * persisted meaning because the historical JSON fingerprint can alias
+	 * values with different BSON types.
 	 */
 	idempotencyPayloadMatches(
 		existing: CanonicalEvent,
@@ -322,9 +676,11 @@ export class MongoDBManagerWriteOps {
 			metadata?: Record<string, unknown>
 			expiresAt?: Date
 		},
+		writeOptions: EventMetadataWriteOptions,
 	): boolean {
+		let fingerprintOrLegacyFieldsMatch: boolean
 		if (existing.idempotencyFingerprint) {
-			return (
+			fingerprintOrLegacyFieldsMatch =
 				existing.idempotencyFingerprint ===
 				computeIdempotencyFingerprint(
 					event,
@@ -332,15 +688,22 @@ export class MongoDBManagerWriteOps {
 					this.resolveWriteDefaultScope(),
 					this.host.workspaceDir,
 				)
-			)
+		} else {
+			const incoming = this.host.resolveIdempotencyFingerprint(event)
+			fingerprintOrLegacyFieldsMatch =
+				existing.role === incoming.role &&
+				existing.body === incoming.body &&
+				(existing.sessionId ?? undefined) === incoming.sessionId &&
+				existing.scope === incoming.scope &&
+				existing.scopeRef === incoming.scopeRef
 		}
-		const incoming = this.host.resolveIdempotencyFingerprint(event)
-		return (
-			existing.role === incoming.role &&
-			existing.body === incoming.body &&
-			(existing.sessionId ?? undefined) === incoming.sessionId &&
-			existing.scope === incoming.scope &&
-			existing.scopeRef === incoming.scopeRef
+		if (!fingerprintOrLegacyFieldsMatch) {
+			return false
+		}
+		return eventMetadataMatchesPersistedForm(
+			existing.metadata ?? {},
+			event.metadata ?? {},
+			writeOptions,
 		)
 	}
 
@@ -365,18 +728,32 @@ export class MongoDBManagerWriteOps {
 			metadata?: Record<string, unknown>
 			expiresAt?: Date
 		}
+		session?: ClientSession
 	}): Promise<{ eventId: string; chunkCreated: boolean } | null> {
-		const existing = (await eventsCollection(
-			this.host.db,
-			this.host.prefix,
-		).findOne({
+		const filter = {
 			agentId: this.host.agentId,
 			idempotencyKey: params.idempotencyKey,
-		})) as CanonicalEvent | null
+		}
+		const collection = eventsCollection(this.host.db, this.host.prefix)
+		const existing = (await (params.session
+			? collection.findOne(filter, {
+					...EVENT_IDENTITY_READ_OPTIONS,
+					session: params.session,
+				})
+			: collection.findOne(filter, {
+					...EVENT_IDENTITY_READ_OPTIONS,
+					readConcern: { level: "majority" },
+				}))) as CanonicalEvent | null
 		if (!existing) {
 			return null
 		}
-		if (!this.idempotencyPayloadMatches(existing, params.event)) {
+		if (
+			!this.idempotencyPayloadMatches(
+				existing,
+				params.event,
+				collection.bsonOptions,
+			)
+		) {
 			throw new IdempotencyConflictError(params.idempotencyKey)
 		}
 		return { eventId: existing.eventId, chunkCreated: false }
@@ -394,19 +771,24 @@ export class MongoDBManagerWriteOps {
 				"MongoDBMemoryManager is closed; refusing to queue a new write",
 			)
 		}
+		// Capture admission at the public call boundary, before queue delay can
+		// make this write appear newer than an intervening erasure. Convert the
+		// promise to a settled result immediately so a queue fast-fail cannot
+		// leave a rejected admission read orphaned.
+		const generation = this.host.memoryJobWorkerGeneration ?? 0
+		const admission = captureAdmissionToken({
+			db: this.host.db,
+			prefix: this.host.prefix,
+			agentId: this.host.agentId,
+		}).then(
+			(token) => ({ ok: true as const, token }),
+			(error: unknown) => ({ ok: false as const, error }),
+		)
 		const execute = async () => {
-			if (event.idempotencyKey) {
-				const replay = await this.host.replayIdempotentEventWrite({
-					idempotencyKey: event.idempotencyKey,
-					event,
-				})
-				if (replay) {
-					return replay
-				}
+			const admitted = await admission
+			if (!admitted.ok) {
+				throw admitted.error
 			}
-			// W16: ingest-run clock starts at the write attempt (a replay is
-			// not an ingest and returns above before this point).
-			const ingestStartMs = Date.now()
 			const eventId = randomUUID()
 			// D1/B3: the write side of the canonical identity rule — an implicit
 			// sessionId lands the event in the SAME session scope a sessionKey
@@ -487,16 +869,17 @@ export class MongoDBManagerWriteOps {
 				})
 			const stageExtractionJob = async (
 				written: Awaited<ReturnType<typeof writeEvent>>,
-				session?: ClientSession,
+				session: ClientSession,
 			) => {
 				await createMemoryJob({
 					db: this.host.db,
 					prefix: this.host.prefix,
-					...(session ? { session } : {}),
+					session,
 					job: {
 						jobId: `extraction-${written.eventId}`,
 						jobType: "extraction",
 						agentId: this.host.agentId,
+						admissionEpoch: admitted.token.epoch,
 						status: "pending",
 						stagedAt: extractionJobPendingAt,
 						metadata: { eventId: written.eventId },
@@ -508,50 +891,52 @@ export class MongoDBManagerWriteOps {
 					},
 				})
 			}
+			// W16: ingest-run clock starts at the write attempt. A replay returns
+			// from the fenced transaction without recording an ingest run.
+			const ingestStartMs = Date.now()
 			let written: Awaited<ReturnType<typeof writeEvent>>
 			try {
-				if (postWriteDerivedWorkEnabled && this.host.client) {
-					const session = this.host.client.startSession()
-					try {
-						let transactionalWrite:
-							| Awaited<ReturnType<typeof writeEvent>>
-							| undefined
-						await session.withTransaction(async () => {
-							transactionalWrite = await persistEvent(session)
-							await stageExtractionJob(transactionalWrite, session)
-						}, MAJORITY_TRANSACTION_OPTIONS)
-						if (!transactionalWrite) {
-							throw new Error(
-								"event and extraction job transaction returned no event",
-							)
+				const outcome = await withFencedWrite({
+					db: this.host.db,
+					prefix: this.host.prefix,
+					token: admitted.token,
+					fn: async (session) => {
+						if (event.idempotencyKey) {
+							const replay = await this.host.replayIdempotentEventWrite({
+								idempotencyKey: event.idempotencyKey,
+								event,
+								session,
+							})
+							if (replay) {
+								return { kind: "replay" as const, receipt: replay }
+							}
 						}
-						written = transactionalWrite
-					} catch (err) {
-						if (!isTransactionUnsupported(err)) {
-							throw err
+						const persisted = await persistEvent(session)
+						if (postWriteDerivedWorkEnabled) {
+							await stageExtractionJob(persisted, session)
 						}
-						log.info(
-							"transactions unavailable for event extraction outbox; using direct writes",
-						)
-						written = await persistEvent()
-						await stageExtractionJob(written)
-					} finally {
-						await session.endSession()
-					}
-				} else {
-					written = await persistEvent()
-					if (postWriteDerivedWorkEnabled) {
-						await stageExtractionJob(written)
-					}
+						return { kind: "written" as const, written: persisted }
+					},
+				})
+				if (outcome.kind === "replay") {
+					return outcome.receipt
 				}
+				written = outcome.written
 			} catch (err) {
 				if (event.idempotencyKey && isDuplicateKeyError(err)) {
-					// Lost race: a concurrent request carrying the same key committed
-					// first and uq_events_agent_idempotency_key rejected our insert.
-					// Replay the winner's receipt (Stripe: same key, same result).
-					const replay = await this.host.replayIdempotentEventWrite({
-						idempotencyKey: event.idempotencyKey,
-						event,
+					// A duplicate-key error aborts its transaction, so replay in a
+					// new fenced transaction with the original admission token.
+					// An erasure that advanced the epoch wins this retry boundary.
+					const replay = await withFencedWrite({
+						db: this.host.db,
+						prefix: this.host.prefix,
+						token: admitted.token,
+						fn: (session) =>
+							this.host.replayIdempotentEventWrite({
+								idempotencyKey: event.idempotencyKey as string,
+								event,
+								session,
+							}),
 					})
 					if (replay) {
 						return replay
@@ -559,49 +944,79 @@ export class MongoDBManagerWriteOps {
 				}
 				throw err
 			}
+			const projectionStartMs = Date.now()
+			const projectionEvent: CanonicalEvent = {
+				eventId: written.eventId,
+				agentId: this.host.agentId,
+				role: event.role,
+				body: event.body,
+				scope,
+				scopeRef: written.scopeRef,
+				timestamp: written.timestamp,
+				validAt: event.validAt ?? written.timestamp,
+				...(event.invalidAt ? { invalidAt: event.invalidAt } : {}),
+				...(expiresAt ? { expiresAt } : {}),
+				...(event.sessionId ? { sessionId: event.sessionId } : {}),
+				...(event.metadata ? { metadata: event.metadata } : {}),
+			}
 			let projected: { chunkCreated: boolean }
+			let projectionFailed = false
 			try {
-				projected = await projectEventChunk({
+				projected = await withFencedWrite({
 					db: this.host.db,
 					prefix: this.host.prefix,
-					event: {
-						eventId: written.eventId,
-						agentId: this.host.agentId,
-						role: event.role,
-						body: event.body,
-						scope,
-						scopeRef: written.scopeRef,
-						timestamp: written.timestamp,
-						validAt: event.validAt ?? written.timestamp,
-						...(event.invalidAt ? { invalidAt: event.invalidAt } : {}),
-						...(expiresAt ? { expiresAt } : {}),
-						...(event.sessionId ? { sessionId: event.sessionId } : {}),
-						...(event.metadata ? { metadata: event.metadata } : {}),
-					},
+					token: admitted.token,
+					fn: (session) =>
+						projectEventChunk({
+							db: this.host.db,
+							prefix: this.host.prefix,
+							event: projectionEvent,
+							session,
+							recordRun: false,
+						}),
 				})
 			} catch (err) {
-				// W08: the event (and its staged job) is durable; a failed
-				// projection must not reject it. The event stays in the
-				// unprojected set the repair pass re-projects (the chunk
-				// upsert is idempotent by path).
+				projectionFailed = true
 				projected = { chunkCreated: false }
 				log.warn(
 					`chunk projection failed for durable event ${written.eventId}; leaving it unprojected for the repair pass: ${String(err)}`,
 				)
 			}
+			const projectionRun = {
+				agentId: this.host.agentId,
+				projectionType: "chunks" as const,
+				status: projectionFailed ? ("failed" as const) : ("ok" as const),
+				itemsProjected: projected.chunkCreated ? 1 : 0,
+				durationMs: Date.now() - projectionStartMs,
+			}
+			await withFencedWrite({
+				db: this.host.db,
+				prefix: this.host.prefix,
+				token: admitted.token,
+				fn: (session) =>
+					recordProjectionRun({
+						db: this.host.db,
+						prefix: this.host.prefix,
+						run: projectionRun,
+						session,
+					}),
+			}).catch(() => {})
 			if (projected.chunkCreated) {
 				this.host.chunkCount += 1
 				// C-017: a newly projected chunk is embedded server-side
 				// (autoEmbed) in automated mode — bill one indexing unit per
 				// created chunk; replays create none.
 				if (this.host.config.mongodb?.embeddingMode === "automated") {
-					recordEmbeddingSpend(
+					void recordEmbeddingSpend(
 						this.host.db,
 						this.host.prefix,
 						this.host.agentId,
 						"indexing",
 						1,
-					)
+						{ admission: admitted.token },
+					).catch(() => {
+						log.warn("indexing cost ledger recording failed")
+					})
 				}
 			}
 			if (postWriteDerivedWorkEnabled) {
@@ -666,10 +1081,14 @@ export class MongoDBManagerWriteOps {
 						)
 					}
 				}
+				// W8: one admission per write chain — the post-write wake
+				// reuses this write's admission token, so the drain's repair
+				// and claim rounds do not capture a second admission against
+				// the same erasure gate.
 				if (this.host.memoryJobWorkerStopped) {
-					this.host.startMemoryJobWorker()
+					this.host.startMemoryJobWorker(admitted.token, generation)
 				} else {
-					this.host.wakeMemoryJobWorker()
+					this.host.wakeMemoryJobWorker(admitted.token, generation)
 				}
 			}
 
@@ -682,6 +1101,7 @@ export class MongoDBManagerWriteOps {
 				scope,
 				scopeRef: written.scopeRef,
 				runContext: operationRunContext,
+				admission: admitted.token,
 			})
 
 			// P2.4: the hot write path coalesces invalidation — a burst of
@@ -692,6 +1112,7 @@ export class MongoDBManagerWriteOps {
 				agentId: this.host.agentId,
 				scope,
 				scopeRef: written.scopeRef,
+				admission: admitted.token,
 			})
 
 			// Lane coverage tracking (non-blocking)
@@ -745,11 +1166,18 @@ export class MongoDBManagerWriteOps {
 				if (procedureCandidates.length > 0) {
 					increments.procedural = procedureCandidates.length
 				}
-				await updateLaneCoverage({
+				await withFencedWrite({
 					db: this.host.db,
 					prefix: this.host.prefix,
-					agentId: this.host.agentId,
-					increments,
+					token: admitted.token,
+					fn: (session) =>
+						updateLaneCoverage({
+							db: this.host.db,
+							prefix: this.host.prefix,
+							agentId: this.host.agentId,
+							increments,
+							session,
+						}),
 				})
 			} catch (err) {
 				log.warn("lane coverage update failed after event write", {
@@ -767,17 +1195,25 @@ export class MongoDBManagerWriteOps {
 			// Best-effort by design — the write is already durable and a
 			// failed ledger insert must not reject it.
 			try {
-				await recordIngestRun({
+				const run = {
+					agentId: this.host.agentId,
+					source: "event-write" as const,
+					status: "ok" as const,
+					itemsProcessed: 1,
+					itemsFailed: 0,
+					durationMs: Date.now() - ingestStartMs,
+				}
+				await withFencedWrite({
 					db: this.host.db,
 					prefix: this.host.prefix,
-					run: {
-						agentId: this.host.agentId,
-						source: "event-write",
-						status: "ok",
-						itemsProcessed: 1,
-						itemsFailed: 0,
-						durationMs: Date.now() - ingestStartMs,
-					},
+					token: admitted.token,
+					fn: (session) =>
+						recordIngestRun({
+							db: this.host.db,
+							prefix: this.host.prefix,
+							run,
+							session,
+						}),
 				})
 			} catch (err) {
 				log.warn("ingest run recording failed after durable event write", {
@@ -796,13 +1232,11 @@ export class MongoDBManagerWriteOps {
 	}
 
 	/**
-	 * P3.9: batch variant of writeConversationEvent. The whole batch occupies
-	 * ONE slot in the per-agent write queue (ordering against single writes is
-	 * preserved) and amortizes round trips: one batched idempotency lookup,
-	 * one insertMany for events, one bulkWrite for chunk projection, one
-	 * insertMany for extraction jobs, one updateMany clearing outbox markers,
-	 * and one aggregated lane-coverage update. Per-item receipts mirror the
-	 * single-write receipt shape; a failed item never fails its siblings.
+	 * Fenced batch variant of writeConversationEvent. The whole batch occupies
+	 * one slot in the per-agent write queue and prepares stable IDs and clocks
+	 * once. Known-aborted event rounds may shrink and retry, but exactly one
+	 * fenced round commits. Event leaders and staged extraction jobs commit
+	 * atomically; projection, job release, and accounting run afterward.
 	 */
 	async writeConversationEventsBatch(
 		events: WriteConversationEventInput[],
@@ -814,131 +1248,61 @@ export class MongoDBManagerWriteOps {
 				"MongoDBMemoryManager is closed; refusing to queue a new write",
 			)
 		}
+		const generation = this.host.memoryJobWorkerGeneration ?? 0
+		const admission = captureAdmissionToken({
+			db: this.host.db,
+			prefix: this.host.prefix,
+			agentId: this.host.agentId,
+		}).then(
+			(token) => ({ ok: true as const, token }),
+			(error: unknown) => ({ ok: false as const, error }),
+		)
 		const execute = async (): Promise<WriteConversationEventReceipt[]> => {
+			const admitted = await admission
+			if (!admitted.ok) {
+				throw admitted.error
+			}
 			// W16: ingest-run clock for the batch boundary (one run per call).
 			const ingestStartMs = Date.now()
 			const receipts: Array<WriteConversationEventReceipt | undefined> =
 				events.map(() => undefined)
-
-			// 1. Batched idempotency replay: ONE $in lookup for every key in the
-			// batch instead of a findOne per keyed write (P0.1 semantics per
-			// item: same key + same payload replays; different payload conflicts).
-			const keyedIndexes = events
-				.map((event, index) => ({ event, index }))
-				.filter(({ event }) => Boolean(event.idempotencyKey))
-			if (keyedIndexes.length > 0) {
-				const keys = [
-					...new Set(
-						keyedIndexes.map(({ event }) => event.idempotencyKey as string),
-					),
-				]
-				const existing = (await eventsCollection(this.host.db, this.host.prefix)
-					.find({ agentId: this.host.agentId, idempotencyKey: { $in: keys } })
-					.toArray()) as unknown as CanonicalEvent[]
-				const byKey = new Map(
-					existing.map((doc) => [doc.idempotencyKey as string, doc]),
-				)
-				for (const { event, index } of keyedIndexes) {
-					const doc = byKey.get(event.idempotencyKey as string)
-					if (!doc) {
-						continue
-					}
-					// B4: same full-fingerprint comparison as the single path.
-					const samePayload = this.idempotencyPayloadMatches(doc, event)
-					receipts[index] = samePayload
-						? {
-								ok: true,
-								eventId: doc.eventId,
-								chunkCreated: false,
-								replayed: true,
-							}
-						: {
-								ok: false,
-								code: "IDEMPOTENCY_CONFLICT",
-								message: `idempotency key "${event.idempotencyKey}" was reused with a different payload`,
-							}
-				}
-			}
-
-			// 2. Build the write set for the non-replayed items.
 			const postWriteDerivedWorkEnabled =
 				this.host.shouldRunPostWriteDerivedWork()
 			const extractionJobPendingAt = postWriteDerivedWorkEnabled
 				? new Date()
 				: undefined
-			type PendingItem = {
-				index: number
-				input: WriteConversationEventInput
-				eventId: string
-				scope: MemoryScope
-				// W06: the manager-resolved scopeRef (complete identity at the
-				// boundary; carried so the low-level insert consumes it instead
-				// of re-resolving without the workspaceDir).
-				scopeRef: string
-				// P4.4.1/C-005: expiry computed once per item so the event
-				// document AND its chunk projection carry the same value.
-				expiresAt?: Date
-			}
-			const pending: PendingItem[] = []
-			// D1/B3: same unified-default identity rule as the single write.
-			// W06: same complete-identity resolution — scope AND scopeRef with
-			// the manager's workspaceDir, so batch workspace writes land in the
-			// hashed workspace partition and the resolved scopeRef flows to the
-			// low-level batch insert.
 			const writeDefaultScope = this.resolveWriteDefaultScope()
+			const prepared: PreparedBatchItem[] = []
 			for (const [index, input] of events.entries()) {
-				if (receipts[index]) {
-					continue
-				}
-				const { scope, scopeRef } = resolveScopeIdentity({
-					scope: input.scope,
-					scopeRef: input.scopeRef,
-					agentId: this.host.agentId,
-					sessionId: input.sessionId,
-					workspaceDir: this.host.workspaceDir,
-					defaultScope: writeDefaultScope,
-				})
-				// P4.4.1: same TTL rule as the single write — explicit wins,
-				// session-scope default applies to session writes only.
-				const expiresAt = resolveWriteExpiresAt({
-					explicit: input.expiresAt,
-					sessionId: input.sessionId,
-					ttl: this.host.config.mongodb?.ttl,
-				})
-				pending.push({
-					index,
-					input,
-					eventId: randomUUID(),
-					scope,
-					scopeRef,
-					expiresAt,
-				})
-			}
-
-			// 3. ONE insertMany for the whole batch (unordered: a per-item
-			// failure — validation or an E11000 idempotency race — does not
-			// abort its siblings).
-			const writeResults = await writeEventsBatch({
-				db: this.host.db,
-				prefix: this.host.prefix,
-				events: pending.map(
-					({ input, eventId, scope, scopeRef, expiresAt }) => ({
-						eventId,
+				try {
+					const { scope, scopeRef } = resolveScopeIdentity({
+						scope: input.scope,
+						scopeRef: input.scopeRef,
 						agentId: this.host.agentId,
 						sessionId: input.sessionId,
+						workspaceDir: this.host.workspaceDir,
+						defaultScope: writeDefaultScope,
+					})
+					const expiresAt = resolveWriteExpiresAt({
+						explicit: input.expiresAt,
+						sessionId: input.sessionId,
+						ttl: this.host.config.mongodb?.ttl,
+					})
+					const eventInput: EventWriteInput = {
+						eventId: randomUUID(),
+						agentId: this.host.agentId,
 						role: input.role,
 						body: input.body,
 						scope,
 						scopeRef,
-						timestamp: input.timestamp,
-						validAt: input.validAt,
-						invalidAt: input.invalidAt,
-						metadata: input.metadata,
-						idempotencyKey: input.idempotencyKey,
-						// B4: same per-item fingerprint rule as the single write.
-						// W06: workspaceDir rides along for the same partition.
+						...(input.sessionId ? { sessionId: input.sessionId } : {}),
+						...(input.timestamp ? { timestamp: input.timestamp } : {}),
+						...(input.validAt ? { validAt: input.validAt } : {}),
+						...(input.invalidAt ? { invalidAt: input.invalidAt } : {}),
+						...(input.metadata ? { metadata: input.metadata } : {}),
 						...(input.idempotencyKey
 							? {
+									idempotencyKey: input.idempotencyKey,
 									idempotencyFingerprint: computeIdempotencyFingerprint(
 										input,
 										this.host.agentId,
@@ -949,96 +1313,407 @@ export class MongoDBManagerWriteOps {
 							: {}),
 						extractionJobPendingAt,
 						...(expiresAt ? { expiresAt } : {}),
-					}),
-				),
-			})
-			const written: Array<
-				PendingItem & { timestamp: Date; scopeRef: string; replayed?: boolean }
-			> = []
-			for (const [position, result] of writeResults.entries()) {
-				const item = pending[position]
-				if (result.ok) {
-					written.push({
-						...item,
-						timestamp: result.timestamp,
-						scopeRef: result.scopeRef,
-						// W09: a duplicateKey ok receipt is a durable event this
-						// attempt did not create — an earlier attempt of the same
-						// logical write (retry E11000 on our own eventId, or a
-						// read-confirmed uncertain outcome). Converge projection
-						// and job staging in this pass (both are idempotent) and
-						// acknowledge it as a replay instead of failing a
-						// durable write.
-						...(result.duplicateKey ? { replayed: true } : {}),
-					})
-					continue
-				}
-				if (result.duplicateKey && item.input.idempotencyKey) {
-					// Lost race: a concurrent same-key write committed first. Replay
-					// the winner's receipt (Stripe: same key, same result); a payload
-					// mismatch is a per-item 422-style conflict.
-					try {
-						const replay = await this.host.replayIdempotentEventWrite({
-							idempotencyKey: item.input.idempotencyKey,
-							event: item.input,
-						})
-						if (replay) {
-							receipts[item.index] = {
-								ok: true,
-								eventId: replay.eventId,
-								chunkCreated: false,
-								replayed: true,
-							}
-							continue
-						}
-					} catch (err) {
-						if (err instanceof IdempotencyConflictError) {
-							receipts[item.index] = {
-								ok: false,
-								code: "IDEMPOTENCY_CONFLICT",
-								message: err.message,
-							}
-							continue
-						}
-						throw err
 					}
-				}
-				receipts[item.index] = {
-					ok: false,
-					code: "WRITE_ERROR",
-					message: result.message,
+					const event = buildCanonicalEventDocument(eventInput)
+					prepared.push({
+						index,
+						input: eventInput,
+						event,
+						...(postWriteDerivedWorkEnabled
+							? {
+									job: {
+										jobId: `extraction-${event.eventId}`,
+										jobType: "extraction",
+										agentId: this.host.agentId,
+										status: "pending",
+										createdAt: event.recordedAt,
+										stagedAt: extractionJobPendingAt,
+										admissionEpoch: admitted.token.epoch,
+										metadata: { eventId: event.eventId },
+										payload: {
+											eventId: event.eventId,
+											scope: event.scope,
+											scopeRef: event.scopeRef,
+										},
+									},
+								}
+							: {}),
+					})
+				} catch (err) {
+					receipts[index] = batchWriteError(
+						err instanceof Error ? err.message : String(err),
+					)
 				}
 			}
+
+			const groups: PreparedBatchGroup[] = []
+			const keyedGroups = new Map<string, PreparedBatchGroup>()
+			for (const item of prepared) {
+				const key = item.event.idempotencyKey
+				if (!key) {
+					groups.push({ members: [item] })
+					continue
+				}
+				const group = keyedGroups.get(key)
+				if (group) {
+					group.members.push(item)
+				} else {
+					const created = { idempotencyKey: key, members: [item] }
+					keyedGroups.set(key, created)
+					groups.push(created)
+				}
+			}
+
+			let insertGroups = groups
+			let resolveGroups: PreparedBatchGroup[] = []
+			let needsResolutionFence = false
+			const writtenPrepared: PreparedBatchItem[] = []
+			const attemptedIndexes = new Set<number>()
+			const collection = eventsCollection(this.host.db, this.host.prefix)
+
+			while (
+				insertGroups.length > 0 ||
+				resolveGroups.length > 0 ||
+				needsResolutionFence
+			) {
+				const insertSnapshot = insertGroups.map((group) => ({
+					...group,
+					members: [...group.members],
+				}))
+				const resolveSnapshot = resolveGroups.map((group) => ({
+					...group,
+					members: [...group.members],
+				}))
+				try {
+					const draft = await withFencedWrite({
+						db: this.host.db,
+						prefix: this.host.prefix,
+						token: admitted.token,
+						fn: async (session: ClientSession): Promise<BatchRoundDraft> => {
+							const roundReceipts = new Map<number, BatchEventWriteReceipt>()
+							const localInsertGroups: PreparedBatchGroup[] = []
+							const keys = [
+								...new Set(
+									[...insertSnapshot, ...resolveSnapshot]
+										.map((group) => group.idempotencyKey)
+										.filter((key): key is string => Boolean(key)),
+								),
+							]
+							const storedByKey = new Map<string, Document>()
+							if (keys.length > 0) {
+								let storedRows: Document[]
+								try {
+									storedRows = await collection
+										.find(
+											{
+												agentId: this.host.agentId,
+												idempotencyKey: { $in: keys },
+											},
+											{
+												projection: EVENT_IDEMPOTENCY_REPLAY_PROJECTION,
+												...EVENT_IDENTITY_READ_OPTIONS,
+												session,
+											},
+										)
+										.toArray()
+								} catch (err) {
+									if (hasMongoErrorLabel(err, "TransientTransactionError")) {
+										throw err
+									}
+									throw new BatchBodyAbort(err)
+								}
+								for (const row of storedRows) {
+									if (typeof row.idempotencyKey === "string") {
+										storedByKey.set(row.idempotencyKey, row)
+									}
+								}
+							}
+
+							for (const group of insertSnapshot) {
+								const stored = group.idempotencyKey
+									? storedByKey.get(group.idempotencyKey)
+									: undefined
+								if (stored) {
+									for (const [index, receipt] of draftGroupAgainstWinner({
+										group,
+										stored,
+										writeOptions: collection.bsonOptions,
+									})) {
+										roundReceipts.set(index, receipt)
+									}
+								} else {
+									localInsertGroups.push(group)
+								}
+							}
+							for (const group of resolveSnapshot) {
+								const stored = group.idempotencyKey
+									? storedByKey.get(group.idempotencyKey)
+									: undefined
+								if (stored) {
+									for (const [index, receipt] of draftGroupAgainstWinner({
+										group,
+										stored,
+										writeOptions: collection.bsonOptions,
+									})) {
+										roundReceipts.set(index, receipt)
+									}
+								} else {
+									for (const member of group.members) {
+										roundReceipts.set(
+											member.index,
+											batchWriteError(
+												"event durability unconfirmed; retry with the same idempotency key",
+											),
+										)
+									}
+								}
+							}
+
+							const leaders = localInsertGroups.map((group) => group.members[0])
+							if (leaders.length > 0) {
+								try {
+									await collection.insertMany(
+										leaders.map((leader) => leader.event),
+										{ ordered: false, session },
+									)
+								} catch (err) {
+									if (hasMongoErrorLabel(err, "TransientTransactionError")) {
+										throw err
+									}
+									const issues = classifyAttributableEventBatchAbort(
+										err,
+										leaders,
+									)
+									if (issues) {
+										throw new AttributableEventBatchAbort(
+											issues,
+											leaders.map((leader) => leader.index),
+											err,
+										)
+									}
+									throw new BatchBodyAbort(
+										err,
+										leaders.map((leader) => leader.index),
+									)
+								}
+								if (postWriteDerivedWorkEnabled) {
+									try {
+										await createMemoryJobsBatch({
+											db: this.host.db,
+											prefix: this.host.prefix,
+											session,
+											jobs: leaders.map((leader) => {
+												if (!leader.job) {
+													throw new Error("prepared extraction job was missing")
+												}
+												return leader.job
+											}),
+										})
+									} catch (err) {
+										if (hasMongoErrorLabel(err, "TransientTransactionError")) {
+											throw err
+										}
+										throw new BatchBodyAbort(
+											err,
+											leaders.map((leader) => leader.index),
+										)
+									}
+								}
+								for (const group of localInsertGroups) {
+									for (const [index, receipt] of draftInsertedGroup({
+										group,
+										writeOptions: collection.bsonOptions,
+									})) {
+										roundReceipts.set(index, receipt)
+									}
+								}
+							}
+							return { receipts: roundReceipts, inserted: leaders }
+						},
+					})
+					for (const [index, receipt] of draft.receipts) {
+						receipts[index] = receipt
+					}
+					for (const item of draft.inserted) {
+						attemptedIndexes.add(item.index)
+					}
+					writtenPrepared.push(...draft.inserted)
+					insertGroups = []
+					resolveGroups = []
+					needsResolutionFence = false
+				} catch (err) {
+					if (err instanceof AttributableEventBatchAbort) {
+						for (const index of err.attemptedIndexes) {
+							attemptedIndexes.add(index)
+						}
+						needsResolutionFence = true
+						const issues = new Map(
+							err.issues.map((issue) => [issue.originalIndex, issue]),
+						)
+						const nextInsertGroups: PreparedBatchGroup[] = []
+						for (const group of insertGroups) {
+							const issue = issues.get(group.members[0].index)
+							if (!issue) {
+								nextInsertGroups.push(group)
+								continue
+							}
+							if (issue.kind === "validation") {
+								receipts[issue.originalIndex] = batchWriteError(issue.message)
+								const remaining = group.members.slice(1)
+								if (remaining.length > 0) {
+									nextInsertGroups.push({
+										...group,
+										members: remaining,
+									})
+								}
+							} else {
+								resolveGroups = [...resolveGroups, group]
+							}
+						}
+						insertGroups = nextInsertGroups
+						continue
+					}
+					if (err instanceof ErasureGateConflictError) {
+						throw err
+					}
+					if (err instanceof BatchBodyAbort) {
+						for (const index of err.attemptedIndexes) {
+							attemptedIndexes.add(index)
+						}
+						for (const group of [...insertGroups, ...resolveGroups]) {
+							for (const member of group.members) {
+								receipts[member.index] = batchWriteError(err.message)
+							}
+						}
+						break
+					}
+
+					for (const group of [...insertGroups, ...resolveGroups]) {
+						const uncertain = group.idempotencyKey
+							? "event durability unconfirmed; retry with the same idempotency key"
+							: "event durability unconfirmed; a keyless outcome cannot be retried safely"
+						for (const member of group.members) {
+							receipts[member.index] = batchWriteError(uncertain)
+						}
+					}
+					try {
+						const existing = await findExistingEventsForReplay({
+							collection,
+							eventIds: insertGroups.map(
+								(group) => group.members[0].event.eventId,
+							),
+						})
+						for (const group of insertGroups) {
+							const leader = group.members[0]
+							const stored = existing.get(leader.event.eventId)
+							if (!isStoredEventReplayDocument(stored)) {
+								continue
+							}
+							let matches = false
+							try {
+								matches = mintedAttemptMatches(
+									stored,
+									leader,
+									collection.bsonOptions,
+								)
+							} catch {
+								matches = false
+							}
+							if (!matches) {
+								continue
+							}
+							for (const [index, receipt] of draftInsertedGroup({
+								group,
+								writeOptions: collection.bsonOptions,
+							})) {
+								receipts[index] = receipt
+							}
+							writtenPrepared.push(leader)
+						}
+					} catch {
+						// The generic uncertainty receipts above remain authoritative.
+					}
+					break
+				}
+			}
+
+			const pending = prepared.filter((item) =>
+				attemptedIndexes.has(item.index),
+			)
+			const written = writtenPrepared.map((item) => ({
+				index: item.index,
+				input: events[item.index],
+				eventId: item.event.eventId,
+				scope: item.event.scope,
+				scopeRef: item.event.scopeRef,
+				timestamp: item.event.timestamp,
+				expiresAt: item.event.expiresAt,
+			}))
 
 			// 4. ONE bulkWrite for chunk projection + ONE updateMany marking the
 			// events projected. A projection failure degrades to
 			// chunkCreated:false without failing the (already durable) writes —
 			// the projection repair pass recovers them.
 			if (written.length > 0) {
-				const chunkResults = await projectEventChunksBatch({
+				const projectionStartMs = Date.now()
+				const projectionEvents: CanonicalEvent[] = written.map((item) => ({
+					eventId: item.eventId,
+					agentId: this.host.agentId,
+					role: item.input.role,
+					body: item.input.body,
+					scope: item.scope,
+					scopeRef: item.scopeRef,
+					timestamp: item.timestamp,
+					validAt: item.input.validAt ?? item.timestamp,
+					...(item.input.invalidAt ? { invalidAt: item.input.invalidAt } : {}),
+					// C-005: expiry computed at pending time — identical to
+					// the value persisted on the event document.
+					...(item.expiresAt ? { expiresAt: item.expiresAt } : {}),
+					...(item.input.sessionId ? { sessionId: item.input.sessionId } : {}),
+					...(item.input.metadata ? { metadata: item.input.metadata } : {}),
+				}))
+				let chunkResults: Array<{ chunkCreated: boolean }> = []
+				let projectionFailed = false
+				try {
+					chunkResults = await withFencedWrite({
+						db: this.host.db,
+						prefix: this.host.prefix,
+						token: admitted.token,
+						fn: (session) =>
+							projectEventChunksBatch({
+								db: this.host.db,
+								prefix: this.host.prefix,
+								events: projectionEvents,
+								session,
+								recordRun: false,
+							}),
+					})
+				} catch (err) {
+					projectionFailed = true
+					log.warn(
+						`batch chunk projection failed after durable writes; leaving events unprojected for repair: ${String(err)}`,
+					)
+				}
+				const projectionRun = {
+					agentId: this.host.agentId,
+					projectionType: "chunks" as const,
+					status: projectionFailed ? ("failed" as const) : ("ok" as const),
+					itemsProjected: chunkResults.filter((result) => result.chunkCreated)
+						.length,
+					durationMs: Date.now() - projectionStartMs,
+				}
+				await withFencedWrite({
 					db: this.host.db,
 					prefix: this.host.prefix,
-					events: written.map((item) => ({
-						eventId: item.eventId,
-						agentId: this.host.agentId,
-						role: item.input.role,
-						body: item.input.body,
-						scope: item.scope,
-						scopeRef: item.scopeRef,
-						timestamp: item.timestamp,
-						validAt: item.input.validAt ?? item.timestamp,
-						...(item.input.invalidAt
-							? { invalidAt: item.input.invalidAt }
-							: {}),
-						// C-005: expiry computed at pending time — identical to
-						// the value persisted on the event document.
-						...(item.expiresAt ? { expiresAt: item.expiresAt } : {}),
-						...(item.input.sessionId
-							? { sessionId: item.input.sessionId }
-							: {}),
-						...(item.input.metadata ? { metadata: item.input.metadata } : {}),
-					})),
-				})
+					token: admitted.token,
+					fn: (session) =>
+						recordProjectionRun({
+							db: this.host.db,
+							prefix: this.host.prefix,
+							run: projectionRun,
+							session,
+						}),
+				}).catch(() => {})
 				let createdChunkCount = 0
 				for (const [position, item] of written.entries()) {
 					const chunkCreated = chunkResults[position]?.chunkCreated ?? false
@@ -1046,11 +1721,10 @@ export class MongoDBManagerWriteOps {
 						this.host.chunkCount += 1
 						createdChunkCount += 1
 					}
-					receipts[item.index] = {
-						ok: true,
-						eventId: item.eventId,
-						chunkCreated,
-						...(item.replayed ? { replayed: true } : {}),
+					for (const [index, receipt] of receipts.entries()) {
+						if (receipt?.ok && receipt.eventId === item.eventId) {
+							receipts[index] = { ...receipt, chunkCreated }
+						}
 					}
 				}
 				// C-017: each newly projected chunk is embedded server-side
@@ -1060,74 +1734,60 @@ export class MongoDBManagerWriteOps {
 					createdChunkCount > 0 &&
 					this.host.config.mongodb?.embeddingMode === "automated"
 				) {
-					recordEmbeddingSpend(
+					void recordEmbeddingSpend(
 						this.host.db,
 						this.host.prefix,
 						this.host.agentId,
 						"indexing",
 						createdChunkCount,
-					)
+						{ admission: admitted.token },
+					).catch(() => {
+						log.warn("indexing cost ledger recording failed")
+					})
 				}
 			}
 
-			// 5. ONE insertMany for the extraction jobs (directly claimable —
-			// the batch has no transaction to stage through), then ONE
-			// updateMany clearing the outbox markers for events whose job is
-			// durable. A failed job insert leaves the marker set for the outbox
-			// repair pass, the same recovery contract as the single path.
+			// 5. Jobs were atomically staged with their events. Release all
+			// committed jobs in one update, then clear event outbox markers only
+			// when every expected job became claimable. A partial release keeps
+			// every marker armed so the repair pass can converge the batch.
 			if (postWriteDerivedWorkEnabled && written.length > 0) {
-				const jobResults = await createMemoryJobsBatch({
-					db: this.host.db,
-					prefix: this.host.prefix,
-					jobs: written.map((item) => ({
-						jobId: `extraction-${item.eventId}`,
-						jobType: "extraction" as const,
-						agentId: this.host.agentId,
-						status: "pending" as const,
-						metadata: { eventId: item.eventId },
-						payload: {
-							eventId: item.eventId,
-							scope: item.scope,
-							scopeRef: item.scopeRef,
-						},
-					})),
-				})
-				const claimableEventIds: string[] = []
-				for (const [position, jobResult] of jobResults.entries()) {
-					const item = written[position]
-					// A duplicate means the deterministic extraction-<eventId> job
-					// already exists (pre-created by /v1/extract or a prior attempt)
-					// and is claimable — satisfied, not an error.
-					if (jobResult.ok || jobResult.duplicate) {
-						claimableEventIds.push(item.eventId)
-						if (operationRunContext) {
-							this.host.memoryJobOperationContexts.set(
-								`extraction-${item.eventId}`,
-								operationRunContext,
-							)
-						}
-					} else {
-						log.warn(
-							`batch extraction job insert failed for ${item.eventId}; leaving the outbox marker for the repair pass: ${jobResult.message}`,
-						)
+				const jobIds = written.map((item) => `extraction-${item.eventId}`)
+				if (operationRunContext) {
+					for (const jobId of jobIds) {
+						this.host.memoryJobOperationContexts.set(jobId, operationRunContext)
 					}
 				}
-				if (claimableEventIds.length > 0) {
-					try {
+				try {
+					const released = await releaseStagedMemoryJobsBatch({
+						db: this.host.db,
+						prefix: this.host.prefix,
+						jobIds,
+						agentId: this.host.agentId,
+					})
+					if (released === written.length) {
 						await clearEventExtractionJobPendingBatch({
 							db: this.host.db,
 							prefix: this.host.prefix,
-							eventIds: claimableEventIds,
+							eventIds: written.map((item) => item.eventId),
 							agentId: this.host.agentId,
 						})
-					} catch (err) {
-						log.warn(`batch extraction outbox cleanup failed: ${String(err)}`)
+					} else {
+						log.warn(
+							`batch extraction job release matched ${released}/${written.length}; leaving outbox markers for repair`,
+						)
 					}
-				}
-				if (this.host.memoryJobWorkerStopped) {
-					this.host.startMemoryJobWorker()
-				} else {
-					this.host.wakeMemoryJobWorker()
+					if (released > 0) {
+						if (this.host.memoryJobWorkerStopped) {
+							this.host.startMemoryJobWorker(admitted.token, generation)
+						} else {
+							this.host.wakeMemoryJobWorker(admitted.token, generation)
+						}
+					}
+				} catch (err) {
+					log.warn(
+						`batch extraction job release failed; leaving outbox markers for repair: ${String(err)}`,
+					)
 				}
 			}
 
@@ -1149,12 +1809,14 @@ export class MongoDBManagerWriteOps {
 						scope: item.scope,
 						scopeRef: item.scopeRef,
 						runContext: operationRunContext,
+						admission: admitted.token,
 					})
 				}
 				this.host.scheduleQueryCacheInvalidation({
 					agentId: this.host.agentId,
 					scope: item.scope,
 					scopeRef: item.scopeRef,
+					admission: admitted.token,
 				})
 			}
 
@@ -1171,7 +1833,7 @@ export class MongoDBManagerWriteOps {
 				for (const item of written) {
 					bump("raw-window", 1)
 					const receipt = receipts[item.index]
-					bump("hybrid", receipt && receipt.ok && receipt.chunkCreated ? 1 : 0)
+					bump("hybrid", receipt?.ok && receipt.chunkCreated ? 1 : 0)
 					if (postWriteDerivedWorkEnabled) {
 						const candidates = extractStructuredCandidatesFromEvent({
 							eventId: item.eventId,
@@ -1206,11 +1868,18 @@ export class MongoDBManagerWriteOps {
 					}
 				}
 				if (written.length > 0) {
-					await updateLaneCoverage({
+					await withFencedWrite({
 						db: this.host.db,
 						prefix: this.host.prefix,
-						agentId: this.host.agentId,
-						increments,
+						token: admitted.token,
+						fn: (session) =>
+							updateLaneCoverage({
+								db: this.host.db,
+								prefix: this.host.prefix,
+								agentId: this.host.agentId,
+								increments,
+								session,
+							}),
 					})
 				}
 			} catch (err) {
@@ -1240,17 +1909,25 @@ export class MongoDBManagerWriteOps {
 				const status: "ok" | "partial" | "failed" =
 					itemsFailed === 0 ? "ok" : itemsProcessed > 0 ? "partial" : "failed"
 				try {
-					await recordIngestRun({
+					const run = {
+						agentId: this.host.agentId,
+						source: "event-write" as const,
+						status,
+						itemsProcessed,
+						itemsFailed,
+						durationMs: Date.now() - ingestStartMs,
+					}
+					await withFencedWrite({
 						db: this.host.db,
 						prefix: this.host.prefix,
-						run: {
-							agentId: this.host.agentId,
-							source: "event-write",
-							status,
-							itemsProcessed,
-							itemsFailed,
-							durationMs: Date.now() - ingestStartMs,
-						},
+						token: admitted.token,
+						fn: (session) =>
+							recordIngestRun({
+								db: this.host.db,
+								prefix: this.host.prefix,
+								run,
+								session,
+							}),
 					})
 				} catch (err) {
 					log.warn("ingest run recording failed after batch event write", {
@@ -1280,10 +1957,20 @@ export class MongoDBManagerWriteOps {
 		scope?: MemoryScope
 		scopeRef?: string
 	}) {
+		if (this.host.closed)
+			throw new Error(
+				"MongoDBMemoryManager is closed; refusing to schedule extraction",
+			)
 		const eventId = params.eventId.trim()
 		if (!eventId) {
 			throw new Error("eventId is required")
 		}
+		const generation = this.host.memoryJobWorkerGeneration ?? 0
+		const admission = await captureAdmissionToken({
+			db: this.host.db,
+			prefix: this.host.prefix,
+			agentId: this.host.agentId,
+		})
 		// Tenant isolation: a scope-restricted caller may only extract from an event
 		// within its authorized scope/scopeRef. Enforce ownership SYNCHRONOUSLY here,
 		// before scheduling — the deterministic `extraction-${eventId}` job is often
@@ -1310,9 +1997,14 @@ export class MongoDBManagerWriteOps {
 				throw err
 			}
 		}
-		return this.host.scheduleBackgroundExtraction(eventId, {
-			scope: params.scope,
-			scopeRef: params.scopeRef,
-		})
+		return this.host.scheduleBackgroundExtraction(
+			eventId,
+			{
+				scope: params.scope,
+				scopeRef: params.scopeRef,
+			},
+			undefined,
+			{ admission, generation },
+		)
 	}
 }

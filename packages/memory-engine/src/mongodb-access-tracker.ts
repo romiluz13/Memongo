@@ -1,5 +1,5 @@
 /**
- * AccessTracker — batched access-event persistence backed by a time series
+ * AccessTracker — batched, erasure-fenced access-event persistence backed by an ordinary
  * collection plus computed summary fields on canonical memory documents.
  *
  * Raw access history is stored in `access_events` for trend analysis, while the
@@ -7,7 +7,13 @@
  * canonical collections so existing scoring paths keep working.
  */
 
-import type { AnyBulkWriteOperation, Db, Document, Filter } from "mongodb"
+import type {
+	AnyBulkWriteOperation,
+	ClientSession,
+	Db,
+	Document,
+	Filter,
+} from "mongodb"
 import { randomUUID } from "node:crypto"
 import { createSubsystemLogger } from "@memongo/lib"
 import {
@@ -19,6 +25,13 @@ import {
 	relationsCollection,
 	structuredMemCollection,
 } from "./mongodb-schema.js"
+import {
+	type AdmissionToken,
+	captureAdmissionToken,
+	isErasureGateConflictError,
+	isMalformedGateError,
+	withFencedWrite,
+} from "./mongodb-write-fence.js"
 import type {
 	AccessEventCollection,
 	AccessEventDocument,
@@ -268,6 +281,7 @@ type TrendTarget = {
  * batchId instead of merging counts across batches.
  */
 type UncommittedEntry = {
+	admission: AdmissionToken
 	target: AccessRecordTarget
 	count: number
 }
@@ -292,6 +306,7 @@ export class AccessTracker {
 	private timer: ReturnType<typeof setInterval> | null = null
 	private totalBuffered = 0
 	private pendingFlush: Promise<number> | null = null
+	private readonly pendingAdmissions = new Set<Promise<void>>()
 
 	constructor(
 		private readonly db: Db,
@@ -315,13 +330,39 @@ export class AccessTracker {
 		this.timer.unref?.()
 	}
 
-	recordAccess(target: AccessRecordTarget): void {
+	recordAccess(target: AccessRecordTarget, admission?: AdmissionToken): void {
 		const id = target.id.trim()
-		if (!id) {
+		if (!id) return
+		if (admission) {
+			if (admission.agentId !== this.agentId) {
+				log.warn("access record rejected: admission belongs to another agent")
+				return
+			}
+			this.bufferAccess({ ...target, id }, admission)
 			return
 		}
-		const normalized: AccessRecordTarget = { ...target, id }
-		const key = bufferKey(normalized)
+		// Legacy calls admit a new record intent; searches pass their pre-read token.
+		const pending = captureAdmissionToken({
+			db: this.db,
+			prefix: this.prefix,
+			agentId: this.agentId,
+		})
+			.then(
+				(token) => this.bufferAccess({ ...target, id }, token),
+				() => {
+					log.warn("access record admission failed; record discarded")
+				},
+			)
+			.finally(() => this.pendingAdmissions.delete(pending))
+		this.pendingAdmissions.add(pending)
+	}
+
+	private bufferAccess(
+		target: AccessRecordTarget,
+		admission: AdmissionToken,
+	): void {
+		const normalized = target
+		const key = JSON.stringify([admission.epoch, bufferKey(normalized)])
 		const entries = this.buffer.get(key) ?? []
 		// W11: only an uncommitted entry may absorb the new count. An entry
 		// that already carries a batchId is committed to that batch's
@@ -333,7 +374,11 @@ export class AccessTracker {
 		if (last && !("batchId" in last)) {
 			last.count++
 		} else {
-			entries.push({ target: normalized, count: 1 })
+			entries.push({
+				target: normalized,
+				count: 1,
+				admission: { ...admission },
+			})
 		}
 		this.buffer.set(key, entries)
 		this.totalBuffered++
@@ -347,6 +392,7 @@ export class AccessTracker {
 	}
 
 	async flush(): Promise<number> {
+		await Promise.all([...this.pendingAdmissions])
 		let updated = 0
 		if (this.pendingFlush) {
 			updated += await this.pendingFlush
@@ -391,7 +437,10 @@ export class AccessTracker {
 	 */
 	private rebufferSnapshot(snapshot: CommittedEntry[]): void {
 		for (const entry of snapshot) {
-			const key = bufferKey(entry.target)
+			const key = JSON.stringify([
+				entry.admission.epoch,
+				bufferKey(entry.target),
+			])
 			const entries = this.buffer.get(key) ?? []
 			entries.push(entry)
 			this.buffer.set(key, entries)
@@ -423,6 +472,64 @@ export class AccessTracker {
 		this.buffer.clear()
 		this.totalBuffered = 0
 
+		let rawSupported: boolean
+		try {
+			const info = await this.db
+				.listCollections(
+					{ name: `${this.prefix}access_events` },
+					{ nameOnly: false },
+				)
+				.toArray()
+			rawSupported = info[0]?.type !== "timeseries"
+		} catch {
+			this.rebufferSnapshot(snapshot)
+			log.warn(
+				`access sink inspection failed; re-buffering ${snapshot.length} entries`,
+			)
+			return 0
+		}
+		if (!rawSupported)
+			log.warn(
+				`access history skipped for retained time-series sink (${snapshot.length} entries); canonical counts remain fenced`,
+			)
+		const groups = new Map<number, CommittedEntry[]>()
+		for (const entry of snapshot) {
+			const group = groups.get(entry.admission.epoch) ?? []
+			group.push(entry)
+			groups.set(entry.admission.epoch, group)
+		}
+		let updated = 0
+		for (const [epoch, group] of groups) {
+			try {
+				updated += await withFencedWrite({
+					db: this.db,
+					prefix: this.prefix,
+					token: { kind: "admission", agentId: this.agentId, epoch },
+					fn: (session) =>
+						this.flushSnapshot(group, batchId, rawSupported, session),
+				})
+			} catch (error) {
+				if (isErasureGateConflictError(error) || isMalformedGateError(error)) {
+					log.warn(
+						`access batch admission invalid; discarding ${group.length} entries`,
+					)
+				} else {
+					this.rebufferSnapshot(group)
+					log.warn(
+						`access batch write failed; re-buffering ${group.length} entries`,
+					)
+				}
+			}
+		}
+		return updated
+	}
+
+	private async flushSnapshot(
+		snapshot: CommittedEntry[],
+		batchId: string,
+		rawSupported: boolean,
+		session: ClientSession,
+	): Promise<number> {
 		const now = new Date()
 		const eventDocs: AccessEventDocument[] = []
 		const collectionOps = new Map<
@@ -492,87 +599,46 @@ export class AccessTracker {
 		if (skipped.length > 0) {
 			// W01 fail-safe: an under-specified identity never produces a
 			// canonical update. One warn per flush (not per target) keeps the
-			// log bounded. Raw access events were still recorded above.
+			// log bounded. Raw access events are included only when the sink is ordinary.
 			const byCollection: Record<string, number> = {}
 			for (const target of skipped) {
 				byCollection[target.collection] =
 					(byCollection[target.collection] ?? 0) + 1
 			}
 			log.warn(
-				`skipped ${skipped.length} under-specified canonical access update(s); raw access events still recorded: ${JSON.stringify(byCollection)}`,
+				`skipped ${skipped.length} under-specified canonical access update(s); raw access events queued when supported: ${JSON.stringify(byCollection)}`,
 			)
 		}
 
-		// W11 raw layer: read-reconcile by batchId before inserting. Unique
-		// indexes are prohibited on time-series collections, so the available
-		// exactly-once shape is to skip the insert for any batch whose raw
-		// events are already present (a previous flush inserted them, then
-		// failed a later phase and re-buffered this snapshot). A fresh flush
-		// carries only the just-minted batchId — a UUID cannot collide — so
-		// the reconcile read runs only on retry flushes, keeping the
-		// steady-state cost identical to the pre-guard flush.
-		if (eventDocs.length > 0) {
-			try {
-				const batchIds = [...new Set(snapshot.map((entry) => entry.batchId))]
-				const isRetry = batchIds.length > 1 || batchIds[0] !== batchId
-				let toInsert = eventDocs
-				if (isRetry) {
-					const present = new Set(
-						(
-							await accessEventsCollection(this.db, this.prefix)
-								.find({ batchId: { $in: batchIds } })
-								.toArray()
-						).map((doc) => String(doc.batchId)),
-					)
-					toInsert = eventDocs.filter((doc) => !present.has(doc.batchId))
-				}
-				if (toInsert.length > 0) {
-					await accessEventsCollection(this.db, this.prefix).insertMany(
-						toInsert,
-						{
-							ordered: false,
-						},
-					)
-				}
-			} catch (err) {
-				const msg = err instanceof Error ? err.message : String(err)
-				log.warn(
-					`access event insert failed (re-buffering ${snapshot.length} entries for retry): ${msg}`,
+		if (rawSupported && eventDocs.length > 0) {
+			const batchIds = [...new Set(snapshot.map((entry) => entry.batchId))]
+			const isRetry = batchIds.length > 1 || batchIds[0] !== batchId
+			let toInsert = eventDocs
+			if (isRetry) {
+				const present = new Set(
+					(
+						await accessEventsCollection(this.db, this.prefix)
+							.find({ batchId: { $in: batchIds } }, { session })
+							.toArray()
+					).map((doc) => String(doc.batchId)),
 				)
-				this.rebufferSnapshot(snapshot)
-				return 0
+				toInsert = eventDocs.filter((doc) => !present.has(doc.batchId))
 			}
+			if (toInsert.length > 0)
+				await accessEventsCollection(this.db, this.prefix).insertMany(
+					toInsert,
+					{ ordered: false, session },
+				)
 		}
-
-		// W11 canonical layer: on ANY collection's failure the WHOLE snapshot
-		// is re-buffered (batchIds preserved) — replacing the old
-		// failed-collection-only re-buffer that desynchronized raw/canonical
-		// alignment across collections. The retry is safe at both layers:
-		// already-inserted batches are skipped by the raw read-reconcile and
-		// already-applied ops no-match on the appliedBatches guard, so every
-		// count lands exactly once across any sequence of partial failures.
 		let updated = 0
-		let canonicalFailed = false
 		for (const [collection, ops] of collectionOps) {
-			try {
-				const result = await getCanonicalCollection(
-					this.db,
-					this.prefix,
-					collection,
-				).bulkWrite(ops, { ordered: false })
-				updated += result.modifiedCount ?? 0
-			} catch (err) {
-				const msg = err instanceof Error ? err.message : String(err)
-				log.warn(
-					`access summary flush failed for ${collection} (re-buffering ${snapshot.length} entries for retry): ${msg}`,
-				)
-				canonicalFailed = true
-			}
+			const result = await getCanonicalCollection(
+				this.db,
+				this.prefix,
+				collection,
+			).bulkWrite(ops, { ordered: false, session })
+			updated += result.modifiedCount ?? 0
 		}
-		if (canonicalFailed) {
-			this.rebufferSnapshot(snapshot)
-		}
-
 		return updated
 	}
 

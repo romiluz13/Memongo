@@ -47,6 +47,10 @@ describe("invalidateQueryCache (immediate)", () => {
 				scopeRef: SCOPE_REF,
 			}),
 		).resolves.toBe(3)
+		// Byte-preserved baseline call shape: without a session the
+		// deleteMany call takes EXACTLY ONE argument (pinned by the
+		// mongodb-kb.test.ts regression suite); a session adds the options
+		// argument only inside fenced transactions.
 		expect(mockCol.deleteMany).toHaveBeenCalledWith({
 			agentId: AGENT_ID,
 			scope: SCOPE,
@@ -70,6 +74,109 @@ describe("invalidateQueryCache (immediate)", () => {
 			}),
 		).resolves.toBe(0)
 	})
+})
+
+describe("invalidateQueryCache throwOnError opt-in (U15, plan e5ec10dc C3)", () => {
+	beforeEach(() => {
+		vi.clearAllMocks()
+	})
+
+	it("U15a (RED on current bytes): throwOnError:true propagates the operation error instead of swallowing it", async () => {
+		const mockCol = createMockCollection({
+			deleteMany: vi.fn().mockRejectedValue(new Error("cache unavailable")),
+		})
+		vi.mocked(queryCacheCollection).mockReturnValue(mockCol)
+
+		// On unfixed bytes the param does not exist and the error is
+		// swallowed (resolves 0), so this refusal is the meaningful RED.
+		await expect(
+			invalidateQueryCache({
+				db: {} as Db,
+				prefix: PREFIX,
+				agentId: AGENT_ID,
+				scope: SCOPE,
+				scopeRef: SCOPE_REF,
+				throwOnError: true,
+			}),
+		).rejects.toThrow("cache unavailable")
+	})
+
+	it("U15b (passing control): throwOnError:true with a successful delete still returns deletedCount", async () => {
+		const mockCol = createMockCollection({
+			deleteMany: vi.fn().mockResolvedValue({ deletedCount: 2 }),
+		})
+		vi.mocked(queryCacheCollection).mockReturnValue(mockCol)
+
+		await expect(
+			invalidateQueryCache({
+				db: {} as Db,
+				prefix: PREFIX,
+				agentId: AGENT_ID,
+				scope: SCOPE,
+				scopeRef: SCOPE_REF,
+				throwOnError: true,
+			}),
+		).resolves.toBe(2)
+	})
+
+	it("U15c (passing control): default (absent) keeps the byte-preserved swallow — returns 0 and logs a warn", async () => {
+		const mockCol = createMockCollection({
+			deleteMany: vi.fn().mockRejectedValue(new Error("cache unavailable")),
+		})
+		vi.mocked(queryCacheCollection).mockReturnValue(mockCol)
+		const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {})
+
+		try {
+			await expect(
+				invalidateQueryCache({
+					db: {} as Db,
+					prefix: PREFIX,
+					agentId: AGENT_ID,
+					scope: SCOPE,
+					scopeRef: SCOPE_REF,
+				}),
+			).resolves.toBe(0)
+			expect(
+				warnSpy.mock.calls.some((args) =>
+					String(args[0]).includes("query cache invalidation failed"),
+				),
+			).toBe(true)
+		} finally {
+			warnSpy.mockRestore()
+		}
+	})
+
+	it("U15d (passing control): explicit throwOnError:false keeps the documented swallow contract", async () => {
+		const mockCol = createMockCollection({
+			deleteMany: vi.fn().mockRejectedValue(new Error("cache unavailable")),
+		})
+		vi.mocked(queryCacheCollection).mockReturnValue(mockCol)
+		const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {})
+
+		try {
+			await expect(
+				invalidateQueryCache({
+					db: {} as Db,
+					prefix: PREFIX,
+					agentId: AGENT_ID,
+					scope: SCOPE,
+					scopeRef: SCOPE_REF,
+					throwOnError: false,
+				}),
+			).resolves.toBe(0)
+			expect(
+				warnSpy.mock.calls.some((args) =>
+					String(args[0]).includes("query cache invalidation failed"),
+				),
+			).toBe(true)
+		} finally {
+			warnSpy.mockRestore()
+		}
+	})
+
+	// The coalescer's "fire never throws" contract is pinned unchanged by
+	// the existing QueryCacheInvalidationCoalescer block below: those cases
+	// must stay GREEN after the C3 opt-in lands.
 })
 
 describe("QueryCacheInvalidationCoalescer (P2.4)", () => {

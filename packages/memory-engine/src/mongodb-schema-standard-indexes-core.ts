@@ -18,7 +18,10 @@ import {
 // Standard indexes (work on all MongoDB editions)
 // ---------------------------------------------------------------------------
 
-import { handleUniqueIndexCreationError } from "./mongodb-schema-index-utils.js"
+import {
+	ensureTtlIndex,
+	handleUniqueIndexCreationError,
+} from "./mongodb-schema-index-utils.js"
 import type { StandardIndexOptions } from "./mongodb-schema-standard-index-types.js"
 
 export async function ensureCoreStandardIndexes(
@@ -78,23 +81,25 @@ export async function ensureCoreStandardIndexes(
 
 	// Optional TTL on files for memory auto-expiry
 	// WARNING: This deletes memory files from MongoDB after ttlDays
-	// F18: Drop opposite-named index before creating to avoid IndexOptionsConflict.
+	// F1: ensureTtlIndex converges a changed expiry via collMod — createIndex
+	// alone cannot change expireAfterSeconds on an existing index.
+	// F18/F2: the helper retires the same-key idx_files_updated counterpart
+	// itself, only after the TTL target passes inspection.
 	if (ttlOpts?.memoryTtlDays && ttlOpts.memoryTtlDays > 0) {
 		const files = filesCollection(db, prefix)
-		try {
-			await files.dropIndex("idx_files_updated")
-		} catch {
-			// Index may not exist — safe to ignore
-		}
 		const seconds = ttlOpts.memoryTtlDays * 24 * 60 * 60
-		await files.createIndex(
-			{ updatedAt: 1 },
-			{ name: "idx_files_ttl", expireAfterSeconds: seconds },
-		)
+		const outcome = await ensureTtlIndex(db, files, {
+			name: "idx_files_ttl",
+			key: { updatedAt: 1 },
+			expireAfterSeconds: seconds,
+			counterpartName: "idx_files_updated",
+		})
 		applied++
-		log.warn(
-			`created TTL index on files: ${ttlOpts.memoryTtlDays} days — old memory files will be auto-deleted`,
-		)
+		if (outcome === "created") {
+			log.warn(
+				`created TTL index on files: ${ttlOpts.memoryTtlDays} days — old memory files will be auto-deleted`,
+			)
+		}
 	} else {
 		// Ensure no ghost TTL index from a previous config
 		const files = filesCollection(db, prefix)
@@ -277,19 +282,16 @@ export async function ensureCoreStandardIndexes(
 		{ name: "idx_relruns_query_ts" },
 	)
 	applied++
+	// F1: ensureTtlIndex converges a changed expiry via collMod; the helper
+	// retires the plain idx_relruns_ts counterpart itself, only after the TTL
+	// target passes inspection (F2).
 	if (ttlOpts?.relevanceRetentionDays && ttlOpts.relevanceRetentionDays > 0) {
-		try {
-			await relevanceRuns.dropIndex("idx_relruns_ts")
-		} catch {
-			// Index may not exist — safe to ignore
-		}
-		await relevanceRuns.createIndex(
-			{ ts: 1 },
-			{
-				name: "idx_relruns_ttl",
-				expireAfterSeconds: ttlOpts.relevanceRetentionDays * 24 * 60 * 60,
-			},
-		)
+		await ensureTtlIndex(db, relevanceRuns, {
+			name: "idx_relruns_ttl",
+			key: { ts: 1 },
+			expireAfterSeconds: ttlOpts.relevanceRetentionDays * 24 * 60 * 60,
+			counterpartName: "idx_relruns_ts",
+		})
 		applied++
 	} else {
 		try {
@@ -308,18 +310,12 @@ export async function ensureCoreStandardIndexes(
 	)
 	applied++
 	if (ttlOpts?.relevanceRetentionDays && ttlOpts.relevanceRetentionDays > 0) {
-		try {
-			await relevanceArtifacts.dropIndex("idx_relart_ts")
-		} catch {
-			// Index may not exist — safe to ignore
-		}
-		await relevanceArtifacts.createIndex(
-			{ ts: 1 },
-			{
-				name: "idx_relart_ttl",
-				expireAfterSeconds: ttlOpts.relevanceRetentionDays * 24 * 60 * 60,
-			},
-		)
+		await ensureTtlIndex(db, relevanceArtifacts, {
+			name: "idx_relart_ttl",
+			key: { ts: 1 },
+			expireAfterSeconds: ttlOpts.relevanceRetentionDays * 24 * 60 * 60,
+			counterpartName: "idx_relart_ts",
+		})
 		applied++
 	} else {
 		try {

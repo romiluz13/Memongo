@@ -1,5 +1,5 @@
 import { createSubsystemLogger } from "@memongo/lib"
-import { queryFailureMeta } from "./query-diagnostics.js"
+import { settledFailureMeta } from "./query-diagnostics.js"
 import type {
 	MemoryConversationScope,
 	MemoryProceduralScope,
@@ -228,8 +228,8 @@ const CONVERSATION_EVIDENCE_REGEXES = buildKeywordRegexes(
 // Deterministic tie-breaking priority (lower = higher priority)
 const PATH_PRIORITY: Record<RetrievalPath, number> = {
 	"active-critical": 0,
-	procedural: 1,
-	structured: 2,
+	procedural: 2,
+	structured: 1,
 	"raw-window": 3,
 	graph: 4,
 	episodic: 5,
@@ -1061,9 +1061,8 @@ export function planRetrieval(
 			...(skippedLanes.length > 0 ? { skippedLanes } : {}),
 		}
 	} catch (err) {
-		// C-002: raw query text never enters diagnostics — length + digest
-		// preserve correlation without content (see query-diagnostics.ts).
-		log.error("planRetrieval failed", queryFailureMeta(query, err))
+		// Code, length and digest preserve correlation without processing error text.
+		log.error("planRetrieval failed", settledFailureMeta(err, query))
 		throw err
 	}
 }

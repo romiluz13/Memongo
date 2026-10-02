@@ -1,8 +1,9 @@
 # Memongo HTTP API service image.
 #
-# Stage 1 (oven/bun): resolve the workspace lockfile and install production
-# dependencies for the API slice only (api + its workspace closure).
-# Stage 2 (node): run the API from source with tsx, matching the documented
+# Stage 1 (oven/bun, build): full workspace install (the compiler toolchain is
+# a devDependency) and build of the API slice plus its workspace closure.
+# Stage 2 (oven/bun, prune): reinstall only the API's production dependencies.
+# Stage 3 (node): run the API from source with tsx, matching the documented
 # Node 20+ runtime on the current LTS.
 #
 # Runtime env (see .env.example): MEMONGO_MONGODB_URI and MEMONGO_API_KEY are
@@ -10,11 +11,13 @@
 # when other containers must reach the API.
 # Liveness: GET /health. Readiness: GET /ready (503 until lanes pass).
 
-FROM oven/bun:1.3.13 AS build
+FROM oven/bun:1.4.2 AS build
 WORKDIR /app
 
-# Manifests and workspaces first so dependency layers cache independently.
-COPY package.json bun.lock turbo.json tsconfig.json tsconfig.base.json ./
+# Manifests, install-time config, and workspaces first so dependency layers
+# cache independently. .puppeteerrc.cjs must precede the full install: the
+# puppeteer postinstall reads it from the build context.
+COPY package.json bun.lock turbo.json tsconfig.json tsconfig.base.json .puppeteerrc.cjs ./
 COPY apps/ /app/apps/
 COPY packages/ /app/packages/
 COPY scripts/ /app/scripts/
@@ -30,7 +33,7 @@ RUN bunx turbo run build --filter '@memongo/api...'
 # the workspace directories and survive the reinstall. The full install's
 # node_modules is wiped first: bun does not reconcile extraneous packages
 # when re-running a filtered install over an existing tree.
-FROM oven/bun:1.3.13 AS prune
+FROM oven/bun:1.4.2 AS prune
 WORKDIR /app
 COPY --from=build /app /app
 RUN rm -rf node_modules \

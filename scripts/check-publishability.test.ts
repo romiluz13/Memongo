@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 import {
 	assertAlignedInternalDependencies,
 	findForbiddenPackageArtifact,
+	findMissingLegalFile,
 } from "./check-publishability.js"
 
 describe("publishability release policy", () => {
@@ -23,6 +24,24 @@ describe("publishability release policy", () => {
 				"dist/index.d.ts",
 				"README.md",
 			]),
+		).toBeUndefined()
+	})
+
+	it("rejects a tarball inventory missing LICENSE", () => {
+		expect(findMissingLegalFile(["dist/index.js", "README.md", "NOTICE"])).toBe(
+			"LICENSE",
+		)
+	})
+
+	it("rejects a tarball inventory missing NOTICE", () => {
+		expect(
+			findMissingLegalFile(["dist/index.js", "README.md", "LICENSE"]),
+		).toBe("NOTICE")
+	})
+
+	it("accepts a tarball inventory with both legal files", () => {
+		expect(
+			findMissingLegalFile(["dist/index.js", "README.md", "LICENSE", "NOTICE"]),
 		).toBeUndefined()
 	})
 

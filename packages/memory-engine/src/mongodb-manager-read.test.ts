@@ -71,6 +71,46 @@ vi.mock("./mongodb-telemetry.js", async () =>
 	(await import("./test-helpers/manager-test-kit.js")).telemetryModuleMock(),
 )
 
+// Erasure-fence adapter (minimal): readFile is now a fenced shell, so the
+// legacy locator tests route through captureAdmissionToken + withFencedWrite.
+// The schema module mock's metaCollection is a bare vi.fn(), so both fence
+// primitives are replaced with file-local fakes: an always-admitted token and
+// an opaque-session passthrough. The opaque session object is what the fenced
+// collection calls forward, so the exact-arg assertions below name it.
+const legacyFence = vi.hoisted(() => ({
+	session: {
+		legacyFenceSession: true,
+	} as unknown as import("mongodb").ClientSession,
+	admissionToken: {
+		kind: "admission",
+		agentId: "agent-1",
+		epoch: 0,
+	},
+}))
+
+vi.mock("./mongodb-erasure-epoch.js", async (importOriginal) => {
+	const actual =
+		await importOriginal<typeof import("./mongodb-erasure-epoch.js")>()
+	return {
+		...actual,
+		captureAdmissionToken: vi.fn(async () => legacyFence.admissionToken),
+		isErasureGateConflictError: vi.fn(() => false),
+	}
+})
+
+vi.mock("./mongodb-write-fence.js", async (importOriginal) => {
+	const actual =
+		await importOriginal<typeof import("./mongodb-write-fence.js")>()
+	return {
+		...actual,
+		withFencedWrite: vi.fn(
+			async (params: {
+				fn: (session: import("mongodb").ClientSession) => Promise<unknown>
+			}) => params.fn(legacyFence.session),
+		),
+	}
+})
+
 describe("MongoDBMemoryManager conversation recall", () => {
 	it("forwards the verified native bitemporal prefilter capability", async () => {
 		const { recallConversation } = await import(
@@ -188,6 +228,9 @@ describe("MongoDBManagerReadOps structured locator TTL guard (B1)", () => {
 					{ expiresAt: { $gt: expect.any(Date) } },
 				],
 			}),
+			// The fenced readFile forwards the fence session to every branch
+			// collection call (opaque object from the withFencedWrite mock).
+			{ session: legacyFence.session },
 		)
 	})
 
@@ -387,7 +430,9 @@ describe("MongoDBManagerReadOps kb locator tenant scoping (C-035)", () => {
 					{ title: "docs/handbook.md" },
 				],
 			},
-			{ sort: { updatedAt: -1, _id: 1 } },
+			// Existing sort options gain the fence session (opaque object from
+			// the withFencedWrite mock).
+			{ sort: { updatedAt: -1, _id: 1 }, session: legacyFence.session },
 		)
 	})
 

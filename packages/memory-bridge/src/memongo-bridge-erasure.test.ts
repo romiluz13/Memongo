@@ -75,6 +75,27 @@ describe("bridge tenant erasure (C-003)", () => {
 		).rejects.toThrow("wipe failed")
 	})
 
+	it("forwards a deliberate recovery takeover to the manager unchanged", async () => {
+		// The literal is never translated at this layer — the manager (and
+		// through it the engine) receives exactly { recovery: "takeover" }.
+		await memongoBridgeDeleteAllForAgent({
+			agentId: "agent-A",
+			recovery: "takeover",
+		})
+
+		expect(deleteAllForAgent).toHaveBeenCalledOnce()
+		expect(deleteAllForAgent).toHaveBeenCalledWith({ recovery: "takeover" })
+	})
+
+	it("passes no recovery intent when none is given", async () => {
+		// Ordinary entry must never smuggle a takeover: the manager gets
+		// undefined, so the engine sees a plain begin (typed 409 on an
+		// active owner — never a silent replacement).
+		await memongoBridgeDeleteAllForAgent({ agentId: "agent-A" })
+
+		expect(deleteAllForAgent).toHaveBeenCalledWith(undefined)
+	})
+
 	afterEach(() => {
 		process.env.MEMONGO_AGENT_ID = prevAgentId
 	})

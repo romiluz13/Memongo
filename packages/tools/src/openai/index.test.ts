@@ -193,4 +193,83 @@ describe("createOpenAIMiddleware (OpenAI SDK middleware)", () => {
 			spy.mockRestore()
 		}
 	})
+
+	it("W7: re-fetches on every create call — erased server memory is never served as the old string", async () => {
+		const renderedQueue = ["openai first memory", ""]
+		const mockFetch = globalThis.fetch as ReturnType<typeof vi.fn>
+		mockFetch.mockImplementation(async (url: unknown) => {
+			if (String(url).includes("/v1/context-bundle")) {
+				const rendered = renderedQueue.shift() ?? ""
+				return new Response(JSON.stringify({ rendered }), {
+					status: 200,
+					headers: { "Content-Type": "application/json" },
+				})
+			}
+			return new Response(
+				JSON.stringify({ ok: true, eventId: "evt", chunkCreated: false }),
+				{ status: 200, headers: { "Content-Type": "application/json" } },
+			)
+		})
+
+		const client = createMockOpenAIClient()
+		const proxied = createOpenAIMiddleware(client as any, BASE_OPTIONS)
+		const messages = [{ role: "user", content: "same question" }]
+
+		await proxied.chat.completions.create({ model: "gpt-4", messages })
+		const firstCall = client.chat.completions.create.mock.calls[0][0]
+		expect(firstCall.messages[0].role).toBe("system")
+		expect(firstCall.messages[0].content).toContain("openai first memory")
+
+		// Server memory erased between calls: fresh fetch, no stale system
+		// message replayed from the first call.
+		await proxied.chat.completions.create({ model: "gpt-4", messages })
+		const secondCall = client.chat.completions.create.mock.calls[1][0]
+		expect(secondCall.messages[0].role).toBe("user")
+
+		const bundleCalls = mockFetch.mock.calls.filter((call: unknown[]) =>
+			String(call[0]).includes("/v1/context-bundle"),
+		)
+		expect(bundleCalls).toHaveLength(2)
+	})
+
+	it("W7: a new middleware instance with the same credentials never reuses a prior result", async () => {
+		const renderedQueue = ["instance one memory", ""]
+		const mockFetch = globalThis.fetch as ReturnType<typeof vi.fn>
+		mockFetch.mockImplementation(async (url: unknown) => {
+			if (String(url).includes("/v1/context-bundle")) {
+				const rendered = renderedQueue.shift() ?? ""
+				return new Response(JSON.stringify({ rendered }), {
+					status: 200,
+					headers: { "Content-Type": "application/json" },
+				})
+			}
+			return new Response(
+				JSON.stringify({ ok: true, eventId: "evt", chunkCreated: false }),
+				{ status: 200, headers: { "Content-Type": "application/json" } },
+			)
+		})
+
+		const clientOne = createMockOpenAIClient()
+		const clientTwo = createMockOpenAIClient()
+		const proxiedOne = createOpenAIMiddleware(clientOne as any, BASE_OPTIONS)
+		// SAME credentials, brand-new instance.
+		const proxiedTwo = createOpenAIMiddleware(clientTwo as any, {
+			...BASE_OPTIONS,
+		})
+		const messages = [{ role: "user", content: "same question" }]
+
+		await proxiedOne.chat.completions.create({ model: "gpt-4", messages })
+		await proxiedTwo.chat.completions.create({ model: "gpt-4", messages })
+
+		const firstCall = clientOne.chat.completions.create.mock.calls[0][0]
+		expect(firstCall.messages[0].role).toBe("system")
+		expect(firstCall.messages[0].content).toContain("instance one memory")
+		const secondCall = clientTwo.chat.completions.create.mock.calls[0][0]
+		expect(secondCall.messages[0].role).toBe("user")
+
+		const bundleCalls = mockFetch.mock.calls.filter((call: unknown[]) =>
+			String(call[0]).includes("/v1/context-bundle"),
+		)
+		expect(bundleCalls).toHaveLength(2)
+	})
 })

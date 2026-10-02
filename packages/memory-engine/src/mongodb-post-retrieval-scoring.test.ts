@@ -6,6 +6,7 @@ import {
 	quotedPhraseBoost,
 	applyPostRetrievalScoring,
 } from "./mongodb-post-retrieval-scoring.js"
+import { rerankResults } from "./mongodb-search-ranking.js"
 import type { MemorySearchResult } from "./types.js"
 
 // ---------------------------------------------------------------------------
@@ -170,6 +171,27 @@ describe("temporalProximityBoost", () => {
 			0.5,
 		)
 		expect(boosted).toBe(0.5)
+	})
+
+	it("returns original score when the query has no temporal expression (B12)", () => {
+		// Pre-B12 this query fell back to a default 30-day window and boosted
+		// any recent result; the boost must now require an explicit temporal
+		// expression in the query.
+		const questionDate = new Date("2024-03-15T00:00:00Z")
+		const recent = temporalProximityBoost(
+			"what did I eat for dinner",
+			questionDate,
+			new Date("2024-03-13T00:00:00Z"),
+			0.5,
+		)
+		const stale = temporalProximityBoost(
+			"what did I eat for dinner",
+			questionDate,
+			new Date("2023-03-15T00:00:00Z"),
+			0.5,
+		)
+		expect(recent).toBe(0.5)
+		expect(stale).toBe(0.5)
 	})
 
 	it("uses custom maxBoost", () => {
@@ -340,7 +362,9 @@ describe("applyPostRetrievalScoring", () => {
 			{ questionDate: new Date("2024-03-15T00:00:00Z") },
 		)
 
-		// The second result should be boosted above the first due to keyword, entity, and temporal matches
+		// The second result should be boosted above the first via keyword and
+		// entity matches (B12: no temporal boost — the query carries no
+		// temporal expression).
 		expect(scored[0].snippet).toContain("Tokyo restaurant")
 	})
 
@@ -376,5 +400,57 @@ describe("applyPostRetrievalScoring", () => {
 		const scored = applyPostRetrievalScoring("query", input)
 		const outputPaths = new Set(scored.map((r) => r.snippet))
 		expect(outputPaths).toEqual(inputPaths)
+	})
+
+	it("composes on top of the heuristic rerank instead of discarding it (RET-07)", () => {
+		// Audit proof set: [.9 conversation, .8 conversation, .7 conversation,
+		// .6 reference] reorders to [.9, .8, .6 ref, .7 conv] under the
+		// diversity heuristic (3rd conversation result penalized 0.15).
+		const retrieved: MemorySearchResult[] = [
+			makeResult({
+				path: "chunks/a",
+				score: 0.9,
+				snippet: "alpha",
+				source: "conversation",
+			}),
+			makeResult({
+				path: "chunks/b",
+				score: 0.8,
+				snippet: "bravo",
+				source: "conversation",
+			}),
+			makeResult({
+				path: "chunks/c",
+				score: 0.7,
+				snippet: "charlie",
+				source: "conversation",
+			}),
+			makeResult({
+				path: "chunks/d",
+				score: 0.6,
+				snippet: "delta",
+				source: "reference",
+			}),
+		]
+		const heuristic = rerankResults(retrieved, "zzyzx quixotic")
+		expect(heuristic.map((r) => r.path)).toEqual([
+			"chunks/a",
+			"chunks/b",
+			"chunks/d",
+			"chunks/c",
+		])
+		// The post scorer must preserve that order when the query matches no
+		// boost signal. Pre-RET-07, rerankResults returned the ORIGINAL
+		// scores, so this re-sort restored [.9, .8, .7, .6] and silently
+		// discarded the heuristic.
+		const scored = applyPostRetrievalScoring("zzyzx quixotic", heuristic, {
+			questionDate: new Date("2024-03-15T00:00:00Z"),
+		})
+		expect(scored.map((r) => r.path)).toEqual([
+			"chunks/a",
+			"chunks/b",
+			"chunks/d",
+			"chunks/c",
+		])
 	})
 })

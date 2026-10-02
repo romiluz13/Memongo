@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/unbound-method -- Vitest mock method assertions */
-import type { Db, Collection } from "mongodb"
+import type { ClientSession, Collection, Db } from "mongodb"
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest"
 
 // ---------------------------------------------------------------------------
@@ -10,11 +10,36 @@ vi.mock("./mongodb-schema.js", () => ({
 	telemetryCollection: vi.fn(),
 }))
 
+vi.mock("./mongodb-write-fence.js", () => ({
+	captureAdmissionToken: vi.fn(async ({ agentId }: { agentId: string }) => ({
+		kind: "admission",
+		agentId,
+		epoch: 0,
+	})),
+	ErasureGateConflictError: class extends Error {
+		readonly code = "ERASURE_GATE_CONFLICT"
+	},
+	withFencedWrite: vi.fn(
+		async ({ fn }: { fn: (session: ClientSession) => Promise<void> }) =>
+			fn({} as ClientSession),
+	),
+}))
+import {
+	captureAdmissionToken,
+	withFencedWrite,
+} from "./mongodb-write-fence.js"
+const fakeDb = {
+	listCollections: vi.fn(() => ({
+		toArray: vi.fn(async () => [{ type: "collection" }]),
+	})),
+} as unknown as Db
+const drainEmission = () =>
+	new Promise<void>((resolve) => setImmediate(resolve))
+
 import { telemetryCollection } from "./mongodb-schema.js"
 import {
 	emitTelemetry,
 	getLatencyStats,
-	getCacheHitRate,
 	getOperationDistribution,
 	resolveTelemetrySampling,
 } from "./mongodb-telemetry.js"
@@ -51,14 +76,16 @@ describe("emitTelemetry", () => {
 		vi.mocked(telemetryCollection).mockReturnValue(mockCol)
 	})
 
-	it("calls insertOne with correct document shape", () => {
-		emitTelemetry({} as Db, PREFIX, {
+	it("calls insertOne with correct document shape", async () => {
+		emitTelemetry(fakeDb, PREFIX, {
 			meta: { agentId: AGENT_ID, operation: "search" },
 			durationMs: 42,
 			ok: true,
 		})
 
+		await drainEmission()
 		expect(mockCol.insertOne).toHaveBeenCalledOnce()
+		await drainEmission()
 		const [doc] = vi.mocked(mockCol.insertOne).mock.calls[0]
 		expect(doc).toEqual(
 			expect.objectContaining({
@@ -70,38 +97,40 @@ describe("emitTelemetry", () => {
 		)
 	})
 
-	it("adds ts field automatically", () => {
+	it("adds ts field automatically", async () => {
 		const before = Date.now()
-		emitTelemetry({} as Db, PREFIX, {
+		emitTelemetry(fakeDb, PREFIX, {
 			meta: { agentId: AGENT_ID, operation: "event-write" },
 			durationMs: 10,
 			ok: true,
 		})
 		const after = Date.now()
 
+		await drainEmission()
 		const [doc] = vi.mocked(mockCol.insertOne).mock.calls[0]
 		const ts = (doc as Record<string, unknown>).ts as Date
 		expect(ts.getTime()).toBeGreaterThanOrEqual(before)
 		expect(ts.getTime()).toBeLessThanOrEqual(after)
 	})
 
-	it("does not throw on insertOne failure", () => {
+	it("does not throw on insertOne failure", async () => {
 		vi.mocked(mockCol.insertOne).mockReturnValue(
 			Promise.reject(new Error("Write failed")) as never,
 		)
 
 		// Should not throw
 		expect(() => {
-			emitTelemetry({} as Db, PREFIX, {
+			emitTelemetry(fakeDb, PREFIX, {
 				meta: { agentId: AGENT_ID, operation: "search" },
 				durationMs: 10,
 				ok: true,
 			})
 		}).not.toThrow()
+		await drainEmission()
 	})
 
-	it("includes optional fields when provided", () => {
-		emitTelemetry({} as Db, PREFIX, {
+	it("includes optional fields when provided", async () => {
+		emitTelemetry(fakeDb, PREFIX, {
 			meta: { agentId: AGENT_ID, operation: "search" },
 			durationMs: 100,
 			ok: true,
@@ -111,6 +140,7 @@ describe("emitTelemetry", () => {
 			fusionMethod: "rrf",
 		})
 
+		await drainEmission()
 		const [doc] = vi.mocked(mockCol.insertOne).mock.calls[0]
 		expect(doc).toEqual(
 			expect.objectContaining({
@@ -122,13 +152,14 @@ describe("emitTelemetry", () => {
 		)
 	})
 
-	it("omits optional fields when not provided", () => {
-		emitTelemetry({} as Db, PREFIX, {
+	it("omits optional fields when not provided", async () => {
+		emitTelemetry(fakeDb, PREFIX, {
 			meta: { agentId: AGENT_ID, operation: "cache-check" },
 			durationMs: 5,
 			ok: true,
 		})
 
+		await drainEmission()
 		const [doc] = vi.mocked(mockCol.insertOne).mock.calls[0]
 		const d = doc as Record<string, unknown>
 		expect(d.pathUsed).toBeUndefined()
@@ -137,14 +168,147 @@ describe("emitTelemetry", () => {
 		expect(d.fusionMethod).toBeUndefined()
 	})
 
-	it("passes correct collection prefix", () => {
-		emitTelemetry({} as Db, "prod_", {
+	it("passes correct collection prefix", async () => {
+		emitTelemetry(fakeDb, "prod_", {
 			meta: { agentId: AGENT_ID, operation: "search" },
 			durationMs: 10,
 			ok: true,
 		})
 
-		expect(telemetryCollection).toHaveBeenCalledWith({}, "prod_")
+		await drainEmission()
+		expect(telemetryCollection).toHaveBeenCalledWith(fakeDb, "prod_")
+	})
+
+	it("returns an awaited session-bound write for fenced diagnostics", async () => {
+		const session = {} as ClientSession
+		let resolveInsert: (() => void) | undefined
+		const insertPending = new Promise<void>((resolve) => {
+			resolveInsert = resolve
+		})
+		vi.mocked(mockCol.insertOne).mockReturnValueOnce(insertPending as never)
+
+		const emission = emitTelemetry(
+			fakeDb,
+			PREFIX,
+			{
+				meta: { agentId: AGENT_ID, operation: "entity-extraction" },
+				durationMs: 12,
+				ok: true,
+			},
+			{ session },
+		)
+		expect(emission).toBeInstanceOf(Promise)
+		expect(mockCol.insertOne).toHaveBeenCalledWith(expect.any(Object), {
+			session,
+		})
+
+		let settled = false
+		void emission.then(() => {
+			settled = true
+		})
+		await Promise.resolve()
+		expect(settled).toBe(false)
+
+		resolveInsert?.()
+		await emission
+		expect(settled).toBe(true)
+	})
+
+	it("rejects a session-bound write so its diagnostic transaction aborts", async () => {
+		const failure = new Error("diagnostic insert failed")
+		vi.mocked(mockCol.insertOne).mockRejectedValueOnce(failure)
+
+		await expect(
+			emitTelemetry(
+				fakeDb,
+				PREFIX,
+				{
+					meta: { agentId: AGENT_ID, operation: "entity-extraction" },
+					durationMs: 12,
+					ok: false,
+				},
+				{ session: {} as ClientSession },
+			),
+		).rejects.toBe(failure)
+	})
+
+	it("uses supplied admission without capturing a new intent", async () => {
+		const admission = {
+			kind: "admission" as const,
+			agentId: AGENT_ID,
+			epoch: 37,
+		}
+		await emitTelemetry(
+			fakeDb,
+			PREFIX,
+			{
+				meta: { agentId: AGENT_ID, operation: "search" },
+				durationMs: 1,
+				ok: true,
+			},
+			{ admission },
+		)
+		expect(captureAdmissionToken).not.toHaveBeenCalled()
+		expect(withFencedWrite).toHaveBeenCalledWith(
+			expect.objectContaining({ token: admission }),
+		)
+	})
+	it("captures legacy admission at invocation", async () => {
+		emitTelemetry(fakeDb, PREFIX, {
+			meta: { agentId: AGENT_ID, operation: "search" },
+			durationMs: 1,
+			ok: true,
+		})
+		expect(captureAdmissionToken).toHaveBeenCalledWith({
+			db: fakeDb,
+			prefix: PREFIX,
+			agentId: AGENT_ID,
+		})
+		await drainEmission()
+	})
+	it("rejects sink inspection failure without opening a fence", async () => {
+		const failure = new Error("private rejected command body")
+		const db = {
+			listCollections: vi.fn(() => ({
+				toArray: vi.fn().mockRejectedValue(failure),
+			})),
+		} as unknown as Db
+		await expect(
+			emitTelemetry(
+				db,
+				PREFIX,
+				{
+					meta: { agentId: AGENT_ID, operation: "search" },
+					durationMs: 1,
+					ok: true,
+				},
+				{ admission: { kind: "admission", agentId: AGENT_ID, epoch: 0 } },
+			),
+		).rejects.toBe(failure)
+		expect(withFencedWrite).not.toHaveBeenCalled()
+		expect(mockCol.insertOne).not.toHaveBeenCalled()
+	})
+	it("disabled admitted emissions never inspect or capture", async () => {
+		vi.stubEnv("MEMONGO_TELEMETRY_ENABLED", "false")
+		try {
+			const db = { listCollections: vi.fn() } as unknown as Db
+			await emitTelemetry(
+				db,
+				PREFIX,
+				{
+					meta: { agentId: AGENT_ID, operation: "search" },
+					durationMs: 1,
+					ok: true,
+				},
+				{ admission: { kind: "admission", agentId: AGENT_ID, epoch: 0 } },
+			)
+			expect(db.listCollections).not.toHaveBeenCalled()
+			expect(captureAdmissionToken).not.toHaveBeenCalled()
+			expect(withFencedWrite).not.toHaveBeenCalled()
+			expect(mockCol.insertOne).not.toHaveBeenCalled()
+		} finally {
+			vi.unstubAllEnvs()
+		}
 	})
 
 	describe("sampling controls (08-report fleet audit)", () => {
@@ -152,7 +316,7 @@ describe("emitTelemetry", () => {
 		const previousRate = process.env.MEMONGO_TELEMETRY_SAMPLE_RATE
 
 		const emitOnce = () =>
-			emitTelemetry({} as Db, PREFIX, {
+			emitTelemetry(fakeDb, PREFIX, {
 				meta: { agentId: AGENT_ID, operation: "search" },
 				durationMs: 10,
 				ok: true,
@@ -194,39 +358,43 @@ describe("emitTelemetry", () => {
 			expect(mockCol.insertOne).not.toHaveBeenCalled()
 		})
 
-		it("default (unset) emits every document", () => {
+		it("default (unset) emits every document", async () => {
 			delete process.env.MEMONGO_TELEMETRY_ENABLED
 			delete process.env.MEMONGO_TELEMETRY_SAMPLE_RATE
 			for (let i = 0; i < 10; i++) {
 				emitOnce()
 			}
+			await drainEmission()
 			expect(mockCol.insertOne).toHaveBeenCalledTimes(10)
 		})
 
-		it("sample rate 1 emits every document", () => {
+		it("sample rate 1 emits every document", async () => {
 			process.env.MEMONGO_TELEMETRY_SAMPLE_RATE = "1"
 			for (let i = 0; i < 10; i++) {
 				emitOnce()
 			}
+			await drainEmission()
 			expect(mockCol.insertOne).toHaveBeenCalledTimes(10)
 		})
 
-		it("sample rate 0.5 emits a subset within statistical bounds", () => {
+		it("sample rate 0.5 emits a subset within statistical bounds", async () => {
 			process.env.MEMONGO_TELEMETRY_SAMPLE_RATE = "0.5"
 			for (let i = 0; i < 500; i++) {
 				emitOnce()
 			}
+			await drainEmission()
 			const emitted = vi.mocked(mockCol.insertOne).mock.calls.length
 			// 500 Bernoulli(0.5) trials: P(outside 40..60%) < 1e-5
 			expect(emitted).toBeGreaterThan(150)
 			expect(emitted).toBeLessThan(350)
 		})
 
-		it("invalid rate falls back to full emission (telemetry fails open)", () => {
+		it("invalid rate falls back to full emission (telemetry fails open)", async () => {
 			process.env.MEMONGO_TELEMETRY_SAMPLE_RATE = "banana"
 			for (let i = 0; i < 10; i++) {
 				emitOnce()
 			}
+			await drainEmission()
 			expect(mockCol.insertOne).toHaveBeenCalledTimes(10)
 		})
 
@@ -392,91 +560,6 @@ describe("getLatencyStats", () => {
 		const matchStage = (pipeline as Record<string, unknown>[])[0]
 			.$match as Record<string, unknown>
 		expect(matchStage["meta.operation"]).toBeUndefined()
-	})
-})
-
-// ---------------------------------------------------------------------------
-// getCacheHitRate
-// ---------------------------------------------------------------------------
-
-describe("getCacheHitRate", () => {
-	let mockCol: Collection
-
-	beforeEach(() => {
-		vi.clearAllMocks()
-		mockCol = createMockCollection()
-		vi.mocked(telemetryCollection).mockReturnValue(mockCol)
-	})
-
-	it("calculates correct hit rate", async () => {
-		const toArrayFn = vi.fn().mockResolvedValue([
-			{ _id: true, count: 7 },
-			{ _id: false, count: 3 },
-		])
-		vi.mocked(mockCol.aggregate).mockReturnValue({
-			toArray: toArrayFn,
-		} as never)
-
-		const result = await getCacheHitRate({
-			db: {} as Db,
-			prefix: PREFIX,
-			agentId: AGENT_ID,
-		})
-
-		expect(result.hits).toBe(7)
-		expect(result.misses).toBe(3)
-		expect(result.total).toBe(10)
-		expect(result.hitRate).toBeCloseTo(0.7)
-	})
-
-	it("returns zero rate when no data", async () => {
-		const toArrayFn = vi.fn().mockResolvedValue([])
-		vi.mocked(mockCol.aggregate).mockReturnValue({
-			toArray: toArrayFn,
-		} as never)
-
-		const result = await getCacheHitRate({
-			db: {} as Db,
-			prefix: PREFIX,
-			agentId: AGENT_ID,
-		})
-
-		expect(result).toEqual({ hitRate: 0, hits: 0, misses: 0, total: 0 })
-	})
-
-	it("handles only hits (no misses)", async () => {
-		const toArrayFn = vi.fn().mockResolvedValue([{ _id: true, count: 5 }])
-		vi.mocked(mockCol.aggregate).mockReturnValue({
-			toArray: toArrayFn,
-		} as never)
-
-		const result = await getCacheHitRate({
-			db: {} as Db,
-			prefix: PREFIX,
-			agentId: AGENT_ID,
-		})
-
-		expect(result.hitRate).toBe(1)
-		expect(result.hits).toBe(5)
-		expect(result.misses).toBe(0)
-	})
-
-	it("filters by cache-check operation", async () => {
-		const toArrayFn = vi.fn().mockResolvedValue([])
-		vi.mocked(mockCol.aggregate).mockReturnValue({
-			toArray: toArrayFn,
-		} as never)
-
-		await getCacheHitRate({
-			db: {} as Db,
-			prefix: PREFIX,
-			agentId: AGENT_ID,
-		})
-
-		const [pipeline] = vi.mocked(mockCol.aggregate).mock.calls[0]
-		const matchStage = (pipeline as Record<string, unknown>[])[0]
-			.$match as Record<string, unknown>
-		expect(matchStage["meta.operation"]).toBe("cache-check")
 	})
 })
 

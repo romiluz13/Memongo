@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest"
 import {
 	BENCHMARK_READINESS_FALLBACK,
+	isTerminalSearchIndexStatus,
 	readSearchIndexStatus,
 	type ReadSearchIndexStatusResult,
 	type SearchIndexStatus,
@@ -69,6 +70,16 @@ describe("readSearchIndexStatus (Task 1.5)", () => {
 			queryable: false,
 			indexName: "events_text",
 		})
+	})
+
+	test("treats DOES_NOT_EXIST as terminal alongside FAILED and DELETING", () => {
+		expect(isTerminalSearchIndexStatus("DOES_NOT_EXIST")).toBe(true)
+		expect(isTerminalSearchIndexStatus("FAILED")).toBe(true)
+		expect(isTerminalSearchIndexStatus("DELETING")).toBe(true)
+		expect(isTerminalSearchIndexStatus("PENDING")).toBe(false)
+		expect(isTerminalSearchIndexStatus("BUILDING")).toBe(false)
+		expect(isTerminalSearchIndexStatus("READY")).toBe(false)
+		expect(isTerminalSearchIndexStatus("STALE")).toBe(false)
 	})
 
 	test("returns DOES_NOT_EXIST when no matching index is reported", async () => {

@@ -7,19 +7,16 @@ import { MongoClient } from "mongodb"
 import { MemongoClient } from "@memongo/client"
 import {
 	emptyLaneCoverage,
-	getCacheHitRate,
 	getLaneCoverage,
 	getLatencyStats,
 	getOperationDistribution,
 	materializeEpisode,
 	recordProcedureOutcome,
-	checkCache,
 	extractAndUpsertEntities,
 	expandGraph,
 	evolveProcedure,
 	synthesizeProfile,
 	updateLaneCoverage,
-	writeCache,
 } from "@memongo/memory-engine/internal"
 import { buildMemongoConfig } from "../packages/memory-bridge/src/memory-config.ts"
 import { resolveMemoryBackendConfig } from "../packages/memory-engine/src/backend-config.ts"
@@ -1155,56 +1152,10 @@ async function main() {
 			returnPlan: true,
 		})
 
-		const initialCacheHit = await checkCache({
-			db,
-			prefix: mongoCfg.collectionPrefix,
-			query: repeatedQuery,
-			agentId,
-			scope: "agent",
-			scopeRef: scopeRefAgent,
-			config: mongoCfg.cache,
-		})
-		if (!initialCacheHit.hit) {
-			writeCache({
-				db,
-				prefix: mongoCfg.collectionPrefix,
-				query: repeatedQuery,
-				agentId,
-				scope: "agent",
-				scopeRef: scopeRefAgent,
-				results: procedureSearch.results,
-				pathUsed: "procedural",
-				sourceScope: "structured",
-				ttlSec: 300,
-			})
-			await sleep(500)
-		}
-		const cacheHit = initialCacheHit.hit
-			? initialCacheHit
-			: await waitFor(
-					"query cache hit",
-					() =>
-						checkCache({
-							db,
-							prefix: mongoCfg.collectionPrefix,
-							query: repeatedQuery,
-							agentId,
-							scope: "agent",
-							scopeRef: scopeRefAgent,
-							config: mongoCfg.cache,
-						}),
-					(result) => result.hit,
-				)
-		const cacheStats = await getCacheHitRate({
-			db,
-			prefix: mongoCfg.collectionPrefix,
-			agentId,
-			windowMs: 60 * 60 * 1000,
-		})
 		checks.push(
 			pass(
-				"query-cache",
-				`tier=${cacheHit.tier}, hitRate=${cacheStats.hitRate.toFixed(2)}`,
+				"live-retrieval-repeat",
+				"two identical detailed searches completed without result reuse",
 			),
 		)
 

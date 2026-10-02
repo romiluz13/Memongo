@@ -2,10 +2,9 @@
 
 Atlas Local preview is the canonical Memongo MongoDB stack.
 
-> [!WARNING]
-> MongoDB Automated Embedding is an upstream Preview feature that MongoDB says
-> not to use in production. The auto-embedding instructions below are for local
-> evaluation and controlled preview deployments.
+Memongo uses MongoDB Automated Embedding, which MongoDB currently labels
+[Preview](https://www.mongodb.com/docs/vector-search/crud-embeddings/automated-embedding/).
+The upstream deployment requirements and provider configuration apply.
 
 ## Recommended: Preview (Single Container)
 
@@ -22,9 +21,9 @@ VOYAGE_API_KEY=al-your-atlas-model-api-key ./docker/mongodb/start-preview.sh
 ./docker/mongodb/start-preview.sh stop
 ```
 
-This uses `mongodb/mongodb-atlas-local` (pinned dated tag in the compose file, ~584 MB) -- a single container with everything Memongo needs:
+This uses `mongodb/mongodb-atlas-local:preview`, a floating tag. Record the resolved image digest with deployment validation results. The container includes:
 
-- mongod (MongoDB 8.x, single-node replica set)
+- mongod (single-node replica set)
 - mongot (community search engine)
 - Atlas Search + Atlas Vector Search
 - Auto-embeddings via Voyage AI (when `VOYAGE_API_KEY` is an Atlas Model key)
@@ -43,6 +42,16 @@ For most users, this is all you need. The multi-container setup below is for adv
 > The multi-container setup is for users who need separate mongod/mongot control, custom auth, or specific MongoDB versions.
 
 Adapted from [mdb-community-search](https://github.com/JohnGUnderwood/mdb-community-search) (MongoDB engineer reference implementation).
+
+The advanced stack uses MongoDB Community Server 9.0.0-rc0 and MongoDB Search
+1.70.4. Automated Embedding requires Community Edition 8.2 or later with
+`mongot` and configured provider keys.
+
+The startup commands below initialize fresh data volumes. For existing volumes,
+review MongoDB's [9.0 compatibility changes](https://www.mongodb.com/docs/upcoming/release-notes/9.0-compatibility/)
+and follow the upgrade procedure for the installed server and feature
+compatibility version before changing the image. Preserve the volumes; these
+startup commands do not perform a retained-data upgrade.
 
 ### Prerequisites
 

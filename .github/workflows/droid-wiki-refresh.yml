@@ -1,8 +1,6 @@
 name: Droid Wiki Refresh
 
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
 
 jobs:

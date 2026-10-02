@@ -1,13 +1,13 @@
 /* eslint-disable @typescript-eslint/unbound-method -- Vitest mock method assertions */
 import type { Db } from "mongodb"
-import { describe, it, expect, vi, beforeEach } from "vitest"
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest"
 
 // ---------------------------------------------------------------------------
 // Mock telemetry before importing module under test
 // ---------------------------------------------------------------------------
 
 vi.mock("./mongodb-telemetry.js", () => ({
-	emitTelemetry: vi.fn(),
+	emitTelemetry: vi.fn().mockResolvedValue(undefined),
 }))
 
 import {
@@ -185,6 +185,46 @@ describe("crossEncoderRerank", () => {
 		expect(body.top_k).toBe(3)
 	})
 
+	it("sends the full passage text to the reranker when present (B5)", async () => {
+		const fullText1 = `${"assistant turn body ".repeat(80)}answer past char 700`
+		const fullText2 = `${"second long turn ".repeat(80)}also past char 700`
+		const results = [
+			makeResult({
+				snippet: fullText1.slice(0, 700),
+				text: fullText1,
+				score: 0.9,
+				path: "path/0",
+			}),
+			makeResult({
+				snippet: fullText2.slice(0, 700),
+				text: fullText2,
+				score: 0.8,
+				path: "path/1",
+			}),
+			makeResult({ snippet: "preview only", score: 0.7, path: "path/2" }),
+		]
+		const config = makeConfig()
+		const mockFetch = mockFetchSuccess([
+			{ index: 0, relevance_score: 0.9 },
+			{ index: 1, relevance_score: 0.8 },
+			{ index: 2, relevance_score: 0.7 },
+		])
+		await crossEncoderRerank({
+			db: DB,
+			prefix: PREFIX,
+			agentId: AGENT_ID,
+			query: QUERY,
+			results,
+			config,
+			fetchFn: mockFetch,
+		})
+
+		const body = JSON.parse(mockFetch.mock.calls[0][1].body as string)
+		// Full text for results that carry it; snippet fallback otherwise.
+		expect(body.documents).toEqual([fullText1, fullText2, "preview only"])
+		expect(body.documents[0].length).toBeGreaterThan(700)
+	})
+
 	it("maps scores back onto correct results and re-sorts descending", async () => {
 		const results = makeResults(3)
 		const config = makeConfig()
@@ -216,18 +256,21 @@ describe("crossEncoderRerank", () => {
 		expect(out.results[2].score).toBe(0.3)
 	})
 
-	it("appends below-minScore results at end", async () => {
-		const aboveMin = [
+	it("appends CE-below-minScore results at end (B7: minScore gates CE scores)", async () => {
+		const results = [
 			makeResult({ snippet: "high1", score: 0.5, path: "a" }),
 			makeResult({ snippet: "high2", score: 0.4, path: "b" }),
+			makeResult({ snippet: "low1", score: 0.05, path: "c" }),
 		]
-		const belowMin = [makeResult({ snippet: "low1", score: 0.05, path: "c" })]
-		const results = [...aboveMin, ...belowMin]
 		const config = makeConfig({ minScore: 0.1 })
 
+		// B7: every result is a candidate by rank; the CE scores one of them
+		// under minScore, which lands it in the below partition instead of
+		// being excluded from the rerank input.
 		const fetchFn = mockFetchSuccess([
 			{ index: 0, relevance_score: 0.6 },
 			{ index: 1, relevance_score: 0.8 },
+			{ index: 2, relevance_score: 0.02 },
 		])
 
 		const out = await crossEncoderRerank({
@@ -241,11 +284,61 @@ describe("crossEncoderRerank", () => {
 		})
 
 		expect(out.reranked).toBe(true)
-		// Reranked candidates first (sorted by score), then remainder
 		expect(out.results.length).toBe(3)
+		// CE-above-minScore head, sorted by CE score descending.
 		expect(out.results[0].snippet).toBe("high2") // 0.8 from reranker
 		expect(out.results[1].snippet).toBe("high1") // 0.6 from reranker
-		expect(out.results[2].snippet).toBe("low1") // below-minScore, appended
+		expect(out.results[2].snippet).toBe("low1") // CE 0.02, appended last
+		if (!out.reranked) {
+			throw new Error("expected reranked: true")
+		}
+		expect(out.partitions.reranked.map((r) => r.path)).toEqual(["b", "a"])
+		expect(out.partitions.below.map((r) => r.path)).toEqual(["c"])
+		expect(out.partitions.below.map((r) => r.score)).toEqual([0.02])
+	})
+
+	it("returns partition metadata and keeps CE-ranked results ahead of untouched overflow (RET-08)", async () => {
+		// Audit proof: CE-scored .2/.1 followed by untouched overflow with
+		// higher original scores — the CE decision must survive instead of
+		// being displaced by retrieval scores that were never CE-calibrated.
+		const results = [
+			makeResult({ snippet: "candidate 1", score: 0.9, path: "a" }),
+			makeResult({ snippet: "candidate 2", score: 0.85, path: "b" }),
+			makeResult({ snippet: "overflow 1", score: 0.8, path: "c" }),
+			makeResult({ snippet: "overflow 2", score: 0.75, path: "d" }),
+		]
+		const config = makeConfig({ topN: 2 })
+
+		const fetchFn = mockFetchSuccess([
+			{ index: 0, relevance_score: 0.2 },
+			{ index: 1, relevance_score: 0.1 },
+		])
+
+		const out = await crossEncoderRerank({
+			db: DB,
+			prefix: PREFIX,
+			agentId: AGENT_ID,
+			query: QUERY,
+			results,
+			config,
+			fetchFn,
+		})
+
+		if (!out.reranked) {
+			throw new Error("expected reranked: true")
+		}
+		// Only the topN candidates went to the provider.
+		const body = JSON.parse(vi.mocked(fetchFn).mock.calls[0][1].body as string)
+		expect(body.documents).toEqual(["candidate 1", "candidate 2"])
+		// Partition metadata carries the authoritative split (RET-08).
+		expect(out.partitions.reranked.map((r) => r.path)).toEqual(["a", "b"])
+		expect(out.partitions.reranked.map((r) => r.score)).toEqual([0.2, 0.1])
+		expect(out.partitions.overflow.map((r) => r.path)).toEqual(["c", "d"])
+		expect(out.partitions.emptySnippet).toEqual([])
+		expect(out.partitions.below).toEqual([])
+		// Flat results keep the CE-scored partition first — overflow .8/.75
+		// does not displace CE-ranked .2/.1.
+		expect(out.results.map((r) => r.path)).toEqual(["a", "b", "c", "d"])
 	})
 
 	it("slices candidates to topN", async () => {
@@ -269,8 +362,9 @@ describe("crossEncoderRerank", () => {
 		})
 
 		expect(out.reranked).toBe(true)
-		// 3 reranked + 2 remainder (below topN threshold but above minScore, these go to remainder)
-		const body = JSON.parse(fetchFn.mock.calls[0][1].body as string)
+		// B7: rank-based candidate selection — the first topN results by
+		// input rank go to the provider; the rest become overflow.
+		const body = JSON.parse(vi.mocked(fetchFn).mock.calls[0][1].body as string)
 		expect(body.documents.length).toBe(3)
 	})
 
@@ -317,7 +411,7 @@ describe("crossEncoderRerank", () => {
 			fetchFn,
 		})
 
-		const body = JSON.parse(fetchFn.mock.calls[0][1].body as string)
+		const body = JSON.parse(vi.mocked(fetchFn).mock.calls[0][1].body as string)
 		expect(body.model).toBe("rerank-2.5-lite")
 	})
 
@@ -343,7 +437,7 @@ describe("crossEncoderRerank", () => {
 			fetchFn,
 		})
 
-		const body = JSON.parse(fetchFn.mock.calls[0][1].body as string)
+		const body = JSON.parse(vi.mocked(fetchFn).mock.calls[0][1].body as string)
 		expect(body.query).toBe(
 			`This is agent conversation memory. Prioritize recent results.\n${QUERY}`,
 		)
@@ -396,7 +490,9 @@ describe("crossEncoderRerank", () => {
 			fetchFn,
 		})
 
-		expect(fetchFn.mock.calls[0]?.[1]).toMatchObject({ redirect: "manual" })
+		expect(vi.mocked(fetchFn).mock.calls[0]?.[1]).toMatchObject({
+			redirect: "manual",
+		})
 	})
 
 	it("falls back on network error", async () => {
@@ -564,8 +660,8 @@ describe("crossEncoderRerank", () => {
 		expect(out.reranked).toBe(false)
 		expect(out.results).toBe(results)
 		// Verify AbortSignal.timeout was passed
-		const fetchCall = fetchFn.mock.calls[0]
-		expect(fetchCall[1].signal).toBeDefined()
+		const fetchCall = vi.mocked(fetchFn).mock.calls[0]
+		expect(fetchCall[1]?.signal).toBeDefined()
 	}, 15_000)
 
 	// --- Empty snippet filtering (H5) ---
@@ -597,7 +693,7 @@ describe("crossEncoderRerank", () => {
 
 		expect(out.reranked).toBe(true)
 		// Only 2 non-empty snippets should be sent to API
-		const body = JSON.parse(fetchFn.mock.calls[0][1].body as string)
+		const body = JSON.parse(vi.mocked(fetchFn).mock.calls[0][1].body as string)
 		expect(body.documents.length).toBe(2)
 		expect(body.documents).toEqual([
 			"Alice works on ProjectX",
@@ -659,12 +755,17 @@ describe("crossEncoderRerank", () => {
 
 	// --- All below minScore ---
 
-	it("returns input unchanged when all results are below minScore", async () => {
+	it("reranks by rank even when every pre-rerank score is below minScore (B7)", async () => {
 		const results = [
 			makeResult({ snippet: "low1", score: 0.05, path: "a" }),
 			makeResult({ snippet: "low2", score: 0.08, path: "b" }),
 		]
 		const config = makeConfig({ minScore: 0.1 })
+
+		const fetchFn = mockFetchSuccess([
+			{ index: 0, relevance_score: 0.9 },
+			{ index: 1, relevance_score: 0.7 },
+		])
 
 		const out = await crossEncoderRerank({
 			db: DB,
@@ -673,10 +774,17 @@ describe("crossEncoderRerank", () => {
 			query: QUERY,
 			results,
 			config,
+			fetchFn,
 		})
 
-		expect(out.reranked).toBe(false)
-		expect(out.results).toBe(results)
+		// B7: candidates are chosen by rank, so low FIRST-STAGE scores no
+		// longer skip the reranker — the CE scores carry the ranking now.
+		expect(out.reranked).toBe(true)
+		expect(fetchFn).toHaveBeenCalledOnce()
+		const body = JSON.parse(vi.mocked(fetchFn).mock.calls[0][1].body as string)
+		expect(body.documents).toEqual(["low1", "low2"])
+		expect(out.results.map((r) => r.path)).toEqual(["a", "b"])
+		expect(out.results.map((r) => r.score)).toEqual([0.9, 0.7])
 	})
 })
 
@@ -963,4 +1071,140 @@ describe("crossEncoderRerank remaining latency budget (C-031)", () => {
 		expect(out.reranked).toBe(true)
 		expect(fetchFn).toHaveBeenCalledOnce()
 	})
+})
+
+describe("original-admission rerank telemetry", () => {
+	beforeEach(() => {
+		vi.clearAllMocks()
+		vi.stubEnv("MEMONGO_RERANK_STRICT", "0")
+		vi.stubEnv("MEMONGO_BENCHMARK_STRICT", "0")
+	})
+	afterEach(() => vi.unstubAllEnvs())
+
+	it.each([
+		"disabled",
+		"too-few-candidates",
+		"too-few-valid-candidates",
+		"budget-exhausted",
+		"api-error",
+		"bad-response-shape",
+		"success",
+		"exception",
+	])("keeps %s behavior when original telemetry rejects", async (branch) => {
+		const admission = {
+			kind: "admission",
+			agentId: AGENT_ID,
+			epoch: 19,
+		} as const
+		const results = makeResults(branch === "too-few-candidates" ? 1 : 3)
+		if (branch === "too-few-valid-candidates")
+			for (const result of results) result.snippet = " "
+		const config = makeConfig({ enabled: branch !== "disabled" })
+		const fetchFn =
+			branch === "api-error"
+				? vi.fn().mockResolvedValue({ ok: false, status: 503 })
+				: branch === "bad-response-shape"
+					? vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) })
+					: branch === "exception"
+						? vi.fn().mockRejectedValue(new Error("provider fixture"))
+						: mockFetchSuccess([
+								{ index: 2, relevance_score: 0.99 },
+								{ index: 1, relevance_score: 0.8 },
+								{ index: 0, relevance_score: 0.7 },
+							])
+		vi.mocked(emitTelemetry).mockRejectedValueOnce(
+			new Error("telemetry fixture"),
+		)
+		const out = await crossEncoderRerank({
+			db: DB,
+			prefix: PREFIX,
+			agentId: AGENT_ID,
+			query: QUERY,
+			results,
+			config,
+			fetchFn,
+			admission,
+			remainingBudgetMs: branch === "budget-exhausted" ? 0 : undefined,
+		})
+		expect(emitTelemetry).toHaveBeenCalledExactlyOnceWith(
+			DB,
+			PREFIX,
+			expect.objectContaining({
+				meta: { agentId: AGENT_ID, operation: "rerank" },
+			}),
+			{ admission },
+		)
+		const doc = vi.mocked(emitTelemetry).mock.calls[0]?.[2]
+		if (branch === "success" || branch === "exception")
+			expect(doc).not.toHaveProperty("rerankSkipped")
+		else expect(doc?.rerankSkipped).toBe(branch)
+		expect(out.reranked).toBe(branch === "success")
+		if (branch === "success")
+			expect(out.results.map((result) => result.path)).toEqual([
+				"path/2",
+				"path/1",
+				"path/0",
+			])
+		else expect(out.results).toBe(results)
+		if (
+			[
+				"disabled",
+				"too-few-candidates",
+				"too-few-valid-candidates",
+				"budget-exhausted",
+			].includes(branch)
+		)
+			expect(fetchFn).not.toHaveBeenCalled()
+		else expect(fetchFn).toHaveBeenCalledOnce()
+	})
+
+	it("rethrows the original strict provider error despite rejected telemetry", async () => {
+		vi.stubEnv("MEMONGO_RERANK_STRICT", "1")
+		const error = new Error("original provider fixture")
+		const admission = {
+			kind: "admission",
+			agentId: AGENT_ID,
+			epoch: 19,
+		} as const
+		vi.mocked(emitTelemetry).mockRejectedValueOnce(
+			new Error("telemetry fixture"),
+		)
+		await expect(
+			crossEncoderRerank({
+				db: DB,
+				prefix: PREFIX,
+				agentId: AGENT_ID,
+				query: QUERY,
+				results: makeResults(3),
+				config: makeConfig(),
+				admission,
+				fetchFn: vi.fn().mockRejectedValue(error),
+			}),
+		).rejects.toBe(error)
+		expect(emitTelemetry).toHaveBeenCalledWith(DB, PREFIX, expect.any(Object), {
+			admission,
+		})
+	})
+
+	it("returns without waiting for telemetry completion", async () => {
+		const admission = {
+			kind: "admission",
+			agentId: AGENT_ID,
+			epoch: 19,
+		} as const
+		vi.mocked(emitTelemetry).mockImplementationOnce(
+			() => new Promise<void>(() => {}),
+		)
+		const results = makeResults(3)
+		const out = await crossEncoderRerank({
+			db: DB,
+			prefix: PREFIX,
+			agentId: AGENT_ID,
+			query: QUERY,
+			results,
+			config: makeConfig({ enabled: false }),
+			admission,
+		})
+		expect(out.results).toBe(results)
+	}, 1_000)
 })

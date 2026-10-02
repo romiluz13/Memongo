@@ -31,27 +31,61 @@ export function resolveMemongoConfigFilePath(
 
 function readMemongoJsonFile(
 	filePath: string,
+	explicit: boolean,
 ): { memory?: MemoryConfig; agents?: MemongoConfig["agents"] } | undefined {
+	// The default config path is optional: absent means "no file config".
+	// Everything else fails clearly instead of silently reverting file-only
+	// settings (for example retention) to defaults — an explicitly selected
+	// missing file, an unreadable existing file, malformed JSON, or a
+	// non-object top level all indicate operator intent that must not be
+	// dropped before connecting and mutating.
+	let raw: string
 	try {
-		if (!fs.existsSync(filePath)) {
+		raw = fs.readFileSync(filePath, "utf-8")
+	} catch (error) {
+		const code = (error as NodeJS.ErrnoException).code
+		if (code === "ENOENT" && !explicit) {
 			return undefined
 		}
-		const raw = fs.readFileSync(filePath, "utf-8")
-		const parsed = JSON.parse(raw) as unknown
-		if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-			return undefined
+		if (code === "ENOENT") {
+			throw new Error(
+				`Memongo config file not found at "${filePath}" (selected via MEMONGO_CONFIG_PATH). Create it or unset MEMONGO_CONFIG_PATH.`,
+			)
 		}
-		return parsed as { memory?: MemoryConfig; agents?: MemongoConfig["agents"] }
-	} catch {
-		return undefined
+		// fs error messages carry the path and error code only — no content.
+		throw new Error(
+			`Memongo config file at "${filePath}" could not be read (${code ?? "unknown error"}).`,
+			{ cause: error },
+		)
 	}
+	let parsed: unknown
+	try {
+		parsed = JSON.parse(raw)
+	} catch {
+		// JSON.parse error messages echo source text on some supported Node
+		// versions; the file may contain credentials, so the parse error and
+		// its cause are deliberately excluded.
+		throw new Error(
+			`Memongo config file at "${filePath}" is not valid JSON. Fix or remove the file.`,
+		)
+	}
+	if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+		throw new Error(
+			`Memongo config file at "${filePath}" must contain a JSON object at the top level.`,
+		)
+	}
+	return parsed as { memory?: MemoryConfig; agents?: MemongoConfig["agents"] }
 }
 
 export function buildMemongoConfig(
 	env: NodeJS.ProcessEnv = process.env,
 ): MemongoConfig {
 	const filePath = resolveMemongoConfigFilePath(env)
-	const fromFile = readMemongoJsonFile(filePath)
+	const fromFile = readMemongoJsonFile(
+		filePath,
+		env.MEMONGO_CONFIG_PATH?.trim() !== undefined &&
+			env.MEMONGO_CONFIG_PATH.trim().length > 0,
+	)
 
 	// P2.6: one URI precedence rule, shared with the engine via
 	// applyMongoDbForceUriOverride (@memongo/lib): MEMONGO_FORCE_MONGODB_URI

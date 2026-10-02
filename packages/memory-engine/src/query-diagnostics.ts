@@ -89,36 +89,84 @@ function wordPattern(token: string): string {
 	return `${startsWord ? "\\b" : ""}${escaped}${endsWord ? "\\b" : ""}`
 }
 
-/**
- * Builds an alternation of every eligible window of consecutive query
- * words, longest first. Each window tolerates up to ECHO_MAX_GAP chars of
- * separator junk between words and matches case-insensitively, so
- * case-folded, whitespace-mangled, split, truncated, and middle-fragment
- * echoes all hit. Longest-first ordering makes the alternation consume the
- * maximal span, so nested shorter windows never double-replace.
- */
-function echoWindowRegex(words: string[]): RegExp | null {
-	const windows: { source: string; text: string }[] = []
-	for (let start = 0; start < words.length; start++) {
-		for (let end = words.length; end > start; end--) {
-			const run = words.slice(start, end)
-			const text = run.join(" ")
+function redactQueryWindows(
+	text: string,
+	words: string[],
+	alias: string,
+): string {
+	const occurrences = new Map<string, number[]>()
+	const starts = words.map((word) => {
+		const cached = occurrences.get(word)
+		if (cached) return cached
+		const positions: number[] = []
+		const regex = new RegExp(wordPattern(word), "gi")
+		let match = regex.exec(text)
+		while (match !== null) {
+			positions.push(match.index)
+			regex.lastIndex = match.index + 1
+			match = regex.exec(text)
+		}
+		occurrences.set(word, positions)
+		return positions
+	})
+	const prefixLengths = [0]
+	for (const word of words) {
+		prefixLengths.push(prefixLengths[prefixLengths.length - 1] + word.length)
+	}
+	const reach: Map<number, number>[] = Array.from(
+		{ length: words.length },
+		() => new Map(),
+	)
+	const windows = new Map<
+		number,
+		{ start: number; end: number; length: number }
+	>()
+
+	for (let start = words.length - 1; start >= 0; start--) {
+		for (const position of starts[start]) {
+			let end = start
+			const next = reach[start + 1]
+			if (next) {
+				const wordEnd = position + words[start].length
+				for (let p = wordEnd; p <= wordEnd + ECHO_MAX_GAP; p++) {
+					end = Math.max(end, next.get(p) ?? start)
+					if (end === words.length - 1) break
+				}
+			}
+			reach[start].set(position, end)
+			const length = prefixLengths[end + 1] - prefixLengths[start] + end - start
 			const eligible =
-				run.length >= 2
-					? text.length >= ECHO_WINDOW_MIN_LENGTH
-					: text.length >= ECHO_SINGLE_WORD_MIN_LENGTH
+				end > start
+					? length >= ECHO_WINDOW_MIN_LENGTH
+					: length >= ECHO_SINGLE_WORD_MIN_LENGTH
 			if (!eligible) continue
-			windows.push({
-				source: run.map(wordPattern).join(`[\\s\\S]{0,${ECHO_MAX_GAP}}?`),
-				text,
-			})
+			const previous = windows.get(position)
+			// The old alternation sorted joined lengths, retaining query-start order on ties.
+			if (!previous || length >= previous.length)
+				windows.set(position, { start, end, length })
 		}
 	}
-	if (windows.length === 0) return null
-	const sources = [...new Set(windows)]
-		.sort((a, b) => b.text.length - a.text.length)
-		.map((window) => window.source)
-	return new RegExp(sources.join("|"), "gi")
+
+	const parts: string[] = []
+	let copiedUntil = 0
+	let position = 0
+	while (position < text.length) {
+		const window = windows.get(position)
+		if (!window) {
+			position++
+			continue
+		}
+		parts.push(text.slice(copiedUntil, position), alias)
+		for (let word = window.start; word < window.end; word++) {
+			position += words[word].length
+			// Reachability guarantees a continuation within the gap; choose it lazily.
+			while ((reach[word + 1].get(position) ?? -1) < window.end) position++
+		}
+		position += words[window.end].length
+		copiedUntil = position
+	}
+	parts.push(text.slice(copiedUntil))
+	return parts.join("")
 }
 
 /**
@@ -168,8 +216,7 @@ function redactQueryEcho(text: string, query: string, alias: string): string {
 		// survive into logs.
 		const words = trimmed.split(/\s+/).filter(Boolean)
 		fragmentWords.push(...words)
-		const windowRegex = echoWindowRegex(words)
-		if (windowRegex) out = out.replace(windowRegex, alias)
+		out = redactQueryWindows(out, words, alias)
 	}
 	// Fragment pass: truncated or re-segmented mid-word echoes.
 	return redactQueryFragments(out, fragmentWords, alias)
@@ -184,5 +231,33 @@ export function queryFailureMeta(
 		queryLength: query.length,
 		queryDigest: digest,
 		error: redactQueryEcho(formatErrorMessage(err), query, `[query:${digest}]`),
+	}
+}
+
+export type SettledFailureMeta = {
+	code?: number
+	queryLength?: number
+	queryDigest?: string
+}
+
+export function settledFailureMeta(
+	err: unknown,
+	query?: string,
+): SettledFailureMeta {
+	const code =
+		err && typeof err === "object"
+			? Object.getOwnPropertyDescriptor(err, "code")?.value
+			: undefined
+	return {
+		...(typeof code === "number" && Number.isFinite(code) ? { code } : {}),
+		...(query !== undefined
+			? {
+					queryLength: query.length,
+					queryDigest: createHash("sha256")
+						.update(query)
+						.digest("hex")
+						.slice(0, 12),
+				}
+			: {}),
 	}
 }

@@ -5,13 +5,15 @@ const DEFAULT_REDACT_KEEP_END = 4
 // Credentials embedded in ANY scheme's URL userinfo (mongodb+srv,
 // postgres, redis, amqp, https, ...). Only the password group is
 // starred; an empty user (redis://:pass@) still matches.
-const SCHEME_USERINFO_PATTERN = /[a-z][a-z0-9+.-]*:\/\/[^\s:@/]*:([^@\s/]+)@/gi
+const SCHEME_USERINFO_PATTERN =
+	/(?<![a-z0-9+.-])[0-9+.-]*[a-z][a-z0-9+.-]*:\/\/[^\s:@/]*:([^@\s/]+)@/gi
 
 // Username-only userinfo (redis://dummy-user@host, https://user@host):
 // the username itself is the credential in key-as-username schemes, so
 // it is starred too. Runs after the password pattern, which has already
 // consumed user:pass@ forms (its masked *** output is idempotent here).
-const SCHEME_USER_PATTERN = /[a-z][a-z0-9+.-]*:\/\/([^:@/\s"]+)@/gi
+const SCHEME_USER_PATTERN =
+	/(?<![a-z0-9+.-])[0-9+.-]*[a-z][a-z0-9+.-]*:\/\/([^:@/\s"]+)@/gi
 
 const DEFAULT_REDACT_PATTERNS: RegExp[] = [
 	// Assignment forms: KEY/TOKEN/SECRET/PASSWORD/PASSWD/AUTH/CREDENTIAL(S)
@@ -51,7 +53,7 @@ const DEFAULT_REDACT_PATTERNS: RegExp[] = [
 	// (…/path-dummy-000001/callback, …/reset/token). The lookahead requires a
 	// delimiter (or end) after the word, so "tokenization" and similar
 	// non-credential paths pass through unmasked.
-	/(https?:\/\/[^/?#\s]+)\/(?:[^\s?#/]*[/._-])*(?:secrets?|tokens?|credentials?|passwd|password)(?=[/._-]|$)[^\s?#]*/gi,
+	/(https?:\/\/[^/?#\s]+)\/(?:[^\s?#]*[/._-])?(?:secrets?|tokens?|credentials?|passwd|password)(?=[/._-]|$)[^\s?#]*/gi,
 ]
 
 /**
@@ -100,49 +102,50 @@ function redactPemBlock(block: string): string {
 	return `${lines[0]}\n***redacted***\n${lines[lines.length - 1]}`
 }
 
+function maskCapture(
+	match: RegExpExecArray,
+	group: number,
+	mask: string,
+): string {
+	const [start, end] = (match.indices as RegExpIndicesArray)[group]
+	return (
+		match[0].slice(0, start - match.index) +
+		mask +
+		match[0].slice(end - match.index)
+	)
+}
+
+function redactMatch(match: RegExpExecArray, patternIndex: number): string {
+	if (match[0].includes("PRIVATE KEY-----")) return redactPemBlock(match[0])
+	if (
+		patternIndex === SCHEME_USERINFO_PATTERN_INDEX ||
+		patternIndex === SCHEME_USER_PATTERN_INDEX
+	)
+		return match[1] ? maskCapture(match, 1, "***") : match[0]
+	if (URL_TRUNCATING_PATTERN_INDEXES.includes(patternIndex))
+		return match[1] ? `${match[1]}/***` : match[0]
+	for (let group = match.length - 1; group > 0; group--) {
+		if (match[group]) return maskCapture(match, group, maskToken(match[group]))
+	}
+	return maskToken(match[0])
+}
+
 export function redactSensitiveText(text: string): string {
 	if (!text) return text
 	let result = text
 	for (const [patternIndex, pattern] of DEFAULT_REDACT_PATTERNS.entries()) {
-		const regex = new RegExp(pattern.source, pattern.flags)
-		result = result.replace(regex, (...args: unknown[]) => {
-			const match = args[0] as string
-			if (match.includes("PRIVATE KEY-----")) return redactPemBlock(match)
-			// Replace-callback varargs are: capture groups..., offset (number),
-			// input (string), [named-groups object]. Capture groups are only the
-			// entries before the numeric offset — the trailing input string must
-			// never be mistaken for a group (picking it made embedded secrets
-			// survive redaction and over-masked whole-line inputs).
-			const rest = args.slice(1)
-			const offsetIndex = rest.findIndex((arg) => typeof arg === "number")
-			const captures = offsetIndex === -1 ? rest : rest.slice(0, offsetIndex)
-			if (patternIndex === SCHEME_USERINFO_PATTERN_INDEX) {
-				// *************************** — star only the password.
-				const passwordGroup = captures[0]
-				if (typeof passwordGroup === "string" && passwordGroup.length > 0)
-					return match.replace(passwordGroup, "***")
-				return match
-			}
-			if (patternIndex === SCHEME_USER_PATTERN_INDEX) {
-				// Username-only userinfo — star the username in full.
-				const userGroup = captures[0]
-				if (typeof userGroup === "string" && userGroup.length > 0)
-					return match.replace(userGroup, "***")
-				return match
-			}
-			if (URL_TRUNCATING_PATTERN_INDEXES.includes(patternIndex)) {
-				// Webhook / credential-path URL — keep scheme://host, drop the path.
-				const host = captures[0]
-				if (typeof host === "string" && host.length > 0) return `${host}/***`
-				return match
-			}
-			const token =
-				captures
-					.filter((g): g is string => typeof g === "string" && g.length > 0)
-					.at(-1) ?? match
-			const masked = maskToken(token)
-			return token === match ? masked : match.replace(token, masked)
-		})
+		const regex = new RegExp(pattern.source, `${pattern.flags}d`)
+		const parts: string[] = []
+		let copiedUntil = 0
+		for (const match of result.matchAll(regex)) {
+			parts.push(
+				result.slice(copiedUntil, match.index),
+				redactMatch(match, patternIndex),
+			)
+			copiedUntil = match.index + match[0].length
+		}
+		parts.push(result.slice(copiedUntil))
+		result = parts.join("")
 	}
 	return result
 }

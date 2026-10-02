@@ -1,6 +1,12 @@
+import { settledFailureMeta } from "./query-diagnostics.js"
 import type { Db, Document } from "mongodb"
 import { type MemoryScope, createSubsystemLogger } from "@memongo/lib"
 import { recordProjectionRun } from "./mongodb-ops.js"
+import {
+	ErasureGateConflictError,
+	withFencedWrite,
+	type AdmissionToken,
+} from "./mongodb-write-fence.js"
 import { resolveTimeRangePreset } from "./mongodb-retrieval-planner.js"
 import { buildUnexpiredClause } from "./mongodb-temporal.js"
 import {
@@ -22,6 +28,21 @@ import type {
 } from "./types.js"
 
 const log = createSubsystemLogger("memory:mongodb:discovery-projections")
+function recordReadProjectionRun(
+	params: Parameters<typeof recordProjectionRun>[0] & {
+		admission?: AdmissionToken
+	},
+): Promise<string> {
+	if (params.admission) {
+		return withFencedWrite({
+			db: params.db,
+			prefix: params.prefix,
+			token: params.admission,
+			fn: (session) => recordProjectionRun({ ...params, session }),
+		})
+	}
+	return recordProjectionRun(params)
+}
 
 const DEFAULT_MAX_ITEMS = 5
 const MAX_ITEMS = 8
@@ -207,11 +228,15 @@ function pickLatestDocuments<T extends Document>(
 async function settled<T>(
 	label: string,
 	fn: () => Promise<T>,
+	query?: string,
 ): Promise<T | null> {
 	try {
 		return await fn()
 	} catch (error) {
-		log.warn(`buildDiscoveryProjection: ${label} query failed`, { error })
+		log.warn(
+			`buildDiscoveryProjection: ${label} query failed`,
+			settledFailureMeta(error, query),
+		)
 		return null
 	}
 }
@@ -422,19 +447,22 @@ async function buildEntityBrief(params: {
 	const regex = buildQueryRegex(query)
 	const scopeFilter = { agentId, scope, scopeRef }
 
-	const entities = await settled("entity-brief.entities", () =>
-		entitiesCollection(db, prefix)
-			.find({
-				...scopeFilter,
-				...(regex
-					? {
-							$or: [{ name: regex }, { aliases: regex }],
-						}
-					: {}),
-			})
-			.sort({ updatedAt: -1 })
-			.limit(maxItems)
-			.toArray(),
+	const entities = await settled(
+		"entity-brief.entities",
+		() =>
+			entitiesCollection(db, prefix)
+				.find({
+					...scopeFilter,
+					...(regex
+						? {
+								$or: [{ name: regex }, { aliases: regex }],
+							}
+						: {}),
+				})
+				.sort({ updatedAt: -1 })
+				.limit(maxItems)
+				.toArray(),
+		query,
 	)
 
 	const matchedEntities = entities ?? []
@@ -444,19 +472,22 @@ async function buildEntityBrief(params: {
 	const relationDocs =
 		matchedIds.length === 0
 			? []
-			: await settled("entity-brief.relations", () =>
-					relationsCollection(db, prefix)
-						.find({
-							...scopeFilter,
-							state: "active",
-							$or: [
-								{ fromEntityId: { $in: matchedIds } },
-								{ toEntityId: { $in: matchedIds } },
-							],
-						})
-						.sort({ updatedAt: -1 })
-						.limit(maxItems)
-						.toArray(),
+			: await settled(
+					"entity-brief.relations",
+					() =>
+						relationsCollection(db, prefix)
+							.find({
+								...scopeFilter,
+								state: "active",
+								$or: [
+									{ fromEntityId: { $in: matchedIds } },
+									{ toEntityId: { $in: matchedIds } },
+								],
+							})
+							.sort({ updatedAt: -1 })
+							.limit(maxItems)
+							.toArray(),
+					query,
 				)
 	const relations = relationDocs ?? []
 
@@ -471,39 +502,45 @@ async function buildEntityBrief(params: {
 	const relatedEntityDocs =
 		relatedEntityIds.length === 0
 			? []
-			: await settled("entity-brief.related-entities", () =>
-					entitiesCollection(db, prefix)
-						.find({
-							...scopeFilter,
-							entityId: { $in: relatedEntityIds },
-						})
-						.sort({ updatedAt: -1 })
-						.limit(maxItems * 2)
-						.toArray(),
+			: await settled(
+					"entity-brief.related-entities",
+					() =>
+						entitiesCollection(db, prefix)
+							.find({
+								...scopeFilter,
+								entityId: { $in: relatedEntityIds },
+							})
+							.sort({ updatedAt: -1 })
+							.limit(maxItems * 2)
+							.toArray(),
+					query,
 				)
 	const relatedEntities = relatedEntityDocs ?? []
-	const structured = await settled("entity-brief.structured", () =>
-		structuredMemCollection(db, prefix)
-			.find({
-				...scopeFilter,
-				state: "active",
-				...(regex
-					? {
-							$or: [
-								{ key: regex },
-								{ value: regex },
-								{ context: regex },
-								{ tags: regex },
-							],
-						}
-					: {}),
-				// P4.4.1 (B1): hide TTL-expired docs until the sweep removes them;
-				// $and because the regex lane may occupy the top-level $or.
-				$and: [buildUnexpiredClause()],
-			})
-			.sort({ updatedAt: -1 })
-			.limit(maxItems)
-			.toArray(),
+	const structured = await settled(
+		"entity-brief.structured",
+		() =>
+			structuredMemCollection(db, prefix)
+				.find({
+					...scopeFilter,
+					state: "active",
+					...(regex
+						? {
+								$or: [
+									{ key: regex },
+									{ value: regex },
+									{ context: regex },
+									{ tags: regex },
+								],
+							}
+						: {}),
+					// P4.4.1 (B1): hide TTL-expired docs until the sweep removes them;
+					// $and because the regex lane may occupy the top-level $or.
+					$and: [buildUnexpiredClause()],
+				})
+				.sort({ updatedAt: -1 })
+				.limit(maxItems)
+				.toArray(),
+		query,
 	)
 
 	const entityNames = new Map<string, string>()
@@ -560,68 +597,77 @@ async function buildTopicBrief(params: {
 	const normalized = query.trim().toLowerCase()
 	const scopeFilter = { agentId, scope, scopeRef }
 
-	const episodes = await settled("topic-brief.episodes", () =>
-		episodesCollection(db, prefix)
-			.find({
-				...scopeFilter,
-				status: { $ne: "deleted" },
-				...(regex
-					? {
-							$or: [
-								{ title: regex },
-								{ summary: regex },
-								{ tags: regex },
-								{ topics: normalized },
-							],
-						}
-					: {}),
-			})
-			.sort({ "timeRange.end": -1 })
-			.limit(maxItems)
-			.toArray(),
+	const episodes = await settled(
+		"topic-brief.episodes",
+		() =>
+			episodesCollection(db, prefix)
+				.find({
+					...scopeFilter,
+					status: { $ne: "deleted" },
+					...(regex
+						? {
+								$or: [
+									{ title: regex },
+									{ summary: regex },
+									{ tags: regex },
+									{ topics: normalized },
+								],
+							}
+						: {}),
+				})
+				.sort({ "timeRange.end": -1 })
+				.limit(maxItems)
+				.toArray(),
+		query,
 	)
-	const structured = await settled("topic-brief.structured", () =>
-		structuredMemCollection(db, prefix)
-			.find({
-				...scopeFilter,
-				state: "active",
-				...(regex
-					? {
-							$or: [
-								{ key: regex },
-								{ value: regex },
-								{ context: regex },
-								{ tags: regex },
-							],
-						}
-					: {}),
-				// P4.4.1 (B1): hide TTL-expired docs until the sweep removes them;
-				// $and because the regex lane may occupy the top-level $or.
-				$and: [buildUnexpiredClause()],
-			})
-			.sort({ updatedAt: -1 })
-			.limit(maxItems)
-			.toArray(),
+	const structured = await settled(
+		"topic-brief.structured",
+		() =>
+			structuredMemCollection(db, prefix)
+				.find({
+					...scopeFilter,
+					state: "active",
+					...(regex
+						? {
+								$or: [
+									{ key: regex },
+									{ value: regex },
+									{ context: regex },
+									{ tags: regex },
+								],
+							}
+						: {}),
+					// P4.4.1 (B1): hide TTL-expired docs until the sweep removes them;
+					// $and because the regex lane may occupy the top-level $or.
+					$and: [buildUnexpiredClause()],
+				})
+				.sort({ updatedAt: -1 })
+				.limit(maxItems)
+				.toArray(),
+		query,
 	)
-	const procedures = await settled("topic-brief.procedures", () =>
-		proceduresCollection(db, prefix)
-			.find({
-				...scopeFilter,
-				state: "active",
-				...(regex
-					? {
-							$or: [
-								{ name: regex },
-								{ steps: regex },
-								{ intentTags: regex },
-								{ searchText: regex },
-							],
-						}
-					: {}),
-			})
-			.sort({ updatedAt: -1 })
-			.limit(maxItems)
-			.toArray(),
+	const procedures = await settled(
+		"topic-brief.procedures",
+		() =>
+			proceduresCollection(db, prefix)
+				.find({
+					...scopeFilter,
+					state: "active",
+					...(regex
+						? {
+								$or: [
+									{ name: regex },
+									{ steps: regex },
+									{ intentTags: regex },
+									{ searchText: regex },
+								],
+							}
+						: {}),
+				})
+				.sort({ updatedAt: -1 })
+				.limit(maxItems)
+				.toArray(),
+		query,
 	)
 
 	const sections: MemoryDiscoveryProjectionSection[] = []
@@ -679,25 +725,28 @@ async function buildWhatChanged(params: {
 		$lte: resolvedTimeRange.end,
 	}
 
-	const revisions = await settled("what-changed.structured-revisions", () =>
-		structuredMemRevisionsCollection(db, prefix)
-			.find({
-				...scopeFilter,
-				supersededAt: dateFilter,
-				...(regex
-					? {
-							$or: [
-								{ key: regex },
-								{ value: regex },
-								{ context: regex },
-								{ tags: regex },
-							],
-						}
-					: {}),
-			})
-			.sort({ supersededAt: -1 })
-			.limit(laneQueryLimit)
-			.toArray(),
+	const revisions = await settled(
+		"what-changed.structured-revisions",
+		() =>
+			structuredMemRevisionsCollection(db, prefix)
+				.find({
+					...scopeFilter,
+					supersededAt: dateFilter,
+					...(regex
+						? {
+								$or: [
+									{ key: regex },
+									{ value: regex },
+									{ context: regex },
+									{ tags: regex },
+								],
+							}
+						: {}),
+				})
+				.sort({ supersededAt: -1 })
+				.limit(laneQueryLimit)
+				.toArray(),
+		query,
 	)
 	const revisionDocs = pickLatestDocuments(revisions ?? [], {
 		identity: (doc) => {
@@ -720,18 +769,21 @@ async function buildWhatChanged(params: {
 		})
 		.filter((value): value is { type: string; key: string } => value !== null)
 	const currentStructured = revisionFilters.length
-		? await settled("what-changed.structured-current", () =>
-				structuredMemCollection(db, prefix)
-					.find({
-						...scopeFilter,
-						state: "active",
-						$or: revisionFilters,
-						// P4.4.1 (B1): an expired "current" record reads as gone even
-						// before the TTL sweep; $and because $or carries the revision
-						// identity set.
-						$and: [buildUnexpiredClause()],
-					})
-					.toArray(),
+		? await settled(
+				"what-changed.structured-current",
+				() =>
+					structuredMemCollection(db, prefix)
+						.find({
+							...scopeFilter,
+							state: "active",
+							$or: revisionFilters,
+							// P4.4.1 (B1): an expired "current" record reads as gone even
+							// before the TTL sweep; $and because $or carries the revision
+							// identity set.
+							$and: [buildUnexpiredClause()],
+						})
+						.toArray(),
+				query,
 			)
 		: []
 	const currentStructuredByKey = new Map<string, Document>()
@@ -741,25 +793,28 @@ async function buildWhatChanged(params: {
 			doc,
 		)
 	}
-	const procedures = await settled("what-changed.procedures", () =>
-		proceduresCollection(db, prefix)
-			.find({
-				...scopeFilter,
-				updatedAt: dateFilter,
-				...(regex
-					? {
-							$or: [
-								{ name: regex },
-								{ steps: regex },
-								{ intentTags: regex },
-								{ searchText: regex },
-							],
-						}
-					: {}),
-			})
-			.sort({ updatedAt: -1 })
-			.limit(laneQueryLimit)
-			.toArray(),
+	const procedures = await settled(
+		"what-changed.procedures",
+		() =>
+			proceduresCollection(db, prefix)
+				.find({
+					...scopeFilter,
+					updatedAt: dateFilter,
+					...(regex
+						? {
+								$or: [
+									{ name: regex },
+									{ steps: regex },
+									{ intentTags: regex },
+									{ searchText: regex },
+								],
+							}
+						: {}),
+				})
+				.sort({ updatedAt: -1 })
+				.limit(laneQueryLimit)
+				.toArray(),
+		query,
 	)
 	const procedureDocs = pickLatestDocuments(procedures ?? [], {
 		identity: (doc) =>
@@ -767,24 +822,27 @@ async function buildWhatChanged(params: {
 		timestamp: (doc) =>
 			doc.updatedAt instanceof Date ? doc.updatedAt : undefined,
 	})
-	const relations = await settled("what-changed.relations", () =>
-		relationsCollection(db, prefix)
-			.find({
-				...scopeFilter,
-				updatedAt: dateFilter,
-				...(regex
-					? {
-							$or: [
-								{ fromEntityId: regex },
-								{ toEntityId: regex },
-								{ type: regex },
-							],
-						}
-					: {}),
-			})
-			.sort({ updatedAt: -1 })
-			.limit(laneQueryLimit)
-			.toArray(),
+	const relations = await settled(
+		"what-changed.relations",
+		() =>
+			relationsCollection(db, prefix)
+				.find({
+					...scopeFilter,
+					updatedAt: dateFilter,
+					...(regex
+						? {
+								$or: [
+									{ fromEntityId: regex },
+									{ toEntityId: regex },
+									{ type: regex },
+								],
+							}
+						: {}),
+				})
+				.sort({ updatedAt: -1 })
+				.limit(laneQueryLimit)
+				.toArray(),
+		query,
 	)
 	const relationDocs = pickLatestDocuments(relations ?? [], {
 		identity: (doc) => {
@@ -800,16 +858,19 @@ async function buildWhatChanged(params: {
 		timestamp: (doc) =>
 			doc.updatedAt instanceof Date ? doc.updatedAt : undefined,
 	})
-	const events = await settled("what-changed.events", () =>
-		eventsCollection(db, prefix)
-			.find({
-				...scopeFilter,
-				timestamp: dateFilter,
-				...(regex ? { body: regex } : {}),
-			})
-			.sort({ timestamp: -1 })
-			.limit(laneQueryLimit)
-			.toArray(),
+	const events = await settled(
+		"what-changed.events",
+		() =>
+			eventsCollection(db, prefix)
+				.find({
+					...scopeFilter,
+					timestamp: dateFilter,
+					...(regex ? { body: regex } : {}),
+				})
+				.sort({ timestamp: -1 })
+				.limit(laneQueryLimit)
+				.toArray(),
+		query,
 	)
 
 	const sections: MemoryDiscoveryProjectionSection[] = []
@@ -886,67 +947,76 @@ async function buildContradictionReport(params: {
 	const scopeFilter = { agentId, scope, scopeRef }
 	const stateFilter = { $in: ["conflicted", "invalidated"] }
 
-	const structured = await settled("contradiction.structured", () =>
-		structuredMemCollection(db, prefix)
-			.find({
-				...scopeFilter,
-				state: stateFilter,
-				...(regex
-					? {
-							$or: [
-								{ key: regex },
-								{ value: regex },
-								{ context: regex },
-								{ tags: regex },
-							],
-						}
-					: {}),
-				// P4.4.1 (B1): hide TTL-expired docs until the sweep removes them;
-				// $and because the regex lane may occupy the top-level $or.
-				$and: [buildUnexpiredClause()],
-			})
-			.sort({ updatedAt: -1 })
-			.limit(maxItems)
-			.toArray(),
+	const structured = await settled(
+		"contradiction.structured",
+		() =>
+			structuredMemCollection(db, prefix)
+				.find({
+					...scopeFilter,
+					state: stateFilter,
+					...(regex
+						? {
+								$or: [
+									{ key: regex },
+									{ value: regex },
+									{ context: regex },
+									{ tags: regex },
+								],
+							}
+						: {}),
+					// P4.4.1 (B1): hide TTL-expired docs until the sweep removes them;
+					// $and because the regex lane may occupy the top-level $or.
+					$and: [buildUnexpiredClause()],
+				})
+				.sort({ updatedAt: -1 })
+				.limit(maxItems)
+				.toArray(),
+		query,
 	)
-	const procedures = await settled("contradiction.procedures", () =>
-		proceduresCollection(db, prefix)
-			.find({
-				...scopeFilter,
-				state: stateFilter,
-				...(regex
-					? {
-							$or: [
-								{ name: regex },
-								{ steps: regex },
-								{ intentTags: regex },
-								{ searchText: regex },
-							],
-						}
-					: {}),
-			})
-			.sort({ updatedAt: -1 })
-			.limit(maxItems)
-			.toArray(),
+	const procedures = await settled(
+		"contradiction.procedures",
+		() =>
+			proceduresCollection(db, prefix)
+				.find({
+					...scopeFilter,
+					state: stateFilter,
+					...(regex
+						? {
+								$or: [
+									{ name: regex },
+									{ steps: regex },
+									{ intentTags: regex },
+									{ searchText: regex },
+								],
+							}
+						: {}),
+				})
+				.sort({ updatedAt: -1 })
+				.limit(maxItems)
+				.toArray(),
+		query,
 	)
-	const relations = await settled("contradiction.relations", () =>
-		relationsCollection(db, prefix)
-			.find({
-				...scopeFilter,
-				state: stateFilter,
-				...(regex
-					? {
-							$or: [
-								{ fromEntityId: regex },
-								{ toEntityId: regex },
-								{ type: regex },
-							],
-						}
-					: {}),
-			})
-			.sort({ updatedAt: -1 })
-			.limit(maxItems)
-			.toArray(),
+	const relations = await settled(
+		"contradiction.relations",
+		() =>
+			relationsCollection(db, prefix)
+				.find({
+					...scopeFilter,
+					state: stateFilter,
+					...(regex
+						? {
+								$or: [
+									{ fromEntityId: regex },
+									{ toEntityId: regex },
+									{ type: regex },
+								],
+							}
+						: {}),
+				})
+				.sort({ updatedAt: -1 })
+				.limit(maxItems)
+				.toArray(),
+		query,
 	)
 
 	const sections: MemoryDiscoveryProjectionSection[] = []
@@ -999,6 +1069,7 @@ function projectionKindRequiresQuery(
 }
 
 export async function buildDiscoveryProjection(params: {
+	admission?: AdmissionToken
 	db: Db
 	prefix: string
 	agentId: string
@@ -1011,6 +1082,12 @@ export async function buildDiscoveryProjection(params: {
 }): Promise<MemoryDiscoveryProjection> {
 	const startedAt = Date.now()
 	const { db, prefix, agentId, kind, query, scope, scopeRef } = params
+	if (
+		params.admission &&
+		(params.admission.kind !== "admission" ||
+			params.admission.agentId !== agentId)
+	)
+		throw new ErasureGateConflictError(agentId)
 	const maxItems = clampMaxItems(params.maxItems)
 
 	if (projectionKindRequiresQuery(kind) && !query?.trim()) {
@@ -1085,7 +1162,8 @@ export async function buildDiscoveryProjection(params: {
 			builtAt: new Date(),
 		}
 
-		await recordProjectionRun({
+		await recordReadProjectionRun({
+			admission: params.admission,
 			db,
 			prefix,
 			run: {
@@ -1099,7 +1177,8 @@ export async function buildDiscoveryProjection(params: {
 
 		return projection
 	} catch (error) {
-		await recordProjectionRun({
+		await recordReadProjectionRun({
+			admission: params.admission,
 			db,
 			prefix,
 			run: {

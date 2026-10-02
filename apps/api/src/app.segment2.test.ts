@@ -763,7 +763,7 @@ describe("createApp", () => {
 		])
 
 		expect(() => createApp()).toThrow(
-			"MEMONGO_API_SCOPED_KEYS policy for token scoped-secret must constrain agentIds, scopes, or scopeRefs",
+			"MEMONGO_API_SCOPED_KEYS policy must constrain agentIds, scopes, or scopeRefs",
 		)
 	})
 
@@ -869,6 +869,125 @@ describe("createApp", () => {
 		expect(
 			bridgeMocks.memongoBridgeSearchWithDegradation,
 		).not.toHaveBeenCalled()
+	})
+
+	it("threads the server-derived KB restriction through every reachable route", async () => {
+		process.env.MEMONGO_API_SCOPED_KEYS = JSON.stringify([
+			{ token: "agent-only", agentIds: ["codex"] },
+		])
+		bridgeMocks.memongoBridgeGetState.mockResolvedValue({
+			profile: {},
+			blocks: {},
+			bundle: {},
+		})
+		bridgeMocks.memongoBridgeRelevanceExplain.mockResolvedValue({
+			health: "healthy",
+			results: [],
+		})
+		const app = createApp()
+		const headers = {
+			Authorization: "Bearer agent-only",
+			"Content-Type": "application/json",
+		}
+
+		const responses = await Promise.all([
+			app.request("/v1/search", {
+				method: "POST",
+				headers,
+				body: JSON.stringify({
+					agentId: "codex",
+					query: "authorization probe",
+					kbRestricted: false,
+				}),
+			}),
+			app.request("/v1/search-detailed", {
+				method: "POST",
+				headers,
+				body: JSON.stringify({
+					agentId: "codex",
+					query: "authorization probe",
+					kbRestricted: false,
+				}),
+			}),
+			app.request("/v1/context-bundle", {
+				method: "POST",
+				headers,
+				body: JSON.stringify({
+					agentId: "codex",
+					query: "authorization probe",
+					kbRestricted: false,
+				}),
+			}),
+			app.request("/v1/state?agentId=codex", { headers }),
+			app.request("/v1/admin/relevance/explain", {
+				method: "POST",
+				headers,
+				body: JSON.stringify({
+					agentId: "codex",
+					query: "authorization probe",
+					kbRestricted: false,
+				}),
+			}),
+		])
+
+		expect(responses.map((response) => response.status)).toEqual([
+			200, 200, 200, 200, 200,
+		])
+		for (const mock of [
+			bridgeMocks.memongoBridgeSearchWithDegradation,
+			bridgeMocks.memongoBridgeSearchDetailed,
+			bridgeMocks.memongoBridgeBuildContextBundle,
+			bridgeMocks.memongoBridgeGetState,
+			bridgeMocks.memongoBridgeRelevanceExplain,
+		]) {
+			expect(mock).toHaveBeenCalledWith(
+				expect.objectContaining({ kbRestricted: true }),
+			)
+		}
+	})
+
+	it("keeps the KB restriction request-local across alternating credentials", async () => {
+		process.env.MEMONGO_API_KEY = "admin-secret"
+		process.env.MEMONGO_API_SCOPED_KEYS = JSON.stringify([
+			{ token: "agent-only", agentIds: ["codex"] },
+			{
+				token: "scope-ref-key",
+				agentIds: ["codex"],
+				scopeRefs: ["tenant:codex"],
+			},
+		])
+		const app = createApp()
+		const request = (token: string, scopeRef?: string) =>
+			app.request("/v1/search", {
+				method: "POST",
+				headers: {
+					Authorization: `Bearer ${token}`,
+					"Content-Type": "application/json",
+				},
+				body: JSON.stringify({
+					agentId: "codex",
+					query: "authorization probe",
+					scopeRef,
+				}),
+			})
+
+		const statuses = []
+		for (const [token, scopeRef] of [
+			["admin-secret", undefined],
+			["agent-only", undefined],
+			["scope-ref-key", "tenant:codex"],
+			["agent-only", undefined],
+			["admin-secret", undefined],
+		] as const) {
+			statuses.push((await request(token, scopeRef)).status)
+		}
+
+		expect(statuses).toEqual([200, 200, 200, 200, 200])
+		expect(
+			bridgeMocks.memongoBridgeSearchWithDegradation.mock.calls.map(
+				([params]) => params.kbRestricted,
+			),
+		).toEqual([undefined, true, false, true, undefined])
 	})
 
 	it("keeps MEMONGO_API_KEY as the admin key when scoped keys are configured", async () => {
@@ -981,6 +1100,48 @@ describe("createApp", () => {
 				invalidAt: "2026-04-10T12:00:00.000Z",
 			}),
 		)
+	})
+
+	it.each([
+		{
+			path: "/v1/add",
+			body: { content: "remember this" },
+			bridge: bridgeMocks.memongoBridgeAdd,
+		},
+		{
+			path: "/v1/write-event",
+			body: { role: "user", body: "remember this" },
+			bridge: bridgeMocks.memongoBridgeWriteConversationEvent,
+		},
+		{
+			path: "/v1/write-events",
+			body: { events: [{ role: "user", body: "remember this" }] },
+			bridge: bridgeMocks.memongoBridgeWriteConversationEventsBatch,
+		},
+	])("maps an erasure gate conflict from $path to a redacted 409", async ({
+		path,
+		body,
+		bridge,
+	}) => {
+		const conflict = new Error(
+			"erasure gate conflict at mongodb://writer:super-secret@localhost",
+		)
+		conflict.name = "ErasureGateConflictError"
+		bridge.mockRejectedValueOnce(conflict)
+
+		const res = await createApp().request(path, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify(body),
+		})
+
+		expect(res.status).toBe(409)
+		const payload = (await res.json()) as {
+			error: { code: string; message: string }
+		}
+		expect(payload.error.code).toBe("ERASURE_GATE_CONFLICT")
+		expect(payload.error.message).toBe("write conflicts with active erasure")
+		expect(payload.error.message).not.toContain("super-secret")
 	})
 
 	it.each([

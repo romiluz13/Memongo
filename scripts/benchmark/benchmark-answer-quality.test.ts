@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import {
 	buildJudgedAnswerCases,
 	buildUnavailableE2eQaEnvelope,
@@ -6,10 +6,16 @@ import {
 	runBenchmarkJudgedAnswers,
 	type BenchmarkJudgedAnswerMaterial,
 } from "./benchmark-answer-quality.js"
+import type { BenchmarkRunAccounting } from "./benchmark-parity-envelope.js"
+import { runE2eQa } from "../mongodb-e2e-qa.js"
 import type {
 	MemoryBenchmarkEvaluatorIdentity,
 	MemoryBenchmarkOfficialMetrics,
 } from "../../packages/memory-engine/src/types.js"
+
+// The harness is exercised through its own unit suite; here it is stubbed so
+// the benchmark-contract layer can be tested without LLM calls.
+vi.mock("../mongodb-e2e-qa.js", () => ({ runE2eQa: vi.fn() }))
 
 const evaluatorIdentity: MemoryBenchmarkEvaluatorIdentity = {
 	suite: "longmemeval",
@@ -176,6 +182,117 @@ describe("mergeLongMemEvalAnswerQuality", () => {
 			"no enrichment provider configured",
 		)
 	})
+
+	it("projects the official summary into longMemEval.answerQuality.official (Slice B, additive)", () => {
+		const official = {
+			protocol: "official-anscheck" as const,
+			coverage: "full" as const,
+			overallAccuracy: 0.75,
+			taskAveragedAccuracy: 0.7,
+			abstentionAccuracy: 0.5,
+			abstentionCount: 2,
+			perType: [
+				{ questionType: "single-session-user", accuracy: 0.8, count: 5 },
+				{ questionType: "temporal-reasoning", accuracy: 0.6, count: 5 },
+			],
+			missingQuestionIds: [],
+			lostPreCheckpointQuestionIds: [],
+			accountingCompleteness: "complete" as const,
+			export: { kind: "full" as const, path: "out.jsonl", rows: 10 },
+		}
+		const merged = mergeLongMemEvalAnswerQuality({
+			officialMetrics: baseMetrics,
+			e2eQa: {
+				answerModel: "answer-model",
+				judge: "judge-model",
+				judgeVersion: "v1",
+				accuracy: 0.75,
+				latencyMs: null,
+				judgeFalsePositiveRate: 0,
+				cases: { eligible: 10, attempted: 10, completed: 10, failed: 0 },
+				attempts: { answerGeneration: 10, answerJudge: 10, decoyJudge: 0 },
+				caseResults: [],
+				official,
+			},
+		})
+		expect(merged?.longMemEval?.answerQuality?.official).toEqual(official)
+		// The legacy answerQuality projection still happens alongside.
+		expect(merged?.longMemEval?.answerQuality?.accuracy).toBe(0.75)
+		// No unreleased `officialQa` sibling on longMemEval: the nested
+		// answerQuality.official location is the only projection. (The field is
+		// gone from the type, so the sibling check reads through a widening
+		// cast on purpose.)
+		expect(
+			(merged?.longMemEval as { officialQa?: unknown } | undefined)?.officialQa,
+		).toBeUndefined()
+		expect(baseMetrics.longMemEval?.answerQuality?.official).toBeUndefined()
+	})
+
+	it("leaves answerQuality.official absent for envelopes without an official block", () => {
+		const merged = mergeLongMemEvalAnswerQuality({
+			officialMetrics: baseMetrics,
+			e2eQa: {
+				answerModel: "answer-model",
+				judge: "judge-model",
+				judgeVersion: "v1",
+				accuracy: 0.5,
+				latencyMs: 20,
+				judgeFalsePositiveRate: 0,
+				cases: { eligible: 2, attempted: 2, completed: 2, failed: 0 },
+				attempts: { answerGeneration: 2, answerJudge: 2, decoyJudge: 0 },
+				caseResults: [],
+			},
+		})
+		expect(merged?.longMemEval?.answerQuality?.official).toBeUndefined()
+		expect(
+			(merged?.longMemEval as { officialQa?: unknown } | undefined)?.officialQa,
+		).toBeUndefined()
+	})
+
+	it("projects a customJudge envelope into longMemEval.answerQuality.customJudge and omits official (custom-judge integration)", () => {
+		const customJudge = {
+			protocol: "custom-judge-anscheck" as const,
+			judgeModel: "gpt-5.6-luna",
+			coverage: "full" as const,
+			overallAccuracy: 0.75,
+			taskAveragedAccuracy: 0.7,
+			abstentionAccuracy: 0.5,
+			abstentionCount: 2,
+			perType: [
+				{ questionType: "single-session-user", accuracy: 0.8, count: 5 },
+				{ questionType: "temporal-reasoning", accuracy: 0.6, count: 5 },
+			],
+			missingQuestionIds: [],
+			lostPreCheckpointQuestionIds: [],
+			accountingCompleteness: "complete" as const,
+			export: {
+				kind: "full" as const,
+				path: "out.custom-judge.jsonl",
+				rows: 10,
+			},
+		}
+		const merged = mergeLongMemEvalAnswerQuality({
+			officialMetrics: baseMetrics,
+			e2eQa: {
+				answerModel: "answer-model",
+				judge: "gpt-5.6-luna",
+				judgeVersion: "v1",
+				accuracy: 0.75,
+				latencyMs: null,
+				judgeFalsePositiveRate: 0,
+				cases: { eligible: 10, attempted: 10, completed: 10, failed: 0 },
+				attempts: { answerGeneration: 10, answerJudge: 10, decoyJudge: 0 },
+				caseResults: [],
+				customJudge,
+			},
+		})
+		expect(merged?.longMemEval?.answerQuality?.customJudge).toEqual(customJudge)
+		// A custom-judge envelope carries no official summary: the official
+		// block must be omitted by construction, never fabricated.
+		expect(merged?.longMemEval?.answerQuality?.official).toBeUndefined()
+		expect(merged?.longMemEval?.answerQuality?.accuracy).toBe(0.75)
+		expect(baseMetrics.longMemEval?.answerQuality?.customJudge).toBeUndefined()
+	})
 })
 
 describe("runBenchmarkJudgedAnswers", () => {
@@ -183,14 +300,38 @@ describe("runBenchmarkJudgedAnswers", () => {
 		"MEMONGO_ENRICHMENT_API_KEY",
 		"MEMONGO_ENRICHMENT_BASE_URL",
 		"MEMONGO_ENRICHMENT_MODEL",
+		"MEMONGO_BENCHMARK_JUDGE_MODEL",
 	] as const
 	const saved: Record<string, string | undefined> = {}
+
+	const oneAnswerMaterial = () =>
+		new Map<string, BenchmarkJudgedAnswerMaterial>([
+			[
+				"case-1",
+				{
+					caseId: "case-1",
+					question: "q",
+					goldAnswer: "a",
+					abstention: false,
+					contextPassages: ["p"],
+				},
+			],
+		])
 
 	beforeEach(() => {
 		for (const key of ENV_KEYS) {
 			saved[key] = process.env[key]
 			delete process.env[key]
 		}
+		vi.mocked(runE2eQa).mockReset()
+		// Default stub so tests that (wrongly) reach the harness fail on their
+		// policy assertions instead of crashing on an undefined envelope.
+		vi.mocked(runE2eQa).mockImplementation(async () =>
+			buildUnavailableE2eQaEnvelope({
+				reason: "stubbed harness",
+				eligibleCases: 0,
+			}),
+		)
 	})
 
 	afterEach(() => {
@@ -232,7 +373,7 @@ describe("runBenchmarkJudgedAnswers", () => {
 		})
 		expect(envelope?.accuracy).toBeNull()
 		expect(envelope?.unavailableReason).toContain(
-			"no enrichment provider configured",
+			"no benchmark answer provider configured",
 		)
 	})
 
@@ -279,7 +420,127 @@ describe("runBenchmarkJudgedAnswers", () => {
 		})
 		expect(envelope?.accuracy).toBeNull()
 		expect(envelope?.unavailableReason).toContain(
-			"enrichment provider misconfigured",
+			"benchmark answer provider misconfigured",
 		)
+	})
+
+	it("reports unavailable when the required judge model is not configured", async () => {
+		process.env.MEMONGO_ENRICHMENT_API_KEY = "test-key"
+		process.env.MEMONGO_ENRICHMENT_BASE_URL = "https://bench.example.invalid"
+		process.env.MEMONGO_ENRICHMENT_MODEL = "answer-model"
+		const envelope = await runBenchmarkJudgedAnswers({
+			datasetKind: "longmemeval",
+			materialByCaseId: oneAnswerMaterial(),
+			resumedFromCheckpoint: false,
+		})
+		expect(envelope?.accuracy).toBeNull()
+		expect(envelope?.unavailableReason).toContain(
+			"MEMONGO_BENCHMARK_JUDGE_MODEL",
+		)
+		// The refusal happens before any QA call is attempted.
+		expect(runE2eQa).not.toHaveBeenCalled()
+	})
+
+	it("reports unavailable when the judge model equals the answer model", async () => {
+		process.env.MEMONGO_ENRICHMENT_API_KEY = "test-key"
+		process.env.MEMONGO_ENRICHMENT_BASE_URL = "https://bench.example.invalid"
+		process.env.MEMONGO_ENRICHMENT_MODEL = "answer-model"
+		process.env.MEMONGO_BENCHMARK_JUDGE_MODEL = "answer-model"
+		const envelope = await runBenchmarkJudgedAnswers({
+			datasetKind: "longmemeval",
+			materialByCaseId: oneAnswerMaterial(),
+			resumedFromCheckpoint: false,
+		})
+		expect(envelope?.accuracy).toBeNull()
+		expect(envelope?.unavailableReason).toContain("must differ from")
+		expect(runE2eQa).not.toHaveBeenCalled()
+	})
+
+	it("runs the QA harness with distinct per-role models and forwards transport usage into the accounting per role", async () => {
+		process.env.MEMONGO_ENRICHMENT_API_KEY = "test-key"
+		process.env.MEMONGO_ENRICHMENT_BASE_URL = "https://bench.example.invalid"
+		process.env.MEMONGO_ENRICHMENT_MODEL = "answer-model"
+		process.env.MEMONGO_BENCHMARK_JUDGE_MODEL = "judge-model"
+		const recorded: Array<{
+			kind: "attempt" | "success" | "failure"
+			operation: string
+			metadata: Record<string, unknown>
+		}> = []
+		const accounting = {
+			snapshot: () => {
+				throw new Error("not used in this test")
+			},
+			recordAttempt: (operation: string, metadata?: Record<string, unknown>) =>
+				recorded.push({
+					kind: "attempt",
+					operation,
+					metadata: { ...metadata },
+				}),
+			recordSuccess: (operation: string, metadata?: Record<string, unknown>) =>
+				recorded.push({
+					kind: "success",
+					operation,
+					metadata: { ...metadata },
+				}),
+			recordFailure: (operation: string, metadata?: Record<string, unknown>) =>
+				recorded.push({
+					kind: "failure",
+					operation,
+					metadata: { ...metadata },
+				}),
+		} as unknown as BenchmarkRunAccounting
+		vi.mocked(runE2eQa).mockImplementationOnce(async (qaParams) => {
+			qaParams.onProviderCall?.("answer-generation", "attempted")
+			qaParams.onProviderCall?.("answer-generation", "succeeded", {
+				inputTokens: 11,
+				outputTokens: 7,
+			})
+			qaParams.onProviderCall?.("answer-judge", "succeeded")
+			qaParams.onProviderCall?.("decoy-judge", "failed")
+			return buildUnavailableE2eQaEnvelope({
+				reason: "stubbed",
+				eligibleCases: 1,
+			})
+		})
+		await runBenchmarkJudgedAnswers({
+			datasetKind: "longmemeval",
+			materialByCaseId: oneAnswerMaterial(),
+			resumedFromCheckpoint: false,
+			accounting,
+		})
+		expect(runE2eQa).toHaveBeenCalledTimes(1)
+		const qaParams = vi.mocked(runE2eQa).mock.calls[0]?.[0]
+		expect(qaParams?.model).toBe("answer-model")
+		expect(qaParams?.answerModel).toBe("answer-model")
+		expect(qaParams?.judgeModel).toBe("judge-model")
+		const providerName = qaParams?.provider.name
+		expect(providerName).toBeTruthy()
+		expect(recorded).toEqual([
+			{
+				kind: "attempt",
+				operation: "answer-generation",
+				metadata: { provider: providerName, model: "answer-model" },
+			},
+			{
+				kind: "success",
+				operation: "answer-generation",
+				metadata: {
+					provider: providerName,
+					model: "answer-model",
+					inputTokens: 11,
+					outputTokens: 7,
+				},
+			},
+			{
+				kind: "success",
+				operation: "answer-judge",
+				metadata: { provider: providerName, model: "judge-model" },
+			},
+			{
+				kind: "failure",
+				operation: "decoy-judge",
+				metadata: { provider: providerName, model: "judge-model" },
+			},
+		])
 	})
 })

@@ -123,6 +123,7 @@ describe("mongodb-memory-jobs", () => {
 				jobType: "extraction",
 				workerId: "worker-a",
 				leaseMs: 30_000,
+				admissionEpoch: 7,
 				now,
 			}),
 		).resolves.toEqual(claimed)
@@ -151,9 +152,13 @@ describe("mongodb-memory-jobs", () => {
 					},
 					// C4: a failed job stays claimable until its attempt budget is
 					// spent, so a transient failure no longer discards the work.
+					// Terminal dead letters (deadLetterAt set, possibly at a low
+					// truthful attempt count with no retryAt) are excluded — a
+					// retry would be a pointless identical request (p6).
 					{
 						status: "failed",
 						attempts: { $lt: MEMORY_JOB_MAX_ATTEMPTS },
+						deadLetterAt: { $exists: false },
 						$or: [{ retryAt: { $exists: false } }, { retryAt: { $lte: now } }],
 					},
 				],
@@ -170,15 +175,198 @@ describe("mongodb-memory-jobs", () => {
 						leaseExpiresAt: { $add: ["$$NOW", 30_000] },
 						attempts: { $add: [{ $ifNull: ["$attempts", 0] }, 1] },
 						leaseToken: expect.any(String),
+						admissionEpoch: { $ifNull: ["$admissionEpoch", 7] },
 					}),
 				},
-				{ $unset: ["completedAt", "error", "stagedAt", "retryAt"] },
+				{ $unset: ["completedAt", "error", "stagedAt", "retryAt", "tracking"] },
 			],
 			expect.objectContaining({
 				sort: { createdAt: 1, jobId: 1 },
 				returnDocument: "after",
 				writeConcern: { w: "majority", wtimeoutMS: 5_000 },
 			}),
+		)
+	})
+
+	it("commits an effect batch only after fencing the gate and exact live lease", async () => {
+		const { withClaimedMemoryJobEffectBatch } = await import(
+			"./mongodb-memory-jobs.js"
+		)
+		const session = {
+			withTransaction: vi.fn(async (fn: () => Promise<unknown>) => await fn()),
+			endSession: vi.fn(async () => undefined),
+		} as unknown as ClientSession
+		const gateUpdate = vi.fn(async () => ({ matchedCount: 1 }) as UpdateResult)
+		const jobUpdate = vi.fn(async () => ({ matchedCount: 1 }) as UpdateResult)
+		const db = {
+			client: { startSession: vi.fn(() => session) },
+			collection: vi.fn((name: string) => {
+				if (name === "test_meta") {
+					return mockCollection({
+						findOne: vi.fn(async () => ({
+							_id: "tenant-erasure-gate:agent-1",
+							agentId: "agent-1",
+							epoch: 7,
+							state: "open",
+							serial: 2,
+						})),
+						updateOne: gateUpdate,
+					})
+				}
+				if (name === "test_memory_jobs") {
+					return mockCollection({ updateOne: jobUpdate })
+				}
+				return mockCollection()
+			}),
+		} as unknown as Db
+		const effect = vi.fn(async (received: ClientSession) => {
+			expect(received).toBe(session)
+			return "committed"
+		})
+
+		await expect(
+			withClaimedMemoryJobEffectBatch({
+				db,
+				prefix: "test_",
+				token: { kind: "admission", agentId: "agent-1", epoch: 7 },
+				jobId: "job-1",
+				agentId: "agent-1",
+				leaseOwner: "worker-a",
+				leaseToken: "token-a",
+				fn: effect,
+			}),
+		).resolves.toBe("committed")
+
+		expect(jobUpdate).toHaveBeenCalledWith(
+			expect.objectContaining({
+				jobId: "job-1",
+				agentId: "agent-1",
+				status: "running",
+				leaseOwner: "worker-a",
+				leaseToken: "token-a",
+				leaseExpiresAt: { $gt: expect.any(Date) },
+				admissionEpoch: 7,
+			}),
+			{
+				$inc: { effectFenceSerial: 1 },
+				$currentDate: { effectFenceAt: true },
+			},
+			{ session },
+		)
+		expect(effect).toHaveBeenCalledOnce()
+		expect(gateUpdate).toHaveBeenCalledOnce()
+	})
+
+	it("fails an effect batch closed when the exact lease is no longer owned", async () => {
+		const { withClaimedMemoryJobEffectBatch } = await import(
+			"./mongodb-memory-jobs.js"
+		)
+		const session = {
+			withTransaction: vi.fn(async (fn: () => Promise<unknown>) => await fn()),
+			endSession: vi.fn(async () => undefined),
+		} as unknown as ClientSession
+		const db = {
+			client: { startSession: vi.fn(() => session) },
+			collection: vi.fn((name: string) => {
+				if (name === "test_meta") {
+					return mockCollection({
+						findOne: vi.fn(async () => ({
+							_id: "tenant-erasure-gate:agent-1",
+							agentId: "agent-1",
+							epoch: 7,
+							state: "open",
+							serial: 2,
+						})),
+						updateOne: vi.fn(async () => ({ matchedCount: 1 }) as UpdateResult),
+					})
+				}
+				if (name === "test_memory_jobs") {
+					return mockCollection({
+						updateOne: vi.fn(async () => ({ matchedCount: 0 }) as UpdateResult),
+					})
+				}
+				return mockCollection()
+			}),
+		} as unknown as Db
+		const effect = vi.fn(async () => "must-not-run")
+
+		await expect(
+			withClaimedMemoryJobEffectBatch({
+				db,
+				prefix: "test_",
+				token: { kind: "admission", agentId: "agent-1", epoch: 7 },
+				jobId: "job-1",
+				agentId: "agent-1",
+				leaseOwner: "worker-a",
+				leaseToken: "stale-token",
+				fn: effect,
+			}),
+		).rejects.toMatchObject({
+			code: "MEMORY_JOB_OWNERSHIP_LOST",
+			jobId: "job-1",
+		})
+		expect(effect).not.toHaveBeenCalled()
+	})
+
+	it("binds a legacy claimed row to the captured admission epoch", async () => {
+		const { captureClaimedMemoryJobAdmissionEpoch } = await import(
+			"./mongodb-memory-jobs.js"
+		)
+		const session = {
+			withTransaction: vi.fn(async (fn: () => Promise<unknown>) => await fn()),
+			endSession: vi.fn(async () => undefined),
+		} as unknown as ClientSession
+		const jobUpdate = vi.fn(async () => ({ matchedCount: 1 }) as UpdateResult)
+		const db = {
+			client: { startSession: vi.fn(() => session) },
+			collection: vi.fn((name: string) => {
+				if (name === "test_meta") {
+					return mockCollection({
+						findOne: vi.fn(async () => ({
+							_id: "tenant-erasure-gate:agent-1",
+							agentId: "agent-1",
+							epoch: 9,
+							state: "open",
+							serial: 3,
+						})),
+						updateOne: vi.fn(async () => ({ matchedCount: 1 }) as UpdateResult),
+					})
+				}
+				if (name === "test_memory_jobs") {
+					return mockCollection({ updateOne: jobUpdate })
+				}
+				return mockCollection()
+			}),
+		} as unknown as Db
+
+		await expect(
+			captureClaimedMemoryJobAdmissionEpoch({
+				db,
+				prefix: "test_",
+				token: { kind: "admission", agentId: "agent-1", epoch: 9 },
+				jobId: "legacy-job",
+				agentId: "agent-1",
+				leaseOwner: "worker-a",
+				leaseToken: "token-a",
+			}),
+		).resolves.toBe(true)
+
+		expect(jobUpdate).toHaveBeenCalledWith(
+			expect.objectContaining({
+				jobId: "legacy-job",
+				leaseOwner: "worker-a",
+				leaseToken: "token-a",
+				admissionEpoch: { $exists: false },
+				leaseExpiresAt: { $gt: expect.any(Date) },
+			}),
+			{
+				$set: {
+					admissionEpoch: 9,
+					effectFenceAt: expect.any(Date),
+				},
+				$inc: { effectFenceSerial: 1 },
+			},
+			{ session },
 		)
 	})
 
@@ -368,7 +556,33 @@ describe("mongodb-memory-jobs", () => {
 			const telemetryInsert = vi.fn(async () => ({ insertedId: "t-1" }))
 			const db = mockDb({
 				test_memory_jobs: mockCollection({ updateOne }),
+				test_meta: mockCollection({
+					findOneAndUpdate: vi.fn(async () => ({
+						agentId: "agent-1",
+						epoch: 0,
+						state: "open",
+						serial: 0,
+					})),
+					findOne: vi.fn(async () => ({
+						agentId: "agent-1",
+						epoch: 0,
+						state: "open",
+						serial: 0,
+					})),
+				}),
 				test_memory_telemetry: mockCollection({ insertOne: telemetryInsert }),
+			})
+			Object.assign(db, {
+				listCollections: () => ({
+					toArray: async () => [{ type: "collection" }],
+				}),
+				client: {
+					startSession: () => ({
+						inTransaction: () => false,
+						withTransaction: async (fn: () => Promise<unknown>) => fn(),
+						endSession: async () => {},
+					}),
+				},
 			})
 
 			await expect(
@@ -414,6 +628,7 @@ describe("mongodb-memory-jobs", () => {
 				heartbeatAt: "",
 			})
 			// The transition is surfaced in telemetry for status dashboards.
+			await vi.waitFor(() => expect(telemetryInsert).toHaveBeenCalledTimes(1))
 			expect(telemetryInsert).toHaveBeenCalledWith(
 				expect.objectContaining({
 					ok: false,
@@ -421,6 +636,7 @@ describe("mongodb-memory-jobs", () => {
 					eventType: "extraction",
 					meta: { agentId: "agent-1", operation: "memory-job-dead-letter" },
 				}),
+				expect.objectContaining({ session: expect.any(Object) }),
 			)
 		})
 
@@ -545,6 +761,82 @@ describe("mongodb-memory-jobs", () => {
 		)
 	})
 
+	it("uses the caller session to release one staged job", async () => {
+		const { releaseStagedMemoryJob } = await import("./mongodb-memory-jobs.js")
+		const updateOne = vi.fn(async () => ({ matchedCount: 1 }) as UpdateResult)
+		const db = mockDb({
+			test_memory_jobs: mockCollection({ updateOne }),
+		})
+		const session = {} as ClientSession
+
+		await expect(
+			releaseStagedMemoryJob({
+				db,
+				prefix: "test_",
+				jobId: "job-transaction",
+				agentId: "agent-1",
+				session,
+			}),
+		).resolves.toBe(true)
+		expect(updateOne).toHaveBeenCalledWith(
+			expect.any(Object),
+			expect.any(Object),
+			{ session },
+		)
+	})
+
+	it("uses the caller session to read one job", async () => {
+		const { getMemoryJob } = await import("./mongodb-memory-jobs.js")
+		const findOne = vi.fn(async () => null)
+		const db = mockDb({
+			test_memory_jobs: mockCollection({ findOne }),
+		})
+		const session = {} as ClientSession
+
+		await expect(
+			getMemoryJob({
+				db,
+				prefix: "test_",
+				jobId: "job-transaction",
+				agentId: "agent-1",
+				session,
+			}),
+		).resolves.toBeNull()
+		expect(findOne).toHaveBeenCalledWith(
+			{ jobId: "job-transaction", agentId: "agent-1" },
+			{ session },
+		)
+	})
+
+	it("releases staged jobs in one batch update", async () => {
+		const { releaseStagedMemoryJobsBatch } = await import(
+			"./mongodb-memory-jobs.js"
+		)
+		const updateMany = vi.fn(async () => ({ matchedCount: 2 }) as UpdateResult)
+		const db = mockDb({
+			test_memory_jobs: mockCollection({ updateMany }),
+		})
+
+		await expect(
+			releaseStagedMemoryJobsBatch({
+				db,
+				prefix: "test_",
+				jobIds: ["job-1", "job-2"],
+				agentId: "agent-1",
+			}),
+		).resolves.toBe(2)
+		expect(updateMany).toHaveBeenCalledWith(
+			{
+				jobId: { $in: ["job-1", "job-2"] },
+				agentId: "agent-1",
+				status: "pending",
+				stagedAt: { $exists: true },
+			},
+			{ $unset: { stagedAt: "" } },
+			expect.any(Object),
+		)
+	})
+
 	it("creates many jobs in ONE unordered majority insertMany (P3.9)", async () => {
 		const { createMemoryJobsBatch } = await import("./mongodb-memory-jobs.js")
 		const insertMany = vi.fn(async () => ({
@@ -592,6 +884,44 @@ describe("mongodb-memory-jobs", () => {
 			{ ok: true, jobId: "extraction-evt-1" },
 			{ ok: true, jobId: "extraction-evt-2" },
 		])
+	})
+
+	it("uses the caller session for one batch insert and preserves prepared clocks", async () => {
+		const { createMemoryJobsBatch } = await import("./mongodb-memory-jobs.js")
+		const insertMany = vi.fn(async () => ({
+			acknowledged: true,
+			insertedCount: 1,
+		}))
+		const db = mockDb({
+			test_memory_jobs: mockCollection({ insertMany }),
+		})
+		const session = {} as import("mongodb").ClientSession
+		const createdAt = new Date("2026-09-08T12:00:00.000Z")
+
+		await createMemoryJobsBatch({
+			db,
+			prefix: "test_",
+			session,
+			jobs: [
+				{
+					jobId: "extraction-evt-1",
+					jobType: "extraction",
+					agentId: "agent-1",
+					status: "pending",
+					createdAt,
+				},
+			],
+		})
+
+		expect(insertMany).toHaveBeenCalledWith(
+			[
+				expect.objectContaining({
+					jobId: "extraction-evt-1",
+					createdAt,
+				}),
+			],
+			{ ordered: false, session },
+		)
 	})
 
 	it("maps per-item bulk failures, flagging E11000 as duplicate (P3.9)", async () => {
@@ -819,5 +1149,149 @@ describe("mongodb-memory-jobs", () => {
 			duplicate: true,
 		})
 		expect(results[1]).toEqual({ ok: true, jobId: "extraction-evt-2" })
+	})
+
+	it("terminal failure dead-letters at the TRUTHFUL attempt count (p6-approved design)", async () => {
+		const { failClaimedMemoryJob } = await import("./mongodb-memory-jobs.js")
+		const updateOne = vi.fn(async () => ({ matchedCount: 1 }) as UpdateResult)
+		const db = mockDb({ test_memory_jobs: mockCollection({ updateOne }) })
+
+		// First-attempt policy refusal: attempts is 1, not MEMORY_JOB_MAX.
+		await failClaimedMemoryJob({
+			db,
+			prefix: "test_",
+			jobId: "extraction-evt-1",
+			agentId: "agent-1",
+			leaseOwner: "worker-1",
+			leaseToken: "token-1",
+			jobType: "extraction",
+			completedAt: new Date("2026-09-20T12:00:00Z"),
+			now: new Date("2026-09-20T12:00:00Z"),
+			error:
+				"relation extraction: provider response unusable (shape=refusal, finishReason=stop, refusal=true, provider=mock)",
+			metadata: { eventId: "evt-1" },
+			attempts: 1,
+			terminal: true,
+		})
+
+		expect(updateOne).toHaveBeenCalledTimes(1)
+		const [filter, update] = updateOne.mock.calls[0]
+		expect(filter).toMatchObject({
+			jobId: "extraction-evt-1",
+			status: "running",
+			leaseOwner: "worker-1",
+			leaseToken: "token-1",
+		})
+		const set = update.$set
+		// Dead letter: no retryAt (a retry would be a pointless identical
+		// request), no completedAt (TTL must not erase it), deadLetterAt set.
+		expect(set.status).toBe("failed")
+		expect(set.deadLetterAt).toEqual(new Date("2026-09-20T12:00:00Z"))
+		expect(set.retryAt).toBeUndefined()
+		expect(set.completedAt).toBeUndefined()
+		// Truthful attempts: the historical claim count is NEVER fabricated to
+		// force the terminal transition.
+		expect(set.attempts).toBeUndefined()
+		// Caller metadata is untouched (p6: no diagnostics through metadata).
+		expect(set.metadata).toEqual({ eventId: "evt-1" })
+	})
+
+	it("non-terminal failure keeps the bounded retry ladder (retryAt, no deadLetterAt)", async () => {
+		const { failClaimedMemoryJob } = await import("./mongodb-memory-jobs.js")
+		const updateOne = vi.fn(async () => ({ matchedCount: 1 }) as UpdateResult)
+		const db = mockDb({ test_memory_jobs: mockCollection({ updateOne }) })
+
+		await failClaimedMemoryJob({
+			db,
+			prefix: "test_",
+			jobId: "extraction-evt-1",
+			agentId: "agent-1",
+			leaseOwner: "worker-1",
+			leaseToken: "token-1",
+			jobType: "extraction",
+			completedAt: new Date("2026-09-20T12:00:00Z"),
+			now: new Date("2026-09-20T12:00:00Z"),
+			error:
+				"relation extraction: provider response unusable (shape=empty-content, finishReason=stop, provider=mock)",
+			metadata: { eventId: "evt-1" },
+			attempts: 1,
+		})
+
+		const set = updateOne.mock.calls[0][1].$set
+		expect(set.status).toBe("failed")
+		expect(set.retryAt).toBeInstanceOf(Date)
+		expect(set.deadLetterAt).toBeUndefined()
+	})
+
+	it("exhausted attempts still dead-letter without the terminal flag (existing ladder)", async () => {
+		const { failClaimedMemoryJob } = await import("./mongodb-memory-jobs.js")
+		const updateOne = vi.fn(async () => ({ matchedCount: 1 }) as UpdateResult)
+		const db = mockDb({ test_memory_jobs: mockCollection({ updateOne }) })
+
+		await failClaimedMemoryJob({
+			db,
+			prefix: "test_",
+			jobId: "extraction-evt-1",
+			agentId: "agent-1",
+			leaseOwner: "worker-1",
+			leaseToken: "token-1",
+			jobType: "extraction",
+			completedAt: new Date("2026-09-20T12:00:00Z"),
+			now: new Date("2026-09-20T12:00:00Z"),
+			error:
+				"relation extraction JSON parse failed (finishReason=stop, provider=mock)",
+			metadata: { eventId: "evt-1" },
+			attempts: 3,
+		})
+
+		const set = updateOne.mock.calls[0][1].$set
+		expect(set.deadLetterAt).toEqual(new Date("2026-09-20T12:00:00Z"))
+		expect(set.retryAt).toBeUndefined()
+		expect(set.attempts).toBeUndefined()
+	})
+
+	it("the failed claim branch excludes dead letters (MANDATORY for truthful terminal attempts)", async () => {
+		const { claimMemoryJob } = await import("./mongodb-memory-jobs.js")
+		const findOneAndUpdate = vi.fn(async () => null)
+		const db = mockDb({
+			test_memory_jobs: mockCollection({ findOneAndUpdate }),
+		})
+
+		await claimMemoryJob({
+			db,
+			prefix: "test_",
+			agentId: "agent-1",
+			jobType: "extraction",
+			workerId: "worker-1",
+			leaseMs: 60_000,
+		})
+
+		const filter = findOneAndUpdate.mock.calls[0][0]
+		const failedBranch = filter.$or.find(
+			(branch: { status?: string }) => branch.status === "failed",
+		)
+		expect(failedBranch).toBeDefined()
+		// Without this exclusion, a terminal failure at attempts=1 with no
+		// retryAt would be immediately reclaimed (p6).
+		expect(failedBranch.deadLetterAt).toEqual({ $exists: false })
+	})
+
+	it("retryFailedMemoryJob unsets deadLetterAt so an intentional requeue stays possible", async () => {
+		const { retryFailedMemoryJob } = await import("./mongodb-memory-jobs.js")
+		const updateOne = vi.fn(async () => ({ matchedCount: 1 }) as UpdateResult)
+		const db = mockDb({ test_memory_jobs: mockCollection({ updateOne }) })
+
+		await retryFailedMemoryJob({
+			db,
+			prefix: "test_",
+			jobId: "extraction-evt-1",
+			agentId: "agent-1",
+			payload: { eventId: "evt-1" },
+		})
+
+		const update = updateOne.mock.calls[0][1]
+		expect(update.$set.status).toBe("pending")
+		expect(update.$unset.deadLetterAt).toBe("")
+		expect(update.$unset.retryAt).toBe("")
 	})
 })

@@ -286,6 +286,9 @@ export async function getMemorySearchManager(params: {
 	cfg: MemongoConfig
 	agentId: string
 	purpose?: "default" | "status"
+	/** "owned" returns a caller-lifetime manager, never cached; the caller
+	 * must close() it exactly once. */
+	ownership?: "owned"
 }): Promise<MemorySearchManagerResult> {
 	let resolved: ResolvedMemoryBackendConfig
 	try {
@@ -312,6 +315,20 @@ export async function getMemorySearchManager(params: {
 		workspaceDir,
 		extraMemoryPaths,
 	})
+	if (params.ownership === "owned") {
+		// Caller-owned manager: never cached, never deduplicated by
+		// INFLIGHT_INIT, invisible to idle-TTL/LRU eviction. The caller must
+		// close() it exactly once; that releases the shared-client reference.
+		return await initializeManager({
+			cfg: params.cfg,
+			agentId: params.agentId,
+			resolved,
+			extraMemoryPaths,
+			cacheKey,
+			owned: true,
+		})
+	}
+
 	const cached = MONGODB_MANAGER_CACHE.get(cacheKey)
 	if (cached) {
 		cached.lastUsedAt = Date.now()
@@ -352,6 +369,8 @@ async function initializeManager(params: {
 	resolved: ResolvedMemoryBackendConfig
 	extraMemoryPaths?: string[]
 	cacheKey: string
+	/** Caller-owned: return the raw manager, uncached. */
+	owned?: boolean
 }): Promise<MemorySearchManagerResult> {
 	const generation = closeGeneration
 	const sharedRuntime = isSharedMongoClientEnabled()
@@ -393,8 +412,17 @@ async function initializeManager(params: {
 				error: "memory managers closed during initialization",
 			}
 		}
-		const entry = await cacheManager(params.cacheKey, manager)
-		return { manager: trackManagerBorrows(manager, entry) }
+		// Caller-owned: hand back the raw manager. It has no cache entry, so
+		// no eviction path can see it; the caller must close() it.
+		if (params.owned) {
+			return { manager }
+		}
+		return {
+			manager: trackManagerBorrows(
+				manager,
+				await cacheManager(params.cacheKey, manager),
+			),
+		}
 	} catch (err) {
 		if (manager) {
 			// create() succeeded but a later step failed: close the manager so

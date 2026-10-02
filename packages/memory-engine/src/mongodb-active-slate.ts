@@ -1,3 +1,4 @@
+import { settledFailureMeta } from "./query-diagnostics.js"
 import type { Db, Document } from "mongodb"
 import { type MemoryScope, createSubsystemLogger } from "@memongo/lib"
 import {
@@ -5,8 +6,17 @@ import {
 	proceduresCollection,
 	structuredMemCollection,
 } from "./mongodb-schema.js"
-import { buildUnexpiredClause } from "./mongodb-temporal.js"
-import { emitTelemetry } from "./mongodb-telemetry.js"
+import {
+	buildCurrentValidityClause,
+	buildEventLifecycleClause,
+	buildUnexpiredClause,
+	mergeQueryClauses,
+} from "./mongodb-temporal.js"
+import { emitTelemetry, type TelemetryDocument } from "./mongodb-telemetry.js"
+import {
+	ErasureGateConflictError,
+	type AdmissionToken,
+} from "./mongodb-write-fence.js"
 import type {
 	MemoryActiveSlate,
 	MemoryActiveSlateItem,
@@ -17,6 +27,20 @@ import type {
 } from "./types.js"
 
 const log = createSubsystemLogger("memory:mongodb:active-slate")
+function emitReadTelemetry(
+	db: Db,
+	prefix: string,
+	doc: Omit<TelemetryDocument, "ts">,
+	admission?: AdmissionToken,
+): void {
+	if (admission) {
+		void emitTelemetry(db, prefix, doc, { admission }).catch(() =>
+			log.warn("active-slate telemetry emit failed"),
+		)
+	} else {
+		emitTelemetry(db, prefix, doc)
+	}
+}
 
 const ACTIVE_SLATE_MAX_ITEMS = 6
 const ACTIVE_SLATE_DEFAULT_ITEMS = 5
@@ -199,12 +223,16 @@ async function settled<T>(
 	try {
 		return await fn()
 	} catch (error) {
-		log.warn(`hydrateActiveSlate: ${label} query failed`, { error })
+		log.warn(
+			`hydrateActiveSlate: ${label} query failed`,
+			settledFailureMeta(error),
+		)
 		return null
 	}
 }
 
 export async function hydrateActiveSlate(params: {
+	admission?: AdmissionToken
 	db: Db
 	prefix: string
 	agentId: string
@@ -214,20 +242,36 @@ export async function hydrateActiveSlate(params: {
 }): Promise<MemoryActiveSlate> {
 	const startedAt = Date.now()
 	const { db, prefix, agentId, scope, scopeRef } = params
+	if (
+		params.admission &&
+		(params.admission.kind !== "admission" ||
+			params.admission.agentId !== agentId)
+	)
+		throw new ErasureGateConflictError(agentId)
 	const maxItems = clampMaxItems(params.maxItems)
 	const sourceLimit = ACTIVE_SLATE_MAX_ITEMS
 	const now = new Date()
 	const scopeFilter = { agentId, scope, scopeRef }
-	const nonExpiredFilter = {
-		$or: [
-			{ validTo: { $exists: false } },
-			{ validTo: null },
-			{ validTo: { $gt: now } },
-		],
-	}
-	// P4.4.1 (B1): hide TTL-expired docs until the sweep removes them. Kept
-	// in $and because nonExpiredFilter already occupies the top-level $or.
-	const ttlGuard = { $and: [buildUnexpiredClause()] }
+	// RET-10: search-lane-parity current-validity guard for the structured
+	// paths — validFrom <= now or absent AND validTo > now or absent, the
+	// same arms searchStructuredMemory's currentOnly translation applies.
+	// Replaces the B1 validTo-only inline filter: it missed the not-yet-valid
+	// (future validFrom) residual. Composed with the B1 TTL guard via
+	// mergeQueryClauses so the spread lands as ONE top-level $and instead of
+	// two colliding $and/$or keys.
+	const structuredLifecycleFilter = mergeQueryClauses(
+		buildCurrentValidityClause({ asOf: now }),
+		buildUnexpiredClause({ asOf: now }),
+	)
+	// RET-10: procedures carry validFrom (insert) / validTo (supersede) and
+	// no TTL axis — parity with findExactProcedureMatches / searchProcedures
+	// currentOnly translation.
+	const procedureLifecycleFilter = buildCurrentValidityClause({ asOf: now })
+	// RET-10 (events): the anchors are events — full lifecycle guard
+	// (bitemporal validAt/invalidAt incl. the explicit-null open-window
+	// branch, plus TTL expiresAt) via buildEventLifecycleClause, matching
+	// the events-lane guards.
+	const anchorLifecycleFilter = buildEventLifecycleClause({ asOf: now })
 
 	try {
 		const [activeCriticalDocs, procedureDocs, durableDocs, anchorDocs] =
@@ -251,8 +295,7 @@ export async function hydrateActiveSlate(params: {
 									"instruction",
 								],
 							},
-							...nonExpiredFilter,
-							...ttlGuard,
+							...structuredLifecycleFilter,
 						})
 						.sort({ updatedAt: -1 })
 						.limit(sourceLimit)
@@ -276,6 +319,7 @@ export async function hydrateActiveSlate(params: {
 						.find({
 							...scopeFilter,
 							state: "active",
+							...procedureLifecycleFilter,
 						})
 						.sort({ updatedAt: -1 })
 						.limit(sourceLimit)
@@ -311,8 +355,7 @@ export async function hydrateActiveSlate(params: {
 									"instruction",
 								],
 							},
-							...nonExpiredFilter,
-							...ttlGuard,
+							...structuredLifecycleFilter,
 						})
 						.sort({ updatedAt: -1 })
 						.limit(sourceLimit)
@@ -334,7 +377,7 @@ export async function hydrateActiveSlate(params: {
 					eventsCollection(db, prefix)
 						.find({
 							...scopeFilter,
-							...buildUnexpiredClause(),
+							...anchorLifecycleFilter,
 						})
 						.sort({ timestamp: -1 })
 						.limit(sourceLimit)
@@ -416,27 +459,37 @@ export async function hydrateActiveSlate(params: {
 			hydratedAt: new Date(),
 		}
 
-		emitTelemetry(db, prefix, {
-			meta: {
-				agentId,
-				operation: "active-slate-hydration",
+		emitReadTelemetry(
+			db,
+			prefix,
+			{
+				meta: {
+					agentId,
+					operation: "active-slate-hydration",
+				},
+				durationMs: Date.now() - startedAt,
+				ok: true,
+				itemCount: items.length,
 			},
-			durationMs: Date.now() - startedAt,
-			ok: true,
-			itemCount: items.length,
-		})
+			params.admission,
+		)
 
 		return slate
 	} catch (error) {
-		emitTelemetry(db, prefix, {
-			meta: {
-				agentId,
-				operation: "active-slate-hydration",
+		emitReadTelemetry(
+			db,
+			prefix,
+			{
+				meta: {
+					agentId,
+					operation: "active-slate-hydration",
+				},
+				durationMs: Date.now() - startedAt,
+				ok: false,
+				itemCount: 0,
 			},
-			durationMs: Date.now() - startedAt,
-			ok: false,
-			itemCount: 0,
-		})
+			params.admission,
+		)
 		throw error
 	}
 }

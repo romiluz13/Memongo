@@ -47,6 +47,16 @@ export const adminPaths = {
 	"/v1/admin/relevance/report": {
 		get: {
 			summary: "Relevance report",
+			parameters: [
+				{
+					name: "windowMs",
+					in: "query",
+					required: false,
+					schema: { type: "number" },
+					description:
+						"Rolling window in milliseconds. Non-finite values are ignored.",
+				},
+			],
 			responses: { "200": { description: "Report" } },
 		},
 	},
@@ -136,7 +146,7 @@ export const adminPaths = {
 			summary:
 				"Irreversibly erase every collection entry for one agent (tenant erasure)",
 			description:
-				"Deletes all tenant data across every collection that stores agent data and returns a per-collection receipt. Requires the literal confirmation string and the global admin token; scoped API keys are rejected.",
+				'Deletes all tenant data across every collection that stores agent data and returns a per-collection receipt. Requires an explicit nonblank agentId in the body, query, or a supported nested identity container; environment/default targets are never selected. Requires the literal confirmation string and the global admin token; scoped API keys are rejected. An optional recovery:"takeover" deliberately replaces a paused live erasure owner (the observed owner of an erasing gate, which may still be live or paused) and never begins a fresh erase; it conflicts on an open or absent gate or a raced finalize. An ordinary erase starts on an open or absent gate; an active erasure yields a typed 409 gate conflict.',
 			requestBody: {
 				required: true,
 				content: {
@@ -152,7 +162,14 @@ export const adminPaths = {
 								},
 								agentId: {
 									type: "string",
-									description: AGENT_ID_FIELD_DESCRIPTION,
+									description:
+										"Explicit agent to erase; provide here, in the agentId query parameter, or a supported nested identity container. No environment/default target.",
+								},
+								recovery: {
+									type: "string",
+									enum: ["takeover"],
+									description:
+										'Typed recovery option; the literal string "takeover" replaces the observed owner of an erasing gate, possibly still live or paused, and never begins a fresh erase; it conflicts on an open or absent gate or a raced finalize. Any other value is a 400.',
 								},
 							},
 						},
@@ -161,6 +178,13 @@ export const adminPaths = {
 			},
 			responses: {
 				"200": { description: "Per-collection tenant erasure receipt" },
+				"400": {
+					description: "Invalid confirm or recovery value, or missing agentId",
+				},
+				"409": {
+					description:
+						'Erasure gate conflict: the typed 409 carries the ERASURE_GATE_CONFLICT code and the agentId, never a gate snapshot. An ordinary request conflicts with an active erasure; recovery:"takeover" replaces the observed owner of an erasing gate and conflicts on an open or absent gate or a raced finalize (the original owner may have finalized before the takeover landed).',
+				},
 			},
 		},
 	},
@@ -178,7 +202,7 @@ export const adminPaths = {
 						"Filter by review state; omit to list every entry including the decided history",
 					schema: {
 						type: "string",
-						enum: ["pending-review", "promoted", "rejected"],
+						enum: ["pending-review", "promoting", "promoted", "rejected"],
 					},
 				},
 				{
@@ -187,7 +211,10 @@ export const adminPaths = {
 					schema: { type: "integer", minimum: 1, maximum: 100 },
 				},
 			],
-			responses: { "200": { description: "Quarantine review queue" } },
+			responses: {
+				"200": { description: "Quarantine review queue" },
+				"400": { description: "Invalid quarantine status filter" },
+			},
 		},
 	},
 	"/v1/admin/quarantine/promote": {
@@ -227,6 +254,11 @@ export const adminPaths = {
 				},
 			},
 			responses: {
+				"404": { description: "Quarantine entry not found" },
+				"409": {
+					description:
+						"Quarantine entry was reviewed or is being reviewed; refresh its state before deciding again",
+				},
 				"200": {
 					description:
 						"Review receipt with the written memory and mutation ids",
@@ -271,6 +303,11 @@ export const adminPaths = {
 				},
 			},
 			responses: {
+				"404": { description: "Quarantine entry not found" },
+				"409": {
+					description:
+						"Quarantine entry was reviewed or is being reviewed; refresh its state before deciding again",
+				},
 				"200": { description: "Review receipt with the mutation audit id" },
 			},
 		},

@@ -29,7 +29,6 @@ function benchmarkOps(
 		"settleBenchmarkScenarioManager",
 		"listBenchmarkEventEvidence",
 		"waitForBenchmarkSearchConvergence",
-		"flushBenchmarkQueryCache",
 		"cleanupBenchmarkScenarioData",
 		"resolveBenchmarkResultSessionIds",
 		"resolveBenchmarkResultTurnIds",
@@ -184,12 +183,12 @@ vi.mock(
 		).derivedMemoryModuleMock(),
 )
 
-vi.mock("./mongodb-benchmark-readiness.js", async () =>
+vi.mock("./mongodb-benchmark-readiness.js", async (importOriginal) =>
 	(
 		await import(
 			"../../packages/memory-engine/src/test-helpers/manager-test-kit.js"
 		)
-	).benchmarkReadinessModuleMock(),
+	).benchmarkReadinessModuleMock(importOriginal),
 )
 
 vi.mock("../../packages/memory-engine/src/mongodb-telemetry.js", async () =>
@@ -202,6 +201,57 @@ vi.mock("../../packages/memory-engine/src/mongodb-telemetry.js", async () =>
 
 const { eventsCollection, chunksCollection, sessionChunksCollection } =
 	await import("../../packages/memory-engine/src/mongodb-schema.js")
+
+describe("benchmark scenario manager configuration (B12)", () => {
+	it("zeroes post-rerank recency/access boosts without mutating the host config", () => {
+		const manager = {
+			client: {},
+			db: fakeDb,
+			prefix: fakePrefix,
+			agentId: "benchmark-parent",
+			workspaceDir: "/workspace",
+			extraMemoryPaths: [],
+			capabilities: { textSearch: true, vectorSearch: true },
+			nativeBitemporalVectorPrefilter: false,
+			config: {
+				mongodb: {
+					reranking: {
+						enabled: true,
+						model: "rerank-2.5",
+						topN: 7,
+						minScore: 0.01,
+						recencyBoost: 0.3,
+						accessBoost: 0.25,
+					},
+				},
+			},
+		} as unknown as MongoDBMemoryManager
+
+		// No createBenchmarkScenarioManager override on the fake manager, so
+		// the real ops method runs and builds a real scenario manager.
+		const ops = benchmarkOps(manager)
+		const opsRecord = ops as unknown as Record<
+			string,
+			(id: string) => Record<string, unknown>
+		>
+		const scenarioManager = opsRecord.createBenchmarkScenarioManager(
+			"benchmark-scenario-agent",
+		)
+		const scenarioMongo = (scenarioManager.config as Record<string, unknown>)
+			.mongodb as Record<string, Record<string, number>>
+		expect(scenarioMongo.reranking.recencyBoost).toBe(0)
+		expect(scenarioMongo.reranking.accessBoost).toBe(0)
+		// Other rerank settings pass through untouched.
+		expect(scenarioMongo.reranking.topN).toBe(7)
+		expect(scenarioMongo.reranking.minScore).toBe(0.01)
+		// The host config object is never mutated.
+		const hostMongo = (
+			(manager as Record<string, unknown>).config as Record<string, unknown>
+		).mongodb as Record<string, Record<string, number>>
+		expect(hostMongo.reranking.recencyBoost).toBe(0.3)
+		expect(hostMongo.reranking.accessBoost).toBe(0.25)
+	})
+})
 
 describe("benchmarkIngest", () => {
 	beforeEach(() => {
@@ -577,6 +627,172 @@ describe("scenario benchmark ingestion", () => {
 			"publication benchmark scenario ingest incomplete: scenario=scenario-1 failedTurns=1",
 		)
 	})
+
+	it("aborts the run on a scenario readiness failure and still cleans up (B4 d)", async () => {
+		mocked(ingestBenchmarkConversations).mockResolvedValue({
+			datasetPath: "/workspace/benchmarks/dataset.jsonl",
+			datasetName: "dataset.jsonl",
+			conversationsIngested: 1,
+			turnsIngested: 1,
+			skippedConversations: 0,
+			failedLines: 0,
+			failedTurns: 0,
+			startedAt: new Date("2026-04-09T00:00:00.000Z"),
+			completedAt: new Date("2026-04-09T00:00:01.000Z"),
+		})
+		const scenarioManager = {
+			agentId: "benchmark-scenario-agent",
+			writeConversationEventsBatch: vi.fn(),
+			stopMemoryJobWorker: vi.fn(async () => {}),
+		} as unknown as MongoDBMemoryManager
+		const cleanupBenchmarkScenarioData = vi.fn(async () => {})
+		const manager = {
+			agentId: "benchmark-root-agent",
+			db: {
+				collection: vi.fn(() => ({
+					aggregate: vi.fn(() => ({
+						toArray: vi.fn(async () => []),
+					})),
+				})),
+			},
+			prefix: "test_",
+			createBenchmarkScenarioManager: vi.fn(() => scenarioManager),
+			settleBenchmarkScenarioManager: vi.fn(async () => {
+				throw new Error(
+					"benchmark events search convergence timed out: indexed=0/2 agentId=benchmark-scenario-agent",
+				)
+			}),
+			cleanupBenchmarkScenarioData,
+		} as unknown as MongoDBMemoryManager
+
+		// B4 (d): the run aborts on a readiness failure (the original error
+		// propagates unmutated), and the finally block still releases the
+		// scenario tenant so a --resume starts from a clean checkpoint.
+		await expect(
+			benchmarkOps(manager).runScenarioBenchmarkDataset({
+				datasetPath: "/workspace/benchmarks/dataset.jsonl",
+				dataset: {
+					name: "dataset.jsonl",
+					datasetKind: "longmemeval",
+					scenarios: [
+						{
+							scenarioId: "scenario-1",
+							conversations: [
+								{
+									sessionId: "session-1",
+									turns: [{ role: "user", body: "Remember this" }],
+								},
+							],
+							evaluations: [],
+						},
+					],
+				} as never,
+				datasetVersion: "dataset-version",
+				maxResults: 50,
+				minScore: 0.01,
+				executionProfile: "shipped",
+				publicationRun: true,
+				runContext: { accounting: {} } as never,
+			}),
+		).rejects.toThrow(
+			"benchmark events search convergence timed out: indexed=0/2 agentId=benchmark-scenario-agent",
+		)
+		expect(manager.settleBenchmarkScenarioManager).toHaveBeenCalled()
+		expect(cleanupBenchmarkScenarioData).toHaveBeenCalledWith(
+			"benchmark-scenario-agent",
+		)
+	})
+
+	it("rejects MEMONGO_LLM_ENRICHMENT_STRICT combined with MEMONGO_EXTRACTION_LLM=off (B1)", async () => {
+		mocked(ingestBenchmarkConversations).mockResolvedValue({
+			datasetPath: "/workspace/benchmarks/dataset.jsonl",
+			datasetName: "dataset.jsonl",
+			conversationsIngested: 1,
+			turnsIngested: 1,
+			skippedConversations: 0,
+			failedLines: 0,
+			failedTurns: 0,
+			startedAt: new Date("2026-04-09T00:00:00.000Z"),
+			completedAt: new Date("2026-04-09T00:00:01.000Z"),
+		})
+		const scenarioManager = {
+			agentId: "benchmark-scenario-agent",
+			db: {
+				collection: vi.fn(() => ({
+					aggregate: vi.fn(() => ({
+						toArray: vi.fn(async () => []),
+					})),
+				})),
+			},
+			prefix: "test_",
+			writeConversationEventsBatch: vi.fn(),
+			stopMemoryJobWorker: vi.fn(async () => {}),
+		} as unknown as MongoDBMemoryManager
+		const settleBenchmarkScenarioManager = vi.fn(async () => {})
+		const cleanupBenchmarkScenarioData = vi.fn(async () => {})
+		const manager = {
+			agentId: "benchmark-root-agent",
+			db: {
+				collection: vi.fn(() => ({
+					aggregate: vi.fn(() => ({
+						toArray: vi.fn(async () => []),
+					})),
+				})),
+			},
+			prefix: "test_",
+			createBenchmarkScenarioManager: vi.fn(() => scenarioManager),
+			settleBenchmarkScenarioManager,
+			cleanupBenchmarkScenarioData,
+		} as unknown as MongoDBMemoryManager
+
+		// B1: strict enrichment requires the extraction LLM, so the off
+		// ablation cannot silently drop ingest-time enrichment. Under
+		// MEMONGO_BENCHMARK_STRICT the evidence catch rethrows the
+		// misconfiguration instead of downgrading it to a warning.
+		vi.stubEnv("MEMONGO_BENCHMARK_STRICT", "1")
+		vi.stubEnv("MEMONGO_EXTRACTION_LLM", "off")
+		vi.stubEnv("MEMONGO_LLM_ENRICHMENT_MODE", "enabled")
+		vi.stubEnv("MEMONGO_LLM_ENRICHMENT_STRICT", "1")
+		// Keep the canonical ingest path (no fast ingest) for this test.
+		vi.stubEnv("MEMONGO_BENCHMARK_FAST_INGEST", "off")
+		try {
+			await expect(
+				benchmarkOps(manager).runScenarioBenchmarkDataset({
+					datasetPath: "/workspace/benchmarks/dataset.jsonl",
+					dataset: {
+						name: "dataset.jsonl",
+						datasetKind: "longmemeval",
+						scenarios: [
+							{
+								scenarioId: "scenario-1",
+								conversations: [
+									{
+										sessionId: "session-1",
+										turns: [{ role: "user", body: "Remember this" }],
+									},
+								],
+								evaluations: [],
+							},
+						],
+					} as never,
+					datasetVersion: "dataset-version",
+					maxResults: 5,
+					minScore: 0,
+					executionProfile: "diagnostic",
+					runContext: { accounting: {} } as never,
+				}),
+			).rejects.toThrow(
+				"benchmark evidence creation failed in strict mode: scenario=scenario-1: MEMONGO_LLM_ENRICHMENT_STRICT cannot be combined with MEMONGO_EXTRACTION_LLM=off: strict mode requires the extraction LLM",
+			)
+			// The scenario aborts (B4 d) and the cleanup still releases the
+			// tenant so a --resume starts from a clean checkpoint.
+			expect(cleanupBenchmarkScenarioData).toHaveBeenCalledWith(
+				"benchmark-scenario-agent",
+			)
+		} finally {
+			vi.unstubAllEnvs()
+		}
+	})
 })
 
 describe("benchmark event search convergence", () => {
@@ -904,7 +1120,7 @@ describe("benchmark event search convergence", () => {
 		}
 	})
 
-	it("does not wait for non-searchable control-character text", async () => {
+	it("fails the run on non-searchable control-character events text (B4)", async () => {
 		const prevStrict = process.env.MEMONGO_BENCHMARK_STRICT
 		process.env.MEMONGO_BENCHMARK_STRICT = "1"
 		const aggregate = vi.fn()
@@ -916,11 +1132,13 @@ describe("benchmark event search convergence", () => {
 
 			const manager = makeSearchConvergenceManager()
 
+			// B4 (c): a required lane with zero searchable documents is a
+			// reliability failure, not a silent bypass.
 			await expect(
 				benchmarkOps(manager).waitForBenchmarkEventSearchConvergence(
 					"agent-zero-width",
 				),
-			).resolves.toBeUndefined()
+			).rejects.toThrow(/has no searchable documents/)
 			expect(aggregate).not.toHaveBeenCalled()
 		} finally {
 			if (prevStrict === undefined) delete process.env.MEMONGO_BENCHMARK_STRICT
@@ -1295,5 +1513,519 @@ describe("benchmark event search convergence", () => {
 				process.env.MEMONGO_BENCHMARK_STRICT = previousStrict
 			}
 		}
+	})
+	describe("benchmark index readiness is mandatory by default (B4)", () => {
+		const clearReadinessEnv = () => {
+			delete process.env.MEMONGO_BENCHMARK_STRICT
+			delete process.env.MEMONGO_BENCHMARK_VECTOR_SEARCH_SETTLE_TIMEOUT_MS
+			delete process.env.MEMONGO_BENCHMARK_EVENT_SEARCH_SETTLE_TIMEOUT_MS
+			delete process.env.MEMONGO_BENCHMARK_VECTOR_SEARCH_PROBE_MAX_TIME_MS
+			delete process.env.MEMONGO_BENCHMARK_EVENT_SEARCH_PROBE_MAX_TIME_MS
+		}
+		const restoreReadinessEnv = (
+			snapshot: Record<string, string | undefined>,
+		) => {
+			for (const [key, value] of Object.entries(snapshot)) {
+				if (value === undefined) {
+					delete process.env[key]
+				} else {
+					process.env[key] = value
+				}
+			}
+		}
+		const readinessEnvSnapshot = () => ({
+			MEMONGO_BENCHMARK_STRICT: process.env.MEMONGO_BENCHMARK_STRICT,
+			MEMONGO_BENCHMARK_VECTOR_SEARCH_SETTLE_TIMEOUT_MS:
+				process.env.MEMONGO_BENCHMARK_VECTOR_SEARCH_SETTLE_TIMEOUT_MS,
+			MEMONGO_BENCHMARK_EVENT_SEARCH_SETTLE_TIMEOUT_MS:
+				process.env.MEMONGO_BENCHMARK_EVENT_SEARCH_SETTLE_TIMEOUT_MS,
+			MEMONGO_BENCHMARK_VECTOR_SEARCH_PROBE_MAX_TIME_MS:
+				process.env.MEMONGO_BENCHMARK_VECTOR_SEARCH_PROBE_MAX_TIME_MS,
+			MEMONGO_BENCHMARK_EVENT_SEARCH_PROBE_MAX_TIME_MS:
+				process.env.MEMONGO_BENCHMARK_EVENT_SEARCH_PROBE_MAX_TIME_MS,
+		})
+
+		it("waits for text convergence without strict mode or env overrides", async () => {
+			const snapshot = readinessEnvSnapshot()
+			clearReadinessEnv()
+			try {
+				const { readSearchIndexStatus } = await import(
+					"./mongodb-benchmark-readiness.js"
+				)
+				mocked(readSearchIndexStatus).mockResolvedValue({
+					kind: "ok",
+					status: "READY",
+					queryable: true,
+					indexName: "events_text",
+				})
+				const aggregate = vi.fn().mockReturnValue({
+					toArray: vi.fn().mockResolvedValue([{ count: 2 }]),
+				})
+				mocked(eventsCollection).mockReturnValue({
+					find: makeSearchableFind(),
+					aggregate,
+				} as never)
+				const manager = makeSearchConvergenceManager()
+
+				// Before B4 the default timeout was 0 in non-strict mode, so ~494
+				// turns written in one insertMany were queried with no wait and the
+				// auto-embed/mongot lag hid the last-written sessions.
+				await benchmarkOps(manager).waitForBenchmarkEventSearchConvergence(
+					"agent-b4-default",
+				)
+
+				expect(aggregate).toHaveBeenCalled()
+			} finally {
+				restoreReadinessEnv(snapshot)
+			}
+		})
+
+		it("waits for raw-session vector convergence without strict mode or env overrides", async () => {
+			const snapshot = readinessEnvSnapshot()
+			clearReadinessEnv()
+			try {
+				const { readSearchIndexStatus } = await import(
+					"./mongodb-benchmark-readiness.js"
+				)
+				mocked(readSearchIndexStatus).mockResolvedValue({
+					kind: "ok",
+					status: "READY",
+					queryable: true,
+					indexName: "test_session_chunks_vector",
+				})
+				const aggregate = vi.fn().mockReturnValue({
+					toArray: vi.fn().mockResolvedValue([{ count: 2 }]),
+				})
+				mocked(sessionChunksCollection).mockReturnValue({
+					find: makeSearchableTextFind(),
+					aggregate,
+				} as never)
+				const manager = makeSearchConvergenceManager()
+
+				await benchmarkOps(manager).waitForBenchmarkSearchConvergence({
+					agentId: "agent-b4-vector",
+					retrievalLane: "raw-session",
+				})
+
+				expect(aggregate).toHaveBeenCalledWith(
+					expect.any(Array),
+					expect.objectContaining({ maxTimeMS: 30_000 }),
+				)
+			} finally {
+				restoreReadinessEnv(snapshot)
+			}
+		})
+
+		it("fails as a reliability failure on convergence timeout in default mode", async () => {
+			const snapshot = readinessEnvSnapshot()
+			clearReadinessEnv()
+			process.env.MEMONGO_BENCHMARK_EVENT_SEARCH_SETTLE_TIMEOUT_MS = "100"
+			try {
+				const { readSearchIndexStatus } = await import(
+					"./mongodb-benchmark-readiness.js"
+				)
+				mocked(readSearchIndexStatus).mockResolvedValue({
+					kind: "ok",
+					status: "READY",
+					queryable: true,
+					indexName: "events_text",
+				})
+				const aggregate = vi.fn().mockReturnValue({
+					toArray: vi.fn().mockResolvedValue([{ count: 0 }]),
+				})
+				mocked(eventsCollection).mockReturnValue({
+					find: makeSearchableFind(),
+					aggregate,
+				} as never)
+				const manager = makeSearchConvergenceManager()
+
+				// B4: a timeout must throw (reliability failure), not warn and let
+				// the question be scored against a half-indexed store.
+				await expect(
+					benchmarkOps(manager).waitForBenchmarkEventSearchConvergence(
+						"agent-b4-timeout",
+					),
+				).rejects.toThrow(/search convergence timed out/)
+			} finally {
+				restoreReadinessEnv(snapshot)
+			}
+		})
+
+		it("keeps an explicit settle timeout of 0 as the documented opt-out", async () => {
+			const snapshot = readinessEnvSnapshot()
+			clearReadinessEnv()
+			process.env.MEMONGO_BENCHMARK_EVENT_SEARCH_SETTLE_TIMEOUT_MS = "0"
+			try {
+				const aggregate = vi.fn().mockReturnValue({
+					toArray: vi.fn().mockResolvedValue([{ count: 2 }]),
+				})
+				mocked(eventsCollection).mockReturnValue({
+					find: makeSearchableFind(),
+					aggregate,
+				} as never)
+				const manager = makeSearchConvergenceManager()
+
+				await benchmarkOps(manager).waitForBenchmarkEventSearchConvergence(
+					"agent-b4-optout",
+				)
+
+				expect(aggregate).not.toHaveBeenCalled()
+			} finally {
+				restoreReadinessEnv(snapshot)
+			}
+		})
+
+		// B4 (a)/(b): probe-failure behavior, per lane.
+		it("keeps polling through transient probe failures until convergence (text lane)", async () => {
+			const snapshot = readinessEnvSnapshot()
+			clearReadinessEnv()
+			try {
+				const { readSearchIndexStatus } = await import(
+					"./mongodb-benchmark-readiness.js"
+				)
+				mocked(readSearchIndexStatus).mockResolvedValue({
+					kind: "ok",
+					status: "READY",
+					queryable: true,
+					indexName: "events_text",
+				})
+				let calls = 0
+				const aggregate = vi.fn().mockImplementation(() => {
+					calls += 1
+					return {
+						toArray:
+							calls <= 2
+								? vi
+										.fn()
+										.mockRejectedValue(
+											new Error("mongot temporarily unavailable"),
+										)
+								: vi.fn().mockResolvedValue([{ count: 2 }]),
+					}
+				})
+				mocked(eventsCollection).mockReturnValue({
+					find: makeSearchableFind(),
+					aggregate,
+				} as never)
+				const manager = makeSearchConvergenceManager()
+
+				await benchmarkOps(manager).waitForBenchmarkEventSearchConvergence(
+					"agent-b4-transient",
+				)
+
+				// Two transient failures, one wildcard-count success, one text
+				// probe after the count reached the expected documents.
+				expect(aggregate).toHaveBeenCalledTimes(4)
+			} finally {
+				restoreReadinessEnv(snapshot)
+			}
+		})
+
+		it("keeps polling through transient probe failures until convergence (vector lane)", async () => {
+			const snapshot = readinessEnvSnapshot()
+			clearReadinessEnv()
+			try {
+				const { readSearchIndexStatus } = await import(
+					"./mongodb-benchmark-readiness.js"
+				)
+				mocked(readSearchIndexStatus).mockResolvedValue({
+					kind: "ok",
+					status: "READY",
+					queryable: true,
+					indexName: "test_session_chunks_vector",
+				})
+				let calls = 0
+				const aggregate = vi.fn().mockImplementation(() => {
+					calls += 1
+					return {
+						toArray:
+							calls <= 2
+								? vi
+										.fn()
+										.mockRejectedValue(
+											new Error("mongot temporarily unavailable"),
+										)
+								: vi.fn().mockResolvedValue([{ count: 2 }]),
+					}
+				})
+				mocked(sessionChunksCollection).mockReturnValue({
+					find: makeSearchableTextFind(),
+					aggregate,
+				} as never)
+				const manager = makeSearchConvergenceManager()
+
+				await benchmarkOps(manager).waitForBenchmarkSearchConvergence({
+					agentId: "agent-b4-transient-vector",
+					retrievalLane: "raw-session",
+				})
+
+				expect(aggregate).toHaveBeenCalledTimes(3)
+			} finally {
+				restoreReadinessEnv(snapshot)
+			}
+		})
+
+		it("fails the run on a convergence timeout with the last error (text lane)", async () => {
+			const snapshot = readinessEnvSnapshot()
+			clearReadinessEnv()
+			process.env.MEMONGO_BENCHMARK_EVENT_SEARCH_SETTLE_TIMEOUT_MS = "50"
+			try {
+				const { readSearchIndexStatus } = await import(
+					"./mongodb-benchmark-readiness.js"
+				)
+				mocked(readSearchIndexStatus).mockResolvedValue({
+					kind: "ok",
+					status: "READY",
+					queryable: true,
+					indexName: "events_text",
+				})
+				const aggregate = vi.fn().mockReturnValue({
+					toArray: vi
+						.fn()
+						.mockRejectedValue(new Error("mongot temporarily unavailable")),
+				})
+				mocked(eventsCollection).mockReturnValue({
+					find: makeSearchableFind(),
+					aggregate,
+				} as never)
+				const manager = makeSearchConvergenceManager()
+
+				await expect(
+					benchmarkOps(manager).waitForBenchmarkEventSearchConvergence(
+						"agent-b4-timeout-err",
+					),
+				).rejects.toThrow(
+					/search convergence timed out.*lastError=.*mongot temporarily unavailable/s,
+				)
+			} finally {
+				restoreReadinessEnv(snapshot)
+			}
+		})
+
+		it("fails the run on a convergence timeout with the last error (vector lane)", async () => {
+			const snapshot = readinessEnvSnapshot()
+			clearReadinessEnv()
+			process.env.MEMONGO_BENCHMARK_VECTOR_SEARCH_SETTLE_TIMEOUT_MS = "50"
+			try {
+				const { readSearchIndexStatus } = await import(
+					"./mongodb-benchmark-readiness.js"
+				)
+				mocked(readSearchIndexStatus).mockResolvedValue({
+					kind: "ok",
+					status: "READY",
+					queryable: true,
+					indexName: "test_session_chunks_vector",
+				})
+				const aggregate = vi.fn().mockReturnValue({
+					toArray: vi
+						.fn()
+						.mockRejectedValue(new Error("mongot temporarily unavailable")),
+				})
+				mocked(sessionChunksCollection).mockReturnValue({
+					find: makeSearchableTextFind(),
+					aggregate,
+				} as never)
+				const manager = makeSearchConvergenceManager()
+
+				await expect(
+					benchmarkOps(manager).waitForBenchmarkSearchConvergence({
+						agentId: "agent-b4-timeout-vector",
+						retrievalLane: "raw-session",
+					}),
+				).rejects.toThrow(/vector convergence timed out.*lastError=/s)
+			} finally {
+				restoreReadinessEnv(snapshot)
+			}
+		})
+
+		it("fails immediately on a permanent probe error instead of polling (text lane)", async () => {
+			const snapshot = readinessEnvSnapshot()
+			clearReadinessEnv()
+			try {
+				const { readSearchIndexStatus } = await import(
+					"./mongodb-benchmark-readiness.js"
+				)
+				mocked(readSearchIndexStatus).mockResolvedValue({
+					kind: "ok",
+					status: "READY",
+					queryable: true,
+					indexName: "events_text",
+				})
+				const aggregate = vi.fn().mockReturnValue({
+					toArray: vi.fn().mockRejectedValue({ codeName: "IndexNotFound" }),
+				})
+				mocked(eventsCollection).mockReturnValue({
+					find: makeSearchableFind(),
+					aggregate,
+				} as never)
+				const manager = makeSearchConvergenceManager()
+
+				await expect(
+					benchmarkOps(manager).waitForBenchmarkEventSearchConvergence(
+						"agent-b4-permanent",
+					),
+				).rejects.toThrow(/search convergence probe failed permanently/)
+				expect(aggregate).toHaveBeenCalledTimes(1)
+			} finally {
+				restoreReadinessEnv(snapshot)
+			}
+		})
+
+		it("fails immediately on a permanent probe error instead of polling (vector lane)", async () => {
+			const snapshot = readinessEnvSnapshot()
+			clearReadinessEnv()
+			try {
+				const { readSearchIndexStatus } = await import(
+					"./mongodb-benchmark-readiness.js"
+				)
+				mocked(readSearchIndexStatus).mockResolvedValue({
+					kind: "ok",
+					status: "READY",
+					queryable: true,
+					indexName: "test_session_chunks_vector",
+				})
+				const aggregate = vi.fn().mockReturnValue({
+					toArray: vi.fn().mockRejectedValue({ codeName: "IndexNotFound" }),
+				})
+				mocked(sessionChunksCollection).mockReturnValue({
+					find: makeSearchableTextFind(),
+					aggregate,
+				} as never)
+				const manager = makeSearchConvergenceManager()
+
+				await expect(
+					benchmarkOps(manager).waitForBenchmarkSearchConvergence({
+						agentId: "agent-b4-permanent-vector",
+						retrievalLane: "raw-session",
+					}),
+				).rejects.toThrow(/vector convergence probe failed permanently/)
+				expect(aggregate).toHaveBeenCalledTimes(1)
+			} finally {
+				restoreReadinessEnv(snapshot)
+			}
+		})
+
+		it("rejects a FAILED vector index in default mode without polling", async () => {
+			const snapshot = readinessEnvSnapshot()
+			clearReadinessEnv()
+			try {
+				const { readSearchIndexStatus } = await import(
+					"./mongodb-benchmark-readiness.js"
+				)
+				mocked(readSearchIndexStatus).mockResolvedValue({
+					kind: "ok",
+					status: "FAILED",
+					queryable: false,
+					indexName: "test_session_chunks_vector",
+				})
+				const aggregate = vi.fn().mockReturnValue({
+					toArray: vi.fn().mockResolvedValue([{ count: 2 }]),
+				})
+				mocked(sessionChunksCollection).mockReturnValue({
+					find: makeSearchableTextFind(),
+					aggregate,
+				} as never)
+				const manager = makeSearchConvergenceManager()
+
+				await expect(
+					benchmarkOps(manager).waitForBenchmarkSearchConvergence({
+						agentId: "agent-b4-failed-index",
+						retrievalLane: "raw-session",
+					}),
+				).rejects.toThrow(/index-not-ready: vector index .* FAILED/)
+				expect(aggregate).not.toHaveBeenCalled()
+			} finally {
+				restoreReadinessEnv(snapshot)
+			}
+		})
+
+		// B4 (c): silent readiness bypasses warn and are recorded.
+		it("throws when a required lane has no searchable documents after ingest", async () => {
+			const snapshot = readinessEnvSnapshot()
+			clearReadinessEnv()
+			try {
+				const aggregate = vi.fn().mockReturnValue({
+					toArray: vi.fn().mockResolvedValue([{ count: 2 }]),
+				})
+				mocked(eventsCollection).mockReturnValue({
+					find: makeSearchableFind(["", "   "]),
+					aggregate,
+				} as never)
+				const manager = makeSearchConvergenceManager()
+
+				await expect(
+					benchmarkOps(manager).waitForBenchmarkEventSearchConvergence(
+						"agent-b4-empty-required",
+					),
+				).rejects.toThrow(/has no searchable documents/)
+				expect(aggregate).not.toHaveBeenCalled()
+			} finally {
+				restoreReadinessEnv(snapshot)
+			}
+		})
+
+		it("records and warns a readiness skip for a legitimately empty lane", async () => {
+			const snapshot = readinessEnvSnapshot()
+			clearReadinessEnv()
+			try {
+				const find = vi.fn().mockReturnValue({
+					toArray: vi.fn().mockResolvedValue([]),
+				})
+				const manager = makeSearchConvergenceManager()
+				const ops = benchmarkOps(manager)
+
+				await ops.waitForBenchmarkSearchCollectionConvergence({
+					agentId: "agent-b4-empty-optional",
+					label: "session_chunks",
+					collection: { find },
+					collectionName: "test_session_chunks",
+					indexName: "test_session_chunks_text",
+					textPath: "text",
+				})
+
+				expect(ops.readinessSkips).toEqual([
+					{
+						lane: "session_chunks",
+						index: "test_session_chunks_text",
+						reason: "no-searchable-docs",
+					},
+				])
+			} finally {
+				restoreReadinessEnv(snapshot)
+			}
+		})
+
+		it("records a readiness skip when auto-embed capability is absent", async () => {
+			const snapshot = readinessEnvSnapshot()
+			clearReadinessEnv()
+			try {
+				const manager = Object.assign(
+					Object.create(MongoDBMemoryManager.prototype),
+					{
+						db: fakeDb,
+						prefix: fakePrefix,
+						agentId: "agent-benchmark",
+						config: { mongodb: { embeddingMode: "automated" } },
+						capabilities: { textSearch: true, vectorSearch: false },
+					},
+				) as MongoDBMemoryManager
+				const ops = benchmarkOps(manager)
+
+				await ops.waitForBenchmarkSearchConvergence({
+					agentId: "agent-b4-no-autoembed",
+					retrievalLane: "raw-session",
+				})
+
+				expect(ops.readinessSkips).toEqual([
+					{
+						lane: "session_chunks",
+						index: "test_session_chunks_vector",
+						reason: "no-autoembed-capability",
+					},
+				])
+			} finally {
+				restoreReadinessEnv(snapshot)
+			}
+		})
 	})
 })

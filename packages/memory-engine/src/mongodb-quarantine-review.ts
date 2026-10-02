@@ -18,11 +18,17 @@
 // idx_memory_quarantine_ttl_pending (schema): 30-day default, so a review
 // backlog can never accumulate forever. Reviewed rows (promoted/rejected)
 // stay out of that index and persist as the audit trail.
-import type { Db } from "mongodb"
+import type { ClientSession, Db } from "mongodb"
 import { randomUUID } from "node:crypto"
 import { createSubsystemLogger, type MemoryScope } from "@memongo/lib"
 import { matchPatterns } from "./mongodb-consolidator.js"
 import { recordMutation } from "./mongodb-mutations.js"
+import {
+	ErasureGateConflictError,
+	isErasureGateConflictError,
+	withFencedWrite,
+	type AdmissionToken,
+} from "./mongodb-write-fence.js"
 import { memoryQuarantineCollection } from "./mongodb-schema.js"
 import {
 	writeStructuredMemory,
@@ -32,6 +38,16 @@ import {
 import { CONFIDENCE_BY_SOURCE, type MemorySourceAgent } from "./types.js"
 
 const log = createSubsystemLogger("memory:mongodb:quarantine")
+
+export class QuarantineReviewError extends Error {
+	constructor(
+		readonly reason: "not-found" | "conflict",
+		message: string,
+	) {
+		super(message)
+		this.name = "QuarantineReviewError"
+	}
+}
 
 const DEFAULT_LIST_LIMIT = 20
 const MAX_LIST_LIMIT = 100
@@ -186,139 +202,198 @@ export async function promoteQuarantined(params: {
 	embeddingMode: import("@memongo/lib").MemoryMongoDBEmbeddingMode
 	reviewerId?: string
 	reviewNotes?: string
+	admission?: AdmissionToken
 }): Promise<QuarantineReviewReceipt> {
-	const { db, prefix, agentId, quarantineId, embeddingMode } = params
+	const { db, prefix, agentId, quarantineId, embeddingMode, admission } = params
+	if (
+		admission &&
+		(admission.kind !== "admission" || admission.agentId !== agentId)
+	)
+		throw new ErasureGateConflictError(agentId)
 	const collection = memoryQuarantineCollection(db, prefix)
 
-	const entry = await collection.findOne({ quarantineId, agentId })
-	if (!entry) {
-		throw new Error(`quarantine entry not found: ${quarantineId}`)
-	}
-	if (entry.status === "promoted" || entry.status === "rejected") {
-		throw new Error(
-			`quarantine entry ${quarantineId} already reviewed (status=${entry.status})`,
+	const claimPromotion = async (session?: ClientSession) => {
+		const entry = await collection.findOne(
+			{ quarantineId, agentId },
+			session ? { session } : undefined,
 		)
-	}
-	if (entry.status === "promoting" && !promoteLeaseExpired(entry)) {
-		throw new Error(
-			`quarantine entry ${quarantineId} promotion already in progress (claim lease active)`,
-		)
-	}
-	const recovering = entry.status === "promoting"
-
-	const content = typeof entry.content === "string" ? entry.content : ""
-	// W12: exact roundtrip for structured-write-sourced rows; matchPatterns
-	// only for rows with no stored candidate shape.
-	const storedCandidate =
-		entry.structuredCandidate && typeof entry.structuredCandidate === "object"
-			? (entry.structuredCandidate as Record<string, unknown>)
-			: null
-	const candidateType =
-		typeof storedCandidate?.type === "string" ? storedCandidate.type : undefined
-	const candidateKey =
-		typeof storedCandidate?.key === "string" ? storedCandidate.key : undefined
-	const candidateValue =
-		typeof storedCandidate?.value === "string"
-			? storedCandidate.value
-			: undefined
-	const candidateUsable =
-		candidateType !== undefined &&
-		candidateKey !== undefined &&
-		candidateValue !== undefined
-	let match: { type: StructuredMemoryType; key: string; value: string } | null
-	if (candidateUsable) {
-		// The candidate's type was a validated StructuredMemoryType at ingress
-		// (it came from a StructuredMemoryEntry); the doc read-back only
-		// proves string-ness, hence the narrow cast.
-		match = {
-			type: candidateType as StructuredMemoryType,
-			key: candidateKey,
-			value: candidateValue,
+		if (!entry) {
+			throw new QuarantineReviewError(
+				"not-found",
+				`quarantine entry not found: ${quarantineId}`,
+			)
 		}
-	} else {
-		match = matchPatterns(content)
-	}
-	if (!match) {
-		throw new Error(
-			`quarantine entry ${quarantineId} content matches no memory pattern; promote requires a derivable memory shape`,
-		)
-	}
+		if (entry.status === "promoted" || entry.status === "rejected") {
+			throw new QuarantineReviewError(
+				"conflict",
+				`quarantine entry ${quarantineId} already reviewed (status=${entry.status})`,
+			)
+		}
+		if (entry.status === "promoting" && !promoteLeaseExpired(entry)) {
+			throw new QuarantineReviewError(
+				"conflict",
+				`quarantine entry ${quarantineId} promotion already in progress (claim lease active)`,
+			)
+		}
+		const recovering = entry.status === "promoting"
+		if (
+			["user", "tenant", "session", "workspace"].includes(entry.scope) &&
+			!(typeof entry.scopeRef === "string" && entry.scopeRef.trim())
+		) {
+			throw new QuarantineReviewError(
+				"conflict",
+				`quarantine entry ${quarantineId} has unresolved scope identity; reject remains available or resubmit with explicit scopeRef`,
+			)
+		}
 
-	const decision = buildDecisionFields(params)
-	const now = new Date()
-	// Claim (or, when recovering an expired lease, re-claim) the row in the
-	// leased intermediate state. The CAS filter keeps concurrent reviews and
-	// live-lease re-promotions from double-claiming.
-	const claimFilter = recovering
-		? {
-				quarantineId,
-				agentId,
-				status: "promoting" as const,
-				$or: [
-					{ promoteLeaseExpiresAt: { $lt: now } },
-					{ promoteLeaseExpiresAt: { $exists: false } },
-				],
+		const content = typeof entry.content === "string" ? entry.content : ""
+		// W12: exact roundtrip for structured-write-sourced rows; matchPatterns
+		// only for rows with no stored candidate shape.
+		const storedCandidate =
+			entry.structuredCandidate && typeof entry.structuredCandidate === "object"
+				? (entry.structuredCandidate as Record<string, unknown>)
+				: null
+		const candidateType =
+			typeof storedCandidate?.type === "string"
+				? storedCandidate.type
+				: undefined
+		const candidateKey =
+			typeof storedCandidate?.key === "string" ? storedCandidate.key : undefined
+		const candidateValue =
+			typeof storedCandidate?.value === "string"
+				? storedCandidate.value
+				: undefined
+		const candidateUsable =
+			candidateType !== undefined &&
+			candidateKey !== undefined &&
+			candidateValue !== undefined
+		let match: { type: StructuredMemoryType; key: string; value: string } | null
+		if (candidateUsable) {
+			// The candidate's type was a validated StructuredMemoryType at ingress
+			// (it came from a StructuredMemoryEntry); the doc read-back only
+			// proves string-ness, hence the narrow cast.
+			match = {
+				type: candidateType as StructuredMemoryType,
+				key: candidateKey,
+				value: candidateValue,
 			}
-		: { quarantineId, agentId, status: "pending-review" as const }
-	const claim = await collection.updateOne(claimFilter, {
-		$set: {
-			...decision,
-			status: "promoting" as const,
-			promoteClaimedAt: now,
-			promoteLeaseExpiresAt: new Date(now.getTime() + PROMOTE_LEASE_MS),
-		},
-	})
-	if (claim.matchedCount === 0) {
-		throw new Error(
-			`quarantine entry ${quarantineId} concurrently reviewed; no changes applied`,
-		)
-	}
+		} else {
+			match = matchPatterns(content)
+		}
+		if (!match) {
+			throw new Error(
+				`quarantine entry ${quarantineId} content matches no memory pattern; promote requires a derivable memory shape`,
+			)
+		}
 
-	const memoryEntry: StructuredMemoryEntry = {
-		// W12: rebuild the persisted candidate verbatim (shape fields only —
-		// tenant identity and provenance are always re-derived here). The
-		// original confidence (if stored) is applied in the explicit
-		// `confidence` field below; a stored sourceAgent wins over the
-		// review default so the roundtrip preserves who originally produced
-		// the memory.
-		...(candidateUsable && storedCandidate
+		const decision = buildDecisionFields(params)
+		const now = new Date()
+		// Claim (or, when recovering an expired lease, re-claim) the row in the
+		// leased intermediate state. The CAS filter keeps concurrent reviews and
+		// live-lease re-promotions from double-claiming.
+		const claimFilter = recovering
 			? {
-					...(Array.isArray(storedCandidate.tags)
-						? { tags: storedCandidate.tags as string[] }
-						: {}),
-					...(typeof storedCandidate.context === "string"
-						? { context: storedCandidate.context }
-						: {}),
+					quarantineId,
+					agentId,
+					status: "promoting" as const,
+					$or: [
+						{ promoteLeaseExpiresAt: { $lt: now } },
+						{ promoteLeaseExpiresAt: { $exists: false } },
+					],
 				}
-			: {}),
-		type: match.type,
-		key: match.key,
-		value: match.value,
-		agentId,
-		source: "agent",
-		confidence:
-			candidateUsable && storedCandidate
-				? typeof storedCandidate.confidence === "number"
-					? storedCandidate.confidence
-					: CONFIDENCE_BY_SOURCE.agent_extracted
-				: CONFIDENCE_BY_SOURCE.agent_extracted,
-		sourceAgent:
-			candidateUsable && storedCandidate?.sourceAgent
-				? (storedCandidate.sourceAgent as MemorySourceAgent)
-				: { id: agentId, name: "quarantine-review" },
-		sourceEventIds: Array.isArray(entry.sourceEventIds)
-			? (entry.sourceEventIds as string[])
-			: undefined,
-		...(entry.scope ? { scope: entry.scope as MemoryScope } : {}),
-		...(entry.scopeRef ? { scopeRef: entry.scopeRef as string } : {}),
-		provenance: {
-			quarantineId,
-			originalClassification: entry.classification,
+			: { quarantineId, agentId, status: "pending-review" as const }
+		const claim = await collection.updateOne(
+			claimFilter,
+			{
+				$set: {
+					...decision,
+					status: "promoting" as const,
+					promoteClaimedAt: now,
+					promoteLeaseExpiresAt: new Date(now.getTime() + PROMOTE_LEASE_MS),
+				},
+			},
+			session ? { session } : undefined,
+		)
+		if (claim.matchedCount === 0) {
+			throw new QuarantineReviewError(
+				"conflict",
+				`quarantine entry ${quarantineId} concurrently reviewed; no changes applied`,
+			)
+		}
+
+		const memoryEntry: StructuredMemoryEntry = {
+			// W12: rebuild the persisted candidate verbatim (shape fields only —
+			// tenant identity and provenance are always re-derived here). The
+			// original confidence (if stored) is applied in the explicit
+			// `confidence` field below; a stored sourceAgent wins over the
+			// review default so the roundtrip preserves who originally produced
+			// the memory.
+			...(candidateUsable && storedCandidate
+				? {
+						...(typeof storedCandidate.sessionId === "string"
+							? { sessionId: storedCandidate.sessionId }
+							: {}),
+						...(Array.isArray(storedCandidate.tags)
+							? { tags: storedCandidate.tags as string[] }
+							: {}),
+						...(typeof storedCandidate.context === "string"
+							? { context: storedCandidate.context }
+							: {}),
+					}
+				: {}),
+			type: match.type,
+			key: match.key,
+			value: match.value,
+			agentId,
+			source: "agent",
+			confidence:
+				candidateUsable && storedCandidate
+					? typeof storedCandidate.confidence === "number"
+						? storedCandidate.confidence
+						: CONFIDENCE_BY_SOURCE.agent_extracted
+					: CONFIDENCE_BY_SOURCE.agent_extracted,
+			sourceAgent:
+				candidateUsable && storedCandidate?.sourceAgent
+					? (storedCandidate.sourceAgent as MemorySourceAgent)
+					: { id: agentId, name: "quarantine-review" },
+			sourceEventIds: Array.isArray(entry.sourceEventIds)
+				? (entry.sourceEventIds as string[])
+				: undefined,
+			...(entry.scope ? { scope: entry.scope as MemoryScope } : {}),
+			...(entry.scopeRef ? { scopeRef: entry.scopeRef as string } : {}),
+			provenance: {
+				quarantineId,
+				originalClassification: entry.classification,
+				matchedPatterns: entry.matchedPatterns,
+				promotedByReview: true,
+				...(candidateUsable ? { restoredCandidate: true } : {}),
+			},
+		}
+
+		return {
+			decision,
+			match,
+			candidateUsable,
+			memoryEntry,
+			classification: entry.classification,
 			matchedPatterns: entry.matchedPatterns,
-			promotedByReview: true,
-			...(candidateUsable ? { restoredCandidate: true } : {}),
-		},
+		}
 	}
+	const {
+		decision,
+		match,
+		candidateUsable,
+		memoryEntry,
+		classification,
+		matchedPatterns,
+	} = admission
+		? await withFencedWrite({
+				db,
+				prefix,
+				token: admission,
+				fn: claimPromotion,
+			})
+		: await claimPromotion()
 
 	let writeResult: { upserted: boolean; id: string }
 	try {
@@ -327,6 +402,7 @@ export async function promoteQuarantined(params: {
 			prefix,
 			entry: memoryEntry,
 			embeddingMode,
+			...(admission ? { admission } : {}),
 			// C-008: the review IS the overrule. This write re-enters the
 			// write-structured path AFTER a human reviewed the flagged
 			// content (the row only reaches "promoting" through
@@ -336,25 +412,31 @@ export async function promoteQuarantined(params: {
 			injectionClassification: "skip",
 		})
 	} catch (err) {
+		if (admission && isErasureGateConflictError(err)) throw err
 		// Compensating revert: the claim holds the row in "promoting", but no
 		// memory exists — put it back in the queue and surface the error.
 		// (A process that dies HERE leaves the leased claim, which the
 		// expired-lease recovery above handles — W12.)
-		await collection.updateOne(
-			{ quarantineId, agentId, status: "promoting" },
-			{
-				$set: {
-					status: "pending-review",
+		const revertClaim = (session?: ClientSession) =>
+			collection.updateOne(
+				{ quarantineId, agentId, status: "promoting" },
+				{
+					$set: {
+						status: "pending-review",
+					},
+					$unset: {
+						reviewedAt: "",
+						reviewerId: "",
+						reviewNotes: "",
+						promoteClaimedAt: "",
+						promoteLeaseExpiresAt: "",
+					},
 				},
-				$unset: {
-					reviewedAt: "",
-					reviewerId: "",
-					reviewNotes: "",
-					promoteClaimedAt: "",
-					promoteLeaseExpiresAt: "",
-				},
-			},
-		)
+				session ? { session } : undefined,
+			)
+		if (admission)
+			await withFencedWrite({ db, prefix, token: admission, fn: revertClaim })
+		else await revertClaim()
 		throw err
 	}
 
@@ -363,21 +445,32 @@ export async function promoteQuarantined(params: {
 	// claim keeps the row recoverable and the receipt surfaces the gap.
 	let finalizeError: string | undefined
 	try {
-		const finalized = await collection.updateOne(
-			{ quarantineId, agentId, status: "promoting" },
-			{
-				$set: {
-					...decision,
-					status: "promoted" as const,
-					memoryId: writeResult.id,
+		const finalizePromotion = (session?: ClientSession) =>
+			collection.updateOne(
+				{ quarantineId, agentId, status: "promoting" },
+				{
+					$set: {
+						...decision,
+						status: "promoted" as const,
+						memoryId: writeResult.id,
+					},
 				},
-			},
-		)
+				session ? { session } : undefined,
+			)
+		const finalized = admission
+			? await withFencedWrite({
+					db,
+					prefix,
+					token: admission,
+					fn: finalizePromotion,
+				})
+			: await finalizePromotion()
 		if (finalized.matchedCount === 0) {
 			finalizeError =
 				"quarantine row left in promoting: row changed state during promotion"
 		}
 	} catch (err) {
+		if (admission && isErasureGateConflictError(err)) throw err
 		finalizeError = err instanceof Error ? err.message : String(err)
 		log.warn(
 			`promote finalize failed for quarantine=${quarantineId} (row left recoverable in promoting): ${finalizeError}`,
@@ -395,10 +488,11 @@ export async function promoteQuarantined(params: {
 		...(finalizeError ? { finalizeError } : {}),
 	}
 
-	try {
-		const { mutationId } = await recordMutation({
+	const auditPromotion = (session?: ClientSession) =>
+		recordMutation({
 			db,
 			prefix,
+			...(session ? { session } : {}),
 			mutation: {
 				collectionName: "memory_quarantine",
 				documentId: quarantineId,
@@ -416,8 +510,8 @@ export async function promoteQuarantined(params: {
 				meta: {
 					decision: "promoted",
 					quarantineId,
-					originalClassification: entry.classification,
-					matchedPatterns: entry.matchedPatterns,
+					originalClassification: classification,
+					matchedPatterns: matchedPatterns,
 					...(candidateUsable ? { restoredCandidate: true } : {}),
 					...(finalizeError ? { finalizeError } : {}),
 					...(params.reviewerId ? { reviewerId: params.reviewerId } : {}),
@@ -426,8 +520,18 @@ export async function promoteQuarantined(params: {
 				},
 			},
 		})
+	try {
+		const { mutationId } = admission
+			? await withFencedWrite({
+					db,
+					prefix,
+					token: admission,
+					fn: auditPromotion,
+				})
+			: await auditPromotion()
 		receipt.mutationId = mutationId
 	} catch (err) {
+		if (admission && isErasureGateConflictError(err)) throw err
 		// The decision is durable on the row; the ledger copy failed. Surface
 		// the gap on the receipt instead of swallowing it.
 		receipt.auditError = err instanceof Error ? err.message : String(err)
@@ -451,59 +555,93 @@ export async function rejectQuarantined(params: {
 	quarantineId: string
 	reviewerId?: string
 	reviewNotes?: string
+	admission?: AdmissionToken
 }): Promise<QuarantineReviewReceipt> {
-	const { db, prefix, agentId, quarantineId } = params
+	const { db, prefix, agentId, quarantineId, admission } = params
+	if (
+		admission &&
+		(admission.kind !== "admission" || admission.agentId !== agentId)
+	)
+		throw new ErasureGateConflictError(agentId)
 	const collection = memoryQuarantineCollection(db, prefix)
-
-	const entry = await collection.findOne({ quarantineId, agentId })
-	if (!entry) {
-		throw new Error(`quarantine entry not found: ${quarantineId}`)
-	}
-	if (entry.status === "promoted" || entry.status === "rejected") {
-		throw new Error(
-			`quarantine entry ${quarantineId} already reviewed (status=${entry.status})`,
+	const rejectDecision = async (session?: ClientSession) => {
+		const entry = await collection.findOne(
+			{ quarantineId, agentId },
+			session ? { session } : undefined,
 		)
-	}
-	// W12: a promote claim with a live lease owns the row; an expired one
-	// (crashed promoter) is recoverable — rejection is a valid resolution.
-	if (entry.status === "promoting" && !promoteLeaseExpired(entry)) {
-		throw new Error(
-			`quarantine entry ${quarantineId} promotion already in progress (claim lease active)`,
-		)
-	}
-	const recoveringPromotion = entry.status === "promoting"
+		if (!entry) {
+			throw new QuarantineReviewError(
+				"not-found",
+				`quarantine entry not found: ${quarantineId}`,
+			)
+		}
+		if (entry.status === "promoted" || entry.status === "rejected") {
+			throw new QuarantineReviewError(
+				"conflict",
+				`quarantine entry ${quarantineId} already reviewed (status=${entry.status})`,
+			)
+		}
+		// W12: a promote claim with a live lease owns the row; an expired one
+		// (crashed promoter) is recoverable — rejection is a valid resolution.
+		if (entry.status === "promoting" && !promoteLeaseExpired(entry)) {
+			throw new QuarantineReviewError(
+				"conflict",
+				`quarantine entry ${quarantineId} promotion already in progress (claim lease active)`,
+			)
+		}
+		const recoveringPromotion = entry.status === "promoting"
 
-	const decision = {
-		...buildDecisionFields(params),
-		status: "rejected" as const,
-	}
-	const rejectFilter = recoveringPromotion
-		? {
-				quarantineId,
-				agentId,
-				status: "promoting" as const,
-				$or: [
-					{ promoteLeaseExpiresAt: { $lt: new Date() } },
-					{ promoteLeaseExpiresAt: { $exists: false } },
-				],
-			}
-		: { quarantineId, agentId, status: "pending-review" as const }
-	const result = await collection.updateOne(rejectFilter, {
-		$set: decision,
-		...(recoveringPromotion
+		const decision = {
+			...buildDecisionFields(params),
+			status: "rejected" as const,
+		}
+		const rejectFilter = recoveringPromotion
 			? {
-					$unset: {
-						promoteClaimedAt: "",
-						promoteLeaseExpiresAt: "",
-					},
+					quarantineId,
+					agentId,
+					status: "promoting" as const,
+					$or: [
+						{ promoteLeaseExpiresAt: { $lt: new Date() } },
+						{ promoteLeaseExpiresAt: { $exists: false } },
+					],
 				}
-			: {}),
-	})
-	if (result.matchedCount === 0) {
-		throw new Error(
-			`quarantine entry ${quarantineId} concurrently reviewed; no changes applied`,
+			: { quarantineId, agentId, status: "pending-review" as const }
+		const result = await collection.updateOne(
+			rejectFilter,
+			{
+				$set: decision,
+				...(recoveringPromotion
+					? {
+							$unset: {
+								promoteClaimedAt: "",
+								promoteLeaseExpiresAt: "",
+							},
+						}
+					: {}),
+			},
+			session ? { session } : undefined,
 		)
+		if (result.matchedCount === 0) {
+			throw new QuarantineReviewError(
+				"conflict",
+				`quarantine entry ${quarantineId} concurrently reviewed; no changes applied`,
+			)
+		}
+
+		return {
+			decision,
+			recoveringPromotion,
+			classification: entry.classification,
+		}
 	}
+	const { decision, recoveringPromotion, classification } = admission
+		? await withFencedWrite({
+				db,
+				prefix,
+				token: admission,
+				fn: rejectDecision,
+			})
+		: await rejectDecision()
 
 	const receipt: QuarantineReviewReceipt = {
 		quarantineId,
@@ -515,36 +653,42 @@ export async function rejectQuarantined(params: {
 	}
 
 	try {
-		const { mutationId } = await recordMutation({
-			db,
-			prefix,
-			mutation: {
-				collectionName: "memory_quarantine",
-				documentId: quarantineId,
-				operation: "update",
-				agentId,
-				oldValue: null,
-				newValue: { status: "rejected" },
-				changedFields: ["status", "reviewedAt"],
-				severity: "warning",
-				meta: {
-					decision: "rejected",
-					quarantineId,
-					originalClassification: entry.classification,
-					...(recoveringPromotion
-						? {
-								recoveredFromPromoting: true,
-								note: "a promotion claim was in flight; a partially completed promotion may have written structured memory with provenance pointing at this quarantineId — inspect before relying on this rejection",
-							}
-						: {}),
-					...(params.reviewerId ? { reviewerId: params.reviewerId } : {}),
-					...(params.reviewNotes ? { reviewNotes: params.reviewNotes } : {}),
-					reviewedAt: decision.reviewedAt,
+		const audit = (session?: ClientSession) =>
+			recordMutation({
+				db,
+				prefix,
+				...(session ? { session } : {}),
+				mutation: {
+					collectionName: "memory_quarantine",
+					documentId: quarantineId,
+					operation: "update",
+					agentId,
+					oldValue: null,
+					newValue: { status: "rejected" },
+					changedFields: ["status", "reviewedAt"],
+					severity: "warning",
+					meta: {
+						decision: "rejected",
+						quarantineId,
+						originalClassification: classification,
+						...(recoveringPromotion
+							? {
+									recoveredFromPromoting: true,
+									note: "a promotion claim was in flight; a partially completed promotion may have written structured memory with provenance pointing at this quarantineId — inspect before relying on this rejection",
+								}
+							: {}),
+						...(params.reviewerId ? { reviewerId: params.reviewerId } : {}),
+						...(params.reviewNotes ? { reviewNotes: params.reviewNotes } : {}),
+						reviewedAt: decision.reviewedAt,
+					},
 				},
-			},
-		})
+			})
+		const { mutationId } = admission
+			? await withFencedWrite({ db, prefix, token: admission, fn: audit })
+			: await audit()
 		receipt.mutationId = mutationId
 	} catch (err) {
+		if (admission && isErasureGateConflictError(err)) throw err
 		// The decision is durable on the row; the ledger copy failed. Surface
 		// the gap on the receipt instead of swallowing it.
 		receipt.auditError = err instanceof Error ? err.message : String(err)

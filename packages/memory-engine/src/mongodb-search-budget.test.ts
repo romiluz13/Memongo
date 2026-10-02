@@ -184,4 +184,58 @@ describe("mongodb-search-budget", () => {
 		expect(reservation?.tryConsumeEmbed()).toBe(false)
 		reservation?.release()
 	})
+
+	it("resolves an optional maxWallMs and never invents one (RET-16)", () => {
+		expect(resolveSearchBudgetLimits({ maxWallMs: 2_500 })).toMatchObject({
+			maxWallMs: 2_500,
+		})
+		expect(resolveSearchBudgetLimits({})).not.toHaveProperty("maxWallMs")
+		expect(resolveSearchBudgetLimits()).not.toHaveProperty("maxWallMs")
+		expect(resolveSearchBudgetLimits({ maxWallMs: 0 })).not.toHaveProperty(
+			"maxWallMs",
+		)
+		expect(
+			resolveSearchBudgetLimits({ maxWallMs: Number.NaN }),
+		).not.toHaveProperty("maxWallMs")
+	})
+
+	it("refuses consumption past the wall-clock deadline and marks the budget exhausted (RET-16)", async () => {
+		const { budget } = await runWithSearchBudget(
+			{ maxAggregations: 10, maxEmbeds: 10, maxWallMs: 5 },
+			async () => {
+				// Before the deadline: consumption is allowed and counted.
+				expect(tryConsumeSearchAggregation()).toBe(true)
+				await new Promise((resolve) => setTimeout(resolve, 15))
+				// Past the deadline: every further consume is refused (empty ≠
+				// error) — the wall spans retries AND passes.
+				expect(tryConsumeSearchAggregation()).toBe(false)
+				expect(tryConsumeSearchEmbed()).toBe(false)
+				expect(
+					tryReserveSearchBudget({ aggregations: 1, embeds: 0 }),
+				).toBeUndefined()
+			},
+		)
+		expect(budget.aggregations).toBe(1)
+		expect(budget.embeds).toBe(0)
+		expect(budget.exhausted).toBe(true)
+		expect(budget.maxWallMs).toBe(5)
+	})
+
+	it("keeps the PARENT deadline for nested shared budgets (RET-16)", async () => {
+		const { budget } = await runWithSearchBudget(
+			{ maxAggregations: 10, maxEmbeds: 10, maxWallMs: 5 },
+			async () => {
+				await new Promise((resolve) => setTimeout(resolve, 15))
+				// Nested run shares the outer ledger — its (absent) wall must
+				// not reset the parent deadline.
+				const nested = await runWithSearchBudget(
+					{ maxAggregations: 99, maxEmbeds: 99 },
+					async () => tryConsumeSearchAggregation(),
+				)
+				expect(nested.value).toBe(false)
+			},
+		)
+		expect(budget.exhausted).toBe(true)
+		expect(budget.maxWallMs).toBe(5)
+	})
 })

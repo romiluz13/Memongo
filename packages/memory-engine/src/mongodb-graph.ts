@@ -17,7 +17,10 @@ import {
 import { recordMutation } from "./mongodb-mutations.js"
 import { recordProjectionRun } from "./mongodb-ops.js"
 import type { EnrichmentProvider } from "./mongodb-llm-enrichment.js"
-import { extractTypedRelations } from "./mongodb-relation-extraction.js"
+import {
+	extractTypedRelations,
+	type TypedRelationCandidate,
+} from "./mongodb-relation-extraction.js"
 import {
 	entitiesCollection,
 	entityLinksCollection,
@@ -136,6 +139,18 @@ export type GraphExpansionResult = {
 		entity: Entity
 		relation: Relation
 		depth: number
+		/**
+		 * RET-05: resolved endpoints of the ACTUAL edge. `entity` is the
+		 * neighbor (the endpoint that is not the root when the edge touches
+		 * the root; the far endpoint on multi-hop edges), which made the old
+		 * `${root} ${type} ${entity}` snippet render a false assertion for
+		 * incoming and multi-hop edges. `fromEntity`/`toEntity` carry the
+		 * real direction; both resolve to the root for root-touching edges,
+		 * and are undefined only when an endpoint document is missing
+		 * (dangling relation).
+		 */
+		fromEntity?: Entity
+		toEntity?: Entity
 	}>
 }
 
@@ -709,26 +724,29 @@ export async function upsertRelation(params: {
 			`relation ${upserted ? "created" : "updated"}: ${relation.fromEntityId} -[${relation.type}]-> ${relation.toEntityId}`,
 		)
 
-		// Fire-and-forget: record mutation audit trail (non-blocking)
-		Promise.allSettled([
-			recordMutation({
-				db,
-				prefix,
-				mutation: {
-					collectionName: "relations",
-					documentId: `${relation.fromEntityId}:${relation.toEntityId}`,
-					operation: upserted ? "create" : "update",
-					agentId: relation.agentId,
-					oldValue: outcome.existing,
-					newValue: outcome.setDoc,
-					actorRole: "system",
-				},
-			}),
-		]).catch((err) => {
-			log.warn(
-				`relation audit failed: ${err instanceof Error ? err.message : String(err)}`,
-			)
+		const audit = recordMutation({
+			db,
+			prefix,
+			...(params.session ? { session: params.session } : {}),
+			mutation: {
+				collectionName: "relations",
+				documentId: `${relation.fromEntityId}:${relation.toEntityId}`,
+				operation: upserted ? "create" : "update",
+				agentId: relation.agentId,
+				oldValue: outcome.existing,
+				newValue: outcome.setDoc,
+				actorRole: "system",
+			},
 		})
+		if (params.session) {
+			await audit
+		} else {
+			Promise.allSettled([audit]).catch((err) => {
+				log.warn(
+					`relation audit failed: ${err instanceof Error ? err.message : String(err)}`,
+				)
+			})
+		}
 
 		return { upserted }
 	} catch (err) {
@@ -1219,6 +1237,20 @@ export async function expandGraph(params: {
 					entity: targetEntity,
 					relation: relation as unknown as Relation,
 					depth,
+					// RET-05: resolve both endpoints so consumers can render the
+					// actual edge instead of assuming root→neighbor. Root-touching
+					// endpoints resolve to rootEntity; multi-hop endpoints come
+					// from entityMap; dangling endpoints stay undefined.
+					...(relation.fromEntityId === entityId
+						? { fromEntity: rootEntity }
+						: entityMap.has(relation.fromEntityId as string)
+							? { fromEntity: entityMap.get(relation.fromEntityId as string) }
+							: {}),
+					...(relation.toEntityId === entityId
+						? { toEntity: rootEntity }
+						: entityMap.has(relation.toEntityId as string)
+							? { toEntity: entityMap.get(relation.toEntityId as string) }
+							: {}),
 				})
 			}
 		}
@@ -1471,6 +1503,13 @@ function makeEntityId(
 
 type ExtractedEntity = { entityId: string; name: string; type: EntityType }
 
+export type EntityExtractionDiagnostics = {
+	durationMs: number
+	extractionMethod: "regex" | "llm"
+	entitiesExtracted: number
+	relationsCreated: number
+}
+
 type BulkUpdateOneOp = {
 	updateOne: {
 		filter: Record<string, unknown>
@@ -1480,26 +1519,65 @@ type BulkUpdateOneOp = {
 }
 
 /**
- * Indexes of the ops that failed with E11000 inside a MongoBulkWriteError.
- * A single-op batch can also surface as a plain duplicate-key server error.
+ * True when a rejected bulkWrite reports a write concern failure, checked
+ * through the driver's public surface only (MongoBulkWriteError.err and
+ * BulkWriteResult.getWriteConcernError(), never the private arrays behind
+ * them). A write concern failure leaves batch durability uncertain, so if it
+ * cannot be ruled out, assume it is present.
  */
-function duplicateKeyWriteErrorIndexes(err: unknown): number[] {
+function hasWriteConcernError(err: unknown): boolean {
 	if (typeof err !== "object" || err === null) {
-		return []
+		return false
+	}
+	const candidate = err as {
+		err?: unknown
+		result?: { getWriteConcernError?: () => unknown }
+	}
+	if (candidate.err) {
+		return true
+	}
+	try {
+		return candidate.result?.getWriteConcernError?.() != null
+	} catch {
+		return true
+	}
+}
+
+/**
+ * Op indexes of a positively classified pure duplicate-key batch: every
+ * reported writeError is E11000 with a numeric op index, and no write concern
+ * failure accompanies the batch. Anything else — a mixed batch, a write
+ * concern failure, an unclassifiable error — is undefined. A plain
+ * duplicate-key server error without a writeErrors array classifies only for
+ * a single-op batch: with several ops there is no way to tell which one
+ * failed, so nothing may be inferred about the others.
+ */
+function pureDuplicateKeyWriteErrorIndexes(
+	err: unknown,
+	opsCount: number,
+): number[] | undefined {
+	if (typeof err !== "object" || err === null) {
+		return undefined
+	}
+	if (hasWriteConcernError(err)) {
+		return undefined
 	}
 	const writeErrors = (err as { writeErrors?: unknown }).writeErrors
-	if (Array.isArray(writeErrors)) {
-		return writeErrors
-			.filter(
-				(writeError): writeError is { index: number; code: number } =>
-					typeof writeError === "object" &&
-					writeError !== null &&
-					(writeError as { code?: unknown }).code === 11000 &&
-					typeof (writeError as { index?: unknown }).index === "number",
-			)
-			.map((writeError) => writeError.index)
+	if (Array.isArray(writeErrors) && writeErrors.length > 0) {
+		const indexes: number[] = []
+		for (const writeError of writeErrors) {
+			const entry = writeError as { code?: unknown; index?: unknown }
+			if (entry?.code !== 11000 || typeof entry?.index !== "number") {
+				return undefined
+			}
+			indexes.push(entry.index)
+		}
+		return indexes
 	}
-	return isDuplicateKeyError(err) ? [0] : []
+	if (opsCount === 1 && isDuplicateKeyError(err)) {
+		return [0]
+	}
+	return undefined
 }
 
 /**
@@ -1510,42 +1588,72 @@ function duplicateKeyWriteErrorIndexes(err: unknown): number[] {
  * "partial failure" silently drops the losing op's update (mentionCount,
  * sourceEventIds, link confidence). Retry each duplicate-key writeError as a
  * plain update (upsert: false) — the same E11000-retry pattern the engine
- * already uses on the structured/event write paths. Non-duplicate failures
- * keep the previous warn-and-continue behavior.
+ * already uses on the structured/event write paths.
+ *
+ * Only a positively classified pure duplicate-key batch is recovered; every
+ * other failure — a mixed batch, any write concern failure (batch durability
+ * uncertain), a failed retry, a retry that matches no document (the target
+ * vanished between the bulk write and the retry), or an unclassifiable error —
+ * throws a static contextual error with the original as `cause`, so a lost or
+ * uncertain graph write fails the durable job for retry instead of completing
+ * silently. Messages stay free of server errmsg strings and key values: the
+ * job runner persists err.message as the durable failure record.
  */
 async function bulkWriteUpsertsWithDuplicateKeyRetry(params: {
 	collection: Collection
 	ops: BulkUpdateOneOp[]
 	context: string
+	session?: ClientSession
 }): Promise<void> {
 	try {
-		await params.collection.bulkWrite(params.ops, { ordered: false })
+		await params.collection.bulkWrite(
+			params.ops,
+			params.session
+				? { ordered: false, session: params.session }
+				: { ordered: false },
+		)
 		return
 	} catch (bulkErr) {
-		const duplicateIndexes = duplicateKeyWriteErrorIndexes(bulkErr)
-		if (duplicateIndexes.length === 0) {
-			log.warn(`bulkWrite ${params.context} partial failure`, {
-				error: bulkErr,
+		if (params.session) {
+			throw bulkErr
+		}
+		const duplicateIndexes = pureDuplicateKeyWriteErrorIndexes(
+			bulkErr,
+			params.ops.length,
+		)
+		if (!duplicateIndexes) {
+			throw new Error(`bulkWrite ${params.context} failed`, {
+				cause: bulkErr,
 			})
-			return
 		}
 		for (const index of duplicateIndexes) {
 			const op = params.ops[index]
 			if (!op) {
-				continue
+				throw new Error(
+					`bulkWrite ${params.context} failed: duplicate-key retry lost op index ${index}`,
+					{ cause: bulkErr },
+				)
 			}
+			let retryResult: { matchedCount: number }
 			try {
 				// The winner's document exists now — replay the losing op as a
 				// plain update so its side effects are not silently dropped.
-				await params.collection.updateOne(
+				retryResult = await params.collection.updateOne(
 					op.updateOne.filter,
 					op.updateOne.update,
 					{ upsert: false },
 				)
 			} catch (retryErr) {
-				log.warn(`bulkWrite ${params.context} duplicate-key retry failed`, {
-					error: retryErr,
-				})
+				throw new Error(
+					`bulkWrite ${params.context} failed: duplicate-key retry failed`,
+					{ cause: retryErr },
+				)
+			}
+			if (retryResult.matchedCount === 0) {
+				throw new Error(
+					`bulkWrite ${params.context} failed: duplicate-key retry matched no document (target vanished before retry)`,
+					{ cause: bulkErr },
+				)
 			}
 		}
 	}
@@ -1569,9 +1677,25 @@ export async function extractAndUpsertEntities(params: {
 	sourceEventId?: string
 	extractor?: EntityExtractor
 	role?: "user" | "assistant" | "system" | "tool"
-}): Promise<{ entities: ExtractedEntity[]; relationsCreated: number }> {
+	session?: ClientSession
+	recordRun?: boolean
+}): Promise<{
+	entities: ExtractedEntity[]
+	relationsCreated: number
+	diagnostics?: EntityExtractionDiagnostics
+}> {
 	const { db, prefix, agentId, eventContent, scope, sourceEventId, role } =
 		params
+	if (params.session && params.extractor) {
+		throw new Error(
+			"transactional entity extraction requires the default local extractor",
+		)
+	}
+	if (params.session && params.recordRun !== false) {
+		throw new Error(
+			"transactional entity extraction requires recordRun to be false",
+		)
+	}
 	const startMs = Date.now()
 	const scopeRef = resolveScopeRef({
 		scope,
@@ -1601,31 +1725,48 @@ export async function extractAndUpsertEntities(params: {
 	}
 
 	if (extracted.length === 0) {
-		await Promise.allSettled([
-			recordProjectionRun({
-				db,
-				prefix,
-				run: {
-					agentId,
-					projectionType: "entities",
-					status: "ok",
-					itemsProjected: 0,
-					durationMs: Date.now() - startMs,
-				},
-			}),
-			recordProjectionRun({
-				db,
-				prefix,
-				run: {
-					agentId,
-					projectionType: "relations",
-					status: "ok",
-					itemsProjected: 0,
-					durationMs: Date.now() - startMs,
-				},
-			}),
-		])
-		return { entities: [], relationsCreated: 0 }
+		const durationMs = Date.now() - startMs
+		if (params.recordRun !== false) {
+			await Promise.allSettled([
+				recordProjectionRun({
+					db,
+					prefix,
+					run: {
+						agentId,
+						projectionType: "entities",
+						status: "ok",
+						itemsProjected: 0,
+						durationMs,
+					},
+				}),
+				recordProjectionRun({
+					db,
+					prefix,
+					run: {
+						agentId,
+						projectionType: "relations",
+						status: "ok",
+						itemsProjected: 0,
+						durationMs,
+					},
+				}),
+			])
+		}
+		return {
+			entities: [],
+			relationsCreated: 0,
+			...(params.recordRun === false
+				? {
+						diagnostics: {
+							durationMs,
+							extractionMethod:
+								extractor instanceof RegexEntityExtractor ? "regex" : "llm",
+							entitiesExtracted: 0,
+							relationsCreated: 0,
+						},
+					}
+				: {}),
+		}
 	}
 
 	// H1 audit fix: batch upsert entities via bulkWrite (replaces sequential upsertEntity loop)
@@ -1774,6 +1915,7 @@ export async function extractAndUpsertEntities(params: {
 				collection: entitiesCollection(db, prefix),
 				ops: entityOps,
 				context: "entity upserts",
+				session: params.session,
 			})
 		}
 
@@ -1884,6 +2026,7 @@ export async function extractAndUpsertEntities(params: {
 					collection: relationsCollection(db, prefix),
 					ops: relationOps,
 					context: "relation upserts",
+					session: params.session,
 				})
 			}
 			if (linkOps.length > 0) {
@@ -1891,6 +2034,7 @@ export async function extractAndUpsertEntities(params: {
 					collection: entityLinksCollection(db, prefix),
 					ops: linkOps,
 					context: "entity-link upserts",
+					session: params.session,
 				})
 			}
 		}
@@ -1899,78 +2043,101 @@ export async function extractAndUpsertEntities(params: {
 			`extracted ${extracted.length} entities and ${relationsCreated} relations from event content for agent=${agentId}`,
 		)
 
-		// H6 audit fix: emit entity-extraction telemetry
-		emitTelemetry(db, prefix, {
-			meta: { agentId, operation: "entity-extraction" },
-			durationMs: Date.now() - startMs,
-			ok: true,
-			extractionMethod: extractorResults[0]?.extractionMethod ?? "regex",
-			entitiesExtracted: extracted.length,
-		})
+		const durationMs = Date.now() - startMs
+		const extractionMethod =
+			extractorResults[0]?.extractionMethod ??
+			(extractor instanceof RegexEntityExtractor ? "regex" : "llm")
+		if (params.recordRun !== false) {
+			// H6 audit fix: emit entity-extraction telemetry
+			emitTelemetry(db, prefix, {
+				meta: { agentId, operation: "entity-extraction" },
+				durationMs,
+				ok: true,
+				extractionMethod,
+				entitiesExtracted: extracted.length,
+			})
 
-		await Promise.allSettled([
-			recordProjectionRun({
-				db,
-				prefix,
-				run: {
-					agentId,
-					projectionType: "entities",
-					status: "ok",
-					itemsProjected: extracted.length,
-					durationMs: Date.now() - startMs,
-				},
-			}),
-			recordProjectionRun({
-				db,
-				prefix,
-				run: {
-					agentId,
-					projectionType: "relations",
-					status: "ok",
-					itemsProjected: relationsCreated,
-					durationMs: Date.now() - startMs,
-				},
-			}),
-		])
-		return { entities: extracted, relationsCreated }
+			await Promise.allSettled([
+				recordProjectionRun({
+					db,
+					prefix,
+					run: {
+						agentId,
+						projectionType: "entities",
+						status: "ok",
+						itemsProjected: extracted.length,
+						durationMs,
+					},
+				}),
+				recordProjectionRun({
+					db,
+					prefix,
+					run: {
+						agentId,
+						projectionType: "relations",
+						status: "ok",
+						itemsProjected: relationsCreated,
+						durationMs,
+					},
+				}),
+			])
+		}
+		return {
+			entities: extracted,
+			relationsCreated,
+			...(params.recordRun === false
+				? {
+						diagnostics: {
+							durationMs,
+							extractionMethod,
+							entitiesExtracted: extracted.length,
+							relationsCreated,
+						},
+					}
+				: {}),
+		}
 	} catch (err) {
-		// H6 audit fix: emit entity-extraction telemetry on failure
-		emitTelemetry(db, prefix, {
-			meta: { agentId, operation: "entity-extraction" },
-			durationMs: Date.now() - startMs,
-			ok: false,
-			extractionMethod:
-				extractor instanceof RegexEntityExtractor ? "regex" : "llm",
-			entitiesExtracted: 0,
-		})
+		if (params.recordRun !== false) {
+			// H6 audit fix: emit entity-extraction telemetry on failure
+			emitTelemetry(db, prefix, {
+				meta: { agentId, operation: "entity-extraction" },
+				durationMs: Date.now() - startMs,
+				ok: false,
+				extractionMethod:
+					extractor instanceof RegexEntityExtractor ? "regex" : "llm",
+				entitiesExtracted: 0,
+			})
 
-		await Promise.allSettled([
-			recordProjectionRun({
-				db,
-				prefix,
-				run: {
-					agentId,
-					projectionType: "entities",
-					status: "failed",
-					itemsProjected: 0,
-					durationMs: Date.now() - startMs,
-				},
-			}),
-			recordProjectionRun({
-				db,
-				prefix,
-				run: {
-					agentId,
-					projectionType: "relations",
-					status: "failed",
-					itemsProjected: 0,
-					durationMs: Date.now() - startMs,
-				},
-			}),
-		])
-		log.error(
-			`extractAndUpsertEntities failed: ${err instanceof Error ? err.message : String(err)}`,
-		)
+			await Promise.allSettled([
+				recordProjectionRun({
+					db,
+					prefix,
+					run: {
+						agentId,
+						projectionType: "entities",
+						status: "failed",
+						itemsProjected: 0,
+						durationMs: Date.now() - startMs,
+					},
+				}),
+				recordProjectionRun({
+					db,
+					prefix,
+					run: {
+						agentId,
+						projectionType: "relations",
+						status: "failed",
+						itemsProjected: 0,
+						durationMs: Date.now() - startMs,
+					},
+				}),
+			])
+		}
+		if (!params.session) {
+			log.error(
+				`extractAndUpsertEntities failed: ${err instanceof Error ? err.message : String(err)}`,
+			)
+		}
 		throw err
 	}
 }
@@ -1984,17 +2151,33 @@ export async function extractAndUpsertEntities(params: {
  * scopeRef) from the event. Provider and persistence failures propagate so the
  * durable extraction job can retry.
  */
+export async function prepareTypedRelations(params: {
+	provider: EnrichmentProvider
+	model: string
+	eventContent: string
+	entities: Array<{ entityId: string; name: string }>
+}): Promise<TypedRelationCandidate[]> {
+	return extractTypedRelations({
+		provider: params.provider,
+		model: params.model,
+		text: params.eventContent,
+		entities: params.entities,
+	})
+}
+
 export async function extractAndUpsertTypedRelations(params: {
 	db: Db
 	prefix: string
 	client?: MongoClient
+	session?: ClientSession
 	agentId: string
 	scope: MemoryScope
 	scopeRef: string
 	eventContent: string
 	entities: Array<{ entityId: string; name: string }>
-	provider: EnrichmentProvider
+	provider?: EnrichmentProvider
 	model: string
+	preparedRelations?: TypedRelationCandidate[]
 	sourceEventId?: string
 	validFrom?: Date
 	leaseFence?: () => Promise<boolean>
@@ -2015,12 +2198,20 @@ export async function extractAndUpsertTypedRelations(params: {
 	if (entities.length < 2) return 0
 
 	try {
-		const relations = await extractTypedRelations({
-			provider,
-			model,
-			text: eventContent,
-			entities,
-		})
+		const relations =
+			params.preparedRelations ??
+			(await extractTypedRelations({
+				provider:
+					provider ??
+					(() => {
+						throw new Error(
+							"typed relation extraction requires a provider or prepared relations",
+						)
+					})(),
+				model,
+				text: eventContent,
+				entities,
+			}))
 		let created = 0
 		for (const rel of relations) {
 			if (params.leaseFence && (await params.leaseFence())) {
@@ -2030,6 +2221,7 @@ export async function extractAndUpsertTypedRelations(params: {
 				db,
 				prefix,
 				client: params.client,
+				session: params.session,
 				eventReceiptIds: sourceEventId ? [sourceEventId] : undefined,
 				relation: {
 					fromEntityId: rel.fromEntityId,
@@ -2182,8 +2374,11 @@ export async function findRelationByLocatorId(params: {
 	relationId: string
 	/** C-025: relation type, when the caller knows it. */
 	type?: string
+	/** Erasure fence: forward the fence session to every relation read. */
+	session?: ClientSession
 }): Promise<Document | null> {
-	const { db, prefix, agentId, scope, scopeRef, relationId, type } = params
+	const { db, prefix, agentId, scope, scopeRef, relationId, type, session } =
+		params
 	const collection = relationsCollection(db, prefix)
 	const scoped: Document = { agentId, scope, scopeRef }
 	if (type) {
@@ -2195,7 +2390,9 @@ export async function findRelationByLocatorId(params: {
 				...scoped,
 				$or: [{ relationId: `${relationId}-${type}` }, { relationId, type }],
 			},
-			{ sort: { updatedAt: -1, _id: 1 } },
+			session
+				? { sort: { updatedAt: -1, _id: 1 }, session }
+				: { sort: { updatedAt: -1, _id: 1 } },
 		)
 		if (typed) {
 			return typed
@@ -2203,17 +2400,21 @@ export async function findRelationByLocatorId(params: {
 	} else {
 		const direct = await collection.findOne(
 			{ ...scoped, relationId },
-			{ sort: { updatedAt: -1, _id: 1 } },
+			session
+				? { sort: { updatedAt: -1, _id: 1 }, session }
+				: { sort: { updatedAt: -1, _id: 1 } },
 		)
 		if (direct) {
 			return direct
 		}
 	}
 	const candidates = await collection
-		.find(scoped, {
-			sort: { updatedAt: -1, _id: 1 },
-			limit: 50,
-		})
+		.find(
+			scoped,
+			session
+				? { sort: { updatedAt: -1, _id: 1 }, limit: 50, session }
+				: { sort: { updatedAt: -1, _id: 1 }, limit: 50 },
+		)
 		.toArray()
 	return (
 		candidates.find((candidate) => {

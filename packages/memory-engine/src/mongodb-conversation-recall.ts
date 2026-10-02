@@ -10,11 +10,13 @@ import {
 import { type CanonicalEvent, renderEventChunkText } from "./mongodb-events.js"
 import {
 	buildVectorSearchStage,
+	freshnessRevalidationStages,
 	runSearchAggregateWithRetry,
 	splitAtlasSearchFilter,
 } from "./mongodb-search.js"
 import { tryConsumeSearchAdmission } from "./mongodb-search-admission.js"
 import { emitTelemetry } from "./mongodb-telemetry.js"
+import { clampSearchQuery } from "./mongodb-search-ranking.js"
 import {
 	extractTemporalWindow,
 	resolveNumCandidates,
@@ -25,6 +27,7 @@ import {
 	eventsCollection,
 } from "./mongodb-schema.js"
 import { buildUnexpiredClause } from "./mongodb-temporal.js"
+import { settledFailureMeta } from "./query-diagnostics.js"
 import type {
 	ConversationRecallCitation,
 	ConversationRecallRequest,
@@ -194,9 +197,7 @@ function normalizeTimeZone(timeZone?: string): string | undefined {
 		)
 		return normalized
 	} catch {
-		log.warn(
-			`invalid conversation recall timezone '${normalized}', falling back to UTC`,
-		)
+		log.warn("invalid conversation recall timezone, falling back to UTC")
 		return undefined
 	}
 }
@@ -570,6 +571,17 @@ async function semanticRecall(params: {
 		params.effectiveLimit,
 		params.nativeBitemporalPrefilter,
 	)
+	// Resolve the full vector predicate once: the SAME filter document is the
+	// Search-stage prefilter and the post-stage revalidation against the
+	// hydrated document.
+	const vectorFilter = buildVectorFilter({
+		request: params.request,
+		startDate: params.startDate,
+		endDate: params.endDate,
+		...(params.nativeBitemporalPrefilter
+			? { bitemporalPrefilterAt: params.asOf }
+			: {}),
+	})
 	const stage = buildVectorSearchStage({
 		queryVector: null,
 		queryText,
@@ -578,33 +590,32 @@ async function semanticRecall(params: {
 		indexName: params.vectorIndexName,
 		numCandidates: semanticFetch.numCandidates,
 		limit: semanticFetch.limit,
-		filter: buildVectorFilter({
-			request: params.request,
-			startDate: params.startDate,
-			endDate: params.endDate,
-			...(params.nativeBitemporalPrefilter
-				? { bitemporalPrefilterAt: params.asOf }
-				: {}),
-		}),
+		filter: vectorFilter,
 		textFieldPath: "body",
 	})
 	if (!stage) {
 		return []
 	}
 
-	// Until the serving index is verified with the validity filter fields, keep
-	// issue #41's bounded overfetch plus post-filter fallback. Once verified,
-	// MongoDB's documented date-range/existence prefilter operators enforce the
-	// validity window before ANN candidate selection.
+	// The canonical bi-temporal postfilter is unconditional. The native
+	// prefilter (when enabled) runs against the indexed copy, which can lag
+	// the latest write — it is an optimization, not permission to omit the
+	// postfilter against the hydrated document. Issue #41's bounded overfetch
+	// keeps the post-stage $match from starving the result set.
 	const pipeline: Document[] = [
 		{ $vectorSearch: stage },
-		...(params.nativeBitemporalPrefilter
-			? []
-			: [{ $match: buildBitemporalFilter(params.asOf) }]),
+		// Re-validate the full request predicate against the hydrated
+		// document — the prefilter runs against the indexed copy, which can
+		// lag an owner/scope/session/role/timestamp mutation.
+		...freshnessRevalidationStages(vectorFilter),
+		{ $match: buildBitemporalFilter(params.asOf) },
 		// P4.4.1: exclude expired docs post-$vectorSearch (expiresAt is not a
 		// declared filter field on the serving vector index, so the exclusion
-		// cannot live in the ANN prefilter).
-		{ $match: buildUnexpiredClause({ asOf: params.asOf }) },
+		// cannot live in the ANN prefilter). expiresAt is RETENTION, not
+		// historical validity: it is always checked at wall-now so a
+		// historical asOf cannot revive a memory awaiting physical TTL
+		// deletion.
+		{ $match: buildUnexpiredClause({ asOf: new Date() }) },
 		{ $limit: params.effectiveLimit },
 		{ $project: buildEventProjection("vectorSearchScore") },
 	]
@@ -670,15 +681,16 @@ async function hybridRecall(params: {
 		return []
 	}
 
-	// The text lane keeps its post-search validity match. The vector lane uses
-	// the same compatibility match until its native prefilter gate is ready, so
-	// invalidated-at-asOf documents cannot reach fusion in either mode.
+	// Both inner lanes carry the canonical post-search validity match
+	// unconditionally. The vector lane's native prefilter (when enabled) runs
+	// against the indexed copy, which can lag the latest write, so it is an
+	// optimization, not permission to omit the postfilter.
 	// `$search.compound.filter` could use native `range` operators on
 	// dates, but a post-$match keeps the predicate expressed once (via
 	// buildBitemporalFilter) and avoids drift between the two paths.
 	const bitemporalFilter = buildBitemporalFilter(params.asOf)
 
-	const { compoundFilter, postMatch } = splitAtlasSearchFilter(vectorFilter)
+	const { compoundFilter } = splitAtlasSearchFilter(vectorFilter)
 
 	// Task 35 root fix: when the query carries a temporal token, add an
 	// Atlas Search `near` clause on `timestamp` into the text-lane
@@ -714,9 +726,14 @@ async function hybridRecall(params: {
 					pipelines: {
 						vector: [
 							{ $vectorSearch: vectorStage },
-							...(params.nativeBitemporalPrefilter
-								? []
-								: [{ $match: bitemporalFilter }]),
+							// Re-validate the full request predicate against the
+							// hydrated document — same stale-index exposure as
+							// the text lane below.
+							...freshnessRevalidationStages(vectorFilter),
+							// Canonical bi-temporal postfilter: the native
+							// prefilter (when enabled) runs against the indexed
+							// copy, which can lag the latest write.
+							{ $match: bitemporalFilter },
 						],
 						text: [
 							{
@@ -729,7 +746,10 @@ async function hybridRecall(params: {
 									},
 								},
 							},
-							...(postMatch ? [{ $match: postMatch }] : []),
+							// Re-validate the full filter against the
+							// hydrated document — the compound filter runs against
+							// the indexed copy, which can lag the latest write.
+							...freshnessRevalidationStages(vectorFilter),
 							{ $match: bitemporalFilter },
 							{ $limit: params.effectiveLimit * 4 },
 						],
@@ -744,8 +764,11 @@ async function hybridRecall(params: {
 		},
 		// P4.4.1: exclude expired docs right after fusion (one stage covers
 		// both inner lanes) — expiresAt is not a declared filter field on the
-		// serving vector/search indexes.
-		{ $match: buildUnexpiredClause({ asOf: params.asOf }) },
+		// serving vector/search indexes. expiresAt is RETENTION, not
+		// historical validity: it is always checked at wall-now so a
+		// historical asOf cannot revive a memory awaiting physical TTL
+		// deletion.
+		{ $match: buildUnexpiredClause({ asOf: new Date() }) },
 		{ $limit: params.effectiveLimit },
 		{ $addFields: { scoreDetails: { $meta: "scoreDetails" } } },
 		{
@@ -769,6 +792,13 @@ export async function recallConversation(params: {
 	queryEmbeddingModel?: MemoryMongoDBQueryEmbeddingModel
 	capabilities?: DetectedCapabilities
 	nativeBitemporalVectorPrefilter?: boolean
+	/**
+	 * RET-13: lane failure policy hook — the recall waterfall degrades
+	 * (hybrid → semantic → standard) by design, but each stage failure is
+	 * reported at its seam ("recall:hybrid", "recall:semantic") so the
+	 * manager can re-poll index readiness instead of learning nothing.
+	 */
+	onLaneFailure?: (lane: string, error: unknown) => void
 }): Promise<ConversationRecallResponse> {
 	const startedAt = Date.now()
 	const effectiveLimit = clampLimit(params.request.limit)
@@ -776,7 +806,23 @@ export async function recallConversation(params: {
 		? assertValidDate(params.request.asOf, "asOf")
 		: new Date()
 	const resolvedTimeZone = normalizeTimeZone(params.request.timezone)
-	const queryText = params.request.query?.trim()
+	const trimmedQuery = params.request.query?.trim()
+	const queryText = trimmedQuery ? clampSearchQuery(trimmedQuery) : trimmedQuery
+	const request =
+		queryText === params.request.query
+			? params.request
+			: { ...params.request, query: queryText }
+	if (trimmedQuery && queryText !== trimmedQuery) {
+		emitTelemetry(params.db, params.prefix, {
+			meta: {
+				agentId: params.request.agentId,
+				operation: "search-query-clamped",
+			},
+			durationMs: 0,
+			ok: true,
+			queryLength: trimmedQuery.length,
+		})
+	}
 	const startDate = params.request.startTime
 		? resolveTimeBoundary(params.request.startTime, "start", resolvedTimeZone)
 		: undefined
@@ -873,7 +919,7 @@ export async function recallConversation(params: {
 	if (!queryText) {
 		results = await standardRecall({
 			collection,
-			request: params.request,
+			request,
 			effectiveLimit,
 			startDate,
 			endDate,
@@ -889,7 +935,7 @@ export async function recallConversation(params: {
 		try {
 			results = await hybridRecall({
 				collection,
-				request: params.request,
+				request,
 				effectiveLimit,
 				startDate,
 				endDate,
@@ -905,8 +951,11 @@ export async function recallConversation(params: {
 			})
 			searchMethod = "hybrid"
 		} catch (error) {
-			const message = error instanceof Error ? error.message : String(error)
-			log.warn(`hybrid conversation recall failed, falling back: ${message}`)
+			log.warn(
+				"hybrid conversation recall failed, falling back",
+				settledFailureMeta(error, queryText),
+			)
+			params.onLaneFailure?.("recall:hybrid", error)
 			results = []
 		}
 	}
@@ -920,7 +969,7 @@ export async function recallConversation(params: {
 		try {
 			results = await semanticRecall({
 				collection,
-				request: params.request,
+				request,
 				effectiveLimit,
 				startDate,
 				endDate,
@@ -934,8 +983,11 @@ export async function recallConversation(params: {
 			})
 			searchMethod = "semantic"
 		} catch (error) {
-			const message = error instanceof Error ? error.message : String(error)
-			log.warn(`semantic conversation recall failed, falling back: ${message}`)
+			log.warn(
+				"semantic conversation recall failed, falling back",
+				settledFailureMeta(error, queryText),
+			)
+			params.onLaneFailure?.("recall:semantic", error)
 			results = []
 		}
 	}
@@ -943,7 +995,7 @@ export async function recallConversation(params: {
 	if (queryText && results.length === 0) {
 		results = await standardRecall({
 			collection,
-			request: params.request,
+			request,
 			effectiveLimit,
 			startDate,
 			endDate,

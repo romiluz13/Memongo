@@ -29,10 +29,33 @@ function mockCollection(
 }
 
 function mockDb(collectionMap: Record<string, Collection> = {}): Db {
-	return {
-		collection: vi.fn((name: string) => {
-			return collectionMap[name] ?? mockCollection()
+	const gate: Document = { agentId: "", epoch: 0, state: "open", serial: 0 }
+	const meta = mockCollection({
+		findOneAndUpdate: vi.fn(
+			async (
+				_filter: unknown,
+				update: { $setOnInsert: { agentId: string } },
+			) => {
+				gate.agentId = update.$setOnInsert.agentId
+				return { ...gate }
+			},
+		),
+		findOne: vi.fn(async () => ({ ...gate })),
+		updateOne: vi.fn(async () => {
+			gate.serial += 1
+			return { matchedCount: 1, modifiedCount: 1 }
 		}),
+	})
+	const session = {
+		inTransaction: () => false,
+		withTransaction: async (fn: () => Promise<unknown>) => fn(),
+		endSession: async () => {},
+	}
+	return {
+		client: { startSession: () => session },
+		collection: vi.fn((name: string) =>
+			name === "test_meta" ? meta : (collectionMap[name] ?? mockCollection()),
+		),
 	} as unknown as Db
 }
 
@@ -40,7 +63,8 @@ function mockDb(collectionMap: Record<string, Collection> = {}): Db {
 // Module-level mocks for dependencies
 // ---------------------------------------------------------------------------
 
-vi.mock("@memongo/lib", () => ({
+vi.mock("@memongo/lib", async (importOriginal) => ({
+	...(await importOriginal<typeof import("@memongo/lib")>()),
 	createSubsystemLogger: () => ({
 		info: vi.fn(),
 		warn: vi.fn(),
@@ -68,7 +92,9 @@ vi.mock("./mongodb-reasoning-chain.js", () => ({
 	})),
 }))
 
-vi.mock("./mongodb-structured-memory.js", () => ({
+vi.mock("./mongodb-structured-memory.js", async (importOriginal) => ({
+	...(await importOriginal<typeof import("./mongodb-structured-memory.js")>()),
+	invalidateStructuredMemoryByHandle: vi.fn(),
 	writeStructuredMemory: vi.fn(async () => ({
 		upserted: true,
 		id: "test-id",
@@ -329,7 +355,7 @@ describe("consolidateMemory", () => {
 		const consolidationRunsCol = mockCollection({
 			findOne: vi.fn(async () => null),
 		})
-		const aggregate = vi.fn(() => ({
+		const aggregate = vi.fn((_pipeline: Document[]) => ({
 			toArray: vi.fn(async () => [
 				{ unprocessed: [{ n: 1 }], byType: [], topTopics: [] },
 			]),
@@ -639,7 +665,7 @@ describe("consolidateMemory", () => {
 		const updateOneFn = vi.fn(
 			async () => ({ modifiedCount: 1 }) as UpdateResult,
 		)
-		const aggregateFn = vi.fn(() => ({
+		const aggregateFn = vi.fn((_pipeline: Document[]) => ({
 			// Simulates the unscoped query result: a near-identical fact that
 			// belongs to a DIFFERENT tenant (scopeRef) under the same agentId.
 			toArray: vi.fn(async () => [
@@ -734,6 +760,22 @@ describe("consolidateMemory", () => {
 			})),
 		})
 
+		const { invalidateStructuredMemoryByHandle } = await import(
+			"./mongodb-structured-memory.js"
+		)
+		vi.mocked(invalidateStructuredMemoryByHandle).mockResolvedValueOnce({
+			family: "structured",
+			handle: {
+				family: "structured",
+				id: "retired",
+				agentId: "agent-1",
+				scope: "agent",
+				scopeRef: "agent:agent-1",
+				revision: 2,
+				state: "invalidated",
+				structured: { type: "preference", key: "old" },
+			},
+		} as Awaited<ReturnType<typeof invalidateStructuredMemoryByHandle>>)
 		const updateOneFn = vi.fn(
 			async () => ({ modifiedCount: 1 }) as UpdateResult,
 		)
@@ -750,6 +792,11 @@ describe("consolidateMemory", () => {
 						toArray: vi.fn(async () => [
 							{
 								_id: "fact-new",
+								key: "new",
+								type: "preference",
+								revision: 1,
+								scope: "agent",
+								scopeRef: "agent:agent-1",
 								value: "I prefer dark mode for coding",
 								agentId: "agent-1",
 								state: "active",
@@ -763,6 +810,10 @@ describe("consolidateMemory", () => {
 				toArray: vi.fn(async () => [
 					{
 						_id: "fact-old",
+						key: "old",
+						revision: 1,
+						scope: "agent",
+						scopeRef: "agent:agent-1",
 						value: "I prefer dark mode",
 						type: "preference",
 						agentId: "agent-1",
@@ -787,11 +838,20 @@ describe("consolidateMemory", () => {
 			options: { minCombinedScore: 0 },
 		})
 
+		expect(invalidateStructuredMemoryByHandle).toHaveBeenCalled()
 		expect(result.prunedCount).toBe(1)
-		// The older duplicate should have been invalidated
-		expect(updateOneFn).toHaveBeenCalledWith(
-			{ _id: "fact-old" },
-			{ $set: { state: "invalidated" } },
+		expect(updateOneFn).not.toHaveBeenCalled()
+		expect(invalidateStructuredMemoryByHandle).toHaveBeenCalledWith(
+			expect.objectContaining({
+				expectedId: "fact-old",
+				session: db.client.startSession(),
+				transactionalSideEffects: "inline",
+				handle: expect.objectContaining({
+					revision: 1,
+					structured: { type: "preference", key: "old" },
+				}),
+				invalidatedBy: { reason: "near-duplicate-prune", runId: result.runId },
+			}),
 		)
 	})
 
@@ -902,5 +962,95 @@ describe("consolidateMemory", () => {
 
 		expect(result.eventsProcessed).toBe(1)
 		expect(result.durationMs).toBeGreaterThanOrEqual(0)
+	})
+
+	it("leaves a graph-failed event unacknowledged, acknowledges its peer, fails the run, and rejects", async () => {
+		// B1: a required graph write failure must not become a successful
+		// durable-learning completion. The failed event must stay off the
+		// dreamerProcessedAt ack list, the successful peer must still be
+		// acknowledged, the run record must flip to failed, and the caller
+		// must see the rejection so the job retry path engages.
+		const { consolidateMemory } = await import("./mongodb-consolidator.js")
+		const { extractAndUpsertEntities } = await import("./mongodb-graph.js")
+		const graphMock = extractAndUpsertEntities as ReturnType<typeof vi.fn>
+		graphMock.mockImplementation(async (args: { sourceEventId?: string }) => {
+			if (args?.sourceEventId === "e-graph-fails") {
+				throw new Error("bulkWrite entity upserts failed")
+			}
+			return { entities: [], relationsCreated: 0 }
+		})
+		try {
+			const consolidationRunsCol = mockCollection({
+				findOne: vi.fn(async () => null),
+			})
+			const eventsUpdateMany = vi.fn(
+				async (_filter: Document) => ({ modifiedCount: 1 }) as UpdateResult,
+			)
+			const eventsCol = mockCollection({
+				find: vi.fn(() => ({
+					sort: vi.fn(() => ({
+						limit: vi.fn(() => ({
+							toArray: vi.fn(async () => [
+								{
+									eventId: "e-graph-ok",
+									agentId: "agent-1",
+									body: "ordinary event body",
+									timestamp: new Date(),
+									role: "user",
+								},
+								{
+									eventId: "e-graph-fails",
+									agentId: "agent-1",
+									body: "another ordinary body",
+									timestamp: new Date(),
+									role: "user",
+								},
+							]),
+						})),
+					})),
+				})),
+				updateMany: eventsUpdateMany,
+			})
+			const db = mockDb({
+				test_consolidation_runs: consolidationRunsCol,
+				test_events: eventsCol,
+			})
+
+			await expect(
+				consolidateMemory({
+					db,
+					prefix: "test_",
+					agentId: "agent-1",
+					options: { minIntervalMs: 0 },
+				}),
+			).rejects.toThrow("bulkWrite entity upserts failed")
+
+			// Ack carries only the successful peer.
+			expect(eventsUpdateMany).toHaveBeenCalledTimes(1)
+			expect(eventsUpdateMany.mock.calls[0][0]).toEqual({
+				agentId: "agent-1",
+				eventId: { $in: ["e-graph-ok"] },
+			})
+
+			// Run record flips to failed with the graph error surfaced.
+			const runsUpdateOne = consolidationRunsCol.updateOne as ReturnType<
+				typeof vi.fn
+			>
+			const finishCall = runsUpdateOne.mock.calls.find(
+				(call) =>
+					(call[1] as Document)?.$set &&
+					"status" in ((call[1] as Document).$set as Document),
+			)
+			expect(finishCall).toBeDefined()
+			const finishSet = (finishCall?.[1] as Document).$set as Document
+			expect(finishSet.status).toBe("failed")
+			expect(finishSet.error).toBe("bulkWrite entity upserts failed")
+			expect(finishSet.eventsProcessed).toBe(1)
+		} finally {
+			graphMock.mockImplementation(async () => ({
+				entities: [],
+				relationsCreated: 0,
+			}))
+		}
 	})
 })

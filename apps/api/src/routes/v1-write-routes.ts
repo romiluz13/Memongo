@@ -27,6 +27,9 @@ import {
 	readScopeRef,
 	readScopeInputError,
 	readIdempotencyKey,
+	isErasureGateConflictError,
+	isWriteQueueFullError,
+	isStructuredMemoryRevisionConflictError,
 	isIdempotencyConflictError,
 	isRecord,
 	readDateValue,
@@ -88,8 +91,24 @@ export function registerWriteRoutes(v1: Hono<V1RouterEnv>): void {
 			})
 		} catch (err) {
 			const message = err instanceof Error ? err.message : String(err)
+			if (isErasureGateConflictError(err)) {
+				return jsonError(
+					c,
+					409,
+					"ERASURE_GATE_CONFLICT",
+					"write conflicts with active erasure",
+				)
+			}
 			if (isIdempotencyConflictError(err)) {
 				return jsonError(c, 422, "IDEMPOTENCY_CONFLICT", message)
+			}
+			if (isWriteQueueFullError(err)) {
+				return jsonError(
+					c,
+					429,
+					"WRITE_QUEUE_FULL",
+					"write queue is full; retry later",
+				)
 			}
 			return internalError(c, err, "ADD_FAILED")
 		}
@@ -187,16 +206,34 @@ export function registerWriteRoutes(v1: Hono<V1RouterEnv>): void {
 			})
 		} catch (err) {
 			const message = err instanceof Error ? err.message : String(err)
+			if (isErasureGateConflictError(err)) {
+				return jsonError(
+					c,
+					409,
+					"ERASURE_GATE_CONFLICT",
+					"write conflicts with active erasure",
+				)
+			}
 			if (isIdempotencyConflictError(err)) {
 				return jsonError(c, 422, "IDEMPOTENCY_CONFLICT", message)
+			}
+			if (isWriteQueueFullError(err)) {
+				return jsonError(
+					c,
+					429,
+					"WRITE_QUEUE_FULL",
+					"write queue is full; retry later",
+				)
 			}
 			return internalError(c, err, "WRITE_EVENT_FAILED")
 		}
 	})
 
 	// P3.9: bulk variant of /write-event. Per-item validation/idempotency
-	// failures become per-item receipts (never a batch-level 4xx), mirroring
-	// the single-write receipt shape; only a malformed envelope is a 400.
+	// failures become per-item receipts rather than a batch-level rejection,
+	// mirroring the single-write receipt shape; a malformed envelope is a 400.
+	// An operation-wide admission failure (erasure-gate conflict) instead
+	// rejects the whole request with a 409 — no receipts are returned.
 	v1.post("/write-events", async (c) => {
 		const body = (await readJsonBody(c)) as Record<string, unknown>
 		const rawEvents = body.events
@@ -382,6 +419,22 @@ export function registerWriteRoutes(v1: Hono<V1RouterEnv>): void {
 			}
 			return c.json({ ok: true, receipts })
 		} catch (err) {
+			if (isErasureGateConflictError(err)) {
+				return jsonError(
+					c,
+					409,
+					"ERASURE_GATE_CONFLICT",
+					"write conflicts with active erasure",
+				)
+			}
+			if (isWriteQueueFullError(err)) {
+				return jsonError(
+					c,
+					429,
+					"WRITE_QUEUE_FULL",
+					"write queue is full; retry later",
+				)
+			}
 			return internalError(c, err, "WRITE_EVENTS_FAILED")
 		}
 	})
@@ -418,12 +471,35 @@ export function registerWriteRoutes(v1: Hono<V1RouterEnv>): void {
 		if (!entry.ok) {
 			return jsonError(c, 400, "VALIDATION_ERROR", entry.message)
 		}
+		const validFrom = readDateValue(entry.value.validFrom)
+		const validTo = readDateValue(entry.value.validTo)
+		const lastConfirmedAt = readDateValue(entry.value.lastConfirmedAt)
+		for (const [field, date] of [
+			["validFrom", validFrom],
+			["validTo", validTo],
+			["lastConfirmedAt", lastConfirmedAt],
+		] as const) {
+			if (date === null) {
+				return jsonError(
+					c,
+					400,
+					"VALIDATION_ERROR",
+					`entry.${field} must be a valid date string when provided`,
+				)
+			}
+		}
 		// B1: convert the validated ISO string to a Date (the engine ignores a
 		// string expiresAt via its instanceof check) and apply the same
 		// deterministic past-expiry policy as the event write routes.
-		const entryExpiresAt = entry.value.expiresAt
-			? new Date(entry.value.expiresAt)
-			: undefined
+		const entryExpiresAt = readDateValue(entry.value.expiresAt)
+		if (entryExpiresAt === null) {
+			return jsonError(
+				c,
+				400,
+				"VALIDATION_ERROR",
+				"entry.expiresAt must be a valid date string when provided",
+			)
+		}
 		if (entryExpiresAt && entryExpiresAt.getTime() <= Date.now()) {
 			return jsonError(
 				c,
@@ -439,6 +515,9 @@ export function registerWriteRoutes(v1: Hono<V1RouterEnv>): void {
 				scopeRef: await readScopeRef(c),
 				entry: {
 					...entry.value,
+					...(validFrom ? { validFrom } : {}),
+					...(validTo ? { validTo } : {}),
+					...(lastConfirmedAt ? { lastConfirmedAt } : {}),
 					...(entryExpiresAt ? { expiresAt: entryExpiresAt } : {}),
 				} as StructuredMemoryEntry,
 			})
@@ -451,6 +530,14 @@ export function registerWriteRoutes(v1: Hono<V1RouterEnv>): void {
 			}
 			return c.json(out)
 		} catch (err) {
+			if (isStructuredMemoryRevisionConflictError(err)) {
+				return jsonError(
+					c,
+					409,
+					"STRUCTURED_MEMORY_REVISION_CONFLICT",
+					"structured memory revision conflict; fetch current state before retrying",
+				)
+			}
 			return internalError(c, err, "WRITE_STRUCTURED_FAILED")
 		}
 	})

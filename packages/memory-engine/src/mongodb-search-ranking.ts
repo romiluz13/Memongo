@@ -10,6 +10,7 @@ import type { Document } from "mongodb"
 import type { MemoryScope } from "@memongo/lib"
 import { createSubsystemLogger } from "@memongo/lib"
 import type { ResolvedMongoDBConfig } from "./backend-config.js"
+import { derivationFromRole, parseResultRole } from "./memory-derivation.js"
 import { rrfScore } from "./mongodb-hybrid.js"
 import type { ProcedureState } from "./mongodb-procedures.js"
 import type {
@@ -17,7 +18,10 @@ import type {
 	RelevanceHealth,
 	RelevanceSourceScope,
 } from "./mongodb-relevance.js"
-import { MONGODB_MAX_NUM_CANDIDATES } from "./mongodb-search.js"
+import {
+	MAX_RESULT_TEXT_CHARS,
+	MONGODB_MAX_NUM_CANDIDATES,
+} from "./mongodb-search.js"
 import type {
 	StructuredMemorySalience,
 	StructuredMemoryState,
@@ -120,6 +124,9 @@ export function mapEventSearchDocToResult(
 	const body = typeof doc.body === "string" ? doc.body : ""
 	if (!eventId || !body) return null
 	const score = typeof doc.score === "number" ? doc.score : 0
+	// RET-09: events carry the turn's authoring role natively — label it on
+	// the result instead of only tucking it into provenance.
+	const role = parseResultRole(doc.role)
 	return {
 		path: `events/${eventId}`,
 		filePath: `events/${eventId}`,
@@ -127,9 +134,16 @@ export function mapEventSearchDocToResult(
 		endLine: 0,
 		score,
 		snippet: body.slice(0, 700),
+		// B5: the full body rides alongside the preview so the reranker and
+		// the reader see past character 700.
+		text: body.slice(0, MAX_RESULT_TEXT_CHARS),
 		source: "conversation",
 		sourceType: "conversation",
 		canonicalId: `event:${eventId}`,
+		...(role ? { role } : {}),
+		...(role
+			? { derivation: derivationFromRole(role) }
+			: { derivation: "derived" }),
 		...(typeof doc.sessionId === "string" ? { sessionId: doc.sessionId } : {}),
 		...(doc.timestamp instanceof Date ? { timestamp: doc.timestamp } : {}),
 		...(typeof doc.scope === "string"
@@ -430,9 +444,15 @@ export type RerankWeights = {
 /**
  * Heuristic reranker for v2 search results.
  * - Source diversity penalty: no more than 2 results from the same source at the top
+ *   (multiplicative: a 3rd+ result from one source is scaled by
+ *   `1 - diversityWeight * (count - 2)`, floored at 0.5, so small RRF scores
+ *   are dampened proportionally instead of being subtracted to zero)
  * - Episode priority boost: episode results get a score boost
  *
- * Does not mutate the original array.
+ * Does not mutate the original array. Returned results carry their adjusted
+ * scores (with the applied delta stamped as
+ * `provenance.heuristicRerankAdjustment`), so the next scoring stage composes
+ * on top of the heuristic instead of re-sorting it away (RET-07).
  * Recency boost deferred (needs timestamp in MemorySearchResult interface).
  */
 export function rerankResults(
@@ -463,21 +483,41 @@ export function rerankResults(
 	// 2. Sort by adjusted score descending
 	scored.sort((a, b) => b.adjustedScore - a.adjustedScore)
 
-	// 3. Source diversity penalty: penalize 3rd+ result from same source
+	// 3. Source diversity penalty: penalize 3rd+ result from same source.
+	// Multiplicative with a 0.5 floor so every score stays positive: an
+	// additive penalty of 0.15 would zero out RRF-scale scores (~0.016).
 	const sourceCounts = new Map<string, number>()
 	for (const entry of scored) {
 		const source = entry.result.source
 		const count = (sourceCounts.get(source) ?? 0) + 1
 		sourceCounts.set(source, count)
 		if (count > 2) {
-			entry.adjustedScore -= diversityWeight * (count - 2)
+			const factor = Math.max(0.5, 1 - diversityWeight * (count - 2))
+			entry.adjustedScore *= factor
 		}
 	}
 
 	// 4. Re-sort after diversity penalty
 	scored.sort((a, b) => b.adjustedScore - a.adjustedScore)
 
-	return scored.map((s) => s.result)
+	// 5. RET-07: propagate the adjusted score onto the returned results so
+	// downstream sorts keep the heuristic order. Stamp the applied delta in
+	// provenance only when nonzero, so untouched results stay identical.
+	return scored.map(({ result, adjustedScore }) => {
+		const score = Math.max(0, adjustedScore)
+		const adjustment = score - result.score
+		if (adjustment === 0) {
+			return result
+		}
+		return {
+			...result,
+			score,
+			provenance: {
+				...(result.provenance ?? {}),
+				heuristicRerankAdjustment: adjustment,
+			},
+		}
+	})
 }
 
 // ---------------------------------------------------------------------------
@@ -532,8 +572,8 @@ export function clampSearchMaxResults(value: number): number {
 /**
  * WS-16 (C-030): conversation queries are clamped to this ceiling before the
  * hot path consumes them — ahead of autoEmbed (a 2k+ char query still pays a
- * full embedding call), BM25 (megabyte-scale $search terms), the query-cache
- * probe (unbounded cache keys), and rerank (providers meter input tokens).
+ * full embedding call), BM25 (megabyte-scale $search terms), and rerank
+ * (providers meter input tokens).
  * The HTTP API never enforced a query-length limit, so any caller could push
  * arbitrarily large payloads into every lane. ~2,000 characters is the
  * established conversation-query budget: enough for long multi-sentence
@@ -602,6 +642,7 @@ export function resolveRuntimeSearchConfig(
 		sourcePreference: resolved.sourcePreference,
 		timeRange: resolved.timeRange,
 		needExactEvidence: resolved.needExactEvidence,
+		allowConstraintRelaxation: resolved.allowConstraintRelaxation,
 		numCandidates:
 			resolveProfileNumCandidates({
 				maxResults: resolved.maxResults,
@@ -613,25 +654,6 @@ export function resolveRuntimeSearchConfig(
 		allowHybridBackstop: resolved.allowHybridBackstop,
 		lexicalPrefilter: resolved.lexicalPrefilter,
 	}
-}
-
-export function shouldUseDetailedSearchCache(
-	request: MemorySearchRequest,
-): boolean {
-	const config = request.searchConfig
-	if (!config) {
-		return true
-	}
-	return (
-		config.recipe === undefined &&
-		(config.recallProfile === undefined ||
-			config.recallProfile === "balanced") &&
-		config.numCandidates === undefined &&
-		config.fusionMethod === undefined &&
-		config.hybridMode === undefined &&
-		config.allowHybridBackstop === undefined &&
-		config.lexicalPrefilter === undefined
-	)
 }
 
 export function emptySearchMetadata(

@@ -1,7 +1,8 @@
-import { createHash, randomUUID } from "node:crypto"
+import { randomUUID } from "node:crypto"
 import type { Db } from "mongodb"
 import { createSubsystemLogger } from "@memongo/lib"
 import type { ResolvedMongoDBConfig } from "./backend-config.js"
+import { applyDiagnosticQueryPrivacy } from "./mongodb-diagnostic-privacy.js"
 import type { DetectedCapabilities } from "./mongodb-schema.js"
 import {
 	relevanceArtifactsCollection,
@@ -9,6 +10,12 @@ import {
 	relevanceRunsCollection,
 } from "./mongodb-schema.js"
 import type { MemorySearchResult } from "./types.js"
+import {
+	type AdmissionToken,
+	captureAdmissionToken,
+	ErasureGateConflictError,
+	withFencedWrite,
+} from "./mongodb-write-fence.js"
 
 const log = createSubsystemLogger("memory:mongodb:relevance")
 
@@ -30,6 +37,7 @@ export type RelevanceArtifact = {
 }
 
 export type RelevanceRunPersistInput = {
+	admission?: AdmissionToken
 	query: string
 	sourceScope: RelevanceSourceScope
 	latencyMs: number
@@ -74,19 +82,14 @@ type RecentSignal = {
 	degraded: boolean
 }
 
-function normalizeQuery(query: string): string {
-	return query.trim().replace(/\s+/g, " ").toLowerCase()
-}
+// RET-21: query normalization/hashing/redaction moved to
+// mongodb-diagnostic-privacy.js — one policy shared with the recall-trace
+// path, so the two diagnostic stores can never drift apart again.
 
-function hashQuery(query: string): string {
-	return createHash("sha256").update(normalizeQuery(query)).digest("hex")
-}
-
-function redactQuery(query: string): string {
-	// Keep shape and spacing while redacting letters/digits.
-	return query.replace(/[A-Za-z0-9]/g, "x")
-}
-
+// RET-14: extraction is KEY-matched at any depth — a number is only a
+// match when a requested key maps to it. A bare numeric leaf (no key
+// context) is never a match, so unrelated numerics elsewhere in the
+// document (e.g. serverInfo.port) can never masquerade as explain stats.
 function extractNumberByKeys(
 	value: unknown,
 	keys: string[],
@@ -94,9 +97,6 @@ function extractNumberByKeys(
 ): number | undefined {
 	if (depth > 8 || value === null || value === undefined) {
 		return undefined
-	}
-	if (typeof value === "number" && Number.isFinite(value)) {
-		return value
 	}
 	if (Array.isArray(value)) {
 		for (const item of value) {
@@ -126,10 +126,14 @@ function extractNumberByKeys(
 }
 
 export function summarizeExplain(raw: unknown): Record<string, unknown> {
+	// EL-035: executionStats.executionTimeMillis is the measured total;
+	// executionTimeMillisEstimate is a queryPlanner-stage estimate kept as
+	// the fallback for explains captured at queryPlanner verbosity.
 	const executionTimeMs =
-		extractNumberByKeys(raw, ["executionTimeMillisEstimate"]) ??
-		extractNumberByKeys(raw, ["executionTimeMillis"])
+		extractNumberByKeys(raw, ["executionTimeMillis"]) ??
+		extractNumberByKeys(raw, ["executionTimeMillisEstimate"])
 	const nReturned = extractNumberByKeys(raw, ["nReturned"])
+	// Absent keys stay null — never a sibling value (RET-14).
 	const numCandidates = extractNumberByKeys(raw, [
 		"numCandidates",
 		"candidatesExamined",
@@ -259,16 +263,24 @@ export class MongoDBRelevanceRuntime {
 	}
 
 	async persistRun(input: RelevanceRunPersistInput): Promise<string> {
+		const admission =
+			input.admission ??
+			(await captureAdmissionToken({
+				db: this.db,
+				prefix: this.prefix,
+				agentId: this.agentId,
+			}))
+		if (admission.agentId !== this.agentId)
+			throw new ErasureGateConflictError(this.agentId)
 		const runId = randomUUID()
-		const privacyMode = this.cfg.relevance.telemetry.queryPrivacyMode
-		const queryHash =
-			privacyMode === "none" ? undefined : hashQuery(input.query)
-		const queryRedacted =
-			privacyMode === "raw"
-				? input.query
-				: privacyMode === "redacted-hash"
-					? redactQuery(input.query)
-					: undefined
+		// RET-21: the shared transform — identical semantics to the previous
+		// inline logic (none → no query fields; redacted-hash → hash +
+		// redacted; raw → hash + raw), now sourced from the single policy
+		// module the recall-trace path also consumes.
+		const { queryHash, queryRedacted } = applyDiagnosticQueryPrivacy(
+			input.query,
+			this.cfg.relevance.telemetry.queryPrivacyMode,
+		)
 		const now = new Date()
 		const topScores = input.artifacts
 			.map((artifact) => artifact.summary?.topScore)
@@ -298,33 +310,37 @@ export class MongoDBRelevanceRuntime {
 			...(typeof topScore === "number" ? { topScore } : {}),
 		}
 
-		await this.runs.insertOne(runDoc)
-
 		const persistRaw =
 			this.cfg.relevance.telemetry.persistRawExplain &&
 			(input.status === "degraded" || Boolean(input.diagnosticMode))
-		if (input.artifacts.length > 0) {
-			await this.artifacts.insertMany(
-				input.artifacts.map((artifact) => {
-					const rawExplain = persistRaw ? artifact.rawExplain : undefined
-					return {
-						runId,
-						// W02: artifacts carry their own immutable tenant identity
-						// so tenant erasure can reach them directly instead of
-						// only through their parent run row. Legacy rows (no
-						// agentId) remain covered by the runId join while their
-						// parents exist.
-						agentId: this.agentId,
-						artifactType: artifact.artifactType,
-						summary: artifact.summary,
-						rawExplain,
-						rawSizeBytes: rawExplain ? JSON.stringify(rawExplain).length : 0,
-						compression: "none",
-						ts: now,
-					}
-				}),
-			)
-		}
+		const artifactDocs = input.artifacts.map((artifact) => {
+			const rawExplain = persistRaw ? artifact.rawExplain : undefined
+			return {
+				runId,
+				// W02: artifacts carry their own immutable tenant identity
+				// so tenant erasure can reach them directly instead of
+				// only through their parent run row. Legacy rows (no
+				// agentId) remain covered by the runId join while their
+				// parents exist.
+				agentId: this.agentId,
+				artifactType: artifact.artifactType,
+				summary: artifact.summary,
+				rawExplain,
+				rawSizeBytes: rawExplain ? JSON.stringify(rawExplain).length : 0,
+				compression: "none",
+				ts: now,
+			}
+		})
+		await withFencedWrite({
+			db: this.db,
+			prefix: this.prefix,
+			token: admission,
+			fn: async (session) => {
+				await this.runs.insertOne(runDoc, { session })
+				if (artifactDocs.length > 0)
+					await this.artifacts.insertMany(artifactDocs, { session })
+			},
+		})
 
 		return runId
 	}

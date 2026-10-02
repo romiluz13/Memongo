@@ -1192,6 +1192,178 @@ describe("P2.8 boundary input validation", () => {
 		).not.toHaveBeenCalled()
 	})
 
+	it.each([
+		["confidence", -0.1],
+		["confidence", 1.1],
+		["sourceReliability", -0.1],
+		["sourceReliability", 1.1],
+		["sourceReliability", "0.9"],
+		["sourceReliability", null],
+	] as const)("write-structured rejects invalid %s=%s before dispatch", async (field, value) => {
+		const res = await postJson("/v1/write-structured", {
+			entry: { type: "fact", key: "city", value: "Berlin", [field]: value },
+		})
+		expect(res.status).toBe(400)
+		expect(
+			((await res.json()) as { error: { code: string; message: string } })
+				.error,
+		).toMatchObject({
+			code: "VALIDATION_ERROR",
+			message: expect.stringContaining(`entry.${field}`),
+		})
+		expect(
+			bridgeMocks.memongoBridgeWriteStructuredMemory,
+		).not.toHaveBeenCalled()
+	})
+	it.each([
+		-0.1, 1.1,
+	])("write-procedure rejects confidence=%s before dispatch", async (confidence) => {
+		const res = await postJson("/v1/write-procedure", {
+			entry: {
+				procedureId: "p1",
+				name: "Deploy",
+				steps: ["build"],
+				confidence,
+			},
+		})
+		expect(res.status).toBe(400)
+		expect(
+			((await res.json()) as { error: { code: string; message: string } })
+				.error,
+		).toMatchObject({
+			code: "VALIDATION_ERROR",
+			message: expect.stringContaining("entry.confidence"),
+		})
+		expect(bridgeMocks.memongoBridgeWriteProcedure).not.toHaveBeenCalled()
+	})
+	it.each([
+		0, 0.5, 1,
+	])("write routes preserve permitted certainty=%s and optional fields", async (certainty) => {
+		const entry = {
+			type: "fact",
+			key: "city",
+			value: "Berlin",
+			confidence: certainty,
+			sourceReliability: certainty,
+			futureField: "retained",
+		}
+		const structured = await postJson("/v1/write-structured", { entry })
+		expect(structured.status).toBe(200)
+		expect(
+			bridgeMocks.memongoBridgeWriteStructuredMemory.mock.calls[0]?.[0]?.entry,
+		).toEqual(entry)
+		const procedure = {
+			procedureId: "p1",
+			name: "Deploy",
+			steps: ["build"],
+			confidence: certainty,
+		}
+		const response = await postJson("/v1/write-procedure", { entry: procedure })
+		expect(response.status).toBe(200)
+		expect(
+			bridgeMocks.memongoBridgeWriteProcedure.mock.calls[0]?.[0]?.entry,
+		).toEqual(procedure)
+	})
+
+	it.each([
+		["validFrom", null],
+		["validTo", null],
+		["lastConfirmedAt", null],
+		["validFrom", 123],
+		["validTo", 123],
+		["lastConfirmedAt", 123],
+		["validFrom", "not-a-date"],
+		["validTo", "not-a-date"],
+		["lastConfirmedAt", "not-a-date"],
+		["validFrom", "2026-10-01T12:00:00"],
+		["validTo", "2026-10-01T12:00:00"],
+		["lastConfirmedAt", "2026-10-01T12:00:00"],
+		["validFrom", "2026-10-01T12:00:00+99:99"],
+		["validTo", "2026-10-01T12:00:00+99:99"],
+		["lastConfirmedAt", "2026-10-01T12:00:00+99:99"],
+	] as const)("write-structured rejects invalid date %s=%s before dispatch", async (field, value) => {
+		const res = await postJson("/v1/write-structured", {
+			entry: { type: "fact", key: "city", value: "Berlin", [field]: value },
+		})
+		expect(res.status).toBe(400)
+		expect(
+			((await res.json()) as { error: { code: string; message: string } })
+				.error,
+		).toMatchObject({
+			code: "VALIDATION_ERROR",
+			message: expect.stringContaining(`entry.${field}`),
+		})
+		expect(
+			bridgeMocks.memongoBridgeWriteStructuredMemory,
+		).not.toHaveBeenCalled()
+	})
+
+	it.each([
+		"2020-01-01T12:00:00Z",
+		"2020-01-01T12:00:00+02:30",
+		"2020-01-01T12:00:00+0230",
+	])("write-structured converts valid dates %s to Date objects", async (timestamp) => {
+		const entry = {
+			type: "fact",
+			key: "city",
+			value: "Berlin",
+			validFrom: timestamp,
+			validTo: timestamp,
+			lastConfirmedAt: timestamp,
+			futureField: "retained",
+		}
+		const res = await postJson("/v1/write-structured", { entry })
+		expect(res.status).toBe(200)
+		expect(
+			bridgeMocks.memongoBridgeWriteStructuredMemory.mock.calls[0]?.[0]?.entry,
+		).toEqual({
+			...entry,
+			validFrom: new Date(timestamp),
+			validTo: new Date(timestamp),
+			lastConfirmedAt: new Date(timestamp),
+		})
+	})
+
+	it.each([
+		"2035-01-01T12:00:00+99:99",
+		"not-a-date",
+		"2035-01-01T12:00:00",
+		123,
+		null,
+		"2020-01-01T12:00:00Z",
+	])("write-structured rejects invalid expiry %s before dispatch", async (expiresAt) => {
+		const res = await postJson("/v1/write-structured", {
+			entry: { type: "fact", key: "city", value: "Berlin", expiresAt },
+		})
+		expect(res.status).toBe(400)
+		expect(
+			((await res.json()) as { error: { code: string; message: string } })
+				.error,
+		).toMatchObject({
+			code: "VALIDATION_ERROR",
+			message: expect.stringContaining("entry.expiresAt"),
+		})
+		expect(
+			bridgeMocks.memongoBridgeWriteStructuredMemory,
+		).not.toHaveBeenCalled()
+	})
+
+	it.each([
+		"2035-01-01T12:00:00Z",
+		"2035-01-01T12:00:00+02:30",
+		"2035-01-01T12:00:00+0230",
+	])("write-structured preserves future expiry %s as a Date", async (expiresAt) => {
+		const entry = { type: "fact", key: "city", value: "Berlin", expiresAt }
+		const res = await postJson("/v1/write-structured", { entry })
+		expect(res.status).toBe(200)
+		expect(
+			bridgeMocks.memongoBridgeWriteStructuredMemory.mock.calls[0]?.[0]?.entry,
+		).toEqual({
+			...entry,
+			expiresAt: new Date(expiresAt),
+		})
+	})
+
 	it("write-structured accepts a valid entry and forwards it to the bridge", async () => {
 		const res = await postJson("/v1/write-structured", {
 			entry: { type: "fact", key: "city", value: "Berlin" },

@@ -255,7 +255,11 @@ describe("mongodb-profile", () => {
 			.calls[0][0] as Document[]
 		const matchStage = aggregateCall.find((s: Document) => s.$match)
 		expect(matchStage).toBeDefined()
-		expect(matchStage!.$match.state).toBe("active")
+		// The $match is a canonical mergeQueryClauses composition; the state
+		// predicate sits inside the $and alongside the temporal guards.
+		expect(matchStage!.$match.$and).toEqual(
+			expect.arrayContaining([{ state: "active" }]),
+		)
 	})
 
 	// 6. Top entities by relation count
@@ -418,11 +422,79 @@ describe("mongodb-profile", () => {
 			.calls[0][0] as Document[]
 		const matchStage = aggregateCall.find((s: Document) => s.$match)
 		expect(matchStage).toBeDefined()
-		const timestampFilter = matchStage!.$match.timestamp
+		// The $match is a canonical mergeQueryClauses composition; the window
+		// predicate sits inside the $and alongside the TTL guard.
+		const evtClauses = matchStage!.$match.$and as Document[]
+		expect(Array.isArray(evtClauses)).toBe(true)
+		const timestampClause = evtClauses.find((c: Document) => c.timestamp)
+		expect(timestampClause).toBeDefined()
+		const timestampFilter = timestampClause!.timestamp
 		expect(timestampFilter.$gte).toBeInstanceOf(Date)
 		const filterTime = (timestampFilter.$gte as Date).getTime()
 		expect(filterTime).toBeGreaterThanOrEqual(beforeTime - customWindowMs)
 		expect(filterTime).toBeLessThanOrEqual(afterTime - customWindowMs)
+	})
+
+	// 11b. The events activity lane excludes TTL-expired events (P4.4.1 guard)
+	it("synthesizeProfile guards the events activity lane with the unexpired clause", async () => {
+		setupEmptyMocks()
+
+		const activityWindowMs = 7 * 24 * 60 * 60 * 1000
+		const beforeTime = Date.now()
+		await synthesizeProfile({
+			...defaultParams(),
+			activityWindowMs,
+		})
+		const afterTime = Date.now()
+
+		const evtCol = vi.mocked(eventsCollection).mock.results[0].value
+		const aggregateCall = vi.mocked(evtCol.aggregate).mock
+			.calls[0][0] as Document[]
+		const matchStage = aggregateCall.find((s: Document) => s.$match)
+		expect(matchStage).toBeDefined()
+		if (!matchStage) {
+			throw new Error("events activity $match stage was not recorded")
+		}
+		const evtClauses = matchStage.$match.$and as Document[]
+		expect(evtClauses).toEqual(
+			expect.arrayContaining([
+				{
+					$or: [
+						{ expiresAt: { $exists: false } },
+						{ expiresAt: { $gt: expect.any(Date) } },
+					],
+				},
+			]),
+		)
+		// The guard evaluates against the same captured instant as the window.
+		const guardClause = evtClauses.find(
+			(c: Document) =>
+				Array.isArray(c.$or) &&
+				(c.$or as Document[]).some((arm) => arm.expiresAt),
+		)
+		expect(guardClause).toBeDefined()
+		if (!guardClause) {
+			throw new Error("events activity expiry guard was not recorded")
+		}
+		const expiryArm = (guardClause.$or as Document[]).find(
+			(arm: Document) => arm.expiresAt?.$gt,
+		)
+		expect(expiryArm).toBeDefined()
+		if (!expiryArm) {
+			throw new Error("events activity expiry edge was not recorded")
+		}
+		const expiryEdge = expiryArm.expiresAt.$gt as Date
+		expect(expiryEdge.getTime()).toBeGreaterThanOrEqual(beforeTime)
+		expect(expiryEdge.getTime()).toBeLessThanOrEqual(afterTime)
+		const timestampClause = evtClauses.find((c: Document) => c.timestamp)
+		expect(timestampClause).toBeDefined()
+		if (!timestampClause) {
+			throw new Error("events activity window edge was not recorded")
+		}
+		const activityWindowEdge = timestampClause.timestamp.$gte as Date
+		expect(expiryEdge.getTime() - activityWindowEdge.getTime()).toBe(
+			activityWindowMs,
+		)
 	})
 
 	// 12. Null lastActive when no events
@@ -446,9 +518,12 @@ describe("mongodb-profile", () => {
 		const structAgg = vi.mocked(structCol.aggregate).mock
 			.calls[0][0] as Document[]
 		const structMatch = structAgg.find((s: Document) => s.$match)
-		expect(structMatch!.$match.agentId).toBe(AGENT_ID)
-		expect(structMatch!.$match.scope).toBe(SCOPE)
-		expect(structMatch!.$match.scopeRef).toBe(SCOPE_REF)
+		// Scope predicate is the first clause of the $and composition.
+		expect(structMatch!.$match.$and).toEqual(
+			expect.arrayContaining([
+				{ agentId: AGENT_ID, scope: SCOPE, scopeRef: SCOPE_REF },
+			]),
+		)
 
 		// Entities $match
 		const entCol = vi.mocked(entitiesCollection).mock.results[0].value
@@ -465,13 +540,15 @@ describe("mongodb-profile", () => {
 		expect(findCall.scope).toBe(SCOPE)
 		expect(findCall.scopeRef).toBe(SCOPE_REF)
 
-		// Events $match
+		// Events $match (canonical $and composition: scope + TTL guard + window)
 		const evtCol = vi.mocked(eventsCollection).mock.results[0].value
 		const evtAgg = vi.mocked(evtCol.aggregate).mock.calls[0][0] as Document[]
 		const evtMatch = evtAgg.find((s: Document) => s.$match)
-		expect(evtMatch!.$match.agentId).toBe(AGENT_ID)
-		expect(evtMatch!.$match.scope).toBe(SCOPE)
-		expect(evtMatch!.$match.scopeRef).toBe(SCOPE_REF)
+		expect(evtMatch!.$match.$and).toEqual(
+			expect.arrayContaining([
+				{ agentId: AGENT_ID, scope: SCOPE, scopeRef: SCOPE_REF },
+			]),
+		)
 	})
 
 	// 14. Telemetry emission
@@ -666,13 +743,47 @@ describe("mongodb-profile", () => {
 			.value
 		const pipeline = vi.mocked(structuredCol.aggregate).mock
 			.calls[0][0] as Document[]
-		expect(pipeline[0]).toMatchObject({
-			$match: {
-				$or: [
-					{ expiresAt: { $exists: false } },
-					{ expiresAt: { $gt: expect.any(Date) } },
-				],
-			},
-		})
+		const matchStage = pipeline[0].$match as Document
+		expect(matchStage.$and).toEqual(
+			expect.arrayContaining([
+				{
+					$or: [
+						{ expiresAt: { $exists: false } },
+						{ expiresAt: { $gt: expect.any(Date) } },
+					],
+				},
+			]),
+		)
+	})
+
+	// 24. Validity guard: ended or not-yet-valid structured rows are excluded
+	it("synthesizeProfile composes the current-validity clause into the structured $match", async () => {
+		setupEmptyMocks()
+
+		await synthesizeProfile(defaultParams())
+
+		const structuredCol = vi.mocked(structuredMemCollection).mock.results[0]
+			.value
+		const pipeline = vi.mocked(structuredCol.aggregate).mock
+			.calls[0][0] as Document[]
+		const matchStage = pipeline[0].$match as Document
+		// buildCurrentValidityClause contributes both window edges; the merge
+		// flattens them into the outer $and.
+		expect(matchStage.$and).toEqual(
+			expect.arrayContaining([
+				{
+					$or: [
+						{ validFrom: { $exists: false } },
+						{ validFrom: { $lte: expect.any(Date) } },
+					],
+				},
+				{
+					$or: [
+						{ validTo: { $exists: false } },
+						{ validTo: { $gt: expect.any(Date) } },
+					],
+				},
+			]),
+		)
 	})
 })

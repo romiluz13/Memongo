@@ -1,4 +1,5 @@
 import type { Document } from "mongodb"
+import { buildBitemporalFilter } from "./mongodb-bitemporal.js"
 
 type TemporalWindowOptions = {
 	asOf?: Date
@@ -110,6 +111,31 @@ export function buildUnexpiredClause(
 	return {
 		$or: [{ [field]: { $exists: false } }, { [field]: { $gt: asOf } }],
 	}
+}
+
+/**
+ * RET-10: canonical lifecycle filter for `events` reads outside the search
+ * lanes. Composes the durable-surface bitemporal predicate
+ * (`buildBitemporalFilter`) with the TTL guard (`buildUnexpiredClause`) so
+ * hydration surfaces (bundle recent-events, slate recent-anchors, session
+ * expansion neighbors) cannot reintroduce expired, invalidated, or
+ * not-yet-valid events that retrieval excludes. The invalidAt arm keeps its
+ * explicit-null branch because the events upsert path stores
+ * `invalidAt: null` for open windows (mongodb-events.ts $set) — an
+ * `$exists`-only arm would drop still-valid events that the search lanes
+ * (lifecycleMatch / chunk-lane guards) keep.
+ *
+ * Clock split: validity follows `asOf`; retention follows the current time
+ * because expired records may remain pending asynchronous deletion.
+ */
+export function buildEventLifecycleClause(
+	options: { asOf?: Date } = {},
+): Document {
+	const asOf = resolveTemporalAsOf(options.asOf)
+	return mergeQueryClauses(
+		buildBitemporalFilter(asOf),
+		buildUnexpiredClause({ field: "expiresAt" }),
+	)
 }
 
 /**

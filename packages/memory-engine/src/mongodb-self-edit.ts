@@ -2,15 +2,21 @@
  * Self-editing memory: allows agents to directly edit their own core memory
  * blocks (user preferences, persona identity, task instructions).
  */
-import type { Db, MongoClient } from "mongodb"
+import type { ClientSession, Db, MongoClient } from "mongodb"
 import type { MemoryMongoDBEmbeddingMode } from "@memongo/lib"
 import type { MemorySelfEditBlock, MemorySelfEditAction } from "./types.js"
 import { classifyInjection } from "./mongodb-injection-classifier.js"
 import { structuredMemCollection } from "./mongodb-schema.js"
+import { resolveScopeRef } from "./mongodb-scope.js"
 import {
 	writeStructuredMemory,
 	type StructuredMemoryType,
 } from "./mongodb-structured-memory.js"
+import {
+	ErasureGateConflictError,
+	withFencedWrite,
+	type AdmissionToken,
+} from "./mongodb-write-fence.js"
 import { MAJORITY_TRANSACTION_OPTIONS } from "./mongodb-transactions.js"
 
 // ---------------------------------------------------------------------------
@@ -77,6 +83,7 @@ export async function selfEditBlock(params: {
 	agentId: string
 	embeddingMode: MemoryMongoDBEmbeddingMode
 	client?: MongoClient
+	admission?: AdmissionToken
 	block: MemorySelfEditBlock
 	action: MemorySelfEditAction
 	content: string
@@ -94,7 +101,61 @@ export async function selfEditBlock(params: {
 }> {
 	const { db, prefix, agentId, embeddingMode, client, block, action, content } =
 		params
+	const { admission } = params
+	if (
+		admission &&
+		(admission.kind !== "admission" || admission.agentId !== agentId)
+	)
+		throw new ErasureGateConflictError(agentId)
 	const { type, key } = BLOCK_MAP[block]
+	const owner = {
+		agentId,
+		scope: "agent" as const,
+		scopeRef: resolveScopeRef({ scope: "agent", agentId }),
+	}
+
+	if (admission) {
+		const applyEdit = async (session: ClientSession) => {
+			let value = content
+			if (action !== "replace") {
+				const existing = await structuredMemCollection(db, prefix).findOne(
+					{ ...owner, type, key },
+					{ session },
+				)
+				if (existing && typeof existing.value === "string") {
+					value =
+						action === "append"
+							? `${existing.value}\n${content}`
+							: `${content}\n${existing.value}`
+				}
+			}
+			assertProtectedSelfEditSafe(block, value)
+			const result = await writeStructuredMemory({
+				db,
+				prefix,
+				entry: {
+					type,
+					key,
+					value,
+					agentId,
+					confidence: 1.0,
+					salience: "critical",
+					sourceAgent: { id: agentId, name: "user" },
+				},
+				embeddingMode,
+				session,
+				transactionalSideEffects: "inline",
+			})
+			return {
+				upserted: result.upserted,
+				id: result.quarantined ? result.id : `core:${block}`,
+				...(result.quarantined
+					? { quarantined: true, matchedPatterns: result.matchedPatterns }
+					: {}),
+			}
+		}
+		return withFencedWrite({ db, prefix, token: admission, fn: applyEdit })
+	}
 
 	if (action !== "replace" && client) {
 		const session = client.startSession()
@@ -111,7 +172,7 @@ export async function selfEditBlock(params: {
 				| undefined
 			await session.withTransaction(async () => {
 				const existing = await structuredMemCollection(db, prefix).findOne(
-					{ agentId, type, key },
+					{ ...owner, type, key },
 					{ session },
 				)
 				const existingValue =
@@ -173,7 +234,7 @@ export async function selfEditBlock(params: {
 	} else {
 		// append or prepend — read existing doc first
 		const existing = await structuredMemCollection(db, prefix).findOne({
-			agentId,
+			...owner,
 			type,
 			key,
 		})

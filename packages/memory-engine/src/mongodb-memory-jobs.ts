@@ -4,6 +4,7 @@ import type { ClientSession, Db } from "mongodb"
 import { memoryJobsCollection } from "./mongodb-schema.js"
 import { classifyBulkInsertError } from "./mongodb-events.js"
 import { emitTelemetry } from "./mongodb-telemetry.js"
+import { type AdmissionToken, withFencedWrite } from "./mongodb-write-fence.js"
 import type {
 	ClaimedMemoryJob,
 	MemoryJob,
@@ -63,12 +64,12 @@ export async function createMemoryJob(params: {
 	db: Db
 	prefix: string
 	session?: ClientSession
-	job: Omit<MemoryJob, "createdAt">
+	job: MemoryJobBatchInput
 }): Promise<string> {
 	const { db, prefix, job } = params
 	const doc: MemoryJob = {
 		...job,
-		createdAt: new Date(),
+		createdAt: job.createdAt ?? new Date(),
 		attempts: job.attempts ?? 0,
 	}
 	await memoryJobsCollection(db, prefix).insertOne(
@@ -83,6 +84,10 @@ export async function createMemoryJob(params: {
 export type MemoryJobBatchItemResult =
 	| { ok: true; jobId: string }
 	| { ok: false; jobId: string; duplicate: boolean; message: string }
+
+export type MemoryJobBatchInput = Omit<MemoryJob, "createdAt"> & {
+	createdAt?: Date
+}
 
 /**
  * W09 reconciliation read for job inserts: which jobIds already exist. An
@@ -176,7 +181,8 @@ async function reconcileJobBatchOutcomes(params: {
 export async function createMemoryJobsBatch(params: {
 	db: Db
 	prefix: string
-	jobs: Array<Omit<MemoryJob, "createdAt">>
+	session?: ClientSession
+	jobs: MemoryJobBatchInput[]
 }): Promise<MemoryJobBatchItemResult[]> {
 	const { db, prefix, jobs } = params
 	if (jobs.length === 0) {
@@ -184,13 +190,20 @@ export async function createMemoryJobsBatch(params: {
 	}
 	const docs: MemoryJob[] = jobs.map((job) => ({
 		...job,
-		createdAt: new Date(),
+		createdAt: job.createdAt ?? new Date(),
 		attempts: job.attempts ?? 0,
 	}))
 	const results: MemoryJobBatchItemResult[] = docs.map((doc) => ({
 		ok: true,
 		jobId: doc.jobId,
 	}))
+	if (params.session) {
+		await memoryJobsCollection(db, prefix).insertMany(docs, {
+			ordered: false,
+			session: params.session,
+		})
+		return results
+	}
 	try {
 		await memoryJobsCollection(db, prefix).insertMany(docs, {
 			ordered: false,
@@ -261,6 +274,7 @@ export async function claimMemoryJob(params: {
 	jobType: MemoryJobType
 	workerId: string
 	leaseMs: number
+	admissionEpoch?: number
 	now?: Date
 }): Promise<ClaimedMemoryJob | null> {
 	// Fleet audit P2: lease timestamps are stamped with server time ($$NOW via
@@ -303,9 +317,15 @@ export async function claimMemoryJob(params: {
 				// failed before retryAt existed are eligible immediately. A failed
 				// explicit run keeps its caller options in metadata; the
 				// consolidation runner restores them (W05).
+				// deadLetterAt exclusion: a terminal failure (refusal/content-filter/
+				// length — see failClaimedMemoryJob's `terminal` option) dead-letters
+				// at its TRUTHFUL attempt count, so attempts < MAX alone must not
+				// reclaim it; only retryFailedMemoryJob (which unsets deadLetterAt)
+				// can requeue a dead letter.
 				{
 					status: "failed",
 					attempts: { $lt: MEMORY_JOB_MAX_ATTEMPTS },
+					deadLetterAt: { $exists: false },
 					$or: [{ retryAt: { $exists: false } }, { retryAt: { $lte: now } }],
 				},
 			],
@@ -320,9 +340,19 @@ export async function claimMemoryJob(params: {
 					heartbeatAt: "$$NOW",
 					leaseExpiresAt: { $add: ["$$NOW", params.leaseMs] },
 					attempts: { $add: [{ $ifNull: ["$attempts", 0] }, 1] },
+					...(params.admissionEpoch !== undefined
+						? {
+								admissionEpoch: {
+									$ifNull: ["$admissionEpoch", params.admissionEpoch],
+								},
+							}
+						: {}),
 				},
 			},
-			{ $unset: ["completedAt", "error", "stagedAt", "retryAt"] },
+			// Claiming clears the tracking marker atomically: ownership
+			// moves to the worker, so a post-claim crash is recovered by
+			// normal lease expiry.
+			{ $unset: ["completedAt", "error", "stagedAt", "retryAt", "tracking"] },
 		],
 		{
 			sort: { createdAt: 1, jobId: 1 },
@@ -352,6 +382,7 @@ export async function deadLetterExpiredMemoryJobs(params: {
 	agentId: string
 	jobType?: MemoryJobType
 	now?: Date
+	session?: ClientSession
 }): Promise<number> {
 	const now = params.now ?? new Date()
 	const result = await memoryJobsCollection(
@@ -384,7 +415,9 @@ export async function deadLetterExpiredMemoryJobs(params: {
 				completedAt: "",
 			},
 		},
-		{ writeConcern: DURABLE_JOB_WRITE_CONCERN },
+		params.session
+			? { session: params.session }
+			: { writeConcern: DURABLE_JOB_WRITE_CONCERN },
 	)
 	return result.modifiedCount ?? 0
 }
@@ -422,9 +455,126 @@ export async function renewMemoryJobLease(params: {
 	return result.matchedCount === 1
 }
 
+export class MemoryJobOwnershipLostError extends Error {
+	readonly code = "MEMORY_JOB_OWNERSHIP_LOST"
+
+	constructor(readonly jobId: string) {
+		super(`memory job ownership lost: ${jobId}`)
+		this.name = "MemoryJobOwnershipLostError"
+	}
+}
+
+export function isMemoryJobOwnershipLostError(
+	err: unknown,
+): err is MemoryJobOwnershipLostError {
+	return (
+		typeof err === "object" &&
+		err !== null &&
+		(err as { code?: unknown }).code === "MEMORY_JOB_OWNERSHIP_LOST"
+	)
+}
+
+/**
+ * Commit one extraction effect batch only while both the job's original
+ * erasure admission and its exact live lease are still owned.
+ *
+ * The gate row and job row are deliberately written before `fn`: erasure,
+ * lease renewal, and lease reclaim all write one of those rows, so a
+ * concurrent ownership change conflicts with this transaction. Driver
+ * retries re-read both conditions and fail closed after ownership is lost.
+ */
+export async function withClaimedMemoryJobEffectBatch<T>(params: {
+	db: Db
+	prefix: string
+	token: AdmissionToken
+	jobId: string
+	agentId: string
+	leaseOwner: string
+	leaseToken: string
+	fn: (session: ClientSession) => Promise<T>
+}): Promise<T> {
+	return withFencedWrite({
+		db: params.db,
+		prefix: params.prefix,
+		token: params.token,
+		fn: async (session) => {
+			const ownership = await memoryJobsCollection(
+				params.db,
+				params.prefix,
+			).updateOne(
+				{
+					jobId: params.jobId,
+					agentId: params.agentId,
+					status: "running",
+					leaseOwner: params.leaseOwner,
+					leaseToken: params.leaseToken,
+					leaseExpiresAt: { $gt: new Date() },
+					admissionEpoch: params.token.epoch,
+				},
+				{
+					$inc: { effectFenceSerial: 1 },
+					$currentDate: { effectFenceAt: true },
+				},
+				{ session },
+			)
+			if (ownership.matchedCount !== 1) {
+				throw new MemoryJobOwnershipLostError(params.jobId)
+			}
+			return params.fn(session)
+		},
+	})
+}
+
+/**
+ * Upgrade a legacy claimed row that predates admissionEpoch. The trusted gate
+ * capture happens before event/provider reads, and this transaction binds
+ * that epoch to the exact live lease without replacing a stored value.
+ */
+export async function captureClaimedMemoryJobAdmissionEpoch(params: {
+	db: Db
+	prefix: string
+	token: AdmissionToken
+	jobId: string
+	agentId: string
+	leaseOwner: string
+	leaseToken: string
+}): Promise<boolean> {
+	return withFencedWrite({
+		db: params.db,
+		prefix: params.prefix,
+		token: params.token,
+		fn: async (session) => {
+			const result = await memoryJobsCollection(
+				params.db,
+				params.prefix,
+			).updateOne(
+				{
+					jobId: params.jobId,
+					agentId: params.agentId,
+					status: "running",
+					leaseOwner: params.leaseOwner,
+					leaseToken: params.leaseToken,
+					leaseExpiresAt: { $gt: new Date() },
+					admissionEpoch: { $exists: false },
+				},
+				{
+					$set: {
+						admissionEpoch: params.token.epoch,
+						effectFenceAt: new Date(),
+					},
+					$inc: { effectFenceSerial: 1 },
+				},
+				{ session },
+			)
+			return result.matchedCount === 1
+		},
+	})
+}
+
 type ClaimedJobTerminalParams = {
 	db: Db
 	prefix: string
+	session?: ClientSession
 	jobId: string
 	agentId: string
 	leaseOwner: string
@@ -445,15 +595,29 @@ async function finishClaimedMemoryJob(
 		error?: string
 		/** Attempts already spent, used to space out the retry. */
 		attempts?: number
+		/**
+		 * Terminal failure (refusal/content-filter/length): dead-letter NOW
+		 * instead of when the attempt budget runs out. `attempts` stays the
+		 * truthful historical claim count — no fabricated counts; the claim
+		 * filter's deadLetterAt exclusion is what stops the reclaim loop.
+		 */
+		terminal?: boolean
 	},
 ): Promise<boolean> {
 	const now = params.now ?? new Date()
 	const completedAt = params.completedAt ?? new Date()
-	// A job that exhausted its attempt budget becomes a dead letter instead of
-	// a retryable failure. Three properties follow from that, and all three
-	// are load-bearing:
-	//   - no retryAt: the claim filter requires attempts < MAX, so a retry
-	//     time would be a promise the queue can never keep;
+	// A job that exhausted its attempt budget — or was failed terminally
+	// (non-retryable provider class: policy refusal, content filter, or
+	// token-budget truncation) — becomes a dead letter instead of a
+	// retryable failure. Four properties follow from that, and all are
+	// load-bearing:
+	//   - no retryAt: promising a retry time for a job the queue will not
+	//     reclaim is a lie; for terminal failures the retry would be a
+	//     pointless identical request;
+	//   - truthful attempts: a terminal failure keeps its actual attempt
+	//     count (1 for a first-attempt refusal). The claim filter's failed
+	//     branch excludes deadLetterAt, so a low attempt count cannot
+	//     reclaim a dead letter;
 	//   - no completedAt: the completed-TTL index would silently erase the job
 	//     like any other finished one — a dead letter is kept precisely so an
 	//     operator can see it (status counts surface it) and requeue or drop
@@ -462,7 +626,8 @@ async function finishClaimedMemoryJob(
 	//     dead letter from a failure that still has budget left.
 	const deadLettered =
 		params.status === "failed" &&
-		(params.attempts ?? 1) >= MEMORY_JOB_MAX_ATTEMPTS
+		(params.terminal === true ||
+			(params.attempts ?? 1) >= MEMORY_JOB_MAX_ATTEMPTS)
 	const update: Record<string, unknown> = {
 		status: params.status,
 		completedAt,
@@ -501,13 +666,15 @@ async function finishClaimedMemoryJob(
 				heartbeatAt: "",
 			},
 		},
-		{ writeConcern: DURABLE_JOB_WRITE_CONCERN },
+		params.session
+			? { session: params.session }
+			: { writeConcern: DURABLE_JOB_WRITE_CONCERN },
 	)
 	if (result.matchedCount === 1 && deadLettered) {
 		log.error(
 			`memory job dead-lettered after ${params.attempts ?? 1} attempts: jobId=${params.jobId} jobType=${params.jobType ?? "unknown"} error=${params.error ?? ""}`,
 		)
-		emitTelemetry(params.db, params.prefix, {
+		const telemetry = {
 			meta: {
 				agentId: params.agentId,
 				operation: "memory-job-dead-letter",
@@ -516,7 +683,14 @@ async function finishClaimedMemoryJob(
 			ok: false,
 			itemCount: params.attempts ?? 1,
 			eventType: params.jobType ?? "unknown",
-		})
+		} as const
+		if (params.session) {
+			await emitTelemetry(params.db, params.prefix, telemetry, {
+				session: params.session,
+			})
+		} else {
+			emitTelemetry(params.db, params.prefix, telemetry)
+		}
 	}
 	return result.matchedCount === 1
 }
@@ -528,7 +702,12 @@ export async function completeClaimedMemoryJob(
 }
 
 export async function failClaimedMemoryJob(
-	params: ClaimedJobTerminalParams & { error: string; attempts?: number },
+	params: ClaimedJobTerminalParams & {
+		error: string
+		attempts?: number
+		/** Dead-letter immediately (non-retryable provider failure class). */
+		terminal?: boolean
+	},
 ): Promise<boolean> {
 	return finishClaimedMemoryJob({ ...params, status: "failed" })
 }
@@ -540,16 +719,29 @@ export async function retryFailedMemoryJob(params: {
 	agentId: string
 	payload: NonNullable<MemoryJob["payload"]>
 	metadata?: Record<string, unknown>
+	session?: ClientSession
+	admissionEpoch?: number
 }): Promise<boolean> {
 	const result = await memoryJobsCollection(params.db, params.prefix).updateOne(
 		{
 			jobId: params.jobId,
 			agentId: params.agentId,
 			status: "failed",
+			...(params.admissionEpoch !== undefined
+				? {
+						$or: [
+							{ admissionEpoch: { $exists: false } },
+							{ admissionEpoch: params.admissionEpoch },
+						],
+					}
+				: {}),
 		},
 		{
 			$set: {
 				status: "pending",
+				...(params.admissionEpoch !== undefined
+					? { admissionEpoch: params.admissionEpoch }
+					: {}),
 				payload: params.payload,
 				...(params.metadata ? { metadata: params.metadata } : {}),
 			},
@@ -568,7 +760,9 @@ export async function retryFailedMemoryJob(params: {
 				retryAt: "",
 			},
 		},
-		{ writeConcern: DURABLE_JOB_WRITE_CONCERN },
+		params.session
+			? { session: params.session }
+			: { writeConcern: DURABLE_JOB_WRITE_CONCERN },
 	)
 	return result.matchedCount === 1
 }
@@ -578,6 +772,7 @@ export async function releaseStagedMemoryJob(params: {
 	prefix: string
 	jobId: string
 	agentId: string
+	session?: ClientSession
 }): Promise<boolean> {
 	const result = await memoryJobsCollection(params.db, params.prefix).updateOne(
 		{
@@ -587,9 +782,36 @@ export async function releaseStagedMemoryJob(params: {
 			stagedAt: { $exists: true },
 		},
 		{ $unset: { stagedAt: "" } },
-		{ writeConcern: DURABLE_JOB_WRITE_CONCERN },
+		params.session
+			? { session: params.session }
+			: { writeConcern: DURABLE_JOB_WRITE_CONCERN },
 	)
 	return result.matchedCount === 1
+}
+
+export async function releaseStagedMemoryJobsBatch(params: {
+	db: Db
+	prefix: string
+	jobIds: string[]
+	agentId: string
+}): Promise<number> {
+	if (params.jobIds.length === 0) {
+		return 0
+	}
+	const result = await memoryJobsCollection(
+		params.db,
+		params.prefix,
+	).updateMany(
+		{
+			jobId: { $in: params.jobIds },
+			agentId: params.agentId,
+			status: "pending",
+			stagedAt: { $exists: true },
+		},
+		{ $unset: { stagedAt: "" } },
+		{ writeConcern: DURABLE_JOB_WRITE_CONCERN },
+	)
+	return result.matchedCount
 }
 
 export async function updateMemoryJob(params: {
@@ -684,11 +906,16 @@ export async function getMemoryJob(params: {
 	prefix: string
 	jobId: string
 	agentId?: string
+	session?: ClientSession
 }): Promise<MemoryJob | null> {
 	const { db, prefix, jobId, agentId } = params
-	const doc = await memoryJobsCollection(db, prefix).findOne({
+	const filter = {
 		jobId,
 		...(agentId ? { agentId } : {}),
-	})
+	}
+	const collection = memoryJobsCollection(db, prefix)
+	const doc = params.session
+		? await collection.findOne(filter, { session: params.session })
+		: await collection.findOne(filter)
 	return (doc as MemoryJob | null) ?? null
 }

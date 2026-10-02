@@ -61,3 +61,6 @@ benchmarks/results/checkpoints/
 # Vitest JUnit output, emitted only when CI=true; parsed by
 # scripts/ci/verify-tests-ran.mjs (skip-green guard).
 test-results/
+
+# Local scratch (browser profiles, throwaway inputs) — never repo content.
+tmp/

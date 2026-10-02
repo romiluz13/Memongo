@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/unbound-method -- Vitest mock method assertions */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest"
+import type { Document } from "mongodb"
 import {
 	MongoDBMemoryManager,
 	searchV2,
@@ -10,7 +11,6 @@ import {
 	resetSearchAdmissionForTests,
 	tryConsumeSearchAdmission,
 } from "./mongodb-search-admission.js"
-import { checkCache, writeCache } from "./mongodb-query-cache.js"
 import { crossEncoderRerank } from "./mongodb-reranker.js"
 import type { MemorySearchResult } from "./types.js"
 import {
@@ -19,6 +19,7 @@ import {
 	fakeDb,
 	fakePrefix,
 	captureManagerPrototype,
+	kitMongoConfig,
 } from "./test-helpers/manager-test-kit.js"
 
 captureManagerPrototype(MongoDBMemoryManager)
@@ -96,6 +97,10 @@ vi.mock("./mongodb-telemetry.js", async () =>
 	(await import("./test-helpers/manager-test-kit.js")).telemetryModuleMock(),
 )
 
+vi.mock("./mongodb-write-fence.js", async () =>
+	(await import("./test-helpers/manager-test-kit.js")).writeFenceModuleMock(),
+)
+
 const { getEventsByTimeRange } = await import("./mongodb-events.js")
 const { planRetrieval, resolveTimeRangePreset, extractTemporalWindow } =
 	await import("./mongodb-retrieval-planner.js")
@@ -114,6 +119,7 @@ const {
 const { getLaneCoverage } = await import("./mongodb-lane-coverage.js")
 const { searchKB } = await import("./mongodb-kb-search.js")
 const { emitTelemetry } = await import("./mongodb-telemetry.js")
+const { captureAdmissionToken } = await import("./mongodb-write-fence.js")
 
 // ---------------------------------------------------------------------------
 // 8.2b: P3.1/P3.2 search cost — fused lanes, per-search budget, backstop gating
@@ -701,11 +707,6 @@ describe("legacySearch fallback opt-in (P3.2)", () => {
 	})
 
 	it("returns empty without re-running legacySearch when the fallback is not opted in", async () => {
-		mocked(checkCache).mockResolvedValue({
-			hit: false,
-			tier: "miss",
-			results: [],
-		})
 		mocked(planRetrieval).mockReturnValue({
 			paths: [],
 			confidence: "low",
@@ -717,20 +718,22 @@ describe("legacySearch fallback opt-in (P3.2)", () => {
 		mocked(chunksCollection).mockReturnValue({ aggregate } as never)
 
 		const manager = buildMockManager()
+		const legacySearch = vi.spyOn(
+			manager as unknown as {
+				legacySearch(...args: unknown[]): Promise<MemorySearchResult[]>
+			},
+			"legacySearch",
+		)
 		const results = await manager.search("qzx legacy opt-out marker")
 
 		// Empty ≠ error: the v2 empty answer stands; legacySearch does not
-		// re-run the whole retrieval (its chunks aggregate never fires).
+		// re-run the whole retrieval; the only aggregate is the v2 text query.
 		expect(results).toEqual([])
-		expect(aggregate).not.toHaveBeenCalled()
+		expect(aggregate).toHaveBeenCalledTimes(1)
+		expect(legacySearch).not.toHaveBeenCalled()
 	})
 
 	it("runs legacySearch when legacySearchFallback is opted in", async () => {
-		mocked(checkCache).mockResolvedValue({
-			hit: false,
-			tier: "miss",
-			results: [],
-		})
 		mocked(planRetrieval).mockReturnValue({
 			paths: [],
 			confidence: "low",
@@ -758,11 +761,69 @@ describe("legacySearch fallback opt-in (P3.2)", () => {
 				mongodb: { ...baseCfg, legacySearchFallback: true },
 			},
 		})
+		const recordSearchAccess = vi.spyOn(
+			manager as unknown as { recordSearchAccess(...args: unknown[]): void },
+			"recordSearchAccess",
+		)
 		const results = await manager.search("qzx legacy opt-in marker")
+		expect(captureAdmissionToken).toHaveBeenCalledTimes(1)
+		expect(recordSearchAccess).toHaveBeenCalledWith(results, {
+			kind: "admission",
+			agentId: "agent-1",
+			epoch: 0,
+		})
 
 		expect(aggregate).toHaveBeenCalled()
 		expect(results.length).toBeGreaterThan(0)
 		expect(results[0]?.snippet).toContain("legacy fallback hit")
+	})
+
+	it("preserves the KB restriction in the detailed legacy fallback literal", async () => {
+		mocked(planRetrieval).mockReturnValue({
+			paths: [],
+			confidence: "low",
+			reasoning: "empty plan",
+		})
+		vi.mocked(chunksCollection).mockReturnValue({
+			aggregate: vi
+				.fn()
+				.mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) }),
+		} as never)
+		const base = buildMockManager()
+		const baseCfg = (
+			base as unknown as { config: { mongodb: Record<string, unknown> } }
+		).config.mongodb
+		const manager = buildMockManager({
+			config: {
+				mongodb: { ...baseCfg, legacySearchFallback: true },
+			},
+		})
+		const legacySearch = vi
+			.spyOn(
+				manager as unknown as {
+					legacySearch(
+						query: string,
+						opts?: Record<string, unknown>,
+					): Promise<MemorySearchResult[]>
+				},
+				"legacySearch",
+			)
+			.mockResolvedValue([])
+
+		await manager.searchDetailed({
+			query: "authorization probe",
+			kbRestricted: true,
+		})
+
+		expect(legacySearch).toHaveBeenCalledWith(
+			"authorization probe",
+			expect.objectContaining({ kbRestricted: true }),
+			expect.objectContaining({
+				kind: "admission",
+				agentId: "agent-1",
+				epoch: 0,
+			}),
+		)
 	})
 })
 
@@ -832,6 +893,75 @@ describe("rerankResults", () => {
 		const originalOrder = results.map((r) => r.path)
 		rerankResults(results, "query")
 		expect(results.map((r) => r.path)).toEqual(originalOrder)
+	})
+
+	it("propagates diversity-adjusted scores with provenance stamps (RET-07)", () => {
+		const results = [
+			makeResult("event:1", "text1", 0.9, "conversation"),
+			makeResult("event:2", "text2", 0.8, "conversation"),
+			makeResult("event:3", "text3", 0.7, "conversation"),
+			makeResult("struct:1", "text4", 0.6, "reference"),
+		]
+		const reranked = rerankResults(results, "query")
+		// Audit proof: the 3rd conversation result (0.7) drops below the
+		// reference (0.6) under the diversity penalty.
+		expect(reranked.map((r) => r.path)).toEqual([
+			"event:1",
+			"event:2",
+			"struct:1",
+			"event:3",
+		])
+		// RET-07: the adjusted scores now travel on the returned results, so
+		// the next scoring stage composes on top of the heuristic instead of
+		// re-sorting it away.
+		expect(reranked[0].score).toBeCloseTo(0.9)
+		expect(reranked[0].provenance).toBeUndefined()
+		expect(reranked[2].score).toBeCloseTo(0.6)
+		expect(reranked[2].provenance).toBeUndefined()
+		// Multiplicative penalty: 0.7 * (1 - 0.15 * 1) = 0.595 (B6)
+		expect(reranked[3].score).toBeCloseTo(0.595)
+		expect(reranked[3].provenance?.heuristicRerankAdjustment).toBeCloseTo(
+			-0.105,
+		)
+	})
+
+	it("keeps RRF-scale scores positive under the diversity penalty (B6)", () => {
+		// Regression: an additive 0.15 penalty zeroed every RRF-scale score
+		// (~0.016), collapsing the evidence lane after the first two chunks.
+		const results = [
+			makeResult("chunk:1", "chunk1", 0.016, "reference"),
+			makeResult("chunk:2", "chunk2", 0.015, "reference"),
+			makeResult("chunk:3", "chunk3", 0.014, "reference"),
+			makeResult("struct:1", "entity1", 0.013, "structured"),
+		]
+		const reranked = rerankResults(results, "query")
+		expect(reranked).toHaveLength(4)
+		// All four results keep a strictly positive score.
+		for (const r of reranked) {
+			expect(r.score).toBeGreaterThan(0)
+		}
+		// Relative order among the penalized chunks is preserved.
+		const chunkScores = reranked
+			.filter((r) => r.path.startsWith("chunk:"))
+			.map((r) => r.score)
+		expect(chunkScores).toEqual([...chunkScores].sort((a, b) => b - a))
+		// The 3rd reference chunk is dampened proportionally, not zeroed:
+		// 0.014 * 0.85 = 0.0119.
+		const thirdChunk = reranked.find((r) => r.path === "chunk:3")
+		expect(thirdChunk?.score).toBeCloseTo(0.0119, 5)
+	})
+
+	it("propagates episode boost scores (RET-07)", () => {
+		const results = [
+			makeResult("event:1", "text1", 0.9, "conversation"),
+			makeResult("episode:ep1", "Episode: summary", 0.8, "conversation"),
+		]
+		const reranked = rerankResults(results, "query")
+		expect(reranked[0].path).toBe("episode:ep1")
+		expect(reranked[0].score).toBeCloseTo(0.92)
+		expect(reranked[0].provenance?.heuristicRerankAdjustment).toBeCloseTo(0.12)
+		expect(reranked[1].score).toBeCloseTo(0.9)
+		expect(reranked[1].provenance).toBeUndefined()
 	})
 })
 
@@ -977,23 +1107,15 @@ describe("scope-safe cache writes", () => {
 		} as never)
 
 		const manager = buildMockManager({
-			config: {
-				mongodb: {
-					embeddingMode: "automated",
-					fusionMethod: "rankFusion",
-					numCandidates: 500,
-					cache: {
-						enabled: false,
-						conversationTtlSec: 300,
-						kbTtlSec: 600,
-					},
-					kb: { enabled: false },
-					episodes: { enabled: false },
-					graph: { enabled: false },
-					reranking: { enabled: false },
-					queryRewriting: { enabled: false },
+			config: kitMongoConfig({
+				numCandidates: 500,
+				cache: {
+					enabled: false,
+					conversationTtlSec: 300,
+					kbTtlSec: 600,
 				},
-			},
+				episodes: { enabled: false, minEventsForEpisode: 6 },
+			}),
 		})
 
 		const top50 = await manager.searchDetailed({
@@ -1026,24 +1148,16 @@ describe("scope-safe cache writes", () => {
 		} as never)
 
 		const manager = buildMockManager({
-			config: {
-				mongodb: {
-					embeddingMode: "automated",
-					fusionMethod: "rankFusion",
-					recallProfile: "proof",
-					numCandidates: 200,
-					cache: {
-						enabled: false,
-						conversationTtlSec: 300,
-						kbTtlSec: 600,
-					},
-					kb: { enabled: false },
-					episodes: { enabled: false },
-					graph: { enabled: false },
-					reranking: { enabled: false },
-					queryRewriting: { enabled: false },
+			config: kitMongoConfig({
+				recallProfile: "proof",
+				numCandidates: 200,
+				cache: {
+					enabled: false,
+					conversationTtlSec: 300,
+					kbTtlSec: 600,
 				},
-			},
+				episodes: { enabled: false, minEventsForEpisode: 6 },
+			}),
 		})
 
 		const response = await manager.searchDetailed({
@@ -1072,23 +1186,15 @@ describe("scope-safe cache writes", () => {
 		} as never)
 
 		const manager = buildMockManager({
-			config: {
-				mongodb: {
-					embeddingMode: "automated",
-					fusionMethod: "rankFusion",
-					numCandidates: 500,
-					cache: {
-						enabled: false,
-						conversationTtlSec: 300,
-						kbTtlSec: 600,
-					},
-					kb: { enabled: false },
-					episodes: { enabled: false },
-					graph: { enabled: false },
-					reranking: { enabled: false },
-					queryRewriting: { enabled: false },
+			config: kitMongoConfig({
+				numCandidates: 500,
+				cache: {
+					enabled: false,
+					conversationTtlSec: 300,
+					kbTtlSec: 600,
 				},
-			},
+				episodes: { enabled: false, minEventsForEpisode: 6 },
+			}),
 		})
 
 		const response = await manager.searchDetailed({
@@ -1102,83 +1208,7 @@ describe("scope-safe cache writes", () => {
 		expect(response.metadata.resolvedSearchConfig?.numCandidates).toBe(750)
 	})
 
-	it("search() writes cache with session scope when sessionKey is provided", async () => {
-		// Cache miss so the search pipeline runs
-		mocked(checkCache).mockResolvedValue({
-			hit: false,
-			tier: undefined,
-			results: [],
-		} as never)
-
-		// Planner returns episodic path — which is fully mocked
-		mocked(planRetrieval).mockReturnValue({
-			paths: ["episodic"],
-			confidence: "high",
-			reasoning: "test scope cache",
-		})
-
-		mocked(searchEpisodes).mockResolvedValue([
-			{
-				episodeId: "ep-scope-1",
-				title: "Scope session episode",
-				summary: "Evidence for session",
-				type: "daily",
-				agentId: "agent-1",
-				scope: "agent",
-				scopeRef: "agent:agent-1",
-				timeRange: { start: new Date(), end: new Date() },
-				sourceEventCount: 1,
-				updatedAt: new Date(),
-			},
-		])
-
-		const manager = buildMockManager()
-		await manager.search("what did we discuss?", {
-			sessionKey: "sess-1",
-		})
-
-		expect(writeCache).toHaveBeenCalledTimes(1)
-		const writeCacheArgs = mocked(writeCache).mock.calls[0]?.[0]
-		// BUG: currently writes scope: "agent" — should be "session"
-		expect(writeCacheArgs.scope).toBe("session")
-		expect(writeCacheArgs.scopeRef).toBe("session:sess-1")
-	})
-
-	it("search() reads cache with session scope when sessionKey is provided", async () => {
-		mocked(checkCache).mockResolvedValue({
-			hit: false,
-			tier: undefined,
-			results: [],
-		} as never)
-
-		mocked(planRetrieval).mockReturnValue({
-			paths: ["episodic"],
-			confidence: "high",
-			reasoning: "test scope in cache read",
-		})
-
-		mocked(searchEpisodes).mockResolvedValue([])
-
-		const manager = buildMockManager()
-		await manager.search("what did we discuss?", {
-			sessionKey: "sess-3",
-		})
-
-		// BUG: currently reads cache with scope: "agent" — should be "session"
-		expect(checkCache).toHaveBeenCalledWith(
-			expect.objectContaining({
-				scope: "session",
-				scopeRef: "session:sess-3",
-			}),
-		)
-	})
-
 	it("keeps default agent searches out of workspace bridge chunks", async () => {
-		mocked(checkCache).mockResolvedValue({
-			hit: false,
-			tier: undefined,
-			results: [],
-		} as never)
 		mocked(planRetrieval).mockReturnValue({
 			paths: ["hybrid"],
 			confidence: "high",
@@ -1537,11 +1567,6 @@ describe("searchV2 lane latency instrumentation", () => {
 	})
 
 	it("search() hands the lane breakdown to the caller's onLaneLatency sink", async () => {
-		mocked(checkCache).mockResolvedValue({
-			hit: false,
-			tier: undefined,
-			results: [],
-		} as never)
 		mocked(planRetrieval).mockReturnValue({
 			paths: ["episodic"],
 			confidence: "high",
@@ -1601,13 +1626,8 @@ describe("search admission envelope at the manager boundary (WS-11)", () => {
 		return (manager as unknown as { lastSearchMode: string }).lastSearchMode
 	}
 
-	/** Cache miss + empty v2 plan + chunks aggregate that records any lane. */
+	/** Empty v2 plan + chunks aggregate that records any legacy lane. */
 	function primeEmptySearch(): ReturnType<typeof vi.fn> {
-		mocked(checkCache).mockResolvedValue({
-			hit: false,
-			tier: "miss",
-			results: [],
-		})
 		mocked(planRetrieval).mockReturnValue({
 			paths: [],
 			confidence: "low",
@@ -1663,13 +1683,20 @@ describe("search admission envelope at the manager boundary (WS-11)", () => {
 				},
 			})
 
+			const legacySearch = vi.spyOn(
+				manager as unknown as {
+					legacySearch(...args: unknown[]): Promise<MemorySearchResult[]>
+				},
+				"legacySearch",
+			)
 			const results = await manager.search("qzx legacy token envelope")
 
 			// v2 was admitted and returned its (healthy) empty answer; the
 			// legacy re-run was denied and left that answer standing with
 			// the marker.
 			expect(results).toEqual([])
-			expect(aggregate).not.toHaveBeenCalled()
+			expect(aggregate).toHaveBeenCalledTimes(1)
+			expect(legacySearch).not.toHaveBeenCalled()
 			expect(lastSearchModeOf(manager)).toBe("v2:empty->legacy-throttled")
 		} finally {
 			if (originalBurst === undefined) {
@@ -1680,15 +1707,13 @@ describe("search admission envelope at the manager boundary (WS-11)", () => {
 		}
 	})
 
-	it("searchDetailed() short-circuits a throttled response before cache or legacy", async () => {
+	it("searchDetailed() short-circuits a throttled response before legacy", async () => {
 		exhaustBucket()
 		const aggregate = primeEmptySearch()
 		const base = buildMockManager()
 		const baseCfg = (
 			base as unknown as { config: { mongodb: Record<string, unknown> } }
 		).config.mongodb
-		// Cache is enabled in the kit config and the fallback opted in —
-		// both must be skipped on the throttle branch.
 		const manager = buildMockManager({
 			config: {
 				mongodb: { ...baseCfg, legacySearchFallback: true },
@@ -1703,9 +1728,6 @@ describe("search admission envelope at the manager boundary (WS-11)", () => {
 		expect(response.results).toEqual([])
 		expect(response.metadata.throttled).toBeDefined()
 		expect(response.metadata.throttled?.retryAfterMs).toBeGreaterThan(0)
-		// No cache write (a cached throttle would masquerade as an empty
-		// verdict) and no legacy re-run.
-		expect(mocked(writeCache)).not.toHaveBeenCalled()
 		expect(aggregate).not.toHaveBeenCalled()
 		expect(lastSearchModeOf(manager)).toBe("v2:throttled")
 	})
@@ -1731,6 +1753,12 @@ describe("search admission envelope at the manager boundary (WS-11)", () => {
 				},
 			})
 
+			const legacySearch = vi.spyOn(
+				manager as unknown as {
+					legacySearch(...args: unknown[]): Promise<MemorySearchResult[]>
+				},
+				"legacySearch",
+			)
 			const response = await manager.searchDetailed({
 				query: "qzx detailed legacy token",
 				maxResults: 10,
@@ -1738,7 +1766,8 @@ describe("search admission envelope at the manager boundary (WS-11)", () => {
 
 			expect(response.results).toEqual([])
 			expect(response.metadata.throttled).toBeUndefined()
-			expect(aggregate).not.toHaveBeenCalled()
+			expect(aggregate).toHaveBeenCalledTimes(1)
+			expect(legacySearch).not.toHaveBeenCalled()
 			expect(lastSearchModeOf(manager)).toBe("v2:empty->legacy-throttled")
 		} finally {
 			if (originalBurst === undefined) {
@@ -1753,6 +1782,12 @@ describe("search admission envelope at the manager boundary (WS-11)", () => {
 		const aggregate = primeEmptySearch()
 		const manager = buildMockManager()
 
+		const legacySearch = vi.spyOn(
+			manager as unknown as {
+				legacySearch(...args: unknown[]): Promise<MemorySearchResult[]>
+			},
+			"legacySearch",
+		)
 		const response = await manager.searchDetailed({
 			query: "qzx healthy empty",
 			maxResults: 10,
@@ -1762,7 +1797,8 @@ describe("search admission envelope at the manager boundary (WS-11)", () => {
 		// manager keeps them distinguishable at the detailed seam too.
 		expect(response.results).toEqual([])
 		expect(response.metadata.throttled).toBeUndefined()
-		expect(aggregate).not.toHaveBeenCalled()
+		expect(aggregate).toHaveBeenCalledTimes(1)
+		expect(legacySearch).not.toHaveBeenCalled()
 		expect(lastSearchModeOf(manager)).toBe("v2:empty")
 	})
 
@@ -1781,6 +1817,17 @@ describe("search admission envelope at the manager boundary (WS-11)", () => {
 		})
 
 		await manager.searchKB("qzx kb throttle")
+
+		expect(captureAdmissionToken).toHaveBeenCalledTimes(1)
+		expect(emitTelemetry).toHaveBeenCalledWith(
+			fakeDb,
+			fakePrefix,
+			expect.objectContaining({ throttled: true }),
+			{ admission: { kind: "admission", agentId: "agent-1", epoch: 0 } },
+		)
+		expect(
+			vi.mocked(captureAdmissionToken).mock.invocationCallOrder[0],
+		).toBeLessThan(Number(vi.mocked(emitTelemetry).mock.invocationCallOrder[0]))
 
 		// Denial degrades ranking (text lane), not completeness: searchKB
 		// still runs, with the vector lane explicitly dropped.
@@ -1839,11 +1886,6 @@ describe("search degradation sink at the manager boundary (WS-12, C-019)", () =>
 	}
 
 	function primeEmptySearch(): ReturnType<typeof vi.fn> {
-		mocked(checkCache).mockResolvedValue({
-			hit: false,
-			tier: "miss",
-			results: [],
-		})
 		mocked(planRetrieval).mockReturnValue({
 			paths: [],
 			confidence: "low",
@@ -1884,12 +1926,19 @@ describe("search degradation sink at the manager boundary (WS-12, C-019)", () =>
 		const manager = buildMockManager()
 		const degradations: Array<Record<string, unknown>> = []
 
+		const legacySearch = vi.spyOn(
+			manager as unknown as {
+				legacySearch(...args: unknown[]): Promise<MemorySearchResult[]>
+			},
+			"legacySearch",
+		)
 		const results = await manager.search("qzx sink healthy empty", {
 			onDegradation: (degradation) => degradations.push(degradation),
 		})
 
 		expect(results).toEqual([])
-		expect(aggregate).not.toHaveBeenCalled()
+		expect(aggregate).toHaveBeenCalledTimes(1)
+		expect(legacySearch).not.toHaveBeenCalled()
 		expect(degradations).toHaveLength(0)
 	})
 
@@ -1911,12 +1960,19 @@ describe("search degradation sink at the manager boundary (WS-12, C-019)", () =>
 			})
 			const degradations: Array<Record<string, unknown>> = []
 
+			const legacySearch = vi.spyOn(
+				manager as unknown as {
+					legacySearch(...args: unknown[]): Promise<MemorySearchResult[]>
+				},
+				"legacySearch",
+			)
 			const results = await manager.search("qzx sink legacy skipped", {
 				onDegradation: (degradation) => degradations.push(degradation),
 			})
 
 			expect(results).toEqual([])
-			expect(aggregate).not.toHaveBeenCalled()
+			expect(aggregate).toHaveBeenCalledTimes(1)
+			expect(legacySearch).not.toHaveBeenCalled()
 			expect(degradations).toHaveLength(1)
 			expect(degradations[0]).toMatchObject({
 				kind: "throttled",
@@ -1983,8 +2039,8 @@ describe("search degradation sink at the manager boundary (WS-12, C-019)", () =>
 // ---------------------------------------------------------------------------
 // Tests: WS-16 (C-030) search query clamp at the manager boundary
 // searchV2 is real (only collaborators module-mocked), so the clamp runs in
-// its production position: trimmed, clamped, THEN handed to the cache probe,
-// planning, embed, and rerank lanes.
+// its production position: trimmed, clamped, THEN handed to planning, embed,
+// and rerank lanes.
 // ---------------------------------------------------------------------------
 
 describe("search query clamp (C-030)", () => {
@@ -1992,13 +2048,8 @@ describe("search query clamp (C-030)", () => {
 		vi.clearAllMocks()
 	})
 
-	/** Cache miss + empty v2 plan + empty chunks aggregate. */
+	/** Empty v2 plan + empty chunks aggregate. */
 	function primeEmptySearch(): ReturnType<typeof vi.fn> {
-		mocked(checkCache).mockResolvedValue({
-			hit: false,
-			tier: "miss",
-			results: [],
-		})
 		mocked(planRetrieval).mockReturnValue({
 			paths: [],
 			confidence: "low",
@@ -2011,7 +2062,7 @@ describe("search query clamp (C-030)", () => {
 		return aggregate
 	}
 
-	it("clamps before the cache probe and emits search-query-clamped telemetry", async () => {
+	it("clamps before planning and emits search-query-clamped telemetry", async () => {
 		primeEmptySearch()
 		const manager = buildMockManager()
 		const longQuery = `needle-at-start${"x".repeat(2400)}`
@@ -2019,9 +2070,7 @@ describe("search query clamp (C-030)", () => {
 		const results = await manager.search(longQuery)
 
 		expect(results).toEqual([])
-		// The cache probe — the first hot-path consumer — saw the bounded
-		// query, proving the clamp happened ahead of it.
-		expect(mocked(checkCache).mock.calls[0][0].query).toHaveLength(2000)
+		expect(mocked(planRetrieval).mock.calls[0]?.[0]).toHaveLength(2000)
 		// The clamp marker fired with the PRE-clamp length so operators can
 		// see how far over the ceiling the caller was.
 		const clampCall = vi
@@ -2031,6 +2080,13 @@ describe("search query clamp (C-030)", () => {
 					(call[2] as { meta?: { operation?: string } }).meta?.operation ===
 					"search-query-clamped",
 			)
+		expect(clampCall?.[3]).toEqual({
+			admission: { kind: "admission", agentId: "agent-1", epoch: 0 },
+		})
+		expect(
+			vi.mocked(captureAdmissionToken).mock.invocationCallOrder[0],
+		).toBeLessThan(Number(vi.mocked(emitTelemetry).mock.invocationCallOrder[0]))
+
 		expect(clampCall).toBeDefined()
 		const [db, prefix, doc] = clampCall as [
 			typeof fakeDb,
@@ -2065,5 +2121,697 @@ describe("search query clamp (C-030)", () => {
 					"search-query-clamped",
 			)
 		expect(clampCalls).toHaveLength(0)
+	})
+})
+
+// ---------------------------------------------------------------------------
+// Wave 3b (RET-02/RET-06): resolved time ranges and tenant identity reach
+// every V2 lane filter — chunk guard arms, session/evidence lanes, the
+// evidence pipeline, raw-window and graph bounds, and the default filter
+// at the direct-call seam.
+// ---------------------------------------------------------------------------
+
+describe("searchV2 resolved time range and chunk identity guards (RET-02/RET-06)", () => {
+	const RANGE_START = new Date("2026-08-01T00:00:00.000Z")
+	const RANGE_END = new Date("2026-08-10T00:00:00.000Z")
+	const FIXED_CLOCK = new Date("2026-08-12T00:00:00.000Z")
+
+	/** One conversation chunk doc so the fused lane returns a result. */
+	function primeChunkAggregate(): ReturnType<typeof vi.fn> {
+		const aggregate = vi.fn().mockReturnValue({
+			toArray: vi.fn().mockResolvedValue([
+				{
+					path: "events/evt-1",
+					startLine: 0,
+					endLine: 0,
+					text: "guard arm probe",
+					source: "conversation",
+					score: 0.9,
+				},
+			]),
+		})
+		mocked(chunksCollection).mockReturnValue({ aggregate } as never)
+		return aggregate
+	}
+
+	/** Vector-only hybrid probe with an explicit caller range. */
+	async function searchWithRange(
+		searchOptions: Record<string, unknown>,
+		query = "guard arm probe",
+		availablePaths: string[] = ["hybrid"],
+	) {
+		return searchV2(fakeDb, fakePrefix, query, "agent-1", {
+			availablePaths: new Set(availablePaths as never),
+			searchOptions: {
+				embeddingMode: "automated",
+				queryEmbeddingModel: "voyage-4-large",
+				allowHybridBackstop: false,
+				...searchOptions,
+			} as never,
+		})
+	}
+
+	beforeEach(() => {
+		vi.clearAllMocks()
+		mocked(crossEncoderRerank).mockImplementation(async ({ results }) => ({
+			results,
+			reranked: false,
+			latencyMs: 0,
+		}))
+	})
+
+	it("arms the fused chunk lane with the explicit-range timestamp guard (RET-02)", async () => {
+		mocked(planRetrieval).mockReturnValue({
+			paths: ["hybrid"],
+			confidence: "high",
+			reasoning: "guard probe",
+		})
+		const aggregate = primeChunkAggregate()
+
+		await searchWithRange({
+			scope: "workspace",
+			scopeRef: "workspace:agent-1",
+			timeRange: { start: RANGE_START, end: RANGE_END },
+			conversationFilter: {
+				source: { $in: ["conversation", "sessions"] },
+				agentId: "agent-1",
+				scope: "workspace",
+				scopeRef: "workspace:agent-1",
+				status: { $ne: "deleted" },
+			},
+			bridgeFilter: {
+				source: { $in: ["conversation", "memory"] },
+				agentId: "agent-1",
+				scope: "workspace",
+				scopeRef: "workspace:agent-1",
+				status: { $ne: "deleted" },
+			},
+			capabilities: {
+				vectorSearch: true,
+				textSearch: true,
+				scoreFusion: false,
+				rankFusion: true,
+				storedSource: false,
+				vectorIndexMethod: false,
+			},
+			fusionMethod: "rankFusion",
+		})
+
+		expect(aggregate).toHaveBeenCalledTimes(1)
+		const pipeline = aggregate.mock.calls[0]?.[0] as Document[]
+		const vsStage =
+			pipeline[0]?.$rankFusion?.input?.pipelines?.vector?.[0]?.$vectorSearch
+		expect(vsStage).toBeDefined()
+		// C-026 bitemporal arms stay; RET-02 appends the occurrence-time arm
+		// with the executor-resolved explicit bounds, so the candidate pool
+		// is bounded before ANN traversal instead of being crowded out
+		// post-filter.
+		expect(vsStage.filter.$and).toEqual([
+			{ $or: [{ validAt: null }, { validAt: { $lte: expect.any(Date) } }] },
+			{ $or: [{ invalidAt: null }, { invalidAt: { $gt: expect.any(Date) } }] },
+			{ timestamp: { $gte: RANGE_START, $lte: RANGE_END } },
+		])
+	})
+
+	it("keeps inferred preset windows soft — no chunk-lane timestamp arm (RET-02)", async () => {
+		const aggregate = primeChunkAggregate()
+		mocked(resolveTimeRangePreset).mockReturnValue({
+			start: new Date("2026-08-05T00:00:00.000Z"),
+			end: new Date("2026-08-12T00:00:00.000Z"),
+		})
+		mocked(planRetrieval).mockReturnValue({
+			paths: ["hybrid"],
+			confidence: "high",
+			reasoning: "temporal query",
+			constraints: {
+				timeRange: {
+					preset: "last-7d",
+					hard: true,
+					reason: "explicit last-week constraint",
+				},
+			},
+		})
+
+		await searchWithRange({
+			scope: "workspace",
+			scopeRef: "workspace:agent-1",
+			// No searchOptions.timeRange: the window below is INFERRED from
+			// query text by the planner.
+			conversationFilter: {
+				source: { $in: ["conversation", "sessions"] },
+				agentId: "agent-1",
+				scope: "workspace",
+				scopeRef: "workspace:agent-1",
+				status: { $ne: "deleted" },
+			},
+			capabilities: {
+				vectorSearch: true,
+				textSearch: false,
+				scoreFusion: false,
+				rankFusion: false,
+				storedSource: false,
+				vectorIndexMethod: false,
+			},
+			searchConfig: { hybridMode: "vector-only" },
+		})
+
+		// The preset DID resolve into the request's timeRange binding…
+		expect(resolveTimeRangePreset).toHaveBeenCalledWith(
+			"last-7d",
+			expect.any(Date),
+		)
+		// …but Decision 2 keeps inferred windows SOFT: no timestamp arm in
+		// the index-adjacent filter. Only the C-026 bitemporal arms ride it.
+		const pipeline = aggregate.mock.calls[0]?.[0] as Document[]
+		const vsStage = pipeline[0]?.$vectorSearch
+		expect(vsStage.filter.$and).toEqual([
+			{ $or: [{ validAt: null }, { validAt: { $lte: expect.any(Date) } }] },
+			{ $or: [{ invalidAt: null }, { invalidAt: { $gt: expect.any(Date) } }] },
+		])
+		expect(vsStage.filter.timestamp).toBeUndefined()
+	})
+
+	it("prefers searchOptions.resolvedTimeRange over the raw timeRange field (RET-02)", async () => {
+		mocked(planRetrieval).mockReturnValue({
+			paths: ["hybrid"],
+			confidence: "high",
+			reasoning: "guard probe",
+		})
+		const aggregate = primeChunkAggregate()
+
+		await searchWithRange({
+			timeRange: {
+				start: "2026-01-01T00:00:00.000Z",
+				end: "2026-01-31T00:00:00.000Z",
+			},
+			resolvedTimeRange: { start: RANGE_START, end: RANGE_END },
+			conversationFilter: {
+				source: { $in: ["conversation"] },
+				agentId: "agent-1",
+				scope: "agent",
+				scopeRef: "agent:agent-1",
+			},
+			capabilities: {
+				vectorSearch: true,
+				textSearch: false,
+				scoreFusion: false,
+				rankFusion: false,
+				storedSource: false,
+				vectorIndexMethod: false,
+			},
+			searchConfig: { hybridMode: "vector-only" },
+		})
+
+		const pipeline = aggregate.mock.calls[0]?.[0] as Document[]
+		const vsStage = pipeline[0]?.$vectorSearch
+		// The manager forwards the executor-resolved bounds as
+		// resolvedTimeRange; those win over the raw normalized field.
+		expect(vsStage.filter.$and).toEqual(
+			expect.arrayContaining([
+				{ timestamp: { $gte: RANGE_START, $lte: RANGE_END } },
+			]),
+		)
+	})
+
+	it("derives the default chunk filter from resolved identity and expiry (RET-06)", async () => {
+		mocked(planRetrieval).mockReturnValue({
+			paths: ["hybrid"],
+			confidence: "high",
+			reasoning: "guard probe",
+		})
+		const aggregate = primeChunkAggregate()
+
+		const callStart = new Date()
+		await searchWithRange({
+			questionDate: FIXED_CLOCK,
+			capabilities: {
+				vectorSearch: true,
+				textSearch: false,
+				scoreFusion: false,
+				rankFusion: false,
+				storedSource: false,
+				vectorIndexMethod: false,
+			},
+			searchConfig: { hybridMode: "vector-only" },
+		})
+		const callEnd = new Date()
+
+		const pipeline = aggregate.mock.calls[0]?.[0] as Document[]
+		// Clock split invariant: retention (expiresAt) is pruned at wall-now;
+		// validity (validAt/invalidAt) keeps the caller's question clock. The
+		// same merged filter rides the $vectorSearch prefilter and the
+		// post-stage revalidation $match — assert both copies.
+		const filters = [
+			pipeline[0]?.$vectorSearch?.filter,
+			pipeline.find((stage) => stage.$match)?.$match,
+		] as Document[]
+		for (const filter of filters) {
+			expect(filter).toBeDefined()
+			expect(filter.$and).toHaveLength(4)
+			const identity = filter.$and[0] as Document
+			expect(identity.agentId).toBe("agent-1")
+			expect(identity.scope).toBe("agent")
+			expect(identity.scopeRef).toBe("agent:agent-1")
+			expect(identity.source.$in).toEqual(["conversation", "sessions"])
+			expect(identity.status).toEqual({ $ne: "deleted" })
+			const expiryArm = filter.$and[1] as Document
+			expect(expiryArm.$or[0]).toEqual({ expiresAt: { $exists: false } })
+			const expiryGt = (expiryArm.$or[1] as Document).expiresAt.$gt as Date
+			expect(expiryGt).toBeInstanceOf(Date)
+			expect(expiryGt.getTime()).toBeGreaterThanOrEqual(callStart.getTime())
+			expect(expiryGt.getTime()).toBeLessThanOrEqual(callEnd.getTime())
+			expect(expiryGt.getTime()).not.toBe(FIXED_CLOCK.getTime())
+			expect(filter.$and[2]).toEqual({
+				$or: [{ validAt: null }, { validAt: { $lte: FIXED_CLOCK } }],
+			})
+			expect(filter.$and[3]).toEqual({
+				$or: [{ invalidAt: null }, { invalidAt: { $gt: FIXED_CLOCK } }],
+			})
+		}
+	})
+
+	it("pins the default chunk filter to the session scope when a sessionKey is present (RET-06)", async () => {
+		mocked(planRetrieval).mockReturnValue({
+			paths: ["hybrid"],
+			confidence: "high",
+			reasoning: "guard probe",
+		})
+		const aggregate = primeChunkAggregate()
+
+		await searchWithRange({
+			sessionKey: "sess-9",
+			questionDate: FIXED_CLOCK,
+			capabilities: {
+				vectorSearch: true,
+				textSearch: false,
+				scoreFusion: false,
+				rankFusion: false,
+				storedSource: false,
+				vectorIndexMethod: false,
+			},
+			searchConfig: { hybridMode: "vector-only" },
+		})
+
+		const pipeline = aggregate.mock.calls[0]?.[0] as Document[]
+		const filter = pipeline[0]?.$vectorSearch?.filter
+		const identity = filter.$and[0] as Document
+		expect(identity.scope).toBe("session")
+		expect(identity.scopeRef).toBe("session:sess-9")
+		expect(identity.agentId).toBe("agent-1")
+	})
+
+	it("overwrites foreign identity keys on custom chunk filters (RET-06)", async () => {
+		mocked(planRetrieval).mockReturnValue({
+			paths: ["hybrid"],
+			confidence: "high",
+			reasoning: "guard probe",
+		})
+		const aggregate = primeChunkAggregate()
+
+		await searchWithRange({
+			conversationFilter: {
+				// A foreign-tenant shape — identity keys that would widen the
+				// read across scopes if honored.
+				source: { $in: ["conversation", "sessions"] },
+				agentId: "agent-2",
+				scope: "session",
+				scopeRef: "session:other-tenant",
+				status: { $ne: "deleted" },
+			},
+			bridgeFilter: {
+				source: { $in: ["memory"] },
+				agentId: "agent-3",
+				scope: "workspace",
+				scopeRef: "workspace:agent-3",
+				status: { $ne: "deleted" },
+			},
+			capabilities: {
+				vectorSearch: true,
+				textSearch: false,
+				scoreFusion: false,
+				rankFusion: false,
+				storedSource: false,
+				vectorIndexMethod: false,
+			},
+			searchConfig: { hybridMode: "vector-only" },
+		})
+
+		// Both custom filters were forced onto the resolved identity, so
+		// they still fuse into ONE lane with the union of sources — identity
+		// cannot be widened, and the fusion budget is preserved.
+		expect(aggregate).toHaveBeenCalledTimes(1)
+		const pipeline = aggregate.mock.calls[0]?.[0] as Document[]
+		const filter = pipeline[0]?.$vectorSearch?.filter
+		expect(filter.agentId).toBe("agent-1")
+		expect(filter.scope).toBe("agent")
+		expect(filter.scopeRef).toBe("agent:agent-1")
+		expect(filter.source.$in).toEqual(["conversation", "sessions", "memory"])
+	})
+
+	it("forwards the explicit range into the raw-window lane bounds (RET-02)", async () => {
+		mocked(planRetrieval).mockReturnValue({
+			paths: ["raw-window"],
+			confidence: "high",
+			reasoning: "temporal query",
+			constraints: {
+				timeRange: {
+					preset: "last-7d",
+					hard: true,
+					reason: "inferred last-week constraint",
+				},
+			},
+		})
+		mocked(resolveTimeRangePreset).mockReturnValue({
+			start: new Date("2026-07-01T00:00:00.000Z"),
+			end: new Date("2026-07-08T00:00:00.000Z"),
+		})
+		mocked(getEventsByTimeRange).mockResolvedValue([] as never)
+
+		await searchWithRange(
+			{
+				timeRange: { start: RANGE_START, end: RANGE_END },
+			},
+			"what happened in the deployment window",
+			["raw-window"],
+		)
+
+		// Explicit caller bounds win over both the inferred preset and the
+		// 24h fallback default.
+		expect(getEventsByTimeRange).toHaveBeenCalledWith(
+			expect.objectContaining({
+				agentId: "agent-1",
+				start: RANGE_START,
+				end: RANGE_END,
+			}),
+		)
+	})
+
+	it("prefers the explicit range end for graph expansion asOf (RET-02)", async () => {
+		mocked(planRetrieval).mockReturnValue({
+			paths: ["graph"],
+			confidence: "high",
+			reasoning: "known entity with temporal constraint",
+			constraints: {
+				timeRange: {
+					preset: "last-7d",
+					hard: true,
+					reason: "inferred last-week constraint",
+				},
+				entities: { names: ["Alice"] },
+			},
+		})
+		mocked(resolveTimeRangePreset).mockReturnValue({
+			start: new Date("2026-07-01T00:00:00.000Z"),
+			end: new Date("2026-07-08T00:00:00.000Z"),
+		})
+		mocked(searchEntitiesAutocomplete).mockResolvedValue([
+			{
+				entityId: "ent-1",
+				name: "Alice",
+				type: "person",
+				agentId: "agent-1",
+				scope: "agent",
+				updatedAt: new Date(),
+			},
+		])
+		mocked(expandGraph).mockResolvedValue(null)
+
+		await searchV2(
+			fakeDb,
+			fakePrefix,
+			"what did Alice work on last week",
+			"agent-1",
+			{
+				availablePaths: new Set(["graph"]),
+				knownEntityNames: ["Alice"],
+				searchOptions: {
+					allowHybridBackstop: false,
+					timeRange: { start: RANGE_START, end: RANGE_END },
+				},
+			},
+		)
+
+		// The bitemporal graph expansion snapshot lands on the explicit
+		// range end, not the inferred preset end.
+		expect(expandGraph).toHaveBeenCalledWith(
+			expect.objectContaining({
+				entityId: "ent-1",
+				agentId: "agent-1",
+				asOf: RANGE_END,
+			}),
+		)
+	})
+
+	it("caps the conversation-evidence upper bound at the explicit range end (RET-02)", async () => {
+		mocked(planRetrieval).mockReturnValue({
+			paths: ["hybrid"],
+			confidence: "high",
+			reasoning: "evidence probe",
+		})
+		mocked(chunksCollection).mockReturnValue({
+			aggregate: vi.fn().mockReturnValue({
+				toArray: vi.fn().mockResolvedValue([]),
+			}),
+		} as never)
+		const evidenceAggregate = vi.fn().mockReturnValue({
+			toArray: vi.fn().mockResolvedValue([]),
+		})
+		mocked(eventsCollection).mockReturnValue({
+			aggregate: evidenceAggregate,
+		} as never)
+
+		await searchV2(
+			fakeDb,
+			fakePrefix,
+			"What did I say about espresso?",
+			"agent-1",
+			{
+				availablePaths: new Set(["hybrid"]),
+				searchOptions: {
+					scope: "agent",
+					scopeRef: "agent:agent-1",
+					conversationFilter: {
+						source: { $in: ["conversation"] },
+						agentId: "agent-1",
+						scope: "agent",
+						scopeRef: "agent:agent-1",
+					},
+					capabilities: {
+						vectorSearch: true,
+						textSearch: false,
+						scoreFusion: false,
+						rankFusion: false,
+						storedSource: true,
+						vectorIndexMethod: false,
+					},
+					embeddingMode: "automated",
+					queryEmbeddingModel: "voyage-4-lite",
+					conversationEvidenceMode: "parallel",
+					// AFTER the range end — the range bounds the window.
+					questionDate: new Date("2026-08-15T00:00:00.000Z"),
+					timeRange: { start: RANGE_START, end: RANGE_END },
+					allowHybridBackstop: false,
+				},
+			},
+		)
+
+		expect(evidenceAggregate).toHaveBeenCalledOnce()
+		const pipeline = evidenceAggregate.mock.calls[0]?.[0] as Document[]
+		const evidenceFilter = pipeline[0]?.$vectorSearch?.filter
+		expect(evidenceFilter).toBeDefined()
+		expect(evidenceFilter.timestamp).toEqual({
+			$gte: RANGE_START,
+			$lte: RANGE_END,
+		})
+	})
+
+	it("caps the conversation-evidence window at questionDate when it precedes the range end (RET-02)", async () => {
+		mocked(planRetrieval).mockReturnValue({
+			paths: ["hybrid"],
+			confidence: "high",
+			reasoning: "evidence probe",
+		})
+		mocked(chunksCollection).mockReturnValue({
+			aggregate: vi.fn().mockReturnValue({
+				toArray: vi.fn().mockResolvedValue([]),
+			}),
+		} as never)
+		const evidenceAggregate = vi.fn().mockReturnValue({
+			toArray: vi.fn().mockResolvedValue([]),
+		})
+		mocked(eventsCollection).mockReturnValue({
+			aggregate: evidenceAggregate,
+		} as never)
+		const questionDate = new Date("2026-08-05T00:00:00.000Z")
+
+		await searchV2(
+			fakeDb,
+			fakePrefix,
+			"What did I say about espresso?",
+			"agent-1",
+			{
+				availablePaths: new Set(["hybrid"]),
+				searchOptions: {
+					scope: "agent",
+					scopeRef: "agent:agent-1",
+					conversationFilter: {
+						source: { $in: ["conversation"] },
+						agentId: "agent-1",
+						scope: "agent",
+						scopeRef: "agent:agent-1",
+					},
+					capabilities: {
+						vectorSearch: true,
+						textSearch: false,
+						scoreFusion: false,
+						rankFusion: false,
+						storedSource: true,
+						vectorIndexMethod: false,
+					},
+					embeddingMode: "automated",
+					queryEmbeddingModel: "voyage-4-lite",
+					conversationEvidenceMode: "parallel",
+					// BEFORE the range end — no future leakage past what the
+					// user had seen when asking.
+					questionDate,
+					timeRange: { start: RANGE_START, end: RANGE_END },
+					allowHybridBackstop: false,
+				},
+			},
+		)
+
+		expect(evidenceAggregate).toHaveBeenCalledOnce()
+		const pipeline = evidenceAggregate.mock.calls[0]?.[0] as Document[]
+		const evidenceFilter = pipeline[0]?.$vectorSearch?.filter
+		expect(evidenceFilter.timestamp).toEqual({
+			$gte: RANGE_START,
+			$lte: questionDate,
+		})
+	})
+
+	it("arms the Option B session-evidence lane timestamp guard (RET-02)", async () => {
+		const previousMode = process.env.MEMONGO_SESSION_EVIDENCE_MODE
+		process.env.MEMONGO_SESSION_EVIDENCE_MODE = "B"
+		try {
+			mocked(planRetrieval).mockReturnValue({
+				paths: ["hybrid"],
+				confidence: "high",
+				reasoning: "session lane probe",
+			})
+			mocked(chunksCollection).mockReturnValue({
+				aggregate: vi.fn().mockReturnValue({
+					toArray: vi.fn().mockResolvedValue([]),
+				}),
+			} as never)
+			const sessionAggregate = vi.fn().mockReturnValue({
+				toArray: vi.fn().mockResolvedValue([]),
+			})
+			mocked(sessionChunksCollection).mockReturnValue({
+				aggregate: sessionAggregate,
+			} as never)
+
+			await searchWithRange({
+				timeRange: { start: RANGE_START, end: RANGE_END },
+				capabilities: {
+					vectorSearch: true,
+					textSearch: false,
+					scoreFusion: false,
+					rankFusion: false,
+					storedSource: false,
+					vectorIndexMethod: false,
+				},
+				searchConfig: { hybridMode: "vector-only" },
+			})
+
+			expect(sessionAggregate).toHaveBeenCalled()
+			const pipelines = sessionAggregate.mock.calls.map(
+				(call) => call[0] as Document[],
+			)
+			const vectorPipeline = pipelines.find(
+				(candidate) => candidate[0]?.$vectorSearch,
+			)
+			expect(vectorPipeline).toBeDefined()
+			const filter = vectorPipeline?.[0]?.$vectorSearch?.filter
+			expect(filter.agentId).toBe("agent-1")
+			expect(filter.scope).toBe("agent")
+			expect(filter.scopeRef).toBe("agent:agent-1")
+			// Occurrence-time guard on session evidence docs (first user
+			// turn time), same explicit-range semantics as the chunk lanes.
+			expect(filter.timestamp).toEqual({
+				$gte: RANGE_START,
+				$lte: RANGE_END,
+			})
+		} finally {
+			if (previousMode === undefined) {
+				delete process.env.MEMONGO_SESSION_EVIDENCE_MODE
+			} else {
+				process.env.MEMONGO_SESSION_EVIDENCE_MODE = previousMode
+			}
+		}
+	})
+
+	it("arms the memory-evidence lane timestamp guard (RET-02)", async () => {
+		const previousSessionMode = process.env.MEMONGO_SESSION_EVIDENCE_MODE
+		const previousMirrorMode = process.env.MEMONGO_EVIDENCE_MIRROR_MODE
+		delete process.env.MEMONGO_SESSION_EVIDENCE_MODE
+		process.env.MEMONGO_EVIDENCE_MIRROR_MODE = "enabled"
+		try {
+			mocked(planRetrieval).mockReturnValue({
+				paths: ["hybrid"],
+				confidence: "high",
+				reasoning: "mirror lane probe",
+			})
+			mocked(chunksCollection).mockReturnValue({
+				aggregate: vi.fn().mockReturnValue({
+					toArray: vi.fn().mockResolvedValue([]),
+				}),
+			} as never)
+			const mirrorAggregate = vi.fn().mockReturnValue({
+				toArray: vi.fn().mockResolvedValue([]),
+			})
+			mocked(memoryEvidenceCollection).mockReturnValue({
+				aggregate: mirrorAggregate,
+			} as never)
+
+			await searchWithRange({
+				timeRange: { start: RANGE_START, end: RANGE_END },
+				capabilities: {
+					vectorSearch: true,
+					textSearch: false,
+					scoreFusion: false,
+					rankFusion: false,
+					storedSource: false,
+					vectorIndexMethod: false,
+				},
+				searchConfig: { hybridMode: "vector-only" },
+			})
+
+			expect(mirrorAggregate).toHaveBeenCalled()
+			const pipelines = mirrorAggregate.mock.calls.map(
+				(call) => call[0] as Document[],
+			)
+			const vectorPipeline = pipelines.find(
+				(candidate) => candidate[0]?.$vectorSearch,
+			)
+			expect(vectorPipeline).toBeDefined()
+			const filter = vectorPipeline?.[0]?.$vectorSearch?.filter
+			expect(filter.agentId).toBe("agent-1")
+			expect(filter.status).toBe("active")
+			expect(filter.timestamp).toEqual({
+				$gte: RANGE_START,
+				$lte: RANGE_END,
+			})
+		} finally {
+			if (previousSessionMode === undefined) {
+				delete process.env.MEMONGO_SESSION_EVIDENCE_MODE
+			} else {
+				process.env.MEMONGO_SESSION_EVIDENCE_MODE = previousSessionMode
+			}
+			if (previousMirrorMode === undefined) {
+				delete process.env.MEMONGO_EVIDENCE_MIRROR_MODE
+			} else {
+				process.env.MEMONGO_EVIDENCE_MIRROR_MODE = previousMirrorMode
+			}
+		}
 	})
 })

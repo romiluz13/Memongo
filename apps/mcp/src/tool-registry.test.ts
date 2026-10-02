@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import {
 	parseMcpToolFlags,
+	requiresAdmin,
 	selectEnabledTools,
 	toolCatalog,
 } from "./tool-registry.js"
@@ -71,14 +72,14 @@ describe("selectEnabledTools", () => {
 		expect(names.has("memongo_recall_messages")).toBe(false)
 	})
 
-	it("MEMONGO_MCP_ALIASES=1 adds semantic alias tools but not admin tools", () => {
+	it("MEMONGO_MCP_ALIASES=1 adds only aliases of core tools", () => {
 		const tools = selectEnabledTools({ MEMONGO_MCP_ALIASES: "1" })
-		expect(tools).toHaveLength(CORE_COUNT + ALIAS_COUNT)
+		expect(tools).toHaveLength(CORE_COUNT + 1)
 		const names = new Set(tools.map((tool) => tool.name))
 		expect(names.has("memongo_recall_messages")).toBe(true)
-		expect(names.has("memongo_memory_get")).toBe(true)
-		expect(names.has("memongo_memory_history")).toBe(true)
-		expect(names.has("memongo_import_conversation_history")).toBe(true)
+		expect(names.has("memongo_memory_get")).toBe(false)
+		expect(names.has("memongo_memory_history")).toBe(false)
+		expect(names.has("memongo_import_conversation_history")).toBe(false)
 		expect(names.has("memongo_status")).toBe(false)
 	})
 
@@ -112,6 +113,7 @@ describe("input schema guidance (P1.2)", () => {
 			"query",
 			"scope",
 			"scopeRef",
+			"sessionKey",
 		])
 		for (const { description } of descriptions) {
 			expect(typeof description).toBe("string")
@@ -172,5 +174,42 @@ describe("input schema guidance (P1.2)", () => {
 		for (const { description } of descriptions) {
 			expect(typeof description).toBe("string")
 		}
+	})
+})
+
+describe("alias authority bindings", () => {
+	it("binds every alias to an existing non-alias canonical operation", () => {
+		for (const tool of toolCatalog.filter(
+			(tool) => tool.category === "alias",
+		)) {
+			const canonical = toolCatalog.find(
+				(target) => target.name === tool.canonical,
+			)
+			expect(canonical).toBeDefined()
+			expect(canonical?.category).not.toBe("alias")
+			expect(tool.description).toContain(tool.canonical)
+		}
+	})
+	it("inherits the current canonical authority", () => {
+		for (const tool of toolCatalog.filter(
+			(tool) => tool.category === "alias",
+		)) {
+			expect(requiresAdmin(tool)).toBe(tool.name !== "memongo_recall_messages")
+		}
+	})
+	it.each([
+		undefined,
+		"missing-tool",
+		"memongo_memory_get",
+	])("fails closed for unresolved or chained canonical %s", (canonical) => {
+		expect(
+			requiresAdmin({
+				name: "synthetic",
+				description: "",
+				category: "alias",
+				canonical,
+				inputSchema: { type: "object" },
+			}),
+		).toBe(true)
 	})
 })

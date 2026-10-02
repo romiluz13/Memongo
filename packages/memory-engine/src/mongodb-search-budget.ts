@@ -30,6 +30,16 @@ export type SearchBudgetLimits = {
 	maxAggregations: number
 	/** Maximum server-side query embeddings allowed for one search request. */
 	maxEmbeds: number
+	/**
+	 * RET-16: optional wall-clock ceiling for the whole request, in
+	 * milliseconds from the moment the budget opens. The deadline is checked
+	 * at consume/reserve time and spans retries AND passes — one request,
+	 * one wall. DEFAULT OFF: WS-16 pins the single-pass tail budget, and no
+	 * repo decision exists for a multi-pass request wall (a default could
+	 * degrade legitimate corrective searches); operators opt in via
+	 * searchBudget.maxWallMs.
+	 */
+	maxWallMs?: number
 }
 
 export type SearchBudgetSnapshot = SearchBudgetLimits & {
@@ -64,8 +74,7 @@ export const DEFAULT_SEARCH_BUDGET: SearchBudgetLimits = {
 // maxTimeMS, but user-driven $search/$vectorSearch pipelines ran uncapped —
 // one pathological aggregation could hold a mongot/mongod worker for the full
 // server default. Every user-driven search aggregate now carries this
-// ceiling; callers with their own deadline (the query-cache semantic probe)
-// override it explicitly.
+// ceiling; callers with a narrower deadline can override it explicitly.
 // ---------------------------------------------------------------------------
 
 export const DEFAULT_USER_SEARCH_MAX_TIME_MS = 10_000
@@ -91,6 +100,8 @@ type ActiveSearchBudget = {
 	reservedAggregations: number
 	reservedEmbeds: number
 	exhausted: boolean
+	/** RET-16: absolute deadline (Date.now() + maxWallMs) when the limit is set. */
+	deadlineAt?: number
 }
 
 const budgetStorage = new AsyncLocalStorage<ActiveSearchBudget>()
@@ -99,10 +110,29 @@ function toSnapshot(budget: ActiveSearchBudget): SearchBudgetSnapshot {
 	return {
 		maxAggregations: budget.limits.maxAggregations,
 		maxEmbeds: budget.limits.maxEmbeds,
+		...(budget.limits.maxWallMs != null
+			? { maxWallMs: budget.limits.maxWallMs }
+			: {}),
 		aggregations: budget.aggregations,
 		embeds: budget.embeds,
 		exhausted: budget.exhausted,
 	}
+}
+
+/** Flip the exhausted flag once, with one warn line per exhaustion reason. */
+function markExhausted(
+	budget: ActiveSearchBudget,
+	reason: string,
+	extra?: Record<string, unknown>,
+): void {
+	if (budget.exhausted) {
+		return
+	}
+	budget.exhausted = true
+	log.warn(
+		`per-search budget exhausted (${reason}); degrading remaining lanes to empty results`,
+		{ ...toSnapshot(budget), ...extra },
+	)
 }
 
 /** Resolve optional config overrides over the defaults. */
@@ -113,12 +143,21 @@ export function resolveSearchBudgetLimits(
 		typeof value === "number" && Number.isFinite(value) && value > 0
 			? Math.floor(value)
 			: fallback
+	const maxWallMs =
+		typeof overrides?.maxWallMs === "number" &&
+		Number.isFinite(overrides.maxWallMs) &&
+		overrides.maxWallMs > 0
+			? Math.floor(overrides.maxWallMs)
+			: undefined
 	return {
 		maxAggregations: resolve(
 			overrides?.maxAggregations,
 			DEFAULT_SEARCH_BUDGET.maxAggregations,
 		),
 		maxEmbeds: resolve(overrides?.maxEmbeds, DEFAULT_SEARCH_BUDGET.maxEmbeds),
+		// RET-16: absent/invalid stays OFF (mechanism default; see the type
+		// doc) — resolveSearchBudgetLimits never invents a wall.
+		...(maxWallMs !== undefined ? { maxWallMs } : {}),
 	}
 }
 
@@ -154,6 +193,11 @@ export async function runWithSearchBudget<T>(
 		reservedAggregations: 0,
 		reservedEmbeds: 0,
 		exhausted: false,
+		// RET-16: the request wall starts when the budget opens; the share
+		// branch above keeps the PARENT's deadline for nested re-entries.
+		...(limits.maxWallMs != null
+			? { deadlineAt: Date.now() + limits.maxWallMs }
+			: {}),
 	}
 	const value = await budgetStorage.run(budget, fn)
 	return { value, budget: toSnapshot(budget) }
@@ -162,25 +206,27 @@ export async function runWithSearchBudget<T>(
 function tryConsume(
 	kind: "aggregations" | "embeds",
 	limit: (limits: SearchBudgetLimits) => number,
+	onCapacityExhausted?: () => void,
 ): boolean {
 	const budget = budgetStorage.getStore()
-	// Unbudgeted callers (cache probe, diagnostics, legacy paths outside
-	// searchV2) are never throttled.
+	// Unbudgeted callers (diagnostics and legacy paths outside searchV2) are
+	// never throttled.
 	if (!budget) {
 		return true
+	}
+	// RET-16: the request wall spans retries and passes — once the deadline
+	// passes, every further consume is refused (empty ≠ error).
+	if (budget.deadlineAt !== undefined && Date.now() > budget.deadlineAt) {
+		markExhausted(budget, "wall-clock deadline passed")
+		return false
 	}
 	const reserved =
 		kind === "aggregations"
 			? budget.reservedAggregations
 			: budget.reservedEmbeds
 	if (budget[kind] + reserved >= limit(budget.limits)) {
-		if (!budget.exhausted) {
-			budget.exhausted = true
-			log.warn(
-				`per-search budget exhausted (${kind} hit the limit); degrading remaining lanes to empty results`,
-				{ ...toSnapshot(budget) },
-			)
-		}
+		markExhausted(budget, `${kind} hit the limit`)
+		onCapacityExhausted?.()
 		return false
 	}
 	budget[kind] += 1
@@ -201,8 +247,10 @@ export function tryConsumeSearchAggregation(): boolean {
  * autoEmbed $vectorSearch stage embeds the query text server-side, so stage
  * construction is where the cost lands. Returns false when exhausted.
  */
-export function tryConsumeSearchEmbed(): boolean {
-	return tryConsume("embeds", (limits) => limits.maxEmbeds)
+export function tryConsumeSearchEmbed(
+	onCapacityExhausted?: () => void,
+): boolean {
+	return tryConsume("embeds", (limits) => limits.maxEmbeds, onCapacityExhausted)
 }
 
 function normalizeReservationCount(value: number): number {
@@ -222,6 +270,16 @@ export function tryReserveSearchBudget(request: {
 	const requestedAggregations = normalizeReservationCount(request.aggregations)
 	const requestedEmbeds = normalizeReservationCount(request.embeds)
 	const budget = budgetStorage.getStore()
+
+	// RET-16: reservations past the request wall can never be satisfied.
+	if (
+		budget &&
+		budget.deadlineAt !== undefined &&
+		Date.now() > budget.deadlineAt
+	) {
+		markExhausted(budget, "wall-clock deadline passed")
+		return undefined
+	}
 
 	if (
 		budget &&
@@ -255,6 +313,10 @@ export function tryReserveSearchBudget(request: {
 
 	const consume = (kind: "aggregations" | "embeds"): boolean => {
 		if (released) return false
+		if (budget?.deadlineAt !== undefined && Date.now() > budget.deadlineAt) {
+			markExhausted(budget, "wall-clock deadline passed")
+			return false
+		}
 		if (kind === "aggregations") {
 			if (remainingAggregations <= 0) return false
 			remainingAggregations -= 1

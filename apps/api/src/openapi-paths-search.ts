@@ -259,6 +259,11 @@ export const searchPaths = {
 											},
 										},
 										needExactEvidence: { type: "boolean" },
+										allowConstraintRelaxation: {
+											type: "boolean",
+											description:
+												"Opt-in for the constraint-relaxation fallback: without it, explicit constraints (timeRange, needExactEvidence) stay hard and an empty constrained answer stays empty.",
+										},
 										numCandidates: { type: "number" },
 										fusionMethod: {
 											type: "string",
@@ -398,6 +403,9 @@ export const searchPaths = {
 														},
 													},
 													needExactEvidence: { type: "boolean" },
+													allowConstraintRelaxation: {
+														type: "boolean",
+													},
 													numCandidates: { type: "number" },
 													fusionMethod: { type: "string" },
 													hybridMode: { type: "string" },

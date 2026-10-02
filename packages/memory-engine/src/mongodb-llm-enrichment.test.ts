@@ -7,6 +7,7 @@ import {
 	resolveEnrichmentMaxTokens,
 	resolveEnrichmentTimeoutMs,
 	resolveEnrichmentProvider,
+	isExtractionLlmDisabled,
 	createAnthropicProvider,
 	createHttpProvider,
 	extractSessionEnrichment,
@@ -14,8 +15,10 @@ import {
 	buildEnrichedUserfactDocument,
 	buildQaEvidenceDocument,
 	enrichSessionsWithLLM,
+	withRetry,
 	EnrichmentHttpError,
 	EnrichmentParseError,
+	EnrichmentResponseError,
 	ENRICHMENT_SYSTEM_PROMPT,
 	type EnrichmentMode,
 	type EnrichmentProvider,
@@ -93,6 +96,31 @@ describe("resolveEnrichmentStrictMode", () => {
 		expect(resolveEnrichmentStrictMode("0")).toBe(false)
 		expect(resolveEnrichmentStrictMode("false")).toBe(false)
 		expect(resolveEnrichmentStrictMode("enabled")).toBe(false)
+	})
+})
+
+describe("isExtractionLlmDisabled", () => {
+	it("is disabled by default (unset env keeps extraction on)", () => {
+		expect(isExtractionLlmDisabled({})).toBe(false)
+		expect(isExtractionLlmDisabled({ MEMONGO_EXTRACTION_LLM: undefined })).toBe(
+			false,
+		)
+	})
+
+	it("treats off/0/false (any case, padded) as disabled", () => {
+		for (const value of ["off", "OFF", " off ", "0", "false", "False"]) {
+			expect(isExtractionLlmDisabled({ MEMONGO_EXTRACTION_LLM: value })).toBe(
+				true,
+			)
+		}
+	})
+
+	it("treats any other value as enabled (on/true/garbage)", () => {
+		for (const value of ["on", "true", "1", "enabled", "yes"]) {
+			expect(isExtractionLlmDisabled({ MEMONGO_EXTRACTION_LLM: value })).toBe(
+				false,
+			)
+		}
 	})
 })
 
@@ -247,6 +275,45 @@ describe("createHttpProvider", () => {
 		expect(options.headers.Authorization).toBeUndefined()
 		expect(body.max_completion_tokens).toBe(99)
 		expect(body.max_tokens).toBeUndefined()
+	})
+
+	it("omits temperature when unset and passes it through when provided", async () => {
+		const mockFetch = vi.fn().mockResolvedValue({
+			ok: true,
+			json: async () => ({
+				choices: [{ message: { content: "{}" } }],
+			}),
+		})
+
+		const provider = createHttpProvider(
+			{
+				baseUrl: "https://example.com/v1",
+				apiKey: "test-key",
+				model: "gpt-4o-mini",
+			},
+			mockFetch as unknown as typeof globalThis.fetch,
+			TEST_TRANSPORT,
+		)
+
+		await provider.chatCompletion({
+			model: "gpt-4o-mini",
+			messages: [{ role: "user", content: "test" }],
+		})
+
+		const [, firstOptions] = mockFetch.mock.calls[0]
+		expect(JSON.parse(firstOptions.body).temperature).toBeUndefined()
+
+		await provider.chatCompletion({
+			model: "gpt-4o-mini",
+			messages: [{ role: "user", content: "test" }],
+			maxTokens: 10,
+			temperature: 0,
+		})
+
+		const [, secondOptions] = mockFetch.mock.calls[1]
+		const body = JSON.parse(secondOptions.body)
+		expect(body.temperature).toBe(0)
+		expect(body.max_tokens).toBe(10)
 	})
 
 	it("supports x-api-key auth for OpenAI-compatible gateways", async () => {
@@ -430,6 +497,91 @@ describe("createAnthropicProvider", () => {
 		expect(body.max_tokens).toBe(2048)
 		expect(body.system).toBe("system prompt")
 		expect(body.messages).toEqual([{ role: "user", content: "test" }])
+	})
+
+	it("maps Anthropic stop_reason max_tokens and stop onto finishReason", async () => {
+		const mockFetch = vi
+			.fn()
+			.mockResolvedValueOnce({
+				ok: true,
+				json: async () => ({
+					stop_reason: "max_tokens",
+					content: [{ type: "text", text: "truncated" }],
+				}),
+			})
+			.mockResolvedValueOnce({
+				ok: true,
+				json: async () => ({
+					stop_reason: "stop",
+					content: [{ type: "text", text: "done" }],
+				}),
+			})
+		const provider = createAnthropicProvider(
+			{
+				baseUrl: "https://example.com/anthropic/v1/messages",
+				apiKey: "test-key",
+				model: "claude-sonnet-4-6",
+			},
+			mockFetch as unknown as typeof globalThis.fetch,
+			TEST_TRANSPORT,
+		)
+		const truncated = await provider.chatCompletion({
+			model: "claude-sonnet-4-6",
+			messages: [{ role: "user", content: "test" }],
+		})
+		expect(truncated.responseMeta).toEqual({
+			shape: "length",
+			finishReason: "max_tokens",
+		})
+		const stopped = await provider.chatCompletion({
+			model: "claude-sonnet-4-6",
+			messages: [{ role: "user", content: "test" }],
+		})
+		expect(stopped.responseMeta).toEqual({
+			shape: "ok",
+			finishReason: "stop",
+		})
+	})
+
+	it("omits temperature when unset and passes it through when provided", async () => {
+		const mockFetch = vi.fn().mockResolvedValue({
+			ok: true,
+			json: async () => ({
+				content: [{ type: "text", text: "{}" }],
+			}),
+		})
+
+		const provider = createAnthropicProvider(
+			{
+				baseUrl: "https://example.com/anthropic/v1/messages",
+				apiKey: "test-key",
+				model: "claude-sonnet-4-6",
+			},
+			mockFetch as unknown as typeof globalThis.fetch,
+			TEST_TRANSPORT,
+		)
+
+		await provider.chatCompletion({
+			model: "claude-sonnet-4-6",
+			messages: [{ role: "user", content: "test" }],
+		})
+
+		const [, firstOptions] = mockFetch.mock.calls[0]
+		const firstBody = JSON.parse(firstOptions.body)
+		expect(firstBody.temperature).toBeUndefined()
+		expect(firstBody.max_tokens).toBe(1024)
+
+		await provider.chatCompletion({
+			model: "claude-sonnet-4-6",
+			messages: [{ role: "user", content: "test" }],
+			maxTokens: 10,
+			temperature: 0,
+		})
+
+		const [, secondOptions] = mockFetch.mock.calls[1]
+		const secondBody = JSON.parse(secondOptions.body)
+		expect(secondBody.temperature).toBe(0)
+		expect(secondBody.max_tokens).toBe(10)
 	})
 
 	it("returns the Anthropic usage block as EnrichmentChatUsage (C-017)", async () => {
@@ -1283,6 +1435,25 @@ describe("enrichSessionsWithLLM", () => {
 		expect(callCount).toBe(2)
 	})
 
+	it("retries 502 and 504 gateway failures through withRetry (N1-a)", async () => {
+		for (const status of [502, 504]) {
+			let calls = 0
+			const result = await withRetry(
+				async () => {
+					calls += 1
+					if (calls === 1) {
+						throw new EnrichmentHttpError("Bad gateway", status)
+					}
+					return "ok"
+				},
+				2,
+				1, // fast backoff for the test
+			)
+			expect(result).toBe("ok")
+			expect(calls).toBe(2)
+		}
+	})
+
 	it("retries on 429 status and succeeds", async () => {
 		let callCount = 0
 		const provider: EnrichmentProvider = {
@@ -1357,5 +1528,422 @@ describe("enrichSessionsWithLLM", () => {
 		// Not a failure — just skipped
 		expect(result.sessionsFailed).toBe(0)
 		expect(provider.chatCompletion).not.toHaveBeenCalled()
+	})
+})
+
+describe("typed response envelope classification (OpenAI-compatible transport)", () => {
+	/**
+	 * Fixture-backed transport test: the mock fetch returns HTTP 200 with the
+	 * given body. A string body means response.json() throws (malformed body).
+	 */
+	function httpProviderWithBody(body: unknown): {
+		provider: EnrichmentProvider
+		mockFetch: ReturnType<typeof vi.fn>
+	} {
+		const mockFetch = vi.fn().mockResolvedValue({
+			ok: true,
+			json:
+				typeof body === "string"
+					? async () => {
+							throw new SyntaxError(body)
+						}
+					: async () => body,
+		})
+		const provider = createHttpProvider(
+			{
+				baseUrl: "https://example.com/v1",
+				apiKey: "test-key",
+				model: "gpt-5.6-luna",
+			},
+			mockFetch as unknown as typeof globalThis.fetch,
+			TEST_TRANSPORT,
+		)
+		return { provider, mockFetch }
+	}
+
+	async function chat(provider: EnrichmentProvider) {
+		return provider.chatCompletion({
+			model: "gpt-5.6-luna",
+			messages: [{ role: "user", content: "test" }],
+		})
+	}
+
+	it("classifies a normal completion as ok with finishReason preserved", async () => {
+		const { provider } = httpProviderWithBody({
+			choices: [
+				{ message: { content: '{"facts":[]}' }, finish_reason: "stop" },
+			],
+		})
+		const result = await chat(provider)
+		expect(result.content).toBe('{"facts":[]}')
+		expect(result.responseMeta).toEqual({ shape: "ok", finishReason: "stop" })
+	})
+
+	it("classifies a 200 error-object (no choices) as missing-choices — metadata, not a throw", async () => {
+		const { provider } = httpProviderWithBody({ error: { code: "oops" } })
+		const result = await chat(provider)
+		expect(result.content).toBe("")
+		expect(result.responseMeta).toEqual({ shape: "missing-choices" })
+	})
+
+	it("classifies an empty choices array as missing-choices", async () => {
+		const { provider } = httpProviderWithBody({ choices: [] })
+		const result = await chat(provider)
+		expect(result.responseMeta?.shape).toBe("missing-choices")
+	})
+
+	it("classifies choices[0] without a message object as malformed-message", async () => {
+		const { provider } = httpProviderWithBody({
+			choices: [{ finish_reason: "stop" }],
+		})
+		const result = await chat(provider)
+		expect(result.responseMeta).toEqual({ shape: "malformed-message" })
+	})
+
+	it("classifies null content (no refusal) as null-content", async () => {
+		const { provider } = httpProviderWithBody({
+			choices: [{ message: { content: null }, finish_reason: "stop" }],
+		})
+		const result = await chat(provider)
+		expect(result.responseMeta).toEqual({
+			shape: "null-content",
+			finishReason: "stop",
+		})
+	})
+
+	it("classifies empty content with finish_reason=stop as empty-content", async () => {
+		const { provider } = httpProviderWithBody({
+			choices: [{ message: { content: "" }, finish_reason: "stop" }],
+		})
+		const result = await chat(provider)
+		expect(result.responseMeta).toEqual({
+			shape: "empty-content",
+			finishReason: "stop",
+		})
+	})
+
+	it("classifies whitespace-only content as empty-content (valid-empty, not a parse failure)", async () => {
+		const { provider } = httpProviderWithBody({
+			choices: [{ message: { content: "   \n\t  " }, finish_reason: "stop" }],
+		})
+		const result = await chat(provider)
+		expect(result.content).toBe("")
+		expect(result.responseMeta).toEqual({
+			shape: "empty-content",
+			finishReason: "stop",
+		})
+	})
+
+	it("classifies the Structured Outputs refusal fixture (refusal + finish_reason=stop, no content) as refusal", async () => {
+		const { provider } = httpProviderWithBody({
+			choices: [
+				{
+					message: { refusal: "I can't help with that request." },
+					finish_reason: "stop",
+				},
+			],
+		})
+		const result = await chat(provider)
+		expect(result.content).toBe("")
+		expect(result.responseMeta).toEqual({
+			shape: "refusal",
+			finishReason: "stop",
+			refusal: true,
+		})
+	})
+
+	it("classifies the Azure filtered 200 (finish_reason=content_filter, no content) as content-filter", async () => {
+		const { provider } = httpProviderWithBody({
+			choices: [
+				{ message: { content: null }, finish_reason: "content_filter" },
+			],
+		})
+		const result = await chat(provider)
+		expect(result.responseMeta).toEqual({
+			shape: "content-filter",
+			finishReason: "content_filter",
+			refusal: true,
+		})
+	})
+
+	it("classifies empty content with finish_reason=length as length", async () => {
+		const { provider } = httpProviderWithBody({
+			choices: [{ message: { content: "" }, finish_reason: "length" }],
+		})
+		const result = await chat(provider)
+		expect(result.responseMeta).toEqual({
+			shape: "length",
+			finishReason: "length",
+		})
+	})
+
+	it("classifies NON-EMPTY content with finish_reason=length as length (typed before parse)", async () => {
+		// A truncated-but-present body is still length — a valid-looking JSON
+		// prefix must not masquerade as ok.
+		const { provider } = httpProviderWithBody({
+			choices: [
+				{
+					message: { content: '{"relations":[{"from":"e-alice"' },
+					finish_reason: "length",
+				},
+			],
+		})
+		const result = await chat(provider)
+		expect(result.content).toBe('{"relations":[{"from":"e-alice"')
+		expect(result.responseMeta).toEqual({
+			shape: "length",
+			finishReason: "length",
+		})
+	})
+
+	it("returns malformed-body as metadata (transport never throws for envelope problems)", async () => {
+		const { provider } = httpProviderWithBody("<html>gateway error page</html>")
+		const result = await chat(provider)
+		expect(result.content).toBe("")
+		expect(result.responseMeta).toEqual({ shape: "malformed-body" })
+	})
+
+	it("logs malformed-body with fixed safe metadata only — never the raw parser message (F7-1)", async () => {
+		const rawBody = "<html>gateway error page SENTINEL-RAW-BODY-7f3a</html>"
+		const { provider } = httpProviderWithBody(rawBody)
+		const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {})
+		try {
+			const result = await chat(provider)
+			expect(result.responseMeta).toEqual({ shape: "malformed-body" })
+			expect(warnSpy).toHaveBeenCalled()
+			const lines = warnSpy.mock.calls.map((call) => call.join(" "))
+			// Fixed safe metadata IS logged: the shape and the error class.
+			expect(lines.some((line) => line.includes("malformed-body"))).toBe(true)
+			expect(lines.some((line) => line.includes("SyntaxError"))).toBe(true)
+			// The raw provider body / parser message is NEVER logged.
+			for (const line of lines) {
+				expect(line).not.toContain(rawBody)
+				expect(line).not.toContain("gateway error page")
+			}
+		} finally {
+			warnSpy.mockRestore()
+		}
+	})
+
+	it("preserves the usage block on an empty/filtered 200 (account every paid response)", async () => {
+		const { provider } = httpProviderWithBody({
+			choices: [
+				{ message: { content: null }, finish_reason: "content_filter" },
+			],
+			usage: { prompt_tokens: 120, completion_tokens: 0 },
+		})
+		const result = await chat(provider)
+		expect(result.responseMeta?.shape).toBe("content-filter")
+		expect(result.usage).toEqual({ inputTokens: 120, outputTokens: 0 })
+	})
+
+	it("surfaces reasoning tokens from completion_tokens_details", async () => {
+		const { provider } = httpProviderWithBody({
+			choices: [{ message: { content: "{}" }, finish_reason: "stop" }],
+			usage: {
+				prompt_tokens: 410,
+				completion_tokens: 2048,
+				completion_tokens_details: { reasoning_tokens: 1899 },
+			},
+		})
+		const result = await chat(provider)
+		expect(result.usage).toEqual({
+			inputTokens: 410,
+			outputTokens: 2048,
+			reasoningTokens: 1899,
+		})
+	})
+})
+
+describe("extractSessionEnrichment empty-response bounded retry (F5)", () => {
+	const VALID_BODY = JSON.stringify({
+		facts: ["The user likes tea"],
+		qa_pairs: [],
+		has_personal_content: true,
+	})
+
+	function providerSequence(
+		responses: Array<{
+			content: string
+			responseMeta?: { shape: string; finishReason?: string }
+		}>,
+	): EnrichmentProvider {
+		let call = 0
+		return {
+			name: "mock",
+			chatCompletion: vi.fn(async () => {
+				const response = responses[Math.min(call, responses.length - 1)]
+				call++
+				return response
+			}),
+		}
+	}
+
+	it("retries a transient empty completion once in-step and parses the retry", async () => {
+		const provider = providerSequence([
+			{
+				content: "",
+				responseMeta: { shape: "empty-content", finishReason: "stop" },
+			},
+			{
+				content: VALID_BODY,
+				responseMeta: { shape: "ok", finishReason: "stop" },
+			},
+		])
+		const result = await extractSessionEnrichment(provider, "hello", "m")
+		expect(result.facts).toEqual(["The user likes tea"])
+		expect(provider.chatCompletion).toHaveBeenCalledTimes(2)
+	})
+
+	it("degrades to the existing empty result after the bounded retry is exhausted (non-strict)", async () => {
+		const provider = providerSequence([
+			{
+				content: "",
+				responseMeta: { shape: "empty-content", finishReason: "stop" },
+			},
+		])
+		const result = await extractSessionEnrichment(provider, "hello", "m")
+		expect(result.facts).toEqual([])
+		expect(result.qaPairs).toEqual([])
+		// Total-call budget: exactly 1 + SESSION_EMPTY_RESPONSE_RETRIES calls.
+		expect(provider.chatCompletion).toHaveBeenCalledTimes(2)
+	})
+
+	it("keeps strictJson fatal after the bounded retry is exhausted", async () => {
+		const provider = providerSequence([
+			{
+				content: "",
+				responseMeta: { shape: "empty-content", finishReason: "stop" },
+			},
+		])
+		await expect(
+			extractSessionEnrichment(provider, "hello", "m", { strictJson: true }),
+		).rejects.toBeInstanceOf(EnrichmentParseError)
+		expect(provider.chatCompletion).toHaveBeenCalledTimes(2)
+	})
+
+	it("does NOT retry a refusal — a retry would be a pointless identical request", async () => {
+		const provider = providerSequence([
+			{ content: "", responseMeta: { shape: "refusal", finishReason: "stop" } },
+			{
+				content: VALID_BODY,
+				responseMeta: { shape: "ok", finishReason: "stop" },
+			},
+		])
+		const result = await extractSessionEnrichment(provider, "hello", "m")
+		expect(result.facts).toEqual([])
+		expect(provider.chatCompletion).toHaveBeenCalledTimes(1)
+	})
+
+	it("does NOT retry a length-truncated completion", async () => {
+		const provider = providerSequence([
+			{
+				content: '{"facts":',
+				responseMeta: { shape: "length", finishReason: "length" },
+			},
+			{
+				content: VALID_BODY,
+				responseMeta: { shape: "ok", finishReason: "stop" },
+			},
+		])
+		const result = await extractSessionEnrichment(provider, "hello", "m")
+		expect(result.facts).toEqual([])
+		expect(provider.chatCompletion).toHaveBeenCalledTimes(1)
+	})
+
+	it("fails the session loudly for an invalid envelope (default-deny, no silent degrade)", async () => {
+		const provider = providerSequence([
+			{ content: "", responseMeta: { shape: "missing-choices" } },
+			{
+				content: VALID_BODY,
+				responseMeta: { shape: "ok", finishReason: "stop" },
+			},
+		])
+		await expect(
+			extractSessionEnrichment(provider, "hello", "m"),
+		).rejects.toBeInstanceOf(EnrichmentResponseError)
+		expect(provider.chatCompletion).toHaveBeenCalledTimes(1)
+	})
+
+	it("fails the session loudly for a malformed body shape", async () => {
+		const provider = providerSequence([
+			{ content: "", responseMeta: { shape: "malformed-body" } },
+		])
+		await expect(
+			extractSessionEnrichment(provider, "hello", "m"),
+		).rejects.toThrow("session enrichment: provider response envelope invalid")
+	})
+
+	it("retries legacy empty content without responseMeta once (backward compatible)", async () => {
+		const provider = providerSequence([
+			{ content: "" },
+			{ content: VALID_BODY },
+		])
+		const result = await extractSessionEnrichment(provider, "hello", "m")
+		expect(result.facts).toEqual(["The user likes tea"])
+		expect(provider.chatCompletion).toHaveBeenCalledTimes(2)
+	})
+
+	it("bounds the total call budget when transport retries interleave with empties", async () => {
+		// Three retryable 429s (the default transport retry budget), then a
+		// persistent empty completion: worst case is
+		// maxRetries + 1 + SESSION_EMPTY_RESPONSE_RETRIES = 5 calls, and the
+		// session degrades (not fails).
+		// F-B1-5: the transport backoff sleeps on real timers (1s base with
+		// exponential growth and jitter, up to ~10.5s for three retries), which
+		// blows the default 5s test timeout. Fake the timers and fast-forward
+		// through the backoff so the call-budget assertion is deterministic.
+		let call = 0
+		const provider: EnrichmentProvider = {
+			name: "mock",
+			chatCompletion: vi.fn(async () => {
+				call++
+				if (call <= 3) {
+					throw new EnrichmentHttpError("Rate limited", 429)
+				}
+				return {
+					content: "",
+					responseMeta: { shape: "empty-content", finishReason: "stop" },
+				}
+			}),
+		}
+
+		vi.useFakeTimers()
+		try {
+			const run = enrichSessionsWithLLM({
+				provider,
+				model: "m",
+				mode: "enabled",
+				conversations: [
+					{
+						conversationId: "conv-1",
+						sessionId: "s1",
+						turns: [
+							{
+								role: "user",
+								body: "hello",
+								timestamp: "2026-01-15T10:00:00Z",
+							},
+						],
+					},
+				],
+				agentId: "agent-1",
+				scope: "agent",
+				scopeRef: "ref-1",
+				eventIds: new Map([["s1", ["ev1"]]]),
+				concurrency: 1,
+			})
+			// 30s covers the worst-case cumulative backoff (~10.5s) with
+			// headroom for the empty-response retry budget.
+			await vi.advanceTimersByTimeAsync(30_000)
+			const result = await run
+
+			expect(call).toBe(5)
+			expect(result.sessionsFailed).toBe(0)
+			expect(result.sessionsEnriched).toBe(0)
+			expect(result.userfactDocs).toEqual([])
+		} finally {
+			vi.useRealTimers()
+		}
 	})
 })

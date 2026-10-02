@@ -21,10 +21,11 @@ import {
 // Mock helpers
 // ---------------------------------------------------------------------------
 
-function mockCollection(name: string): Collection {
+function mockCollection(name: string, indexes: Document[] = []): Collection {
 	return {
 		collectionName: name,
 		createIndex: vi.fn(async () => name),
+		listIndexes: vi.fn(() => ({ toArray: async () => indexes })),
 		createSearchIndex: vi.fn(async () => name),
 		updateSearchIndex: vi.fn(async () => undefined),
 		dropIndex: vi.fn(async () => ({ ok: 1 })),
@@ -34,15 +35,28 @@ function mockCollection(name: string): Collection {
 }
 
 function mockDb(
-	existingCollections: string[] = [],
+	existingCollections: Array<
+		string | { name: string; type: "collection" | "timeseries" }
+	> = [],
 	versionArray?: unknown,
+	indexesByCollection: Record<string, Document[]> = {},
 ): Db {
 	const collections = new Map<string, Collection>()
+	const collectionTypes = new Map(
+		existingCollections.map((entry) =>
+			typeof entry === "string"
+				? [entry, "collection" as const]
+				: [entry.name, entry.type],
+		),
+	)
 
 	const db = {
 		collection: vi.fn((name: string) => {
 			if (!collections.has(name)) {
-				collections.set(name, mockCollection(name))
+				collections.set(
+					name,
+					mockCollection(name, indexesByCollection[name] ?? []),
+				)
 			}
 			return collections.get(name)!
 		}),
@@ -55,13 +69,24 @@ function mockDb(
 				}
 			: {}),
 		createCollection: vi.fn(async (name: string) => {
-			collections.set(name, mockCollection(name))
+			collectionTypes.set(name, "collection")
+			collections.set(
+				name,
+				mockCollection(name, indexesByCollection[name] ?? []),
+			)
 			return collections.get(name)!
 		}),
-		listCollections: vi.fn(() => ({
+		listCollections: vi.fn((filter?: { name?: string }) => ({
 			map: vi.fn(() => ({
-				toArray: async () => existingCollections,
+				toArray: async () =>
+					[...collectionTypes.keys()].filter(
+						(name) => !filter?.name || name === filter.name,
+					),
 			})),
+			toArray: async () =>
+				[...collectionTypes.entries()]
+					.filter(([name]) => !filter?.name || name === filter.name)
+					.map(([name, type]) => ({ name, type })),
 		})),
 	} as unknown as Db
 
@@ -854,7 +879,7 @@ describe("isEventsVectorBitemporalPrefilterReady", () => {
 })
 
 // ---------------------------------------------------------------------------
-// Query Cache collection and schema (Phase 1)
+// Legacy query-cache collection and schema
 // ---------------------------------------------------------------------------
 
 describe("queryCacheCollection", () => {
@@ -962,30 +987,6 @@ describe("query_cache schema", () => {
 })
 
 describe("query_cache standard indexes", () => {
-	it("creates unique compound index on (queryHash, agentId, scope, scopeRef)", async () => {
-		const db = mockDb()
-		await ensureStandardIndexes(db, "test_")
-		const qc = db.collection("test_query_cache") as unknown as {
-			createIndex: ReturnType<typeof vi.fn>
-		}
-		const calls = qc.createIndex.mock.calls
-		const uniqueCall = calls.find(
-			(c: unknown[]) =>
-				c[1] &&
-				typeof c[1] === "object" &&
-				(c[1] as Record<string, unknown>).name ===
-					"uq_query_cache_hash_agent_scope_scoperef",
-		)
-		expect(uniqueCall).toBeDefined()
-		expect(uniqueCall?.[0]).toEqual({
-			queryHash: 1,
-			agentId: 1,
-			scope: 1,
-			scopeRef: 1,
-		})
-		expect((uniqueCall?.[1] as Record<string, unknown>).unique).toBe(true)
-	})
-
 	it("creates TTL index on expiresAt with expireAfterSeconds: 0", async () => {
 		const db = mockDb()
 		await ensureStandardIndexes(db, "test_")
@@ -1004,69 +1005,29 @@ describe("query_cache standard indexes", () => {
 		expect((ttlCall?.[1] as Record<string, unknown>).expireAfterSeconds).toBe(0)
 	})
 
-	it("creates hitCount compound index on (agentId, hitCount desc)", async () => {
+	it("keeps only the TTL index for legacy query-cache rows", async () => {
 		const db = mockDb()
 		await ensureStandardIndexes(db, "test_")
 		const qc = db.collection("test_query_cache") as unknown as {
 			createIndex: ReturnType<typeof vi.fn>
 		}
-		const calls = qc.createIndex.mock.calls
-		const hitCall = calls.find(
-			(c: unknown[]) =>
-				c[1] &&
-				typeof c[1] === "object" &&
-				(c[1] as Record<string, unknown>).name ===
-					"idx_query_cache_agent_hitcount",
+		const names = qc.createIndex.mock.calls.map(
+			(call: unknown[]) => (call[1] as Record<string, unknown>)?.name,
 		)
-		expect(hitCall).toBeDefined()
-		expect(hitCall?.[0]).toEqual({ agentId: 1, hitCount: -1 })
+		expect(names).toEqual(["idx_query_cache_ttl"])
 	})
 })
 
-describe("query_cache vector search index", () => {
-	it("creates autoEmbed vector search index on queryNorm field", async () => {
-		const db = mockDb()
-		await ensureSearchIndexes(db, "test_", "atlas-local-preview", "automated")
-		const qc = db.collection("test_query_cache") as unknown as {
-			createSearchIndex: ReturnType<typeof vi.fn>
-		}
-		expect(qc.createSearchIndex).toHaveBeenCalledTimes(1)
-		const call = qc.createSearchIndex.mock.calls[0]
-		expect((call[0] as Document).name).toBe("test_query_cache_vector")
-		expect((call[0] as Document).type).toBe("vectorSearch")
-		const fields = (call[0] as Document).definition.fields
-		const autoEmbed = fields.find((f: Document) => f.type === "autoEmbed")
-		expect(autoEmbed).toBeDefined()
-		expect(autoEmbed.path).toBe("queryNorm")
-		expect(autoEmbed.model).toBe("voyage-4-large")
-	})
-
-	it("includes filter paths for agentId, scope, scopeRef", async () => {
-		const db = mockDb()
-		await ensureSearchIndexes(db, "test_", "atlas-local-preview", "automated")
-		const qc = db.collection("test_query_cache") as unknown as {
-			createSearchIndex: ReturnType<typeof vi.fn>
-		}
-		const call = qc.createSearchIndex.mock.calls[0]
-		const fields = (call[0] as Document).definition.fields
-		const filterPaths = fields
-			.filter((f: Document) => f.type === "filter")
-			.map((f: Document) => f.path)
-		expect(filterPaths).toContain("agentId")
-		expect(filterPaths).toContain("scope")
-		expect(filterPaths).toContain("scopeRef")
-	})
-
+describe("search index budget", () => {
 	it("assertIndexBudget accommodates the full planned search index count on unbounded profiles", async () => {
 		const db = mockDb()
 		// This should NOT fail for unbounded Atlas profiles.
 		await ensureSearchIndexes(db, "test_", "atlas-local-preview", "automated")
-		// The budget check is internal, but we verify that the total search index call count
-		// includes events, query_cache, and session_chunks
+		// The legacy query-cache collection no longer gets a Search index.
 		const qc = db.collection("test_query_cache") as unknown as {
 			createSearchIndex: ReturnType<typeof vi.fn>
 		}
-		expect(qc.createSearchIndex).toHaveBeenCalledTimes(1)
+		expect(qc.createSearchIndex).not.toHaveBeenCalled()
 		const sc = db.collection("test_session_chunks") as unknown as {
 			createSearchIndex: ReturnType<typeof vi.fn>
 		}
@@ -1114,8 +1075,8 @@ describe("query_cache vector search index", () => {
 	})
 })
 
-describe("telemetry time series collection", () => {
-	it("ensureCollections creates memory_telemetry time series collection", async () => {
+describe("ordinary diagnostic collections", () => {
+	it("creates fresh diagnostic sinks as ordinary collections with their retention TTLs", async () => {
 		const db = mockDb([])
 		await ensureCollections(db, "test_")
 		const createCalls = (db.createCollection as ReturnType<typeof vi.fn>).mock
@@ -1123,69 +1084,144 @@ describe("telemetry time series collection", () => {
 		const telemetryCall = createCalls.find(
 			(c: unknown[]) => c[0] === "test_memory_telemetry",
 		)
-		expect(telemetryCall).toBeDefined()
-		// Time series options
-		expect(telemetryCall?.[1]?.timeseries).toBeDefined()
-		expect(telemetryCall?.[1]?.timeseries.timeField).toBe("ts")
-		expect(telemetryCall?.[1]?.timeseries.metaField).toBe("meta")
-		expect(telemetryCall?.[1]?.timeseries.granularity).toBe("seconds")
-		expect(telemetryCall?.[1]?.expireAfterSeconds).toBe(604800)
+		const accessEventsCall = createCalls.find(
+			(c: unknown[]) => c[0] === "test_access_events",
+		)
+		expect(telemetryCall).toEqual(["test_memory_telemetry"])
+		expect(accessEventsCall).toEqual(["test_access_events"])
+
+		const telemetry = db.collection("test_memory_telemetry") as unknown as {
+			createIndex: ReturnType<typeof vi.fn>
+		}
+		expect(telemetry.createIndex).toHaveBeenCalledWith(
+			{ ts: 1 },
+			{ expireAfterSeconds: 604800 },
+		)
+		const accessEvents = db.collection("test_access_events") as unknown as {
+			createIndex: ReturnType<typeof vi.fn>
+		}
+		expect(accessEvents.createIndex).toHaveBeenCalledWith(
+			{ ts: 1 },
+			{ expireAfterSeconds: 30 * 24 * 3600 },
+		)
 	})
 
-	it("ensureCollections skips memory_telemetry when it already exists", async () => {
+	it("repairs a missing TTL after collection creation was interrupted", async () => {
+		// This is the durable state left by a createCollection success followed
+		// by a createIndex failure on the prior startup attempt.
 		const db = mockDb(["test_memory_telemetry"])
-		await ensureCollections(db, "test_")
-		const createCalls = (db.createCollection as ReturnType<typeof vi.fn>).mock
-			.calls
-		const telemetryCall = createCalls.find(
-			(c: unknown[]) => c[0] === "test_memory_telemetry",
-		)
-		expect(telemetryCall).toBeUndefined()
-	})
-})
-
-describe("access events time series collection", () => {
-	it("ensureCollections creates access_events time series collection", async () => {
-		const db = mockDb([])
-		await ensureCollections(db, "test_")
-		const createCalls = (db.createCollection as ReturnType<typeof vi.fn>).mock
-			.calls
-		const accessEventsCall = createCalls.find(
-			(c: unknown[]) => c[0] === "test_access_events",
-		)
-		expect(accessEventsCall).toBeDefined()
-		expect(accessEventsCall?.[1]?.timeseries).toBeDefined()
-		expect(accessEventsCall?.[1]?.timeseries.timeField).toBe("ts")
-		expect(accessEventsCall?.[1]?.timeseries.metaField).toBe("meta")
-		expect(accessEventsCall?.[1]?.timeseries.granularity).toBe("minutes")
-		expect(accessEventsCall?.[1]?.expireAfterSeconds).toBe(30 * 24 * 3600)
-	})
-
-	it("ensureCollections skips access_events when it already exists", async () => {
-		const db = mockDb(["test_access_events"])
-		await ensureCollections(db, "test_")
-		const createCalls = (db.createCollection as ReturnType<typeof vi.fn>).mock
-			.calls
-		const accessEventsCall = createCalls.find(
-			(c: unknown[]) => c[0] === "test_access_events",
-		)
-		expect(accessEventsCall).toBeUndefined()
-	})
-
-	it("fails closed when access_events time series creation fails unexpectedly", async () => {
-		const db = mockDb([])
-		;(db.createCollection as ReturnType<typeof vi.fn>).mockImplementation(
-			async (name: string) => {
-				if (name === "test_access_events") {
-					throw new Error("timeseries unsupported")
-				}
-				return mockCollection(name)
-			},
-		)
+		const telemetry = db.collection("test_memory_telemetry") as unknown as {
+			createIndex: ReturnType<typeof vi.fn>
+		}
+		telemetry.createIndex
+			.mockRejectedValueOnce(new Error("simulated TTL creation failure"))
+			.mockResolvedValue("ts_1")
 
 		await expect(ensureCollections(db, "test_")).rejects.toThrow(
-			"timeseries unsupported",
+			"simulated TTL creation failure",
 		)
+		await ensureCollections(db, "test_")
+
+		const telemetryCreates = (
+			db.createCollection as ReturnType<typeof vi.fn>
+		).mock.calls.filter(
+			(call: unknown[]) => call[0] === "test_memory_telemetry",
+		)
+		expect(telemetryCreates).toHaveLength(0)
+		expect(telemetry.createIndex).toHaveBeenCalledTimes(2)
+	})
+
+	it("preserves a compatible existing ts_1 TTL index", async () => {
+		const db = mockDb(["test_memory_telemetry"], undefined, {
+			test_memory_telemetry: [
+				{ name: "_id_", key: { _id: 1 } },
+				{ name: "ts_1", key: { ts: 1 }, expireAfterSeconds: 604800 },
+			],
+		})
+		await ensureCollections(db, "test_")
+
+		const telemetry = db.collection("test_memory_telemetry") as unknown as {
+			createIndex: ReturnType<typeof vi.fn>
+		}
+		expect(telemetry.createIndex).not.toHaveBeenCalled()
+	})
+
+	it("rejects an incompatible existing TTL instead of shortening it", async () => {
+		const db = mockDb(["test_memory_telemetry"], undefined, {
+			test_memory_telemetry: [
+				{
+					name: "ts_1",
+					key: { ts: 1 },
+					expireAfterSeconds: 14 * 24 * 3600,
+				},
+			],
+		})
+
+		await expect(ensureCollections(db, "test_")).rejects.toThrow(
+			/incompatible TTL index policy.*test_memory_telemetry/,
+		)
+	})
+
+	it("rejects a partial-only TTL at the expected duration", async () => {
+		const db = mockDb(["test_memory_telemetry"], undefined, {
+			test_memory_telemetry: [
+				{
+					name: "partial_policy",
+					key: { ts: 1 },
+					expireAfterSeconds: 7 * 24 * 3600,
+					partialFilterExpression: { "meta.agentId": "one-agent" },
+				},
+			],
+		})
+
+		await expect(ensureCollections(db, "test_")).rejects.toThrow(
+			/incompatible TTL index policy.*test_memory_telemetry/,
+		)
+	})
+
+	it("rejects a shorter partial TTL after the required full TTL", async () => {
+		const db = mockDb(["test_memory_telemetry"], undefined, {
+			test_memory_telemetry: [
+				{
+					name: "full_expected",
+					key: { ts: 1 },
+					expireAfterSeconds: 7 * 24 * 3600,
+				},
+				{
+					name: "partial_policy",
+					key: { ts: 1 },
+					expireAfterSeconds: 60,
+					partialFilterExpression: { "meta.agentId": "one-agent" },
+				},
+			],
+		})
+
+		await expect(ensureCollections(db, "test_")).rejects.toThrow(
+			/incompatible TTL index policy.*test_memory_telemetry/,
+		)
+	})
+
+	it("leaves an existing time-series sink untouched", async () => {
+		const db = mockDb([
+			{ name: "test_memory_telemetry", type: "timeseries" },
+			{ name: "test_access_events", type: "timeseries" },
+		])
+		await ensureCollections(db, "test_")
+
+		for (const name of ["test_memory_telemetry", "test_access_events"]) {
+			const collection = db.collection(name) as unknown as {
+				createIndex: ReturnType<typeof vi.fn>
+				listIndexes: ReturnType<typeof vi.fn>
+			}
+			expect(collection.createIndex).not.toHaveBeenCalled()
+			expect(collection.listIndexes).not.toHaveBeenCalled()
+		}
+		const diagnosticCreates = (
+			db.createCollection as ReturnType<typeof vi.fn>
+		).mock.calls.filter((call: unknown[]) =>
+			["test_memory_telemetry", "test_access_events"].includes(String(call[0])),
+		)
+		expect(diagnosticCreates).toHaveLength(0)
 	})
 })
 
@@ -1289,8 +1325,8 @@ describe("access events standard indexes", () => {
 	})
 })
 
-describe("ensureCollections total count with query_cache and time series", () => {
-	it("creates all regular collections plus telemetry and access-events time series collections", async () => {
+describe("ensureCollections total count with ordinary diagnostic sinks", () => {
+	it("creates all regular collections plus both ordinary diagnostic collections", async () => {
 		const db = mockDb([])
 		await ensureCollections(db, "test_")
 		// 30 = 28 baseline + 1 memory_quarantine (embedding_cache removed, #13)
@@ -1299,14 +1335,14 @@ describe("ensureCollections total count with query_cache and time series", () =>
 	})
 })
 
-describe("ensureStandardIndexes total count with query_cache and time series indexes", () => {
+describe("ensureStandardIndexes total count with legacy query_cache TTL", () => {
 	it("returns updated total index count including query_cache, telemetry, access event, and session_chunks indexes", async () => {
 		const db = mockDb()
 		const count = await ensureStandardIndexes(db, "test_")
 		// 25 (v1 base, embedding_cache removed #13) + 9 events (6 + 1 dreamerProcessedAt + 1 bi-temporal SE-1 + 1 idempotency) + 3 entities + 4 relations +
 		// 2 entity links + 5 episodes (4 + 1 promotion) + 1 ingest_runs + 1 projection_runs +
 		// 1 structured scope + 1 structured revisions + 4 procedures + 1 procedure_revisions +
-		// 3 query_cache + 2 telemetry + 3 access_events (2 + 1 W11 batchId) + 3 memory_mutations
+		// 1 query_cache TTL + 2 telemetry + 3 access_events (2 + 1 W11 batchId) + 3 memory_mutations
 		// + 1 lane_coverage + 2 consolidation_runs + 3 session_chunks
 		// + 1 bi-temporal valid-time (#32) + 2 durable job claim/TTL indexes
 		// + 1 extraction outbox partial index + 1 unique relation identity
@@ -1315,7 +1351,7 @@ describe("ensureStandardIndexes total count with query_cache and time series ind
 		// C-005: +1 partial TTL index (chunks expiresAt) + 1 session_chunks TTL (idx_session_chunks_ttl_expires_at)
 		// C-004: +3 memory_quarantine (unique id, queue listing, pending TTL)
 		// C-017 (WS-10): +2 cost ledger (unique agent/day/kind + TTL)
-		// = 103
-		expect(count).toBe(103)
+		// = 101
+		expect(count).toBe(101)
 	})
 })

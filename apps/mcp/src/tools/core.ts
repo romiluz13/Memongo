@@ -22,6 +22,10 @@ export const coreTools: readonly McpToolDefinition[] = [
 					type: "string",
 					description: "Natural-language search query.",
 				},
+				sessionKey: {
+					type: "string",
+					description: "Optional session identifier for retrieval.",
+				},
 				agentId: {
 					type: "string",
 					description:
@@ -73,6 +77,8 @@ export const coreTools: readonly McpToolDefinition[] = [
 				returnPlan: { type: "boolean" },
 				searchConfig: {
 					type: "object",
+					description:
+						"Provided controls are preserved for API validation. Invalid controls produce a tool error with the default non-silent client.",
 					properties: {
 						recipe: {
 							type: "string",
@@ -97,6 +103,11 @@ export const coreTools: readonly McpToolDefinition[] = [
 							},
 						},
 						needExactEvidence: { type: "boolean" },
+						allowConstraintRelaxation: {
+							type: "boolean",
+							description:
+								"Opt-in for the constraint-relaxation fallback. Default false: explicit constraints (timeRange, needExactEvidence) stay hard and an empty constrained answer stays empty.",
+						},
 						recallProfile: {
 							type: "string",
 							enum: ["latency", "balanced", "proof"],

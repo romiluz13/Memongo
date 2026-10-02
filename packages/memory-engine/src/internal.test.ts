@@ -91,11 +91,13 @@ describe("listMemoryFiles", () => {
 		expect(files.some((file) => file.endsWith("nested.md"))).toBe(true)
 	})
 
-	it("ignores non-existent additional paths", async () => {
+	it("rejects non-existent configured additional paths", async () => {
 		const tmpDir = getTmpDir()
-
-		const files = await listMemoryFiles(tmpDir, ["/does/not/exist"])
-		expect(files).toHaveLength(0)
+		await expect(
+			listMemoryFiles(tmpDir, ["/does/not/exist"]),
+		).rejects.toMatchObject({
+			code: "ENOENT",
+		})
 	})
 
 	it("ignores symlinked files and directories", async () => {

@@ -4,8 +4,6 @@ name: E2E Nightly (full)
 # full e2e suite, including the paths that need an Atlas Model key for
 # auto-embeddings (Voyage) and an enrichment model for LLM extraction.
 on:
-  schedule:
-    - cron: "0 3 * * *"
   workflow_dispatch:
 
 jobs:
@@ -36,7 +34,7 @@ jobs:
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.2.5
+          bun-version-file: package.json
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
@@ -133,7 +131,7 @@ jobs:
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.2.5
+          bun-version-file: package.json
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
@@ -165,6 +163,10 @@ jobs:
       - name: Sample-mode benchmark (5 questions, judged answers on)
         env:
           MEMONGO_MONGODB_URI: mongodb://127.0.0.1:27017/?directConnection=true
+          # B7: the benchmark refuses to run with reranking enabled but no
+          # reranker key — passing the key keeps the nightly sample measuring
+          # the reranked pipeline instead of silently skipping the reranker.
+          VOYAGE_API_KEY: ${{ secrets.VOYAGE_API_KEY }}
           MEMONGO_ENRICHMENT_API_KEY: ${{ secrets.MEMONGO_ENRICHMENT_API_KEY }}
           MEMONGO_ENRICHMENT_BASE_URL: ${{ vars.MEMONGO_ENRICHMENT_BASE_URL }}
           MEMONGO_ENRICHMENT_MODEL: ${{ vars.MEMONGO_ENRICHMENT_MODEL }}

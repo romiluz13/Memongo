@@ -27,6 +27,26 @@ vi.mock("./mongodb-graph.js", async (importOriginal) => {
 	}
 })
 
+vi.mock("./mongodb-write-fence.js", async (importOriginal) => {
+	const actual =
+		await importOriginal<typeof import("./mongodb-write-fence.js")>()
+	return {
+		...actual,
+		captureAdmissionToken: vi.fn(async ({ agentId }: { agentId: string }) => ({
+			kind: "admission" as const,
+			agentId,
+			epoch: 0,
+		})),
+		withFencedWrite: vi.fn(
+			async ({
+				fn,
+			}: {
+				fn: (session: import("mongodb").ClientSession) => Promise<unknown>
+			}) => fn({} as import("mongodb").ClientSession),
+		),
+	}
+})
+
 captureManagerPrototype(MongoDBMemoryManager)
 
 const PREFIX = "test_"
@@ -121,6 +141,7 @@ describe("writeConversationEvent — collection state", () => {
 		expect(job.jobId).toBe(`extraction-${receipt.eventId}`)
 		expect(job.jobType).toBe("extraction")
 		expect(job.status).toBe("pending")
+		expect(job.admissionEpoch).toBe(0)
 		// Staged through the outbox, then released.
 		expect(job.stagedAt).toBeUndefined()
 		expect(job.metadata).toEqual({ eventId: receipt.eventId })

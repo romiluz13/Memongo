@@ -39,6 +39,7 @@ export { createOpenAIMiddleware } from "./openai/index.js"
 
 const searchSchema = z.object({
 	query: z.string(),
+	sessionKey: z.string().optional(),
 	agentId: z.string().optional(),
 	limit: z.number().optional(),
 	minScore: z.number().optional(),
@@ -395,7 +396,8 @@ export function createMemongoTools(client: MemongoClient): MemongoToolSet {
 			description:
 				"Get the current structured memory or procedure referenced by a stable lifecycle handle.",
 			inputSchema: lifecycleGetSchema,
-			execute: async (input) => client.getLifecycleItem(input),
+			execute: async (input) =>
+				withUntrustedMemoryProvenance(await client.getLifecycleItem(input)),
 		}),
 		memongo_lifecycle_update: tool({
 			description:
@@ -487,7 +489,8 @@ export function createMemongoTools(client: MemongoClient): MemongoToolSet {
 				scope: memoryScopeSchema.optional(),
 				scopeRef: z.string().optional(),
 			}),
-			execute: async (input) => client.state(input),
+			execute: async (input) =>
+				withUntrustedMemoryProvenance(await client.state(input)),
 		}),
 		memongo_import_conversations: tool({
 			description:

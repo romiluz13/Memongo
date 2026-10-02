@@ -53,6 +53,54 @@ export function testBenchmarkRunConfiguration(params: {
 export const fakeDb = {} as unknown as import("mongodb").Db
 export const fakePrefix = "test_"
 
+/**
+ * The canonical resolved `config.mongodb` shape for kit-based tests. Trace
+ * and verdict seams read deep fields (`relevance.telemetry.queryPrivacyMode`,
+ * `legacySearchFallback`, …), so partial configs crash — spread overrides on
+ * top of this instead of building ad-hoc config objects.
+ */
+export function kitMongoConfig(overrides?: Record<string, unknown>) {
+	return {
+		mongodb: {
+			embeddingMode: "automated",
+			fusionMethod: "rankFusion",
+			numCandidates: 200,
+			cache: {
+				enabled: false,
+				conversationTtlSec: 300,
+				kbTtlSec: 600,
+			},
+			// sources omitted — getActiveSources defaults to all enabled
+			kb: { enabled: false },
+			episodes: { enabled: true, minEventsForEpisode: 6 },
+			graph: { enabled: false },
+			reranking: { enabled: false },
+			queryRewriting: { enabled: false },
+			// RET-21: every recordRecallTrace site reads the diagnostic
+			// privacy mode from the resolved relevance telemetry config —
+			// mirror the resolver's safe default so trace writes in
+			// mock-manager tests apply the redacted-hash policy.
+			relevance: {
+				enabled: true,
+				telemetry: {
+					enabled: true,
+					baseSampleRate: 0.01,
+					adaptive: {
+						enabled: true,
+						maxSampleRate: 0.1,
+						minWindowSize: 5,
+					},
+					persistRawExplain: true,
+					queryPrivacyMode: "redacted-hash",
+				},
+				retention: { days: 14 },
+				benchmark: { enabled: false, datasetPath: "" },
+			},
+			...overrides,
+		},
+	}
+}
+
 export function buildMockManager(overrides?: Record<string, unknown>) {
 	if (!managerPrototype) {
 		throw new Error(
@@ -74,24 +122,7 @@ export function buildMockManager(overrides?: Record<string, unknown>) {
 			vectorIndexMethod: false,
 			scoreFusion: false,
 		},
-		config: {
-			mongodb: {
-				embeddingMode: "automated",
-				fusionMethod: "rankFusion",
-				numCandidates: 200,
-				cache: {
-					enabled: true,
-					conversationTtlSec: 300,
-					kbTtlSec: 600,
-				},
-				// sources omitted — getActiveSources defaults to all enabled
-				kb: { enabled: false },
-				episodes: { enabled: true, minEventsForEpisode: 6 },
-				graph: { enabled: false },
-				reranking: { enabled: false },
-				queryRewriting: { enabled: false },
-			},
-		},
+		config: kitMongoConfig(),
 		extraMemoryPaths: [],
 		writeQueue: Promise.resolve(),
 		derivationQueue: Promise.resolve(),
@@ -111,14 +142,19 @@ export function buildMockManager(overrides?: Record<string, unknown>) {
 //     (await import("./test-helpers/manager-test-kit.js")).eventsModuleMock())
 // ---------------------------------------------------------------------------
 
-export function eventsModuleMock() {
+export async function eventsModuleMock() {
+	const actual = await vi.importActual<typeof import("../mongodb-events.js")>(
+		"../mongodb-events.js",
+	)
 	return {
+		...actual,
 		writeEvent: vi.fn(),
 		writeEventsBatch: vi.fn(),
 		projectEventChunksBatch: vi.fn(),
 		clearEventExtractionJobPendingBatch: vi.fn().mockResolvedValue(0),
 		clearEventExtractionJobPending: vi.fn().mockResolvedValue(true),
 		getPendingExtractionEvents: vi.fn().mockResolvedValue([]),
+		getUnprojectedEvents: vi.fn().mockResolvedValue([]),
 		projectChunksFromEvents: vi.fn(),
 		projectEventChunk: vi.fn(),
 		getEventsByTimeRange: vi.fn(),
@@ -139,6 +175,72 @@ export function eventsModuleMock() {
 				this.idempotencyKey = idempotencyKey
 			}
 		},
+	}
+}
+
+/**
+ * Legacy manager suites use partial Db doubles and test behavior outside the
+ * erasure boundary. Keep their established seams while making the new writer
+ * dependency explicit. Fence-specific tests do not use this mock.
+ */
+export function writeFenceModuleMock() {
+	class ErasureGateConflictError extends Error {
+		readonly code = "ERASURE_GATE_CONFLICT"
+
+		constructor(message = "erasure gate changed during write") {
+			super(message)
+			this.name = "ErasureGateConflictError"
+		}
+	}
+	return {
+		ErasureGateConflictError,
+		isErasureGateConflictError: (
+			err: unknown,
+		): err is InstanceType<typeof ErasureGateConflictError> =>
+			err instanceof ErasureGateConflictError,
+		captureAdmissionToken: vi.fn(async ({ agentId }: { agentId: string }) => ({
+			kind: "admission" as const,
+			agentId,
+			epoch: 0,
+		})),
+		readErasureGate: vi.fn(async ({ agentId }: { agentId: string }) => ({
+			agentId,
+			epoch: 0,
+			state: "open" as const,
+			serial: 0,
+		})),
+		withFencedWrite: vi.fn(
+			async <T>({
+				db,
+				fn,
+			}: {
+				db: import("mongodb").Db
+				fn: (session: import("mongodb").ClientSession) => Promise<T>
+			}) => {
+				const dbClient = (
+					db as import("mongodb").Db & {
+						client?: {
+							startSession: () => Pick<
+								import("mongodb").ClientSession,
+								"withTransaction" | "endSession"
+							>
+						}
+					}
+				).client
+				if (!dbClient) {
+					return fn({} as import("mongodb").ClientSession)
+				}
+				const session = dbClient.startSession()
+				try {
+					return await session.withTransaction(
+						() => fn(session as import("mongodb").ClientSession),
+						{ writeConcern: { w: "majority", wtimeoutMS: 5000 } },
+					)
+				} finally {
+					await session.endSession()
+				}
+			},
+		),
 	}
 }
 
@@ -263,13 +365,65 @@ export function graphModuleMock() {
 		expandGraph: vi.fn(),
 		extractAndUpsertEntities: vi.fn(),
 		extractAndUpsertTypedRelations: vi.fn(),
+		prepareTypedRelations: vi.fn(async () => []),
 		findRelationByLocatorId: vi.fn(),
 	}
 }
 
 export function schemaModuleMock() {
+	const makeEventsCollection = () => ({
+		bsonOptions: {},
+		find: vi.fn(() => ({
+			toArray: vi.fn(async () => []),
+		})),
+		insertMany: vi.fn(async (docs: Array<{ eventId?: string }>) => {
+			const { writeEventsBatch } = await import("../mongodb-events.js")
+			const results = await writeEventsBatch({
+				db: {} as import("mongodb").Db,
+				prefix: "test_",
+				events: docs as never,
+			})
+			const writeErrors = results.flatMap((result, index) => {
+				if (result.ok) {
+					return []
+				}
+				return [
+					{
+						index,
+						code: result.duplicateKey ? 11000 : 121,
+						errmsg: result.duplicateKey
+							? `${result.message} index: uq_events_agent_idempotency_key `
+							: result.message,
+					},
+				]
+			})
+			if (writeErrors.length > 0) {
+				throw { writeErrors }
+			}
+			return { acknowledged: true, insertedCount: docs.length }
+		}),
+	})
+	const mockedEventsCollection = vi.fn(() => makeEventsCollection())
+	const setEventsCollectionReturn = mockedEventsCollection.mockReturnValue.bind(
+		mockedEventsCollection,
+	)
+	mockedEventsCollection.mockReturnValue = ((value: object) => {
+		for (const [key, fallback] of Object.entries(makeEventsCollection())) {
+			if (!(key in value)) {
+				Object.defineProperty(value, key, {
+					configurable: true,
+					enumerable: false,
+					value: fallback,
+					writable: true,
+				})
+			}
+		}
+		return setEventsCollectionReturn(
+			value as ReturnType<typeof makeEventsCollection>,
+		)
+	}) as typeof mockedEventsCollection.mockReturnValue
 	return {
-		eventsCollection: vi.fn(),
+		eventsCollection: mockedEventsCollection,
 		entitiesCollection: vi.fn(),
 		relationsCollection: vi.fn(),
 		episodesCollection: vi.fn(),
@@ -327,13 +481,7 @@ export function schemaModuleMock() {
 
 export function queryCacheModuleMock() {
 	return {
-		// C-032: mongodb-search-v2.ts reads this constant at module scope, so
-		// the mock must carry the real value (mongodb-query-cache.ts) or every
-		// manager test file fails at import time.
-		SEMANTIC_PROBE_MAX_TIME_MS: 1_500,
-		checkCache: vi.fn(),
 		invalidateQueryCache: vi.fn(),
-		writeCache: vi.fn(),
 	}
 }
 
@@ -372,8 +520,17 @@ export function laneCoverageModuleMock() {
 }
 
 export function memoryJobsModuleMock() {
+	class MemoryJobOwnershipLostError extends Error {
+		readonly code = "MEMORY_JOB_OWNERSHIP_LOST"
+
+		constructor(readonly jobId: string) {
+			super(`memory job ownership lost: ${jobId}`)
+			this.name = "MemoryJobOwnershipLostError"
+		}
+	}
 	return {
 		claimMemoryJob: vi.fn(),
+		captureClaimedMemoryJobAdmissionEpoch: vi.fn(async () => true),
 		completeClaimedMemoryJob: vi.fn(),
 		createMemoryJob: vi.fn(),
 		createMemoryJobsBatch: vi.fn(),
@@ -384,9 +541,22 @@ export function memoryJobsModuleMock() {
 		getMemoryJob: vi.fn(),
 		listMemoryJobs: vi.fn(),
 		releaseStagedMemoryJob: vi.fn().mockResolvedValue(true),
+		releaseStagedMemoryJobsBatch: vi.fn().mockResolvedValue(0),
 		renewMemoryJobLease: vi.fn(),
 		retryFailedMemoryJob: vi.fn(),
 		updateMemoryJob: vi.fn(),
+		MemoryJobOwnershipLostError,
+		isMemoryJobOwnershipLostError: (
+			err: unknown,
+		): err is InstanceType<typeof MemoryJobOwnershipLostError> =>
+			err instanceof MemoryJobOwnershipLostError,
+		withClaimedMemoryJobEffectBatch: vi.fn(
+			async <T>({
+				fn,
+			}: {
+				fn: (session: import("mongodb").ClientSession) => Promise<T>
+			}) => fn({} as import("mongodb").ClientSession),
+		),
 	}
 }
 
@@ -402,6 +572,11 @@ export function derivedMemoryModuleMock() {
 			title: "Thread: synthetic",
 			summary: "Synthetic summary",
 		})),
+		prepareDerivedMemoryPromotion: vi.fn(async () => ({
+			structuredCandidates: [],
+			procedureCandidates: [],
+			promotionGuards: {},
+		})),
 		promoteDerivedMemoryFromEvent: vi.fn(),
 		extractStructuredCandidatesFromEvent: vi.fn(() => []),
 		resolveStructuredCandidatesForPromotion: vi.fn(async () => []),
@@ -409,8 +584,18 @@ export function derivedMemoryModuleMock() {
 	}
 }
 
-export function benchmarkReadinessModuleMock() {
+// The readiness module is a pure boundary (only the db-touching probe needs
+// stubbing), so its mock spreads the real module via importOriginal — same
+// pattern as benchmarkQualityContractsModuleMock — instead of re-implementing
+// pure exports like isTerminalSearchIndexStatus, which would drift.
+export async function benchmarkReadinessModuleMock(
+	importOriginal: () => Promise<
+		typeof import("../../../../scripts/benchmark/mongodb-benchmark-readiness.js")
+	>,
+) {
+	const actual = await importOriginal()
 	return {
+		...actual,
 		readSearchIndexStatus: vi.fn().mockResolvedValue({
 			kind: "fallback",
 			reason: "command-not-found",
@@ -420,6 +605,6 @@ export function benchmarkReadinessModuleMock() {
 
 export function telemetryModuleMock() {
 	return {
-		emitTelemetry: vi.fn(),
+		emitTelemetry: vi.fn().mockResolvedValue(undefined),
 	}
 }

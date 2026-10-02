@@ -6,6 +6,10 @@ import { describe, it, expect, vi, beforeEach } from "vitest"
 // Mock schema-collections before importing module under test
 // ---------------------------------------------------------------------------
 
+vi.mock("./mongodb-write-fence.js", async () =>
+	(await import("./test-helpers/manager-test-kit.js")).writeFenceModuleMock(),
+)
+
 vi.mock("./mongodb-schema-collections.js", () => ({
 	costLedgerCollection: vi.fn(),
 }))
@@ -69,11 +73,17 @@ describe("recordLLMSpend", () => {
 		vi.mocked(costLedgerCollection).mockReturnValue(mockCol)
 	})
 
-	it("upserts a kind=llm doc with both token counters", () => {
-		recordLLMSpend({} as Db, PREFIX, AGENT_ID, {
-			inputTokens: 120,
-			outputTokens: 30,
-		})
+	it("upserts a kind=llm doc with both token counters", async () => {
+		await recordLLMSpend(
+			{} as Db,
+			PREFIX,
+			AGENT_ID,
+			{
+				inputTokens: 120,
+				outputTokens: 30,
+			},
+			{},
+		)
 
 		expect(costLedgerCollection).toHaveBeenCalledWith({}, PREFIX)
 		const [filter, update, options] = vi.mocked(mockCol.updateOne).mock.calls[0]
@@ -84,22 +94,28 @@ describe("recordLLMSpend", () => {
 		})
 		expect((update as Document).$set.updatedAt).toBeInstanceOf(Date)
 		expect((update as Document).$setOnInsert.createdAt).toBeInstanceOf(Date)
-		expect(options).toEqual({ upsert: true })
+		expect(options).toEqual({ upsert: true, session: {} })
 	})
 
-	it("records input-only when output tokens are missing", () => {
-		recordLLMSpend({} as Db, PREFIX, AGENT_ID, { inputTokens: 50 })
+	it("records input-only when output tokens are missing", async () => {
+		await recordLLMSpend({} as Db, PREFIX, AGENT_ID, { inputTokens: 50 }, {})
 
 		const [filter, update] = vi.mocked(mockCol.updateOne).mock.calls[0]
 		expect((filter as Document).kind).toBe("llm")
 		expect((update as Document).$inc).toEqual({ inputTokens: 50 })
 	})
 
-	it("floors fractional token counts", () => {
-		recordLLMSpend({} as Db, PREFIX, AGENT_ID, {
-			inputTokens: 10.9,
-			outputTokens: 0.9,
-		})
+	it("floors fractional token counts", async () => {
+		await recordLLMSpend(
+			{} as Db,
+			PREFIX,
+			AGENT_ID,
+			{
+				inputTokens: 10.9,
+				outputTokens: 0.9,
+			},
+			{},
+		)
 
 		const [, update] = vi.mocked(mockCol.updateOne).mock.calls[0]
 		expect((update as Document).$inc).toEqual({
@@ -150,20 +166,15 @@ describe("recordEmbeddingSpend", () => {
 		vi.mocked(costLedgerCollection).mockReturnValue(mockCol)
 	})
 
-	it("upserts embedUnits for each embedding channel kind", () => {
-		for (const kind of [
-			"search",
-			"cache-probe",
-			"consolidation",
-			"indexing",
-		] as const) {
+	it("upserts embedUnits for each embedding channel kind", async () => {
+		for (const kind of ["search", "consolidation", "indexing"] as const) {
 			vi.clearAllMocks()
-			recordEmbeddingSpend({} as Db, PREFIX, AGENT_ID, kind, 3)
+			await recordEmbeddingSpend({} as Db, PREFIX, AGENT_ID, kind, 3, {})
 			const [filter, update, options] = vi.mocked(mockCol.updateOne).mock
 				.calls[0]
 			expect(filter).toEqual({ agentId: AGENT_ID, day: DAY, kind })
 			expect((update as Document).$inc).toEqual({ embedUnits: 3 })
-			expect(options).toEqual({ upsert: true })
+			expect(options).toEqual({ upsert: true, session: {} })
 		}
 	})
 
@@ -181,8 +192,15 @@ describe("recordEmbeddingSpend", () => {
 		expect(mockCol.updateOne).not.toHaveBeenCalled()
 	})
 
-	it("floors fractional units", () => {
-		recordEmbeddingSpend({} as Db, PREFIX, AGENT_ID, "consolidation", 2.7)
+	it("floors fractional units", async () => {
+		await recordEmbeddingSpend(
+			{} as Db,
+			PREFIX,
+			AGENT_ID,
+			"consolidation",
+			2.7,
+			{},
+		)
 		const [, update] = vi.mocked(mockCol.updateOne).mock.calls[0]
 		expect((update as Document).$inc).toEqual({ embedUnits: 2 })
 	})
@@ -350,7 +368,7 @@ describe("instrumentProviderCostSpend", () => {
 
 		await wrapped.chatCompletion(REQUEST)
 
-		expect(mockCol.updateOne).toHaveBeenCalledOnce()
+		await vi.waitFor(() => expect(mockCol.updateOne).toHaveBeenCalledOnce())
 		const [filter, update] = vi.mocked(mockCol.updateOne).mock.calls[0]
 		expect((filter as Document).kind).toBe("llm")
 		expect((update as Document).$inc).toEqual({
@@ -399,5 +417,25 @@ describe("instrumentProviderCostSpend", () => {
 		})
 
 		expect(wrapped.name).toBe("inner")
+	})
+})
+
+describe("cost recorder return contracts", () => {
+	it("keeps legacy no-ops void and explicit no-ops awaited without admission", async () => {
+		const { captureAdmissionToken } = await import("./mongodb-write-fence.js")
+		vi.clearAllMocks()
+		const llmLegacy: void = recordLLMSpend({} as Db, PREFIX, AGENT_ID, {})
+		const embedLegacy: void = recordEmbeddingSpend(
+			{} as Db,
+			PREFIX,
+			AGENT_ID,
+			"search",
+			0,
+		)
+		expect(llmLegacy).toBeUndefined()
+		expect(embedLegacy).toBeUndefined()
+		await recordLLMSpend({} as Db, PREFIX, AGENT_ID, {}, {})
+		await recordEmbeddingSpend({} as Db, PREFIX, AGENT_ID, "search", 0, {})
+		expect(captureAdmissionToken).not.toHaveBeenCalled()
 	})
 })

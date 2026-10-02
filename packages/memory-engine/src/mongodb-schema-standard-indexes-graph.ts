@@ -15,7 +15,10 @@ import {
 // Standard indexes (work on all MongoDB editions)
 // ---------------------------------------------------------------------------
 
-import { handleUniqueIndexCreationError } from "./mongodb-schema-index-utils.js"
+import {
+	ensureTtlIndex,
+	handleUniqueIndexCreationError,
+} from "./mongodb-schema-index-utils.js"
 import type { StandardIndexOptions } from "./mongodb-schema-standard-index-types.js"
 
 export async function ensureGraphStandardIndexes(
@@ -336,14 +339,19 @@ export async function ensureGraphStandardIndexes(
 	// ghost index from a previous configuration when disabled.
 	if (ttlOpts?.episodesRetentionDays && ttlOpts.episodesRetentionDays > 0) {
 		const seconds = ttlOpts.episodesRetentionDays * 24 * 60 * 60
-		await episodes.createIndex(
-			{ updatedAt: 1 },
-			{ name: "idx_episodes_ttl_updated", expireAfterSeconds: seconds },
-		)
+		// F1: ensureTtlIndex converges a changed expiry via collMod — createIndex
+		// alone cannot change expireAfterSeconds on an existing index.
+		const outcome = await ensureTtlIndex(db, episodes, {
+			name: "idx_episodes_ttl_updated",
+			key: { updatedAt: 1 },
+			expireAfterSeconds: seconds,
+		})
 		applied++
-		log.warn(
-			`created TTL index on episodes: ${ttlOpts.episodesRetentionDays} days — old episodes will be auto-deleted`,
-		)
+		if (outcome === "created") {
+			log.warn(
+				`created TTL index on episodes: ${ttlOpts.episodesRetentionDays} days — old episodes will be auto-deleted`,
+			)
+		}
 	} else {
 		try {
 			await episodes.dropIndex("idx_episodes_ttl_updated")

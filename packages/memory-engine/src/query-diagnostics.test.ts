@@ -235,7 +235,8 @@ describe("planRetrieval failure diagnostics (C-002 catch seam)", () => {
 				.map((args) => args.join(" "))
 				.join("\n")
 			expect(logged).toContain("planRetrieval failed")
-			expect(logged).toMatch(/\[query:[0-9a-f]{12}\]/)
+			expect(logged).toMatch(/"queryDigest":"[0-9a-f]{12}"/)
+			expect(logged).toContain(`"queryLength":${query.length}`)
 			expect(logged).not.toContain("SEARCH-NEEDLE")
 		} finally {
 			errorLine.mockRestore()
@@ -250,8 +251,7 @@ describe("searchV2 failure diagnostics (C-002 catch seam)", () => {
 		const boom = new Error(`lane sweep failed: ${query}`)
 		// Poison lane coverage so planRetrieval (called inside the funnel's
 		// outer try) throws an error whose message echoes the query — the
-		// rethrow reaches searchV2's catch seam, which must alias it, not
-		// log it.
+		// rethrow reaches searchV2's catch seam, which must omit error text.
 		const { getLaneCoverage } = await import("./mongodb-lane-coverage.js")
 		vi.mocked(getLaneCoverage).mockResolvedValue({
 			lanes: {
@@ -278,7 +278,8 @@ describe("searchV2 failure diagnostics (C-002 catch seam)", () => {
 				.map((args) => args.join(" "))
 				.join("\n")
 			expect(logged).toContain("searchV2 failed")
-			expect(logged).toMatch(/\[query:[0-9a-f]{12}\]/)
+			expect(logged).toMatch(/"queryDigest":"[0-9a-f]{12}"/)
+			expect(logged).toContain(`"queryLength":${query.length}`)
 			expect(logged).not.toContain("SEARCH-NEEDLE")
 		} finally {
 			vi.mocked(getLaneCoverage).mockRestore()
@@ -292,7 +293,7 @@ describe("searchV2 failure diagnostics (C-002 catch seam)", () => {
 		const query = "SEARCH-NEEDLE-xyzzy coverage miss"
 		// Round-3 refutation finding: the inner lane-coverage catch logged
 		// the raw driver message — which can echo the query-bearing filter —
-		// without passing the queryFailureMeta boundary.
+		// without passing a query-safe diagnostic boundary.
 		const { getLaneCoverage } = await import("./mongodb-lane-coverage.js")
 		vi.mocked(getLaneCoverage).mockRejectedValue(
 			new Error(`coverage read failed for filter text: ${query}`),
@@ -309,7 +310,8 @@ describe("searchV2 failure diagnostics (C-002 catch seam)", () => {
 				.map((args) => args.join(" "))
 				.join("\n")
 			expect(logged).toContain("Failed to load lane coverage")
-			expect(logged).toMatch(/\[query:[0-9a-f]{12}\]/)
+			expect(logged).toMatch(/"queryDigest":"[0-9a-f]{12}"/)
+			expect(logged).toContain(`"queryLength":${query.length}`)
 			expect(logged).not.toContain("SEARCH-NEEDLE")
 			const outerLogged = errorLine.mock.calls
 				.map((args) => args.join(" "))

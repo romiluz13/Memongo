@@ -31,7 +31,7 @@ memongo-mcp
 | `MEMONGO_MCP_ADMIN_TOKEN` | —                    | Optional admin credential; requests bearing it unlock admin tools (with `MEMONGO_MCP_ADMIN=1`). |
 | `MEMONGO_MCP_ALLOWED_HOSTS` | —                  | Comma-separated extra hostnames the `Host` header (and browser `Origin`) may carry; needed behind reverse proxies. |
 | `MEMONGO_MCP_ADMIN`     | off                     | `1`/`true` also registers admin/benchmark tools (status, jobs, traces, relevance/benchmark suites). |
-| `MEMONGO_MCP_ALIASES`   | off                     | `1`/`true` also registers semantic alias tools (e.g. `memongo_recall_messages`, `memongo_memory_*`). |
+| `MEMONGO_MCP_ALIASES`   | off                     | `1`/`true` registers `memongo_recall_messages`. The `memongo_memory_*` and `memongo_import_conversation_history` aliases also require `MEMONGO_MCP_ADMIN=1` and the admin credential over authenticated HTTP. |
 
 By default only the 12 core tools are advertised (`memongo_search`,
 `memongo_search_detailed`, `memongo_add`, `memongo_write_event`,
@@ -41,6 +41,19 @@ By default only the 12 core tools are advertised (`memongo_search`,
 pay prompt tokens only for the write -> extract -> recall loop. Every tool
 returns `structuredContent` alongside the text serialization of its JSON
 result.
+
+Lifecycle get (including its memory-get alias), active-slate, discovery and
+unified-state results carry the same top-level untrusted-memory provenance
+notice as the existing search, recall, profile, context-bundle and file-read
+results. The notice appears in both JSON text and `structuredContent`; nested
+provenance remains intact. It is advisory model context, not an authorization
+check or a guarantee against prompt injection. Lifecycle history results remain
+outside this change.
+
+The MCP `memongo_quarantine_list` tool rejects a provided status outside
+`pending-review`, `promoting`, `promoted`, and `rejected` with `isError: true`
+before calling the API. The HTTP endpoint also rejects an unsupported status
+with `400`. Omit `status` to list all stages; an empty `?status=` is invalid.
 
 ## stdio transport (default)
 
@@ -115,3 +128,11 @@ node dist/server.js
 ## License
 
 Apache-2.0
+
+Detailed search preserves provided `searchMode` and `searchConfig` constraints
+for API validation. Invalid values produce a tool error with the default
+non-silent client. An explicitly injected `silent: true` client retains empty
+results with a degradation marker. Other top-level numeric and boolean controls
+still use the existing type filtering.
+
+The `memongo-mcp` launcher resolves symbolic links before checking its entrypoint, so npm bin links start the stdio server. Importing the package keeps startup explicit.

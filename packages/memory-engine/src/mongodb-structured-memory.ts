@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto"
+import { createHash, randomUUID } from "node:crypto"
 import type {
 	ClientSession,
 	Collection,
@@ -6,7 +6,7 @@ import type {
 	Document,
 	MongoClient,
 } from "mongodb"
-import { MongoServerError } from "mongodb"
+import { BSON, MongoServerError } from "mongodb"
 import {
 	type MemoryMongoDBEmbeddingMode,
 	type MemoryMongoDBQueryEmbeddingModel,
@@ -14,12 +14,21 @@ import {
 	createSubsystemLogger,
 } from "@memongo/lib"
 import { isDuplicateKeyError } from "./internal.js"
-import { recordEmbeddingSpend } from "./mongodb-cost-ledger.js"
+import {
+	ErasureGateConflictError,
+	withFencedWrite,
+	type AdmissionToken,
+} from "./mongodb-write-fence.js"
+import {
+	recordEmbeddingSpend,
+	recordEmbeddingSpendInSession,
+} from "./mongodb-cost-ledger.js"
 import type { EmbeddingStatus } from "./mongodb-embedding-retry.js"
 import { classifyInjection } from "./mongodb-injection-classifier.js"
 import { recordMutation, type MutationMeta } from "./mongodb-mutations.js"
 import { invalidateQueryCache } from "./mongodb-query-cache.js"
 import { summarizeExplain } from "./mongodb-relevance.js"
+import { freshnessRevalidationStages } from "./mongodb-search.js"
 import type { DetectedCapabilities } from "./mongodb-schema.js"
 import {
 	memoryQuarantineCollection,
@@ -267,12 +276,13 @@ export type StructuredMemoryLifecyclePatch = Partial<
 
 type StructuredMemoryRevision = {
 	/**
-	 * Deterministic `_id` (`identity:rN`) makes the revision snapshot insert
+	 * Deterministic `_id` (`identity:g<physical-id-hash>:rN`) makes the revision snapshot insert
 	 * idempotent: two writers superseding the same committed revision record
 	 * identical history — the loser's insert dedups on E11000 instead of
 	 * doubling the revision row.
 	 */
 	_id: string
+	structuredId: unknown
 	type: StructuredMemoryType
 	key: string
 	value: string
@@ -530,6 +540,10 @@ function buildRevisionDoc(params: {
 					? params.existing.updatedAt
 					: params.now
 
+	const generation = createHash("sha256")
+		.update(BSON.serialize({ _id: params.existing._id }))
+		.digest("hex")
+
 	return {
 		_id:
 			[
@@ -540,7 +554,8 @@ function buildRevisionDoc(params: {
 				String(params.existing.key ?? ""),
 			]
 				.map((part) => encodeURIComponent(part))
-				.join(":") + `:r${revision}`,
+				.join(":") + `:g${generation}:r${revision}`,
+		structuredId: params.existing._id,
 		type: params.existing.type as StructuredMemoryType,
 		key: String(params.existing.key ?? ""),
 		value: String(params.existing.value ?? ""),
@@ -561,7 +576,12 @@ function buildRevisionDoc(params: {
 				? (params.existing.temporalScope as StructuredMemoryTemporalScope)
 				: "permanent",
 		validFrom,
-		validTo: params.now,
+		validTo:
+			params.existing.state === "invalidated" &&
+			params.existing.validTo instanceof Date &&
+			params.existing.validTo <= params.now
+				? params.existing.validTo
+				: params.now,
 		supersededAt: params.now,
 		updatedAt:
 			params.existing.updatedAt instanceof Date
@@ -633,9 +653,8 @@ function buildRevisionDoc(params: {
 }
 
 /**
- * Insert a revision snapshot, tolerating E11000 on the deterministic `_id`:
- * a concurrent writer (or a retried CAS attempt) already recorded history for
- * this exact revision, so the duplicate insert is a no-op, not a failure.
+ * Sessionless duplicate snapshots are no-ops. Transaction errors must propagate
+ * so the driver can abort or retry the entire transaction.
  */
 async function insertRevisionSnapshot(
 	revisions: Collection,
@@ -648,7 +667,7 @@ async function insertRevisionSnapshot(
 			session ? { session } : undefined,
 		)
 	} catch (err) {
-		if (!isDuplicateKeyError(err)) {
+		if (session || !isDuplicateKeyError(err)) {
 			throw err
 		}
 	}
@@ -793,7 +812,7 @@ function structuredLifecycleItemFromDoc(
 	}
 }
 
-function structuredEntryFromDoc(
+export function structuredEntryFromDoc(
 	doc: Document,
 	patch: StructuredMemoryLifecyclePatch,
 ): StructuredMemoryEntry {
@@ -867,7 +886,9 @@ export async function writeStructuredMemory(params: {
 	entry: StructuredMemoryEntry
 	embeddingMode: MemoryMongoDBEmbeddingMode
 	client?: MongoClient
+	admission?: AdmissionToken
 	session?: ClientSession
+	transactionalSideEffects?: "defer" | "inline"
 	actorRole?: MemoryActorRole
 	mutationMeta?: MutationMeta
 	eventReceiptIds?: string[]
@@ -880,6 +901,7 @@ export async function writeStructuredMemory(params: {
 	 * of a silent overwrite.
 	 */
 	expectedRevision?: number
+	expectedId?: unknown
 	/**
 	 * P4.4.1: resolved session-scope TTL settings (memory.mongodb.ttl). When
 	 * enabled and the entry carries a sessionId, the write derives
@@ -925,6 +947,37 @@ export async function writeStructuredMemory(params: {
 	changed?: boolean
 }> {
 	const { db, prefix, entry } = params
+	const { admission, ...rest } = params
+	if (admission) {
+		if (params.session)
+			throw new Error(
+				"admitted structured writes cannot use an external session",
+			)
+		if (admission.kind !== "admission" || admission.agentId !== entry.agentId)
+			throw new ErasureGateConflictError(entry.agentId)
+		return withFencedWrite({
+			db,
+			prefix,
+			token: admission,
+			fn: (session) =>
+				writeStructuredMemory({
+					...rest,
+					session,
+					transactionalSideEffects: "inline",
+				}),
+		})
+	}
+
+	const scope = entry.scope ?? "agent"
+	const scopeRef = resolveScopeRef({
+		scope,
+		scopeRef: entry.scopeRef,
+		agentId: entry.agentId,
+		sessionId: entry.sessionId,
+		workspaceDir: entry.workspaceDir,
+		userId: entry.userId,
+		tenantId: entry.tenantId,
+	})
 
 	// C-008 injection-safety: write-structured is a direct write surface (API,
 	// bridge, SDK tools, pi save) — unlike consolidation candidates, these
@@ -941,68 +994,65 @@ export async function writeStructuredMemory(params: {
 		})
 		if (verdict.classification === "injection-likely") {
 			const content = structuredEntryInjectionText(entry)
-			// Dedup: a projection re-running on the same poisoned source (its
-			// write receipt is only recorded on success) would otherwise add a
-			// new quarantine row per run. Reuse the pending row for identical
-			// flagged content. Scope and scopeRef are part of the identity so
-			// two authorized scopes under one agent never share a quarantine
-			// row: rows persist scope fields only when the entry had them, so
-			// absence matches via $exists (not null equality, which the
-			// MongoDB driver would treat as "null OR missing" and conflate
-			// differently across the stateful fake's strict comparison).
+			// Resolved identity keeps review and dedup in the canonical partition.
 			const existing = await memoryQuarantineCollection(db, prefix).findOne(
 				{
 					agentId: entry.agentId,
 					content,
 					status: "pending-review",
-					...(entry.scope
-						? { scope: entry.scope }
-						: { scope: { $exists: false } }),
-					...(entry.scopeRef
-						? { scopeRef: entry.scopeRef }
-						: { scopeRef: { $exists: false } }),
+					scope,
+					scopeRef,
 				},
-				{ projection: { quarantineId: 1 } },
+				{
+					projection: { quarantineId: 1 },
+					...(params.session ? { session: params.session } : {}),
+				},
 			)
 			const quarantineId =
 				existing && typeof existing.quarantineId === "string"
 					? existing.quarantineId
 					: randomUUID()
 			if (!existing) {
-				await memoryQuarantineCollection(db, prefix).insertOne({
-					quarantineId,
-					agentId: entry.agentId,
-					...(entry.scope ? { scope: entry.scope } : {}),
-					...(entry.scopeRef ? { scopeRef: entry.scopeRef } : {}),
-					content,
-					// W12: persist the FULL candidate shape at ingress. The
-					// quarantine row is the only durable record of the original
-					// structured intent — without it, promotion must re-derive
-					// type/key/value from the rendered text (matchPatterns) and
-					// can fail or alter identity. Promotion rebuilds this entry
-					// verbatim (see promoteQuarantined's restoredCandidate path).
-					structuredCandidate: {
-						type: entry.type,
-						key: entry.key,
-						value: entry.value,
-						...(typeof entry.confidence === "number"
-							? { confidence: entry.confidence }
-							: {}),
-						...(entry.sourceAgent ? { sourceAgent: entry.sourceAgent } : {}),
-						...(Array.isArray(entry.tags) ? { tags: entry.tags } : {}),
-						...(typeof entry.context === "string"
-							? { context: entry.context }
+				await memoryQuarantineCollection(db, prefix).insertOne(
+					{
+						quarantineId,
+						agentId: entry.agentId,
+						scope,
+						scopeRef,
+						content,
+						// W12: persist the FULL candidate shape at ingress. The
+						// quarantine row is the only durable record of the original
+						// structured intent — without it, promotion must re-derive
+						// type/key/value from the rendered text (matchPatterns) and
+						// can fail or alter identity. Promotion rebuilds this entry
+						// verbatim (see promoteQuarantined's restoredCandidate path).
+						structuredCandidate: {
+							type: entry.type,
+							key: entry.key,
+							value: entry.value,
+							...(entry.sessionId !== undefined
+								? { sessionId: entry.sessionId }
+								: {}),
+							...(typeof entry.confidence === "number"
+								? { confidence: entry.confidence }
+								: {}),
+							...(entry.sourceAgent ? { sourceAgent: entry.sourceAgent } : {}),
+							...(Array.isArray(entry.tags) ? { tags: entry.tags } : {}),
+							...(typeof entry.context === "string"
+								? { context: entry.context }
+								: {}),
+						},
+						classification: "injection-likely",
+						tier: verdict.tier,
+						matchedPatterns: verdict.matchedPatterns,
+						status: "pending-review",
+						createdAt: new Date(),
+						...(entry.sourceEventIds
+							? { sourceEventIds: entry.sourceEventIds }
 							: {}),
 					},
-					classification: "injection-likely",
-					tier: verdict.tier,
-					matchedPatterns: verdict.matchedPatterns,
-					status: "pending-review",
-					createdAt: new Date(),
-					...(entry.sourceEventIds
-						? { sourceEventIds: entry.sourceEventIds }
-						: {}),
-				})
+					params.session ? { session: params.session } : undefined,
+				)
 			} else {
 				// Dedup hit: the row is reused for the re-run, so refresh the
 				// stored candidate to the latest attempt's shape (a re-run with
@@ -1011,10 +1061,15 @@ export async function writeStructuredMemory(params: {
 					{ quarantineId },
 					{
 						$set: {
+							scope,
+							scopeRef,
 							structuredCandidate: {
 								type: entry.type,
 								key: entry.key,
 								value: entry.value,
+								...(entry.sessionId !== undefined
+									? { sessionId: entry.sessionId }
+									: {}),
 								...(typeof entry.confidence === "number"
 									? { confidence: entry.confidence }
 									: {}),
@@ -1028,6 +1083,7 @@ export async function writeStructuredMemory(params: {
 							},
 						},
 					},
+					params.session ? { session: params.session } : undefined,
 				)
 			}
 			log.warn(
@@ -1050,16 +1106,6 @@ export async function writeStructuredMemory(params: {
 	const embeddingStatus: EmbeddingStatus = "pending"
 
 	const now = new Date()
-	const scope = entry.scope ?? "agent"
-	const scopeRef = resolveScopeRef({
-		scope,
-		scopeRef: entry.scopeRef,
-		agentId: entry.agentId,
-		sessionId: entry.sessionId,
-		workspaceDir: entry.workspaceDir,
-		userId: entry.userId,
-		tenantId: entry.tenantId,
-	})
 	const salience = inferSalience(entry)
 	const temporalScope = inferTemporalScope(entry)
 	const sourceReliability = inferSourceReliability(entry)
@@ -1142,7 +1188,8 @@ export async function writeStructuredMemory(params: {
 		setDoc.artifact = entry.artifact
 	}
 
-	const identityFilter = {
+	const identityFilter: Document = {
+		...(params.expectedId !== undefined ? { _id: params.expectedId } : {}),
 		agentId: entry.agentId,
 		scope,
 		scopeRef,
@@ -1162,24 +1209,37 @@ export async function writeStructuredMemory(params: {
 		revision: number
 		changed: boolean
 	}> => {
+		persistedSetDoc = setDoc
 		const existing = await collection.findOne(
 			identityFilter,
 			session ? { session } : undefined,
 		)
 		existingBeforeWrite = existing
 		if (!existing) {
+			if (params.expectedRevision !== undefined)
+				throw new MemoryLifecycleConflictError({
+					reason: "stale-revision",
+					expectedRevision: params.expectedRevision,
+					actualRevision: 0,
+				})
 			const result = await collection.updateOne(
 				identityFilter,
 				{
-					$set: {
+					$setOnInsert: {
 						...setDoc,
 						revision: 1,
 						reinforcementCount: entry.reinforcementCount ?? 1,
+						createdAt: now,
+						openedCount: entry.openedCount ?? 0,
 					},
-					$setOnInsert: { createdAt: now, openedCount: entry.openedCount ?? 0 },
 				},
 				{ upsert: true, ...(session ? { session } : {}) },
 			)
+			if (result.upsertedCount === 0) {
+				throw new StructuredMemoryRevisionConflictError(
+					`structured memory create raced on ${entry.type}:${entry.key}`,
+				)
+			}
 			return {
 				upserted: result.upsertedCount > 0,
 				id: result.upsertedId ? String(result.upsertedId) : entry.key,
@@ -1229,15 +1289,78 @@ export async function writeStructuredMemory(params: {
 						? existing.updatedAt
 						: now
 
-		if (!hasStructuredValueChanged(existing, entry)) {
+		if (
+			entry.type === "fact" &&
+			entry.provenance?.origin === "llm-inference" &&
+			existing.provenance?.origin === "llm-inference" &&
+			existing.state === "active" &&
+			state === "active" &&
+			entry.reinforcementCount === 0 &&
+			entry.validFrom === undefined &&
+			entry.validTo === undefined &&
+			entry.reviewAt === undefined &&
+			entry.lastConfirmedAt === undefined &&
+			entry.openedAt === undefined &&
+			entry.openedCount === undefined &&
+			entry.lastUsedAt === undefined &&
+			entry.artifact === undefined &&
+			((existing.expiresAt === undefined && expiresAt === undefined) ||
+				(existing.expiresAt instanceof Date &&
+					expiresAt instanceof Date &&
+					existing.expiresAt.getTime() === expiresAt.getTime() &&
+					expiresAt.getTime() > now.getTime()))
+		) {
+			const previousProvenance = { ...existing.provenance }
+			const incomingProvenance = { ...entry.provenance }
+			delete previousProvenance.runId
+			delete incomingProvenance.runId
+			const previousSourceAgent = { ...existing.sourceAgent }
+			const incomingSourceAgent = { ...entry.sourceAgent }
+			delete previousSourceAgent.runId
+			delete incomingSourceAgent.runId
+			if (
+				JSON.stringify(previousSourceAgent) ===
+					JSON.stringify(incomingSourceAgent) &&
+				!hasStructuredValueChanged(
+					{ ...existing, provenance: previousProvenance },
+					{
+						...entry,
+						provenance: incomingProvenance,
+						state,
+						salience,
+						temporalScope,
+						sourceReliability,
+					},
+				)
+			) {
+				return {
+					upserted: false,
+					id: entry.key,
+					revision: currentRevision,
+					changed: false,
+				}
+			}
+		}
+
+		if (
+			!hasStructuredValueChanged(existing, {
+				...entry,
+				state,
+				salience,
+				temporalScope,
+				sourceReliability,
+			})
+		) {
+			const reinforcementSetDoc = { ...persistedSetDoc }
+			delete reinforcementSetDoc.reinforcementCount
 			// (P2.5 a) compare-and-swap: the update applies only if the document is
 			// still at the revision we read. A concurrent writer between our
 			// findOne and this update makes the filter match nothing.
-			const reinforceResult = await collection.updateOne(
+			const reinforceResult = await collection.findOneAndUpdate(
 				{ ...identityFilter, revision: currentRevision },
 				{
 					$set: {
-						...persistedSetDoc,
+						...reinforcementSetDoc,
 						revision: currentRevision,
 						validFrom: currentValidFrom,
 						lastConfirmedAt: now,
@@ -1246,12 +1369,21 @@ export async function writeStructuredMemory(params: {
 						reinforcementCount: 1,
 					},
 				},
-				session ? { session } : {},
+				{
+					returnDocument: "after",
+					projection: { reinforcementCount: 1, _id: 0 },
+					includeResultMetadata: false,
+					...(session ? { session } : {}),
+				},
 			)
-			if (reinforceResult.matchedCount === 0) {
+			if (reinforceResult === null) {
 				throw new StructuredMemoryRevisionConflictError(
 					`structured memory reinforcement raced on ${entry.type}:${entry.key} at revision ${currentRevision}`,
 				)
+			}
+			persistedSetDoc = {
+				...reinforcementSetDoc,
+				reinforcementCount: reinforceResult.reinforcementCount,
 			}
 			return {
 				upserted: false,
@@ -1274,11 +1406,12 @@ export async function writeStructuredMemory(params: {
 			existing.validFrom instanceof Date ? existing.validFrom : undefined
 		const valueChanged =
 			String(existing.value ?? "") !== String(entry.value ?? "")
-		// A genuine value change opens a new valid-time window. A same-value
+		const reactivating = existing.state === "invalidated" && state === "active"
+		// A value change or reactivation opens a new valid-time window. A same-value
 		// re-mention keeps the EARLIEST known start, or a later mention would push
 		// validFrom forward and wrongly drop the fact from an "as of T" query. (#32 F1)
 		const nextValidFrom =
-			valueChanged || !existingValidFrom
+			valueChanged || reactivating || !existingValidFrom
 				? incomingValidFrom
 				: existingValidFrom.getTime() <= incomingValidFrom.getTime()
 					? existingValidFrom
@@ -1303,16 +1436,19 @@ export async function writeStructuredMemory(params: {
 			]
 		}
 
-		// A genuine value change must not inherit the prior assertion's end-date;
+		// A value change or reactivation must not inherit the prior assertion's end-date;
 		// $set never removes an unspecified field, so clear a stale validTo when the
 		// new open-ended value carries none. (#32 F2)
 		const nextUnset: Document = {}
 		if (
-			valueChanged &&
+			(valueChanged || reactivating) &&
 			entry.validTo === undefined &&
 			existing.validTo != null
 		) {
 			nextUnset.validTo = ""
+		}
+		if (reactivating) {
+			nextUnset.invalidatedBy = ""
 		}
 
 		// (P2.5 a) compare-and-swap: no upsert here — the document existed at
@@ -1428,13 +1564,14 @@ export async function writeStructuredMemory(params: {
 	// defer the side effects so they run AFTER the transaction commits (an
 	// audit for a write that never commits is a correctness bug). Otherwise
 	// run them immediately.
-	const runSideEffects = async (): Promise<void> => {
+	const runSideEffects = async (session?: ClientSession): Promise<void> => {
 		await invalidateQueryCache({
 			db,
 			prefix,
 			agentId: entry.agentId,
 			scope,
 			scopeRef,
+			...(session ? { session, throwOnError: true } : {}),
 		})
 
 		// C-017: an automated-mode persist re-embeds the value field
@@ -1443,7 +1580,18 @@ export async function writeStructuredMemory(params: {
 		// indexing embedding unit. Runs with the other side effects, i.e.
 		// after the caller's transaction commits in the session path.
 		if (params.embeddingMode === "automated") {
-			recordEmbeddingSpend(db, prefix, entry.agentId, "indexing", 1)
+			if (session) {
+				await recordEmbeddingSpendInSession({
+					db,
+					prefix,
+					agentId: entry.agentId,
+					kind: "indexing",
+					units: 1,
+					session,
+				})
+			} else {
+				recordEmbeddingSpend(db, prefix, entry.agentId, "indexing", 1)
+			}
 		}
 
 		const oldSnapshot = existingBeforeWrite
@@ -1451,30 +1599,42 @@ export async function writeStructuredMemory(params: {
 			oldSnapshot != null
 				? computeChangedFields(oldSnapshot, persistedSetDoc)
 				: undefined
-		Promise.allSettled([
-			recordMutation({
-				db,
-				prefix,
-				mutation: {
-					collectionName: "structured_mem",
-					documentId: entry.key,
-					operation: oldSnapshot == null ? "create" : "update",
-					agentId: entry.agentId,
-					oldValue: oldSnapshot ?? null,
-					newValue: persistedSetDoc,
-					changedFields,
-					actorRole: params.actorRole ?? "system",
-					...(params.mutationMeta ? { meta: params.mutationMeta } : {}),
-				},
-			}),
-		]).catch((err) => {
-			log.warn(
-				`structured memory audit failed: ${err instanceof Error ? err.message : String(err)}`,
-			)
+		const audit = recordMutation({
+			db,
+			prefix,
+			...(session ? { session } : {}),
+			mutation: {
+				collectionName: "structured_mem",
+				documentId: entry.key,
+				operation: oldSnapshot == null ? "create" : "update",
+				agentId: entry.agentId,
+				oldValue: oldSnapshot ?? null,
+				newValue: persistedSetDoc,
+				changedFields,
+				actorRole: params.actorRole ?? "system",
+				...(params.mutationMeta ? { meta: params.mutationMeta } : {}),
+			},
 		})
+		if (session) {
+			await audit
+		} else {
+			Promise.allSettled([audit]).catch((err) => {
+				log.warn(
+					`structured memory audit failed: ${err instanceof Error ? err.message : String(err)}`,
+				)
+			})
+		}
 	}
 
 	if (params.session) {
+		if (params.transactionalSideEffects === "inline") {
+			await runSideEffects(params.session)
+			return {
+				upserted: outcome.upserted,
+				id: outcome.id,
+				changed: outcome.changed,
+			}
+		}
 		// Caller's transaction is still open — defer side effects.
 		return {
 			upserted: outcome.upserted,
@@ -1521,7 +1681,14 @@ export async function updateStructuredMemoryByHandle(params: {
 	client?: MongoClient
 	actorRole?: MemoryActorRole
 	mutationMeta?: MutationMeta
+	admission?: AdmissionToken
 }): Promise<Extract<MemoryLifecycleItem, { family: "structured" }> | null> {
+	if (
+		params.admission &&
+		(params.admission.kind !== "admission" ||
+			params.admission.agentId !== params.handle.agentId)
+	)
+		throw new ErasureGateConflictError(params.handle.agentId)
 	const collection = structuredMemCollection(params.db, params.prefix)
 	const existing = await collection.findOne(
 		structuredFilterFromHandle(params.handle),
@@ -1547,6 +1714,7 @@ export async function updateStructuredMemoryByHandle(params: {
 		actorRole: params.actorRole,
 		mutationMeta: params.mutationMeta,
 		expectedRevision: currentRevision,
+		admission: params.admission,
 	})
 	if (write.quarantined) {
 		// C-008: the merged entry tripped the tier-1 classifier and the patch
@@ -1562,14 +1730,44 @@ export async function invalidateStructuredMemoryByHandle(params: {
 	db: Db
 	prefix: string
 	handle: MemoryStructuredStableHandle
+	expectedId?: unknown
 	invalidatedBy?: Record<string, unknown>
 	client?: MongoClient
+	session?: ClientSession
+	transactionalSideEffects?: "defer" | "inline"
 	actorRole?: MemoryActorRole
 	mutationMeta?: MutationMeta
+	admission?: AdmissionToken
 }): Promise<Extract<MemoryLifecycleItem, { family: "structured" }> | null> {
+	const { admission, ...rest } = params
+	if (admission) {
+		if (params.session)
+			throw new Error(
+				"admitted structured invalidation cannot use an external session",
+			)
+		if (
+			admission.kind !== "admission" ||
+			admission.agentId !== params.handle.agentId
+		)
+			throw new ErasureGateConflictError(params.handle.agentId)
+		return withFencedWrite({
+			db: params.db,
+			prefix: params.prefix,
+			token: admission,
+			fn: (session) =>
+				invalidateStructuredMemoryByHandle({
+					...rest,
+					session,
+					transactionalSideEffects: "inline",
+				}),
+		})
+	}
 	const collection = structuredMemCollection(params.db, params.prefix)
 	const revisions = structuredMemRevisionsCollection(params.db, params.prefix)
-	const filter = structuredFilterFromHandle(params.handle)
+	const filter: Document = {
+		...structuredFilterFromHandle(params.handle),
+		...(params.expectedId !== undefined ? { _id: params.expectedId } : {}),
+	}
 	const now = new Date()
 	let oldSnapshot: Document | null = null
 	let newSnapshot: Document | null = null
@@ -1637,7 +1835,9 @@ export async function invalidateStructuredMemoryByHandle(params: {
 		changed = true
 	}
 
-	if (params.client) {
+	if (params.session) {
+		await persist(params.session)
+	} else if (params.client) {
 		const session = params.client.startSession()
 		try {
 			await session.withTransaction(async () => {
@@ -1661,34 +1861,51 @@ export async function invalidateStructuredMemoryByHandle(params: {
 	if (!newSnapshot) {
 		return null
 	}
+	const persistedSnapshot = newSnapshot
 	if (changed) {
-		await invalidateQueryCache({
-			db: params.db,
-			prefix: params.prefix,
-			agentId: params.handle.agentId,
-			scope: params.handle.scope,
-			scopeRef: params.handle.scopeRef,
-		})
-		recordMutation({
-			db: params.db,
-			prefix: params.prefix,
-			mutation: {
-				collectionName: "structured_mem",
-				documentId: structuredHandleFromDoc(newSnapshot).id,
-				operation: "invalidate",
+		const runSideEffects = async (session?: ClientSession): Promise<void> => {
+			await invalidateQueryCache({
+				db: params.db,
+				prefix: params.prefix,
 				agentId: params.handle.agentId,
-				oldValue: oldSnapshot,
-				newValue: newSnapshot,
-				changedFields: ["state", "validTo", "revision", "invalidatedBy"],
-				actorRole: params.actorRole ?? "system",
-				severity: "warning",
-				...(params.mutationMeta ? { meta: params.mutationMeta } : {}),
-			},
-		}).catch((err) => {
-			log.warn("structured memory invalidate audit failed", { error: err })
-		})
+				scope: params.handle.scope,
+				scopeRef: params.handle.scopeRef,
+				...(session ? { session, throwOnError: true } : {}),
+			})
+			const audit = recordMutation({
+				db: params.db,
+				prefix: params.prefix,
+				...(session ? { session } : {}),
+				mutation: {
+					collectionName: "structured_mem",
+					documentId: structuredHandleFromDoc(persistedSnapshot).id,
+					operation: "invalidate",
+					agentId: params.handle.agentId,
+					oldValue: oldSnapshot,
+					newValue: persistedSnapshot,
+					changedFields: ["state", "validTo", "revision", "invalidatedBy"],
+					actorRole: params.actorRole ?? "system",
+					severity: "warning",
+					...(params.mutationMeta ? { meta: params.mutationMeta } : {}),
+				},
+			})
+			if (session) {
+				await audit
+			} else {
+				audit.catch((err) => {
+					log.warn("structured memory invalidate audit failed", {
+						error: err,
+					})
+				})
+			}
+		}
+		if (params.session && params.transactionalSideEffects === "inline") {
+			await runSideEffects(params.session)
+		} else if (!params.session) {
+			await runSideEffects()
+		}
 	}
-	return structuredLifecycleItemFromDoc(newSnapshot)
+	return structuredLifecycleItemFromDoc(persistedSnapshot)
 }
 
 export async function applyStructuredMemoryFeedbackByHandle(params: {
@@ -1702,7 +1919,15 @@ export async function applyStructuredMemoryFeedbackByHandle(params: {
 	embeddingMode: MemoryMongoDBEmbeddingMode
 	client?: MongoClient
 	actorRole?: MemoryActorRole
+	admission?: AdmissionToken
 }): Promise<Extract<MemoryLifecycleItem, { family: "structured" }> | null> {
+	const { admission } = params
+	if (
+		admission &&
+		(admission.kind !== "admission" ||
+			admission.agentId !== params.handle.agentId)
+	)
+		throw new ErasureGateConflictError(params.handle.agentId)
 	const actorRole = params.actorRole ?? "user"
 	const mutationMeta: MutationMeta = {
 		source: "memory-feedback",
@@ -1725,6 +1950,7 @@ export async function applyStructuredMemoryFeedbackByHandle(params: {
 			client: params.client,
 			actorRole,
 			mutationMeta,
+			admission,
 		})
 	}
 
@@ -1745,69 +1971,102 @@ export async function applyStructuredMemoryFeedbackByHandle(params: {
 			client: params.client,
 			actorRole,
 			mutationMeta,
+			admission,
 		})
 	}
 
-	const collection = structuredMemCollection(params.db, params.prefix)
-	const filter = structuredFilterFromHandle(params.handle)
-	const now = new Date()
-	// (P2.5 f) enforce the handle's pinned state and revision BEFORE the
-	// confirmation $inc, and pin the update filter to the observed revision:
-	// a stale handle must never reinforce a record that has moved on (or been
-	// invalidated) since the handle was issued.
-	const confirm = async (): Promise<Document | null> => {
-		const existing = await collection.findOne(filter)
-		if (!existing) {
+	const confirmFeedback = async (session?: ClientSession) => {
+		const collection = structuredMemCollection(params.db, params.prefix)
+		const filter = structuredFilterFromHandle(params.handle)
+		const now = new Date()
+		// (P2.5 f) enforce the handle's pinned state and revision BEFORE the
+		// confirmation $inc, and pin the update filter to the observed revision:
+		// a stale handle must never reinforce a record that has moved on (or been
+		// invalidated) since the handle was issued.
+		const confirm = async (): Promise<Document | null> => {
+			const existing = await collection.findOne(
+				filter,
+				session ? { session } : undefined,
+			)
+			if (!existing) {
+				return null
+			}
+			const currentRevision = enforceStructuredHandleFreshness({
+				handle: params.handle,
+				existing,
+				rejectInvalidated: true,
+			})
+			const oldSnapshot = await collection.findOneAndUpdate(
+				{ ...filter, revision: currentRevision },
+				{
+					$set: {
+						lastConfirmedAt: now,
+						updatedAt: now,
+					},
+					$inc: {
+						reinforcementCount: 1,
+					},
+				},
+				{ returnDocument: "before", ...(session ? { session } : {}) },
+			)
+			if (!oldSnapshot) {
+				throw new StructuredMemoryRevisionConflictError(
+					`structured memory confirmation raced on ${params.handle.structured.type}:${params.handle.structured.key} at revision ${currentRevision}`,
+				)
+			}
+			return oldSnapshot
+		}
+		const oldSnapshot = session
+			? await confirm()
+			: await withRevisionCasRetry(confirm)
+		if (!oldSnapshot) {
 			return null
 		}
-		const currentRevision = enforceStructuredHandleFreshness({
-			handle: params.handle,
-			existing,
-			rejectInvalidated: true,
-		})
-		const oldSnapshot = await collection.findOneAndUpdate(
-			{ ...filter, revision: currentRevision },
-			{
-				$set: {
-					lastConfirmedAt: now,
-					updatedAt: now,
-				},
-				$inc: {
-					reinforcementCount: 1,
-				},
-			},
-			{ returnDocument: "before" },
-		)
-		if (!oldSnapshot) {
-			throw new StructuredMemoryRevisionConflictError(
-				`structured memory confirmation raced on ${params.handle.structured.type}:${params.handle.structured.key} at revision ${currentRevision}`,
-			)
+		const updated = applyStructuredConfirmationSnapshot(oldSnapshot, now)
+		if (session) {
+			await invalidateQueryCache({
+				db: params.db,
+				prefix: params.prefix,
+				agentId: params.handle.agentId,
+				scope: params.handle.scope,
+				scopeRef: params.handle.scopeRef,
+				session,
+				throwOnError: true,
+			})
 		}
-		return oldSnapshot
+		const audit = recordMutation({
+			db: params.db,
+			prefix: params.prefix,
+			...(session ? { session } : {}),
+			mutation: {
+				collectionName: "structured_mem",
+				documentId: structuredHandleFromDoc(updated).id,
+				operation: "update",
+				agentId: params.handle.agentId,
+				oldValue: oldSnapshot,
+				newValue: updated,
+				changedFields: ["reinforcementCount", "lastConfirmedAt"],
+				actorRole,
+				meta: mutationMeta,
+			},
+		})
+		if (session) {
+			await audit
+		} else {
+			audit.catch((err) => {
+				log.warn("structured memory feedback audit failed", { error: err })
+			})
+		}
+		return structuredLifecycleItemFromDoc(updated)
 	}
-	const oldSnapshot = await withRevisionCasRetry(confirm)
-	if (!oldSnapshot) {
-		return null
-	}
-	const updated = applyStructuredConfirmationSnapshot(oldSnapshot, now)
-	recordMutation({
-		db: params.db,
-		prefix: params.prefix,
-		mutation: {
-			collectionName: "structured_mem",
-			documentId: structuredHandleFromDoc(updated).id,
-			operation: "update",
-			agentId: params.handle.agentId,
-			oldValue: oldSnapshot,
-			newValue: updated,
-			changedFields: ["reinforcementCount", "lastConfirmedAt"],
-			actorRole,
-			meta: mutationMeta,
-		},
-	}).catch((err) => {
-		log.warn("structured memory feedback audit failed", { error: err })
-	})
-	return structuredLifecycleItemFromDoc(updated)
+	return admission
+		? withFencedWrite({
+				db: params.db,
+				prefix: params.prefix,
+				token: admission,
+				fn: confirmFeedback,
+			})
+		: confirmFeedback()
 }
 
 export async function getStructuredMemoryHistoryByHandle(params: {
@@ -1894,6 +2153,10 @@ function toStructuredResult(doc: Document): MemorySearchResult {
 		snippet: typeof doc.value === "string" ? doc.value.slice(0, 700) : "",
 		source: "structured",
 		sourceType: "structured",
+		// RET-09: structured records are agent-curated observations; the
+		// store writes no user/agent attribution field, so the conservative
+		// derivation applies (never user-authored without evidence).
+		derivation: "derived",
 		...(typeof doc.sessionId === "string" ? { sessionId: doc.sessionId } : {}),
 		...(doc.updatedAt instanceof Date ? { timestamp: doc.updatedAt } : {}),
 		...(typeof doc.scope === "string"
@@ -2020,9 +2283,16 @@ export async function searchStructuredMemory(
 		if (!opts.filter?.currentOnly) {
 			return filter
 		}
+		const requestedState = opts.filter.state
+		const currentStateClause =
+			Array.isArray(requestedState) && requestedState.length > 0
+				? { state: { $in: requestedState } }
+				: typeof requestedState === "string" && requestedState
+					? { state: requestedState }
+					: { state: "active" }
 		return mergeQueryClauses(
 			filter,
-			{ state: "active" },
+			currentStateClause,
 			buildCurrentValidityClause({ asOf: currentAsOf }),
 		)
 	}
@@ -2042,12 +2312,19 @@ export async function searchStructuredMemory(
 				limit: opts.maxResults,
 				filter: Object.keys(filter).length > 0 ? filter : undefined,
 				textFieldPath: "value", // structured memory stores text in "value" field
-				returnStoredSource: opts.capabilities.storedSource,
+				// Authoritative serving hydrates the full current document from
+				// mongod (the documented default); storedSource may return stale
+				// data and would defeat the post-stage freshness $match below.
+				returnStoredSource: false,
 			})
 
 			if (vsStage) {
 				const pipeline: Document[] = [
 					{ $vectorSearch: vsStage },
+					// Re-validate the full filter against the hydrated document —
+					// the ANN prefilter runs against the indexed copy, which can
+					// lag the latest write.
+					...freshnessRevalidationStages(filter),
 					// P4.4.1: exclude expired docs AFTER $vectorSearch — the serving
 					// vector index does not declare expiresAt as a filter field, so
 					// the exclusion cannot live in the ANN prefilter. The TTL sweep

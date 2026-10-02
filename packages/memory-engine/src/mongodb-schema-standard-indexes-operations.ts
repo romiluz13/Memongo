@@ -141,29 +141,12 @@ export async function ensureOperationalStandardIndexes(
 	)
 	applied++
 
-	// Query Cache indexes
+	// Legacy result-cache rows are never served, but retain the TTL index so
+	// rows from older deployments age out without a migration.
 	const queryCache = queryCacheCollection(db, prefix)
-	try {
-		await queryCache.createIndex(
-			{ queryHash: 1, agentId: 1, scope: 1, scopeRef: 1 },
-			{ name: "uq_query_cache_hash_agent_scope_scoperef", unique: true },
-		)
-		applied++
-	} catch (err) {
-		handleUniqueIndexCreationError(
-			err,
-			"uq_query_cache_hash_agent_scope_scoperef",
-		)
-		applied++
-	}
 	await queryCache.createIndex(
 		{ expiresAt: 1 },
 		{ name: "idx_query_cache_ttl", expireAfterSeconds: 0 },
-	)
-	applied++
-	await queryCache.createIndex(
-		{ agentId: 1, hitCount: -1 },
-		{ name: "idx_query_cache_agent_hitcount" },
 	)
 	applied++
 

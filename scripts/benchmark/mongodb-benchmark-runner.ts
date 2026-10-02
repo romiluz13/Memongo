@@ -9,6 +9,7 @@ import {
 	resolveDatasetSha256,
 	resolveRetrievalUnit,
 } from "./benchmark-parity-envelope.js"
+import type { BenchmarkReadinessSkip } from "./mongodb-manager-benchmark-scenario.js"
 import type { MemorySearchResult } from "../../packages/memory-engine/src/types.js"
 import type {
 	BenchmarkCostAccounting,
@@ -183,6 +184,12 @@ export type BenchmarkSummary = {
 	scoredCases: number
 	skippedCases: number
 	execution: MemoryBenchmarkExecutionSummary
+	/**
+	 * B4: index-readiness waits skipped without evidence in non-strict mode
+	 * (no capability, no vector stage, legitimately empty lane). Reported
+	 * next to execution.failedCases so a silent bypass cannot hide.
+	 */
+	readinessSkips?: BenchmarkReadinessSkip[]
 	caseOutcomes: MemoryBenchmarkCaseOutcome[]
 	hitRate: number
 	emptyRate: number
@@ -1853,6 +1860,7 @@ export function summarizeBenchmarkExecutions(params: {
 	scenarios?: number
 	executions: BenchmarkCaseExecution[]
 	ingest?: BenchmarkSummary["ingest"]
+	readinessSkips?: BenchmarkReadinessSkip[]
 }): BenchmarkSummary {
 	const executions = params.executions
 	const scored = executions.filter((entry) => entry.scored)
@@ -1899,6 +1907,12 @@ export function summarizeBenchmarkExecutions(params: {
 			...(entry.officialMetric ? { officialMetric: entry.officialMetric } : {}),
 			empty: entry.empty,
 			latencyMs: entry.latencyMs,
+			...(entry.longMemEval?.session
+				? {
+						recallAnyAt10: entry.longMemEval.session.recallAnyAt10,
+						recallAnyAt50: entry.longMemEval.session.recallAnyAt50,
+					}
+				: {}),
 			...(entry.latencyByLane ? { latencyByLane: entry.latencyByLane } : {}),
 			...(entry.error
 				? { failure: { stage: "retrieval" as const, message: entry.error } }
@@ -1943,6 +1957,9 @@ export function summarizeBenchmarkExecutions(params: {
 		questionTypeBreakdown: summarizeQuestionTypes(executions),
 		...(officialMetrics ? { officialMetrics } : {}),
 		...(params.ingest ? { ingest: params.ingest } : {}),
+		...(params.readinessSkips && params.readinessSkips.length > 0
+			? { readinessSkips: params.readinessSkips }
+			: {}),
 	}
 }
 

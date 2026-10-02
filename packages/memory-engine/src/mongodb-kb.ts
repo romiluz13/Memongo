@@ -14,7 +14,10 @@ import {
 	isDuplicateKeyError,
 	runUnorderedBulkWriteCounted,
 } from "./internal.js"
-import { recordEmbeddingSpend } from "./mongodb-cost-ledger.js"
+import {
+	recordEmbeddingSpend,
+	recordEmbeddingSpendInSession,
+} from "./mongodb-cost-ledger.js"
 import type { EmbeddingStatus } from "./mongodb-embedding-retry.js"
 import { invalidateQueryCache } from "./mongodb-query-cache.js"
 import { kbCollection, kbChunksCollection } from "./mongodb-schema.js"
@@ -24,6 +27,11 @@ import {
 	MAJORITY_TRANSACTION_OPTIONS,
 	isTransactionUnsupported,
 } from "./mongodb-transactions.js"
+import {
+	isErasureGateConflictError,
+	withFencedWrite,
+	type AdmissionToken,
+} from "./mongodb-write-fence.js"
 
 const log = createSubsystemLogger("memory:mongodb:kb")
 
@@ -83,6 +91,60 @@ function resolveKBScope(scope: KBScope): ResolvedKBScope {
 }
 
 // ---------------------------------------------------------------------------
+// Admission fence (plan e5ec10dc §2/§3 S2)
+//
+// Ordinary per-document failure types for the admission branch. They are NOT
+// gate conflicts: a KBAdmissionError/KBForeignOwnerError/KBParentVanishedError
+// fails that one document closed (error recorded, no mutation, no skip claim);
+// only ErasureGateConflictError aborts the whole attempt (C2).
+// ---------------------------------------------------------------------------
+
+export class KBAdmissionError extends Error {
+	constructor(message: string) {
+		super(message)
+		this.name = "KBAdmissionError"
+	}
+}
+
+export class KBForeignOwnerError extends Error {
+	constructor(message: string) {
+		super(message)
+		this.name = "KBForeignOwnerError"
+	}
+}
+
+export class KBParentVanishedError extends Error {
+	constructor(message: string) {
+		super(message)
+		this.name = "KBParentVanishedError"
+	}
+}
+
+/**
+ * §2.1 admission precondition, enforced at BOTH entries before any work.
+ * Absent admission is a no-op. Present admission requires kind "admission",
+ * the caller's own agentId, and the canonical agent scope derivation
+ * (`agent:${agentId}` with no override) — it validates the supplied
+ * identity; it does not capture or refresh an epoch.
+ */
+function assertKBAdmission(scope: KBScope, admission?: AdmissionToken): void {
+	if (!admission) {
+		return
+	}
+	const resolved = resolveKBScope(scope)
+	if (
+		admission.kind !== "admission" ||
+		admission.agentId !== resolved.agentId ||
+		resolved.scope !== "agent" ||
+		resolved.scopeRef !== `agent:${resolved.agentId}`
+	) {
+		throw new KBAdmissionError(
+			"admission requires its owner's canonical agent scope",
+		)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
@@ -124,13 +186,18 @@ export async function ingestToKB(params: {
 	force?: boolean
 	maxDocumentSize?: number
 	client?: MongoClient
+	/** Admission token (plan e5ec10dc §3 S2): present → the fenced, fail-closed
+	 * write boundary; absent → every current path byte-preserved. */
+	admission?: AdmissionToken
 	progress?: (update: {
 		completed: number
 		total: number
 		label: string
 	}) => void
 }): Promise<KBIngestResult> {
-	const { db, prefix, documents, force, progress } = params
+	// §2.1: the guard fires before collections, dedup or chunking.
+	assertKBAdmission(params.scope, params.admission)
+	const { db, prefix, documents, force, progress, admission } = params
 	const { agentId, scope: memoryScope, scopeRef } = resolveKBScope(params.scope)
 	// Clamp under the 16 MiB BSON document limit with headroom for the KB
 	// document's own metadata — a caller override above the ceiling would only
@@ -178,15 +245,40 @@ export async function ingestToKB(params: {
 			// failed — or a legacy parent written before the marker existed —
 			// must be REPAIRED (chunks re-upserted, then flipped complete), not
 			// skipped: skipping froze the KB with permanently missing chunks.
+			// §2.2 owner-checked dedup results: with admission, every hit
+			// must carry this caller's identity (agentId/scope/scopeRef);
+			// without admission the wrapper returns the hit unchanged
+			// (byte-preserved semantics). A foreign unique-key collision is
+			// NOT successful dedup.
+			const requireOwned = (
+				hit: Record<string, unknown> | null,
+				via: string,
+			): Record<string, unknown> | null => {
+				if (
+					admission &&
+					hit &&
+					(hit.agentId !== agentId ||
+						hit.scope !== memoryScope ||
+						hit.scopeRef !== scopeRef)
+				) {
+					throw new KBForeignOwnerError(
+						`${doc.title}: ${via} matched a parent owned by ${String(hit.agentId)}`,
+					)
+				}
+				return hit
+			}
 			let reIngestionOldId: string | null = null
 			let reIngestionOldDocId: unknown = null
 			let repairExistingDocId: string | null = null
 			if (!force) {
 				const sourcePath = doc.source.path ?? doc.title
-				const existingByPath = await kb.findOne({
-					"source.path": sourcePath,
-					scopeRef,
-				})
+				const existingByPath = requireOwned(
+					await kb.findOne({
+						"source.path": sourcePath,
+						scopeRef,
+					}),
+					"path dedup",
+				)
 				if (existingByPath) {
 					if (existingByPath.hash === doc.hash) {
 						// W07: a same-hash skip is only valid when the stored
@@ -208,7 +300,10 @@ export async function ingestToKB(params: {
 					}
 				} else {
 					// No path match — check hash as fallback
-					const existingByHash = await kb.findOne({ hash: doc.hash, scopeRef })
+					const existingByHash = requireOwned(
+						await kb.findOne({ hash: doc.hash, scopeRef }),
+						"hash dedup",
+					)
 					if (existingByHash) {
 						const schemeCurrent =
 							existingByHash.chunkScheme === CHUNK_SCHEME_VERSION
@@ -237,7 +332,10 @@ export async function ingestToKB(params: {
 			let forceOldId: string | null = null
 			let forceOldDocId: unknown = null
 			if (force) {
-				const existingDoc = await kb.findOne({ hash: doc.hash, scopeRef })
+				const existingDoc = requireOwned(
+					await kb.findOne({ hash: doc.hash, scopeRef }),
+					"force dedup",
+				)
 				if (existingDoc) {
 					forceOldId = String(existingDoc._id)
 					forceOldDocId = existingDoc._id
@@ -361,55 +459,200 @@ export async function ingestToKB(params: {
 			const oldIdToDelete = reIngestionOldId ?? forceOldId
 			const oldDocIdToDelete = reIngestionOldDocId ?? forceOldDocId
 
-			// C-017: chunks that actually landed this document (0 on skip,
-			// dedup, or no-op repair re-upserts). Billed after the persist path
-			// returns — past the transaction commit on the re-ingest path.
-			let appliedChunks = 0
-			if (repairExistingDocId) {
-				// C2 repair: the parent already exists (incomplete) — do not
-				// re-insert it (its hash owns the unique index); re-upsert the
-				// chunks and flip complete when they all land.
-				appliedChunks = await persistChunksAndComplete(repairExistingDocId)
-			} else if (needsTransaction && oldIdToDelete && oldDocIdToDelete) {
-				// Re-ingestion path: wrap delete-old + insert-new in withTransaction()
-				// for atomicity. Falls back to sequential on standalone topology.
-				const chunksCreated = await reIngestAtomically({
-					client: params.client,
-					kb,
-					kbChunks,
-					oldDocId: oldIdToDelete,
-					oldDocPk: oldDocIdToDelete,
-					newKBDoc,
-					chunkOps,
-				})
-				result.chunksCreated += chunksCreated
-				appliedChunks = chunksCreated
-			} else {
-				// Fresh ingestion: no delete needed, no transaction required.
-				// P1-2: a concurrent ingest of the same content can win the
-				// uq_kb_scope_hash race between our dedup check and this insert
-				// — that is a successful dedup, not an error.
-				try {
-					await kb.insertOne(newKBDoc)
-				} catch (err) {
-					if (isDuplicateKeyError(err)) {
-						result.skipped++
-						continue
+			if (!admission) {
+				// C-017: chunks that actually landed this document (0 on skip,
+				// dedup, or no-op repair re-upserts). Billed after the persist path
+				// returns — past the transaction commit on the re-ingest path.
+				let appliedChunks = 0
+				if (repairExistingDocId) {
+					// C2 repair: the parent already exists (incomplete) — do not
+					// re-insert it (its hash owns the unique index); re-upsert the
+					// chunks and flip complete when they all land.
+					appliedChunks = await persistChunksAndComplete(repairExistingDocId)
+				} else if (needsTransaction && oldIdToDelete && oldDocIdToDelete) {
+					// Re-ingestion path: wrap delete-old + insert-new in withTransaction()
+					// for atomicity. Falls back to sequential on standalone topology.
+					const chunksCreated = await reIngestAtomically({
+						client: params.client,
+						kb,
+						kbChunks,
+						oldDocId: oldIdToDelete,
+						oldDocPk: oldDocIdToDelete,
+						newKBDoc,
+						chunkOps,
+					})
+					result.chunksCreated += chunksCreated
+					appliedChunks = chunksCreated
+				} else {
+					// Fresh ingestion: no delete needed, no transaction required.
+					// P1-2: a concurrent ingest of the same content can win the
+					// uq_kb_scope_hash race between our dedup check and this insert
+					// — that is a successful dedup, not an error.
+					try {
+						await kb.insertOne(newKBDoc)
+					} catch (err) {
+						if (isDuplicateKeyError(err)) {
+							result.skipped++
+							continue
+						}
+						throw err
 					}
-					throw err
+					appliedChunks = await persistChunksAndComplete(docId)
 				}
-				appliedChunks = await persistChunksAndComplete(docId)
-			}
 
-			// C-017: every applied chunk write embeds its text server-side
-			// (autoEmbed) in automated mode — one indexing unit per landed
-			// chunk, billed after the persist path (and any transaction)
-			// completed.
-			if (params.embeddingMode === "automated" && appliedChunks > 0) {
-				recordEmbeddingSpend(db, prefix, agentId, "indexing", appliedChunks)
+				// C-017: every applied chunk write embeds its text server-side
+				// (autoEmbed) in automated mode — one indexing unit per landed
+				// chunk, billed after the persist path (and any transaction)
+				// completed.
+				if (params.embeddingMode === "automated" && appliedChunks > 0) {
+					recordEmbeddingSpend(db, prefix, agentId, "indexing", appliedChunks)
+				}
+				result.documentsProcessed++
+			} else {
+				// §3 S2 admission branch: ONE fence per document; every
+				// operation on the fence session (driver rule: an operation
+				// without an explicit session is NOT in the transaction); raw
+				// errors (§2.5); callback-local counts (the driver may
+				// re-run the callback, and a failed attempt must not leave
+				// counted work); the ledger AWAITED in the SAME document
+				// transaction. reIngestAtomically is NOT called here — it manages its
+				// own session/withTransaction and standalone fallback, which
+				// would nest transactions (C4).
+				const owned = { agentId, scope: memoryScope, scopeRef }
+				const ownedChunkOps = chunkOps.map(({ updateOne }) => ({
+					updateOne: {
+						...updateOne,
+						filter: { ...updateOne.filter, ...owned },
+					},
+				}))
+				const appliedChunks = await withFencedWrite({
+					db,
+					prefix,
+					token: admission,
+					fn: async (session): Promise<number> => {
+						// §2.3 in-fence identity+ownership revalidation —
+						// the pre-fence lookup is only a plan.
+						const revalidate = async (
+							id: unknown,
+							what: string,
+						): Promise<void> => {
+							const current = await kb.findOne(
+								{ _id: id, ...owned } as Record<string, unknown>,
+								{ session },
+							)
+							if (!current) {
+								throw new KBParentVanishedError(
+									`${doc.title}: ${what} parent ${String(id)} is missing or no longer owned`,
+								)
+							}
+						}
+						const requireOwnedChildren = async (
+							parentId: string,
+						): Promise<void> => {
+							const foreign = await kbChunks.findOne(
+								{
+									docId: parentId,
+									$or: [
+										{ agentId: { $ne: agentId } },
+										{ scope: { $ne: memoryScope } },
+										{ scopeRef: { $ne: scopeRef } },
+									],
+								},
+								{ session, projection: { _id: 1 } },
+							)
+							if (foreign) {
+								throw new KBForeignOwnerError(
+									`${doc.title}: foreign child under ${parentId}`,
+								)
+							}
+						}
+						if (repairExistingDocId) {
+							await revalidate(repairExistingDocId, "repair")
+						}
+						if (oldIdToDelete !== null) {
+							await revalidate(oldDocIdToDelete, "replacement")
+							await requireOwnedChildren(oldIdToDelete)
+						}
+						await requireOwnedChildren(docId)
+						if (oldIdToDelete !== null) {
+							await kbChunks.deleteMany(
+								{ docId: oldIdToDelete, ...owned },
+								{ session },
+							)
+							const removed = await kb.deleteOne(
+								{ _id: oldDocIdToDelete, ...owned } as Record<string, unknown>,
+								{ session },
+							)
+							if (removed.deletedCount !== 1) {
+								throw new KBParentVanishedError(
+									`${doc.title}: replacement parent disappeared`,
+								)
+							}
+						}
+						if (!repairExistingDocId) {
+							// §2.5: a raw duplicate error aborts — a foreign
+							// parent may hold uq_kb_scope_hash; this is NOT a
+							// skip on this branch.
+							await kb.insertOne(newKBDoc, { session })
+						}
+						// W07 clean-replace + RAW bulkWrite — no
+						// runUnorderedBulkWriteCounted swallow inside the fn
+						// (internal.ts catches MongoBulkWriteError; the driver
+						// forbids silent handlers in withTransaction
+						// callbacks). Clean owned chunks even for zero new
+						// chunks, so fenced repair completion always describes
+						// the exact chunk set.
+						await kbChunks.deleteMany({ docId, ...owned }, { session })
+						let applied = 0
+						if (ownedChunkOps.length > 0) {
+							const writeResult = await kbChunks.bulkWrite(ownedChunkOps, {
+								ordered: false,
+								session,
+							})
+							applied = writeResult.upsertedCount + writeResult.modifiedCount
+						}
+						const completed = await kb.updateOne(
+							{ _id: docId, ...owned } as Record<string, unknown>,
+							{
+								$set: {
+									chunksComplete: true,
+									chunkScheme: CHUNK_SCHEME_VERSION,
+									chunkCount: chunkOps.length,
+								},
+							},
+							{ session },
+						)
+						if (completed.matchedCount !== 1) {
+							throw new KBParentVanishedError(
+								`${doc.title}: completion parent disappeared`,
+							)
+						}
+						// Ledger AWAITED in the SAME document transaction
+						// (no-op for applied <= 0, cost-ledger).
+						if (params.embeddingMode === "automated") {
+							await recordEmbeddingSpendInSession({
+								db,
+								prefix,
+								agentId,
+								kind: "indexing",
+								units: applied,
+								session,
+							})
+						}
+						return applied
+					},
+				})
+				// Acknowledged success — only now does the attempt claim work.
+				result.chunksCreated += appliedChunks
+				result.documentsProcessed++
 			}
-			result.documentsProcessed++
 		} catch (err) {
+			if (admission && isErasureGateConflictError(err)) {
+				// C2 settled: an original-token gate conflict aborts the whole
+				// attempt — no further documents, no cache fence, no
+				// successful marker.
+				throw err
+			}
 			const msg = err instanceof Error ? err.message : String(err)
 			result.errors.push(`${doc.title}: ${msg}`)
 			log.warn(`KB ingest failed for ${doc.title}: ${msg}`)
@@ -425,13 +668,45 @@ export async function ingestToKB(params: {
 		`KB ingest: processed=${result.documentsProcessed} chunks=${result.chunksCreated} skipped=${result.skipped} errors=${result.errors.length}`,
 	)
 	if (result.documentsProcessed > 0) {
-		await invalidateQueryCache({
-			db,
-			prefix,
-			agentId,
-			scope: memoryScope,
-			scopeRef,
-		})
+		if (admission) {
+			// C3 settled: ONE separate post-primary cache fence under the
+			// SAME original token; throwOnError inside the transaction (no
+			// swallowed operation errors, driver rule); after the fence
+			// settles, gate conflicts propagate (abort per C2) and any other
+			// error is a best-effort warn — the documents are already
+			// committed and cache invalidation stays best-effort.
+			try {
+				await withFencedWrite({
+					db,
+					prefix,
+					token: admission,
+					fn: async (session) => {
+						await invalidateQueryCache({
+							db,
+							prefix,
+							agentId,
+							scope: memoryScope,
+							scopeRef,
+							session,
+							throwOnError: true,
+						})
+					},
+				})
+			} catch (err) {
+				if (isErasureGateConflictError(err)) {
+					throw err
+				}
+				log.warn(`KB cache invalidation fence failed: ${String(err)}`)
+			}
+		} else {
+			await invalidateQueryCache({
+				db,
+				prefix,
+				agentId,
+				scope: memoryScope,
+				scopeRef,
+			})
+		}
 	}
 	return result
 }
@@ -606,7 +881,13 @@ export async function ingestFilesToKB(params: {
 		total: number
 		label: string
 	}) => void
+	/** Admission token (plan e5ec10dc §3 S2): forwarded verbatim to
+	 * ingestToKB by the {...params} spread below; present — the fenced,
+	 * fail-closed write boundary, absent — byte-preserved paths. */
+	admission?: AdmissionToken
 }): Promise<KBIngestResult> {
+	// §2.1: the guard fires before any filesystem work at this entry.
+	assertKBAdmission(params.scope, params.admission)
 	const { paths, recursive = true, tags, category, importedBy } = params
 
 	// Collect all files

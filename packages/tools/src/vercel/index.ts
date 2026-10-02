@@ -1,7 +1,4 @@
-import type {
-	LanguageModelV2,
-	LanguageModelV2CallOptions,
-} from "@ai-sdk/provider"
+import type { LanguageModelV2CallOptions } from "@ai-sdk/provider"
 import type { MemongoScope } from "@memongo/client"
 // Canonical scope enum from the single contract source (P2.2).
 import { MEMORY_SCOPE_VALUES } from "@memongo/lib"
@@ -16,7 +13,7 @@ import { _clearCache } from "../cache-identity.js"
 
 export type { MemongoCoreOptions } from "../middleware-core.js"
 
-/** Exported for testing only. */
+/** Retained as a no-op for compatibility with existing imports. */
 export { _clearCache }
 
 /* ------------------------------------------------------------------ */
@@ -24,10 +21,10 @@ export { _clearCache }
 /*                                                                     */
 /*  The Vercel AI SDK's official channel into middleware is            */
 /*  `providerOptions` -> `params.providerOptions.memongo`:             */
-/*    { agentId?, userId?, scope?, sessionId?, mode? }                 */
+/*    { agentId?, userId?, scope?, scopeRef?, sessionId?, mode? }       */
 /*  Identity is read per request — never from module closures — so     */
 /*  concurrent Fluid Compute invocations for different tenants sharing */
-/*  one warm process can never be keyed together.                      */
+/*  one warm process never share retrieved state.                      */
 /* ------------------------------------------------------------------ */
 
 const VALID_SCOPES: ReadonlySet<string> = new Set(MEMORY_SCOPE_VALUES)
@@ -42,7 +39,9 @@ function identityFromParams(
 	const identity: MemongoRequestIdentity = {}
 	if (typeof raw.agentId === "string") identity.agentId = raw.agentId
 	if (typeof raw.userId === "string") identity.userId = raw.userId
+	if (typeof raw.scopeRef === "string") identity.scopeRef = raw.scopeRef
 	if (typeof raw.sessionId === "string") identity.sessionId = raw.sessionId
+	if (typeof raw.requestId === "string") identity.requestId = raw.requestId
 	if (typeof raw.scope === "string" && VALID_SCOPES.has(raw.scope)) {
 		identity.scope = raw.scope as MemongoScope
 	}
@@ -83,10 +82,23 @@ function extractResponseText(
 /*  Public API                                                        */
 /* ------------------------------------------------------------------ */
 
+// The public contract derives from the declared `ai` peer itself, so it
+// follows the consumer's installed major: under ai 5.x both aliases are
+// LanguageModelV2 (V2 in, V2 out — today's contract); under ai 7.x the
+// peer's own wrapper accepts V2/V3/V4 and returns its V4 wrapper. Keeping
+// the aliases as Parameters/ReturnType computations makes the emitted
+// declarations resolve against the consumer's `ai`, leaving no undeclared
+// @ai-sdk/provider import on the public surface. ai 5.0.237's
+// wrapLanguageModel constructs a new V2 object (input extension fields
+// are not preserved), so no generic return-model promise is made.
+type WrapArg = Parameters<typeof wrapLanguageModel>
+export type MemongoModelInput = WrapArg[0]["model"]
+export type MemongoWrappedModel = ReturnType<typeof wrapLanguageModel>
+
 export function withMemongo(
-	model: LanguageModelV2,
+	model: MemongoModelInput,
 	options: MemongoCoreOptions,
-): LanguageModelV2 {
+): MemongoWrappedModel {
 	const core = createMemongoMiddlewareCore(options)
 
 	const middleware: LanguageModelMiddleware = {

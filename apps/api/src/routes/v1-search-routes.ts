@@ -26,7 +26,9 @@ import {
 	readJsonBody,
 	readQuery,
 	readLimit,
+	MAX_RECALL_CONVERSATION_LIMIT,
 	readSessionKey,
+	readSessionCoordinate,
 	readScope,
 	readScopeRef,
 	readScopeInputError,
@@ -59,6 +61,7 @@ export function registerSearchRoutes(v1: Hono<V1RouterEnv>): void {
 					sessionKey: await readSessionKey(c),
 					scope: await readScope(c),
 					scopeRef: await readScopeRef(c),
+					kbRestricted: c.get("kbRestricted"),
 				},
 			)
 			// WS-12 (C-019): throttling is served as throttling — the
@@ -75,6 +78,10 @@ export function registerSearchRoutes(v1: Hono<V1RouterEnv>): void {
 		const query = readQuery(body)
 		if (!query.trim()) {
 			return jsonError(c, 400, "VALIDATION_ERROR", "query is required")
+		}
+		const scopeError = await readScopeInputError(c)
+		if (scopeError) {
+			return jsonError(c, 400, "VALIDATION_ERROR", scopeError)
 		}
 		// P2.8: the KB filter feeds a MongoDB query — validate it (typed fields,
 		// no operator-shaped keys) instead of casting the raw object through.
@@ -97,6 +104,8 @@ export function registerSearchRoutes(v1: Hono<V1RouterEnv>): void {
 				await memongoBridgeSearchKBWithDegradation({
 					query,
 					agentId: await readAgentId(c),
+					scope: await readScope(c),
+					sessionKey: await readSessionCoordinate(c),
 					scopeRef: await readScopeRef(c),
 					maxResults: readLimit(body),
 					minScore:
@@ -133,14 +142,41 @@ export function registerSearchRoutes(v1: Hono<V1RouterEnv>): void {
 		if (asOf === null) {
 			return jsonError(c, 400, "VALIDATION_ERROR", "asOf must be a valid date")
 		}
+		const scopeError = await readScopeInputError(c)
+		if (scopeError) return jsonError(c, 400, "VALIDATION_ERROR", scopeError)
+		for (const field of [
+			"query",
+			"startTime",
+			"endTime",
+			"timezone",
+		] as const) {
+			if (body[field] !== undefined && typeof body[field] !== "string") {
+				return jsonError(
+					c,
+					400,
+					"VALIDATION_ERROR",
+					`${field} must be a string`,
+				)
+			}
+		}
+		if (
+			body.includeToolMessages !== undefined &&
+			typeof body.includeToolMessages !== "boolean"
+		) {
+			return jsonError(
+				c,
+				400,
+				"VALIDATION_ERROR",
+				"includeToolMessages must be a boolean",
+			)
+		}
 		try {
 			const result = await memongoBridgeRecallConversation({
 				agentId: await readAgentId(c),
 				scope: await readScope(c),
 				scopeRef: await readScopeRef(c),
 				query: typeof body.query === "string" ? body.query : undefined,
-				sessionId:
-					typeof body.sessionId === "string" ? body.sessionId : undefined,
+				sessionId: await readSessionCoordinate(c),
 				roles,
 				startTime:
 					typeof body.startTime === "string" ? body.startTime : undefined,
@@ -151,7 +187,7 @@ export function registerSearchRoutes(v1: Hono<V1RouterEnv>): void {
 					typeof body.includeToolMessages === "boolean"
 						? body.includeToolMessages
 						: undefined,
-				limit: readLimit(body),
+				limit: readLimit(body, MAX_RECALL_CONVERSATION_LIMIT),
 			})
 			return c.json(result)
 		} catch (err) {
@@ -304,6 +340,7 @@ export function registerSearchRoutes(v1: Hono<V1RouterEnv>): void {
 				referenceScope: referenceScope.value,
 				proceduralScope: proceduralScope.value,
 				searchConfig: searchConfig.value,
+				kbRestricted: c.get("kbRestricted"),
 			})
 			return c.json(result)
 		} catch (err) {

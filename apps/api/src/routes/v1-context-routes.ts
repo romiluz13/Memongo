@@ -18,6 +18,7 @@ import {
 	readJsonBody,
 	readQuery,
 	readSessionId,
+	readSessionCoordinate,
 	readScope,
 	readScopeRef,
 	readScopeInputError,
@@ -48,6 +49,7 @@ export function registerContextRoutes(v1: Hono<V1RouterEnv>): void {
 		try {
 			const slate = await memongoBridgeHydrateActiveSlate({
 				agentId: await readAgentId(c),
+				sessionId: await readSessionCoordinate(c),
 				scope: await readScope(c),
 				scopeRef: await readScopeRef(c),
 				maxItems: typeof body.maxItems === "number" ? body.maxItems : undefined,
@@ -83,6 +85,7 @@ export function registerContextRoutes(v1: Hono<V1RouterEnv>): void {
 			}
 			const projection = await memongoBridgeBuildDiscoveryProjection({
 				agentId: await readAgentId(c),
+				sessionId: await readSessionCoordinate(c),
 				kind,
 				query: readQuery(body) || undefined,
 				scope: await readScope(c),
@@ -165,6 +168,7 @@ export function registerContextRoutes(v1: Hono<V1RouterEnv>): void {
 						: undefined,
 				timeRange: timeRange.value,
 				mode: mode.value,
+				kbRestricted: c.get("kbRestricted"),
 			})
 			return c.json(bundle)
 		} catch (err) {

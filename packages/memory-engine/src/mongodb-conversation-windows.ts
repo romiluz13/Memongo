@@ -5,6 +5,13 @@ import { createSubsystemLogger } from "@memongo/lib"
 import { renderEventChunkText } from "./mongodb-events.js"
 import { chunksCollection, eventsCollection } from "./mongodb-schema.js"
 import { buildUnexpiredClause } from "./mongodb-temporal.js"
+import {
+	captureAdmissionToken,
+	readErasureGate,
+	withFencedWrite,
+	ErasureGateConflictError,
+	type AdmissionToken,
+} from "./mongodb-write-fence.js"
 
 const log = createSubsystemLogger("memory:mongodb:conversation-windows")
 
@@ -125,7 +132,7 @@ export function buildConversationWindows(
 /**
  * Project conversation windows into the chunks collection.
  * Each window becomes a chunk at `windows/{sessionId}/{windowIndex}`.
- * Idempotent: uses upsert with path as unique key.
+ * Reprojection matches the path within the requested conversation namespace.
  *
  * Fetches all events for the session, builds windows, and upserts chunks.
  */
@@ -138,10 +145,18 @@ export async function projectConversationWindows(params: {
 	scopeRef: string
 	windowSize?: number
 	overlap?: number
+	admission?: AdmissionToken
 }): Promise<{ windowsCreated: number }> {
 	const { db, prefix, agentId, sessionId, scope, scopeRef } = params
 	const windowSize = params.windowSize ?? 7
 	const overlap = params.overlap ?? 2
+	const admission =
+		params.admission ?? (await captureAdmissionToken({ db, prefix, agentId }))
+	if (admission.kind !== "admission" || admission.agentId !== agentId)
+		throw new ErasureGateConflictError(agentId)
+	const gate = await readErasureGate({ db, prefix, agentId })
+	if (!gate || gate.state !== "open" || gate.epoch !== admission.epoch)
+		throw new ErasureGateConflictError(agentId)
 
 	// Fetch all events for this session. C-005: the unexpired clause keeps
 	// expired events (deleted server-side by the events TTL index on a ~60s
@@ -149,7 +164,7 @@ export async function projectConversationWindows(params: {
 	// tenant's retention policy already expired.
 	const eventsCol = eventsCollection(db, prefix)
 	const rawResult = await eventsCol
-		.find({ agentId, sessionId, ...buildUnexpiredClause() })
+		.find({ agentId, sessionId, scope, scopeRef, ...buildUnexpiredClause() })
 		.sort({ timestamp: 1 })
 		.limit(1000)
 		.toArray()
@@ -183,34 +198,40 @@ export async function projectConversationWindows(params: {
 		const hash = createHash("sha256").update(win.text).digest("hex")
 		const now = new Date()
 
-		await chunks.updateOne(
-			{ path },
-			{
-				$set: {
-					text: win.text,
-					hash,
-					source: "conversation",
-					agentId,
-					scope,
-					scopeRef,
-					updatedAt: now,
-					sessionId,
-					windowIndex: win.windowIndex,
-					timestamp: win.events[0].timestamp,
-					// C-005: window expiry is DERIVED state (max of its
-					// events' expiry) — recomputed in full on every
-					// projection, so a stale expiry is $unset rather than
-					// left behind when the derived value becomes "permanent".
-					...(win.expiresAt ? { expiresAt: win.expiresAt } : {}),
-				},
-				$setOnInsert: {
-					path,
-					createdAt: now,
-				},
-				...(win.expiresAt ? {} : { $unset: { expiresAt: "" } }),
-			},
-			{ upsert: true },
-		)
+		await withFencedWrite({
+			db,
+			prefix,
+			token: admission,
+			fn: (session) =>
+				chunks.updateOne(
+					{ path, agentId, scope, scopeRef, source: "conversation" },
+					{
+						$set: {
+							text: win.text,
+							hash,
+							source: "conversation",
+							agentId,
+							scope,
+							scopeRef,
+							updatedAt: now,
+							sessionId,
+							windowIndex: win.windowIndex,
+							timestamp: win.events[0].timestamp,
+							// C-005: window expiry is DERIVED state (max of its
+							// events' expiry) — recomputed in full on every
+							// projection, so a stale expiry is $unset rather than
+							// left behind when the derived value becomes "permanent".
+							...(win.expiresAt ? { expiresAt: win.expiresAt } : {}),
+						},
+						$setOnInsert: {
+							path,
+							createdAt: now,
+						},
+						...(win.expiresAt ? {} : { $unset: { expiresAt: "" } }),
+					},
+					{ upsert: true, session },
+				),
+		})
 		windowsCreated++
 	}
 

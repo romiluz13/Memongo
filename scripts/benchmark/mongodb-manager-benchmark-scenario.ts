@@ -13,7 +13,11 @@ import type {
 	BenchmarkRetrievalLane,
 	BenchmarkRunConfiguration,
 } from "./benchmark-parity-envelope.js"
-import { readSearchIndexStatus } from "./mongodb-benchmark-readiness.js"
+import { benchmarkAnswerProviderSource } from "./benchmark-answer-provider.js"
+import {
+	isTerminalSearchIndexStatus,
+	readSearchIndexStatus,
+} from "./mongodb-benchmark-readiness.js"
 import { withMongoBenchmarkRetry } from "./mongodb-benchmark-retry.js"
 import { mongodbDeploymentIdentity } from "../../packages/memory-engine/src/mongodb-capability-registry.js"
 import { renderEventChunkText } from "../../packages/memory-engine/src/mongodb-events.js"
@@ -23,6 +27,7 @@ import {
 } from "../../packages/memory-engine/src/mongodb-evidence-mirror.js"
 import { updateLaneCoverage } from "../../packages/memory-engine/src/mongodb-lane-coverage.js"
 import {
+	BENCHMARK_RERANK_BOOST_OVERRIDES,
 	BENCHMARK_SCENARIO_COLLECTION_SUFFIXES,
 	benchmarkConvergenceFilter,
 	benchmarkSearchEqualsFilters,
@@ -36,14 +41,9 @@ import type { MongoDBManagerHost } from "../../packages/memory-engine/src/mongod
 import type { MongoDBMemoryManager } from "../../packages/memory-engine/src/mongodb-manager.js"
 import { recordProjectionRun } from "../../packages/memory-engine/src/mongodb-ops.js"
 import {
-	checkCache,
-	writeCache,
-} from "../../packages/memory-engine/src/mongodb-query-cache.js"
-import {
 	chunksCollection,
 	eventsCollection,
 	memoryEvidenceCollection,
-	queryCacheCollection,
 	sessionChunksCollection,
 } from "../../packages/memory-engine/src/mongodb-schema.js"
 import { resolveScopeRef } from "../../packages/memory-engine/src/mongodb-scope.js"
@@ -86,8 +86,63 @@ function runBenchmarkRead<T>(
 	})
 }
 
+export type BenchmarkReadinessSkipReason =
+	| "no-autoembed-capability"
+	| "no-text-search-capability"
+	| "no-vector-stage"
+	| "no-searchable-docs"
+
+export type BenchmarkReadinessSkip = {
+	lane: string
+	index: string
+	reason: BenchmarkReadinessSkipReason
+}
+
+/**
+ * B4: errors that no amount of polling can fix — a missing index, an auth
+ * failure, an unsupported pipeline stage. Retrying these until the deadline
+ * burns up to 18 minutes per scenario (300 s vector + 60 s text across six
+ * lanes) before the throw, so the convergence loops fail fast on them.
+ */
+export function isPermanentReadinessError(err: unknown): boolean {
+	const e = err as { code?: number; codeName?: string; message?: string }
+	if (
+		e?.codeName &&
+		[
+			"IndexNotFound",
+			"Unauthorized",
+			"InvalidPipelineOperator",
+			"InvalidOptions",
+			"CommandNotFound",
+		].includes(e.codeName)
+	) {
+		return true
+	}
+	return /index .*not found|no such index|not authorized|unrecognized pipeline stage|\$vectorSearch is not (allowed|supported)/i.test(
+		e?.message ?? "",
+	)
+}
+
 export class MongoDBManagerBenchmarkScenarioOps {
 	constructor(private readonly host: MongoDBManagerHost) {}
+
+	/**
+	 * B4: every non-strict path that skips an index-readiness wait without
+	 * evidence is recorded here and warned, so a silent bypass shows up in
+	 * the run report next to the execution failure counts instead of
+	 * disappearing. Cleared never; one array per ops instance (per run for
+	 * the outer facade, which owns all convergence waits).
+	 */
+	readonly readinessSkips: BenchmarkReadinessSkip[] = []
+
+	private recordReadinessSkip(skip: BenchmarkReadinessSkip): void {
+		this.readinessSkips.push(skip)
+		log.warn("benchmark index readiness wait skipped", {
+			lane: skip.lane,
+			index: skip.index,
+			reason: skip.reason,
+		})
+	}
 
 	snapshotBenchmarkRunConfiguration(params: {
 		executionProfile: "shipped" | "diagnostic"
@@ -114,14 +169,16 @@ export class MongoDBManagerBenchmarkScenarioOps {
 			conversationEvidenceMode: mongoCfg.conversationEvidenceMode,
 			embeddingDimensions: mongoCfg.numDimensions,
 			embeddingQuantization: mongoCfg.quantization,
-			cacheEnabled: mongoCfg.cache.enabled,
-			cacheConversationTtlSec: mongoCfg.cache.conversationTtlSec,
-			cacheKbTtlSec: mongoCfg.cache.kbTtlSec,
-			cacheSimilarityThreshold: mongoCfg.cache.similarityThreshold,
 			rerankerEnabled: mongoCfg.reranking?.enabled ?? false,
 			rerankerModel: mongoCfg.reranking?.model ?? null,
 			rerankerTopN: mongoCfg.reranking?.topN ?? null,
 			rerankerMinScore: mongoCfg.reranking?.minScore ?? null,
+			// B12: benchmark scenario runs force the post-rerank recency and
+			// access boosts off (BENCHMARK_RERANK_BOOST_OVERRIDES zeroes them
+			// on every scenario manager), so the recorded weights come from
+			// the override, not the host config.
+			rerankerRecencyBoost: BENCHMARK_RERANK_BOOST_OVERRIDES.recencyBoost,
+			rerankerAccessBoost: BENCHMARK_RERANK_BOOST_OVERRIDES.accessBoost,
 			rerankerInstructionSha256: mongoCfg.reranking?.instruction
 				? createHash("sha256")
 						.update(mongoCfg.reranking.instruction)
@@ -155,6 +212,13 @@ export class MongoDBManagerBenchmarkScenarioOps {
 			userSearchMaxTimeMs: resolveUserSearchMaxTimeMs(),
 		}
 		const environmentKeys = [
+			// B1: the answerer and the extraction LLM are separately
+			// configurable, so both must be part of the scenario identity.
+			"MEMONGO_BENCHMARK_ANSWER_ALLOW_PRIVATE_NETWORK",
+			"MEMONGO_BENCHMARK_ANSWER_AUTH_STYLE",
+			"MEMONGO_BENCHMARK_ANSWER_MODEL",
+			"MEMONGO_BENCHMARK_ANSWER_PROVIDER",
+			"MEMONGO_BENCHMARK_ANSWER_TOKEN_PARAM",
 			"MEMONGO_BENCHMARK_STRICT",
 			"MEMONGO_BENCHMARK_DERIVED_WORK_MODE",
 			"MEMONGO_BENCHMARK_EVENT_SEARCH_PROBE_MAX_TIME_MS",
@@ -179,6 +243,9 @@ export class MongoDBManagerBenchmarkScenarioOps {
 			"MEMONGO_ENRICHMENT_TOKEN_PARAM",
 			"MEMONGO_EVIDENCE_SETTLE_MS",
 			"MEMONGO_EVIDENCE_MIRROR_MODE",
+			// B1: extraction-off changes what gets written, so it must not
+			// hash identically to an extraction-on run.
+			"MEMONGO_EXTRACTION_LLM",
 			"MEMONGO_LLM_ENRICHMENT_MAX_RETRIES",
 			"MEMONGO_LLM_ENRICHMENT_MAX_TOKENS",
 			"MEMONGO_LLM_ENRICHMENT_MODE",
@@ -208,11 +275,32 @@ export class MongoDBManagerBenchmarkScenarioOps {
 		settings["env.MEMONGO_ENRICHMENT_API_KEY.sha256"] = enrichmentApiKey
 			? createHash("sha256").update(enrichmentApiKey).digest("hex")
 			: null
+		// B1: a dedicated benchmark answerer gets the same hashed treatment
+		// (never the raw secret) so checkpoint reuse reflects which answerer
+		// produced a run.
+		const benchmarkAnswerApiKey =
+			process.env.MEMONGO_BENCHMARK_ANSWER_API_KEY?.trim() ?? ""
+		settings["env.MEMONGO_BENCHMARK_ANSWER_API_KEY.sha256"] =
+			benchmarkAnswerApiKey
+				? createHash("sha256").update(benchmarkAnswerApiKey).digest("hex")
+				: null
 		const enrichmentBaseUrl =
 			process.env.MEMONGO_ENRICHMENT_BASE_URL?.trim() ?? ""
 		settings["env.MEMONGO_ENRICHMENT_BASE_URL.sha256"] = enrichmentBaseUrl
 			? createHash("sha256").update(enrichmentBaseUrl).digest("hex")
 			: null
+		// F-B1-3: the answer endpoint is part of the answerer identity. Hashed
+		// like the enrichment base URL (never raw), so a checkpoint from a
+		// different answer endpoint cannot be resumed silently.
+		const benchmarkAnswerBaseUrl =
+			process.env.MEMONGO_BENCHMARK_ANSWER_BASE_URL?.trim() ?? ""
+		settings["env.MEMONGO_BENCHMARK_ANSWER_BASE_URL.sha256"] =
+			benchmarkAnswerBaseUrl
+				? createHash("sha256").update(benchmarkAnswerBaseUrl).digest("hex")
+				: null
+		// F-B1-2: record which provider config the answerer resolved from, so
+		// an enrichment-fallback run is never mistaken for a dedicated one.
+		settings.answerProviderSource = benchmarkAnswerProviderSource(process.env)
 		return {
 			executionProfile: params.executionProfile,
 			retrievalLane: params.retrievalLane,
@@ -511,6 +599,9 @@ export class MongoDBManagerBenchmarkScenarioOps {
 			collectionName: `${this.host.prefix}events`,
 			indexName: `${this.host.prefix}events_text`,
 			textPath: "body",
+			// B4: the shipped profile just ingested this haystack; zero
+			// searchable events means ingest failed, so empty throws here.
+			requireSearchableDocuments: true,
 		})
 		await this.waitForBenchmarkVectorSearchCollectionConvergence({
 			agentId: params.agentId,
@@ -522,6 +613,7 @@ export class MongoDBManagerBenchmarkScenarioOps {
 			collectionName: `${this.host.prefix}events`,
 			indexName: `${this.host.prefix}events_vector`,
 			textPath: "body",
+			requireSearchableDocuments: true,
 		})
 		await this.waitForBenchmarkSearchCollectionConvergence({
 			agentId: params.agentId,
@@ -533,6 +625,7 @@ export class MongoDBManagerBenchmarkScenarioOps {
 			collectionName: `${this.host.prefix}chunks`,
 			indexName: `${this.host.prefix}chunks_text`,
 			textPath: "text",
+			requireSearchableDocuments: true,
 		})
 		await this.waitForBenchmarkVectorSearchCollectionConvergence({
 			agentId: params.agentId,
@@ -544,6 +637,7 @@ export class MongoDBManagerBenchmarkScenarioOps {
 			collectionName: `${this.host.prefix}chunks`,
 			indexName: `${this.host.prefix}chunks_vector`,
 			textPath: "text",
+			requireSearchableDocuments: true,
 		})
 		await this.waitForBenchmarkSearchCollectionConvergence({
 			agentId: params.agentId,
@@ -635,6 +729,11 @@ export class MongoDBManagerBenchmarkScenarioOps {
 					"benchmark vector convergence requires MongoDB Vector Search auto-embed capability in strict mode",
 				)
 			}
+			this.recordReadinessSkip({
+				lane: label,
+				index: indexName,
+				reason: "no-autoembed-capability",
+			})
 			return
 		}
 
@@ -656,12 +755,19 @@ export class MongoDBManagerBenchmarkScenarioOps {
 		).length
 		if (expectedCount === 0) {
 			const message = `benchmark ${label} vector convergence has no searchable documents: collection=${collectionName} agentId=${agentId} textPath=${textPath}`
-			if (requireSearchableDocuments && isBenchmarkStrictMode()) {
+			// B4: for lanes whose documents the shipped profile just ingested
+			// (events, chunks, raw-session session_chunks), zero searchable
+			// documents means ingest failed — throw in every mode, not only
+			// strict. Lanes that can legitimately be empty (default-lane
+			// session_chunks, unmirrored memory_evidence) record the skip.
+			if (requireSearchableDocuments) {
 				throw new Error(message)
 			}
-			if (requireSearchableDocuments) {
-				log.warn(message)
-			}
+			this.recordReadinessSkip({
+				lane: label,
+				index: indexName,
+				reason: "no-searchable-docs",
+			})
 			return
 		}
 
@@ -669,12 +775,13 @@ export class MongoDBManagerBenchmarkScenarioOps {
 			process.env.MEMONGO_BENCHMARK_VECTOR_SEARCH_SETTLE_TIMEOUT_MS ??
 				process.env.MEMONGO_BENCHMARK_EVENT_SEARCH_SETTLE_TIMEOUT_MS,
 		)
+		// B4: index readiness is mandatory by default. The wait polls until the
+		// indexed-document count equals the written count; an explicit
+		// MEMONGO_*_SETTLE_TIMEOUT_MS=0 is the documented opt-out.
 		const timeoutMs =
 			Number.isFinite(configuredTimeout) && configuredTimeout >= 0
 				? configuredTimeout
-				: isBenchmarkStrictMode()
-					? 300_000
-					: 0
+				: 300_000
 		if (timeoutMs === 0) return
 
 		const readinessProbe = await runBenchmarkRead(
@@ -682,18 +789,30 @@ export class MongoDBManagerBenchmarkScenarioOps {
 			() => readSearchIndexStatus(this.host.db, collectionName, indexName),
 		)
 		if (readinessProbe.kind === "ok") {
-			if (
-				(readinessProbe.status === "FAILED" ||
-					readinessProbe.status === "DELETING" ||
-					readinessProbe.status === "STALE") &&
-				isBenchmarkStrictMode()
-			) {
+			// B4 / R2-4: FAILED, DELETING, and DOES_NOT_EXIST can never
+			// converge — fail the run in every mode instead of polling.
+			if (isTerminalSearchIndexStatus(readinessProbe.status)) {
 				throw new Error(
 					`index-not-ready: vector index ${indexName} status ${readinessProbe.status} (queryable=${readinessProbe.queryable}) agentId=${agentId}`,
 				)
 			}
+			if (readinessProbe.status === "STALE") {
+				if (isBenchmarkStrictMode()) {
+					throw new Error(
+						`index-not-ready: vector index ${indexName} status STALE (queryable=${readinessProbe.queryable}) agentId=${agentId}`,
+					)
+				}
+				// non-strict: STALE may still serve; keep polling but say so.
+				log.warn(
+					`benchmark ${label} vector index ${indexName} is STALE (queryable=${readinessProbe.queryable}); continuing to poll agentId=${agentId}`,
+				)
+			}
 		}
 
+		// B4 (e): the readiness probe caps at 1,000 documents — a tenant with
+		// more than 1,000 searchable docs is declared converged at 1,000.
+		// Harmless for LongMemEval-S (about 494 turns per scenario tenant);
+		// page the count here before running LoCoMo or larger tenants.
 		const limit = Math.min(expectedCount, 1000)
 		const vectorStage = buildVectorSearchStage({
 			queryVector: null,
@@ -712,6 +831,11 @@ export class MongoDBManagerBenchmarkScenarioOps {
 					`benchmark ${label} vector convergence cannot build $vectorSearch stage agentId=${agentId}`,
 				)
 			}
+			this.recordReadinessSkip({
+				lane: label,
+				index: indexName,
+				reason: "no-vector-stage",
+			})
 			return
 		}
 
@@ -728,6 +852,7 @@ export class MongoDBManagerBenchmarkScenarioOps {
 		let indexedCount = 0
 		let lastError: unknown
 		let lastProgressLogAt = 0
+		let loggedFirstFailure = false
 
 		while (Date.now() <= deadline) {
 			try {
@@ -761,12 +886,26 @@ export class MongoDBManagerBenchmarkScenarioOps {
 				}
 			} catch (err) {
 				lastError = err
-				if (!isBenchmarkStrictMode()) {
+				// B4: permanent probe errors (missing index, auth, unsupported
+				// stage) can never converge — fail now instead of burning the
+				// full 300 s per lane. Transient errors keep polling.
+				if (isPermanentReadinessError(err)) {
+					throw new Error(
+						`benchmark ${label} vector convergence probe failed permanently: ${err instanceof Error ? err.message : String(err)} agentId=${agentId}`,
+					)
+				}
+				if (!loggedFirstFailure) {
+					loggedFirstFailure = true
 					log.warn("benchmark vector convergence probe failed", {
+						agentId,
+						index: indexName,
+						error: err instanceof Error ? err.message : String(err),
+					})
+				} else {
+					log.debug("benchmark vector convergence probe failed", {
 						agentId,
 						error: err instanceof Error ? err.message : String(err),
 					})
-					return
 				}
 			}
 			const now = Date.now()
@@ -785,13 +924,13 @@ export class MongoDBManagerBenchmarkScenarioOps {
 			await new Promise((resolve) => setTimeout(resolve, intervalMs))
 		}
 
+		// B4: a convergence timeout is a reliability failure of the run's
+		// infrastructure, never a scored wrong answer. Failing loudly keeps
+		// unattributable numbers out of the report.
 		const message = `benchmark ${label} vector convergence timed out: indexed=${indexedCount}/${expectedCount} agentId=${agentId}`
-		if (isBenchmarkStrictMode()) {
-			throw new Error(
-				lastError ? `${message}; lastError=${String(lastError)}` : message,
-			)
-		}
-		log.warn(message)
+		throw new Error(
+			lastError ? `${message}; lastError=${String(lastError)}` : message,
+		)
 	}
 
 	async waitForBenchmarkEventSearchConvergence(agentId: string): Promise<void> {
@@ -802,6 +941,9 @@ export class MongoDBManagerBenchmarkScenarioOps {
 			collectionName: `${this.host.prefix}events`,
 			indexName: `${this.host.prefix}events_text`,
 			textPath: "body",
+			// B4: the shipped profile just ingested this haystack; zero
+			// searchable events means ingest failed, so empty throws here.
+			requireSearchableDocuments: true,
 		})
 	}
 
@@ -815,9 +957,17 @@ export class MongoDBManagerBenchmarkScenarioOps {
 		collectionName: string
 		indexName: string
 		textPath: string
+		requireSearchableDocuments?: boolean
 	}): Promise<void> {
-		const { agentId, label, collection, collectionName, indexName, textPath } =
-			params
+		const {
+			agentId,
+			label,
+			collection,
+			collectionName,
+			indexName,
+			textPath,
+			requireSearchableDocuments = false,
+		} = params
 		const namespace = {
 			agentId,
 			scope: params.scope,
@@ -832,6 +982,11 @@ export class MongoDBManagerBenchmarkScenarioOps {
 					"benchmark event search convergence requires MongoDB Search text capability in strict mode",
 				)
 			}
+			this.recordReadinessSkip({
+				lane: label,
+				index: indexName,
+				reason: "no-text-search-capability",
+			})
 			return
 		}
 
@@ -855,17 +1010,33 @@ export class MongoDBManagerBenchmarkScenarioOps {
 			.reverse()
 			.map((doc) => benchmarkSearchProbeTerm(doc[textPath]))
 			.find((term): term is string => Boolean(term))
-		if (expectedCount === 0) return
+		if (expectedCount === 0) {
+			// B4: same empty-policy contract as the vector lane — throw when
+			// the caller's lane must have documents (events, chunks), record
+			// the skip when empty is legitimate (session_chunks, unmirrored
+			// memory_evidence).
+			if (requireSearchableDocuments) {
+				throw new Error(
+					`benchmark ${label} text convergence has no searchable documents: collection=${collectionName} agentId=${agentId} textPath=${textPath}`,
+				)
+			}
+			this.recordReadinessSkip({
+				lane: label,
+				index: indexName,
+				reason: "no-searchable-docs",
+			})
+			return
+		}
 
 		const configuredTimeout = Number(
 			process.env.MEMONGO_BENCHMARK_EVENT_SEARCH_SETTLE_TIMEOUT_MS,
 		)
+		// B4: index readiness is mandatory by default (see the vector-lane
+		// counterpart above); explicit env 0 opts out of the wait.
 		const timeoutMs =
 			Number.isFinite(configuredTimeout) && configuredTimeout >= 0
 				? configuredTimeout
-				: isBenchmarkStrictMode()
-					? 60_000
-					: 0
+				: 60_000
 		if (timeoutMs === 0) return
 
 		const readinessProbe = await runBenchmarkRead(
@@ -873,22 +1044,37 @@ export class MongoDBManagerBenchmarkScenarioOps {
 			() => readSearchIndexStatus(this.host.db, collectionName, indexName),
 		)
 		if (readinessProbe.kind === "ok") {
+			if (isTerminalSearchIndexStatus(readinessProbe.status)) {
+				throw new Error(
+					`index-not-ready: search index ${indexName} status ${readinessProbe.status} (queryable=${readinessProbe.queryable}) agentId=${agentId}`,
+				)
+			}
 			if (readinessProbe.queryable) {
-				if (readinessProbe.status === "STALE" && isBenchmarkStrictMode()) {
-					throw new Error(
-						`index-not-ready: search index ${indexName} status STALE (queryable=${readinessProbe.queryable}) agentId=${agentId}`,
+				if (readinessProbe.status === "STALE") {
+					if (isBenchmarkStrictMode()) {
+						throw new Error(
+							`index-not-ready: search index ${indexName} status STALE (queryable=${readinessProbe.queryable}) agentId=${agentId}`,
+						)
+					}
+					// non-strict: STALE but queryable may still serve; keep
+					// polling but say so instead of passing silently.
+					log.warn(
+						`benchmark ${label} search index ${indexName} is STALE (queryable=true); continuing to poll agentId=${agentId}`,
 					)
 				}
 				// queryable=true means the index is usable, not that fresh writes have
 				// propagated into mongot. MongoDB Search is eventually consistent, so
 				// benchmark setup must still probe document visibility below.
-			}
-			if (!readinessProbe.queryable && isBenchmarkStrictMode()) {
+			} else if (isBenchmarkStrictMode()) {
 				throw new Error(
 					`index-not-ready: search index ${indexName} queryable=false status=${readinessProbe.status} agentId=${agentId}`,
 				)
+			} else {
+				// non-strict: keep polling, but the bypass is no longer silent.
+				log.warn(
+					`benchmark ${label} search index ${indexName} queryable=false status=${readinessProbe.status}; continuing to poll agentId=${agentId}`,
+				)
 			}
-			// non-strict: fall through to aggregate probe and keep polling
 		}
 
 		const intervalMs = 2_000
@@ -903,6 +1089,8 @@ export class MongoDBManagerBenchmarkScenarioOps {
 		let indexedCount = 0
 		let textProbeCount = 0
 		let lastError: unknown
+		let lastProgressLogAt = 0
+		let loggedFirstFailure = false
 
 		while (Date.now() <= deadline) {
 			try {
@@ -1005,24 +1193,51 @@ export class MongoDBManagerBenchmarkScenarioOps {
 				}
 			} catch (err) {
 				lastError = err
-				if (!isBenchmarkStrictMode()) {
+				// B4: permanent probe errors fail now (see the vector lane);
+				// transient errors keep polling until the deadline.
+				if (isPermanentReadinessError(err)) {
+					throw new Error(
+						`benchmark ${label} search convergence probe failed permanently: ${err instanceof Error ? err.message : String(err)} agentId=${agentId}`,
+					)
+				}
+				if (!loggedFirstFailure) {
+					loggedFirstFailure = true
 					log.warn("benchmark event search convergence probe failed", {
+						agentId,
+						index: indexName,
+						error: err instanceof Error ? err.message : String(err),
+					})
+				} else {
+					log.debug("benchmark event search convergence probe failed", {
 						agentId,
 						error: err instanceof Error ? err.message : String(err),
 					})
-					return
 				}
+			}
+			// B4: the text lane gets the vector lane's 30-second progress log
+			// so a stuck wait is visible, not silent.
+			const now = Date.now()
+			if (now - lastProgressLogAt >= 30_000) {
+				lastProgressLogAt = now
+				log.info("benchmark event search convergence waiting", {
+					agentId,
+					collection: collectionName,
+					index: indexName,
+					indexedCount,
+					expectedCount,
+					remainingMs: Math.max(0, deadline - now),
+					lastError: lastError ? String(lastError) : undefined,
+				})
 			}
 			await new Promise((resolve) => setTimeout(resolve, intervalMs))
 		}
 
+		// B4: reliability failure, not a scored wrong answer (see the vector
+		// lane's timeout tail above).
 		const message = `benchmark ${label} search convergence timed out: indexed=${indexedCount}/${expectedCount} textProbe=${textProbeCount}${textProbeQuery ? ` query=${textProbeQuery}` : ""} agentId=${agentId}`
-		if (isBenchmarkStrictMode()) {
-			throw new Error(
-				lastError ? `${message}; lastError=${String(lastError)}` : message,
-			)
-		}
-		log.warn(message)
+		throw new Error(
+			lastError ? `${message}; lastError=${String(lastError)}` : message,
+		)
 	}
 
 	async cleanupBenchmarkScenarioData(agentId: string): Promise<void> {
@@ -1041,34 +1256,6 @@ export class MongoDBManagerBenchmarkScenarioOps {
 					error: result.reason,
 				})
 			}
-		}
-	}
-
-	/**
-	 * #66: drop the benchmark tenant's query cache between measurement passes.
-	 * Without this, pass 2+ replays pass 1 from `query_cache` — latencyMs ~0 and
-	 * bit-identical rankings — so every extra pass would be fake-fast noise-free
-	 * garbage. Deleting the scenario agent's entries keeps every pass as cold as
-	 * pass 1 without touching the shipped `checkCache`/`writeCache` path.
-	 *
-	 * `writeCache` is fire-and-forget, so an upsert issued by the previous
-	 * pass's last query can still land after this delete; at most one stale
-	 * entry per pass survives, which cannot move a p95 over a full dataset.
-	 */
-	async flushBenchmarkQueryCache(agentId: string): Promise<void> {
-		try {
-			const deleted = await queryCacheCollection(
-				this.host.db,
-				this.host.prefix,
-			).deleteMany({ agentId })
-			log.info("benchmark query cache flushed between measurement passes", {
-				agentId,
-				deletedCount: deleted.deletedCount,
-			})
-		} catch (err) {
-			throw new Error(
-				`benchmark query cache flush failed for agentId=${agentId}: ${err instanceof Error ? err.message : String(err)}`,
-			)
 		}
 	}
 

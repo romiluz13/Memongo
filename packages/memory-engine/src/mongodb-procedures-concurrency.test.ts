@@ -349,7 +349,7 @@ describe("procedure lifecycle revision concurrency", () => {
 			embeddingMode: "automated",
 		})
 
-		expect(outcome).toEqual({ upserted: false, id: "deploy" })
+		expect(outcome).toEqual({ upserted: false, id: "deploy", changed: true })
 		expect(raced).toBe(true)
 		expect(procedures.docs[0].revision).toBe(3)
 		expect(procedures.docs[0].steps).toEqual(["Run tests", "Deploy globally"])
@@ -505,7 +505,7 @@ describe("procedure lifecycle revision concurrency", () => {
 		})
 		await Promise.resolve()
 
-		expect(result).toEqual({ upserted: false, id: "deploy" })
+		expect(result).toEqual({ upserted: false, id: "deploy", changed: false })
 		expect(procedures.docs).toEqual([original])
 		expect(revisions.docs).toEqual([])
 		expect(queryCache.deleteManyCalls).toEqual([])

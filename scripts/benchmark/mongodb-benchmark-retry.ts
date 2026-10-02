@@ -23,6 +23,75 @@ const TRANSIENT_MONGO_ERROR_LABELS = [
 	"ResumableChangeStreamError",
 ] as const
 
+const DIAGNOSTIC_ERROR_NAMES = new Set([
+	...TRANSIENT_MONGO_ERROR_NAMES,
+	"Error",
+	"TypeError",
+	"ReferenceError",
+	"SyntaxError",
+	"RangeError",
+	"MongoServerError",
+	"MongoOperationTimeoutError",
+	"EmbeddingModelMismatchError",
+])
+
+const DIAGNOSTIC_OPERATIONS = [
+	"benchmark event evidence",
+	"event evidence",
+	"search convergence",
+	"raw-session search",
+	"decomposed search",
+	"original decomposed search",
+	"relevance search",
+	"search",
+	...["events", "chunks", "session_chunks", "memory_evidence"].flatMap(
+		(collection) =>
+			[
+				"vector convergence source read",
+				"vector index readiness",
+				"text convergence source read",
+				"text index readiness",
+			].map((suffix) => `${collection} ${suffix}`),
+	),
+]
+
+function reportTerminalFailure(
+	label: string,
+	attempt: number,
+	maxAttempts: number,
+	error: unknown,
+): void {
+	// Labels carry case IDs and errors can contain queries or credentials.
+	const operation =
+		DIAGNOSTIC_OPERATIONS.find(
+			(known) => label === known || label.startsWith(`${known} for `),
+		) ?? "unknown"
+	const errorType =
+		error instanceof Error && DIAGNOSTIC_ERROR_NAMES.has(error.name)
+			? error.name
+			: "UnknownError"
+	const convergence =
+		error instanceof Error
+			? /^benchmark (?:events|chunks|session_chunks|memory_evidence|search convergence) (vector|search) convergence timed out:/.exec(
+					error.message,
+				)
+			: null
+	const reason = convergence
+		? convergence[1] === "vector"
+			? "vector-convergence-timeout"
+			: "text-convergence-timeout"
+		: "unclassified"
+	console.error(
+		`[memory:mongodb:benchmark-failure] ${JSON.stringify({
+			operation,
+			attempt,
+			maxAttempts,
+			errorType,
+			reason,
+		})}`,
+	)
+}
+
 export function isTransientMongoBenchmarkError(
 	error: unknown,
 	depth = 0,
@@ -98,6 +167,7 @@ export async function withMongoBenchmarkRetry<T>(
 			return await operation()
 		} catch (error) {
 			if (attempt >= maxAttempts || !isTransientMongoBenchmarkError(error)) {
+				reportTerminalFailure(label, attempt, maxAttempts, error)
 				throw error
 			}
 			const delayMs = Math.min(maxDelayMs, baseDelayMs * 2 ** (attempt - 1))

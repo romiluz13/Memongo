@@ -178,7 +178,7 @@ export const MEMONGO_API_ROUTES: readonly ApiRouteContract[] = [
 		summary: "Update a structured/procedure memory by stable handle",
 		requiredFields: ["handle", "patch"],
 		optionalFields: [],
-		errorStatuses: [400, 404, 500],
+		errorStatuses: [400, 404, 409, 500],
 		tools: ["memongo_lifecycle_update", "memongo_memory_update"],
 	},
 	{
@@ -188,7 +188,7 @@ export const MEMONGO_API_ROUTES: readonly ApiRouteContract[] = [
 		summary: "Invalidate a structured/procedure memory by stable handle",
 		requiredFields: ["handle"],
 		optionalFields: ["invalidatedBy"],
-		errorStatuses: [400, 404, 500],
+		errorStatuses: [400, 404, 409, 500],
 		tools: ["memongo_lifecycle_delete", "memongo_memory_delete"],
 	},
 	{
@@ -218,7 +218,7 @@ export const MEMONGO_API_ROUTES: readonly ApiRouteContract[] = [
 		summary: "Apply confirm/correct/irrelevant feedback to a memory",
 		requiredFields: ["handle", "signal"],
 		optionalFields: ["patch", "invalidatedBy", "note", "actorRole"],
-		errorStatuses: [400, 404, 500],
+		errorStatuses: [400, 404, 409, 500],
 		tools: ["memongo_memory_feedback"],
 	},
 	{
@@ -281,7 +281,7 @@ export const MEMONGO_API_ROUTES: readonly ApiRouteContract[] = [
 		summary: "Get the unified state family (profile, blocks, bundle)",
 		requiredFields: [],
 		optionalFields: ["agentId", "scope", "scopeRef"],
-		errorStatuses: [500],
+		errorStatuses: [500, 503],
 		tools: ["memongo_state_unified"],
 	},
 	{
@@ -311,7 +311,7 @@ export const MEMONGO_API_ROUTES: readonly ApiRouteContract[] = [
 			"expiresAt",
 		],
 		headerFields: ["Idempotency-Key"],
-		errorStatuses: [400, 500],
+		errorStatuses: [400, 409, 422, 429, 500],
 		tools: ["memongo_add"],
 	},
 	{
@@ -333,7 +333,7 @@ export const MEMONGO_API_ROUTES: readonly ApiRouteContract[] = [
 			"expiresAt",
 		],
 		headerFields: ["Idempotency-Key"],
-		errorStatuses: [400, 500],
+		errorStatuses: [400, 409, 422, 429, 500],
 		tools: ["memongo_write_event"],
 	},
 	{
@@ -344,7 +344,7 @@ export const MEMONGO_API_ROUTES: readonly ApiRouteContract[] = [
 			"Write a batch of conversation events with per-item idempotency receipts",
 		requiredFields: ["events"],
 		optionalFields: ["agentId", "sessionId", "scope", "scopeRef"],
-		errorStatuses: [400, 500],
+		errorStatuses: [400, 409, 429, 500],
 		tools: [],
 	},
 	{
@@ -364,7 +364,7 @@ export const MEMONGO_API_ROUTES: readonly ApiRouteContract[] = [
 		summary: "Write a structured memory entry",
 		requiredFields: ["entry"],
 		optionalFields: ["agentId", "scope", "scopeRef"],
-		errorStatuses: [400, 500],
+		errorStatuses: [400, 409, 500],
 		tools: ["memongo_write_structured"],
 	},
 	{
@@ -432,7 +432,7 @@ export const MEMONGO_API_ROUTES: readonly ApiRouteContract[] = [
 		operationId: "syncMemory",
 		summary: "Sync memory sources",
 		requiredFields: [],
-		optionalFields: [],
+		optionalFields: ["agentId", "reason", "force"],
 		errorStatuses: [400, 500],
 		tools: ["memongo_sync"],
 	},
@@ -479,7 +479,7 @@ export const MEMONGO_API_ROUTES: readonly ApiRouteContract[] = [
 		operationId: "relevanceReport",
 		summary: "Get the relevance telemetry report",
 		requiredFields: [],
-		optionalFields: [],
+		optionalFields: ["windowMs"],
 		errorStatuses: [500],
 		tools: ["memongo_relevance_report"],
 	},
@@ -546,8 +546,8 @@ export const MEMONGO_API_ROUTES: readonly ApiRouteContract[] = [
 		summary:
 			"Irreversibly erase every collection entry for one agent (tenant erasure)",
 		requiredFields: ["confirm"],
-		optionalFields: ["agentId"],
-		errorStatuses: [400, 500],
+		optionalFields: ["agentId", "recovery"],
+		errorStatuses: [400, 409, 500],
 		tools: ["memongo_erase_agent"],
 	},
 	{
@@ -557,7 +557,7 @@ export const MEMONGO_API_ROUTES: readonly ApiRouteContract[] = [
 		summary: "List quarantined memories awaiting review (oldest first)",
 		requiredFields: [],
 		optionalFields: ["agentId", "status", "limit"],
-		errorStatuses: [500],
+		errorStatuses: [400, 500],
 		tools: ["memongo_quarantine_list"],
 	},
 	{
@@ -568,7 +568,7 @@ export const MEMONGO_API_ROUTES: readonly ApiRouteContract[] = [
 			"Overrule the injection classifier and write a quarantined memory as structured memory",
 		requiredFields: ["quarantineId"],
 		optionalFields: ["agentId", "reviewerId", "reviewNotes"],
-		errorStatuses: [400, 500],
+		errorStatuses: [400, 404, 409, 500],
 		tools: ["memongo_quarantine_promote"],
 	},
 	{
@@ -579,7 +579,7 @@ export const MEMONGO_API_ROUTES: readonly ApiRouteContract[] = [
 			"Discard a quarantined memory (kept as audit trail; only unreviewed entries expire)",
 		requiredFields: ["quarantineId"],
 		optionalFields: ["agentId", "reviewerId", "reviewNotes"],
-		errorStatuses: [400, 500],
+		errorStatuses: [400, 404, 409, 500],
 		tools: ["memongo_quarantine_reject"],
 	},
 	{
@@ -618,7 +618,7 @@ export const MEMONGO_API_ROUTES: readonly ApiRouteContract[] = [
 		operationId: "scanNovelty",
 		summary: "Scan for novel memories",
 		requiredFields: [],
-		optionalFields: ["agentId", "limit", "scope"],
+		optionalFields: ["agentId", "limit", "scope", "scopeRef"],
 		errorStatuses: [400, 500],
 		tools: ["memongo_novelty_scan"],
 	},

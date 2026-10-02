@@ -212,19 +212,18 @@ export async function listMemoryFiles(
 	const result: string[] = []
 	const memoryDir = path.join(workspaceDir, "memory")
 
-	// W14: a rejected enumeration (readdir rejects wholesale — there is no
-	// partial-result mode) must surface as an error, never as "source is
-	// empty": an empty result would make the caller's stale cleanup delete
-	// every stored chunk. ENOENT stays a legitimate skip (no memory dir).
+	// Only initial default-root absence is optional; a failed walk must
+	// reject so sync cannot delete stored chunks from an incomplete listing.
+	let dirStat: Stats | undefined
 	try {
-		const dirStat = await fs.lstat(memoryDir)
-		if (!dirStat.isSymbolicLink() && dirStat.isDirectory()) {
-			await walkDir(memoryDir, result)
-		}
+		dirStat = await fs.lstat(memoryDir)
 	} catch (err) {
 		if (!isFileMissingError(err)) {
 			throw err
 		}
+	}
+	if (dirStat && !dirStat.isSymbolicLink() && dirStat.isDirectory()) {
+		await walkDir(memoryDir, result)
 	}
 
 	const normalizedExtraPaths = normalizeExtraMemoryPaths(
@@ -233,23 +232,16 @@ export async function listMemoryFiles(
 	)
 	if (normalizedExtraPaths.length > 0) {
 		for (const inputPath of normalizedExtraPaths) {
-			try {
-				const stat = await fs.lstat(inputPath)
-				if (stat.isSymbolicLink()) {
-					continue
-				}
-				if (stat.isDirectory()) {
-					await walkDir(inputPath, result, multimodal)
-					continue
-				}
-				if (stat.isFile() && isAllowedMemoryFilePath(inputPath, multimodal)) {
-					result.push(inputPath)
-				}
-			} catch (err) {
-				if (isFileMissingError(err)) {
-					continue
-				}
-				throw err
+			const stat = await fs.lstat(inputPath)
+			if (stat.isSymbolicLink()) {
+				continue
+			}
+			if (stat.isDirectory()) {
+				await walkDir(inputPath, result, multimodal)
+				continue
+			}
+			if (stat.isFile() && isAllowedMemoryFilePath(inputPath, multimodal)) {
+				result.push(inputPath)
 			}
 		}
 	}
@@ -282,18 +274,17 @@ export async function listLegacyMarkdownMemoryFiles(
 	const result: string[] = []
 	const memoryDir = path.join(workspaceDir, "memory")
 
-	// W14: same enumeration contract as listMemoryFiles — surface transient
-	// failures, skip only confirmed-missing paths.
+	// Only initial default-root absence is optional; recursive failures reject.
+	let dirStat: Stats | undefined
 	try {
-		const dirStat = await fs.lstat(memoryDir)
-		if (!dirStat.isSymbolicLink() && dirStat.isDirectory()) {
-			// Legacy markdown listing intentionally excludes multimodal files.
-			await walkDir(memoryDir, result)
-		}
+		dirStat = await fs.lstat(memoryDir)
 	} catch (err) {
 		if (!isFileMissingError(err)) {
 			throw err
 		}
+	}
+	if (dirStat && !dirStat.isSymbolicLink() && dirStat.isDirectory()) {
+		await walkDir(memoryDir, result)
 	}
 
 	const normalizedExtraPaths = normalizeExtraMemoryPaths(
@@ -302,23 +293,16 @@ export async function listLegacyMarkdownMemoryFiles(
 	)
 	if (normalizedExtraPaths.length > 0) {
 		for (const inputPath of normalizedExtraPaths) {
-			try {
-				const stat = await fs.lstat(inputPath)
-				if (stat.isSymbolicLink()) {
-					continue
-				}
-				if (stat.isDirectory()) {
-					await walkDir(inputPath, result)
-					continue
-				}
-				if (stat.isFile() && inputPath.endsWith(".md")) {
-					result.push(inputPath)
-				}
-			} catch (err) {
-				if (isFileMissingError(err)) {
-					continue
-				}
-				throw err
+			const stat = await fs.lstat(inputPath)
+			if (stat.isSymbolicLink()) {
+				continue
+			}
+			if (stat.isDirectory()) {
+				await walkDir(inputPath, result)
+				continue
+			}
+			if (stat.isFile() && inputPath.endsWith(".md")) {
+				result.push(inputPath)
 			}
 		}
 	}

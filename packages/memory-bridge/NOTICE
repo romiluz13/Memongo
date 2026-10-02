@@ -1,0 +1,20 @@
+Memongo
+Copyright 2026 The Memongo Authors
+
+This product includes software developed by the Memongo project
+(https://github.com/romiluz13/memongo).
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    https://www.apache.org/licenses/LICENSE-2.0
+
+-------------------------------------------------------------------------------
+Third-party attributions
+-------------------------------------------------------------------------------
+
+The local MongoDB development stack under docker/mongodb/ is adapted from
+mdb-community-search by John Underwood
+(https://github.com/JohnGUnderwood/mdb-community-search), a MongoDB engineer
+reference implementation.

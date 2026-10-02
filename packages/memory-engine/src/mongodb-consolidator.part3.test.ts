@@ -1,6 +1,7 @@
 import fc from "fast-check"
 import type { Collection, Db, Document, UpdateResult } from "mongodb"
 import { beforeEach, describe, expect, it, vi } from "vitest"
+import type { FactMergeVerdict } from "./mongodb-consolidation-adjudication.js"
 
 // ---------------------------------------------------------------------------
 // Mock helpers
@@ -30,10 +31,33 @@ function mockCollection(
 }
 
 function mockDb(collectionMap: Record<string, Collection> = {}): Db {
-	return {
-		collection: vi.fn((name: string) => {
-			return collectionMap[name] ?? mockCollection()
+	const gate: Document = { agentId: "", epoch: 0, state: "open", serial: 0 }
+	const meta = mockCollection({
+		findOneAndUpdate: vi.fn(
+			async (
+				_filter: unknown,
+				update: { $setOnInsert: { agentId: string } },
+			) => {
+				gate.agentId = update.$setOnInsert.agentId
+				return { ...gate }
+			},
+		),
+		findOne: vi.fn(async () => ({ ...gate })),
+		updateOne: vi.fn(async () => {
+			gate.serial += 1
+			return { matchedCount: 1, modifiedCount: 1 }
 		}),
+	})
+	const session = {
+		inTransaction: () => false,
+		withTransaction: async (fn: () => Promise<unknown>) => fn(),
+		endSession: async () => {},
+	}
+	return {
+		client: { startSession: () => session },
+		collection: vi.fn((name: string) =>
+			name === "test_meta" ? meta : (collectionMap[name] ?? mockCollection()),
+		),
 	} as unknown as Db
 }
 
@@ -41,7 +65,8 @@ function mockDb(collectionMap: Record<string, Collection> = {}): Db {
 // Module-level mocks for dependencies
 // ---------------------------------------------------------------------------
 
-vi.mock("@memongo/lib", () => ({
+vi.mock("@memongo/lib", async (importOriginal) => ({
+	...(await importOriginal<typeof import("@memongo/lib")>()),
 	createSubsystemLogger: () => ({
 		info: vi.fn(),
 		warn: vi.fn(),
@@ -69,11 +94,22 @@ vi.mock("./mongodb-reasoning-chain.js", () => ({
 	})),
 }))
 
-vi.mock("./mongodb-structured-memory.js", () => ({
+vi.mock("./mongodb-structured-memory.js", async (importOriginal) => ({
+	...(await importOriginal<typeof import("./mongodb-structured-memory.js")>()),
 	writeStructuredMemory: vi.fn(async () => ({
 		upserted: true,
 		id: "test-id",
 	})),
+	invalidateStructuredMemoryByHandle: vi.fn(
+		async (params: { handle: { revision: number } }) => ({
+			handle: {
+				...params.handle,
+				state: "invalidated",
+				revision: params.handle.revision + 1,
+			},
+			snapshot: {},
+		}),
+	),
 }))
 
 vi.mock("./mongodb-graph.js", () => ({
@@ -94,15 +130,27 @@ vi.mock("./mongodb-llm-enrichment.js", async () => {
 	return { ...actual, resolveEnrichmentProvider: resolveEnrichmentProviderMock }
 })
 
-const { resolveConflictedCandidateMock, adjudicateFactMergeMock } = vi.hoisted(
-	() => ({
-		resolveConflictedCandidateMock: vi.fn(async () => ({
-			resolved: false,
-			invalidatedCount: 0,
-		})),
-		adjudicateFactMergeMock: vi.fn(async () => ({ verdict: "NO_MERGE" })),
-	}),
-)
+const {
+	prepareConflictedCandidateResolutionMock,
+	persistPreparedMock,
+	adjudicateFactMergeMock,
+} = vi.hoisted(() => ({
+	prepareConflictedCandidateResolutionMock: vi.fn(
+		async (): Promise<
+			import("./mongodb-contradiction.js").PreparedContradictionInvalidation[]
+		> => [],
+	),
+	persistPreparedMock: vi.fn(
+		async (
+			_params: Parameters<
+				typeof import("./mongodb-contradiction.js").persistPreparedContradictionInvalidations
+			>[0],
+		) => 1,
+	),
+	adjudicateFactMergeMock: vi.fn(
+		async (): Promise<FactMergeVerdict> => ({ verdict: "NO_MERGE" }),
+	),
+}))
 
 vi.mock("./mongodb-consolidation-adjudication.js", async () => {
 	const actual = await vi.importActual<
@@ -110,10 +158,16 @@ vi.mock("./mongodb-consolidation-adjudication.js", async () => {
 	>("./mongodb-consolidation-adjudication.js")
 	return {
 		...actual,
-		resolveConflictedCandidate: resolveConflictedCandidateMock,
+		prepareConflictedCandidateResolution:
+			prepareConflictedCandidateResolutionMock,
 		adjudicateFactMerge: adjudicateFactMergeMock,
 	}
 })
+
+vi.mock("./mongodb-contradiction.js", async (importOriginal) => ({
+	...(await importOriginal<typeof import("./mongodb-contradiction.js")>()),
+	persistPreparedContradictionInvalidations: persistPreparedMock,
+}))
 
 // ---------------------------------------------------------------------------
 // Phase 3.7 — Quality filter: isDerivableFromContext
@@ -577,12 +631,16 @@ describe("P4.4.2 contradiction wiring", () => {
 		})
 		// Existing same-key structured_mem entry in the conflicted state.
 		const structuredCol = mockCollection({
-			findOne: vi.fn(async () => ({
+			findOne: vi.fn(async (filter: Document) => ({
 				agentId: "agent-1",
 				type: "preference",
 				key: "Python over JavaScript",
-				value: "I prefer JavaScript over Python",
-				state: "conflicted",
+				value:
+					filter.state === "active"
+						? "I prefer Python over JavaScript"
+						: "I prefer JavaScript over Python",
+				state: filter.state === "active" ? "active" : "conflicted",
+				revision: filter.state === "active" ? 2 : 1,
 			})),
 		})
 		const db = mockDb({
@@ -602,10 +660,17 @@ describe("P4.4.2 contradiction wiring", () => {
 		)
 		const { db } = makeConflictSetup()
 		resolveEnrichmentProviderMock.mockReturnValueOnce(stubProvider)
-		resolveConflictedCandidateMock.mockResolvedValueOnce({
-			resolved: true,
-			invalidatedCount: 1,
-		})
+		prepareConflictedCandidateResolutionMock.mockResolvedValueOnce([
+			{
+				newFact: {
+					key: "Python over JavaScript",
+					value: "I prefer Python over JavaScript",
+					revision: 0,
+				},
+				target: { key: "old-fact", value: "old observation", revision: 1 },
+				rationale: "changed preference",
+			},
+		])
 
 		const result = await consolidateMemory({
 			db,
@@ -616,7 +681,7 @@ describe("P4.4.2 contradiction wiring", () => {
 
 		expect(result.factsPromoted).toBe(1)
 		expect(result.conflictsResolved).toBe(1)
-		expect(resolveConflictedCandidateMock).toHaveBeenCalledWith(
+		expect(prepareConflictedCandidateResolutionMock).toHaveBeenCalledWith(
 			expect.objectContaining({
 				agentId: "agent-1",
 				candidate: expect.objectContaining({
@@ -625,11 +690,22 @@ describe("P4.4.2 contradiction wiring", () => {
 				}),
 			}),
 		)
-		// resolve (detect → invalidate inside the helper) happens BEFORE the
-		// candidate is re-evaluated and promoted.
+		// Preparation precedes the write; retirement follows it in the same session.
 		expect(
-			resolveConflictedCandidateMock.mock.invocationCallOrder[0],
+			prepareConflictedCandidateResolutionMock.mock.invocationCallOrder[0],
 		).toBeLessThan(vi.mocked(writeStructuredMemory).mock.invocationCallOrder[0])
+		expect(
+			vi.mocked(writeStructuredMemory).mock.invocationCallOrder[0],
+		).toBeLessThan(persistPreparedMock.mock.invocationCallOrder[0])
+		expect(persistPreparedMock).toHaveBeenCalledWith(
+			expect.objectContaining({
+				session: expect.anything(),
+				prepared: expect.any(Array),
+			}),
+		)
+		expect(persistPreparedMock.mock.calls[0]?.[0].session).toBe(
+			vi.mocked(writeStructuredMemory).mock.calls[0]?.[0].session,
+		)
 	})
 
 	it("drops the candidate when IT is the loser (no existing fact invalidated)", async () => {
@@ -639,10 +715,7 @@ describe("P4.4.2 contradiction wiring", () => {
 		)
 		const { db } = makeConflictSetup()
 		resolveEnrichmentProviderMock.mockReturnValueOnce(stubProvider)
-		resolveConflictedCandidateMock.mockResolvedValueOnce({
-			resolved: false,
-			invalidatedCount: 0,
-		})
+		prepareConflictedCandidateResolutionMock.mockResolvedValueOnce([])
 
 		const result = await consolidateMemory({
 			db,
@@ -673,7 +746,7 @@ describe("P4.4.2 contradiction wiring", () => {
 
 		expect(result.factsPromoted).toBe(0)
 		expect(result.conflictsResolved).toBe(1)
-		expect(resolveConflictedCandidateMock).not.toHaveBeenCalled()
+		expect(prepareConflictedCandidateResolutionMock).not.toHaveBeenCalled()
 		expect(vi.mocked(writeStructuredMemory)).not.toHaveBeenCalled()
 	})
 
@@ -691,7 +764,7 @@ describe("P4.4.2 contradiction wiring", () => {
 
 		expect(result.factsPromoted).toBe(0)
 		expect(result.conflictsResolved).toBe(1)
-		expect(resolveConflictedCandidateMock).not.toHaveBeenCalled()
+		expect(prepareConflictedCandidateResolutionMock).not.toHaveBeenCalled()
 	})
 })
 
@@ -742,6 +815,7 @@ describe("P4.4.3 LLM-adjudicated dedup", () => {
 			key: "city",
 			value: "The user lives in Berlin",
 			state: "active",
+			revision: 1,
 			scope: "agent",
 			scopeRef: "agent:agent-1",
 			updatedAt: new Date("2026-01-02T00:00:00Z"),
@@ -754,6 +828,7 @@ describe("P4.4.3 LLM-adjudicated dedup", () => {
 			key: "city-detail",
 			value: "The user lives in Berlin, Germany",
 			state: "active",
+			revision: 1,
 			scope: "agent",
 			scopeRef: "agent:agent-1",
 			updatedAt: new Date("2026-01-01T00:00:00Z"),
@@ -761,10 +836,17 @@ describe("P4.4.3 LLM-adjudicated dedup", () => {
 			score: params.dupScore,
 		}
 		const updateOneMock = vi.fn(
-			async () => ({ modifiedCount: 1 }) as UpdateResult,
+			async (_filter: Document, _update: Document) =>
+				({ modifiedCount: 1 }) as UpdateResult,
 		)
 		const structuredCol = mockCollection({
-			findOne: vi.fn(async () => null),
+			findOne: vi.fn(async (filter: Document) =>
+				filter._id === keptFact._id
+					? keptFact
+					: filter._id === dupFact._id
+						? dupFact
+						: null,
+			),
 			find: vi.fn(() => ({
 				sort: vi.fn(() => ({
 					limit: vi.fn(() => ({
@@ -832,25 +914,31 @@ describe("P4.4.3 LLM-adjudicated dedup", () => {
 
 		expect(result.factsMerged).toBe(1)
 
-		// The kept (newer) fact gets the synthesized union text and the folded
-		// sourceEventIds, capped at MAX_SOURCE_EVENT_IDS = 200 keeping the most
-		// recent entries.
-		const keptWrite = updateOneMock.mock.calls.find(
-			([filter]) => (filter as { _id?: unknown })._id === keptFact._id,
+		const { writeStructuredMemory, invalidateStructuredMemoryByHandle } =
+			await import("./mongodb-structured-memory.js")
+		expect(writeStructuredMemory).toHaveBeenCalledWith(
+			expect.objectContaining({
+				expectedId: keptFact._id,
+				expectedRevision: 1,
+				entry: expect.objectContaining({
+					value: "The user lives in Berlin, Germany",
+					sourceEventIds: [...keptIds, ...dupIds].slice(-200),
+					state: "active",
+				}),
+				session: db.client.startSession(),
+				transactionalSideEffects: "inline",
+			}),
 		)
-		expect(keptWrite).toBeDefined()
-		const keptSet = (keptWrite?.[1] as { $set: Record<string, unknown> }).$set
-		expect(keptSet.value).toBe("The user lives in Berlin, Germany")
-		const folded = keptSet.sourceEventIds as string[]
-		expect(folded).toHaveLength(200)
-		expect(folded[0]).toBe("k51")
-		expect(folded[folded.length - 1]).toBe("d100")
-
-		// The merged-away (older) fact is invalidated per the prune mechanism.
-		expect(updateOneMock).toHaveBeenCalledWith(
-			{ _id: dupFact._id },
-			{ $set: { state: "invalidated" } },
+		expect(invalidateStructuredMemoryByHandle).toHaveBeenCalledWith(
+			expect.objectContaining({
+				expectedId: dupFact._id,
+				handle: expect.objectContaining({ revision: 1, state: "active" }),
+				invalidatedBy: { reason: "llm-dedup-merge", runId: result.runId },
+				session: db.client.startSession(),
+				transactionalSideEffects: "inline",
+			}),
 		)
+		expect(updateOneMock).not.toHaveBeenCalled()
 	})
 
 	it("NO-MERGE verdict leaves both facts untouched", async () => {
@@ -946,7 +1034,7 @@ describe("consolidateMemory TTL expiry guards (B1)", () => {
 
 	it("hasConflict lookup excludes expired structured docs", async () => {
 		const { consolidateMemory } = await import("./mongodb-consolidator.js")
-		const findOneMock = vi.fn(async () => null)
+		const findOneMock = vi.fn(async (_filter: Document) => null)
 		const structuredCol = mockCollection({ findOne: findOneMock })
 		const db = makeTtlRunDb(structuredCol)
 
@@ -963,7 +1051,7 @@ describe("consolidateMemory TTL expiry guards (B1)", () => {
 
 	it("candidate similarity search excludes expired structured docs", async () => {
 		const { consolidateMemory } = await import("./mongodb-consolidator.js")
-		const aggregateMock = vi.fn(() => ({
+		const aggregateMock = vi.fn((_pipeline: Document[]) => ({
 			toArray: vi.fn(async () => []),
 		}))
 		const structuredCol = mockCollection({ aggregate: aggregateMock })
@@ -988,7 +1076,7 @@ describe("consolidateMemory TTL expiry guards (B1)", () => {
 
 	it("prune phase fact sweep excludes expired structured docs", async () => {
 		const { consolidateMemory } = await import("./mongodb-consolidator.js")
-		const findMock = vi.fn(() => ({
+		const findMock = vi.fn((_filter: Document) => ({
 			sort: vi.fn(() => ({
 				limit: vi.fn(() => ({
 					toArray: vi.fn(async () => []),
@@ -1027,14 +1115,14 @@ describe("consolidateMemory TTL expiry guards (B1)", () => {
 			scopeRef: "agent:agent-1",
 			updatedAt: new Date("2026-01-01T00:00:00Z"),
 		}
-		const findMock = vi.fn(() => ({
+		const findMock = vi.fn((_filter: Document) => ({
 			sort: vi.fn(() => ({
 				limit: vi.fn(() => ({
 					toArray: vi.fn(async () => [fact]),
 				})),
 			})),
 		}))
-		const aggregateMock = vi.fn(() => ({
+		const aggregateMock = vi.fn((_pipeline: Document[]) => ({
 			toArray: vi.fn(async () => []),
 		}))
 		const structuredCol = mockCollection({

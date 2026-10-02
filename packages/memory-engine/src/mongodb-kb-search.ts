@@ -7,9 +7,15 @@ import {
 } from "@memongo/lib"
 import { mergeHybridResultsMongoDB } from "./mongodb-hybrid.js"
 import { summarizeExplain } from "./mongodb-relevance.js"
+import { settledFailureMeta } from "./query-diagnostics.js"
+import {
+	resolveUserSearchMaxTimeMs,
+	tryConsumeSearchAggregation,
+} from "./mongodb-search-budget.js"
 import type { DetectedCapabilities } from "./mongodb-schema.js"
 import {
 	buildVectorSearchStage,
+	freshnessRevalidationStages,
 	MONGODB_MAX_NUM_CANDIDATES,
 	normalizeAndFilterRankFusionResults,
 	runSearchAggregateWithRetry,
@@ -41,7 +47,12 @@ function toKBSearchResult(doc: Document): MemorySearchResult {
 		snippet: typeof doc.text === "string" ? doc.text.slice(0, 700) : "",
 		source: "reference",
 		sourceType: "reference",
+		// RET-09: KB chunks are verbatim spans of ingested external
+		// documents — cited material, not conversation authorship.
+		derivation: "reference",
 		...(doc.updatedAt instanceof Date ? { timestamp: doc.updatedAt } : {}),
+		// Preserve the source retention deadline in result provenance.
+		...(doc.expiresAt instanceof Date ? { expiresAt: doc.expiresAt } : {}),
 	}
 }
 
@@ -141,6 +152,16 @@ export async function searchKB(
 		 * so one flag removes the whole embed burn.
 		 */
 		skipVectorLane?: boolean
+		/**
+		 * RET-13: shared lane failure policy for the KB waterfall. strict →
+		 * rethrow so a failing stage fails the search loudly (consistent with
+		 * every other lane under benchmark strict mode); else report each
+		 * stage failure at its seam ("kb:$scoreFusion", "kb:js-merge",
+		 * "kb:vector", "kb:keyword", "kb:$text") via onLaneFailure and keep
+		 * degrading down the waterfall.
+		 */
+		strict?: boolean
+		onLaneFailure?: (lane: string, error: unknown) => void
 	},
 ): Promise<MemorySearchResult[]> {
 	const canVector =
@@ -175,7 +196,7 @@ export async function searchKB(
 	const runKbFusion = async (
 		method: "scoreFusion" | "rankFusion",
 	): Promise<MemorySearchResult[] | null> => {
-		const { compoundFilter, postMatch } = splitAtlasSearchFilter(chunkFilter)
+		const { compoundFilter } = splitAtlasSearchFilter(chunkFilter)
 		const vsStage = buildVectorSearchStage({
 			queryVector,
 			queryText: query,
@@ -185,7 +206,10 @@ export async function searchKB(
 			numCandidates,
 			limit: opts.maxResults,
 			filter: chunkFilter,
-			returnStoredSource: opts.capabilities.storedSource,
+			// Authoritative serving hydrates the full current document from
+			// mongod (the documented default); storedSource may return stale
+			// data and would defeat the post-stage freshness $match below.
+			returnStoredSource: false,
 		})
 		if (!vsStage) {
 			return null
@@ -201,7 +225,10 @@ export async function searchKB(
 					},
 				},
 			},
-			...(postMatch ? [{ $match: postMatch }] : []),
+			// Re-validate the full chunk filter against the hydrated
+			// document — the compound filter runs against the indexed copy,
+			// which can lag the latest write.
+			...freshnessRevalidationStages(chunkFilter),
 			{ $limit: opts.maxResults * 4 },
 		]
 		const weights = {
@@ -217,7 +244,10 @@ export async function searchKB(
 						$scoreFusion: {
 							input: {
 								pipelines: {
-									vector: [{ $vectorSearch: vsStage }],
+									vector: [
+										{ $vectorSearch: vsStage },
+										...freshnessRevalidationStages(chunkFilter),
+									],
 									text: textPipeline,
 								},
 								normalization: "minMaxScaler",
@@ -229,7 +259,10 @@ export async function searchKB(
 						$rankFusion: {
 							input: {
 								pipelines: {
-									vector: [{ $vectorSearch: vsStage }],
+									vector: [
+										{ $vectorSearch: vsStage },
+										...freshnessRevalidationStages(chunkFilter),
+									],
 									text: textPipeline,
 								},
 							},
@@ -247,6 +280,9 @@ export async function searchKB(
 					endLine: 1,
 					text: 1,
 					docId: 1,
+					// RET-11 wave-3e followup: the mapper's expiresAt carry
+					// was dead — no KB projection included the field.
+					expiresAt: 1,
 					updatedAt: 1,
 					score: { $meta: "score" },
 				},
@@ -300,10 +336,14 @@ export async function searchKB(
 					return results
 				}
 			} catch (err) {
+				if (opts.strict) {
+					throw err
+				}
 				const msg = err instanceof Error ? err.message : String(err)
 				log.warn(
 					`KB hybrid search ($scoreFusion) failed, falling back to $rankFusion: ${msg}`,
 				)
+				opts.onLaneFailure?.("kb:$scoreFusion", err)
 			}
 		}
 		if (opts.capabilities.rankFusion) {
@@ -313,10 +353,14 @@ export async function searchKB(
 					return results
 				}
 			} catch (err) {
+				if (opts.strict) {
+					throw err
+				}
 				const msg = err instanceof Error ? err.message : String(err)
 				log.warn(
 					`KB hybrid search ($rankFusion) failed, falling back to vector-only: ${msg}`,
 				)
+				opts.onLaneFailure?.("kb:$rankFusion", err)
 			}
 		}
 	}
@@ -333,7 +377,10 @@ export async function searchKB(
 			numCandidates,
 			limit,
 			filter: chunkFilter,
-			returnStoredSource: opts.capabilities.storedSource,
+			// Authoritative serving hydrates the full current document from
+			// mongod (the documented default); storedSource may return stale
+			// data and would defeat the post-stage freshness $match below.
+			returnStoredSource: false,
 		})
 
 		if (!vsStage) {
@@ -341,6 +388,10 @@ export async function searchKB(
 		}
 		const pipeline: Document[] = [
 			{ $vectorSearch: vsStage },
+			// Re-validate the full chunk filter against the hydrated
+			// document — the ANN prefilter runs against the indexed copy,
+			// which can lag the latest write.
+			...freshnessRevalidationStages(chunkFilter),
 			{ $limit: limit },
 			{
 				$project: {
@@ -350,6 +401,9 @@ export async function searchKB(
 					endLine: 1,
 					text: 1,
 					docId: 1,
+					// RET-11 wave-3e followup: the mapper's expiresAt carry
+					// was dead — no KB projection included the field.
+					expiresAt: 1,
 					updatedAt: 1,
 					score: { $meta: "vectorSearchScore" },
 				},
@@ -377,7 +431,7 @@ export async function searchKB(
 	}
 
 	const runTextLane = async (limit: number): Promise<MemorySearchResult[]> => {
-		const { compoundFilter, postMatch } = splitAtlasSearchFilter(chunkFilter)
+		const { compoundFilter } = splitAtlasSearchFilter(chunkFilter)
 		const pipeline: Document[] = [
 			{
 				$search: {
@@ -389,7 +443,10 @@ export async function searchKB(
 					...(opts.explain?.includeScoreDetails ? { scoreDetails: true } : {}),
 				},
 			},
-			...(postMatch ? [{ $match: postMatch }] : []),
+			// Re-validate the full chunk filter against the hydrated
+			// document — the compound filter runs against the indexed copy,
+			// which can lag the latest write.
+			...freshnessRevalidationStages(chunkFilter),
 			{ $limit: limit },
 			{
 				$project: {
@@ -399,6 +456,9 @@ export async function searchKB(
 					endLine: 1,
 					text: 1,
 					docId: 1,
+					// RET-11 wave-3e followup: the mapper's expiresAt carry
+					// was dead — no KB projection included the field.
+					expiresAt: 1,
 					updatedAt: 1,
 					score: { $meta: "searchScore" },
 					...(opts.explain?.includeScoreDetails
@@ -440,30 +500,78 @@ export async function searchKB(
 		return docs.map(toKBSearchResult)
 	}
 
+	let vectorLaneFulfilled = false
+	let textLaneFulfilled = false
 	if (canVector && canText && fusionMethod === "js-merge") {
 		try {
 			const laneLimit = opts.maxResults * 4
-			const [vectorResults, textResults] = await Promise.all([
+			const [vectorOutcome, textOutcome] = await Promise.allSettled([
 				runVectorLane(laneLimit),
 				runTextLane(laneLimit),
 			])
-			return mergeHybridResultsMongoDB({
-				vector: vectorResults,
-				keyword: textResults,
-				maxResults: opts.maxResults,
-				vectorWeight: KB_FUSION_VECTOR_WEIGHT,
-				textWeight: KB_FUSION_TEXT_WEIGHT,
-			}).filter((result) => result.score >= opts.minScore)
+			const failure = [vectorOutcome, textOutcome].find(
+				(outcome) => outcome.status === "rejected",
+			)
+			if (
+				failure?.status === "rejected" &&
+				(opts.strict ||
+					(vectorOutcome.status === "rejected" &&
+						textOutcome.status === "rejected"))
+			) {
+				throw failure.reason
+			}
+			if (
+				vectorOutcome.status === "fulfilled" &&
+				textOutcome.status === "fulfilled"
+			) {
+				return mergeHybridResultsMongoDB({
+					vector: vectorOutcome.value,
+					keyword: textOutcome.value,
+					maxResults: opts.maxResults,
+					vectorWeight: KB_FUSION_VECTOR_WEIGHT,
+					textWeight: KB_FUSION_TEXT_WEIGHT,
+				}).filter((result) => result.score >= opts.minScore)
+			}
+			vectorLaneFulfilled = vectorOutcome.status === "fulfilled"
+			textLaneFulfilled = textOutcome.status === "fulfilled"
+			const lane = vectorLaneFulfilled
+				? "kb:js-merge:keyword"
+				: "kb:js-merge:vector"
+			if (failure?.status === "rejected") {
+				log.warn("KB js-merge branch failed", {
+					lane,
+					...settledFailureMeta(failure.reason),
+				})
+				try {
+					opts.onLaneFailure?.(lane, failure.reason)
+				} catch {
+					// A diagnostic hook must not discard a successful search.
+				}
+			}
+			const survivor =
+				vectorOutcome.status === "fulfilled"
+					? vectorOutcome.value
+					: textOutcome.status === "fulfilled"
+						? textOutcome.value
+						: []
+			const results = survivor
+				.filter((result) => result.score >= opts.minScore)
+				.slice(0, opts.maxResults)
+			if (results.length > 0) return results
 		} catch (err) {
+			if (opts.strict) {
+				throw err
+			}
 			const msg = err instanceof Error ? err.message : String(err)
 			log.warn(
 				`KB hybrid search (js-merge) failed, falling back to individual lanes: ${msg}`,
 			)
+			opts.onLaneFailure?.("kb:js-merge", err)
 		}
 	}
 
 	// Try vector search (vector-only fallback)
-	if (canVector) {
+	if (canVector && !vectorLaneFulfilled) {
 		try {
 			const results = (await runVectorLane(opts.maxResults)).filter(
 				(result) => result.score >= opts.minScore,
@@ -472,51 +580,77 @@ export async function searchKB(
 				return results
 			}
 		} catch (err) {
+			if (opts.strict) {
+				throw err
+			}
 			const msg = err instanceof Error ? err.message : String(err)
 			log.warn(`KB vector search failed: ${msg}`)
+			opts.onLaneFailure?.("kb:vector", err)
 		}
 	}
 
 	// Keyword search fallback using $search
-	if (canText) {
+	if (canText && !textLaneFulfilled) {
 		try {
 			return (await runTextLane(opts.maxResults * 4))
 				.filter((r) => r.score >= opts.minScore)
 				.slice(0, opts.maxResults)
 		} catch (err) {
+			if (opts.strict) {
+				throw err
+			}
 			const msg = err instanceof Error ? err.message : String(err)
 			log.warn(`KB keyword search failed: ${msg}`)
+			opts.onLaneFailure?.("kb:keyword", err)
 		}
 	}
 
 	// Last resort: basic $text index search
+	// RET-16: the $text fallback is a billable aggregation (EL-036) like
+	// every other search stage — it bypasses runSearchAggregateWithRetry,
+	// so it consumes the budget directly and carries the user-search
+	// maxTimeMS ceiling. Refusal degrades to empty (empty ≠ error), never
+	// an error.
+	if (!tryConsumeSearchAggregation()) {
+		return []
+	}
 	try {
 		const filter: Document = { $text: { $search: query } }
 		if (chunkFilter) {
 			Object.assign(filter, chunkFilter)
 		}
 		const docs = await kbChunks
-			.aggregate([
-				{ $match: filter },
-				{
-					$project: {
-						_id: 0,
-						path: 1,
-						startLine: 1,
-						endLine: 1,
-						text: 1,
-						docId: 1,
-						updatedAt: 1,
-						score: { $meta: "textScore" },
+			.aggregate(
+				[
+					{ $match: filter },
+					{
+						$project: {
+							_id: 0,
+							path: 1,
+							startLine: 1,
+							endLine: 1,
+							text: 1,
+							docId: 1,
+							// RET-11 wave-3e followup: match the vector/text
+							// projections above.
+							expiresAt: 1,
+							updatedAt: 1,
+							score: { $meta: "textScore" },
+						},
 					},
-				},
-				{ $sort: { score: { $meta: "textScore" } } },
-				{ $limit: opts.maxResults },
-			])
+					{ $sort: { score: { $meta: "textScore" } } },
+					{ $limit: opts.maxResults },
+				],
+				{ maxTimeMS: resolveUserSearchMaxTimeMs() },
+			)
 			.toArray()
 		return docs.map(toKBSearchResult).filter((r) => r.score >= opts.minScore)
-	} catch {
+	} catch (err) {
+		if (opts.strict) {
+			throw err
+		}
 		log.warn("KB $text search fallback also failed; returning empty results")
+		opts.onLaneFailure?.("kb:$text", err)
 		return []
 	}
 }

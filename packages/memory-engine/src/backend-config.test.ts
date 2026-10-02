@@ -1115,10 +1115,10 @@ describe("resolveMemoryBackendConfig", () => {
 	})
 
 	// ---------------------------------------------------------------------------
-	// Cache config resolution
+	// Legacy cache config compatibility
 	// ---------------------------------------------------------------------------
 
-	it("resolves cache config with defaults (enabled by default)", () => {
+	it("reports persisted result caching disabled by default", () => {
 		const cfg = {
 			agents: { defaults: { workspace: "/tmp/memory-test" } },
 			memory: {
@@ -1127,13 +1127,13 @@ describe("resolveMemoryBackendConfig", () => {
 			},
 		} as unknown as MemongoConfig
 		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
-		expect(resolved.mongodb?.cache.enabled).toBe(true)
+		expect(resolved.mongodb?.cache.enabled).toBe(false)
 		expect(resolved.mongodb?.cache.conversationTtlSec).toBe(300)
 		expect(resolved.mongodb?.cache.kbTtlSec).toBe(3600)
 		expect(resolved.mongodb?.cache.similarityThreshold).toBe(0.95)
 	})
 
-	it("resolves cache config with custom values", () => {
+	it("accepts legacy cache values but cannot re-enable serving", () => {
 		const cfg = {
 			agents: { defaults: { workspace: "/tmp/memory-test" } },
 			memory: {
@@ -1150,42 +1150,10 @@ describe("resolveMemoryBackendConfig", () => {
 			},
 		} as unknown as MemongoConfig
 		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
-		expect(resolved.mongodb?.cache.enabled).toBe(true)
+		expect(resolved.mongodb?.cache.enabled).toBe(false)
 		expect(resolved.mongodb?.cache.conversationTtlSec).toBe(600)
 		expect(resolved.mongodb?.cache.kbTtlSec).toBe(7200)
 		expect(resolved.mongodb?.cache.similarityThreshold).toBe(0.9)
-	})
-
-	it("resolves cache disabled when explicitly set to false", () => {
-		const cfg = {
-			agents: { defaults: { workspace: "/tmp/memory-test" } },
-			memory: {
-				backend: "mongodb",
-				mongodb: {
-					uri: "mongodb://localhost:27017",
-					cache: { enabled: false },
-				},
-			},
-		} as unknown as MemongoConfig
-		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
-		expect(resolved.mongodb?.cache.enabled).toBe(false)
-		// Defaults still apply for other fields
-		expect(resolved.mongodb?.cache.conversationTtlSec).toBe(300)
-		expect(resolved.mongodb?.cache.kbTtlSec).toBe(3600)
-		expect(resolved.mongodb?.cache.similarityThreshold).toBe(0.95)
-	})
-
-	it("resolves cache enabled when cache section is undefined (default-enable pattern)", () => {
-		const cfg = {
-			agents: { defaults: { workspace: "/tmp/memory-test" } },
-			memory: {
-				backend: "mongodb",
-				mongodb: { uri: "mongodb://localhost:27017" },
-			},
-		} as unknown as MemongoConfig
-		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
-		// cache?.enabled !== false => true when undefined
-		expect(resolved.mongodb?.cache.enabled).toBe(true)
 	})
 
 	it("resolves cache with partial overrides", () => {
@@ -1200,73 +1168,10 @@ describe("resolveMemoryBackendConfig", () => {
 			},
 		} as unknown as MemongoConfig
 		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
-		expect(resolved.mongodb?.cache.enabled).toBe(true) // default
+		expect(resolved.mongodb?.cache.enabled).toBe(false)
 		expect(resolved.mongodb?.cache.conversationTtlSec).toBe(300) // default
 		expect(resolved.mongodb?.cache.kbTtlSec).toBe(1800) // overridden
 		expect(resolved.mongodb?.cache.similarityThreshold).toBe(0.95) // default
-	})
-
-	it("uses conversation TTL for conversation scope and KB TTL for KB scope", () => {
-		const cfg = {
-			agents: { defaults: { workspace: "/tmp/memory-test" } },
-			memory: {
-				backend: "mongodb",
-				mongodb: {
-					uri: "mongodb://localhost:27017",
-					cache: {
-						conversationTtlSec: 120,
-						kbTtlSec: 4800,
-					},
-				},
-			},
-		} as unknown as MemongoConfig
-		const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" })
-		// The resolved config stores both TTLs; the search() method decides which to use
-		expect(resolved.mongodb?.cache.conversationTtlSec).toBe(120)
-		expect(resolved.mongodb?.cache.kbTtlSec).toBe(4800)
-	})
-
-	it("applies !== false pattern for cache.enabled", () => {
-		// Test the exact pattern: mongo.cache?.enabled !== false
-		// undefined => true, true => true, false => false
-		const cfgUndefined = {
-			agents: { defaults: { workspace: "/tmp/memory-test" } },
-			memory: {
-				backend: "mongodb",
-				mongodb: { uri: "mongodb://localhost:27017", cache: {} },
-			},
-		} as unknown as MemongoConfig
-		expect(
-			resolveMemoryBackendConfig({ cfg: cfgUndefined, agentId: "main" }).mongodb
-				?.cache.enabled,
-		).toBe(true)
-
-		const cfgTrue = {
-			agents: { defaults: { workspace: "/tmp/memory-test" } },
-			memory: {
-				backend: "mongodb",
-				mongodb: { uri: "mongodb://localhost:27017", cache: { enabled: true } },
-			},
-		} as unknown as MemongoConfig
-		expect(
-			resolveMemoryBackendConfig({ cfg: cfgTrue, agentId: "main" }).mongodb
-				?.cache.enabled,
-		).toBe(true)
-
-		const cfgFalse = {
-			agents: { defaults: { workspace: "/tmp/memory-test" } },
-			memory: {
-				backend: "mongodb",
-				mongodb: {
-					uri: "mongodb://localhost:27017",
-					cache: { enabled: false },
-				},
-			},
-		} as unknown as MemongoConfig
-		expect(
-			resolveMemoryBackendConfig({ cfg: cfgFalse, agentId: "main" }).mongodb
-				?.cache.enabled,
-		).toBe(false)
 	})
 
 	// ---------------------------------------------------------------------------

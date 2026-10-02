@@ -19,6 +19,7 @@ docker
 .env*
 **/.env*
 # Local tool state and machine junk.
+.orchestrator
 .turbo
 **/.turbo
 .DS_Store

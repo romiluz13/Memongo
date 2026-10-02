@@ -1,9 +1,13 @@
-import type { Db, MongoClient } from "mongodb"
+import type { ClientSession, Db, MongoClient } from "mongodb"
 import { type MemoryScope, createSubsystemLogger } from "@memongo/lib"
 import type { EnrichmentProvider } from "./mongodb-llm-enrichment.js"
 import { structuredMemCollection } from "./mongodb-schema.js"
 import { invalidateStructuredMemoryByHandle } from "./mongodb-structured-memory.js"
-import { buildUnexpiredClause } from "./mongodb-temporal.js"
+import {
+	buildCurrentValidityClause,
+	buildUnexpiredClause,
+	mergeQueryClauses,
+} from "./mongodb-temporal.js"
 
 /**
  * LLM contradiction detection (issue #33).
@@ -134,6 +138,222 @@ export async function detectContradictions(params: {
 // already tenant-scoped and recency-bounded, this is a hard cap.
 const MAX_CANDIDATE_FACTS = 40
 
+export type PreparedContradictionInvalidation = {
+	newFact: { key: string; value: string; revision: number }
+	target: { key: string; value: string; revision: number }
+	rationale: string
+}
+
+/**
+ * Perform the provider-dependent comparison outside a transaction while
+ * pinning both source and target revisions for guarded persistence.
+ */
+export async function prepareContradictionInvalidations(params: {
+	db: Db
+	prefix: string
+	provider: EnrichmentProvider
+	model: string
+	agentId: string
+	scope: MemoryScope
+	scopeRef: string
+	newFacts: Array<{ key: string; value: string }>
+	requirePersistedSource?: true
+}): Promise<PreparedContradictionInvalidation[]> {
+	const { db, prefix, provider, model, agentId, scope, scopeRef } = params
+	const requestedFacts = params.newFacts.filter(
+		(fact) => fact.key && fact.value,
+	)
+	if (requestedFacts.length === 0) return []
+
+	const collection = structuredMemCollection(db, prefix)
+	const newKeys = new Set(requestedFacts.map((fact) => fact.key))
+	const currentClause = mergeQueryClauses(
+		{ state: "active" },
+		buildCurrentValidityClause(),
+		buildUnexpiredClause(),
+	)
+	const [sourceDocs, existingDocs] = await Promise.all([
+		collection
+			.find(
+				{
+					agentId,
+					scope,
+					scopeRef,
+					type: "fact",
+					key: { $in: [...newKeys] },
+					...currentClause,
+				},
+				{ projection: { key: 1, value: 1, revision: 1, _id: 0 } },
+			)
+			.toArray(),
+		collection
+			.find(
+				{
+					agentId,
+					scope,
+					scopeRef,
+					type: "fact",
+					key: { $nin: [...newKeys] },
+					...currentClause,
+				},
+				{ projection: { key: 1, value: 1, revision: 1, _id: 0 } },
+			)
+			.sort({ updatedAt: -1 })
+			.limit(MAX_CANDIDATE_FACTS)
+			.toArray(),
+	])
+	const sources = new Map(
+		sourceDocs
+			.map((doc) => ({
+				key: String(doc.key ?? ""),
+				value: String(doc.value ?? ""),
+				revision: Number(doc.revision),
+			}))
+			.filter(
+				(fact) =>
+					fact.key.length > 0 &&
+					fact.value.length > 0 &&
+					Number.isInteger(fact.revision) &&
+					fact.revision >= 1,
+			)
+			.map((fact) => [fact.key, fact] as const),
+	)
+	const targets = new Map(
+		existingDocs
+			.map((doc) => ({
+				key: String(doc.key ?? ""),
+				value: String(doc.value ?? ""),
+				revision: Number(doc.revision),
+			}))
+			.filter(
+				(fact) =>
+					fact.key.length > 0 &&
+					fact.value.length > 0 &&
+					Number.isInteger(fact.revision) &&
+					fact.revision >= 1,
+			)
+			.map((fact) => [fact.key, fact] as const),
+	)
+	if (targets.size === 0) return []
+
+	const prepared: PreparedContradictionInvalidation[] = []
+	const seenTargets = new Set<string>()
+	for (const requested of requestedFacts) {
+		const pinned = sources.get(requested.key)
+		if (params.requirePersistedSource && !pinned) continue
+		if (pinned && pinned.value !== requested.value) continue
+		// A requested fact that is not yet persisted — a consolidator
+		// candidate evaluated before its promotion write — is its own source
+		// of truth: the provider evaluated exactly this content, so nothing
+		// could have changed underneath it. revision 0 marks it unpinned.
+		const source = pinned ?? { ...requested, revision: 0 }
+		const findings = await detectContradictions({
+			provider,
+			model,
+			newFact: source,
+			existingFacts: [...targets.values()],
+		})
+		for (const finding of findings) {
+			const target = targets.get(finding.contradictedKey)
+			if (!target || seenTargets.has(target.key)) continue
+			seenTargets.add(target.key)
+			prepared.push({
+				newFact: source,
+				target,
+				rationale: finding.rationale,
+			})
+		}
+	}
+	return prepared
+}
+
+/**
+ * Apply prepared invalidations only when source and target facts still match
+ * the exact active revisions and values evaluated by the provider.
+ */
+export async function persistPreparedContradictionInvalidations(params: {
+	db: Db
+	prefix: string
+	client?: MongoClient
+	session?: ClientSession
+	agentId: string
+	scope: MemoryScope
+	scopeRef: string
+	prepared: PreparedContradictionInvalidation[]
+	runId?: string
+}): Promise<number> {
+	const collection = structuredMemCollection(params.db, params.prefix)
+	const currentClause = mergeQueryClauses(
+		{ state: "active" },
+		buildCurrentValidityClause(),
+		buildUnexpiredClause(),
+	)
+	let invalidated = 0
+	for (const decision of params.prepared) {
+		// An unpinned source (revision 0) was caller-provided and not yet
+		// persisted when the provider evaluated it — there is nothing to
+		// re-verify. Only the target must still match its pinned revision.
+		const source =
+			decision.newFact.revision === 0
+				? decision.newFact
+				: await collection.findOne(
+						{
+							agentId: params.agentId,
+							scope: params.scope,
+							scopeRef: params.scopeRef,
+							type: "fact",
+							key: decision.newFact.key,
+							value: decision.newFact.value,
+							revision: decision.newFact.revision,
+							...currentClause,
+						},
+						params.session ? { session: params.session } : undefined,
+					)
+		const target = await collection.findOne(
+			{
+				agentId: params.agentId,
+				scope: params.scope,
+				scopeRef: params.scopeRef,
+				type: "fact",
+				key: decision.target.key,
+				value: decision.target.value,
+				revision: decision.target.revision,
+				...currentClause,
+			},
+			params.session ? { session: params.session } : undefined,
+		)
+		if (!source || !target) continue
+		const result = await invalidateStructuredMemoryByHandle({
+			db: params.db,
+			prefix: params.prefix,
+			...(params.session
+				? { session: params.session, transactionalSideEffects: "inline" }
+				: params.client
+					? { client: params.client }
+					: {}),
+			handle: {
+				family: "structured",
+				id: decision.target.key,
+				agentId: params.agentId,
+				scope: params.scope,
+				scopeRef: params.scopeRef,
+				revision: decision.target.revision,
+				state: "active",
+				structured: { type: "fact", key: decision.target.key },
+			},
+			invalidatedBy: {
+				reason: "contradiction",
+				byKey: decision.newFact.key,
+				byValue: decision.newFact.value,
+				rationale: decision.rationale,
+				...(params.runId ? { runId: params.runId } : {}),
+			},
+		})
+		if (result) invalidated += 1
+	}
+	return invalidated
+}
+
 /**
  * Detect and expire facts that newly-written facts contradict (#33).
  *
@@ -154,6 +374,7 @@ export async function invalidateContradictedFacts(params: {
 	scopeRef: string
 	newFacts: Array<{ key: string; value: string }>
 	runId?: string
+	requirePersistedSource?: true
 }): Promise<number> {
 	const { db, prefix, client, provider, model, agentId, scope, scopeRef } =
 		params
@@ -161,68 +382,27 @@ export async function invalidateContradictedFacts(params: {
 	if (newFacts.length === 0) return 0
 
 	try {
-		const newKeys = new Set(newFacts.map((f) => f.key))
-		// Tenant-scoped candidate set: ONLY this agent+scope+scopeRef's active
-		// facts. Never compare or invalidate across tenants (SCAR from #31).
-		const existing = await structuredMemCollection(db, prefix)
-			.find(
-				{
-					agentId,
-					scope,
-					scopeRef,
-					type: "fact",
-					state: "active",
-					key: { $nin: [...newKeys] },
-					// P4.4.1 (B1): an expired fact reads as gone — it must not feed
-					// the comparison set ahead of the TTL sweep.
-					...buildUnexpiredClause(),
-				},
-				{ projection: { key: 1, value: 1, _id: 0 } },
-			)
-			.sort({ updatedAt: -1 })
-			.limit(MAX_CANDIDATE_FACTS)
-			.toArray()
-		const existingFacts = existing
-			.map((d) => ({ key: String(d.key), value: String(d.value ?? "") }))
-			.filter((f) => f.value)
-		if (existingFacts.length === 0) return 0
-
-		const invalidatedKeys = new Set<string>()
-		for (const newFact of newFacts) {
-			const findings = await detectContradictions({
-				provider,
-				model,
-				newFact,
-				existingFacts,
-			})
-			for (const finding of findings) {
-				if (invalidatedKeys.has(finding.contradictedKey)) continue
-				const result = await invalidateStructuredMemoryByHandle({
-					db,
-					prefix,
-					client,
-					handle: {
-						family: "structured",
-						id: finding.contradictedKey,
-						agentId,
-						scope,
-						scopeRef,
-						revision: 0,
-						state: "active",
-						structured: { type: "fact", key: finding.contradictedKey },
-					},
-					invalidatedBy: {
-						reason: "contradiction",
-						byKey: newFact.key,
-						byValue: newFact.value,
-						rationale: finding.rationale,
-						...(params.runId ? { runId: params.runId } : {}),
-					},
-				})
-				if (result) invalidatedKeys.add(finding.contradictedKey)
-			}
-		}
-		return invalidatedKeys.size
+		const prepared = await prepareContradictionInvalidations({
+			db,
+			prefix,
+			provider,
+			model,
+			agentId,
+			scope,
+			scopeRef,
+			newFacts,
+			requirePersistedSource: params.requirePersistedSource,
+		})
+		return persistPreparedContradictionInvalidations({
+			db,
+			prefix,
+			client,
+			agentId,
+			scope,
+			scopeRef,
+			prepared,
+			runId: params.runId,
+		})
 	} catch (err) {
 		log.warn("contradiction invalidation failed", {
 			error: err instanceof Error ? err.message : String(err),

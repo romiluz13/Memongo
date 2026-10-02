@@ -36,7 +36,6 @@ import {
 	structuredMemCollection,
 	proceduresCollection,
 	eventsCollection,
-	queryCacheCollection,
 	sessionChunksCollection,
 	memoryEvidenceCollection,
 } from "./mongodb-schema-collections.js"
@@ -160,10 +159,10 @@ export async function ensureSearchIndexes(
 		}
 	}
 
-	// 15 search indexes total: chunks, kb_chunks, structured_mem, procedures,
-	// events, and session_chunks each get text + vector indexes, plus query_cache
-	// gets 1 vector index, plus entities and episodes get 1 autocomplete index
-	// each (P3.8). The optional evidence mirror adds two more indexes only when
+	// 14 search indexes total: chunks, kb_chunks, structured_mem, procedures,
+	// events, and session_chunks each get text + vector indexes, plus entities
+	// and episodes get 1 autocomplete index each (P3.8). The optional evidence
+	// mirror adds two more indexes only when
 	// explicitly enabled.
 	// Keep the budget helper explicit so future constrained/free-tier profiles
 	// can safely reduce index count without changing index definitions.
@@ -172,8 +171,8 @@ export async function ensureSearchIndexes(
 	const plannedSearchIndexCount = rawSessionIndexProfile
 		? 1
 		: evidenceMirrorEnabled
-			? 17
-			: 15
+			? 16
+			: 14
 	const budget = assertIndexBudget(profile, plannedSearchIndexCount)
 	const reducedBudget =
 		!budget.withinBudget &&
@@ -207,6 +206,10 @@ export async function ensureSearchIndexes(
 						// C-005: the Option B lane filters unexpired docs in
 						// its $vectorSearch filter (search-v2 sessionFilter).
 						{ type: "filter", path: "expiresAt" },
+						// RET-02 (wave 3b): the Option B lane composes the
+						// explicit-range occurrence-time guard (timestamp
+						// $gte/$lte) into the same filter.
+						{ type: "filter", path: "timestamp" },
 					],
 				},
 				"session_chunks",
@@ -282,11 +285,14 @@ export async function ensureSearchIndexes(
 		// (buildUnexpiredClause on expiresAt) into its $vectorSearch filter,
 		// so expiresAt must be declared as a filter field here or mongot
 		// rejects the query ("Path 'expiresAt' needs to be indexed as
-		// filter") — mirroring query_cache_vector.
+		// filter"), matching the other retention-aware vector lanes.
 		// C-026: the chunk lanes now compose the bitemporal guard (validAt /
 		// invalidAt null-or-range arms) into the same $vectorSearch filter,
 		// so both fields join the declared filter paths — mirroring
 		// events_vector, which declares them for the events lane.
+		// RET-02 (wave 3b): the chunk lanes also compose the explicit-range
+		// occurrence-time guard ($gte/$lte on timestamp) into the same
+		// filter, so timestamp joins the declared filter paths.
 		const chunksFilterPaths = [
 			"source",
 			"path",
@@ -298,6 +304,7 @@ export async function ensureSearchIndexes(
 			"expiresAt",
 			"validAt",
 			"invalidAt",
+			"timestamp",
 		]
 		const vectorDef: Document = withVectorStoredSource(
 			buildAutoEmbedVectorDefinition(
@@ -650,38 +657,6 @@ export async function ensureSearchIndexes(
 		}
 	}
 
-	// Query Cache search index (autoEmbed on queryNorm)
-	if (!longMemEvalIndexProfile) {
-		const queryCache = queryCacheCollection(db, prefix)
-		try {
-			const cacheVectorDef: Document = {
-				fields: [
-					autoEmbedVectorField("queryNorm", activeQuantization),
-					{ type: "filter", path: "agentId" },
-					{ type: "filter", path: "scope" },
-					{ type: "filter", path: "scopeRef" },
-					{ type: "filter", path: "expiresAt" },
-				],
-			}
-			vectorCreated = await ensureVectorIndex({
-				collection: queryCache,
-				name: `${prefix}query_cache_vector`,
-				definition: cacheVectorDef,
-				label: "query_cache vector",
-			})
-		} catch (err) {
-			const msg = err instanceof Error ? err.message : String(err)
-			if (msg.includes("already exists") || msg.includes("duplicate")) {
-				vectorCreated = true
-			} else if (isSearchIndexManagementUnavailable(msg)) {
-				log.warn(`search index management unavailable: ${msg}`)
-				return { text: textCreated, vector: vectorCreated }
-			} else {
-				log.warn(`query_cache vector search index creation failed: ${msg}`)
-			}
-		}
-	}
-
 	// Session Chunks search indexes (Option B — dedicated session-evidence collection)
 	if (!longMemEvalIndexProfile) {
 		const sessionChunks = sessionChunksCollection(db, prefix)
@@ -726,6 +701,10 @@ export async function ensureSearchIndexes(
 				// C-005: the Option B lane filters unexpired docs in its
 				// $vectorSearch filter (search-v2 sessionFilter).
 				{ type: "filter", path: "expiresAt" },
+				// RET-02 (wave 3b): the Option B lane composes the
+				// explicit-range occurrence-time guard (timestamp
+				// $gte/$lte) into the same filter.
+				{ type: "filter", path: "timestamp" },
 			]
 			const sessionVectorDef: Document = withVectorStoredSource(
 				{

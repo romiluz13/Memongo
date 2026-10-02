@@ -69,6 +69,20 @@ export const statusPaths = {
 	"/v1/sync": {
 		post: {
 			summary: "Sync workspace files to MongoDB",
+			requestBody: {
+				content: {
+					"application/json": {
+						schema: {
+							type: "object",
+							properties: {
+								agentId: { type: "string" },
+								reason: { type: "string" },
+								force: { type: "boolean" },
+							},
+						},
+					},
+				},
+			},
 			responses: { "200": { description: "Ok" } },
 		},
 	},

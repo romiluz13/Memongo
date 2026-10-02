@@ -1,4 +1,4 @@
-import type { Db } from "mongodb"
+import type { ClientSession, Db } from "mongodb"
 import type { RetrievalPath } from "./mongodb-retrieval-planner.js"
 import { laneCoverageCollection } from "./mongodb-schema.js"
 
@@ -42,6 +42,7 @@ export async function updateLaneCoverage(params: {
 	prefix: string
 	agentId: string
 	increments: Partial<Record<string, number>>
+	session?: ClientSession
 }): Promise<void> {
 	const { db, prefix, agentId, increments } = params
 	if (Object.keys(increments).length === 0) {
@@ -71,7 +72,7 @@ export async function updateLaneCoverage(params: {
 			$set: setFields,
 			$setOnInsert: { agentId },
 		},
-		{ upsert: true },
+		{ upsert: true, ...(params.session ? { session: params.session } : {}) },
 	)
 }
 
@@ -85,6 +86,7 @@ export async function markLaneAvailable(params: {
 	prefix: string
 	agentId: string
 	lane: RetrievalPath
+	session?: ClientSession
 }): Promise<void> {
 	const { db, prefix, agentId, lane } = params
 	const now = new Date()
@@ -99,7 +101,7 @@ export async function markLaneAvailable(params: {
 			},
 			$setOnInsert: { agentId },
 		},
-		{ upsert: true },
+		{ upsert: true, ...(params.session ? { session: params.session } : {}) },
 	)
 }
 

@@ -283,7 +283,7 @@ describe("pruneIdempotencyFingerprints — worker drain wiring", () => {
 		const manager = Object.assign(
 			Object.create(MongoDBMemoryManager.prototype),
 			{
-				db: {} as import("mongodb").Db,
+				db: createStatefulMongoFake({ prefix: PREFIX }).db,
 				prefix: PREFIX,
 				agentId: AGENT,
 				client: undefined,

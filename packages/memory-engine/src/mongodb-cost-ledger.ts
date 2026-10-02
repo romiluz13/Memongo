@@ -1,3 +1,4 @@
+import { settledFailureMeta } from "./query-diagnostics.js"
 /**
  * C-017 (WS-10): persistent per-tenant per-day spend accounting.
  *
@@ -20,10 +21,16 @@
  * server-side embed of one indexed field. The cost model table in
  * docs/cost-model.md converts units to dollars for a configured model.
  */
-import type { Db } from "mongodb"
+import type { ClientSession, Db } from "mongodb"
 import { createSubsystemLogger } from "@memongo/lib"
 import { costLedgerCollection } from "./mongodb-schema-collections.js"
 import type { EnrichmentProvider } from "./mongodb-llm-enrichment.js"
+import {
+	type AdmissionToken,
+	captureAdmissionToken,
+	ErasureGateConflictError,
+	withFencedWrite,
+} from "./mongodb-write-fence.js"
 
 const log = createSubsystemLogger("memory:mongodb:cost-ledger")
 
@@ -35,16 +42,10 @@ const log = createSubsystemLogger("memory:mongodb:cost-ledger")
  * Ledger channels. "llm" counts provider tokens; the rest count embedding
  * units by the pipeline that triggered them:
  * - "search": query-time lane probes (from the per-request search budget)
- * - "cache-probe": query-cache tier-2 semantic lookups
  * - "consolidation": consolidator similarity probes
  * - "indexing": writes that trigger a server-side re-embed of indexed text
  */
-export type CostSpendKind =
-	| "llm"
-	| "search"
-	| "cache-probe"
-	| "consolidation"
-	| "indexing"
+export type CostSpendKind = "llm" | "search" | "consolidation" | "indexing"
 
 export type CostLedgerEmbeddingKind = Exclude<CostSpendKind, "llm">
 
@@ -71,47 +72,35 @@ function positiveCount(value: number | undefined): number | null {
 	return Math.floor(value)
 }
 
-/**
- * Fire-and-forget $inc upsert onto the (agentId, day, kind) counter doc.
- * Never throws, never blocks: a failed ledger write logs and drops — cost
- * accounting must not be able to fail a memory operation. The try/catch
- * wraps the collection accessor too: a synchronous driver failure (bad Db
- * handle, pool shutdown) must degrade exactly like a rejected promise.
- */
-function incrementLedger(params: {
+async function incrementLedger(params: {
 	db: Db
 	prefix: string
 	agentId: string
 	day: string
 	kind: CostSpendKind
 	inc: Record<string, number>
-}): void {
+	admission?: AdmissionToken
+}): Promise<void> {
 	const now = new Date()
-	try {
-		costLedgerCollection(params.db, params.prefix)
-			.updateOne(
+	const admission = params.admission ?? (await captureAdmissionToken(params))
+	if (admission.agentId !== params.agentId)
+		throw new ErasureGateConflictError(params.agentId)
+	await withFencedWrite({
+		db: params.db,
+		prefix: params.prefix,
+		token: admission,
+		fn: async (session) => {
+			await costLedgerCollection(params.db, params.prefix).updateOne(
 				{ agentId: params.agentId, day: params.day, kind: params.kind },
 				{
 					$inc: params.inc,
 					$set: { updatedAt: now },
 					$setOnInsert: { createdAt: now },
 				},
-				{ upsert: true },
+				{ upsert: true, session },
 			)
-			.catch((err) => {
-				log.warn("cost ledger write failed", {
-					agentId: params.agentId,
-					kind: params.kind,
-					error: err instanceof Error ? err.message : String(err),
-				})
-			})
-	} catch (err) {
-		log.warn("cost ledger write failed", {
-			agentId: params.agentId,
-			kind: params.kind,
-			error: err instanceof Error ? err.message : String(err),
-		})
-	}
+		},
+	})
 }
 
 // ---------------------------------------------------------------------------
@@ -127,23 +116,82 @@ export function recordLLMSpend(
 	prefix: string,
 	agentId: string,
 	spend: { inputTokens?: number; outputTokens?: number },
-): void {
+): void
+export function recordLLMSpend(
+	db: Db,
+	prefix: string,
+	agentId: string,
+	spend: { inputTokens?: number; outputTokens?: number },
+	options: { admission?: AdmissionToken },
+): Promise<void>
+export function recordLLMSpend(
+	db: Db,
+	prefix: string,
+	agentId: string,
+	spend: { inputTokens?: number; outputTokens?: number },
+	options?: { admission?: AdmissionToken },
+): void | Promise<void> {
 	const inputTokens = positiveCount(spend.inputTokens)
 	const outputTokens = positiveCount(spend.outputTokens)
 	if (inputTokens === null && outputTokens === null) {
-		return
+		return options ? Promise.resolve() : undefined
 	}
-	incrementLedger({
+	const pending = incrementLedger({
 		db,
 		prefix,
 		agentId,
 		day: costLedgerDay(),
 		kind: "llm",
+		admission: options?.admission,
 		inc: {
 			...(inputTokens !== null ? { inputTokens } : {}),
 			...(outputTokens !== null ? { outputTokens } : {}),
 		},
 	})
+	if (options) return pending
+	void pending.catch((err) => {
+		log.warn("cost ledger write failed", {
+			agentId,
+			kind: "llm",
+			...settledFailureMeta(err),
+		})
+	})
+}
+
+/**
+ * Awaited/session-bound variant for guarded worker batches. Unlike the
+ * fire-and-forget public recorder, a rejection aborts the caller transaction.
+ */
+export async function recordLLMSpendInSession(params: {
+	db: Db
+	prefix: string
+	agentId: string
+	spend: { inputTokens?: number; outputTokens?: number }
+	session: ClientSession
+	at?: Date
+}): Promise<void> {
+	const inputTokens = positiveCount(params.spend.inputTokens)
+	const outputTokens = positiveCount(params.spend.outputTokens)
+	if (inputTokens === null && outputTokens === null) {
+		return
+	}
+	const now = params.at ?? new Date()
+	await costLedgerCollection(params.db, params.prefix).updateOne(
+		{
+			agentId: params.agentId,
+			day: costLedgerDay(now),
+			kind: "llm",
+		},
+		{
+			$inc: {
+				...(inputTokens !== null ? { inputTokens } : {}),
+				...(outputTokens !== null ? { outputTokens } : {}),
+			},
+			$set: { updatedAt: now },
+			$setOnInsert: { createdAt: now },
+		},
+		{ upsert: true, session: params.session },
+	)
 }
 
 /**
@@ -158,18 +206,72 @@ export function recordEmbeddingSpend(
 	agentId: string,
 	kind: CostLedgerEmbeddingKind,
 	units: number,
-): void {
+): void
+export function recordEmbeddingSpend(
+	db: Db,
+	prefix: string,
+	agentId: string,
+	kind: CostLedgerEmbeddingKind,
+	units: number,
+	options: { admission?: AdmissionToken },
+): Promise<void>
+export function recordEmbeddingSpend(
+	db: Db,
+	prefix: string,
+	agentId: string,
+	kind: CostLedgerEmbeddingKind,
+	units: number,
+	options?: { admission?: AdmissionToken },
+): void | Promise<void> {
 	if (!Number.isFinite(units) || units <= 0) {
-		return
+		return options ? Promise.resolve() : undefined
 	}
-	incrementLedger({
+	const pending = incrementLedger({
 		db,
 		prefix,
 		agentId,
 		day: costLedgerDay(),
 		kind,
+		admission: options?.admission,
 		inc: { embedUnits: Math.floor(units) },
 	})
+	if (options) return pending
+	void pending.catch((err) => {
+		log.warn("cost ledger write failed", {
+			agentId,
+			kind,
+			...settledFailureMeta(err),
+		})
+	})
+}
+
+/** Awaited/session-bound embedding ledger update for guarded worker writes. */
+export async function recordEmbeddingSpendInSession(params: {
+	db: Db
+	prefix: string
+	agentId: string
+	kind: CostLedgerEmbeddingKind
+	units: number
+	session: ClientSession
+	at?: Date
+}): Promise<void> {
+	if (!Number.isFinite(params.units) || params.units <= 0) {
+		return
+	}
+	const now = params.at ?? new Date()
+	await costLedgerCollection(params.db, params.prefix).updateOne(
+		{
+			agentId: params.agentId,
+			day: costLedgerDay(now),
+			kind: params.kind,
+		},
+		{
+			$inc: { embedUnits: Math.floor(params.units) },
+			$set: { updatedAt: now },
+			$setOnInsert: { createdAt: now },
+		},
+		{ upsert: true, session: params.session },
+	)
 }
 
 // ---------------------------------------------------------------------------
@@ -216,7 +318,7 @@ export async function getDailyCostSums(
 	} catch (err) {
 		log.warn("cost ledger daily sums failed", {
 			agentId,
-			error: err instanceof Error ? err.message : String(err),
+			...settledFailureMeta(err),
 		})
 		return []
 	}
@@ -239,13 +341,27 @@ export function instrumentProviderCostSpend(params: {
 	prefix: string
 	agentId: string
 	provider: EnrichmentProvider
+	onUsage?: (usage: {
+		inputTokens?: number
+		outputTokens?: number
+		at: Date
+	}) => void
 }): EnrichmentProvider {
 	return {
 		...params.provider,
 		async chatCompletion(request) {
 			const response = await params.provider.chatCompletion(request)
 			if (response.usage) {
-				recordLLMSpend(params.db, params.prefix, params.agentId, response.usage)
+				if (params.onUsage) {
+					params.onUsage({ ...response.usage, at: new Date() })
+				} else {
+					recordLLMSpend(
+						params.db,
+						params.prefix,
+						params.agentId,
+						response.usage,
+					)
+				}
 			}
 			return response
 		},

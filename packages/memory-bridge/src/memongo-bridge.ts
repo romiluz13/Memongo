@@ -86,10 +86,19 @@ function resolveAgentId(explicit?: string): string {
 
 export async function memongoBridgeGetManager(
 	agentId?: string,
+	opts?: {
+		/** "owned" returns a caller-lifetime manager, never cached; the
+		 * caller must close() it exactly once. */
+		ownership?: "owned"
+	},
 ): Promise<MongoDBMemoryManager> {
 	const id = resolveAgentId(agentId)
 	const cfg = resolveBridgeConfig()
-	const { manager, error } = await getMemorySearchManager({ cfg, agentId: id })
+	const { manager, error } = await getMemorySearchManager({
+		cfg,
+		agentId: id,
+		...(opts?.ownership ? { ownership: opts.ownership } : {}),
+	})
 	if (!manager || error) {
 		throw new Error(error ?? "mongodb memory unavailable")
 	}
@@ -104,6 +113,7 @@ export async function memongoBridgeSearch(params: {
 	sessionKey?: string
 	scope?: MemoryScope
 	scopeRef?: string
+	kbRestricted?: boolean
 }) {
 	const m = await memongoBridgeGetManager(params.agentId)
 	return m.search(params.query, {
@@ -112,6 +122,7 @@ export async function memongoBridgeSearch(params: {
 		sessionKey: params.sessionKey,
 		scope: params.scope,
 		scopeRef: params.scopeRef,
+		kbRestricted: params.kbRestricted,
 	})
 }
 
@@ -130,6 +141,7 @@ export async function memongoBridgeSearchWithDegradation(params: {
 	sessionKey?: string
 	scope?: MemoryScope
 	scopeRef?: string
+	kbRestricted?: boolean
 }): Promise<{
 	results: MemorySearchResult[]
 	degradation?: MemorySearchDegradation
@@ -142,6 +154,7 @@ export async function memongoBridgeSearchWithDegradation(params: {
 		sessionKey: params.sessionKey,
 		scope: params.scope,
 		scopeRef: params.scopeRef,
+		kbRestricted: params.kbRestricted,
 		onDegradation: (d) => {
 			degradation = d
 		},
@@ -152,6 +165,8 @@ export async function memongoBridgeSearchWithDegradation(params: {
 export async function memongoBridgeSearchKB(params: {
 	query: string
 	agentId?: string
+	scope?: MemoryScope
+	sessionKey?: string
 	scopeRef?: string
 	maxResults?: number
 	minScore?: number
@@ -162,8 +177,10 @@ export async function memongoBridgeSearchKB(params: {
 	return m.searchKB(params.query, {
 		maxResults: params.maxResults,
 		minScore: params.minScore,
-		// Tenant isolation: search the caller's authorized KB scopeRef, not the
-		// manager's default. Undefined falls back to the agent default in searchKB.
+		// Explicit references win; otherwise searchKB derives an explicit scope.
+		// Omitted scope retains the legacy agent partition.
+		scope: params.scope,
+		sessionKey: params.sessionKey,
 		scopeRef: params.scopeRef,
 		filter: params.filter,
 		fusionMethod: params.fusionMethod,
@@ -179,6 +196,8 @@ export async function memongoBridgeSearchKB(params: {
 export async function memongoBridgeSearchKBWithDegradation(params: {
 	query: string
 	agentId?: string
+	scope?: MemoryScope
+	sessionKey?: string
 	scopeRef?: string
 	maxResults?: number
 	minScore?: number
@@ -193,8 +212,10 @@ export async function memongoBridgeSearchKBWithDegradation(params: {
 	const results = await m.searchKB(params.query, {
 		maxResults: params.maxResults,
 		minScore: params.minScore,
-		// Tenant isolation: search the caller's authorized KB scopeRef, not the
-		// manager's default. Undefined falls back to the agent default in searchKB.
+		// Explicit references win; otherwise searchKB derives an explicit scope.
+		// Omitted scope retains the legacy agent partition.
+		scope: params.scope,
+		sessionKey: params.sessionKey,
 		scopeRef: params.scopeRef,
 		filter: params.filter,
 		fusionMethod: params.fusionMethod,
@@ -377,6 +398,7 @@ export async function memongoBridgeWriteProcedure(params: {
 
 export async function memongoBridgeProfile(params: {
 	agentId?: string
+	sessionId?: string
 	scope?: MemoryScope
 	scopeRef?: string
 	maxEntities?: number
@@ -386,6 +408,7 @@ export async function memongoBridgeProfile(params: {
 }) {
 	const m = await memongoBridgeGetManager(params.agentId)
 	return m.synthesizeProfile({
+		sessionId: params.sessionId,
 		scope: params.scope,
 		scopeRef: params.scopeRef,
 		maxEntities: params.maxEntities,
@@ -397,12 +420,14 @@ export async function memongoBridgeProfile(params: {
 
 export async function memongoBridgeHydrateActiveSlate(params: {
 	agentId?: string
+	sessionId?: string
 	scope?: MemoryScope
 	scopeRef?: string
 	maxItems?: number
 }): Promise<MemoryActiveSlate> {
 	const m = await memongoBridgeGetManager(params.agentId)
 	return m.hydrateActiveSlate({
+		sessionId: params.sessionId,
 		scope: params.scope,
 		scopeRef: params.scopeRef,
 		maxItems: params.maxItems,
@@ -411,6 +436,7 @@ export async function memongoBridgeHydrateActiveSlate(params: {
 
 export async function memongoBridgeBuildDiscoveryProjection(params: {
 	agentId?: string
+	sessionId?: string
 	kind: "entity-brief" | "topic-brief" | "what-changed" | "contradiction-report"
 	query?: string
 	scope?: MemoryScope
@@ -424,6 +450,7 @@ export async function memongoBridgeBuildDiscoveryProjection(params: {
 }): Promise<MemoryDiscoveryProjection> {
 	const m = await memongoBridgeGetManager(params.agentId)
 	return m.buildDiscoveryProjection({
+		sessionId: params.sessionId,
 		kind: params.kind,
 		query: params.query,
 		scope: params.scope,
@@ -458,6 +485,7 @@ export async function memongoBridgeBuildContextBundle(params: {
 		end?: string
 	}
 	mode?: "full" | "wake-up"
+	kbRestricted?: boolean
 }): Promise<MemoryContextBundle> {
 	const m = await memongoBridgeGetManager(params.agentId)
 	return m.buildContextBundle({
@@ -476,6 +504,7 @@ export async function memongoBridgeBuildContextBundle(params: {
 		// union at the seam — same translation pattern as searchDetailed.
 		timeRange: params.timeRange as MemorySearchTimeRange | undefined,
 		mode: params.mode,
+		kbRestricted: params.kbRestricted,
 	})
 }
 
@@ -610,12 +639,14 @@ export async function memongoBridgeSearchDetailed(params: {
 			end?: string
 		}
 		needExactEvidence?: boolean
+		allowConstraintRelaxation?: boolean
 		numCandidates?: number
 		fusionMethod?: "scoreFusion" | "rankFusion" | "js-merge"
 		hybridMode?: "hybrid" | "vector-only"
 		allowHybridBackstop?: boolean
 		lexicalPrefilter?: "disabled" | "experimental"
 	}
+	kbRestricted?: boolean
 }) {
 	const m = await memongoBridgeGetManager(params.agentId)
 	if (!m.searchDetailed) {
@@ -659,6 +690,7 @@ export async function memongoBridgeSearchDetailed(params: {
 		structuredScope: params.structuredScope,
 		referenceScope: params.referenceScope,
 		proceduralScope: params.proceduralScope,
+		kbRestricted: params.kbRestricted,
 		searchConfig: params.searchConfig as
 			| {
 					recipe?: "fast" | "hybrid" | "deep" | "temporal" | "chain-of-thought"
@@ -687,6 +719,7 @@ export async function memongoBridgeSearchDetailed(params: {
 						end?: string
 					}
 					needExactEvidence?: boolean
+					allowConstraintRelaxation?: boolean
 					numCandidates?: number
 					fusionMethod?: "scoreFusion" | "rankFusion" | "js-merge"
 					hybridMode?: "hybrid" | "vector-only"
@@ -726,12 +759,23 @@ export async function memongoBridgeStats(params: {
  * per-collection receipts plus the proof-of-erasure audit record id; a
  * failed collection is reported on the receipt (status "partial") instead
  * of aborting the sweep.
+ *
+ * Gate semantics (production erasure integration grant): the sweep runs
+ * behind the per-agent erasure gate. recovery:"takeover" is a DELIBERATE
+ * owner replacement — it dispatches directly to takeoverErasure and can
+ * replace a paused live owner (the operator is the liveness oracle); on an
+ * open or absent gate it conflicts (the original owner may have finalized
+ * — retry ordinary). An ordinary request on an active owner also
+ * conflicts; ErasureGateConflictError propagates to the route's typed 409.
  */
 export async function memongoBridgeDeleteAllForAgent(params: {
 	agentId?: string
+	recovery?: "takeover"
 }): Promise<TenantErasureReceipt> {
 	const m = await memongoBridgeGetManager(params.agentId)
-	return m.deleteAllForAgent()
+	return m.deleteAllForAgent(
+		params.recovery !== undefined ? { recovery: params.recovery } : undefined,
+	)
 }
 
 /**
@@ -874,6 +918,7 @@ export async function memongoBridgeRelevanceExplain(params: {
 	maxResults?: number
 	minScore?: number
 	deep?: boolean
+	kbRestricted?: boolean
 }): Promise<RelevanceExplainResult> {
 	const m = await memongoBridgeGetManager(params.agentId)
 	return m.relevanceExplain({
@@ -883,6 +928,7 @@ export async function memongoBridgeRelevanceExplain(params: {
 		maxResults: params.maxResults,
 		minScore: params.minScore,
 		deep: params.deep,
+		kbRestricted: params.kbRestricted,
 	})
 }
 
@@ -1028,6 +1074,7 @@ export async function memongoBridgeGetState(params: {
 	agentId?: string
 	scope?: MemoryScope
 	scopeRef?: string
+	kbRestricted?: boolean
 }): Promise<MemoryStateFamily & { partial?: boolean }> {
 	const results = await Promise.allSettled([
 		memongoBridgeProfile({
@@ -1044,8 +1091,18 @@ export async function memongoBridgeGetState(params: {
 			agentId: params.agentId,
 			scope: params.scope,
 			scopeRef: params.scopeRef,
+			kbRestricted: params.kbRestricted,
 		}),
 	])
+	const rejected = results.filter(
+		(result): result is PromiseRejectedResult => result.status === "rejected",
+	)
+	if (rejected.length === results.length) {
+		throw new AggregateError(
+			rejected.map((result) => result.reason),
+			"all unified state reads failed",
+		)
+	}
 	const partial = results.some((r) => r.status === "rejected")
 	const profile =
 		results[0].status === "fulfilled"

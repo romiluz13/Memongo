@@ -1,5 +1,12 @@
-import type { Db, Document } from "mongodb"
+import { settledFailureMeta } from "./query-diagnostics.js"
+import type { ClientSession, Db, Document } from "mongodb"
 import { createSubsystemLogger } from "@memongo/lib"
+import {
+	captureAdmissionToken,
+	ErasureGateConflictError,
+	type AdmissionToken,
+	withFencedWrite,
+} from "./mongodb-write-fence.js"
 import { telemetryCollection } from "./mongodb-schema.js"
 
 const log = createSubsystemLogger("memory:mongodb:telemetry")
@@ -12,6 +19,7 @@ export type TelemetryOperation =
 	| "search"
 	| "event-write"
 	| "projection-run"
+	/** @deprecated Historical persisted query-cache telemetry only. */
 	| "cache-check"
 	| "graph-expansion"
 	| "profile-synthesis"
@@ -39,7 +47,9 @@ export type TelemetryDocument = {
 	resultCount?: number
 	topScore?: number
 	fusionMethod?: string
+	/** @deprecated Historical persisted query-cache telemetry only. */
 	cacheHit?: boolean
+	/** @deprecated Historical persisted query-cache telemetry only. */
 	latencySavedMs?: number
 	itemCount?: number
 	eventType?: string
@@ -80,7 +90,7 @@ export type TelemetryDocument = {
 	/**
 	 * WS-16 (C-030): pre-clamp character length carried on
 	 * search-query-clamped docs so operators can see how far past the
-	 * 2,000-character ceiling a caller pushed.
+	 * 2,000-code-unit ceiling a search/recall entry or generated rewrite exceeded.
 	 */
 	queryLength?: number
 }
@@ -120,34 +130,87 @@ export function resolveTelemetrySampling(env: {
 	return { enabled: !disabled, sampleRate }
 }
 
-/**
- * Emit a telemetry document to the memory_telemetry time series collection.
- * Fire-and-forget: never blocks the caller, never throws. Kill-switched and
- * sampled via MEMONGO_TELEMETRY_ENABLED / MEMONGO_TELEMETRY_SAMPLE_RATE
- * (see {@link resolveTelemetrySampling}). Uses insertOne with .catch() for
- * error-swallowing.
- */
+type TelemetryWriteOptions =
+	| { session: ClientSession; admission?: never }
+	| { admission: AdmissionToken; session?: never }
+
+/** Legacy calls start a new diagnostic intent; admitted calls preserve the original read epoch. */
 export function emitTelemetry(
 	db: Db,
 	prefix: string,
 	doc: Omit<TelemetryDocument, "ts">,
-): void {
+	options: { session: ClientSession; admission?: never },
+): Promise<void>
+export function emitTelemetry(
+	db: Db,
+	prefix: string,
+	doc: Omit<TelemetryDocument, "ts">,
+	options: { admission: AdmissionToken; session?: never },
+): Promise<void>
+export function emitTelemetry(
+	db: Db,
+	prefix: string,
+	doc: Omit<TelemetryDocument, "ts">,
+): void
+export function emitTelemetry(
+	db: Db,
+	prefix: string,
+	doc: Omit<TelemetryDocument, "ts">,
+	options?: TelemetryWriteOptions,
+): void | Promise<void> {
 	const { enabled, sampleRate } = resolveTelemetrySampling(process.env)
-	if (!enabled || sampleRate <= 0) {
-		return
-	}
-	if (sampleRate < 1 && Math.random() > sampleRate) {
-		return
+	if (
+		!enabled ||
+		sampleRate <= 0 ||
+		(sampleRate < 1 && Math.random() > sampleRate)
+	) {
+		return options ? Promise.resolve() : undefined
 	}
 	const entry: TelemetryDocument = { ...doc, ts: new Date() }
-	telemetryCollection(db, prefix)
-		.insertOne(entry)
-		.catch((err) => {
-			log.warn("telemetry emit failed", {
-				operation: doc.meta.operation,
-				error: err instanceof Error ? err.message : String(err),
-			})
+	if (options?.session) {
+		return telemetryCollection(db, prefix)
+			.insertOne(entry, { session: options.session })
+			.then(() => undefined)
+	}
+	const emission = emitAdmittedTelemetry(db, prefix, entry, options?.admission)
+	if (options) return emission
+	void emission.catch(() => {
+		log.warn("telemetry emit failed", { operation: doc.meta.operation })
+	})
+}
+
+async function emitAdmittedTelemetry(
+	db: Db,
+	prefix: string,
+	entry: TelemetryDocument,
+	priorAdmission?: AdmissionToken,
+): Promise<void> {
+	const admission =
+		priorAdmission ??
+		(await captureAdmissionToken({
+			db,
+			prefix,
+			agentId: entry.meta.agentId,
+		}))
+	if (admission.agentId !== entry.meta.agentId)
+		throw new ErasureGateConflictError(entry.meta.agentId)
+	const [info] = await db
+		.listCollections({ name: `${prefix}memory_telemetry` }, { nameOnly: false })
+		.toArray()
+	if (info?.type === "timeseries") {
+		log.warn("telemetry skipped for retained time-series sink", {
+			operation: entry.meta.operation,
 		})
+		return
+	}
+	await withFencedWrite({
+		db,
+		prefix,
+		token: admission,
+		fn: async (session) => {
+			await telemetryCollection(db, prefix).insertOne(entry, { session })
+		},
+	})
 }
 
 // ---------------------------------------------------------------------------
@@ -213,9 +276,7 @@ export async function getLatencyStats(params: {
 			.aggregate(pipeline)
 			.toArray()
 	} catch (err) {
-		log.warn(
-			`latency stats aggregation failed: ${err instanceof Error ? err.message : String(err)}`,
-		)
+		log.warn("latency stats aggregation failed", settledFailureMeta(err))
 		return { p50: 0, p95: 0, p99: 0, count: 0 }
 	}
 	if (results.length === 0 || results[0].count === 0) {
@@ -228,56 +289,6 @@ export async function getLatencyStats(params: {
 		p99: results[0].p99?.[0] ?? 0,
 		count: results[0].count,
 	}
-}
-
-/** Get cache hit rate over a time window. */
-export async function getCacheHitRate(params: {
-	db: Db
-	prefix: string
-	agentId: string
-	windowMs?: number
-}): Promise<{ hitRate: number; hits: number; misses: number; total: number }> {
-	const { db, prefix, agentId, windowMs = 3600000 } = params
-	const since = new Date(Date.now() - windowMs)
-
-	const pipeline = [
-		{
-			$match: {
-				"meta.agentId": agentId,
-				"meta.operation": "cache-check",
-				ts: { $gte: since },
-			},
-		},
-		{
-			$group: {
-				_id: "$cacheHit",
-				count: { $sum: 1 },
-			},
-		},
-	]
-
-	let results: Document[]
-	try {
-		results = await telemetryCollection(db, prefix)
-			.aggregate(pipeline)
-			.toArray()
-	} catch (err) {
-		log.warn(
-			`cache hit-rate aggregation failed: ${err instanceof Error ? err.message : String(err)}`,
-		)
-		return { hitRate: 0, hits: 0, misses: 0, total: 0 }
-	}
-	let hits = 0
-	let misses = 0
-	for (const r of results) {
-		if (r._id === true) {
-			hits = r.count as number
-		} else {
-			misses += r.count as number
-		}
-	}
-	const total = hits + misses
-	return { hitRate: total > 0 ? hits / total : 0, hits, misses, total }
 }
 
 /** Get operation distribution over a time window. */
@@ -316,7 +327,8 @@ export async function getOperationDistribution(params: {
 			.toArray()
 	} catch (err) {
 		log.warn(
-			`operation distribution aggregation failed: ${err instanceof Error ? err.message : String(err)}`,
+			"operation distribution aggregation failed",
+			settledFailureMeta(err),
 		)
 		return []
 	}

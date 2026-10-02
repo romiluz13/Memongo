@@ -4,6 +4,7 @@ import {
 	resolveNumCandidates,
 	resolveTimeRangePreset,
 } from "./mongodb-retrieval-planner.js"
+import { isExactCapableDerivation } from "./memory-derivation.js"
 import { resolveScopeRef } from "./mongodb-scope.js"
 import { sortObject } from "./search-utils.js"
 import {
@@ -25,6 +26,7 @@ import type {
 	ResolvedSearchConfig,
 	RejectedResultSummary,
 	SearchConfig,
+	SearchLaneOutcome,
 	SearchRecallProfile,
 	SearchRecipe,
 } from "./types.js"
@@ -224,6 +226,11 @@ export function resolveSearchConfig(request: MemorySearchRequest): Omit<
 		timeRange: request.timeRange ?? configured.timeRange,
 		needExactEvidence:
 			request.needExactEvidence ?? configured.needExactEvidence ?? false,
+		allowConstraintRelaxation:
+			request.allowConstraintRelaxation ??
+			request.searchConfig?.allowConstraintRelaxation ??
+			configured.allowConstraintRelaxation ??
+			false,
 		numCandidates: resolveProfileNumCandidates({
 			maxResults,
 			recallProfile,
@@ -259,6 +266,7 @@ export function applySearchConfig(
 		sourcePreference: resolved.sourcePreference,
 		...(resolved.timeRange ? { timeRange: resolved.timeRange } : {}),
 		needExactEvidence: resolved.needExactEvidence,
+		allowConstraintRelaxation: resolved.allowConstraintRelaxation,
 		...(resolved.numCandidates != null
 			? { numCandidates: resolved.numCandidates }
 			: {}),
@@ -275,6 +283,8 @@ export function applySearchConfig(
 		sourcePreference: request.sourcePreference ?? resolved.sourcePreference,
 		timeRange: request.timeRange ?? resolved.timeRange,
 		needExactEvidence: request.needExactEvidence ?? resolved.needExactEvidence,
+		allowConstraintRelaxation:
+			request.allowConstraintRelaxation ?? resolved.allowConstraintRelaxation,
 		searchConfig: requestSearchConfig,
 	}
 }
@@ -301,7 +311,6 @@ function sourcePreferencePaths(
 function selectPassPaths(params: {
 	availablePaths: Set<RetrievalPath>
 	sourcePreference: MemorySearchSourcePreference[]
-	pass: number
 	timeRange?: MemorySearchExecutorTimeRange
 	preferredPaths?: RetrievalPath[]
 }): Set<RetrievalPath> {
@@ -335,26 +344,16 @@ function selectPassPaths(params: {
 	if (params.sourcePreference.length === 0) {
 		return allowed
 	}
+	// RET-03: source ordering is a ranking signal, not an exclusion filter.
+	// The eligible set for every pass is ALL preferred sources' paths within
+	// the allowed set (a timeRange still restricts to time-capable lanes);
+	// follow-up passes narrow via their preferredPaths hint instead.
 	const preferredAllowed = new Set(
 		params.sourcePreference.flatMap((source) => sourcePreferencePaths(source)),
 	)
-	const scopedAllowed = new Set(
+	return new Set(
 		Array.from(allowed).filter((path) => preferredAllowed.has(path)),
 	)
-	const preferredSource =
-		params.sourcePreference[
-			Math.min(params.pass - 1, params.sourcePreference.length - 1)
-		]
-	const preferredPaths = sourcePreferencePaths(preferredSource).filter((path) =>
-		scopedAllowed.has(path),
-	)
-	if (
-		preferredPaths.length === 0 ||
-		params.pass > params.sourcePreference.length
-	) {
-		return scopedAllowed
-	}
-	return new Set(preferredPaths)
 }
 
 export function buildMemorySearchRequestSignature(
@@ -363,12 +362,16 @@ export function buildMemorySearchRequestSignature(
 	return JSON.stringify(
 		sortObject({
 			query: request.query,
+			// Authorization changes lane eligibility, so any future request
+			// coalescing keyed by this signature must keep it distinct.
+			kbRestricted: request.kbRestricted,
 			maxResults: request.maxResults,
 			minScore: request.minScore,
 			searchMode: request.searchMode,
 			sourcePreference: request.sourcePreference,
 			timeRange: request.timeRange,
 			needExactEvidence: request.needExactEvidence,
+			allowConstraintRelaxation: request.allowConstraintRelaxation,
 			maxPasses: request.maxPasses,
 			conversationScope: request.conversationScope,
 			structuredScope: request.structuredScope,
@@ -408,12 +411,26 @@ export function normalizeMemorySearchRequest(
 export function resolveExecutorTimeRange(
 	request: MemorySearchRequest,
 ): MemorySearchExecutorTimeRange | undefined {
-	const raw = request.timeRange
+	return resolveExecutorTimeRangeAt(request.timeRange, new Date())
+}
+
+/**
+ * RET-02: the executor's range resolution with an injected clock, shared
+ * with searchV2 so the V2 lanes resolve an explicit request range with the
+ * SAME precedence — preset wins over explicit bounds; a partial or
+ * unparseable explicit range is no range — while honoring the B14
+ * reference clock (questionDate for fixed-clock benchmarks, wall clock
+ * otherwise) for preset resolution.
+ */
+export function resolveExecutorTimeRangeAt(
+	raw: MemorySearchRequest["timeRange"] | undefined,
+	now: Date,
+): MemorySearchExecutorTimeRange | undefined {
 	if (!raw) {
 		return undefined
 	}
 	if (raw.preset) {
-		return resolveTimeRangePreset(raw.preset)
+		return resolveTimeRangePreset(raw.preset, now)
 	}
 	const start = raw.start ? new Date(raw.start) : undefined
 	const end = raw.end ? new Date(raw.end) : undefined
@@ -606,14 +623,25 @@ export function planFollowUpPass(params: {
 	return null
 }
 
+/**
+ * RET-09: a locator (canonicalId / path) alone proves nothing about the
+ * NATURE of the hit — every result carries a locator, so the old "any
+ * non-empty locator ⇒ exact evidence" check passed for agent paraphrases,
+ * summaries, and inferred relations alike. Exactness additionally requires
+ * a derivation whose span is quotable by construction: user-authored
+ * turns, user-extracted facts, or verbatim reference spans. Results with
+ * no provenance metadata (legacy rows) are NOT exact — absent provenance
+ * must never read as quotable support.
+ */
 export function resultHasExactEvidence(result: MemorySearchResult): boolean {
-	if (result.canonicalId?.trim()) {
+	const hasLocator = Boolean(result.canonicalId?.trim() ?? result.path.trim())
+	if (!hasLocator) {
+		return false
+	}
+	if (result.role === "user") {
 		return true
 	}
-	if (result.path.trim()) {
-		return true
-	}
-	return false
+	return isExactCapableDerivation(result.derivation)
 }
 
 function searchResultIdentity(result: MemorySearchResult): string {
@@ -713,10 +741,16 @@ function resultMatchesExactEvidenceAnchor(
 		)
 		.join(" ")
 		.toLowerCase()
+	const text = typeof result.text === "string" ? result.text.toLowerCase() : ""
 	return anchors.some((anchor) => {
 		const escaped = anchor.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
-		const matcher = new RegExp(`\\b${escaped.replace(/\s+/g, "\\s+")}\\b`, "i")
-		return matcher.test(haystack)
+		const start = /\w/.test(anchor[0] ?? "") ? "\\b" : ""
+		const end = /\w/.test(anchor.at(-1) ?? "") ? "\\b" : ""
+		const matcher = new RegExp(
+			`${start}${escaped.replace(/\s+/g, "\\s+")}${end}`,
+			"i",
+		)
+		return matcher.test(haystack) || (text.length > 0 && matcher.test(text))
 	})
 }
 
@@ -786,7 +820,10 @@ export function applyHardConstraintRejections(params: {
 				canonicalId: result.canonicalId,
 				path: result.path,
 				source: result.source,
-				reason: "missing exact evidence locator",
+				reason:
+					result.canonicalId?.trim() || result.path.trim()
+						? "exact evidence requires user-authored or reference span"
+						: "missing exact evidence locator",
 			})
 			continue
 		}
@@ -890,6 +927,7 @@ export function mergeMetadata(params: {
 				| "reranked"
 				| "plan"
 				| "throttled"
+				| "laneOutcomes"
 			>
 		}
 	>
@@ -919,6 +957,13 @@ export function mergeMetadata(params: {
 	const throttled = params.passes.find(
 		(pass) => pass.metadata.throttled != null,
 	)?.metadata.throttled
+	// RET-13: concatenate each pass's per-lane outcome ledger so the merged
+	// metadata answers "why did lane X produce nothing" across the whole
+	// request — pathsExecuted shows ATTEMPTED paths, resultsByPath only
+	// CONTRIBUTING lanes, and laneOutcomes carries the per-lane why.
+	const laneOutcomes = params.passes.flatMap(
+		(pass) => pass.metadata.laneOutcomes ?? [],
+	)
 	return {
 		mode: params.request.searchMode,
 		classification: params.classification,
@@ -951,6 +996,7 @@ export function mergeMetadata(params: {
 			? { plan: params.passes[0].metadata.plan }
 			: {}),
 		...(throttled ? { throttled } : {}),
+		...(laneOutcomes.length ? { laneOutcomes } : {}),
 	}
 }
 
@@ -967,6 +1013,7 @@ export function buildNoDirectEvidenceResponse(params: {
 				| "reranked"
 				| "plan"
 				| "throttled"
+				| "laneOutcomes"
 			>
 		}
 	>
@@ -1025,11 +1072,14 @@ export function analyzeCorrectionNeeded(params: {
 	if (dominantReason === "outside requested time range") {
 		return {
 			needed: true,
-			correction: "time-range-widened-2x",
+			correction: "time-range-widened-3x",
 			reason: dominantReason,
 		}
 	}
-	if (dominantReason === "missing exact evidence locator") {
+	if (
+		dominantReason === "missing exact evidence locator" ||
+		dominantReason === "exact evidence requires user-authored or reference span"
+	) {
 		return {
 			needed: true,
 			correction: "hybrid-evidence-relaxed",
@@ -1039,7 +1089,7 @@ export function analyzeCorrectionNeeded(params: {
 	if (dominantReason === "missing timestamp for requested time range") {
 		return {
 			needed: true,
-			correction: "time-range-widened-2x",
+			correction: "time-range-widened-3x",
 			reason: dominantReason,
 		}
 	}
@@ -1074,7 +1124,14 @@ export function identifyRelaxableConstraint(
 	) {
 		return { constraint: "timeRange", action: "removed-time-range" }
 	}
-	if (dominantReason === "missing exact evidence locator") {
+	if (
+		dominantReason === "missing exact evidence locator" ||
+		dominantReason === "exact evidence requires user-authored or reference span"
+	) {
+		// RET-09 followup: the provenance-based rejection reason is the same
+		// binding constraint as the locator-missing one — needExactEvidence.
+		// Opt-in relaxation must arm for both, or results that carry locators
+		// but no exact-capable provenance become un-relaxable.
 		return {
 			constraint: "needExactEvidence",
 			action: "disabled-exact-evidence",
@@ -1308,6 +1365,22 @@ function queryNeedsDistinctSessionCoverage(
 	)
 }
 
+/**
+ * B10: narrow multi-session breadth detection for the per-session cap.
+ * `queryNeedsDistinctSessionCoverage` fires on nearly every first-person
+ * question (time words like "before", "last", "recent" are everywhere), and
+ * the broad first-person detector fires on the rest — so the old
+ * `conversationEvidenceQuery || distinctSessionCoverageQuery` condition
+ * forced a per-session cap of 1 onto single-session questions, which need
+ * the user turn AND the assistant turn from the same session. Only explicit
+ * multi-session phrasing deserves the breadth cap of 1.
+ */
+function queryNeedsMultiSessionBreadth(query: string): boolean {
+	return /\b(how many|how often|how frequently|across (?:\w+ )?sessions|all the times|every time|each time|each session|multiple sessions|which sessions|over time)\b/i.test(
+		query,
+	)
+}
+
 function queryPrefersPreferenceEvidence(query: string): boolean {
 	return /\b(prefer|preference|like|dislike|favorite|want|need|advice|tips?|suggest(?:ion)?s?|recommend(?:ation)?s?)\b/i.test(
 		query,
@@ -1400,6 +1473,17 @@ export function applyLaneAwareResultControls(params: {
 	classification: MemorySearchClassification
 	planPaths?: RetrievalPath[]
 	topK?: number
+	/**
+	 * RET-08: number of leading results that were scored by the cross-encoder
+	 * (the reranked partition). When set (0 < count < length), the score sort
+	 * is applied within the CE head and the untouched tail separately, so
+	 * unreranked overflow with a high retrieval score cannot displace
+	 * CE-ranked results. Unset → global sort (pre-rerank and non-reranked
+	 * callers). Its presence also marks the post-rerank invocation, where
+	 * per-session diversification is skipped (B10: the cap must never
+	 * override the cross-encoder's ordering).
+	 */
+	rerankPartitionCount?: number
 }): { results: MemorySearchResult[]; summary: LaneControlSummary } {
 	const planPaths = params.planPaths ?? []
 	const topK = params.topK ?? 10
@@ -1505,7 +1589,25 @@ export function applyLaneAwareResultControls(params: {
 			: { ...result, score: Number((result.score * multiplier).toFixed(6)) }
 	})
 
-	rescored.sort((a, b) => b.score - a.score)
+	// RET-08: sort segment-stable when a rerank partition boundary is
+	// supplied — retrieval scores and cross-encoder scores are not
+	// calibrated against each other, so a global sort would let unreranked
+	// overflow with a high retrieval score displace CE-ranked results. The
+	// head (CE-scored) and tail (untouched partitions) each sort by score
+	// within their segment; caps and session diversification then walk the
+	// composed order.
+	const rerankPartitionCount = params.rerankPartitionCount
+	const byScoreDesc = (a: MemorySearchResult, b: MemorySearchResult) =>
+		b.score - a.score
+	const sorted =
+		rerankPartitionCount !== undefined &&
+		rerankPartitionCount > 0 &&
+		rerankPartitionCount < rescored.length
+			? [
+					...rescored.slice(0, rerankPartitionCount).toSorted(byScoreDesc),
+					...rescored.slice(rerankPartitionCount).toSorted(byScoreDesc),
+				]
+			: rescored.toSorted(byScoreDesc)
 	const caps = defaultCaps({
 		conversationEvidenceQuery,
 		classification: params.classification,
@@ -1516,7 +1618,7 @@ export function applyLaneAwareResultControls(params: {
 	const overflow: MemorySearchResult[] = []
 	const rest: MemorySearchResult[] = []
 	const counts: Partial<Record<SearchResultLane, number>> = {}
-	for (const result of rescored) {
+	for (const result of sorted) {
 		const lane = inferSearchResultLane(result)
 		const cap = caps[lane]
 		if (top.length < topK) {
@@ -1532,12 +1634,26 @@ export function applyLaneAwareResultControls(params: {
 		}
 		rest.push(result)
 	}
-	const diversified = diversifyTopSessions({
-		results: [...top, ...rest, ...overflow],
-		topK,
-		maxPerSession:
-			conversationEvidenceQuery || distinctSessionCoverageQuery ? 1 : 2,
-	})
+	// B10: the per-session cap of 1 applies ONLY to explicit multi-session
+	// breadth questions ("how many", "across sessions", "all the times") —
+	// never to the broad first-person/time-word detectors, which fire on
+	// nearly every question and used to cut the assistant turn of the best
+	// session out of single-session answers. Everything else allows 3 per
+	// session so a single-session answer can carry the user turn, the
+	// assistant turn, and one more piece of the same conversation. And it is
+	// never re-applied after the reranker (rerankPartitionCount set): the
+	// cross-encoder already ranked globally, so a per-session cap there would
+	// override its ordering and push CE-ranked turns to the tail.
+	const multiSessionBreadthQuery = queryNeedsMultiSessionBreadth(params.query)
+	const composed = [...top, ...rest, ...overflow]
+	const diversified =
+		rerankPartitionCount !== undefined
+			? { results: composed, capped: 0 }
+			: diversifyTopSessions({
+					results: composed,
+					topK,
+					maxPerSession: multiSessionBreadthQuery ? 1 : 3,
+				})
 	summary.sessionCapped = diversified.capped
 	summary.applied =
 		summary.boosted > 0 ||
@@ -1633,6 +1749,8 @@ export async function executeMongoSearchPlan(params: {
 			queryRewritten?: boolean
 			/** WS-11: present when admission control denied this pass. */
 			throttled?: { retryAfterMs: number }
+			/** RET-13: per-lane outcome ledger recorded by this pass. */
+			laneOutcomes?: SearchLaneOutcome[]
 		}
 	}>
 	trustContext?: {
@@ -1655,6 +1773,7 @@ export async function executeMongoSearchPlan(params: {
 				| "reranked"
 				| "plan"
 				| "throttled"
+				| "laneOutcomes"
 			>
 		}
 	> = []
@@ -1667,7 +1786,6 @@ export async function executeMongoSearchPlan(params: {
 		const passPaths = selectPassPaths({
 			availablePaths: params.availablePaths,
 			sourcePreference: normalized.sourcePreference,
-			pass: passPlan.pass,
 			...(timeRange ? { timeRange } : {}),
 			...(passPlan.preferredPaths
 				? { preferredPaths: passPlan.preferredPaths }
@@ -1711,6 +1829,11 @@ export async function executeMongoSearchPlan(params: {
 				},
 				...(executed.metadata.throttled
 					? { throttled: executed.metadata.throttled }
+					: {}),
+				// RET-13: the pass's per-lane outcome ledger rides into the
+				// executor merge (concatenated across passes below).
+				...(executed.metadata.laneOutcomes?.length
+					? { laneOutcomes: executed.metadata.laneOutcomes }
 					: {}),
 			},
 		})
@@ -1788,20 +1911,25 @@ export async function executeMongoSearchPlan(params: {
 		passCount: passes.length,
 		maxPasses: normalized.maxPasses,
 	})
-	if (correction.needed && correction.correction) {
+	// RET-01: when relaxation is armed (opted in, spare pass budget, dominant
+	// relaxable constraint), the corrective widening pass cannot serve — its
+	// outputs are re-validated against the ORIGINAL caller constraints below,
+	// so an out-of-range fetch is rejected again. Running it would only
+	// consume the very pass the relaxation fallback needs (observed live:
+	// corrective starved relaxation at maxPasses 2). Skip it and let the
+	// relaxation fallback take the budget. Without opt-in the corrective
+	// machinery is unchanged.
+	const relaxationArmed =
+		normalized.allowConstraintRelaxation === true &&
+		passes.length < normalized.maxPasses &&
+		identifyRelaxableConstraint(allRejected) !== null
+	if (correction.needed && correction.correction && !relaxationArmed) {
 		let correctiveTimeRange = timeRange
-		let correctiveRequest = normalized
-		if (correction.correction === "time-range-widened-2x" && timeRange) {
+		if (correction.correction === "time-range-widened-3x" && timeRange) {
 			const duration = timeRange.end.getTime() - timeRange.start.getTime()
 			correctiveTimeRange = {
 				start: new Date(timeRange.start.getTime() - duration),
 				end: new Date(timeRange.end.getTime() + duration),
-			}
-		}
-		if (correction.correction === "hybrid-evidence-relaxed") {
-			correctiveRequest = {
-				...normalized,
-				needExactEvidence: false,
 			}
 		}
 		const correctivePaths =
@@ -1814,10 +1942,18 @@ export async function executeMongoSearchPlan(params: {
 			availablePaths: correctivePaths,
 			...(correctiveTimeRange ? { timeRange: correctiveTimeRange } : {}),
 		})
+		// RET-01: a corrective pass broadens candidate RETRIEVAL only — a
+		// wider fetch window can rescue in-range results that lane windows
+		// crowded out, and hybrid+all-paths can surface more evidence-bearing
+		// results. Outputs are always re-validated against the ORIGINAL
+		// caller constraints (normalized request, original timeRange), so a
+		// corrective pass can never admit out-of-contract results into the
+		// final response. Removing a constraint outright is the opt-in
+		// relaxation fallback below, not a correction.
 		const corrFiltered = applyHardConstraintRejections({
 			results: corrExec.results,
-			request: correctiveRequest,
-			...(correctiveTimeRange ? { timeRange: correctiveTimeRange } : {}),
+			request: normalized,
+			...(timeRange ? { timeRange } : {}),
 		})
 		allRejected.push(...corrFiltered.rejected)
 		for (const result of corrFiltered.accepted) {
@@ -1841,6 +1977,9 @@ export async function executeMongoSearchPlan(params: {
 				...(corrExec.metadata.throttled
 					? { throttled: corrExec.metadata.throttled }
 					: {}),
+				...(corrExec.metadata.laneOutcomes?.length
+					? { laneOutcomes: corrExec.metadata.laneOutcomes }
+					: {}),
 			},
 		})
 		acceptedResults = Array.from(acceptedById.values())
@@ -1853,13 +1992,26 @@ export async function executeMongoSearchPlan(params: {
 		trustSummary = summarizeTrust(trustedResults)
 	}
 
-	// --- Constraint relaxation: if still empty after all passes, relax the dominant constraint ---
+	// --- Constraint relaxation fallback (RET-01: opt-in only) ---
+	// Explicit caller constraints are hard by default: an empty constrained
+	// answer stays empty. The executor re-runs a pass with the dominant
+	// constraint removed ONLY when the caller opted in via
+	// allowConstraintRelaxation AND pass budget remains — every pass
+	// (original, follow-up, corrective, relaxation) counts against maxPasses.
 	let constraintRelaxations:
 		| Array<{ constraint: string; action: string }>
 		| undefined
+	let withheldRelaxation: {
+		constraint: string
+		action: string
+		reason: string
+	} | null = null
 	if (acceptedResults.length === 0 && allRejected.length > 0) {
 		const relaxation = identifyRelaxableConstraint(allRejected)
-		if (relaxation) {
+		const relaxationAllowed =
+			normalized.allowConstraintRelaxation === true &&
+			passes.length < normalized.maxPasses
+		if (relaxation && relaxationAllowed) {
 			let relaxedRequest = normalized
 			let relaxedTimeRange = timeRange
 			if (relaxation.action === "removed-time-range") {
@@ -1903,6 +2055,9 @@ export async function executeMongoSearchPlan(params: {
 					...(relaxExec.metadata.throttled
 						? { throttled: relaxExec.metadata.throttled }
 						: {}),
+					...(relaxExec.metadata.laneOutcomes?.length
+						? { laneOutcomes: relaxExec.metadata.laneOutcomes }
+						: {}),
 				},
 			})
 			constraintRelaxations = [relaxation]
@@ -1914,7 +2069,42 @@ export async function executeMongoSearchPlan(params: {
 				sessionKey: normalized.conversationScope?.sessionKey,
 			})
 			trustSummary = summarizeTrust(trustedResults)
+		} else if (relaxation) {
+			// RET-01: a relaxable constraint was identified but the relaxation
+			// pass did not run (not opted in, or no pass budget left). Record
+			// it so the response can disclose the withheld relaxation instead
+			// of returning a bare empty result.
+			withheldRelaxation = {
+				...relaxation,
+				reason:
+					normalized.allowConstraintRelaxation === true
+						? "pass budget exhausted"
+						: "constraint relaxation not enabled",
+			}
 		}
+	}
+
+	// RET-01: honest empty when a relaxable constraint was identified but
+	// the relaxation pass was withheld. This branch fires before the generic
+	// exact-evidence empty so the reason names the dominant rejecting
+	// constraint and explains exactly why no relaxed results were served.
+	if (withheldRelaxation && acceptedResults.length === 0) {
+		const constraintDescription =
+			withheldRelaxation.constraint === "timeRange"
+				? "the requested time range"
+				: "the exact-evidence requirement"
+		const optInNote =
+			withheldRelaxation.reason === "pass budget exhausted"
+				? "the pass budget (maxPasses) was already exhausted"
+				: "constraint relaxation is not enabled (opt in via searchConfig.allowConstraintRelaxation: true)"
+		return buildNoDirectEvidenceResponse({
+			request: normalized,
+			classification,
+			passes,
+			resultsRejected: allRejected,
+			reason: `All candidate results were rejected by ${constraintDescription}; the constraint was kept because ${optInNote}.`,
+			trustSummary,
+		})
 	}
 
 	if (normalized.needExactEvidence && acceptedResults.length === 0) {
@@ -1957,14 +2147,23 @@ export async function executeMongoSearchPlan(params: {
 		})
 	}
 
+	// RET-04: the served response is capped to the caller's maxResults. The
+	// full candidate pool stays internal for MMR and the low-trust
+	// abstention check (trust rerank places high-trust results first, so
+	// abstention on the pool implies abstention on the slice); the slice is
+	// what the caller receives, so trustSummary and evidenceCoverage
+	// describe the served results, not the internal pool.
+	const servedResults = trustRankedResults.slice(0, normalized.maxResults)
+	trustSummary = summarizeTrust(servedResults)
+
 	return {
-		results: trustRankedResults,
+		results: servedResults,
 		metadata: mergeMetadata({
 			request: normalized,
 			classification,
 			passes,
 			resultsRejected: allRejected,
-			results: trustRankedResults,
+			results: servedResults,
 			constraintRelaxations,
 			mmrApplied: mmr.mmrApplied,
 			mmrLambda: mmr.mmrLambda,

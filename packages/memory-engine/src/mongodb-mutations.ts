@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto"
-import type { Db, Document } from "mongodb"
+import type { ClientSession, Db, Document } from "mongodb"
 import { createSubsystemLogger } from "@memongo/lib"
 import type { MemoryActorRole } from "./types.js"
 import { mutationsCollection } from "./mongodb-schema.js"
@@ -50,6 +50,7 @@ export type MutationRecord = {
 export async function recordMutation(params: {
 	db: Db
 	prefix: string
+	session?: ClientSession
 	mutation: Omit<MutationRecord, "mutationId" | "timestamp" | "severity"> & {
 		severity?: MutationSeverity
 	}
@@ -74,7 +75,10 @@ export async function recordMutation(params: {
 		...(mutation.meta ? { meta: mutation.meta } : {}),
 	}
 	try {
-		await mutationsCollection(db, prefix).insertOne(doc)
+		await mutationsCollection(db, prefix).insertOne(
+			doc,
+			params.session ? { session: params.session } : undefined,
+		)
 		return { mutationId }
 	} catch (err) {
 		log.warn("recordMutation failed", { mutationId, error: err })

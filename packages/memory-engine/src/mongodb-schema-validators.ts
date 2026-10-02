@@ -4,19 +4,19 @@ import { createSubsystemLogger } from "@memongo/lib"
 
 const log = createSubsystemLogger("memory:mongodb:schema")
 
-import { serverVersionAtLeast } from "./mongodb-capability-registry.js"
 import { isEvidenceMirrorEnabled } from "./mongodb-evidence-mirror.js"
-import { ensureTimeseriesOrPlain } from "./mongodb-schema-collections.js"
-import { detectServerVersionArray } from "./mongodb-schema-search-indexes.js"
+import { ensureOrdinaryDiagnosticCollection } from "./mongodb-schema-collections.js"
 
 // ---------------------------------------------------------------------------
 // Ensure collections exist (idempotent)
 // ---------------------------------------------------------------------------
 
 // JSON Schema validators for MongoDB-native collections.
-// Uses $jsonSchema with validationAction: "errorAndLog" (MongoDB 8.1+;
-// "error" below) so invalid docs are rejected at write time and logged
-// server-side, keeping persisted memory collections structurally consistent.
+// Uses $jsonSchema with validationAction: "error" so invalid docs are
+// rejected at write time, keeping persisted memory collections structurally
+// consistent. Rejected document bodies are deliberately kept out of the
+// mongod log: "errorAndLog" (MongoDB 8.1+) logs the full rejected document
+// server-side, which would write agentId/body into ops-visible logs.
 
 import {
 	KB_SCHEMA,
@@ -132,16 +132,6 @@ export async function ensureCollections(db: Db, prefix: string): Promise<void> {
 		"memory_cost_ledger",
 		...(isEvidenceMirrorEnabled() ? ["memory_evidence"] : []),
 	].map((n) => `${prefix}${n}`)
-	// errorAndLog is GA since MongoDB 8.1 (P3.5): rejections are additionally
-	// recorded in the mongod log with document and reason. Older servers and
-	// deployments where buildInfo is unavailable keep plain "error".
-	const validationAction = serverVersionAtLeast(
-		await detectServerVersionArray(db),
-		8,
-		1,
-	)
-		? "errorAndLog"
-		: "error"
 	for (const name of needed) {
 		if (!existing.has(name)) {
 			// Strip prefix to look up validator
@@ -151,7 +141,7 @@ export async function ensureCollections(db: Db, prefix: string): Promise<void> {
 				await db.createCollection(name, {
 					validator,
 					validationLevel: "moderate",
-					validationAction,
+					validationAction: "error",
 				})
 			} else {
 				await db.createCollection(name)
@@ -159,29 +149,13 @@ export async function ensureCollections(db: Db, prefix: string): Promise<void> {
 			log.info(`created collection ${name}`)
 		}
 	}
-	// Time series collections — created separately (no $jsonSchema support).
-	// Falls back to a plain collection with a TTL index when time series are
-	// unsupported (pre-5.0 / DocumentDB / standalone), so writes don't throw.
+	// Fresh diagnostic sinks are ordinary collections so their writes can join
+	// admission-fence transactions. Existing time-series sinks are deliberately
+	// left untouched pending the separate retained-data conversion.
 	const telemetryName = `${prefix}memory_telemetry`
-	if (!existing.has(telemetryName)) {
-		await ensureTimeseriesOrPlain(db, telemetryName, {
-			timeField: "ts",
-			metaField: "meta",
-			granularity: "seconds",
-			expireAfterSeconds: 604800, // 7 days
-		})
-		log.info(`created telemetry collection ${telemetryName}`)
-	}
+	await ensureOrdinaryDiagnosticCollection(db, telemetryName, 604800)
 	const accessEventsName = `${prefix}access_events`
-	if (!existing.has(accessEventsName)) {
-		await ensureTimeseriesOrPlain(db, accessEventsName, {
-			timeField: "ts",
-			metaField: "meta",
-			granularity: "minutes",
-			expireAfterSeconds: 30 * 24 * 3600,
-		})
-		log.info(`created access events collection ${accessEventsName}`)
-	}
+	await ensureOrdinaryDiagnosticCollection(db, accessEventsName, 30 * 24 * 3600)
 
 	await ensureSchemaValidation(db, prefix)
 }
@@ -189,20 +163,13 @@ export async function ensureCollections(db: Db, prefix: string): Promise<void> {
 /**
  * Apply JSON Schema validation to existing collections that were created
  * before validation was added. Idempotent — safe to call on every startup.
- * Uses validationAction: "errorAndLog" on MongoDB 8.1+ ("error" below) so
- * invalid writes fail fast AND leave a server-side record (P3.5).
+ * Uses validationAction: "error" so invalid writes fail fast without
+ * copying rejected document bodies into the mongod log.
  */
 export async function ensureSchemaValidation(
 	db: Db,
 	prefix: string,
 ): Promise<void> {
-	const validationAction = serverVersionAtLeast(
-		await detectServerVersionArray(db),
-		8,
-		1,
-	)
-		? "errorAndLog"
-		: "error"
 	const failures: string[] = []
 	for (const [baseName, validator] of Object.entries(VALIDATED_COLLECTIONS)) {
 		if (baseName === "memory_evidence" && !isEvidenceMirrorEnabled()) {
@@ -214,7 +181,7 @@ export async function ensureSchemaValidation(
 				collMod: collName,
 				validator,
 				validationLevel: "moderate",
-				validationAction,
+				validationAction: "error",
 			})
 			log.info(`applied schema validation to ${collName}`)
 		} catch (err) {

@@ -1,6 +1,6 @@
 {
 	"name": "@memongo/api",
-	"version": "0.1.0",
+	"version": "2.2.0",
 	"private": true,
 	"type": "module",
 	"description": "HTTP API server for the Memongo memory platform",

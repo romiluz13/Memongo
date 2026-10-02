@@ -193,7 +193,11 @@ describe("mongodb-procedures", () => {
 			eventReceiptIds: ["evt-replayed"],
 		})
 
-		expect(result).toEqual({ upserted: false, id: "event-receipt" })
+		expect(result).toEqual({
+			upserted: false,
+			id: "event-receipt",
+			changed: false,
+		})
 		expect(col.updateOne).not.toHaveBeenCalled()
 		expect(revisions.insertOne).not.toHaveBeenCalled()
 		expect(queryCache.deleteMany).not.toHaveBeenCalled()
@@ -289,6 +293,9 @@ describe("mongodb-procedures", () => {
 				source: "structured",
 				sessionId: "q1::session_9",
 				sourceEventIds: ["evt-proc-1"],
+				// RET-09: procedures are distilled step sequences —
+				// agent-derived by construction, labeled as such.
+				derivation: "derived",
 			}),
 		])
 	})

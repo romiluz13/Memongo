@@ -51,7 +51,7 @@ import type {
 	MemongoTraceChainResponse,
 	MemongoSelfEditInput,
 	MemongoSelfEditResponse,
-	MemongoQuarantineDisposition,
+	MemongoLifecycleMutationResult,
 	MemongoWriteEventsResponse,
 } from "./types.js"
 import { MEMONGO_CLIENT_VERSION } from "./version.js"
@@ -312,7 +312,24 @@ async function apiPost<T>(
  * every modern browser expose it); Math.random fallback only for exotic
  * runtimes where crypto is absent.
  */
-function generateIdempotencyKey(): string {
+function resolveIdempotencyKey(customId?: string, header = false): string {
+	if (customId != null) {
+		if (typeof customId !== "string" || !customId.trim()) {
+			throw new TypeError("customId must be a non-empty string")
+		}
+		if (
+			header &&
+			(customId.includes("\u0000") ||
+				customId.includes("\r") ||
+				customId.includes("\n") ||
+				/[\u0100-\uFFFF]/.test(customId))
+		) {
+			throw new TypeError(
+				"customId must be a valid Idempotency-Key header value",
+			)
+		}
+		return customId
+	}
 	if (globalThis.crypto?.randomUUID) {
 		return globalThis.crypto.randomUUID()
 	}
@@ -411,6 +428,7 @@ export type MemongoSearchDetailedMetadata = {
 		maxPasses: number
 		sourcePreference: string[]
 		needExactEvidence: boolean
+		allowConstraintRelaxation: boolean
 		numCandidates: number
 		fusionMethod: "scoreFusion" | "rankFusion" | "js-merge"
 		hybridMode: "hybrid" | "vector-only"
@@ -719,7 +737,7 @@ export class MemongoClient {
 		input: MemongoAddInput,
 	): Promise<{ ok: true; eventId: string; chunkCreated: boolean }> {
 		// One key per logical write, stable across this call's retries (P0.1).
-		const idempotencyKey = input.customId ?? generateIdempotencyKey()
+		const idempotencyKey = resolveIdempotencyKey(input.customId, true)
 		return apiPost(
 			this._opts,
 			"/v1/add",
@@ -855,34 +873,44 @@ export class MemongoClient {
 				},
 			},
 			() =>
-				apiPost(this._opts, "/v1/recall-conversation", {
-					query: input.query,
-					sessionId: input.sessionId,
-					roles: input.roles,
-					startTime: input.startTime,
-					endTime: input.endTime,
-					asOf: input.asOf,
-					timezone: input.timezone,
-					includeToolMessages: input.includeToolMessages,
-					limit: input.limit,
-					agentId: input.agentId,
-					scope: input.scope,
-					scopeRef: input.scopeRef,
-				}),
+				apiPost(
+					this._opts,
+					"/v1/recall-conversation",
+					{
+						query: input.query,
+						sessionId: input.sessionId,
+						roles: input.roles,
+						startTime: input.startTime,
+						endTime: input.endTime,
+						asOf: input.asOf,
+						timezone: input.timezone,
+						includeToolMessages: input.includeToolMessages,
+						limit: input.limit,
+						agentId: input.agentId,
+						scope: input.scope,
+						scopeRef: input.scopeRef,
+					},
+					undefined,
+					true,
+				),
 		)
 	}
 
 	async getLifecycleItem(
 		input: MemongoLifecycleGetInput,
 	): Promise<MemongoLifecycleItem> {
-		return apiPost(this._opts, "/v1/lifecycle/get", {
-			handle: input.handle,
-		})
+		return apiPost(
+			this._opts,
+			"/v1/lifecycle/get",
+			{ handle: input.handle },
+			undefined,
+			true,
+		)
 	}
 
 	async updateLifecycleItem(
 		input: MemongoLifecycleUpdateInput,
-	): Promise<MemongoLifecycleItem & MemongoQuarantineDisposition> {
+	): Promise<MemongoLifecycleMutationResult> {
 		return apiPost(this._opts, "/v1/lifecycle/update", {
 			handle: input.handle,
 			patch: input.patch,
@@ -901,10 +929,13 @@ export class MemongoClient {
 	async getLifecycleHistory(
 		input: MemongoLifecycleHistoryInput,
 	): Promise<MemongoLifecycleHistoryEntry[]> {
-		return apiPost(this._opts, "/v1/lifecycle/history", {
-			handle: input.handle,
-			limit: input.limit,
-		})
+		return apiPost(
+			this._opts,
+			"/v1/lifecycle/history",
+			{ handle: input.handle, limit: input.limit },
+			undefined,
+			true,
+		)
 	}
 
 	async reportProcedureOutcome(
@@ -920,7 +951,7 @@ export class MemongoClient {
 
 	async applyMemoryFeedback(
 		input: MemongoMemoryFeedbackInput,
-	): Promise<MemongoLifecycleItem & MemongoQuarantineDisposition> {
+	): Promise<MemongoLifecycleMutationResult> {
 		return apiPost(this._opts, "/v1/memory/feedback", {
 			handle: input.handle,
 			signal: input.signal,
@@ -968,7 +999,7 @@ export class MemongoClient {
 		expiresAt?: string
 	}): Promise<{ ok: true; eventId: string; chunkCreated: boolean }> {
 		// One key per logical write, stable across this call's retries (P0.1).
-		const idempotencyKey = input.customId ?? generateIdempotencyKey()
+		const idempotencyKey = resolveIdempotencyKey(input.customId, true)
 		return apiPost(
 			this._opts,
 			"/v1/write-event",
@@ -1029,7 +1060,7 @@ export class MemongoClient {
 					metadata: event.metadata,
 					scope: event.scope,
 					scopeRef: event.scopeRef,
-					customId: event.customId ?? generateIdempotencyKey(),
+					customId: resolveIdempotencyKey(event.customId),
 					expiresAt: event.expiresAt,
 				})),
 				agentId: input.agentId,
@@ -1089,27 +1120,39 @@ export class MemongoClient {
 			activityWindowMs?: number
 		} = {},
 	): Promise<MemongoProfileResponse> {
-		return apiPost(this._opts, "/v1/profile", {
-			agentId: input.agentId,
-			containerTag: input.containerTag,
-			scope: input.scope,
-			scopeRef: input.scopeRef ?? input.containerTag,
-			maxEntities: input.maxEntities,
-			maxEpisodes: input.maxEpisodes,
-			maxPerType: input.maxPerType,
-			activityWindowMs: input.activityWindowMs,
-		})
+		return apiPost(
+			this._opts,
+			"/v1/profile",
+			{
+				agentId: input.agentId,
+				containerTag: input.containerTag,
+				scope: input.scope,
+				scopeRef: input.scopeRef ?? input.containerTag,
+				maxEntities: input.maxEntities,
+				maxEpisodes: input.maxEpisodes,
+				maxPerType: input.maxPerType,
+				activityWindowMs: input.activityWindowMs,
+			},
+			undefined,
+			true,
+		)
 	}
 
 	async hydrateActiveSlate(
 		input: MemongoActiveSlateInput = {},
 	): Promise<MemongoActiveSlateResponse> {
-		return apiPost(this._opts, "/v1/hydrate-active-slate", {
-			agentId: input.agentId,
-			scope: input.scope,
-			scopeRef: input.scopeRef,
-			maxItems: input.maxItems,
-		})
+		return apiPost(
+			this._opts,
+			"/v1/hydrate-active-slate",
+			{
+				agentId: input.agentId,
+				scope: input.scope,
+				scopeRef: input.scopeRef,
+				maxItems: input.maxItems,
+			},
+			undefined,
+			true,
+		)
 	}
 
 	async state(
@@ -1191,15 +1234,22 @@ export class MemongoClient {
 
 	/**
 	 * C-003: irreversible tenant erasure. The literal `confirm: "erase"` is
-	 * required — the API rejects anything else with a 400.
+	 * required — the API rejects anything else with a 400. `recovery:
+	 * "takeover"` deliberately replaces the observed owner of an erasing
+	 * gate (possibly still live or paused) and never begins a fresh erase;
+	 * it conflicts on an open or absent gate or a raced finalize. Without
+	 * it, an ordinary erase starts on an open or absent gate and conflicts
+	 * with a typed 409 while an erasure is active; it never takes over.
 	 */
 	async eraseAgent(input: {
 		confirm: "erase"
 		agentId?: string
+		recovery?: "takeover"
 	}): Promise<MemongoEraseAgentResponse> {
 		return apiPost(this._opts, "/v1/admin/erase", {
 			confirm: input.confirm,
 			agentId: input.agentId,
+			...(input.recovery !== undefined ? { recovery: input.recovery } : {}),
 		})
 	}
 

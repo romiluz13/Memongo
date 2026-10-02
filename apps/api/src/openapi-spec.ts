@@ -65,6 +65,7 @@ const openApiSpecDocument = {
 const ERROR_STATUS_DESCRIPTIONS: Record<number, string> = {
 	400: "Validation error",
 	404: "Not found",
+	409: "Erasure gate conflict",
 	422: "Request rejected",
 	500: "Internal server error",
 }

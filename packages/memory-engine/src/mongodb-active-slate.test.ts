@@ -343,11 +343,110 @@ describe("mongodb-active-slate", () => {
 
 		await hydrateActiveSlate(defaultParams())
 
+		// RET-10: the anchors guard is now the full event lifecycle clause —
+		// the B1 TTL arm plus the canonical bitemporal validAt/invalidAt
+		// arms — merged into one top-level $and.
 		expect(vi.mocked(eventsFind.find).mock.calls[0]?.[0]).toMatchObject({
-			$or: [
-				{ expiresAt: { $exists: false } },
-				{ expiresAt: { $gt: expect.any(Date) } },
-			],
+			$and: expect.arrayContaining([
+				{
+					$or: [
+						{ expiresAt: { $exists: false } },
+						{ expiresAt: { $gt: expect.any(Date) } },
+					],
+				},
+			]),
+		})
+	})
+
+	it("applies search-lane-parity lifecycle guards to every slate query (RET-10)", async () => {
+		vi.mocked(structuredMemCollection)
+			.mockReturnValueOnce(createMockFindCollection([]))
+			.mockReturnValueOnce(createMockFindCollection([]))
+		const proceduresFind = createMockFindCollection([])
+		vi.mocked(proceduresCollection).mockReturnValue(proceduresFind)
+		const eventsFind = createMockFindCollection([])
+		vi.mocked(eventsCollection).mockReturnValue(eventsFind)
+
+		await hydrateActiveSlate(defaultParams())
+
+		// Structured paths carry the current-validity arms (validFrom AND
+		// validTo — the future-validFrom residual is closed) on top of the
+		// B1 TTL arm, matching the search lanes' currentOnly translation.
+		const structuredFilters = vi
+			.mocked(structuredMemCollection)
+			.mock.results.map(
+				(result) =>
+					vi.mocked(result.value.find).mock.calls[0]?.[0] as
+						| Document
+						| undefined,
+			)
+		expect(structuredFilters).toHaveLength(2)
+		for (const filter of structuredFilters) {
+			expect(filter).toMatchObject({
+				$and: expect.arrayContaining([
+					{
+						$or: [
+							{ validFrom: { $exists: false } },
+							{ validFrom: { $lte: expect.any(Date) } },
+						],
+					},
+					{
+						$or: [
+							{ validTo: { $exists: false } },
+							{ validTo: { $gt: expect.any(Date) } },
+						],
+					},
+					{
+						$or: [
+							{ expiresAt: { $exists: false } },
+							{ expiresAt: { $gt: expect.any(Date) } },
+						],
+					},
+				]),
+			})
+		}
+
+		// Procedures carry the current-validity arms (validFrom/validTo);
+		// procedures have no TTL axis, so no expiresAt arm.
+		expect(vi.mocked(proceduresFind.find).mock.calls[0]?.[0]).toMatchObject({
+			$and: expect.arrayContaining([
+				{
+					$or: [
+						{ validFrom: { $exists: false } },
+						{ validFrom: { $lte: expect.any(Date) } },
+					],
+				},
+				{
+					$or: [
+						{ validTo: { $exists: false } },
+						{ validTo: { $gt: expect.any(Date) } },
+					],
+				},
+			]),
+		})
+		expect(
+			vi.mocked(proceduresFind.find).mock.calls[0]?.[0],
+		).not.toHaveProperty("$or")
+
+		// Anchors carry the full event lifecycle: bitemporal validAt/invalidAt
+		// (including the explicit-null branch for upsert-written open
+		// windows) plus TTL expiresAt, matching the events-lane guards.
+		expect(vi.mocked(eventsFind.find).mock.calls[0]?.[0]).toMatchObject({
+			$and: expect.arrayContaining([
+				{
+					$or: [
+						{ validAt: { $exists: false } },
+						{ validAt: { $lte: expect.any(Date) } },
+					],
+				},
+				{
+					$or: [
+						{ invalidAt: { $exists: false } },
+						{ invalidAt: null },
+						{ invalidAt: { $gt: expect.any(Date) } },
+					],
+				},
+			]),
 		})
 	})
 })

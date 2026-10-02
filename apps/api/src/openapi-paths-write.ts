@@ -73,7 +73,13 @@ export const writePaths = {
 					},
 				},
 			},
-			responses: { "200": { description: "Event id" } },
+			responses: {
+				"200": { description: "Event id" },
+				"429": {
+					description:
+						"Per-agent write queue full; nothing written; retry later",
+				},
+			},
 		},
 	},
 	"/v1/write-event": {
@@ -128,7 +134,13 @@ export const writePaths = {
 					},
 				},
 			},
-			responses: { "200": { description: "Event id" } },
+			responses: {
+				"200": { description: "Event id" },
+				"429": {
+					description:
+						"Per-agent write queue full; nothing written; retry later",
+				},
+			},
 		},
 	},
 	"/v1/write-events": {
@@ -136,7 +148,7 @@ export const writePaths = {
 			summary:
 				"Write a batch of conversation events (P3.9) with per-item receipts",
 			description:
-				"Bulk variant of /v1/write-event: one request writes up to 500 events through an amortized insertMany/bulkWrite path. Per-item idempotency keys (customId) follow the same IETF/Stripe semantics as the single write — a replayed item returns its original receipt, a key reused with a different payload yields a per-item IDEMPOTENCY_CONFLICT entry, and a failed item never fails the batch.",
+				"Bulk variant of /v1/write-event: one request writes up to 500 events through an amortized insertMany/bulkWrite path. Per-item idempotency keys (customId) follow the same IETF/Stripe semantics as the single write — a replayed item returns its original receipt, a key reused with a different payload yields a per-item IDEMPOTENCY_CONFLICT entry, and a per-item validation or idempotency failure returns its receipt instead of failing the batch. Operation-wide failures take the other path: an active erasure gate rejects the whole write with 409 ERASURE_GATE_CONFLICT, a saturated per-agent write queue rejects the whole request with 429 WRITE_QUEUE_FULL, and unexpected infrastructure errors reject it with a 500 error envelope — none returns receipts.",
 			requestBody: {
 				required: true,
 				content: {
@@ -202,6 +214,10 @@ export const writePaths = {
 				},
 			},
 			responses: {
+				"429": {
+					description:
+						"Per-agent write queue full; whole request rejected with nothing written and no receipts, including per-item validation receipts; retry later",
+				},
 				"200": {
 					description:
 						"Per-item receipts mirroring the single-write receipt shape",
@@ -255,6 +271,21 @@ export const writePaths = {
 									description:
 										"Structured memory entry to upsert (type, key, value, plus optional fields such as context, confidence, tags, salience, temporalScope).",
 									properties: {
+										validFrom: {
+											type: "string",
+											description:
+												"Valid-time start as a parseable ISO timestamp with Z or a numeric UTC offset. Colonless offsets are also accepted. Past timestamps are allowed.",
+										},
+										validTo: {
+											type: "string",
+											description:
+												"Valid-time end as a parseable ISO timestamp with Z or a numeric UTC offset. Colonless offsets are also accepted; this field does not set TTL expiry.",
+										},
+										lastConfirmedAt: {
+											type: "string",
+											description:
+												"Confirmation time as a parseable ISO timestamp with Z or a numeric UTC offset. Colonless offsets are also accepted.",
+										},
 										expiresAt: {
 											type: "string",
 											format: "date-time",
@@ -281,6 +312,10 @@ export const writePaths = {
 				},
 			},
 			responses: {
+				"409": {
+					description:
+						"STRUCTURED_MEMORY_REVISION_CONFLICT: concurrent structured revision conflict; fetch current state before retrying",
+				},
 				"200": { description: "Upsert result" },
 				"202": {
 					description:

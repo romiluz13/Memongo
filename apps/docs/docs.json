@@ -64,6 +64,10 @@
 							{
 								"group": "Configuration",
 								"pages": ["guides/memory-config", "guides/open-source"]
+							},
+							{
+								"group": "Operations",
+								"pages": ["guides/mongodb-shared-prefix-migration"]
 							}
 						]
 					}

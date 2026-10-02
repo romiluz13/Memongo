@@ -28,7 +28,7 @@ memongo/
 
 ## Build, Test, and Development
 
-- Runtime: Node 20+, Bun 1.2+ as package manager
+- Runtime: use Node.js matching root `package.json` `engines.node` and Bun matching `packageManager`.
 - Install: `bun install`
 - Build: `bun run build` (Turbo)
 - Dev: `bun run dev`

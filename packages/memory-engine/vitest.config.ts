@@ -1,4 +1,4 @@
-import { defineConfig } from "vitest/config"
+import { configDefaults, defineConfig } from "vitest/config"
 
 // A remote Atlas cluster is far slower than the local atlas-local container for
 // exactly the work the e2e hooks do. Measured against a live cluster: a single
@@ -22,6 +22,12 @@ const isRemoteCluster = testUri.startsWith("mongodb+srv://")
 
 export default defineConfig({
 	test: {
+		// Unit-only default selection: the e2e suites (live MongoDB) are
+		// excluded at the config layer so every caller — raw CLI, package
+		// script, IDE — gets the same boundary. config.exclude replaces the
+		// documented defaults, so they are re-stated via configDefaults.
+		// Deliberate live runs select the suites via vitest.e2e.config.ts.
+		exclude: [...configDefaults.exclude, "**/*.e2e.test.ts"],
 		// The e2e suites all share one MongoDB deployment, and their beforeAll
 		// hooks do real work against it — ensureCollections, ~90 standard
 		// indexes, up to 14 search indexes. Vitest's 10s default is a budget for

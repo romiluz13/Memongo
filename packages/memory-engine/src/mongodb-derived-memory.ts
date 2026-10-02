@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto"
-import type { Db, MongoClient } from "mongodb"
+import type { ClientSession, Db, MongoClient } from "mongodb"
 import {
 	type MemoryMongoDBEmbeddingMode,
 	type MemoryScope,
@@ -18,7 +18,12 @@ import {
 	structuredMemCollection,
 } from "./mongodb-schema.js"
 import { invalidateContradictedFacts } from "./mongodb-contradiction.js"
-import { buildUnexpiredClause } from "./mongodb-temporal.js"
+import {
+	buildCurrentValidityClause,
+	buildEventLifecycleClause,
+	buildUnexpiredClause,
+	mergeQueryClauses,
+} from "./mongodb-temporal.js"
 import { refineCandidatesValidTime } from "./mongodb-temporal-extraction.js"
 import {
 	type StructuredMemoryEntry,
@@ -399,9 +404,7 @@ async function findSupportingEventIds(params: {
 			body: {
 				$regex: new RegExp(escapeRegex(candidate.value.trim()), "i"),
 			},
-			// P4.4.1 (B1): an expired event must not count as supporting
-			// evidence — the TTL sweep lags ~60s behind the expiry instant.
-			...buildUnexpiredClause(),
+			...buildEventLifecycleClause(),
 		})
 		.sort({ timestamp: -1, _id: -1 })
 		.limit(3)
@@ -674,10 +677,353 @@ export function extractProcedureCandidatesFromEvent(
 	]
 }
 
+export type PreparedDerivedMemoryPromotion = {
+	structuredCandidates: StructuredMemoryEntry[]
+	procedureCandidates: ProcedureEntry[]
+	promotionGuards: Record<
+		string,
+		| { kind: "immediate" }
+		| { kind: "existing"; revision: number; value: string }
+		| {
+				kind: "evidence"
+				events: Array<{ eventId: string; body: string; timestamp: Date }>
+		  }
+	>
+}
+
+function structuredCandidateIdentity(candidate: StructuredMemoryEntry): string {
+	return `${candidate.type}\0${candidate.key}`
+}
+
+/**
+ * Resolve every provider/read-dependent promotion decision before entering a
+ * retryable worker transaction. Persistence revalidates event receipts and
+ * current document revisions inside the transaction.
+ */
+export async function prepareDerivedMemoryPromotion(params: {
+	db: Db
+	prefix: string
+	event: ConversationEvent
+	provider?: EnrichmentProvider | null
+	temporalProvider?: EnrichmentProvider | null
+	model?: string
+	prefetchedLlmFacts?: string[]
+}): Promise<PreparedDerivedMemoryPromotion> {
+	const structuredCandidates = (
+		await resolveStructuredCandidatesForPromotion(params)
+	).filter((candidate) => !isDerivableFromContext(candidate.value))
+	const promotionGuards: PreparedDerivedMemoryPromotion["promotionGuards"] = {}
+	const currentClause = mergeQueryClauses(
+		{ state: "active" },
+		buildCurrentValidityClause(),
+		buildUnexpiredClause(),
+	)
+	for (const candidate of structuredCandidates) {
+		const identity = structuredCandidateIdentity(candidate)
+		const trigger = candidate.provenance?.promotionTrigger
+		if (trigger === "existing-durable-memory") {
+			const existing = await structuredMemCollection(
+				params.db,
+				params.prefix,
+			).findOne(
+				{
+					agentId: candidate.agentId,
+					scope: candidate.scope ?? params.event.scope,
+					scopeRef: candidate.scopeRef ?? params.event.scopeRef,
+					type: candidate.type,
+					key: candidate.key,
+					...currentClause,
+				},
+				{ projection: { value: 1, revision: 1 } },
+			)
+			const revision = Number(existing?.revision)
+			if (
+				!existing ||
+				!Number.isInteger(revision) ||
+				revision < 1 ||
+				typeof existing.value !== "string"
+			) {
+				continue
+			}
+			promotionGuards[identity] = {
+				kind: "existing",
+				revision,
+				value: existing.value,
+			}
+			continue
+		}
+		if (trigger === "repeated-evidence") {
+			const supportingIds = (candidate.sourceEventIds ?? []).filter(
+				(eventId) => eventId !== params.event.eventId,
+			)
+			const docs = await eventsCollection(params.db, params.prefix)
+				.find(
+					{
+						agentId: params.event.agentId,
+						scope: params.event.scope,
+						scopeRef: params.event.scopeRef,
+						eventId: { $in: supportingIds },
+						...buildEventLifecycleClause(),
+					},
+					{ projection: { eventId: 1, body: 1, timestamp: 1 } },
+				)
+				.toArray()
+			if (docs.length !== supportingIds.length) {
+				continue
+			}
+			promotionGuards[identity] = {
+				kind: "evidence",
+				events: docs.map((doc) => ({
+					eventId: String(doc.eventId),
+					body: String(doc.body ?? ""),
+					timestamp:
+						doc.timestamp instanceof Date ? doc.timestamp : new Date(0),
+				})),
+			}
+			continue
+		}
+		promotionGuards[identity] = { kind: "immediate" }
+	}
+	return {
+		structuredCandidates: structuredCandidates.filter(
+			(candidate) =>
+				promotionGuards[structuredCandidateIdentity(candidate)] !== undefined,
+		),
+		procedureCandidates: extractProcedureCandidatesFromEvent(params.event),
+		promotionGuards,
+	}
+}
+
+async function promotionGuardStillValid(params: {
+	db: Db
+	prefix: string
+	session?: ClientSession
+	event: ConversationEvent
+	candidate: StructuredMemoryEntry
+	guard: PreparedDerivedMemoryPromotion["promotionGuards"][string] | undefined
+}): Promise<boolean> {
+	if (!params.guard || params.guard.kind === "immediate") return !!params.guard
+	if (params.guard.kind === "existing") {
+		const currentClause = mergeQueryClauses(
+			{ state: "active" },
+			buildCurrentValidityClause(),
+			buildUnexpiredClause(),
+		)
+		return Boolean(
+			await structuredMemCollection(params.db, params.prefix).findOne(
+				{
+					agentId: params.candidate.agentId,
+					scope: params.candidate.scope ?? params.event.scope,
+					scopeRef: params.candidate.scopeRef ?? params.event.scopeRef,
+					type: params.candidate.type,
+					key: params.candidate.key,
+					value: params.guard.value,
+					revision: params.guard.revision,
+					...currentClause,
+				},
+				params.session ? { session: params.session } : undefined,
+			),
+		)
+	}
+	for (const evidence of params.guard.events) {
+		const found = await eventsCollection(params.db, params.prefix).findOne(
+			{
+				agentId: params.event.agentId,
+				scope: params.event.scope,
+				scopeRef: params.event.scopeRef,
+				eventId: evidence.eventId,
+				body: evidence.body,
+				timestamp: evidence.timestamp,
+				...buildEventLifecycleClause(),
+			},
+			params.session ? { session: params.session } : undefined,
+		)
+		if (!found) return false
+	}
+	return true
+}
+
+export async function persistPreparedDerivedMemoryPromotion(params: {
+	db: Db
+	prefix: string
+	client?: MongoClient
+	session?: ClientSession
+	embeddingMode: MemoryMongoDBEmbeddingMode
+	event: ConversationEvent
+	prepared: PreparedDerivedMemoryPromotion
+}): Promise<{
+	structuredCreated: number
+	proceduresCreated: number
+	skipped: boolean
+	skipReason?: string
+}> {
+	const { db, prefix, client, session, embeddingMode, event, prepared } = params
+	let structuredCreated = 0
+	let proceduresCreated = 0
+	let existingCandidateCount = 0
+	let firstError: unknown
+	const structuredCollection = structuredMemCollection(db, prefix)
+	const procedureCollection = proceduresCollection(db, prefix)
+
+	let structuredFailed = false
+	for (const candidate of prepared.structuredCandidates) {
+		if (
+			!(await promotionGuardStillValid({
+				db,
+				prefix,
+				session,
+				event,
+				candidate,
+				guard: prepared.promotionGuards[structuredCandidateIdentity(candidate)],
+			}))
+		) {
+			continue
+		}
+		const receipt = await structuredCollection.findOne(
+			{
+				agentId: candidate.agentId,
+				scope: candidate.scope,
+				scopeRef: candidate.scopeRef,
+				type: candidate.type,
+				key: candidate.key,
+				sourceEventIds: event.eventId,
+			},
+			{
+				projection: { _id: 1 },
+				...(session ? { session } : {}),
+			},
+		)
+		if (receipt) {
+			existingCandidateCount += 1
+			continue
+		}
+		try {
+			const result = await writeStructuredMemory({
+				db,
+				prefix,
+				entry: candidate,
+				embeddingMode,
+				...(session ? { session, transactionalSideEffects: "inline" } : {}),
+				...(!session && client ? { client } : {}),
+				eventReceiptIds: [event.eventId],
+			})
+			if (result.upserted) {
+				structuredCreated += 1
+			}
+		} catch (err) {
+			if (session) throw err
+			structuredFailed = true
+			firstError ??= err
+			log.warn(
+				`structured candidate promotion failed for ${event.eventId} key=${candidate.key}: ${String(err)}`,
+			)
+		}
+	}
+	if (prepared.structuredCandidates.length > 0) {
+		const run = {
+			agentId: event.agentId,
+			projectionType: "structured-promotion" as const,
+			status: structuredFailed ? ("failed" as const) : ("ok" as const),
+			itemsProjected: structuredCreated,
+			durationMs: 0,
+		}
+		if (session) {
+			await recordProjectionRun({ db, prefix, run, session })
+		} else {
+			await recordProjectionRunBestEffort({
+				db,
+				prefix,
+				run,
+				context: "structured promotion",
+			})
+		}
+	}
+
+	let procedureFailed = false
+	for (const candidate of prepared.procedureCandidates) {
+		const receipt = await procedureCollection.findOne(
+			{
+				agentId: candidate.agentId,
+				scope: candidate.scope,
+				scopeRef: candidate.scopeRef,
+				procedureId: candidate.procedureId,
+				sourceEventIds: event.eventId,
+			},
+			{
+				projection: { _id: 1 },
+				...(session ? { session } : {}),
+			},
+		)
+		if (receipt) {
+			existingCandidateCount += 1
+			continue
+		}
+		try {
+			const result = await writeProcedure({
+				db,
+				prefix,
+				entry: candidate,
+				embeddingMode,
+				...(session ? { session, transactionalSideEffects: "inline" } : {}),
+				...(!session && client ? { client } : {}),
+				eventReceiptIds: [event.eventId],
+			})
+			if (result.upserted) {
+				proceduresCreated += 1
+			}
+		} catch (err) {
+			if (session) throw err
+			procedureFailed = true
+			firstError ??= err
+			log.warn(
+				`procedure candidate promotion failed for ${event.eventId} id=${candidate.procedureId}: ${String(err)}`,
+			)
+		}
+	}
+	if (prepared.procedureCandidates.length > 0) {
+		const run = {
+			agentId: event.agentId,
+			projectionType: "procedures" as const,
+			status: procedureFailed ? ("failed" as const) : ("ok" as const),
+			itemsProjected: proceduresCreated,
+			durationMs: 0,
+		}
+		if (session) {
+			await recordProjectionRun({ db, prefix, run, session })
+		} else {
+			await recordProjectionRunBestEffort({
+				db,
+				prefix,
+				run,
+				context: "procedure promotion",
+			})
+		}
+	}
+
+	if (firstError !== undefined) {
+		throw firstError
+	}
+	const totalCandidateCount =
+		prepared.structuredCandidates.length + prepared.procedureCandidates.length
+	if (
+		totalCandidateCount > 0 &&
+		existingCandidateCount === totalCandidateCount
+	) {
+		return {
+			structuredCreated,
+			proceduresCreated,
+			skipped: true,
+			skipReason: "already-promoted",
+		}
+	}
+	return { structuredCreated, proceduresCreated, skipped: false }
+}
+
 export async function promoteDerivedMemoryFromEvent(params: {
 	db: Db
 	prefix: string
 	client?: MongoClient
+	session?: ClientSession
 	embeddingMode: MemoryMongoDBEmbeddingMode
 	event: ConversationEvent
 	provider?: EnrichmentProvider | null
@@ -689,6 +1035,8 @@ export async function promoteDerivedMemoryFromEvent(params: {
 	 * When provided, the per-event provider call is skipped entirely.
 	 */
 	prefetchedLlmFacts?: string[]
+	prepared?: PreparedDerivedMemoryPromotion
+	skipContradictions?: boolean
 }): Promise<{
 	structuredCreated: number
 	proceduresCreated: number
@@ -708,16 +1056,9 @@ export async function promoteDerivedMemoryFromEvent(params: {
 		prefetchedLlmFacts,
 	} = params
 
-	let structuredCreated = 0
-	let proceduresCreated = 0
-	let existingCandidateCount = 0
-	let totalCandidateCount = 0
-	let firstError: unknown
-	const structuredCollection = structuredMemCollection(db, prefix)
-	const procedureCollection = proceduresCollection(db, prefix)
-
-	const promotable = (
-		await resolveStructuredCandidatesForPromotion({
+	const prepared =
+		params.prepared ??
+		(await prepareDerivedMemoryPromotion({
 			db,
 			prefix,
 			event,
@@ -725,76 +1066,33 @@ export async function promoteDerivedMemoryFromEvent(params: {
 			temporalProvider,
 			model,
 			prefetchedLlmFacts,
-		})
-	).filter((candidate) => !isDerivableFromContext(candidate.value))
-	totalCandidateCount += promotable.length
-	let structuredFailed = false
-	for (const candidate of promotable) {
-		const receipt = await structuredCollection.findOne(
-			{
-				agentId: candidate.agentId,
-				scope: candidate.scope,
-				scopeRef: candidate.scopeRef,
-				type: candidate.type,
-				key: candidate.key,
-				sourceEventIds: event.eventId,
-			},
-			{ projection: { _id: 1 } },
-		)
-		if (receipt) {
-			existingCandidateCount += 1
-			continue
-		}
-		try {
-			const result = await writeStructuredMemory({
-				db,
-				prefix,
-				entry: candidate,
-				embeddingMode,
-				client,
-				eventReceiptIds: [event.eventId],
-			})
-			if (result.upserted) {
-				structuredCreated += 1
-			}
-		} catch (err) {
-			structuredFailed = true
-			firstError ??= err
-			log.warn(
-				`structured candidate promotion failed for ${event.eventId} key=${candidate.key}: ${String(err)}`,
-			)
-		}
-	}
-	if (promotable.length > 0) {
-		await recordProjectionRunBestEffort({
-			db,
-			prefix,
-			run: {
-				agentId: event.agentId,
-				projectionType: "structured-promotion",
-				status: structuredFailed ? "failed" : "ok",
-				itemsProjected: structuredCreated,
-				durationMs: 0,
-			},
-			context: "structured promotion",
-		})
-	}
+		}))
+	const result = await persistPreparedDerivedMemoryPromotion({
+		db,
+		prefix,
+		client,
+		session: params.session,
+		embeddingMode,
+		event,
+		prepared,
+	})
 
 	// Contradiction-driven invalidation (#33): expire existing active facts the
 	// new facts make false. Run only after every candidate write succeeded, so a
 	// retry cannot acknowledge an incomplete promotion set.
 	const resolvedContradictionProvider = contradictionProvider ?? provider
-	if (!structuredFailed && resolvedContradictionProvider) {
+	if (!params.skipContradictions && resolvedContradictionProvider) {
 		await invalidateContradictedFacts({
 			db,
 			prefix,
 			client,
 			provider: resolvedContradictionProvider,
 			model: model ?? "",
+			requirePersistedSource: true,
 			agentId: event.agentId,
 			scope: event.scope,
 			scopeRef: event.scopeRef,
-			newFacts: promotable
+			newFacts: prepared.structuredCandidates
 				.filter((candidate) => candidate.type === "fact")
 				.map((candidate) => ({
 					key: candidate.key,
@@ -804,75 +1102,7 @@ export async function promoteDerivedMemoryFromEvent(params: {
 		})
 	}
 
-	const procedureCandidates = extractProcedureCandidatesFromEvent(event)
-	totalCandidateCount += procedureCandidates.length
-	let procedureFailed = false
-	for (const candidate of procedureCandidates) {
-		const receipt = await procedureCollection.findOne(
-			{
-				agentId: candidate.agentId,
-				scope: candidate.scope,
-				scopeRef: candidate.scopeRef,
-				procedureId: candidate.procedureId,
-				sourceEventIds: event.eventId,
-			},
-			{ projection: { _id: 1 } },
-		)
-		if (receipt) {
-			existingCandidateCount += 1
-			continue
-		}
-		try {
-			const result = await writeProcedure({
-				db,
-				prefix,
-				entry: candidate,
-				embeddingMode,
-				client,
-				eventReceiptIds: [event.eventId],
-			})
-			if (result.upserted) {
-				proceduresCreated += 1
-			}
-		} catch (err) {
-			procedureFailed = true
-			firstError ??= err
-			log.warn(
-				`procedure candidate promotion failed for ${event.eventId} id=${candidate.procedureId}: ${String(err)}`,
-			)
-		}
-	}
-	if (procedureCandidates.length > 0) {
-		await recordProjectionRunBestEffort({
-			db,
-			prefix,
-			run: {
-				agentId: event.agentId,
-				projectionType: "procedures",
-				status: procedureFailed ? "failed" : "ok",
-				itemsProjected: proceduresCreated,
-				durationMs: 0,
-			},
-			context: "procedure promotion",
-		})
-	}
-
-	if (firstError !== undefined) {
-		throw firstError
-	}
-	if (
-		totalCandidateCount > 0 &&
-		existingCandidateCount === totalCandidateCount
-	) {
-		return {
-			structuredCreated,
-			proceduresCreated,
-			skipped: true,
-			skipReason: "already-promoted",
-		}
-	}
-
-	return { structuredCreated, proceduresCreated, skipped: false }
+	return result
 }
 
 /**

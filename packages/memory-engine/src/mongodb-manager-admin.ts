@@ -11,6 +11,7 @@ import { getLaneCoverage } from "./mongodb-lane-coverage.js"
 import { getDailyCostSums, type DailyCostSum } from "./mongodb-cost-ledger.js"
 import { resolveMemoryJobBacklogAlertThreshold } from "./mongodb-manager-jobs.js"
 import type { MongoDBManagerHost } from "./mongodb-manager-host.js"
+import { captureAdmissionToken } from "./mongodb-write-fence.js"
 import {
 	promoteQuarantined as runPromoteQuarantined,
 	rejectQuarantined as runRejectQuarantined,
@@ -972,23 +973,35 @@ export class MongoDBManagerAdminOps {
 	 * across every collection, with per-collection receipts and a
 	 * critical-severity audit record that survives the erase.
 	 *
-	 * W03 fencing: the erasure bumps a durable per-agent epoch (inside the
-	 * erasure primitive) so workers that claimed pre-erasure work abandon
-	 * at their fence checks, and this manager drains its OWN local work
-	 * first — the per-agent job worker is stopped (stopMemoryJobWorker
-	 * awaits the in-flight runner, so its writes land before the sweep and
-	 * are erased) and the access tracker is flushed (buffered counts land
+	 * Gate integration (production erasure integration grant): the sweep
+	 * runs behind the per-agent erasure gate — beginErasure closes
+	 * admission, every delete batch is fenced, and completion is granted
+	 * only by finalizeErasure (authoritative recount + audit + conditional
+	 * reopen in one transaction). recovery:"takeover" dispatches directly
+	 * to takeoverErasure: a DELIBERATE owner replacement that can replace
+	 * a paused live owner — the operator is the liveness oracle. An active
+	 * owner makes an ordinary request conflict; the
+	 * ErasureGateConflictError propagates to the route's typed 409.
+	 *
+	 * W03 fencing: workers that claimed pre-erasure work abandon at their
+	 * fence checks, and this manager drains its OWN local work first — the
+	 * per-agent job worker is stopped (stopMemoryJobWorker awaits the
+	 * in-flight runner, so its writes land before the sweep and are
+	 * erased) and the access tracker is flushed (buffered counts land
 	 * pre-sweep). The worker restarts on the next legitimate post-erasure
 	 * write (the established memoryJobWorkerStopped restart pattern in the
 	 * write path): new writes intentionally recreate the tenant.
 	 */
-	async deleteAllForAgent(): Promise<TenantErasureReceipt> {
+	async deleteAllForAgent(params?: {
+		recovery?: "takeover"
+	}): Promise<TenantErasureReceipt> {
 		await this.host.stopMemoryJobWorker()
 		await this.host.accessTracker?.flush()
 		return runTenantErasure({
 			db: this.host.db,
 			prefix: this.host.prefix,
 			agentId: this.host.agentId,
+			...(params?.recovery !== undefined ? { recovery: params.recovery } : {}),
 		})
 	}
 
@@ -1001,6 +1014,11 @@ export class MongoDBManagerAdminOps {
 		reviewerId?: string
 		reviewNotes?: string
 	}): Promise<QuarantineReviewReceipt> {
+		const admission = await captureAdmissionToken({
+			db: this.host.db,
+			prefix: this.host.prefix,
+			agentId: this.host.agentId,
+		})
 		return runPromoteQuarantined({
 			db: this.host.db,
 			prefix: this.host.prefix,
@@ -1009,6 +1027,7 @@ export class MongoDBManagerAdminOps {
 			embeddingMode: this.host.config.mongodb?.embeddingMode ?? "automated",
 			reviewerId: params.reviewerId,
 			reviewNotes: params.reviewNotes,
+			admission,
 		})
 	}
 
@@ -1021,6 +1040,11 @@ export class MongoDBManagerAdminOps {
 		reviewerId?: string
 		reviewNotes?: string
 	}): Promise<QuarantineReviewReceipt> {
+		const admission = await captureAdmissionToken({
+			db: this.host.db,
+			prefix: this.host.prefix,
+			agentId: this.host.agentId,
+		})
 		return runRejectQuarantined({
 			db: this.host.db,
 			prefix: this.host.prefix,
@@ -1028,6 +1052,7 @@ export class MongoDBManagerAdminOps {
 			quarantineId: params.quarantineId,
 			reviewerId: params.reviewerId,
 			reviewNotes: params.reviewNotes,
+			admission,
 		})
 	}
 

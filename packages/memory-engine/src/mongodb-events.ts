@@ -1,14 +1,28 @@
 import { createHash, randomUUID } from "node:crypto"
-import type { ClientSession, Db, Document } from "mongodb"
+import type { ClientSession, Collection, Db, Document } from "mongodb"
 import {
 	type MemoryScope,
 	createSubsystemLogger,
 	retryAsync,
 } from "@memongo/lib"
+import {
+	EVENT_IDENTITY_READ_OPTIONS,
+	type EventMetadataWriteOptions,
+	eventMetadataMatchesPersistedForm,
+} from "./mongodb-event-metadata-identity.js"
 import { recordProjectionRun } from "./mongodb-ops.js"
 import { eventsCollection, chunksCollection } from "./mongodb-schema.js"
 import { resolveScopeIdentity } from "./mongodb-scope.js"
 import { buildUnexpiredClause } from "./mongodb-temporal.js"
+import {
+	captureAdmissionToken,
+	readErasureGate,
+	withFencedWrite,
+	ErasureGateConflictError,
+	isErasureGateConflictError,
+	type AdmissionToken,
+} from "./mongodb-write-fence.js"
+import { settledFailureMeta } from "./query-diagnostics.js"
 
 const log = createSubsystemLogger("memory:mongodb:events")
 const DURABLE_EVENT_WRITE_CONCERN = {
@@ -223,6 +237,7 @@ export async function pruneIdempotencyFingerprints(params: {
 	agentId: string
 	olderThanDays?: number
 	now?: Date
+	session?: ClientSession
 }): Promise<{ pruned: number }> {
 	const { db, prefix, agentId } = params
 	const retentionDays =
@@ -244,6 +259,7 @@ export async function pruneIdempotencyFingerprints(params: {
 			],
 		},
 		{ $unset: { idempotencyKey: "", idempotencyFingerprint: "" } },
+		params.session ? { session: params.session } : {},
 	)
 	return { pruned: result.modifiedCount }
 }
@@ -259,7 +275,7 @@ export function renderEventChunkText(
 // Write
 // ---------------------------------------------------------------------------
 
-type EventWriteInput = Omit<
+export type EventWriteInput = Omit<
 	CanonicalEvent,
 	"eventId" | "timestamp" | "scopeRef" | "recordedAt"
 > & {
@@ -268,11 +284,144 @@ type EventWriteInput = Omit<
 	scopeRef?: string
 }
 
+export type EventReplayDocument = Pick<
+	CanonicalEvent,
+	"eventId" | "agentId" | "role" | "body" | "scope" | "scopeRef" | "timestamp"
+> &
+	Partial<
+		Pick<
+			CanonicalEvent,
+			| "sessionId"
+			| "channel"
+			| "metadata"
+			| "validAt"
+			| "invalidAt"
+			| "expiresAt"
+			| "idempotencyKey"
+			| "idempotencyFingerprint"
+		>
+	>
+
+const EVENT_REPLAY_PROJECTION = {
+	_id: 0,
+	eventId: 1,
+	agentId: 1,
+	sessionId: 1,
+	channel: 1,
+	role: 1,
+	body: 1,
+	metadata: 1,
+	scope: 1,
+	scopeRef: 1,
+	timestamp: 1,
+	validAt: 1,
+	invalidAt: 1,
+	expiresAt: 1,
+} as const
+
+export const EVENT_IDEMPOTENCY_REPLAY_PROJECTION = {
+	...EVENT_REPLAY_PROJECTION,
+	idempotencyKey: 1,
+	idempotencyFingerprint: 1,
+} as const
+
+export function isStoredEventReplayDocument(
+	value: Document | null | undefined,
+): value is EventReplayDocument {
+	return (
+		value != null &&
+		typeof value.eventId === "string" &&
+		typeof value.agentId === "string" &&
+		typeof value.role === "string" &&
+		typeof value.body === "string" &&
+		typeof value.scope === "string" &&
+		typeof value.scopeRef === "string" &&
+		value.timestamp instanceof Date &&
+		!Number.isNaN(value.timestamp.getTime())
+	)
+}
+
+function datesMatch(stored: unknown, attempted: Date | undefined): boolean {
+	return (
+		stored instanceof Date &&
+		attempted instanceof Date &&
+		stored.getTime() === attempted.getTime()
+	)
+}
+
+export function eventReplayMatches(
+	stored: EventReplayDocument,
+	attempted: CanonicalEvent,
+	input: EventWriteInput,
+	writeOptions: EventMetadataWriteOptions,
+): boolean {
+	if (
+		stored.agentId !== attempted.agentId ||
+		stored.scope !== attempted.scope ||
+		stored.scopeRef !== attempted.scopeRef ||
+		stored.role !== attempted.role ||
+		stored.body !== attempted.body
+	) {
+		return false
+	}
+	for (const field of ["sessionId", "channel"] as const) {
+		const storedHasField = Object.hasOwn(stored, field)
+		const attemptedHasField = Object.hasOwn(attempted, field)
+		if (
+			storedHasField !== attemptedHasField ||
+			(attemptedHasField && stored[field] !== attempted[field])
+		) {
+			return false
+		}
+	}
+	const storedHasMetadata = Object.hasOwn(stored, "metadata")
+	const attemptedHasMetadata = Object.hasOwn(attempted, "metadata")
+	if (
+		storedHasMetadata !== attemptedHasMetadata ||
+		(attemptedHasMetadata &&
+			!eventMetadataMatchesPersistedForm(
+				stored.metadata,
+				attempted.metadata,
+				writeOptions,
+			))
+	) {
+		return false
+	}
+	for (const field of ["invalidAt", "expiresAt"] as const) {
+		if (field in attempted && !datesMatch(stored[field], attempted[field])) {
+			return false
+		}
+	}
+	if (
+		input.timestamp !== undefined &&
+		!datesMatch(stored.timestamp, attempted.timestamp)
+	) {
+		return false
+	}
+	if (input.validAt !== undefined) {
+		if (
+			!Object.hasOwn(stored, "validAt") ||
+			!datesMatch(stored.validAt, attempted.validAt)
+		) {
+			return false
+		}
+	} else if (
+		input.timestamp !== undefined &&
+		Object.hasOwn(stored, "validAt") &&
+		!datesMatch(stored.validAt, attempted.validAt)
+	) {
+		return false
+	}
+	return true
+}
+
 /**
  * Build the canonical event document for a write, applying the shared date
  * validation and the P2.3 scope-identity rule. Throws on invalid input.
  */
-function buildCanonicalEventDocument(event: EventWriteInput): CanonicalEvent {
+export function buildCanonicalEventDocument(
+	event: EventWriteInput,
+): CanonicalEvent {
 	const eventId = event.eventId ?? randomUUID()
 	const timestamp = event.timestamp ?? new Date()
 	const validAt = event.validAt ?? timestamp
@@ -336,19 +485,62 @@ export async function writeEvent(params: {
 	const collection = eventsCollection(db, prefix)
 	const doc = buildCanonicalEventDocument(event)
 	const eventId = doc.eventId
-
-	await retryTransientMongoWrite("events.updateOne", () =>
+	const update = () =>
 		collection.updateOne(
 			{ eventId },
 			{ $setOnInsert: doc },
 			params.session
 				? { upsert: true, session: params.session }
 				: { upsert: true, writeConcern: DURABLE_EVENT_WRITE_CONCERN },
-		),
-	)
+		)
 
-	log.info(`event written: ${eventId} role=${event.role}`)
-	return { eventId, timestamp: doc.timestamp, scopeRef: doc.scopeRef }
+	const updateResult = params.session
+		? await update()
+		: await retryTransientMongoWrite("events.updateOne", update)
+	if (updateResult.upsertedCount === 1) {
+		log.info(`event written: ${eventId} role=${event.role}`)
+		return { eventId, timestamp: doc.timestamp, scopeRef: doc.scopeRef }
+	}
+
+	let stored: Document | null
+	try {
+		stored = await collection.findOne(
+			{ eventId },
+			params.session
+				? {
+						projection: EVENT_REPLAY_PROJECTION,
+						...EVENT_IDENTITY_READ_OPTIONS,
+						session: params.session,
+					}
+				: {
+						projection: EVENT_REPLAY_PROJECTION,
+						...EVENT_IDENTITY_READ_OPTIONS,
+						readConcern: { level: "majority" },
+					},
+		)
+	} catch (cause) {
+		throw new Error(
+			`event replay confirmation failed for event ID "${eventId}"; stored event could not be read`,
+			{ cause },
+		)
+	}
+	if (!isStoredEventReplayDocument(stored)) {
+		throw new Error(
+			`event replay confirmation failed for event ID "${eventId}"; stored event was missing or malformed`,
+		)
+	}
+	if (!eventReplayMatches(stored, doc, event, collection.bsonOptions)) {
+		throw new Error(
+			`event ID "${eventId}" is already assigned to a different event`,
+		)
+	}
+
+	log.info(`event replayed: ${eventId} role=${event.role}`)
+	return {
+		eventId: stored.eventId,
+		timestamp: stored.timestamp,
+		scopeRef: stored.scopeRef,
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -367,7 +559,12 @@ export type EventBatchItemResult =
 	| { ok: false; eventId?: string; duplicateKey: boolean; message: string }
 
 type BulkWriteFailure = {
-	writeErrors?: Array<{ index: number; code?: number; errmsg?: string }>
+	writeErrors?: Array<{
+		index: number
+		code?: number
+		errmsg?: string
+		errInfo?: Document
+	}>
 }
 
 function asBulkWriteFailure(err: unknown): BulkWriteFailure | null {
@@ -384,7 +581,12 @@ function asBulkWriteFailure(err: unknown): BulkWriteFailure | null {
 export type BulkInsertOutcome =
 	| {
 			kind: "item-errors"
-			writeErrors: Array<{ index: number; code?: number; errmsg?: string }>
+			writeErrors: Array<{
+				index: number
+				code?: number
+				errmsg?: string
+				errInfo?: Document
+			}>
 			writeConcernError: boolean
 	  }
 	| { kind: "no-writes-performed" }
@@ -394,10 +596,11 @@ export type BulkInsertOutcome =
  * W09: classify a thrown insertMany error by what the server actually did,
  * per the shipped driver 7.5 shapes (EL-023):
  * - writeErrors array present → per-item failures; unlisted ops were applied
- *   by the unordered insert (EL-020), unless a write-concern error rides
- *   along — then their replication is uncertain (EL-022).
- * - NoWritesPerformed error label → the server guarantees zero writes were
- *   performed across attempts (EL-021); the whole batch is safe to re-run.
+ *   by the unordered insert (EL-020). The write-concern combination is kept
+ *   defensively, though driver 7.5 folds insertMany write-concern errors into
+ *   a shape with no top-level writeErrors (EL-022).
+ * - NoWritesPerformed error label → no writes occurred in that driver retry
+ *   chain (EL-021). It says nothing about earlier engine-level attempts.
  * - Anything else (pure write-concern error, network exhaustion, unknown) →
  *   uncertain: the batch's fate is only knowable by a reconciliation read.
  */
@@ -425,10 +628,11 @@ export function classifyBulkInsertError(err: unknown): BulkInsertOutcome {
 }
 
 /**
- * EL-022/EL-023: a write-concern error surfaces on a thrown
- * MongoBulkWriteError as `.err` / `.result.getWriteConcernError()` (and as a
- * standalone MongoWriteConcernError carrying the server's writeConcernErrors
- * array). It is an uncertain-outcome signal, never a per-item failure.
+ * EL-022/EL-023: detect all supported write-concern error shapes
+ * defensively. For insertMany, driver 7.5 throws before processing per-item
+ * results and leaves top-level writeErrors empty, so the current caller
+ * classifies that shape as wholly uncertain instead of reaching the combined
+ * item-errors/writeConcernError branch.
  */
 function carriesWriteConcernError(err: unknown): boolean {
 	if (!err || typeof err !== "object") {
@@ -458,10 +662,11 @@ function carriesWriteConcernError(err: unknown): boolean {
 }
 
 /**
- * W09 reconciliation read: which of the given eventIds exist in the events
- * collection. Presence is the ground truth for what an uncertain attempt
- * (write concern / network) actually applied; absence means the item is not
- * durable and is safe to retry.
+ * W09 reconciliation read: which of the given eventIds are majority-visible
+ * in the events collection. Presence confirms durability and cannot roll
+ * back. Absence only means durability is unconfirmed at read time: an earlier
+ * attempt may still majority-commit, so retry requires the same logical-write
+ * identity (idempotency key or caller-pinned eventId).
  */
 export async function findExistingEventIds(params: {
 	db: Db
@@ -475,7 +680,10 @@ export async function findExistingEventIds(params: {
 	const docs = await eventsCollection(db, prefix)
 		.find(
 			{ eventId: { $in: eventIds } },
-			{ projection: { _id: 0, eventId: 1 } },
+			{
+				projection: { _id: 0, eventId: 1 },
+				readConcern: { level: "majority" },
+			},
 		)
 		.toArray()
 	const existing = new Set<string>()
@@ -488,32 +696,70 @@ export async function findExistingEventIds(params: {
 	return existing
 }
 
+export async function findExistingEventsForReplay(params: {
+	collection: Collection
+	eventIds: string[]
+}): Promise<Map<string, Document>> {
+	const { collection, eventIds } = params
+	if (eventIds.length === 0) {
+		return new Map()
+	}
+	const docs = await collection
+		.find(
+			{ eventId: { $in: eventIds } },
+			{
+				projection: EVENT_REPLAY_PROJECTION,
+				...EVENT_IDENTITY_READ_OPTIONS,
+				readConcern: { level: "majority" },
+			},
+		)
+		.toArray()
+	const existing = new Map<string, Document>()
+	for (const doc of docs) {
+		if (typeof doc.eventId === "string") {
+			existing.set(doc.eventId, doc)
+		}
+	}
+	return existing
+}
+
 /**
  * W09: for docs whose durability the server did not confirm, read back which
- * eventIds actually exist. Present = durable — receipt ok with duplicateKey
- * flagged so the caller maps it to the replay path; absent = not durable —
- * ok:false (retry-safe). If the reconciliation read itself fails, items get
- * "durability unconfirmed" receipts instead of a throw: a throw after a
- * possible durable commit is the W08 anti-pattern, and receipts preserve the
- * batch's siblings.
+ * eventIds are majority-visible. Present = durable — receipt ok with
+ * duplicateKey flagged so the caller maps it to the replay path; absent =
+ * durability unconfirmed — ok:false, with identity-preserving retry guidance.
+ * If the reconciliation read itself fails, items get "durability unconfirmed"
+ * receipts instead of a throw: a throw after a possible durable commit is the
+ * W08 anti-pattern, and receipts preserve the batch's siblings.
  */
 async function reconcileEventBatchOutcomes(params: {
 	db: Db
 	prefix: string
 	results: EventBatchItemResult[]
 	docs: CanonicalEvent[]
+	inputs: EventWriteInput[]
 	docIndexes: number[]
 	positions: number[]
+	keyedDuplicateMessages?: Map<number, string>
 }): Promise<void> {
-	const { db, prefix, results, docs, docIndexes, positions } = params
+	const {
+		db,
+		prefix,
+		results,
+		docs,
+		inputs,
+		docIndexes,
+		positions,
+		keyedDuplicateMessages,
+	} = params
 	if (positions.length === 0) {
 		return
 	}
-	let existing: Set<string>
+	let existing: Map<string, Document>
+	const collection = eventsCollection(db, prefix)
 	try {
-		existing = await findExistingEventIds({
-			db,
-			prefix,
+		existing = await findExistingEventsForReplay({
+			collection,
 			eventIds: positions.map((position) => docs[position].eventId),
 		})
 	} catch (err) {
@@ -526,28 +772,55 @@ async function reconcileEventBatchOutcomes(params: {
 				ok: false,
 				eventId: doc.eventId,
 				duplicateKey: false,
-				message: "event durability unconfirmed (reconciliation read failed)",
+				message:
+					"event durability unconfirmed (majority reconciliation read failed); outcome may have committed; retry only with the same idempotency key or caller-pinned eventId",
 			}
 		}
 		return
 	}
 	for (const position of positions) {
 		const doc = docs[position]
-		if (existing.has(doc.eventId)) {
-			results[docIndexes[position]] = {
-				ok: true,
-				eventId: doc.eventId,
-				timestamp: doc.timestamp,
-				scopeRef: doc.scopeRef,
-				duplicateKey: true,
-			}
-		} else {
+		const stored = existing.get(doc.eventId)
+		if (stored === undefined) {
+			results[docIndexes[position]] = keyedDuplicateMessages?.has(position)
+				? {
+						ok: false,
+						eventId: doc.eventId,
+						duplicateKey: true,
+						message:
+							keyedDuplicateMessages.get(position) ?? "event insert failed",
+					}
+				: {
+						ok: false,
+						eventId: doc.eventId,
+						duplicateKey: false,
+						message:
+							"event durability unconfirmed; not found by majority reconciliation read; retry only with the same idempotency key or caller-pinned eventId",
+					}
+		} else if (!isStoredEventReplayDocument(stored)) {
 			results[docIndexes[position]] = {
 				ok: false,
 				eventId: doc.eventId,
 				duplicateKey: false,
 				message:
-					"event insert unconfirmed (write concern or network outcome); not found on reconciliation read",
+					"event replay identity unconfirmed; stored event was malformed",
+			}
+		} else if (
+			eventReplayMatches(stored, doc, inputs[position], collection.bsonOptions)
+		) {
+			results[docIndexes[position]] = {
+				ok: true,
+				eventId: stored.eventId,
+				timestamp: stored.timestamp,
+				scopeRef: stored.scopeRef,
+				duplicateKey: true,
+			}
+		} else if (stored) {
+			results[docIndexes[position]] = {
+				ok: false,
+				eventId: doc.eventId,
+				duplicateKey: false,
+				message: `event ID "${doc.eventId}" is already assigned to a different event`,
 			}
 		}
 	}
@@ -573,6 +846,7 @@ export async function writeEventsBatch(params: {
 	const collection = eventsCollection(db, prefix)
 
 	const docs: CanonicalEvent[] = []
+	const inputs: EventWriteInput[] = []
 	const docIndexes: number[] = []
 	const results: EventBatchItemResult[] = events.map(() => ({
 		ok: false as const,
@@ -582,6 +856,7 @@ export async function writeEventsBatch(params: {
 	for (const [index, event] of events.entries()) {
 		try {
 			docs.push(buildCanonicalEventDocument(event))
+			inputs.push(event)
 			docIndexes.push(index)
 		} catch (err) {
 			results[index] = {
@@ -618,14 +893,16 @@ export async function writeEventsBatch(params: {
 	} catch (err) {
 		const outcome = classifyBulkInsertError(err)
 		if (outcome.kind === "no-writes-performed") {
-			// EL-021: the server guarantees zero writes; every item stays a
-			// safe-retry receipt instead of a rejection.
+			// EL-021: the server guarantees zero writes only within the final
+			// driver retry chain. Earlier engine-level attempts remain unknown,
+			// so retries must preserve logical-write identity.
 			for (const [position, doc] of docs.entries()) {
 				results[docIndexes[position]] = {
 					ok: false,
 					eventId: doc.eventId,
 					duplicateKey: false,
-					message: "no writes performed (server-confirmed); safe to retry",
+					message:
+						"final driver retry chain performed no writes; earlier attempts may have committed; retry only with the same idempotency key or caller-pinned eventId",
 				}
 			}
 		} else if (outcome.kind === "item-errors") {
@@ -633,31 +910,23 @@ export async function writeEventsBatch(params: {
 				outcome.writeErrors.map((writeError) => writeError.index),
 			)
 			const unconfirmedPositions: number[] = []
+			const keyedDuplicateMessages = new Map<number, string>()
 			for (const writeError of outcome.writeErrors) {
 				const doc = docs[writeError.index]
 				if (!doc) {
 					continue
 				}
-				if (writeError.code === 11000 && doc.idempotencyKey) {
-					// Keyed duplicate: another logical write carrying the same
-					// idempotency key won the slot — the caller replays the
-					// winner's receipt (Stripe semantics; payload may differ).
-					results[docIndexes[writeError.index]] = {
-						ok: false,
-						eventId: doc.eventId,
-						duplicateKey: true,
-						message: writeError.errmsg ?? "event insert failed",
-					}
-					continue
-				}
 				if (writeError.code === 11000) {
-					// W09: keyless E11000 — the only keyless unique index is
-					// eventId (EL-013), so this is an earlier attempt of this
-					// same batch insert (the writeEventsBatch-level retry saw
-					// the collision after a partial mid-flight application).
-					// Verify by read: present = durable-exists, absent = a
-					// genuine per-item failure.
+					// The eventId and agent/idempotencyKey indexes can both raise
+					// E11000. Read the event ID before deciding whether this is a
+					// replay, an identity conflict, or a keyed winner race.
 					unconfirmedPositions.push(writeError.index)
+					if (doc.idempotencyKey) {
+						keyedDuplicateMessages.set(
+							writeError.index,
+							writeError.errmsg ?? "event insert failed",
+						)
+					}
 					continue
 				}
 				results[docIndexes[writeError.index]] = {
@@ -691,8 +960,10 @@ export async function writeEventsBatch(params: {
 				prefix,
 				results,
 				docs,
+				inputs,
 				docIndexes,
 				positions: unconfirmedPositions,
+				keyedDuplicateMessages,
 			})
 		} else {
 			// Uncertain outcome (write concern without per-item report, or a
@@ -703,13 +974,14 @@ export async function writeEventsBatch(params: {
 				prefix,
 				results,
 				docs,
+				inputs,
 				docIndexes,
 				positions: docs.map((_, position) => position),
 			})
 		}
 	}
 
-	log.info(`event batch written: ${docs.length} event(s)`)
+	log.info(`event batch processed: ${docs.length} event(s)`)
 	return results
 }
 
@@ -737,6 +1009,7 @@ export async function clearEventExtractionJobPending(params: {
 	prefix: string
 	eventId: string
 	agentId: string
+	session?: ClientSession
 }): Promise<boolean> {
 	const result = await eventsCollection(params.db, params.prefix).updateOne(
 		{
@@ -745,7 +1018,9 @@ export async function clearEventExtractionJobPending(params: {
 			extractionJobPendingAt: { $exists: true },
 		},
 		{ $unset: { extractionJobPendingAt: "" } },
-		{ writeConcern: DURABLE_EVENT_WRITE_CONCERN },
+		params.session
+			? { session: params.session }
+			: { writeConcern: DURABLE_EVENT_WRITE_CONCERN },
 	)
 	return result.matchedCount === 1
 }
@@ -864,16 +1139,18 @@ export async function markEventsProjected(params: {
 	db: Db
 	prefix: string
 	eventIds: string[]
+	session?: ClientSession
 }): Promise<number> {
 	const { db, prefix, eventIds } = params
 	if (eventIds.length === 0) {
 		return 0
 	}
 	const collection = eventsCollection(db, prefix)
-	const result = await collection.updateMany(
-		{ eventId: { $in: eventIds } },
-		{ $set: { projectedAt: new Date() } },
-	)
+	const filter = { eventId: { $in: eventIds } }
+	const update = { $set: { projectedAt: new Date() } }
+	const result = params.session
+		? await collection.updateMany(filter, update, { session: params.session })
+		: await collection.updateMany(filter, update)
 	return result.modifiedCount
 }
 
@@ -891,21 +1168,25 @@ export async function markEventsConsolidated(params: {
 	prefix: string
 	eventIds: string[]
 	episodeId: string
+	agentId?: string
+	session?: ClientSession
 }): Promise<number> {
 	const { db, prefix, eventIds, episodeId } = params
 	if (eventIds.length === 0) {
 		return 0
 	}
 	const collection = eventsCollection(db, prefix)
-	const result = await collection.updateMany(
-		{ eventId: { $in: eventIds } },
-		{
-			$set: {
-				consolidatedAt: new Date(),
-				consolidatedIntoEpisodeId: episodeId,
-			},
-		},
-	)
+	const filter = {
+		eventId: { $in: eventIds },
+		...(params.agentId ? { agentId: params.agentId } : {}),
+	}
+	const update = {
+		$set: { consolidatedAt: new Date(), consolidatedIntoEpisodeId: episodeId },
+	}
+	const result = params.session
+		? await collection.updateMany(filter, update, { session: params.session })
+		: await collection.updateMany(filter, update)
+
 	log.info(
 		`marked ${result.modifiedCount} events consolidated into episode=${episodeId}`,
 	)
@@ -997,9 +1278,17 @@ export async function projectChunksFromEvents(params: {
 	prefix: string
 	agentId: string
 	batchSize?: number
+	admission?: AdmissionToken
 }): Promise<{ eventsProcessed: number; chunksCreated: number }> {
 	const { db, prefix, agentId, batchSize } = params
 	const startMs = Date.now()
+	const admission =
+		params.admission ?? (await captureAdmissionToken({ db, prefix, agentId }))
+	if (admission.kind !== "admission" || admission.agentId !== agentId)
+		throw new ErasureGateConflictError(agentId)
+	const gate = await readErasureGate({ db, prefix, agentId })
+	if (!gate || gate.state !== "open" || gate.epoch !== admission.epoch)
+		throw new ErasureGateConflictError(agentId)
 
 	const events = await getUnprojectedEvents({
 		db,
@@ -1007,54 +1296,63 @@ export async function projectChunksFromEvents(params: {
 		agentId,
 		limit: batchSize,
 	})
-	if (events.length === 0) {
-		return { eventsProcessed: 0, chunksCreated: 0 }
-	}
-
+	if (events.length === 0) return { eventsProcessed: 0, chunksCreated: 0 }
 	let chunksCreated = 0
-
 	try {
 		for (const event of events) {
-			const { chunkCreated } = await projectEventChunk({
+			const { chunkCreated } = await withFencedWrite({
 				db,
 				prefix,
-				event,
-				recordRun: false,
+				token: admission,
+				fn: (session) =>
+					projectEventChunk({ db, prefix, event, recordRun: false, session }),
 			})
-			if (chunkCreated) {
-				chunksCreated++
-			}
+			if (chunkCreated) chunksCreated++
 		}
-		await recordProjectionRun({
-			db,
-			prefix,
-			run: {
-				agentId,
-				projectionType: "chunks",
-				status: "ok",
-				itemsProjected: chunksCreated,
-				durationMs: Date.now() - startMs,
-			},
-		})
 	} catch (err) {
-		const msg = err instanceof Error ? err.message : String(err)
-		await recordProjectionRun({
+		if (isErasureGateConflictError(err)) throw err
+		const run = {
+			agentId,
+			projectionType: "chunks" as const,
+			status: "failed" as const,
+			itemsProjected: chunksCreated,
+			durationMs: Date.now() - startMs,
+		}
+		await withFencedWrite({
 			db,
 			prefix,
-			run: {
-				agentId,
-				projectionType: "chunks",
-				status: "failed",
-				itemsProjected: chunksCreated,
-				durationMs: Date.now() - startMs,
-			},
-		}).catch(() => {})
+			token: admission,
+			fn: (session) => recordProjectionRun({ db, prefix, run, session }),
+		}).catch((diagnosticErr) =>
+			log.warn(
+				"projection repair failed-run record was not written",
+				settledFailureMeta(diagnosticErr),
+			),
+		)
+		const msg = err instanceof Error ? err.message : String(err)
 		log.warn(
 			`projection failed after ${chunksCreated} chunks created from ${events.length} events for agent=${agentId}: ${msg}`,
 		)
 		throw err
 	}
-
+	const run = {
+		agentId,
+		projectionType: "chunks" as const,
+		status: "ok" as const,
+		itemsProjected: chunksCreated,
+		durationMs: Date.now() - startMs,
+	}
+	await withFencedWrite({
+		db,
+		prefix,
+		token: admission,
+		fn: (session) => recordProjectionRun({ db, prefix, run, session }),
+	}).catch((err) =>
+		log.warn(
+			"projection repair run record was not written",
+			settledFailureMeta(err),
+		),
+	)
 	log.info(
 		`projected ${chunksCreated} chunks from ${events.length} events for agent=${agentId}`,
 	)
@@ -1068,17 +1366,32 @@ export async function projectChunksFromEvents(params: {
  * chunkCreated:false for every item WITHOUT marking events projected, so the
  * projection repair pass recovers them later; the event writes themselves are
  * already durable and stay acknowledged.
+ *
+ * Session path (fence interior): when a session rides the params the same
+ * pair of writes runs inside the caller's withTransaction — both writes go
+ * straight to the collections carrying the session (no
+ * retryTransientMongoWrite wrapper: the outer transaction owns retry) and any
+ * failure rethrows RAW (the sessionless partial and W08 degrades must not
+ * mask an abort inside the caller's fence). recordRun must be false and no
+ * projection run is recorded — the caller owns diagnostics in separate
+ * fenced writes.
  */
 export async function projectEventChunksBatch(params: {
 	db: Db
 	prefix: string
 	events: CanonicalEvent[]
 	recordRun?: boolean
+	session?: ClientSession
 }): Promise<Array<{ chunkCreated: boolean }>> {
 	const { db, prefix, events } = params
 	const startMs = Date.now()
 	if (events.length === 0) {
 		return []
+	}
+	if (params.session && params.recordRun !== false) {
+		throw new TypeError(
+			"projectEventChunksBatch requires recordRun:false when a session is provided",
+		)
 	}
 	const chunks = chunksCollection(db, prefix)
 	const ops = events.map((event) => {
@@ -1094,6 +1407,9 @@ export async function projectEventChunksBatch(params: {
 						text,
 						hash,
 						source: "conversation",
+						// RET-09: see projectEventChunk — role rides $setOnInsert
+						// so mappers can label provenance directly.
+						role: event.role,
 						agentId: event.agentId,
 						scope: event.scope,
 						scopeRef: event.scopeRef,
@@ -1116,6 +1432,32 @@ export async function projectEventChunksBatch(params: {
 			},
 		}
 	})
+
+	if (params.session) {
+		// Session path (fence interior): the caller's withTransaction owns
+		// retry and abort, so both writes ride the session directly with no
+		// retryTransientMongoWrite wrapper, and any failure rethrows RAW —
+		// the sessionless partial and W08 degrades would mask an abort
+		// inside the caller's fence. recordRun is pinned false by the guard
+		// above; no projection run is recorded — the caller owns diagnostics
+		// in separate fenced writes.
+		const result = await chunks.bulkWrite(ops, {
+			ordered: false,
+			session: params.session,
+		})
+		const sessionUpsertedIndexes = new Set(
+			Object.keys(result.upsertedIds ?? {}).map((key) => Number(key)),
+		)
+		await markEventsProjected({
+			db,
+			prefix,
+			eventIds: events.map((event) => event.eventId),
+			session: params.session,
+		})
+		return events.map((_, index) => ({
+			chunkCreated: sessionUpsertedIndexes.has(index),
+		}))
+	}
 
 	let upsertedIndexes: Set<number>
 	let failedIndexes: Set<number>
@@ -1193,14 +1535,20 @@ export async function projectEventChunk(params: {
 	prefix: string
 	event: CanonicalEvent
 	recordRun?: boolean
+	session?: ClientSession
 }): Promise<{ chunkCreated: boolean }> {
 	const { db, prefix, event } = params
+	if (params.session && params.recordRun !== false) {
+		throw new TypeError(
+			"projectEventChunk requires recordRun:false when a session is provided",
+		)
+	}
 	const startMs = Date.now()
 	const chunks = chunksCollection(db, prefix)
 	const path = `events/${event.eventId}`
 	const text = renderEventChunkText(event)
 	const hash = createHash("sha256").update(text).digest("hex")
-	const result = await retryTransientMongoWrite("chunks.updateOne", () =>
+	const writeChunk = () =>
 		chunks.updateOne(
 			{ path },
 			{
@@ -1209,6 +1557,12 @@ export async function projectEventChunk(params: {
 					text,
 					hash,
 					source: "conversation",
+					// RET-09: preserve the turn's authoring role so search
+					// mappers can label provenance without parsing the text
+					// prefix. $setOnInsert (not $set): the role is immutable
+					// like the text, and legacy chunks keep recovering it
+					// from the renderEventChunkText prefix.
+					role: event.role,
 					agentId: event.agentId,
 					scope: event.scope,
 					scopeRef: event.scopeRef,
@@ -1234,15 +1588,31 @@ export async function projectEventChunk(params: {
 					invalidAt: event.invalidAt ?? null,
 				},
 			},
-			{ upsert: true },
-		),
-	)
+			params.session
+				? { upsert: true, session: params.session }
+				: { upsert: true },
+		)
+	const result = params.session
+		? await writeChunk()
+		: await retryTransientMongoWrite("chunks.updateOne", writeChunk)
 	let markerSet = true
 	try {
-		await retryTransientMongoWrite("events.markProjected", () =>
-			markEventsProjected({ db, prefix, eventIds: [event.eventId] }),
-		)
+		const markProjected = () =>
+			markEventsProjected({
+				db,
+				prefix,
+				eventIds: [event.eventId],
+				session: params.session,
+			})
+		if (params.session) {
+			await markProjected()
+		} else {
+			await retryTransientMongoWrite("events.markProjected", markProjected)
+		}
 	} catch (err) {
+		if (params.session) {
+			throw err
+		}
 		// W08: same degradation as the batch variant — the chunk is durable,
 		// the event stays unprojected, the repair pass re-projects it.
 		markerSet = false

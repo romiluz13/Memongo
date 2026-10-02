@@ -1,7 +1,26 @@
-import { describe, it, expect } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { MemongoClient } from "@memongo/client"
 import { createMemongoTools } from "@memongo/tools"
 import * as bridge from "./memongo-bridge.js"
+
+// Capture the exact getMemorySearchManager params the bridge forwards.
+// Partial mock: only getMemorySearchManager is replaced; every other engine
+// export stays real so the wiring assertions keep covering the real module.
+const engineMocks = vi.hoisted(() => ({
+	getManagerParams: [] as unknown[],
+}))
+vi.mock("@memongo/memory-engine", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("@memongo/memory-engine")>()
+	return {
+		...actual,
+		getMemorySearchManager: (params: unknown) => {
+			engineMocks.getManagerParams.push(params)
+			return Promise.resolve({
+				manager: { close: async () => {} },
+			})
+		},
+	}
+})
 
 describe("Phase 7-11 wiring: bridge functions", () => {
 	it("exports memongoBridgeShutdown (bridge shutdown part 2)", async () => {
@@ -202,5 +221,39 @@ describe("Phase 10 wiring: AI SDK tools", () => {
 describe("Phase 10 wiring: client types exported", () => {
 	it("exports MemongoTraceChainInput type", async () => {
 		expect(MemongoClient).toBeDefined()
+	})
+})
+
+describe("manager ownership passthrough (memongoBridgeGetManager)", () => {
+	beforeEach(() => {
+		engineMocks.getManagerParams.length = 0
+		vi.stubEnv("MEMONGO_MONGODB_URI", "mongodb://localhost:27017")
+		vi.stubEnv("MEMONGO_AGENT_ID", "bridge-agent")
+	})
+
+	afterEach(() => {
+		vi.unstubAllEnvs()
+	})
+
+	it("defaults to the cached acquisition (no ownership override)", async () => {
+		await bridge.memongoBridgeGetManager()
+
+		expect(engineMocks.getManagerParams).toHaveLength(1)
+		expect(engineMocks.getManagerParams[0]).toMatchObject({
+			agentId: "bridge-agent",
+		})
+		expect(
+			(engineMocks.getManagerParams[0] as Record<string, unknown>).ownership,
+		).toBeUndefined()
+	})
+
+	it("passes ownership 'owned' through to the engine acquisition", async () => {
+		await bridge.memongoBridgeGetManager(undefined, { ownership: "owned" })
+
+		expect(engineMocks.getManagerParams).toHaveLength(1)
+		expect(engineMocks.getManagerParams[0]).toMatchObject({
+			agentId: "bridge-agent",
+			ownership: "owned",
+		})
 	})
 })

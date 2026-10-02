@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto"
 import { type MemoryScope, createSubsystemLogger } from "@memongo/lib"
+import { settledFailureMeta } from "./query-diagnostics.js"
 import type { EnrichmentProvider } from "./mongodb-llm-enrichment.js"
 import type { StructuredMemoryEntry } from "./mongodb-structured-memory.js"
 
@@ -128,7 +129,7 @@ async function reasonOverMemories(params: {
 	} catch (err) {
 		log.warn("consolidation reasoning LLM call failed", {
 			kind: params.kind,
-			error: err instanceof Error ? err.message : String(err),
+			...settledFailureMeta(err),
 		})
 		return []
 	}

@@ -1,3 +1,8 @@
+import {
+	captureAdmissionToken,
+	isErasureGateConflictError,
+	type AdmissionToken,
+} from "./mongodb-erasure-epoch.js"
 import { findRelationByLocatorId } from "./mongodb-graph.js"
 import { listQuarantined } from "./mongodb-quarantine-review.js"
 import type { MongoDBManagerHost } from "./mongodb-manager-host.js"
@@ -10,8 +15,9 @@ import {
 	proceduresCollection,
 	structuredMemCollection,
 } from "./mongodb-schema.js"
+import { withFencedWrite } from "./mongodb-write-fence.js"
 import type { MemoryScope } from "@memongo/lib"
-import type { Document } from "mongodb"
+import type { ClientSession, Document } from "mongodb"
 import { buildUnexpiredClause } from "./mongodb-temporal.js"
 
 /**
@@ -32,6 +38,60 @@ export type ManagerReadResult = {
 	title?: string | undefined
 }
 
+/**
+ * Erasure suppression (per .ddd/notes/locator-read-erasure-suppression.md
+ * §5-§7): an erasure gate conflict — at admission or in-fence — serves the
+ * branch's own "reads as gone" miss shape (B1 precedent) instead of the
+ * record. Each row's `source` matches that branch's real miss return, and
+ * `conversationNormalize` replicates readConversationChunk's prefix handling
+ * (strip ONE `conversation:` prefix and trim, then re-prefix) so `events/x`
+ * and `conversation:events/x` both yield path `conversation:events/x`.
+ */
+const BRANCH_SHAPES: ReadonlyArray<{
+	prefixes: readonly string[]
+	source: ManagerReadResult["source"]
+	conversationNormalize?: boolean
+}> = [
+	{ prefixes: ["structured:"], source: "structured" },
+	{ prefixes: ["entity:"], source: "conversation" },
+	{ prefixes: ["procedure:"], source: "structured" },
+	{ prefixes: ["event:"], source: "conversation" },
+	{ prefixes: ["episode:"], source: "conversation" },
+	{ prefixes: ["relation:"], source: "conversation" },
+	{ prefixes: ["kb:", "reference:"], source: "reference" },
+	{
+		prefixes: ["conversation:", "events/", "sessions/"],
+		source: "conversation",
+		conversationNormalize: true,
+	},
+]
+
+function suppressedShape(rawPath: string): ManagerReadResult {
+	const normalized = rawPath.trim()
+	for (const { prefixes, source, conversationNormalize } of BRANCH_SHAPES) {
+		if (!prefixes.some((p) => normalized.startsWith(p))) {
+			continue
+		}
+		const path = conversationNormalize
+			? `conversation:${normalized.startsWith("conversation:") ? normalized.slice("conversation:".length).trim() : normalized}`
+			: normalized
+		return {
+			text: "",
+			path,
+			locator: path,
+			source,
+			sourceType: source,
+		}
+	}
+	return {
+		text: "",
+		path: normalized,
+		locator: normalized,
+		source: "reference" as const,
+		sourceType: "reference" as const,
+	}
+}
+
 export class MongoDBManagerReadOps {
 	constructor(private readonly host: MongoDBManagerHost) {}
 
@@ -42,9 +102,57 @@ export class MongoDBManagerReadOps {
 	}): Promise<ManagerReadResult> {
 		const rawPath = params.relPath.trim()
 		if (!rawPath) {
-			throw new Error("path required")
+			throw new Error("path required") // ordinary validation, before any gate work
 		}
 
+		let token: AdmissionToken
+		try {
+			// Write-bearing admission (lead-authorized): upserts open(0) for a
+			// legacy/missing gate; durable findAndModify per call. Erasing at
+			// admission → the branch's miss shape, zero tenant-data access.
+			token = await captureAdmissionToken({
+				db: this.host.db,
+				prefix: this.host.prefix,
+				agentId: this.host.agentId,
+			})
+		} catch (err) {
+			if (isErasureGateConflictError(err)) {
+				return suppressedShape(rawPath)
+			}
+			throw err // malformed gate / driver error: fail closed
+		}
+		try {
+			// One original token; no session passed → the fence owns exactly one
+			// session/transaction level (mongodb-write-fence.ts:30-42); there is
+			// no sessionless fallback. In-fence conflict (erasure won the gate
+			// between admission and commit) → miss shape, never a silent serve.
+			return await withFencedWrite({
+				db: this.host.db,
+				prefix: this.host.prefix,
+				token,
+				fn: (session) => this.readLocator(rawPath, params, session),
+			})
+		} catch (err) {
+			if (isErasureGateConflictError(err)) {
+				return suppressedShape(rawPath)
+			}
+			throw err
+		}
+	}
+
+	/**
+	 * The pre-fence dispatch body, now always fenced: `session` is REQUIRED —
+	 * every collection operation below runs inside the fence's transaction on
+	 * that explicit session (driver rule, mongodb 7.6.0 lib/sessions.js:468:
+	 * an operation inside withTransaction WITHOUT the session is NOT part of
+	 * the transaction). Filters, sort, limits, normalization and every miss
+	 * shape are unchanged from the unfenced reader.
+	 */
+	private async readLocator(
+		rawPath: string,
+		params: { from?: number; lines?: number },
+		session: ClientSession,
+	): Promise<ManagerReadResult> {
 		if (rawPath.startsWith("structured:")) {
 			const [basePath, queryString] = rawPath.split("?", 2)
 			const [, type, ...keyParts] = basePath.split(":")
@@ -58,16 +166,19 @@ export class MongoDBManagerReadOps {
 			const record = await structuredMemCollection(
 				this.host.db,
 				this.host.prefix,
-			).findOne({
-				agentId: this.host.agentId,
-				type,
-				key,
-				...(scope ? { scope } : {}),
-				...(scopeRef ? { scopeRef } : {}),
-				// P4.4.1 (B1): an expired record reads as gone even before the
-				// TTL sweep removes it.
-				...buildUnexpiredClause(),
-			})
+			).findOne(
+				{
+					agentId: this.host.agentId,
+					type,
+					key,
+					...(scope ? { scope } : {}),
+					...(scopeRef ? { scopeRef } : {}),
+					// P4.4.1 (B1): an expired record reads as gone even before the
+					// TTL sweep removes it.
+					...buildUnexpiredClause(),
+				},
+				{ session },
+			)
 			if (!record) {
 				return {
 					text: "",
@@ -83,6 +194,7 @@ export class MongoDBManagerReadOps {
 					$set: { openedAt: new Date() },
 					$inc: { openedCount: 1 },
 				},
+				{ session },
 			)
 			const text = [
 				`type: ${String(record.type ?? type)}`,
@@ -163,12 +275,15 @@ export class MongoDBManagerReadOps {
 			const record = await entitiesCollection(
 				this.host.db,
 				this.host.prefix,
-			).findOne({
-				agentId: this.host.agentId,
-				entityId,
-				...(scope ? { scope } : {}),
-				...(scopeRef ? { scopeRef } : {}),
-			})
+			).findOne(
+				{
+					agentId: this.host.agentId,
+					entityId,
+					...(scope ? { scope } : {}),
+					...(scopeRef ? { scopeRef } : {}),
+				},
+				{ session },
+			)
 			if (!record) {
 				return {
 					text: "",
@@ -218,12 +333,15 @@ export class MongoDBManagerReadOps {
 			const record = await proceduresCollection(
 				this.host.db,
 				this.host.prefix,
-			).findOne({
-				agentId: this.host.agentId,
-				procedureId,
-				...(scope ? { scope } : {}),
-				...(scopeRef ? { scopeRef } : {}),
-			})
+			).findOne(
+				{
+					agentId: this.host.agentId,
+					procedureId,
+					...(scope ? { scope } : {}),
+					...(scopeRef ? { scopeRef } : {}),
+				},
+				{ session },
+			)
 			if (!record) {
 				return {
 					text: "",
@@ -239,6 +357,7 @@ export class MongoDBManagerReadOps {
 					$set: { openedAt: new Date() },
 					$inc: { openedCount: 1 },
 				},
+				{ session },
 			)
 			const text = [
 				`procedureId: ${String(record.procedureId ?? procedureId)}`,
@@ -285,7 +404,7 @@ export class MongoDBManagerReadOps {
 			if (!eventId) {
 				throw new Error("path required")
 			}
-			return await this.host.readCanonicalEvent(eventId, rawPath)
+			return await this.host.readCanonicalEvent(eventId, rawPath, session)
 		}
 
 		if (rawPath.startsWith("episode:")) {
@@ -300,6 +419,7 @@ export class MongoDBManagerReadOps {
 				rawPath,
 				episodeId,
 				expandEvents: expand === "events" || expand === "full",
+				session,
 			})
 		}
 
@@ -325,6 +445,7 @@ export class MongoDBManagerReadOps {
 				scopeRef,
 				relationId,
 				type,
+				session,
 			})
 			if (!relation) {
 				return {
@@ -421,7 +542,7 @@ export class MongoDBManagerReadOps {
 					scopeRef,
 					$or: [{ "source.path": kbPath }, { title: kbPath }],
 				},
-				{ sort: { updatedAt: -1, _id: 1 } },
+				{ sort: { updatedAt: -1, _id: 1 }, session },
 			)
 			if (!record) {
 				return {
@@ -451,16 +572,29 @@ export class MongoDBManagerReadOps {
 				rawPath,
 				params.from,
 				params.lines,
+				session,
 			)
 		}
 
-		return await this.host.readBridgeChunk(rawPath, params.from, params.lines)
+		return await this.host.readBridgeChunk(
+			rawPath,
+			params.from,
+			params.lines,
+			session,
+		)
 	}
 
+	/**
+	 * Optional trailing `session`: the fenced readLocator path always passes
+	 * the fence's session; direct legacy callers omit it and get today's
+	 * unfenced behavior (named exclusion in the plan §8/§14). When omitted,
+	 * the collection call shape stays exactly today's (no options argument).
+	 */
 	async readConversationChunk(
 		rawPath: string,
 		from?: number,
 		lines?: number,
+		session?: ClientSession,
 	): Promise<ManagerReadResult> {
 		const normalizedPath = rawPath.startsWith("conversation:")
 			? rawPath.slice("conversation:".length).trim()
@@ -472,28 +606,31 @@ export class MongoDBManagerReadOps {
 		const count = Math.max(1, lines ?? Number.MAX_SAFE_INTEGER)
 		const end = start + count - 1
 		const docs = await chunksCollection(this.host.db, this.host.prefix)
-			.find({
-				path: normalizedPath,
-				source: { $in: ["sessions", "conversation"] },
-				agentId: this.host.agentId,
-				// C-005: expired chunks (sweep lagging up to ~60s) are hidden
-				// here; the events/ miss falls through to readCanonicalEvent,
-				// which applies the same guard to the event document.
-				$and: [
-					...(from || lines
-						? [
-								{
-									$or: [
-										{ startLine: { $gte: start, $lte: end } },
-										{ endLine: { $gte: start, $lte: end } },
-										{ startLine: { $lte: start }, endLine: { $gte: end } },
-									],
-								},
-							]
-						: []),
-					buildUnexpiredClause({ field: "expiresAt" }),
-				],
-			})
+			.find(
+				{
+					path: normalizedPath,
+					source: { $in: ["sessions", "conversation"] },
+					agentId: this.host.agentId,
+					// C-005: expired chunks (sweep lagging up to ~60s) are hidden
+					// here; the events/ miss falls through to readCanonicalEvent,
+					// which applies the same guard to the event document.
+					$and: [
+						...(from || lines
+							? [
+									{
+										$or: [
+											{ startLine: { $gte: start, $lte: end } },
+											{ endLine: { $gte: start, $lte: end } },
+											{ startLine: { $lte: start }, endLine: { $gte: end } },
+										],
+									},
+								]
+							: []),
+						buildUnexpiredClause({ field: "expiresAt" }),
+					],
+				},
+				...(session ? [{ session }] : []),
+			)
 			// oxlint-disable-next-line unicorn/no-array-sort -- MongoDB cursor .sort(), not Array
 			.sort({ startLine: 1 })
 			.toArray()
@@ -504,6 +641,7 @@ export class MongoDBManagerReadOps {
 					return await this.host.readCanonicalEvent(
 						eventId,
 						`conversation:${normalizedPath}`,
+						session,
 					)
 				}
 			}
@@ -530,15 +668,19 @@ export class MongoDBManagerReadOps {
 	async readCanonicalEvent(
 		eventId: string,
 		rawPath: string,
+		session?: ClientSession,
 	): Promise<ManagerReadResult> {
 		const event = await eventsCollection(
 			this.host.db,
 			this.host.prefix,
-		).findOne({
-			agentId: this.host.agentId,
-			eventId,
-			...buildUnexpiredClause(),
-		})
+		).findOne(
+			{
+				agentId: this.host.agentId,
+				eventId,
+				...buildUnexpiredClause(),
+			},
+			...(session ? [{ session }] : []),
+		)
 		if (!event) {
 			return {
 				text: "",
@@ -569,34 +711,38 @@ export class MongoDBManagerReadOps {
 		rawPath: string,
 		from?: number,
 		lines?: number,
+		session?: ClientSession,
 	): Promise<ManagerReadResult> {
 		const start = Math.max(1, from ?? 1)
 		const count = Math.max(1, lines ?? Number.MAX_SAFE_INTEGER)
 		const end = start + count - 1
 		const docs = await chunksCollection(this.host.db, this.host.prefix)
-			.find({
-				path: rawPath,
-				source: { $in: ["conversation", "memory"] },
-				agentId: this.host.agentId,
-				scope: "workspace",
-				scopeRef: this.host.workspaceScopeRef,
-				// C-005: same unexpired guard as the conversation reader — the
-				// bridge lane reads the same chunks collection.
-				$and: [
-					...(from || lines
-						? [
-								{
-									$or: [
-										{ startLine: { $gte: start, $lte: end } },
-										{ endLine: { $gte: start, $lte: end } },
-										{ startLine: { $lte: start }, endLine: { $gte: end } },
-									],
-								},
-							]
-						: []),
-					buildUnexpiredClause({ field: "expiresAt" }),
-				],
-			})
+			.find(
+				{
+					path: rawPath,
+					source: { $in: ["conversation", "memory"] },
+					agentId: this.host.agentId,
+					scope: "workspace",
+					scopeRef: this.host.workspaceScopeRef,
+					// C-005: same unexpired guard as the conversation reader — the
+					// bridge lane reads the same chunks collection.
+					$and: [
+						...(from || lines
+							? [
+									{
+										$or: [
+											{ startLine: { $gte: start, $lte: end } },
+											{ endLine: { $gte: start, $lte: end } },
+											{ startLine: { $lte: start }, endLine: { $gte: end } },
+										],
+									},
+								]
+							: []),
+						buildUnexpiredClause({ field: "expiresAt" }),
+					],
+				},
+				...(session ? [{ session }] : []),
+			)
 			// oxlint-disable-next-line unicorn/no-array-sort -- MongoDB cursor .sort(), not Array
 			.sort({ startLine: 1 })
 			.toArray()
@@ -625,16 +771,20 @@ export class MongoDBManagerReadOps {
 		rawPath: string
 		episodeId: string
 		expandEvents: boolean
+		session?: ClientSession
 	}): Promise<ManagerReadResult> {
-		const { rawPath, episodeId, expandEvents } = params
+		const { rawPath, episodeId, expandEvents, session } = params
 		const episode = await episodesCollection(
 			this.host.db,
 			this.host.prefix,
-		).findOne({
-			agentId: this.host.agentId,
-			episodeId,
-			status: { $ne: "deleted" },
-		})
+		).findOne(
+			{
+				agentId: this.host.agentId,
+				episodeId,
+				status: { $ne: "deleted" },
+			},
+			...(session ? [{ session }] : []),
+		)
 		if (!episode) {
 			return {
 				text: "",
@@ -679,11 +829,14 @@ export class MongoDBManagerReadOps {
 
 		if (expandEvents && sourceEventIds.length > 0) {
 			const events = await eventsCollection(this.host.db, this.host.prefix)
-				.find({
-					agentId: this.host.agentId,
-					eventId: { $in: sourceEventIds },
-					...buildUnexpiredClause(),
-				})
+				.find(
+					{
+						agentId: this.host.agentId,
+						eventId: { $in: sourceEventIds },
+						...buildUnexpiredClause(),
+					},
+					...(session ? [{ session }] : []),
+				)
 				.toArray()
 			const eventOrder = new Map(
 				sourceEventIds.map((value, index) => [value, index]),

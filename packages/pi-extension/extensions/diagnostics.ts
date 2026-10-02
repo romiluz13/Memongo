@@ -10,29 +10,43 @@
  * Over-matching only adds stars to log detail; errMessage is the single
  * choke point every diagnostic site flows through.
  */
+function maskCapturedValue(text: string, pattern: RegExp): string {
+	const parts: string[] = []
+	let copiedUntil = 0
+	const regex = new RegExp(pattern.source, `${pattern.flags}d`)
+	for (const match of text.matchAll(regex)) {
+		let redacted = match[0]
+		for (let group = 1; group < match.length; group++) {
+			if (!match[group]) continue
+			const [start, end] = (match.indices as RegExpIndicesArray)[group]
+			redacted =
+				match[0].slice(0, start - match.index) +
+				"***" +
+				match[0].slice(end - match.index)
+			break
+		}
+		parts.push(text.slice(copiedUntil, match.index), redacted)
+		copiedUntil = match.index + match[0].length
+	}
+	parts.push(text.slice(copiedUntil))
+	return parts.join("")
+}
+
 export function sanitizeDiagnostic(text: string): string {
 	let out = text
-	out = out.replace(
-		/[a-z][a-z0-9+.-]*:\/\/[^\s:@/]*:([^@\s]+)@/gi,
-		(match, password: string) => match.replace(password, "***"),
+	out = maskCapturedValue(
+		out,
+		/(?<![a-z0-9+.-])[0-9+.-]*[a-z][a-z0-9+.-]*:\/\/[^\s:@/]*:([^@\s]+)@/gi,
 	)
-	out = out.replace(
-		/[a-z][a-z0-9+.-]*:\/\/([^:@/\s"]+)@/gi,
-		(match, user: string) => match.replace(user, "***"),
+	out = maskCapturedValue(
+		out,
+		/(?<![a-z0-9+.-])[0-9+.-]*[a-z][a-z0-9+.-]*:\/\/([^:@/\s"]+)@/gi,
 	)
-	out = out.replace(
+	out = maskCapturedValue(
+		out,
 		/\b[A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|AUTH|CREDENTIALS?)\b\s*"?\s*[=:]\s*(?:\\?"([^"\\]*)\\?"?|\\?'([^'\\]*)\\?'?|([^\s"'\\,;}\]]+))/gi,
-		(match, doubleQuoted: string, singleQuoted: string, bare: string) => {
-			const value = [doubleQuoted, singleQuoted, bare].find(
-				(candidate) => typeof candidate === "string" && candidate.length > 0,
-			)
-			return typeof value === "string" ? match.replace(value, "***") : match
-		},
 	)
-	out = out.replace(
-		/\bBearer\s+([A-Za-z0-9._\-+=]+)/gi,
-		(match, token: string) => match.replace(token, "***"),
-	)
+	out = maskCapturedValue(out, /\bBearer\s+([A-Za-z0-9._\-+=]+)/gi)
 	out = out.replace(
 		/(https?:\/\/(?:hooks\.[a-z0-9.-]+|discord(?:app)?\.com\/api\/webhooks))\S*/gi,
 		(_match, host: string) => `${host}/***`,

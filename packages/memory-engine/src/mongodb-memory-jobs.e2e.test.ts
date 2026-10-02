@@ -3,12 +3,19 @@ import { mkdtemp, rm } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import type { MemongoConfig } from "@memongo/lib"
-import { MongoClient } from "mongodb"
-import { afterAll, beforeAll, describe, expect, it } from "vitest"
+import {
+	type Collection,
+	type CollectionOptions,
+	type Db,
+	MongoClient,
+	MongoServerError,
+} from "mongodb"
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest"
 import {
 	claimMemoryJob,
 	completeClaimedMemoryJob,
 	createMemoryJob,
+	deadLetterExpiredMemoryJobs,
 	failClaimedMemoryJob,
 	MEMORY_JOB_MAX_ATTEMPTS,
 	releaseStagedMemoryJob,
@@ -20,21 +27,29 @@ import { writeEvent, writeEventsBatch } from "./mongodb-events.js"
 import { MongoDBMemoryManager } from "./mongodb-manager.js"
 import { writeProcedure } from "./mongodb-procedures.js"
 import {
+	chunksCollection,
 	ensureCollections,
 	entitiesCollection,
 	entityLinksCollection,
 	eventsCollection,
 	memoryJobsCollection,
+	mutationsCollection,
 	procedureRevisionsCollection,
 	proceduresCollection,
 	relationsCollection,
 	structuredMemCollection,
 	structuredMemRevisionsCollection,
+	telemetryCollection,
+	projectionRunsCollection,
 } from "./mongodb-schema.js"
 import { writeStructuredMemory } from "./mongodb-structured-memory.js"
 import { resolvePreviewMongoTestUri } from "./test-helpers/preview-env.js"
 import { MAJORITY_TRANSACTION_OPTIONS } from "./mongodb-transactions.js"
 import { resolveMemoryBackendConfig } from "./backend-config.js"
+import {
+	bumpTenantErasureEpoch,
+	captureAdmissionToken,
+} from "./mongodb-erasure-epoch.js"
 
 const TEST_URI = resolvePreviewMongoTestUri(
 	"mongodb://127.0.0.1:27019/?directConnection=true",
@@ -44,6 +59,59 @@ const PREFIX = "jobs_"
 const AGENT = `agent-${randomUUID().slice(0, 8)}`
 
 let client: MongoClient
+
+function proxyDbCollections(
+	db: Db,
+	resolve: (name: string, collection: Collection) => Collection,
+): Db {
+	return new Proxy(db, {
+		get(target, property) {
+			if (property === "collection") {
+				return (name: string, options?: CollectionOptions) =>
+					resolve(name, target.collection(name, options))
+			}
+			const value = Reflect.get(target, property, target)
+			return typeof value === "function" ? value.bind(target) : value
+		},
+	})
+}
+
+function repairManager(db: Db, agentId: string): MongoDBMemoryManager {
+	return Object.assign(Object.create(MongoDBMemoryManager.prototype), {
+		db,
+		prefix: PREFIX,
+		agentId,
+		chunkCount: 0,
+	}) as MongoDBMemoryManager
+}
+
+function extractionRunnerManager(
+	db: Db,
+	agentId: string,
+): MongoDBMemoryManager {
+	return Object.assign(Object.create(MongoDBMemoryManager.prototype), {
+		client,
+		db,
+		prefix: PREFIX,
+		agentId,
+		config: { mongodb: { embeddingMode: "automated" } },
+		workspaceDir: "/tmp/memongo-worker-effects-e2e",
+		memoryJobOperationContexts: new Map(),
+	}) as MongoDBMemoryManager
+}
+
+async function runClaimedExtraction(
+	manager: MongoDBMemoryManager,
+	job: NonNullable<Awaited<ReturnType<typeof claimMemoryJob>>>,
+): Promise<void> {
+	const lifecycle = MongoDBMemoryManager.prototype as unknown as {
+		runClaimedBackgroundExtractionJob: (
+			this: MongoDBMemoryManager,
+			claimed: typeof job,
+		) => Promise<void>
+	}
+	await lifecycle.runClaimedBackgroundExtractionJob.call(manager, job)
+}
 
 describe("durable memory job leases (live MongoDB)", () => {
 	beforeAll(async () => {
@@ -171,6 +239,7 @@ describe("durable memory job leases (live MongoDB)", () => {
 			leaseMs: 60_000,
 		})
 		expect(original).not.toBeNull()
+		if (!original) throw new Error("expected the original extraction claim")
 		await memoryJobsCollection(db, PREFIX).updateOne(
 			{ jobId },
 			{ $set: { leaseExpiresAt: new Date(Date.now() - 1_000) } },
@@ -207,6 +276,659 @@ describe("durable memory job leases (live MongoDB)", () => {
 				leaseMs: 60_000,
 			}),
 		).resolves.toBe(true)
+	})
+
+	it("blocks stale worker effects after a same-epoch lease reclaim", async () => {
+		const db = client.db(TEST_DB)
+		const agentId = `${AGENT}-worker-effect-reclaim`
+		const eventId = `event-worker-effect-reclaim-${randomUUID()}`
+		const jobId = `extraction-${eventId}`
+		const admission = await captureAdmissionToken({
+			db,
+			prefix: PREFIX,
+			agentId,
+		})
+		await writeEvent({
+			db,
+			prefix: PREFIX,
+			event: {
+				eventId,
+				agentId,
+				role: "user",
+				body: "A provider result that belongs to a stale lease.",
+				scope: "agent",
+				scopeRef: `agent:${agentId}`,
+			},
+		})
+		await createMemoryJob({
+			db,
+			prefix: PREFIX,
+			job: {
+				jobId,
+				jobType: "extraction",
+				agentId,
+				status: "pending",
+				admissionEpoch: admission.epoch,
+				payload: {
+					eventId,
+					scope: "agent",
+					scopeRef: `agent:${agentId}`,
+				},
+			},
+		})
+		const original = await claimMemoryJob({
+			db,
+			prefix: PREFIX,
+			agentId,
+			jobType: "extraction",
+			workerId: "worker-original",
+			leaseMs: 60_000,
+			admissionEpoch: admission.epoch,
+		})
+		expect(original).not.toBeNull()
+		if (!original) throw new Error("expected the original extraction claim")
+
+		const enrichment = await import("./mongodb-llm-enrichment.js")
+		let replacement: NonNullable<
+			Awaited<ReturnType<typeof claimMemoryJob>>
+		> | null = null
+		const provider = {
+			name: "worker-effects-e2e",
+			chatCompletion: vi.fn(async () => ({
+				content: JSON.stringify({
+					facts: ["The stale worker must not persist this provider fact."],
+					qa_pairs: [],
+					has_personal_content: false,
+				}),
+			})),
+		}
+		const interceptedDb = proxyDbCollections(db, (name, collection) => {
+			if (name !== `${PREFIX}memory_jobs`) return collection
+			return new Proxy(collection, {
+				get(target, property) {
+					if (property === "updateOne") {
+						return async (...args: Parameters<typeof target.updateOne>) => {
+							const update = args[1]
+							if (
+								!replacement &&
+								provider.chatCompletion.mock.calls.length > 0 &&
+								!Array.isArray(update) &&
+								"$inc" in update &&
+								"effectFenceSerial" in (update.$inc ?? {})
+							) {
+								await memoryJobsCollection(db, PREFIX).updateOne(
+									{ jobId, leaseToken: original.leaseToken },
+									{ $set: { leaseExpiresAt: new Date(Date.now() - 1_000) } },
+								)
+								replacement = await claimMemoryJob({
+									db,
+									prefix: PREFIX,
+									agentId,
+									jobType: "extraction",
+									workerId: "worker-replacement",
+									leaseMs: 60_000,
+									admissionEpoch: admission.epoch,
+								})
+							}
+							return target.updateOne(...args)
+						}
+					}
+					const value = Reflect.get(target, property, target)
+					return typeof value === "function" ? value.bind(target) : value
+				},
+			})
+		})
+		const providerSpy = vi
+			.spyOn(enrichment, "resolveEnrichmentProvider")
+			.mockReturnValue(provider)
+		try {
+			await runClaimedExtraction(
+				extractionRunnerManager(interceptedDb, agentId),
+				original,
+			)
+		} finally {
+			providerSpy.mockRestore()
+		}
+
+		expect(provider.chatCompletion).toHaveBeenCalled()
+		expect(replacement).toMatchObject({
+			jobId,
+			leaseOwner: "worker-replacement",
+			admissionEpoch: admission.epoch,
+		})
+		expect(
+			await structuredMemCollection(db, PREFIX).countDocuments({ agentId }),
+		).toBe(0)
+		expect(
+			await proceduresCollection(db, PREFIX).countDocuments({ agentId }),
+		).toBe(0)
+		await expect(
+			memoryJobsCollection(db, PREFIX).findOne({ jobId, agentId }),
+		).resolves.toMatchObject({
+			status: "running",
+			leaseOwner: "worker-replacement",
+			leaseToken: replacement?.leaseToken,
+		})
+	})
+
+	it("blocks worker effects when the epoch advances after the event read", async () => {
+		const db = client.db(TEST_DB)
+		const agentId = `${AGENT}-worker-effect-epoch`
+		const eventId = `event-worker-effect-epoch-${randomUUID()}`
+		const jobId = `extraction-${eventId}`
+		const admission = await captureAdmissionToken({
+			db,
+			prefix: PREFIX,
+			agentId,
+		})
+		await writeEvent({
+			db,
+			prefix: PREFIX,
+			event: {
+				eventId,
+				agentId,
+				role: "user",
+				body: "@alice remembers #stale-epoch.",
+				scope: "agent",
+				scopeRef: `agent:${agentId}`,
+			},
+		})
+		await createMemoryJob({
+			db,
+			prefix: PREFIX,
+			job: {
+				jobId,
+				jobType: "extraction",
+				agentId,
+				status: "pending",
+				admissionEpoch: admission.epoch,
+				payload: {
+					eventId,
+					scope: "agent",
+					scopeRef: `agent:${agentId}`,
+				},
+			},
+		})
+		const claimed = await claimMemoryJob({
+			db,
+			prefix: PREFIX,
+			agentId,
+			jobType: "extraction",
+			workerId: "worker-epoch",
+			leaseMs: 60_000,
+			admissionEpoch: admission.epoch,
+		})
+		expect(claimed).not.toBeNull()
+		if (!claimed) throw new Error("expected the epoch extraction claim")
+
+		let eventRead = false
+		const interceptedDb = proxyDbCollections(db, (name, collection) => {
+			if (name !== `${PREFIX}events`) return collection
+			return new Proxy(collection, {
+				get(target, property) {
+					if (property === "findOne") {
+						return async (...args: Parameters<typeof target.findOne>) => {
+							const doc = await target.findOne(...args)
+							if (!eventRead) {
+								eventRead = true
+								await bumpTenantErasureEpoch(db, PREFIX, agentId)
+							}
+							return doc
+						}
+					}
+					const value = Reflect.get(target, property, target)
+					return typeof value === "function" ? value.bind(target) : value
+				},
+			})
+		})
+		const enrichment = await import("./mongodb-llm-enrichment.js")
+		const providerSpy = vi
+			.spyOn(enrichment, "resolveEnrichmentProvider")
+			.mockReturnValue(null)
+		try {
+			await runClaimedExtraction(
+				extractionRunnerManager(interceptedDb, agentId),
+				claimed,
+			)
+		} finally {
+			providerSpy.mockRestore()
+		}
+
+		expect(eventRead).toBe(true)
+		expect(
+			await entitiesCollection(db, PREFIX).countDocuments({ agentId }),
+		).toBe(0)
+		expect(
+			await structuredMemCollection(db, PREFIX).countDocuments({ agentId }),
+		).toBe(0)
+		await expect(
+			memoryJobsCollection(db, PREFIX).findOne({ jobId, agentId }),
+		).resolves.toMatchObject({
+			status: "running",
+			leaseToken: claimed?.leaseToken,
+			admissionEpoch: admission.epoch,
+		})
+	})
+
+	it("blocks promotion when the source event is invalidated during inference", async () => {
+		const db = client.db(TEST_DB)
+		const agentId = `${AGENT}-worker-effect-source-lifecycle`
+		const eventId = `event-worker-effect-source-lifecycle-${randomUUID()}`
+		const jobId = `extraction-${eventId}`
+		const admission = await captureAdmissionToken({
+			db,
+			prefix: PREFIX,
+			agentId,
+		})
+		await writeEvent({
+			db,
+			prefix: PREFIX,
+			event: {
+				eventId,
+				agentId,
+				role: "user",
+				body: "Remember this: the source-valid launch code is Red Heron.",
+				scope: "agent",
+				scopeRef: `agent:${agentId}`,
+			},
+		})
+		await createMemoryJob({
+			db,
+			prefix: PREFIX,
+			job: {
+				jobId,
+				jobType: "extraction",
+				agentId,
+				status: "pending",
+				admissionEpoch: admission.epoch,
+				payload: {
+					eventId,
+					scope: "agent",
+					scopeRef: `agent:${agentId}`,
+				},
+			},
+		})
+		const claimed = await claimMemoryJob({
+			db,
+			prefix: PREFIX,
+			agentId,
+			jobType: "extraction",
+			workerId: "worker-source-lifecycle",
+			leaseMs: 60_000,
+			admissionEpoch: admission.epoch,
+		})
+		expect(claimed).not.toBeNull()
+		if (!claimed)
+			throw new Error("expected the source-lifecycle extraction claim")
+
+		const enrichment = await import("./mongodb-llm-enrichment.js")
+		let invalidated = false
+		const provider = {
+			name: "worker-effects-e2e",
+			chatCompletion: vi.fn(async () => {
+				if (!invalidated) {
+					invalidated = true
+					await eventsCollection(db, PREFIX).updateOne(
+						{ eventId, agentId },
+						{ $set: { invalidAt: new Date(Date.now() - 1_000) } },
+					)
+				}
+				return {
+					content: JSON.stringify({
+						facts: ["The source-valid launch code is Red Heron."],
+						qa_pairs: [],
+						has_personal_content: false,
+					}),
+				}
+			}),
+		}
+		const providerSpy = vi
+			.spyOn(enrichment, "resolveEnrichmentProvider")
+			.mockReturnValue(provider)
+		try {
+			await runClaimedExtraction(extractionRunnerManager(db, agentId), claimed)
+		} finally {
+			providerSpy.mockRestore()
+		}
+
+		expect(invalidated).toBe(true)
+		expect(provider.chatCompletion).toHaveBeenCalled()
+		expect(
+			await structuredMemCollection(db, PREFIX).countDocuments({ agentId }),
+		).toBe(0)
+		expect(
+			await proceduresCollection(db, PREFIX).countDocuments({ agentId }),
+		).toBe(0)
+	})
+
+	it.each([
+		["no correction", "none"],
+		["source correction", "source"],
+		["target correction", "target"],
+	] as const)("revalidates contradiction revisions after %s during inference", async (_label, correction) => {
+		const db = client.db(TEST_DB)
+		const agentId = `${AGENT}-contradiction-${correction}-${randomUUID()}`
+		const scopeRef = `agent:${agentId}`
+		const eventId = `event-contradiction-${randomUUID()}`
+		const jobId = `extraction-${eventId}`
+		const sourceValue = "The user lives in London."
+		const correctedSourceValue = "The user lives in Lisbon."
+		const targetKey = `fact-berlin-${randomUUID()}`
+		const targetValue = "The user lives in Berlin."
+		const correctedTargetValue = "The user lives in Madrid."
+		const admission = await captureAdmissionToken({
+			db,
+			prefix: PREFIX,
+			agentId,
+		})
+		await writeStructuredMemory({
+			db,
+			prefix: PREFIX,
+			embeddingMode: "automated",
+			entry: {
+				type: "fact",
+				key: targetKey,
+				value: targetValue,
+				agentId,
+				scope: "agent",
+				scopeRef,
+			},
+		})
+		await writeEvent({
+			db,
+			prefix: PREFIX,
+			event: {
+				eventId,
+				agentId,
+				role: "user",
+				body: `Remember: ${sourceValue}`,
+				scope: "agent",
+				scopeRef,
+			},
+		})
+		await createMemoryJob({
+			db,
+			prefix: PREFIX,
+			job: {
+				jobId,
+				jobType: "extraction",
+				agentId,
+				status: "pending",
+				admissionEpoch: admission.epoch,
+				payload: { eventId, scope: "agent", scopeRef },
+			},
+		})
+		const claimed = await claimMemoryJob({
+			db,
+			prefix: PREFIX,
+			agentId,
+			jobType: "extraction",
+			workerId: `worker-contradiction-${correction}`,
+			leaseMs: 60_000,
+			admissionEpoch: admission.epoch,
+		})
+		expect(claimed).not.toBeNull()
+		if (!claimed) throw new Error("expected the contradiction extraction claim")
+
+		let contradictionCalls = 0
+		const provider = {
+			name: "worker-effects-contradiction-e2e",
+			chatCompletion: vi.fn(async ({ messages }) => {
+				const systemPrompt =
+					messages.find((message) => message.role === "system")?.content ?? ""
+				if (systemPrompt.startsWith("You detect direct contradictions")) {
+					contradictionCalls += 1
+					if (correction !== "none") {
+						const source = await structuredMemCollection(db, PREFIX).findOne({
+							agentId,
+							scope: "agent",
+							scopeRef,
+							type: "fact",
+							value: sourceValue,
+							state: "active",
+						})
+						expect(source).not.toBeNull()
+						if (!source) throw new Error("expected the promoted source fact")
+						const key = correction === "source" ? String(source.key) : targetKey
+						await writeStructuredMemory({
+							db,
+							prefix: PREFIX,
+							embeddingMode: "automated",
+							entry: {
+								type: "fact",
+								key,
+								value:
+									correction === "source"
+										? correctedSourceValue
+										: correctedTargetValue,
+								agentId,
+								scope: "agent",
+								scopeRef,
+							},
+						})
+					}
+					return {
+						content: JSON.stringify({
+							contradictions: [
+								{ key: targetKey, rationale: "exclusive locations" },
+							],
+						}),
+					}
+				}
+				if (systemPrompt.startsWith("You extract the validity time window")) {
+					return {
+						content: JSON.stringify({ validFrom: null, validTo: null }),
+					}
+				}
+				return {
+					content: JSON.stringify({
+						facts: [],
+						qa_pairs: [],
+						has_personal_content: false,
+					}),
+				}
+			}),
+		}
+		const enrichment = await import("./mongodb-llm-enrichment.js")
+		const providerSpy = vi
+			.spyOn(enrichment, "resolveEnrichmentProvider")
+			.mockReturnValue(provider)
+		try {
+			await runClaimedExtraction(extractionRunnerManager(db, agentId), claimed)
+		} finally {
+			providerSpy.mockRestore()
+		}
+
+		const source = await structuredMemCollection(db, PREFIX).findOne({
+			agentId,
+			scope: "agent",
+			scopeRef,
+			type: "fact",
+			key: { $ne: targetKey },
+		})
+		const target = await structuredMemCollection(db, PREFIX).findOne({
+			agentId,
+			scope: "agent",
+			scopeRef,
+			type: "fact",
+			key: targetKey,
+		})
+		const targetRevisions = await structuredMemRevisionsCollection(
+			db,
+			PREFIX,
+		).countDocuments({
+			agentId,
+			scope: "agent",
+			scopeRef,
+			type: "fact",
+			key: targetKey,
+		})
+		const contradictionAudits = await mutationsCollection(
+			db,
+			PREFIX,
+		).countDocuments({
+			agentId,
+			collectionName: "structured_mem",
+			operation: "invalidate",
+			"newValue.invalidatedBy.reason": "contradiction",
+		})
+
+		expect(contradictionCalls).toBe(1)
+		await expect(
+			memoryJobsCollection(db, PREFIX).findOne({ jobId, agentId }),
+		).resolves.toMatchObject({ status: "completed" })
+		if (correction === "none") {
+			expect(source).toMatchObject({
+				value: sourceValue,
+				revision: 1,
+				state: "active",
+			})
+			expect(target).toMatchObject({
+				value: targetValue,
+				revision: 2,
+				state: "invalidated",
+				invalidatedBy: {
+					reason: "contradiction",
+					byValue: sourceValue,
+				},
+			})
+			expect(targetRevisions).toBe(1)
+			expect(contradictionAudits).toBe(1)
+		} else {
+			expect(source).toMatchObject({
+				value: correction === "source" ? correctedSourceValue : sourceValue,
+				revision: correction === "source" ? 2 : 1,
+				state: "active",
+			})
+			expect(target).toMatchObject({
+				value: correction === "target" ? correctedTargetValue : targetValue,
+				revision: correction === "target" ? 2 : 1,
+				state: "active",
+			})
+			expect(target?.invalidatedBy).toBeUndefined()
+			expect(targetRevisions).toBe(correction === "target" ? 1 : 0)
+			expect(contradictionAudits).toBe(0)
+		}
+	})
+
+	it("retries an aborted effect batch without repeating provider work", async () => {
+		const db = client.db(TEST_DB)
+		const agentId = `${AGENT}-worker-effect-retry`
+		const eventId = `event-worker-effect-retry-${randomUUID()}`
+		const jobId = `extraction-${eventId}`
+		const admission = await captureAdmissionToken({
+			db,
+			prefix: PREFIX,
+			agentId,
+		})
+		await writeEvent({
+			db,
+			prefix: PREFIX,
+			event: {
+				eventId,
+				agentId,
+				role: "user",
+				body: "Remember this: the retry-safe launch code is Blue Finch.",
+				scope: "agent",
+				scopeRef: `agent:${agentId}`,
+			},
+		})
+		await createMemoryJob({
+			db,
+			prefix: PREFIX,
+			job: {
+				jobId,
+				jobType: "extraction",
+				agentId,
+				status: "pending",
+				admissionEpoch: admission.epoch,
+				payload: {
+					eventId,
+					scope: "agent",
+					scopeRef: `agent:${agentId}`,
+				},
+			},
+		})
+		const claimed = await claimMemoryJob({
+			db,
+			prefix: PREFIX,
+			agentId,
+			jobType: "extraction",
+			workerId: "worker-retry",
+			leaseMs: 60_000,
+			admissionEpoch: admission.epoch,
+		})
+		expect(claimed).not.toBeNull()
+		if (!claimed) throw new Error("expected the retry extraction claim")
+
+		const enrichment = await import("./mongodb-llm-enrichment.js")
+		const provider = {
+			name: "worker-effects-e2e",
+			chatCompletion: vi.fn(async () => ({
+				content: JSON.stringify({
+					facts: [],
+					qa_pairs: [],
+					has_personal_content: false,
+					validity: { scope: "ongoing" },
+				}),
+			})),
+		}
+		const providerSpy = vi
+			.spyOn(enrichment, "resolveEnrichmentProvider")
+			.mockReturnValue(provider)
+		let injected = false
+		let structuredUpdates = 0
+		const providerCallsAtWrites: number[] = []
+		const interceptedDb = proxyDbCollections(db, (name, collection) => {
+			if (name !== `${PREFIX}structured_mem`) return collection
+			return new Proxy(collection, {
+				get(target, property) {
+					if (property === "updateOne") {
+						return async (...args: Parameters<typeof target.updateOne>) => {
+							structuredUpdates += 1
+							providerCallsAtWrites.push(
+								provider.chatCompletion.mock.calls.length,
+							)
+							const result = await target.updateOne(...args)
+							if (!injected) {
+								injected = true
+								throw new MongoServerError({
+									ok: 0,
+									code: 112,
+									errmsg: "synthetic worker effect retry",
+									errorLabels: ["TransientTransactionError"],
+								})
+							}
+							return result
+						}
+					}
+					const value = Reflect.get(target, property, target)
+					return typeof value === "function" ? value.bind(target) : value
+				},
+			})
+		})
+		try {
+			await runClaimedExtraction(
+				extractionRunnerManager(interceptedDb, agentId),
+				claimed,
+			)
+		} finally {
+			providerSpy.mockRestore()
+		}
+
+		expect(injected).toBe(true)
+		expect(structuredUpdates).toBeGreaterThanOrEqual(2)
+		expect(providerCallsAtWrites[0]).toBeGreaterThan(0)
+		expect(providerCallsAtWrites[1]).toBe(providerCallsAtWrites[0])
+		expect(
+			await structuredMemCollection(db, PREFIX).countDocuments({ agentId }),
+		).toBe(1)
+		await expect(
+			memoryJobsCollection(db, PREFIX).findOne({ jobId, agentId }),
+		).resolves.toMatchObject({
+			status: "completed",
+			admissionEpoch: admission.epoch,
+		})
 	})
 
 	it("breaks equal-createdAt claim ties by jobId", async () => {
@@ -613,6 +1335,352 @@ describe("durable memory job leases (live MongoDB)", () => {
 		expect(claimedJobIds).toEqual(
 			new Set(eventIds.map((eventId) => `extraction-${eventId}`)),
 		)
+	})
+
+	it("rejects the original admission when the epoch advances after the pending read", async () => {
+		const db = client.db(TEST_DB)
+		const agentId = `${AGENT}-stale-admission`
+		const eventId = `event-stale-admission-${randomUUID()}`
+		await writeEvent({
+			db,
+			prefix: PREFIX,
+			event: {
+				eventId,
+				agentId,
+				role: "user",
+				body: "No graph entities in this sentence.",
+				scope: "agent",
+				extractionJobPendingAt: new Date(),
+			},
+		})
+		let pendingReadIntercepted = false
+		const interceptedDb = proxyDbCollections(db, (name, collection) => {
+			if (name !== `${PREFIX}events`) return collection
+			return new Proxy(collection, {
+				get(target, property) {
+					if (property === "find") {
+						return (...args: Parameters<typeof target.find>) => {
+							const cursor = target.find(...args)
+							const toArray = cursor.toArray.bind(cursor)
+							cursor.toArray = async () => {
+								const docs = await toArray()
+								if (!pendingReadIntercepted) {
+									pendingReadIntercepted = true
+									await bumpTenantErasureEpoch(db, PREFIX, agentId)
+								}
+								return docs
+							}
+							return cursor
+						}
+					}
+					const value = Reflect.get(target, property, target)
+					return typeof value === "function" ? value.bind(target) : value
+				},
+			})
+		})
+		const manager = repairManager(interceptedDb, agentId)
+
+		await expect(manager.repairExtractionOutbox()).rejects.toMatchObject({
+			code: "ERASURE_GATE_CONFLICT",
+		})
+		expect(pendingReadIntercepted).toBe(true)
+		expect(
+			await eventsCollection(db, PREFIX).findOne({ eventId, agentId }),
+		).toMatchObject({
+			extractionJobPendingAt: expect.any(Date),
+		})
+		expect(
+			await memoryJobsCollection(db, PREFIX).countDocuments({ agentId }),
+		).toBe(0)
+		expect(await chunksCollection(db, PREFIX).countDocuments({ agentId })).toBe(
+			0,
+		)
+		expect(
+			await projectionRunsCollection(db, PREFIX).countDocuments({ agentId }),
+		).toBe(0)
+		expect(
+			await telemetryCollection(db, PREFIX).countDocuments({
+				"meta.agentId": agentId,
+			}),
+		).toBe(0)
+	})
+
+	it("does not write zero-entity diagnostics after a post-commit epoch advance", async () => {
+		const db = client.db(TEST_DB)
+		const agentId = `${AGENT}-stale-diagnostics`
+		const eventId = `event-stale-diagnostics-${randomUUID()}`
+		await writeEvent({
+			db,
+			prefix: PREFIX,
+			event: {
+				eventId,
+				agentId,
+				role: "user",
+				body: "No graph entities in this sentence.",
+				scope: "agent",
+				extractionJobPendingAt: new Date(),
+			},
+		})
+		let gateReads = 0
+		const interceptedDb = proxyDbCollections(db, (name, collection) => {
+			if (name !== `${PREFIX}meta`) return collection
+			return new Proxy(collection, {
+				get(target, property) {
+					if (property === "findOne") {
+						return async (...args: Parameters<typeof target.findOne>) => {
+							gateReads += 1
+							if (gateReads === 2) {
+								await bumpTenantErasureEpoch(db, PREFIX, agentId)
+							}
+							return target.findOne(...args)
+						}
+					}
+					const value = Reflect.get(target, property, target)
+					return typeof value === "function" ? value.bind(target) : value
+				},
+			})
+		})
+		const manager = repairManager(interceptedDb, agentId)
+
+		await expect(manager.repairExtractionOutbox()).resolves.toEqual({
+			eventsProcessed: 1,
+			jobsCreated: 1,
+			jobsReleased: 1,
+			eventsFailed: 0,
+		})
+		expect(
+			await eventsCollection(db, PREFIX).findOne({ eventId, agentId }),
+		).not.toHaveProperty("extractionJobPendingAt")
+		expect(
+			await memoryJobsCollection(db, PREFIX).countDocuments({
+				agentId,
+				stagedAt: { $exists: false },
+			}),
+		).toBe(1)
+		expect(
+			await projectionRunsCollection(db, PREFIX).countDocuments({ agentId }),
+		).toBe(0)
+		expect(
+			await telemetryCollection(db, PREFIX).countDocuments({
+				"meta.agentId": agentId,
+			}),
+		).toBe(0)
+	})
+
+	it("stops mid-loop when the original admission becomes stale", async () => {
+		const db = client.db(TEST_DB)
+		const agentId = `${AGENT}-mid-loop-stop`
+		const eventIds = [
+			`event-mid-loop-1-${randomUUID()}`,
+			`event-mid-loop-2-${randomUUID()}`,
+		]
+		await writeEventsBatch({
+			db,
+			prefix: PREFIX,
+			events: eventIds.map((eventId) => ({
+				eventId,
+				agentId,
+				role: "user",
+				body: "No graph entities in this sentence.",
+				scope: "agent",
+				extractionJobPendingAt: new Date(),
+			})),
+		})
+		let gateReads = 0
+		const interceptedDb = proxyDbCollections(db, (name, collection) => {
+			if (name !== `${PREFIX}meta`) return collection
+			return new Proxy(collection, {
+				get(target, property) {
+					if (property === "findOne") {
+						return async (...args: Parameters<typeof target.findOne>) => {
+							gateReads += 1
+							if (gateReads === 3) {
+								await bumpTenantErasureEpoch(db, PREFIX, agentId)
+							}
+							return target.findOne(...args)
+						}
+					}
+					const value = Reflect.get(target, property, target)
+					return typeof value === "function" ? value.bind(target) : value
+				},
+			})
+		})
+		const manager = repairManager(interceptedDb, agentId)
+
+		await expect(manager.repairExtractionOutbox()).rejects.toMatchObject({
+			code: "ERASURE_GATE_CONFLICT",
+		})
+		expect(
+			await eventsCollection(db, PREFIX).findOne({
+				eventId: eventIds[0],
+				agentId,
+			}),
+		).not.toHaveProperty("extractionJobPendingAt")
+		expect(
+			await eventsCollection(db, PREFIX).findOne({
+				eventId: eventIds[1],
+				agentId,
+			}),
+		).toMatchObject({
+			extractionJobPendingAt: expect.any(Date),
+		})
+		expect(
+			await memoryJobsCollection(db, PREFIX).countDocuments({
+				agentId,
+				jobId: `extraction-${eventIds[0]}`,
+				stagedAt: { $exists: false },
+			}),
+		).toBe(1)
+		expect(
+			await memoryJobsCollection(db, PREFIX).countDocuments({
+				agentId,
+				jobId: `extraction-${eventIds[1]}`,
+			}),
+		).toBe(0)
+	})
+
+	it("rolls back job, chunk, graph, release, and marker on a late failure", async () => {
+		const db = client.db(TEST_DB)
+		const agentId = `${AGENT}-late-rollback`
+		const eventId = `event-late-rollback-${randomUUID()}`
+		await writeEvent({
+			db,
+			prefix: PREFIX,
+			event: {
+				eventId,
+				agentId,
+				role: "user",
+				body: "@alice discusses #rollback.",
+				scope: "agent",
+				extractionJobPendingAt: new Date(),
+			},
+		})
+		let injected = false
+		const interceptedDb = proxyDbCollections(db, (name, collection) => {
+			if (name !== `${PREFIX}events`) return collection
+			return new Proxy(collection, {
+				get(target, property) {
+					if (property === "updateOne") {
+						return async (...args: Parameters<typeof target.updateOne>) => {
+							const result = await target.updateOne(...args)
+							const filter = args[0] as Record<string, unknown>
+							if ("extractionJobPendingAt" in filter && !injected) {
+								injected = true
+								throw new Error("synthetic late marker failure")
+							}
+							return result
+						}
+					}
+					const value = Reflect.get(target, property, target)
+					return typeof value === "function" ? value.bind(target) : value
+				},
+			})
+		})
+		const manager = repairManager(interceptedDb, agentId)
+
+		await expect(manager.repairExtractionOutbox()).resolves.toEqual({
+			eventsProcessed: 0,
+			jobsCreated: 0,
+			jobsReleased: 0,
+			eventsFailed: 1,
+		})
+		expect(injected).toBe(true)
+		expect(
+			await eventsCollection(db, PREFIX).findOne({ eventId, agentId }),
+		).toMatchObject({
+			extractionJobPendingAt: expect.any(Date),
+		})
+		expect(
+			await eventsCollection(db, PREFIX).findOne({ eventId, agentId }),
+		).not.toHaveProperty("projectedAt")
+		expect(
+			await memoryJobsCollection(db, PREFIX).countDocuments({ agentId }),
+		).toBe(0)
+		expect(await chunksCollection(db, PREFIX).countDocuments({ agentId })).toBe(
+			0,
+		)
+		expect(
+			await entitiesCollection(db, PREFIX).countDocuments({ agentId }),
+		).toBe(0)
+		expect(
+			await relationsCollection(db, PREFIX).countDocuments({ agentId }),
+		).toBe(0)
+		expect(
+			await entityLinksCollection(db, PREFIX).countDocuments({ agentId }),
+		).toBe(0)
+	})
+
+	it("keeps repair deltas and graph provenance stable when the transaction callback retries", async () => {
+		const db = client.db(TEST_DB)
+		const agentId = `${AGENT}-callback-retry`
+		const eventId = `event-callback-retry-${randomUUID()}`
+		await writeEvent({
+			db,
+			prefix: PREFIX,
+			event: {
+				eventId,
+				agentId,
+				role: "user",
+				body: "@alice",
+				scope: "agent",
+				extractionJobPendingAt: new Date(),
+			},
+		})
+		let injected = false
+		let entityBulkWrites = 0
+		const interceptedDb = proxyDbCollections(db, (name, collection) => {
+			if (name !== `${PREFIX}entities`) return collection
+			return new Proxy(collection, {
+				get(target, property) {
+					if (property === "bulkWrite") {
+						return async (...args: Parameters<typeof target.bulkWrite>) => {
+							entityBulkWrites += 1
+							const result = await target.bulkWrite(...args)
+							if (!injected) {
+								injected = true
+								throw new MongoServerError({
+									ok: 0,
+									code: 112,
+									errmsg: "synthetic retry after native write",
+									errorLabels: ["TransientTransactionError"],
+								})
+							}
+							return result
+						}
+					}
+					const value = Reflect.get(target, property, target)
+					return typeof value === "function" ? value.bind(target) : value
+				},
+			})
+		})
+		const manager = repairManager(interceptedDb, agentId)
+
+		await expect(manager.repairExtractionOutbox()).resolves.toEqual({
+			eventsProcessed: 1,
+			jobsCreated: 1,
+			jobsReleased: 1,
+			eventsFailed: 0,
+		})
+		expect(injected).toBe(true)
+		expect(entityBulkWrites).toBeGreaterThanOrEqual(2)
+		expect(manager.chunkCount).toBe(1)
+		expect(
+			await memoryJobsCollection(db, PREFIX).countDocuments({ agentId }),
+		).toBe(1)
+		expect(await chunksCollection(db, PREFIX).countDocuments({ agentId })).toBe(
+			1,
+		)
+		const entity = await entitiesCollection(db, PREFIX).findOne({
+			agentId,
+			name: "alice",
+		})
+		expect(entity).toMatchObject({
+			mentionCount: 1,
+			sourceEventIds: [eventId],
+		})
+		expect(
+			await eventsCollection(db, PREFIX).findOne({ eventId, agentId }),
+		).not.toHaveProperty("extractionJobPendingAt")
 	})
 
 	it("recovers and executes staged outbox work through the public manager factory", async () => {
@@ -1192,5 +2260,130 @@ describe("durable memory job leases (live MongoDB)", () => {
 				jobId: new RegExp(`^consolidation-auto-${agentId}-${windowIndex}$`),
 			}),
 		).resolves.toBe(1)
+	})
+
+	it("adopts a failed tracking row by clearing the marker in the claiming update", async () => {
+		const db = client.db(TEST_DB)
+		const agentId = `${AGENT}-tracking-adoption`
+		const jobs = memoryJobsCollection(db, PREFIX)
+		const baseJob = {
+			jobType: "consolidation" as const,
+			agentId,
+			createdAt: new Date(),
+		}
+
+		// A failed tracking row (the terminal state of a crashed synchronous
+		// run) is claimable; the SAME atomic claim clears the tracking marker,
+		// so ownership transfers to the worker and later lease-expiry recovery
+		// applies.
+		const adoptedId = `consolidation-tracking-adopted-${randomUUID()}`
+		await jobs.insertOne({
+			...baseJob,
+			jobId: adoptedId,
+			status: "failed",
+			attempts: 1,
+			tracking: true,
+		})
+		const adopted = await claimMemoryJob({
+			db,
+			prefix: PREFIX,
+			agentId,
+			jobType: "consolidation",
+			workerId: "worker-tracking-adopter",
+			leaseMs: -60_000,
+		})
+		expect(adopted).toMatchObject({ jobId: adoptedId, attempts: 2 })
+		// The stored row, not just the returned view, lost the marker.
+		const adoptedStored = await jobs.findOne({ jobId: adoptedId })
+		expect(adoptedStored?.status).toBe("running")
+		expect(adoptedStored).not.toHaveProperty("tracking")
+
+		// The adopted row is now an ordinary running row: a replacement worker
+		// reclaims it after lease expiry (tracking no longer excludes it).
+		const reclaimed = await claimMemoryJob({
+			db,
+			prefix: PREFIX,
+			agentId,
+			jobType: "consolidation",
+			workerId: "worker-tracking-reclaimer",
+			leaseMs: 60_000,
+		})
+		expect(reclaimed).toMatchObject({
+			jobId: adoptedId,
+			attempts: 3,
+			leaseOwner: "worker-tracking-reclaimer",
+		})
+
+		// A tracking row whose attempt budget is spent dead-letters like any
+		// other claimed work once the adopted lease expires.
+		const deadId = `consolidation-tracking-dead-${randomUUID()}`
+		await jobs.insertOne({
+			...baseJob,
+			jobId: deadId,
+			status: "failed",
+			attempts: MEMORY_JOB_MAX_ATTEMPTS - 1,
+			tracking: true,
+		})
+		const deadClaimed = await claimMemoryJob({
+			db,
+			prefix: PREFIX,
+			agentId,
+			jobType: "consolidation",
+			workerId: "worker-tracking-dead",
+			leaseMs: -60_000,
+		})
+		expect(deadClaimed).toMatchObject({
+			jobId: deadId,
+			attempts: MEMORY_JOB_MAX_ATTEMPTS,
+		})
+		await expect(
+			deadLetterExpiredMemoryJobs({
+				db,
+				prefix: PREFIX,
+				agentId,
+				jobType: "consolidation",
+			}),
+		).resolves.toBe(1)
+		const deadStored = await jobs.findOne({ jobId: deadId })
+		expect(deadStored).toMatchObject({ status: "failed" })
+		expect(deadStored?.deadLetterAt).toBeInstanceOf(Date)
+		expect(deadStored).not.toHaveProperty("completedAt")
+
+		// Guard: a LIVE synchronous row (running + tracking, lease-less) stays
+		// unclaimable and sweep-exempt — the marker still protects rows the
+		// synchronous runner owns.
+		const liveId = `consolidation-tracking-live-${randomUUID()}`
+		await jobs.insertOne({
+			...baseJob,
+			jobId: liveId,
+			status: "running",
+			attempts: 1,
+			tracking: true,
+		})
+		for (const workerId of ["worker-guard-1", "worker-guard-2"]) {
+			await expect(
+				claimMemoryJob({
+					db,
+					prefix: PREFIX,
+					agentId,
+					jobType: "consolidation",
+					workerId,
+					leaseMs: 60_000,
+				}),
+			).resolves.toBeNull()
+		}
+		await expect(
+			deadLetterExpiredMemoryJobs({
+				db,
+				prefix: PREFIX,
+				agentId,
+				jobType: "consolidation",
+			}),
+		).resolves.toBe(0)
+		await expect(jobs.findOne({ jobId: liveId })).resolves.toMatchObject({
+			status: "running",
+			tracking: true,
+			attempts: 1,
+		})
 	})
 })

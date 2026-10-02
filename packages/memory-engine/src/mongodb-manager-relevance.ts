@@ -1,46 +1,62 @@
-import path from "node:path"
-import { normalizeSearchResults } from "./mongodb-hybrid.js"
-import type { SearchMethod } from "./mongodb-hybrid.js"
-import { searchKB } from "./mongodb-kb-search.js"
+import { captureAdmissionToken } from "./mongodb-write-fence.js"
 import type {
 	RelevanceArtifact,
 	RelevanceSourceScope,
 } from "./mongodb-relevance.js"
-import { applyPostRetrievalScoring } from "./mongodb-post-retrieval-scoring.js"
+import { searchV2 } from "./mongodb-search-v2.js"
+import type { RetrievalPath } from "./mongodb-retrieval-planner.js"
 import {
-	kbCollection,
-	chunksCollection,
-	kbChunksCollection,
-	structuredMemCollection,
-} from "./mongodb-schema.js"
-import { mongoSearch } from "./mongodb-search.js"
-import type {
-	SearchExplainOptions,
-	SearchTraceEvent,
-} from "./mongodb-search.js"
-import { searchStructuredMemory } from "./mongodb-structured-memory.js"
-import type { MemorySearchResult } from "./types.js"
-import {
-	deduplicateSearchResults,
+	clampSearchMaxResults,
+	clampSearchQuery,
 	getActiveSources,
-	rerankResults,
-	resolveExplainSources,
 } from "./mongodb-search-ranking.js"
 import type { RelevanceExplainResult } from "./mongodb-search-ranking.js"
 import type { MongoDBManagerHost } from "./mongodb-manager-host.js"
-import { createSubsystemLogger } from "@memongo/lib"
-
-const log = createSubsystemLogger("memory:mongodb")
 
 /**
  * Relevance-diagnostics collaborator extracted from `mongodb-manager.ts`
- * (P4.3 god-file split). The facade delegates `relevanceExplain`; search
- * helpers are reached through the host's `searchOps` collaborator.
+ * (P4.3 god-file split). The facade delegates `relevanceExplain`.
  */
 
 export class MongoDBManagerRelevanceOps {
 	constructor(private readonly host: MongoDBManagerHost) {}
 
+	/**
+	 * sourceScope narrows the V2 lane set the way the retired legacy
+	 * implementation's resolveExplainSources gate did: "memory" keeps the
+	 * conversation-derived lanes (raw-window/hybrid/graph/episodic), "kb"
+	 * keeps the KB lane, "structured" keeps the structured-family lanes
+	 * (active-critical/structured/procedural), "all" keeps everything.
+	 * buildV2AvailablePaths has already excluded disabled sources and
+	 * graph/episode lanes, so the filter only intersects with that set.
+	 */
+	private filterV2PathsForSourceScope(
+		availablePaths: Set<RetrievalPath>,
+		sourceScope: RelevanceSourceScope,
+	): Set<RetrievalPath> {
+		if (sourceScope === "all") {
+			return availablePaths
+		}
+		const keep: RetrievalPath[] =
+			sourceScope === "memory"
+				? ["raw-window", "hybrid", "graph", "episodic"]
+				: sourceScope === "kb"
+					? ["kb"]
+					: ["active-critical", "structured", "procedural"]
+		return new Set([...availablePaths].filter((path) => keep.includes(path)))
+	}
+
+	/**
+	 * RET-15: relevanceExplain diagnoses the pipeline that actually answers
+	 * searches — searchV2 (planner, lanes, reranker, constraints) — instead
+	 * of the retired hand-rolled re-implementation of the legacy pipeline
+	 * that omitted every V2-only stage and reversed the bridge/memory
+	 * result budgets. It resolves identity and lanes exactly like search()
+	 * (narrowed per sourceScope), executes one V2 search, and persists one
+	 * diagnostic-mode run whose trace artifact carries the real V2
+	 * metadata. A diagnostic must execute the pipeline, not read a prior
+	 * answer.
+	 */
 	async relevanceExplain(params: {
 		query: string
 		sourceScope?: RelevanceSourceScope
@@ -49,363 +65,178 @@ export class MongoDBManagerRelevanceOps {
 		minScore?: number
 		deep?: boolean
 		questionDate?: Date
+		kbRestricted?: boolean
 	}): Promise<RelevanceExplainResult> {
 		if (!this.host.relevance) {
 			throw new Error("relevance runtime is unavailable")
 		}
+		const relevance = this.host.relevance
 		const sourceScope = params.sourceScope ?? "all"
-		const maxResults = params.maxResults ?? 10
-		const minScore = params.minScore ?? 0.1
+		const maxResults = clampSearchMaxResults(params.maxResults ?? 10)
 		const startedAt = Date.now()
-		const query = params.query.trim()
-		if (!query) {
+		const cleaned = clampSearchQuery(params.query.trim())
+		if (!cleaned) {
 			return {
 				latencyMs: 0,
 				sourceScope,
 				health: "insufficient-data",
-				sampleRate: this.host.relevance.getSampleState().current,
+				sampleRate: relevance.getSampleState().current,
 				artifacts: [],
 				results: [],
 			}
 		}
 
-		const queryVector: number[] | null = null
 		const mongoCfg = this.host.config.mongodb!
-
-		const artifacts: RelevanceArtifact[] = []
-		const traces: SearchTraceEvent[] = []
-		const explainOpts: SearchExplainOptions = {
-			enabled: true,
-			deep: Boolean(params.deep),
-			includeScoreDetails: true,
-			onArtifact: (artifact) => {
-				artifacts.push({
-					artifactType: artifact.artifactType,
-					summary: artifact.summary,
-					rawExplain: artifact.rawExplain,
-					compression: "none",
-				})
-			},
-		}
-
-		// Source policy enforcement: disabled sources return empty results even when
-		// explicitly requested via sourceScope (matches search() behavior).
 		const activeSources = getActiveSources(
 			mongoCfg.sources,
-			mongoCfg.kb.enabled,
+			mongoCfg.kb.enabled && params.kbRestricted !== true,
 		)
-		const explainSources = resolveExplainSources(sourceScope, activeSources)
-		const bridgeMaxResults = this.host.getBridgeChunkBudget(maxResults)
-		const emptyResults: MemorySearchResult[] = []
-		// relevanceExplain is a diagnostic view of what search() would return, so
-		// it resolves the same identity from the same inputs and must never read
-		// wider than the search path it is explaining.
-		const identity = this.host.resolveSearchIdentity({
-			sessionKey: params.sessionKey,
-		})
-		const bridgeFilter = this.host.buildBridgeChunkFilterForIdentity(identity)
-
-		let mergedResults: MemorySearchResult[] = []
-		if (sourceScope === "memory") {
-			if (!explainSources.conversation) {
-				mergedResults = emptyResults
-			} else {
-				const [runtimeHits, bridgeHits] = await Promise.all([
-					mongoSearch(
-						chunksCollection(this.host.db, this.host.prefix),
-						query,
-						queryVector,
-						{
-							maxResults: bridgeMaxResults,
-							minScore,
-							numCandidates: mongoCfg.numCandidates,
-							sessionKey: params.sessionKey,
-							filter: this.host.buildConversationChunkFilter(identity),
-							fusionMethod: mongoCfg.fusionMethod,
-							capabilities: this.host.capabilities,
-							vectorIndexName: `${this.host.prefix}chunks_vector`,
-							textIndexName: `${this.host.prefix}chunks_text`,
-							vectorWeight: 0.7,
-							textWeight: 0.3,
-							embeddingMode: mongoCfg.embeddingMode,
-							queryEmbeddingModel: mongoCfg.queryEmbeddingModel,
-							explain: explainOpts,
-							onTrace: (event) => traces.push(event),
-						},
-					),
-					!bridgeFilter
-						? emptyResults
-						: mongoSearch(
-								chunksCollection(this.host.db, this.host.prefix),
-								query,
-								queryVector,
-								{
-									maxResults,
-									minScore,
-									numCandidates: mongoCfg.numCandidates,
-									sessionKey: params.sessionKey,
-									filter: bridgeFilter,
-									fusionMethod: mongoCfg.fusionMethod,
-									capabilities: this.host.capabilities,
-									vectorIndexName: `${this.host.prefix}chunks_vector`,
-									textIndexName: `${this.host.prefix}chunks_text`,
-									vectorWeight: 0.7,
-									textWeight: 0.3,
-									embeddingMode: mongoCfg.embeddingMode,
-									queryEmbeddingModel: mongoCfg.queryEmbeddingModel,
-									explain: explainOpts,
-									onTrace: (event) => traces.push(event),
-								},
-							),
-				])
-				const legacyMethod: SearchMethod =
-					this.host.resolveObservedSearchMethod(traces, mongoCfg)
-				const normalizedRuntime = normalizeSearchResults(
-					runtimeHits,
-					legacyMethod,
-				)
-				const normalizedBridge = normalizeSearchResults(
-					bridgeHits,
-					legacyMethod,
-				)
-				mergedResults = applyPostRetrievalScoring(
-					query,
-					rerankResults(
-						deduplicateSearchResults(
-							[...normalizedRuntime, ...normalizedBridge].toSorted(
-								(a, b) => b.score - a.score,
-							),
-						),
-						query,
-					),
-					{ questionDate: params.questionDate },
-				).slice(0, maxResults)
+		const availablePaths = this.filterV2PathsForSourceScope(
+			this.host.buildV2AvailablePaths(activeSources),
+			sourceScope,
+		)
+		// Nothing measurable: disabled sources or a sourceScope that
+		// intersects nothing. Distinguishable from "searched and found
+		// nothing" — that verdict is "degraded", this one is not a verdict.
+		if (availablePaths.size === 0) {
+			return {
+				latencyMs: Date.now() - startedAt,
+				sourceScope,
+				health: "insufficient-data",
+				sampleRate: relevance.getSampleState().current,
+				artifacts: [],
+				results: [],
 			}
-		} else if (sourceScope === "kb") {
-			mergedResults = !explainSources.reference
-				? emptyResults
-				: await searchKB(
-						kbChunksCollection(this.host.db, this.host.prefix),
-						query,
-						queryVector,
-						{
-							maxResults,
-							minScore,
-							scopeRef: identity.scopeRef,
-							numCandidates: mongoCfg.numCandidates,
-							vectorIndexName: `${this.host.prefix}kb_chunks_vector`,
-							textIndexName: `${this.host.prefix}kb_chunks_text`,
-							capabilities: this.host.capabilities,
-							embeddingMode: mongoCfg.embeddingMode,
-							queryEmbeddingModel: mongoCfg.queryEmbeddingModel,
-							kbDocs: kbCollection(this.host.db, this.host.prefix),
-							explain: explainOpts,
-						},
-					)
-		} else if (sourceScope === "structured") {
-			mergedResults = !explainSources.structured
-				? emptyResults
-				: await searchStructuredMemory(
-						structuredMemCollection(this.host.db, this.host.prefix),
-						query,
-						queryVector,
-						{
-							maxResults,
-							minScore,
-							filter: {
-								agentId: this.host.agentId,
-								scope: identity.scope,
-								scopeRef: identity.scopeRef,
-							},
-							numCandidates: mongoCfg.numCandidates,
-							capabilities: this.host.capabilities,
-							vectorIndexName: `${this.host.prefix}structured_mem_vector`,
-							embeddingMode: mongoCfg.embeddingMode,
-							queryEmbeddingModel: mongoCfg.queryEmbeddingModel,
-							explain: explainOpts,
-						},
-					)
-		} else {
-			const [
-				runtimeConversationResults,
-				bridgeConversationResults,
-				kbResults,
-				structuredResults,
-			] = await Promise.all([
-				// Runtime conversation chunks — skip if conversation source is disabled
-				!explainSources.conversation
-					? emptyResults
-					: mongoSearch(
-							chunksCollection(this.host.db, this.host.prefix),
-							query,
-							queryVector,
-							{
-								maxResults,
-								minScore,
-								numCandidates: mongoCfg.numCandidates,
-								sessionKey: params.sessionKey,
-								filter: this.host.buildConversationChunkFilter(identity),
-								fusionMethod: mongoCfg.fusionMethod,
-								capabilities: this.host.capabilities,
-								vectorIndexName: `${this.host.prefix}chunks_vector`,
-								textIndexName: `${this.host.prefix}chunks_text`,
-								vectorWeight: 0.7,
-								textWeight: 0.3,
-								embeddingMode: mongoCfg.embeddingMode,
-								queryEmbeddingModel: mongoCfg.queryEmbeddingModel,
-								explain: explainOpts,
-								onTrace: (event) => traces.push(event),
-							},
-						),
-				// Bridge-note chunks — same collection, different namespace filter
-				!explainSources.conversation || !bridgeFilter
-					? emptyResults
-					: mongoSearch(
-							chunksCollection(this.host.db, this.host.prefix),
-							query,
-							queryVector,
-							{
-								maxResults: bridgeMaxResults,
-								minScore,
-								numCandidates: mongoCfg.numCandidates,
-								sessionKey: params.sessionKey,
-								filter: bridgeFilter,
-								fusionMethod: mongoCfg.fusionMethod,
-								capabilities: this.host.capabilities,
-								vectorIndexName: `${this.host.prefix}chunks_vector`,
-								textIndexName: `${this.host.prefix}chunks_text`,
-								vectorWeight: 0.7,
-								textWeight: 0.3,
-								embeddingMode: mongoCfg.embeddingMode,
-								queryEmbeddingModel: mongoCfg.queryEmbeddingModel,
-								explain: explainOpts,
-								onTrace: (event) => traces.push(event),
-							},
-						),
-				// KB chunks — skip if reference source is disabled
-				!explainSources.reference
-					? emptyResults
-					: searchKB(
-							kbChunksCollection(this.host.db, this.host.prefix),
-							query,
-							queryVector,
-							{
-								maxResults: Math.max(3, Math.floor(maxResults / 3)),
-								minScore,
-								scopeRef: identity.scopeRef,
-								numCandidates: mongoCfg.numCandidates,
-								vectorIndexName: `${this.host.prefix}kb_chunks_vector`,
-								textIndexName: `${this.host.prefix}kb_chunks_text`,
-								capabilities: this.host.capabilities,
-								embeddingMode: mongoCfg.embeddingMode,
-								queryEmbeddingModel: mongoCfg.queryEmbeddingModel,
-								kbDocs: kbCollection(this.host.db, this.host.prefix),
-								explain: explainOpts,
-							},
-						).catch((err) => {
-							log.warn(`relevanceExplain KB search failed: ${String(err)}`)
-							return [] as MemorySearchResult[]
-						}),
-				// Structured memory — skip if structured source is disabled
-				!explainSources.structured
-					? emptyResults
-					: searchStructuredMemory(
-							structuredMemCollection(this.host.db, this.host.prefix),
-							query,
-							queryVector,
-							{
-								maxResults: Math.max(3, Math.floor(maxResults / 3)),
-								minScore,
-								filter: {
-									agentId: this.host.agentId,
-									scope: identity.scope,
-									scopeRef: identity.scopeRef,
-								},
-								numCandidates: mongoCfg.numCandidates,
-								capabilities: this.host.capabilities,
-								vectorIndexName: `${this.host.prefix}structured_mem_vector`,
-								embeddingMode: mongoCfg.embeddingMode,
-								queryEmbeddingModel: mongoCfg.queryEmbeddingModel,
-								explain: explainOpts,
-							},
-						).catch((err) => {
-							log.warn(
-								`relevanceExplain structured memory search failed: ${String(err)}`,
-							)
-							return [] as MemorySearchResult[]
-						}),
-			])
-			const conversationResults = [
-				...runtimeConversationResults,
-				...bridgeConversationResults,
-			]
-			const legacyMethod: SearchMethod = this.host.resolveObservedSearchMethod(
-				traces,
-				mongoCfg,
-			)
-			const normalizedLegacy = normalizeSearchResults(
-				conversationResults,
-				legacyMethod,
-			)
-			const normalizedKb = normalizeSearchResults(kbResults, "kb")
-			const normalizedStructured = normalizeSearchResults(
-				structuredResults,
-				"structured",
-			)
-			const merged = [
-				...normalizedLegacy,
-				...normalizedKb,
-				...normalizedStructured,
-			].toSorted((a, b) => b.score - a.score)
-			mergedResults = applyPostRetrievalScoring(
-				query,
-				rerankResults(deduplicateSearchResults(merged), query),
-				{ questionDate: params.questionDate },
-			).slice(0, maxResults)
 		}
 
-		const successfulTrace = [...traces].toReversed().find((event) => event.ok)
-		const fallbackPath =
-			successfulTrace && successfulTrace.method !== mongoCfg.fusionMethod
-				? `${mongoCfg.fusionMethod}->${successfulTrace.method}`
-				: undefined
-		const health = this.host.relevance.evaluateHealth(
-			mergedResults,
-			fallbackPath,
-		)
-		this.host.relevance.recordSignal(mergedResults, fallbackPath)
-		artifacts.push({
-			artifactType: "trace",
-			summary: {
-				sourceScope,
-				requestedFusionMethod: mongoCfg.fusionMethod,
-				fallbackPath,
-				events: traces,
-				topScore: mergedResults[0]?.score ?? 0,
-				resultCount: mergedResults.length,
-			},
+		const readAdmission = await captureAdmissionToken({
+			db: this.host.db,
+			prefix: this.host.prefix,
+			agentId: this.host.agentId,
 		})
 
+		// Same identity rule as search(): sessionKey implies "session",
+		// explicit scope wins, default otherwise — a diagnostic view must
+		// never read wider than the search path it explains.
+		const { scope: searchScope, scopeRef: searchScopeRef } =
+			this.host.resolveSearchIdentity({ sessionKey: params.sessionKey })
+
+		const v2 = await searchV2(
+			this.host.db,
+			this.host.prefix,
+			cleaned,
+			this.host.agentId,
+			{
+				admission: readAdmission,
+				availablePaths,
+				hasEpisodes: mongoCfg.episodes.enabled,
+				hasGraphData: mongoCfg.graph.enabled,
+				maxResults,
+				// C-016: re-poll index readiness when a lane fails at query
+				// time so status reflects the outage — same seam as search().
+				onPathFailure: (path, error) =>
+					this.host.noteSearchLaneFailure(path, error),
+				searchOptions: {
+					// Same default chain as search(), so the diagnostic runs
+					// the pipeline at the thresholds the served path uses.
+					minScore: params.minScore ?? mongoCfg.reranking?.minScore ?? 0.01,
+					sessionKey: params.sessionKey,
+					numCandidates: mongoCfg.numCandidates,
+					capabilities: this.host.capabilities,
+					fusionMethod: mongoCfg.fusionMethod,
+					embeddingMode: mongoCfg.embeddingMode,
+					queryEmbeddingModel: mongoCfg.queryEmbeddingModel,
+					conversationEvidenceMode: mongoCfg.conversationEvidenceMode,
+					graphMaxDepth: mongoCfg.graph.maxGraphDepth,
+					conversationFilter: this.host.buildConversationChunkFilter({
+						scope: searchScope,
+						scopeRef: searchScopeRef,
+					}),
+					bridgeFilter: this.host.buildScopeAwareBridgeChunkFilter(
+						activeSources,
+						{
+							scope: searchScope,
+							scopeRef: searchScopeRef,
+						},
+					),
+					bridgeMaxResults: this.host.getBridgeChunkBudget(maxResults),
+					scope: searchScope,
+					scopeRef: searchScopeRef,
+					rerankConfig: mongoCfg.reranking,
+					queryRewriteConfig: mongoCfg.queryRewriting,
+					questionDate: params.questionDate,
+					budget: mongoCfg.searchBudget,
+				},
+			},
+		)
+
 		const latencyMs = Date.now() - startedAt
+
+		// WS-11: a throttled diagnostic is not a retrieval verdict — surface
+		// it as such instead of feeding a synthetic "empty/degraded" signal
+		// into the adaptive sampler.
+		const throttled = v2.metadata.throttled
+		const health = throttled
+			? "insufficient-data"
+			: relevance.evaluateHealth(v2.results)
+		if (!throttled) {
+			relevance.recordSignal(v2.results)
+		}
+
+		// One trace artifact with the real V2 decision surface — plan,
+		// constraints, per-lane execution/latency/outcomes, rerank and
+		// rewrite flags, budget. `deep` is recorded, not honored with fake
+		// per-lane mongo explains: searchV2 has no explain instrumentation,
+		// and the retired lane-level explains were of the legacy pipeline.
+		const artifacts: RelevanceArtifact[] = [
+			{
+				artifactType: "trace",
+				summary: {
+					pipeline: "v2",
+					sourceScope,
+					diagnosticDepth: params.deep ? "deep" : "standard",
+					...(throttled ? { throttled } : {}),
+					plan: v2.metadata.plan.paths,
+					planConfidence: v2.metadata.plan.confidence,
+					planConstraints: v2.metadata.plan.constraints ?? {},
+					planReasoning: v2.metadata.plan.reasoning,
+					skippedLanes: v2.metadata.plan.skippedLanes ?? [],
+					pathsExecuted: v2.metadata.pathsExecuted,
+					resultsByPath: v2.metadata.resultsByPath,
+					...(v2.metadata.laneOutcomes
+						? { laneOutcomes: v2.metadata.laneOutcomes }
+						: {}),
+					...(v2.metadata.latencyByPath
+						? { latencyByPath: v2.metadata.latencyByPath }
+						: {}),
+					reranked: Boolean(v2.metadata.reranked),
+					queryRewritten: Boolean(v2.metadata.queryRewritten),
+					...(v2.metadata.budget ? { budget: v2.metadata.budget } : {}),
+					topScore: v2.results[0]?.score ?? 0,
+					resultCount: v2.results.length,
+				},
+			},
+		]
+
 		let runId: string | undefined
 		try {
-			runId = await this.host.relevance.persistRun({
-				query,
+			runId = await relevance.persistRun({
+				admission: readAdmission,
+				query: cleaned,
 				sourceScope,
 				latencyMs,
 				topK: maxResults,
 				hitSources: Array.from(
-					new Set(mergedResults.map((result) => result.source)),
+					new Set(v2.results.map((result) => result.source)),
 				),
-				fallbackPath,
 				status: health,
 				sampled: true,
-				sampleRate: this.host.relevance.getSampleState().current,
+				sampleRate: relevance.getSampleState().current,
 				artifacts,
 				diagnosticMode: true,
 			})
 		} catch (err) {
-			this.host.relevance.logTelemetryFailure(err)
+			relevance.logTelemetryFailure(err)
 		}
 
 		return {
@@ -413,10 +244,9 @@ export class MongoDBManagerRelevanceOps {
 			latencyMs,
 			sourceScope,
 			health,
-			fallbackPath,
-			sampleRate: this.host.relevance.getSampleState().current,
+			sampleRate: relevance.getSampleState().current,
 			artifacts,
-			results: mergedResults,
+			results: v2.results,
 		}
 	}
 }

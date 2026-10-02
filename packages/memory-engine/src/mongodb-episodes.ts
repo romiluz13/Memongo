@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto"
-import type { Db, Document } from "mongodb"
+import type { ClientSession, Db, Document } from "mongodb"
 import { type MemoryScope, createSubsystemLogger } from "@memongo/lib"
 import { isDuplicateKeyError } from "./internal.js"
 import {
@@ -9,6 +9,11 @@ import {
 } from "./mongodb-events.js"
 import { recordProjectionRun } from "./mongodb-ops.js"
 import { episodesCollection } from "./mongodb-schema.js"
+import {
+	type AdmissionToken,
+	ErasureGateConflictError,
+	withFencedWrite,
+} from "./mongodb-write-fence.js"
 import { resolveUserSearchMaxTimeMs } from "./mongodb-search-budget.js"
 import { resolveScopeRef } from "./mongodb-scope.js"
 
@@ -216,8 +221,10 @@ async function enforceEpisodesScopeCap(params: {
 	agentId: string
 	scope: MemoryScope
 	scopeRef: string
+	cap?: number
+	session?: ClientSession
 }): Promise<void> {
-	const cap = resolveEpisodesMaxPerScope()
+	const cap = params.cap ?? resolveEpisodesMaxPerScope()
 	if (cap <= 0) {
 		return
 	}
@@ -227,7 +234,9 @@ async function enforceEpisodesScopeCap(params: {
 		scope: params.scope,
 		scopeRef: params.scopeRef,
 	}
-	const count = await col.countDocuments(filter)
+	const count = params.session
+		? await col.countDocuments(filter, { session: params.session })
+		: await col.countDocuments(filter)
 	if (count <= cap) {
 		return
 	}
@@ -237,6 +246,7 @@ async function enforceEpisodesScopeCap(params: {
 				sort: { createdAt: 1 },
 				limit: count - cap,
 				projection: { episodeId: 1 },
+				...(params.session ? { session: params.session } : {}),
 			})
 			.toArray()
 	)
@@ -245,13 +255,37 @@ async function enforceEpisodesScopeCap(params: {
 	if (overflowIds.length === 0) {
 		return
 	}
-	await col.deleteMany({
+	const deleteFilter = {
 		agentId: params.agentId,
 		episodeId: { $in: overflowIds },
-	})
+	}
+	if (params.session)
+		await col.deleteMany(deleteFilter, { session: params.session })
+	else await col.deleteMany(deleteFilter)
 	log.info(
 		`pruned ${overflowIds.length} oldest episode(s) to enforce cap=${cap} scope=${params.scope} scopeRef=${params.scopeRef}`,
 	)
+}
+
+async function recordEpisodeProjectionRun(params: {
+	db: Db
+	prefix: string
+	run: Parameters<typeof recordProjectionRun>[0]["run"]
+	admission?: AdmissionToken
+}): Promise<string> {
+	if (!params.admission) return recordProjectionRun(params)
+	return withFencedWrite({
+		db: params.db,
+		prefix: params.prefix,
+		token: params.admission,
+		fn: (session) =>
+			recordProjectionRun({
+				db: params.db,
+				prefix: params.prefix,
+				run: params.run,
+				session,
+			}),
+	})
 }
 
 // ---------------------------------------------------------------------------
@@ -259,6 +293,7 @@ async function enforceEpisodesScopeCap(params: {
 // ---------------------------------------------------------------------------
 
 export async function materializeEpisode(params: {
+	admission?: AdmissionToken
 	db: Db
 	prefix: string
 	agentId: string
@@ -283,6 +318,12 @@ export async function materializeEpisode(params: {
 }): Promise<Episode | null> {
 	const { db, prefix, agentId, type, timeRange, scope, summarizer } = params
 	const startMs = Date.now()
+	if (
+		params.admission &&
+		(params.admission.kind !== "admission" ||
+			params.admission.agentId !== agentId)
+	)
+		throw new ErasureGateConflictError(agentId)
 	try {
 		const resolvedScope = scope ?? "agent"
 		const scopeRef = resolveScopeRef({
@@ -309,9 +350,10 @@ export async function materializeEpisode(params: {
 			log.info(
 				`skipping episode materialization: only ${events.length} events in range for agent=${agentId}`,
 			)
-			await recordProjectionRun({
+			await recordEpisodeProjectionRun({
 				db,
 				prefix,
+				admission: params.admission,
 				run: {
 					agentId,
 					projectionType: "episodes",
@@ -335,9 +377,10 @@ export async function materializeEpisode(params: {
 			log.info(
 				`skipping episode materialization: only ${summarizerInput.length} conversational events in range for agent=${agentId}`,
 			)
-			await recordProjectionRun({
+			await recordEpisodeProjectionRun({
 				db,
 				prefix,
+				admission: params.admission,
 				run: {
 					agentId,
 					projectionType: "episodes",
@@ -427,53 +470,73 @@ export async function materializeEpisode(params: {
 		// take the insert path of this upsert; uq_episodes_source_events makes
 		// the loser fail with E11000. Re-running once matches the winner's
 		// document and applies this write as a plain update.
-		const runEpisodeUpsert = async () =>
-			col.updateOne(
-				identityFilter,
-				{
-					$set: setDoc,
-					$setOnInsert: {
-						episodeId,
-						createdAt: now,
-						status: "active" as EpisodeStatus,
+		const persistEpisode = async (session?: ClientSession) => {
+			const runEpisodeUpsert = () =>
+				col.updateOne(
+					identityFilter,
+					{
+						$set: setDoc,
+						$setOnInsert: {
+							episodeId,
+							createdAt: now,
+							status: "active" as EpisodeStatus,
+						},
 					},
-				},
-				{ upsert: true },
-			)
-		let updateResult: Awaited<ReturnType<typeof runEpisodeUpsert>>
-		try {
-			updateResult = await runEpisodeUpsert()
-		} catch (err) {
-			if (!isDuplicateKeyError(err)) {
-				throw err
+					{ upsert: true, ...(session ? { session } : {}) },
+				)
+			let updateResult: Awaited<ReturnType<typeof runEpisodeUpsert>>
+			try {
+				updateResult = await runEpisodeUpsert()
+			} catch (err) {
+				if (session || !isDuplicateKeyError(err)) throw err
+				updateResult = await runEpisodeUpsert()
 			}
-			updateResult = await runEpisodeUpsert()
-		}
-
-		let persistedEpisodeId: string = episodeId
-		if (updateResult.upsertedCount === 0) {
-			const existing = await col.findOne(identityFilter, {
-				projection: { episodeId: 1 },
-			})
-			if (
-				typeof existing?.episodeId === "string" &&
-				existing.episodeId.trim()
-			) {
-				persistedEpisodeId = existing.episodeId
+			let persistedEpisodeId: string = episodeId
+			if (updateResult.upsertedCount === 0) {
+				const existing = await col.findOne(identityFilter, {
+					projection: { episodeId: 1 },
+					...(session ? { session } : {}),
+				})
+				if (
+					typeof existing?.episodeId === "string" &&
+					existing.episodeId.trim()
+				)
+					persistedEpisodeId = existing.episodeId
 			}
+			return { updateResult, persistedEpisodeId }
 		}
+		const { updateResult, persistedEpisodeId } = params.admission
+			? await withFencedWrite({
+					db,
+					prefix,
+					token: params.admission,
+					fn: (session) => persistEpisode(session),
+				})
+			: await persistEpisode()
 
 		// The cap only needs attention when this call INSERTED an episode — a
 		// re-materialization of an existing window leaves the count unchanged.
 		if (updateResult.upsertedCount === 1) {
 			try {
-				await enforceEpisodesScopeCap({
+				const cap = resolveEpisodesMaxPerScope()
+				const capParams = {
 					db,
 					prefix,
 					agentId,
 					scope: resolvedScope,
 					scopeRef,
-				})
+					cap,
+				}
+				if (params.admission && cap > 0) {
+					await withFencedWrite({
+						db,
+						prefix,
+						token: params.admission,
+						fn: (session) => enforceEpisodesScopeCap({ ...capParams, session }),
+					})
+				} else {
+					await enforceEpisodesScopeCap(capParams)
+				}
 			} catch (err) {
 				log.warn(
 					`episodes cap enforcement failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
@@ -499,9 +562,10 @@ export async function materializeEpisode(params: {
 		log.info(
 			`episode materialized: ${episodeId} type=${type} events=${events.length} agent=${agentId}`,
 		)
-		await recordProjectionRun({
+		await recordEpisodeProjectionRun({
 			db,
 			prefix,
+			admission: params.admission,
 			run: {
 				agentId,
 				projectionType: "episodes",
@@ -512,9 +576,10 @@ export async function materializeEpisode(params: {
 		}).catch(() => {})
 		return episode
 	} catch (err) {
-		await recordProjectionRun({
+		await recordEpisodeProjectionRun({
 			db,
 			prefix,
+			admission: params.admission,
 			run: {
 				agentId,
 				projectionType: "episodes",
@@ -917,6 +982,7 @@ export function resetAutoEpisodeNegativeMemoForTests(): void {
  * query instead of a cooldown query plus the 500-event scan.
  */
 export async function checkAutoEpisodeTriggers(params: {
+	admission?: AdmissionToken
 	db: Db
 	prefix: string
 	agentId: string
@@ -940,6 +1006,13 @@ export async function checkAutoEpisodeTriggers(params: {
 		rateLimitMinutes = 60,
 		force = false,
 	} = params
+
+	if (
+		params.admission &&
+		(params.admission.kind !== "admission" ||
+			params.admission.agentId !== agentId)
+	)
+		throw new ErasureGateConflictError(agentId)
 
 	try {
 		// 1. Best-effort cooldown check (unless forced). Run it before loading
@@ -1044,6 +1117,7 @@ export async function checkAutoEpisodeTriggers(params: {
 			// Materialize exactly the selected window — no re-query that could
 			// absorb events written mid-flight (P0.4 set divergence).
 			events: episodeEvents,
+			...(params.admission ? { admission: params.admission } : {}),
 		})
 
 		if (!episode) {
@@ -1053,12 +1127,18 @@ export async function checkAutoEpisodeTriggers(params: {
 
 		// 6. Mark events as consolidated
 		const eventIds = episodeEvents.map((e) => e.eventId)
-		await markEventsConsolidated({
-			db,
-			prefix,
-			eventIds,
-			episodeId: episode.episodeId,
-		})
+		const markerParams = { db, prefix, eventIds, episodeId: episode.episodeId }
+		if (params.admission) {
+			await withFencedWrite({
+				db,
+				prefix,
+				token: params.admission,
+				fn: (session) =>
+					markEventsConsolidated({ ...markerParams, agentId, session }),
+			})
+		} else {
+			await markEventsConsolidated(markerParams)
+		}
 
 		log.info(
 			`auto episode triggered: reason=${triggerReason} episode=${episode.episodeId} events=${eventIds.length} agent=${agentId}`,

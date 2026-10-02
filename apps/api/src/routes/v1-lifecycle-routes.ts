@@ -10,6 +10,7 @@ import {
 import { internalError, jsonError } from "../lib/errors.js"
 
 import {
+	isStructuredMemoryRevisionConflictError,
 	MAX_HISTORY_LIMIT,
 	readJsonBody,
 	lifecycleHandleIdentityError,
@@ -101,6 +102,22 @@ export function registerLifecycleRoutes(v1: Hono<V1RouterEnv>): void {
 					202,
 				)
 			}
+			if (err instanceof Error && err.name === "MemoryLifecycleConflictError") {
+				return jsonError(
+					c,
+					409,
+					"MEMORY_LIFECYCLE_CONFLICT",
+					"memory handle is stale or invalidated; fetch current state before retrying",
+				)
+			}
+			if (isStructuredMemoryRevisionConflictError(err)) {
+				return jsonError(
+					c,
+					409,
+					"STRUCTURED_MEMORY_REVISION_CONFLICT",
+					"structured memory revision conflict; fetch current state before retrying",
+				)
+			}
 			return internalError(c, err, "LIFECYCLE_UPDATE_FAILED")
 		}
 	})
@@ -140,6 +157,22 @@ export function registerLifecycleRoutes(v1: Hono<V1RouterEnv>): void {
 			}
 			return c.json(item)
 		} catch (err) {
+			if (err instanceof Error && err.name === "MemoryLifecycleConflictError") {
+				return jsonError(
+					c,
+					409,
+					"MEMORY_LIFECYCLE_CONFLICT",
+					"memory handle is stale or invalidated; fetch current state before retrying",
+				)
+			}
+			if (isStructuredMemoryRevisionConflictError(err)) {
+				return jsonError(
+					c,
+					409,
+					"STRUCTURED_MEMORY_REVISION_CONFLICT",
+					"structured memory revision conflict; fetch current state before retrying",
+				)
+			}
 			return internalError(c, err, "LIFECYCLE_DELETE_FAILED")
 		}
 	})
@@ -321,6 +354,22 @@ export function registerLifecycleRoutes(v1: Hono<V1RouterEnv>): void {
 						matchedPatterns: quarantined.matchedPatterns ?? [],
 					},
 					202,
+				)
+			}
+			if (err instanceof Error && err.name === "MemoryLifecycleConflictError") {
+				return jsonError(
+					c,
+					409,
+					"MEMORY_LIFECYCLE_CONFLICT",
+					"memory handle is stale or invalidated; fetch current state before retrying",
+				)
+			}
+			if (isStructuredMemoryRevisionConflictError(err)) {
+				return jsonError(
+					c,
+					409,
+					"STRUCTURED_MEMORY_REVISION_CONFLICT",
+					"structured memory revision conflict; fetch current state before retrying",
 				)
 			}
 			return internalError(c, err, "MEMORY_FEEDBACK_FAILED")

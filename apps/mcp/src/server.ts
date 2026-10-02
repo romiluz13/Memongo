@@ -25,10 +25,15 @@ import {
 	type ContextBundleModeValue,
 	type MemoryScopeValue,
 } from "@memongo/lib"
-import { pathToFileURL } from "node:url"
+import { isEntrypoint } from "./entrypoint.js"
 import type { McpAuthScope } from "./auth.js"
 import { startHttpTransport } from "./http-transport.js"
-import { selectEnabledTools, toWireTool, toolCatalog } from "./tool-registry.js"
+import {
+	requiresAdmin,
+	selectEnabledTools,
+	toWireTool,
+	toolCatalog,
+} from "./tool-registry.js"
 import { MEMONGO_SERVER_VERSION } from "./version.js"
 
 const memongo = new MemongoClient({
@@ -405,7 +410,7 @@ export function createMemongoServer(scope: McpAuthScope = "local"): Server {
 	const envEnabled = selectEnabledTools(process.env)
 	const enabledTools =
 		scope === "standard"
-			? envEnabled.filter((tool) => tool.category !== "admin")
+			? envEnabled.filter((tool) => !requiresAdmin(tool))
 			: envEnabled
 	const enabledNames = new Set(enabledTools.map((tool) => tool.name))
 
@@ -452,6 +457,8 @@ export async function handleToolCall(
 		if (name === "memongo_search") {
 			const out = await memongo.search({
 				query: typeof args.query === "string" ? args.query : "",
+				sessionKey:
+					typeof args.sessionKey === "string" ? args.sessionKey : undefined,
 				agentId: typeof args.agentId === "string" ? args.agentId : undefined,
 				limit: typeof args.limit === "number" ? args.limit : undefined,
 				minScore: typeof args.minScore === "number" ? args.minScore : undefined,
@@ -690,7 +697,7 @@ export async function handleToolCall(
 			const out = await memongo.getLifecycleItem({
 				handle: readLifecycleHandleArg(args),
 			})
-			return jsonResult(out)
+			return jsonMemoryResult(out)
 		}
 		if (LIFECYCLE_UPDATE_TOOL_NAMES.has(name)) {
 			const handle = readLifecycleHandleArg(args)
@@ -889,39 +896,6 @@ export async function handleToolCall(
 			return jsonResult(out)
 		}
 		if (name === "memongo_search_detailed") {
-			const searchConfig =
-				typeof args.searchConfig === "object" &&
-				args.searchConfig !== null &&
-				!Array.isArray(args.searchConfig)
-					? (args.searchConfig as Record<string, unknown>)
-					: undefined
-			const searchConfigTimeRange =
-				typeof searchConfig?.timeRange === "object" &&
-				searchConfig.timeRange !== null &&
-				!Array.isArray(searchConfig.timeRange)
-					? (searchConfig.timeRange as Record<string, unknown>)
-					: undefined
-			const searchConfigSourcePreference = Array.isArray(
-				searchConfig?.sourcePreference,
-			)
-				? searchConfig.sourcePreference.filter(
-						(
-							value,
-						): value is
-							| "reference"
-							| "conversation"
-							| "structured"
-							| "procedural"
-							| "episodic"
-							| "graph" =>
-							value === "reference" ||
-							value === "conversation" ||
-							value === "structured" ||
-							value === "procedural" ||
-							value === "episodic" ||
-							value === "graph",
-					)
-				: undefined
 			const out = await memongo.searchDetailed({
 				query: typeof args.query === "string" ? args.query : "",
 				agentId: typeof args.agentId === "string" ? args.agentId : undefined,
@@ -931,93 +905,16 @@ export async function handleToolCall(
 				maxResults:
 					typeof args.maxResults === "number" ? args.maxResults : undefined,
 				minScore: typeof args.minScore === "number" ? args.minScore : undefined,
-				searchMode:
-					args.searchMode === "auto" ||
-					args.searchMode === "direct" ||
-					args.searchMode === "agentic"
-						? args.searchMode
-						: undefined,
+				searchMode: args.searchMode as Parameters<
+					MemongoMcpClient["searchDetailed"]
+				>[0]["searchMode"],
 				maxPasses:
 					typeof args.maxPasses === "number" ? args.maxPasses : undefined,
 				returnPlan:
 					typeof args.returnPlan === "boolean" ? args.returnPlan : undefined,
-				searchConfig: searchConfig
-					? {
-							recipe:
-								searchConfig.recipe === "fast" ||
-								searchConfig.recipe === "hybrid" ||
-								searchConfig.recipe === "deep" ||
-								searchConfig.recipe === "temporal" ||
-								searchConfig.recipe === "chain-of-thought"
-									? searchConfig.recipe
-									: undefined,
-							maxResults:
-								typeof searchConfig.maxResults === "number"
-									? searchConfig.maxResults
-									: undefined,
-							searchMode:
-								searchConfig.searchMode === "auto" ||
-								searchConfig.searchMode === "direct" ||
-								searchConfig.searchMode === "agentic"
-									? searchConfig.searchMode
-									: undefined,
-							maxPasses:
-								typeof searchConfig.maxPasses === "number"
-									? searchConfig.maxPasses
-									: undefined,
-							sourcePreference: searchConfigSourcePreference,
-							timeRange: searchConfigTimeRange
-								? {
-										preset:
-											typeof searchConfigTimeRange.preset === "string"
-												? searchConfigTimeRange.preset
-												: undefined,
-										start:
-											typeof searchConfigTimeRange.start === "string"
-												? searchConfigTimeRange.start
-												: undefined,
-										end:
-											typeof searchConfigTimeRange.end === "string"
-												? searchConfigTimeRange.end
-												: undefined,
-									}
-								: undefined,
-							needExactEvidence:
-								typeof searchConfig.needExactEvidence === "boolean"
-									? searchConfig.needExactEvidence
-									: undefined,
-							recallProfile:
-								searchConfig.recallProfile === "latency" ||
-								searchConfig.recallProfile === "balanced" ||
-								searchConfig.recallProfile === "proof"
-									? searchConfig.recallProfile
-									: undefined,
-							numCandidates:
-								typeof searchConfig.numCandidates === "number"
-									? searchConfig.numCandidates
-									: undefined,
-							fusionMethod:
-								searchConfig.fusionMethod === "scoreFusion" ||
-								searchConfig.fusionMethod === "rankFusion" ||
-								searchConfig.fusionMethod === "js-merge"
-									? searchConfig.fusionMethod
-									: undefined,
-							hybridMode:
-								searchConfig.hybridMode === "hybrid" ||
-								searchConfig.hybridMode === "vector-only"
-									? searchConfig.hybridMode
-									: undefined,
-							allowHybridBackstop:
-								typeof searchConfig.allowHybridBackstop === "boolean"
-									? searchConfig.allowHybridBackstop
-									: undefined,
-							lexicalPrefilter:
-								searchConfig.lexicalPrefilter === "disabled" ||
-								searchConfig.lexicalPrefilter === "experimental"
-									? searchConfig.lexicalPrefilter
-									: undefined,
-						}
-					: undefined,
+				searchConfig: args.searchConfig as Parameters<
+					MemongoMcpClient["searchDetailed"]
+				>[0]["searchConfig"],
 			})
 			return jsonMemoryResult(out)
 		}
@@ -1028,7 +925,7 @@ export async function handleToolCall(
 				scopeRef: typeof args.scopeRef === "string" ? args.scopeRef : undefined,
 				maxItems: typeof args.maxItems === "number" ? args.maxItems : undefined,
 			})
-			return jsonResult(out)
+			return jsonMemoryResult(out)
 		}
 		if (name === "memongo_discovery_projection") {
 			const kind = args.kind
@@ -1050,7 +947,7 @@ export async function handleToolCall(
 				scopeRef: typeof args.scopeRef === "string" ? args.scopeRef : undefined,
 				maxItems: typeof args.maxItems === "number" ? args.maxItems : undefined,
 			})
-			return jsonResult(out)
+			return jsonMemoryResult(out)
 		}
 		if (name === "memongo_write_structured") {
 			const entry =
@@ -1100,17 +997,41 @@ export async function handleToolCall(
 			if (args.confirm !== "erase") {
 				throw new Error("confirm must be the literal string 'erase'")
 			}
+			// Deliberate recovery is a typed literal like confirm: only the
+			// exact "takeover" forwards, so this layer never invents or
+			// translates recovery intent (the API owns the same validation).
+			if (args.recovery !== undefined && args.recovery !== "takeover") {
+				throw new Error("recovery must be the literal string 'takeover'")
+			}
+			const agentId =
+				typeof args.agentId === "string" ? args.agentId.trim() : ""
+			if (!agentId) {
+				throw new Error("agentId must be explicitly provided for erasure")
+			}
 			const out = await memongo.eraseAgent({
 				confirm: "erase",
-				agentId: typeof args.agentId === "string" ? args.agentId : undefined,
+				agentId,
+				...(args.recovery === "takeover" ? { recovery: "takeover" } : {}),
 			})
 			return jsonResult(out)
 		}
 		if (name === "memongo_quarantine_list") {
+			if (
+				args.status !== undefined &&
+				args.status !== "pending-review" &&
+				args.status !== "promoting" &&
+				args.status !== "promoted" &&
+				args.status !== "rejected"
+			) {
+				throw new Error(
+					"status must be pending-review|promoting|promoted|rejected",
+				)
+			}
 			const out = await memongo.listQuarantined({
 				agentId: typeof args.agentId === "string" ? args.agentId : undefined,
 				status:
 					args.status === "pending-review" ||
+					args.status === "promoting" ||
 					args.status === "promoted" ||
 					args.status === "rejected"
 						? args.status
@@ -1201,7 +1122,7 @@ export async function handleToolCall(
 				scope: readScopeArg(args),
 				scopeRef: typeof args.scopeRef === "string" ? args.scopeRef : undefined,
 			})
-			return jsonResult(out)
+			return jsonMemoryResult(out)
 		}
 		if (IMPORT_TOOL_NAMES.has(name)) {
 			if (
@@ -1359,11 +1280,7 @@ async function main(): Promise<void> {
 	await createMemongoServer().connect(new StdioServerTransport())
 }
 
-const entrypointHref = process.argv[1]
-	? pathToFileURL(process.argv[1]).href
-	: undefined
-
-if (import.meta.url === entrypointHref) {
+if (isEntrypoint(process.argv[1], import.meta.url)) {
 	main().catch((err) => {
 		console.error(err)
 		process.exit(1)

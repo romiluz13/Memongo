@@ -36,6 +36,14 @@ import type {
 	MemorySyncProgressUpdate,
 } from "./types.js"
 
+import {
+	type AdmissionToken,
+	ErasureGateConflictError,
+	isErasureGateConflictError,
+	isMalformedGateError,
+	withFencedWrite,
+} from "./mongodb-write-fence.js"
+
 const log = createSubsystemLogger("memory:mongodb:sync")
 
 // Re-export chunk helpers from internal.ts
@@ -306,7 +314,12 @@ async function deleteChunksForPath(
 	namespace: SyncNamespace,
 	session?: ClientSession,
 ): Promise<number> {
-	const filter = { ...buildNamespaceFilter(namespace), path }
+	// Current event/window producers omit startLine; preserve their projections.
+	const filter = {
+		...buildNamespaceFilter(namespace),
+		path,
+		startLine: { $exists: true },
+	}
 	const result = session
 		? await chunks.deleteMany(filter, { session })
 		: await chunks.deleteMany(filter)
@@ -319,7 +332,11 @@ async function deleteStaleChunks(
 	validPaths: Set<string>,
 	session?: ClientSession,
 ): Promise<number> {
-	const namespaceFilter = buildNamespaceFilter(namespace)
+	// Current event/window producers omit startLine; preserve their projections.
+	const namespaceFilter = {
+		...buildNamespaceFilter(namespace),
+		startLine: { $exists: true },
+	}
 	const allPaths = session
 		? await chunks.distinct("path", namespaceFilter, { session })
 		: await chunks.distinct("path", namespaceFilter)
@@ -397,6 +414,9 @@ async function syncFileNonTransactional(params: {
  * files and session transcripts share the exact same durability contract.
  */
 async function syncSourceFileAtomically(params: {
+	db: Db
+	prefix: string
+	admission?: AdmissionToken
 	client: MongoClient | undefined
 	useTransactions: boolean
 	chunksCol: Collection
@@ -423,6 +443,35 @@ async function syncSourceFileAtomically(params: {
 		embeddings,
 		embeddingStatus,
 	} = params
+
+	if (params.admission) {
+		return withFencedWrite({
+			db: params.db,
+			prefix: params.prefix,
+			token: params.admission,
+			fn: async (session) => {
+				await deleteChunksForPath(chunksCol, entry.path, namespace, session)
+				const chunkOps = buildChunkOps(
+					entry.path,
+					namespace,
+					chunks,
+					model,
+					embeddings,
+					embeddingStatus,
+				)
+				const result = await chunksCol.bulkWrite(chunkOps, {
+					ordered: false,
+					session,
+				})
+				await upsertFileMetadata(filesCol, entry, namespace, session)
+				return {
+					upserted: result.upsertedCount + result.modifiedCount,
+					disableTransactions: false,
+					failed: false,
+				}
+			},
+		})
+	}
 
 	if (!client || !params.useTransactions) {
 		const result = await syncFileNonTransactional({
@@ -532,6 +581,7 @@ export type SyncResult = {
 }
 
 export async function syncToMongoDB(params: {
+	admission?: AdmissionToken
 	client?: MongoClient
 	db: Db
 	prefix: string
@@ -548,6 +598,12 @@ export async function syncToMongoDB(params: {
 	progress?: (update: MemorySyncProgressUpdate) => void
 }): Promise<SyncResult> {
 	const { db, prefix, embeddingMode, progress } = params
+	if (
+		params.admission &&
+		(params.admission.kind !== "admission" ||
+			params.admission.agentId !== params.agentId)
+	)
+		throw new ErasureGateConflictError(params.agentId ?? "")
 	const model = params.model ?? INDEX_AUTOEMBED_MODEL
 	const chunking = params.chunking ?? { tokens: 400, overlap: 80 }
 	const memoryNamespace: SyncNamespace = {
@@ -654,6 +710,9 @@ export async function syncToMongoDB(params: {
 
 			const { upserted, disableTransactions, failed } =
 				await syncSourceFileAtomically({
+					db: params.db,
+					prefix: params.prefix,
+					admission: params.admission,
 					client: params.client,
 					useTransactions,
 					chunksCol,
@@ -681,6 +740,8 @@ export async function syncToMongoDB(params: {
 				label: file.path,
 			})
 		} catch (err) {
+			if (isErasureGateConflictError(err) || isMalformedGateError(err))
+				throw err
 			// W14: count per-file failures so the caller (dirty-flag gating in
 			// the manager) can refuse to treat this sync as clean.
 			filesFailed++
@@ -701,6 +762,9 @@ export async function syncToMongoDB(params: {
 	if (params.agentId && params.sessionMemoryEnabled !== false) {
 		try {
 			const sessionResult = await syncSessionFiles({
+				db,
+				prefix,
+				admission: params.admission,
 				client: params.client,
 				useTransactions,
 				agentId: params.agentId,
@@ -733,6 +797,8 @@ export async function syncToMongoDB(params: {
 				useTransactions = false
 			}
 		} catch (err) {
+			if (isErasureGateConflictError(err) || isMalformedGateError(err))
+				throw err
 			// W14: a session-sync-level failure leaves the valid-path set
 			// incomplete for the sessions namespace — stale cleanup must not
 			// run on partial knowledge.
@@ -768,7 +834,27 @@ export async function syncToMongoDB(params: {
 			}
 		}
 
-		if (params.client && useTransactions) {
+		if (params.admission) {
+			staleDeleted = await withFencedWrite({
+				db,
+				prefix,
+				token: params.admission,
+				fn: async (session) => {
+					const deleted = await deleteStaleChunks(
+						chunksCol,
+						memoryNamespace,
+						validPaths,
+						session,
+					)
+					if (staleFileIds.length > 0)
+						await filesCol.deleteMany(
+							{ _id: { $in: staleFileIds } } as Record<string, unknown>,
+							{ session },
+						)
+					return deleted
+				},
+			})
+		} else if (params.client && useTransactions) {
 			let session: ClientSession | undefined
 			try {
 				session = params.client.startSession()
@@ -848,6 +934,9 @@ export async function syncToMongoDB(params: {
 // ---------------------------------------------------------------------------
 
 async function syncSessionFiles(params: {
+	db: Db
+	prefix: string
+	admission?: AdmissionToken
 	client?: MongoClient
 	useTransactions: boolean
 	agentId: string
@@ -972,6 +1061,9 @@ async function syncSessionFiles(params: {
 			// Atomic write: delete + upsert + metadata in one transaction (W15)
 			const { upserted, disableTransactions, failed } =
 				await syncSourceFileAtomically({
+					db: params.db,
+					prefix: params.prefix,
+					admission: params.admission,
 					client: params.client,
 					useTransactions,
 					chunksCol: params.chunksCol,
@@ -998,6 +1090,8 @@ async function syncSessionFiles(params: {
 				label: `Indexed conversation transcript ${filesProcessed + filesFailed}/${sessionPaths.length}`,
 			})
 		} catch (err) {
+			if (isErasureGateConflictError(err) || isMalformedGateError(err))
+				throw err
 			// W14: a transient per-file failure must count (dirty-flag gating)
 			// and must keep stale cleanup off — the file's path never made it
 			// into validPaths, so its stored chunks are not accounted for.
@@ -1024,18 +1118,45 @@ async function syncSessionFiles(params: {
 			(storedPath) => !params.validPaths.has(storedPath),
 		)
 		if (staleSessionPaths.length > 0) {
-			staleDeleted = await deleteStaleChunks(
-				params.chunksCol,
-				sessionNamespace,
-				new Set(params.validPaths),
-			)
-			await params.filesCol.deleteMany({
-				_id: {
-					$in: staleSessionPaths.map((storedPath) =>
-						buildStorageId(sessionNamespace, storedPath),
-					),
-				},
-			} as Record<string, unknown>)
+			if (params.admission) {
+				staleDeleted = await withFencedWrite({
+					db: params.db,
+					prefix: params.prefix,
+					token: params.admission,
+					fn: async (session) => {
+						const deleted = await deleteStaleChunks(
+							params.chunksCol,
+							sessionNamespace,
+							new Set(params.validPaths),
+							session,
+						)
+						await params.filesCol.deleteMany(
+							{
+								_id: {
+									$in: staleSessionPaths.map((storedPath) =>
+										buildStorageId(sessionNamespace, storedPath),
+									),
+								},
+							} as Record<string, unknown>,
+							{ session },
+						)
+						return deleted
+					},
+				})
+			} else {
+				staleDeleted = await deleteStaleChunks(
+					params.chunksCol,
+					sessionNamespace,
+					new Set(params.validPaths),
+				)
+				await params.filesCol.deleteMany({
+					_id: {
+						$in: staleSessionPaths.map((storedPath) =>
+							buildStorageId(sessionNamespace, storedPath),
+						),
+					},
+				} as Record<string, unknown>)
+			}
 		}
 	}
 

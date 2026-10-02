@@ -26,7 +26,7 @@ export type OperationRunAccounting = {
 	): void
 }
 
-type OperationMutation = {
+export type OperationMutation = {
 	provider?: string
 	model?: string
 	count?: number
@@ -38,6 +38,33 @@ type OperationMutation = {
 	 */
 	inputTokens?: number
 	outputTokens?: number
+	/**
+	 * C-017: reasoning tokens reported by the transport alongside
+	 * input/output (OpenAI-compatible completion_tokens_details). Absent
+	 * when the gateway does not report reasoning spend.
+	 */
+	reasoningTokens?: number
+}
+
+export type OperationAccountingEffect = {
+	kind: "attempt" | "success" | "failure"
+	operation: Exclude<BenchmarkOperationName, "embedding">
+	metadata?: OperationMutation
+}
+
+export function applyOperationAccountingEffects(
+	runContext: OperationRunContext,
+	effects: readonly OperationAccountingEffect[],
+): void {
+	for (const effect of effects) {
+		if (effect.kind === "attempt") {
+			runContext.accounting.recordAttempt(effect.operation, effect.metadata)
+		} else if (effect.kind === "success") {
+			runContext.accounting.recordSuccess(effect.operation, effect.metadata)
+		} else {
+			runContext.accounting.recordFailure(effect.operation, effect.metadata)
+		}
+	}
 }
 
 export type OperationRunConfiguration = {
@@ -204,6 +231,11 @@ export function createOperationRunContext(params: {
 					entry.outputTokens = (entry.outputTokens ?? 0) + outputTokens
 					tokensMeasured = true
 				}
+				const reasoningTokens = metadata?.reasoningTokens
+				if (reasoningTokens !== undefined && Number.isFinite(reasoningTokens)) {
+					entry.reasoningTokens = (entry.reasoningTokens ?? 0) + reasoningTokens
+					tokensMeasured = true
+				}
 			},
 			recordFailure(operation, metadata) {
 				const count = metadata?.count ?? 1
@@ -252,7 +284,24 @@ export function instrumentOperationProvider(params: {
 	runContext: OperationRunContext
 	operation: Exclude<BenchmarkOperationName, "embedding" | "vector-query">
 	model?: string
+	onEffect?: (effect: OperationAccountingEffect) => void
 }): EnrichmentProvider {
+	const record = (
+		kind: OperationAccountingEffect["kind"],
+		metadata: OperationMutation,
+	) => {
+		if (params.onEffect) {
+			params.onEffect({ kind, operation: params.operation, metadata })
+			return
+		}
+		if (kind === "attempt") {
+			params.runContext.accounting.recordAttempt(params.operation, metadata)
+		} else if (kind === "success") {
+			params.runContext.accounting.recordSuccess(params.operation, metadata)
+		} else {
+			params.runContext.accounting.recordFailure(params.operation, metadata)
+		}
+	}
 	return {
 		...params.provider,
 		async chatCompletion(request) {
@@ -260,21 +309,24 @@ export function instrumentOperationProvider(params: {
 				provider: params.provider.name,
 				model: request.model,
 			}
-			params.runContext.accounting.recordAttempt(params.operation, metadata)
+			record("attempt", metadata)
 			try {
 				const response = await params.provider.chatCompletion(request)
-				params.runContext.accounting.recordSuccess(params.operation, {
+				record("success", {
 					...metadata,
 					...(response.usage
 						? {
 								inputTokens: response.usage.inputTokens,
 								outputTokens: response.usage.outputTokens,
+								...(response.usage.reasoningTokens !== undefined
+									? { reasoningTokens: response.usage.reasoningTokens }
+									: {}),
 							}
 						: {}),
 				})
 				return response
 			} catch (error) {
-				params.runContext.accounting.recordFailure(params.operation, metadata)
+				record("failure", metadata)
 				throw error
 			}
 		},

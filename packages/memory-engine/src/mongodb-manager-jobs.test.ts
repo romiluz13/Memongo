@@ -71,6 +71,28 @@ vi.mock("./mongodb-telemetry.js", async () =>
 	(await import("./test-helpers/manager-test-kit.js")).telemetryModuleMock(),
 )
 
+vi.mock("./mongodb-write-fence.js", async (importOriginal) => ({
+	...(await importOriginal<typeof import("./mongodb-write-fence.js")>()),
+	captureAdmissionToken: vi.fn(async ({ agentId }: { agentId: string }) => ({
+		kind: "admission" as const,
+		agentId,
+		epoch: 0,
+	})),
+	readErasureGate: vi.fn(async ({ agentId }: { agentId: string }) => ({
+		agentId,
+		epoch: 0,
+		state: "open" as const,
+		serial: 0,
+	})),
+	withFencedWrite: vi.fn(
+		async ({
+			fn,
+		}: {
+			fn: (session: import("mongodb").ClientSession) => Promise<unknown>
+		}) => fn({} as import("mongodb").ClientSession),
+	),
+}))
+
 describe("MongoDBMemoryManager consolidate job tracking", () => {
 	beforeEach(() => {
 		vi.clearAllMocks()

@@ -105,6 +105,12 @@ const forbiddenPrivateDeps = new Set([
 	"@memongo/docs",
 ])
 
+// Every published tarball must carry the repository's legal files. npm
+// force-includes LICENSE even under a `files` whitelist, but NOTICE is only
+// packed because each publishable manifest lists it explicitly — keep both
+// under test so the omission cannot regress.
+const requiredLegalFiles = ["LICENSE", "NOTICE"] as const
+
 function fail(message: string): never {
 	throw new Error(message)
 }
@@ -115,6 +121,13 @@ export function findForbiddenPackageArtifact(
 	return artifactPaths.find((artifactPath) =>
 		forbiddenTarballPatterns.some((pattern) => pattern.test(artifactPath)),
 	)
+}
+
+export function findMissingLegalFile(
+	artifactPaths: string[],
+): string | undefined {
+	const present = new Set(artifactPaths)
+	return requiredLegalFiles.find((legalFile) => !present.has(legalFile))
 }
 
 export function assertAlignedInternalDependencies(
@@ -264,6 +277,26 @@ function assertNoOrphanDistArtifacts(
 		)
 		if (!candidates.some((candidate) => fs.existsSync(candidate))) {
 			fail(`orphan dist artifact "${relPath}" found in ${packageRelPath}`)
+		}
+	}
+}
+
+function assertLegalFileParity(packageDir: string, packageRelPath: string) {
+	for (const legalFile of requiredLegalFiles) {
+		const packageCopyPath = path.join(packageDir, legalFile)
+		if (!fs.existsSync(packageCopyPath)) {
+			fail(`missing ${legalFile} copy in ${packageRelPath}`)
+		}
+		const rootDigest = createHash("sha256")
+			.update(fs.readFileSync(path.join(rootDir, legalFile)))
+			.digest("hex")
+		const packageDigest = createHash("sha256")
+			.update(fs.readFileSync(packageCopyPath))
+			.digest("hex")
+		if (rootDigest !== packageDigest) {
+			fail(
+				`${legalFile} in ${packageRelPath} differs from the repository root copy`,
+			)
 		}
 	}
 }
@@ -614,6 +647,11 @@ function assertTarballContents(
 		fail(`package tarball is missing README.md: ${packageRelPath}`)
 	}
 
+	const missingLegalFile = findMissingLegalFile([...tarballPaths])
+	if (missingLegalFile) {
+		fail(`package tarball is missing ${missingLegalFile}: ${packageRelPath}`)
+	}
+
 	if (piExtensionPaths && piExtensionPaths.length > 0) {
 		for (const requiredFile of piExtensionPaths) {
 			// Entry can be a file or a directory. For directories, npm packs
@@ -744,6 +782,7 @@ function checkPackage(
 	const packageJson = readJson(packageJsonPath)
 	assertMetadata(packageJson, packageSpec.dir)
 	assertReleaseHygiene(packageJson, packageSpec.dir)
+	assertLegalFileParity(packageDir, packageSpec.dir)
 
 	let piExtensionPaths: string[] | undefined
 	if (packageSpec.piExtension) {
@@ -825,80 +864,89 @@ function installSmoke(
 	const installDir = fs.mkdtempSync(
 		path.join(os.tmpdir(), "memongo-pack-smoke-"),
 	)
-	const dependencies = Object.fromEntries(
-		Array.from(tarballsByName.entries()).map(([name, tarballPath]) => [
-			name,
-			`file:${tarballPath}`,
-		]),
-	)
-
-	if (targetPackage.name === "@memongo/tools") {
-		dependencies.ai = "^5.0.0"
-	}
-
-	fs.writeFileSync(
-		path.join(installDir, "package.json"),
-		JSON.stringify(
-			{
-				name: "memongo-pack-smoke",
-				private: true,
-				type: "module",
-				dependencies,
-			},
-			null,
-			2,
-		),
-	)
-
-	execFileSync("npm", ["install", "--ignore-scripts", "--no-package-lock"], {
-		cwd: installDir,
-		stdio: "pipe",
-	})
-
-	if (targetPackage.piExtension) {
-		// Pi extensions are loaded by Pi's jiti loader, not Node module resolution.
-		// Verify the pi manifest + extension entrypoints exist in the installed tarball.
-		const installedPkg = readJson(
-			path.join(installDir, "node_modules", targetPackage.name, "package.json"),
+	try {
+		const dependencies = Object.fromEntries(
+			Array.from(tarballsByName.entries()).map(([name, tarballPath]) => [
+				name,
+				`file:${tarballPath}`,
+			]),
 		)
-		const pi = installedPkg["pi"]
-		if (
-			typeof pi !== "object" ||
-			pi === null ||
-			!Array.isArray((pi as Record<string, unknown>).extensions)
-		) {
-			fail(
-				`installed pi extension missing "pi.extensions" manifest: ${targetPackage.name}`,
-			)
-		}
-		const ext = (pi as Record<string, unknown>).extensions as string[]
-		for (const entry of ext) {
-			const relPath = entry.replace(/^\.\//, "")
-			if (
-				!fs.existsSync(
-					path.join(installDir, "node_modules", targetPackage.name, relPath),
-				)
-			) {
-				fail(
-					`installed pi extension missing entrypoint "${relPath}": ${targetPackage.name}`,
-				)
-			}
-		}
-		return
-	}
 
-	execFileSync(
-		"node",
-		[
-			"--input-type=module",
-			"-e",
-			`import(${JSON.stringify(targetPackage.name)}).then(() => process.exit(0))`,
-		],
-		{
+		if (targetPackage.name === "@memongo/tools") {
+			dependencies.ai = "^5.0.0"
+		}
+
+		fs.writeFileSync(
+			path.join(installDir, "package.json"),
+			JSON.stringify(
+				{
+					name: "memongo-pack-smoke",
+					private: true,
+					type: "module",
+					dependencies,
+				},
+				null,
+				2,
+			),
+		)
+
+		execFileSync("npm", ["install", "--ignore-scripts", "--no-package-lock"], {
 			cwd: installDir,
 			stdio: "pipe",
-		},
-	)
+		})
+
+		if (targetPackage.piExtension) {
+			// Pi extensions are loaded by Pi's jiti loader, not Node module resolution.
+			// Verify the pi manifest + extension entrypoints exist in the installed tarball.
+			const installedPkg = readJson(
+				path.join(
+					installDir,
+					"node_modules",
+					targetPackage.name,
+					"package.json",
+				),
+			)
+			const pi = installedPkg["pi"]
+			if (
+				typeof pi !== "object" ||
+				pi === null ||
+				!Array.isArray((pi as Record<string, unknown>).extensions)
+			) {
+				fail(
+					`installed pi extension missing "pi.extensions" manifest: ${targetPackage.name}`,
+				)
+			}
+			const ext = (pi as Record<string, unknown>).extensions as string[]
+			for (const entry of ext) {
+				const relPath = entry.replace(/^\.\//, "")
+				if (
+					!fs.existsSync(
+						path.join(installDir, "node_modules", targetPackage.name, relPath),
+					)
+				) {
+					fail(
+						`installed pi extension missing entrypoint "${relPath}": ${targetPackage.name}`,
+					)
+				}
+			}
+			return
+		}
+
+		execFileSync(
+			"node",
+			[
+				"--input-type=module",
+				"-e",
+				`import(${JSON.stringify(targetPackage.name)}).then(() => process.exit(0))`,
+			],
+			{
+				cwd: installDir,
+				stdio: "pipe",
+			},
+		)
+	} finally {
+		fs.rmSync(installDir, { recursive: true, force: true })
+	}
 }
 
 function main() {
@@ -919,26 +967,30 @@ function main() {
 	const skips: string[] = []
 
 	const packDir = fs.mkdtempSync(path.join(os.tmpdir(), "memongo-packs-"))
-	const tarballs = publishablePackages.map((packageSpec) =>
-		checkPackage(packageSpec, packDir, availability, skips),
-	)
-	const tarballsByName = new Map(
-		tarballs.map((entry) => [entry.name, entry.tarballPath]),
-	)
+	try {
+		const tarballs = publishablePackages.map((packageSpec) =>
+			checkPackage(packageSpec, packDir, availability, skips),
+		)
+		const tarballsByName = new Map(
+			tarballs.map((entry) => [entry.name, entry.tarballPath]),
+		)
 
-	for (const packageSpec of publishablePackages) {
-		installSmoke(packageSpec, tarballsByName)
-	}
+		for (const packageSpec of publishablePackages) {
+			installSmoke(packageSpec, tarballsByName)
+		}
 
-	for (const skip of skips) {
-		console.log(`SKIP ${skip}`)
+		for (const skip of skips) {
+			console.log(`SKIP ${skip}`)
+		}
+		const supportedCount = tarballs.filter(
+			(entry) => entry.supportedSurface,
+		).length
+		console.log(
+			`Publishability checks passed for ${supportedCount} supported packages and ${publishablePackages.length - supportedCount} runtime support package.`,
+		)
+	} finally {
+		fs.rmSync(packDir, { recursive: true, force: true })
 	}
-	const supportedCount = tarballs.filter(
-		(entry) => entry.supportedSurface,
-	).length
-	console.log(
-		`Publishability checks passed for ${supportedCount} supported packages and ${publishablePackages.length - supportedCount} runtime support package.`,
-	)
 }
 
 if (import.meta.main) {

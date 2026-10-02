@@ -1,0 +1,389 @@
+---
+title: MongoDB shared-prefix migration
+description: Consolidate per-agent MongoDB collections into shared-prefix collections with retention held, verified, and restored inside one maintenance window.
+icon: "database"
+---
+
+This guide moves per-agent collections (`<prefix><agent>_<base>`) into shared
+per-base collections (`<prefix><base>`) on a live MongoDB deployment while
+their TTL retention indexes are held, the copy is verified server-side, and
+every source is reconciled from live state before retention resumes. It uses
+three repository tools:
+
+- `scripts/prepare-mongodb-runtime.ts --schema-only` — configured schema
+  preparation without Search coupling;
+- `scripts/mongodb-ttl-retention-hold.mjs` — inventory, pause, restore, and
+  per-source absence marking for TTL retention; and
+- `scripts/migrate-to-shared-prefix.ts` — the migration CLI (dry-run report,
+  `$merge` copy with digest verification, optional source drop).
+
+The procedure is ordered so that nothing that can mutate schema or data runs
+before a verified, restorable backup exists.
+
+## Scope and limits
+
+Read this list before planning the window:
+
+- Ordinary collections only. Views, time-series collections, collection-level
+  TTL, capped collections, and legacy quarantine policies require manual DBA
+  handling.
+- Supported retention is a single ascending TTL key in one of the accepted
+  forms — plain seconds, the exact `{ <field>: { $exists: true } }` partial
+  filter, or the exact shipped quarantine form — with only exact simple
+  collation when present. Compound keys, custom options, unique constraints,
+  BSON-valued filters, and non-simple collation are rejected by the hold
+  helper and require manual handling.
+- The CLI needs memory proportional to the number of source collections (it
+  holds one digest per source) and scans both source and target per
+  collection.
+- Quiescence is the write fence. Digest verification proves the copy at scan
+  time; it cannot fence a mutation that happens later.
+- A killed client may leave a server operation committed or in progress. A
+  watchdog timeout is uncertain, never a clean abort.
+- Restoring TTL makes held rows eligible for asynchronous deletion at the
+  server's next TTL sweep, not immediate deletion. Plan the window for that
+  deferred deletion on large held sets.
+- The default `mongodb:prepare` command is Search-coupled and can return FAIL
+  after standard schema mutation when Search is unavailable. This procedure
+  uses the `--schema-only` mode instead; Search readiness is a separate
+  deployment concern.
+- The support claim is bounded to the server versions and topologies accepted
+  by this repository's combined validation gate. Publishing this procedure
+  does not establish broader release readiness.
+- These instructions target a repository checkout with Node (>= 20.19.0),
+  Bun 1.4.2, and workspace dependencies installed. They are **not** supported
+  from the published release containers: the release runtime provides Node
+  without Bun, and its production-filtered install does not include the
+  private scripts workspace.
+
+## Prerequisites
+
+1. A maintenance window that stops application writes, background mutation,
+   and external DDL for every source and target collection.
+2. A writable primary and an operator role able to inspect
+   collections/indexes, create and drop indexes, run `$merge`, drop verified
+   source collections, and run the schema preparation operations. Managed TTL
+   changes require `collMod` authorization.
+3. The final configuration path the application will use after maintenance
+   (`MEMONGO_CONFIG_PATH`), the target database, the target prefix, log paths,
+   the hold-file path, and the migration filters — all fixed before the
+   session starts.
+
+## Session setup
+
+Run from the repository root. Pin the repository runtime for the entire
+session and abort if the version check fails. Every Bun command below uses
+`"$BUN_BIN"` explicitly; the exported `PATH` additionally pins child
+processes that spawn `bun` by name.
+
+```bash
+BUN_BIN='<absolute-path-to-bun-1.4.2>'
+test "$("$BUN_BIN" --version)" = "1.4.2"
+export PATH="$(dirname "$BUN_BIN"):$PATH"
+```
+
+Define the session variables. The three target values — `$MONGODB_URI`,
+`$MONGODB_DB`, `$MONGODB_TARGET_PREFIX` — are defined once here and reused
+verbatim by every later phase. Never derive or retype them between phases.
+
+```bash
+MONGODB_URI='<uri>'                     # writable primary URI
+MONGODB_DB='<db>'                       # database under maintenance
+MONGODB_TARGET_PREFIX='memongo_'        # shared-target prefix
+PAUSE_FILE='<unit>.pause.json'          # one pause file per migration unit
+MEMONGO_CONFIG_PATH='<final-config-path>'
+MIGRATION_TIMEOUT_SECONDS='<seconds>'   # per CLI invocation
+
+DRY_RUN_STDOUT='<path>'
+DRY_RUN_STDERR='<path>'
+MIGRATION_STDOUT='<path>'
+MIGRATION_STDERR='<path>'
+PREPARE_STDOUT='<path>'
+PREPARE_STDERR='<path>'
+
+MIGRATION_FILTERS=(--agent '<agent>' --batch 500)
+```
+
+Set up the watchdog and the hold wrapper. `guard()` kills a command that
+outlives its budget; `hold()` `exec`s into the helper process so the watchdog
+owns the helper PID directly.
+
+```bash
+guard() {  # external watchdog: kill the command if it outlives its budget
+	local secs="$1"; shift
+	"$@" & local p=$!
+	( sleep "$secs"; kill -TERM "$p" 2>/dev/null; sleep 2; kill -KILL "$p" 2>/dev/null ) &
+	local w=$!
+	wait "$p"; local rc=$?
+	kill "$w" 2>/dev/null; wait "$w" 2>/dev/null
+	return "$rc"
+}
+
+hold() {
+	exec env MEMONGO_MONGODB_URI="$MONGODB_URI" \
+		node scripts/mongodb-ttl-retention-hold.mjs \
+		--db "$MONGODB_DB" --file "$PAUSE_FILE" "$@"
+}
+```
+
+Credential hygiene: the helper reads the URI only from the
+`MEMONGO_MONGODB_URI` environment variable and rejects a `--uri` argument
+(exit 2). It never includes the URI in stdout, stderr, errors, or the hold
+file. Avoid `set -x`, preserve log file permissions, and unset
+`MEMONGO_MONGODB_URI` when the session ends.
+
+Begin every operator session with a read-only inspect. If a hold already
+exists, resolve it (restore, or resume-copy) before anything else; never start
+`inventory` over an active hold — the helper refuses (exit 5).
+
+```bash
+guard 30 hold inspect
+```
+
+## Backup and rollback gate
+
+Complete this gate **before the first `--schema-only` preparation**.
+Preparation itself can create, drop, or `collMod` TTL indexes, and enabling or
+shortening retention can make existing documents eligible for asynchronous
+deletion.
+
+- Create a database backup covering every source and shared target.
+- Verify the backup completed and record its identifier and location without
+  placing credentials in logs.
+- Document and validate the concrete restore procedure in a disposable
+  environment or through your deployment's established restore drill.
+- Preserve pre-migration collection UUIDs, index specs, and content/count
+  snapshots.
+- Assign the operator who can authorize restore.
+
+Reverse rollback is not automatic. `$merge` additions to shared targets are
+not removed by the migration CLI or the hold helper. A source dropped after
+verification is not recreated by `restore`; `mark-source-dropped` specifically
+prevents that. The helper's `restore` command restores recorded TTL indexes
+on surviving namespaces only. Reversing copied data or reconstructing a
+dropped source requires the preflight backup and an operator-directed restore
+outside this procedure.
+
+## Prepare and verify the shared targets
+
+Resolve the target exactly through the application's current configuration.
+Run the configured schema-only preparation bound to the exact same
+`$MONGODB_URI` value used everywhere else (here as
+`MEMONGO_FORCE_MONGODB_URI`) and the final `MEMONGO_CONFIG_PATH`:
+
+```bash
+env \
+  MEMONGO_FORCE_MONGODB_URI="$MONGODB_URI" \
+  MEMONGO_CONFIG_PATH="$MEMONGO_CONFIG_PATH" \
+  "$BUN_BIN" scripts/prepare-mongodb-runtime.ts --schema-only \
+  >"$PREPARE_STDOUT" 2>"$PREPARE_STDERR"
+PREPARE_RC=$?
+```
+
+Before inventory, require:
+
+- `PREPARE_RC=0`;
+- the `mongodb:prepare-schema PASS` marker in `$PREPARE_STDOUT`;
+- receipt values `db=$MONGODB_DB` and `prefix=$MONGODB_TARGET_PREFIX`; and
+- the retention triple matching your configured policy. The receipt has this
+  shape (values shown are placeholders):
+
+  ```
+  mongodb:prepare-schema PASS
+  db=<database>
+  prefix=<prefix>
+  retention: memory=<N>d episodes=<N>d relevance=<N>d
+  standardIndexes=<count>
+  ```
+
+The `--schema-only` mode runs the same configuration resolution as the
+application (`buildMemongoConfig` → `resolveMemoryBackendConfig`), then
+`ensureCollections` and `ensureStandardIndexes` with the resolved retention
+values. It skips Search index creation, capability detection, and
+Search-readiness polling, so it succeeds on non-Search MongoDB deployments. A
+FAIL or a mismatched receipt is a stop signal, not permission to continue.
+
+Then confirm every intended shared target exists with the intended final
+policy, and enumerate every source→target mapping. The CLI discovers sources
+named `<targetPrefix><agentId>_<base>` (agentId `[a-z0-9-]+`, base one of the
+fixed base names) and copies each into `<targetPrefix><base>` — for example,
+`memongo_agent-a_chunks` → `memongo_chunks`. Intentional no-TTL policy is
+valid, but every touched target must already exist. The later paused-state
+dry-run is the second, exact manifest check.
+
+## Inventory and pause retention
+
+Enumerate the intended per-agent sources from live `listCollections` state.
+Inventory **all touched namespaces in one hold**: every selected per-agent
+source and every corresponding shared target — including targets with no TTL
+indexes. Do not inventory only sources.
+
+```bash
+guard 60 hold inventory \
+  '<prefix><agent>_<base>' '<shared-target>'
+```
+
+The helper captures exact UUIDs and the supported TTL policy of each
+namespace, rejects unsupported policies (exit 3, zero mutation), and persists
+the pause file atomically. Treat the pause file as the sole restore source of
+truth. Stop on missing namespaces, unsupported TTL shape, identity mismatch,
+unrecorded TTL, or policy drift.
+
+Then pause retention and verify UUID consistency and zero live TTL indexes on
+every held namespace:
+
+```bash
+guard 60 hold pause
+```
+
+`pause` is two-pass. Pass 1 is read-only over every held namespace: it
+verifies existence, recorded UUIDs, and revalidates each recorded index
+against the complete live policy shape. Any refusal exits with zero
+mutations. Pass 2 drops each recorded TTL index by name, revalidating it
+immediately before the drop, and requires zero TTL indexes remaining before
+recording the namespace as paused. Re-entry repeats pass 1 over the whole
+hold before completing pass 2.
+
+## Dry run
+
+Run the explicitly target-bound dry-run with the session-wide pin and the
+same `MIGRATION_FILTERS` array the apply step will reuse unchanged:
+
+```bash
+guard "$MIGRATION_TIMEOUT_SECONDS" \
+  env \
+    MEMONGO_MONGODB_URI="$MONGODB_URI" \
+    MEMONGO_MONGODB_DATABASE="$MONGODB_DB" \
+    MEMONGO_MONGODB_TARGET_PREFIX="$MONGODB_TARGET_PREFIX" \
+    "$BUN_BIN" scripts/migrate-to-shared-prefix.ts \
+    "${MIGRATION_FILTERS[@]}" \
+  >"$DRY_RUN_STDOUT" 2>"$DRY_RUN_STDERR"
+DRY_RUN_RC=$?
+printf 'dry_run_exit=%s stdout=%s stderr=%s\n' \
+  "$DRY_RUN_RC" "$DRY_RUN_STDOUT" "$DRY_RUN_STDERR"
+```
+
+The dry-run reports the complete source→target manifest without mutating
+anything. Do not export a second target URI, database, or prefix, and do not
+depend on ambient `MEMONGO_*` values.
+
+## STOP — operator review required
+
+Do not continue until a human reviews and approves all of the following:
+
+- `DRY_RUN_RC=0`;
+- the schema-preparation receipt used the same URI variable, database,
+  prefix, and retention policy;
+- the exact expected source set and source→target mapping;
+- no unexpected agent, source, target, `UNSUPPORTED`, or missing namespace;
+- the same `--agent` filters and `--batch` value will be used by the apply
+  run;
+- all manifest sources and targets are present in the active hold; and
+- live confirmation that every held namespace remains UUID-consistent and
+  TTL-free after the pause.
+
+## Apply
+
+Only after that review, run the separately target-bound apply. This is a
+separate block on purpose: do not paste it together with the dry-run, auto-
+chain the two, or treat a zero aggregate exit as a substitute for the review
+above.
+
+```bash
+guard "$MIGRATION_TIMEOUT_SECONDS" \
+  env \
+    MEMONGO_MONGODB_URI="$MONGODB_URI" \
+    MEMONGO_MONGODB_DATABASE="$MONGODB_DB" \
+    MEMONGO_MONGODB_TARGET_PREFIX="$MONGODB_TARGET_PREFIX" \
+    "$BUN_BIN" scripts/migrate-to-shared-prefix.ts \
+    --apply --drop "${MIGRATION_FILTERS[@]}" \
+  >"$MIGRATION_STDOUT" 2>"$MIGRATION_STDERR"
+MIGRATION_RC=$?
+printf 'migration_exit=%s stdout=%s stderr=%s\n' \
+  "$MIGRATION_RC" "$MIGRATION_STDOUT" "$MIGRATION_STDERR"
+```
+
+Each source is copied with one server-side
+`$merge {on: "_id", whenMatched: "keepExisting", whenNotMatched: "insert"}`
+(no client decode/re-serialize) and verified by a SHA-256 digest multiset
+over raw persisted bytes. `--drop` drops a source only after its own
+verification passes; any error or unmatched content retains the source and
+exits nonzero. While the CLI runs, or its outcome is uncertain, retention
+must stay paused.
+
+## Reconcile sources from live state
+
+The CLI emits one receipt per source collection. The overall exit code merely
+aggregates failures; it is not the hold input. Reconcile every source
+individually:
+
+- A `dropped` line is evidence input only. Run
+  `guard 60 hold mark-source-dropped <source>` only after the helper verifies
+  live absence. The command refuses a still-present source (exit 5) and a
+  foreign-reused name (exit 4), and is idempotent while the namespace stays
+  absent.
+- A source that is present (for example `verified=true` without `dropped`)
+  remains paused, including when you did not use `--drop`.
+- A missing, malformed, truncated, failed, `uncertain`, or `unsupported`
+  receipt requires live inspection. Mark only proven absence. A UUID mismatch
+  or foreign name reuse is unresolved.
+- Never infer one source's outcome from the aggregate exit, totals, scan
+  count, or another source's line. CLI stdout is human-readable, not a
+  durable receipt.
+
+Then make one explicit decision: keep the hold active and resume-copy the
+retained sources, or abort/finish and restore. A watchdog timeout remains
+uncertain — killing the client does not roll back a submitted server
+operation.
+
+## Restore and verify parity
+
+On abort/finish, run one guarded restore:
+
+```bash
+guard 60 hold restore
+```
+
+The helper restores each surviving source and target independently, never
+recreates a source recorded as dropped, and never replaces a changed live
+policy — the namespace is recorded unresolved (exit 4) and the refusal names
+the non-conforming field. Resume writers only after restore exits 0, reports
+`holdClosed:true`, and the pause file is absent. Any unresolved namespace
+keeps the hold file.
+
+Then rerun the **same** `--schema-only` preparation command with the
+unchanged final configuration — not the Search-coupled `mongodb:prepare`
+command — and require the same PASS receipt with the same target values.
+Compare target UUIDs, content, and TTL policy with the pre-hold/configured
+snapshot. Treat any default-policy rewrite or policy mismatch as a
+preparation defect, not a successful finish.
+
+## What the retention hold covers
+
+The configurable TTL convergence accepted by the schema-only preparation
+covers exactly these four indexes:
+
+| Collection | TTL index |
+| --- | --- |
+| `files` | `idx_files_ttl` |
+| `episodes` | `idx_episodes_ttl_updated` |
+| `relevance_runs` | `idx_relruns_ttl` |
+| `relevance_artifacts` | `idx_relart_ttl` |
+
+Do not generalize that to every TTL index created by the schema preparation:
+
+- `structured_mem_revisions.idx_structured_revisions_ttl` is an optional
+  operational-module path and is not part of the schema-only receipt's
+  three-value retention triple.
+- `memory_quarantine.idx_memory_quarantine_ttl_pending` uses its exact
+  partial policy and currently replaces its named index rather than using
+  the shared convergence helper.
+- The hold helper may inventory, pause, and restore the exact live policies
+  of those two namespaces, but that does not prove preparation-time
+  positive-to-positive convergence for either.
+- Other fixed/default TTL indexes likewise receive no positive-to-positive
+  configuration claim.
+
+If a migration touches either namespace, require an exact pre/post
+`listIndexes` comparison and treat any requested policy change as a separate
+unsupported preflight unless independently validated.

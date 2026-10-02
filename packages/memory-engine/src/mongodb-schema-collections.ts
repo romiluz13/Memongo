@@ -198,6 +198,67 @@ export async function ensureTimeseriesOrPlain(
 	}
 }
 
+/**
+ * Ensure a fresh diagnostic sink is an ordinary collection with retention on
+ * its `ts` field. Existing time-series sinks belong to the separate retained-
+ * data conversion path and must remain untouched here.
+ */
+export async function ensureOrdinaryDiagnosticCollection(
+	db: Db,
+	name: string,
+	expireAfterSeconds: number,
+): Promise<void> {
+	const [existing] = await db
+		.listCollections({ name }, { nameOnly: false })
+		.toArray()
+	if (existing?.type === "timeseries") {
+		return
+	}
+	if (existing && existing.type !== "collection") {
+		throw new Error(
+			`diagnostic sink ${name} has unsupported collection type ${String(existing.type)}`,
+		)
+	}
+	if (!existing) {
+		await db.createCollection(name)
+		log.info(`created ordinary diagnostic collection ${name}`)
+	}
+
+	const collection = db.collection(name)
+	const indexes = await collection.listIndexes().toArray()
+	const retentionPolicyIndexes = indexes.filter((index) => {
+		const keys = Object.keys(index.key)
+		const isExactTsKey = keys.length === 1 && keys[0] === "ts"
+		return isExactTsKey || index.expireAfterSeconds !== undefined
+	})
+	const [compatibleIndex] = retentionPolicyIndexes
+	if (
+		retentionPolicyIndexes.length === 1 &&
+		compatibleIndex &&
+		compatibleIndex.key.ts === 1 &&
+		compatibleIndex.expireAfterSeconds === expireAfterSeconds &&
+		compatibleIndex.partialFilterExpression === undefined
+	) {
+		return
+	}
+	if (retentionPolicyIndexes.length > 0) {
+		const found = retentionPolicyIndexes
+			.map(
+				(index) =>
+					`key=${JSON.stringify(index.key)}, expireAfterSeconds=${String(index.expireAfterSeconds)}, partial=${String(index.partialFilterExpression !== undefined)}`,
+			)
+			.join("; ")
+		throw new Error(
+			`incompatible TTL index policy on ${name}: expected one full-collection key={"ts":1} index with expireAfterSeconds=${expireAfterSeconds}, found ${found}`,
+		)
+	}
+
+	await collection.createIndex({ ts: 1 }, { expireAfterSeconds })
+	log.info(
+		`ensured diagnostic TTL index on ${name} (${expireAfterSeconds} seconds)`,
+	)
+}
+
 export function telemetryCollection(db: Db, prefix: string): Collection {
 	return col(db, prefix, "memory_telemetry")
 }

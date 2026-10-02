@@ -8,6 +8,24 @@ import {
 } from "./mongodb-relevance.js"
 import type { DetectedCapabilities } from "./mongodb-schema.js"
 
+const fenceState = vi.hoisted(() => ({ session: { fixture: true } }))
+vi.mock("./mongodb-write-fence.js", async (importOriginal) => {
+	const actual =
+		await importOriginal<typeof import("./mongodb-write-fence.js")>()
+	return {
+		...actual,
+		captureAdmissionToken: vi.fn(async ({ agentId }: { agentId: string }) => ({
+			kind: "admission" as const,
+			agentId,
+			epoch: 0,
+		})),
+		withFencedWrite: vi.fn(
+			async ({ fn }: { fn: (session: unknown) => Promise<unknown> }) =>
+				fn(fenceState.session),
+		),
+	}
+})
+
 function mockDb(): {
 	db: Db
 	collections: Map<
@@ -116,6 +134,79 @@ describe("mongodb relevance runtime", () => {
 		})
 	})
 
+	it("summarizeExplain never reports unrelated numeric leaves (RET-14 audit proof)", () => {
+		// Exact audit proof case: serverInfo.port must not leak into any
+		// metric; numCandidates is absent and must stay null, not borrowed.
+		const summary = summarizeExplain({
+			serverInfo: { port: 27017 },
+			executionStats: {
+				executionTimeMillis: 12,
+				nReturned: 3,
+				totalDocsExamined: 99,
+			},
+		})
+		expect(summary).toEqual({
+			executionTimeMs: 12,
+			nReturned: 3,
+			numCandidates: null,
+		})
+	})
+
+	it("summarizeExplain prefers the measured executionTimeMillis over the stage estimate", () => {
+		const summary = summarizeExplain({
+			queryPlanner: {
+				winningPlan: {
+					stage: "VECTOR_SEARCH",
+					executionTimeMillisEstimate: 5,
+				},
+			},
+			executionStats: {
+				executionTimeMillis: 21,
+				nReturned: 7,
+			},
+		})
+		expect(summary).toEqual({
+			executionTimeMs: 21,
+			nReturned: 7,
+			numCandidates: null,
+		})
+	})
+
+	it("summarizeExplain still finds the estimate alone (queryPlanner verbosity)", () => {
+		const summary = summarizeExplain({
+			queryPlanner: {
+				winningPlan: {
+					inputStage: {
+						stage: "TEXT_MATCH",
+						executionTimeMillisEstimate: 3,
+					},
+				},
+			},
+		})
+		expect(summary).toEqual({
+			executionTimeMs: 3,
+			nReturned: null,
+			numCandidates: null,
+		})
+	})
+
+	it("summarizeExplain ignores unrelated numeric siblings before wanted nodes", () => {
+		// Arrays and sibling objects carry unrelated numbers; only
+		// key-matched values at any depth qualify.
+		const summary = summarizeExplain({
+			lanes: [
+				{ attempts: 4, docs: [1, 2, 3] },
+				{ nested: { deep: { nReturned: 9, noise: 12345 } } },
+			],
+			other: { totalKeysExamined: 500 },
+		})
+		expect(summary).toEqual({
+			executionTimeMs: null,
+			nReturned: 9,
+			numCandidates: null,
+		})
+	})
+
 	it("persistRun stores redacted query + hash in redacted-hash mode", async () => {
 		const { db, collections } = mockDb()
 		const runtime = new MongoDBRelevanceRuntime(
@@ -150,6 +241,12 @@ describe("mongodb relevance runtime", () => {
 		)?.insertMany
 		expect(runsInsert).toHaveBeenCalledTimes(1)
 		expect(artifactsInsert).toHaveBeenCalledTimes(1)
+		expect(runsInsert).toHaveBeenCalledWith(expect.anything(), {
+			session: fenceState.session,
+		})
+		expect(artifactsInsert).toHaveBeenCalledWith(expect.anything(), {
+			session: fenceState.session,
+		})
 
 		const persistedRun = runsInsert?.mock.calls[0]?.[0] as Record<
 			string,

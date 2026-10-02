@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/unbound-method -- Vitest mock method assertions */
-import type { Db, Collection } from "mongodb"
+import type { ClientSession, Collection, Db } from "mongodb"
 import { describe, it, expect, vi } from "vitest"
 vi.mock("./mongodb-telemetry.js", () => ({
 	emitTelemetry: vi.fn(),
@@ -401,6 +401,54 @@ describe("mongodb-ops", () => {
 			).rejects.toThrow("DB error")
 
 			expect(emitTelemetry).not.toHaveBeenCalled()
+		})
+
+		it("keeps the projection run and nested telemetry in one session", async () => {
+			vi.clearAllMocks()
+			const session = {} as ClientSession
+			const projCol = createMockCollection()
+			const db = createMockDb({ [`${PREFIX}projection_runs`]: projCol })
+			let resolveTelemetry: (() => void) | undefined
+			const telemetryPending = new Promise<void>((resolve) => {
+				resolveTelemetry = resolve
+			})
+			vi.mocked(emitTelemetry).mockReturnValueOnce(telemetryPending as never)
+
+			let settled = false
+			const recording = recordProjectionRun({
+				db,
+				prefix: PREFIX,
+				run: {
+					agentId: "agent-1",
+					projectionType: "entities",
+					status: "ok",
+					itemsProjected: 2,
+					durationMs: 15,
+				},
+				session,
+			}).then(() => {
+				settled = true
+			})
+
+			await vi.waitFor(() => {
+				expect(emitTelemetry).toHaveBeenCalled()
+			})
+			expect(projCol.insertOne).toHaveBeenCalledWith(expect.any(Object), {
+				session,
+			})
+			expect(emitTelemetry).toHaveBeenCalledWith(
+				db,
+				PREFIX,
+				expect.objectContaining({
+					meta: { agentId: "agent-1", operation: "projection-run" },
+				}),
+				{ session },
+			)
+			expect(settled).toBe(false)
+
+			resolveTelemetry?.()
+			await recording
+			expect(settled).toBe(true)
 		})
 	})
 })
