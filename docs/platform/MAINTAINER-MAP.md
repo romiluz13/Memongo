@@ -4,6 +4,8 @@ This is the shortest path to understanding what Memongo is, what is supported, a
 
 ## Start here
 
+For review, reassignment or continuation, begin with [the 2026-10-02 handoff](../handoff/2026-10-02/README.md). It supersedes historical plan/status prose and preserves all unfinished work.
+
 1. `README.md`
 2. `apps/docs/introduction.mdx`
 3. `docs/platform/PLATFORM-README.md`
