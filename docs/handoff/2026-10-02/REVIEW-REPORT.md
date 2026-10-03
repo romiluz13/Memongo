@@ -140,3 +140,53 @@ This proves known A/B recorded dataset inequality only. Missing legacy/equal dec
 The scanner evidence join independently reads five existing native JSON/JUnit cases and seven unchanged selected current/native source hashes. Four preserve actual event/window rows through stale scanner deletion or same-path file replacement under admitted and compatibility routes. A fifth passing test intentionally observes an unfixed lower-level file-first projection collision; it does not run later cleanup or demonstrate a supported manager-generated UUID collision. Raw healthy payloads are pre-row snapshots; post-row equality comes from the passed fixture assertion. Current startLine-present deletion predicates are a narrow discriminator, not typed/imported ownership proof; a present null value also matches. No new server/native/whole-product run occurs. Historical UUID/baseline/server cleanup stays dated.
 
 Only four evidence classifications change in this continuation: B02:C04, S03:C02, S02:C01 and B06:C06 become partial. All58 original parent rows and418 text/status/closure coordinates remain unchanged. Current split14verified,0failed,32partial,350unverified,22policy-held; verified lower bound3.35%, zero parent closures. Three evidence-only outcomes and one narrow source child are separate workstream outcomes, not criterion completion. Previous exact-head CI37116729849SUCCESS belongs to10339f3; current delivery/new CI is not asserted by this prepared report. Immutable release/npm/tag2.2.0 remains unchanged.
+
+
+## Private QA capture and request bounds — 2026-10-03
+
+Reviewed source `65835971a904a2d3146c28c0a761c71b55bfffba` adds opt-in capture through the existing
+benchmark preparation and sidecar seams. The manager already forwards the
+capture setting. Preflight, answer and judge invocations share a sequence;
+whitelisted requests and adapted outcomes are persisted separately before and
+after each call. Fresh private paths, exclusive writes, known-key redaction and
+terminal capture failures protect the requested diagnostic mode. Default
+providers, prediction schema, resume, logical counters and core HTTP retry
+behavior are unchanged. See the [operator contract](../../benchmarks/benchmark-operating-contract.md#private-qa-diagnostic-capture).
+
+Before implementation, the supported injected HTTP journey passed four controls
+and failed the requested new durable-capture check. After implementation, all
+eight controls and four escape-denial controls passed: five injected HTTP calls
+produced ten private request/outcome files, including a 429 failure and the raw
+adapted invalid judge response before parsing. Independent source and
+privacy review accepted the four-path change. Fresh integration passed 720
+scripts tests with four existing dataset skips, including 90 scoring and 24
+sidecar cases; all 693 earlier cases/statuses remain, with 31 added passing cases.
+Affected TypeScript, Biome, diff and required-suite guards passed. Three existing
+test fixtures were completed with their already-required unreliable counters;
+this did not change the runtime statistics contract.
+
+A separate 12-case injected-request proof on base
+`e59332487d82a993b2bf0939ecdb8e603370895e` verified the existing fresh one-case
+HTTP bound of 3 preflight + 3 answer + 6 judge requests, permanent/transient failure
+paths and redirect refusal. All 12 controls and four escape-denial controls
+passed. Its lower admission caps exist only in the fixture; no new runtime
+budget feature was shipped. Requested output allowance is not actual usage or
+billing, and logical scoring counters are intentionally separate.
+
+This is provider-boundary and affected offline evidence. It does not establish
+actual benchmark-manager retrieval delivery, live HTTP wire behavior, missing
+usage or embedding cost, a monetary cap, directory-entry power-loss durability,
+or safety against hostile same-user path races. Raw diagnostic content remains
+private; known-key redaction is not universal redaction. An outcome-write
+failure can follow a paid call and leaves an incomplete request. No model,
+benchmark campaign, live database, package publication or deployment was run.
+
+The original 58 parents / 418 clauses and their closure states remain intact:
+14 verified, 0 failed, 32 partial, 350 unverified, 22 policy-held and 0 whole-parent
+closures. Technical readiness retains its frozen six gates/eighteen requirements
+and 1/6 whole-gate credit. The capture repair contributes partial evidence; it
+does not certify a complete gate, current quality or benchmark leadership.
+The next live qualification still needs the separately chosen model/routes,
+spend bound, owned target and private retention decision. Delivery/automatic CI
+for the documentation commit must be observed separately; no new CI result is
+claimed by this local proof.

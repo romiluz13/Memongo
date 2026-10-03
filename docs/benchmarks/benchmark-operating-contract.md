@@ -64,6 +64,40 @@ CI providers may provide `GITHUB_SHA`, `GITHUB_RUN_ID`,
 `VERCEL_GIT_COMMIT_SHA`, or `VERCEL_DEPLOYMENT_ID`; Memongo reads those as
 fallbacks.
 
+## Private QA diagnostic capture
+
+For a fresh official or custom-judge QA run, set
+`MEMONGO_BENCHMARK_QA_CAPTURE=1` to retain provider requests and outcomes.
+Omitted, empty or `0` leaves capture disabled; other values fail before provider
+calls. Capture requires absent prediction and capture paths and no completed
+resume scenarios. Default prediction privacy and resume behavior are unchanged.
+
+Capture creates `<checkpoint>.predictions.json.capture` as a new private `0700`
+directory. Each provider invocation writes an exclusive `0600` request file
+before the call and a separate outcome file afterward, including preflight and
+transport or judge-content retries. Files are synced and closed. Existing paths,
+symlinks, directory replacement and changed directory permissions are refused.
+A capture-write failure stops QA before another provider attempt; a request
+without a completed outcome remains incomplete and may already have incurred a
+provider charge. Filesystem checks cover the owned local POSIX path; they do not
+establish power-loss directory durability or protection against concurrent
+same-user path replacement.
+
+Requests retain whitelisted model, messages and settings. Outcomes retain the
+adapted completion, finish metadata and available usage, or a fixed failure
+classification and HTTP status. Known configured API-key values are redacted.
+The opt-in artifacts contain private context, gold answers and hypotheses; keep
+them private. They do not capture HTTP headers, raw failed response bodies or
+live wire traffic. Missing usage stays missing, and reasoning-token detail must
+not be added again to output usage.
+
+On the supported HTTP QA path, a fresh single case is bounded by three
+preflight, three answer and six judge requests. Logical scoring counters count
+answer and judge operations separately from those transport attempts. This
+bound excludes ingestion, additional cases, resume and provider-internal
+retries, and does not enforce a monetary or whole-run budget. Capture and
+injected-request tests are diagnostic evidence, not benchmark-quality results.
+
 ## Publishable benchmark claims
 
 A claim may be published only when all are true:
