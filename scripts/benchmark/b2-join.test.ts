@@ -499,11 +499,15 @@ describe("main baseline sidecar gate (R2-1)", () => {
 		const runB = await writeCheckpoint(dir, "b.json")
 		await writeFile(
 			`${runA}.predictions.json`,
-			JSON.stringify({ rows: { q1: { verdict: "yes" } } }),
+			JSON.stringify({
+				rows: { q1: { questionId: "q1", stage: "judged", verdict: "yes" } },
+			}),
 		)
 		await writeFile(
 			`${runB}.predictions.json`,
-			JSON.stringify({ rows: { q1: { verdict: "yes" } } }),
+			JSON.stringify({
+				rows: { q1: { questionId: "q1", stage: "judged", verdict: "yes" } },
+			}),
 		)
 		const baselineA = await writeCheckpoint(dir, "baseline-a.json")
 		const baselineB = await writeCheckpoint(dir, "baseline-b.json")
@@ -587,18 +591,20 @@ describe("main baseline sidecar gate (R2-1)", () => {
 	async function runBaselineFixture(
 		mutate: (a: BaselineFixture, b: BaselineFixture) => void,
 		options: string[] = [],
+		primary = false,
 	) {
 		const dir = await mkdtemp(path.join(tmpdir(), "b2-complete-baseline-"))
 		try {
 			const baselineA = baselineFixture()
 			const baselineB = baselineFixture()
-			mutate(baselineA, baselineB)
 			const fixtures = [
 				baselineFixture(undefined, "no"),
 				baselineFixture(undefined, "yes"),
 				baselineA,
 				baselineB,
 			]
+			if (primary) mutate(fixtures[0], fixtures[1])
+			else mutate(baselineA, baselineB)
 			const paths = fixtures.map((_, index) => path.join(dir, `${index}.json`))
 			for (const [index, fixture] of fixtures.entries()) {
 				await writeFile(paths[index], JSON.stringify(fixture.checkpoint))
@@ -612,16 +618,181 @@ describe("main baseline sidecar gate (R2-1)", () => {
 				paths[0],
 				"--b",
 				paths[1],
-				"--baseline-a",
-				paths[2],
-				"--baseline-b",
-				paths[3],
+				...(primary
+					? []
+					: ["--baseline-a", paths[2], "--baseline-b", paths[3]]),
 				...options,
 			])
 		} finally {
 			await rm(dir, { recursive: true, force: true })
 		}
 	}
+
+	const invalidPrimary: Array<{
+		name: string
+		mutate: (a: BaselineFixture, b: BaselineFixture) => void
+	}> = [
+		{
+			name: "duplicate last-pass cases",
+			mutate: (_a, b) => {
+				b.checkpoint.completedScenarios[0].executionsByPass[0].push(
+					b.checkpoint.completedScenarios[0].executionsByPass[0][0],
+				)
+			},
+		},
+		{
+			name: "duplicate completed scenarios",
+			mutate: (_a, b) => {
+				b.checkpoint.completedScenarios.push(b.checkpoint.completedScenarios[0])
+			},
+		},
+		{
+			name: "unknown execution case",
+			mutate: (_a, b) => {
+				b.checkpoint.completedScenarios[0].executionsByPass[0][0].caseId =
+					"other"
+			},
+		},
+		{
+			name: "unknown completed scenario",
+			mutate: (_a, b) => {
+				b.checkpoint.completedScenarios[0].scenarioId = "other"
+			},
+		},
+		{
+			name: "unknown sidecar row",
+			mutate: (_a, b) => {
+				b.sidecar.rows.other = {
+					questionId: "other",
+					stage: "judged",
+					verdict: "yes",
+				}
+			},
+		},
+		{
+			name: "mismatched sidecar question",
+			mutate: (_a, b) => {
+				b.sidecar.rows.q1.questionId = "other"
+			},
+		},
+		{
+			name: "answered with a verdict",
+			mutate: (_a, b) => {
+				b.sidecar.rows.q1.stage = "answered"
+			},
+		},
+		{
+			name: "unreliable with a verdict",
+			mutate: (_a, b) => {
+				b.sidecar.rows.q1.stage = "unreliable"
+			},
+		},
+		{
+			name: "unknown stage",
+			mutate: (_a, b) => {
+				b.sidecar.rows.q1.stage = "other"
+			},
+		},
+		{
+			name: "invalid verdict label",
+			mutate: (_a, b) => {
+				b.sidecar.rows.q1.verdict = "maybe"
+			},
+		},
+		{
+			name: "judged with null verdict",
+			mutate: (_a, b) => {
+				b.sidecar.rows.q1.verdict = null
+			},
+		},
+		{
+			name: "duplicate declared IDs",
+			mutate: (_a, b) => {
+				b.checkpoint.scenarioIds.push("q1")
+			},
+		},
+	]
+
+	it.each(invalidPrimary)("refuses malformed primary artifacts: $name", async ({
+		mutate,
+	}) => {
+		const result = await runBaselineFixture(mutate, [], true)
+		expect(result.code).toBe(1)
+		expect(result.stdout).toBe("")
+		expect(result.stderr).toMatch(/invalid run coverage/)
+	})
+
+	it.each([
+		"answered",
+		"unreliable",
+	])("preserves partial primary %s/null rows", async (stage) => {
+		const result = await runBaselineFixture(
+			(_a, b) => {
+				b.sidecar.rows.q1.stage = stage
+				b.sidecar.rows.q1.verdict = null
+			},
+			[],
+			true,
+		)
+		expect(result.code).toBe(0)
+		const report = JSON.parse(result.stdout)
+		expect(report.judgedInBoth).toBe(2)
+		expect(report.partialQ.incomplete).toBe(true)
+	})
+
+	it("preserves repeated cases in earlier measurement passes", async () => {
+		const result = await runBaselineFixture(
+			(_a, b) => {
+				const scenario = b.checkpoint.completedScenarios[0]
+				const last = scenario.executionsByPass[0]
+				scenario.executionsByPass.unshift([last[0], last[0]])
+			},
+			[],
+			true,
+		)
+		expect(result.code).toBe(0)
+		expect(JSON.parse(result.stdout).noiseRule.real).toBe(true)
+	})
+
+	it("preserves declared generic scenarios with multiple distinct cases", async () => {
+		const result = await runBaselineFixture(
+			(a, b) => {
+				for (const fixture of [a, b]) {
+					for (const scenario of fixture.checkpoint.completedScenarios) {
+						const execution = scenario.executionsByPass[0][0]
+						Reflect.deleteProperty(execution, "longMemEval")
+						scenario.executionsByPass[0] = [
+							{ ...execution, caseId: `${scenario.scenarioId}::qa_1` },
+							{ ...execution, caseId: `${scenario.scenarioId}::qa_2` },
+						]
+					}
+				}
+			},
+			["--r-only"],
+			true,
+		)
+		expect(result.code).toBe(0)
+		expect(JSON.parse(result.stdout).questionCount).toBe(6)
+	})
+
+	it("rejects duplicate generic selected case IDs", async () => {
+		const result = await runBaselineFixture(
+			(_a, b) => {
+				for (const scenario of b.checkpoint.completedScenarios) {
+					Reflect.deleteProperty(scenario.executionsByPass[0][0], "longMemEval")
+				}
+				const last = b.checkpoint.completedScenarios[0].executionsByPass[0]
+				last.push(last[0])
+			},
+			["--r-only"],
+			true,
+		)
+		expect(result.code).toBe(1)
+		expect(result.stdout).toBe("")
+		expect(result.stderr).toContain(
+			"invalid run coverage: duplicate selected case ID",
+		)
+	})
 
 	it.each([
 		["--min-judged"],
@@ -862,7 +1033,9 @@ describe("main baseline sidecar gate (R2-1)", () => {
 	}) => {
 		const result = await runBaselineFixture(mutate)
 		expect(result.code).toBe(1)
-		expect(result.stderr).toMatch(/incomplete baseline coverage/)
+		expect(result.stderr).toMatch(
+			/incomplete baseline coverage|invalid run coverage/,
+		)
 		expect(result.stdout).toBe("")
 	})
 

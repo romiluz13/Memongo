@@ -188,12 +188,72 @@ export async function readB2RunArtifacts(
 			`missing prediction sidecar: ${sidecarPath}. The Q side requires a run with MEMONGO_BENCHMARK_QA_PROTOCOL=official; pass --r-only to join on R alone.`,
 		)
 	}
+	const ids = checkpoint.scenarioIds
+	if (
+		ids !== undefined &&
+		(!Array.isArray(ids) ||
+			!ids.every((id) => typeof id === "string" && id.length > 0) ||
+			new Set(ids).size !== ids.length ||
+			(checkpoint.totalScenarios !== undefined &&
+				checkpoint.totalScenarios !== ids.length))
+	) {
+		throw new Error("invalid run coverage: invalid scenario declaration")
+	}
+	const population = ids === undefined ? undefined : new Set(ids)
+	// Other datasets can have several case IDs per declared scenario.
+	const questionPopulation =
+		population &&
+		checkpoint.completedScenarios?.some((scenario) =>
+			scenario.executionsByPass
+				?.at(-1)
+				?.some((execution) => execution.longMemEval),
+		)
+			? population
+			: undefined
+	for (const [id, row] of Object.entries(sidecar.rows ?? {})) {
+		if (
+			!row ||
+			typeof row !== "object" ||
+			row.questionId !== id ||
+			(questionPopulation && !questionPopulation.has(id)) ||
+			(row.stage === "judged"
+				? row.verdict !== "yes" && row.verdict !== "no"
+				: (row.stage !== "answered" && row.stage !== "unreliable") ||
+					row.verdict !== null)
+		) {
+			throw new Error(
+				"invalid run coverage: prediction row identity or stage/verdict",
+			)
+		}
+	}
 	const byQuestion = new Map<string, RunQuestionMetrics>()
+	const completed = new Set<string>()
 	for (const scenario of checkpoint.completedScenarios ?? []) {
+		const id = scenario.scenarioId
+		if (
+			(population && (!id || !population.has(id))) ||
+			(id && completed.has(id))
+		) {
+			throw new Error(
+				"invalid run coverage: duplicate or unexpected completed scenario",
+			)
+		}
+		if (id) completed.add(id)
 		const passes = scenario.executionsByPass ?? []
 		const lastPass = passes[passes.length - 1] ?? []
+		if (
+			questionPopulation &&
+			(lastPass.length !== 1 || lastPass[0]?.caseId !== id)
+		) {
+			throw new Error(
+				"invalid run coverage: LongMemEval scenario/case mismatch",
+			)
+		}
 		for (const execution of lastPass) {
 			if (!execution.caseId) continue
+			if (byQuestion.has(execution.caseId)) {
+				throw new Error("invalid run coverage: duplicate selected case ID")
+			}
 			byQuestion.set(execution.caseId, {
 				questionId: execution.caseId,
 				questionType: execution.questionType,
