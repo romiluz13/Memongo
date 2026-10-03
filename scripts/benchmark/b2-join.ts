@@ -53,6 +53,8 @@ type ExecutionTrace = {
 }
 
 type CheckpointFile = {
+	totalScenarios?: number
+	scenarioIds?: string[]
 	completedScenarios?: Array<{
 		scenarioId?: string
 		executionsByPass?: ExecutionTrace[][]
@@ -204,6 +206,56 @@ export async function readB2RunArtifacts(
 		}
 	}
 	return byQuestion
+}
+
+async function readCompleteBaselinePopulation(
+	checkpointPath: string,
+): Promise<Set<string>> {
+	const checkpoint = JSON.parse(
+		await readFile(checkpointPath, "utf8"),
+	) as CheckpointFile
+	const sidecar = JSON.parse(
+		await readFile(`${checkpointPath}.predictions.json`, "utf8"),
+	) as SidecarFile
+	const ids = checkpoint.scenarioIds ?? []
+	const population = new Set(ids)
+	const completed = new Set<string>()
+	let complete =
+		Array.isArray(ids) &&
+		ids.length > 0 &&
+		ids.every((id) => typeof id === "string" && id.length > 0) &&
+		population.size === ids.length &&
+		checkpoint.totalScenarios === ids.length
+	for (const scenario of checkpoint.completedScenarios ?? []) {
+		const id = scenario.scenarioId
+		const lastPass = scenario.executionsByPass?.at(-1) ?? []
+		if (
+			!id ||
+			!population.has(id) ||
+			completed.has(id) ||
+			lastPass.length !== 1 ||
+			lastPass[0]?.caseId !== id
+		) {
+			complete = false
+		}
+		if (id) completed.add(id)
+	}
+	for (const id of population) {
+		const row = sidecar.rows?.[id]
+		if (
+			row?.questionId !== id ||
+			row.stage !== "judged" ||
+			(row.verdict !== "yes" && row.verdict !== "no")
+		) {
+			complete = false
+		}
+	}
+	if (!complete || completed.size !== population.size) {
+		throw new Error(
+			`incomplete baseline coverage: ${checkpointPath}; every declared question must have one completed entry and a matching judged yes/no row`,
+		)
+	}
+	return population
 }
 
 function isCorrect(verdict?: string | null): boolean {
@@ -449,6 +501,21 @@ export async function main(
 			)
 			process.exitCode = 1
 			return
+		}
+		const populationA = await readCompleteBaselinePopulation(
+			path.resolve(baselineAPath),
+		)
+		const populationB = await readCompleteBaselinePopulation(
+			path.resolve(baselineBPath),
+		)
+		if (
+			populationA.size !== populationB.size ||
+			[...populationA].some((id) => !populationB.has(id)) ||
+			baselineJudged !== populationA.size
+		) {
+			throw new Error(
+				"incomplete baseline coverage: both baselines must judge the same complete declared population",
+			)
 		}
 		if (rate.flipRate * 50 >= B2_NET_Q_FLIP_THRESHOLD) {
 			console.warn(

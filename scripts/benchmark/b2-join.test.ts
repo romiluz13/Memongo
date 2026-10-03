@@ -1,4 +1,4 @@
-import { mkdtemp, writeFile } from "node:fs/promises"
+import { mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { describe, expect, it, vi } from "vitest"
@@ -420,16 +420,20 @@ describe("main baseline sidecar gate (R2-1)", () => {
 	async function runMain(argv: string[]): Promise<{
 		code: number | undefined
 		stderr: string
+		stdout: string
 	}> {
 		const previous = process.exitCode
 		process.exitCode = 0
 		const stderr: string[] = []
+		const stdout: string[] = []
 		const errorSpy = vi
 			.spyOn(console, "error")
 			.mockImplementation((message) => {
 				stderr.push(String(message))
 			})
-		const logSpy = vi.spyOn(console, "log").mockImplementation(() => {})
+		const logSpy = vi.spyOn(console, "log").mockImplementation((message) => {
+			stdout.push(String(message))
+		})
 		try {
 			await main(argv)
 		} catch (error) {
@@ -441,7 +445,7 @@ describe("main baseline sidecar gate (R2-1)", () => {
 		process.exitCode = previous
 		errorSpy.mockRestore()
 		logSpy.mockRestore()
-		return { code, stderr: stderr.join("\n") }
+		return { code, stderr: stderr.join("\n"), stdout: stdout.join("\n") }
 	}
 
 	it("exits non-zero when a baseline checkpoint has no sidecar", async () => {
@@ -497,5 +501,222 @@ describe("main baseline sidecar gate (R2-1)", () => {
 		])
 		expect(result.code).not.toBe(0)
 		expect(result.stderr).toMatch(/baseline has no judged questions/)
+	})
+
+	function baselineFixture(ids = ["q1", "q2", "q3"], verdict = "no") {
+		return {
+			checkpoint: {
+				totalScenarios: ids.length,
+				scenarioIds: ids,
+				completedScenarios: ids.map((id) => ({
+					scenarioId: id,
+					executionsByPass: [
+						[
+							{
+								caseId: id,
+								longMemEval: {
+									session: { recallAnyAt10: 1, recallAnyAt50: 1 },
+								},
+							},
+						],
+					],
+				})),
+			},
+			sidecar: {
+				rows: Object.fromEntries(
+					ids.map((id) => [
+						id,
+						{
+							questionId: id,
+							stage: "judged",
+							verdict: verdict as string | null,
+						},
+					]),
+				),
+			},
+		}
+	}
+
+	type BaselineFixture = ReturnType<typeof baselineFixture>
+
+	async function runBaselineFixture(
+		mutate: (a: BaselineFixture, b: BaselineFixture) => void,
+		options: string[] = [],
+	) {
+		const dir = await mkdtemp(path.join(tmpdir(), "b2-complete-baseline-"))
+		try {
+			const baselineA = baselineFixture()
+			const baselineB = baselineFixture()
+			mutate(baselineA, baselineB)
+			const fixtures = [
+				baselineFixture(undefined, "no"),
+				baselineFixture(undefined, "yes"),
+				baselineA,
+				baselineB,
+			]
+			const paths = fixtures.map((_, index) => path.join(dir, `${index}.json`))
+			for (const [index, fixture] of fixtures.entries()) {
+				await writeFile(paths[index], JSON.stringify(fixture.checkpoint))
+				await writeFile(
+					`${paths[index]}.predictions.json`,
+					JSON.stringify(fixture.sidecar),
+				)
+			}
+			return await runMain([
+				"--a",
+				paths[0],
+				"--b",
+				paths[1],
+				"--baseline-a",
+				paths[2],
+				"--baseline-b",
+				paths[3],
+				...options,
+			])
+		} finally {
+			await rm(dir, { recursive: true, force: true })
+		}
+	}
+
+	const incompleteBaselines: Array<{
+		name: string
+		mutate: (a: BaselineFixture, b: BaselineFixture) => void
+	}> = [
+		{
+			name: "one partial baseline",
+			mutate: (_, b) => {
+				b.checkpoint.completedScenarios.splice(1)
+			},
+		},
+		{
+			name: "both partial baselines with the same overlap",
+			mutate: (a, b) => {
+				a.checkpoint.completedScenarios.splice(1)
+				b.checkpoint.completedScenarios.splice(1)
+			},
+		},
+		{
+			name: "a missing judgment",
+			mutate: (_, b) => {
+				delete b.sidecar.rows.q2
+			},
+		},
+		{
+			name: "an unreliable judgment",
+			mutate: (_, b) => {
+				b.sidecar.rows.q2.stage = "unreliable"
+				b.sidecar.rows.q2.verdict = null
+			},
+		},
+		{
+			name: "a non-judged stage with a verdict",
+			mutate: (_, b) => {
+				b.sidecar.rows.q2.stage = "answered"
+			},
+		},
+		{
+			name: "an invalid verdict label",
+			mutate: (_, b) => {
+				b.sidecar.rows.q2.verdict = "maybe"
+			},
+		},
+		{
+			name: "a mismatched sidecar question ID",
+			mutate: (_, b) => {
+				b.sidecar.rows.q2.questionId = "other"
+			},
+		},
+		{
+			name: "a missing declared population",
+			mutate: (a) => {
+				Reflect.deleteProperty(a.checkpoint, "scenarioIds")
+			},
+		},
+		{
+			name: "an empty declared population",
+			mutate: (a) => {
+				a.checkpoint.scenarioIds = []
+				a.checkpoint.totalScenarios = 0
+			},
+		},
+		{
+			name: "duplicate declared IDs",
+			mutate: (a) => {
+				a.checkpoint.scenarioIds = ["q1", "q1", "q3"]
+			},
+		},
+		{
+			name: "an inconsistent declared total",
+			mutate: (a) => {
+				a.checkpoint.totalScenarios = 2
+			},
+		},
+		{
+			name: "different complete declared populations",
+			mutate: (_, b) => {
+				Object.assign(b, baselineFixture(["q1", "q2", "q4"]))
+			},
+		},
+		{
+			name: "a duplicate completed ID",
+			mutate: (a) => {
+				a.checkpoint.completedScenarios.push(a.checkpoint.completedScenarios[0])
+			},
+		},
+		{
+			name: "an unexpected completed ID",
+			mutate: (a) => {
+				a.checkpoint.completedScenarios.push(
+					baselineFixture(["q4"]).checkpoint.completedScenarios[0],
+				)
+			},
+		},
+		{
+			name: "a completed scenario/execution ID mismatch",
+			mutate: (a) => {
+				a.checkpoint.completedScenarios[0].scenarioId = "q2"
+			},
+		},
+		{
+			name: "a duplicate last-pass execution",
+			mutate: (a) => {
+				a.checkpoint.completedScenarios[0].executionsByPass[0].push(
+					a.checkpoint.completedScenarios[0].executionsByPass[0][0],
+				)
+			},
+		},
+	]
+
+	it.each(incompleteBaselines)("refuses calibration for $name", async ({
+		mutate,
+	}) => {
+		const result = await runBaselineFixture(mutate)
+		expect(result.code).toBe(1)
+		expect(result.stderr).toMatch(/incomplete baseline coverage/)
+		expect(result.stdout).toBe("")
+	})
+
+	it("requires complete supplied baselines even in r-only mode", async () => {
+		const result = await runBaselineFixture(
+			(_, b) => {
+				b.checkpoint.completedScenarios.splice(1)
+			},
+			["--r-only"],
+		)
+		expect(result.code).toBe(1)
+		expect(result.stdout).toBe("")
+	})
+
+	it("accepts complete populations in different orders and preserves the measured flip threshold", async () => {
+		const result = await runBaselineFixture((_, b) => {
+			Object.assign(b, baselineFixture(["q3", "q2", "q1"], "yes"))
+		})
+		expect(result.code).toBe(0)
+		expect(result.stderr).toBe("")
+		const report = JSON.parse(result.stdout)
+		expect(report.flipRate).toEqual({ judgedInBoth: 3, flips: 3, flipRate: 1 })
+		expect(report.netQFlips).toBe(3)
+		expect(report.noiseRule.threshold).toBe(4)
+		expect(report.noiseRule.real).toBe(false)
 	})
 })
