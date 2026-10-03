@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/unbound-method -- Vitest mock method assertions */
 import { describe, it, expect, vi, beforeEach } from "vitest"
+import { MongoServerError, type Collection, type Document } from "mongodb"
 import {
 	classifyCanonicalIngestHealth,
 	classifyProjectionHealth,
@@ -10,7 +11,14 @@ import {
 import { MongoDBManagerAdminOps } from "./mongodb-manager-admin.js"
 import { resolveMemoryJobBacklogAlertThreshold } from "./mongodb-manager-jobs.js"
 import type { MongoDBManagerHost } from "./mongodb-manager-host.js"
-import { mocked, fakeDb, fakePrefix } from "./test-helpers/manager-test-kit.js"
+import { fakeDb, fakePrefix } from "./test-helpers/manager-test-kit.js"
+
+const { mocked } = vi
+
+vi.mock("./mongodb-schema-collections.js", async (importOriginal) => ({
+	...(await importOriginal<typeof import("./mongodb-schema-collections.js")>()),
+	costLedgerCollection: vi.fn(),
+}))
 
 vi.mock("./mongodb-schema-capabilities.js", () => ({
 	probeSearchLaneReadiness: vi.fn(),
@@ -130,6 +138,16 @@ const { probeSearchLaneReadiness } = await import(
 )
 const { getLaneCoverage } = await import("./mongodb-lane-coverage.js")
 
+const { costLedgerCollection } = await import("./mongodb-schema-collections.js")
+let dailyCostToArray = vi.fn()
+
+beforeEach(() => {
+	dailyCostToArray = vi.fn().mockResolvedValue([])
+	mocked(costLedgerCollection).mockReturnValue({
+		aggregate: vi.fn().mockReturnValue({ toArray: dailyCostToArray }),
+	} as unknown as Collection<Document>)
+})
+
 // ---------------------------------------------------------------------------
 // 8.3: getV2Status
 // ---------------------------------------------------------------------------
@@ -241,6 +259,70 @@ describe("v2 health classification helpers", () => {
 describe("getV2Status", () => {
 	beforeEach(() => {
 		vi.clearAllMocks()
+		const zeroCol = {
+			countDocuments: vi.fn().mockResolvedValue(0),
+			findOne: vi.fn().mockResolvedValue(null),
+		} as unknown as Collection<Document>
+		mocked(eventsCollection).mockReturnValue(zeroCol)
+		mocked(entitiesCollection).mockReturnValue(zeroCol)
+		mocked(relationsCollection).mockReturnValue(zeroCol)
+		mocked(episodesCollection).mockReturnValue(zeroCol)
+		mocked(proceduresCollection).mockReturnValue(zeroCol)
+		mocked(relevanceRunsCollection).mockReturnValue(zeroCol)
+	})
+
+	it.each([
+		{ rows: [] },
+		{
+			rows: [
+				{ _id: "2026-08-14", inputTokens: 7, outputTokens: 3, embedUnits: 2 },
+			],
+		},
+	])("keeps healthy cost reads complete: $rows", async ({ rows }) => {
+		dailyCostToArray.mockResolvedValue(rows)
+
+		const status = await getV2Status(fakeDb, fakePrefix, "agent-1")
+
+		expect(dailyCostToArray).toHaveBeenCalledTimes(1)
+		expect(costLedgerCollection).toHaveBeenCalledWith(fakeDb, fakePrefix)
+		expect(status.costLedger?.daily).toEqual(
+			rows.map(({ _id, ...spend }) => ({ day: _id, ...spend })),
+		)
+		expect(status.health.failedChecks).toEqual([])
+		expect(status.health.dataCompleteness).toBe("complete")
+	})
+
+	it("discloses a failed cost read without leaking driver payload to diagnostics", async () => {
+		const privateText = "private-status-cost-credential-canary"
+		dailyCostToArray.mockRejectedValue(
+			new MongoServerError({
+				errmsg: privateText,
+				code: 2,
+				codeName: privateText,
+			}),
+		)
+		const warning = vi.spyOn(console, "warn").mockImplementation(() => {})
+		const error = vi.spyOn(console, "error").mockImplementation(() => {})
+		try {
+			const status = await getV2Status(fakeDb, fakePrefix, "agent-1")
+
+			expect(dailyCostToArray).toHaveBeenCalledTimes(1)
+			expect(status.costLedger?.daily).toEqual([])
+			expect(status.health.failedChecks).toEqual(["costLedger.dailySums"])
+			expect(status.health.dataCompleteness).toBe("partial")
+			expect(warning).toHaveBeenCalledTimes(1)
+			expect(error).toHaveBeenCalledTimes(1)
+			const diagnostics = JSON.stringify([
+				...warning.mock.calls,
+				...error.mock.calls,
+			])
+			expect(diagnostics).toContain("costLedger.dailySums")
+			expect(diagnostics).not.toContain(privateText)
+			expect(diagnostics).not.toContain("errorResponse")
+		} finally {
+			warning.mockRestore()
+			error.mockRestore()
+		}
 	})
 
 	it("returns counts, projection lag, and retrieval paths", async () => {

@@ -1,5 +1,10 @@
 /* eslint-disable @typescript-eslint/unbound-method -- Vitest mock method assertions */
-import type { Db, Collection, Document } from "mongodb"
+import {
+	MongoServerError,
+	type Db,
+	type Collection,
+	type Document,
+} from "mongodb"
 import { describe, it, expect, vi, beforeEach } from "vitest"
 
 // ---------------------------------------------------------------------------
@@ -296,6 +301,84 @@ describe("getDailyCostSums", () => {
 	it("returns [] when no documents match", async () => {
 		const sums = await getDailyCostSums({} as Db, PREFIX, AGENT_ID, 30)
 		expect(sums).toEqual([])
+	})
+
+	it("preserves best-effort failure when throwOnError is false", async () => {
+		vi.mocked(mockCol.aggregate).mockReturnValue({
+			toArray: vi.fn().mockRejectedValue(new Error("aggregate failed")),
+		} as never)
+
+		await expect(
+			getDailyCostSums({} as Db, PREFIX, AGENT_ID, 30, {
+				throwOnError: false,
+			}),
+		).resolves.toEqual([])
+	})
+
+	it.each([
+		{ rows: [] },
+		{
+			rows: [
+				{ _id: "2026-08-14", inputTokens: 7, outputTokens: 3, embedUnits: 2 },
+			],
+		},
+	])("preserves healthy rows and pipeline in strict mode: $rows", async ({
+		rows,
+	}) => {
+		vi.mocked(mockCol.aggregate).mockReturnValue({
+			toArray: vi.fn().mockResolvedValue(rows),
+		} as never)
+
+		const bestEffort = await getDailyCostSums({} as Db, PREFIX, AGENT_ID, 30)
+		const strict = await getDailyCostSums({} as Db, PREFIX, AGENT_ID, 30, {
+			throwOnError: true,
+		})
+
+		expect(strict).toEqual(bestEffort)
+		expect(vi.mocked(mockCol.aggregate).mock.calls[1]).toEqual(
+			vi.mocked(mockCol.aggregate).mock.calls[0],
+		)
+	})
+
+	it.each([
+		"cursor rejection",
+		"synchronous aggregate failure",
+	])("rejects strict %s without forwarding driver payload", async (failureMode) => {
+		const privateText = "private-cost-query-credential-canary"
+		const driverError = new MongoServerError({
+			errmsg: privateText,
+			code: 2,
+			codeName: privateText,
+		})
+		if (failureMode === "cursor rejection") {
+			vi.mocked(mockCol.aggregate).mockReturnValue({
+				toArray: vi.fn().mockRejectedValue(driverError),
+			} as never)
+		} else {
+			vi.mocked(mockCol.aggregate).mockImplementation(() => {
+				throw driverError
+			})
+		}
+		const warning = vi.spyOn(console, "warn").mockImplementation(() => {})
+		try {
+			const result = getDailyCostSums({} as Db, PREFIX, AGENT_ID, 30, {
+				throwOnError: true,
+			})
+			await expect(result).rejects.toThrow("cost ledger daily sums failed")
+			const error: unknown = await result.catch((err: unknown) => err)
+			expect(error).toBeInstanceOf(Error)
+			expect(error).not.toBe(driverError)
+			expect(Object.keys(error as Error)).toEqual([])
+			expect(Object.hasOwn(error as Error, "cause")).toBe(false)
+			expect(String(error)).not.toContain(privateText)
+			expect(warning).toHaveBeenCalledTimes(1)
+			const diagnostics = warning.mock.calls.flat().join("\n")
+			expect(diagnostics).not.toContain(privateText)
+			expect(diagnostics).not.toContain("errorResponse")
+			expect(diagnostics).toContain('"code":2')
+		} finally {
+			warning.mockRestore()
+		}
 	})
 
 	it("returns [] on aggregation failure (best-effort contract)", async () => {

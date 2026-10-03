@@ -281,14 +281,15 @@ export async function recordEmbeddingSpendInSession(params: {
 /**
  * Per-day spend sums for one tenant over the last `days` UTC days (inclusive
  * of today). Returns only days with at least one ledger document, ascending.
- * Aggregation failures resolve to [] — the status surface treats cost data
- * as best-effort, same contract as every other getV2Status check.
+ * Aggregation failures resolve to [] unless throwOnError is enabled, in which
+ * case they reject with a sanitized error for status completeness checks.
  */
 export async function getDailyCostSums(
 	db: Db,
 	prefix: string,
 	agentId: string,
 	days: number,
+	options: { throwOnError?: boolean } = {},
 ): Promise<DailyCostSum[]> {
 	const windowDays = Math.max(1, Math.floor(days))
 	const startDay = costLedgerDay(
@@ -320,6 +321,9 @@ export async function getDailyCostSums(
 			agentId,
 			...settledFailureMeta(err),
 		})
+		if (options.throwOnError) {
+			throw new Error("cost ledger daily sums failed")
+		}
 		return []
 	}
 }

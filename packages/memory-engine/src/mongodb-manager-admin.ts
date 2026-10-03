@@ -435,7 +435,7 @@ export async function getV2Status(
 				deadLetterAt: { $exists: true },
 			}),
 			// C-017: trailing per-day cost ledger sums (tokens + embed units).
-			getDailyCostSums(db, prefix, agentId, 30),
+			getDailyCostSums(db, prefix, agentId, 30, { throwOnError: true }),
 			// WS-14 (C-024): referential-integrity orphan checks — one per
 			// relation type, agent-scoped to match the rest of this status.
 			checkRelationEntityOrphans(
