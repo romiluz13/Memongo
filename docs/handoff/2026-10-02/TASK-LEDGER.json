@@ -91,7 +91,7 @@
 			"id": "B02",
 			"phase": "1",
 			"title": "Bind runs and resumes to executable and effective settings",
-			"remaining": "Campaign-sensitive measurement work remains sequenced after the campaign seal; no whole-parent acceptance receipt established.",
+			"remaining": "Bounded current report proof records build identity from environment metadata without attesting executed built bytes; all controls remain blocked by other evidence gates. B02:C04 is partial. Canonical executable/effective-settings/resume binding and all other parent criteria remain uncertified.",
 			"acceptanceCriteria": [
 				"Changing any effective treatment parameter or source byte rejects resume",
 				"Same inputs with flag reorder produce same identity",
@@ -304,7 +304,7 @@
 			"id": "B06",
 			"phase": "1",
 			"title": "Replace B2 heuristics with paired statistical analysis",
-			"remaining": "Campaign-sensitive measurement work remains sequenced after the campaign seal; no whole-parent acceptance receipt established.",
+			"remaining": "Campaign-sensitive measurement work remains sequenced after the campaign seal; no whole-parent acceptance receipt established. B06:C06 is partial after known nonempty A/B dataset digest mismatch rejection. Equal/missing legacy metadata do not attest bytes; model/judge/prompt/configuration/baseline and descriptive invalid-report clauses remain unproved.",
 			"acceptanceCriteria": [
 				"6 gains and 0 losses gives exact two-sided p=0.03125 regardless of n",
 				"netQ=1/netR=2/threshold=6 fixture cannot declare evidence of a win",
@@ -521,7 +521,7 @@
 			"id": "S02",
 			"phase": "1",
 			"title": "Protect canonical source from derived cleanup",
-			"remaining": "Bounded children may contribute, but original acceptance criteria have not been fully reconciled to current receipts; no completion inference.",
+			"remaining": "Bounded children may contribute, but original acceptance criteria have not been fully reconciled to current receipts; no completion inference. S02:C01 is partial: four existing native producer-preservation controls match current selected source; a fifth records an unfixed lower-level file-first collision. Typed/imported ownership and supported manager collision remain unproved.",
 			"acceptanceCriteria": [
 				"Workspace file sync cannot delete event-derived chunks",
 				"Cross-agent same sessionId cannot overwrite a projection",
@@ -561,7 +561,7 @@
 			"id": "S03",
 			"phase": "1",
 			"title": "Complete revision CAS and canonical mutation semantics",
-			"remaining": "E257 implements the resolved policy for structured current history: exclude unbound or earlier-generation snapshots while preserving storage. Procedure history, what-changed, mixed old writers, numeric BSON equivalence, manual physical-id reuse and the remaining parent criteria are not certified. The two reads do not promise a linearizable latest view.",
+			"remaining": "E257 implements the resolved policy for structured current history: exclude unbound or earlier-generation snapshots while preserving storage. Procedure history, what-changed, mixed old writers, numeric BSON equivalence, manual physical-id reuse and the remaining parent criteria are not certified. The two reads do not promise a linearizable latest view. A bounded join of20 historical native candidate-retirement cases with current selected source refutes the old rejected-candidate loss journey. S03:C02 is partial; standalone prewrite authority, legacy target provenance and after-barrier races remain outside proof.",
 			"acceptanceCriteria": [
 				"Concurrent create cannot overwrite an already revised winner",
 				"Rejected/uncommitted candidate cannot invalidate an observed fact",
@@ -2806,5 +2806,29 @@
 		}
 	],
 	"archiveLinkNote": "plannedChecks retains verbatim original-task Markdown such as ../execution/CHECKS.json; those links resolve relative to originalTaskArchivePath in the private archive, not relative to this public JSON file.",
-	"followUpSourceBasis": "0aabbc887b73c11e983bcf2578b6eecbcedefa1a"
+	"followUpSourceBasis": "0aabbc887b73c11e983bcf2578b6eecbcedefa1a",
+	"priorityEvidenceFollowUp": {
+		"sourceRevision": "5aa93b7b874ccb18806e13fbe62e7d3a53c0cbd9",
+		"verifiedCriteria": 14,
+		"criterionDenominator": 418,
+		"verifiedLowerBoundPercent": 3.35,
+		"classificationCounts": {
+			"partial": 32,
+			"verified_satisfied": 14,
+			"unverified": 350,
+			"policy_held": 22,
+			"verified_failed": 0,
+			"superseded_proposal_not_approved": 0
+		},
+		"wholeParentClosures": 0,
+		"changedEvidenceClassifications": [
+			"B02:C04 unverified to partial",
+			"S03:C02 unverified to partial",
+			"S02:C01 unverified to partial",
+			"B06:C06 unverified to partial"
+		],
+		"productChanges": 1,
+		"limits": "Known A/B recorded dataset mismatch guard only; missing/equal labels are not attestation. Three evidence-only joins remain partial; historical source equality is not a fresh whole-product run. All original criteria/status/closure preserved.",
+		"productSourcePaths": 2
+	}
 }
