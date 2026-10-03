@@ -1,5 +1,13 @@
-import { describe, it, expect } from "vitest"
-import { mkdtemp, readFile, rm } from "node:fs/promises"
+import { describe, it, expect, vi } from "vitest"
+import { promises as fs } from "node:fs"
+import {
+	mkdir,
+	mkdtemp,
+	readFile,
+	readdir,
+	rm,
+	writeFile,
+} from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import type {
@@ -18,6 +26,7 @@ import {
 	isOfficialAbstentionQuestion,
 } from "./longmemeval-official-qa.js"
 import {
+	OfficialQaCaptureError,
 	createOfficialPredictionSidecar,
 	recordOfficialAnswer,
 	recordOfficialUnreliable,
@@ -186,6 +195,439 @@ const BASE_ENV = {
 	MEMONGO_BENCHMARK_JUDGE_BASE_URL: "https://judge.example/v1",
 	MEMONGO_BENCHMARK_JUDGE_MODEL: JUDGE_MODEL,
 }
+
+describe("explicit private provider capture", () => {
+	function prepare(
+		dir: string,
+		answer: EnrichmentProvider,
+		judge: EnrichmentProvider,
+		capture: string | undefined = "1",
+	) {
+		return prepareOfficialQa({
+			env: {
+				...BASE_ENV,
+				MEMONGO_BENCHMARK_QA_CAPTURE:
+					capture === "omitted" ? undefined : capture,
+			},
+			checkpointPath: path.join(dir, "checkpoint.json"),
+			runId: "run-1",
+			configurationHash: "b".repeat(64),
+			datasetSha256: "a".repeat(64),
+			resolveProviders: () => ({ answer, judge }),
+		})
+	}
+
+	function score(context: OfficialQaContext, value = material("q-1")) {
+		return scoreOfficialScenario({
+			context,
+			scenarioId: "scenario-1",
+			declaredCaseIds: ["q-1"],
+			materialByCaseId: new Map([["q-1", value]]),
+		})
+	}
+
+	it.each([
+		"omitted",
+		"",
+		"0",
+	])("preserves the default providers, compact sidecar and no capture for %s", async (capture) => {
+		const dir = await tempDir("capture-off")
+		try {
+			const answer = answerProvider()
+			const judge = judgeProvider()
+			const context = await prepare(dir, answer, judge, capture)
+			expect(context.answerProvider).toBe(answer)
+			expect(context.judgeProvider).toBe(judge)
+			await score(context)
+			expect(await readdir(dir)).toEqual(["checkpoint.json.predictions.json"])
+			const raw = await readFile(context.sidecarPath, "utf8")
+			expect(raw).not.toContain("snippet one")
+			expect(raw).not.toContain(BASE_ENV.MEMONGO_ENRICHMENT_API_KEY)
+			expect(Object.keys(JSON.parse(raw))).toEqual([
+				"version",
+				"identity",
+				"rows",
+			])
+		} finally {
+			await rm(dir, { recursive: true, force: true })
+		}
+	})
+
+	it.each([
+		"yes",
+		"true",
+	])("rejects ambiguous capture %s before preflight", async (capture) => {
+		const dir = await tempDir("capture-flag")
+		try {
+			const answer = answerProvider()
+			await expect(
+				prepare(dir, answer, judgeProvider(), capture),
+			).rejects.toThrow("MEMONGO_BENCHMARK_QA_CAPTURE must be 0 or 1")
+			expect(answer.calls).toHaveLength(0)
+			expect(await readdir(dir)).toEqual([])
+		} finally {
+			await rm(dir, { recursive: true, force: true })
+		}
+	})
+
+	it("captures preflight, physical retries and raw adapted judge content without changing logical stats", async () => {
+		const dir = await tempDir("capture-retries")
+		try {
+			let answerCalls = 0
+			const answer = fakeProvider(() => {
+				answerCalls += 1
+				if (answerCalls === 2) {
+					throw new EnrichmentHttpError(
+						"untrusted-http-body synthetic-answer",
+						429,
+					)
+				}
+				return {
+					content: answerCalls === 1 ? "ok" : '{"answer":"violet"}',
+					responseMeta: { shape: "ok", finishReason: "stop" },
+					usage: { inputTokens: 11, outputTokens: 3, reasoningTokens: 2 },
+				}
+			})
+			let judgeCalls = 0
+			const judge = fakeProvider(() => ({
+				content: ++judgeCalls === 1 ? "invalid synthetic-judge" : "yes",
+				responseMeta: { shape: "ok", finishReason: "stop" },
+			}))
+			const context = await prepareOfficialQa({
+				env: {
+					...BASE_ENV,
+					MEMONGO_ENRICHMENT_API_KEY: "  synthetic-answer  ",
+					MEMONGO_BENCHMARK_JUDGE_API_KEY: "  synthetic-judge  ",
+					MEMONGO_BENCHMARK_ANSWER_API_KEY: "  synthetic-dedicated  ",
+					MEMONGO_BENCHMARK_ANSWER_MODEL: ANSWER_MODEL,
+					MEMONGO_BENCHMARK_QA_CAPTURE: "1",
+				},
+				checkpointPath: path.join(dir, "checkpoint.json"),
+				runId: "run-1",
+				configurationHash: "b".repeat(64),
+				datasetSha256: "a".repeat(64),
+				resolveProviders: () => ({ answer, judge }),
+			})
+			await score(
+				context,
+				material("q-1", {
+					contextPassages: [
+						"delivered synthetic-answer synthetic-judge synthetic-dedicated",
+					],
+				}),
+			)
+			const capture = `${context.sidecarPath}.capture`
+			expect(await readdir(capture)).toHaveLength(10)
+			const entries = await Promise.all(
+				(await readdir(capture))
+					.sort()
+					.map(async (name) =>
+						JSON.parse(await readFile(path.join(capture, name), "utf8")),
+					),
+			)
+			expect(
+				entries
+					.filter((entry) => entry.kind === "request")
+					.map((entry) => entry.phase),
+			).toEqual(["preflight", "answer", "answer", "judge", "judge"])
+			expect(
+				entries.find(
+					(entry) => entry.sequence === 2 && entry.kind === "outcome",
+				),
+			).toMatchObject({
+				level: "provider-failure-classification",
+				status: "failed",
+				failure: "http",
+				httpStatus: 429,
+			})
+			expect(
+				entries.find(
+					(entry) => entry.sequence === 4 && entry.kind === "outcome",
+				),
+			).toMatchObject({
+				level: "provider-adapted-completion",
+				content: "invalid [REDACTED]",
+				responseMeta: { shape: "ok", finishReason: "stop" },
+			})
+			expect(
+				entries.find(
+					(entry) => entry.sequence === 3 && entry.kind === "outcome",
+				).usage,
+			).toEqual({ inputTokens: 11, outputTokens: 3, reasoningTokens: 2 })
+			expect(
+				entries.find(
+					(entry) => entry.sequence === 5 && entry.kind === "outcome",
+				),
+			).not.toHaveProperty("usage")
+			const raw = JSON.stringify(entries)
+			for (const secret of [
+				"synthetic-answer",
+				"synthetic-judge",
+				"synthetic-dedicated",
+				"untrusted-http-body",
+			])
+				expect(raw).not.toContain(secret)
+			expect(raw).not.toMatch(/headers|apiKey|stack|cause/)
+			expect(answer.calls[1]?.messages[1]?.content).toContain(
+				"synthetic-answer",
+			)
+			expect(context.stats.attempts).toEqual({
+				answerGeneration: 1,
+				answerJudge: 2,
+			})
+			expect(context.sidecar.rows["q-1"]?.verdict).toBe("yes")
+		} finally {
+			await rm(dir, { recursive: true, force: true })
+		}
+	})
+
+	it("retains length and reasoning usage while excluding the case honestly", async () => {
+		const dir = await tempDir("capture-length")
+		try {
+			const answer = fakeProvider(() => ({
+				content: '{"answer":"violet"}',
+				responseMeta: { shape: "length", finishReason: "length" },
+				usage: { inputTokens: 11, outputTokens: 3, reasoningTokens: 2 },
+			}))
+			const judge = judgeProvider()
+			const context = await prepare(dir, answer, judge)
+			await score(context)
+			const outcome = JSON.parse(
+				await readFile(`${context.sidecarPath}.capture/2.outcome.json`, "utf8"),
+			)
+			expect(outcome.responseMeta).toEqual({
+				shape: "length",
+				finishReason: "length",
+			})
+			expect(outcome.usage).toEqual({
+				inputTokens: 11,
+				outputTokens: 3,
+				reasoningTokens: 2,
+			})
+			expect(context.sidecar.rows["q-1"]?.stage).toBe("unreliable")
+			expect(judge.calls).toHaveLength(0)
+		} finally {
+			await rm(dir, { recursive: true, force: true })
+		}
+	})
+
+	it.each([
+		"open",
+		"writeFile",
+		"sync",
+		"close",
+	])("makes initial %s failure terminal before paid preflight", async (method) => {
+		const dir = await tempDir(`capture-fail-${method}`)
+		let closeHandle: (() => Promise<void>) | undefined
+		try {
+			const answer = answerProvider()
+			const originalOpen = fs.open.bind(fs)
+			vi.spyOn(fs, "open").mockImplementationOnce(async (file, flags, mode) => {
+				if (method === "open")
+					throw new EnrichmentHttpError("untrusted-secret", 429)
+				const handle = await originalOpen(file, flags, mode)
+				closeHandle = handle.close.bind(handle)
+				if (method === "writeFile")
+					vi.spyOn(handle, "writeFile").mockRejectedValueOnce(
+						new Error("untrusted-secret"),
+					)
+				if (method === "sync")
+					vi.spyOn(handle, "sync").mockRejectedValueOnce(
+						new Error("untrusted-secret"),
+					)
+				if (method === "close")
+					vi.spyOn(handle, "close").mockRejectedValueOnce(
+						new Error("untrusted-secret"),
+					)
+				return handle
+			})
+			await expect(prepare(dir, answer, judgeProvider())).rejects.toThrow(
+				new OfficialQaCaptureError(),
+			)
+			expect(answer.calls).toHaveLength(0)
+		} finally {
+			vi.restoreAllMocks()
+			await closeHandle?.()
+			await rm(dir, { recursive: true, force: true })
+		}
+	})
+
+	it.each([
+		"succeeded",
+		"http429",
+	])("stops after a %s provider outcome cannot be persisted, without overwriting or retrying", async (kind) => {
+		const dir = await tempDir(`capture-outcome-${kind}`)
+		try {
+			let calls = 0
+			const answer: EnrichmentProvider = {
+				name: "fake",
+				async chatCompletion() {
+					calls += 1
+					if (calls === 1) return { content: "ok" }
+					await writeFile(
+						path.join(
+							dir,
+							"checkpoint.json.predictions.json.capture/2.outcome.json",
+						),
+						"protected bytes",
+						{ mode: 0o600 },
+					)
+					if (kind === "http429")
+						throw new EnrichmentHttpError("untrusted-secret", 429)
+					return { content: '{"answer":"violet"}' }
+				},
+			}
+			const judge = judgeProvider()
+			const context = await prepare(dir, answer, judge)
+			await expect(score(context)).rejects.toThrow(
+				"official answer generation failed for question q-1: Official QA capture failed; refusing further provider calls",
+			)
+			expect(calls).toBe(2)
+			expect(judge.calls).toHaveLength(0)
+			expect(
+				await readFile(`${context.sidecarPath}.capture/2.outcome.json`, "utf8"),
+			).toBe("protected bytes")
+			expect(context.sidecar.rows["q-1"]).toBeUndefined()
+		} finally {
+			await rm(dir, { recursive: true, force: true })
+		}
+	})
+
+	it.each([
+		["http", new EnrichmentHttpError("untrusted-body-secret", 400)],
+		["timeout", new DOMException("untrusted-abort-secret", "AbortError")],
+		["network", new TypeError("untrusted-network-secret")],
+		["provider", new Error("untrusted-provider-secret")],
+	] as const)("persists only fixed %s failure fields and rethrows the original provider error", async (failure, error) => {
+		const dir = await tempDir(`capture-error-${failure}`)
+		try {
+			let calls = 0
+			const answer: EnrichmentProvider = {
+				name: "fake",
+				async chatCompletion() {
+					if (++calls === 1) return { content: "ok" }
+					throw error
+				},
+			}
+			const context = await prepare(dir, answer, judgeProvider())
+			await expect(
+				context.answerProvider.chatCompletion({
+					model: ANSWER_MODEL,
+					messages: [{ role: "user", content: "synthetic" }],
+				}),
+			).rejects.toBe(error)
+			const outcome = JSON.parse(
+				await readFile(`${context.sidecarPath}.capture/2.outcome.json`, "utf8"),
+			)
+			expect(outcome.failure).toBe(failure)
+			expect(Object.keys(outcome).sort()).toEqual(
+				[
+					"configurationHash",
+					"datasetSha256",
+					"failure",
+					"kind",
+					"level",
+					"phase",
+					"recordedAt",
+					"runId",
+					"sequence",
+					"status",
+					...(failure === "http" ? ["httpStatus"] : []),
+				].sort(),
+			)
+			expect(JSON.stringify(outcome)).not.toContain("untrusted")
+		} finally {
+			await rm(dir, { recursive: true, force: true })
+		}
+	})
+
+	it("returns the original adapted response and omits arbitrary provider properties", async () => {
+		const dir = await tempDir("capture-response-identity")
+		try {
+			const response = {
+				content: '{"answer":"violet"}',
+				responseMeta: {
+					shape: "ok" as const,
+					finishReason: "stop",
+					providerSecret: "excluded-meta-secret",
+				},
+				usage: {
+					inputTokens: 11,
+					outputTokens: 3,
+					providerSecret: "excluded-usage-secret",
+				},
+				providerConfig: "excluded-config-secret",
+			}
+			const answer = fakeProvider(() => response)
+			const context = await prepare(dir, answer, judgeProvider())
+			const completion = await context.answerProvider.chatCompletion({
+				model: ANSWER_MODEL,
+				messages: [{ role: "user", content: "synthetic" }],
+			})
+			expect(completion).toBe(response)
+			const raw = await readFile(
+				`${context.sidecarPath}.capture/2.outcome.json`,
+				"utf8",
+			)
+			expect(raw).not.toContain("excluded-")
+			expect(JSON.parse(raw).usage).toEqual({
+				inputTokens: 11,
+				outputTokens: 3,
+			})
+		} finally {
+			await rm(dir, { recursive: true, force: true })
+		}
+	})
+
+	it("rejects existing predictions before preflight while default resume remains available", async () => {
+		const dir = await tempDir("capture-existing-sidecar")
+		try {
+			const answer = answerProvider()
+			const original = recordOfficialVerdict(
+				recordOfficialAnswer(
+					createOfficialPredictionSidecar(sidecarIdentity()),
+					"q-1",
+					"violet",
+				),
+				"q-1",
+				"yes",
+			)
+			const sidecarPath = path.join(dir, "checkpoint.json.predictions.json")
+			await writeOfficialPredictionSidecarAtomic(sidecarPath, original)
+			const bytes = await readFile(sidecarPath, "utf8")
+			await expect(prepare(dir, answer, judgeProvider())).rejects.toThrow(
+				OfficialQaCaptureError,
+			)
+			expect(answer.calls).toHaveLength(0)
+			expect(await readFile(sidecarPath, "utf8")).toBe(bytes)
+			const resumed = await prepare(dir, answer, judgeProvider(), "0")
+			expect(resumed.sidecar.rows["q-1"]?.verdict).toBe("yes")
+			expect(await readdir(dir)).toEqual(["checkpoint.json.predictions.json"])
+		} finally {
+			await rm(dir, { recursive: true, force: true })
+		}
+	})
+
+	it("rejects an existing capture directory before preflight without changing its bytes", async () => {
+		const dir = await tempDir("capture-existing-directory")
+		try {
+			const capture = path.join(dir, "checkpoint.json.predictions.json.capture")
+			await mkdir(capture, { mode: 0o700 })
+			await writeFile(path.join(capture, "protected"), "protected bytes")
+			const answer = answerProvider()
+			await expect(prepare(dir, answer, judgeProvider())).rejects.toThrow(
+				OfficialQaCaptureError,
+			)
+			expect(answer.calls).toHaveLength(0)
+			expect(await readdir(capture)).toEqual(["protected"])
+			expect(await readFile(path.join(capture, "protected"), "utf8")).toBe(
+				"protected bytes",
+			)
+		} finally {
+			await rm(dir, { recursive: true, force: true })
+		}
+	})
+})
 
 describe("resolveBenchmarkQaProtocol", () => {
 	it("preserves legacy behavior for undefined and custom-v1", () => {
@@ -1917,6 +2359,7 @@ describe("summarizeOfficialBenchmarkQaRun", () => {
 					attempts: { answerGeneration: 0, answerJudge: 0 },
 					successes: { answerGeneration: 0, answerJudge: 0 },
 					failures: { answerGeneration: 0, answerJudge: 0 },
+					unreliable: { answerGeneration: 0, answerJudge: 0 },
 				},
 				unavailable: [],
 			}
@@ -2033,6 +2476,7 @@ describe("summarizeOfficialBenchmarkQaRun", () => {
 					attempts: { answerGeneration: 0, answerJudge: 0 },
 					successes: { answerGeneration: 0, answerJudge: 0 },
 					failures: { answerGeneration: 0, answerJudge: 0 },
+					unreliable: { answerGeneration: 0, answerJudge: 0 },
 				},
 				unavailable: [],
 			}
@@ -2084,6 +2528,7 @@ describe("custom-judge protocol (non-official Luna judging)", () => {
 				attempts: { answerGeneration: 0, answerJudge: 0 },
 				successes: { answerGeneration: 0, answerJudge: 0 },
 				failures: { answerGeneration: 0, answerJudge: 0 },
+				unreliable: { answerGeneration: 0, answerJudge: 0 },
 			},
 			unavailable: [],
 		}

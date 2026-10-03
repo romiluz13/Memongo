@@ -1,18 +1,23 @@
 import { describe, it, expect } from "vitest"
 import {
 	chmod,
+	mkdir,
 	mkdtemp,
 	readdir,
 	readFile,
+	rename,
 	rm,
 	stat,
+	symlink,
 	writeFile,
 } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import {
 	OfficialPredictionSidecarError,
+	OfficialQaCaptureError,
 	createOfficialPredictionSidecar,
+	createOfficialQaCaptureWriter,
 	deriveOfficialPredictionSidecarPath,
 	readOfficialPredictionSidecar,
 	recordOfficialAnswer,
@@ -343,6 +348,139 @@ describe("official prediction sidecar privacy", () => {
 					["hypothesis", "questionId", "stage", "updatedAt", "verdict"].sort(),
 				)
 			}
+		} finally {
+			await rm(dir, { recursive: true, force: true })
+		}
+	})
+})
+
+describe("private official QA capture persistence", () => {
+	it("keeps request and outcome files separate, exclusive and private", async () => {
+		const dir = await tempDir("capture")
+		try {
+			const sidecarPath = path.join(dir, "checkpoint.predictions.json")
+			const write = await createOfficialQaCaptureWriter(sidecarPath, identity())
+			await write(1, "request", { phase: "preflight", model: "answer" })
+			await write(1, "outcome", { status: "succeeded", content: "ok" })
+			const capture = `${sidecarPath}.capture`
+			expect((await stat(capture)).mode & 0o777).toBe(0o700)
+			expect((await readdir(capture)).sort()).toEqual([
+				"1.outcome.json",
+				"1.request.json",
+			])
+			for (const name of await readdir(capture)) {
+				expect((await stat(path.join(capture, name))).mode & 0o777).toBe(0o600)
+			}
+			const original = await readFile(
+				path.join(capture, "1.request.json"),
+				"utf8",
+			)
+			expect(JSON.parse(original)).toMatchObject({
+				sequence: 1,
+				kind: "request",
+				runId: "run-1",
+				datasetSha256: identity().datasetSha256,
+				configurationHash: identity().configurationHash,
+			})
+			await expect(
+				write(1, "request", { content: "replacement" }),
+			).rejects.toThrow(OfficialQaCaptureError)
+			expect(await readFile(path.join(capture, "1.request.json"), "utf8")).toBe(
+				original,
+			)
+		} finally {
+			await rm(dir, { recursive: true, force: true })
+		}
+	})
+
+	it.each([
+		"file",
+		"directory",
+		"symlink",
+	])("refuses a preexisting capture %s without altering it", async (kind) => {
+		const dir = await tempDir(`capture-existing-${kind}`)
+		try {
+			const sidecarPath = path.join(dir, "checkpoint.predictions.json")
+			const capture = `${sidecarPath}.capture`
+			const target = path.join(dir, "protected")
+			await writeFile(target, "protected bytes")
+			if (kind === "directory") await mkdir(capture)
+			else if (kind === "symlink") await symlink(target, capture)
+			else await writeFile(capture, "existing capture")
+			await expect(
+				createOfficialQaCaptureWriter(sidecarPath, identity()),
+			).rejects.toThrow(OfficialQaCaptureError)
+			expect(await readFile(target, "utf8")).toBe("protected bytes")
+			if (kind === "file")
+				expect(await readFile(capture, "utf8")).toBe("existing capture")
+			if (kind === "directory") expect(await readdir(capture)).toEqual([])
+		} finally {
+			await rm(dir, { recursive: true, force: true })
+		}
+	})
+
+	it.each([
+		"file",
+		"symlink",
+		"dangling-symlink",
+	])("refuses a preexisting prediction %s", async (kind) => {
+		const dir = await tempDir(`capture-prediction-${kind}`)
+		try {
+			const sidecarPath = path.join(dir, "checkpoint.predictions.json")
+			const target = path.join(dir, "protected")
+			if (kind !== "dangling-symlink")
+				await writeFile(target, "protected bytes")
+			if (kind === "file") await writeFile(sidecarPath, "existing prediction")
+			else await symlink(target, sidecarPath)
+			await expect(
+				createOfficialQaCaptureWriter(sidecarPath, identity()),
+			).rejects.toThrow(OfficialQaCaptureError)
+			expect(await readdir(dir)).not.toContain(
+				"checkpoint.predictions.json.capture",
+			)
+			if (kind !== "dangling-symlink")
+				expect(await readFile(target, "utf8")).toBe("protected bytes")
+		} finally {
+			await rm(dir, { recursive: true, force: true })
+		}
+	})
+
+	it("refuses an individual receipt symlink without creating its target", async () => {
+		const dir = await tempDir("capture-receipt-symlink")
+		try {
+			const sidecarPath = path.join(dir, "checkpoint.predictions.json")
+			const write = await createOfficialQaCaptureWriter(sidecarPath, identity())
+			const target = path.join(dir, "absent-protected")
+			await symlink(target, `${sidecarPath}.capture/1.request.json`)
+			await expect(write(1, "request", { content: "private" })).rejects.toThrow(
+				OfficialQaCaptureError,
+			)
+			expect(await readdir(dir)).not.toContain("absent-protected")
+		} finally {
+			await rm(dir, { recursive: true, force: true })
+		}
+	})
+
+	it.each([
+		"directory",
+		"symlink",
+		"permissions",
+	])("stops after owned directory %s changes", async (kind) => {
+		const dir = await tempDir(`capture-owner-${kind}`)
+		try {
+			const sidecarPath = path.join(dir, "checkpoint.predictions.json")
+			const capture = `${sidecarPath}.capture`
+			const write = await createOfficialQaCaptureWriter(sidecarPath, identity())
+			if (kind === "permissions") await chmod(capture, 0o755)
+			else {
+				await rename(capture, `${capture}.original`)
+				if (kind === "symlink") await symlink(`${capture}.original`, capture)
+				else await mkdir(capture, { mode: 0o700 })
+			}
+			await expect(write(1, "request", { content: "private" })).rejects.toThrow(
+				OfficialQaCaptureError,
+			)
+			expect(await readdir(capture)).toEqual([])
 		} finally {
 			await rm(dir, { recursive: true, force: true })
 		}

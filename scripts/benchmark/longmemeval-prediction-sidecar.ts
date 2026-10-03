@@ -243,6 +243,69 @@ export async function writeOfficialPredictionSidecarAtomic(
 	await fs.rename(temporaryPath, sidecarPath)
 }
 
+export class OfficialQaCaptureError extends Error {
+	constructor() {
+		super("Official QA capture failed; refusing further provider calls")
+		this.name = "OfficialQaCaptureError"
+	}
+}
+
+export type OfficialQaCaptureWriter = (
+	sequence: number,
+	kind: "request" | "outcome",
+	record: Record<string, unknown>,
+) => Promise<void>
+
+export async function createOfficialQaCaptureWriter(
+	sidecarPath: string,
+	identity: Pick<
+		OfficialPredictionSidecarIdentity,
+		"runId" | "datasetSha256" | "configurationHash"
+	>,
+): Promise<OfficialQaCaptureWriter> {
+	const directory = `${sidecarPath}.capture`
+	try {
+		try {
+			await fs.lstat(sidecarPath)
+			throw new OfficialQaCaptureError()
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error
+		}
+		await fs.mkdir(directory, { mode: 0o700 })
+		const owned = await fs.lstat(directory)
+		return async (sequence, kind, record) => {
+			try {
+				const current = await fs.lstat(directory)
+				if (
+					!current.isDirectory() ||
+					current.dev !== owned.dev ||
+					current.ino !== owned.ino ||
+					(current.mode & 0o777) !== 0o700
+				) {
+					throw new OfficialQaCaptureError()
+				}
+				const file = await fs.open(
+					path.join(directory, `${sequence}.${kind}.json`),
+					"wx",
+					0o600,
+				)
+				try {
+					await file.writeFile(
+						`${JSON.stringify({ ...record, ...identity, sequence, kind }, null, "\t")}\n`,
+					)
+					await file.sync()
+				} finally {
+					await file.close()
+				}
+			} catch {
+				throw new OfficialQaCaptureError()
+			}
+		}
+	} catch {
+		throw new OfficialQaCaptureError()
+	}
+}
+
 function parseStoredSidecar(
 	parsed: unknown,
 	sidecarPath: string,

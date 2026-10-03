@@ -7,6 +7,7 @@ import type {
 	EnrichmentTokenParam,
 } from "../../packages/memory-engine/src/mongodb-llm-enrichment.js"
 import {
+	EnrichmentHttpError,
 	createHttpProvider,
 	withRetry,
 } from "../../packages/memory-engine/src/mongodb-llm-enrichment.js"
@@ -37,7 +38,9 @@ import type {
 	OfficialQaReference,
 } from "./longmemeval-official-qa.js"
 import {
+	OfficialQaCaptureError,
 	createOfficialPredictionSidecar,
+	createOfficialQaCaptureWriter,
 	deriveOfficialPredictionSidecarPath,
 	readOfficialPredictionSidecar,
 	recordOfficialAnswer,
@@ -45,7 +48,10 @@ import {
 	recordOfficialVerdict,
 	writeOfficialPredictionSidecarAtomic,
 } from "./longmemeval-prediction-sidecar.js"
-import type { OfficialPredictionSidecar } from "./longmemeval-prediction-sidecar.js"
+import type {
+	OfficialPredictionSidecar,
+	OfficialPredictionSidecarIdentity,
+} from "./longmemeval-prediction-sidecar.js"
 
 /**
  * Official LongMemEval QA scoring, wired into the benchmark manager.
@@ -366,6 +372,104 @@ export type OfficialQaContext = {
 	}>
 }
 
+async function createOfficialProviderCapture(
+	sidecarPath: string,
+	identity: OfficialPredictionSidecarIdentity,
+	env: Record<string, string | undefined>,
+) {
+	const secrets = [
+		env.MEMONGO_BENCHMARK_ANSWER_API_KEY,
+		env.MEMONGO_BENCHMARK_JUDGE_API_KEY,
+		env.MEMONGO_ENRICHMENT_API_KEY,
+	]
+		.map((key) => key?.trim() ?? "")
+		.filter((key) => key.length > 0)
+	const redact = (text: string) =>
+		secrets.reduce((value, key) => value.replaceAll(key, "[REDACTED]"), text)
+	const write = await createOfficialQaCaptureWriter(sidecarPath, {
+		runId: redact(identity.runId),
+		datasetSha256: redact(identity.datasetSha256),
+		configurationHash: redact(identity.configurationHash),
+	})
+	let sequence = 0
+	return (
+		provider: EnrichmentProvider,
+		phase: "preflight" | "answer" | "judge",
+	): EnrichmentProvider => ({
+		name: provider.name,
+		async chatCompletion(params) {
+			const attempt = ++sequence
+			await write(attempt, "request", {
+				level: "provider-parameters",
+				phase,
+				recordedAt: new Date().toISOString(),
+				model: redact(params.model),
+				messages: params.messages.map((message) => ({
+					role: redact(message.role),
+					content: redact(message.content),
+				})),
+				maxTokens: params.maxTokens,
+				temperature: params.temperature,
+				...(params.responseFormat
+					? { responseFormat: { type: params.responseFormat.type } }
+					: {}),
+			})
+			let response: Awaited<ReturnType<EnrichmentProvider["chatCompletion"]>>
+			try {
+				response = await provider.chatCompletion(params)
+			} catch (error) {
+				await write(attempt, "outcome", {
+					level: "provider-failure-classification",
+					phase,
+					recordedAt: new Date().toISOString(),
+					status: "failed",
+					failure:
+						error instanceof EnrichmentHttpError
+							? "http"
+							: error instanceof DOMException && error.name === "AbortError"
+								? "timeout"
+								: error instanceof TypeError
+									? "network"
+									: "provider",
+					...(error instanceof EnrichmentHttpError
+						? { httpStatus: error.statusCode }
+						: {}),
+				})
+				throw error
+			}
+			await write(attempt, "outcome", {
+				level: "provider-adapted-completion",
+				phase,
+				recordedAt: new Date().toISOString(),
+				status: "succeeded",
+				content: redact(response.content),
+				...(response.responseMeta
+					? {
+							responseMeta: {
+								shape: redact(response.responseMeta.shape),
+								finishReason:
+									response.responseMeta.finishReason === undefined
+										? undefined
+										: redact(response.responseMeta.finishReason),
+								refusal: response.responseMeta.refusal,
+							},
+						}
+					: {}),
+				...(response.usage
+					? {
+							usage: {
+								inputTokens: response.usage.inputTokens,
+								outputTokens: response.usage.outputTokens,
+								reasoningTokens: response.usage.reasoningTokens,
+							},
+						}
+					: {}),
+			})
+			return response
+		},
+	})
+}
+
 /**
  * Preflight a durable QA run (official or custom-judge). Validation failure
  * modes fire before any provider call: missing checkpoint path, missing
@@ -412,6 +516,21 @@ export async function prepareOfficialQa(params: {
 		throw new Error(
 			`MEMONGO_BENCHMARK_QA_PROTOCOL=${protocol} requires checkpointPath: predictions must persist beside the checkpoint for crash-safe resume`,
 		)
+	}
+	const captureValue = params.env.MEMONGO_BENCHMARK_QA_CAPTURE
+	if (
+		captureValue !== undefined &&
+		captureValue !== "" &&
+		captureValue !== "0" &&
+		captureValue !== "1"
+	) {
+		throw new Error("MEMONGO_BENCHMARK_QA_CAPTURE must be 0 or 1")
+	}
+	if (
+		captureValue === "1" &&
+		(params.resumeCompletedScenarios?.length ?? 0) > 0
+	) {
+		throw new OfficialQaCaptureError()
 	}
 	const providers = params.resolveProviders
 		? params.resolveProviders()
@@ -469,11 +588,23 @@ export async function prepareOfficialQa(params: {
 	// reasoning-class endpoints) must fail here, before the run pays for
 	// retrieval or burns a partial multi-question pass, with an actionable
 	// message instead of a per-question failure loop.
-	await preflightOfficialAnswerProvider(providers.answer, answerModel, protocol)
+	const capture =
+		captureValue === "1"
+			? await createOfficialProviderCapture(sidecarPath, identity, params.env)
+			: undefined
+	await preflightOfficialAnswerProvider(
+		capture ? capture(providers.answer, "preflight") : providers.answer,
+		answerModel,
+		protocol,
+	)
 	return {
 		protocol,
-		answerProvider: providers.answer,
-		judgeProvider: providers.judge,
+		answerProvider: capture
+			? capture(providers.answer, "answer")
+			: providers.answer,
+		judgeProvider: capture
+			? capture(providers.judge, "judge")
+			: providers.judge,
 		answerModel,
 		judgeModel,
 		sidecarPath,
@@ -521,6 +652,7 @@ async function preflightOfficialAnswerProvider(
 			OFFICIAL_ANSWER_TRANSPORT_RETRIES,
 		)
 	} catch (error) {
+		if (error instanceof OfficialQaCaptureError) throw error
 		const message = error instanceof Error ? error.message : String(error)
 		throw new Error(
 			`${protocol} QA answer provider preflight failed (settings: temperature=${OFFICIAL_ANSWER_TEMPERATURE}, maxTokens=${OFFICIAL_ANSWER_MAX_TOKENS}, model=${model}): ${message}. If the provider rejects temperature:0, point MEMONGO_BENCHMARK_ANSWER_* at a provider that accepts it, or unset MEMONGO_BENCHMARK_QA_PROTOCOL to fall back to the legacy harness`,
