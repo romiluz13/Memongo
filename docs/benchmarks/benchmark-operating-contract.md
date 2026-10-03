@@ -98,6 +98,28 @@ bound excludes ingestion, additional cases, resume and provider-internal
 retries, and does not enforce a monetary or whole-run budget. Capture and
 injected-request tests are diagnostic evidence, not benchmark-quality results.
 
+## Checkpoint-sidecar comparison
+
+The `b2-join.ts` reader refuses duplicate or inconsistent supplied scenario
+IDs, unexpected completed scenarios, duplicate selected final-pass case IDs,
+and prediction rows with a mismatched question ID or invalid stage/verdict.
+Judged rows require `yes` or `no`; answered and unreliable rows require null.
+For declared LongMemEval runs identified by selected LongMemEval metrics, each
+scenario has one matching case and prediction IDs must belong to the declared
+population. Generic scenarios can retain several distinct case IDs. Earlier
+measurement passes are not treated as duplicate final-pass results.
+
+Missing legacy declarations, optional R-only sidecars and partial primary
+coverage remain supported. A partial comparison can still emit descriptive
+`REAL`; it does not certify complete workload coverage, equal effective
+settings, causal improvement or a publishable win. Supplied complete-repeat,
+minimum-judged and known declared dataset-inequality guards remain separate.
+
+Build environment labels do not attest the full loaded graph or effective
+requests. Record actual entrypoints, loaded artifacts and intended-target
+requests before qualification; different single-file compiler output alone
+cannot establish a stale or behaviorally different build.
+
 ## Publishable benchmark claims
 
 A claim may be published only when all are true:

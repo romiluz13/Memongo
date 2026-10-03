@@ -190,3 +190,52 @@ The next live qualification still needs the separately chosen model/routes,
 spend bound, owned target and private retention decision. Delivery/automatic CI
 for the documentation commit must be observed separately; no new CI result is
 claimed by this local proof.
+
+
+## Primary artifact validation and local identity evidence — 2026-10-03
+
+Reviewed source `eef9ff5b44ca65d34491360583e482171e9a3666` changes only the existing B2 reader and its tests.
+Supplied scenario declarations must be unique and consistent; completed
+scenarios and selected final-pass cases cannot silently overwrite each other.
+Prediction row IDs and stage/verdict combinations are validated before scoring.
+Declared question membership and one-case identity apply to existing selected
+LongMemEval metrics; generic multiple-case scenarios remain valid. Partial
+primary data, missing legacy declarations, optional R-only sidecars and earlier
+measurement passes remain supported. Pure joins, formulas, complete-repeat,
+minimum-count and declared dataset guards are unchanged. See the
+[comparison contract](../../benchmarks/benchmark-operating-contract.md#checkpoint-sidecar-comparison).
+
+Twelve malformed actual CLI inputs previously emitted `REAL` with exit0; all
+now reject with exit1 and no JSON. Seven original valid controls and three
+additional generic/repeated-pass/known-null controls preserve byte-identical
+stdout/stderr. Focused tests pass87/87. Fresh integrated scripts pass737 cases,
+with four unchanged dataset-dependent skips and zero failures: the prior724
+case/status multiset remains, with17 added passing cases. Required scoring,
+sidecar and B2 suites execute; affected types, Biome and diff checks pass.
+All1299 tracked file hashes remain unchanged during checks. Initial after-test
+fixture diagnostics were retained and corrected without relaxing rejection.
+
+A separate evidence-only local probe imports the benchmark entrypoint without
+running its main function, resolves selected local package exports and observes
+loaded dist/runtime/settings boundaries. Its12 assertion controls, four escape
+denials and three injected HTTP requests pass; six private request/outcome
+files retain the synthetic effective settings. Declared setting changes reject;
+namespace-only configuration changes demonstrate why raw configuration hashes
+do not alone prove a changed treatment. All three selected single-file emitter
+comparisons differ from existing dist, so complete build equivalence remains
+UNKNOWN. This does not establish stale or semantically different code. In-memory
+byte/request drift checks are fixture comparisons, not shipped prepaid guards.
+The probe uses Bun1.4.2; its process.version compatibility value is v26.3.0.
+It does not exercise actual manager acquisition/retrieval, a complete loaded
+graph, live requests or MongoDB, and it performs no build or source edit.
+
+Both source and evidence reviews are independently accepted. Main delivery and
+its automatic CI remain separate until observed at the exact documentation
+head. Published2.2.0 packages/tag and historical campaign artifacts are unchanged.
+No model, benchmark campaign, live database, publication or deployment runs.
+The58/418 original criteria remain14 verified,0 failed,32 partial,350 unverified,
+22 policy-held and0 whole-parent closures; technical readiness remains1/6.
+These two local outcomes add partial G02/G05 evidence only. Live qualification
+still requires named routes/models, currency/time limits, accountable ownership,
+private retention and separately verified enforcement under A01–A03. Current
+quality and benchmark leadership remain unmeasured.
