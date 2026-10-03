@@ -26,6 +26,7 @@ import {
 	isOfficialAbstentionQuestion,
 } from "./longmemeval-official-qa.js"
 import {
+	OfficialPredictionSidecarError,
 	OfficialQaCaptureError,
 	createOfficialPredictionSidecar,
 	recordOfficialAnswer,
@@ -1928,6 +1929,121 @@ describe("judge verdict reliability (J1)", () => {
 })
 
 describe("summarizeOfficialBenchmarkQaRun", () => {
+	it.each([
+		"unknown judged row",
+		"row key/question ID mismatch",
+		"duplicate row question ID",
+		"invalid judged verdict",
+		"null judged verdict",
+		"duplicate declared ID",
+		"blank declared ID",
+		"answered row with verdict",
+	])("rejects %s before metrics or export without rewriting the sidecar", async (invalid) => {
+		const { context, dir } = await buildContext(
+			"summary-invalid",
+			(sidecar) => {
+				let seeded = recordOfficialAnswer(sidecar, "q-1", "violet")
+				seeded = recordOfficialVerdict(seeded, "q-1", "yes")
+				seeded = recordOfficialAnswer(seeded, "q-2", "emerald")
+				seeded = recordOfficialVerdict(seeded, "q-2", "no")
+				if (invalid === "unknown judged row") {
+					seeded = recordOfficialAnswer(seeded, "foreign", "synthetic")
+					seeded = recordOfficialVerdict(seeded, "foreign", "no")
+				}
+				if (invalid === "row key/question ID mismatch") {
+					seeded.rows["q-1"]!.questionId = "q-2"
+				}
+				if (invalid === "duplicate row question ID") {
+					seeded.rows.alias = { ...seeded.rows["q-1"]! }
+				}
+				if (invalid === "invalid judged verdict") {
+					seeded.rows["q-1"]!.verdict = "maybe"
+				}
+				if (invalid === "null judged verdict") {
+					seeded.rows["q-1"]!.verdict = null
+				}
+				if (invalid === "answered row with verdict") {
+					seeded.rows["q-1"]!.stage = "answered"
+				}
+				Object.assign(sidecar.rows, seeded.rows)
+			},
+		)
+		try {
+			const original = await readFile(context.sidecarPath, "utf8")
+			await expect(
+				summarizeOfficialBenchmarkQaRun({
+					context,
+					scenarios: [
+						scenarioFixture([
+							{
+								caseId: invalid === "blank declared ID" ? " " : "q-1",
+								query: "q1",
+							},
+							{
+								caseId: invalid === "duplicate declared ID" ? "q-1" : "q-2",
+								query: "q2",
+							},
+						]),
+					],
+					coveredCaseIds: new Set(["q-1", "q-2"]),
+					datasetSha256: "a".repeat(64),
+				}),
+			).rejects.toThrow(OfficialPredictionSidecarError)
+			expect(await readdir(dir)).toEqual(["checkpoint.json.predictions.json"])
+			expect(await readFile(context.sidecarPath, "utf8")).toBe(original)
+		} finally {
+			await rm(dir, { recursive: true, force: true })
+		}
+	})
+
+	it("keeps an empty declaration with no rows unavailable", async () => {
+		const { context, dir } = await buildContext("summary-empty")
+		try {
+			const { envelope, metrics } = await summarizeOfficialBenchmarkQaRun({
+				context,
+				scenarios: [],
+				coveredCaseIds: new Set(),
+				datasetSha256: "a".repeat(64),
+			})
+			expect(envelope.official?.coverage).toBe("unavailable")
+			expect(envelope.accuracy).toBeNull()
+			expect(envelope.cases.eligible).toBe(0)
+			expect(envelope.cases.completed).toBe(0)
+			expect(metrics).toBeNull()
+			expect(await readdir(dir)).toEqual([])
+		} finally {
+			await rm(dir, { recursive: true, force: true })
+		}
+	})
+
+	it("keeps declared answered rows unmeasured with unavailable coverage", async () => {
+		const { context, dir } = await buildContext(
+			"summary-answered",
+			(sidecar) => {
+				Object.assign(
+					sidecar.rows,
+					recordOfficialAnswer(sidecar, "q-1", "violet").rows,
+				)
+			},
+		)
+		try {
+			const { envelope, metrics } = await summarizeOfficialBenchmarkQaRun({
+				context,
+				scenarios: [scenarioFixture([{ caseId: "q-1", query: "q1" }])],
+				coveredCaseIds: new Set(["q-1"]),
+				datasetSha256: "a".repeat(64),
+			})
+			expect(envelope.official?.coverage).toBe("unavailable")
+			expect(envelope.official?.missingQuestionIds).toEqual(["q-1"])
+			expect(envelope.accuracy).toBeNull()
+			expect(envelope.cases.completed).toBe(0)
+			expect(metrics).toBeNull()
+			expect(await readdir(dir)).toEqual(["checkpoint.json.predictions.json"])
+		} finally {
+			await rm(dir, { recursive: true, force: true })
+		}
+	})
+
 	it("aggregates judged rows exactly like the Slice A metric computation", async () => {
 		const { context, dir } = await buildContext("summary-full", (sidecar) => {
 			let seeded = recordOfficialAnswer(sidecar, "q-1", "violet")

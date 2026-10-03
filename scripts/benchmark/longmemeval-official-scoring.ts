@@ -38,6 +38,7 @@ import type {
 	OfficialQaReference,
 } from "./longmemeval-official-qa.js"
 import {
+	OfficialPredictionSidecarError,
 	OfficialQaCaptureError,
 	createOfficialPredictionSidecar,
 	createOfficialQaCaptureWriter,
@@ -1292,6 +1293,30 @@ export async function summarizeOfficialBenchmarkQaRun(params: {
 			})
 		}
 	}
+	const declaredIds = references.map((reference) => reference.questionId)
+	const declaredIdSet = new Set(declaredIds)
+	if (
+		declaredIdSet.size !== declaredIds.length ||
+		declaredIds.some((id) => typeof id !== "string" || id.trim().length === 0)
+	) {
+		throw new OfficialPredictionSidecarError(
+			"Official QA summary contains invalid declared case IDs",
+		)
+	}
+	for (const [key, row] of Object.entries(params.context.sidecar.rows)) {
+		if (
+			key !== row.questionId ||
+			!declaredIdSet.has(row.questionId) ||
+			(row.stage === "judged"
+				? row.verdict !== "yes" && row.verdict !== "no"
+				: (row.stage !== "answered" && row.stage !== "unreliable") ||
+					row.verdict !== null)
+		) {
+			throw new OfficialPredictionSidecarError(
+				"Official QA summary contains invalid prediction rows",
+			)
+		}
+	}
 	const referenceByQuestionId = new Map(
 		references.map((reference) => [reference.questionId, reference]),
 	)
@@ -1305,7 +1330,6 @@ export async function summarizeOfficialBenchmarkQaRun(params: {
 	)
 	const unreliableQuestionIds = unreliableRows.map((row) => row.questionId)
 	const judgedIds = new Set(judgedRows.map((row) => row.questionId))
-	const declaredIds = references.map((reference) => reference.questionId)
 	const missingQuestionIds = declaredIds.filter((id) => !judgedIds.has(id))
 	// Slice B round 2: lost pre-checkpoint usage is sticky. Startup orphans
 	// (judged rows whose scenario never reached a completed checkpoint before
