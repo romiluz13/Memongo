@@ -53,6 +53,7 @@ type ExecutionTrace = {
 }
 
 type CheckpointFile = {
+	datasetSha256?: string
 	totalScenarios?: number
 	scenarioIds?: string[]
 	completedScenarios?: Array<{
@@ -434,16 +435,19 @@ function parseArg(argv: string[], flag: string): string | undefined {
 	return index >= 0 && value && !value.startsWith("--") ? value : undefined
 }
 
-/** Pass counts per scenario, used to warn when a checkpoint recorded >1 pass. */
-async function readCheckpointPassCounts(
+/** Checkpoint metadata for the dataset gate and measurement-pass warning. */
+async function readCheckpointMetadata(
 	checkpointPath: string,
-): Promise<number[]> {
+): Promise<{ datasetSha256?: string; passCounts: number[] }> {
 	const checkpoint = JSON.parse(
 		await readFile(checkpointPath, "utf8"),
 	) as CheckpointFile
-	return (checkpoint.completedScenarios ?? []).map(
-		(scenario) => scenario.executionsByPass?.length ?? 0,
-	)
+	return {
+		datasetSha256: checkpoint.datasetSha256,
+		passCounts: (checkpoint.completedScenarios ?? []).map(
+			(scenario) => scenario.executionsByPass?.length ?? 0,
+		),
+	}
 }
 
 export async function main(
@@ -483,15 +487,23 @@ export async function main(
 	const runB = await readB2RunArtifacts(path.resolve(checkpointB), {
 		requireSidecar,
 	})
+	const datasetDigests: Array<string | undefined> = []
 	for (const label of ["a", "b"] as const) {
-		const passCounts = await readCheckpointPassCounts(
+		const { datasetSha256, passCounts } = await readCheckpointMetadata(
 			path.resolve(label === "a" ? checkpointA : checkpointB),
 		)
+		datasetDigests.push(datasetSha256)
 		if (passCounts.some((count) => count > 1)) {
 			console.warn(
 				`warning: checkpoint ${label} has scenarios with more than one measurement pass; joining the LAST pass only`,
 			)
 		}
+	}
+	const [datasetShaA, datasetShaB] = datasetDigests
+	if (datasetShaA && datasetShaB && datasetShaA !== datasetShaB) {
+		throw new Error(
+			"dataset digest mismatch: A and B must use the same dataset",
+		)
 	}
 	const baselineAPath = parseArg(argv, "--baseline-a")
 	const baselineBPath = parseArg(argv, "--baseline-b")

@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises"
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { describe, expect, it, vi } from "vitest"
@@ -447,6 +447,51 @@ describe("main baseline sidecar gate (R2-1)", () => {
 		logSpy.mockRestore()
 		return { code, stderr: stderr.join("\n"), stdout: stdout.join("\n") }
 	}
+
+	it.each([
+		["different Q datasets", "a", "b", false, 1],
+		["different R-only datasets", "a", "b", true, 1],
+		["same Q dataset", "a", "a", false, 0],
+		["same R-only dataset", "a", "a", true, 0],
+		["one missing legacy digest", "a", undefined, false, 0],
+		["both missing legacy digests", undefined, undefined, false, 0],
+	] as const)("checks %s", async (_name, digestA, digestB, rOnly, code) => {
+		const dir = await mkdtemp(path.join(tmpdir(), "b2-join-dataset-"))
+		try {
+			const runA = await writeCheckpoint(dir, "a.json")
+			const runB = await writeCheckpoint(dir, "b.json")
+			for (const [file, digest] of [
+				[runA, digestA],
+				[runB, digestB],
+			] as const) {
+				const checkpoint = JSON.parse(await readFile(file, "utf8"))
+				if (digest) checkpoint.datasetSha256 = digest.repeat(64)
+				await writeFile(file, JSON.stringify(checkpoint))
+				await writeFile(
+					`${file}.predictions.json`,
+					JSON.stringify({
+						rows: { q1: { questionId: "q1", stage: "judged", verdict: "yes" } },
+					}),
+				)
+			}
+			const result = await runMain([
+				"--a",
+				runA,
+				"--b",
+				runB,
+				...(rOnly ? ["--r-only"] : []),
+			])
+			expect(result.code).toBe(code)
+			if (code === 1) {
+				expect(result.stdout).toBe("")
+				expect(result.stderr).toContain("dataset digest mismatch")
+			} else {
+				expect(JSON.parse(result.stdout).questionCount).toBe(1)
+			}
+		} finally {
+			await rm(dir, { recursive: true, force: true })
+		}
+	})
 
 	it("exits non-zero when a baseline checkpoint has no sidecar", async () => {
 		const dir = await mkdtemp(path.join(tmpdir(), "b2-join-baseline-"))
