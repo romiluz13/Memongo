@@ -578,6 +578,131 @@ describe("main baseline sidecar gate (R2-1)", () => {
 		}
 	}
 
+	it.each([
+		["--min-judged"],
+		["--min-judged", "--r-only"],
+		["--min-judged", ""],
+		["--min-judged", "   "],
+		["--min-judged", "not-a-count"],
+		["--min-judged", "-1"],
+		["--min-judged", "3.5"],
+		["--min-judged", "3questions"],
+		["--min-judged", "NaN"],
+		["--min-judged", "Infinity"],
+		["--min-judged", "9007199254740992"],
+		["--min-judged", "1e3"],
+		["--min-judged", "0x3"],
+		["--min-judged", "+"],
+	])("rejects invalid explicit minimum with %j %j", async (...options) => {
+		const result = await runBaselineFixture(() => {}, options)
+		expect(result.code).toBe(1)
+		expect(result.stderr).toContain(
+			"--min-judged requires a non-negative decimal safe integer",
+		)
+		expect(result.stdout).toBe("")
+	})
+
+	it.each([
+		"0",
+		"3",
+		"003",
+		"+3",
+		" 3 ",
+	])("preserves complete baseline calibration with minimum %j", async (minimum) => {
+		const result = await runBaselineFixture(() => {}, ["--min-judged", minimum])
+		expect(result.code).toBe(0)
+		expect(result.stderr).toBe("")
+		const report = JSON.parse(result.stdout)
+		expect(report.judgedInBoth).toBe(3)
+		expect(report.netQFlips).toBe(3)
+		expect(report.flipRate).toEqual({ judgedInBoth: 3, flips: 0, flipRate: 0 })
+		expect(report.noiseRule.threshold).toBe(3)
+		expect(report.noiseRule.real).toBe(true)
+	})
+
+	it("preserves omission of the optional minimum", async () => {
+		const result = await runBaselineFixture(() => {})
+		expect(result.code).toBe(0)
+		expect(result.stderr).toBe("")
+		expect(JSON.parse(result.stdout).noiseRule.real).toBe(true)
+	})
+
+	it("preserves the below-count error for a valid minimum", async () => {
+		const result = await runBaselineFixture(() => {}, ["--min-judged", "4"])
+		expect(result.code).toBe(1)
+		expect(result.stderr).toBe(
+			"error: judged-in-both 3 is below --min-judged 4",
+		)
+		expect(result.stdout).toBe("")
+	})
+
+	it.each([
+		[],
+		["not-a-count"],
+		["9007199254740992"],
+	])("validates an invalid minimum before reading artifacts with %j", async (...values) => {
+		const dir = await mkdtemp(path.join(tmpdir(), "b2-invalid-minimum-"))
+		try {
+			const result = await runMain([
+				"--a",
+				path.join(dir, "missing-a.json"),
+				"--b",
+				path.join(dir, "missing-b.json"),
+				"--min-judged",
+				...values,
+			])
+			expect(result.code).toBe(1)
+			expect(result.stderr).toContain(
+				"--min-judged requires a non-negative decimal safe integer",
+			)
+			expect(result.stderr).not.toContain("ENOENT")
+			expect(result.stdout).toBe("")
+		} finally {
+			await rm(dir, { recursive: true, force: true })
+		}
+	})
+
+	it.each([
+		"0",
+		"not-a-count",
+	])("applies explicit minimum validation in r-only mode with %j", async (minimum) => {
+		const result = await runBaselineFixture(() => {}, [
+			"--r-only",
+			"--min-judged",
+			minimum,
+		])
+		expect(result.code).toBe(minimum === "0" ? 0 : 1)
+		if (minimum === "0") {
+			expect(JSON.parse(result.stdout).noiseRule.rOnly).toBe(true)
+		} else {
+			expect(result.stderr).toContain(
+				"--min-judged requires a non-negative decimal safe integer",
+			)
+			expect(result.stdout).toBe("")
+		}
+	})
+
+	it.each([
+		["3", "not-a-count", 0],
+		["not-a-count", "3", 1],
+	])("preserves the first repeated minimum value %j", async (first, second, code) => {
+		const result = await runBaselineFixture(() => {}, [
+			"--min-judged",
+			String(first),
+			"--min-judged",
+			String(second),
+		])
+		expect(result.code).toBe(code)
+		if (code === 0) {
+			expect(JSON.parse(result.stdout).judgedInBoth).toBe(3)
+		} else {
+			expect(result.stderr).toContain(
+				"--min-judged requires a non-negative decimal safe integer",
+			)
+			expect(result.stdout).toBe("")
+		}
+	})
+
 	const incompleteBaselines: Array<{
 		name: string
 		mutate: (a: BaselineFixture, b: BaselineFixture) => void

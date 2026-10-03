@@ -459,7 +459,21 @@ export async function main(
 		return
 	}
 	const rOnly = argv.includes("--r-only")
-	const minJudged = Number.parseInt(parseArg(argv, "--min-judged") ?? "", 10)
+	const minJudgedValue = parseArg(argv, "--min-judged")
+	const minJudged =
+		minJudgedValue === undefined ? undefined : Number(minJudgedValue)
+	if (
+		argv.includes("--min-judged") &&
+		(!minJudgedValue ||
+			!/^\+?\d+$/.test(minJudgedValue) ||
+			!Number.isSafeInteger(minJudged))
+	) {
+		console.error(
+			"error: --min-judged requires a non-negative decimal safe integer",
+		)
+		process.exitCode = 1
+		return
+	}
 	const requireSidecar = !rOnly
 	// Sequential (not Promise.all) so a missing-sidecar failure names the
 	// first artifact deterministically instead of racing on rejection order.
@@ -543,7 +557,7 @@ export async function main(
 			)
 		}
 	}
-	if (Number.isFinite(minJudged) && report.judgedInBoth < minJudged) {
+	if (minJudged != null && report.judgedInBoth < minJudged) {
 		console.error(
 			`error: judged-in-both ${report.judgedInBoth} is below --min-judged ${minJudged}`,
 		)
