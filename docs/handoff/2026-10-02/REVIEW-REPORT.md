@@ -239,3 +239,45 @@ These two local outcomes add partial G02/G05 evidence only. Live qualification
 still requires named routes/models, currency/time limits, accountable ownership,
 private retention and separately verified enforcement under A01–A03. Current
 quality and benchmark leadership remain unmeasured.
+
+
+## QA summary correspondence — 2026-10-03
+
+Reviewed source `d3483ba2f2579c3e690dcc00b4020ff1593dba27`, from main
+`b96075608966c28f569cd33d392cf285a0d1ddb3`, adds a guard to the existing QA
+summary and regressions in its colocated test. The current manager calls this
+summary; a synthetic canonical sidecar write/read/summary journey demonstrated
+that a foreign judged row could produce full coverage and accuracy 50/51 with
+51 completed answers against 50 declared cases. Duplicate row/declaration
+identity and invalid or null judged verdicts also reached metrics or export.
+These findings concern corrupted/restored artifacts or supplied declarations;
+the normal producer and fixed loader already emit valid verdicts and unique IDs.
+
+The summary now rejects nonblank/unique case-ID violations and inconsistent
+row key, question ID, declared membership, stage or verdict before metrics and
+export, using a fixed existing error without artifact payload. It preserves
+valid partial/unreliable coverage, declared orphan accounting, custom-judge
+provenance, generic multiple-case scenarios and unavailable empty populations.
+Storage, formulas, provider behavior, resume and export shape are unchanged.
+See the [QA summary contract](../../benchmarks/benchmark-operating-contract.md#qa-summary-population).
+
+Before the repair, six of thirteen canonical fixture cases failed the expected
+rejection; all seven compatibility controls passed. Eight meaningful unit
+regressions failed on the unchanged source. On the integrated source, the
+canonical fixture passes 13/13 with four guard denials and zero provider calls;
+the seven accepted summary values and exported bytes match the previous
+behavior. Fresh scripts validation records 747 passes, four unchanged
+dataset-dependent skips and zero failures, retaining all 741 previous case
+statuses plus ten passing regressions. Scoring100, sidecar24 and B2-join87 all
+execute; unit, required-suite guard, affected types, Biome and diff checks exit
+zero. All 1,299 tracked inputs remain unchanged throughout those checks. The
+unit suite itself has no network-guard claim; the canonical fixture is guarded.
+
+This is late aggregation validation, not admission before paid work or complete
+S1-G05 evidence. It executes no manager, model, live benchmark or MongoDB path.
+The original roadmap remains 14/418 verified (3.35% lower bound), 32 partial,
+350 unverified, 22 policy-held and zero whole-parent closures. Technical
+readiness remains 1/6 (16.67%), with all six definitions and 18 acceptance texts
+unchanged. Current quality and competitive leadership remain unmeasured;
+historical B2 remains 11/50 and inconclusive. Main delivery and exact-head CI
+are separate observations. Published npm/tag 2.2.0 retains its immutable basis.

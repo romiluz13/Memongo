@@ -120,6 +120,22 @@ requests. Record actual entrypoints, loaded artifacts and intended-target
 requests before qualification; different single-file compiler output alone
 cannot establish a stale or behaviorally different build.
 
+## QA summary population
+
+The official and custom-judge QA summary validates its declared case IDs and
+prediction rows before computing metrics or writing an export. Case IDs must
+be nonblank and unique. Each row key must match its question ID and belong to
+the declared case population. Judged verdicts require `yes` or `no`; answered
+and unreliable rows require null. Inconsistent inputs raise the existing
+sidecar error without including artifact values or rewriting stored rows.
+
+Valid missing, answered and unreliable cases still withhold whole-workload
+accuracy. Declared orphan rows retain incomplete-accounting disclosure; an
+empty population stays unavailable, and generic scenarios may contain multiple
+cases. This check rejects corrupt or foreign restored inputs at aggregation.
+It does not provide admission before provider calls, complete-run coverage or
+proof of a matched benchmark result.
+
 ## Publishable benchmark claims
 
 A claim may be published only when all are true:
