@@ -1,3 +1,5 @@
+**2026-10-04 reliability follow-up:** reviewed source `56c6daa5aa83b41a6906e31a0295d692b2a39df1` sanitizes recognized credentials in quarantine receipts/audit metadata and checks the installed MCP executable during package validation. Combined local proof records 5,905 passes/four existing skips/zero failures and expected artifact/freshness outcomes. [Behavior and limits](REVIEW-REPORT.md#quarantine-diagnostic-redaction-and-installed-mcp-validation--2026-10-04). Original 14/418 evidence credit and 1/6 technical readiness are unchanged; main delivery and exact-head hosted CI are separate observations. Earlier entries below remain historical.
+
 **2026-10-03 cost-status follow-up:** reviewed source `99f4fc22b7d7698024fcb39925f71427baaa6795` discloses a failed cost aggregation as `costLedger.dailySums`/partial while healthy empty remains complete and default reader behavior is preserved. Affected offline proof passes3,533 engine cases/no skips or failures and the unchanged exported-status probe4/4. The fixed418-criterion map now records **14 verified (3.35% lower bound),0 failed,28 partial,354 unverified and22 policy-held;0/58 whole parents certified**. Access-retry evidence remains partial because synthetic two-target and native one-target checks do not prove the exact multi-row transaction clause. Read [behavior, evidence and limits](REVIEW-REPORT.md#cost-status-disclosure-and-access-retry-evidence--2026-10-03). Source review is accepted; final shared review, main delivery and current exact-head CI are separate. Earlier snapshots below remain historical; no campaign win or publication authority follows.
 
 **2026-10-03 bounded offline follow-up:** supplied-baseline coverage is repaired on reviewed code `26c409eec7070f20035b124ad883ba68c22c1903`. The fixed original roadmap has 58 parents and 418 acceptance criteria. A bounded independent evidence mapping verifies **13/418 criteria (3.11% lower bound)**; 27 are partial, 356 lack a complete mapping in this pass and 22 remain policy-held. **0/58 whole parents are certified.** Unmapped does not mean unimplemented. This supersedes older current-source/campaign-continuation pointers below; historical receipts and original criteria are preserved. Read [the follow-up and its limits](REVIEW-REPORT.md#offline-baseline-coverage-and-criterion-evidence--2026-10-03). The preserved campaign remains inconclusive: B2 completed 11/50 after six failed attempts; no comparative win, model/campaign resume or publication is authorized by these results.
@@ -281,3 +283,53 @@ readiness remains 1/6 (16.67%), with all six definitions and 18 acceptance texts
 unchanged. Current quality and competitive leadership remain unmeasured;
 historical B2 remains 11/50 and inconclusive. Main delivery and exact-head CI
 are separate observations. Published npm/tag 2.2.0 retains its immutable basis.
+
+
+## Quarantine diagnostic redaction and installed MCP validation — 2026-10-04
+
+Reviewed source `af470dd23ebdace2dc200bf1d630fbb1cdfa0752` applies the existing
+recognized-credential redactor to quarantine finalization and decision-audit
+error messages before caller receipts and finalization audit metadata use them.
+It preserves ordinary diagnostics, lifecycle outcomes, recovery flags and
+admission-conflict propagation. This is new-message sanitization under the
+existing pattern and partial-mask contract, not an exhaustive privacy audit.
+
+Supported fault-injected helper journeys previously exposed synthetic URI
+credentials in three cases; the same eight cases now pass, preserving all
+recorded state and memory outcomes. Nine credential unit regressions fail before
+repair; all 44 narrow cases and 3,560 engine cases pass afterward, retaining all
+3,533 prior case statuses plus 27 new cases. Existing bridge (7), client (13), and API (30)
+unit seams pass separately; they do not establish a live Mongo/HTTP incident or
+complete hosted end-to-end journey. No local native server was needed or run.
+
+Reviewed source `56c6daa5aa83b41a6906e31a0295d692b2a39df1` strengthens the package
+checker after actual npm-installed broken, silent and wrong-version MCP
+executables were accepted by import-only smoke. It directly launches the
+installed executable, sends one stdio initialize request and requires the
+installed package version in the reply, bounded by ten seconds and 1 MiB output.
+The same four packed/installed fixture cases now pass. Six unit rejection cases
+fail before repair; all 26 checker cases pass afterward, and scripts validation
+records 754 passes, four existing dataset-dependent skips and zero failures,
+retaining all 751 prior case statuses plus seven new passing cases. An actual
+Bun hanging-child control rejects after 10.439 seconds despite ignoring SIGTERM.
+
+Fresh local artifact checks pass for eight packages, including the installed
+MCP command, with its network boundary guarded. Strict release freshness still
+rejects the existing coordinated2.2.0 versions. Individual dependency closure
+remains unproved because install smoke supplies all sibling tarballs; the bin
+probe is initialization/version evidence, not full tool/API behavior. The
+[publication contract](../../platform/publish.md) keeps those limits explicit.
+
+Both source changes are independently accepted. Combined local foundation
+checks pass build, monorepo types, lint, units, suite guard, eight-package
+artifacts and diff validation; strict release freshness is the expected existing-
+version failure. Nine fresh JUnit reports record 5,905 passes, four existing
+skips and zero failures. All 1,299 tracked inputs remain unchanged during those
+checks; the three subsequent documentation changes are reviewed separately.
+Exact-head hosted CI remains a separate observation. These source proofs do
+not certify publication, deployment, live performance or universal security. No model or benchmark campaign runs. The fixed original
+58 parents/418 criteria remain 14 verified, 0 failed, 32 partial, 350 unverified,
+22 policy-held and zero whole-parent closures; 3.35 percent is the evidence-mapping
+lower bound, not product completion or a bug percentage. The six benchmark
+gates and 18 acceptance texts retain 1/6 credit; current quality and competitive
+leadership remain unmeasured.

@@ -52,6 +52,8 @@ This monorepo uses the `@memongo` npm scope. Publishing is maintainer-operated; 
      publishable package;
    - no exact-pinned `mongodb` dependency (semver ranges only);
    - `bin` targets exist and start with `#!/usr/bin/env node`;
+   - the npm-installed `memongo-mcp` executable initializes over stdio at its
+     installed package version within ten seconds, with bounded output;
    - cross-package version consistency for the surfaces above;
    - every coordinated package version is still unpublished on npm;
    - internal runtime dependencies use the coordinated caret range;
@@ -61,6 +63,11 @@ This monorepo uses the `@memongo` npm scope. Publishing is maintainer-operated; 
      tarball. These run via `bunx`; when the tools cannot be fetched (offline)
      the gate reports `SKIP` instead of failing, and it always skips
      `@memongo/pi-extension` (no JS entrypoints).
+   Installation smoke installs the coordinated tarballs together. It does not
+   isolate each package's declared dependency closure. The MCP probe checks
+   initialization and version; tool calls and API behavior require their
+   separate validation lanes.
+
 4. **Publish** in dependency order (below) from `v*` tags via the GitHub
    publish workflow.
 
