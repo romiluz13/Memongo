@@ -824,24 +824,54 @@ async function buildWhatChanged(params: {
 	})
 	const relations = await settled(
 		"what-changed.relations",
-		() =>
-			relationsCollection(db, prefix)
+		() => {
+			const collection = relationsCollection(db, prefix)
+			if (regex) {
+				return collection
+					.aggregate([
+						{ $match: { ...scopeFilter, updatedAt: dateFilter } },
+						...["fromEntityId", "toEntityId"].map((field) => ({
+							$lookup: {
+								from: `${prefix}entities`,
+								localField: field,
+								foreignField: "entityId",
+								pipeline: [
+									{
+										$match: {
+											...scopeFilter,
+											$or: [{ name: regex }, { aliases: regex }],
+										},
+									},
+									{ $limit: 1 },
+									{ $project: { _id: 0, entityId: 1 } },
+								],
+								as: `matched_${field}`,
+							},
+						})),
+						{
+							$match: {
+								$or: [
+									{ "matched_fromEntityId.0": { $exists: true } },
+									{ "matched_toEntityId.0": { $exists: true } },
+									{ type: regex },
+								],
+							},
+						},
+						{ $sort: { updatedAt: -1 } },
+						{ $limit: laneQueryLimit },
+						{ $project: { matched_fromEntityId: 0, matched_toEntityId: 0 } },
+					])
+					.toArray()
+			}
+			return collection
 				.find({
 					...scopeFilter,
 					updatedAt: dateFilter,
-					...(regex
-						? {
-								$or: [
-									{ fromEntityId: regex },
-									{ toEntityId: regex },
-									{ type: regex },
-								],
-							}
-						: {}),
 				})
 				.sort({ updatedAt: -1 })
 				.limit(laneQueryLimit)
-				.toArray(),
+				.toArray()
+		},
 		query,
 	)
 	const relationDocs = pickLatestDocuments(relations ?? [], {
