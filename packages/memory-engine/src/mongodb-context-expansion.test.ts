@@ -588,3 +588,129 @@ describe("expandSearchContext", () => {
 		expect(neighborOrder).toEqual(["events/n1", "events/n2", "events/n3"])
 	}, 10_000)
 })
+
+describe("same-time context neighbors", () => {
+	const timestamp = new Date("2026-01-01T00:02:00Z")
+	const event = (eventId: string, offset = 0) => ({
+		eventId,
+		agentId: "agent1",
+		sessionId: "s1",
+		role: "user",
+		body: `body ${eventId}`,
+		timestamp: new Date(timestamp.getTime() + offset),
+	})
+	const parent = (eventId: string) =>
+		makeResult({
+			path: `events/${eventId}`,
+			sessionId: "s1",
+			timestamp,
+			score: 0.9,
+		})
+	const options = {
+		prefix: "test_",
+		agentId: "agent1",
+		scope: "session" as const,
+		scopeRef: "agent:agent1:session:s1",
+		maxResults: 10,
+	}
+
+	it.each([
+		["a", ["events/a", "events/b"]],
+		["b", ["events/a", "events/b", "events/c"]],
+		["c", ["events/b", "events/c"]],
+	])("keeps distinct tied neighbors around %s without the parent twice", async (id, expected) => {
+		const { db } = createMockDb([event("c"), event("b"), event("a")])
+		const rows = await expandSearchContext({
+			...options,
+			db,
+			results: [parent(id)],
+		})
+		expect(rows.map((row) => row.path).sort()).toEqual(expected)
+	})
+
+	it("keeps timestamp precedence and two neighbors per side across a tie", async () => {
+		const { db } = createMockDb([
+			event("a", -2000),
+			event("b", -1000),
+			event("e"),
+			event("d"),
+			event("c"),
+			event("f", 1000),
+		])
+		const rows = await expandSearchContext({
+			...options,
+			db,
+			results: [parent("d")],
+			windowSize: 2,
+		})
+		expect(rows.map((row) => row.path).sort()).toEqual([
+			"events/b",
+			"events/c",
+			"events/d",
+			"events/e",
+			"events/f",
+		])
+	})
+
+	it("orders Unicode IDs by code units instead of locale", async () => {
+		const { db } = createMockDb([event("😀"), event("é"), event("Z")])
+		const rows = await expandSearchContext({
+			...options,
+			db,
+			results: [parent("é")],
+		})
+		expect(rows.map((row) => row.path).sort()).toEqual([
+			"events/Z",
+			"events/é",
+			"events/😀",
+		])
+	})
+
+	it("keeps strict timestamp fallback when the fetched rows omit the parent", async () => {
+		const { db } = createMockDb([
+			event("a", -1000),
+			event("c"),
+			event("d", 1000),
+		])
+		const rows = await expandSearchContext({
+			...options,
+			db,
+			results: [parent("b")],
+		})
+		expect(rows.map((row) => row.path).sort()).toEqual([
+			"events/a",
+			"events/b",
+			"events/d",
+		])
+	})
+
+	it("deduplicates an existing tied peer and preserves the output cap", async () => {
+		const { db } = createMockDb([event("c"), event("b"), event("a")])
+		const rows = await expandSearchContext({
+			...options,
+			db,
+			results: [parent("b"), parent("a")],
+			maxResults: 2,
+		})
+		expect(rows.map((row) => row.path).sort()).toEqual(["events/a", "events/b"])
+	})
+
+	it("chooses the same bounded tied peers from different query tie orders", async () => {
+		for (const ids of [
+			["d", "b", "a", "c"],
+			["c", "a", "b", "d"],
+		]) {
+			const { db } = createMockDb(ids.map((id) => event(id)))
+			const rows = await expandSearchContext({
+				...options,
+				db,
+				results: [parent("c")],
+			})
+			expect(rows.map((row) => row.path).sort()).toEqual([
+				"events/b",
+				"events/c",
+				"events/d",
+			])
+		}
+	})
+})

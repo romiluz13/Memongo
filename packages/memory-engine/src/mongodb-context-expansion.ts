@@ -156,22 +156,43 @@ export async function expandSearchContext(params: {
 		}
 
 		const sessionNeighbors: MemorySearchResult[] = []
+		sessionEvents = sessionEvents.filter(
+			(event) => event.timestamp instanceof Date,
+		)
+		// ID ties make turns available deterministically, not chronologically.
+		sessionEvents.sort((a, b) => {
+			const timeDifference = a.timestamp.getTime() - b.timestamp.getTime()
+			if (timeDifference !== 0) return timeDifference
+			return a.eventId < b.eventId ? -1 : a.eventId > b.eventId ? 1 : 0
+		})
 
 		// For each expandable result, find its N-1 and N+1 neighbors
 		for (const item of items) {
 			const parentTimestamp = item.timestamp.getTime()
 			const parentScore = item.result.score
+			const parentIndex = sessionEvents.findIndex(
+				(event) => `events/${event.eventId}` === item.result.path,
+			)
 
 			// Find events immediately before and after this one
 			const before: typeof sessionEvents = []
 			const after: typeof sessionEvents = []
 
-			for (const event of sessionEvents) {
-				if (!event.timestamp || !(event.timestamp instanceof Date)) continue
+			for (const [index, event] of sessionEvents.entries()) {
 				const eventTs = event.timestamp.getTime()
-				if (eventTs < parentTimestamp) {
+				if (
+					eventTs < parentTimestamp ||
+					(eventTs === parentTimestamp &&
+						parentIndex >= 0 &&
+						index < parentIndex)
+				) {
 					before.push(event)
-				} else if (eventTs > parentTimestamp) {
+				} else if (
+					eventTs > parentTimestamp ||
+					(eventTs === parentTimestamp &&
+						parentIndex >= 0 &&
+						index > parentIndex)
+				) {
 					after.push(event)
 				}
 			}
