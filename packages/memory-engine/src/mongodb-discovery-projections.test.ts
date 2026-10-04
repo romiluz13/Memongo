@@ -60,6 +60,185 @@ describe("mongodb-discovery-projections", () => {
 		vi.clearAllMocks()
 	})
 
+	describe("named contradiction relations", () => {
+		beforeEach(() => {
+			vi.mocked(structuredMemCollection).mockReturnValue(
+				createMockFindCollection([]),
+			)
+			vi.mocked(proceduresCollection).mockReturnValue(
+				createMockFindCollection([]),
+			)
+			vi.mocked(eventsCollection).mockReturnValue(createMockFindCollection([]))
+		})
+
+		const relation = {
+			fromEntityId: "2b7384062b18357c",
+			toEntityId: "4613b2d4dfe716c1",
+			type: "depends_on",
+			scope: SCOPE,
+			scopeRef: SCOPE_REF,
+			state: "conflicted",
+			updatedAt: new Date("2026-10-04T12:00:00Z"),
+		}
+
+		function relationCollection(docs: Document[]) {
+			const aggregate = vi.fn().mockReturnValue({
+				toArray: vi.fn().mockResolvedValue(docs),
+			})
+			const collection = { ...createMockFindCollection([]), aggregate }
+			vi.mocked(relationsCollection).mockReturnValue(
+				collection as unknown as Collection,
+			)
+			return { aggregate, collection }
+		}
+
+		it.each([
+			"Apollo",
+			"Glory",
+			"Selene",
+		])("returns matching relation evidence for endpoint name or alias %s", async (query) => {
+			relationCollection([relation])
+			const result = await buildDiscoveryProjection({
+				...defaultParams(),
+				kind: "contradiction-report",
+				query,
+			})
+			expect(result.sections[0]?.evidence[0]?.canonicalId).toBe(
+				`relation:${relation.fromEntityId}:depends_on:${relation.toEntityId}`,
+			)
+			expect(result.metadata.partial).toBe(false)
+		})
+
+		it("scopes both endpoint lookups and filters relevance before the result limit", async () => {
+			const { aggregate } = relationCollection([relation])
+			await buildDiscoveryProjection({
+				...defaultParams(),
+				kind: "contradiction-report",
+				query: "Apollo",
+				maxItems: 4,
+			})
+			expect(aggregate).toHaveBeenCalledOnce()
+			const pipeline = aggregate.mock.calls[0]?.[0] as Document[]
+			expect(pipeline[0]?.$match).toEqual({
+				agentId: AGENT_ID,
+				scope: SCOPE,
+				scopeRef: SCOPE_REF,
+				state: { $in: ["conflicted", "invalidated"] },
+			})
+			for (const [index, field] of ["fromEntityId", "toEntityId"].entries()) {
+				const lookup = pipeline[index + 1]?.$lookup
+				expect(lookup).toMatchObject({
+					from: `${PREFIX}entities`,
+					localField: field,
+					foreignField: "entityId",
+					pipeline: [
+						{
+							$match: {
+								agentId: AGENT_ID,
+								scope: SCOPE,
+								scopeRef: SCOPE_REF,
+								$or: [{ name: /Apollo/i }, { aliases: /Apollo/i }],
+							},
+						},
+						{ $limit: 1 },
+						{ $project: { _id: 0, entityId: 1 } },
+					],
+				})
+			}
+			expect(pipeline[3]?.$match).toEqual({
+				$or: [
+					{ "matched_fromEntityId.0": { $exists: true } },
+					{ "matched_toEntityId.0": { $exists: true } },
+					{ type: /Apollo/i },
+				],
+			})
+			expect(pipeline[4]).toEqual({ $sort: { updatedAt: -1 } })
+			expect(pipeline[5]).toEqual({ $limit: 4 })
+			expect(pipeline[6]).toEqual({
+				$project: {
+					matched_fromEntityId: 0,
+					matched_toEntityId: 0,
+				},
+			})
+		})
+
+		it.each([
+			undefined,
+			"   ",
+		])("retains the original cursor when query is %s", async (query) => {
+			const collection = createMockFindCollection([relation])
+			const aggregate = vi.fn()
+			vi.mocked(relationsCollection).mockReturnValue({
+				...collection,
+				aggregate,
+			} as unknown as Collection)
+			const result = await buildDiscoveryProjection({
+				...defaultParams(),
+				kind: "contradiction-report",
+				query,
+				maxItems: 4,
+			})
+			expect(aggregate).not.toHaveBeenCalled()
+			expect(collection.find).toHaveBeenCalledWith({
+				agentId: AGENT_ID,
+				scope: SCOPE,
+				scopeRef: SCOPE_REF,
+				state: { $in: ["conflicted", "invalidated"] },
+			})
+			expect(result.sections[0]?.evidence[0]?.canonicalId).toContain(
+				relation.fromEntityId,
+			)
+		})
+
+		it("preserves literal query escaping and empty matches", async () => {
+			const { aggregate } = relationCollection([])
+			const result = await buildDiscoveryProjection({
+				...defaultParams(),
+				kind: "contradiction-report",
+				query: "A.p",
+			})
+			expect(aggregate).toHaveBeenCalledOnce()
+			const pipeline = aggregate.mock.calls[0]?.[0] as Document[]
+			expect(pipeline[1]?.$lookup.pipeline[0].$match.$or[0].name).toEqual(
+				/A\.p/i,
+			)
+			expect(result.sections).toEqual([])
+			expect(result.metadata.partial).toBe(false)
+		})
+
+		it("discloses aggregate failure while retaining other contradiction evidence", async () => {
+			const aggregate = vi.fn().mockReturnValue({
+				toArray: vi
+					.fn()
+					.mockRejectedValue(new Error("synthetic aggregation unavailable")),
+			})
+			vi.mocked(relationsCollection).mockReturnValue({
+				...createMockFindCollection([]),
+				aggregate,
+			} as unknown as Collection)
+			vi.mocked(structuredMemCollection).mockReturnValue(
+				createMockFindCollection([
+					{
+						type: "fact",
+						key: "Apollo",
+						value: "synthetic conflict",
+						state: "conflicted",
+						updatedAt: new Date(),
+						scope: SCOPE,
+						scopeRef: SCOPE_REF,
+					},
+				]),
+			)
+			const result = await buildDiscoveryProjection({
+				...defaultParams(),
+				kind: "contradiction-report",
+				query: "Apollo",
+			})
+			expect(result.metadata.partial).toBe(true)
+			expect(result.sections[0]?.title).toBe("Structured contradictions")
+		})
+	})
+
 	describe("named what-changed relations", () => {
 		beforeEach(() => {
 			vi.mocked(structuredMemRevisionsCollection).mockReturnValue(

@@ -1028,24 +1028,54 @@ async function buildContradictionReport(params: {
 	)
 	const relations = await settled(
 		"contradiction.relations",
-		() =>
-			relationsCollection(db, prefix)
+		() => {
+			const collection = relationsCollection(db, prefix)
+			if (regex) {
+				return collection
+					.aggregate([
+						{ $match: { ...scopeFilter, state: stateFilter } },
+						...["fromEntityId", "toEntityId"].map((field) => ({
+							$lookup: {
+								from: `${prefix}entities`,
+								localField: field,
+								foreignField: "entityId",
+								pipeline: [
+									{
+										$match: {
+											...scopeFilter,
+											$or: [{ name: regex }, { aliases: regex }],
+										},
+									},
+									{ $limit: 1 },
+									{ $project: { _id: 0, entityId: 1 } },
+								],
+								as: `matched_${field}`,
+							},
+						})),
+						{
+							$match: {
+								$or: [
+									{ "matched_fromEntityId.0": { $exists: true } },
+									{ "matched_toEntityId.0": { $exists: true } },
+									{ type: regex },
+								],
+							},
+						},
+						{ $sort: { updatedAt: -1 } },
+						{ $limit: maxItems },
+						{ $project: { matched_fromEntityId: 0, matched_toEntityId: 0 } },
+					])
+					.toArray()
+			}
+			return collection
 				.find({
 					...scopeFilter,
 					state: stateFilter,
-					...(regex
-						? {
-								$or: [
-									{ fromEntityId: regex },
-									{ toEntityId: regex },
-									{ type: regex },
-								],
-							}
-						: {}),
 				})
 				.sort({ updatedAt: -1 })
 				.limit(maxItems)
-				.toArray(),
+				.toArray()
+		},
 		query,
 	)
 
