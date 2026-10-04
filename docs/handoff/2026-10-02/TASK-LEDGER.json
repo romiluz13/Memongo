@@ -1308,7 +1308,7 @@
 			"id": "R01",
 			"phase": "1",
 			"title": "Repair wake-up and context evidence delivery",
-			"remaining": "Zero-limit profile wake-up clause has supported local native proof and a reviewed minimal fix. Other exact-anchor/salience/evidence delivery and allocation clauses remain open; no whole-parent certification.",
+			"remaining": "Zero-limit profile and older-critical wake-up clauses have supported local native proof and reviewed minimal fixes. Exact-anchor/evidence delivery and allocation clauses remain open; no whole-parent certification.",
 			"acceptanceCriteria": [
 				"Default wake-up profile succeeds on real Mongo",
 				"Critical older item survives newer high-salience fillers",
@@ -2453,7 +2453,7 @@
 			"id": "R01a",
 			"phase": "1",
 			"title": "Repair wake-up zero limits and evidence anchors independently of broad identity redesign",
-			"remaining": "Exact-zero entity/episode query skip and healthy wake-up clause proved on real Mongo. Anchor controls and older-highest-salience clauses remain open; no whole-parent closure.",
+			"remaining": "Exact-zero query skip, healthy wake-up and older-highest-salience bounded/indexed-sort clauses proved on real Mongo. Anchor controls remain open; no whole-parent closure.",
 			"acceptanceCriteria": [
 				"maxEntities0/maxEpisodes0 issue no$limit0 and return empty sections; positive-limit control works; bundlepartialfalse when all othersections healthy",
 				"Anchor/truncated/source control exercises exactR001/F201/F162 branches",
@@ -2853,5 +2853,27 @@
 			"verified_failed": 0,
 			"superseded_proposal_not_approved": 0
 		}
+	},
+	"smallMilestoneFollowUp": {
+		"status": "bounded_local_evidence",
+		"sourceRevision": "b6c96dfe306f0c7df8d21765be1c06d352e0c05f",
+		"selectedTasks": 1,
+		"preparedTasks": 1,
+		"mainDelivery": "not_asserted_by_local_validation",
+		"sourcePaths": 3,
+		"criterionDenominator": 418,
+		"verifiedCriteria": 19,
+		"verifiedLowerBoundPercent": 4.55,
+		"classificationCounts": {
+			"verified_satisfied": 19,
+			"verified_failed": 0,
+			"partial": 31,
+			"unverified": 346,
+			"policy_held": 22,
+			"superseded_proposal_not_approved": 0
+		},
+		"changedMappings": ["R01:C02", "R01a:C03"],
+		"formalParentClosures": 0,
+		"limits": "One repair, two overlapping scoped evidence joins. Original58parent rows/all418criteria/status/closure and six/all18 gates unchanged. No quality/production/publication or automatic issue implementation claim."
 	}
 }
