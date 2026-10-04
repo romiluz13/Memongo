@@ -52,9 +52,103 @@ function defaultParams() {
 	}
 }
 
+function createSortedFindCollection(docs: Document[]): Collection {
+	let selected = docs
+	const cursor = {
+		sort: vi.fn((sort: Record<string, 1 | -1>) => {
+			selected = [...docs].toSorted((left, right) => {
+				for (const [key, direction] of Object.entries(sort)) {
+					const a = left[key] instanceof Date ? left[key].getTime() : left[key]
+					const b =
+						right[key] instanceof Date ? right[key].getTime() : right[key]
+					if (a !== b) return (a < b ? -1 : 1) * direction
+				}
+				return 0
+			})
+			return cursor
+		}),
+		limit: vi.fn((limit: number) => {
+			selected = selected.slice(0, limit)
+			return cursor
+		}),
+		project: vi.fn(() => cursor),
+		toArray: vi.fn(async () => selected),
+	}
+	return { find: vi.fn(() => cursor) } as unknown as Collection
+}
+
 describe("mongodb-active-slate", () => {
 	beforeEach(() => {
 		vi.clearAllMocks()
+	})
+
+	it("retains an older critical item beyond six newer high items", async () => {
+		const now = Date.now()
+		const rows = Array.from({ length: 8 }, (_, index) => ({
+			type: "todo",
+			key: `high-${index}`,
+			value: `High ${index}`,
+			salience: "high",
+			updatedAt: new Date(now - index * 1000),
+		}))
+		vi.mocked(structuredMemCollection)
+			.mockReturnValueOnce(
+				createSortedFindCollection([
+					...rows,
+					{
+						type: "todo",
+						key: "old-blocker",
+						value: "Critical",
+						salience: "critical",
+						updatedAt: new Date(now - 100_000),
+					},
+				]),
+			)
+			.mockReturnValueOnce(createMockFindCollection([]))
+		vi.mocked(proceduresCollection).mockReturnValue(
+			createMockFindCollection([]),
+		)
+		vi.mocked(eventsCollection).mockReturnValue(createMockFindCollection([]))
+
+		const slate = await hydrateActiveSlate(defaultParams())
+		expect(slate.items.map((item) => item.title)).toEqual([
+			"old-blocker",
+			"high-0",
+			"high-1",
+			"high-2",
+			"high-3",
+		])
+	})
+
+	it.each([
+		"critical",
+		"high",
+	])("preserves newest-first bounded selection within %s salience", async (salience) => {
+		const now = Date.now()
+		const rows = Array.from({ length: 8 }, (_, index) => ({
+			type: "todo",
+			key: `item-${index}`,
+			value: `Item ${index}`,
+			salience,
+			updatedAt: new Date(now - index * 1000),
+		})).reverse()
+		vi.mocked(structuredMemCollection)
+			.mockReturnValueOnce(createSortedFindCollection(rows))
+			.mockReturnValueOnce(createMockFindCollection([]))
+		vi.mocked(proceduresCollection).mockReturnValue(
+			createMockFindCollection([]),
+		)
+		vi.mocked(eventsCollection).mockReturnValue(createMockFindCollection([]))
+
+		const slate = await hydrateActiveSlate({ ...defaultParams(), maxItems: 6 })
+		expect(slate.items.map((item) => item.title)).toEqual([
+			"item-0",
+			"item-1",
+			"item-2",
+			"item-3",
+			"item-4",
+			"item-5",
+		])
 	})
 
 	it("hydrates a tiny prioritized slate from active memory, procedures, and recent anchors", async () => {

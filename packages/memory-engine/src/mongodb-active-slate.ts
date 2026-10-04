@@ -297,7 +297,7 @@ export async function hydrateActiveSlate(params: {
 							},
 							...structuredLifecycleFilter,
 						})
-						.sort({ updatedAt: -1 })
+						.sort({ salience: 1, updatedAt: -1 })
 						.limit(sourceLimit)
 						.project({
 							type: 1,
