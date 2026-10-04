@@ -1468,7 +1468,7 @@
 			"id": "R04",
 			"phase": "2",
 			"title": "Correct graph and temporal neighbor selection",
-			"remaining": "Later-phase work is deferred and not certified complete; dependency/policy/experiment gates remain. October4 bounded same-time repair: local timestamp/eventId ordering retains neighbors when the parent is among the fetched100; observed101-row parent-absent residual prevents whole-clause credit. R04:C02 partial only; late-hit/truncation/balanced allocation and all other clauses remain open. October4 graph-depth repair retains minimum observed relation depth and direct-zero precedence; unchanged root-seed truncation still permits a direct edge seen only transitively at depth2. R04:C01 partial only; frontier/relevance/global shortest-path and all other clauses remain open. October4 named what-changed relation repair joins owned current endpoint names/aliases before unchanged result cap and removes opaque-ID relevance; R04:C06 partial only. Contradiction-report, historical names and latency/index claims remain open.",
+			"remaining": "Later-phase work is deferred and not certified complete; dependency/policy/experiment gates remain. October4 bounded same-time repair: local timestamp/eventId ordering retains neighbors when the parent is among the fetched100; observed101-row parent-absent residual prevents whole-clause credit. R04:C02 partial only; late-hit/truncation/balanced allocation and all other clauses remain open. October4 graph-depth repair retains minimum observed relation depth and direct-zero precedence; unchanged root-seed truncation still permits a direct edge seen only transitively at depth2. R04:C01 partial only; frontier/relevance/global shortest-path and all other clauses remain open. October4 named what-changed relation repair joins owned current endpoint names/aliases before unchanged result cap and removes opaque-ID relevance; That earlier stage was partial. October4 contradiction-report now uses the same owned current endpoint name/alias relevance before cap; canonical12/12 and focused113/113 pass. Historical names and latency/index claims remain open; Exact R04:C06 named-query clause has bounded full evidence; historical/performance and all other parent clauses stay open, no parent closure.",
 			"acceptanceCriteria": [
 				"Cycle cannot relabel direct edge depth2",
 				"Same-time adjacent turns remain available",
@@ -2941,5 +2941,20 @@
 		"formalParentClosures": 0,
 		"mainDelivery": "not_asserted_by_local_validation",
 		"limits": "Minimum observed graph depth/root-seed residual; named change relation lane only/contradiction and historical names remain. Original58/418/six18 preserved."
+	},
+	"fasterPlan1740FollowUp": {
+		"sourceRevision": "b93553849dd898d3b2030e5450bce789cc1b69fb",
+		"criterion": "R04:C06",
+		"classification": "verified_satisfied",
+		"native": 12,
+		"focusedUnit": 113,
+		"finalUnitPassed": 5943,
+		"unchangedSkips": 4,
+		"failures": 0,
+		"verifiedLowerBound": "20/418=4.78%",
+		"wholeTechnicalGates": "1/6=16.67%",
+		"parentClosures": 0,
+		"sharedReviewAndMainDelivery": "separate_evidence",
+		"report": "REVIEW-REPORT.md#named-contradiction-relationships-october-4-2026"
 	}
 }
