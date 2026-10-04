@@ -1468,7 +1468,7 @@
 			"id": "R04",
 			"phase": "2",
 			"title": "Correct graph and temporal neighbor selection",
-			"remaining": "Later-phase work is deferred and not certified complete; dependency/policy/experiment gates remain.",
+			"remaining": "Later-phase work is deferred and not certified complete; dependency/policy/experiment gates remain. October4 bounded same-time repair: local timestamp/eventId ordering retains neighbors when the parent is among the fetched100; observed101-row parent-absent residual prevents whole-clause credit. R04:C02 partial only; late-hit/truncation/balanced allocation and all other clauses remain open.",
 			"acceptanceCriteria": [
 				"Cycle cannot relabel direct edge depth2",
 				"Same-time adjacent turns remain available",
@@ -2875,5 +2875,26 @@
 		"changedMappings": ["R01:C02", "R01a:C03"],
 		"formalParentClosures": 0,
 		"limits": "One repair, two overlapping scoped evidence joins. Original58parent rows/all418criteria/status/closure and six/all18 gates unchanged. No quality/production/publication or automatic issue implementation claim."
+	},
+	"continueThreeHours1316FollowUp": {
+		"status": "bounded_local_evidence",
+		"sourceRevision": "5c2f197e31dd4df99bab35d29e7d177c4753a5e4",
+		"selectedTasks": 1,
+		"preparedTasks": 1,
+		"sourcePaths": 2,
+		"criterionDenominator": 418,
+		"verifiedCriteria": 19,
+		"verifiedLowerBoundPercent": 4.55,
+		"classificationCounts": {
+			"verified_satisfied": 19,
+			"verified_failed": 0,
+			"partial": 32,
+			"unverified": 345,
+			"policy_held": 22
+		},
+		"changedMappings": ["R04:C02_unverified_to_partial"],
+		"formalParentClosures": 0,
+		"mainDelivery": "not_asserted_by_local_validation",
+		"limits": "No whole-clause numerator or benchmark-gate rise; all original58/418 criteria/status/closure and6/all18 gates preserved."
 	}
 }
