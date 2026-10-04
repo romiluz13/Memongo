@@ -1468,7 +1468,7 @@
 			"id": "R04",
 			"phase": "2",
 			"title": "Correct graph and temporal neighbor selection",
-			"remaining": "Later-phase work is deferred and not certified complete; dependency/policy/experiment gates remain. October4 bounded same-time repair: local timestamp/eventId ordering retains neighbors when the parent is among the fetched100; observed101-row parent-absent residual prevents whole-clause credit. R04:C02 partial only; late-hit/truncation/balanced allocation and all other clauses remain open.",
+			"remaining": "Later-phase work is deferred and not certified complete; dependency/policy/experiment gates remain. October4 bounded same-time repair: local timestamp/eventId ordering retains neighbors when the parent is among the fetched100; observed101-row parent-absent residual prevents whole-clause credit. R04:C02 partial only; late-hit/truncation/balanced allocation and all other clauses remain open. October4 graph-depth repair retains minimum observed relation depth and direct-zero precedence; unchanged root-seed truncation still permits a direct edge seen only transitively at depth2. R04:C01 partial only; frontier/relevance/global shortest-path and all other clauses remain open. October4 named what-changed relation repair joins owned current endpoint names/aliases before unchanged result cap and removes opaque-ID relevance; R04:C06 partial only. Contradiction-report, historical names and latency/index claims remain open.",
 			"acceptanceCriteria": [
 				"Cycle cannot relabel direct edge depth2",
 				"Same-time adjacent turns remain available",
@@ -2896,5 +2896,50 @@
 		"formalParentClosures": 0,
 		"mainDelivery": "not_asserted_by_local_validation",
 		"limits": "No whole-clause numerator or benchmark-gate rise; all original58/418 criteria/status/closure and6/all18 gates preserved."
+	},
+	"continueThreeHours1510GraphFollowUp": {
+		"status": "bounded_local_evidence",
+		"sourceRevision": "5a8334207600895623bb8826806d8e467f977961",
+		"selectedTasks": 1,
+		"preparedTasks": 1,
+		"sourcePaths": 2,
+		"criterionDenominator": 418,
+		"verifiedCriteria": 19,
+		"verifiedLowerBoundPercent": 4.55,
+		"classificationCounts": {
+			"verified_satisfied": 19,
+			"verified_failed": 0,
+			"partial": 33,
+			"unverified": 344,
+			"policy_held": 22
+		},
+		"changedMappings": ["R04:C01_unverified_to_partial"],
+		"formalParentClosures": 0,
+		"mainDelivery": "not_asserted_by_local_validation",
+		"limits": "Minimum observed depth only; unchanged seed-limit residual. Original58/418 and six/all18 gates preserved."
+	},
+	"continueThreeHours1510FollowUp": {
+		"status": "bounded_local_evidence",
+		"sourceRevision": "df230e80914965e0e9d93964f6b78bd5a42c285b",
+		"selectedTasks": 2,
+		"preparedTasks": 2,
+		"sourcePaths": 4,
+		"criterionDenominator": 418,
+		"verifiedCriteria": 19,
+		"verifiedLowerBoundPercent": 4.55,
+		"classificationCounts": {
+			"verified_satisfied": 19,
+			"verified_failed": 0,
+			"partial": 34,
+			"unverified": 343,
+			"policy_held": 22
+		},
+		"changedMappings": [
+			"R04:C01_unverified_to_partial",
+			"R04:C06_unverified_to_partial"
+		],
+		"formalParentClosures": 0,
+		"mainDelivery": "not_asserted_by_local_validation",
+		"limits": "Minimum observed graph depth/root-seed residual; named change relation lane only/contradiction and historical names remain. Original58/418/six18 preserved."
 	}
 }
