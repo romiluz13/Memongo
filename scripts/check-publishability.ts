@@ -857,7 +857,7 @@ function checkPublishWorkflow() {
 	}
 }
 
-function installSmoke(
+export function installSmoke(
 	targetPackage: PublishablePackage,
 	tarballsByName: Map<string, string>,
 ) {
@@ -944,6 +944,65 @@ function installSmoke(
 				stdio: "pipe",
 			},
 		)
+
+		if (targetPackage.name === "@memongo/mcp") {
+			const installedPackage = readJson(
+				path.join(
+					installDir,
+					"node_modules",
+					targetPackage.name,
+					"package.json",
+				),
+			)
+			const output = execFileSync(
+				path.join(installDir, "node_modules", ".bin", "memongo-mcp"),
+				{
+					cwd: installDir,
+					encoding: "utf8",
+					input: `${JSON.stringify({
+						jsonrpc: "2.0",
+						id: 1,
+						method: "initialize",
+						params: {
+							protocolVersion: "2024-11-05",
+							capabilities: {},
+							clientInfo: { name: "memongo-pack-smoke", version: "1.0.0" },
+						},
+					})}\n`,
+					env: { ...process.env, MEMONGO_MCP_TRANSPORT: "stdio" },
+					timeout: 10_000,
+					killSignal: "SIGKILL",
+					maxBuffer: 1024 * 1024,
+				},
+			)
+			let responses: {
+				jsonrpc?: unknown
+				id?: unknown
+				error?: unknown
+				result?: { serverInfo?: { version?: unknown } }
+			}[]
+			try {
+				responses = output
+					.trim()
+					.split(/\r?\n/)
+					.filter(Boolean)
+					.map((line) => JSON.parse(line))
+			} catch {
+				throw new Error(
+					"installed MCP bin returned an invalid initialize response",
+				)
+			}
+			const initialized = responses.find((response) => response?.id === 1)
+			if (
+				initialized?.jsonrpc !== "2.0" ||
+				initialized.error !== undefined ||
+				initialized.result?.serverInfo?.version !== installedPackage.version
+			) {
+				throw new Error(
+					"installed MCP bin did not initialize at its package version",
+				)
+			}
+		}
 	} finally {
 		fs.rmSync(installDir, { recursive: true, force: true })
 	}

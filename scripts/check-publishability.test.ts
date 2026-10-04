@@ -8,6 +8,7 @@ import {
 	assertAlignedInternalDependencies,
 	findForbiddenPackageArtifact,
 	findMissingLegalFile,
+	installSmoke,
 } from "./check-publishability.js"
 
 describe("publishability release policy", () => {
@@ -176,4 +177,99 @@ describe("publishability CLI modes", () => {
 		expect(publish).toContain("run: bun run check-publishability\n")
 		expect(publish).not.toContain("--artifacts-only")
 	})
+})
+
+describe("installed MCP executable startup", () => {
+	it.each([
+		{
+			name: "healthy",
+			rejects: false,
+			body: `import readline from "node:readline";
+const input = readline.createInterface({ input: process.stdin });
+input.on("line", line => { const request = JSON.parse(line); if (process.env.MEMONGO_MCP_TRANSPORT !== "stdio") process.exit(74); console.log(JSON.stringify({ jsonrpc: "2.0", id: request.id, result: { protocolVersion: request.params.protocolVersion, capabilities: {}, serverInfo: { name: "fixture", version: "1.2.3" } } })); });`,
+		},
+		{ name: "nonzero exit", rejects: true, body: "process.exit(73);" },
+		{ name: "silent success", rejects: true, body: "process.exit(0);" },
+		{
+			name: "wrong version",
+			rejects: true,
+			body: 'console.log(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { serverInfo: { version: "0.0.0" } } }));',
+		},
+		{
+			name: "protocol error",
+			rejects: true,
+			body: 'console.log(JSON.stringify({ jsonrpc: "2.0", id: 1, error: { code: -32600, message: "fixture" } }));',
+		},
+		{
+			name: "malformed response",
+			rejects: true,
+			body: 'console.log("fixture malformed response");',
+		},
+		{
+			name: "hang ignores SIGTERM",
+			rejects: true,
+			body: 'process.on("SIGTERM", () => {}); setInterval(() => {}, 1000);',
+		},
+	])("$name", ({ body, rejects }) => {
+		const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "memongo-bin-test-"))
+		const originalEnv = { ...process.env }
+		try {
+			for (const key of Object.keys(process.env)) delete process.env[key]
+			Object.assign(process.env, {
+				PATH: `${path.dirname(process.execPath)}:/usr/bin:/bin`,
+				HOME: path.join(fixture, "home"),
+				npm_config_cache: path.join(fixture, "cache"),
+				npm_config_userconfig: path.join(fixture, "user.npmrc"),
+				npm_config_globalconfig: path.join(fixture, "global.npmrc"),
+				npm_config_offline: "true",
+				npm_config_audit: "false",
+				npm_config_fund: "false",
+				npm_config_update_notifier: "false",
+				MEMONGO_MCP_TRANSPORT: "http",
+			})
+			fs.mkdirSync(process.env.HOME ?? "", { recursive: true })
+			fs.writeFileSync(path.join(fixture, "user.npmrc"), "")
+			fs.writeFileSync(path.join(fixture, "global.npmrc"), "")
+			fs.writeFileSync(
+				path.join(fixture, "package.json"),
+				JSON.stringify({
+					name: "@memongo/mcp",
+					version: "1.2.3",
+					type: "module",
+					exports: "./index.js",
+					bin: { "memongo-mcp": "./cli.js" },
+					files: ["index.js", "cli.js"],
+				}),
+			)
+			fs.writeFileSync(
+				path.join(fixture, "index.js"),
+				"export const fixture = true;\n",
+			)
+			fs.writeFileSync(
+				path.join(fixture, "cli.js"),
+				`#!/usr/bin/env node\n${body}\n`,
+				{ mode: 0o755 },
+			)
+			const packed = JSON.parse(
+				execFileSync("npm", ["pack", "--json", "--ignore-scripts"], {
+					cwd: fixture,
+					encoding: "utf8",
+					timeout: 10_000,
+				}),
+			) as { filename: string }[]
+			const first = packed[0]
+			if (!first) throw new Error("fixture npm pack returned no package")
+			const run = () =>
+				installSmoke(
+					{ name: "@memongo/mcp", dir: "apps/mcp", supportedSurface: true },
+					new Map([["@memongo/mcp", path.join(fixture, first.filename)]]),
+				)
+			if (rejects) expect(run).toThrow()
+			else expect(run).not.toThrow()
+		} finally {
+			for (const key of Object.keys(process.env)) delete process.env[key]
+			Object.assign(process.env, originalEnv)
+			fs.rmSync(fixture, { recursive: true, force: true })
+		}
+	}, 25_000)
 })
