@@ -1062,7 +1062,8 @@ export async function expandGraph(params: {
 		function collectRelations(rels: Document[]): void {
 			for (const directRel of rels) {
 				const key = `${directRel.fromEntityId}:${directRel.toEntityId}:${directRel.type}`
-				if (!relationsByKey.has(key)) {
+				const existing = relationsByKey.get(key)
+				if (!existing || existing.depth > 0) {
 					relationsByKey.set(key, { relation: directRel, depth: 0 })
 				}
 				// Process transitive relations from $graphLookup
@@ -1070,7 +1071,8 @@ export async function expandGraph(params: {
 				for (const transRel of transitive) {
 					const tKey = `${transRel.fromEntityId}:${transRel.toEntityId}:${transRel.type}`
 					const depth = ((transRel.depth as number) ?? 0) + 1
-					if (!relationsByKey.has(tKey)) {
+					const existing = relationsByKey.get(tKey)
+					if (!existing || depth < existing.depth) {
 						relationsByKey.set(tKey, { relation: transRel, depth })
 					}
 				}

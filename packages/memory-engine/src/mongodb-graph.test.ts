@@ -726,6 +726,149 @@ describe("mongodb-graph", () => {
 	})
 
 	describe("expandGraph", () => {
+		describe("minimum observed relation depth", () => {
+			async function expandRows(rows: Document[][]) {
+				const entitiesCol = createMockCollection({
+					findOne: vi.fn().mockResolvedValue(makeEntity()),
+					find: vi.fn().mockReturnValue({
+						toArray: vi
+							.fn()
+							.mockResolvedValue([
+								makeEntity({ entityId: "ent-2" }),
+								makeEntity({ entityId: "ent-3" }),
+								makeEntity({ entityId: "ent-4" }),
+							]),
+					}),
+				})
+				const toArray = vi.fn()
+				for (const batch of rows) toArray.mockResolvedValueOnce(batch)
+				const db = createMockDb({
+					[`${PREFIX}entities`]: entitiesCol,
+					[`${PREFIX}relations`]: createMockCollection({
+						aggregate: vi.fn().mockReturnValue({ toArray }),
+					}),
+				})
+				return expandGraph({
+					db,
+					prefix: PREFIX,
+					entityId: "ent-1",
+					agentId: "agent-1",
+					maxDepth: 4,
+					bidirectional: rows.length === 2,
+				})
+			}
+
+			it.each([
+				false,
+				true,
+			])("keeps direct depth0 with cyclic row first=%s", async (cyclicFirst) => {
+				const direct = makeRelation({ toEntityId: "ent-3" })
+				const cyclic = {
+					...makeRelation(),
+					transitiveRelations: [{ ...direct, depth: 1 }],
+				}
+				const result = await expandRows([
+					cyclicFirst ? [cyclic, direct] : [direct, cyclic],
+				])
+				const edge = result?.connections.find(
+					(c) => c.relation.toEntityId === "ent-3",
+				)
+				expect(edge?.depth).toBe(0)
+				expect(edge?.relation).toBe(direct)
+			})
+
+			it.each([
+				false,
+				true,
+			])("keeps shallower transitive observation with deep row first=%s", async (deepFirst) => {
+				const edge = makeRelation({
+					fromEntityId: "ent-3",
+					toEntityId: "ent-4",
+				})
+				const deep = {
+					...makeRelation(),
+					transitiveRelations: [{ ...edge, depth: 2, weight: 9 }],
+				}
+				const shallow = {
+					...makeRelation({ toEntityId: "ent-3" }),
+					transitiveRelations: [{ ...edge, depth: 0, weight: 1 }],
+				}
+				const result = await expandRows([
+					deepFirst ? [deep, shallow] : [shallow, deep],
+				])
+				const connection = result?.connections.find(
+					(c) => c.relation.fromEntityId === "ent-3",
+				)
+				expect(connection?.depth).toBe(1)
+				expect(connection?.relation.weight).toBe(1)
+			})
+
+			it("restores reverse direct depth after a forward cyclic observation", async () => {
+				const incoming = makeRelation({
+					fromEntityId: "ent-3",
+					toEntityId: "ent-1",
+				})
+				const result = await expandRows([
+					[
+						{
+							...makeRelation(),
+							transitiveRelations: [{ ...incoming, depth: 1 }],
+						},
+					],
+					[incoming],
+				])
+				const edge = result?.connections.find(
+					(c) => c.relation.fromEntityId === "ent-3",
+				)
+				expect(edge?.depth).toBe(0)
+				expect(edge?.fromEntity?.entityId).toBe("ent-3")
+				expect(edge?.toEntity?.entityId).toBe("ent-1")
+			})
+
+			it("retains first metadata for equal transitive depths", async () => {
+				const first = {
+					...makeRelation({ fromEntityId: "ent-3", toEntityId: "ent-4" }),
+					depth: 0,
+					weight: 1,
+				}
+				const result = await expandRows([
+					[
+						{ ...makeRelation(), transitiveRelations: [first] },
+						{
+							...makeRelation({ toEntityId: "ent-3" }),
+							transitiveRelations: [{ ...first, weight: 9 }],
+						},
+					],
+				])
+				expect(
+					result?.connections.find((c) => c.relation.fromEntityId === "ent-3")
+						?.relation,
+				).toBe(first)
+			})
+
+			it("retains first metadata for repeated direct rows", async () => {
+				const first = makeRelation({ weight: 1 })
+				const result = await expandRows([[first, { ...first, weight: 9 }]])
+				expect(result?.connections).toHaveLength(1)
+				expect(result?.connections[0]?.relation).toBe(first)
+				expect(result?.connections[0]?.depth).toBe(0)
+			})
+
+			it("keeps direction and relation type in the deduplication key", async () => {
+				const outgoing = makeRelation()
+				const incoming = makeRelation({
+					fromEntityId: "ent-2",
+					toEntityId: "ent-1",
+				})
+				const result = await expandRows([
+					[outgoing, { ...outgoing, type: "depends_on" }],
+					[incoming],
+				])
+				expect(result?.connections).toHaveLength(3)
+				expect(result?.connections.every((c) => c.depth === 0)).toBe(true)
+			})
+		})
+
 		it("uses $graphLookup to find connected entities within maxDepth", async () => {
 			const rootEntity = makeEntity()
 			const connectedRelation = {
