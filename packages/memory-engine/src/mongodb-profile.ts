@@ -198,69 +198,73 @@ export async function synthesizeProfile(params: {
 				// 2. Top entities by relation count via two indexed $eq lookups (C2/M3 audit fix)
 				// Split $or in $expr into two separate $lookup stages so each can use its own index.
 				// $expr with $or cannot use indexes; $expr with $eq can.
-				entitiesCollection(db, prefix)
-					.aggregate([
-						{ $match: scopeFilter },
-						// Lookup 1: outgoing relations count (uses index on fromEntityId)
-						{
-							$lookup: {
-								from: `${prefix}relations`,
-								let: { eid: "$entityId" },
-								pipeline: [
-									{
-										$match: {
-											$expr: { $eq: ["$fromEntityId", "$$eid"] },
-											...scopeFilter,
-										},
+				maxEntities === 0
+					? Promise.resolve([])
+					: entitiesCollection(db, prefix)
+							.aggregate([
+								{ $match: scopeFilter },
+								// Lookup 1: outgoing relations count (uses index on fromEntityId)
+								{
+									$lookup: {
+										from: `${prefix}relations`,
+										let: { eid: "$entityId" },
+										pipeline: [
+											{
+												$match: {
+													$expr: { $eq: ["$fromEntityId", "$$eid"] },
+													...scopeFilter,
+												},
+											},
+											{ $count: "cnt" },
+										],
+										as: "outRels",
 									},
-									{ $count: "cnt" },
-								],
-								as: "outRels",
-							},
-						},
-						// Lookup 2: incoming relations count (uses index on toEntityId)
-						{
-							$lookup: {
-								from: `${prefix}relations`,
-								let: { eid: "$entityId" },
-								pipeline: [
-									{
-										$match: {
-											$expr: { $eq: ["$toEntityId", "$$eid"] },
-											...scopeFilter,
-										},
-									},
-									{ $count: "cnt" },
-								],
-								as: "inRels",
-							},
-						},
-						// Sum the two counts (no full relation docs in memory — only $count results)
-						{
-							$addFields: {
-								relationCount: {
-									$add: [
-										{ $ifNull: [{ $arrayElemAt: ["$outRels.cnt", 0] }, 0] },
-										{ $ifNull: [{ $arrayElemAt: ["$inRels.cnt", 0] }, 0] },
-									],
 								},
-							},
-						},
-						{ $sort: { relationCount: -1 } },
-						{ $limit: maxEntities },
-						{ $project: { name: 1, type: 1, relationCount: 1 } },
-					])
-					.toArray(),
+								// Lookup 2: incoming relations count (uses index on toEntityId)
+								{
+									$lookup: {
+										from: `${prefix}relations`,
+										let: { eid: "$entityId" },
+										pipeline: [
+											{
+												$match: {
+													$expr: { $eq: ["$toEntityId", "$$eid"] },
+													...scopeFilter,
+												},
+											},
+											{ $count: "cnt" },
+										],
+										as: "inRels",
+									},
+								},
+								// Sum the two counts (no full relation docs in memory — only $count results)
+								{
+									$addFields: {
+										relationCount: {
+											$add: [
+												{ $ifNull: [{ $arrayElemAt: ["$outRels.cnt", 0] }, 0] },
+												{ $ifNull: [{ $arrayElemAt: ["$inRels.cnt", 0] }, 0] },
+											],
+										},
+									},
+								},
+								{ $sort: { relationCount: -1 } },
+								{ $limit: maxEntities },
+								{ $project: { name: 1, type: 1, relationCount: 1 } },
+							])
+							.toArray(),
 
 				// 3. Recent episodes
-				episodesCollection(db, prefix)
-					.find({ ...scopeFilter, status: { $ne: "deleted" } })
-					// MongoDB FindCursor.sort — not Array#sort (unicorn false positive).
-					// oxlint-disable-next-line unicorn/no-array-sort
-					.sort({ "timeRange.start": -1 })
-					.limit(maxEpisodes)
-					.project({ title: 1, summary: 1, type: 1, timeRange: 1 })
-					.toArray(),
+				maxEpisodes === 0
+					? Promise.resolve([])
+					: episodesCollection(db, prefix)
+							.find({ ...scopeFilter, status: { $ne: "deleted" } })
+							// MongoDB FindCursor.sort — not Array#sort (unicorn false positive).
+							// oxlint-disable-next-line unicorn/no-array-sort
+							.sort({ "timeRange.start": -1 })
+							.limit(maxEpisodes)
+							.project({ title: 1, summary: 1, type: 1, timeRange: 1 })
+							.toArray(),
 
 				// 4. Activity patterns from events (last N days)
 				eventsCollection(db, prefix)

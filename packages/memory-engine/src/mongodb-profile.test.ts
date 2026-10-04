@@ -306,6 +306,46 @@ describe("mongodb-profile", () => {
 		expect(limitStage!.$limit).toBe(3)
 	})
 
+	it.each([
+		{ maxEntities: 0, maxEpisodes: 1 },
+		{ maxEntities: 1, maxEpisodes: 0 },
+		{ maxEntities: 0, maxEpisodes: 0 },
+	])("skips disabled profile queries for $maxEntities entities and $maxEpisodes episodes", async (limits) => {
+		setupEmptyMocks()
+		vi.mocked(entitiesCollection).mockReturnValue(
+			createMockAggregateCollection([
+				{ name: "Ada", type: "person", relationCount: 2 },
+			]),
+		)
+		vi.mocked(episodesCollection).mockReturnValue(
+			createMockFindCollection([
+				{
+					title: "Recap",
+					summary: "A recap",
+					type: "thread",
+					timeRange: { start: new Date(), end: new Date() },
+				},
+			]),
+		)
+
+		const profile = await synthesizeProfile({ ...defaultParams(), ...limits })
+
+		expect(profile.topEntities).toHaveLength(limits.maxEntities)
+		expect(profile.recentEpisodes).toHaveLength(limits.maxEpisodes)
+		if (limits.maxEntities === 0) {
+			expect(entitiesCollection).not.toHaveBeenCalled()
+		} else {
+			expect(entitiesCollection).toHaveBeenCalledOnce()
+		}
+		if (limits.maxEpisodes === 0) {
+			expect(episodesCollection).not.toHaveBeenCalled()
+		} else {
+			expect(episodesCollection).toHaveBeenCalledOnce()
+		}
+		expect(structuredMemCollection).toHaveBeenCalledOnce()
+		expect(eventsCollection).toHaveBeenCalledOnce()
+	})
+
 	// 8. Recent episodes sorted
 	it("synthesizeProfile returns recent episodes sorted by timeRange.start desc", async () => {
 		const now = new Date()

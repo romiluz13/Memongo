@@ -32,6 +32,7 @@ import { randomUUID } from "node:crypto"
 import { MongoClient, type Db, type Document } from "mongodb"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 import { synthesizeProfile } from "./mongodb-profile.js"
+import { buildContextBundle } from "./mongodb-context-bundle.js"
 import {
 	ensureCollections,
 	entitiesCollection,
@@ -59,6 +60,7 @@ const AGENT_ONE_OUTAGE = "agent-profile-one-source-outage"
 const AGENT_ALL_OUTAGE = "agent-profile-all-source-outage"
 const AGENT_EMPTY = "agent-profile-empty"
 const AGENT_ACTIVITY_TTL = "agent-profile-activity-ttl"
+const AGENT_WAKE_UP = "agent-profile-wake-up"
 
 const OUTAGE_LABEL = "INJECTED_SOURCE_OUTAGE"
 const HOUR = 60 * 60 * 1000
@@ -202,6 +204,16 @@ beforeAll(async () => {
 		}),
 	])
 
+	await structuredMemCollection(db, PREFIX).insertOne({
+		...scopeFields(AGENT_WAKE_UP),
+		key: "wake-up-fact",
+		type: "fact",
+		value: "Stored context",
+		salience: "normal",
+		state: "active",
+		updatedAt: new Date(),
+	})
+
 	// One entity with one outgoing and one incoming relation (relationCount 2).
 	await entitiesCollection(db, PREFIX).insertOne({
 		...scopeFields(AGENT_TEMPORAL),
@@ -342,6 +354,58 @@ describe("synthesizeProfile validity and availability (e2e)", () => {
 		expect(profile.activityPatterns.totalEvents).toBe(2)
 		expect(profile.activityPatterns.roleDistribution).toEqual({ user: 2 })
 		expect(profile.activityPatterns.lastActive).toBeInstanceOf(Date)
+	})
+
+	it.each([
+		{ maxEntities: 0, maxEpisodes: 1 },
+		{ maxEntities: 1, maxEpisodes: 0 },
+		{ maxEntities: 0, maxEpisodes: 0 },
+	])("returns empty disabled lanes with entity limit $maxEntities and episode limit $maxEpisodes", async (limits) => {
+		const profile = await synthesizeProfile({
+			db,
+			prefix: PREFIX,
+			agentId: AGENT_TEMPORAL,
+			scope: SCOPE,
+			scopeRef: `${AGENT_TEMPORAL}-ref`,
+			...limits,
+		})
+
+		expect(profile.topEntities).toHaveLength(limits.maxEntities)
+		expect(profile.recentEpisodes).toHaveLength(limits.maxEpisodes)
+		expect(profile.facts.map((fact) => fact.key)).toEqual(["fact-current"])
+		expect(profile.activityPatterns.totalEvents).toBe(2)
+	})
+
+	it("keeps the real profile lane healthy in a wake-up bundle", async () => {
+		const filledBundle = await buildContextBundle({
+			db,
+			prefix: PREFIX,
+			agentId: AGENT_TEMPORAL,
+			scope: SCOPE,
+			scopeRef: `${AGENT_TEMPORAL}-ref`,
+			request: { mode: "wake-up" },
+		})
+		expect(filledBundle.metadata.partial).toBe(false)
+		expect(filledBundle.metadata.pathsExecuted).toContain("profile")
+
+		const bundle = await buildContextBundle({
+			db,
+			prefix: PREFIX,
+			agentId: AGENT_WAKE_UP,
+			scope: SCOPE,
+			scopeRef: `${AGENT_WAKE_UP}-ref`,
+			request: { mode: "wake-up" },
+		})
+
+		expect(bundle.metadata.partial).toBe(false)
+		expect(bundle.metadata.pathsExecuted).toContain("profile")
+		expect(
+			bundle.sections.find((section) => section.kind === "profile")?.items,
+		).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ title: "Fact: wake-up-fact" }),
+			]),
+		)
 	})
 
 	it("excludes TTL-expired events from activity while they await the sweep", async () => {
