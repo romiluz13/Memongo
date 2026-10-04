@@ -20,7 +20,11 @@
 // stay out of that index and persist as the audit trail.
 import type { ClientSession, Db } from "mongodb"
 import { randomUUID } from "node:crypto"
-import { createSubsystemLogger, type MemoryScope } from "@memongo/lib"
+import {
+	createSubsystemLogger,
+	redactSensitiveText,
+	type MemoryScope,
+} from "@memongo/lib"
 import { matchPatterns } from "./mongodb-consolidator.js"
 import { recordMutation } from "./mongodb-mutations.js"
 import {
@@ -473,7 +477,9 @@ export async function promoteQuarantined(params: {
 		}
 	} catch (err) {
 		if (admission && isErasureGateConflictError(err)) throw err
-		finalizeError = err instanceof Error ? err.message : String(err)
+		finalizeError = redactSensitiveText(
+			err instanceof Error ? err.message : String(err),
+		)
 		log.warn(
 			`promote finalize failed for quarantine=${quarantineId} (row left recoverable in promoting): ${finalizeError}`,
 		)
@@ -536,9 +542,11 @@ export async function promoteQuarantined(params: {
 		if (admission && isErasureGateConflictError(err)) throw err
 		// The decision is durable on the row; the ledger copy failed. Surface
 		// the gap on the receipt instead of swallowing it.
-		receipt.auditError = err instanceof Error ? err.message : String(err)
+		receipt.auditError = redactSensitiveText(
+			err instanceof Error ? err.message : String(err),
+		)
 		log.warn(
-			`promote audit record failed for quarantine=${quarantineId}: ${err instanceof Error ? err.message : String(err)}`,
+			`promote audit record failed for quarantine=${quarantineId}: ${receipt.auditError}`,
 		)
 	}
 
@@ -694,9 +702,11 @@ export async function rejectQuarantined(params: {
 		if (admission && isErasureGateConflictError(err)) throw err
 		// The decision is durable on the row; the ledger copy failed. Surface
 		// the gap on the receipt instead of swallowing it.
-		receipt.auditError = err instanceof Error ? err.message : String(err)
+		receipt.auditError = redactSensitiveText(
+			err instanceof Error ? err.message : String(err),
+		)
 		log.warn(
-			`reject audit record failed for quarantine=${quarantineId}: ${err instanceof Error ? err.message : String(err)}`,
+			`reject audit record failed for quarantine=${quarantineId}: ${receipt.auditError}`,
 		)
 	}
 

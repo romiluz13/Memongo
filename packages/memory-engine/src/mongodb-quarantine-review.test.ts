@@ -687,6 +687,83 @@ describe("rejected recovery receipt", () => {
 	})
 })
 
+describe.each([
+	"finalize",
+	"promote-audit",
+	"reject-audit",
+] as const)("quarantine diagnostic privacy — %s", (boundary) => {
+	afterEach(() => vi.restoreAllMocks())
+	it.each([
+		[
+			"MongoDB URI password",
+			new Error("write failed: mongodb://user:private-value@localhost/db"),
+			"write failed: mongodb://user:***@localhost/db",
+		],
+		[
+			"assigned credential",
+			"write failed: password=private-value",
+			"write failed: password=***",
+		],
+		[
+			"bearer credential",
+			new Error("write failed: Bearer fixture-private-credential"),
+			"write failed: Bearer fixtur***tial",
+		],
+		["plain Error", new Error("fixture write failed"), "fixture write failed"],
+		["plain string", "fixture write failed", "fixture write failed"],
+		["empty Error", new Error(""), ""],
+		["number", 0, "0"],
+		["null", null, "null"],
+		["undefined", undefined, "undefined"],
+	])("sanitizes recognized credentials and preserves %s diagnostics", async (_name, error, expected) => {
+		const fake = createStatefulMongoFake({ prefix: PREFIX })
+		const quarantineId = await seedPending(fake)
+		if (boundary === "finalize") {
+			const collection = fake.collection("memory_quarantine")
+			const update = collection.updateOne.bind(collection)
+			vi.spyOn(collection, "updateOne").mockImplementation(async (...args) => {
+				if (!Array.isArray(args[1]) && args[1].$set?.status === "promoted")
+					throw error
+				return update(...args)
+			})
+		} else {
+			const collection = fake.collection("memory_mutations")
+			const insert = collection.insertOne.bind(collection)
+			vi.spyOn(collection, "insertOne").mockImplementation(async (...args) => {
+				if (args[0].collectionName === "memory_quarantine") throw error
+				return insert(...args)
+			})
+		}
+		const params = { db: fake.db, prefix: PREFIX, agentId: AGENT, quarantineId }
+		const receipt =
+			boundary === "reject-audit"
+				? await rejectQuarantined(params)
+				: await promoteQuarantined({ ...params, embeddingMode: "automated" })
+		const expectedStatus = boundary === "reject-audit" ? "rejected" : "promoted"
+		expect(receipt.status).toBe(expectedStatus)
+		expect(fake.findDoc("memory_quarantine", { quarantineId })?.status).toBe(
+			boundary === "finalize" ? "promoting" : expectedStatus,
+		)
+		expect(fake.all("structured_mem")).toHaveLength(
+			boundary === "reject-audit" ? 0 : 1,
+		)
+		if (boundary === "finalize") {
+			expect(receipt.finalizeError).toBe(expected || undefined)
+			expect(
+				fake.findDoc("memory_mutations", { documentId: quarantineId })?.meta
+					?.finalizeError,
+			).toBe(expected || undefined)
+			expect(receipt.auditError).toBeUndefined()
+		} else {
+			expect(receipt.auditError).toBe(expected)
+			expect(receipt.finalizeError).toBeUndefined()
+			expect(
+				fake.findDoc("memory_mutations", { documentId: quarantineId }),
+			).toBeNull()
+		}
+	})
+})
+
 describe("MongoDBMemoryManager — facade wiring (C-004)", () => {
 	it("delegates list/promote/reject through the ops collaborators", async () => {
 		const fake = createStatefulMongoFake({ prefix: PREFIX })
