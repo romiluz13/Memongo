@@ -4,14 +4,11 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest"
 import { hydrateActiveSlate } from "./mongodb-active-slate.js"
 import { buildContextBundle } from "./mongodb-context-bundle.js"
 import { ensureCollections, ensureStandardIndexes } from "./mongodb-schema.js"
+import { resolvePreviewMongoTestUri } from "./test-helpers/preview-env.js"
 
-const uri = process.env.MEMONGO_TEST_MONGODB_URI
-if (
-	!uri ||
-	new URL(uri).hostname !== "127.0.0.1" ||
-	new URL(uri).port !== "27218"
+const uri = resolvePreviewMongoTestUri(
+	"mongodb://admin:admin@localhost:27017/memongo?authSource=admin&replicaSet=rs0&directConnection=true",
 )
-	throw new Error("Active slate fixture requires owned local MongoDB")
 
 const client = new MongoClient(uri, { monitorCommands: true })
 const name = `memongo_active_salience_${randomUUID().replaceAll("-", "")}`
