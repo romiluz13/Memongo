@@ -40,3 +40,13 @@ apps/web/.next
 # Tests are inert at runtime.
 **/*.test.ts
 **/*.test.tsx
+
+# Private working records stay outside container contexts.
+.local-state
+.agents
+.ai
+.codex
+AGENTS.md
+CLAUDE.md
+CONTEXT.md
+skills-lock.json

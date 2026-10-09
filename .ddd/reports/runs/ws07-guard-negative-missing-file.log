@@ -1,3 +1,0 @@
-verify-tests-ran: violations:
-  - missing junit: apps/api/test-results/does-not-exist.xml (reporter not configured, package lost its tests, or the run never happened)
-guard exit=1

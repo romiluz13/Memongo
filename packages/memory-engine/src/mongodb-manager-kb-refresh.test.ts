@@ -1,38 +1,4 @@
-// KB auto-refresh owner-specific marker isolation (grant note
-// `.ddd/notes/kb-auto-refresh-owner-marker.md`, cleared plan 7d62f9f0…).
-// One shared prefix must not let one tenant's refresh marker suppress
-// another tenant's scheduled import: the marker key is
-// `kb_last_auto_refresh:<agentId>` at BOTH the read and the write, the
-// legacy global row is ignored and preserved in place, and only a
-// REJECTED import skips the marker write (resolved error/zero-work
-// semantics are preserved unchanged and stay open separately).
-//
-// Five granted cases drive the ACTUAL `maybeAutoRefreshKB` through
-// `MongoDBManagerSyncOps` with a file-local stateful meta fake — no
-// shared kit, no DB, no provider calls. The fake is served through the
-// real `./mongodb-schema.js` import (`vi.mock` overrides
-// `metaCollection`, the binding manager-sync actually uses), and the
-// ingest is mocked through `./mongodb-kb.js` (the dynamic import inside
-// maybeAutoRefreshKB resolves to it). Vitest 4.1.10: `vi.mock` mocks
-// every import call and is hoisted; `vi.hoisted` supplies the factory
-// state (node_modules/vitest/dist/index.d.ts).
-//
-// RED discipline: case 1 asserts agent B's import RAN before any
-// marker-shape assertion (case 3 follows the same order for BOTH
-// agents on the seeded legacy row), so on unfixed bytes the intended
-// failures (imports suppressed) are meaningful assertion failures, not
-// marker-shape mismatches.
-//
-// S1 admission-fence extension (cleared plan e5ec10dc…): U1-U4 drive the
-// same entry with ./mongodb-write-fence.js mocked importOriginal — only
-// captureAdmissionToken and withFencedWrite become recording fakes with
-// on-demand gate conflicts; isErasureGateConflictError and the error
-// class stay REAL, so the manager's classifier branch is exercised
-// against the real error shape. U1 is the behavioral RED (capture-before-
-// ingest ordering, token threading, fenced marker); U3 pins the
-// resolved-with-errors marker attempt (the fence count is its RED
-// discriminator); U2/U4 pin conflict deferral — no ingest / no meta
-// mutation, a deferred (not failed) warn, and a full retry next cycle.
+// KB auto-refresh markers are isolated by owner.
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import type { Db } from "mongodb"
 import { MongoDBManagerSyncOps } from "./mongodb-manager-sync.js"

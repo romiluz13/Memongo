@@ -64,3 +64,23 @@ test-results/
 
 # Local scratch (browser profiles, throwaway inputs) — never repo content.
 tmp/
+
+# Local working records and tooling configuration
+.local-state/
+.agents/
+.ai/
+.codex/
+.factory/
+.ddd/
+/AGENTS.md
+/CLAUDE.md
+/CONTEXT.md
+/skills-lock.json
+/docs/agents/
+/docs/adr/
+/docs/handoff/
+/docs/research/
+/docs/experiments/
+/docs/plans/
+/droid-wiki/
+/.github/workflows/droid-wiki-refresh.yml

@@ -39,9 +39,8 @@ export type ManagerReadResult = {
 }
 
 /**
- * Erasure suppression (per .ddd/notes/locator-read-erasure-suppression.md
- * §5-§7): an erasure gate conflict — at admission or in-fence — serves the
- * branch's own "reads as gone" miss shape (B1 precedent) instead of the
+ * Erasure suppression: a conflict at admission or in-fence serves the
+ * branch's own "reads as gone" miss shape instead of the
  * record. Each row's `source` matches that branch's real miss return, and
  * `conversationNormalize` replicates readConversationChunk's prefix handling
  * (strip ONE `conversation:` prefix and trim, then re-prefix) so `events/x`

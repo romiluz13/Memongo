@@ -53,7 +53,7 @@ For API and live-memory verification, use the release docs:
 
 - Keep the public product story in `README.md`, `apps/docs`, and `docs/platform`.
 - Put migration and historical material under `docs/migration`.
-- Put research or brainstorm material under `docs/research`, `docs/experiments`, or `docs/plans`.
+- Keep private working notes, research, and tooling configuration outside the public Git tree.
 - Do not teach deprecated aliases as the primary API shape.
 
 ## Release rules
