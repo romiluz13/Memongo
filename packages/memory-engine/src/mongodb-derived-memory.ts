@@ -395,6 +395,31 @@ async function findSupportingEventIds(params: {
 		return []
 	}
 
+	const value = candidate.value.trim()
+	const contextualFact =
+		candidate.promotionReason === "llm-extraction"
+			? /^From a conversation about [^:]+:\s+(.+)$/i.exec(value)
+			: null
+	const evidenceValue = contextualFact?.[1] ?? value
+	let evidencePattern = contextualFact
+		? `^${escapeRegex(evidenceValue)}$`
+		: escapeRegex(value)
+	if (candidate.promotionReason === "llm-extraction") {
+		const possessive = /^(My |The user's )/i.exec(evidenceValue)
+		if (possessive && evidenceValue.length > possessive[0].length) {
+			const alternate =
+				possessive[0].toLowerCase() === "my " ? "The user's " : "My "
+			// Anchor the new subject alternative so quoted or named speakers
+			// cannot supply first-person evidence for the current user. Require the
+			// entire alternative statement to avoid extending a literal value.
+			evidencePattern = `${evidencePattern}|^${escapeRegex(alternate + evidenceValue.slice(possessive[0].length))}$`
+		}
+	}
+
+	if (contextualFact && !new RegExp(evidencePattern, "i").test(event.body)) {
+		return []
+	}
+
 	const docs = await eventsCollection(db, prefix)
 		.find({
 			agentId: event.agentId,
@@ -402,7 +427,7 @@ async function findSupportingEventIds(params: {
 			scopeRef: event.scopeRef,
 			eventId: { $ne: event.eventId },
 			body: {
-				$regex: new RegExp(escapeRegex(candidate.value.trim()), "i"),
+				$regex: new RegExp(evidencePattern, "i"),
 			},
 			...buildEventLifecycleClause(),
 		})
@@ -686,7 +711,12 @@ export type PreparedDerivedMemoryPromotion = {
 		| { kind: "existing"; revision: number; value: string }
 		| {
 				kind: "evidence"
-				events: Array<{ eventId: string; body: string; timestamp: Date }>
+				events: Array<{
+					eventId: string
+					body: string
+					timestamp: Date
+					role?: string
+				}>
 		  }
 	>
 }
@@ -756,25 +786,54 @@ export async function prepareDerivedMemoryPromotion(params: {
 			const supportingIds = (candidate.sourceEventIds ?? []).filter(
 				(eventId) => eventId !== params.event.eventId,
 			)
+			const contextualClaim =
+				candidate.context ===
+				"Extracted by the LLM fact extractor from a canonical event."
+					? /^From a conversation about [^:]+:\s+(.+)$/i.exec(
+							candidate.value.trim(),
+						)?.[1]
+					: undefined
+			const evidenceIds = contextualClaim
+				? [params.event.eventId, ...supportingIds]
+				: supportingIds
 			const docs = await eventsCollection(params.db, params.prefix)
 				.find(
 					{
 						agentId: params.event.agentId,
 						scope: params.event.scope,
 						scopeRef: params.event.scopeRef,
-						eventId: { $in: supportingIds },
+						eventId: { $in: evidenceIds },
 						...buildEventLifecycleClause(),
 					},
-					{ projection: { eventId: 1, body: 1, timestamp: 1 } },
+					{ projection: { eventId: 1, body: 1, timestamp: 1, role: 1 } },
 				)
 				.toArray()
-			if (docs.length !== supportingIds.length) {
+			if (docs.length !== evidenceIds.length) {
 				continue
+			}
+			if (contextualClaim) {
+				const alternateClaim = /^My /i.test(contextualClaim)
+					? contextualClaim.replace(/^My /i, "The user's ")
+					: contextualClaim.replace(/^The user's /i, "My ")
+				const fullClaim = new RegExp(
+					`^(?:${escapeRegex(contextualClaim)}|${escapeRegex(alternateClaim)})$`,
+					"i",
+				)
+				const current = docs.find((doc) => doc.eventId === params.event.eventId)
+				if (
+					current?.body !== params.event.body ||
+					!docs.every(
+						(doc) => typeof doc.body === "string" && fullClaim.test(doc.body),
+					) ||
+					!docs.some((doc) => doc.role === "user")
+				)
+					continue
 			}
 			promotionGuards[identity] = {
 				kind: "evidence",
 				events: docs.map((doc) => ({
 					eventId: String(doc.eventId),
+					...(contextualClaim ? { role: String(doc.role ?? "") } : {}),
 					body: String(doc.body ?? ""),
 					timestamp:
 						doc.timestamp instanceof Date ? doc.timestamp : new Date(0),
@@ -832,6 +891,7 @@ async function promotionGuardStillValid(params: {
 				scope: params.event.scope,
 				scopeRef: params.event.scopeRef,
 				eventId: evidence.eventId,
+				...(evidence.role !== undefined ? { role: evidence.role } : {}),
 				body: evidence.body,
 				timestamp: evidence.timestamp,
 				...buildEventLifecycleClause(),
