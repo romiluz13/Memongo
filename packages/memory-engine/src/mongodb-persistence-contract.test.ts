@@ -178,6 +178,36 @@ async function managerLoop(
 }
 
 describe("prompt-compatible facts reach durable persistence through actual assignment", () => {
+	it("explains zero-row admission through the actual manager without recording fact text", async () => {
+		vi.stubEnv("MEMONGO_LOG_LEVEL", "debug")
+		const lines: string[] = []
+		vi.spyOn(console, "debug").mockImplementation((line) =>
+			lines.push(String(line)),
+		)
+		const fact =
+			"From a conversation about parcel pickup: The user's pickup label is PRIVATE-DIFFERENT."
+		const r = await managerLoop({ fact, batchFacts: [] })
+		expect(r.completed.status).toBe("completed")
+		expect(r.completed.outputCount).toBe(0)
+		expect(r.stored).toHaveLength(0)
+		const decisions = lines.filter((line) =>
+			line.includes("derived-promotion decision"),
+		)
+		expect(
+			decisions.some((line) => line.includes('"reason":"provider-facts"')),
+		).toBe(true)
+		expect(
+			decisions.some((line) => line.includes('"reason":"no-support"')),
+		).toBe(true)
+		expect(
+			decisions.some(
+				(line) =>
+					line.includes('"reason":"prepared"') && line.includes('"count":0'),
+			),
+		).toBe(true)
+		expect(decisions.join("\n")).not.toContain("PRIVATE-DIFFERENT")
+		expect(decisions.join("\n")).not.toContain(BODY)
+	})
 	it("persists a grounded contextual possessive fact through the actual manager and worker", async () => {
 		const r = await managerLoop()
 		expect(r.completed.status).toBe("completed")

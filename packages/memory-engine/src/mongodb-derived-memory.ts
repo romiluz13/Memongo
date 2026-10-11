@@ -32,6 +32,55 @@ import {
 
 const log = createSubsystemLogger("memory:mongodb:derived")
 
+type PromotionDecision =
+	| "regex-only"
+	| "prefetched-facts"
+	| "provider-facts"
+	| "provider-error"
+	| "candidates"
+	| "no-support"
+	| "context-derived"
+	| "existing-invalid"
+	| "evidence-missing"
+	| "claim-mismatch"
+	| "user-witness-missing"
+	| "prepared"
+	| "started"
+	| "failed"
+	| "guard-invalid"
+	| "receipt-exists"
+	| "write-upserted"
+	| "write-changed"
+	| "write-noop"
+	| "write-quarantined"
+	| "write-error"
+	| "finished"
+
+// Observations inside retryable transactions describe attempts, not committed receipts.
+function recordPromotionDecision(
+	event: ConversationEvent,
+	stage: "extraction" | "admission" | "prepare" | "persist",
+	reason: PromotionDecision,
+	candidate?: Pick<StructuredMemoryEntry, "type" | "key">,
+	count?: number,
+): void {
+	try {
+		if (!log.isEnabled("debug")) return
+		log.debug("derived-promotion decision", {
+			observation: "attempt",
+			event: shortHash(event.eventId),
+			stage,
+			reason,
+			...(candidate
+				? { candidate: shortHash(structuredCandidateIdentity(candidate)) }
+				: {}),
+			...(count !== undefined ? { count } : {}),
+		})
+	} catch {
+		// Diagnostic sinks must not change admission, writes, or exception propagation.
+	}
+}
+
 async function recordProjectionRunBestEffort(params: {
 	db: Db
 	prefix: string
@@ -455,6 +504,13 @@ async function mergeStructuredCandidates(
 ): Promise<DerivedStructuredCandidate[]> {
 	const regexCandidates = extractStructuredCandidatesFromEvent(event)
 	if (!provider && prefetchedLlmFacts === undefined) {
+		recordPromotionDecision(
+			event,
+			"extraction",
+			"regex-only",
+			undefined,
+			regexCandidates.length,
+		)
 		return regexCandidates
 	}
 
@@ -467,6 +523,13 @@ async function mergeStructuredCandidates(
 			event,
 			prefetchedLlmFacts,
 		)
+		recordPromotionDecision(
+			event,
+			"extraction",
+			"prefetched-facts",
+			undefined,
+			llmCandidates.length,
+		)
 	} else if (provider) {
 		try {
 			llmCandidates = await extractLlmStructuredCandidates({
@@ -474,7 +537,15 @@ async function mergeStructuredCandidates(
 				provider,
 				model: model ?? "",
 			})
+			recordPromotionDecision(
+				event,
+				"extraction",
+				"provider-facts",
+				undefined,
+				llmCandidates.length,
+			)
 		} catch (err) {
+			recordPromotionDecision(event, "extraction", "provider-error")
 			log.warn(
 				`LLM structured extraction failed for ${event.eventId}, using regex only: ${String(err)}`,
 			)
@@ -535,6 +606,13 @@ export async function resolveStructuredCandidatesForPromotion(params: {
 		model,
 		prefetchedLlmFacts,
 	)
+	recordPromotionDecision(
+		event,
+		"admission",
+		"candidates",
+		undefined,
+		candidates.length,
+	)
 	if (candidates.length === 0) {
 		return []
 	}
@@ -581,6 +659,7 @@ export async function resolveStructuredCandidatesForPromotion(params: {
 			candidate,
 		})
 		if (supportingEventIds.length === 0) {
+			recordPromotionDecision(event, "admission", "no-support", candidate)
 			continue
 		}
 
@@ -721,7 +800,9 @@ export type PreparedDerivedMemoryPromotion = {
 	>
 }
 
-function structuredCandidateIdentity(candidate: StructuredMemoryEntry): string {
+function structuredCandidateIdentity(
+	candidate: Pick<StructuredMemoryEntry, "type" | "key">,
+): string {
 	return `${candidate.type}\0${candidate.key}`
 }
 
@@ -739,9 +820,30 @@ export async function prepareDerivedMemoryPromotion(params: {
 	model?: string
 	prefetchedLlmFacts?: string[]
 }): Promise<PreparedDerivedMemoryPromotion> {
+	recordPromotionDecision(params.event, "prepare", "started")
+	try {
+		return await prepareDerivedMemoryPromotionImpl(params)
+	} catch (error) {
+		recordPromotionDecision(params.event, "prepare", "failed")
+		throw error
+	}
+}
+
+async function prepareDerivedMemoryPromotionImpl(
+	params: Parameters<typeof prepareDerivedMemoryPromotion>[0],
+): Promise<PreparedDerivedMemoryPromotion> {
 	const structuredCandidates = (
 		await resolveStructuredCandidatesForPromotion(params)
-	).filter((candidate) => !isDerivableFromContext(candidate.value))
+	).filter((candidate) => {
+		if (!isDerivableFromContext(candidate.value)) return true
+		recordPromotionDecision(
+			params.event,
+			"prepare",
+			"context-derived",
+			candidate,
+		)
+		return false
+	})
 	const promotionGuards: PreparedDerivedMemoryPromotion["promotionGuards"] = {}
 	const currentClause = mergeQueryClauses(
 		{ state: "active" },
@@ -773,6 +875,12 @@ export async function prepareDerivedMemoryPromotion(params: {
 				revision < 1 ||
 				typeof existing.value !== "string"
 			) {
+				recordPromotionDecision(
+					params.event,
+					"prepare",
+					"existing-invalid",
+					candidate,
+				)
 				continue
 			}
 			promotionGuards[identity] = {
@@ -809,6 +917,12 @@ export async function prepareDerivedMemoryPromotion(params: {
 				)
 				.toArray()
 			if (docs.length !== evidenceIds.length) {
+				recordPromotionDecision(
+					params.event,
+					"prepare",
+					"evidence-missing",
+					candidate,
+				)
 				continue
 			}
 			if (contextualClaim) {
@@ -824,10 +938,25 @@ export async function prepareDerivedMemoryPromotion(params: {
 					current?.body !== params.event.body ||
 					!docs.every(
 						(doc) => typeof doc.body === "string" && fullClaim.test(doc.body),
-					) ||
-					!docs.some((doc) => doc.role === "user")
-				)
+					)
+				) {
+					recordPromotionDecision(
+						params.event,
+						"prepare",
+						"claim-mismatch",
+						candidate,
+					)
 					continue
+				}
+				if (!docs.some((doc) => doc.role === "user")) {
+					recordPromotionDecision(
+						params.event,
+						"prepare",
+						"user-witness-missing",
+						candidate,
+					)
+					continue
+				}
 			}
 			promotionGuards[identity] = {
 				kind: "evidence",
@@ -843,6 +972,13 @@ export async function prepareDerivedMemoryPromotion(params: {
 		}
 		promotionGuards[identity] = { kind: "immediate" }
 	}
+	recordPromotionDecision(
+		params.event,
+		"prepare",
+		"prepared",
+		undefined,
+		Object.keys(promotionGuards).length,
+	)
 	return {
 		structuredCandidates: structuredCandidates.filter(
 			(candidate) =>
@@ -917,6 +1053,32 @@ export async function persistPreparedDerivedMemoryPromotion(params: {
 	skipped: boolean
 	skipReason?: string
 }> {
+	recordPromotionDecision(
+		params.event,
+		"persist",
+		"started",
+		undefined,
+		params.prepared.structuredCandidates.length,
+	)
+	try {
+		const result = await persistPreparedDerivedMemoryPromotionImpl(params)
+		recordPromotionDecision(
+			params.event,
+			"persist",
+			"finished",
+			undefined,
+			result.structuredCreated,
+		)
+		return result
+	} catch (error) {
+		recordPromotionDecision(params.event, "persist", "failed")
+		throw error
+	}
+}
+
+async function persistPreparedDerivedMemoryPromotionImpl(
+	params: Parameters<typeof persistPreparedDerivedMemoryPromotion>[0],
+): ReturnType<typeof persistPreparedDerivedMemoryPromotion> {
 	const { db, prefix, client, session, embeddingMode, event, prepared } = params
 	let structuredCreated = 0
 	let proceduresCreated = 0
@@ -937,6 +1099,7 @@ export async function persistPreparedDerivedMemoryPromotion(params: {
 				guard: prepared.promotionGuards[structuredCandidateIdentity(candidate)],
 			}))
 		) {
+			recordPromotionDecision(event, "persist", "guard-invalid", candidate)
 			continue
 		}
 		const receipt = await structuredCollection.findOne(
@@ -954,6 +1117,7 @@ export async function persistPreparedDerivedMemoryPromotion(params: {
 			},
 		)
 		if (receipt) {
+			recordPromotionDecision(event, "persist", "receipt-exists", candidate)
 			existingCandidateCount += 1
 			continue
 		}
@@ -967,10 +1131,23 @@ export async function persistPreparedDerivedMemoryPromotion(params: {
 				...(!session && client ? { client } : {}),
 				eventReceiptIds: [event.eventId],
 			})
+			recordPromotionDecision(
+				event,
+				"persist",
+				result.quarantined
+					? "write-quarantined"
+					: result.upserted
+						? "write-upserted"
+						: result.changed
+							? "write-changed"
+							: "write-noop",
+				candidate,
+			)
 			if (result.upserted) {
 				structuredCreated += 1
 			}
 		} catch (err) {
+			recordPromotionDecision(event, "persist", "write-error", candidate)
 			if (session) throw err
 			structuredFailed = true
 			firstError ??= err
