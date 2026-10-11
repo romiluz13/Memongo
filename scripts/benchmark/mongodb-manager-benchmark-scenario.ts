@@ -86,6 +86,19 @@ function runBenchmarkRead<T>(
 	})
 }
 
+function resolveBenchmarkIndexSettleTimeout(
+	raw: string | undefined,
+	fallback: number,
+): number {
+	const value = raw?.trim()
+	if (!value) return fallback
+	const timeout = Number(value)
+	return Number.isFinite(timeout) &&
+		(timeout > 0 || (timeout === 0 && !isBenchmarkStrictMode()))
+		? timeout
+		: fallback
+}
+
 export type BenchmarkReadinessSkipReason =
 	| "no-autoembed-capability"
 	| "no-text-search-capability"
@@ -210,6 +223,17 @@ export class MongoDBManagerBenchmarkScenarioOps {
 			searchBudgetMaxAggregations: DEFAULT_SEARCH_BUDGET.maxAggregations,
 			searchBudgetMaxEmbeds: DEFAULT_SEARCH_BUDGET.maxEmbeds,
 			userSearchMaxTimeMs: resolveUserSearchMaxTimeMs(),
+			// Effective timings participate in identity; blank and unset raw values
+			// normalize alike but differ under VECTOR ?? EVENT precedence.
+			effectiveTextSearchSettleTimeoutMs: resolveBenchmarkIndexSettleTimeout(
+				process.env.MEMONGO_BENCHMARK_EVENT_SEARCH_SETTLE_TIMEOUT_MS,
+				60_000,
+			),
+			effectiveVectorSearchSettleTimeoutMs: resolveBenchmarkIndexSettleTimeout(
+				process.env.MEMONGO_BENCHMARK_VECTOR_SEARCH_SETTLE_TIMEOUT_MS ??
+					process.env.MEMONGO_BENCHMARK_EVENT_SEARCH_SETTLE_TIMEOUT_MS,
+				300_000,
+			),
 		}
 		const environmentKeys = [
 			// B1: the answerer and the extraction LLM are separately
@@ -771,17 +795,12 @@ export class MongoDBManagerBenchmarkScenarioOps {
 			return
 		}
 
-		const configuredTimeout = Number(
+		// Explicit zero remains an opt-out only for non-strict benchmarks.
+		const timeoutMs = resolveBenchmarkIndexSettleTimeout(
 			process.env.MEMONGO_BENCHMARK_VECTOR_SEARCH_SETTLE_TIMEOUT_MS ??
 				process.env.MEMONGO_BENCHMARK_EVENT_SEARCH_SETTLE_TIMEOUT_MS,
+			300_000,
 		)
-		// B4: index readiness is mandatory by default. The wait polls until the
-		// indexed-document count equals the written count; an explicit
-		// MEMONGO_*_SETTLE_TIMEOUT_MS=0 is the documented opt-out.
-		const timeoutMs =
-			Number.isFinite(configuredTimeout) && configuredTimeout >= 0
-				? configuredTimeout
-				: 300_000
 		if (timeoutMs === 0) return
 
 		const readinessProbe = await runBenchmarkRead(
@@ -1028,15 +1047,10 @@ export class MongoDBManagerBenchmarkScenarioOps {
 			return
 		}
 
-		const configuredTimeout = Number(
+		const timeoutMs = resolveBenchmarkIndexSettleTimeout(
 			process.env.MEMONGO_BENCHMARK_EVENT_SEARCH_SETTLE_TIMEOUT_MS,
+			60_000,
 		)
-		// B4: index readiness is mandatory by default (see the vector-lane
-		// counterpart above); explicit env 0 opts out of the wait.
-		const timeoutMs =
-			Number.isFinite(configuredTimeout) && configuredTimeout >= 0
-				? configuredTimeout
-				: 60_000
 		if (timeoutMs === 0) return
 
 		const readinessProbe = await runBenchmarkRead(

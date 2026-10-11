@@ -1,3 +1,4 @@
+import { setImmediate } from "node:timers/promises"
 /* eslint-disable @typescript-eslint/unbound-method -- Vitest mock method assertions */
 import {
 	describe,
@@ -13,6 +14,10 @@ import type { MemongoConfig } from "@memongo/lib"
 import { MongoDBMemoryManager } from "./mongodb-manager.js"
 import { resolveMemoryBackendConfig } from "./backend-config.js"
 import * as schemaModule from "./mongodb-schema.js"
+import {
+	resolveSearchIndexReadinessTiming,
+	getExpectedSearchIndexTargets,
+} from "./mongodb-schema-search-definitions.js"
 
 // ---------------------------------------------------------------------------
 // Module-graph mocks (same seam set as mongodb-manager-lifecycle.test.ts)
@@ -46,9 +51,10 @@ vi.mock("./mongodb-graph.js", async () =>
 	(await import("./test-helpers/manager-test-kit.js")).graphModuleMock(),
 )
 
-vi.mock("./mongodb-schema.js", async () =>
-	(await import("./test-helpers/manager-test-kit.js")).schemaModuleMock(),
-)
+vi.mock("./mongodb-schema.js", async (importOriginal) => ({
+	...(await importOriginal<typeof import("./mongodb-schema.js")>()),
+	...(await import("./test-helpers/manager-test-kit.js")).schemaModuleMock(),
+}))
 
 vi.mock("./mongodb-query-cache.js", async () =>
 	(await import("./test-helpers/manager-test-kit.js")).queryCacheModuleMock(),
@@ -209,7 +215,12 @@ function buildSharedClient(): {
 		db: vi.fn((name?: string) =>
 			name === "admin"
 				? { command: vi.fn(async () => ({ ok: 1 })) }
-				: { databaseName: name ?? "memongo" },
+				: {
+						databaseName: name ?? "memongo",
+						collection: vi.fn(() => ({
+							listSearchIndexes: () => ({ toArray: async () => [] }),
+						})),
+					},
 		),
 		close,
 	} as unknown as MongoClient
@@ -479,5 +490,123 @@ describe("W17 factory happy path under the unwind wrap", () => {
 		expect(mongoDriverHarness.FakeMongoClient.instances[0].closeCalls).toBe(1)
 		expect(accessTrackerHarness.state.instances[0].closed).toBe(true)
 		expect(onClosed).toHaveBeenCalledTimes(1)
+	})
+})
+
+describe("required readiness timing reaches the actual factory waiter", () => {
+	const cases = [
+		["defaults unset", undefined, undefined, "", "", 60000, 1000],
+		["defaults empty", "", "", "", "", 60000, 1000],
+		["invalid timeout valid poll", "0", "250", "", "", 60000, 250],
+		["valid timeout invalid poll", "42000", "NaN", "", "", 42000, 1000],
+		["whitespace", "   ", " ", "", "", 60000, 1000],
+		["zero", "0", "0", "", "", 60000, 1000],
+		["literal NaN", "NaN", "NaN", "", "", 60000, 1000],
+		["negative", "-1", "-2", "", "", 60000, 1000],
+		["infinite", "Infinity", "Infinity", "", "", 60000, 1000],
+		["valid", "180000", "250", "", "", 180000, 250],
+		["valid padded", " 42000 ", " 125 ", "", "", 42000, 125],
+		["valid fractional", "42000.9", "125.9", "", "", 42000, 125],
+		["benchmark strict zero", "0", "0", "1", "", 180000, 1000],
+		["search strict NaN", "NaN", "NaN", "", "1", 180000, 1000],
+		["search true budget", "NaN", "NaN", "", "true", 180000, 1000],
+		["strict whitespace", " ", " ", "1", "", 180000, 1000],
+		["benchmark true budget", " ", " ", "true", "", 180000, 1000],
+	] as const
+	it.each(
+		cases,
+	)("%s preserves required waiting with positive finite timing", async (_name, timeout, poll, benchmarkStrict, searchStrict, expectedTimeout, expectedPoll) => {
+		const keys = {
+			MEMONGO_SEARCH_INDEX_READINESS_TIMEOUT_MS: timeout,
+			MEMONGO_SEARCH_INDEX_READINESS_POLL_MS: poll,
+			MEMONGO_BENCHMARK_STRICT: benchmarkStrict,
+			MEMONGO_STRICT_SEARCH_INDEX_READY: searchStrict,
+		}
+		const originals = Object.fromEntries(
+			Object.keys(keys).map((key) => [key, process.env[key]]),
+		)
+		let releaseWaiter = () => {}
+		const waitGate = new Promise<void>((resolve) => {
+			releaseWaiter = resolve
+		})
+		try {
+			for (const [key, value] of Object.entries(keys)) {
+				if (value === undefined) delete process.env[key]
+				else process.env[key] = value
+			}
+			vi.mocked(
+				schemaModule.resolveSearchIndexReadinessTiming,
+			).mockImplementation(resolveSearchIndexReadinessTiming)
+			vi.mocked(schemaModule.getExpectedSearchIndexTargets).mockImplementation(
+				getExpectedSearchIndexTargets,
+			)
+			vi.mocked(
+				schemaModule.isSearchIndexManagementAvailable,
+			).mockResolvedValue(true)
+			vi.mocked(schemaModule.listSearchIndexes).mockResolvedValue([])
+			vi.mocked(schemaModule.ensureSearchIndexes).mockResolvedValue({
+				text: true,
+				vector: true,
+			})
+			const waiter = vi.mocked(schemaModule.waitForSearchIndexesQueryable)
+			waiter.mockClear()
+			waiter.mockImplementation(async () => {
+				await waitGate
+				return {
+					ready: false,
+					indexes: [],
+					pending: ["offline-pending"],
+					failed: [],
+				}
+			})
+			vi.mocked(schemaModule.ensureStandardIndexes).mockClear()
+			vi.mocked(schemaModule.ensureStandardIndexes).mockRejectedValue(
+				new Error("offline-stop-after-required-wait"),
+			)
+			const { client } = buildSharedClient()
+			const creation = MongoDBMemoryManager.create({
+				cfg: buildCfg(),
+				agentId: "readiness",
+				resolved: resolveMemoryBackendConfig({
+					cfg: buildCfg(),
+					agentId: "readiness",
+				}),
+				client,
+			})
+			let settled = false
+			void creation.then(
+				() => {
+					settled = true
+				},
+				() => {
+					settled = true
+				},
+			)
+			await setImmediate()
+			expect(settled).toBe(false)
+			expect(schemaModule.ensureStandardIndexes).not.toHaveBeenCalled()
+			releaseWaiter()
+			await expect(creation).rejects.toThrow(
+				benchmarkStrict === "1" || searchStrict === "1"
+					? "search indexes not fully queryable"
+					: "offline-stop-after-required-wait",
+			)
+			expect(waiter.mock.calls.length).toBeGreaterThan(0)
+			for (const [, timing] of waiter.mock.calls) {
+				expect(timing?.timeoutMs).toBe(expectedTimeout)
+				expect(timing?.pollMs).toBe(expectedPoll)
+				expect(Number.isFinite(timing?.timeoutMs)).toBe(true)
+				expect(Number.isFinite(timing?.pollMs)).toBe(true)
+				expect(timing?.timeoutMs).toBeGreaterThan(0)
+				expect(timing?.pollMs).toBeGreaterThan(0)
+				expect(timing?.indexNames.length).toBeGreaterThan(0)
+			}
+		} finally {
+			releaseWaiter()
+			for (const [key, value] of Object.entries(originals)) {
+				if (value === undefined) delete process.env[key]
+				else process.env[key] = value
+			}
+		}
 	})
 })

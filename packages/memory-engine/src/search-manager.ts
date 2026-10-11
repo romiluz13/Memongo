@@ -41,6 +41,9 @@ type ManagerCacheEntry = {
  * per-manager client is closed with its manager.
  */
 const MONGODB_MANAGER_CACHE = new Map<string, ManagerCacheEntry>()
+// Evicted entries leave the lookup immediately, but shutdown still owns their
+// completion, including idle closes and borrows evicted before shutdown began.
+const PENDING_MANAGER_CLOSES = new Set<Promise<void>>()
 
 /**
  * In-flight initialization promises keyed by the same cache key. This
@@ -124,24 +127,28 @@ function closeEntryAtQuiescence(entry: ManagerCacheEntry): void {
 	}
 	entry.closeInitiated = true
 	void closeManager(entry.manager).finally(() => {
-		entry.quiescence?.resolve()
+		if (entry.quiescence) {
+			PENDING_MANAGER_CLOSES.delete(entry.quiescence.promise)
+			entry.quiescence.resolve()
+		}
 	})
 }
 
 /**
  * B9: remove an entry from service. The caller removes it from the lookup
  * map first (no new operations can start); this marks it evicted, arms the
- * quiescence promise shutdown waits on when borrows are outstanding, and
+ * quiescence promise shutdown waits on for every eviction, and
  * closes immediately when idle.
  */
 function evictEntry(entry: ManagerCacheEntry): void {
 	entry.evicted = true
-	if (entry.borrows > 0 && !entry.closeInitiated && !entry.quiescence) {
+	if (!entry.quiescence) {
 		let resolve: () => void = () => undefined
 		const promise = new Promise<void>((res) => {
 			resolve = res
 		})
 		entry.quiescence = { promise, resolve }
+		PENDING_MANAGER_CLOSES.add(promise)
 	}
 	closeEntryAtQuiescence(entry)
 }
@@ -456,7 +463,7 @@ export async function closeAllMemorySearchManagers(): Promise<void> {
 	for (const entry of entries) {
 		evictEntry(entry)
 	}
-	await Promise.all(entries.map((entry) => entry.quiescence?.promise))
+	await Promise.all(PENDING_MANAGER_CLOSES)
 	await closeAllSharedMongoClients()
 }
 
