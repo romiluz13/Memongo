@@ -2,6 +2,11 @@ name: Publish Packages
 
 on:
   workflow_dispatch:
+    inputs:
+      verification_only:
+        description: Verify already published versions without publishing
+        type: boolean
+        default: false
   push:
     tags:
       - "v*"
@@ -113,9 +118,11 @@ jobs:
           --require-suite src/contract-conformance.test.ts
 
       - name: Check publishability
+        if: ${{ github.event_name != 'workflow_dispatch' || !inputs.verification_only }}
         run: bun run check-publishability
 
       - name: Publish packages
+        if: ${{ github.event_name != 'workflow_dispatch' || !inputs.verification_only }}
         run: |
           for pkg in \
             packages/lib \
@@ -152,7 +159,7 @@ jobs:
           cd "$SMOKE_DIR"
           npm init -y >/dev/null
 
-          # Pin every smoke install to the exact version this run published.
+          # Pin every smoke install to the exact versions declared by this revision.
           pin() {
             node -p "require('$GITHUB_WORKSPACE/$1/package.json').name + '@' + require('$GITHUB_WORKSPACE/$1/package.json').version"
           }
@@ -163,7 +170,7 @@ jobs:
           # version; retry the install instead of failing the release on
           # propagation lag.
           for attempt in 1 2 3 4 5 6 7 8 9 10; do
-            if npm install --no-audit --no-fund $PACKAGES; then
+            if npm install --cache "$SMOKE_DIR/.npm-cache" --prefer-online --no-audit --no-fund $PACKAGES; then
               break
             fi
             if [ "$attempt" -eq 10 ]; then
