@@ -18,7 +18,7 @@ Memongo durable memory for the [Pi coding agent](https://pi.dev).
 ### 1. Run Memongo locally
 
 ```bash
-cd /Users/rom.iluz/Dev/memongo
+cd /path/to/memongo
 
 # Optional automated semantic search (Preview; Atlas Model API key):
 export VOYAGE_API_KEY="al-..."
@@ -41,7 +41,7 @@ Add to `~/.pi/agent/settings.json`:
 ```json
 {
   "packages": [
-    "/Users/rom.iluz/Dev/memongo/packages/pi-extension"
+    "/path/to/memongo/packages/pi-extension"
   ]
 }
 ```

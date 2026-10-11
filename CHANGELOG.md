@@ -2,6 +2,20 @@
 
 All notable changes to Memongo will be documented in this file.
 
+## 2.2.1 — 2026-10-12
+
+- Add opt-in derived-memory diagnostics and preserve grounded contextual claims
+  across one optional terminal sentence period.
+- Upgrade the MongoDB driver dependency to ^7.7.0 and isolate benchmark factory
+  workspaces and storage measurement lifecycle.
+- Adopt HTTP rerank-3 with consistent bounded rerank windows.
+- Drain evicted managers before shared-client shutdown and enforce required
+  benchmark text/vector readiness for invalid strict-mode timeout settings.
+- Record effective readiness timings in run identity. Configuration hashes change;
+  old checkpoints are incompatible. Use fresh runs and paired controls.
+
+See [release details and validation limits](docs/platform/releases/2.2.1.md).
+
 ## 2.2.0 — 2026-10-02
 
 Reliability fixes across the engine, HTTP API, SDK, MCP, and middleware. This
