@@ -426,6 +426,19 @@ function escapeRegex(input: string): string {
 	return input.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
 }
 
+// Sentence punctuation may differ; the full claim and internal punctuation may not.
+function contextualClaimPattern(claim: string): RegExp {
+	const repeatedPeriod = claim.endsWith("..")
+	const literal = repeatedPeriod ? claim : claim.replace(/\.$/, "")
+	const alternate = /^My /i.test(literal)
+		? literal.replace(/^My /i, "The user's ")
+		: literal.replace(/^The user's /i, "My ")
+	return new RegExp(
+		`^(?:${escapeRegex(literal)}|${escapeRegex(alternate)})${repeatedPeriod ? "" : "\\.?"}$`,
+		"i",
+	)
+}
+
 function stripPromotionMetadata(
 	candidate: DerivedStructuredCandidate,
 ): StructuredMemoryEntry {
@@ -451,9 +464,9 @@ async function findSupportingEventIds(params: {
 			: null
 	const evidenceValue = contextualFact?.[1] ?? value
 	let evidencePattern = contextualFact
-		? `^${escapeRegex(evidenceValue)}$`
+		? contextualClaimPattern(evidenceValue).source
 		: escapeRegex(value)
-	if (candidate.promotionReason === "llm-extraction") {
+	if (candidate.promotionReason === "llm-extraction" && !contextualFact) {
 		const possessive = /^(My |The user's )/i.exec(evidenceValue)
 		if (possessive && evidenceValue.length > possessive[0].length) {
 			const alternate =
@@ -926,13 +939,7 @@ async function prepareDerivedMemoryPromotionImpl(
 				continue
 			}
 			if (contextualClaim) {
-				const alternateClaim = /^My /i.test(contextualClaim)
-					? contextualClaim.replace(/^My /i, "The user's ")
-					: contextualClaim.replace(/^The user's /i, "My ")
-				const fullClaim = new RegExp(
-					`^(?:${escapeRegex(contextualClaim)}|${escapeRegex(alternateClaim)})$`,
-					"i",
-				)
+				const fullClaim = contextualClaimPattern(contextualClaim)
 				const current = docs.find((doc) => doc.eventId === params.event.eventId)
 				if (
 					current?.body !== params.event.body ||

@@ -27,6 +27,7 @@ const PREFIX_FACT =
 async function managerLoop(
 	options: {
 		fact?: string
+		body?: string
 		batchFacts?: string[]
 		mutateSupport?: (row: Row) => void
 		mutateCurrent?: (row: Row) => void
@@ -66,9 +67,14 @@ async function managerLoop(
 		memoryJobOperationContexts: new Map(),
 	}) as MongoDBMemoryManager
 	const receipts = await manager.writeConversationEventsBatch([
-		{ ...event, role: options.roles?.[0] ?? "user" },
 		{
 			...event,
+			body: options.body ?? BODY,
+			role: options.roles?.[0] ?? "user",
+		},
+		{
+			...event,
+			body: options.body ?? BODY,
 			role: options.roles?.[1] ?? "assistant",
 			timestamp: new Date(1),
 		},
@@ -100,7 +106,7 @@ async function managerLoop(
 			request.messages.find((m) => m.role === "user")?.content ?? ""
 		transcripts.push(transcript)
 		const facts = transcript.includes(
-			`<transcript>\n${BODY}\n${BODY}\n</transcript>`,
+			`<transcript>\n${options.body ?? BODY}\n${options.body ?? BODY}\n</transcript>`,
 		)
 			? (options.batchFacts ?? [fact])
 			: [fact]
@@ -178,6 +184,77 @@ async function managerLoop(
 }
 
 describe("prompt-compatible facts reach durable persistence through actual assignment", () => {
+	it.each([
+		"From a conversation about package or item pickup: The user's pickup label is NARU-617-QP",
+		"From a conversation about a pickup label: The user's pickup label is NARU-617-QP",
+	])("persists captured contextual claim without terminal period: %s", async (fact) => {
+		const r = await managerLoop({ fact, batchFacts: [] })
+		expect(r.completed.status).toBe("completed")
+		expect(r.completed.outputCount).toBe(1)
+		expect(r.stored).toHaveLength(1)
+		expect(r.stored[0]).toMatchObject({
+			value: fact,
+			sourceEventIds: r.actual.map((e) => e.eventId).sort(),
+			reinforcementCount: 2,
+			provenance: {
+				promotionTrigger: "repeated-evidence",
+				supportingEventCount: 1,
+			},
+		})
+		expect(r.f.transactions.committed).toBeGreaterThan(0)
+		expect(r.f.transactions.aborted).toBe(0)
+	})
+	it.each([
+		[PREFIX_FACT, BODY.slice(0, -1)],
+		[PREFIX_FACT.slice(0, -1), BODY.slice(0, -1)],
+	])("preserves terminal-period equivalence in either direction: %s / %s", async (fact, body) => {
+		const r = await managerLoop({ fact, body, batchFacts: [] })
+		expect(r.completed.outputCount).toBe(1)
+		expect(r.stored).toHaveLength(1)
+		expect(r.stored[0].value).toBe(fact)
+	})
+	it("retains the user witness when the current event is assistant-authored", async () => {
+		const fact = PREFIX_FACT.slice(0, -1)
+		const r = await managerLoop({
+			fact,
+			batchFacts: [],
+			roles: ["assistant", "user"],
+		})
+		expect(r.completed.outputCount).toBe(1)
+		expect(r.stored[0].value).toBe(fact)
+	})
+	it.each([
+		["quoted", `Alice said, "${BODY}"`],
+		["named", `Alice: ${BODY}`],
+		["extended statement", `${BODY} Extra statement.`],
+		["extended label", "My pickup label is NARU-617-QP-EXTRA."],
+		["internal punctuation", "My pickup label is NARU.617-QP."],
+		["wrong label", "My pickup label is WRONG."],
+		["double period", `${BODY}.`],
+		["question mark", "My pickup label is NARU-617-QP?"],
+		["exclamation mark", "My pickup label is NARU-617-QP!"],
+	])("terminal-period equivalence does not admit %s evidence", async (_name, body) => {
+		const r = await managerLoop({
+			fact: PREFIX_FACT.slice(0, -1),
+			body,
+			batchFacts: [],
+		})
+		expect(r.stored).toHaveLength(0)
+		expect(r.completed.outputCount).toBe(0)
+	})
+	it("does not strip multiple final periods from a contextual candidate", async () => {
+		const r = await managerLoop({ fact: `${PREFIX_FACT}.`, batchFacts: [] })
+		expect(r.stored).toHaveLength(0)
+		expect(r.completed.outputCount).toBe(0)
+	})
+	it("does not admit assistant-only evidence through period equivalence", async () => {
+		const r = await managerLoop({
+			fact: PREFIX_FACT.slice(0, -1),
+			roles: ["assistant", "assistant"],
+		})
+		expect(r.stored).toHaveLength(0)
+		expect(r.completed.outputCount).toBe(0)
+	})
 	it("explains zero-row admission through the actual manager without recording fact text", async () => {
 		vi.stubEnv("MEMONGO_LOG_LEVEL", "debug")
 		const lines: string[] = []
@@ -438,6 +515,8 @@ describe("contextual personal facts require a canonical user witness", () => {
 	it.each([
 		"role",
 		"body",
+		"period-body",
+		"timestamp",
 		"scope",
 		"expired",
 		"invalidated",
@@ -449,13 +528,15 @@ describe("contextual personal facts require a canonical user witness", () => {
 			db: f.db,
 			prefix: "test_",
 			event,
-			prefetchedLlmFacts: [PREFIX_FACT],
+			prefetchedLlmFacts: [PREFIX_FACT.slice(0, -1)],
 		}
 		const prepared = await prepareDerivedMemoryPromotion(args)
 		expect(prepared.structuredCandidates).toHaveLength(1)
 		const row = f.table("test_events")[0]
 		if (change === "role") row.role = "assistant"
 		if (change === "body") row.body = "changed"
+		if (change === "period-body") row.body = BODY.slice(0, -1)
+		if (change === "timestamp") row.timestamp = new Date(900)
 		if (change === "scope") row.scopeRef = "other"
 		if (change === "expired") row.expiresAt = new Date(0)
 		if (change === "invalidated") row.invalidAt = new Date(0)
